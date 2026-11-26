@@ -143,7 +143,6 @@
       "loading": "正在讀取插件…",
       "loadFailed": "未能讀取插件資訊，請重試。",
       "retired": "此功能已下線，請在電腦上查看替代插件。",
-      "replaced": "電腦上這個插件已經換成另一次安裝，不是這條記錄對應的那一個。可以在「已安裝」裡重新開啟。",
       "approvalRequired": "安裝記錄需要復原，請在電腦上的插件詳情中處理。",
       "builtinRecovery": "內建插件需要復原，請重新啟動電腦上的 Cindy。",
       "disabled": "啟用插件後即可使用。",
@@ -339,7 +338,6 @@
     "title": {
       "offline": "電腦已離線",
       "loadFailed": "插件載入失敗",
-      "replaced": "這個插件已更換",
       "retired": "功能已停用",
       "approvalRequired": "安裝需要復原",
       "builtinRecovery": "內建插件需要復原",
@@ -542,13 +540,11 @@
       "succeededUnread": "已完成，但沒能讀取電腦上的插件。",
       "uninstalled": "已解除安裝"
     },
-    "open": "開啟插件",
     "close": "完成",
     "decide": "查看並決定",
     "decideBlocked": "這台電腦上另一項操作還沒結束，結束後再決定。",
     "readAgain": "重新讀取",
     "showInstalled": "前往已安裝",
-    "openUnavailable": "「{{device}}」已不在這個帳號的電腦清單裡，無法從這裡開啟。",
-    "openOffline": "「{{device}}」未連線，連線後才能開啟。"
+    "unlisted": "「{{device}}」已不在這個帳號的電腦清單裡。"
   }
 }

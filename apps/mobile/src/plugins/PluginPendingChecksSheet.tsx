@@ -8,7 +8,7 @@ import { ScrollFade, ScrollThumb, useScrollOverflow } from "@/components/ScrollO
 import { CONSENT_FADE_HEIGHT } from "./pluginConsentPresentation";
 import { samePluginSlotHolder, type PluginSlotEntry, type PluginSlotHolder } from "./pluginManagementSlot";
 import { PLUGIN_NOT_OPENED_TEXT } from "./pluginOperationOpens";
-import { pluginConclusionSettled, pluginCheckConclusion, retryPluginCheckReadback, stopPluginConclusion, tellPluginConclusion, type PluginCheckConclusion, type PluginPendingCheck } from "./usePluginManagement";
+import { pluginConclusionSettled, retryPluginCheckReadback, stopPluginConclusion, tellPluginConclusion, type PluginCheckConclusion, type PluginPendingCheck } from "./usePluginManagement";
 
 /** One line of the list: an operation holding its computer's slot, a pending check, or both (the same operation). */
 export interface PluginOperationLine {
@@ -36,19 +36,20 @@ const KIND: Record<PluginSlotEntry, string> = {
  * the computer no longer has and that nothing on the computer can prove (`unprovable`: an uninstall, a page approval)
  * shows what the computer has now and offers only "Stop tracking": checking again could not settle it.
  */
-export function PluginPendingChecksSheet({ visible, lines, conclusions, isOnline, canOpen, onDecide, onClose, onOpenChecked, onShowInstalled }: {
+export function PluginPendingChecksSheet({ visible, lines, conclusions, isOnline, listed, onDecide, onClose, onShowInstalled }: {
   visible: boolean;
   lines: PluginOperationLine[];
   conclusions: PluginCheckConclusion[];
   isOnline(deviceId: string): boolean;
-  /** The computer is still listed for this account (only there can an instance be opened). */
-  canOpen(deviceId: string): boolean;
+  /** The computer is still listed for this account ("Go to Installed" goes to its installed list only then). */
+  listed(deviceId: string): boolean;
   /** "View and decide": opens the consent once its operation holds the computer's slot; false when it cannot. */
   onDecide(operationId: string): boolean;
   onClose(): void;
-  /** "Open plugin": the page opens, in the press itself, the instance this line shows as proven. */
-  onOpenChecked(operationId: string): void;
-  /** "Go to Installed": closes the list and shows the installed segment of the record's computer (V2.10 ③). */
+  /**
+   * "Go to Installed": closes the list and shows the installed segment of the record's computer. A record never opens a
+   * particular instance (maintainer, 2026-11-26): what the installed list opens is the computer's current one.
+   */
   onShowInstalled(who: PluginSlotHolder): void;
 }) {
   const { t } = useTranslation(), styles = useThemedStyles(makeStyles), { colors } = useTheme();
@@ -61,30 +62,6 @@ export function PluginPendingChecksSheet({ visible, lines, conclusions, isOnline
   // Only what is still settled then counts (`tellPluginConclusion`): one being read again, or that could not be read
   // after all, stays listed.
   const settledSeen = useRef(new Set<string>());
-  // "Open plugin" opens at once what its line shows. A success is a past result (the plugin may have been replaced
-  // since), so one proven before the list was opened is read again, once, as the list opens (or as soon as its computer
-  // can be read), and its line has no "Open plugin" until that read is back. One proven while the list is open was read
-  // just now. After that, a plugin change notification from that computer or its coming back online takes "Open plugin"
-  // away and the record reads it again (usePluginManagement `holdPluginConclusionsOn`; maintainer review 14:25 #1).
-  const provenBefore = useRef<Set<string> | undefined>(undefined);
-  const proven = (item: PluginCheckConclusion) => item.readback === "verified" && !item.told
-    && (item.result === "succeeded" || item.result === "installed") && item.entry !== "uninstall";
-  const readable = (deviceId: string) => canOpen(deviceId) && isOnline(deviceId);
-  if (!visible) provenBefore.current = undefined;
-  else provenBefore.current ??= new Set(conclusions.filter(proven).map((item) => item.operationId));
-  useEffect(() => {
-    for (const operationId of [...(provenBefore.current ?? [])]) {
-      const conclusion = conclusions.find((item) => item.operationId === operationId);
-      if (!conclusion || !proven(conclusion)) { provenBefore.current!.delete(operationId); continue; }
-      if (!readable(conclusion.who.deviceId)) continue;
-      provenBefore.current!.delete(operationId);
-      // After this commit's effects: the page says whether the computer can be reached in its own effect, which runs
-      // after this one. A read issued before that would count as issued while unreachable and, failing, be read twice.
-      // A computer that just came back has its proven successes read again already (they are no longer "verified"): no
-      // second read.
-      queueMicrotask(() => { if (pluginCheckConclusion(operationId)?.readback === "verified") void retryPluginCheckReadback(operationId); });
-    }
-  });
   if (!visible) seen.current.clear();
   useEffect(() => {
     if (!visible) { setBlocked([]); return; }
@@ -114,19 +91,20 @@ export function PluginPendingChecksSheet({ visible, lines, conclusions, isOnline
     return t(check.state.outcome === "confirmation" ? "plugins.checks.status.confirmation" : "plugins.checks.status.running");
   };
   /**
-   * How a line that left the list ended (dispatcher L-1, L-3): a success says whether the list's own read of the
-   * computer found the instance (only then "Open", and only on a computer still listed), is still reading, did not find
-   * it, or failed to read ("Read again"); an uninstall has nothing to open.
+   * How a line that left the list ended (dispatcher L-1, L-3): a success says what the list's own read of the computer
+   * found (done, changed or not attributable since, an older computer, not there now), that it is still reading, or that
+   * it failed to read ("Read again"). A success whose plugin is there offers "Go to Installed" (the record's computer's
+   * installed list, while that computer is listed for this account; maintainer, 2026-11-26); an uninstall has none.
    */
-  const installedEntry = (deviceId: string) => canOpen(deviceId) ? { showInstalled: true } : { openUnavailable: true };
-  const ended = (line: PluginOperationLine): { text: string; open?: string; readAgain?: string; stop?: string; openUnavailable?: boolean; showInstalled?: boolean } => {
+  const installedEntry = (deviceId: string) => listed(deviceId) ? { showInstalled: true } : { unlisted: true };
+  const ended = (line: PluginOperationLine): { text: string; readAgain?: string; stop?: string; unlisted?: boolean; showInstalled?: boolean } => {
     const operationId = line.check?.operationId ?? (line.concluded ? line.key : undefined);
     const conclusion = operationId ? conclusions.find((item) => item.operationId === operationId) : undefined;
     if (!conclusion) return { text: t(line.check ? "plugins.checks.result.untracked" : "plugins.checks.result.ended") };
     // Drawn with a known result (proven, why not, or not confirmed after its receipt was gone): seen once the list closes.
     if (pluginConclusionSettled(conclusion)) settledSeen.current.add(conclusion.operationId);
     if (conclusion.result === "notInstalled") return { text: t("plugins.market.unconfirmedNotInstalled") };
-    if (conclusion.result === "mismatch") return { text: t("plugins.market.unconfirmedMismatch") };
+    if (conclusion.result === "mismatch") return { text: t("plugins.market.unconfirmedMismatch"), ...installedEntry(conclusion.who.deviceId) };
     // "Go to Installed" only while its computer is in this account's list (maintainer review 14:25 #3): otherwise the
     // record stays, says that computer is not available, and offers no way to another computer's list.
     if (conclusion.result === "legacy") return { text: t("plugins.market.unconfirmedLegacy"), ...installedEntry(conclusion.who.deviceId) };
@@ -136,18 +114,12 @@ export function PluginPendingChecksSheet({ visible, lines, conclusions, isOnline
     // "Stop tracking" on one that could not be read.
     if (conclusion.told && conclusion.readback === "failed") return { text: t("plugins.checks.result.untracked") };
     switch (conclusion.readback) {
-      case "verified":
-        // Already shown to the person elsewhere (its own view opened or showed it): nothing more to open from here.
-        if (conclusion.told) return { text: done };
-        if (!canOpen(conclusion.who.deviceId)) return { text: done, openUnavailable: true };
-        // To be read again before it is offered (this render's effect, once the computer can be read).
-        if (provenBefore.current?.has(conclusion.operationId) && isOnline(conclusion.who.deviceId))
-          return { text: t("plugins.checks.result.readingBack"), stop: conclusion.operationId };
-        return { text: done, open: conclusion.operationId };
+      case "verified": return { text: done, ...installedEntry(conclusion.who.deviceId) };
       // Being read: nothing to do but wait, or stop following it (the read is dropped; nothing is sent).
       case "pending": return conclusion.told ? { text: done } : { text: t("plugins.checks.result.readingBack"), stop: conclusion.operationId };
       // The success stands as a past result; the computer's facts now do not name this operation's instance.
-      case "gone": case "unconfirmed": return { text: t(PLUGIN_NOT_OPENED_TEXT[conclusion.readback]) };
+      case "unconfirmed": return { text: t(PLUGIN_NOT_OPENED_TEXT.unconfirmed), ...installedEntry(conclusion.who.deviceId) };
+      case "gone": return { text: t(PLUGIN_NOT_OPENED_TEXT.gone) };
       // An older computer gives no evidence (V2.10 ③): the person opens it from the installed list.
       case "legacy": return { text: t(PLUGIN_NOT_OPENED_TEXT.legacy), ...installedEntry(conclusion.who.deviceId) };
       case "failed": return { text: t("plugins.checks.result.succeededUnread"), readAgain: conclusion.operationId, stop: conclusion.operationId };
@@ -211,44 +183,31 @@ export function PluginPendingChecksSheet({ visible, lines, conclusions, isOnline
                       <Text style={styles.label}>{t("plugins.checks.showInstalled")}</Text>
                     </Pressable>
                   </View>
-                ) : over?.open || over?.readAgain || over?.stop ? (
+                ) : over?.readAgain || over?.stop ? (
                   <View style={styles.actions}>
-                    {/* The line opened from here is not counted as seen by closing the list: the detail's own reply decides
-                        (`pluginConclusionShownBy`; maintainer review 15:22 #1). */}
-                    {over.open ? (
-                      <Pressable testID="plugins.checks.open" accessibilityRole="button" disabled={!online}
+                    {over.readAgain ? (
+                      <Pressable testID="plugins.checks.readAgain" accessibilityRole="button" disabled={!online}
                         accessibilityState={{ disabled: !online }}
-                        onPress={() => { const operationId = over.open!; settledSeen.current.delete(operationId); onOpenChecked(operationId); }} style={[styles.button, styles.primary, !online && styles.unavailable]}>
-                        <Text style={[styles.label, styles.primaryText]}>{t("plugins.checks.open")}</Text>
+                        onPress={() => { void retryPluginCheckReadback(over.readAgain!); }} style={[styles.button, styles.primary, !online && styles.unavailable]}>
+                        <Text style={[styles.label, styles.primaryText]}>{t("plugins.checks.readAgain")}</Text>
                       </Pressable>
-                    ) : (
-                      <>
-                        {over.readAgain ? (
-                          <Pressable testID="plugins.checks.readAgain" accessibilityRole="button" disabled={!online}
-                            accessibilityState={{ disabled: !online }}
-                            onPress={() => { void retryPluginCheckReadback(over.readAgain!); }} style={[styles.button, styles.primary, !online && styles.unavailable]}>
-                            <Text style={[styles.label, styles.primaryText]}>{t("plugins.checks.readAgain")}</Text>
-                          </Pressable>
-                        ) : null}
-                        {/* One not read (yet, or its computer is away for good) can always be let go: nothing is sent. */}
-                        <Pressable testID="plugins.checks.stop" accessibilityRole="button"
-                          onPress={() => stopPluginConclusion(over.stop!)} style={styles.button}>
-                          <Text style={styles.label}>{t("plugins.checks.stop")}</Text>
-                        </Pressable>
-                      </>
-                    )}
+                    ) : null}
+                    {/* One not read (yet, or its computer is away for good) can always be let go: nothing is sent. */}
+                    <Pressable testID="plugins.checks.stop" accessibilityRole="button"
+                      onPress={() => stopPluginConclusion(over.stop!)} style={styles.button}>
+                      <Text style={styles.label}>{t("plugins.checks.stop")}</Text>
+                    </Pressable>
                   </View>
                 ) : null}
-                {!check && (over?.open || over?.readAgain) && !online ? (
-                  // Why the button is unavailable: the computer left this account's list, or is not connected now.
-                  <Text testID="plugins.checks.unreachable" style={styles.hint}>{!canOpen(line.who.deviceId)
-                    ? t("plugins.checks.openUnavailable", { device: line.who.deviceName })
-                    // A result already read only waits to be opened; one not read yet waits to be checked.
-                    : t(over.open ? "plugins.checks.openOffline" : "plugins.checks.status.offline", { device: line.who.deviceName })}</Text>
+                {!check && over?.readAgain && !online ? (
+                  // Why "Read again" is unavailable: the computer left this account's list, or is not connected now.
+                  <Text testID="plugins.checks.unreachable" style={styles.hint}>{!listed(line.who.deviceId)
+                    ? t("plugins.checks.unlisted", { device: line.who.deviceName })
+                    : t("plugins.checks.status.offline", { device: line.who.deviceName })}</Text>
                 ) : null}
                 {!check && over?.stop ? <Text style={styles.hint}>{t("plugins.checks.stopHint")}</Text> : null}
-                {check || over?.showInstalled || over?.open || over?.readAgain || over?.stop ? null : over?.openUnavailable ? (
-                  <Text testID="plugins.checks.openUnavailable" style={styles.hint}>{t("plugins.checks.openUnavailable", { device: line.who.deviceName })}</Text>
+                {check || over?.showInstalled || over?.readAgain || over?.stop ? null : over?.unlisted ? (
+                  <Text testID="plugins.checks.unlisted" style={styles.hint}>{t("plugins.checks.unlisted", { device: line.who.deviceName })}</Text>
                 ) : null}
               </View>
             );

@@ -143,7 +143,6 @@
       "loading": "方讀法器…",
       "loadFailed": "法器之資未能讀，請再試。",
       "retired": "此功能已退，請於機上察替代之法器。",
-      "replaced": "彼機之法器已易為他番所納，非此錄所載者。可於「已納」中復啟之。",
       "approvalRequired": "安裝之錄須復原，請於機上法器詳情中理之。",
       "builtinRecovery": "內建法器須復原，請重啟機上之 Cindy。",
       "disabled": "啟此法器即可用之。",
@@ -339,7 +338,6 @@
     "title": {
       "offline": "機已離線",
       "loadFailed": "法器載入未成",
-      "replaced": "此法器已易",
       "retired": "此功已停",
       "approvalRequired": "安裝須復原",
       "builtinRecovery": "內建法器須復原",
@@ -542,13 +540,11 @@
       "succeededUnread": "已成，然未能讀彼機之法器。",
       "uninstalled": "已卸"
     },
-    "open": "啟法器",
     "close": "畢",
     "decide": "觀而決之",
     "decideBlocked": "此機另有一事未竟，竟後再決。",
     "readAgain": "復讀",
     "showInstalled": "往已納",
-    "openUnavailable": "「{{device}}」已不在此號之機列，不能自此啟之。",
-    "openOffline": "「{{device}}」未連，連之乃可啟。"
+    "unlisted": "「{{device}}」已不在此號之機列。"
   }
 }

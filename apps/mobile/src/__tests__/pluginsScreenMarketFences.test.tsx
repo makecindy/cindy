@@ -11,8 +11,8 @@ import { PluginUiEnablePrompt } from "@/plugins/PluginUiEnablePrompt";
 import { PluginManagementConfirmation } from "@/plugins/PluginManagementConfirmation";
 import { pluginManagementSlotFor, pluginOperationHold } from "@/plugins/pluginManagementSlot";
 /**
- * Proven as this install: concluded as done with its instance read from the computer. The page never opens a result by
- * itself; the person opens it from the list of checks ("Open plugin"), which the tests of that list cover.
+ * Proven as this install: concluded as done with its instance read from the computer. Nothing opens a result's instance:
+ * the list of checks says how it ended and leads to the installed list ("Go to Installed").
  */
 const provenDemo = () => __retainedForTests.conclusions().some((conclusion) => (conclusion.result === "succeeded" || conclusion.result === "installed")
   && conclusion.readback === "verified" && conclusion.instanceKey === "_root__demo");
@@ -901,15 +901,17 @@ describe("market read fences and lost-receipt facts", () => {
         await act(async () => root.render(createElement(PluginsScreen)));
         await settle(20);
         // A read after the reconnect proves this install (V2.10 ①). The page does not move by itself for it: it is
-        // listed at the top as having a result, and opens from the list.
+        // listed at the top as having a result; the list says it is done and leads to the installed list, never to the
+        // instance's detail.
         expect({ proven: opened(), opened: reallyOpened() }).toEqual({ proven: true, opened: false });
         const control = (id: string) => element.querySelector(`[data-testid="${id}"]`) as HTMLButtonElement;
         expect(control("plugins.slotHolder").textContent).toContain("plugins.checks.settledOne");
         await act(async () => control("plugins.slotHolder.show").click());
         await settle(10);
-        await act(async () => control("plugins.checks.open").click());
+        expect(control("plugins.checks.showInstalled")).not.toBeNull();
+        await act(async () => control("plugins.checks.showInstalled").click());
         await settle(20);
-        expect(reallyOpened()).toBe(true);
+        expect(reallyOpened()).toBe(false);
         expect(writes(sent)).toEqual(["management:begin", "management:answer"]);
       });
     });
@@ -1065,9 +1067,9 @@ describe("market read fences and lost-receipt facts", () => {
         expect({ writes: writes(world.requests), update: world.ops.get("operation-0002")!.phase, banner: banner() })
           .toEqual({ writes: BOTH, update: "confirmation", banner: expect.stringContaining("plugins.checks.attentionMany") });
       }));
-      // Pre-push review, round 5 (failed on 7951455227 with "Open plugin" pressed for Notes before the consent came up:
-      // its read landed after it, the page moved to Notes and the update's unanswered consent was cancelled). The list
-      // reads as it opens and nothing opens when a read lands.
+      // Pre-push review, round 5 (failed on 7951455227 with "Open plugin", since removed, pressed for Notes before the
+      // consent came up: its read landed after it, the page moved to Notes and the update's unanswered consent was
+      // cancelled). Nothing opens when a read lands, and nothing is written for the update.
       it.each([["wide", 900], ["narrow", 390]] as const)("%s: the list is opened while Demo's update is getting ready; the update's consent comes up; Notes' read lands: nothing opens, nothing is written for the update", async (_name, width) => numbered(async () => {
         const world = computer();
         fixture.platform = "android";
@@ -1097,8 +1099,7 @@ describe("market read fences and lost-receipt facts", () => {
         expect(writes(world.requests)).toEqual(BOTH.slice(0, 2));
         const read = gate();
         world.hold = (label) => label === "light" ? read.promise : undefined;
-        await click("plugins.slotHolder.show");                                              // the list of checks: Notes is read again
-        expect(allById("plugins.checks.open")).toHaveLength(0);                              // being read: not offered yet
+        await click("plugins.slotHolder.show");                                              // the list of checks
         preparing.release(true);                                                             // the update goes on: begin, its consent
         await settle(30);
         expect({ writes: writes(world.requests), update: world.ops.get("operation-0002")?.phase, consent: allById("plugins.management.allow").length > 0 })
@@ -1471,16 +1472,16 @@ describe("market read fences and lost-receipt facts", () => {
       const timesOut: Hold = () => Promise.resolve(false);
       async function open(width = 900) { fixture.width = width; await openDetail(); await settle(8); }
 
-      it("control: a plain update: the detail is read again, nothing is listed, nothing is prompted", async () => {
+      it("control: a plain update: the detail is read again, listed until seen in the list, nothing is prompted", async () => {
         const world = host();
         await open();
         fixture.alert.mockClear();
         await update();
         expect({ banner: banner(), prompts: prompts(), results: results(), actions: menuActions() })
-          .toEqual({ banner: "", prompts: [], results: [{ entry: "update", result: "succeeded", readback: "verified", told: true }], actions: ["uninstall"] });
+          .toEqual({ banner: expect.stringContaining("plugins.checks.settledOne"), prompts: [], results: [{ entry: "update", result: "succeeded", readback: "verified", told: false }], actions: ["uninstall"] });
         expect(world.asked.filter((id) => id === "management:begin")).toHaveLength(1);
       });
-      it.each([["wide", 900], ["narrow", 390]] as const)("update; the reads after it time out; the computer goes away and comes back (%s): the detail shows the update and nothing stays listed", async (_name, width) => {
+      it.each([["wide", 900], ["narrow", 390]] as const)("update; the reads after it time out; the computer goes away and comes back (%s): the detail shows the update and it is listed until seen in the list", async (_name, width) => {
         const world = host();
         world.hold = timesOut;
         await open(width);
@@ -1492,7 +1493,7 @@ describe("market read fences and lost-receipt facts", () => {
         fixture.online = true; await rerender();
         await settle(30);
         expect({ results: results(), read: detailReads().includes("mac:demo"), actions: menuActions(), banner: banner() })
-          .toEqual({ results: [{ entry: "update", result: "succeeded", readback: "verified", told: true }], read: true, actions: ["uninstall"], banner: "" });
+          .toEqual({ results: [{ entry: "update", result: "succeeded", readback: "verified", told: false }], read: true, actions: ["uninstall"], banner: expect.stringContaining("plugins.checks.settledOne") });
       });
       // The success is read again from the list, by the person, and seen there. The page keeps no account of what the
       // detail on screen shows: that detail is left as it was (its own read after the update did not land) until it is
@@ -1512,66 +1513,7 @@ describe("market read fences and lost-receipt facts", () => {
         expect({ results: results(), banner: banner(), prompts: prompts() })
           .toEqual({ results: [{ entry: "update", result: "succeeded", readback: "verified", told: true }], banner: "", prompts: [] });
       });
-      // Maintainer review 15:22 #2: a page approval of install A, proven; the plugin is then replaced under the same key by
-      // install B whose pages are approved too, and the computer says its plugins changed. The record reads it again:
-      // before, that read took B as this approval's result (same key, pages approved) and recorded B's token. Now only
-      // A's past success stays, without "Open plugin". Minimal failing input on af50d3d92d: this test.
-      it("page approval of one install, proven; replaced under the same key by another install with its pages approved too: only the past success stays, no \"Open plugin\"", async () => {
-        const world = host({ ui: true });
-        await open(390);
-        // The detail's own read after the result fails, so the result is not seen there: it stays listed, proven.
-        fixture.read.mockImplementation(async () => { throw new Error("[TIMEOUT] remote invoke timed out"); });
-        await act(async () => { fixture.props.get("detail").uiApprovalNotice.actions[0].onPress(); });
-        await settle(30);
-        expect(results()).toEqual([{ entry: "page-approval", result: "succeeded", readback: "verified", told: false }]);
-        world.plugin.approval = { state: "approved", revision: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb" };   // B, pages approved
-        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-        try {
-          await act(async () => { fixture.resourceListeners.forEach((listener) => listener("mac", { collectionId: "plugins" })); });
-          await act(async () => { await vi.advanceTimersByTimeAsync(600); });
-        } finally { vi.useRealTimers(); }
-        await settle(30);
-        expect(results()).toEqual([{ entry: "page-approval", result: "succeeded", readback: "unconfirmed", told: false }]);
-        await click("plugins.slotHolder.show");
-        expect(byId("plugins.checks.open")).toBeNull();
-      });
-      // Pre-push review (2026-11-26) on 93f1926003: the detail opened from a record stayed held to that record after the
-      // person updated the plugin from it, so the update's own result (a new install) was taken for a replaced one and
-      // the update stayed listed. Now an operation started from that detail releases the hold. Failed on 93f1926003.
-      it("a detail opened from a record; the person updates the plugin from it: the new install is shown and the update is seen", async () => {
-        const world = host({ ui: true });
-        // The release on the market has the same pages as the installed one (only its version moves on).
-        world.market.manifest = { ...JSON.parse(JSON.stringify(world.plugin.manifest)), version: "2" };
-        let readFails = false;
-        fixture.read.mockImplementation(async (_invoke: any, _host: any, ref: any) => {
-          if (readFails) throw new Error("[TIMEOUT] remote invoke timed out");
-          return { ...row().item, ref, revision: JSON.stringify([world.plugin.manifest.version, `approved:${world.plugin.approval.revision}`]), blocks: [] };
-        });
-        // The update the computer commits installs a new package: a new approval revision under the same key.
-        const wire = fixture.wire.getMockImplementation()!;
-        fixture.wire.mockImplementation(async (...args: any[]) => {
-          const reply = await (wire as any)(...args);
-          if (args[2]?.[0]?.actionId === "management:begin" && args[2]?.[0]?.input?.kind === "install")
-            world.plugin.approval = { state: "approved", revision: "cccccccc-cccc-4ccc-8ccc-cccccccccccc" };
-          return reply;
-        });
-        await open(390);
-        readFails = true;                                                       // the page approval is not seen on this detail
-        await act(async () => { fixture.props.get("detail").uiApprovalNotice.actions[0].onPress(); });
-        await settle(30);
-        readFails = false;
-        await click("plugins.slotHolder.show");
-        await click("plugins.checks.open");
-        await settle(20);
-        expect({ status: fixture.props.get("detail").model.status, results: results() })
-          .toEqual({ status: undefined, results: [{ entry: "page-approval", result: "succeeded", readback: "verified", told: true }] });
-        const spy = vi.spyOn(expoCrypto, "randomUUID").mockImplementationOnce(() => "update-operation" as any);   // its own operation
-        try { await update(); await settle(30); } finally { spy.mockRestore(); }
-        expect({ status: fixture.props.get("detail").model.status, results: results(), banner: banner() })
-          .toEqual({ status: undefined, banner: "", results: [{ entry: "page-approval", result: "succeeded", readback: "verified", told: true },
-            { entry: "update", result: "succeeded", readback: "verified", told: true }] });
-      });
-      it("page approval; the reads after it time out; the computer comes back: approved on screen and nothing stays listed", async () => {
+      it("page approval; the reads after it time out; the computer comes back: approved on screen and it is listed until seen in the list", async () => {
         const world = host({ ui: true });
         world.hold = timesOut;
         await open(390);
@@ -1581,9 +1523,9 @@ describe("market read fences and lost-receipt facts", () => {
         world.hold = () => undefined;
         fixture.online = true; await rerender();
         await settle(30);
-        expect({ approval: fixture.props.get("detail").uiApprovalNotice, banner: banner() }).toEqual({ approval: undefined, banner: "" });
+        expect({ approval: fixture.props.get("detail").uiApprovalNotice, banner: banner() }).toEqual({ approval: undefined, banner: expect.stringContaining("plugins.checks.settledOne") });
       });
-      it("update; begin's reply lost; receipt gone; the detail's own \"Check result\" proves it: listed as installed; \"Open plugin\" reads the detail, which shows the new version", async () => {
+      it("update; begin's reply lost; receipt gone; the detail's own \"Check result\" proves it: listed as installed; seen in the list, with Go to Installed", async () => {
         const world = host();
         // The installed detail's own resource, as the computer has it at the time (the detail shows its version block).
         fixture.read.mockImplementation(async () => ({ ...row().item, blocks: [{ id: "version", fallbackMarkdown: world.plugin.manifest.version }] }));
@@ -1597,10 +1539,10 @@ describe("market read fences and lost-receipt facts", () => {
         expect({ results: results(), notice: fixture.props.get("detail").managementNotice, banner: banner() })
           .toEqual({ results: [{ entry: "update", result: "installed", readback: "verified", told: false }], notice: undefined, banner: expect.stringContaining("plugins.checks.settledOne") });
         await click("plugins.slotHolder.show");
-        await click("plugins.checks.open");
-        await settle(30);
-        expect({ results: results(), banner: banner(), version: fixture.props.get("detail").model.version })
-          .toEqual({ results: [{ entry: "update", result: "installed", readback: "verified", told: true }], banner: "", version: "2" });
+        expect(byId("plugins.checks.showInstalled")).not.toBeNull();
+        await click("plugins.checks.close");
+        expect({ results: results(), banner: banner() })
+          .toEqual({ results: [{ entry: "update", result: "installed", readback: "verified", told: true }], banner: "" });
       });
       it("update; only the success's own read times out, the detail's own read answers: the detail is read again, and the success stays listed to be read", async () => {
         const world = host();
@@ -1611,7 +1553,7 @@ describe("market read fences and lost-receipt facts", () => {
         expect({ actions: menuActions(), read: detailReads(), banner: banner() })
           .toEqual({ actions: ["uninstall"], read: ["mac:demo"], banner: expect.stringContaining("plugins.checks.waitingOne") });
       });
-      it("update; the page is left before the read is back: nobody saw it, so it is listed as having a result; the list says done with \"Open plugin\", closing it clears the notice", async () => {
+      it("update; the page is left before the read is back: nobody saw it, so it is listed as having a result; the list says done with \"Go to Installed\", closing it clears the notice", async () => {
         let release!: () => void;
         const gate = new Promise<boolean>((resolve) => { release = () => resolve(true); });
         const world = host();
@@ -1626,7 +1568,7 @@ describe("market read fences and lost-receipt facts", () => {
         await rerender();
         expect(banner()).toContain("plugins.checks.settledOne");
         await click("plugins.slotHolder.show");
-        expect({ done: (byId("plugins.checks")?.textContent ?? "").includes("plugins.checks.result.succeeded"), open: !!byId("plugins.checks.open") }).toEqual({ done: true, open: true });
+        expect({ done: (byId("plugins.checks")?.textContent ?? "").includes("plugins.checks.result.succeeded"), installed: !!byId("plugins.checks.showInstalled") }).toEqual({ done: true, installed: true });
         await click("plugins.checks.close");
         expect(banner()).toBe("");
       });
@@ -1674,7 +1616,7 @@ describe("market read fences and lost-receipt facts", () => {
           await click("plugins.checks.close");
           expect(banner()).toBe("");
         });
-      it("update could not be read; back to the list; the computer comes back; the person opens that detail again: it is read once, and the notice goes", async () => {
+      it("update could not be read; back to the list; the computer comes back; the person opens that detail again: it is read once, and the result is listed until seen in the list", async () => {
         const world = host();
         world.hold = timesOut;
         await open(390);
@@ -1689,7 +1631,7 @@ describe("market read fences and lost-receipt facts", () => {
         fixture.read.mockClear();
         await act(async () => fixture.props.get("directory").onDetail(row()));
         await settle(30);
-        expect({ banner: banner(), reads: detailReads() }).toEqual({ banner: "", reads: ["mac:demo"] });
+        expect({ banner: banner(), reads: detailReads() }).toEqual({ banner: expect.stringContaining("plugins.checks.settledOne"), reads: ["mac:demo"] });
       });
       // Pre-push review, round 5; each failed on 7951455227.
       it.each([["wide", 900], ["narrow", 390]] as const)("%s: update started from the detail opened over the plugin's own page; back to the plugin's page while the computer installs; it ends: the plugin's page stays in front, and the detail is read when it is shown again", async (_name, width) => {
@@ -1725,7 +1667,7 @@ describe("market read fences and lost-receipt facts", () => {
         await act(async () => fixture.props.get("header").right.props.onPress());
         await settle(30);
         expect({ menu: onPluginPage().menu, read: detailReads().includes("mac:demo"), results: results(), banner: banner() })
-          .toEqual({ menu: true, read: true, results: [{ entry: "update", result: "succeeded", readback: "verified", told: true }], banner: "" });
+          .toEqual({ menu: true, read: true, results: [{ entry: "update", result: "succeeded", readback: "verified", told: false }], banner: expect.stringContaining("plugins.checks.settledOne") });
       });
       it("update could not be read; the computer comes back; the success's own read answers; the controller's read after the update and the detail's reads time out: nothing brought the detail up to date, so the result stays listed", async () => {
         const world = host();
@@ -1757,7 +1699,7 @@ describe("market read fences and lost-receipt facts", () => {
         expect(results()).toEqual([{ entry: "update", result: "succeeded", readback: "verified", told: false }]);
         await act(async () => { fixture.appStateListeners.forEach((listener) => listener("active")); });
         await settle(30);
-        expect({ results: results(), banner: banner() }).toEqual({ results: [{ entry: "update", result: "succeeded", readback: "verified", told: true }], banner: "" });
+        expect({ results: results(), banner: banner() }).toEqual({ results: [{ entry: "update", result: "succeeded", readback: "verified", told: false }], banner: expect.stringContaining("plugins.checks.settledOne") });
       });
       // Pre-push review, round 6; each failed on 84ddb5043c. Seen only on a detail read after the result was proven
       // (also when the reads after the update land in one commit); and a read the person's own press issued after the
@@ -1789,7 +1731,7 @@ describe("market read fences and lost-receipt facts", () => {
         await act(async () => fixture.props.get("header").right.props.onPress());
         await settle(30);
         expect({ detailReads: detailReads(), snapshots: snapshots(world) - before, results: results() })
-          .toEqual({ detailReads: ["mac:demo"], snapshots: 0, results: [{ entry: "update", result: "succeeded", readback: "verified", told: true }] });
+          .toEqual({ detailReads: ["mac:demo"], snapshots: 0, results: [{ entry: "update", result: "succeeded", readback: "verified", told: false }] });
       });
       // Pre-push review, round 9 (the rows after each control failed from 8a456c9f59 on, and pass on c6efda5691): the
       // result comes with the write's own reply after the connection moved on meanwhile (the app left the foreground
@@ -1811,7 +1753,7 @@ describe("market read fences and lost-receipt facts", () => {
         await act(async () => { fixture.appStateListeners.forEach((listener) => listener("active")); }); await settle(14);
       };
       it.each([["control: no blip", false], ["the app leaves the foreground for a moment while the computer updates", true]] as const)(
-        "update from the installed detail; %s; begin's reply says succeeded and every read answers: the detail is brought up to date and nothing stays listed", async (_name, blip) => {
+        "update from the installed detail; %s; begin's reply says succeeded and every read answers: the detail is brought up to date and it is listed until seen in the list", async (_name, blip) => {
           const world = host();
           fixture.read.mockImplementation(async () => ({ ...row().item, blocks: [{ id: "version", fallbackMarkdown: world.plugin.manifest.version }] }));
           world.operation = () => ({ operationId: world.operationId, phase: "running" });
@@ -1823,7 +1765,7 @@ describe("market read fences and lost-receipt facts", () => {
           await act(async () => { release(); });
           await settle(40);
           expect({ actions: menuActions(), detailReadAgain: detailReads().length > 0, version: fixture.props.get("detail").model.version, results: results(), banner: banner() })
-            .toEqual({ actions: ["uninstall"], detailReadAgain: true, version: "2", results: [{ entry: "update", result: "succeeded", readback: "verified", told: true }], banner: "" });
+            .toEqual({ actions: ["uninstall"], detailReadAgain: true, version: "2", results: [{ entry: "update", result: "succeeded", readback: "verified", told: false }], banner: expect.stringContaining("plugins.checks.settledOne") });
         });
       it.each([["control: no blip", false], ["the app leaves the foreground for a moment while the computer uninstalls", true]] as const)(
         "uninstall from the installed detail; %s; begin's reply says succeeded and every read answers: the detail of the plugin that is gone closes", async (_name, blip) => {
@@ -1863,26 +1805,6 @@ describe("market read fences and lost-receipt facts", () => {
         await settle(40);
         expect({ ...onPluginPage(), detailReads: detailReads(), results: results() }).toEqual({ menu: false, detailsButton: "plugins.details", detailReads: [],
           results: [{ entry: "update", result: "succeeded", readback: "verified", told: false }] });
-      });
-      // (The row keyed as the real list keys it, useRemoteResourceList: the harness's `row()` has another key, so "Open
-      // plugin" for the instance on screen would select another row there.)
-      it.each([["wide", 900], ["narrow", 390]] as const)("%s: update; the reads after it time out; \"Read again\" in the list proves it; \"Open plugin\" on that line (the same detail): the detail is read once, and the result is seen", async (_name, width) => {
-        const world = host();
-        world.hold = timesOut;
-        fixture.width = width;
-        const real = { ...row(), key: JSON.stringify(["mac", "plugins", "plugin", "demo"]) };
-        await act(async () => root.render(createElement(PluginsScreen)));
-        await act(async () => fixture.props.get("directory").onDetail(real));
-        await settle(8);
-        await update();
-        world.hold = () => undefined;
-        await click("plugins.slotHolder.show");
-        await click("plugins.checks.readAgain");
-        fixture.read.mockClear();
-        await click("plugins.checks.open");
-        await settle(30);
-        expect({ detailReads: detailReads(), results: results(), banner: banner() })
-          .toEqual({ detailReads: ["mac:demo"], results: [{ entry: "update", result: "succeeded", readback: "verified", told: true }], banner: "" });
       });
     });
 
@@ -2098,9 +2020,9 @@ describe("a consent that was shown, left, and not cancelled waits in the list fo
     const checks = usePluginPendingChecks(() => true, true, ["mac"]);
     const conclusions = usePluginCheckConclusions();
     return createElement("div", null, view ? createElement(View) : null,
-      createElement(PluginPendingChecksSheet, { visible: true, conclusions, isOnline: () => true, canOpen: () => true,
+      createElement(PluginPendingChecksSheet, { visible: true, conclusions, isOnline: () => true, listed: () => true,
         lines: checks.map((check) => ({ key: check.operationId, entry: check.entry, who: check.who, check })),
-        onDecide: () => false, onClose: () => {}, onOpenChecked: () => {}, onShowInstalled: () => {} }));
+        onDecide: () => false, onClose: () => {}, onShowInstalled: () => {} }));
   }
   const render = async (view: boolean) => { await act(async () => root.render(createElement(Page, { view }))); await settle(20); };
   async function install() {

@@ -145,7 +145,6 @@
       "loading": "Carregando plugin…",
       "loadFailed": "Não foi possível carregar os detalhes do plugin. Tente novamente.",
       "retired": "Este recurso foi descontinuado. Veja seu substituto no computador.",
-      "replaced": "O plugin no computador agora é outra instalação, não a deste registro. Você pode abri-lo de novo em Instalados.",
       "approvalRequired": "A instalação precisa de atenção. Restaure-a nos detalhes do plugin no computador.",
       "builtinRecovery": "Este plugin integrado precisa de atenção. Reinicie Cindy no computador.",
       "disabled": "Ative este plugin para usá-lo.",
@@ -341,7 +340,6 @@
     "title": {
       "offline": "Computador offline",
       "loadFailed": "Não foi possível carregar o plugin",
-      "replaced": "Este plugin foi substituído",
       "retired": "Recurso descontinuado",
       "approvalRequired": "A instalação precisa de atenção",
       "builtinRecovery": "O plugin integrado precisa de atenção",
@@ -544,13 +542,11 @@
       "succeededUnread": "Concluído, mas não foi possível ler os plugins do computador.",
       "uninstalled": "Desinstalado"
     },
-    "open": "Abrir plugin",
     "close": "OK",
     "decide": "Ver e decidir",
     "decideBlocked": "Outra operação neste computador não terminou. Decida quando terminar.",
     "readAgain": "Ler de novo",
     "showInstalled": "Ir para Instalados",
-    "openUnavailable": "“{{device}}” não está mais entre os computadores desta conta, então não pode ser aberto daqui.",
-    "openOffline": "“{{device}}” não está conectado. Conecte-o para abrir o plugin."
+    "unlisted": "“{{device}}” não está mais entre os computadores desta conta."
   }
 }

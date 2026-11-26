@@ -145,7 +145,6 @@
       "loading": "Cargando complemento…",
       "loadFailed": "No se pudieron cargar los detalles del complemento. Inténtalo de nuevo.",
       "retired": "Esta función se retiró. Consulta su reemplazo en la computadora.",
-      "replaced": "El complemento del ordenador es ahora otra instalación, no la de este registro. Puedes volver a abrirlo desde Instalados.",
       "approvalRequired": "La instalación necesita atención. Restáurala en los detalles del complemento en la computadora.",
       "builtinRecovery": "Este complemento integrado necesita atención. Reinicia Cindy en la computadora.",
       "disabled": "Habilita este complemento para usarlo.",
@@ -341,7 +340,6 @@
     "title": {
       "offline": "Computadora fuera de línea",
       "loadFailed": "No se pudo cargar el complemento",
-      "replaced": "Este complemento se ha sustituido",
       "retired": "Función retirada",
       "approvalRequired": "La instalación necesita atención",
       "builtinRecovery": "El complemento integrado necesita atención",
@@ -544,13 +542,11 @@
       "succeededUnread": "Hecho, pero no se pudieron leer los complementos del ordenador.",
       "uninstalled": "Desinstalado"
     },
-    "open": "Abrir complemento",
     "close": "Listo",
     "decide": "Ver y decidir",
     "decideBlocked": "Otra operación en este ordenador no ha terminado. Decide cuando termine.",
     "readAgain": "Volver a leer",
     "showInstalled": "Ir a Instalados",
-    "openUnavailable": "«{{device}}» ya no está entre los ordenadores de esta cuenta, así que no se puede abrir desde aquí.",
-    "openOffline": "«{{device}}» no está conectado. Conéctalo para abrir el complemento."
+    "unlisted": "«{{device}}» ya no está entre los ordenadores de esta cuenta."
   }
 }

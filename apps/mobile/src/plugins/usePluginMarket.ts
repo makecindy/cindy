@@ -13,7 +13,7 @@ import {
   PLUGIN_MARKET_QUERY_MAX, pluginMarketErrorKey, pluginMarketMatchesFilter, pluginMarketOrganizationErrorKey,
   pluginMarketRequest, pluginMarketSourceUnverified, type PluginMarketCounts, type PluginMarketFilter, type PluginMarketPage,
 } from "./pluginMarketCatalog";
-import { holdPluginConclusionsOn, rereadPluginConclusionsOn, usePluginCheckConclusions, usePluginManagement, usePluginPendingChecks } from "./usePluginManagement";
+import { usePluginCheckConclusions, usePluginManagement, usePluginPendingChecks } from "./usePluginManagement";
 import { pluginManagementSlotFor, pluginOperationHold, usePluginManagementSlot, type PluginSlotToken } from "./pluginManagementSlot";
 
 /** Same freshness window as the computer's market browser; pull-to-refresh always re-reads. */
@@ -542,23 +542,15 @@ export function usePluginMarket(options: UsePluginMarketOptions) {
     let timer: ReturnType<typeof setTimeout> | undefined;
     const off = onRemoteResourceChanged((source, payload) => {
       if (payload.collectionId !== "plugins") return;
-      // A success proven there loses its "Open" at once; it is read again with the burst, once (maintainer review 14:25 #1).
-      holdPluginConclusionsOn(source);
       changed.add(source);
       timer ??= setTimeout(() => {
         timer = undefined;
         const devices = [...changed];
         changed.clear();
-        for (const device of devices) rereadPluginConclusionsOn(device);
         if (mounted.current) for (const device of devices) invalidateComputer(device);
       }, PLUGIN_CHANGE_COALESCE_MS);
     });
-    return () => {
-      off();
-      if (timer) clearTimeout(timer);
-      // Held successes are not left without a read when the page goes before the burst ends.
-      for (const device of changed) rereadPluginConclusionsOn(device);
-    };
+    return () => { off(); if (timer) clearTimeout(timer); };
   }, [onRemoteResourceChanged, invalidateComputer]);
   useEffect(() => {
     const attempt = install, state = management.state, controller = management.controller;

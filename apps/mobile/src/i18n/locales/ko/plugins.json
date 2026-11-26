@@ -143,7 +143,6 @@
       "loading": "플러그인 불러오는 중…",
       "loadFailed": "플러그인 정보를 불러오지 못했습니다. 다시 시도하세요.",
       "retired": "종료된 기능입니다. 컴퓨터에서 대체 플러그인을 확인하세요.",
-      "replaced": "컴퓨터의 이 플러그인은 다른 설치로 교체되어 이 기록의 플러그인이 아닙니다. ‘설치됨’에서 다시 열 수 있습니다.",
       "approvalRequired": "설치 기록 복구가 필요합니다. 컴퓨터의 플러그인 상세 페이지에서 처리하세요.",
       "builtinRecovery": "기본 플러그인 복구가 필요합니다. 컴퓨터의 Cindy를 다시 시작하세요.",
       "disabled": "플러그인을 활성화하면 사용할 수 있습니다.",
@@ -339,7 +338,6 @@
     "title": {
       "offline": "컴퓨터 오프라인",
       "loadFailed": "플러그인을 불러올 수 없음",
-      "replaced": "이 플러그인이 교체되었습니다",
       "retired": "종료된 기능",
       "approvalRequired": "설치 복구 필요",
       "builtinRecovery": "기본 플러그인 복구 필요",
@@ -542,13 +540,11 @@
       "succeededUnread": "완료되었지만 컴퓨터의 플러그인을 읽지 못했습니다.",
       "uninstalled": "제거됨"
     },
-    "open": "플러그인 열기",
     "close": "닫기",
     "decide": "보고 결정하기",
     "decideBlocked": "이 컴퓨터의 다른 작업이 끝나지 않았습니다. 끝난 뒤 결정하세요.",
     "readAgain": "다시 읽기",
     "showInstalled": "‘설치됨’으로 이동",
-    "openUnavailable": "“{{device}}”이(가) 더 이상 이 계정의 컴퓨터 목록에 없어 여기서 열 수 없습니다.",
-    "openOffline": "“{{device}}”이(가) 연결되어 있지 않습니다. 연결하면 플러그인을 열 수 있습니다."
+    "unlisted": "“{{device}}”이(가) 더 이상 이 계정의 컴퓨터 목록에 없습니다."
   }
 }

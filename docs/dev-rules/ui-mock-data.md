@@ -131,7 +131,7 @@ pnpm mobile:sim:whoami -- --mock --json
   走真实的分页、详情、确认面板与安装回执；Demo Glossary Translate 演示下载失败，Demo Uncertain Sync 演示结果待确认（安装后
   离开插件页再回来，或在「安装到」切到另一台电脑，顶部一直有待核实提示，「查看」打开记录面板：核实结果、不再跟踪；
   配合 `market=lateConsent` 它在 begin 回包丢失、第一次查询协议错误后交给记录，核实时出现「电脑正在等你确认 · 查看并决定」；
-  `market=lateResult` 核实出成功并出现「打开」；`market=unreadResult` 核实出成功但第一次已装读取失败，出现「重新读取」），
+  `market=lateResult` 核实出成功（「已完成」＋「去已安装」）；`market=unreadResult` 核实出成功但第一次已装读取失败，出现「重新读取」），
   Demo Notes 是同标识冲突。确认面板的对照：Demo Device Simulator（官方，有高风险 `node:execute`）、Demo Agenda
   （官方，无高风险）、Demo Shift Calendar（社区，回执带 `communityMarket`）、Demo Repo Tools（Demo Git Market 自定义市场，
   可正常安装，有高风险，确认面板显示仓库 github.com/demo-org/demo-git-market）、Demo Auto Agent（官方，没有 Node，但有后台 Agent 与派活取件两项高风险）、
@@ -163,33 +163,32 @@ pnpm mobile:sim:whoami -- --mock --json
   | 结果待核实（「核实结果」可点） | `cindy://plugins?checks=waiting` |
   | 待核实 + 电脑离线（「核实结果」不可点并写原因） | `cindy://plugins?checks=offline`（记录在不在账号列表里的 CINDY Away Mock Mac 上） |
   | 电脑正在等你确认（「查看并决定」） | `cindy://plugins?checks=awaitingYou` |
-  | 成功 + 打开插件 | `cindy://plugins?checks=succeeded` |
-  | 市场安装成功后的常规路径（市场留在原处，顶部提示「…的操作有结果了」→「查看」→「打开插件」；从市场详情安装时详情改显示「已安装」） | `cindy://plugins?market=normal`，在市场里（列表行或市场详情）安装任一未装插件并允许 |
+  | 成功（「已完成」＋「去已安装」） | `cindy://plugins?checks=succeeded` |
+  | 市场安装成功后的常规路径（市场留在原处，顶部提示「…的操作有结果了」→「查看」→「去已安装」；从市场详情安装时详情改显示「已安装」） | `cindy://plugins?market=normal`，在市场里（列表行或市场详情）安装任一未装插件并允许 |
   | 成功但实例未核实（「重新读取」） | `cindy://plugins?checks=unread` |
   | 失败 | `cindy://plugins?checks=failed` |
   | 已不再跟踪 | `cindy://plugins?checks=untracked` |
   | 多条记录，一条待核实、一条进行中（顶部提示写「2 项插件操作待查看」） | `cindy://plugins?checks=many` |
   | 多条都还在进行（「N 项插件操作还没结束」） | 没有入口：要两台电脑上各有一项进行中，模拟环境只有一台在线电脑；这句的出现条件由 `pluginsScreenMarketFences.test.tsx` 的两台电脑用例断言 |
   | 回执过期，电脑上有这个插件但那份回答里没有它的安装记录（待核实的一行写「电脑上有这个插件，但读不到它的安装记录，还不能确认结果」，「核实结果」可点） | `cindy://plugins?checks=recordMissing`（模拟电脑的已装快照只剩自定义市场条目并报市场不可用；之后发任一 `market=` 场景，模拟电脑恢复为读得到市场；`checks=legacyHost` 留下的「按旧电脑回答」同样在发 `market=` 场景时恢复） |
-  | 记录面板打开时把之前证实的结果再读一次（先「已完成，正在确认电脑上的插件…」，读到后出现「打开插件」） | `cindy://plugins?market=normal` 安装一个插件，等顶部提示出现后点「查看」；读取很快，要截到中间态用 `checks=readingBack` |
-  | 两条都已读出结果（关上面板前，面板后面的顶部提示写「2 项插件操作有结果了」；两行都是「已完成」与「打开插件」） | `cindy://plugins?checks=results` |
+  | 两条都已读出结果（关上面板前，面板后面的顶部提示写「2 项插件操作有结果了」；两行都是「已完成」与「去已安装」） | `cindy://plugins?checks=results` |
   | 一条有结果、一条待核实（顶部提示写「2 项插件操作待查看」） | `cindy://plugins?checks=attention` |
   | 单条有结果的顶部提示（「…的操作有结果了」，不带面板） | 没有单独入口：`cindy://plugins?market=readbackFailed` 安装一个插件后退出并重新打开插件页（重开时自动重读，读出后只列在顶部、页面不跳转） |
   | 成功，正在确认电脑上的插件（「已完成，正在确认电脑上的插件…」） | `cindy://plugins?checks=readingBack`（之后的已装读取一直不回） |
-  | 成功，但插件之后又有变化（未能证实，没有「打开」） | `cindy://plugins?checks=changed`（提交后模拟电脑换成同一插件的旧版本，记录 `unattributed`；形状不完全贴合真实 Host：真实电脑上从本地文件装旧版本可能落到 `conflict`，结论同样是不打开） |
+  | 成功，但插件之后又有变化（未能证实，「已变更，或无法核实是这次安装的」＋「去已安装」） | `cindy://plugins?checks=changed`（提交后模拟电脑换成同一插件的旧版本，记录 `unattributed`；形状不完全贴合真实 Host：真实电脑上从本地文件装旧版本可能落到 `conflict`，结论同样是未能证实） |
   | 已卸载 | `cindy://plugins?checks=uninstalled`（Demo Weather Board 的卸载） |
   | 「查看并决定」被占用挡住（说明要等另一项结束） | `cindy://plugins?checks=decideBlocked`，列表里两条：点 Demo Agenda 的「查看并决定」（Demo Device Simulator 正在同一台电脑上安装；电脑在 Simulator 拿到位置之后才回答 Agenda 的确认，页面中途的查询不会让 Agenda 先拿回位置） |
   | 卸载回执过期，无法确认（显示还装着、只有「不再跟踪」） | `cindy://plugins?checks=unprovableUninstall`（面板打开后自动核实一次即出现） |
   | 更新完成且回执过期后核实（「已安装」+ 打开） | `cindy://plugins?checks=updateGone`（Demo Reading List 的更新） |
-  | 成功，但未能证实（本机换装同版本，`unattributed`，没有「打开」） | `cindy://plugins?checks=reinstalled` |
-  | 成功，但电脑端版本较旧（两个归属字段都没有，没有「打开」，有「去已安装」） | `cindy://plugins?checks=legacyHost` |
+  | 成功，但未能证实（本机换装同版本，`unattributed`，「去已安装」） | `cindy://plugins?checks=reinstalled` |
+  | 成功，但电脑端版本较旧（两个归属字段都没有，有「去已安装」） | `cindy://plugins?checks=legacyHost` |
   | 成功，但电脑上现在没有这个插件（之后被卸载） | `cindy://plugins?checks=goneSince` |
-  | 成功，只推进了目录版本（条目「可更新」，`self` ＋ 原号，仍可「打开」） | `cindy://plugins?checks=catalogAhead` |
+  | 成功，只推进了目录版本（条目「可更新」，`self` ＋ 原号，仍是「已完成」） | `cindy://plugins?checks=catalogAhead` |
   | 确认与选择不一致（只能拒绝） | 没有模拟入口：模拟电脑的确认都与所选一致（`pluginMarketVisualFixture.test.ts` 逐场景核对）；组件测试覆盖 |
   | 来源变化（更新预检） | `cindy://plugins?market=updateSourceChanged`，已安装里 Demo Moved Source 详情「管理插件 → 更新到 v版本」 |
   | 版本变化（更新预检） | `cindy://plugins?market=updateReleaseChanged`，已安装里 Demo Weather Board 详情「更新到 v版本」 |
   | 读取失败（更新预检） | `cindy://plugins?market=updateReadFailed`，同上 |
-  | 市场安装成功但没能读取（「已完成，但没能读取」，留在顶部提示与记录列表） | `cindy://plugins?market=readbackFailed`，在市场里安装任一未装插件并允许：装好后紧接着的两次已装读取失败（这笔成功自己的那次和页面的刷新），市场行直接结束、不弹提示，市场留在原处，顶部提示写「…的结果待核实」，记录面板列出这条「已完成，但没能读取电脑上的插件」（「重新读取」「不再跟踪」）；点「重新读取」后读到，面板里显示「已完成」与「打开插件」，点「打开插件」当场打开（要再截先发 `market=normal` 再发这个） |
+  | 市场安装成功但没能读取（「已完成，但没能读取」，留在顶部提示与记录列表） | `cindy://plugins?market=readbackFailed`，在市场里安装任一未装插件并允许：装好后紧接着的两次已装读取失败（这笔成功自己的那次和页面的刷新），市场行直接结束、不弹提示，市场留在原处，顶部提示写「…的结果待核实」，记录面板列出这条「已完成，但没能读取电脑上的插件」（「重新读取」「不再跟踪」）；点「重新读取」后读到，面板里显示「已完成」与「去已安装」（要再截先发 `market=normal` 再发这个） |
   | 市场详情读取失败（「重试」） | `cindy://plugins?market=detailReadFailed`，打开任一未装插件的市场详情（每个插件第一次读取失败，「重试」后正常；同一深链再发一次不重新造失败，要再截失败先发 `market=normal` 再发这个） |
   | 在电脑上完成配置 | 没有界面入口：已装详情的状态行只提供「连接电脑」「重试」（主干现状），`settings` 分支的这句提示点不到；`preview=1`（Missing API key）只显示状态 |
   | 进行中停住（其它入口不可用） | `cindy://plugins?market=hold`，安装或更新并允许后停在「进行中」 |

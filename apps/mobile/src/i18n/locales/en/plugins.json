@@ -143,7 +143,6 @@
       "loading": "Loading plugin…",
       "loadFailed": "Plugin details could not be loaded. Try again.",
       "retired": "This feature has been retired. See its replacement on the computer.",
-      "replaced": "The plugin on the computer is now another installation, not the one this record is about. You can open it again from Installed.",
       "approvalRequired": "The installation needs attention. Restore it in plugin details on the computer.",
       "builtinRecovery": "This built-in plugin needs attention. Restart Cindy on the computer.",
       "disabled": "Enable this plugin to use it.",
@@ -339,7 +338,6 @@
     "title": {
       "offline": "Computer offline",
       "loadFailed": "Could not load plugin",
-      "replaced": "This plugin was replaced",
       "retired": "Feature retired",
       "approvalRequired": "Installation needs attention",
       "builtinRecovery": "Built-in plugin needs attention",
@@ -542,13 +540,11 @@
       "succeededUnread": "Done, but the plugins on the computer couldn’t be read.",
       "uninstalled": "Uninstalled"
     },
-    "open": "Open plugin",
     "close": "Done",
     "decide": "View and decide",
     "decideBlocked": "Another operation on this computer isn’t finished. Decide once it is.",
     "readAgain": "Read again",
     "showInstalled": "Go to Installed",
-    "openUnavailable": "“{{device}}” is no longer in this account’s computers, so it can’t be opened from here.",
-    "openOffline": "“{{device}}” isn’t connected. Connect it to open the plugin."
+    "unlisted": "“{{device}}” is no longer in this account’s computers."
   }
 }

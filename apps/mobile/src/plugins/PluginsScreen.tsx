@@ -80,7 +80,6 @@ import { PluginManagementConfirmation } from "./PluginManagementConfirmation";
 import { PluginNotice, type PluginNoticeProps } from "./PluginNotice";
 import { createPluginManagementClient } from "./pluginManagementClient";
 import {
-  installedApprovalToken,
   marketItemMatchesPlugin,
   pluginApprovalToken,
   samePluginMarketSourceIdentity,
@@ -92,7 +91,7 @@ import {
 } from "./PluginDirectoryView";
 import { usePluginMarket } from "./usePluginMarket";
 import { pluginOperationHold, samePluginSlotHolder, usePluginManagementSlot, type PluginSlotHolder, type PluginSlotToken } from "./pluginManagementSlot";
-import { pluginCheckConclusion, pluginConclusionListed, pluginConclusionShownBy, retryPluginCheckReadback, tellPluginConclusion, usePluginCheckConclusions, usePluginPendingChecks, type PluginDetailIdentity } from "./usePluginManagement";
+import { pluginConclusionListed, usePluginCheckConclusions, usePluginPendingChecks } from "./usePluginManagement";
 import { PluginPendingChecksSheet, type PluginOperationLine } from "./PluginPendingChecksSheet";
 import { usePluginPrompt } from "./usePluginPrompt";
 import { PluginMarketSection } from "./PluginMarketSection";
@@ -171,12 +170,7 @@ function PluginDirectory() {
   const [detail, setDetail] = useState<RemoteResource>();
   const [detailLoading, setDetailLoading] = useState(false);
   /** Detail reads issued by this page (`showDetail`), counted. */
-  const detailReads = useRef(0);
   const [detailFailed, setDetailFailed] = useState(false);
-  /** The detail opened from a record is another install now (maintainer review 15:22 #1): its reply is not shown. */
-  const [detailReplaced, setDetailReplaced] = useState(false);
-  /** A reply of the pressed install waits for its record, being read again, to prove it (shown as loading meanwhile). */
-  const [detailAwaitingRecord, setDetailAwaitingRecord] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [readmeOpen, setReadmeOpen] = useState(false);
   const [recent, setRecent] = useState<string[]>([]);
@@ -431,21 +425,7 @@ function PluginDirectory() {
     await management.controller?.reconcile();
     await list.refresh();
   };
-  /**
-   * Show an installed detail. `fromRecord`: opened by "Open plugin" on that record; while this detail stays selected,
-   * every read of it (the page's own reads again: back to the foreground, reconnect, after an operation) is held to that
-   * record. `null`: the person opened it from the installed list, which shows the computer's current instance as it is.
-   * A reply is shown only when it is the install the record proved (`pluginConclusionShownBy`); a record counts as seen
-   * on a detail only by a reply that is that install (the same rule).
-   */
-  const showDetail = async (row: HostedRemoteCollectionItem, fromRecord?: string | null) => {
-    if (fromRecord) {
-      // The install the person asked to open: the token the record proved at the press (it may be read again meanwhile).
-      // (A record that has no token is held all the same: nothing is shown for it; dispatcher, 2026-11-26.)
-      detailFromRecord.current = { key: row.key, operationId: fromRecord, approvalToken: pluginCheckConclusion(fromRecord)?.approvalToken };
-    }
-    else if (fromRecord === null || detailFromRecord.current?.key !== row.key) detailFromRecord.current = undefined;
-    shownIdentity.current.delete(row.key);
+  const showDetail = async (row: HostedRemoteCollectionItem) => {
     const generation = ++detailGeneration.current,
       owner = getMobileAuthOwner();
     market.closeDetail();
@@ -456,15 +436,11 @@ function PluginDirectory() {
     setSettingsOpen(false);
     setDetail(undefined);
     setDetailFailed(false);
-    setDetailReplaced(false);
-    awaitingRecord.current = undefined;
-    setDetailAwaitingRecord(false);
     if (!list.isOnline(row.host)) {
       setDetailLoading(false);
       return;
     }
     setDetailLoading(true);
-    detailReads.current += 1;
     try {
       const resource = await getRemoteResource(
         invoke,
@@ -477,7 +453,6 @@ function PluginDirectory() {
         generation === detailGeneration.current &&
         isMobileAuthOwnerCurrent(owner)
       ) {
-        if (!acceptDetailReply(row, resource)) return;
         setDetail(resource);
         setSelected((current) =>
           current?.row.key === row.key
@@ -523,7 +498,7 @@ function PluginDirectory() {
       detailOpen &&
       selectedOnline &&
       !toggleToken.current &&
-      (returned || reconnected || (!detailLoading && !detail && !detailFailed && !detailReplaced))
+      (returned || reconnected || (!detailLoading && !detail && !detailFailed))
     )
       void showDetail(selected.row);
   }, [focused, selectedOnline, selected?.row.key]);
@@ -549,7 +524,7 @@ function PluginDirectory() {
     surface?: PluginPageSurface,
   ) => {
     if (!list.isOnline(row.host)) {
-      void showDetail(row, null);
+      void showDetail(row);
       return;
     }
     const action = surface
@@ -557,10 +532,9 @@ function PluginDirectory() {
       : (row.item.actions?.find((a) => a.id === "open:panel") ??
         row.item.actions?.find((a) => a.id === "open:mainView"));
     if (!action || action.disabled) {
-      void showDetail(row, null);
+      void showDetail(row);
       return;
     }
-    detailFromRecord.current = undefined;
     detailGeneration.current += 1;
     market.closeDetail();
     setDetailOpen(false);
@@ -673,7 +647,7 @@ function PluginDirectory() {
         })}
         style={styles.info}
         onPress={() => {
-          void showDetail(row, null);
+          void showDetail(row);
         }}
       >
         <Info color={colors.textTertiary} size={iconSize.md} />
@@ -687,10 +661,6 @@ function PluginDirectory() {
   const targetOnline = (id: string) => { const host = targets.find((candidate) => candidate.deviceId === id); return !!host && list.isOnline(host); };
   const checks = usePluginPendingChecks(targetOnline, focused, targets.map((candidate) => candidate.deviceId));
   const conclusions = usePluginCheckConclusions();
-  // What the results are now, also for a caller kept from an earlier render (a write that finishes later reads the
-  // detail again with the `showDetail` of the press that started it).
-  const conclusionsNow = useRef(conclusions);
-  conclusionsNow.current = conclusions;
   const [checksOpen, setChecksOpen] = useState(false);
   const operationLines: PluginOperationLine[] = [
     ...checks.map((check) => ({ key: check.operationId, entry: check.entry, who: check.who, check })),
@@ -812,7 +782,7 @@ function PluginDirectory() {
           onRefresh={refreshDirectory}
           onOpen={open}
           onDetail={(row) => {
-            void showDetail(row, null);
+            void showDetail(row);
           }}
           onConnectComputer={() => router.push("/devices/manage")}
           segment={segment}
@@ -947,8 +917,8 @@ function PluginDirectory() {
         selected.row,
         demoScenario?.state ? undefined : detail,
         online,
-        detailLoading || detailAwaitingRecord || demoScenario?.state === "loading",
-        detailReplaced ? "replaced" : detailFailed || demoScenario?.state === "loadFailed",
+        detailLoading || demoScenario?.state === "loading",
+        detailFailed || demoScenario?.state === "loadFailed",
       )
     : undefined;
   // One bounded read per target/connection resolves uncertain facts without replacing the author page.
@@ -961,40 +931,12 @@ function PluginDirectory() {
     if (uncertainFactsRead.current === key) return;
     uncertainFactsRead.current = key;
     void getRemoteResource(invoke, row.host, row.item.ref, i18n.language, ["plugin-capabilities"]).then((resource) => {
-      if (generation === detailGeneration.current && liveSelection.current.epoch === epoch && isMobileAuthOwnerCurrent(owner) && liveSelection.current.key === row.key && liveSelection.current.focused && liveSelection.current.online
-        && acceptDetailReply(row, resource)) setDetail(resource);
+      if (generation === detailGeneration.current && liveSelection.current.epoch === epoch && isMobileAuthOwnerCurrent(owner) && liveSelection.current.key === row.key && liveSelection.current.focused && liveSelection.current.online) setDetail(resource);
     }).catch(() => { /* Existing author page stays usable; an uncertain background read needs no second notice. */ });
   }, [uncertainConfiguration, selected?.row.key, focused, online, detailLoading, detailFailed, connectionEpoch, auth.accountGeneration]);
   const renderedGeneration = detailGeneration.current;
-  // "Open" from the list of checks (dispatcher L-3): only the instance the list's own read found, and only on that
-  // computer: one no longer listed for this account cannot be opened (the panel says so instead).
+  // The record's computer is still listed for this account ("Go to Installed" goes to its list only then).
   const knownTarget = (deviceId: string) => targets.some((candidate) => candidate.deviceId === deviceId);
-  const openInstalled = (who: PluginSlotHolder, instanceKey: string, operationId: string): boolean => {
-    const host = targets.find((candidate) => candidate.deviceId === who.deviceId);
-    if (!host) return false;
-    setChecksOpen(false);
-    void showDetail({ key: JSON.stringify([who.deviceId, "plugins", "plugin", instanceKey]), host,
-      item: { ref: { collectionId: "plugins", kind: "plugin", id: instanceKey }, revision: "", links: [], display: { title: who.name } } } as HostedRemoteCollectionItem, operationId);
-    return true;
-  };
-  // "Open plugin" in the list of checks opens in the press itself, with nothing awaited in between: the instance the
-  // line shows as proven, on a computer listed now. (Pre-push review, round 5: reading first and opening when the read
-  // came back moved the page after the press, by which time another operation's consent could be up, the computer gone
-  // from the list, or the app in the background.) The list keeps what it shows current instead: a success proven
-  // before the list was opened is read again when it opens, and has no "Open plugin" until that read is back
-  // (PluginPendingChecksSheet).
-  // (A second press in the same frame, before the list is gone, opens nothing again: a synchronous ref, as for Install.)
-  const openedFromList = useRef(false);
-  if (!checksOpen) openedFromList.current = false;
-  const openChecked = (operationId: string) => {
-    // The record as it stands now (a change notification may have taken its "Open plugin" away since this render).
-    const proven = pluginCheckConclusion(operationId);
-    if (openedFromList.current || proven?.readback !== "verified" || !proven.instanceKey) return;
-    // Opens the detail in the press; what it shows, and whether the record counts as seen, waits for the detail's own
-    // reply (`showDetail`, `pluginConclusionShownBy`).
-    if (!openInstalled(proven.who, proven.instanceKey, operationId)) return;
-    openedFromList.current = true;
-  };
   // The page never moves, and prompts nothing, for a result (pre-push review 2026-11-26, four rounds: every way of
   // opening or announcing a result by itself took the person away from something, and leaving a consent cancels it).
   // However an operation ended, its result is listed at the top; the person opens it from "Open plugin" in the list of
@@ -1157,88 +1099,15 @@ function PluginDirectory() {
         ]
       : []),
   ];
-  /**
-   * Seen on a detail (routes 2 and 3 of "seen"), always by the reply shown and the one rule `pluginConclusionShownBy`
-   * (maintainer review 15:22): `shownIdentity` is the install each detail row shows now (cleared when a read of it is
-   * issued, set when its reply is shown). Route 2: a reply shown counts every proven record of that install as seen.
-   * Route 3: the detail an operation was started from, brought up to date by its own read after the result, counts that
-   * operation as seen once it is proven, if the reply shown is its install (`broughtUpToDate`: operation → row).
-   */
-  const detailFromRecord = useRef<{ key: string; operationId: string; approvalToken?: string } | undefined>(undefined);
-  /** A reply of the pressed install that came while its record was being read again: shown once that read proves it. */
-  const awaitingRecord = useRef<{ key: string; operationId: string; generation: number; resource: RemoteResource } | undefined>(undefined);
-  const shownIdentity = useRef(new Map<string, PluginDetailIdentity>());
-  const broughtUpToDate = useRef(new Map<string, string>());
-  const tellIfShown = (operationId: string, rowKey: string) => {
-    const conclusion = pluginCheckConclusion(operationId), shown = shownIdentity.current.get(rowKey);
-    if (conclusion && shown && !conclusion.told && pluginConclusionShownBy(conclusion, shown)) tellPluginConclusion(operationId);
-  };
-  const tellShown = (rowKey: string) => {
-    for (const conclusion of conclusionsNow.current) tellIfShown(conclusion.operationId, rowKey);
-  };
-  const detailUpToDateFor = (operationId: string, rowKey: string) => {
-    broughtUpToDate.current.set(operationId, rowKey);
-    tellIfShown(operationId, rowKey);
-  };
-  /**
-   * Every installed-detail reply about to be shown passes here (`showDetail`, and the background read of uncertain
-   * setup facts). While the detail is held to a record ("Open plugin"), a reply of another install (its approval token
-   * is not the one the record proved when it was pressed) is not shown: "This plugin was replaced", and the record is
-   * read again if it is still proven (a record being read already needs no second read). A reply that is shown sets the
-   * install the row shows and counts every record it proves as seen (route 2), by `pluginConclusionShownBy`.
-   */
-  const acceptDetailReply = (row: HostedRemoteCollectionItem, resource: RemoteResource): boolean => {
-    const shown: PluginDetailIdentity = { deviceId: row.host.deviceId, instanceKey: row.item.ref.id, approvalToken: installedApprovalToken(resource.revision) };
-    const held = detailFromRecord.current?.key === row.key ? detailFromRecord.current : undefined;
-    awaitingRecord.current = undefined;
-    setDetailAwaitingRecord(false);
-    if (held) {
-      // The record as it stands at this reply (a notification or a read since the press may have changed it).
-      const record = pluginCheckConclusion(held.operationId);
-      const pressed = held.approvalToken !== undefined && shown.approvalToken === held.approvalToken;
-      if (pressed && record?.readback === "pending") {
-        // Being read again (a change notification since the press): not shown before that read proves this install.
-        awaitingRecord.current = { key: row.key, operationId: held.operationId, generation: detailGeneration.current, resource };
-        setDetailAwaitingRecord(true);
-        return false;
-      }
-      // Without an identity on either side (an older computer, an unexpected reply, a record that kept none) it counts
-      // as another install: nothing is shown or counted as seen.
-      if (!pressed || !record || !pluginConclusionShownBy(record, shown)) {
-        shownIdentity.current.delete(row.key);
-        setDetailReplaced(true);
-        if (record?.readback === "verified" && !record.told) void retryPluginCheckReadback(held.operationId);
-        return false;
-      }
-    }
-    shownIdentity.current.set(row.key, shown);
-    if (held) broughtUpToDate.current.set(held.operationId, row.key);  // proven again later: seen by this reply then
-    tellShown(row.key);
-    return true;
-  };
-  /** A reply kept while its record was read again: settled by that read (shown if it proves this install). */
-  const settleAwaitingReply = () => {
-    const waiting = awaitingRecord.current;
-    if (!waiting || waiting.generation !== detailGeneration.current) return;
-    const record = pluginCheckConclusion(waiting.operationId);
-    if (!record || record.readback === "pending") return;
-    const row = selected?.row;
-    if (!row || row.key !== waiting.key) { awaitingRecord.current = undefined; setDetailAwaitingRecord(false); return; }
-    if (acceptDetailReply(row, waiting.resource)) {
-      setDetail(waiting.resource);
-      setSelected((current) => current?.row.key === row.key ? { ...current, row: { ...row, item: waiting.resource } } : current);
-    }
-  };
   const completedOperation = useRef<{ operationId: string; row?: HostedRemoteCollectionItem; generation: number;
-    /** How many detail reads had been issued when the result was first known here. */
-    reads: number; owner: ReturnType<typeof getMobileAuthOwner>; settled: boolean } | undefined>(undefined);
+    owner: ReturnType<typeof getMobileAuthOwner>; settled: boolean } | undefined>(undefined);
   useEffect(() => {
     const state = management.state, controller = management.controller;
     if (!state || state.outcome !== "succeeded" || !state.operationId || !controller) return;
     if (completedOperation.current?.operationId !== state.operationId) {
       const row = selected?.row;
       completedOperation.current = { operationId: state.operationId, row, generation: detailGeneration.current,
-        reads: detailReads.current, owner: getMobileAuthOwner(), settled: false };
+        owner: getMobileAuthOwner(), settled: false };
       void list.refresh();
       // The market beside it (wide screen) or on the next visit must not keep that computer's old pages and counts.
       if (row) market.invalidate(row.host.deviceId);
@@ -1249,20 +1118,12 @@ function PluginDirectory() {
     // as this operation's, or why not) is the list's one read of the success. While the snapshot read is out nothing
     // happens; a failed one leaves the detail as it is (as before this operation; the result is listed at the top).
     const done = completedOperation.current!;
-    // An operation the person started from this detail succeeded: it shows that operation's result now, no longer the
-    // install a record proved before.
-    if (done.row && detailFromRecord.current?.key === done.row.key) detailFromRecord.current = undefined;
     if (done.settled || state.finalReadback !== "read") return;
     done.settled = true;
     const { row, generation, owner } = done;
     if (!row || liveManagement.current !== controller || !isMobileAuthOwnerCurrent(owner)) return;
-    if (generation !== detailGeneration.current) {
-      // The selection moved on since the result was known. When a detail read was issued since (the person, a reconnect)
-      // and the same detail is the one selected, that read was this one: nothing more to read. (Opening the plugin's
-      // own page moves the selection on without reading the detail.)
-      if (detailReads.current !== done.reads && selected?.row.key === row.key) detailUpToDateFor(done.operationId, row.key);
-      return;
-    }
+    // The selection moved on since the result was known: nothing to bring up to date.
+    if (generation !== detailGeneration.current) return;
     const refreshed = controller.getState();
     if (!refreshed.online) return;
     const snapshot = refreshed.snapshot;
@@ -1272,19 +1133,13 @@ function PluginDirectory() {
     // Read again only while this detail is what is shown: from the plugin's own page (the person went back to it
     // meanwhile) nothing is put over it; its details button reads the detail when it is shown again.
     if (viewed) {
-      if (!selected?.surface || detailOpen) { void showDetail(row); detailUpToDateFor(done.operationId, row.key); }
+      if (!selected?.surface || detailOpen) void showDetail(row);
     } else if (snapshot) {
       detailGeneration.current += 1;
       setSelected(undefined);
       setDetail(undefined);
     }
   }, [management.state?.outcome, management.state?.operationId, management.state?.finalReadback]);
-  // Route 3, for a result proven after its detail was brought up to date (above): checked on the reply shown, by the
-  // same rule. Nothing is opened, replaced or prompted for it.
-  useEffect(() => {
-    for (const [operationId, rowKey] of broughtUpToDate.current) tellIfShown(operationId, rowKey);
-    settleAwaitingReply();
-  }, [conclusions]);
   const failedOperationNotice = useRef<string | undefined>(undefined);
   useEffect(() => {
     const state = management.state;
@@ -1382,7 +1237,7 @@ function PluginDirectory() {
   ) : undefined;
   const taskSettingsAvailable = model?.taskPreferences && managed?.approval.state === "approved" &&
     managed.enabled && enabled && online && focused && detailOpen && !busy &&
-    managementReady && (!holder || holder.entry === "task-settings") && !detailLoading && !detailFailed && !detailReplaced;
+    managementReady && (!holder || holder.entry === "task-settings") && !detailLoading && !detailFailed;
   const detailView =
     selected && model ? (
       <PluginDetailView
@@ -1555,8 +1410,8 @@ function PluginDirectory() {
         />
       ) : null}
       <PluginPendingChecksSheet visible={checksOpen} lines={operationLines} conclusions={conclusions} isOnline={targetOnline}
-        canOpen={knownTarget} onDecide={decide}
-        onClose={() => setChecksOpen(false)} onOpenChecked={openChecked}
+        listed={knownTarget} onDecide={decide}
+        onClose={() => setChecksOpen(false)}
         // An older computer's result (V2.10 ③): the installed list, where the person opens the plugin themselves.
         onShowInstalled={showInstalledOf} />
       <View style={styles.layout}>
