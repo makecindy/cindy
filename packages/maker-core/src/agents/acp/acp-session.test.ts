@@ -234,6 +234,37 @@ describe('openAcpSession handshake', () => {
     expect(session.resumeOutcome).toBe('new');
   });
 
+  // Unit: ACP v1 Session Setup requires capability gating. Exercise the real handshake
+  // with a one-character instruction to catch missing or misplaced lifecycle fields.
+  it.each([
+    { method: 'session/new', supported: true, text: 'x', expected: { mode: 'append', content: [{ type: 'text', text: 'x' }] } },
+    { method: 'session/load', supported: true, text: 'x', expected: { mode: 'append', content: [{ type: 'text', text: 'x' }] } },
+    { method: 'session/resume', supported: true, text: 'x', expected: { mode: 'append', content: [{ type: 'text', text: 'x' }] } },
+    { method: 'session/resume', supported: true, text: undefined, expected: undefined },
+    { method: 'session/new', supported: false, text: 'x', expected: undefined },
+  ])('sends the personal system prompt on $method when supported ($supported, $text)', async ({
+    method, supported, text, expected,
+  }) => {
+    const isNew = method === 'session/new';
+    const agent = createFakeAgent({
+      agentCapabilities: {
+        loadSession: method === 'session/load',
+        sessionCapabilities: {
+          ...(method === 'session/resume' ? { resume: {} } : {}),
+          ...(supported ? { systemPrompt: {} } : {}),
+        },
+      },
+      handlers: isNew ? {} : { [method]: () => ({}) },
+    });
+    const { session } = await open(agent, {
+      personalSystemPrompt: text,
+      ...(!isNew ? { resumeSessionId: 'old-1' } : {}),
+    });
+    expect(agent.methods()).toEqual(['initialize', method]);
+    expect((agent.sent[1]!.params as AcpRecord).systemPrompt).toEqual(expected);
+    await session.close();
+  });
+
   it('maps auth-required to a typed error and closes the endpoint', async () => {
     const agent = createFakeAgent({
       authMethods: [{ id: 'login', name: 'Sign in' }],
@@ -758,6 +789,21 @@ describe('AcpSession stop and failure', () => {
     await ended;
     expect(events.at(-1)).toMatchObject({ type: 'error', data: { isTerminal: true, reason: 'acp-agent-exited' } });
     await expect(session.send({ type: 'user', content: 'again' })).rejects.toThrow('closed');
+  });
+
+  it.each([false, true])('uses personal instructions only outside isolated companions (isolated: %s)', async (isolated) => {
+    const agent = createFakeAgent({ agentCapabilities: { sessionCapabilities: { systemPrompt: {} } } });
+    const policy = { mode: 'allowlist' as const, configured: [], catalog: [] };
+    const handle = await createAcpAgent(() => agent.transport).startSession({
+      workingDir: '/w', model: '', providerId: 'acp-plugin:test:engine', userPrompt: '  x  ',
+      ...(isolated ? {
+        botRuntimeProfile: { botId: 'test', profileVersion: 1, skillPolicy: policy, mcpPolicy: policy, toolsetPolicy: policy },
+      } : {}),
+    });
+    expect((agent.sent[1]!.params as AcpRecord).systemPrompt).toEqual(
+      isolated ? undefined : { mode: 'append', content: [{ type: 'text', text: 'x' }] },
+    );
+    await handle.close();
   });
 
   // 引擎账号：运行中的额度用完、服务繁忙带上 Cindy 失败判定认得的字段；不认识的 kind 照普通错误处理。

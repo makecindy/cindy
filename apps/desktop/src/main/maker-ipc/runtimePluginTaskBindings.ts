@@ -23,7 +23,7 @@ export function createRuntimePluginTaskPrompt({ maker, ghostTaskSystemPrompt, re
   readSessionRuntimeProfiles: ReadProfiles;
 }) {
   const appliedTaskPrompts = new WeakMap<Awaited<ReturnType<typeof maker.createSession>>, string>();
-  // Plugin engines receive no Cindy system prompt (docs/plans/acp-plugin-bridge.md), so no task prompt either.
+  // Task-selected static prompt fragments are supported only by the built-in engines.
   const readTaskPrompt = (sessionId: string, agentKind: EngineKind, agentDeviceId?: string | null) =>
     agentKind === 'acp'
       ? ''

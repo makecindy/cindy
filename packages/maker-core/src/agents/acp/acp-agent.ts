@@ -120,7 +120,7 @@ const NO_INIT = buildAcpCapabilities(
       loadSession: false,
       promptCapabilities: { image: false, audio: false, embeddedContext: false },
       mcpCapabilities: { http: false, sse: false },
-      sessionCapabilities: { resume: false, close: false, list: false },
+      sessionCapabilities: { resume: false, close: false, list: false, systemPrompt: false },
     },
     authMethods: [],
     steering: false,
@@ -327,6 +327,9 @@ export class AcpAgent extends BaseAgent {
       ...(hosted?.guest ? { guestWorkspace: true } : {}),
       ...(accountDir ? { accountDir } : {}),
     };
+    const personalSystemPrompt = hosted || isolatedBotProfile(opts.botRuntimeProfile)
+      ? undefined
+      : opts.userPrompt?.trim();
     const open = async (): Promise<AcpSession> => {
       const tracked = trackClose(Object.keys(connectOptions).length
         ? await this.acpDeps.endpoints.connect(harnessKey, connectOptions)
@@ -344,6 +347,7 @@ export class AcpAgent extends BaseAgent {
           ...(opts.botRuntimeProfile || hosted ? { requireSelectedModel: true } : {}),
           ...(opts.effort ? { effort: opts.effort } : {}),
           ...(opts.permissionMode ? { permissionMode: opts.permissionMode } : {}),
+          ...(personalSystemPrompt ? { personalSystemPrompt } : {}),
           briefing,
           ...(companionBriefing ? { resumedCompanionBriefing: companionBriefing } : {}),
           ...(skillCommandNames.length > 0 ? { skillCommandNames } : {}),

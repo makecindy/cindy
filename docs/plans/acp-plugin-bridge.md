@@ -74,8 +74,8 @@ Cindy 主进程**从不执行插件写的命令**，只启动插件包里声明�
 | `acp-agent.ts`（第 3 步） | `AcpAgent extends BaseAgent`，按「插件 Agent 标识」分派到宿主注册的端点 |
 
 第 1 步自写最小 JSON-RPC 客户端，不新增依赖、不改锁文件；只实现 v1，v2 草案不接。
-不经 ACP 向 Agent 注入 Cindy 的 system prompt（v1 已支持客户端 system prompt）；以后要注入，
-按 [Agent 行为规则](../dev-rules/maker-core-and-agent-behavior.md)的 system prompt 门禁单独评审。
+个性化设置里的用户提示词按 ACP v1 的 `sessionCapabilities.systemPrompt` 协商，在新建、加载或恢复会话时
+以 `append` 追加。隔离 Buddy 和为其他用户托管的会话不转发全局个性化。清空时不再传个性化正文，插件恢复会话时仍可能使用自己此前保存的提示词。Cindy 产品提示词与任务插件静态提示词继续由各自的既有路径处理。
 
 **行为映射**
 

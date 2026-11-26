@@ -924,6 +924,11 @@ export class Maker {
       }
       agentStartAttempted = true;
       if (startOpts.fastModePolicy && !(startOpts.fastModePolicy.isRequestAllowed?.() ?? startOpts.fastModePolicy.isAllowed())) startOpts.fastMode = false;
+      // Desktop may enrich userPrompt with project context for built-in engines. ACP
+      // receives only the personal instructions captured before that context is added.
+      if (opts.agentKind === 'acp' && startOpts.hostStartupPreferences) {
+        startOpts.userPrompt = startOpts.hostStartupPreferences.userPrompt;
+      }
       if (startOpts.agentDeviceId) {
         if (startOpts.remoteHostId) {
           throw new Error('A session cannot run its agent on another computer and on an SSH host at the same time');
