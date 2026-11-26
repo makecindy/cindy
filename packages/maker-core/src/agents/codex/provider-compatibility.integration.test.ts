@@ -164,6 +164,18 @@ it.skipIf(!binaryPath)('keeps Cindy AI, subscription and custom routes usable ac
       const nextId = await next.send(`SWITCH_TO_${nativeProvider}`, nativeProvider, 'HISTORY_CINDY_SENTINEL');
       await next.close();
       if (nextId !== previousId) expect(await readFile(sourcePath, 'utf8')).toBe(source);
+      if (provider === 'custom-probe') {
+        // #13314: the first side-chat child must resume in place, with its
+        // original history, without a second provider-repair fork.
+        const { newSdkSessionId } = await agent.forkSdkSession({
+          sourceSdkSessionId: nextId, upToMessageId: undefined, providerId: provider, model, workingDir: work,
+        });
+        const rollout = await readFile(locations.get(newSdkSessionId)!, 'utf8');
+        expect(JSON.parse(rollout.split('\n', 1)[0]).payload.model_provider).toBe(nativeProvider);
+        const child = await open('side-chat', provider, model, newSdkSessionId);
+        expect(await child.send('SIDE_CHAT_FIRST_INPUT', nativeProvider, 'HISTORY_CINDY_SENTINEL')).toBe(newSdkSessionId);
+        await child.close();
+      }
       previousId = nextId;
     }
     // The explicit switch must affect real native requests after resume, while

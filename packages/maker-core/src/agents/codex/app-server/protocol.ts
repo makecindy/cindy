@@ -461,6 +461,7 @@ export interface ThreadForkParams {
   /** Legacy fork + rollback path only; lastTurnId precision path omits it. */
   persistExtendedHistory?: boolean;
   model?: string;
+  modelProvider?: string;
   cwd?: string;
   /** EXPERIMENTAL. Runtime-visible workspace roots for the forked thread. */
   runtimeWorkspaceRoots?: string[];

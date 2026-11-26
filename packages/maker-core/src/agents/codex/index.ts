@@ -273,7 +273,7 @@ import {
   matchesDeterministicUsageExhaustionText,
 } from '@cindy/maker-shared/error-redaction';
 import { AppServerHost, CodexNativeInitializationStoppedError, type ThreadEventHandlers, type ThreadSubscription } from './app-server/host.js';
-import { AppServerRequestTimeoutError, type RequestProgressDeadline } from './app-server/client.js';
+import { AppServerRequestTimeoutError, AppServerResponseError, type RequestProgressDeadline } from './app-server/client.js';
 import { useCodexHistoryHome, type CodexExternalAuth } from './app-server/external-auth.js';
 import {
   isTerminalRateLimitRetryExhaustion,
@@ -988,7 +988,14 @@ function isExactUnloadedThreadReadError(error: unknown, threadId: string): boole
 function isSavedModelProviderMismatch(error: unknown, selectedProvider: string | undefined): boolean {
   if (!selectedProvider || typeof error !== 'object' || error === null) return false;
   const { code, data } = error as { code?: unknown; data?: Record<string, unknown> };
-  return code === -32600 && data?.type === 'modelProviderMismatch'
+  if (code !== -32600) return false;
+  if (error instanceof AppServerResponseError && data === undefined) {
+    // 0.168+ refuses the override during configuration loading, before the
+    // structured mismatch is emitted. Only this correlated resume refusal is safe.
+    const match = /^codex app-server thread\/resume error -32600: failed to load configuration: Cannot change this thread's model provider from `([^`\s]+)` to `([^`\s]+)` on resume\.$/.exec(error.message);
+    return match?.[2] === selectedProvider && match[1] !== selectedProvider;
+  }
+  return data?.type === 'modelProviderMismatch'
     && data.currentModelProvider === selectedProvider
     && typeof data.modelProvider === 'string' && data.modelProvider.length > 0
     && data.modelProvider !== selectedProvider;
@@ -3207,7 +3214,10 @@ assertRouteCurrent();
               ...(!remoteHostId && historyHome ? { runtimeCodexHome: historyHome } : {}),
               // 受邀者任务的 app-server 与账号会话一样走按 host 分开的 proxy(鉴权注入方式冻结在这个 host 上)，
               // 不改写本机用户任务共用的 proxy 状态。
+              // Legacy third-party auth may also use a custom Responses identity. The
+              // generic control-plane proxy has no provider declarations for the fork.
               ...(key.startsWith('local-account:') || nativeSubscriptionAccount || key.startsWith(LOCAL_GUEST_HOST_PREFIX) || deviceHostedGuestProviderId || localToolCatalog
+                || (isLocalForkHostKey(key) && credentialMode === 'provider-oauth' && localAuthPolicy !== 'isolated')
                 ? { accountHostKey: `${key}:${generation}` } : {}),
               credentialMode: spawnCredentialMode,
               ...(localAuthPolicy === 'isolated'
@@ -16401,6 +16411,10 @@ assertRouteCurrent();
             releaseForkLease = leased.release;
             forkHost = host;
             stage = 'host-start';
+            // The scoped host already froze the provider declarations for this route.
+            // Select its process default before spawning so the first child keeps it.
+            const forkModelProvider = host.getCustomProviderModelProviderId?.(opts.providerId, opts.model);
+            if (forkModelProvider) await host.selectModelProvider(forkModelProvider);
             const initResp = await host.ensureStarted();
             // Child rollout discovery scans this.codexHome. The fork host may be
             // the first host started by this process, so hydrate it here.
@@ -16456,6 +16470,7 @@ assertRouteCurrent();
             }
             const params: ThreadForkParams = {
               threadId: opts.sourceSdkSessionId,
+              ...(forkModelProvider ? { modelProvider: forkModelProvider } : {}),
               ...(preparedSourcePath ? { path: preparedSourcePath } : {}),
               ...(!usedNativeForkAnchor ? { persistExtendedHistory: true } : {}),
               ...(usedNativeForkAnchor ? { lastTurnId } : {}),
