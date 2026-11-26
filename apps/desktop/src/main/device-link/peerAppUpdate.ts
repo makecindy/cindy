@@ -174,18 +174,21 @@ export function createPeerAppUpdateHandler(ports: PeerAppUpdatePorts) {
     }
   }
 
+  const currentActiveInstall = () => activeInstall;
+
   async function handleInstall(
     expectedVersion: string,
     controllerDeviceId: string,
     controllerName: string,
   ): Promise<PeerAppUpdateInstallAccepted> {
-    if (activeInstall) {
-      if (activeInstall.targetVersion === expectedVersion) {
+    const existingBefore = currentActiveInstall();
+    if (existingBefore) {
+      if (existingBefore.targetVersion === expectedVersion) {
         return {
           version: PEER_APP_UPDATE_VERSION,
           accepted: true,
-          state: activeInstall.phase,
-          targetVersion: activeInstall.targetVersion,
+          state: existingBefore.phase,
+          targetVersion: existingBefore.targetVersion,
         };
       }
       throw new PeerAppUpdateError('PEER_APP_UPDATE_BUSY', 'another update is already in progress');
@@ -198,13 +201,14 @@ export function createPeerAppUpdateHandler(ports: PeerAppUpdatePorts) {
 
     const checked = await runCheck(false);
     // Re-check after awaiting runCheck(false) so concurrent install requests do not overwrite activeInstall.
-    if (activeInstall) {
-      if (activeInstall.targetVersion === expectedVersion) {
+    const existingAfter = currentActiveInstall();
+    if (existingAfter) {
+      if (existingAfter.targetVersion === expectedVersion) {
         return {
           version: PEER_APP_UPDATE_VERSION,
           accepted: true,
-          state: activeInstall.phase,
-          targetVersion: activeInstall.targetVersion,
+          state: existingAfter.phase,
+          targetVersion: existingAfter.targetVersion,
         };
       }
       throw new PeerAppUpdateError('PEER_APP_UPDATE_BUSY', 'another update is already in progress');

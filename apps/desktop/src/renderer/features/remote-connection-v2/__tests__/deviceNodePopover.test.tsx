@@ -494,7 +494,7 @@ describe('HubNodePopover', () => {
   it('re-probes unwatched downloading state on reopen and clears caches/watchers on account switch', async () => {
     vi.useFakeTimers();
     let state: 'downloading' | 'ready' = 'downloading';
-    const command = vi.fn(async () => ({
+    const command = vi.fn(async (_input: { request: { action: string } }): Promise<Record<string, unknown>> => ({
       state: {},
       peerUpdate: {
         ok: true,
