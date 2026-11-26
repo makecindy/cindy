@@ -721,6 +721,21 @@ describe('newMakerDraft store', () => {
     expect(wc?.initialTask).toBeUndefined();
   });
 
+  // Unit: reopening a saved draft must keep the plugin engine and model together.
+  it('restores the agy Worker selection locally and clears it when moving to SSH', async () => {
+    const store = await loadModule();
+    const collab = {
+      enabled: true, worker: 'acp' as const,
+      workerConfig: { role: 'developer', providerId: 'acp-plugin:agy-plugin:agy', model: 'gemini-3-pro' },
+    };
+    store.patchCollab(collab);
+    const restored = await reloadModule();
+    expect(restored.getDraft().collab).toMatchObject(collab);
+    restored.patchDraft({ remoteHostId: 'ssh-1', workingDir: '/project' });
+    expect(restored.getDraft().collab.enabled).toBe(false);
+    expect(restored.getDraft().collab.workerConfig).toBeUndefined();
+  });
+
   it('clears the Worker model group when the collaboration draft moves to SSH', async () => {
     const { getDraft, patchDraft } = await loadModule();
     patchDraft({

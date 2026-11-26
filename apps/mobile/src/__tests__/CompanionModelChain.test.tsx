@@ -137,24 +137,14 @@ it("shows the selected remote account and catalog model name without changing it
   expect(node.textContent).not.toContain("openai:second");
   expect(h.change).not.toHaveBeenCalled();
 });
-it("keeps the primary first and reorders separate same-model backup accounts without expanding the chain", async () => {
-  const third = { ...route, providerId: "openai:third" };
-  h.catalog.providers.push(provider("openai:third", "third@example.com"));
-  await render("remote-mac", [{ ...route, providerId: "openai" }, route, third]);
-  const moves = () => node.querySelectorAll('[aria-label="devices.companionProfile.moveModelUp"]');
-  const removes = () => node.querySelectorAll('[aria-label="devices.companionProfile.removeModel"]');
-  // Backups are visible immediately; the primary still cannot be moved or removed.
-  expect(node.textContent).toContain("devices.companionProfile.backupModels");
-  expect(node.textContent).toContain("second@example.com");
-  // Backup 1 cannot move above the primary; backup 2 moves above backup 1.
-  expect(moves()).toHaveLength(1);
-  expect(removes()).toHaveLength(2);
-  await act(async () => (moves()[0] as HTMLButtonElement).click());
-  expect(
-    JSON.parse(h.change.mock.lastCall![0].modelChain).map(
-      (r: any) => r.providerId,
-    ),
-  ).toEqual(["openai", "openai:third", "openai:second"]);
+// cindy-bots-runtime.md「伙伴只用一个模型」: a chain an older computer saved with backups shows only its
+// primary; there is nothing to add, reorder or remove.
+it("shows only the primary of a chain an older computer saved with backups", async () => {
+  await render("remote-mac", [{ ...route, providerId: "openai" }, route]);
+  expect(node.textContent).not.toContain("second@example.com");
+  expect(node.textContent).not.toContain("devices.companionProfile.addModel");
+  expect(node.querySelectorAll('[role="button"], button')).toHaveLength(1);
+  expect(h.change).not.toHaveBeenCalled();
 });
 it("does not expose the previous device account while the new catalog is loading", async () => {
   await render();
