@@ -9132,6 +9132,35 @@ describe('unreachable account service', () => {
     expect(readSubscriptionPoolCodexModels('openai', { includeLastConfirmed: true })).toEqual([]);
   });
 
+  // Unit: mixed OpenAI pool API-key member must treat upstream-overload (not only HTTP 529)
+  // as a switchable overload failure so the task can move to a healthy sibling account.
+  it('treats upstream-overload as switchable for mixed OpenAI pool API-key members', async () => {
+    const connection = 'openai-key-overload';
+    h.pools.openai = { strategy: 'order', accounts: [account('default')] };
+    h.apiMembers = [{ ...account('api:openai-key-1'), connectionId: connection, providerId: 'openai' }];
+    setCustomProviderKeyReader(id => id === connection ? 'synthetic-key' : null);
+    const lease = await acquireSubscriptionAccount('openai', 'gpt-6.2-astra', [], false, {
+      includeApiKeys: true,
+      agent: 'codex',
+      exclude: new Set(['default']),
+    });
+    expect(lease?.apiConnectionId).toBe(connection);
+    try {
+      expect(
+        lease!.observeFailure(
+          {
+            message: 'Selected model is at capacity. Please try a different model.',
+            reason: 'upstream-overload',
+          },
+          'gpt-6.2-astra',
+          'run',
+        ),
+      ).toBe(true);
+    } finally {
+      lease?.release();
+    }
+  });
+
   it('does not invent a sign-in for an account that was never confirmed', async () => {
     h.pools.openai = { strategy: 'expiring', accounts: [account('default')] };
     h.read.mockRejectedValue(unreachable());

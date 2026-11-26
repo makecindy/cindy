@@ -2017,9 +2017,7 @@ const usageLimitAutoResume = new UsageLimitAutoResume({
   isEligible: isUsageLimitAutoResumeEligible,
   resolveResetAt: resolveSessionUsageResetAt,
   // Same-account remote Agent tasks ask their executing computer (subscription-account-pools.md 账号间自动换号).
-  canSwitchAccount: async (sessionId) =>
-    await canSwitchPluginEngineTaskAccount(sessionId, readSubscriptionRuntimeSession).catch(() => false)
-    || canSwitchSubscriptionAccount(sessionId, readSubscriptionRuntimeSession, remoteBackgroundInvoke),
+  canSwitchAccount: canSwitchTaskAccount,
   arm: (sessionId, token, resumeAt) =>
     agentInputCoordinatorHolder?.armUsageLimitWait(sessionId, token, resumeAt) ?? false,
   isCurrent: (sessionId, token) =>
@@ -5255,6 +5253,12 @@ const subscriptionAccountRecoveryDeps = {
   },
   log: (message: string, fields: Record<string, unknown>) => log.info(message, fields),
 } satisfies AccountFailoverDeps;
+
+/** 同池是否存在另一个此刻可接手该任务的健康账号（订阅池 / 混合池 / 插件引擎多账号池）。 */
+export async function canSwitchTaskAccount(sessionId: string): Promise<boolean> {
+  return (await canSwitchPluginEngineTaskAccount(sessionId, readSubscriptionRuntimeSession).catch(() => false))
+    || canSwitchSubscriptionAccount(sessionId, readSubscriptionRuntimeSession, remoteBackgroundInvoke);
+}
 
 /** 直发路径在 createSession / 重读 live session 之前换掉不能用的订阅账号、关掉不健康原生会话。 */
 export async function prepareUnhealthySessionForSend(
