@@ -1522,6 +1522,7 @@ interface ElectronAPI {
     requestTaskApproval: (id: string, capability?: 'observe' | 'companions') => Promise<{ granted: boolean }>;
     getControlPoints: (id: string) => Promise<import('../shared/ghost').GhostControlPointInfo[]>;
     listControlPointCandidates: (point: import('../shared/ghost').GhostControlPointId) => Promise<import('../shared/ghost').GhostControlPointCandidate[]>;
+    listEventSources: () => Promise<import('../shared/ghost').GhostEventSourceCandidate[]>;
     runtimePlugins: (sessionId: string, settings?: import('../shared/pluginRuntime').RuntimePluginSettings) => Promise<import('../shared/pluginRuntime').RuntimePluginSettings>;
     listPickerModels: () => Promise<import('../shared/ghost').GhostPickerModel[]>;
     routeNewTask: (pluginId: string, data: import('../shared/ghost').GhostStartTaskPointData) => Promise<import('../shared/ghost').GhostStartTaskRouteResult>;
@@ -4587,6 +4588,7 @@ interface ElectronAPI {
         devices: Array<{
           deviceId: string;
           deviceName: string;
+          projectAliases?: import('@cindy/maker-shared/project-alias-sync').CachedProjectAliases;
           sessions: Record<string, unknown>[];
         }>;
         ownerToken?: string;
@@ -4596,6 +4598,7 @@ interface ElectronAPI {
         devices: ReadonlyArray<{
           deviceId: string;
           deviceName: string;
+          projectAliases?: import('@cindy/maker-shared/project-alias-sync').CachedProjectAliases;
           sessions: readonly Record<string, unknown>[];
         }>,
         expectedOwnerToken?: string,
@@ -4934,6 +4937,9 @@ interface ElectronAPI {
   // ── session-git-pr-context: 会话分支感知 + PR 关联状态 ──
   gitContext: {
     readGithub: (method: import('@cindy/maker-shared').GithubReadMethod, args: unknown) => Promise<Record<string, unknown>>;
+    resolveGithubItem: (repository: string, number: number) => Promise<
+      | { ok: true; kind: 'pr' | 'issue'; title: string; state: 'open' | 'closed' }
+      | { ok: false; reason: 'not-connected' | 'not-found' | 'unavailable' }>;
     githubSetupStatus: () => Promise<import('../shared/githubSetup').GithubSetupState>;
     githubAppAccess: () => Promise<import('../shared/githubSetup').GithubAppAccess>;
     githubAppStatus: () => Promise<import('../shared/githubSetup').GithubAppConnectionState>;
@@ -7710,6 +7716,8 @@ interface ElectronAPI {
         problem?: 'limit' | 'failed' | 'unsupported' | 'suspended' | 'quota' | 'released';
         quotaLimit?: number;
         quotaResetAt?: number;
+        /** 插件事件来源：每个选中插件的监听状态。 */
+        plugins?: Array<{ plugin: string; state: 'listening' | 'disconnected' | 'error' | 'stopped' | 'unknown'; reportedAt?: number; lastEventAt?: number }>;
       } | null>;
       /** 设置签名密钥:传入时保存从发送方复制的密钥;不传时生成新密钥,明文只在这次返回。仅任务所在电脑可用。 */
       setWebhookSecret: (id: string, secret?: string) => Promise<{ secret?: string }>;

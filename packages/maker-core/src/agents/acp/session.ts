@@ -877,6 +877,13 @@ export class AcpSession {
     switch (result.outcome) {
       case 'injected':
         return;
+      case 'queued':
+        // Some ACP adapters (for example zcode-acp) accept steering by queueing it
+        // internally when the active turn cannot inject mid-flight. Treat it as
+        // accepted without flushing the current assistant segment so the host neither
+        // reports a failure nor sends the message twice.
+        this.logger?.info('acp: agent queued the steered message for delivery');
+        return;
       case 'promptRequired':
         throw new Error(NO_ACTIVE_TURN_TO_STEER);
       case 'startedNewTurn':

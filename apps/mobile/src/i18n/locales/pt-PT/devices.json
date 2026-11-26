@@ -532,7 +532,8 @@
           "30d": "30d",
           "all": "Todas"
         }
-      }
+      },
+      "partial": "Os resultados podem estar incompletos. Use palavras mais específicas ou limite a pesquisa a um projeto."
     },
     "renameDevice": {
       "title": "Mudar o nome do dispositivo",
