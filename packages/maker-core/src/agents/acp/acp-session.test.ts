@@ -36,6 +36,11 @@ import {
   renderPluginEngineCapabilityBriefing,
 } from './briefing.js';
 import {
+  createAcpMcpResultBackfiller,
+  createMcpToolResultBucket,
+  parseAcpMcpToolName,
+} from './mcp-tool-result.js';
+import {
   AgentStartupCleanupPendingError,
   AgentStartupStoppedError,
   TurnPermissionPolicyUnsupportedError,
@@ -1808,6 +1813,322 @@ describe('AcpAgent (the acp engine)', () => {
     expect(secondMessage!.text).toContain('/tmp/build.log 里为什么报 /learn 相关错误？');
     agent.prompts[1]!.settle.resolve({ stopReason: 'end_turn' });
     await handle.close();
+  });
+
+  // 测试价值
+  // - 生产入口与可观察结果：AcpAgent.startSession / openAcpSession / createAcpMcpResultBackfiller；
+  //   当 ACP 引擎对 MCP tool_call_update 不返回 content/rawOutput（如 agy acp）时，tool_result_full
+  //   从 Host MCP 回执回填带 xdt_card_id 的完整文本并透传 isError；已有 ACP 输出或中断调用不被覆盖。
+  // - Bug／规则依据：Antigravity 插件引擎调用 pr_card 等 Cindy 插件工具后，ACP 只发 status: completed
+  //   且无输出正文，导致消息落库为 "done"、PR 卡片与媒体回锚消失。
+  // - 现有覆盖缺口：此前 acp-session.test.ts 仅验证带 content/diff 的普通工具，未覆盖空 MCP 结算回填。
+  // - 最小失败输入：ACP 发送 mcp__cindy__ghost_call 的 tool_call 与无 content/rawOutput 的 completed
+  //   更新，同时 Host MCP 桶已记录带 toolSummary 与 xdt_card_id 的回包。
+  // - tier：unit（内存假 ACP 对端与纯函数桶）。
+  it('backfills empty ACP MCP tool_call_update results from Host receipts without overwriting agent output or interrupted calls', async () => {
+    const bucket = createMcpToolResultBucket();
+    const prCardJson = JSON.stringify({
+      ok: true,
+      result: { card_id: 'card-pr-1', stage: 'open' },
+      xdt_card_id: 'card-pr-1',
+      xdt_card_turn_end: true,
+    });
+    const searchJson = JSON.stringify({ ok: true, result: { hits: 2 } });
+    const errJson = JSON.stringify({ ok: false, errorCode: 'DENIED', message: 'forbidden' });
+
+    const seenCtx: Array<Record<string, unknown>> = [];
+    const agent = createFakeAgent({ agentCapabilities: { mcpCapabilities: { http: true } } });
+    const engine = new AcpAgent({
+      auth: {
+        getState: async () => ({ authenticated: true }),
+        triggerLogin: async () => ({ authenticated: true }),
+        logout: async () => {},
+        getAuthEnv: async () => ({}),
+      },
+      runtimeConfig: {},
+      binaryPath: '',
+      logger: silentLogger,
+      clientInfo: { name: 'cindy', version: 'test' },
+      endpoints: { connect: async () => agent.transport },
+      preparePiExtraSpawnConfig: async (_providers, ctx) => {
+        seenCtx.push(ctx as unknown as Record<string, unknown>);
+        return {
+          mcpBridge: {
+            token: 'tok',
+            servers: [
+              { name: 'cindy', url: 'http://127.0.0.1:1/mcp/cindy' },
+              { name: 'cindy_helper', url: 'http://127.0.0.1:1/mcp/cindy_helper' },
+            ],
+          },
+          takeMcpToolResult: (query) => bucket.take(query),
+        };
+      },
+    });
+
+    const handle = await engine.startSession({
+      workingDir: '/repo',
+      model: '',
+      providerId: 'acp-plugin:agy:agy',
+    });
+    expect(seenCtx).toHaveLength(1);
+    expect(seenCtx[0]!.recordMcpToolResults).toBe(true);
+
+    const events: AgentEvent[] = [];
+    const pump = (async () => {
+      for await (const event of handle.events()) events.push(event);
+    })();
+
+    await handle.send({ type: 'user', content: 'open PR card' });
+    await vi.waitFor(() => expect(agent.prompts).toHaveLength(1));
+
+    // Concurrent calls that finish out of order; Host recorded args with toolSummary & different key order.
+    agent.update({
+      sessionUpdate: 'tool_call',
+      toolCallId: 'call-pr',
+      title: 'mcp__cindy__ghost_call',
+      rawInput: { args: { pr: '12880', repo: 'makecindy/cindy' }, ghost_id: 'cindy-github', namespace: null, tool: 'pr_card' },
+    });
+    agent.update({
+      sessionUpdate: 'tool_call',
+      toolCallId: 'call-search',
+      title: 'mcp__cindy__ghost_call',
+      rawInput: { args: { q: 'foo' }, ghost_id: 'xd-feishu', namespace: 'xd', tool: 'search' },
+    });
+    agent.update({
+      sessionUpdate: 'tool_call',
+      toolCallId: 'call-err',
+      title: 'mcp__cindy_helper__call_tool',
+      rawInput: { name: 'set_title', args: { title: 'x' } },
+    });
+    agent.update({
+      sessionUpdate: 'tool_call',
+      toolCallId: 'call-native',
+      title: 'mcp__cindy__ghost_info',
+      rawInput: { ghost_id: 'cindy-github' },
+    });
+
+    bucket.record({
+      serverName: 'cindy',
+      toolName: 'ghost_call',
+      input: { tool: 'pr_card', namespace: null, ghost_id: 'cindy-github', args: { repo: 'makecindy/cindy', pr: '12880' }, toolSummary: 'Show PR card' },
+      fullText: prCardJson,
+      isError: false,
+    });
+    bucket.record({
+      serverName: 'cindy',
+      toolName: 'ghost_call',
+      input: { ghost_id: 'xd-feishu', namespace: 'xd', tool: 'search', args: { q: 'foo' }, toolSummary: 'Search' },
+      fullText: searchJson,
+      isError: false,
+    });
+    bucket.record({
+      serverName: 'cindy_helper',
+      toolName: 'call_tool',
+      input: { name: 'set_title', args: { title: 'x' } },
+      fullText: errJson,
+      isError: true,
+    });
+    bucket.record({
+      serverName: 'cindy',
+      toolName: 'ghost_info',
+      input: { ghost_id: 'cindy-github' },
+      fullText: '{"from":"host"}',
+      isError: false,
+    });
+
+    // Finish search before pr_card, both with empty ACP content/rawOutput.
+    agent.update({ sessionUpdate: 'tool_call_update', toolCallId: 'call-search', status: 'completed' });
+    agent.update({ sessionUpdate: 'tool_call_update', toolCallId: 'call-pr', status: 'completed' });
+    agent.update({ sessionUpdate: 'tool_call_update', toolCallId: 'call-err', status: 'completed' });
+    // Agent DOES report content here: must NOT overwrite with Host receipt.
+    agent.update({
+      sessionUpdate: 'tool_call_update',
+      toolCallId: 'call-native',
+      status: 'completed',
+      content: [{ type: 'content', content: { type: 'text', text: '{"from":"agent"}' } }],
+    });
+    agent.prompts[0]!.settle.resolve({ stopReason: 'end_turn' });
+    await vi.waitFor(() => expect(events.some((e) => e.type === 'done')).toBe(true));
+
+    const fullById = new Map(
+      events
+        .filter((e) => e.type === 'tool_result_full')
+        .map((e) => [(e.data as AcpRecord).toolUseId as string, e.data as AcpRecord]),
+    );
+    const summaryById = new Map(
+      events
+        .filter((e) => e.type === 'tool_result')
+        .map((e) => [((e.data as AcpRecord).toolUseIds as string[])[0]!, (e.data as AcpRecord).summary as string]),
+    );
+
+    expect(fullById.get('call-pr')).toEqual({ toolUseId: 'call-pr', fullText: prCardJson, isError: false });
+    expect(fullById.get('call-search')).toEqual({ toolUseId: 'call-search', fullText: searchJson, isError: false });
+    expect(fullById.get('call-err')).toEqual({ toolUseId: 'call-err', fullText: errJson, isError: true });
+    expect(summaryById.get('call-err')).toBe('failed');
+    expect(fullById.get('call-native')).toEqual({ toolUseId: 'call-native', fullText: '{"from":"agent"}', isError: false });
+    // Native-output call retired its matching Host receipt so a later identical empty call cannot reuse it.
+    expect(bucket.size()).toBe(0);
+
+    // Follow-up identical call with empty ACP output gets only its own fresh receipt.
+    await handle.send({ type: 'user', content: 'repeat ghost_info and cancel mid call' });
+    await vi.waitFor(() => expect(agent.prompts).toHaveLength(2));
+    agent.update({
+      sessionUpdate: 'tool_call',
+      toolCallId: 'call-native-repeat',
+      title: 'mcp__cindy__ghost_info',
+      rawInput: { ghost_id: 'cindy-github' },
+    });
+    bucket.record({
+      serverName: 'cindy',
+      toolName: 'ghost_info',
+      input: { ghost_id: 'cindy-github' },
+      fullText: '{"from":"host-v2"}',
+      isError: false,
+    });
+    agent.update({ sessionUpdate: 'tool_call_update', toolCallId: 'call-native-repeat', status: 'completed' });
+
+    // Interrupted call retires its already-recorded Host receipt while keeping the interrupted text.
+    agent.update({
+      sessionUpdate: 'tool_call',
+      toolCallId: 'call-cancelled',
+      title: 'mcp__cindy__ghost_info',
+      rawInput: { ghost_id: 'cindy-github' },
+    });
+    bucket.record({
+      serverName: 'cindy',
+      toolName: 'ghost_info',
+      input: { ghost_id: 'cindy-github' },
+      fullText: '{"from":"interrupted-call"}',
+      isError: false,
+    });
+    agent.prompts[1]!.settle.resolve({ stopReason: 'cancelled' });
+    await vi.waitFor(() => expect(events.filter((e) => e.type === 'done')).toHaveLength(2));
+    const repeatFull = events.find(
+      (e) => e.type === 'tool_result_full' && (e.data as AcpRecord).toolUseId === 'call-native-repeat',
+    )?.data as AcpRecord | undefined;
+    expect(repeatFull).toEqual({
+      toolUseId: 'call-native-repeat',
+      fullText: '{"from":"host-v2"}',
+      isError: false,
+    });
+    const cancelledFull = events.find(
+      (e) => e.type === 'tool_result_full' && (e.data as AcpRecord).toolUseId === 'call-cancelled',
+    )?.data as AcpRecord | undefined;
+    expect(cancelledFull).toEqual({
+      toolUseId: 'call-cancelled',
+      fullText: 'Interrupted before the tool finished.',
+      isError: true,
+    });
+    expect(bucket.size()).toBe(0);
+
+    await handle.close();
+    await pump;
+  });
+
+  it('backfills remote device-hosted ACP tool_result_full via createAcpMcpResultBackfiller and parses underscore MCP names', () => {
+    expect(parseAcpMcpToolName('mcp__cindy_helper__call_tool', ['cindy', 'cindy_helper'])).toEqual({
+      serverName: 'cindy_helper',
+      toolName: 'call_tool',
+    });
+    expect(parseAcpMcpToolName('mcp_cindy_helper_call_tool', ['cindy', 'cindy_helper'])).toEqual({
+      serverName: 'cindy_helper',
+      toolName: 'call_tool',
+    });
+
+    const bucket = createMcpToolResultBucket();
+    const cardText = '{"ok":true,"xdt_card_id":"remote-card-1"}';
+    bucket.record({
+      serverName: 'cindy',
+      toolName: 'ghost_call',
+      input: { ghost_id: 'cindy-github', namespace: null, tool: 'pr_card', args: { pr: '42' }, toolSummary: 'PR' },
+      fullText: cardText,
+      isError: false,
+    });
+    bucket.record({
+      serverName: 'cindy',
+      toolName: 'ghost_call',
+      input: { ghost_id: 'cindy-github', namespace: null, tool: 'status_watch', args: {} },
+      fullText: '{"ok":false,"errorCode":"AUTH"}',
+      isError: true,
+    });
+
+    const mapEvent = createAcpMcpResultBackfiller({
+      takeMcpToolResult: (q) => bucket.take(q),
+      serverNames: ['cindy'],
+    });
+
+    // Input arrives via patch after initial empty tool_use, then empty tool_result_full.
+    mapEvent({ type: 'tool_use', data: { toolUseId: 'tu-1', toolName: 'mcp__cindy__ghost_call', input: {} } });
+    mapEvent({
+      type: 'tool_use',
+      data: {
+        toolUseId: 'tu-1',
+        toolName: 'mcp__cindy__ghost_call',
+        input: { ghost_id: 'cindy-github', namespace: null, tool: 'pr_card', args: { pr: '42' } },
+        acpInputPatch: true,
+      },
+    });
+    const filled = mapEvent({ type: 'tool_result_full', data: { toolUseId: 'tu-1', fullText: '', isError: false } });
+    expect(filled.data).toEqual({ toolUseId: 'tu-1', fullText: cardText, isError: false });
+
+    // Error receipt flips both tool_result_full.isError and subsequent tool_result.summary.
+    mapEvent({
+      type: 'tool_use',
+      data: {
+        toolUseId: 'tu-2',
+        toolName: 'mcp__cindy__ghost_call',
+        input: { ghost_id: 'cindy-github', namespace: null, tool: 'status_watch', args: {} },
+      },
+    });
+    const errFilled = mapEvent({ type: 'tool_result_full', data: { toolUseId: 'tu-2', fullText: '', isError: false } });
+    expect(errFilled.data).toEqual({
+      toolUseId: 'tu-2',
+      fullText: '{"ok":false,"errorCode":"AUTH"}',
+      isError: true,
+    });
+    const errSummary = mapEvent({ type: 'tool_result', data: { summary: 'done', toolUseIds: ['tu-2'] } });
+    expect(errSummary.data).toEqual({ summary: 'failed', toolUseIds: ['tu-2'] });
+
+    // Non-empty tool_result_full passes through unchanged AND retires its matching Host receipt,
+    // so a subsequent identical empty-output call receives its own fresh receipt instead of the old one.
+    bucket.record({
+      serverName: 'cindy',
+      toolName: 'ghost_call',
+      input: { ghost_id: 'cindy-github', namespace: null, tool: 'pr_card', args: { pr: '99' } },
+      fullText: '{"ok":true,"xdt_card_id":"stale-card"}',
+      isError: false,
+    });
+    mapEvent({
+      type: 'tool_use',
+      data: {
+        toolUseId: 'tu-3',
+        toolName: 'mcp__cindy__ghost_call',
+        input: { ghost_id: 'cindy-github', namespace: null, tool: 'pr_card', args: { pr: '99' } },
+      },
+    });
+    const untouched = mapEvent({ type: 'tool_result_full', data: { toolUseId: 'tu-3', fullText: 'already here', isError: false } });
+    expect(untouched.data).toEqual({ toolUseId: 'tu-3', fullText: 'already here', isError: false });
+    bucket.record({
+      serverName: 'cindy',
+      toolName: 'ghost_call',
+      input: { ghost_id: 'cindy-github', namespace: null, tool: 'pr_card', args: { pr: '99' } },
+      fullText: '{"ok":true,"xdt_card_id":"fresh-card"}',
+      isError: false,
+    });
+    mapEvent({
+      type: 'tool_use',
+      data: {
+        toolUseId: 'tu-4',
+        toolName: 'mcp__cindy__ghost_call',
+        input: { ghost_id: 'cindy-github', namespace: null, tool: 'pr_card', args: { pr: '99' } },
+      },
+    });
+    const freshFilled = mapEvent({ type: 'tool_result_full', data: { toolUseId: 'tu-4', fullText: '', isError: false } });
+    expect(freshFilled.data).toEqual({
+      toolUseId: 'tu-4',
+      fullText: '{"ok":true,"xdt_card_id":"fresh-card"}',
+      isError: false,
+    });
   });
 });
 

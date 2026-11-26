@@ -17,6 +17,7 @@ import {
   TurnPermissionPolicyUnsupportedError,
   type AgentSessionHandle,
   type SendOptions,
+  type TakeMcpToolResult,
   type TurnChangeCaptureHooks,
   type TurnPermissionPolicy,
 } from '../base-agent.js';
@@ -160,6 +161,8 @@ export interface OpenAcpSessionOptions {
   captureSessionId?: string;
   /** Host-side file change capture callbacks for local ACP turns. */
   turnChangeCapture?: TurnChangeCaptureHooks;
+  /** Backfills empty MCP tool results from the host HTTP MCP bridge when the engine omits them. */
+  takeMcpToolResult?: TakeMcpToolResult;
   /** Overrides ACP_OPEN_TOOL_QUIET_CAP_MS (tests). */
   openToolQuietCapMs?: number;
   now?: () => number;
@@ -344,15 +347,17 @@ export async function openAcpSession(opts: OpenAcpSessionOptions): Promise<AcpSe
       outcome = 'new';
     }
 
+    const acceptedMcpServers = accepted.map((server) => server.name);
     const session = new AcpSession({
       connection,
       init,
       sessionId,
       configOptions: normalizeConfigOptions(result.configOptions),
       resumeOutcome: outcome,
+      acceptedMcpServers,
       droppedMcpServers: dropped,
       briefing: outcome === 'new'
-        ? typeof opts.briefing === 'function' ? opts.briefing(accepted.map((server) => server.name)) : opts.briefing ?? ''
+        ? typeof opts.briefing === 'function' ? opts.briefing(acceptedMcpServers) : opts.briefing ?? ''
         : '',
       options: opts,
     });
@@ -492,6 +497,7 @@ interface AcpSessionInit {
   sessionId: string;
   configOptions: AcpConfigOption[];
   resumeOutcome: AcpResumeOutcome;
+  acceptedMcpServers: string[];
   droppedMcpServers: string[];
   /** Briefing for a new session, resolved against the accepted MCP servers. */
   briefing: string;
@@ -612,7 +618,11 @@ export class AcpSession {
       const trimmed = name.trim().replace(/^\/+/, '').toLowerCase();
       if (trimmed) this.commandNames.add(trimmed);
     }
-    this.translator = new AcpUpdateTranslator({ blockIdPrefix: `acp-${init.sessionId}` });
+    this.translator = new AcpUpdateTranslator({
+      blockIdPrefix: `acp-${init.sessionId}`,
+      ...(init.options.takeMcpToolResult ? { takeMcpToolResult: init.options.takeMcpToolResult } : {}),
+      mcpServerNames: init.acceptedMcpServers,
+    });
     if (init.options.permissionMode) this.applyPermissionMode(init.options.permissionMode);
     this.connection.onClose((info) => this.handleConnectionClosed(info));
     // Logical RPC closure cancels requests. Only an endpoint exit can end

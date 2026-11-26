@@ -56,3 +56,14 @@ export {
   type PluginEngineBriefingSkill,
   type PluginEngineWireMessage,
 } from './briefing.js';
+export {
+  ACP_MCP_RECEIPT_MAX_TEXT_CHARS,
+  canonicalizeMcpToolInput,
+  createAcpMcpResultBackfiller,
+  createMcpToolResultBucket,
+  parseAcpMcpToolName,
+  type CreateMcpToolResultBucketOptions,
+  type McpToolResultBucket,
+  type ParsedAcpMcpToolName,
+  type RecordedMcpToolResult,
+} from './mcp-tool-result.js';

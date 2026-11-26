@@ -4,7 +4,8 @@ import {
 } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import type { Transport, TransportSendOptions } from '@modelcontextprotocol/sdk/shared/transport.js';
 import {
-  isJSONRPCRequest, isJSONRPCResultResponse, type JSONRPCMessage, type RequestId, type Tool,
+  isJSONRPCErrorResponse, isJSONRPCRequest, isJSONRPCResultResponse,
+  type JSONRPCMessage, type RequestId, type Tool,
 } from '@modelcontextprotocol/sdk/types.js';
 
 /*
@@ -169,12 +170,129 @@ function textResult(text: string, isError = false) {
   return { content: [{ type: 'text' as const, text }], ...(isError ? { isError } : {}) };
 }
 
+export interface ObservedMcpToolCallResult {
+  serverName: string;
+  toolName: string;
+  input: unknown;
+  fullText: string;
+  isError: boolean;
+}
+
+const MAX_IN_FLIGHT_OBSERVED_CALLS = 256;
+
+function extractMcpToolResponse(
+  message: JSONRPCMessage,
+): { fullText: string; isError: boolean } | null {
+  if (isJSONRPCResultResponse(message)) {
+    const result = message.result as {
+      content?: unknown;
+      structuredContent?: unknown;
+      isError?: unknown;
+    };
+    const parts: string[] = [];
+    if (Array.isArray(result.content)) {
+      for (const item of result.content) {
+        if (!item || typeof item !== 'object') continue;
+        const block = item as Record<string, unknown>;
+        if (block.type === 'text' && typeof block.text === 'string') {
+          if (block.text.length > 0) parts.push(block.text);
+        } else if (block.type === 'resource' && block.resource && typeof block.resource === 'object') {
+          const resource = block.resource as Record<string, unknown>;
+          if (typeof resource.text === 'string' && resource.text.length > 0) parts.push(resource.text);
+          else if (typeof resource.uri === 'string' && resource.uri.length > 0) parts.push(resource.uri);
+        } else if (block.type === 'resource_link' && typeof block.uri === 'string' && block.uri.length > 0) {
+          parts.push(block.uri);
+        }
+      }
+    }
+    if (parts.length === 0 && result.structuredContent !== undefined) {
+      try {
+        const serialized = JSON.stringify(result.structuredContent);
+        if (serialized) parts.push(serialized);
+      } catch {
+        // ignore unserializable structuredContent
+      }
+    }
+    return { fullText: parts.join('\n'), isError: result.isError === true };
+  }
+  if (isJSONRPCErrorResponse(message)) {
+    const text = typeof message.error?.message === 'string' && message.error.message.length > 0
+      ? message.error.message
+      : 'MCP tool call failed';
+    return { fullText: text, isError: true };
+  }
+  return null;
+}
+
+/**
+ * Observes `tools/call` JSON-RPC requests and emits their final text response synchronously
+ * before the HTTP bytes are sent back to the client, so ACP engines that omit `content`/
+ * `rawOutput` on `tool_call_update` always find the receipt already recorded.
+ */
+class ObservedStreamableHTTPServerTransport extends StreamableHTTPServerTransport {
+  private readonly inFlightToolCalls = new Map<RequestId, { toolName: string; input: unknown }>();
+
+  constructor(
+    options: StreamableHTTPServerTransportOptions,
+    protected readonly observedServerName: string,
+    private readonly onToolCallResult?: (receipt: ObservedMcpToolCallResult) => void,
+  ) {
+    super(options);
+  }
+
+  override set onmessage(handler: Transport['onmessage']) {
+    super.onmessage = handler && ((message, extra) => {
+      if (this.onToolCallResult && isJSONRPCRequest(message) && message.method === 'tools/call') {
+        const params = message.params as { name?: unknown; arguments?: unknown } | undefined;
+        if (typeof params?.name === 'string' && params.name.length > 0) {
+          if (this.inFlightToolCalls.size >= MAX_IN_FLIGHT_OBSERVED_CALLS && !this.inFlightToolCalls.has(message.id)) {
+            const oldest = this.inFlightToolCalls.keys().next().value;
+            if (oldest !== undefined) this.inFlightToolCalls.delete(oldest);
+          }
+          this.inFlightToolCalls.set(message.id, { toolName: params.name, input: params.arguments });
+        }
+      }
+      return handler(message, extra);
+    });
+  }
+  override get onmessage(): Transport['onmessage'] { return super.onmessage; }
+
+  override send(message: JSONRPCMessage, options?: TransportSendOptions) {
+    if (
+      this.onToolCallResult &&
+      (isJSONRPCResultResponse(message) || isJSONRPCErrorResponse(message)) &&
+      message.id !== undefined
+    ) {
+      const pending = this.inFlightToolCalls.get(message.id);
+      if (pending) {
+        this.inFlightToolCalls.delete(message.id);
+        const extracted = extractMcpToolResponse(message);
+        if (extracted) {
+          this.onToolCallResult({
+            serverName: this.observedServerName,
+            toolName: pending.toolName,
+            input: pending.input,
+            fullText: extracted.fullText,
+            isError: extracted.isError,
+          });
+        }
+      }
+    }
+    return super.send(message, options);
+  }
+
+  override close(): Promise<void> {
+    this.inFlightToolCalls.clear();
+    return super.close();
+  }
+}
+
 /**
  * describe_tool and run_tool exist only in this transport: the McpServer is never touched, so
  * servers that install their own tools/list and tools/call handlers (MCP App and companion
  * connection proxies) keep their discovery and execution unchanged.
  */
-class AntigravityCatalogTransport extends StreamableHTTPServerTransport {
+class AntigravityCatalogTransport extends ObservedStreamableHTTPServerTransport {
   private readonly listing = new AsyncLocalStorage<RequestId>();
   private readonly definitions = new Map<string, Definition>();
   private hidden = new Set<string>();
@@ -185,8 +303,9 @@ class AntigravityCatalogTransport extends StreamableHTTPServerTransport {
     options: StreamableHTTPServerTransportOptions,
     private readonly serverName: string,
     private readonly budgetBytes: number,
+    onToolCallResult?: (receipt: ObservedMcpToolCallResult) => void,
   ) {
-    super(options);
+    super(options, serverName, onToolCallResult);
   }
 
   private unknownTool(name: unknown) {
@@ -256,8 +375,17 @@ export function createCatalogTransport(
   serverName: string,
   serverNames: readonly string[],
   options: StreamableHTTPServerTransportOptions,
+  onToolCallResult?: (receipt: ObservedMcpToolCallResult) => void,
 ): StreamableHTTPServerTransport {
-  return clientName === ANTIGRAVITY_CLIENT_NAME
-    ? new AntigravityCatalogTransport(options, serverName, antigravityServerBudget(serverName, serverNames))
+  if (clientName === ANTIGRAVITY_CLIENT_NAME) {
+    return new AntigravityCatalogTransport(
+      options,
+      serverName,
+      antigravityServerBudget(serverName, serverNames),
+      onToolCallResult,
+    );
+  }
+  return onToolCallResult
+    ? new ObservedStreamableHTTPServerTransport(options, serverName, onToolCallResult)
     : new StreamableHTTPServerTransport(options);
 }

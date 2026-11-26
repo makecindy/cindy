@@ -791,11 +791,13 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
           vendorOptions,
           mcpCallerKind: 'root',
           mcpCallerAttested: true,
+          ...(input.agentKind === 'acp' ? { recordMcpToolResults: true } : {}),
         });
         return {
           servers: mcpTargets(extra),
           dispose: () => extra?.disposeSessionCtx?.(),
           closeSessionInstance: () => extra?.closeSessionInstance?.(),
+          ...(extra?.takeMcpToolResult ? { takeMcpToolResult: extra.takeMcpToolResult } : {}),
         };
       },
       capture: ({ kind, opts: startOpts }): ExecutorCaptureHooks | undefined => {

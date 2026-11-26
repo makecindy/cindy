@@ -127,6 +127,7 @@ import { setRemoteReceiptDisplayReady } from '@/lib/sessionAttentionStore';
 import { shortSessionId } from '@/lib/sessionId';
 import { isQuotaExhaustedErrorMessage } from '@/utils/quotaError';
 import { isOverloadErrorMessage } from '@/utils/overloadError';
+import type { CollabWorkerKind } from '@/components/new-chat/ExtraDirsButton';
 import { ChatInput, type SessionModelPick } from '@/components/new-chat/ChatInput';
 import { PluginUiSlot, PluginUiWorkdirButton, usePluginUiHas } from '@/cindy-brain/PluginUiContributions';
 import {
@@ -2988,7 +2989,11 @@ function CCAgentSessionContent({
   );
   const modelGroupsConfig = modelGroupsTaskDeviceId ? deviceTaskModelGroups.config : localTaskModelGroups.config;
   // 已挂着「下一条消息换到另一台电脑」时，按那个即将生效的位置挑：换模型时会沿用它，两边必须是同一台。
-  const switchTaskByModelGroup = useCallback(async (selection: ModelGroupSelection) => {
+  const switchTaskByModelGroup = useCallback(async (
+    selection: ModelGroupSelection,
+    /** 在合并条目下点的那一行：用户在那里选的思考深度与 Fast(成员支持时带上)。 */
+    context?: { effort?: string; fastMode?: true | 'ultrafast' },
+  ) => {
     if (!sessionId) return;
     // 和在选择器里点一行同一个顺序保证：已经点了发送就不再换；选路期间占住这个任务的切换门，
     // 这时点发送会等换完，而不是先用旧模型发出去。
@@ -2999,8 +3004,8 @@ function CCAgentSessionContent({
       const navigationVersion = sessionNavigationVersionRef.current;
       // 远程控制的任务：由任务所在那台按它的模式选，位置是那台眼里的位置。
       const result = modelGroupsTaskDeviceId
-        ? await resolveDeviceModelGroup(modelGroupsTaskDeviceId, selection, undefined, { agentDeviceId: taskLocation })
-        : await resolveModelGroup(selection, undefined, { agentDeviceId: taskLocation });
+        ? await resolveDeviceModelGroup(modelGroupsTaskDeviceId, selection, context, { agentDeviceId: taskLocation })
+        : await resolveModelGroup(selection, context, { agentDeviceId: taskLocation });
       if (sessionNavigationVersionRef.current !== navigationVersion) return;
       if (!result || result.outcome !== 'routed') {
         if (result) toast.warning(t('modelGroups.picker.switchUnavailable', { name: result.groupName }));
@@ -3027,6 +3032,11 @@ function CCAgentSessionContent({
         config: modelGroupsConfig,
         active: null,
         onSelect: (selection: ModelGroupSelection) => { void switchTaskByModelGroup(selection); },
+        // 合并整个供应商的路由也像一个供应商列出来：点其中一个模型 = 按这条路由在任务所在的位置挑成员换过去。
+        // 另一台电脑的配置里没有这类路由(发给别的设备时不带)，那边不会出现合并条目。
+        onPickMerged: (selection: ModelGroupSelection, context: { effort?: string; fastMode?: true | 'ultrafast' }) => {
+          void switchTaskByModelGroup(selection, context);
+        },
         // 管理入口只在本机：另一台电脑的模式在那台上改。
         ...(modelGroupsTaskDeviceId ? {} : { onManage: () => navigate('/settings?tab=model-groups') }),
       }
@@ -3481,7 +3491,7 @@ function CCAgentSessionContent({
   // F-COLLAB: 协同模式真实状态。enabled 来自 session.orcaRole === 'lead';
   // worker(显示用)从 active workflow 的 Worker session 列表查到 agentKind。
   // 切换协同走 IPC enableOrca / disableOrca,失败时 toast。
-  const [collabWorker, setCollabWorker] = useState<'cc' | 'codex' | 'pi'>('codex');
+  const [collabWorker, setCollabWorker] = useState<CollabWorkerKind>('codex');
   // enableBusy 只盖"开启协同"路径;关闭走 useStopOrcaCollab hook 自己管 busy。
   const [enableBusy, setEnableBusy] = useState(false);
   const [createWorkerOpen, setCreateWorkerOpen] = useState(false);
