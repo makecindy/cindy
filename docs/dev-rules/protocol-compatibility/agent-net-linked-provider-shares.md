@@ -81,17 +81,18 @@ Device Link，分享者不再签新的放行证，旧的 30 分钟内失效。
 
 ## 中转与服务端仓
 
-- 共享状态文档多了 `linkedShares`，按[多副本规则](agent-net-relay-cluster.md)把 `RELAY_CLUSTER_COMPAT` 从 1 提升到 2：
-  旧副本既不认这些放行证，也会和新字段的写入竞争，因此官方多副本服务要先停全部旧副本再发布。
+- 共享状态文档多了可选的 `linkedShares`，按[多副本规则](agent-net-relay-cluster.md)的例外**不提升** `RELAY_CLUSTER_COMPAT`，
+  可以照常滚动发布：旧副本写分享文档时原样带过这个字段；混跑期间由旧副本负责的网络不声明能力、不认已登记分享
+  （登记回 404、放行证不被认可），这些分享照旧走 Device Link，全部换成新副本后自动生效，不会误授权或丢数据。
 - 官方 Agent-Net 服务在服务端仓的同名 `packages/agent-net-relay` / `packages/device-link-sharing`，需要同步本次的
-  `sharing.ts`、`store.ts`、`cluster.ts`、`repositories.ts` 改动与 fixture（截至 2026-11-26 尚未同步，未部署）。
+  `sharing.ts`、`server.ts`、`store.ts`、`repositories.ts` 改动与 fixture（服务端仓同步 PR 见客户端 PR 说明）。
 - 自建中转：这项能力只在账号分享服务上开放，私有分享服务（`/private-sharing/*`）不接受登记（测试覆盖），客户端在
   走自建中转时也不发起，因此不提升 `RELAY_VERSION`；已部署的自建中转不受影响。
 
 ## 实现入口与回归测试
 
 - 服务：`packages/agent-net-relay/src/sharing.ts`（`linkedShare`、`linkShare`、`unlinkShare`、`/transport` 分支、`check`）、
-  `server.ts`（开关与 `/info`）、`store.ts`、`cluster.ts`。
+  `server.ts`（开关与 `/info`）、`store.ts`；混跑保留字段由 `cluster.integration.test.ts` 的「keeps sharing-document fields another build added…」覆盖。
 - Desktop：`agentNetLinkedShares.ts`（分享者登记、放行判断、撤销与清理；受邀者发起、连接、会话与附件选路）、
   `agentNetSharing.ts`（`sessionRoute` 与绑定生命周期）、`agentNetMedia.ts`、`agentNetRuntime.ts`（记录 `/info` 能力）、
   `index.ts`（放行策略）、`dispatch.ts`（通道闸门）、`providerShareRuntime.ts`（挂接）。
