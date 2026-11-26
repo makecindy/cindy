@@ -1,3 +1,5 @@
+import { PluginEngineIcon } from '@/components/icons/PluginEngineIcon';
+import { ANTIGRAVITY_MARK_DATA_URL, isAntigravityPluginId, isAntigravityPluginName } from '@cindy/maker-shared/branding';
 import { useFirstRunGuideConnectionDialog } from '@/features/first-run-guide/firstRunGuideStore';
 import { isBuiltinApiKeyProviderId } from '../../../shared/providerSecrets';
 import { BUNDLED_CATALOG, providerSetupLink, providerPresetOAuth, providerPresetOAuthRuntimes, buildUserProvider, isMimoTokenPlanPreset } from '@cindy/model-providers';
@@ -26,11 +28,13 @@ import { WINDOW_DRAG_STYLE, WINDOW_NO_DRAG_STYLE } from '@/components/layout/win
 import { Check, Info, Search } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
+import { Checkbox } from '@/components/ui/checkbox';
 import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
 import { Spinner } from '@/components/ui/spinner';
-import { createCustomProvider, deleteCustomProvider, updateCustomProvider, providerViewToCustomProviderConfig, type RuntimeKeys } from '@/lib/customProviders';
+import { providerViewToCustomProviderConfig, type RuntimeKeys } from '@/lib/customProviders';
 import { GEMINI_API_PRESET_ID, newGeminiConnectionId } from '../../../shared/geminiApiConnection';
+import { localProviderSetup, useProviderSetupSource } from './providerSetupSource';
 import { isWizardOAuthChoice, isWizardApiKeyChoice, presetChoiceMeta, builtinChoiceMeta, type ProviderSearchTarget } from './providerSearch';
 import { CURRENT_CINDY_REGION } from '../../../shared/brandRegion';
 import { configuredPresetAgents } from '../../../shared/piRuntimeInitialization';
@@ -51,6 +55,10 @@ import { localCliDisplayName, type LocalCliDetection } from '../../../shared/loc
 import { useProviderOAuthDeviceCode } from '@/hooks/useProviderOAuthDeviceCode';
 import { isSubscriptionProvider } from '../../../shared/subscriptionAccounts';
 import { SubscriptionSignInChoices, type SubscriptionSignInTarget } from './SubscriptionSignInChoices';
+import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
+import type { OfficialModelPlugin } from '../../../shared/pluginMarket';
+import { OfficialModelPluginStep } from './OfficialModelPluginStep';
+import { useOfficialModelPlugins } from './useOfficialModelPlugins';
 import { cardIcon, ProviderRow } from './ProviderRow';
 import { LocalOllamaInstall, offersManagedOllamaInstall } from './LocalOllamaInstall';
 import { MANAGED_LLAMACPP_PROVIDER_ID } from '../../../shared/llamaCpp';
@@ -59,6 +67,7 @@ import { SettingsTextInput } from './SettingsTextInput';
 import { modelsAfterProviderEndpointEdit } from '@/lib/customProviderEndpointEdit';
 import type { DetectedProviderDraft } from '../../../shared/providerDetection';
 import { SpeechModelChoices } from './SpeechModelChoices';
+import { isRealtimeModel } from '../../../shared/speechProviderSetup';
 import { isSpeechModel, SPEECH_API_PRESETS, speechReferenceModels, speechSetupTarget, withSpeechApiPresets } from '../../../shared/speechProviderSetup';
 
 import {
@@ -92,6 +101,7 @@ interface AddProviderWizardProps {
   onReturnCustom?: (draft: DetectedProviderDraft) => void;
   providers: ProviderView[];
   entry?: WizardEntry;
+  showOfficialModelPlugins?: boolean;
   /** 连接失败已在向导内提示；父级只恢复草稿，不再提示目录目标失效。 */
   onEntryUnavailable?: (reason?: 'target-unavailable' | 'connection-failed') => void;
   /** 「自定义端点」卡片 → 关闭向导并打开完整表单。 */
@@ -309,11 +319,15 @@ export function AddProviderWizard({
   providers,
   entry,
   onEntryUnavailable,
+  showOfficialModelPlugins,
   onOpenCustomForm: openCustomForm,
   onClose: notifyClosed,
   onDone: notifyDone,
 }: AddProviderWizardProps) {
   const { t, i18n } = useTranslation();
+  // The cloud instance settings page supplies its instance; otherwise this computer.
+  const setupSource = useProviderSetupSource();
+  const api = setupSource ?? localProviderSetup;
   const dialog = useDialogExit();
   const panelRef = useRef<HTMLDivElement>(null);
   const { complete: completeGuideConnection, cancel: cancelGuideConnection } = useFirstRunGuideConnectionDialog();
@@ -334,6 +348,7 @@ export function AddProviderWizard({
   const consumePresetEntry = useCallback(() => {
     if (entry?.kind === 'preset') presetEntryConsumedRef.current = entry.presetId;
   }, [entry]);
+  const [pluginStep, setPluginStep] = useState<{ item: OfficialModelPlugin; owner: ReturnType<typeof getDataOwnerGeneration> }>();
   const [query, setQuery] = useState('');
   // entry(左栏检测建议 / 引导卡直达):目录里找得到该渠道才直达授权步,否则回落目录页。
   const entryProvider =
@@ -354,7 +369,7 @@ export function AddProviderWizard({
   const oauthDraftRef = useRef<CustomProviderConfig | null>(null);
   const oauthAttemptRef = useRef(0);
   const [ollamaCanInstall, setOllamaCanInstall] = useState(() =>
-    offersManagedOllamaInstall(window.electronAPI.platform),
+    api.localRuntimes && offersManagedOllamaInstall(window.electronAPI.platform),
   );
   const [loggingIn, setLoggingIn] = useState(false);
   const [xaiDeviceLogin, setXaiDeviceLogin] = useState(false);
@@ -369,8 +384,8 @@ export function AddProviderWizard({
     clearDeviceCode: clearGenericDeviceCode,
     beginOwnedLogin: beginGenericOwnedLogin,
     cancelOwnedLogin: cancelGenericOwnedLogin,
-  } = useProviderOAuthDeviceCode(genericOAuthProviderId, {
-    observeProgress: genericDeviceFlow || (sel?.kind === 'oauth' && ['openai', 'xai'].includes(sel.provider.id)),
+  } = useProviderOAuthDeviceCode(setupSource ? null : genericOAuthProviderId, {
+    observeProgress: !setupSource && (genericDeviceFlow || (sel?.kind === 'oauth' && ['openai', 'xai'].includes(sel.provider.id))),
     browserLoginRef: accountLoginRef,
   });
   // Step 3 拉取态
@@ -410,6 +425,7 @@ export function AddProviderWizard({
         recommended: boolean;
         speechReference?: boolean;
         manualSpeech?: boolean;
+        realtime?: boolean;
         agents: AgentKind[];
         /** 列模型端点上报的上下文窗口,**按 agent 分槽**(同一 id 双端可不同,如
          *  cc=1M / codex=272K);完成创建时按所属 runtime 取值,作为供应商事实单独保存。 */
@@ -432,7 +448,7 @@ export function AddProviderWizard({
 
   useEffect(() => {
     let cancelled = false;
-    void window.electronAPI.maker
+    void api
       .listProviderPresets()
       .then((r) => {
         if (!cancelled) {
@@ -455,6 +471,10 @@ export function AddProviderWizard({
 
   useEffect(() => {
     let cancelled = false;
+    if (!api.localRuntimes) {
+      setLocalProbe((current) => ({ ...current, ready: true }));
+      return;
+    }
     void window.electronAPI.maker
       .localModelList()
       .then((result) => {
@@ -477,7 +497,7 @@ export function AddProviderWizard({
 
   useEffect(() => {
     let cancelled = false;
-    void window.electronAPI.maker
+    void api
       .scanLocalCli()
       .then((result) => {
         if (!cancelled) setCliDetections(result.detections);
@@ -507,6 +527,10 @@ export function AddProviderWizard({
     [presets],
   );
   const q = query.trim().toLowerCase();
+  const activePluginStep = pluginStep && isDataOwnerGenerationCurrent(pluginStep.owner) ? pluginStep : undefined;
+  const officialPlugins = useOfficialModelPlugins(step === 1 && !activePluginStep && !!showOfficialModelPlugins, i18n.language);
+  const matchingPlugins = officialPlugins.items.filter(item =>
+    !q || [item.name, item.ghostId, item.description].some(value => value?.toLowerCase().includes(q)));
   const filteredOauth = q
     ? oauthChoices.filter((p) => p.name.toLowerCase().includes(q))
     : oauthChoices;
@@ -558,7 +582,7 @@ export function AddProviderWizard({
         connectedProviderIds,
         cliCandidates,
         fallbackOauthProviderId: oauthChoices[0]?.id ?? null,
-      })
+      }).filter((item) => api.localRuntimes || item.kind !== 'ollama')
     : [];
   const recommendedOauthIds = new Set(
     recommendations
@@ -569,10 +593,11 @@ export function AddProviderWizard({
   const ollamaMatchesQuery =
     !q || t('settings.providers.local.title').toLowerCase().includes(q) || 'ollama'.includes(q);
   const showOllamaInList =
+    api.localRuntimes &&
     !ollamaAlreadyAdded &&
     ollamaMatchesQuery &&
     (Boolean(q) || (localProbe.ready && !recommendsOllama));
-  const showLlamaCppInList = (!q || 'llama.cpp'.includes(q)) && !providers.some(p => p.id === MANAGED_LLAMACPP_PROVIDER_ID);
+  const showLlamaCppInList = api.localRuntimes && (!q || 'llama.cpp'.includes(q)) && !providers.some(p => p.id === MANAGED_LLAMACPP_PROVIDER_ID);
   const listedOauth = q
     ? filteredOauth
     : filteredOauth.filter((p) => !recommendedOauthIds.has(p.id));
@@ -599,7 +624,7 @@ export function AddProviderWizard({
     if (savingRef.current) return;
     const draft = oauthDraftRef.current;
     oauthDraftRef.current = null;
-    if (draft) void deleteCustomProvider(draft.id).catch(() => undefined);
+    if (draft) void api.deleteCustomProvider(draft.id).catch(() => undefined);
   }, []);
 
   const pickOauth = useCallback((provider: ProviderView) => {
@@ -607,7 +632,7 @@ export function AddProviderWizard({
     consumePresetEntry();
     const draft = oauthDraftRef.current;
     oauthDraftRef.current = null;
-    if (draft) void deleteCustomProvider(draft.id).catch(() => undefined);
+    if (draft) void api.deleteCustomProvider(draft.id).catch(() => undefined);
     fetchSeqRef.current += 1;
     setManualModelIds({});
     setSel({ kind: 'oauth', provider });
@@ -619,7 +644,7 @@ export function AddProviderWizard({
     consumePresetEntry();
     const draft = oauthDraftRef.current;
     oauthDraftRef.current = null;
-    if (draft) void deleteCustomProvider(draft.id).catch(() => undefined);
+    if (draft) void api.deleteCustomProvider(draft.id).catch(() => undefined);
     fetchSeqRef.current += 1;
     setManualModelIds({});
     setSel({ kind: 'builtinApiKey', provider });
@@ -662,7 +687,7 @@ export function AddProviderWizard({
       }
       const draft = oauthDraftRef.current;
       oauthDraftRef.current = null;
-      if (draft) void deleteCustomProvider(draft.id).catch(() => undefined);
+      if (draft) void api.deleteCustomProvider(draft.id).catch(() => undefined);
       if (
         preset.id === 'lmstudio' &&
         providers.some((p) => p.id === MANAGED_LMSTUDIO_PROVIDER_ID)
@@ -756,18 +781,40 @@ export function AddProviderWizard({
   }, [entry, presets, presetsLoadState, pickPreset, onEntryUnavailable]);
 
   const localLoginRef = useRef<{ cancel: () => void } | null>(null);
+  // The setup source's own account sign-in (the cloud instance's Claude Code or Codex).
+  const sourceAccountLogin = async (kind: 'claude' | 'codex') => {
+    setLoggingIn(true);
+    const login = { cancel: () => setupSource?.cancelLocalAccountLogin?.() };
+    localLoginRef.current = login;
+    try {
+      const result = await setupSource!.localAccountLogin!(kind);
+      if (localLoginRef.current !== login) return;
+      if (result.ok) onDone(kind === 'claude' ? 'anthropic' : 'openai');
+      else if (result.reason !== 'login_cancelled')
+        toast.error(t(kind === 'claude' ? 'settings.connections.claude.toast.loginFailed' : 'settings.providers.openai.localUnavailable'));
+    } catch {
+      if (localLoginRef.current === login)
+        toast.error(t(kind === 'claude' ? 'settings.connections.claude.toast.loginFailed' : 'settings.providers.openai.localUnavailable'));
+    } finally {
+      if (localLoginRef.current === login) {
+        localLoginRef.current = null;
+        setLoggingIn(false);
+      }
+    }
+  };
   useEffect(() => () => {
     const localLogin = localLoginRef.current;
     localLoginRef.current = null;
     localLogin?.cancel();
     const login = accountLoginRef.current;
     accountLoginRef.current = null;
-    if (login) void window.electronAPI.maker.providerOAuthCancel(login.providerId, { ownerId: login.ownerId, releaseOwner: true });
+    if (login) void api.providerOAuthCancel(login.providerId, { ownerId: login.ownerId, releaseOwner: true });
   }, []);
 
   const connectSubscription = useCallback(async (choice: SubscriptionSignInTarget) => {
     const providerId = sel?.kind === 'oauth' ? sel.provider.id : undefined;
     if (!isSubscriptionProvider(providerId) || localLoginRef.current) return;
+    if (setupSource?.localAccountLogin) return void sourceAccountLogin(providerId === 'anthropic' ? 'claude' : 'codex');
     setLoggingIn(true);
     const loginKey = crypto.randomUUID();
     // A login is cancelled through the account pool of its kind, whichever provider it joins.
@@ -826,14 +873,14 @@ export function AddProviderWizard({
           accountLoginRef.current = login;
           let created = false;
           try {
-            await createCustomProvider({ id, name: selected.name, auth: preset ? { method: 'oauth', oauth: providerPresetOAuth(preset.id)! } : { method: 'oauth', native },
+            await api.createCustomProvider({ id, name: selected.name, auth: preset ? { method: 'oauth', oauth: providerPresetOAuth(preset.id)! } : { method: 'oauth', native },
               runtimes: preset ? providerPresetOAuthRuntimes(preset) : brand === 'anthropic'
                 ? { 'claude-code': { baseUrl: 'https://api.anthropic.com', wireProtocol: 'anthropic-messages', models: [] } }
                 : { codex: { baseUrl: brand === 'openai' ? 'https://chatgpt.com/backend-api/codex' : 'https://api.x.ai/v1', wireProtocol: 'openai-responses', models: [] } },
             }, {});
             created = true;
             if (accountLoginRef.current !== login) return;
-            const result = await window.electronAPI.maker.providerOAuthLogin(id, {
+            const result = await api.providerOAuthLogin(id, {
               ownerId: login.ownerId,
               ...(brand === 'xai' ? { method } : {}),
             });
@@ -846,12 +893,12 @@ export function AddProviderWizard({
               accountLoginRef.current = null;
               clearGenericDeviceCode();
             }
-            if (created && !ok) await deleteCustomProvider(id);
+            if (created && !ok) await api.deleteCustomProvider(id);
           }
         } else {
           const ownedLogin = beginGenericOwnedLogin();
           try {
-            const r = await window.electronAPI.maker.providerOAuthLogin(id, {
+            const r = await api.providerOAuthLogin(id, {
               ownerId: ownedLogin.ownerId,
             });
             ok = r.ok;
@@ -863,10 +910,9 @@ export function AddProviderWizard({
         if (ok && preset) {
           // Reuse the model picker after login. Credentials stay in Main; only the
           // discovered, redacted model configuration comes back to the renderer.
-          const snapshot = await window.electronAPI.maker.listProviders();
-          if (oauthAttemptRef.current !== attempt) { await deleteCustomProvider(id); return; }
-          const connected = snapshot.providers.find(p => p.id === id);
-          if (!connected) { await deleteCustomProvider(id); throw new Error('provider_not_found_after_login'); }
+          const connected = await api.readProvider(id);
+          if (oauthAttemptRef.current !== attempt) { await api.deleteCustomProvider(id); return; }
+          if (!connected) { await api.deleteCustomProvider(id); throw new Error('provider_not_found_after_login'); }
           const config = providerViewToCustomProviderConfig(connected);
           oauthDraftRef.current = config;
           const choices: typeof picks = new Map();
@@ -902,7 +948,7 @@ export function AddProviderWizard({
           toast.error(t('settings.providers.wizard.authorizeFailed', { name: selected.name }));
         }
       } catch {
-        if (preset && id !== preset.id && !oauthDraftRef.current) await deleteCustomProvider(id).catch(() => undefined);
+        if (preset && id !== preset.id && !oauthDraftRef.current) await api.deleteCustomProvider(id).catch(() => undefined);
         toast.error(t('settings.providers.wizard.authorizeFailed', { name: selected.name }));
       } finally {
         // A cancelled account login may settle after a retry or local login has started.
@@ -928,7 +974,7 @@ export function AddProviderWizard({
     if (accountLoginRef.current) {
       const login = accountLoginRef.current;
       accountLoginRef.current = null;
-      if (login) void window.electronAPI.maker.providerOAuthCancel(login.providerId, { ownerId: login.ownerId, releaseOwner: true });
+      if (login) void api.providerOAuthCancel(login.providerId, { ownerId: login.ownerId, releaseOwner: true });
     }
     else cancelGenericOwnedLogin();
     clearGenericDeviceCode();
@@ -962,6 +1008,8 @@ export function AddProviderWizard({
 
     for (const agent of agents) {
       for (const m of preset.runtimes[agent]?.models ?? []) {
+        // A realtime preset describes capabilities. Only discovery adds account membership.
+        if (isRealtimeModel(m, modelRegistry)) continue;
         const existing = initial.get(m.id);
         if (existing) {
           if (!existing.agents.includes(agent)) existing.agents.push(agent);
@@ -994,6 +1042,7 @@ export function AddProviderWizard({
       if (runtime.requestPath) continue;
       const baseUrl = presetRuntimeBaseUrl(preset, agent, presetBaseUrls);
       for (const model of presetSupplementalModels(preset, agent, modelRegistry, baseUrl)) {
+        if (isRealtimeModel(model, modelRegistry)) continue;
         const existing = initial.get(model.id);
         if (existing) {
           if (!existing.agents.includes(agent)) existing.agents.push(agent);
@@ -1031,6 +1080,7 @@ export function AddProviderWizard({
           discoveredSources: { ...existing?.discoveredSources, [agent]: m.discoveredSource },
           discoverySnapshotIds: { ...existing?.discoverySnapshotIds, [agent]: m.discoverySnapshotId },
           opaqueModelIds: { ...existing?.opaqueModelIds, [agent]: m.opaqueModelId },
+          ...(m.discoveredCost ? { discoveredCosts: { ...existing?.discoveredCosts, [agent]: m.discoveredCost } } : {}),
           ...(m.route ? { routes: { ...existing?.routes, [agent]: m.route } } : {}),
         });
       }
@@ -1109,7 +1159,7 @@ export function AddProviderWizard({
             const reuseDetection = detected?.catalog?.ok && agent === detected.agent
               && apiKey === detected.apiKey && source.baseUrl === detected.preset.runtimes[agent]?.baseUrl
               && !source.route && !source.modelsUrl?.includes('client_version=');
-            const r = reuseDetection ? detected!.catalog! : await window.electronAPI.maker.fetchProviderModels({
+            const r = reuseDetection ? detected!.catalog! : await api.fetchProviderModels({
               ...(detected ? { redirect: 'error' as const } : {}),
               agent,
               baseUrl: source.baseUrl,
@@ -1208,9 +1258,13 @@ export function AddProviderWizard({
               existing.name !== m.name ||
               m.discoveredSource || m.discoverySnapshotId || m.opaqueModelId ||
               existing.discoveredSources?.[agent] || existing.discoverySnapshotIds?.[agent] ||
-              m.discoveredCost ||
+              m.discoveredCost || existing.discoveredCosts?.[agent] ||
               m.discoveredMetadata || existing.speechReference
             ) {
+              const nextDiscoveredCosts = { ...existing.discoveredCosts };
+              if (m.discoveredCost) nextDiscoveredCosts[agent] = m.discoveredCost;
+              else delete nextDiscoveredCosts[agent];
+              const hasDiscoveredCosts = Object.keys(nextDiscoveredCosts).length > 0;
               next.set(m.id, {
                 ...existing,
                 speechReference: false,
@@ -1221,7 +1275,7 @@ export function AddProviderWizard({
                 discoveredSources: { ...existing.discoveredSources, [agent]: m.discoveredSource },
                 discoverySnapshotIds: { ...existing.discoverySnapshotIds, [agent]: m.discoverySnapshotId },
                 opaqueModelIds: { ...existing.opaqueModelIds, [agent]: m.opaqueModelId || existing.opaqueModelIds?.[agent] },
-                ...(m.discoveredCost ? { discoveredCosts: { ...existing.discoveredCosts, [agent]: m.discoveredCost } } : {}),
+                discoveredCosts: hasDiscoveredCosts ? nextDiscoveredCosts : undefined,
                 agents: mergedAgents,
                 discoveredMetadata: {
                   ...existing.discoveredMetadata,
@@ -1333,7 +1387,7 @@ export function AddProviderWizard({
     setSaving(true);
     try {
       // 失败经统一 IPC 错误协议抛出(throwIpcError),这里 catch 即失败。
-      await window.electronAPI.builtinApiKeyStore(id, key);
+      await api.builtinApiKeyStore(id, key);
       toast.success(t('settings.providers.wizard.authorizedToast', { name: sel.provider.name }));
       onDone(id);
     } catch {
@@ -1364,6 +1418,7 @@ export function AddProviderWizard({
         routes: v.routes,
         interfaceIds: v.interfaceIds,
         manualSpeech: v.manualSpeech,
+        realtime: v.realtime,
       }));
     if (!bindGeminiImages && !selected.some(model => model.checked)) {
       toast.error(t('settings.providers.wizard.noModelSelected'));
@@ -1402,7 +1457,7 @@ export function AddProviderWizard({
             const discoveredMetadata = m.discoveredMetadata?.[agent] ?? {};
             // Current picks own visibility; an old disabled draft must not override
             // a checked row. Leave checked models on the existing default contract.
-            const { defaultEnabled: _oldEnabled, ...draftModel }: Partial<ProviderRuntimeModelConfig> =
+            const { defaultEnabled: _oldEnabled, discoveredCost: _oldCost, ...draftModel }: Partial<ProviderRuntimeModelConfig> =
               detected?.config.runtimes[agent]?.models.find(model => model.id === m.id) ?? {};
             return {
               ...draftModel,
@@ -1419,7 +1474,7 @@ export function AddProviderWizard({
               discoverySnapshotId: m.discoverySnapshotIds?.[agent],
               opaqueModelId: m.opaqueModelIds?.[agent],
               ...(m.discoveredCosts?.[agent] ? { discoveredCost: m.discoveredCosts[agent] } : {}),
-              ...(m.manualSpeech ? { mode: 'audio_speech' as const } : presetModel?.mode ? { mode: presetModel.mode } : {}),
+              ...(m.realtime ? { mode: 'realtime' as const, modalities: { input: ['audio', 'text'], output: ['audio', 'text'] } } : m.manualSpeech ? { mode: 'audio_speech' as const } : presetModel?.mode ? { mode: presetModel.mode } : {}),
               ...(presetModel?.modalities ? { modalities: { input: [...presetModel.modalities.input], output: [...presetModel.modalities.output] } } : {}),
               ...(presetModel?.officialDocs ? { officialDocs: presetModel.officialDocs } : {}),
               // Known models follow the maintained preset after refresh. Only
@@ -1464,10 +1519,10 @@ export function AddProviderWizard({
         runtimes,
       };
       if (bindGeminiImages) {
-        const result = await createCustomProvider(config, keys, { bindGeminiImages: true });
+        const result = await api.createCustomProvider(config, keys, { bindGeminiImages: true });
         if (!result.ok) throw new Error('Gemini connection was not saved');
       } else {
-        await (oauthDraft ? updateCustomProvider : createCustomProvider)(config, keys);
+        await (oauthDraft ? api.updateCustomProvider : api.createCustomProvider)(config, keys);
       }
       toast.success(
         t('settings.providers.wizard.createdToast', {
@@ -1515,7 +1570,10 @@ export function AddProviderWizard({
   const speechPicks = [...picks.entries()].filter(([id, value]) => value.manualSpeech || value.agents.some(agent =>
     isSpeechModel({ id, discoveredMetadata: value.discoveredMetadata?.[agent], mode: sel?.kind === 'preset' ? sel.preset.runtimes[agent]?.models.find(model => model.id === id)?.mode : undefined })));
   const speechIds = new Set(speechPicks.map(([id]) => id));
-  const generalPicks = [...picks.entries()].filter(([id]) => !speechIds.has(id));
+  const realtimePicks = [...picks.entries()].filter(([id, value]) => value.realtime || value.agents.some(agent =>
+    isRealtimeModel({ id, discoveredMetadata: value.discoveredMetadata?.[agent] }, modelRegistry)));
+  const realtimeIds = new Set(realtimePicks.map(([id]) => id));
+  const generalPicks = [...picks.entries()].filter(([id]) => !speechIds.has(id) && !realtimeIds.has(id));
   const togglePick = (id: string) => setPicks(previous => {
     const next = new Map(previous); const value = next.get(id);
     if (value) next.set(id, { ...value, checked: !value.checked });
@@ -1597,6 +1655,10 @@ export function AddProviderWizard({
         style={WINDOW_NO_DRAG_STYLE}
         className="modal-panel fixed inset-0 z-modal m-auto flex h-fit max-h-[min(640px,85vh)] w-[min(600px,calc(100vw-32px))] flex-col overflow-hidden outline-none"
       >
+        {activePluginStep ? (
+          <OfficialModelPluginStep item={activePluginStep.item} owner={activePluginStep.owner}
+            onBack={() => setPluginStep(undefined)} onDone={() => onDone()} />
+        ) : <>
         {/* 头部:标题居左 + 步骤指示居右,同一行(2026-07 定稿原型形态)。 */}
         <div className="flex items-center justify-between gap-4 px-4 pb-3 pt-4">
           <Dialog.Title asChild><h3
@@ -1823,6 +1885,35 @@ export function AddProviderWizard({
                     })}
                   </>
                 )}
+                {showOfficialModelPlugins && (matchingPlugins.length > 0 || officialPlugins.failed || officialPlugins.hasMore) && (
+                  <>
+                    <GroupLabel>{t('settings.providers.wizard.officialModelPlugins')}</GroupLabel>
+                    {matchingPlugins.map(item => (
+                      <ProviderRow
+                        key={item.pluginId}
+                        icon={isAntigravityPluginId(item.ghostId) || isAntigravityPluginName(item.name)
+                          ? <PluginEngineIcon size={15} iconDataUrl={ANTIGRAVITY_MARK_DATA_URL} />
+                          : cardIcon({ name: item.name })}
+                        name={item.name}
+                        meta={t('settings.providers.wizard.configurePlugin')}
+                        onClick={() => setPluginStep({ item, owner: getDataOwnerGeneration() })}
+                      />
+                    ))}
+                  </>
+                )}
+                {officialPlugins.hasMore && (
+                  <Button variant="secondary" data-settings-search-action="Load the next page of official model plugins" onClick={officialPlugins.loadMore}>
+                    {t('settings.ghosts.contribution.loadMore')}
+                  </Button>
+                )}
+                {officialPlugins.failed && (
+                  <div className="flex items-center justify-between gap-2 px-3 py-2">
+                    <span role="status">{t('settings.ghosts.market.unavailable')}</span>
+                    <Button variant="secondary" data-settings-search-action="Retry loading the official model plugin catalog" onClick={officialPlugins.retry}>
+                      {t('settings.providers.wizard.retryPlugin')}
+                    </Button>
+                  </div>
+                )}
                 {listedLocalPresets.length > 0 && (
                   <>
                     <GroupLabel>{t('settings.providers.wizard.moreLocal')}</GroupLabel>
@@ -1889,28 +1980,42 @@ export function AddProviderWizard({
                   </span>
                 </div>
               </div>
-              {isSubscriptionProvider(sel.provider.id) && (
+              {/* The account picker reads this computer's CLI accounts; a setup source signs in its own. */}
+              {isSubscriptionProvider(sel.provider.id) && !setupSource && (
                 <SubscriptionSignInChoices key={sel.provider.id} providerId={sel.provider.id}
                   busy={loggingIn} onConnect={target => void connectSubscription(target)} onCancel={cancelAuthorize} />
               )}
-              <div className={cn('flex flex-wrap items-center gap-2', isSubscriptionProvider(sel.provider.id) && 'border-t border-[var(--border-default)] pt-4')}>
+              <div className={cn('flex flex-wrap items-center gap-2', isSubscriptionProvider(sel.provider.id) && !setupSource && 'border-t border-[var(--border-default)] pt-4')}>
                 {/* 等待授权中按钮变「取消」(与详情头对称),不禁用——浏览器流挂起时用户必须能中止重试。 */}
-                {!isSubscriptionProvider(sel.provider.id) && (loggingIn ? (
+                {(!isSubscriptionProvider(sel.provider.id) || setupSource) && (loggingIn ? (
                   <Button variant="secondary" size="lg" type="button" onClick={cancelAuthorize}>
                     <Spinner size={13} />
                     {t('settings.providers.button.cancel')}
                   </Button>
                 ) : (
                   <>
+                    {setupSource?.localAccountLogin && isSubscriptionProvider(sel.provider.id) && (
+                      <Button data-settings-search-action="Sign in with the setup target's own Claude Code or Codex account"
+                        variant="secondary" size="lg" type="button" onClick={() => void connectSubscription({ target: 'default' })}>
+                        {t(
+                          sel.provider.id === 'anthropic'
+                            ? 'settings.providers.localAccount.useClaude'
+                            : 'settings.providers.openai.useLocalAccount',
+                        )}
+                      </Button>
+                    )}
+                    {/* Claude 订阅只能经 Claude Code 自己的登录使用,不提供独立账号。 */}
+                    {sel.provider.id !== 'anthropic' && (
                       <Button variant="secondary" size="lg" type="button" onClick={() => void handleAuthorize()}>
                         {t(
-                          sel.provider.id === 'xai'
+                          ['openai', 'xai'].includes(sel.provider.id)
                               ? 'settings.providers.openai.addIndependentAccount'
                               : sel.provider.auth.oauth?.flow === 'device-code'
                                 ? 'settings.providers.wizard.authorizeWithDeviceCode'
                                 : 'settings.providers.button.authorize',
                         )}
                       </Button>
+                    )}
                     {sel.provider.id === 'xai' && (
                       <Button variant="secondary" size="lg" type="button" onClick={() => void handleAuthorize('device')}>
                         {t('settings.connections.xai.deviceLogin')}
@@ -1943,6 +2048,7 @@ export function AddProviderWizard({
                 <OAuthDeviceCodeCard deviceCode={genericDeviceCode} />
               )}
               {loggingIn && browserUrl && <OAuthBrowserLink url={browserUrl} />}
+              {loggingIn && setupSource?.loginPrompt}
               {oauthSingleAgentNote && <InfoLine text={oauthSingleAgentNote} />}
             </div>
           )}
@@ -2107,6 +2213,7 @@ export function AddProviderWizard({
                       const agent = speechTarget?.agent ?? speechPicks[0]?.[1].agents[0];
                       if (!agent) return;
                       setPicks(previous => {
+                        if (previous.has(id) && !speechIds.has(id)) return previous;
                         const next = new Map(previous); const existing = next.get(id);
                         next.set(id, { ...existing, name: existing?.name ?? id, checked: true,
                           recommended: existing?.recommended ?? false, agents: existing?.agents ?? [agent],
@@ -2114,44 +2221,48 @@ export function AddProviderWizard({
                         return next;
                       });
                     }} />}
-                  {speechPicks.length > 0 && generalPicks.length > 0 && <p className="text-13 font-medium text-[var(--text-primary)]">{t('settings.providers.speechSetup.otherModels')}</p>}
+                  {(speechTarget?.service === 'openai' || speechTarget?.service === 'bailian' || realtimePicks.length > 0) && <SpeechModelChoices
+                    mode="realtime"
+                    choices={realtimePicks.map(([id, value]) => ({ id, ...value, manual: value.realtime }))}
+                    onToggle={togglePick}
+                    onAdd={id => {
+                      const agent = speechTarget?.agent ?? realtimePicks[0]?.[1].agents[0];
+                      if (!agent) return;
+                      setPicks(previous => {
+                        if (previous.has(id) && !realtimeIds.has(id)) return previous;
+                        const next = new Map(previous), old = next.get(id);
+                        next.set(id, { ...old, name: old?.name ?? id, checked: true, recommended: false,
+                          agents: old?.agents ?? [agent], realtime: true });
+                        return next;
+                      });
+                    }} />}
+                  {(speechPicks.length > 0 || realtimePicks.length > 0) && generalPicks.length > 0 && <p className="text-13 font-medium text-[var(--text-primary)]">{t('settings.providers.speechSetup.otherModels')}</p>}
                   {generalPicks.length > 0 && (
                     <div
                       className="flex flex-col overflow-hidden rounded-xl border"
                       style={{ borderColor: 'var(--border-default)' }}
                     >
                       {generalPicks.map(([id, v], i) => (
-                        <button
+                        <label
                           key={id}
-                          type="button"
-                          onClick={() =>
-                            setPicks((prev) => {
-                              const next = new Map(prev);
-                              const cur = next.get(id);
-                              if (cur) next.set(id, { ...cur, checked: !cur.checked });
-                              return next;
-                            })
-                          }
                           className={cn(
-                            'flex items-center gap-2.5 px-3.5 py-2.5 text-left transition-colors hover:bg-[var(--settings-menu-bg-hover)]',
+                            'flex cursor-pointer items-center gap-2.5 px-3.5 py-2.5 text-left transition-colors hover:bg-[var(--settings-menu-bg-hover)]',
                             i > 0 && 'border-t',
                           )}
                           style={{ borderColor: 'var(--border-default)' }}
                         >
-                          <span
-                            className="flex h-4 w-4 shrink-0 items-center justify-center rounded border"
-                            style={
-                              v.checked
-                                ? {
-                                    backgroundColor: 'var(--accent-cta-bg)',
-                                    borderColor: 'var(--accent-cta-bg)',
-                                    color: 'var(--surface-on-card)',
-                                  }
-                                : { borderColor: 'var(--text-tertiary)' }
+                          <Checkbox
+                            data-settings-search-action="Choose whether this discovered model is added to the new provider"
+                            checked={v.checked}
+                            onChange={() =>
+                              setPicks((prev) => {
+                                const next = new Map(prev);
+                                const cur = next.get(id);
+                                if (cur) next.set(id, { ...cur, checked: !cur.checked });
+                                return next;
+                              })
                             }
-                          >
-                            {v.checked && <Check size={11} strokeWidth={3} />}
-                          </span>
+                          />
                           <span
                             className="min-w-0 flex-1 truncate text-13"
                             style={{ color: 'var(--settings-section-title)' }}
@@ -2183,7 +2294,7 @@ export function AddProviderWizard({
                               {t('settings.providers.wizard.recommended')}
                             </span>
                           )}
-                        </button>
+                        </label>
                       ))}
                     </div>
                   )}
@@ -2257,6 +2368,7 @@ export function AddProviderWizard({
         <div className="flex items-center justify-between px-4 pb-4 pt-2">
           <button
             type="button"
+            data-settings-search-action="Return to the previous wizard step or custom provider form"
             onClick={() => {
               if (savingRef.current) return;
               if (step === 2 && detected && onReturnCustom && sel?.kind === 'preset') {
@@ -2282,7 +2394,7 @@ export function AddProviderWizard({
                       const saved = original.models.find(row => row.id === id);
                       // Only checked rows return to the custom form. Do not
                       // resurrect an older disabled flag on this second save path.
-                      const { defaultEnabled: _oldEnabled, ...selectedModel }: Partial<ProviderRuntimeModelConfig> = saved ?? {};
+                      const { defaultEnabled: _oldEnabled, discoveredCost: _oldCost, ...selectedModel }: Partial<ProviderRuntimeModelConfig> = saved ?? {};
                       return { ...(!selectedModel.interfaceId && !selectedModel.api && !selectedModel.piApi && !selectedModel.route
                         && model.interfaceIds?.[target] ? { interfaceId: model.interfaceIds[target] } : {}),
                         ...selectedModel, id, name: model.name,
@@ -2290,6 +2402,7 @@ export function AddProviderWizard({
                         discoveredSource: model.discoveredSources?.[target],
                         discoverySnapshotId: model.discoverySnapshotIds?.[target],
                         opaqueModelId: model.opaqueModelIds?.[target] || saved?.opaqueModelId,
+                        ...(model.discoveredCosts?.[target] ? { discoveredCost: model.discoveredCosts[target] } : {}),
                         ...(saved?.route ?? model.routes?.[target] ? { route: saved?.route ?? model.routes?.[target] } : {}),
                       };
                     }) : original.models;
@@ -2372,6 +2485,7 @@ export function AddProviderWizard({
             )}
           </div>
         </div>
+        </>}
       </Dialog.Content>
       </Dialog.Portal>
     </Dialog.Root>

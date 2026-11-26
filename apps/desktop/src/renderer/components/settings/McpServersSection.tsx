@@ -51,14 +51,16 @@ function Divider() {
   return <div className="border-t" style={{ borderColor: 'var(--settings-theme-card-border)' }} />;
 }
 
-function McpRow({
+export function McpRow({
   config,
   onEdit,
   onDelete,
+  actions,
 }: {
   config: CustomMcpConfig;
-  onEdit: () => void;
-  onDelete: () => void;
+  onEdit?: () => void;
+  onDelete?: () => void;
+  actions?: React.ReactNode;
 }) {
   const { t } = useTranslation();
   return (
@@ -88,14 +90,19 @@ function McpRow({
         </span>
       </div>
       <div className="flex shrink-0 items-center gap-1">
-        <RowIconButton icon={<Pencil size={16} />} label={t('settings.mcp.editAria')} onClick={onEdit} />
-        <RowIconButton icon={<Trash2 size={16} />} label={t('settings.mcp.deleteAria')} onClick={onDelete} />
+        {onEdit && (
+          <RowIconButton icon={<Pencil size={16} />} label={t('settings.mcp.editAria')} onClick={onEdit} />
+        )}
+        {onDelete && (
+          <RowIconButton icon={<Trash2 size={16} />} label={t('settings.mcp.deleteAria')} onClick={onDelete} />
+        )}
+        {actions}
       </div>
     </div>
   );
 }
 
-function AddRow({ onClick }: { onClick: () => void }) {
+export function McpAddRow({ onClick }: { onClick: () => void }) {
   const { t } = useTranslation();
   return (
     <button
@@ -161,6 +168,7 @@ export function McpServersSection() {
         description: t('settings.mcp.deleteConfirm.message'),
         confirmText: t('settings.mcp.deleteConfirm.confirm'),
         cancelText: t('settings.mcp.cancel'),
+        confirmVariant: 'destructive',
       });
       if (!ok) return;
       try {
@@ -190,7 +198,7 @@ export function McpServersSection() {
             </Fragment>
           ))}
           {servers.length > 0 && <Divider />}
-          <AddRow onClick={() => setDialog({ mode: 'create' })} />
+          <McpAddRow onClick={() => setDialog({ mode: 'create' })} />
         </SettingsCard>
       )}
 

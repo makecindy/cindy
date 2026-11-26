@@ -1,3 +1,4 @@
+import path from 'node:path';
 /** Main-process persistence for Work Louder keyboard preferences, one file per model. */
 
 import { activeOwnerScopeKey, ownerScopedUserDataPath } from '../appSessionState.js';
@@ -31,6 +32,38 @@ import {
 } from '../../shared/workLouderCodex.js';
 import { desktopMakerLogger } from '../maker-host/logger-adapter.js';
 import { createOverrideSettingsFile } from '../maker-host/override-settings-file.js';
+
+import { inspectSettingsJson, isSettingsRecord } from '../maker-host/inspect-settings-json.js';
+import { validateOptionalSettingsFields, isSettingBoolean, isSettingNumber } from '../maker-host/settings-inspection.js';
+import { isWorkLouderCodexAgentSource } from '../../shared/workLouderCodex.js';
+
+function validateInspectionRaw(raw: Record<string, unknown>): void {
+  const action = (value: unknown) => value === null || normalizeAction(value) !== null;
+  validateOptionalSettingsFields(raw, {
+    deviceEnabled: isSettingBoolean, lightingBrightness: isSettingNumber, lightingAutoDim: isWorkLouderCodexAutoDim,
+    agentSource: value => value === 'pinned' || value === 'recent' || isWorkLouderCodexAgentSource(value), singleTapAgentKeys: isSettingBoolean,
+    customAgentKeys: value => Array.isArray(value) && value.length <= WORKLOUDER_CODEX_AGENT_SLOT_COUNT && value.every(action), layout: isSettingsRecord,
+  });
+  if (!isSettingsRecord(raw.layout)) return;
+  validateOptionalSettingsFields(raw.layout, { version: value => value === 1, encoderMode: isWorkLouderCodexEncoderMode,
+    separateMicrophoneKeys: isSettingBoolean, slots: isSettingsRecord, analogStick: isSettingsRecord, encoder: isSettingsRecord,
+    taskKeys: value => Array.isArray(value) && value.every(isWorkLouderCreatorProgrammableKey),
+    merges: value => Array.isArray(value) && value.every(item => isSettingsRecord(item) && isWorkLouderCreatorProgrammableKey(item.origin) && isWorkLouderCreatorProgrammableKey(item.cover)),
+  });
+  if (isSettingsRecord(raw.layout.slots)) for (const slot of new Set([...WORKLOUDER_CREATOR_PROGRAMMABLE_KEYS, ...WORKLOUDER_CODEX_COMMAND_SLOTS])) {
+    const value = raw.layout.slots[slot];
+    if (value === undefined) continue;
+    if (!isSettingsRecord(value)) throw new Error('invalid key assignment');
+    validateOptionalSettingsFields(value, { keycapId: isWorkLouderCodexKeycapId, action });
+  }
+  if (isSettingsRecord(raw.layout.analogStick)) validateOptionalSettingsFields(raw.layout.analogStick, Object.fromEntries(WORKLOUDER_CODEX_ANALOG_DIRECTIONS.map(key => [key, action])));
+  if (isSettingsRecord(raw.layout.encoder)) validateOptionalSettingsFields(raw.layout.encoder, Object.fromEntries(['left', 'right', 'click', 'longPress'].map(key => [key, action])));
+}
+
+/** Persisted preferences only: never starts the keyboard host or reconciles layout. */
+export function inspectWorkLouderSettings(ownerRoot: string, model: WorkLouderModel) {
+  return inspectSettingsJson(path.join(ownerRoot, settingsFileName(model)), (raw) => { validateInspectionRaw(raw); return normalize(raw, model); }, MAX_SETTINGS_BYTES);
+}
 
 const log = desktopMakerLogger.child('worklouder-codex-settings-store');
 const MAX_SETTINGS_BYTES = 64 * 1024;

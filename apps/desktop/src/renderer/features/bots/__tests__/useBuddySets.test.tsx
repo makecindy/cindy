@@ -9,7 +9,7 @@
  * - 现有覆盖缺口:buddySetsPrefs.test.ts 只测同步 prefs;teammatesSection.test.tsx 不经过真实 hook。
  * - 最小失败输入:owner authority reader 返回 null;两个 hook 共享一个 localStorage;损坏 owner claim 使写入失败。
  * - tier:unit(jsdom,localStorage,React hook),纯同步、无真实等待。
- * - 实测耗时:5.99s(单独运行该文件,含 vitest 启动;用例本身 72ms)。
+ * - 实测耗时:1.76s(单独运行该文件,含 vitest 启动;用例本身 22ms)。
  */
 import { cleanup, renderHook, act } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';

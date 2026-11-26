@@ -8,7 +8,7 @@
  * - 现有覆盖缺口:teammatesSectionPrefs.test.ts 只覆盖收起/视图/头像条;原 buddySetsPrefs 用例只覆盖正常读写。
  * - 最小失败输入:种子写入一个集后把 owner authority reader 设为 null;写入前把 owner claim 设成损坏 JSON。
  * - tier:unit(jsdom,localStorage),纯同步、无真实等待。
- * - 实测耗时:8.12s(单独运行该文件,含 vitest 启动;用例本身 5ms)。
+ * - 实测耗时:1.89s(单独运行该文件,含 vitest 启动;用例本身 4ms)。
  */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createBuddySet, emptyBuddySets, assignBuddyToSet, serializeBuddySets } from '@cindy/maker-shared/buddy-sets';

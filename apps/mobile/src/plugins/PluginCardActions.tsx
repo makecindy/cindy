@@ -1,3 +1,4 @@
+import { cardPrLinkKey } from '@cindy/maker-shared';
 import { ghostCardSessionLinkId } from '@cindy/maker-shared/ghost-card-form';
 import { useCallback, useContext, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { prStatusItemKeys, type PrStatusKind, type PrStatusResult } from "@cindy/maker-shared";
@@ -262,7 +263,7 @@ function CardControls({
   // The GitHub card has a stable action vocabulary. Keep its settings controls together
   // instead of mixing them into the footer. Unknown/legacy cards retain the generic layout.
   const hasLegacySettings = items.some(action => ['prset:rename', 'prset:follow', 'prset:archive'].includes(action.id) && !action.toggle);
-  const settingsAction = compact && !hasLegacySettings && projectedLines.length > 0 && pluginId === 'cindy-github'
+  const settingsAction = compact && !hasLegacySettings && projectedLines.length > 0 && ['cindy-github', 'cindy-gitlab', '_root__cindy-github', '_root__cindy-gitlab'].includes(pluginId ?? '')
     ? items.find(action => action.id === 'prui:settings') : undefined;
   const settingsOpen = !!settingsAction && items.some(action => action.toggle);
   const modelChoices = settingsOpen ? items.filter(action => ['prset:modelTask', 'prset:model'].includes(action.id)) : [];
@@ -277,8 +278,8 @@ function CardControls({
   const titleHost = titleLink?.url ? linkHost(titleLink.url) : undefined;
   // A PR link leads with the app's own PR icon in its status colour (as on the home task row);
   // other links end with a quiet external-link mark.
-  const titlePr = titleLink?.url && /^https:\/\/(?:www\.)?github\.com\/[^/]+\/[^/]+\/pull\/\d+/.test(titleLink.url)
-    ? prStatusVisual(titleLink.prState ?? prStatus.find((slot) => slot.key === githubPrKeyOfUrl(titleLink.url!))?.status?.status ?? null, colors) : undefined;
+  const titleKey = titleLink?.url && cardPrLinkKey(titleLink.url);
+  const titlePr = titleKey ? prStatusVisual(titleLink?.prState ?? prStatus.find(slot => slot.key === titleKey)?.status?.status ?? null, colors) : undefined;
   const buttons = (history ? [] : items).filter((action) => !action.toggle && action !== titleLink && action !== settingsAction && !modelChoices.includes(action) && action !== modelPicker);
   const { getAccessToken } = useAuth();
   const readonly = history || ['sent', 'sending', 'unconfirmed', 'deleting', 'deleted'].includes(mail?.state ?? '');
@@ -1023,11 +1024,6 @@ function CardControls({
       </Modal>
     </View>
   );
-}
-/** `owner/repo#N` (lower-case) of a GitHub pull request URL, the key the Host's PR status slots use. */
-function githubPrKeyOfUrl(url: string): string | undefined {
-  const m = /^https:\/\/(?:www\.)?github\.com\/([^/]+)\/([^/]+)\/pull\/(\d+)/.exec(url);
-  return m ? `${m[1].toLowerCase()}/${m[2].toLowerCase()}#${Number(m[3])}` : undefined;
 }
 /** A plugin link reads as "open github.com" instead of repeating the card's title. */
 function linkHost(url: string): string | undefined {

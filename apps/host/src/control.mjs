@@ -35,7 +35,7 @@ export function readHostEndpoint(profile) {
   return record;
 }
 
-async function controlRequest(profile, endpoint, pathname, body) {
+async function controlRequest(profile, endpoint, pathname, body, timeoutMs = 5_000) {
   const token = fs.readFileSync(path.join(profile, 'host-api-token'), 'utf8').trim();
   const response = await fetch(`${endpoint.baseUrl}${pathname}`, {
     method: body === undefined ? 'GET' : 'POST',
@@ -43,7 +43,7 @@ async function controlRequest(profile, endpoint, pathname, body) {
       ...(endpoint.instanceId ? { 'x-cindy-host-instance': endpoint.instanceId } : {}),
       ...(body === undefined ? {} : { 'content-type': 'application/json' }) },
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-    redirect: 'error', signal: AbortSignal.timeout(5_000),
+    redirect: 'error', signal: AbortSignal.timeout(timeoutMs),
   });
   if (!response.ok) throw new Error(`Host control request failed (${response.status})`);
   return response.json();
@@ -79,5 +79,7 @@ export async function requestHostStop(profile) {
 export async function requestHostRemote(profile, action, deviceId) {
   const endpoint = readHostEndpoint(profile);
   if (!endpoint?.instanceId) throw new Error('Start Cindy Host first using the same data directory');
-  return controlRequest(profile, endpoint, '/control/remote', { instanceId: endpoint.instanceId, action, deviceId });
+  // 「重新加入」 waits on two service requests (Device Link, then Agent-Net enrollment, up to 10 s each).
+  return controlRequest(profile, endpoint, '/control/remote', { instanceId: endpoint.instanceId, action, deviceId },
+    action === 'rejoin' ? 30_000 : undefined);
 }

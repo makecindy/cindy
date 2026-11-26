@@ -1,0 +1,141 @@
+.plugin-publish-versions {
+  container: plugin-publish-versions / inline-size;
+}
+
+.plugin-publish-versions-grid {
+  display: grid;
+  grid-template-columns: 200px minmax(0, 1fr);
+  align-items: start;
+  gap: 36px;
+}
+
+.plugin-publish-versions-rail {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+  margin-inline-start: -12px;
+}
+
+.plugin-publish-version-row,
+.plugin-publish-version-local-state {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr);
+  align-items: start;
+  gap: 10px;
+}
+
+.plugin-publish-version-row,
+.plugin-publish-version-local-state {
+  padding: 9px 12px;
+}
+
+.plugin-publish-version-row {
+  width: 100%;
+  text-align: start;
+}
+
+.plugin-publish-version-row > svg {
+  margin-block-start: 2px;
+}
+
+.plugin-publish-version-row:not([aria-current='true']):hover {
+  background-color: var(--surface-hover-soft);
+}
+
+.plugin-publish-version-row[aria-current='true'],
+.plugin-publish-version-row:active {
+  background-color: var(--surface-chip);
+}
+
+.plugin-publish-version-row-status {
+  color: var(--text-tertiary);
+}
+
+.plugin-publish-version-row[aria-current='true'] .plugin-publish-version-row-status {
+  color: var(--text-secondary);
+}
+
+.plugin-publish-version-unread,
+.plugin-publish-version-picker,
+.plugin-publish-version-more {
+  justify-self: start;
+  max-width: 100%;
+}
+
+.plugin-publish-version-unread,
+.plugin-publish-version-picker {
+  margin: 0 0 6px 12px;
+}
+
+.plugin-publish-version-more {
+  margin-top: 6px;
+  margin-inline-start: 38px;
+}
+
+.plugin-publish-version-card {
+  min-width: 0;
+  border: 1px solid var(--border-default);
+  border-radius: 12px;
+  background: var(--surface-elevated);
+  padding: 20px 24px 0;
+}
+
+.plugin-publish-version-records {
+  margin-top: 24px;
+}
+
+.plugin-publish-version-records:empty {
+  margin-top: 20px;
+}
+
+.plugin-publish-version-records > details {
+  border-top: 1px solid var(--border-default);
+}
+
+.plugin-publish-version-records > details > summary {
+  min-height: 52px;
+}
+
+.plugin-publish-version-records > details > div {
+  padding-inline-start: 30px;
+}
+
+@container plugin-publish-versions (width < 600px) {
+  .plugin-publish-versions-grid {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 20px;
+  }
+
+  .plugin-publish-versions-rail {
+    display: flex;
+    gap: 6px;
+    margin-inline: 0;
+    overflow-x: auto;
+    padding-block: 2px;
+    scrollbar-width: none;
+  }
+
+  .plugin-publish-version-row {
+    flex: none;
+    width: max-content;
+    min-width: 124px;
+    max-width: 100%;
+  }
+
+  .plugin-publish-version-local-state,
+  .plugin-publish-version-unread,
+  .plugin-publish-version-picker,
+  .plugin-publish-version-more {
+    flex: none;
+    align-self: center;
+    margin: 0;
+  }
+
+  .plugin-publish-version-picker {
+    width: 150px;
+  }
+
+  .plugin-publish-version-card {
+    padding: 16px 16px 0;
+  }
+}

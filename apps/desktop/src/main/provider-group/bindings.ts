@@ -18,7 +18,7 @@
 import { activeOwnerScopeKey, ownerScopedUserDataPath } from '../appSessionState.js';
 import { desktopMakerLogger } from '../maker-host/logger-adapter.js';
 import { createOverrideSettingsFile } from '../maker-host/override-settings-file.js';
-import { isProviderGroupProviderId } from '../../shared/providerGroup.js';
+import { isProviderGroupProviderId, withLocalProviderGroupAccounts } from '../../shared/providerGroup.js';
 import { captureProviderManagementScope, withProviderGroupMutation } from './managementScope.js';
 import type { ProviderGroupBindingCleanup } from './store.js';
 
@@ -319,7 +319,8 @@ async function writeReleases(
     await finishPendingCleanups(assertCurrent);
     assertCurrent();
     // 已提交的移出已由意图回放完成；旧 IPC 请求恢复时，不能按过期快照再解除新分配。
-    const current = readProviderGroup(providerId);
+    const stored = readProviderGroup(providerId);
+    const current = stored ? withLocalProviderGroupAccounts(stored, providerId) : null;
     if (current && (keepMemberKeys === null || current.members.length !== keepMemberKeys.size
       || current.members.some((member) => !keepMemberKeys.has(member.key)))) return;
     await store.updateAtomic(({ value }) => {

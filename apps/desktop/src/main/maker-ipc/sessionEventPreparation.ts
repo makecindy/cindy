@@ -263,14 +263,16 @@ export function prepareSessionEvent(
       contextTokens?: number;
       contextWindow?: number;
       contextSnapshotAuthoritative?: boolean;
+      manualCompact?: boolean;
     };
     // Remote event and state records can arrive in different poll chunks. Use
     // the confirmed status payload, never the proxy cache at compact_boundary.
     // A replayed boundary alone therefore cannot write an older watermark.
     const isCompactionSnapshot = isContextCompactionSnapshot(session, event, data);
-    // Idle compact / late background work may still send isRunning for UI
-    // copy. It must not latch the product turn tracker or idle bookkeeping.
-    if (isForegroundRunningStatus(data, event)) {
+    // Codex manual compact stays running in the composer so Stop is available.
+    // Its busy status must not open a product turn or start an Orca Worker.
+    const isManualCompact = event.source === 'codex' && data.manualCompact === true;
+    if (!isManualCompact && isForegroundRunningStatus(data, event)) {
       noteForegroundTurnStarted(deps, session, event, { noteTurnStarted, noteSubagentObservationTurnStarted });
       const wasInTurn = deps.sessionTurnActivityTracker.isSessionInTurn(session.id);
       if (!wasInTurn || event.sessionTurnGeneration !== undefined) {
@@ -308,7 +310,7 @@ export function prepareSessionEvent(
       }
       if ((event.source === 'pi' || event.source === 'codex' || event.source === 'claude-code')
         && admitUsage?.() !== false && (!wasInTurn || !deps.turnUsageContextBySession.has(session.id))) {
-        const context = captureTurnUsageContext(session.id, undefined, event.source);
+        const context = captureTurnUsageContext(session.id, undefined, event.source, session.model);
         if (!session.remoteHostId && !session.agentDeviceId) beginCompanyTurn(context, context.providerId, event.source);
         deps.turnUsageContextBySession.set(session.id, context);
       }

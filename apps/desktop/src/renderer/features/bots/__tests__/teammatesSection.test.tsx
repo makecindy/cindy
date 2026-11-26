@@ -8,8 +8,8 @@
  * - 现有覆盖缺口:其它用例只覆盖名册行、拖拽、收起偏好,不覆盖伙伴集持久化失败的可观察反馈。
  * - 最小失败输入:useBuddySets 返回 status=error 或 saveFailed=true,重渲染段落后查找重试入口。
  * - tier:unit(jsdom,真实组件 + hook 替身),纯同步、无真实等待。
- * - 实测耗时:13.34s(单独运行整个既有 77 用例 jsdom 文件,含启动与真实组件装配;
- *   本轮只新增两条断言,未另建重复文件,超过 10s 的原因已在 PR 正文写明)。
+ * - 实测耗时:7.54s(单独运行整个既有 78 用例 jsdom 文件,含启动与真实组件装配;
+ *   本轮只新增两条断言,未另建重复文件)。
  */
 import { useBotUnreadSync } from '../useBotUnreadSync';
 
@@ -974,6 +974,17 @@ describe('TeammatesSection rows', () => {
     fireEvent.click(screen.getByText('PR steward'));
     expect(mocks.navigate).toHaveBeenCalledTimes(1);
     expect(mocks.navigate).toHaveBeenCalledWith('/bots/bot-1');
+  });
+
+  // A healthy main chat skips the /bots/:botId spinner hand-off; the state lets the
+  // chat gate hand back to that page if its fresh read disagrees (see botOpenRoute).
+  it('opens a healthy main chat straight from the row', async () => {
+    mocks.profiles = [{ ...bot({ id: 'bot-1', name: 'PR steward' }), sessions: [
+      { id: 'main', kind: 'chat', role: 'canonical', status: 'active', title: '', updatedAt: 1 },
+    ] }];
+    await renderSidebar();
+    fireEvent.click(screen.getByText('PR steward'));
+    expect(mocks.navigate).toHaveBeenCalledWith('/bots/bot-1/session/main', { state: { botDirectEntry: true } });
   });
 
   it('keeps legacy stopped Bots reachable for deletion without presenting archive or restore', async () => {

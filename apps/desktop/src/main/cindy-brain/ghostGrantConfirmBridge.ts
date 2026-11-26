@@ -96,8 +96,11 @@ export interface GhostGrantConfirmBridgeDeps {
   /** 确认超时,默认 9 分钟,须早于外层 MCP 的 10 分钟 deadline。测试注小值。 */
   timeoutMs?: number;
   logger?: { warn: (...args: unknown[]) => void };
-  /** 同 IssueConfirmBridgeDeps.onDesktopOnlyConfirmPending(#926):IM 侧「去桌面确认」提示。 */
-  onDesktopOnlyConfirmPending?: (sessionId: string) => void;
+  /**
+   * 同 IssueConfirmBridgeDeps.onDesktopOnlyConfirmPending(#926):IM 侧「去桌面确认」提示。
+   * 带上 lane,让提示按卡片实际在确认的事情称呼(如 reveal_path 不是插件文件授权)。
+   */
+  onDesktopOnlyConfirmPending?: (sessionId: string, lane: GhostGrantLane) => void;
 }
 
 interface PendingGrantEntry {
@@ -134,7 +137,7 @@ export class GhostGrantConfirmBridge {
         request,
       });
       try {
-        this.deps.onDesktopOnlyConfirmPending?.(sessionId);
+        this.deps.onDesktopOnlyConfirmPending?.(sessionId, payload.lane);
       } catch (err) {
         // 旁路提示绝不反噬确认流程:回调同步抛错会在 Promise executor 里把
         // request() 直接 reject(review 反馈)——吞错只 warn。

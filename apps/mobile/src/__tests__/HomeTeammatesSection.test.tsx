@@ -378,7 +378,7 @@ it('defers a buddy set fold into the home disclosure window', async () => {
  * - 现有覆盖缺口:已有折叠态用例只覆盖名册未读/待关注点,不覆盖本地伙伴集持久化失败。
  * - 最小失败输入:collapsed=true、showCollapsedAvatars=false,并令 hook 返回 error 或 saveFailed。
  * - tier:unit(jsdom,真实首页段落 + hook 替身),纯同步、无真实等待。
- * - 实测耗时:3.46s(单独运行整个既有 19 用例文件,含启动;用例本身 158ms)。
+ * - 实测耗时:2.33s(单独运行整个既有 19 用例文件,含启动;用例本身 111ms)。
  */
 it('keeps buddy-set read and save retries visible when only the header is shown', async () => {
   h.collapsed = true; h.showAvatars = false; h.buddySetsStatus = 'error';

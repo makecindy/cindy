@@ -59,6 +59,7 @@ import { RemoteAgentRemoteError } from '../../remote-agent/controller/runClient'
 import { MakerScheduleRunner } from '../runner.desktop';
 import { ScheduledModelSelectionBusyError } from '../../maker-ipc/scheduledModelSelection';
 import { isHeadlessGhostSetupTurn } from '../../mcp-integrations/ghostSetupInteractionSurface';
+import { GitSnapshotCoordinator } from '../../git-snapshot/gitSnapshotCoordinator.js';
 
 type SessionSendOptions = Parameters<Session['send']>[1];
 type SendImpl = (
@@ -497,17 +498,25 @@ describe('MakerScheduleRunner send outcome policy', () => {
     expect(update).not.toHaveBeenCalled();
   });
 
-  // Schedules do not run plugin-engine (ACP) tasks (docs/plans/acp-plugin-bridge.md, 排除范围).
-  // A bound one must fail visibly before restore or any engine switch, never run on a built-in
-  // engine. Minimal input: target row agent_kind='acp'. Unit fixture.
-  it('refuses a target task that runs on a plugin engine before restoring or switching it', async () => {
-    mocks.getSessionRowSnapshot.mockResolvedValue({ status: 'archived', agentKind: 'acp' });
+  // A plugin-engine (ACP) task runs a linked automation only on its own engine and model, on this
+  // computer (docs/plans/acp-plugin-bridge.md). Any other shape must fail visibly before restore or
+  // any engine switch, never run on a built-in engine. Minimal input: target row agent_kind='acp'
+  // with a model chosen, or on another computer. Unit fixture.
+  it.each([
+    [{}, {}, 'uses the task\'s own model'],
+    [{ model: undefined }, { agentDeviceId: 'other-computer' }, 'must run on this computer'],
+  ] as const)('refuses an unsupported plugin-engine target before restoring or switching it', async (scheduleOverrides, rowOverrides, reason) => {
+    mocks.getSessionRowSnapshot.mockResolvedValue({ status: 'archived', agentKind: 'acp', ...rowOverrides });
     const h = createSessionHarness(async () => ({ accepted: true }));
     const acquirePendingAgentSwitch = vi.fn();
     const { runner, maker, notifier } = createRunnerHarness(h.session, { acquirePendingAgentSwitch });
-    await expect(runner.fire(baseSchedule({ targetSessionId: h.session.id }), createFireContext()))
-      .rejects.toMatchObject({ code: 'PLUGIN_ENGINE_UNSUPPORTED' });
-    expect(latestNotifiedRun(notifier)).toMatchObject({ status: 'failed', errorMsg: expect.stringContaining('plugin engine') });
+    const error = await runner.fire(baseSchedule({ targetSessionId: h.session.id, ...scheduleOverrides }), createFireContext())
+      .catch((refusal: unknown) => refusal);
+    expect(error).toMatchObject({
+      code: 'PLUGIN_ENGINE_UNSUPPORTED',
+      message: expect.stringContaining(reason),
+    });
+    expect(latestNotifiedRun(notifier)).toMatchObject({ status: 'failed', errorMsg: (error as Error).message });
     expect(mocks.restoreArchivedSessionForSend).not.toHaveBeenCalled();
     expect(acquirePendingAgentSwitch).not.toHaveBeenCalled();
     expect(maker.createSession).not.toHaveBeenCalled();
@@ -690,6 +699,44 @@ describe('MakerScheduleRunner send outcome policy', () => {
     expect(run.status).toBe('success');
     expect(run.resultText).toBe('done text');
     expect(ctx.removeAbortListener).toHaveBeenCalledTimes(1);
+  });
+
+  // #10161 / unit: the idle scheduler goes straight through this runner.
+  // Its generic error sanitization used to erase the safe, typed send diagnosis.
+  it('keeps the dispatch intent diagnosis in an idle scheduled run', async () => {
+    vi.useFakeTimers();
+    const receipt = Promise.withResolvers<{ attemptId: string }>();
+    const entered = Promise.withResolvers<void>();
+    const snapshots = new GitSnapshotCoordinator({
+      snapshotTimeoutMs: 50,
+      recordTurnAttempt: () => { entered.resolve(); return receipt.promise; },
+      readAutoSnapshotEnabled: () => true,
+      getSessionContext: vi.fn(), detectRepoRoot: vi.fn(),
+      createShadowSavepoint: vi.fn(), createShadowMarker: vi.fn(),
+      oneShot: vi.fn(), logger: createLogger(),
+    });
+    const dispatch = vi.fn();
+    const h = createSessionHarness(async (_message, opts) => {
+      await opts?.onAccepted?.();
+      dispatch();
+      return { accepted: true };
+    });
+    const { runner, notifier } = createRunnerHarness(h.session, {
+      beforeDispatchUserTurn: (id, signal) => snapshots.onTurnStart(id, signal),
+    });
+    try {
+      const result = runner.fire(baseSchedule(), createFireContext()).catch(error => error);
+      await entered.promise;
+      await vi.advanceTimersByTimeAsync(50);
+      const errorMsg = expect.stringMatching(/^\[SNAPSHOT_DISPATCH_INTENT_TIMEOUT\]/);
+      expect(await result).toMatchObject({ message: errorMsg });
+      expect(latestNotifiedRun(notifier)).toMatchObject({ status: 'failed', errorMsg });
+      expect(mocks.createMessage).toHaveBeenCalledOnce();
+      expect(dispatch).not.toHaveBeenCalled();
+    } finally {
+      receipt.resolve({ attemptId: 'late' });
+      vi.useRealTimers();
+    }
   });
 
   // Unit regression for the idle shared reconnect: after acceptance, a confirmed

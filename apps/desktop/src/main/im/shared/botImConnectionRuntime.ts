@@ -34,6 +34,7 @@ import { ownerScopedImSecrets } from '../ownerScopedStorage';
 import { readWechatChannelSettings, writeWechatCompanionBinding } from '../wechat/channelSettings';
 import {
   BOT_IM_CONNECTION_CHANGED_EVENT,
+  BOT_IM_CONNECT_TIMEOUT_REASON,
   isBotImGroupChatId,
   type BotImChannel,
   type BotImConnectionAddInput,
@@ -274,18 +275,21 @@ async function releaseInstance(live: LiveInstance): Promise<void> {
   instances.delete(live.record.id);
 }
 
-/** 账号 IM 连接启动: 按记录起全部伙伴连接(各自失败只记日志, 不挡其它)。 */
+/**
+ * 账号 IM 连接启动: 按记录并行起全部伙伴连接, 一条慢或失败不推迟其它(各自失败只记日志)。
+ * 连接之间没有顺序依赖: 同一平台身份添加时已拒绝重复, 凭证与传输层状态按连接前缀隔离。
+ */
 export async function startBotImConnections(): Promise<void> {
   if (!deps) return;
-  for (const record of listBotImConnections()) {
-    if (instances.has(record.id)) continue;
+  await Promise.all(listBotImConnections().map(async (record) => {
+    if (instances.has(record.id)) return;
     try {
       const live = instantiate(record);
       await live.transport.im.init();
     } catch (err) {
       log.error(`bot im connection ${record.id} (${record.channel}) start failed: ${String(err)}`);
     }
-  }
+  }));
 }
 
 /** 账号 IM 连接停止: 释放全部实例, 记录保留。 */
@@ -295,6 +299,28 @@ export async function stopBotImConnections(): Promise<void> {
 
 /** Match an existing session link against the verified, currently connected direct chat. */
 export function getBotIMessageDirectTarget(botId: string, routeKey: string | null) {
+  const target = resolveBotIMessageTarget(botId, routeKey);
+  return target && /^(?:any|iMessage);-;/.test(target.chat) && !target.im.isGroup(target.chat) ? target : null;
+}
+
+/**
+ * The connected iMessage chat a teammate's channel lane (private chat or group) talks in. A group
+ * handed to this teammate stays on its original connection (only its group route names the
+ * teammate), so every live connection is considered and its adapter checks the lane's ownership.
+ */
+export function getBotIMessageLaneTarget(botId: string, routeKey: string) {
+  const matches = [];
+  for (const [id, live] of instances) {
+    if (live.transport.kind !== 'imessage') continue;
+    const { im, orchestrator } = live.transport;
+    if (im.getStatus().kind !== 'connected' || !im.connectedOrigin) continue;
+    const chat = orchestrator.adapter.connectedChatForLane?.(botId, routeKey);
+    if (chat) matches.push({ im, chat, connection: id, origin: im.connectedOrigin });
+  }
+  return matches.length === 1 ? matches[0] : null;
+}
+
+function resolveBotIMessageTarget(botId: string, routeKey: string | null) {
   const connections = listBotImConnectionsForBot(botId).filter(record => record.channel === 'imessage');
   // The canonical task has no connection identity of its own.
   if (routeKey === null && connections.length !== 1) return null;
@@ -305,9 +331,7 @@ export function getBotIMessageDirectTarget(botId: string, routeKey: string | nul
     const { im, orchestrator } = live.transport;
     if (im.getStatus().kind !== 'connected' || !im.connectedOrigin) continue;
     const chat = routeKey === null ? im.getOwnerUserId() : orchestrator.adapter.connectedChatForLane?.(botId, routeKey);
-    if (chat && /^(?:any|iMessage);-;/.test(chat) && !im.isGroup(chat)) {
-      matches.push({ im, chat, connection: record.id, origin: im.connectedOrigin });
-    }
+    if (chat) matches.push({ im, chat, connection: record.id, origin: im.connectedOrigin });
   }
   return matches.length === 1 ? matches[0] : null;
 }
@@ -561,7 +585,8 @@ async function addBotImConnectionNow(
         if (input.channel !== 'telegram') return rollback('channel mismatch');
         const state = await transport.im.setConfig({ token: input.token, ownerUserId: input.ownerUserId });
         const failed = state.saveErrorStatus ?? (state.status.kind === 'connected' ? null : state.status);
-        if (failed) return rollback(describeStatusFailure(failed));
+        // 只是握手超时: 用稳定原因, 页面据此保留输入、提示用原输入重试。
+        if (failed) return rollback(state.saveTimedOut ? BOT_IM_CONNECT_TIMEOUT_REASON : describeStatusFailure(failed));
         break;
       }
       case 'feishu': {

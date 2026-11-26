@@ -27,6 +27,7 @@
 import { FILE_PEER_CHANNEL } from './filePeer.js';
 import { MACHINE_STATUS_CHANNEL } from './machineStatus.js';
 import { AGENT_NET_SWITCH_CHANNEL, AGENT_NET_SWITCH_TIMEOUT_MS } from './agentNetSwitch.js';
+import { PEER_APP_UPDATE_CHANNEL, PEER_APP_UPDATE_TIMEOUT_MS } from './peerAppUpdate.js';
 import { PROVIDER_GROUP_REMOTE_CHANNEL } from './providerGroup.js';
 import { REMOTE_AGENT_CHANNEL } from './remoteAgent.js';
 import {
@@ -268,6 +269,9 @@ const CORE_INVOKE_CHANNELS: readonly string[] = [
   // 菜单时拉一次,才能给出「更大」的档位。无 event.sender / 无本机副作用,不写任何存储。
   // 老被控端无 handler → CHANNEL_NOT_ALLOWED → 控制端退回「只允许收紧」。
   'maker:get-context-window-bounds',
+  // Same-account, read-only native window numbers. No config contents, paths or
+  // credentials; no settings writes. Old hosts reject this channel as unsupported.
+  'maker:model-context-limit:get',
   'maker:set-extra-dirs',
   'maker:set-writable-dirs',
   // Pi 原生分支树:只读快照 + 当前会话内导航。导航业务 handler 在被控端原子同步
@@ -442,6 +446,11 @@ const CORE_INVOKE_CHANNELS: readonly string[] = [
   // 拦截执行，只给同账号电脑(共享任务访客与供应商分享受邀者再拒一次)。打开后必须在期限内经 Agent-Net
   // 收到同一发起端的确认，否则被控端自己退回。老版本无 handler → CHANNEL_NOT_ALLOWED,发起端显示需要更新。
   AGENT_NET_SWITCH_CHANNEL,
+  // 远程检查并触发同账号电脑的应用更新(2026-11-26 用户确认):只提供 status 只读检查与锁定
+  // expectedVersion 的 install 触发，走对端既有的 updateService 内置更新链路；裸 update-* IPC
+  // 仍然永不放行。被控端 dispatch 拦截执行，只给同账号电脑(共享任务访客与供应商分享受邀者再拒一次)。
+  // 老版本无 handler → CHANNEL_NOT_ALLOWED，卡片不显示更新图标。
+  PEER_APP_UPDATE_CHANNEL,
   // 远程 Agent(被控端 dispatch 拦截执行，不落 ipcMain handler)：在被控端用它自己的登录与
   // 供应商运行 Agent，文件、命令与 Cindy 工具回到控制端执行。准入同 fs:list-dir 的论证：
   // 同账号 + 被控端显式打开远程控制时，控制端本就能驱动被控端的 Agent；不进共享任务白名单。
@@ -793,6 +802,8 @@ const EXTENDED_INVOKE_CHANNELS: readonly string[] = [
   'worktree:discard-precreated',
   'worktree:cancel-precreated',
   'worktree:removal-preview',
+  'worktree:restore-status',
+  'worktree:restore-for-session',
   // —— 个人 Telegram bot 跨设备上下线(准入论证见上方 DL_TELEGRAM_* 常量注释)——
   // 两条都由被控端 dispatch 拦截执行, 不是 ipcMain handler。
   DL_TELEGRAM_STATUS_CHANNEL,
@@ -980,6 +991,7 @@ export const INVOKE_TIMEOUT_OVERRIDES_MS: Readonly<Record<string, number>> = {
   // NTFS 复制模式更慢)。控制端在此期间显示创建中,给 5 分钟执行预算 + 回程余量。
   // 旧控制端仍按 60s 超时,超时后走既有预创建补偿;被控端执行不受此值影响。
   'worktree:create': 300_000,
+  'worktree:restore-for-session': 300_000,
   // 被控端 await agent.startSession:Codex app-server 冷启动 + thread/start 没有更短
   // deadline,机器高负载时实测 41.6s / 42.4s(2026-11-18)。默认 30s 会让控制端先超时:
   // 被控端照样建完任务,控制端却当失败处理,首条消息没发、用户重试又建一个新任务,
@@ -1017,6 +1029,7 @@ export const INVOKE_TIMEOUT_OVERRIDES_MS: Readonly<Record<string, number>> = {
   // 要等那台电脑上的人确认(最多 2 分钟),再逐台连接 SSH 服务器授权新公钥。
   [SETUP_TRANSFER_CHANNEL]: SETUP_TRANSFER_TIMEOUT_MS,
   [AGENT_NET_SWITCH_CHANNEL]: AGENT_NET_SWITCH_TIMEOUT_MS,
+  [PEER_APP_UPDATE_CHANNEL]: PEER_APP_UPDATE_TIMEOUT_MS,
   // listing tier 轻量 DB 读:毫秒级查询,12s 仍等不到只能是链路问题,快速失败喂给熔断器。
   // 12s 同时覆盖被控端冷启动 DB 迁移的常见时长(那类失败是快速返回的 DbClient not ready,
   // 不吃满超时),不会误伤首拉重试。

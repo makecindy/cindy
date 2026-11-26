@@ -421,6 +421,10 @@
         "$type": "number",
         "$value": "{reference.foundations.z-modal-popover-nested}"
       },
+      "z-modal-blocking": {
+        "$type": "number",
+        "$value": "{reference.foundations.z-modal-blocking}"
+      },
       "z-toast": {
         "$type": "number",
         "$value": "{reference.foundations.z-toast}"
@@ -428,6 +432,10 @@
       "z-toast-top": {
         "$type": "number",
         "$value": "{reference.foundations.z-toast-top}"
+      },
+      "z-blocking-gate": {
+        "$type": "number",
+        "$value": "{reference.foundations.z-blocking-gate}"
       }
     }
   }
