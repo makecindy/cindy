@@ -47,7 +47,20 @@ const DRAIN_TIMEOUT_MS = 2_000;
 const REFUSAL_MEMORY_MS = 30_000;
 const DEFAULT_REPROBE_MS = 10_000;
 // 选路的门槛与判断在 pathRouter.ts（原生引擎的传输共用），这里照旧导出给已有的调用方。
-export { AUTO_DIRECT_RECOVER_DELTA_MS, AUTO_DIRECT_RECOVER_RATIO, AUTO_RELAY_DELTA_MS, AUTO_RELAY_RATIO, AUTO_SWITCH_COOLDOWN_MS, decideAutoPreferRelay } from './pathRouter.js';
+export {
+  AUTO_DIRECT_RECOVER_DELTA_MS,
+  AUTO_DIRECT_RECOVER_RATIO,
+  AUTO_EMERGENCY_DELTA_MS,
+  AUTO_EMERGENCY_RATIO,
+  AUTO_RELAY_DELTA_MS,
+  AUTO_RELAY_MAX_DELTA_MS,
+  AUTO_RELAY_MIN_DELTA_MS,
+  AUTO_RELAY_RATIO,
+  AUTO_RELAY_RATIO_MARGIN,
+  AUTO_SWITCH_COOLDOWN_MS,
+  autoRelaySwitchMarginMs,
+  decideAutoPreferRelay,
+} from './pathRouter.js';
 /** 对端给的候选地址最多收这么多个。 */
 const MAX_CANDIDATES = 16;
 const DATA = 0x44;
