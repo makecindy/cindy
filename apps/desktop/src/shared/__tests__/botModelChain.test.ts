@@ -7,6 +7,8 @@ import {
   normalizeBotModelChain,
   normalizeBotProfileModelChain,
   primaryBotModelRoute,
+  selectBotFallbackRoute,
+  type BotModelRoute,
 } from '../botModelChain';
 
 describe('Bot model chain', () => {
@@ -91,6 +93,24 @@ describe('Bot model chain', () => {
         ['codex\u0000openai\u0000fallback-1'],
       ),
     ).toMatchObject({ harness: 'claude', model: 'fallback-2' });
+  });
+
+  // Unit, #13206: ordered fallback after a pool merge; previous cases only skipped visited routes.
+  it('skips a merged local account as a new fallback and retains explicit runnable routes', () => {
+    const [primary, old, backup] = normalizeBotModelChain([
+      { harness: 'claude', model: 'opus', providerId: 'anthropic' },
+      { harness: 'claude', model: 'opus', providerId: 'subscription-a' },
+      { harness: 'codex', model: 'gpt', providerId: 'openai' },
+    ]) as [BotModelRoute, BotModelRoute, BotModelRoute];
+    const merged = (id: string) => id === old.providerId ? 'account-a' : undefined;
+    const select = (routes: BotModelRoute[], host?: string) =>
+      selectBotFallbackRoute([primary, ...routes], primary, [], host, merged);
+    expect(select([old, backup])).toEqual({ route: backup, routeLocked: false });
+    expect(select([old])).toEqual({ route: null, routeLocked: true });
+    expect(selectBotFallbackRoute([primary, old], primary, [], null, () => undefined).route).toEqual(old);
+    const deviceRoute = { ...old, agentDeviceId: 'device-b' };
+    expect(select([deviceRoute]).route).toEqual(deviceRoute);
+    expect(select([old], 'ssh-host').route).toEqual(old);
   });
 
   it('treats the harness as part of the route identity', () => {
