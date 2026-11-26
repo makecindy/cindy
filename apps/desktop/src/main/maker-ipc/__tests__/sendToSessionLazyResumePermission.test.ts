@@ -1,5 +1,6 @@
 import { syncNewMakerDraftCache, getGroupAssistantPluginSelection, getSelectedNewMakerRoute, GroupCindyRemoteEngineError } from '../../maker-host/newMakerDefaultsCache.js';
 import { admitPluginEngineSwitchTarget } from '../pluginEngineSessionAdmission.js';
+import { PLUGIN_ENGINE_DEFAULT_MODEL } from '../../../shared/pluginEngines.js';
 import * as path from 'node:path';
 import { createSessionOptionsReconciler, type SessionExecutionRow } from '../sessionOptionsReconciler.js';
 import type { MakerSessionCreateOpts } from '../sessionRequest.js';
@@ -522,15 +523,18 @@ describe('external handoff to hidden group lanes', () => {
     const push = (selectedPluginEngine: unknown) => syncNewMakerDraftCache({ ownerStamp: owner,
       selectedPluginEngine, lastByVendor: {}, effortByModel: {}, fastModeByModel: {} }, owner, 'user:1', false);
     const openSession = vi.fn(async () => ({ row: { id: 'created' } }));
-    const engine = { key: 'fixture:engine', availability: { state: 'available' }, models: [{ id: 'chosen' }],
-      permissionModes: [{ id: 'plan' }], defaultPermissionMode: 'ask' };
+    const engine = { key: 'fixture:engine', providerId, name: 'Fixture Engine',
+      availability: { state: 'available' }, models: [{ id: 'chosen' }],
+      permissionModes: [{ id: 'plan' }, { id: 'ask' }], defaultPermissionMode: 'ask' };
     const localModel = { harness: 'codex', model: 'gpt-local', providerId: 'openai', effort: 'medium', fastMode: false };
     const inspectAppDefaultModel = vi.fn(async () => ({ available: [{ route: localModel }] }));
+    const teammatePluginEngineModelChoices = vi.fn(() => (engine.availability.state === 'available'
+      ? [{ route: { providerId, model: 'chosen' }, displayName: 'Fixture Model' }] : []));
     const h = botTaskDispatchHarness({ created: { permissionMode: 'plan', planModeEnabled: true } }, {}, {
       captureSessionOwner: () => () => {}, activeOwnerScopeKey: () => 'user:1',
-      getGroupAssistantPluginSelection, getSelectedNewMakerRoute, admitPluginEngineSwitchTarget, GroupCindyRemoteEngineError,
+      getGroupAssistantPluginSelection, getSelectedNewMakerRoute, admitPluginEngineSwitchTarget, GroupCindyRemoteEngineError, PLUGIN_ENGINE_DEFAULT_MODEL,
       listPluginEngineViews: () => [engine], openSession, markGroupCindyTask: vi.fn(), broadcastSessionCreated: vi.fn(),
-      inspectAppDefaultModel, getRemoteNewMakerDefaults: () => ({ permissionMode: 'ask' }),
+      inspectAppDefaultModel, teammatePluginEngineModelChoices, getRemoteNewMakerDefaults: () => ({ permissionMode: 'ask' }),
       permissionModeOrAsk: (mode: string | undefined) => mode ?? 'ask', log: { warn: vi.fn() },
       maker: { getSession: () => undefined, getSessionMeta: async () => ({ agentKind: 'acp' }) },
     });
@@ -556,7 +560,7 @@ describe('external handoff to hidden group lanes', () => {
     // model at all it is the public MODEL_UNAVAILABLE, not a runtime error.
     push({ ...selection, deviceId: 'another-device' });
     expect(await h.ensureGroupAssistantSession(request))
-      .toMatchObject({ ok: true, sessionId: 'created', created: true, modelFallback: true });
+      .toMatchObject({ ok: true, sessionId: 'created', created: true, modelFallback: { name: 'gpt-local' } });
     expect(openSession).toHaveBeenLastCalledWith(expect.objectContaining({ body: expect.objectContaining({
       agentKind: 'codex', providerId: 'openai', model: 'gpt-local',
     }) }));
@@ -564,6 +568,15 @@ describe('external handoff to hidden group lanes', () => {
     expect(await h.ensureGroupAssistantSession(request))
       .toMatchObject({ ok: false, errorCode: 'MODEL_UNAVAILABLE' });
     expect(openSession).toHaveBeenCalledTimes(2);
+    // #13163 review, existing guard fixture: no built-in routes, but one local
+    // plugin model. Its new task must not inherit the remote engine's Plan mode.
+    engine.availability.state = 'available';
+    inspectAppDefaultModel.mockResolvedValueOnce({ available: [] });
+    expect(await h.ensureGroupAssistantSession(request))
+      .toMatchObject({ ok: true, sessionId: 'created', created: true, modelFallback: { name: 'Fixture Model' } });
+    expect(openSession).toHaveBeenLastCalledWith(expect.objectContaining({ body: expect.objectContaining({
+      agentKind: 'acp', providerId, model: 'chosen', permissionMode: 'ask',
+    }) }));
     push(undefined);
   });
 

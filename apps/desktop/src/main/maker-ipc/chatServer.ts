@@ -3180,6 +3180,14 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       // Only the owner's own message speaks for the owner; a teammate that named Cindy in its reply is labeled as itself.
       const ownWords = source.origin === 'user' && source.author?.kind === 'human' && source.authorId === selfId && !source.maskAttribution;
       const speaker = s.members.find(m => m.id === source.authorId);
+      // A fast turn can settle before dispatch returns. The opener already knows the fallback,
+      // so its notice must be ready without waiting on the executor's task-status lookup.
+      if (task.modelFallback) {
+        const { name } = task.modelFallback;
+        run.modelNotice = name
+          ? t('bots.groupChat.assistant.modelFallback').replaceAll('{{model}}', () => name)
+          : t('bots.groupChat.assistant.modelFallbackUnnamed');
+      }
       const dispatched = await deps.dispatch({ groupAssistantTask: true, targetSessionId: sessionId, clientId: run.clientId, message, persistedContent: message,
         // The requester's own words are the request this turn speaks for; the group's messages are background.
         ...(ownWords ? { autoReviewUserText: { kind: 'agent-request' as const, request: { sessionId, clientId: run.clientId, plainBody: true, delegatedText: words } } } : {}),
@@ -3201,12 +3209,8 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       if (!dispatched.ok) throw new Error(botGroupRuntimeFailureCode({ code: dispatched.errorCode, message: dispatched.message }));
       assistantTasks.noteDelivered(roomId, sessionId, scope, source.seq);
       // The requester's other devices learn at once where this runs; later renewals repeat it.
-      const model = selfDeviceId || task.modelFallback
-        ? (await deps.readGroupTaskStatus?.(sessionId, { model: true }).catch(() => null))?.model : undefined;
-      if (task.modelFallback) run.modelNotice = model
-        ? t('bots.groupChat.assistant.modelFallback').replaceAll('{{model}}', () => model)
-        : t('bots.groupChat.assistant.modelFallbackUnnamed');
       if (selfDeviceId) {
+        const model = (await deps.readGroupTaskStatus?.(sessionId, { model: true }).catch(() => null))?.model;
         run.executor = { deviceId: selfDeviceId, sessionId, ...(model ? { model } : {}) };
         if (live()) void checkLease(run);
       }

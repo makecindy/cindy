@@ -193,7 +193,7 @@ import { advanceRuntimeRecoveryNotice } from '../im/shared/runtimeRecoveryNotice
 import { removeBotImConnectionsForBot } from '../im/shared/botImConnectionRuntime.js';
 import { configureBotImLaneRuntime } from '../im/shared/botImLaneRuntime.js';
 import { markImSessionManualRouteOverride } from '../im/shared/manualRouteOverride.js';
-import { configureAppDefaultModelSelection, inspectAppDefaultModel } from './appDefaultModelControl.js';
+import { configureAppDefaultModelSelection, inspectAppDefaultModel, teammatePluginEngineModelChoices } from './appDefaultModelControl.js';
 import { configureCloudMemoryManagement, configureCloudMcpCredentials } from '../host-settings/managementData.js';
 import { cloudMcpCredentialStore } from '../secrets/providerSecretStore.js';
 import { cloudManagementProviderRegistry, isCloudManagementInvocation, cloudManagementExecution, registerPrivateCloudManagementCall } from '../host-settings/managementCalls.js';
@@ -13980,23 +13980,37 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         catch (error) { if (!(error instanceof GroupCindyRemoteEngineError)) throw error; remoteEngine = true; }
         const route = remoteEngine ? undefined : getSelectedNewMakerRoute(ownerScope);
         const agentKind = route ? (route.harness === 'claude' ? 'claude-code' : route.harness) : undefined;
-        let modelFallback = false;
+        let modelFallback: { name?: string } | undefined;
         // One of this computer's available models. None at all is a public "model unavailable", not a runtime error.
         const openAvailableModel = async (from: string) => {
           const { available } = await inspectAppDefaultModel();
+          assertOwner();
           const pick = available[0]?.route;
-          if (!pick) throw new Error('MODEL_UNAVAILABLE');
+          if (!pick) {
+            // Reuse the local picker policy, including hidden/disabled models and engine defaults.
+            const engines = listPluginEngineViews();
+            const plugin = teammatePluginEngineModelChoices(engines)[0];
+            if (!plugin) throw new Error('MODEL_UNAVAILABLE');
+            const { providerId } = plugin.route;
+            const { model, effort, permissionMode } = admitPluginEngineSwitchTarget({ providerId, model: plugin.route.model }, engines);
+            log.warn('group-cindy: selected engine unusable here, answering with an available model', { from, to: model });
+            // An engine-selected default is not a specific model, and provider aliases can contain account names.
+            modelFallback = model === PLUGIN_ENGINE_DEFAULT_MODEL ? {} : { name: plugin.displayName ?? model };
+            return openSession({ assertCurrent: assertOwner, body: {
+              title, projectDir, workspaceKind: projectDir ? 'project' : 'dialogue', workingDir: projectDir ?? undefined,
+              agentKind: 'acp', providerId, model, effort, permissionMode,
+            } });
+          }
           const pickAgentKind = pick.harness === 'claude' ? 'cc' : pick.harness;
           // 权限按回退到的引擎读取，避免把原引擎的高权限带给另一种引擎（否则会落库成全权限并被群任务直接沿用）。
           const pickEngineKind = pickAgentKind === 'cc' ? 'claude-code' : pickAgentKind;
           log.warn('group-cindy: selected engine unusable here, answering with an available model', { from, to: pick.model });
-          const opened = await openSession({ assertCurrent: assertOwner, body: {
+          modelFallback = { name: pick.model };
+          return openSession({ assertCurrent: assertOwner, body: {
             title, projectDir, workspaceKind: projectDir ? 'project' : 'dialogue', workingDir: projectDir ?? undefined,
             agentKind: pickAgentKind, model: pick.model, providerId: pick.providerId, effort: pick.effort || '', fastMode: pick.fastMode,
             permissionMode: permissionModeOrAsk(getRemoteNewMakerDefaults(pickEngineKind).permissionMode),
           } });
-          modelFallback = true;
-          return opened;
         };
         const { row } = await (async () => {
           if (remoteEngine) return openAvailableModel('remote-engine');
@@ -14024,7 +14038,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         // Before its first turn starts, so the task starts with the 群协作 Skill.
         markGroupCindyTask(row.id);
         broadcastSessionCreated(row.id);
-        return { ok: true as const, sessionId: row.id, created: true, ...(modelFallback ? { modelFallback: true } : {}) };
+        return { ok: true as const, sessionId: row.id, created: true, ...(modelFallback ? { modelFallback } : {}) };
       } catch (error) {
         log.warn('group-cindy: openSession failed', {
           sessionId, title, projectDir,
