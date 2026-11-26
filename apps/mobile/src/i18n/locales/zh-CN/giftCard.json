@@ -13,6 +13,7 @@
   "cardLabel": "Cindy 礼品卡，{{amount}}",
   "fields": {
     "validity": "有效期",
+    "validityValue_one": "领取后 {{count}} 天",
     "validityValue_other": "领取后 {{count}} 天",
     "claimBy": "领取截止",
     "destination": "存入",

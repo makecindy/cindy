@@ -768,12 +768,49 @@ describe('take over', () => {
       if (route === '/preferences' && method === 'GET') return [];
       return {};
     } });
-    expect(await t.runtime.takeOver('bot_mia')).toEqual({ ok: false, code: 'FAILED' });
+    expect(await t.runtime.takeOver('bot_mia')).toEqual({ ok: false, code: 'PROFILE_SNAPSHOT_MISSING' });
     expect(t.calls.some(call => call.method === 'PATCH')).toBe(false);
     expect(t.local.host.createProfile).not.toHaveBeenCalled();
     expect(t.log.warn).toHaveBeenCalledWith('Companion home change failed', {
       action: 'takeOver', botId: 'bot_mia', code: 'PROFILE_SNAPSHOT_MISSING', stage: 'profile-check',
     });
+  });
+
+  // 2026-11-25 reinstall & cross-device missing-snapshot recovery: same-device reinstall recovers
+  // directly (while preserving local Cindy singleton conflict protection); another computer recovers
+  // once confirmed with allowMissingProfile.
+  it('recovers a same-device reinstall without a cloud profile snapshot and allows confirmed cross-device recovery', async () => {
+    const sameDevice = setup({ home: 'desk', installationId: 'fresh-install', handler: (route, method) => {
+      if (route === '/preferences') return method === 'GET'
+        ? [{ key: 'companion.install.v1', value: { installationId: 'wiped-install', deviceId: 'desk' }, revision: 1 }]
+        : { revision: 2 };
+      if (route === '/conversations') return { id: ROOM };
+      if (route.includes('/messages?')) return [];
+      return {};
+    } });
+    sameDevice.actors[0] = { id: 'actor-1', kind: 'bot', externalId: 'cindy-default', name: 'Cindy', avatar: null, homeDeviceId: 'desk' };
+    sameDevice.local.host.findConflictingCindy = vi.fn(async () => 'other-cindy');
+    expect(await sameDevice.runtime.takeOver('cindy-default')).toEqual({
+      ok: false, code: 'LOCAL_CINDY_CONFLICT', conflictingBotId: 'other-cindy', conflictingDeviceId: 'desk',
+    });
+    sameDevice.local.host.findConflictingCindy = vi.fn(async () => null);
+    expect(await sameDevice.runtime.takeOver('cindy-default')).toEqual({ ok: true });
+    expect(sameDevice.state.isDemoted('cindy-default')).toBe(false);
+    expect(sameDevice.local.host.createProfile).toHaveBeenCalledWith(expect.objectContaining({
+      id: 'cindy-default', name: 'Cindy', templateId: 'cindy', fallbackOnTransient: true,
+    }), expect.anything());
+
+    const crossDevice = setup({ home: 'laptop', handler: (route, method) => {
+      if (route === '/preferences' && method === 'GET') return [];
+      if (route === '/conversations') return { id: ROOM };
+      if (route.includes('/messages?')) return [];
+      return {};
+    } });
+    expect(await crossDevice.runtime.takeOver('bot_mia')).toEqual({ ok: false, code: 'PROFILE_SNAPSHOT_MISSING' });
+    expect(crossDevice.calls.some(call => call.method === 'PATCH')).toBe(false);
+    expect(await crossDevice.runtime.takeOver('bot_mia', { allowMissingProfile: true })).toEqual({ ok: true });
+    expect(crossDevice.actors[0]!.homeDeviceId).toBe('desk');
+    expect(crossDevice.state.isDemoted('bot_mia')).toBe(false);
   });
 
   // #12507, unit: the explicit takeOver action previously logged the same receipt for
@@ -810,7 +847,7 @@ describe('take over', () => {
       if (route === '/preferences' && method === 'GET') return [{ key: 'companion.profile.v1', value: { name: 'Mia' }, revision: 1 }];
       return {};
     } });
-    expect(await t.runtime.takeOver('bot_mia')).toEqual({ ok: false, code: 'FAILED' });
+    expect(await t.runtime.takeOver('bot_mia')).toEqual({ ok: false, code: 'PROFILE_SNAPSHOT_MISSING' });
     expect(t.calls.some(call => call.method === 'PATCH')).toBe(false);
   });
 

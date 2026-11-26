@@ -125,7 +125,9 @@ describe.each(['win32', 'linux'] as const)('%s close prompt dismissal', (platfor
     expect(await screen.findByRole('alertdialog')).toBeTruthy();
   });
 
-  it('keeps the prompt open while saving and permits dismissal after a failed save', async () => {
+  // User-confirmed behavior (2026-11-25): a failed save of the first close choice no longer
+  // strands the prompt. It reports the failure, closes the prompt and applies the choice once.
+  it('keeps the prompt open while saving, then applies the unsaved choice once after a failed save', async () => {
     const api = platform === 'win32' ? installWindowsApi(null) : installLinuxApi(null);
     let rejectSave!: (error: Error) => void;
     const setBehavior = 'setWindowsCloseBehavior' in api ? api.setWindowsCloseBehavior : api.setLinuxCloseBehavior;
@@ -140,9 +142,10 @@ describe.each(['win32', 'linux'] as const)('%s close prompt dismissal', (platfor
     fireEvent.keyDown(document.body, { key: 'Escape', code: 'Escape' });
     expect(screen.getByRole('alertdialog')).toBeTruthy();
     await act(async () => rejectSave(new Error('failed')));
-    fireEvent.click(screen.getByRole('button', { name: 'common.dismiss' }));
-    await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
-    expect(api.windowClose).not.toHaveBeenCalled();
+    // The choice prompt is gone; what remains is the ordinary closing state.
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'settings.windowBehavior.closeBehavior.quit' })).toBeNull());
+    await waitFor(() => expect(api.windowClose).toHaveBeenCalledTimes(1));
+    expect(api.windowClose).toHaveBeenCalledWith('quit');
   });
 });
 

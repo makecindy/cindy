@@ -109,6 +109,16 @@ export const additionalSettings = defineSettings({
     sectionKey: 'settings.tabs.storage',
     aliases: ['工作目录', 'working directory'],
   },
+  buddyWorkspaceDirectory: {
+    id: 'storage.buddyWorkspaceDirectory',
+    tab: 'storage',
+    targetId: 'settings-buddy-workspace-directory',
+    fallbackTargetId: 'settings-panel-storage',
+    titleKey: 'settings.about.storage.buddyWorkspaceDirectoryTitle',
+    descriptionKey: 'settings.about.storage.buddyWorkspaceDirectoryDescription',
+    sectionKey: 'settings.tabs.storage',
+    aliases: ['伙伴工作区', '伙伴目录', 'buddy workspace', 'bot workspace'],
+  },
   botReplyTarget: {
     id: 'general.botReplyTarget',
     tab: 'general',

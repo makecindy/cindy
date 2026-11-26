@@ -717,13 +717,19 @@ describe('author installation projection', () => {
       expect.objectContaining({ key: 'ui:pages', detailArgs: expect.objectContaining({ pages: 'ui://form' }) }),
     );
   });
-  // Author detail/list projection must preserve the server-owned market reason;
-  // the previous hardcoded null erased every moderation explanation (unit).
-  it('preserves a server market reason and keeps old responses without it readable', async () => {
-    harness.list.mockResolvedValue({ plugins: [{ ...ownPlugin(), market: { ...ownPlugin().market, reason: '停止维护' } }], nextCursor: null, queriedAt: at });
-    expect((await host.listMyPlugins({ query: '', filter: 'all' })).plugins[0].market.reason).toBe('停止维护');
+  // Unit: the list projection must retain description and moderation reason from
+  // one server summary, while older projections without description stay readable.
+  it('preserves the server description and market reason in the list', async () => {
+    harness.list.mockResolvedValue({ plugins: [{
+      ...ownPlugin(), description: 'Catalog description', market: { ...ownPlugin().market, reason: '停止维护' },
+    }], nextCursor: null, queriedAt: at });
+    expect((await host.listMyPlugins({ query: '', filter: 'all' })).plugins[0]).toMatchObject({
+      description: 'Catalog description', market: { reason: '停止维护' },
+    });
     harness.list.mockResolvedValue({ plugins: [ownPlugin()], nextCursor: null, queriedAt: at });
-    expect((await host.listMyPlugins({ query: '', filter: 'all' })).plugins[0].market.reason).toBeNull();
+    const [legacy] = (await host.listMyPlugins({ query: '', filter: 'all' })).plugins;
+    expect(legacy.market.reason).toBeNull();
+    expect(legacy.description).toBeUndefined();
   });
   async function localView() {
     harness.list.mockResolvedValue({ plugins: [ownPlugin()], nextCursor: null, queriedAt: at });

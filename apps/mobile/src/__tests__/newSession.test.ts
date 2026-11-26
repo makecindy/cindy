@@ -602,7 +602,7 @@ describe('isNewSessionRuntimePending', () => {
     // 目标模式是独立创建入口:表单禁用 + 函数内兜底。
     const goalStart = source.indexOf('const createGoalSession = useCallback(');
     expect(source.slice(goalStart, goalStart + 400)).toContain('if (runtimePendingRef.current) return;');
-    expect(source).toContain('disabled={worktreeCreateBlocked || runtimePending || pluginEngineWorktreeUnsupported}');
+    expect(source).toContain('disabled={worktreeCreateBlocked || runtimePending}');
   });
 
   it('aborts creation instead of sending an empty model after the submit-time catalog check', () => {

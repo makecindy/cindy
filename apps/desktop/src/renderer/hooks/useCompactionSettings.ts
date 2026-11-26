@@ -1,6 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { createLogger } from '@/lib/logger';
+import { i18n } from '@/i18n';
+import { toast } from '@/lib/toast';
+import { mapIpcErrorToI18nKey } from '@/utils/ipcError';
 import { getDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 
 const log = createLogger('UseCompactionSettings');
@@ -86,7 +89,8 @@ export function useCompactionSettings(agent: CompactionAgent = 'claude'): {
         }
       } catch (err) {
         log.warn('compactionSetPct failed', err);
-        await reloadPct();
+        toast.error(i18n.t(mapIpcErrorToI18nKey(err, { fallback: 'ipcError.INTERNAL' })));
+        if (mountedRef.current) await reloadPct();
       }
     },
     [api, reloadPct],
@@ -139,10 +143,10 @@ export function useCompactionSettings(agent: CompactionAgent = 'claude'): {
       pendingPctRef.current = null;
       pendingOwnerRef.current = null;
       if (pending !== null && owner) {
-        void api.setPct(pending, owner);
+        void commitPct(pending, owner);
       }
     };
-  }, [api, reloadPct]);
+  }, [commitPct, reloadPct]);
 
   return { pct, isCustomized, defaultPct, setPct, resetPct };
 }

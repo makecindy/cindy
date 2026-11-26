@@ -683,7 +683,7 @@ export function SessionContentHeader({
               <button
                 ref={menuTriggerRef}
                 className={cn(
-                  'flex h-7 w-7 shrink-0 items-center justify-center rounded-md',
+                  'flex h-7 w-7 shrink-0 items-center justify-center rounded-lg',
                   'text-[var(--cmd-palette-item-meta)] transition-colors',
                   'hover:bg-titlebar-button-hover hover:text-foreground',
                   'focus-visible:outline-none data-[state=open]:bg-titlebar-button-hover',
