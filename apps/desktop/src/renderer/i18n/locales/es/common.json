@@ -7949,6 +7949,10 @@
           "label": "Mostrar u ocultar la barra lateral",
           "description": "Contraer o expandir la barra lateral de la lista de sesiones"
         },
+        "copy-session-link": {
+          "label": "Copiar enlace de la sesión",
+          "description": "Copia el enlace de la sesión abierta"
+        },
         "session-history-back": {
           "label": "Tarea anterior",
           "description": "Volver a la tarea que viste antes"

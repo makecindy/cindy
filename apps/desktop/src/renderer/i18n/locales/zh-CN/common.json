@@ -7831,6 +7831,10 @@
           "label": "切换侧边栏",
           "description": "收起或展开左侧任务列表"
         },
+        "copy-session-link": {
+          "label": "复制任务链接",
+          "description": "复制当前打开的任务链接"
+        },
         "session-history-back": {
           "label": "上一个任务",
           "description": "按浏览顺序回到上一个打开的任务"

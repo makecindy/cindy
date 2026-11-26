@@ -7837,6 +7837,10 @@
           "label": "显隐侧栏",
           "description": "收或展左侧差事录"
         },
+        "copy-session-link": {
+          "label": "录差事链接",
+          "description": "录当前差事之链接"
+        },
         "session-history-back": {
           "label": "前一差事",
           "description": "循浏览之序，归前所启之差事"

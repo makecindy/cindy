@@ -7837,6 +7837,10 @@
           "label": "サイドバーを切り替え",
           "description": "左側のセッションリストを折りたたみ・展開します"
         },
+        "copy-session-link": {
+          "label": "セッションリンクをコピー",
+          "description": "開いているセッションのリンクをコピー"
+        },
         "session-history-back": {
           "label": "前のセッション",
           "description": "閲覧順で前に開いていたセッションに戻ります"

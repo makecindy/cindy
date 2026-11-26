@@ -7837,6 +7837,10 @@
           "label": "切換側邊欄",
           "description": "收起或展開左側任務列表"
         },
+        "copy-session-link": {
+          "label": "複製任務連結",
+          "description": "複製目前開啟的任務連結"
+        },
         "session-history-back": {
           "label": "上一個任務",
           "description": "依瀏覽順序回到上一個開啟的任務"
