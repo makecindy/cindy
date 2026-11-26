@@ -377,6 +377,15 @@ export function acceptSessionRuntimeMutation(params: {
   return state.generation;
 }
 
+/**
+ * 一条新消息(用户发的，或自动化、目标、协同发来的；自动续跑那一条不算)开始了新的一轮：「这一轮已经试过失败的」
+ * 清空，之前失败过、现在可能已恢复的来源(例如额度已重置)重新可以接替。不清跳数：它还决定任务是否在接替来源上。
+ * 原来只在用户换模型时清空，跑得久的任务每个来源都失败过一次以后就再也不会自动换(2026-11-26 排查)。
+ */
+export function startSessionRuntimeFallbackTurn(sessionId: string): void {
+  states.get(sessionId)?.visitedRoutes.clear();
+}
+
 export function recordFailedSessionRuntimeFallbackCandidate(
   sessionId: string,
   expectedGeneration: number,

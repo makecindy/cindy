@@ -696,6 +696,15 @@ import {
   type MinimalAgentEvent,
 } from './subscriptionGateway.js';
 import { GhostTaskEventIndex } from './taskEventIndex.js';
+import {
+  CINDY_GITHUB_PR_CARD_TOOL,
+  TurnPrPublishTracker,
+  runPublishedPrCardFallback,
+} from './prPublishFallback.js';
+import { classifyGhostVisibility } from './ghostVisibility.desktop.js';
+import { workdirWriteVerdict } from './fsSlot.js';
+import { deriveGhostSessionContext } from '../../shared/ghost.js';
+import type { PrRef } from '../git-context/prRefExtractor.js';
 import { setTaskChangeListener } from '../localDb/taskEvents.js';
 import {
   GhostExternalLinkGate,
@@ -3123,6 +3132,7 @@ export function createGhostSessionTap(sessionId: string): {
 } {
   let translator: GhostTurnTranslator | null = null;
   let activity: GhostActivityTracker | null = null;
+  let prPublishTracker: TurnPrPublishTracker | null = null;
   /** 拆线不可逆:资格判定是异步的,回调必须知道自己已经没有归属会话了。 */
   let disposed = false;
   // 资格判定**惰性化 + 可重试**:接线发生在启动重连期,DbClient 可能还没
@@ -3179,6 +3189,7 @@ export function createGhostSessionTap(sessionId: string): {
         sessionId,
         sink: { activity: (name, data) => gw.publish('activity', name, data) },
       });
+      prPublishTracker = new TurnPrPublishTracker();
       translator = new GhostTurnTranslator({
         sessionId,
         agent: info.agentKind ?? 'unknown',
@@ -3187,10 +3198,15 @@ export function createGhostSessionTap(sessionId: string): {
           turnStart: (d) => {
             gw.publish('turn', 'did-turn-start', d);
             activity?.beginTurn();
+            prPublishTracker?.beginTurn();
           },
           turnEnd: (d) => {
             activity?.finishTurn();
             gw.publish('turn', 'did-turn-end', d);
+            const unhandledPrs = prPublishTracker?.finishTurn(d.endReason === 'completed') ?? [];
+            if (unhandledPrs.length > 0) {
+              runGhostPrPublishFallback(sessionId, unhandledPrs);
+            }
           },
         },
       });
@@ -3206,6 +3222,7 @@ export function createGhostSessionTap(sessionId: string): {
         if (item.type === 'event') {
           activity.handleEvent(item.event);
           translator.handleEvent(item.event);
+          prPublishTracker.handleEvent(item.event);
         } else {
           applyActivity(item.phase, item.request);
         }
@@ -3228,6 +3245,7 @@ export function createGhostSessionTap(sessionId: string): {
       if (state === 'eligible') {
         activity?.handleEvent(ev);
         translator?.handleEvent(ev);
+        prPublishTracker?.handleEvent(ev);
         return;
       }
       if (state === 'ineligible') return;
@@ -3580,6 +3598,85 @@ export function runGhostAssistantReplyHook(
     sessionId,
     clientId,
     text,
+  );
+}
+
+/**
+ * Turn-end fallback for user turns that created a GitHub PR via `gh pr create`
+ * without calling `cindy-github` `pr_card`. Runs asynchronously and fail-open,
+ * reusing `cindy-github`'s own `pr_card(published: true)` settings/ownership/scheduler path.
+ */
+function runGhostPrPublishFallback(sessionId: string, prs: readonly PrRef[]): void {
+  const ownerStamp = getGhostOwnerPushStamp();
+  const isCurrent = () =>
+    isGhostOwnerStampCurrent(ownerStamp) && !isAppSessionBoundaryPending();
+  void runPublishedPrCardFallback(
+    {
+      isCurrent,
+      getSessionSnapshot: async (sid) => {
+        const snapshot = await getSessionFsSnapshot(sid);
+        if (!snapshot) return null;
+        return {
+          workingDir: snapshot.workingDir ?? null,
+          remoteHostId: snapshot.remoteHostId ?? null,
+          workdirIsReadOnly:
+            workdirWriteVerdict(snapshot.permissionMode, snapshot.planModeEnabled) === 'deny',
+        };
+      },
+      resolveGithubTarget: async (workingDir) => {
+        const installed = await listInstalledGhostsAsync();
+        if (!isCurrent()) return null;
+        const visibility = classifyGhostVisibility(CINDY_GITHUB_GHOST_ID, workingDir, {
+          listGhosts: () => installed,
+          isAvailableForActiveSession: isGhostAvailableForActiveSession,
+          isDisabledForWorkdir: isGhostDisabledForWorkdir,
+        });
+        if (!visibility.ok) return null;
+        const ghost = visibility.ghost;
+        if (!(ghost.manifest.tools ?? []).some((tool) => tool.name === CINDY_GITHUB_PR_CARD_TOOL)) {
+          return null;
+        }
+        const instanceId = installedGhostStoragePart(ghost);
+        // Never open an interactive setup prompt from a turn-end fallback.
+        if (getGhostSetupAssessment(instanceId).state !== 'ready') return null;
+        return {
+          instanceId,
+          logicalGhostId: pluginStoragePart(installedGhostLogicalIdentity(ghost)),
+          wantsSessionContext: ghost.manifest.sessionContext === true,
+        };
+      },
+      buildSessionContext: (sid, snapshot) =>
+        deriveGhostSessionContext(sid, snapshot.workingDir, {
+          workingDir: snapshot.workingDir,
+          remoteHostId: snapshot.remoteHostId,
+          workdirIsReadOnly: snapshot.workdirIsReadOnly,
+        }) as unknown as Record<string, unknown>,
+      registerCardCall: (callId, target, sid) => {
+        getGhostCardService().registerCall(callId, {
+          ghostId: target.instanceId,
+          logicalGhostId: target.logicalGhostId,
+          tool: CINDY_GITHUB_PR_CARD_TOOL,
+          toolUseId: null,
+          sessionId: sid,
+          remoteHostId: null,
+        });
+      },
+      finalizeCardCall: (callId) => {
+        getGhostCardService().finalizeCall(callId);
+      },
+      callPrCard: ({ instanceId, callId, sessionId: sid, args }) =>
+        getGhostPipeDispatcher().callGhostTool({
+          ghostId: instanceId,
+          tool: CINDY_GITHUB_PR_CARD_TOOL,
+          args,
+          callId,
+          sessionId: sid,
+          recordUsage: false,
+        }),
+      log,
+    },
+    sessionId,
+    prs,
   );
 }
 

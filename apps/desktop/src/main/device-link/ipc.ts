@@ -155,6 +155,7 @@ import {
   type CachedDeviceSessions,
   type MirrorCache,
 } from './mirrorCacheStore';
+import { getOfflineInboxIntentStore } from './offlineInboxIntentStore';
 import { enqueuePurge, hasPendingPurgeRecords } from './mirrorCachePurgeQueue';
 import {
   recordSubscribe,
@@ -2300,5 +2301,37 @@ export function registerDeviceLinkIpc(deps: DeviceLinkIpcDeps = defaultDeps()): 
     assertTrustedAppRendererEvent(e);
     const p = (payload ?? {}) as { deviceId?: unknown };
     return handleMirrorCacheClear(getMirrorCache(), p.deviceId);
+  });
+
+  ipcMain.handle(DEVICE_LINK_INVOKE.OFFLINE_INBOX_INTENTS_LIST, (e) => {
+    assertTrustedAppRendererEvent(e);
+    requireDeviceLinkCapability();
+    return getOfflineInboxIntentStore().list();
+  });
+  ipcMain.handle(DEVICE_LINK_INVOKE.OFFLINE_INBOX_INTENTS_UPSERT, async (e, payload: unknown) => {
+    assertTrustedAppRendererEvent(e);
+    requireDeviceLinkCapability();
+    const p = (payload ?? {}) as { intent?: unknown };
+    const intents = await getOfflineInboxIntentStore().upsert(p.intent);
+    deps.broadcast(DEVICE_LINK_PUSH.OFFLINE_INBOX_INTENTS_CHANGED, { intents });
+    return intents;
+  });
+  ipcMain.handle(DEVICE_LINK_INVOKE.OFFLINE_INBOX_INTENTS_REMOVE, async (e, payload: unknown) => {
+    assertTrustedAppRendererEvent(e);
+    requireDeviceLinkCapability();
+    const p = (payload ?? {}) as { deviceId?: unknown; sessionId?: unknown };
+    const deviceId = requireString(p.deviceId, 'deviceId');
+    const sessionId = requireString(p.sessionId, 'sessionId');
+    const intents = await getOfflineInboxIntentStore().remove(deviceId, sessionId);
+    deps.broadcast(DEVICE_LINK_PUSH.OFFLINE_INBOX_INTENTS_CHANGED, { intents });
+    return intents;
+  });
+  ipcMain.handle(DEVICE_LINK_INVOKE.OFFLINE_INBOX_INTENTS_CLEAR_DEVICE, async (e, payload: unknown) => {
+    assertTrustedAppRendererEvent(e);
+    const p = (payload ?? {}) as { deviceId?: unknown };
+    const deviceId = requireString(p.deviceId, 'deviceId');
+    const intents = await getOfflineInboxIntentStore().clearDevice(deviceId);
+    deps.broadcast(DEVICE_LINK_PUSH.OFFLINE_INBOX_INTENTS_CHANGED, { intents });
+    return intents;
   });
 }
