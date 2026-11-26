@@ -14,7 +14,7 @@ import { MarkdownBlockCopyButton } from './MarkdownBlockCopyButton';
 import { MermaidDiagramWebView } from './mermaidWebView';
 import { MathFormulaWebView } from './mathWebView';
 import { hasRichAnswer } from '@cindy/maker-shared/rich-answer';
-import { splitBotGroupMentionSegments, type BotGroupTextSegment } from '@cindy/maker-shared/botGroupMentions';
+import type { BotGroupTextSegment } from '@cindy/maker-shared/botGroupMentions';
 import { Text } from '@/components/AppText';
 import { MarkdownSelectableText, MarkdownSelectableSpan } from './MarkdownSelectableText';
 import { fontWeight, monoFont, useThemedStyles, type ThemeColors } from '@/theme';
@@ -22,7 +22,7 @@ import { lineHeight, radius, spacing, typeScale } from '@/theme/tokens';
 import { mobileMarkdownListMarkerText, mobileMarkdownTableToTsv, parseMobileMarkdown, type MobileMarkdownBlock, type MobileMarkdownInline } from './messageMarkdown';
 import { buildMessageContentLayout } from './messageContentLayout';
 import { buildMobileMarkdownTableColumnWidths } from './messageTableLayout';
-import { botGroupMentionMember, type BotGroupMentionContext, type BotGroupMentionPoint } from './botGroupMentions';
+import { botGroupMentionMember, splitMobileBotGroupMentionSegments, type BotGroupMentionContext, type BotGroupMentionPoint } from './botGroupMentions';
 import { MarkdownBody, MessagePayloadModal, MessageHeavyContentVisibilityContext } from './MessageRenderer';
 import { ImageLightbox } from './ImageLightbox';
 import type { MessagePayload } from './messagePayload';
@@ -105,7 +105,7 @@ function renderInlines(inlines: readonly MobileMarkdownInline[], styles: Styles,
   const visibleText = runs.map(run => run.text).join('');
   // Most group text has no mention. Keep its native styled run directly:
   // scanning labels and nesting another selectable span adds work per cell/run.
-  const segments = context && visibleText.includes('@') ? splitBotGroupMentionSegments(visibleText, context.labels).map(segment => {
+  const segments = context && visibleText.includes('@') ? splitMobileBotGroupMentionSegments(visibleText, context.labels, context).map(segment => {
     const start = offset;
     offset += segment.text.length;
     return { ...segment, start, end: offset, label: segment.text,
@@ -306,7 +306,7 @@ export function BotGroupMarkdownText({ content, authorKind, mentionContext, rich
 export function BotGroupUserText({ content, mentionLabels, mentionContext }: { content: string; mentionLabels: readonly string[]; mentionContext?: BotGroupMentionContext }) {
   const styles = useThemedStyles(makeStyles);
   const touch = useMentionTouchContext(content.includes('@') ? mentionContext : undefined);
-  const text = useMemo(() => renderMentionSegments(splitBotGroupMentionSegments(content, mentionLabels), styles, touch.context),
+  const text = useMemo(() => renderMentionSegments(splitMobileBotGroupMentionSegments(content, mentionLabels, touch.context), styles, touch.context),
     [content, mentionLabels, styles, touch.context]);
   return <View ref={touch.ref} collapsable={false} onTouchStart={touch.onTouchStart}><MarkdownSelectableText selectable style={styles.text}>
     {text}

@@ -337,9 +337,11 @@ export interface BotGroupTextSegment {
 export function splitBotGroupMentionSegments(
   text: string,
   labels: readonly string[],
+  preferredLabels: readonly string[] = [],
 ): BotGroupTextSegment[] {
+  const preferred = new Set(preferredLabels.map(label => label.trim()));
   const entries = [...new Set(labels.map((label) => label.trim()).filter(Boolean))]
-    .sort((a, b) => b.length - a.length)
+    .sort((a, b) => Number(preferred.has(b)) - Number(preferred.has(a)) || b.length - a.length)
     .map((label) => ({ label, all: false, botIds: [], aliasIds: [] }));
   const segments: BotGroupTextSegment[] = [];
   let cursor = 0;

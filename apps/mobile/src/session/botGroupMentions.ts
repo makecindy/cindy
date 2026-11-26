@@ -1,5 +1,6 @@
 import type { BotGroupMemberView, BotGroupMention } from '@cindy/maker-shared/botGroupChat';
 import { chatGroupHumanDisplayName } from '@cindy/maker-shared/botGroupPresentation';
+import { splitBotGroupMentionSegments } from '@cindy/maker-shared/botGroupMentions';
 
 // Sent text keeps its original locale and wording across product renames.
 // Share historical labels with segmentation so a shorter member name cannot split them.
@@ -29,6 +30,20 @@ export interface BotGroupMentionContext {
   onPress(member: BotGroupMemberView, anchor?: BotGroupMentionPoint): void;
 }
 
+function memberMentionLabels(member: BotGroupMemberView) {
+  return [member.name, botGroupMentionDisplayName(member), member.nickname || member.displayName || member.name];
+}
+
+export function splitMobileBotGroupMentionSegments(text: string, labels: readonly string[], context?: BotGroupMentionContext) {
+  if (!context?.mentions.botIds.length) return splitBotGroupMentionSegments(text, labels);
+  const { members, mentions, allLabels, allBotsLabels } = context;
+  const recipients = new Set(mentions.botIds);
+  const preferred = members.filter(member => recipients.has(member.botId)).flatMap(memberMentionLabels);
+  if (mentions.all) preferred.push(...allLabels);
+  if (mentions.allBots) preferred.push(...allBotsLabels);
+  return splitBotGroupMentionSegments(text, labels, preferred);
+}
+
 export function botGroupMentionMember(label: string, context: BotGroupMentionContext): BotGroupMemberView | undefined {
   const { members, mentions, serverBacked, allLabels, allBotsLabels } = context;
   const name = label.replace(/^@/, '').trim();
@@ -38,7 +53,7 @@ export function botGroupMentionMember(label: string, context: BotGroupMentionCon
   const botBroadcast = [...allBotsLabels, ...LEGACY_BOT_GROUP_ALL_BOTS_LABELS, '所有伙伴', '所有夥伴', 'すべての仲間', '모든 동반자', 'all buddies', 'bots'].some(label => label.toLowerCase() === name.toLowerCase());
   if ((mentions.allBots || fallback) && botBroadcast) return undefined;
   const matches = members.filter(member => (fallback || mentions.botIds.includes(member.botId))
-    && [member.name, botGroupMentionDisplayName(member), member.nickname || member.displayName || member.name]
+    && memberMentionLabels(member)
       .some(candidate => candidate?.trim() === name));
   return matches.length === 1 ? matches[0] : undefined;
 }

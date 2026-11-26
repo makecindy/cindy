@@ -76,9 +76,9 @@ vi.mock('@/session/ConversationShareWebView', () => ({ cleanupConversationShareP
 vi.mock('expo-sharing', () => ({ shareAsync: h.sharedImage }));
 vi.mock('expo-clipboard', () => ({ setStringAsync: vi.fn(async () => {}) }));
 vi.mock('react-native-uitextview', () => ({
-  UITextView: ({ children, testID, onPress, onTouchStart, style }: any) => {
+  UITextView: ({ children, testID, onPress, onTouchStart, style, accessibilityRole }: any) => {
     h.textRender();
-    return el('span', { 'data-testid': testID, onClick: onPress, onTouchStart,
+    return el('span', { 'data-testid': testID, onClick: onPress, onTouchStart, role: accessibilityRole,
       'data-style': JSON.stringify(Object.assign({}, ...[style].flat(Infinity).filter(Boolean))) }, children);
   },
 }));
@@ -1702,14 +1702,15 @@ describe('group composer', () => {
   it.each([
     { draft: '', other: 'Ann Lee', typedAfter: 'Lee, can you check?', recipients: ['mimi'] },
     { draft: '@Team', other: 'Team @Ann', typedAfter: '', recipients: ['xiaoman', 'mimi'] },
-  ])('sends the avatar pick despite the longer name $other', async ({ draft, other, typedAfter, recipients }) => {
+  ])('sends and renders the avatar pick despite the longer name $other', async ({ draft, other, typedAfter, recipients }) => {
     const data = group();
     const names = ['Ann', other, 'Team'];
-    await render(group({
+    const chat = group({
       openPlan: null,
       members: data.members.map((member, index) => ({ ...member, name: names[index]! })),
       messages: [message('m1', 1, { authorBotId: 'mimi', authorName: 'Ann', content: 'Earlier reply' })],
-    }));
+    });
+    await render(chat);
     if (draft) await type(draft);
     await act(async () => holdAvatar('mimi'));
     if (typedAfter) await type(h.row.value + typedAfter);
@@ -1717,6 +1718,17 @@ describe('group composer', () => {
     expect(h.chat.act).toHaveBeenLastCalledWith('send', expect.objectContaining({
       mentions: { all: false, botIds: recipients },
     }));
+    const { text: content, mentions } = h.chat.act.mock.lastCall[1];
+    await render({ ...chat, messages: [...chat.messages, message('sent', 2, { authorKind: 'user', content, mentions })] });
+    const links = [...byId('botGroup.message.user')!.querySelectorAll('span[role="link"]')];
+    const labels = draft ? ['@Team', '@Ann'] : ['@Ann'];
+    expect(links.map(link => link.textContent)).toEqual(labels);
+    for (const [index, link] of links.entries()) {
+      expect(JSON.parse(link.getAttribute('data-style')!).color).toBeTruthy();
+      await act(async () => (link as HTMLElement).click());
+      expect(byId('botGroup.mention.identity')?.textContent).toContain(labels[index]!.slice(1));
+      await click('botGroup.mention.identity.close');
+    }
   });
 
   it.each(['scheduled', 'manual', 'always'] as const)('honors %s delegation when a long press starts an empty draft', async trigger => {
