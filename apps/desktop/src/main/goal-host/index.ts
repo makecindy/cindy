@@ -8,7 +8,7 @@
 
 import { randomUUID } from 'node:crypto';
 
-import type { AgentKind, Maker } from '@cindy/maker-core';
+import type { Maker } from '@cindy/maker-core';
 
 import { accountUsageLimitFromExhaustedResets } from '../../shared/accountUsageLimit.js';
 import { isOpenCodeGoProvider, opencodeGoUsageEndpoint } from '../../shared/opencodeGoUsage.js';
@@ -72,7 +72,7 @@ export function startGoalController(deps: StartGoalControllerDeps): GoalControll
   const storage = new GoalStorage(deps.getDb);
   const controller = new GoalController({
     storage,
-    // 插件引擎任务同样跑 Goal(docs/plans/acp-plugin-bridge.md,2026-11-25 用户决定)。
+    // 插件引擎任务同样能设目标(2026-11-25)：每轮按与用户发送相同的路径交给它自己的引擎。
     getSession: (id): SessionLike | undefined => deps.maker.getSession(id),
     // 确保会话活着:已活直接返回;未活按存档 SessionMeta resume(spawn agent),
     // 仿 scheduler 心跳。修"开了对话没发消息 → goal 发不出第一轮"的根因。
@@ -123,10 +123,10 @@ export function startGoalController(deps: StartGoalControllerDeps): GoalControll
     },
     // 按实际订阅账号处理限额错误与重置时刻；其它订阅保留主动配额检测。
     getAccountLimit: async (engineKind, sessionId, turnError) => {
-      // A plugin engine signs in on its own: Cindy holds no snapshot of that account. Its usage-limit
-      // errors carry their reset time (structured), which the controller reads before asking here.
+      // Plugin engines use their own CLI's login: Cindy has no account window to read. A rejected turn
+      // still stops the goal through the turn error itself (passive path).
       if (engineKind === 'acp') return null;
-      const agentKind: AgentKind = engineKind;
+      const agentKind = engineKind;
       const row = await getSessionRowSnapshot(sessionId);
       const { providerId, modelId } = resolveSessionRuntimeRoute(sessionId, agentKind, row);
       const provider = providerId && getActiveCatalog().providers.find(p => p.id === providerId);

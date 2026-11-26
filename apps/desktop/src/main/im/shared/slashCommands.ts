@@ -16,14 +16,16 @@ import { getDesktopProviderService } from '../../maker-host/createDesktopProvide
 import { readDeviceProviderViews } from '../../remote-agent/controller/deviceCatalog';
 import { getModelVisibilityOverride, waitForModelVisibilityMirror } from '../../maker-host/model-visibility-mirror';
 import { getSessionProvider } from '../../maker-host/session-provider-store';
-import { listPluginEngineViews } from '../../maker-ipc/pluginEnginesIpc';
-import { pluginEngineKeyFromProviderId } from '../../../shared/pluginEngines';
 import {
   buildProviderSections,
   connectedProvidersForAgent,
   getModel,
   isModelVisible,
+  type ProviderSection,
+  type SectionModel,
 } from '@cindy/model-providers';
+import { readImPluginEngine } from './pluginEngineCatalog';
+import type { PluginEngineView } from '../../../shared/pluginEngines';
 import { createLogger } from '../../logger';
 
 import { resetImSessionToChannelDefaults } from './channelDefaultRouteSync';
@@ -378,35 +380,23 @@ export function createSlashHandlers(
         }
         const { row } = target;
         if (row.agentKind === 'acp') {
-          // 插件引擎对话:只列这个引擎自己的模型(与应用内同一引擎内换模型一致,立即生效);
-          // 换到别的引擎在 Cindy 里做。
-          const key = pluginEngineKeyFromProviderId(row.providerId);
-          const engine = row.agentDeviceId ? undefined : listPluginEngineViews().find((item) => item.key === key);
-          const live = turnRunner.getMakerSessionById(row.id);
-          const models = engine
-            ? engine.models.filter((model) => !engine.disabledModels?.some((off) => off.id === model.id))
-            : (live?.capabilities.availableModels ?? []);
-          const spec = cards.buildModelPickerCard({
+          // 插件引擎任务(docs/plans/acp-plugin-bridge.md)：列它自己的引擎提供的模型，同一引擎内切换(与应用内
+          // 选择器同一规则)。卡片按钮带引擎的 providerId；换到别的引擎只在应用里做(那要交接)。
+          const engine = await readImPluginEngine(row);
+          const section = engine ? pluginEngineModelSection(engine) : null;
+          if (!section) {
+            await safeSendText(ctx, imText('imBot.text.shared.slash.pluginEngineModelsUnavailable'));
+            return true;
+          }
+          await safeSendCard(ctx, cards.buildModelPickerCard({
             sessionId: row.id,
-            agentKind: 'acp',
-            sections: [{
-              provider: { id: row.providerId ?? '', name: engine?.name ?? row.providerId ?? '' },
-              models: models.map((model) => ({ id: model.id, displayName: model.displayName })),
-            }],
+            agentKind: 'pi',
+            sections: [section],
             currentModelId: row.model,
             currentProviderId: row.providerId,
             currentEffort: row.effort || null,
-            defaultEffortByModel: Object.fromEntries(models.map((model) => [
-              model.id,
-              ('defaultEffort' in model ? model.defaultEffort : null) ?? '',
-            ])),
-          });
-          try {
-            await safeSendCard(ctx, spec);
-          } catch (err) {
-            const msg = err instanceof Error ? err.message : String(err);
-            log.error(`/model card send failed: ${msg}`);
-          }
+            defaultEffortByModel: Object.fromEntries(section.models.map((m) => [m.id, m.defaultEffort ?? ''])),
+          })).catch((err: unknown) => log.error(`/model card send failed: ${err instanceof Error ? err.message : String(err)}`));
           return true;
         }
         // 模型清单与应用内模型选择器**走同一个方法**:live providers(含自定义供应商 + 实时连接态)
@@ -696,7 +686,9 @@ export function createSlashHandlers(
         const context = permissionModeCommandContext(
           row.id,
           row.permissionMode,
-          turnRunner.getPermissionModes(row),
+          await turnRunner.getPermissionModes(row.agentKind, {
+            sessionId: row.id, providerId: row.providerId, agentDeviceId: row.agentDeviceId,
+          }),
         );
         if (!richIm) {
           const requested = commandArgs[0];
@@ -742,3 +734,23 @@ export function createSlashHandlers(
 
   return { handleSlashCommand };
 }
+
+/**
+ * A plugin engine's models as one picker section. The card reads only the section's id and name, so the
+ * engine is presented under its own task providerId (`acp-plugin:…`) rather than a built-in provider.
+ */
+function pluginEngineModelSection(engine: PluginEngineView): ProviderSection | null {
+  const models = engine.models.filter((model) => !engine.disabledModels?.some((off) => off.id === model.id));
+  if (models.length === 0) return null;
+  return {
+    provider: { id: engine.providerId, name: engine.name } as ProviderSection['provider'],
+    models: models.map((model) => ({
+      id: model.id,
+      displayName: model.displayName || model.id,
+      efforts: (model.efforts ?? []) as SectionModel['efforts'],
+      defaultEffort: (model.defaultEffort ?? null) as SectionModel['defaultEffort'],
+      contextWindow: 0,
+    })),
+  };
+}
+

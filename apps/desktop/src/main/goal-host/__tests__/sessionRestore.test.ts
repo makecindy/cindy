@@ -133,27 +133,26 @@ describe('Goal dormant session restore', () => {
     );
   });
 
-  // Goals run on plugin engine (ACP) tasks too (docs/plans/acp-plugin-bridge.md, 2026-11-25): a dormant
-  // one resumes on its own engine and source, never on a built-in engine. Before, it was refused and
-  // Goal creation failed. Minimal input: persisted meta agentKind 'acp' with its plugin source. Unit.
+  // 2026-11-25 用户要求插件引擎在所有地方与内置引擎一样可用：此前休眠的插件引擎任务设目标时不恢复、目标直接失败。
+  // 现在按它自己的引擎恢复(任务行的 providerId 指出引擎，另一台电脑上的引擎留在那台)，绝不在内置引擎上恢复。
+  // 最小失败输入：persisted meta agentKind 'acp'。tier：unit。
   it('resumes a dormant plugin-engine task on its own engine', async () => {
-    const provider = 'acp-plugin:_ns__local__dsh-acp:dsh';
-    const pluginSession = { ...fakeSession(), agentKind: 'acp' } as unknown as Session;
     const deps = baseDeps({
       maker: {
         getSession: vi.fn(),
-        getSessionMeta: vi.fn().mockResolvedValue({ ...META, agentKind: 'acp', model: 'deepseek-v4' }),
-        createSession: vi.fn().mockResolvedValue(pluginSession),
+        getSessionMeta: vi.fn().mockResolvedValue({ ...META, agentKind: 'acp', agentDeviceId: 'studio' }),
+        createSession: vi.fn().mockResolvedValue(fakeSession()),
       },
-      getSessionRow: vi.fn().mockResolvedValue({ providerId: provider }),
+      getSessionRow: vi.fn().mockResolvedValue({ providerId: 'acp-plugin:agy:agy' }),
     });
 
-    await expect(restoreSessionForGoal('session-1', deps)).resolves.toBe(pluginSession);
+    await expect(restoreSessionForGoal('session-1', deps)).resolves.toBeDefined();
 
     expect(deps.maker.createSession).toHaveBeenCalledWith(expect.objectContaining({
-      agentKind: 'acp', providerId: provider, model: 'deepseek-v4', resumeSessionId: 'thread-1',
+      id: 'session-1', agentKind: 'acp', providerId: 'acp-plugin:agy:agy', agentDeviceId: 'studio',
+      resumeSessionId: 'thread-1', fastMode: false,
     }));
-    expect(deps.wireSession).toHaveBeenCalledWith(pluginSession);
+    expect(deps.hydrateProvider).toHaveBeenCalledWith('session-1', 'acp-plugin:agy:agy');
     expect(deps.warn).not.toHaveBeenCalled();
   });
 });

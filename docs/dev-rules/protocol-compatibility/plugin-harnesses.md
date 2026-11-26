@@ -59,8 +59,9 @@ Renderer 读到的字段相同；图标数据 URL 单个最多 64 KiB、一次�
 更新后的桌面和手机可以编辑同一份配置。不能识别 ACP 的旧设置服务会拒绝保存这项选择。插件清单、批准状态及中转消息格式沿用原契约。
 
 定时任务（2026-11-19，第二期）：`Schedule` / `CreateScheduleInput` 的 `agentKind`、`modelAgentKind` 新增取值 `acp`（`providerId` 必为
-`acp-plugin:…`），只用于每次新建任务、在自动任务所在电脑运行的 Agent 任务；保存时拒绝绑定任务、持续会话、worktree、运行位置、
-脚本执行，以及只改一半（例如旧端把 `agentKind` 写回内置引擎）的组合。`schedules.agent_kind` / `model_agent_kind` 列只放宽 TS 枚举，
+`acp-plugin:…`），只用于每次新建任务、在自动任务所在电脑运行的 Agent 任务；保存时拒绝绑定任务、持续会话、运行位置、
+脚本执行，以及只改一半（例如旧端把 `agentKind` 写回内置引擎）的组合。2026-11-25 起接受 `useWorktree`：旧版自动化电脑保存时
+仍会拒绝这种组合（明确失败，不悄悄去掉 worktree）。`schedules.agent_kind` / `model_agent_kind` 列只放宽 TS 枚举，
 没有 CHECK 约束，不需要迁移。旧版本读到 `acp` 行：运行时按未知引擎失败（不回落内置模型），旧表单显示为 Claude；旧端保存整张表单
 时由新版校验拒绝，不会悄悄换引擎。项目自动化（随代码提交的 `.cindy/automations/schedules.json`）不接受插件引擎。
 Agent 工具：`list_available_models` / `schedule_list_models` 的 host 结果追加可选 `pluginEngines`（只列任务电脑本机、且不按 agent
@@ -70,8 +71,8 @@ renderer `scheduleFormLogic.test.ts`「plugin engine selection」。
 
 协同 Worker（2026-11-19，第二期）：`maker:session:enable-orca` 的 `workerAgent`、`maker:worker:create` 的 `agent`、`create_worker` /
 `create_workers` 的 `agent` 枚举新增取值 `acp`（`providerId` / `provider_id` 必为 `acp-plugin:…`）。只由本机新版电脑的创建面板与 Lead 的
-工具发起，远程控制与手机不列插件引擎；旧版被控端从不会收到。插件引擎 Worker 只在 Lead 所在电脑本机运行，带运行设备、Agent 位置、
-worktree 或 SSH Lead 时拒绝（INVALID_PARAMS）。`maker:worker:list` 与团队快照里这种 Worker 的 `session.agentKind = acp`，并追加可选
+工具发起，远程控制与手机不列插件引擎；旧版被控端从不会收到。插件引擎 Worker 只在 Lead 所在电脑本机运行，带运行设备、Agent 位置
+或 SSH Lead 时拒绝（INVALID_PARAMS）；2026-11-25 起接受 `worktree`（旧版拒绝）。`maker:worker:list` 与团队快照里这种 Worker 的 `session.agentKind = acp`，并追加可选
 `session.providerId`；`list_workers` / `get_workspace_info` 的 agent 字段同样可为 `acp`。共享解析器 `parseOrcaTeamWorkers` 给手机追加可选
 `pluginEngineProviderId`，`agentKind` 仍是旧端可用的占位值；已发布的手机把它显示为 Claude Code，查看与派活不受影响。插件引擎任务当 Lead
 的所有入口统一拒绝（`[PLUGIN_ENGINE_CANNOT_LEAD]`），`set_worker_runtime` 对插件引擎 Worker 返回 UNSUPPORTED_CAPABILITY。远端 Worker
@@ -256,6 +257,26 @@ method-not-found 时本会话撤回插话能力，之后的插话排队。
 实现见 desktop `maker-ipc/register.ts`、maker-core `agents/acp/acp-agent.ts`、host `agent/agent-skills.ts`；回归见
 `acp-session.test.ts`「lists for the `/` menu」、renderer `slashCommands.test.ts`「plugin engine Skills」与 host `boundary.test.mjs`「25b L1」。
 
+## Worktree（2026-11-25）
+
+远程控制另一台电脑的项目、在插件引擎上新建任务并勾选 worktree 时（桌面控制端与手机），沿用内置引擎的两步创建：先向被控端发
+既有 `worktree:create`（带预生成 `sessionId` 与 `recoveryKey`），再以检出路径与同一 id 发既有 `maker:create-session`
+（`agentKind = acp`）。被控端两个 channel 都不按引擎区分，旧被控端同样接受；被控端未声明 `recoveryKey` 回收能力时控制端
+不发起（与内置引擎同一门）。项目在本机、引擎在同账号另一台电脑时，本机 `local-db:sessions:create` 的 `localPluginWorktree`
+接受 `agentDeviceId`（只在本机检出，不跨端）。协同 Worker 的 `worktree` 与定时任务的 `useWorktree` 见上文。不新增 channel、
+中转帧或字段，自建中转无需改动。回归见 renderer `newMakerDraftSubmission.test.ts`「local plugin engine worktree submission」、
+main `sessionsUpdate.test.ts`「plugin engine runs on another computer」、`orcaWorkerCreationService.test.ts`「plugin engine Worker」
+与 `runnerModelSelection.test.ts`「plugin engine schedules」。
+
+## 与内置引擎一致的其余入口（2026-11-25）
+
+- `maker:predict-prompt` 的 `agentKind` 新增取值 `acp`（插件引擎任务的输入推荐）。新控制端对旧被控端发出时旧端以 INVALID_PARAMS
+  拒绝，推荐按读取失败不显示；旧控制端对插件引擎任务仍报内置值，新被控端按引擎不一致不派发（与此前一样没有推荐）。
+- `maker:generate-title` / `maker:auto-title` 的 `agentKind` 接受 `acp`（只用辅助模型）。旧被控端拒绝，标题保持占位。
+- `session_goals.agent_kind`、目标状态的 `agentKind` 可为 `acp`（列无 CHECK 约束，只放宽 TS 枚举，无需迁移）。旧版读到 `acp`
+  目标时不恢复该任务（与旧版行为一致），不会在内置引擎上运行。
+- send_to_session、/learn 不新增字段或 channel。自建中转无需改动。
+
 ## 每轮权限闸（2026-11-25）
 
 IM 群聊、访客与个人微信的轮次带宿主的 `turnPermissionPolicy`（哪些工具调用必须由人确认）。内置引擎在执行前的审批点执行它；
@@ -280,4 +301,4 @@ IM 轮次只有已知的读和搜索操作可以经上述条件直接放行，�
 带回控制端；控制端 IM 在插件引擎任务的能力未声明支持时于发送前拒绝策略轮，所以被控端仍是旧版（其 ACP 会话忽略发送选项）
 时 fail-closed，不会无闸运行。不新增 channel、中转帧或 IPC。实现见 maker-core `agents/acp/{protocol,capabilities,session}.ts`
 与 Desktop `im/shared/turnRunner.ts`；回归见 `acp-session.test.ts`「AcpSession per-turn permission gate」与
-`turnRunnerSendOutcome.test.ts`「on a plugin engine」。
+`channelToolPolicy.test.ts`。

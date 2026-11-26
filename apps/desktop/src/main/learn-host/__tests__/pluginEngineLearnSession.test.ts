@@ -1,48 +1,49 @@
-/**
- * 测试价值
- * - 生产入口与可观察结果：pluginEngineLearnSessionOptions(learn-host/index.ts 为插件引擎任务的 /learn
- *   建蒸馏会话时调用)；用户看到蒸馏任务跑在同一个插件引擎上、权限不超过 acceptEdits，引擎不可用时
- *   本次 /learn 明确失败。
- * - 依据：docs/plans/acp-plugin-bridge.md「/learn、目标模式与溢出续接」(2026-11-25 用户决定)；此前插件
- *   引擎任务的 /learn 一律以 PluginEngineUnsupportedError 失败。
- * - 现有覆盖缺口：controller.test.ts 用假 createSession，index.ts 的会话装配无测试。新模块，单独成文件。
- * - 最小失败输入：来源为插件引擎、来源记录或实时 store 带 acp-plugin 来源的任务。
- * - tier：unit(纯函数 + 真实准入函数，无 I/O)。
- */
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
-import type { PluginEngineView } from '../../../shared/pluginEngines.js';
-import { pluginEngineLearnSessionOptions } from '../pluginEngineLearnSession.js';
+import { createPluginEngineLearnSession } from '../pluginEngineLearnSession';
 
-const PROVIDER = 'acp-plugin:_ns__local__dsh-acp:dsh';
-const engine = (availability: PluginEngineView['availability']): PluginEngineView => ({
-  key: '_ns__local__dsh-acp:dsh', providerId: PROVIDER, ghostId: '_ns__local__dsh-acp', harnessId: 'dsh',
-  name: 'DeepSeek Harness', availability,
-  models: [{ id: 'deepseek-v4', displayName: 'DeepSeek-V4-Pro', efforts: ['low', 'high', 'max'], defaultEffort: 'high' }],
-  permissionModes: [{ id: 'default', displayName: 'Default' }, { id: 'bypassPermissions', displayName: 'Allow all' }],
-  defaultPermissionMode: 'default',
-});
-const base = { id: 'learn-1', workingDir: '/staging', title: 'Learn: release notes' };
+// 2026-11-25 用户要求插件引擎在所有地方与内置引擎一样可用：/learn 此前对插件引擎任务直接报
+// 「Learn is not available for tasks running on a plugin engine」。生产入口 createPluginEngineLearnSession
+// (learn-host 的 createSession 在来源任务为 acp 时调用)；可观察结果是交给 maker.createSession 的蒸馏任务参数。
+// 最小失败输入：来源任务 agentKind=acp、provider=acp-plugin:agy:agy。tier：unit(maker 与准入为桩)。
+describe('createPluginEngineLearnSession', () => {
+  const opts = { id: 'learn-1', workingDir: '/staging/learn-1', title: 'Learn' };
+  const provider = 'acp-plugin:agy:agy';
 
-describe('/learn on a plugin engine task', () => {
-  it('distils on the same engine with the admitted model, never above acceptEdits', () => {
-    expect(pluginEngineLearnSessionOptions({
-      ...base,
-      origin: { model: 'deepseek-v4', effort: 'max', providerId: PROVIDER },
-      inheritedProviderId: null,
-      engines: [engine({ state: 'available' })],
-    })).toEqual({
-      ...base, agentKind: 'acp', providerId: PROVIDER, model: 'deepseek-v4', effort: 'max', permissionMode: 'acceptEdits',
-    });
+  function fixture(admitted = { model: 'gemini-3-pro', effort: 'high', permissionMode: 'default' }) {
+    const order: string[] = [];
+    const deps = {
+      maker: { createSession: vi.fn(async () => { order.push('create'); return { id: opts.id } as never; }) },
+      admitPluginEngine: vi.fn(() => admitted),
+      setSessionProvider: vi.fn(() => { order.push('provider'); }),
+    };
+    return { deps, order };
+  }
+
+  it('distills on the same plugin engine and model, asking for each action', async () => {
+    const { deps, order } = fixture();
+    await createPluginEngineLearnSession(deps, opts, { model: 'gemini-3-pro', effort: 'high' }, provider);
+    expect(deps.admitPluginEngine).toHaveBeenCalledWith({ providerId: provider, model: 'gemini-3-pro', effort: 'high',
+      permissionMode: 'default' });
+    expect(deps.maker.createSession).toHaveBeenCalledWith(expect.objectContaining({
+      id: 'learn-1', agentKind: 'acp', providerId: provider, model: 'gemini-3-pro', effort: 'high',
+      permissionMode: 'default', fastMode: false, workingDir: '/staging/learn-1',
+    }));
+    expect(order).toEqual(['provider', 'create']);
   });
 
-  it.each([
-    ['the engine is turned off or removed', { origin: { model: 'deepseek-v4', providerId: PROVIDER }, engines: [] }, '已停用或卸载'],
-    ['the engine is unavailable', { origin: { model: 'deepseek-v4', providerId: PROVIDER },
-      engines: [engine({ state: 'unavailable', message: 'Install dsh' })] }, '当前不可用'],
-    ['the engine runs on another computer', { origin: { model: 'deepseek-v4', providerId: PROVIDER, agentDeviceId: 'device-b' },
-      engines: [engine({ state: 'available' })] }, 'not available for tasks running on a plugin engine'],
-  ] as const)('fails this /learn, with no built-in fallback, when %s', (_case, input, message) => {
-    expect(() => pluginEngineLearnSessionOptions({ ...base, inheritedProviderId: null, ...input })).toThrow(message);
+  it('never distills with full access, even when the engine would start there', async () => {
+    const { deps } = fixture({ model: 'm', effort: '', permissionMode: 'bypassPermissions' });
+    await expect(createPluginEngineLearnSession(deps, opts, {}, provider)).rejects.toThrow('plugin engine');
+    expect(deps.maker.createSession).not.toHaveBeenCalled();
+  });
+
+  it('keeps an engine on another computer there, without checking this computer’s engines', async () => {
+    const { deps } = fixture();
+    await createPluginEngineLearnSession(deps, opts, { model: 'gemini-3-pro', agentDeviceId: 'studio' }, provider);
+    expect(deps.admitPluginEngine).not.toHaveBeenCalled();
+    expect(deps.maker.createSession).toHaveBeenCalledWith(expect.objectContaining({
+      agentKind: 'acp', agentDeviceId: 'studio', permissionMode: 'default',
+    }));
   });
 });

@@ -92,7 +92,6 @@ import { resolveSafe as resolveCindyMediaUrl } from '../../cindy-media/blobStore
 import { beginHeadlessGhostSetupTurn } from '../../mcp-integrations/ghostSetupInteractionSurface.js';
 
 import {
-  ACP_PERMISSION_MODES,
   createSessionUnavailableError,
   isTerminalAgentErrorEvent,
   MAIN_OWNED_SEND_CONTEXT,
@@ -101,6 +100,7 @@ import {
 } from '@cindy/maker-core';
 import type {
   AgentEvent,
+  AgentKind,
   EngineKind,
   InteractionDecision,
   InteractionRequest,
@@ -120,10 +120,8 @@ import type {
 import { transformXdtRefs } from '@cindy/im';
 import type { AutoReviewUserReferences } from '@cindy/maker-shared/auto-review-intent';
 
-import { pluginEngineKeyFromProviderId } from '../../../shared/pluginEngines';
 import { hasBuiltinAgentKind } from '../../maker-host/engineKind';
-import { listPluginEngineViews } from '../../maker-ipc/pluginEnginesIpc';
-import { admitPluginEngineSwitchTarget } from '../../maker-ipc/pluginEngineSessionAdmission';
+import { readImPluginEngine } from './pluginEngineCatalog';
 import { persistUserMessage } from '../messagePersistence';
 import { imAutoReviewReferences } from './autoReviewReferences';
 import { bindingStore } from '../binding';
@@ -198,7 +196,7 @@ import { isQuotaExhaustionFailure, terminalErrorText, turnRetryNotice } from './
 import { resolveSessionErrorContext } from './sessionProviderLabel';
 import { createTurnPresenter, DEFAULT_PRESENTER_POLICY, type TurnPresenter } from './turnPresenter';
 import {
-  toCoreAgentKind,
+  toCoreEngineKind,
   readPermissionMode,
   touchUserSent as repoTouchUserSent,
   updatePermissionMode,
@@ -385,32 +383,19 @@ interface QueuedSend {
 type DetachDrainOutcome = 'rewire' | 'cancelled';
 
 /**
- * The plugin engine an IM conversation names (row.providerId), as this computer offers it now:
- * its name if installed, and why it cannot run the conversation (null = it can). Same admission
- * as switching a desktop task onto it (docs/plans/acp-plugin-bridge.md「IM 渠道」).
+ * 插件引擎任务(docs/plans/acp-plugin-bridge.md)与内置引擎任务一样接 IM 渠道(2026-11-25)：读行时保留 'acp'
+ * 与它的 providerId，按它自己的引擎恢复，绝不落成 Claude 去跑。
  */
-function checkPluginEngineForIm(row: { providerId: string | null; model: string }): {
-  engineName: string | null;
-  unavailable: string | null;
-} {
-  const engines = listPluginEngineViews();
-  const key = pluginEngineKeyFromProviderId(row.providerId);
-  const engineName = engines.find((engine) => engine.key === key)?.name ?? null;
-  try {
-    admitPluginEngineSwitchTarget({ providerId: row.providerId, model: row.model }, engines);
-    return { engineName, unavailable: null };
-  } catch (error) {
-    return { engineName, unavailable: error instanceof Error ? error.message : String(error) };
-  }
-}
+type BuiltinMakerSession = MakerSession;
+
 
 interface SessionState {
   /** Keep the original session configuration even when no persistent takeover exists. */
   preserveSessionConfig: boolean;
   /** Both cancel this channel's turn; only runtime disposal retires late replacements. */
   disposalIntent?: 'runtime' | 'observation';
-  /** Maker session (in-process), on a built-in or a plugin engine. */
-  makerSession: MakerSession;
+  /** Maker session (in-process), always on a built-in engine (see IM_CHANNEL_FEATURE). */
+  makerSession: BuiltinMakerSession;
   /** 渠道 user id of the bot's owner — kept here so listeners can address replies. */
   userId: string;
   /** 当前 session 的受管工作目录；本地生成图片仅允许从这里物化。 */
@@ -519,7 +504,7 @@ export interface RouteTarget {
 
 type DefaultRouteTargetResolution =
   | { target: RouteTarget; missingAuth?: never }
-  | { target: null; missingAuth: ImAuthRouteStatus & { agentKind: EngineKind; model: string } };
+  | { target: null; missingAuth: ImAuthRouteStatus & { agentKind: AgentKind; model: string } };
 
 export interface ImRunAgentTurnArgs {
   /** Revalidate the ingress lease immediately before provider start, including internally queued sends. */
@@ -720,11 +705,17 @@ export interface ImTurnRunner {
    * 未接线 / 接管 / 通知回复任务返回 undefined。
    */
   vendorOptionsForSession(sessionId: string): Record<string, unknown> | undefined;
+  /** Permission choices exposed by the session's concrete Agent implementation. */
   /**
-   * Permission choices exposed by the session's concrete Agent implementation; a plugin engine's
-   * come from its running session, else from what the engine last offered.
+   * The task's permission menu. A plugin-engine task (agentKind 'acp') offers its engine's own modes: the
+   * live session's negotiated modes, then its execution computer's catalog. Only local tasks use
+   * Cindy's generic modes when the engine's modes are unavailable.
    */
-  getPermissionModes(row: { id: string; agentKind: EngineKind; providerId: string | null }): PermissionModeDescriptor[];
+  getPermissionModes(agentKind: EngineKind, task: {
+    sessionId: string;
+    providerId?: string | null;
+    agentDeviceId?: string | null;
+  }): Promise<PermissionModeDescriptor[]>;
   changePermissionMode(args: {
     sessionId: string;
     mode: PermissionMode;
@@ -747,17 +738,14 @@ export interface ImTurnRunner {
   }): Promise<{ stopped: boolean; droppedQueued: number }>;
 }
 
-/**
- * row 的路由快照 —— 跟随切换的实际落点比对用。渠道默认只指向内置引擎,
- * 插件引擎对话没有可比的默认路由(null = 与任何跟随目标都不同)。
- */
+/** row 的路由快照 —— 跟随切换的实际落点比对用。 */
 function routeOfRow(
   row: Pick<ImSessionRow, 'agentKind' | 'model' | 'providerId' | 'agentDeviceId' | 'effort'>,
-): ImDefaultRoute | null {
-  if (row.agentKind === 'acp') return null;
+): ImDefaultRoute {
   return {
     agentDeviceId: row.agentDeviceId ?? null,
-    agentKind: row.agentKind,
+    // Channel default routes are built-in; a plugin-engine row ('acp') simply never matches one.
+    agentKind: row.agentKind as AgentKind,
     model: row.model,
     providerId: row.providerId,
     effort: row.effort,
@@ -878,7 +866,7 @@ export function createTurnRunner(
       throw new Error('Notification target session is unavailable');
     }
     return {
-      row: { id: row.id, agentKind: toCoreAgentKind(row.agentKind), workingDir: row.workingDir,
+      row: { id: row.id, agentKind: toCoreEngineKind(row.agentKind), workingDir: row.workingDir,
         model: row.model, effort: row.effort, permissionMode: row.permissionMode, fastMode: row.fastMode,
         sdkSessionId: row.sdkSessionId, remoteHostId: row.remoteHostId ?? null, providerId: row.providerId ?? null,
         agentDeviceId: row.agentDeviceId ?? null },
@@ -909,7 +897,8 @@ export function createTurnRunner(
     if (!auth.ok) {
       return {
         target: null,
-        missingAuth: { ...auth, agentKind: prepared.agentKind, model: prepared.model },
+        // Only built-in routes can miss auth (plugin engines sign in with their own CLI).
+        missingAuth: { ...auth, agentKind: prepared.agentKind as AgentKind, model: prepared.model },
       };
     }
     const row = await repo.createSession(botContextId, userId, scopeKey, prepared);
@@ -1044,10 +1033,11 @@ export function createTurnRunner(
         .limit(1);
       const row = rows[0];
       if (row?.workingDir) {
+        // 接管到插件引擎任务：保留它自己的引擎(不按 toCoreAgentKind 落成 Claude)。
         return {
           row: {
             id: row.id,
-            agentKind: toCoreAgentKind(row.agentKind),
+            agentKind: toCoreEngineKind(row.agentKind),
             workingDir: row.workingDir,
             model: row.model,
             effort: row.effort,
@@ -1268,7 +1258,7 @@ export function createTurnRunner(
       const auth = await checkImRouteAuthDetailed(authRow, undefined, authCheckDeps());
       if (!auth.ok) {
         if (args.queueMode === 'internal') {
-          const authStatus = { ...auth, agentKind: authRow.agentKind, model: authRow.model };
+          const authStatus = { ...auth, agentKind: authRow.agentKind as AgentKind, model: authRow.model };
           const text =
             ui.agent.authMissing?.({ ...authStatus, attached: authNoticeAttached }) ??
             ui.agent.apiKeyMissing;
@@ -1392,11 +1382,10 @@ export function createTurnRunner(
         // 跟随切换没生效(失败被吞、保持原路由)时这条消息会按旧路由发送, 而此前的
         // 授权检查只验过新默认路由 —— 按实际路由补一次, 旧供应商断开时在这里给出
         // 缺授权提示, 而不是进旧路由的发送流程运行时失败(PR #5155 review P2)。
-        const refreshedRoute = routeOfRow(refreshed);
-        if (!refreshedRoute || !sameImDefaultRoute(refreshedRoute, followTarget)) {
+        if (!sameImDefaultRoute(routeOfRow(refreshed), followTarget)) {
           const auth = await checkImRouteAuthDetailed(effectiveRuntimeAuthRow(refreshed), undefined, authCheckDeps());
           if (!auth.ok) {
-            const authStatus = { ...auth, agentKind: refreshed.agentKind, model: refreshed.model };
+            const authStatus = { ...auth, agentKind: refreshed.agentKind as AgentKind, model: refreshed.model };
             if (args.queueMode === 'internal') {
               const text =
                 ui.agent.authMissing?.({ ...authStatus, attached: target.attached }) ??
@@ -1870,13 +1859,11 @@ export function createTurnRunner(
         if (state.botLane && !landed) {
           throw new Error(`companion session ${rowId} missing before route authentication`);
         }
-        const landedRoute = landed ? routeOfRow(landed) : null;
-        if (landed && (state.botLane
-          || (followAuthRoute && (!landedRoute || !sameImDefaultRoute(landedRoute, followAuthRoute))))) {
+        if (landed && (state.botLane || (followAuthRoute && !sameImDefaultRoute(routeOfRow(landed), followAuthRoute)))) {
           const auth = await checkImRouteAuthDetailed(effectiveRuntimeAuthRow(landed), undefined, authCheckDeps());
           if (!auth.ok) {
             const attached = state.attached || !!state.botLane;
-            const authStatus = { ...auth, agentKind: landed.agentKind, model: landed.model };
+            const authStatus = { ...auth, agentKind: landed.agentKind as AgentKind, model: landed.model };
             if (item.turn.queueMode === 'internal') {
               const text =
                 ui.agent.authMissing?.({ ...authStatus, attached }) ??
@@ -2017,12 +2004,6 @@ export function createTurnRunner(
       }
 
       failureSource = 'session.send';
-      // A plugin engine enforces the policy only after reporting the gate. One on a computer still on
-      // an older Cindy would ignore it, so the turn is refused before anything reaches the engine.
-      if (effectiveTurnPolicy && state.makerSession.agentKind === 'acp'
-        && state.makerSession.capabilities.turnPermissionPolicy?.supported?.supported !== true) {
-        throw new TurnPermissionPolicyUnsupportedError('acp', state.makerSession.permissionModeState?.mode ?? 'ask');
-      }
       const sendResult = await state.makerSession.send(outgoingMessage as typeof item.userMessage, {
         planMode: false,
         // IM owns successful replies, including turns in an attached desktop task.
@@ -2178,7 +2159,7 @@ export function createTurnRunner(
           if (persisted) {
             item.prePersistedUserMessage = { sessionId: rowId, clientId: persisted.clientId };
             if (item.channelToolScope) item.channelToolScope.inputClientId = persisted.clientId;
-            // Same as the desktop send path: plugin engines report no turn file changes.
+            // Turn change capture relies on built-in engine hooks (same rule as desktop sends).
             if (hasBuiltinAgentKind(state.makerSession)) {
               await beginTurnChangeSetAtDispatch(state.makerSession, persisted.clientId);
               turnChangeSetStarted = true;
@@ -2382,7 +2363,7 @@ export function createTurnRunner(
       if (!row.workingDir) {
         throw createSessionUnavailableError('SESSION_CLOSED', `session ${sessionId} missing after deferred agent switch`);
       }
-      const agentKind = toCoreAgentKind(row.agentKind);
+      const agentKind = toCoreEngineKind(row.agentKind);
       const startOverride = getSessionRuntimeStartOverride(sessionId, agentKind, row.agentDeviceId);
       hydrateSessionProvider(sessionId, startOverride.providerId === undefined ? row.providerId ?? null : startOverride.providerId);
       setSessionEffort(sessionId, startOverride.model ? startOverride.effort : row.effort);
@@ -2494,7 +2475,7 @@ export function createTurnRunner(
   }
 
   /** Rebind observation without discarding accepted or queued IM messages. */
-  function rebindSessionOutput(state: SessionState, current: MakerSession, userId: string): void {
+  function rebindSessionOutput(state: SessionState, current: BuiltinMakerSession, userId: string): void {
     for (const unsubscribe of state.unsubscribers) {
       try {
         unsubscribe();
@@ -2656,7 +2637,7 @@ export function createTurnRunner(
 
   async function replyMissingAuth(
     userId: string,
-    auth: ImAuthRouteStatus & { agentKind: EngineKind; model: string },
+    auth: ImAuthRouteStatus & { agentKind: AgentKind; model: string },
     scopeKey?: string,
     attached = false,
   ): Promise<void> {
@@ -2711,7 +2692,6 @@ export function createTurnRunner(
       readXdGatewayApiKey,
       hasCustomProviderKey,
       getAgentAuthState: (agentKind) => getMaker().getAgentAuthState(agentKind),
-      checkPluginEngine: checkPluginEngineForIm,
       listProviders: () => getDesktopProviderService().listProviders({ allowSideEffects: true }),
       warn: (message) => log.warn(message),
     };
@@ -4013,8 +3993,12 @@ export function createTurnRunner(
         // 私聊发一张一键修复卡(切回 auto)。只对提供 permissionModeFix 文案
         // 的渠道(飞书)与群 lane 生效 — 私聊不挂群策略, 防御性跳过; 卡片
         // 发送失败不阻塞收口(用户仍可 /permission 手动切)。
+        // The one-tap fix switches to the built-in engines' auto mode; a plugin engine offers its own
+        // modes, so its owner switches with /permission (the error text above still explains why).
+        const fixAgentKind = state.makerSession.agentKind;
         if (
           policyUnsupported &&
+          fixAgentKind !== 'acp' &&
           adapter.ui.cards.permissionModeFix &&
           output.kind === 'rich-card' &&
           userId.startsWith('g/')
@@ -4031,7 +4015,7 @@ export function createTurnRunner(
             }
             const fixSpec = cards.buildPermissionModeFixCard({
               sessionId: state.makerSession.id,
-              agentKind: state.makerSession.agentKind,
+              agentKind: fixAgentKind,
               sessionTitle: sessionTitle || state.makerSession.id.slice(-8),
             });
             await output.im.sendInteractiveCard(userId, fixSpec, { deliverToOwnerDm: true });
@@ -4907,15 +4891,6 @@ export function createTurnRunner(
     return getMaker().getSession(sessionId) ?? null;
   }
 
-  function sessionPermissionModes(row: { id: string; agentKind: EngineKind; providerId: string | null }): PermissionModeDescriptor[] {
-    if (row.agentKind !== 'acp') return getMaker().getCapabilities(row.agentKind).permissionModes;
-    // A plugin engine names its own modes; Maker's generic ACP capabilities do not know them.
-    const live = getMakerSessionById(row.id);
-    if (live) return live.capabilities.permissionModes;
-    const key = pluginEngineKeyFromProviderId(row.providerId);
-    return listPluginEngineViews().find((engine) => engine.key === key)?.permissionModes ?? [...ACP_PERMISSION_MODES];
-  }
-
   /**
    * 提前落库入站用户消息 —— 契约与取舍见 ImTurnRunner.persistInboundUserMessageEarly。
    *
@@ -5159,7 +5134,23 @@ export function createTurnRunner(
     companionBotIdFor,
     rotateCompanionLane,
     peekCompanionRouteTarget,
-    getPermissionModes: (row) => sessionPermissionModes(row),
+    getPermissionModes: async (agentKind, task) => {
+      if (agentKind !== 'acp') return getMaker().getCapabilities(agentKind).permissionModes;
+      const live = getMakerSessionById(task.sessionId);
+      if (live?.agentKind === 'acp' && live.agentDeviceId === (task.agentDeviceId ?? null)
+        && live.capabilities.permissionModes.length) {
+        return live.capabilities.permissionModes;
+      }
+      const engine = await readImPluginEngine(task);
+      if (engine?.permissionModes.length) {
+        return engine.permissionModes.map((mode) => ({
+          id: mode.id as PermissionMode,
+          displayName: mode.displayName,
+          ...(mode.description ? { description: mode.description } : {}),
+        }));
+      }
+      return task.agentDeviceId ? [] : getMaker().getCapabilities('acp').permissionModes;
+    },
     changePermissionMode: (args) =>
       changeSessionPermissionMode({
         ...args,

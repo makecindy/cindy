@@ -10,11 +10,16 @@ import type { AgentKind } from '@cindy/maker-core';
 
 import type { ImSessionRow } from './sessionRepo';
 
-type AuthRow = Pick<ImSessionRow, 'agentKind' | 'model' | 'providerId' | 'agentDeviceId'>;
-/** A conversation on a built-in engine: the only kind model providers route. */
-type BuiltinAuthRow = AuthRow & { agentKind: AgentKind };
+type AnyAuthRow = Pick<ImSessionRow, 'agentKind' | 'model' | 'providerId' | 'agentDeviceId'>;
+/** A route on a built-in engine; plugin-engine routes return before provider checks. */
+type AuthRow = Omit<AnyAuthRow, 'agentKind'> & { agentKind: AgentKind };
 
-function isBuiltinRow(row: AuthRow): row is BuiltinAuthRow {
+/**
+ * Plugin engines (docs/plans/acp-plugin-bridge.md) sign in with their own CLI: Cindy has no provider
+ * credential to check. Whether the engine is offered is decided when the task starts, which reports a
+ * clear error instead of falling back to a built-in engine.
+ */
+function isBuiltinAuthRow(row: AnyAuthRow): row is AuthRow {
   return row.agentKind !== 'acp';
 }
 
@@ -34,17 +39,12 @@ export interface ImAuthCheckDeps {
   hasCustomProviderKey(providerId: string, agentKind: AgentKind): boolean;
   getAgentAuthState(agentKind: AgentKind): Promise<{ authenticated: boolean }>;
   listProviders(): Promise<ProviderView[]>;
-  checkRemoteRoute?(row: BuiltinAuthRow & { agentDeviceId: string }): Promise<{ provider: ProviderView }>;
-  /**
-   * A plugin engine of this computer (row.agentKind 'acp'), checked with the same admission as a
-   * desktop task: its name if known, and why it cannot run the conversation now (null = it can).
-   */
-  checkPluginEngine?(row: AuthRow): { engineName: string | null; unavailable: string | null };
+  checkRemoteRoute?(row: AuthRow & { agentDeviceId: string }): Promise<{ provider: ProviderView }>;
   warn(message: string): void;
 }
 
 export async function hasAuthForImRoute(
-  row: AuthRow,
+  row: AnyAuthRow,
   providerSnapshot: ProviderView[] | null | undefined,
   deps: ImAuthCheckDeps,
 ): Promise<boolean> {
@@ -52,14 +52,12 @@ export async function hasAuthForImRoute(
 }
 
 export async function checkImRouteAuth(
-  row: AuthRow,
+  anyRow: AnyAuthRow,
   providerSnapshot: ProviderView[] | null | undefined,
   deps: ImAuthCheckDeps,
 ): Promise<ImAuthCheckResult> {
-  if (!isBuiltinRow(row)) {
-    const { ok, missing } = checkPluginEngineRoute(row, deps);
-    return { ok, missing };
-  }
+  if (!isBuiltinAuthRow(anyRow)) return { ok: true, missing: null };
+  const row = anyRow;
   if (row.agentDeviceId) return checkRemoteAuth(row, deps);
   const resolution = resolveEffectiveProvider(
     row,
@@ -69,7 +67,7 @@ export async function checkImRouteAuth(
 }
 
 async function checkImRouteAuthWithResolution(
-  row: BuiltinAuthRow,
+  row: AuthRow,
   resolution: ProviderResolution,
   deps: ImAuthCheckDeps,
 ): Promise<ImAuthCheckResult> {
@@ -122,11 +120,14 @@ async function checkImRouteAuthWithResolution(
  * 使用本函数即可避免把存量会话的供应商误报成 Cindy AI。
  */
 export async function checkImRouteAuthDetailed(
-  row: AuthRow,
+  anyRow: AnyAuthRow,
   providerSnapshot: ProviderView[] | null | undefined,
   deps: ImAuthCheckDeps,
 ): Promise<ImAuthRouteStatus> {
-  if (!isBuiltinRow(row)) return checkPluginEngineRoute(row, deps);
+  if (!isBuiltinAuthRow(anyRow)) {
+    return { ok: true, missing: null, providerId: anyRow.providerId, providerLabel: null };
+  }
+  const row = anyRow;
   if (row.agentDeviceId) return checkRemoteAuth(row, deps);
   const providers =
     providerSnapshot === undefined ? await listProvidersForAuth(deps) : providerSnapshot;
@@ -144,22 +145,7 @@ export async function checkImRouteAuthDetailed(
   };
 }
 
-/**
- * Plugin engines sign in with their own accounts, not a model provider's key: what matters is that
- * the engine is offered here now. One on another computer is checked by that computer at start,
- * like a desktop task on it, and its refusal comes back as the start error.
- */
-function checkPluginEngineRoute(row: AuthRow, deps: ImAuthCheckDeps): ImAuthRouteStatus {
-  if (row.agentDeviceId) return { ok: true, missing: null, providerId: row.providerId, providerLabel: null };
-  const check = deps.checkPluginEngine?.(row) ?? { engineName: null, unavailable: 'Plugin engine check unavailable' };
-  const route = { providerId: row.providerId, providerLabel: check.engineName };
-  if (check.unavailable === null) return { ok: true, missing: null, ...route };
-  deps.warn(`plugin engine unavailable: ${check.unavailable}`);
-  // The fix is the same place as a provider's: Settings → Model providers lists plugin engines too.
-  return { ok: false, missing: 'provider-disconnected', ...route };
-}
-
-async function checkRemoteAuth(row: BuiltinAuthRow, deps: ImAuthCheckDeps): Promise<ImAuthRouteStatus> {
+async function checkRemoteAuth(row: AuthRow, deps: ImAuthCheckDeps): Promise<ImAuthRouteStatus> {
   try {
     if (!row.agentDeviceId || !deps.checkRemoteRoute) throw new Error('Remote route checker unavailable');
     const { provider } = await deps.checkRemoteRoute({ ...row, agentDeviceId: row.agentDeviceId });
@@ -204,9 +190,12 @@ export async function listProvidersForAuth(deps: ImAuthCheckDeps): Promise<Provi
 }
 
 export function resolveEffectiveProvider(
-  row: BuiltinAuthRow,
+  anyRow: AnyAuthRow,
   providers: ProviderView[] | null,
 ): ProviderResolution {
+  // Plugin engines have no Cindy provider source.
+  if (!isBuiltinAuthRow(anyRow)) return { kind: 'none' };
+  const row = anyRow;
   if (!providers) return row.providerId ? { kind: 'explicit-invalid' } : { kind: 'none' };
   if (row.providerId) {
     // 显式 providerId 命中的这个具体来源上,当前 model id 必须真的是聊天模型才接受
@@ -231,14 +220,14 @@ export function resolveEffectiveProvider(
 }
 
 export async function fallbackAuthForImRoute(
-  row: BuiltinAuthRow,
+  row: AuthRow,
   deps: ImAuthCheckDeps,
 ): Promise<boolean> {
   return (await fallbackAuthCheckForImRoute(row, deps)).ok;
 }
 
 async function fallbackAuthCheckForImRoute(
-  row: BuiltinAuthRow,
+  row: AuthRow,
   deps: ImAuthCheckDeps,
 ): Promise<ImAuthCheckResult> {
   const hasGatewayKey = Boolean(deps.readXdGatewayApiKey());

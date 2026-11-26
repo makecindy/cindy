@@ -34,6 +34,7 @@ import { decideCindyCompression } from './cindyContextCompression.js';
 import {
   buildHandoff,
   type HandoffCoverage,
+  type BuildHandoffOptions,
   extractPlainText,
   prependNoteToWireUserMessage,
   type HandoffSourceMessage,
@@ -684,6 +685,7 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
     target: NativeSessionRecoveryTarget | 'retain-route' | null,
     assertCanCommit: () => void,
     signal?: AbortSignal,
+    retry?: { userClientId: string; onHandoff(full: string, forRetry: string): void },
   ): Promise<void>;
   prepareModelWindowSwitch(
     sessionId: string,
@@ -1323,7 +1325,7 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
   };
 
   return {
-    async prepareNativeSessionRecovery(sessionId, target, assertCanCommit, signal) {
+    async prepareNativeSessionRecovery(sessionId, target, assertCanCommit, signal, retry) {
       if (inFlight.has(sessionId)) throw new Error('Native session recovery is already in progress');
       const controller = target === 'retain-route' ? new AbortController() : undefined;
       if (controller) signal = signal ? AbortSignal.any([signal, controller.signal]) : controller.signal;
@@ -1366,7 +1368,7 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
           // 显式重启(target=null)对伙伴的每段对话一视同仁: 主任务与 IM / 群专线按空闲间隔
           // 刷新同一口径写交接(isBotChatContext)。换路由恢复仍只认主任务。
           const companionChat = target ? isCanonicalBotContext(row) : isBotChatContext(row);
-          const { handoff, handoffCoverage } = buildHandoff(source, {
+          const handoffOptions: BuildHandoffOptions = {
             fromLabel: engineLabelForOverflow(row.agentKind),
             toLabel: engineLabelForOverflow(row.agentKind),
             sessionId,
@@ -1376,7 +1378,14 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
             reason: 'native-session-recovery',
             companion: companionChat,
             ...(await companionRecall(sessionId, companionChat)),
-          });
+          };
+          const { handoff, handoffCoverage } = buildHandoff(source, handoffOptions);
+          // Keep the full recovery record for cancellation, restart and later inputs.
+          // Only this retry is about to supply the same accepted user input itself.
+          const retrySource = target === 'retain-route' && retry
+            ? source.find(message => message.role === 'user' && message.clientId === retry.userClientId)
+            : undefined;
+          const retryHandoff = retrySource ? buildHandoff(source.filter(message => message !== retrySource), handoffOptions).handoff : undefined;
           assertReady();
           // Durable handoff, SDK reset and complete target route succeed or fail together.
           // No user turn or tool call is replayed by this control-plane operation.
@@ -1394,6 +1403,7 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
           if (signal) commitArgs[3] = signal;
           await deps.commitRebuild(...commitArgs);
           deps.setPendingHandoff(sessionId, handoff, generation);
+          if (retryHandoff !== undefined) retry?.onHandoff(handoff, retryHandoff);
           deps.onRebuilt?.(sessionId);
         });
       } finally {

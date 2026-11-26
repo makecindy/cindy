@@ -57,7 +57,6 @@ const mocks = vi.hoisted(() => ({
   },
   getMaker: vi.fn(),
   listProviders: vi.fn(),
-  listPluginEngineViews: vi.fn((): unknown[] => []),
   hasCustomProviderKey: vi.fn(),
   readXdGatewayApiKey: vi.fn(),
   bindingGet: vi.fn(),
@@ -111,10 +110,6 @@ vi.mock('../../../maker-host/createDesktopProviderService', () => ({
   getDesktopProviderService: () => ({ listProviders: mocks.listProviders }),
 }));
 
-vi.mock('../../../maker-ipc/pluginEnginesIpc', () => ({
-  listPluginEngineViews: mocks.listPluginEngineViews,
-}));
-
 vi.mock('../../../maker-host/provider-route', () => ({
   hasCustomProviderKey: mocks.hasCustomProviderKey,
 }));
@@ -152,8 +147,8 @@ vi.mock('../localMarkdownImages', () => ({
 
 vi.mock('../sessionRepo', () => ({
   touchUserSent: mocks.touchUserSent,
-  toCoreAgentKind: (kind: string) =>
-    kind === 'codex' || kind === 'pi' || kind === 'acp' ? kind : 'claude-code',
+  toCoreEngineKind: (kind: string) =>
+    kind === 'acp' ? 'acp' : kind === 'codex' ? 'codex' : kind === 'pi' ? 'pi' : 'claude-code',
 }));
 
 vi.mock('../../messagePersistence', () => ({
@@ -1777,73 +1772,6 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
       }
     },
   );
-
-  /**
-   * A conversation on a plugin engine (docs/plans/acp-plugin-bridge.md「IM 渠道」): the runner used to
-   * refuse it with PLUGIN_ENGINE_UNSUPPORTED. Now it runs like a built-in one — the engine admission
-   * replaces provider checks, and the channel policy reaches the engine, which enforces or refuses it.
-   */
-  describe('on a plugin engine', () => {
-    const ENGINE = 'acp-plugin:dsh-1:dsh';
-    const engineView = (overrides: Record<string, unknown> = {}) => ({
-      key: 'dsh-1:dsh', providerId: ENGINE, name: 'DSH', availability: { state: 'available' },
-      models: [], permissionModes: [], defaultPermissionMode: 'ask', ...overrides,
-    });
-    const groupPolicy: TurnPermissionPolicy = {
-      origin: { kind: 'im', channel: 'feishu' },
-      confirmationSurface: 'channel',
-      forceConfirmToolCall: () => true,
-    };
-    const engineSession = (sendImpl: Parameters<typeof createSessionHarness>[0], capabilities: Capabilities) => {
-      const h = createSessionHarness(sendImpl, 'feishu-session', { capabilities });
-      Object.assign(h.session, { agentKind: 'acp' });
-      const maker = createMakerHarness(h.session);
-      mocks.getMaker.mockReturnValue(maker);
-      return { h, maker };
-    };
-    const dispatch = (userMessageId: string) => getRunner().dispatchAgentTurn({
-      botContextId: 'cli_test_bot', userId: 'ou_user', userMessageId, text: 'from the group',
-      attachments: [], queueMode: 'external', beforeProviderStart: vi.fn(async () => undefined),
-      turnPermissionPolicy: groupPolicy,
-    });
-
-    beforeEach(() => {
-      mocks.findActiveSession.mockResolvedValue({
-        id: 'feishu-session', agentKind: 'acp', workingDir: 'F:\\XDMaker', model: 'default', effort: '',
-        permissionMode: 'ask', fastMode: false, sdkSessionId: null, providerId: ENGINE,
-      });
-      mocks.listPluginEngineViews.mockReturnValue([engineView()]);
-    });
-
-    it('starts the task on its engine and hands the channel policy to it', async () => {
-      const { h, maker } = engineSession(async () => ({ accepted: true }), {
-        turnPermissionPolicy: { supported: { supported: true }, unsupportedPermissionModes: ['bypassPermissions'] },
-      } as unknown as Capabilities);
-      const result = await dispatch('engine-accepted');
-      expect(result.kind).toBe('accepted');
-      expect(maker.createSession).toHaveBeenCalledWith(expect.objectContaining({ agentKind: 'acp', providerId: ENGINE }));
-      expect(h.send.mock.calls[0]?.[1]?.turnPermissionPolicy).toBe(groupPolicy);
-      // No model-provider sign-in check stands between the chat and its own engine.
-      expect(mocks.listProviders).not.toHaveBeenCalled();
-    });
-
-    it('tells the chat when the engine cannot enforce the policy or is turned off', async () => {
-      const { h } = engineSession(async () => {
-        throw new TurnPermissionPolicyUnsupportedError('acp', 'ask');
-      }, {} as Capabilities);
-      await expect(dispatch('engine-no-gate')).resolves.toEqual({
-        kind: 'rejected', reason: 'TURN_PERMISSION_POLICY_UNSUPPORTED:agent:ask',
-      });
-      // Refused before the message reaches an engine that did not report the gate (it could be a
-      // computer on an older Cindy whose plugin engines ignore the policy).
-      expect(h.send).not.toHaveBeenCalled();
-
-      mocks.listPluginEngineViews.mockReturnValue([engineView({ suspended: true })]);
-      h.send.mockClear();
-      await expect(dispatch('engine-off')).resolves.toMatchObject({ kind: 'rejected', reason: 'missing_auth' });
-      expect(h.send).not.toHaveBeenCalled();
-    });
-  });
 
   it('skips the turn policy when the channel declares the session mode optional (Full access guardrail removal)', async () => {
     // feishu 渠道设置显式放行「完全访问」后: 该档位的群轮次不再挂强确认

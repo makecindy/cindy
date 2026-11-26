@@ -43,7 +43,7 @@ import {
   type ImDefaultRouteDecision,
   type ImDefaultRouteRecord,
 } from './channelDefaultRoute';
-import { resetSessionToDefaults, toBuiltinAgentKind, type ImSessionRow } from './sessionRepo';
+import { resetSessionToDefaults, toCoreAgentKind, type ImSessionRow } from './sessionRepo';
 import type { ImLaneProjectDefaults, ImLaneRouteOverride, ImOrchestratorConfig } from './types';
 
 const log = createLogger('im:default-route');
@@ -133,7 +133,7 @@ function isChannelOwnedRow(
 
 function currentRouteOf(row: SessionRouteRow): ImDefaultRoute {
   return {
-    agentKind: toBuiltinAgentKind(row.agentKind),
+    agentKind: toCoreAgentKind(row.agentKind),
     model: row.model ?? '',
     providerId: row.providerId?.trim() || null,
     ...(row.agentDeviceId ? { agentDeviceId: row.agentDeviceId } : {}),

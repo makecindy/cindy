@@ -75,6 +75,7 @@ export interface GoalState {
   usageResetAt: number | null;
   /** 最近一次裁决 / 守卫给出的理由(UI 展示 + resume 续轮提示)。 */
   lastReason: string | null;
+  /** 'acp' = 插件引擎任务(docs/plans/acp-plugin-bridge.md)。 */
   agentKind: EngineKind;
   startedAt: number;
   updatedAt: number;
