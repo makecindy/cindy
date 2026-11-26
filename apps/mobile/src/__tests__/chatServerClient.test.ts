@@ -285,13 +285,13 @@ describe('group list activity', () => {
     expect(await client.rosterActivity(id(1), snapshot())).toEqual({ phase: 'needs-interaction' });
   });
 
-  it('refreshes pending execution state without a new message and tolerates an older server', async () => {
+  it('keeps in-progress executions idle outside the group while surfacing needs_input and tolerating an older server', async () => {
     const request = vi.fn().mockResolvedValueOnce([{ status: 'running' }]).mockResolvedValueOnce([])
       .mockResolvedValueOnce([{ status: 'needs_input' }]).mockResolvedValueOnce([])
       .mockRejectedValueOnce(Object.assign(new Error('NOT_FOUND'), { status: 404 })).mockResolvedValueOnce([]);
     const client = createChatServerClient(request);
     const value = snapshot();
-    expect(await client.rosterActivity(value.room.id, value)).toEqual({ phase: 'running' });
+    expect(await client.rosterActivity(value.room.id, value)).toEqual({ phase: 'idle' });
     const awaiting = await client.rosterActivity(value.room.id, value);
     expect(chatRoomRow(value.room, value, undefined, awaiting).item.display.teammateActivity)
       .toEqual({ phase: 'needs-interaction' });

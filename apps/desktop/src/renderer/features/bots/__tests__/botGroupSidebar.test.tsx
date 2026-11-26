@@ -443,18 +443,17 @@ describe('TeammatesSection group chats', () => {
     expect(screen.queryByRole('button', { name: 'bots.add' })).toBeNull();
   });
 
-  it('shows the running mark on the group, not on the speaking teammate’s own row', async () => {
-    mocks.groups = [group({ speakingBotIds: ['mimi'] })];
+  it('keeps showing the latest message on the group while a teammate executes, without leaking onto the teammate’s own row', async () => {
+    mocks.groups = [group({ speakingBotIds: ['mimi', 'xiaoman'], lastMessage: { authorKind: 'bot', authorName: '咪咪', preview: '周六去莫干山', createdAt: 10 } })];
     mocks.islandActivity = new Map([
       ['lane-mimi', { sessionId: 'lane-mimi', phase: 'running', workingPhase: 'searching' }],
     ]);
     await renderSidebar();
-    const running = screen.getByTestId('bot-group-running');
-    expect(running.textContent).toContain('咪咪');
-    expect(running.textContent).toContain('generation:lane-mimi');
+    expect(screen.queryByTestId('bot-group-running')).toBeNull();
+    expect(screen.getByText('bots.groupChat.sidebar.preview:{"name":"咪咪","text":"周六去莫干山"}')).toBeTruthy();
+    expect(screen.queryByText('generation:lane-mimi')).toBeNull();
     // The teammate row keeps its private-chat preview.
     expect(screen.getByText('咪咪 private preview')).toBeTruthy();
-    expect(screen.getAllByText('generation:lane-mimi')).toHaveLength(1);
   });
 
   it('previews a plan waiting for 开始 or for 继续 / 重试 instead of the latest message', async () => {
@@ -484,30 +483,31 @@ describe('TeammatesSection group chats', () => {
     expect(screen.queryByTestId('bot-group-running')).toBeNull();
   });
 
-  it('shows the step in progress as 分工 k/n in the running style', async () => {
+  it('keeps showing the latest message when a plan step or planning is in progress', async () => {
     mocks.groups = [
       group({
+        id: 'g1',
+        name: '官网',
         speakingBotIds: ['mimi'],
         openPlan: openPlan({ status: 'running', currentStep: 1, currentStepStatus: 'running' }),
+      }),
+      group({
+        id: 'g2',
+        name: '周报',
+        updatedAt: 9,
+        speakingBotIds: ['xiaoman'],
+        planningBotId: 'xiaoman',
+        lastMessage: { authorKind: 'bot', authorName: '小满', preview: '开始整理', createdAt: 9 },
       }),
     ];
     mocks.islandActivity = new Map([
       ['lane-mimi', { sessionId: 'lane-mimi', phase: 'running', workingPhase: 'editing' }],
     ]);
     await renderSidebar();
-    const running = screen.getByTestId('bot-group-running');
-    expect(running.textContent).toBe('bots.groupChat.sidebar.planRunning:{"step":2,"total":3,"name":"咪咪"}');
-    expect(running.className).toContain('text-[var(--status-bar-accent)]');
+    expect(screen.queryByTestId('bot-group-running')).toBeNull();
     expect(document.querySelector('[data-teammate-row-status] [data-teammate-status="running"]')).toBeNull();
-    expect(running.querySelector('.session-status-breathing')).not.toBeNull();
-  });
-
-  it('shows the organizer working out a plan in the running style', async () => {
-    mocks.groups = [group({ speakingBotIds: ['xiaoman'], planningBotId: 'xiaoman' })];
-    await renderSidebar();
-    expect(screen.getByTestId('bot-group-running').textContent).toBe(
-      'bots.groupChat.sidebar.planPlanning:{"name":"小满"}',
-    );
+    expect(screen.getByText('bots.groupChat.sidebar.preview:{"name":"阿布","text":"下午 有小概率阵雨"}')).toBeTruthy();
+    expect(screen.getByText('bots.groupChat.sidebar.preview:{"name":"小满","text":"开始整理"}')).toBeTruthy();
   });
 
   it('keeps the confirmation hint when the teammate doing a step waits for the user', async () => {
@@ -560,8 +560,9 @@ it.each([[false, 'bots.groupChat.sidebar.sharedReply:{"name":"Alice"}'], [true, 
     expect(screen.queryByText(/冒充|卡片文字/)).toBeNull();
   });
 
-// #8047: list summaries carry the execution snapshot, even before a lane starts.
-it.each(['reply', 'step'] as const)('shows a queued %s in the sidebar without stale generation activity', async activity => {
+// #8047: list summaries carry the execution snapshot, even before a lane starts;
+// the sidebar keeps showing the latest message instead of queued/running status.
+it.each(['reply', 'step'] as const)('keeps showing the latest message when a %s is queued in the group', async activity => {
   mocks.groups = [group({ speakingBotIds: ['mimi'],
     ...(activity === 'step' ? { openPlan: openPlan({ status: 'running', currentStepStatus: 'running' }) } : {}),
     round: { status: 'running', canContinue: false, speakers: [{ botId: 'mimi', activity,
@@ -569,23 +570,26 @@ it.each(['reply', 'step'] as const)('shows a queued %s in the sidebar without st
   })];
   mocks.islandActivity = new Map([['lane-mimi', { sessionId: 'lane-mimi', phase: 'running', workingPhase: 'searching' }]]);
   await renderSidebar();
-  expect(screen.getByTestId('bot-group-running').textContent).toBe('bots.groupChat.header.queued:{"name":"咪咪"}');
+  expect(screen.queryByTestId('bot-group-running')).toBeNull();
+  expect(screen.getByText('bots.groupChat.sidebar.preview:{"name":"阿布","text":"下午 有小概率阵雨"}')).toBeTruthy();
   expect(screen.queryByText('generation:lane-mimi')).toBeNull();
 });
 
-it.each([false, true])('shows the executing teammate rather than a queued teammate in the sidebar (plan: %s)', async hasPlan => {
+it.each([false, true])('keeps showing the latest message and real message timestamp while teammates execute (plan: %s)', async hasPlan => {
+  const twoHoursAgo = Date.now() - 2 * 60 * 60 * 1000;
   mocks.groups = [group({ speakingBotIds: ['mimi', 'xiaoman'],
+    lastMessage: { authorKind: 'bot', authorName: '咪咪', preview: '周六去莫干山', createdAt: twoHoursAgo },
     ...(hasPlan ? { openPlan: openPlan({ status: 'running', currentStepStatus: 'running' }) } : {}),
     round: { status: 'running', canContinue: false, speakers: [
       { botId: 'mimi', activity: hasPlan ? 'step' : 'reply', executionStatus: 'queued', sessionId: null },
       { botId: 'xiaoman', activity: 'reply', executionStatus: 'running', sessionId: 'lane-xiaoman' },
     ] },
   })];
-  await renderSidebar();
-  const row = screen.getByTestId('bot-group-running');
-  expect(row.textContent).toContain('小满');
-  expect(row.textContent).not.toContain('咪咪');
-  expect(row.textContent).not.toContain('bots.groupChat.header.queued');
+  const view = await renderSidebar();
+  expect(screen.queryByTestId('bot-group-running')).toBeNull();
+  expect(screen.getByText('bots.groupChat.sidebar.preview:{"name":"咪咪","text":"周六去莫干山"}')).toBeTruthy();
+  const row = view.container.querySelector('[data-bot-group-id="g1"]')!;
+  expect(row.querySelector('[data-teammate-timestamp]')?.textContent).not.toBe('bots.list.justNow');
 });
 
 describe('icon strip mentions', () => {
@@ -598,7 +602,7 @@ describe('icon strip mentions', () => {
   };
   afterEach(() => window.localStorage.clear());
 
-  it('keeps one orange running point for mentions without an @ glyph', async () => {
+  it('keeps the blue group unread point for mentions even while a teammate executes in the group', async () => {
     mocks.groups = [
       group({ speakingBotIds: ['mimi'], serverUnread: { count: 2, mentioned: true } }),
       group({ id: 'g2', name: '读书会', teammateActivity: { phase: 'idle' }, serverUnread: { count: 1, mentioned: false } }),
@@ -606,35 +610,40 @@ describe('icon strip mentions', () => {
     mocks.islandActivity = new Map([['lane-mimi', { sessionId: 'lane-mimi', phase: 'running' }]]);
     const view = await renderSidebar();
     switchView();
-    // The running point itself carries the @: one indicator, status color kept.
-    const marked = screen.getByRole('button', { name: `周末出游 · bots.avatarStatus.running · ${mentionLabel}` });
+    // Executing inside a group never replaces unread with an orange running point.
+    const marked = screen.getByRole('button', { name: new RegExp(`^周末出游 · bots\\.avatarStatus\\.(done|unread) · ${mentionLabel}$`) });
     expect(marked.querySelectorAll('[data-teammate-status]')).toHaveLength(1);
     const point = marked.querySelector<HTMLElement>('[data-teammate-mention]');
-    expect(point?.getAttribute('data-teammate-status')).toBe('running');
-    expect((point?.firstElementChild as HTMLElement)?.style.backgroundColor).toBe('var(--warning-accent)');
+    expect(point?.getAttribute('data-teammate-status')).not.toBe('running');
+    expect((point?.firstElementChild as HTMLElement)?.style.backgroundColor).toBe('var(--bot-unread-bg)');
     // Ordinary group unread uses blue in icon mode.
     const plain = screen.getByRole('button', { name: /^读书会 · / });
     expect(plain.getAttribute('aria-label')).not.toContain(mentionLabel);
     expect(plain.querySelector<HTMLElement>('[data-teammate-status] > span')?.style.backgroundColor).toBe('var(--bot-unread-bg)');
-    expect(view.container.querySelectorAll('[data-teammate-mention]')).toHaveLength(1);
+    expect(marked.querySelectorAll('[data-teammate-mention]')).toHaveLength(1);
+    expect(plain.querySelectorAll('[data-teammate-mention]')).toHaveLength(0);
   });
 
-  it.each([false, true])('keeps a gray unread count alongside running progress (mentioned: %s)', async mentioned => {
+  it.each([false, true])('keeps normal unread styling without running progress or dot while executing (mentioned: %s)', async mentioned => {
     mocks.profiles = [];
-    mocks.groups = [group({ speakingBotIds: ['mimi'], serverUnread: { count: 2, mentioned } })];
+    mocks.groups = [group({ speakingBotIds: ['mimi'], teammateActivity: { phase: 'idle' }, serverUnread: { count: 2, mentioned } })];
     mocks.islandActivity = new Map([['lane-mimi', { sessionId: 'lane-mimi', phase: 'running' }]]);
     const view = await renderSidebar();
     const row = view.container.querySelector('[data-bot-group-id="g1"]')!;
-    expect(screen.getByTestId('bot-group-running')).toBeTruthy();
+    expect(screen.queryByTestId('bot-group-running')).toBeNull();
     expect(row.querySelector('[data-teammate-unread-count]')?.textContent).toBe('2');
-    expect(row.querySelector('[data-teammate-unread-count] > span')?.className).not.toContain('bg-[var(--bot-unread-bg)]');
+    if (mentioned) {
+      expect(row.querySelector('[data-teammate-unread-count] > span')?.className).toContain('bg-[var(--bot-unread-bg)]');
+    } else {
+      expect(row.querySelector('[data-teammate-unread-count] > span')?.className).not.toContain('bg-[var(--bot-unread-bg)]');
+    }
     expect(row.querySelector('[data-teammate-status]')).toBeNull();
-    mocks.groups = [group({ speakingBotIds: ['mimi'], serverUnread: { count: 0, mentioned: false } })];
+    mocks.groups = [group({ speakingBotIds: ['mimi'], teammateActivity: { phase: 'idle' }, serverUnread: { count: 0, mentioned: false } })];
     view.rerender(<TeammatesSection />);
     expect(row.querySelector('[data-teammate-unread-count]')).toBeNull();
-    expect(screen.getByTestId('bot-group-running')).toBeTruthy();
+    expect(screen.queryByTestId('bot-group-running')).toBeNull();
     switchView();
-    expect(view.container.querySelector<HTMLElement>('[data-teammate-status="running"] > span')?.style.backgroundColor).toBe('var(--warning-accent)');
+    expect(view.container.querySelector('[data-teammate-status="running"]')).toBeNull();
   });
 
   it.each(['completed', 'idle'] as const)('uses a blue count for list group mentions and a blue point in icon mode (%s)', async phase => {
@@ -752,16 +761,15 @@ describe('icon strip mentions', () => {
 describe('topic reply sidebar entry', () => {
   const messageId = '40000000-0000-4000-8000-000000000002';
   const threadRootId = '40000000-0000-4000-8000-000000000001';
-  it('opens the exact reply separately from the group row, including repeated activation', async () => {
+  it('labels thread replies as plain preview text without a separate clickable thread link', async () => {
     mocks.groups = [group({ lastMessage: { ...group().lastMessage!, messageId, threadRootId } })];
     const view = await renderSidebar();
-    const topic = screen.getByRole('button', { name: /bots.groupChat.server.thread.viewThread/ });
-    expect(topic.textContent).toContain('bots.groupChat.sidebar.threadReply');
-    expect(view.container.querySelector('button button')).toBeNull();
-    fireEvent.click(topic);
-    fireEvent.click(topic);
-    const route = `/bots/groups/g1?messageId=${messageId}&threadRootId=${threadRootId}`;
-    expect(mocks.navigate.mock.calls).toEqual([[route], [route]]);
+    const label = screen.getByText('bots.groupChat.sidebar.threadReply');
+    expect(label.closest('button')).toBeNull();
+    expect(screen.queryByRole('button', { name: /bots.groupChat.server.thread.viewThread/ })).toBeNull();
+    expect(view.container.querySelectorAll('[data-bot-group-id="g1"] button')).toHaveLength(1);
+    fireEvent.click(label);
+    expect(mocks.navigate).toHaveBeenLastCalledWith('/bots/groups/g1');
     fireEvent.click(screen.getByRole('button', { name: '周末出游' }));
     expect(mocks.navigate).toHaveBeenLastCalledWith('/bots/groups/g1');
   });
@@ -773,10 +781,15 @@ describe('topic reply sidebar entry', () => {
     expect(screen.queryByRole('button', { name: /bots.groupChat.server.thread.viewThread/ })).toBeNull();
   });
 
-  it('does not turn the running status into a stale reply link', async () => {
+  it('keeps the thread reply preview while executing and hides it only for a confirmation hint', async () => {
     mocks.groups = [group({ speakingBotIds: ['mimi'], lastMessage: { ...group().lastMessage!, messageId, threadRootId } })];
-    await renderSidebar();
-    expect(screen.getByTestId('bot-group-running')).toBeTruthy();
+    const view = await renderSidebar();
+    expect(screen.queryByTestId('bot-group-running')).toBeNull();
+    expect(screen.getByText('bots.groupChat.sidebar.threadReply')).toBeTruthy();
     expect(screen.queryByRole('button', { name: /bots.groupChat.server.thread.viewThread/ })).toBeNull();
+    mocks.islandActivity = new Map([['lane-mimi', { sessionId: 'lane-mimi', phase: 'needs-interaction' }]]);
+    view.rerender(<TeammatesSection />);
+    expect(screen.getByTestId('bot-group-running')).toBeTruthy();
+    expect(screen.queryByText('bots.groupChat.sidebar.threadReply')).toBeNull();
   });
 });

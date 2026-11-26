@@ -25,7 +25,8 @@ export function resolveTeammateStatus(input: {
   return input.unread ? 'unread' : 'idle';
 }
 
-/** Group plans remain actionable until the owner answers, including between steps. */
+/** Group plans remain actionable until the owner answers, including between steps.
+ *  In-progress group executions stay inside the chat and do not project a running state outside. */
 export function teammateGroupActivity(group: {
   teammateActivity?: TeammateActivity;
   archived?: boolean;
@@ -35,15 +36,19 @@ export function teammateGroupActivity(group: {
   lastMessage?: { authorKind: string } | null;
 }): TeammateActivity {
   if (group.archived) return { phase: 'idle' };
-  if (group.teammateActivity) return group.teammateActivity;
+  if (group.teammateActivity) {
+    return group.teammateActivity.phase === 'running'
+      ? { phase: group.lastMessage?.authorKind === 'bot' ? 'completed' : 'idle' }
+      : group.teammateActivity;
+  }
   const plan = group.openPlan;
   if (plan?.status === 'proposed' || plan?.status === 'waiting') return { phase: 'needs-interaction' };
   if (plan?.currentStepStatus === 'failed') return { phase: 'error' };
-  if (group.speakingBotIds.length || group.planningBotId || plan?.status === 'running') return { phase: 'running' };
   return { phase: group.lastMessage?.authorKind === 'bot' ? 'completed' : 'idle' };
 }
 
-/** Server groups use the same execution and plan states on desktop and mobile. */
+/** Server groups use the same actionable and completion states on desktop and mobile;
+ *  in-progress executions stay inside the group chat. */
 export function teammateChatActivity(input: {
   executions: readonly { status: string; updated_at?: string; plan_id?: string | null }[];
   plans: readonly { id?: string; status: string }[];
@@ -62,8 +67,6 @@ export function teammateChatActivity(input: {
   const closedPlans = new Set(input.plans.filter(plan => plan.id
     && ['done', 'stopped', 'dismissed', 'superseded'].includes(plan.status)).map(plan => plan.id));
   if (recent.some(row => row.status === 'failed' && (!row.plan_id || !closedPlans.has(row.plan_id)))) return { phase: 'error' };
-  if (input.planning || input.executions.some(row => ['queued', 'running', 'stopping'].includes(row.status))
-    || input.plans.some(plan => plan.status === 'running')) return { phase: 'running' };
   if (recent.some(row => row.status === 'succeeded')) return { phase: 'completed' };
   return { phase: 'idle' };
 }

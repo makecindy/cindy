@@ -527,9 +527,8 @@ export function TeammatesSection() {
   const renderGroupRow = (group: BotGroupSummary) => (
     <BotGroupSidebarRow key={'group:' + group.id} group={group} bots={bots}
       islandActivity={islandActivity} now={now} selected={group.id === selectedGroupId}
-      onOpenGroup={(id, reply) => {
-        const query = reply ? '?' + new URLSearchParams(reply).toString() : '';
-        navigate('/bots/groups/' + encodeURIComponent(id) + query);
+      onOpenGroup={(id) => {
+        navigate('/bots/groups/' + encodeURIComponent(id));
       }}
       onContextMenu={event => {
         event.preventDefault(); event.stopPropagation();

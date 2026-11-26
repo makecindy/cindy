@@ -28,28 +28,31 @@ describe('teammate avatar status', () => {
     expect(aggregateTeammateStatus(['unread', 'error', 'running'])).toBe('error');
     expect(aggregateTeammateStatus([])).toBe('idle');
   });
-  it('distinguishes actionable group plans, ordinary human messages and archived activity', () => {
+  it('distinguishes actionable group plans, ordinary human messages and archived activity without surfacing running', () => {
     const group = { speakingBotIds: [], lastMessage: { authorKind: 'user' } };
     expect(teammateGroupActivity(group).phase).toBe('idle');
     expect(teammateGroupActivity({ ...group, openPlan: { status: 'proposed' } }).phase).toBe('needs-interaction');
     expect(teammateGroupActivity({ ...group, openPlan: { status: 'waiting', currentStepStatus: 'failed' } }).phase).toBe('needs-interaction');
-    expect(teammateGroupActivity({ ...group, speakingBotIds: ['bot'] }).phase).toBe('running');
+    expect(teammateGroupActivity({ ...group, speakingBotIds: ['bot'] }).phase).toBe('idle');
+    expect(teammateGroupActivity({ ...group, lastMessage: { authorKind: 'bot' }, speakingBotIds: ['bot'] }).phase).toBe('completed');
+    expect(teammateGroupActivity({ ...group, teammateActivity: { phase: 'running' } }).phase).toBe('idle');
+    expect(teammateGroupActivity({ ...group, lastMessage: { authorKind: 'bot' }, teammateActivity: { phase: 'running' } }).phase).toBe('completed');
     expect(teammateGroupActivity({ ...group, archived: true, speakingBotIds: ['bot'] }).phase).toBe('idle');
   });
 });
 
-it('uses server executions instead of unread messages and ignores stale terminal runs', () => {
+it('uses server executions instead of unread messages and ignores stale terminal or in-progress runs', () => {
   const input = { executions: [{ status: 'succeeded', updated_at: '2026-10-29T01:00:00Z' }], plans: [], lastMessageAt: Date.parse('2026-10-29T00:59:59Z') };
   expect(teammateChatActivity(input).phase).toBe('completed');
   expect(teammateChatActivity({ ...input, lastMessageAt: Date.parse('2026-10-29T01:01:00Z') }).phase).toBe('idle');
   expect(teammateChatActivity({ ...input, executions: [{ status: 'failed', updated_at: '2026-10-29T01:00:00Z' }] }).phase).toBe('error');
-  // Unit regression: a concurrent topic must not hide a recent main-chat failure;
-  // the existing single-execution assertions could not exercise this priority.
+  // Unit regression: a concurrent topic must not hide a recent main-chat failure,
+  // and in-progress runs stay inside the group instead of projecting running outside.
   const failedAndRunning = { ...input, executions: [
     { status: 'failed', updated_at: '2026-10-29T01:00:00Z' }, { status: 'running' },
   ] };
   expect(teammateChatActivity(failedAndRunning).phase).toBe('error');
-  expect(teammateChatActivity({ ...failedAndRunning, lastMessageAt: Date.parse('2026-10-29T01:01:00Z') }).phase).toBe('running');
+  expect(teammateChatActivity({ ...failedAndRunning, lastMessageAt: Date.parse('2026-10-29T01:01:00Z') }).phase).toBe('idle');
   expect(teammateChatActivity({ ...failedAndRunning, plans: [{ status: 'waiting' }] }).phase).toBe('needs-interaction');
   expect(teammateChatActivity({ ...input, executions: [{ status: 'needs_input' }, { status: 'running' }] }).phase).toBe('needs-interaction');
   expect(teammateChatActivity({ ...input, plans: [{ status: 'waiting' }] }).phase).toBe('needs-interaction');
