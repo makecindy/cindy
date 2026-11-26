@@ -276,7 +276,10 @@ vi.mock('../../secrets/providerSecretStore.js', () => ({
 vi.mock('../outbound-fetch.desktop.js', () => ({
   outboundFetch: vi.fn(async () => { throw new Error('offline'); }),
 }));
-vi.mock('../provider-route.js', () => ({
+vi.mock('../provider-route.js', async (importOriginal) => ({
+  // Keep canonical per-model transport routing real: the Host snapshot consumes it.
+  // Only credential/reader wiring is isolated from this catalog race regression.
+  ...await importOriginal<typeof import('../provider-route.js')>(),
   getProviderRouteCredentialRevision: () => 0,
   setCustomProviderHeaderReader: () => undefined,
   setCustomProviderKeyReader: () => undefined,

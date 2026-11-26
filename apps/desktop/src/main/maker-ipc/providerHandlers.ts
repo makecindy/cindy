@@ -374,7 +374,7 @@ export interface ProviderHandlerDeps {
   /** Release a prepared Host guard when persistence fails. */
   cancelCodexCustomProviderHostChange?(): void;
   /** Whether the running Host snapshot already contains this custom Provider identity. */
-  hasAppliedCodexCustomProviderImageGeneration?(providerId: string): boolean;
+  hasAppliedCodexCustomProviderRoute?(providerId: string): boolean;
   /** Busy local Codex turns only; remote Codex and other agents are excluded. */
   listBusyLocalCodexSessionIds?(): string[];
   /** Current selectable catalog ids, used to validate visible provider order entries. */
@@ -3377,7 +3377,7 @@ export function registerProviderHandlers(
           owner = registerProviderOAuthOwner(id, generation, sender, ownerId);
         }
         const preparation = await prepareCodexCustomProviderChange(
-          deps.hasAppliedCodexCustomProviderImageGeneration?.(id) === true,
+          deps.hasAppliedCodexCustomProviderRoute?.(id) === true,
           {},
           ownerAtIngress,
         );
@@ -3464,7 +3464,7 @@ export function registerProviderHandlers(
       assertProviderMutationOwner(owner);
       if (!config || (config.auth && config.auth.method !== 'apiKey')) throwIpcError('INVALID_PARAMS', 'API connection required');
       const preparation = await prepareCodexCustomProviderChange(
-        deps.hasAppliedCodexCustomProviderImageGeneration?.(id) === true, options, owner,
+        deps.hasAppliedCodexCustomProviderRoute?.(id) === true, options, owner,
       );
       if (preparation.confirmation) return preparation.confirmation;
       try {
@@ -3522,7 +3522,7 @@ export function registerProviderHandlers(
         let codexHostPrepared = false;
         try {
           const preparation = await prepareCodexCustomProviderChange(
-            deps.hasAppliedCodexCustomProviderImageGeneration?.(id) === true,
+            deps.hasAppliedCodexCustomProviderRoute?.(id) === true,
             options,
             ownerAtIngress,
           );
