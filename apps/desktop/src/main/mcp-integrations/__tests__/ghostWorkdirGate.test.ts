@@ -1849,6 +1849,18 @@ describe('花名册 / ghost_list 过滤', () => {
     }
   });
 
+  it('ghost_info 不把 Object.prototype 属性名误判为内置 MCP 提示', async () => {
+    const result = await makeDeps().getAwakeGhost('constructor');
+    expect(result).toEqual({
+      ok: false,
+      errorCode: 'GHOST_NOT_FOUND',
+      message: expect.stringContaining('Plugins settings link for the task computer'),
+    });
+    if (!result.ok) {
+      expect(result.message).not.toContain('function Object');
+    }
+  });
+
   it('ghost_info 对未启用目标返回 GHOST_ASLEEP', async () => {
     listMock.mockReturnValue([
       { ...(chipGhost('sleeping') as Record<string, unknown>), enabled: false },

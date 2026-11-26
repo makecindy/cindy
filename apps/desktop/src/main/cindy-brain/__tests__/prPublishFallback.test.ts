@@ -28,13 +28,19 @@ describe('isGhPrCreateCommand', () => {
     ['gh pr create --base main --head fix/a --title "fix"', true],
     ['git push -u origin fix/a && gh pr create --fill', true],
     ['PR_URL=$(gh pr create --base main --head fix/a)', true],
+    ['$pr = gh pr create --fill', true],
     ["/bin/zsh -lc \"cat > /tmp/pr.md <<'EOF'\nbody\nEOF\ngh pr create --base main --body-file /tmp/pr.md\"", true],
     ['/bin/zsh -lc \'GH_HOST=github.com gh pr create --base main\'', true],
+    ['pwsh -Command "gh pr create --fill"', true],
     ['gh pr view https://github.com/makecindy/cindy/pull/12736', false],
     ['gh pr checks https://github.com/makecindy/cindy/pull/12736', false],
     ['gh pr create --help', false],
     ['gh pr create --dry-run --title "test"', false],
     ['echo "gh pr create --base main"', false],
+    ['echo "line1\ngh pr create --fill"', false],
+    ["cat <<'EOF'\nExample:\ngh pr create --fill\nhttps://github.com/makecindy/cindy/pull/12736\nEOF", false],
+    ['cat <<-EOF\n\tgh pr create --fill\n\tEOF', false],
+    ['# gh pr create --fill', false],
     ['git grep "gh pr create"', false],
   ])('command %j -> %s', (command, expected) => {
     expect(isGhPrCreateCommand(command)).toBe(expected);
@@ -201,6 +207,79 @@ describe('TurnPrPublishTracker', () => {
       data: { toolUseIds: ['g-err'], summary: '{"ok":false,"errorCode":"INTERNAL"}' },
     });
     expect(tracker.finishTurn(true).map((r) => r.prNumber)).toEqual([101]);
+  });
+
+  it('tracks PowerShell tool creations and preserves tool_result_full failure over follow-up summary', () => {
+    const tracker = new TurnPrPublishTracker();
+    tracker.beginTurn();
+    // Claude Code on Windows emits toolName: "PowerShell" with input.command
+    tracker.handleEvent({
+      type: 'tool_use',
+      source: 'claude-code',
+      data: {
+        toolUseId: 'ps-1',
+        toolName: 'PowerShell',
+        input: { command: 'gh pr create --fill' },
+      },
+    });
+    tracker.handleEvent({
+      type: 'tool_result_full',
+      source: 'claude-code',
+      data: {
+        toolUseId: 'ps-1',
+        fullText: 'https://github.com/makecindy/cindy/pull/202\n',
+        isError: false,
+      },
+    });
+    // Codex emits tool_result_full(isError: true) followed by a plain summary tool_result("failed"/"completed")
+    tracker.handleEvent({
+      type: 'tool_use',
+      source: 'codex',
+      data: {
+        toolUseId: 'ghost-fail',
+        toolName: 'mcp:cindy:ghost_call',
+        input: {
+          ghost_id: 'cindy-github',
+          tool: 'pr_card',
+          args: { repo: 'makecindy/cindy', pr: '202', published: true },
+        },
+      },
+    });
+    tracker.handleEvent({
+      type: 'tool_result_full',
+      source: 'codex',
+      data: {
+        toolUseId: 'ghost-fail',
+        fullText: '{"ok":false,"errorCode":"INTERNAL"}',
+        isError: true,
+      },
+    });
+    tracker.handleEvent({
+      type: 'tool_result',
+      source: 'codex',
+      data: {
+        toolUseIds: ['ghost-fail'],
+        summary: 'completed',
+      },
+    });
+    // Failed gh pr create followed by a summary with a PR URL must also stay failed
+    tracker.handleEvent({
+      type: 'tool_use',
+      source: 'codex',
+      data: { toolUseId: 'ps-fail', toolName: 'PowerShell', input: { command: 'gh pr create --fill' } },
+    });
+    tracker.handleEvent({
+      type: 'tool_result_full',
+      source: 'codex',
+      data: { toolUseId: 'ps-fail', fullText: 'already exists', isError: true },
+    });
+    tracker.handleEvent({
+      type: 'tool_result',
+      source: 'codex',
+      data: { toolUseIds: ['ps-fail'], summary: 'https://github.com/makecindy/cindy/pull/203' },
+    });
+
+    expect(tracker.finishTurn(true).map((r) => r.prNumber)).toEqual([202]);
   });
 });
 

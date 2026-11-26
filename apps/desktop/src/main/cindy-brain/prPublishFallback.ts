@@ -22,42 +22,206 @@ import type { MinimalAgentEvent } from './subscriptionGateway.js';
 export const CINDY_GITHUB_GHOST_ID = 'cindy-github';
 export const CINDY_GITHUB_PR_CARD_TOOL = 'pr_card';
 
-const SHELL_TOOL_NAMES = new Set(['bash', 'exec', 'exec_command', 'shell', 'run_command', 'terminal']);
-const SHELL_WRAPPER_RE = /^\s*(?:\/(?:usr\/)?bin\/)?(?:zsh|bash|sh)\s+(?:-[a-zA-Z]*c[a-zA-Z]*)\s+(['"])([\s\S]*)\1\s*$/;
-const SEGMENT_SPLIT_RE = /(?:&&|\|\||[;\n|])+/;
-const GH_PR_CREATE_RE = /^\s*(?:(?:\(|\$\(\s*)*)(?:[A-Za-z_][A-Za-z0-9_]*=(?:"[^"]*"|'[^']*'|[^\s"'`]+)\s+)*(?:env\s+)?(?:(?:\/[^\s"']+\/)?gh)\s+pr\s+create(?:\s|$)/;
+const SHELL_TOOL_NAMES = new Set([
+  'bash',
+  'powershell',
+  'pwsh',
+  'cmd',
+  'exec',
+  'exec_command',
+  'shell',
+  'run_command',
+  'terminal',
+]);
+const POSIX_SHELL_WRAPPER_RE =
+  /^\s*(?:\/(?:usr\/)?bin\/)?(?:zsh|bash|sh)\s+(?:-[a-zA-Z]*c[a-zA-Z]*)\s+(['"])([\s\S]*)\1\s*$/;
+const POWERSHELL_WRAPPER_RE =
+  /^\s*(?:powershell(?:\.exe)?|pwsh(?:\.exe)?)\s+(?:-[a-zA-Z]+\s+)*(?:-c|-command)\s+(['"])([\s\S]*)\1\s*$/i;
+const GH_PR_CREATE_RE =
+  /^\s*(?:(?:\(|\$\(\s*)*)(?:[A-Za-z_][A-Za-z0-9_]*=(?:"[^"]*"|'[^']*'|[^\s"'`]+)\s+)*(?:env\s+)?(?:(?:(?:\/|[A-Za-z]:\\)[^\s"']+[\\/])?gh(?:\.exe)?)\s+pr\s+create(?:\s|$)/;
 const GH_NON_PUBLISH_FLAG_RE = /(?:^|\s)(?:--help|-h|--dry-run)(?:\s|$)/;
+const HEREDOC_START_RE = /^<<(-?)\s*(?:(['"])([^'"\n]+)\2|\\([A-Za-z0-9_.-]+)|([A-Za-z0-9_.-]+))/;
 
 function prKey(owner: string, repo: string, prNumber: number): string {
   return `${owner.toLowerCase()}/${repo.toLowerCase()}#${prNumber}`;
 }
 
 function unwrapShellCommand(raw: string): string {
-  const m = SHELL_WRAPPER_RE.exec(raw);
-  if (!m) return raw;
-  const quote = m[1];
-  const inner = m[2];
-  return quote === '"' ? inner.replace(/\\(["\\$`])/g, '$1') : inner;
+  const posix = POSIX_SHELL_WRAPPER_RE.exec(raw);
+  if (posix) {
+    const [, quote, inner] = posix;
+    return quote === '"' ? inner.replace(/\\(["\\$`])/g, '$1') : inner;
+  }
+  const ps = POWERSHELL_WRAPPER_RE.exec(raw);
+  if (ps) {
+    const [, quote, inner] = ps;
+    return quote === '"' ? inner.replace(/\\(["\\$`])/g, '$1') : inner;
+  }
+  return raw;
+}
+
+interface PendingHeredoc {
+  delimiter: string;
+  stripTabs: boolean;
 }
 
 /**
- * Determine whether a shell command invokes `gh pr create` (excluding `--help` / `--dry-run`
- * and literal strings inside `echo` / `grep` / `rg`).
+ * Split a shell script into top-level executable command segments while ignoring
+ * separators and text inside quotes, comments, and heredoc bodies.
+ */
+function extractExecutableSegments(script: string): string[] {
+  const segments: string[] = [];
+  const pendingHeredocs: PendingHeredoc[] = [];
+  let activeHeredoc: PendingHeredoc | null = null;
+  let current = '';
+  let quote: "'" | '"' | null = null;
+  let inComment = false;
+  let i = 0;
+
+  const flush = () => {
+    const trimmed = current.trim();
+    if (trimmed) segments.push(trimmed);
+    current = '';
+  };
+
+  while (i < script.length) {
+    if (activeHeredoc) {
+      const nl = script.indexOf('\n', i);
+      const lineEnd = nl === -1 ? script.length : nl;
+      const rawLine = script.slice(i, lineEnd).replace(/\r$/, '');
+      const candidate = activeHeredoc.stripTabs ? rawLine.replace(/^\t+/, '') : rawLine;
+      i = nl === -1 ? script.length : nl + 1;
+      if (candidate === activeHeredoc.delimiter) {
+        activeHeredoc = pendingHeredocs.shift() ?? null;
+      }
+      continue;
+    }
+
+    const ch = script[i];
+
+    if (inComment) {
+      if (ch === '\n') {
+        inComment = false;
+        flush();
+        if (pendingHeredocs.length > 0) {
+          activeHeredoc = pendingHeredocs.shift() ?? null;
+        }
+      }
+      i += 1;
+      continue;
+    }
+
+    if (quote === "'") {
+      current += ch;
+      if (ch === "'") quote = null;
+      i += 1;
+      continue;
+    }
+
+    if (quote === '"') {
+      if (ch === '\\' && i + 1 < script.length) {
+        current += ch + script[i + 1];
+        i += 2;
+        continue;
+      }
+      current += ch;
+      if (ch === '"') quote = null;
+      i += 1;
+      continue;
+    }
+
+    // Outside quotes
+    if (ch === '\\' && i + 1 < script.length) {
+      if (script[i + 1] === '\n') {
+        i += 2;
+        continue;
+      }
+      current += ch + script[i + 1];
+      i += 2;
+      continue;
+    }
+
+    if (ch === "'" || ch === '"') {
+      quote = ch;
+      current += ch;
+      i += 1;
+      continue;
+    }
+
+    if (ch === '#' && (current.length === 0 || /\s$/.test(current))) {
+      inComment = true;
+      i += 1;
+      continue;
+    }
+
+    // Detect heredoc operator `<<EOF` / `<<'EOF'` / `<<-"EOF"` (not `<<<` here-string).
+    if (ch === '<' && script[i + 1] === '<' && script[i + 2] !== '<') {
+      const m = HEREDOC_START_RE.exec(script.slice(i));
+      if (m) {
+        const delimiter = m[3] ?? m[4] ?? m[5] ?? '';
+        if (delimiter) {
+          pendingHeredocs.push({ delimiter, stripTabs: m[1] === '-' });
+        }
+        current += m[0];
+        i += m[0].length;
+        continue;
+      }
+    }
+
+    if (ch === '\n' || ch === '\r') {
+      flush();
+      if (ch === '\r' && script[i + 1] === '\n') i += 2;
+      else i += 1;
+      if (pendingHeredocs.length > 0) {
+        activeHeredoc = pendingHeredocs.shift() ?? null;
+      }
+      continue;
+    }
+
+    if (ch === ';') {
+      flush();
+      i += 1;
+      continue;
+    }
+
+    if ((ch === '&' && script[i + 1] === '&') || (ch === '|' && script[i + 1] === '|')) {
+      flush();
+      i += 2;
+      continue;
+    }
+
+    if (ch === '|') {
+      flush();
+      i += 1;
+      continue;
+    }
+
+    current += ch;
+    i += 1;
+  }
+
+  // Unclosed quote or unterminated heredoc: treat conservatively by not flushing partial quoted tail.
+  if (quote === null && !activeHeredoc) {
+    flush();
+  }
+  return segments;
+}
+
+/**
+ * Determine whether a shell command executes `gh pr create` (excluding `--help`,
+ * `--dry-run`, and text inside quotes, comments, or heredoc bodies).
  */
 export function isGhPrCreateCommand(command: string): boolean {
   if (!command || !command.includes('gh')) return false;
-  const candidates = [command];
-  const unwrapped = unwrapShellCommand(command);
-  if (unwrapped !== command) candidates.push(unwrapped);
-
-  for (const text of candidates) {
-    for (const segment of text.split(SEGMENT_SPLIT_RE)) {
-      if (!segment.includes('gh')) continue;
-      // Strip simple variable assignment like `PR_URL=$(gh pr create ...)`
-      const normalized = segment.replace(/^\s*(?:export\s+)?[A-Za-z_][A-Za-z0-9_]*=\$\(\s*/, '');
-      if (GH_PR_CREATE_RE.test(normalized) && !GH_NON_PUBLISH_FLAG_RE.test(normalized)) {
-        return true;
-      }
+  const script = unwrapShellCommand(command);
+  for (const segment of extractExecutableSegments(script)) {
+    if (!segment.includes('gh')) continue;
+    // Strip simple shell/PowerShell assignment like `PR_URL=$(gh pr create ...)` or `$url = gh pr create ...`
+    const normalized = segment
+      .replace(/^\s*(?:export\s+)?[A-Za-z_][A-Za-z0-9_]*=\$\(\s*/, '')
+      .replace(/^\s*\$[A-Za-z_][A-Za-z0-9_]*\s*=\s*/, '');
+    if (GH_PR_CREATE_RE.test(normalized) && !GH_NON_PUBLISH_FLAG_RE.test(normalized)) {
+      return true;
     }
   }
   return false;
@@ -79,14 +243,24 @@ function isShellToolName(toolName: string): boolean {
   return SHELL_TOOL_NAMES.has(tail);
 }
 
-interface PendingPrCardCall {
+interface TrackedCreateCall {
+  pr: PrRef | null;
+  failed: boolean;
+  settledFull: boolean;
+}
+
+interface TrackedPrCardCall {
   repo: string | null;
   pr: string | null;
   published: boolean;
   afterCreateCount: number;
+  handledKeys: Set<string>;
+  succeeded: boolean;
+  failed: boolean;
+  settledFull: boolean;
 }
 
-function parsePrCardCall(toolName: string, input: unknown): PendingPrCardCall | null {
+function parsePrCardCall(toolName: string, input: unknown): TrackedPrCardCall | null {
   const lower = toolName.trim().toLowerCase();
   if (!lower.endsWith('ghost_call')) return null;
   if (!input || typeof input !== 'object') return null;
@@ -98,6 +272,10 @@ function parsePrCardCall(toolName: string, input: unknown): PendingPrCardCall | 
     pr: typeof args.pr === 'string' || typeof args.pr === 'number' ? String(args.pr).trim() : null,
     published: args.published === true,
     afterCreateCount: 0,
+    handledKeys: new Set<string>(),
+    succeeded: false,
+    failed: false,
+    settledFull: false,
   };
 }
 
@@ -152,20 +330,28 @@ function parseRepoPrKey(repo: string | null, pr: string | null): string | null {
 /**
  * Per-session, per-turn tracker that records GitHub PRs created via `gh pr create`
  * and suppresses fallback whenever `cindy-github` `pr_card` already handled them.
+ *
+ * Authoritative `tool_result_full` outcomes always take precedence over summary
+ * `tool_result` events regardless of arrival order (e.g. Codex emitting
+ * `tool_result_full(isError: true)` followed by a plain `tool_result` summary).
  */
 export class TurnPrPublishTracker {
-  private readonly pendingCreateIds = new Set<string>();
-  private readonly pendingPrCardCalls = new Map<string, PendingPrCardCall>();
-  private readonly createdPrs = new Map<string, PrRef>();
-  private readonly handledPrKeys = new Set<string>();
-  private prCardSucceededAfterCreate = false;
+  private readonly createCalls = new Map<string, TrackedCreateCall>();
+  private readonly prCardCalls = new Map<string, TrackedPrCardCall>();
 
   beginTurn(): void {
-    this.pendingCreateIds.clear();
-    this.pendingPrCardCalls.clear();
-    this.createdPrs.clear();
-    this.handledPrKeys.clear();
-    this.prCardSucceededAfterCreate = false;
+    this.createCalls.clear();
+    this.prCardCalls.clear();
+  }
+
+  private countCreatedPrs(): number {
+    const keys = new Set<string>();
+    for (const call of this.createCalls.values()) {
+      if (!call.failed && call.pr) {
+        keys.add(prKey(call.pr.owner, call.pr.repo, call.pr.prNumber));
+      }
+    }
+    return keys.size;
   }
 
   handleEvent(event: MinimalAgentEvent): void {
@@ -179,48 +365,61 @@ export class TurnPrPublishTracker {
       if (isShellToolName(toolName)) {
         const command = extractShellCommand(data.input);
         if (command && isGhPrCreateCommand(command)) {
-          this.pendingCreateIds.add(toolUseId);
+          this.createCalls.set(toolUseId, { pr: null, failed: false, settledFull: false });
         }
         return;
       }
 
       const prCardCall = parsePrCardCall(toolName, data.input);
       if (prCardCall) {
-        prCardCall.afterCreateCount = this.createdPrs.size;
-        this.pendingPrCardCalls.set(toolUseId, prCardCall);
+        prCardCall.afterCreateCount = this.countCreatedPrs();
+        this.prCardCalls.set(toolUseId, prCardCall);
       }
       return;
     }
 
     if (event.type !== 'tool_result' && event.type !== 'tool_result_full') return;
+    const isFull = event.type === 'tool_result_full';
     const info = extractToolResultInfo(event);
     if (!info) return;
 
     for (const id of info.ids) {
-      if (this.pendingCreateIds.has(id)) {
-        if (!info.isError) {
+      const createCall = this.createCalls.get(id);
+      if (createCall) {
+        // Never let a follow-up summary overwrite an authoritative full result.
+        if (!isFull && createCall.settledFull) continue;
+        if (isFull) createCall.settledFull = true;
+        if (info.isError) {
+          createCall.failed = true;
+          createCall.pr = null;
+        } else if (!createCall.failed) {
           const githubRefs = extractPrRefs(info.text).filter(
             (ref) => !ref.provider || ref.provider === 'github',
           );
           if (githubRefs.length === 1) {
-            const ref = githubRefs[0];
-            this.createdPrs.set(prKey(ref.owner, ref.repo, ref.prNumber), ref);
+            createCall.pr = githubRefs[0];
           }
         }
       }
 
-      const prCardCall = this.pendingPrCardCalls.get(id);
+      const prCardCall = this.prCardCalls.get(id);
       if (prCardCall) {
-        if (!info.isError && !isGhostToolErrorPayload(info.text)) {
+        // Never let a follow-up summary overwrite an authoritative full result.
+        if (!isFull && prCardCall.settledFull) continue;
+        if (isFull) prCardCall.settledFull = true;
+        const failed = info.isError || isGhostToolErrorPayload(info.text);
+        if (failed) {
+          prCardCall.failed = true;
+          prCardCall.succeeded = false;
+          prCardCall.handledKeys.clear();
+        } else if (!prCardCall.failed) {
+          prCardCall.succeeded = true;
           const argKey = parseRepoPrKey(prCardCall.repo, prCardCall.pr);
-          if (argKey) this.handledPrKeys.add(argKey);
+          if (argKey) prCardCall.handledKeys.add(argKey);
           for (const ref of extractPrRefs(info.text)) {
             if (!ref.provider || ref.provider === 'github') {
-              this.handledPrKeys.add(prKey(ref.owner, ref.repo, ref.prNumber));
+              prCardCall.handledKeys.add(prKey(ref.owner, ref.repo, ref.prNumber));
             }
-          }
-          if (prCardCall.afterCreateCount > 0 || prCardCall.published) {
-            this.prCardSucceededAfterCreate = true;
           }
         }
       }
@@ -229,12 +428,33 @@ export class TurnPrPublishTracker {
 
   /** Complete the current turn, reset state, and return PRs that still need a `pr_card(published: true)` handoff. */
   finishTurn(completed: boolean): PrRef[] {
-    const unhandled =
-      completed && !this.prCardSucceededAfterCreate
-        ? [...this.createdPrs.values()].filter(
-            (pr) => !this.handledPrKeys.has(prKey(pr.owner, pr.repo, pr.prNumber)),
-          )
-        : [];
+    if (!completed) {
+      this.beginTurn();
+      return [];
+    }
+
+    const createdPrs = new Map<string, PrRef>();
+    for (const call of this.createCalls.values()) {
+      if (!call.failed && call.pr) {
+        createdPrs.set(prKey(call.pr.owner, call.pr.repo, call.pr.prNumber), call.pr);
+      }
+    }
+
+    const handledKeys = new Set<string>();
+    let prCardSucceededAfterCreate = false;
+    for (const call of this.prCardCalls.values()) {
+      if (!call.succeeded || call.failed) continue;
+      for (const key of call.handledKeys) handledKeys.add(key);
+      if (call.afterCreateCount > 0 || call.published) {
+        prCardSucceededAfterCreate = true;
+      }
+    }
+
+    const unhandled = prCardSucceededAfterCreate
+      ? []
+      : [...createdPrs.values()].filter(
+          (pr) => !handledKeys.has(prKey(pr.owner, pr.repo, pr.prNumber)),
+        );
     this.beginTurn();
     return unhandled;
   }
