@@ -1004,14 +1004,15 @@ export function createChatServerClient(request: ChatRequest, personalList = crea
             ...(previous?.failures ? { failures: previous.failures } : {}),
             ...(previous?.executions ? { executions: previous.executions } : {}),
             metadataIncomplete: true,
+            ...(previous?.metadataRetryAt ? { metadataRetryAt: previous.metadataRetryAt } : {}),
           });
         }
       }
       let executions: ChatExecution[] | undefined = previous?.executions;
       let executionFailures: ChatExecutionFailure[] | undefined = previous?.failures;
       let plans: ChatPlan[] | undefined = previous?.plans;
-      let metadataIncomplete = false;
-      let metadataRetryAt: number | undefined;
+      let metadataIncomplete = shouldReadMetadata ? false : !!previous?.metadataIncomplete;
+      let metadataRetryAt: number | undefined = shouldReadMetadata ? undefined : previous?.metadataRetryAt;
       const noteMetadataFailure = (reason: unknown) => {
         if (!chatDegradableMetadataError(reason)) throw reason;
         metadataIncomplete = true;
@@ -1021,14 +1022,18 @@ export function createChatServerClient(request: ChatRequest, personalList = crea
       if (shouldReadMetadata) {
         // Use the same execution snapshot for running status and stop controls. Failure notices
         // and plan cards only need the page's message IDs; none of the three waits for another.
-        const [execRes, failRes, planRes] = await Promise.allSettled([
-          executionsRead ?? request<ChatExecution[]>(`/conversations/${room}/executions`),
-          failures(room, messages),
-          snapshot.room.kind === 'group' && !threadRootId ? readPlans(room, messages) : Promise.resolve(undefined),
+        // Non-degradable failures (e.g. 403 NOT_MEMBER) reject Promise.all immediately without
+        // waiting for slower sibling metadata reads.
+        const degrade = <T>(promise: Promise<T>, fallback: T): Promise<T> =>
+          promise.catch(reason => { noteMetadataFailure(reason); return fallback; });
+        const [nextExecutions, nextFailures, nextPlans] = await Promise.all([
+          degrade(executionsRead ?? request<ChatExecution[]>(`/conversations/${room}/executions`), executions),
+          degrade(failures(room, messages), executionFailures),
+          snapshot.room.kind === 'group' && !threadRootId ? degrade(readPlans(room, messages), plans) : Promise.resolve(plans),
         ]);
-        if (execRes.status === 'fulfilled') executions = execRes.value; else noteMetadataFailure(execRes.reason);
-        if (failRes.status === 'fulfilled') executionFailures = failRes.value; else noteMetadataFailure(failRes.reason);
-        if (planRes.status === 'fulfilled') plans = planRes.value; else noteMetadataFailure(planRes.reason);
+        executions = nextExecutions;
+        executionFailures = nextFailures;
+        plans = nextPlans;
         const sourceMessages = new Map<string, ChatMessage | undefined>([...snapshot.messages, ...messages].map(message => [message.id, message]));
         const live = (Array.isArray(executions) ? executions : [])
           .filter(execution => !execution.plan_id && ['queued', 'running', 'needs_input', 'stopping'].includes(execution.status));

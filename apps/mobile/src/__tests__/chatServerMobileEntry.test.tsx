@@ -1625,4 +1625,138 @@ describe('incremental mobile group sync and 429 resilience', () => {
     expect(snapAttempts).toBeLessThanOrEqual(4);
     expect(roster.items).toHaveLength(10);
   });
+
+  it('preserves WS-pushed messages committed while a slower full load is still awaiting secondary metadata', async () => {
+    const { opened, deliver } = fakeSockets();
+    const msg1 = { id: self, seq: '1', authorId: self, author: { kind: 'human', name: 'Me' }, content: [{ type: 'text', text: 'First' }], createdAt: '2026-11-26T01:00:00Z', deleted: false, threadRootId: null };
+    const msg2Id = '00000000-0000-4000-8000-000000000302';
+    const msg2 = { id: msg2Id, seq: '2', authorId: self, author: { kind: 'human', name: 'Me' }, content: [{ type: 'text', text: 'Arrived mid-load' }], createdAt: '2026-11-26T01:01:00Z', deleted: false, threadRootId: null };
+    let holdExecutions = false;
+    let releaseExecutions: (() => void) | null = null;
+    const original = h.auth.apiFetch.getMockImplementation()!;
+    h.auth.apiFetch.mockImplementation(async (path, options) => {
+      if (path === '/v1/actors') return [];
+      if (path.endsWith('/snapshot')) return { room, members: [{ id: self, kind: 'human', state: 'joined', name: 'Me', ownerActorId: self, ownerName: '', role: 'member', avatar: null }], messages: [msg1], cursor: '1' };
+      if (path.includes('/messages?')) return [msg1];
+      if (path.startsWith('/v1/changes?')) return { head: '1', cursor: '1', changes: [], hasMore: false };
+      if (path.endsWith('/executions') && holdExecutions) {
+        await new Promise<void>(resolve => { releaseExecutions = resolve; });
+        return [];
+      }
+      return original(path, options);
+    });
+    showChat = true; await render();
+    const ws = opened.at(-1)!;
+    await deliver(ws, { type: 'ready', actorId: self });
+    expect(chat.state).toMatchObject({ kind: 'ready', group: { messages: [{ content: 'First' }] } });
+
+    // Start a full reload whose /executions read stays in flight while a WS message arrives and is ACKed.
+    holdExecutions = true;
+    await act(async () => { chat.reload(); for (let tick = 0; tick < 8; tick++) await Promise.resolve(); });
+    expect(releaseExecutions).not.toBeNull();
+    await deliver(ws, {
+      type: 'changes',
+      scope: `conversation:${id}`,
+      cursor: '2',
+      changes: [{ type: 'message.created', entityId: msg2Id, data: { message: msg2 } }],
+    });
+    expect(chat.state).toMatchObject({ kind: 'ready', group: { messages: [{ content: 'First' }, { content: 'Arrived mid-load' }] } });
+
+    // Completing the older /executions read must NOT overwrite msg2 with the earlier [msg1] snapshot.
+    await act(async () => { releaseExecutions?.(); for (let tick = 0; tick < 12; tick++) await Promise.resolve(); });
+    expect(chat.state).toMatchObject({ kind: 'ready', group: { messages: [{ content: 'First' }, { content: 'Arrived mid-load' }] } });
+  });
+
+  it('respects 429 cooldown for incoming messages even when degraded state still holds live room work', async () => {
+    vi.useFakeTimers();
+    const { opened, deliver } = fakeSockets();
+    const msg1 = { id: self, seq: '1', authorId: self, author: { kind: 'human', name: 'Me' }, content: [{ type: 'text', text: 'Working' }], createdAt: '2026-11-26T01:00:00Z', deleted: false, threadRootId: null };
+    const msg2Id = '00000000-0000-4000-8000-000000000303';
+    const msg2 = { id: msg2Id, seq: '2', authorId: self, author: { kind: 'human', name: 'Me' }, content: [{ type: 'text', text: 'Second while cooling down' }], createdAt: '2026-11-26T01:01:00Z', deleted: false, threadRootId: null };
+    const runningExec = [{ id: 'exec-1', source_message_id: self, bot_id: 'bot-1', status: 'running', error_message: null }];
+    let execPhase: 'running' | 'rate-limit' | 'idle' = 'running';
+    const original = h.auth.apiFetch.getMockImplementation()!;
+    h.auth.apiFetch.mockImplementation(async (path, options) => {
+      if (path === '/v1/actors') return [];
+      if (path.endsWith('/snapshot')) return { room, members: [{ id: self, kind: 'human', state: 'joined', name: 'Me', ownerActorId: self, ownerName: '', role: 'member', avatar: null }], messages: [msg1], cursor: '1' };
+      if (path.includes('/messages?')) return [msg1];
+      if (path.startsWith('/v1/changes?')) return { head: '1', cursor: '1', changes: [], hasMore: false };
+      if (path.endsWith('/executions')) {
+        if (execPhase === 'running') return runningExec;
+        if (execPhase === 'rate-limit') throw Object.assign(new Error('RATE_LIMITED'), { status: 429, code: 'RATE_LIMITED', retryAt: Date.now() + 6_000 });
+        return [];
+      }
+      return original(path, options);
+    });
+    showChat = true; await render();
+    const ws = opened.at(-1)!;
+    await deliver(ws, { type: 'ready', actorId: self });
+
+    // Trigger 429 on /executions so previous runningExec stays cached in degraded state.
+    execPhase = 'rate-limit';
+    await act(async () => { chat.reload(); for (let tick = 0; tick < 12; tick++) await Promise.resolve(); });
+
+    // Incoming WS message during cooldown renders immediately and does NOT bypass cooldown via hasLiveRoomWork().
+    h.auth.apiFetch.mockClear();
+    await deliver(ws, {
+      type: 'changes',
+      scope: `conversation:${id}`,
+      cursor: '2',
+      changes: [{ type: 'message.created', entityId: msg2Id, data: { message: msg2 } }],
+    });
+    expect(chat.state).toMatchObject({ kind: 'ready', group: { messages: [{ content: 'Working' }, { content: 'Second while cooling down' }] } });
+    expect(h.auth.apiFetch).not.toHaveBeenCalled();
+
+    // Once cooldown expires, scheduled recovery reads /executions and settles cleanly.
+    execPhase = 'idle';
+    await act(async () => { await vi.advanceTimersByTimeAsync(6_500); });
+    expect(h.auth.apiFetch.mock.calls.some(([path]) => String(path).endsWith('/executions'))).toBe(true);
+  });
+
+  it('keeps metadataIncomplete across skipped push-message reads and revokes immediately on 403 without waiting for slow sibling metadata', async () => {
+    vi.useFakeTimers();
+    const { opened, deliver } = fakeSockets();
+    const msg1 = { id: self, seq: '1', authorId: self, author: { kind: 'human', name: 'Me' }, content: [{ type: 'text', text: 'Root' }], createdAt: '2026-11-26T01:00:00Z', deleted: false, threadRootId: null };
+    const replyId = '00000000-0000-4000-8000-000000000304';
+    const reply = { id: replyId, seq: '2', authorId: self, author: { kind: 'human', name: 'Me' }, content: [{ type: 'text', text: 'Thread reply' }], createdAt: '2026-11-26T01:01:00Z', deleted: false, threadRootId: self };
+    let execMode: '429' | 'ok' | '403' = '429';
+    let hangPlans = false;
+    const original = h.auth.apiFetch.getMockImplementation()!;
+    h.auth.apiFetch.mockImplementation(async (path, options) => {
+      if (path === '/v1/actors') return [];
+      if (path.endsWith('/snapshot')) return { room, members: [{ id: self, kind: 'human', state: 'joined', name: 'Me', ownerActorId: self, ownerName: '', role: 'member', avatar: null }], messages: [msg1], cursor: '1' };
+      if (path.includes('/messages?')) return [msg1];
+      if (path.startsWith('/v1/changes?')) return { head: '1', cursor: '1', changes: [], hasMore: false };
+      if (path.endsWith('/executions')) {
+        if (execMode === '429') throw Object.assign(new Error('RATE_LIMITED'), { status: 429, code: 'RATE_LIMITED', retryAt: Date.now() + 4_000 });
+        if (execMode === '403') throw Object.assign(new Error('NOT_MEMBER'), { status: 403, code: 'NOT_MEMBER' });
+        return [];
+      }
+      if (path.includes('/plans') && hangPlans) {
+        return await new Promise<never>(() => {});
+      }
+      return original(path, options);
+    });
+    showChat = true; await render();
+    const ws = opened.at(-1)!;
+    await deliver(ws, { type: 'ready', actorId: self });
+
+    // A thread reply triggers aggregate repair during cooldown; recovery must NOT be cancelled.
+    await deliver(ws, {
+      type: 'changes',
+      scope: `conversation:${id}`,
+      cursor: '2',
+      changes: [{ type: 'message.created', entityId: replyId, data: { message: reply } }],
+    });
+    execMode = 'ok';
+    h.auth.apiFetch.mockClear();
+    await act(async () => { await vi.advanceTimersByTimeAsync(4_500); });
+    expect(h.auth.apiFetch.mock.calls.some(([path]) => String(path).endsWith('/executions'))).toBe(true);
+
+    // 403 NOT_MEMBER on /executions must clear the screen immediately even if /plans never resolves.
+    execMode = '403';
+    hangPlans = true;
+    await act(async () => { chat.reload(); for (let tick = 0; tick < 12; tick++) await Promise.resolve(); });
+    expect(chat.state.kind).toBe('missing');
+  });
 });

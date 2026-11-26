@@ -476,7 +476,7 @@ export function useChatServerGroup(groupId: string, enabled: boolean, threadRoot
   const accessGeneration = useRef(0);
   const freshRead = useRef(false);
   const fullRead = useRef({ identity, at: 0 });
-  const recoveryControl = useRef<{ identity: string; schedule: (retryAt?: number) => void; clear: () => void; reset: () => void } | null>(null);
+  const recoveryControl = useRef<{ identity: string; schedule: (retryAt?: number) => void; ensureScheduled: (retryAt?: number) => void; clear: () => void; reset: () => void } | null>(null);
   // Whether the actor list on screen was actually read, not the empty stand-in for a failed read.
   const actorsRead = useRef({ identity, ok: false });
   // Phone-local timing of one opening: when something was first shown, and when it was verified.
@@ -555,15 +555,37 @@ export function useChatServerGroup(groupId: string, enabled: boolean, threadRoot
       // A list that failed to load is asked for again; only a successful read is reused.
       const knownActors = (verified || skipMetadata) && actorsRead.current.identity === identity && actorsRead.current.ok
         ? (verified?.actors ?? previousEntry?.actors ?? null) : null;
+      const preserveNewerPush = (candidate: ChatPage): ChatPage => {
+        const liveSnap = api.client.peekSnapshot(groupId);
+        const current = page.current?.identity === identity ? page.current.page : null;
+        const sameRevision = (rev: string | undefined) => !candidate.historyRevision || !rev || rev === candidate.historyRevision;
+        const currentNewer = current && sameRevision(current.historyRevision)
+          && BigInt(current.snapshot.cursor) > BigInt(candidate.snapshot.cursor) ? current : null;
+        const liveNewer = liveSnap && sameRevision(liveSnap.cacheGeneration)
+          && BigInt(liveSnap.cursor) > BigInt(candidate.snapshot.cursor) ? liveSnap : null;
+        if (!currentNewer && !liveNewer) return candidate;
+        const newestSnapshot = liveNewer && (!currentNewer || BigInt(liveNewer.cursor) >= BigInt(currentNewer.snapshot.cursor))
+          ? liveNewer : currentNewer!.snapshot;
+        return {
+          ...candidate,
+          snapshot: newestSnapshot,
+          messages: mergeTimelineMessages(
+            candidate.messages,
+            [...(currentNewer?.messages ?? []), ...(liveNewer?.messages ?? [])],
+            threadRootId,
+          ),
+        };
+      };
       const onMessages = (partial: ChatPage) => {
         if (run.isStale() || !valid() || generation !== accessGeneration.current) return;
         const selfId = previousEntry?.self ?? api.knownSelfId();
         if (!selfId) return;
         const actorsList = previousEntry?.actors ?? [];
-        page.current = { identity, page: partial, self: selfId, actors: actorsList };
-        setState({ identity, value: { kind: 'ready', group: view(partial, selfId, actorsList) }, online: true, loadingOlder: false });
+        const mergedPartial = preserveNewerPush(partial);
+        page.current = { identity, page: mergedPartial, self: selfId, actors: actorsList };
+        setState({ identity, value: { kind: 'ready', group: view(mergedPartial, selfId, actorsList) }, online: true, loadingOlder: false });
       };
-      const [next, self, actors] = await Promise.all([
+      const [loadedNext, self, actors] = await Promise.all([
         api.client.load(groupId, oldest, threadRootId, 0, verified?.page, { previous: previous ?? undefined, skipMetadata, onMessages }),
         api.client.me(),
         knownActors ?? api.client.actors().then(value => { actorsRead.current = { identity, ok: true }; return value; },
@@ -572,6 +594,7 @@ export function useChatServerGroup(groupId: string, enabled: boolean, threadRoot
       if (run.isStale() || !valid() || generation !== accessGeneration.current) return;
       // Replace the reauthorized window; no stale history survives changed access.
       if (api.client.personalList.hidden(groupId)) { loseAccess(); return; }
+      const next = preserveNewerPush(loadedNext);
       const complete = !next.metadataIncomplete;
       freshRead.current = complete;
       const reused = !!verified && next.messages === verified.page.messages;
@@ -634,6 +657,9 @@ export function useChatServerGroup(groupId: string, enabled: boolean, threadRoot
             void request({ reason: 'changed' });
           }
         }, waitMs);
+      },
+      ensureScheduled: (retryAt?: number) => {
+        if (!backoffTimer) control.schedule(retryAt);
       },
     };
     recoveryControl.current = control;
@@ -746,11 +772,22 @@ export function useChatServerGroup(groupId: string, enabled: boolean, threadRoot
                 if (hasAggregate) void hydrate(page.current).catch(() => undefined);
               }
               const metadataCoolingDown = api.rateLimitRemainingMs() > 0 || (page.current?.page.metadataRetryAt ?? 0) > Date.now();
-              const needsMetadata = needsExecutions || needsPlans || hasPlanCard
-                || hasLiveRoomWork(page.current?.page)
-                || (!!page.current?.page.metadataIncomplete && !metadataCoolingDown);
-              if (needsMetadata || !projectedDirectly) {
+              const wantsMetadata = needsExecutions || needsPlans || hasPlanCard
+                || hasLiveRoomWork(page.current?.page) || !!page.current?.page.metadataIncomplete;
+              if (!projectedDirectly) {
                 void request({ reason: 'changed' });
+              } else if (wantsMetadata) {
+                if (metadataCoolingDown) {
+                  if (page.current?.identity === identity && !page.current.page.metadataIncomplete) {
+                    page.current = { ...page.current, page: { ...page.current.page, metadataIncomplete: true } };
+                  }
+                  freshRead.current = false;
+                  if (recoveryControl.current?.identity === identity) {
+                    recoveryControl.current.ensureScheduled(page.current?.page.metadataRetryAt);
+                  }
+                } else {
+                  void request({ reason: 'changed' });
+                }
               } else if (hasAggregate) {
                 void request({ reason: 'push-message' });
               }
