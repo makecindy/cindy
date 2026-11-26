@@ -3379,10 +3379,17 @@ async function fingerprintPiPackageTree(
       const chunks: Buffer[] = [];
       let position = 0;
       for (;;) {
-        const { bytesRead } = await handle.read(scratch, 0, scratch.length, position);
+        // Bytes were reserved for `before.size`; never read past it. A writer
+        // appending to the file mid-read must not inflate the buffered chunks
+        // beyond the reserved byte budget.
+        const remaining = before.size - position;
+        if (remaining <= 0) break;
+        const { bytesRead } = await handle.read(
+          scratch, 0, Math.min(scratch.length, remaining), position,
+        );
         if (bytesRead === 0) break;
-        // Bytes were reserved before the read started; only the duration and
-        // entry budgets still need a check while streaming this file.
+        // The byte budget is already reserved; only the duration and entry
+        // budgets still need a check while streaming this file.
         assertSnapshotBudget(budget);
         chunks.push(Buffer.from(scratch.subarray(0, bytesRead)));
         position += bytesRead;

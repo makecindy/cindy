@@ -6050,4 +6050,51 @@ describe('Pi package fingerprint ordering', () => {
       openSpy.mockRestore();
     }
   });
+
+  // 测试价值：直接测生产入口 fingerprintPiPackageTree；文件在读取期间被追加时，
+  // 必须在预留字节处停止并由 after stat 拒绝，不再缓冲新增内容。
+  // Bug 依据：Greptile 在 #13048 指出读取循环按 before.size 预留预算却读到 EOF。
+  // 覆盖缺口：上面的 byte / in-flight 用例只覆盖打开前的预算，不覆盖打开后文件增长。
+  // 最小失败输入：512 KiB 文件在第一次 read 后被追加 1 MiB；旧实现会读到 1.5 MiB。
+  // tier：unit（进程内 fs.open spy，无真实等待）。
+  it('stops at the reserved size when a file grows during fingerprinting', async () => {
+    const root = path.join(runtime.userData, 'fingerprint-growing-file');
+    await fs.mkdir(root, { recursive: true });
+    const originalSize = 512 * 1024;
+    const growingFile = path.join(root, 'growing.bin');
+    await fs.writeFile(growingFile, Buffer.alloc(originalSize, 5));
+    const store = await import('../pi-package-store.js');
+    const originalOpen = fs.open.bind(fs);
+    let bytesRead = 0;
+    let grown = false;
+    const openSpy = vi.spyOn(fs, 'open').mockImplementation((async (...args) => {
+      const handle = await originalOpen(...args);
+      if (!String(args[0]).includes('fingerprint-growing-file')) return handle;
+      const originalRead = handle.read.bind(handle);
+      return {
+        stat: (...statArgs: Parameters<typeof handle.stat>) => handle.stat(...statArgs),
+        read: async (...readArgs: Parameters<typeof handle.read>) => {
+          const result = await originalRead(...readArgs);
+          bytesRead += result.bytesRead;
+          if (!grown && result.bytesRead > 0) {
+            grown = true;
+            await fs.appendFile(growingFile, Buffer.alloc(1024 * 1024, 6));
+          }
+          return result;
+        },
+        close: (...closeArgs: Parameters<typeof handle.close>) => handle.close(...closeArgs),
+      } as Awaited<ReturnType<typeof fs.open>>;
+    }) as typeof fs.open);
+    try {
+      await expect(store.__testing.fingerprintPiPackageTree(root, {
+        maxEntries: 100,
+        maxBytes: 64 * 1024 * 1024,
+        maxDurationMs: 10_000,
+      })).rejects.toThrow('Pi extension package changed while fingerprinting');
+      expect(grown).toBe(true);
+      expect(bytesRead).toBe(originalSize);
+    } finally {
+      openSpy.mockRestore();
+    }
+  });
 });
