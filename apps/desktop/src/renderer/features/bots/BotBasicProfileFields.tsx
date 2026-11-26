@@ -1,4 +1,5 @@
 import { Camera } from 'lucide-react';
+import { useId } from 'react';
 import type { ReactNode } from 'react';
 
 import { Input, Textarea } from '@/components/ui/input';
@@ -42,6 +43,7 @@ export function BotBasicProfileFields({
   avatarPreview?: string;
 }) {
   const { t } = useBotTranslation();
+  const nameHintId = useId();
   const update = <K extends keyof BotBasicProfileValue>(
     key: K,
     nextValue: BotBasicProfileValue[K],
@@ -81,6 +83,7 @@ export function BotBasicProfileFields({
             readOnly={readOnly}
             autoFocus={autoFocusName}
             ariaLabel={t('bots.nameLabel')}
+            aria-describedby={nameHintId}
             value={value.name}
             onChange={(next) => update('name', next, 'text')}
             onBlur={onNameBlur}
@@ -89,7 +92,7 @@ export function BotBasicProfileFields({
             className="min-w-0"
             required
           />
-          <span className="text-12 text-[var(--text-tertiary)]">{t('bots.nameHistoryHint')}</span>
+          <span id={nameHintId} className="text-12 text-[var(--text-tertiary)]">{t('bots.nameHistoryHint')}</span>
         </label>
       </div>
 

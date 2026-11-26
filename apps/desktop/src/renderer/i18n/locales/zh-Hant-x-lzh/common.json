@@ -11198,7 +11198,7 @@
     }
   },
   "bots": {
-    "nameHistoryHint": "易名惟及後出之訊，舊訊仍存其時之稱。",
+    "nameHistoryHint": "易名惟及後出之訊。",
     "rosterLoadFailed": "未能讀取同伴名冊",
     "rosterReload": "重讀同伴名冊",
     "avatarStatus": {

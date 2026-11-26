@@ -11198,8 +11198,7 @@
     }
   },
   "bots": {
-    "nameHistoryHint": "改名只影响之后的新消息；历史消息仍显示发送时使用的名字。",
-    "nameHistoryHint": "改名只影响之后的新消息；历史消息仍显示发送时使用的名字。",
+    "nameHistoryHint": "改名只影响之后的新消息。",
     "rosterLoadFailed": "未能读取伙伴列表",
     "rosterReload": "重新读取伙伴",
     "avatarStatus": {
