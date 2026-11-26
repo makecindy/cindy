@@ -210,11 +210,11 @@ export function useTaskCreatorIndex(): ReadonlyMap<string, ReadonlySet<string>> 
   }, [scopes, profiles, remote, cloud, cindyIds]);
 }
 
-function taskCreatorSessionKey(id: string, deviceId?: string): string {
+export function taskCreatorSessionKey(id: string, deviceId?: string): string {
   return JSON.stringify([deviceId ?? null, id]);
 }
 
-function taskCreatorProjectKey(folder: string, deviceId?: string | null): string {
+export function taskCreatorProjectKey(folder: string, deviceId?: string | null): string {
   return JSON.stringify(['project', deviceId ?? null, folder]);
 }
 
@@ -232,6 +232,31 @@ export function matchesTaskCreators(
       ? index.get(taskCreatorProjectKey(folder, session.deviceLinkDeviceId))
       : index.get(taskCreatorSessionKey(session.id, session.deviceLinkDeviceId));
   if (selected === 'none') return !isTeammateTaskSession(session) && folder === null && !creators?.size;
+  return selected.some(key => creators?.has(key));
+}
+
+/**
+ * Sidebar「筛选 → 伙伴」只作用于伙伴相关的内容：不属于任何伙伴的任务始终显示，
+ * 伙伴的任务只在选中该伙伴时显示；「都不显示」隐藏全部伙伴任务。
+ */
+export function matchesSidebarTeammateFilter(
+  session: Session,
+  selected: 'all' | 'none' | readonly string[],
+  index: ReadonlyMap<string, ReadonlySet<string>>,
+): boolean {
+  return matchesTaskCreators(session, selected, index) || matchesTaskCreators(session, 'none', index);
+}
+
+/** 伙伴自己的项目文件夹只在「全部」或选中该伙伴时显示；普通项目不受伙伴筛选影响。 */
+export function sidebarTeammateProjectVisible(
+  project: { workingDir: string; deviceLinkDeviceId?: string | null },
+  selected: 'all' | 'none' | readonly string[],
+  index: ReadonlyMap<string, ReadonlySet<string>>,
+): boolean {
+  const folder = teammateFolderOfProjectPath(project.workingDir);
+  if (folder === null || selected === 'all') return true;
+  if (selected === 'none') return false;
+  const creators = index.get(taskCreatorProjectKey(folder, project.deviceLinkDeviceId));
   return selected.some(key => creators?.has(key));
 }
 
