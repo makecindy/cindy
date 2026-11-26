@@ -149,8 +149,12 @@ it('keeps the scroll thumb off the text', async () => {
   await click('open');
   const flat = (style: any) => Object.assign({}, ...[style].flat(3).filter(Boolean));
   const copy = () => h.props.get('sharedTask.confirmCopy');
-  expect(flat(copy().contentContainerStyle).paddingRight).toBeUndefined();
+  // Text that fits draws nothing extra: no gutter, no thumb, no fade (the card as before this round).
   await act(async () => copy().onLayout({ nativeEvent: { layout: { height: 200 } } }));
+  await act(async () => copy().onContentSizeChange(300, 150));
+  expect(flat(copy().contentContainerStyle).paddingRight).toBeUndefined();
+  expect(host.querySelector('[data-testid="sharedTask.confirmThumb"]')).toBeNull();
+  expect(host.querySelector('[data-testid="sharedTask.confirmFade"]')).toBeNull();
   await act(async () => copy().onContentSizeChange(300, 600));
   const thumb = host.querySelector('[data-testid="sharedTask.confirmThumb"]') as HTMLElement;
   const right = parseFloat(thumb.style.right), width = parseFloat(thumb.style.width);
