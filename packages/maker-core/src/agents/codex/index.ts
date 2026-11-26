@@ -7464,7 +7464,7 @@ assertRouteCurrent();
       const expected = expectedGatewayNames.filter(name => Object.keys(config).some(key => key.startsWith(`mcp_servers.${name}.`)));
       const deadline = Date.now() + 5_000;
       const reports = await Promise.all(expected.map(async name => [name,
-        respectOrcaBackoff && name === 'cindy_orca' && Date.now() < orcaProbeNotBefore ? undefined : await readCodexThreadMcpServerTools(
+        respectOrcaBackoff && name === 'cindy_orca' && Date.now() < orcaProbeNotBefore ? null : await readCodexThreadMcpServerTools(
           (method, params, requestOpts) => host.request(method, params, requestOpts), threadId, name, deadline - Date.now(),
         ).catch(() => undefined),
       ] as const));
@@ -7486,7 +7486,7 @@ assertRouteCurrent();
       }
       if (closed || threadId !== checkedThreadId || !isCurrentHost()
         || JSON.stringify(expectedRuntimeMcpConfig()) !== JSON.stringify(mcpConfig)) return;
-      if (reports?.has('cindy_orca') && !reports.get('cindy_orca') && Date.now() >= orcaProbeNotBefore) {
+      if (reports?.has('cindy_orca') && reports.get('cindy_orca') === undefined) {
         orcaProbeNotBefore = Date.now() + 30_000;
       }
       expectedMcpNeedsRecheck = !reports || [...reports.values()].some(report => !report || report.state === 'failed' || report.state === 'pending');
