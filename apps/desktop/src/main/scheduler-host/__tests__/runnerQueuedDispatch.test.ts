@@ -1502,6 +1502,57 @@ describe('MakerScheduleRunner queued dispatch (busy bound session)', () => {
     expect(schedule).toEqual(saved);
   });
 
+  // Exercise the real fire and both queue boundaries after releasing a bound model lease.
+  it.each([
+    { boundary: 'preparing', recurring: true, manual: false },
+    { boundary: 'accepted', recurring: true, manual: false },
+    { boundary: 'preparing', recurring: true, manual: true },
+    { boundary: 'accepted', recurring: false, manual: false },
+  ])('settles a bound model change before dispatch: %j', async ({ boundary, recurring, manual }) => {
+    const h = createSessionHarness(async () => ({ accepted: true }));
+    const selection = { agentKind: 'codex' as const, model: 'scheduled-model', providerId: 'selected',
+      effort: null, fastMode: false };
+    Object.assign(h.session, selection);
+    mocks.getSessionProvider.mockReturnValue(selection.providerId);
+    const queue = createQueueHarness({ busy: false });
+    const { runner, notifier } = createRunnerHarness(h.session, queue.deps, {
+      metaModel: selection.model,
+      acquirePendingAgentSwitch: async () => {
+        Object.assign(h.session, { model: selection.model });
+        return { release: vi.fn(), selection };
+      },
+    });
+    const schedule = heartbeatSchedule({ ...selection, effort: undefined, modelAgentKind: 'codex', recurring, manual });
+    const ctx = createFireContext();
+    const result = runner.fire(schedule, ctx).catch((error: unknown) => error);
+    await vi.waitFor(() => expect(queue.enqueueCalls).toHaveLength(1));
+    const request = enqueueLast(queue);
+    if (boundary === 'accepted') await request.onPreparing?.();
+    Object.assign(h.session, { model: 'interactive-model' });
+    if (boundary === 'accepted') {
+      await expect(request.onAccepted({ permissionMode: 'ask', planMode: false }))
+        .rejects.toBeInstanceOf(AcceptedCallbackDispatchCancelled);
+    } else await queue.accept();
+
+    expect(ctx.onTurnActive).not.toHaveBeenCalled();
+    expect(h.session.model).toBe('interactive-model');
+    if (manual || !recurring) {
+      expect(await result).toBeInstanceOf(Error);
+      expect(latestNotifiedRun(notifier).status).toBe('failed');
+      return;
+    }
+    expect(await result).toMatchObject({ sessionId: SESSION_ID, deferred: true, deferRetryMs: expect.any(Number) });
+    expect(notifier.notify).not.toHaveBeenCalled();
+
+    const retry = runner.fire(schedule, { ...createFireContext(), runId: 'retry' });
+    await vi.waitFor(() => expect(queue.enqueueCalls).toHaveLength(2));
+    await queue.accept();
+    expect(h.session.model).toBe(selection.model);
+    h.emit({ type: 'done', data: {}, source: 'codex', turnOrigin: enqueueLast(queue).origin });
+    await expect(retry).resolves.toMatchObject({ sessionId: SESSION_ID });
+    expect(latestNotifiedRun(notifier).status).toBe('success');
+  });
+
   // Review regression (integration): the previous matrix only kept the same live
   // location. An identical provider/model on another device must never receive
   // this run. Exercise both preparation and accepted-before-vendor boundaries.
