@@ -227,6 +227,7 @@ const COPY = {
     de: 'Extern',
     'pt-PT': 'Externo',
     'pt-BR': 'Externo',
+    id: 'Eksternal',
     'zh-Hant-x-lzh': '外部',
     'zh-Hans-x-lzh': '外部',
   },

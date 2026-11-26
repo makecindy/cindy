@@ -9,6 +9,7 @@ import deCloud from '../renderer/i18n/locales/de/cloud.json';
 import enCloud from '../renderer/i18n/locales/en/cloud.json';
 import esCloud from '../renderer/i18n/locales/es/cloud.json';
 import frCloud from '../renderer/i18n/locales/fr/cloud.json';
+import idCloud from '../renderer/i18n/locales/id/cloud.json';
 import jaCloud from '../renderer/i18n/locales/ja/cloud.json';
 import koCloud from '../renderer/i18n/locales/ko/cloud.json';
 import ptBRCloud from '../renderer/i18n/locales/pt-BR/cloud.json';
@@ -25,6 +26,7 @@ const CLOUD: Record<SupportedLocale, Bundle> = {
   en: enCloud,
   es: esCloud,
   fr: frCloud,
+  id: idCloud,
   ja: jaCloud,
   ko: koCloud,
   'pt-BR': ptBRCloud,
