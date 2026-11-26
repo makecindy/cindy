@@ -1029,11 +1029,6 @@ interface WorkerBridgeInvokeOptions {
   reportClientId?: string;
   /** Host-only proof that dispatch returned a definite rejection, not an exception. */
   onReportRejected?: () => void;
-  /**
-   * 远端桥专用：来源电脑的版本还没有 `report` 字段，其模型无从填写。
-   * 桥接端已核实同账号身份与会话归属，这里按旧自由文本契约放行，只留一行 warn。
-   */
-  allowLegacyReport?: boolean;
 }
 
 export function createOrcaWorkerBridgeMcpProvider(deps: OrcaBridgeMcpDeps) {
@@ -1118,8 +1113,12 @@ export function createOrcaWorkerBridgeMcpProvider(deps: OrcaBridgeMcpDeps) {
                 .describe('Checks actually run, or why none were run.'),
               risk: z.string().min(1).optional(),
             })
+            // 旧版本只发 message：schema 层不给必填，否则升级前已在跑的成员会被
+            // 校验挡在 handler 之前，整条结果交不回来。缺省时按「未带状态」送达
+            // 并留一行 warn，所以「没人填」与「没有发生」仍分得开。
+            .optional()
             // 五态语义只在 state 上写一次；这里不复制，避免两份说明各自漂移。
-            .describe('Required. The turn\'s conclusion; state carries the five settling states.'),
+            .describe('Required in practice. The turn\'s conclusion; state carries the five settling states. Omitting it still delivers the message, but the Lead cannot tell a finished turn from one still running.'),
         },
         async ({ message, worker_id, delivery, report }) => {
           // fail-closed 兜底：直连 handler 或旧运行时绕过 schema 时，progress 也绝不
@@ -1601,10 +1600,9 @@ export function createOrcaWorkerBridgeMcpProvider(deps: OrcaBridgeMcpDeps) {
       let invoke: (() => Promise<OrcaToolResult>) | undefined;
       registerRoutedTools(ctx, (name, _description, shape, handler) => {
         if (name !== tool) return;
-        // 必填的 report 只约束能看见新 schema 的模型；旧设备经桥接进来时没有这个字段。
-        const parsed: z.output<z.ZodObject<typeof shape>> = (options.allowLegacyReport && args.report === undefined
-          ? z.object({ ...shape, report: z.optional(shape.report) }).parse(args)
-          : z.object(shape).parse(args)) as z.output<z.ZodObject<typeof shape>>;
+        // report 本身可选（旧版本只发 message），所以这里不需要再按来源放宽：
+        // 缺字段时的「未带状态」语义由 handler 统一处理。
+        const parsed = z.object(shape).parse(args) as z.output<z.ZodObject<typeof shape>>;
         invoke = () => handler(parsed);
       }, options);
       if (!invoke) return text({ error: 'unknown worker bridge tool' }, true);

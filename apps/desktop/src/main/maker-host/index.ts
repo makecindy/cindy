@@ -1365,9 +1365,8 @@ export function getMaker(): Maker {
       activeTeamId: async id => (await getActiveTeamByLead(id))?.id ?? null,
       remoteInvoke,
       // Remote runtime settles only the reported inputs; queued assignments keep running.
-      invokeTool: (ctx, tool, args, reportClientId, onReportRejected, allowLegacyReport) => orcaWorkerBridgeProvider.invokeTool(ctx, tool, args, {
+      invokeTool: (ctx, tool, args, reportClientId, onReportRejected) => orcaWorkerBridgeProvider.invokeTool(ctx, tool, args, {
         manageWorkerStatus: false, ...(reportClientId ? { reportClientId } : {}), onReportRejected,
-        ...(allowLegacyReport ? { allowLegacyReport } : {}),
       }),
       deliverReport: (sessionId, ids, send) => deliverRemoteWorkerReport(sessionId, ids, send, result => !result.isError),
       getActiveInputClientIds: getSessionActiveInputClientIds,

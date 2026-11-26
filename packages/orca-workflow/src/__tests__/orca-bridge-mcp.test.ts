@@ -349,7 +349,9 @@ describe('orca_worker_bridge MCP helpers', () => {
 
   // 可选的结构化回报等于没有：字段存在但没人填（#9818 上线后 184 次调用 0 次使用）。
   // 约柬放在 schema 必填上，模型侧无法省略；处理器只对旧 schema 留一行日志兜底。
-  it('marks the structured report as required in the tool schema', () => {
+  // 旧版本只发 message：schema 不放宽的话，升级前已在跑的成员会被校验挡在 handler
+  // 之前，整条结果交不回来（维护者评审：只发 message 是常见情况）。
+  it('accepts a send_to_lead that carries only a message', () => {
     const { maker } = makeProvider();
     const provider = createOrcaWorkerBridgeMcpProvider({
       getMaker: () => maker as unknown as Maker, logger: makeLogger(),
@@ -360,7 +362,7 @@ describe('orca_worker_bridge MCP helpers', () => {
     const schema = server._registeredTools.send_to_lead.inputSchema as {
       safeParse: (value: unknown) => { success: boolean };
     };
-    expect(schema.safeParse({ worker_id: 'worker-1', message: 'done' }).success).toBe(false);
+    expect(schema.safeParse({ worker_id: 'worker-1', message: 'done' }).success).toBe(true);
     expect(schema.safeParse({
       worker_id: 'worker-1', message: 'done', report: { state: 'ready' },
     }).success).toBe(true);
@@ -758,7 +760,9 @@ describe('orca_worker_bridge MCP helpers', () => {
   // 旧设备的 schema 里没有 report，模型无从填写；桥接端核实身份后按旧契约放行，
   // 但只要没带那个标记，缺 report 仍然拒绝（Greptile P1）。
   // 生产入口：provider.invokeTool（Host 侧桥接入口）；unit tier。
-  it('lets only the attested legacy remote path skip the required report', async () => {
+  // 缺 report 现在对所有来源都放行，所以不再需要「只让经核实的旧端绕过」这条通路；
+  // 语义靠 handler：缺字段按「未带状态」送达并留一行 warn。
+  it('delivers a report-less call instead of rejecting it', async () => {
     const lead = makeSession('lead-1');
     const h = makeWorkerBridgeLeadHarness(lead);
     const ctx = {
@@ -774,10 +778,8 @@ describe('orca_worker_bridge MCP helpers', () => {
     };
     const args = { worker_id: 'worker-1', message: '旧端回报' };
 
-    await expect(h.provider.invokeTool(ctx as never, 'send_to_lead', args)).rejects.toThrow(/report/);
-
     const json = parseToolJson(
-      await h.provider.invokeTool(ctx as never, 'send_to_lead', args, { allowLegacyReport: true }),
+      await h.provider.invokeTool(ctx as never, 'send_to_lead', args),
     );
     expect(json).toMatchObject({ ok: true });
     expect(h.finishReport).toHaveBeenCalledWith(true, { delivered: true });
