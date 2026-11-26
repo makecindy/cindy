@@ -94,7 +94,7 @@ describe.each(['claude-code', 'pi', 'codex'] as const)('%s terminal-aligned asyn
       await flush();
       await s.session.send('another turn');
       await s.session.submitAsyncQuestionAnswer(id, answer);
-      expect(dispatch).toHaveBeenCalledWith(expect.any(String), expect.any(AbortSignal), id, expect.any(String), origin);
+      expect(dispatch).toHaveBeenCalledWith(expect.any(String), expect.any(AbortSignal), id, expect.any(String), origin, undefined);
     } finally { await s.session.close(); }
   });
 
@@ -112,6 +112,27 @@ describe.each(['claude-code', 'pi', 'codex'] as const)('%s terminal-aligned asyn
       release();
       await expect(submit).resolves.toBe(true);
     } finally { release(); await s.session.close(); }
+  });
+
+  // Unit regression: submit an image as the entire answer through Session.
+  // Text-only admission tests don't detect a dropped image or a changed image winning a retry.
+  it('admits an image-only answer once and rejects a different image for the same submission', async () => {
+    const s = await setup(agentKind);
+    const dispatch = vi.fn(async () => {});
+    s.session.setAsyncQuestionAnswerDispatcher(dispatch);
+    try {
+      const id = s.ask();
+      const image = { url: 'cindy-media://blobs/screenshot.png', mimeType: 'image/png', originalName: 'screenshot.png', size: 68 };
+      const decision = { kind: 'ask_user_question' as const, answers: { 'Which scope?': '' }, answerImages: [image] };
+      await expect(s.session.submitAsyncQuestionAnswer(id, decision)).resolves.toBe(true);
+      expect(dispatch).toHaveBeenCalledWith(expect.stringContaining('Which scope?'), expect.any(AbortSignal),
+        id, '> Which scope?', null, [image]);
+      await expect(s.session.submitAsyncQuestionAnswer(id, { ...decision, answerImages: [{ ...image, url: 'other' }] }))
+        .resolves.toBe(false);
+      s.resolvers[0](decision);
+      await flush();
+      expect(dispatch).toHaveBeenCalledOnce();
+    } finally { await s.session.close(); }
   });
 
   it.each(['sync-first', 'async-first'] as const)('keeps both kinds answerable with %s arrival', async (order) => {

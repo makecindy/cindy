@@ -2272,8 +2272,11 @@ export function createMessagePersistence(deps: MessagePersistencePorts) {
             requestId,
             questions: request.questions ?? [],
             status: cancelled ? 'cancelled' : 'answered',
-        ...(cancelled && typeof decision.withdrawalReason === 'string' ? { withdrawalReason: decision.withdrawalReason } : {}),
+            ...(cancelled && typeof decision.withdrawalReason === 'string' ? { withdrawalReason: decision.withdrawalReason } : {}),
             answers,
+            ...(!cancelled && Array.isArray(decision.answerImages) && decision.answerImages.length
+              ? { images: decision.answerImages }
+              : {}),
           },
           {
             acceptedAt,

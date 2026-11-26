@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { formatAsyncQuestionReplyDisplay, formatAsyncQuestionSupplement } from '@cindy/maker-shared';
+import { questionAnswerSubmissionKey, type QuestionAnswerImage } from '@cindy/maker-shared/interaction';
 import type { AskUserQuestionItem, SendOrigin, InteractionDecision, InteractionRequest } from '../../types/events.js';
 
 interface PendingQuestion {
@@ -10,7 +11,7 @@ interface PendingQuestion {
   question: AskUserQuestionItem;
   submission?: Promise<void>;
   delivered?: boolean;
-  submissionText?: string;
+  submissionKey?: string;
   deliveryMessage?: { answerText: string; text: string; displayText: string };
 }
 
@@ -25,7 +26,8 @@ export class AsyncUserQuestions {
     isLateAnswer(generation: number): boolean;
     resolve(request: InteractionRequest): Promise<InteractionDecision>;
     /** `text` goes to the model; `displayText` is the same answer as people read it. */
-    deliver(text: string, signal: AbortSignal, requestId: string, displayText: string, origin: SendOrigin | null): Promise<void>;
+    deliver(text: string, signal: AbortSignal, requestId: string, displayText: string, origin: SendOrigin | null,
+      images?: readonly QuestionAnswerImage[]): Promise<void>;
     dismiss(requestId: string, reason: string, withdrawalReason?: string): void;
     reportError(error: unknown): void;
   }) {}
@@ -51,27 +53,33 @@ export class AsyncUserQuestions {
     if (!entry || entry.abort.signal.aborted || decision.kind !== 'ask_user_question') return false;
     if (decision.inProgress) return true;
     if (decision.dismissed) return !entry.submission;
-    const text = formatAsyncQuestionSupplement([entry.question], decision.answers);
-    if (entry.submissionText !== undefined && entry.submissionText !== text) return false;
+    const images = decision.answerImages?.length ? decision.answerImages : undefined;
+    const hasImages = !!images;
+    const text = formatAsyncQuestionSupplement([entry.question], decision.answers, { hasImages });
+    if (hasImages && !text) return false;
+    // A second submit may join the existing receipt only for the same content.
+    const key = questionAnswerSubmissionKey(text, images);
+    if (entry.submissionKey !== undefined && entry.submissionKey !== key) return false;
     if (!text || entry.delivered) return true;
     if (!entry.submission) {
-      entry.submissionText = text;
+      entry.submissionKey = key;
       const answers = { ...decision.answers };
       entry.submission = this.sendTail.then(async () => {
         if (entry.abort.signal.aborted) throw new Error('Question was dismissed');
         // Retry identity must survive a turn ending after an uncertain receipt.
         if (entry.deliveryMessage?.answerText !== text) entry.deliveryMessage = {
           answerText: text, text: formatAsyncQuestionSupplement([entry.question], answers,
-            { late: this.deps.isLateAnswer(entry.generation) }),
-          displayText: formatAsyncQuestionReplyDisplay([entry.question], answers),
+            { late: this.deps.isLateAnswer(entry.generation), hasImages }),
+          displayText: formatAsyncQuestionReplyDisplay([entry.question], answers, { hasImages }),
         };
-        await this.deps.deliver(entry.deliveryMessage.text, entry.abort.signal, requestId, entry.deliveryMessage.displayText, entry.origin);
+        await this.deps.deliver(entry.deliveryMessage.text, entry.abort.signal, requestId,
+          entry.deliveryMessage.displayText, entry.origin, images);
         entry.delivered = true;
       });
       this.sendTail = entry.submission.catch(() => undefined);
     }
     try { await entry.submission; return true; }
-    catch (error) { entry.submission = undefined; entry.submissionText = undefined; throw error; }
+    catch (error) { entry.submission = undefined; entry.submissionKey = undefined; throw error; }
   }
 
   snapshot(): Set<string> { return new Set(this.pending.keys()); }

@@ -934,6 +934,7 @@ function normalizeAskUser(message: RemoteMessage, pendingQuestionIds?: ReadonlyS
 
   const questions = normalizeAskQuestions(content.questions);
   const answers = readStringRecord(content.answers);
+  const attachments = content.status === 'answered' ? readImageAttachments(content.images) : [];
   const pairs = questions.length > 0
     ? questions.map((question) => ({ question: question.question, answer: answers?.[answerKey(question)] ?? answers?.[question.question] ?? '' }))
     : [{
@@ -945,7 +946,9 @@ function normalizeAskUser(message: RemoteMessage, pendingQuestionIds?: ReadonlyS
     .filter((pair) => pair.question || pair.answer)
     .map((pair) => content.status !== 'answered'
       ? `Q: ${pair.question}\n${withdrawalReason ? `${i18n.t('interaction.panel.questionWithdrawn')} · ${withdrawalReason}` : i18n.t('interaction.panel.questionUnanswered')}`
-      : `Q: ${pair.question}\nA: ${pair.answer || '(skipped)'}`)
+      : pair.answer || !attachments.length
+        ? `Q: ${pair.question}\nA: ${pair.answer || '(skipped)'}`
+        : `Q: ${pair.question}`)
     .join('\n\n');
 
   if (!body) return null;
@@ -956,6 +959,7 @@ function normalizeAskUser(message: RemoteMessage, pendingQuestionIds?: ReadonlyS
     role: message.role,
     label: 'ask_user',
     body,
+    ...(attachments.length > 0 && { attachments }),
     align: 'agent',
     createdAt: message.createdAt,
   };

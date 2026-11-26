@@ -8,7 +8,7 @@ import type { ChatMessage, AskUserDraft, AskUserViewerState } from '../../../src
 import type { VoiceQuestionTarget } from '../../../src/renderer/components/new-chat/voiceQuestionSelection';
 import { CompanionVoiceToolbar } from '../../../src/renderer/features/bots/voice/CompanionVoiceToolbar';
 
-function Fixture({ question, voice, multi, form = false, speakerFiltered = false, withdrawn = false, free = false }: {
+function Fixture({ question, voice, multi, form = false, speakerFiltered = false, withdrawn = false, free = false, images = false }: {
   question: string;
   voice?: boolean;
   multi?: boolean;
@@ -16,8 +16,10 @@ function Fixture({ question, voice, multi, form = false, speakerFiltered = false
   speakerFiltered?: boolean;
   withdrawn?: boolean;
   free?: boolean;
+  images?: boolean;
 }) {
   const [receipt, setReceipt] = useState<Record<string, string> | null>(null);
+  const [imageReceipt, setImageReceipt] = useState<string[]>([]);
   const [draft, setDraft] = useState<AskUserDraft | null>(null);
   const [viewerState, setViewerState] = useState<AskUserViewerState>('expanded');
   const bridge = useRef<VoiceQuestionTarget | null>(null);
@@ -36,16 +38,22 @@ function Fixture({ question, voice, multi, form = false, speakerFiltered = false
       onConfigure={forbid('configure')} /></div> : null}
     <AskUserQuestionPrompt sessionId="question-evidence" workingDir="/project"
       voiceBridge={voice ? bridge : undefined}
-      pending={{ requestId: 'review', ...(withdrawn ? { delivery: 'async' as const, withdrawalReason: '已从日志确认登录恢复，无需再次确认。' } : {}), questions: form ? [
+      imageAttachmentsEnabled={images}
+      pending={{ requestId: 'review', ...((withdrawn || images) ? { delivery: 'async' as const } : {}),
+        ...(withdrawn ? { withdrawalReason: '已从日志确认登录恢复，无需再次确认。' } : {}), questions: form ? [
         { id: 'name', header: '确认原型', question: 'Name', answerConstraints: { required: true, minLength: 3, maxLength: 5 } },
         { id: 'kind', header: '确认原型', question: 'Kind', options: [{ label: 'Personal' }, { label: 'Other' }],
           answerConstraints: { required: true, choices: ['Personal', 'Other'] } },
       ] : [{ header: '确认原型', question, multiSelect: multi, options: free ? undefined : [
         { label: '可以，按这版实现' }, { label: '还需要调整' },
       ] }] }}
-      onAnswer={form ? (_id, answers) => setReceipt(answers) : forbid('answer question')}
+      onAnswer={form || images ? (_id, answers, attachedImages) => {
+        setReceipt(answers);
+        setImageReceipt(attachedImages?.map(image => image.file.name) ?? []);
+      } : forbid('answer question')}
       draft={draft} onDraftChange={setDraft} viewerState={viewerState} onViewerStateChange={setViewerState} />
-    {receipt && <output data-testid="mcp-form-receipt">{JSON.stringify(receipt)}</output>}
+    {receipt && <output data-testid="mcp-form-receipt" hidden={images}>{JSON.stringify(receipt)}</output>}
+    {images && <output data-testid="question-image-receipt" hidden>{JSON.stringify(imageReceipt)}</output>}
   </main>;
 }
 
@@ -73,5 +81,6 @@ void mountPage({
     clientId: 'question-history', role: 'ask_user', content: '', timestamp: Date.now(),
     askUserStatus: 'expired', askUserQuestions: [{ question: String(ctx.data.question) }],
   } as ChatMessage} /></main> : <Fixture question={String(ctx.data.question)} voice={ctx.data.voice === true} multi={ctx.data.multi === true}
-    speakerFiltered={ctx.data.speakerFiltered === true} withdrawn={ctx.data.withdrawn === true} form={ctx.data.form === true} free={ctx.data.free === true} />,
+    speakerFiltered={ctx.data.speakerFiltered === true} withdrawn={ctx.data.withdrawn === true} form={ctx.data.form === true}
+    free={ctx.data.free === true} images={ctx.data.images === true} />,
 });

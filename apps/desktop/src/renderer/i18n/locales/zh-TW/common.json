@@ -15392,6 +15392,8 @@
     "jumpToBottom": "跳到底部",
     "prevMessageJump": "跳到上一則提問：{{preview}}",
     "askUserQuestion": {
+      "addImages": "新增圖片",
+      "imageRejected": "無法新增「{{name}}」。支援 PNG、JPEG、WebP、GIF，最多 {{limit}} 張，合計不超過 {{size}} MB。",
       "unanswered": "未回答",
       "withdrawn": "無需再回答",
       "withdrawnDraft": "這個問題已不再需要回答。\n{{reason}}\n草稿已保留，你仍可作為補充傳送。",

@@ -1,4 +1,5 @@
 import { parseOutputLimitDetails, type OutputLimitDetails } from '@cindy/maker-shared';
+import type { QuestionAnswerImage } from '@cindy/maker-shared/interaction';
 /**
  * Session — 单次 agent 会话的上层包装。
  *
@@ -96,6 +97,9 @@ export interface PermissionModeState {
 export type SessionEventListener = (event: AgentEvent) => void;
 export type SessionStatusListener = (status: SessionStatus) => void;
 export type InteractionRequestListener = (req: InteractionRequest, signal?: AbortSignal) => Promise<InteractionDecision>;
+
+type AsyncQuestionAnswerDispatcher = (text: string, signal: AbortSignal, requestId: string,
+  displayText: string, origin: SendOrigin | null, images?: readonly QuestionAnswerImage[]) => Promise<void>;
 
 /**
  * turn 零事件看门狗阈值(ms)。turn 在跑、却连续这么久**没有产品进展**,视为整条
@@ -700,8 +704,9 @@ export class Session {
         && generation === this.turnGeneration,
       isLateAnswer: (generation) => generation !== this.turnGeneration || !this.handle.isTurnRunning?.(),
       resolve: (request) => this.interactionListener!(request),
-      deliver: async (text, signal, requestId, displayText, origin) => {
-        if (this.asyncQuestionAnswerDispatcher) return this.asyncQuestionAnswerDispatcher(text, signal, requestId, displayText, origin);
+      deliver: async (text, signal, requestId, displayText, origin, images) => {
+        if (this.asyncQuestionAnswerDispatcher) return this.asyncQuestionAnswerDispatcher(text, signal, requestId, displayText, origin, images);
+        if (images?.length) throw new Error('Question image delivery requires a host dispatcher');
         const options = { signal, [ASYNC_QUESTION_ANSWER]: true as const };
         if (this.handle.isTurnRunning?.()) {
           try { await this.steer(text, options); return; } catch (error) {
@@ -904,13 +909,13 @@ export class Session {
     return snapshot;
   }
 
-  private asyncQuestionAnswerDispatcher?: (text: string, signal: AbortSignal, requestId: string, displayText: string, origin: SendOrigin | null) => Promise<void>;
+  private asyncQuestionAnswerDispatcher?: AsyncQuestionAnswerDispatcher;
 
   /**
    * Hosts with a durable input queue own admission/persistence of question replies.
    * `text` is the model's copy; `displayText` is what history and queues show.
    */
-  setAsyncQuestionAnswerDispatcher(dispatch: (text: string, signal: AbortSignal, requestId: string, displayText: string, origin: SendOrigin | null) => Promise<void>): void {
+  setAsyncQuestionAnswerDispatcher(dispatch: AsyncQuestionAnswerDispatcher): void {
     this.asyncQuestionAnswerDispatcher = dispatch;
   }
 

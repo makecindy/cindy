@@ -1272,7 +1272,7 @@ export async function updateMessageContent(
       sessionId,
       role: row.role,
       content: row.content,
-    }).then(() => undefined).catch((err) => {
+    }, db).then(() => undefined).catch((err) => {
       log.warn('message media ref commit failed (update)', {
         sessionId,
         clientId,

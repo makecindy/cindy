@@ -7017,6 +7017,7 @@ function CCAgentSessionContent({
                     sessionId={sessionId}
                     workingDir={session?.workingDir ?? ''}
                     remoteHostId={session?.remoteHostId}
+                    imageAttachmentsEnabled={rightSidebarDeviceLinkDeviceId === null && !session?.remoteHostId && !session?.agentDeviceId && !readOnly}
                     pending={pendingAskUser}
                     pendingQuestions={pendingAskUserQueue}
                     onSelectQuestion={selectAskUserQuestion}

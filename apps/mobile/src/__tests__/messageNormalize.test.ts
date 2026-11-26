@@ -943,6 +943,18 @@ describe('normalizeRemoteMessages', () => {
     expect(items[0].body).not.toContain('A:');
   });
 
+  // The host hides the duplicate user row. An image-only answer must still
+  // appear in read-only mobile history instead of being labelled skipped.
+  it('keeps the screenshot on an image-only question answer in history', () => {
+    const url = `cindy-media://blobs/${'f'.repeat(64)}.png`;
+    const [item] = normalizeRemoteMessages([message({ id: 'image-answer', role: 'ask_user', content: {
+      status: 'answered', questions: [{ question: 'What do you see?' }], answers: { 'What do you see?': '' },
+      images: [{ url, mimeType: 'image/png', originalName: 'shot.png' }],
+    } })]);
+    expect(item.body).toBe('Q: What do you see?');
+    expect(item.attachments).toEqual([expect.objectContaining({ kind: 'image', uri: url, name: 'shot.png' })]);
+  });
+
   it('renders only answered ask_user history as question and answer pairs', () => {
     const items = normalizeRemoteMessages([
       message({
