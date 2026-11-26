@@ -508,7 +508,13 @@ handle 的只读 `isPreparingUserTurn()`，使用 `bridge_turn_no_event_timeout`
 自动 CONTINUE 保留原请求的 Plan 与权限选项；超时恢复不等于 ExitPlanMode 批准，
 不得强制 planMode=false。若原计划已批准后执行失败，缺少可靠的审批周期记录时仍保守
 保留原 Plan 选项，可能重新进入计划模式；不为避免重入新增审批状态。人工 Retry 沿用
-既有合成 UI 动作策略，本自动恢复修复不调整该策略。
+既有合成 UI 动作策略；Codex 重连超时后的人工继续同样保留原计划选项。
+
+Codex 重连超时后，宿主在发给模型的续跑消息中说明断线原因。收到工具错误时，模型可从
+原有的工具结果继续诊断；工具已开始但尚未收到结果时，先核对实际状态，避免重复执行。
+普通任务自动续跑后，如果没有新的实质产出就再次发生同样的重连超时，交给用户处理。
+有新的可见文本或工具调用时可再次恢复，仍受当前任务的自动恢复总预算约束。已配置的
+模型组沿用自己的重试和切换规则。
 退避窗口内 provider / Session 因 stall abort 复核、terminal-error drain
 或 interrupt ACK 失败而 `unexpected` close 时，必须用实例 + attemptToken 精确保留交棒，
 不得 teardown 已批准的自动续跑——包括 timer 已 fire、CONTINUE 已因 SESSION_RUNNING
