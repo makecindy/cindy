@@ -17132,7 +17132,6 @@ function clearError(sessionId: string): void {
 
 function retryLastError(sessionId: string): Promise<void> {
   if (!sessionId) return Promise.resolve();
-  disposeLiveErrorPersist(sessionId);
   // 续跑语义在 main:coordinator 判定失败 turn 已有 assistant 产出时,用共享英文
   // 常量 CONTINUE_AFTER_ERROR_PROMPT 替代重发原文(shared/interruptedTurn.ts),
   // renderer 不传文案、不做判定。
@@ -17196,6 +17195,10 @@ function retryLastError(sessionId: string): Promise<void> {
       // 项不得误认（Greptile review P1）。
       const retryTookEffect = projection.error === null && projection.recovery === null;
       if (retryTookEffect) {
+        // Keep a stale/expired recovery visible. Clearing the live error before
+        // Main confirms that a new queue item was accepted makes a no-op Retry
+        // look like a completed task and leaves the user without a recovery path.
+        disposeLiveErrorPersist(sessionId);
         for (const item of projection.pendingQueue) {
           if (preRetryQueueIds.has(item.clientId)) continue;
           if (item.supersedesUserClientId) {

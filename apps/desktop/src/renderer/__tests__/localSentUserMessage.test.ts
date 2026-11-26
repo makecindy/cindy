@@ -22,6 +22,7 @@ vi.mock('@/lib/messageService', () => ({
   list: vi.fn(async () => ({ items: [], hasMore: false, oldestId: null })),
   create: vi.fn(async () => ({}) as unknown),
   updateContent: vi.fn(async () => ({}) as unknown),
+  dismissError: vi.fn(async () => true),
 }));
 
 vi.mock('@/lib/sessionService', () => ({
@@ -786,6 +787,24 @@ describe('isLocalSentUserMessage (#2194)', () => {
     await expect(p).rejects.toThrow('ipc down');
     await flushPromises();
     expect(makerChatStore.isLocalSentUserMessage(sid, 'qh-2')).toBe(false);
+  });
+
+  it('stale Retry keeps the live error available when Main reports no recovery', async () => {
+    const sid = `retry-stale-${Math.random().toString(36).slice(2, 8)}`;
+    makerChatStore.initGlobalListeners();
+    const recovery = { kind: 'active-turn' as const, item: queuedItem('failed-stale', 'original') };
+    const failed = projection(sid, {
+      error: 'codex reconnect stalled',
+      recovery,
+      errorPersistId: 'error-stale',
+    });
+    projectionHandler!(failed);
+    retryLastError.mockResolvedValueOnce(failed);
+
+    await makerChatStore.retryLastError(sid);
+
+    expect(makerChatStore.getSnapshot(sid).disposedErrorPersistId).toBeNull();
+    expect(makerChatStore.getSnapshot(sid).error).toBe('codex reconnect stalled');
   });
 
   // Codex review P1（第十五轮）: active-turn 人工 Retry 的产物由 main 在返回
