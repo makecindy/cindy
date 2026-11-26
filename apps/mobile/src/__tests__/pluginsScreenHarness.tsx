@@ -1,7 +1,7 @@
 /**
- * The plugins page under test with its leaves stubbed, shared by pluginsScreen.test.tsx and
- * pluginsScreenMarketFences.test.tsx (split so each file stays within the unit budget): the fixture, every module mock
- * (registered here, before a test file imports the page), the per-test reset, and the helpers both files use.
+ * The plugins page under test with its leaves stubbed, shared by pluginsScreen.test.tsx,
+ * pluginsScreenMarketFences.test.tsx and pluginsScreenSuccessRead.test.tsx (split so each file stays within the unit budget): the fixture, every module mock
+ * (registered here, before a test file imports the page), the per-test reset, and the helpers the files use.
  * Test files import it first.
  */
 import { act, createElement, useEffect } from "react";
