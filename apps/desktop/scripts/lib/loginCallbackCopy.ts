@@ -33,6 +33,7 @@ export const OAUTH_LANG_TO_APP_LOCALES: Record<OAuthResultPageLang, string[]> = 
   'de': ['de'],
   'pt-PT': ['pt-PT'],
   'pt-BR': ['pt-BR'],
+  'id': ['id', 'en'],
   'zh-Hant-x-lzh': ['zh-Hant-x-lzh', 'zh-TW', 'zh-CN'],
   'zh-Hans-x-lzh': ['zh-Hans-x-lzh', 'zh-CN'],
 };

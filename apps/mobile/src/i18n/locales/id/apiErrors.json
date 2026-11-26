@@ -1,0 +1,6 @@
+{
+  "requestTimeout": "Permintaan habis waktu. Coba lagi nanti.",
+  "networkUnavailable": "Koneksi jaringan tidak tersedia. Periksa jaringan lalu coba lagi.{{webHint}}",
+  "networkUnavailableWebHint": " Pratinjau web mungkin diblokir kebijakan CORS browser; uji dengan Expo Go atau simulator.",
+  "requestFailed": "Permintaan tidak selesai. Coba lagi nanti."
+}

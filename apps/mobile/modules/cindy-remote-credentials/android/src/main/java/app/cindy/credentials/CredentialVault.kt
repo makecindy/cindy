@@ -53,7 +53,7 @@ internal class CredentialVault(private val context: Context, private val install
       locale.startsWith("ja", true) -> "ja"
       locale.startsWith("ko", true) -> "ko"
       tag.language == "pt" -> if (tag.country == "BR") "pt-BR" else "pt-PT"
-      tag.language in listOf("es", "fr", "de") -> tag.language
+      tag.language in listOf("es", "fr", "de", "id") -> tag.language
       else -> "en"
     }
     return catalog.getJSONObject(language)

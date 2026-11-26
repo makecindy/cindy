@@ -315,6 +315,7 @@ object WidgetText {
       id.startsWith("es") -> "es"
       id.startsWith("fr") -> "fr"
       id.startsWith("pt") -> if (id.endsWith("PT")) "pt-PT" else "pt-BR"
+      id.startsWith("id") -> "id"
       else -> "en"
     }
   }

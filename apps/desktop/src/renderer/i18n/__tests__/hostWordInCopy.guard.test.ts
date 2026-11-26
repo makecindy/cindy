@@ -139,6 +139,52 @@ const OTHER_MEANINGS: ReadonlyArray<{ meaning: string; entries: Readonly<Record<
       ],
     },
   },
+  {
+    meaning: 'id: a remote machine reached over SSH or another device',
+    entries: {
+      'id': [
+        'chat.errorBanner.piBundledNodeMissing',
+        'ipcError.SSH_HOST_PREFS_WRITE_FAILED',
+        'newChat.addRemoteProject.host',
+        'newChat.addRemoteProject.sourceGroupSsh',
+        'projectSettings.sshHost',
+        'settings.remote.configDiagnostic.io',
+        'settings.remote.configDiagnostic.limit',
+        'settings.remote.configDiagnostic.syntax',
+        'settings.remote.detail.agentProxyWaiting',
+        'settings.remoteControl.sections.ssh',
+      ],
+    },
+  },
+  {
+    meaning: 'id: the person who hosts a shared task or a group chat',
+    entries: {
+      'id': [
+        'providerGroup.member.sourceGroupOwner',
+        'sharedTask.host',
+        'sharedTask.roleHost',
+      ],
+    },
+  },
+  {
+    meaning: 'id: Cindy as the app that hosts plugins and gives them tools',
+    entries: {
+      'id': [
+        'settings.ghosts.perm.codeDetailHostServices',
+        'settings.ghosts.perm.hostTools_computerDetail',
+        'settings.ghosts.perm.networkSecretGhCliDetail',
+        'settings.ghosts.perm.uiHost',
+      ],
+    },
+  },
+  {
+    meaning: 'id: a server that hosts an organization identity request',
+    entries: {
+      'id': [
+        'settings.ghosts.forgeOidcInstallConfirm.hostsLabel',
+      ],
+    },
+  },
 ];
 
 const LOCALES_DIR = new URL('../locales/', import.meta.url);

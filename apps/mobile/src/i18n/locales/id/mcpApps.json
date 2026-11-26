@@ -1,0 +1,27 @@
+{
+  "sharedTaskReadOnly": "Hanya pemilik tugas yang bisa berinteraksi dengan kartu ini.",
+  "retry": "Muat ulang",
+  "viewLimit": "Terlalu banyak halaman terbuka sekaligus. Gulir atau tutup halaman lain, lalu halaman ini akan terbuka otomatis.",
+  "pluginRevoked": "Plugin dinonaktifkan atau berubah, jadi halaman ini tidak berlaku lagi",
+  "loadFailed": "Aplikasi gagal dimuat. Periksa koneksi lalu muat ulang.",
+  "updateRequired": "Komputer ini belum mendukung MCP Apps. Perbarui Cindy di komputer itu lalu coba lagi.",
+  "appName": "MCP App",
+  "cardTitle": "{{title}} · $t(mcpApps.appName)",
+  "messageSource": "Dikirim oleh $t(mcpApps.appName) “{{name}}”",
+  "serverId": "ID Server MCP: {{id}}",
+  "exitFullscreen": "Keluar dari layar penuh",
+  "mobileUpdateRequired": "Perbarui Cindy di ponsel ini dulu untuk membuka kartu ini.",
+  "filesOnExecutionComputer": "Lihat isi berkas di komputer eksekutor",
+  "source": {
+    "official": "Cindy resmi",
+    "organization": "Organisasi · {{namespace}}",
+    "market": "Marketplace Plugin",
+    "third-party": "Sumber pihak ketiga",
+    "local": "Terpasang lokal",
+    "unknown": "Sumber tidak diketahui"
+  },
+  "customMcp": "MCP kustom",
+  "sourceLabel": "Sumber",
+  "signatureLabel": "Tanda tangan",
+  "fullscreen": "Layar penuh"
+}

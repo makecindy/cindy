@@ -91,7 +91,16 @@ const RETRY_COPY = {
     unavailable: 'This update failure cannot be retried',
     archive_unavailable: 'The update file is missing or unreadable. Please check for updates again',
     spawn_failed: 'Could not restart the updater. Close this window and check for updates again',
+  },  "id": {
+    "retry": "Coba lagi",
+    "processes_running": "Tutup Cindy dan semua proses yang berjalan dari folder instalasinya, lalu coba lagi",
+    "updater_busy": "Pembaruan lain sedang berjalan. Tutup jendela ini dan periksa pembaruan lagi",
+    "in_progress": "Percobaan ulang pembaruan sedang berlangsung",
+    "unavailable": "Pembaruan yang gagal ini tidak dapat dicoba lagi",
+    "archive_unavailable": "File pembaruan tidak ditemukan atau tidak dapat dibaca. Silakan periksa pembaruan lagi",
+    "spawn_failed": "Tidak dapat memulai ulang program pembaruan. Tutup jendela ini dan periksa pembaruan lagi",
   },
+
   ja: {
     retry: '再試行',
     processes_running:

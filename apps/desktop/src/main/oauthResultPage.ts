@@ -39,6 +39,10 @@ export function getRemoteOAuthCallbackCopy(lang: OAuthResultPageLang): { title: 
     "title": "Resposta de autorização recebida",
     "body": "Volte para Cindy para verificar o resultado da autorização no dispositivo remoto."
   },
+  "id": {
+    "title": "Callback otorisasi diterima",
+    "body": "Kembali ke Cindy untuk melihat hasil otorisasi di perangkat jarak jauh."
+  },
     'zh-Hant-x-lzh': { title: '授權回呼已至', body: '請歸 Cindy，察遠端裝置之授權結果。' },
     'zh-Hans-x-lzh': { title: '授权回调已至', body: '请归 Cindy，察远程设备之授权结果。' },
 }[lang];
@@ -100,6 +104,7 @@ export const OAUTH_RESULT_HTML_LANG: Record<OAuthResultPageLang, string> = {
   "de": "de",
   "pt-PT": "pt-PT",
   "pt-BR": "pt-BR",
+  "id": "id",
   'zh-Hant-x-lzh': 'zh-Hant-x-lzh',
   'zh-Hans-x-lzh': 'zh-Hans-x-lzh',
 };
@@ -143,6 +148,8 @@ function returnLabel(lang: OAuthResultPageLang, brandName: string): string {
       return `Voltar a ${brandName}`;
     case 'pt-BR':
       return `Voltar para ${brandName}`;
+    case 'id':
+      return `Kembali ke ${brandName}`;
     case 'zh':
       return `返回 ${brandName}`;
     case 'zh-TW':
@@ -232,6 +239,15 @@ export function getProviderOAuthResultCopy(
         missingCodeBody: `Nenhum código de autorização foi recebido de ${providerName}. Volte para ${brandName} e tente novamente.`,
         invalidStateBody: `A validação da autorização falhou. Volte para ${brandName} e inicie a conexão novamente.`,
         exchangeFailedBody: `Ocorreu um erro ao conectar ${providerName}. Volte para ${brandName} e tente novamente.`,
+      };
+    case 'id':
+      return {
+        successTitle: `Otorisasi selesai`,
+        successBody: `${providerName} sekarang terhubung ke ${brandName}. Kamu bisa kembali ke aplikasi untuk melanjutkan.`,
+        errorTitle: `Otorisasi belum selesai`,
+        missingCodeBody: `Tidak ada kode otorisasi yang diterima dari ${providerName}. Kembali ke ${brandName} lalu coba lagi.`,
+        invalidStateBody: `Validasi otorisasi gagal. Kembali ke ${brandName} lalu mulai koneksi lagi.`,
+        exchangeFailedBody: `Terjadi kesalahan saat menghubungkan ${providerName}. Kembali ke ${brandName} lalu coba lagi.`,
       };
     case 'zh':
       return {
@@ -422,6 +438,16 @@ const GHOST_OAUTH_PAGE_STRINGS: Record<OAuthResultPageLang, GhostOAuthResultCopy
       "internal": "Ocorreu um erro ao processar a resposta de autorização. Volte para {brand} e tente novamente."
     }
   },
+  "id": {
+    "successTitle": "Otorisasi berhasil",
+    "successBody": "Kamu bisa menutup halaman ini dan kembali ke {brand}.",
+    "errorTitle": "Otorisasi gagal",
+    "errors": {
+      "provider-error": "Server otorisasi mengembalikan error: {detail}",
+      "invalid-callback": "Respons otorisasi tidak lengkap atau gagal validasi. Kembali ke {brand} lalu coba lagi.",
+      "internal": "Terjadi kesalahan saat memproses respons otorisasi. Kembali ke {brand} lalu coba lagi."
+    }
+  },
   'zh-Hant-x-lzh': {
     successTitle: '授權已成',
     successBody: '君可闔此頁，歸 {brand} 續之。',
@@ -475,6 +501,8 @@ export function getOAuthNeutralResultCopy(
       return { title: "É necessário continuar", body: `Volte a ${brandName} e conclua a instalação no espaço de trabalho atual.` };
     case 'pt-BR':
       return { title: "Ação necessária", body: `Volte para ${brandName} e conclua a instalação no espaço de trabalho atual.` };
+    case 'id':
+      return { title: "Perlu tindakan", body: `Kembali ke ${brandName} dan selesaikan pemasangan di ruang kerja saat ini.` };
     case 'zh':
       return {
         title: '需要继续操作',

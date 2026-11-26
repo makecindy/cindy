@@ -111,6 +111,7 @@ describe("incoming share native file ownership", () => {
       "en",
       "es",
       "fr",
+      "id",
       "ja",
       "ko",
       "pt-BR",

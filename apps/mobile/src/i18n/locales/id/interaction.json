@@ -1,0 +1,501 @@
+{
+  "permission": {
+    "install": "Pasang",
+    "mcpComplete": "Selesai",
+    "mcpCancel": "Batal",
+    "mode": {
+      "default": "Izin bawaan",
+      "acceptEdits": "Izinkan perubahan",
+      "plan": "Mode rencana",
+      "auto": "Peninjauan otomatis",
+      "bypass": "Akses penuh"
+    },
+    "pickerSelect": "Pilih mode izin {{mode}}",
+    "armedRiskWarning": "Keputusan baru dikirim ke komputermu setelah kamu mengonfirmasi.",
+    "armedHighRiskTitle": "Konfirmasi tindakan berisiko tinggi",
+    "kind": "Konfirmasi izin",
+    "deny": "tolak",
+    "denyAccessibility": "Tolak permintaan izin",
+    "alwaysAllow": "Selalu izinkan untuk sesi ini",
+    "alwaysAllowAccessibility": "Selalu izinkan permintaan izin untuk sesi ini",
+    "alwaysAllowConfirm": "Konfirmasi izinkan untuk sesi ini",
+    "allowOnce": "Izinkan sekali",
+    "allowOnceAccessibility": "Izinkan permintaan izin sekali",
+    "allowOnceConfirm": "Konfirmasi izinkan sekali",
+    "highRisk": "Risiko tinggi",
+    "autoReviewUnavailable": "Peninjauan otomatis tidak selesai. Konfirmasi apakah tindakan ini diizinkan.",
+    "autoReviewReason": "Peninjauan otomatis butuh keputusanmu: {{reason}}",
+    "fullAccessConfirm": {
+      "title": "Aktifkan Akses penuh?",
+      "description": "Akses penuh mematikan sandbox ruang kerja dan melewati persetujuan rutin. {{appName}} bisa mengubah berkas di luar ruang kerja dan menjalankan perintah berjaringan tanpa bertanya lagi; tindakan berisiko tinggi bawaan tetap meminta konfirmasi.",
+      "confirm": "Aktifkan akses penuh",
+      "cancel": "Pertahankan izin saat ini"
+    },
+    "description": {
+      "default": "Tindakan menunggu persetujuanmu saat diperlukan.",
+      "acceptEdits": "Perubahan berkas langsung diizinkan; tindakan lain menunggu persetujuanmu saat diperlukan.",
+      "auto": "Tindakan disetujui oleh model AI sehingga bisa perlu menunggu lebih lama; kamu mengonfirmasi saat diperlukan.",
+      "bypass": "Tindakan rutin diizinkan langsung, termasuk berkas di luar ruang kerja dan perintah jaringan.",
+      "plan": "Hanya menganalisis dan merencanakan, tanpa mengubah berkas."
+    }
+  },
+  "planMode": {
+    "label": "Mode rencana",
+    "exit": "Keluar dari mode rencana"
+  },
+  "panel": {
+    "questionUnanswered": "Belum dijawab",
+    "questionWithdrawn": "Tidak perlu dijawab lagi",
+    "withdrawnDraft": "Pertanyaan ini tidak perlu dijawab lagi.\n{{reason}}\nDrafmu disimpan; kamu masih bisa mengirimnya sebagai tambahan.",
+    "sendSupplement": "Kirim tambahan",
+    "readOnlyKind": "Menunggu konfirmasi",
+    "readOnlyTitle": "Menunggu konfirmasi di komputermu",
+    "pendingRequests": "Permintaan tertunda",
+    "queueSwitchTo": "Beralih ke permintaan tertunda {{position}}: {{label}}",
+    "queueSwitchGeneric": "Ganti permintaan tertunda",
+    "queuePositionCurrent": "Saat ini",
+    "queuePositionNext": "Berikutnya",
+    "queuePositionNth": "No. {{index}}",
+    "composerBlockedByPending": "Selesaikan permintaan tertunda di komputermu dulu sebelum mengetik lagi.",
+    "missingRequestId": "Interaksi jarak jauh ini tidak punya requestId, jadi keputusan tidak bisa dikirim balik.",
+    "desktopConfirmUnsupported": "Konfirmasi ini hanya bisa ditangani di komputer jarak jauh. Kembali ke aplikasi desktop untuk melanjutkan.",
+    "unsupportedType": "Jenis interaksi jarak jauh ini belum didukung di aplikasi ponsel.",
+    "unsupportedKind": "Belum didukung",
+    "desktopOnlyKind": "Di komputer",
+    "cancelRequest": "Batalkan permintaan ini",
+    "cancelRequestAccessibility": "Batalkan permintaan jarak jauh ini",
+    "awaitingAnswer": "Menunggu jawaban",
+    "continueAccessibility": "Lanjutkan pertanyaan jarak jauh",
+    "continue": "Lanjutkan",
+    "askOptionCount": "{{count}} opsi",
+    "askFreeInput": "Teks bebas",
+    "askModeMulti": "Pilih banyak",
+    "askModeSingle": "Pilih satu",
+    "askMetaCaption": "{{options}} · {{mode}} · Mendukung jawaban lain",
+    "collapse": "Ciutkan",
+    "collapsePendingCard": "Ciutkan permintaan tertunda untuk membaca keluaran komputermu dulu",
+    "expandPendingCard": "Bentangkan permintaan tertunda untuk menjawab: {{title}}",
+    "collapsedHint": "Ketuk untuk menjawab",
+    "selectAnswer": "Pilih jawaban {{label}}",
+    "submittingHint": "Mengirim keputusan ke komputermu. Jangan kirim ulang.",
+    "decisionNotAccepted": "Jawabanmu tidak diterima. Coba lagi.",
+    "customAnswerInputAccessibility": "Ketik jawaban khusus",
+    "customAnswerPlaceholder": "Ketik jawaban lain",
+    "customAnswerButtonText": "Ketik jawaban lain…",
+    "answerInput": "Ketik jawaban",
+    "previous": "Kembali",
+    "skipAccessibility": "Lewati pertanyaan",
+    "skip": "Lewati",
+    "submitAnswerAccessibility": "Kirim jawaban",
+    "next": "Berikutnya",
+    "answerRequired": "Pilih atau ketik jawaban untuk melanjutkan.",
+    "submit": "Kirim jawaban",
+    "sendAndContinue": "Kirim dan lanjutkan",
+    "closeAnswer": "Tutup",
+    "planReviewTitle": "Tinjau rencana Claude",
+    "planExpand": "Bentangkan rencana",
+    "planEditHint": "Pakai mode ubah untuk menyesuaikan rencana",
+    "planBrowseHint": "Ketuk bagian untuk melompat ke sana",
+    "planEditToggle": "Ubah rencana",
+    "planEditExit": "Keluar dari mode ubah rencana",
+    "planCollapse": "Ciutkan rencana",
+    "planExpandArea": "Bentangkan area jelajah rencana",
+    "planHalf": "Beralih ke rencana layar separuh",
+    "planEditorAccessibility": "Editor rencana",
+    "planEditorPlaceholder": "Ubah rencana",
+    "planOutline": "Daftar isi",
+    "planJumpTo": "Lompat ke bagian rencana {{title}}",
+    "planEmpty": "Rencana masih kosong.",
+    "planApproveAccessibility": "Setujui dan jalankan rencana",
+    "planApprove": "Setujui rencana Claude dan mulai menulis kode",
+    "planFeedbackLabel": "Masukan rencana",
+    "planFeedbackPlaceholder": "Beri tahu Claude apa yang harus dilakukan",
+    "planFeedbackRequired": "Masukkan masukan sebelum mengirim.",
+    "planFeedbackSubmit": "Kirim masukan rencana",
+    "planFeedbackAccessibility": "Beri masukan untuk mengubah rencana",
+    "validation": {
+      "required": "Isi kolom wajib ini.",
+      "choice": "Pilih salah satu opsi yang terdaftar.",
+      "tooShort": "Masukkan minimal {{count}} karakter.",
+      "tooLong": "Masukkan maksimal {{count}} karakter."
+    },
+    "askRestrictedMetaCaption": "{{options}} · {{mode}}"
+  },
+  "kinds": {
+    "permission": {
+      "title": "Perlu izin untuk tindakan di komputer",
+      "label": "Otorisasi"
+    },
+    "ask_user_question": {
+      "title": "Agent perlu jawaban",
+      "label": "Pertanyaan"
+    },
+    "plan_review": {
+      "title": "Rencana perlu disetujui",
+      "label": "Rencana"
+    },
+    "issue_confirm": {
+      "title": "Isi Issue perlu konfirmasi",
+      "label": "Issue"
+    },
+    "rename_sessions_confirm": {
+      "title": "Perubahan nama tugas perlu konfirmasi",
+      "label": "Ganti nama"
+    },
+    "ghost_grant_confirm": {
+      "title": "Izin akses berkas perlu konfirmasi",
+      "label": "Akses berkas"
+    },
+    "plugin_setup": {
+      "title": "Plugin perlu disiapkan di komputer",
+      "label": "Plugin"
+    },
+    "fallback": {
+      "title": "Permintaan jarak jauh perlu ditangani",
+      "label": "Permintaan"
+    },
+    "input_handoff": {
+      "title": "Perlu serah terima input",
+      "label": "Serah terima input"
+    }
+  },
+  "rewind": {
+    "readError": "Pratinjau pemunduran tidak dapat dibaca. Sinkronkan lagi lalu coba.",
+    "noFilesNote": "Tidak ada perubahan berkas proyek yang terdeteksi setelah pesan ini. Melanjutkan akan menghapus obrolan berikutnya.",
+    "conversationOnlyNote": "Berkas proyek tidak dapat dipulihkan karena tidak ada savepoint Git. Melanjutkan akan menghapus obrolan setelah pesan ini; berkas tidak akan kembali ke keadaan sebelumnya.",
+    "gitSafetyDisabledNote": "Savepoint keamanan Git tidak aktif, jadi berkas proyek tidak dapat dipulihkan. Aktifkan di Pengaturan di komputer; melanjutkan akan menghapus obrolan setelah pesan ini.",
+    "moreFiles": "{{count}} berkas lagi",
+    "stats": "{{count}} berkas · +{{insertions}} / -{{deletions}} baris",
+    "gotIt": "Mengerti",
+    "cancel": "Batal",
+    "cancelAccessibility": "Batalkan pemunduran",
+    "confirm": "Konfirmasi pemunduran",
+    "confirming": "Memundurkan…",
+    "titleLoading": "Memeriksa dampak pemunduran…",
+    "titleDefault": "Mundurkan ke pesan ini?",
+    "titleEmpty": "Mundurkan obrolan saja",
+    "titleError": "Tidak dapat mundur",
+    "detailLoading": "Ponsel sedang membaca pratinjau pemunduran berkas dari komputer.",
+    "detailDefault": "Berkas di bawah ini akan dikembalikan, dan obrolan setelah pesan ini dipotong.",
+    "detailEmpty": "Tidak ada perubahan berkas proyek yang terdeteksi setelah pesan ini.",
+    "detailConversationOnly": "Berkas proyek tidak akan kembali ke keadaan sebelumnya.",
+    "detailError": "Komputer menolak pemunduran ini."
+  },
+  "collab": {
+    "dispatchSummaryItem": "{{label}}: {{task}}",
+    "batchTitle": "Ditugaskan ke {{count}} Worker sekaligus",
+    "batchTitleGeneric": "Ditugaskan ke beberapa Worker sekaligus",
+    "batchBodyFallback": "Buat Worker sekaligus",
+    "dispatchTitle": "Ditugaskan ke Worker {{who}}",
+    "dispatchRole": "Peran {{meta}}",
+    "dispatchBodyFallback": "Buat Worker",
+    "sendTitle": "Kirim pesan ke Worker",
+    "sendBodyFallback": "Kirim pesan",
+    "fromLead": "Pesan dari Lead",
+    "fromWorkerNamed": "Pesan dari Worker “{{role}}”",
+    "fromWorker": "Pesan dari Worker",
+    "fromWorkerBatch": "Laporan sistem: {{count}} hasil Worker",
+    "emptyMessageBody": "(Pesan kosong)"
+  },
+  "contextSheet": {
+    "backAccessibility": "Kembali ke panel konteks",
+    "goalStatus": {
+      "active": "Sedang berjalan",
+      "paused": "Dijeda",
+      "blocked": "Menunggu",
+      "complete": "Selesai",
+      "budgetLimited": "Mencapai batas",
+      "usageLimited": "Penggunaan dibatasi",
+      "capacityLimited": "Layanan model sibuk"
+    },
+    "goalLabel": "Tujuan",
+    "goalObjectiveAccessibility": "Isi tujuan",
+    "goalPlaceholder": "Apa yang ingin kamu capai? Agent akan terus bekerja menuju tujuan ini sampai selesai atau mencapai batas.",
+    "advancedSettings": "Pengaturan lanjutan",
+    "limitsHint": "Jika tidak diubah, mengikuti batas bawaan komputer jarak jauh; tujuan berhenti otomatis saat salah satu batas tercapai dan bisa dihentikan manual kapan saja; “Tanpa batas” berarti batas tersebut tidak ditetapkan.",
+    "maxTurns": "Giliran maksimum",
+    "tokenBudget": "Anggaran token",
+    "noProgressLimit": "Batas tanpa kemajuan",
+    "startGoal": "Mulai tujuan",
+    "goalMeta": "{{turns}} giliran · {{tokens}} token",
+    "goalCapacityHint": "Hulu belum punya kapasitas tersedia saat ini; percobaan ulang dilakukan otomatis",
+    "pause": "Jeda",
+    "resume": "Lanjutkan",
+    "clearGoal": "Hentikan tujuan",
+    "unlimited": "Tanpa batas",
+    "noScreenshots": "Tangkapan layar tidak ditemukan.",
+    "mediaRemove": "Hapus lampiran foto {{name}}",
+    "mediaDeselect": "Batal pilih foto {{name}}",
+    "mediaSelect": "Pilih foto {{name}}",
+    "photoPermissionHint": "Izin foto belum aktif. Aktifkan untuk menambahkan foto terbaru dengan cepat.",
+    "enablePhotoPermission": "Aktifkan izin foto",
+    "enable": "Aktifkan",
+    "icloudTimeout": "Foto masih diunduh dari iCloud dan waktu tunggunya habis. Periksa jaringan lalu coba lagi nanti.",
+    "photoNotReadable": "Foto ini belum bisa dibaca (mungkin belum selesai diunduh dari iCloud). Coba lagi nanti."
+  },
+  "pluginSetup": {
+    "remoteDesktop": "Buka desktop jarak jauh",
+    "completeOnDesktop": "Gunakan desktop jarak jauh untuk menyelesaikan penyiapan di komputer. Login, otorisasi, dan penyimpanan kredensial dilakukan di komputer itu; kartu ini memperbarui statusnya otomatis.",
+    "chooseOne": "Pilih salah satu cara pengaturan",
+    "progress": "{{satisfied}}/{{total}} selesai",
+    "desktopActionHint": "Di komputer: {{action}}",
+    "a11ySeparator": ", ",
+    "phase": {
+      "pending": "Menunggu pengaturan",
+      "action_running": "Berlangsung…",
+      "waiting_external": "Menunggu otorisasi…",
+      "verifying": "Memverifikasi…",
+      "satisfied": "Selesai",
+      "failed": "Gagal",
+      "cancelled": "Dibatalkan"
+    },
+    "error": {
+      "ACTION_FAILED": "Tindakan pengaturan tidak selesai. Coba lagi.",
+      "ACTION_STALE": "Pengaturan berubah. Pilih lagi tindakan pengaturan.",
+      "AUTH_CANCELLED": "Otorisasi dibatalkan. Otorisasi akun lagi setelah siap.",
+      "AUTH_FAILED": "Gagal menyelesaikan otorisasi. Coba lagi.",
+      "AUTH_NETWORK": "Tidak bisa menghubungi layanan otorisasi. Periksa jaringan lalu coba lagi.",
+      "AUTH_SERVICE_UNAVAILABLE": "Layanan otorisasi sementara tidak tersedia. Coba lagi nanti.",
+      "INLINE_INVALID": "Isi konfigurasi tidak valid. Periksa lalu coba lagi.",
+      "INLINE_UNAVAILABLE": "Versi ini tidak bisa menyimpan konfigurasi tersebut di obrolan. Perbarui Cindy lalu coba lagi.",
+      "SAVE_FAILED": "Gagal menyimpan konfigurasi. Coba lagi.",
+      "WINDOW_CLOSED": "Jendela yang memulai pengaturan sudah ditutup. Kembali ke tugas lalu coba lagi.",
+      "TARGET_UNAVAILABLE": "Plugin ini dinonaktifkan, di-uninstall, atau tidak tersedia. Periksa Plugin lalu coba lagi.",
+      "ASSESSMENT_FAILED": "Status pengaturan sementara tidak bisa diperbarui. Coba lagi.",
+      "TIMEOUT": "Pengaturan melewati batas waktu. Coba lagi."
+    },
+    "action": {
+      "oauth_connect": "Otorisasi",
+      "open_plugin_settings": "Buka pengaturan",
+      "manage_connection": "Kelola koneksi",
+      "open_client_settings": "Buka pengaturan model"
+    },
+    "inlineFormAction": "Isi {{label}} di komputer",
+    "inlineFormActionGeneric": "Isi satu pengaturan di komputer"
+  },
+  "inputHandoff": {
+    "originWarning": {
+      "insecure": "Halaman ini tidak memakai koneksi aman; isian di sini bisa dibaca orang lain.",
+      "ip-address": "Halaman ini memakai alamat IP, bukan domain. Pastikan ini situs yang dimaksud.",
+      "local-host": "Halaman ini berasal dari layanan di komputer ini. Pastikan ini aplikasi yang dimaksud.",
+      "local-file": "Halaman ini berkas lokal. Pastikan isinya sesuai harapan.",
+      "punycode": "Alamat ini mengandung karakter khusus dan mungkin meniru situs lain. Periksa dengan teliti.",
+      "embedded-frame": "Kolom ini berada di situs lain yang tertanam di halaman. Pastikan sumbernya tepercaya."
+    },
+    "agentControlled": "Layar ini dibuka oleh Agent. Sebelum mengisi, pastikan ini memang tempat yang ingin kamu masuki.",
+    "agentPicture": "Kode QR ini berasal dari tangkapan layar Agent, jadi Cindy tidak bisa melihat layar aslinya dan tidak akan otomatis melanjutkan setelah pemindaian. Pastikan kode ini mengarah ke situs tempat kamu ingin masuk, lalu pilih “Kembalikan ke Agent” setelah memindai.",
+    "error": {
+      "decision": "Tindakan tidak terkirim. Coba lagi.",
+      "stale": "Layar sudah berubah. Ikuti tampilan terbaru.",
+      "submit": "Input tidak terkirim. Coba lagi."
+    },
+    "terminal": {
+      "succeeded": "Sudah dikembalikan ke Agent.",
+      "cancelled": "Serah terima input dibatalkan.",
+      "failed": "Serah terima input berakhir.",
+      "expired": "Menunggu terlalu lama, serah terima input berakhir."
+    },
+    "failure": {
+      "permission": "Cindy tidak punya izin membaca layar komputer ini. Izinkan Cindy di Aksesibilitas pada Pengaturan Sistem.",
+      "target_gone": "Jendela tujuan sudah ditutup.",
+      "unreadable": "Layar ini tidak bisa dibaca. Selesaikan langsung di komputer host, lalu kembalikan ke Agent.",
+      "action_failed": "Tindakan tadi tidak berpengaruh. Periksa layar lalu coba lagi.",
+      "timeout": "Menunggu terlalu lama, serah terima input berakhir.",
+      "unsupported": "Komputer ini belum mendukung serah terima input.",
+      "origin_changed": "Halaman berubah sebelum diisi, jadi tidak ada yang dimasukkan. Periksa halaman saat ini lalu isi lagi.",
+      "picture_unavailable": "Tidak bisa menampilkan gambar langkah ini. Izinkan Cindy merekam layar di Pengaturan Sistem, dan pastikan jendelanya tidak diminimalkan.",
+      "screen_locked": "Layar komputer ini terkunci (monitor yang tertidur juga akan mengunci layar). Bangunkan dan buka kuncinya, lalu minta Agent mencoba lagi.",
+      "nothing_to_fill": "Tidak ada yang perlu diisi di layar ini, jadi sudah dikembalikan ke Agent untuk melanjutkan."
+    },
+    "phase": {
+      "reading": "Membaca layar…",
+      "working": "Mengisi…",
+      "finishing": "Sepertinya sudah selesai. Dikembalikan ke Agent dalam {{count}} detik.",
+      "finishingNow": "Sepertinya sudah selesai. Mengembalikan ke Agent…"
+    },
+    "action": {
+      "stay": "Belum selesai",
+      "done": "Kembalikan ke Agent",
+      "cancel": "Batalkan serah terima input",
+      "claim": "Tangani di sini",
+      "picture": "Lihat layar",
+      "backToForm": "Kembali ke formulir",
+      "liveView": "Gambar langsung",
+      "openRemoteDesktop": "Buka desktop jarak jauh",
+      "useForm": "Pakai formulir saja",
+      "fill": "Isi",
+      "skip": "Lewati",
+      "continue": "Lanjutkan",
+      "close": "Batal",
+      "showPassword": "Tampilkan kata sandi",
+      "hidePassword": "Sembunyikan kata sandi",
+      "scan": "Pindai"
+    },
+    "directSignIn": {
+      "hint": "Masuk langsung di jendela; Cindy melanjutkan sendiri setelah selesai."
+    },
+    "remoteUnavailable": "Komputer ini tidak bisa menerima input dari jarak jauh. Selesaikan langkah ini di komputer host, lalu kembalikan ke Agent.",
+    "unnamedField": "Kolom",
+    "passwordField": "Kata sandi",
+    "codeField": "Kode verifikasi",
+    "filledHint": "Sudah ada isinya. Biarkan kosong untuk mempertahankannya.",
+    "record": {
+      "doneOn_one": "Pemilik menyelesaikan {{count}} langkah input di {{device}}",
+      "doneOn_other": "Pemilik menyelesaikan {{count}} langkah input di {{device}}",
+      "doneHost_one": "Pemilik menyelesaikan {{count}} langkah input di komputer host",
+      "doneHost_other": "Pemilik menyelesaikan {{count}} langkah input di komputer host",
+      "donePhone_one": "Pemilik menyelesaikan {{count}} langkah input di ponsel",
+      "donePhone_other": "Pemilik menyelesaikan {{count}} langkah input di ponsel",
+      "doneElsewhere_one": "Pemilik menyelesaikan {{count}} langkah input di perangkat lain",
+      "doneElsewhere_other": "Pemilik menyelesaikan {{count}} langkah input di perangkat lain",
+      "done": "Serah terima input selesai",
+      "nothingToFill": "Tidak ada yang perlu diisi; dikembalikan ke Agent",
+      "cancelled": "Serah terima input dibatalkan",
+      "expired": "Serah terima input kehabisan waktu",
+      "failed": "Serah terima input tidak selesai"
+    },
+    "holder": {
+      "elsewhere": "Sedang ditangani di {{device}}. Bisa juga ditangani di sini.",
+      "host": "komputer host",
+      "phone": "ponsel",
+      "otherDevice": "perangkat lain"
+    },
+    "agentNote": "Tambahan dari Agent: {{note}}",
+    "picture": {
+      "hint": "Ketuk sebuah titik di gambar, dan Cindy mengetuk titik yang sama di komputer host.",
+      "open": "Tampilkan gambar langkah ini",
+      "openHint": "Langkah ini tidak bisa disusun sebagai formulir. Gambar dikirim terenkripsi hanya ke perangkat ini dan tidak disimpan.",
+      "alt": "Gambar jendela tujuan",
+      "loading": "Mengambil gambar…",
+      "error": "Tidak bisa mengambil gambar. Coba lagi.",
+      "field": "Kolom aktif",
+      "type": "Input",
+      "typeEnter": "Ketik lalu tekan Return"
+    },
+    "liveViewHint": "Lihat jendela ini secara langsung dari sini; ketukan dan input hanya masuk ke jendela ini.",
+    "deviceCode": {
+      "prompt": "Masuk dengan kode ini",
+      "copy": "Salin kode",
+      "copied": "Kode disalin",
+      "copyFailed": "Gagal menyalin",
+      "open": "Buka di Perangkat Ini",
+      "openFailed": "Tidak bisa membuka tautan",
+      "then": "Masukkan kode di halaman itu dan selesaikan proses masuk, lalu pilih “Kembalikan ke Agent”."
+    },
+    "sheetNote": "Hanya diisi ke bagian ini di komputer, tidak diberikan ke Agent dan tidak disimpan.",
+    "nothingLeft": "Tidak ada lagi yang perlu diisi di sini.",
+    "qr": {
+      "open": "Buka {{site}} di Sini",
+      "openApp": "Buka tautan {{site}} di perangkat ini",
+      "share": "Simpan atau bagikan gambar",
+      "copyLink": "Salin tautan",
+      "copyText": "Salin konten",
+      "copied": "Disalin",
+      "copyFailed": "Tidak bisa menyalin. Coba lagi.",
+      "openFailed": "Perangkat ini tidak bisa membuka tautan. Simpan gambarnya, lalu pindai dari galeri lewat “Pindai” di App.",
+      "shareFailed": "Gagal membuka berbagi. Coba lagi.",
+      "hintLink": "Membukanya di sini menyerahkan login ke App yang menangani tautan. Atau simpan gambar lalu pindai dari galeri lewat “Pindai” di App. Cindy melanjutkan otomatis setelah kamu masuk.",
+      "hint": "Simpan gambar lalu pindai dari galeri lewat “Pindai” di App, atau pindai kode ini dari perangkat lain. Cindy melanjutkan otomatis setelah kamu masuk.",
+      "alt": "Kode QR di komputer. Ketukan akan diteruskan ke kode ini di komputer.",
+      "loading": "Mengambil kode QR…",
+      "failed": "Gagal mengambil kode QR. Ketuk untuk mencoba lagi.",
+      "scanned": "Sudah dipindai. Konfirmasi di ponsel; Cindy melanjutkan setelah dikonfirmasi."
+    }
+  },
+  "presentation": {
+    "action": {
+      "submitting": "Mengirim"
+    },
+    "permission": {
+      "titleStdin": "Izinkan input ke terminal ini?",
+      "titleMcpUrl": "Selesaikan permintaan dari {{server}}",
+      "highRiskTitle": "Izin berisiko tinggi perlu konfirmasi kedua",
+      "highRiskDetail": "Periksa isi perintahnya, lalu ketuk konfirmasi lagi untuk mengizinkan; tolak jika ragu.",
+      "sessionAllowTitle": "Bisa izinkan sekali, atau selalu izinkan untuk tugas ini",
+      "allowTitle": "Setelah diizinkan, komputer akan melanjutkan",
+      "tool": "Alat: {{tool}}",
+      "title": "Izinkan {{tool}}?",
+      "risk": "Perintah ini bisa mengubah status sistem, repositori, atau layanan eksternal. Sebelum mengizinkan, pastikan kamu memercayai tugas dan isi perintah saat ini.",
+      "titleCommand": "Izinkan perintah ini dijalankan?",
+      "titleFileRead": "Izinkan membaca berkas?",
+      "titleFileWrite": "Izinkan mengubah berkas?",
+      "titleBrowser": "Izinkan browser menjalankan langkah ini?",
+      "titlePlugin": "Izinkan Plugin “{{plugin}}”?"
+    },
+    "ask": {
+      "progress": "Pertanyaan {{current}} dari {{total}}",
+      "multiSelect": "Bisa pilih beberapa, atau masukkan jawaban lain.",
+      "singleSelect": "Pilih satu jawaban, atau masukkan jawaban lain.",
+      "emptyTitle": "Tidak ada pertanyaan spesifik",
+      "emptyDetail": "Kamu bisa mengirim jawaban kosong agar komputer melanjutkan.",
+      "waiting": "Agent sedang menunggu konfirmasi"
+    },
+    "plan": {
+      "outlineCount": "{{count}} bagian",
+      "noOutline": "Tidak ada daftar bagian",
+      "hasFile": "Berkas rencana tersedia",
+      "noFile": "Tidak ada path berkas rencana",
+      "editedTitle": "Rencana sudah diubah; setelah disetujui, versi saat ini yang dijalankan",
+      "approveTitle": "Setelah disetujui, komputer melanjutkan sesuai rencana ini"
+    },
+    "queue": {
+      "count": "{{count}} permintaan",
+      "empty": "Tidak ada permintaan tertunda",
+      "hint": {
+        "plan_review": "Tinjau rencana dulu, beri masukan bila perlu, dan komputer baru melanjutkan setelah dikonfirmasi.",
+        "permission": "Hanya keputusan ini yang dikirim balik ke tugas saat ini di komputer.",
+        "ask_user_question": "Jawaban disimpan sebagai draf; komputer melanjutkan setelah dikirim.",
+        "issue_confirm": "Periksa judul dan isi sebelum mengirim.",
+        "plugin_setup": "Konfigurasi harus diselesaikan di komputer; kamu bisa membatalkan permintaan ini di sini.",
+        "fallback": "Ponsel memproses permintaan sesuai urutan yang dikirim komputer."
+      }
+    }
+  },
+  "companion": {
+    "permissionRequest": "{{name}} minta konfirmasimu",
+    "operation": "Operasi",
+    "details": "Lihat detail",
+    "fields": {
+      "path": "Berkas",
+      "file_path": "Berkas",
+      "url": "Alamat",
+      "command": "Perintah",
+      "ghost_id": "Plugin",
+      "tool": "Alat"
+    }
+  },
+  "issueConfirm": {
+    "title": "Konfirmasi pengiriman masukan ke {{appName}}",
+    "typeBug": "Bug",
+    "typeFeature": "Saran fitur",
+    "titleLabel": "Judul",
+    "bodyLabel": "Isi (Markdown)",
+    "privacyHint": "Judul dan isi Issue akan tampil publik dan mungkin bisa dicari atau di-cache. Sistem hanya bisa menyembunyikan sebagian informasi sensitif umum, tidak bisa mengenali semua privasi semantik.",
+    "relatedLogsHint": "Pengiriman ini menyertakan log klien terkait yang ditampilkan di atas; log sudah disaring sumber dan field-nya, disamarkan, serta dibatasi panjangnya sebelum dipublikasikan.",
+    "privacyConfirm": "Isi publik di atas sudah diperiksa dan tidak memuat informasi pribadi, obrolan, atau bisnis yang tidak boleh dipublikasikan",
+    "submissionMethodLabel": "Identitas pengiriman",
+    "identityGithubUser": "Akun GitHub @{{login}}",
+    "identityGithubUserHint": "Kamu akan menjadi penulis Issue ini di GitHub dan bisa mengubah atau menutupnya di GitHub",
+    "identityPlatform": "Bot resmi Cindy @{{login}} (Default)",
+    "identityPlatformHint": "Tidak perlu mengonfigurasi akun GitHub; Issue dibuat oleh Bot resmi, dan kamu bisa memilih atribusi publik di isinya",
+    "publicNameLabel": "Atribusi publik",
+    "publicNameHint": "Atribusi ini akan tampil publik di isi Issue",
+    "anonymous": "Anonim",
+    "useAnonymous": "Gunakan atribusi anonim",
+    "envLine": "Lingkungan klien saat pengiriman (dilampirkan otomatis): klien {{appVersion}} · {{platform}} {{arch}} ({{osVersion}}) · bahasa antarmuka {{uiLanguage}}",
+    "runtimeLine": "Harness {{harness}} · Model ID {{modelId}} (tugas ini)",
+    "regionLine": "Wilayah versi: {{region}}",
+    "regionCodeCn": "CN",
+    "regionCodeDev": "Dev",
+    "submit": "Kirim masukan",
+    "cancel": "Batal",
+    "previewLabel": "GitHub · Masukan publik",
+    "edit": "Ubah",
+    "doneEditing": "Selesai mengubah",
+    "publicSubmit": "Kirim masukan secara publik",
+    "publicationNotice": "Setelah dikirim, isi dan atribusi akan tampil publik di GitHub.",
+    "attribution": "Atribusi: {{name}}",
+    "environment": "Lingkungan runtime disertakan",
+    "identitySettings": "Atribusi dan akun"
+  }
+}

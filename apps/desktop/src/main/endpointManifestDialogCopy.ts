@@ -115,6 +115,22 @@ export const ENDPOINT_MANIFEST_DIALOG_COPY: Record<
     offlineButton: 'Use Last Configuration',
     quitButton: 'Quit Cindy',
   },
+  "id": {
+    "networkTitle": "Cindy tidak dapat terhubung",
+    "configTitle": "Cindy tidak dapat dimulai",
+    "networkBody": "Cindy tidak bisa terhubung ke layanannya saat mulai. Pastikan perangkat ini online, lalu coba mulai lagi. Jika kamu memakai Proxy atau jaringan kantor, coba ganti jaringan.",
+    "configBody": "Cindy belum bisa selesai dimulai saat ini. Coba lagi nanti. Jika masalah berlanjut, hubungi dukungan.",
+    "errorLine": "Error: {{error}}",
+    "diagnosticsHint": "Jika butuh bantuan, salin diagnostik ke pesan dukunganmu.",
+    "copyDiagnosticsButton": "Salin diagnostik",
+    "copiedHint": "Diagnostik disalin. Tempel ke pesan dukunganmu.",
+    "copyFailedHint": "Diagnostik tidak dapat disalin. Coba lagi.",
+    "noSavedConfigurationHint": "Perangkat ini belum punya konfigurasi tersimpan, jadi Cindy perlu menyambung ulang sebelum bisa dimulai.",
+    "offlineHint": "Kamu juga bisa memulai offline dengan konfigurasi terakhir yang diambil Cindy ({{savedAt}}). Fitur yang butuh jaringan tidak akan tersedia.",
+    "retryButton": "Coba mulai Cindy lagi",
+    "offlineButton": "Pakai konfigurasi terakhir",
+    "quitButton": "Keluar dari Cindy"
+  },
   ja: {
     networkTitle: 'Cindy に一時的に接続できません',
     configTitle: 'Cindy を一時的に起動できません',

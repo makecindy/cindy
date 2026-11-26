@@ -83,6 +83,7 @@ function localizedActionLabel(
     if (resolvedLocale === 'de') return "Zum Chat hinzufügen";
     if (resolvedLocale === 'pt-PT') return "Adicionar à conversa";
     if (resolvedLocale === 'pt-BR') return "Adicionar à conversa";
+    if (resolvedLocale === 'id') return 'Tambahkan ke obrolan';
     return 'Add to chat';
   }
   // Copy 是两套菜单共用的同一条命令,标签只保留 catalog 一处正本。
@@ -99,6 +100,7 @@ function localizedActionLabel(
     if (resolvedLocale === 'de') return `„${preview}“ nachschlagen`;
     if (resolvedLocale === 'pt-PT') return `Pesquisar «${preview}»`;
     if (resolvedLocale === 'pt-BR') return `Consultar “${preview}”`;
+    if (resolvedLocale === 'id') return `Cari “${preview}”`;
     return `Look Up “${preview}”`;
   }
   if (resolvedLocale === 'zh-CN') return `在网页中搜索“${preview}”`;

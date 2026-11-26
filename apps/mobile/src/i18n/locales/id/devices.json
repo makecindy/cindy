@@ -1,0 +1,1040 @@
+{
+  "widgetGuideAction": "Tambah widget",
+  "widgetGuideIntro": "Widget adalah kartu kecil di Layar Utama. Lihat sisa kuota dan pemakaian token hari ini tanpa membuka Cindy.",
+  "widgetGuideExample": "Widget Cindy di samping ikon aplikasi di Layar Utama ponsel.",
+  "widgetGuidePicker": "Edit → Tambah Widget",
+  "widgetGuideIOS": "Sentuh dan tahan area kosong di Layar Utama, lalu ketuk {{picker}}.\n\nCari Cindy, pilih Kuota langganan atau Pemakaian harian, lalu ketuk Tambah Widget.",
+  "widgetGuideAndroid": "Sentuh dan tahan area kosong di layar utama, lalu ketuk Widget.\n\nTemukan Cindy dan seret Kuota langganan atau Pemakaian harian ke layar utama.",
+  "widgetGuideHome": "Layar Utama",
+  "widgetGuideLock": "Layar Kunci",
+  "widgetGuideLockIOS": "Juga di Layar Kunci: sentuh dan tahan, lalu ketuk Sesuaikan.",
+  "widgetGuideDismiss": "Mengerti",
+  "usageOther": "Lainnya",
+  "usageTitle": "Ringkasan pemakaian",
+  "usageOnlyDevice": "Hanya {{name}}",
+  "usagePlans": "Jatah paket",
+  "usageBudget": "Sisa anggaran periode",
+  "usageWaiting": "Setelah terhubung ke komputer, sisa kuota paket dan pemakaian hari ini akan tampil di sini",
+  "usageUpdateDesktop": "Perbarui Cindy di komputer untuk melihat pemakaian",
+  "usageWaitingTitle": "Pemakaian akan tampil di sini",
+  "usageWaitingCopy": "Setelah ponsel terhubung ke komputermu, sisa kuota paket dan pemakaian harian tiap akun disinkronkan otomatis, biasanya hanya beberapa detik.",
+  "usageUpdateDesktopTitle": "Perbarui Cindy di komputer untuk melihatnya",
+  "usageUpdateDesktopCopy": "Versi Cindy di komputer terlalu lama dan belum bisa menyinkronkan pemakaian ke ponsel. Setelah diperbarui, data akan tampil otomatis.",
+  "management": {
+    "addCloud": "Tambah host cloud",
+    "preparingCloud": "Menyiapkan host cloud",
+    "manageCloud": "Kelola host cloud",
+    "title": "Manajemen perangkat",
+    "openDevice": "Lihat detail perangkat {{name}}",
+    "details": "Detail perangkat",
+    "retry": "Coba lagi",
+    "unknown": "Belum ada informasi",
+    "notFound": "Perangkat ini sudah tidak ada di akunmu.",
+    "deleteDevice": "Hapus perangkat",
+    "deleteTitle": "Hapus “{{name}}”?",
+    "deleteMessage": "Keluarkan perangkat ini dari akunmu dan putuskan akses jarak jauhnya. Tugas dan berkas di perangkat tetap disimpan; masuk kembali di perangkat itu untuk bergabung lagi.",
+    "deleteFailed": "Gagal menghapus perangkat.",
+    "deleteOnline": "Server ini belum mendukung penghapusan perangkat yang online. Coba lagi setelah layanan diperbarui.",
+    "deleteRejectedWhileOffline": "Perangkat tidak bisa dihapus: server masih mencatatnya online, padahal di daftar tampil offline.",
+    "currentlyOnline": "Sedang online",
+    "availableSection": "Perangkat online",
+    "offlineSection": "Perangkat offline",
+    "showAllOffline": "Tampilkan semua ({{count}})",
+    "showFewerOffline": "Ciutkan",
+    "nameTooLong": "Nama perangkat tidak boleh lebih dari {{limit}} karakter.",
+    "fields": {
+      "name": "Nama",
+      "status": "Status",
+      "platform": "Platform",
+      "model": "Model",
+      "systemVersion": "Versi sistem",
+      "appVersion": "Versi Cindy",
+      "cpu": "Prosesor",
+      "memory": "Memori",
+      "lastSeen": "Terakhir online",
+      "deviceId": "Device ID"
+    }
+  },
+  "common": {
+    "cancel": "Batal",
+    "save": "Simpan",
+    "delete": "Hapus",
+    "create": "Baru"
+  },
+  "resources": {
+    "connectionUnknown": "Status koneksi tidak diketahui",
+    "hostOffline": "Offline",
+    "titleFallback": "Sumber daya",
+    "loading": "Memuat…",
+    "emptyTitle": "Belum ada apa pun di sini",
+    "emptyCopy": "Komputer ini belum menyediakan item apa pun di sini.",
+    "loadFailed": "Tidak bisa memuat konten",
+    "noHosts": "Tidak ada komputer kompatibel yang tersedia.",
+    "noConversation": "Item ini belum punya sesi yang bisa dibuka.",
+    "openFailed": "Sesi tidak bisa dibuka",
+    "resolving": "Membuka sesi terbaru…",
+    "retry": "Coba lagi",
+    "hostCount": "{{count}} komputer",
+    "stale": "Item ini mungkin sudah kedaluwarsa. Belum bisa diperbarui."
+  },
+  "presentation": {
+    "deviceList": {
+      "headerAvailable": "{{count}} komputer bisa dikendalikan",
+      "headerUnavailable": "{{count}} komputer sementara tidak tersedia",
+      "waitingForDesktop": "Menunggu komputer online",
+      "filterAvailable": "Perangkat yang bisa dikendalikan",
+      "filterEmpty": "Tidak ada perangkat yang bisa dikendalikan",
+      "filterMeta": "{{available}} bisa diakses",
+      "filterMetaWithUnavailable": "{{available}} bisa diakses · {{unavailable}} perlu ditangani",
+      "showUnavailableReason": "Perangkat yang dibentangkan akan menampilkan alasan tidak tersedia",
+      "emptyCopy": "Masuk ke akun yang sama di komputer, lalu aktifkan “Izinkan perangkat dengan akun sama mengendalikan komputer ini” di Pengaturan → Koneksi jarak jauh.",
+      "emptyTitle": "Belum ada komputer untuk ditampilkan",
+      "hideUnavailableA11y": "Sembunyikan komputer yang tidak tersedia",
+      "showUnavailableA11y": "Tampilkan komputer yang tidak tersedia",
+      "availableOnly": "Hanya yang tersedia",
+      "unavailableCount": "Tidak tersedia {{count}}",
+      "status": {
+        "ready": "Bisa dikendalikan",
+        "busy": "Berjalan",
+        "offline": "Offline",
+        "remoteDisabled": "Kontrol jarak jauh nonaktif",
+        "accessRevoked": "Akses dicabut",
+        "self": "Perangkat ini"
+      },
+      "detail": {
+        "accessRevoked": "Pulihkan akses ponsel ini di komputer",
+        "remoteDisabled": "Aktifkan kontrol jarak jauh di pengaturan komputer",
+        "self": "Ponsel ini",
+        "busy": "Komputer sedang mengerjakan tugas",
+        "ready": "Kontrol jarak jauh diizinkan"
+      },
+      "lastSeen": {
+        "never": "Belum pernah online",
+        "unknown": "Waktu online terakhir tidak diketahui",
+        "justNow": "Baru saja online",
+        "minutesAgo": "Online {{count}} menit lalu",
+        "hoursAgo": "Online {{count}} jam lalu",
+        "daysAgo": "Online {{count}} hari lalu",
+        "onDate": "Terakhir online {{date}}"
+      }
+    },
+    "sessionList": {
+      "section": {
+        "pinned": "Disematkan",
+        "dialogue": "Obrolan"
+      },
+      "filterWithCount": "{{label}} {{count}}",
+      "controlsSummary": "{{filter}} · Dikelompokkan menurut {{group}}",
+      "automation": "Otomasi",
+      "sessionCount": "{{count}} sesi",
+      "messageCount": "{{count}} pesan",
+      "status": {
+        "archived": "Diarsipkan",
+        "deleted": "Terhapus"
+      },
+      "preview": {
+        "permission": "Menunggu izin",
+        "planReview": "Menunggu tinjauan rencana",
+        "answer": "Menunggu balasanmu",
+        "attention": "Menunggu tindakanmu",
+        "automationRunning": "Otomasi berjalan",
+        "running": "Berjalan"
+      },
+      "context": {
+        "matchingTasks": "{{count}} sesi yang cocok",
+        "tasks": "{{count}} sesi",
+        "noMatchingTasks": "Tidak ada sesi yang cocok",
+        "noResults": "Tidak ada hasil untuk filter ini",
+        "rows": " · {{count}} baris",
+        "detail": "{{result}}{{rows}} · {{filter}} · Dikelompokkan menurut {{group}}",
+        "searchResults": "Hasil pencarian",
+        "title": {
+          "active": "Sesi aktif",
+          "waiting": "Sesi tertunda",
+          "automation": "Sesi otomasi",
+          "archived": "Sesi yang diarsipkan",
+          "all": "Semua sesi"
+        },
+        "hint": {
+          "search": "Pencarian mencakup judul, path proyek, model, nama otomasi, dan pratinjau pesan.",
+          "active": "Buka sesi untuk terus mengendalikannya, atau tahan untuk memilih beberapa sesi.",
+          "waiting": "Izin, tinjauan rencana, dan pertanyaan yang perlu dikonfirmasi di ponsel muncul di sini.",
+          "automation": "Sesi otomasi dikelompokkan per otomasi; bentangkan grup untuk membuka satu eksekusi tertentu.",
+          "archived": "Tahan sesi yang diarsipkan untuk membatalkan arsip atau menghapusnya sekaligus.",
+          "all": "Sesi aktif, diarsipkan, dan otomasi ditampilkan bersama agar mudah dicari."
+        }
+      },
+      "empty": {
+        "search": {
+          "title": "Tidak ada sesi yang cocok",
+          "copy": "Coba judul, path proyek, model, atau kata kunci pesan lain."
+        },
+        "waiting": {
+          "title": "Tidak ada permintaan tertunda",
+          "copy": "Permintaan izin, tinjauan rencana, dan pilihan pertanyaan muncul di sini."
+        },
+        "automation": {
+          "title": "Tidak ada sesi otomasi",
+          "copy": "Setelah otomasi berjalan, sesi terkait akan dikelompokkan di sini."
+        },
+        "archived": {
+          "title": "Tidak ada sesi yang diarsipkan",
+          "copy": "Tahan sesi untuk mengarsipkan atau menghapusnya sekaligus."
+        },
+        "active": {
+          "title": "Tidak ada sesi aktif di komputer ini",
+          "copy": "Buat atau lanjutkan sesi di komputer dan sesi itu akan muncul di sini."
+        }
+      },
+      "time": {
+        "unknown": "Waktu aktivitas terakhir tidak diketahui",
+        "justNow": "Baru saja",
+        "minutesAgo_one": "{{count}} menit lalu",
+        "minutesAgo_other": "{{count}} menit lalu",
+        "hoursAgo_one": "{{count}} jam lalu",
+        "hoursAgo_other": "{{count}} jam lalu",
+        "daysAgo_one": "{{count}} hari lalu",
+        "daysAgo_other": "{{count}} hari lalu",
+        "minutes": "{{count}} menit",
+        "hours": "{{count}} jam",
+        "days": "{{count}} hari",
+        "weeks": "{{count}} minggu",
+        "months": "{{count}} bulan",
+        "years": "{{count}} tahun"
+      }
+    },
+    "home": {
+      "allDevices": "Semua",
+      "allComputers": "Semua perangkat",
+      "waitingCount": "{{count}} tertunda",
+      "synced": "Tersinkron",
+      "unknownComputer": "Perangkat tidak dikenal",
+      "uncategorizedProject": "Proyek tanpa kategori",
+      "cindyMake": "Cindy Make",
+      "empty": {
+        "search": {
+          "title": "Tidak ada hasil yang cocok",
+          "copy": "Coba nama proyek, judul sesi, nama komputer, atau kata kunci pesan lain."
+        },
+        "waiting": {
+          "title": "Tidak ada permintaan tertunda",
+          "copy": "Permintaan izin, tinjauan rencana, dan pilihan pertanyaan muncul di sini."
+        },
+        "automation": {
+          "title": "Tidak ada sesi otomasi",
+          "copy": "Setelah otomasi berjalan, sesi terkait akan dikelompokkan per proyek di sini."
+        },
+        "archived": {
+          "title": "Tidak ada sesi yang diarsipkan",
+          "copy": "Beralih ke Semua atau Aktif untuk terus melihat proyek dan sesi saat ini."
+        },
+        "noSession": {
+          "title": "Belum ada sesi",
+          "copy": "Buat atau lanjutkan sesi di komputer, lalu proyek dan sesi terkait langsung muncul di sini."
+        }
+      },
+      "noDevice": {
+        "accessRevoked": {
+          "title": "Akses dicabut",
+          "copy": "{{names}} mencabut akses jarak jauh ponsel ini. Coba minta lagi, atau izinkan kembali di komputer agar pulih otomatis."
+        },
+        "remoteDisabled": {
+          "title": "Izinkan kontrol jarak jauh di komputer",
+          "copy": "{{names}} sudah online. Tinggal satu langkah: aktifkan izin kontrol ponsel di komputer."
+        },
+        "offline": {
+          "title": "Buka Cindy di komputer",
+          "copy": "Komputer yang pernah terhubung sekarang offline. Buka Cindy di komputer dan tetap masuk; ponsel akan tersambung otomatis."
+        },
+        "firstRun": {
+          "title": "Hubungkan Cindy di komputer",
+          "copy": "Saat ini Cindy berjalan di komputermu. Aplikasi ponsel memakai akses jarak jauh agar kamu bisa memakai Agent di komputer itu."
+        }
+      }
+    },
+    "bulk": {
+      "action": {
+        "archive": "Arsipkan",
+        "delete": "Hapus",
+        "pin": "Sematkan",
+        "restore": "Batalkan arsip",
+        "unpin": "Lepas sematan"
+      },
+      "title": "{{action}} {{count}} sesi",
+      "description": "Terapkan {{action}} ke {{count}} sesi yang dipilih.",
+      "descriptionWithSkipped": "Terapkan {{action}} ke {{count}} sesi yang dipilih; {{skippedCount}} sesi yang tidak berlaku akan dilewati."
+    }
+  },
+  "list": {
+    "projectActions": {
+      "newTask": "Sesi baru",
+      "allTasks": "Semua sesi",
+      "search": "Cari"
+    },
+    "taskSuggestions": {
+      "connected": "Komputer terhubung",
+      "title": "Jauh dari komputer?\nTetap bisa memulai.",
+      "copy": "Serahkan ke Cindy dari sini agar dikerjakan di komputer. Pantau kemajuannya kapan saja dari ponsel.",
+      "footerTitle": "Selanjutnya, biar komputer yang bantu…",
+      "footerCopy": "Mulai sesi baru dan pantau kemajuannya di ponsel.",
+      "newTask": "Sesi baru",
+      "tryThese": "Coba tugas baru",
+      "shuffle": "Tampilkan ide lain",
+      "syncHint": "Sesi yang dimulai di komputer juga akan muncul di sini.",
+      "items": {
+        "findFile": {
+          "label": "Cari berkas di komputer",
+          "hint": "Tak perlu kembali ke komputer untuk mencarinya",
+          "prompt": "Bantu cari berkas di komputer ini. Tanyakan dulu kata kunci nama berkas, jenis berkas, atau perkiraan waktu modifikasinya, lalu cari dan tampilkan daftar kemungkinan hasilnya."
+        },
+        "computerStatus": {
+          "label": "Lihat seberapa sibuk komputer sekarang",
+          "hint": "Cek aktivitas dan penggunaan sumber daya",
+          "prompt": "Cek penggunaan CPU, memori, dan disk di komputer ini, temukan program yang memakai banyak sumber daya, lalu ringkas dengan bahasa sederhana."
+        },
+        "projectProgress": {
+          "label": "Ikuti perkembangan terbaru proyek",
+          "hint": "Tinjau perubahan terbaru dan sisa pekerjaan",
+          "prompt": "Bantu rangkum perkembangan terbaru sebuah proyek di komputer ini. Tanyakan dulu proyek mana yang dimaksud, lalu tinjau perubahan terbaru dan pekerjaan yang tersisa, dan susun ringkasan singkat."
+        },
+        "downloads": {
+          "label": "Lihat isi folder Downloads",
+          "hint": "Petakan dulu, baru tentukan cara merapikannya",
+          "prompt": "Tinjau berkas di folder Downloads komputer ini, ringkas berdasarkan jenis dan tanggal, lalu sarankan cara merapikannya. Jangan pindahkan atau hapus berkas dulu."
+        },
+        "summarizeDocument": {
+          "label": "Ringkas dokumen panjang",
+          "hint": "Dapatkan poin utama di ponsel",
+          "prompt": "Bantu ringkas sebuah dokumen di komputer ini. Tanyakan dulu nama atau lokasi berkasnya, lalu setelah dibaca tarik poin utama, kesimpulan, dan hal yang perlu ditindaklanjuti."
+        },
+        "storageUsage": {
+          "label": "Cari tahu apa yang memakai ruang disk",
+          "hint": "Temukan berkas dan folder besar",
+          "prompt": "Analisis penggunaan disk di komputer ini, tampilkan daftar folder dan berkas terbesar, lalu sarankan cara merapikannya. Jangan hapus apa pun dulu."
+        }
+      }
+    },
+    "thisComputer": "Perangkat ini",
+    "allConversations": "Semua sesi",
+    "syncFailed": "Sinkronisasi gagal",
+    "requestFailed": "permintaan gagal",
+    "loading": "Memuat perangkat yang bisa dikendalikan…",
+    "untitled": "Sesi tanpa judul",
+    "connection": {
+      "connecting": "Menyambungkan",
+      "disconnected": "Terputus"
+    },
+    "error": {
+      "sessionDeviceNotFound": "Perangkat untuk sesi ini tidak ditemukan. Sinkronkan ulang lalu coba lagi.",
+      "taskDeviceNotFound": "Perangkat untuk sesi ini tidak ditemukan. Sinkronkan ulang lalu coba lagi.",
+      "noDevice": "Tidak ada perangkat yang tersedia. Aktifkan kontrol jarak jauh di komputer, lalu sinkronkan ulang."
+    },
+    "alert": {
+      "cacheSaveFailed": "Cache offline tidak dapat disimpan",
+      "cacheSaveFailedDetail": "Periksa sisa ruang penyimpanan ponsel. Aplikasi masih bisa dipakai online, tetapi sebagian konten mungkin tidak bisa dilihat offline.",
+      "actionFailed": "Operasi gagal",
+      "renameFailed": "Gagal mengganti nama",
+      "deleteTitle": "Hapus sesi?",
+      "deleteMessage": "“{{title}}” akan dihapus dan tidak dapat dipulihkan."
+    },
+    "a11y": {
+      "selectScope": "Pilih cakupan sesi",
+      "openMenu": "Buka menu",
+      "closeMenu": "Tutup menu",
+      "openDisplaySettings": "Buka pengaturan tampilan",
+      "openDisplaySettingsWithStatus": "Buka pengaturan tampilan (saat ini: {{status}})",
+      "openSearch": "Cari",
+      "openSettings": "Buka pengaturan",
+      "syncing": "Menyinkronkan ulang",
+      "sync": "Sinkronkan ulang",
+      "pinnedConversations": "{{count}} sesi disematkan",
+      "newRemoteConversation": "Sesi baru",
+      "renameDevice": "Ganti nama {{label}}",
+      "project": "Proyek {{title}}",
+      "dialogue": "Obrolan",
+      "automation": "Otomatisasi",
+      "openAutomationLatest": "Buka sesi terbaru otomasi {{title}}",
+      "automationTask": "Otomasi {{title}}",
+      "openConversation": "Buka sesi {{title}}",
+      "followedBy": ", ditindaklanjuti oleh {{names}}",
+      "collapse": "Ciutkan {{title}}",
+      "expand": "Bentangkan {{title}}",
+      "taskError": "Sesi gagal",
+      "awaitingYou": "Menunggu tindakanmu",
+      "doneUnread": "Selesai, belum dibaca",
+      "running": "Berjalan",
+      "close": "Tutup",
+      "cancelRename": "Batalkan ganti nama",
+      "createdBy": "Dibuat oleh {{name}}",
+      "ownedBy": "Milik {{name}}"
+    },
+    "accounts": {
+      "title": "Ganti akun",
+      "add": "Masuk ke akun lain",
+      "syncFailed": "Informasi akun belum bisa diperbarui",
+      "runningTitle": "Ganti akun?",
+      "runningMessage": "Masih ada sesi yang berjalan. Setelah akun diganti, sesi tetap berjalan di komputer, tetapi ponsel ini berhenti menerima dan mengendalikannya.",
+      "switchConfirm": "Lanjut ganti akun"
+    },
+    "menu": {
+      "groupDialogue": "Obrolan",
+      "groupAutomation": "Otomatisasi",
+      "dialogueFolder": "Obrolan",
+      "automationFolder": "Otomatisasi",
+      "search": "Cari",
+      "settings": "Pengaturan",
+      "remoteSettings": "Pengaturan koneksi jarak jauh",
+      "displaySettings": "Pengaturan tampilan",
+      "groupHeading": "Grup",
+      "sortHeading": "Urutan sesi",
+      "projectOrderHeading": "Urutan proyek",
+      "projectOrderManualTip": "Sentuh dan tahan baris proyek, lalu seret untuk mengubah urutan. Tugas di dalamnya tetap mengikuti urutan di atas.",
+      "statusHeading": "Status tugas",
+      "showDeviceTasks": "Lihat tugas",
+      "openDevice": "Buka",
+      "renameDevice": "Ganti nama",
+      "groupDevice": "Perangkat",
+      "groupProject": "Proyek",
+      "sortBy": {
+        "priority": "Prioritas",
+        "recency": "Aktivitas terakhir",
+        "created": "Waktu dibuat"
+      },
+      "sortByPriorityTip": "Yang menunggu kamu lebih dulu, lalu belum dibaca, lalu berjalan, sisanya menurut waktu",
+      "projectOrder": {
+        "activity": "Ikuti tugas",
+        "custom": "Manual"
+      },
+      "status": {
+        "active": "Aktif",
+        "archived": "Diarsipkan",
+        "all": "Semua"
+      },
+      "filterHeading": "Filter",
+      "filterSummaryActive": "{{count}} aktif",
+      "filterReset": "Atur ulang filter",
+      "filterAll": "Semua",
+      "filterProjectsHeading": "Proyek",
+      "filterAllProjects": "Semua proyek",
+      "filterSelectedProjects": "{{count}} dipilih",
+      "filterVendorHeading": "Harness",
+      "filterVendor": {
+        "all": "Semua",
+        "cc": "Claude Code",
+        "codex": "Codex",
+        "pi": "Pi"
+      },
+      "filterLastActivityHeading": "Aktivitas terakhir",
+      "filterLastActivity": {
+        "1d": "1 hari",
+        "3d": "3 hari",
+        "7d": "7 hr",
+        "30d": "30 hari",
+        "all": "Semua"
+      },
+      "showCollapsedTeammateAvatars": "Tampilkan avatar saat diciutkan",
+      "displayHeading": "Tampilan",
+      "view": {
+        "card": "Kartu",
+        "text": "Teks",
+        "list": "Daftar"
+      },
+      "taskInfoHeading": "Info sesi",
+      "taskInfo": {
+        "teammate": "Foto profil Rekan",
+        "project": "Ikon dan nama proyek",
+        "harness": "Ikon Harness",
+        "time": "Waktu",
+        "pr": "Status PR",
+        "tokens": "Token",
+        "cost": "Biaya"
+      },
+      "summaryNone": "Tidak ada",
+      "summarySeparator": ", ",
+      "filterEmptyCopy": "Bisa disesuaikan atau direset di “Filter” pada pengaturan tampilan.",
+      "filterTeammatesHeading": "Rekan",
+      "filterAnySource": "Semua",
+      "filterHideAutomations": "Sembunyikan tugas otomatisasi",
+      "filterHideAllTeammates": "Sembunyikan semua",
+      "filterSelectedTeammates": "{{count}} dipilih",
+      "inbox": {
+        "inbox": "Menunggu",
+        "working": "Berjalan",
+        "snoozed": "Ditunda",
+        "archived": "Diarsipkan",
+        "snooze": "Tunda",
+        "complete": "Selesai",
+        "wake": "Kembalikan sekarang",
+        "restore": "Pulihkan tugas",
+        "process": "Tandai selesai (arsipkan)",
+        "empty": "Kotak masuk kosong",
+        "snoozeFailed": "Gagal menyimpan waktu tunda. Periksa koneksi dan pastikan komputer pemilik tugas sudah diperbarui.",
+        "hours": "{{count}} jam lagi",
+        "hours_one": "{{count}} jam lagi",
+        "hours_other": "{{count}} jam lagi",
+        "thisEvening": "Malam ini",
+        "tomorrow": "Besok",
+        "nextWeek": "Minggu depan",
+        "indefinite": "Tanpa batas",
+        "custom": "Kustom…",
+        "invalidTime": "Pilih tanggal dan waktu dalam rentang satu tahun ke depan."
+      },
+      "taskListMode": {
+        "enterInbox": "Beralih ke kotak masuk",
+        "leaveInbox": "Beralih ke daftar tugas"
+      }
+    },
+    "search": {
+      "placeholder": "Cari judul atau konten…",
+      "filterA11y": "Filter pencarian",
+      "filterAria": "Filter dan urutan pencarian (Urutan: {{sort}}, Status: {{status}}, Agent: {{agent}}, Aktivitas terakhir: {{lastActivity}}, Proyek: {{projects}})",
+      "filter": {
+        "label": "Kriteria pencarian",
+        "reset": "Reset",
+        "sortHeading": "Urutkan menurut",
+        "statusHeading": "Status",
+        "projectsHeading": "Proyek",
+        "agentHeading": "Agent",
+        "lastActivityHeading": "Aktivitas terakhir",
+        "allProjects": "Semua proyek",
+        "selectedProjects": "{{count}} dipilih",
+        "sort": {
+          "relevance": "Relevansi",
+          "activityDesc": "Aktivitas terakhir",
+          "activityAsc": "Aktivitas terlama"
+        },
+        "status": {
+          "active": "Aktif",
+          "archived": "Diarsipkan",
+          "all": "Semua"
+        },
+        "agent": {
+          "all": "Semua",
+          "cc": "Claude Code",
+          "codex": "Codex",
+          "pi": "Pi"
+        },
+        "lastActivity": {
+          "1d": "1 hari",
+          "3d": "3 hari",
+          "7d": "7 hr",
+          "30d": "30 hari",
+          "all": "Semua"
+        }
+      }
+    },
+    "renameDevice": {
+      "title": "Ganti nama perangkat",
+      "placeholder": "Nama perangkat",
+      "savingA11y": "Menyimpan nama perangkat",
+      "saveA11y": "Simpan nama perangkat"
+    },
+    "renameSession": {
+      "title": "Ganti nama sesi",
+      "placeholder": "Judul sesi",
+      "savingA11y": "Menyimpan judul sesi",
+      "saveA11y": "Simpan judul sesi"
+    },
+    "revoked": {
+      "title": "Akses dicabut",
+      "body": "“{{deviceName}}” mencabut izin akses jarak jauh untuk perangkat ini. Beri izin lagi untuk perangkat ini di pengaturan {{appName}} di komputer tersebut, lalu ketuk “Coba akses lagi”.",
+      "retry": "Coba akses lagi"
+    },
+    "viewAllConversations": "Lihat semua {{count}} sesi",
+    "viewAllRuns": "Lihat semua {{count}} eksekusi",
+    "preview": {
+      "needAttention": "{{count}} perlu perhatian",
+      "waiting": "{{count}} menunggu",
+      "automationRunning": "Otomasi berjalan",
+      "totalRuns": "Total {{count}} kali dijalankan",
+      "runCount": "Total {{count}} kali",
+      "nextRunMinutes": "Jalan dalam {{count}} menit",
+      "nextRunHours": "Dalam {{count}} jam",
+      "nextRunDays": "Dalam {{count}} hari",
+      "imminent": "Segera berjalan",
+      "stopped": "Dihentikan"
+    }
+  },
+  "detail": {
+    "filter": {
+      "active": "Aktif",
+      "waiting": "Menunggu",
+      "automation": "Otomasi",
+      "archived": "Diarsipkan",
+      "all": "Semua",
+      "a11y": "Filter sesi {{label}}"
+    },
+    "group": {
+      "project": "Proyek",
+      "date": "Tanggal",
+      "label": "Grup",
+      "a11y": "Kelompokkan menurut {{label}}"
+    },
+    "metric": {
+      "active": "Aktif",
+      "waiting": "Menunggu",
+      "automation": "Otomasi",
+      "activeA11y": "Filter sesi aktif",
+      "waitingA11y": "Filter sesi menunggu",
+      "automationA11y": "Filter sesi otomasi"
+    },
+    "search": {
+      "openA11y": "Cari sesi jarak jauh",
+      "closeA11y": "Tutup pencarian sesi jarak jauh",
+      "label": "Cari",
+      "placeholder": "Cari judul atau konten…",
+      "clearA11y": "Hapus pencarian",
+      "closeInputA11y": "Tutup pencarian",
+      "clear": "Hapus",
+      "close": "Tutup"
+    },
+    "filters": {
+      "collapseA11y": "Ciutkan filter sesi",
+      "expandA11y": "Bentangkan filter sesi",
+      "label": "Filter"
+    },
+    "selection": {
+      "count": "{{count}} sesi dipilih",
+      "canAct": "Tindakan tersedia",
+      "cannotAct": "Tidak ada tindakan tersedia",
+      "clearA11y": "Batalkan pilihan sesi"
+    },
+    "bulk": {
+      "pinning": "Menyematkan…",
+      "unpinning": "Melepas sematan…",
+      "archiving": "Mengarsipkan…",
+      "restoring": "Membatalkan pengarsipan…",
+      "deleting": "Menghapus…",
+      "pinA11y": "Sematkan sesi terpilih",
+      "unpinA11y": "Lepas sematan sesi terpilih",
+      "archiveA11y": "Arsipkan sesi terpilih",
+      "restoreA11y": "Batalkan pengarsipan sesi terpilih",
+      "deleteA11y": "Hapus sesi terpilih",
+      "cancelA11y": "Batalkan tindakan massal",
+      "partialFailure": "{{done}} diproses, {{failed}} gagal (dipulihkan, bisa dicoba lagi).",
+      "noArchivable": "Tidak ada sesi aktif yang bisa diarsipkan dalam pilihan ini.",
+      "noPinnable": "Tidak ada sesi aktif yang bisa disematkan dalam pilihan ini.",
+      "noRestorable": "Tidak ada sesi terarsip yang bisa dibatalkan pengarsipannya dalam pilihan ini.",
+      "noUnpinnable": "Tidak ada sesi tersemat dalam pilihan ini.",
+      "noDeletable": "Tidak ada sesi yang bisa dihapus dalam pilihan ini.",
+      "noneModifiable": "Tidak ada sesi terpilih yang bisa diubah."
+    },
+    "automationScope": {
+      "eyebrow": "Otomasi",
+      "title": "Otomasi",
+      "emptyCopy": "Setelah otomasi berjalan, sesi dari setiap operasi muncul di sini.",
+      "emptyTitle": "Otomasi ini belum punya catatan operasi"
+    },
+    "projectScope": {
+      "eyebrow": "Proyek",
+      "emptyCopy": "Mulai sesi baru di proyek ini.",
+      "emptyTitle": "Proyek ini belum punya sesi"
+    },
+    "subtitle": {
+      "deviceActive": "{{deviceName}} · {{count}} sesi aktif",
+      "activeAndProjects": "{{count}} sesi aktif · {{projects}} proyek"
+    },
+    "row": {
+      "a11yAutomationGroup": "Grup otomasi {{title}}",
+      "a11ySession": "Sesi {{title}}",
+      "a11yCollapse": "Ciutkan {{title}}",
+      "a11yExpand": "Bentangkan {{title}}",
+      "collapse": "Ciutkan",
+      "expand": "Bentangkan"
+    },
+    "badge": {
+      "waiting": "Menunggu {{count}}",
+      "automationPrefix": "Otomasi",
+      "sessionCount": "{{count}} sesi",
+      "aggregate": "Dikelompokkan",
+      "running": "Berjalan",
+      "unread": "Belum dibaca {{count}}"
+    },
+    "child": {
+      "openA11y": "Buka sesi otomasi {{title}}"
+    },
+    "viewAllRuns": "Lihat semua {{count}} operasi"
+  },
+  "companions": {
+    "section": {
+      "showAll": "Tampilkan semua",
+      "showAllA11y": "Tampilkan semua {{count}}",
+      "showLess": "Ciutkan"
+    },
+    "noCreateHosts": "Saat ini tidak ada komputer kompatibel yang tersedia. Buka Cindy di komputer dan masuk dengan akun yang sama untuk membuat Rekan baru.",
+    "messageSent": "Pesan terkirim ke tugas latar belakang",
+    "sentTo": "Pesan terkirim ke {{name}}",
+    "receivedFrom": "Pesan dari {{name}}",
+    "backgroundTask": "Tugas latar belakang",
+    "openTask": "Buka tugas",
+    "viewPr": "Lihat PR",
+    "stale": "Detail mungkin sudah kedaluwarsa dan belum dapat diperbarui.",
+    "artifactCount": "{{count}} berkas",
+    "prCount": "{{count}} PR",
+    "artifactCount_one": "{{count}} berkas",
+    "artifactCount_other": "{{count}} berkas",
+    "prCount_one": "{{count}} PR",
+    "prCount_other": "{{count}} PR",
+    "duration": {
+      "seconds": "{{n}} detik",
+      "minutes": "{{n}} menit",
+      "hoursMinutes": "{{h}} jam {{m}} menit"
+    },
+    "actionFailed": "Belum bisa memuat atau menyelesaikan tindakan ini",
+    "messages": "Pesan",
+    "readOnly": "Hanya lihat",
+    "directEmpty": "Belum ada pesan yang bisa dilihat.",
+    "directLimitReached": "Percakapan Rekan di giliran ini sudah mencapai batas; kedua pihak sudah kembali ke tugas utamanya masing-masing.",
+    "directUnavailable": "Obrolan Rekan ini tidak lagi tersedia.",
+    "unread": "Ada balasan baru",
+    "status": {
+      "queued": "Sedang dimulai",
+      "running": "Berjalan",
+      "waiting": "Menunggu diproses",
+      "completed": "Selesai",
+      "failed": "Gagal",
+      "cancelled": "Dihentikan",
+      "timed-out": "Waktu habis",
+      "unknown": "Status tidak diketahui"
+    },
+    "title": "Rekan",
+    "search": "Cari Rekan",
+    "startChat": "Mulai obrolan",
+    "automation": {
+      "unsavedTitle": "Buang perubahan?",
+      "unsavedBody": "Perubahanmu belum disimpan.",
+      "discard": "Buang perubahan"
+    },
+    "openProfile": "Lihat profil {{name}}",
+    "switchCompanion": "Ganti Rekan",
+    "activity": {
+      "thinking": "Sedang berpikir",
+      "typing": "Sedang mengetik",
+      "helping": "Sedang mengerjakan"
+    },
+    "working": {
+      "thinking": "Berpikir…",
+      "replying": "Membalas…",
+      "processing": "Bekerja…",
+      "compacting": "Merapikan obrolan…",
+      "reading-memory": "Membaca memori…",
+      "saving-memory": "Menyimpan memori…",
+      "deleting-memory": "Menghapus memori…",
+      "organizing-memory": "Merapikan memori…",
+      "reading-file": "Membaca berkas…",
+      "saving-file": "Memperbarui berkas…",
+      "searching": "Mencari di web…",
+      "reading-web": "Membaca halaman web…",
+      "searching-files": "Mencari berkas…",
+      "testing": "Menjalankan pengujian…",
+      "checking": "Memeriksa kode…",
+      "reviewing-memory": "Memeriksa memori…",
+      "reviewing-files": "Meninjau berkas…",
+      "reviewing-sources": "Memeriksa sumber web…",
+      "reviewing-checks": "Meninjau hasil pemeriksaan…"
+    },
+    "invitation": {
+      "title": "Bersiap untuk bertemu",
+      "waiting": "Sampai jumpa nanti, {{name}}",
+      "background": "Silakan lanjut dulu; persiapan berjalan di latar belakang.",
+      "profile": "Menulis ceritanya sendiri",
+      "skills": "Menyiapkan komputer untuk {{name}}",
+      "avatar": "{{name}} sedang memilih avatar baru",
+      "welcome": "Menyiapkan sapaan pertama",
+      "failed": "Persiapan berhenti sementara. Yang sudah selesai tetap disimpan, dan kamu bisa mencoba lagi.",
+      "retryFailed": "Belum bisa mencoba ulang sekarang. Coba lagi nanti.",
+      "leave": "Nanti saja",
+      "avatarSkipped": "Sementara memakai avatar bawaan; kamu bisa menggantinya kapan saja."
+    },
+    "viewResult": "Lihat hasil",
+    "noWrittenResult": "Tidak ada hasil tertulis.",
+    "errorDetails": "Detail error",
+    "createTeammate": "Rekan baru",
+    "createMenu": "Baru",
+    "awaiting": "Menunggu konfirmasimu",
+    "taskResult": "Hasil tugas",
+    "collapseResult": "Sembunyikan hasil",
+    "avatarStatus": {
+      "awaiting": "Menunggu konfirmasimu",
+      "error": "Perlu perhatian",
+      "running": "Sedang bekerja",
+      "done": "Selesai",
+      "unread": "Belum dibaca"
+    },
+    "viewMr": "Lihat MR",
+    "viewPrMr": "Lihat PR",
+    "mrCount": "{{count}} MR",
+    "prMrCount": "{{count}} PR",
+    "mrCount_one": "{{count}} MR",
+    "prMrCount_one": "{{count}} PR",
+    "mrCount_other": "{{count}} MR",
+    "prMrCount_other": "{{count}} PR"
+  },
+  "companionProfile": {
+    "avatar": "Avatar",
+    "emptyEditor": "Belum ada isi.",
+    "searchOptions": "Cari",
+    "changed": "Isi diubah di tempat lain. Editanmu yang belum disimpan tetap dipertahankan.",
+    "discardAndReload": "Buang editan dan muat ulang",
+    "memoryEntries": "Memori tersimpan",
+    "memorySearch": "Cari memori",
+    "memoryEmpty": "Belum ada memori",
+    "memoryNoResults": "Tidak ada memori yang cocok",
+    "memoryDisabled": "Memori nonaktif. Rekan tidak membaca atau menyimpan memori; memori yang tersimpan tetap bisa dilihat dan dihapus.",
+    "memoryLoadFailed": "Gagal memuat memori",
+    "memoryToday": "Hari ini",
+    "memoryUpdated": "Diperbarui {{time}}",
+    "memoryEdit": "Ubah",
+    "memoryDone": "Selesai",
+    "memoryTooLong": "Isi terlalu panjang. Perpendek untuk menyimpan.",
+    "memoryRequired": "Judul dan isi tidak boleh kosong.",
+    "memoryChanged": "{{name}} baru saja memperbarui memori ini",
+    "memoryUseLatest": "Pakai yang terbaru",
+    "memoryKeepMine": "Pertahankan perubahanku",
+    "memorySaved": "Tersimpan",
+    "memorySaveFailed": "Belum berhasil disimpan; editanmu tetap dipertahankan.",
+    "memoryMissing": "Memori ini sudah tidak ada.",
+    "memoryDeleteFailed": "Gagal menghapus",
+    "create": "Rekan baru",
+    "createFailed": "Hasil pembuatan belum terkonfirmasi. Coba lagi untuk memeriksa.",
+    "createHostUnsupported": "Komputer ini belum bisa membuat Rekan baru. Perbarui Cindy di komputer itu, atau buat Rekan di sana.",
+    "createNeedsDetails": "Isi nama dan pilih avatar untuk membuat Rekan.",
+    "title": "Profil Rekan",
+    "profile": "Profil & Kepribadian",
+    "memory": "Memori",
+    "skills": "Skill & Koneksi",
+    "artifacts": "Hasil",
+    "direct": "Pesan Rekan",
+    "settings": "Model & Izin",
+    "search": "Cari pesan",
+    "models": "Rantai model kandidat",
+    "permissions": "Izin tindakan",
+    "personalSkills": "Skill",
+    "connections": "Skill & koneksi yang dirujuk",
+    "save": "Simpan perubahan",
+    "offline": "Sambungkan lagi ke {{deviceName}} untuk melanjutkan. Editan yang belum disimpan tetap ada.",
+    "hostUpgrade": "Perbarui Cindy di {{deviceName}} lalu coba lagi, atau ubah pengaturan Rekan di komputer itu.",
+    "readFailed": "Status terbaru belum bisa dipastikan. Segarkan lalu coba lagi; tindakan mungkin sudah selesai. Editanmu tetap ada.",
+    "deleteFailed": "Rekan tidak dapat dihapus.",
+    "artifactsEmpty": "Belum ada hasil. Minta Rekan membuat sesuatu.",
+    "openSourceTask": "Buka tugas sumber",
+    "modelFollowsDefault": "Ikuti rantai model bawaan saat ini",
+    "modelOverride": "Memakai rantai model khusus Rekan ini",
+    "modelsUnavailable": "Belum ada model yang tersedia. Periksa pengaturan model Rekan ini di komputer, lalu segarkan.",
+    "artifactsRecovery": "Buka berkas dari kartu pesan, atau telusuri berkas di {{deviceName}}.",
+    "directRecovery": "Belum bisa memuat pesan Rekan. Perbarui Cindy di {{deviceName}} lalu coba lagi.",
+    "directEmpty": "Belum ada pesan Rekan",
+    "skillsEmpty": "Belum ada Skill pribadi. Minta Rekan mencatat cara kerjanya.",
+    "connectionsEmpty": "Belum ada Skill atau koneksi yang dipilih",
+    "largeProfileRecovery": "Profil ini terlalu panjang untuk diubah di ponsel. Ubah profil lengkapnya di {{deviceName}}.",
+    "addModel": "Tambah model cadangan",
+    "removeModel": "Hapus model",
+    "moveModelUp": "Naikkan model",
+    "backupModels": "Model cadangan ({{count}})",
+    "settingsTitle": "Pengaturan Rekan",
+    "name": "Nama",
+    "portraitNumber": "Avatar {{number}}",
+    "uploadAvatar": "Unggah avatar",
+    "avatarFailed": "Gambar ini tidak dapat dibuka. Coba gambar lain.",
+    "nameTaken": "Sudah ada Rekan dengan nama itu. Pilih nama lain.",
+    "home": "Komputer utama",
+    "chat": "Obrolan",
+    "showReplyTarget": "Tampilkan pesan yang dibalas",
+    "showReplyTargetHint": "Tampilkan pesanmu yang dibalas di atas balasan Rekan. Berlaku untuk semua Rekan; balasan lama tidak menampilkannya.",
+    "channels": "Platform pesan",
+    "channelsEmpty": "Belum ada platform pesan yang terhubung",
+    "channelTasksEmpty": "Belum ada catatan tugas",
+    "channelPlatforms": {
+      "telegram": "Telegram",
+      "feishu": "Feishu",
+      "lark": "Lark",
+      "wecom": "WeCom",
+      "dingtalk": "DingTalk",
+      "discord": "Discord"
+    }
+  },
+  "companionImport": {
+    "title": "Impor Rekan",
+    "entry": "Impor dari Agent lain",
+    "description": "Pilih apa yang mau dibawa dari Hermes atau OpenClaw.",
+    "empty": "Tidak ada Agent terpasang yang ditemukan di komputer ini.",
+    "personality": "Kepribadian dan kebiasaan kerja",
+    "memory": "Memori tentangmu",
+    "skills": "Skill",
+    "connections": "Lingkungan dan koneksi",
+    "automations": "Otomasi",
+    "paused": "Tetap dijeda",
+    "itemAttention": "Perlu ditangani",
+    "takeover": "Periksa dan ambil alih otomasi setelah impor",
+    "takeoverNote": "Tugas sumber baru dijeda setelah koneksi datanya terverifikasi. Jika dependensi yang dibutuhkan dibatalkan, tugas sumber tetap berjalan.",
+    "submit": "Impor",
+    "back": "Kembali",
+    "open": "Buka Rekan",
+    "running": "Mengimpor dan memeriksa koneksi…",
+    "complete": "Impor tersimpan",
+    "attention": "Sebagian item perlu ditangani. Lihat detailnya di bawah.",
+    "error": "Impor tidak dapat diselesaikan. Coba lagi dengan pilihan yang sama.",
+    "keptAtSource": "Pengambilalihan belum selesai",
+    "retry": "Periksa ulang",
+    "missingSelection": "Item yang diperlukan otomasi ini belum dipilih.",
+    "authRefresh": "Cara perpanjangan otorisasi asli masih perlu disambungkan.",
+    "toolMapping": "Pembatasan alat yang asli masih perlu dipetakan, jadi belum diambil alih.",
+    "modelMapping": "Konfigurasi model yang asli masih perlu dipetakan.",
+    "contextMapping": "Direktori kerja atau konteks terkait yang asli masih perlu dipetakan.",
+    "deliveryFailed": "Lokasi pengiriman yang asli belum diverifikasi.",
+    "sourceChanged": "Tugas sumber berubah. Muat ulang pratinjaunya.",
+    "credentialFailed": "Kredensial tidak dapat disimpan dengan aman.",
+    "scriptMissing": "Skrip yang diperlukan tugas ini tidak ada.",
+    "sourceCommand": "Perintah kontrol Agent asli tidak ditemukan.",
+    "readFailed": "Kueri data yang sebenarnya dibutuhkan tugas ini belum diverifikasi.",
+    "search": "Cari",
+    "selectAll": "Pilih semua",
+    "previous": "Sebelumnya",
+    "next": "Berikutnya",
+    "chatSetup": "Informasi yang diimpor sudah tersimpan, jadi kita bisa mulai mengobrol. Sebagian item masih perlu login atau pemeriksaan; kita lanjutkan kapan pun kamu siap. Sebelum diambil alih, otomasi sumber tetap seperti semula.",
+    "chatReady": "Informasimu sudah diimpor, jadi kita bisa mulai mengobrol.",
+    "partial": "Sebagian konten tidak terimpor sepenuhnya",
+    "details": "Lihat detail impor",
+    "partlySaved": "Hanya tersimpan sebagian",
+    "savedNeedsSetup": "Tersimpan; pengaturan atau aktivasi belum selesai",
+    "notSaved": "Belum tersimpan",
+    "databaseDriver": "Driver basis data tidak dapat dimuat. Perbarui atau perbaiki Cindy, lalu coba lagi.",
+    "databaseUnavailable": "Basis data sumber tidak dapat dibaca. Data asli tidak berubah; coba lagi setelah diperbaiki.",
+    "fileTooLarge": "Berkas atau impor ini melebihi batas baca. Konten tidak dipotong.",
+    "memoryMetadata": "Ringkasan atau judul memori tidak memenuhi syarat penyimpanan.",
+    "memoryWrite": "Penulisan memori atau pemeriksaan integritas gagal. Bisa dicoba lagi.",
+    "memoryChanged": "Memori yang tersimpan sudah berubah dan tidak ditimpa.",
+    "attachmentUnsupported": "Format lampiran ini belum didukung. Berkas asli tetap di sumbernya.",
+    "diskFull": "Ruang disk tidak cukup. Kosongkan ruang, lalu coba lagi.",
+    "permissionDenied": "Izin untuk membaca atau menyimpan item ini tidak ada. Perbaiki izin, lalu coba lagi.",
+    "setupDeferred": "Login dan verifikasi bisa dilanjutkan di obrolan Rekan.",
+    "automationInvalid": "Definisi otomasi tidak dapat dikonversi dan belum dibuat.",
+    "itemFailed": "Item ini belum selesai. Coba lagi atau lihat detail impor.",
+    "chatPartial": "Rekan sudah dibuat, tetapi sebagian konten tidak tersimpan sepenuhnya. Item di bawah masih perlu ditangani; konten dan obrolan lain tetap bisa dipakai.",
+    "imBotOwnerMissing": "User ID pemilik tidak ditemukan. Selesaikan koneksi bot ini di halaman “Platform pesan” milik Rekan.",
+    "imBotGatewayRunning": "Gateway asli masih memakai bot ini. Hentikan dulu, lalu sambungkan di halaman “Platform pesan”.",
+    "imBotInUse": "Bot ini sudah dipakai di komputer ini: di Pengaturan → Bot IM, atau di Rekan lain.",
+    "imBotConnectFailed": "Bot ini tidak dapat tersambung. Coba lagi di halaman “Platform pesan” milik Rekan.",
+    "imBotSourceStopUnconfirmed": "Bot asli belum berhenti, jadi belum diserahkan ke Rekan. Kamu bisa menyambungkannya nanti di halaman “Platform pesan” milik Rekan.",
+    "imBotSourceChanged": "Bot asli berganti setelah pratinjau, jadi tidak dinonaktifkan. Muat ulang pratinjau lalu impor lagi.",
+    "bots": "Bot pesan",
+    "botsNote": "Setelah impor, bot ini akan nonaktif di {{source}} dan diambil alih oleh Rekan.",
+    "sourceDisabled": "Sudah nonaktif sebelumnya",
+    "botOwner": "ID pemilik {{id}}"
+  },
+  "glance": {
+    "open": "Sekilas {{name}}",
+    "computers": "Komputer",
+    "runningHere": "Berjalan di sini",
+    "online": "Online",
+    "offline": "Offline",
+    "current": "Saat ini",
+    "offlineCount_one": "{{count}} offline",
+    "offlineCount_other": "{{count}} offline",
+    "showMore": "Tampilkan lebih banyak",
+    "showLess": "Ciutkan",
+    "doneCount_one": "{{count}} selesai",
+    "doneCount_other": "{{count}} selesai",
+    "checkMeta": "Cari To-do baru di email dan pesan yang terhubung",
+    "recentTasks": "Tugas terkini",
+    "unread": "Hasil belum dibaca",
+    "openFailed": "Tautan tidak dapat dibuka",
+    "outputs": "Output",
+    "outputMeta": "{{time}} · {{task}}"
+  },
+  "cloudCompanion": {
+    "homeOffline": "Komputer utama “{{device}}” offline",
+    "switchAction": "Lanjutkan di komputer lain",
+    "composerHint": "Komputer utama offline. Ganti ke komputer lain untuk melanjutkan.",
+    "readOnlyNote": "Percakapan ini tersimpan di cloud dan hanya bisa dilihat.",
+    "empty": "Belum ada percakapan di cloud.",
+    "loadFailed": "Belum bisa memuat percakapan cloud.",
+    "loadOlder": "Muat Pesan Lebih Lama",
+    "noTargets": "Tidak ada komputer lain yang tersedia. Buka Cindy di komputer lain, masuk dengan akun yang sama, aktifkan “Izinkan perangkat dengan akun sama mengendalikan komputer ini”, lalu coba lagi.",
+    "devicesFailed": "Belum bisa memuat daftar komputermu. Coba lagi nanti.",
+    "preparing": "Menyiapkan di “{{device}}”…",
+    "preparingHint": "Komputer itu mengambil alih Rekan sesuai profil cloud-nya dan membukanya begitu siap.",
+    "timeout": "“{{device}}” belum siap. Pastikan Cindy di komputer itu sudah terbuka dan online, lalu coba lagi.",
+    "conflict": "{{name}} sudah dipindahkan ke “{{device}}”.",
+    "switchFailed": "Belum bisa mengganti komputer utama. Coba lagi nanti.",
+    "unknownDevice": "komputer lain",
+    "runsOn": "Berjalan di “{{device}}”",
+    "homeTitle": "Komputer utama",
+    "moveTo": "Pindah ke “{{device}}”",
+    "moveTitle": "Jalankan {{name}} di “{{device}}”?",
+    "moveDescription": "Mulai sekarang {{name}} berjalan di “{{device}}”, dan riwayat obrolan ikut terbawa. Direktori kerja, koneksi, dan berkas lokal tetap di komputer asalnya.",
+    "olderTarget": "Cindy versi lama",
+    "olderTargetNote": "Di “{{device}}” ada Cindy versi lama, jadi {{name}} berjalan dengan cara lama di sana: riwayat obrolan tetap tersinkron, tetapi aturan proyek dan otomasi tidak berlaku di sana.",
+    "moveAction": "Pindah ke “{{device}}”",
+    "moving": "Memindahkan {{name}} ke “{{device}}”…",
+    "busyTitle": "{{name}} masih membalas",
+    "busyDescription": "Bisa menunggu balasan ini selesai lalu pindah ke “{{device}}”, atau hentikan balasan dan pindah sekarang.",
+    "busyWait": "Pindah Setelah Selesai",
+    "busyStop": "Hentikan dan Pindahkan",
+    "transferBusy": "{{name}} masih membalas. Pindahkan setelah balasan selesai",
+    "switchConflict": "Komputer utama {{name}} sudah berubah, jadi kali ini tidak dipindahkan",
+    "homeOutdated": "Cindy di komputer utama “{{device}}” versinya lebih lama. Perbarui dulu, atau ganti komputer utama di sana",
+    "homeUnreachable": "“{{device}}” tidak bisa dihubungi sekarang. Komputer itu harus online dan mengaktifkan “Izinkan perangkat dengan akun sama mengendalikan komputer ini”",
+    "sendUnreachable": "Pesan belum sampai ke komputer utama “{{device}}”; mungkin sudah offline. Bisa lanjut di komputer lain."
+  },
+  "sessionImport": {
+    "entry": "Impor dari alat lain",
+    "title": "Impor dari alat lain",
+    "found_one": "Ditemukan {{count}} sesi di {{device}}",
+    "found_other": "Ditemukan {{count}} sesi di {{device}}",
+    "search": "Cari sesi atau folder",
+    "scanning": "Mencari sesi di komputer…",
+    "loadFailed": "Gagal membaca sesi di komputer. Coba lagi",
+    "retry": "Coba lagi",
+    "rescan": "Pindai lagi",
+    "emptyTitle": "Tidak ada sesi yang bisa diimpor di komputer",
+    "emptyDescription": "Cindy bisa mengimpor sesi dari alat berikut. Setelah memakai salah satunya, kembali dan pindai lagi.",
+    "noMatch": "Tidak ada sesi yang cocok",
+    "dialogue": "Obrolan",
+    "folderMissing": "Folder asli sudah tidak ada",
+    "groupTasks_one": "{{count}} sesi",
+    "groupTasks_other": "{{count}} sesi",
+    "archived": "Diarsipkan",
+    "unsupported": "Format belum didukung",
+    "selected_one": "{{count}} dipilih · {{size}}",
+    "selected_other": "{{count}} dipilih · {{size}}",
+    "confirmBody_one": "Akan mengimpor {{count}} sesi dengan ruang disk hingga {{size}}. Impor berjalan di latar belakang di komputer dan bisa dihentikan kapan saja. Ketuk sekali lagi untuk mulai.",
+    "confirmBody_other": "Akan mengimpor {{count}} sesi dengan ruang disk hingga {{size}}. Impor berjalan di latar belakang di komputer dan bisa dihentikan kapan saja. Ketuk sekali lagi untuk mulai.",
+    "importCount_one": "Impor {{count}} sesi",
+    "importCount_other": "Impor {{count}} sesi",
+    "import": "Impor",
+    "progressTitle_one": "Mengimpor {{count}} sesi",
+    "progressTitle_other": "Mengimpor {{count}} sesi",
+    "background": "Panel ini bisa ditutup; impor tetap berjalan di komputer.",
+    "stop": "Hentikan",
+    "done": "Selesai",
+    "queued": "Menunggu",
+    "copy": "Menyalin riwayat asli",
+    "messages_one": "Menulis {{count}} pesan",
+    "messages_other": "Menyimpan {{count}} pesan",
+    "verify": "Memeriksa apakah bisa dilanjutkan",
+    "resultTitle_one": "{{count}} sesi diimpor",
+    "resultTitle_other": "{{count}} sesi diimpor",
+    "sumReady_one": "{{count}} siap dilanjutkan",
+    "sumReady_other": "{{count}} siap dilanjutkan",
+    "sumAction_one": "{{count}} butuh tindakanmu",
+    "sumAction_other": "{{count}} perlu tindakanmu",
+    "sumFailed_one": "{{count}} gagal diimpor",
+    "sumFailed_other": "{{count}} gagal diimpor",
+    "readyNative": "Siap dilanjutkan dengan {{harness}} seperti semula",
+    "readyHandoff": "Siap dilanjutkan oleh {{harness}}, bisa diganti kapan saja",
+    "missingDir": "Folder asal sudah tidak ada. Pilih folder di komputer untuk melanjutkan",
+    "cancelled": "Dihentikan sebelum impor",
+    "failure": {
+      "read-failed": "Gagal diimpor: berkas riwayat asli tidak bisa dibaca",
+      "unsupported-version": "Gagal diimpor: format riwayat versi ini belum didukung",
+      "empty": "Gagal diimpor: riwayat asli tidak berisi pesan",
+      "not-found": "Gagal diimpor: riwayat asli sudah tidak ada",
+      "disk-full": "Gagal diimpor: ruang disk tidak cukup",
+      "native-unloadable": "Gagal diimpor: riwayat asli tidak bisa dimuat"
+    }
+  },
+  "liveActivity": {
+    "waitingForUpdate": "Menunggu pembaruan"
+  }
+}

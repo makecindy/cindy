@@ -1,0 +1,155 @@
+{
+  "picker": {
+    "title": "Model",
+    "permissionTitle": "Izin",
+    "searchAccessibility": "Cari model",
+    "searchPlaceholder": "Cari model…",
+    "noResults": "Tidak ada model yang cocok",
+    "emptyDefault": "Belum ada model yang tersedia",
+    "loadingDefault": "Memuat model…",
+    "subscriptionBadge": "Langganan",
+    "subscriptionBadgeCompact": "Langganan",
+    "backToModels": "Kembali ke daftar model",
+    "agentSwitchHint": "Setelah model dipilih, pesan berikutnya beralih ke {{agent}}",
+    "crossAgentEmptyHint": "Sambungkan dulu sumber model {{agent}} di perangkat jarak jauh",
+    "permissionModeAccessibility": "Mode izin: {{mode}}",
+    "selectProviderModelAccessibility": "Pilih {{model}} dari {{provider}}",
+    "selectModelAccessibility": "Pilih model {{model}}",
+    "configureAccessibility": "Konfigurasi {{model}}",
+    "budgetDisabledHint": "Model ini perlu API key yang dikonfigurasi di perangkat jarak jauh dulu",
+    "priceLine": "Input {{input}} · Output {{output}} per 1 juta token",
+    "priceTitle": "Per 1 juta token",
+    "priceAmounts": "Input {{input}} · Output {{output}}",
+    "discountedVsStandard": "Sedang diskon, hemat {{percent}}% dari harga standar",
+    "contextSuffix": "Konteks {{size}}",
+    "fastTag": "Cepat"
+  },
+  "options": {
+    "speed": {
+      "label": "Kecepatan",
+      "standard": "Standar",
+      "fast": "Cepat",
+      "ultrafast": "Sangat cepat"
+    },
+    "fastMode": "Mode cepat",
+    "fastModeAccessibility": "Mode cepat {{model}}",
+    "reasoningEffort": "Tingkat penalaran",
+    "reasoningEffortAccessibility": "Tingkat penalaran {{label}}",
+    "effortLevels": {
+      "minimal": "Minimal",
+      "low": "Rendah",
+      "medium": "Sedang",
+      "high": "Tinggi",
+      "xhigh": "Sangat tinggi",
+      "max": "Maksimum",
+      "ultra": "Ultra"
+    }
+  },
+  "contextWindowSwitch": {
+    "condensedToast": "Untuk menyesuaikan model baru, percakapan yang lebih lama akan dikompres; riwayat lengkap tetap dapat dilihat.",
+    "remoteTitle": "Tugas jarak jauh ini tidak bisa berganti model dengan aman",
+    "remoteDescription": "Konteks tugas jarak jauh ini sudah memakai {{used}} / {{total}} (sekitar {{pct}}%), jadi tidak bisa dialihkan dengan aman ke model berjendela kecil ini. Pertahankan model saat ini, atau mulai tugas baru sebelum memilih model ini.",
+    "cancel": "Pertahankan model ini"
+  },
+  "switchOutcome": {
+    "applied": "Pengalihan sumber model sudah berlaku.",
+    "failed": "Pengalihan sumber model gagal. Pilih model lagi.",
+    "previousSettingsRetained": "Pergantian kali ini tidak selesai; tugas tetap memakai pengaturan sebelumnya."
+  },
+  "agentSwitch": {
+    "browseAccessibility": "Jelajahi model {{agent}}"
+  },
+  "unified": {
+    "remoteCopyUnavailableOn": "{{provider}} di '{{device}}' sedang tidak tersedia.",
+    "remoteCopyUnavailableOnTaskComputer": "{{provider}} di komputer tempat tugas berada sedang tidak tersedia.",
+    "accountCount_one": "{{count}} akun",
+    "accountCount_other": "{{count}} akun",
+    "accountFallback": "Akun {{index}}",
+    "favoriteConfiguration": "Favoritkan konfigurasi ini",
+    "savedConfiguration": "Sudah difavoritkan · Ketuk untuk membatalkan",
+    "currentConfiguration": "Konfigurasi saat ini",
+    "usingRecommended": "Memakai pengaturan yang disarankan",
+    "customized": "Disesuaikan",
+    "resetScopeHint": "Memulihkan yang disarankan akan mereset Harness, tingkat penalaran, dan Fast. Favorit yang sudah ada tidak berubah.",
+    "saveFavoriteHint": "Simpan pengaturan ini supaya bisa langsung dipakai dari daftar favorit lain kali.",
+    "removeFavoriteHint": "Membatalkan hanya menghapus pintasan; pengaturan saat ini tidak berubah.",
+    "editFavorite": "Ubah favorit asli",
+    "editFavoriteHint": "Hanya favorit ini yang diubah, berlaku setelah disimpan; konfigurasi yang sedang dipakai tidak berubah.",
+    "saveFavorite": "Simpan favorit",
+    "cancelEdit": "Batalkan pengubahan",
+    "originalFavoriteKept": "Pengaturan sudah disesuaikan; favorit aslinya tetap disimpan.",
+    "parametersSaved": "Pengaturan tersimpan.",
+    "restoredHint": "Pengaturan yang disarankan dipulihkan. Favorit yang sudah ada tidak berubah.",
+    "favoriteRemoved": "Favorit dibatalkan. Pengaturan saat ini tidak berubah.",
+    "favoriteSaved": "Konfigurasi ini ditambahkan ke favorit.",
+    "favoriteUpdated": "Favorit diperbarui. Konfigurasi yang sedang dipakai tidak berubah.",
+    "favoriteChanged": "Favorit ini sudah diubah atau dihapus. Batalkan pengubahan lalu buka lagi untuk mencoba.",
+    "favoriteExists": "Konfigurasi ini sudah ada di favorit. Batalkan pengubahan untuk langsung memakainya.",
+    "favorites": "Favorit",
+    "all": "Semua model",
+    "recommended": "Disarankan",
+    "source": "Sumber",
+    "remoteProvider": "{{provider}} · {{device}}",
+    "remoteProviderGroup": "{{provider}} · {{device}} · {{group}}",
+    "providerGroup": "{{provider}} · {{group}}",
+    "groupBadge_one": "Grup penyedia · {{count}} komputer",
+    "groupBadge_other": "Grup penyedia · {{count}} komputer",
+    "harness": "Harness",
+    "restoreRecommended": "Kembalikan ke yang disarankan",
+    "saveFailed": "Gagal menyimpan. Coba lagi.",
+    "configure": "Konfigurasi",
+    "syncFailed": "Favorit tidak bisa disinkronkan. Buka lagi untuk mencoba; Cindy di komputer jarak jauh mungkin perlu diperbarui.",
+    "timeUnit": {
+      "day": "h",
+      "hour": "j",
+      "minute": "m",
+      "second": "d"
+    },
+    "quotaAverage": "Rata-rata sisa {{percent}}%",
+    "quotaUpdating": "Kuota menunggu pembaruan",
+    "quotaResetSoon": "Segera direset",
+    "quotaResetIn": "Direset dalam {{duration}}",
+    "quotaAverageHint": "Kuota mingguan · Bobot sama per akun",
+    "quotaResetHint": "Dengan laju saat ini, kuota mungkin masih tersisa saat reset: kuning dalam 24 jam, merah dalam 6 jam."
+  },
+  "modelGroups": {
+    "title": "Grup model",
+    "sourceCount_one": "{{count}} sumber",
+    "sourceCount_other": "{{count}} sumber",
+    "strategy": {
+      "expiring": "Kedaluwarsa lebih dulu",
+      "order": "Sesuai urutan",
+      "rotate": "Bergiliran",
+      "cheapest": "Paling murah"
+    },
+    "sourceOnDevice": "{{provider}} · {{device}}",
+    "why": {
+      "expiringQuota": "Sisa kuota {{left}}%, direset {{reset}}; pakai ini dulu",
+      "expiring": "Diurutkan paling atas berdasarkan kuota",
+      "order": "Sumber tersedia yang paling atas",
+      "rotate": "Sekarang gilirannya",
+      "only": "Saat ini hanya ini yang bisa dipakai",
+      "soonest": "Kuota semua sumber habis; ini yang paling cepat pulih",
+      "soonestUntil": "Kuota semua sumber habis; ini yang paling cepat pulih ({{reset}})",
+      "cheapest": "Harga paling rendah",
+      "cheapestFree": "Langganan masih punya kuota, tanpa biaya tambahan",
+      "exceptionImage": "Pesan berisi gambar, jadi hanya dipilih dari sumber yang bisa membaca gambar",
+      "exceptionImageFallback": "Pesan berisi gambar, tetapi tidak ada sumber yang bisa membaca gambar; tetap dipilih seperti biasa",
+      "exceptionHours": "Pada jam ini dialihkan ke “{{name}}”",
+      "separator": "; "
+    },
+    "picker": {
+      "switched": "“{{name}}” mengganti tugas ini ke {{model}}",
+      "switchUnavailable": "“{{name}}” saat ini tidak punya sumber yang bisa dipakai tugas ini; model tidak diganti.",
+      "chooseUnavailable": "“{{name}}” saat ini tidak punya sumber yang bisa dipakai; tidak dipilih."
+    },
+    "anotherDevice": "Komputer lain"
+  },
+  "pluginEngines": {
+    "genericName": "Mesin plugin",
+    "defaultModel": "Model bawaan",
+    "unavailable": "{{engine}} tidak tersedia",
+    "unavailableWithHint": "{{engine}} tidak tersedia: {{hint}}",
+    "worktreeUnsupported": "Mesin plugin belum bisa memulai tugas di worktree. Nonaktifkan worktree untuk mengirim."
+  }
+}
