@@ -667,7 +667,7 @@ describe('PluginMarketLedger', () => {
    *   原控制端随后仍被判成「是我那次装的」。
    * - 最小失败输入：带两种绑定的已装记录各走一次这四条路径；以及标记卸载后原样恢复。
    * - 改前失败：四条各自失败（写回后仍带 remoteOperationBinding）；原样恢复一条改前即通过（覆盖既有行为）。
-   *   模拟器迁移一条另断言：迁移事务显式交来的新绑定被保留（复审 6067717502，382861f9ad 上失败）。
+   *   远程操作的新证据改为整次安装成功后经 attachRemoteOperationBinding 补写，另有一条断言它只补进提交时写下的那条记录。
    * - tier：unit。
    */
   describe('remote operation evidence on ledger rewrites (V2.10)', () => {
@@ -708,24 +708,49 @@ describe('PluginMarketLedger', () => {
       expect(ledger.installationForGhost('cindy-test')).not.toHaveProperty('remoteOperationBinding');
     });
 
-    it('drops inherited evidence on a simulator migration unless the migration passes its own', () => {
-      const inherited = harness();
+    it('drops the evidence on a simulator migration', () => {
+      const { ledger } = harness();
       const legacy = bound({ ghostId: 'baguette-simulator' });
-      inherited.ledger.upsertInstallation(legacy);
-      // A repair copies the old record: whatever binding it carries is inherited and dropped.
-      expect(inherited.ledger.migrateSimulatorInstallation(legacy, { ...legacy, ghostId: 'cindy-simulator', namespace: null }))
+      ledger.upsertInstallation(legacy);
+      // Whatever binding `next` carries is inherited and dropped (an interrupted-migration repair copies the old record).
+      expect(ledger.migrateSimulatorInstallation(legacy, { ...legacy, ghostId: 'cindy-simulator', namespace: null }))
         .toBe(true);
-      const repaired = inherited.ledger.installationForGhost('cindy-simulator');
-      expect(repaired).toMatchObject({ installed: true, ghostId: 'cindy-simulator' });
-      expect(repaired).not.toHaveProperty('remoteOperationBinding');
+      const migrated = ledger.installationForGhost('cindy-simulator');
+      expect(migrated).toMatchObject({ installed: true, ghostId: 'cindy-simulator' });
+      expect(migrated).not.toHaveProperty('remoteOperationBinding');
+    });
 
-      // A remote update commit hands over the binding it just generated; only that one is kept.
-      const committed = harness();
-      committed.ledger.upsertInstallation(legacy);
-      const fresh = { ...operation, operationId: 'op-0000000000000002', rawManifestSha256: 'e'.repeat(64) };
-      expect(committed.ledger.migrateSimulatorInstallation(legacy,
-        { ...legacy, ghostId: 'cindy-simulator', namespace: null, rawManifestSha256: 'e'.repeat(64) }, fresh)).toBe(true);
-      expect(committed.ledger.installationForGhost('cindy-simulator')?.remoteOperationBinding).toEqual(fresh);
+    it('attaches an operation\'s evidence only to the exact record its commit wrote', () => {
+      const { ledger } = harness();
+      const written = record({ rawManifestSha256: 'd'.repeat(64), updatedAt: '2026-11-26T07:00:00.000Z' });
+      ledger.upsertInstallation(written);
+      const evidence = { ...operation, approval: 'approved:00000000-0000-4000-8000-000000000001' };
+      expect(ledger.attachRemoteOperationBinding(written, evidence)).toBe(true);
+      expect(ledger.installationForGhost('cindy-test')?.remoteOperationBinding).toEqual(evidence);
+      // Never twice, never over someone else's evidence.
+      expect(ledger.attachRemoteOperationBinding(written, { ...evidence, operationId: 'op-0000000000000009' })).toBe(false);
+      // A later rewrite (reinstall, another operation) makes the commit's record disappear: nothing is attached.
+      const rewritten = record({ rawManifestSha256: 'd'.repeat(64), updatedAt: '2026-11-26T07:00:01.000Z' });
+      ledger.upsertInstallation(rewritten);
+      expect(ledger.attachRemoteOperationBinding(written, evidence)).toBe(false);
+      expect(ledger.installationForGhost('cindy-test')).not.toHaveProperty('remoteOperationBinding');
+      // Removed in between: nothing is attached either.
+      ledger.markRemovedRecord(rewritten, null);
+      expect(ledger.attachRemoteOperationBinding(rewritten, evidence)).toBe(false);
+    });
+
+    // 自审（推送前）：证据在安装成功收尾后才补写，恰在补写前捕获记录的比较并写入不能因此永久失败（否则卸载、
+    // 默认安装退订、迁移、信任补写都会落空）。改前失败。
+    it('does not let a late attach defeat compare-and-write on a record captured just before it', () => {
+      const { ledger } = harness();
+      const written = record({ rawManifestSha256: 'd'.repeat(64) });
+      ledger.upsertInstallation(written);
+      const captured = ledger.installationForGhost('cindy-test')!;
+      expect(ledger.attachRemoteOperationBinding(written, { ...operation, approval: 'approved:00000000-0000-4000-8000-000000000001' }))
+        .toBe(true);
+      expect(ledger.markRemovedRecordIfUnchanged(captured, 'user-a')).toBe(true);
+      expect(ledger.installationForGhost('cindy-test')).toMatchObject({ installed: false });
+      expect(ledger.installationForGhost('cindy-test')).not.toHaveProperty('remoteOperationBinding');
     });
 
     it('keeps the evidence when a failed replacement restores the exact previous record', () => {

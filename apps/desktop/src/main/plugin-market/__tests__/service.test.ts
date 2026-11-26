@@ -1238,7 +1238,11 @@ describe('PluginMarketService migration and defaultInstall', () => {
     })) as unknown as InstalledGhost[];
     const management = new RemotePluginManagement({
       list: projected,
-      instance: (instanceKey) => projected().find((ghost) => installedGhostStoragePart(ghost) === instanceKey),
+      instance: (instanceKey) => {
+        const ghost = projected().find((candidate) => installedGhostStoragePart(candidate) === instanceKey);
+        return ghost ? { storagePart: instanceKey, approval: ghostInstallApprovalToken(ghost.approval), version: ghost.manifest.version }
+          : undefined;
+      },
       capture: () => () => true,
       captureReceipt: () => () => true,
       market: {
@@ -1249,7 +1253,7 @@ describe('PluginMarketService migration and defaultInstall', () => {
             consent: { prompt, initiator: 'user' }, assertCurrent, assertScope, ...(remoteOperation ? { remoteOperation } : {}),
           });
         },
-        installedOperations: (items, controller) => service.withInstalledOperationIds(items, controller),
+        installedOperations: (items, controller, live) => service.withInstalledOperationIds(items, controller, live),
       },
       setEnabled: async () => {},
       uninstall: async () => {},

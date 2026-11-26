@@ -9441,14 +9441,24 @@ export function registerGhostIpc(): void {
     });
   remotePluginManagement = new RemotePluginManagement({
     list: availableGhosts,
-    // 契约 V2.10：目录、推荐、详情只为本控制端的 'self' 候选按实例读当前实例，不重扫全部安装；注册表答不了
-    // 即 undefined，按未证实处理。可用性与 list() 同一口径。
+    // 契约 V2.10：目录、推荐、详情只为本控制端的 'self' 候选按实例键读当前批准令牌与版本：只读该实例的注册表项与
+    // 批准记录，不做完整实例投影（不读安装来源和市场账本），不重扫全部安装。会话与账号门禁与 availableGhosts()
+    // 同一口径。读不到即 undefined，按未证实处理。
     instance: (instanceKey) => {
-      if (isAppSessionBoundaryPending()) return undefined;
-      const ghost = getGhostManager().findInstalledInstance(instanceKey);
-      // 与 availableGhosts() 同一口径，且不再查第二次实例。
-      return ghost && (getAppCapabilities().canUseCindyAccountServices || !ghostRequiresCindyAccount(ghost.manifest))
-        ? ghost : undefined;
+      try {
+        if (isAppSessionBoundaryPending()) return undefined;
+        const facts = getGhostManager().readInstalledInstanceApproval(instanceKey);
+        if (!facts) return undefined;
+        if (!getAppCapabilities().canUseCindyAccountServices && ghostRequiresCindyAccount(facts.manifest)) return undefined;
+        return {
+          storagePart: instanceKey,
+          approval: ghostInstallApprovalToken({ state: 'approved', revision: facts.revision }),
+          version: facts.manifest.version,
+        };
+      } catch {
+        // 读不到（换号中、根目录或批准记录异常）就按未证实处理，不让整次读取失败。
+        return undefined;
+      }
     },
     publication: {
       prepare: async (id, expected) => {

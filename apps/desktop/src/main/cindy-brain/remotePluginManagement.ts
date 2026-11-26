@@ -17,7 +17,7 @@ import type {
   PluginMarketPage,
   PluginMarketItem,
 } from '../../shared/pluginMarket.js';
-import { projectInstalledOperationAttribution } from '../../shared/pluginMarket.js';
+import { projectInstalledOperationAttribution, type InstalledInstanceFacts } from '../../shared/pluginMarket.js';
 import type {
   PluginManagementProject,
   PluginManagementProjectState,
@@ -64,7 +64,7 @@ export interface RemotePluginManagementDeps {
    * 契约 V2.10：按实例键读当前实例（不重扫全部安装）。只用于目录、推荐、详情对本控制端 `'self'` 候选的复核；
    * 读不到（含实例注册表答不了）返回 undefined，调用方按未证实处理，不回退到整份列表。
    */
-  instance?(instanceKey: string): InstalledGhost | undefined;
+  instance?(instanceKey: string): InstalledInstanceFacts | undefined;
   preferences?: RemotePluginPreferences;
   settingsPage?: true;
   ui?: {
@@ -115,7 +115,7 @@ export interface RemotePluginManagementDeps {
       /** 契约 V2.10：复核用的实例列表（最后一个 await 之后同步读取，出口原样放进同一响应）与换装回调。 */
       live?: {
         ghosts?(): readonly InstalledGhost[];
-        instance?(instanceKey: string): InstalledGhost | undefined;
+        instance?(instanceKey: string): InstalledInstanceFacts | undefined;
         onChanged?(): void;
       },
     ): Promise<T[]>;
