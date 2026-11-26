@@ -1,11 +1,29 @@
-import { canStopBotGroupWork, isOwnBotGroupSpeaker, type BotGroupSpeakerActivity } from './botGroupChat.js';
-
 /** Shared roster geometry and state precedence for Desktop, iOS and Android. */
+// Keep this module dependency-free so lightweight tooling (e.g. ES2022 scripts/device-link)
+// can import it without pulling in heavier group-chat modules.
 // Keep touch targets independent of the portrait; the inset also holds corner dots and selection rings.
 export const TEAMMATE_AVATAR = { strip: 36, stripTarget: 48, row: 44, dot: 10, border: 2, gap: 8 } as const;
 export type TeammateStatus = 'awaiting' | 'error' | 'running' | 'done' | 'unread' | 'idle';
 export interface TeammateActivity { phase: string }
 export const TEAMMATE_STATUS_ORDER: readonly TeammateStatus[] = ['awaiting', 'error', 'running', 'done', 'unread', 'idle'];
+
+/** Whether a group member's work belongs to this account (owned companion or self-requested group Cindy). */
+export function isOwnBotGroupWork(
+  member: { assistant?: boolean; isOwned?: boolean } | undefined,
+  isSelfRequested: boolean,
+): boolean {
+  return !!member && (member.assistant === true ? isSelfRequested : member.isOwned === true);
+}
+
+/** Whether a group speaker/execution belongs to this account's own agent (owned companion or self-requested group Cindy). */
+export function isOwnBotGroupSpeaker(
+  group: { serverBacked?: boolean; members: readonly { botId: string; assistant?: boolean; isOwned?: boolean }[] },
+  speaker: { botId: string; executionId?: string; isSelfRequested?: boolean; activity: string },
+): boolean {
+  if (!group.serverBacked) return true;
+  if (speaker.activity === 'planning' && !speaker.executionId) return speaker.isSelfRequested === true;
+  return isOwnBotGroupWork(group.members.find(member => member.botId === speaker.botId), speaker.isSelfRequested === true);
+}
 
 export function aggregateTeammateStatus(states: readonly TeammateStatus[]): TeammateStatus {
   return TEAMMATE_STATUS_ORDER.find(state => states.includes(state)) ?? 'idle';
@@ -33,7 +51,7 @@ export function teammateGroupActivity(group: {
   archived?: boolean;
   serverBacked?: boolean;
   members?: readonly { botId: string; assistant?: boolean; isOwned?: boolean }[];
-  round?: { speakers: readonly { botId: string; executionId?: string; isSelfRequested?: boolean; activity: BotGroupSpeakerActivity }[] };
+  round?: { speakers: readonly { botId: string; executionId?: string; isSelfRequested?: boolean; activity: string }[] };
   speakingBotIds: readonly string[];
   planningBotId?: string | null;
   openPlan?: { status: string; currentStepStatus?: string | null } | null;
@@ -48,7 +66,7 @@ export function teammateGroupActivity(group: {
     ? group.speakingBotIds.length > 0
     : group.round
       ? group.round.speakers.some(speaker => isOwnBotGroupSpeaker({ serverBacked: true, members: group.members ?? [] }, speaker))
-      : group.speakingBotIds.some(botId => canStopBotGroupWork(group.members?.find(member => member.botId === botId), false));
+      : group.speakingBotIds.some(botId => isOwnBotGroupWork(group.members?.find(member => member.botId === botId), false));
   const ownPlanRunning = plan?.status === 'running' && (!group.serverBacked || hasOwnSpeaker);
   if (hasOwnSpeaker || group.planningBotId || ownPlanRunning) return { phase: 'running' };
   return { phase: group.lastMessage?.authorKind === 'bot' ? 'completed' : 'idle' };
