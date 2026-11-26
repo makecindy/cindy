@@ -38,7 +38,7 @@ import { desktopTransferCodec } from './transferCodec';
 import { desktopInvokeTransferMetrics } from './invokeTransferMetrics';
 import { watchNetworkChanges } from './networkChanges';
 import path from 'node:path';
-import { app, BrowserWindow } from 'electron';
+import { app, BrowserWindow, session } from 'electron';
 import type WebSocket from 'ws';
 import {
   DeviceLinkClient,
@@ -1792,12 +1792,31 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
       startProviderShareRuntime(broadcast, { invoke: remoteBackgroundInvoke });
       client?.start();
       stopNetworkWatch?.();
+      const readSystemProxy = async (): Promise<string | null> => {
+        const ses = session?.defaultSession;
+        if (!ses || typeof ses.resolveProxy !== 'function') return null;
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        try {
+          const result = await Promise.race([
+            ses.resolveProxy('https://cindy.invalid'),
+            new Promise<null>((resolve) => {
+              timer = setTimeout(() => resolve(null), 500);
+              timer.unref?.();
+            }),
+          ]);
+          return typeof result === 'string' ? result.trim() : null;
+        } catch {
+          return null;
+        } finally {
+          if (timer) clearTimeout(timer);
+        }
+      };
       stopNetworkWatch = watchNetworkChanges(() => {
         if (linkTornDown || !arbiter?.isOwner() || !authManager.getAuthState().isAuthenticated) return;
         client?.notifyNetworkChanged();
-        // Agent-Net 主连接自己探测（Device Link 的探测在那条连接里由本机回答，到不了中转）。关着时不做任何事。
+        // Agent-Net 主连接与分享连接自己探测（Device Link 的探测在那条连接里由本机回答，到不了中转）。关着时不做任何事。
         agentNetNetworkChanged();
-      });
+      }, { readProxy: readSystemProxy });
       // 可靠帧可能在 ownership 接管前到达(那时非持有者,重建被 shouldAbort 挡掉):
       // 接管后对本机仍在控制、且 link 未就绪的设备补发一次重建,避免启动竞态留下
       // 半开链路,不必等对端下一帧。

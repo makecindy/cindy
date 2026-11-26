@@ -21,7 +21,7 @@ const members = cases.map((item, index) => ({
 }));
 const view: ProviderGroupView = {
   providerId: 'openai',
-  config: { strategy: 'least', autoSwitch: true, members },
+  config: { strategy: 'expiring', autoSwitch: true, members },
   members: members.map((member, index) => ({ ...member, ...cases[index], appVersion: '0.1.113' })),
 };
 

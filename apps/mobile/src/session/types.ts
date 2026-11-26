@@ -114,6 +114,8 @@ export interface RemoteSession {
   forkedAtMessageId?: string | null;
   pinnedAt?: string | null;
   snoozedUntil?: string | null;
+  /** Host-authoritative IM attachment flag returned by `local-db:sessions:get`. */
+  imAttached?: boolean;
   snoozedAt?: string | null;
   userSendAt: string | null;
   lastActivityAt?: string | null;
@@ -320,6 +322,7 @@ export interface InputProjection {
   error: string | null;
   /** Stable error reason for live projections; older controlled hosts may omit it. */
   errorReason?: string | null;
+  reconnectHandoff?: 'disabled' | 'exhausted';
   /** Bounded details for tool-loop errors; older projections may omit them. */
   toolLoop?: MobileToolLoopErrorDetails | null;
   outputLimit?: OutputLimitDetails | null;
