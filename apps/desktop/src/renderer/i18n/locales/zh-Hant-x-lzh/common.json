@@ -7398,7 +7398,8 @@
       "localNetwork": {
         "label": "區域網路",
         "deniedHint": "無此權，同網之電腦與手機不得直連此機，唯經中繼，其速遲矣。",
-        "settingsHint": "請於「系統設定 › 隱私權與安全性 › 區域網路」啟 Cindy，歸此即自生效。"
+        "promptedHint": "請於系統彈框中點「允許」；若無彈框，可往系統設定手啟之。",
+        "settingsHint": "於「隱私權與安全性」覓「區域網路」而啟 Cindy；若列中無之，點「+」添此應用，歸即自效。"
       }
     },
     "imBot": {
@@ -7869,6 +7870,10 @@
         "toggle-sidebar": {
           "label": "顯隱側欄",
           "description": "收或展左側差事錄"
+        },
+        "copy-session-link": {
+          "label": "錄差事連結",
+          "description": "錄當前差事之連結"
         },
         "session-history-back": {
           "label": "前一差事",
@@ -15655,7 +15660,6 @@
       "piRetryHistoryUnavailable": "此信未發。Pi 讀舊錄以發信時失誤。可再試，或另啟任務。",
       "upstreamStatusError": "上游返 {{status}}，此答未竟。",
       "messageNotSent": "此信未發。",
-      "upstreamEmpty550": "模型之服返 HTTP 550，答文空",
       "replyFailed": "答未竟",
       "queuedSendRecovery": "前訊未遣。點「再試」可依原樣遣發。若遣新訊，則取代前訊。",
       "retryTitle": "再遣末一訊",
@@ -16741,6 +16745,8 @@
       "retryIn": "{{seconds}} 秒後自試"
     },
     "subscriptionAccountError": {
+      "unreachable": "Codex 帳號服務暫不可達。",
+      "rechecking": "Codex 帳號服務暫不可達，至 {{resetAt}} 將復試。",
       "poolModelLimited": "此模型訂閱之額已盡，可先易模型。",
       "poolRetryUntil": "俟 {{resetAt}} 後可再試。",
       "poolOtherSignedOut": "另有訂閱帳號已退出，可於行此任務之機重新登入而試。",
@@ -22711,6 +22717,16 @@
     "refresh": "更新額度"
   },
   "subscriptionAccounts": {
+    "existing": {
+      "menu": "更多新增方式",
+      "connect": "連接既有登入…",
+      "found": "發現 {{count}} 個可連接的登入",
+      "title": "{{device}} 上的既有登入",
+      "note": "Cindy 將與終端機共用所選帳號的設定。",
+      "attach": "連接",
+      "choose": "選擇其他目錄…",
+      "unverified": "無法確認此目錄中的訂閱登入。"
+    },
     "pluginSignIn": {
       "method": "登入之法",
       "secretHint": "Key 唯付法器，藏於此帳號之篋；Cindy 不存，亦不傳他機。",
