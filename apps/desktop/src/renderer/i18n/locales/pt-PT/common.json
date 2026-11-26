@@ -7983,6 +7983,10 @@
           "label": "Alternar barra lateral",
           "description": "Recolher ou expandir a barra lateral da lista de sessões"
         },
+        "copy-session-link": {
+          "label": "Copiar ligação da sessão",
+          "description": "Copiar a ligação da sessão aberta"
+        },
         "session-history-back": {
           "label": "Tarefa anterior",
           "description": "Voltar à tarefa que visualizou anteriormente"

@@ -7914,6 +7914,10 @@
           "label": "Seitenleiste umschalten",
           "description": "Seitenleiste mit der Sitzungsliste ein- oder ausklappen"
         },
+        "copy-session-link": {
+          "label": "Sitzungslink kopieren",
+          "description": "Link der geöffneten Sitzung kopieren"
+        },
         "session-history-back": {
           "label": "Vorherige Aufgabe",
           "description": "Zur zuvor angesehenen Aufgabe zurückgehen"

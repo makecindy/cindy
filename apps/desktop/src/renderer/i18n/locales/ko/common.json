@@ -7871,6 +7871,10 @@
           "label": "사이드바 전환",
           "description": "왼쪽 세션 목록을 접거나 펼칩니다"
         },
+        "copy-session-link": {
+          "label": "세션 링크 복사",
+          "description": "열려 있는 세션의 링크 복사"
+        },
         "session-history-back": {
           "label": "이전 세션",
           "description": "탐색 순서대로 이전에 열었던 세션으로 돌아갑니다"

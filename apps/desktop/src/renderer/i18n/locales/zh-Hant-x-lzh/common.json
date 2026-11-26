@@ -7871,6 +7871,10 @@
           "label": "顯隱側欄",
           "description": "收或展左側差事錄"
         },
+        "copy-session-link": {
+          "label": "錄差事連結",
+          "description": "錄當前差事之連結"
+        },
         "session-history-back": {
           "label": "前一差事",
           "description": "循瀏覽之序，歸前所啟之差事"

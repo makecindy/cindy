@@ -7983,6 +7983,10 @@
           "label": "Afficher/masquer la barre latérale",
           "description": "Réduire ou développer la barre latérale de la liste des sessions"
         },
+        "copy-session-link": {
+          "label": "Copier le lien de la session",
+          "description": "Copier le lien de la session ouverte"
+        },
         "session-history-back": {
           "label": "Tâche précédente",
           "description": "Revenir à la tâche consultée précédemment"

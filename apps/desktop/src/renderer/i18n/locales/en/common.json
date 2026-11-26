@@ -7914,6 +7914,10 @@
           "label": "Toggle sidebar",
           "description": "Collapse or expand the session list sidebar"
         },
+        "copy-session-link": {
+          "label": "Copy session link",
+          "description": "Copy the link to the open session"
+        },
         "session-history-back": {
           "label": "Previous task",
           "description": "Go back to the task you viewed before"
