@@ -18,7 +18,7 @@ import type { TextInputInstance } from 'react-native';
  * （与桌面同一套规则，见 @cindy/maker-shared/botGroupMentions），clientId 作为幂等键：同一段
  * 文字、点名目标和附件未变时重试沿用同一个 clientId。支持附件时，「+」打开附件面板。
  */
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useImperativeHandle, useMemo, useRef, useState, type Ref } from 'react';
 import { Alert, Keyboard, Platform, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { randomUUID } from 'expo-crypto';
 import { Camera, Circle, CircleCheck, Folder, Image as ImageIcon, Plus, Square, Users } from 'lucide-react-native';
@@ -79,9 +79,21 @@ type MentionOption =
   | { kind: 'all' | 'allBots'; label: string }
   | { kind: 'member'; label: string; member: BotGroupMemberView };
 
+export interface BotGroupComposerHandle {
+  mentionBot(botId: string): void;
+}
+
+function focusFromTimeline(input: TextInputInstance | null) {
+  if (!input) return;
+  // Android can keep the input focused after Back hides the keyboard.
+  if (input.isFocused() && !Keyboard.isVisible()) input.blur();
+  input.focus();
+}
+
 export function BotGroupComposer({
-  pullThrough, members, conversationKind, identityFor, deviceId, online, allowMentionAllBots = false, running, canStop = true, stopPending = false, planState, attachmentsSupported, uploadAttachment, quoteMessageId, focusRequest, onSend, onStop, topic = false, placeholder: placeholderOverride, maskIndicator, onParticipate,
+  ref, pullThrough, members, conversationKind, identityFor, deviceId, online, allowMentionAllBots = false, running, canStop = true, stopPending = false, planState, attachmentsSupported, uploadAttachment, quoteMessageId, focusRequest, onSend, onStop, topic = false, placeholder: placeholderOverride, maskIndicator, onParticipate,
 }: {
+  ref?: Ref<BotGroupComposerHandle>;
   pullThrough?: ComposerPullThroughBridge;
   maskIndicator?: import('react').ReactNode;
   onParticipate?(): void;
@@ -123,14 +135,13 @@ export function BotGroupComposer({
   const [stopping, setStopping] = useState(false);
   const inputRef = useRef<TextInputInstance>(null);
   useEffect(() => {
-    const input = inputRef.current;
-    if (!focusRequest || !input) return;
-    // focus() is a no-op on an input that is already focused, and Android keeps focus after Back
-    // hides the keyboard. Re-focus only then; with the keyboard up, an IME composition is left alone.
-    if (input.isFocused() && !Keyboard.isVisible()) input.blur();
-    input.focus();
+    if (focusRequest) focusFromTimeline(inputRef.current);
   }, [focusRequest]);
-  const textRef = useRef(text); textRef.current = text;
+  const textRef = useRef(text);
+  const updateText = (value: string) => {
+    textRef.current = value;
+    setText(value);
+  };
   const selectionRef = useRef({ start: 0, end: 0 });
   const sendingRef = useRef(false);
   const stoppingRef = useRef(false);
@@ -219,22 +230,39 @@ export function BotGroupComposer({
   useEffect(() => { if (!text) resetResize(); }, [text, resetResize]);
 
 
-  const choose = (option: MentionOption) => {
-    if (!query) return;
-    const next = insertBotGroupMention(text, { start: query.start, end: caret }, option.label);
-    setText(next.text);
+  const insertMention = (option: MentionOption, draft: string, range: { start: number; end: number }) => {
+    const next = insertBotGroupMention(draft, range, option.label);
+    updateText(next.text);
     selectionRef.current = { start: next.caret, end: next.caret };
     setCaret(next.caret);
     setForcedSelection({ start: next.caret, end: next.caret });
     setTracked(current => {
-      const remaining = retainBotGroupTrackedMentions(text, next.text, {
+      const remaining = retainBotGroupTrackedMentions(draft, next.text, {
         members: mentionMembers,
-        allLabels: [allLabel], allBotLabels, tracked: current, editStart: query.start, editEnd: caret,
+        allLabels: [allLabel], allBotLabels, tracked: current, editStart: range.start, editEnd: range.end,
       });
-      return option.kind === 'member' ? [...remaining, { botId: option.member.botId, label: option.label, start: query.start }] : remaining;
+      return option.kind === 'member' ? [...remaining, { botId: option.member.botId, label: option.label, start: range.start }] : remaining;
     });
+  };
+
+  const choose = (option: MentionOption) => {
+    if (!query) return;
+    insertMention(option, text, { start: query.start, end: caret });
     inputRef.current?.focus();
   };
+
+  useImperativeHandle(ref, () => ({
+    mentionBot(botId) {
+      if (!online) return;
+      const member = mentionCandidates.find(candidate => candidate.botId === botId && candidate.actorKind !== 'human');
+      if (!member?.name.trim()) return;
+      const current = textRef.current;
+      // A timeline gesture keeps the whole draft, including any selected text.
+      const draft = current && !/\s$/.test(current) ? `${current} ` : current;
+      insertMention({ kind: 'member', label: member.name.trim(), member }, draft, { start: draft.length, end: draft.length });
+      focusFromTimeline(inputRef.current);
+    },
+  }));
 
   const send = async () => {
     if (!canSend || sendingRef.current) return;
@@ -253,12 +281,12 @@ export function BotGroupComposer({
     sendingRef.current = true;
     setSending(true);
     // Clear at once like any chat; a failed send puts the draft back if nothing new was typed.
-    setText('');
+    updateText('');
     setCaret(0);
     setTracked([]);
     const restoreDraft = () => {
       if (textRef.current) return;
-      setText(draft);
+      updateText(draft);
       setTracked(draftTracked);
       // The tag comes back only with its own draft, never onto newly typed text.
     };
@@ -403,8 +431,9 @@ export function BotGroupComposer({
       onChangeText={(value) => {
         onParticipate?.();
         const { start: editStart, end: editEnd } = selectionRef.current;
-        setText(value);
-        setTracked(current => retainBotGroupTrackedMentions(text, value, {
+        const previous = textRef.current;
+        updateText(value);
+        setTracked(current => retainBotGroupTrackedMentions(previous, value, {
           members: mentionMembers,
           allLabels: [allLabel], allBotLabels,
           tracked: current,

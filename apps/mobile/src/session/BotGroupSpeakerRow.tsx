@@ -14,7 +14,6 @@ import { useThemedStyles, type ThemeColors } from '@/theme';
 import { fontWeight, lineHeight, spacing, typeScale } from '@/theme/tokens';
 import {
   BOT_GROUP_INLINE_AVATAR_SIZE,
-  BOT_GROUP_MESSAGE_AVATAR_SIZE,
   BotGroupAvatar,
   type BotGroupIdentity,
 } from './BotGroupAvatars';
@@ -23,8 +22,9 @@ import { remoteSessionStore, useSessionPendingInteractions } from './remoteSessi
 import type { PendingInteraction } from './types';
 
 /** Owned-session prompts stay outside the collapsible execution progress. */
-export function BotGroupSpeakerRow({ deviceId, identity, sessionId, activity, online, executionStatus, stopping, executionId, inputClientId, groupId, startedAt, workStep, revealWaiting = true, footer, onError }: {
+export function BotGroupSpeakerRow({ deviceId, avatar, identity, sessionId, activity, online, executionStatus, stopping, executionId, inputClientId, groupId, startedAt, workStep, revealWaiting = true, footer, onError }: {
   deviceId: string;
+  avatar: ReactNode;
   executionId?: string;
   inputClientId?: string;
   groupId?: string;
@@ -67,9 +67,7 @@ export function BotGroupSpeakerRow({ deviceId, identity, sessionId, activity, on
     : t('chat.teammateProcess.processing');
   const stateLabel = waiting ? t(revealWaiting ? 'groupChat.waitingConfirm' : 'groupChat.waitingForOwner', { name: '' }) : isStopping || executionStatus === 'queued' || activity === 'planning' ? label : elapsedTitle;
   return <View style={styles.row} testID="botGroup.speaking" accessibilityLabel={`${identity.name}, ${waiting ? t(revealWaiting ? 'groupChat.waitingConfirm' : 'groupChat.waitingForOwner', { name: identity.name }) : label}`}>
-    <View style={styles.avatar}>
-      <BotGroupAvatar deviceId={deviceId} identity={identity} size={BOT_GROUP_MESSAGE_AVATAR_SIZE} online={online} />
-    </View>
+    {avatar}
     <View style={styles.body}>
       <TeammateProcess id={`group-process:${executionId ?? lane}`} running
         title={`${identity.name} · ${stateLabel}`}
@@ -93,7 +91,6 @@ export function BotGroupSpeakerRow({ deviceId, identity, sessionId, activity, on
 
 const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   row: { flexDirection: 'row', alignItems: 'flex-start', gap: spacing.sm },
-  avatar: { width: BOT_GROUP_MESSAGE_AVATAR_SIZE, height: BOT_GROUP_MESSAGE_AVATAR_SIZE, marginTop: spacing.sm },
   body: { flex: 1, minWidth: 0 },
   processName: { color: colors.textPrimary, fontSize: typeScale.bodySmall, lineHeight: lineHeight.bodySmall, fontWeight: fontWeight.regular },
   processState: { color: colors.textSecondary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption },

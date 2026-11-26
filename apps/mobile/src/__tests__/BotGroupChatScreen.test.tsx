@@ -128,8 +128,8 @@ vi.mock('react-native', () => {
       h.keyboardAvoidingView = props;
       return el('div', null, children);
     },
-    Pressable: ({ children, onPress, disabled, testID, accessibilityLabel }: any) => el('button',
-      { 'data-testid': testID, 'aria-label': accessibilityLabel, disabled, onClick: onPress },
+    Pressable: ({ children, onPress, onLongPress, disabled, testID, accessibilityLabel }: any) => el('button',
+      { 'data-testid': testID, 'aria-label': accessibilityLabel, disabled, onClick: onPress, onContextMenu: onLongPress },
       typeof children === 'function' ? children({ pressed: false }) : children),
     ActivityIndicator: ({ testID }: any) => el('i', { 'data-testid': testID ?? 'spinner' }),
     StyleSheet: { create: (value: unknown) => value, flatten: (style: unknown) => Object.assign({}, ...[style].flat(Infinity).filter(Boolean)), hairlineWidth: 1 },
@@ -261,9 +261,9 @@ vi.mock('@/session/BotGroupAvatars', () => {
 }; });
 vi.mock('@/session/TeammateProcess', () => ({ useTeammateElapsedTitle: () => 'Working', TeammateWorkSegment: ({ title, children }: any) => el('div', null, title, children), TeammateProcessLink: ({ title, onPress }: any) => el('button', { onClick: onPress }, title), TeammateProcess: ({ title, children }: any) => el('section', null, title, children) }));
 vi.mock('@/session/BotGroupSpeakerRow', () => ({
-  BotGroupSpeakerRow: ({ identity, activity, sessionId, onStop, stopPending, footer }: any) => {
+  BotGroupSpeakerRow: ({ identity, activity, sessionId, onStop, stopPending, footer, avatar }: any) => {
     const inspect = useContext(ProcessDisclosureViewport);
-    return el('div', { 'data-testid': `speaker.${identity.botId}.${activity}`, 'data-session': sessionId }, identity.name, footer,
+    return el('div', { 'data-testid': `speaker.${identity.botId}.${activity}`, 'data-session': sessionId }, avatar, identity.name, footer,
       h.speakerDisclosure ? el('button', { 'data-testid': 'fixture.processCollapse', onClick: () => inspect?.(300) }, 'Collapse process') : null,
       onStop ? el('button', { 'data-testid': 'botGroup.work.stop', disabled: stopPending, onClick: onStop }, 'stop') : null);
   },
@@ -1661,6 +1661,41 @@ describe('group composer', () => {
       text: '请 @阿布 写代码', mentions: { all: false, botIds: ['abu'] }, clientId: 'uuid-1',
     });
     expect(h.row.value).toBe('');
+  });
+
+  it('adds the exact BOT from a message or a running row to the draft on avatar long press', async () => {
+    const data = group();
+    await render(group({
+      openPlan: null,
+      members: data.members.slice(0, 2).map(member => ({ ...member, name: 'Ann' })),
+      messages: [message('m1', 1, { authorBotId: 'mimi', authorName: 'Ann', content: 'Earlier reply' })],
+      round: { status: 'running', speakers: [{ botId: 'abu', activity: 'reply', sessionId: null }], canContinue: false },
+    }));
+    await type('A draft');
+    await act(async () => h.row.onSelectionChange({ nativeEvent: { selection: { start: 0, end: 7 } } }));
+    await click('botGroup.avatarMention.mimi');
+    expect(h.row.value).toBe('A draft');
+
+    const hold = (botId: string) => {
+      const target = byId(`botGroup.avatarMention.${botId}`);
+      expect(target).not.toBeNull();
+      target!.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true }));
+    };
+    await act(async () => hold('abu'));
+    expect(h.row.value).toBe('A draft @Ann ');
+    expect(h.chat.act).not.toHaveBeenCalled();
+    await click('botGroup.composer.send');
+    expect(h.chat.act).toHaveBeenLastCalledWith('send', expect.objectContaining({
+      text: 'A draft @Ann', mentions: { all: false, botIds: ['abu'] },
+    }));
+
+    await act(async () => { hold('mimi'); hold('abu'); });
+    expect(h.row.value).toBe('@Ann @Ann ');
+    expect(h.chat.act).toHaveBeenCalledTimes(1);
+    await click('botGroup.composer.send');
+    expect(h.chat.act).toHaveBeenLastCalledWith('send', expect.objectContaining({
+      text: '@Ann @Ann', mentions: { all: false, botIds: ['mimi', 'abu'] },
+    }));
   });
 
   it.each(['[INVALID_PARAMS] MENTION_UNAVAILABLE', 'MENTION_UNAVAILABLE'])('keeps a stale selected target through a refused send (%s) and lets a new pick replace it', async message => {
