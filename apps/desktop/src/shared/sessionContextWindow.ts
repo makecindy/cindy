@@ -1,5 +1,15 @@
-import type { AgentKind, Catalog, CatalogModel } from '@cindy/model-providers';
+import { catalogModelIdCandidates, type AgentKind, type Catalog, type CatalogModel, type Provider } from '@cindy/model-providers';
 import { dbToMakerAgentKind } from './agentKindConversion';
+
+/** Route aliases match selection, but different window products never collapse. */
+export function findContextWindowModels(provider: Provider, agent: AgentKind, modelId: string): CatalogModel[] {
+  const ids = catalogModelIdCandidates(modelId, provider.routing[agent]?.modelIdRewrite?.stripPrefix, { exact: true });
+  for (const id of ids) {
+    const matches = (provider.models[agent] ?? []).filter(model => model.id === id);
+    if (matches.length) return matches;
+  }
+  return [];
+}
 
 /** Route identity carried by both persisted sessions and their renderer projection. */
 export interface ContextWindowSession {
@@ -24,9 +34,7 @@ export function resolveVerifiedContextWindow(
   for (const provider of catalog.providers) {
     if (provider.routing[agent]?.disabled === true) continue;
     if (providerId && provider.id !== providerId) continue;
-    for (const model of provider.models[agent] ?? []) {
-      if (model.id === modelId) candidates.push(model);
-    }
+    candidates.push(...findContextWindowModels(provider, agent, modelId));
   }
   if (candidates.length !== 1) return null;
   const only = candidates[0];
@@ -65,8 +73,8 @@ export function resolveRouteContextWindowBounds(
   for (const provider of catalog.providers) {
     if (provider.routing[agent]?.disabled === true) continue;
     if (providerId && provider.id !== providerId) continue;
-    for (const model of provider.models[agent] ?? []) {
-      if (model.id === modelId) candidates.push({ providerId: provider.id, model });
+    for (const model of findContextWindowModels(provider, agent, modelId)) {
+      candidates.push({ providerId: provider.id, model });
     }
   }
   if (candidates.length !== 1) return null;

@@ -9,6 +9,8 @@ const NON_DESKTOP_SETUP_SOURCES = new Set([
   // 官方飞书 / Lark hook(与个人飞书 'feishu' 区分的 vendorOptions.source)。
   'feishu-hook',
   'discord',
+  // 官方 Discord hook(与个人 Discord bot 'discord' 区分的 vendorOptions.source)。
+  'discord-hook',
   'slack-hook',
   'telegram',
   'wecom',

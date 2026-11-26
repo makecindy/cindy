@@ -243,12 +243,12 @@ export function InputHandoffCard({ sessionId, snapshot, remote }: InputHandoffCa
       aria-label={snapshot.purpose}
       data-testid="input-handoff-strip"
       className={cn(
-        'w-full max-w-[914px] rounded-[12px] border px-3 py-2.5',
+        'w-full max-w-[914px] rounded-xl border px-3 py-2.5',
         'border-[var(--border-default)] bg-[var(--surface-elevated)] text-[var(--text-primary)]',
       )}
     >
       <div className="flex min-w-0 items-center gap-3">
-        <span className="flex size-9 shrink-0 items-center justify-center rounded-[8px] bg-[var(--surface-chip)] text-[var(--text-primary)]">
+        <span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-[var(--surface-chip)] text-[var(--text-primary)]">
           <Icon size={18} aria-hidden />
         </span>
         <div className="min-w-0 flex-1">

@@ -23,6 +23,9 @@ export interface SessionRuntimeProfile {
   fastMode: boolean | 'ultrafast';
 }
 
+/** Plugin routes persist on the session row; only built-in engines use a temporary runtime override. */
+export type FallbackRouteProfile = SessionRuntimeProfile | (Omit<SessionRuntimeProfile, 'agentKind'> & { agentKind: 'acp' });
+
 export interface PendingSessionRuntimeMutation {
   generation: number;
   source: SessionRuntimeMutationSource;
@@ -42,11 +45,19 @@ export interface SessionRuntimeControlSnapshot {
   visitedRoutes: string[];
 }
 
+function runtimeOverrideForDevice(profile: SessionRuntimeProfile | null, agentDeviceId?: string | null) {
+  return profile && (profile.agentDeviceId ?? null) === (agentDeviceId ?? null) ? profile : null;
+}
+
+function runtimeOverrideForStart(sessionId: string, agentKind: EngineKind, agentDeviceId?: string | null) {
+  const profile = runtimeOverrideForDevice(getSessionRuntimeControlSnapshot(sessionId).effectiveOverride, agentDeviceId);
+  return profile?.agentKind === agentKind ? profile : null;
+}
+
 /** Startup-only projection; persisted preferences and native-history identity stay on the row. */
-export function getSessionRuntimeStartOverride(sessionId: string, agentKind: AgentKind, agentDeviceId?: string | null) {
-  const profile = getSessionRuntimeControlSnapshot(sessionId).effectiveOverride;
-  if (!profile || profile.agentKind !== agentKind
-    || (profile.agentDeviceId ?? null) !== (agentDeviceId ?? null)) return {};
+export function getSessionRuntimeStartOverride(sessionId: string, agentKind: EngineKind, agentDeviceId?: string | null) {
+  const profile = runtimeOverrideForStart(sessionId, agentKind, agentDeviceId);
+  if (!profile) return {};
   return { model: profile.model, providerId: profile.providerId,
     effort: profile.effort ?? undefined, fastMode: profile.fastMode };
 }
@@ -55,9 +66,11 @@ export function getSessionRuntimeStartOverride(sessionId: string, agentKind: Age
 export function projectSessionRuntimeControl(
   sessionId: string,
   baseline: SessionRuntimeProfile,
+  agentDeviceId = baseline.agentDeviceId,
 ): Partial<RendererSession> {
   const control = getSessionRuntimeControlSnapshot(sessionId);
-  const effective = control.effectiveOverride ?? baseline;
+  // A route-change push can run while an override from the previous computer still exists.
+  const effective = runtimeOverrideForDevice(control.effectiveOverride, agentDeviceId) ?? baseline;
   return {
     agentKind: makerToDbAgentKind(effective.agentKind),
     model: effective.model,
@@ -108,7 +121,7 @@ const states = new Map<string, SessionRuntimeControlState>();
 let ownerEpoch = 0;
 
 function routeKey(
-  profile: Pick<SessionRuntimeProfile, 'agentKind' | 'providerId' | 'model' | 'agentDeviceId'>,
+  profile: Pick<SessionRuntimeProfile, 'providerId' | 'model' | 'agentDeviceId'> & { agentKind: EngineKind },
 ): string {
   return `${profile.agentKind}\u0000${profile.providerId ?? ''}\u0000${profile.model}${modelRouteLocationKey(profile.agentDeviceId)}`;
 }
@@ -136,10 +149,13 @@ export function sessionRuntimeGenerationMatches(
   return expectedGeneration === undefined || (states.get(sessionId)?.generation ?? 0) === expectedGeneration;
 }
 
-export function recordUserSessionRuntimeMutation(sessionId: string): number {
+export function recordUserSessionRuntimeMutation(
+  sessionId: string,
+  options?: { preserveEffective?: boolean },
+): number {
   const state = stateFor(sessionId);
   state.generation += 1;
-  state.effectiveOverride = null;
+  if (!options?.preserveEffective) state.effectiveOverride = null;
   state.pending = null;
   state.pendingRouteExplicit = true;
   state.fallbackHop = 0;
@@ -321,12 +337,12 @@ export function resolveCompatibleSessionRuntimeAxisPatch(params: {
 
 export function acceptSessionRuntimeMutation(params: {
   sessionId: string;
-  source: SessionRuntimeMutationSource;
-  profile: SessionRuntimeProfile;
-  previousProfile?: SessionRuntimeProfile;
-  deferred: boolean;
+  previousProfile?: FallbackRouteProfile;
   thinking?: boolean;
-}): number {
+} & (
+  | { source: SessionRuntimeMutationSource; profile: SessionRuntimeProfile; deferred: boolean }
+  | { source: 'fallback'; profile: FallbackRouteProfile; deferred: false }
+)): number {
   const state = stateFor(params.sessionId);
   const previousPending = state.pending;
   state.generation += 1;
@@ -341,7 +357,7 @@ export function acceptSessionRuntimeMutation(params: {
   const acceptedThinking =
     params.thinking ??
     (params.deferred && samePendingTarget ? previousPending?.thinking : undefined);
-  const accepted: PendingSessionRuntimeMutation = {
+  const accepted: PendingSessionRuntimeMutation | null = params.profile.agentKind === 'acp' ? null : {
     generation: state.generation,
     source: params.source,
     profile: params.profile,
@@ -349,7 +365,7 @@ export function acceptSessionRuntimeMutation(params: {
   };
   state.pending = params.deferred ? accepted : null;
   state.pendingRouteExplicit = true;
-  if (!params.deferred) state.effectiveOverride = params.profile;
+  if (!params.deferred) state.effectiveOverride = accepted?.profile ?? null;
   if (params.source === 'fallback') {
     state.fallbackHop += 1;
     if (params.previousProfile) state.visitedRoutes.add(routeKey(params.previousProfile));
@@ -364,7 +380,7 @@ export function acceptSessionRuntimeMutation(params: {
 export function recordFailedSessionRuntimeFallbackCandidate(
   sessionId: string,
   expectedGeneration: number,
-  profile: SessionRuntimeProfile,
+  profile: Pick<SessionRuntimeProfile, 'providerId' | 'model' | 'agentDeviceId'> & { agentKind: EngineKind },
 ): boolean {
   const state = stateFor(sessionId);
   if (state.generation !== expectedGeneration) return false;
@@ -424,13 +440,12 @@ export function getPendingSessionRuntimeMutation(
  * started runtime keeps the saved provider baseline and takes its effort and Fast axes from it.
  */
 export function applySessionRuntimeOverrideForStart(
-  o: { id?: string; agentKind: EngineKind; model?: string; providerId?: string | null; effort?: Effort; fastMode?: boolean | 'ultrafast' },
+  o: { id?: string; agentKind: EngineKind; agentDeviceId?: string | null; model?: string; providerId?: string | null; effort?: Effort; fastMode?: boolean | 'ultrafast' },
   groupDecidesSource: boolean,
 ): SessionRuntimeProfile | null {
-  if (o.agentKind === 'acp') return null;
   const runtimeOverride =
-    typeof o.id === 'string' ? getSessionRuntimeControlSnapshot(o.id).effectiveOverride : null;
-  if (runtimeOverride && runtimeOverride.agentKind === o.agentKind) {
+    typeof o.id === 'string' ? runtimeOverrideForStart(o.id, o.agentKind, o.agentDeviceId) : null;
+  if (runtimeOverride) {
     o.model = runtimeOverride.model;
     if (!groupDecidesSource) o.providerId = runtimeOverride.providerId;
     o.effort = runtimeOverride.effort ?? undefined;

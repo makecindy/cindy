@@ -37,9 +37,9 @@ import { usePreviewFocusReturn } from './PreviewChrome';
  * - 滚动锁定：打开期间给 `[data-scroll-container]` 设置 `overflowY: hidden`。
  * - 关闭按钮：按设计不显示 X 关闭按钮。
  * - 会话画廊：`enableGallery` 开启后，可用 ←/→ 或屏幕箭头在会话图片间翻页，并显示
- *   “n / 总数”计数。列表优先来自 `ImageGalleryContext`(MessageStream 下发的全量
- *   会话图片)，否则退回扫描 DOM 中的 `[data-gallery-src]`。起始下标由被点击元素的
- *   `data-gallery-active` 定位，细节见 `collectGallery` / `resolveStartIndexInFull`。
+ *   “n / 总数”计数。列表来自 `ImageGalleryContext`(任务里是 MessageStream 从已加载
+ *   历史派生的全部图片，跨回合)；起始位置见 `galleryOpeningIndex`。不在列表里的
+ *   图退回单张预览。
  */
 
 import { saveImageAs } from './DownloadImageMenuItem';
@@ -114,8 +114,16 @@ import {
   wheelZoomFactor,
   zoomAtPoint,
 } from './lightboxGestures';
-import { ImageGalleryContext, type GalleryImage } from './ImageGalleryContext';
+import {
+  galleryOpeningByTarget,
+  galleryOpeningIndex,
+  ImageGalleryContext,
+  ImageGalleryScopeContext,
+  type GalleryImage,
+  type GalleryOccurrence,
+} from './ImageGalleryContext';
 import { containImageSize } from './imageDisplaySize';
+import { useWorkspaceMediaPath } from './useWorkspaceMediaPath';
 import {
   ActivePreviewCollection,
   AttachmentCollectionPreview,
@@ -131,6 +139,7 @@ import {
   previewPanelSize,
 } from './PreviewChrome';
 import { previewAdjacentIndex, previewSourceName } from '@cindy/maker-shared/attachment-preview';
+import { Z_INDEX_LAYERS } from '@/styles/generated/token-mappings';
 
 /** 图片不允许缩得比"适配窗口"更小,所以下限是 1 而不是共享常量的 0.2。 */
 const IMAGE_MIN_SCALE = 1;
@@ -192,14 +201,19 @@ interface ImageLightboxProps {
    * inside an iframe, where the host DOM active-marker fallback cannot reach.
    */
   galleryId?: string;
+  /** Markdown destination of a reply image; matches the gallery entry when the
+   * rendered address was resolved differently. */
+  galleryTarget?: string;
+  /** Which repeat of `galleryTarget` was clicked when a reply shows it more than once. */
+  galleryOccurrence?: GalleryOccurrence;
   /**
    * 会话内翻图。开启后,lightbox 提供左右箭头 + ←/→ 键盘翻页 + "n / 总数" 计数,
-   * 在当前会话的所有图片间切换。
+   * 在当前会话已加载的所有图片间切换(不限于同一条消息或同一回合)。
    *
-   * 图片列表优先取 `ImageGalleryContext` 下发的**全量**列表(由 MessageStream 从
-   * 未裁剪的 allRenderItems 派生),所以计数立刻是整个会话的总数、也能直接翻到
-   * 渲染窗口之外的早期图;拿不到 context 时退回扫描 DOM 里带 `data-gallery-src`
-   * 的图(只覆盖已加载部分)。`src` 是打开时显示的那张,用来定位起始位置。
+   * 图片列表取 `ImageGalleryContext` 下发的列表(由 MessageStream 从未裁剪的
+   * allRenderItems 派生),计数立刻覆盖整个已加载历史、也能直接翻到渲染窗口之外
+   * 的早期图。`src` 是打开时显示的那张,与所在消息一起定位起始位置。
+   * 打开后列表固定,新到的消息不会插入。
    *
    * 不传(默认 false)时行为和以前完全一致——只显示单张 `src`,无翻页 UI。
    * 这样上传预览条 / 输入框预览 / 文件浏览器等非会话场景不受影响。
@@ -316,10 +330,44 @@ function isDirectCacheable(src: string): boolean {
   );
 }
 
+/**
+ * Address of the gallery entry being shown. A reply image written relative to the
+ * task folder is resolved here, with the reply's own lookup, since the gallery may
+ * have been built before that lookup settled.
+ */
+function useGalleryImageSrc(item: GalleryImage): { src: string; revision: number } {
+  const workspace = item.workspace;
+  const resolved = useWorkspaceMediaPath(workspace?.path, workspace?.workingDir ?? '', Boolean(workspace));
+  // `revision` moves when a file that was missing is found, even at the same
+  // address; the viewer reloads the image then, as the reply does.
+  const { revision } = resolved;
+  if (!workspace || resolved.pending) return { src: item.src, revision };
+  return { src: workspace.address(resolved.src) ?? item.src, revision };
+}
+
 /** 左右翻页圆形按钮的内联样式。lightbox overlay 不走 Tailwind,这里同样用内联。 */
 export function ImageLightbox(props: ImageLightboxProps) {
   const items = useOpeningCollection(props.annotationFallbackSrc ?? props.src);
-  return items ? (
+  const sessionImages = useContext(ImageGalleryContext);
+  const scope = useContext(ImageGalleryScopeContext);
+  // A task image browses every loaded image, across turns. The message's own
+  // attachment list still serves files and videos opened from that message.
+  // Even a task with a single image keeps to the task collection (no navigation),
+  // so the image never steps into its message's files.
+  // Decided once: a reply finishing while the viewer is open must not swap the
+  // viewer (and drop zoom or an unsaved annotation).
+  const [browsesSession] = useState(
+    () =>
+      props.enableGallery === true &&
+      galleryOpeningIndex(sessionImages, {
+        src: props.annotationFallbackSrc ?? props.src,
+        galleryId: props.galleryId,
+        target: props.galleryTarget,
+        occurrence: props.galleryOccurrence,
+        scope,
+      }) >= 0,
+  );
+  return items && !browsesSession ? (
     <AttachmentCollectionPreview
       items={items}
       source={props.annotationFallbackSrc ?? props.src}
@@ -337,6 +385,8 @@ function ImageLightboxContent({
   onClose,
   enableGallery = false,
   galleryId,
+  galleryTarget,
+  galleryOccurrence,
   sessionId: sessionIdProp,
   annotationEdit,
   initialStrokes,
@@ -347,6 +397,7 @@ function ImageLightboxContent({
   // 会话全量图片列表(MessageStream 下发);非聊天场景无 Provider 时为 null。
   const restorePreviewFocus = usePreviewFocusReturn();
   const sessionImages = useContext(ImageGalleryContext);
+  const galleryScope = useContext(ImageGalleryScopeContext);
   // 当前会话 id(发送到对话用):prop 优先(文件浏览器等 provider 外宿主),
   // 否则取聊天流 context;都没有则为 undefined → 不显示该动作。
   const { sessionId: contextSessionId, workingDir } = useChatSessionFile();
@@ -356,45 +407,46 @@ function ImageLightboxContent({
   const [loadFailed, setLoadFailed] = useState<string | null>(null);
   const [retryVersion, setRetryVersion] = useState(0);
   // 会话内翻图列表 + 起始下标。只在挂载时算一次,翻页只在已知列表内移动下标。
-  // enableGallery 关时退化成单张 [src]。开启时:
-  //   1) 优先用 context 的全量列表(覆盖整个会话,含渲染窗口外的早期图),
-  //      起始下标用位置映射精确定位用户点的那张;
-  //   2) 没有 context(理论上不该发生)才退回扫 DOM —— 只覆盖已加载部分。
-  // 关键守卫:只有当 `src` 确实在候选列表里时才进画廊。否则(例如 Markdown /
-  // 本地文件**链接**复用同一个 lightbox 打开,但它们不是画廊图片)退回单张,
+  // enableGallery 关时退化成单张 [src]。开启时用 context 的已加载历史全量列表
+  // (含渲染窗口外的早期图),起始位置按 galleryId → 所在消息内同址 / 同 Markdown
+  // 目标 → 全局同址定位。
+  // 关键守卫:只有当 `src` 确实在候选列表里时才进画廊。否则(例如本地文件
+  // **链接**复用同一个 lightbox 打开,但它们不是画廊图片)退回单张,
   // 不然会套用会话画廊、起始落到不相干的第 0 张图。
   const [gallery] = useState<{ items: readonly GalleryImage[]; start: number }>(() => {
-    if (!enableGallery) {
-      // 历史标注图再编辑:单张项带上烧录图 + 原图元数据,原图丢失时可退回烧录图
-      // (与画廊翻到标注图走同一套 currentSrc 推导)。
-      if (annotationFallbackSrc && !annotationEdit && initialStrokes?.length) {
-        return {
-          items: [
-            {
-              src: annotationFallbackSrc,
-              annotationSourceUrl: src,
-              annotationStrokes: initialStrokes,
-            },
-          ],
-          start: 0,
-        };
-      }
-      return { items: [{ src }], start: 0 };
+    // 历史标注图再编辑:单张项带上烧录图 + 原图元数据,原图丢失时可退回烧录图
+    // (与画廊翻到标注图走同一套 currentSrc 推导)。
+    const single: GalleryImage =
+      annotationFallbackSrc && !annotationEdit && initialStrokes?.length
+        ? { src: annotationFallbackSrc, annotationSourceUrl: src, annotationStrokes: initialStrokes }
+        : { src };
+    if (!enableGallery) return { items: [single], start: 0 };
+    // The gallery lists an annotated image by its burned address, with the same
+    // original and strokes, so the re-edit view opens inside the task gallery.
+    const opening = {
+      src: single.src,
+      galleryId,
+      target: galleryTarget,
+      occurrence: galleryOccurrence,
+      scope: galleryScope,
+    };
+    const start = galleryOpeningIndex(sessionImages, opening);
+    if (!sessionImages || start < 0) return { items: [single], start: 0 };
+    const matched = sessionImages[start]!;
+    if (single.annotationSourceUrl && !matched.annotationSourceUrl) {
+      // A list without annotation metadata still opens the clicked re-edit view.
+      const items = [...sessionImages];
+      items[start] = { ...matched, ...single };
+      return { items, start };
     }
-    const keyedIndex =
-      galleryId && sessionImages
-        ? sessionImages.findIndex((item) => item.galleryId === galleryId)
-        : -1;
-    if (sessionImages && keyedIndex >= 0) {
-      return { items: sessionImages, start: keyedIndex };
-    }
-    if (sessionImages?.some((g) => g.src === src)) {
-      return { items: sessionImages, start: Math.max(
-          0,
-          sessionImages.findIndex((image) => image.src === src)),
-      };
-    }
-    return { items: [{ src }], start: 0 };
+    // A reply image matched by its written destination shows exactly what the
+    // reply rendered (encoded URL, resolved folder path). Other matches already
+    // carry their own address (plugin cards: the gallery's, possibly remote-rewritten).
+    if (matched.src === src || !galleryOpeningByTarget(matched, opening))
+      return { items: sessionImages, start };
+    const items = [...sessionImages];
+    items[start] = { ...matched, src, workspace: undefined };
+    return { items, start };
   });
   const galleryItems = gallery.items;
   const [index, setIndex] = useState<number>(gallery.start);
@@ -409,12 +461,15 @@ function ImageLightboxContent({
   );
   const failedAnnotationSourcesRef = useRef(failedAnnotationSources);
   failedAnnotationSourcesRef.current = failedAnnotationSources;
+  const itemImage = useGalleryImageSrc(currentItem);
   const currentSrc =
     currentItem.annotationSourceUrl &&
     currentItem.annotationStrokes?.length &&
     !failedAnnotationSources.has(currentItem.annotationSourceUrl)
       ? currentItem.annotationSourceUrl
-      : currentItem.src;
+      : itemImage.src;
+  // A failure belongs to one load attempt: a found-later file (new revision) reloads.
+  const currentLoad = `${itemImage.revision}:${currentSrc}`;
   const isClosingRef = useRef(false);
   // 右键菜单位置；行为与 LightboxImage 缩略图保持一致。
   const [menuPos, setMenuPos] = useState<{ x: number; y: number } | null>(null);
@@ -1442,7 +1497,7 @@ function ImageLightboxContent({
       className={PREVIEW_PANEL_CLASS}
       style={{
         ...PREVIEW_PANEL_STYLE,
-        zIndex: 9999,
+        zIndex: Z_INDEX_LAYERS.fullscreen,
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
@@ -1458,7 +1513,13 @@ function ImageLightboxContent({
       }}
     >
         <PreviewHeader
-          name={filename ?? previewSourceName(currentSrc, t('attachmentPreview.image'))}
+          name={
+            // The opener's name only describes the image it opened on; after
+            // switching, each image shows its own name.
+            (index === gallery.start ? filename : undefined) ||
+            currentItem.name ||
+            previewSourceName(currentSrc, t('attachmentPreview.image'))
+          }
           detail={
             currentNaturalSize ? `${currentNaturalSize.w} × ${currentNaturalSize.h}` : undefined
           }
@@ -1498,7 +1559,7 @@ function ImageLightboxContent({
             </>
           }
         />
-        {loadFailed === currentSrc ? (
+        {loadFailed === currentLoad ? (
           <div
             className="absolute z-[2] flex flex-col items-center gap-3 rounded-xl bg-[var(--surface)] p-6 text-[var(--text-secondary)]"
             role="status"
@@ -1551,7 +1612,7 @@ function ImageLightboxContent({
         onDoubleClick={isAnnotating ? undefined : handleImageDoubleClick}
       >
         <img
-            key={retryVersion}
+            key={`${retryVersion}:${itemImage.revision}`}
             ref={imgRef}
           src={currentSrc}
           alt=""
@@ -1599,7 +1660,7 @@ function ImageLightboxContent({
               replaceStrokes([]);
               return;
             }
-              setLoadFailed(currentSrc);
+              setLoadFailed(currentLoad);
           }}
         />
         {/* 标注层:viewBox = 图片自然尺寸,归一化笔迹 × 自然尺寸 = path 坐标,
@@ -1640,9 +1701,6 @@ function ImageLightboxContent({
           <DropdownMenuContent
             align="start"
             sideOffset={2}
-            // lightbox overlay 是 z-9999；默认 DropdownMenuContent(z-50) 会被遮住,
-            // 这里提升到 overlay 上方。
-            className="z-[10000]"
           >
             {canAnnotate && !isAnnotating ? (
               <DropdownMenuItem
@@ -1728,7 +1786,7 @@ function ImageLightboxContent({
                 %
               </button>
             </DropdownMenuTrigger>
-            <DropdownMenuContent className="z-[10002]">
+            <DropdownMenuContent>
               <DropdownMenuItem onClick={resetViewport}>
                 {t('attachmentPreview.fit')}
               </DropdownMenuItem>
@@ -1835,13 +1893,14 @@ function ImageLightboxContent({
             {index + 1} / {galleryItems.length}
           </button>
                 </DropdownMenuTrigger>
-                <DropdownMenuContent className="z-[10002] max-h-72 overflow-auto">
+                <DropdownMenuContent className="max-h-72 overflow-auto">
                   {galleryItems.map((item, itemIndex) => (
                     <DropdownMenuItem
                       key={item.galleryId ?? `${itemIndex}:${item.src}`}
                       onClick={() => setIndex(itemIndex)}
                     >
-                      {itemIndex + 1}. {previewSourceName(item.src, t('attachmentPreview.image'))}
+                      {itemIndex + 1}.{' '}
+                      {item.name || previewSourceName(item.src, t('attachmentPreview.image'))}
                     </DropdownMenuItem>
                   ))}
                 </DropdownMenuContent>

@@ -135,6 +135,17 @@ function providerImportUrl(scheme: 'cindy' | 'xdt-maker'): string {
   return `${scheme}://provider/import?v=1&data=${Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url')}`;
 }
 
+describe('cloud computer device links', () => {
+  it('focuses only an exact device ID in the local device list', () => {
+    expect(parseDeepLink('cindy://devices/guest-42')).toEqual({
+      type: 'settings', tab: 'remote-control', focusDeviceId: 'guest-42',
+    });
+    for (const suffix of ['/restart', '?action=delete', '#extra', '%2f']) {
+      expect(parseDeepLink('cindy://devices/guest-42' + suffix)).toBeNull();
+    }
+  });
+});
+
 describe('history task links', () => {
   it.each([
     ['task/一', 'host', 'task/一', 'host'],

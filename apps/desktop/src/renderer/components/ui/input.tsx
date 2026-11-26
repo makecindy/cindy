@@ -111,9 +111,8 @@ export interface InputProps extends Omit<
   /** 错误态：边框 / focus 环切到 `--error-*` 族。 */
   error?: boolean;
   /**
-   * secret 眼睛按钮 Tip 的内容样式。Tip 经 Portal 渲染到 body,默认 `z-[60]` 会被
-   * `z-[10000]` 的模态层盖住;输入位于手写模态内时传 `z-[10001]` 盖过宿主弹窗
-   * (与本仓其它模态内 Tip 的既有做法一致)。
+   * secret 眼睛按钮 Tip 的内容样式。Tip 默认在 tooltip 层(10011),已高于弹窗与菜单,
+   * 不需要为弹窗再抬层级(DESIGN.md §6 层级刻度)。
    */
   secretTipContentClassName?: string;
   /** 附加到**外层容器**（内层 input 恒为 w-full），供 flex 行传 `flex-1 min-w-0`。 */

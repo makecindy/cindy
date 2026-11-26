@@ -115,7 +115,7 @@ vi.mock('../index.js', () => ({
   broadcast: vi.fn(), getDeviceLinkConnectionIssue: () => null,
   remoteBackgroundInvoke: h.invoke,
   getDeviceLinkPeerLinks: () => ({ links: [] }),
-  restartDeviceLinkForRelayChange: h.restart, setKeepAwakeEnabled: vi.fn(),
+  restartDeviceLinkForRelayChange: h.restart, setKeepAwakeEnabled: vi.fn(), rejoinThisDevice: vi.fn(),
 }));
 vi.mock('@cindy/device-link-relay', () => ({
   createDeviceCredential: () => ({ credential: 'fake-credential' }),

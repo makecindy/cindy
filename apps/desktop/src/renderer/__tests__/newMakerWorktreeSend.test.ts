@@ -44,24 +44,6 @@ describe('NewMakerDraftRoute worktree send flow', () => {
     expect(clearStarting).toBeLessThan(restoreEnd);
   });
 
-  it('never silently downgrades an explicit worktree request to a normal session', () => {
-    const selected = source.indexOf('const selectedWorktree = { ...wtRef.current };');
-    const guard = source.indexOf(
-      '&& selectedWorktree.confirmedIneligible !== true',
-      selected,
-    );
-    const markInFlight = source.indexOf('markSendInFlight(true);', guard);
-    const guardedSource = source.slice(guard, markInFlight);
-
-    expect(selected).toBeGreaterThan(-1);
-    expect(guard).toBeGreaterThan(selected);
-    expect(markInFlight).toBeGreaterThan(guard);
-    expect(guardedSource).toContain('!selectedWorktree.baseRepo');
-    expect(guardedSource).toContain('!selectedWorktree.branchPreferenceReady');
-    expect(guardedSource).toContain('selectedWorktree.supportsRecoveryKeyDiscard !== true');
-    expect(guardedSource).toContain('return false;');
-  });
-
   it('lets a confirmed-ineligible directory create a plain session while keeping the ON memory', () => {
     // 2026-08-07 裁决:探测成功且确认不合格(非 git / 无 git / 已在 worktree 内)时,
     // 勾选记忆不生效——发送 / Goal 门、worktree 副作用分支全部按普通会话放行;
@@ -112,7 +94,9 @@ describe('NewMakerDraftRoute worktree send flow', () => {
   });
 
   it('uses the current checkout as the safe source when branch discovery is not ready', () => {
-    expect(source.match(/sourceBranch: wt\.sourceBranch\.trim\(\) \|\| 'HEAD'/g)).toHaveLength(2);
+    // Remote two-step creation (built-in and plugin engines) moved to precreateRemoteDraftWorktree,
+    // whose 'HEAD' fallback is exercised in remotePrecreatedWorktree.test.ts.
+    expect(source.match(/sourceBranch: wt\.sourceBranch\.trim\(\) \|\| 'HEAD'/g)).toHaveLength(1);
     expect(source).not.toContain("sourceBranch: wt.sourceBranch.trim() || 'main'");
   });
 

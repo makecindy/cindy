@@ -195,6 +195,9 @@
     "turnTokens": "{{tokens}} tokens"
   },
   "lightbox": {
+    "saveImage": "儲存原圖",
+    "imageSaved": "圖片已儲存",
+    "saveFailed": "圖片儲存失敗，請再試一次",
     "originalUnavailable": "原圖暫時無法載入",
     "retryOriginal": "重試原圖",
     "loadingOriginal": "正在載入原圖…",

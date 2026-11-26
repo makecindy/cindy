@@ -372,6 +372,38 @@ describe("iLink HTTP boundary", () => {
     });
   });
 
+  it("preserves the numeric iLink ret on send rejection without exposing response details", async () => {
+    const api = new IlinkApiClient({
+      baseUrl: "https://ilinkai.weixin.qq.com",
+      token: "fake-token",
+      botAgent: "Cindy/1.0.0",
+      fetch: async () =>
+        new Response(JSON.stringify({ ret: 1205, detail: "private server detail" })),
+    });
+    await expect(
+      api.sendText(
+        {
+          peerId: "peer",
+          text: "hello",
+          contextToken: "context",
+          clientId: "rejected-text",
+        },
+        signal(),
+      ),
+    ).rejects.toMatchObject({ code: "SEND_REJECTED", ret: 1205, retryable: true });
+    await expect(
+      api.sendText(
+        {
+          peerId: "peer",
+          text: "hello",
+          contextToken: "context",
+          clientId: "rejected-text-2",
+        },
+        signal(),
+      ),
+    ).rejects.not.toThrow(/private server detail/);
+  });
+
   it("uploads encrypted media and sends the returned CDN reference", async () => {
     const calls: Array<{ url: string; init?: RequestInit }> = [];
     const transport = new TencentIlinkTransport({

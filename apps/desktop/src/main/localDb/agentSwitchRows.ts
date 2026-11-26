@@ -1,6 +1,6 @@
-import { and, desc, eq, gt, isNull } from 'drizzle-orm';
+import { and, desc, eq, gt, isNull, sql } from 'drizzle-orm';
 import { getDbClient } from './client/current.js';
-import { messages, sessions } from './schema.js';
+import { messages, schedules, sessions } from './schema.js';
 import { messageRowid } from './retriedUserTurnSupersede.js';
 import { messageToCamel, persistableSessionEffort, projectSessionRuntimeFields } from './mapper.js';
 import { isPluginEngineKind, normalizeDbAgentKind, type DbEngineKind } from '../../shared/agentKindConversion.js';
@@ -70,8 +70,11 @@ export async function applyAgentSwitchToSessionRowWithPorts<OwnerScope>(
   if (patch.agentDeviceId !== undefined) setObj.agentDeviceId = patch.agentDeviceId;
   // effort 值域由 renderer 按目标引擎 capabilities 解析(schema 列是字面量联合,
   // 跨层传输后此处以 string 到达;非法值与直改 DB 同级,运行时由引擎侧收敛)。
-  // 固定 effort 模型运行时为 null；sessions.effort NOT NULL，省略该字段。
-  const persistableEffort = persistableSessionEffort(patch.effort);
+  // 固定 effort 的内置模型运行时为 null；sessions.effort NOT NULL，省略该字段保留记忆。
+  // 插件引擎用空串表示「模型不提供思考档位 / 由引擎自己决定」，必须显式写回 '' 清掉旧档位。
+  const persistableEffort = isPluginEngineKind(patch.agentKind) && patch.effort === ''
+    ? ('' as typeof sessions.$inferInsert['effort'])
+    : persistableSessionEffort(patch.effort);
   if (persistableEffort !== undefined) {
     setObj.effort = persistableEffort;
   }
@@ -85,12 +88,22 @@ export async function applyAgentSwitchToSessionRowWithPorts<OwnerScope>(
   }
   // RETURNING keeps the projection tied to this committed write, including axes
   // omitted by the caller. A later SELECT could observe a newer selection.
-  const [committed] = await db.update(sessions).set(setObj).where(eq(sessions.id, sessionId))
+  const pluginTarget = isPluginEngineKind(patch.agentKind);
+  // Pair with the guarded schedule writes. SQLite arbitrates the two writes
+  // even when different desktop instances share the same profile.
+  const condition = pluginTarget ? sql`NOT EXISTS (
+    SELECT 1 FROM ${schedules} WHERE ${sessions.source} = 'scheduler' AND ${schedules.targetSessionId} = ${sessions.id}
+  )` : undefined;
+  const [committed] = await db.update(sessions).set(setObj).where(and(eq(sessions.id, sessionId), condition))
     .returning({
       id: sessions.id, agentKind: sessions.agentKind, model: sessions.model,
+      agentDeviceId: sessions.agentDeviceId,
       providerId: sessions.providerId, effort: sessions.effort, fastMode: sessions.fastMode,
       scheduledModelBaseline: sessions.scheduledModelBaseline,
     });
+  if (!committed && pluginTarget) {
+    throwIpcError('PRECONDITION_FAILED', 'this task no longer accepts a plugin engine');
+  }
   if (!committed || !isOwnerScopeCurrent(ownerScope)) return;
   broadcastSessionPatched(
     sessionId,

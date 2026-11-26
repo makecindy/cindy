@@ -43,7 +43,6 @@ import { stripInternalWebCitations } from '@cindy/maker-shared/internal-citation
 import { MAIN_OWNED_SEND_CONTEXT } from '@cindy/maker-core';
 
 import type {
-  AgentKind,
   EngineKind,
   InteractionRequest,
   PermissionMode,
@@ -60,7 +59,7 @@ import {
 
 import { emitSessionCreated } from '../localDb/ipc/sessionCreatedBroadcast.js';
 import { getMaker } from '../maker-host/index.js';
-import { isPluginEngineTask, PluginEngineUnsupportedError } from '../maker-host/engineKind.js';
+import { hasBuiltinAgentKind } from '../maker-host/engineKind.js';
 import { setSessionEffort, setSessionFastMode } from '../maker-host/session-effort-store.js';
 import { desktopSessionStorage } from '../maker-host/session-storage.js';
 import { resolveLenientRoute } from '../maker-host/model-route-guard.js';
@@ -170,24 +169,16 @@ import { modernLocaleOf } from '../../shared/locale.js';
 
 type MainOwnedImChannel = Extract<TurnPermissionOrigin, { kind: 'im' }>['channel'];
 
-/** Official hooks do not run plugin-engine tasks in phase 1 (docs/plans/acp-plugin-bridge.md). */
-const OFFICIAL_CHANNEL_FEATURE = 'Official bot channels';
-
-/** Refuses only plugin-engine tasks; every other session keeps its existing hook path. */
-function runsOnBuiltinEngine<T extends { agentKind: EngineKind }>(value: T): value is T & { agentKind: AgentKind } {
-  return !isPluginEngineTask(value);
-}
-
 function mainOwnedChannelOrigin(value: string | undefined): TurnPermissionOrigin | null {
   switch (value) {
     case 'telegram':
     case 'feishu':
-      // `source.im=telegram|feishu` identifies the official server-backed hook
-      // here, not the authenticated personal-bot adapter that shares the same
+    case 'discord':
+      // `source.im=telegram|feishu|discord` identifies the official server-backed
+      // hook here, not the authenticated personal-bot adapter that shares the same
       // channel id. Keep managed package mutations on the Desktop confirmation
       // path: a personal-bot `im` origin would let an official relay turn skip it.
       return { kind: 'hook', source: value };
-    case 'discord':
     case 'slack':
     case 'wechat':
     case 'dingtalk':
@@ -211,6 +202,25 @@ type HookDispatchOverrides = {
 };
 type HookWorkspaceCtx = { alias: string | undefined; teamId: string | null };
 
+/** 官方 Discord 任务在 sessions.source / vendorOptions.source 里的值(与个人 Discord bot 的 'discord' 区分)。 */
+const DISCORD_HOOK_SESSION_SOURCE = 'discord-hook';
+
+/** 官方 hook 新任务落库的 sessions.source; 官方 Slack 与未知渠道不写(保持 desktop)。 */
+function hookSessionSource(sourceIm: string | undefined): 'telegram' | 'x' | 'feishu' | 'discord-hook' | null {
+  switch (sourceIm) {
+    case 'telegram':
+    case 'x':
+    case 'feishu':
+      return sourceIm;
+    // 个人 Discord bot 的会话是 'discord': 启动时会被强制归入「对话」分组并改写成托管目录,
+    // 个人渠道的默认路由跟随也按它认行。官方任务必须用自己的值, 才不会被个人 bot 的逻辑接管。
+    case 'discord':
+      return DISCORD_HOOK_SESSION_SOURCE;
+    default:
+      return null;
+  }
+}
+
 /**
  * 新任务路由取值链的全部输入(同步读本机文件, 不碰供应商目录): 目录偏好合并后的
  * 显式值、目录来源偏好、IM 默认设置。resolveNewSessionConfig 与「跟随默认」的指纹
@@ -227,24 +237,31 @@ function hookDefaultInputs(
       ? sourceIm
       : null;
   const workspaceAlias = workspaceCtx?.alias;
+  // 官方 Discord 上线时共用配置已经是正本: 它没有按渠道的旧偏好要并入, 也没有 /model 卡,
+  // 服务端便签(dispatch options)不再作数 —— 生来就按「已并入、已迁移」只读共用那一份,
+  // 不读个人 Discord bot 的 'discord' 默认值。
+  const sharedOnly = sourceIm === 'discord';
   // 所有官方机器人共用一套项目配置(sharedProjectPrefs.ts): 这个渠道原有的按渠道偏好并入
   // 之后, 一律读共用的那一份; 并入之前(升级后还没连上过服务端)沿用它自己的那份。
-  const shared = sharedProject || (prefsChannel !== null && isSharedPrefsAdopted(prefsChannel));
+  const shared =
+    sharedProject || sharedOnly || (prefsChannel !== null && isSharedPrefsAdopted(prefsChannel));
+  const readsPrefs = prefsChannel !== null || sharedOnly;
   const localPref =
-    prefsChannel !== null && workspaceAlias
-      ? shared
+    readsPrefs && workspaceAlias
+      ? shared || prefsChannel === null
         ? getWorkspacePref(SHARED_PREFS_CHANNEL, null, workspaceAlias)
         : getWorkspacePref(prefsChannel, workspaceCtx.teamId, workspaceAlias)
       : null;
   const mergedOverrides = resolveWorkspacePrefOverrides(
     localPref,
     overrides,
-    prefsChannel !== null && workspaceAlias !== undefined && isWorkspacePrefsMigrated(prefsChannel),
+    sharedOnly ||
+      (prefsChannel !== null && workspaceAlias !== undefined && isWorkspacePrefsMigrated(prefsChannel)),
   );
   // 项目级来源偏好(纯本地, 用户在设置页该项目那一行显式选的来源)优先于草稿默认来源。
   const workdirRoute =
-    prefsChannel !== null && workspaceAlias
-      ? shared
+    readsPrefs && workspaceAlias
+      ? shared || prefsChannel === null
         ? getWorkspaceProviderRoute(SHARED_PREFS_CHANNEL, null, workspaceAlias)
         : getWorkspaceProviderRoute(prefsChannel, workspaceCtx.teamId, workspaceAlias)
       : null;
@@ -273,9 +290,23 @@ export function sharedImProjectFingerprint(alias: string): string {
     'slack', { alias, teamId: null }, true));
 }
 
-export function resolveSharedImProjectConfig(alias: string, log: { warn(msg: string): void }) {
+/**
+ * 共享项目设置的「默认设置指纹」, 与 resolveSharedImProjectConfig 返回的 fingerprint 同一口径
+ * (固定模型时相等): 个人飞书 bot 绑定了项目的群任务跟随这一行时, 每条消息只比这个, 不必每次解析。
+ */
+export function sharedImProjectDefaultsFingerprint(alias: string): string {
+  return hookDefaultsFingerprint(hookDefaultInputs({ agentKind: null, model: null, effort: null, permissionMode: null },
+    'slack', { alias, teamId: null }, true));
+}
+
+/** `providerSnapshot`: 一次解析多个项目时共用同一份供应商目录(缺省现取)。 */
+export function resolveSharedImProjectConfig(
+  alias: string,
+  log: { warn(msg: string): void },
+  providerSnapshot?: ProviderView[],
+) {
   return resolveNewSessionConfig({ agentKind: null, model: null, effort: null, permissionMode: null },
-    log, 'slack', { alias, teamId: null }, undefined, true);
+    log, 'slack', { alias, teamId: null }, providerSnapshot, true);
 }
 
 /**
@@ -767,7 +798,7 @@ export function createMakerHookSessionRunner(deps: {
           if (code !== 'ENOENT' && code !== 'ENOTDIR') throw error;
         }
       }
-      return { workingDir, usable };
+      return { workingDir, usable, companionOwned: row?.source === 'bot' };
     },
 
     async run(req: HookRunRequest, releaseSendLock = (): void => {}) {
@@ -801,7 +832,7 @@ export function createMakerHookSessionRunner(deps: {
           )
         : null;
       const recordNewTaskDefaultRoute = async (sessionId: string): Promise<void> => {
-        if (!resolved || !['telegram', 'slack', 'x', 'feishu'].includes(req.source?.im ?? '')) return;
+        if (!resolved || !['telegram', 'slack', 'x', 'feishu', 'discord'].includes(req.source?.im ?? '')) return;
         assertAccount?.();
         await writeHookDefaultRouteRecord(sessionId, resolved.fingerprint).catch((err) => {
           log.warn(`hook default route record failed: ${String(err)}`);
@@ -812,7 +843,7 @@ export function createMakerHookSessionRunner(deps: {
       let effort = resolved?.effort;
       let resumeSessionId: string | undefined;
       let companionFastMode: boolean | 'ultrafast' | undefined;
-      let effectiveAgentKind: AgentKind = resolved?.agentKind ?? 'claude-code';
+      let effectiveAgentKind: EngineKind = resolved?.agentKind ?? 'claude-code';
       // 新建路径 resolved 必有值(capabilities 校验过); 复用路径由下方 meta 覆盖
       let permissionMode: PermissionMode = (resolved?.permissionMode ??
         'bypassPermissions') as PermissionMode;
@@ -833,8 +864,7 @@ export function createMakerHookSessionRunner(deps: {
           workingDir = meta.workDir;
           model = meta.model;
           resumeSessionId = meta.sdkSessionId;
-          // 插件引擎任务不接官方渠道(docs/plans/acp-plugin-bridge.md):明确拒绝,不按内置引擎重开。
-          if (meta.agentKind === 'acp') throw new PluginEngineUnsupportedError(OFFICIAL_CHANNEL_FEATURE);
+          // 插件引擎任务(docs/plans/acp-plugin-bridge.md)同样接官方渠道：按它自己的引擎与 providerId 恢复。
           effectiveAgentKind = meta.agentKind;
         }
         effort = req.companionBotId ? meta?.effort : undefined;
@@ -850,10 +880,15 @@ export function createMakerHookSessionRunner(deps: {
         agentDeviceId = row?.agentDeviceId ?? meta?.agentDeviceId ?? null;
       }
 
-      const fail = (msg: string, finalText = ''): HookRunOutcome => ({
+      const fail = (
+        msg: string,
+        finalText = '',
+        errorReason?: string | null,
+      ): HookRunOutcome => ({
         status: 'error',
         finalText,
         errorMessage: msg,
+        ...(errorReason ? { errorReason } : {}),
         durationMs: Date.now() - startedAt,
       });
 
@@ -877,9 +912,11 @@ export function createMakerHookSessionRunner(deps: {
        * 上一版把它跟临时降档一起删了, 而两者本来无关 —— 原注释就写着“即使复用
        * 会话已是安全档、不需要切档, 也要持住这段独占”)。
        */
-      // 官方飞书 / Lark 的话题轮次同属多人可见的群轮次(deriveLaneKind), 同样持有 lease。
+      // 官方飞书 / Lark 的话题轮次与官方 Discord 的服务器频道轮次同属多人可见的群轮次
+      // (deriveLaneKind), 同样持有 lease。
       const isOfficialGroupTurn =
-        (req.source?.im === 'telegram' || req.source?.im === 'feishu') && req.laneKind === 'group';
+        (req.source?.im === 'telegram' || req.source?.im === 'feishu' || req.source?.im === 'discord') &&
+        req.laneKind === 'group';
       let releaseTelegramGroupTurnLease: (() => void) | null = null;
       let releaseGroupHistoryAccess: (() => void) | null = null;
       const releaseGroupHistory = (): void => {
@@ -950,7 +987,8 @@ export function createMakerHookSessionRunner(deps: {
           ? {
               vendorOptions: {
                 // 官方飞书刻意不用 'feishu': 那是个人飞书 bot 会话的来源值, 会让
-                // cindy_feishu_bot 把本会话当成个人 bot 渠道。
+                // cindy_feishu_bot 把本会话当成个人 bot 渠道。官方 Discord 同理不用
+                // 'discord'(个人 Discord bot 与 cindy_discord 工具的渠道值)。
                 source:
                   req.source?.im === 'telegram'
                     ? 'telegram'
@@ -958,7 +996,9 @@ export function createMakerHookSessionRunner(deps: {
                       ? 'x'
                       : req.source?.im === 'feishu'
                         ? 'feishu-hook'
-                        : 'slack-hook',
+                        : req.source?.im === 'discord'
+                          ? DISCORD_HOOK_SESSION_SOURCE
+                          : 'slack-hook',
               },
             }
           : {}),
@@ -1014,13 +1054,10 @@ export function createMakerHookSessionRunner(deps: {
             setSessionProvider(req.sessionId, admittedProviderId);
             await setSessionProviderIdInDb(req.sessionId, admittedProviderId);
           }
-          if (
-            req.source?.im === 'telegram' ||
-            req.source?.im === 'x' ||
-            req.source?.im === 'feishu'
-          ) {
+          const createOnlySessionSource = hookSessionSource(req.source?.im);
+          if (createOnlySessionSource !== null) {
             assertAccount?.();
-            await setSessionSourceInDb(req.sessionId, req.source.im);
+            await setSessionSourceInDb(req.sessionId, createOnlySessionSource);
           }
           assertAccount?.();
           await recordNewTaskDefaultRoute(req.sessionId);
@@ -1123,11 +1160,6 @@ export function createMakerHookSessionRunner(deps: {
           }
           return fail(err instanceof Error ? err.message : String(err));
         }
-      }
-      // maker.createSession 对已活着的同 id 实例直接复用:那个实例若跑在插件引擎上,
-      // 同样明确拒绝(meta 缺失时上方的检查覆盖不到)。
-      if (!runsOnBuiltinEngine(session)) {
-        return fail(new PluginEngineUnsupportedError(OFFICIAL_CHANNEL_FEATURE).message);
       }
 
       // 运行时来源注入(路由层经 session-provider-store 决定上游与钥匙)必须先于
@@ -1318,11 +1350,9 @@ export function createMakerHookSessionRunner(deps: {
         if (sessionProviderId && accountStillCurrent()) {
           await setSessionProviderIdInDb(session.id, sessionProviderId);
         }
-        if (
-          (req.source?.im === 'telegram' || req.source?.im === 'x' || req.source?.im === 'feishu') &&
-          accountStillCurrent()
-        ) {
-          await setSessionSourceInDb(session.id, req.source.im);
+        const newSessionSource = hookSessionSource(req.source?.im);
+        if (newSessionSource !== null && accountStillCurrent()) {
+          await setSessionSourceInDb(session.id, newSessionSource);
         }
         if (accountStillCurrent()) await recordNewTaskDefaultRoute(session.id);
         if (accountStillCurrent()) broadcastSessionCreated(session.id);
@@ -1769,8 +1799,11 @@ export function createMakerHookSessionRunner(deps: {
                   : {}),
               },
             });
-            await beginTurnChangeSetAtDispatch(session, turnChangeAnchorClientId);
-            turnChangeSetStarted = true;
+            // Turn change capture relies on built-in engine hooks (same rule as desktop sends).
+            if (hasBuiltinAgentKind(session)) {
+              await beginTurnChangeSetAtDispatch(session, turnChangeAnchorClientId);
+              turnChangeSetStarted = true;
+            }
             // 每次被接受的 IM 消息都是一次用户发送: bump userSendAt 让排序
             // 时间轴与桌面端 sendMessage 口径一致, sessions:patched 广播顺带把
             // 复用/接管会话即时重排序(新建路径已在广播前落过, 这里更新为实际
@@ -1836,7 +1869,7 @@ export function createMakerHookSessionRunner(deps: {
             surface: 'official',
           })
           : err instanceof Error ? err.message : String(err);
-        return { ...fail(message), ...collected };
+        return { ...fail(message, '', observer.errorReason), ...collected };
       } finally {
         // 无论正常收口还是超时/错误,未决交互都按默认收口并释放中央 route
         finalizeInteractions();
@@ -2012,6 +2045,7 @@ function beginContinuationWatch(
         status: 'error',
         finalText: '',
         errorMessage,
+        ...(observer.errorReason ? { errorReason: observer.errorReason } : {}),
         durationMs: Date.now() - startedAt,
       });
       return;
@@ -2031,6 +2065,7 @@ function beginContinuationWatch(
         status: errorMessage === null ? 'ok' : 'error',
         finalText: collected.finalText,
         errorMessage,
+        ...(errorMessage !== null && observer.errorReason ? { errorReason: observer.errorReason } : {}),
         durationMs: Date.now() - startedAt,
         ...(collected.attachments !== undefined ? { attachments: collected.attachments } : {}),
       });

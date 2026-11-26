@@ -1202,14 +1202,18 @@ describe('Shared create project picker', () => {
   it('routes every remote create path through the shared handoff', () => {
     const handoffCalls =
       newMakerDraftRouteSource.match(/\n\s+commitRemoteSessionHandoff\(\{/g) ?? [];
-    expect(handoffCalls.length).toBe(2);
+    expect(handoffCalls.length).toBe(3);
     // 组件不得自己碰这三步中的任何一步 —— 那就等于又开了一条绕过不变量的路。
     expect(newMakerDraftRouteSource).not.toContain('pinSessionOrigin(');
     expect(newMakerDraftRouteSource).not.toContain('mergeDeviceSessions(');
     expect(newMakerDraftRouteSource).not.toContain('buildProvisionalRemoteSession(');
-    // 两处都得把实际提交的 args 交给 handoff:临时行按它组装,不各自再推一遍
-    // model / permission / workspaceKind。
-    for (const marker of ["logTag: 'draft send'", "logTag: 'draft goal'"]) {
+    // 三处远程创建(插件引擎发送、普通发送、新建目标)都得把实际提交的 args 交给 handoff:
+    // 临时行按它组装,不各自再推一遍 model / permission / workspaceKind。
+    for (const marker of [
+      "logTag: 'draft send plugin engine'",
+      "logTag: 'draft send'",
+      "logTag: 'draft goal'",
+    ]) {
       const callStart = newMakerDraftRouteSource.lastIndexOf(
         'commitRemoteSessionHandoff({',
         newMakerDraftRouteSource.lastIndexOf(marker),
@@ -1218,7 +1222,7 @@ describe('Shared create project picker', () => {
       expect(newMakerDraftRouteSource.slice(callStart, callEnd)).toContain('createArgs,');
     }
     // workDir 取 create 响应(纯对话的运行目录由对端分配,控制端猜不到)。
-    expect((newMakerDraftRouteSource.match(/workDir: created\??\.workDir,/g) ?? []).length).toBe(2);
+    expect((newMakerDraftRouteSource.match(/workDir: created\??\.workDir,/g) ?? []).length).toBe(3);
   });
 
   // #807 review 第十七轮:handleSend 的第一个 await 是协同策略重取,它在上锁之前 —— 期间两个

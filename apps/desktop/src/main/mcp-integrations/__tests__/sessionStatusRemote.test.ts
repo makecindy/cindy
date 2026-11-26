@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { DeviceLinkError, type InvokeResultPayload } from '@cindy/device-link';
-import { createRemoteSessionsStatusSetter } from '../sessionStatusRemote.js';
+import { createRemoteSessionsPatcher, createRemoteSessionsSnoozeSetter, createRemoteSessionsStatusSetter } from '../sessionStatusRemote.js';
 import { createDeviceUnresponsiveError } from '../../device-link/responsivenessTracker.js';
 import { admitTaskAction } from '../../maker-ipc/taskActionAuthorization.js';
 
@@ -170,4 +170,45 @@ describe('remote session archive status', () => {
     expect(await setStatus(request)).toMatchObject({ errorCode: 'HOST_NOT_READY', changed: [] });
     expect(invoke).not.toHaveBeenCalled();
   });
+});
+
+// Agent snooze_sessions on another computer (2026-11-22): the same patch-meta call the
+// inbox makes there, accepted only when the returned row carries the requested wake time.
+describe('remote task snooze', () => {
+  const until = '2026-12-01T01:00:00.000Z';
+  it('patches only snoozedUntil and treats a mismatched receipt as unknown', async () => {
+    const invoke = vi.fn(async (_device: string, _channel: string, args: unknown[]) => ({
+      ok: true as const,
+      result: { id: args[0], status: 'active', title: 't', workingDir: null, snoozedUntil: args[0] === 's1' ? until : null },
+    }));
+    const snooze = createRemoteSessionsSnoozeSetter({ invoke, captureAccess: () => () => {} });
+    expect(await snooze({ deviceId: 'studio', sessionIds: ['s1', 's2', 's3'], snoozedUntil: until })).toMatchObject({
+      ok: false, errorCode: 'REMOTE_RESULT_UNKNOWN',
+      changed: [{ sessionId: 's1', snoozedUntil: until, title: 't' }],
+      failedSessionId: 's2', remainingSessionIds: ['s3'],
+    });
+    expect(invoke.mock.calls.map((call) => call.slice(1, 3))).toEqual([
+      ['local-db:sessions:patch-meta', ['s1', { snoozedUntil: until }]],
+      ['local-db:sessions:patch-meta', ['s2', { snoozedUntil: until }]],
+    ]);
+  });
+});
+
+// #12464, unit: an older remote host replaces the timestamp on every write.
+// Retrying a batch must skip its existing pin and stop on an unconfirmed write.
+it('preserves a remote pin and reports a missing mutation receipt', async () => {
+  const pinnedAt = '2026-11-24T00:00:00.000Z';
+  const invoke = vi.fn(async (_device: string, _channel: string, args: unknown[]) => ({
+    ok: true as const,
+    result: { id: args[0], pinnedAt: args[0] === 's1' ? pinnedAt : null, status: 'active' },
+  }));
+  const patch = createRemoteSessionsPatcher({ invoke, captureAccess: () => () => {} });
+  expect(await patch('studio', ['s1', 's2', 's3'], { pinnedAt })).toMatchObject({
+    ok: false, errorCode: 'REMOTE_RESULT_UNKNOWN', changed: [{ sessionId: 's1' }],
+    failedSessionId: 's2', remainingSessionIds: ['s3'],
+  });
+  expect(invoke.mock.calls.map(([, channel, args]) => [channel, args])).toEqual([
+    ['local-db:sessions:get', ['s1']], ['local-db:sessions:get', ['s2']],
+    ['local-db:sessions:patch-meta', ['s2', { pinnedAt }]],
+  ]);
 });

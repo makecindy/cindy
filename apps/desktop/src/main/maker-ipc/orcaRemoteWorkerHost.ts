@@ -22,6 +22,7 @@ import {
   type OrcaRemoteWorkerModelsResult,
 } from '@cindy/device-link';
 
+import type { ModelGroupSessionStart } from '../model-groups/sessionStart.js';
 import type { OrcaRemoteLead } from '../../shared/orcaRemoteWorker.js';
 import type { IpcHandlerRegistry } from './ipcHandlerRegistry.js';
 import type { OpenedSessionRow, openSession } from '../localDb/sessionOpening.js';
@@ -30,7 +31,8 @@ import type { OpenedSessionRow, openSession } from '../localDb/sessionOpening.js
 export function createOrcaRemoteWorkerSessionOpener(deps: {
   openSession: typeof openSession;
   insertSession(row: OpenedSessionRow): Promise<void>;
-  bootstrapSession(row: OpenedSessionRow, assertCurrent: () => void): Promise<unknown>;
+  bootstrapSession(row: OpenedSessionRow, assertCurrent: () => void, modelGroupStart?: string): Promise<unknown>;
+  modelGroupStart?: Pick<ModelGroupSessionStart, 'prepare'>;
   broadcastSessionCreated(sessionId: string): void;
   isSelfDeviceId?(deviceId: string): boolean;
   resolveAgentSelection?(request: OrcaRemoteWorkerOpenRequest): Promise<OrcaRemoteWorkerOpenRequest>;
@@ -39,6 +41,23 @@ export function createOrcaRemoteWorkerSessionOpener(deps: {
   return async (request, lead) => {
     const assertOwner = deps.captureOwner?.() ?? (() => {});
     assertOwner();
+    if (request.modelGroup && !deps.modelGroupStart) fail('UNSUPPORTED_CAPABILITY', 'Worker model groups are unavailable');
+    const group = request.modelGroup ? await deps.modelGroupStart!.prepare(request.modelGroup, {
+      keptModelName: request.model ?? '',
+    }) : null;
+    assertOwner();
+    if (group?.route) {
+      const route = group.route;
+      request = {
+        ...request,
+        agentKind: route.agentKind === 'cc' ? 'claude-code' : route.agentKind,
+        providerId: route.providerId,
+        model: route.model,
+        effort: route.effort,
+        fastMode: false,
+        agentDeviceId: route.agentDeviceId,
+      };
+    }
     if (request.agentDeviceId && deps.isSelfDeviceId?.(request.agentDeviceId)) {
       request = { ...request, agentDeviceId: null };
     }
@@ -67,12 +86,13 @@ export function createOrcaRemoteWorkerSessionOpener(deps: {
       assertCurrent();
       await deps.insertSession(opened);
       assertCurrent();
-      await deps.bootstrapSession(opened, assertCurrent);
+      if (group) await deps.bootstrapSession(opened, assertCurrent, group.token);
+      else await deps.bootstrapSession(opened, assertCurrent);
     });
     deps.broadcastSessionCreated(row.id);
     const agentKind = row.agentKind === 'cc' ? 'claude-code' : (row.agentKind as 'codex' | 'pi');
     return { workingDir: row.workingDir ?? '', model: row.model, agentKind, effort: row.effort, fastMode: row.fastMode,
-      ...(request.agentDeviceId !== undefined ? { agentDeviceId: row.agentDeviceId ?? null, providerId: row.providerId ?? null } : {}) };
+      ...(request.modelGroup || request.agentDeviceId !== undefined ? { agentDeviceId: row.agentDeviceId ?? null, providerId: row.providerId ?? null } : {}) };
   };
 }
 
@@ -97,6 +117,7 @@ export interface OrcaRemoteWorkerExistingSession {
 
 export interface OrcaRemoteWorkerHostDeps {
   getCaller(): OrcaRemoteWorkerCaller | null;
+  supportsModelGroup?: boolean;
   readSession(sessionId: string): Promise<OrcaRemoteWorkerExistingSession | null>;
   readModels?(request: OrcaRemoteWorkerModelsRequest): Promise<OrcaRemoteWorkerModelsResult>;
   /**
@@ -125,8 +146,7 @@ function fail(code: string, message: string): never {
   throw new Error(`[${code}] ${message}`);
 }
 
-function requireCaller(deps: OrcaRemoteWorkerHostDeps): OrcaRemoteWorkerCaller {
-  const caller = deps.getCaller();
+function requireCaller(caller: OrcaRemoteWorkerCaller | null): OrcaRemoteWorkerCaller {
   if (!caller || !caller.controllerDeviceId) {
     fail('PRECONDITION_FAILED', 'remote worker requests must come from another device');
   }
@@ -134,21 +154,32 @@ function requireCaller(deps: OrcaRemoteWorkerHostDeps): OrcaRemoteWorkerCaller {
   return caller;
 }
 
+export function createRemoteWorkerModelsHandler(
+  deps: Pick<OrcaRemoteWorkerHostDeps, 'getCaller' | 'readModels'>,
+) {
+  return async (raw: unknown): Promise<OrcaRemoteWorkerModelsResult> => {
+    requireCaller(deps.getCaller());
+    if (!deps.readModels) fail('UNSUPPORTED_CAPABILITY', 'remote Worker model discovery is unavailable');
+    return deps.readModels(parseOrcaRemoteWorkerModelsRequest(raw));
+  };
+}
+
 export function createOrcaRemoteWorkerHost(deps: OrcaRemoteWorkerHostDeps) {
   return {
     caps(): OrcaRemoteWorkerCaps {
-      requireCaller(deps);
-      return { version: ORCA_REMOTE_WORKER_VERSION, workerBridge: true, ...(deps.readModels ? { agentDevice: true } : {}) };
+      requireCaller(deps.getCaller());
+      return {
+        version: ORCA_REMOTE_WORKER_VERSION,
+        workerBridge: true,
+        ...(deps.readModels ? { agentDevice: true } : {}),
+        ...(deps.supportsModelGroup ? { modelGroup: true } : {}),
+      };
     },
 
-    async models(raw: unknown): Promise<OrcaRemoteWorkerModelsResult> {
-      requireCaller(deps);
-      if (!deps.readModels) fail('UNSUPPORTED_CAPABILITY', 'remote Worker model discovery is unavailable');
-      return deps.readModels(parseOrcaRemoteWorkerModelsRequest(raw));
-    },
+    models: createRemoteWorkerModelsHandler(deps),
 
     async open(raw: unknown): Promise<OrcaRemoteWorkerOpenResult> {
-      const caller = requireCaller(deps);
+      const caller = requireCaller(deps.getCaller());
       const request = parseOrcaRemoteWorkerOpenRequest(raw);
       return deps.withSessionLock(request.sessionId, async () => {
         const existing = await deps.readSession(request.sessionId);
@@ -171,7 +202,7 @@ export function createOrcaRemoteWorkerHost(deps: OrcaRemoteWorkerHostDeps) {
               agentKind: existing.agentKind,
               effort: existing.effort,
               fastMode: existing.fastMode,
-              ...(request.agentDeviceId !== undefined ? { agentDeviceId: existing.agentDeviceId ?? null, providerId: existing.providerId ?? null } : {}),
+              ...(request.modelGroup || request.agentDeviceId !== undefined ? { agentDeviceId: existing.agentDeviceId ?? null, providerId: existing.providerId ?? null } : {}),
             };
           }
           fail('ALREADY_EXISTS', 'a different task already uses this id');
@@ -189,7 +220,7 @@ export function createOrcaRemoteWorkerHost(deps: OrcaRemoteWorkerHostDeps) {
     },
 
     async release(raw: unknown): Promise<{ released: boolean }> {
-      const caller = requireCaller(deps);
+      const caller = requireCaller(deps.getCaller());
       const { sessionId } = parseOrcaRemoteWorkerReleaseRequest(raw);
       return deps.withSessionLock(sessionId, async () => {
         const existing = await deps.readSession(sessionId);

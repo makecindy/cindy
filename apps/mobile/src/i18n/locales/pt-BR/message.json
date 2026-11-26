@@ -195,6 +195,9 @@
     "turnTokens": "{{tokens}} tokens"
   },
   "lightbox": {
+    "saveImage": "Salvar imagem",
+    "imageSaved": "Imagem salva",
+    "saveFailed": "Não foi possível salvar a imagem. Tente novamente.",
     "originalUnavailable": "Imagem original indisponível",
     "retryOriginal": "Recarregar imagem original",
     "loadingOriginal": "Carregando imagem original…",

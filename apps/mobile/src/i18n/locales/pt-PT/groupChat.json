@@ -112,7 +112,7 @@
     "runtimeFailureReason": {
       "unclaimed_timeout": {
         "summary": "{{name}} não começou a processar dentro do prazo de espera. Este pedido terminou.",
-        "advice": "Peça ao proprietário do colega para verificar se a Cindy está a funcionar e se o respetivo computador está ligado à rede.",
+        "advice": "Peça ao proprietário do amigo para verificar se a Cindy está a funcionar e se o respetivo computador está ligado à rede.",
         "details": "Quando a Cindy e a rede voltarem a funcionar, envie a mensagem novamente."
       }
     },
@@ -655,5 +655,6 @@
     "externalFormatError": "Volte a abrir a ligação completa a partir da mensagem original."
   },
   "memberCount_many": "{{count}} membros",
-  "waitingForOwner": "A aguardar confirmação"
+  "waitingForOwner": "A aguardar confirmação",
+  "externalBadge": "Externo"
 }

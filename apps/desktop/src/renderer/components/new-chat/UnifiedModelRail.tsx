@@ -1,4 +1,6 @@
-import type { ReactNode } from 'react';
+import { useLayoutEffect, useRef, type ReactNode } from 'react';
+import { isDarkBackground } from '../../../shared/theme-import/color';
+import { themeService } from '@/themes/theme-service';
 import { isProviderShareAgentDeviceId } from '../../../shared/providerShare';
 import { useProviderShareWeeklyQuota } from '@/features/provider-share/useProviderShareWeeklyQuota';
 import { History, LayoutGrid, Share2, Star, Waypoints } from 'lucide-react';
@@ -195,6 +197,7 @@ export function UnifiedModelRail({
               label={label}
               accountIdentity={accountIdentity}
               {...(groupNote ? { groupNote } : {})}
+              selectedUpload={isActive && !!provider?.customIcon}
               isActive={isActive}
               itemKey={key}
               onClick={() => onSelect(item)}
@@ -261,6 +264,7 @@ interface RailButtonProps {
   accountIdentity?: string;
   /** 供应商组那一格:用量读的是哪台(或还没分到电脑),账号名跟在这一句后面。 */
   groupNote?: string;
+  selectedUpload: boolean;
   isActive: boolean;
   itemKey: string;
   onClick: () => void;
@@ -333,6 +337,7 @@ function RailButtonView({
   onClick,
   disabled,
   children,
+  selectedUpload,
   quota,
   pool,
 }: RailButtonProps & {
@@ -340,6 +345,45 @@ function RailButtonView({
   pool?: ModelPoolQuota | null;
 }) {
   const { t } = useTranslation();
+  const mark = useRef<HTMLSpanElement>(null);
+  useLayoutEffect(() => {
+    const el = mark.current;
+    if (!el || !selectedUpload) return;
+    const applyPalette = () => {
+      // Read the destination token, not an intermediate frame of the button transition.
+      // Chromium resolves CSS color expressions and composites translucent theme colors.
+      const canvas = document.createElement('canvas');
+      canvas.width = canvas.height = 1;
+      const ctx = canvas.getContext('2d', { willReadFrequently: true });
+      if (!ctx) return;
+      canvas.hidden = true;
+      canvas.style.backgroundColor = 'var(--accent-cta-bg)';
+      const button = el.parentElement!;
+      button.append(canvas);
+      const layers = [getComputedStyle(canvas).backgroundColor];
+      // A translucent button shows the rail and panel surfaces underneath.
+      for (let parent = button.parentElement; parent && !layers[0].startsWith('rgb('); parent = parent.parentElement) {
+        layers.unshift(getComputedStyle(parent).backgroundColor);
+      }
+      if (!layers[0].startsWith('rgb(')) {
+        canvas.style.backgroundColor = 'Canvas';
+        layers.unshift(getComputedStyle(canvas).backgroundColor);
+      }
+      canvas.remove();
+      for (const color of layers) {
+        ctx.fillStyle = color;
+        ctx.fillRect(0, 0, 1, 1);
+      }
+      const [r, g, b] = ctx.getImageData(0, 0, 1, 1).data;
+      el.style.colorScheme = isDarkBackground({ r, g, b }) ? 'dark' : 'light';
+    };
+    applyPalette();
+    const unsubscribe = themeService.onDidChangeTheme(applyPalette);
+    return () => {
+      unsubscribe();
+      el.style.removeProperty('color-scheme');
+    };
+  }, [selectedUpload]);
   const remaining = quota ? Math.round(100 - quota.usedPercent) : null;
   const quotaLabel = pool?.hasAccountDetails
     ? pool.label
@@ -397,14 +441,14 @@ function RailButtonView({
         aria-pressed={isActive}
         data-rail-item={itemKey}
         className={cn(
-          'relative flex h-[38px] w-[34px] shrink-0 flex-col items-center justify-center rounded-[9px] transition-colors',
+          'relative flex h-[38px] w-[34px] shrink-0 flex-col items-center justify-center rounded-lg transition-colors',
           isActive
             ? 'bg-[var(--accent-cta-bg)] text-[var(--accent-pure-cta-fg)]'
             : 'text-[var(--text-tertiary)] hover:bg-[var(--model-item-hover)] hover:text-[var(--text-secondary)]',
           disabled && 'cursor-not-allowed opacity-50',
         )}
       >
-        <span className="flex h-[24px] items-center justify-center">{children}</span>
+        <span ref={mark} className="flex h-[24px] items-center justify-center">{children}</span>
         {(pool?.warning || !!pool?.resetSoonCount) && (
           <span
             aria-hidden

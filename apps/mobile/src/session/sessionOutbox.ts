@@ -5,6 +5,7 @@
  */
 import type { ChatReplyQuote } from '@cindy/maker-shared/chat-reply-quote';
 import { i18n } from '@/i18n';
+import { isExpoAndroidDnsFailure } from '@/api/expoAndroidDnsFailure';
 import { isDurableOutboxHandedOff, type DurableOutboxRecord } from '@/session/durableOutbox';
 import type { MobileSessionReference } from '@/session/sessionReferences';
 import type { RemoteSerializedAttachment } from '@/session/types';
@@ -516,7 +517,9 @@ export function outboxDisplayItem(item: MobileOutboxItem): MobileOutboxDisplayIt
     ...(item.phase === 'dispatching' ? { dispatching: true } : {}),
     errorText: item.phase !== 'failed'
       ? null
-      : (item.enqueueError ?? (item.failedIds.length > 0 ? i18n.t('session.row.attachmentUploadFailed') : null)),
+      : (item.enqueueError && isExpoAndroidDnsFailure(item.enqueueError)
+        ? i18n.t('apiErrors.networkUnavailable', { webHint: '' })
+        : item.enqueueError ?? (item.failedIds.length > 0 ? i18n.t('session.row.attachmentUploadFailed') : null)),
   };
 }
 

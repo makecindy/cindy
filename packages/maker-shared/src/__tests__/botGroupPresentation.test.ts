@@ -13,7 +13,10 @@ import {
   projectBotGroupExecutionFailures,
   botGroupExecutionFailureBatches,
   botGroupSidebarPlanPreview,
+  chatGroupHumanDisplayName,
+  chatGroupMemberName,
   chatGroupMembership,
+  chatGroupOwnerName,
   botGroupNewMessageCount,
   botGroupActivityAt,
   latestBotGroupMessage,
@@ -474,4 +477,23 @@ it('pins receipt-backed work to its exact row despite differing source clocks', 
   const other = { executionId: 'b', sourceMessageId: 'other' };
   const entries = interleaveBotGroupWork([{ id: 'local-own', serverMessageId: 'server-own', createdAt: 50 }, { id: 'other', createdAt: 30 }], [other, own]);
   expect(entries.map(entry => entry.kind === 'message' ? entry.value.id : entry.value.executionId)).toEqual(['local-own', 'a', 'other', 'b']);
+});
+
+// Basis: bot-group-chat.md §5 enterprise identity; verifies · Org suffix, nickname override,
+// idempotency, and companion owner name without nested org suffix (unit tier).
+describe('enterprise human display name formatting', () => {
+  it('appends · OrgName only for humans with showOrgName and no group nickname', () => {
+    expect(chatGroupHumanDisplayName({ actorKind: 'human', name: '林知行', orgName: '星辰科技', showOrgName: true })).toBe('林知行 · 星辰科技');
+    expect(chatGroupHumanDisplayName({ actorKind: 'human', name: '林知行 · 星辰科技', orgName: '星辰科技', showOrgName: true })).toBe('林知行 · 星辰科技');
+    expect(chatGroupHumanDisplayName({ actorKind: 'human', name: '阿行', nickname: '阿行', orgName: '星辰科技', showOrgName: true })).toBe('阿行');
+    expect(chatGroupHumanDisplayName({ actorKind: 'human', name: '林知行', orgName: '星辰科技', showOrgName: false })).toBe('林知行');
+    expect(chatGroupHumanDisplayName({ actorKind: 'bot', name: 'Cindy', orgName: '星辰科技', showOrgName: true })).toBe('Cindy');
+  });
+
+  it('keeps companion owner labels on the human base name without nested org suffixes', () => {
+    const owner = { id: 'h1', kind: 'human', state: 'joined', name: '林知行' };
+    const bot = { id: 'b1', kind: 'bot', state: 'joined', name: 'Cindy', ownerActorId: 'h1', ownerName: '林知行' };
+    expect(chatGroupOwnerName(bot, [owner, bot])).toBe('林知行');
+    expect(chatGroupMemberName(bot, [owner, bot])).toBe('Cindy (林知行)');
+  });
 });

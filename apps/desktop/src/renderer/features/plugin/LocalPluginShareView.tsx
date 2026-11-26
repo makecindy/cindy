@@ -159,7 +159,8 @@ function RemoteShareInstall({ snapshot, device, online, onBusy, onError, onInsta
         description: `${device.name} · ${consent.facts.kind === 'install'
           ? t('settings.ghosts.installConsent.installMeta', { version: consent.facts.version, source: ghostInstallConsentSourceLabel(t, consent) })
           : t('settings.ghosts.installConsent.updateMeta', { from: consent.facts.previousVersion, to: consent.facts.version, source: ghostInstallConsentSourceLabel(t, consent) })}`,
-        content: <GhostInstallConsentContent facts={consent.facts} replacement={replacement} sourceChanged={consent.target?.sourceChanged} />,
+        content: <GhostInstallConsentContent facts={consent.facts} origin={consent.origin} communityMarket={consent.communityMarket}
+          replacement={replacement} sourceChanged={consent.target?.sourceChanged} />,
         confirmText: t(replacement ? 'sharing.localReplaceButton' : consent.facts.kind === 'install'
           ? 'settings.ghosts.installConsent.confirmInstall' : 'settings.ghosts.installConsent.confirmUpdate'),
         cancelText: t('settings.ghosts.installConsent.cancel'), maxWidth: 460, contentSelectable: true,

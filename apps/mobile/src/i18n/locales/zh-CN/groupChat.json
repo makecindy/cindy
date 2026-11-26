@@ -646,5 +646,6 @@
     },
     "externalFormatError": "请从原消息重新打开完整链接。"
   },
-  "waitingForOwner": "等待主人确认"
+  "waitingForOwner": "等待主人确认",
+  "externalBadge": "外部"
 }

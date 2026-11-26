@@ -104,6 +104,9 @@ ID 分开保存。官方在入队前组装引用，沿用既有任务持久化�
 机器人」重新选择模型的指引，失败原因写入主日志。服务端快照（主动推送与重连镜像）改动某目录
 的 Agent 或模型时，同键的配对来源一并清除；多个 Slack team 共用的 null-team 兜底来源不因
 单个 team 改路由被清，以免其它 team 静默改走默认来源。
+云实例授权窗口：官方 Telegram、Slack、X、飞书在云实例中使用专用 Chromium 授权窗口，绑定完成、取消或过期
+（最长 15 分钟）后回收；回收不撤销绑定，也不关闭用户另外打开的页面。普通 Desktop 仍用系统浏览器
+（`main/instance-runtime/hook-authorization-windows.ts`）。
 
 > 这张表存在的理由与 `botCommands.ts` 注册表一样：把「散落两个仓、谁也不知道差在哪」
 > 变成「表里显式登记」。**新增或修改任一 bot 的用户可见行为时，必须同步更新本表对应
@@ -162,13 +165,14 @@ App 完成未读与提醒统一由 `renderer/hooks/useSessionRunningStatus.ts` �
 | 能力 | 单一真相源 | 共享到什么程度 |
 |---|---|---|
 | 子代理输出隔离 | `im/shared/agentEventScope.ts` + `maker-core/agents/claude-code/translator.ts` | 官方 `hook-control/turnObserver` 与个人 `im/shared/turnRunner` 在消费实时事件前过滤带 `agentMeta.parentUuid` 的子代理事件。内部正文、工具/思考、媒体旁路和终态不进入主任务的 IM 回帖，也不影响主任务收口；个人侧自动任务转播同样适用。Claude translator 为子代理工具结果保留归属，主代理流式事件不继承子代理元数据；主任务正文统计和最后消息的实质内容判定只消费主代理，子代理完整消息与流式增量都不阻断主任务 result 截断补发，也不覆盖 silent-stop 判定。整轮失败即使由子代理 API 错误引起，仍按主任务失败收口。主代理主动引用的成果正常发送，桌面完整记录不变。 |
-| 普通工具权限的多处确认 | `maker-ipc/interactionRouter.ts` + `sharedPermission.ts` | IM 与 Cindy 共用一个决定，首次有效回答生效，桌面/手机与渠道同步收口。来源正文由 `im/shared/interactionSource.ts` 构造；个人富卡与官方 Hook 分别负责各自载体更新。供应商分享的本机凭证确认卡共用 `interactionCardModel.ts` 回传当前任务的凭证授权标记；个人卡片点击从 pending 保存的原请求恢复作用域，不转换成通用工具允许规则。未来渠道复用同一注册接口，详见 [共享合同](im-permission-confirmation.md)。 |
+| 普通工具权限的多处确认 | `maker-ipc/interactionRouter.ts` + `sharedPermission.ts` | IM 与 Cindy 共用一个决定，首次有效回答生效，桌面/手机与渠道同步收口。来源正文由 `im/shared/interactionSource.ts` 构造；个人富卡与官方 Hook 分别负责各自载体更新。远程执行器补弹的普通确认卡只提供单次允许和拒绝。供应商分享的本机凭证确认卡共用 `interactionCardModel.ts` 回传当前任务的凭证授权标记；个人卡片点击从 pending 保存的原请求恢复作用域，不转换成通用工具允许规则。未来渠道复用同一注册接口，详见 [共享合同](im-permission-confirmation.md)。 |
 | 代输入指引（2026-10-13） | `im/shared/inputHandoffChannelNotice.ts` | 任务开出代输入卡时，在驱动该任务的聊天里发**一行固定文字**「🔐 需要你帮忙输入：<任务名> · 在 Cindy 中打开」，每个请求一次。个人 bot 由 `turnRunner` 在 `beforeProviderStart` 绑定 `im.sendText`；官方 bot 由 `session-runner` 绑定与运行时回收提示同一条独立发送（`onRuntimeRecovery`，需协商 `msg-op-v1`，未协商时不发）。卡片、界面内容与主人填写的值**两侧都不进 Telegram**——这是有意的产品边界（值只走 Cindy 加密通道），不是缺口。详见 [代输入](input-handoff.md)。 |
 | 远程与分享供应商的新任务路由 | `im/remoteProviderRoute.ts` + `im/shared/openChannelSession.ts` | 两侧均可在 Cindy 的 bot 模型设置选择同账号其他电脑或分享供应商，按授权目录校验并保存 `agentDeviceId`；新建、`/new` 与冷恢复沿用该执行位置，所选位置不可用时不回落本机。个人渠道默认与官方工作目录默认仍各自保存。详见 [供应商分享 §5.2](provider-sharing.md#52-供应商设置)。 |
 | 本机模型列表的开关就绪 | `maker-host/model-visibility-mirror.ts` | 个人 `/model` 与官方 `listAgentModels` 的本机目录均等待当前账号配置同步；超时返回错误，不把未同步当成全部关闭或回退出厂开关。个人分享任务的 `/model` 读取分享方授权目录，不套用本机同名供应商的开关。 |
 | 过程区与正文的**文本合成** | `im/shared/turnPresenter.ts` + `turnActivity.ts` | 过程区怎么排（工具步骤、思考步骤、耗时行）、过程区与正文怎么拼（`composeProgressView`）。耗时行末尾的当前 `N tok/s` 同源：两侧（含个人侧自动任务转播）都只经 `applyStatusTokenRate` 读 `status` 事件的 `tokenSpeed`（与桌面运行状态栏同一份读数）——新宿主按测量来源取最近有效读数，每次状态更新按原采样时间判断 60 秒有效期；旧宿主的占位帧与 0 读数保留上一个值、`generationReliable === false` 隐藏、只随 ticker 带出不单独刷帧；凡把过程区冻结进终稿的收口（个人侧终止错误、转播收口）都经 `clearRunningIndicators` 与重试说明一起清掉。**正文累积不算**——见第三节：`createTurnPresenter` 按 `mode` 实例化两个独立引擎，累积、消息投影、`finalText()` 判据都不同，改一个引擎不影响另一个 |
 | 运行中**过程消息**的生命周期、渲染与出站失败判据（官方需双方协商 `telegram-progress-ops-v1`） | `packages/lizi-im/src/telegram/streamingText.ts`（`startTelegramProgressCarrier` 与个人 `startTelegramStreaming` 是同一个 handle 类）+ `progressFrame.ts` + `outboundPolicy.ts` + `markdown.ts` 的 `markdownToTelegramHtml` | 惰性占位、1.5s 尾沿节流、首帧 send 后续 edit、单帧上限 `TELEGRAM_PROGRESS_FRAME_MAX_CHARS = 3800`（源 markdown 字符数；官方 presenter 的 `PresenterPolicy.intermediateMaxRenderedChars` 默认值也取它）、NO_REPLY 及其前缀不落地、HTML 被拒（400）回落纯文本、`message is not modified` 视为成功、429 按 `retry_after` 全长退避后重试一次——两侧跑同一份代码。**传输不同**：个人走 Bot API（`index.ts` 的 `callSend` / `sendRenderedChunk` / `editHtml`），官方走 msg.op（`hook-control/telegramTurnCarrier.ts` 只实现 `TelegramStreamingDeps` 的 msg.op 版，并经 `telegramMsgOp.ts` 把 `msg.op.result` 的 `channelErrorCode` / `error` / `retryAfterMs` 映射成同形错误）；服务端只执行，不做转换与回落。未协商时官方仍由服务端渲染 `turn.progress`，本行对官方不成立 |
 | 成功终稿的**收口**（官方需双方协商 `telegram-final-ops-v1`） | `packages/lizi-im/src/telegram/streamingText.ts` 的 finalize（官方经 `startTelegramTurnCarrier`，与进度消息同一个 handle）+ `chunk.ts` | Rich 新发 → 明确 4xx 回落 HTML → HTML 400 回落纯文本、按 `chunkTelegramSource` 分段、终稿落地后才尽力删过程消息——两侧同一份代码。官方另有两处传输差异：终稿段经 `purpose: 'turn-final'` 登记（服务端据此写 route、在 `turn.end` 确认后提升续跑锚点、做群中继）；私聊首段挂完成特效（第三节「终稿特效」）。**只覆盖普通成功、不带附件的轮次**：失败 / 取消 / 续跑轮 / 正文恰为 NO_REPLY（ambient 判定在服务端）/ 带附件 / 私聊草稿模式都仍由服务端按 `turn.end` 发布。带附件不走本端：桌面持久出箱只存终态文本（附件字节不进 JSON 持久化），本端逐段上传附件期间退出或崩溃时，重启重放的兜底帧没有附件、服务端接管后附件会丢，所以整轮随 `turn.end` 交给服务端（与旧路径相同）。终稿必达不降级：发布前 `turn.end` 先进桌面持久出箱，没有完整确认就以 `clientFinal.complete=false` 交回服务端重发（第四节第 3 行） |
+| 终态模型过载错误的用户说明 | `im/shared/turnRetryNotice.ts` 的 `terminalErrorText` | 个人与官方 Telegram 终态失败说明共用映射；当输入已带 `reason: 'UPSTREAM_OVERLOADED'` 时，显示既有本地化的模型服务繁忙与手动重发说明。该 reason 在此只用于呈现，不新增自动重试或恢复判据；其它错误沿用原映射。 |
 | 执行中交互卡的**渲染与按钮排布**（官方需双方协商 `telegram-card-ops-v1`） | `packages/lizi-im/src/telegram/components.ts` 的 `layoutTelegramCard` + `cardLayout.ts` | 粗体标题 + markdown 正文 → HTML、正文上限 3800（`capRenderedText` 安全截断）、label ≤12 字两两并排——两侧同一份。**回调编码不同**：个人编成内存 ref token（`buildCardPayload`），官方由服务端铸 callback_data 并照旧回 `interaction.decision`（`hook-control/telegramCardOps.ts`）。卡片的**语义层**（选项、按钮文案来源、权限入参摘要）仍各自一份，见第三节「交互卡的语义与文案」。群里的卡改投 owner 私聊及其来源说明仍由服务端按现行规则决定。op 被明确拒绝时回落 `interaction.request`（服务端渲染） |
 | 官方 bot 的**命令菜单**（需双方协商 `telegram-commands-v1`） | `apps/desktop/src/main/im/shared/botCommands.ts` 的 `buildOfficialBotCommandMenus` | 官方菜单的命令集合、顺序、文案都取注册表（与个人菜单同一份 i18n key），desktop 按 en（默认）/ zh / ja / ko 各渲染一份经 `provider.commands.set` 下发，服务端只执行 `setMyCommands`，且只管理默认菜单与 zh / ja / ko（每次全量重写，缺席的语言写空，其它语言码含显式 `en` 一律忽略）；菜单只存服务端内存、不落库：desktop 每次握手都重发，服务端重启后到桌面重连前（以及设备离线期间）用服务端默认菜单。**语言口径沿用两侧既有差异**：官方按用户的 Telegram 语言，个人按桌面端语言。**命令分发不在这一行**：官方命令仍由服务端收入站并分发（1c 的别名差异照旧）。未协商时服务端用自己的 `TELEGRAM_COMMANDS` |
 | 渠道 `/stop` 的**明确停止** | `maker-ipc/register.ts` 的 `stopSessionTurnExplicitly` | 个人 IM 的 `/stop` / `!stop`（含微信，`im/shared/turnRunner.ts` 的 `stopActiveTurn`）与官方 hook 的 `task.cancel`（`hook-control/dispatcher.ts`，经 `stopSessionExplicitly` 注入）都走桌面 Stop 同一套清理：撤自动续跑与退避簿记、取消上下文溢出恢复、暂停 Goal、停输入队列并中止当前一轮。2026-10 之前两侧各少几步（个人不暂停 Goal、官方连自动续跑都不撤）。渠道侧只保留各自的排队收口（个人清 `sendQueue`，官方回 `turn.end(cancelled)`）。账号切换时的中止不是用户喊停，仍是普通 abort |
@@ -564,6 +568,11 @@ bot 身份按入站使用的稳定 ID 校验；Discord 取 gateway application i
 - 呈现大脑：`apps/desktop/src/main/im/shared/turnPresenter.ts`
 - 呈现能力契约：`packages/lizi-im/src/telegram/presentationCapabilities.ts`
 - 任务 / 对话 / 消息的用词：`docs/product-rules/task-and-conversation-naming.md`
+
+### 云实例设置入口
+
+云实例设置页复用本地个人 Telegram 的表单与人设 / 行为 / 群激活组件，读写目标实例；官方 Telegram 走独立作用域，
+不能经个人行为域修改。见 [云实例](../cloud-instances.md)。
 
 ## 按消息号读取群历史图片（2026-10-29）
 

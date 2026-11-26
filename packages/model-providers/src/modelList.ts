@@ -83,8 +83,16 @@ export interface DeriveModelListOptions {
   /**
    * 可见性过滤(用户「设置 → 模型供应商」的显隐 override);决策统一走 isModelVisible,
    * 数据源由调用方按自己进程能读到的存储注入。缺省 = 不过滤。
+   *
+   * 传了本谓词即表示「这是一份给人挑的清单」:用户整家隐藏的供应商(ProviderView.hidden)
+   * 同样按未显示处理,不需要各调用方再判一次。不传 = 路由 / 能力快照口径,隐藏不生效。
    */
   isVisible?: (providerId: string, model: CatalogModel) => boolean;
+  /**
+   * 保留用户整家隐藏的供应商(逐模型可见性照常过滤)。给自己另有「已隐藏」陈列区的
+   * 选择面板用:它要让收藏 / 最近继续解析到这些模型,并把它们列在可展开的隐藏区里。
+   */
+  includeHiddenProviders?: boolean;
   /**
    * 'first-wins'(默认): 同 id 跨供应商去重,按供应商序 + 目录序首见胜出 —— 拍平单列清单;
    * 'none': 不去重,同 id 在每个提供它的供应商下各出一行 —— 分段清单。
@@ -143,6 +151,7 @@ export function deriveModelList(opts: DeriveModelListOptions): ModelListEntry[] 
     excludeModel,
     keepSelected,
     includePaymentRequired = false,
+    includeHiddenProviders = false,
   } = opts;
 
   // first-wins 的占坑表直接记「id → 首见行在 out 里的下标」,选中行替换时 O(1) 定位
@@ -185,7 +194,7 @@ export function deriveModelList(opts: DeriveModelListOptions): ModelListEntry[] 
         }
         continue;
       }
-      if (!selected && isVisible && !isVisible(provider.id, m)) continue;
+      if (!selected && isVisible && ((provider.hidden === true && !includeHiddenProviders) || !isVisible(provider.id, m))) continue;
       if (dedupe === 'first-wins') seenIndex.set(m.id, out.length);
       out.push(makeEntry());
     }
@@ -217,6 +226,7 @@ export function deriveModelSections(
     excludeModel,
     keepSelected,
     includePaymentRequired = false,
+    includeHiddenProviders = false,
   } = opts;
   const q = (opts.query ?? '').trim().toLowerCase();
 
@@ -232,7 +242,7 @@ export function deriveModelSections(
         ? isAgentSelectableModel(m, { userProvider })
         : isModelSelectableForNewRoute(m, { userProvider });
       if (!selectable) continue;
-      if (!selected && isVisible && !isVisible(provider.id, m)) continue;
+      if (!selected && isVisible && ((provider.hidden === true && !includeHiddenProviders) || !isVisible(provider.id, m))) continue;
       if (q && !m.name.toLowerCase().includes(q) && !m.id.toLowerCase().includes(q)) continue;
       const entry: ModelListEntry = {
         ...m,

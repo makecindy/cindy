@@ -300,7 +300,7 @@ async function doStart(
   // Object.keys / Object.entries 里，于是在 Codex 侧静默消失，同一份配置却在 Claude 侧
   // 正常工作。registry 已从源头隔离这类 id，这里是对称的纵深防御（Claude 侧的
   // buildMcpServers 同样用 null-prototype）。
-  const serverFactories: Record<string, () => McpServer> = Object.create(null);
+  const serverFactories: Parameters<typeof startCodexHttpBridge>[0]['serverFactories'] = Object.create(null);
   const pluginIdByServerName: Record<string, string> = Object.create(null);
   const remoteHttpServers: Record<
     string,
@@ -335,9 +335,11 @@ async function doStart(
     const toClaudeSdkConfig = provider.toClaudeSdkConfig;
     if (!toClaudeSdkConfig) continue;
 
-    const createServer = (): McpServer => {
+    const createServer = (startup?: LiziMcpSessionContext): McpServer => {
       // Class providers read instance state, including when creating later client facades.
-      const cfg = toClaudeSdkConfig.call(provider, ctx) as
+      const cfg = toClaudeSdkConfig.call(provider, startup
+        ? { ...ctx, ...startup, agentKind: ctx.agentKind, getSessionContext: ctx.getSessionContext }
+        : ctx) as
         | { type?: string; name?: string; instance?: unknown }
         | null;
       if (cfg?.type !== 'sdk' || !cfg.instance) {
@@ -359,7 +361,8 @@ async function doStart(
       continue;
     }
 
-    serverFactories[provider.name] = () => {
+    serverFactories[provider.name] = (startup) => {
+      if (startup) return createServer(startup);
       if (firstInstance) {
         const instance = firstInstance;
         firstInstance = null;

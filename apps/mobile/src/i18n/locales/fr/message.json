@@ -195,6 +195,9 @@
     "turnTokens": "{{tokens}} jetons"
   },
   "lightbox": {
+    "saveImage": "Enregistrer",
+    "imageSaved": "Image enregistrée",
+    "saveFailed": "Impossible d’enregistrer l’image. Réessayez.",
     "originalUnavailable": "Image originale indisponible",
     "retryOriginal": "Réessayer l'image originale",
     "loadingOriginal": "Chargement de l'image originale…",

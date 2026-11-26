@@ -4,6 +4,7 @@
  */
 
 import { AcpLineDecoder, type AcpLineTransport, type AcpTransportClosed, type Logger } from '@cindy/maker-core';
+import { GHOST_NODE_STDIO_B64_MAX_CHARS } from '../../shared/ghost.js';
 import type { NodeWorkerProcess } from '../cindy-brain/nodeRuntimeBroker.js';
 
 const STDERR_TAIL_CHARS = 4_096;
@@ -74,7 +75,18 @@ export function createAcpProcessTransport(proc: NodeWorkerProcess, logger: Logge
   return {
     write(line) {
       if (closedInfo || closingByClient || proc.stdin.destroyed) throw new Error('ACP endpoint is not running');
-      proc.stdin.write(Buffer.from(`${line}\n`, 'utf8').toString('base64'));
+      const encoded = Buffer.from(`${line}\n`, 'utf8').toString('base64');
+      // 插件进程按帧收 base64(stdin-b64)，超过 GHOST_NODE_STDIO_B64_MAX_CHARS 的帧会被整段
+      // 丢弃：一条 ACP 消息里嵌一张 base64 图片就可能远超上限，那一轮请求会在引擎那侧凭空消失。
+      // 上限是 4 的整数倍，按它切段每段仍是合法 base64；接收端依次写进同一条 stdin，
+      // 拼接回来与原行逐字节一致，所以引擎仍然只看到一行一条消息。
+      if (encoded.length <= GHOST_NODE_STDIO_B64_MAX_CHARS) {
+        proc.stdin.write(encoded);
+        return;
+      }
+      for (let offset = 0; offset < encoded.length; offset += GHOST_NODE_STDIO_B64_MAX_CHARS) {
+        proc.stdin.write(encoded.slice(offset, offset + GHOST_NODE_STDIO_B64_MAX_CHARS));
+      }
     },
     onLine(listener) {
       lineListeners.add(listener);

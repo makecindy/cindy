@@ -22,6 +22,7 @@
  */
 
 import type { McpToolApprovalContext, McpToolApprovalPolicy } from '@cindy/maker-core';
+import { STARTUP_GHOST_TOOL_PREFIX } from '../../shared/ghost.js';
 import {
   isProjectAccessAction,
   ORCA_TASK_ACTION_TOOLS,
@@ -150,10 +151,35 @@ export type GhostToolApprovalResolver = (target: {
 }) => GhostToolApprovalFacts | null;
 
 let ghostToolApprovalResolver: GhostToolApprovalResolver | null = null;
+type StartupGhostToolApprovalResolver = (name: string) => (GhostToolApprovalFacts & {
+  ghostId: string; namespace: string | null; tool: string;
+}) | null;
+let startupGhostToolApprovalResolver: StartupGhostToolApprovalResolver | null = null;
 
 /** Main 启动时注册（cindy-brain `registerGhostIpc`）；未注册时插件调用一律按会话审批。 */
-export function setGhostToolApprovalResolver(resolver: GhostToolApprovalResolver | null): void {
+export function setGhostToolApprovalResolver(
+  resolver: GhostToolApprovalResolver | null,
+  startupResolver: StartupGhostToolApprovalResolver | null = null,
+): void {
   ghostToolApprovalResolver = resolver;
+  startupGhostToolApprovalResolver = startupResolver;
+}
+
+function startupToolArgs(params: Record<string, unknown> | undefined) {
+  return params && Object.keys(params).length === 1 ? readJsonObject(params.args) : undefined;
+}
+
+/** Give the outer Agent reviewer the real plugin action and its untouched arguments. */
+export function getDesktopMcpToolApprovalEvidence(context: McpToolApprovalContext): unknown {
+  if (context.serverName !== 'cindy' || !context.toolName?.startsWith(STARTUP_GHOST_TOOL_PREFIX)) return undefined;
+  const args = startupToolArgs(readJsonObject(context.toolParams));
+  if (!args) return undefined;
+  try {
+    const target = startupGhostToolApprovalResolver?.(context.toolName);
+    return target && { ghost_id: target.ghostId, namespace: target.namespace, tool: target.tool, args };
+  } catch {
+    return undefined;
+  }
 }
 
 /**
@@ -163,8 +189,22 @@ export function setGhostToolApprovalResolver(resolver: GhostToolApprovalResolver
  */
 function ghostCallPolicy(context: McpToolApprovalContext): McpToolApprovalPolicy | null {
   if (context.serverName !== 'cindy') return null;
-  if (context.toolName !== 'ghost_call' && context.toolName !== undefined) return null;
   const params = readJsonObject(context.toolParams);
+  const startupEnvelope = startupToolArgs(params);
+  if (context.toolName?.startsWith(STARTUP_GHOST_TOOL_PREFIX)) {
+    if (!startupEnvelope) return 'prompt-each-time';
+    try {
+      const facts = startupGhostToolApprovalResolver?.(context.toolName);
+      if (!facts || facts.declared === 'each-call') return 'prompt-each-time';
+      return facts.declared === 'auto' ? 'auto-approve' : 'prompt';
+    } catch {
+      return 'prompt-each-time';
+    }
+  }
+  // Older Codex versions may omit the MCP name. The args-only startup
+  // envelope does not identify the target and cannot earn a remembered grant.
+  if (context.toolName === undefined && startupEnvelope) return 'prompt-each-time';
+  if (context.toolName !== 'ghost_call' && context.toolName !== undefined) return null;
   if (!params) return null;
   const ghostId = typeof params.ghost_id === 'string' ? params.ghost_id.trim() : '';
   const tool = typeof params.tool === 'string' ? params.tool.trim() : '';
@@ -323,6 +363,7 @@ export function getDesktopMcpToolApprovalPolicy(
     // Moving a teammate hands its running to another computer: the task's permission mode decides.
     if (action === 'manage_session_prs' && args?.action !== 'list') return 'prompt-each-time';
     if (action === 'move_teammate_home') return 'prompt-each-time';
+    if (action === 'teammate_workspace_migration' && !['preview', 'status'].includes(String(args?.action))) return 'prompt-each-time';
     // 发给另一台电脑上的任务：作用范围越出本机，交给当前任务的权限档，不走可信 server 的静默放行。
     if (action === 'send_to_session' && targetsAnotherComputer(sessionIdDevice(args?.target_session_id))) {
       return 'prompt-each-time';

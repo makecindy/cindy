@@ -79,7 +79,9 @@ vi.mock('../../maker-host/override-settings-file.js', () => ({
           if (next.providers) h.created = next.providers;
         },
       }
-    : {
+    : options.label === 'subscription-api-key-members'
+      ? { invalidateIfChanged: () => {}, read: () => ({ members: {}, order: {} }) }
+      : {
         invalidateIfChanged: () => {},
         isUnreadable: () => h.poolUnreadable,
         read: () => ({ bindings: h.bindings, pools: h.pools }),
@@ -546,6 +548,13 @@ describe('subscription management boundary', () => {
     h.execute.mockRejectedValue(new Error('codex_provider_managed_auth'));
     const error = await invoke({ action: 'connect', target: 'default', providerId: 'openai', loginKey: 'login' }).catch(error => error);
     expect(mapIpcErrorToI18nKey(error)).toBe('ipcError.SUBSCRIPTION_CODEX_PROVIDER_AUTH');
+  });
+
+  // A saved row can move or disappear between displaying it and clicking Sign in.
+  it('reports a missing sign-in target separately from CLI or network errors', async () => {
+    h.execute.mockRejectedValue(new Error('Account not found'));
+    await expect(invoke({ action: 'login', providerId: 'openai', accountId: 'default', loginKey: 'stale' }))
+      .rejects.toThrow('[NOT_FOUND]');
   });
 
   // 2026-11-18 user report, unit: an unreachable account service reached the renderer as the
