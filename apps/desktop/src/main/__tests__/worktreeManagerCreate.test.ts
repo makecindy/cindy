@@ -210,7 +210,8 @@ describe('createWorktree naming authority', () => {
     });
     const firstPath = path.join(baseRepo, '.cindy-worktrees', 'shared');
     let fullCheckoutEnv: Record<string, string> | undefined;
-    let stageCheckoutEnv: Record<string, string> | undefined;
+    let selectiveCheckoutEnv: Record<string, string> | undefined;
+    let backgroundCheckoutEnv: Record<string, string> | undefined;
 
     gitExecMock.mockImplementation((args: string[], cwd?: string, opts?: { extraEnv?: Record<string, string> }) => {
       const wtIdx = args.indexOf('worktree');
@@ -224,13 +225,20 @@ describe('createWorktree naming authority', () => {
       if (args[0] === 'branch' && args[1] === '--all') {
         return { stdout: createdRefs.join('\n'), stderr: '' };
       }
+      if (args[0] === 'ls-tree') {
+        return { stdout: 'AGENTS.md\n', stderr: '' };
+      }
       if (args[0] === 'checkout' && cwd === firstPath && args.includes('.')) {
         fullCheckoutEnv = opts?.extraEnv;
         enteredFirstCheckout();
         return firstCheckout;
       }
+      if (args[0] === 'checkout' && args.includes('AGENTS.md')) {
+        selectiveCheckoutEnv = opts?.extraEnv;
+        return { stdout: '', stderr: '' };
+      }
       if (args[0] === 'checkout' && args.includes(':(exclude).sivi')) {
-        stageCheckoutEnv = opts?.extraEnv;
+        backgroundCheckoutEnv = opts?.extraEnv;
         return { stdout: '', stderr: '' };
       }
       return previousGit(args, cwd, opts);
@@ -257,7 +265,8 @@ describe('createWorktree naming authority', () => {
         },
       });
       expect(fullCheckoutEnv).toMatchObject({ LC_ALL: 'C', GIT_TERMINAL_PROMPT: '0' });
-      expect(stageCheckoutEnv).toMatchObject({ LC_ALL: 'C', GIT_TERMINAL_PROMPT: '0' });
+      expect(selectiveCheckoutEnv).toMatchObject({ LC_ALL: 'C', GIT_TERMINAL_PROMPT: '0' });
+      expect(backgroundCheckoutEnv).toMatchObject({ LC_ALL: 'C', GIT_TERMINAL_PROMPT: '0' });
     } finally {
       finishFirstCheckout();
       await first;
