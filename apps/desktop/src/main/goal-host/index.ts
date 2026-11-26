@@ -33,7 +33,9 @@ import {
   readAccountUsageLimit,
   sessionUsesOtherMachineAccount,
   subscriptionFamilyOf,
+  subscriptionPoolAccountUsageLimit,
 } from '../usage/accountUsageLimit.js';
+import { readSubscriptionTaskUsage } from '../subscription-accounts/runtime.js';
 import { readClaudeAccountUsageSnapshot } from '../usage/claudeAccountUsage.js';
 import { onCodexAutoResetRestored } from '../maker-ipc/usage.js';
 import { GoalController, GoalControllerDisposedError } from './controller';
@@ -164,9 +166,20 @@ export function startGoalController(deps: StartGoalControllerDeps): GoalControll
       // 那台的独立账号本机目录认不出(上面判不出订阅家族)时也到这里,同样不读。
       // SSH 沿用原有的网关预算回落。
       if (row?.agentDeviceId && !row.remoteHostId) return null;
-      const subscription = await readAccountUsageLimit(agentKind, providerId, modelId).catch(
-        () => null,
-      );
+      const subscription = await (async () => {
+        if (family === 'claude' || family === 'codex') {
+          const poolProvider = family === 'claude' ? 'anthropic' : 'openai';
+          const pooled = await readSubscriptionTaskUsage(
+            poolProvider,
+            { sessionId, nativeSessionId: row?.sdkSessionId, providerId },
+            { fresh: turnError !== undefined },
+          );
+          if (pooled !== undefined) {
+            return subscriptionPoolAccountUsageLimit(family, pooled, { agentKind, modelId });
+          }
+        }
+        return readAccountUsageLimit(agentKind, providerId, modelId);
+      })().catch(() => null);
       if (subscription !== undefined) return subscription;
       // 非订阅的 Claude Code 会话(Cindy 网关):读 LiteLLM 预算周期。
       if (agentKind === 'claude-code') {

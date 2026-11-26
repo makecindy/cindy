@@ -4,7 +4,11 @@ import { readContextRecoverySessionWithPorts, classifyCodexHistoryWithPorts, com
 import { desktopContextRecoveryAbortSignal } from './contextRecoveryAssembly.desktop.js';
 import { createSessionContextWindowBudgetReconcile } from './sessionContextWindowBudgetReconcile.js';
 import { appliedContextWindowBudgets, pendingSessionContextWindowBudgetReconciles } from './sessionContextWindowBudgetState.js';
-import { needsSubscriptionAccountHandoff, hasRestoredPooledCodexQuota } from '../subscription-accounts/runtime.js';
+import {
+  needsSubscriptionAccountHandoff,
+  hasRestoredPooledCodexQuota,
+  readSubscriptionTaskUsage,
+} from '../subscription-accounts/runtime.js';
 import { withRemoteAccountReads } from '../subscription-accounts/remotePreflight.js';
 import { prepareSubscriptionAccountForSend } from '../subscription-accounts/prepareSend.js';
 import { accountProviderId, readMergedProviderAccount, resolveSubscriptionPoolProvider as resolveSubscriptionPoolProviderRef } from '../subscription-accounts/placement.js';
@@ -1349,6 +1353,7 @@ import {
   codexAccountUsageLimit,
   sessionUsesOtherMachineAccount,
   subscriptionFamilyOf,
+  subscriptionPoolAccountUsageLimit,
 } from '../usage/accountUsageLimit.js';
 import { parseGeminiInputRateLimit } from '@cindy/maker-shared/error-redaction';
 import { UsageLimitAutoResume } from './usageLimitAutoResume.js';
@@ -1882,11 +1887,24 @@ async function resolveSessionUsageResetAt(
           preSend: () => { if (scope !== activeOwnerScopeKey()) throw new Error('Account changed'); },
         }));
     },
-    readLocalLimit: async ({ agentKind, providerId, modelId }, family) => family === 'claude'
+    readLocalLimit: async ({ agentKind, providerId, modelId, sdkSessionId }, family) => {
+      if (family === 'claude' || family === 'codex') {
+        const poolProvider = family === 'claude' ? 'anthropic' : 'openai';
+        const pooled = await readSubscriptionTaskUsage(
+          poolProvider,
+          { sessionId, nativeSessionId: sdkSessionId, providerId },
+          { fresh: true },
+        );
+        if (pooled !== undefined) {
+          return subscriptionPoolAccountUsageLimit(family, pooled, { agentKind, modelId });
+        }
+      }
+      return family === 'claude'
         ? claudeAccountUsageLimit(await readClaudeSubscriptionUsageSnapshotForDeviceLink(providerId ?? undefined, { fresh: true }), modelId)
         : family === 'codex'
           ? codexAccountUsageLimit(await readCodexAccountUsageSnapshotWithWebRefresh(providerId ?? undefined, { fresh: true }), { agentKind, modelId })
-          : readAccountUsageLimit(agentKind, providerId, modelId),
+          : readAccountUsageLimit(agentKind, providerId, modelId);
+    },
     unavailable: (error) => log.info('usage reset lookup unavailable; retaining provider error hint', { sessionId, error: String(error) }),
   });
 }
@@ -2076,7 +2094,7 @@ export async function hasRestoredCodexQuota(sessionId: string, expectedProvider:
   if (!kind) return false;
   const route = resolveSessionRuntimeRoute(sessionId, kind, row);
   const providerId = route.providerId ?? (kind === 'codex' ? 'openai' : null);
-  if (providerId === 'openai') {
+  if (providerId && subscriptionFamilyOf(kind, providerId) === 'codex') {
     const restored = await hasRestoredPooledCodexQuota(expectedProvider, sessionId, row.sdkSessionId, route.modelId);
     if (restored !== null) return restored;
   }

@@ -290,6 +290,7 @@ import {
   readSubscriptionPoolScheduling,
   readLegacySubscriptionPoolUsage,
   readSubscriptionSessionUsage,
+  readSubscriptionTaskUsage,
   readSubscriptionSessionAccount,
   canSwitchHostedSubscriptionAccount,
   readSubscriptionPoolAccountUsages,
@@ -6238,6 +6239,99 @@ describe('native account assignment on the executing computer', () => {
     h.pools.anthropic!.disconnected = true;
     expect(await readSubscriptionPoolAccountUsages('anthropic')).toBeUndefined();
     expect((await readSubscriptionPool('anthropic')).accounts.every((a) => !a.usage)).toBe(true);
+  });
+
+  // Regression (unit): a shared created subscription provider (`anthropic-sub-*`) whose account
+  // was merged into the built-in pool previously returned `[]` from readSubscriptionPoolAccountUsages
+  // because it only checked providerAccounts instead of servingAccounts. Minimal failing input:
+  // created provider with pinned account moved to built-in `anthropic`.
+  it('resolves the pinned serving account and authoritative kind for merged created providers', async () => {
+    const providerId = 'anthropic-sub-a1b2c3d4';
+    h.created[providerId] = { kind: 'anthropic', name: 'Claude · Ultra', account: 'second' };
+    // Merged into built-in `anthropic`: no account is placed directly on `providerId`.
+    h.placement['anthropic:second'] = 'anthropic';
+    const resetsAt = Date.now() / 1000 + 3600;
+    h.usage.mockImplementation(async (_provider: string, dir: string) => ({
+      claudeUsage: {
+        updatedAt: Date.now(),
+        fiveHour: { utilization: dir.endsWith('second') ? 35 : 5, resetsAt },
+        sevenDay: { utilization: dir.endsWith('second') ? 60 : 10, resetsAt },
+      },
+    }));
+    const shared = await readSubscriptionPoolAccountUsages(providerId);
+    expect(shared).toEqual([
+      expect.objectContaining({
+        kind: 'anthropic',
+        usage: expect.objectContaining({
+          claudeUsage: expect.objectContaining({
+            fiveHour: expect.objectContaining({ utilization: 35 }),
+            sevenDay: expect.objectContaining({ utilization: 60 }),
+          }),
+        }),
+      }),
+    ]);
+    // Pausing or disconnecting the destination pool hides the merged share's quota instead of leaking.
+    h.pools.anthropic!.accounts = h.pools.anthropic!.accounts.map(a => a.id === 'second' ? { ...a, paused: true } : a);
+    expect(await readSubscriptionPoolAccountUsages(providerId)).toEqual([]);
+    h.pools.anthropic!.accounts = h.pools.anthropic!.accounts.map(a => ({ ...a, paused: false }));
+    h.pools.anthropic!.disconnected = true;
+    expect(await readSubscriptionPoolAccountUsages(providerId)).toEqual([]);
+  });
+
+  // Regression (unit): local and remote usage-limit reset lookups must read the task's actual
+  // bound subscription account or created subscription provider (`anthropic-sub-*` / `openai-sub-*`),
+  // never the legacy default CLI reader or another pool member.
+  it('reads task-scoped and created-provider subscription usage for reset lookups', async () => {
+    const providerId = 'anthropic-sub-a1b2c3d4';
+    h.created[providerId] = { kind: 'anthropic', name: 'Claude · Ultra', account: 'second' };
+    h.placement['anthropic:second'] = providerId;
+    const resetsAt = Date.now() / 1000 + 7200;
+    h.usage.mockImplementation(async (_provider: string, dir: string) => ({
+      claudeUsage: {
+        updatedAt: Date.now(),
+        fiveHour: { utilization: dir.endsWith('second') ? 100 : 12, resetsAt },
+      },
+    }));
+    h.bindings.set('task:task-1', { providerId: 'anthropic', accountId: 'second' });
+    h.bindings.set('native:sdk-1', { providerId: 'anthropic', accountId: 'second' });
+
+    // Task-bound lookup reads the pinned account even when default still has quota.
+    const taskUsage = await readSubscriptionTaskUsage('anthropic', {
+      sessionId: 'task-1',
+      nativeSessionId: 'sdk-1',
+      providerId,
+    });
+    expect(taskUsage?.claudeUsage?.fiveHour?.utilization).toBe(100);
+
+    // Remote legacy quota channel supports created providers with or without sdkSessionId and echoes providerId.
+    const withSession = await readLegacySubscriptionQuota(
+      readLegacySubscriptionPoolUsage,
+      'maker:usage:claude-subscription',
+      [providerId, true, { subscriptionSessionId: 'sdk-1' }],
+      readSubscriptionSessionUsage,
+    );
+    expect(withSession).toMatchObject({ providerId, fiveHour: { utilization: 100 } });
+
+    const firstTurn = await readLegacySubscriptionQuota(
+      readLegacySubscriptionPoolUsage,
+      'maker:usage:claude-subscription',
+      [providerId, true, 'default-subscription-account'],
+      readSubscriptionSessionUsage,
+    );
+    expect(firstTurn).toMatchObject({ providerId, fiveHour: { utilization: 100 } });
+
+    // Unbound native session on a created provider fails closed (null) instead of falling through to legacy default.
+    const unbound = await readLegacySubscriptionQuota(
+      readLegacySubscriptionPoolUsage,
+      'maker:usage:claude-subscription',
+      [providerId, true, { subscriptionSessionId: 'unknown-sdk' }],
+      readSubscriptionSessionUsage,
+    );
+    expect(unbound).toBeNull();
+
+    // Removed bound account fails closed (null) rather than borrowing another pool account.
+    h.pools.anthropic!.accounts = h.pools.anthropic!.accounts.filter(a => a.id !== 'second');
+    expect(await readSubscriptionTaskUsage('anthropic', { sessionId: 'task-1', providerId })).toBeNull();
   });
   // User-reported quota oscillation / unit: frequent SDK events used to renew
   // the cache clock forever. Existing tests never cross endpoint TTL with events.
