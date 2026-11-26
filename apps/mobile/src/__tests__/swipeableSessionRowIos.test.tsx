@@ -356,5 +356,11 @@ it('uses snooze in the inbox secondary slot, while ordinary rows retain More', (
   expect(controls.onArchive).toHaveBeenCalledWith(session);
   draw(false);
   act(() => (host.querySelector('[data-testid="swipe.optionsAction"]') as HTMLButtonElement).click());
-  expect(controls.onShowOptions).toHaveBeenCalledWith(session, { inboxMode: false });
+  expect(controls.onShowOptions).toHaveBeenCalledWith(session);
+  // A pinned-section row tells the sheet to leave out the inbox actions; other rows say nothing.
+  act(() => root.render(
+    <SwipeableSessionRow {...controls} onSnooze={onSnooze} pinnedSection session={session} testID="swipe">row</SwipeableSessionRow>,
+  ));
+  act(() => (host.querySelector('[data-testid="swipe.optionsAction"]') as HTMLButtonElement).click());
+  expect(controls.onShowOptions).toHaveBeenLastCalledWith(session, { pinnedSection: true });
 });

@@ -57,8 +57,8 @@ export function useSessionListActions(options?: {
   const { invoke } = useDeviceLink();
   const swipeRegistry = useMemo(() => createSwipeRowRegistry(), []);
   const [actionSheetSession, setActionSheetSession] = useState<RemoteSession | null>(null);
-  /** The opening row's inbox context; undefined keeps the list mode's default. */
-  const [actionSheetInbox, setActionSheetInbox] = useState<boolean | undefined>(undefined);
+  /** Where the options sheet was opened; undefined keeps the list mode's default. */
+  const [actionSheetContext, setActionSheetContext] = useState<SessionOptionsContext | undefined>(undefined);
   const [renameSessionTarget, setRenameSessionTarget] = useState<RemoteSession | null>(null);
   const [renameSessionDraft, setRenameSessionDraft] = useState('');
   const [snoozeSessionTarget, setSnoozeSessionTarget] = useState<RemoteSession | null>(null);
@@ -292,7 +292,7 @@ export function useSessionListActions(options?: {
   }, [runSwipeAction]);
 
   const showSessionOptions = useCallback((session: RemoteSession, context?: SessionOptionsContext) => {
-    setActionSheetInbox(context?.inboxMode);
+    setActionSheetContext(context);
     setActionSheetSession(session);
   }, []);
 
@@ -385,7 +385,7 @@ export function useSessionListActions(options?: {
     snoozeSessionTarget, confirmSnooze, closeSnooze, handleSnoozeClosed,
     patchSession,
     actionSheetSession,
-    actionSheetInbox,
+    actionSheetContext,
     archiveSession,
     closeRenameSession,
     confirmRenameSession,

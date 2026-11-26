@@ -117,6 +117,8 @@ export interface SessionSwipeControls {
 
 export interface SwipeableSessionRowProps {
   inboxMode?: boolean;
+  /** Row sits in the pinned section: its options sheet leaves out the inbox actions. */
+  pinnedSection?: boolean;
   /** 目标会话:id 作互斥 key,pinnedAt 决定右滑按钮图标(Pin/PinOff)与动作方向。 */
   session: RemoteSession;
   registry: SwipeRowRegistry;
@@ -148,6 +150,7 @@ function SwipeableSessionRowInner({
   onSnooze,
   onComplete,
   inboxMode = false,
+  pinnedSection = false,
   testID,
   children,
 }: SwipeableSessionRowProps) {
@@ -259,8 +262,9 @@ function SwipeableSessionRowInner({
   const handleOptionsPress = useCallback(() => {
     close();
     if (snoozeAction) onSnooze?.(session);
-    else onShowOptions(session, { inboxMode });
-  }, [close, inboxMode, onShowOptions, onSnooze, snoozeAction, session]);
+    else if (pinnedSection) onShowOptions(session, { pinnedSection: true });
+    else onShowOptions(session);
+  }, [close, onShowOptions, onSnooze, pinnedSection, snoozeAction, session]);
 
   const handleArchivePress = useCallback(() => {
     onArchive(session);

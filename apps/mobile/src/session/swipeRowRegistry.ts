@@ -17,12 +17,17 @@ import {
 export type SessionSwipeAction = 'pin' | 'unpin' | 'archive' | 'restore' | 'delete' | 'rename' | 'snooze' | 'wake';
 
 /**
- * Where the options sheet was opened. Inbox actions (snooze / wake) belong to rows in the inbox
- * sections; the pinned section is a shortcut list without them (2026-11-25 user decision).
- * Callers that do not say keep the list mode's default.
+ * Where the options sheet was opened. The pinned section is a shortcut list without the inbox
+ * actions (snooze / wake; 2026-11-25 user decision). Every other row, including shared tasks and
+ * search results, keeps the list mode's default.
  */
 export interface SessionOptionsContext {
-  inboxMode: boolean;
+  pinnedSection: true;
+}
+
+/** Whether the options sheet offers the inbox actions. */
+export function sessionOptionsInboxMode(listInboxMode: boolean, context?: SessionOptionsContext): boolean {
+  return listInboxMode && context?.pinnedSection !== true;
 }
 
 export interface SwipeRowRegistry {
