@@ -7510,7 +7510,8 @@
       "localNetwork": {
         "label": "Red local",
         "deniedHint": "Sin este permiso, los ordenadores y teléfonos de la misma red no pueden conectarse directamente a este ordenador. Pasan por el relé, que es más lento.",
-        "settingsHint": "Activa Cindy en Ajustes del Sistema › Privacidad y seguridad › Red local. Se aplica en cuanto vuelvas."
+        "promptedHint": "Haz clic en Permitir en el aviso de macOS. Si no aparece ninguno, abre Ajustes del Sistema para activarlo manualmente.",
+        "settingsHint": "En Privacidad y seguridad, abre Red local y activa Cindy. Si no aparece en la lista, pulsa + para añadir esta app; surtirá efecto en cuanto vuelvas."
       }
     },
     "imBot": {
@@ -7981,6 +7982,10 @@
         "toggle-sidebar": {
           "label": "Mostrar u ocultar la barra lateral",
           "description": "Contraer o expandir la barra lateral de la lista de sesiones"
+        },
+        "copy-session-link": {
+          "label": "Copiar enlace de la sesión",
+          "description": "Copia el enlace de la sesión abierta"
         },
         "session-history-back": {
           "label": "Tarea anterior",
@@ -9704,6 +9709,7 @@
         "createTitle": "Agregar servidor MCP",
         "editTitle": "Editar servidor MCP",
         "desc": "Solo MCP remoto http / sse. Las nuevas sesiones de Agent podrán usarlo después de guardar; las sesiones de Agent en curso no se verán afectadas.",
+        "embeddedGuide": "Tu asistente abrió este formulario para configurar MCP en la tarea actual. Sigue las instrucciones del proveedor del servicio para revisar los datos que ya están rellenados, completar los que falten y guardar la configuración.",
         "teammateDesc": "Solo MCP remoto http / sse. Después de guardar, tu amigo lo añade a sus herramientas y puede usarlo desde el siguiente mensaje de esta conversación, sin necesidad de una nueva sesión."
       },
       "fields": {
@@ -12122,6 +12128,8 @@
         "loadEarlierFailed": "No se pudieron cargar los mensajes anteriores. Inténtalo de nuevo.",
         "emptyTitle": "Aún no hay mensajes en este grupo",
         "emptyDescription": "Di algo para comenzar y tus amigos se unirán. @ un amigo para que solo ellos respondan.",
+        "emptyDescriptionWithAssistant": "Menciona a @Cindy o usa el menú de invitación de la esquina superior derecha para invitar a personas o agregar amigos.",
+        "emptyDescriptionInvite": "Desde el menú de invitación de la esquina superior derecha puedes invitar a personas o agregar amigos.",
         "roundEnded": "Los amigos terminaron",
         "stepTag": "Paso {{count}}",
         "sending": "Enviando",
@@ -12460,7 +12468,7 @@
         "loginRequired": "Inicia sesión en tu cuenta y vuelve a intentarlo.",
         "requestFailed": "El servicio de chat no está disponible. Vuelve a intentarlo en unos momentos.",
         "copyFailed": "No se pudo copiar. Selecciona el enlace y cópialo manualmente.",
-        "createDescription": "Elige amigos o crea primero el grupo e invita a otras personas a unirse.",
+        "createDescription": "Después de crear el grupo, puedes invitar a personas y agregar amigos.",
         "settings": {
           "name": "Nombre del grupo",
           "topic": "Tema",
@@ -13767,6 +13775,7 @@
           "overloadRetryingNoCount": "El servicio del modelo está ocupado. Reintentando automáticamente…",
           "overloadFailed": "⚠️ El servicio del modelo está ocupado: el proveedor no tiene capacidad en este momento. Vuelve a enviar este mensaje aquí para reintentarlo o cambia a otro modelo en Cindy. (Pulsar «Reintentar» en la app de escritorio también continúa la tarea, pero el resultado no volverá a este mensaje)."
         },
+        "openAiReconnect": "Vuelve a conectar ChatGPT en Cindy desde Configuración → Proveedores → OpenAI y envía aquí un mensaje.",
         "audioInputUnavailable": "Esta conexión al modelo no admite audio directamente. Pide a Cindy que transcriba el audio antes de continuar.",
         "toolLoop": {
           "generic": "El modelo llamó a herramientas repetidamente demasiadas veces, así que Cindy detuvo este turno para evitar un bucle infinito. Envía un mensaje nuevo para continuar.",
@@ -15784,7 +15793,6 @@
       "piRetryHistoryUnavailable": "Tu mensaje no se envió. Pi no pudo leer el historial necesario para enviarlo. Puedes volver a intentarlo o continuar en una tarea nueva.",
       "upstreamStatusError": "El proveedor devolvió {{status}}, por lo que la respuesta no pudo completarse.",
       "messageNotSent": "Tu mensaje no se envió.",
-      "upstreamEmpty550": "El servicio del modelo devolvió HTTP 550 con una respuesta vacía",
       "replyFailed": "No se pudo completar la respuesta",
       "queuedSendRecovery": "Tu mensaje no se envió. Selecciona «Reintentar» para enviarlo tal cual. Si envías un mensaje nuevo, reemplazará al anterior.",
       "retryTitle": "Reenviar el último mensaje",
@@ -16631,7 +16639,7 @@
       "REMOTE_WORKDIR_UNAVAILABLE": "El directorio de trabajo remoto no está disponible. Verifica que la carpeta aún exista en esa computadora y vuelve a intentarlo.",
       "REMOTE_OPTIMISTIC_SESSION_STATE_UNAVAILABLE": "La computadora aún no puede confirmar si se envió este mensaje. Espera un momento y vuelve a intentarlo. No envíes el mismo mensaje dos veces.",
       "REMOTE_AGENT_UNAVAILABLE": "No se pudo comunicar con la computadora que ejecuta el Agent. Revisa los detalles del error.",
-      "REMOTE_AGENT_TIMEOUT": "Se agotó el tiempo de espera de la computadora que ejecuta el Agent. El resultado es desconocido. Revisa la tarea antes de volver a intentarlo.",
+      "REMOTE_AGENT_TIMEOUT": "El equipo que ejecuta el Agent aún no ha respondido. Revisa el progreso de la tarea. Si sigue en curso o ya ha terminado, no hace falta volver a intentarlo.",
       "REMOTE_AGENT_LINK_BUSY": "La comunicación con la computadora que ejecuta el Agent está saturada. Espera un momento antes de volver a intentarlo.",
       "REMOTE_AGENT_UNRESPONSIVE": "La computadora que ejecuta el Agent no respondió en varios intentos, por lo que las llamadas se pausaron temporalmente. Espera un momento antes de volver a intentarlo.",
       "REMOTE_AGENT_OFFLINE": "La computadora que ejecuta el Agent está sin conexión. Vuelve a intentarlo cuando se conecte de nuevo.",
@@ -16925,6 +16933,8 @@
       "retryIn": "Reintento automático en {{seconds}} s"
     },
     "subscriptionAccountError": {
+      "unreachable": "El servicio de cuentas de Codex no responde.",
+      "rechecking": "El servicio de cuentas de Codex no responde. Se reintentará a las {{resetAt}}.",
       "poolModelLimited": "Se ha alcanzado el límite de uso de la suscripción para este modelo. Puedes cambiar de modelo.",
       "poolRetryUntil": "Vuelve a intentarlo después de {{resetAt}}.",
       "poolOtherSignedOut": "Otra cuenta de suscripción tiene la sesión cerrada. Inicia sesión en el equipo que ejecuta la tarea y vuelve a intentarlo.",
@@ -22954,6 +22964,16 @@
     "refresh": "Actualizar cuota"
   },
   "subscriptionAccounts": {
+    "existing": {
+      "menu": "Más formas de añadir una cuenta",
+      "connect": "Conectar una sesión existente…",
+      "found": "{{count}} disponibles",
+      "title": "Sesiones en {{device}}",
+      "note": "Cindy y la CLI compartirán la configuración de la cuenta.",
+      "attach": "Conectar",
+      "choose": "Elegir otra carpeta…",
+      "unverified": "No se pudo verificar la suscripción."
+    },
     "pluginSignIn": {
       "method": "Método de inicio de sesión",
       "secretHint": "La clave solo va al plugin, que la guarda en la carpeta propia de esta cuenta. Cindy no la guarda ni la envía a otros ordenadores.",

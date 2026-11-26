@@ -5,10 +5,10 @@
 > 或决定开发中得到的知识该写到哪里、新增规则文档、整理与迁移规则文档之前
 > **适用路径**：`AGENTS.md`、`{apps,packages}/**/AGENTS.md`、`REVIEW.md`、`CONTRIBUTING*.md`、
 > `docs/dev-rules/**`、`docs/product-rules/**`、`docs/design-rules/**`、`scripts/rule-index.mjs`、
-> `scripts/check-dco.mjs`、`.githooks/**`、`.github/PULL_REQUEST_TEMPLATE.md`
+> `scripts/check-dco.mjs`、`scripts/repo-worktrees.mjs`、`.githooks/**`、`.github/PULL_REQUEST_TEMPLATE.md`
 
 本文是仓库交付约定的正本，维护 worktree 会话契约、DCO、提交验证、直推 `main` 的
-额外门禁、review 严重度口径、项目知识归属与文档整理原则；根 [AGENTS.md](../../AGENTS.md)
+额外门禁、合并方式、review 严重度口径、项目知识归属与文档整理原则；根 [AGENTS.md](../../AGENTS.md)
 保留关键约束与阅读入口。提交、push 和 PR 的时机由用户或宿主工作流决定，本文不额外授权外部写操作。
 自动审阅是建议性检查，口径与修改入口见 [REVIEW.md](../../REVIEW.md)，不替代人工 review
 或 CI 门禁。
@@ -180,6 +180,31 @@ worktree 建成空目录或自动切到项目根继续修改代码。
 - **直推 `main` 的额外门禁**：push 前由独立 reviewer 对最终 diff 做一次对抗性 review，对照
   `docs/` 下规则找实际问题；发现 P0／P1 必须先修复并重新 review，直到没有 P0／P1。commit
   可以先创建，但 push 的必须是 review 通过的最终 commit。
+
+### 合并方式
+
+- **普通 PR 以 squash 合入 `main`**：主线一条记录对应一个 PR。仓库设置让这条记录的标题
+  固定取 PR 标题（带 `(#N)`），正文保留各提交信息与 `Signed-off-by`；分支内的过程提交和
+  同步 `main` 的 merge 留在 PR 页面。PR 标题会原样成为主线记录，按 PR 模板写清楚。
+- **例外只有两种**：维护者给 PR 加 `merge:keep-commits` 标签时用 merge commit，保留分支内
+  逐条提交，用于长期分支合回、上游同步或刻意分步的大改动；维护者在主干侧代为解决冲突时也用
+  merge commit，因为只有 PR head 进入主线历史，GitHub 才会自动把 PR 标记为已合并。不使用
+  rebase merge。
+- **由合并流程执行，不由单次调用选择**：维护者的自动审查合并流程（review-pr）按同一策略
+  决定合并方式；调用方传入与策略不一致的方式会被拒绝，标签不是维护者添加的会停止合并。
+- **旧历史不改写**：2026-11-26 之前主线以 merge commit 为主（近 7 天 664 个合入 PR 中 615 个），
+  原因是没有写明策略、由每次合并自行选择，不是有意的约定。
+
+squash 后分支里的提交不会出现在 `main` 的历史中，对日常开发有这些影响：
+
+- 判断分支是否已合入看 PR 状态，不看 Git 祖先关系：`git branch --merged`、
+  `git merge-base --is-ancestor` 对 squash 合入的分支都显示未合入，`git branch -d` 会拒绝删除；
+  确认 PR 已合入后用 `git branch -D`。`pnpm repo:worktrees` 已按 PR 识别，base 列显示
+  `pr-merged`（实现与回归见 `scripts/repo-worktrees.mjs`、`scripts/__tests__/repo-worktrees.test.mjs`）。
+- 合入后的新工作从最新 `main` 新开分支，不在已合入的分支上接着提交：新 PR 会重复显示已合入
+  的改动，还可能与 `main` 冲突。
+- 以另一个 PR 分支为 base 的叠放 PR：下层合入后，上层先 rebase 到最新 `main`
+  （`git rebase --onto origin/main <下层分支合入前的 head>`）再继续，否则会带着下层的旧提交。
 
 ## 3. Review 严重度口径
 

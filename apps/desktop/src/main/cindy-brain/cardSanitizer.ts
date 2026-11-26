@@ -331,7 +331,15 @@ function sanitizeAttrs(tag: string, attrs: ParsedAttrs, opts: CssOpts): string |
   // 交互卡(v2):data-ghost-action 声明可点区域(任意允许标签都可挂)。
   // 值过 GHOST_CARD_ACTION_ID_RE 才落地——不合法只丢这条属性(元素与文字
   // 保留,只是点不动),不牵连整个元素。点击由宿主受信桥委托回传,卡内零脚本。
-  const action = audioSlot ? '' : (attrs['data-ghost-action'] ?? '').trim();
+  // PR 合并就绪按钮(data-ghost-pr-merge-ready="owner/repo#123"):只挂带动作的 button。
+  // 插件也可把未就绪时的休眠按钮写成 display:none + data-ghost-pr-merge-action="pr:merge"
+  // (不含 data-ghost-action,旧宿主和旧手机都不会露出);新宿主在这里把动作提升为
+  // data-ghost-action,再按标题栏同源 PR 状态(mergeState === 'CLEAN')实时显隐。
+  const mergeReady = tag === 'button' && !audioSlot ? (attrs['data-ghost-pr-merge-ready'] ?? '').trim() : '';
+  const mergeReadyValid = Boolean(cardPrSlotKey(mergeReady));
+  const rawAction = audioSlot ? '' : (attrs['data-ghost-action'] ?? '').trim();
+  const deferredMergeAction = !rawAction && mergeReadyValid ? (attrs['data-ghost-pr-merge-action'] ?? '').trim() : '';
+  const action = rawAction || deferredMergeAction;
   const actionValid = GHOST_CARD_ACTION_ID_RE.test(action);
   if (actionValid) {
     parts.push(` data-ghost-action="${escapeAttr(action)}"`);
@@ -348,6 +356,7 @@ function sanitizeAttrs(tag: string, attrs: ParsedAttrs, opts: CssOpts): string |
     if (typeof promptDecl === 'string' && promptDecl.length <= GHOST_CARD_PROMPT_PLACEHOLDER_MAX_LEN) {
       parts.push(` data-ghost-prompt="${escapeAttr(promptDecl)}"`);
     }
+    if (mergeReadyValid) parts.push(` data-ghost-pr-merge-ready="${escapeAttr(mergeReady)}"`);
   }
   // 卡内外链(v3):data-ghost-link 声明"点击经宿主确认框后 openExternal"。
   // <a href> 转写为同一声明——真实 href 不落地(无脚本 iframe 里点真链接会把

@@ -2921,6 +2921,7 @@ class McpHttpClient {
   private readonly requestUrl: string;
   private readonly directLoopback: boolean;
   private readonly requestTimeoutMs: number;
+  private readonly startupBudgetMs: number;
   private startupDeadlineAt: number | null;
   serverInfoName: string | undefined;
 
@@ -2949,18 +2950,27 @@ class McpHttpClient {
       ? configuredTimeout!
       : 600_000;
     const configuredStartupTimeout = server.remote?.startupTimeoutMs;
-    const startupTimeoutMs = Number.isInteger(configuredStartupTimeout)
+    this.startupBudgetMs = Number.isInteger(configuredStartupTimeout)
       && configuredStartupTimeout! > 0
       && configuredStartupTimeout! < 30_000
       ? configuredStartupTimeout!
       : 10_000;
-    this.startupDeadlineAt = Date.now() + startupTimeoutMs;
+    this.startupDeadlineAt = Date.now() + this.startupBudgetMs;
   }
 
-  private nextRequestTimeoutMs(): number {
+  private timeoutError(method: string | undefined, fallback: string): McpBridgeError {
+    if (this.server.remote && this.startupDeadlineAt !== null && (method === 'initialize' || method === 'tools/list')) {
+      const elapsed = Date.now() - (this.startupDeadlineAt - this.startupBudgetMs);
+      return new McpBridgeError('startup timed out during ' + method + ' after ' + elapsed
+        + 'ms (startup budget ' + this.startupBudgetMs + 'ms, request limit ' + this.requestTimeoutMs + 'ms)');
+    }
+    return new McpBridgeError(fallback);
+  }
+
+  private nextRequestTimeoutMs(method: string | undefined): number {
     if (this.startupDeadlineAt === null) return this.requestTimeoutMs;
     const remaining = this.startupDeadlineAt - Date.now();
-    if (remaining <= 0) throw new McpBridgeError('startup timed out');
+    if (remaining <= 0) throw this.timeoutError(method, 'startup timed out');
     return Math.max(1, Math.min(this.requestTimeoutMs, remaining));
   }
 
@@ -2997,7 +3007,8 @@ class McpHttpClient {
   }
 
   private async post<T>(body: unknown, consume: (response: Response) => Promise<T>, signal?: AbortSignal, notificationTimeoutMs?: number): Promise<T> {
-    const requestTimeoutMs = notificationTimeoutMs ?? this.nextRequestTimeoutMs();
+    const request = body as { id?: number; method?: string };
+    const requestTimeoutMs = notificationTimeoutMs ?? this.nextRequestTimeoutMs(request.method);
     this.inFlight += 1;
     const controller = new AbortController();
     const cancel = () => controller.abort();
@@ -3021,7 +3032,6 @@ class McpHttpClient {
       // body 也会按 requestTimeoutMs 中止，不会无限阻塞后续 server 注册。
       return await consume(res);
     } catch (error) {
-      const request = body as { id?: number; method?: string };
       if (controller.signal.aborted && request.id !== undefined && request.method !== 'initialize') {
         // Aborting fetch only ends our wait. Cancel the exact MCP request on a
         // separate bounded POST; never reuse the already-aborted caller signal.
@@ -3032,7 +3042,7 @@ class McpHttpClient {
       if (signal?.aborted) throw new McpBridgeError('request cancelled');
       if (controller.signal.aborted) {
         this.needsReconnect = true;
-        throw new McpBridgeError('request timed out');
+        throw this.timeoutError(request.method, 'request timed out');
       }
       if (error instanceof McpBridgeError) throw error;
       if (error instanceof SyntaxError) throw new McpBridgeError('invalid JSON response');
@@ -5604,7 +5614,12 @@ export default async function cindyBridge(piApi: any) {
   const servers = Array.isArray(cfg.servers) ? cfg.servers : [];
   // 全部 server 并行启动：每个 remote 有独立短预算，多个黑洞 provider 也只占一份
   // startup window，不会串行叠加到 Pi RPC 的 30s ready 超时。
+  // The gateway and its reconnectors use the configured server name as identity.
+  // Claim it before the first await so the first descriptor owns both connections.
+  const claimedNames = new Set<string>();
   await Promise.all(servers.map(async (server) => {
+    if (claimedNames.has(server.name)) return;
+    claimedNames.add(server.name);
     mcpGateway.setServerDisplayName(server.name, server.displayName);
     mcpGateway.registerReconnect(server.name, () => connectServer(server, token));
     try {
