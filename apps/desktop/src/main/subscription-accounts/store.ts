@@ -121,7 +121,7 @@ export function accountDirectory(provider: SubscriptionProvider, id: string): st
   );
 }
 export function readPool(provider: SubscriptionProvider): SubscriptionPoolConfig | null {
-  store.invalidateIfChanged();
+  store.invalidateIfChanged(60_000);
   return store.read().pools[provider] ?? null;
 }
 /** OpenAI 池里从旧 Codex 连接导入的账号(旧连接 ID → 账号)；账号池文件读不了时返回 null，不当成没有。 */
@@ -230,14 +230,18 @@ export async function writeAccountBindings(
   accountId: string,
   /** The provider the task named (placement.ts); omitted for the built-in provider. */
   via?: string,
+  assertCurrent?: () => void,
 ): Promise<void> {
   const through = via && via !== providerId ? { via } : {};
-  await store.updateAtomic(({ value }) => ({
-    bindings: {
-      ...value.bindings,
-      ...Object.fromEntries(
-        keys.filter(Boolean).map((key) => [`${providerId}:${key}`, { providerId, accountId, ...through }]),
-      ),
-    },
-  }));
+  await store.updateAtomic(({ value }) => {
+    assertCurrent?.();
+    return {
+      bindings: {
+        ...value.bindings,
+        ...Object.fromEntries(
+          keys.filter(Boolean).map((key) => [`${providerId}:${key}`, { providerId, accountId, ...through }]),
+        ),
+      },
+    };
+  });
 }

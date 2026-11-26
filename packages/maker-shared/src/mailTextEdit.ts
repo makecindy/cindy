@@ -8,8 +8,9 @@ const omitted = new Set('head script style template noscript svg math iframe obj
 
 /** Source offsets let both clients change text without serializing the document:
  * styles, links, CID references and untouched markup retain their original bytes.
- * No HTML is evaluated and preview URLs never enter the saved draft. */
-export function mailTextParagraphs(html: string): Paragraph[] {
+ * No HTML is evaluated and preview URLs never enter the saved draft.
+ * Plain-text projections can keep line breaks between inline nodes. */
+export function mailTextParagraphs(html: string, { preserveMultilineWhitespace = false } = {}): Paragraph[] {
   const doc = parse(html, { sourceCodeLocationInfo: true });
   const result: Paragraph[] = [];
   let runs: Run[] = [];
@@ -29,7 +30,8 @@ export function mailTextParagraphs(html: string): Paragraph[] {
       }
     }
     const count = result.length;
-    if ('value' in node && node.sourceCodeLocation && (node.value.trim() || !/[\r\n]/.test(node.value))) {
+    if ('value' in node && node.sourceCodeLocation
+      && (preserveMultilineWhitespace || node.value.trim() || !/[\r\n]/.test(node.value))) {
       runs.push({ start: node.sourceCodeLocation.startOffset, end: node.sourceCodeLocation.endOffset, text: node.value });
     }
     if ('childNodes' in node) for (const child of node.childNodes) walk(child);

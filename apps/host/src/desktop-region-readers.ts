@@ -17,7 +17,6 @@
  * Key: `<file>#<what it reads>`, or `<file>#<enclosing function>:realm-fallback`; one sorted entry per line.
  */
 export const DESKTOP_REGION_READERS: Readonly<Record<string, { host: string }>> = {
-  'apps/desktop/src/main/claude-orphan-reaper.ts#CURRENT_CINDY_REGION': { host: 'Module-level Claude process markers (XDT_CLAUDE_PATH_MARKERS); the Host imports only killProcessTree (codex-tool-tree-reaper.ts), so they are unused' },
   'apps/desktop/src/main/maker-host/active-catalog.ts#CURRENT_CINDY_REGION': { host: 'Before /models first succeeds, cn hides the unverified XD image, embedding and non-Seedance video models (provider-access-policy.ts); every catalog reader follows, including the engines\' model lists (3c)' },
   'apps/desktop/src/main/maker-host/codexLocalSessionsCore.ts#CURRENT_CINDY_REGION': { host: 'cn also looks for old Codex threads in the legacy xdt-maker codex-home when resuming; the fallback codex-home is unreachable (codex-thread-storage.ts binds assertCurrent)' },
   'apps/desktop/src/main/maker-ipc/piUsageReceiptsCore.ts#CURRENT_CINDY_REGION': { host: 'The Pi receipt pricing context (TurnPricingContext.region) of the turn usage records (release table row 13, 3d): the Host\'s edition, as the desktop\'s' },

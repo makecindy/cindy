@@ -86,7 +86,7 @@ it.each(staleCronValues)('starts the hour preset at its default, ignoring exact-
 
 it.each([7, 28, 59])('switches a stale Cron from the current %i-minute interval and keeps the legacy value on menu re-selection', (minutes) => {
   const onChange = renderChip('*/5 * * * *', minutes * 60_000);
-  fireEvent.click(screen.getByRole('button', { name: 'scheduler.chips.timingMode.cron' }));
+  fireEvent.click(screen.getByRole('radio', { name: 'scheduler.chips.timingMode.cron' }));
   expect(onChange).toHaveBeenCalledWith({ cronExpr: `*/${minutes} * * * *`, intervalMs: undefined });
   expect(screen.getByRole('combobox').textContent).toContain(`${minutes}*`);
   onChange.mockClear();

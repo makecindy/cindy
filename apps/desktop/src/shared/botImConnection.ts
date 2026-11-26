@@ -258,6 +258,12 @@ export interface BotImConnectionLanesPayload {
 
 export const BOT_IM_CONNECTION_CHANGED_EVENT = 'botImConnection:changed';
 
+/**
+ * 添加连接失败的 `CONNECT_FAILED: <原因>` 里, 「只是建连握手超时」用的稳定原因。
+ * 页面据此提示「连接超时, 请重试」并保留刚填的内容; 其它原因仍是诊断原文。
+ */
+export const BOT_IM_CONNECT_TIMEOUT_REASON = 'timeout';
+
 /** Local-only settings: passwords are write-only and an empty value retains the saved password. */
 export type BotIMessageConfig = Omit<Extract<BotImConnectionAddInput, { channel: 'imessage' }>, 'botId' | 'channel' | 'password'>;
 export type BotIMessageUpdateInput = BotIMessageConfig & { password?: string };

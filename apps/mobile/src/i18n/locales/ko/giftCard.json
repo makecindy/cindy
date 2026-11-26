@@ -13,6 +13,7 @@
   "cardLabel": "Cindy 기프트 카드, {{amount}}",
   "fields": {
     "validity": "유효 기간",
+    "validityValue_one": "받은 후 {{count}}일",
     "validityValue_other": "받은 후 {{count}}일",
     "claimBy": "받기 기한",
     "destination": "추가 위치",

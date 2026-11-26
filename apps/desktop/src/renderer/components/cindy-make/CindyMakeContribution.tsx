@@ -21,6 +21,7 @@ import {
   type CindyMakeContributionError,
   type CindyMakeContributionView,
 } from '../../../shared/cindyMakeContribution';
+import { Checkbox } from '@/components/ui/checkbox';
 
 const key = 'cindyMake.contribution';
 
@@ -355,12 +356,11 @@ export function CindyMakeContributionDialog({
                 {draft.touchesUi && <li>{t(`${key}.dialog.uiNote`)}</li>}
               </ul>
               <label className="flex min-h-8 cursor-pointer items-start gap-2 text-13 text-[var(--text-primary)]">
-                <input
-                  type="checkbox"
+                <Checkbox
                   checked={signed}
                   disabled={submitting}
                   onChange={(event) => setSigned(event.target.checked)}
-                  className="mt-0.5 size-4 shrink-0 accent-[var(--confirm-btn-primary-bg)]"
+                  className="mt-0.5"
                 />
                 <span>{t(`${key}.dialog.dco`, { name: name.trim(), email: email.trim() })}</span>
               </label>

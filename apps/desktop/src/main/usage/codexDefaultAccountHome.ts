@@ -20,12 +20,14 @@ import { accountDirectory, readPool } from '../subscription-accounts/store.js';
 import {
   codexAccountRpc,
   readNativeAccount,
+  readNativeCodexAccountAndRateLimits,
   readNativeCodexTokens,
+  readCodexWebTokens,
 } from '../subscription-accounts/nativeCli.js';
 
 type ResetTarget = Pick<
   CodexRateLimitResetServiceDeps,
-  'readRateLimits' | 'consumeResetCredit' | 'readAccountIdentity' | 'recordRateLimitSnapshot'
+  'readRateLimits' | 'readAccountAndRateLimits' | 'consumeResetCredit' | 'readAccountIdentity' | 'recordRateLimitSnapshot'
 >;
 
 function defaultAccountAvailable(): boolean {
@@ -56,6 +58,40 @@ export async function detachedDefaultCodexHome(): Promise<string | null> {
   // Read authorization after the filesystem checks, and recheck the pool after that read.
   return await isNativeProviderAuthBoundToSharedSystemCredential('openai')
     && defaultAccountAvailable() && accountDirectory('openai', 'default') === home ? home : null;
+}
+
+/** Credentials for the account whose web usage is being refreshed. */
+export async function readCodexWebUsageCredentials(
+  providerId: string | undefined,
+  adapter: {
+    getAccessToken(providerId?: string): Promise<string | null>;
+    getAccountId(providerId?: string): Promise<string | null>;
+  },
+) {
+  const readAdapter = async () => {
+    const accessToken = await adapter.getAccessToken(providerId);
+    const accountId = accessToken ? await adapter.getAccountId(providerId) : null;
+    return accessToken ? { accessToken, accountId } : null;
+  };
+  if (providerId && providerId !== 'openai') return readAdapter();
+
+  // A login can switch homes or rotate its file during I/O. Retry the selection once.
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const home = await detachedDefaultCodexHome();
+    if (readPool('openai')?.disconnected) return null;
+    if (home) {
+      const tokens = await readCodexWebTokens(home).catch(() => undefined);
+      if (await detachedDefaultCodexHome() !== home) continue;
+      if (!tokens?.canDispatch()) continue;
+      if (!tokens.accessToken) return null;
+      return { accessToken: tokens.accessToken, accountId: tokens.chatgptAccountId };
+    }
+    const credentials = await readAdapter();
+    if (await detachedDefaultCodexHome()) continue;
+    if (readPool('openai')?.disconnected) return null;
+    return credentials;
+  }
+  throw new Error('Default Codex usage credentials changed during refresh');
 }
 
 /** Identity of that home, with the credential guard used before a redemption. */
@@ -93,6 +129,10 @@ export function withDetachedDefaultCodexHome(
     assertScope();
   };
   return {
+    readAccountAndRateLimits: async () => {
+      const home = await resolveHome();
+      return home ? readNativeCodexAccountAndRateLimits(home, () => assertHome(home)) : undefined;
+    },
     readAccountIdentity: async () => {
       const home = await resolveHome();
       if (!home) {
