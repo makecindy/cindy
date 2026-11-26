@@ -1,12 +1,14 @@
 /**
- * 宿主侧的派发凭据账，以及「引用不存在的凭据」的核对。
+ * 宿主侧的派发凭据账，以及「引用了协议里根本不存在的派发结果值」的核对。
  *
  * 派发由宿主自己记账：send_to_worker 被接受的那一刻就写下凭据，只来自真实动作。
- * Lead 的回复里如果引用了宿主签发的编号或派发结果值，而账本里没有对应记录，
- * 那就是一个纯字段矛盾——不需要读语义，也不需要模型判定。
  *
- * 取舍：只认协议令牌（`wake_kind=`、`queued_message_id:` 一类），不认措辞。
- * 词表永远补不完；核对只比字段，误报的代价是多问一轮，不会动派发本身。
+ * 核对只判闭集：`wake_kind=<值>` 的值不在协议定义的集合里，就不可能是任何一次派发的
+ * 结果，这与账本里存了多少条、会话是否重启过都无关。
+ *
+ * 编号一律不核对。账本只在内存里、有保留期与条数上限：重启之后或过了保留期，一条真实
+ * 编号与编造的编号在账本里看起来完全一样。查不到不等于编造，所以缺席一律放行——
+ * 这条规则是维护者 2026-11-26 在 PR #10477 上明确要求的，别再改回「查不到就纠」。
  */
 
 /** 投递方式：direct = 本轮直接唤醒/立即执行，queued = 进队列等 Worker 自己取。 */
@@ -133,10 +135,9 @@ export function dispatchFactsForTurn(
   return [...ledger.facts];
 }
 
-/** 回复里引用了一个宿主没有记录的派发。 */
+/** 回复里引用了一个协议里不可能出现的派发结果值。 */
 export interface UnbackedDispatchClaim {
-  /** wake-kind = 引用了派发结果值；id = 引用了宿主签发的编号。 */
-  kind: 'wake-kind' | 'id';
+  kind: 'wake-kind';
   /** 回复里出现的那个值。 */
   token: string;
   /** 回复里使用的标签，用于回话时指出是哪一处。 */
@@ -145,42 +146,26 @@ export interface UnbackedDispatchClaim {
 
 /** 派发结果值闭集：这些值只可能来自工具返回。 */
 const WAKE_KIND_PATTERN = /\bwake_kind\s*[=:]\s*`?([a-z][a-z-]{2,20})`?/i;
-/** 宿主签发编号的协议标签：只认这几个标签，不猜裸 id。 */
-const LABELED_ID_ALL_PATTERN =
-  /\b(queued_message_id|message_id|dispatch_id)\s*[=:]\s*`?([A-Za-z0-9_-]{8,64})`?/gi;
 
 /**
- * 找出回复里「引用了宿主没有的派发凭据」的第一处。
+ * 宿主会发出的 wake_kind 值（`send_to_worker` / `create_worker` 的返回闭集）。
  *
- * - `wake_kind=<值>` 断言了一次派发结果，而账本里一条凭据都没有 → 无中生有。
- * - `queued_message_id: <编号>` 等标签后的编号必须命中账本里某个派发/排队编号。
- *
- * 账本非空时 `wake_kind` 不判：那时分不清它复述的是哪一次派发，误判代价高。
+ * 不在这个集合里的值不可能来自任何一次派发，所以判它不需要账本、也不怕账本丢失。
  */
-export function findUnbackedDispatchClaim(
-  leadSessionId: string,
-  text: string,
-): UnbackedDispatchClaim | null {
-  const ledger = ledgers.get(leadSessionId);
-  const facts = ledger ? ledger.facts : [];
+const ISSUED_WAKE_KINDS = new Set(['resumed', 'already-active', 'queued', 'created']);
 
+/**
+ * 找出回复里「引用了协议之外派发结果值」的那一处。
+ *
+ * 合法值一律放行：那时可能是在复述本次、上一轮、甚至重启前的一次真实派发，
+ * 单条回复分不清是哪一种，误判会把真话纠成假话。
+ */
+export function findUnbackedDispatchClaim(text: string): UnbackedDispatchClaim | null {
   const wakeKind = text.match(WAKE_KIND_PATTERN);
-  if (wakeKind && facts.length === 0) {
-    return { kind: 'wake-kind', token: wakeKind[1]!, label: 'wake_kind' };
-  }
-
-  // 一条回复里可能列出多个编号：逐个核对，只要有一个查不到就拦住。
-  // 只看第一个的话，前面放一个真编号就能把后面的假编号遮住。
-  for (const labeledId of text.matchAll(LABELED_ID_ALL_PATTERN)) {
-    const label = labeledId[1]!;
-    const token = labeledId[2]!;
-    const known = facts.some(
-      (fact) => fact.dispatchId === token || fact.queuedMessageId === token,
-    );
-    if (!known) return { kind: 'id', token, label };
-  }
-
-  return null;
+  if (!wakeKind) return null;
+  const token = wakeKind[1]!.toLowerCase();
+  if (ISSUED_WAKE_KINDS.has(token)) return null;
+  return { kind: 'wake-kind', token, label: 'wake_kind' };
 }
 
 /**

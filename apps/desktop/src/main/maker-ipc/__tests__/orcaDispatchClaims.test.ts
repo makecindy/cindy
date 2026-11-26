@@ -92,60 +92,47 @@ describe('host dispatch fact ledger', () => {
 });
 
 describe('unbacked dispatch claim detection', () => {
-  it('flags a wake_kind value while the host recorded no dispatch at all', () => {
-    expect(
-      findUnbackedDispatchClaim('lead-1', '已派修（wake_kind=already-active），等它交回。'),
-    ).toEqual({ kind: 'wake-kind', token: 'already-active', label: 'wake_kind' });
+  it('flags a wake_kind the protocol never issues', () => {
+    expect(findUnbackedDispatchClaim('已派修（wake_kind=accepted），等它交回。')).toEqual({
+      kind: 'wake-kind',
+      token: 'accepted',
+      label: 'wake_kind',
+    });
   });
 
-  it('accepts a wake_kind recap once the host has dispatches to back it', () => {
+  it('flags a fabricated wake_kind even when the host dispatched in this session', () => {
     noteLeadDispatchFact('lead-1', fact());
 
+    expect(findUnbackedDispatchClaim('派了（wake_kind=dispatched），在跑。')).toMatchObject({
+      kind: 'wake-kind',
+      token: 'dispatched',
+    });
+  });
+
+  it('accepts every wake_kind value the protocol can return', () => {
+    for (const token of ['resumed', 'already-active', 'queued', 'created']) {
+      expect(findUnbackedDispatchClaim(`已派（wake_kind=${token}）。`)).toBeNull();
+    }
+  });
+
+  it('leaves a dispatch id alone — a missing id does not mean a fabricated one', () => {
     expect(
-      findUnbackedDispatchClaim('lead-1', '上一笔 wake_kind=queued 还在队列里。'),
+      findUnbackedDispatchClaim('派了：queued_message_id: e47e4ix8u7vjpxzd0ixrivw8'),
     ).toBeNull();
   });
 
-  it('flags a labeled dispatch id that exists nowhere in the ledger', () => {
-    expect(
-      findUnbackedDispatchClaim('lead-1', '派了：queued_message_id: e47e4ix8u7vjpxzd0ixrivw8'),
-    ).toEqual({ kind: 'id', token: 'e47e4ix8u7vjpxzd0ixrivw8', label: 'queued_message_id' });
-  });
-
-  it('accepts an id dispatched in an earlier turn', () => {
-    noteLeadDispatchFact('lead-1', fact({ queuedMessageId: 'cvpssg60na9s2ona9dh7327s' }));
+  it('leaves an id alone even when the ledger holds other dispatches', () => {
+    noteLeadDispatchFact('lead-1', { ...fact(), queuedMessageId: 'realidrealidrealid12' });
 
     expect(
-      findUnbackedDispatchClaim('lead-1', '上一条的 queued_message_id: cvpssg60na9s2ona9dh7327s 已消费。'),
+      findUnbackedDispatchClaim(
+        '两笔：queued_message_id: realidrealidrealid12 与 queued_message_id: abcdefgh123456',
+      ),
     ).toBeNull();
   });
 
   it('leaves plain prose alone — it carries no protocol token to check', () => {
-    expect(findUnbackedDispatchClaim('lead-1', '已派给 research 去改注入表了。')).toBeNull();
-  });
-
-  it('checks every cited id, so a real one cannot cover a fabricated one', () => {
-    noteLeadDispatchFact('lead-1', {
-      workerId: 'worker-1',
-      workerLabel: 'research',
-      dispatchId: 'd'.repeat(22),
-      turnGeneration: 3,
-      delivery: 'queued',
-      queuedMessageId: 'realidrealidrealid12',
-      at: Date.now(),
-    });
-    expect(
-      findUnbackedDispatchClaim(
-        'lead-1',
-        '两笔：queued_message_id: realidrealidrealid12 与 queued_message_id: fakeidfakeidfakeid34',
-      ),
-    ).toMatchObject({ kind: 'id', token: 'fakeidfakeidfakeid34' });
-  });
-
-  it('reports the first problem only, so one reminder names one place', () => {
-    expect(
-      findUnbackedDispatchClaim('lead-1', 'wake_kind=queued，编号 queued_message_id: abcdefgh1234'),
-    )?.toMatchObject({ kind: 'wake-kind' });
+    expect(findUnbackedDispatchClaim('已派给 research 去改注入表了。')).toBeNull();
   });
 });
 

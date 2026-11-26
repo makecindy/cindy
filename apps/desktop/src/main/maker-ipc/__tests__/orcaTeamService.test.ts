@@ -449,20 +449,20 @@ describe('OrcaTeamService updateWorker', () => {
 });
 
 describe('dispatch claim reminder on lead turn settle', () => {
-  it('reminds the lead once when the closing text cites a dispatch the host never accepted', async () => {
+  it('reminds the lead once when the closing text cites a wake_kind the protocol never issues', async () => {
     resetDispatchClaimState();
     const { deps, service } = createDeps();
 
     await service.handleLeadTurnSettled({
       leadSessionId: 'lead-1',
       turnGeneration: 3,
-      finalText: '已派修（wake_kind=already-active），等它交回。',
+      finalText: '已派修（wake_kind=accepted），等它交回。',
     });
 
     expect(deps.sendAutoBridgeToLead).toHaveBeenCalledTimes(1);
     const call = vi.mocked(deps.sendAutoBridgeToLead).mock.calls[0];
     expect(call?.[0]).toBe('lead-1');
-    expect(call?.[1]).toContain('wake_kind=already-active');
+    expect(call?.[1]).toContain('wake_kind=accepted');
   });
 
   it('stays silent for an id the host dispatched in an earlier turn', async () => {
@@ -486,6 +486,60 @@ describe('dispatch claim reminder on lead turn settle', () => {
     expect(deps.sendAutoBridgeToLead).not.toHaveBeenCalled();
   });
 
+  it('stays silent when the lead cites an id issued before a restart', async () => {
+    resetDispatchClaimState();
+    const { deps, service } = createDeps();
+    await service.sendToWorker({
+      callerLeadSessionId: 'lead-1',
+      targetSessionId: 'worker-session-1',
+      message: 'Please also check the desktop build.',
+    });
+    const fact = dispatchFactsForTurn('lead-1', 0)[0];
+    const cited = fact?.queuedMessageId ?? fact?.dispatchId;
+    expect(cited).toBeTruthy();
+
+    // 宿主重启：账本只在内存里，重启后一条都不剩。
+    resetDispatchClaimState();
+
+    await service.handleLeadTurnSettled({
+      leadSessionId: 'lead-1',
+      turnGeneration: 1,
+      finalText: `重启前那条 queued_message_id: ${cited} 早就派下去了。`,
+    });
+
+    expect(deps.sendAutoBridgeToLead).not.toHaveBeenCalled();
+  });
+
+  it('stays silent when the lead cites an id past the retention window', async () => {
+    resetDispatchClaimState();
+    const { deps, service } = createDeps();
+    await service.sendToWorker({
+      callerLeadSessionId: 'lead-1',
+      targetSessionId: 'worker-session-1',
+      message: 'Please also check the desktop build.',
+    });
+    const fact = dispatchFactsForTurn('lead-1', 0)[0];
+    const cited = fact?.queuedMessageId ?? fact?.dispatchId;
+    expect(cited).toBeTruthy();
+
+    // 超过保留期：这条凭据已经被清掉了，与「从来没派过」在账本里完全一样。
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(Date.now() + 25 * 60 * 60 * 1000);
+      expect(dispatchFactsForTurn('lead-1', 2)).toHaveLength(0);
+    } finally {
+      vi.useRealTimers();
+    }
+
+    await service.handleLeadTurnSettled({
+      leadSessionId: 'lead-1',
+      turnGeneration: 3,
+      finalText: `昨天那条 queued_message_id: ${cited} 已经派下去了。`,
+    });
+
+    expect(deps.sendAutoBridgeToLead).not.toHaveBeenCalled();
+  });
+
   it('allows only one reminder per turn', async () => {
     resetDispatchClaimState();
     const { deps, service } = createDeps();
@@ -493,12 +547,12 @@ describe('dispatch claim reminder on lead turn settle', () => {
     await service.handleLeadTurnSettled({
       leadSessionId: 'lead-1',
       turnGeneration: 2,
-      finalText: 'wake_kind=queued',
+      finalText: 'wake_kind=dispatched',
     });
     await service.handleLeadTurnSettled({
       leadSessionId: 'lead-1',
       turnGeneration: 2,
-      finalText: 'wake_kind=queued',
+      finalText: 'wake_kind=dispatched',
     });
 
     expect(deps.sendAutoBridgeToLead).toHaveBeenCalledTimes(1);

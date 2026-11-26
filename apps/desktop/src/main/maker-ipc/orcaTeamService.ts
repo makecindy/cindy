@@ -12,7 +12,6 @@ import type {
 import { AcceptedCallbackDispatchCancelled } from './acceptedCallbackRunner.js';
 import {
   consumeDispatchClaimReminder,
-  dispatchFactsForTurn,
   dropLeadDispatchFact,
   findUnbackedDispatchClaim,
   noteLeadDispatchFact,
@@ -2434,8 +2433,8 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
     noteWorkerProductTerminal,
 
   /**
-   * Lead 收口核对：回复里引用了宿主没有的派发凭据时，提醒一次。
-   * 只比协议令牌与账本，不读措辞；同一轮只提醒一次，避免反复空转。
+   * Lead 收口核对：回复里引用了协议之外的派发结果值时，提醒一次。
+   * 只判闭集，不看账本、不读措辞；同一轮只提醒一次，避免反复空转。
    */
   async handleLeadTurnSettled(params: {
     leadSessionId: string;
@@ -2448,24 +2447,20 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
     const workers = await deps.listWorkersByLead(params.leadSessionId);
     if (workers.length === 0) return;
 
-    // 读一次凭据：推进轮次观察并清掉过期项，核对本身看整本账。
-    const facts = dispatchFactsForTurn(params.leadSessionId, params.turnGeneration);
-    const claim = findUnbackedDispatchClaim(params.leadSessionId, text);
+    // 只判闭集：不读账本，也不看措辞。账本会过期、重启就没了，查不到不等于编造。
+    const claim = findUnbackedDispatchClaim(text);
     if (!claim) return;
     if (!consumeDispatchClaimReminder(params.leadSessionId, params.turnGeneration)) {
       deps.log.info('orca dispatch claim reminder skipped', {
         leadSessionId: params.leadSessionId,
-        kind: claim.kind,
-        facts: facts.length,
+        token: claim.token,
       });
       return;
     }
 
     const lines = [
-      '[Orca host] You cited a dispatch record the host does not have.',
-      claim.kind === 'wake-kind'
-        ? `You wrote \`${claim.label}=${claim.token}\`, but the host accepted no dispatch for this session.`
-        : `You wrote \`${claim.label}: ${claim.token}\`, but no such dispatch exists in this session.`,
+      '[Orca host] You cited a dispatch result value the protocol never issues.',
+      `You wrote \`${claim.label}=${claim.token}\`; no dispatch returns that value.`,
       'Either dispatch now with send_to_worker, or say plainly that nothing was dispatched.',
     ];
     const delivered = await deps
@@ -2481,8 +2476,7 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
     deps.log.info('orca dispatch claim reminder', {
       leadSessionId: params.leadSessionId,
       accepted: delivered.accepted,
-      kind: claim.kind,
-      facts: facts.length,
+      token: claim.token,
     });
   },
 
