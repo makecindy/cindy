@@ -12,6 +12,7 @@ const native = vi.hoisted(() => ({
   closeAccount: undefined as (() => void) | undefined,
   storage: new Map<string, string>(),
   asyncStorage: new Map<string, string>(),
+  removeGate: Promise.resolve() as Promise<void>,
   confirmDeletion: vi.fn(),
   refreshAccount: vi.fn(),
   accountMemberships: vi.fn(),
@@ -46,7 +47,7 @@ vi.mock('@react-native-async-storage/async-storage', () => ({ default: {
   setItem: async (key: string, value: string) => { native.asyncStorage.set(key, value); },
   removeItem: async (key: string) => { native.asyncStorage.delete(key); },
   getAllKeys: async () => [...native.asyncStorage.keys()],
-  multiRemove: async (keys: readonly string[]) => { for (const key of keys) native.asyncStorage.delete(key); },
+  multiRemove: async (keys: readonly string[]) => { await native.removeGate; for (const key of keys) native.asyncStorage.delete(key); },
   multiGet: async (keys: readonly string[]) => keys.map(key => [key, native.asyncStorage.get(key) ?? null]),
   multiSet: async (pairs: readonly [string, string][]) => { for (const [key, value] of pairs) native.asyncStorage.set(key, value); },
   clear: async () => { native.asyncStorage.clear(); },
@@ -249,7 +250,7 @@ describe('browser auth session lifecycle (real AuthProvider, mocked native/netwo
     native.providers.mockReset().mockResolvedValue({ social: ['wechat'], emailCode: true, smsCode: false });
     native.initialUrl.mockReset().mockResolvedValue(null);
     native.requestCode.mockReset().mockResolvedValue(undefined);
-    native.storage.clear(); native.chatFiles.clear(); native.asyncStorage.clear();
+    native.storage.clear(); native.chatFiles.clear(); native.asyncStorage.clear(); native.removeGate = Promise.resolve();
     native.removeChatFile.mockReset().mockImplementation(async (key: string) => { native.chatFiles.delete(key); });
     native.writeSecure.mockReset().mockImplementation(async (key: string, value: string) => { native.storage.set(key, value); });
     native.logoutCleanup.mockReset();
@@ -407,14 +408,27 @@ describe('browser auth session lifecycle (real AuthProvider, mocked native/netwo
       native.refreshAccount.mockResolvedValue({ accountToken: 'account-access', accountRefreshToken: 'other-passport-refresh' });
       native.accountMemberships.mockResolvedValue([other]);
       native.exchangeMembership.mockResolvedValue({ membership: other, accessToken: 'other-access', refreshToken: 'other-rotated' });
-      const switching = act(async () => { await auth.switchAccount(otherKey); });
-      if (withPassport) await switching;
-      else await expect(switching).rejects.toMatchObject({ code: 'SAVED_ACCOUNT_REAUTH_REQUIRED' });
+      // Hold the disk removal: the switch must not report its failure before the ended account's drafts are gone.
+      // (Await the switch itself; act()'s thenable does not chain, so `expect(act(...)).rejects` would not wait.)
+      let releaseRemoval!: () => void;
+      native.removeGate = new Promise<void>((resolve) => { releaseRemoval = resolve; });
+      let failure: unknown = null;
+      let settled = false;
+      const switching = auth.switchAccount(otherKey).catch((error: unknown) => { failure = error; }).finally(() => { settled = true; });
+      await act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)); });
+      if (!withPassport) expect(settled).toBe(false);
+      releaseRemoval();
+      await act(async () => { await switching; });
+      const otherDraftId = botGroupComposerDraftId({ accountKey: otherKey, deviceId: 'mac', groupId: 'g1' })!;
       if (withPassport) {
+        expect(failure).toBeNull();
         await act(async () => { await flushComposerDraftWrites(); });
         expect(native.asyncStorage.get(draftKey(otherKey))).toBe(`draft of ${otherKey}`);
       } else {
-        await vi.waitFor(() => expect(native.asyncStorage.has(draftKey(otherKey))).toBe(false));
+        // By the time the caller sees the failure the ended account's draft is gone, in memory and on disk.
+        expect(failure).toMatchObject({ code: 'SAVED_ACCOUNT_REAUTH_REQUIRED' });
+        expect(native.asyncStorage.has(draftKey(otherKey))).toBe(false);
+        expect(await readComposerDraft(otherDraftId)).toBeNull();
       }
       expect(native.asyncStorage.get(draftKey(currentKey))).toBe(`draft of ${currentKey}`);
     });
