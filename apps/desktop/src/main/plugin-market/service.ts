@@ -1192,19 +1192,19 @@ interface InstalledOperationEvidence {
  * 契约 V2.10：这条证据对应的那次安装，是否仍是出口要返回的那个实例的当前安装。两项同时成立才算：
  * - 账本里该实例的记录仍是核实时那一份（逐字节相同）。任何安装、更新、重装（包括同一份包被别人再装一遍）、
  *   卸载、换源都会重写记录，所以换装一定对不上。
- * - `live` 给出时，其中的同一实例仍是核实时那次安装：同一批准修订（每次落位都新铸）、同一版本。
- *   这一项把归属与同一响应里返回的实例列表钉在一起。
+ * - `current`（出口此刻读到的同一实例；`'unchecked'` 只用于不经远程出口的调用）仍是核实时那次安装：同一批准
+ *   修订（每次落位都新铸）、同一版本。快照出口给的是它随后原样放进响应的那份列表里的实例；目录、推荐、
+ *   详情给的是按实例单独读到的当前实例。读不到即对不上。
  */
 function evidenceStillCurrent(
   evidence: InstalledOperationEvidence,
   ledgerNow: Readonly<Record<string, PluginMarketInstallationRecord>>,
-  live: readonly InstalledGhost[] | undefined,
+  current: InstalledGhost | undefined | 'unchecked',
 ): boolean {
   if (JSON.stringify(ledgerNow[pluginLedgerRecordKey(evidence.record)]) !== JSON.stringify(evidence.record)) return false;
-  if (!live) return true;
-  const part = installedGhostStoragePart(evidence.ghost);
-  const current = live.find((ghost) => installedGhostStoragePart(ghost) === part);
+  if (current === 'unchecked') return true;
   return Boolean(current &&
+    installedGhostStoragePart(current) === installedGhostStoragePart(evidence.ghost) &&
     ghostInstallApprovalToken(current.approval) === ghostInstallApprovalToken(evidence.ghost.approval) &&
     current.manifest.version === evidence.ghost.manifest.version);
 }
@@ -3779,15 +3779,21 @@ export class PluginMarketService {
    * - 只按条目自己投影时用的那份本机快照核实（见 itemInstallSnapshots），与 `installState` 同出一次账本读取。
    * - 记录里的操作证据由当前密钥为这个控制端算出、绑定的包摘要等于记录与磁盘上的包、且属于同一实例时，才是
    *   `'self'` 候选；其余已装条目一律 `'unattributed'`（不说明是谁）。
-   * - 候选在最后一个 await 之后同步复核（evidenceStillCurrent）：账本记录仍是那一份，且 `live.ghosts()` 返回的、
-   *   出口随后原样放进同一响应的实例仍是那次安装。对不上即降为 `'unattributed'` 并调用 `live.onChanged`，
-   *   由出口决定是否整次重读。宁可不给「打开」，也不把一次安装的凭据配给另一次安装。
+   * - 候选在最后一个 await 之后同步复核（evidenceStillCurrent）：账本记录仍是那一份，且当前实例仍是那次安装。
+   *   当前实例的来源由出口决定：返回 `ghosts[]` 的快照出口给 `live.ghosts`（整份列表，出口本来就要读、读一次、
+   *   原样放进响应）；目录、推荐、详情给 `live.instance`，只对本控制端的 `'self'` 候选按实例读取，没有候选时
+   *   零额外读取。对不上即降为 `'unattributed'` 并调用 `live.onChanged`，由出口决定是否整次重读。
+   *   宁可不给「打开」，也不把一次安装的凭据配给另一次安装。
    * - 出口统一经 projectInstalledOperationAttribution，传入条目上已有的两个字段先去掉。本机界面不经过这里。
    */
   async withInstalledOperationIds<T extends PluginMarketItem>(
     items: readonly T[],
     controller: string,
-    live?: { ghosts(): readonly InstalledGhost[]; onChanged?(): void },
+    live?: {
+      ghosts?(): readonly InstalledGhost[];
+      instance?(instanceKey: string): InstalledGhost | undefined;
+      onChanged?(): void;
+    },
   ): Promise<T[]> {
     let tag: string | null = null;
     let keyId: string | null = null;
@@ -3800,8 +3806,16 @@ export class PluginMarketService {
       keyId = sourceIds.keyId();
       ledger = this.ledgerForOwner(owner);
     }
-    // 以下全部同步：响应里的实例列表、账本复核与归属出自同一时刻。
-    const liveGhosts = live?.ghosts();
+    // 以下全部同步：响应里的实例、账本复核与归属出自同一时刻。快照出口的整份列表在这里读（它本来就要读），
+    // 其它出口只对候选按实例读。
+    const liveGhosts = live?.ghosts?.();
+    const instances = new Map<string, InstalledGhost | undefined>();
+    const currentInstance = (part: string): InstalledGhost | undefined | 'unchecked' => {
+      if (!live) return 'unchecked';
+      if (liveGhosts) return liveGhosts.find((ghost) => installedGhostStoragePart(ghost) === part);
+      if (!instances.has(part)) instances.set(part, live.instance?.(part));
+      return instances.get(part);
+    };
     const evidenceBySnapshot = new Map<LocalInstallSnapshot, Map<string, InstalledOperationEvidence>>();
     let ledgerNow: Readonly<Record<string, PluginMarketInstallationRecord>> | null = null;
     return items.map((item) => {
@@ -3819,7 +3833,9 @@ export class PluginMarketService {
             // 读不到账本就无法复核，按未证实处理（不让整次读取失败）。
             try { ledgerNow = ledger.read().installations; } catch { ledgerNow = {}; }
           }
-          if (evidenceStillCurrent(candidate, ledgerNow, liveGhosts)) operationId = candidate.operationId;
+          if (evidenceStillCurrent(candidate, ledgerNow, currentInstance(installedGhostStoragePart(candidate.ghost)))) {
+            operationId = candidate.operationId;
+          }
           else live?.onChanged?.();
         }
       }

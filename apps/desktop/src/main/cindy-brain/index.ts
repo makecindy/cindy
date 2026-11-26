@@ -9440,6 +9440,13 @@ export function registerGhostIpc(): void {
     });
   remotePluginManagement = new RemotePluginManagement({
     list: availableGhosts,
+    // 契约 V2.10：目录、推荐、详情只为本控制端的 'self' 候选按实例读当前实例，不重扫全部安装；注册表答不了
+    // 即 undefined，按未证实处理。可用性与 list() 同一口径。
+    instance: (instanceKey) => {
+      if (isAppSessionBoundaryPending()) return undefined;
+      const ghost = getGhostManager().findInstalledInstance(instanceKey);
+      return ghost && isGhostAvailableForActiveSession(instanceKey) ? ghost : undefined;
+    },
     publication: {
       prepare: async (id, expected) => {
         const host = await import('../plugin-contributions/host.js');

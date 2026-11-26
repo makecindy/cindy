@@ -3138,11 +3138,18 @@ describe('installed operation attribution through remote management (V2.10)', ()
       await options.gate?.(read);
       return result;
     };
+    // Production list() scans every install on the main thread; instance() reads one. Count both.
+    const reads = { list: 0, instance: [] as string[] };
+    const projected = () => runtime.ghosts.map((ghost) => ({
+      ...ghost,
+      approval: ghost.approval ?? { state: 'approved', revision: '00000000-0000-4000-8000-000000000001' },
+    })) as unknown as InstalledGhost[];
     const management = new RemotePluginManagement({
-      list: () => runtime.ghosts.map((ghost) => ({
-        ...ghost,
-        approval: ghost.approval ?? { state: 'approved', revision: '00000000-0000-4000-8000-000000000001' },
-      })) as unknown as InstalledGhost[],
+      list: () => { reads.list++; return projected(); },
+      instance: (instanceKey) => {
+        reads.instance.push(instanceKey);
+        return projected().find((ghost) => installedGhostStoragePart(ghost) === instanceKey);
+      },
       capture: () => () => true,
       captureReceipt: () => () => true,
       ...(options.projects ? { projects: { list: options.projects, disabled: () => [], setDisabled: () => {} } } : {}),
@@ -3190,7 +3197,7 @@ describe('installed operation attribution through remote management (V2.10)', ()
       }
       expect(receipt).toMatchObject({ phase: 'succeeded' });
     };
-    return { invoke, detail, seen, installRemotely };
+    return { invoke, detail, seen, installRemotely, reads };
   }
 
   /** 本地来源的自定义市场，`publish` 改目录当前版本；运行时装入的总是目录当时的版本。 */
@@ -3451,6 +3458,55 @@ describe('installed operation attribution through remote management (V2.10)', ()
         },
       });
       expect(pick(await remote.detail('phone-a', m.pluginId), EXIT_KEYS)).toEqual(UNATTRIBUTED());
+    });
+
+    /* 测试价值（#12731 维护者复审 91359dd6f2：目录、推荐、详情不得新增主线程全量安装扫描）
+     * - 生产入口与可观察结果：RemotePluginManagement.invoke 的 read:'catalog'（含下一页）、read:'recommendations'、
+     *   market-detail、snapshot；deps.list()（生产里在主线程同步扫描全部安装）与 deps.instance()（按实例读）的调用次数。
+     * - 缺口：91359dd6f2 为复核在这些出口兜底读整份列表，空页、无候选、未安装详情也从 0 次变成 1 次，翻页逐页执行。
+     * - 最小失败输入：空目录页、下一页、空推荐、未安装详情、他人绑定的已装目录页、一个本控制端候选的目录页。
+     * - 改前失败：在 91359dd6f2 上，除快照外各条都读了 1 次整份列表。
+     */
+    it('reads no installation list for catalog pages, recommendations or details, and one instance per own candidate', async () => {
+      const m = customMarket('team-lib', 'alpha');
+      writeLocalMarket(m.root, 'team-lib', [{ rel: 'plugins/alpha', id: 'alpha' }, { rel: 'plugins/beta', id: 'beta' }]);
+      (m.h.api as unknown as { recommendations: () => Promise<{ plugins: VisiblePluginSummary[] }> }).recommendations =
+        vi.fn(async () => ({ plugins: [] }));
+      const remote = remoteManagement(m.h.service);
+      const reset = () => { remote.reads.list = 0; remote.reads.instance = []; };
+      const zero = { list: 0, instance: [] };
+
+      // Nothing installed: an empty page, the next page, empty recommendations, a detail.
+      await remote.invoke('phone-a', 'snapshot', { read: 'catalog', query: { query: 'no-such-plugin' } });
+      expect(remote.reads).toEqual(zero);
+      const first = await remote.invoke('phone-a', 'snapshot', { read: 'catalog', query: { limit: 1 } });
+      expect(first.nextCursor).toEqual(expect.any(String));
+      await remote.invoke('phone-a', 'snapshot', { read: 'catalog', query: { limit: 1, cursor: first.nextCursor } });
+      expect(remote.reads).toEqual(zero);
+      expect(await remote.invoke('phone-a', 'snapshot', { read: 'recommendations' })).toEqual([]);
+      await remote.detail('phone-a', m.pluginId);
+      expect(remote.reads).toEqual(zero);
+
+      // Installed by phone-a: another controller's page has no candidate, so no reads at all.
+      await m.remote.installRemotely('phone-a', 'op-0000000000000001', m.pluginId);
+      reset();
+      const otherPage = await remote.invoke('phone-b', 'snapshot', { read: 'catalog' });
+      expect(pick((otherPage.items as Wire[]).find((item) => item.pluginId === m.pluginId)!, EXIT_KEYS)).toEqual(UNATTRIBUTED());
+      expect(remote.reads).toEqual(zero);
+      // phone-a's page has exactly one candidate: one instance read, never the whole list.
+      const ownPage = await remote.invoke('phone-a', 'snapshot', { read: 'catalog' });
+      expect(pick((ownPage.items as Wire[]).find((item) => item.pluginId === m.pluginId)!, EXIT_KEYS)).toEqual(SELF('op-0000000000000001'));
+      expect(remote.reads.list).toBe(0);
+      expect(remote.reads.instance).toHaveLength(1);
+      reset();
+      await remote.detail('phone-a', m.pluginId);
+      expect(remote.reads.list).toBe(0);
+      expect(remote.reads.instance).toHaveLength(1);
+
+      // The snapshot returns ghosts[]: exactly one list read, shared with the attribution check.
+      reset();
+      await remote.invoke('phone-a', 'snapshot', { read: 'installed' });
+      expect(remote.reads).toEqual({ list: 1, instance: [] });
     });
 
     it('keeps the evidence when nothing changed in between, and re-reads at most once while it keeps changing', async () => {
