@@ -51,6 +51,7 @@ export type DbTxName =
   | 'bots.updateAttention'
   | 'bots.reconcileCanonicalLink'
   | 'bots.replaceCanonicalSession'
+  | 'bots.createChatSession'
   | 'bots.prepareRuntime'
   | 'bots.finishRuntime'
   | 'bots.pauseLifecycle'
@@ -744,6 +745,14 @@ export interface BotsReplaceCanonicalSessionArgs {
   now: number;
 }
 
+/** Add a user-created independent Buddy chat without moving the permanent canonical session. */
+export interface BotsCreateChatSessionArgs {
+  botId: string;
+  expectedProfileVersion: number;
+  session: BotsReplaceCanonicalSessionArgs['session'];
+  now: number;
+}
+
 export interface BotsReconcileCanonicalLinkArgs {
   botId: string;
   now: number;
@@ -1386,6 +1395,7 @@ export type DbTxArgsByName = {
   'bots.updateAttention': BotsUpdateAttentionArgs;
   'bots.reconcileCanonicalLink': BotsReconcileCanonicalLinkArgs;
   'bots.replaceCanonicalSession': BotsReplaceCanonicalSessionArgs;
+  'bots.createChatSession': BotsCreateChatSessionArgs;
   'bots.prepareRuntime': BotsPrepareRuntimeArgs;
   'bots.finishRuntime': BotsFinishRuntimeArgs;
   'bots.pauseLifecycle': BotsLifecycleTransitionArgs;
@@ -1489,6 +1499,7 @@ export type DbTxResultByName = {
   'bots.updateAttention': { changed: boolean };
   'bots.reconcileCanonicalLink': BotsReconcileCanonicalLinkResult;
   'bots.replaceCanonicalSession': BotsReplaceCanonicalSessionResult;
+  'bots.createChatSession': { sessionId: string };
   'bots.prepareRuntime': undefined;
   'bots.finishRuntime': boolean;
   'bots.pauseLifecycle': undefined;

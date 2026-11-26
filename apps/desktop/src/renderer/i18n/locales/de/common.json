@@ -11727,7 +11727,24 @@
     "chat": {
       "newMessagesBoundary": "NEU",
       "composerPlaceholder": "Sag etwas zu {{name}}…",
-      "composerPlaceholderLatin": "Sag etwas zu {{name}}…"
+      "composerPlaceholderLatin": "Sag etwas zu {{name}}…",
+      "directoryTitle": "Unterhaltungen mit {{name}}",
+      "directoryDescription": "Jede Unterhaltung hat einen eigenen Verlauf. Profil, Einstellungen und gespeicherte Langzeiterinnerungen sind in allen Unterhaltungen verfügbar.",
+      "emptyTitle": "Noch keine Unterhaltungen",
+      "emptyDescription": "Beginne eine Unterhaltung mit {{name}}. Profil und gespeicherte Erinnerungen bleiben in jeder Unterhaltung verfügbar.",
+      "untitledConversation": "Unbenannte Unterhaltung",
+      "mainConversation": "Hauptunterhaltung",
+      "newSession": "Neue Unterhaltung beginnen",
+      "deleteCurrent": "Diese Unterhaltung löschen",
+      "createFailed": "Neue Unterhaltung konnte nicht erstellt werden. Bitte erneut versuchen.",
+      "deleteTitle": "Diese Unterhaltung löschen",
+      "deleteDescription": "Nur der Verlauf dieser Unterhaltung wird gelöscht. Der Freund, seine Einstellungen und gespeicherten Erinnerungen bleiben erhalten.",
+      "deleteConfirm": "Unterhaltung löschen",
+      "cancel": "Unterhaltung behalten",
+      "emptyPreview": "Noch keine Nachrichten",
+      "searchPlaceholder": "Unterhaltungen durchsuchen…",
+      "noSearchResults": "Keine passenden Unterhaltungen",
+      "clearSearch": "Suche leeren"
     },
     "globalSettings": {
       "restoreHint": "Empfohlenes Modell für Freunde wiederherstellen. Individuelle Modelle einzelner Freunde bleiben unverändert.",

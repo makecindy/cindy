@@ -134,6 +134,7 @@ export function TeammatesSection() {
   const remoteRoute = matchPath('/bots/remote/:deviceId/:botId', pathname);
   const localRoute = [
     '/bots/:botId',
+    '/bots/:botId/conversations',
     '/bots/:botId/session/:sessionId',
     '/bots/:botId/history/:sessionId',
     '/bots/:botId/direct/:threadId',
@@ -562,7 +563,7 @@ export function TeammatesSection() {
     if (entry.kind === 'group') return `/bots/groups/${encodeURIComponent(entry.group.id)}`;
     if (entry.kind === 'cindy') return currentCindy?.route;
     const bot = entry.bot;
-    return 'deviceId' in bot ? `/bots/remote/${encodeURIComponent(bot.deviceId)}/${encodeURIComponent(bot.id)}` : `/bots/${encodeURIComponent(bot.id)}`;
+    return 'deviceId' in bot ? `/bots/remote/${encodeURIComponent(bot.deviceId)}/${encodeURIComponent(bot.id)}` : botOpenRoute(bot).to;
   };
 
   return (

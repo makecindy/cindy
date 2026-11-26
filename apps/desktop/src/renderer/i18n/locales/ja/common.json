@@ -11681,7 +11681,24 @@
     "chat": {
       "newMessagesBoundary": "NEW",
       "composerPlaceholder": "{{name}}に話しかける…",
-      "composerPlaceholderLatin": "{{name}} に話しかける…"
+      "composerPlaceholderLatin": "{{name}} に話しかける…",
+      "directoryTitle": "{{name}}との会話",
+      "directoryDescription": "会話ごとに履歴は分かれます。プロフィール、設定、保存した長期記憶はすべての会話で共有されます。",
+      "emptyTitle": "会話はまだありません",
+      "emptyDescription": "{{name}}との会話を始めましょう。プロフィールと保存した記憶は、どの会話でも利用できます。",
+      "untitledConversation": "無題の会話",
+      "mainConversation": "メインの会話",
+      "newSession": "新しい会話を始める",
+      "deleteCurrent": "この会話を削除",
+      "createFailed": "新しい会話を作成できませんでした。もう一度お試しください。",
+      "deleteTitle": "この会話を削除",
+      "deleteDescription": "この会話の履歴だけが削除されます。仲間、設定、保存した記憶は残ります。",
+      "deleteConfirm": "会話を削除",
+      "cancel": "会話を残す",
+      "emptyPreview": "メッセージはまだありません",
+      "searchPlaceholder": "会話を検索…",
+      "noSearchResults": "一致する会話がありません",
+      "clearSearch": "検索をクリア"
     },
     "globalSettings": {
       "restoreHint": "仲間の推奨モデルに戻します。各仲間のカスタムモデルは変更されません。",

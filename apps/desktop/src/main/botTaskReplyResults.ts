@@ -20,7 +20,7 @@ export async function readTaskResultsForReply(
     FROM messages m JOIN sessions s ON s.id = m.session_id
     JOIN bot_session_links b ON b.session_id = s.id
     WHERE m.session_id = ? AND m.client_id = ? AND m.role = 'assistant'
-      AND m.rewind_at IS NULL AND s.source = 'bot' AND b.role IN ('canonical', 'history')
+      AND m.rewind_at IS NULL AND s.source = 'bot' AND b.role IN ('canonical', 'chat', 'history')
       AND NOT EXISTS (SELECT 1 FROM messages later WHERE later.session_id = m.session_id
         AND later.rewind_at IS NULL AND later.role IN ('tool_use', 'tool_result')
         AND (later.created_at > m.created_at OR (later.created_at = m.created_at AND later.rowid > m.rowid)))

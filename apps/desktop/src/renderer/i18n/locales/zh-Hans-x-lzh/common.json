@@ -11681,7 +11681,24 @@
     "chat": {
       "newMessagesBoundary": "NEW",
       "composerPlaceholder": "与{{name}}言之…",
-      "composerPlaceholderLatin": "与 {{name}} 言之…"
+      "composerPlaceholderLatin": "与 {{name}} 言之…",
+      "directoryTitle": "与 {{name}} 言谈",
+      "directoryDescription": "每段言谈各有其录。伙伴之身、设定与所存久忆，诸谈共用。",
+      "emptyTitle": "尚无言谈",
+      "emptyDescription": "且与 {{name}} 开谈。伙伴之身与所存记忆，诸谈皆可用。",
+      "untitledConversation": "无题言谈",
+      "mainConversation": "本篇言谈",
+      "newSession": "新开言谈",
+      "deleteCurrent": "删此番言谈",
+      "createFailed": "未能新开言谈，再试。",
+      "deleteTitle": "删此言谈",
+      "deleteDescription": "仅删此言谈之记录；同僚、规制与已存记忆仍留。",
+      "deleteConfirm": "删言谈",
+      "cancel": "留此言谈",
+      "emptyPreview": "尚无片言",
+      "searchPlaceholder": "寻觅言谈…",
+      "noSearchResults": "无相合之言谈",
+      "clearSearch": "清搜寻"
     },
     "globalSettings": {
       "restoreHint": "复同伴荐用之模型，各同伴自订之模型不变。",

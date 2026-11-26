@@ -65,7 +65,7 @@ export async function resolveBotHistorySessionIds(
 
 /**
  * 换窗交接回忆指引用的伙伴自有会话清单(有界,最多 `limit` 条)。按归属分层而不是按时间混排:
- * 伙伴自己的私聊会话(当前主对话 + 恢复前的 history Session,最新在前)整体优先,剩余名额再
+ * 伙伴自己的私聊会话(canonical + 用户新建 chat + 恢复前的 history Session,最新在前)整体优先,剩余名额再
  * 给最新的、由它发起的后台任务——后台任务再多,结果也早已按回执进过主对话;而旧对话一旦被
  * 挤出清单,用户追问恢复前的事就只能得到"没有记录"。
  *
@@ -89,7 +89,8 @@ export async function listBotRecallSessionIds(callerSessionId: string, limit: nu
   const db = getDbClient();
   const chats = await db.query<{ sessionId: string }>(
     `SELECT l.session_id AS sessionId FROM bot_session_links l
-      WHERE l.bot_id = ? AND l.role IN ('canonical', 'history')
+      JOIN sessions s ON s.id = l.session_id AND s.status != 'deleted'
+      WHERE l.bot_id = ? AND l.role IN ('canonical', 'chat', 'history')
         AND (l.route_key IS NULL OR l.route_key NOT LIKE 'delegation:%')
         AND NOT EXISTS (
           SELECT 1 FROM bot_delegations d

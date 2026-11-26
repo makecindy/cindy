@@ -35,15 +35,23 @@ describe('botEntryTarget', () => {
   });
 });
 
-// Sidebar opens used to always pass through /bots/:botId (spinner + session read)
-// before the chat. Only a healthy main chat may skip it; every case the Bot page
-// validates or repairs (cindy-bots-runtime §3.1) must keep going there.
+// A healthy local companion opens its conversation directory. Missing or inactive
+// main chats still pass through /bots/:botId so the existing repair flow can run.
 describe('botOpenRoute', () => {
   const main = (status: 'active' | 'archived' | 'deleted') => ({ id: 'main', kind: 'chat', role: 'canonical', status, title: '', updatedAt: 1 });
   const bot = (extra: Partial<BotProfile> = {}) =>
     ({ id: 'bot-1', name: 'B', status: 'active', canonicalSessionId: 'main', sessions: [main('active')], ...extra }) as BotProfile;
-  it('opens a healthy main chat directly, marked as a direct entry', () => {
-    expect(botOpenRoute(bot())).toEqual({ to: '/bots/bot-1/session/main', state: { botDirectEntry: true } });
+  it('opens a healthy companion in its conversation directory', () => {
+    expect(botOpenRoute(bot())).toEqual({ to: '/bots/bot-1/conversations' });
+  });
+  it('keeps opening the conversation directory when the main chat was deleted but another chat session is active', () => {
+    expect(botOpenRoute(bot({
+      canonicalSessionId: undefined,
+      sessions: [
+        main('deleted'),
+        { id: 'chat-1', kind: 'chat', role: 'chat', status: 'active', title: 'Topic', updatedAt: 2 },
+      ] as BotProfile['sessions'],
+    }))).toEqual({ to: '/bots/bot-1/conversations' });
   });
   it.each([
     ['no main chat link', bot({ sessions: [] })],

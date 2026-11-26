@@ -465,7 +465,7 @@ function sessionSummaryFromRow(
     orcaRole: row.orcaRole,
     parentSessionId: row.parentSessionId,
     ...(row.companionId && row.companionName != null
-      && (row.companionRole === 'canonical' || row.companionRole === 'history' || row.companionRole === 'channel')
+      && (row.companionRole === 'canonical' || row.companionRole === 'chat' || row.companionRole === 'history' || row.companionRole === 'channel')
       ? { companion: {
           id: row.companionId,
           name: row.companionName,

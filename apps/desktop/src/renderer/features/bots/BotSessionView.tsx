@@ -18,7 +18,6 @@ import type { BotChatIdentity } from './BotSessionContentHeader';
 import type { BotChatBinding } from './botChatPresentation';
 import { BotDmThreadHost } from './BotDmThreadHost';
 import { useBotPluginFocusedSession } from './useBotPluginFocusedSession';
-import { canonicalBotSession } from './botSessionOwners';
 import { standardSessionRoute } from '@/lib/orcaSessionIdentity';
 
 type BotSessionGate =
@@ -94,8 +93,9 @@ function BotSessionGateView() {
   const [gate, setGate] = useState<BotSessionGate>(() => {
     const profiles = getBotProfiles();
     const profile = profiles.find(bot => bot.id === botId && bot.status === 'active');
-    const projection = profile ? canonicalBotSession(profile) : undefined;
-    if (!profile || !projection || projection.id !== sessionId || projection.status !== 'active' || !sessionId) return { kind: 'loading' };
+    const projection = profile?.sessions.find((item) => item.id === sessionId &&
+      (item.role === 'canonical' || item.role === 'chat'));
+    if (!profile || !projection || projection.status !== 'active' || !sessionId) return { kind: 'loading' };
     // The already-read local roster selects a display; fresh validation still
     // controls writes and read receipts. Mount the existing message cache now.
     return { kind: 'ready', verified: false, identity: { ...readBotChatIdentity(profile, profile.id), sessionId },
@@ -177,7 +177,10 @@ function BotSessionGateView() {
         const sessions = (bot as { sessions?: unknown }).sessions;
         const profileStatus = (bot as { status?: unknown }).status;
         const activeProjection = Array.isArray(sessions)
-          ? canonicalBotSession({ sessions: sessions.filter((row) => row && typeof row === 'object') })
+          ? sessions.find((row) => row && typeof row === 'object' &&
+            (row as { id?: unknown }).id === sessionId &&
+            ((row as { role?: unknown }).role === 'canonical' || (row as { role?: unknown }).role === 'chat')) as
+              { id?: string; role?: string; status?: string } | undefined
           : undefined;
         if (profileStatus !== 'active' || activeProjection?.id !== sessionId || activeProjection?.status !== 'active') {
           // The URL is an old presentation, not evidence that the task disappeared.
@@ -243,7 +246,7 @@ function BotSessionGateView() {
     return <SessionEntryError reason={gate.kind === 'error' ? gate.reason : 'missing'}
       onRetry={() => setReloadVersion((value) => value + 1)} />;
   }
-  const readOnly = !gate.verified || (shadowed && gate.isCanonical);
+  const readOnly = !gate.verified || shadowed;
   return (
     <main className="relative flex h-full min-w-0 overflow-hidden bg-[var(--surface)]">
       {/* 私聊话题只属于本机的伙伴主对话；只读副本没有话题。 */}

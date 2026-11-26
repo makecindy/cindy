@@ -184,6 +184,10 @@ export const router = createHashRouter([
                               })),
                           },
                           {
+                            path: ':botId/conversations',
+                            lazy: () => import('@/features/bots/BotConversationDirectory').then(({ BotConversationDirectory }) => ({ Component: BotConversationDirectory })),
+                          },
+                          {
                             path: ':botId',
                             lazy: () => import('@/features/bots/BotsHomeView').then(({ BotsHomeView }) => ({ Component: BotsHomeView })),
                           },

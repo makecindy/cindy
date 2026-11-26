@@ -5395,6 +5395,10 @@ interface ElectronAPI {
       ) => Promise<import('../shared/botLifecycle').BotHistorySearchResponse>;
       create: (body: unknown) => Promise<unknown>;
       update: (body: unknown) => Promise<unknown>;
+      createChatSession: (body: {
+        botId: string;
+        title: string;
+      }) => Promise<import('@/lib/ccAgent.types').Session>;
       createCanonicalSession: (body: {
         botId: string;
         expectedCanonicalSessionId: string | null;

@@ -2,6 +2,7 @@ import { deviceDisplayName } from '@/lib/deviceName';
 import type { CompanionCloudSnapshot } from '../../../shared/companionCloud';
 import type { BotProfile } from './botStore';
 import { isRemoteBotUnread, taskBotKey, type RemoteBot } from './remoteBotRoster';
+import { botOpenRoute } from './botNavigation';
 
 export type CindyDeviceBot = BotProfile | RemoteBot;
 
@@ -65,7 +66,7 @@ export function cindyDeviceOptions(
       online: true,
       unread: (unreadByBotId[bot.id] ?? 0) > 0,
       unreadCount: unreadByBotId[bot.id] ?? 0,
-      route: `/bots/${encodeURIComponent(bot.id)}`,
+      route: botOpenRoute(bot).to,
     }));
   const remote = remoteCindys
     .map((bot) => {

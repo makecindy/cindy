@@ -14,18 +14,21 @@ export function isBotDirectEntryState(state: unknown): boolean {
 }
 
 /**
- * Where a sidebar click on a local companion goes. The roster only projects
- * links whose Session row still exists, with that row's status, so an active
- * profile with an active main chat opens the chat directly. Anything else
- * (missing, deleted or archived main chat, inactive profile, pending invitation)
- * keeps the `/bots/:botId` hand-off, which validates and repairs.
+ * Where a sidebar click on a local companion goes. A healthy Buddy opens its
+ * conversation directory; a missing, deleted or archived main chat, inactive
+ * profile or pending invitation keeps the /bots/:botId setup and repair hand-off.
  */
 export function botOpenRoute(bot: BotProfile): { to: string; state?: typeof BOT_DIRECT_ENTRY_STATE } {
   const botRoute = `/bots/${encodeURIComponent(bot.id)}`;
   const main = canonicalBotSession(bot);
+  const hasActiveChat = bot.sessions.some(
+    (session) => (session.role === 'canonical' || session.role === 'chat') && session.status === 'active',
+  );
   const invitationPending = !!bot.invitation && bot.invitation.stage !== 'ready' && !bot.canonicalSessionId;
-  if (bot.status !== 'active' || invitationPending || !main || main.status !== 'active') return { to: botRoute };
-  return { to: `${botRoute}/session/${encodeURIComponent(main.id)}`, state: BOT_DIRECT_ENTRY_STATE };
+  if (bot.status !== 'active' || invitationPending || (!hasActiveChat && (!main || main.status !== 'active'))) {
+    return { to: botRoute };
+  }
+  return { to: botRoute + '/conversations' };
 }
 
 /** Navigation is by stable profile ID, never by the display name or portrait. */

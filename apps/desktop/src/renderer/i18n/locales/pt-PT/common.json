@@ -11814,7 +11814,24 @@
     "chat": {
       "newMessagesBoundary": "NEW",
       "composerPlaceholder": "Diga algo a {{name}}…",
-      "composerPlaceholderLatin": "Diga algo a {{name}}…"
+      "composerPlaceholderLatin": "Diga algo a {{name}}…",
+      "directoryTitle": "Conversas com {{name}}",
+      "directoryDescription": "Cada conversa tem o seu próprio histórico. O perfil, as definições e as memórias de longo prazo guardadas do companheiro são partilhados entre todas as conversas.",
+      "emptyTitle": "Ainda não existem conversas",
+      "emptyDescription": "Comece uma conversa com {{name}}. O perfil e as memórias guardadas ficam disponíveis em todas as conversas.",
+      "untitledConversation": "Conversa sem título",
+      "mainConversation": "Conversa principal",
+      "newSession": "Iniciar nova conversa",
+      "deleteCurrent": "Eliminar esta conversa",
+      "createFailed": "Não foi possível criar uma conversa. Tente novamente.",
+      "deleteTitle": "Eliminar esta conversa",
+      "deleteDescription": "Só o histórico desta conversa será eliminado. O colega, as definições e as memórias guardadas serão mantidos.",
+      "deleteConfirm": "Eliminar conversa",
+      "cancel": "Manter conversa",
+      "emptyPreview": "Ainda não existem mensagens",
+      "searchPlaceholder": "Pesquisar conversas…",
+      "noSearchResults": "Nenhuma conversa correspondente",
+      "clearSearch": "Limpar pesquisa"
     },
     "globalSettings": {
       "restoreHint": "Restaurar o modelo recomendado para os amigos. Os modelos personalizados de cada amigo mantêm-se inalterados.",

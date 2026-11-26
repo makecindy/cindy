@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 /**
- * 伙伴对话头部:名字/头像 + 设置齿轮,两个入口都跳设置页;电脑与切换都收进近况浮层,头部不再单列。
+ * 伙伴对话头部:名字/头像进入对话目录,设置齿轮打开设置;电脑与切换都收进近况浮层。
  */
 
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
@@ -99,19 +99,19 @@ describe('BotSessionContentHeader', () => {
     expect(screen.getByRole('button', { name: 'bots.glance.open' }).dataset.cloudHome).toBe('false');
   });
 
-  it('leaves the header whitespace in the native window drag region', () => {
+  it('keeps the directory and settings buttons out of the native window drag region', () => {
     render(<BotSessionContentHeader bot={bot} />);
 
     expect(appRegionOf(screen.getByTestId('bot-session-content-header'))).toBe('');
-    expect(appRegionOf(screen.getByTitle('bots.settings'))).toBe('no-drag');
+    expect(appRegionOf(screen.getByTitle('bots.chat.directoryTitle'))).toBe('no-drag');
     expect(appRegionOf(screen.getByLabelText('bots.settings'))).toBe('no-drag');
   });
 
-  it('opens settings from either the name lockup or the gear button', () => {
+  it('opens the directory from the name lockup and settings from the gear button', () => {
     render(<BotSessionContentHeader bot={bot} />);
 
-    fireEvent.click(screen.getByTitle('bots.settings'));
-    expect(navigate).toHaveBeenCalledWith('/bots/bot-1/session/sess-1?settings=1');
+    fireEvent.click(screen.getByTitle('bots.chat.directoryTitle'));
+    expect(navigate).toHaveBeenCalledWith('/bots/bot-1/conversations');
 
     fireEvent.click(screen.getByLabelText('bots.settings'));
     expect(navigate).toHaveBeenCalledTimes(2);

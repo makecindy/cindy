@@ -638,6 +638,7 @@ export async function listInterruptedPendingRows(
   // 真正继续(伙伴启用、未降级)不在这里重写判据,由调用方用发送路径同一套守卫判定。
   const visibleBotRole = inArray(botSessionLinks.role, [
     'canonical',
+    'chat',
     'delegation',
     'routine',
     'channel',

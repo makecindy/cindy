@@ -607,7 +607,7 @@ export type ContextRebuildReason =
 export function isBotChatContext(row: { source?: string | null; botRole?: string | null }): boolean {
   return (
     row.source === 'bot' &&
-    (row.botRole === 'canonical' || row.botRole === 'thread' || row.botRole === 'routine' || row.botRole === 'channel' || row.botRole === 'group')
+    (row.botRole === 'canonical' || row.botRole === 'chat' || row.botRole === 'thread' || row.botRole === 'routine' || row.botRole === 'channel' || row.botRole === 'group')
   );
 }
 

@@ -72,7 +72,7 @@ export interface ConversationSearchSessionSummary {
   companion?: {
     id: string;
     name: string;
-    role: 'canonical' | 'history' | 'channel';
+    role: 'canonical' | 'chat' | 'history' | 'channel';
     readOnly: boolean;
   };
   userSendAt: string | null;

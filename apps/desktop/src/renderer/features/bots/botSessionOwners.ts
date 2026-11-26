@@ -48,6 +48,10 @@ export function botRouteForOwnedSession(
 ): BotSessionEntryTarget | null {
   const bot = findBotProfileForSession(profiles, sessionId);
   if (!bot) return null;
+  const ownedChat = bot.sessions.find((session) =>
+    session.id === sessionId && session.role === 'chat',
+  );
+  if (ownedChat) return { route: '/bots/' + encodeURIComponent(bot.id) + '/session/' + encodeURIComponent(sessionId), consumesAlert: false };
   const botRoute = `/bots/${encodeURIComponent(bot.id)}`;
   const canonicalSessionId = canonicalBotSession(bot)?.id;
   // Keep the original id even if the cached link becomes history before the click lands.

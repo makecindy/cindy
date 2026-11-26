@@ -11681,7 +11681,24 @@
     "chat": {
       "newMessagesBoundary": "NEW",
       "composerPlaceholder": "跟{{name}}說點什麼…",
-      "composerPlaceholderLatin": "跟 {{name}} 說點什麼…"
+      "composerPlaceholderLatin": "跟 {{name}} 說點什麼…",
+      "directoryTitle": "和 {{name}} 的對話",
+      "directoryDescription": "每段對話都有獨立記錄。夥伴的資料、設定和已儲存的長期記憶會在所有對話間共用。",
+      "emptyTitle": "還沒有對話",
+      "emptyDescription": "開始和 {{name}} 聊聊吧。夥伴資料和已儲存的記憶會在每段對話中保留。",
+      "untitledConversation": "未命名對話",
+      "mainConversation": "主要對話",
+      "newSession": "開始新對話",
+      "deleteCurrent": "刪除此對話",
+      "createFailed": "無法建立新對話，請再試一次。",
+      "deleteTitle": "刪除此對話",
+      "deleteDescription": "只會刪除此對話的記錄；夥伴、設定與已儲存的記憶會保留。",
+      "deleteConfirm": "刪除對話",
+      "cancel": "保留對話",
+      "emptyPreview": "還沒有訊息",
+      "searchPlaceholder": "搜尋對話…",
+      "noSearchResults": "沒有相符的對話",
+      "clearSearch": "清除搜尋"
     },
     "globalSettings": {
       "restoreHint": "恢復夥伴推薦模型，個別夥伴的自訂模型保持不變。",

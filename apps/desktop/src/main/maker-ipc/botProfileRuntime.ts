@@ -528,10 +528,10 @@ export async function hydrateBotProfileRuntime(
   // Group lanes, IM channel lanes and private-chat topics are long-lived like the
   // canonical Chat and share its Profile/Home. Channel lanes and topics are
   // full-profile lanes (not chat-only).
-  if (!row || !['canonical', 'delegation', 'group', 'channel', 'thread', 'routine'].includes(row.role)) return null;
+  if (!row || !['canonical', 'chat', 'delegation', 'group', 'channel', 'thread', 'routine'].includes(row.role)) return null;
   // A private-chat topic is the owner's own conversation, so it carries the main
   // Chat's owner-private abilities (cindy-bots-runtime.md「私聊话题」).
-  const ownerChat = row.role === 'canonical' || row.role === 'thread' || row.role === 'routine';
+  const ownerChat = row.role === 'canonical' || row.role === 'chat' || row.role === 'thread' || row.role === 'routine';
   const [profile] = await db
     .select()
     .from(botProfiles)
@@ -696,7 +696,7 @@ export async function hydrateBotProfileRuntime(
       ];
   // Canonical Chats, private-chat topics, group lanes and IM channel lanes follow
   // Profile updates; delegation children stay frozen.
-  const followsProfile = row.role === 'canonical' || row.role === 'thread' || row.role === 'routine' || row.role === 'group' || row.role === 'channel';
+  const followsProfile = row.role === 'canonical' || row.role === 'chat' || row.role === 'thread' || row.role === 'routine' || row.role === 'group' || row.role === 'channel';
   const [previousSnapshot] = await db
     .select({
       profileVersion: botRuntimeSnapshots.profileVersion,
@@ -1011,7 +1011,7 @@ export async function hydrateBotProfileRuntime(
     // Bot-to-Bot messaging is a narrow canonical-Bot capability provided by
     // the essential helper. It is not the generic Orca/team-worker surface and
     // therefore must not depend on optional toolset inheritance.
-    partnerActionsEnabled: row.role === 'canonical' && helperAvailable,
+    partnerActionsEnabled: (row.role === 'canonical' || row.role === 'chat') && helperAvailable,
     botCreationEnabled: fullLane && helperAvailable,
     // Skill management is available before the first Skill exists. An empty
     // index must not hide the instructions for learning the first reusable method.

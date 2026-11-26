@@ -9883,7 +9883,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         !row ||
         row.source !== 'bot' ||
         row.status !== 'active' ||
-        (row.role !== 'canonical' && row.role !== 'delegation' && row.role !== 'group'
+        (row.role !== 'canonical' && row.role !== 'chat' && row.role !== 'delegation' && row.role !== 'group'
           && row.role !== 'channel' && row.role !== 'thread' && row.role !== 'routine')
       ) {
         return 'not-bot';
@@ -12127,7 +12127,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         status: sessions.status, botId: botProfiles.id, profileVersion: botProfiles.currentVersion,
       }).from(sessions)
         .leftJoin(botSessionLinks, and(eq(botSessionLinks.sessionId, sessions.id),
-          isNull(botSessionLinks.archivedAt), inArray(botSessionLinks.role, ['canonical', 'group', 'channel', 'thread', 'routine'])))
+          isNull(botSessionLinks.archivedAt), inArray(botSessionLinks.role, ['canonical', 'chat', 'group', 'channel', 'thread', 'routine'])))
         .leftJoin(botProfiles, eq(botProfiles.id, botSessionLinks.botId))
         .where(eq(sessions.id, sessionId)).limit(1);
       return row?.status === 'active' && row.agentKind !== 'acp' ? { baseline: row.baseline,
@@ -17716,7 +17716,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         .where(and(
           eq(botSessionLinks.sessionId, sessionId),
           // Group / IM channel lanes and private-chat topics follow the Bot's current model chain exactly like its canonical Chat.
-          inArray(botSessionLinks.role, ['canonical', 'group', 'channel', 'thread', 'routine']),
+          inArray(botSessionLinks.role, ['canonical', 'chat', 'group', 'channel', 'thread', 'routine']),
           isNull(botSessionLinks.archivedAt),
           // Paused settings may preview grants; sending still requires an active Bot.
           purpose === 'preview'
@@ -17890,7 +17890,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         and(
           eq(botSessionLinks.sessionId, sessionId),
           isNull(botSessionLinks.archivedAt),
-          inArray(botSessionLinks.role, ['canonical', 'delegation', 'group', 'channel', 'thread', 'routine']),
+          inArray(botSessionLinks.role, ['canonical', 'chat', 'delegation', 'group', 'channel', 'thread', 'routine']),
         ),
       )
       .limit(1);
@@ -19146,7 +19146,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         else workerInputs.delete(args[2]);
         const origin = (args[3] as { origin?: AgentInputQueuedMessage['origin'] } | undefined)?.origin;
         if (botInput?.source === 'bot' && botInput.agentDeviceId && !botInput.remoteHostId
-          && ['canonical', 'thread'].includes(botInput.role ?? '')
+          && ['canonical', 'chat', 'thread'].includes(botInput.role ?? '')
           && ((origin?.kind === 'scheduler' && origin.runId) || ownsQuotaRoute())) {
           scheduledQuotaInputs.add(args[2]);
         } else scheduledQuotaInputs.delete(args[2]);
@@ -19160,7 +19160,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         } else {
           modelGroupInputs.delete(args[2]);
         }
-        if (botInput?.source === 'bot' && ['canonical', 'delegation', 'group', 'channel', 'thread', 'routine'].includes(botInput.role ?? '')) {
+        if (botInput?.source === 'bot' && ['canonical', 'chat', 'delegation', 'group', 'channel', 'thread', 'routine'].includes(botInput.role ?? '')) {
           botFallbackInputs.add(args[2]);
         } else {
           botFallbackInputs.delete(args[2]);

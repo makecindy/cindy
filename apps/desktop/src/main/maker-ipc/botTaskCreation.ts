@@ -92,7 +92,7 @@ async function resolveBotTaskCreator(callerSessionId: string): Promise<string | 
     .innerJoin(botProfiles, eq(botProfiles.id, botSessionLinks.botId))
     .where(and(
       eq(botSessionLinks.sessionId, callerSessionId),
-      inArray(botSessionLinks.role, ['canonical', 'thread', 'channel', 'group', 'routine']),
+      inArray(botSessionLinks.role, ['canonical', 'chat', 'thread', 'channel', 'group', 'routine']),
       isNull(botSessionLinks.archivedAt),
       eq(sessions.source, 'bot'),
       eq(sessions.status, 'active'),

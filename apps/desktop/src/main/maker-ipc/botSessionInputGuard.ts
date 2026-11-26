@@ -31,5 +31,5 @@ export function isShadowedCompanionSession(
   link: { role?: string | null; botId?: string | null } | null | undefined,
   isShadowed: (botId: string) => boolean,
 ): boolean {
-  return (link?.role === 'canonical' || link?.role === 'routine') && !!link.botId && isShadowed(link.botId);
+  return (link?.role === 'canonical' || link?.role === 'chat' || link?.role === 'routine') && !!link.botId && isShadowed(link.botId);
 }

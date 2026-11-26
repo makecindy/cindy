@@ -1,4 +1,4 @@
-import { and, eq, inArray } from 'drizzle-orm';
+import { and, eq, inArray, isNull } from 'drizzle-orm';
 import { getDbClient } from './client/current.js';
 import type { DbClient } from './client/DbClient.js';
 import { sessions, botSessionLinks } from './schema.js';
@@ -55,6 +55,24 @@ export async function isTaskListBotLane(db: DbClient['drizzle'], sessionId: stri
     .where(and(
       eq(botSessionLinks.sessionId, sessionId),
       inArray(botSessionLinks.role, ['routine', 'channel', 'group']),
+    ))
+    .limit(1);
+  return !!link;
+}
+
+/**
+ * Owner-managed Buddy chat sessions (`canonical` and `chat`) are not ordinary
+ * tasks, but may be deleted individually without deleting the Buddy profile or
+ * its shared memories. Matches `DELETABLE_BOT_CHAT_SQL` in `sessions.setTerminalStatus`.
+ */
+export async function isDeletableBotChat(db: DbClient['drizzle'], sessionId: string): Promise<boolean> {
+  const [link] = await db
+    .select({ role: botSessionLinks.role })
+    .from(botSessionLinks)
+    .where(and(
+      eq(botSessionLinks.sessionId, sessionId),
+      inArray(botSessionLinks.role, ['canonical', 'chat']),
+      isNull(botSessionLinks.archivedAt),
     ))
     .limit(1);
   return !!link;

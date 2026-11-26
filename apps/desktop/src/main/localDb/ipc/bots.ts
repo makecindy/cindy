@@ -56,7 +56,8 @@ import {
   readEffectiveBotPrimaryRoute,
   writeBotModelChainSettings,
 } from '../../maker-host/bot-model-chain-settings-store.js';
-import { extractMessagePreview, sessionToCamel } from '../mapper.js';
+import { extractMessagePreview, finalizePlainPreview, sessionToCamel } from '../mapper.js';
+import { LIST_PREVIEW_EXTRACT_SQL } from '../sessionListProjection.js';
 import { normalizeBotToolCapabilities } from '../../../shared/botCapabilitySelection.js';
 import {
   botProfileContentChanged,
@@ -994,6 +995,95 @@ function normalizeBotModelCapabilitiesOrThrow(
 /** How many candidate rows the preview query inspects (see below). */
 const CANONICAL_PREVIEW_SCAN = 100;
 
+/** Companion visibility + non-empty extract filter shared by batched active `chat` previews. */
+const BOT_CHAT_REPLY_COMPLETED_SQL = `(json_valid(m.agent_meta) = 1 AND (
+  json_extract(m.agent_meta, '$.turnCompleted') = 1
+  OR json_extract(m.agent_meta, '$.turnMoney.amount') > 0
+  OR json_extract(m.agent_meta, '$.turnCostUsd') > 0
+  OR json_type(m.agent_meta, '$.turnUsageDetails') IS NOT NULL
+  OR (json_type(m.agent_meta, '$.sourceGroup.groupId') = 'text'
+    AND length(trim(json_extract(m.agent_meta, '$.sourceGroup.groupId'))) > 0)
+))`;
+
+const BOT_CHAT_VISIBLE_PREVIEW_FILTER_SQL = `m.role IN ('user', 'assistant')
+  AND m.rewind_at IS NULL
+  AND (m.agent_meta IS NULL OR json_valid(m.agent_meta) = 0 OR (
+    json_extract(m.agent_meta, '$.autoResume') IS NOT 1
+    AND json_type(m.agent_meta, '$.botDirectMessage') IS NULL
+    AND json_extract(m.agent_meta, '$.botPrivateReply') IS NOT 1
+  ))
+  AND (
+    m.role = 'user'
+    OR (
+      (m.agent_meta IS NULL OR json_valid(m.agent_meta) = 0 OR (
+        json_extract(m.agent_meta, '$.failedSamplingAttempt') IS NULL
+        AND COALESCE(json_extract(m.agent_meta, '$.samplingAttemptPending'), 0) = 0
+        AND json_extract(m.agent_meta, '$.assistantPhase') IS NOT 'commentary'
+        AND json_extract(m.agent_meta, '$.parentToolUseId') IS NULL
+        AND json_extract(m.agent_meta, '$.parent_tool_use_id') IS NULL
+      ))
+      AND (${BOT_CHAT_REPLY_COMPLETED_SQL} OR NOT EXISTS (
+        SELECT 1 FROM (
+          SELECT subsequent_tool.created_at FROM messages AS subsequent_tool
+          WHERE subsequent_tool.session_id = m.session_id
+            AND subsequent_tool.created_at > m.created_at
+            AND subsequent_tool.rewind_at IS NULL
+            AND subsequent_tool.role IN ('tool_use', 'tool_result', 'thinking')
+          ORDER BY subsequent_tool.created_at LIMIT 1
+        ) AS first_tool
+        WHERE NOT EXISTS (
+          SELECT 1 FROM messages AS next_input
+          WHERE next_input.session_id = m.session_id
+            AND next_input.role = 'user' AND next_input.rewind_at IS NULL
+            AND next_input.created_at > m.created_at
+            AND next_input.created_at < first_tool.created_at
+            AND (next_input.agent_meta IS NULL OR json_valid(next_input.agent_meta) = 0 OR json_extract(next_input.agent_meta, '$.autoResume') IS NOT 1)
+            AND (next_input.agent_meta IS NULL OR json_valid(next_input.agent_meta) = 0 OR json_extract(next_input.agent_meta, '$.delivery') IS NOT 'steer')
+        )
+      ))
+    )
+  )
+  AND NULLIF(trim(COALESCE(${LIST_PREVIEW_EXTRACT_SQL}, ''), char(9, 10, 13, 32)), '') IS NOT NULL`;
+
+/**
+ * Atomic batched write-back of companion-filtered `chat` previews.
+ * Writes only when the session's message watermark (`max_rowid`, `count`, `cleared_at`)
+ * has not moved since the read and `list_preview` is still empty.
+ */
+const BOT_CHAT_PREVIEW_BACKFILL_SQL = `UPDATE sessions
+SET
+  list_preview = CASE
+    WHEN payload.has_preview = 1 AND NULLIF(sessions.list_preview, '') IS NULL THEN payload.preview
+    ELSE sessions.list_preview
+  END,
+  list_preview_role = CASE
+    WHEN payload.has_preview = 1 AND NULLIF(sessions.list_preview, '') IS NULL THEN payload.role
+    ELSE sessions.list_preview_role
+  END,
+  list_message_count = CASE
+    WHEN sessions.list_message_count IS NULL THEN payload.count
+    ELSE sessions.list_message_count
+  END
+FROM (
+  SELECT
+    json_extract(value, '$.id') AS id,
+    json_extract(value, '$.preview') AS preview,
+    json_extract(value, '$.role') AS role,
+    json_extract(value, '$.count') AS count,
+    json_extract(value, '$.hasPreview') AS has_preview,
+    json_extract(value, '$.maxRowid') AS max_rowid,
+    json_extract(value, '$.clearedAt') AS cleared_at
+  FROM json_each(?)
+) AS payload
+WHERE sessions.id = payload.id
+  AND sessions.cleared_at IS payload.cleared_at
+  AND NOT EXISTS (
+    SELECT 1 FROM messages m
+    WHERE m.session_id = sessions.id
+      AND m.rowid > COALESCE(payload.max_rowid, 0)
+  )
+  AND (SELECT count(*) FROM messages m WHERE m.session_id = sessions.id) = payload.count`;
+
 /** Explicit group deliveries are complete replies independent of the canonical turn.
  * The transcript also accepts persisted usage/cost as a legacy turn seal. */
 function canonicalReplyCompleted() {
@@ -1229,6 +1319,132 @@ async function readProfile(
   if (canonicalSessionId) await flushAssistantSamplingMetadata(canonicalSessionId);
   owner.assertCurrent();
   const latestMessage = await readCanonicalChatPreview(db, canonicalSessionId, canonicalClearedAt);
+  const chatPreviewBySession = new Map<string, string | null>();
+  const missingChatPreviewIds: string[] = [];
+  for (const link of links) {
+    if (link.role !== 'chat') continue;
+    const row = byId.get(link.sessionId);
+    if (!row || row.status !== 'active') continue;
+    if (typeof row.listPreview === 'string' && row.listPreview.trim()) continue;
+    if (row.listMessageCount === 0) continue;
+    missingChatPreviewIds.push(row.id);
+  }
+  const uniqueMissingChatIds = [...new Set(missingChatPreviewIds)];
+  const runningChatIds: string[] = [];
+  const settledChatIds: string[] = [];
+  for (const id of uniqueMissingChatIds) {
+    if (getMakerIfReady()?.getSession(id)?.isTurnRunning?.() === true) runningChatIds.push(id);
+    else settledChatIds.push(id);
+  }
+  for (const id of runningChatIds) {
+    owner.assertCurrent();
+    const row = byId.get(id);
+    const live = await readCanonicalChatPreview(db, id, row?.clearedAt ?? null);
+    chatPreviewBySession.set(id, live.preview);
+  }
+  const chatPreviewBackfill: Array<{
+    id: string;
+    preview: string | null;
+    role: string | null;
+    count: number;
+    hasPreview: 0 | 1;
+    maxRowid: number;
+    clearedAt: number | null;
+  }> = [];
+  const outerSessionIdSql = sql`${sql.identifier('sessions')}.${sql.identifier('id')}`;
+  const outerSessionClearedAtSql = sql`${sql.identifier('sessions')}.${sql.identifier('cleared_at')}`;
+  for (let offset = 0; offset < settledChatIds.length; offset += 200) {
+    owner.assertCurrent();
+    const batch = settledChatIds.slice(offset, offset + 200);
+    const previewRows = await db
+      .select({
+        id: sessions.id,
+        clearedAt: sessions.clearedAt,
+        latestMessageExtract: sql<string | null>`(
+          SELECT ${sql.raw(LIST_PREVIEW_EXTRACT_SQL)} FROM messages m
+          WHERE m.session_id = ${outerSessionIdSql}
+            AND ${sql.raw(BOT_CHAT_VISIBLE_PREVIEW_FILTER_SQL)}
+            AND (${outerSessionClearedAtSql} IS NULL OR m.created_at > ${outerSessionClearedAtSql})
+          ORDER BY m.created_at DESC, m.rowid DESC LIMIT 1
+        )`.as('latest_message_extract'),
+        latestMessageRole: sql<string | null>`(
+          SELECT m.role FROM messages m
+          WHERE m.session_id = ${outerSessionIdSql}
+            AND ${sql.raw(BOT_CHAT_VISIBLE_PREVIEW_FILTER_SQL)}
+            AND (${outerSessionClearedAtSql} IS NULL OR m.created_at > ${outerSessionClearedAtSql})
+          ORDER BY m.created_at DESC, m.rowid DESC LIMIT 1
+        )`.as('latest_message_role'),
+        latestMessageParentUuid: sql<unknown>`(
+          SELECT CASE WHEN json_valid(m.agent_meta) = 1 THEN json_extract(m.agent_meta, '$.parentUuid') ELSE NULL END
+          FROM messages m
+          WHERE m.session_id = ${outerSessionIdSql}
+            AND ${sql.raw(BOT_CHAT_VISIBLE_PREVIEW_FILTER_SQL)}
+            AND (${outerSessionClearedAtSql} IS NULL OR m.created_at > ${outerSessionClearedAtSql})
+          ORDER BY m.created_at DESC, m.rowid DESC LIMIT 1
+        )`.as('latest_message_parent_uuid'),
+        messageCount: sql<number>`(
+          SELECT count(*) FROM messages m
+          WHERE m.session_id = ${outerSessionIdSql}
+        )`.as('message_count'),
+        maxMessageRowid: sql<number>`COALESCE((
+          SELECT max(m.rowid) FROM messages m
+          WHERE m.session_id = ${outerSessionIdSql}
+        ), 0)`.as('max_message_rowid'),
+      })
+      .from(sessions)
+      .where(inArray(sessions.id, batch));
+    owner.assertCurrent();
+    for (const previewRow of previewRows) {
+      const subagentRow =
+        typeof previewRow.latestMessageParentUuid === 'string' &&
+        isSubagentParentToolUseId(previewRow.latestMessageParentUuid);
+      let preview =
+        !subagentRow && previewRow.latestMessageExtract != null
+          ? finalizePlainPreview(previewRow.latestMessageExtract, previewRow.latestMessageRole)
+          : null;
+      let previewRole = previewRow.latestMessageRole;
+      // Rare fallback: subagent parentUuid, markdown-only text that collapsed to empty, or
+      // structured content arrays not covered by LIST_PREVIEW_EXTRACT_SQL.
+      if (
+        subagentRow ||
+        (previewRow.latestMessageExtract != null && preview == null) ||
+        (previewRow.latestMessageExtract == null && previewRow.messageCount > 0)
+      ) {
+        owner.assertCurrent();
+        const fallback = await readCanonicalChatPreview(
+          db,
+          previewRow.id,
+          previewRow.clearedAt ?? null,
+        );
+        preview = fallback.preview;
+        previewRole = fallback.role;
+      }
+      chatPreviewBySession.set(previewRow.id, preview);
+      if (preview != null || previewRow.messageCount === 0) {
+        chatPreviewBackfill.push({
+          id: previewRow.id,
+          preview,
+          role: preview != null ? previewRole : null,
+          count: previewRow.messageCount,
+          hasPreview: preview != null ? 1 : 0,
+          maxRowid: previewRow.maxMessageRowid,
+          clearedAt: previewRow.clearedAt ?? null,
+        });
+      }
+    }
+  }
+  if (chatPreviewBackfill.length > 0 && typeof client.exec === 'function') {
+    owner.assertCurrent();
+    try {
+      await client.exec(BOT_CHAT_PREVIEW_BACKFILL_SQL, [JSON.stringify(chatPreviewBackfill)]);
+    } catch (err) {
+      log.warn('bot chat preview projection backfill failed', {
+        botId,
+        count: chatPreviewBackfill.length,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
   const unreadCount = await countCanonicalUnread(
     db,
     canonicalSessionId,
@@ -1345,12 +1561,18 @@ async function readProfile(
       if (!row) return [];
       const groupId = link.role === 'group' ? parseBotGroupIdFromRouteKey(link.routeKey) : null;
       const threadRoot = link.role === 'thread' ? parseBotDmThreadRouteKey(link.routeKey) : null;
+      const preview =
+        row.id === canonicalSessionId
+          ? latestMessage.preview
+          : typeof row.listPreview === 'string' && row.listPreview.trim()
+            ? finalizePlainPreview(row.listPreview, row.listPreviewRole)
+            : chatPreviewBySession.get(row.id) ?? null;
       return [
         {
           id: row.id,
           title: row.title,
           kind:
-            link.role === 'canonical'
+            link.role === 'canonical' || link.role === 'chat'
               ? 'chat'
               : link.role === 'delegation'
                 ? 'worker'
@@ -1363,7 +1585,10 @@ async function readProfile(
                       : link.role === 'thread'
                         ? 'thread'
                         : 'history',
+          createdAt: row.createdAt,
           updatedAt: row.updatedAt,
+          lastActivityAt: row.lastActivityAt ?? row.userSendAt ?? row.updatedAt,
+          preview,
           status: row.status,
           role: link.role,
           // 群专线没有自己的页面:通知 / 灵动岛入口要据此回到它所在的群。
@@ -2301,7 +2526,7 @@ export async function updateBotProfile(raw: unknown, expectedVersion?: number,
     && Object.prototype.hasOwnProperty.call(body.capabilities, 'permissions');
   const modelFollowers = acceptsModelSelection ? await db.select({ sessionId: botSessionLinks.sessionId })
     .from(botSessionLinks).where(and(eq(botSessionLinks.botId, id),
-      inArray(botSessionLinks.role, ['canonical', 'group', 'channel', 'thread', 'routine']),
+      inArray(botSessionLinks.role, ['canonical', 'chat', 'group', 'channel', 'thread', 'routine']),
       isNull(botSessionLinks.archivedAt))) : [];
   const commitProfile = async () => {
     await coordinateBotModelSelection(modelFollowers.map((link) => link.sessionId), async () => {
@@ -2863,6 +3088,49 @@ export function registerBotIpc(onCreatedTopic?: (id: string, subject: string, in
       ? { ...input, expectedProfileVersion: derived.to }
       : input, beforeCommit, hostOptions);
   };
+
+  ipcMain.handle('local-db:bots:create-chat-session', async (event, raw: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    const body = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw as Record<string, unknown> : {};
+    const botId = readText(body.botId, 'botId', 128, true);
+    const title = readText(body.title, 'title', 128, true);
+    const owner = captureBotOperationOwner();
+    // Match canonical creation: user edits to the shared Buddy profile become
+    // the identity used by the new chat, while the existing main chat stays put.
+    await reconcileBotProfileFolder(botId);
+    owner.assertCurrent();
+    const client = getDbClient();
+    const db = client.drizzle;
+    const [profile] = await db.select().from(botProfiles).where(eq(botProfiles.id, botId)).limit(1);
+    if (!profile || profile.status !== 'active') throwIpcError('PRECONDITION_FAILED', '伙伴当前不可用');
+    const [version] = await db.select().from(botProfileVersions).where(and(
+      eq(botProfileVersions.botId, botId), eq(botProfileVersions.version, profile.currentVersion),
+    )).limit(1);
+    if (!version) throwIpcError('PRECONDITION_FAILED', '伙伴资料版本不存在');
+    const config = parseJson(version.capabilitiesJson);
+    const invitation = botInvitationProgress(config.invitation);
+    if (invitation && invitation.stage !== 'ready' && invitation.stage !== 'welcome')
+      throwIpcError('PRECONDITION_FAILED', '伙伴正在准备见面');
+    const primaryRoute = await readEffectiveBotPrimaryRoute(config);
+    owner.assertCurrent();
+    if (!primaryRoute) throwIpcError('PRECONDITION_FAILED', '请先连接模型供应商或选择伙伴模型');
+    const now = Date.now();
+    const sessionId = resolveBusinessSessionId(undefined);
+    const workspace = await privateBotWorkspace(botId, readBotProjectMode(config), { ownerUserDataPath: () => owner.userDataDir });
+    owner.assertCurrent();
+    await openSession({ id: sessionId, now, source: 'bot', assertCurrent: owner.assertCurrent,
+      body: { title, ...workspace, ...botSessionRouteFields(config, primaryRoute) },
+    }, async (insertRow, assertCurrent) => {
+      assertCurrent();
+      return client.tx('bots.createChatSession', { botId, expectedProfileVersion: profile.currentVersion,
+        session: botSessionPayload(insertRow), now });
+    });
+    owner.assertCurrent();
+    const [createdRow] = await db.select().from(sessions).where(eq(sessions.id, sessionId)).limit(1);
+    if (!createdRow) throwIpcError('NOT_FOUND', 'Bot 对话任务不存在');
+    broadcastBotProfileChanged({ botId, change: 'updated' });
+    return sessionToCamel({ ...createdRow, messageCount: 0, latestMessageContent: null, latestMessageRole: null });
+  });
 
   ipcMain.handle('local-db:bots:create-canonical-session', async (event, raw: unknown) => {
     assertTrustedAppRendererEvent(event);
