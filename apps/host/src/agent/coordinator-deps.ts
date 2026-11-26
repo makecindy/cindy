@@ -290,6 +290,8 @@ export function hostCoordinatorDeps(ctx: HostCoordinatorContext): AgentInputCoor
     // ── Not bound on the Host, and why ─────────────────────────────────────────────────────────
     // Orca tasks are refused at Host admission: no saved report is restored, so none is revalidated.
     canRestoreOrcaReport: undefined,
+    // The Host has no Orca report acknowledgement to settle.
+    onAcknowledgedQueuedReport: undefined,
     // Host sessions are not stamped with a reconciled send_to_session route, so no hint is projected.
     sendToSessionHint: undefined,
     // The usage-limit resume arrives with the third batch (release table).
