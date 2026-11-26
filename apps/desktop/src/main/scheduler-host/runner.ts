@@ -15,6 +15,7 @@ import {
 } from '../maker-ipc/scheduledModelSelection';
 import { isDisallowedPluginEngineDeviceId } from '../maker-ipc/pluginEngineSessionAdmission';
 import { CONTINUE_AFTER_APP_EXIT_PROMPT, UI_ACTION_TRIGGER_PREFIX } from '../../shared/interruptedTurn.js';
+import { workingDirEquals } from '../../shared/workingDir.js';
 import { withScheduleLock } from './scheduleLock';
 import {
   routinePermissionSnapshot,
@@ -108,7 +109,7 @@ import { schedulerFailureDetail } from '../maker-ipc/schedulerQueueBridge.js';
 import { SnapshotDispatchIntentDeadlineError } from '../utils/operationBudget.js';
 
 
-import { prependHandoffToUserMessage } from '../maker-ipc/agentHandoff.js';
+import { prependHandoffToUserMessage, prependNoteToWireUserMessage } from '../maker-ipc/agentHandoff.js';
 import {
   sanitizeSendOutcomeError,
   toDesktopSessionDispatchOutcome,
@@ -631,6 +632,9 @@ export interface SchedulerRunnerRuntime {
   releaseWorktree: typeof import('../worktree').WorktreePool.releaseWorktree;
   isManagedScheduledTarget: typeof import('./restore-target.desktop').isManagedScheduledTarget;
   restoreScheduledTarget: typeof import('./restore-target.desktop').restoreScheduledTarget;
+  resolveRecoveredWorkingDir?: (sessionId: string, workingDir: string) => string;
+  peekWorkingDirectoryRecoveryNote?: (sessionId: string, workingDir: string) => string | null;
+  consumeWorkingDirectoryRecoveryNote?: (sessionId: string, note: string) => void;
 }
 
 export class MakerScheduleRunner implements ScheduleRunner {
@@ -1337,10 +1341,14 @@ export class MakerScheduleRunner implements ScheduleRunner {
       if (ctx.expectedPreRunWorkingDir !== undefined && hookCwd !== ctx.expectedPreRunWorkingDir) {
         throw new Error('Schedule execution directory changed; refresh before executing the approved action');
       }
+      const effectiveHookCwd =
+        schedule.targetSessionId && hookCwd
+          ? (this.runtime.resolveRecoveredWorkingDir?.(schedule.targetSessionId, hookCwd) ?? hookCwd)
+          : hookCwd;
       const hook = await withPreRunHookDiagnosis(await executePreRunHook({
         command: schedule.preRunHook.command,
         timeoutMs: schedule.preRunHook.timeoutMs,
-        cwd: hookCwd,
+        cwd: effectiveHookCwd,
         // pause/delete 的 abortInflightAndWait 只等几秒:信号透传进执行器,abort
         // 即树杀脚本进程立即返回,不让长 hook 拖住暂停/删除、也不在其后继续建会话。
         signal: ctx.signal,
@@ -1350,7 +1358,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
           scheduleName: schedule.name,
           runId: ctx.runId,
           firedAt: ctx.firedAt,
-          workingDir: hookCwd,
+          workingDir: effectiveHookCwd,
           lastFinishedAt: schedule.lastFinishedAt,
           ...(ctx.webhook ? { webhook: ctx.webhook } : {}),
           ...(ctx.trigger ? { trigger: ctx.trigger } : {}),
@@ -1797,6 +1805,9 @@ export class MakerScheduleRunner implements ScheduleRunner {
     // allocating a dialogue directory or creating an ephemeral worktree.
     throwIfFireAborted(ctx.signal, 'workspace allocation');
     let workingDir = isHeartbeat ? heartbeatWorkingDir : schedule.workingDir;
+    if (isHeartbeat && workingDir) {
+      workingDir = this.runtime.resolveRecoveredWorkingDir?.(sessionId, workingDir) ?? workingDir;
+    }
     // 未指定目录且不要 worktree → 回退 dialogue 语义(分配 app 管理的工作区)。
     // MCP/对话路径创建的任务经常不带 workingDir,而引擎 create() 默认
     // workspaceKind='project',此前这里会每轮抛 "workingDir is required" 永久
@@ -2167,6 +2178,56 @@ export class MakerScheduleRunner implements ScheduleRunner {
           currentProviderId,
           nextProviderId,
         });
+      }
+      if (
+        !this.deps.schedulerQueue &&
+        isHeartbeat &&
+        reusedLiveSession &&
+        liveSession &&
+        !liveSession.remoteHostId &&
+        !agentDeviceId &&
+        liveSession.workDir
+      ) {
+        const liveRecoveredDir =
+          this.runtime.resolveRecoveredWorkingDir?.(sessionId, liveSession.workDir) ??
+          liveSession.workDir;
+        const liveDirNeedsRecovery =
+          !workingDirEquals(liveRecoveredDir, liveSession.workDir) ||
+          (heartbeatWorkingDir !== undefined &&
+            !workingDirEquals(workingDir, heartbeatWorkingDir) &&
+            !workingDirEquals(liveSession.workDir, workingDir)) ||
+          ((liveSession.agentKind === 'claude-code' || liveSession.agentKind === 'pi') &&
+            heartbeatWorkingDir !== undefined &&
+            workingDirEquals(liveSession.workDir, heartbeatWorkingDir) &&
+            !!this.runtime.peekWorkingDirectoryRecoveryNote?.(sessionId, liveSession.workDir));
+        if (liveDirNeedsRecovery) {
+          // 无 schedulerQueue 直发路径不经 makerSendTransaction：活会话仍绑在失效目录
+          // （或 Claude/Pi 原地重建目录后 cwd 仍指已删除 inode）时，Maker.createSession 会
+          // 复用旧实例并忽略新 workingDir。空闲时按 runtime-refresh 安全关闭再由下方重建；
+          // 会话正忙时顺延/失败，绝不中断在途 turn 或提前消费恢复说明。
+          try {
+            await prepareLocalSessionCredentialModeSwitch({
+              maker: this.deps.maker,
+              sessionId,
+              isSessionInTurn: this.runtime.isSessionInTurn,
+              signal: ctx.signal,
+            });
+          } catch (err) {
+            if (err instanceof CredentialModeSwitchBusyError) {
+              return this.failOrDeferSessionRunning(schedule, ctx, sessionId, isHeartbeat);
+            }
+            throw err;
+          }
+          throwIfFireAborted(ctx.signal, 'session creation');
+          reusedLiveSession = false;
+          this.deps.logger.info?.('[runner] closed live session for working directory recovery', {
+            scheduleId: schedule.id,
+            sessionId,
+            agentKind: liveSession.agentKind,
+            fromWorkingDir: liveSession.workDir,
+            toWorkingDir: workingDir,
+          });
+        }
       }
     }
     if (!agentDeviceId && isHeartbeat && effectiveAgentKind === 'pi' && !reusedLiveSession && resumeSessionId) {
@@ -2630,6 +2691,21 @@ export class MakerScheduleRunner implements ScheduleRunner {
       }
     }
 
+    // 直发降级路径兜底围栏：若并发竞态令 createSession 仍返回旧目录上的活会话，绝不向
+    // 失效目录发送或注入/消费“已切换至备用目录”的恢复说明。
+    const workingDirRecovered =
+      isHeartbeat &&
+      !session.remoteHostId &&
+      !agentDeviceId &&
+      !!workingDir &&
+      ((heartbeatWorkingDir !== undefined && !workingDirEquals(workingDir, heartbeatWorkingDir)) ||
+        !!this.runtime.peekWorkingDirectoryRecoveryNote?.(session.id, workingDir));
+    if (workingDirRecovered && session.workDir && !workingDirEquals(session.workDir, workingDir)) {
+      throw new Error(
+        `Scheduled task session ${session.id} is still running in stale working directory; refusing dispatch`,
+      );
+    }
+
     // 4.5.4 只有直发降级路径需要把取消映射到 session.abort()。生产队列路径由
     // coordinator 按「仍在排队 / 已派发」分别撤项或中断，不能让这个监听器误杀
     // 异步入队期间刚好开始的用户 turn。
@@ -2709,10 +2785,17 @@ export class MakerScheduleRunner implements ScheduleRunner {
       // session-agent-switch:本路径直发 session.send(不经 makerSendTransaction),
       // 交接注入要自己接——切换后首条消息若是定时任务触发,新引擎同样需要交接
       // 上下文,否则零上下文裸跑(2026-07-20 审计)。落库仍是 prompt 原文。
+      const workdirRecoveryNote =
+        isHeartbeat && workingDir
+          ? (this.runtime.peekWorkingDirectoryRecoveryNote?.(session.id, workingDir) ?? null)
+          : null;
       const pendingHandoff = await this.runtime.agentHandoffPending.peek(session.id);
-      const outgoingMessage = pendingHandoff
-        ? prependHandoffToUserMessage({ type: 'user', content: promptToSend }, pendingHandoff)
+      const withRecoveryNote = workdirRecoveryNote
+        ? prependNoteToWireUserMessage({ type: 'user', content: promptToSend }, workdirRecoveryNote)
         : { type: 'user' as const, content: promptToSend };
+      const outgoingMessage = pendingHandoff
+        ? prependHandoffToUserMessage(withRecoveryNote, pendingHandoff)
+        : withRecoveryNote;
       // session.abort() is best-effort when no turn has started yet.  The
       // explicit guard prevents a cancellation racing the setup above from
       // dispatching a new agent turn.
@@ -2907,6 +2990,9 @@ export class MakerScheduleRunner implements ScheduleRunner {
       });
       if (pendingHandoff && sendResult.accepted) {
         this.runtime.agentHandoffPending.consume(session.id);
+      }
+      if (workdirRecoveryNote && sendResult.accepted) {
+        this.runtime.consumeWorkingDirectoryRecoveryNote?.(session.id, workdirRecoveryNote);
       }
       // Session.send may report a cancelled-before-dispatch outcome instead of
       // throwing.  Once the fire is aborted, preserve the abort path so the

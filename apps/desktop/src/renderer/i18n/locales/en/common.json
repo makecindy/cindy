@@ -2551,7 +2551,7 @@
       "skinLabel": "Character",
       "skinHint": "The character shown in Agent Notch and the Dynamic Island.",
       "soundLabel": "Event sounds",
-      "soundHint": "When an event sound is set, only that sound plays. Unset or disabled event sounds follow system notification settings.",
+      "soundHint": "Choose an 8-bit sound for each alert, shared by Agent Notch and the Dynamic Island. The tap sound plays only when you tap Agent Notch.",
       "soundAria": "Toggle Agent Notch sounds",
       "soundSelectAria": "Sound for {{event}}",
       "soundPreviewAria": "Preview {{event}} sound",
@@ -2606,7 +2606,7 @@
         "select": "Click action"
       },
       "soundOptions": {
-        "none": "Follow system",
+        "none": "None",
         "startup-chime": "Startup chime",
         "ring-chime": "Ring chime",
         "item-found": "Item found",
@@ -13864,6 +13864,9 @@
           "allow": "allow",
           "deny": "deny",
           "approve": "approve"
+        },
+        "companion": {
+          "retryLater": "try again later"
         }
       },
       "hook": {

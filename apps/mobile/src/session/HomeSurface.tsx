@@ -209,7 +209,7 @@ import {
   shouldReplaceListWithSearchResults,
 } from '@/session/conversationSearch';
 import { useConversationSearch } from '@/session/useConversationSearch';
-import { useRemoteProjectAliases } from '@/session/remoteProjectAliases';
+import { hydrateRemoteProjectAliases, useRemoteProjectAliases } from '@/session/remoteProjectAliases';
 import {
   buildMobileHomePresentation,
   excludeOrcaWorkerSessions,
@@ -1747,6 +1747,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
       ) return;
       setDisplayOrderSeed(snapshot.displayOrder);
       for (const device of snapshot.devices) {
+        if (device.projectAliases) hydrateRemoteProjectAliases(homeCacheUserId, device.deviceId, device.projectAliases);
         remoteSessionStore.hydrateDeviceSessionsIfEmpty(device.deviceId, device.deviceName, device.sessions);
       }
     };
@@ -2716,6 +2717,11 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
   const displayOrderScope = JSON.stringify([preferenceOwner, selectedDeviceId, taskListMode, groupDevice, groupByProject, groupDialogue, groupAutomation,
     sortBy, statusFilter, projectFilter, teammateFilter, vendorFilter, lastActivityFilter, hideAutomations, searchQuery]);
   displayOrderScopeRef.current = displayOrderScope;
+  useEffect(() => {
+    if (homeListCacheHydrated && homeCacheUserId && remoteSessionStore.getSessions().length) {
+      scheduleHomeListSnapshotPersist(homeCacheUserId, () => remoteSessionStore.getSessions());
+    }
+  }, [homeListCacheHydrated, homeCacheUserId, projectAliases]);
   const commitDisplayOrder = useCallback((order: HomeDisplayOrder) => {
     rememberHomeDisplayOrder(homeCacheUserId, order);
     scheduleHomeListSnapshotPersist(homeCacheUserId, () => remoteSessionStore.getSessions());
