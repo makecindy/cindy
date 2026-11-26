@@ -319,46 +319,56 @@ describe("market read fences and lost-receipt facts", () => {
     expect(shownMarket().rowState(item)).toEqual({ kind: "failed", messageKey: "plugins.market.unconfirmedNotInstalled" });
     expect(fixture.read.mock.calls.some((call: any[]) => call[2]?.id === "_root__demo")).toBe(false);
   });
-  // Maintainer review 03:54 #1: tapping "Check result" again starts a new round before its operation query returns.
-  it("does not let the first round's detail settle while the second round's operation query is in flight", async () => {
-    let verifying = false, round = 0;
-    const firstDetail = deferred(), secondQuery = deferred();
-    queuedWire((request) => {
+  // Maintainer review 03:54 #1 (a second "Check result" while the first round is out). Since controller rule ④ (contract
+  // V2.10) a round settles only from its own installed snapshot, read inside that round's lookup (no market detail
+  // after NOT_FOUND), so the round lasts until its facts land: a second tap meanwhile starts no parallel round (no
+  // second lookup is sent), and the first round settles from its own facts, whatever they show. The earlier order
+  // (round 1's detail landing after round 2 began) can no longer occur. Tier: unit/jsdom.
+  it.each([["show the plugin", true], ["show it gone", false]] as const)("a second Check result while the first round's facts are out waits for that round: they %s", async (_name, present) => {
+    let verifying = false, heldFirst = false;
+    const firstFacts = deferred();
+    const sent = queuedWire((request) => {
       switch (request.actionId) {
         case "management:snapshot":
           if (request.input?.read === "capabilities") return { catalogPaging: true };
           if (request.input?.read === "catalog") return marketPage([item]);
-          return managementSnapshot(verifying);
-        case "management:market-detail": return { ...item, installState: verifying ? "installed" : "not-installed", ...(verifying ? { installedOperationId: "screen-operation", installedOperationAttribution: "self" } : {}), manifest: demoManifest };
+          return managementSnapshot(verifying && present);
+        case "management:market-detail": return { ...item, installState: "not-installed", manifest: demoManifest };
         case "management:begin": return demoConsent(request);
         case "management:answer": verifying = true; throw new Error("[TIMEOUT] remote invoke timed out");
         case "management:operation": throw hostError("NOT_FOUND");
         default: throw new Error("unexpected " + request.actionId);
       }
     }, (request) => {
-      if (request === "manifest") return undefined;
-      if (verifying && request.actionId === "management:market-detail" && round === 1) return firstDetail.promise;
-      if (request.actionId === "management:operation" && ++round === 2) return secondQuery.promise;
+      if (request === "manifest" || !verifying || heldFirst) return undefined;
+      if (request.actionId === "management:snapshot" && request.input?.read === "installed") { heldFirst = true; return firstFacts.promise; }
       return undefined;
     });
     await openMarket();
     await act(async () => shownMarket().install(shownMarket().items[0]));
     await settle(14);
     await approveOnPhone();
+    const details = () => sent.filter((request) => request.actionId === "management:market-detail").length;
+    const detailsBefore = details();
     await act(async () => { void shownMarket().checkResult(item); });
     await settle(14);
+    expect(heldFirst).toBe(true);
+    const lookups = () => sent.filter((request) => request.actionId === "management:operation").length;
+    const before = lookups();
     await act(async () => { void shownMarket().checkResult(item); });
-    await settle(6);
-    // The first round's detail would say "installed"; the second round's query has not returned yet.
-    await act(async () => { firstDetail.release(); });
-    await settle(10);
-    expect(fixture.read.mock.calls.some((call: any[]) => call[2]?.id === "_root__demo")).toBe(false);
+    await settle(14);
+    // Still the first round: nothing settled, no second lookup sent.
+    expect(lookups()).toBe(before);
     expect(shownMarket().rowState(item)).toEqual({ kind: "unknown" });
-    await act(async () => { secondQuery.release(); });
-    await settle(14);
-    // The second round reads its own facts and settles: the plugin is installed from this release.
-    expect(fixture.read.mock.calls.some((call: any[]) => call[2]?.id === "_root__demo")).toBe(true);
+    await act(async () => { firstFacts.release(); });
+    await settle(20);
+    expect(fixture.read.mock.calls.some((call: any[]) => call[2]?.id === "_root__demo")).toBe(present);
+    if (!present) expect(shownMarket().rowState(item)).toEqual({ kind: "failed", messageKey: "plugins.market.unconfirmedNotInstalled" });
+    // Settled from the installed snapshot alone (controller rule ④): no market detail is read after NOT_FOUND.
+    expect(details()).toBe(detailsBefore);
+    expect(sent.filter((request) => request.actionId === "management:begin")).toHaveLength(1);
   });
+
   // Maintainer review 03:54 #2: the snapshot read after NOT_FOUND (A) is replaced by a later plugin-change read (B).
   it("settles from the newer snapshot when the read after NOT_FOUND is replaced and returns last", async () => {
     let instancePresent = false;
@@ -453,11 +463,11 @@ describe("market read fences and lost-receipt facts", () => {
     await settle(14);
     expect(fixture.read.mock.calls.some((call: any[]) => call[2]?.id === "_root__demo")).toBe(true);
   });
-  // Maintainer review 04:20: a newer installed snapshot replaces the facts, so a market detail read on the older
-  // facts must not settle the result.
-  it("drops a market detail read on facts that a newer installed snapshot replaced", async () => {
-    const heldDetail = deferred();
-    let began = false, present = true, holdDetail = false;
+  // Maintainer review 04:20: a newer installed snapshot replaces the facts, so the older facts must not settle the result
+  // (since controller rule ④ the facts are the installed snapshot itself; no market detail is read on them).
+  it("drops facts read after NOT_FOUND that a newer installed snapshot replaced", async () => {
+    const heldFacts = deferred();
+    let began = false, present = true, holdFacts = false;
     queuedWire((request) => {
       switch (request.actionId) {
         case "management:snapshot":
@@ -471,9 +481,9 @@ describe("market read fences and lost-receipt facts", () => {
         default: throw new Error("unexpected " + request.actionId);
       }
     }, (request) => {
-      if (holdDetail && request !== "manifest" && request.actionId === "management:market-detail") {
-        holdDetail = false;
-        return heldDetail.promise;
+      if (holdFacts && request !== "manifest" && request.actionId === "management:snapshot" && request.input?.read === "installed") {
+        holdFacts = false;
+        return heldFacts.promise;
       }
       return undefined;
     });
@@ -481,16 +491,16 @@ describe("market read fences and lost-receipt facts", () => {
     await act(async () => shownMarket().install(shownMarket().items[0]));
     await settle(14);
     await approveOnPhone();
-    holdDetail = true;
+    holdFacts = true;
     await act(async () => { void shownMarket().checkResult(item); });
     await settle(14);
-    // The facts after NOT_FOUND showed the same-id instance; its market detail is in flight. Then the instance
-    // is removed and a plugin-change refresh lands with the newer facts.
-    expect(holdDetail).toBe(false);
+    // The read after NOT_FOUND (it shows the same-id instance, this phone's ①) is in flight. Then the instance is
+    // removed and a plugin-change refresh lands with the newer facts.
+    expect(holdFacts).toBe(false);
     present = false;
     await act(async () => { await fixture.props.get("confirmation").controller.refresh(); });
     await settle(14);
-    await act(async () => { heldDetail.release(); });
+    await act(async () => { heldFacts.release(); });
     await settle(14);
     expect(fixture.read.mock.calls.some((call: any[]) => call[2]?.id === "_root__demo")).toBe(false);
     expect(shownMarket().rowState(item)).toEqual({ kind: "failed", messageKey: "plugins.market.unconfirmedNotInstalled" });
@@ -683,56 +693,6 @@ describe("market read fences and lost-receipt facts", () => {
     };
     const opened = () => fixture.read.mock.calls.some((call: any[]) => call[2]?.id === "_root__demo");
 
-    // Group 1 (03:54 #1): round 1's market detail D1 ("installed") is in flight when "Check result" starts round 2,
-    // whose operation query Q2 is held. Round 2's facts either still show the plugin or show it gone.
-    describe.each([["round 2 still finds the plugin", true], ["round 2 finds it gone", false]])("check result twice: %s", (_c, presentInRound2) => {
-      it.each(orderings(["D1", "Q2"]).map((order) => [order.join(" → "), order] as const))("%s", async (_label, order) => {
-        const g = gates();
-        let began = false, round = 0, queries = 0, details = 0;
-        queuedWire((request) => {
-          switch (request.actionId) {
-            case "management:snapshot":
-              if (request.input?.read === "capabilities") return { catalogPaging: true };
-              if (request.input?.read === "catalog") return marketPage([item]);
-              return managementSnapshot(began && (round < 2 || presentInRound2));
-            case "management:market-detail": return { ...item, installState: began ? "installed" : "not-installed", ...(began ? { installedOperationId: "screen-operation", installedOperationAttribution: "self" } : {}), manifest: demoManifest };
-            case "management:begin": return demoConsent(request);
-            case "management:answer": began = true; throw new Error("[TIMEOUT] remote invoke timed out");
-            case "management:operation": throw hostError("NOT_FOUND");
-            default: throw new Error("unexpected " + request.actionId);
-          }
-        }, (request) => {
-          if (request === "manifest" || !began) return undefined;
-          if (request.actionId === "management:operation" && ++queries === 2) return g.hold("Q2");
-          if (request.actionId === "management:market-detail" && ++details === 1) return g.hold("D1");
-          return undefined;
-        });
-        await openMarket();
-        await act(async () => shownMarket().install(shownMarket().items[0]));
-        await settle(14);
-        await approveOnPhone();
-        round = 1;
-        await act(async () => { void shownMarket().checkResult(item); });
-        await settle(14);
-        round = 2;
-        await act(async () => { void shownMarket().checkResult(item); });
-        await settle(6);
-        let q2Returned = false;
-        for (const step of order) {
-          g.release(step);
-          if (step === "Q2") q2Returned = true;
-          await settle(14);
-          // Invariant ①/②: until round 2 has its own facts, round 1's detail gives no result.
-          if (!q2Returned) { expect(opened()).toBe(false); expect(shownMarket().rowState(item)).toEqual({ kind: "unknown" }); }
-        }
-        if (presentInRound2) expect(opened()).toBe(true);
-        else {
-          expect(opened()).toBe(false);
-          expect(shownMarket().rowState(item)).toEqual({ kind: "failed", messageKey: "plugins.market.unconfirmedNotInstalled" });
-        }
-      });
-    });
-
     // Group 2 (03:54 #3): the first probe P1 is held while the person leaves the market and comes back, which starts
     // probe P2 (held too). P1 either times out or succeeds late.
     describe.each([["the first probe times out", true], ["the first probe succeeds late", false]])("probe while leaving and returning: %s", (_c, p1Fails) => {
@@ -777,7 +737,9 @@ describe("market read fences and lost-receipt facts", () => {
           case "management:snapshot":
             if (request.input?.read === "capabilities") return { catalogPaging: true };
             if (request.input?.read === "catalog") return marketPage([item]);
-            return managementSnapshot(present);
+            // The same record as the market detail (V2.10: one install record behind both).
+            return managementSnapshot(present, { ...item, installState: present ? "installed" : "not-installed",
+              ...attributed(present, ours ? "screen-operation" : undefined) });
           case "management:market-detail": return { ...item, installState: present ? "installed" : "not-installed",
             ...attributed(present, ours ? "screen-operation" : undefined), manifest: demoManifest };
           case "management:begin": return demoConsent(request);
@@ -821,7 +783,7 @@ describe("market read fences and lost-receipt facts", () => {
           case "management:snapshot":
             if (request.input?.read === "capabilities") return { catalogPaging: true };
             if (request.input?.read === "catalog") return marketPage([item]);
-            return managementSnapshot(present);
+            return managementSnapshot(present, { ...item, installState: present ? "installed" : "not-installed", ...attributed(present) });
           case "management:market-detail": return { ...item, installState: present ? "installed" : "not-installed", ...attributed(present), manifest: demoManifest };
           case "management:begin": return demoConsent(request);
           case "management:answer": throw new Error("answer must not be sent");
@@ -978,48 +940,5 @@ describe("market read fences and lost-receipt facts", () => {
         expect(shownMarket().items.map((row: any) => row.name)).toEqual(["Found"]);
       } finally { vi.useRealTimers(); }
     });
-  });
-  it("ignores a market detail from an earlier verification that arrives late", async () => {
-    let verifying = false;
-    const details: Array<{ release: () => void; promise: Promise<void> }> = [];
-    queuedWire((request) => {
-      switch (request.actionId) {
-        case "management:snapshot":
-          if (request.input?.read === "capabilities") return { catalogPaging: true };
-          if (request.input?.read === "catalog") return marketPage([item]);
-          return managementSnapshot(verifying);
-        case "management:market-detail":
-          // The first verification's facts said "installed"; the second (newer) says "conflict".
-          if (!verifying) return { ...item, manifest: demoManifest };
-          return { ...item, installState: (request as any).verification === 1 ? "installed" : "conflict", manifest: demoManifest };
-        case "management:begin": return demoConsent(request);
-        case "management:answer": verifying = true; throw new Error("[TIMEOUT] remote invoke timed out");
-        case "management:operation": throw hostError("NOT_FOUND");
-        default: throw new Error("unexpected " + request.actionId);
-      }
-    }, (request) => {
-      if (verifying && request !== "manifest" && request.actionId === "management:market-detail") {
-        const gate = deferred();
-        details.push(gate);
-        (request as any).verification = details.length;
-        return gate.promise;
-      }
-      return undefined;
-    });
-    await openMarket();
-    await act(async () => shownMarket().install(shownMarket().items[0]));
-    await settle(14);
-    await approveOnPhone();
-    await act(async () => { void shownMarket().checkResult(item); });
-    await settle(14);
-    await act(async () => { void shownMarket().checkResult(item); });
-    await settle(14);
-    expect(details).toHaveLength(2);
-    await act(async () => { details[0]!.release(); });
-    await settle(10);
-    await act(async () => { details[1]!.release(); });
-    await settle(10);
-    expect(fixture.read.mock.calls.some((call: any[]) => call[2]?.id === "_root__demo")).toBe(false);
-    expect(shownMarket().rowState(item)).toEqual({ kind: "failed", messageKey: "plugins.market.unconfirmedMismatch" });
   });
 });

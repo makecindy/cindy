@@ -248,14 +248,16 @@ export const AFTER_RECEIPT_GONE: Record<PluginSlotEntry, AfterReceiptGone> = {
  * A market install or update whose receipt is gone (NOT_FOUND) settles from the facts the controller read right after it
  * (`missingReceiptFacts`), never from an earlier snapshot, wherever it is shown:
  * - No same-id instance in those facts: "could not confirm; not on this computer now".
- * - A same-id instance is only a lead (a local package can share id and namespace): contract V2.9, only the Host's own
- *   evidence makes it this attempt's result: installed at the release asked for, with this operation id recorded
- *   (`installedOperationId`). Anything else stays unconfirmed ("mismatch"). A failed read changes nothing ("Check
- *   result" verifies again). The original operation is never sent again.
+ * - A same-id instance is only a lead (a local package can share id and namespace): only the Host's own evidence makes it
+ *   this attempt's result (contract V2.10 ①), and only as that one response gives it (controller rule ④): the market
+ *   record in the same installed snapshot as the instance (`market.items` beside `ghosts`, which the Host checks against
+ *   each other in that response). No other request's attribution is combined with these instances; the record missing
+ *   from that response (the computer could not read its catalog then) leaves it unconfirmed ("mismatch"). The original
+ *   operation is never sent again.
  * Valid only while these facts are still the ones read by the newest installed read issued (the controller derives it
  * when asked); a new lookup clears them.
  */
-async function settleFromFacts(entry: ManagementEntry, facts: NonNullable<PluginManagementState["missingReceiptFacts"]>) {
+function settleFromFacts(entry: ManagementEntry, facts: NonNullable<PluginManagementState["missingReceiptFacts"]>) {
   const check = entry.controller.pendingCheck(), item = check?.detail;
   if (!check || AFTER_RECEIPT_GONE[check.entry] !== "facts" || !item || entry.settling === facts) return;
   entry.settling = facts;
@@ -264,7 +266,7 @@ async function settleFromFacts(entry: ManagementEntry, facts: NonNullable<Plugin
     && controller.getState().operationId === check.operationId;
   const settle = (result: "installed" | "notInstalled" | "mismatch" | "legacy", instanceKey?: string) => {
     if (!valid() || !controller.untrack()) return;
-    // The instance comes from the facts read after NOT_FOUND and the market's own record of this operation: verified.
+    // The instance and the market's record of this operation come from the same response read after NOT_FOUND: verified.
     conclude(entry, { operationId: check.operationId, entry: check.entry, who: check.who, result,
       readback: result === "installed" && instanceKey ? "verified" : "none", instanceKey: result === "installed" ? instanceKey : undefined });
   };
@@ -272,15 +274,13 @@ async function settleFromFacts(entry: ManagementEntry, facts: NonNullable<Plugin
   const lead = facts.ghosts.find((ghost) => marketItemMatchesPlugin(item, ghost)
     && (check.entry !== "update" || ghost.instanceKey === check.who.instanceKey));
   if (!lead) { settle("notInstalled"); return; }
-  try {
-    const market = await createPluginManagementClient({ invoke: entry.invoke, deviceId: check.who.deviceId, isCurrent: valid })
-      .detail(item.pluginId);
-    // The same decision as after a final receipt (V2.10): only ① makes it this operation's result; ②, ③ and no
-    // instance leave it unconfirmed (without a receipt, ② does not even show the operation succeeded).
-    const opens = pluginOperationOpens(check, { ghosts: facts.ghosts, market });
-    if (opens.open) settle("installed", opens.instanceKey);
-    else settle(opens.reason === "legacy" ? "legacy" : opens.reason === "gone" ? "notInstalled" : "mismatch");
-  } catch { /* Market facts not read: still unconfirmed; "Check result" verifies again. */ }
+  // The same decision as after a final receipt (V2.10): only ① makes it this operation's result; ②, ③ and no
+  // instance leave it unconfirmed (without a receipt, ② does not even show the operation succeeded).
+  const opens = pluginOperationOpens(check, { ghosts: facts.ghosts, market: facts.market.items });
+  if (opens.open) { settle("installed", opens.instanceKey); return; }
+  const recorded = facts.market.items.some((record) => record.pluginId === item.pluginId);
+  // An instance is there but this response names no record of it: nothing proves or disproves it here (②).
+  settle(opens.reason === "legacy" ? "legacy" : opens.reason === "gone" && recorded ? "notInstalled" : "mismatch");
 }
 /** After each change of an entry's controller: the list at the top, a market install's facts, a final result. */
 function watch(entry: ManagementEntry) {

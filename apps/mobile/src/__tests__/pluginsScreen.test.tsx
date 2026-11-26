@@ -2436,17 +2436,20 @@ describe("market install recovery", () => {
   // `installedBy`: the operation id the Host recorded with the installed package (contract V2.9), shown to this device.
   function installWire(options: { begin?: () => unknown; answer?: () => unknown; operation?: () => unknown; detail?: () => unknown; installed?: () => boolean;
     installedBy?: () => string | undefined; olderHost?: boolean }) {
+    // Like the Host: installState and the evidence come from the market-source record of this exact plugin.
+    const record$ = (): Record<string, unknown> => (options.detail ? options.detail() : { ...item, installState: options.installed?.() ? "installed" : "not-installed",
+      ...attributed(!!options.installed?.(), options.installedBy?.(), options.olderHost),
+      manifest: { schemaVersion: 3, id: "demo", name: "Demo", version: "1" } }) as Record<string, unknown>;
     return marketWire((request) => {
       switch (request.actionId) {
-        case "management:snapshot":
+        case "management:snapshot": {
           if (request.input?.read === "capabilities") return { catalogPaging: true };
           if (request.input?.read === "catalog") return marketPage([item]);
-          return managementSnapshot(options.installed?.() ?? false);
-        case "management:market-detail":
-          // Like the Host: installState comes from the market-source record of this exact plugin.
-          return options.detail ? options.detail() : { ...item, installState: options.installed?.() ? "installed" : "not-installed",
-            ...attributed(!!options.installed?.(), options.installedBy?.(), options.olderHost),
-            manifest: { schemaVersion: 3, id: "demo", name: "Demo", version: "1" } };
+          // The same record of the plugin as its market detail: the Host projects both from one install record (V2.10).
+          const { manifest: _manifest, ...record } = record$();
+          return managementSnapshot(options.installed?.() ?? false, record);
+        }
+        case "management:market-detail": return record$();
         case "management:begin": return options.begin!();
         case "management:answer": return options.answer!();
         case "management:operation": return options.operation!();
@@ -2645,13 +2648,14 @@ describe("market install recovery", () => {
             if (world.snapshotFails) { world.snapshotFails -= 1; throw hostError("TIMEOUT"); }
             if (world.facts) return { ...managementSnapshot(false), ghosts: world.facts.ghosts,
               market: { ...managementSnapshot(false).market, items: [world.facts.record] } };
-            return { ...managementSnapshot(world.installed), ...(world.ghosts ? { ghosts: world.ghosts() } : {}),
+            return { ...managementSnapshot(world.installed, { ...item, installState: world.installed ? "installed" : "not-installed",
+              ...attributed(world.installed, world.installedBy ?? "screen-operation") }), ...(world.ghosts ? { ghosts: world.ghosts() } : {}),
               ...(world.marketItems ? { market: { ...managementSnapshot(false).market, items: world.marketItems } } : {}) };
           // The detail's manifest is the catalog's current release (its version is the record's, not the installed one).
           case "management:market-detail": if (world.facts) return { ...(world.facts.record as object),
             manifest: { schemaVersion: 3, id: "demo", name: "Demo", version: (world.facts.record as { version: string }).version } };
             return { ...item, installState: world.installed ? "installed" : "not-installed",
-            ...attributed(world.installed, world.installedBy), manifest: { schemaVersion: 3, id: "demo", name: "Demo", version: "1" } };
+            ...attributed(world.installed, world.installedBy ?? "screen-operation"), manifest: { schemaVersion: 3, id: "demo", name: "Demo", version: "1" } };
           case "management:begin": throw new Error("[TIMEOUT] remote invoke timed out");    // written; the reply is lost
           case "management:answer": return world.answer ? world.answer() : receipt("running");
           case "management:operation": return world.operation();
@@ -3232,6 +3236,51 @@ describe("market install recovery", () => {
       .every((request) => request.input.pluginId === "market/demo")).toBe(true);
     expect(requests.filter((request) => request.actionId === "management:begin")).toHaveLength(1);
   });
+  // Controller rule ④ (contract V2.10, settled 2026-11-26; maintainer review 03:52 of c6efda5691): after NOT_FOUND, "Open"
+  // is decided only from one installed read, its market record and its instances together. A market detail's 'self' is
+  // only "the install current when it was read": combined with another response's instances it can name a replaced
+  // instance. Responses shaped as the Host projects them (contract section "同一响应里归属与实例出自同一次安装"; it has
+  // no JSON samples for this). Both failed on c6efda5691 (it read the detail after the snapshot). Tier: unit/jsdom.
+  const replaced = { ...demoGhost, manifest: { ...demoGhost.manifest, version: "2" },
+    approval: { state: "approved", revision: "22222222-2222-4222-8222-222222222222" } };
+  it.each([
+    ["the detail says this install, the installed read another install's record beside the replaced instance", false],
+    ["the installed read says this install beside its instance, and the detail cannot be read", true],
+  ] as const)("after the receipt is gone, Open comes only from one installed read: %s", async (_name, sameResponseProves) => {
+    let installed = false, receiptGone = false;
+    const requests = marketWire((request) => {
+      switch (request.actionId) {
+        case "management:snapshot":
+          if (request.input?.read === "capabilities") return { catalogPaging: true };
+          if (request.input?.read === "catalog") return marketPage(installed ? [] : [item]);
+          if (!installed) return managementSnapshot(false);
+          return sameResponseProves ? managementSnapshot(true)
+            : { ...managementSnapshot(true, { ...item, installState: "installed", installedOperationAttribution: "unattributed" }), ghosts: [replaced] };
+        case "management:market-detail":
+          if (installed && sameResponseProves) throw hostError("TIMEOUT");
+          return { ...item, installState: installed ? "installed" : "not-installed", ...attributed(installed, "screen-operation"),
+            manifest: { schemaVersion: 3, id: "demo", name: "Demo", version: "1" } };
+        case "management:begin": return demoConsent(request);
+        case "management:answer": installed = true; throw new Error("[TIMEOUT] remote invoke timed out");
+        case "management:operation":
+          if (receiptGone) throw hostError("NOT_FOUND");
+          return { operationId: request.input.operationId, phase: "running" };
+        default: throw new Error("unexpected " + request.actionId);
+      }
+    });
+    await openMarket();
+    await act(async () => shownMarket().install(shownMarket().items[0]));
+    await settle(14);
+    await act(async () => { void fixture.props.get("confirmation").controller.answer(true); });
+    await settle(14);
+    receiptGone = true;
+    await act(async () => { await shownMarket().checkResult(item); });
+    await settle(14);
+    expect(fixture.read.mock.calls.some((call: any[]) => call[2]?.id === "_root__demo")).toBe(sameResponseProves);
+    if (!sameResponseProves) expect(shownMarket().rowState(item)).toEqual({ kind: "failed", messageKey: "plugins.market.unconfirmedMismatch" });
+    expect(requests.filter((request) => request.actionId === "management:begin")).toHaveLength(1);
+    expect(requests.filter((request) => request.actionId === "management:answer")).toHaveLength(1);
+  });
   // Maintainer reviews (2026-11-25, 01:52 and 04:44): after the receipt expired, the computer replaced custom market A
   // with a same-name repository or folder B and installed B's plugin with the same id and release; the phone took it
   // as A's result. Contract V2.9 (maintainer reviews 09:30 and 10:36): only the Host's record that this attempt's
@@ -3246,17 +3295,17 @@ describe("market install recovery", () => {
     const { publisherKind: _server, ...base } = marketItem("demo", "Demo");
     const item = { ...base, pluginId: "custom:Team/demo", sourceType: "git-market", sourceMarketName: "Team", sourceIdentity: sourceA };
     let installed = false, receiptGone = false;
+    const record = () => ({ ...item, installState: installed ? "installed" : "not-installed",
+      ...(installed ? { installedSourceId: sourceA.sourceId } : {}), ...attributed(installed, installedOperationId, olderHost) });
     const requests = marketWire((request) => {
       switch (request.actionId) {
         case "management:snapshot":
           if (request.input?.read === "capabilities") return { catalogPaging: true };
           if (request.input?.read === "catalog") return { ...marketPage(installed ? [] : [item]), customSourceNames: ["Team"] };
-          return managementSnapshot(installed);
+          // The installed read carries the same record of the plugin as its market detail (V2.10, one install record).
+          return managementSnapshot(installed, record());
         case "management:market-detail":
-          return { ...item, installState: installed ? "installed" : "not-installed",
-            ...(installed ? { installedSourceId: sourceA.sourceId } : {}),
-            ...attributed(installed, installedOperationId, olderHost),
-            manifest: { schemaVersion: 3, id: "demo", name: "Demo", version: "1" } };
+          return { ...record(), manifest: { schemaVersion: 3, id: "demo", name: "Demo", version: "1" } };
         case "management:begin": return { operationId: request.input.operationId, phase: "confirmation", consent: {
           requestId: "consent", initiator: "user", origin: "custom-market", originLabel: "Team", originSource: sourceA,
           installationSource: { kind: "third-party" },
@@ -3331,16 +3380,17 @@ describe("market install recovery", () => {
     const custom = scenario === "mismatch";
     const shown = custom ? { ...base, pluginId: "custom:Team/demo", sourceType: "local-market", sourceMarketName: "Team", sourceIdentity: folderA } : item;
     let onComputer = false, receiptGone = false;
+    const record = () => ({ ...shown, installState: onComputer ? "installed" : "not-installed", ...attributed(onComputer),
+      ...(custom && onComputer ? { installedSourceId: folderB.sourceId } : {}) });
     const requests = marketWire((request) => {
       switch (request.actionId) {
         case "management:snapshot":
           if (request.input?.read === "capabilities") return { catalogPaging: true };
           if (request.input?.read === "catalog") return { ...marketPage(onComputer ? [] : [shown]), customSourceNames: custom ? ["Team"] : [] };
-          return managementSnapshot(onComputer);
+          // The installed read carries the same record of the plugin as its market detail (V2.10, one install record).
+          return managementSnapshot(onComputer, record());
         case "management:market-detail":
-          return { ...shown, installState: onComputer ? "installed" : "not-installed", ...attributed(onComputer),
-            ...(custom && onComputer ? { installedSourceId: folderB.sourceId } : {}),
-            manifest: { schemaVersion: 3, id: "demo", name: "Demo", version: "1" } };
+          return { ...record(), manifest: { schemaVersion: 3, id: "demo", name: "Demo", version: "1" } };
         case "management:begin":
           if (scenario === "noConsent") { onComputer = true; throw new Error("[TIMEOUT] remote invoke timed out"); }
           return custom ? { operationId: request.input.operationId, phase: "confirmation", consent: {
