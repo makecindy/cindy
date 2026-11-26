@@ -9,7 +9,6 @@ import type { TaskDigestFailure } from './taskDigest.js';
 import { decideProviderGroupFailure } from '../provider-group/failurePolicy.js';
 import {
   botModelRouteIndex,
-  isBotFallbackRouteUsable,
   nextBotModelRoute,
   normalizeBotModelChain,
   type BotModelRoute,
@@ -26,7 +25,6 @@ export interface FollowUpRouteInput {
   visitedRoutes: readonly string[];
   /** SSH 远端任务不能跨 harness 切换(与候选链自动恢复同一口径)。 */
   sameHarnessOnly: boolean;
-  readMergedAccount(providerId: string): string | undefined;
   /** 任务当前上下文用量(tokens);没有可信读数为 null(此时不推荐更小窗口)。 */
   contextTokens: number | null;
   /** 任务当前路线的上下文窗口;未知为 null。 */
@@ -63,7 +61,7 @@ export function suggestFollowUpRoute(input: FollowUpRouteInput): BotModelRoute |
     input.current,
     input.visitedRoutes,
     (candidate) =>
-      isBotFallbackRouteUsable(candidate, input.current.harness, input.sameHarnessOnly, input.readMergedAccount)
+      (!input.sameHarnessOnly || candidate.harness === input.current.harness)
       // 换过去就挤满的小窗口路线不推荐。
       && agentSwitchKeepsContextHeadroom({
         contextTokens: input.contextTokens,

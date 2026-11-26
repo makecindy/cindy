@@ -28,7 +28,6 @@ function input(overrides: Partial<FollowUpRouteInput> = {}): FollowUpRouteInput 
     failure: { phase: 'usage-limit', error: '已达用量上限', errorReason: null },
     visitedRoutes: [],
     sameHarnessOnly: false,
-    readMergedAccount: () => undefined,
     contextTokens: 40_000,
     currentContextWindow: 1_000_000,
     windowOf: (route) => WINDOWS[route.model] ?? null,
@@ -43,18 +42,6 @@ describe('follow-up route suggestion', () => {
     expect(suggestFollowUpRoute(input({ chain: [OPUS] }))).toBeNull();
     // 链首之外的候选被裁掉,当前路线即便在被裁掉的后备里,也不会被带回链首。
     expect(suggestFollowUpRoute(input({ current: SOL }))).toBeNull();
-  });
-
-  // #13206: get_task_digest must skip the same merged local backup as automatic recovery.
-  it('skips the merged local alias and preserves routes using a different placement', () => {
-    const old = { ...OPUS, providerId: 'old-subscription' };
-    const options = input({ chain: [OPUS, old, SOL], readMergedAccount: id => id === old.providerId ? 'account-a' : undefined });
-    expect(suggestFollowUpRoute(options)).toMatchObject(SOL);
-    expect(suggestFollowUpRoute({ ...options, chain: [OPUS, old] })).toBeNull();
-    expect(suggestFollowUpRoute({ ...options, readMergedAccount: () => undefined })).toMatchObject(old);
-    expect(suggestFollowUpRoute({ ...options, sameHarnessOnly: true, chain: [OPUS, SOL, old] })).toMatchObject(old);
-    const remote = { ...old, agentDeviceId: 'device-b' };
-    expect(suggestFollowUpRoute({ ...options, chain: [OPUS, remote] })).toMatchObject(remote);
   });
 
   it('gives no suggestion for failures a different model cannot fix', () => {

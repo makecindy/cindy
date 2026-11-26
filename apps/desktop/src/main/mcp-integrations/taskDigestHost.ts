@@ -12,7 +12,6 @@ import type { AgentKind } from '@cindy/model-providers';
 
 import { getDbClient } from '../localDb/client/current.js';
 import { botProfileVersions, botSessionLinks, sessions } from '../localDb/schema.js';
-import { readMergedProviderAccount } from '../subscription-accounts/placement.js';
 import { getActiveCatalog } from '../maker-host/active-catalog.js';
 import { readEffectiveBotModelChain } from '../maker-host/bot-model-chain-settings-store.js';
 import { resolveConfiguredContextWindow } from '../maker-host/model-context-settings.js';
@@ -248,7 +247,6 @@ export function createDesktopTaskDigestDeps(host: DesktopTaskDigestHost): TaskDi
           failure: { ...failure, ...(failure.phase === 'errored' ? runtime?.terminalError ?? {} : {}) },
           visitedRoutes: getSessionRuntimeControlSnapshot(targetSessionId).visitedRoutes,
           sameHarnessOnly: !!target?.remoteHostId,
-          readMergedAccount: readMergedProviderAccount,
           contextTokens: usage.contextTokens,
           currentContextWindow: usage.contextWindow ?? verifiedRouteWindow(harness, current.model, current.provider_id),
           windowOf: (candidate) => verifiedRouteWindow(candidate.harness, candidate.model, candidate.providerId),

@@ -11,7 +11,7 @@
  */
 import { describe, expect, it } from 'vitest';
 
-import { nextBotModelRoute, botModelRouteRuntimeKey, type BotModelRoute } from '../../../shared/botModelChain';
+import { normalizeBotModelChain, selectBotFallbackRoute, nextBotModelRoute, botModelRouteRuntimeKey, type BotModelRoute } from '../../../shared/botModelChain';
 import type { ModelGroupRoute, ModelGroupsConfig } from '../../../shared/modelGroups';
 import { botModelGroupsSignature, expandBotModelGroups } from '../botRoutes';
 
@@ -56,6 +56,24 @@ describe('model groups in a companion model chain', () => {
     const current = expanded.find((route) => route.model === from)!;
     const keys = visited.map((model) => botModelRouteRuntimeKey(expanded.find((route) => route.model === model)!));
     expect(nextBotModelRoute(expanded, current, keys)?.model ?? null).toBe(next);
+  });
+
+  // #13206: a single saved smart route may still contain the former provider of a merged account.
+  it('skips a merged local source within one smart route and keeps sources with their own accounts', () => {
+    const current = plain('opus', { harness: 'claude', providerId: 'anthropic', modelGroup: 'g' });
+    const primary = { agentKind: 'cc', providerId: 'anthropic', model: 'opus' } as const;
+    const alias = { ...primary, providerId: 'subscription-a' };
+    const backup = { agentKind: 'codex', providerId: 'openai', model: 'gpt' } as const;
+    const select = (sources: ModelGroupRoute['candidates'], merged = true) => {
+      const smartRoute = { ...group, strategy: 'order' as const, candidates: [primary, ...sources] };
+      const routes = expandBotModelGroups(normalizeBotModelChain([current]), { routes: [smartRoute] }, NOW);
+      return selectBotFallbackRoute(routes, current, [], null,
+        id => merged && id === alias.providerId ? 'account-a' : undefined);
+    };
+    expect(select([alias, backup]).route?.providerId).toBe('openai');
+    expect(select([alias])).toEqual({ route: null, routeLocked: true });
+    expect(select([alias, backup], false).route?.providerId).toBe('subscription-a');
+    expect(select([{ ...alias, agentDeviceId: 'mac-2' }, backup]).route?.agentDeviceId).toBe('mac-2');
   });
 
   it('tries the group a time-of-day exception switched to first, then the original group', () => {
