@@ -2269,9 +2269,10 @@ function createXdResponsesToolImageTransform(frozenAuthInjection?: CodexProxyAut
       || !isPlainObject(body) || !isXdGatewayUpstream(ctx.upstreamBase)) return null;
     const { providerId, routing, catalogModel } = responsesCompatibilityRoute(body, ctx, frozenAuthInjection);
     if (providerId !== 'xd' || !routing || (routing.wireProtocol ?? 'openai-responses') !== 'openai-responses') return null;
-    const modelId = stripCodexGatewayWirePrefix(catalogModel.replace(/\[1m\]$/, ''));
-    const model = getActiveCatalog().providers.find(provider => provider.id === 'xd')
-      ?.models.codex?.find(candidate => candidate.id === modelId);
+    const modelId = catalogModel.replace(/\[1m\]$/, '');
+    const models = getActiveCatalog().providers.find(provider => provider.id === 'xd')?.models.codex;
+    const model = models?.find(candidate => candidate.id === modelId)
+      ?? models?.find(candidate => candidate.id === stripCodexGatewayWirePrefix(modelId));
     const inputs = model?.modalities?.input;
     if (inputs?.length !== 1 || inputs[0] !== 'text') return null;
     return replaceResponsesToolResultImagesWithNotice(body);

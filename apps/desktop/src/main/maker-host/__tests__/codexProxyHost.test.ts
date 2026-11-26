@@ -11065,15 +11065,16 @@ describe('Codex gateway rejection observer', () => {
   });
 });
 
-// #2907: the Chat bridge coverage cannot see images sent by the XD Responses
-// passthrough. Exercise the Desktop proxy with the smallest replay of a screenshot.
+// #2907, PR #12648 review: this loopback integration exercises the production
+// POST /responses proxy. A tool screenshot must survive on the exact vision
+// route even when its unprefixed text sibling is present in the same catalog.
 it('downgrades only tool images on XD text-only Responses routes', async () => {
   const host = await freshCodexProxyHost(true);
   const { setXdGatewayModels } = await import('../active-catalog.js');
   const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
   const real = await vi.importActual<typeof import('@cindy/anthropic-compat-proxy')>('@cindy/anthropic-compat-proxy');
-  const textModel = 'deepseek/deepseek-v4-flash';
-  const visionModel = 'deepseek/deepseek-v4.1-flash';
+  const textModel = 'gpt-5.6-sol';
+  const visionModel = `codex/${textModel}`;
   const image = { type: 'input_image', image_url: 'data:image/png;base64,aW1hZ2U=' };
   const user = { type: 'message', role: 'user', content: [image] };
   const call = { type: 'function_call', name: 'view_image', call_id: 'call_screenshot', arguments: '{}' };
