@@ -2493,7 +2493,7 @@ export class TurnPermissionPolicyUnsupportedError extends Error {
   readonly code = 'TURN_PERMISSION_POLICY_UNSUPPORTED';
 
   constructor(
-    /** 'acp' = a plugin engine, which cannot enforce a per-turn policy in any mode. */
+    /** 'acp' = a plugin engine (enforces per-turn policies only when it advertises permissionGate outside bypassPermissions). */
     readonly agentKind: EngineKind,
     readonly permissionMode: PermissionMode,
   ) {

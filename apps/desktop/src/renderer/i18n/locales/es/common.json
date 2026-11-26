@@ -4744,6 +4744,15 @@
       "menu": {
         "disableProvider": "Deshabilitar este proveedor",
         "enableProvider": "Habilitar este proveedor",
+        "icon": "Icono de conexión",
+        "appearance": "Nombre e icono",
+        "ownImage": "Elegir imagen",
+        "imageError": "Elige una imagen PNG, JPG o WebP de menos de 10 MB.",
+        "connectionIcon": {
+          "default": "Predeterminado",
+          "personal": "Personal",
+          "work": "Trabajo"
+        },
         "hideProvider": "Ocultar del selector de modelos",
         "showProvider": "Mostrar en el selector de modelos"
       },
@@ -5958,7 +5967,7 @@
       "uninstallTitle": "¿Desinstalar la extensión Pi?",
       "uninstallDescription": "{{name}} se eliminará de este dispositivo. Las tareas Pi que ya están abiertas mantienen la extensión anterior hasta que se cierran.",
       "confirmUninstall": "Desinstalar",
-      "extensionDialogConfirm": "Confirmar",
+      "extensionDialogConfirm": "Continuar",
       "cancel": "Cancelar",
       "resources": {
         "extension": "Código de extensión",
@@ -7348,6 +7357,30 @@
           "disableBlocked": {
             "controller-encryption-required": "Este ordenador tiene activado «Usar solo Agent-Net». Desactívalo aquí antes de volver el otro ordenador a Device Link.",
             "agent-net-only-relay": "Esta conexión usa una red que solo admite Agent-Net. Elige una ruta compatible con Device Link antes de volver."
+          }
+        },
+        "peerUpdate": {
+          "availableTip": "Versión {{version}} disponible: haz clic para actualizar",
+          "downloading": "Descargando {{version}}…",
+          "relaunching": "Reiniciando para instalar {{version}}…",
+          "confirm": {
+            "title": "¿Actualizar Cindy en «{{name}}»?",
+            "selfTitle": "¿Actualizar Cindy en este ordenador?",
+            "description": "Cindy se actualizará de {{from}} a {{to}} y se reiniciará en ese dispositivo. La conexión remota se interrumpirá brevemente.",
+            "selfDescription": "Cindy se actualizará de {{from}} a {{to}} y se reiniciará en este ordenador.",
+            "busyWarning": "Las tareas en ejecución o trabajos en segundo plano en ese dispositivo se interrumpirán al reiniciar.",
+            "selfBusyWarning": "Las tareas en ejecución o trabajos en segundo plano en este ordenador se interrumpirán al reiniciar.",
+            "linuxPermissionHint": "Las instalaciones gestionadas en Linux pueden pedir la contraseña del sistema en el dispositivo de destino.",
+            "windowsPermissionHint": "Si está instalado en una carpeta protegida, puede pedir permisos del sistema en el dispositivo de destino.",
+            "action": "Actualizar ahora"
+          },
+          "toast": {
+            "started": "Actualizando «{{name}}» a {{version}}",
+            "relaunching": "«{{name}}» se está reiniciando para instalar {{version}}",
+            "versionChanged": "La versión disponible en «{{name}}» cambió. Vuelve a abrir la tarjeta para revisar.",
+            "noUpdate": "No hay ninguna actualización instalable disponible en «{{name}}».",
+            "busy": "«{{name}}» ya está ejecutando otra actualización. Inténtalo en un momento.",
+            "failed": "No se pudo actualizar Cindy en «{{name}}»."
           }
         }
       }
@@ -9882,7 +9915,7 @@
       "allow": "Permitir",
       "deny": "Denegar",
       "questionTitle": "Se necesita tu intervención",
-      "submit": "Enviar",
+      "submit": "Enviar respuesta",
       "planTitle": "Revisión del plan",
       "approve": "Aprobar",
       "requestChanges": "Solicitar cambios",
@@ -12465,7 +12498,7 @@
           "soleOwnerHint": "Eres el único miembro que queda. Archiva este grupo para conservar su historial y restaurarlo más adelante.",
           "archive": "Archivar grupo",
           "archiveHint": "Al archivar este grupo, se deshabilita para todos los miembros y se detienen los mensajes nuevos y las ejecuciones de los amigos. El historial se conserva. Busca el grupo para ver su historial o desarchivarlo.",
-          "confirm": "Confirmar",
+          "confirm": "Continuar",
           "lastOwner": "Transfiere la propiedad a otro miembro antes de salir o quitar al propietario actual.",
           "conflict": "Alguien actualizó este grupo. Actualiza y vuelve a intentarlo.",
           "unarchive": "Desarchivar grupo",
@@ -13338,7 +13371,7 @@
       }
     },
     "confirmDialog": {
-      "confirm": "Confirmar",
+      "confirm": "Continuar",
       "cancel": "Cancelar",
       "dontShowAgain": "No volver a mostrar"
     },
@@ -14902,27 +14935,27 @@
         },
         "acp": {
           "ask": {
-            "label": "Confirmar cada vez",
+            "label": "Permisos predeterminados",
             "description": "Confirmas cuando el Agent pide permiso. Cindy no puede bloquear las acciones para las que el Agent no pide confirmación."
           },
           "default": {
-            "label": "Predeterminado",
+            "label": "Permisos predeterminados",
             "description": "El agente trabaja a su manera predeterminada; tú confirmas sus solicitudes de permiso."
           },
           "acceptEdits": {
-            "label": "Aceptar ediciones",
+            "label": "Aceptar ediciones automáticamente",
             "description": "El agente edita archivos directamente; tú confirmas sus demás solicitudes de permiso."
           },
           "auto": {
-            "label": "Automático",
+            "label": "Revisión automática",
             "description": "El agente decide qué necesita confirmación; tú confirmas las solicitudes que haga."
           },
           "plan": {
-            "label": "Solo planificar",
+            "label": "Modo de plan",
             "description": "El agente solo analiza y planifica; no edita archivos."
           },
           "bypassPermissions": {
-            "label": "Permitir todo",
+            "label": "Acceso completo",
             "description": "Todos los permisos que pida el Agent se conceden automáticamente."
           }
         }
@@ -15562,7 +15595,7 @@
       "back": "Atrás",
       "skip": "Omitir",
       "next": "Siguiente",
-      "submit": "Enviar",
+      "submit": "Enviar respuesta",
       "sendAndContinue": "Enviar y continuar",
       "close": "Cerrar",
       "customAnswer": "Escribe algo más…",
@@ -16015,6 +16048,10 @@
       "diffUnchangedLines_other": "{{count}} líneas sin cambios",
       "diffUnchangedLines_many": "{{count}} líneas sin cambios",
       "diffPreviewLoading": "Preparando vista previa de diferencias…"
+    },
+    "filePreview": {
+      "changed": "Archivo modificado",
+      "refreshHint": "Haz clic para actualizar"
     },
     "textLightbox": {
       "unreadable": "No se puede leer este archivo",

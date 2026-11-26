@@ -104,6 +104,7 @@ import {
   findParkedEngineSession,
   findPendingAgentHandoff,
   listMessagesForAgentHandoff,
+  readAutoReviewHistoryPage,
   findForkParentSessionId,
   findPendingForkOrigin,
   getMessageDeletionTarget,
@@ -381,6 +382,23 @@ describe('local-db:messages:list cursor', () => {
       const rows=await listMessagesForAgentHandoff('s1',null,undefined,'authorization');
       expect(rows).toHaveLength(109);expect(rows[0]?.clientId).toBe('human-20');expect(rows.at(-1)?.clientId).toBe('human-128');
       expect(await listMessagesForAgentHandoff('s1',100,undefined,'authorization')).toHaveLength(100);
+    } finally { sqlite.close(); }
+  });
+
+  it('detects omitted authority before filtering markers and pages replay before the rewind target', async () => {
+    const sqlite = createDb();
+    try {
+      for (let i = 0; i < 400; i++) {
+        insertCostMessage(sqlite, { id: String(i), role: 'user', createdAt: 1 });
+      }
+      expect((await readAutoReviewHistoryPage('s1')).complete).toBe(true);
+      insertCostMessage(sqlite, { id: 'marker', role: 'user', createdAt: 2, agentMeta: { contextRebuild: {} } });
+      const page = await readAutoReviewHistoryPage('s1');
+      expect(page.complete).toBe(false);
+      expect(page.messages).toHaveLength(399);
+      const target = sqlite.prepare("SELECT rowid FROM messages WHERE id = '3'").get() as { rowid: number };
+      const kept = await listMessagesForAgentHandoff('s1', 2, undefined, 'replay', { createdAt: 1, rowid: target.rowid });
+      expect(kept.map(row => row.clientId)).toEqual(['1', '2']);
     } finally { sqlite.close(); }
   });
 
