@@ -7416,8 +7416,7 @@
             "machines": "Máquinas provedoras remotas"
           },
           "usage": {
-            "remoteModel": "Modelo remoto",
-            "remoteTask": "Tarefa remota"
+            "remoteModel": "Modelo remoto"
           },
           "bundle": {
             "mixed": "{{running}} em execução · {{ready}} prontas",
@@ -16445,7 +16444,7 @@
         "groupSwitch": "Continuou em outro computador automaticamente"
       },
       "autoResumeSeparator": {
-        "label": "Conexão interrompida — retomada automaticamente"
+        "label": "Resposta vazia — retomada automaticamente"
       },
       "autoResumePending": {
         "label": "Reconectando",

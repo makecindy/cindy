@@ -7304,8 +7304,7 @@
             "machines": "远供之机"
           },
           "usage": {
-            "remoteModel": "远模",
-            "remoteTask": "远务"
+            "remoteModel": "远模"
           },
           "bundle": {
             "mixed": "{{running}} 行中 · {{ready}} 待命",
@@ -16263,7 +16262,7 @@
         "groupSwitch": "已自易一机续之"
       },
       "autoResumeSeparator": {
-        "label": "连接中断，已自续"
+        "label": "未得答，已自续"
       },
       "autoResumePending": {
         "label": "方重连",

@@ -2073,7 +2073,9 @@ export function getDeviceLinkPeerLinks(includeTraffic = false): DeviceLinkPeerLi
   const agentNetRoute = primaryUsesEncryptedTransport ? agentNetRelayRoute() : null;
   const relayTransport = !relayProtocol ? undefined : primaryUsesEncryptedTransport ? agentNetRoute?.via : 'websocket';
   const allPeerLinks = client.getPeerLinkSnapshots();
-  const providerShareRoutes = primaryUsesEncryptedTransport ? agentNetProviderShareRoutes(allPeerLinks) : [];
+  const providerShareRoutes = primaryUsesEncryptedTransport
+    ? agentNetProviderShareRoutes(allPeerLinks, (peer) => client!.connectionFor(peer) === client)
+    : [];
   return {
     ...traffic,
     // 拓扑只画同账号设备;跨账号 peer(共享任务 / 供应商分享)不在这页。

@@ -7304,8 +7304,7 @@
             "machines": "遠端供應商機器"
           },
           "usage": {
-            "remoteModel": "遠端模型",
-            "remoteTask": "遠端任務"
+            "remoteModel": "遠端模型"
           },
           "bundle": {
             "mixed": "{{running}} 個執行中 · {{ready}} 個就緒",
@@ -16271,7 +16270,7 @@
         "groupSwitch": "已自動換一台電腦繼續"
       },
       "autoResumeSeparator": {
-        "label": "連線中斷，已自動繼續"
+        "label": "回覆為空，已自動繼續"
       },
       "autoResumePending": {
         "label": "重新連線中",

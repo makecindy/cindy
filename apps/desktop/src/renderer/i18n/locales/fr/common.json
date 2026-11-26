@@ -7416,8 +7416,7 @@
             "machines": "Machines fournisseurs distantes"
           },
           "usage": {
-            "remoteModel": "Modèle distant",
-            "remoteTask": "Tâche distante"
+            "remoteModel": "Modèle distant"
           },
           "bundle": {
             "mixed": "{{running}} en cours d'exécution · {{ready}} prêtes",
@@ -16445,7 +16444,7 @@
         "groupSwitch": "Poursuite automatique sur un autre ordinateur"
       },
       "autoResumeSeparator": {
-        "label": "Connexion interrompue : reprise automatique"
+        "label": "Réponse vide — reprise automatique"
       },
       "autoResumePending": {
         "label": "Reconnexion",

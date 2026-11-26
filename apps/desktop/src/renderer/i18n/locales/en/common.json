@@ -7347,8 +7347,7 @@
             "machines": "Remote provider machines"
           },
           "usage": {
-            "remoteModel": "Remote model",
-            "remoteTask": "Remote task"
+            "remoteModel": "Remote model"
           },
           "bundle": {
             "mixed": "{{running}} running · {{ready}} ready",
@@ -16338,7 +16337,7 @@
         "groupSwitch": "Continued on another computer automatically"
       },
       "autoResumeSeparator": {
-        "label": "Connection interrupted — resumed automatically"
+        "label": "Empty response — resumed automatically"
       },
       "autoResumePending": {
         "label": "Reconnecting",

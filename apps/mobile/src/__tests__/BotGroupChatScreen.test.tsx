@@ -211,7 +211,7 @@ vi.mock('@/utils/useTaskListBack', () => ({ useTaskListBack: () => h.leave }));
 vi.mock('@/platform/chrome/AnchoredPullDownMenu', () => ({ AnchoredPullDownMenu: ({ children }: any) => children }));
 vi.mock('@/device-link/remoteResourceCache', () => ({ markRemoteResourceRead: h.markRead }));
 vi.mock('@/device-link/remoteResourceAvailability', () => ({ readRemoteCollectionCache: () => [] }));
-vi.mock('@/platform/chrome', () => ({ showConfirm: h.confirm }));
+vi.mock('@/platform/chrome', async () => ({ showConfirm: h.confirm, ...(await import('@/platform/chrome/NativeSwitch')) }));
 vi.mock('@/platform/chrome/NativeSwitch', () => ({ NativeSwitch: ({ testID, value, disabled, onValueChange }: any) =>
   el('button', { 'data-testid': testID, role: 'switch', 'aria-checked': value, disabled, onClick: () => onValueChange(!value) }) }));
 vi.mock('@/platform/chrome/NativePullDownMenu', () => ({
@@ -1826,17 +1826,17 @@ describe('group composer', () => {
     expect(h.chat.act).toHaveBeenLastCalledWith('send', expect.objectContaining({ mentions: { all: false, botIds: ['abu'] } }));
   });
 
-  it('keeps the current human in the group but excludes it from mention choices and typed mentions', async () => {
+  it.each([false, true])('offers and resolves the current human only in groups (direct: %s)', async direct => {
     h.chat.server = true;
-    const data = group({ openPlan: null });
+    const data = group({ openPlan: null, ...(direct ? { conversationKind: 'direct' as const } : {}) });
     data.members.unshift({ ...data.members[0]!, botId: 'self', name: 'Me', actorKind: 'human', isSelf: true });
     await render(data);
     await type('@');
-    expect(byId('botGroup.mention.self')).toBeNull();
+    expect(!!byId('botGroup.mention.self')).toBe(!direct);
     expect(byId('botGroup.mention.mimi')).not.toBeNull();
     await type('@Me @阿布 hello');
     await click('botGroup.composer.send');
-    expect(h.chat.act).toHaveBeenLastCalledWith('send', expect.objectContaining({ mentions: { all: false, botIds: ['abu'] } }));
+    expect(h.chat.act).toHaveBeenLastCalledWith('send', expect.objectContaining({ mentions: { all: false, botIds: direct ? ['abu'] : ['self', 'abu'] } }));
   });
 
   it.each(['picked', 'manual'])('removes only the %s token identity when same-name mentions coexist', async removed => {
@@ -2527,6 +2527,21 @@ describe('group settings', () => {
     await click('botGroup.settings.leave');
     expect(h.chat.act).toHaveBeenCalledWith('leave', undefined);
     expect(h.leave).toHaveBeenCalledOnce();
+  });
+
+  // #13127 (unit): older computers can report the assistant state without accepting the write.
+  it.each([true, false])('uses the computer assistant switch only when writable (%s)', async supported => {
+    const data = group({ serverBacked: true, supportsSettingsManagement: true, revision: 5,
+      supportsGroupAssistant: true, assistantEnabled: true, supportsAssistantManagement: supported });
+    data.members[0] = { ...data.members[0], isSelf: true, role: 'admin' };
+    await openSettings(data);
+    await click('botGroup.settings.manage');
+    const toggle = byId('botGroup.settings.assistant');
+    expect(toggle?.getAttribute('aria-checked')).toBe('true');
+    expect(toggle?.disabled).toBe(!supported);
+    await click('botGroup.settings.assistant');
+    if (supported) expect(h.chat.act).toHaveBeenCalledWith('set-assistant', { assistant: false, expectedRevision: 5 });
+    else expect(h.chat.act).not.toHaveBeenCalled();
   });
 
   // The computer ignores topic and description; renaming there must not send an empty 群简介 over the real one.
@@ -3353,16 +3368,22 @@ describe('mobile group threads', () => {
     expect(h.chat.markRead).not.toHaveBeenCalled();
   });
 
-  it('renders authoritative reply summary alongside the reply and More actions', async () => {
+  it.each([true, false])('opens the group topic from the reply summary without an inline reminder (unread: %s)', async unread => {
     h.chat.server = true;
-    const root = { ...rootMessage(), replyCount: 17, threadUnread: { count: 2, mentioned: true }, threadPreview: {
+    const replyAt = new Date().setHours(15, 15, 0, 0);
+    const root = { ...rootMessage(), replyCount: 17, threadUnread: unread ? { count: 2, mentioned: true } : undefined, threadPreview: {
       replies: [{ id: 'reply', authorKind: 'user' as const, authorBotId: 'other', authorName: 'Other', isSelf: false,
-        text: 'Follow-up', attachments: [], createdAt: Date.now() - 120000 }],
+        text: 'Follow-up', attachments: [], createdAt: replyAt }],
     } };
     await render(threadGroup({ messages: [root] }), 'ready', undefined, '');
-    expect(byId(`botGroup.thread.${rootId}`)?.textContent).toContain('count=17');
-    expect(byId(`botGroup.thread.${rootId}`)?.textContent).toContain('groupChat.thread.mentioned');
-    expect(byId(`botGroup.thread.${rootId}`)?.textContent).not.toContain('lastMinutes');
+    const summary = byId(`botGroup.thread.${rootId}`);
+    expect(summary?.textContent).toContain('count=17');
+    expect(summary?.textContent).not.toContain('groupChat.thread.newReplies');
+    expect(summary?.textContent).not.toContain('groupChat.thread.mentioned');
+    expect(summary?.textContent).not.toContain('lastMinutes');
+    expect(summary?.textContent).not.toContain('lastHours');
+    if (unread) expect(summary?.textContent).not.toContain('15:15');
+    else expect(summary?.textContent).toContain('15:15');
     await click(`botGroup.thread.${rootId}`); expect(h.push).toHaveBeenCalledOnce();
     await click(`botGroup.thread.context.${rootId}.action.quote`);
     expect(h.push).toHaveBeenCalledOnce(); expect(byId('botGroup.cancelReply')).not.toBeNull();
