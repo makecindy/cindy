@@ -1,8 +1,8 @@
 import { isSyntheticTriggerContent } from '@cindy/maker-shared/synthetic-trigger';
-import type { AgentKind } from '@cindy/maker-core';
+import type { EngineKind } from '@cindy/maker-core';
 
 export interface TurnModelIdentity {
-  agentKind: AgentKind;
+  agentKind: EngineKind;
   model: string;
   providerId: string | null;
 }
@@ -24,5 +24,6 @@ export async function recordTurnModelChange(
   if (!await deps.record(current)) return;
   // Cross-Harness changes already have a history-handoff boundary.
   if (!previous || previous.agentKind !== current.agentKind || previous.model === current.model) return;
+  if (current.agentKind === 'acp' && previous.providerId !== current.providerId) return;
   await deps.publish({ fromModel: previous.model, toModel: current.model, modelOnly: true });
 }

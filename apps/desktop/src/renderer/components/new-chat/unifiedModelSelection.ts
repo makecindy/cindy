@@ -28,6 +28,7 @@ import { isSourceRouteProviderId } from '@/features/model-groups/sourceRouteProv
 import { modelConfigCopyIdentity, type ModelConfigCopy } from '@/state/modelConfigCopy';
 import type { ModelFavoriteItem } from '@/state/modelFavorites';
 import type { RecentModelItem } from '@/state/recentModels';
+import type { ResolvedPluginEngineFavorite } from '@/lib/pluginEngineFavorites';
 
 export { resolveStoredModelEntry };
 
@@ -510,6 +511,20 @@ export interface UnifiedListRow {
   agentDeviceId?: string;
   /** 那台电脑的目录此刻读不到:行照常列出但不可选(entry 只是按收藏拼出的占位)。 */
   unavailable?: true;
+  /** 收藏区里插件引擎模型的已解析信息;内置模型行没有。 */
+  pluginEngine?: ResolvedPluginEngineFavorite;
+}
+
+function pluginEngineFavoriteStubEntry(resolved: ResolvedPluginEngineFavorite): UnifiedModelEntry {
+  return {
+    providerId: resolved.engine.providerId,
+    modelId: resolved.row.id,
+    displayName: resolved.row.name ?? resolved.row.id,
+    candidates: ['claude-code'],
+    recommended: 'claude-code',
+    nativeAgent: null,
+    capabilities: {},
+  };
 }
 
 /** 收藏区里本目录之外的那一条:由调用方按那台电脑的目录解析(见 buildUnifiedListSections)。 */
@@ -688,6 +703,13 @@ export function buildUnifiedListSections(args: {
    */
   resolveForeignFavorite?: (item: ModelFavoriteItem) => ForeignFavoriteRow | null;
   /**
+   * 收藏里属于插件引擎的条目由调用方按完整插件引擎目录(含已隐藏引擎)解析。
+   * 返回 null = 当前不可用 / 模型不存在或不是插件引擎条目;**不删条目**。
+   * 出现在 ★ / 全部视图，以及对应插件引擎的左侧栏格位里。
+   */
+  resolvePluginEngineFavorite?: (item: ModelFavoriteItem) => ResolvedPluginEngineFavorite | null;
+  matchesPluginEngineFavorite?: (resolved: ResolvedPluginEngineFavorite, query: string) => boolean;
+  /**
    * 只从模型分组里收起的供应商(同一供应商「运行于」另一台电脑时只列那台的一项)。收藏与最近仍按完整目录解析，
    * 不因收起而消失。
    */
@@ -720,6 +742,32 @@ export function buildUnifiedListSections(args: {
   // ── 收藏区 ── 恒置顶,在任何 rail 视图下都显示;按供应商筛选时只留该来源的收藏。
   const favRows: UnifiedListRow[] = [];
   for (const item of favorites) {
+    const pluginFavorite = args.resolvePluginEngineFavorite?.(item);
+    if (pluginFavorite) {
+      const matchesRail =
+        rail.kind === 'all' ||
+        rail.kind === 'favorites' ||
+        (rail.kind === 'plugin-engine' &&
+          pluginFavorite.engine.providerId === rail.providerId &&
+          (pluginFavorite.engine.deviceId ?? null) === (rail.deviceId ?? null));
+      if (!matchesRail) continue;
+      if (q && args.matchesPluginEngineFavorite && !args.matchesPluginEngineFavorite(pluginFavorite, q)) {
+        continue;
+      }
+      favRows.push({
+        anchor: {
+          kind: 'fav',
+          uid: item.uid,
+          providerId: pluginFavorite.engine.providerId,
+          modelId: pluginFavorite.row.id,
+        },
+        entry: pluginEngineFavoriteStubEntry(pluginFavorite),
+        favorite: item,
+        pluginEngine: pluginFavorite,
+      });
+      continue;
+    }
+    if (rail.kind === 'plugin-engine') continue;
     const foreign = args.resolveForeignFavorite?.(item);
     if (foreign) {
       if (railProviderFilterId(rail) !== null) continue;
@@ -780,7 +828,7 @@ export function buildUnifiedListSections(args: {
     });
   }
   // ★ 视图只陈列收藏:提前返回,不进最近 / 推荐 / 分组。
-  if (rail.kind === 'favorites') {
+  if (rail.kind === 'favorites' || rail.kind === 'plugin-engine') {
     if (favRows.length > 0) {
       sections.push({ key: 'favorites', kind: 'favorites', rows: favRows });
     }

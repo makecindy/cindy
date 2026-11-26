@@ -1704,9 +1704,9 @@ export class Session {
   }
 
   /** Self-close: only claims the cause when no teardown has started yet. */
-  private closeFromRuntime(): Promise<void> {
+  private closeFromRuntime(crashMessage?: string): Promise<void> {
     if (!this.terminationStarted && this.status !== 'closed') this.runtimeInitiatedClose = true;
-    return this.close();
+    return this.beginClose({ reason: 'navigation' }, crashMessage);
   }
 
   /**
@@ -1715,6 +1715,10 @@ export class Session {
    * Account boundaries go through `detach({ reason: 'account-boundary' })`.
    */
   close(opts?: AgentSessionTeardownOptions): Promise<void> {
+    return this.beginClose(opts ?? { reason: 'navigation' });
+  }
+
+  private beginClose(teardown: AgentSessionTeardownOptions, crashMessage?: string): Promise<void> {
     if (this.closePromise) return this.closePromise;
     if (this.status === 'closed') return Promise.resolve();
 
@@ -1732,7 +1736,7 @@ export class Session {
       reject = onReject;
     });
     this.closePromise = closing;
-    void this.performClose(opts ?? { reason: 'navigation' }).then(resolve, reject);
+    void this.performClose(teardown, crashMessage).then(resolve, reject);
     return closing;
   }
 
@@ -1822,14 +1826,22 @@ export class Session {
     return true;
   }
 
-  private async performClose(teardown: AgentSessionTeardownOptions): Promise<void> {
+  private async performClose(teardown: AgentSessionTeardownOptions, crashMessage?: string): Promise<void> {
     let closeSucceeded = false;
     try {
       // close() fences late provider events before entering here. Settle the
       // owned product turn ourselves before listeners and its claim are lost.
       // Never retry: tools may already have performed external side effects.
-      this.settleUnfinishedTurn(SESSION_CLOSED_MID_TURN_MESSAGE,
-        teardown.reason === 'navigation' && this.handle.isCompactingDeliveredReply?.());
+      const interruptedCompaction = teardown.reason === 'navigation' && this.handle.isCompactingDeliveredReply?.();
+      if (crashMessage !== undefined) {
+        // A crash before the first send also belongs to this runtime. Publish
+        // once, under the close fence, before cancelling the send reservation.
+        if (this.terminalEventObservedGeneration !== this.turnGeneration) {
+          this.emitUnfinishedTurn(crashMessage, 'session_event_loop_crashed', interruptedCompaction);
+        }
+      } else {
+        this.settleUnfinishedTurn(SESSION_CLOSED_MID_TURN_MESSAGE, 'session_closed_mid_turn', interruptedCompaction);
+      }
       this.clearTurnStallWatchdog();
       this.clearTerminalErrorDrain();
       this.cancelSendReservation(this.sendReservation);
@@ -1869,16 +1881,20 @@ export class Session {
     }
   }
 
-  private settleUnfinishedTurn(message: string, interruptedCompaction = false): void {
+  private settleUnfinishedTurn(message: string, reason: string, interruptedCompaction = false): void {
     if (!this.hasUnsettledTurn()) return;
+    this.emitUnfinishedTurn(message, reason, interruptedCompaction);
+  }
+
+  private emitUnfinishedTurn(message: string, reason: string, interruptedCompaction = false): void {
     const usage = this.handle.getPendingTurnUsage?.();
     if (interruptedCompaction || this.abortRecoveryScheduledFor === this.turnGeneration) {
       this.fanOutEvent({ type: 'done', data: { status: 'cancelled', ...(usage ? { usage } : {}) }, source: this.eventSource });
     } else {
       this.fanOutEvent({ type: 'error', data: {
-        message, isTerminal: true, reason: 'session_event_loop_crashed',
+        message, isTerminal: true, reason,
         ...(usage ? { usage } : {}),
-      }, source: this.eventSource });
+      }, source: this.eventSource, sessionTurnGeneration: this.turnGeneration });
     }
   }
 
@@ -1932,7 +1948,7 @@ export class Session {
       if (this.handle.detach) {
         await this.handle.detach(teardown);
       } else {
-        if (this.handle.getPendingTurnUsage) this.settleUnfinishedTurn(SESSION_CLOSED_MID_TURN_MESSAGE);
+        if (this.handle.getPendingTurnUsage) this.settleUnfinishedTurn(SESSION_CLOSED_MID_TURN_MESSAGE, 'session_closed_mid_turn');
         await this.handle.close(teardown);
       }
       detachSucceeded = true;
@@ -1984,6 +2000,11 @@ export class Session {
     listener: (manifest: PiRuntimeCapabilityManifest | undefined) => void,
   ): () => void {
     return this.handle.onRuntimeCapabilitiesChange?.(listener) ?? (() => undefined);
+  }
+
+  /** Subscribe to per-session negotiated capability changes (plugin ACP engines). */
+  onCapabilitiesChange(listener: (capabilities: Capabilities) => void): () => void {
+    return this.handle.onCapabilitiesChange?.(listener) ?? (() => undefined);
   }
 
   async getContextUsage(): Promise<ContextUsageData> {
@@ -3911,25 +3932,16 @@ export class Session {
         this.fanOutEvent(event, observedGeneration, awaitingGeneration, true);
       }
     } catch (e) {
-      this.logger.error('event loop crashed', { error: String(e) });
-      if (this.closePromise || this.status === 'closed') return;
-      // 先占住 closing gate，避免 terminal error listener 在死掉的 iterator 上重新 send。
-      const closing = this.closeFromRuntime();
-      if (this.terminalEventObservedGeneration !== this.turnGeneration) {
-        this.fanOutEvent({
-          type: 'error',
-          data: {
-            message: `Session event loop stopped unexpectedly: ${String(e)}`,
-            isTerminal: true,
-            reason: 'session_event_loop_crashed',
-          },
-          source: this.eventSource,
-        });
-      }
+      if (this.terminationStarted || this.status === 'closed') return;
+      const detail = redactSensitiveText(String(e));
+      this.logger.error('event loop crashed', {
+        error: detail,
+        ...(e instanceof Error && e.stack ? { stack: redactSensitiveText(e.stack) } : {}),
+      });
       try {
-        await closing;
+        await this.closeFromRuntime(`Session event loop stopped unexpectedly: ${detail}`);
       } catch (closeError) {
-        this.logger.warn('event-loop crash handle close failed', { error: String(closeError) });
+        this.logger.warn('event-loop crash handle close failed', { error: redactSensitiveText(String(closeError)) });
       }
       return;
     }
@@ -3954,7 +3966,7 @@ export class Session {
     this.runtimeInitiatedClose = true;
     this.terminationStarted = true;
     this.closePromise = Promise.resolve();
-    this.settleUnfinishedTurn('Session event loop stopped unexpectedly without a terminal event');
+    this.settleUnfinishedTurn('Session event loop stopped unexpectedly without a terminal event', 'session_event_loop_crashed');
     this.clearTurnStallWatchdog();
     this.cancelSendReservation(this.sendReservation);
     this.sendReservation = null;

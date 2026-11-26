@@ -250,6 +250,7 @@
     "edit": "Editar",
     "steer": "Intervir",
     "steerQueued": "Ainda não foi entregue. A mensagem continua em fila.",
+    "steerUnsupportedNotice": "Este motor não permite orientar. As mensagens em fila serão enviadas quando o turno atual terminar.",
     "moveUp": "Mover para antes",
     "moveDown": "Mover para depois",
     "cancelSend": "Cancelar envio",
