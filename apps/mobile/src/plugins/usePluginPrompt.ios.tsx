@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useWindowDimensions } from "react-native";
-import { Button, HStack, Text, VStack } from "@expo/ui/swift-ui";
-import { buttonStyle, fixedSize, font, foregroundStyle, frame, tint } from "@expo/ui/swift-ui/modifiers";
+import { Button, HStack, Rectangle, Text, VStack } from "@expo/ui/swift-ui";
+import { accessibilityHidden, buttonStyle, fixedSize, font, foregroundStyle, frame, opacity, tint,
+  useScrollGeometryChange } from "@expo/ui/swift-ui/modifiers";
 import { ComposerSheet } from "@/session/ComposerSheet";
 import { spacing, useTheme } from "@/theme";
-import { CONSENT_SIDE_BY_SIDE_MIN_WIDTH } from "./pluginConsentPresentation";
+import { CONSENT_FADE_HEIGHT, CONSENT_SIDE_BY_SIDE_MIN_WIDTH } from "./pluginConsentPresentation";
 
 /** A confirmation, or (no `cancelLabel`) a notice with one button that only closes it. */
 export interface PluginPromptRequest {
@@ -39,6 +40,13 @@ export function usePluginPrompt() {
     return new Promise((resolve) => { resolver.current = resolve; setRequest(next); });
   }, []);
   const stacked = fontScale > 1.2 && width < CONSENT_SIDE_BY_SIDE_MIN_WIDTH;
+  // When the title and message do not fit, a text-free fade over the lower edge says there is more (dispatcher Q-4; the
+  // SwiftUI scroll bar only shows while scrolling), as on the confirmation sheet.
+  const [more, setMore] = useState(false);
+  const geometry = useScrollGeometryChange((next: { contentOffsetY: number; containerHeight: number; contentHeight: number }) => {
+    const below = next.contentHeight > next.containerHeight + 1 && next.contentOffsetY + next.containerHeight < next.contentHeight - 2;
+    setMore((current) => current === below ? current : below);
+  });
   const button = (accept: boolean) => {
     const label = accept ? request?.confirmLabel ?? "" : request?.cancelLabel ?? "";
     const color = request?.destructive ? colors.sharedTaskConfirmBackground : colors.cta;
@@ -58,6 +66,16 @@ export function usePluginPrompt() {
   const dialog = (
     <ComposerSheet visible={!!request} onClose={() => settle(false)} title="" nativeContent testID="plugins.prompt"
       preventDismiss={request?.cancelable === false}
+      // Accessibility text sizes: open at the full height, so the scrolling text and the buttons below it both get room
+      // (a medium sheet on a small phone leaves the text a few lines).
+      largeOnly={fontScale > 1.3}
+      nativeContentModifiers={geometry ? [geometry] : []}
+      nativeContentOverlay={
+        <Rectangle testID="plugins.prompt.fade" modifiers={[
+          foregroundStyle({ type: "linearGradient", colors: ["transparent", colors.surfaceElevated], startPoint: { x: 0.5, y: 0 }, endPoint: { x: 0.5, y: 1 } }),
+          frame({ height: CONSENT_FADE_HEIGHT }), opacity(more ? 1 : 0), accessibilityHidden(true),
+        ]} />
+      }
       footer={
         // The footer always gets its full height; the title and the message scroll above it.
         <VStack spacing={spacing.sm} modifiers={[fixedSize({ horizontal: false, vertical: true })]}>

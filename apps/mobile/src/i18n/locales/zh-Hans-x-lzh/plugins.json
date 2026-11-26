@@ -364,7 +364,8 @@
       "localFolder": "本地之匣",
       "repositoryMissingInstall": "此机未示此自订之坊之库，不能自手机纳之。请先于彼机更新 Cindy 并刷新此坊；若仍不可，请径于电脑纳之。",
       "repositoryMissingUpdate": "此机未示此自订之坊之库，不能自手机更之。请先于彼机更新 Cindy 并刷新此坊；若仍不可，请径于电脑更之。",
-      "sourceChanged": "所请之源与汝择时异，不能于手机许之。请却之而复择。"
+      "sourceChanged": "所请之源与汝择时异，不能于手机许之。请却之而复择。",
+      "consentChanged": "所请之法器、版次或彼机与汝择时异，不能于手机许之。请却之而复择，或于彼机处之。"
     },
     "sourceNotice": {
       "community": "此法器由社区作者开发与维护，{{appName}} 已审核此版本，但无法保证其在所有使用情境下皆安全。",
@@ -504,7 +505,18 @@
       "checking": "方核其果",
       "waiting": "果未确。可复核之，或不复随之。",
       "offline": "「{{device}}」未连，连之乃可核果。",
-      "awaitingYou": "彼机待汝确之"
+      "awaitingYou": "彼机待汝确之",
+      "unprovable": {
+        "uninstall": {
+          "absent": "彼机已无此番卸之之录，其果不可确。今彼机无此法器。",
+          "present": "彼机已无此番卸之之录，其果不可确。今彼机仍存此法器。"
+        },
+        "pageApproval": {
+          "absent": "彼机已无此番启页之录，其果不可确。今彼机无此法器。",
+          "approved": "彼机已无此番启页之录，其果不可确。其页今已启。",
+          "notApproved": "彼机已无此番启页之录，其果不可确。其页今犹未启。"
+        }
+      }
     },
     "stop": "不复随之",
     "stopHint": "唯此手机不复随之，不废彼机之事。",
@@ -516,7 +528,7 @@
       "untracked": "已不复随之",
       "ended": "已终",
       "readingBack": "已成，方核彼机之法器…",
-      "succeededMissing": "已成，然彼机未见此法器。",
+      "changedSince": "已成，然彼机此法器其后又有所易。",
       "succeededUnread": "已成，然未能读彼机之法器。",
       "uninstalled": "已卸"
     },

@@ -364,7 +364,8 @@
       "localFolder": "Local folder",
       "repositoryMissingInstall": "This computer didn’t share the repository for this custom marketplace, so it can’t be installed from your phone. Update Cindy on that computer and refresh this marketplace first; if that doesn’t help, install on the computer.",
       "repositoryMissingUpdate": "This computer didn’t share the repository for this custom marketplace, so this plugin can’t be updated from your phone. Update Cindy on that computer and refresh this marketplace first; if that doesn’t help, update the plugin on the computer.",
-      "sourceChanged": "The source in this request differs from the one you chose, so it can’t be allowed from your phone. Deny it and choose again."
+      "sourceChanged": "The source in this request differs from the one you chose, so it can’t be allowed from your phone. Deny it and choose again.",
+      "consentChanged": "This request is for a different plugin, version or computer than the one you chose, so it can’t be allowed from your phone. Deny it and choose again, or handle it on the computer."
     },
     "sourceNotice": {
       "community": "Community developers build and maintain this plugin. {{appName}} has reviewed this version but can’t guarantee it’s safe in every situation.",
@@ -504,7 +505,18 @@
       "checking": "Checking the result",
       "waiting": "Result unconfirmed. Check it again, or stop tracking.",
       "offline": "“{{device}}” isn’t connected. Connect it to check the result.",
-      "awaitingYou": "The computer is waiting for you to confirm"
+      "awaitingYou": "The computer is waiting for you to confirm",
+      "unprovable": {
+        "uninstall": {
+          "absent": "The computer no longer has a record of this uninstall, so its result can’t be confirmed. The plugin isn’t on the computer now.",
+          "present": "The computer no longer has a record of this uninstall, so its result can’t be confirmed. The plugin is still on the computer."
+        },
+        "pageApproval": {
+          "absent": "The computer no longer has a record of turning on these pages, so the result can’t be confirmed. The plugin isn’t on the computer now.",
+          "approved": "The computer no longer has a record of turning on these pages, so the result can’t be confirmed. Its pages are on now.",
+          "notApproved": "The computer no longer has a record of turning on these pages, so the result can’t be confirmed. Its pages aren’t on yet."
+        }
+      }
     },
     "stop": "Stop tracking",
     "stopHint": "Only this phone stops tracking. The operation on the computer isn’t cancelled.",
@@ -516,7 +528,7 @@
       "untracked": "No longer tracked",
       "ended": "Finished",
       "readingBack": "Done. Checking the plugin on the computer…",
-      "succeededMissing": "Done, but this plugin wasn’t found on the computer.",
+      "changedSince": "Done, but this plugin has changed on the computer since.",
       "succeededUnread": "Done, but the plugins on the computer couldn’t be read.",
       "uninstalled": "Uninstalled"
     },

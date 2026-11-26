@@ -5,7 +5,11 @@ vi.mock("react-native", () => ({ AppState: { currentState: "active", addEventLis
 vi.mock("@/auth/AuthContext", () => ({ useAuth: () => ({ accountGeneration: 1 }) }));
 vi.mock("@/device-link/DeviceLinkContext", () => ({ useDeviceLink: () => ({}) }));
 vi.mock("@/device-link/revokedDevicesStore", () => ({ useRevokedDevices: () => null }));
-import { pluginMarketVisualManagement, setPluginMarketVisualScenario } from "@/debug/pluginMarketVisualFixture";
+import { PLUGIN_MARKET_VISUAL_SCENARIOS, pluginMarketVisualDemoIds, pluginMarketVisualManagement, resetPluginMarketVisualComputer,
+  setPluginMarketVisualScenario } from "@/debug/pluginMarketVisualFixture";
+import { isPluginMarketSourceIdentity, parsePluginManagementDetail, parsePluginManagementReceipt, parsePluginManagementSnapshot } from "@/plugins/pluginManagementTypes";
+import { parsePluginMarketPage } from "@/plugins/pluginMarketCatalog";
+import { declaredPluginConsent, pluginConsentAllowance } from "@/plugins/pluginConsentAllowance";
 import { seedPluginChecksForVisualMock } from "@/debug/pluginChecksVisualFixture";
 import { __retainedForTests } from "@/plugins/usePluginManagement";
 import { __testing as slotTesting } from "@/plugins/pluginManagementSlot";
@@ -84,6 +88,108 @@ describe("pending-check states from cindy://plugins?checks=<state>", () => {
     if (state === "succeeded" || state === "unread") {
       pluginMarketVisualManagement("management:begin", { operationId: `rm-${state}`, kind: "uninstall" }, "_root__demo-agenda");
       lookup(`rm-${state}`);
+    }
+  });
+});
+
+/* 测试价值（调度要求 P-5：模拟数据不能悄悄偏离协议）
+ * - 生产入口与可观察结果：每个 `market=` 场景下 mock 电脑的市场条目、市场详情、已装快照、操作回执与确认，过一遍手机生产
+ *   的解析 / 校验（parsePluginMarketPage、parsePluginManagementDetail、parsePluginManagementSnapshot、
+ *   parsePluginManagementReceipt、isPluginMarketSourceIdentity、pluginConsentAllowance）；断言全部有效。
+ * - 依据：iOS 第六轮补拍：updateSourceChanged 的 sourceId 是 25 个字符（协议要 22），校验把它当成缺省，进不了目标提示。
+ * - 故意无效的只有这些（显式列出）：readFailed / unreadResult / updateReadFailed / detailReadFailed 的那一次读取失败、outdated 拒绝新形状的读取、
+ *   旧 Host 自定义市场（Demo Legacy …）的条目与确认不带来源身份（按协议是「无法核实」，确认不允许）、updateSourceChanged
+ *   的更新详情故意换了来源（手机在 begin 前就停下，不会走到确认）。
+ * - 最小失败输入：任一 sourceId 不是 22 位。tier: unit（纯内存 mock）。
+ */
+// Dispatcher P-5: the record panel's remaining states, and those dispatcher O added, each from its own `checks=` entry
+// (docs/dev-rules/ui-mock-data.md). Same production path as above. Tier: unit.
+describe("more pending-check states from cindy://plugins?checks=<state>", () => {
+  const flush = async () => { for (let i = 0; i < 80; i++) await Promise.resolve(); };
+  afterEach(() => { __retainedForTests.clear(); slotTesting.reset(); resetPluginMarketVisualComputer(); });
+  const ended = () => __retainedForTests.conclusions().map((c) => [c.entry, c.result, c.readback]);
+  it.each([
+    ["readingBack", () => expect(ended()).toEqual([["market-install", "succeeded", "pending"]])],
+    ["changed", () => expect(ended()).toEqual([["market-install", "succeeded", "changed"]])],
+    ["uninstalled", () => expect(ended()).toEqual([["uninstall", "succeeded", "none"]])],
+    ["updateGone", () => expect(ended()).toEqual([["update", "installed", "verified"]])],
+    ["unprovableUninstall", () => expect(__retainedForTests.checks().map((c) => [c.entry, c.unprovable])).toEqual([["uninstall", { present: true }]])],
+  ] as const)("%s, after the list opened", async (state, assert) => {
+    const after = await seedPluginChecksForVisualMock(state);
+    await flush();
+    expect(__retainedForTests.checks()).toHaveLength(1);
+    after!();
+    await flush();
+    assert();
+  });
+  it("decideBlocked: the consent waits for this phone while another operation holds the computer", async () => {
+    await seedPluginChecksForVisualMock("decideBlocked");
+    await flush();
+    const checks = __retainedForTests.checks();
+    expect(checks.map((c) => [c.who.name, c.awaitingYou])).toEqual([["Demo Agenda", true], ["Demo Device Simulator", false]]);
+    expect(checks[0]!.decide()).toBe(false);
+  });
+});
+
+describe("the mock computer speaks the protocol in every market scenario", () => {
+  const ok = (value: unknown) => (value as { result: unknown }).result;
+  it.each(PLUGIN_MARKET_VISUAL_SCENARIOS)("%s", (name) => {
+    setPluginMarketVisualScenario(name, true);
+    const read = (input: Record<string, unknown>) => {
+      try { return ok(pluginMarketVisualManagement("management:snapshot", input)); }
+      catch (error) {
+        // Intentional failures of these scenarios: one failed read, or an older Host refusing a newer read.
+        expect(["readFailed", "unreadResult", "outdated"]).toContain(name);
+        return name === "outdated" ? undefined : ok(pluginMarketVisualManagement("management:snapshot", input));
+      }
+    };
+    const page = read({ read: "catalog", query: { scope: "all", limit: 100 } });
+    if (page !== undefined) {
+      const parsed = parsePluginMarketPage(page);
+      for (const item of parsed.items) if (item.sourceIdentity !== undefined) expect(isPluginMarketSourceIdentity(item.sourceIdentity), item.pluginId).toBe(true);
+      // Only the older Host's custom market names no source (protocol: unverifiable).
+      for (const item of parsed.items.filter((entry) => entry.sourceType !== "server" && !entry.sourceIdentity)) expect(item.name).toMatch(/Legacy/);
+    }
+    const snapshot = parsePluginManagementSnapshot(read({ read: "installed" }) ?? read({}));
+    for (const pluginId of pluginMarketVisualDemoIds()) {
+      let value: unknown;
+      try { value = ok(pluginMarketVisualManagement("management:market-detail", { pluginId })); }
+      catch { expect(["updateReadFailed", "detailReadFailed"]).toContain(name); continue; }
+      const detail = parsePluginManagementDetail(value);
+      expect(detail.pluginId).toBe(pluginId);
+      if (detail.sourceType !== "server" && !/Legacy/.test(detail.name)) expect(isPluginMarketSourceIdentity(detail.sourceIdentity), pluginId).toBe(true);
+      if (detail.installedSourceId !== undefined) expect(detail.installedSourceId, pluginId).toMatch(/^[A-Za-z0-9_-]{22}$/);
+    }
+    // Every consent the mock computer asks for is a valid receipt, and (except the older Host's) one the phone can allow
+    // for exactly what was chosen: the same plugin, version, kind and source.
+    for (const item of snapshot.market.items) {
+      const installed = snapshot.ghosts.find((ghost) => ghost.manifest.id === item.ghostId);
+      if (installed ? item.installState !== "update-available" : item.installState !== "not-installed") continue;
+      // Intentional: updateSourceChanged's detail names another source than the installed update's on purpose, so the
+      // phone stops before begin ("the source changed"); its consent is never reached.
+      if (installed && name === "updateSourceChanged") continue;
+      let detail;
+      try { detail = parsePluginManagementDetail(ok(pluginMarketVisualManagement("management:market-detail", { pluginId: item.pluginId }))); }
+      catch { continue; }
+      const operationId = `protocol-${name}-${item.ghostId}`;
+      try {
+        pluginMarketVisualManagement("management:begin", { operationId, kind: "install", pluginId: item.pluginId,
+          expectedReleaseId: detail.releaseId }, installed?.instanceKey);
+      } catch { /* A lost begin reply or a refused update preflight; the lookup below still answers. */ }
+      for (let i = 0; i < 4; i++) {
+        let receipt;
+        try { receipt = parsePluginManagementReceipt(ok(pluginMarketVisualManagement("management:operation", { operationId })), operationId); }
+        catch { continue; }
+        if (receipt.consent) {
+          const allowance = pluginConsentAllowance({ kind: installed ? "update" : "install", deviceId: "mock", pluginId: detail.pluginId,
+            ghostId: detail.ghostId, version: detail.version, releaseId: detail.releaseId, sourceType: detail.sourceType,
+            source: detail.sourceIdentity ?? null }, declaredPluginConsent(receipt.consent, "mock"));
+          expect(allowance.allow, `${item.pluginId}: ${JSON.stringify(allowance)}`).toBe(!/Legacy/.test(detail.name) || detail.sourceType === "server");
+          pluginMarketVisualManagement("management:answer", { operationId, requestId: receipt.consent.requestId, confirmed: false });
+          break;
+        }
+        if (["succeeded", "failed", "cancelled"].includes(receipt.phase)) break;
+      }
     }
   });
 });

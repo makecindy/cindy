@@ -366,7 +366,8 @@
       "localFolder": "Pasta local",
       "repositoryMissingInstall": "Este computador não indicou o repositório deste mercado personalizado, por isso não é possível instalar a partir do telemóvel. Primeiro atualize a Cindy nesse computador e atualize este mercado; se não resolver, instale diretamente a partir do computador.",
       "repositoryMissingUpdate": "Este computador não indicou o repositório deste mercado personalizado, por isso não é possível atualizar a partir do telemóvel. Primeiro atualize a Cindy nesse computador e atualize este mercado; se não resolver, atualize o plugin diretamente a partir do computador.",
-      "sourceChanged": "A origem deste pedido é diferente da que escolheu, por isso não pode ser permitido a partir do telemóvel. Recuse e escolha novamente."
+      "sourceChanged": "A origem deste pedido é diferente da que escolheu, por isso não pode ser permitido a partir do telemóvel. Recuse e escolha novamente.",
+      "consentChanged": "Este pedido é para um plugin, versão ou computador diferente do que escolheu, por isso não pode ser permitido a partir do telemóvel. Recuse e escolha novamente, ou resolva no computador."
     },
     "sourceNotice": {
       "community": "Este plugin é desenvolvido e mantido por membros da comunidade. A {{appName}} analisou esta versão, mas não pode garantir a segurança do plugin em todas as situações de utilização.",
@@ -506,7 +507,18 @@
       "checking": "A verificar o resultado",
       "waiting": "Resultado não confirmado. Verifique novamente ou deixe de acompanhar.",
       "offline": "«{{device}}» não está ligado. Ligue-o para verificar o resultado.",
-      "awaitingYou": "O computador está a aguardar a sua confirmação"
+      "awaitingYou": "O computador está a aguardar a sua confirmação",
+      "unprovable": {
+        "uninstall": {
+          "absent": "O computador já não tem registo desta desinstalação, pelo que não é possível confirmar o resultado. O plugin não está no computador agora.",
+          "present": "O computador já não tem registo desta desinstalação, pelo que não é possível confirmar o resultado. O plugin ainda está no computador."
+        },
+        "pageApproval": {
+          "absent": "O computador já não tem registo da ativação destas páginas, pelo que não é possível confirmar o resultado. O plugin não está no computador agora.",
+          "approved": "O computador já não tem registo da ativação destas páginas, pelo que não é possível confirmar o resultado. As páginas estão ativadas.",
+          "notApproved": "O computador já não tem registo da ativação destas páginas, pelo que não é possível confirmar o resultado. As páginas ainda não estão ativadas."
+        }
+      }
     },
     "stop": "Deixar de acompanhar",
     "stopHint": "Só este telemóvel deixa de acompanhar. A operação no computador não é cancelada.",
@@ -518,7 +530,7 @@
       "untracked": "Já não é acompanhado",
       "ended": "Terminado",
       "readingBack": "Concluído. A verificar o plugin no computador…",
-      "succeededMissing": "Concluído, mas este plugin não foi encontrado no computador.",
+      "changedSince": "Concluído, mas este plugin mudou no computador desde então.",
       "succeededUnread": "Concluído, mas não foi possível ler os plugins do computador.",
       "uninstalled": "Desinstalado"
     },

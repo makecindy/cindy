@@ -10,17 +10,20 @@ import type { ManagedMarketItem, ManagedPlugin } from "@/plugins/pluginManagemen
 export type PluginMarketVisualScenario =
   | "normal" | "outdated" | "unavailable" | "organization" | "customPartial" | "empty" | "readFailed"
   | "twoComputers" | "offline" | "hold" | "lateConsent" | "lateResult" | "unreadResult"
-  | "updateReleaseChanged" | "updateSourceChanged" | "updateReadFailed";
+  | "updateReleaseChanged" | "updateSourceChanged" | "updateReadFailed" | "detailReadFailed";
 const SCENARIOS: PluginMarketVisualScenario[] = ["normal", "outdated", "unavailable", "organization", "customPartial", "empty",
   "readFailed", "twoComputers", "offline", "hold", "lateConsent", "lateResult", "unreadResult",
-  "updateReleaseChanged", "updateSourceChanged", "updateReadFailed"];
+  "updateReleaseChanged", "updateSourceChanged", "updateReadFailed", "detailReadFailed"];
 /**
  * Scripted operations for the list of pending checks (`cindy://plugins?checks=<state>`, see pluginChecksVisualFixture):
  * how the mock computer answers lookups of one operation id. `waiting`: a protocol error every time (lookups stop);
  * `consent`, `succeeded`, `unread`, `failed`: a protocol error first, then a consent this phone never showed, a success,
- * a success whose first installed read fails, a failure; `running`: still under way.
+ * a success whose first installed read fails, a failure; `running`: still under way. `readingBack`: a success after
+ * which the computer's installed reads stay out (the list says it is still reading); `changed`: a success after which
+ * the plugin is at another version (changed on the computer since); `gone`: the operation takes effect (not an
+ * uninstall) and the computer then forgets its receipt (NOT_FOUND from then on).
  */
-export type VisualCheckBehavior = "running" | "waiting" | "consent" | "succeeded" | "unread" | "failed";
+export type VisualCheckBehavior = "running" | "waiting" | "consent" | "succeeded" | "unread" | "failed" | "readingBack" | "changed" | "gone";
 const scripted = new Map<string, { behavior: VisualCheckBehavior; lookups: number }>();
 export function scriptVisualCheckOperation(operationId: string, behavior: VisualCheckBehavior) {
   scripted.set(operationId, { behavior, lookups: 0 });
@@ -41,12 +44,18 @@ export function pluginMarketVisualDeviceScenario(): "twoComputers" | "offline" |
 }
 let scenario: PluginMarketVisualScenario = "normal";
 let failedReads = 0;
+/** `detailReadFailed`: the first market detail read of a plugin that is not being updated fails (its "Retry"). */
+let failedDetailReads = 0;
 
+/** Every `market=` scenario, and every demo plugin's market id (the protocol check in pluginMarketVisualFixture.test.ts). */
+export const PLUGIN_MARKET_VISUAL_SCENARIOS: readonly string[] = SCENARIOS;
+export function pluginMarketVisualDemoIds(): string[] { return DEMOS.map((demo) => marketItem(demo).pluginId); }
 /** Applies a deep-link scenario; returns true when the market tab should open. */
 export function setPluginMarketVisualScenario(value: unknown, enabled: boolean): boolean {
   if (!enabled || typeof value !== "string" || !SCENARIOS.includes(value as PluginMarketVisualScenario)) return false;
   scenario = value as PluginMarketVisualScenario;
   failedReads = 0;
+  failedDetailReads = 0;
   return true;
 }
 
@@ -217,7 +226,16 @@ const marketName = (demo: DemoPlugin) => demo.legacySource ? LEGACY_MARKET
 const marketSource = (demo: DemoPlugin) => demo.market === "long" ? LONG_MARKET_SOURCE
   : demo.market === "folder" ? FOLDER_MARKET_SOURCE : CUSTOM_MARKET_SOURCE;
 const CUSTOM_SOURCE_NAMES = [CUSTOM_MARKET, LEGACY_MARKET, LONG_MARKET, FOLDER_MARKET];
-const installed = new Map<string, { demo: DemoPlugin; enabled: boolean; version: string }>();
+/** `operationId`: the remote operation that installed it (the Host's `installedOperationId`, contract V2.9). */
+const installed = new Map<string, { demo: DemoPlugin; enabled: boolean; version: string; operationId?: string }>();
+/** `readingBack` checks: the computer's installed reads stay out until the next seed. */
+let holdInstalledReads = false;
+export function pluginMarketVisualHoldsInstalledReads(): boolean { return holdInstalledReads; }
+/** DEV: the mock computer back to its first state (each `checks=` seed starts from it). */
+export function resetPluginMarketVisualComputer() {
+  installed.clear(); operations.clear(); scripted.clear(); holdInstalledReads = false; failInstalledRead = false;
+  failInstalledReadOnCommit = false; seedInstalled();
+}
 const operations = new Map<string, { kind: "install" | "update" | "uninstall"; ghostId: string; answered: boolean; polls: number; done?: "succeeded" | "failed" | "cancelled" }>();
 const instanceKey = (ghostId: string) => `_root__${ghostId}`;
 const seedInstalled = () => {
@@ -246,6 +264,8 @@ function marketItem(demo: DemoPlugin): ManagedMarketItem {
     ...(entry && !server && !demo.legacySource
       ? { installedSourceId: demo.sourceMoved ? "DemoOldMarketSource001" : marketSource(demo).sourceId } : {}),
     ...(entry && entry.version !== RELEASE ? { updateRequiresConsent: true as const } : {}),
+    // Only the phone that started that install is told (contract V2.9); the mock computer has just this phone.
+    ...(entry?.operationId ? { installedOperationId: entry.operationId } : {}),
   };
 }
 const manifest = (demo: DemoPlugin, version = RELEASE) => ({
@@ -306,6 +326,11 @@ function receipt(operationId: string) {
     script.lookups += 1;
     if (script.behavior === "running") return { operationId, phase: "running" };
     if (script.behavior === "waiting" || script.lookups === 1) throw failure("INVALID_RESPONSE");
+    if (script.behavior === "gone") {
+      if (op.kind !== "uninstall") installed.set(instanceKey(demo.ghostId), { demo, enabled: true, version: RELEASE, operationId });
+      operations.delete(operationId);
+      throw failure("NOT_FOUND");
+    }
     if (script.behavior === "failed") op.done = "failed";
     else if (script.behavior === "consent" && !op.answered) op.answered = false;
     else { op.polls = 3; op.answered = true; if (script.behavior === "unread") failInstalledReadOnCommit = true; }
@@ -339,8 +364,11 @@ function receipt(operationId: string) {
   // an operation under way: other entries unavailable, the notice at the top), until another scenario is chosen.
   if ((op.polls < 3 && !pendingCheck) || scenario === "hold")
     return { operationId, phase: "running" };
-  installed.set(instanceKey(demo.ghostId), { demo, enabled: entry?.enabled ?? true, version: RELEASE });
+  installed.set(instanceKey(demo.ghostId), { demo, enabled: entry?.enabled ?? true, version: RELEASE, operationId });
   if (scenario === "unreadResult" || failInstalledReadOnCommit) { failInstalledRead = true; failInstalledReadOnCommit = false; }
+  if (script?.behavior === "readingBack") holdInstalledReads = true;
+  // Changed on the computer since: an older package of the same plugin replaced it.
+  if (script?.behavior === "changed") installed.set(instanceKey(demo.ghostId), { demo, enabled: true, version: "0.9.0" });
   op.done = "succeeded";
   return { operationId, phase: "succeeded" };
 }
@@ -365,10 +393,11 @@ export function pluginMarketVisualManagement(actionId: string | undefined, input
       const entry = installed.get(instanceKey(demo.ghostId));
       const updating = !!entry && entry.version !== RELEASE;
       if (updating && scenario === "updateReadFailed") throw failure("TIMEOUT");
+      if (!updating && scenario === "detailReadFailed" && failedDetailReads++ < 1) throw failure("TIMEOUT");
       const item = marketItem(demo);
       if (updating && scenario === "updateReleaseChanged") return result({ ...item, releaseId: `${demo.ghostId}@9.9.9`, version: "9.9.9", manifest: manifest(demo, "9.9.9") });
       if (updating && scenario === "updateSourceChanged" && item.sourceIdentity)
-        return result({ ...item, sourceIdentity: { ...item.sourceIdentity, sourceId: "DemoChangedMarketSource01" }, manifest: manifest(demo) });
+        return result({ ...item, sourceIdentity: { ...item.sourceIdentity, sourceId: "DemoChangedMarketSrc01" }, manifest: manifest(demo) });
       return result({ ...item, manifest: manifest(demo) });
     }
     case "management:begin": {

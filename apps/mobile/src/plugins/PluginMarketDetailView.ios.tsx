@@ -4,7 +4,7 @@ import {
 } from "@expo/ui/swift-ui";
 import {
   accessibilityLabel, background, buttonStyle, clipShape, contentShape, disabled, fixedSize, font, foregroundStyle, layoutPriority,
-  frame, lineLimit, listRowBackground, listRowInsets, listRowSeparator, listRowSeparatorTint, listStyle, padding,
+  frame, lineLimit, listRowBackground, listRowInsets, listRowSeparator, listRowSeparatorTint, listStyle, onGeometryChange, padding,
   scrollContentBackground, shapes,
 } from "@expo/ui/swift-ui/modifiers";
 import { StyleSheet, useWindowDimensions } from "react-native";
@@ -27,6 +27,11 @@ export function PluginMarketDetailView({ detail, market, pageNotice }: PluginMar
   const [hostWidth, setHostWidth] = useState(width);
   const [toolsExpanded, setToolsExpanded] = useState(false);
   const [toolsOverflow, setToolsOverflow] = useState(false);
+  // The source label never wraps or truncates: when it would squeeze the name it goes on its own line under it, as in
+  // the market rows (dispatcher P-4: "Team shared" showed as "Tea…", and one letter per line at AX5).
+  const [titleWidth, setTitleWidth] = useState(0);
+  const [badgeWidth, setBadgeWidth] = useState(0);
+  const badgeBelow = titleWidth > 0 && badgeWidth > titleWidth * 0.4;
   const primaryStyle = useNativeGlassButtonStyle({ prominent: true });
   const secondaryStyle = useNativeGlassButtonStyle();
   const item = detail.item;
@@ -81,18 +86,30 @@ export function PluginMarketDetailView({ detail, market, pageNotice }: PluginMar
               <VStack modifiers={[frame({ width: 72, height: 72 })]}>
                 <RNHostView matchContents><PluginMarketIcon item={item} variant="hero" /></RNHostView>
               </VStack>
-              <VStack alignment="leading" spacing={spacing.xs} modifiers={[frame({ maxWidth: Infinity, alignment: "leading" })]}>
-                <HStack spacing={spacing.sm}>
-                  {/* The full name, on as many lines as it needs (dispatcher M-6: "Demo Team She…" on a small screen). */}
-                  <Text modifiers={[font({ textStyle: "title2", weight: "semibold" }), fixedSize({ horizontal: false, vertical: true }),
-                    layoutPriority(1)]}>{item.name}</Text>
-                  {origin ? (
-                    <Text modifiers={[font({ textStyle: "caption2", weight: "semibold" }), foregroundStyle(colors.textSecondary),
-                      padding({ horizontal: spacing.sm, vertical: 2 }), background(colors.surfaceChip), clipShape("capsule")]}>
+              <VStack testID="plugins.market.detailTitle" alignment="leading" spacing={spacing.xs} modifiers={[frame({ maxWidth: Infinity, alignment: "leading" }),
+                onGeometryChange(({ width: next }: { width: number }) => {
+                  const rounded = Math.round(next);
+                  if (rounded > 0) setTitleWidth((current) => current === rounded ? current : rounded);
+                })]}>
+                {(() => {
+                  // The full name, on as many lines as it needs (dispatcher M-6: "Demo Team She…" on a small screen).
+                  const name = <Text modifiers={[font({ textStyle: "title2", weight: "semibold" }), fixedSize({ horizontal: false, vertical: true }),
+                    layoutPriority(1)]}>{item.name}</Text>;
+                  const badge = origin ? (
+                    <Text testID="plugins.market.detailBadge" modifiers={[font({ textStyle: "caption2", weight: "semibold" }), foregroundStyle(colors.textSecondary),
+                      lineLimit(1), fixedSize({ horizontal: true, vertical: false }),
+                      padding({ horizontal: spacing.sm, vertical: 2 }), background(colors.surfaceChip), clipShape("capsule"),
+                      onGeometryChange(({ width: next }: { width: number }) => {
+                        const rounded = Math.round(next);
+                        if (rounded > 0) setBadgeWidth((current) => current === rounded ? current : rounded);
+                      })]}>
                       {t("plugins.market.filter." + origin)}
                     </Text>
-                  ) : null}
-                </HStack>
+                  ) : null;
+                  return badgeBelow
+                    ? <VStack testID="plugins.market.detailTitleStacked" alignment="leading" spacing={spacing.xs}>{name}{badge}</VStack>
+                    : <HStack testID="plugins.market.detailTitleRow" spacing={spacing.sm}>{name}{badge}</HStack>;
+                })()}
                 {pluginMarketSubtitle(item) ? text(pluginMarketSubtitle(item)) : null}
               </VStack>
             </HStack>

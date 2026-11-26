@@ -3,7 +3,9 @@ import { Pressable, ScrollView, StyleSheet, View } from "react-native";
 import { useTranslation } from "react-i18next";
 import { SheetModal } from "@/session/SheetModal";
 import { Text } from "@/components/AppText";
-import { fontWeight, lineHeight, radius, spacing, typeScale, useThemedStyles, type ThemeColors } from "@/theme";
+import { fontWeight, lineHeight, radius, spacing, typeScale, useTheme, useThemedStyles, type ThemeColors } from "@/theme";
+import { ScrollFade, ScrollThumb, useScrollOverflow } from "@/components/ScrollOverflow";
+import { CONSENT_FADE_HEIGHT } from "./pluginConsentPresentation";
 import type { PluginSlotEntry, PluginSlotHolder } from "./pluginManagementSlot";
 import { retryPluginCheckReadback, type PluginCheckConclusion, type PluginPendingCheck } from "./usePluginManagement";
 
@@ -24,7 +26,9 @@ const KIND: Record<PluginSlotEntry, string> = {
  * operation), never from the directory or the market list: an item a filter, a later page or the installed filter
  * hides, a market removed since, or a computer not selected still has its line here. A pending check offers the two
  * things the person can do: look up the original operation ("Check result", unavailable while its computer is
- * offline, with the reason), or stop following it on this phone (nothing is sent to the computer).
+ * offline, with the reason), or stop following it on this phone (nothing is sent to the computer). One whose receipt
+ * the computer no longer has and that nothing on the computer can prove (`unprovable`: an uninstall, a page approval)
+ * shows what the computer has now and offers only "Stop tracking": checking again could not settle it.
  */
 export function PluginPendingChecksSheet({ visible, lines, conclusions, isOnline, canOpen, onDecide, onClose, onOpenInstalled }: {
   visible: boolean;
@@ -38,7 +42,8 @@ export function PluginPendingChecksSheet({ visible, lines, conclusions, isOnline
   onClose(): void;
   onOpenInstalled(who: PluginSlotHolder, instanceKey: string): void;
 }) {
-  const { t } = useTranslation(), styles = useThemedStyles(makeStyles);
+  const { t } = useTranslation(), styles = useThemedStyles(makeStyles), { colors } = useTheme();
+  const listArea = useScrollOverflow();
   // Lines seen while open stay until it closes, so a check that ends here shows how it ended.
   const seen = useRef(new Map<string, PluginOperationLine>());
   // A consent that could not be opened (another operation holds the computer's slot), per operation.
@@ -53,6 +58,10 @@ export function PluginPendingChecksSheet({ visible, lines, conclusions, isOnline
     if (!check) return t("plugins.checks.status.preparing");
     if (!isOnline(line.who.deviceId)) return t("plugins.checks.status.offline", { device: line.who.deviceName });
     if (check.awaitingYou) return t("plugins.checks.status.awaitingYou");
+    // The receipt is gone and nothing on the computer names this operation: what is there now, and why it stays open.
+    if (check.unprovable) return t("plugins.checks.status.unprovable." + KIND[line.entry] + "."
+      + (!check.unprovable.present ? "absent" : check.unprovable.pagesApproved === undefined ? "present"
+        : check.unprovable.pagesApproved ? "approved" : "notApproved"));
     if (check.state.busy && check.state.outcome === "unknown") return t("plugins.checks.status.checking");
     if (check.waiting || check.state.outcome === "unknown") return t("plugins.checks.status.waiting");
     return t(check.state.outcome === "confirmation" ? "plugins.checks.status.confirmation" : "plugins.checks.status.running");
@@ -75,7 +84,8 @@ export function PluginPendingChecksSheet({ visible, lines, conclusions, isOnline
         return canOpen(conclusion.who.deviceId) ? { text: done, open: conclusion.instanceKey }
           : { text: done, openUnavailable: true };
       case "pending": return { text: t("plugins.checks.result.readingBack") };
-      case "missing": return { text: t("plugins.checks.result.succeededMissing") };
+      // The success stands; the plugin on the computer is no longer this operation's (pluginOperationOpens).
+      case "changed": return { text: t("plugins.checks.result.changedSince") };
       case "failed": return { text: t("plugins.checks.result.succeededUnread"), readAgain: conclusion.operationId };
       default: return { text: done };
     }
@@ -85,7 +95,10 @@ export function PluginPendingChecksSheet({ visible, lines, conclusions, isOnline
       {visible ? <View style={styles.sheet} testID="plugins.checks">
         {/* Says what is in it: unfinished operations while any is listed, how they ended once none is (dispatcher N-6). */}
         <Text style={styles.title} accessibilityRole="header">{t(live.size ? "plugins.checks.title" : "plugins.checks.titleEnded")}</Text>
-        <ScrollView contentContainerStyle={styles.list}>
+        {/* More lines than fit: a fade over the lower edge and a scroll thumb that stays visible (dispatcher Q-1). */}
+        <View style={styles.listArea}>
+        <ScrollView contentContainerStyle={styles.list} showsVerticalScrollIndicator={false} testID="plugins.checks.list"
+          onLayout={listArea.onLayout} onContentSizeChange={listArea.onContentSizeChange} onScroll={listArea.onScroll} scrollEventThrottle={64}>
           {shown.map((line) => {
             const check = live.has(line.key) ? line.check : undefined;
             const online = isOnline(line.who.deviceId);
@@ -106,7 +119,7 @@ export function PluginPendingChecksSheet({ visible, lines, conclusions, isOnline
                           style={[styles.button, styles.primary, (!online || check.state.busy) && styles.unavailable]}>
                           <Text style={[styles.label, styles.primaryText]}>{t("plugins.checks.decide")}</Text>
                         </Pressable>
-                      ) : (
+                      ) : check.unprovable ? null : (
                         <Pressable testID="plugins.checks.verify" accessibilityRole="button"
                           disabled={!online || check.state.busy}
                           accessibilityState={{ disabled: !online || check.state.busy }}
@@ -148,6 +161,9 @@ export function PluginPendingChecksSheet({ visible, lines, conclusions, isOnline
             );
           })}
         </ScrollView>
+        {listArea.more ? <ScrollFade testID="plugins.checks.listFade" color={colors.surfaceElevated} height={CONSENT_FADE_HEIGHT} /> : null}
+        <ScrollThumb overflow={listArea} testID="plugins.checks.listThumb" />
+        </View>
         <Pressable testID="plugins.checks.close" accessibilityRole="button" onPress={onClose} style={styles.button}>
           <Text style={styles.label}>{t("plugins.checks.close")}</Text>
         </Pressable>
@@ -163,6 +179,7 @@ const makeStyles = (c: ThemeColors) => StyleSheet.create({
   },
   title: { fontSize: typeScale.body, lineHeight: lineHeight.body, fontWeight: fontWeight.semibold, color: c.textPrimary },
   list: { gap: spacing.lg },
+  listArea: { flexShrink: 1 },
   item: { gap: spacing.xs },
   name: { fontSize: typeScale.bodySmall, lineHeight: lineHeight.bodySmall, fontWeight: fontWeight.semibold, color: c.textPrimary },
   meta: { fontSize: typeScale.footnote, lineHeight: lineHeight.caption, color: c.textSecondary },

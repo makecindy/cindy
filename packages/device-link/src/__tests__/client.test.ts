@@ -6825,11 +6825,15 @@ describe('DeviceLinkClient', () => {
     h.client.stop();
   });
 
-  it('未连接时 invoke 直接 NOT_CONNECTED', async () => {
+  // #12684 O-3: refused before its queue, so no write receipt; the phone's DeviceLinkContext reads "settled without a
+  // receipt" as "never written" (existing behaviour, now relied on). Tier: unit.
+  it('未连接时 invoke 直接 NOT_CONNECTED，且不给写出回执', async () => {
     const h = makeHarness();
-    await expect(h.client.invoke('dev-b', { channel: 'x', args: [] })).rejects.toMatchObject({
+    const receipt = vi.fn();
+    await expect(h.client.invoke('dev-b', { channel: 'x', args: [] }, undefined, { onRequestWritten: receipt })).rejects.toMatchObject({
       code: 'NOT_CONNECTED',
     });
+    expect(receipt).not.toHaveBeenCalled();
   });
 
   it('帧大小按 UTF-8 字节判定:CJK 帧码元数未超但字节数超 → PAYLOAD_TOO_LARGE', async () => {

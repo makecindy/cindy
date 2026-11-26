@@ -130,10 +130,10 @@ export function PluginMarketSection({ market, onConnectComputer }: {
               {origin ? <Text style={styles.badge}>{t("plugins.market.filter." + origin)}</Text> : null}
             </View>
             {/* Every changing state keeps the same two-line description slot, so rows never change height while an install
-                moves on. A plugin that cannot be installed from the phone stays so: its note takes the lines it needs
-                (up to three), so a long translation is never cut (dispatcher N-5). */}
+                moves on. A plugin that cannot be installed from the phone stays so: its note takes all the lines it needs,
+                so a long translation is never cut (dispatcher N-5, P-4). */}
             {state.kind === "sourceUnverified" ? (
-              <Text testID={`plugins.market.line.${item.pluginId}`} numberOfLines={3} style={styles.note}>{line}</Text>
+              <Text testID={`plugins.market.line.${item.pluginId}`} style={styles.note}>{line}</Text>
             ) : <View testID={`plugins.market.line.${item.pluginId}`}>
               {/* Two invisible lines of the taller description style reserve the height at any font scale. */}
               <View style={styles.reserve} pointerEvents="none" accessibilityElementsHidden

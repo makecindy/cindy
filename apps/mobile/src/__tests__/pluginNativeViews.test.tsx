@@ -14,6 +14,7 @@ import { PluginTaskPickerView as AndroidTaskPickerView } from "@/plugins/PluginT
 import { pluginDetailModel } from "@/plugins/pluginDetailModel";
 import { palettes } from "@/theme/tokens";
 import { planConsentSheet } from "@/plugins/pluginConsentPresentation";
+import { declaredPluginConsent, pluginConsentAllowance } from "@/plugins/pluginConsentAllowance";
 import { PluginManagementConfirmation } from "@/plugins/PluginManagementConfirmation.ios";
 import { PluginManagementConfirmation as AndroidManagementConfirmation } from "@/plugins/PluginManagementConfirmation";
 import { PluginModelPicker } from '@/plugins/PluginModelPicker';
@@ -1240,6 +1241,21 @@ it("keeps settings load failure compact with its semantic icon and standard relo
 });
 
 
+// Dispatcher P-2 (iOS sixth reshoot): at AX5 the notice's "View" sat off screen or under the detail's task buttons, so the
+// operation list could not be opened. A notice with `onPress` is one native button: a tap anywhere opens it, and its
+// action shows as a label inside (no button within a button). Without it the notice is unchanged. Tier: unit/jsdom.
+it("makes the whole notice one button when it opens something, with its action as a label inside", () => {
+  const onPress = vi.fn();
+  const { container } = mount(PluginNativeNotice, { testID: "holder", title: "Another operation is under way", onPress,
+    actions: [{ label: "View", testID: "holder.view", onPress }] });
+  const whole = bridge.props.get("holder");
+  expect(container.querySelector('[data-testid="holder"]')?.getAttribute("data-native")).toBe("Button");
+  expect(container.querySelector('[data-testid="holder"] [data-native="Button"]')).toBeNull();
+  expect(container.querySelector('[data-testid="holder.view"]')?.textContent).toBe("View");
+  act(() => whole.onPress());
+  expect(onPress).toHaveBeenCalledOnce();
+});
+
 it.each(["light", "dark"] as const)("renders the actual top notice as a low-contrast status strip in %s and moves narrow actions below", (mode) => {
   bridge.mode = mode;
   const { container } = mount(PluginNativeNotice, { testID: "strip", title: "Computer offline", icon: "offline", actions: [{ label: "Connect computer", testID: "connect", onPress: vi.fn() }] });
@@ -1335,7 +1351,10 @@ describe("older Host without a repository identity", () => {
   const sheetProps = (consent: Record<string, unknown>, facts: Record<string, unknown>) => {
     const state = { outcome: "confirmation", online: true, busy: false, receipt: { consent: {
       requestId: "request", origin: "custom-market", originLabel: "Acme", initiator: "user", ...consent, facts } } } as any;
-    return { state, controller: { getState: () => state, answer: vi.fn() } as any, active: true, deviceName: "Mac" };
+    // The sheet asks the controller whether this consent can be allowed (pluginConsentAllowance, dispatcher O-4); this
+    // stand-in decides it from `state.expectedConsent` the same way the controller does.
+    const consentAllowance = () => pluginConsentAllowance(state.expectedConsent ?? null, declaredPluginConsent(state.receipt.consent, "host"));
+    return { state, controller: { getState: () => state, answer: vi.fn(), consentAllowance } as any, active: true, deviceName: "Mac" };
   };
   const installFacts = { kind: "install", ghostId: "runner", name: "Runner", version: "1", permissions: [] };
   const updateFacts = { kind: "update", ghostId: "runner", name: "Runner", version: "2", previousVersion: "1", added: [], removed: [],
@@ -1391,9 +1410,10 @@ describe("older Host without a repository identity", () => {
   // Maintainer review 05:55 #2: the consent names another source than the one chosen on the phone.
   it.each([["iOS", PluginManagementConfirmation], ["Android", AndroidManagementConfirmation]] as const)(
     "%s keeps only Reject when the consent names another source than the one chosen", (_platform, Sheet) => {
-      const chosen = { kind: "local", sourceId: "SourceA_0123456789abcd" };
+      const chosen = { kind: "local" as const, sourceId: "SourceA_0123456789abcd" };
       const p = sheetProps({ originSource: { kind: "local", sourceId: "SourceB_0123456789abcd" } }, installFacts);
-      p.state.expectedSource = chosen;
+      p.state.expectedConsent = { kind: "install", deviceId: "host", pluginId: "custom:Acme/runner", ghostId: "runner", version: "1",
+        releaseId: "runner@1", sourceType: "local-market", source: chosen };
       const { container } = mount(Sheet, p);
       expect(container.textContent).toContain("plugins.notice.consentSource.sourceChanged");
       expect(disabled("plugins.management.allow")).toBe(true);
@@ -1413,6 +1433,10 @@ describe("older Host without a repository identity", () => {
     const { container } = mount(PluginDirectoryView, { ...directory(), market, segment: "market" });
     expect(disabled("plugins.market.install.custom:Acme/runner")).toBe(true);
     expect(container.textContent).toContain("plugins.market.sourceUnverifiedShort");
+    // Dispatcher P-4: the note takes every line it needs (German needs four at 1.3× beside Install on a small phone).
+    const line = bridge.props.get("plugins.market.line.custom:Acme/runner");
+    expect(line.modifiers.some((modifier: any) => modifier && "lineLimit" in modifier)).toBe(false);
+    expect(line.modifiers).toContainEqual({ fixedSize: { horizontal: false, vertical: true } });
   });
   it("Android market row offers no install for it and says to install on the computer", () => {
     const market = marketModel({ items: [legacyItem], rowState: () => ({ kind: "sourceUnverified" }) });
@@ -1430,6 +1454,23 @@ describe("older Host without a repository identity", () => {
       // Android layout re-check: "After you tap Install…" does not apply while Install is unavailable.
       expect(container.textContent).not.toContain("plugins.market.securityBody");
     });
+});
+
+// Dispatcher P-4 (iOS sixth reshoot): the market detail's source label beside the name showed "Tea…" and, at AX5, one
+// letter per line. It never truncates or wraps; once it would take more than 40% of the title column it goes under the
+// name, as in the market rows. Minimal failing input: a 120 pt label in a 200 pt column. Tier: unit/jsdom.
+it("puts the iOS market detail's source label under the name when it would squeeze it, never cut", () => {
+  const market = marketModel({ rowState: () => ({ kind: "idle" }) });
+  const item = { ...marketModel().items[0], pluginId: "org:Team/sheets", name: "Demo Team Sheets", scope: "organization" };
+  mount(MarketDetailView, { market, detail: { item, target: row.host, loading: false, failed: false } });
+  const badge = bridge.props.get("plugins.market.detailBadge");
+  expect(badge.modifiers).toContainEqual({ lineLimit: 1 });
+  expect(badge.modifiers).toContainEqual({ fixedSize: { horizontal: true, vertical: false } });
+  expect(bridge.props.has("plugins.market.detailTitleRow")).toBe(true);
+  const widthOf = (modifiers: any[]) => modifiers.find((m: any) => m?.onGeometryChange).onGeometryChange;
+  act(() => widthOf(badge.modifiers)({ width: 120, height: 20 }));
+  act(() => widthOf(bridge.props.get("plugins.market.detailTitle").modifiers)({ width: 200, height: 60 }));
+  expect(bridge.props.has("plugins.market.detailTitleStacked")).toBe(true);
 });
 
 describe("pinned high-risk permission", () => {
@@ -1612,7 +1653,8 @@ describe("pinned high-risk permission", () => {
     const lines = () => (Array.isArray(scroll().children) ? scroll().children : [scroll().children]).flat().filter(Boolean);
     expect(lines().map((line: any) => line.props.children)).toEqual(fiveLines);
     for (const line of lines()) expect(line.props.numberOfLines).toBeUndefined();
-    expect(scroll().persistentScrollbar).toBe(true);
+    // Dispatcher Q-1: its own scroll thumb (the native bar's color ignores the app's dark mode).
+    expect(scroll().showsVerticalScrollIndicator).toBe(false);
     const chrome = 20 * 2 + 12 + 12 * 2 + 4;
     const layout = (id: string, height: number) => act(() => bridge.props.get(id).onLayout({ nativeEvent: { layout: { height } } }));
     const heading = () => (bridge.props.get("plugins.management.highRisk").children as any[]).flat().find((child: any) => child?.props?.testID === "plugins.management.highRiskTitle");
@@ -1668,7 +1710,7 @@ describe("pinned high-risk permission", () => {
     bridge.fontScale = 2;
     const { container } = mount(AndroidManagementConfirmation, props(allFive));
     const list = () => bridge.props.get("plugins.management.list");
-    expect(list().persistentScrollbar).toBe(true);
+    expect(list().showsVerticalScrollIndicator).toBe(false);
     expect(list().accessibilityHint).toBe("plugins.management.scrollHint");
     act(() => list().onLayout({ nativeEvent: { layout: { height: 300 } } }));
     act(() => list().onContentSizeChange(390, 1200));
@@ -1679,6 +1721,28 @@ describe("pinned high-risk permission", () => {
     expect(bridge.props.get("plugins.management.listFade")).toMatchObject({ pointerEvents: "none" });
     act(() => list().onScroll({ nativeEvent: { contentOffset: { y: 900 }, contentSize: { height: 1200 }, layoutMeasurement: { height: 300 } } }));
     expect(fade()).toBeNull();
+  });
+  // Dispatcher Q-1 (Android sixth reshoot): in dark mode the always-visible bar was #151515 on #1E1E1E, darker than the
+  // sheet, so with too little shown for the fade it said nothing. Each scroll area draws its own thumb in the
+  // `borderStrong` token, which stands out from the sheet in both modes; it moves with the scroll and takes no touches.
+  // Minimal failing input: dark mode, list content 1200 in 300. Tier: unit/jsdom.
+  it.each(["light", "dark"] as const)("Android shows a scroll thumb that stands out from the sheet in %s mode", (mode) => {
+    bridge.mode = mode;
+    bridge.fontScale = 2;
+    mount(AndroidManagementConfirmation, props(allFive));
+    const list = () => bridge.props.get("plugins.management.list");
+    act(() => list().onLayout({ nativeEvent: { layout: { height: 300 } } }));
+    act(() => list().onContentSizeChange(390, 1200));
+    const thumb = () => Object.assign({}, ...[bridge.props.get("plugins.management.listThumb").style].flat(3).filter(Boolean));
+    expect(thumb()).toMatchObject({ backgroundColor: palettes[mode].borderStrong, top: 0, height: 75 });
+    expect(bridge.props.get("plugins.management.listThumb").pointerEvents).toBe("none");
+    // Contrast against the sheet: a luminance gap, not a near match (the old bar was 0.004 apart in dark mode).
+    const luminance = (hex: string) => { const [r, g, b] = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255)
+      .map((v) => v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4); return 0.2126 * r! + 0.7152 * g! + 0.0722 * b!; };
+    const [a, b] = [luminance(palettes[mode].borderStrong), luminance(palettes[mode].surfaceElevated)];
+    expect((Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05)).toBeGreaterThanOrEqual(3);
+    act(() => list().onScroll({ nativeEvent: { contentOffset: { y: 900 }, contentSize: { height: 1200 }, layoutMeasurement: { height: 300 } } }));
+    expect(thumb().top).toBe(225);
   });
   it("Android gives the buttons their own height below the scroll area, which flexes into the rest (K-1)", () => {
     bridge.fontScale = 3;
@@ -1732,6 +1796,8 @@ describe("pinned high-risk permission", () => {
   });
   // Dispatcher N-3: in the regular layout the fade covered half of the second guaranteed item (Chinese, short screen,
   // 1.3×). The fade is drawn only over what shows below the two guaranteed items, when that is at least its height.
+  // Dispatcher P-3: with less than that below them the summary is no longer pinned at all (one scroll area), so a
+  // pinned summary that does not show everything always shows the fade.
   it.each([["10 pt below the two items", 10, false], ["60 pt below the two items", 60, true]] as const)(
     "Android draws the summary fade only below its guaranteed items: %s", (_name, extra, fades) => {
       const { container } = mount(AndroidManagementConfirmation, props(allFive));
@@ -1746,6 +1812,12 @@ describe("pinned high-risk permission", () => {
       lines().forEach((line: any) => act(() => line.props.onLayout({ nativeEvent: { layout: { height: 40 } } })));
       // The identity block takes what leaves exactly `extra` below the two items.
       layout("plugins.management.identity", Math.floor(844 * 0.85) - chrome - 100 - 30 - two - extra);
+      if (!fades) {
+        // Not enough below the two items for the fade: one scroll area, no pinned summary and no fade over it.
+        expect(container.querySelector('[data-testid="plugins.management.highRiskScroll"]')).toBeNull();
+        expect(container.querySelector('[data-testid="plugins.management.highRiskFade"]')).toBeNull();
+        return;
+      }
       expect(scroll().style.maxHeight).toBe(two + extra);
       act(() => scroll().onLayout({ nativeEvent: { layout: { height: two + extra } } }));
       act(() => scroll().onContentSizeChange(390, 5 * 40 + 4 * 4));

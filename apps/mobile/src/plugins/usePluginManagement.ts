@@ -12,6 +12,7 @@ import {
   type PluginManagementController,
   type PluginManagementState,
 } from "./pluginManagementController";
+import { pluginOperationOpens } from "./pluginOperationOpens";
 import { pluginSlotOwnerKey, samePluginSlotHolder, setPluginPendingCheckSource, type PluginSlotEntry, type PluginSlotHolder } from "./pluginManagementSlot";
 import { marketItemMatchesPlugin, type ManagedMarketDetail } from "./pluginManagementTypes";
 
@@ -62,10 +63,11 @@ export interface PluginCheckConclusion {
   result: "succeeded" | "failed" | "cancelled" | "installed" | "notInstalled" | "mismatch";
   errorCode?: string | null;
   /**
-   * `pending`: the read is out; `verified`: it found the instance (`instanceKey`); `missing`: it did not; `failed`: it did
-   * not come back (it can be read again); `none`: nothing to open (an uninstall, or no success).
+   * `pending`: the read is out; `verified`: it found this operation's instance (`instanceKey`, `pluginOperationOpens`);
+   * `changed`: it did not (the plugin changed on the computer since: gone, another version, another operation's);
+   * `failed`: it did not come back (it can be read again); `none`: nothing to open (an uninstall, or no success).
    */
-  readback: "pending" | "verified" | "missing" | "failed" | "none";
+  readback: "pending" | "verified" | "changed" | "failed" | "none";
   /** The instance found by that read (never the instance the operation started from: an uninstall has none). */
   instanceKey?: string;
   /** Its own view was showing it and handled the result already (only the list of checks still tells it). */
@@ -91,6 +93,12 @@ export interface PluginPendingCheck {
    * L-2): read-only until the person opens it with `decide`.
    */
   awaitingYou: boolean;
+  /**
+   * The computer no longer has this operation's receipt (NOT_FOUND) and its entry has no operation-level evidence
+   * (`AFTER_RECEIPT_GONE`): what the facts read after it show now. The panel says the result cannot be confirmed, shows
+   * this, and offers only "Stop tracking"; nothing looks it up again by itself.
+   */
+  unprovable?: { present: boolean; pagesApproved?: boolean };
   /** Look up the original operation once (never a second begin, answer or cancel). */
   verify(): Promise<void>;
   /**
@@ -118,7 +126,10 @@ function pendingChecksOf(ownerKey: string): PluginPendingCheck[] {
     const check = entry.controller.pendingCheck();
     if (!check) continue;
     const controller = entry.controller;
+    const gone = AFTER_RECEIPT_GONE[check.entry] === "unprovable" ? controller.currentMissingReceiptFacts() : null;
+    const now = gone && check.who.instanceKey ? gone.ghosts.find((ghost) => ghost.instanceKey === check.who.instanceKey) : undefined;
     list.push({ ...check, state: controller.getState(), shown: !!entry.listener, controller,
+      ...(gone ? { unprovable: { present: !!now, ...(check.entry === "page-approval" && now ? { pagesApproved: now.uiCapabilityApproved === true } : {}) } } : {}),
       awaitingYou: controller.consentUnseen() && !entry.listener,
       canStop: controller.idle(),
       verify: async () => { entry.settling = undefined; await controller.reconcile(); },
@@ -154,11 +165,6 @@ type Finished = NonNullable<ManagementEntry["lastCheck"]>;
  */
 interface Readback { owner: ReturnType<typeof getMobileAuthOwner>; ownerKey: string; invoke: PluginManagementInvoke; snapshotRead?: "installed"; check: Finished }
 const readbacks = new Map<string, Readback>();
-function instanceFor(check: Finished, ghosts: NonNullable<PluginManagementState["snapshot"]>["ghosts"]) {
-  if (check.entry === "market-install" || check.entry === "update")
-    return check.detail ? ghosts.find((ghost) => marketItemMatchesPlugin(check.detail!, ghost)) : undefined;
-  return check.who.instanceKey ? ghosts.find((ghost) => ghost.instanceKey === check.who.instanceKey) : undefined;
-}
 async function readBack(operationId: string) {
   const job = readbacks.get(operationId);
   const before = conclusions.find((item) => item.operationId === operationId);
@@ -169,9 +175,11 @@ async function readBack(operationId: string) {
     const snapshot = await createPluginManagementClient({ invoke: job.invoke, deviceId: job.check.who.deviceId, isCurrent: current })
       .snapshot(job.snapshotRead);
     if (!current()) return;
-    const found = instanceFor(job.check, snapshot.ghosts);
+    // The final receipt said it succeeded; the market's record read with these facts may name another operation since.
+    const opens = pluginOperationOpens(job.check, { ghosts: snapshot.ghosts, receipt: "final",
+      market: job.check.detail ? snapshot.market.items.find((item) => item.pluginId === job.check.detail!.pluginId) : undefined });
     const latest = conclusions.find((item) => item.operationId === operationId) ?? before;
-    conclude(job, found ? { ...latest, readback: "verified", instanceKey: found.instanceKey } : { ...latest, readback: "missing", instanceKey: undefined });
+    conclude(job, opens.open ? { ...latest, readback: "verified", instanceKey: opens.instanceKey } : { ...latest, readback: "changed", instanceKey: undefined });
     readbacks.delete(operationId);
   } catch {
     if (!current()) return;
@@ -182,7 +190,23 @@ async function readBack(operationId: string) {
 /** Read the target computer again for a success whose read failed ("Read again" in the list of checks). */
 export function retryPluginCheckReadback(operationId: string) { void readBack(operationId); }
 /**
- * A market install whose receipt is gone (NOT_FOUND) settles from the facts the controller read right after it
+ * What settles a pending check once the computer no longer has its receipt (NOT_FOUND), per entry (dispatcher O-1; the
+ * per-entry table in docs/dev-rules/plugin-mobile-implementation.md, "待核实记录的状态表"). Typed over every entry, so a
+ * new entry does not compile until it has a row:
+ * - `facts`: market install and update. The Host records the operation id of the install that put an instance there
+ *   (`installedOperationId`, contract V2.9), so the facts read after NOT_FOUND can prove it (`settleFromFacts`).
+ * - `unprovable`: uninstall and page approval. Nothing on the Host names the operation that did them, so the facts cannot
+ *   settle it: the record stays listed with what the computer shows now, an explanation and "Stop tracking", and is
+ *   never looked up again by itself (the controller stops automatic lookups once the receipt is gone).
+ * - `never-recorded`: enable and task settings write directly (no operation, no receipt), so no pending check exists.
+ */
+type AfterReceiptGone = "facts" | "unprovable" | "never-recorded";
+export const AFTER_RECEIPT_GONE: Record<PluginSlotEntry, AfterReceiptGone> = {
+  "market-install": "facts", update: "facts", uninstall: "unprovable", "page-approval": "unprovable",
+  enable: "never-recorded", "task-settings": "never-recorded",
+};
+/**
+ * A market install or update whose receipt is gone (NOT_FOUND) settles from the facts the controller read right after it
  * (`missingReceiptFacts`), never from an earlier snapshot, wherever it is shown:
  * - No same-id instance in those facts: "could not confirm; not on this computer now".
  * - A same-id instance is only a lead (a local package can share id and namespace): contract V2.9, only the Host's own
@@ -194,7 +218,7 @@ export function retryPluginCheckReadback(operationId: string) { void readBack(op
  */
 async function settleFromFacts(entry: ManagementEntry, facts: NonNullable<PluginManagementState["missingReceiptFacts"]>) {
   const check = entry.controller.pendingCheck(), item = check?.detail;
-  if (!check || (check.entry !== "market-install" && check.entry !== "update") || !item || entry.settling === facts) return;
+  if (!check || AFTER_RECEIPT_GONE[check.entry] !== "facts" || !item || entry.settling === facts) return;
   entry.settling = facts;
   const controller = entry.controller;
   const valid = () => !entry.dead && isMobileAuthOwnerCurrent(entry.owner) && controller.currentMissingReceiptFacts() === facts
@@ -205,20 +229,24 @@ async function settleFromFacts(entry: ManagementEntry, facts: NonNullable<Plugin
     conclude(entry, { operationId: check.operationId, entry: check.entry, who: check.who, result,
       readback: result === "installed" && instanceKey ? "verified" : "none", instanceKey: result === "installed" ? instanceKey : undefined });
   };
-  const instance = facts.ghosts.find((ghost) => marketItemMatchesPlugin(item, ghost));
-  if (!instance) { settle("notInstalled"); return; }
+  // A lead only: the market plugin (an install), or the instance the update started from; `pluginOperationOpens` decides.
+  const lead = facts.ghosts.find((ghost) => marketItemMatchesPlugin(item, ghost)
+    && (check.entry !== "update" || ghost.instanceKey === check.who.instanceKey));
+  if (!lead) { settle("notInstalled"); return; }
   try {
     const market = await createPluginManagementClient({ invoke: entry.invoke, deviceId: check.who.deviceId, isCurrent: valid })
       .detail(item.pluginId);
-    settle(market.installState === "installed" && market.releaseId === item.releaseId
-      && market.installedOperationId === check.operationId ? "installed" : "mismatch", instance.instanceKey);
+    // No receipt: only the Host's record of this operation id proves it (same release, same instance, this operation).
+    const opens = pluginOperationOpens(check, { ghosts: facts.ghosts, market, receipt: "gone" });
+    if (opens.open) settle("installed", opens.instanceKey); else settle("mismatch");
   } catch { /* Market facts not read: still unconfirmed; "Check result" verifies again. */ }
 }
 /** After each change of an entry's controller: the list at the top, a market install's facts, a final result. */
 function watch(entry: ManagementEntry) {
   const check = entry.controller.pendingCheck();
   const state = entry.controller.getState();
-  if (check?.entry === "market-install" && state.outcome === "unknown" && !state.busy && state.missingReceiptFacts)
+  // The receipt is gone: each entry settles as its row of AFTER_RECEIPT_GONE says (an unprovable one stays listed).
+  if (check && AFTER_RECEIPT_GONE[check.entry] === "facts" && state.outcome === "unknown" && !state.busy && state.missingReceiptFacts)
     void settleFromFacts(entry, state.missingReceiptFacts);
   // A pending check that ended with a final result: told once (the list of checks says how it ended; when no view showed
   // it, also a market row note and the lists read again). A success is closed by the list's own read of the computer

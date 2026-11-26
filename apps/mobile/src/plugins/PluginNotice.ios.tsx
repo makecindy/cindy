@@ -6,7 +6,7 @@ import { iconSize, radius, spacing, useTheme } from "@/theme";
 import type { PluginNoticeProps } from "./PluginNotice";
 
 /** A compact status strip; SwiftUI owns label and button layout. */
-export function PluginNativeNotice({ title, detail, icon = "info", testID, actions, unavailable, compact = false }: PluginNoticeProps) {
+export function PluginNativeNotice({ title, detail, icon = "info", testID, actions, unavailable, compact = false, onPress }: PluginNoticeProps) {
   const { colors } = useTheme();
   const { width, fontScale } = useWindowDimensions();
   const [measuredWidth, setMeasuredWidth] = useState(0);
@@ -17,13 +17,18 @@ export function PluginNativeNotice({ title, detail, icon = "info", testID, actio
   // Beside the text a button keeps its one-line width; stacked under it (narrow, large text) it may wrap within the
   // notice instead, so a long label at the largest sizes (German "Erneut versuchen") never pushes the notice past the
   // screen edge (dispatcher M-3).
-  const buttons = actions?.map((action) => <Button
+  // A notice the whole of which opens something (dispatcher P-2) is one button: its action shows as a label inside it, so
+  // the tap target is the full row however the text wraps (no button within a button).
+  const buttons = onPress ? actions?.map((action) => <Text key={action.label} testID={action.testID}
+    modifiers={[font({ textStyle: "subheadline", weight: "semibold" }), foregroundStyle(colors.textPrimary),
+      fixedSize({ horizontal: false, vertical: true })]}>{action.label}</Text>)
+    : actions?.map((action) => <Button
     key={action.label} label={action.label} testID={action.testID} onPress={action.onPress}
     modifiers={[buttonStyle("bordered"), controlSize("small"),
       fixedSize(stackedActions ? { horizontal: false, vertical: true } : { horizontal: true, vertical: false }),
       frame({ minHeight: 44 }), disabled(Boolean(action.disabled))]}
   />);
-  return <VStack testID={testID} alignment="leading" spacing={spacing.sm}
+  const notice = <VStack testID={onPress ? undefined : testID} alignment="leading" spacing={spacing.sm}
     modifiers={[
       padding({ horizontal: compact ? 0 : spacing.md, vertical: spacing.xs }),
       frame({ minHeight: 48, maxWidth: Infinity, alignment: "leading" }),
@@ -42,6 +47,9 @@ export function PluginNativeNotice({ title, detail, icon = "info", testID, actio
       {!stackedActions ? buttons : null}
     </HStack>
   </VStack>;
+  return onPress ? <Button testID={testID} onPress={onPress} modifiers={[buttonStyle("plain"), frame({ maxWidth: Infinity, alignment: "leading" })]}>
+    {notice}
+  </Button> : notice;
 }
 export function PluginNotice(props: PluginNoticeProps) {
   const { mode } = useTheme();

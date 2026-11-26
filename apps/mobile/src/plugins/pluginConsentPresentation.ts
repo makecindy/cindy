@@ -1,3 +1,4 @@
+import { declaredPluginConsent, pluginConsentAllowance, type PluginConsentAllowance } from "./pluginConsentAllowance";
 import { pluginSourceWarningKey } from '@cindy/maker-shared/mcp-apps';
 import { formatPluginVersion } from './pluginMarketCatalog';
 import {
@@ -82,9 +83,12 @@ export function planConsentSheet(sheet: ConsentSheetMeasures): ConsentSheetPlan 
   const full = Math.ceil(itemsHeight(sheet.lines.length));
   const floor = Math.ceil(itemsHeight(Math.min(2, sheet.lines.length)));
   const room = available - Math.ceil(sheet.heading) - Math.ceil(sheet.identity);
-  if (room < floor) return { mode: "compact" };
-  const summaryLines = Math.min(full, Math.floor(room));
-  return { mode: "regular", summaryLines, clipped: summaryLines < full, guaranteed: floor };
+  if (room >= full) return { mode: "regular", summaryLines: full, clipped: false, guaranteed: floor };
+  // A summary that does not show in full keeps the regular layout only when, below its two guaranteed items, enough of
+  // the next one shows for the fade to be drawn over it (dispatcher P-3: at XXXL a third item showing 1 pt looked like the
+  // end of the list); otherwise everything goes into one scroll area.
+  if (room < floor + sheet.gap + CONSENT_FADE_HEIGHT) return { mode: "compact" };
+  return { mode: "regular", summaryLines: Math.floor(room), clipped: true, guaranteed: floor };
 }
 
 /** Fixed order of the pinned classes, whatever order the package declares them in. */
@@ -148,14 +152,13 @@ function sourceNotice(consent: Consent, t: Translate): string | undefined {
 }
 
 /**
- * `expectedSource`: the full source identity the person chose when this install or update was started on the phone
- * (controller state). The consent must name exactly that source; otherwise Allow stays unavailable.
+ * `allowance`: whether this consent can be allowed here (`pluginConsentAllowance`, the controller's
+ * `consentAllowance()`: what the person chose against what the consent declares). Without one, only the declaration
+ * rules apply (nobody chose it on the phone).
  */
 export function pluginConsentPresentation(consent: Consent, t: Translate, deviceName?: string,
-  expectedSource?: PluginMarketSourceIdentity | null) {
-  const custom = consent.origin === "custom-market";
-  const sourceChanged = custom && !!expectedSource && !!consent.originSource
-    && !samePluginMarketSourceIdentity(consent.originSource, expectedSource);
+  allowance: PluginConsentAllowance = pluginConsentAllowance(null, declaredPluginConsent(consent, ""))) {
+  const sourceChanged = !allowance.allow && allowance.reason === "source-changed";
   const facts = consent.facts;
   const detailOf = (item: PluginPermissionItem) =>
     [
@@ -224,14 +227,17 @@ export function pluginConsentPresentation(consent: Consent, t: Translate, device
      * A source switch is confirmed like a first install (contract V2.4b: full permissions, `facts.kind === "install"`).
      */
     originSourceChanged: sourceChangedNotice(consent, t),
-    /** The consent names another source than the one chosen (it changed after the last check): choose again. */
-    sourceChanged: sourceChanged ? t("plugins.notice.consentSource.sourceChanged") : undefined,
     /**
-     * A custom-market install or update the phone cannot tie to the chosen source: the Host did not name the source,
-     * so the phone cannot show what would be allowed, or it names another source than the one chosen. Allow stays
-     * unavailable; Reject stays available (continue on the computer, or choose again).
+     * The consent names another source or source type than the one chosen (it changed after the last check), or another
+     * plugin, version, kind or computer: choose again, or continue on the computer.
      */
-    allowBlocked: custom && (!consent.originSource || sourceChanged),
+    sourceChanged: sourceChanged ? t("plugins.notice.consentSource.sourceChanged")
+      : !allowance.allow && allowance.reason === "changed" ? t("plugins.notice.consentSource.consentChanged") : undefined,
+    /**
+     * Not allowed here (`pluginConsentAllowance`): a custom market that names no valid source (the phone cannot show
+     * what would be allowed), or anything else than what was chosen. Allow stays unavailable; Reject stays available.
+     */
+    allowBlocked: !allowance.allow,
     identity: facts.ghostId,
     trust: pluginSourceWarningKey(consent.installationSource) ? t(pluginSourceWarningKey(consent.installationSource)!) : undefined,
     origin: [

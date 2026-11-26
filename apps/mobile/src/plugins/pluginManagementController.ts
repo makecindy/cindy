@@ -1,3 +1,4 @@
+import { declaredPluginConsent, pluginConsentAllowance, type PluginConsentAllowance, type PluginConsentExpectation } from './pluginConsentAllowance';
 import { randomUUID } from 'expo-crypto';
 import type { PluginPromptDisplay } from './pluginPromptReads';
 import { subscribeMobileAuthOwner } from '@/auth/authOwnerGeneration';
@@ -34,6 +35,8 @@ export interface PluginManagementState {
    * name after the last detail read). Absent for server items and consents not started here.
    */
   expectedSource?: PluginMarketSourceIdentity | null;
+  /** What the person chose when this operation started (dispatcher O-4); a consent may be allowed only if it matches. */
+  expectedConsent?: PluginConsentExpectation | null;
 }
 export interface PluginManagementControllerOptions {
   /** Optional shared chat hint. Never used by readSnapshot or mutation validation. */
@@ -51,6 +54,19 @@ export interface PluginManagementControllerOptions {
 type BeginIntent = PluginManagementBegin extends infer T ? T extends PluginManagementBegin ? Omit<T, 'operationId'> : never : never;
 type ConsentIntent = { kind: 'approve-ui' | 'defer-ui'; installed: PluginUiConsentItem };
 const terminal = (receipt: PluginManagementReceipt) => ['succeeded', 'cancelled', 'failed'].includes(receipt.phase);
+/** What the person chose, as a consent must declare it (dispatcher O-4); null for operations that never ask. */
+function expectationOf(intent: BeginIntent | ConsentIntent, deviceId: string): PluginConsentExpectation | null {
+  if (intent.kind === 'install') {
+    const { detail } = intent;
+    return { kind: intent.installed ? 'update' : 'install', deviceId, pluginId: detail.pluginId, ghostId: detail.ghostId,
+      version: detail.version, releaseId: detail.releaseId, sourceType: detail.sourceType, source: detail.sourceIdentity ?? null };
+  }
+  // A page approval started from the installed detail names the instance's plugin and version; one started from a chat
+  // prompt knows only the instance (nothing chosen to compare: the declaration rules apply).
+  if (intent.kind === 'approve-ui' && 'manifest' in intent.installed)
+    return { kind: 'ui-capability', deviceId, ghostId: intent.installed.manifest.id, version: intent.installed.manifest.version };
+  return null;
+}
 const AUTO_LOOKUP_FAILURES = 4;
 /** Cap of the automatic lookup delay: the Host reports the operation running (work under way, a result soon). */
 const AUTO_LOOKUP_RUNNING_MAX_DELAY_MS = 5_000;
@@ -429,7 +445,8 @@ export function createPluginManagementController(client: PluginManagementClient,
     answers.clear(); cancelling = null; consentOrder.length = 0; answerSentAt.clear(); shownRank = -1;
     lookupFailures = 0; autoLookupStopped = false; resetPace(); answerWrittenEver = false; cancelAttempted = false; shownConsent = null;
     publish({ busy: true, errorCode: null, operationId: null, receipt: null, outcome: 'idle',
-      expectedSource: intent.kind === 'install' && intent.detail.sourceType !== 'server' ? intent.detail.sourceIdentity ?? null : null });
+      expectedSource: intent.kind === 'install' && intent.detail.sourceType !== 'server' ? intent.detail.sourceIdentity ?? null : null,
+      expectedConsent: expectationOf(intent, slotHold?.who.deviceId ?? client.deviceId) });
     const installed = intent.installed;
     if (!installed && intent.kind !== 'install') { release(holder, { outcome: 'failed', errorCode: 'PLUGIN_INSTALL_CHANGED' }); return; }
     receiver = installed && 'manifest' in installed ? installed : undefined;
@@ -547,6 +564,10 @@ export function createPluginManagementController(client: PluginManagementClient,
       drop(holder);
     }
   }
+  function consentAllowance(): PluginConsentAllowance | null {
+    const consent = state.receipt?.consent;
+    return consent ? pluginConsentAllowance(state.expectedConsent ?? null, declaredPluginConsent(consent, client.deviceId)) : null;
+  }
   async function answer(confirmed: boolean) {
     const receipt = state.receipt;
     if (!receipt?.consent || state.outcome !== 'confirmation' || !state.online || state.busy || disposed || !client.isCurrent() || !opGuard()) return;
@@ -563,15 +584,12 @@ export function createPluginManagementController(client: PluginManagementClient,
       conclude(holder, patch);
     };
     try {
-      const consent = receipt.consent;
-      if (confirmed && consent.origin === 'custom-market') {
-        // Never allow a custom-market consent the phone cannot tie to the chosen source (the sheet already keeps
-        // Allow unavailable; this guards every caller).
-        if (!consent.originSource) { unsent({ errorCode: 'PLUGIN_SOURCE_UNVERIFIED' }); return; }
-        if (state.expectedSource && !samePluginMarketSourceIdentity(consent.originSource, state.expectedSource)) {
-          unsent({ errorCode: 'PLUGIN_SOURCE_CHANGED' });
-          return;
-        }
+      // The same decision as the sheet's Allow (dispatcher O-4), for every caller, right before anything is written.
+      const allowance = confirmed ? consentAllowance() : null;
+      if (allowance && !allowance.allow) {
+        unsent({ errorCode: allowance.reason === 'source-unverified' ? 'PLUGIN_SOURCE_UNVERIFIED'
+          : allowance.reason === 'source-changed' ? 'PLUGIN_SOURCE_CHANGED' : 'PLUGIN_CONSENT_CHANGED' });
+        return;
       }
       if (confirmed) {
         const snapshot = await readSnapshot(token);
@@ -707,6 +725,16 @@ export function createPluginManagementController(client: PluginManagementClient,
      * nothing is written to the computer; the view goes back to no operation, its slot goes. Not while a write of it is
      * on its way (the slot never goes then).
      */
+    /**
+     * The operation this controller ran, once it has a final result (dispatcher O-2): what `pluginOperationOpens` needs
+     * to decide whether a view opens an instance after it. Null while not final, or when no entry of the page started it.
+     */
+    /** Whether the consent on screen can be allowed here (`pluginConsentAllowance`; null without one). */
+    consentAllowance,
+    finishedOperation(): { operationId: string; entry: PluginSlotEntry; who: PluginSlotHolder; detail?: ManagedMarketDetail } | null {
+      if (disposed || !opEntry || !opWho || !state.operationId || !final(state.outcome)) return null;
+      return { operationId: state.operationId, entry: opEntry, who: opWho, detail: installDetail };
+    },
     untrack(): boolean {
       if (disposed || writesInFlight > 0) return false;
       ++epoch; stopPolling(); busyHolder = 0; answers.clear(); cancelling = null;

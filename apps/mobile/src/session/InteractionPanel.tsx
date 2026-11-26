@@ -10,6 +10,7 @@ import { InputHandoffCard } from '@/inputHandoff/InputHandoffCard';
 import { parseInputHandoffSnapshotLike } from '@/inputHandoff/inputHandoffNative';
 import { mobilePluginSetupActions } from '@/plugins/pluginSetupActions';
 import { isPluginMarketSourceIdentity } from '@/plugins/pluginManagementTypes';
+import { declaredTaskCardConsent, pluginConsentAllowance } from '@/plugins/pluginConsentAllowance';
 import { usePaneViewport } from '@/platform/AdaptiveWindowContext';
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -844,13 +845,12 @@ function PermissionCard({
   // source they pack from; a malformed source counts as missing.
   const installSource = isPluginInstall && installInput?.origin === 'custom-market' && isPluginMarketSourceIdentity(installInput.source)
     ? installInput.source : undefined;
-  // A first install the phone cannot tie to a source stays rejectable only: an older Host's card has no origin
-  // (it may come from a custom market), and a custom-market card without a valid source cannot say which
-  // repository would be allowed. Install on the computer instead.
-  // A custom-market card without a valid source is never allowed here, install or update (maintainer review 05:55,
-  // contract #12731); an older Host's first-install card without an origin is not either.
-  const installSourceUnverified = (isPluginInstall && installInput?.origin === 'custom-market' && !installSource)
-    || (isFirstInstall && installInput?.origin === undefined);
+  // The same decision as the plugins page's confirmation (pluginConsentAllowance, dispatcher O-4); nothing was chosen
+  // on the phone, so only the declaration rules apply: a custom-market card without a valid source is never allowed
+  // here, install or update (maintainer review 05:55, contract #12731); nor an older Host's first-install card without
+  // an origin (it may come from a custom market). Install on the computer instead.
+  const installSourceUnverified = isPluginInstall
+    && !pluginConsentAllowance(null, declaredTaskCardConsent(item.request.input, '')).allow;
   const installRepository = installSource
     ? installSource.kind === 'local' ? t('plugins.notice.consentSource.localFolder')
       : installSource.ref

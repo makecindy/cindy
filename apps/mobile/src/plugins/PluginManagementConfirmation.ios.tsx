@@ -33,7 +33,7 @@ export function PluginManagementConfirmation(
   const { t } = useTranslation(),
     { colors } = useTheme();
   const { consent, visible, answer } = usePluginConsent(props);
-  const info = consent ? pluginConsentPresentation(consent, t, props.deviceName, props.state.expectedSource) : undefined;
+  const info = consent ? pluginConsentPresentation(consent, t, props.deviceName, props.controller.consentAllowance?.() ?? undefined) : undefined;
   const { height: windowHeight, width: windowWidth, fontScale } = useWindowDimensions();
   const insets = useSafeAreaInsets();
   // Two layouts by one rule (`planConsentSheet`, the same as Android), from measured content heights only: regular,

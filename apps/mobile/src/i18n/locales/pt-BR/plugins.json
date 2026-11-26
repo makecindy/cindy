@@ -366,7 +366,8 @@
       "localFolder": "Pasta local",
       "repositoryMissingInstall": "Este computador não informou o repositório deste marketplace personalizado, então não dá para instalar pelo celular. Primeiro atualize a Cindy nesse computador e atualize este marketplace; se não resolver, instale direto pelo computador.",
       "repositoryMissingUpdate": "Este computador não informou o repositório deste marketplace personalizado, então não dá para atualizar pelo celular. Primeiro atualize a Cindy nesse computador e atualize este marketplace; se não resolver, atualize o plugin direto pelo computador.",
-      "sourceChanged": "A origem desta solicitação é diferente da que você escolheu, então ela não pode ser permitida pelo celular. Recuse e escolha de novo."
+      "sourceChanged": "A origem desta solicitação é diferente da que você escolheu, então ela não pode ser permitida pelo celular. Recuse e escolha de novo.",
+      "consentChanged": "Esta solicitação é para um plugin, versão ou computador diferente do que você escolheu, então não pode ser permitida pelo celular. Recuse e escolha de novo, ou resolva no computador."
     },
     "sourceNotice": {
       "community": "Este plugin é desenvolvido e mantido por membros da comunidade. A {{appName}} revisou esta versão, mas não pode garantir a segurança do plugin em todas as situações de uso.",
@@ -506,7 +507,18 @@
       "checking": "Verificando o resultado",
       "waiting": "Resultado não confirmado. Verifique de novo ou pare de acompanhar.",
       "offline": "“{{device}}” não está conectado. Conecte-o para verificar o resultado.",
-      "awaitingYou": "O computador está aguardando sua confirmação"
+      "awaitingYou": "O computador está aguardando sua confirmação",
+      "unprovable": {
+        "uninstall": {
+          "absent": "O computador não tem mais registro desta desinstalação, então não dá para confirmar o resultado. O plugin não está no computador agora.",
+          "present": "O computador não tem mais registro desta desinstalação, então não dá para confirmar o resultado. O plugin ainda está no computador."
+        },
+        "pageApproval": {
+          "absent": "O computador não tem mais registro da ativação destas páginas, então não dá para confirmar o resultado. O plugin não está no computador agora.",
+          "approved": "O computador não tem mais registro da ativação destas páginas, então não dá para confirmar o resultado. As páginas estão ativadas.",
+          "notApproved": "O computador não tem mais registro da ativação destas páginas, então não dá para confirmar o resultado. As páginas ainda não estão ativadas."
+        }
+      }
     },
     "stop": "Parar de acompanhar",
     "stopHint": "Só este celular para de acompanhar. A operação no computador não é cancelada.",
@@ -518,7 +530,7 @@
       "untracked": "Não acompanhado",
       "ended": "Encerrado",
       "readingBack": "Concluído. Verificando o plugin no computador…",
-      "succeededMissing": "Concluído, mas este plugin não foi encontrado no computador.",
+      "changedSince": "Concluído, mas este plugin mudou no computador desde então.",
       "succeededUnread": "Concluído, mas não foi possível ler os plugins do computador.",
       "uninstalled": "Desinstalado"
     },

@@ -4,7 +4,8 @@ import { AccessibilityInfo, Alert, findNodeHandle, Modal, Platform, ScrollView, 
 import { Text } from '@/components/AppText';
 import { MainWindowActionButton } from '@/components/MobilePrimitives';
 import { showConfirm } from '@/platform/chrome/showActionMenu';
-import { useThemedStyles, type ThemeColors } from '@/theme';
+import { useTheme, useThemedStyles, type ThemeColors } from '@/theme';
+import { ScrollFade, ScrollThumb, useScrollOverflow } from '@/components/ScrollOverflow';
 import { fontWeight, lineHeight, radius, spacing, typeScale } from '@/theme/tokens';
 
 /** A confirmation, or (no `cancelLabel`) a notice with one button that only closes it. */
@@ -15,7 +16,7 @@ export function useSharedTaskConfirmation() {
   const [request, setRequest] = useState<Confirmation | null>(null);
   const resolver = useRef<((accepted: boolean) => void) | null>(null);
   const cancelButton = useRef<ViewInstance>(null);
-  const styles = useThemedStyles(makeStyles);
+  const styles = useThemedStyles(makeStyles), { colors } = useTheme();
   useEffect(() => () => { resolver.current?.(false); resolver.current = null; }, []);
   const settle = useCallback((accepted: boolean) => {
     const resolve = resolver.current;
@@ -35,10 +36,7 @@ export function useSharedTaskConfirmation() {
     onShow={() => { const handle = findNodeHandle(cancelButton.current); if (handle) AccessibilityInfo.setAccessibilityFocus(handle); }}>
     <View style={styles.backdrop} testID="sharedTask.confirmBackdrop">
       <View style={styles.card} accessibilityViewIsModal testID="sharedTask.confirmDialog">
-        <ScrollView style={styles.content} contentContainerStyle={styles.copy} bounces={false}>
-          <Text style={styles.title} accessibilityRole="header">{request.title}</Text>
-          {!!request.message && <Text style={styles.body}>{request.message}</Text>}
-        </ScrollView>
+        <ConfirmationCopy title={request.title} message={request.message} styles={styles} surface={colors.surfaceElevated} />
         <View style={styles.actions}>
           {request.cancelLabel !== undefined ? <MainWindowActionButton density="compact" buttonRef={cancelButton} style={styles.button}
             action={{ label: request.cancelLabel, onPress: () => settle(false), testID: 'sharedTask.confirmCancel' }} /> : null}
@@ -50,6 +48,27 @@ export function useSharedTaskConfirmation() {
   </Modal> : null;
   return { confirm, dialog };
 }
+
+/**
+ * The title and message, scrolling above the buttons. When they do not fit, a fade over the lower edge and a scroll thumb
+ * that stays visible say there is more, in light and dark mode (dispatcher Q-4: a German notice at the largest text size
+ * on a short screen showed only half a last line).
+ */
+function ConfirmationCopy({ title, message, styles, surface }: { title: string; message?: string; styles: ReturnType<typeof makeStyles>; surface: string }) {
+  const copy = useScrollOverflow();
+  return (
+    <View style={styles.content}>
+      <ScrollView style={styles.content} contentContainerStyle={styles.copy} bounces={false} showsVerticalScrollIndicator={false} testID="sharedTask.confirmCopy"
+        onLayout={copy.onLayout} onContentSizeChange={copy.onContentSizeChange} onScroll={copy.onScroll} scrollEventThrottle={64}>
+        <Text style={styles.title} accessibilityRole="header">{title}</Text>
+        {!!message && <Text style={styles.body}>{message}</Text>}
+      </ScrollView>
+      {copy.more ? <ScrollFade testID="sharedTask.confirmFade" color={surface} height={COPY_FADE_HEIGHT} /> : null}
+      <ScrollThumb overflow={copy} testID="sharedTask.confirmThumb" />
+    </View>
+  );
+}
+const COPY_FADE_HEIGHT = 24;
 
 const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   backdrop: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: colors.overlay, padding: spacing.xl },

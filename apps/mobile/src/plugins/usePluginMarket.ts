@@ -1,3 +1,4 @@
+import { pluginOperationOpens } from "./pluginOperationOpens";
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { AppState } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
@@ -625,9 +626,12 @@ export function usePluginMarket(options: UsePluginMarketOptions) {
     } else if (state.outcome === "failed") finish(attempt, pluginMarketErrorKey(state.errorCode));
     else if (state.outcome === "cancelled") finish(attempt);
     else if (state.outcome === "succeeded" && !state.busy) {
-      // Wait for the controller's post-commit readback; it locates the new physical instance.
-      const installed = state.snapshot?.ghosts.find((ghost) => marketItemMatchesPlugin(attempt.item, ghost));
-      if (installed || state.errorCode) { complete(attempt, installed?.instanceKey); return; }
+      // Wait for the controller's post-commit readback; the one decision (dispatcher O-2) names the instance it opens.
+      const opens = state.operationId && state.snapshot ? pluginOperationOpens(
+        { operationId: state.operationId, entry: "market-install", who: {}, detail: attempt.detail ?? attempt.item },
+        { ghosts: state.snapshot.ghosts, receipt: "final",
+          market: state.snapshot.market.items.find((item) => item.pluginId === attempt.item.pluginId) }) : null;
+      if (opens?.open || state.errorCode) { complete(attempt, opens?.open ? opens.instanceKey : undefined); return; }
       // The committed install stays successful even if the readback never names it.
       const timer = setTimeout(() => complete(attempt, undefined), 5_000);
       return () => clearTimeout(timer);

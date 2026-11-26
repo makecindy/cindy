@@ -5,11 +5,16 @@ import { beforeEach, afterEach, expect, it, vi } from 'vitest';
 import { Platform } from 'react-native';
 import { useSharedTaskConfirmation } from '@/session/useSharedTaskConfirmation';
 
-const h = vi.hoisted(() => ({ native: vi.fn(), alert: vi.fn(), result: vi.fn(), close: () => {}, dark: false, request: null as any }));
+const h = vi.hoisted(() => ({ native: vi.fn(), alert: vi.fn(), result: vi.fn(), close: () => {}, dark: false, request: null as any,
+  props: new Map<string, any>() }));
 vi.mock('@/platform/chrome/showActionMenu', () => ({ showConfirm: h.native }));
 vi.mock('react-native', async () => {
   const { createElement } = await import('react');
-  const view = ({ children, testID, style }: { children: ReactNode; testID?: string; style?: object }) => createElement('div', { 'data-testid': testID, style }, children);
+  const view = (props: { children: ReactNode; testID?: string; style?: object }) => {
+    if (props.testID) h.props.set(props.testID, props);
+    const style = Object.assign({}, ...[props.style].flat(3).filter(Boolean));
+    return createElement('div', { 'data-testid': props.testID, style }, props.children);
+  };
   return { Platform: { OS: 'android' }, View: view, ScrollView: view,
     Modal: ({ children, onRequestClose }: { children: ReactNode; onRequestClose(): void }) => { h.close = onRequestClose; return createElement('div', { role: 'dialog' }, children); },
     StyleSheet: { create: (styles: unknown) => styles, hairlineWidth: 1 },
@@ -22,7 +27,8 @@ vi.mock('@/components/MobilePrimitives', () => ({
 }));
 vi.mock('@/theme', async () => {
   const { lightColors, darkColors } = await import('@/theme/tokens');
-  return { useThemedStyles: (make: (colors: typeof lightColors) => unknown) => make(h.dark ? darkColors : lightColors) };
+  return { useThemedStyles: (make: (colors: typeof lightColors) => unknown) => make(h.dark ? darkColors : lightColors),
+    useTheme: () => ({ colors: h.dark ? darkColors : lightColors }) };
 });
 let root: Root;
 let host: HTMLDivElement;
@@ -112,4 +118,25 @@ it('keeps the buttons outside the scrolled text', async () => {
   expect(scrolled.textContent).toContain('A long explanation.');
   expect(scrolled.querySelector('button')).toBeNull();
   expect(actions.querySelector('[data-testid="sharedTask.confirmAccept"]')).not.toBeNull();
+});
+
+// Dispatcher Q-4 (Android sixth reshoot): a German notice at the largest text size on a short screen scrolled, and the
+// resting card showed only half a last line. More text than fits: a fade over the lower edge and a scroll thumb in a
+// token that stands out from the card in light and dark; both go once the end shows. Tier: unit/jsdom.
+it.each([false, true])('says the text scrolls with a fade and a visible thumb (dark=%s)', async (dark) => {
+  h.dark = dark;
+  await act(async () => root.render(<Harness />));
+  await click('open');
+  const copy = h.props.get('sharedTask.confirmCopy');
+  await act(async () => copy.onLayout({ nativeEvent: { layout: { height: 200 } } }));
+  await act(async () => copy.onContentSizeChange(300, 600));
+  const { lightColors, darkColors } = await import('@/theme/tokens');
+  expect(host.querySelector('[data-testid="sharedTask.confirmFade"]')).not.toBeNull();
+  const thumb = host.querySelector('[data-testid="sharedTask.confirmThumb"]') as HTMLElement;
+  expect(thumb).not.toBeNull();
+  const expected = (dark ? darkColors : lightColors).borderStrong;
+  expect(thumb.style.backgroundColor.replace(/\s/g, '')).toBe(`rgb(${[1, 3, 5].map((i) => parseInt(expected.slice(i, i + 2), 16)).join(',')})`);
+  expect(copy.showsVerticalScrollIndicator).toBe(false);
+  await act(async () => copy.onScroll({ nativeEvent: { contentOffset: { y: 400 }, contentSize: { height: 600 }, layoutMeasurement: { height: 200 } } }));
+  expect(host.querySelector('[data-testid="sharedTask.confirmFade"]')).toBeNull();
 });

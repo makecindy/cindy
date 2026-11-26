@@ -278,7 +278,7 @@ export function pluginApprovalToken(plugin: ManagedPlugin): string {
   return plugin.approval.state === 'approved' ? `approved:${plugin.approval.revision}` : plugin.approval.state;
 }
 /** Never infer a namespace from a name/prefix. Legacy wire falls back only to the exact physical key. */
-export function marketItemMatchesPlugin(item: ManagedMarketItem, plugin: ManagedPlugin): boolean {
+export function marketItemMatchesPlugin(item: Pick<ManagedMarketItem, 'ghostId' | 'namespace'>, plugin: ManagedPlugin): boolean {
   return item.ghostId === plugin.manifest.id && (item.namespace !== undefined && plugin.namespace !== undefined
     ? item.namespace === plugin.namespace : plugin.instanceKey === item.ghostId);
 }

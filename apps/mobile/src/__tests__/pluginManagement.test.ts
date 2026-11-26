@@ -10,6 +10,9 @@ import { createPluginPromptReads } from '@/plugins/pluginPromptReads';
 import { pluginUiApprovalNotice } from '@/plugins/pluginUiApprovalNotice';
 import { PluginPromptReadsProvider, usePluginPromptReads } from '@/plugins/PluginPromptReadsContext';
 import { createPluginManagementController, nextDetachedStep } from '@/plugins/pluginManagementController';
+import { invokeSendEvidence } from '@/device-link/invokeSendEvidence';
+import { pluginOperationOpens } from '@/plugins/pluginOperationOpens';
+import { declaredPluginConsent, declaredTaskCardConsent, pluginConsentAllowance } from '@/plugins/pluginConsentAllowance';
 import { isBoundedPluginResponse, parsePluginManagementDetail, parsePluginManagementReceipt,
   parsePluginManagementSnapshot, marketItemMatchesPlugin, pluginNeedsUiApproval, type ManagedPlugin,
   parsePluginUiConsent, samePluginMarketSourceIdentity, isPluginMarketSourceIdentity, type ManagedMarketDetail, type PluginManagementReceipt, type PluginManagementSnapshot } from '@/plugins/pluginManagementTypes';
@@ -70,8 +73,17 @@ const detail: ManagedMarketDetail = { pluginId: 'market/demo', ghostId: 'demo', 
 const snapshot = (ghosts: ManagedPlugin[] = [plugin]): PluginManagementSnapshot => ({ version: 1, ghosts,
   market: { items: [detail], unavailableReason: null, customSourceNames: [], unavailableCustomSourceNames: [] } });
 const receipt = (phase: PluginManagementReceipt['phase'] = 'running'): PluginManagementReceipt => ({ operationId: 'operation-1', phase });
+/**
+ * The consent the Host asks for when this file's usual operation (updating `plugin` 1 → 2 to `detail`) stops at one: an
+ * update's facts (dispatcher O-4: a consent may be allowed only when it declares what was chosen).
+ */
 const confirmation = (): PluginManagementReceipt => ({ ...receipt('confirmation'), consent: { requestId: 'consent-1',
-  initiator: 'user', origin: 'market', facts: { kind: 'install', ghostId: 'demo', name: 'Demo', version: '2', permissions: [] } } });
+  initiator: 'user', origin: 'market', facts: { kind: 'update', ghostId: 'demo', name: 'Demo', version: '2', previousVersion: '1',
+    added: [], removed: [], unchangedCount: 0, builtinOauthClientChanged: false } } });
+/** A page approval's consent for `plugin` as the computer asks it (its installed version, purpose ui-capability). */
+const uiConfirmation = (): PluginManagementReceipt => ({ ...receipt('confirmation'), consent: { requestId: 'consent-1',
+  initiator: 'user', origin: 'local-file', purpose: 'ui-capability', facts: { kind: 'update', ghostId: 'demo', name: 'Demo',
+    version: '1', previousVersion: '1', added: [], removed: [], unchangedCount: 0, builtinOauthClientChanged: false } } });
 const capability = { protocolVersion: 1, collections: [{ id: 'plugins', actions: [{ id: 'management:snapshot', label: 'Manage' }] }] };
 /** Like vi.waitFor, without its 50 ms polling: retries the assertion while promises settle (file performance budget). */
 async function eventually(assertion: () => void) {
@@ -477,7 +489,9 @@ describe('offline and reconnect between enqueue, dequeue, write and reply', () =
 // Reject or Check result whenever the screen lets them), with these invariants after every step:
 // ① Allow / Reject are tappable only when no request holds busy and no answer to this consent is in flight or written;
 // ② at most one answer is written per consent request; ③ at most one lookup is in flight on the current connection;
-// ④ once the Host's later phase was shown, the consent never shows again; ⑤ busy is never held with nothing in flight.
+// ④ once the Host's later phase was shown, the consent never shows again; ⑤ busy is never held with nothing in flight;
+// ⑥ (dispatcher O-3) every request ends in exactly one class (answered, written, known not sent), and an unknown result
+// only follows a written mutation.
 // Minimal failing input (54a3e8db): Reject queued → offline → online → lookup → Allow written → old Reject refused.
 // Tier: unit (in-memory Host; bounded depth, every enabled event at every step).
 describe('busy belongs to one request; one answer per consent', () => {
@@ -495,7 +509,11 @@ describe('busy belongs to one request; one answer per consent', () => {
       if (item.kind === 'answer' && host.phase === 'confirmation') host.phase = item.confirmed ? 'running' : 'cancelled';
       if (item.kind === 'cancel' && (host.phase === 'confirmation' || host.phase === 'running')) host.phase = 'cancelled';
     };
-    const invoke = (async (_id: string, channel: string, args?: unknown[], options?: { preSend?: () => void; onRequestWritten?: () => void; onNotSent?: () => void }) => {
+    // ⑥ (dispatcher O-3) Each request ends in exactly one class: answered, written (then lost), or known not sent; the
+    // two reports never both come and each at most once. The stand-in transport below sits behind the same decision
+    // DeviceLinkContext.invoke makes (invokeSendEvidence), as production does.
+    const ends: Array<{ action: string; written: number; notSent: number; answered: boolean; failed: boolean }> = [];
+    const transport = (async (_id: string, channel: string, args?: unknown[], options?: { preSend?: () => void; onRequestWritten?: () => void }) => {
       options?.preSend?.();
       const request = args?.[0] as Envelope | undefined;
       const action = request?.actionId;
@@ -532,11 +550,24 @@ describe('busy belongs to one request; one answer per consent', () => {
         };
         pending.push(item);
       });
+    });
+    const invoke = (async (id: string, channel: string, args?: unknown[], options?: { preSend?: () => void; onRequestWritten?: () => void; onNotSent?: () => void }) => {
+      const end = { action: (args?.[0] as Envelope | undefined)?.actionId ?? channel, written: 0, notSent: 0, answered: false, failed: false };
+      ends.push(end);
+      const evidence = invokeSendEvidence({
+        onRequestWritten: () => { end.written += 1; options?.onRequestWritten?.(); },
+        onNotSent: () => { end.notSent += 1; options?.onNotSent?.(); },
+      });
+      try {
+        const result = await evidence.viaTransport(() => transport(id, channel, args, { preSend: options?.preSend, onRequestWritten: evidence.onRequestWritten }));
+        end.answered = true;
+        return result;
+      } catch (error) { end.failed = true; evidence.failed(); throw error; }
     }) as unknown as PluginManagementInvoke;
     const c = createPluginManagementController(createPluginManagementClient({ deviceId: 'host-1', invoke }),
       { createOperationId: () => 'operation-1', pollIntervalMs: 3_600_000 });
     controllers.push(c);
-    return { c, host, pending, toggle: () => { connection += 1; }, connection: () => connection };
+    return { c, host, pending, ends, toggle: () => { connection += 1; }, connection: () => connection };
   }
   // Every step settles on microtasks alone (the rig never uses timers), which keeps the exhaustive walk fast.
   const flush = async () => { for (let i = 0; i < 100; i++) await Promise.resolve(); };
@@ -557,6 +588,13 @@ describe('busy belongs to one request; one answer per consent', () => {
       if (st.outcome === 'running' || st.outcome === 'succeeded' || st.outcome === 'cancelled') hostPhaseShown = true;
       if (hostPhaseShown && st.outcome === 'confirmation') violation ??= `④ consent reopened (${step})`;
       if (st.busy && r.pending.length === 0) violation ??= `⑤ busy with nothing in flight (${step})`;
+      for (const end of r.ends) {
+        if (end.written > 1 || end.notSent > 1 || (end.written && end.notSent)) violation ??= `⑥ ${end.action} reported written ${end.written}, not sent ${end.notSent} (${step})`;
+        if (end.failed && !end.answered && end.written + end.notSent !== 1) violation ??= `⑥ ${end.action} failed in no class (${step})`;
+      }
+      // An unknown result only after a mutation was handed to the transport and written.
+      if (st.outcome === 'unknown' && !r.ends.some((end) => end.action !== 'management:operation' && end.written > 0))
+        violation ??= `⑥ unknown with no mutation written (${step})`;
     };
     const enabled = (): Event[] => {
       const st = r.c.getState(), list: Event[] = [];
@@ -1404,7 +1442,9 @@ describe('mobile plugin market', () => {
   it('installs a plugin the computer does not have yet: begin without an instance, consent, then the new instance is read back', async () => {
     const installedNow = { ...plugin, manifest };
     const h = host((request) => {
-      if (request.actionId === 'management:begin') return confirmation();
+      // A first install's consent (dispatcher O-4: it declares a first install of the version chosen).
+      if (request.actionId === 'management:begin') return { ...confirmation(), consent: { ...confirmation().consent!,
+        facts: { kind: 'install', ghostId: 'demo', name: 'Demo', version: fresh.version, permissions: [] } } };
       h.setFacts(snapshot([installedNow]));
       return receipt('succeeded');
     }, fresh);
@@ -1508,9 +1548,7 @@ describe('interactive page capability approval', () => {
     expect(() => parsePluginManagementSnapshot({ ...snapshot(), uiCapabilityApproval: 'true' })).toThrow('INVALID_RESPONSE');
   });
   it('queries a lost UI approval receipt without replaying the answer', async () => {
-    const h = host((r) => r.actionId === 'management:begin' ? { ...confirmation(), consent: {
-      ...confirmation().consent!, purpose: 'ui-capability',
-    } } : r.actionId === 'management:answer' ? Promise.reject(new Error('TIMEOUT')) : receipt('succeeded'));
+    const h = host((r) => r.actionId === 'management:begin' ? uiConfirmation() : r.actionId === 'management:answer' ? Promise.reject(new Error('TIMEOUT')) : receipt('succeeded'));
     h.setFacts({ ...snapshot(), uiCapabilityApproval: true });
     const c = controller(h.client); await c.refresh(); await c.approveUi(plugin); await c.answer(true);
     expect(c.getState().outcome).toBe('unknown');
@@ -1520,7 +1558,7 @@ describe('interactive page capability approval', () => {
     expect(c.getState().outcome).toBe('succeeded');
   });
   it.each(['revision', 'owner', 'disconnect'] as const)('does not send a stale UI confirmation after %s changes', async (change) => {
-    const h = host(() => ({ ...confirmation(), consent: { ...confirmation().consent!, purpose: 'ui-capability' } }));
+    const h = host(() => uiConfirmation());
     h.setFacts({ ...snapshot(), uiCapabilityApproval: true });
     const c = controller(h.client); await c.refresh(); await c.approveUi(plugin);
     if (change === 'revision') h.setFacts({ ...snapshot([{ ...plugin, approval: { state: 'approved', revision: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' } }]), uiCapabilityApproval: true });
@@ -2012,6 +2050,11 @@ describe('confirmation sheet wording', () => {
     // The identity block and two items fit, the rest scrolls inside the summary.
     expect(planConsentSheet({ available: 332, identity: 230, heading: 25, lines: [20, 20, 20, 20, 20], gap: 4 }))
       .toEqual({ mode: 'regular', summaryLines: 77, clipped: true, guaranteed: 44 });
+    // Dispatcher P-3 (iOS XXXL, SE): room for the two items and 1 pt of the third (55 of 5 items) is no longer regular;
+    // with the fade's height of the third showing it is.
+    expect(planConsentSheet({ available: 255 + 55, identity: 230, heading: 25, lines: [27, 27, 27, 27, 27], gap: 0 })).toEqual({ mode: 'compact' });
+    expect(planConsentSheet({ available: 255 + 54 + CONSENT_FADE_HEIGHT, identity: 230, heading: 25, lines: [27, 27, 27, 27, 27], gap: 0 }))
+      .toEqual({ mode: 'regular', summaryLines: 54 + CONSENT_FADE_HEIGHT, clipped: true, guaranteed: 54 });
   });
   it('keeps the two-layout invariants for every height, text size and item count', () => {
     const availables = [0, 1, 10, 43, 44, 88, 100, 200, 320, 480, 640, 900];
@@ -2035,8 +2078,9 @@ describe('confirmation sheet wording', () => {
         const sum = (n: number) => lines.slice(0, n).reduce((total, line) => total + line, 0) + Math.max(0, Math.min(n, count) - 1) * gap;
         const floor = sum(Math.min(2, count)), full = sum(count);
         if (plan.mode === 'compact') {
-          // ③ Compact only when the regular layout's floor does not fit (or nothing is measured and even one line would not).
-          if (measured) expect(identity + heading + floor, name).toBeGreaterThan(available);
+          // ③ Compact only when the regular layout's floor does not fit: everything, or (dispatcher P-3) the two items and
+          // enough of the next to draw the fade over it (or nothing is measured and even one line would not).
+          if (measured) expect(identity + heading + Math.min(full, floor + gap + CONSENT_FADE_HEIGHT), name).toBeGreaterThan(available);
           continue;
         }
         // ① A pinned summary always gets a real height, and so does the list above it.
@@ -2052,7 +2096,8 @@ describe('confirmation sheet wording', () => {
           // what shows below them is at least the fade's height (otherwise only the scrollbar says there is more).
           expect(plan.guaranteed, name).toBe(floor);
           if (consentSummaryFadeAllowed(plan)) expect(plan.summaryLines - CONSENT_FADE_HEIGHT, name).toBeGreaterThanOrEqual(plan.guaranteed);
-          if (plan.clipped && plan.summaryLines - plan.guaranteed < CONSENT_FADE_HEIGHT) expect(consentSummaryFadeAllowed(plan), name).toBe(false);
+          // ⑨ (dispatcher P-3) Regular and not all shown ⇒ the fade can be drawn (part of the next item always shows).
+          if (plan.clipped) expect(consentSummaryFadeAllowed(plan), name).toBe(true);
         } else {
           expect(plan.summaryLines + PINNED_HIGH_RISK_MIN_HEIGHT, name).toBeLessThanOrEqual(available);
         }
@@ -2155,8 +2200,10 @@ describe('confirmation sheet wording', () => {
     // Maintainer review 05:55 #2: compared with the full identity chosen on the phone, sourceId included.
     const chosen = { kind: 'git' as const, repository: 'github.com/acme/plugins', sourceId: 'SourceA_0123456789abcd' };
     const consented = (sourceId: string) => install({ origin: 'custom-market', originLabel: 'Acme', originSource: { ...chosen, sourceId } }, []);
-    expect(pluginConsentPresentation(consented(chosen.sourceId), t, 'Mac', chosen)).toMatchObject({ allowBlocked: false, sourceChanged: undefined });
-    expect(pluginConsentPresentation(consented('SourceB_0123456789abcd'), t, 'Mac', chosen))
+    const chose = (consent: any) => pluginConsentAllowance({ kind: 'install', deviceId: 'host-1', pluginId: 'custom-market:Acme/demo',
+      ghostId: 'demo', version: '1', releaseId: 'release-1', sourceType: 'git-market', source: chosen }, declaredPluginConsent(consent, 'host-1'));
+    expect(pluginConsentPresentation(consented(chosen.sourceId), t, 'Mac', chose(consented(chosen.sourceId)))).toMatchObject({ allowBlocked: false, sourceChanged: undefined });
+    expect(pluginConsentPresentation(consented('SourceB_0123456789abcd'), t, 'Mac', chose(consented('SourceB_0123456789abcd'))))
       .toMatchObject({ allowBlocked: true, sourceChanged: 'plugins.notice.consentSource.sourceChanged' });
     // Official and community market installs carry no repository and are never blocked by its absence.
     expect(pluginConsentPresentation(install({}, []), t, 'Mac')).toMatchObject({ allowBlocked: false, repository: undefined });
@@ -2359,5 +2406,122 @@ describe('confirmation sheet wording', () => {
     expect(parsePluginManagementReceipt(receipt(true), 'op').consent?.communityMarket).toBe(true);
     expect(parsePluginManagementReceipt(receipt(undefined), 'op').consent?.communityMarket).toBeUndefined();
     for (const value of ['true', 1, false, null]) expect(() => parsePluginManagementReceipt(receipt(value), 'op')).toThrow('INVALID_RESPONSE');
+  });
+});
+
+// Dispatcher O-2: one decision for every "Open" after an operation (the list of checks, the market row, the installed
+// detail). Each condition on its own, from the operation that holds and one change at a time: the instance (an install's
+// market plugin, an update's or a page approval's own instance), the version, and the Host's evidence (its record naming
+// this operation, or this operation's final receipt while the record names none). Minimal failing input: any one of
+// them changed and Open still offered. Tier: unit (pure).
+describe('whether a finished operation opens an instance', () => {
+  const finished = (entry: 'market-install' | 'update' | 'page-approval' | 'uninstall' | 'enable' | 'task-settings', instanceKey?: string) =>
+    ({ operationId: 'operation-1', entry, who: { instanceKey }, detail: entry === 'market-install' || entry === 'update' ? detail : undefined });
+  const updated: ManagedPlugin = { ...plugin, manifest: { ...plugin.manifest, version: '2' } };
+  const record = { pluginId: detail.pluginId, releaseId: detail.releaseId, installState: 'installed' as const };
+  it.each([
+    ['install: this instance, this version, final receipt', 'market-install', [updated], undefined, 'final', '_root__demo'],
+    ['install: the record names this operation, receipt gone', 'market-install', [updated], { ...record, installedOperationId: 'operation-1' }, 'gone', '_root__demo'],
+    ['install: receipt gone and no record of an operation', 'market-install', [updated], record, 'gone', null],
+    ['install: the record names another operation', 'market-install', [updated], { ...record, installedOperationId: 'operation-2' }, 'final', null],
+    ['install: an older version with the same id', 'market-install', [plugin], undefined, 'final', null],
+    ['install: the record is at another release', 'market-install', [updated], { ...record, releaseId: 'release-3' }, 'final', null],
+    ['install: the record says an update is available', 'market-install', [updated], { ...record, installState: 'update-available' as const }, 'final', null],
+    ['install: the same name in another namespace', 'market-install', [{ ...updated, instanceKey: 'team__demo', namespace: 'team' }], undefined, 'final', null],
+    ['install: not on the computer', 'market-install', [], undefined, 'final', null],
+    ['update: its own instance at the new version', 'update', [updated], undefined, 'final', '_root__demo'],
+    ['update: another instance of the plugin, its own gone', 'update', [{ ...updated, instanceKey: 'demo-copy' }], undefined, 'final', null],
+  ] as const)('%s', (_name, entry, ghosts, market, receipt, opened) => {
+    const result = pluginOperationOpens(finished(entry, '_root__demo'), { ghosts, market, receipt });
+    expect(result).toEqual(opened ? { open: true, instanceKey: opened } : { open: false });
+  });
+  it('page approval: its own instance with its pages approved, after its final receipt only', () => {
+    const approved = { ...plugin, uiCapabilityApproved: true as const };
+    expect(pluginOperationOpens(finished('page-approval', '_root__demo'), { ghosts: [approved], receipt: 'final' })).toEqual({ open: true, instanceKey: '_root__demo' });
+    expect(pluginOperationOpens(finished('page-approval', '_root__demo'), { ghosts: [plugin], receipt: 'final' })).toEqual({ open: false });
+    expect(pluginOperationOpens(finished('page-approval', '_root__demo'), { ghosts: [approved], receipt: 'gone' })).toEqual({ open: false });
+    expect(pluginOperationOpens(finished('page-approval', 'demo-copy'), { ghosts: [approved], receipt: 'final' })).toEqual({ open: false });
+  });
+  it.each(['uninstall', 'enable', 'task-settings'] as const)('%s never opens one', (entry) => {
+    expect(pluginOperationOpens(finished(entry, '_root__demo'), { ghosts: [updated], receipt: 'final' })).toEqual({ open: false });
+  });
+});
+
+// Dispatcher O-4: the one decision whether a consent can be allowed (pluginConsentAllowance), field by field. From a
+// consent that declares exactly what was chosen (allowed), one declared field changed at a time; each is refused, and
+// only the Host's source switch (`originSourceChanged` on an update that comes back as a first install) is the switch
+// flow. Minimal failing input on 015469869c: a consent of another source type (or version, kind, plugin) was allowed
+// because only custom-market consents were compared. Tier: unit (pure).
+describe('whether a consent can be allowed', () => {
+  const git = { kind: 'git' as const, repository: 'github.com/acme/plugins', ref: 'main', sourceId: 'SourceA_0123456789abcd' };
+  const chosen = { kind: 'update' as const, deviceId: 'host-1', pluginId: 'custom:Acme/demo', ghostId: 'demo', version: '2',
+    releaseId: 'release-2', sourceType: 'git-market' as const, source: git };
+  const declared = { deviceId: 'host-1', ghostId: 'demo', version: '2', kind: 'update' as const, origin: 'custom-market' as const, source: git };
+  it('allows exactly what was chosen', () => {
+    expect(pluginConsentAllowance(chosen, declared)).toEqual({ allow: true, sourceSwitch: false });
+    expect(pluginConsentAllowance(chosen, { ...declared, kind: 'install', originSourceChanged: true })).toEqual({ allow: true, sourceSwitch: true });
+  });
+  it.each([
+    ['another computer', { deviceId: 'host-2' }, 'changed', 'deviceId'],
+    ['another plugin', { ghostId: 'other' }, 'changed', 'ghostId'],
+    ['another version', { version: '3' }, 'changed', 'version'],
+    ['a first install for an update', { kind: 'install' as const }, 'changed', 'kind'],
+    ['an update marked as a source switch', { originSourceChanged: true }, 'changed', 'kind'],
+    ['a page approval for an update', { purpose: 'ui-capability' as const }, 'changed', 'purpose'],
+    ['the server market (another source type)', { origin: 'market' as const, source: undefined }, 'source-changed', 'sourceType'],
+    ['a local file (another source type)', { origin: 'local-file' as const, source: undefined }, 'source-changed', 'sourceType'],
+    ['a local folder for a Git market (another source kind)', { source: { kind: 'local' as const, sourceId: git.sourceId } }, 'source-changed', 'sourceType'],
+    ['another repository', { source: { ...git, repository: 'github.com/other/plugins' } }, 'source-changed', 'source'],
+    ['another ref', { source: { ...git, ref: 'next' } }, 'source-changed', 'source'],
+    ['no ref', { source: { kind: 'git' as const, repository: git.repository, sourceId: git.sourceId } }, 'source-changed', 'source'],
+    ['another source id', { source: { ...git, sourceId: 'SourceB_0123456789abcd' } }, 'source-changed', 'source'],
+    ['no source', { source: undefined }, 'source-unverified', 'source'],
+    ['a malformed source', { sourceMalformed: true }, 'source-unverified', 'source'],
+  ] as const)('refuses %s', (_name, change, reason, field) => {
+    expect(pluginConsentAllowance(chosen, { ...declared, ...change })).toEqual({ allow: false, reason, field });
+  });
+  it('a first install takes no source switch; the server market asks for the market origin; a page approval its purpose', () => {
+    const install = { ...chosen, kind: 'install' as const };
+    expect(pluginConsentAllowance(install, { ...declared, kind: 'install' })).toEqual({ allow: true, sourceSwitch: false });
+    expect(pluginConsentAllowance(install, { ...declared, kind: 'install', originSourceChanged: true })).toMatchObject({ allow: false, field: 'kind' });
+    const server = { ...chosen, sourceType: 'server' as const, source: null };
+    expect(pluginConsentAllowance(server, { ...declared, origin: 'market', source: undefined })).toEqual({ allow: true, sourceSwitch: false });
+    expect(pluginConsentAllowance(server, declared)).toMatchObject({ allow: false, reason: 'source-changed', field: 'sourceType' });
+    const pages = { kind: 'ui-capability' as const, deviceId: 'host-1', ghostId: 'demo', version: '1' };
+    expect(pluginConsentAllowance(pages, { deviceId: 'host-1', ghostId: 'demo', version: '1', kind: 'update', purpose: 'ui-capability', origin: 'local-file' }))
+      .toEqual({ allow: true, sourceSwitch: false });
+    expect(pluginConsentAllowance(pages, { deviceId: 'host-1', ghostId: 'demo', version: '1', kind: 'update', origin: 'local-file' }))
+      .toMatchObject({ allow: false, field: 'purpose' });
+  });
+  it('without a choice (an Agent task card, a prompt started elsewhere) only the declaration rules apply', () => {
+    expect(pluginConsentAllowance(null, declaredTaskCardConsent({ ghost_id: 'demo', version: '1', operation: 'install', origin: 'market' }, 'host-1'))).toMatchObject({ allow: true });
+    expect(pluginConsentAllowance(null, declaredTaskCardConsent({ ghost_id: 'demo', version: '1', operation: 'install' }, 'host-1'))).toMatchObject({ allow: false, field: 'origin' });
+    expect(pluginConsentAllowance(null, declaredTaskCardConsent({ ghost_id: 'demo', version: '1', operation: 'update' }, 'host-1'))).toMatchObject({ allow: true });
+    expect(pluginConsentAllowance(null, declaredTaskCardConsent({ operation: 'update', origin: 'custom-market' }, 'host-1'))).toMatchObject({ allow: false, reason: 'source-unverified' });
+    expect(pluginConsentAllowance(null, declaredTaskCardConsent({ operation: 'update', origin: 'custom-market', source: { kind: 'git', sourceId: 'x' } }, 'host-1')))
+      .toMatchObject({ allow: false, reason: 'source-unverified' });
+  });
+});
+
+// Dispatcher O-4: the controller checks the same decision right before it writes an Allow, whoever calls it (a sheet
+// that missed it, a stale callback). A consent of another source type or kind than the update chosen: no answer
+// written, the consent stays to be rejected. Minimal failing input on 015469869c: an official-market update whose
+// consent names a custom market wrote Allow. Tier: unit (in-memory Host).
+describe('the controller writes Allow only for a consent that declares what was chosen', () => {
+  it.each([
+    ['another source type', { origin: 'custom-market', originLabel: 'Team', originSource: { kind: 'git', repository: 'github.com/acme/market', sourceId: 'SourceA_0123456789abcd' } }, 'PLUGIN_SOURCE_CHANGED'],
+    ['a first install for the update chosen', { facts: { kind: 'install', ghostId: 'demo', name: 'Demo', version: '2', permissions: [] } }, 'PLUGIN_CONSENT_CHANGED'],
+    ['another version', { facts: { ...(confirmation().consent!.facts), version: '3' } }, 'PLUGIN_CONSENT_CHANGED'],
+  ] as const)('%s', async (_name, change, code) => {
+    const h = host((request) => request.actionId === 'management:begin'
+      ? { ...confirmation(), consent: { ...confirmation().consent!, ...change } } : receipt('running'));
+    const c = controller(h.client); await c.refresh();
+    await c.install(detail, plugin);
+    expect(c.getState().outcome).toBe('confirmation');
+    await c.answer(true);
+    expect(h.requests.filter((r) => r.actionId === 'management:answer')).toEqual([]);
+    expect(c.getState()).toMatchObject({ outcome: 'confirmation', errorCode: code, busy: false });
+    await c.answer(false);
+    expect(h.requests.filter((r) => r.actionId === 'management:answer').map((r) => r.input.confirmed)).toEqual([false]);
   });
 });

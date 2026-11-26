@@ -1398,7 +1398,7 @@ describe("page slot release paths", () => {
     /** Leave this detail for another plugin's (the update's view goes away). */
     const leave = async () => { await act(async () => fixture.props.get("directory").onDetail(fixture.extraRows[0])); await settle(14); };
     const writes = () => asked.filter((id) => !["management:snapshot", "management:market-detail"].includes(id));
-    return { update, requests, market, leave, writes };
+    return { update, requests, market, snapshot, plugin, leave, writes };
   }
   const receiptOf = (request: any, phase: string, extra: Record<string, unknown> = {}) => ({ operationId: request.input.operationId, phase, ...extra });
   it("releases it when the update succeeds", async () => {
@@ -1506,6 +1506,8 @@ describe("page slot release paths", () => {
       await act(async () => root.render(createElement(PluginsScreen)));
       await settle(14);
       done = true;
+      // What the computer has after it: the update applied (the uninstall's instance is gone in its own test below).
+      if (entry === "update") { Object.assign(s.plugin.manifest, { version: "2" }); Object.assign(s.market, { installState: "installed" }); }
       await press("plugins.slotHolder.show");
       await press("plugins.checks.verify");
       expect(s.writes()).toEqual(["management:begin", "management:operation"]);
@@ -1532,6 +1534,7 @@ describe("page slot release paths", () => {
       await act(async () => root.render(createElement(PluginsScreen)));
       await settle(14);
       done = true;
+      Object.assign(s.plugin, { uiCapabilityApproved: true });             // the computer approved its pages
       await press("plugins.slotHolder.show");
       await press("plugins.checks.verify");
       expect(s.writes()).toEqual(["management:begin", "management:operation"]);
@@ -1541,6 +1544,113 @@ describe("page slot release paths", () => {
       expect(fixture.read).toHaveBeenCalledWith(fixture.wire, expect.objectContaining({ deviceId: "mac" }),
         expect.objectContaining({ id: "demo" }), "en", ["plugin-capabilities"]);
     });
+  });
+  // Dispatcher O-1 (maintainer review 23:03 of #12684, items 1 and 2): once the computer no longer has an operation's
+  // receipt (NOT_FOUND), each entry settles by its row of AFTER_RECEIPT_GONE, through the list's own "Check result":
+  // an update from the Host's record of this operation (`installedOperationId`) on the instance it started from; an
+  // uninstall or a page approval, which nothing on the computer can prove, shows what the computer has now and only
+  // "Stop tracking"; enable and task settings never leave a record. Minimal failing input on 015469869c: an update whose
+  // receipt expired stayed "result unconfirmed" with the same record on the computer (only market installs settled), and
+  // an uninstall or a page approval stayed "check again" forever. Tier: unit/jsdom (real controller and registry).
+  describe("receipt gone (NOT_FOUND), per entry, through the list of checks (dispatcher O-1)", () => {
+    const byId = (id: string) => element.querySelector(`[data-testid="${id}"]`) as HTMLButtonElement | null;
+    const press = async (id: string) => {
+      const control = byId(id);
+      expect(control, `${id} is on screen`).not.toBeNull();
+      await act(async () => control!.click());
+      await settle(14);
+    };
+    type Entry = "update" | "uninstall" | "page approval";
+    async function gone(entry: Entry, after: (s: Awaited<ReturnType<typeof updateScreen>>, operationId: string) => void) {
+      let operationId = "", expired = false;
+      const s = await updateScreen({ ui: entry === "page approval",
+        begin: (request) => { operationId = request.input.operationId; return receiptOf(request, "running"); },
+        operation: (request) => { if (expired) throw new Error("[NOT_FOUND] no such operation"); return receiptOf(request, "running"); } });
+      if (entry === "update") await s.update();
+      else if (entry === "uninstall") {
+        await act(async () => { void fixture.props.get("header").rightToolbar.props.onAction("uninstall"); });
+        await act(async () => fixture.alert.mock.calls.at(-1)![2][1].onPress());
+        await settle(14);
+      } else {
+        await act(async () => { fixture.props.get("detail").uiApprovalNotice.actions[0].onPress(); });
+        await settle(14);
+      }
+      await act(async () => root.render(createElement("div")));
+      await settle(6);
+      await act(async () => root.render(createElement(PluginsScreen)));
+      await settle(14);
+      expired = true;
+      after(s, operationId);
+      await press("plugins.slotHolder.show");
+      await press("plugins.checks.verify");
+      expect(s.writes()).toEqual(["management:begin", "management:operation"]);
+      return { s, text: () => byId("plugins.checks")?.textContent ?? "" };
+    }
+    const updated = (s: Awaited<ReturnType<typeof updateScreen>>, installedOperationId?: string) => {
+      Object.assign(s.plugin.manifest, { version: "2" });
+      Object.assign(s.market, { installState: "installed", ...(installedOperationId ? { installedOperationId } : {}) });
+    };
+    it.each([
+      ["update, the Host's record names this operation", "match", "plugins.checks.result.installed", true],
+      ["update, the Host's record names another operation", "other", "plugins.market.unconfirmedMismatch", false],
+      ["update, no record of an operation (another controller or an older Host)", "none", "plugins.market.unconfirmedMismatch", false],
+      ["update, the instance it started from is gone (another instance has the plugin now)", "replaced", "plugins.market.unconfirmedNotInstalled", false],
+    ] as const)("%s", async (_name, record, text, opens) => {
+      const { s } = await gone("update", (s, operationId) => {
+        updated(s, record === "match" ? operationId : record === "other" ? "other-operation-0001" : undefined);
+        if (record === "replaced") Object.assign(s.plugin, { instanceKey: "demo-copy" });
+      });
+      const shown = byId("plugins.checks")?.textContent ?? "";
+      expect(shown).toContain(text);
+      expect(!!byId("plugins.checks.open")).toBe(opens);
+      expect(s.writes()).toEqual(["management:begin", "management:operation"]);
+    });
+    it.each([
+      ["uninstall, the plugin is gone", "uninstall", (s: any) => { s.snapshot.ghosts.splice(0); }, "plugins.checks.status.unprovable.uninstall.absent"],
+      ["uninstall, the plugin is still there", "uninstall", () => {}, "plugins.checks.status.unprovable.uninstall.present"],
+      ["page approval, its pages are on", "page approval", (s: any) => { s.plugin.uiCapabilityApproved = true; }, "plugins.checks.status.unprovable.pageApproval.approved"],
+      ["page approval, its pages are not on", "page approval", () => {}, "plugins.checks.status.unprovable.pageApproval.notApproved"],
+    ] as const)("%s: cannot be confirmed, says what is there now, only Stop tracking", async (_name, entry, after, text) => {
+      const { s, text: shown } = await gone(entry, after);
+      expect(shown()).toContain(text);
+      expect(byId("plugins.checks.verify")).toBeNull();
+      expect(byId("plugins.checks.open")).toBeNull();
+      // Nothing looks it up again by itself.
+      await settle(20);
+      expect(s.writes()).toEqual(["management:begin", "management:operation"]);
+      await press("plugins.checks.stop");
+      expect(shown()).toContain("plugins.checks.result.untracked");
+      expect(s.writes()).toEqual(["management:begin", "management:operation"]);
+    });
+    // Existing behaviour (passes on 015469869c too): enable writes directly, with no operation to track.
+    it("enable: a lost reply leaves no record to check (it is read back, never tracked)", async () => {
+      const { plugin } = realManagementHost();
+      fixture.invoke.mockImplementation(async () => { throw new Error("[TIMEOUT] remote invoke timed out"); });
+      await openDetail();
+      await settle(8);
+      await act(async () => fixture.props.get("detail").onEnabledChange(false));
+      await settle(14);
+      expect(plugin.instanceKey).toBe("demo");
+      expect(byId("plugins.slotHolder.show")).toBeNull();
+      expect(holder()).toBeNull();
+    });
+  });
+  // Dispatcher O-2: the installed detail after its own update uses the same decision as the list (pluginOperationOpens):
+  // the computer showing the new version keeps the detail on it quietly; one still at the old version (it changed since)
+  // keeps the detail on the instance shown and says so once. Minimal failing input on 015469869c: no sentence. Tier: unit.
+  it.each([
+    ["the computer has the new version", true],
+    ["the computer still has the old version", false],
+  ] as const)("after an update succeeds on its detail and %s", async (_name, applied) => {
+    const s = await updateScreen({ begin: (request) => {
+      if (applied) { Object.assign(s.plugin.manifest, { version: "2" }); Object.assign(s.market, { installState: "installed" }); }
+      return receiptOf(request, "succeeded");
+    } });
+    fixture.alert.mockClear();
+    await s.update();
+    const told = fixture.alert.mock.calls.filter((call) => call[1] === "plugins.checks.result.changedSince");
+    expect(told).toHaveLength(applied ? 0 : 1);
+    expect(fixture.props.get("header")).toBeDefined();
   });
   it("follows an update to its end after the page is left, then releases it", async () => {
     let finish!: () => void;
@@ -2874,7 +2984,9 @@ describe("market install recovery", () => {
       await act(async () => control!.click());
       await settle(14);
     }
-    type World = { operation: () => unknown; installed: boolean; installedBy?: string; snapshotFails?: number; answer?: () => unknown };
+    type World = { operation: () => unknown; installed: boolean; installedBy?: string; snapshotFails?: number; answer?: () => unknown;
+      /** The computer's instances instead of `installed`'s, and the market's record of them in the installed read. */
+      ghosts?: () => unknown[]; marketItems?: unknown[] };
     const consentOf = (requestId = "consent") => ({ operationId: "screen-operation", phase: "confirmation", consent: {
       requestId, initiator: "user", origin: "market", facts: { kind: "install", ghostId: "demo", name: "Demo", version: "1", permissions: [] } } });
     const receipt = (phase: string, extra: object = {}) => ({ operationId: "screen-operation", phase, ...extra });
@@ -2885,7 +2997,8 @@ describe("market install recovery", () => {
             if (request.input?.read === "capabilities") return { catalogPaging: true };
             if (request.input?.read === "catalog") return marketPage(world.installed ? [] : [item]);
             if (world.snapshotFails) { world.snapshotFails -= 1; throw hostError("TIMEOUT"); }
-            return managementSnapshot(world.installed);
+            return { ...managementSnapshot(world.installed), ...(world.ghosts ? { ghosts: world.ghosts() } : {}),
+              ...(world.marketItems ? { market: { ...managementSnapshot(false).market, items: world.marketItems } } : {}) };
           case "management:market-detail": return { ...item, installState: world.installed ? "installed" : "not-installed",
             ...(world.installedBy ? { installedOperationId: world.installedBy } : {}), manifest: { schemaVersion: 3, id: "demo", name: "Demo", version: "1" } };
           case "management:begin": throw new Error("[TIMEOUT] remote invoke timed out");    // written; the reply is lost
@@ -2942,6 +3055,85 @@ describe("market install recovery", () => {
       await click("plugins.management.allow");
       expect(sent()).toEqual(["operation:screen-operation", "answer:screen-operation"]);
       expect(writes(requests).filter((write) => write.startsWith("cancel") || write.startsWith("begin"))).toEqual(["begin:screen-operation"]);
+    });
+    // Dispatcher O-4 (maintainer review 23:03 of #12684, item 4): a consent that does not declare what was chosen is
+    // never allowed, wherever it is shown: the sheet's Allow stays unavailable and pressing it writes nothing; Reject
+    // stays. Here the person chose the official market's Demo and the computer's consent names a custom market (another
+    // source type), the maintainer's case. Minimal failing input on 015469869c: "View and decide" → Allow wrote the
+    // answer (only custom-market consents were compared). Tier: unit/jsdom (real controller, real sheet).
+    const otherSourceType = (requestId = "consent") => ({ ...consentOf(requestId), consent: { ...consentOf(requestId).consent,
+      origin: "custom-market", originLabel: "Team", originSource: { kind: "git", repository: "github.com/acme/market", sourceId: "SourceA_0123456789abcd" } } });
+    const answers = (requests: MarketWireRequest[]) => writes(requests).filter((write) => write.startsWith("answer"));
+    async function allowIsRefused(requests: MarketWireRequest[]) {
+      const allow = byId("plugins.management.allow");
+      expect(allow, "the confirmation is on screen").not.toBeNull();
+      expect(allow!.disabled).toBe(true);
+      await act(async () => allow!.click());
+      await settle(14);
+      expect(answers(requests)).toEqual([]);
+      expect(element.textContent).toContain("plugins.notice.consentSource.sourceChanged");
+      expect(byId("plugins.management.reject")?.disabled).toBe(false);
+    }
+    it("View and decide: a consent naming another source type than the one chosen writes no answer", async () => {
+      const world: World = { operation: () => receipt("running"), installed: false };
+      const requests = await toPanel(world);
+      world.operation = () => otherSourceType();
+      await verifyFrom(requests);
+      await click("plugins.checks.decide");
+      await allowIsRefused(requests);
+    });
+    it("first display: the consent begin returns names another source type, Allow writes nothing", async () => {
+      fixture.platform = "android";
+      fixture.realConfirmation = true;
+      const world: World = { operation: () => otherSourceType(), installed: false };
+      const requests = tableWire(world);
+      await act(async () => root.render(createElement(PluginsScreen)));
+      await act(async () => fixture.props.get("segment").onChange("market"));
+      await settle(14);
+      // The begin's own reply is the consent (no lookup): the table's begin loses its reply, so answer it here.
+      const wire = fixture.wire.getMockImplementation()!;
+      fixture.wire.mockImplementation(async (device: string, channel: string, args?: any[], options?: any) =>
+        args?.[0]?.actionId === "management:begin" ? transportSend(options, async () => {
+          requests.push({ device, actionId: "management:begin", input: args[0].input });
+          return { effects: [], result: otherSourceType() };
+        }) : wire(device, channel, args, options));
+      await click(`plugins.market.install.${item.pluginId}`);
+      expect(writes(requests)).toEqual(["begin:screen-operation"]);
+      await allowIsRefused(requests);
+    });
+    it("after a reconnect: the consent the lookup finds names another source type, Allow writes nothing", async () => {
+      fixture.platform = "android";
+      fixture.realConfirmation = true;
+      const world: World = { operation: () => receipt("running"), installed: false };
+      const requests = tableWire(world);
+      await act(async () => root.render(createElement(PluginsScreen)));
+      await act(async () => fixture.props.get("segment").onChange("market"));
+      await settle(14);
+      await click(`plugins.market.install.${item.pluginId}`);               // begin written, reply lost
+      world.operation = () => otherSourceType();
+      fixture.online = false;
+      await act(async () => root.render(createElement(PluginsScreen)));
+      await settle(14);
+      fixture.online = true;
+      await act(async () => root.render(createElement(PluginsScreen)));
+      await settle(14);
+      expect(writes(requests)).toContain("operation:screen-operation");  // looked up on reconnect
+      await allowIsRefused(requests);
+    });
+    it("after a remount: the consent its row finds names another source type, Allow writes nothing", async () => {
+      const world: World = { operation: () => receipt("running"), installed: false };
+      const requests = await toPanel(world);
+      await click("plugins.checks.close");
+      await act(async () => root.render(createElement("div")));
+      await settle(6);
+      await act(async () => root.render(createElement(PluginsScreen)));
+      await act(async () => fixture.props.get("segment").onChange("market"));
+      await settle(14);
+      world.operation = () => otherSourceType();
+      await click("plugins.slotHolder.show");
+      await verifyFrom(requests);
+      await click("plugins.checks.decide");
+      await allowIsRefused(requests);
     });
     it("leaving a consent the sheet showed cancels it once (the one write a gone view makes)", async () => {
       fixture.platform = "android";
@@ -3019,13 +3211,35 @@ describe("market install recovery", () => {
       await click("plugins.checks.readAgain");
       expect(byId("plugins.checks.open")).not.toBeNull();
     });
-    it("succeeded but the instance is not on the computer: says so, no Open", async () => {
+    // Dispatcher O-2: after a success the list opens only the instance this operation put there (pluginOperationOpens):
+    // otherwise the success stands, there is no Open, and one sentence says the plugin changed on the computer since.
+    // Minimal failing input on 015469869c: the readback found an older version with the same id, or the market item
+    // named another operation, and Open opened it. The uninstalled and other-namespace rows also passed before
+    // (existing behaviour; the uninstalled row's text changed). Tier: unit/jsdom.
+    it.each([
+      ["the instance is not on the computer (uninstalled since)", () => [], undefined],
+      ["only an older version with the same id", () => [{ ...demoGhost, manifest: { ...demoGhost.manifest, version: "0" } }], undefined],
+      ["the same version, installed by another operation", () => [demoGhost], { installState: "installed", installedOperationId: "other-operation-0001" }],
+      ["the same name in another namespace", () => [{ ...demoGhost, instanceKey: "team__demo", namespace: "team" }], undefined],
+    ] as const)("succeeded, but %s: no Open, says the plugin changed since", async (_name, ghosts, record) => {
       const world: World = { operation: () => receipt("running"), installed: false };
       const requests = await toPanel(world);
       world.operation = () => receipt("succeeded");
+      world.ghosts = ghosts as () => unknown[];
+      if (record) world.marketItems = [{ ...item, ...record }];
       await verifyFrom(requests);
-      expect(status()).toContain("plugins.checks.result.succeededMissing");
+      expect(status()).toContain("plugins.checks.result.changedSince");
       expect(byId("plugins.checks.open")).toBeNull();
+    });
+    // Existing behaviour (passes on 015469869c too): the record naming this operation keeps Open.
+    it("succeeded, the market item names this operation: Open", async () => {
+      const world: World = { operation: () => receipt("running"), installed: false };
+      const requests = await toPanel(world);
+      world.operation = () => receipt("succeeded");
+      world.installed = true;
+      world.marketItems = [{ ...item, installState: "installed", installedOperationId: "screen-operation" }];
+      await verifyFrom(requests);
+      expect(byId("plugins.checks.open")).not.toBeNull();
     });
     it.each([["failed", "plugins.checks.result.failed"], ["cancelled", "plugins.checks.result.cancelled"]])(
       "%s (here or by another controller): says how it ended, writes nothing", async (phase, text) => {
@@ -3419,7 +3633,8 @@ describe("market install recovery", () => {
     expect(requests.filter((request) => request.actionId === "management:market-detail")).toHaveLength(2);
     const sheet = fixture.props.get("confirmation");
     expect(sheet.state.expectedSource).toEqual(folderA);
-    const view = pluginConsentPresentation(sheet.state.receipt.consent, (key: string) => key, "Mac", sheet.state.expectedSource);
+    // What the sheet shows: the controller's own decision (pluginConsentAllowance) for the consent on screen.
+    const view = pluginConsentPresentation(sheet.state.receipt.consent, (key: string) => key, "Mac", sheet.controller.consentAllowance());
     expect(view).toMatchObject({ allowBlocked: true, sourceChanged: "plugins.notice.consentSource.sourceChanged" });
   });
   // Maintainer review 04:44 #1: the controller re-reads the detail right before begin; a same-name market that now

@@ -22,7 +22,8 @@ import {
 } from '@cindy/device-link';
 import { HISTORY_VIEW_VERSION, isHistoryViewUnavailable, type HistoryViewPage } from '@cindy/maker-shared/message-window';
 import { DeviceLinkProvider, useDeviceLink, type DeviceLinkContextValue } from '../device-link/DeviceLinkContext';
-import { createPluginManagementClient } from '../plugins/pluginManagementClient';
+import { createPluginManagementClient, type PluginManagementInvoke } from '../plugins/pluginManagementClient';
+import { createPluginManagementController } from '../plugins/pluginManagementController';
 import { setMobileAuthOwner } from '../auth/authOwnerGeneration';
 import { setMobileAgentNetPreferences, waitForMobileAgentNetPreferences } from '../device-link/agentNetPreferences';
 // Platform process lifecycle is covered in fileWebViewTermination.test.tsx.
@@ -310,6 +311,184 @@ describe('the write receipt of one request through link recovery', () => {
     expect(client.openLink).toHaveBeenCalled();
     expect(sends).toEqual(end === 'handshake' ? [] : ['client.invoke']);
     expect(error).toMatchObject({ outcomeUnknown: written });
+  });
+});
+
+// Dispatcher O-3 (maintainer review 23:03 of #12684, item 3). Every exit between the plugin client and the transport that
+// returns or throws without the transport writing the request reports `onNotSent`, once; a write reports
+// `onRequestWritten`, once; never both. Through the real Provider invoke and the real management controller: a disable
+// whose begin ends at each exit fails plainly (not an unknown result), keeps no pending record and works when tried again.
+// Exits inside Device Link and Agent-Net are their refusals as this Provider receives them: rejected with no receipt (the
+// receipt contract itself is client.test.ts / sessionLinks tests). Minimal failing input on 015469869c: an unresponsive
+// computer (send slot refused) or a relay-side "not connected" ended as an unknown result and kept the management slot.
+// Tier: unit/jsdom.
+describe('every exit before the transport writes the request (dispatcher O-3)', () => {
+  const managed = { schemaVersion: 3 as const, id: 'demo', name: 'Demo', version: '1', kind: 'chip' };
+  const installed = { instanceKey: '_root_demo', namespace: null, manifest: managed, enabled: true,
+    approval: { state: 'approved' as const, revision: '12345678-1234-4123-8123-123456789abc' } };
+  const facts = { version: 1, ghosts: [installed],
+    market: { items: [], unavailableReason: null, customSourceNames: [], unavailableCustomSourceNames: [] } };
+  const manifest = { protocolVersion: 1, collections: [{ id: 'plugins', actions: [{ id: 'management:snapshot', label: 'Manage' }] }] };
+  type Client = InstanceType<typeof transport.Client>;
+  type Exit = { setup: (client: Client) => void | (() => void); code: string };
+  // [exit, how it is reached, the code the controller ends with]
+  const exits: Array<[string, Exit]> = [
+    ['the computer is shown unavailable (entry check)', { code: 'REMOTE_DISABLED', setup: (client) => {
+      client.presenceChanged({ deviceId: 'host', deviceName: 'Host', platform: 'darwin', appVersion: 'test',
+        online: true, remoteControlEnabled: false, busy: false, lastSeenAt: 1 });
+      return () => client.presenceChanged({ deviceId: 'host', deviceName: 'Host', platform: 'darwin', appVersion: 'test',
+        online: true, remoteControlEnabled: true, busy: false, lastSeenAt: 2 });
+    } }],
+    ['the send slot refuses an unresponsive computer', { code: 'DEVICE_UNRESPONSIVE', setup: () => {
+      for (let i = 0; i < 3; i++) settleDeviceSend('host', acquireDeviceSendSlot('host'), 'timeout');
+      return () => resetDeviceResponsivenessTracking();
+    } }],
+    ['the relay is not connected and does not come back', { code: 'NOT_CONNECTED', setup: (client) => {
+      client.status = 'stopped';
+      return () => { client.status = 'online'; };
+    } }],
+    ['link recovery fails (only the handshake was written)', { code: 'INVOKE_TIMEOUT', setup: (client) => {
+      client.needsLinkRecovery = () => true;
+      client.openLink.mockImplementation(async () => {
+        const error = new DeviceLinkError('INVOKE_TIMEOUT', 'no link-accept'); error.inFlight = true; throw error;
+      });
+      return () => { client.needsLinkRecovery = () => false; client.openLink.mockReset(); };
+    } }],
+    ...([
+      // [exit, code, message] as each transport throws it (Agent-Net maps a session's NOT_SENT to LINK_NOT_OPEN).
+      ['Device Link: not connected to relay (before its queue)', 'NOT_CONNECTED', 'not connected to relay'],
+      ['Device Link: the computer is offline (before its queue)', 'DEVICE_OFFLINE', 'target device offline'],
+      ['Device Link: expired before its first write', 'BACKPRESSURE', 'request expired before socket write'],
+      ['Agent-Net: remote control disabled (before a session took it)', 'REMOTE_DISABLED', 'remote control is disabled by the target'],
+      ['Agent-Net: no open session (before a session took it)', 'LINK_NOT_OPEN', 'no Agent-Net session with the target'],
+      ['Agent-Net: the session never took it (NOT_SENT)', 'LINK_NOT_OPEN', 'not sent'],
+    ] as const).map(([name, code, message]): [string, Exit] => [name, { code, setup: (client) => {
+      const original = client.invoke.getMockImplementation();
+      client.invoke.mockImplementation(async (_d, payload, _t, options) => {
+        if ((payload.args?.[0] as { actionId?: string } | undefined)?.actionId === 'management:begin') {
+          options?.preSend?.();
+          // As each transport ends it: the Device Link expiry carries its own "never written" mark, the others none.
+          const error = new DeviceLinkError(code, message);
+          if (code === 'BACKPRESSURE') error.inFlight = false;
+          throw error;
+        }
+        return original!(_d, payload, _t, options);
+      });
+      return () => client.invoke.mockImplementation(original!);
+    } }]),
+  ];
+  function hostOn(client: Client) {
+    const begins: string[] = [];
+    client.invoke.mockImplementation(async (_d, payload, _t, options) => {
+      options?.preSend?.();
+      options?.onRequestWritten?.();
+      if (payload.channel.endsWith(':manifest')) return { ok: true, result: manifest };
+      const request = payload.args?.[0] as { actionId: string };
+      if (request.actionId === 'management:begin') begins.push('written');
+      if (request.actionId === 'management:snapshot') return { ok: true, result: { effects: [], result: facts } };
+      return { ok: true, result: { effects: [], result: { operationId: 'operation-1', phase: 'succeeded' } } };
+    });
+    return begins;
+  }
+  it.each(exits)('%s', async (_name, exit) => {
+    resetDeviceResponsivenessTracking();
+    const client = transport.clients[0];
+    const begins = hostOn(client);
+    const reports: string[] = [];
+    // The exit is in place for the begin only: the controller's own reads before it go through as usual.
+    let exitArmed = false, restore: void | (() => void);
+    const invoke: PluginManagementInvoke = (deviceId, channel, args, options) => {
+      if ((args?.[0] as { actionId?: string } | undefined)?.actionId !== 'management:begin') return context.invoke(deviceId, channel, args, options);
+      if (exitArmed) { exitArmed = false; restore = exit.setup(client); }
+      return context.invoke(deviceId, channel, args, {
+        ...options,
+        onRequestWritten: () => { reports.push('written'); options?.onRequestWritten?.(); },
+        onNotSent: () => { reports.push('not sent'); options?.onNotSent?.(); },
+      });
+    };
+    setMobileAuthOwner('owner');
+    const c = createPluginManagementController(createPluginManagementClient({ deviceId: 'host', invoke }), { createOperationId: () => 'operation-1' });
+    try {
+      await act(async () => { await c.refresh(); });
+      exitArmed = true;
+      await act(async () => { await c.setEnabled(installed, false); });
+      expect(reports).toEqual(['not sent']);
+      expect(begins).toEqual([]);
+      expect(c.getState()).toMatchObject({ busy: false, outcome: 'failed', errorCode: exit.code });
+      expect(c.pendingCheck()).toBeNull();
+      // Tried again once the exit is gone: written once, answered.
+      await act(async () => { restore?.(); });
+      reports.length = 0;
+      await act(async () => { await c.setEnabled(installed, false); });
+      expect(begins).toEqual(['written']);
+      expect(reports).toEqual(['written']);
+      expect(c.getState()).toMatchObject({ busy: false, outcome: 'succeeded' });
+    } finally {
+      c.dispose();
+      resetDeviceResponsivenessTracking();
+    }
+  });
+
+  // Exits only reached by other channels than the plugin's own, and the Provider gone: the same one report.
+  it.each([
+    ['the history view capability is missing (negotiated before the request)', 'CHANNEL_NOT_ALLOWED'],
+    ['the low-priority read queue is full', 'BACKPRESSURE'],
+    ['the Provider is gone (no client)', 'NOT_CONNECTED'],
+  ] as const)('%s', async (name, code) => {
+    const client = transport.clients[0];
+    const reports: string[] = [];
+    const report = { onRequestWritten: () => reports.push('written'), onNotSent: () => reports.push('not sent') };
+    let error: unknown;
+    if (code === 'CHANNEL_NOT_ALLOWED') {
+      client.openLink.mockResolvedValue(accepted());
+      await act(async () => { error = await context.invoke('host', historyChannel, [], report).catch((e) => e); });
+    } else if (code === 'BACKPRESSURE') {
+      const held: Array<() => void> = [];
+      client.invoke.mockImplementation(() => new Promise((resolve) => { held.push(() => resolve({ ok: true, result: null })); }));
+      const queued: Promise<unknown>[] = [];
+      await act(async () => {
+        for (let i = 0; i < 4 + 256; i++) queued.push(context.invoke('host', 'maker:remote-resources:list', [i]).catch(() => null));
+        error = await context.invoke('host', 'maker:remote-resources:list', ['last'], report).catch((e) => e);
+      });
+      client.invoke.mockResolvedValue({ ok: true, result: null });
+      await act(async () => { held.forEach((release) => release()); await Promise.all(queued); });
+    } else {
+      const gone = context.invoke;
+      await act(async () => root.unmount());
+      error = await gone('host', REMOTE_RESOURCE_INVOKE_CHANNEL, [{}], report).catch((e) => e);
+      root = createRoot(document.createElement('div'));
+      await act(async () => render());
+    }
+    expect(error, name).toMatchObject({ code });
+    expect(reports).toEqual(['not sent']);
+  });
+
+  // The other direction: once a transport says it wrote the request, a failure is never "not sent", and the receipt
+  // comes once even when the request is written twice (the history delta resend) or tried on the direct path first.
+  it.each([
+    ['written, then the reply was lost', 'lost'],
+    ['written twice (a resend), then the reply was lost', 'twice'],
+    ['the direct path failed after it may have delivered it', 'direct'],
+  ] as const)('%s', async (_name, end) => {
+    const client = transport.clients[0];
+    const reports: string[] = [];
+    const { installPeerInvoke } = await import('../device-link/peerFileRegistry');
+    const uninstall = end === 'direct' ? installPeerInvoke(async () => { throw new Error('direct path dropped'); }) : () => {};
+    client.invoke.mockImplementation(async (_d, _p, _t, options) => {
+      options?.preSend?.();
+      options?.onRequestWritten?.();
+      if (end === 'twice') options?.onRequestWritten?.();
+      const error = new DeviceLinkError('INVOKE_TIMEOUT', 'no reply after first socket write'); error.inFlight = true; throw error;
+    });
+    setMobileAuthOwner('owner');
+    const plugins = createPluginManagementClient({ deviceId: 'host', invoke: (d, ch, a, o) => context.invoke(d, ch, a, {
+      ...o, onRequestWritten: () => { reports.push('written'); o?.onRequestWritten?.(); }, onNotSent: () => { reports.push('not sent'); o?.onNotSent?.(); } }) });
+    let error: unknown;
+    try {
+      await act(async () => { error = await plugins.answer('operation-1', 'consent-1', true).catch((e) => e); });
+    } finally { uninstall(); }
+    expect(reports).toEqual(['written']);
+    expect(error).toMatchObject({ outcomeUnknown: true });
   });
 });
 

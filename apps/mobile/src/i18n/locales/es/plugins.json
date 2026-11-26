@@ -366,7 +366,8 @@
       "localFolder": "Carpeta local",
       "repositoryMissingInstall": "Este ordenador no ha indicado el repositorio de este mercado personalizado, así que no se puede instalar desde el teléfono. Primero actualiza Cindy en ese ordenador y actualiza este mercado; si sigue sin funcionar, instala directamente en el ordenador.",
       "repositoryMissingUpdate": "Este ordenador no ha indicado el repositorio de este mercado personalizado, así que no se puede actualizar desde el teléfono. Primero actualiza Cindy en ese ordenador y actualiza este mercado; si sigue sin funcionar, actualiza el complemento directamente en el ordenador.",
-      "sourceChanged": "El origen de esta solicitud no coincide con el que elegiste, así que no se puede permitir desde el teléfono. Recházala y vuelve a elegir."
+      "sourceChanged": "El origen de esta solicitud no coincide con el que elegiste, así que no se puede permitir desde el teléfono. Recházala y vuelve a elegir.",
+      "consentChanged": "Esta solicitud es para un complemento, versión u ordenador distinto del que elegiste, así que no se puede permitir desde el teléfono. Recházala y vuelve a elegir, o resuélvelo en el ordenador."
     },
     "sourceNotice": {
       "community": "Este complemento lo desarrollan y mantienen miembros de la comunidad. {{appName}} ha revisado esta versión, pero no puede garantizar que sea seguro en todas las situaciones de uso.",
@@ -506,7 +507,18 @@
       "checking": "Comprobando el resultado",
       "waiting": "Resultado sin confirmar. Compruébalo otra vez o deja de seguirlo.",
       "offline": "«{{device}}» no está conectado. Conéctalo para comprobar el resultado.",
-      "awaitingYou": "El ordenador espera tu confirmación"
+      "awaitingYou": "El ordenador espera tu confirmación",
+      "unprovable": {
+        "uninstall": {
+          "absent": "El ordenador ya no tiene registro de esta desinstalación, así que no se puede confirmar el resultado. El complemento no está ahora en el ordenador.",
+          "present": "El ordenador ya no tiene registro de esta desinstalación, así que no se puede confirmar el resultado. El complemento sigue en el ordenador."
+        },
+        "pageApproval": {
+          "absent": "El ordenador ya no tiene registro de la activación de estas páginas, así que no se puede confirmar el resultado. El complemento no está ahora en el ordenador.",
+          "approved": "El ordenador ya no tiene registro de la activación de estas páginas, así que no se puede confirmar el resultado. Sus páginas están activadas.",
+          "notApproved": "El ordenador ya no tiene registro de la activación de estas páginas, así que no se puede confirmar el resultado. Sus páginas aún no están activadas."
+        }
+      }
     },
     "stop": "Dejar de seguir",
     "stopHint": "Solo este teléfono deja de seguirla. La operación del ordenador no se cancela.",
@@ -518,7 +530,7 @@
       "untracked": "Ya no se sigue",
       "ended": "Terminado",
       "readingBack": "Hecho. Comprobando el complemento en el ordenador…",
-      "succeededMissing": "Hecho, pero no se encontró este complemento en el ordenador.",
+      "changedSince": "Hecho, pero este complemento ha cambiado en el ordenador desde entonces.",
       "succeededUnread": "Hecho, pero no se pudieron leer los complementos del ordenador.",
       "uninstalled": "Desinstalado"
     },

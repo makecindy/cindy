@@ -174,10 +174,11 @@ export function PluginMarketRows({ market, onConnectComputer }: PluginMarketRows
                   : <HStack testID={`plugins.market.titleRow.${item.pluginId}`} spacing={6}>{name}{badge}</HStack>;
               })()}
               {line ? (
-                // Its own lines in full, up to the limit (dispatcher M-5: without a fixed vertical size the row offered
-                // one line and German "… am Computer install…" was cut).
-                <Text modifiers={[font({ textStyle: state.kind === "idle" ? "subheadline" : "footnote" }),
-                  foregroundStyle(colors.textSecondary), lineLimit(state.kind === "idle" ? 2 : 3),
+                // A description keeps two lines; a status line (what to do now) shows in full, however many lines it
+                // takes (dispatcher M-5, P-4: German "… am Computer installieren" needs four lines at 1.3× beside
+                // the Install button on a small phone, and three cut it).
+                <Text testID={`plugins.market.line.${item.pluginId}`} modifiers={[font({ textStyle: state.kind === "idle" ? "subheadline" : "footnote" }),
+                  foregroundStyle(colors.textSecondary), ...(state.kind === "idle" ? [lineLimit(2)] : []),
                   fixedSize({ horizontal: false, vertical: true })]}>{line}</Text>
               ) : null}
             </VStack>

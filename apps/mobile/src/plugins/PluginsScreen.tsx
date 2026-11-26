@@ -92,6 +92,7 @@ import {
 import { usePluginMarket } from "./usePluginMarket";
 import { pluginOperationHold, samePluginSlotHolder, usePluginManagementSlot, type PluginSlotHolder, type PluginSlotToken } from "./pluginManagementSlot";
 import { usePluginCheckConclusions, usePluginPendingChecks } from "./usePluginManagement";
+import { pluginOperationOpens } from "./pluginOperationOpens";
 import { PluginPendingChecksSheet, type PluginOperationLine } from "./PluginPendingChecksSheet";
 import { usePluginPrompt } from "./usePluginPrompt";
 import { PluginMarketSection } from "./PluginMarketSection";
@@ -121,7 +122,7 @@ function PluginDirectory() {
   const { invoke, connectionEpoch } = useDeviceLink();
   const { colors } = useTheme(),
     styles = useThemedStyles(makeStyles);
-  const { width } = useWindowDimensions();
+  const { width, fontScale } = useWindowDimensions();
   const wide = width >= 768;
   const devices = useDeviceManagement(auth.apiFetch, focused);
   const targets = useMemo(
@@ -322,7 +323,10 @@ function PluginDirectory() {
           }
         : undefined,
     }),
-    [searchVisible, searchBar, t, colors.inputCaret, colors.textPrimary],
+    // `fontScale` (dispatcher P-2): when the text size changes while the page is open, the stacked search bar grows with
+    // it but the page below kept the header height it was laid out with, so the bar covered the list's first rows.
+    // Handing the header its options again lays the header and the page out again for the new size.
+    [searchVisible, searchBar, t, colors.inputCaret, colors.textPrimary, fontScale],
   );
   useEffect(() => {
     setPageTitle("");
@@ -689,6 +693,8 @@ function PluginDirectory() {
     title: !lone ? t("plugins.checks.many", { count: noticeLines.length })
       : t(loneWaits ? "plugins.checks.waitingOne" : "plugins.slot.holder", { name: lone.who.name, device: lone.who.deviceName }),
     actions: [{ label: t("plugins.slot.show"), testID: "plugins.slotHolder.show", onPress: () => setChecksOpen(true) }],
+    // Anywhere on it opens the list (dispatcher P-2: at the largest text sizes its button can sit off screen).
+    onPress: () => setChecksOpen(true),
   } : undefined;
   // Wide screens (both platforms) and Android: above both panes. A narrow iOS screen: as the first row of the native
   // list on screen (`pageNotice`), where the navigation bar and the search field never cover it (dispatcher M-1).
@@ -1017,6 +1023,7 @@ function PluginDirectory() {
       // told apart from a source that really changed.
       if (state.errorCode === "PLUGIN_SOURCE_UNVERIFIED") tell("plugins.management.sourceUnverifiedTitle", "plugins.management.sourceUnverified");
       else if (state.errorCode === "PLUGIN_SOURCE_CHANGED") tell("plugins.management.sourceChangedTitle", "plugins.management.sourceChanged");
+      else if (state.errorCode === "PLUGIN_CONSENT_CHANGED") tell("plugins.notice.title.managementFailed", "plugins.notice.consentSource.consentChanged");
       else tell("plugins.notice.title.managementFailed");
     };
     if (action === "uninstall" && managed) {
@@ -1130,9 +1137,19 @@ function PluginDirectory() {
       const refreshed = controller.getState();
       if (!refreshed || refreshed.errorCode || !refreshed.online) return;
       const snapshot = refreshed.snapshot;
-      const plugin = snapshot?.ghosts.find(
+      const viewed = snapshot?.ghosts.find(
         (item) => item.instanceKey === row.item.ref.id,
       );
+      // An update or a page approval opens only the instance the one decision finds (dispatcher O-2); when the plugin
+      // changed on the computer since, the detail stays on the instance shown and says so (nothing else is opened).
+      const finished = controller.finishedOperation();
+      let plugin = viewed;
+      if (snapshot && finished && (finished.entry === "update" || finished.entry === "page-approval")) {
+        const opens = pluginOperationOpens(finished, { ghosts: snapshot.ghosts, receipt: "final",
+          market: finished.detail ? snapshot.market.items.find((item) => item.pluginId === finished.detail!.pluginId) : undefined });
+        plugin = opens.open ? snapshot.ghosts.find((item) => item.instanceKey === opens.instanceKey) : viewed;
+        if (!opens.open && viewed) tell("plugins.checks.result.succeeded", "plugins.checks.result.changedSince");
+      }
       if (plugin)
         void showDetail({
           ...row,
@@ -1195,6 +1212,8 @@ function PluginDirectory() {
       case "enable":
         void enable(true);
         break;
+      // Not reached from the status row today: it offers only "connect" and "retry" (main's existing choice, both
+      // platforms); kept for when a settings action is offered there (dispatcher Q-2, follow-up outside #12684).
       case "reconnect":
       case "settings":
         if (originalSettings) setSettingsOpen(true);

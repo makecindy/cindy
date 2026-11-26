@@ -366,7 +366,8 @@
       "localFolder": "Dossier local",
       "repositoryMissingInstall": "Cet ordinateur n’a pas indiqué le dépôt de ce marketplace personnalisé : l’installation depuis le téléphone n’est pas possible. Mettez d’abord Cindy à jour sur cet ordinateur et actualisez ce marketplace ; si cela ne suffit pas, installez directement depuis l’ordinateur.",
       "repositoryMissingUpdate": "Cet ordinateur n’a pas indiqué le dépôt de ce marketplace personnalisé : la mise à jour depuis le téléphone n’est pas possible. Mettez d’abord Cindy à jour sur cet ordinateur et actualisez ce marketplace ; si cela ne suffit pas, mettez à jour le plugin directement depuis l’ordinateur.",
-      "sourceChanged": "La source de cette demande diffère de celle que vous avez choisie : elle ne peut pas être autorisée depuis le téléphone. Refusez-la et choisissez à nouveau."
+      "sourceChanged": "La source de cette demande diffère de celle que vous avez choisie : elle ne peut pas être autorisée depuis le téléphone. Refusez-la et choisissez à nouveau.",
+      "consentChanged": "Cette demande concerne un autre plugin, une autre version ou un autre ordinateur que celui choisi : elle ne peut pas être autorisée depuis le téléphone. Refusez-la et choisissez à nouveau, ou réglez-la sur l’ordinateur."
     },
     "sourceNotice": {
       "community": "Ce plugin est développé et maintenu par des membres de la communauté. {{appName}} a examiné cette version, mais ne peut pas garantir la sécurité du plugin dans toutes les situations d’utilisation.",
@@ -506,7 +507,18 @@
       "checking": "Vérification du résultat",
       "waiting": "Résultat non confirmé. Vérifiez à nouveau ou arrêtez le suivi.",
       "offline": "« {{device}} » n’est pas connecté. Connectez-le pour vérifier le résultat.",
-      "awaitingYou": "L’ordinateur attend votre confirmation"
+      "awaitingYou": "L’ordinateur attend votre confirmation",
+      "unprovable": {
+        "uninstall": {
+          "absent": "L’ordinateur n’a plus de trace de cette désinstallation : son résultat ne peut pas être confirmé. Le plugin n’est pas sur l’ordinateur actuellement.",
+          "present": "L’ordinateur n’a plus de trace de cette désinstallation : son résultat ne peut pas être confirmé. Le plugin est toujours sur l’ordinateur."
+        },
+        "pageApproval": {
+          "absent": "L’ordinateur n’a plus de trace de l’activation de ces pages : le résultat ne peut pas être confirmé. Le plugin n’est pas sur l’ordinateur actuellement.",
+          "approved": "L’ordinateur n’a plus de trace de l’activation de ces pages : le résultat ne peut pas être confirmé. Ses pages sont activées.",
+          "notApproved": "L’ordinateur n’a plus de trace de l’activation de ces pages : le résultat ne peut pas être confirmé. Ses pages ne sont pas encore activées."
+        }
+      }
     },
     "stop": "Arrêter le suivi",
     "stopHint": "Seul ce téléphone arrête le suivi. L’opération sur l’ordinateur n’est pas annulée.",
@@ -518,7 +530,7 @@
       "untracked": "Plus suivi",
       "ended": "Terminé",
       "readingBack": "Terminé. Vérification du plugin sur l’ordinateur…",
-      "succeededMissing": "Terminé, mais ce plugin est introuvable sur l’ordinateur.",
+      "changedSince": "Terminé, mais ce plugin a changé sur l’ordinateur depuis.",
       "succeededUnread": "Terminé, mais les plugins de l’ordinateur n’ont pas pu être lus.",
       "uninstalled": "Désinstallé"
     },

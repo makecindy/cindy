@@ -19,6 +19,11 @@ export interface PluginNoticeProps {
   detail?: string;
   icon?: "info" | "warning" | "offline";
   testID?: string;
+  /**
+   * The whole notice opens this (dispatcher P-2): a tap anywhere on it, not only on its button, so the row stays usable
+   * when its button is pushed off screen or under another control at large text sizes.
+   */
+  onPress?: () => void;
   actions?: Array<{
     label: string;
     onPress(): void;
@@ -33,6 +38,7 @@ export function PluginNotice({
   icon = "info",
   testID,
   actions,
+  onPress,
 }: PluginNoticeProps) {
   const { colors } = useTheme(),
     styles = useThemedStyles(makeStyles);
@@ -65,8 +71,10 @@ export function PluginNotice({
       ) : null}
     </>
   );
+  const Card = onPress ? Pressable : View;
   return (
-    <View testID={testID} style={[styles.card, compact && { backgroundColor: "transparent", paddingHorizontal: 0, paddingVertical: spacing.xs }]} accessibilityLiveRegion="polite">
+    <Card testID={testID} style={[styles.card, compact && { backgroundColor: "transparent", paddingHorizontal: 0, paddingVertical: spacing.xs }]} accessibilityLiveRegion="polite"
+      {...(onPress ? { onPress, accessibilityRole: "button" as const } : {})}>
       <View style={[styles.row, compact && { alignItems: "baseline", flexWrap: "wrap" }]}>
         <Icon size={iconSize.sm} color={colors.textSecondary} />
         <View style={styles.content}>
@@ -76,7 +84,7 @@ export function PluginNotice({
         {actions?.length === 1 ? renderActions() : null}
       </View>
       {actions && actions.length > 1 ? renderActions() : null}
-    </View>
+    </Card>
   );
 }
 const makeStyles = (c: ThemeColors) =>

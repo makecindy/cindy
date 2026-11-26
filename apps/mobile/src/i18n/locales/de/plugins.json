@@ -364,7 +364,8 @@
       "localFolder": "Lokaler Ordner",
       "repositoryMissingInstall": "Dieser Computer hat das Repository dieses benutzerdefinierten Marktplatzes nicht angegeben. Installieren vom Handy ist daher nicht möglich. Aktualisiere zuerst Cindy auf diesem Computer und dann den Marktplatz; hilft das nicht, installiere direkt am Computer.",
       "repositoryMissingUpdate": "Dieser Computer hat das Repository dieses benutzerdefinierten Marktplatzes nicht angegeben. Aktualisieren vom Handy ist daher nicht möglich. Aktualisiere zuerst Cindy auf diesem Computer und dann den Marktplatz; hilft das nicht, aktualisiere das Plugin direkt am Computer.",
-      "sourceChanged": "Die Quelle in dieser Anfrage weicht von deiner Auswahl ab und kann nicht vom Handy aus erlaubt werden. Lehne ab und wähle erneut."
+      "sourceChanged": "Die Quelle in dieser Anfrage weicht von deiner Auswahl ab und kann nicht vom Handy aus erlaubt werden. Lehne ab und wähle erneut.",
+      "consentChanged": "Diese Anfrage gilt für ein anderes Plugin, eine andere Version oder einen anderen Computer als ausgewählt und kann nicht vom Handy aus erlaubt werden. Lehne ab und wähle erneut oder kläre es am Computer."
     },
     "sourceNotice": {
       "community": "Dieses Plugin wird von Mitgliedern der Community entwickelt und gepflegt. {{appName}} hat diese Version geprüft, kann die Sicherheit des Plugins aber nicht in jeder Nutzungssituation garantieren.",
@@ -504,7 +505,18 @@
       "checking": "Ergebnis wird geprüft",
       "waiting": "Ergebnis unbestätigt. Prüfe es erneut oder verfolge es nicht weiter.",
       "offline": "„{{device}}“ ist nicht verbunden. Verbinde ihn, um das Ergebnis zu prüfen.",
-      "awaitingYou": "Der Computer wartet auf deine Bestätigung"
+      "awaitingYou": "Der Computer wartet auf deine Bestätigung",
+      "unprovable": {
+        "uninstall": {
+          "absent": "Der Computer hat keinen Eintrag zu dieser Deinstallation mehr, das Ergebnis lässt sich nicht bestätigen. Das Plugin ist jetzt nicht auf dem Computer.",
+          "present": "Der Computer hat keinen Eintrag zu dieser Deinstallation mehr, das Ergebnis lässt sich nicht bestätigen. Das Plugin ist noch auf dem Computer."
+        },
+        "pageApproval": {
+          "absent": "Der Computer hat keinen Eintrag zum Aktivieren dieser Seiten mehr, das Ergebnis lässt sich nicht bestätigen. Das Plugin ist jetzt nicht auf dem Computer.",
+          "approved": "Der Computer hat keinen Eintrag zum Aktivieren dieser Seiten mehr, das Ergebnis lässt sich nicht bestätigen. Die Seiten sind jetzt aktiviert.",
+          "notApproved": "Der Computer hat keinen Eintrag zum Aktivieren dieser Seiten mehr, das Ergebnis lässt sich nicht bestätigen. Die Seiten sind noch nicht aktiviert."
+        }
+      }
     },
     "stop": "Nicht mehr verfolgen",
     "stopHint": "Nur dieses Handy verfolgt den Vorgang nicht mehr. Auf dem Computer wird nichts abgebrochen.",
@@ -516,7 +528,7 @@
       "untracked": "Wird nicht mehr verfolgt",
       "ended": "Beendet",
       "readingBack": "Erledigt. Das Plugin auf dem Computer wird geprüft…",
-      "succeededMissing": "Erledigt, aber dieses Plugin wurde auf dem Computer nicht gefunden.",
+      "changedSince": "Erledigt, aber dieses Plugin hat sich seitdem auf dem Computer geändert.",
       "succeededUnread": "Erledigt, aber die Plugins auf dem Computer konnten nicht gelesen werden.",
       "uninstalled": "Deinstalliert"
     },

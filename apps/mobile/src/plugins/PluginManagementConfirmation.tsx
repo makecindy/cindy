@@ -8,6 +8,7 @@ import {
   radius,
   spacing,
   typeScale,
+  useTheme,
   useThemedStyles,
   type ThemeColors,
 } from "@/theme";
@@ -16,15 +17,16 @@ import {
   type PluginManagementConfirmationProps,
 } from "./usePluginConsent";
 import { useState } from "react";
+import { ScrollFade, ScrollThumb, useScrollOverflow } from "@/components/ScrollOverflow";
 import { CONSENT_FADE_HEIGHT, CONSENT_SIDE_BY_SIDE_MIN_WIDTH, consentSummaryFadeAllowed, planConsentSheet,
   pluginConsentPresentation } from "./pluginConsentPresentation";
 export function PluginManagementConfirmation(
   props: PluginManagementConfirmationProps,
 ) {
   const { t } = useTranslation(),
-    styles = useThemedStyles(makeStyles);
+    styles = useThemedStyles(makeStyles), { colors } = useTheme();
   const { consent, visible, answer } = usePluginConsent(props);
-  const info = consent ? pluginConsentPresentation(consent, t, props.deviceName, props.state.expectedSource) : undefined;
+  const info = consent ? pluginConsentPresentation(consent, t, props.deviceName, props.controller.consentAllowance?.() ?? undefined) : undefined;
   const { height: windowHeight, width: windowWidth, fontScale } = useWindowDimensions();
   // Two layouts by one rule (`planConsentSheet`, the same as iOS), from measured content heights only: regular, with the
   // summary pinned above the buttons, when the identity block (titles, computer, source, repository, source notes) and
@@ -61,13 +63,9 @@ export function PluginManagementConfirmation(
   const summaryLines = info?.highRisk?.lines.map((line, index) => (
     <Text key={index} style={styles.highRiskBody} onLayout={measureLine(index)}>{line}</Text>
   ));
-  // Over the scroll area's lower edge while more is below: bands of the sheet's own surface color, more opaque toward
-  // the edge (one token, so it follows light and dark mode). No text; it takes no room and no touches.
-  const fade = (testID: string) => (
-    <View testID={testID} pointerEvents="none" style={styles.fade} accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
-      {FADE_STEPS.map((opacity) => <View key={opacity} style={[styles.fadeBand, { opacity }]} />)}
-    </View>
-  );
+  // Over the scroll area's lower edge while more is below: the sheet's own surface color (one token, so it follows light
+  // and dark mode), with a scroll thumb in the `borderStrong` token that stays visible in both (dispatcher Q-1).
+  const fade = (testID: string) => <ScrollFade testID={testID} color={colors.surfaceElevated} height={FADE_HEIGHT} />;
   return (
     <SheetModal
       nativePresentation
@@ -77,7 +75,7 @@ export function PluginManagementConfirmation(
     >
       <View style={styles.sheet} testID="plugins.managementConfirmation">
         <View style={styles.listArea}>
-          <ScrollView contentContainerStyle={styles.content} testID="plugins.management.list" persistentScrollbar
+          <ScrollView contentContainerStyle={styles.content} testID="plugins.management.list" showsVerticalScrollIndicator={false}
             accessibilityHint={t("plugins.management.scrollHint")}
             onLayout={list.onLayout} onContentSizeChange={list.onContentSizeChange} onScroll={list.onScroll}
             scrollEventThrottle={64}>
@@ -125,6 +123,7 @@ export function PluginManagementConfirmation(
             ))}
           </ScrollView>
           {list.more ? fade("plugins.management.listFade") : null}
+          <ScrollThumb overflow={list} testID="plugins.management.listThumb" />
         </View>
         {/* Regular: outside the scroll area, always visible above the buttons. */}
         {!compact && info?.highRisk ? (
@@ -132,7 +131,7 @@ export function PluginManagementConfirmation(
             {heading}
             <View>
               {/* Scrolls inside its height; the bar stays visible and the fade shows while items are hidden below. */}
-              <ScrollView testID="plugins.management.highRiskScroll" nestedScrollEnabled persistentScrollbar
+              <ScrollView testID="plugins.management.highRiskScroll" nestedScrollEnabled showsVerticalScrollIndicator={false}
                 accessibilityHint={t("plugins.management.scrollHint")}
                 style={{ maxHeight: plan.mode === "regular" ? plan.summaryLines : undefined }}
                 onLayout={summary.onLayout} onContentSizeChange={summary.onContentSizeChange} onScroll={summary.onScroll}
@@ -141,6 +140,7 @@ export function PluginManagementConfirmation(
                 {summaryLines}
               </ScrollView>
               {summary.more && consentSummaryFadeAllowed(plan) ? fade("plugins.management.highRiskFade") : null}
+              <ScrollThumb overflow={summary} testID="plugins.management.highRiskThumb" />
             </View>
           </View>
         ) : null}
@@ -168,27 +168,6 @@ export function PluginManagementConfirmation(
   );
 }
 const FADE_HEIGHT = CONSENT_FADE_HEIGHT;
-const FADE_STEPS = [0.15, 0.35, 0.6, 0.85];
-/** Whether a scroll area has more below what it shows (from its own scroll metrics; display only). */
-function useScrollOverflow() {
-  const [area, setArea] = useState({ visible: 0, content: 0, atEnd: false });
-  return {
-    more: area.content > area.visible + 1 && !area.atEnd,
-    onLayout: (event: { nativeEvent: { layout: { height: number } } }) => {
-      const visible = Math.ceil(event.nativeEvent.layout.height);
-      setArea((current) => current.visible === visible ? current : { ...current, visible });
-    },
-    onContentSizeChange: (_width: number, height: number) => {
-      const content = Math.ceil(height);
-      setArea((current) => current.content === content ? current : { ...current, content });
-    },
-    onScroll: (event: { nativeEvent: { contentOffset: { y: number }; contentSize: { height: number }; layoutMeasurement: { height: number } } }) => {
-      const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
-      const atEnd = contentOffset.y + layoutMeasurement.height >= contentSize.height - 2;
-      setArea((current) => current.atEnd === atEnd ? current : { ...current, atEnd });
-    },
-  };
-}
 const makeStyles = (c: ThemeColors) =>
   StyleSheet.create({
     sheet: {
@@ -252,8 +231,6 @@ const makeStyles = (c: ThemeColors) =>
     // The list takes what the pinned summary and the buttons leave (flex, from their real heights: K-1); the fade floats
     // over its lower edge.
     listArea: { flexShrink: 1 },
-    fade: { position: "absolute", left: 0, right: 0, bottom: 0, height: FADE_HEIGHT },
-    fadeBand: { flex: 1, backgroundColor: c.surfaceElevated },
     // Compact: the summary inside the scroll area, separated by the same hairline.
     highRiskInline: { paddingBottom: 0 },
     unavailable: { opacity: 0.5 },
