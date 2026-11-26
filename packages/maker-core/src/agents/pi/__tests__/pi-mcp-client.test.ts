@@ -21,7 +21,7 @@ function gatewayWithFetch(fetchImpl: typeof fetch, permissionMode = 'ask') {
     fetch: fetchImpl, URL, Headers, AbortController, TextDecoder, process: { env: {} },
     // 沙箱没有模块系统：bridge 顶部的 node:crypto import 在切片后丢失，
     // 指纹计算用的 createHash 必须由宿主注入。
-    setTimeout, clearTimeout, createHash,
+    Date, setTimeout, clearTimeout, createHash,
     guestToolGate: null, toolsDisabledForTurn: () => false,
     currentPermissionState: () => ({ mode: permissionMode }),
     FILE_WRITE_BUILTINS: new Set(), READONLY_BUILTINS: new Set(),
@@ -62,7 +62,7 @@ function gatewayWithFetch(fetchImpl: typeof fetch, permissionMode = 'ask') {
     approve: () => approvalHook({ toolName: 'cindy_mcp_call_tool', toolCallId: 'call',
       input: { server: 'cindy', tool: 'ghost_call', args: { ghost_id: 'demo' } } },
       { ui: { input: async () => 'allow' } }),
-    connect: (server: { name: string; displayName?: string; url: string } = {
+    connect: (server: { name: string; displayName?: string; url: string; remote?: { startupTimeoutMs: number; requestTimeoutMs: number } } = {
       name: 'cindy', url: 'https://example.test/mcp',
     }) => context.connect(server, 'fake-token'),
     resultHook: (event: unknown) => resultHooks[0]?.(event),
@@ -127,6 +127,31 @@ it('keeps transformed Pi input as own JSON data without invoking prototype sette
 });
 
 describe('Pi MCP request lifecycle', () => {
+  // #8053, unit: connectServer used to discard the handshake phase on abort.
+  // A shorter request limit distinguishes measured elapsed time from the startup budget.
+  it.each(['initialize', 'tools/list'])('diagnoses a stalled custom HTTP %s at startup', async phase => {
+    vi.useFakeTimers();
+    const h = gatewayWithFetch(async (_url, options) => {
+      const { method } = JSON.parse(String(options?.body));
+      if (method === phase) {
+        return new Promise<Response>((_resolve, reject) => {
+          options!.signal!.addEventListener('abort', () => reject(new Error('fixture-secret')));
+        });
+      }
+      if (method === 'initialize') await new Promise(resolve => setTimeout(resolve, 10));
+      return Response.json({ result: {} });
+    });
+    const elapsed = phase === 'initialize' ? 25 : 35;
+    const result = expect(h.connect({
+      name: 'custom_fixture', url: 'https://example.test/mcp?key=fixture-secret',
+      remote: { startupTimeoutMs: 50, requestTimeoutMs: 25 },
+    })).rejects.toMatchObject({
+      message: 'startup timed out during ' + phase + ' after ' + elapsed + 'ms (startup budget 50ms, request limit 25ms)',
+    });
+    await vi.advanceTimersByTimeAsync(elapsed);
+    await result;
+  });
+
   // #10691: the registered gateway and real approval hook must reject missing
   // ghost_id, including an extra args wrapper, before approval/HTTP. Previously
   // only generic call_tool envelopes were checked. Unit tier, injected fetch.

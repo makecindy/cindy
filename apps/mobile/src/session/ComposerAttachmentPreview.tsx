@@ -1,3 +1,4 @@
+import { attachmentPreviewKind } from "@cindy/maker-shared/attachment-preview";
 import {
   ImageLightbox,
   type ImageLightboxAnnotationConfig,
@@ -5,7 +6,7 @@ import {
 import { RemoteAttachmentPreview } from "./RemoteAttachmentPreview";
 import { isPayloadDirectPreviewableUrl, toRemoteAttachmentUrl } from "./messagePayload";
 import type { MobileMessageGalleryImage } from "./messageGallery";
-import type { ResolveRemoteMediaFn } from "./remoteMedia";
+import { isDirectPreviewableMediaUrl, type ResolveRemoteMediaFn } from "./remoteMedia";
 import type { RemoteSerializedAttachment } from "./types";
 
 /** One explicit draft collection; images swipe inside one viewer, annotation keeps the original image and strokes. */
@@ -28,6 +29,7 @@ export function ComposerAttachmentPreview({
   const attachment = attachments[index];
   if (!attachment) return null;
   const image = images.find((item) => item.key === attachment.id);
+  const audio = attachmentPreviewKind(attachment.name, attachment.mimeType) === "audio";
   return (
     <>
       {image ? (
@@ -44,20 +46,21 @@ export function ComposerAttachmentPreview({
         <RemoteAttachmentPreview
           key={attachment.id}
           name={attachment.name}
+          mediaKind={audio ? "audio" : undefined}
           onClose={onClose}
-          resolve={async (signal) => {
+          resolve={async (signal, forceRefresh) => {
             const source = attachment.url || attachment.path;
             if (!source) throw new Error("MEDIA_SOURCE_MISSING");
-            const direct: boolean = isPayloadDirectPreviewableUrl(source);
+            const direct: boolean = audio ? isDirectPreviewableMediaUrl(source) : isPayloadDirectPreviewableUrl(source);
             if (direct)
               return { url: source, mimeType: attachment.mimeType };
             return resolveRemoteMedia(
               {
-                kind: "file",
+                kind: audio ? "audio" : "file",
                 url: toRemoteAttachmentUrl(source),
                 previewable: false,
               },
-              { front: true, signal },
+              { front: true, signal, ...(forceRefresh ? { forceRefresh: true } : {}) },
             );
           }}
         />

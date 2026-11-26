@@ -72,3 +72,45 @@ it('retires only failures belonging to a known closed plan', () => {
     expect(teammateChatActivity({ ...input, plans: [{ id: 'stopped-plan', status }] }).phase).toBe('needs-interaction');
   }
 });
+
+// Unit: in multi-user groups, only this account's own working agent (owned companion or
+// self-requested group Cindy) should light up the roster "running" state; peer work stays quiet.
+describe('group working status ownership', () => {
+  const members = [
+    { botId: 'cindy', assistant: true, isOwned: false },
+    { botId: 'my-bot', assistant: false, isOwned: true },
+    { botId: 'peer-bot', assistant: false, isOwned: false },
+  ];
+  const isOwnWork = ({ botId, requesterId, maskOwnerId }: { botId?: string; requesterId?: string; maskOwnerId?: string }) => {
+    if (maskOwnerId) return maskOwnerId === 'self';
+    const member = members.find(candidate => candidate.botId === botId);
+    return !!member && (member.assistant ? requesterId === 'self' : member.isOwned);
+  };
+
+  it.each([
+    { label: 'peer-requested Cindy', executions: [{ status: 'running', bot_id: 'cindy', requester_id: 'peer' }], plans: [], expected: 'idle' },
+    { label: 'self-requested Cindy', executions: [{ status: 'running', bot_id: 'cindy', requester_id: 'self' }], plans: [], expected: 'running' },
+    { label: 'peer companion even if requested by self', executions: [{ status: 'running', bot_id: 'peer-bot', requester_id: 'self' }], plans: [], expected: 'idle' },
+    { label: 'own companion even if requested by peer', executions: [{ status: 'running', bot_id: 'my-bot', requester_id: 'peer' }], plans: [], expected: 'running' },
+    { label: 'peer Cindy alongside own companion', executions: [{ status: 'running', bot_id: 'cindy', requester_id: 'peer' }, { status: 'queued', bot_id: 'my-bot', requester_id: 'self' }], plans: [], expected: 'running' },
+    { label: 'own personal mask', executions: [{ status: 'running', bot_id: 'hidden-mask', mask_owner_id: 'self' }], plans: [], expected: 'running' },
+    { label: 'peer running plan step', executions: [], plans: [{ id: 'p1', status: 'running', creator_id: 'peer', current_step: 0, steps: [{ position: 0, botId: 'peer-bot', status: 'running' }] }], expected: 'idle' },
+    { label: 'own running plan step', executions: [], plans: [{ id: 'p1', status: 'running', creator_id: 'peer', current_step: 0, steps: [{ position: 0, botId: 'my-bot', status: 'running' }] }], expected: 'running' },
+  ])('teammateChatActivity reports $expected for $label', ({ executions, plans, expected }) => {
+    expect(teammateChatActivity({ executions, plans, isOwnWork }).phase).toBe(expected);
+  });
+
+  it.each([
+    { label: 'peer-requested Cindy', speaker: { botId: 'cindy', executionId: 'e1', isSelfRequested: false, activity: 'reply' as const }, expected: 'idle' },
+    { label: 'self-requested Cindy', speaker: { botId: 'cindy', executionId: 'e1', isSelfRequested: true, activity: 'reply' as const }, expected: 'running' },
+    { label: 'peer companion', speaker: { botId: 'peer-bot', executionId: 'e2', isSelfRequested: true, activity: 'reply' as const }, expected: 'idle' },
+    { label: 'own companion', speaker: { botId: 'my-bot', executionId: 'e3', isSelfRequested: false, activity: 'reply' as const }, expected: 'running' },
+  ])('teammateGroupActivity server fallback reports $expected for $label', ({ speaker, expected }) => {
+    expect(teammateGroupActivity({
+      serverBacked: true,
+      members,
+      speakingBotIds: [speaker.botId],
+      round: { speakers: [speaker] },
+    }).phase).toBe(expected);
+  });
+});

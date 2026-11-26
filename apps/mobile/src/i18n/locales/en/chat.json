@@ -197,6 +197,8 @@
     "retryIn": "Retrying automatically in {{seconds}} s"
   },
   "subscriptionAccountError": {
+    "unreachable": "The Codex account service is temporarily unreachable.",
+    "rechecking": "The Codex account service is temporarily unreachable. Retrying at {{resetAt}}.",
     "poolModelLimited": "Subscription usage for this model has reached its limit. You can switch models now.",
     "poolRetryUntil": "Retry after {{resetAt}}.",
     "poolOtherSignedOut": "Another subscription account is signed out. You can sign in on the computer running the task and retry.",

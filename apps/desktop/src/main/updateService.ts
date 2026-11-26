@@ -85,7 +85,10 @@ import { buildLinuxUpdateScript, linuxRelaunchDisplayArgs, normalizeLinuxDebSha2
 import {
   checkDebianManagedInstallation,
   findLinuxUserInstallation,
+  hasLinuxPkexec,
+  isLinuxPkexecPreauthorized,
   missingLinuxUserInstallTools,
+  recognizeLinuxUserInstallation,
   type LinuxUserInstallation,
 } from './linuxInstallation';
 import { linuxPasswordStoreRelaunchArgs } from './linuxPasswordStore';
@@ -355,12 +358,67 @@ function ensureWindowsUpdaterPrerequisites(options?: {
   return true;
 }
 
+const LINUX_INSTALLATION_UNSUPPORTED_ERROR_CODE = 'linux_installation_unsupported';
+
+/**
+ * A system `.deb` normally needs someone to enter a pkexec password. It can
+ * install unattended only when polkit already authorizes pkexec for this user
+ * without a prompt (for example a cloud desktop image that grants it to its
+ * desktop user) and the executable belongs to the Cindy package.
+ */
+function systemDebSupportsUnattendedUpdate(exePath: string): boolean {
+  return hasLinuxPkexec()
+    && isLinuxPkexecPreauthorized(process.pid)
+    && checkDebianManagedInstallation(exePath).status === 'managed';
+}
+
+/**
+ * Whether a staged update may be applied without anyone at the computer (idle
+ * or startup install). On Linux this is Cindy's marked user-directory
+ * installation, or a system `.deb` whose pkexec needs no password. The strict
+ * preflight in executeRelaunch still runs before quitting and reports
+ * `linux_installation_unsupported` on failure.
+ */
+function supportsUnattendedAppUpdate(): boolean {
+  if (process.platform !== 'linux') return true;
+  const exePath = app.getPath('exe');
+  const installation = recognizeLinuxUserInstallation(exePath, os.homedir(), process.getuid?.() ?? -1);
+  if (installation) return installation.region === CURRENT_CINDY_REGION;
+  return systemDebSupportsUnattendedUpdate(exePath);
+}
+
+/**
+ * Strict form used before a startup install: the splash waits for a relaunch
+ * once one is accepted, so a preflight failure after acceptance would strand
+ * it. Check the same conditions as executeRelaunch up front.
+ */
+function canApplyUnattendedAppUpdateNow(): boolean {
+  if (process.platform !== 'linux') return true;
+  const exePath = app.getPath('exe');
+  const uid = process.getuid?.() ?? -1;
+  const installation = findLinuxUserInstallation(exePath, os.homedir(), uid);
+  if (installation) {
+    return installation.region === CURRENT_CINDY_REGION && missingLinuxUserInstallTools().length === 0;
+  }
+  // A recognized user install that fails the strict check must not fall back
+  // to the system package path.
+  if (recognizeLinuxUserInstallation(exePath, os.homedir(), uid)) return false;
+  return systemDebSupportsUnattendedUpdate(exePath);
+}
+
+/** Install blockers that only the user can clear; retrying unattended cannot help. */
+function hasUserActionInstallBlocker(): boolean {
+  return lastErrorCode === WINDOWS_UPDATER_RUNTIME_MISSING_ERROR_CODE
+    || lastErrorCode === LINUX_INSTALLATION_UNSUPPORTED_ERROR_CODE;
+}
+
 function autoUpdateSettingsWire() {
   const state = readAutoUpdateSettingsState();
   return {
     autoRelaunchOnIdle: state.value.autoRelaunchOnIdle,
     isCustomized: state.isCustomized,
     defaultAutoRelaunchOnIdle: state.defaults.autoRelaunchOnIdle,
+    unattendedInstallSupported: supportsUnattendedAppUpdate(),
   };
 }
 
@@ -395,7 +453,7 @@ async function getAutoRelaunchBlockReasonForCurrentState(): Promise<AutoRelaunch
   if (!readAutoUpdateSettings().autoRelaunchOnIdle) return 'disabled';
   if (isDev()) return 'dev';
   if (currentStatus !== 'ready') return 'not-ready';
-  if (lastErrorCode === WINDOWS_UPDATER_RUNTIME_MISSING_ERROR_CODE) return 'not-ready';
+  if (hasUserActionInstallBlocker()) return 'not-ready';
   if (isRelaunching || autoRelaunchInProgress) return 'relaunching';
   const hasBusyTasksNow = await hasBusyTasks();
 
@@ -407,7 +465,12 @@ async function getAutoRelaunchBlockReasonForCurrentState(): Promise<AutoRelaunch
   const status = currentStatus;
   const relaunching = isRelaunching || autoRelaunchInProgress;
   const nowMs = Date.now();
-  if (hasBusyTasksNow) lastBusyAtMs = nowMs;
+  if (hasBusyTasksNow) {
+    // Do not probe polkit while work is active. The synchronous check can take
+    // up to two seconds and the next poll will retry after the quiet period.
+    lastBusyAtMs = nowMs;
+    return 'busy';
+  }
 
   return getAutoRelaunchBlockReason({
     enabled,
@@ -420,7 +483,7 @@ async function getAutoRelaunchBlockReasonForCurrentState(): Promise<AutoRelaunch
     nowMs,
     lastBusyAtMs,
     lastResumeAtMs,
-    requiresInteractiveAuth: process.platform === 'linux',
+    requiresInteractiveAuth: !supportsUnattendedAppUpdate(),
   });
 }
 
@@ -443,10 +506,10 @@ async function getAutoRelaunchBlockReasonForCurrentState(): Promise<AutoRelaunch
 async function getStartupRelaunchBlockReason(): Promise<AutoRelaunchBlockReason | null> {
   if (isDev()) return 'dev';
   if (currentStatus !== 'ready') return 'not-ready';
-  if (lastErrorCode === WINDOWS_UPDATER_RUNTIME_MISSING_ERROR_CODE) return 'not-ready';
+  if (hasUserActionInstallBlocker()) return 'not-ready';
   if (isRelaunching || autoRelaunchInProgress) return 'relaunching';
-  // pkexec 必须用户在场输入密码，启动时不能自己装。
-  if (process.platform === 'linux') return 'interactive-auth';
+  // Linux 系统 .deb 通常要用户在场输入 pkexec 密码；用户目录安装和已免密授权的 .deb 可以自己装。
+  if (!canApplyUnattendedAppUpdateNow()) return 'interactive-auth';
   return null;
 }
 
@@ -634,11 +697,12 @@ export function isUpdateRelaunchImminent(): boolean {
   if (currentStatus !== 'downloading' && currentStatus !== 'ready') return false;
   // The native updater replaces the *installed* app; it never runs in dev.
   if (isDev()) return false;
-  // A missing VC++ Runtime requires an explicit user install. Treating that
-  // indefinite wait as imminent would keep startup side-effects disabled.
-  if (lastErrorCode === WINDOWS_UPDATER_RUNTIME_MISSING_ERROR_CODE) return false;
-  // Linux 安装要 pkexec 密码，不会在空闲/启动时自己装。
-  if (process.platform === 'linux') return false;
+  // A missing VC++ Runtime or an unsupported Linux layout requires the user to
+  // act. Treating that indefinite wait as imminent would keep startup
+  // side-effects disabled.
+  if (hasUserActionInstallBlocker()) return false;
+  // 需要 pkexec 密码的 Linux 系统 .deb 不会在空闲/启动时自己装。
+  if (!canApplyUnattendedAppUpdateNow()) return false;
   // Respecting the user's switch: with auto-relaunch off the patch just sits
   // there until they click the banner, which is not "imminent".
   return readAutoUpdateSettings().autoRelaunchOnIdle;
@@ -2119,12 +2183,18 @@ async function executeRelaunchUnguarded(
     }
     const supported = installation
       ? installation.region === CURRENT_CINDY_REGION && missingLinuxUserInstallTools().length === 0
-      : debianCheck?.status === 'managed';
+      // The update script needs pkexec for a system .deb; without it, quitting
+      // would only stop active work and relaunch the same version.
+      : debianCheck?.status === 'managed' && hasLinuxPkexec();
     if (!supported) {
-      log.error('Linux installation cannot self-update; use the installation guide or its package manager');
+      log.error(
+        debianCheck?.status === 'managed'
+          ? 'Linux system .deb update needs pkexec, which is not installed'
+          : 'Linux installation cannot self-update; use the installation guide or its package manager',
+      );
       isRelaunching = false;
       autoRelaunchInProgress = false;
-      setStatus('ready', { version: readyVersion ?? undefined, errorCode: 'linux_installation_unsupported' });
+      setStatus('ready', { version: readyVersion ?? undefined, errorCode: LINUX_INSTALLATION_UNSUPPORTED_ERROR_CODE });
       return;
     }
   }
@@ -2213,6 +2283,9 @@ function agentUpdateApplyBlockReason(): string | null {
         return debianCheck.status === 'error'
           ? '暂时无法验证 Linux 安装来源，请稍后重试。'
           : '当前 Linux 安装方式不支持应用内更新；请使用安装说明或系统包管理器。';
+      }
+      if (!hasLinuxPkexec()) {
+        return '这台电脑缺少系统授权组件 pkexec，无法安装系统 .deb 更新；请改用 Linux 用户目录安装，或用系统包管理器更新。';
       }
     }
   }
@@ -2387,6 +2460,11 @@ export async function applyConfirmedAppUpdateForAgent(options: {
       : { status: 'failed', reason: '更新器没有启动，Cindy 未重启。', errorCode: lastErrorCode ?? 'relaunch_not_started' };
   }
   return awaitRelaunchOutcome(targetVersion, AGENT_RELAUNCH_SETTLE_MS);
+}
+
+/** Same answer as the Settings → About row: whether the idle switch can take effect here. */
+export function supportsUnattendedAppUpdateForAgent(): boolean {
+  return supportsUnattendedAppUpdate();
 }
 
 /** Effective idle auto-install switch (Settings → About), shared with the Agent tools. */

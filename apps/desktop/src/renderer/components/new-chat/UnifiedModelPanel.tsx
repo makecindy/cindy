@@ -1,11 +1,36 @@
-import { useRemoteModelFavorites } from '@/state/useRemoteModelFavorites';
+import { useRemoteModelFavorites, type FavoriteStore } from '@/state/useRemoteModelFavorites';
 import type { ControlledModelFavoriteSource } from '../../../shared/controlledModelCatalog';
 import {
   parseProviderShareFavoriteSource,
   providerShareFavoriteRegionsOf,
+  useProviderShareFavoriteKeysByDevice,
   useProviderShareFavorites,
   useProviderShareFavoriteSources,
 } from '@/state/providerShareFavorites';
+import {
+  isSamePluginEngineChoice,
+  visiblePluginEngineChoices,
+} from '@/lib/pluginEngineSelection';
+import {
+  isPluginEngineFavoriteActive,
+  matchesPluginEngineFavoriteQuery,
+  pluginEngineFavoriteConfig,
+  pluginEngineFavoriteProviderId,
+  resolvePluginEngineFavorite,
+  type ResolvedPluginEngineFavorite,
+} from '@/lib/pluginEngineFavorites';
+import {
+  activePluginEngineModelId,
+  matchPluginEngineRows,
+  PluginEngineFavoriteRow,
+  PluginEngineModelConfig,
+  PluginEnginesSection,
+  usePluginEngineChoiceLabel,
+  usePluginEngineEffortLabel,
+  usePluginEngineModelLabel,
+  type PluginEngineFavoritesController,
+  type PluginEnginesPickerProps,
+} from './PluginEnginesSection';
 import {
   agentDeviceOfFavorite,
   LOCAL_MODEL_FAVORITE_STORE,
@@ -163,6 +188,12 @@ export interface UnifiedModelPanelProps {
   deviceModelGroupTabs?: readonly DeviceModelGroupsRailTab[];
   renderDeviceModelGroups?: (deviceId: string) => ReactNode;
   /**
+   * 插件提供的执行引擎：传入完整列表（含已隐藏引擎，便于解析收藏），面板按 visiblePluginEngineChoices
+   * 派生常规分组与左侧栏格位，并接入统一收藏区与收藏浮层。
+   */
+  pluginEngines?: PluginEnginesPickerProps;
+  onPluginEnginePicked?: () => void;
+  /**
    * 插件提供的执行引擎：每个引擎在左侧栏单独一格(名字 + 插件图标)，选中时列表区显示
    * `renderPluginEngine(providerId, deviceId)`。不传 / 空数组就没有这些格(没装任何引擎时)。
    * 带 `deviceId` 的是自己另一台电脑上的引擎，格位排进那台电脑那一段。
@@ -232,6 +263,8 @@ export interface UnifiedModelPanelProps {
    * 不显示某一台的配额。缺省 = 都按目录归属读。
    */
   providerGroupUsage?: ProviderGroupUsageOf;
+  /** 合并整个供应商的路由那一格显示谁的额度(sourceRouteProviders.ts 的 usageMember)。 */
+  routeUsageMember?: (providerId: string) => { provider: ProviderView; agentDeviceId: string | null } | null;
   /** 保留付费模型为锁定展示行，并把点击交给统一付费提示。 */
   includePaymentRequired?: boolean;
   paymentRequiredLabel?: string;
@@ -463,7 +496,9 @@ function UnifiedModelPanelContent({
   modelGroupsView,
   deviceModelGroupTabs,
   renderDeviceModelGroups,
-  pluginEngineTabs,
+  pluginEngines,
+  onPluginEnginePicked,
+  pluginEngineTabs: pluginEngineTabsProp,
   renderPluginEngine,
   favoritesPinned,
   favoritesPinnedHasRows = false,
@@ -495,6 +530,7 @@ function UnifiedModelPanelContent({
   interactionDisabled = false,
   providerUsage = null,
   providerGroupUsage,
+  routeUsageMember,
   includePaymentRequired = false,
   paymentRequiredLabel,
   paymentRequiredUnlockLabel,
@@ -537,8 +573,37 @@ function UnifiedModelPanelContent({
     remoteSources?.shareFavoriteSources,
   );
   const sharedFavoriteSources = useProviderShareFavoriteSources(remoteSources?.shareFavoriteSources);
+  const shareFavoriteKeys = useProviderShareFavoriteKeysByDevice(
+    remoteSources?.shareFavoriteSources,
+    !!favoritesListDeviceId,
+  );
   const hasRemoteSources = !!remoteSources;
   const favoritesHomeDeviceId = remoteSources?.homeDeviceId ?? null;
+  const homeFavoriteStore: FavoriteStore = preferenceStore
+    ? preferenceStore.favorites.store
+    : favoritesListDeviceId
+      ? remoteFavorites.store
+      : LOCAL_MODEL_FAVORITE_STORE;
+  const pluginEngineChoiceLabel = usePluginEngineChoiceLabel();
+  const pluginEngineModelLabel = usePluginEngineModelLabel();
+  const pluginEngineEffortLabel = usePluginEngineEffortLabel();
+  const visiblePluginEngines = useMemo(
+    () =>
+      pluginEngines
+        ? { ...pluginEngines, engines: visiblePluginEngineChoices(pluginEngines.engines, pluginEngines.active) }
+        : undefined,
+    [pluginEngines],
+  );
+  const pluginEngineTabs = useMemo<readonly PluginEngineRailTab[] | undefined>(() => {
+    if (pluginEngineTabsProp) return pluginEngineTabsProp;
+    if (!visiblePluginEngines || visiblePluginEngines.engines.length === 0) return undefined;
+    return visiblePluginEngines.engines.map((engine) => ({
+      providerId: engine.providerId,
+      ...(engine.deviceId ? { deviceId: engine.deviceId } : {}),
+      name: pluginEngineChoiceLabel(engine),
+      ...(engine.iconDataUrl ? { iconDataUrl: engine.iconDataUrl } : {}),
+    }));
+  }, [pluginEngineTabsProp, visiblePluginEngines, pluginEngineChoiceLabel]);
   const agentDeviceFavorites = useAgentDeviceFavorites({
     deviceId: remoteSources?.active && !isSharedProvider ? deviceId : undefined,
     homeDeviceId: favoritesHomeDeviceId,
@@ -1018,6 +1083,22 @@ function UnifiedModelPanelContent({
     };
   }, [deviceFavoritesEnabled, favoritesHomeDeviceId, deviceFavoriteGroups, unavailableDeviceIds, sharedFavoriteSources]);
 
+  const resolvePluginFavorite = useMemo(() => {
+    if (!pluginEngines || selectionPolicy === 'official') return undefined;
+    return (item: ModelFavoriteItem): ResolvedPluginEngineFavorite | null =>
+      resolvePluginEngineFavorite(item, pluginEngines.engines, {
+        homeDeviceId: favoritesHomeDeviceId,
+        sharedFavoriteSources,
+        running: pluginEngines.running,
+      });
+  }, [pluginEngines, selectionPolicy, favoritesHomeDeviceId, sharedFavoriteSources]);
+  const defaultPluginModelLabel = t('newChat.pluginEngines.defaultModel');
+  const matchesPluginFavorite = useCallback(
+    (resolved: ResolvedPluginEngineFavorite, q: string) =>
+      matchesPluginEngineFavoriteQuery(resolved, q, defaultPluginModelLabel),
+    [defaultPluginModelLabel],
+  );
+
   const listedSections = useMemo(
     () =>
       buildUnifiedListSections({
@@ -1025,6 +1106,12 @@ function UnifiedModelPanelContent({
         favorites,
         recentModels,
         ...(resolveDeviceFavorite ? { resolveForeignFavorite: resolveDeviceFavorite } : {}),
+        ...(resolvePluginFavorite
+          ? {
+              resolvePluginEngineFavorite: resolvePluginFavorite,
+              matchesPluginEngineFavorite: matchesPluginFavorite,
+            }
+          : {}),
         query,
         matchesQuery: (entry, q) => matchesModelName({
           id: entry.modelId, displayName: entry.displayName, description: entry.description,
@@ -1038,7 +1125,7 @@ function UnifiedModelPanelContent({
           ? { recommendation: { agent: liveEngineAgent, ...selected } }
           : {}),
       }),
-    [entries, resolvableEntries, favorites, recentModels, resolveDeviceFavorite, query, effectiveRail, effectiveEngineOf, providerOrder, t, scope, liveEngineAgent, selected.modelId, selected.providerId, foldedProviderIds],
+    [entries, resolvableEntries, favorites, recentModels, resolveDeviceFavorite, resolvePluginFavorite, matchesPluginFavorite, query, effectiveRail, effectiveEngineOf, providerOrder, t, scope, liveEngineAgent, selected.modelId, selected.providerId, foldedProviderIds],
   );
   // 已隐藏区只跟「全部」与某个供应商的视图走(收藏 / 最近 / 模型组是另一种清单);
   // 搜索时 effectiveRail 已回到「全部」,所以搜索天然覆盖所有被隐藏的模型。
@@ -1063,7 +1150,7 @@ function UnifiedModelPanelContent({
   // 当前选中的模型就在隐藏区里时直接展开:打开面板必须看得见自己正在用什么。
   const selectedIsHidden = hiddenSections.some((section) =>
     section.rows.some((row) =>
-      row.entry.providerId === selected.providerId && entryMatchesModelId(row.entry, selected.modelId)));
+      !row.pluginEngine && row.entry.providerId === selected.providerId && entryMatchesModelId(row.entry, selected.modelId)));
   const hiddenShown = hiddenRowCount > 0 && (hiddenExpanded || selectedIsHidden || query.trim() !== '');
   const sections = useMemo(
     () => (hiddenShown ? [...listedSections, ...hiddenSections] : listedSections),
@@ -1209,6 +1296,105 @@ function UnifiedModelPanelContent({
     },
   });
 
+  const pluginFavoriteEncodeOptions = useMemo(
+    () => ({
+      homeDeviceId: favoritesHomeDeviceId,
+      shareFavoriteKeys,
+      wireLimit: !!favoritesListDeviceId,
+    }),
+    [favoritesHomeDeviceId, shareFavoriteKeys, favoritesListDeviceId],
+  );
+  const selectPluginEngineFavorite = (resolved: ResolvedPluginEngineFavorite) => {
+    if (!pluginEngines) return;
+    void runExternal(async () => {
+      const result = pluginEngines.onSelect({
+        providerId: resolved.engine.providerId,
+        modelId: resolved.row.id,
+        ...(resolved.effort ? { effort: resolved.effort } : {}),
+        ...(resolved.engine.deviceId ? { deviceId: resolved.engine.deviceId } : {}),
+      });
+      const applied = typeof result === 'object' ? await result : result;
+      if (applied !== false) onPluginEnginePicked?.();
+      return applied;
+    });
+  };
+  const pluginEngineFavoritesController: PluginEngineFavoritesController | undefined =
+    pluginEngines && selectionPolicy === 'personalized'
+      ? {
+          canFavorite: (engine) =>
+            pluginEngineFavoriteProviderId(engine, pluginFavoriteEncodeOptions) !== null,
+          addFavorite: (engine, modelId, effort, flashKey) => {
+            const config = pluginEngineFavoriteConfig(
+              engine,
+              modelId,
+              effort,
+              pluginFavoriteEncodeOptions,
+            );
+            if (!config) return;
+            void runExternal(async () => {
+              try {
+                await homeFavoriteStore.add(config);
+                flashFavorite(flashKey);
+              } catch {
+                toast.error(t('newChat.modelSelector.unified.favoritesSaveFailed'));
+                return false;
+              }
+            });
+          },
+          removeFavorite: (uid) => {
+            if (flyAnchor?.kind === 'fav' && flyAnchor.uid === uid) closeFlyout();
+            void runExternal(async () => {
+              try {
+                await homeFavoriteStore.remove(uid);
+              } catch {
+                toast.error(t('newChat.modelSelector.unified.favoritesSaveFailed'));
+                return false;
+              }
+            });
+          },
+          updateFavoriteEffort: (resolved, nextEffort) => {
+            if (nextEffort === resolved.effort) return;
+            void runExternal(async () => {
+              const live = isPluginEngineFavoriteActive(
+                resolved,
+                pluginEngines.active,
+                pluginEngines.running,
+              );
+              const selectionBase = {
+                providerId: resolved.engine.providerId,
+                modelId: resolved.row.id,
+                ...(resolved.engine.deviceId ? { deviceId: resolved.engine.deviceId } : {}),
+              };
+              if (live) {
+                try {
+                  const res = pluginEngines.onSelect({ ...selectionBase, effort: nextEffort });
+                  const applied = typeof res === 'object' ? await res : res;
+                  if (applied === false) return false;
+                } catch {
+                  return false;
+                }
+              }
+              try {
+                await homeFavoriteStore.update(resolved.favorite.uid, { effort: nextEffort });
+              } catch {
+                if (live && resolved.effort) {
+                  try {
+                    await pluginEngines.onSelect({ ...selectionBase, effort: resolved.effort });
+                  } catch {
+                    // Best-effort rollback; error toast still informs the user.
+                  }
+                }
+                toast.error(t('newChat.modelSelector.unified.favoritesSaveFailed'));
+                return false;
+              }
+            });
+          },
+          justFavoritedKey: justFavorited,
+          configurationEnabled,
+          interactionDisabled: interactionDisabled || actionPending,
+        }
+      : undefined;
+
   // ── 浮层 ─────────────────────────────────────────────────────────────────
   const flyTarget = useMemo(() => {
     if (!flyAnchor) return null;
@@ -1265,12 +1451,23 @@ function UnifiedModelPanelContent({
   const quotaProviderOf = (section: (typeof sections)[number]): string | null => {
     if (section.group?.type === 'provider') return section.group.providerId;
     const first = section.rows[0];
-    if (!first || section.rows.some(row => row.agentDeviceId || row.entry.providerId !== first.entry.providerId)) return null;
+    if (!first || first.pluginEngine || section.rows.some(row => row.pluginEngine || row.agentDeviceId || row.entry.providerId !== first.entry.providerId)) return null;
     if (sections.some(other => other.group?.type === 'provider' && other.group.providerId === first.entry.providerId)) return null;
     const firstSourceSection = sections.find(other => other.rows.length > 0 && other.rows.every(row =>
-      !row.agentDeviceId && row.entry.providerId === first.entry.providerId));
+      !row.pluginEngine && !row.agentDeviceId && row.entry.providerId === first.entry.providerId));
     return firstSourceSection === section ? first.entry.providerId : null;
   };
+  const favoritesSection = sections.find((section) => section.kind === 'favorites');
+  const separateAllPrefix = effectiveRail.kind === 'all' && (!!pinnedTop || !!visiblePluginEngines?.engines.length);
+  const listSections = useMemo(() => separateAllPrefix ? sections.filter((section) => section.kind !== 'favorites') : sections, [separateAllPrefix, sections]);
+  const hasVisiblePluginEngineMatch =
+    !!visiblePluginEngines &&
+    matchPluginEngineRows(
+      visiblePluginEngines.engines,
+      query,
+      (engine) => activePluginEngineModelId(visiblePluginEngines.active, engine),
+      defaultPluginModelLabel.toLowerCase(),
+    ) > 0;
   /**
    * 「已隐藏」区的入口:折叠时排在列表末尾,展开后变成该区的标题。搜索词或当前选中项
    * 把它强制展开时仍可点,只是收不起来(aria-expanded 如实反映)。
@@ -1306,10 +1503,10 @@ function UnifiedModelPanelContent({
   useLayoutEffect(() => {
     if (waitingForWindow && !listRef.current?.contains(document.activeElement)) setWindowed(true);
   }, [waitingForWindow]);
-  const windowEnabled = windowed && hasRows && !remoteListPending && !catalogNotice && effectiveRail.kind !== 'model-groups';
+  const windowEnabled = windowed && hasRows && !remoteListPending && !catalogNotice && effectiveRail.kind !== 'model-groups' && effectiveRail.kind !== 'plugin-engine';
   const rowIsDisabled = (row: UnifiedListRow, knownConfig?: UnifiedRowConfig) => {
     if (interactionDisabled || actionPending || row.unavailable) return true;
-    if (!isRouteDisabled || row.agentDeviceId) return false;
+    if (!isRouteDisabled || row.agentDeviceId || row.pluginEngine) return false;
     const config = knownConfig ?? withOptimisticConfig(
       row.anchor, configOf(row.entry, row.favorite ?? row.recent, effectiveRail), optimisticConfig,
     );
@@ -1317,7 +1514,7 @@ function UnifiedModelPanelContent({
   };
   const modelWindow = useUnifiedModelWindow({
     enabled: windowEnabled,
-    sections,
+    sections: listSections,
     listRef,
     flyAnchor,
     isRowDisabled: rowIsDisabled,
@@ -1646,6 +1843,7 @@ function UnifiedModelPanelContent({
             favorites,
             recentModels,
             ...(resolveDeviceFavorite ? { resolveForeignFavorite: resolveDeviceFavorite } : {}),
+            ...(resolvePluginFavorite ? { resolvePluginEngineFavorite: resolvePluginFavorite } : {}),
             query: '',
             rail: RAIL_ALL,
             effectiveEngineOf,
@@ -1653,7 +1851,7 @@ function UnifiedModelPanelContent({
             ...(listHiddenProviderIds?.size ? { listHiddenProviderIds } : {}),
           })
         : [],
-    [widthSizerActive, resolvableEntries, favorites, recentModels, resolveDeviceFavorite, effectiveEngineOf, providerOrder, listHiddenProviderIds],
+    [widthSizerActive, resolvableEntries, favorites, recentModels, resolveDeviceFavorite, resolvePluginFavorite, effectiveEngineOf, providerOrder, listHiddenProviderIds],
   );
   const widthSizerRef = useRef<HTMLDivElement>(null);
   const [widthMeasure, setWidthMeasure] = useState<ReturnType<typeof createWidthMeasure> | null>(null);
@@ -1748,6 +1946,26 @@ function UnifiedModelPanelContent({
     );
   };
   const renderOption = (row: UnifiedListRow, navigation?: RowNavigationProps) => {
+    if (row.pluginEngine) {
+      return (
+        <PluginEngineFavoriteRow
+          key={anchorKey(row.anchor)}
+          resolved={row.pluginEngine}
+          {...navigation}
+          anchor={row.anchor}
+          active={sameAnchor(flyAnchor, row.anchor)}
+          readable={readableRows}
+          configurationEnabled={configurationEnabled}
+          interactionDisabled={interactionDisabled || actionPending}
+          onSelect={() => selectPluginEngineFavorite(row.pluginEngine!)}
+          {...(selectionPolicy === 'personalized' && pluginEngineFavoritesController
+            ? { onRemove: () => pluginEngineFavoritesController.removeFavorite(row.pluginEngine!.favorite.uid) }
+            : {})}
+          onReveal={revealFlyout}
+          onRevealForKeyboard={revealFlyoutForKeyboard}
+        />
+      );
+    }
     if (row.agentDeviceId) return renderDeviceFavoriteRow(row, false, navigation);
     const config = withOptimisticConfig(
       row.anchor,
@@ -1849,6 +2067,13 @@ function UnifiedModelPanelContent({
     );
   };
 
+  const renderSection = (section: (typeof sections)[number], previous?: (typeof sections)[number]) => (
+    <div key={section.key} role="group" aria-label={sectionLabel(section)}>
+      {section.hidden && !previous?.hidden ? hiddenDisclosure : null}
+      {renderSectionLabel(section)}
+      {section.rows.map((row) => renderOption(row))}
+    </div>
+  );
   const visibleGroups = new Map<number, typeof modelWindow.virtualItems>();
   for (const measurement of modelWindow.virtualItems) {
     const index = modelWindow.items[measurement.index]!.sectionIndex;
@@ -1909,7 +2134,22 @@ function UnifiedModelPanelContent({
         </div>
       )}
       {favoritesListDeviceId && remoteFavorites.error ? <div role="status" className="px-3 py-2 text-13 text-[var(--text-secondary)]">{t(favoritesSyncFailureI18nKey(remoteFavorites.errorCode))}</div> : null}
-      {pinnedTop && effectiveRail.kind === 'all' ? pinnedTop : null}
+      {separateAllPrefix && !catalogNotice && !remoteListPending && (
+        <>
+          {favoritesSection ? renderSection(favoritesSection) : null}
+          {pinnedTop ?? null}
+          {visiblePluginEngines && visiblePluginEngines.engines.length > 0 ? (
+            <PluginEnginesSection
+              picker={visiblePluginEngines}
+              query={query}
+              onPicked={() => onPluginEnginePicked?.()}
+              {...(pluginEngineFavoritesController ? { favorites: pluginEngineFavoritesController } : {})}
+              panelElement={panelElement}
+              {...(overlayClassName !== undefined ? { overlayClassName } : {})}
+            />
+          ) : null}
+        </>
+      )}
       {favoritesPinned && effectiveRail.kind === 'favorites' && !query.trim() ? favoritesPinned : null}
       {!remoteListPending && remoteRail !== null ? remoteSources?.status : null}
     </>
@@ -1924,6 +2164,7 @@ function UnifiedModelPanelContent({
       <UnifiedModelRail
         providerUsage={providerUsage}
         {...(providerGroupUsage ? { providerGroupUsage } : {})}
+        {...(routeUsageMember ? { routeUsageMember } : {})}
         items={railItems}
         active={effectiveRail}
         onSelect={handleRailSelect}
@@ -1993,7 +2234,29 @@ function UnifiedModelPanelContent({
           {effectiveRail.kind === 'model-groups' ? (
             (effectiveRail.deviceId ? renderDeviceModelGroups?.(effectiveRail.deviceId) : modelGroupsView) ?? null
           ) : effectiveRail.kind === 'plugin-engine' ? (
-            renderPluginEngine?.(effectiveRail.providerId, effectiveRail.deviceId) ?? null
+            <>
+              {favoritesSection ? renderSection(favoritesSection) : null}
+              {visiblePluginEngines ? (
+                <PluginEnginesSection
+                  picker={{
+                    ...visiblePluginEngines,
+                    engines: visiblePluginEngines.engines.filter((engine) =>
+                      isSamePluginEngineChoice(engine, {
+                        providerId: effectiveRail.providerId,
+                        deviceId: effectiveRail.deviceId,
+                      }),
+                    ),
+                  }}
+                  query=""
+                  onPicked={() => onPluginEnginePicked?.()}
+                  {...(pluginEngineFavoritesController ? { favorites: pluginEngineFavoritesController } : {})}
+                  panelElement={panelElement}
+                  {...(overlayClassName !== undefined ? { overlayClassName } : {})}
+                />
+              ) : (
+                renderPluginEngine?.(effectiveRail.providerId, effectiveRail.deviceId) ?? null
+              )}
+            </>
           ) : remoteListPending ? (
             remoteSources?.failure ?? (
               <div
@@ -2005,8 +2268,22 @@ function UnifiedModelPanelContent({
               </div>
             )
           ) : catalogNotice ? (
-            catalogNotice
-          ) : !hasRows && hiddenRowCount === 0 && !(pinnedTopHasRows && effectiveRail.kind === 'all')
+            <>
+              {effectiveRail.kind === 'all' && favoritesSection ? renderSection(favoritesSection) : null}
+              {effectiveRail.kind === 'all' && pinnedTop ? pinnedTop : null}
+              {effectiveRail.kind === 'all' && visiblePluginEngines && visiblePluginEngines.engines.length > 0 ? (
+                <PluginEnginesSection
+                  picker={visiblePluginEngines}
+                  query={query}
+                  onPicked={() => onPluginEnginePicked?.()}
+                  {...(pluginEngineFavoritesController ? { favorites: pluginEngineFavoritesController } : {})}
+                  panelElement={panelElement}
+                  {...(overlayClassName !== undefined ? { overlayClassName } : {})}
+                />
+              ) : null}
+              {catalogNotice}
+            </>
+          ) : !hasRows && hiddenRowCount === 0 && !(effectiveRail.kind === 'all' && (pinnedTopHasRows || hasVisiblePluginEngineMatch))
             && !(favoritesPinnedHasRows && effectiveRail.kind === 'favorites' && !query.trim()) ? (
             emptyCatalogNotice ?? (
               // 与跨 Harness 提示一样,空态文案在已定宽的面板内换行,不参与 max-content 撑宽。
@@ -2028,7 +2305,7 @@ function UnifiedModelPanelContent({
                 style={{ height: modelWindow.virtualizer.getTotalSize() }}
               >
                 {Array.from(visibleGroups, ([index, items]) => {
-                  const section = sections[index]!;
+                  const section = listSections[index]!;
                   return (
                     <div key={section.key} role="group" aria-label={sectionLabel(section)} className="absolute inset-x-0 top-0">
                       {items.map((measurement) => {
@@ -2049,7 +2326,7 @@ function UnifiedModelPanelContent({
                               tabIndex: modelWindow.entryKey === item.key ? 0 : -1,
                               position: { index: item.rowIndex + 1, total: section.rows.length },
                             }) : <>
-                              {section.hidden && !sections[index - 1]?.hidden ? hiddenDisclosure : null}
+                              {section.hidden && !listSections[index - 1]?.hidden ? hiddenDisclosure : null}
                               {renderSectionLabel(section)}
                             </>}
                           </div>
@@ -2061,13 +2338,7 @@ function UnifiedModelPanelContent({
               </div>
               {hiddenShown ? null : hiddenDisclosure}
               </>
-            ) : <>{sections.map((section, sectionIndex) => (
-              <div key={section.key} role="group" aria-label={sectionLabel(section)}>
-                {section.hidden && !sections[sectionIndex - 1]?.hidden ? hiddenDisclosure : null}
-                {renderSectionLabel(section)}
-                {section.rows.map((row) => renderOption(row))}
-              </div>
-            ))}{hiddenShown ? null : hiddenDisclosure}</>
+            ) : <>{listSections.map((section, index) => renderSection(section, listSections[index - 1]))}{hiddenShown ? null : hiddenDisclosure}</>
           )}
         </div>
         {/* 定宽 sizer(见 widthSizerSections 的说明):不可见、零高度、不进 listbox,
@@ -2093,6 +2364,23 @@ function UnifiedModelPanelContent({
                   <span className="truncate">{widthCandidates.label}</span>
                 </div>
                 {widthCandidates.row && ((row) => {
+                  if (row.pluginEngine) {
+                    return (
+                      <PluginEngineFavoriteRow
+                        key={anchorKey(row.anchor)}
+                        resolved={row.pluginEngine}
+                        anchor={row.anchor}
+                        active={false}
+                        measurementOnly
+                        configurationEnabled={configurationEnabled}
+                        interactionDisabled
+                        onSelect={noop}
+                        onRemove={noop}
+                        onReveal={noop}
+                        onRevealForKeyboard={noop}
+                      />
+                    );
+                  }
                   if (row.agentDeviceId) return renderDeviceFavoriteRow(row, true);
                   const config = configOf(row.entry, row.favorite ?? row.recent, RAIL_ALL);
                   const priceDisplay = priceDisplayOf(row.entry, config);
@@ -2144,6 +2432,26 @@ function UnifiedModelPanelContent({
         >
           {(() => {
             const target = flyTarget;
+            if (target.pluginEngine) {
+              const pluginTarget = target.pluginEngine;
+              return (
+                <PluginEngineModelConfig
+                  engine={pluginTarget.engine}
+                  row={pluginTarget.row}
+                  label={pluginEngineModelLabel(pluginTarget.row)}
+                  effort={pluginTarget.effort}
+                  effortLabel={pluginEngineEffortLabel}
+                  state="favorite"
+                  disabled={interactionDisabled || actionPending}
+                  onChange={(effort) =>
+                    pluginEngineFavoritesController?.updateFavoriteEffort(pluginTarget, effort)
+                  }
+                  onRemoveFavorite={() =>
+                    pluginEngineFavoritesController?.removeFavorite(pluginTarget.favorite.uid)
+                  }
+                />
+              );
+            }
             // 深度 / Fast 写入在途时显示目标值,松手即停在新档(见 withOptimisticConfig)。
             const config = withOptimisticConfig(
               target.anchor,
