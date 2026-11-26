@@ -6650,6 +6650,7 @@ describe('sidebar topic reply navigation', () => {
               rootAuthorName: 'Me',
               rootAuthorBotId: 'self',
               rootText: 'Deploy pipeline tweak',
+              rootKind: 'task',
               replyCount: 3,
               participated: true,
               following: false,
@@ -6702,7 +6703,7 @@ describe('sidebar topic reply navigation', () => {
 
     fireEvent.click(headerBtn);
     const panel = await screen.findByTestId('bot-group-thread-list-panel');
-    expect(within(panel).getByText('Deploy pipeline tweak')).toBeTruthy();
+    expect(within(panel).getByText('[bots.groupChat.server.thread.rootKind.task] Deploy pipeline tweak')).toBeTruthy();
     expect(within(panel).getByText('Billing invoice question')).toBeTruthy();
     expect(within(panel).queryByText('Random coffee chat')).toBeNull();
     // Clean 2-line row: latest reply preview line is omitted.

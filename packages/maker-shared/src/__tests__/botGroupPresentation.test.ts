@@ -21,8 +21,10 @@ import {
   botGroupActivityAt,
   latestBotGroupMessage,
   botGroupCodeRefLabel,
+  describeBotGroupThreadRootFallback,
   extractBotGroupThreadCodeRefsFromMessages,
   filterBotGroupThreads,
+  formatBotGroupThreadRootTitle,
   hasActionableGroupThreads,
   isBotGroupThreadActionable,
   isBotGroupThreadMine,
@@ -602,5 +604,48 @@ describe('in-group thread index filtering and quiet unread projection', () => {
     const withRefs = thread({ rootId: 'has-refs', participated: true, refs });
     expect(filterBotGroupThreads([withRefs, threads[4]!], 'mine', '#13080').recent.map(t => t.rootId)).toEqual(['has-refs']);
     expect(filterBotGroupThreads([withRefs, threads[4]!], 'mine', '13022').recent.map(t => t.rootId)).toEqual(['has-refs']);
+  });
+
+  it('classifies non-text root messages (task cards, media, shares, cards) and formats restrained titles', () => {
+    const labels = {
+      kinds: { task: '任务', image: '图片', video: '视频', audio: '语音', file: '文件', share: '转发回复', card: '卡片' },
+      empty: '没有文字内容',
+    };
+    const liveTaskCard = buildBotGroupLiveTaskCard({
+      taskId: 'task-99',
+      deviceId: 'dev-1',
+      title: '修复 Windows 群聊顶部群名提示',
+      state: 'idle',
+      requesterName: 'zini',
+      botName: 'hihi',
+      prUrl: 'https://github.com/makecindy/cindy/pull/13147',
+    }, { task: '任务', untitled: '未命名任务', states: { running: '进行中', waiting: '等待', idle: '空闲', failed: '失败' } });
+
+    const taskFallback = describeBotGroupThreadRootFallback({ author: { kind: 'bot' }, content: [liveTaskCard] });
+    expect(taskFallback).toEqual({ kind: 'task', text: '修复 Windows 群聊顶部群名提示' });
+    expect(formatBotGroupThreadRootTitle({ rootText: taskFallback!.text, rootKind: taskFallback!.kind }, labels))
+      .toBe('[任务] 修复 Windows 群聊顶部群名提示');
+
+    // A human cannot forge a teammate task card; it degrades to generic card.
+    expect(describeBotGroupThreadRootFallback({ author: { kind: 'human' }, content: [liveTaskCard] }))
+      .toEqual({ kind: 'card', text: '' });
+
+    expect(describeBotGroupThreadRootFallback({ content: [{ type: 'media', caption: 'IMG_4097.jpg' }] }))
+      .toEqual({ kind: 'image', text: 'IMG_4097.jpg' });
+    expect(formatBotGroupThreadRootTitle({ rootText: 'IMG_4097.jpg', rootKind: 'image' }, labels)).toBe('[图片]');
+
+    expect(describeBotGroupThreadRootFallback({ content: [{ type: 'media', caption: 'demo.mp4' }] }))
+      .toEqual({ kind: 'video', text: 'demo.mp4' });
+    expect(formatBotGroupThreadRootTitle({ rootText: 'demo.mp4', rootKind: 'video' }, labels)).toBe('[视频]');
+
+    expect(describeBotGroupThreadRootFallback({ content: [{ type: 'media', caption: 'voice.m4a' }] }))
+      .toEqual({ kind: 'audio', text: 'voice.m4a' });
+    expect(formatBotGroupThreadRootTitle({ rootText: 'voice.m4a', rootKind: 'audio' }, labels)).toBe('[语音]');
+
+    expect(describeBotGroupThreadRootFallback({ content: [{ type: 'media', caption: 'spec.pdf' }] }))
+      .toEqual({ kind: 'file', text: 'spec.pdf' });
+    expect(formatBotGroupThreadRootTitle({ rootText: 'spec.pdf', rootKind: 'file' }, labels)).toBe('[文件] spec.pdf');
+    expect(formatBotGroupThreadRootTitle({ rootText: '', rootKind: 'file' }, labels)).toBe('[文件]');
+    expect(formatBotGroupThreadRootTitle({ rootText: '', rootKind: undefined }, labels)).toBe('没有文字内容');
   });
 });

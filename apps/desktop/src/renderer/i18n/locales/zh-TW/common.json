@@ -12246,7 +12246,16 @@
           "indexEmptyAll": "這個群聊還沒有話題",
           "indexEmptySearch": "沒有符合的話題",
           "viewAllThreads": "查看全部話題",
-          "syncingHistory": "正在追溯更早話題…"
+          "syncingHistory": "正在追溯更早話題…",
+          "rootKind": {
+            "task": "任務",
+            "image": "圖片",
+            "video": "影片",
+            "audio": "語音",
+            "file": "檔案",
+            "share": "轉發回覆",
+            "card": "卡片"
+          }
         },
         "replyPlaceholder": "回覆這則訊息，可用 @ 點名夥伴…",
         "sendReply": "傳送回覆",

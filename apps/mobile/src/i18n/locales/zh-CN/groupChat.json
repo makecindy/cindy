@@ -448,7 +448,16 @@
     "hintOne": "话题有新回复",
     "hintMany_one": "{{count}} 个话题有新回复",
     "hintMany_other": "{{count}} 个话题有新回复",
-    "syncingHistory": "正在追溯更早话题…"
+    "syncingHistory": "正在追溯更早话题…",
+    "rootKind": {
+      "task": "任务",
+      "image": "图片",
+      "video": "视频",
+      "audio": "语音",
+      "file": "文件",
+      "share": "转发回复",
+      "card": "卡片"
+    }
   },
   "mask": {
     "toolAccess": "工具权限",

@@ -12246,7 +12246,16 @@
           "indexEmptyAll": "这个群聊还没有话题",
           "indexEmptySearch": "没有匹配的话题",
           "viewAllThreads": "查看全部话题",
-          "syncingHistory": "正在追溯更早话题…"
+          "syncingHistory": "正在追溯更早话题…",
+          "rootKind": {
+            "task": "任务",
+            "image": "图片",
+            "video": "视频",
+            "audio": "语音",
+            "file": "文件",
+            "share": "转发回复",
+            "card": "卡片"
+          }
         },
         "replyPlaceholder": "回复这条消息，可用 @ 点名伙伴…",
         "sendReply": "发送回复",

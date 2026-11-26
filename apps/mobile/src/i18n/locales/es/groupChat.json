@@ -457,7 +457,16 @@
     "hintMany_one": "Nuevas respuestas en {{count}} hilo",
     "hintMany_many": "Nuevas respuestas en {{count}} hilos",
     "hintMany_other": "Nuevas respuestas en {{count}} hilos",
-    "syncingHistory": "Cargando hilos anteriores…"
+    "syncingHistory": "Cargando hilos anteriores…",
+    "rootKind": {
+      "task": "Tarea",
+      "image": "Imagen",
+      "video": "Video",
+      "audio": "Audio",
+      "file": "Archivo",
+      "share": "Respuesta compartida",
+      "card": "Tarjeta"
+    }
   },
   "mask": {
     "toolAccess": "Acceso a herramientas",

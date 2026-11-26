@@ -12246,7 +12246,16 @@
           "indexEmptyAll": "이 그룹에 아직 스레드가 없습니다",
           "indexEmptySearch": "일치하는 스레드가 없습니다",
           "viewAllThreads": "전체 스레드 보기",
-          "syncingHistory": "이전 스레드 불러오는 중…"
+          "syncingHistory": "이전 스레드 불러오는 중…",
+          "rootKind": {
+            "task": "작업",
+            "image": "이미지",
+            "video": "동영상",
+            "audio": "오디오",
+            "file": "파일",
+            "share": "공유된 답글",
+            "card": "카드"
+          }
         },
         "replyPlaceholder": "이 메시지에 답글을 쓰세요. @로 동반자를 멘션할 수 있어요…",
         "sendReply": "답글 보내기",

@@ -448,7 +448,16 @@
     "hintOne": "Neue Antworten in einem Thread",
     "hintMany_one": "Neue Antworten in {{count}} Thread",
     "hintMany_other": "Neue Antworten in {{count}} Threads",
-    "syncingHistory": "Ältere Threads werden geladen…"
+    "syncingHistory": "Ältere Threads werden geladen…",
+    "rootKind": {
+      "task": "Aufgabe",
+      "image": "Bild",
+      "video": "Video",
+      "audio": "Audio",
+      "file": "Datei",
+      "share": "Geteilte Antwort",
+      "card": "Karte"
+    }
   },
   "mask": {
     "toolAccess": "Tool-Zugriff",

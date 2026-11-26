@@ -448,7 +448,16 @@
     "hintOne": "New replies in a thread",
     "hintMany_one": "New replies in {{count}} thread",
     "hintMany_other": "New replies in {{count}} threads",
-    "syncingHistory": "Loading earlier threads…"
+    "syncingHistory": "Loading earlier threads…",
+    "rootKind": {
+      "task": "Task",
+      "image": "Image",
+      "video": "Video",
+      "audio": "Audio",
+      "file": "File",
+      "share": "Shared reply",
+      "card": "Card"
+    }
   },
   "mask": {
     "toolAccess": "Tool access",

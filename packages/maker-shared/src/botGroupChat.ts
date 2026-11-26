@@ -339,11 +339,15 @@ export interface BotGroupThreadCodeRef {
   url: string;
 }
 
+export type BotGroupThreadRootKind = 'task' | 'image' | 'video' | 'audio' | 'file' | 'share' | 'card';
+
 export interface BotGroupThreadSummary {
   rootId: string;
   rootAuthorName: string;
   rootAuthorBotId: string | null;
   rootText: string;
+  /** Content type of a non-text root message (task card, media, share, card) for compact list labels. */
+  rootKind?: BotGroupThreadRootKind;
   rootCreatedAt?: number;
   replyCount: number;
   unread: BotGroupThreadUnread;

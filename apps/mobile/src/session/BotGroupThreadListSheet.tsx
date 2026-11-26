@@ -7,6 +7,7 @@ import {
   botGroupCodeRefLabel,
   botGroupThreadActivityAt,
   filterBotGroupThreads,
+  formatBotGroupThreadRootTitle,
   isBotGroupThreadActionable,
   pickBotGroupThreadDisplayRefs,
   type BotGroupThreadFilter,
@@ -45,8 +46,19 @@ function ThreadRow({
   const actionable = isBotGroupThreadActionable(thread);
   const activityAt = botGroupThreadActivityAt(thread);
   const timeText = formatCompactTime(activityAt, t);
-  const responders = thread.responders ?? [];
   const { issue, pr } = pickBotGroupThreadDisplayRefs(thread.refs);
+  const rootTitle = formatBotGroupThreadRootTitle(thread, {
+    kinds: {
+      task: t(key('rootKind.task')),
+      image: t(key('rootKind.image')),
+      video: t(key('rootKind.video')),
+      audio: t(key('rootKind.audio')),
+      file: t(key('rootKind.file')),
+      share: t(key('rootKind.share')),
+      card: t(key('rootKind.card')),
+    },
+    empty: t(key('emptyReply')),
+  });
 
   return (
     <View style={styles.row}>
@@ -64,7 +76,7 @@ function ThreadRow({
             size={iconSize.lg}
           />
           <Text numberOfLines={1} style={[styles.rootText, actionable && styles.rootTextUnread]}>
-            {thread.rootText || t(key('emptyReply'))}
+            {rootTitle}
           </Text>
           {timeText ? <Text style={styles.timeText}>{timeText}</Text> : null}
         </View>
@@ -72,23 +84,6 @@ function ThreadRow({
 
       <View style={styles.metaRow}>
         <Pressable accessibilityRole="button" onPress={onPress} style={styles.metaMain}>
-          {responders.length > 0 ? (
-            <View style={styles.responders}>
-              {responders.slice(0, 3).map((responder, index) => (
-                <View
-                  key={responder.id}
-                  style={[styles.responderAvatar, index > 0 && styles.responderOverlap, { zIndex: responders.length - index }]}
-                >
-                  <BotGroupAvatar
-                    deviceId=""
-                    online
-                    identity={identityFor(responder.authorBotId ?? '', responder.authorName)}
-                    size={iconSize.md}
-                  />
-                </View>
-              ))}
-            </View>
-          ) : null}
           <Text style={styles.metaText}>{t(key('replyCount'), { count: thread.replyCount })}</Text>
           {thread.unread.mentioned && actionable ? (
             <View style={styles.tagPill}>
@@ -373,14 +368,6 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     gap: spacing.xs + 2,
     paddingLeft: 26,
   },
-  responders: { flexDirection: 'row', alignItems: 'center' },
-  responderAvatar: {
-    borderRadius: radius.pill,
-    borderWidth: 1.5,
-    borderColor: colors.surface,
-    overflow: 'hidden',
-  },
-  responderOverlap: { marginLeft: -spacing.xs },
   metaText: {
     fontSize: typeScale.caption,
     lineHeight: lineHeight.caption,

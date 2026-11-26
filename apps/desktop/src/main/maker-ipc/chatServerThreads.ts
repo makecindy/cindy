@@ -301,8 +301,9 @@ export function isShareableThreadReply(message: ThreadMessage): boolean {
 
 const THREAD_PREVIEW_TEXT_MAX = 280;
 
-/** Reply text for a one-line preview; quote/process/task cards and media are excluded and Markdown links become plain labels. */
+/** Reply text for a one-line preview; quote/process/task/share cards and media are excluded and Markdown links become plain labels. */
 export function threadPreviewText(message: ThreadMessage): string {
+  if (readBotGroupThreadShareCard(message)) return '';
   const text = message.content
     .flatMap(block => {
       if (block.type === 'media') return [];

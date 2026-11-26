@@ -12292,7 +12292,16 @@
           "indexEmptyAll": "Noch keine Threads in dieser Gruppe",
           "indexEmptySearch": "Keine passenden Threads",
           "viewAllThreads": "Alle Threads anzeigen",
-          "syncingHistory": "Ältere Threads werden geladen…"
+          "syncingHistory": "Ältere Threads werden geladen…",
+          "rootKind": {
+            "task": "Aufgabe",
+            "image": "Bild",
+            "video": "Video",
+            "audio": "Audio",
+            "file": "Datei",
+            "share": "Geteilte Antwort",
+            "card": "Karte"
+          }
         },
         "replyPlaceholder": "Antworte auf diese Nachricht; mit @ erwähnst du einen Freund…",
         "sendReply": "Antwort senden",

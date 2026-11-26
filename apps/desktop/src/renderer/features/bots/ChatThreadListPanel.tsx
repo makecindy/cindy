@@ -11,6 +11,7 @@ import {
   botGroupCodeRefLabel,
   botGroupThreadActivityAt,
   filterBotGroupThreads,
+  formatBotGroupThreadRootTitle,
   isBotGroupThreadActionable,
   pickBotGroupThreadDisplayRefs,
   type BotGroupThreadFilter,
@@ -142,9 +143,20 @@ function ThreadIndexRow({
   const activityMs = botGroupThreadActivityAt(thread);
   const activityIso = activityMs > 0 ? new Date(activityMs).toISOString() : undefined;
   const relative = useRelativeTime(activityIso, { hovered });
-  const responders = thread.responders ?? [];
   const { issue, pr } = pickBotGroupThreadDisplayRefs(thread.refs);
   const prStatus = pr ? prStatuses.get(prStatusKey(toPrIdentity(pr))) : undefined;
+  const rootTitle = formatBotGroupThreadRootTitle(thread, {
+    kinds: {
+      task: t(key('rootKind.task')),
+      image: t(key('rootKind.image')),
+      video: t(key('rootKind.video')),
+      audio: t(key('rootKind.audio')),
+      file: t(key('rootKind.file')),
+      share: t(key('rootKind.share')),
+      card: t(key('rootKind.card')),
+    },
+    empty: t(key('emptyReply')),
+  });
 
   return (
     <div
@@ -173,13 +185,13 @@ function ThreadIndexRow({
             }}
           />
           <span
-            title={thread.rootText || undefined}
+            title={rootTitle}
             className={cn(
               'min-w-0 flex-1 truncate text-13 leading-[1.54] text-[var(--text-primary)]',
               actionable ? 'font-medium' : 'font-normal',
             )}
           >
-            {thread.rootText || t(key('emptyReply'))}
+            {rootTitle}
           </span>
           {relative ? (
             <span
@@ -196,26 +208,6 @@ function ThreadIndexRow({
         onClick={onOpen}
         className="flex min-w-0 cursor-pointer flex-wrap items-center gap-x-2 gap-y-1 pb-2 pl-[36px] pr-2.5 text-11 leading-[1.455] text-[var(--text-tertiary)]"
       >
-        {responders.length > 0 ? (
-          <span aria-hidden className="flex shrink-0 items-center -space-x-1">
-            {responders.map(responder => {
-              const member = memberFor(members, responder.authorBotId);
-              return (
-                <BotAvatar
-                  key={responder.id}
-                  size="xs"
-                  className="h-[15px] w-[15px] text-10 ring-1 ring-[var(--surface)]"
-                  bot={{
-                    name: responder.authorName,
-                    avatar: member?.avatar ?? null,
-                    avatarUrl: member?.avatarUrl,
-                    avatarColor: member?.avatarColor ?? null,
-                  }}
-                />
-              );
-            })}
-          </span>
-        ) : null}
         <span className="shrink-0 tabular-nums">
           {t('bots.groupChat.server.replyCount', { count: thread.replyCount })}
         </span>

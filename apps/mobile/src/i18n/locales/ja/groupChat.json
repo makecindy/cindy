@@ -448,7 +448,16 @@
     "hintOne": "スレッドに新しい返信があります",
     "hintMany_one": "{{count}} 件のスレッドに新しい返信",
     "hintMany_other": "{{count}} 件のスレッドに新しい返信",
-    "syncingHistory": "以前のスレッドを読み込み中…"
+    "syncingHistory": "以前のスレッドを読み込み中…",
+    "rootKind": {
+      "task": "タスク",
+      "image": "画像",
+      "video": "動画",
+      "audio": "音声",
+      "file": "ファイル",
+      "share": "共有された返信",
+      "card": "カード"
+    }
   },
   "mask": {
     "toolAccess": "ツールの権限",

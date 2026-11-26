@@ -8,8 +8,8 @@ import { parseChatInvitationShareId, parseChatInvitationToken } from '@cindy/dev
 import type { ChatInviteShares } from './chatInviteShare';
 import { createConversationListState } from '@cindy/maker-shared/chatConversationList';
 import type { ChatHistory } from '@cindy/maker-shared/chat-history';
-import { readBotGroupCapabilityNotice, botGroupMessageSummaryText, botGroupQuoteFromMessage, buildBotGroupQuoteCard, readBotGroupExecutionFailure, readBotGroupQuote, readBotGroupQuoteCard, readBotGroupTaskCard, readImportedBotGroupRuntimeFailureCode, type BotGroupAttachment, type BotGroupMemberView, type BotGroupMessageView, type BotGroupRemoteChatData } from '@cindy/maker-shared/botGroupChat';
-import { chatGroupMemberName as memberName, chatGroupOwnerName, botGroupActivityAt, latestBotGroupMessage, botGroupExecutionFailureBatches, projectBotGroupExecutionFailures, extractBotGroupThreadCodeRefsFromMessages } from '@cindy/maker-shared/botGroupPresentation';
+import { readBotGroupCapabilityNotice, botGroupMessageSummaryText, botGroupQuoteFromMessage, buildBotGroupQuoteCard, readBotGroupExecutionFailure, readBotGroupLiveTaskCard, readBotGroupQuote, readBotGroupQuoteCard, readBotGroupTaskCard, readImportedBotGroupRuntimeFailureCode, type BotGroupAttachment, type BotGroupMemberView, type BotGroupMessageView, type BotGroupRemoteChatData } from '@cindy/maker-shared/botGroupChat';
+import { chatGroupMemberName as memberName, chatGroupOwnerName, botGroupActivityAt, latestBotGroupMessage, botGroupExecutionFailureBatches, projectBotGroupExecutionFailures, extractBotGroupThreadCodeRefsFromMessages, describeBotGroupThreadRootFallback } from '@cindy/maker-shared/botGroupPresentation';
 import type { HostedRemoteCollectionItem } from '@/device-link/remoteResources';
 // The app's `@/i18n` sets up this default instance; importing it here would pull React bindings into a plain client.
 import i18next from 'i18next';
@@ -466,8 +466,16 @@ export function chatGroupView(page: ChatPage, selfId: string, actors: readonly C
       const diff = BigInt(chatCursor(b.seq)) - BigInt(chatCursor(a.seq));
       return diff > 0n ? 1 : diff < 0n ? -1 : 0;
     };
+    const plainTextFor = (message: ChatMessage) => {
+      if (message.deleted || readBotGroupThreadShareCard(message)) return '';
+      const raw = bodyBlocks(message)
+        .filter(block => !(message.author.kind === 'bot' && readBotGroupLiveTaskCard(block)))
+        .flatMap(block => block.type === 'media' ? [] : [block.text ?? block.fallback ?? ''])
+        .join('\n');
+      return mobileMarkdownPreviewText(raw);
+    };
     const snippetFor = (message: ChatMessage) => {
-      const text = mobileMarkdownPreviewText(contentText(message));
+      const text = plainTextFor(message);
       if (text) return text;
       const media = chatMessageAttachments(message)[0];
       return media ? media.name : '';
@@ -504,11 +512,14 @@ export function chatGroupView(page: ChatPage, selfId: string, actors: readonly C
         ...(root && !root.deleted && root.origin !== 'system' ? [root] : []),
       ]);
       const rootCreatedAt = root ? Date.parse(root.createdAt) : undefined;
+      const rootPlainText = root && !root.deleted ? plainTextFor(root) : '';
+      const rootFallback = root && !root.deleted && !rootPlainText ? describeBotGroupThreadRootFallback(root) : null;
       summaries.push({
         rootId,
         rootAuthorName: root ? authorName(root) : '',
         rootAuthorBotId: root ? root.authorId : null,
-        rootText: root && !root.deleted ? snippetFor(root) : '',
+        rootText: rootPlainText || rootFallback?.text || '',
+        ...(rootFallback ? { rootKind: rootFallback.kind } : {}),
         ...(rootCreatedAt !== undefined && Number.isFinite(rootCreatedAt) ? { rootCreatedAt } : {}),
         replyCount: Math.max(root?.replyCount ?? 0, replies.length),
         unread: threadUnreadFor(rootId) ?? { count: 0, mentioned: false },

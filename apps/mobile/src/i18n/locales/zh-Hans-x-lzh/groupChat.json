@@ -448,7 +448,16 @@
     "hintOne": "话题有新覆",
     "hintMany_one": "{{count}} 话题有新覆",
     "hintMany_other": "{{count}} 话题有新覆",
-    "syncingHistory": "方溯旧话…"
+    "syncingHistory": "方溯旧话…",
+    "rootKind": {
+      "task": "差事",
+      "image": "图画",
+      "video": "影像",
+      "audio": "语音",
+      "file": "卷宗",
+      "share": "转传回复",
+      "card": "笺卡"
+    }
   },
   "mask": {
     "toolAccess": "工具之权柄",

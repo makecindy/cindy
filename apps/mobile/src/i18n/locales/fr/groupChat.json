@@ -457,7 +457,16 @@
     "hintMany_one": "Nouvelles réponses dans {{count}} fil",
     "hintMany_many": "Nouvelles réponses dans {{count}} fils",
     "hintMany_other": "Nouvelles réponses dans {{count}} fils",
-    "syncingHistory": "Chargement des fils précédents…"
+    "syncingHistory": "Chargement des fils précédents…",
+    "rootKind": {
+      "task": "Tâche",
+      "image": "Image",
+      "video": "Vidéo",
+      "audio": "Audio",
+      "file": "Fichier",
+      "share": "Réponse partagée",
+      "card": "Carte"
+    }
   },
   "mask": {
     "toolAccess": "Accès aux outils",

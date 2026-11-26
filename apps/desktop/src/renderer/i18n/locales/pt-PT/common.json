@@ -12390,7 +12390,16 @@
           "indexEmptyAll": "Ainda não há tópicos neste grupo",
           "indexEmptySearch": "Sem tópicos correspondentes",
           "viewAllThreads": "Ver todos os tópicos",
-          "syncingHistory": "A carregar tópicos anteriores…"
+          "syncingHistory": "A carregar tópicos anteriores…",
+          "rootKind": {
+            "task": "Tarefa",
+            "image": "Imagem",
+            "video": "Vídeo",
+            "audio": "Áudio",
+            "file": "Ficheiro",
+            "share": "Resposta partilhada",
+            "card": "Cartão"
+          }
         },
         "replyPlaceholder": "Responder a esta mensagem; use @ para mencionar um amigo…",
         "sendReply": "Enviar resposta",

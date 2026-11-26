@@ -12246,7 +12246,16 @@
           "indexEmptyAll": "このグループにはまだスレッドがありません",
           "indexEmptySearch": "一致するスレッドがありません",
           "viewAllThreads": "すべてのスレッドを見る",
-          "syncingHistory": "以前のスレッドを読み込み中…"
+          "syncingHistory": "以前のスレッドを読み込み中…",
+          "rootKind": {
+            "task": "タスク",
+            "image": "画像",
+            "video": "動画",
+            "audio": "音声",
+            "file": "ファイル",
+            "share": "共有された返信",
+            "card": "カード"
+          }
         },
         "replyPlaceholder": "このメッセージに返信。@ で仲間を指定できます…",
         "sendReply": "返信を送信",

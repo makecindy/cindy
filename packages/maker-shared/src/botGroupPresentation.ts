@@ -12,6 +12,7 @@ import {
   isBotGroupPlanOpen,
   isBotGroupCapabilityNoticeCode,
   readBotGroupRuntimeFailureReason,
+  readBotGroupThreadShareCard,
   type BotGroupDetail,
   type BotGroupErrorCode,
   type BotGroupExecutionFailureView,
@@ -23,6 +24,7 @@ import {
   type BotGroupReplyMode,
   type BotGroupSummary,
   type BotGroupThreadCodeRef,
+  type BotGroupThreadRootKind,
   type BotGroupThreadSummary,
 } from './botGroupChat.js';
 
@@ -732,6 +734,75 @@ export function botGroupCodeRefLabel(
   ref: Pick<BotGroupThreadCodeRef, 'kind' | 'provider' | 'number'>,
 ): string {
   return `${ref.kind === 'pr' && ref.provider === 'gitlab' ? '!' : '#'}${ref.number}`;
+}
+
+const IMAGE_MEDIA_EXT_RE = /\.(?:png|jpe?g|gif|webp|heic|heif|bmp|svg|avif)$/i;
+const VIDEO_MEDIA_EXT_RE = /\.(?:mp4|mov|m4v|webm|mkv|avi)$/i;
+const AUDIO_MEDIA_EXT_RE = /\.(?:mp3|m4a|wav|ogg|opus|aac|flac|amr)$/i;
+
+export interface BotGroupThreadRootFallback {
+  kind: BotGroupThreadRootKind;
+  text: string;
+}
+
+/**
+ * Classifies a non-text thread root message (task card, share card, media, or other card)
+ * so the thread list can show its type/title instead of falling back to "No text".
+ */
+export function describeBotGroupThreadRootFallback(message: {
+  deleted?: unknown;
+  threadRootId?: unknown;
+  author?: { kind?: unknown };
+  content: readonly {
+    type?: unknown;
+    namespace?: unknown;
+    schemaRevision?: unknown;
+    data?: unknown;
+    caption?: unknown;
+    mimeType?: unknown;
+  }[];
+}): BotGroupThreadRootFallback | null {
+  if (message.deleted === true) return null;
+  if (message.author?.kind === 'bot') {
+    const liveTask = message.content.map(readBotGroupLiveTaskCard).find(Boolean);
+    if (liveTask) return { kind: 'task', text: liveTask.title.trim() };
+    const task = message.content.map(readBotGroupTaskCard).find(Boolean);
+    if (task) return { kind: 'task', text: task.title.trim() };
+  }
+  if (readBotGroupThreadShareCard(message)) return { kind: 'share', text: '' };
+  const media = message.content.find(block => block.type === 'media');
+  if (media) {
+    const caption = typeof media.caption === 'string' ? media.caption.trim() : '';
+    const mime = typeof media.mimeType === 'string' ? media.mimeType.toLowerCase() : '';
+    const kind: BotGroupThreadRootKind = mime.startsWith('image/') || IMAGE_MEDIA_EXT_RE.test(caption)
+      ? 'image'
+      : mime.startsWith('video/') || VIDEO_MEDIA_EXT_RE.test(caption)
+        ? 'video'
+        : mime.startsWith('audio/') || AUDIO_MEDIA_EXT_RE.test(caption)
+          ? 'audio'
+          : 'file';
+    return { kind, text: caption };
+  }
+  const otherCard = message.content.find(block => block.type === 'card' && !readBotGroupQuoteCard(block) && !readBotGroupProcessCard(block));
+  if (otherCard) return { kind: 'card', text: '' };
+  return null;
+}
+
+/** Formats a thread row's single-line title, identifying non-text roots by type/title. */
+export function formatBotGroupThreadRootTitle(
+  thread: Pick<BotGroupThreadSummary, 'rootText' | 'rootKind'>,
+  labels: {
+    kinds: Record<BotGroupThreadRootKind, string>;
+    empty: string;
+  },
+): string {
+  const text = thread.rootText.trim();
+  if (!thread.rootKind) return text || labels.empty;
+  const tag = `[${labels.kinds[thread.rootKind]}]`;
+  if (thread.rootKind === 'image' || thread.rootKind === 'video' || thread.rootKind === 'audio') {
+    return tag;
+  }
+  return text ? `${tag} ${text}` : tag;
 }
 
 function matchesBotGroupThreadQuery(thread: BotGroupThreadSummary, needle: string): boolean {

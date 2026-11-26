@@ -12390,7 +12390,16 @@
           "indexEmptyAll": "Aún no hay hilos en este grupo",
           "indexEmptySearch": "No hay hilos que coincidan",
           "viewAllThreads": "Ver todos los hilos",
-          "syncingHistory": "Cargando hilos anteriores…"
+          "syncingHistory": "Cargando hilos anteriores…",
+          "rootKind": {
+            "task": "Tarea",
+            "image": "Imagen",
+            "video": "Video",
+            "audio": "Audio",
+            "file": "Archivo",
+            "share": "Respuesta compartida",
+            "card": "Tarjeta"
+          }
         },
         "replyPlaceholder": "Responde a este mensaje; usa @ para mencionar a un amigo…",
         "sendReply": "Enviar respuesta",

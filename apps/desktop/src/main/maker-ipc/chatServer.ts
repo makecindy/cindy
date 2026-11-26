@@ -69,7 +69,7 @@ import type { BotGroupChatService, BotGroupChatServiceDeps, BotGroupLaneTerminal
 import { groupTaskName } from './groupTaskNaming.js';
 import { readPersistedInputSenderTask, readPersistedReplyText } from './botGroupChatService.js';
 import { botGroupRuntimeFailureCode, botGroupRuntimeFailureDetail } from './botGroupRuntimeFailure.js';
-import { chatGroupMemberName, chatGroupOwnerName, botGroupExecutionFailureBatches, latestBotGroupMessage, extractBotGroupThreadCodeRefsFromMessages } from '@cindy/maker-shared/botGroupPresentation';
+import { chatGroupMemberName, chatGroupOwnerName, botGroupExecutionFailureBatches, latestBotGroupMessage, extractBotGroupThreadCodeRefsFromMessages, describeBotGroupThreadRootFallback } from '@cindy/maker-shared/botGroupPresentation';
 import { createThreadProjection, isShareableThreadReply, threadPreviewAttachments, threadPreviewText } from './chatServerThreads.js';
 import { companionSnapshot, registerCompanionHomes } from '../companion-cloud/homes.js';
 import { startCompanionCloud, type CompanionCloudRuntime } from '../companion-cloud/runtime.js';
@@ -2028,11 +2028,14 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
         ...(root && !root.deleted && root.origin !== 'system' ? [root] : []),
       ]);
       const rootCreatedAt = root ? Date.parse(root.createdAt) : undefined;
+      const rootPlainText = root && !root.deleted ? threadPreviewText(root) : '';
+      const rootFallback = root && !root.deleted && !rootPlainText ? describeBotGroupThreadRootFallback(root) : null;
       summaries.push({
         rootId,
         rootAuthorName: rootView?.authorName ?? '',
         rootAuthorBotId: rootView?.authorBotId ?? null,
-        rootText: root && !root.deleted ? threadPreviewText(root) || mediaNames(root) : '',
+        rootText: rootPlainText || rootFallback?.text || '',
+        ...(rootFallback ? { rootKind: rootFallback.kind } : {}),
         ...(rootCreatedAt !== undefined && Number.isFinite(rootCreatedAt) ? { rootCreatedAt } : {}),
         replyCount: Math.max(root?.replyCount ?? 0, replies.length),
         unread: threadUnread(rootId, s.messages, reads, s.mentionReadIds),

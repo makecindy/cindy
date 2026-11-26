@@ -1416,6 +1416,31 @@ it('projects group thread summaries with participation and persistent @mention t
   const broadcastView = chatGroupView({ snapshot: broadcastSnap, messages: [root], before: null }, id(10));
   expect(broadcastView.threads?.[0]?.mentionedMe).toBeUndefined();
   expect(broadcastView.threads?.[0]?.lastMention).toBeUndefined();
+
+  // Non-text task-card root messages resolve rootKind='task' + task title instead of empty text.
+  const taskRoot = {
+    ...message(24),
+    id: id(24),
+    seq: '24',
+    authorId: id(12),
+    author: { kind: 'bot', name: 'Helper' },
+    replyCount: 1,
+    content: [{
+      type: 'card',
+      namespace: 'cindy.task',
+      schemaRevision: 2,
+      fallback: '[任务] 修复 Windows 提示 · 空闲',
+      data: { taskId: 't-1', deviceId: null, title: '修复 Windows 提示', state: 'idle', requesterName: 'Peer', botName: 'Helper' },
+    }],
+  };
+  const taskReply = { ...message(25), id: id(25), seq: '25', authorId: id(10), author: { kind: 'human', name: 'Me' }, threadRootId: taskRoot.id, content: [{ type: 'text', text: 'Done' }] };
+  const taskSnap = { ...snapshot(), messages: [taskReply, taskRoot], reads: [] };
+  const taskView = chatGroupView({ snapshot: taskSnap, messages: [taskRoot], before: null }, id(10));
+  expect(taskView.threads?.[0]).toMatchObject({
+    rootId: taskRoot.id,
+    rootKind: 'task',
+    rootText: '修复 Windows 提示',
+  });
 });
 
 it('backfills historical threads from older pages and snapshot reads on mobile', async () => {

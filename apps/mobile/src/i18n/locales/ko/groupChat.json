@@ -448,7 +448,16 @@
     "hintOne": "스레드에 새 답글이 있습니다",
     "hintMany_one": "스레드 {{count}}개에 새 답글",
     "hintMany_other": "스레드 {{count}}개에 새 답글",
-    "syncingHistory": "이전 스레드 불러오는 중…"
+    "syncingHistory": "이전 스레드 불러오는 중…",
+    "rootKind": {
+      "task": "작업",
+      "image": "이미지",
+      "video": "동영상",
+      "audio": "오디오",
+      "file": "파일",
+      "share": "공유된 답글",
+      "card": "카드"
+    }
   },
   "mask": {
     "toolAccess": "도구 권한",

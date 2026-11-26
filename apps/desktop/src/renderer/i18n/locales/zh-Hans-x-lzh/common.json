@@ -12246,7 +12246,16 @@
           "indexEmptyAll": "此群尚无话题",
           "indexEmptySearch": "无相合之话题",
           "viewAllThreads": "览全部话题",
-          "syncingHistory": "方溯旧话…"
+          "syncingHistory": "方溯旧话…",
+          "rootKind": {
+            "task": "差事",
+            "image": "图画",
+            "video": "影像",
+            "audio": "语音",
+            "file": "卷宗",
+            "share": "转传回复",
+            "card": "笺卡"
+          }
         },
         "replyPlaceholder": "覆此讯，可用 @ 点名同伴…",
         "sendReply": "遣回复",
