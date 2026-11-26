@@ -133,7 +133,8 @@ export function startActivityPushSync(options: {
   let running: Promise<void> | undefined;
   let pending = false;
   let pendingRefresh = false;
-  let foregroundOnly = true;
+  type Trigger = "event" | "deferred-event" | "retry";
+  let pendingTrigger: Trigger = "retry";
   let deferredRegistration = false;
   let retry: ReturnType<typeof setTimeout> | undefined;
   let last: string | undefined;
@@ -189,15 +190,15 @@ export function startActivityPushSync(options: {
   const retryAfter = (delay: number) => {
     retry ??= setTimeout(() => {
       retry = undefined;
-      const automatic = !backgroundDemand;
+      const trigger = backgroundDemand ? "deferred-event" : "retry";
       backgroundDemand = false;
-      void sync(false, automatic);
+      void sync(false, trigger);
     }, Math.min(delay, 2_147_483_647));
   };
-  const attempt = async (refresh: boolean, automatic: boolean) => {
+  const attempt = async (refresh: boolean, trigger: Trigger) => {
     try {
       assertCurrent();
-      if (unsupported || (automatic && AppState.currentState !== "active")) return;
+      if (unsupported || (trigger === "retry" && AppState.currentState !== "active")) return;
       const registration = await native.getPushRegistration!();
       assertCurrent();
       if (registration.accountScope !== options.accountScope) return;
@@ -269,7 +270,7 @@ export function startActivityPushSync(options: {
       if (failure?.enabled === registration.enabled && Date.now() < failure.until && (key !== last || wantsRefresh)) {
         deferredRegistration ||= key !== last;
         // A newly observed token still needs one registration if the phone locks.
-        backgroundDemand ||= !automatic && key !== last;
+        backgroundDemand ||= trigger !== "retry" && key !== last;
         retryAfter(failure.until - Date.now());
         if (!accepted) options.onRegistered(false);
         return;
@@ -286,7 +287,7 @@ export function startActivityPushSync(options: {
       }
       // Auth acquisition may span backgrounding; don't send a recovery that
       // was only eligible while foreground. Token changes still register normally.
-      if (automatic && AppState.currentState !== "active") return;
+      if (trigger === "retry" && AppState.currentState !== "active") return;
       const refreshStale = shouldRefresh && AppState.currentState === "active";
       if (key === last && !refreshStale) return;
       const refreshedAt = Date.now();
@@ -312,8 +313,10 @@ export function startActivityPushSync(options: {
         recovery.failure = { enabled: registration.enabled, until, delay };
         if (refreshStale) recovery.pendingRefreshActivity = registration.activityId;
         const status = error && typeof error === "object" && "status" in error ? Number(error.status) : undefined;
-        if ((accepted || deferredRegistration) && key !== last && AppState.currentState === "active" &&
+        if ((accepted || deferredRegistration) && key !== last &&
+            (trigger === "event" || AppState.currentState === "active") &&
             (status === undefined || status === 408 || status === 429 || status >= 500)) {
+          backgroundDemand ||= trigger === "event";
           retryAfter(until - Date.now());
         }
         throw error;
@@ -365,18 +368,18 @@ export function startActivityPushSync(options: {
       }
     }
   };
-  const sync = (refresh = false, automatic = false) => {
-    foregroundOnly &&= automatic;
+  const sync = (refresh = false, trigger: Trigger = "event") => {
+    if (trigger === "event" || pendingTrigger === "retry") pendingTrigger = trigger;
     pending = true;
     pendingRefresh ||= refresh;
     running ??= Promise.resolve().then(async () => {
       try {
         while (pending && !controller.signal.aborted) {
           const refreshNow = pendingRefresh;
-          const automaticOnly = foregroundOnly;
-          foregroundOnly = true;
+          const triggerNow = pendingTrigger;
+          pendingTrigger = "retry";
           pending = pendingRefresh = false;
-          await attempt(refreshNow, automaticOnly);
+          await attempt(refreshNow, triggerNow);
         }
       } finally {
         running = undefined;

@@ -502,3 +502,25 @@ it.each(["stale", "rotated", "cooldown"])("retains a deferred activity refresh t
     });
   } finally { sync.dispose(); vi.useRealTimers(); }
 });
+
+// Unit, #13216: a real token change may outlive the foreground, but must not
+// start a background retry loop when the service stays unavailable.
+it("delivers one deferred native token change after lock and resumes on foreground", async () => {
+  vi.useFakeTimers();
+  const sync = startActivityPushSync(options());
+  try {
+    await sync.sync();
+    fixture.native.getPushRegistration.mockResolvedValue({ ...registration(), updateToken: "new" });
+    fetchMock.mockRejectedValue(new TypeError("offline"));
+    fixture.native.addListener.mock.calls.at(-1)![1]();
+    await vi.advanceTimersByTimeAsync(0);
+    fixture.appState.currentState = "background";
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    fixture.appState.currentState = "active";
+    fetchMock.mockResolvedValue({ ok: true } as Response);
+    await sync.sync(true);
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+    expect(JSON.parse(fetchMock.mock.calls[3][1]!.body as string).updateToken).toBe("new");
+  } finally { sync.dispose(); vi.useRealTimers(); }
+});
