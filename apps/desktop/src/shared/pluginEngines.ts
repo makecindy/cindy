@@ -44,6 +44,13 @@ export function isPluginEngineEffort(value: unknown): value is PluginEngineEffor
   return typeof value === 'string' && (PLUGIN_ENGINE_EFFORTS as readonly string[]).includes(value);
 }
 
+/** Live facts for the local settings page only. */
+export interface PluginEngineReportedModelDetails {
+  modelId: string;
+  imageInput?: boolean;
+  contextWindow?: number;
+}
+
 export interface PluginEngineModel {
   id: string;
   displayName: string;
@@ -137,6 +144,7 @@ export interface PluginEngineView {
   declaredName?: string;
   /** The models the user turned off, as the engine lists them. Not sent to phones or other computers. */
   disabledModels?: PluginEngineModel[];
+  reportedModelDetails?: PluginEngineReportedModelDetails[];
   /** Explicit per-model reasoning defaults, for settings on this computer. */
   modelEfforts?: Readonly<Partial<Record<string, PluginEngineEffort>>>;
   /**

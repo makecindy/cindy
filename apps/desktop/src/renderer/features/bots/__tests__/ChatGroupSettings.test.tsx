@@ -198,6 +198,18 @@ function activeProfile(id: string, name: string, status = 'active') {
 }
 // Component: a human member edits a personal preference, independently of the
 // manager form. Confirmed props win; failed/in-flight writes never pretend to save.
+it('lets an ordinary member move their group Cindy to a named computer', async () => {
+  const initial = { ...group(), assistantDeviceId: 'mac', assistantComputers: [{ id: 'mac', name: 'Studio' }, { id: 'win', name: 'Windows' }] };
+  const { rerender } = render(<MemoryRouter><ChatGroupSettings group={initial} /></MemoryRouter>);
+  const picker = () => screen.getByRole('combobox', { name: key('assistantComputer') });
+  expect(picker().textContent).toContain('Studio');
+  fireEvent.click(picker());
+  fireEvent.click(screen.getByRole('option', { name: 'Windows' }));
+  await waitFor(() => expect(mocks.manage).toHaveBeenCalledWith({ groupId: 'room', action: { type: 'assistantDevice', deviceId: 'win' } }));
+  rerender(<MemoryRouter><ChatGroupSettings group={{ ...initial, assistantDeviceId: 'win' }} /></MemoryRouter>);
+  expect(picker().textContent).toContain('Windows');
+});
+
 it('lets an ordinary member choose notifications and follows the confirmed cross-device value', async () => {
   const initial = { ...group(), supportsNotificationSettings: true, notificationMode: 'all' as const };
   const { rerender } = render(<MemoryRouter><ChatGroupSettings group={initial} /></MemoryRouter>);

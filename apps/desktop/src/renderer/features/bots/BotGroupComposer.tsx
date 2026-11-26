@@ -311,6 +311,7 @@ export function BotGroupComposer({
       setText(value);
     },
     members,
+    conversationKind,
     textareaRef,
     allLabels: thread ? threadAllLabels : undefined,
     allowMentionAllBots,
@@ -649,12 +650,19 @@ export function BotGroupComposer({
     if (handled) { event.preventDefault(); return; }
     if (sending || voice.isBusy) return;
     const pasted = event.clipboardData.getData('text/plain');
-    if (!richText && isLongPasteText(pasted)) {
+    const start = textareaRef.current?.selectionStart ?? text.length;
+    const end = textareaRef.current?.selectionEnd ?? start;
+    const folds = !richText && isLongPasteText(pasted);
+    const next = text.slice(0, start) + pasted + text.slice(end);
+    // A 话题 reply is capped: a paste past the cap is refused (folded or rich-text paste) or cut
+    // (the plain field's maxLength). Say why, as dictation does, instead of nothing happening.
+    // The plain field stores a pasted CRLF as one character, so it is measured that way.
+    const measured = richText || folds ? next.length : pasted.replace(/\r\n?/g, '\n').length + next.length - pasted.length;
+    const overLimit = thread && measured > BOT_GROUP_MESSAGE_MAX_CHARS;
+    if (overLimit) toast.warning(t('bots.groupChat.composer.tooLong', { max: BOT_GROUP_MESSAGE_MAX_CHARS }));
+    if (folds) {
       event.preventDefault();
-      const start = textareaRef.current?.selectionStart ?? text.length;
-      const end = textareaRef.current?.selectionEnd ?? start;
-      const next = text.slice(0, start) + pasted + text.slice(end);
-      if (thread && next.length > BOT_GROUP_MESSAGE_MAX_CHARS) return;
+      if (overLimit) return;
       setInput(current => ({
         ...current,
         richText: true,
