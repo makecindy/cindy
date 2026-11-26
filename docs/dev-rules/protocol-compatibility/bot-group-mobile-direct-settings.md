@@ -60,3 +60,7 @@ schema、数据库或 Mobile 原生指纹。完整管理需要两端客户端更
 `supportsAssistantManagement` 的电脑才能接收 `set-assistant`，参数为布尔值
 `assistant` 和编辑时的 `expectedRevision`。电脑复核群管理资格后调用桌面群管理入口；
 手机沿用群详情读回。只提供状态的旧电脑显示只读开关，缺状态的电脑隐藏该行。
+
+直连 Chat Server 时，手机只在 `GET /me` 声明 `groupAssistant: 1` 后读 `room.assistant`（缺省为开）
+并显示该开关；群主／管理员沿用群信息 `PATCH`，只带 `assistant` 与编辑时的 `expectedRevision`，
+以自己控制的群主／管理员 actor 写入。服务器未声明能力时隐藏该行，客户端不发写请求；无新路由或字段。

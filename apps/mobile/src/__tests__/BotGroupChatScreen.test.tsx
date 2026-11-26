@@ -2449,6 +2449,24 @@ describe('group settings', () => {
     else expect(h.chat.act).not.toHaveBeenCalled();
   });
 
+  // #13127 (unit): a phone talking to the chat service itself had no 「群里的 Cindy」 row at all.
+  it.each([true, false])('switches the group Cindy directly while the settings are writable (%s)', async editable => {
+    const data = group({ serverBacked: true, supportsSettingsManagement: true, revision: 5, supportsGroupAssistant: true, assistantEnabled: true });
+    data.members[0] = { ...data.members[0], actorId: 'human', actorKind: 'human', isSelf: true, isOwned: true, role: 'admin' };
+    h.chat.server = true;
+    const manage = vi.fn(async () => ({ effects: [] }));
+    h.management = { group: data, editable, ready: true, loading: false, reason: editable ? null : 'permission', act: manage, refresh: vi.fn() };
+    await openSettings(data);
+    await click('botGroup.settings.manage');
+    const toggle = byId('botGroup.settings.assistant');
+    expect(toggle?.getAttribute('aria-checked')).toBe('true');
+    expect(toggle?.disabled).toBe(!editable);
+    await click('botGroup.settings.assistant');
+    if (editable) expect(manage).toHaveBeenCalledWith('set-assistant', { assistant: false });
+    else expect(manage).not.toHaveBeenCalled();
+    expect(h.chat.act).not.toHaveBeenCalled();
+  });
+
   // The computer ignores topic and description; renaming there must not send an empty 群简介 over the real one.
   it('renames through a computer without touching the description it cannot show', async () => {
     const data = group({ serverBacked: true, supportsSettingsManagement: true, revision: 5, description: 'Kept on the server' });

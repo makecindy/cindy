@@ -159,6 +159,32 @@ it('withdraws an owned companion as that actor without granting removal of other
   expect(writes()).toHaveLength(1);
 });
 
+// Unit regression (#13127, direct path): the phone talking to the chat service had no 「群里的 Cindy」 switch.
+// It writes the same PATCH as Desktop only on servers with groupAssistant, and only as a manager.
+it('switches the group Cindy as a manager only on servers with groupAssistant', async () => {
+  snapshot.room.assistant = false;
+  await render();
+  expect(result.group).not.toHaveProperty('assistantEnabled');
+  await act(async () => { await expect(result.act('set-assistant', { assistant: true })).rejects.toThrow('CHAT_UNAVAILABLE'); });
+  const original = request.getMockImplementation()!;
+  request.mockImplementation(async (path, method, body, actor) => {
+    if (path === '/me') return { actor: { id: id(2), kind: 'human' }, capabilities: { groupAssistant: 1 } };
+    const saved = await original(path, method, body, actor);
+    if (method === 'PATCH' && body.assistant !== undefined) snapshot.room.assistant = body.assistant;
+    return saved;
+  });
+  await act(async () => { await result.refresh(); });
+  expect(result.group).toMatchObject({ supportsGroupAssistant: true, assistantEnabled: false });
+  await act(async () => { await result.act('set-assistant', { assistant: true }); });
+  expect(writes()).toEqual([[`/conversations/${id(1)}`, 'PATCH', { operationId: 'operation-1', expectedRevision: 4, assistant: true }, id(2)]]);
+  expect(result.group).toMatchObject({ assistantEnabled: true, revision: 5 });
+  // A member is refused before any request, not only by a disabled switch.
+  snapshot.members[0].role = 'member';
+  await act(async () => { await result.refresh(); });
+  await act(async () => { await expect(result.act('set-assistant', { assistant: false })).rejects.toThrow('PERMISSION_DENIED'); });
+  expect(writes()).toHaveLength(1);
+});
+
 it('selects only an owned manager, never a foreign owner', async () => {
   snapshot.members[0].role = 'member'; snapshot.members[1].role = 'admin';
   snapshot.members.push({ ...snapshot.members[0], id: id(9), ownerActorId: id(9), role: 'owner' });

@@ -36,7 +36,10 @@ export function useBotGroupSettingsManagement(source: BotGroupRemoteChatData, en
     try {
       const { snapshot, self, manager } = await api.client.groupSettings(groupId);
       if (!valid() || sequence.current !== run) return;
-      const settings = { group: { ...chatGroupView({ snapshot, messages: [], before: null }, self), ...api.client.lifecycleCapabilities() }, managerId: manager?.id };
+      const capabilities = api.client.lifecycleCapabilities();
+      const settings = { group: { ...chatGroupView({ snapshot, messages: [], before: null }, self), ...capabilities,
+        // 「群里的 Cindy」 as on Desktop: only with the server's groupAssistant; an absent value means on.
+        ...(capabilities.supportsGroupAssistant ? { assistantEnabled: snapshot.room.assistant !== false } : {}) }, managerId: manager?.id };
       verified.current = { binding, settings };
       setState({ binding, settings, loading: false, failed: false });
     } catch {
@@ -80,6 +83,10 @@ export function useBotGroupSettingsManagement(source: BotGroupRemoteChatData, en
     } else if (actionId === 'bot-access') {
       if (input.access !== 'none' && input.access !== 'chat' && input.access !== 'tools') throw new Error('INVALID_PARAMS');
       action = { type: 'botAccess', actorId: actor(), access: input.access, expectedRevision: revision(input.expectedRevision) };
+    } else if (actionId === 'set-assistant') {
+      if (!current.group.supportsGroupAssistant) throw new Error('CHAT_UNAVAILABLE');
+      if (typeof input.assistant !== 'boolean') throw new Error('INVALID_PARAMS');
+      action = { type: 'update', expectedRevision: revision(input.expectedRevision), assistant: input.assistant };
     } else if (actionId === 'update' || actionId === 'delete' || actionId === 'archive') {
       action = { type: 'update', expectedRevision: revision(input.expectedRevision) };
       if (actionId !== 'update') action.archived = actionId === 'delete' || input.archived !== false;
