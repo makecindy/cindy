@@ -208,6 +208,21 @@ describe('direct group plans', () => {
     expect(chatGroupView(page, id(10)).round.speakers[0]).not.toHaveProperty('requesterName');
   });
 
+  // Unit regression (owner report 2026-11-27): in a direct group the group's own Cindy showed a grey
+  // initial among same-name personal Cindys. Desktop always uses Cindy's artwork; companions keep theirs.
+  it('shows the group Cindy with Cindy artwork whatever avatar the server sends', () => {
+    const base = snapshot();
+    const human = base.members[0]!;
+    const members = chatGroupView({ snapshot: { ...base, members: [human,
+      { ...human, id: id(12), kind: 'bot', name: 'Cindy', ownerActorId: '', assistant: true, avatar: null },
+      { ...human, id: id(13), kind: 'bot', name: 'Cindy', ownerActorId: '', assistant: true, groupAvatar: 'https://images.example.invalid/a.png' },
+      { ...human, id: id(14), kind: 'bot', name: 'Cindy', avatar: 'https://images.example.invalid/b.png' },
+    ] }, messages: [], before: null }, id(10)).members;
+    expect(members.filter(member => member.assistant).map(member => [member.avatar, member.avatarUrl]))
+      .toEqual([['cindy://avatar/preset/cindy', null], ['cindy://avatar/preset/cindy', null]]);
+    expect(members.find(member => member.botId === id(14))).toMatchObject({ avatar: '', avatarUrl: 'https://images.example.invalid/b.png' });
+  });
+
   it('projects the exact queued attempt and sends it with the displayed revision', async () => {
     const { client, state, request } = fixture();
     Object.assign(state.plan, { kind: 'talk', status: 'running', current_step: 0,

@@ -412,7 +412,8 @@ function MembersTab({ k, group, owner, manager, direct, busy, ownRemoval, identi
         ];
         const paused = !isActiveBotGroupMember(member);
         const orgInfo = !bot ? (member.departmentPath || member.department || (member.nickname && member.orgName ? member.orgName : null)) : null;
-        const meta = bot
+        // The group's own Cindy is nobody's teammate and has no grants; say what it does, as on Desktop.
+        const meta = bot && member.assistant === true ? k(paused ? 'paused' : 'assistantHint') : bot
           ? `${k('teammateTag')} · ${k(paused ? 'paused' : ACCESS_LABEL[member.guestAccess ?? 'chat'])}`
           : [t(`groupChat.settings.roles.${member.role ?? 'member'}`), orgInfo].filter(Boolean).join(' · ');
         // With a native menu the system opens it from the row; the fallback sheet passes `open`.

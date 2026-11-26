@@ -8,7 +8,7 @@ import { parseChatInvitationShareId, parseChatInvitationToken } from '@cindy/dev
 import type { ChatInviteShares } from './chatInviteShare';
 import { createConversationListState } from '@cindy/maker-shared/chatConversationList';
 import type { ChatHistory } from '@cindy/maker-shared/chat-history';
-import { readBotGroupAssistantNotice, groupAssistantNoticeCode, readBotGroupCapabilityNotice, botGroupMessageSummaryText, botGroupQuoteFromMessage, buildBotGroupQuoteCard, readBotGroupExecutionFailure, readBotGroupQuote, readBotGroupQuoteCard, readBotGroupTaskCard, readImportedBotGroupRuntimeFailureCode, type BotGroupAttachment, type BotGroupMemberView, type BotGroupMessageView, type BotGroupRemoteChatData } from '@cindy/maker-shared/botGroupChat';
+import { BOT_GROUP_ASSISTANT_AVATAR, readBotGroupAssistantNotice, groupAssistantNoticeCode, readBotGroupCapabilityNotice, botGroupMessageSummaryText, botGroupQuoteFromMessage, buildBotGroupQuoteCard, readBotGroupExecutionFailure, readBotGroupQuote, readBotGroupQuoteCard, readBotGroupTaskCard, readImportedBotGroupRuntimeFailureCode, type BotGroupAttachment, type BotGroupMemberView, type BotGroupMessageView, type BotGroupRemoteChatData } from '@cindy/maker-shared/botGroupChat';
 import { chatGroupMemberName as memberName, chatGroupOwnerName, botGroupActivityAt, latestBotGroupMessage, botGroupExecutionFailureBatches, projectBotGroupExecutionFailures } from '@cindy/maker-shared/botGroupPresentation';
 import type { HostedRemoteCollectionItem } from '@/device-link/remoteResources';
 // The app's `@/i18n` sets up this default instance; importing it here would pull React bindings into a plain client.
@@ -335,8 +335,11 @@ export function chatMemberAvatar(value: string | null): Pick<BotGroupMemberView,
 }
 
 function chatMemberIdentity(member: ChatMember, members: readonly ChatMember[]) {
-  // The group avatar wins in its group, as on Desktop.
-  return { botId: member.id, name: memberName(member, members), ...chatMemberAvatar(member.groupAvatar ?? member.avatar ?? member.defaultAvatarUrl ?? null), avatarColor: '' };
+  // The group avatar wins in its group, as on Desktop. The group's own Cindy always shows
+  // Cindy's artwork, whatever the server sends, also as on Desktop (chatServer.ts members).
+  const avatar = member.kind === 'bot' && member.assistant === true ? BOT_GROUP_ASSISTANT_AVATAR
+    : member.groupAvatar ?? member.avatar ?? member.defaultAvatarUrl ?? null;
+  return { botId: member.id, name: memberName(member, members), ...chatMemberAvatar(avatar), avatarColor: '' };
 }
 
 function chatMessageMentions(message: ChatMessage): BotGroupMention {
