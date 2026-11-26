@@ -7,7 +7,7 @@ import type { ConversationSearchResponse } from '../../../shared/conversationSea
 import type { BotProfile } from './botStore';
 import { useBotSettingsTarget } from './useBotSettingsTarget';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
+import { SearchInput } from '@/components/ui/search-input';
 import { SettingsCard, SettingsRow } from '@/components/ui/settings-rows';
 import { BotDeleteDialog } from './BotDeleteDialog';
 import { withoutBotHiddenLanes } from './botGroupLane';
@@ -167,18 +167,22 @@ export function BotLifecycleSettings({
                 void searchHistory();
               }}
             >
-              <Input
-                size="md"
+              <SearchInput
                 ariaLabel={t('bots.historySearch.title')}
                 value={query}
                 onChange={setQuery}
+                // 回车提交才查询；清空时把上一次的结果和报错一起收掉，回到未搜索状态。
+                onClear={() => {
+                  setSearchResult(null);
+                  setSearchError(false);
+                }}
                 placeholder={t('bots.historySearch.search')}
                 className="min-w-0 flex-1"
               />
               <Button
                 type="submit"
                 variant="secondary"
-                size="lg"
+                size="md"
                 disabled={searching || !query.trim()}
               >
                 <Search size={14} />

@@ -108,6 +108,31 @@ describe('BotLifecycleSettings v1 actions', () => {
     expect(window.electronAPI.localDb.bots.searchHistory).toHaveBeenCalledWith({ botId: 'bot-1', query: 'project', limit: 20 });
   });
 
+  /*
+   * 测试价值
+   * - 生产入口与可观察结果：BotLifecycleSettings 的历史搜索（提交才查询）迁到 SearchInput 后，
+   *   表单提交仍发起查询；点内置清空按钮后输入框清空、上一次的结果与报错一起消失。
+   * - 规则依据：主人裁决 2026-11-27（所有搜索框都要有清空，提交式搜索清空后结果复位）。
+   * - 现有覆盖缺口：上面的用例只覆盖点击「搜索」按钮，不覆盖清空后的复位。
+   * - 最小失败输入：搜索 "project" 得到空结果后点清空，「bots.historySearch.empty」仍在。
+   * - tier：unit（jsdom 渲染真实组件）。
+   */
+  it('submits the history search from the form and clears the last result with the clear button', async () => {
+    render(<MemoryRouter><BotLifecycleSettings bot={bot('active')} onOpenSession={vi.fn()} /></MemoryRouter>);
+    const box = screen.getByRole('textbox', { name: 'bots.historySearch.title' }) as HTMLInputElement;
+    fireEvent.change(box, { target: { value: 'project' } });
+    fireEvent.submit(box.form!);
+    await waitFor(() => expect(screen.getByText('bots.historySearch.empty')).toBeTruthy());
+    expect(window.electronAPI.localDb.bots.searchHistory).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(screen.getByRole('button', { name: 'commonUi.clearSearch' }));
+    expect(box.value).toBe('');
+    expect(screen.queryByText('bots.historySearch.empty')).toBeNull();
+    expect(document.activeElement).toBe(box);
+    // 清空按钮是 type="button"：没有再发起一次查询。
+    expect(window.electronAPI.localDb.bots.searchHistory).toHaveBeenCalledTimes(1);
+  });
+
   it('offers deletion and restart without a pause action', async () => {
     render(
       <MemoryRouter>

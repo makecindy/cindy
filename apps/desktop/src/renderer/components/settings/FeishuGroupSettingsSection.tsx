@@ -25,7 +25,7 @@ import { PermissionSelector } from '@/components/new-chat/PermissionSelector';
 import { Button } from '@/components/ui/button';
 import { Collapse } from '@/components/ui/collapse';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
-import { Input } from '@/components/ui/input';
+import { SearchInput } from '@/components/ui/search-input';
 import { Select, type SelectOption } from '@/components/ui/select';
 import { SettingsCard, SettingsNotice, SettingsRow } from '@/components/ui/settings-rows';
 import { useModelPickerAgents } from '@/hooks/useAvailableAgents';
@@ -355,11 +355,10 @@ export function FeishuGroupSettingsSection() {
                 ) : (
                   <div className="flex flex-col gap-5">
                     {list.groups.length > SEARCH_MIN_GROUPS && (
-                      <Input
+                      <SearchInput
                         data-settings-search-action="Filter groups in the current list"
                         value={query}
                         onChange={setQuery}
-                        type="search"
                         ariaLabel={t('settings.feishuBot.groups.searchLabel')}
                         placeholder={t('settings.feishuBot.groups.searchPlaceholder')}
                       />
