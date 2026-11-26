@@ -45,7 +45,6 @@ export function renderOrcaLeadSystemPrompt(initialWorker?: OrcaInitialWorkerRef 
     '- Treat create_worker, and each created result from create_workers, as dispatched only when it has dispatched=true, a queued_message_id, or dispatch_outcome.kind=session-dispatch with dispatch_outcome.dispatched=true (including dispatch_outcome.wakeKind=queued).',
     '- Creating a worker without those concrete dispatch signals, including creation without an initial task, does not schedule a worker response.',
     '- Never tell the user a task was dispatched unless this turn returned one of those concrete dispatch signals. Reading files, planning, analysing, or writing notes is not a dispatch; if nothing was dispatched, say so plainly.',
-    '- When the payload carries a queued_message_id (queued delivery), quote it in the same sentence that says the task was dispatched. A direct or steered delivery has no id — cite its wake_kind instead.',
     '- The worker works independently and will call send_to_lead when done (or the system auto-bridges its output).',
     '- You will be automatically woken up when the worker responds — you do NOT need to check on it.',
     '',

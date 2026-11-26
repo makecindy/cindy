@@ -162,45 +162,23 @@ const WAKE_KIND_PATTERN = /\bwake_kind\s*[=:]\s*`?([a-z][a-z-]{2,20})`?/i;
  * 不在这个集合里的值不可能来自任何一次派发——账本里有多少条都一样。
  */
 const ISSUED_WAKE_KINDS = new Set(['resumed', 'already-active', 'queued', 'created']);
-/** 宿主签发编号的协议标签：只认派发编号，不猜裸 id。入站排队编号由宿主自己印在输入里，拿来核对只会拦下真话。 */
-const LABELED_ID_ALL_PATTERN = /\b(dispatch_id)\s*[=:]\s*`?([A-Za-z0-9_-]{8,64})`?/gi;
 
 /**
- * 找出回复里「引用了宿主没有的派发凭据」的第一处。
+ * 找出回复里「引用了宿主不可能发出的派发结果值」的第一处。
  *
- * - `wake_kind=<值>` 断言了一次派发结果：值不在协议闭集里，或账本里一条凭据都没有 → 无中生有。
- * - `dispatch_id: <编号>` 必须命中账本里某个派发编号。`queued_message_id` / `message_id`
- *   是**入站**回报的编号（宿主自己印进 Lead 输入），复述它们是正常行为，不核对。
+ * 只判闭集违规：`wake_kind=<值>` 不在协议里，就不可能是任何一次派发的结果，
+ * 与账本里存了几条、期间是否重启过、事件是否已调换过都无关。
  *
- * 账本非空且 wake_kind 是合法值时不管：那时分不清它复述的是哪一次派发，误判代价高。
+ * 编号（`dispatch_id` / `queued_message_id` / `message_id`）一律不核对。账本只在内存里，
+ * 有 24 小时与 200 条上限，重启或过期之后一条真实编号与编造的完全一样。查不到不等于编造，
+ * 能证明的只有「这个值协议里根本没有」。
  */
-export function findUnbackedDispatchClaim(
-  leadSessionId: string,
-  text: string,
-): UnbackedDispatchClaim | null {
-  const ledger = ledgers.get(leadSessionId);
-  const facts = ledger ? ledger.facts : [];
-
+export function findUnbackedDispatchClaim(text: string): UnbackedDispatchClaim | null {
   const wakeKind = text.match(WAKE_KIND_PATTERN);
-  if (wakeKind) {
-    const token = wakeKind[1]!.toLowerCase();
-    // 协议里不存在的值，账本再多也证明不了它：先判这一条，与账本无关。
-    if (!ISSUED_WAKE_KINDS.has(token)) return { kind: 'wake-kind', token, label: 'wake_kind' };
-    if (facts.length === 0) return { kind: 'wake-kind', token, label: 'wake_kind' };
-  }
-
-  // 一条回复里可能列出多个编号：逐个核对，只要有一个查不到就拦住。
-  // 只看第一个的话，前面放一个真编号就能把后面的假编号遮住。
-  for (const labeledId of text.matchAll(LABELED_ID_ALL_PATTERN)) {
-    const label = labeledId[1]!;
-    const token = labeledId[2]!;
-    const known = facts.some(
-      (fact) => fact.dispatchId === token || fact.queuedMessageId === token,
-    );
-    if (!known) return { kind: 'id', token, label };
-  }
-
-  return null;
+  if (!wakeKind) return null;
+  const token = wakeKind[1]!.toLowerCase();
+  if (ISSUED_WAKE_KINDS.has(token)) return null;
+  return { kind: 'wake-kind', token, label: 'wake_kind' };
 }
 
 /**

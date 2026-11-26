@@ -449,20 +449,20 @@ describe('OrcaTeamService updateWorker', () => {
 });
 
 describe('dispatch claim reminder on lead turn settle', () => {
-  it('reminds the lead once when the closing text cites a dispatch the host never accepted', async () => {
+  it('reminds the lead once when the closing text cites a dispatch result value the protocol never issues', async () => {
     resetDispatchClaimState();
     const { deps, service } = createDeps();
 
     await service.handleLeadTurnSettled({
       leadSessionId: 'lead-1',
       turnGeneration: 3,
-      finalText: '已派修（wake_kind=already-active），等它交回。',
+      finalText: '已派修（wake_kind=already-dispatched），等它交回。',
     });
 
     expect(deps.sendAutoBridgeToLead).toHaveBeenCalledTimes(1);
     const call = vi.mocked(deps.sendAutoBridgeToLead).mock.calls[0];
     expect(call?.[0]).toBe('lead-1');
-    expect(call?.[1]).toContain('wake_kind=already-active');
+    expect(call?.[1]).toContain('wake_kind=already-dispatched');
   });
 
   it('stays silent for an id the host dispatched in an earlier turn', async () => {
@@ -493,12 +493,12 @@ describe('dispatch claim reminder on lead turn settle', () => {
     await service.handleLeadTurnSettled({
       leadSessionId: 'lead-1',
       turnGeneration: 2,
-      finalText: 'wake_kind=queued',
+      finalText: 'wake_kind=dispatched',
     });
     await service.handleLeadTurnSettled({
       leadSessionId: 'lead-1',
       turnGeneration: 2,
-      finalText: 'wake_kind=queued',
+      finalText: 'wake_kind=dispatched',
     });
 
     expect(deps.sendAutoBridgeToLead).toHaveBeenCalledTimes(1);

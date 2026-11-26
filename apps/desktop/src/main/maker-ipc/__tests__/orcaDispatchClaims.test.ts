@@ -80,7 +80,7 @@ describe('host dispatch fact ledger', () => {
     // 先把账本推到第 9 轮，再回退：这样才真的走进回退分支。
     expect(dispatchFactsForTurn('lead-1', 9)).toHaveLength(1);
     expect(dispatchFactsForTurn('lead-1', 2).map((entry) => entry.dispatchId)).toEqual(['mq-real']);
-    expect(findUnbackedDispatchClaim('lead-1', '回执 wake_kind=resumed')).toBeNull();
+    expect(findUnbackedDispatchClaim('回执 wake_kind=resumed')).toBeNull();
   });
 
   it('treats an unknown turn number as neither progress nor a rollback', () => {
@@ -110,56 +110,40 @@ describe('host dispatch fact ledger', () => {
 });
 
 describe('unbacked dispatch claim detection', () => {
-  it('flags a wake_kind value while the host recorded no dispatch at all', () => {
+  it('flags a wake_kind value the protocol never issues', () => {
     expect(
-      findUnbackedDispatchClaim('lead-1', '已派修（wake_kind=already-active），等它交回。'),
-    ).toEqual({ kind: 'wake-kind', token: 'already-active', label: 'wake_kind' });
+      findUnbackedDispatchClaim('已派修（wake_kind=already-dispatched），等它交回。'),
+    ).toEqual({ kind: 'wake-kind', token: 'already-dispatched', label: 'wake_kind' });
   });
 
-  it('accepts a wake_kind recap once the host has dispatches to back it', () => {
-    noteLeadDispatchFact('lead-1', fact());
-
-    expect(
-      findUnbackedDispatchClaim('lead-1', '上一笔 wake_kind=queued 还在队列里。'),
-    ).toBeNull();
+  it('accepts every value the protocol can return', () => {
+    for (const token of ['resumed', 'already-active', 'queued', 'created']) {
+      expect(findUnbackedDispatchClaim(`派工回执 wake_kind=${token}`)).toBeNull();
+    }
   });
 
-  it('leaves a cited queue id alone — the host prints those ids itself', () => {
-    // 入站排队回报的编号由宿主以 `queued_message_id:` 写进 Lead 的输入，提示词还要求
-    // Lead 用它去 steer。拿它去核对只会把复述真编号拦下来。
+  it('leaves a cited dispatch id alone — a missing ledger entry proves nothing', () => {
+    // 账本在内存里、有 24 小时与 200 条上限；重启或过期之后一条真实编号与编造的
+    // 完全一样。查不到不等于编造，所以编号一律不核对，只交给语义层。
     expect(
-      findUnbackedDispatchClaim('lead-1', '派了：queued_message_id: e47e4ix8u7vjpxzd0ixrivw8'),
+      findUnbackedDispatchClaim('派了：dispatch_id: e47e4ix8u7vjpxzd0ixrivw8'),
     ).toBeNull();
-    noteLeadDispatchFact('lead-1', fact({ queuedMessageId: 'cvpssg60na9s2ona9dh7327s' }));
     expect(
-      findUnbackedDispatchClaim('lead-1', '上一条的 queued_message_id: cvpssg60na9s2ona9dh7327s 已消费。'),
+      findUnbackedDispatchClaim('派了：queued_message_id: e47e4ix8u7vjpxzd0ixrivw8'),
     ).toBeNull();
   });
 
   it('leaves plain prose alone — it carries no protocol token to check', () => {
-    expect(findUnbackedDispatchClaim('lead-1', '已派给 research 去改注入表了。')).toBeNull();
+    expect(findUnbackedDispatchClaim('已派给 research 去改注入表了。')).toBeNull();
   });
 
-  it('does not flag a wake_kind recap once the ledger has any dispatch', () => {
-    // 账本非空时分不清它复述的是哪一次，误判代价高——那条路交给语义层。
+  it('flags a fabricated value even when the host recorded dispatches', () => {
     noteLeadDispatchFact('lead-1', fact({}));
-    expect(findUnbackedDispatchClaim('lead-1', '上一笔 wake_kind=queued。')).toBeNull();
-  });
-
-  it('flags a wake_kind value the host never issues, even with dispatches recorded', () => {
-    // “账本非空就不管”只对真值成立；协议里不存在的值不可能来自某次派发。
-    noteLeadDispatchFact('lead-1', fact({}));
-    expect(findUnbackedDispatchClaim('lead-1', '已派工（wake_kind=dispatched）。')).toEqual({
+    expect(findUnbackedDispatchClaim('已派工（wake_kind=dispatched）。')).toEqual({
       kind: 'wake-kind',
       token: 'dispatched',
       label: 'wake_kind',
     });
-  });
-
-  it('reports the first problem only, so one reminder names one place', () => {
-    expect(
-      findUnbackedDispatchClaim('lead-1', 'wake_kind=queued，编号 queued_message_id: abcdefgh1234'),
-    )?.toMatchObject({ kind: 'wake-kind' });
   });
 });
 

@@ -327,8 +327,8 @@ async function judgeOneText(params: {
 /** 拦下收口时回灌给模型的说明。 */
 function unbackedClaimReason(claim: UnbackedDispatchClaim): string {
   return [
-    '[Orca host] You cited a dispatch record the host does not have.',
-    `You wrote \`${claim.label}=${claim.token}\`, but the host accepted no dispatch for this session.`,
+    '[Orca host] You cited a dispatch result value the protocol never issues.',
+    `You wrote \`${claim.label}=${claim.token}\`; no dispatch returns that value.`,
     'Either dispatch now with send_to_worker, or say plainly that nothing was dispatched.',
   ].join('\n');
 }
@@ -440,8 +440,8 @@ export async function evaluateTurnGate(input: {
     ].join('\n');
   }
 
-  // L0 凭据层：引用了宿主没有的派发凭据。
-  const claim = findUnbackedDispatchClaim(input.leadSessionId, text);
+  // L0 凭据层：引用了协议根本不存在的派发结果值；编号查不到不算证据。
+  const claim = findUnbackedDispatchClaim(text);
   if (claim) {
     if (!consumeDispatchClaimReminder(input.leadSessionId, input.turnGeneration, `${claim.kind}:${claim.token}`)) {
       return undefined;
