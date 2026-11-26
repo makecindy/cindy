@@ -890,6 +890,7 @@ import {
   getWorkerRolesMirror,
   getSelectedNewMakerRoute,
   getGroupAssistantPluginSelection,
+  GroupCindyRemoteEngineError,
   getWorkerPermissionModeFromCreationPrefs,
   type ProviderModelMemorySnapshot,
   syncNewMakerDraftCache,
@@ -13971,10 +13972,34 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           if (row?.status === 'active' && stored === projectDir) return { ok: true as const, sessionId, created: false };
         }
         const ownerScope = activeOwnerScopeKey();
-        const pluginSelection = getGroupAssistantPluginSelection(ownerScope);
-        const route = getSelectedNewMakerRoute(ownerScope);
+        // The executing computer decides (bot-group-chat.md §9): a new-task engine on another
+        // computer is answered with one of this computer's models, never by moving the request.
+        let pluginSelection: ReturnType<typeof getGroupAssistantPluginSelection>;
+        let remoteEngine = false;
+        try { pluginSelection = getGroupAssistantPluginSelection(ownerScope); }
+        catch (error) { if (!(error instanceof GroupCindyRemoteEngineError)) throw error; remoteEngine = true; }
+        const route = remoteEngine ? undefined : getSelectedNewMakerRoute(ownerScope);
         const agentKind = route ? (route.harness === 'claude' ? 'claude-code' : route.harness) : undefined;
+        let modelFallback = false;
+        // One of this computer's available models. None at all is a public "model unavailable", not a runtime error.
+        const openAvailableModel = async (from: string) => {
+          const { available } = await inspectAppDefaultModel();
+          const pick = available[0]?.route;
+          if (!pick) throw new Error('MODEL_UNAVAILABLE');
+          const pickAgentKind = pick.harness === 'claude' ? 'cc' : pick.harness;
+          // 权限按回退到的引擎读取，避免把原引擎的高权限带给另一种引擎（否则会落库成全权限并被群任务直接沿用）。
+          const pickEngineKind = pickAgentKind === 'cc' ? 'claude-code' : pickAgentKind;
+          log.warn('group-cindy: selected engine unusable here, answering with an available model', { from, to: pick.model });
+          const opened = await openSession({ assertCurrent: assertOwner, body: {
+            title, projectDir, workspaceKind: projectDir ? 'project' : 'dialogue', workingDir: projectDir ?? undefined,
+            agentKind: pickAgentKind, model: pick.model, providerId: pick.providerId, effort: pick.effort || '', fastMode: pick.fastMode,
+            permissionMode: permissionModeOrAsk(getRemoteNewMakerDefaults(pickEngineKind).permissionMode),
+          } });
+          modelFallback = true;
+          return opened;
+        };
         const { row } = await (async () => {
+          if (remoteEngine) return openAvailableModel('remote-engine');
           if (pluginSelection) {
             const { model, effort, permissionMode } = admitPluginEngineSwitchTarget(pluginSelection, listPluginEngineViews());
             return openSession({ assertCurrent: assertOwner, body: { title, projectDir,
@@ -13993,31 +14018,21 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             // 群Cindy 的"新建任务默认模型"可能来自旧账号/旧草稿，对本账号不可用；回退一次让宿主编排可用模型。
             // 只认真正的"模型不可用"，不要把 Fast/effort 校验失败的通用"重新选择模型"提示也当成回退信号。
             if (!route || !/not available for/.test(message)) throw error;
-            const { available } = await inspectAppDefaultModel();
-            const pick = available[0]?.route;
-            if (!pick) throw error;
-            const pickAgentKind = pick.harness === 'claude' ? 'cc' : pick.harness;
-            // 权限按回退到的引擎读取，避免把原引擎的高权限带给另一种引擎（否则会落库成全权限并被群任务直接沿用）。
-            const pickEngineKind = pickAgentKind === 'cc' ? 'claude-code' : pickAgentKind;
-            log.warn('group-cindy: routed model unavailable for this account, retrying with an available model', { from: route.model, to: pick.model });
-            return await openSession({ assertCurrent: assertOwner, body: {
-              title, projectDir, workspaceKind: projectDir ? 'project' : 'dialogue', workingDir: projectDir ?? undefined,
-              agentKind: pickAgentKind, model: pick.model, providerId: pick.providerId, effort: pick.effort || '', fastMode: pick.fastMode,
-              permissionMode: permissionModeOrAsk(getRemoteNewMakerDefaults(pickEngineKind).permissionMode),
-            } });
+            return openAvailableModel(route.model);
           }
         })();
         // Before its first turn starts, so the task starts with the 群协作 Skill.
         markGroupCindyTask(row.id);
         broadcastSessionCreated(row.id);
-        return { ok: true as const, sessionId: row.id, created: true };
+        return { ok: true as const, sessionId: row.id, created: true, ...(modelFallback ? { modelFallback: true } : {}) };
       } catch (error) {
         log.warn('group-cindy: openSession failed', {
           sessionId, title, projectDir,
           name: error instanceof Error ? error.name : typeof error,
           message: error instanceof Error ? error.message : String(error),
         });
-        return { ok: false as const, errorCode: 'LANE_UNAVAILABLE', message: error instanceof Error ? error.message : String(error) };
+        const message = error instanceof Error ? error.message : String(error);
+        return { ok: false as const, errorCode: message === 'MODEL_UNAVAILABLE' ? 'MODEL_UNAVAILABLE' : 'LANE_UNAVAILABLE', message };
       }
     },
     isGroupInputLive: (sessionId, clientId) => agentInputCoordinatorHolder?.isInputLive(sessionId, clientId) ?? false,

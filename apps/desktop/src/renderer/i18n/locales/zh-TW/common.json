@@ -12149,6 +12149,8 @@
         "threadNew": "話題裡的新訊息",
         "replyingTo": "回覆「{{name}}」：{{text}}",
         "filesOutsideWorkingDir": "部分檔案不在工作目錄內，未附上。",
+        "modelFallback": "這台電腦上沒有選定的模型，這次改用 {{model}} 回覆。",
+        "modelFallbackUnnamed": "這台電腦上沒有選定的模型，這次改用本機可用的模型回覆。",
         "earlierOmitted": "（更早的訊息略去）",
         "actingFor": "{{name}} · 替 {{person}}",
         "checkout": {

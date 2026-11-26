@@ -12289,6 +12289,8 @@
         "threadNew": "Mensagens novas do tópico",
         "replyingTo": "Em resposta a \"{{name}}\": {{text}}",
         "filesOutsideWorkingDir": "Os arquivos fora do diretório de trabalho não foram anexados.",
+        "modelFallback": "O modelo selecionado não está neste computador, então esta resposta usa {{model}}.",
+        "modelFallbackUnnamed": "O modelo selecionado não está neste computador, então esta resposta usa um modelo disponível aqui.",
         "earlierOmitted": "(Mensagens anteriores omitidas)",
         "actingFor": "{{name}} · por {{person}}",
         "checkout": {

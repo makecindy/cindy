@@ -12149,6 +12149,8 @@
         "threadNew": "話題新言",
         "replyingTo": "答「{{name}}」：{{text}}",
         "filesOutsideWorkingDir": "部分檔案不在工作目錄內，未附上。",
+        "modelFallback": "所擇之模不在此機，今以 {{model}} 應之。",
+        "modelFallbackUnnamed": "所擇之模不在此機，今以本機可用之模應之。",
         "earlierOmitted": "（更早之言略之）",
         "actingFor": "{{name}} · 代 {{person}}",
         "checkout": {

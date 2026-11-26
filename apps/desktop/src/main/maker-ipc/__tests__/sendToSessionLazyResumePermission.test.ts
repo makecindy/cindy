@@ -1,4 +1,4 @@
-import { syncNewMakerDraftCache, getGroupAssistantPluginSelection, getSelectedNewMakerRoute } from '../../maker-host/newMakerDefaultsCache.js';
+import { syncNewMakerDraftCache, getGroupAssistantPluginSelection, getSelectedNewMakerRoute, GroupCindyRemoteEngineError } from '../../maker-host/newMakerDefaultsCache.js';
 import { admitPluginEngineSwitchTarget } from '../pluginEngineSessionAdmission.js';
 import * as path from 'node:path';
 import { createSessionOptionsReconciler, type SessionExecutionRow } from '../sessionOptionsReconciler.js';
@@ -524,10 +524,14 @@ describe('external handoff to hidden group lanes', () => {
     const openSession = vi.fn(async () => ({ row: { id: 'created' } }));
     const engine = { key: 'fixture:engine', availability: { state: 'available' }, models: [{ id: 'chosen' }],
       permissionModes: [{ id: 'plan' }], defaultPermissionMode: 'ask' };
+    const localModel = { harness: 'codex', model: 'gpt-local', providerId: 'openai', effort: 'medium', fastMode: false };
+    const inspectAppDefaultModel = vi.fn(async () => ({ available: [{ route: localModel }] }));
     const h = botTaskDispatchHarness({ created: { permissionMode: 'plan', planModeEnabled: true } }, {}, {
       captureSessionOwner: () => () => {}, activeOwnerScopeKey: () => 'user:1',
-      getGroupAssistantPluginSelection, getSelectedNewMakerRoute, admitPluginEngineSwitchTarget,
+      getGroupAssistantPluginSelection, getSelectedNewMakerRoute, admitPluginEngineSwitchTarget, GroupCindyRemoteEngineError,
       listPluginEngineViews: () => [engine], openSession, markGroupCindyTask: vi.fn(), broadcastSessionCreated: vi.fn(),
+      inspectAppDefaultModel, getRemoteNewMakerDefaults: () => ({ permissionMode: 'ask' }),
+      permissionModeOrAsk: (mode: string | undefined) => mode ?? 'ask', log: { warn: vi.fn() },
       maker: { getSession: () => undefined, getSessionMeta: async () => ({ agentKind: 'acp' }) },
     });
     const request = { title: 'Group Cindy', projectDir: null };
@@ -541,14 +545,25 @@ describe('external handoff to hidden group lanes', () => {
     const input = { targetSessionId: opened.sessionId, clientId: 'bot-group:turn', message: 'Hello' };
     expect(await h.groupDispatch({ ...input, groupAssistantTask: true })).toMatchObject({ ok: true, wakeKind: 'queued' });
     expect(h.scope.enqueueSendToSessionMessage).toHaveBeenCalledExactlyOnceWith(expect.objectContaining(input));
-    for (const invalid of [{ ...selection, providerId: 'bad' }, { ...selection, deviceId: 'another-device' }]) {
-      push(invalid);
-      expect(await h.ensureGroupAssistantSession(request)).toMatchObject({ ok: false });
-    }
+    push({ ...selection, providerId: 'bad' });
+    expect(await h.ensureGroupAssistantSession(request)).toMatchObject({ ok: false });
     engine.availability.state = 'unavailable';
     push(selection);
     expect(await h.ensureGroupAssistantSession(request)).toMatchObject({ ok: false });
     expect(openSession).toHaveBeenCalledTimes(1);
+    // 2026-11-26 incident: a new-task engine on another computer failed every @Cindy with a bare
+    // RUNTIME_ERROR. The executing computer now answers with its own model and says so; with no
+    // model at all it is the public MODEL_UNAVAILABLE, not a runtime error.
+    push({ ...selection, deviceId: 'another-device' });
+    expect(await h.ensureGroupAssistantSession(request))
+      .toMatchObject({ ok: true, sessionId: 'created', created: true, modelFallback: true });
+    expect(openSession).toHaveBeenLastCalledWith(expect.objectContaining({ body: expect.objectContaining({
+      agentKind: 'codex', providerId: 'openai', model: 'gpt-local',
+    }) }));
+    inspectAppDefaultModel.mockResolvedValueOnce({ available: [] });
+    expect(await h.ensureGroupAssistantSession(request))
+      .toMatchObject({ ok: false, errorCode: 'MODEL_UNAVAILABLE' });
+    expect(openSession).toHaveBeenCalledTimes(2);
     push(undefined);
   });
 

@@ -160,6 +160,8 @@ interface Running {
   lane?: string;
   laneLookup?: Promise<void>;
   attachmentAfter?: string;
+  /** The group's Cindy answered with this computer's model instead of the selected one: said once, before the reply. */
+  modelNotice?: string;
   textProgress?: { scope: string; after: string; seen: Map<string, string> };
   settlement?: { terminal: BotGroupLaneTerminal; cancelled?: boolean; payload?: Record<string, unknown>; reply?: { sourceText: string; text: string; attachments: ChatUploadAttachment[] }; fileReply?: Awaited<ReturnType<typeof prepareChatReplyFiles>>; retryAt: number; keepLease?: boolean; refused?: boolean };
   delivery?: Promise<void>;
@@ -2919,6 +2921,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
                 // Keep the notice inside the existing text budget, including on
                 // retries. It describes omitted references, not a failed turn.
                 if (pending.fileReply.omittedFiles) contentText = `${t('bots.groupChat.assistant.filesOutsideWorkingDir')}\n\n${contentText}`;
+                if (run.modelNotice) contentText = `${run.modelNotice}\n\n${contentText}`;
                 produced.push(...mergeChatReplyAttachments(pending.reply.attachments, pending.fileReply.attachments));
                 if (produced.length > BOT_GROUP_ATTACHMENTS_MAX) throw new Error('ATTACHMENT_UNAVAILABLE');
               }
@@ -3198,8 +3201,12 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       if (!dispatched.ok) throw new Error(botGroupRuntimeFailureCode({ code: dispatched.errorCode, message: dispatched.message }));
       assistantTasks.noteDelivered(roomId, sessionId, scope, source.seq);
       // The requester's other devices learn at once where this runs; later renewals repeat it.
+      const model = selfDeviceId || task.modelFallback
+        ? (await deps.readGroupTaskStatus?.(sessionId, { model: true }).catch(() => null))?.model : undefined;
+      if (task.modelFallback) run.modelNotice = model
+        ? t('bots.groupChat.assistant.modelFallback').replaceAll('{{model}}', () => model)
+        : t('bots.groupChat.assistant.modelFallbackUnnamed');
       if (selfDeviceId) {
-        const model = (await deps.readGroupTaskStatus?.(sessionId, { model: true }).catch(() => null))?.model;
         run.executor = { deviceId: selfDeviceId, sessionId, ...(model ? { model } : {}) };
         if (live()) void checkLease(run);
       }

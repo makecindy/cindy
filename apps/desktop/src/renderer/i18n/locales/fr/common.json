@@ -12289,6 +12289,8 @@
         "threadNew": "Nouveaux messages du fil",
         "replyingTo": "En réponse à « {{name}} » : {{text}}",
         "filesOutsideWorkingDir": "Les fichiers situés hors du répertoire de travail n’ont pas été joints.",
+        "modelFallback": "Le modèle sélectionné n’est pas sur cet ordinateur ; cette réponse utilise donc {{model}}.",
+        "modelFallbackUnnamed": "Le modèle sélectionné n’est pas sur cet ordinateur ; cette réponse utilise donc un modèle disponible ici.",
         "earlierOmitted": "(Messages plus anciens omis)",
         "actingFor": "{{name}} · pour {{person}}",
         "checkout": {

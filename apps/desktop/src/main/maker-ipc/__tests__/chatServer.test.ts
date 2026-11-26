@@ -2766,6 +2766,19 @@ describe('Chat Server result delivery and refresh', () => {
       expect(deps.abortLane).not.toHaveBeenCalled();
     });
 
+    // 2026-11-26 incident: the selected engine was on another computer and the group only saw
+    // RUNTIME_ERROR. The task now opens on this computer's model; the reply that answers with it
+    // names the substitute once, ahead of the answer (bot-group-chat.md §9). Unit tier, faked host.
+    it('names the substitute model in the reply of a task opened on this computer\'s model', async () => {
+      deps.ensureGroupAssistantSession = vi.fn(async () => ({ ok: true as const, sessionId: 'group-task-1', created: true, modelFallback: true }));
+      deps.readGroupTaskStatus = vi.fn(async () => ({ title: 'Room', status: 'active', model: 'GPT Local' })) as typeof deps.readGroupTaskStatus;
+      await ask(5, '@Cindy please fix it');
+      const [input] = dispatched();
+      expect(await service.settleLaneTurn({ ...terminal, sessionId: 'group-task-1', activeInputClientId: input!.clientId, resultText: 'Fixed in #12' })).toBe(true);
+      expect(deliveries()[0][2].content[0]).toEqual({ type: 'text',
+        text: `${t('bots.groupChat.assistant.modelFallback').replaceAll('{{model}}', 'GPT Local')}\n\nFixed in #12` });
+    });
+
     // #10163 review (Greptile): a teammate's reply that names Cindy keeps the human who started the chain
     // as requester, but its words are the teammate's. Only the owner's own message carries the owner's
     // verified words; this one is labeled as the teammate and carries no owner stamp.

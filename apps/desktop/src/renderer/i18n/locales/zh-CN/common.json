@@ -12149,6 +12149,8 @@
         "threadNew": "话题里的新消息",
         "replyingTo": "回复「{{name}}」：{{text}}",
         "filesOutsideWorkingDir": "部分文件不在工作目录内，未附上。",
+        "modelFallback": "这台电脑上没有选定的模型，这次改用 {{model}} 回答。",
+        "modelFallbackUnnamed": "这台电脑上没有选定的模型，这次改用本机可用的模型回答。",
         "earlierOmitted": "（更早的消息略去）",
         "actingFor": "{{name}} · 替 {{person}}",
         "checkout": {
