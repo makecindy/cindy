@@ -328,15 +328,10 @@ async function startCodexHttpBridge(
       const orphaned = [...transports.entries()]
         .filter(([, entry]) => !entry.ownerSessionId && !entry.ownerSessionInstanceId)
         .sort(([, a], [, b]) => a.lastActivityAt - b.lastActivityAt);
-      const stale = orphaned.filter(([, entry]) =>
-        now - entry.lastActivityAt >= ORPHAN_TRANSPORT_IDLE_TIMEOUT_MS,
-      );
-      for (const [sessionId] of stale) closeTransport(transports, sessionId);
-      const remaining = orphaned.length - stale.length;
-      if (remaining > MAX_ORPHAN_TRANSPORTS) {
-        for (const [sessionId] of orphaned.slice(0, remaining - MAX_ORPHAN_TRANSPORTS)) {
-          closeTransport(transports, sessionId);
-        }
+      for (const [index, [sessionId, entry]] of orphaned.entries()) {
+        if (index >= orphaned.length - MAX_ORPHAN_TRANSPORTS &&
+            now - entry.lastActivityAt < ORPHAN_TRANSPORT_IDLE_TIMEOUT_MS) break;
+        closeTransport(transports, sessionId);
       }
     }
   };

@@ -89,7 +89,7 @@ import { hasTaskChangeListener, publishTaskChange } from '../taskEvents.js';
 import { createMessageClearRecovery } from '../messageClearRecovery.js';
 import { markLatestAgentHandoffConsumedWithPorts } from '../agentHandoffPendingQueries.js';
 
-export { listMessagesForAgentHandoff } from '../agentHandoffHistory.js';
+export { listMessagesForAgentHandoff, readAutoReviewHistoryPage } from '../agentHandoffHistory.js';
 export { findLatestContextRebuildMeta, findLatestUserMessageForRebuild } from '../contextRebuildQueries.js';
 export { findForkParentSessionId, findPendingAgentHandoff, findPendingForkOrigin } from '../agentHandoffPendingQueries.js';
 

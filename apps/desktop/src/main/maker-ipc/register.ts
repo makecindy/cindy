@@ -574,6 +574,7 @@ import {
   findParkedEngineSession,
   getMessageDeletionTarget,
   listMessagesForAgentHandoff,
+  readAutoReviewHistoryPage,
   findLatestUserMessageForRebuild,
   patchMessageAgentMeta,
   readPiUserEntry,
@@ -18421,7 +18422,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
 
   const readAutoReviewHistory = async (sessionId: string) => {
     await drainPersistQueue();
-    return listMessagesForAgentHandoff(sessionId, 400, undefined, 'authorization');
+    return readAutoReviewHistoryPage(sessionId);
   };
   const loadPluginTargetReview = createPluginTargetReviewLoader({
     owner: getCurrentDbClientSnapshot,

@@ -171,7 +171,7 @@ interface RewindContext {
   // 业务函数自己读 isRunning / 拿 query；这里只暴露 sessionId 之类的元数据
   targetCreatedAt: number;
   /** target 行的 rowid(同 createdAt 时的次序键);Codex 原生边界查询用。 */
-  targetRowid?: number;
+  targetRowid: number;
   targetMessageId: string;
   targetClientId: string;
   /** 当前 agent kind；Claude checkpoint 与 conversation-tree rollback 机制不同。 */
@@ -427,7 +427,7 @@ async function loadRewindContext(
   );
 
   // Claude Code 在另一台电脑运行：文件按本机保存点链回退，需要 target 之后的 user 消息时间线。
-  let savepointTimeline: Pick<RewindContext, 'savepointRewind' | 'codexUserMessages' | 'targetRowid'> = {};
+  let savepointTimeline: Pick<RewindContext, 'savepointRewind' | 'codexUserMessages'> = {};
   if (currentSessionMeta?.agentDeviceId && !currentSessionMeta.remoteHostId) {
     const tailTurns = await loadTailUserTurns(sessionId, target);
     if (!tailTurns.some((row) => row.rowid === target.rowid)) {
@@ -435,13 +435,13 @@ async function loadRewindContext(
     }
     savepointTimeline = {
       savepointRewind: true,
-      targetRowid: target.rowid,
       codexUserMessages: tailTurns.map((row) => ({ clientId: row.clientId, createdAt: row.createdAt })),
     };
   }
 
   return {
     targetCreatedAt: target.createdAt,
+    targetRowid: target.rowid,
     targetMessageId: target.id,
     targetClientId: target.clientId,
     agentKind,
@@ -745,13 +745,10 @@ async function loadCodexRewindNativeBoundary(
   // /clear 之后旧 target 已不在当前原生线程。空时间线不能当成第一轮,否则会换空
   // 线程并把 clear 之后的新消息一并软删(#4994 review P1)。
   assertTargetVisibleAfterClear(ctx.targetCreatedAt, clearedAt);
-  const beforeTarget =
-    ctx.targetRowid === undefined
-      ? lt(messages.createdAt, ctx.targetCreatedAt)
-      : or(
-          lt(messages.createdAt, ctx.targetCreatedAt),
-          and(eq(messages.createdAt, ctx.targetCreatedAt), lt(messageRowid, ctx.targetRowid)),
-        );
+  const beforeTarget = or(
+    lt(messages.createdAt, ctx.targetCreatedAt),
+    and(eq(messages.createdAt, ctx.targetCreatedAt), lt(messageRowid, ctx.targetRowid)),
+  );
   // /clear 与 context_rebuild 之后是新的原生线程,之前的行不能拿来当锚点或时间戳。
   // context_rebuild 的写入契约是 rewind_at 固定非 NULL,需豁免可见性过滤才能看到边界。
   const inTimeline = and(
@@ -811,12 +808,12 @@ async function loadCodexRewindNativeBoundary(
  */
 async function buildNativeContextReset(
   sessionId: string,
-  ctx: Pick<RewindContext, 'targetClientId' | 'agentKind'>,
+  ctx: Pick<RewindContext, 'targetCreatedAt' | 'targetRowid' | 'agentKind'>,
 ): Promise<NonNullable<RewindCommitArgs['nativeContextReset']>> {
   // The rewind target may be earlier than the last page of durable history.
-  const history = await listMessagesForAgentHandoff(sessionId, 2000, undefined, 'replay');
-  const targetIndex = history.findIndex((message) => message.clientId === ctx.targetClientId);
-  const kept = targetIndex >= 0 ? history.slice(0, targetIndex) : [];
+  const kept = await listMessagesForAgentHandoff(sessionId, 2000, undefined, 'replay', {
+    createdAt: ctx.targetCreatedAt, rowid: ctx.targetRowid,
+  });
   const label = ctx.agentKind === 'codex' ? 'Codex' : ctx.agentKind === 'pi' ? 'Pi' : 'Claude Code';
   const hasUserHistory = kept.some((message) => message.role === 'user');
   const route = hasUserHistory ? await getMaker().getSessionMeta(sessionId) : null;

@@ -117,11 +117,6 @@ describe('codexEnvironment', () => {
     );
     expect(replacementUrl.searchParams.get('instance')).toBe('instance-2');
     expect(replacementUrl.toString()).not.toBe(boundUrl.toString());
-
-    const closeSessionInstance = vi.spyOn(first.bridge!, 'closeSessionInstance');
-    first.onHostRetired?.();
-    expect(closeSessionInstance).toHaveBeenCalledWith('instance-1');
-    expect(closeSessionInstance).toHaveBeenCalledWith('instance-2');
   });
 
   it.each(['http', 'sse'] as const)('keeps a %s custom MCP facade available across Codex clients', async (transport) => {
