@@ -4,7 +4,13 @@ const readWorktreeRuntimePathsMock = vi.hoisted(() => vi.fn(async () => new Set<
 const reclaimOrphanedRuntimeLeasesMock = vi.hoisted(() => vi.fn(async () => 0));
 vi.mock('../worktree/runtimeLeases', () => ({
   readWorktreeRuntimePaths: readWorktreeRuntimePathsMock,
-  acquireWorktreeRuntimeLease: async () => {}, releaseWorktreeRuntimeLease: async () => {},
+  acquireWorktreeRuntimeLease: async (ownerId: string, worktreePath: string) => ({
+    ownerId,
+    worktreePath,
+    filePath: `${worktreePath}.lease`,
+  }),
+  recordWorktreeRuntimeLeaseChild: () => {},
+  releaseWorktreeRuntimeLease: async () => {},
   reclaimOrphanedWorktreeRuntimeLeases: reclaimOrphanedRuntimeLeasesMock,
 }));
 /**
@@ -1062,5 +1068,165 @@ describe('removeWorktreeForSession', () => {
 
     releaseCreate();
     await expect(createPromise).resolves.toMatchObject({ ok: false });
+  });
+
+  /*
+   * Test value (engineering-conventions §3.2)
+   * - Production entry: WorktreeManager.cancelPrecreatedWorktree / createWorktree / rollbackPartialCreate.
+   * - Bug/rule basis: (1) path-based cancel with a mismatched path must never abort or seal an in-flight create
+   *   before path verification; (2) background full checkout must receive the create AbortSignal so cancelling
+   *   before metadata publication lets rollback finish without keeping the repository create queue wedged.
+   * - Existing coverage gap: prior abort tests only checked matching recoveryKey aborts during worktree add,
+   *   not wrong-path cancel safety or background full checkout cancellation during rollback.
+   * - Minimal failing inputs: (1) in-flight create + cancel with unrelated path; (2) stuck background full checkout
+   *   aborted during post-stage setup followed by a second create on the same baseRepo.
+   */
+  it('cancel with a mismatched path never aborts or seals an in-flight createWorktree', async () => {
+    const tmpRoot = fsSync.mkdtempSync(path.join(os.tmpdir(), 'xdt-wt-wrong-path-'));
+    try {
+      const base = path.join(tmpRoot, 'repo');
+      fsSync.mkdirSync(base, { recursive: true });
+      const recoveryKey = 'recovery-key-wrong-path-123456';
+      let releaseWorktreeAdd!: () => void;
+      let sawWorktreeAdd = false;
+      let worktreeAddSignal: AbortSignal | undefined;
+
+      gitExecMock.mockImplementation(async (args: string[], _cwd?: string, opts?: { signal?: AbortSignal }) => {
+        if (args[0] === '--version') return { stdout: 'git version 2.50.0\n', stderr: '' };
+        if (args[0] === 'rev-parse' && args[1] === '--show-toplevel') {
+          return { stdout: `${base}\nmain\n.git\n.git\n`, stderr: '' };
+        }
+        if (args[0] === 'branch') return { stdout: 'refs/heads/main\n', stderr: '' };
+        if (args[0] === 'for-each-ref') return { stdout: 'main\n', stderr: '' };
+        if (args[0] === 'worktree' && args[1] === 'list') return { stdout: '', stderr: '' };
+        if (args.includes('worktree') && args.includes('add')) {
+          sawWorktreeAdd = true;
+          worktreeAddSignal = opts?.signal;
+          return new Promise<{ stdout: string; stderr: string }>((resolve, reject) => {
+            releaseWorktreeAdd = () => resolve({ stdout: '', stderr: '' });
+            opts?.signal?.addEventListener('abort', () => reject(new Error('unexpected abort')), { once: true });
+          });
+        }
+        return { stdout: '', stderr: '' };
+      });
+
+      const createPromise = manager.createWorktree({
+        sessionId: 'wrong-path-session',
+        baseRepo: base,
+        name: 'valid-branch',
+        sourceBranch: 'main',
+        recoveryKey,
+      });
+
+      await vi.waitFor(() => expect(sawWorktreeAdd).toBe(true));
+
+      const cancelPromise = manager.cancelPrecreatedWorktree(
+        'wrong-path-session',
+        { path: path.join(base, '.cindy-worktrees', 'completely-different') },
+        { canRemove: async () => true },
+      );
+
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(worktreeAddSignal?.aborted).toBe(false);
+      expect(cancelledIds.has('wrong-path-session')).toBe(false);
+
+      releaseWorktreeAdd();
+      const created = await createPromise;
+      expect(created).toMatchObject({ ok: true });
+      await expect(cancelPromise).resolves.toEqual({ status: 'path-mismatch' });
+      expect(cancelledIds.has('wrong-path-session')).toBe(false);
+      expect(storeMap.has('wrong-path-session')).toBe(true);
+    } finally {
+      fsSync.rmSync(tmpRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('cancelling while background full checkout is stuck aborts the checkout and unblocks the repo create queue', async () => {
+    const tmpRoot = fsSync.mkdtempSync(path.join(os.tmpdir(), 'xdt-wt-bg-abort-'));
+    try {
+      const base = path.join(tmpRoot, 'repo');
+      fsSync.mkdirSync(base, { recursive: true });
+      const recoveryKey = 'recovery-key-bg-abort-123456';
+      let bgCheckoutSignal: AbortSignal | undefined;
+      let sawBgCheckout = false;
+      let releaseProtectedLsFiles!: () => void;
+      let sawProtectedLsFiles = false;
+
+      gitExecMock.mockImplementation(async (args: string[], _cwd?: string, opts?: { signal?: AbortSignal }) => {
+        if (args[0] === '--version') return { stdout: 'git version 2.50.0\n', stderr: '' };
+        if (args[0] === 'rev-parse' && args[1] === '--show-toplevel') {
+          return { stdout: `${base}\nmain\n.git\n.git\n`, stderr: '' };
+        }
+        if (args[0] === 'branch') return { stdout: 'refs/heads/main\n', stderr: '' };
+        if (args[0] === 'for-each-ref') return { stdout: 'main\n', stderr: '' };
+        if (args[0] === 'worktree' && args[1] === 'list') return { stdout: '', stderr: '' };
+        if (args[0] === 'checkout' && args.includes(':(exclude).claude')) {
+          sawBgCheckout = true;
+          bgCheckoutSignal = opts?.signal;
+          return new Promise((_resolve, reject) => {
+            opts?.signal?.addEventListener('abort', () => {
+              reject(new Error('background checkout aborted'));
+            }, { once: true });
+          });
+        }
+        if (args[0] === 'ls-files') {
+          sawProtectedLsFiles = true;
+          return new Promise<{ stdout: string; stderr: string }>((resolve) => {
+            releaseProtectedLsFiles = () => resolve({ stdout: '', stderr: '' });
+          });
+        }
+        return { stdout: '', stderr: '' };
+      });
+
+      const firstCreate = manager.createWorktree({
+        sessionId: 'bg-stuck-session',
+        baseRepo: base,
+        name: 'bg-stuck',
+        sourceBranch: 'main',
+        recoveryKey,
+      });
+
+      await vi.waitFor(() => {
+        expect(sawBgCheckout).toBe(true);
+        expect(sawProtectedLsFiles).toBe(true);
+      });
+      expect(bgCheckoutSignal?.aborted).toBe(false);
+
+      const cancelPromise = manager.cancelPrecreatedWorktree(
+        'bg-stuck-session',
+        { recoveryKey },
+        { canRemove: async () => true },
+      );
+
+      await vi.waitFor(() => expect(bgCheckoutSignal?.aborted).toBe(true));
+      releaseProtectedLsFiles();
+
+      await expect(firstCreate).resolves.toMatchObject({ ok: false });
+      await expect(cancelPromise).resolves.toEqual({ status: 'absent' });
+
+      // Subsequent create on the same baseRepo must proceed instead of hanging behind rollbackPartialCreate.
+      gitExecMock.mockImplementation(async (args: string[]) => {
+        if (args[0] === '--version') return { stdout: 'git version 2.50.0\n', stderr: '' };
+        if (args[0] === 'rev-parse' && args[1] === '--show-toplevel') {
+          return { stdout: `${base}\nmain\n.git\n.git\n`, stderr: '' };
+        }
+        if (args[0] === 'branch') return { stdout: 'refs/heads/main\n', stderr: '' };
+        if (args[0] === 'for-each-ref') return { stdout: 'main\n', stderr: '' };
+        if (args[0] === 'worktree' && args[1] === 'list') return { stdout: '', stderr: '' };
+        return { stdout: '', stderr: '' };
+      });
+
+      const secondCreate = await manager.createWorktree({
+        sessionId: 'next-session',
+        baseRepo: base,
+        name: 'next-branch',
+        sourceBranch: 'main',
+        recoveryKey: 'recovery-key-next-123456',
+      });
+      expect(secondCreate).toMatchObject({ ok: true });
+    } finally {
+      fsSync.rmSync(tmpRoot, { recursive: true, force: true });
+    }
   });
 });

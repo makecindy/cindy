@@ -352,6 +352,7 @@ const precreatedWorktreeOperationQueues = new Map<string, Promise<void>>();
 interface ActivePrecreatedCreate {
   controller: AbortController;
   recoveryKey?: string;
+  worktreePath?: string;
 }
 const activePrecreatedCreates = new Map<string, ActivePrecreatedCreate>();
 /** Bounded wait (< 60s device-link discard timeout) so a stuck create returns in-progress instead of timing out as offline. */
@@ -379,14 +380,20 @@ async function awaitBounded(promise: Promise<unknown>, timeoutMs: number): Promi
   }
 }
 
-function abortMatchingActivePrecreatedCreate(
-  sessionId: string,
-  locator: { recoveryKey?: string },
-): void {
-  const active = activePrecreatedCreates.get(sessionId);
-  if (!active) return;
-  if (locator.recoveryKey !== undefined && active.recoveryKey !== locator.recoveryKey) return;
-  active.controller.abort();
+function matchesActivePrecreatedCreate(
+  active: ActivePrecreatedCreate,
+  locator: { path?: string; recoveryKey?: string },
+): boolean {
+  if (locator.recoveryKey !== undefined) {
+    return active.recoveryKey !== undefined && active.recoveryKey === locator.recoveryKey;
+  }
+  if (locator.path !== undefined) {
+    return (
+      active.worktreePath !== undefined
+      && path.resolve(active.worktreePath) === path.resolve(locator.path)
+    );
+  }
+  return false;
 }
 
 function throwIfCreateAborted(signal?: AbortSignal): void {
@@ -682,7 +689,7 @@ async function stageCheckout(
       ':(exclude).claude', ':(exclude).sivi',
     ],
     worktreePath,
-    { extraEnv: { LC_ALL: 'C' }, onSpawn: onCheckoutChildSpawn },
+    { extraEnv: { LC_ALL: 'C' }, onSpawn: onCheckoutChildSpawn, ...(signal ? { signal } : {}) },
   )
     .then(() => {
       log.info(
@@ -901,10 +908,13 @@ export async function copyClaudeSiviDirs(
  *   (不再无条件写全局 safe.directory:dubious-ownership 时由 gitExec 幂等按需处理;
  *    删除/归档时由 removeWorktreeForSession 清理该 path 的条目, 见 #2627)
  */
-// Only opt-in creators retain a handle for failure compensation; normal startup stays asynchronous.
-const backgroundCheckouts = new Map<string, Promise<void>>();
+interface BackgroundCheckoutEntry {
+  promise: Promise<void>;
+  abort: () => void;
+}
+const backgroundCheckouts = new Map<string, BackgroundCheckoutEntry>();
 export async function awaitBackgroundCheckout(sessionId: string): Promise<void> {
-  await backgroundCheckouts.get(sessionId)?.catch(() => undefined);
+  await backgroundCheckouts.get(sessionId)?.promise.catch(() => undefined);
 }
 
 export interface CreateWorktreeOptions {
@@ -936,7 +946,7 @@ export async function createWorktree(req: CreateWorktreeReq, options?: CreateWor
   activePrecreatedCreates.set(req.sessionId, activeEntry);
   const create = () => withCreateWorktreeQueue(req.baseRepo, () => {
     worktreeManagerPorts().assertPrecreatedSessionNotCancelled(req.sessionId);
-    return createWorktreeInner(req, options, controller.signal);
+    return createWorktreeInner(req, options, activeEntry);
   });
   try {
     return await withPrecreatedWorktreeOperationQueue(req.sessionId, create);
@@ -950,8 +960,9 @@ export async function createWorktree(req: CreateWorktreeReq, options?: CreateWor
 async function createWorktreeInner(
   req: CreateWorktreeReq,
   options?: CreateWorktreeOptions,
-  signal?: AbortSignal,
+  activeEntry?: ActivePrecreatedCreate,
 ): Promise<CreateWorktreeResp> {
+  const signal = activeEntry?.controller.signal;
   const snap: CreatedSnapshot = {};
   const totalStartedAt = Date.now();
   try {
@@ -1068,6 +1079,7 @@ async function createWorktreeInner(
       worktreePath = path.join(baseRepo, MANAGED_WORKTREE_DIR_NAME, name);
       attempts += 1;
     }
+    if (activeEntry) activeEntry.worktreePath = worktreePath;
 
     // 4. mkdirp parent
     return await withWorktreeResourceLock(worktreePath, async (): Promise<CreateWorktreeResp> => {
@@ -1139,9 +1151,15 @@ async function createWorktreeInner(
             bgPromise = stageRes.fullCheckoutPromise.finally(() => releaseWorktreeRuntimeLease(checkoutLease));
             snap.backgroundCheckout = bgPromise;
             const settled = bgPromise.catch(() => undefined);
-            backgroundCheckouts.set(req.sessionId, settled);
+            const checkoutEntry: BackgroundCheckoutEntry = {
+              promise: settled,
+              abort: () => activeEntry?.controller.abort(),
+            };
+            backgroundCheckouts.set(req.sessionId, checkoutEntry);
             void settled.finally(() => {
-              if (backgroundCheckouts.get(req.sessionId) === settled) backgroundCheckouts.delete(req.sessionId);
+              if (backgroundCheckouts.get(req.sessionId) === checkoutEntry) {
+                backgroundCheckouts.delete(req.sessionId);
+              }
             });
           }
         } catch (err) {
@@ -1686,12 +1704,17 @@ export async function cancelPrecreatedWorktree(
   options: Pick<RemoveWorktreeOptions, 'canRemove' | 'reclaimOrphanedRuntimeLeases'>,
 ): Promise<DiscardPrecreatedWorktreeResult> {
   const active = activePrecreatedCreates.get(sessionId);
-  if (active && (locator.recoveryKey === undefined || active.recoveryKey === locator.recoveryKey)) {
+  if (active && matchesActivePrecreatedCreate(active, locator)) {
     if (!options.canRemove || !(await options.canRemove())) {
       return { status: 'preserved', reason: 'claimed' };
     }
-    worktreeManagerPorts().sealPrecreatedSessionCancellation(sessionId);
-    abortMatchingActivePrecreatedCreate(sessionId, locator);
+    if (
+      activePrecreatedCreates.get(sessionId) === active
+      && matchesActivePrecreatedCreate(active, locator)
+    ) {
+      worktreeManagerPorts().sealPrecreatedSessionCancellation(sessionId);
+      active.controller.abort();
+    }
   }
   return withPrecreatedWorktreeOperationQueue(
     sessionId,
@@ -1736,9 +1759,14 @@ export async function discardPrecreatedWorktreeByRecoveryKey(
   options: Pick<RemoveWorktreeOptions, 'canRemove' | 'reclaimOrphanedRuntimeLeases'> = {},
 ): Promise<DiscardPrecreatedWorktreeResult> {
   const active = activePrecreatedCreates.get(sessionId);
-  if (active && active.recoveryKey === recoveryKey) {
+  if (active && matchesActivePrecreatedCreate(active, { recoveryKey })) {
     if (!options.canRemove || (await options.canRemove())) {
-      abortMatchingActivePrecreatedCreate(sessionId, { recoveryKey });
+      if (
+        activePrecreatedCreates.get(sessionId) === active
+        && matchesActivePrecreatedCreate(active, { recoveryKey })
+      ) {
+        active.controller.abort();
+      }
     }
   }
   return withPrecreatedWorktreeOperationQueue(
@@ -1788,8 +1816,14 @@ export async function discardPrecreatedWorktree(
   if (meta.ephemeral) return { status: 'preserved', reason: 'ephemeral' };
 
   const activeCheckout = backgroundCheckouts.get(sessionId);
-  if (activeCheckout && !(await awaitBounded(activeCheckout, PRECREATED_CHECKOUT_WAIT_MS))) {
-    return { status: 'preserved', reason: 'in-progress' };
+  if (activeCheckout) {
+    if (options.canRemove && !(await options.canRemove())) {
+      return { status: 'preserved', reason: 'claimed' };
+    }
+    activeCheckout.abort();
+    if (!(await awaitBounded(activeCheckout.promise, PRECREATED_CHECKOUT_WAIT_MS))) {
+      return { status: 'preserved', reason: 'in-progress' };
+    }
   }
 
   const preserveReason = await removePrecreatedWorktreeWithReason(sessionId, {
