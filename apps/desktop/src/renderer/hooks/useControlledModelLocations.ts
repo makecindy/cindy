@@ -21,8 +21,16 @@ import {
   type DataOwnerGeneration,
 } from '@/contexts/dataOwnerGeneration';
 import { extractIpcError } from '@/utils/ipcError';
-import { evictDeviceProviders, getRoutedProviderGeneration } from './useDeviceProviders';
-import { evictDeviceCapabilities } from './useAgentCapabilities';
+import {
+  evictDeviceProviders,
+  getCachedControlledDeviceProviderTargets,
+  getRoutedProviderGeneration,
+  subscribeRoutedProviderInvalidation,
+} from './useDeviceProviders';
+import {
+  evictDeviceCapabilities,
+  getCachedControlledDeviceCapabilityTargets,
+} from './useAgentCapabilities';
 import {
   evictControlledPluginEngines,
   evictRemotePluginEngines,
@@ -30,7 +38,11 @@ import {
 } from './usePluginEngines';
 import { refreshControlledAvailableAgents } from './useAvailableAgents';
 import { isProviderShareAgentDeviceId } from '../../shared/providerShare';
-import { invalidateControlledCatalogRoutes, refreshDiscoveredCatalogRoutes } from '@/lib/remoteCatalogSnapshot';
+import {
+  invalidateControlledCatalogRoutes,
+  refreshDiscoveredCatalogRoutes,
+  refreshRemoteCatalogSnapshot,
+} from '@/lib/remoteCatalogSnapshot';
 
 const EMPTY_LOCATIONS: ControlledModelLocation[] = [];
 
@@ -73,11 +85,29 @@ function evictRouteKey(route: string): void {
   evictRemotePluginEngines(route);
 }
 
+interface RefreshRequest {
+  destructive: boolean;
+  /** Revalidate already-cached routed catalogs that could have changed while detached. */
+  refreshCachedRoutes: 'none' | 'self-only' | 'all';
+}
+
+function mergeRefreshRequest(existing: RefreshRequest | null, next: RefreshRequest): RefreshRequest {
+  if (!existing) return next;
+  const destructive = existing.destructive || next.destructive;
+  const rank = (mode: RefreshRequest['refreshCachedRoutes']): number =>
+    mode === 'all' ? 2 : mode === 'self-only' ? 1 : 0;
+  const refreshCachedRoutes = rank(existing.refreshCachedRoutes) >= rank(next.refreshCachedRoutes)
+    ? existing.refreshCachedRoutes
+    : next.refreshCachedRoutes;
+  return { destructive, refreshCachedRoutes };
+}
+
 interface ControlledLocationsEntry {
   readonly deviceId: string;
   readonly owner: DataOwnerGeneration;
   readonly link: DeviceLinkApi;
   routedGen: number;
+  hasSubscribers(): boolean;
   subscribe(listener: () => void): () => void;
   addSelfDeviceId(selfDeviceId: string | null | undefined): () => void;
   snapshot(): ControlledModelLocation[] | undefined;
@@ -85,6 +115,44 @@ interface ControlledLocationsEntry {
 }
 
 let entriesByOwner = new WeakMap<DataOwnerGeneration, Map<string, ControlledLocationsEntry>>();
+let globalCatalogPushWatchers = 0;
+
+/**
+ * Called by the app-wide device-link remote-push subscriber (`useDeviceLinkRemoteProjects`)
+ * so detached location entries know whether `CONTROLLED_MODEL_CATALOG_CHANGED` pushes are
+ * continuously observed while no model picker / draft route is mounted.
+ */
+export function registerControlledCatalogPushWatcher(): () => void {
+  globalCatalogPushWatchers += 1;
+  let active = true;
+  return () => {
+    if (!active) return;
+    active = false;
+    globalCatalogPushWatchers = Math.max(0, globalCatalogPushWatchers - 1);
+  };
+}
+
+/**
+ * Invalidate cached routed catalogs and detached locations when `CONTROLLED_MODEL_CATALOG_CHANGED`
+ * arrives while no `useControlledModelLocations` consumer is mounted for `deviceId`.
+ * Mounted entries handle the same push directly through their own listener.
+ */
+export function invalidateDetachedControlledModelLocations(
+  deviceId: string,
+  receivedChangeSequence?: number,
+): void {
+  const owner = getDataOwnerGeneration();
+  const byDevice = entriesByOwner.get(owner);
+  const existing = byDevice?.get(deviceId);
+  if (existing?.hasSubscribers()) return;
+  invalidateControlledCatalogRoutes(deviceId, true, receivedChangeSequence);
+  evictControlledPluginEngines(deviceId);
+  refreshControlledAvailableAgents(deviceId);
+  if (existing) {
+    existing.dispose();
+    byDevice?.delete(deviceId);
+  }
+}
 
 function createEntry(
   owner: DataOwnerGeneration,
@@ -92,8 +160,8 @@ function createEntry(
   link: DeviceLinkApi,
 ): ControlledLocationsEntry {
   let revision = 0;
-  let pending = false;
-  let queuedMode: 'revalidate' | 'reload' | null = null;
+  let activeRequest: number | null = null;
+  let queuedRequest: RefreshRequest | null = null;
   let available = true;
   let supported = false;
   let hasResolved = false;
@@ -120,8 +188,8 @@ function createEntry(
 
   const resetLocalState = (): void => {
     revision += 1;
-    pending = false;
-    queuedMode = null;
+    activeRequest = null;
+    queuedRequest = null;
     available = true;
     supported = false;
     hasResolved = false;
@@ -142,10 +210,11 @@ function createEntry(
     if (current !== undefined) setCurrent(EMPTY_LOCATIONS);
   };
 
-  const refresh = async (destructive: boolean): Promise<void> => {
-    if (subscribers.size === 0 || pending || !available || !isDataOwnerGenerationCurrent(owner)) return;
-    pending = true;
+  const refresh = async (mode: RefreshRequest): Promise<void> => {
+    const { destructive, refreshCachedRoutes } = mode;
+    if (subscribers.size === 0 || activeRequest !== null || !available || !isDataOwnerGenerationCurrent(owner)) return;
     const request = ++revision;
+    activeRequest = request;
     const isCurrent = (): boolean =>
       subscribers.size > 0 && request === revision && isDataOwnerGenerationCurrent(owner);
     try {
@@ -214,6 +283,20 @@ function createEntry(
       if (destructive || recoveredCatalogs !== undefined) {
         refreshDiscoveredCatalogRoutes(deviceId, recoveredCatalogs);
         recoveredCatalogs = undefined;
+      } else if (refreshCachedRoutes !== 'none') {
+        // If catalog pushes could have been missed while detached (e.g. without a
+        // global remote-push watcher, or for local self-device sources), refresh
+        // already-cached routes in the background while retaining their display copies.
+        const cachedRoutes = new Set([
+          ...getCachedControlledDeviceProviderTargets(deviceId),
+          ...getCachedControlledDeviceCapabilityTargets(deviceId),
+        ]);
+        for (const route of cachedRoutes) {
+          const parsed = parseModelCatalogKey(route);
+          if (!parsed || !nextSourceIds.has(parsed.agentDeviceId)) continue;
+          if (refreshCachedRoutes === 'self-only' && !selfDeviceIds.has(parsed.agentDeviceId)) continue;
+          void refreshRemoteCatalogSnapshot(route);
+        }
       }
       refreshControlledPluginEngines(deviceId, sourceIds);
     } catch (error) {
@@ -234,30 +317,34 @@ function createEntry(
         else setCurrent(EMPTY_LOCATIONS);
       }
     } finally {
-      pending = false;
-      if (queuedMode !== null && subscribers.size > 0) {
-        const nextDestructive = queuedMode === 'reload';
-        queuedMode = null;
-        void refresh(nextDestructive);
+      if (activeRequest === request) {
+        activeRequest = null;
+        if (queuedRequest !== null && subscribers.size > 0) {
+          const next = queuedRequest;
+          queuedRequest = null;
+          void refresh(next);
+        }
       }
     }
   };
 
-  const revalidate = (): void => {
-    if (pending) {
-      if (queuedMode !== 'reload') queuedMode = 'revalidate';
+  const revalidate = (refreshCachedRoutes: RefreshRequest['refreshCachedRoutes'] = 'none'): void => {
+    const next: RefreshRequest = { destructive: false, refreshCachedRoutes };
+    if (activeRequest !== null) {
+      queuedRequest = mergeRefreshRequest(queuedRequest, next);
       return;
     }
-    void refresh(false);
+    void refresh(next);
   };
 
   const reload = (catalogChanged = false, receivedChangeSequence?: number): void => {
     invalidate(catalogChanged, receivedChangeSequence);
-    if (pending) {
-      queuedMode = 'reload';
+    const next: RefreshRequest = { destructive: true, refreshCachedRoutes: 'none' };
+    if (activeRequest !== null) {
+      queuedRequest = mergeRefreshRequest(queuedRequest, next);
       return;
     }
-    void refresh(true);
+    void refresh(next);
   };
 
   const attachListeners = (): void => {
@@ -328,6 +415,34 @@ function createEntry(
         reload(true);
       }
     });
+    // Stay synchronized when another path (e.g. PROVIDER_GROUP_IPC.CHANGED via
+    // refreshRemoteCatalogSnapshot, disconnect, or account eviction) advances the
+    // host's routed provider generation while this entry is mounted.
+    const offRoutedInvalidation = subscribeRoutedProviderInvalidation((invalidatedDeviceId, options) => {
+      if (!isDataOwnerGenerationCurrent(owner)) return;
+      if (invalidatedDeviceId === null) {
+        entry.routedGen = getRoutedProviderGeneration(deviceId);
+        resetLocalState();
+        notify();
+        return;
+      }
+      if (invalidatedDeviceId !== deviceId) return;
+      entry.routedGen = getRoutedProviderGeneration(deviceId);
+      if (options?.retainDisplaySnapshot) {
+        // A retained host refresh (e.g. PROVIDER_GROUP_IPC.CHANGED) must keep
+        // the location list visible and recover quietly rather than blanking it.
+        if (activeRequest === null) revalidate();
+        return;
+      }
+      // Disconnect / revoke / disable eviction clears cached locations until the host returns.
+      revision += 1;
+      queuedRequest = null;
+      hasResolved = false;
+      lastConfirmedAt = 0;
+      completeLocations = [];
+      sourceIds = new Set();
+      setCurrent(EMPTY_LOCATIONS);
+    });
     // A does not receive its own broadcasts through B. Its local notifications
     // must also refresh catalogs routed through B, without using A's local grants.
     const reloadLocalSource = (): void => {
@@ -350,6 +465,7 @@ function createEntry(
       offReset?.();
       offControl?.();
       offPush?.();
+      offRoutedInvalidation();
       offProviders?.();
       offAgents?.();
       window.removeEventListener('focus', revalidateOnFocus);
@@ -362,6 +478,9 @@ function createEntry(
     owner,
     link,
     routedGen: getRoutedProviderGeneration(deviceId),
+    hasSubscribers() {
+      return subscribers.size > 0;
+    },
     subscribe(listener) {
       const wasEmpty = subscribers.size === 0;
       subscribers.add(listener);
@@ -372,20 +491,23 @@ function createEntry(
           entry.routedGen = currentRoutedGen;
         }
         attachListeners();
+        const returningAfterDetach = detached && hasResolved;
+        detached = false;
         if (!hasResolved) {
-          void refresh(false);
-        } else if (detached) {
-          detached = false;
-          // Listeners were detached while unused, so a catalog push could have
-          // arrived in the meantime; revalidate quietly while showing the cache.
+          // Route through revalidate() so a quick remount while the prior initial
+          // read is still settling queues a replacement read instead of dropping it.
           revalidate();
+        } else if (returningAfterDetach) {
+          // Listeners were detached while unused; revalidate locations quietly and
+          // refresh any cached routes that could have missed pushes while away.
+          revalidate(globalCatalogPushWatchers > 0 ? 'self-only' : 'all');
         }
       }
       return () => {
         subscribers.delete(listener);
         if (subscribers.size === 0) {
           revision += 1;
-          queuedMode = null;
+          queuedRequest = null;
           detached = true;
           detachListeners?.();
         }
@@ -402,7 +524,6 @@ function createEntry(
     },
     snapshot() {
       if (!isDataOwnerGenerationCurrent(owner)) return EMPTY_LOCATIONS;
-      if (entry.routedGen !== getRoutedProviderGeneration(deviceId)) return EMPTY_LOCATIONS;
       return current;
     },
     dispose() {
@@ -452,6 +573,7 @@ export function resetControlledModelLocationsForTests(): void {
     for (const entry of map.values()) entry.dispose();
   }
   entriesByOwner = new WeakMap();
+  globalCatalogPushWatchers = 0;
 }
 
 /** The task host discovers sources; no intersection with the controller's shares/devices. */

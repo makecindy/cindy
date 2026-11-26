@@ -461,6 +461,10 @@ export function getMountedControlledDeviceProviderTargets(taskDeviceId: string):
   return [...listeners.keys()].filter(key => parseModelCatalogKey(key)?.taskDeviceId === taskDeviceId);
 }
 
+export function getCachedControlledDeviceProviderTargets(taskDeviceId: string): string[] {
+  return [...cache.keys()].filter(key => parseModelCatalogKey(key)?.taskDeviceId === taskDeviceId && expiry.valid(key));
+}
+
 /** device-link:被控设备下线 / 断链时驱逐其供应商缓存(只清该设备的 key + 代际自增)。 */
 export function getCachedDeviceProviders(deviceId: string): DeviceProvidersPayload | null {
   return expiry.valid(deviceId) ? cache.get(deviceId) ?? null : null;
@@ -499,9 +503,28 @@ export function getDeviceProvidersGeneration(deviceId: string): number {
 
 let allEvictGen = 0;
 const routedProviderGenerations = new Map<string, number>();
+type RoutedProviderInvalidationListener = (
+  deviceId: string | null,
+  options?: { retainDisplaySnapshot?: boolean },
+) => void;
+const routedProviderInvalidationListeners = new Set<RoutedProviderInvalidationListener>();
 
 export function getRoutedProviderGeneration(deviceId: string): number {
   return allEvictGen + (routedProviderGenerations.get(deviceId) ?? 0);
+}
+
+export function subscribeRoutedProviderInvalidation(
+  listener: RoutedProviderInvalidationListener,
+): () => void {
+  routedProviderInvalidationListeners.add(listener);
+  return () => { routedProviderInvalidationListeners.delete(listener); };
+}
+
+function notifyRoutedProviderInvalidation(
+  deviceId: string | null,
+  options?: { retainDisplaySnapshot?: boolean },
+): void {
+  for (const listener of [...routedProviderInvalidationListeners]) listener(deviceId, options);
 }
 
 export function evictDeviceProviders(
@@ -509,6 +532,7 @@ export function evictDeviceProviders(
   options?: { retainDisplaySnapshot?: boolean; directOnly?: boolean; deferNotify?: boolean },
 ): number {
   // A provisional direct target must not evict the host's healthy routed aliases.
+  const routedInvalidated = !options?.directOnly && !parseModelCatalogKey(deviceId);
   if (!options?.directOnly) {
     if (!parseModelCatalogKey(deviceId)) {
       routedProviderGenerations.set(deviceId, getRoutedProviderGeneration(deviceId) + 1);
@@ -536,6 +560,7 @@ export function evictDeviceProviders(
       if (!cache.has(deviceId)) notifyDeviceProviders(deviceId, event);
     });
   } else notifyDeviceProviders(deviceId, event);
+  if (routedInvalidated) notifyRoutedProviderInvalidation(deviceId, options);
   return deviceGen.get(deviceId)!;
 }
 
@@ -544,4 +569,5 @@ export function evictAllDeviceProviders(): void {
   allEvictGen += 1;
   const devices = new Set([...cache.keys(), ...inflight.keys(), ...listeners.keys(), ...deviceGen.keys()]);
   for (const deviceId of devices) evictDeviceProviders(deviceId);
+  notifyRoutedProviderInvalidation(null);
 }
