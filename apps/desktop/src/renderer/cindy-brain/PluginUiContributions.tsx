@@ -9,6 +9,7 @@ import { usePluginUiControl } from './pluginUiControls';
 import { getStickySessionDeviceId } from '@/features/device-link/stickySessionOrigin';
 import { Tip } from '@/components/ui/tooltip';
 import { Button } from '@/components/ui/button';
+import { WINDOW_NO_DRAG_STYLE } from '@/components/layout/windowDrag';
 import { Select } from '@/components/ui/select';
 import { Popover, PopoverAnchor, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Spinner } from '@/components/ui/spinner';
@@ -235,7 +236,7 @@ export function PluginUiMenu({ sessionId, ghostId }: { sessionId?: string | null
   const launchers = usePluginUiLaunchers().filter(entry => (!ghostId || entry.instanceId === ghostId) && (sessionId || entry.scope !== 'task'));
   const { t } = useTranslation();
   if (!launchers.length || sessionId && getStickySessionDeviceId(sessionId)) return null;
-  return <DropdownMenu><DropdownMenuTrigger asChild><Button variant="secondary" tone="quiet" size="sm">{t('pluginUi.menu')}</Button></DropdownMenuTrigger>
+  return <DropdownMenu><DropdownMenuTrigger asChild><Button variant="secondary" tone="quiet" size="sm" style={WINDOW_NO_DRAG_STYLE}>{t('pluginUi.menu')}</Button></DropdownMenuTrigger>
     <DropdownMenuContent align="end">{launchers.map(entry => <DropdownMenuItem key={`${entry.instanceId}:${entry.kind}:${entry.id}`}
       onSelect={() => void runPluginUiLauncher(entry, sessionId ?? null).catch(() => toast.error(t('pluginUi.actionFailed')))}>
       {entry.title} · {entry.ghost.manifest.name}
