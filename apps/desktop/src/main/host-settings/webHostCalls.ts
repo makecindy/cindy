@@ -65,9 +65,9 @@ export async function executeWebHostCall(
       // The owner's provider management only (group and share settings of this instance's
       // providers); group scheduling and continuity stay between the owner's computers.
       if (!isProviderManagementRequest(command.args[0])) return { ok: false, code: 'INVALID_PARAMS' };
-      // Group and share changes count as maintenance work; the cloud channels count their own.
-      const value = await runReportedRemoteChange(() =>
-        deps.inContext(controller, channel, () => deps.providerGroup(controller, command.args[0])));
+      // The management handler counts group and share changes as maintenance work, as it does
+      // over DeviceLink, and still answers reads; the cloud channels count their own.
+      const value = await deps.inContext(controller, channel, () => deps.providerGroup(controller, command.args[0]));
       return { ok: true, channel: value ?? null };
     }
     // As over DeviceLink, provider:list's argument only negotiates tunnel features.

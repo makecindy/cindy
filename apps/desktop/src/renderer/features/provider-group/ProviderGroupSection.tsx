@@ -24,7 +24,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
-import { SETTINGS_HINT, SETTINGS_SECTION_TITLE_CLASS, SettingsCard, SettingsRow } from '@/components/ui/settings-rows';
+import { SETTINGS_HINT, SETTINGS_SECTION_TITLE_CLASS, SettingsBlock, SettingsCard, SettingsRow } from '@/components/ui/settings-rows';
 import { Switch } from '@/components/ui/switch';
 import { Tip } from '@/components/ui/tooltip';
 import { useOptionalAuthDeviceId } from '@/contexts/AuthContext';
@@ -37,8 +37,9 @@ import {
   type ProviderGroupConfig,
   type ProviderGroupMember,
   type ProviderGroupMemberStatus,
-  type ProviderGroupStrategy,
 } from '../../../shared/providerGroup';
+import type { RouteStrategy } from '../../../shared/routeStrategy';
+import { RouteStrategyNote } from '@/components/settings/RouteStrategyNote';
 import { providerShareComputerName, useProviderShareOwnerNameOf } from '../provider-share/providerShareNames';
 import { GroupMemberQuota, groupMemberQuotaTarget } from './GroupMemberQuota';
 import { GroupMemberReshare, reshareSummaryText } from './GroupMemberReshare';
@@ -220,8 +221,16 @@ export function ProviderGroupSection({ providerId, providerName, deviceId, devic
                 </div>
               );
             })}
-            <ProviderGroupStrategyControl strategy={config.strategy} disabled={blocked}
-              onChange={strategy => void save({ ...config, strategy })} />
+            {/* 组里的几台电脑就是一条自动路由：选法在「智能路由」里改，这里说明现状并给出入口。
+                组在另一台电脑上(deviceId)时这台的智能路由管不到它，选法仍在这里改，存到那台。 */}
+            {deviceId ? (
+              <ProviderGroupStrategyControl strategy={config.strategy} disabled={blocked}
+                onChange={strategy => void save({ ...config, strategy })} />
+            ) : (
+              <SettingsBlock>
+                <RouteStrategyNote strategy={config.strategy} providerId={providerId} className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1" />
+              </SettingsBlock>
+            )}
             <SettingsRow
               title={t('providerGroup.autoSwitch.label')}
               hint={t('providerGroup.autoSwitch.description')}
@@ -349,7 +358,7 @@ function MemberRow({
 }: {
   member: ProviderGroupMember;
   status: ProviderGroupMemberStatus | undefined;
-  strategy: ProviderGroupStrategy;
+  strategy: RouteStrategy;
   first: boolean;
   /** 同一台电脑上有几个账号时，这是第几个(从 1 起)：行收在电脑下面，只写账号；不传就是一台电脑一行。 */
   account?: number;
@@ -460,7 +469,7 @@ function MemberRow({
           <div className="flex shrink-0 items-center gap-1.5">
             <ProviderGroupLimitSelect name={label} member={member} disabled={disabled}
               onChange={limit => onChange(concurrencyLimitPatch(limit))} />
-            {strategy === 'weight' && (
+            {strategy === 'weighted' && (
               <ProviderGroupWeightSelect name={label} weight={member.weight} disabled={disabled}
                 onChange={weight => onChange({ weight })} />
             )}

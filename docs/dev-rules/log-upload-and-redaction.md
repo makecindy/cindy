@@ -45,6 +45,9 @@ override 语义见 [`configuration-and-overrides.md`](configuration-and-override
 低于 2,000 字符的 JSON 记录，用 `instance + event + part` 关联，避免单条截断丢掉队头证据。
 采样省略数由 `suppressed` 明示；总量裁剪仍遵守现有上限，不放宽来源、记录边界或脱敏规则。
 新增诊断须验证默认 INFO → 正式 writer → collectLogs 后的内容，不能只断言 logger 被调用。
+任务启动分段计时新增精确来源 `session-start-timing`（2026-11-26），单行 JSON，只含固定阶段名、
+Agent 种类枚举（未知记为 `other`）、启动方式、结果、尝试次数与毫秒数，不带任务 id、路径、
+模型名、供应商或错误原文；`maker-ipc` 根与本 scope 的子 scope 仍不放行。
 
 ## 1. 三条不变量
 

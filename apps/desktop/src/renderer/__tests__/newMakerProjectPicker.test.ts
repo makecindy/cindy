@@ -604,12 +604,10 @@ describe('Shared create project picker', () => {
     expect(deviceSwitcherPillSource).toContain('if (devices.length === 0) return null');
     // 离线设备列出但禁用 —— 掉线时从列表消失会让用户以为配对丢了。
     expect(deviceSwitcherPillSource).toContain('disabled={!device.online}');
-    // 换设备后停在这台设备的「对话」:上一台的项目路径在新机器上基本不存在,
-    // 留着会让用户以为项目跟过来了、发送时才在被控端 path guard 上失败。
+    // 换设备后按目标设备恢复上次选择的项目或对话,未记录过的设备回落默认目录或「对话」。
     expect(newMakerDraftRouteSource).toContain('const handleDeviceChange = useCallback(');
-    expect(newMakerDraftRouteSource).toContain(
-      'applyDraftTarget({ deviceId, deviceName, workingDir: null, explicitNoProject: true });',
-    );
+    expect(newMakerDraftRouteSource).toContain('resolveDeviceSwitchWorkspace(');
+    expect(newMakerDraftRouteSource).toContain('rememberDeviceTaskWorkspace(');
   });
 
   // #807:跨设备纯对话。放宽后「选了设备」单独成立即可整套走对端(能力/provider/创建同口径),

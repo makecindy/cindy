@@ -46,6 +46,7 @@ import { FileTypeIcon } from '@/components/ui/file-type-icon';
  */
 
 import {
+  useContext,
   useEffect,
   useMemo,
   useRef,
@@ -106,9 +107,12 @@ import {
   ACTIVITY_ROW_HOVER_SURFACE_CLASS,
   ACTIVITY_ROW_RADIUS_CLASS,
 } from './activityRowChrome';
+import { ImageGalleryContext, ImageGalleryScopeContext } from './ImageGalleryContext';
+import { AttachmentCollectionContext } from './AttachmentCollectionContext';
 import { ImageLightbox } from './ImageLightbox';
 import { TextLightbox } from './lazyPreviewLightboxes';
 import { ToolPayloadLightbox, type ToolPayloadMode } from './ToolPayloadLightbox';
+import { useFilePreviewLightbox } from './FilePreviewLightboxHost';
 import { useFileChipContextMenu } from './useFileChipContextMenu';
 import { activateInlineLinkFromKeyboard } from './linkInteraction';
 import {
@@ -957,6 +961,13 @@ export function AgentActionRow({
   const [expanded, setExpanded] = useState(false);
   const triggerRef = useRef<HTMLElement | null>(null);
   const fileChipRef = useRef<HTMLSpanElement | null>(null);
+  // 文件预览交给会话级宿主(issue #12851):这一行随时会被重建(实时预览区收起 /
+  // 「最近 5 条」把旧行挤出 / work group 换 key),预览不能跟着行一起消失。
+  // 没有宿主的场景(单独渲染这一行)保留就地渲染的退路。
+  const previewHost = useFilePreviewLightbox();
+  const images = useContext(ImageGalleryContext);
+  const scope = useContext(ImageGalleryScopeContext);
+  const attachments = useContext(AttachmentCollectionContext);
 
   /**
    * 行/chevron 激活时的分流:
@@ -972,7 +983,16 @@ export function AgentActionRow({
     const diffPayload = buildDiffPayload(descriptor, inp, asyncDiff ?? syncDiff);
     if (diffPayload) {
       triggerRef.current = anchor;
-      setLightbox({ kind: 'payload', payload: diffPayload });
+      if (previewHost) {
+        previewHost.open({
+          kind: 'diff',
+          sessionId: fileCtx.sessionId,
+          payload: diffPayload,
+          triggerRef,
+        });
+      } else {
+        setLightbox({ kind: 'payload', payload: diffPayload });
+      }
       return;
     }
     if (isInlineExpand) {
@@ -991,16 +1011,28 @@ export function AgentActionRow({
       if (isImagePath(absPath)) {
         // remote 会话:xdt-file://?path= 经 origin 改写走远程媒体管线(device 全量 /
         // ssh 限 workdir 内);本地 no-op。
-        setLightbox({
-          kind: 'image',
-          src: rewriteToRemoteMediaOrigin(
-            toLocalFileUrl(absPath),
-            toRemoteMediaOrigin(fileCtx.origin, fileCtx.workingDir),
-          ),
-        });
+        const src = rewriteToRemoteMediaOrigin(
+          toLocalFileUrl(absPath),
+          toRemoteMediaOrigin(fileCtx.origin, fileCtx.workingDir),
+        );
+        if (previewHost) {
+          previewHost.open({ kind: 'image', sessionId: fileCtx.sessionId, src, images, scope, attachments, file: fileCtx });
+        } else {
+          setLightbox({ kind: 'image', src });
+        }
       } else {
         if (!(await shouldOpenTextLightboxForOrigin(fileCtx, absPath))) return;
-        setLightbox({ kind: 'file', path: absPath, name: basename(absPath) });
+        if (previewHost) {
+          previewHost.open({
+            kind: 'document',
+            sessionId: fileCtx.sessionId,
+            filePath: absPath,
+            fileName: basename(absPath),
+            triggerRef,
+          });
+        } else {
+          setLightbox({ kind: 'file', path: absPath, name: basename(absPath) });
+        }
       }
       return;
     }

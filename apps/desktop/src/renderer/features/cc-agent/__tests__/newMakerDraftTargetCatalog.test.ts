@@ -8,6 +8,7 @@ import { clearDraft, getDraft, saveDraft } from '@/lib/composerDraftStore';
 import type { Effort, ProviderView } from '@cindy/model-providers';
 import { chatEligibleSourcesForModel, effectiveSourceIdForModel, getModel, isModelSelectableForNewRoute, reconcileInvocationEffort } from '@cindy/model-providers';
 import { isDeviceModelVisible, resolveFastSupported } from '@/lib/providerModels';
+import * as taskDraft from '@/state/newMakerDraft';
 import type { RemoteProjectTarget } from '@/components/new-chat/AddRemoteProjectDialog';
 import type { AgentCapabilities } from '@/hooks/useAgentCapabilities';
 import { parseDeviceProvidersPayload } from '@/hooks/useDeviceProviders';
@@ -171,6 +172,8 @@ function harness(options: {
       ? options.sourceDeviceId ?? undefined : options.sameDevice ? 'target-device' : 'old-device',
     effectiveRemoteHostId: null,
     effectiveAgentDeviceId: options.separateAgent ? 'agent-device' : undefined,
+    dataOwnerId: 'owner-test',
+    rememberDeviceTaskWorkspace: vi.fn(),
     capabilityAgentKind: 'pi',
     agentCatalogProviders: [provider('source', ['low'])],
     isSameNewMakerDevice, normalizeDbAgentKind, resolveDeviceLinkDraftDefaults,
@@ -198,7 +201,7 @@ function harness(options: {
     setWtBranchPreferenceSaving: vi.fn(), setWtBranchSync: vi.fn(), setWtBranchPreferenceError: vi.fn(),
     setWtBaseRepo: vi.fn(), setWtSourceBranch: vi.fn(), setWtSupportsRecoveryKeyDiscard: vi.fn(),
     setWtConfirmedIneligible: vi.fn(), setWtPreferenceSaving: vi.fn(),
-    setRemoteDraftPluginEngine: vi.fn(),
+    setRemoteDraftPluginEngine: vi.fn(), forgetRemoteAlternateDraftModel: vi.fn(),
   };
   const applyDraftTarget = callback<(request: unknown) => void>('applyDraftTarget', bindings);
   const add = callback<(target: RemoteProjectTarget) => Promise<void>>('handleRemoteProjectAdded', { ...bindings, applyDraftTarget });
@@ -206,6 +209,11 @@ function harness(options: {
     invoke, patchDraft, setRemoteDraftState, defaults, dlSeedKeyRef,
     evictDeviceCapabilities: bindings.evictDeviceCapabilities,
     evictDeviceProviders: bindings.evictDeviceProviders,
+    changeDevice: () => callback<(id: string, name: string) => void>('handleDeviceChange', {
+      ...bindings, applyDraftTarget, effectiveWorkingDir: bindings.draft.workingDir,
+      resolveDeviceSwitchWorkspace: () => ({ workingDir: null, remoteHostId: null, explicitNoProject: true }),
+      sendInFlightRef: { current: false }, directoryRecoveryRef: { current: null },
+    })('target-device', 'Target'),
     current: () => current,
     add: () => add({ kind: 'device-link', deviceId: 'target-device', deviceName: 'Target', path: '/remote/project' }),
   };
@@ -218,6 +226,26 @@ describe('remote project draft catalog ownership', () => {
     expect(h.evictDeviceCapabilities).toHaveBeenCalledWith('target-device', { directOnly: true });
     expect(h.evictDeviceProviders).toHaveBeenCalledWith('target-device', { directOnly: true });
   });
+  // PR #12916: exercise the device picker and real store together. A local
+  // plugin selection must never be carried into the controlled computer's draft.
+  it('drops the local agy Worker when the device picker switches to a controlled computer', () => {
+    taskDraft.__reloadForTest();
+    try {
+      taskDraft.patchCollab({
+        enabled: true, worker: 'acp',
+        workerConfig: { role: 'developer', providerId: 'acp-plugin:agy-plugin:agy', model: 'gemini-3-pro' },
+      });
+      expect(taskDraft.getDraft().collab.worker).toBe('acp');
+      const h = harness({ sourceDeviceId: null });
+      h.patchDraft.mockImplementation(taskDraft.patchDraft);
+      h.changeDevice();
+      expect(taskDraft.getDraft().deviceLinkDeviceId).toBe('target-device');
+      expect(taskDraft.getDraft().collab).toEqual({ enabled: false, worker: 'codex' });
+    } finally {
+      taskDraft.clearDraft();
+    }
+  });
+
   it.each([false, true])('seeds the new task device using its source-level efforts (previous separate Agent: %s)', async (separateAgent) => {
     const h = harness({ separateAgent, previous: selection('low') });
     await h.add();
@@ -236,6 +264,96 @@ describe('remote project draft catalog ownership', () => {
     const h = harness({ sameDevice: true, previous: selection(null) });
     await h.add();
     expect(h.current()).toEqual(selection('high'));
+  });
+
+  it('remembers and restores each device’s selected project when switching devices via handleDeviceChange', async () => {
+    const storage = new Map<string, string>();
+    vi.stubGlobal('localStorage', {
+      getItem: (key: string) => storage.get(key) ?? null,
+      setItem: (key: string, value: string) => { storage.set(key, value); },
+      removeItem: (key: string) => { storage.delete(key); },
+      clear: () => { storage.clear(); },
+    });
+    const {
+      getLastDeviceTaskWorkspace,
+      rememberDeviceTaskWorkspace,
+      resolveDeviceSwitchWorkspace,
+    } = await import('@/state/lastCreatedTaskWorkspace');
+
+    let state = {
+      deviceLinkDeviceId: null as string | null,
+      deviceLinkDeviceName: null as string | null,
+      workingDir: '/local/cindy' as string | null,
+      remoteHostId: null as string | null,
+      explicitNoProject: false,
+    };
+    const applyDraftTarget = vi.fn((req: {
+      deviceId: string | null;
+      deviceName: string | null;
+      workingDir: string | null;
+      remoteHostId?: string | null;
+      explicitNoProject?: boolean;
+    }) => {
+      state = {
+        deviceLinkDeviceId: req.deviceId,
+        deviceLinkDeviceName: req.deviceName,
+        workingDir: req.workingDir,
+        remoteHostId: req.remoteHostId ?? null,
+        explicitNoProject: req.workingDir == null && req.explicitNoProject === true,
+      };
+    });
+    const makeHandlers = () => {
+      const env = {
+        sendInFlightRef: { current: false },
+        directoryRecoveryRef: { current: null },
+        dataOwnerId: 'owner-switch',
+        draft: state,
+        effectiveDeviceLinkDeviceId: state.deviceLinkDeviceId ?? undefined,
+        effectiveRemoteHostId: state.remoteHostId,
+        effectiveWorkingDir: state.workingDir,
+        getLastDeviceTaskWorkspace,
+        rememberDeviceTaskWorkspace,
+        resolveDeviceSwitchWorkspace,
+        getDefaultNewTaskWorkingDir: () => null,
+        applyDraftTarget,
+      };
+      return {
+        handleDeviceChange: callback<(deviceId: string | null, deviceName: string | null) => void>('handleDeviceChange', env),
+        handleWorkingDirChange: callback<(dir: string | null) => void>('handleWorkingDirChange', env),
+      };
+    };
+
+    // Start on local with /local/cindy → switch to studio-a (never used → dialogue).
+    makeHandlers().handleDeviceChange('studio-a', 'Studio A');
+    expect(state).toMatchObject({ deviceLinkDeviceId: 'studio-a', workingDir: null, explicitNoProject: true });
+
+    // Pick /studio/project on studio-a → switch back to local → restores /local/cindy.
+    makeHandlers().handleWorkingDirChange('/studio/project');
+    expect(state).toMatchObject({ deviceLinkDeviceId: 'studio-a', workingDir: '/studio/project', explicitNoProject: false });
+    makeHandlers().handleDeviceChange(null, null);
+    expect(state).toMatchObject({ deviceLinkDeviceId: null, workingDir: '/local/cindy', explicitNoProject: false });
+
+    // Switch back to studio-a → restores /studio/project.
+    makeHandlers().handleDeviceChange('studio-a', 'Studio A');
+    expect(state).toMatchObject({ deviceLinkDeviceId: 'studio-a', workingDir: '/studio/project', explicitNoProject: false });
+
+    // Explicitly switch studio-a to dialogue → switch to local and back → studio-a remembers dialogue.
+    makeHandlers().handleWorkingDirChange(null);
+    makeHandlers().handleDeviceChange(null, null);
+    expect(state).toMatchObject({ deviceLinkDeviceId: null, workingDir: '/local/cindy', explicitNoProject: false });
+    makeHandlers().handleDeviceChange('studio-a', 'Studio A');
+    expect(state).toMatchObject({ deviceLinkDeviceId: 'studio-a', workingDir: null, explicitNoProject: true });
+
+    // Regression: device A remembers /local/cindy, then enters explicit dialogue (e.g. sidebar
+    // "Dialogue +" sets workingDir=null & explicitNoProject=true), switches to B, and returns to A.
+    // A must remain in dialogue instead of reverting to /local/cindy.
+    makeHandlers().handleDeviceChange(null, null);
+    expect(state).toMatchObject({ deviceLinkDeviceId: null, workingDir: '/local/cindy', explicitNoProject: false });
+    state = { ...state, workingDir: null, explicitNoProject: true };
+    makeHandlers().handleDeviceChange('studio-a', 'Studio A');
+    makeHandlers().handleDeviceChange(null, null);
+    expect(state).toMatchObject({ deviceLinkDeviceId: null, workingDir: null, explicitNoProject: true });
+    vi.unstubAllGlobals();
   });
 
   it('seeds from the fresh catalog when the same device has no prior selection', async () => {
@@ -327,7 +445,7 @@ describe('Agent location chosen on a controlled new-task draft', () => {
       selectableDevices: listed ? [{ deviceId, online: false }] : [],
       selectableDevicesLoaded: loaded,
       controlledModelRoute: { catalogHostDeviceId },
-      isProviderShareAgentDeviceId, patchDraft, setAlternateModel, setDlSel,
+      isProviderShareAgentDeviceId, patchDraft, setAlternateModel, setDlSel, forgetRemoteAlternateDraftModel: vi.fn(),
       log: { warn: vi.fn() },
     })();
     if (clears) {
@@ -347,7 +465,7 @@ describe('Agent location chosen on a controlled new-task draft', () => {
     const select = callback<(selection: unknown) => void>('handleUnifiedDraftSelect', {
       localModelIssue: null, localAlternate: null, setAlternateModel: vi.fn(), usesDeviceCatalog: true,
       setDraftFavoriteAnchor: vi.fn(), getDraft: () => ({}), switchVendor: vi.fn(), setDlSel: vi.fn(),
-      setRemoteDraftPluginEngine: vi.fn(),
+      setRemoteDraftPluginEngine: vi.fn(), forgetRemoteAlternateDraftModel: vi.fn(),
       normalizeDbAgentKind, dbToMakerAgentKind, modelCatalogKey, patchDraft,
       effectiveAgentDeviceId: undefined, isDeviceLinkDraft: true, deviceLinkInitial: null,
       controlledModelRoute: { catalogHostDeviceId: 'task-device' },
@@ -1472,7 +1590,7 @@ describe('the remote draft holder follows the displayed model', () => {
     const select = callback<(selection: unknown) => void>('handleUnifiedDraftSelect', {
       ...bindings, localModelIssue: null, localAlternate: null, setAlternateModel: vi.fn(),
       setDraftFavoriteAnchor: vi.fn(), getDraft: () => ({}), switchVendor: vi.fn(),
-      setRemoteDraftPluginEngine: vi.fn(),
+      setRemoteDraftPluginEngine: vi.fn(), forgetRemoteAlternateDraftModel: vi.fn(),
       normalizeDbAgentKind, dbToMakerAgentKind, setDlSel: vi.fn(), patchDraft: vi.fn(),
       catalogDeviceId: 'target-device', usesDeviceCatalog: true,
       dlRuntimeTouchedRef: { current: false }, dlExplicitChoiceRef: { current: false },
@@ -1515,7 +1633,7 @@ describe('the remote draft holder follows the displayed model', () => {
         resolveDeviceLinkDraftDefaults, setDlSel: vi.fn(), pushActiveDraftPref,
         dlSel: staleHolder, deviceLinkInitial: staleHolder, isCloudDeviceId,
         markDefaultTupleCustomized: vi.fn(), patchActiveTuplePrefs: vi.fn(),
-        setRemoteDraftPluginEngine: vi.fn(), localAlternate: null,
+        setRemoteDraftPluginEngine: vi.fn(), forgetRemoteAlternateDraftModel: vi.fn(), localAlternate: null,
       });
     handleModelDidChange('shared-model');
     expect(pushActiveDraftPref).toHaveBeenCalledTimes(writes);
@@ -1632,7 +1750,7 @@ describe('the seeded source is pinned only by an explicit model or source choice
       pushActiveDraftPref: vi.fn(),
       activePluginEngine: null,
       dlPluginEngine: null,
-      setRemoteDraftPluginEngine: vi.fn(),
+      setRemoteDraftPluginEngine: vi.fn(), forgetRemoteAlternateDraftModel: vi.fn(),
     };
     // 显式来源(用户为这个目标**明确选过**的那家)。没有显式选择时是 null。
     const explicitProviderId = () => callback<() => string | null>('explicitDraftProviderId', {
@@ -1646,9 +1764,14 @@ describe('the seeded source is pinned only by an explicit model or source choice
 
   it('does not pin the seeded source after a permission-only edit', () => {
     const h = harness();
+    const setRemoteDraftPermission = vi.fn();
     callback<(mode: string) => void>('handlePermissionModeDidChange', {
-      ...h.common, isDeviceLinkDraft: true,
+      ...h.common,
+      isDeviceLinkDraft: true,
+      effectiveDeviceLinkDeviceId: 'dev-1',
+      setRemoteDraftPermission,
     })('auto');
+    expect(setRemoteDraftPermission).toHaveBeenCalledWith({ deviceId: 'dev-1', permissionMode: 'auto' });
     expect(h.dlRuntimeTouchedRef.current).toBe(true);
     expect(h.dlExplicitChoiceRef.current).toBe(false);
     expect(h.explicitProviderId()).toBeNull();
@@ -1840,7 +1963,7 @@ it('applies a replacement for an unavailable saved model only to the current loc
 });
 
 // Minimal input: a missing local engine and an alternate on another computer.
-it('keeps remote alternates temporary and applies the latest same-device selection to the holder', () => {
+it('keeps remote alternates out of the saved default and applies the latest same-device selection to the holder', () => {
   const setAlternateModel = vi.fn();
   const switchVendor = vi.fn();
   const rememberAgentDeviceSelection = vi.fn();

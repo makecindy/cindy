@@ -22,6 +22,18 @@ export function toSessionDispatchOutcome(
       message: '[PI_RETRY_HISTORY_FRAME_TOO_LARGE] Your message was not sent. Pi could not read the history needed to retry after a frame exceeded the local 16 MiB limit. You can continue in a new task.',
     };
   }
+  if (result.reason === 'provider-rejected-before-dispatch' && result.diagnostic === 'pi-retry-history-unavailable') {
+    // The history read failed for another reason (the upstream refused it).
+    // The message never reached the provider: say so, and name the cause so
+    // the user is not left with a bare "reply failed".
+    const status = typeof result.upstreamStatus === 'number' ? ` (status ${result.upstreamStatus})` : '';
+    return {
+      dispatched: false,
+      reason: result.reason,
+      context,
+      message: `[PI_RETRY_HISTORY_UNAVAILABLE] Your message was not sent. Pi could not read the history needed to send it${status}. You can retry, or continue in a new task.`,
+    };
+  }
   const message = result.reason === 'provider-rejected-before-dispatch'
     ? `Provider rejected the Session send before dispatch: ${context}`
     : `Session send was cancelled before vendor dispatch: ${context}`;
