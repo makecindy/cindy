@@ -532,6 +532,33 @@ describe('codexHttpBridge', () => {
     await stale.text();
   });
 
+  it('reclaims stale and excess ownerless sessions in the same sweep', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'setInterval', 'clearInterval'] });
+    try {
+      bridge = await startCodexHttpBridge({ serverFactories: { cindy_test: createTestServer }, logger: noopLogger() });
+      const url = bridge.url('cindy_test');
+      const headers = { authorization: 'Bearer ' + bridge.token, accept: 'application/json, text/event-stream', 'content-type': 'application/json' };
+      const body = JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: {
+        protocolVersion: '2024-11-05', capabilities: {}, clientInfo: { name: 'test-client', version: '1' },
+      } });
+      async function open() {
+        const response = await fetch(url, { method: 'POST', headers, body });
+        expect(response.status).toBe(200);
+        await response.text();
+      }
+      await open();
+      vi.setSystemTime(Date.now() + 30 * 60_000);
+      for (let i = 0; i < 257; i++) await open();
+      expect(bridge.mcpSessionCount()).toBe(258);
+      vi.advanceTimersByTime(5 * 60_000);
+      expect(bridge.mcpSessionCount()).toBe(256);
+    } finally {
+      await bridge?.shutdown();
+      bridge = null;
+      vi.useRealTimers();
+    }
+  });
+
   it('accepts an additional bearer token (remote daemon) and rejects unknown tokens', async () => {
     bridge = await startCodexHttpBridge({
       serverFactories: {

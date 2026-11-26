@@ -27,7 +27,7 @@ import {
   type AcpSession,
   type OpenAcpSessionOptions,
 } from './session.js';
-import type { AcpRecord } from './protocol.js';
+import { asRecord, type AcpRecord } from './protocol.js';
 import { AcpAgent, acpMcpServersFromBridge } from './acp-agent.js';
 import {
   defusePluginEngineSlashMentions,
@@ -40,7 +40,13 @@ import {
   createMcpToolResultBucket,
   parseAcpMcpToolName,
 } from './mcp-tool-result.js';
-import { AgentStartupCleanupPendingError, AgentStartupStoppedError, TurnPermissionPolicyUnsupportedError, type SendOptions } from '../base-agent.js';
+import {
+  AgentStartupCleanupPendingError,
+  AgentStartupStoppedError,
+  TurnPermissionPolicyUnsupportedError,
+  type SendOptions,
+  type TurnPermissionPolicy,
+} from '../base-agent.js';
 import { NATIVE_SUBSCRIPTION_ACCOUNT } from '../../interfaces/auth-adapter.js';
 import type { Logger } from '../../interfaces/logger.js';
 import { Session } from '../../session.js';
@@ -689,6 +695,166 @@ describe('AcpSession permissions', () => {
       options: PERMISSION_OPTIONS.filter((option) => option.kind !== 'allow_once'),
     });
     expect(answer).toEqual({ outcome: { outcome: 'selected', optionId: 'no' } });
+  });
+});
+
+describe('AcpSession per-turn permission gate', () => {
+  // Rule: plugin-harnesses.md 每轮权限闸; same contract as the built-in engines' turnPermissionPolicy.
+  const gateInit = (): AcpRecord => ({ protocolVersion: 1, agentCapabilities: {}, authMethods: [], _meta: { permissionGate: { supported: true } } });
+  const requestMeta = (agent: ReturnType<typeof createFakeAgent>, index: number, routine = true) => {
+    const { turnId } = asRecord(asRecord(agent.prompts[index]!.params._meta).permissionGate);
+    expect(typeof turnId).toBe('string');
+    return { _meta: { permissionGate: { turnId, routine } } };
+  };
+  /** IM-group-like policy: confirm shell commands and anything else not read-only. */
+  const channelPolicy = (confirm: (toolName: string, input: unknown) => boolean = (name) => name !== 'Read'): TurnPermissionPolicy => ({
+    origin: { kind: 'im', channel: 'feishu', taskId: 'row-1' },
+    confirmationSurface: 'channel',
+    forceConfirmToolCall: confirm,
+  });
+
+  async function openGated(extra: Partial<OpenAcpSessionOptions> = {}) {
+    const agent = createFakeAgent({ handlers: { initialize: gateInit } });
+    const opened = await open(agent, extra);
+    const asked: InteractionRequest[] = [];
+    opened.session.setInteractionResolver(async (request) => {
+      asked.push(request);
+      return { kind: 'permission', behavior: 'deny' };
+    });
+    return { agent, ...opened, asked };
+  }
+
+  it('refuses a policy turn on an agent without the gate, before anything reaches the agent', async () => {
+    const agent = createFakeAgent();
+    const { session } = await open(agent);
+    expect(session.capabilities.turnPermissionPolicy?.supported.supported).toBe(false);
+    const policyTurn = { turnPermissionPolicy: channelPolicy() };
+    expect(() => session.validateSendOptions(policyTurn)).toThrow(TurnPermissionPolicyUnsupportedError);
+    await expect(session.send({ type: 'user', content: 'from the group' }, policyTurn)).rejects.toMatchObject({
+      code: 'TURN_PERMISSION_POLICY_UNSUPPORTED', agentKind: 'acp', permissionMode: 'ask',
+    });
+    // Text-only turns on such an agent keep running as they did before the gate existed.
+    await session.send({ type: 'user', content: 'welcome' }, { toolsDisabled: true });
+    await vi.waitFor(() => expect(agent.prompts).toHaveLength(1));
+    expect(agent.prompts[0]!.params).not.toHaveProperty('_meta');
+    expect(agent.prompts[0]!.params.prompt).toEqual([{ type: 'text', text: 'welcome' }]);
+  });
+
+  it('gates a policy turn: routine calls the policy allows run unasked, the rest go to you under channel names', async () => {
+    const { agent, session, asked } = await openGated({ permissionMode: 'acceptEdits' });
+    expect(session.capabilities.turnPermissionPolicy).toEqual({ supported: { supported: true }, unsupportedPermissionModes: ['bypassPermissions'] });
+    await session.send({ type: 'user', content: 'from the group' }, { turnPermissionPolicy: channelPolicy() });
+    await vi.waitFor(() => expect(agent.prompts).toHaveLength(1));
+    expect(agent.prompts[0]!.params._meta).toEqual({ permissionGate: { turnId: expect.any(String), scope: 'all-tool-calls' } });
+
+    // ACP can report the fields first, then refer to the same call by ID for approval.
+    agent.update({ sessionUpdate: 'tool_call', toolCallId: 'r1', title: 'Read a.ts', kind: 'read', rawInput: { path: 'a.ts' } });
+    const read = await agent.requestPermission({ toolCall: { toolCallId: 'r1' }, options: PERMISSION_OPTIONS, ...requestMeta(agent, 0) });
+    const shell = await agent.requestPermission({ toolCall: { toolCallId: 'x1', title: 'Run rm -rf build', kind: 'execute', rawInput: { command: 'rm -rf build' } }, options: PERMISSION_OPTIONS, ...requestMeta(agent, 0) });
+    const unmarked = await agent.requestPermission({ toolCall: { toolCallId: 'r2', title: 'Read a second file', kind: 'read' }, options: PERMISSION_OPTIONS, ...requestMeta(agent, 0, false) });
+    expect([read, shell, unmarked]).toEqual([
+      { outcome: { outcome: 'selected', optionId: 'yes' } },
+      { outcome: { outcome: 'selected', optionId: 'no' } },
+      { outcome: { outcome: 'selected', optionId: 'no' } },
+    ]);
+    // The channel's own checks (destructive guard, card) see the call as a shell command.
+    expect(asked.map((request) => [request.kind === 'permission' && request.toolName, request.kind === 'permission' && request.displayName])).toEqual([
+      ['Bash', 'Run rm -rf build'],
+      ['Read', 'Read a second file'],
+    ]);
+    agent.prompts[0]!.settle.resolve({ stopReason: 'end_turn' });
+
+    // The next turn without a policy is not gated, and the agent's marker approves nothing.
+    await session.send({ type: 'user', content: 'from the owner' });
+    await vi.waitFor(() => expect(agent.prompts).toHaveLength(2));
+    expect(agent.prompts[1]!.params._meta).toEqual({ permissionGate: { turnId: expect.any(String) } });
+    expect(requestMeta(agent, 1)._meta.permissionGate.turnId).not.toBe(requestMeta(agent, 0)._meta.permissionGate.turnId);
+    await agent.requestPermission({ toolCall: { toolCallId: 'r3', title: 'Read b.ts', kind: 'read' }, options: PERMISSION_OPTIONS, ...requestMeta(agent, 1) });
+    expect(asked).toHaveLength(3);
+    expect(asked[2]).toMatchObject({ toolName: 'Read b.ts' });
+  });
+
+  it('asks you when the policy itself fails, and refuses a policy turn in Full access', async () => {
+    const { agent, session, asked } = await openGated();
+    const failing = channelPolicy(() => { throw new Error('classifier down'); });
+    await session.send({ type: 'user', content: 'from the group' }, { turnPermissionPolicy: failing });
+    await vi.waitFor(() => expect(agent.prompts).toHaveLength(1));
+    const read = await agent.requestPermission({ toolCall: { toolCallId: 'r1', kind: 'read', rawInput: { path: 'a.ts' } }, options: PERMISSION_OPTIONS, ...requestMeta(agent, 0) });
+    expect(read).toEqual({ outcome: { outcome: 'selected', optionId: 'no' } });
+    expect(asked).toHaveLength(1);
+    agent.prompts[0]!.settle.resolve({ stopReason: 'end_turn' });
+
+    await session.setPermissionMode('bypassPermissions');
+    await expect(session.send({ type: 'user', content: 'again' }, { turnPermissionPolicy: channelPolicy() })).rejects.toMatchObject({
+      code: 'TURN_PERMISSION_POLICY_UNSUPPORTED', permissionMode: 'bypassPermissions',
+    });
+    expect(agent.prompts).toHaveLength(1);
+  });
+
+  // Unit: IM approval uses the resolver for file edits. An explicit mode switch applies to the active turn.
+  it('routes a routine IM edit to approval until the owner changes mode', async () => {
+    const { agent, session, asked } = await openGated();
+    const policy = { ...channelPolicy(() => false), autoReviewContext: { requesterAuthority: 'guest', source: 'group' } } as const;
+    await session.send({ type: 'user', content: 'update the note' }, { turnPermissionPolicy: policy });
+    await vi.waitFor(() => expect(agent.prompts).toHaveLength(1));
+
+    const edit = { kind: 'edit', rawInput: { path: 'notes.md' } };
+    const first = await agent.requestPermission({
+      toolCall: { toolCallId: 'first', ...edit }, options: PERMISSION_OPTIONS, ...requestMeta(agent, 0),
+    });
+    expect(first).toEqual({ outcome: { outcome: 'selected', optionId: 'no' } });
+    expect(asked).toHaveLength(1);
+
+    await session.setPermissionMode('bypassPermissions');
+    const second = await agent.requestPermission({
+      toolCall: { toolCallId: 'second', ...edit }, options: PERMISSION_OPTIONS, ...requestMeta(agent, 0),
+    });
+    expect(second).toEqual({ outcome: { outcome: 'selected', optionId: 'yes' } });
+    expect(asked).toHaveLength(1);
+  });
+
+  it('refuses every tool call of a text-only turn, Full access included, and of the work it leaves running', async () => {
+    const { agent, session, asked } = await openGated({ permissionMode: 'bypassPermissions' });
+    await session.send({ type: 'user', content: 'say hello' }, { toolsDisabled: true });
+    await vi.waitFor(() => expect(agent.prompts).toHaveLength(1));
+    expect(agent.prompts[0]!.params._meta).toEqual({ permissionGate: { turnId: expect.any(String), scope: 'all-tool-calls' } });
+    const during = await agent.requestPermission({ toolCall: { toolCallId: 'x1', kind: 'execute' }, options: PERMISSION_OPTIONS, ...requestMeta(agent, 0) });
+    agent.prompts[0]!.settle.resolve({ stopReason: 'end_turn' });
+    await vi.waitFor(() => expect(session.isTurnRunning()).toBe(false));
+    const after = await agent.requestPermission({ toolCall: { toolCallId: 'x2', kind: 'execute' }, options: PERMISSION_OPTIONS, ...requestMeta(agent, 0) });
+    expect([during, after]).toEqual([
+      { outcome: { outcome: 'selected', optionId: 'no' } },
+      { outcome: { outcome: 'selected', optionId: 'no' } },
+    ]);
+    expect(asked).toHaveLength(0);
+  });
+
+  it('steers a policy message only into a gated turn, adding its restrictions before the agent acts on it', async () => {
+    const agent = createFakeAgent({ handlers: {
+      initialize: () => ({ ...gateInit(), _meta: { permissionGate: { supported: true }, steering: { supported: true } } }),
+      '_session/steering': () => ({ outcome: 'injected' }),
+    } });
+    const { session } = await open(agent);
+    const asked: InteractionRequest[] = [];
+    session.setInteractionResolver(async (request) => { asked.push(request); return { kind: 'permission', behavior: 'deny' }; });
+
+    await session.send({ type: 'user', content: 'owner work' });
+    await vi.waitFor(() => expect(agent.prompts).toHaveLength(1));
+    // The agent was not asked to gate this turn, so a group message waits for its own turn.
+    await expect(session.steer({ type: 'user', content: 'group note' }, { turnPermissionPolicy: channelPolicy() })).rejects.toThrow(/no active turn/i);
+    expect(agent.methods()).not.toContain('_session/steering');
+    agent.prompts[0]!.settle.resolve({ stopReason: 'end_turn' });
+
+    await session.send({ type: 'user', content: 'first sender' }, { turnPermissionPolicy: channelPolicy((name) => name === 'Read') });
+    await vi.waitFor(() => expect(agent.prompts).toHaveLength(2));
+    await session.steer({ type: 'user', content: 'second sender' }, { turnPermissionPolicy: channelPolicy((name) => name === 'Grep') });
+    const read = await agent.requestPermission({ toolCall: { toolCallId: 'r1', kind: 'read', rawInput: { path: 'a.ts' } }, options: PERMISSION_OPTIONS, ...requestMeta(agent, 1) });
+    const search = await agent.requestPermission({ toolCall: { toolCallId: 's1', kind: 'search', rawInput: { query: 'a' } }, options: PERMISSION_OPTIONS, ...requestMeta(agent, 1) });
+    expect([read, search]).toEqual([
+      { outcome: { outcome: 'selected', optionId: 'no' } },
+      { outcome: { outcome: 'selected', optionId: 'no' } },
+    ]);
+    expect(asked.map((request) => request.kind === 'permission' && request.toolName)).toEqual(['Read', 'Grep']);
   });
 });
 

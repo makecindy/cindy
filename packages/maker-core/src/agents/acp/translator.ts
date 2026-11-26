@@ -202,10 +202,10 @@ export class AcpUpdateTranslator {
    * Registers a tool call seen outside `session/update` (the permission request
    * carries one) so its card exists before the user is asked about it.
    */
-  noteToolCall(fields: AcpToolCallFields): AgentEvent[] {
+  noteToolCall(fields: AcpToolCallFields): { events: AgentEvent[]; toolCall: AcpToolCallFields } {
     const events: AgentEvent[] = [];
-    this.upsertTool(fields, events);
-    return events;
+    const tool = this.upsertTool(fields, events);
+    return { events, toolCall: { ...tool, ...fields } };
   }
 
   /** Closes open text / thinking segments without ending the turn (used before a new turn starts). */
@@ -285,7 +285,7 @@ export class AcpUpdateTranslator {
     return events;
   }
 
-  private upsertTool(fields: AcpToolCallFields, events: AgentEvent[]): void {
+  private upsertTool(fields: AcpToolCallFields, events: AgentEvent[]): ToolState {
     this.flushText(events);
     this.closeThinking(events);
     let tool = this.tools.get(fields.toolCallId);
@@ -310,6 +310,7 @@ export class AcpUpdateTranslator {
     if (!tool.settled && (tool.status === 'completed' || tool.status === 'failed')) {
       this.settleTool(tool, events, tool.status === 'failed' ? 'failed' : 'done');
     }
+    return tool;
   }
 
   private emitToolUse(tool: ToolState, events: AgentEvent[], inputPatch = false): void {
