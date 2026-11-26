@@ -7,9 +7,11 @@ export type PersonalizationCallerScope = 'owner' | 'scoped';
 export async function captureHostPersonalization(
   opts: Pick<CreateSessionOptions, 'userPrompt' | 'hostStartupPreferences' | 'makerMemoryEnabled' | 'displayReasoning'>,
   scope?: PersonalizationCallerScope,
+  capturedUserPrompt?: string,
 ): Promise<void> {
   let userPrompt = opts.userPrompt;
   if (scope === 'scoped') userPrompt = undefined;
+  else if (capturedUserPrompt !== undefined) userPrompt = capturedUserPrompt;
   else if (scope === 'owner' || isManagedCloudInstance()) userPrompt = await windowUserPrompt();
   opts.userPrompt = userPrompt;
   opts.hostStartupPreferences = {
