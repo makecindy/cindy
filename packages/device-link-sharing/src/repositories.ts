@@ -9,7 +9,8 @@ export interface ResourceBinding { kind: 'shared-task' | 'provider-share'; resou
  * (docs/dev-rules/protocol-compatibility/agent-net-linked-provider-shares.md). The V1 share stays the only
  * membership authority: this service never stores its members, and the host device decides every lease.
  */
-export interface LinkedProviderShare { shareId: string; networkId: string; hostDeviceId: string; ownerAccountId: string; linkedAt: number; }
+/** `generation` is every lease's `memberVersion`: a new registration (or a new host device) never revives older leases. */
+export interface LinkedProviderShare { shareId: string; networkId: string; hostDeviceId: string; ownerAccountId: string; linkedAt: number; generation: number; }
 export interface SharingState {
   version: 1;
   tasks: StoredSharedTask[];

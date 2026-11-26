@@ -909,6 +909,8 @@ export async function startAgentNetRelay(options: RelayOptions): Promise<RelayHa
         // Re-admitting a tenant must not restore its old shares or invitations.
         for (const book of [state.sharing, state.privateSharing]) {
           if (!book) continue;
+          // Its linked Device Link shares too, or they could never be linked from the account's next network.
+          if (book.linkedShares?.some(linked => linked.networkId === target)) book.linkedShares = book.linkedShares.filter(linked => linked.networkId !== target);
           const bindings = book.bindings.filter(binding => binding.networkId === target);
           if (!bindings.length) continue;
           const tasks = new Set(bindings.filter(binding => binding.kind === 'shared-task').map(binding => binding.resourceId));

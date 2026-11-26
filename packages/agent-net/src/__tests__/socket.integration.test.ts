@@ -536,7 +536,7 @@ it('carries a linked Device Link provider share only for the key its host regist
       networkId: f.bootstrap.networkId, rootPublicKey: f.bootstrap.rootPublicKey, hostDeviceId: 'a-host' } });
   cleanup.push(() => lease.close());
   const delegation = await lease.acquire();
-  expect(delegation.scope).toEqual({ memberId, guestSubject: 'guest-account', memberVersion: 1 });
+  expect(delegation.scope).toEqual({ memberId, guestSubject: 'guest-account', memberVersion: expect.any(Number) });
   // Same account, a key the host never registered: the request reaches the host, which leaves it unsigned.
   const otherBusiness = business(other, 'guest-account');
   const waiting = await otherBusiness.request<{ id: string; status: string }>('/api/agent-net/sharing/transport',

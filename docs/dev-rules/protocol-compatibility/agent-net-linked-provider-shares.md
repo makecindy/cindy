@@ -35,11 +35,13 @@
 - `POST /api/agent-net/sharing/provider-shares/linked/<shareId>/remove`，body `{}`：同样只认本网络本账号；删除后
   `changed` 立即关掉这个分享所有受邀者的会话。
 - `POST /api/agent-net/sharing/transport`：资源是已登记的旧分享时，不查成员库，按账号身份与申请者持钥证明生成
-  `scope: { memberId, guestSubject: <账号>, memberVersion: 1 }` 的申请交给分享者电脑；同一分享同时等待签名的不同受邀设备
-  最多 64 台（`429 TOO_MANY_REQUESTS`），已在等的设备可继续续签。`/transport/status`、`/grants`、受邀者 WebSocket 与附件
+  `scope: { memberId, guestSubject: <账号>, memberVersion: <登记代次> }` 的申请交给分享者电脑；同一分享同时**等待签名**
+  （还没拿到签名）的不同受邀设备最多 64 台（`429 TOO_MANY_REQUESTS`），已签发、续签中的设备不占名额，已在等的设备可继续续签。
+  登记代次按时间生成：取消登记后再登记、或改由同账号另一台电脑登记，都是新代次，之前签发的放行证不会因此复活；
+  复用申请编号时同时核对分享者设备与代次，换了分享者设备的申请拿新编号。删除租户网络时同时清掉它的登记。`/transport/status`、`/grants`、受邀者 WebSocket 与附件
   沿用现有校验；`check` 对已登记分享只认登记的网络与分享者设备。
 - 持久化：`SharingState.linkedShares?: { shareId, networkId, hostDeviceId, ownerAccountId, linkedAt }[]`
-  （`packages/device-link-sharing/src/repositories.ts`），可选字段，旧文档照常读取；单进程存储校验它若存在必须是数组。
+  （`packages/device-link-sharing/src/repositories.ts`，含 `generation`），可选字段，旧文档照常读取；单进程存储校验它若存在必须是数组。
 
 **分享者电脑撤销**：成员被暂停、移除或分享被删除时（`providerShareRuntime.ts` 的 `revoke` / `reconcile`），本机忘掉对应钥匙，
 用现有 `GET /api/agent-net/grants` 与 `DELETE /api/agent-net/grants/<id>` 撤掉已签的放行证，服务端随即以 4410 断开受邀者；

@@ -106,13 +106,21 @@ export function createAgentNetSharing(options: AgentNetSharingOptions, host: Sha
       const existing = rows.find(l => l.shareId === shareId);
       if (existing && (existing.networkId !== actor.networkId || existing.ownerAccountId !== actor.accountId))
         throw new AppError('PROVIDER_SHARE_LINK_CONFLICT', 409, 'The share is linked by another network');
-      if (existing) { existing.hostDeviceId = actor.deviceId; existing.linkedAt = host.now(); return; }
+      // Another computer of the account now hosts it: a new generation, so the previous host's leases stay withdrawn.
+      if (existing) {
+        if (existing.hostDeviceId !== actor.deviceId) { existing.hostDeviceId = actor.deviceId; existing.generation = nextGeneration(existing.generation); }
+        existing.linkedAt = host.now(); return;
+      }
       if (rows.filter(l => l.networkId === actor.networkId).length >= MAX_LINKED_SHARES_PER_NETWORK)
         throw new AppError('LINKED_SHARE_LIMIT', 429, 'Too many linked shares');
-      rows.push({ shareId, networkId: actor.networkId, hostDeviceId: actor.deviceId, ownerAccountId: actor.accountId, linkedAt: host.now() });
+      // A removed registration leaves its signed leases behind until they expire; a fresh generation keeps them dead.
+      rows.push({ shareId, networkId: actor.networkId, hostDeviceId: actor.deviceId, ownerAccountId: actor.accountId, linkedAt: host.now(),
+        generation: nextGeneration(0) });
     });
     return { shareId, linked: true };
   }
+  /** Time-based so that it also exceeds any generation of a registration that was removed (and forgotten) earlier. */
+  const nextGeneration = (previous: number) => Math.max(previous + 1, Math.floor(host.now()));
   async function unlinkShare(actor: SharingActor, shareId: string): Promise<{ removed: boolean }> {
     let removed = false;
     await host.storage.transaction(async s => {
@@ -154,7 +162,7 @@ export function createAgentNetSharing(options: AgentNetSharingOptions, host: Sha
     // A linked V1 share has no member book here: its host device signs only guests its V1 share admits,
     // and removing the link withdraws every lease at once (`changed` closes their sessions).
     const linked = linkedShare(state, d.kind, d.resourceId);
-    if (linked) return linked.networkId === d.networkId && linked.hostDeviceId === d.hostDeviceId && !!d.scope;
+    if (linked) return linked.networkId === d.networkId && linked.hostDeviceId === d.hostDeviceId && d.scope?.memberVersion === linked.generation;
     const binding = state.bindings.find(b => b.kind === d.kind && b.resourceId === d.resourceId && b.networkId === d.networkId);
     if (!binding) return false;
     if (d.kind === 'shared-task') {
@@ -250,11 +258,14 @@ export function createAgentNetSharing(options: AgentNetSharingOptions, host: Sha
           const waiting = host.requests().filter(r => r.networkId === linked.networkId && r.kind === 'provider-share'
             && r.resourceId === resourceId && r.expiresAt > now);
           const existing = waiting.find(r => r.guestDeviceId === actor.deviceId && r.scope.memberId === memberId
-            && r.scope.guestSubject === actor.accountId && r.guestSigningKey === signingKey && r.guestTransportKey === transportKey);
+            && r.scope.guestSubject === actor.accountId && r.guestSigningKey === signingKey && r.guestTransportKey === transportKey
+            && r.hostDeviceId === linked.hostDeviceId && r.scope.memberVersion === linked.generation);
+          // Only guests still waiting for the host's signature count; a signed (and renewing) guest holds no place.
+          const unsigned = waiting.filter(r => r.guestDeviceId !== actor.deviceId && !host.grant(r).delegation);
           if (!waiting.some(r => r.guestDeviceId === actor.deviceId)
-            && new Set(waiting.map(r => r.guestDeviceId)).size >= MAX_LINKED_SHARE_PENDING_GUESTS) throw new AppError('TOO_MANY_REQUESTS', 429, 'Too many pending guests');
+            && new Set(unsigned.map(r => r.guestDeviceId)).size >= MAX_LINKED_SHARE_PENDING_GUESTS) throw new AppError('TOO_MANY_REQUESTS', 429, 'Too many pending guests');
           request = { id: existing && !host.grant(existing).revoked ? existing.id : randomUUID(), kind: 'provider-share', resourceId,
-            hostDeviceId: linked.hostDeviceId, networkId: linked.networkId, scope: { memberId, guestSubject: actor.accountId, memberVersion: 1 },
+            hostDeviceId: linked.hostDeviceId, networkId: linked.networkId, scope: { memberId, guestSubject: actor.accountId, memberVersion: linked.generation },
             guestDeviceId: actor.deviceId, guestSigningKey: signingKey, guestTransportKey: transportKey,
             requestedAt: now, expiresAt: now + MAX_GRANT_LIFETIME_MS };
           await host.saveRequest(request); host.changed([linked.networkId]);

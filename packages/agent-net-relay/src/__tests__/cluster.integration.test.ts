@@ -560,7 +560,7 @@ describe('replicated official relay: write contention', () => {
   it('keeps sharing-document fields another build added when this replica writes the document', async () => {
     const backend = createMemoryRelayCluster();
     const [newer, older] = await Promise.all([ClusterStore.open(backend, 'newer'), ClusterStore.open(backend, 'older')]);
-    const linked = { shareId: 'v1-share', networkId: NETWORK, hostDeviceId: 'owner', ownerAccountId: 'owner-account', linkedAt: 1 };
+    const linked = { shareId: 'v1-share', networkId: NETWORK, hostDeviceId: 'owner', ownerAccountId: 'owner-account', linkedAt: 1, generation: 1 };
     await newer.sharingStorage().transaction(async (draft) => { draft.linkedShares = [linked]; });
     // The other replica touches only what it knows, through the storage interface the sharing service uses.
     await older.sharingStorage().transaction(async (draft) => { draft.bindings.push({ kind: 'shared-task', resourceId: 'task', networkId: NETWORK }); });

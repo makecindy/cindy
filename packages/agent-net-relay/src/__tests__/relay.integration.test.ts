@@ -510,10 +510,12 @@ describe('independent V2 relay', () => {
   // 2026-11-26 linked Device Link provider shares (agent-net-linked-provider-shares.md). Real HTTP/store/restart:
   // the end-to-end lease is covered in packages/agent-net socket.integration; these are the service's own fences.
   // Minimal failing inputs: linking an ID that is already a native V2 share (would let a link bypass its member book);
-  // a restart dropping the link; the private book exposing it; a 65th waiting guest device flooding one host.
+  // a restart dropping the link; the private book exposing it; a 65th waiting guest device flooding one host; a lease
+  // signed before the link was removed coming back with a new registration; a guest stuck on the previous host's request ID.
   it('fences linked Device Link provider shares: native IDs, other accounts, the private book, restarts and waiting guests', async () => {
     const actor = (token: string) => token === 'Bearer unit-owner' ? { accountId: 'owner-account', deviceId: 'owner' }
       : token === 'Bearer other-owner' ? { accountId: 'other-account', deviceId: 'owner' }
+      : token === 'Bearer second-host' ? { accountId: 'owner-account', deviceId: 'second' }
       : /^Bearer guest-\d+$/.test(token) ? { accountId: 'guest-account', deviceId: 'guest-device-' + token.slice(13) } : null;
     const f = await fixture({ sharing: {
       async authenticate(req) { const found = actor(String(req.headers.authorization));
@@ -524,10 +526,12 @@ describe('independent V2 relay', () => {
       } },
     } });
     const guests = new Map<string, Identity>();
-    const call = async (target: string, method: string, input: unknown, token = 'Bearer unit-owner', proof = token !== 'Bearer unit-owner' ? false : true, applicant?: Identity) => {
+    const call = async (target: string, method: string, input: unknown, token = 'Bearer unit-owner',
+      proof: boolean | AgentNetClient = token === 'Bearer unit-owner', applicant?: Identity) => {
       const resource = API + target, body = input === undefined ? '' : JSON.stringify(input);
+      const signer = proof === true ? f.client : proof || null;
       const response = await fetch(f.relay.url + resource, { method, headers: { authorization: token, ...(body ? { 'content-type': 'application/json' } : {}),
-        ...(proof ? { 'x-agent-net-authorization': f.client.header(method, resource, body) } : {}),
+        ...(signer ? { 'x-agent-net-authorization': signer.header(method, resource, body) } : {}),
         ...(applicant ? { 'x-agent-net-applicant': Buffer.from(JSON.stringify(createRequestProof(applicant, method, resource, body))).toString('base64url') } : {}),
       }, ...(body ? { body } : {}) });
       return { status: response.status, body: await response.json() as any };
@@ -560,14 +564,33 @@ describe('independent V2 relay', () => {
     expect(first.body).toMatchObject({ status: 'pending' });
     const directory = await f.client.request<{ delegationRequests: import('@cindy/agent-net-protocol').DelegationRequest[] }>('GET', '/directory');
     expect(directory.delegationRequests).toEqual([expect.objectContaining({ kind: 'provider-share', resourceId: 'v1-share', hostDeviceId: 'owner',
-      guestDeviceId: 'guest-device-0', scope: { memberId: 'v1-member-0', guestSubject: 'guest-account', memberVersion: 1 } })]);
+      guestDeviceId: 'guest-device-0', scope: { memberId: 'v1-member-0', guestSubject: 'guest-account', memberVersion: expect.any(Number) } })]);
     expect((await ask(0)).body.id).toBe(first.body.id);
-    for (let n = 1; n < 64; n++) expect((await ask(n)).status).toBe(200);
-    expect(await ask(64)).toMatchObject({ status: 429, body: { error: { code: 'TOO_MANY_REQUESTS' } } });
-    // A guest already waiting may still renew; removing the link forgets the share at once.
+    // The host signs device 0; a signed guest holds none of the 64 places for guests still waiting.
+    const delegation = await f.client.acceptDelegationRequest(directory.delegationRequests[0], () => undefined);
+    const signed = new AgentNetClient(f.relay.url, guests.get('0')!, f.certificate, f.rootPublicKey, delegation);
+    await expect(signed.directory()).resolves.toBeDefined();
+    for (let n = 1; n <= 64; n++) expect((await ask(n)).status).toBe(200);
+    expect(await ask(65)).toMatchObject({ status: 429, body: { error: { code: 'TOO_MANY_REQUESTS' } } });
+    // A guest already waiting may still renew; removing the link withdraws the signed lease at once.
     expect((await ask(3)).status).toBe(200);
     expect((await call('/sharing/provider-shares/linked/v1-share/remove', 'POST', {})).body).toEqual({ removed: true });
+    await expect(signed.directory()).rejects.toMatchObject({ code: 'GRANT_INVALID' });
     expect((await ask(0)).status).toBe(404);
+    // Linking again is a new generation: the old lease stays dead and the guest gets a new request.
+    expect((await call('/sharing/provider-shares/linked', 'POST', { shareId: 'v1-share' })).status).toBe(200);
+    await expect(signed.directory()).rejects.toMatchObject({ code: 'GRANT_INVALID' });
+    const again = await ask(0);
+    expect(again.body.id).not.toBe(first.body.id);
+    // Another computer of the account takes the share over: the guest's request moves to it under a new ID it can sign.
+    const second = await f.join('second');
+    expect((await call('/sharing/provider-shares/linked', 'POST', { shareId: 'v1-share' }, 'Bearer second-host', second.client)).status).toBe(200);
+    const moved = await ask(0);
+    expect(moved.body.id).not.toBe(again.body.id);
+    const handed = (await second.client.request<{ delegationRequests: import('@cindy/agent-net-protocol').DelegationRequest[] }>('GET', '/directory'))
+      .delegationRequests.find(request => request.id === moved.body.id)!;
+    expect(handed).toMatchObject({ hostDeviceId: 'second', guestDeviceId: 'guest-device-0' });
+    await expect(second.client.acceptDelegationRequest(handed, () => undefined)).resolves.toMatchObject({ hostDeviceId: 'second' });
   });
   it('drops in-flight datagrams for a removed member without disconnecting healthy peers on the same uplink', async () => {
     const f = await fixture(), removed = await f.join('removed'), healthy = await f.join('healthy');
@@ -714,7 +737,12 @@ describe('independent V2 relay', () => {
     // Tenants survive a restart; state written before tenants existed infers the owner's network.
     const file = path.join(f.dataDir, 'agent-net-state.json');
     await f.relay.close();
-    const saved = JSON.parse(await readFile(file, 'utf8')); delete saved.primaryNetworkId; await writeFile(file, JSON.stringify(saved));
+    const saved = JSON.parse(await readFile(file, 'utf8')); delete saved.primaryNetworkId;
+    // A linked Device Link share on each network (written as the account sharing service would).
+    const linkedRow = (shareId: string, network: string) => ({ shareId, networkId: network, hostDeviceId: 'host', ownerAccountId: 'account', linkedAt: 1, generation: 1 });
+    saved.sharing = { version: 1, tasks: [], invitations: [], shares: [], links: [], requests: [], credentials: [], bindings: [],
+      ...saved.sharing, linkedShares: [linkedRow('tenant-share', networkId), linkedRow('owner-share', f.certificate.networkId)] };
+    await writeFile(file, JSON.stringify(saved));
     await f.restart();
     expect((await f.client.request<{ tenants: unknown[] }>('GET', '/tenants')).tenants).toEqual([
       expect.objectContaining({ networkId, accountName: 'Bob', devices: 2 })]);
@@ -739,6 +767,7 @@ describe('independent V2 relay', () => {
     expect(JSON.parse(await readFile(file, 'utf8')).privateSharing).toMatchObject({
       tasks: [{ sharedTaskId: retainedTask }], bindings: [{ networkId: f.certificate.networkId }],
     });
+    expect(JSON.parse(await readFile(file, 'utf8')).sharing.linkedShares).toEqual([expect.objectContaining({ shareId: 'owner-share' })]);
     await expect(revived.directory()).rejects.toMatchObject({ code: 'NETWORK_UNKNOWN' });
     expect((await f.client.request<{ tenants: unknown[] }>('GET', '/tenants')).tenants).toEqual([]);
     await expect(f.client.request('DELETE', '/tenants/' + encodeURIComponent(f.certificate.networkId))).rejects.toMatchObject({ code: 'NOT_FOUND' });
