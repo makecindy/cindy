@@ -123,7 +123,7 @@ export const ORCA_DIRECT_TASK_CREATE = Symbol('orca-direct-task-create');
 
 type OrcaDiscoveryStartOptions = Pick<MakerSessionCreateOpts,
   'agentKind' | 'reviewMode' | 'botRuntimeProfile' | 'orcaRole' | 'vendorOptions' |
-  'workingDir' | 'workspaceKind' | 'remoteHostId' | 'userPrompt' | 'resumeSessionId' | typeof LOCAL_AGENT_CLIENT
+  'workingDir' | 'workspaceKind' | 'remoteHostId' | 'agentDeviceId' | 'userPrompt' | 'resumeSessionId' | typeof LOCAL_AGENT_CLIENT
 > & { [ORCA_DIRECT_TASK_CREATE]?: true };
 
 /** Runs on the startup copy of options, after resolving the persisted role. */
@@ -146,9 +146,9 @@ export function appendOrcaDiscoveryPrompt(
     remoteHostId: opts.remoteHostId ?? row.remoteHostId,
   };
   if (collabProjectUnavailableReason(context, isPluginEnabled, isManagedDialogueWorkspace)) return;
-  // Pi's ordinary-session MCP bridge also requires the global switch, even
-  // when a local project overrides the user default (piEnvironment.ts).
-  if (opts.agentKind === 'pi' && !context.remoteHostId && !isPluginEnabled('collab')) return;
+  // The Pi MCP bridge serves Pi and all device-hosted engines; it also
+  // requires the global switch when a local project overrides the user default.
+  if ((opts.agentKind === 'pi' || opts.agentDeviceId) && !context.remoteHostId && !isPluginEnabled('collab')) return;
   opts.userPrompt = opts.userPrompt ? `${opts.userPrompt}\n\n${orcaDiscoveryPrompt}` : orcaDiscoveryPrompt;
 }
 

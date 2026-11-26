@@ -186,6 +186,10 @@ describe('ordinary Orca discovery at session startup', () => {
     { name: 'project disabled', row: {}, opts: {}, global: true, project: false, expected: false },
     { name: 'project enabled', row: {}, opts: {}, global: false, project: true, expected: true },
     { name: 'Pi project enabled but global disabled', row: {}, opts: { agentKind: 'pi' as const }, global: false, project: true, expected: false },
+    ...(['claude-code', 'codex'] as const).flatMap(agentKind => [
+      { name: `device-hosted ${agentKind} project enabled but global disabled`, row: {}, opts: { agentKind, agentDeviceId: 'other-computer' }, global: false, project: true, expected: false },
+      { name: `device-hosted ${agentKind} project and global enabled`, row: {}, opts: { agentKind, agentDeviceId: 'other-computer' }, global: true, project: true, expected: true },
+    ]),
     { name: 'managed dialogue ignores project override', row: { workspaceKind: 'dialogue', workingDir: '/managed-dialogue' }, opts: {}, global: true, project: false, expected: true },
     { name: 'managed dialogue respects global disabled', row: { workspaceKind: 'dialogue', workingDir: '/managed-dialogue' }, opts: {}, global: false, project: true, expected: false },
     { name: 'explicit dialogue directory respects project override', row: { workspaceKind: 'dialogue' }, opts: {}, global: true, project: false, expected: false },
