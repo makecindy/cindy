@@ -15791,7 +15791,6 @@
       "piRetryHistoryUnavailable": "A mensagem não foi enviada. O Pi não conseguiu ler o histórico necessário para enviá-la. Você pode tentar novamente ou continuar em uma nova tarefa.",
       "upstreamStatusError": "O serviço de origem retornou {{status}}, então a resposta não pôde ser concluída.",
       "messageNotSent": "A mensagem não foi enviada.",
-      "upstreamEmpty550": "O serviço do modelo retornou HTTP 550 com uma resposta vazia",
       "replyFailed": "Não foi possível concluir a resposta",
       "queuedSendRecovery": "Sua mensagem não foi enviada. Selecione “Tentar novamente” para enviá-la sem alterações. Uma nova mensagem substituirá a anterior.",
       "retryTitle": "Reenviar a última mensagem",
