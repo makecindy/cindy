@@ -308,20 +308,26 @@ describe('TeammatesSection group chats', () => {
     expect(mocks.refreshGroups).not.toHaveBeenCalled();
   });
 
-  it('restores the original row and shows the error after an archive request fails', async () => {
-    let settle!: (result: { ok: false; errorCode: string }) => void;
-    mocks.manage.mockImplementationOnce(() => new Promise(resolve => { settle = resolve; }));
-    mocks.groups = [managedGroup()];
-    await renderSidebar();
-    const row = screen.getByRole('button', { name: '周末出游' });
-    row.focus();
-    await selectArchive();
-    await waitFor(() => expect(mocks.manage).toHaveBeenCalledOnce());
-    row.blur();
-    await act(async () => { settle({ ok: false, errorCode: 'REVISION_CONFLICT' }); });
-    await waitFor(() => expect(document.activeElement).toBe(row));
-    expect(screen.getByRole('alert').textContent).toBe('bots.groupChat.server.settings.conflict');
-    expect(mocks.refreshGroups).not.toHaveBeenCalled();
+  // #13097 review / standard: the existing list test missed the collapsed subtree in icon view.
+  it.each(['list', 'icons'] as const)('shows an archive error and restores the group focus in %s view', async mode => {
+    writeTeammatesViewMode('owner', mode);
+    try {
+      let settle!: (result: { ok: false; errorCode: string }) => void;
+      mocks.manage.mockImplementationOnce(() => new Promise(resolve => { settle = resolve; }));
+      mocks.groups = [managedGroup()];
+      await renderSidebar();
+      const row = screen.getByRole('button', { name: '周末出游' });
+      row.focus();
+      await selectArchive();
+      await waitFor(() => expect(mocks.manage).toHaveBeenCalledOnce());
+      row.blur();
+      await act(async () => { settle({ ok: false, errorCode: 'REVISION_CONFLICT' }); });
+      expect(screen.getByRole('alert').textContent).toBe('bots.groupChat.server.settings.conflict');
+      await waitFor(() => expect(document.activeElement).toBe(row));
+      expect(mocks.refreshGroups).not.toHaveBeenCalled();
+    } finally {
+      writeTeammatesViewMode('owner', 'list');
+    }
   });
 
   it('keeps cancelled archives untouched and blocks old-account confirmations and responses', async () => {

@@ -689,6 +689,7 @@ export function TeammatesSection() {
                       type="button"
                       {...companionDragProps(chatRoute(entry), label)}
                       {...(entry.kind === 'group' ? groupMenuProps(entry.group.id) : {})}
+                      data-bot-group-id={entry.kind === 'group' ? entry.group.id : undefined}
                       onClick={() => { const route = chatRoute(entry); if (route) navigate(route); }}
                       aria-label={label}
                       aria-current={selected ? 'page' : undefined}
@@ -737,10 +738,10 @@ export function TeammatesSection() {
         <div className="pt-1 pr-0 pl-3"><BotRosterLoadError /></div>
       ) : null}
 
+      {archiveError && <p role="alert" className="mb-2 pt-1 pr-2.5 pl-[22px] text-12 text-[var(--error-fg)]">{archiveError}</p>}
+
       <SectionCollapse collapsed={showIconStrip || (collapsed && attentionChats.length === 0)}>
       <div className="flex flex-col pt-1 pr-0 pl-3">
-
-      {archiveError && <p role="alert" className="mb-2 px-2.5 text-12 text-[var(--error-fg)]">{archiveError}</p>}
 
       <div>
         {roster.visible.length === 0 && roster.hidden.length === 0 && archivedBots.length === 0 && remoteBots.length === 0 && visibleGroups.length === 0 ? (
