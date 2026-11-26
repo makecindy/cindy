@@ -44,6 +44,7 @@ import {
 } from './remoteBotSettingsData';
 
 interface Props {
+  offlineDescription?: string;
   initialPage?: 'home' | 'memory' | 'capabilities';
   bot: RemoteBot;
   beforeCloseRef: MutableRefObject<(() => Promise<boolean>) | null>;
@@ -59,7 +60,7 @@ export function RemoteBotSettings(props: Props) {
     />
   );
 }
-function RemoteBotSettingsContent({ bot, beforeCloseRef, onDeleted, initialPage = 'home' }: Props) {
+function RemoteBotSettingsContent({ bot, offlineDescription, beforeCloseRef, onDeleted, initialPage = 'home' }: Props) {
   const { t, i18n } = useTranslation();
   // The main computer can be changed from here too (it is asked to hand the companion over).
   const homeActor = cloudCompanionAt(useCompanionCloud(), bot.deviceId, bot.id);
@@ -619,7 +620,7 @@ function RemoteBotSettingsContent({ bot, beforeCloseRef, onDeleted, initialPage 
       ) : null}
       {!bot.online ? (
         <p role="status" className="mb-4 text-13">
-          {t('bots.remote.offlineDescription', { name: bot.name, device: bot.deviceName })}
+          {offlineDescription ?? t('bots.remote.preparing')}
         </p>
       ) : null}
       {error ? (

@@ -104,7 +104,7 @@ it('keeps the generic form page for a host that predates teammate settings', asy
 });
 
 it('asks nothing of an unreachable computer and says so', () => {
-  renderSettings(<RemoteTeammateSettings bot={{ ...bot, online: false }} {...props} />);
+  renderSettings(<RemoteTeammateSettings bot={{ ...bot, online: false }} homeOffline {...props} />);
   expect(screen.getByRole('status').textContent).toBe('bots.remote.offlineDescription:Studio');
   expect(h.declares).not.toHaveBeenCalled();
 });
@@ -129,7 +129,7 @@ it('keeps the open pages (and what is typed in them) across a disconnect and rec
   const view = renderSettings(<RemoteTeammateSettings bot={bot} {...props} />);
   const before = await screen.findByTestId('pages');
   view.rerender(<MemoryRouter><RemoteTeammateSettings bot={{ ...bot, online: false }} {...props} /></MemoryRouter>);
-  expect(screen.getByRole('status').textContent).toBe('bots.remote.offlineDescription:Studio');
+  expect(screen.getByRole('status').textContent).toBe('bots.remote.preparing:Studio');
   expect(screen.getByTestId('pages')).toBe(before);
   h.caps.mockClear();
   view.rerender(<MemoryRouter><RemoteTeammateSettings bot={bot} {...props} /></MemoryRouter>);
@@ -141,7 +141,7 @@ it('keeps the open pages (and what is typed in them) across a disconnect and rec
 // #10045 review regressions (unit): exercise the real remote settings consumer's visible
 // recovery message. Existing cases never used a cloud-only missing name or control-disabled home.
 it('names an undiscovered home without probing or exposing editable settings', () => {
-  renderSettings(<RemoteTeammateSettings bot={{ ...bot, online: false, deviceName: '  ' }} {...props} />);
+  renderSettings(<RemoteTeammateSettings bot={{ ...bot, online: false, deviceName: '  ' }} homeOffline {...props} />);
   expect(screen.getByRole('status').textContent).toBe('bots.remote.offlineDescription:bots.cloud.unknownDevice');
   expect(h.declares).not.toHaveBeenCalled();
   expect(h.call).not.toHaveBeenCalled();

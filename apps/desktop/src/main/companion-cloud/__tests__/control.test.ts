@@ -131,6 +131,38 @@ describe('private report recovery', () => {
 });
 
 describe('take over', () => {
+  // #13083, unit: an already-synced copy is handed here without a usable model.
+  // Explicit takeover tests missed the background path and its one-minute retry.
+  it('restores history to the local conversation once when automatic takeover needs model setup', async () => {
+    vi.useFakeTimers();
+    try {
+      const t = setup({ home: 'laptop', handler: route => {
+        if (route === '/preferences') return [{ key: 'companion.profile.v1', revision: 1, value: MIA }];
+        if (route === '/conversations') return { id: ROOM };
+        if (route.includes('/messages?')) return [{ id: 'msg', seq: '1', authorId: 'human', origin: 'chat',
+          deleted: false, threadRootId: null, createdAt: new Date(1000).toISOString(), content: [{ type: 'text', text: 'Previous conversation' }] }];
+        return {};
+      } });
+      t.local.setProfile({ status: 'active', displayName: 'Mia', description: '' });
+      const profiles = [{ id: 'bot_mia', status: 'active' as const }];
+      await t.runtime.reconcile(profiles);
+      t.host.materializer!.ensureCanonicalSession = async (_bot, _fence, options) => {
+        if (!options?.allowMissingModel) throw new Error('Missing model');
+        return { sessionId: 'session-1', missingModel: true };
+      };
+      t.actors[0]!.homeDeviceId = 'desk';
+      await t.runtime.reconcile(profiles);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(t.state.isDemoted('bot_mia')).toBe(false);
+      expect(t.state.bot('bot_mia')?.arrivalNotices).toContain('model_setup');
+      expect(t.local.host.insertHistory).toHaveBeenCalledWith('session-1', expect.objectContaining({ text: 'Previous conversation' }), expect.anything());
+      await vi.advanceTimersByTimeAsync(60_000);
+      await t.runtime.reconcile(profiles);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(t.local.host.insertHistory).toHaveBeenCalledTimes(1);
+    } finally { runtime?.dispose(); vi.useRealTimers(); }
+  });
+
   // #10205 review, unit: the public repair action must not replay an old cloud snapshot
   // over edits made on the current home after opening the draft. Previous coverage only
   // repaired a missing local copy; a pending local memory/name edit is the minimal regression.

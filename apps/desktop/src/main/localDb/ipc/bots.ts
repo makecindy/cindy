@@ -308,7 +308,7 @@ type CreateBotCanonicalSessionResult = {
 };
 
 type CreateBotCanonicalSessionHostOptions = {
-  /** Host-only flag for explicit cloud take-over; never accepted from renderer IPC payloads. */
+  /** Host-only flag for cloud take-over; never accepted from renderer IPC payloads. */
   allowMissingModel?: boolean;
 };
 

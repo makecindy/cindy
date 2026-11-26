@@ -24,6 +24,7 @@ interface Props {
   bot: RemoteBot;
   /** The home is online but cannot be controlled; this never makes it callable. */
   controlOff?: boolean;
+  homeOffline?: boolean;
   initialPage?: 'home' | 'memory' | 'capabilities' | 'model' | 'voice' | 'channels';
   beforeCloseRef: MutableRefObject<(() => Promise<boolean>) | null>;
   onBack: () => void;
@@ -52,7 +53,8 @@ export function RemoteTeammateSettings(props: Props) {
 function RemoteTeammateSettingsContent(props: Props) {
   const { bot } = props;
   const { t } = useTranslation();
-  const offlineDescription = t(props.controlOff ? 'bots.cloud.homeControlOff' : 'bots.remote.offlineDescription', {
+  const offlineDescription = t(props.controlOff ? 'bots.cloud.homeControlOff'
+    : props.homeOffline ? 'bots.remote.offlineDescription' : 'bots.remote.preparing', {
     name: bot.name, device: bot.deviceName.trim() || t('bots.cloud.unknownDevice'),
   });
   const [support, setSupport] = useState<Support>({ state: 'checking' });
@@ -87,7 +89,7 @@ function RemoteTeammateSettingsContent(props: Props) {
   }, [bot.deviceId, bot.online, attempt]);
 
   if (support.state === 'unsupported')
-    return <RemoteBotSettings bot={bot} initialPage={props.initialPage === 'memory' || props.initialPage === 'capabilities' ? props.initialPage : undefined} beforeCloseRef={props.beforeCloseRef} onDeleted={props.onDeleted} />;
+    return <RemoteBotSettings bot={bot} offlineDescription={offlineDescription} initialPage={props.initialPage === 'memory' || props.initialPage === 'capabilities' ? props.initialPage : undefined} beforeCloseRef={props.beforeCloseRef} onDeleted={props.onDeleted} />;
   if (support.state === 'ready') return <RemoteSettingsPages {...props} ops={support.ops} offlineDescription={offlineDescription} />;
   return (
     <div className="min-h-0 flex-1 overflow-y-auto p-5 text-13 text-[var(--text-primary)]">

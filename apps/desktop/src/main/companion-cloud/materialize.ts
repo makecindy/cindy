@@ -442,8 +442,8 @@ export async function materializeCompanion(input: {
     if (!notices.includes('partial_content')) notices.push('partial_content');
   }
 
-  const ensured = await step(() => host.ensureCanonicalSession(botId, fence,
-    input.resilient ? { allowMissingModel: true } : undefined));
+  // Both takeover paths need a local conversation to import history and expose model settings.
+  const ensured = await step(() => host.ensureCanonicalSession(botId, fence, { allowMissingModel: true }));
   const sessionId = typeof ensured === 'string' ? ensured : ensured.sessionId;
   if (typeof ensured === 'object' && ensured.missingModel && !notices.includes('model_setup')) {
     notices.push('model_setup');
