@@ -1587,7 +1587,8 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
               <div className="pointer-events-none relative mx-auto h-0 w-full max-w-[var(--cindy-message-width)] px-2">
                 <BotGroupThreadHint suppressed={messageNavigationVisible} key={group.id} threads={group.threads ?? []} members={group.members} openRootId={threadRootId}
                   onOpen={rootId => onOpenThread(rootId)} mentions={mentionHistory?.unreadMentions} onLocateMention={locateMention}
-                  onReadMentions={mentionHistory ? () => mentionHistory.markMentionsRead() : undefined} saving={mentionHistory?.saving} />
+                  onReadMentions={mentionHistory ? () => mentionHistory.markMentionsRead() : undefined}
+                  onRetryMentionRead={mentionHistory?.retryRead} saving={mentionHistory?.saving} />
               </div>
             </div>
           ) : null}

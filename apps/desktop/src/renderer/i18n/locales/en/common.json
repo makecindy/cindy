@@ -11812,6 +11812,7 @@
           "title": "Mentions of me",
           "me": "Me",
           "markAll": "Mark all as read",
+          "markReadFailed": "Could not mark mentions as read.",
           "empty": "No unread mentions",
           "thread": "Thread",
           "main": "Group chat",

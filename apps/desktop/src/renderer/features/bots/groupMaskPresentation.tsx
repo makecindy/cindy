@@ -57,9 +57,9 @@ export interface GroupMaskPresentation {
   digestStatus?: 'idle' | 'queued' | 'running' | 'done' | 'failed' | 'cancelled' | 'empty';
 }
 
-type GroupMentionHistory = Pick<GroupMaskPresentation, 'groupId' | 'saving' | 'unreadMentions' | 'markMentionsRead'>;
+type GroupMentionHistory = Pick<GroupMaskPresentation, 'groupId' | 'saving' | 'unreadMentions' | 'markMentionsRead'> & { retryRead?: () => void };
 export const GroupMentionContext = createContext<GroupMentionHistory | null>(null);
-export function useGroupMentionHistory(groupId: string) {
+export function useGroupMentionHistory(groupId: string): GroupMentionHistory | null {
   const history = useContext(GroupMentionContext);
   const mask = useGroupMask(groupId);
   return history?.groupId === groupId ? history : mask;

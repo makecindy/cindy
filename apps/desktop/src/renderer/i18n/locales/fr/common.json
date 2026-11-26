@@ -11902,6 +11902,7 @@
           "title": "Mentions me concernant",
           "me": "Moi",
           "markAll": "Tout marquer comme lu",
+          "markReadFailed": "Impossible de marquer les mentions comme lues.",
           "empty": "Aucune mention non lue",
           "thread": "Fil",
           "main": "Conversation de groupe",

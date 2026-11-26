@@ -14,6 +14,7 @@ function ServerMaskProvider({ groupId, children }: { groupId: string; children: 
   const [state,setState]=useState<ChatMaskState|null>(null);
   const [mentions,setMentions]=useState<ChatMaskMention[]>([]);
   const [saving,setSaving]=useState(false), [error,setError]=useState(false), [connectionLost,setConnectionLost]=useState(false);
+  const [readFailed, setReadFailed] = useState(false);
   const alive=useRef(true), version=useRef(0), authority=useRef(0), busy=useRef(false), pending=useRef(false);
   const stateRef=useRef(state); stateRef.current=state;
   const failed=useRef(new Map<string, () => Promise<void>>());
@@ -48,7 +49,7 @@ function ServerMaskProvider({ groupId, children }: { groupId: string; children: 
     } catch (e) {
       if (current()) {
         if (e instanceof Error && ['CONVERSATION_NOT_FOUND', 'OWNER_CHANGED', 'HUMAN_REQUIRED', 'UNSUPPORTED_OPERATION'].includes(e.message)) {
-          authority.current++; failed.current.clear(); operations.current.clear(); stateRef.current=null; setState(null); setMentions([]);
+          authority.current++; failed.current.clear(); operations.current.clear(); stateRef.current=null; setState(null); setMentions([]); setReadFailed(false);
         } else { setError(true); setConnectionLost(true); }
       }
     }
@@ -110,27 +111,45 @@ function ServerMaskProvider({ groupId, children }: { groupId: string; children: 
     const owner=getDataOwnerGeneration(), generation=authority.current, ids=mentions.filter(m=>!messageIds || messageIds.includes(m.messageId)).map(m=>m.messageId);
     if (!ids.length) return;
     const retryKey=`read:${[...ids].sort().join(',')}`;
+    // A failed response may follow a successful write. Resume the same batch
+    // with its original operation ID instead of replaying confirmed batches.
+    let nextBatch = 0;
+    let operationId: string | undefined;
     const send=async()=>{
       if(!alive.current || !isDataOwnerGenerationCurrent(owner) || generation!==authority.current || operations.current.get(retryKey)!==send) return;
       version.current++; setSaving(true);
       try {
-        for(let i=0;i<ids.length;i+=100){
+        for(;nextBatch<ids.length;nextBatch+=100){
           if(!alive.current || !isDataOwnerGenerationCurrent(owner) || generation!==authority.current) return;
-          const result=await window.electronAPI.maker.chatServer.mentions!({groupId,readIds:ids.slice(i,i+100),operationId:crypto.randomUUID()});
+          operationId ??= crypto.randomUUID();
+          const result=await window.electronAPI.maker.chatServer.mentions!({groupId,readIds:ids.slice(nextBatch,nextBatch+100),operationId});
           if(!result.ok) throw new Error(result.errorCode);
+          operationId = undefined;
         }
-        if(alive.current && isDataOwnerGenerationCurrent(owner) && generation===authority.current && operations.current.get(retryKey)===send) {failed.current.delete(retryKey);setError(failed.current.size > 0);setMentions(previous=>previous.filter(m=>!ids.includes(m.messageId)));}
-      }catch{if(alive.current && isDataOwnerGenerationCurrent(owner) && generation===authority.current && operations.current.get(retryKey)===send){setError(true);failed.current.set(retryKey,send);}}
+        if(alive.current && isDataOwnerGenerationCurrent(owner) && generation===authority.current && operations.current.get(retryKey)===send) {
+          failed.current.delete(retryKey);
+          setError(failed.current.size > 0);
+          setReadFailed([...failed.current.keys()].some(key => key.startsWith('read:')));
+          setMentions(previous=>previous.filter(m=>!ids.includes(m.messageId)));
+        }
+      }catch{if(alive.current && isDataOwnerGenerationCurrent(owner) && generation===authority.current && operations.current.get(retryKey)===send){setError(true);setReadFailed(true);failed.current.set(retryKey,send);}}
       finally{if(alive.current){setSaving(false);void reload();}
         if(operations.current.get(retryKey)===send && !failed.current.has(retryKey)) operations.current.delete(retryKey);}
     };
     failed.current.delete(retryKey); operations.current.set(retryKey,send);
     queue.current=queue.current.then(send,send);
   },[mentions,groupId,reload]);
+  const retryRead = useCallback(() => {
+    for (const [key, send] of failed.current) {
+      if (!key.startsWith('read:')) continue;
+      const attempt = () => failed.current.get(key) === send ? send() : undefined;
+      queue.current = queue.current.then(attempt, attempt);
+    }
+  }, []);
   const history = useMemo(() => ({
-    groupId, saving, markMentionsRead: markRead,
+    groupId, saving, markMentionsRead: markRead, retryRead: readFailed ? retryRead : undefined,
     unreadMentions: mentions.map(m => ({ ...m, ...(m.reply ? { reply: { ...m.reply, companion: maskIdentity(m.reply.companion) } } : {}) })),
-  }), [groupId, saving, markRead, mentions]);
+  }), [groupId, saving, markRead, mentions, readFailed, retryRead]);
   // Keep shared composer, settings and attention consumers on one stable projection.
   const value=useMemo<GroupMaskPresentation|null>(()=>{
   if(!state) return null;
@@ -145,7 +164,7 @@ function ServerMaskProvider({ groupId, children }: { groupId: string; children: 
     attributions:{},
   };
   },[state,history,error,connectionLost,act,reload]);
-  return <GroupMentionContext.Provider value={history.unreadMentions.length ? history : null}>
+  return <GroupMentionContext.Provider value={history.unreadMentions.length || readFailed ? history : null}>
     <GroupMaskContext.Provider value={value}>{children}</GroupMaskContext.Provider>
   </GroupMentionContext.Provider>;
 }

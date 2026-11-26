@@ -242,15 +242,37 @@ describe('chat interaction controls', () => {
     expect(saves).toHaveLength(2);
     expect(saves[1]![0]).toMatchObject({ action: { settings: { enabled: false } }, operationId: saves[0]![0].operationId });
   });
-  // Unit: the mentions inbox used to require a successful read of personal
-  // settings. One unread question must still be accessible in a paused client.
-  it('loads the human mention inbox without reading personal reply settings', async () => {
+  // Unit, #13080: render the actual provider and attention popup. A single
+  // rejected mark-read must keep the mention visible and allow the same write
+  // to be retried without personal replies. Loading alone missed this branch.
+  it('shows and retries a failed mention read when personal replies are paused', async () => {
+    const mention = { messageId: 'question', sequence: '1', authorName: 'Peer', text: 'Please confirm' };
+    let unread = true, rejected = false;
+    mocks.mentions.mockImplementation(async ({ readIds }) => {
+      if (readIds) {
+        if (!rejected) { rejected = true; return { ok: false, errorCode: 'NETWORK_ERROR' }; }
+        unread = false;
+      }
+      return { ok: true, mentions: unread ? [mention] : [], hasMore: false };
+    });
     function Inbox() {
       const history = useGroupMentionHistory('room');
-      return <span>{history?.unreadMentions[0]?.messageId}</span>;
+      return <BotGroupThreadHint threads={[]} members={[]} openRootId={null} onOpen={vi.fn()}
+        mentions={history?.unreadMentions} saving={history?.saving}
+        onReadMentions={() => history?.markMentionsRead()} onRetryMentionRead={history?.retryRead} />;
     }
     render(<GroupMaskProvider groupId="room"><Inbox /></GroupMaskProvider>);
-    await screen.findByText('question');
+    fireEvent.click(await screen.findByTestId('group-attention-hint'));
+    fireEvent.click(screen.getByRole('button', { name: 'bots.groupChat.mask.catchup.markAll' }));
+    expect((await screen.findByRole('alert')).textContent).toContain('bots.groupChat.mask.catchup.markReadFailed');
+    expect(screen.getByText('Please confirm')).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: 'commonUi.retry' }));
+    await waitFor(() => expect(screen.queryByRole('alert')).toBeNull());
+    expect(screen.queryByText('Please confirm')).toBeNull();
+    const writes = mocks.mentions.mock.calls.filter(([input]) => input.readIds);
+    expect(writes).toHaveLength(2);
+    expect(writes[1]![0]).toMatchObject({ readIds: ['question'], operationId: writes[0]![0].operationId });
     expect(mocks.mask).not.toHaveBeenCalled();
   });
   it.each([true, false])('joins directly while personal replies are paused, even with host capability %s', async supported => {

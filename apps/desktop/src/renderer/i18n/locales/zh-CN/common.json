@@ -11766,6 +11766,7 @@
           "title": "@ 我的消息",
           "me": "我",
           "markAll": "全部标为已读",
+          "markReadFailed": "没能将提及标为已读。",
           "empty": "没有未读的 @ 消息",
           "thread": "话题",
           "main": "群聊",

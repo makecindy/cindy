@@ -8,11 +8,23 @@ export default {
   real: 'BotGroupChatView, BotGroupComposer, ChatThreadPanel, BotGroupSettingsDrawer, ChatGroupSettings, GroupMaskControls and GroupMaskSettings',
   notCovered: 'Audio capture, native voice shortcuts, server identity, real agent replies, persistence, private digest delivery and cross-device presence. All events are isolated fixture data.',
   stubs: { 'src/renderer/voice-input/workletUrl': 'export const getVoiceInputWorkletUrl = () => "";' },
-  cases: Object.fromEntries(['default', 'thread', 'paused', 'scheduled', 'manual', 'off', 'offline', 'unbound', 'error', 'loading'].map(name => [name, { about: `Personal stand-in: ${name}`, data: { selfAvatar } }])),
+  cases: Object.fromEntries(['default', 'thread', 'paused', 'scheduled', 'manual', 'off', 'offline', 'unbound', 'error', 'loading', 'mention-read-error'].map(name => [name, { about: `Personal stand-in: ${name}`, data: { selfAvatar } }])),
   async ready(page) { await page.getByTestId('group-attention-hint').waitFor(); },
   async check(page, ui) {
     assert.equal(await page.getByTestId('group-mask-status').count(), 0);
     const inbox = page.getByTestId('group-attention-hint');
+    if (ui.case === 'mention-read-error') {
+      await inbox.click();
+      await page.getByRole('button', { name: await ui.t('bots.groupChat.mask.catchup.markAll'), exact: true }).click();
+      const alert = page.getByRole('alert', { name: '' }).filter({ hasText: await ui.t('bots.groupChat.mask.catchup.markReadFailed') });
+      await alert.waitFor();
+      assert.equal(await inbox.getAttribute('data-count'), '1');
+      await ui.capture('mention-read-error');
+      await alert.getByRole('button', { name: await ui.t('commonUi.retry'), exact: true }).click();
+      await alert.waitFor({ state: 'hidden' });
+      assert.equal(await page.locator('[data-mention-message]').count(), 0);
+      return;
+    }
     assert.equal(await inbox.getAttribute('data-count'), '2');
     await inbox.click();
     assert.equal(await page.locator('[data-mention-message]').count(), 2);
