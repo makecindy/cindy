@@ -750,6 +750,11 @@ export function VoiceMicWaveCaret({ color, testID, viewRef }: { color: string; t
   );
 }
 
+/** '#RRGGBB' / '#RRGGBBAA' at alpha 0, keeping its non-zero RGB; anything else falls back to 'transparent'. */
+function withZeroAlpha(color: string): string {
+  return /^#[0-9a-f]{6}([0-9a-f]{2})?$/i.test(color) ? `${color.slice(0, 7)}00` : 'transparent';
+}
+
 const makeMobileComposerInputRowStyles = (colors: ThemeColors) => ({
   // 外壳是纵向容器：mainRow（输入行）在上、toolbarRow（工具排）在下；
   // 简洁态工具排折叠为 0 高，外壳看起来就是单行 capsule。
@@ -875,10 +880,11 @@ const makeMobileComposerInputRowStyles = (colors: ThemeColors) => ({
     paddingTop: COMPOSER_TEXT_PADDING_TOP,
     textAlignVertical: 'top',
   },
-  // Hides the native text under the one-line preview; the input stays laid out, tappable and readable.
-  // iOS: transparent text (a view below 0.01 opacity would stop receiving taps). Android: opacity 0, since its
-  // new-architecture renderer reads colour 0 ('transparent') as unset and draws the default black.
-  inputUnderPreview: Platform.OS === 'android' ? { opacity: 0 } : { color: 'transparent' },
+  // Hides only the native glyphs under the one-line preview; the input stays laid out, tappable and the
+  // screen reader's node. Not view opacity: below 0.01 iOS stops taps, and Android's alpha 0 marks the node
+  // invisible to TalkBack. Android also reads colour 0 ('transparent') as unset and draws black, so it gets the
+  // primary text colour at zero alpha instead.
+  inputUnderPreview: { color: Platform.OS === 'android' ? withZeroAlpha(colors.textPrimary) : 'transparent' },
   inputGeometricSingleLine: {
     paddingBottom: COMPOSER_TEXT_GEOMETRIC_PADDING_BOTTOM,
     paddingTop: COMPOSER_TEXT_GEOMETRIC_PADDING_TOP,

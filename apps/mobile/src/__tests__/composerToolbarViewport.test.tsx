@@ -4,6 +4,7 @@ import { createRoot } from 'react-dom/client';
 import { expect, it, vi } from 'vitest';
 import { MobileComposerInputRow } from '@/session/MobileComposerInputRow';
 import type { SharedValue } from 'react-native-reanimated';
+import { darkColors } from '@/theme/tokens';
 
 const nativeLayout = vi.hoisted(() => new WeakMap<Element, (height: number) => void>());
 
@@ -187,8 +188,9 @@ it('keeps typed text visible when the card body overflows and reports a hidden t
 // Unit regression: text longer than the collapsed pill showed its last line with the line above cut in
 // half. Render the real row: collapsed, it reads from the start on one line and the native text is hidden
 // without leaving the input untappable; opened, the native text shows again even with the text still passed.
-// iOS hides it with transparent text; Android with opacity 0, because its renderer reads colour 0
-// ('transparent') as unset and draws black, which put two layers of text on top of each other.
+// Only the glyphs are hidden: iOS with transparent text; Android with the primary text colour at zero alpha,
+// because its renderer reads colour 0 ('transparent') as unset and draws black (two layers of text). View
+// opacity is never used: Android's alpha 0 marks the node invisible to TalkBack, iOS below 0.01 stops taps.
 it.each(['ios', 'android'] as const)('shows collapsed overflow text from its start on one line and restores the native text when opened (%s)', (os) => {
   platform.OS = os;
   const container = document.createElement('div');
@@ -204,19 +206,17 @@ it.each(['ios', 'android'] as const)('shows collapsed overflow text from its sta
     const preview = container.querySelector('[data-testid="input.collapsedPreview"]');
     expect(preview?.textContent).toBe(text);
     expect(preview?.getAttribute('data-lines')).toBe('1');
-    if (os === 'ios') {
-      expect(inputStyle().color).toBe('transparent');
-      expect(inputStyle().opacity).toBeUndefined();
-    } else {
-      expect(inputStyle().opacity).toBe(0);
-      expect(inputStyle().color).not.toBe('transparent');
-    }
-    // The native input stays the tappable, focusable element.
+    expect(inputStyle().color).toBe(os === 'ios' ? 'transparent' : `${darkColors.textPrimary}00`);
+    expect(inputStyle().opacity).toBeUndefined();
+    // The native input stays the tappable, focusable element and the screen reader's node.
     expect(textInputProps.current.editable).not.toBe(false);
     expect(textInputProps.current.pointerEvents).toBeUndefined();
+    expect(textInputProps.current.importantForAccessibility).toBeUndefined();
+    expect(textInputProps.current.accessibilityElementsHidden).toBeUndefined();
     render(true);
     expect(container.querySelector('[data-testid="input.collapsedPreview"]')).toBeNull();
     expect(inputStyle().color).not.toBe('transparent');
+    expect(inputStyle().color).not.toBe(`${darkColors.textPrimary}00`);
     expect(inputStyle().opacity).toBeUndefined();
   } finally {
     act(() => root.unmount());
