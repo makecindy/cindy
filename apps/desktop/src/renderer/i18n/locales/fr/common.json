@@ -2846,7 +2846,7 @@
         "description": "Ubuntu utilise les paquets .deb du système. Arch Linux et Omarchy utilisent l'installateur utilisateur géré, avec la même charge .deb vérifiée, sans gestionnaire de paquets Debian.",
         "item1": "Ubuntu : utilisez sudo apt install ./cindy-<version>-<arch>.deb. Arch/Omarchy : suivez le guide d'installation utilisateur dans docs/linux.md.",
         "item2": "Après avoir choisi Mettre à jour, les installations .deb système demandent une autorisation ; les installations utilisateur gérées changent de version sans mot de passe système. Les autres installations gérées par un gestionnaire de paquets utilisent celui-ci.",
-        "item3": "Linux x64 et arm64 prennent en charge le canal bêta. Les mises à jour Linux sont appliquées uniquement lorsque vous choisissez de redémarrer, jamais automatiquement lorsque vous êtes inactif."
+        "item3": "Linux x64 et arm64 prennent en charge le canal bêta. Les installations utilisateur gérées peuvent installer les mises à jour automatiquement pendant l’inactivité ; les installations .deb système autorisées sans mot de passe peuvent également le faire, tandis que les autres ne les appliquent que lorsque vous choisissez de redémarrer."
       },
       "qnaTitle": "Posez votre question",
       "qnaDescription": "Besoin d'aide ? Demandez comment faire ce que vous avez en tête.",
@@ -2921,7 +2921,7 @@
       "openLogsDirError": "Impossible d'ouvrir le répertoire des journaux",
       "autoUpdateLabel": "Installer les mises à jour en période d'inactivité",
       "autoUpdateDescription": "Une fois une mise à jour téléchargée, l'application redémarre pour l'installer lorsque cet ordinateur est inactif depuis 10 minutes et qu'aucune tâche n'est en cours d'exécution.",
-      "linuxUpdateDescription": "Les mises à jour nécessitent un redémarrage que vous déclenchez. Les installations .deb système demandent votre mot de passe système ; les installations utilisateur gérées, non. Les autres installations utilisent leur gestionnaire de paquets.",
+      "linuxUpdateDescription": "Les installations .deb système demandent votre mot de passe système : les mises à jour s’appliquent donc au redémarrage que vous déclenchez. Les installations utilisateur gérées n’ont pas besoin de mot de passe et peuvent s’installer pendant l’inactivité. Les autres installations utilisent leur gestionnaire de paquets.",
       "autoUpdateEnabledToast": "Installation des mises à jour en période d'inactivité activée",
       "autoUpdateDisabledToast": "Installation des mises à jour en période d'inactivité désactivée",
       "autoUpdateSaveFailed": "Impossible d'enregistrer les paramètres de mise à jour automatique",
@@ -4744,6 +4744,15 @@
       "menu": {
         "disableProvider": "Désactiver ce fournisseur",
         "enableProvider": "Activer ce fournisseur",
+        "icon": "Icône de connexion",
+        "appearance": "Nom et icône",
+        "ownImage": "Choisir une image",
+        "imageError": "Choisissez une image PNG, JPG ou WebP de moins de 10 Mo.",
+        "connectionIcon": {
+          "default": "Par défaut",
+          "personal": "Personnel",
+          "work": "Travail"
+        },
         "hideProvider": "Masquer dans le sélecteur de modèles",
         "showProvider": "Afficher dans le sélecteur de modèles"
       },
@@ -5958,7 +5967,7 @@
       "uninstallTitle": "Désinstaller l'extension Pi ?",
       "uninstallDescription": "{{name}} sera supprimée de cet appareil. Les tâches Pi déjà ouvertes conservent l'ancienne extension jusqu'à leur fermeture.",
       "confirmUninstall": "Désinstaller",
-      "extensionDialogConfirm": "Confirmer",
+      "extensionDialogConfirm": "Continuer",
       "cancel": "Annuler",
       "resources": {
         "extension": "Code de l'extension",
@@ -7225,7 +7234,14 @@
           "routeUnavailable": "Indisponible",
           "routeMeasuring": "Mesure…",
           "routeDirectUnavailableHint": "La connexion directe est actuellement indisponible sur ce réseau",
-          "routePreferenceFailed": "Impossible de changer d’itinéraire. Veuillez réessayer."
+          "routePreferenceFailed": "Impossible de changer d’itinéraire. Veuillez réessayer.",
+          "autoRule": {
+            "title": "Règles de routage automatique",
+            "faster": "Choisit le chemin le plus rapide, avec préférence pour le direct en cas d’écart minime.",
+            "thresholds": "Bascule sur le relais s’il gagne 25–50 ms+ ; revient au direct dès que l’écart descend sous 15 ms.",
+            "cooldown": "Temporisation de 30 s anti-oscillation ; bascule immédiate en cas de forte dégradation (≥ 2× plus lent et ≥ 100 ms d’écart).",
+            "peerOverride": "Si l’appareil distant a forcé direct/relais ou utilise une ancienne version, son réglage ou sa capacité prévaut."
+          }
         },
         "protocol": {
           "agentNet": "Agent-Net",
@@ -7348,6 +7364,123 @@
           "disableBlocked": {
             "controller-encryption-required": "Cet ordinateur a activé « Utiliser uniquement Agent-Net ». Désactivez cette option ici avant de remettre l’autre ordinateur sur Device Link.",
             "agent-net-only-relay": "Cette connexion utilise un réseau qui prend uniquement en charge Agent-Net. Choisissez un itinéraire compatible avec Device Link avant de revenir."
+          }
+        },
+        "peerUpdate": {
+          "availableTip": "Version {{version}} disponible — cliquer pour mettre à jour",
+          "downloading": "Téléchargement de {{version}}…",
+          "relaunching": "Redémarrage pour installer {{version}}…",
+          "confirm": {
+            "title": "Mettre à jour Cindy sur « {{name}} » ?",
+            "selfTitle": "Mettre à jour Cindy sur cet ordinateur ?",
+            "description": "Cindy passera de {{from}} à {{to}} puis redémarrera sur cet appareil. La connexion à distance sera brièvement interrompue.",
+            "selfDescription": "Cindy passera de {{from}} à {{to}} puis redémarrera sur cet ordinateur.",
+            "busyWarning": "Les tâches en cours d'exécution ou travaux en arrière-plan sur cet appareil seront interrompus par le redémarrage.",
+            "selfBusyWarning": "Les tâches en cours d'exécution ou travaux en arrière-plan sur cet ordinateur seront interrompus par le redémarrage.",
+            "linuxPermissionHint": "Les installations Linux gérées peuvent demander le mot de passe système sur l’appareil cible.",
+            "windowsPermissionHint": "Une installation dans un dossier protégé peut demander une autorisation système sur l’appareil cible.",
+            "action": "Mettre à jour"
+          },
+          "toast": {
+            "started": "Mise à jour de « {{name}} » vers {{version}} lancée",
+            "relaunching": "« {{name}} » redémarre pour installer {{version}}",
+            "versionChanged": "La version disponible sur « {{name}} » a changé. Rouvrez la carte pour vérifier.",
+            "noUpdate": "Aucune mise à jour installable n’est disponible sur « {{name}} ».",
+            "busy": "« {{name}} » a déjà une mise à jour en cours d'exécution. Réessayez dans un instant.",
+            "failed": "Impossible de mettre à jour Cindy sur « {{name}} »."
+          }
+        },
+        "tabs": {
+          "aria": "Vue topologie",
+          "devices": "Connexions d’appareils",
+          "providers": "Fournisseurs distants"
+        },
+        "providers": {
+          "empty": "Aucune tâche n’est en cours d'exécution sur un fournisseur distant. Lorsqu’une tâche s’exécute sur un autre ordinateur ou fournisseur partagé, son trajet et son relais s’affichent ici.",
+          "noMatch": "Aucune tâche, machine ou relais ne correspond au filtre.",
+          "searchPlaceholder": "Rechercher tâches, machines ou relais…",
+          "clearFilter": "Effacer le filtre",
+          "expand": "Déplier",
+          "collapse": "Replier",
+          "groupTitle": "Groupe {{provider}}",
+          "groupCount": "{{count}} au total",
+          "groupIdleSummary": "{{count}} autres membres : {{online}} en ligne · {{offline}} hors ligne",
+          "filter": {
+            "aria": "Filtrer par état des tâches",
+            "all": "Toutes les tâches ({{count}})",
+            "running": "En cours d'exécution ({{count}})"
+          },
+          "columns": {
+            "tasks": "Mes tâches",
+            "path": "Trajet",
+            "machines": "Machines fournisseurs distantes"
+          },
+          "usage": {
+            "remoteModel": "Modèle distant",
+            "remoteTask": "Tâche distante"
+          },
+          "bundle": {
+            "mixed": "{{running}} en cours d'exécution · {{ready}} prêtes",
+            "runningOnly": "{{running}} en cours d'exécution",
+            "readyOnly": "{{ready}} prêtes",
+            "countBadge": "{{count}} tot.",
+            "popoverTitle": "Tâches sur {{name}} ({{count}})"
+          },
+          "badge": {
+            "own": "Mon ordinateur",
+            "groupMember": "Groupe",
+            "share": "Fournisseur partagé",
+            "shareShort": "Partagé",
+            "shareGroup": "Groupe partagé · {{count}}",
+            "shareGroupShort": "Groupe · {{count}}"
+          },
+          "relayRole": {
+            "officialShort": "Officiel",
+            "selfHostedShort": "Auto-hébergé",
+            "sharerRelayShort": "Relais du partageur",
+            "officialFull": "Relais officiel Cindy",
+            "selfHostedFull": "Relais auto-hébergé",
+            "sharerRelayFull": "Relais auto-hébergé du partageur"
+          },
+          "status": {
+            "ready": "En ligne",
+            "busy": "Occupé",
+            "paused": "En pause",
+            "idle": "Inactif",
+            "standby": "En veille"
+          },
+          "machineLine": {
+            "live": "{{flow}} · {{count}} tâches",
+            "ready": "Prêt · {{count}} tâches"
+          },
+          "popover": {
+            "models": "Modèles actifs",
+            "tasksCount": "Tâches liées ({{count}})",
+            "clickToOpenHint": "Cliquer pour ouvrir",
+            "relayHost": "Hôte relais",
+            "relayRegion": "Région",
+            "relayHop": "Local vers relais",
+            "relayLoad": "Via ce relais",
+            "relayLoadValue": "{{machines}} machines · {{tasks}} tâches"
+          },
+          "idleStrip": {
+            "summary": "{{count}} autres fournisseurs distants en ligne sont inactifs",
+            "show": "Afficher les fournisseurs inactifs",
+            "hide": "Masquer les fournisseurs inactifs"
+          },
+          "stats": {
+            "empty": "Aucune tâche en cours d'exécution sur un fournisseur distant",
+            "tasks": "{{total}} tâches",
+            "tasksWithRunning": "{{total}} tâches ({{running}} en cours d'exécution)",
+            "machines": "{{active}} machines fournisseurs",
+            "machinesWithTotal": "{{active}} actives / {{total}} fournisseurs",
+            "relays": "{{count}} relais"
+          },
+          "legend": {
+            "live": "Tirets bleus animés : échange de messages",
+            "ready": "Ligne verte : lien Agent-Net prêt",
+            "busy": "Point orange : tâche en cours d'exécution / occupé",
+            "error": "Pointillés rouges : sans réponse ou en pause"
           }
         }
       }
@@ -7477,7 +7610,8 @@
       "localNetwork": {
         "label": "Réseau local",
         "deniedHint": "Sans cette autorisation, les ordinateurs et téléphones du même réseau ne peuvent pas se connecter directement à cet ordinateur. Ils passent par le relais, ce qui est plus lent.",
-        "settingsHint": "Activez Cindy dans Réglages Système › Confidentialité et sécurité › Réseau local. Le changement s’applique dès votre retour."
+        "promptedHint": "Cliquez sur Autoriser dans la fenêtre macOS. Si aucune fenêtre n’apparaît, ouvrez Réglages Système pour l’activer manuellement.",
+        "settingsHint": "Dans Confidentialité et sécurité, ouvrez Réseau local et activez Cindy. Si l’app n’apparaît pas, cliquez sur + pour l’ajouter ; le changement s’applique dès votre retour."
       }
     },
     "imBot": {
@@ -7948,6 +8082,10 @@
         "toggle-sidebar": {
           "label": "Afficher/masquer la barre latérale",
           "description": "Réduire ou développer la barre latérale de la liste des sessions"
+        },
+        "copy-session-link": {
+          "label": "Copier le lien de la session",
+          "description": "Copier le lien de la session ouverte"
         },
         "session-history-back": {
           "label": "Tâche précédente",
@@ -9671,6 +9809,7 @@
         "createTitle": "Ajouter un serveur MCP",
         "editTitle": "Modifier le serveur MCP",
         "desc": "MCP distant http / sse uniquement. Les nouvelles sessions peuvent l'appeler après l'enregistrement ; les sessions en cours ne sont pas affectées.",
+        "embeddedGuide": "Ton assistant a ouvert ce formulaire pour configurer MCP pour la tâche en cours. Suis les instructions du fournisseur de services pour vérifier les informations préremplies, compléter les champs manquants et enregistrer la configuration.",
         "teammateDesc": "MCP distant http / sse uniquement. Après l'enregistrement, votre ami l'ajoute à ses outils et peut l'utiliser dès le prochain message de cette conversation, sans nouvelle session."
       },
       "fields": {
@@ -9882,7 +10021,7 @@
       "allow": "Autoriser",
       "deny": "Refuser",
       "questionTitle": "Votre réponse est requise",
-      "submit": "Envoyer",
+      "submit": "Envoyer la réponse",
       "planTitle": "Revue du plan",
       "approve": "Approuver",
       "requestChanges": "Demander des modifications",
@@ -12089,6 +12228,8 @@
         "loadEarlierFailed": "Impossible de charger les messages précédents. Réessayez.",
         "emptyTitle": "Aucun message dans ce groupe pour l'instant",
         "emptyDescription": "Dites quelque chose pour commencer et vos amis se joindront à la conversation. Mentionnez un ami avec @ pour que lui seul réponde.",
+        "emptyDescriptionWithAssistant": "Mentionnez @Cindy ou utilisez le menu d’invitation en haut à droite pour inviter des personnes ou ajouter des amis.",
+        "emptyDescriptionInvite": "Utilisez le menu d’invitation en haut à droite pour inviter des personnes ou ajouter des amis.",
         "roundEnded": "Les amis ont terminé",
         "stepTag": "Étape {{count}}",
         "sending": "Envoi",
@@ -12427,7 +12568,7 @@
         "loginRequired": "Connectez-vous à votre compte et réessayez.",
         "requestFailed": "Le service de conversation est indisponible. Réessayez dans un instant.",
         "copyFailed": "Impossible de copier. Sélectionnez le lien et copiez-le manuellement.",
-        "createDescription": "Choisissez des amis, ou créez d'abord le groupe et invitez des personnes à le rejoindre.",
+        "createDescription": "Une fois le groupe créé, vous pouvez inviter des personnes et ajouter des amis.",
         "settings": {
           "name": "Nom du groupe",
           "topic": "Sujet",
@@ -12465,7 +12606,7 @@
           "soleOwnerHint": "Vous êtes le dernier membre. Archivez ce groupe pour conserver son historique et le restaurer plus tard.",
           "archive": "Archiver le groupe",
           "archiveHint": "L'archivage désactive ce groupe pour tous les membres, ce qui bloque les nouveaux messages et les exécutions des amis. L'historique est conservé. Recherchez le groupe pour consulter son historique ou le désarchiver.",
-          "confirm": "Confirmer",
+          "confirm": "Continuer",
           "lastOwner": "Transférez la propriété à un autre membre avant de quitter le groupe ou de retirer le propriétaire actuel.",
           "conflict": "Quelqu'un a modifié ce groupe. Actualisez et réessayez.",
           "unarchive": "Désarchiver le groupe",
@@ -13338,7 +13479,7 @@
       }
     },
     "confirmDialog": {
-      "confirm": "Confirmer",
+      "confirm": "Continuer",
       "cancel": "Annuler",
       "dontShowAgain": "Ne plus afficher"
     },
@@ -13734,6 +13875,7 @@
           "overloadRetryingNoCount": "Le service du modèle est occupé. Nouvelle tentative automatique en cours…",
           "overloadFailed": "⚠️ Le service du modèle est occupé : le service en amont n'a pas de capacité disponible pour le moment. Renvoyez ce message ici pour réessayer, ou passez à un autre modèle dans Cindy. (Cliquer sur « Réessayer » dans l'application de bureau poursuit aussi la tâche, mais le résultat ne reviendra pas dans ce message.)"
         },
+        "openAiReconnect": "Reconnectez ChatGPT dans Cindy sous Paramètres → Fournisseurs → OpenAI, puis envoyez un message ici.",
         "audioInputUnavailable": "Cette connexion au modèle ne permet pas de traiter directement l’audio. Demandez à Cindy de le transcrire avant de poursuivre.",
         "toolLoop": {
           "generic": "Le modèle a appelé des outils de façon répétée trop de fois : Cindy a arrêté ce tour pour éviter une boucle infinie. Envoyez un nouveau message pour continuer.",
@@ -14902,27 +15044,27 @@
         },
         "acp": {
           "ask": {
-            "label": "Confirmer à chaque fois",
+            "label": "Autorisations par défaut",
             "description": "Vous confirmez quand l’Agent demande une autorisation. Cindy ne peut pas bloquer les actions pour lesquelles l’Agent ne demande rien."
           },
           "default": {
-            "label": "Par défaut",
+            "label": "Autorisations par défaut",
             "description": "L’Agent fonctionne à sa manière par défaut ; vous confirmez ses demandes d’autorisation."
           },
           "acceptEdits": {
-            "label": "Accepter les modifications",
+            "label": "Modifications acceptées",
             "description": "L’Agent modifie les fichiers directement ; vous confirmez ses autres demandes d’autorisation."
           },
           "auto": {
-            "label": "Automatique",
+            "label": "Revue auto",
             "description": "L’Agent décide de ce qui nécessite une confirmation ; vous confirmez les demandes qu’il fait."
           },
           "plan": {
-            "label": "Planifier uniquement",
+            "label": "Mode plan",
             "description": "L’Agent analyse et planifie seulement ; il ne modifie aucun fichier."
           },
           "bypassPermissions": {
-            "label": "Tout autoriser",
+            "label": "Accès complet",
             "description": "Toutes les autorisations demandées par l’Agent sont accordées automatiquement."
           }
         }
@@ -15562,7 +15704,7 @@
       "back": "Retour",
       "skip": "Passer",
       "next": "Suivant",
-      "submit": "Envoyer",
+      "submit": "Envoyer la réponse",
       "sendAndContinue": "Envoyer et continuer",
       "close": "Fermer",
       "customAnswer": "Saisir autre chose…",
@@ -15747,6 +15889,10 @@
       "codexHelperUnavailable": "cindy_helper est activé, mais indisponible pour cette tâche. Le résultat de la tâche risque de ne pas pouvoir être transmis.",
       "codexHelperUnverified": "Impossible de vérifier si cindy_helper est disponible pour cette tâche. Le résultat de la tâche risque de ne pas pouvoir être transmis.",
       "requestFormatError": "L'application a envoyé une requête non valide : cette réponse n'a donc pas pu aboutir.",
+      "piRetryHistoryTooLarge": "Message non envoyé. En lisant l’historique nécessaire au nouvel essai, Pi a rencontré une trame dépassant la limite locale de 16 MiB. Vous pouvez continuer dans une nouvelle tâche.",
+      "piRetryHistoryUnavailable": "Message non envoyé. Pi n’a pas pu lire l’historique nécessaire à l’envoi. Vous pouvez réessayer ou continuer dans une nouvelle tâche.",
+      "upstreamStatusError": "Le service en amont a renvoyé {{status}} ; la réponse n’a pas pu aboutir.",
+      "messageNotSent": "Message non envoyé.",
       "replyFailed": "Impossible de terminer la réponse",
       "queuedSendRecovery": "Ton message n’a pas été envoyé. Sélectionne « Réessayer » pour le renvoyer tel quel. Si tu envoies un nouveau message, il remplacera le précédent.",
       "retryTitle": "Renvoyer le dernier message",
@@ -16013,6 +16159,10 @@
       "diffUnchangedLines_other": "{{count}} lignes inchangées",
       "diffUnchangedLines_many": "{{count}} lignes inchangées",
       "diffPreviewLoading": "Préparation de l'aperçu du diff…"
+    },
+    "filePreview": {
+      "changed": "Fichier modifié",
+      "refreshHint": "Cliquez pour actualiser"
     },
     "textLightbox": {
       "unreadable": "Impossible de lire ce fichier",
@@ -16589,7 +16739,7 @@
       "REMOTE_WORKDIR_UNAVAILABLE": "Le répertoire de travail distant est indisponible. Vérifiez que le dossier existe toujours sur cet ordinateur, puis réessayez.",
       "REMOTE_OPTIMISTIC_SESSION_STATE_UNAVAILABLE": "L'ordinateur ne peut pas encore confirmer si ce message a été envoyé. Patientez un instant et réessayez. N'envoyez pas deux fois le même message.",
       "REMOTE_AGENT_UNAVAILABLE": "Impossible de communiquer avec l'ordinateur où l'Agent est en cours d'exécution. Consultez les détails de l'erreur.",
-      "REMOTE_AGENT_TIMEOUT": "Le délai d'attente de l'ordinateur où l'Agent est en cours d'exécution a expiré. Le résultat est inconnu. Vérifiez la tâche avant de réessayer.",
+      "REMOTE_AGENT_TIMEOUT": "L’ordinateur qui exécute l’Agent n’a pas encore répondu. Vérifiez l’avancement de la tâche. Si elle est encore en cours d'exécution ou déjà terminée, inutile de réessayer.",
       "REMOTE_AGENT_LINK_BUSY": "La communication avec l'ordinateur où l'Agent est en cours d'exécution est saturée. Patientez un instant avant de réessayer.",
       "REMOTE_AGENT_UNRESPONSIVE": "L'ordinateur où l'Agent est en cours d'exécution n'a pas répondu à plusieurs reprises. Les appels ont donc été temporairement suspendus. Patientez un instant avant de réessayer.",
       "REMOTE_AGENT_OFFLINE": "L'ordinateur où l'Agent est en cours d'exécution est hors ligne. Réessayez une fois qu'il sera reconnecté.",
@@ -16883,6 +17033,8 @@
       "retryIn": "Nouvelle tentative automatique dans {{seconds}} s"
     },
     "subscriptionAccountError": {
+      "unreachable": "Le service de comptes Codex est temporairement inaccessible.",
+      "rechecking": "Le service de comptes Codex est temporairement inaccessible. Nouvel essai à {{resetAt}}.",
       "poolModelLimited": "La limite d’utilisation de l’abonnement pour ce modèle est atteinte. Vous pouvez changer de modèle.",
       "poolRetryUntil": "Réessayez après {{resetAt}}.",
       "poolOtherSignedOut": "Un autre compte d’abonnement est déconnecté. Reconnectez-le sur l’ordinateur qui exécute la tâche, puis réessayez.",
@@ -18678,6 +18830,7 @@
         "intervalChip": "Après la fin · {{schedule}}"
       },
       "scheduleMenu": {
+        "custom": "Cron personnalisé",
         "intervalMinutes": "Minutes (toutes les N minutes)",
         "interval": "Horaire (toutes les N heures)",
         "daily": "Quotidien (tous les jours)",
@@ -19381,6 +19534,7 @@
     }
   },
   "commandPalette": {
+    "buddyNewHint": "Dans les réglages de l’ami, choisis « {{restart}} » pour reconstruire le contexte de travail tout en conservant l’historique des messages. Pour une discussion à part, choisis « {{startTopic}} » dans les actions d’un message.",
     "viewSkillDetails": "Voir les détails du skill",
     "projectSkillNotLoaded": "Cette tâche Pi n'a pas chargé ce skill de projet. Les nouvelles tâches tenteront de le charger automatiquement.",
     "pluginSkillSetup": {
@@ -22911,6 +23065,16 @@
     "refresh": "Actualiser le quota"
   },
   "subscriptionAccounts": {
+    "existing": {
+      "menu": "Autres options d’ajout",
+      "connect": "Connecter une session existante…",
+      "found": "{{count}} disponibles",
+      "title": "Sessions sur {{device}}",
+      "note": "Cindy et le terminal utiliseront la même configuration de compte.",
+      "attach": "Connecter",
+      "choose": "Choisir un autre dossier…",
+      "unverified": "Impossible de vérifier cet abonnement."
+    },
     "pluginSignIn": {
       "method": "Méthode de connexion",
       "secretHint": "La clé est transmise uniquement au plugin, qui la conserve dans le dossier propre à ce compte. Cindy ne la stocke pas et ne l’envoie pas à d’autres ordinateurs.",

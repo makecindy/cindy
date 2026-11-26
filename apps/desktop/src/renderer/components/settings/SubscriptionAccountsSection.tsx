@@ -19,6 +19,7 @@ import {
   type ReactNode,
 } from 'react';
 import { useTranslation } from 'react-i18next';
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Select } from '@/components/ui/select';
 import { SegmentedControl } from '@/components/ui/segmented-control';
@@ -79,6 +80,7 @@ import type { OpenAiGroupAccount } from '../../../shared/openAiAccountGroup';
 import { openAiGroupFailureKey } from './OpenAiAccountGroupSection';
 import { pluginEngineUsageAccount } from '../status/pluginEngineUsageAccount';
 import { usePluginEngines } from '@/hooks/usePluginEngines';
+import { ExistingSubscriptionLogins } from './ExistingSubscriptionLogins';
 import { usePluginEngineSignIn } from './PluginEngineSignIn';
 
 /** `acp-plugin:<plugin>:<engine>[~<suffix>]` → `<plugin>:<engine>`. */
@@ -160,9 +162,9 @@ function AccountListPlaceholder({ reserve, label }: { reserve: boolean; label: s
 
 function AccountTag({ children }: { children: ReactNode }) {
   return (
-    <span className="flex h-[18px] shrink-0 items-center rounded-full border border-[var(--settings-integration-avatar-border)] px-2 text-11 font-medium text-[var(--text-tertiary)]">
+    <Badge tone="outline">
       {children}
-    </span>
+    </Badge>
   );
 }
 
@@ -305,6 +307,26 @@ export function SubscriptionAccountsSection({
       await refresh();
     }
   };
+  const addButton = (
+    <Button
+      data-settings-search-action="Add a subscription account or cancel its pending sign-in"
+      variant="secondary"
+      size="sm"
+      disabled={busy && !login.current}
+      onClick={() => {
+        if (login.current)
+          void window.electronAPI.subscriptionAccounts
+            .command({ action: 'cancel', providerId, loginKey: login.current })
+            .catch(() => toast.error(t('subscriptionAccounts.failed')));
+        else void signInFields(t('subscriptionAccounts.add')).then((fields) => {
+          if (fields) void run({ action: 'add', providerId, loginKey: crypto.randomUUID(), ...fields });
+        });
+      }}
+    >
+      {busy ? <Spinner size={13} /> : <Plus size={14} />}
+      {login.current ? t('settings.providers.button.cancel') : t('subscriptionAccounts.add')}
+    </Button>
+  );
   const accounts = view && !isUnusedDefaultSlot(view.accounts) ? view.accounts : [];
   const mixed = accounts.some(account => account.apiKey);
   const moveInOrder = (index: number, offset: number) => {
@@ -356,24 +378,9 @@ export function SubscriptionAccountsSection({
               {dashboard.label}
             </Button>
           )}
-          {(!plugin || pluginMethods.length > 0) && <Button
-            data-settings-search-action="Add a subscription account or cancel its pending sign-in"
-            variant="secondary"
-            size="sm"
-            disabled={busy && !login.current}
-            onClick={() => {
-              if (login.current)
-                void window.electronAPI.subscriptionAccounts
-                  .command({ action: 'cancel', providerId, loginKey: login.current })
-                  .catch(() => toast.error(t('subscriptionAccounts.failed')));
-              else void signInFields(t('subscriptionAccounts.add')).then((fields) => {
-                if (fields) void run({ action: 'add', providerId, loginKey: crypto.randomUUID(), ...fields });
-              });
-            }}
-          >
-            {busy ? <Spinner size={13} /> : <Plus size={14} />}
-            {login.current ? t('settings.providers.button.cancel') : t('subscriptionAccounts.add')}
-          </Button>}
+          {(providerId === 'anthropic' || providerId === 'openai') ? (
+            <ExistingSubscriptionLogins key={providerId} provider={providerId} disabled={busy}>{addButton}</ExistingSubscriptionLogins>
+          ) : (!plugin || pluginMethods.length > 0) && addButton}
         </div>
       </div>
       {failed && (

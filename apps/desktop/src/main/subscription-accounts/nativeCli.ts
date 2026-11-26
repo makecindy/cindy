@@ -3,7 +3,7 @@ import { desktopMakerLogger } from '../maker-host/logger-adapter.js';
 import { spawn } from 'node:child_process';
 import { homedir } from 'node:os';
 import path from 'node:path';
-import { codexWorkspaceIdFromTokens } from '../maker-host/codex-auth-identity.js';
+import { codexAccountDisplayKey, codexWorkspaceIdFromTokens } from '../maker-host/codex-auth-identity.js';
 import { open } from 'node:fs/promises';
 import { statSync, type Stats } from 'node:fs';
 import { cleanProcessEnv, type AccountRateLimitsResponse, type AuthState } from '@cindy/maker-core';
@@ -114,6 +114,22 @@ export async function readNativeAccount(
     };
   }
   return parseNativeCodexAccount(await codexAccountRpc(directory, 'account/read', { refreshToken: false }, options?.codexCanDispatch));
+}
+
+/** Verify the current CLI identity without fetching quota or opening a browser. */
+export async function readExistingLogin(provider: SubscriptionProvider, directory: string) {
+  const auth = await readNativeAccount(provider, directory, { force: true });
+  const identity = auth.identity?.trim();
+  if (!auth.authenticated || !identity || identity.length > 320) return null;
+  let accountKey: string | undefined;
+  if (provider === 'openai') {
+    const tokens = await readNativeCodexTokens(directory);
+    if (!tokens.canDispatch()) return null;
+    accountKey = codexAccountDisplayKey(identity, tokens.chatgptAccountId);
+    if (!accountKey) return null;
+  }
+  return { login: { directory, identity, ...(accountKey ? { accountKey } : {}) },
+    plan: auth.planDisplayName ?? auth.planType ?? auth.plan };
 }
 
 function parseNativeCodexAccount(value: unknown): AuthState & { plan?: string; planType?: string } {

@@ -54,6 +54,12 @@ export interface ApiFetchOptions {
    * 抛出即中止这一跳:异常原样抛给调用方,不会被归一成 status 0 的网络失败。
    */
   beforeHop?: (resolvedBaseUrl: string) => void;
+  /**
+   * Observe a server-provided 429 deadline as soon as headers arrive, before
+   * reading the body. Read-specific throttles can share it with other callers.
+   * Observer failures are logged without details and never change the response.
+   */
+  onRetryAfter?: (retryAt: number, servedBaseUrl: string) => void;
   /** Abort the request after this many milliseconds; 0 disables the deadline. */
   timeoutMs?: number;
   /** Caller lifetime/deadline, including waiting for shared login refresh and retry. */
@@ -183,6 +189,13 @@ async function rawFetch<T>(apiPath: string, opts: ApiFetchOptions): Promise<RawR
     const retryAt = response.status === 429 ? retryAfterDeadline(response) : undefined;
     responseRetryAt = retryAt;
     responseStatus = response.ok ? undefined : response.status;
+    if (retryAt !== undefined) {
+      try {
+        opts.onRetryAfter?.(retryAt, baseUrl);
+      } catch {
+        log.warn('rate limit observer failed', opts.logLabel ?? redactedLogPath(apiPath));
+      }
+    }
     let data: T | null = null;
     try {
       data = (await response.json()) as T;

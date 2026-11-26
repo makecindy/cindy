@@ -137,6 +137,29 @@ fn pump_runs_the_transport_without_the_application_and_the_waiter_wakes_on_a_dat
     assert!(polls >= 1);
 }
 
+// Windows (wait.rs): `WSAPoll`'s timeout follows the system timer, so a 1 ms wait took a whole 15.6 ms tick (2026-11-23: 15.5 ms on
+// average) and two engines pacing a transfer on such waits moved data 15–20% slower than the WASM driver over a 12.5 MB/s, 32 ms
+// line. Observable: short waits on a quiet socket end near their deadline, a datagram still ends a long wait at once, and a
+// second waiter on the same engine works too. The pump test above only waits 20 ms on a quiet socket and never times a short wait.
+#[test]
+fn a_short_wait_ends_near_its_deadline_and_a_datagram_ends_a_long_one() {
+    let mut a = engine(21, "native-a");
+    let port = command(&mut a, json!({"op":"identity"}))["udpPort"].as_u64().unwrap() as u16;
+    let (first, second) = (a.waiter(), a.waiter());
+    for waiter in [&first, &second] {
+        let started = Instant::now();
+        for _ in 0..20 { assert!(!waiter.wait(1), "nothing arrived"); }
+        let average = started.elapsed() / 20;
+        assert!(average < Duration::from_millis(8), "a 1 ms wait took {average:?}");
+    }
+    let sender = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+    let send = std::thread::spawn(move || { sleep(Duration::from_millis(50)); sender.send_to(b"wake", ("127.0.0.1", port)).unwrap(); });
+    let started = Instant::now();
+    assert!(first.wait(5_000), "the datagram ends the wait");
+    assert!(started.elapsed() < Duration::from_secs(2), "woken {:?} after the wait began", started.elapsed());
+    send.join().unwrap();
+}
+
 // Production background opener: an unrelated expired sender must not invalidate
 // a fresh sender. The transport tests do not exercise persisted notification trust.
 #[test]
