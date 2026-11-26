@@ -2778,7 +2778,7 @@
         "description": "Ubuntu 使用系統 .deb 安裝套件。Arch Linux 和 Omarchy 使用受管理的使用者目錄安裝程式，採用同一份經過驗證的 .deb 內容，無需 Debian 套件管理器。",
         "item1": "Ubuntu：使用 sudo apt install ./cindy-<version>-<arch>.deb。Arch/Omarchy：請依照 docs/linux.md 中的使用者目錄安裝指南操作。",
         "item2": "點擊更新後，系統 .deb 安裝需要授權；使用者目錄安裝無需系統密碼即可切換版本。其他套件管理器安裝的版本請透過對應套件管理器更新。",
-        "item3": "Linux x64 和 arm64 支援 Beta 渠道。Linux 僅在你選擇重新啟動時套用更新，不會在閒置時自動安裝。"
+        "item3": "Linux x64 和 arm64 支援 Beta 渠道。使用者目錄安裝可在閒置時自動安裝更新；已設定免密授權的系統 .deb 安裝也可在閒置時自動安裝更新，其他系統 .deb 安裝僅在你選擇重新啟動時套用更新。"
       },
       "qnaTitle": "直接提問",
       "qnaDescription": "沒找到答案？直接問你想做什麼",
@@ -2853,7 +2853,7 @@
       "openLogsDirError": "開啟日誌目錄失敗",
       "autoUpdateLabel": "空閒時自動安裝更新",
       "autoUpdateDescription": "更新下載完成後，當這臺電腦 10 分鐘無操作且沒有任務執行時，自動重啟應用完成安裝。",
-      "linuxUpdateDescription": "更新在你選擇重新啟動時生效。系統 .deb 安裝需要系統密碼，使用者目錄安裝不需要。其他安裝方式請透過對應套件管理器更新。",
+      "linuxUpdateDescription": "系統 .deb 安裝需要系統密碼，更新在你選擇重新啟動時生效；使用者目錄安裝不需要密碼，可在閒置時自動安裝。其他安裝方式請透過對應套件管理器更新。",
       "autoUpdateEnabledToast": "已開啟空閒時自動安裝更新",
       "autoUpdateDisabledToast": "已關閉空閒時自動安裝更新",
       "autoUpdateSaveFailed": "儲存自動更新設定失敗",
@@ -4646,6 +4646,15 @@
       "menu": {
         "disableProvider": "停用此供應商",
         "enableProvider": "啟用此供應商",
+        "icon": "連線圖示",
+        "appearance": "名稱與圖示",
+        "ownImage": "選擇自己的圖片",
+        "imageError": "請選擇 10 MB 以內的 PNG、JPG 或 WebP 圖片。",
+        "connectionIcon": {
+          "default": "預設",
+          "personal": "個人",
+          "work": "工作"
+        },
         "hideProvider": "在模型選擇器中隱藏",
         "showProvider": "在模型選擇器中顯示"
       },
@@ -5855,7 +5864,7 @@
       "uninstallTitle": "解除安裝 Pi 擴充功能？",
       "uninstallDescription": "將從這台裝置移除 {{name}}。目前已開啟的 Pi 任務仍會保留舊擴充功能，關閉後才會完全移除。",
       "confirmUninstall": "解除安裝",
-      "extensionDialogConfirm": "確認",
+      "extensionDialogConfirm": "繼續",
       "cancel": "取消",
       "relativePathUnsupported": "在設定中安裝本機擴充功能時請使用絕對路徑；./extension 這類相對路徑可在 Pi 任務中安裝。",
       "resources": {
@@ -7237,6 +7246,30 @@
           "disableBlocked": {
             "controller-encryption-required": "這台電腦開啟了「僅使用 Agent-Net」。請先在這台電腦關閉此選項，才能把對方切回 Device Link。",
             "agent-net-only-relay": "此連線使用僅支援 Agent-Net 的網路，無法切回 Device Link。請先改用支援 Device Link 的連線路線。"
+          }
+        },
+        "peerUpdate": {
+          "availableTip": "有新版本 {{version}}，點擊更新",
+          "downloading": "正在下載 {{version}}…",
+          "relaunching": "正在重新啟動並更新至 {{version}}…",
+          "confirm": {
+            "title": "更新「{{name}}」上的 Cindy？",
+            "selfTitle": "更新這台電腦上的 Cindy？",
+            "description": "將把 Cindy 從 {{from}} 更新至 {{to}}。更新完成後該裝置會重新啟動 Cindy，遠端連線會短暫中斷。",
+            "selfDescription": "將把 Cindy 從 {{from}} 更新至 {{to}}。更新完成後這台電腦上的 Cindy 會重新啟動。",
+            "busyWarning": "該裝置目前有執行中的任務或背景工作，重新啟動會將其中斷。",
+            "selfBusyWarning": "這台電腦目前有執行中的任務或背景工作，重新啟動會將其中斷。",
+            "linuxPermissionHint": "Linux 受管安裝可能需要在目標裝置上輸入系統密碼。",
+            "windowsPermissionHint": "若安裝在受保護目錄，可能需要在目標裝置上確認系統權限。",
+            "action": "立即更新"
+          },
+          "toast": {
+            "started": "已開始將「{{name}}」更新至 {{version}}",
+            "relaunching": "「{{name}}」正在重新啟動並更新至 {{version}}",
+            "versionChanged": "「{{name}}」的新版本已變更，請重新開啟卡片確認",
+            "noUpdate": "「{{name}}」目前沒有可安裝的新版本",
+            "busy": "「{{name}}」正在執行另一次更新，請稍後再試",
+            "failed": "未能更新「{{name}}」上的 Cindy"
           }
         }
       }
@@ -9553,6 +9586,7 @@
         "createTitle": "新增 MCP 伺服器",
         "editTitle": "編輯 MCP 伺服器",
         "desc": "僅支援遠端 http / sse 型 MCP。儲存後新建或重啟的 Agent 會話即可呼叫，正在執行的 Agent 會話不受影響。",
+        "embeddedGuide": "助手為目前的任務開啟了 MCP 設定表單。請依照服務供應商的說明核對已填資訊，補齊缺少的欄位，再儲存設定。",
         "teammateDesc": "僅支援遠端 http / sse 型 MCP。儲存後夥伴會把它加入自己的工具，在本對話的下一則訊息起即可使用，無需新建任務。"
       },
       "fields": {
@@ -9764,7 +9798,7 @@
       "allow": "允許",
       "deny": "拒絕",
       "questionTitle": "需要你回答",
-      "submit": "提交",
+      "submit": "傳送答覆",
       "planTitle": "計劃待審閱",
       "approve": "批准",
       "requestChanges": "要求修改",
@@ -12333,7 +12367,7 @@
           "soleOwnerHint": "群組裡只剩你。可以封存群組，保留歷史記錄，以後再恢復使用。",
           "archive": "封存群組",
           "archiveHint": "封存會對所有成員停用本群組，停止新訊息與夥伴執行。歷史記錄保留，之後可透過搜尋找到本群組、查看歷史並取消封存。",
-          "confirm": "確認",
+          "confirm": "繼續",
           "lastOwner": "請先將群主轉讓給其他成員，再退出或移除目前的群主。",
           "conflict": "群組設定已更新，請重新整理後再試。",
           "unarchive": "取消封存",
@@ -13189,7 +13223,7 @@
       }
     },
     "confirmDialog": {
-      "confirm": "確認",
+      "confirm": "繼續",
       "cancel": "取消",
       "dontShowAgain": "下次不再提示"
     },
@@ -13571,6 +13605,7 @@
           "overloadRetryingNoCount": "模型服務繁忙，正在自動重試…",
           "overloadFailed": "⚠️ 模型服務繁忙：上游暫時沒有可用容量。請直接在這裡重發這則訊息重試，或在 Cindy 裡換一個模型。（在桌面端點「重試」也能繼續任務，但結果不會回到這則訊息裡。）"
         },
+        "openAiReconnect": "請在 Cindy 設定 → 模型供應商 → OpenAI 中重新連線 ChatGPT，然後在這裡傳送訊息繼續。",
         "audioInputUnavailable": "目前的模型連線無法直接讀取音訊。可以請 Cindy 先將音訊轉成文字，再繼續處理。",
         "toolLoop": {
           "generic": "模型重複呼叫工具次數過多，Cindy 已停止本輪以避免無限迴圈。可以傳送新訊息繼續。",
@@ -14730,27 +14765,27 @@
         },
         "acp": {
           "ask": {
-            "label": "逐項確認",
+            "label": "預設權限",
             "description": "Agent 請求權限時由你確認。Agent 沒有請求確認的操作，Cindy 無法攔截。"
           },
           "default": {
-            "label": "預設",
+            "label": "預設權限",
             "description": "依 Agent 自己的預設方式工作；它請求權限時由你確認。"
           },
           "acceptEdits": {
-            "label": "自動接受編輯",
+            "label": "允許編輯",
             "description": "Agent 直接修改檔案；其他請求權限的操作由你確認。"
           },
           "auto": {
-            "label": "自動",
+            "label": "自動審核",
             "description": "由 Agent 自行判斷哪些操作需要確認；它請求權限時由你確認。"
           },
           "plan": {
-            "label": "只規劃",
+            "label": "計畫模式",
             "description": "Agent 只分析並制定計畫，不修改檔案。"
           },
           "bypassPermissions": {
-            "label": "全部允許",
+            "label": "完全訪問",
             "description": "Agent 請求的權限一律自動允許。"
           }
         }
@@ -15412,7 +15447,7 @@
       "back": "返回",
       "skip": "跳過",
       "next": "下一題",
-      "submit": "提交",
+      "submit": "傳送答覆",
       "sendAndContinue": "傳送並繼續",
       "close": "關閉",
       "customAnswer": "輸入其他回答…",
@@ -15582,6 +15617,11 @@
       "codexHelperUnavailable": "此任務已啟用 cindy_helper，但目前無法使用，任務結果可能無法回傳。",
       "codexHelperUnverified": "未能確認此任務的 cindy_helper 是否可用，任務結果可能無法回傳。",
       "requestFormatError": "應用程式送出的請求格式有誤，本次回覆未能完成。",
+      "piRetryHistoryTooLarge": "這則訊息未送出。Pi 讀取重試所需的歷史記錄時，有一個資料幀超過本機 16 MiB 限制。你可以在新任務中繼續。",
+      "piRetryHistoryUnavailable": "這則訊息未送出。Pi 讀取傳送所需的歷史記錄時失敗。你可以重試，或在新任務中繼續。",
+      "upstreamStatusError": "上游回傳 {{status}}，本次回覆未完成。",
+      "messageNotSent": "這則訊息未送出。",
+      "upstreamEmpty550": "模型服務回傳 HTTP 550（無回應內容）",
       "replyFailed": "回覆未完成",
       "queuedSendRecovery": "上一則訊息尚未傳送。點選「重試」可原樣傳送。傳送新訊息會取代這一則。",
       "retryTitle": "重新傳送最後一則訊息",
@@ -15840,6 +15880,10 @@
       "diffUnchangedLines_one": "{{count}} 行未變",
       "diffUnchangedLines_other": "{{count}} 行未變",
       "diffPreviewLoading": "正在準備差異預覽…"
+    },
+    "filePreview": {
+      "changed": "檔案已變更",
+      "refreshHint": "點擊重新整理"
     },
     "textLightbox": {
       "unreadable": "無法讀取該檔案",
@@ -16416,7 +16460,7 @@
       "REMOTE_WORKDIR_UNAVAILABLE": "遠端工作目錄現在無法使用。請確認那台電腦上的目錄還在，然後重試。",
       "REMOTE_OPTIMISTIC_SESSION_STATE_UNAVAILABLE": "電腦端暫時無法確認這則訊息是否已經送出。請稍後再試，不要重複傳送同一則。",
       "REMOTE_AGENT_UNAVAILABLE": "未能與執行 Agent 的電腦通訊，請查看錯誤詳情。",
-      "REMOTE_AGENT_TIMEOUT": "等待執行 Agent 的電腦回應逾時，結果尚未確認。重試前請先檢查任務進度。",
+      "REMOTE_AGENT_TIMEOUT": "執行 Agent 的電腦還沒回覆。請先查看任務進度。如果任務還在執行或已有結果，就不必重試。",
       "REMOTE_AGENT_LINK_BUSY": "與執行 Agent 的電腦之間的通訊忙碌，請稍後重試。",
       "REMOTE_AGENT_UNRESPONSIVE": "執行 Agent 的電腦多次未回應，呼叫已暫時暫停。請稍後重試。",
       "REMOTE_AGENT_OFFLINE": "執行 Agent 的電腦目前離線，待重新上線後重試。",
@@ -18435,6 +18479,7 @@
         "intervalChip": "完成後計時 · {{schedule}}"
       },
       "scheduleMenu": {
+        "custom": "自訂 Cron",
         "intervalMinutes": "分鐘（每 N 分鐘）",
         "interval": "小時（每 N 小時）",
         "daily": "每天",

@@ -214,6 +214,15 @@ function terminalErrorRecord(data: unknown): {
   };
 }
 
+/** Only the subscription backend's token-parse rejection calls for reconnecting ChatGPT. */
+export function openAiSubscriptionReconnectNotice(data: unknown, providerId: string | null): string | null {
+  if (providerId !== 'openai') return null;
+  const { errorStatus, message } = terminalErrorRecord(data);
+  if (!(errorStatus === 401 || (errorStatus === undefined && /\b401\b/.test(message)))) return null;
+  if (!/\bunauthorized_unknown\b|could not parse your authentication token/i.test(message)) return null;
+  return imText('imBot.text.shared.openAiReconnect');
+}
+
 /**
  * 终态错误是不是「供应商账号的额度 / 花费上限 / 余额用完了」。
  *

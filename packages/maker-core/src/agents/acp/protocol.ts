@@ -29,6 +29,21 @@ export const JSONRPC_INTERNAL_ERROR = -32603;
 export const ACP_STEERING_METHOD = '_session/steering';
 
 /**
+ * Cindy extension, the per-turn permission gate (docs/dev-rules/protocol-compatibility/plugin-harnesses.md
+ * 每轮权限闸). An agent that can send `session/request_permission` for every tool call of a turn before
+ * running it advertises top-level `_meta.permissionGate.supported: true` in the `initialize` result.
+ * Cindy then marks turns that carry a host permission policy (IM group, guest and personal WeChat turns)
+ * or allow no tools with `_meta.permissionGate.scope: 'all-tool-calls'` on `session/prompt`, and the agent
+ * asks before each tool call it makes for that prompt, including work it continues after answering.
+ * Every prompt on a supporting agent carries a permissionGate.turnId, even without a scope. The
+ * agent echoes that ID from the originating prompt on every permission request. The host rejects
+ * requests whose turn no longer owns the permission surface.
+ * Without the advertisement policy turns are refused, exactly like a built-in engine that cannot enforce
+ * the policy; other turns are unaffected.
+ */
+export const ACP_PERMISSION_GATE_SCOPE = 'all-tool-calls';
+
+/**
  * Cindy extension (docs/dev-rules/protocol-compatibility/plugin-harnesses.md 引擎账号): an entry may
  * classify a JSON-RPC error of `session/new|load|resume|prompt` as
  * `error.data._meta.cindy = { kind, resetsAt?, model? }` so Cindy can cool the account and move the
@@ -105,6 +120,8 @@ export interface AcpInitializeResult {
   agentInfo?: { name: string; title?: string; version: string };
   /** The agent takes ACP_STEERING_METHOD (top-level `_meta.steering.supported`). */
   steering: boolean;
+  /** The agent honors ACP_PERMISSION_GATE_SCOPE turns (top-level `_meta.permissionGate.supported`). */
+  permissionGate: boolean;
 }
 
 export interface AcpConfigSelectOption {
@@ -229,6 +246,7 @@ export function normalizeInitializeResult(raw: unknown): AcpInitializeResult {
       ? { agentInfo: { name, version, ...(asNonEmptyString(agentInfo.title) ? { title: agentInfo.title as string } : {}) } }
       : {}),
     steering: asRecord(asRecord(result._meta).steering).supported === true,
+    permissionGate: asRecord(asRecord(result._meta).permissionGate).supported === true,
   };
 }
 

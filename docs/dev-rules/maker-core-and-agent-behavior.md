@@ -28,6 +28,11 @@ Claude Code、Codex、Pi 共用 Maker 的启动失败清理契约：只有明确
 当作进程退出，也不触发只允许真实退出证明的自动重试。清理未确认时继续保留保护，通过
 `AgentStartupCleanupPendingError.whenStopped` 接收同 owner 的实际清理／移交或进程退出证明。
 
+Codex handle 关闭、终止或未交付的启动清理时，除注销线程身份，还须通过
+`closeCodexMcpSessionInstance` 释放该实例的 MCP HTTP transports；不能依赖客户端发送 DELETE。
+Desktop 与 Node Host 共用此回收入口。线程替换、rewind 或 fork 仍沿用当前实例时只更新
+线程身份，不释放实例连接，也不影响兄弟任务；实例连接回收不代表原生线程已卸载。
+
 本地 SDK 已接收启动调用、已观察到进程创建、或远端启动请求已发出后，普通异常不是
 退出证明。Pi 在 transport 已创建而 RPC 包装器构造失败时，也必须关闭已取得的
 transport；关闭未确认时复用原有隔离清理记录和 `AgentStartupCleanupPendingError`，

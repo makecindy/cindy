@@ -78,10 +78,10 @@ function withoutSettingsDetails(view: PluginEngineView): PluginEngineView {
 
 /** Names of the agent modes Cindy can show (the renderer localizes them by id). */
 const AGENT_MODE_NAMES: Record<NonNullable<PluginHarness['modes']>[number], string> = {
-  default: 'Default',
-  acceptEdits: 'Accept edits',
-  auto: 'Auto',
-  plan: 'Plan',
+  default: 'Default permissions',
+  acceptEdits: 'Auto accept edits',
+  auto: 'Auto-review',
+  plan: 'Plan mode',
 };
 
 function toModeView(mode: (typeof ACP_PERMISSION_MODES)[number]): PluginEnginePermissionMode {

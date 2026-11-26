@@ -12,6 +12,7 @@ import { createInputEnqueueHarness, createInputRetryHarness, createInputStopHarn
 import { runSessionExecutionAction } from '../sessionExecutionActions.js';
 import { createSharedPermission } from '../sharedPermission.js';
 import type { InteractionDecision } from '@cindy/maker-core';
+import { toDesktopSessionDispatchOutcome } from '../../maker-host/send-outcome.js';
 import { getMainClassicalStyle, getResolvedMainLocale } from '../../i18n.desktop.js';
 import { mcpAppModelContext } from '../../mcp-apps/runtime.js';
 import { telegramQuestionOrigin, stampTelegramQuestionAnswer, TELEGRAM_QUESTION_ORIGIN, hasTelegramQuestionRoute } from '../telegramQuestionReply';
@@ -1242,6 +1243,31 @@ describe('AgentInputCoordinator Orca priority queue transactions', () => {
       .toMatchObject({ ok: true, result: { executionPaused: false } });
     await flush();
     expect(h.sendToAgent.mock.calls[0]?.[1]).toMatchObject({ content: 'held user input' });
+  });
+
+  // Unit, #12875: an idle task can retain a never-dispatched input after Resume.
+  // The healthy Resume case above doesn't cover a rejected workdir preflight.
+  it('reports the workdir-blocked queue head without retrying it on resume', async () => {
+    const h = createHarness();
+    const sid = 'resume-workdir-blocked';
+    h.sendToAgent.mockResolvedValueOnce(hostSendFailure('WORKDIR_MISSING', 'private fixture path'));
+    h.coordinator.enqueue(sid, makeItem('queued', 'queued input'));
+    await flush();
+
+    const result = await runSessionExecutionAction({
+      targetSessionId: sid, action: 'resume', beforeMutation: async () => {},
+    }, { coordinator: h.coordinator, persist: async () => {}, compact: async () => {} });
+    await flush();
+    expect(result).toEqual({ ok: true, result: {
+      executionPaused: false, queuePaused: false,
+      queueBlock: { code: 'WORKDIR_MISSING', queuedMessageId: 'queued', nextAction: 'retry',
+        message: 'Restore the working directory, then retry the queued message.' },
+    } });
+    expect(h.sendToAgent).toHaveBeenCalledOnce();
+    expect(h.coordinator.getProjection(sid)).toMatchObject({
+      recovery: { kind: 'queue-head', clientId: 'queued' },
+      errorRetryText: 'queued input',
+    });
   });
   const orcaItem = (clientId: string, text: string) =>
     makeItem(clientId, text, {
@@ -7625,7 +7651,7 @@ describe('AgentInputCoordinator send transaction', () => {
     expect(projection.errorRetryText).toBe('first');
   });
 
-  it('keeps a persisted ordinary send recoverable when maker-core dispatch is cancelled', async () => {
+  it.each(['cancelled', 'history-frame-too-large'])('keeps a persisted ordinary send recoverable after %s', async failure => {
     const h = createHarness();
     const sid = 'send-persisted-dispatch-failure';
     const first = makeItem('q-1', 'first');
@@ -7637,7 +7663,10 @@ describe('AgentInputCoordinator send transaction', () => {
       await persistQueuedUserMessage(sessionId, sendOpts);
       persisted.resolve();
       await sendSettled.promise;
-      return sessionDispatchFailure('SEND/send-persisted-dispatch-failure/send');
+      return failure === 'cancelled' ? sessionDispatchFailure('SEND/send-persisted-dispatch-failure/send')
+        : toDesktopSessionDispatchOutcome({
+          accepted: false, reason: 'provider-rejected-before-dispatch', diagnostic: 'pi-retry-history-frame-too-large',
+        }, { source: 'maker-ipc', context: sid });
     });
 
     h.coordinator.enqueue(sid, first);
@@ -7650,7 +7679,12 @@ describe('AgentInputCoordinator send transaction', () => {
     expect(mocks.createMessage).toHaveBeenCalledTimes(1);
     expect(h.sendToAgent).toHaveBeenCalledTimes(1);
     expect(projection.pendingQueue.map((q) => q.clientId)).toEqual(['q-2']);
-    expect(projection.error).toContain('cancelled-before-dispatch');
+    if (failure === 'cancelled') expect(projection.error).toContain('cancelled-before-dispatch');
+    else {
+      expect(projection.error).toContain('not sent');
+      expect(projection.error).toContain('16 MiB');
+      expect(projection.error).not.toContain(sid);
+    }
     expect(projection.recovery).toEqual({ kind: 'active-turn', item: first });
     expect(projection.errorRetryText).toBe('first');
     expect(h.onUndispatchedUserTurn).toHaveBeenCalledWith(
@@ -10488,6 +10522,52 @@ describe('AgentInputCoordinator steer transaction', () => {
         type: 'user',
         content: 'queued-after-idle',
       });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // 生产入口：AgentInputCoordinator drain。可观察结果：下一条排队消息被送出，且没有错误或恢复入口。
+  // 依据：一轮正常结束但没有助手正文、没有错误行时，权威 idle 会放开 tracker，leftover 仍占 dispatch-boundary-busy。
+  // 缺口：已有用例只在 done 代际匹配时放行，tracker 已空闲的后一代 done 则拒绝；tracker 仍闩着的空成功没有覆盖。
+  // 最小失败输入：已派发 leftover 绑定 generation 0，observed done 为 generation 2，live 空闲且 tracker 仍忙。tier：unit。
+  it('drains the next message when a latched turn ends with no assistant body and no error', async () => {
+    vi.useFakeTimers();
+    try {
+      const h = createHarness();
+      const sid = 'drain-empty-success-latched-tracker';
+      h.coordinator.enqueue(sid, makeItem('q-1', 'first'));
+      await flush();
+      expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+
+      // 产品 done 落在另一代：没有助手正文、没有错误行，coordinator 收不到
+      // 属于 leftover 的 done。tracker 仍闩着，live session 已经空闲。
+      h.setLiveRunning(false);
+      h.setLiveSessionPresent(true);
+      h.setRunning(true);
+      h.setObservedCurrentTurnTerminal({ kind: 'done', generation: 2 });
+      h.reconcileTurnIdle.mockImplementation(() => {
+        h.setRunning(false);
+        return true;
+      });
+      h.coordinator.enqueue(sid, makeItem('q-2', 'queued-after-empty-success'));
+      await flush();
+      expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(250);
+      await flush();
+
+      expect(h.reconcileTurnIdle).toHaveBeenCalledWith(sid);
+      expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+      expect(h.sendToAgent.mock.calls[1]?.[1]).toEqual({
+        type: 'user',
+        content: 'queued-after-empty-success',
+      });
+      const projection = latestProjection(h.projections);
+      expect(projection.error).toBeNull();
+      expect(projection.recovery).toBeNull();
+      expect(projection.queuePaused).toBe(false);
+      expect(projection.pendingQueue).toEqual([]);
     } finally {
       vi.useRealTimers();
     }
