@@ -3,6 +3,7 @@ import { holdError, type ProfileHold } from './agent/profile-hold.js';
  * visibility and revocation remain in the same dispatcher as desktop. */
 import { requestPluginOauth, invalidatePluginOauth, supportsRemotePluginOauth } from '../../desktop/src/main/plugin-oauth/runtime.js';
 import WebSocket from 'ws';
+import { AGENT_ISLAND_SESSION_SNAPSHOTS_CHANNEL } from '../../desktop/src/shared/agentIsland.js';
 import {
   CONTROLLER_CAPABILITY_SET_MODEL_EXPLICIT_PROVIDER_NULL_V1, DEVICE_LINK_CAPABILITY_BACKGROUND_LINK_V1, DEVICE_LINK_CAPABILITY_HISTORY_VIEW_V1,
   DL_HISTORY_MESSAGES_CHANNEL, DL_SESSION_HANDOFF_CHANNEL, MACHINE_STATUS_CHANNEL, ORCA_REMOTE_WORKER_MODELS_CHANNEL,
@@ -814,6 +815,8 @@ export function createHostDeviceLink(deps: HostDeviceLinkPorts) {
     emit: payload => emitScoped(SESSION_ACTIVITY_CHANNEL, payload),
     onForegroundActivityChanged: () => {
       if (!current()) return;
+      deps.publish?.({ type: 'plugin_push', channel: AGENT_ISLAND_SESSION_SNAPSHOTS_CHANNEL,
+        payload: activityTracker.getSessionActivitySnapshots() });
       dispatch.publishHostTaskActivity(() => activityTracker.getForegroundTaskActivity(true));
     },
     sessionExists: async sessionId => Boolean(await readSessionMetaForActivity(sessionId)),

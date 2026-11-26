@@ -259,9 +259,10 @@ export function createHostSessionActivityTracker(ports: HostSessionActivityTrack
     }
   };
 
+  const getSessionActivitySnapshots = () => buildAllSessionActivitySnapshots(state).map(toSessionActivity);
+
   const buildNotificationActivityList = (): AgentIslandSessionActivity[] =>
-    buildAllSessionActivitySnapshots(state)
-      .map(toSessionActivity)
+    getSessionActivitySnapshots()
       .filter(item => shouldNotifyAgentIslandForSession(AGENT_ISLAND_DISPLAY_CONFIG, isOrcaWorker(item.sessionId)));
 
   const clearPruneTimer = () => {
@@ -389,15 +390,6 @@ export function createHostSessionActivityTracker(ports: HostSessionActivityTrack
           if (!stoppedSessions.has(id) && !stoppingSessions.has(id)) {
             if (applyAgentIslandEvent(state, hydrateMeta(id), deferred, now())) publishNow();
           }
-        }
-        return;
-      }
-
-      if (event.type === 'input_projection') {
-        const projection = event.projection && typeof event.projection === 'object'
-          ? event.projection as { turnInProgress?: unknown } : null;
-        if (projection?.turnInProgress === true) {
-          deferredCompletions.delete(id);
         }
         return;
       }
@@ -606,6 +598,8 @@ export function createHostSessionActivityTracker(ports: HostSessionActivityTrack
       syncDisplaySuppression();
       relay.replay(buildNotificationActivityList(), emitFn, sessionId);
     },
+
+    getSessionActivitySnapshots,
 
     getSessionActivity(sessionId: string): HostSessionActivitySummary | null {
       if (disposed || !sessionId) return null;

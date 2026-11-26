@@ -1298,6 +1298,10 @@ test('Host device-link pushes session activity, turn-ended patches, and serves h
         ? { format: 'active-sessions-v2', sessions: rows }
         : rows;
     },
+    clearSessionAttention: async (id, intent) => {
+      await host.acknowledgeSessionRead(id, intent);
+      return { ok: true };
+    },
     ackInterrupted: async id => { await ackSessionTurnEndedDurable(String(id)); return { ok: true }; },
     dismissError: (id, cid) => dismissHostErrorMessage(
       id,
@@ -1325,10 +1329,31 @@ test('Host device-link pushes session activity, turn-ended patches, and serves h
     canRegister: () => true,
     invoke: service,
     subscribe: hub.subscribe,
+    publish: hub.publish,
     createWebSocket: (u, headers) => new WebSocket(u, { headers }),
   });
   await host.setEnabled(true);
   await waitFor(() => host.state().status === 'online');
+
+  // An attached Desktop consumes this same turn over SSE while the two controllers use Device Link.
+  const attached = [];
+  const server = createHostServer({ instanceId: 'fixture', token: 'synthetic-stream', events: hub, service });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  let connected = false;
+  const stop = startHostEventBridge({
+    baseUrl: `http://127.0.0.1:${server.address().port}`, token: 'synthetic-stream',
+    onConnectionState: state => { connected = state.status === 'connected'; },
+    broadcast() {},
+    onPluginPush(channel, payload) {
+      if (channel === 'agent-island:session-snapshots') attached.push(payload);
+    },
+  });
+  t.after(async () => {
+    stop();
+    server.closeAllConnections();
+    await new Promise(resolve => server.close(resolve));
+  });
+  await waitFor(() => connected);
 
   const mkClient = id => {
     const c = new DeviceLinkClient({
@@ -1395,9 +1420,23 @@ test('Host device-link pushes session activity, turn-ended patches, and serves h
   assert.equal(activeMap.get('task-idle')?.activityPhase, 'idle');
   assert.equal(activeMap.get('task-idle')?.activityAttention, false);
 
+  await waitFor(() => attached.at(-1)?.some(item => item.sessionId === 'task-1' && item.phase === 'completed' && item.attention));
   const cleared = await c1.invoke('host', { channel: 'notification:clear-session-attention', args: ['task-1', 'explicit'] });
   assert.equal(cleared.ok, true, JSON.stringify(cleared));
   await waitFor(() => c1Pushes.some(p => p.ch === SESSION_ACTIVITY_CHANNEL && p.payload?.sessionId === 'task-1' && p.payload?.attention === false));
+
+  await waitFor(() => !attached.at(-1).some(item => item.sessionId === 'task-1' && item.attention));
+
+  // An HTTP acknowledgement from another attached client clears this Desktop's unread state too.
+  hub.publish({ sessionId: 'task-1', event: { type: 'status', data: { isRunning: true } } });
+  hub.publish({ sessionId: 'task-1', event: { type: 'done', data: {} } });
+  await waitFor(() => attached.at(-1)?.some(item => item.sessionId === 'task-1' && item.attention));
+  const clearResponse = await fetch(`http://127.0.0.1:${server.address().port}/api/notifications/clear-session-attention`, {
+    method: 'POST', headers: { authorization: 'Bearer synthetic-stream', 'content-type': 'application/json' },
+    body: JSON.stringify({ sessionId: 'task-1', intent: 'explicit' }),
+  });
+  assert.equal(clearResponse.status, 200);
+  await waitFor(() => !attached.at(-1).some(item => item.sessionId === 'task-1' && item.attention));
 
   const view = await c1.invoke('host', { channel: 'local-db:messages:view', args: ['task-1', { lazyDetails: true, workLines: true }] });
   assert.equal(view.ok, true, JSON.stringify(view));

@@ -98,6 +98,7 @@ import {
   Tray,
   webContents,
 } from 'electron';
+import { AGENT_ISLAND_SESSION_SNAPSHOTS_CHANNEL } from '../shared/agentIsland.js';
 import {
   fitWindowsBackdropToWindow,
   isWindowsTransparentWindow,
@@ -1569,7 +1570,7 @@ function installHostClientMode(): boolean {
       // one updateSessionInDb sends after a move (sessions.ts broadcastRecentWorkdirsChanged).
       if (['ghosts:changed', 'ghosts:runtime-changed', 'ghosts:card-updated', 'ghosts:notify',
         'ghosts:user-message-blocked', 'ghosts:user-message-rewritten', 'ghosts:hook-fused',
-        'local-db:recent-workdirs:changed'].includes(channel)) {
+        'local-db:recent-workdirs:changed', AGENT_ISLAND_SESSION_SNAPSHOTS_CHANNEL].includes(channel)) {
         for (const win of BrowserWindow.getAllWindows())
           if (isTrustedAppRendererWindow(win)) win.webContents.send(channel, payload);
         return;

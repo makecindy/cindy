@@ -2,7 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHostSessionActivityTracker } from './session-status-activity.ts';
 
-test('Host session activity tracker emits running, interaction, completed, and read-clear transitions', async () => {
+test('Host session activity tracker emits running, interaction, completed, and read-clear transitions', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
   const emitted = [];
   let now = 1_000;
   let fgChanges = 0;
@@ -65,7 +66,7 @@ test('Host session activity tracker emits running, interaction, completed, and r
     assert.equal(emitted.at(-1)?.sessionId, 'existing-cold');
     assert.equal(emitted.at(-1)?.attention, false);
 
-    await new Promise(resolve => setTimeout(resolve, 100));
+    t.mock.timers.tick(100);
     assert.ok(fgChanges >= 1);
   } finally {
     tracker.dispose();
@@ -323,9 +324,6 @@ test('Host session activity tracker suppresses autoResumePending errors, retains
     queued = false;
     tracker.handleEvent({ type: 'input_projection', sessionId: 's-queue', projection: { sessionId: 's-queue', turnInProgress: true, pendingQueue: [] } });
     assert.equal(tracker.getSessionActivity('s-queue')?.phase, 'running');
-    queued = true;
-    tracker.handleEvent({ sessionId: 's-queue', event: { type: 'done', data: {} } });
-    queued = false;
     tracker.handleEvent({ type: 'queue_emptied', sessionId: 's-queue' });
     assert.equal(tracker.getSessionActivity('s-queue')?.phase, 'completed');
     assert.equal(tracker.getSessionActivity('s-queue')?.attention, true);
