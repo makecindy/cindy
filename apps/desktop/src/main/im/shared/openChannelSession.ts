@@ -18,8 +18,12 @@ import { imText } from './imText';
 import type { EngineKind, Effort, PermissionMode } from '@cindy/maker-core';
 
 import { makerToDbEngineKind } from '../../../shared/agentKindConversion';
+import { createLogger } from '../../logger';
+import { isImEffortAcceptedByModel } from '../defaultSessionSettings';
 import { getCurrentDbClientSnapshot } from '../../localDb/client/current';
 import { openSession, type SessionOpenBody } from '../../localDb/sessionOpening';
+
+const log = createLogger('im:channel-session');
 
 /** 渠道为新任务选定的路由(准入前)。 */
 export interface ChannelSessionRoute {
@@ -66,13 +70,31 @@ export async function openChannelSession<T>(
   commit: (admitted: AdmittedChannelRoute, assertCurrent: () => void) => Promise<T>,
   assertAccount?: () => void,
 ): Promise<T> {
+  // 渠道默认档位与最终模型不兼容时不要硬塞给准入: 准入按「本次显式选择」校验, 不兼容就直接
+  // 拒绝建会话; 而失败发生在会话存在之前, agent 侧自救工具都要 session_id 够不着(#11976)。
+  // 这里是最小公共入口(建会话 / /new 轮换 / hook 续跑都经过它), 所以只在这一处判定。
+  //
+  // 两类路由不判定:
+  //   - 远程路由(有 agentDeviceId): 模型只存在于执行端, 本地目录看不到, 且 openSession 对远程
+  //     路由不走本地准入(mapper 会把缺失的 effort 补成 high), 硬判只会把合法档位误降级;
+  //   - acp 插件引擎: 能力由插件自己声明, 不在 Maker 的 agent 词表里。
+  const localEngine = route.agentKind === 'acp' ? undefined : route.agentKind;
+  const effortAccepted = route.effort === undefined
+    || route.agentDeviceId !== undefined && route.agentDeviceId !== null
+    || localEngine === undefined
+    || isImEffortAcceptedByModel(localEngine, route.model, route.effort);
+  if (route.effort !== undefined && !effortAccepted) {
+    log.warn('channel default effort not accepted by model; dropping it', {
+      agentKind: route.agentKind, model: route.model, effort: route.effort,
+    });
+  }
   const body: SessionOpenBody = {
     ...(route.title ? { title: route.title } : {}),
     agentKind: makerToDbEngineKind(route.agentKind) as SessionOpenBody['agentKind'],
     model: route.model,
     providerId: route.providerId,
     ...(route.agentDeviceId ? { agentDeviceId: route.agentDeviceId } : {}),
-    ...(route.effort !== undefined ? { effort: route.effort } : {}),
+    ...(route.effort !== undefined && effortAccepted ? { effort: route.effort } : {}),
     ...(route.fastMode !== undefined ? { fastMode: route.fastMode } : {}),
     permissionMode: route.permissionMode,
     ...(route.workspaceKind ? { workspaceKind: route.workspaceKind } : {}),

@@ -130,6 +130,27 @@ export function applyImRouteOverride<T extends ImDefaultSettings>(
   };
 }
 
+/**
+ * 渠道默认档位是否被最终模型接受 —— 判据与任务准入层(`normalizeEffort`)对齐:
+ *   - 模型未声明档位且标了 `effortsUnknown` → 准入放行, 这里也放行;
+ *   - 声明了档位 → 必须在列表里;
+ *   - 声明为空且不是 unknown → 准入会按「valid: none」拒绝显式档位, 这里判定不接受;
+ *   - 本地能力表里根本没有这个模型(比如它只存在于执行端) → 放行, 未知不等于不支持。
+ * 渠道配置漂移不该变成功能瘫痪: 不接受时调用方省略档位, 由模型自身默认档运行(#11976)。
+ */
+export function isImEffortAcceptedByModel(
+  agentKind: AgentKind,
+  modelId: string,
+  effort: Effort,
+): boolean {
+  const model = getMaker()
+    .getCapabilities(agentKind)
+    .availableModels.find((m) => m.id === modelId);
+  if (!model) return true;
+  if (model.efforts.includes(effort)) return true;
+  return (model as { effortsUnknown?: boolean }).effortsUnknown === true;
+}
+
 export async function resolveImSessionDefaults(
   config: ImOrchestratorConfig,
   providerSnapshot?: ProviderView[] | null,
