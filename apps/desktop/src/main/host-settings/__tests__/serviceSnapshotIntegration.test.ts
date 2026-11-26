@@ -20,7 +20,7 @@ vi.mock('../../appearance-settings-ipc.js', async () => {
   };
 });
 // Custom instructions live in the app window; this stands in for that window.
-const appWindow = vi.hoisted(() => ({ userPrompt: '', answers: true }));
+const appWindow = vi.hoisted(() => ({ userPrompt: '', answers: true, managed: true }));
 vi.mock('../../app-settings/preferences.js', async (importOriginal) => ({
   ...await importOriginal<typeof import('../../app-settings/preferences.js')>(),
   manageAppPreferences: async (operation: string, _patch?: unknown, _visibility?: unknown, { userPrompt }: { userPrompt?: string } = {}) => {
@@ -30,7 +30,7 @@ vi.mock('../../app-settings/preferences.js', async (importOriginal) => ({
   },
 }));
 // Profile preferences are Host-owned only on a managed cloud instance.
-vi.mock('../../instance-runtime/config.js', () => ({ getInstanceConfig: () => ({}) }));
+vi.mock('../../instance-runtime/config.js', () => ({ getInstanceConfig: () => appWindow.managed ? {} : null }));
 vi.mock('../../logger.js', () => ({ createLogger: () => isolated.logger }));
 vi.mock('../../maker-host/logger-adapter.js', () => ({ desktopMakerLogger: { child: () => isolated.logger } }));
 vi.mock('../../appSessionState.js', () => ({
@@ -62,7 +62,7 @@ async function change(domain: HostSettingsDomain, values: Pick<HostSettingsUpdat
 beforeEach(() => {
   isolated.root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-service-snapshot-'));
   isolated.owner = 'fixture-owner'; isolated.generation += 1; isolated.pending = false;
-  appWindow.userPrompt = ''; appWindow.answers = true;
+  appWindow.userPrompt = ''; appWindow.answers = true; appWindow.managed = true;
   vi.clearAllMocks(); warning.mockImplementation(() => {});
   configureHostSettingsApplication({ databaseWarning: warning });
 });
@@ -178,6 +178,28 @@ describe('真实 Host 领域保存到脱敏快照的集成', () => {
     expect(next.userPrompt).toBe('Host 第二版');
   });
 
+  // Launch preference capture already covers cloud starts above. The missing regression
+  // is a desktop owner request with a legacy controller copy, and a share with a private host value.
+  // These run in the existing test tier with the window IPC mocked.
+  it.each([
+    { managed: false, scope: 'owner', saved: '执行端指令', supplied: '旧桌面控制端指令', expected: '执行端指令' },
+    { managed: false, scope: 'owner', saved: '执行端指令', supplied: undefined, expected: '执行端指令' },
+    { managed: false, scope: 'owner', saved: '', supplied: '旧桌面控制端指令', expected: '' },
+    { managed: false, scope: undefined, saved: '窗口正文', supplied: '本机启动快照', expected: '本机启动快照' },
+    { managed: true, scope: 'scoped', saved: '机主私密指令', supplied: '访客提供的指令', expected: undefined },
+  ] as const)('uses the startup authority for $scope (managed=$managed, saved=$saved, supplied=$supplied)', async ({
+    managed, scope, saved, supplied, expected,
+  }) => {
+    appWindow.managed = managed;
+    appWindow.userPrompt = saved;
+    // A scoped start cannot depend on the owner's window even when it is unavailable.
+    appWindow.answers = scope !== 'scoped';
+    const opts: Parameters<typeof captureHostPersonalization>[0] = { userPrompt: supplied };
+    await captureHostPersonalization(opts, scope);
+    expect(opts.userPrompt).toBe(expected);
+    expect(opts.hostStartupPreferences?.userPrompt).toBe(expected);
+  });
+
   it('窗口一直不应答时阻止启动，不偷偷使用默认值或控制端副本', async () => {
     vi.useFakeTimers();
     try {
@@ -185,6 +207,24 @@ describe('真实 Host 领域保存到脱敏快照的集成', () => {
       const opts: Parameters<typeof captureHostPersonalization>[0] = { userPrompt: '不应启用' };
       const started = captureHostPersonalization(opts);
       const settled = expect(started).rejects.toMatchObject({ code: 'UNREADABLE' });
+      await vi.runAllTimersAsync();
+      await settled;
+      expect(opts.hostStartupPreferences).toBeUndefined();
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('stops a deferred desktop startup when the settings owner changes during retry', async () => {
+    vi.useFakeTimers();
+    try {
+      appWindow.managed = false;
+      appWindow.answers = false;
+      const opts: Parameters<typeof captureHostPersonalization>[0] = {};
+      const started = captureHostPersonalization(opts, 'owner');
+      const settled = expect(started).rejects.toMatchObject({ code: 'OWNER_CHANGED' });
+      await vi.advanceTimersByTimeAsync(0);
+      isolated.generation += 1;
+      appWindow.answers = true;
+      appWindow.userPrompt = '新账号指令';
       await vi.runAllTimersAsync();
       await settled;
       expect(opts.hostStartupPreferences).toBeUndefined();

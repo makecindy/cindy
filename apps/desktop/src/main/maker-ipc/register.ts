@@ -1152,8 +1152,7 @@ import { resolveOrcaImageAttachmentInput } from './orcaImageAttachments.js';
 import { buildOrcaQueueDispatchNote } from './orcaQueueNote.js';
 import { createOrcaWorkerReportQueue, type OrcaWorkerReportQueue } from './orcaWorkerReportQueue.js';
 import { OrcaWorkerPermissionConfirmBridge } from './orcaWorkerPermissionConfirmBridge.js';
-import { captureHostPersonalization } from '../host-settings/startup.js';
-import { getInstanceConfig } from '../instance-runtime/config.js';
+import { captureHostPersonalization, type PersonalizationCallerScope } from '../host-settings/startup.js';
 import { assertTaskActionCurrent, runTaskActionRequest, runTaskActionRewindBoundary, captureTaskActionGuard, bindTaskActionInput, hasTaskActionAuthorization, taskActionInputGuard, settleTaskActionInput, type TaskActionDeliveryGuard, type TaskActionConfirmation } from './taskActionAuthorization.js';
 import {
   getOrcaWorkspaceInfoReadOnly,
@@ -9438,6 +9437,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       maker, ghostTaskSystemPrompt, readSessionRuntimeProfiles: id => readSessionRuntimeProfiles(id),
     });
 
+  const queuedPersonalization = new AsyncLocalStorage<{ sessionId: string; scope: PersonalizationCallerScope }>();
+
   async function bootstrapSession(o: CreateOpts, assertAccess?: () => void, nativeHistoryResume = false,
     reconnect?: SharedReconnectRecovery): Promise<{
     session: Awaited<ReturnType<typeof maker.createSession>>;
@@ -9515,13 +9516,6 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         });
       });
     }
-    o.hostStartupPreferences = {
-      userPrompt: o.userPrompt,
-      makerMemoryEnabled: o.makerMemoryEnabled,
-      displayReasoning: o.displayReasoning,
-    };
-    // 托管云实例用实例自己保存的个性化正文，不用控制端传来的副本。
-    if (getInstanceConfig()) await captureHostPersonalization(o);
     startTimer.lap('workdir');
     assertAccess?.();
     // Plugin engines bring their own models and sign-in: never wait on (or fail with) the Cindy
@@ -9537,6 +9531,17 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     assertAccess?.();
     await applyPersistedReviewMode(o);
     assertAccess?.();
+    const queued = queuedPersonalization.getStore();
+    const scoped = o.reviewMode === true || (!!o.id && isSessionSharedTaskActive(o.id));
+    const callerScope = queued && queued.sessionId === o.id ? queued.scope : readDeviceLinkModelSelectionOrigin();
+    await captureHostPersonalization(o, scoped ? 'scoped' : callerScope);
+    assertAccess?.();
+    creationSignal?.throwIfAborted();
+    // A share may have opened while the main window was answering.
+    if (!scoped && o.id && isSessionSharedTaskActive(o.id)) {
+      await captureHostPersonalization(o, 'scoped');
+      assertAccess?.();
+    }
     const didInjectOrcaInstructions = o.reviewMode === true ? false : await applyOrcaInstructions(o);
     // Plugin engines do not receive collaboration instructions as system text. Collaboration
     // Lead and Worker role instructions travel ahead of the first message; ordinary local owner
@@ -21180,10 +21185,16 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     sendToAgent: async (sessionId, message, createOpts, sendOpts) => {
       try {
         let runtimePreparationStarted = false;
-        const send = () => sendToAgentAccepted(sessionId, message, createOpts, {
-          ...sendOpts,
-          onRuntimePreparation: () => { runtimePreparationStarted = true; },
-        });
+        const scope = sendOpts.persistUserMessage?.sharedTaskAuthor ? 'scoped'
+          : sendOpts.fromDeviceLinkClient ? 'owner' : undefined;
+        const send = () => {
+          const dispatch = () => sendToAgentAccepted(sessionId, message, createOpts, {
+            ...sendOpts,
+            onRuntimePreparation: () => { runtimePreparationStarted = true; },
+          });
+          // A queue drain can outlive the invoke. Use only the provenance stamped by Main.
+          return scope ? queuedPersonalization.run({ sessionId, scope }, dispatch) : dispatch();
+        };
         // Welcome-only: ordinary/user/plugin requests retain their existing failure
         // semantics. Selected runtime plugins can have preparation side effects.
         const noRuntimePlugins = () => !Object.values(readRuntimePluginSettings(sessionId) ?? {})
@@ -22772,7 +22783,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       return inputCoordinator.compact(
         sid,
         typedCreateOpts,
-        opts && typeof opts === 'object' ? (opts as { userName?: string }) : undefined,
+        {
+          userName: opts && typeof opts === 'object' ? (opts as { userName?: string }).userName : undefined,
+          fromDeviceLinkClient: remote,
+        },
       );
     },
   );

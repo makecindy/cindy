@@ -809,6 +809,7 @@ interface ActiveTurn {
 
 interface PendingCompactRequest {
   createOpts: AgentInputCreateOpts;
+  fromDeviceLinkClient?: boolean;
   userName?: string;
   beforeMutation?: () => Promise<void>;
   waitForClientIds: string[];
@@ -2604,7 +2605,7 @@ export class AgentInputCoordinator {
   async compact(
     sessionId: string,
     createOpts: AgentInputCreateOpts,
-    opts?: { userName?: string; beforeMutation?: () => Promise<void> },
+    opts?: { userName?: string; beforeMutation?: () => Promise<void>; fromDeviceLinkClient?: boolean },
   ): Promise<AgentInputProjection> {
     const state = this.getState(sessionId);
     // 手动 /compact 是用户接管，与 composer 新消息同语义。先撤掉尚未跨过
@@ -2628,6 +2629,7 @@ export class AgentInputCoordinator {
 
     const request: PendingCompactRequest = {
       createOpts,
+      fromDeviceLinkClient: opts?.fromDeviceLinkClient,
       userName: opts?.userName,
       beforeMutation: opts?.beforeMutation,
       waitForClientIds: state.pendingQueue.map((item) => item.clientId),
@@ -2692,6 +2694,7 @@ export class AgentInputCoordinator {
         request.createOpts,
         {
           messageUuid: active.messageUuid,
+          ...(request.fromDeviceLinkClient ? { fromDeviceLinkClient: true } : {}),
           userName: request.userName,
           throwOnStartFailure: true,
           expectedClearBoundaryMs: active.clearBoundaryMs,
