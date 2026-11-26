@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { SshAccessAnnounce } from '@cindy/device-link';
 import { CLOUD_GUEST_FILE_MARKER } from '../authorizedKeysFile.js';
 import { createSshAccessTarget, type SshAccessSettings, type SshAccessTarget } from '../sshAccessTargetCore.js';
+import { SSH_ACCESS_MAX_MANUAL_KEYS } from '../sshAccessRecord.js';
 import { handleSshAccessRequest } from '../ipc.desktop.js';
 
 vi.mock('../../logger', () => ({ createLogger: () => ({ info() {}, warn() {}, error() {}, debug() {} }) }));
@@ -22,13 +23,19 @@ vi.mock('../sshAccessTarget.desktop.js', () => ({ currentSshAccessTarget: () => 
 // - 现有覆盖缺口：新模块；文件写入与会话结束各自有单测，这里验证它们在什么时候被触发。
 // - 最小失败输入：恢复默认后仍保留 true；撤销后 authorized_keys 里还有那一行；换账号后旧账号的 key 还在；
 //   另一台设备用同一把 key 登记；关着时对没有 key 的电脑发 announce；启动时把已移除设备的 key 写回云电脑文件；
-//   不能按设备断开会话时（以 root 运行）readLocal 仍说能断开。
+//   不能按设备断开会话时（以 root 运行）readLocal 仍说能断开；添加公钥到上限时设置页只拿到「稍后重试」。
 // - tier：unit（真实 fs 只在 mkdtemp 目录，平台与网络全部注入，announce 去抖用假计时器，单文件约 1s）。
 const KEY_A = 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJfYPtO9L0UmsOJcs+BJ3iMNHFGtQIONiQHLRdZfuvr7';
 const FP_A = 'SHA256:djvBZ5K68oGMBtD5pFWRAPELgttcdadkztqINg63Joc';
 const KEY_B = 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIMaGP9ZBWsUOAER5H5Zf4eYmzMBURk1Zj2heBDSMKSOi';
 const FP_B = 'SHA256:mPr78KSflLHkRNgS3SpYoVqLKVcOT11nnMVTK+2G96Q';
 const KEY_C = 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJKEt0idaTeuNCEMu+wXT8G+Y6mBJ+zDXpCTg20sfDgC';
+
+/** A distinct well-formed ssh-ed25519 key line per index (the 32 key bytes repeat index + 1). */
+function ed25519Key(index: number): string {
+  const field = (bytes: Buffer) => Buffer.concat([Buffer.from([0, 0, 0, bytes.length]), bytes]);
+  return `ssh-ed25519 ${Buffer.concat([field(Buffer.from('ssh-ed25519')), field(Buffer.alloc(32, index + 1))]).toString('base64')}`;
+}
 
 interface Harness {
   home: string;
@@ -338,6 +345,20 @@ describe('SSH access settings IPC body', () => {
     await expect(handleSshAccessRequest(target, { operation: 'remove-key', fingerprint: 'SHA256:XySgr8Xym3UBX0xPo8AkyHRPb4jhTA2wFX9VQNbhHCU' }))
       .resolves.toMatchObject({ manualKeys: [] });
     expect(h.terminated).toEqual([['SHA256:XySgr8Xym3UBX0xPo8AkyHRPb4jhTA2wFX9VQNbhHCU']]);
+  });
+
+  // At the limit of added keys the dialog must say so (its own IPC code), not "try again later"; the Host command line
+  // keeps the wire code.
+  it('refuses a key past the limit of added keys with a code of its own', async () => {
+    h.settings.sshAccessEnabled = true;
+    const target = makeTarget();
+    await target.activate();
+    const keys = Array.from({ length: SSH_ACCESS_MAX_MANUAL_KEYS + 1 }, (_, index) => ed25519Key(index));
+    for (const key of keys.slice(0, -1)) await target.addManualKey(key);
+    await expect(handleSshAccessRequest(target, { operation: 'add-key', publicKey: keys.at(-1)! }))
+      .rejects.toThrow(/^\[SSH_ACCESS_KEY_LIMIT\] /);
+    await expect(target.addManualKey(keys.at(-1)!)).rejects.toMatchObject({ code: 'SSH_ACCESS_UNAVAILABLE' });
+    expect((await target.readLocal()).manualKeys).toHaveLength(SSH_ACCESS_MAX_MANUAL_KEYS);
   });
 
   it('rejects malformed requests before the target and hides unexpected failures', async () => {

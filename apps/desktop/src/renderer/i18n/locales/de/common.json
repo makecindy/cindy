@@ -7336,6 +7336,7 @@
           "INVALID_PARAMS": "Das ist kein gültiger öffentlicher ssh-ed25519-Schlüssel. Füge eine einzelne ed25519-Schlüsselzeile ohne Optionen ein.",
           "ALREADY_EXISTS": "Dieser öffentliche Schlüssel kann sich bereits mit diesem Computer verbinden.",
           "PRECONDITION_FAILED": "Der öffentliche Schlüssel kann gerade nicht hinzugefügt werden. Versuche es später erneut.",
+          "SSH_ACCESS_KEY_LIMIT": "Du hast das Limit von {{max}} hinzugefügten öffentlichen Schlüsseln erreicht. Entferne einen, um einen weiteren hinzuzufügen.",
           "INTERNAL": "Der öffentliche Schlüssel wurde nicht hinzugefügt."
         },
         "addedKey": "Öffentlicher Schlüssel hinzugefügt",

@@ -5,6 +5,8 @@
 import type { SshAccessBlock, SshAccessEndpoint } from '@cindy/device-link';
 
 export const SSH_ACCESS_IPC_CHANNEL = 'ssh-access:request';
+/** Public keys the person can add by hand on one computer (device keys are counted apart). */
+export const SSH_ACCESS_MAX_MANUAL_KEYS = 32;
 /** Main → renderer: something in the state below changed; read it again. */
 export const SSH_ACCESS_CHANGED_CHANNEL = 'ssh-access:changed';
 

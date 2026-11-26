@@ -7336,6 +7336,7 @@
           "INVALID_PARAMS": "This isn’t a valid ssh-ed25519 public key. Paste a single ed25519 key line without options.",
           "ALREADY_EXISTS": "This public key can already connect to this computer.",
           "PRECONDITION_FAILED": "The public key can’t be added right now. Try again later.",
+          "SSH_ACCESS_KEY_LIMIT": "You’ve reached the limit of {{max}} added public keys. Remove one to add another.",
           "INTERNAL": "The public key wasn’t added."
         },
         "addedKey": "Public key added",

@@ -11,10 +11,11 @@ import { createHash, randomBytes } from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { parseSshEd25519PublicKey } from '@cindy/device-link';
+import { SSH_ACCESS_MAX_MANUAL_KEYS } from '../../shared/sshAccess.js';
 import { withCrossProcessLock } from '../device-link/crossProcessLock.js';
 
+export { SSH_ACCESS_MAX_MANUAL_KEYS };
 export const SSH_ACCESS_MAX_DEVICES = 64;
-export const SSH_ACCESS_MAX_MANUAL_KEYS = 32;
 export const SSH_ACCESS_MAX_LABEL_CHARS = 64;
 const MAX_RECORD_BYTES = 256 * 1024;
 const DEVICE_ID = /^[A-Za-z0-9._:-]{1,128}$/;

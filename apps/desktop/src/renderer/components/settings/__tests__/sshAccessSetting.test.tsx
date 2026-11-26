@@ -2,7 +2,12 @@
 import { cloneElement, type ReactElement } from 'react';
 import { act, cleanup, fireEvent, render, renderHook, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { SshAccessLocalState, SshAccessSessionCleanup, SshDeviceHostView } from '../../../../shared/sshAccess';
+import {
+  SSH_ACCESS_MAX_MANUAL_KEYS,
+  type SshAccessLocalState,
+  type SshAccessSessionCleanup,
+  type SshDeviceHostView,
+} from '../../../../shared/sshAccess';
 import { SSHD_INSTALL_COMMAND, SshAccessSetting } from '../SshAccessSetting';
 import { SshDeviceHostRow, useSshDeviceHosts } from '../SshDeviceHostRow';
 
@@ -11,7 +16,7 @@ import { SshDeviceHostRow, useSshDeviceHosts } from '../SshDeviceHostRow';
 //   （其它设备卡片上的 SSH 一行），经 window.electronAPI.sshAccess / sshDeviceHosts 与真实组件交互；断言用户看到的
 //   文案 key、发出的 IPC 操作、确认框与结果提示。
 // - Bug／规则依据：spec 决定 3、5、11（位置与内容、恢复默认、移除设备 = 撤销远程访问且确认框写明、手动公钥直接移除、
-//   添加公钥的校验错误、断开全部会话先确认再报告数量、macOS 只给指引、Linux 给可复制命令且不执行 sudo；只有 Linux
+//   添加公钥的校验错误与上限、断开全部会话先确认再报告数量、macOS 只给指引、Linux 给可复制命令且不执行 sudo；只有 Linux
 //   且不以 root 运行时能断开被撤销设备自己的会话，其他情况确认框不承诺断开）；spec 决定 6（其它设备卡片：终端命令、
 //   连接、「添加到 SSH 远程主机」、需要更新、暂不可用，被对方阻断时写明对方给出的原因）；DESIGN §11.1（失败提示说明
 //   哪项操作没完成）；engineering-conventions §8.6（变化通知期间只读一次、待读一笔）。
@@ -19,7 +24,8 @@ import { SshDeviceHostRow, useSshDeviceHosts } from '../SshDeviceHostRow';
 // - 最小失败输入：不支持的电脑仍显示开关；移除设备没有确认就撤销；不能按设备断开会话时（macOS、Linux 上以 root
 //   运行）确认框仍写会话会被断开；没断开任何会话时提示「已断开 0 个」；有会话没断开时只给 1.2 秒的成功提示；
 //   校验失败后弹窗关闭；断开会话不报告数量；连续通知触发多次读取；用户删过的主机仍显示「连接」；连接失败直接显示
-//   主进程的英文原始错误；对方 Mac 关了「远程登录」或原因未知时卡片仍写「对方的 SSH 服务没有运行」。
+//   主进程的英文原始错误；对方 Mac 关了「远程登录」或原因未知时卡片仍写「对方的 SSH 服务没有运行」；添加公钥到上限时
+//   弹窗写「稍后重试」。
 // - tier：unit（jsdom，宿主接口为内存 fake，单独运行约 3 秒）。各语言的真实句间空格见 sshAccessSetting.i18n.test.tsx。
 const { t, toast } = vi.hoisted(() => ({
   t: (key: string, values?: Record<string, unknown>) => (values ? `${key} ${JSON.stringify(values)}` : key),
@@ -202,6 +208,20 @@ describe('SshAccessSetting (this computer)', () => {
     expect(api.addKey).toHaveBeenLastCalledWith('ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJfYPtO9L0UmsOJcs+BJ3iMNHFGtQIONiQHLRdZfuvr7', '办公室');
     expect(screen.queryByRole('dialog')).toBeNull();
     expect(toast.success).toHaveBeenCalledWith('settings.remoteControl.sshAccess.addedKey');
+  });
+
+  it('says the limit was reached when every added key is in use, rather than "try again later"', async () => {
+    const { api } = stubApi(base);
+    api.addKey.mockRejectedValueOnce(new Error('[SSH_ACCESS_KEY_LIMIT] too many keys: at most 32 added public keys'));
+    await renderSetting();
+    fireEvent.click(screen.getByRole('button', { name: 'settings.remoteControl.sshAccess.addKey' }));
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.change(within(dialog).getByLabelText('settings.remoteControl.sshAccess.addKeyDialog.keyField'), {
+      target: { value: 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJfYPtO9L0UmsOJcs+BJ3iMNHFGtQIONiQHLRdZfuvr7' },
+    });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'settings.remoteControl.sshAccess.addKeyDialog.submit' }));
+    await act(async () => {});
+    expect(within(dialog).getByText(`settings.remoteControl.sshAccess.addKeyErrors.SSH_ACCESS_KEY_LIMIT {"max":${SSH_ACCESS_MAX_MANUAL_KEYS}}`)).toBeTruthy();
   });
 
   it('ends all SSH sessions only after confirming, then reports how many ended', async () => {

@@ -28,6 +28,7 @@ import { Switch } from '@/components/ui/switch';
 import { toast } from '@/lib/toast';
 import { extractIpcError } from '@/utils/ipcError';
 import {
+  SSH_ACCESS_MAX_MANUAL_KEYS,
   deviceAliasSlug,
   type SshAccessDeviceRow,
   type SshAccessLocalState,
@@ -38,6 +39,7 @@ import { remoteControlSettings } from './RemoteControlSection.settings-search';
 
 /** Debian / Ubuntu (Cindy's cloud images); other distributions get a sentence instead. */
 export const SSHD_INSTALL_COMMAND = 'sudo apt install -y openssh-server && sudo systemctl enable --now ssh';
+/** Add-key refusals with their own sentence in the dialog (and SSH_ACCESS_KEY_LIMIT, which names the limit). */
 const ADD_KEY_ERRORS = new Set(['INVALID_PARAMS', 'ALREADY_EXISTS', 'PRECONDITION_FAILED']);
 /** A result toast with a second sentence stays up long enough to read it. */
 const LONG_RESULT_TOAST_MS = 5000;
@@ -347,6 +349,9 @@ export function SshAccessSetting({ selfName, selfDeviceId, deviceNames }: {
       return null;
     } catch (error) {
       const code = extractIpcError(error)?.code;
+      if (code === 'SSH_ACCESS_KEY_LIMIT') {
+        return t('settings.remoteControl.sshAccess.addKeyErrors.SSH_ACCESS_KEY_LIMIT', { max: SSH_ACCESS_MAX_MANUAL_KEYS });
+      }
       return t(`settings.remoteControl.sshAccess.addKeyErrors.${code && ADD_KEY_ERRORS.has(code) ? code : 'INTERNAL'}`);
     } finally {
       busyRef.current = false;

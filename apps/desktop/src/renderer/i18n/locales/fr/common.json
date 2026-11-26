@@ -7405,6 +7405,7 @@
           "INVALID_PARAMS": "Ce n'est pas une clé publique ssh-ed25519 valide. Collez une seule ligne de clé ed25519 sans options.",
           "ALREADY_EXISTS": "Cette clé publique peut déjà se connecter à cet ordinateur.",
           "PRECONDITION_FAILED": "Impossible d'ajouter la clé publique pour le moment. Réessayez plus tard.",
+          "SSH_ACCESS_KEY_LIMIT": "Vous avez atteint la limite de {{max}} clés publiques ajoutées. Retirez-en une pour en ajouter une autre.",
           "INTERNAL": "La clé publique n'a pas été ajoutée."
         },
         "addedKey": "Clé publique ajoutée",

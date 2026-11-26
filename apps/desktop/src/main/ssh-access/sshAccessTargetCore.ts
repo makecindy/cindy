@@ -130,6 +130,18 @@ export class SshAccessTargetError extends Error {
   }
 }
 
+/**
+ * Adding a public key while SSH_ACCESS_MAX_MANUAL_KEYS added keys are already allowed. Still SSH_ACCESS_UNAVAILABLE for
+ * callers that only know the wire codes (the Host command line); the settings IPC tells the person the limit was
+ * reached, where "try again later" would never help.
+ */
+export class SshAccessKeyLimitError extends SshAccessTargetError {
+  constructor() {
+    super('SSH_ACCESS_UNAVAILABLE', `too many keys: at most ${SSH_ACCESS_MAX_MANUAL_KEYS} added public keys`);
+    this.name = 'SshAccessKeyLimitError';
+  }
+}
+
 interface PublicState {
   enabled: boolean;
   blocked: SshAccessBlock | null;
@@ -743,7 +755,7 @@ export function createSshAccessTarget(ports: SshAccessTargetPorts) {
         const fingerprint = sshKeyFingerprint(key.publicKey);
         await mutateRecord(captured, (current) => {
           if (fingerprintOwner(current, fingerprint)) fail('SSH_ACCESS_KEY_IN_USE', 'this key is already allowed');
-          if (current.manualKeys.length >= SSH_ACCESS_MAX_MANUAL_KEYS) fail('SSH_ACCESS_UNAVAILABLE', 'too many keys');
+          if (current.manualKeys.length >= SSH_ACCESS_MAX_MANUAL_KEYS) throw new SshAccessKeyLimitError();
           return { ...current, manualKeys: [...current.manualKeys, {
             publicKey: key.publicKey, fingerprint, label: normalizeSshKeyLabel(label) || normalizeSshKeyLabel(key.comment), addedAt: now(),
           }] };

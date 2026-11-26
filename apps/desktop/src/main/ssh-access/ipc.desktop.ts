@@ -20,7 +20,7 @@ import {
 import { assertTrustedAppRendererEvent, isTrustedAppRendererWindow } from '../security/trustedAppRenderer.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
 import type { IpcErrorCode } from '../../shared/ipc-errors.js';
-import { SshAccessTargetError, type SshAccessTarget } from './sshAccessTargetCore.js';
+import { SshAccessKeyLimitError, SshAccessTargetError, type SshAccessTarget } from './sshAccessTargetCore.js';
 import { SSH_ACCESS_MAX_LABEL_CHARS } from './sshAccessRecord.js';
 import { currentSshAccessTarget } from './sshAccessTarget.desktop.js';
 import type { SshAccessController } from './sshAccessController.js';
@@ -62,6 +62,8 @@ export async function handleSshAccessRequest(target: SshAccessTarget | null, raw
       case 'end-sessions': return await target.endAllSessions();
     }
   } catch (error) {
+    // The add-key dialog names the limit instead of "try again later".
+    if (error instanceof SshAccessKeyLimitError) throwIpcError('SSH_ACCESS_KEY_LIMIT', error.message);
     if (error instanceof SshAccessTargetError) throwIpcError(IPC_CODES[error.code], error.message);
     throwIpcError('INTERNAL', 'SSH access request failed');
   }

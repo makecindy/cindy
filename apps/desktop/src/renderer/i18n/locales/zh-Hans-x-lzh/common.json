@@ -7293,6 +7293,7 @@
           "INVALID_PARAMS": "此非有效之 ssh-ed25519 公钥。仅支持单行、不带选项之 ed25519 公钥。",
           "ALREADY_EXISTS": "此公钥已可连此机。",
           "PRECONDITION_FAILED": "暂不能增公钥，请稍后再试。",
+          "SSH_ACCESS_KEY_LIMIT": "所增公钥已达其限（{{max}} 把）。去其一，方可再增。",
           "INTERNAL": "公钥增之未成。"
         },
         "addedKey": "已增公钥",
