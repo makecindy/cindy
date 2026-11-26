@@ -320,6 +320,86 @@ describe('任务失败原因进主日志(issue #5912)', () => {
     expect(log.warn.mock.calls.flat().join('\n')).not.toContain('/Users/someone');
     d.dispose();
   });
+
+  // Hook main logs must classify known structured maker-core failure reasons (such as
+  // codex_reconnect_stalled and upstream-overload) instead of logging reason=unclassified,
+  // while still blocking arbitrary paths or unknown strings from leaking into logs (unit tier).
+  it.each([
+    {
+      requestId: 'req-stall',
+      outcome: {
+        status: 'error' as const,
+        finalText: '',
+        errorMessage: 'The model connection has been retrying for 120s without making progress; the turn was interrupted automatically.',
+        errorReason: 'codex_reconnect_stalled',
+      },
+      expectedReason: 'codex_reconnect_stalled',
+    },
+    {
+      requestId: 'req-overload-reason',
+      outcome: {
+        status: 'error' as const,
+        finalText: '',
+        errorMessage: '⚠️ 模型服务繁忙：上游暂时没有可用容量。',
+        errorReason: 'upstream-overload',
+      },
+      expectedReason: 'upstream-overload',
+    },
+    {
+      requestId: 'req-overload-upper',
+      outcome: {
+        status: 'error' as const,
+        finalText: '',
+        errorMessage: 'stream disconnected before completion',
+        errorReason: 'UPSTREAM_OVERLOADED',
+      },
+      expectedReason: 'upstream-overload',
+    },
+    {
+      requestId: 'req-overload-message-only',
+      outcome: {
+        status: 'error' as const,
+        finalText: '',
+        errorMessage: 'Selected model is at capacity. Please try a different model.',
+      },
+      expectedReason: 'upstream-overload',
+    },
+    {
+      requestId: 'req-stall-message-only',
+      outcome: {
+        status: 'error' as const,
+        finalText: '',
+        errorMessage: 'The model connection has been retrying for 120s without making progress; the turn was interrupted automatically.',
+      },
+      expectedReason: 'codex_reconnect_stalled',
+    },
+    {
+      requestId: 'req-unknown-reason',
+      outcome: {
+        status: 'error' as const,
+        finalText: '',
+        errorMessage: 'secret /Users/dash/private.txt',
+        errorReason: 'custom/unsafe/reason',
+      },
+      expectedReason: 'unclassified',
+    },
+  ])('classifies hook failure log reason for $requestId -> $expectedReason', async ({ requestId, outcome, expectedReason }) => {
+    const fr = fakeRunner();
+    const log = { info: vi.fn(), warn: vi.fn() };
+    const { d } = makeDispatcher({ runner: fr.runner, log });
+    const c = collector();
+    d.onConnected('conn-1', c.send);
+    await d.handleDispatch('conn-1', dispatch({ requestId, source: { im: 'feishu' } }), c.send);
+    await tick();
+    fr.finish(outcome);
+    await tick();
+
+    expect(log.warn).toHaveBeenCalledWith(
+      `hook task ${requestId} failed: im=feishu via=outcome reason=${expectedReason}`,
+    );
+    expect(log.warn.mock.calls.flat().join('\n')).not.toContain('/Users/dash');
+    d.dispose();
+  });
 });
 
 describe('background results during normal turn delivery', () => {

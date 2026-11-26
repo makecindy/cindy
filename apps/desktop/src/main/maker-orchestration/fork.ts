@@ -9,6 +9,7 @@
  * 变成"孤儿 jsonl"，可接受（数量极少，留给后续清理脚本）。
  */
 
+import { randomUUID } from 'node:crypto';
 import { eq, and, lt, gt, asc, desc, isNull, or, sql } from 'drizzle-orm';
 import { createId } from '@paralleldrive/cuid2';
 import { CodexResumePreparationBlockedError, isCodexHistoryRecoveryRequired } from '@cindy/maker-core';
@@ -1154,7 +1155,9 @@ export async function forkSessionAtMessage(
   // 5. SQLite 事务：insert 新 session + bulk copy messages
   const now = Date.now();
 
-  const newMessageIds = sourceMessages.map(() => ({ id: createId(), clientId: createId() }));
+  // A long prefix needs two fresh opaque IDs per row. Use native UUIDs to
+  // avoid hashing twice per row on the main thread before the DB worker runs.
+  const newMessageIds = sourceMessages.map(() => ({ id: randomUUID(), clientId: randomUUID() }));
   const recoveryMarker = needsHistoryRecovery ? buildCodexForkRecoveryMarker({
     source: forkSource, rows: sourceMessages, newMessageIds, sessionId: newSessionId, now,
     targetContextWindow: await resolveDesktopHandoffWindow(sourceSessionId, {

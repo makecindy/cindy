@@ -357,11 +357,14 @@ export function createCardActionHandler(
       const liveBeforePick = turnRunner.getMakerSessionById(sessionId);
       const sessionAgentKind = liveBeforePick?.agentKind ??
         (await getMaker().getSessionMeta?.(sessionId))?.agentKind;
-      // 插件引擎任务不接 IM 渠道(docs/plans/acp-plugin-bridge.md):切模型卡明确失败,
-      // 不按内置引擎的路由去改。
-      if (sessionAgentKind === 'acp') return new PluginEngineUnsupportedError(IM_CHANNEL_FEATURE).message;
+      // 插件引擎任务(docs/plans/acp-plugin-bridge.md)：只在同一个引擎内换模型(卡片按钮带它自己的 providerId)，
+      // 与应用内选择器同一条路径；换到别的引擎要交接，只在应用里做。
+      if (sessionAgentKind === 'acp' && (providerId ?? previousProviderId) !== previousProviderId) {
+        return new PluginEngineUnsupportedError(IM_CHANNEL_FEATURE).message;
+      }
       const isPiSession = sessionAgentKind === 'pi';
-      if (previousRoute?.agentDeviceId && sessionAgentKind) {
+      // A plugin engine on another computer is checked by that computer when the model changes.
+      if (previousRoute?.agentDeviceId && sessionAgentKind && sessionAgentKind !== 'acp') {
         try {
           await readImRemoteProviderRoute({
             agentDeviceId: previousRoute.agentDeviceId,
@@ -413,7 +416,9 @@ export function createCardActionHandler(
       // 持久化与运行态切换必须和 send / agent switch 共用 session 锁，保证后选覆盖先选。
       if (!isPiSession) {
         try {
-          await updateModelEffort(sessionId, modelId, effort ?? 'high', providerId);
+          // Plugin engines keep their own level when the model lists none ('' = the engine decides).
+          await updateModelEffort(sessionId, modelId,
+            effort ?? (sessionAgentKind === 'acp' ? '' as Effort : 'high'), providerId);
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
           log.error(`model:pick DB update failed: ${msg}`);
@@ -531,8 +536,17 @@ export function createCardActionHandler(
     const sessionId = String(event.payload.sessionId ?? '');
     const mode = String(event.payload.mode ?? '') as PermissionMode;
     const modeLabel = String(event.payload.modeLabel ?? mode);
-    const agentKind: AgentKind =
-      event.payload.agentKind === 'codex' ? 'codex' : adapter.config.agentKind;
+    // A plugin-engine task validates against its own engine's modes (docs/plans/acp-plugin-bridge.md);
+    // the task row, not the card payload, decides which engine that is.
+    const task = await getMaker().getSessionMeta?.(sessionId).catch(() => null);
+    const agentKind = task?.agentKind === 'acp' || event.payload.agentKind === 'acp'
+      ? 'acp'
+      : event.payload.agentKind === 'codex' ? 'codex' : adapter.config.agentKind;
+    const permissionModes = task?.agentKind === 'acp'
+      ? await turnRunner.getPermissionModes('acp', {
+        sessionId, providerId: task.providerId, agentDeviceId: task.agentDeviceId,
+      })
+      : agentKind === 'acp' ? [] : getMaker().getCapabilities(agentKind).permissionModes;
 
     if (event.buttonId === 'permmode:confirm-full-access' && mode !== 'bypassPermissions') {
       log.warn(`permmode:confirm-full-access received non-full mode=${mode} — ignoring`);
@@ -544,7 +558,7 @@ export function createCardActionHandler(
     const result = await changeSessionPermissionMode({
       sessionId,
       mode,
-      modes: getMaker().getCapabilities(agentKind).permissionModes,
+      modes: permissionModes,
       confirmedFullAccess: event.buttonId === 'permmode:confirm-full-access',
       readPreviousMode: () => readPermissionMode(sessionId),
       getLiveSession: () => turnRunner.getMakerSessionById(sessionId),

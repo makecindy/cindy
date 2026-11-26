@@ -34,6 +34,7 @@ import { mapMembershipToAuthUser, type User as AccountUser } from '../../desktop
 import { resolveSessionDevice, canRegisterHostDevice } from './auth/device-identity.mjs';
 import { AUTH_SESSION_KEY } from '../../desktop/src/main/authCredentialKeys.js';
 import { createHostDeviceLink } from './device-link.js';
+import { AGENT_NET_UDP_PORT_ENV, parseAgentNetUdpPort } from '../../desktop/src/main/device-link/agentNetStunDiscovery.js';
 import { createHostSessionHandoff } from './agent/session-handoff.js';
 import { createHostService } from './service.mjs';
 import { holdError } from './agent/profile-hold.js';
@@ -2246,11 +2247,14 @@ function hostAgentNetPorts(): Parameters<typeof createHostDeviceLink>[0]['agentN
   const credentials = () => (store ??= createCredentialStore({ userDataDir: resolveHostDataDir(),
     keyringApplication: process.env.CINDY_HOST_KEYRING_APPLICATION?.trim() || undefined }).catch((error: unknown) => { store = null; throw error; }));
   let core: Promise<WebAssembly.Module> | null = null;
+  const agentNetLog = createLogger('agent-net');
+  const fixedUdpPort = parseAgentNetUdpPort(process.env[AGENT_NET_UDP_PORT_ENV], agentNetLog);
   return {
     base: () => base,
     subject: () => accountUser?.id ?? null,
     deviceId: () => currentDeviceId,
     deviceName: readHostDeviceName,
+    bindPort: () => fixedUdpPort,
     readSecret: async key => (await credentials()).read(key),
     writeSecret: async (key, value) => { (await credentials()).write(key, value); },
     enroll: (url, body) => serverApi('/api/agent-net/enroll', { baseUrl: url, method: 'POST', body, timeoutMs: 10_000, cache: 'no-store',
@@ -2276,7 +2280,7 @@ function hostAgentNetPorts(): Parameters<typeof createHostDeviceLink>[0]['agentN
       const scope = createHash('sha256').update(JSON.stringify([base, subject])).digest('hex').slice(0, 32);
       return path.join(resolveHostDataDir(), 'agent-net', scope, 'directory.json');
     },
-    log: createLogger('agent-net'),
+    log: agentNetLog,
   };
 }
 

@@ -15,8 +15,9 @@ import { supplementalConversationEstimates } from '@cindy/maker-shared/usage-cos
  *   - snake↔camel 全部走 `localDb/mapper.ts`，本文件不写字段转换代码。
  */
 
-import { eq, gte, desc, and, isNull, isNotNull, inArray, notInArray, or, sql } from 'drizzle-orm';
+import { eq, gte, desc, and, isNull, isNotNull, inArray, notInArray, or, sql, getTableColumns, is, SQL } from 'drizzle-orm';
 import { runAsBackgroundDbRpc } from '../localDb/client/rpcAdmission.js';
+import { throwIpcError } from '../utils/ipcValidate.js';
 import type { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
 import type { broadcastSessionPatched as BroadcastSessionPatched } from '../localDb/ipc/sessions.js';
 
@@ -87,6 +88,7 @@ export interface ScheduleSidebarIndexRun {
   readAt?: number;
   firedAt?: number;
   finishedAt?: number;
+  canSwitchPluginEngine?: true;
   failureKind?: 'precheck' | 'rate-limit' | 'execution';
   preRunBlocked?: true;
   errorMsg?: string;
@@ -363,6 +365,30 @@ function publicScheduleRunWhere() {
   return sql`${scheduleRuns.scheduleId} NOT IN (SELECT id FROM schedules WHERE NOT (${publicSchedule}))`;
 }
 
+/** A finished run can change its own route only when no automation reuses this task. */
+function canSwitchRunPluginEngine() {
+  return sql<boolean>`(
+    ${scheduleRuns.sessionId} IS NOT NULL
+    AND ${scheduleRuns.finishedAt} IS NOT NULL
+    AND ${scheduleRuns.status} IN ('success', 'failed', 'aborted')
+    AND NOT EXISTS (
+      SELECT 1 FROM schedules AS bound WHERE bound.target_session_id = ${scheduleRuns.sessionId}
+    )
+  )`.mapWith(Boolean);
+}
+
+// Check as part of the write so another desktop instance cannot switch the
+// target between validation and persistence.
+function targetAcceptsAutomation(targetSessionId: string) {
+  return sql`NOT EXISTS (
+    SELECT 1 FROM sessions WHERE id = ${targetSessionId} AND source = 'scheduler' AND agent_kind = 'acp'
+  )`;
+}
+
+function rejectPluginAutomationTarget(): never {
+  throwIpcError('UNSUPPORTED_CAPABILITY', 'this plugin engine task cannot be bound to an automation');
+}
+
 export class DrizzleScheduleStorage implements ScheduleStorage {
   constructor(
     private readonly getDb: () => SchedulerDrizzleDb,
@@ -403,6 +429,11 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
         nextFireSum: sql<number>`coalesce(sum(${schedules.nextFireAt}), 0)`.mapWith(Number),
         nextFireN: sql<number>`coalesce(sum(case when ${schedules.nextFireAt} is not null then 1 else 0 end), 0)`.mapWith(Number),
         activeN: sql<number>`coalesce(sum(case when ${schedules.status} = 'active' then 1 else 0 end), 0)`.mapWith(Number),
+        // A different instance can repoint a rule without changing those totals.
+        boundTasks: sql<string>`(SELECT json_group_array(bound.target_session_id) FROM (
+          SELECT DISTINCT target_session_id FROM schedules
+          WHERE target_session_id IS NOT NULL ORDER BY target_session_id
+        ) AS bound)`,
       })
       .from(schedules);
     return [
@@ -416,6 +447,7 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
       scheduleStats?.nextFireSum ?? 0,
       scheduleStats?.nextFireN ?? 0,
       scheduleStats?.activeN ?? 0,
+      scheduleStats?.boundTasks ?? '[]',
     ].join(':');
   }
 
@@ -444,7 +476,22 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
 
   async insert(s: Schedule): Promise<Schedule> {
     const db = this.getDb();
-    await db.insert(schedules).values(scheduleCreateToRow(s));
+    const row = scheduleCreateToRow(s);
+    if (row.targetSessionId) {
+      // Drizzle inserts SELECT values in table column order. Reuse its
+      // encoders and schema defaults, including columns omitted by the mapper.
+      const values = Object.entries(getTableColumns(schedules)).map(([key, column]) => {
+        const mapped = row[key as keyof typeof row];
+        const value = mapped === undefined ? column.default ?? null : mapped;
+        return is(value, SQL) ? value : sql.param(value, column);
+      });
+      const [inserted] = await db.insert(schedules)
+        .select(sql`SELECT ${sql.join(values, sql`, `)} WHERE ${targetAcceptsAutomation(row.targetSessionId)}`)
+        .returning({ id: schedules.id });
+      if (!inserted) rejectPluginAutomationTarget();
+    } else {
+      await db.insert(schedules).values(row);
+    }
     // 返回 round-tripped 版本（确保 timezone/booleans/默认值都按 DB 实际形态回流）
     const inserted = await this.get(s.id);
     if (!inserted) {
@@ -483,8 +530,16 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
       const [current] = await db.select().from(schedules).where(where).limit(1);
       return current ? scheduleToCamel(current) : null;
     }
-    const [updated] = await db.update(schedules).set(setObj).where(where).returning();
-    if (!updated) return null;
+    const targetCondition = patch.targetSessionId ? targetAcceptsAutomation(patch.targetSessionId) : undefined;
+    const [updated] = await db.update(schedules).set(setObj).where(and(where, targetCondition)).returning();
+    if (!updated) {
+      if (targetCondition) {
+        const [rejected] = await db.select({ id: schedules.id }).from(schedules)
+          .where(and(where, sql`NOT (${targetCondition})`)).limit(1);
+        if (rejected) rejectPluginAutomationTarget();
+      }
+      return null;
+    }
     this.bumpSidebarIndexCache();
     return scheduleToCamel(updated);
   }
@@ -824,6 +879,7 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
       readAt: scheduleRuns.readAt,
       firedAt: scheduleRuns.firedAt,
       finishedAt: scheduleRuns.finishedAt,
+      canSwitchPluginEngine: canSwitchRunPluginEngine(),
       failureRecovered: failureRecoveredSql('schedule_runs'),
       failureKind: failureKindSql('schedule_runs'),
       errorMsg: scheduleRuns.errorMsg,
@@ -892,6 +948,7 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
       status: row.status,
       readAt: row.readAt ?? undefined,
       firedAt: row.firedAt ?? undefined,
+      ...(row.canSwitchPluginEngine && row.sessionId ? { canSwitchPluginEngine: true as const } : {}),
       ...(row.status === 'failed' || row.status === 'interrupted' ? {
         finishedAt: row.finishedAt ?? undefined,
         failureRecovered: Boolean(row.failureRecovered),
@@ -958,6 +1015,17 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
     }
     return runs;
     });
+  }
+
+  async canSwitchCompletedAutomationSession(sessionId: string): Promise<boolean> {
+    const [run] = await this.getDb()
+      .select({ eligible: canSwitchRunPluginEngine() })
+      .from(scheduleSessionLatestRuns)
+      .innerJoin(scheduleRuns, eq(scheduleSessionLatestRuns.runId, scheduleRuns.id))
+      .innerJoin(schedules, eq(scheduleRuns.scheduleId, schedules.id))
+      .where(and(eq(scheduleSessionLatestRuns.sessionId, sessionId), publicScheduleRunWhere()))
+      .limit(1);
+    return run?.eligible === true;
   }
 
   /**
