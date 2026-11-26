@@ -3,6 +3,7 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { RemoteSerializedAttachment } from '@/session/types';
+import { i18n } from '@/i18n';
 import { contextSheetMediaUploadCandidates } from '@/session/contextSheetMediaUpload';
 import type { MobileLocalAttachmentUploadCandidate } from '@/session/mobileLocalAttachmentUpload';
 import { useBotGroupComposerAttachments } from '@/session/useBotGroupComposerAttachments';
@@ -477,4 +478,24 @@ it('cleans a shared file only after staging takes ownership, retaining failed or
   await act(async () => { await flush(); });
   await act(async () => { runtime.uploads[0].resolve(); await harness.latest().waitForPendingUploads(); });
   expect(cleanup).toHaveBeenCalledExactlyOnceWith(['file:///share/report.pdf']);
+});
+
+// 锁屏 / 切走 App / 离开任务会让直连上传以 FILE_PEER_* 内部码失败。界面必须拿到可操作
+// 的一句话,而不是下划线常量;文案 key 由 i18n 目录提供(此文件按惯例把 t mock 成 key)。
+it('reports an interrupted peer upload with user-facing copy instead of the internal code', async () => {
+  const harness = mount('session-a', async () => {
+    throw new Error('FILE_PEER_CANCELLED');
+  });
+  act(() => harness.latest().enqueueUploads([{
+    kind: 'file', uri: 'file:///share/report.pdf', name: 'report.pdf', size: 1000,
+  }], { token: 'token' }));
+  await act(async () => { await harness.latest().waitForPendingUploads(); });
+  // 文案来自 locale 目录(t 在本文件 mock 成 key,但 hook 走 i18n 实例取真值)。
+  expect(harness.options.onError).toHaveBeenCalledWith(
+    i18n.t('composer.upload.interrupted'), { uploadLocalId: expect.any(String) },
+  );
+  expect(i18n.t('composer.upload.interrupted')).not.toContain('FILE_PEER');
+  // 失败卡仍留在托盘,重试 / 删除入口不因换文案而消失。
+  expect(harness.latest().pendingUploads).toHaveLength(1);
+  expect(harness.latest().pendingUploads[0].failed).toBe(true);
 });

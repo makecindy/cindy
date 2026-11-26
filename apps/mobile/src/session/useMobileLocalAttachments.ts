@@ -21,7 +21,9 @@ import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system/legacy';
 import { retainComposerAttachmentFile } from './durableOutboxFiles';
 import * as ImagePicker from 'expo-image-picker';
-import { formatRemoteError } from '@/device-link/remoteStatus';
+import { formatRemoteError, humanizeRemoteError } from '@/device-link/remoteStatus';
+import { i18n } from '@/i18n';
+import { attachmentUploadFailureKey } from '@/session/attachmentUploadFailure';
 import { pickDeferredLibraryPhotos } from '@/session/deferredPhotoLibrary';
 import {
   MOBILE_MAX_ATTACHMENTS,
@@ -354,7 +356,14 @@ export function useMobileLocalAttachments(
         optionsRef.current.attachmentScopeKey !== candidateScopeKey
         || candidate.attachmentScopeGeneration !== attachmentScopeGenerationRef.current
       )) return;
-      optionsRef.current.onError(formatRemoteError(err), { uploadLocalId: localId });
+      // 传输层抛的是内部码(FILE_PEER_*):先换成「中断 / 超时 / 电脑不可达」这类人话,
+      // 其余错误走 humanizeRemoteError 的通用映射(仍把原文附在句尾便于反馈排查)。
+      // 文案用 i18n 实例取,不用 render 期的 t:这个回调是 memo 闭包,语言切过后要取新值。
+      const failureKey = attachmentUploadFailureKey(err);
+      optionsRef.current.onError(
+        failureKey ? i18n.t(failureKey) : humanizeRemoteError(err),
+        { uploadLocalId: localId },
+      );
     },
   }), []);
 
