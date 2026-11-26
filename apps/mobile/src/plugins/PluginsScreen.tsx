@@ -175,6 +175,8 @@ function PluginDirectory() {
   const [detailFailed, setDetailFailed] = useState(false);
   /** The detail opened from a record is another install now (maintainer review 15:22 #1): its reply is not shown. */
   const [detailReplaced, setDetailReplaced] = useState(false);
+  /** A reply of the pressed install waits for its record, being read again, to prove it (shown as loading meanwhile). */
+  const [detailAwaitingRecord, setDetailAwaitingRecord] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [readmeOpen, setReadmeOpen] = useState(false);
   const [recent, setRecent] = useState<string[]>([]);
@@ -439,8 +441,8 @@ function PluginDirectory() {
   const showDetail = async (row: HostedRemoteCollectionItem, fromRecord?: string | null) => {
     if (fromRecord) {
       // The install the person asked to open: the token the record proved at the press (it may be read again meanwhile).
-      const token = pluginCheckConclusion(fromRecord)?.approvalToken;
-      detailFromRecord.current = token ? { key: row.key, operationId: fromRecord, approvalToken: token } : undefined;
+      // (A record that has no token is held all the same: nothing is shown for it; dispatcher, 2026-11-26.)
+      detailFromRecord.current = { key: row.key, operationId: fromRecord, approvalToken: pluginCheckConclusion(fromRecord)?.approvalToken };
     }
     else if (fromRecord === null || detailFromRecord.current?.key !== row.key) detailFromRecord.current = undefined;
     shownIdentity.current.delete(row.key);
@@ -455,6 +457,8 @@ function PluginDirectory() {
     setDetail(undefined);
     setDetailFailed(false);
     setDetailReplaced(false);
+    awaitingRecord.current = undefined;
+    setDetailAwaitingRecord(false);
     if (!list.isOnline(row.host)) {
       setDetailLoading(false);
       return;
@@ -943,7 +947,7 @@ function PluginDirectory() {
         selected.row,
         demoScenario?.state ? undefined : detail,
         online,
-        detailLoading || demoScenario?.state === "loading",
+        detailLoading || detailAwaitingRecord || demoScenario?.state === "loading",
         detailReplaced ? "replaced" : detailFailed || demoScenario?.state === "loadFailed",
       )
     : undefined;
@@ -1160,7 +1164,9 @@ function PluginDirectory() {
    * Route 3: the detail an operation was started from, brought up to date by its own read after the result, counts that
    * operation as seen once it is proven, if the reply shown is its install (`broughtUpToDate`: operation → row).
    */
-  const detailFromRecord = useRef<{ key: string; operationId: string; approvalToken: string } | undefined>(undefined);
+  const detailFromRecord = useRef<{ key: string; operationId: string; approvalToken?: string } | undefined>(undefined);
+  /** A reply of the pressed install that came while its record was being read again: shown once that read proves it. */
+  const awaitingRecord = useRef<{ key: string; operationId: string; generation: number; resource: RemoteResource } | undefined>(undefined);
   const shownIdentity = useRef(new Map<string, PluginDetailIdentity>());
   const broughtUpToDate = useRef(new Map<string, string>());
   const tellIfShown = (operationId: string, rowKey: string) => {
@@ -1181,20 +1187,47 @@ function PluginDirectory() {
    * read again if it is still proven (a record being read already needs no second read). A reply that is shown sets the
    * install the row shows and counts every record it proves as seen (route 2), by `pluginConclusionShownBy`.
    */
-  const acceptDetailReply = (row: HostedRemoteCollectionItem, resource: { revision?: string }): boolean => {
+  const acceptDetailReply = (row: HostedRemoteCollectionItem, resource: RemoteResource): boolean => {
     const shown: PluginDetailIdentity = { deviceId: row.host.deviceId, instanceKey: row.item.ref.id, approvalToken: installedApprovalToken(resource.revision) };
     const held = detailFromRecord.current?.key === row.key ? detailFromRecord.current : undefined;
-    if (held && shown.approvalToken !== held.approvalToken) {
-      shownIdentity.current.delete(row.key);
-      setDetailReplaced(true);
+    awaitingRecord.current = undefined;
+    setDetailAwaitingRecord(false);
+    if (held) {
+      // The record as it stands at this reply (a notification or a read since the press may have changed it).
       const record = pluginCheckConclusion(held.operationId);
-      if (record?.readback === "verified" && !record.told) void retryPluginCheckReadback(held.operationId);
-      return false;
+      const pressed = held.approvalToken !== undefined && shown.approvalToken === held.approvalToken;
+      if (pressed && record?.readback === "pending") {
+        // Being read again (a change notification since the press): not shown before that read proves this install.
+        awaitingRecord.current = { key: row.key, operationId: held.operationId, generation: detailGeneration.current, resource };
+        setDetailAwaitingRecord(true);
+        return false;
+      }
+      // Without an identity on either side (an older computer, an unexpected reply, a record that kept none) it counts
+      // as another install: nothing is shown or counted as seen.
+      if (!pressed || !record || !pluginConclusionShownBy(record, shown)) {
+        shownIdentity.current.delete(row.key);
+        setDetailReplaced(true);
+        if (record?.readback === "verified" && !record.told) void retryPluginCheckReadback(held.operationId);
+        return false;
+      }
     }
     shownIdentity.current.set(row.key, shown);
     if (held) broughtUpToDate.current.set(held.operationId, row.key);  // proven again later: seen by this reply then
     tellShown(row.key);
     return true;
+  };
+  /** A reply kept while its record was read again: settled by that read (shown if it proves this install). */
+  const settleAwaitingReply = () => {
+    const waiting = awaitingRecord.current;
+    if (!waiting || waiting.generation !== detailGeneration.current) return;
+    const record = pluginCheckConclusion(waiting.operationId);
+    if (!record || record.readback === "pending") return;
+    const row = selected?.row;
+    if (!row || row.key !== waiting.key) { awaitingRecord.current = undefined; setDetailAwaitingRecord(false); return; }
+    if (acceptDetailReply(row, waiting.resource)) {
+      setDetail(waiting.resource);
+      setSelected((current) => current?.row.key === row.key ? { ...current, row: { ...row, item: waiting.resource } } : current);
+    }
   };
   const completedOperation = useRef<{ operationId: string; row?: HostedRemoteCollectionItem; generation: number;
     /** How many detail reads had been issued when the result was first known here. */
@@ -1250,6 +1283,7 @@ function PluginDirectory() {
   // same rule. Nothing is opened, replaced or prompted for it.
   useEffect(() => {
     for (const [operationId, rowKey] of broughtUpToDate.current) tellIfShown(operationId, rowKey);
+    settleAwaitingReply();
   }, [conclusions]);
   const failedOperationNotice = useRef<string | undefined>(undefined);
   useEffect(() => {

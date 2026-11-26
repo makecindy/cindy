@@ -1333,6 +1333,42 @@ describe("market read fences and lost-receipt facts", () => {
         await settle(30);
         expect({ reads, status: detailStatus() }).toEqual({ reads: 2, status: "replaced" });
       });
+      // Dispatcher (2026-11-26): no identity counts as another install. A detail reply without a revision that names an
+      // approval token (an older computer, an unexpected reply) is not shown for the record, which is read again.
+      it("\"Open plugin\"; the detail's reply has no install identity: nothing is shown or counted as seen, and the record reads it again", async () => {
+        const world = fresh();
+        const requests = wire(world);
+        await provenWhileAway(world);
+        fixture.read.mockImplementation(async (_invoke: any, _host: any, ref: any) => { const { revision: _none, ...item } = row().item as any; return { ...item, ref, blocks: [] }; });
+        const reads = lightReads(requests);
+        await click("plugins.checks.open");
+        await settle(30);
+        expect({ status: detailStatus(), told: told()[0].told, reread: lightReads(requests) - reads }).toEqual({ status: "replaced", told: false, reread: 1 });
+      });
+      // Dispatcher (2026-11-26): the record is taken again at the reply, not only at the press. Pressed while proven; then
+      // replaced, the computer says its plugins changed, the record is read again and is no longer proven; a reply of the
+      // pressed install, late, is not shown.
+      it("\"Open plugin\"; before the detail answers, the record is read again and no longer proven; the late reply of the pressed install is not shown", async () => {
+        const world = fresh();
+        wire(world);
+        await provenWhileAway(world);
+        const hold = holds();
+        fixture.read.mockImplementation(async (_invoke: any, _host: any, ref: any) => { await hold.wait("detail"); return { ...row().item, ref, blocks: [] }; });
+        await click("plugins.checks.open");
+        world.reply = (snapshot: any) => ({ ...snapshot,
+          ghosts: snapshot.ghosts.map((ghost: any) => ghost.instanceKey === "_root__demo" ? { ...ghost, approval: { state: "approved", revision: B_REVISION } } : ghost),
+          market: { ...snapshot.market, items: snapshot.market.items.map(({ installedOperationId: _id, ...entry }: any) => ({ ...entry, installedOperationAttribution: "unattributed" })) } });
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+        try {
+          await act(async () => { fixture.resourceListeners.forEach((listener) => listener("mac", { collectionId: "plugins" })); });
+          await act(async () => { await vi.advanceTimersByTimeAsync(600); });
+        } finally { vi.useRealTimers(); }
+        await settle(30);
+        expect(told()).toEqual([{ readback: "unconfirmed", told: false }]);
+        hold.release("detail");                                           // the pressed install's reply, late
+        await settle(20);
+        expect({ status: detailStatus(), told: told() }).toEqual({ status: "replaced", told: [{ readback: "unconfirmed", told: false }] });
+      });
       it("control: proven and not replaced: \"Open plugin\" shows the detail and counts the record as seen", async () => {
         const world = fresh();
         wire(world);

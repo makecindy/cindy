@@ -2042,6 +2042,9 @@ describe('whether a finished operation opens an instance', () => {
     expect(pluginConclusionShownBy(proven, { deviceId: 'host-1', instanceKey: '_root__demo', approvalToken: target })).toBe(true);
     expect(pluginConclusionShownBy(proven, { deviceId: 'host-1', instanceKey: '_root__demo', approvalToken: pluginApprovalToken(approvedB) })).toBe(false);
     expect(pluginConclusionShownBy(proven, { deviceId: 'host-1', instanceKey: '_root__demo' })).toBe(false);
+    // A record that kept no token is never shown by any detail (dispatcher, 2026-11-26).
+    const { approvalToken: _none, ...withoutToken } = proven;
+    expect(pluginConclusionShownBy(withoutToken, { deviceId: 'host-1', instanceKey: '_root__demo', approvalToken: target })).toBe(false);
   });
   it.each(['uninstall', 'enable', 'task-settings'] as const)('%s never opens one', (entry) => {
     expect(pluginOperationOpens(finished(entry, '_root__demo'), { ghosts: [updated] })).toMatchObject({ open: false });
