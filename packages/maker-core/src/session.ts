@@ -2480,6 +2480,14 @@ export class Session {
   }
 
   /**
+   * 附加只读目录变更后是否需要回收并重建运行时；仅对真正把 `extraDirs` 冻结在
+   * 建连握手期的适配器返回 true，避免无谓重启靠 prompt 注入热更新的会话。
+   */
+  requiresRuntimeRecycleForExtraDirs(): boolean {
+    return this.handle.requiresRuntimeRecycleForExtraDirs?.() === true;
+  }
+
+  /**
    * 运行时覆盖附加可读写目录。不写 DB；持久化由 host 与 setExtraDirs 相同地协调。
    */
   async setWritableDirs(dirs: string[], remote?: { hostId: string; directories: string[] }): Promise<void> {

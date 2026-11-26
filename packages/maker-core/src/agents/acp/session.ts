@@ -922,6 +922,10 @@ export class AcpSession {
     this.extraDirs = normalized;
   }
 
+  requiresRuntimeRecycleForExtraDirs(): boolean {
+    return this.initializeResult.agentCapabilities.sessionCapabilities.additionalDirectories;
+  }
+
   async setVendorOptions(patch: Record<string, unknown>): Promise<void> {
     this.onVendorOptionsChange?.(patch);
     const roleBriefing = typeof patch.pluginEngineRoleBriefing === 'string'
