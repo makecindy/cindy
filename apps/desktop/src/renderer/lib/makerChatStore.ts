@@ -17324,7 +17324,7 @@ function retryLastError(sessionId: string, expected?: { expectedQueueHeadClientI
   // Keep only the clicked row (or its already pending persistence receipt).
   const clickedErrorRow = clickedState?.error
     ? clickedState.errorPersistId ?? currentPendingErrorRow(sessionId)
-      ?? persistedTailRowIdForLiveError(clickedState)
+      ?? getLiveErrorMessageClientId(clickedState)
     : null;
   const incarnation = sessionIncarnations.get(sessionId);
   const preRetryQueueHeadClientId =
