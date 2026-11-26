@@ -15843,6 +15843,10 @@
       "diffUnchangedLines_other": "변경 없는 줄 {{count}}개",
       "diffPreviewLoading": "diff 미리보기를 준비하는 중입니다…"
     },
+    "filePreview": {
+      "changed": "파일이 변경되었습니다",
+      "refreshHint": "클릭하여 새로고침"
+    },
     "textLightbox": {
       "unreadable": "이 파일을 읽을 수 없습니다",
       "openSystemFailed": "시스템에서 열 수 없습니다",

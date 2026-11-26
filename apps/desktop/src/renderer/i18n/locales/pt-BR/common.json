@@ -16016,6 +16016,10 @@
       "diffUnchangedLines_many": "{{count}} linhas sem alterações",
       "diffPreviewLoading": "Preparando prévia do diff…"
     },
+    "filePreview": {
+      "changed": "Arquivo alterado",
+      "refreshHint": "Clique para atualizar"
+    },
     "textLightbox": {
       "unreadable": "Não foi possível ler este arquivo",
       "openSystemFailed": "Não é possível abrir no sistema",

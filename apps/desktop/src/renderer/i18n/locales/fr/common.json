@@ -16016,6 +16016,10 @@
       "diffUnchangedLines_many": "{{count}} lignes inchangées",
       "diffPreviewLoading": "Préparation de l'aperçu du diff…"
     },
+    "filePreview": {
+      "changed": "Fichier modifié",
+      "refreshHint": "Cliquez pour actualiser"
+    },
     "textLightbox": {
       "unreadable": "Impossible de lire ce fichier",
       "openSystemFailed": "Impossible d'ouvrir dans le système",

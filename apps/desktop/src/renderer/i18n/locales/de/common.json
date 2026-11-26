@@ -15872,6 +15872,10 @@
       "diffUnchangedLines_other": "{{count}} unveränderte Zeilen",
       "diffPreviewLoading": "Diff-Vorschau wird vorbereitet…"
     },
+    "filePreview": {
+      "changed": "Datei geändert",
+      "refreshHint": "Zum Aktualisieren klicken"
+    },
     "textLightbox": {
       "unreadable": "Diese Datei kann nicht gelesen werden",
       "openSystemFailed": "Öffnen im System nicht möglich",

@@ -15909,6 +15909,10 @@
       "diffUnchangedLines_other": "{{count}} unchanged lines",
       "diffPreviewLoading": "Preparing diff preview…"
     },
+    "filePreview": {
+      "changed": "File changed",
+      "refreshHint": "Click to refresh"
+    },
     "textLightbox": {
       "unreadable": "Unable to read this file",
       "openSystemFailed": "Cannot open in system",

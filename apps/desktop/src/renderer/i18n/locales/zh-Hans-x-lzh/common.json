@@ -15834,6 +15834,10 @@
       "diffUnchangedLines_other": "{{count}} 行未易",
       "diffPreviewLoading": "方备差异先览…"
     },
+    "filePreview": {
+      "changed": "卷已易",
+      "refreshHint": "点之即重载"
+    },
     "textLightbox": {
       "unreadable": "此卷不能读",
       "openSystemFailed": "不能于系统中开之",
