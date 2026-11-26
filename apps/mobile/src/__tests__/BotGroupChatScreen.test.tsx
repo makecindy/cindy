@@ -8,6 +8,10 @@ import { shareSelectionStore } from '@/session/shareSelectionStore';
 import { i18n, SUPPORTED_LOCALES } from '@/i18n';
 import { resolveBotGroupMentions } from '@cindy/maker-shared/botGroupMentions';
 import { ProcessDisclosureViewport } from '@/session/useProcessDisclosureViewport';
+import { botGroupComposerDraftId, connectBotGroupDraftEpochs, type InvalidatedBotGroupDraftEpoch } from '@/session/botGroupComposerDraft';
+import { setMobileAuthOwner } from '@/auth/authOwnerGeneration';
+import { accountVaultKey, type AuthRegion } from '@cindy/auth-client';
+import { __testing as composerDraftTesting, clearComposerDraftsWithPrefix, flushComposerDraftWrites } from '@/session/composerDraftStore';
 
 const testThemeContext = createContext('light');
 
@@ -64,6 +68,7 @@ const h = vi.hoisted(() => ({
   keyboardAvoidingView: null as any,
   spacer: null as any, platform: { OS: 'ios' }, insets: { top: 59, bottom: 34, left: 0, right: 0 },
   headerBlur: [] as number[], headerFade: [] as (number | undefined)[], screenOptions: [] as any[],
+  userId: 'owner', accountGeneration: 1, storage: new Map<string, string>(), storageRead: Promise.resolve(),
 }));
 
 // Keep production message components; adapt native surfaces for jsdom.
@@ -193,8 +198,15 @@ vi.mock('@/theme', async () => {
 });
 vi.mock('@/device-link/DeviceLinkContext', () => ({ useDeviceLink: () => ({ invoke: h.processRead, subscribe: h.processSubscribe, unsubscribe: h.processUnsubscribe,
   openLink: h.openLink, onRemoteResourceChanged: h.resourceChanged, getPresenceAvailability: h.availability }) }));
+vi.mock('@react-native-async-storage/async-storage', () => ({ default: {
+  getItem: async (key: string) => { await h.storageRead; return h.storage.get(key) ?? null; },
+  setItem: async (key: string, value: string) => { h.storage.set(key, value); },
+  removeItem: async (key: string) => { h.storage.delete(key); },
+  getAllKeys: async () => [...h.storage.keys()],
+  multiRemove: async (keys: readonly string[]) => { for (const key of keys) h.storage.delete(key); },
+} }));
 vi.mock('@/auth/AuthContext', () => ({ useAuth: () => ({
-  user: { id: 'owner' }, accountGeneration: 1, getAccessToken: async () => 'token', apiFetch: async () => ({}),
+  user: { id: h.userId }, accountGeneration: h.accountGeneration, getAccessToken: async () => 'token', apiFetch: async () => ({}),
 }) }));
 vi.mock('@/utils/backGuard', () => ({ goBackGuarded: h.leave }));
 vi.mock('@/utils/useTaskListBack', () => ({ useTaskListBack: () => h.leave }));
@@ -479,7 +491,7 @@ async function render(data: BotGroupRemoteChatData | null = group(), kind: 'read
     el(BotGroupChatScreen, { deviceId, deviceName: deviceId ? 'Mac' : '', groupId: routeGroupId, threadRootId }))));
 }
 
-beforeEach(() => {
+beforeEach(async () => {
   h.translate = null; h.themeMode = 'light';
   h.scrolls = {}; h.placeCell.clear(); h.rowWindow = null; h.speakerDisclosure = false;
   h.nativeMenus = true;
@@ -501,10 +513,39 @@ beforeEach(() => {
     removePendingUpload: vi.fn(), release: vi.fn(), wait: vi.fn(async () => ({ failedCount: 0 })),
   };
   h.confirm.mockResolvedValue(true);
+  h.userId = 'owner'; h.accountGeneration = 1; h.storageRead = Promise.resolve();
+  setMobileAuthOwner('owner', 'global');
+  // Stands in for the account record AuthContext connects: a fresh generation per account on first use.
+  draftEpochs.values.clear();
+  draftEpochs.pending = null;
+  connectBotGroupDraftEpochs({
+    ensure: async (accountKey) => {
+      await draftEpochs.pending;
+      if (!draftEpochs.values.has(accountKey)) draftEpochs.values.set(accountKey, `epoch-${++draftEpochs.created}`);
+      return draftEpochs.values.get(accountKey)!;
+    },
+    read: async () => Object.fromEntries(draftEpochs.values),
+    subscribe: (listener) => { draftEpochs.listener = listener; return () => { draftEpochs.listener = null; }; },
+  });
+  await clearComposerDraftsWithPrefix('bot-group:');
+  h.storage.clear();
   node = document.createElement('div');
   root = createRoot(node);
 });
 afterEach(async () => { await act(async () => root.unmount()); vi.useRealTimers(); });
+
+const draftEpochs = {
+  values: new Map<string, string>(),
+  created: 0,
+  pending: null as Promise<void> | null,
+  listener: null as null | ((invalidated: readonly InvalidatedBotGroupDraftEpoch[]) => void),
+};
+/** The account record voided this account's generation (its session ended) and the write committed. */
+async function endDraftSession(accountKey: string) {
+  const epoch = draftEpochs.values.get(accountKey);
+  draftEpochs.values.delete(accountKey);
+  if (epoch) await act(async () => { draftEpochs.listener?.([{ accountKey, epoch }]); await new Promise((resolve) => setTimeout(resolve, 0)); });
+}
 
 describe('group timeline', () => {
   // Unit / A04：从生产群页面打开图表，关闭或离开群后不应保留查看器；仅替换原生弹层边界。
@@ -1585,6 +1626,279 @@ describe('group composer', () => {
       h.row.onSelectionChange({ nativeEvent: { selection: { start: text.length, end: text.length } } });
     });
   }
+
+  async function signIn(id: string, realm: AuthRegion = 'global') {
+    h.userId = id;
+    h.accountGeneration += 1;
+    await act(async () => setMobileAuthOwner(id, realm));
+  }
+
+  // Unit regression: the group composer kept its text only in component state, so leaving the group lost
+  // it. Drive the real screen: leave and return, another group, a topic, another account, a failed send.
+  it('keeps the text draft per account, group and topic until it is sent', async () => {
+    // A direct Chat Server group, so its topic has a composer of its own.
+    h.chat.server = true;
+    const data = group({ openPlan: null });
+    const open = (options: { groupId?: string; topic?: string } = {}) =>
+      render(data, 'ready', options.topic, '', options.groupId ?? 'g1');
+    const leaveAndReturn = async () => {
+      await open({ groupId: 'g2' });
+      expect(h.row.value).toBe('');
+      await open();
+    };
+    await open();
+    await type('还没写完');
+    await leaveAndReturn();
+    expect(h.row.value).toBe('还没写完');
+    await open({ topic: 'm1' });
+    await act(async () => h.row.onFocus());
+    expect(byId('botGroup.thread.alsoSend')).not.toBeNull();
+    expect(h.row.value).toBe('');
+    await signIn('someone-else');
+    await open();
+    expect(h.row.value).toBe('');
+    // Same member id in another auth realm is another account.
+    await signIn('owner', 'cn');
+    await open();
+    expect(h.row.value).toBe('');
+    await signIn('owner');
+    await open();
+    expect(h.row.value).toBe('还没写完');
+    h.chat.act.mockRejectedValueOnce(new Error('[NOT_CONNECTED] offline'));
+    await click('botGroup.composer.send');
+    await leaveAndReturn();
+    expect(h.row.value).toBe('还没写完');
+    await click('botGroup.composer.send');
+    expect(h.chat.act).toHaveBeenLastCalledWith('send', expect.objectContaining({ text: '还没写完' }));
+    await leaveAndReturn();
+    expect(h.row.value).toBe('');
+  });
+
+  // Unit regression: a send that fails after the chat was left and reopened puts its text back
+  // only when nothing newer was typed there; it must not overwrite the newer draft.
+  it('keeps text typed after reopening when an earlier send fails later', async () => {
+    h.chat.server = true;
+    const data = group({ openPlan: null });
+    let fail!: (error: Error) => void;
+    await render(data, 'ready', undefined, '');
+    await type('第一句');
+    h.chat.act.mockImplementationOnce(() => new Promise((_resolve, reject) => { fail = reject; }));
+    await click('botGroup.composer.send');
+    await render(data, 'ready', undefined, '', 'g2');
+    await render(data, 'ready', undefined, '');
+    expect(h.row.value).toBe('');
+    await type('第二句');
+    await act(async () => { fail(new Error('[NOT_CONNECTED] offline')); });
+    await render(data, 'ready', undefined, '', 'g2');
+    await render(data, 'ready', undefined, '');
+    expect(h.row.value).toBe('第二句');
+  });
+
+  // Unit regression (review of #13286): send A, leave, reopen and send B. A failing late wrote A back over
+  // B, in any order of the two outcomes, so reopening showed A. Only the latest send owns the draft.
+  it.each([
+    ['A fails, then B fails', 'open', '第二次'],
+    ['A fails, then B fails', 'left', '第二次'],
+    ['B fails, then A fails', 'open', '第二次'],
+    ['B fails, then A fails', 'left', '第二次'],
+    ['B is sent, then A fails', 'open', ''],
+    ['B is sent, then A fails', 'left', ''],
+  ] as const)('keeps only the later send\'s text when %s (chat %s)', async (order, state, expected) => {
+    h.chat.server = true;
+    const data = group({ openPlan: null });
+    const outcomes: Array<{ resolve: (value: unknown) => void; reject: (error: Error) => void }> = [];
+    h.chat.act.mockImplementation(() => new Promise((resolve, reject) => { outcomes.push({ resolve, reject }); }));
+    const leaveAndReturn = async () => {
+      await render(data, 'ready', undefined, '', 'g2');
+      await render(data, 'ready', undefined, '');
+    };
+    const offline = () => new Error('[NOT_CONNECTED] offline');
+    await render(data, 'ready', undefined, '');
+    await type('第一次');
+    await click('botGroup.composer.send');
+    await leaveAndReturn();
+    await type('第二次');
+    await click('botGroup.composer.send');
+    if (state === 'left') await render(data, 'ready', undefined, '', 'g2');
+    const [a, b] = outcomes;
+    if (order === 'A fails, then B fails') {
+      await act(async () => a!.reject(offline()));
+      await act(async () => b!.reject(offline()));
+    } else if (order === 'B fails, then A fails') {
+      await act(async () => b!.reject(offline()));
+      await act(async () => a!.reject(offline()));
+    } else {
+      await act(async () => b!.resolve({ effects: [] }));
+      await act(async () => a!.reject(offline()));
+    }
+    if (state === 'open') expect(h.row.value).toBe(expected);
+    await leaveAndReturn();
+    expect(h.row.value).toBe(expected);
+  });
+
+  // Unit regression (self-review of #13286): ending another account's session must not cancel this
+  // account's put-back. A sends, switches to B, B's session ends, A's send fails; back on A the text is there.
+  it('puts a late failed send back after another account\'s session ended', async () => {
+    h.chat.server = true;
+    const data = group({ openPlan: null });
+    let fail!: (error: Error) => void;
+    h.chat.act.mockImplementationOnce(() => new Promise((_resolve, reject) => { fail = reject; }));
+    await render(data, 'ready', undefined, '');
+    await type('发出去的');
+    await click('botGroup.composer.send');
+    await signIn('b');
+    await render(data, 'ready', undefined, '');
+    await endDraftSession(accountVaultKey('global', 'b'));
+    await act(async () => { fail(new Error('[NOT_CONNECTED] offline')); });
+    await signIn('owner');
+    await render(data, 'ready', undefined, '');
+    expect(h.row.value).toBe('发出去的');
+  });
+
+  // Unit regression (review of #13286): staying on the page, typing and then clearing the input while a
+  // send waits must win over that send failing afterwards, in the input and in the stored draft.
+  it('does not put a failed send back over an input cleared on the same page', async () => {
+    h.chat.server = true;
+    const data = group({ openPlan: null });
+    let fail!: (error: Error) => void;
+    h.chat.act.mockImplementationOnce(() => new Promise((_resolve, reject) => { fail = reject; }));
+    await render(data, 'ready', undefined, '');
+    await type('发出去的');
+    await click('botGroup.composer.send');
+    await type('又写了点');
+    await act(async () => h.row.onChangeText(''));
+    await act(async () => { fail(new Error('[NOT_CONNECTED] offline')); });
+    expect(h.row.value).toBe('');
+    await render(data, 'ready', undefined, '', 'g2');
+    await render(data, 'ready', undefined, '');
+    expect(h.row.value).toBe('');
+  });
+
+  // Unit regression (review of #13286): clearing the reopened input on purpose must win over an
+  // earlier send that fails afterwards.
+  it('does not put a late failed send back over an input cleared after reopening', async () => {
+    h.chat.server = true;
+    const data = group({ openPlan: null });
+    let fail!: (error: Error) => void;
+    h.chat.act.mockImplementationOnce(() => new Promise((_resolve, reject) => { fail = reject; }));
+    await render(data, 'ready', undefined, '');
+    await type('发出去的');
+    await click('botGroup.composer.send');
+    await render(data, 'ready', undefined, '', 'g2');
+    await render(data, 'ready', undefined, '');
+    await type('又写了点');
+    await act(async () => h.row.onChangeText(''));
+    await act(async () => { fail(new Error('[NOT_CONNECTED] offline')); });
+    await render(data, 'ready', undefined, '', 'g2');
+    await render(data, 'ready', undefined, '');
+    expect(h.row.value).toBe('');
+  });
+
+  // Unit regression: an account whose session ended (expired, unavailable, deleted) has its group drafts
+  // cleared; a send still in flight that fails afterwards must not write that account's text back to disk.
+  it('does not bring a draft back when its send fails after the account\'s session ended', async () => {
+    h.chat.server = true;
+    const data = group({ openPlan: null });
+    let fail!: (error: Error) => void;
+    await render(data, 'ready', undefined, '');
+    await type('退出前的草稿');
+    h.chat.act.mockImplementationOnce(() => new Promise((_resolve, reject) => { fail = reject; }));
+    await click('botGroup.composer.send');
+    await act(async () => { root.render(null); });
+    await endDraftSession(accountVaultKey('global', 'owner'));
+    await act(async () => { fail(new Error('[NOT_CONNECTED] offline')); });
+    await render(data, 'ready', undefined, '');
+    expect(h.row.value).toBe('');
+    await act(async () => { await flushComposerDraftWrites(); });
+    expect([...h.storage.keys()].filter(key => key.includes('bot-group'))).toEqual([]);
+  });
+
+  // Unit regression (self-review of #13286): the per-account clear generation is what stops a send from before
+  // the account's session ended once the same account signs in again and its draft version moves on afresh.
+  it('does not put back a send from before the session ended after the same account signs in again', async () => {
+    h.chat.server = true;
+    const data = group({ openPlan: null });
+    let fail!: (error: Error) => void;
+    h.chat.act.mockImplementationOnce(() => new Promise((_resolve, reject) => { fail = reject; }));
+    await render(data, 'ready', undefined, '');
+    await type('到');
+    await click('botGroup.composer.send');
+    await act(async () => { root.render(null); });
+    await endDraftSession(accountVaultKey('global', 'owner'));
+    await signIn('owner');
+    await render(data, 'ready', undefined, '');
+    await type('又');
+    await act(async () => h.row.onChangeText(''));
+    await act(async () => { fail(new Error('[NOT_CONNECTED] offline')); });
+    await render(data, 'ready', undefined, '', 'g2');
+    await render(data, 'ready', undefined, '');
+    expect(h.row.value).toBe('');
+  });
+
+  // Unit regression: after an app restart only the stored copy is left; it must fill the input,
+  // and typing before the read finishes must win.
+  it('restores a stored draft after an app restart unless the user already typed', async () => {
+    draftEpochs.values.set(accountVaultKey('global', 'owner'), 'before-restart');
+    const stored = (groupId: string) => h.storage.set(composerDraftTesting.storageKeyForSession(
+      botGroupComposerDraftId({ accountKey: accountVaultKey('global', 'owner'), epoch: 'before-restart', deviceId: 'mac', groupId })!), '重启前的草稿');
+    stored('g7');
+    await render(group({ openPlan: null }), 'ready', undefined, 'mac', 'g7');
+    await act(async () => {});
+    expect(h.row.value).toBe('重启前的草稿');
+    stored('g8');
+    let release!: () => void;
+    h.storageRead = new Promise(resolve => { release = resolve; });
+    await render(group({ openPlan: null }), 'ready', undefined, 'mac', 'g8');
+    expect(h.row.value).toBe('');
+    await act(async () => { h.row.onChangeText('新打的字'); });
+    await act(async () => { release(); });
+    expect(h.row.value).toBe('新打的字');
+  });
+
+  // Unit regression (review of #13286): the draft id waits for the account's generation from the account record;
+  // text typed before it arrives must be saved once it does, not lost, and a voided generation's draft never shows.
+  it('saves text typed before the draft generation arrives, and never shows a voided generation\'s draft', async () => {
+    let release!: () => void;
+    draftEpochs.pending = new Promise(resolve => { release = resolve; });
+    await render(group({ openPlan: null }), 'ready', undefined, 'mac', 'g9');
+    await act(async () => { h.row.onChangeText('先打的字'); });
+    await act(async () => { release(); });
+    await act(async () => { await flushComposerDraftWrites(); });
+    const epoch = draftEpochs.values.get(accountVaultKey('global', 'owner'))!;
+    const id = botGroupComposerDraftId({ accountKey: accountVaultKey('global', 'owner'), epoch, deviceId: 'mac', groupId: 'g9' })!;
+    expect(h.storage.get(composerDraftTesting.storageKeyForSession(id))).toBe('先打的字');
+    await render(group({ openPlan: null }), 'ready', undefined, 'mac', 'g2');
+    await render(group({ openPlan: null }), 'ready', undefined, 'mac', 'g9');
+    expect(h.row.value).toBe('先打的字');
+    await act(async () => { root.render(null); });
+    await endDraftSession(accountVaultKey('global', 'owner'));
+    await render(group({ openPlan: null }), 'ready', undefined, 'mac', 'g9');
+    await act(async () => {});
+    expect(h.row.value).toBe('');
+    expect(h.storage.has(composerDraftTesting.storageKeyForSession(id))).toBe(false);
+  });
+
+  // Second review of the generation change: the screen stays mounted while the same account signs out and back
+  // in with its generation voided in between; it must wait for the new generation, never reuse the voided one.
+  it('waits for a new draft generation after signing out and back in on a mounted screen', async () => {
+    const owner = accountVaultKey('global', 'owner');
+    await render(group({ openPlan: null }), 'ready', undefined, 'mac', 'g9');
+    const voided = draftEpochs.values.get(owner)!;
+    await act(async () => { setMobileAuthOwner(null); });
+    await endDraftSession(owner);
+    let release!: () => void;
+    draftEpochs.pending = new Promise(resolve => { release = resolve; });
+    await act(async () => { setMobileAuthOwner('owner', 'global'); });
+    await act(async () => { h.row.onChangeText('重新登录后打的字'); });
+    await act(async () => { release(); });
+    await act(async () => { await flushComposerDraftWrites(); });
+    const current = draftEpochs.values.get(owner)!;
+    expect(current).not.toBe(voided);
+    const stored = (epoch: string) => h.storage.get(composerDraftTesting.storageKeyForSession(
+      botGroupComposerDraftId({ accountKey: owner, epoch, deviceId: 'mac', groupId: 'g9' })!));
+    expect(stored(current)).toBe('重新登录后打的字');
+    expect(stored(voided)).toBeUndefined();
+  });
 
   // Both Chat Server entry paths must carry the selected original through the real composer.
   it.each([true, false])('sends a quote and retains it after failure (direct server %s)', async server => {

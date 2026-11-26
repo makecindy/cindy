@@ -102,6 +102,10 @@ import {
   mutateMobileAccountVault,
   patchMobileAccountMetadata,
   readMobileAccountVault,
+  ensureMobileGroupDraftEpoch,
+  invalidateMobileGroupDraftEpochs,
+  onMobileGroupDraftEpochsInvalidated,
+  readMobileGroupDraftEpochs,
   reconcileMobileActiveAuthSession,
   rememberMobilePassportSession,
   rememberMobileResourceSession,
@@ -130,6 +134,7 @@ import { isSelfHostedRelayBaseUrl, getSelfHostedRelayRouteGeneration } from '@/d
 import { clearCachedHomeListSnapshot } from '@/session/mobileHomeListCache';
 import { clearAllMobileOfflineInboxIntents } from '@/session/offlineInboxIntents';
 import { clearHomeSessionPrCache } from '@/session/homeSessionPrStore';
+import { connectBotGroupDraftEpochs } from '@/session/botGroupComposerDraft';
 import { getMobileAuthOwner, isMobileAuthOwnerCurrent, invalidateMobileAuthOwnerForSwitch, setMobileAuthOwner } from '@/auth/authOwnerGeneration';
 import { updateCredentialAccessToken } from '@/remote-desktop/credentialIdentity';
 import { clearMobileChatHistoryStore } from '@/chat/chatHistoryStore';
@@ -155,6 +160,8 @@ import {
 import { probeBetaChannel } from '@/update/fetchLatestRelease';
 
 WebBrowser.maybeCompleteAuthSession();
+// Group chat drafts take their generation from the account record (mobileAccountVault groupDraftEpochs).
+connectBotGroupDraftEpochs({ ensure: ensureMobileGroupDraftEpoch, read: readMobileGroupDraftEpochs, subscribe: onMobileGroupDraftEpochsInvalidated });
 
 const AUTH_SESSION_KEY = 'cindy.mobile.auth.session.v1';
 const LEGACY_RESOURCE_REFRESH_TOKEN_KEY = 'cindy.mobile.auth.refreshToken';
@@ -1196,6 +1203,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
                 setAccountDeletionRestored(deletionWasRestored);
               });
             },
+            { sessionRecordPresent: previousPersistedSessionRaw !== null },
           );
           return true;
         } catch (error) {
@@ -1433,6 +1441,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
                   accountKey: rejectedAccountKey,
                   expectedRefreshToken:
                     activeResourceAtStart!.resource!.refreshToken,
+                  endsSession: true,
                   validateBeforeWrite: () => {
                     if (authGenerationRef.current !== generation) {
                       throw authCodeError('AUTH_FLOW_SUPERSEDED');
@@ -2881,6 +2890,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
                     setAccountGeneration((value) => value + 1);
                   });
                 },
+                { sessionRecordPresent: previousSessionRaw !== null },
               );
             } catch (error) {
               await restorePersistedAuthSessionRaw(previousSessionRaw);
@@ -3091,6 +3101,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           setIsBusy(false);
         }
       };
+      // Ends only this account: void its group drafts without holding up the credential clear. If that write
+      // fails, the next session installed for the account voids them (orphan-session rule, mobileAccountVault).
+      const endedAccountKey = getMobileAuthOwner().accountKey || (userRef.current
+        ? accountVaultKey(activeAuthRealmRef.current, userRef.current.id)
+        : '');
+      void invalidateMobileGroupDraftEpochs([endedAccountKey]).catch(() => {
+        console.warn('[auth] group draft invalidation pending');
+      });
       run = clearLocalSession();
       terminalLogoutInFlightRef.current = run;
       setIsBusy(true);

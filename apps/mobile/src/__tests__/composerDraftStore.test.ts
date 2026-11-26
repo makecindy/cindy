@@ -23,6 +23,18 @@ vi.mock('@react-native-async-storage/async-storage', () => ({
   },
 }));
 
+const vault = vi.hoisted(() => ({
+  epochs: null as Record<string, string> | null,
+  listener: null as null | ((invalidated: readonly { accountKey: string; epoch: string }[]) => void),
+}));
+vi.mock('expo-crypto', () => ({ randomUUID: () => 'uuid' }));
+/** Stands in for the account record that AuthContext connects in the app. */
+const fakeEpochSource = () => ({
+  ensure: async () => null,
+  read: async () => vault.epochs,
+  subscribe: (listener: NonNullable<typeof vault.listener>) => { vault.listener = listener; return () => { vault.listener = null; }; },
+});
+
 describe('composerDraftStore', () => {
   it.each(['both', 'text-only', 'new-draft'] as const)('reconciles a committed send after a crash with %s remaining', async (state) => {
     const { __testing, reconcileCommittedComposerDraft, readComposerDraft, readComposerDocumentDraft } = await import('@/session/composerDraftStore');
@@ -282,6 +294,118 @@ describe('composerDraftStore', () => {
 
     expect(flushed).toBe(true);
     expect(store.get(key)).toBeUndefined();
+  });
+
+  // Unit regression: signing out clears group chat drafts. Pending and stored group drafts must go,
+  // including one only on disk from an earlier launch, while task drafts stay untouched.
+  it('clears only drafts under a prefix, in memory, pending and on disk', async () => {
+    vi.useFakeTimers();
+    const { __testing, clearComposerDraftsWithPrefix, flushComposerDraftWrites, readComposerDraft, readComposerDraftSync, saveComposerDraft } = await import('@/session/composerDraftStore');
+    saveComposerDraft('s1', 'task draft');
+    saveComposerDraft('bot-group:a:mac:g1:', 'stored group draft');
+    await flushComposerDraftWrites();
+    saveComposerDraft('bot-group:a:mac:g2:', 'pending group draft');
+    store.set(__testing.storageKeyForSession('bot-group:a:mac:g3:'), 'earlier launch');
+
+    await clearComposerDraftsWithPrefix('bot-group:');
+    await vi.advanceTimersByTimeAsync(__testing.persistDebounceMs);
+
+    expect([...store.keys()]).toEqual([__testing.storageKeyForSession('s1')]);
+    expect(readComposerDraftSync('bot-group:a:mac:g1:')).toBeNull();
+    expect(await readComposerDraft('bot-group:a:mac:g3:')).toBeNull();
+    expect(readComposerDraftSync('s1')).toBe('task draft');
+  });
+
+  // Unit regression (review of #13286): a disk read already waiting when the prefix clear ran used to
+  // put the cleared draft back into memory, so signing in again in the same run showed it.
+  it('does not let a read that started before a prefix clear bring the draft back', async () => {
+    const asyncStorage = (await import('@react-native-async-storage/async-storage')).default;
+    const { __testing, clearComposerDraftsWithPrefix, readComposerDraft, readComposerDraftSync } = await import('@/session/composerDraftStore');
+    const id = 'bot-group:a:mac:g1:';
+    store.set(__testing.storageKeyForSession(id), 'before sign-out');
+    let release!: () => void;
+    vi.mocked(asyncStorage.getItem).mockImplementationOnce((key: string) => new Promise((resolve) => {
+      release = () => resolve(store.get(key) ?? null);
+    }));
+    const reading = readComposerDraft(id);
+    await flushMicrotasks();
+    const value = store.get(__testing.storageKeyForSession(id));
+    await clearComposerDraftsWithPrefix('bot-group:');
+    store.set(__testing.storageKeyForSession(id), value!);
+    release();
+    expect(await reading).toBeNull();
+    expect(readComposerDraftSync(id)).toBeNull();
+  });
+
+  // Unit regression (review of #13286): a read of a disk-only draft that starts while the prefix clear is
+  // still listing keys must not keep the old text in memory after the clear removes it.
+  it('does not let a read that starts during a prefix clear keep the draft', async () => {
+    const asyncStorage = (await import('@react-native-async-storage/async-storage')).default;
+    const { __testing, clearComposerDraftsWithPrefix, readComposerDraft, readComposerDraftSync } = await import('@/session/composerDraftStore');
+    const id = 'bot-group:a:mac:g1:';
+    store.set(__testing.storageKeyForSession(id), 'on disk only');
+    let releaseKeys!: () => void;
+    vi.mocked(asyncStorage.getAllKeys).mockImplementationOnce(() => new Promise((resolve) => {
+      releaseKeys = () => resolve([...store.keys()]);
+    }));
+    const clearing = clearComposerDraftsWithPrefix('bot-group:');
+    await flushMicrotasks();
+    const reading = readComposerDraft(id);
+    releaseKeys();
+    await clearing;
+    expect(await reading).toBeNull();
+    expect(readComposerDraftSync(id)).toBeNull();
+    expect(store.has(__testing.storageKeyForSession(id))).toBe(false);
+  });
+
+  // Unit regression (review of #13286): voiding one account's draft generation drops only that generation's drafts,
+  // after the account record committed; the same account's newer generation and another realm keep theirs.
+  it('drops exactly the voided generation of one account, across realms and generations', async () => {
+    const { accountVaultKey } = await import('@cindy/auth-client');
+    const { botGroupComposerDraftId, connectBotGroupDraftEpochs } = await import('@/session/botGroupComposerDraft');
+    connectBotGroupDraftEpochs(fakeEpochSource());
+    const { __testing, flushComposerDraftWrites, readComposerDraft, readComposerDraftSync, saveComposerDraft } = await import('@/session/composerDraftStore');
+    const cnKey = accountVaultKey('cn', 'same');
+    const id = (accountKey: string, epoch: string) => botGroupComposerDraftId({ accountKey, epoch, deviceId: 'mac', groupId: 'g1' })!;
+    const voided = id(cnKey, 'old');
+    const newer = id(cnKey, 'new');
+    const global = id(accountVaultKey('global', 'same'), 'old');
+    expect(new Set([voided, newer, global]).size).toBe(3);
+    expect(botGroupComposerDraftId({ accountKey: cnKey, epoch: null, deviceId: 'mac', groupId: 'g1' })).toBeNull();
+    saveComposerDraft(voided, 'voided draft');
+    saveComposerDraft(newer, 'newer draft');
+    saveComposerDraft(global, 'global draft');
+    await flushComposerDraftWrites();
+    vault.listener!([{ accountKey: cnKey, epoch: 'old' }]);
+    await vi.waitFor(() => expect(store.has(__testing.storageKeyForSession(voided))).toBe(false));
+    expect(readComposerDraftSync(voided)).toBeNull();
+    expect(await readComposerDraft(voided)).toBeNull();
+    expect(store.get(__testing.storageKeyForSession(newer))).toBe('newer draft');
+    expect(store.get(__testing.storageKeyForSession(global))).toBe('global draft');
+  });
+
+  it('sweeps stored group drafts whose generation is no longer current, and skips when the record is unreadable', async () => {
+    const { accountVaultKey } = await import('@cindy/auth-client');
+    const { botGroupComposerDraftId, connectBotGroupDraftEpochs, sweepStaleBotGroupDrafts, __testing: draftTesting } = await import('@/session/botGroupComposerDraft');
+    connectBotGroupDraftEpochs(fakeEpochSource());
+    const { __testing } = await import('@/session/composerDraftStore');
+    const key = accountVaultKey('cn', 'sweep');
+    const current = botGroupComposerDraftId({ accountKey: key, epoch: 'current', deviceId: 'mac', groupId: 'g1' })!;
+    const stale = botGroupComposerDraftId({ accountKey: key, epoch: 'voided', deviceId: 'mac', groupId: 'g1' })!;
+    // Written before generations existed: account, computer, group, topic.
+    const legacy = `bot-group:${[key, 'mac', 'g1', ''].map(encodeURIComponent).join(':')}`;
+    const task = 'session-1';
+    for (const draftId of [current, stale, legacy, task]) store.set(__testing.storageKeyForSession(draftId), draftId);
+    vault.epochs = null;
+    draftTesting.resetStaleSweep();
+    await sweepStaleBotGroupDrafts();
+    expect(store.size).toBe(4);
+    vault.epochs = { [key]: 'current' };
+    await sweepStaleBotGroupDrafts();
+    await vi.waitFor(() => expect(store.has(__testing.storageKeyForSession(stale))).toBe(false));
+    expect(store.has(__testing.storageKeyForSession(legacy))).toBe(false);
+    expect(store.get(__testing.storageKeyForSession(current))).toBe(current);
+    expect(store.get(__testing.storageKeyForSession(task))).toBe(task);
   });
 
   it('orders a new persistent write after an in-flight clear', async () => {

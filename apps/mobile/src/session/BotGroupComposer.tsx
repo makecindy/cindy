@@ -19,7 +19,7 @@ import type { TextInputInstance } from 'react-native';
  * 文字、点名目标和附件未变时重试沿用同一个 clientId。支持附件时，「+」打开附件面板。
  */
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, Keyboard, Platform, Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import { Alert, AppState, Keyboard, Platform, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { randomUUID } from 'expo-crypto';
 import { Camera, Circle, CircleCheck, Folder, Image as ImageIcon, Plus, Square, Users } from 'lucide-react-native';
 import { useTranslation } from 'react-i18next';
@@ -58,6 +58,8 @@ import { nextBotGroupSendAttempt, type BotGroupSendAttempt } from './botGroupRem
 import { canBrowsePhotoLibraryDirectly } from './photoLibraryPolicy';
 import type { RemoteSerializedAttachment } from './types';
 import { useBotGroupComposerAttachments } from './useBotGroupComposerAttachments';
+import { flushComposerDraftWrites, readComposerDraft, readComposerDraftSync, saveComposerDraft } from './composerDraftStore';
+import { botGroupComposerDraftGeneration, botGroupComposerDraftVersion, markBotGroupComposerDraftChanged } from './botGroupComposerDraft';
 import type { UseMobileLocalAttachmentsOptions } from './useMobileLocalAttachments';
 
 const CONTROL_SIZE = 34;
@@ -80,8 +82,10 @@ type MentionOption =
   | { kind: 'member'; label: string; member: BotGroupMemberView };
 
 export function BotGroupComposer({
-  pullThrough, members, conversationKind, identityFor, deviceId, online, allowMentionAllBots = false, running, canStop = true, stopPending = false, planState, attachmentsSupported, uploadAttachment, quoteMessageId, focusRequest, onSend, onStop, topic = false, placeholder: placeholderOverride, maskIndicator, onParticipate,
+  pullThrough, members, conversationKind, identityFor, deviceId, online, allowMentionAllBots = false, running, canStop = true, stopPending = false, planState, attachmentsSupported, uploadAttachment, quoteMessageId, focusRequest, onSend, onStop, topic = false, placeholder: placeholderOverride, maskIndicator, onParticipate, draftId = null,
 }: {
+  /** Where this group or topic keeps its text draft on this device; null keeps it only while mounted. */
+  draftId?: string | null;
   pullThrough?: ComposerPullThroughBridge;
   maskIndicator?: import('react').ReactNode;
   onParticipate?(): void;
@@ -111,7 +115,7 @@ export function BotGroupComposer({
   const { t } = useTranslation();
   const { colors } = useTheme();
   const styles = useThemedStyles(makeStyles);
-  const [text, setText] = useState('');
+  const [text, setText] = useState(() => (draftId ? readComposerDraftSync(draftId) : null) ?? '');
   const [caret, setCaret] = useState(0);
   const [forcedSelection, setForcedSelection] = useState<{ start: number; end: number } | undefined>(undefined);
   const [focused, setFocused] = useState(false);
@@ -131,6 +135,46 @@ export function BotGroupComposer({
     input.focus();
   }, [focusRequest]);
   const textRef = useRef(text); textRef.current = text;
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; };
+  }, []);
+  // The draft mirrors the input: sending clears it, a failed send puts it back.
+  const persistDraft = (value: string) => {
+    if (!draftId) return;
+    saveComposerDraft(draftId, value);
+    markBotGroupComposerDraftChanged(draftId);
+  };
+  // A send's text goes back only while that send still owns the draft: its account was not cleared, and
+  // nothing was typed, cleared, put back or sent for this draft since, here or after reopening the chat.
+  // The input and the stored draft then come back together.
+  const draftOwnerOf = () => ({
+    generation: draftId ? botGroupComposerDraftGeneration(draftId) : 0,
+    version: draftId ? botGroupComposerDraftVersion(draftId) : 0,
+  });
+  const ownsDraft = (owner: ReturnType<typeof draftOwnerOf>) => !draftId
+    || (owner.generation === botGroupComposerDraftGeneration(draftId) && owner.version === botGroupComposerDraftVersion(draftId));
+  const draftEditedRef = useRef(false);
+  useEffect(() => {
+    if (!draftId) return;
+    let live = true;
+    // After an app restart only the disk copy is left; typing first wins over it. Text typed while the draft id
+    // was still loading (its account's generation) is saved now instead.
+    if (draftEditedRef.current && textRef.current) persistDraft(textRef.current);
+    else if (!textRef.current) void readComposerDraft(draftId).then((stored) => {
+      if (live && stored && !draftEditedRef.current && !textRef.current) setText(stored);
+    });
+    // Leaving the app may end it before the debounced write lands.
+    const appState = AppState.addEventListener('change', (next) => {
+      if (next !== 'active') void flushComposerDraftWrites(draftId);
+    });
+    return () => {
+      live = false;
+      appState.remove();
+      void flushComposerDraftWrites(draftId);
+    };
+  }, [draftId]);
   const selectionRef = useRef({ start: 0, end: 0 });
   const sendingRef = useRef(false);
   const stoppingRef = useRef(false);
@@ -222,7 +266,9 @@ export function BotGroupComposer({
   const choose = (option: MentionOption) => {
     if (!query) return;
     const next = insertBotGroupMention(text, { start: query.start, end: caret }, option.label);
+    draftEditedRef.current = true;
     setText(next.text);
+    persistDraft(next.text);
     selectionRef.current = { start: next.caret, end: next.caret };
     setCaret(next.caret);
     setForcedSelection({ start: next.caret, end: next.caret });
@@ -254,10 +300,14 @@ export function BotGroupComposer({
     setSending(true);
     // Clear at once like any chat; a failed send puts the draft back if nothing new was typed.
     setText('');
+    persistDraft('');
+    const draftOwner = draftOwnerOf();
     setCaret(0);
     setTracked([]);
     const restoreDraft = () => {
-      if (textRef.current) return;
+      if (!ownsDraft(draftOwner)) return;
+      persistDraft(draft);
+      if (!mountedRef.current || textRef.current) return;
       setText(draft);
       setTracked(draftTracked);
       // The tag comes back only with its own draft, never onto newly typed text.
@@ -271,7 +321,11 @@ export function BotGroupComposer({
       const { failedCount, abandoned } = await tray.waitForPendingUploads();
       const discarded = abandoned || await waitForLeaveDecision();
       setWaitingUploads(false);
-      if (discarded) return;
+      // Nothing is sent once the chat is left; the words wait as this chat's draft.
+      if (discarded) {
+        if (ownsDraft(draftOwner)) persistDraft(draft);
+        return;
+      }
       const attachments = attachmentsSupported ? [...tray.attachmentsRef.current] : [];
       if (failedCount > 0 || (!draftText && attachments.length === 0)) {
         restoreDraft();
@@ -403,7 +457,9 @@ export function BotGroupComposer({
       onChangeText={(value) => {
         onParticipate?.();
         const { start: editStart, end: editEnd } = selectionRef.current;
+        draftEditedRef.current = true;
         setText(value);
+        persistDraft(value);
         setTracked(current => retainBotGroupTrackedMentions(text, value, {
           members: mentionMembers,
           allLabels: [allLabel], allBotLabels,
