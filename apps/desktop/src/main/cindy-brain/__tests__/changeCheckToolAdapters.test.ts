@@ -72,6 +72,23 @@ describe('existing Google plugin read adapters', () => {
     },
   );
 
+  it.each(['drafts', 'promotions', 'social'])(
+    'does not report an empty mailbox when only %s has an indexed message',
+    async (category) => {
+      const read = vi.fn(async (tool: string, args: Record<string, unknown>) => {
+        if (tool === 'gmail_accounts') return accounts;
+        const [query] = args.arguments as string[];
+        const excluded = query.includes(category === 'drafts' ? '-in:drafts' : `-category:${category}`);
+        return ok({ messages: excluded ? [] : [{ id: 'new' }], nextPageToken: '' });
+      });
+      await expect(probeExistingGoogleTools('mail', window, read)).resolves.toBe('changed');
+      expect(read).toHaveBeenCalledWith('gmail_run', expect.objectContaining({
+        arguments: [`after:${Date.parse(window.from) / 1000 - 1} before:${Date.parse(window.to) / 1000}`],
+        options: { max: 1 },
+      }));
+    },
+  );
+
   it.each(['empty', 'changed', 'unlisted-calendar', 'denied', 'bad-shape'] as const)(
     'does not hide incomplete calendar coverage: %s',
     async (mode) => {

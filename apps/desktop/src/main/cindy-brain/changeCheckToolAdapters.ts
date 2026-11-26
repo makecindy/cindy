@@ -101,7 +101,8 @@ export async function probeExistingGoogleTools(
         account,
         command: ['messages', 'search'],
         arguments: [
-          `after:${Math.floor(Date.parse(check.from) / 1000) - 1} before:${Math.ceil(Date.parse(check.to) / 1000)} -in:drafts -category:promotions -category:social`,
+          // The host cannot assume the consumer applies category or draft filters.
+          `after:${Math.floor(Date.parse(check.from) / 1000) - 1} before:${Math.ceil(Date.parse(check.to) / 1000)}`,
         ],
         options: { max: 1 },
       });
