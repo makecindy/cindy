@@ -14738,11 +14738,11 @@
         },
         "acp": {
           "ask": {
-            "label": "その都度確認",
+            "label": "デフォルト権限",
             "description": "Agent が権限を求めたときにあなたが確認します。Agent が確認を求めない操作は Cindy では止められません。"
           },
           "default": {
-            "label": "デフォルト",
+            "label": "デフォルト権限",
             "description": "Agent の既定の動作で進めます。権限の要求はあなたが確認します。"
           },
           "acceptEdits": {
@@ -14750,15 +14750,15 @@
             "description": "Agent はファイルを直接編集します。その他の権限の要求はあなたが確認します。"
           },
           "auto": {
-            "label": "自動",
+            "label": "自動レビュー",
             "description": "確認が必要な操作は Agent が判断します。要求された権限はあなたが確認します。"
           },
           "plan": {
-            "label": "計画のみ",
+            "label": "計画モード",
             "description": "Agent は分析と計画だけを行い、ファイルは編集しません。"
           },
           "bypassPermissions": {
-            "label": "すべて許可",
+            "label": "フルアクセス",
             "description": "Agent が求める権限はすべて自動で許可されます。"
           }
         }

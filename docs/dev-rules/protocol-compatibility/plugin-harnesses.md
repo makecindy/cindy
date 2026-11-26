@@ -27,7 +27,7 @@ ACP `thought_level` 取值映射的集合相同）：非数组、非字符串或
 `modes` / `defaultMode`（2026-11-19）是 Agent 自己的工作模式，用 Cindy 权限档 id（`default`、`acceptEdits`、`auto`、`plan`；
 ACP `mode` 配置项取值忽略大小写与 `-` / `_` 后与之相同才算，与 maker-core `mapModeValues` 同一规则）：校验方式同 `efforts`，保持 Agent 的顺序。
 Host 把它们列进权限菜单，末尾固定加 Cindy 的 `bypassPermissions`；切换时引擎层用 `session/set_config_option` 切 Agent 的模式，
-Cindy 对权限请求仍逐个询问。旧 Host 丢弃这两个字段；不发的插件保持「逐项确认 / 全部允许」。任务行的 `permission_mode` 仍只存 Cindy 已有的取值。
+Cindy 对权限请求仍逐个询问。旧 Host 丢弃这两个字段；不发的插件提供与内置引擎统一的「默认权限 / 完全访问」，`ask` 与 `default` 跨引擎等价识别。任务行的 `permission_mode` 仍只存 Cindy 已有的取值。
 
 刷新（Host → 插件逻辑页，经既有 `ghost-pipe:message` / `cindy.onHostMessage`）：打开模型选择器时 Host 发
 `{ type: 'harnesses-refresh-requested' }`，同一插件 10 分钟内最多一次，逻辑页不在线不发；插件不回复，重新 `PUT /harnesses`。

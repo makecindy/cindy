@@ -14738,27 +14738,27 @@
         },
         "acp": {
           "ask": {
-            "label": "逐项确认",
+            "label": "默认权限",
             "description": "Agent 请求权限时由你确认。Agent 没有请求确认的操作，Cindy 无法拦截。"
           },
           "default": {
-            "label": "默认",
+            "label": "默认权限",
             "description": "按 Agent 自己的默认方式工作；它请求权限时由你确认。"
           },
           "acceptEdits": {
-            "label": "自动接受编辑",
+            "label": "允许编辑",
             "description": "Agent 直接修改文件；其他请求权限的操作由你确认。"
           },
           "auto": {
-            "label": "自动",
+            "label": "自动审批",
             "description": "由 Agent 自行判断哪些操作需要确认；它请求权限时由你确认。"
           },
           "plan": {
-            "label": "只规划",
+            "label": "计划模式",
             "description": "Agent 只分析和制定计划，不修改文件。"
           },
           "bypassPermissions": {
-            "label": "全部允许",
+            "label": "完全访问",
             "description": "Agent 请求的权限一律自动允许。"
           }
         }
