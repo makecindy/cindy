@@ -1,6 +1,6 @@
 import { memo, useCallback, useEffect, useRef, type ReactNode } from 'react';
 import { Animated, Pressable, StyleSheet, View } from 'react-native';
-import { List, Search, SquarePen, type LucideIcon } from 'lucide-react-native';
+import { List, Search, Settings, SquarePen, type LucideIcon } from 'lucide-react-native';
 import { useTranslation } from 'react-i18next';
 import { ClassicSwipeable, type ClassicSwipeableMethods } from '@/platform/gestureHandler';
 import { iconSize, iconStroke, useTheme, useThemedStyles, type ThemeColors } from '@/theme';
@@ -15,22 +15,25 @@ const SIZE = 56;
 const GAP = spacing.md;
 const LEADING_WIDTH = SIZE * 2 + GAP * 3;
 const TRAILING_WIDTH = SIZE + GAP * 2;
+const TWO_ACTION_TRAILING_WIDTH = SIZE * 2 + GAP * 3;
 
 /** Android project headers share task/device-row scroll arbitration, not RNGH's
  * ReanimatedSwipeable (which does not expose a vertical failure threshold). */
 export const SwipeableProjectHeader = memo(function SwipeableProjectHeader({
-  projectKey, registry, onNewTask, onOpenTasks, onSearch, children,
+  projectKey, registry, onNewTask, onOpenTasks, onSearch, onSettings, children,
 }: {
   projectKey: string;
   registry: SwipeRowRegistry;
   onNewTask(): void;
   onOpenTasks(): void;
   onSearch(): void;
+  onSettings?: () => void;
   children: ReactNode;
 }) {
   const { t } = useTranslation();
   const { colors } = useTheme();
   const styles = useThemedStyles(makeStyles);
+  const trailingWidth = onSettings ? TWO_ACTION_TRAILING_WIDTH : TRAILING_WIDTH;
   const width = useWindowWidth();
   const edgeInset = usePaneEdgeInset();
   const methods = useRef<ClassicSwipeableMethods | null>(null);
@@ -46,24 +49,24 @@ export const SwipeableProjectHeader = memo(function SwipeableProjectHeader({
     close();
     action();
   };
-  const action = (offset: Translation, Icon: LucideIcon, label: string, onPress: () => void, leading = false, index = 0) => {
-    const panelWidth = leading ? LEADING_WIDTH : TRAILING_WIDTH;
+  const action = (offset: Translation, Icon: LucideIcon, label: string, onPress: () => void,
+    leading = false, index = 0, neutral = false) => {
+    const panelWidth = leading ? LEADING_WIDTH : trailingWidth;
     const inputRange = leading ? [0, panelWidth] : [-panelWidth, 0];
     const outputRange = leading ? [0, 1] : [1, 0];
     const progress = offset.interpolate({ inputRange, outputRange, extrapolate: 'clamp' });
     return <Animated.View style={[styles.action,
-      { backgroundColor: leading ? colors.swipeActionNeutral : colors.cta },
+      { backgroundColor: leading || neutral ? colors.swipeActionNeutral : colors.cta },
       leading ? { left: GAP + index * (SIZE + GAP), width: SIZE } : {
-        right: GAP,
-        width: offset.interpolate({ inputRange: [-TRAILING_WIDTH - 1, -TRAILING_WIDTH], outputRange: [SIZE + 1, SIZE],
-          extrapolateLeft: 'extend', extrapolateRight: 'clamp' }),
+        right: GAP + index * (SIZE + GAP),
+        width: SIZE,
       },
       { opacity: progress.interpolate({ inputRange: [0.15, 0.7], outputRange: [0, 1], extrapolate: 'clamp' }),
         transform: [{ scale: progress.interpolate({ inputRange: [0.15, 1], outputRange: [0.5, 1], extrapolate: 'clamp' }) }] },
     ]}>
       <Pressable accessibilityLabel={label} accessibilityRole="button" onPress={onPress} style={styles.pressable}>
         <View style={styles.icon}><Icon size={iconSize.swipeAction} strokeWidth={iconStroke.regular}
-          color={leading ? colors.swipeActionText : colors.ctaText} /></View>
+          color={leading || neutral ? colors.swipeActionText : colors.ctaText} /></View>
       </Pressable>
     </Animated.View>;
   };
@@ -82,14 +85,15 @@ export const SwipeableProjectHeader = memo(function SwipeableProjectHeader({
     }}
     renderLeftActions={(_progress, offset) => {
       translation.current = offset;
-      return <View style={styles.leadingShell}>
+      return <View style={[styles.leadingShell, { width: LEADING_WIDTH }]}>
         {action(offset, List, t('devices.list.projectActions.allTasks'), () => run(onOpenTasks), true)}
         {action(offset, Search, t('devices.list.projectActions.search'), () => run(onSearch), true, 1)}
       </View>;
     }}
     renderRightActions={(_progress, offset) => {
       translation.current = offset;
-      return <View style={styles.trailingShell}>
+      return <View style={[styles.trailingShell, { width: trailingWidth }]}>
+        {onSettings ? action(offset, Settings, t('settings.projectInfo.title'), () => run(onSettings), false, 1, true) : null}
         {action(offset, SquarePen, t('devices.list.projectActions.newTask'), () => run(onNewTask))}
       </View>;
     }}>

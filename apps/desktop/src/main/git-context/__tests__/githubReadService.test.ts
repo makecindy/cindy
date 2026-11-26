@@ -214,6 +214,174 @@ it('shares conditional reads, avoids credential bleed, and honors identity-wide 
   expect(fetcher).toHaveBeenCalledTimes(3);
 });
 
+// Unit: secondary 429/403 must back off by retry-after (not primary x-ratelimit-reset), while
+// primary exhaustion (remaining=0) scopes backoff to its resource bucket (REST vs GraphQL).
+it('separates secondary retry-after backoff from primary x-ratelimit-reset and buckets primary exhaustion', async () => {
+  let now = 1_700_000_000_000;
+  const oneHourLaterSec = String(Math.floor((now + 3_600_000) / 1000));
+  const fetcher = vi
+    .fn()
+    // 1) Secondary 429 with remaining > 0 and hourly x-ratelimit-reset: must honor retry-after (60s), not 1h reset.
+    .mockResolvedValueOnce(
+      new Response(null, {
+        status: 429,
+        headers: {
+          'retry-after': '60',
+          'x-ratelimit-remaining': '3884',
+          'x-ratelimit-reset': oneHourLaterSec,
+        },
+      }),
+    )
+    // 2) Recovery after 60s succeeds.
+    .mockResolvedValueOnce(Response.json({ ok: 'recovered' }))
+    // 3) Secondary 429 without retry-after but with hourly x-ratelimit-reset: falls back to 60s, not 1h.
+    .mockResolvedValueOnce(
+      new Response(null, {
+        status: 429,
+        headers: {
+          'x-ratelimit-remaining': '3800',
+          'x-ratelimit-reset': String(Math.floor((now + 3_700_000) / 1000)),
+        },
+      }),
+    )
+    // 4) Recovery after 60s succeeds.
+    .mockResolvedValueOnce(Response.json({ ok: 'fallback-recovered' }))
+    // 5) Plain permission 403 (remaining > 0, no retry-after) does not trip backoff.
+    .mockResolvedValueOnce(
+      new Response(null, {
+        status: 403,
+        headers: {
+          'x-ratelimit-remaining': '3799',
+          'x-ratelimit-reset': String(Math.floor((now + 3_700_000) / 1000)),
+        },
+      }),
+    )
+    // 6) Next request immediately after permission 403 still runs.
+    .mockResolvedValueOnce(Response.json({ ok: 'after-403' }))
+    // 7) GraphQL primary exhaustion (remaining=0) blocks /graphql until reset, but not REST.
+    .mockResolvedValueOnce(
+      new Response(null, {
+        status: 403,
+        headers: {
+          'x-ratelimit-remaining': '0',
+          'x-ratelimit-reset': String(Math.floor((now + 600_000) / 1000)),
+        },
+      }),
+    )
+    // 8) REST read while GraphQL primary quota is exhausted still succeeds.
+    .mockResolvedValueOnce(Response.json({ ok: 'rest-still-works' }))
+    // 9) GraphQL recovers once its reset timestamp passes.
+    .mockResolvedValueOnce(Response.json({ data: { ok: true } }));
+
+  const transport = new GithubReadTransport(fetcher, () => now);
+
+  await expect(transport.read('acct', 'tok', '/repos/o/r/pulls/1')).rejects.toThrow('GITHUB_HTTP_429');
+  now += 59_000;
+  await expect(transport.read('acct', 'tok', '/repos/o/r/pulls/2')).rejects.toThrow('GITHUB_RATE_LIMITED');
+  now += 2_000; // 61s total, well before the 1h x-ratelimit-reset
+  await expect(transport.read('acct', 'tok', '/repos/o/r/pulls/2')).resolves.toEqual({ ok: 'recovered' });
+
+  await expect(transport.read('acct', 'tok', '/repos/o/r/pulls/3')).rejects.toThrow('GITHUB_HTTP_429');
+  now += 61_000;
+  await expect(transport.read('acct', 'tok', '/repos/o/r/pulls/4')).resolves.toEqual({
+    ok: 'fallback-recovered',
+  });
+
+  await expect(transport.read('acct', 'tok', '/repos/private/repo/pulls/1')).rejects.toThrow(
+    'GITHUB_HTTP_403',
+  );
+  await expect(transport.read('acct', 'tok', '/repos/o/r/pulls/5')).resolves.toEqual({
+    ok: 'after-403',
+  });
+
+  await expect(
+    transport.read('acct', 'tok', '/graphql', { body: { query: '{ viewer { login } }' } }),
+  ).rejects.toThrow('GITHUB_HTTP_403');
+  now += 120_000; // 2m elapsed, still before 10m GraphQL reset
+  await expect(
+    transport.read('acct', 'tok', '/graphql', { body: { query: '{ viewer { id } }' } }),
+  ).rejects.toThrow('GITHUB_RATE_LIMITED');
+  await expect(transport.read('acct', 'tok', '/repos/o/r/pulls/6')).resolves.toEqual({
+    ok: 'rest-still-works',
+  });
+  now += 500_000; // past 10m GraphQL reset
+  await expect(
+    transport.read('acct', 'tok', '/graphql', { body: { query: '{ viewer { id } }' } }),
+  ).resolves.toEqual({ data: { ok: true } });
+  expect(fetcher).toHaveBeenCalledTimes(9);
+});
+
+// Unit: cap concurrent requests to avoid startup 429 bursts, and fail queued reads fast on backoff or auth invalidation.
+it('caps in-flight GitHub reads and fails queued reads fast on rate limit or invalidation', async () => {
+  let active = 0;
+  let peak = 0;
+  const gates: Array<() => void> = [];
+  const fetcher = vi.fn(
+    () =>
+      new Promise<Response>((resolve) => {
+        active += 1;
+        peak = Math.max(peak, active);
+        gates.push(() => {
+          active -= 1;
+          resolve(Response.json({ ok: true }));
+        });
+      }),
+  );
+  const transport = new GithubReadTransport(fetcher, () => 1_000);
+  const batch = Array.from({ length: 10 }, (_, i) =>
+    transport.read('acct', 'tok', `/repos/o/r/pulls/${i + 1}`),
+  );
+  await Promise.resolve();
+  expect(peak).toBe(6);
+  expect(fetcher).toHaveBeenCalledTimes(6);
+  while (gates.length > 0) {
+    gates.shift()!();
+    await Promise.resolve();
+    await Promise.resolve();
+  }
+  await expect(Promise.all(batch)).resolves.toHaveLength(10);
+  expect(peak).toBe(6);
+
+  // Queued reads fail fast when an active slot hits 429 (no extra network calls).
+  const rateLimitGates: Array<(response: Response) => void> = [];
+  const rateLimitedFetcher = vi.fn(
+    () =>
+      new Promise<Response>((resolve) => {
+        rateLimitGates.push(resolve);
+      }),
+  );
+  const limited = new GithubReadTransport(rateLimitedFetcher, () => 1_000, 2);
+  const r1 = limited.read('acct', 'tok', '/repos/o/r/pulls/1');
+  const r2 = limited.read('acct', 'tok', '/repos/o/r/pulls/2');
+  const r3 = limited.read('acct', 'tok', '/repos/o/r/pulls/3');
+  await Promise.resolve();
+  expect(rateLimitedFetcher).toHaveBeenCalledTimes(2);
+  rateLimitGates[0](new Response(null, { status: 429, headers: { 'retry-after': '60' } }));
+  rateLimitGates[1](Response.json({ ok: true }));
+  await expect(r1).rejects.toThrow('GITHUB_HTTP_429');
+  await expect(r2).resolves.toEqual({ ok: true });
+  await expect(r3).rejects.toThrow('GITHUB_RATE_LIMITED');
+  expect(rateLimitedFetcher).toHaveBeenCalledTimes(2);
+
+  // Queued reads reject immediately with GITHUB_AUTH_CHANGED on invalidate().
+  const authGates: Array<(response: Response) => void> = [];
+  const authFetcher = vi.fn(
+    () =>
+      new Promise<Response>((resolve) => {
+        authGates.push(resolve);
+      }),
+  );
+  const invalidating = new GithubReadTransport(authFetcher, () => 1_000, 1);
+  const a1 = invalidating.read('acct', 'tok', '/repos/o/r/pulls/1');
+  const a2 = invalidating.read('acct', 'tok', '/repos/o/r/pulls/2');
+  await Promise.resolve();
+  invalidating.invalidate();
+  await expect(a2).rejects.toThrow('GITHUB_AUTH_CHANGED');
+  authGates[0](Response.json({ ok: true }));
+  await expect(a1).rejects.toThrow('GITHUB_AUTH_CHANGED');
+  expect(authFetcher).toHaveBeenCalledTimes(1);
+});
+
 // A paginated thread must be complete, while repeated consumers must not mutate cached GraphQL nodes.
 it('follows outer and nested review pagination without modifying shared cached responses', async () => {
   const { readGithubDetails } = await import('../githubPrDetails');

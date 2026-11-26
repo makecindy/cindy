@@ -499,7 +499,7 @@
       "tools": "Vom Inhaber freigegebene Tools und Informationen",
       "authorizeTitle": "Dieser Gruppe erlauben, die Tools und Informationen von {{name}} zu nutzen?",
       "toolsHint": "Mitglieder dürfen die vorhandenen Tools und privaten Informationen dieses Freundes nutzen. Ergebnisse sind für alle sichtbar. Bestehende Genehmigungsregeln gelten weiterhin. Ein Widerruf stoppt aktive Anfragen, kann aber abgeschlossene Aktionen nicht rückgängig machen.",
-      "confirm": "Bestätigen"
+      "confirm": "Tools erlauben"
     }
   },
   "groupSettings": {
@@ -544,6 +544,8 @@
     "accessChat": "Nur Gruppenchat",
     "accessTools": "Kann Tools und Informationen nutzen",
     "replies": "Antwortverhalten der Freunde",
+    "assistant": "Gruppen-Cindy",
+    "assistantHint": "Arbeitet auf dem Computer der Person, die sie mit @ erwähnt.",
     "replyModeMentionedNote": "Freunde bleiben still, solange sie niemand mit @ erwähnt.",
     "work": "Arbeitsaufteilung",
     "organizerHint": "Legt fest, wer die einzelnen Schritte übernimmt. Standardmäßig der erste Freund.",
@@ -588,7 +590,7 @@
     "removeOwnHint": "{{name}} erhält keine Nachrichten mehr aus „{{group}}“. Der Verlauf bleibt erhalten; andere Gruppen und private Chats sind nicht betroffen.",
     "removeOwnActiveHint": "Aktive Anfragen dieses Freundes in dieser Gruppe werden gestoppt. Unabhängig gestartete Aufgaben laufen weiter.",
     "stopAndRemove": "Stoppen und entfernen",
-    "confirm": "Bestätigen",
+    "confirm": "Tools erlauben",
     "inviteTitle": "Zur Gruppe einladen",
     "reusableLink": "Kein Ablaufdatum · Für mehrere Personen wiederverwendbar",
     "singleUseUntil": "Einmalig nutzbar · Läuft am {{date}} ab",

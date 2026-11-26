@@ -480,7 +480,8 @@ describe('resumable cross-computer copy', () => {
     vi.mocked(moveSessionProjectFromHost).mockResolvedValueOnce({
       ok: true,
       sessionId: 'fork',
-      workingDir: '/another',
+      workingDir: '/repo/.cindy-worktrees/task',
+      projectDir: '/another',
       workspaceKind: 'project',
     });
     const result = await state.context.run({ device: 'A', peer: 'B' }, () =>
@@ -494,7 +495,7 @@ describe('resumable cross-computer copy', () => {
     );
     expect(result).toMatchObject({
       deviceId: 'A',
-      projectMove: { sessionId: 'fork', workingDir: '/another', workspaceKind: 'project' },
+      projectMove: { sessionId: 'fork', workingDir: '/repo/.cindy-worktrees/task', projectDir: '/another', workspaceKind: 'project' },
     });
     expect(state.snapshot).not.toHaveBeenCalled();
     expect(state.imports).not.toHaveBeenCalled();
