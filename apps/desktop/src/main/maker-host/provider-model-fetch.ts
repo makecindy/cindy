@@ -86,12 +86,16 @@ const sharedModelReads = new WeakMap<typeof fetch, Map<string, {
 async function fetchModelsResponse(url: string, init: RequestInit, fetchImpl: typeof fetch): Promise<Response> {
   if (url !== 'https://inference.hinoki.security/v1/models'
     && url !== 'https://tokenrhythm.studio/v1/models' && url !== COMMAND_CODE_MODELS_URL) return fetchImpl(url, init);
+  // Command Code's public view still belongs to the active application's
+  // request lifetime. Never adopt a prior owner's response after a switch.
+  const ownerKey = url === COMMAND_CODE_MODELS_URL ? activeOwnerScopeKey() : '';
+  if (ownerKey && isAppSessionBoundaryPending()) return fetchImpl(url, init);
   let reads = sharedModelReads.get(fetchImpl);
   if (!reads) { reads = new Map(); sharedModelReads.set(fetchImpl, reads); }
   // The existing process-local HMAC includes all effective headers (including
   // credentials) without retaining plaintext keys in the map key. Never share
   // across redirect policies or injected transport/credential-owner closures.
-  const signature = `${modelSourceRequestSignature(url, init)}:${init.redirect ?? 'follow'}`;
+  const signature = `${ownerKey}:${modelSourceRequestSignature(url, init)}:${init.redirect ?? 'follow'}`;
   let read = reads.get(signature);
   if (!read) {
     read = { response: Promise.resolve().then(() => fetchImpl(url, init)), consumers: 0 };

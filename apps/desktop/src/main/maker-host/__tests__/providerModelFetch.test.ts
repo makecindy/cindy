@@ -6,6 +6,7 @@
 
 import { describe, it, expect, vi } from 'vitest';
 import { BUNDLED_CATALOG } from '@cindy/model-providers';
+import * as appSessionState from '../../appSessionState.js';
 import { acceptsModelSourceSnapshot, modelSourceRequestSignature } from '../model-source-snapshots.js';
 
 import {
@@ -867,6 +868,33 @@ describe('Command Code public catalog', () => {
       { ok: true, complete: false, ids: ['vendor/chat-only', 'vendor/portable'] },
     ]);
     expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not share a pending read across active owner generations', async () => {
+    const owner = vi.spyOn(appSessionState, 'activeOwnerScopeKey').mockReturnValue('cloud:owner-a:1');
+    const oldStarted = Promise.withResolvers<void>();
+    const oldResponse = Promise.withResolvers<Response>();
+    function response(id: string) {
+      return Response.json({ data: [{ id, supported_endpoints: ['/messages'] }] });
+    }
+    const transport = vi.fn(async () => response('vendor/current-view'))
+      .mockImplementationOnce(() => {
+        oldStarted.resolve();
+        return oldResponse.promise;
+      });
+    const request = spec({ baseUrl: 'https://api.commandcode.ai/provider', modelsUrl });
+    try {
+      const previous = fetchProviderModels(request, transport);
+      await oldStarted.promise;
+      owner.mockReturnValue('cloud:owner-b:2');
+      const current = fetchProviderModels(request, transport);
+      oldResponse.resolve(response('vendor/previous-view'));
+      const [, result] = await Promise.all([previous, current]);
+      expect(transport).toHaveBeenCalledTimes(2);
+      expect(result.models?.map(model => model.id)).toEqual(['vendor/current-view']);
+    } finally {
+      owner.mockRestore();
+    }
   });
 
   it('distinguishes an empty protocol view from a malformed or failed catalog', async () => {
