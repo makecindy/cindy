@@ -25,11 +25,23 @@ import {
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import type { NavigateFunction } from 'react-router-dom';
+import { isSharedTaskPeer } from '@cindy/device-link';
 import { isTeammateProjectPath } from '@cindy/maker-shared/teammate-project';
 
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Spinner } from '@/components/ui/spinner';
 import { Tip } from '@/components/ui/tooltip';
+import type { Session } from '@/lib/ccAgent.types';
+import { sessionsStore } from '@/lib/sessionsStore';
+import { prefetchDirtyWorktreeForRemoval } from '@/lib/worktreeRemovalWarning';
+import { SessionRenameInput } from '../SessionRenameInput';
+import { getSessionDisplayTitle, toStoredSessionTitle } from '../lib/sessionDisplayTitle';
+import {
+  canOpenSearchResultTaskMenu,
+  CONVERSATION_SEARCH_KEEPALIVE_SELECTOR,
+  useHydratedSearchSession,
+  type SearchResultTaskMenuActions,
+} from './searchResultTaskMenuModel';
 import {
   consumeConversationSearchRequest,
   type ConversationSearchScopeRequest,
@@ -634,6 +646,8 @@ export function useConversationSearch({
   };
 }
 
+export type { SearchResultTaskMenuActions };
+
 /**
  * SearchResultsBody —— 搜索结果区(空 / 加载 / 错误 / 无结果 / 结果列表)。
  * popover 与内联 overlay 共用;高度交由容器决定,`maxHeightClass` 供 popover 限高。
@@ -647,6 +661,8 @@ export function SearchResultsBody({
   leading,
   leadingCount = 0,
   poolCapped = false,
+  taskMenu,
+  statusFilter = 'all',
 }: {
   poolCapped?: boolean;
   trimmed: string;
@@ -658,8 +674,120 @@ export function SearchResultsBody({
   /** 排在会话结果之前的本地命中(伙伴 / 群聊);有命中时不显示「无结果」。 */
   leading?: React.ReactNode;
   leadingCount?: number;
+  /** 任务右键菜单动作；省略时仅保留点击导航（如独立预览 fixture）。 */
+  taskMenu?: SearchResultTaskMenuActions;
+  /** 当前搜索的状态筛选；归档或恢复后立即按该口径过滤结果。 */
+  statusFilter?: ConversationSearchStatusFilter;
 }) {
   const { t } = useTranslation();
+  const [mutationState, setMutationState] = useState<{
+    resultsRef: ConversationSearchResultItem[];
+    localPatches: ReadonlyMap<string, Partial<Session>>;
+    localDeletedIds: ReadonlySet<string>;
+    remoteDeletedIds: ReadonlySet<string>;
+  }>(() => ({
+    resultsRef: results,
+    localPatches: new Map(),
+    localDeletedIds: new Set(),
+    remoteDeletedIds: new Set(),
+  }));
+
+  useEffect(() => {
+    if (results.length === 0) return undefined;
+    const localIds = new Set(
+      results.filter((item) => !item.session.deviceLinkDeviceId).map((item) => item.session.id),
+    );
+    const remoteIds = new Set(
+      results.filter((item) => Boolean(item.session.deviceLinkDeviceId)).map((item) => item.session.id),
+    );
+    const unsubLocal =
+      localIds.size > 0
+        ? sessionsStore.subscribePatches((sessionId, patch) => {
+            if (!localIds.has(sessionId)) return;
+            setMutationState((prev) => {
+              const base =
+                prev.resultsRef === results
+                  ? prev
+                  : {
+                      resultsRef: results,
+                      localPatches: new Map<string, Partial<Session>>(),
+                      localDeletedIds: new Set<string>(),
+                      remoteDeletedIds: new Set<string>(),
+                    };
+              const nextPatches = new Map(base.localPatches);
+              const existing = nextPatches.get(sessionId);
+              nextPatches.set(sessionId, existing ? { ...existing, ...patch } : patch);
+              const nextDeleted = new Set(base.localDeletedIds);
+              if (patch.status === 'deleted') nextDeleted.add(sessionId);
+              return {
+                ...base,
+                localPatches: nextPatches,
+                localDeletedIds: nextDeleted,
+              };
+            });
+          })
+        : undefined;
+    const unsubRemote =
+      remoteIds.size > 0
+        ? remoteProjectsStore.subscribeRemoved((sessionId) => {
+            if (!remoteIds.has(sessionId)) return;
+            setMutationState((prev) => {
+              const base =
+                prev.resultsRef === results
+                  ? prev
+                  : {
+                      resultsRef: results,
+                      localPatches: new Map<string, Partial<Session>>(),
+                      localDeletedIds: new Set<string>(),
+                      remoteDeletedIds: new Set<string>(),
+                    };
+              if (base.remoteDeletedIds.has(sessionId)) return base;
+              const nextDeleted = new Set(base.remoteDeletedIds);
+              nextDeleted.add(sessionId);
+              return { ...base, remoteDeletedIds: nextDeleted };
+            });
+          })
+        : undefined;
+    return () => {
+      unsubLocal?.();
+      unsubRemote?.();
+    };
+  }, [results]);
+
+  const activeLocalPatches =
+    mutationState.resultsRef === results ? mutationState.localPatches : null;
+  const activeLocalDeletedIds =
+    mutationState.resultsRef === results ? mutationState.localDeletedIds : null;
+  const activeRemoteDeletedIds =
+    mutationState.resultsRef === results ? mutationState.remoteDeletedIds : null;
+
+  const visibleResults = useMemo(() => {
+    if (results.length === 0) return results;
+    return results.filter((item) => {
+      const isRemote = Boolean(item.session.deviceLinkDeviceId);
+      if (
+        isRemote
+          ? activeRemoteDeletedIds?.has(item.session.id)
+          : activeLocalDeletedIds?.has(item.session.id)
+      ) {
+        return false;
+      }
+      const live = taskMenu?.resolveSession(item.session) ?? null;
+      const localPatch = !isRemote ? activeLocalPatches?.get(item.session.id) : undefined;
+      const effectiveStatus = live?.status ?? localPatch?.status ?? item.session.status;
+      if (effectiveStatus === 'deleted') return false;
+      if (statusFilter !== 'all' && effectiveStatus !== statusFilter) return false;
+      return true;
+    });
+  }, [
+    activeLocalDeletedIds,
+    activeLocalPatches,
+    activeRemoteDeletedIds,
+    results,
+    statusFilter,
+    taskMenu,
+  ]);
+
   if (trimmed && leadingCount > 0) {
     return (
       <div className={cn('overflow-y-auto p-2', maxHeightClass)}>
@@ -673,12 +801,18 @@ export function SearchResultsBody({
         ) : status === 'error' ? (
           <ErrorNotice className="m-3" message={t('ccAgent.search.failed')} />
         ) : (
-          results.map((item) => (
+          visibleResults.map((item) => (
             <SearchResultRow
               key={conversationSearchResultKey(item)}
               item={item}
               query={trimmed}
               onSelect={onSelect}
+              taskMenu={taskMenu}
+              localPatch={
+                item.session.deviceLinkDeviceId
+                  ? undefined
+                  : activeLocalPatches?.get(item.session.id)
+              }
             />
           ))
         )}
@@ -705,7 +839,7 @@ export function SearchResultsBody({
       <ErrorNotice className="m-3" message={t('ccAgent.search.failed')} />
     );
   }
-  if (results.length === 0) {
+  if (visibleResults.length === 0) {
     return (
       <div className="px-3 py-6 text-center text-12 text-[var(--cmd-palette-empty)]">
         {t(poolCapped ? 'ccAgent.search.match.partial' : 'ccAgent.search.noResults')}
@@ -715,12 +849,16 @@ export function SearchResultsBody({
   return (
     <div className={cn('overflow-y-auto p-2', maxHeightClass)}>
       {poolCapped && <p className="px-3 py-2 text-xs text-[var(--text-secondary)]">{t('ccAgent.search.match.partial')}</p>}
-      {results.map((item) => (
+      {visibleResults.map((item) => (
         <SearchResultRow
           key={conversationSearchResultKey(item)}
           item={item}
           query={trimmed}
           onSelect={onSelect}
+          taskMenu={taskMenu}
+          localPatch={
+            item.session.deviceLinkDeviceId ? undefined : activeLocalPatches?.get(item.session.id)
+          }
         />
       ))}
     </div>
@@ -741,6 +879,8 @@ export interface ConversationSearchBoxProps {
   onOpenChange?: (open: boolean) => void;
   /** 挂载即打开:rail 从「更多」打开未勾选的搜索时,图标随打开一起出现。 */
   defaultOpen?: boolean;
+  /** 搜索结果行的任务右键菜单动作（与侧栏任务右键一致）。 */
+  taskMenu?: SearchResultTaskMenuActions;
 }
 
 /**
@@ -759,6 +899,7 @@ export function ConversationSearchBox({
   triggerClassName,
   onOpenChange,
   defaultOpen = false,
+  taskMenu,
 }: ConversationSearchBoxProps) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(defaultOpen);
@@ -872,8 +1013,36 @@ export function ConversationSearchBox({
         side="right"
         sideOffset={8}
         collisionPadding={12}
+        onContextMenu={(event) => event.stopPropagation()}
+        onPointerDownOutside={(event) => {
+          const target = event.target as Element | null;
+          if (
+            target?.closest(CONVERSATION_SEARCH_KEEPALIVE_SELECTOR) ||
+            document.querySelector('[role="dialog"],[role="alertdialog"]')
+          ) {
+            event.preventDefault();
+          }
+        }}
+        onFocusOutside={(event) => {
+          const target = event.target as Element | null;
+          if (
+            target?.closest(CONVERSATION_SEARCH_KEEPALIVE_SELECTOR) ||
+            document.querySelector('[role="dialog"],[role="alertdialog"]')
+          ) {
+            event.preventDefault();
+          }
+        }}
+        onEscapeKeyDown={(event) => {
+          const target = event.target as Element | null;
+          if (
+            target?.closest('[data-search-result-rename="true"]') ||
+            document.querySelector('[role="dialog"],[role="alertdialog"]')
+          ) {
+            event.preventDefault();
+          }
+        }}
         className={cn(
-          'w-[min(640px,calc(100vw-32px))] rounded-xl border border-[var(--cmd-palette-border)]',
+          'z-float w-[min(640px,calc(100vw-32px))] rounded-xl border border-[var(--cmd-palette-border)]',
           'bg-[var(--cmd-palette-bg)] p-0 text-[var(--cmd-palette-item-text)] shadow-[shadow:var(--cmd-palette-shadow)]',
         )}
       >
@@ -932,6 +1101,8 @@ export function ConversationSearchBox({
           results={search.results}
           onSelect={search.handleSelect}
           maxHeightClass="max-h-[min(620px,calc(100vh-140px))]"
+          taskMenu={taskMenu}
+          statusFilter={search.statusFilter}
         />
       </PopoverContent>
     </Popover>
@@ -1282,23 +1453,54 @@ function SearchResultRow({
   item,
   query,
   onSelect,
+  taskMenu,
+  localPatch,
 }: {
   item: ConversationSearchResultItem;
   query: string;
   onSelect: (item: ConversationSearchResultItem, hit?: ConversationSearchResultItem['contentHit']) => void;
+  taskMenu?: SearchResultTaskMenuActions;
+  localPatch?: Partial<Session>;
 }) {
   const { t } = useTranslation();
   const [expanded, setExpanded] = useState(false);
+  const [menuPos, setMenuPos] = useState<{ x: number; y: number } | null>(null);
+  const [isEditing, setIsEditing] = useState(false);
+  const [editValue, setEditValue] = useState('');
+  const committedRef = useRef(false);
+  const rowButtonRef = useRef<HTMLButtonElement>(null);
+
+  const canOpenMenu = Boolean(taskMenu) && canOpenSearchResultTaskMenu(item.session);
+  const liveSession = taskMenu?.resolveSession(item.session) ?? null;
+  const remoteConnectionStatus =
+    item.session.deviceLinkDeviceId && liveSession === null
+      ? (taskMenu?.getRemoteConnectionStatus?.(item.session.deviceLinkDeviceId) ?? null)
+      : null;
+  const { session: resolvedSession, applyOutOfWindowPatch } = useHydratedSearchSession({
+    summary: item.session,
+    liveSession,
+    localPatch,
+    menuOpen: menuPos !== null,
+    remoteConnectionStatus,
+  });
+
+  const unnamedLabel = t('ccAgent.common.unnamedSession');
   // 与 main 的匹配串同源:未起名会话在结果行里也不能露出英文哨兵,且 titleMatchIndices
-  // 就是按这个串算出来的,换成原始 title 会让高亮下标错位。
-  const displayTitle = conversationSearchTitle(item.session.title, t('ccAgent.common.unnamedSession'));
+  // 就是按这个串算出来的,换成原始 title 会让高亮下标错位。重命名后关闭旧高亮下标。
+  const displayTitle = conversationSearchTitle(resolvedSession.title, unnamedLabel);
+  const titleMatchIndices =
+    resolvedSession.title === item.session.title ? item.titleMatchIndices : [];
+  const renamePrefillTitle = getSessionDisplayTitle(resolvedSession, unnamedLabel, t);
+  const effectiveTags = resolvedSession.tags ?? item.session.tags;
+  const effectiveWorkingDir = resolvedSession.workingDir;
+
   const primaryHit = item.contentHit;
   const allHits = item.contentHits ?? (primaryHit ? [primaryHit] : []);
   const visibleHits = expanded ? allHits : allHits.slice(0, MAX_VISIBLE_HITS_PER_RESULT);
   const hiddenHitCount = Math.max(0, allHits.length - visibleHits.length);
   const subtitle = primaryHit
     ? renderSnippet(primaryHit.snippet, query) ?? renderKeywordHighlights(primaryHit.preview, query)
-    : item.session.workingDir || '';
+    : effectiveWorkingDir || '';
   const activityIso = item.session.updatedAt;
   const activityText = formatSidebarTime(activityIso, t);
   const sourceText = primaryHit ? searchSourceLabel(primaryHit, t) : t('ccAgent.search.source.titleOnly');
@@ -1308,7 +1510,7 @@ function SearchResultRow({
     sourceText,
     activityText,
     deviceLabel,
-    item.session.companion ? null : item.session.workingDir,
+    item.session.companion ? null : effectiveWorkingDir,
   ].filter(Boolean).join(' · ');
   const tooltip = (
     <div className="space-y-2">
@@ -1321,52 +1523,157 @@ function SearchResultRow({
     </div>
   );
 
+  const handleStartRename = useCallback(() => {
+    setEditValue(renamePrefillTitle);
+    committedRef.current = false;
+    setIsEditing(true);
+  }, [renamePrefillTitle]);
+
+  const commitTitle = useCallback(
+    (raw: string) => {
+      if (committedRef.current) return;
+      committedRef.current = true;
+      const trimmedTitle = raw.trim();
+      setIsEditing(false);
+      const unchanged =
+        !trimmedTitle ||
+        trimmedTitle === renamePrefillTitle ||
+        trimmedTitle === displayTitle ||
+        trimmedTitle === resolvedSession.title;
+      if (unchanged || !taskMenu) return;
+      const prevTitle = resolvedSession.title;
+      if (!liveSession && resolvedSession.deviceLinkDeviceId) {
+        applyOutOfWindowPatch({ title: toStoredSessionTitle(resolvedSession, trimmedTitle) });
+      }
+      void Promise.resolve(taskMenu.onRename(resolvedSession.id, trimmedTitle, resolvedSession)).then(
+        (ok) => {
+          if (ok === false && !liveSession && resolvedSession.deviceLinkDeviceId) {
+            applyOutOfWindowPatch({ title: prevTitle });
+          }
+        },
+      );
+    },
+    [
+      applyOutOfWindowPatch,
+      displayTitle,
+      liveSession,
+      renamePrefillTitle,
+      resolvedSession,
+      taskMenu,
+    ],
+  );
+
+  const handleContextMenu = useCallback(
+    (event: React.MouseEvent<HTMLDivElement>) => {
+      if (isEditing) {
+        // 重命名输入框上的右键交给系统的可编辑菜单(剪切/复制/粘贴),只拦截冒泡。
+        event.stopPropagation();
+        return;
+      }
+      if (!canOpenMenu) return;
+      event.preventDefault();
+      event.stopPropagation();
+      if (resolvedSession.deviceLinkDeviceId) {
+        remoteProjectsStore.pinSessionOrigin(resolvedSession.deviceLinkDeviceId, resolvedSession.id);
+      }
+      if (!isSharedTaskPeer(resolvedSession.deviceLinkDeviceId ?? '')) {
+        prefetchDirtyWorktreeForRemoval(resolvedSession.id, resolvedSession.deviceLinkDeviceId);
+      }
+      setMenuPos({ x: event.clientX, y: event.clientY });
+    },
+    [canOpenMenu, isEditing, resolvedSession.deviceLinkDeviceId, resolvedSession.id],
+  );
+
+  const handleCloseMenu = useCallback(() => setMenuPos(null), []);
+  const handleReturnFocus = useCallback(() => {
+    rowButtonRef.current?.focus();
+  }, []);
+
+  const rowHeaderContent = (
+    <>
+      <div className="mt-0.5 flex size-5 shrink-0 items-center justify-center rounded-full bg-[var(--surface-chip)] text-[var(--cmd-palette-item-icon)]">
+        <MessageSquare size={13} />
+      </div>
+      <div className="min-w-0 flex-1">
+        <div className="flex min-w-0 items-center gap-2">
+          {isEditing ? (
+            <div data-search-result-rename="true" className="min-w-0 flex-1">
+              <SessionRenameInput
+                sessionId={resolvedSession.id}
+                value={editValue}
+                onValueChange={setEditValue}
+                onCommit={commitTitle}
+                onCancel={() => {
+                  committedRef.current = true;
+                  setIsEditing(false);
+                  requestAnimationFrame(() => rowButtonRef.current?.focus());
+                }}
+                containerClassName="min-w-0 flex-1"
+                inputClassName="h-6 text-13 font-medium text-[var(--text-primary)]"
+              />
+            </div>
+          ) : (
+            <span className="flex min-w-0 flex-1 flex-wrap items-center gap-x-1.5 gap-y-1">
+              <span className="min-w-0 flex-[1_0_6rem] truncate text-13 font-medium text-[var(--text-primary)]">
+                {highlightSegments(displayTitle, titleMatchIndices)}
+              </span>
+              <span className="max-w-full overflow-x-auto">
+                <TaskTagDots tags={effectiveTags} />
+              </span>
+            </span>
+          )}
+          <Tip text={sourceText} side="top" delay={150} disabled={menuPos !== null || isEditing}>
+            <Badge size="xs">
+              {t(`ccAgent.search.kind.${item.matchKind}`)}
+            </Badge>
+          </Tip>
+        </div>
+        {meta && (
+          <div className="mt-1 truncate text-11 leading-none text-[var(--text-tertiary)]">
+            {meta}
+          </div>
+        )}
+        {visibleHits.length === 0 && subtitle && (
+          <div className="mt-1.5 line-clamp-4 text-12 leading-snug text-[var(--text-secondary)]">
+            {subtitle}
+          </div>
+        )}
+      </div>
+    </>
+  );
+
   return (
     <div
       data-sidebar-session-row="true"
       data-session-id={item.session.id}
+      onContextMenu={handleContextMenu}
       className={cn(
         'rounded-lg transition-colors hover:bg-[var(--cmd-palette-item-hover)]',
+        menuPos !== null && 'bg-[var(--cmd-palette-item-hover)]',
       )}
     >
-      <Tip text={tooltip} side="right" delay={250} contentClassName="max-w-[500px] break-words">
-        <button
-          type="button"
-          onClick={() => { void onSelect(item); }}
-          className="flex w-full items-start gap-2.5 rounded-lg px-3 py-2.5 text-left"
+      {isEditing ? (
+        <div className="flex w-full items-start gap-2.5 rounded-lg px-3 py-2.5 text-left">
+          {rowHeaderContent}
+        </div>
+      ) : (
+        <Tip
+          text={tooltip}
+          side="right"
+          delay={250}
+          disabled={menuPos !== null}
+          contentClassName="max-w-[500px] break-words"
         >
-          <div className="mt-0.5 flex size-5 shrink-0 items-center justify-center rounded-full bg-[var(--surface-chip)] text-[var(--cmd-palette-item-icon)]">
-            <MessageSquare size={13} />
-          </div>
-          <div className="min-w-0 flex-1">
-            <div className="flex min-w-0 items-center gap-2">
-              <span className="flex min-w-0 flex-1 flex-wrap items-center gap-x-1.5 gap-y-1">
-                <span className="min-w-0 flex-[1_0_6rem] truncate text-13 font-medium text-[var(--text-primary)]">
-                  {highlightSegments(displayTitle, item.titleMatchIndices)}
-                </span>
-                <span className="max-w-full overflow-x-auto">
-                  <TaskTagDots tags={item.session.tags} />
-                </span>
-              </span>
-              <Tip text={sourceText} side="top" delay={150}>
-                <Badge size="xs">
-                  {t(`ccAgent.search.kind.${item.matchKind}`)}
-                </Badge>
-              </Tip>
-            </div>
-            {meta && (
-              <div className="mt-1 truncate text-11 leading-none text-[var(--text-tertiary)]">
-                {meta}
-              </div>
-            )}
-            {visibleHits.length === 0 && subtitle && (
-              <div className="mt-1.5 line-clamp-4 text-12 leading-snug text-[var(--text-secondary)]">
-                {subtitle}
-              </div>
-            )}
-          </div>
-        </button>
-      </Tip>
+          <button
+            ref={rowButtonRef}
+            type="button"
+            onClick={() => { void onSelect(item); }}
+            className="flex w-full items-start gap-2.5 rounded-lg px-3 py-2.5 text-left"
+          >
+            {rowHeaderContent}
+          </button>
+        </Tip>
+      )}
       {visibleHits.length > 0 && (
         <div className="mt-0.5 space-y-1 px-3 pb-2 pl-10">
           {visibleHits.map((hit) => (
@@ -1394,6 +1701,19 @@ function SearchResultRow({
             </button>
           )}
         </div>
+      )}
+      {canOpenMenu && taskMenu && (
+        <taskMenu.MenuComponent
+          session={resolvedSession}
+          isLiveInStore={liveSession !== null}
+          menuPos={menuPos}
+          isEditing={isEditing}
+          actions={taskMenu}
+          onCloseMenu={handleCloseMenu}
+          onStartRename={handleStartRename}
+          onOutOfWindowPatch={applyOutOfWindowPatch}
+          returnFocus={handleReturnFocus}
+        />
       )}
     </div>
   );
