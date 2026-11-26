@@ -27,7 +27,7 @@ import {
 } from '../../shared/providerGroup.js';
 import type { ProviderGroupBinding } from './bindings.desktop.js';
 import type { ProviderGroupDirectory, ResolvedProviderGroupMember } from './directory.js';
-import { applyRouteWeightStep, pickRouteMember, routeMembersFull, type SchedulableMember } from './scheduler.js';
+import { applyRouteWeightStep, fiveHourTightFor, pickRouteMember, routeMembersFull, type SchedulableMember } from './scheduler.js';
 import { createGuestSupportReader } from './sharedStatus.js';
 import { providerGroupMemberUsageState, providerGroupRebalanceTarget, PROVIDER_GROUP_USAGE_READ_TIMEOUT_MS } from './usage.js';
 import { coolingScope, currentCooling, PROVIDER_GROUP_COOLING_SCOPE_CAP, type ProviderGroupPersistedCooling } from './cooling.js';
@@ -419,7 +419,7 @@ export function createProviderGroupRouter(deps: ProviderGroupRouterDeps): Provid
           // 分享的额度只代表分享者的一个账号、不按模型，只用于新任务排先后，不作为任务进行中换号的依据。
           usable: ready && (!schedule || schedule.accounts > 0 || accountFull) && (!input.quotaRebalance
             || (r.member.kind !== 'share' && memberRunning(input.providerId, r) < effectiveConcurrencyLimit(r.member)
-              && !!quota.quota && !quota.fiveHourTight)),
+              && !!quota.quota && !fiveHourTightFor({ ...quota, running: physicalRunning }))),
           paused: paused(r),
           running: physicalRunning,
           limit: accountFull ? 0 : effectiveConcurrencyLimit(r.member),
@@ -432,6 +432,8 @@ export function createProviderGroupRouter(deps: ProviderGroupRouterDeps): Provid
           weight: r.member.weight,
           urgency: schedule ? schedule.urgency : quota.urgency,
           fiveHourTight: schedule ? schedule.fiveHourTight : quota.fiveHourTight,
+          // 有几个账号的电脑报来的摘要已按它下一个会用的账号自己的运行数算好快满；单个连接按这台的运行数平摊。
+          ...(schedule ? {} : { fiveHourLeft: quota.fiveHourLeft, ...('quotaSpent' in quota && quota.quotaSpent ? { quotaSpent: true } : {}) }),
           // 有几个账号的电脑用它自己下一个会用的账号的余量；旧版电脑的摘要不带，按读不到处理(排在读得到的后面)。
           headroom: schedule ? (schedule.headroom ?? null) : quota.headroom,
         };
@@ -500,9 +502,10 @@ export function createProviderGroupRouter(deps: ProviderGroupRouterDeps): Provid
       const paused = pausedFor(input);
       return resolved.flatMap((r) => {
         if (r.member.kind === 'share' || input.exclude.has(r.member.key) || r.providerContinuity?.stale || !usable(r) || paused(r)) return [];
-        if (memberRunning(input.providerId, r) >= effectiveConcurrencyLimit(r.member)) return [];
+        const memberLoad = memberRunning(input.providerId, r);
+        if (memberLoad >= effectiveConcurrencyLimit(r.member)) return [];
         const state = providerGroupMemberUsageState(r, input.model, now, input.agentKind);
-        if (!state.quota || state.fiveHourTight) return [];
+        if (!state.quota || fiveHourTightFor({ ...state, running: memberLoad })) return [];
         // 同一台电脑上有几个账号时带上账号名，提示里看得出是哪个号。
         const sameComputer = config.members.filter((m) => m.kind === r.member.kind && m.agentDeviceId === r.member.agentDeviceId);
         const account = r.view?.name || r.member.providerName;
@@ -619,7 +622,7 @@ export function createProviderGroupRouter(deps: ProviderGroupRouterDeps): Provid
           // 与选电脑排序用的同一个窗口，同账号电脑据此提议任务进行中换号(provider-groups.md §6.2)。分享来的电脑的额度
           // 只在组所在电脑内部排先后，不随组状态外传(旧版同账号电脑也会丢弃)。
           ...(quota.quota && r.member.kind !== 'share' ? { quota: quota.quota } : {}),
-          ...(quota.quota && r.member.kind !== 'share' && quota.fiveHourTight ? { fiveHourTight: true as const } : {}),
+          ...(quota.quota && r.member.kind !== 'share' && fiveHourTightFor({ ...quota, running: count }) ? { fiveHourTight: true as const } : {}),
         };
       })),
       ...(providerContinuity ? { providerContinuity } : {}),

@@ -121,6 +121,17 @@ describe('OpenAI subscription group routing', () => {
     expect(await h.pick()).toMatchObject({ member: { key: h.remote } });
     expect(h.router.coolingUntil('openai', 'local', GPT)).toBe(NOW + 100_000);
   });
+
+  // provider-groups.md「选择方式」(2026-11-26，dash 建议，与本机账号池 #12279 一致)：套餐用完、只能花 credits 的电脑
+  // 排在还有套餐余量的后面；都用完时照常用(不排除)。此前两台都算可用，按顺序先用了套餐已用完的那台。
+  it('puts a computer whose native plan window is spent after one with plan quota left, without excluding it', async () => {
+    const h = openaiHarness();
+    h.usage.set('local', { nativeAccountPool: true, appServerBuckets: { codex: quota(100, 100) } });
+    h.usage.set(h.remote, { nativeAccountPool: true, appServerBuckets: { codex: quota(20, 20) } });
+    expect(await h.pick()).toMatchObject({ member: { key: h.remote } });
+    h.usage.set(h.remote, { nativeAccountPool: true, appServerBuckets: { codex: quota(100, 100) } });
+    expect(await h.pick()).toMatchObject({ member: { key: 'local' } });
+  });
 });
 
 function harness(readPoolModelAvailability?: ProviderGroupRouterDeps['readPoolModelAvailability']) {

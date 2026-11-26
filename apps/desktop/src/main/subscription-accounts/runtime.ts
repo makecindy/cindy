@@ -17,7 +17,7 @@ import {
   isNativeProviderAuthBound,
   isNativeProviderAuthSharedSystemCredential,
 } from '../maker-host/nativeProviderAuthBinding.js';
-import { applyRouteWeightStep, pickRouteMember, routeMembersFull, routeSchedulingCandidates, type RouteWeightStep, type SchedulableMember } from '../provider-group/scheduler.js';
+import { applyRouteWeightStep, fiveHourTightFor, pickRouteMember, routeMembersFull, routeSchedulingCandidates, type RouteWeightStep, type SchedulableMember } from '../provider-group/scheduler.js';
 import { concurrencyLimitPatch, effectiveConcurrencyLimit } from '../../shared/providerGroup.js';
 import { DEFAULT_ROUTE_STRATEGY } from '../../shared/routeStrategy.js';
 import { providerGroupMemberUsageState } from '../provider-group/usage.js';
@@ -2057,6 +2057,7 @@ export async function readSubscriptionPoolUsage(
         limit: Number.POSITIVE_INFINITY,
         urgency: usage.urgency,
         fiveHourTight: usage.fiveHourTight,
+        fiveHourLeft: usage.fiveHourLeft,
         headroom: usage.headroom,
       }];
     });
@@ -2807,6 +2808,7 @@ export async function acquireSubscriptionAccount(
         limit: control ? Number.POSITIVE_INFINITY : effectiveConcurrencyLimit(a),
         urgency: usage.urgency,
         fiveHourTight: usage.fiveHourTight,
+        fiveHourLeft: usage.fiveHourLeft,
         headroom: usage.headroom,
       };
     });
@@ -2866,7 +2868,8 @@ export async function acquireSubscriptionAccount(
         running: next?.running ?? 0,
         totalRunning: grouped.candidates.reduce((sum, m) => sum + m.running, 0),
         full: !pinned && routeMembersFull(eligible, grouped),
-        urgency: next?.urgency ?? null, fiveHourTight: next?.fiveHourTight ?? false,
+        // 快满按这个账号自己正在跑的任务平摊后算好再报，组所在电脑不用知道剩余百分比(协议不变)。
+        urgency: next?.urgency ?? null, fiveHourTight: next ? fiveHourTightFor(next) : false,
         headroom: next?.headroom ?? null,
       });
       return { scheduling: true as const };

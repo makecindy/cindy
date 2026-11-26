@@ -199,4 +199,24 @@ describe('only the expiring strategy ranks by quota; every other strategy is wha
     expect(pickProviderGroupMember([tight, m('also', { urgency: 2, fiveHourTight: true })], 'expiring')).toBe('tight');
     expect(pickProviderGroupMember([tight, m('calm', { urgency: 1 })], 'order')).toBe('tight');
   });
+
+  // 2026-11-26(dash 建议)：5 小时剩余按正在跑的任务平摊，剩余 ÷ (在跑 + 1) ≤ 15% 就先避开。此前只看固定 85% 线，
+  // 最急的账号 5 小时已用 60%、已有 2 个任务在跑时仍会接第 3 个，几个任务一起撞上限换号。
+  it('spreads the 5-hour window over running tasks before handing the most urgent member another task', () => {
+    const busy = m('busy', { urgency: 9, fiveHourLeft: 40, running: 2 });
+    expect(pickProviderGroupMember([busy, m('calm', { urgency: 1, fiveHourLeft: 90 })], 'expiring')).toBe('calm');
+    // 没有任务在跑时仍是原来的 85% 线：剩 40% 不算快满。
+    expect(pickProviderGroupMember([m('idle', { urgency: 9, fiveHourLeft: 40 }), m('calm', { urgency: 1, fiveHourLeft: 90 })], 'expiring')).toBe('idle');
+    // 旧版本只报布尔值时照旧。
+    expect(pickProviderGroupMember([m('old', { urgency: 9, fiveHourTight: true }), m('calm', { urgency: 1 })], 'expiring')).toBe('calm');
+  });
+
+  // 2026-11-26(dash 建议，与本机账号池 #12279 一致)：套餐用完、只能花 credits 的排到最后，只剩它时照常用。
+  it('puts members whose plan is spent after the others under every strategy, and still uses them when alone', () => {
+    const spent = m('spent', { urgency: 9, quotaSpent: true });
+    for (const strategy of ['expiring', 'order', 'rotate', 'weighted', 'headroom'] as const) {
+      expect(pickProviderGroupMember([spent, m('plan', { urgency: 1, headroom: 10 })], strategy)).toBe('plan');
+    }
+    expect(pickProviderGroupMember([spent, m('plan', { usable: false })], 'order')).toBe('spent');
+  });
 });

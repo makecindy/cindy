@@ -194,7 +194,7 @@ describe('provider group quota eligibility', () => {
   it('does not keep blocking a reset window or rank it as unused before fresh data arrives', () => {
     const value = { ...snapshot(20, 100), sevenDay: { utilization: 100, resetsAt: NOW / 1000 } };
     expect(providerGroupUsageState(value, 'opus', NOW))
-      .toEqual({ limited: false, resetAtMs: null, fiveHourTight: false, urgency: null, headroom: null, quota: null });
+      .toEqual({ limited: false, resetAtMs: null, fiveHourTight: false, fiveHourLeft: null, urgency: null, headroom: null, quota: null });
   });
 
   it('keeps unknown and stale data distinct from low usage', () => {

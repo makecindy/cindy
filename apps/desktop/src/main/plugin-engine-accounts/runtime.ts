@@ -347,6 +347,7 @@ export function pluginUsageState(usage: GhostHarnessUsage | null | undefined, mo
       ? Math.max(...full.map(window => window.resetsAt!)) : null,
     urgency: schedule?.urgency ?? null,
     fiveHourTight: schedule?.fiveHourTight ?? false,
+    fiveHourLeft: schedule?.fiveHourLeft ?? null,
     headroom: schedule?.headroom ?? null,
   };
 }
@@ -549,6 +550,7 @@ export async function acquirePluginEngineAccount(
         weight: account.weight,
         urgency: usage.urgency,
         fiveHourTight: usage.fiveHourTight,
+        fiveHourLeft: usage.fiveHourLeft,
         headroom: usage.headroom,
       };
     });

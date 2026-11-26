@@ -24,8 +24,18 @@ export interface SchedulableMember {
    * 额度有多急着用(usage.ts：剩下的额度 ÷ 剩下的时间)。1 = 正好按时间用完，越大越该先用；读不到为 null。
    */
   urgency?: number | null;
-  /** 5 小时配额快满、离重置还早(usage.ts)：「快作废的先用」先不分新任务，除非别的都不行。 */
+  /** 5 小时配额快满、离重置还早(usage.ts)：「快作废的先用」先不分新任务，除非别的都不行。没有 `fiveHourLeft` 时用它。 */
   fiveHourTight?: boolean;
+  /**
+   * 5 小时配额还剩多少(0–100)，离重置还早时才有；快重置、读不到为 null 或省略。有它时按正在运行的任务平摊判快满
+   * (fiveHourTightFor)，旧版本报来的只有 `fiveHourTight`。
+   */
+  fiveHourLeft?: number | null;
+  /**
+   * 套餐额度已用完、但还能花 credits 继续用(OpenAI 原生账号池)：排在还有套餐余量的成员后面，只剩它时照常用，不排除
+   * (与本机订阅账号池 #12279 一致)。
+   */
+  quotaSpent?: boolean;
   /** 剩余配额占比(0–100)，「余量最多的先用」用；读不到为 null。 */
   headroom?: number | null;
   /** 「最省钱」用的花费：还有配额的订阅为 0，其余为标价；没有标价为 null。 */
@@ -65,6 +75,20 @@ export interface RoutePick {
 
 /** 不低于最急那个的这个比例算一样急：同时开的几个任务不全压到一个成员上。 */
 export const PROVIDER_GROUP_SIMILAR_URGENCY = 0.9;
+
+/**
+ * 5 小时配额平摊到每个任务还剩这么多以下就算快满(= 100 − 85% 线)。没有任务在跑时就是原来的 85% 线；已有任务在跑时
+ * 按「剩余 ÷ (在跑任务数 + 1)」算，最急的成员不会连着接几个新任务、然后一起撞上 5 小时上限换号(2026-11-26，dash 建议)。
+ */
+export const ROUTE_FIVE_HOUR_SHARE_PERCENT = 15;
+
+/** 这个成员此刻算不算 5 小时快满：有剩余百分比时按正在运行的任务平摊，没有时用报来的 `fiveHourTight`。 */
+export function fiveHourTightFor(member: Pick<SchedulableMember, 'fiveHourLeft' | 'fiveHourTight' | 'running'>): boolean {
+  if (typeof member.fiveHourLeft === 'number' && Number.isFinite(member.fiveHourLeft)) {
+    return member.fiveHourLeft / (Math.max(0, member.running) + 1) <= ROUTE_FIVE_HOUR_SHARE_PERCENT;
+  }
+  return member.fiveHourTight === true;
+}
 
 /**
  * 把一步记到计数上。采用时才记、且记到那一刻的计数上：两个新任务先后选路再先后采用，两步都算进去。
@@ -145,7 +169,10 @@ export function routeSchedulingCandidates(
   strategy: RouteStrategy,
   options: PickOptions = {},
 ): readonly SchedulableMember[] {
-  const open = openMembers(members, options);
+  const reachable = openMembers(members, options);
+  // 套餐用完、只能花 credits 的排到最后：还有别的能接时先不用它，只剩它时照常用。
+  const withPlan = reachable.filter((m) => !m.quotaSpent);
+  const open = withPlan.length > 0 ? withPlan : reachable;
   return strategy === 'expiring' ? byQuota(open, options.keepUnknownQuota === true) : open;
 }
 
@@ -156,7 +183,7 @@ export function routeSchedulingCandidates(
  * 此前只要有一台读得到就分不到任务)；否则只有全部读不到时才都留下。保持列表顺序。
  */
 function byQuota(open: readonly SchedulableMember[], keepUnknown: boolean): readonly SchedulableMember[] {
-  const roomy = open.filter((member) => !member.fiveHourTight);
+  const roomy = open.filter((member) => !fiveHourTightFor(member));
   const pool = roomy.length > 0 ? roomy : open;
   const known = (member: SchedulableMember) => typeof member.urgency === 'number' && Number.isFinite(member.urgency);
   const urgencies = pool.filter(known).map((member) => member.urgency!);

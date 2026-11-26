@@ -33,6 +33,22 @@ function fiveHourTight(usedPercent: number | undefined, resetAtMs: number | null
   return resetAtMs > now && resetAtMs - now > PROVIDER_GROUP_FIVE_HOUR_RESET_SOON_MS;
 }
 
+/**
+ * 5 小时窗口还剩多少配额(0–100)，供调度器按正在运行的任务平摊判快满(scheduler.ts 的 fiveHourTightFor)。
+ * 与 fiveHourTight 同一条件：快重置(一小时内)、已过重置时刻或读不到为 null——快重置的照常分，把剩下的用掉。
+ */
+function fiveHourLeft(usedPercent: number | undefined, resetAtMs: number | null, now: number): number | null {
+  if (usedPercent === undefined || !Number.isFinite(usedPercent)) return null;
+  if (resetAtMs !== null && (resetAtMs <= now || resetAtMs - now <= PROVIDER_GROUP_FIVE_HOUR_RESET_SOON_MS)) return null;
+  return Math.max(0, Math.min(100, 100 - usedPercent));
+}
+
+/** 几个 5 小时窗口里剩得最少的那个；都没有为 null。 */
+function tightestLeft(values: readonly (number | null)[]): number | null {
+  const known = values.filter((value): value is number => value !== null);
+  return known.length > 0 ? Math.min(...known) : null;
+}
+
 /** 窗口还剩多少时间(按窗口长度的百分比)；没开始计时为 100，已过重置时刻、用过却没有重置时刻为 null。 */
 function timeLeftPercent(window: ProviderGroupMemberQuota, now: number): number | null {
   if (window.resetAtMs === null) return window.usedPercent > 0 ? null : 100;
@@ -119,6 +135,7 @@ export function quotaWindowsScheduleState(windows: readonly ProviderGroupMemberQ
     limited: full.length > 0,
     resetAtMs: full.length > 0 && full.every((w) => w.resetAtMs !== null) ? Math.max(...full.map((w) => w.resetAtMs!)) : null,
     fiveHourTight: live.some((w) => w.windowMs <= FIVE_HOURS_MS && fiveHourTight(w.usedPercent, w.resetAtMs, now)),
+    fiveHourLeft: tightestLeft(live.filter((w) => w.windowMs <= FIVE_HOURS_MS).map((w) => fiveHourLeft(w.usedPercent, w.resetAtMs, now))),
     ...paceState(paced.length > 0 ? paced : null, now),
   };
 }
@@ -234,7 +251,11 @@ function codexUsageState(snapshot: ProviderGroupCodexUsageSnapshot, model: strin
     // The executing native pool admits ChatGPT requests and remembers real rejections.
     // Its plan-only projection must not block credits before that admission can run.
     ...(snapshot.nativeAccountPool ? { limited: false, resetAtMs: null } : limit),
+    // 套餐用完但还能花 credits：不排除，排在还有套餐余量的电脑后面(scheduler.ts，与本机账号池 #12279 一致)。
+    ...(snapshot.nativeAccountPool && limit?.limited === true ? { quotaSpent: true as const } : {}),
     fiveHourTight: tight,
+    fiveHourLeft: tightestLeft(timed.filter((w) => w.windowMinutes! * 60_000 <= FIVE_HOURS_MS)
+      .map((w) => fiveHourLeft(w.usedPercent, w.resetsAt ? w.resetsAt * 1000 : null, now))),
     ...paceState(paced.length > 0 && paced.every(current)
       ? paced.map((w) => ({
         usedPercent: w.usedPercent!, resetAtMs: w.resetsAt ? w.resetsAt * 1000 : null, windowMs: w.windowMinutes! * 60_000,
@@ -363,6 +384,7 @@ export function providerGroupUsageState(raw: unknown, model: string | null | und
     limited: limit?.limited ?? false,
     resetAtMs: limit?.resetAtMs ?? null,
     fiveHourTight: fiveHour ? fiveHourTight(fiveHour.utilization, fiveHour.resetsAt ? fiveHour.resetsAt * 1000 : null, now) : false,
+    fiveHourLeft: fiveHour ? fiveHourLeft(fiveHour.utilization, fiveHour.resetsAt ? fiveHour.resetsAt * 1000 : null, now) : null,
     ...paceState(sevenDay && (!scoped || scopedWeek)
       ? [sevenDay, ...(scopedWeek ? [scopedWeek] : [])].map((w) => ({
         usedPercent: w.utilization, resetAtMs: w.resetsAt ? w.resetsAt * 1000 : null, windowMs: WEEK_MS,
