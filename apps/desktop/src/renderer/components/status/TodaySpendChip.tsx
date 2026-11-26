@@ -7,7 +7,7 @@ import {
   formatCompactTimeUntilReset,
   WEEKLY_WINDOW_MINUTES,
 } from '@/lib/compactQuotaCountdown';
-import { isCodexGatewayWireModel, isOpenAiSubscriptionProvider, type AgentKind } from '@cindy/model-providers';
+import { isClaudeSubscriptionProvider, isCodexGatewayWireModel, isOpenAiSubscriptionProvider, type AgentKind } from '@cindy/model-providers';
 import { providerDisplayNameById } from '@/lib/providerDisplayName';
 import { useDeviceProviders } from '@/hooks/useDeviceProviders';
 import { useProviders } from '@/hooks/useProviders';
@@ -992,7 +992,8 @@ export function TodaySpendChip({
   const quotaProviders = isDeviceLinkRemote ? deviceQuotaProviders : localQuotaProviders;
   const selectedQuotaProvider = quotaProviders.find((provider) => provider.id === providerId);
   const isClaudeAccount =
-    providerId === 'anthropic' || selectedQuotaProvider?.auth?.native === 'claude';
+    providerId === 'anthropic' || selectedQuotaProvider?.auth?.native === 'claude' ||
+    isClaudeSubscriptionProvider(selectedQuotaProvider);
   const isXaiAccount = providerId === 'xai' || selectedQuotaProvider?.auth?.native === 'xai';
   // Remote provider ids belong to the device running the Agent. Reuse its existing provider
   // catalog (also used by the model selector), never the controller's same-named account.

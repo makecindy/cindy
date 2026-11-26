@@ -326,6 +326,67 @@ describe('Chat Server result delivery and refresh', () => {
     }
   });
 
+  it('retries a rate-limited group creation once with the original operation', async () => {
+    const posts: unknown[] = [];
+    fixture.handle.mockImplementation((route, method, body) => {
+      if (route !== '/conversations' || method !== 'POST') return response(route);
+      posts.push(body);
+      return posts.length === 1
+        ? { status: 429, headers: { 'retry-after': '3' }, body: { error: { code: 'RATE_LIMITED' } } }
+        : { status: 201, body: { id: roomId } };
+    });
+    const result = service.createGroup({ name: 'Fixture group', botIds: [] });
+    await vi.advanceTimersByTimeAsync(2_999);
+    expect(posts).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(await result).toEqual({ ok: true, groupId: roomId });
+    expect(posts).toEqual([expect.objectContaining({ operationId: expect.any(String) }), posts[0]]);
+  });
+
+  it('cancels a pending creation when the owning chat service is disposed', async () => {
+    const posts = vi.fn(() => ({ status: 429, headers: { 'retry-after': '5' }, body: { error: { code: 'RATE_LIMITED' } } }));
+    fixture.handle.mockImplementation((route, method) => route === '/conversations' && method === 'POST' ? posts() : response(route));
+    const result = service.createGroup({ name: 'Fixture group', botIds: [] });
+    await vi.advanceTimersByTimeAsync(10);
+    service.dispose();
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect((await result).ok).toBe(false);
+    expect(posts).toHaveBeenCalledTimes(1);
+  });
+
+  it('preserves room access denial from optional metadata', async () => {
+    fixture.handle.mockImplementation(route => route.endsWith('/executions')
+      ? { status: 403, body: { error: { code: 'ROLE_REQUIRED' } } } : response(route));
+    expect(await service.getGroup(roomId)).toMatchObject({ ok: false, errorCode: 'PERMISSION_DENIED' });
+  });
+
+  it.each(['executions', 'plans', 'execution-failures'])('keeps cold history visible during a %s rate limit', async resource => {
+    let metadataReads = 0;
+    const started = Date.now();
+    const message = { id: execution.source_message_id, seq: '1', content: [{ type: 'text', text: 'Saved message' }],
+      authorId: botId, author: { kind: 'bot' }, createdAt: '2026-10-03T00:00:00Z' };
+    fixture.handle.mockImplementation(route => {
+      if (route.includes('/messages?')) return { body: [message] };
+      if (route.split('?')[0] === `/conversations/${roomId}/${resource}` && ++metadataReads === 1)
+        return { status: 429, headers: { 'retry-after': '3' }, body: { error: { code: 'RATE_LIMITED' } } };
+      return response(route);
+    });
+    const partial = await service.getGroup(roomId);
+    expect(partial).toMatchObject({ ok: true, group: { metadataRetryAt: started + 3_000, messages: [{ id: message.id }] } });
+    vi.setSystemTime(started + 2_999);
+    expect((await service.getGroup(roomId)).ok).toBe(true);
+    expect(metadataReads).toBe(1);
+    vi.setSystemTime(started + 3_000);
+    const complete = await service.getGroup(roomId);
+    expect(complete.ok && complete.group.messages).toMatchObject([{ id: message.id }]);
+    expect(complete.ok && complete.group).not.toHaveProperty('metadataRetryAt');
+    expect(metadataReads).toBe(2);
+    expect(fixture.handle.mock.calls.filter(([route]) => route.startsWith(`/conversations/${roomId}/messages?`))).toHaveLength(1);
+    for (const other of ['executions', 'plans', 'execution-failures'].filter(name => name !== resource)) {
+      expect(fixture.handle.mock.calls.filter(([route]) => route.split('?')[0] === `/conversations/${roomId}/${other}`)).toHaveLength(1);
+    }
+  });
+
   // #10822 / unit: getGroup + dismissPlan exercise the production server
   // projection and existing stop action. Earlier tests never combined a failed
   // execution, stopped plan and absent local Session with an already-read group.
@@ -1291,6 +1352,36 @@ describe('Chat Server result delivery and refresh', () => {
       .toMatchObject({ ok: false, errorCode: 'SERVICE_ERROR' });
     expect(deps.log.warn).toHaveBeenCalledWith('Chat request failed', expect.objectContaining({ route: '/conversations/:id/messages', status: 500, code: 'UPSTREAM_FAILED' }));
     expect(JSON.stringify(vi.mocked(deps.log.warn).mock.calls)).not.toMatch(/private body|secret text/);
+  });
+
+  it.each([
+    { header: '12', delay: 12_000 },
+    { header: 'Mon, 23 Nov 2026 07:00:12 GMT', delay: 12_000 },
+    { header: '0', delay: 1_000 },
+    { header: undefined, delay: 5_000 },
+  ])('passes the HTTP 429 send deadline to the outbox (Retry-After: $header)', async ({ header, delay }) => {
+    vi.setSystemTime(new Date('2026-11-23T07:00:00Z'));
+    let refused = true;
+    fixture.handle.mockImplementation((route, method) => {
+      if (route.endsWith('/members')) return { body: [] };
+      if (route.endsWith('/messages') && method === 'POST') return refused ? {
+        status: 429, ...(header ? { headers: { 'retry-after': header } } : {}),
+        body: { error: { code: 'RATE_LIMITED' } },
+      } : { body: { id: 'sent-after-429' } };
+      return response(route);
+    });
+    const input = { groupId: roomId, text: 'hello', clientId: 'send-429-test', mentions: { all: false, botIds: [] } };
+    const posts = () => fixture.handle.mock.calls.filter(([route, method]) => route.endsWith('/messages') && method === 'POST');
+    expect(await service.sendMessage(input)).toMatchObject({ ok: false, retryAt: Date.now() + delay, postRateLimited: true });
+    expect(posts()).toHaveLength(1);
+    expect(posts()[0]?.[2]).toMatchObject({ operationId: input.clientId });
+    vi.setSystemTime(Date.now() + delay);
+    refused = false;
+    const sent = await service.sendMessage(input);
+    expect(sent).toEqual({ ok: true, messageId: 'sent-after-429' });
+    expect(await service.sendMessage(input)).toEqual(sent);
+    expect(posts()).toHaveLength(2);
+    expect(posts()[1]?.[2]).toEqual(posts()[0]?.[2]);
   });
 
   describe('引用回复', () => {
@@ -3503,6 +3594,12 @@ describe('Chat Server result delivery and refresh', () => {
     ['authentication_failed private credential', 'AUTH_REQUIRED'],
     ['[REMOTE_AGENT_BUSY] [DEVICE_LIMIT] private credential', 'REMOTE_DEVICE_LIMIT'],
     ['[REMOTE_AGENT_BUSY] [TOTAL_LIMIT] private credential', 'REMOTE_TOTAL_LIMIT'],
+    // #10821: device-link IPC and remote Agent wrappers reach group settlement as local messages.
+    ['[DEVICE_LINK_TIMEOUT] private endpoint', 'RUNTIME_TIMEOUT'],
+    ['[REMOTE_AGENT_TIMEOUT] [INVOKE_TIMEOUT] private endpoint', 'RUNTIME_TIMEOUT'],
+    ['[REMOTE_AGENT_UNAVAILABLE] [DEVICE_LINK_NOT_CONNECTED] private endpoint', 'NETWORK_ERROR'],
+    ['[REMOTE_AGENT_OFFLINE] [DEVICE_OFFLINE] private endpoint', 'NETWORK_ERROR'],
+    ['[REMOTE_AGENT_UNAVAILABLE] private endpoint', 'RUNTIME_ERROR'],
     ['ECONNRESET private endpoint', 'NETWORK_ERROR'],
     ['pi rpc timeout after 30000ms: prompt /private/path', 'RUNTIME_TIMEOUT'],
   ])('classifies an unqueued dispatch rejection from its local message: %s', async (message, code) => {
@@ -3512,6 +3609,7 @@ describe('Chat Server result delivery and refresh', () => {
     expect(failures).toHaveLength(1);
     expect(failures[0][2]).toMatchObject({ detail: `cindy-runtime-error:${code}` });
     expect(JSON.stringify(failures)).not.toContain(message);
+    expect(JSON.stringify(failures)).not.toContain('private endpoint');
     expect(deps.abortLane).toHaveBeenCalledExactlyOnceWith('lane');
   });
 
@@ -5026,6 +5124,53 @@ describe('Chat Server result delivery and refresh', () => {
     expect(socket.send).toHaveBeenCalledWith(JSON.stringify({ type: 'ack', scope: `conversation:${roomId}`, cursor: '43' }));
   });
 
+  it.each([
+    { header: '20', delay: 20_000 },
+    { header: undefined, delay: 15_000 },
+  ])('coalesces snapshot reads and parks a throttled room reset (Retry-After: $header)', async ({ header, delay }) => {
+    expect((await service.getGroup(roomId)).ok).toBe(true);
+    await vi.advanceTimersByTimeAsync(2_000);
+    const socket = fixture.sockets[0]!;
+    Object.defineProperty(socket, 'readyState', { value: 1 });
+    socket.emit('message', JSON.stringify({ type: 'ready' }));
+    await vi.advanceTimersByTimeAsync(0);
+    const close = vi.spyOn(socket, 'close');
+    const snapshotReads: string[] = [];
+    let rejectRead = true;
+    fixture.handle.mockImplementation(route => {
+      if (!route.endsWith('/snapshot')) return response(route);
+      snapshotReads.push(route);
+      return rejectRead
+        ? { status: 429, ...(header ? { headers: { 'retry-after': header } } : {}), body: { error: { code: 'RATE_LIMITED' } } }
+        : { body: { ...response(route).body, cursor: '42' } };
+    });
+    const emitReset = () => socket.emit('message', JSON.stringify({
+      type: 'scope_error', scope: `conversation:${roomId}`, error: { code: 'RESET_REQUIRED' },
+    }));
+    const scope = `/conversations/${roomId}/snapshot`;
+    const detailReads = Promise.all(Array.from({ length: 20 }, () => service.getGroup(roomId)));
+    emitReset();
+    expect((await detailReads).every(result => !result.ok)).toBe(true);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(snapshotReads).toEqual([scope]);
+
+    emitReset();
+    const before = fixture.handle.mock.calls.length;
+    expect((await service.getGroup(roomId)).ok).toBe(false);
+    expect(fixture.handle.mock.calls.slice(before).filter(([route]) => route.startsWith(`/conversations/${roomId}/`))).toEqual([]);
+    expect((await service.getGroup('80000000-0000-4000-8000-000000000003')).ok).toBe(false);
+    await vi.advanceTimersByTimeAsync(delay - 1);
+    expect(snapshotReads).toHaveLength(1);
+    expect(close).not.toHaveBeenCalled();
+
+    rejectRead = false;
+    await vi.advanceTimersByTimeAsync(1);
+    expect(snapshotReads).toEqual([scope, scope]);
+    expect(socket.send).toHaveBeenCalledWith(JSON.stringify({ type: 'subscribe', scope: `conversation:${roomId}`, after: '42' }));
+    expect(close).not.toHaveBeenCalled();
+    expect(fixture.sockets).toEqual([socket]);
+  });
+
   it.each(['before-commit', 'after-commit'])('retries an identical result after a lost response (%s) without rerunning the Agent', async loss => {
     const committed = new Map<string, unknown>();
     let attempts = 0;
@@ -5319,6 +5464,56 @@ describe('Chat Server result delivery and refresh', () => {
     await vi.advanceTimersByTimeAsync(150);
     expect(deps.onChanged).toHaveBeenCalledWith({ groupId: roomId, change: 'messages' }, undefined);
     expect(deps.onChanged).toHaveBeenCalledWith({ groupId: '', change: 'messages' }, undefined);
+  });
+
+  it('keeps the ready socket and delays passive reads after a throttled list sync', async () => {
+    const syncs: number[] = [];
+    fixture.handle.mockImplementation(route => {
+      if (route === '/me') return { body: { actor: { id: selfId }, capabilities: { conversationListStateVersion: 1 } } };
+      if (route.startsWith('/conversation-list-state?')) {
+        syncs.push(Date.now());
+        if (syncs.length === 1) return { status: 429, headers: { 'retry-after': '120' }, body: { error: { code: 'RATE_LIMITED' } } };
+        return { body: [] };
+      }
+      if (route.startsWith('/conversations?')) return { body: [] };
+      return response(route);
+    });
+    await vi.advanceTimersByTimeAsync(2000);
+    const socket = fixture.sockets[0]!;
+    Object.defineProperty(socket, 'readyState', { value: 1 });
+    const close = vi.spyOn(socket, 'close');
+    socket.emit('message', JSON.stringify({ type: 'ready' }));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(syncs).toHaveLength(1);
+    expect(await service.listGroups()).toMatchObject({ ok: false });
+    await vi.advanceTimersByTimeAsync(119999);
+    expect(syncs).toHaveLength(1);
+    expect(close).not.toHaveBeenCalled();
+    expect(fixture.sockets).toEqual([socket]);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(syncs).toHaveLength(2);
+    expect(await service.listGroups()).toMatchObject({ ok: true });
+  });
+
+  it('backs off successive sidebar reads when an individual room summary is throttled', async () => {
+    let attempts = 0;
+    fixture.handle.mockImplementation(route => {
+      if (route.startsWith('/conversations?')) return { body: [room(roomId)] };
+      if (route.endsWith('/executions') && ++attempts === 1)
+        return { status: 429, body: { error: { code: 'RATE_LIMITED' } } };
+      return response(route);
+    });
+    expect(await service.listGroups()).toMatchObject({ ok: false });
+    const listReads = () => fixture.handle.mock.calls.filter(([route]) => route.startsWith('/conversations?')).length;
+    expect(await service.listGroups()).toMatchObject({ ok: false });
+    await vi.advanceTimersByTimeAsync(59999);
+    expect(await service.listGroups()).toMatchObject({ ok: false });
+    expect(listReads()).toBe(1);
+    expect(attempts).toBe(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(await service.listGroups()).toMatchObject({ ok: true });
+    expect(listReads()).toBe(2);
+    expect(attempts).toBe(2);
   });
 
   it('reads subsequent group pages even when the first page contains only invitations', async () => {
@@ -6674,10 +6869,11 @@ describe('Chat Server directed sends', () => {
   let responseMode: 'all' | 'mentioned';
   let nextSendId: number;
   let mentionAudiences = false, allowAllBots = false;
+  let roomKind: 'group' | 'direct';
   let members: Array<{ id: string; kind: string; state: string }>;
   beforeEach(() => {
     vi.useFakeTimers();
-    fixture.packaged = true; responseMode = 'all'; nextSendId = 0; mentionAudiences = false; allowAllBots = false;
+    fixture.packaged = true; roomKind = 'group'; responseMode = 'all'; nextSendId = 0; mentionAudiences = false; allowAllBots = false;
     fixture.profiles = [{ id: 'local-bot', displayName: 'Bot', status: 'active' }];
     members = [{ id: selfId, kind: 'human', state: 'joined' },
       { id: botId, kind: 'bot', state: 'joined' }, { id: humanId, kind: 'human', state: 'joined' }];
@@ -6685,7 +6881,7 @@ describe('Chat Server directed sends', () => {
       if (route === '/me') return { body: { actor: { id: selfId }, capabilities: mentionAudiences ? { groupMentionAudiences: 1 } : {} } };
       if (route === '/actors') return { body: [{ id: botId, kind: 'bot', externalId: 'local-bot', name: 'Bot' }] };
       if (route.endsWith('/members')) return { body: members };
-      if (route.endsWith('/snapshot')) return { body: { room: { id: roomId, kind: 'group', response_mode: responseMode, allow_mention_all_bots: allowAllBots }, members, messages: [], cursor: '0' } };
+      if (route.endsWith('/snapshot')) return { body: { room: { id: roomId, kind: roomKind, response_mode: responseMode, allow_mention_all_bots: allowAllBots }, members, messages: [], cursor: '0' } };
       if (route.endsWith('/messages') && method === 'POST') return { body: { id: 'posted-message' } };
       return { body: [] };
     });
@@ -6698,6 +6894,13 @@ describe('Chat Server directed sends', () => {
     const input = { groupId: roomId, text: '@Bot hello', clientId: `directed-send-${++nextSendId}`, mentions };
     return entry === 'thread' ? service.chatServer!.reply({ ...input, rootId }) : service.sendMessage(input);
   };
+
+  it('keeps the sender out of explicit private-message recipients', async () => {
+    roomKind = 'direct';
+    expect(await service.sendMessage({ groupId: roomId, conversationKind: 'direct', clientId: 'direct-self', text: 'hello',
+      mentions: { all: false, botIds: [selfId, humanId] } })).toMatchObject({ ok: true });
+    expect(posts().at(-1)![2].mentions).toEqual([humanId]);
+  });
 
   // User rule: human and teammate broadcasts must remain distinct on both send routes.
   it.each(['main', 'thread'])('uses the owner-enabled teammate audience independently in %s', async entry => {
@@ -6769,11 +6972,11 @@ describe('Chat Server directed sends', () => {
     expect(posts()).toEqual([]);
   });
 
-  it.each(['main', 'thread'])('preserves actor/local-bot/human targets and excludes self in %s wire payloads', async entry => {
+  it.each(['main', 'thread'])('preserves explicitly selected self and other targets in %s wire payloads', async entry => {
     for (const all of [false, true]) {
       for (const targets of [[botId], ['local-bot'], [humanId], [selfId], [selfId, humanId, 'local-bot', botId]]) {
         expect(await send(entry, { all, botIds: targets })).toMatchObject({ ok: true });
-        const ids = [...new Set([...targets.map(target => target === 'local-bot' ? botId : target), ...(all ? [humanId] : [])])].filter(target => target !== selfId);
+        const ids = [...new Set([...targets.map(target => target === 'local-bot' ? botId : target), ...(all ? [humanId] : [])])];
         expect(posts().at(-1)![2]).toMatchObject({ mentions: ids,
           ...(entry === 'thread' ? { threadRootId: rootId } : {}) });
       }

@@ -53,7 +53,7 @@ import {
   type BotGroupThreadShareView,
 } from '../../shared/botGroupChat.js';
 import type { BotGroupChatService } from './botGroupChatService.js';
-import { botGroupActivityAt, projectBotGroupExecutionFailures } from '@cindy/maker-shared/botGroupPresentation';
+import { botGroupActivityAt, chatGroupMembership, projectBotGroupExecutionFailures } from '@cindy/maker-shared/botGroupPresentation';
 
 const FALLBACK_MESSAGES = 20;
 const FALLBACK_MESSAGE_CHARS = 280;
@@ -206,6 +206,20 @@ const COPY = {
   "zh-Hant-x-lzh": "{name} 貼回一則話題之覆",
   "zh-Hans-x-lzh": "{name} 贴回一则话题之覆",
 },
+  externalBadge: {
+    en: 'External',
+    'zh-CN': '外部',
+    'zh-TW': '外部',
+    ja: '外部',
+    ko: '외부',
+    es: 'Externo',
+    fr: 'Externe',
+    de: 'Extern',
+    'pt-PT': 'Externo',
+    'pt-BR': 'Externo',
+    'zh-Hant-x-lzh': '外部',
+    'zh-Hans-x-lzh': '外部',
+  },
 } satisfies Record<string, Copy>;
 
 function fill(template: string, vars: Record<string, string | number>): string {
@@ -265,6 +279,7 @@ export function botGroupRemoteItem(group: BotGroupSummary): RemoteCollectionItem
       // Early local groups keep their read position on this computer (server groups on the Chat Server).
       ...(group.serverBacked ? {} : { lastReadAt: localGroupReadPosition(group.id) }),
       ...(busy ? { generation: { phase: 'processing', startedAt: null } } : {}),
+      ...(group.external === true ? { badges: [{ tone: 'external', label: localized(COPY.externalBadge), accessibilityLabel: localized(COPY.externalBadge) }] } : {}),
     },
     links: group.members.map((member) => ({
       rel: BOT_GROUP_MEMBER_LINK_REL,
@@ -278,6 +293,7 @@ export function botGroupRemoteItem(group: BotGroupSummary): RemoteCollectionItem
       teammateGroupActivity(group).phase,
       group.updatedAt,
       group.name,
+      group.external === true,
       group.members.map((member) => [member.botId, member.name, member.status]),
       group.organizerBotId,
       group.lastMessage?.createdAt ?? null,
@@ -331,6 +347,7 @@ export function botGroupRemoteChatData(detail: BotGroupDetail): BotGroupRemoteCh
     supportsMemberRemoval: detail.serverBacked === true,
     supportsOwnBotRemoval: detail.serverBacked === true,
     supportsSettingsManagement: detail.serverBacked === true,
+    ...(detail.serverBacked && detail.supportsGroupAssistant ? { supportsAssistantManagement: true } : {}),
   };
 }
 
@@ -562,6 +579,19 @@ export function registerBotGroupRemoteResourceProvider(service: () => BotGroupCh
           if (!receipt.ok) throw new RemoteResourceRegistryError('INVALID_PARAMS', receipt.errorCode);
           ownerService();
           return { result: receipt, effects: [] };
+        }
+        case 'set-assistant': {
+          if (!visibleGroup.serverBacked || !visibleGroup.supportsGroupAssistant || !current.chatServer)
+            throw new RemoteResourceRegistryError('INVALID_PARAMS', 'UNSUPPORTED_OPERATION');
+          if (visibleGroup.archived || visibleGroup.dissolvedAt || !chatGroupMembership(visibleGroup).manager)
+            throw new RemoteResourceRegistryError('INVALID_PARAMS', 'ROLE_REQUIRED');
+          if (typeof input.assistant !== 'boolean' || typeof input.expectedRevision !== 'number')
+            throw new RemoteResourceRegistryError('INVALID_PARAMS', 'INVALID_PARAMS');
+          const receipt = await current.chatServer.manage({ groupId, action: { type: 'update', assistant: input.assistant,
+            expectedRevision: input.expectedRevision, name: visibleGroup.name, topic: visibleGroup.topic ?? '', description: visibleGroup.description ?? '' } });
+          if (!receipt.ok) refuse(chatGroupFailure(new Error(receipt.errorCode)));
+          result = { ok: true };
+          break;
         }
         case 'notifications': {
           if (!visibleGroup.supportsNotificationSettings || !current.chatServer || !['all', 'mentions', 'none'].includes(String(input.mode)))

@@ -39,6 +39,7 @@ import {
 } from '@/components/ui/dropdown-menu';
 
 import { formatLastRun, formatNextRun } from '../lib/formatters';
+import { Badge } from '@/components/ui/badge';
 
 interface Props {
   schedule: Schedule;
@@ -294,7 +295,7 @@ export function TaskListCell({
             // size-5 幽灵按钮 + Silver 图标 + hover 浅灰底,连 token 都复用同一组,
             // 两处"运行"入口视觉与后续调整保持同步。零阴影(docs/design-rules/cindy-design-system.md §6)、
             // 零缩放位移(§14.4),只保留 ≤150ms 的 opacity/颜色功能性过渡。
-            'flex size-5 items-center justify-center rounded-md',
+            'flex size-5 items-center justify-center rounded-lg',
             'text-sidebar-action-icon',
             // 只在行 hover / 按钮 focus 时露出。
             'opacity-0 transition-[opacity,background-color,color] duration-150',
@@ -345,7 +346,7 @@ export function TaskListCell({
               // 高度 / 内边距对齐外面那个 <span>（text-sm 自然 line-height = 20px），
               // 用 h-5 + py-0 + -mx-1 让 input 在视觉上"原地"覆盖标题，
               // 避免双击进入编辑时 cell 整体被撑高 4px 的跳变。
-              'min-w-0 flex-1 h-5 px-1 -mx-1 py-0 rounded',
+              'min-w-0 flex-1 h-5 px-1 -mx-1 py-0 rounded-full',
               'text-sm font-medium text-[var(--msg-assistant-text)]',
               'bg-transparent outline-none',
               'border-[1.5px] border-[var(--focus-ring)]',
@@ -365,26 +366,18 @@ export function TaskListCell({
             视觉规格：椭圆描边 + 11px 灰字。
             编辑态下隐藏 chip 给输入框留满宽度。 */}
         {!isEditing && isProjectSchedule && (
-          <span
-            className={cn(
-              'shrink-0 inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-11 font-medium leading-none',
-              'border-[var(--cmd-palette-border)] text-[var(--cmd-palette-item-meta)]',
-            )}
+          <Badge
+            tone="outline"
+            icon={<FolderGit2 size={10} strokeWidth={1.8} />}
             title={t('scheduler.projectAutomation.cell.tooltip')}
           >
-            <FolderGit2 size={10} strokeWidth={1.8} />
             {t('scheduler.projectAutomation.cell.tag')}
-          </span>
+          </Badge>
         )}
         {!isEditing && (prRule || s.webhookTrigger || s.manual || !s.recurring) && (
-          <span
-            className={cn(
-              'shrink-0 translate-x-[2px] rounded-full border px-2 py-0.5 text-11 font-medium leading-none',
-              'border-[var(--cmd-palette-border)] text-[var(--cmd-palette-item-meta)]',
-            )}
-          >
+          <Badge tone="outline" className="translate-x-[2px]">
             {prRule ? (prRule.url.includes('/-/merge_requests/') ? 'MR' : 'PR') : s.webhookTrigger ? t('scheduler.cell.tagWebhook') : s.manual ? t('scheduler.cell.tagManual') : t('scheduler.cell.tagOnce')}
-          </span>
+          </Badge>
         )}
       </div>
       {hasMetaRow && (

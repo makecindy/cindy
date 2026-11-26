@@ -3,7 +3,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useAuth } from '@/contexts/AuthContext';
 import type { DesktopLoginAction } from '@/lib/authService';
 
-interface UseLoginReturn {
+export interface UseLoginReturn {
   isLoading: boolean;
   errorCode: string | null;
   retryAt: number | undefined;

@@ -28,6 +28,7 @@ import {
   type AgentKind,
   type PermissionModeDescriptor,
 } from '@/hooks/useAgentCapabilities';
+import { resolvePermissionModeForOptions } from '@cindy/maker-shared/permission-mode';
 import type { PermissionMode } from '@/lib/userPreferences.types';
 
 interface PermissionSelectorProps {
@@ -97,10 +98,13 @@ function vendorKeyToAgentKind(v: 'cc' | 'codex' | 'pi'): AgentKind {
   return 'claude-code';
 }
 
-/** Codex 不支持 acceptEdits/plan, 落到 ask 兜底 */
+/** 跨引擎统一识别(ask <-> default)，目标不支持时安全回落。 */
 function normalizeMode(mode: PermissionMode, options: PermissionModeDescriptor[]): PermissionMode {
-  if (options.some((o) => o.id === mode)) return mode;
-  return options[0]?.id ?? mode;
+  if (options.length === 0) return mode;
+  return resolvePermissionModeForOptions(
+    mode,
+    options.map((o) => o.id),
+  ) as PermissionMode;
 }
 
 /**

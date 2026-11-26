@@ -115,7 +115,7 @@ function botTaskDispatchSlice(): string {
   const sendWithBaseline = slice('async function sendUserMessageWithAwaitedGitBaseline(', '\n  /**\n   * 来源标签用的发送方身份快照');
   const dispatchBotSessionMessage = slice(
     'const dispatchBotSessionMessage = async (params: {',
-    '\n  setBotInvitationWelcomeDispatch(',
+    '\n  setVoiceTaskDispatch(',
   );
   const groupDispatch = slice(
     'dispatch: (',
@@ -123,7 +123,7 @@ function botTaskDispatchSlice(): string {
     registerSource.indexOf('const botGroupChatDeps: BotGroupChatServiceDeps = {'),
   );
   const pluginSource = slice('function hostPluginInputSource()', '  const sessionControlService = createSessionControlService(');
-  const sendToSession = slice('sendToSession: async (params) => {', ',\n    enableOrca: enableOrcaInternal,')
+  const sendToSession = slice('sendToSession: async (params', ',\n    enableOrca: enableOrcaInternal,')
     .replace('sendToSession:', 'const sendToSession =');
   return ts.transpileModule(
     `${sendWithBaseline}
@@ -200,6 +200,8 @@ function botTaskDispatchHarness(
   const dbClient = { drizzle: { select: () => dbChain } };
   const stubs: Record<string, unknown> = {
     getPluginHostToolCaller: () => undefined,
+    getSessionActiveInputClientIds: () => [],
+    withPluginTaskService: asyncNoop,
     sanitizeSourceName,
     getInstalledGhostName: () => 'Dashboard',
     captureDataOwnerBroadcastScope: () => ({}),
@@ -495,24 +497,21 @@ describe('external handoff to hidden group lanes', () => {
     }));
   });
 
-  it('queues a plugin-engine group turn only from the group dispatcher', async () => {
+  // 2026-11-25 用户要求插件引擎在所有地方与内置引擎一样可用：插件引擎任务此前只接群聊调度的消息，其他任务经
+  // send_to_session 发来的一律 UNSUPPORTED_CAPABILITY。现在与其他任务一样接收(同一条发送路径)；群内部车道拒收
+  // 外部消息是另一条与引擎无关的规则，保持不变。最小失败输入：目标 meta agentKind='acp'。tier：unit。
+  it('delivers messages to a plugin-engine task like any task, keeping the group-lane rule', async () => {
     const maker = { getSession: () => undefined, getSessionMeta: async () => ({ id: 'child', agentKind: 'acp' }) };
     const h = groupHarness(false, { maker });
     const input = { targetSessionId: 'child', message: 'Reply to the group', clientId: 'bot-group:managed-turn' };
-    expect(await h.sendToSessionInternal(input)).toMatchObject({ ok: false, errorCode: 'UNSUPPORTED_CAPABILITY' });
-    expect(await h.dispatchBotSessionMessage(input)).toMatchObject({ ok: false, errorCode: 'UNSUPPORTED_CAPABILITY' });
+    expect(await h.sendToSessionInternal(input)).toMatchObject({ ok: false, message: expect.stringMatching(/group.*not.*delivered/i) });
     expect(await h.groupDispatch(input)).toMatchObject({ ok: true, wakeKind: 'queued', queuedMessageId: input.clientId });
-    expect(h.scope.enqueueSendToSessionMessage).toHaveBeenCalledTimes(1);
 
     const ordinary = botTaskDispatchHarness({ child: { permissionMode: 'ask', planModeEnabled: false } }, {}, { maker });
-    expect(await ordinary.groupDispatch(input)).toMatchObject({ ok: false, errorCode: 'UNSUPPORTED_CAPABILITY' });
-    expect(ordinary.scope.enqueueSendToSessionMessage).not.toHaveBeenCalled();
-    const visible = { ...input, groupAssistantTask: true };
-    expect(await ordinary.sendToSessionInternal(visible)).toMatchObject({ ok: false, errorCode: 'UNSUPPORTED_CAPABILITY' });
-    expect(await ordinary.groupDispatch(visible)).toMatchObject({ ok: true, wakeKind: 'queued' });
-    expect(ordinary.scope.enqueueSendToSessionMessage).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
-      targetSessionId: visible.targetSessionId, clientId: visible.clientId,
-    }));
+    expect(await ordinary.groupDispatch(input)).toMatchObject({ ok: true, agentKind: 'acp', wakeKind: 'queued' });
+    expect(await ordinary.sendToSessionInternal({ ...input, groupAssistantTask: true }))
+      .toMatchObject({ ok: true, agentKind: 'acp', wakeKind: 'queued' });
+    expect(ordinary.scope.enqueueSendToSessionMessage).toHaveBeenCalledTimes(2);
   });
 
   // #12496, unit: run the registered group opener and sender up to their DB and queue ports.
@@ -702,7 +701,15 @@ describe('idle forwarded request authorization', () => {
     const broadcast = vi.fn();
     const refineTitle = vi.fn();
     const row = { id: 'new-child', permissionMode: 'auto', planModeEnabled: false };
-    const enqueue = vi.fn(async (input: { onAccepted?: () => Promise<void> }) => { await input.onAccepted?.(); });
+    const events: string[] = [];
+    const beforeLocalTaskDispatch = vi.fn(async () => {
+      await Promise.resolve();
+      events.push('linked');
+    });
+    const enqueue = vi.fn(async (input: { onAccepted?: () => Promise<void> }) => {
+      events.push('queued');
+      await input.onAccepted?.();
+    });
     const h = botTaskDispatchHarness({ 'new-child': row }, {}, {
       openSession: async (_input: unknown, create: (row: object, guard: () => Promise<void>) => Promise<unknown>) =>
         ({ row, value: await create(row, async () => {}) }),
@@ -712,9 +719,11 @@ describe('idle forwarded request authorization', () => {
     });
     const receipt = { kind: 'agent-request', request: {
       userText: 'Inspect fixtures', sessionId: 'owner', clientId: 'u1', ownerVerified: true } };
-    expect(await h.sendToSessionInternal({ message: 'envelope', autoReviewUserText: receipt,
+    expect(await h.sendToSessionInternal({ message: 'envelope', autoReviewUserText: receipt, beforeLocalTaskDispatch,
       createDefaults: { agentKind: 'codex', model: 'fixture', workingDir: '/tmp/fixture', permissionMode: 'auto' },
     })).toMatchObject({ ok: true, targetSessionId: 'new-child', wakeKind: 'created' });
+    expect(beforeLocalTaskDispatch).toHaveBeenCalledExactlyOnceWith('new-child');
+    expect(events).toEqual(['linked', 'queued']);
     expect(enqueue).toHaveBeenCalledWith(expect.objectContaining({ targetSessionId: 'new-child', autoReviewUserText: receipt }));
     expect(refineTitle).toHaveBeenCalledExactlyOnceWith('new-child', 'envelope', { initialTitle: 'envelope' });
     expect(h.sendOptions).toHaveLength(0);

@@ -1,6 +1,7 @@
 import { modelImageInputDefault } from '../../../shared/modelImageInputOverride';
 import { displayPricingComponent, isDisplayPricingTableRedundant } from '@/lib/displayPricingFormat';
 import { DisplayPricingDetails, DisplayPricingQuote } from '@/components/DisplayPricingDetails';
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { localizedModelDescription } from '@/lib/modelDescriptions';
 import { providerDisplayName } from '@/lib/providerDisplayName';
@@ -50,24 +51,26 @@ import {
 } from './ModelAdvancedLayout';
 import { modelPriceDetailRows, type ModelPricePresentation } from '@/lib/modelPriceFormat';
 import {
-  isModelEnabled,
-  setModelVisibility, setModelVisibilities,
-  isModelVisibilityCustomized,
-  resetModelVisibilities,
+  isModelEnabled as localIsModelEnabled,
+  setModelVisibility as localSetModelVisibility,
+  setModelVisibilities as localSetModelVisibilities,
+  isModelVisibilityCustomized as localIsModelVisibilityCustomized,
+  resetModelVisibilities as localResetModelVisibilities,
   useModelVisibilityVersion,
 } from '@/state/modelVisibilityPrefs';
 import {
-  clearProviderModelEffort, editProviderModelMemoryBatch,
-  getProviderModelEffort,
-  setProviderModelEffort,
+  clearProviderModelEffort as localClearProviderModelEffort,
+  editProviderModelMemoryBatch as localEditProviderModelMemoryBatch,
+  getProviderModelEffort as localGetProviderModelEffort,
+  setProviderModelEffort as localSetProviderModelEffort,
   useProviderModelMemoryVersion,
 } from '@/state/providerModelMemory';
+import { applyCustomModelEdit, type CustomModelEdit } from '../../../shared/customModelEdit';
+import { useModelSettingsSource } from './modelSettingsSource';
 import { EFFORT_TIER_COLORS } from '@/themes/effortTierColors';
 
 import {
   classifyVisionCapability,
-  providerWireProtocolForApi,
-  providerBaseUrlForApi,
   clampEffortToSupported,
   EFFORT_VALUES,
   isAgentSelectableModel,
@@ -198,6 +201,43 @@ export function ModelAdvancedDrawer({
   // 开关/档位写的是 renderer 本地存储，订阅 version 才能在写后重渲染。
   useModelVisibilityVersion();
   useProviderModelMemoryVersion();
+  // Another device's settings (cloud instance page) stand in for this device's stores.
+  // Resolved at call time, like direct imports.
+  const source = useModelSettingsSource();
+  const isModelEnabled: typeof localIsModelEnabled = (...args) =>
+    source ? source.isModelEnabled(...args) : localIsModelEnabled(...args);
+  const isModelVisibilityCustomized: typeof localIsModelVisibilityCustomized = (...args) =>
+    source ? source.isModelVisibilityCustomized(...args) : localIsModelVisibilityCustomized(...args);
+  const resetModelVisibilities: typeof localResetModelVisibilities = (...args) =>
+    source ? source.resetModelVisibilities(...args) : localResetModelVisibilities(...args);
+  const setModelVisibility: typeof localSetModelVisibility = (agent, providerId, modelId, enabled) =>
+    source
+      ? source.setModelVisibilities(providerId, [{ agent, modelId }], enabled)
+      : localSetModelVisibility(agent, providerId, modelId, enabled);
+  const getProviderModelEffort: typeof localGetProviderModelEffort = (...args) =>
+    source ? source.getEffort(...args) : localGetProviderModelEffort(...args);
+  const setProviderModelEffort: typeof localSetProviderModelEffort = (agent, providerId, modelId, effort) =>
+    source
+      ? source.setEffort(agent, providerId, modelId, effort as Effort)
+      : localSetProviderModelEffort(agent, providerId, modelId, effort);
+  const clearProviderModelEffort: typeof localClearProviderModelEffort = (agent, providerId, modelId) =>
+    source
+      ? source.setEffort(agent, providerId, modelId, null)
+      : localClearProviderModelEffort(agent, providerId, modelId);
+  const setModelVisibilities: typeof localSetModelVisibilities = (providerId, targets, enabled) =>
+    source
+      ? source.setModelVisibilities(providerId, targets, enabled)
+      : localSetModelVisibilities(providerId, targets, enabled);
+  // Alias-group effort edits reach the same target as single-model edits.
+  const editProviderModelMemoryBatch: typeof localEditProviderModelMemoryBatch = (ops) => {
+    if (!source) return localEditProviderModelMemoryBatch(ops);
+    if (ops.some((op) => op.kind !== 'set-effort' && op.kind !== 'clear-effort')) return false;
+    // The batch carries a stored effort string; the panel only offers the model's own efforts.
+    type SourceEffort = Parameters<typeof source.setEffort>[3];
+    for (const op of ops)
+      source.setEffort(op.agent, op.providerId, op.model, op.kind === 'set-effort' ? (op.effort as SourceEffort) : null);
+    return true;
+  };
 
   /**
    * 主展示引擎:该模型可用引擎里的第一个。只读事实(上下文、报价、能力)按它取 ——
@@ -227,7 +267,7 @@ export function ModelAdvancedDrawer({
     let active = true;
     setLocalModelRepo(null);
     setLocalConfigurationBlocked(false);
-    if (open && provider.id === MANAGED_LLAMACPP_PROVIDER_ID && primaryModel) {
+    if (open && !source && provider.id === MANAGED_LLAMACPP_PROVIDER_ID && primaryModel) {
       const modelId = primaryModel.id;
       void window.electronAPI.maker.llamaCppStatus().then((snapshot) => {
         if (active) setLocalConfigurationBlocked(snapshot.canConfigure === false);
@@ -279,70 +319,32 @@ export function ModelAdvancedDrawer({
   const videoModel = videoAgent ? row?.byAgent[videoAgent] : undefined;
   const videoCapability = videoModel?.userModelConfig?.mode === 'video_generation'
     ? videoModel.userModelConfig.modalities?.input.includes('image') ? 'edit' : 'generate' : 'default';
+  /** One model edit: applied here to this device's config, or by the other device itself. */
+  const saveModelEdit = async (agent: AgentKind, modelId: string, edit: CustomModelEdit, setSaving: (saving: boolean) => void) => {
+    let save: () => Promise<boolean>;
+    if (source) save = () => source.editModel(provider, agent, modelId, edit);
+    else {
+      const config = providerViewToCustomProviderConfig(provider);
+      if (!applyCustomModelEdit(config, agent, modelId, edit)) return;
+      save = async () => (await updateCustomProvider(config, {}, { source: 'manual-settings' })).ok;
+    }
+    setSaving(true);
+    try {
+      if (!await save()) toast.error(t('settings.providers.custom.toast.saveFailed'));
+    } catch { toast.error(t('settings.providers.custom.toast.saveFailed')); }
+    finally { setSaving(false); }
+  };
   const setImageCapability = async (value: string, kind: 'image' | 'video' = 'image') => {
     const agent = kind === 'image' ? imageAgent : videoAgent;
     const sourceModel = kind === 'image' ? imageModel : videoModel;
-    if (imageCapabilitySaving || !agent || !sourceModel || !['default', 'generate', 'edit'].includes(value)) return;
-    const config = providerViewToCustomProviderConfig(provider);
-    const model = config.runtimes[agent]?.models.find(item => item.id === sourceModel.id);
-    if (!model) return;
-    if (value === 'default') {
-      delete model.mode;
-      delete model.modalities;
-    } else {
-      model.mode = kind === 'image' ? 'image_generation' : 'video_generation';
-      model.modalities = { input: value === 'edit' ? ['text', 'image'] : ['text'], output: [kind] };
-    }
-    setImageCapabilitySaving(true);
-    try {
-      const result = await updateCustomProvider(config, {}, { source: 'manual-settings' });
-      if (!result.ok) toast.error(t('settings.providers.custom.toast.saveFailed'));
-    } catch { toast.error(t('settings.providers.custom.toast.saveFailed')); }
-    finally { setImageCapabilitySaving(false); }
+    if (imageCapabilitySaving || !agent || !sourceModel || (value !== 'default' && value !== 'generate' && value !== 'edit')) return;
+    await saveModelEdit(agent, sourceModel.id, { kind: 'capability', media: kind, value }, setImageCapabilitySaving);
   };
   const setModelApi = async (agent: AgentKind, api: string) => {
     if (protocolSaving || !canEditProtocol || !row?.byAgent[agent]) return;
-    const config = providerViewToCustomProviderConfig(provider);
-    const runtime = config.runtimes[agent];
-    const model = runtime?.models.find(m => m.id === row.byAgent[agent]!.id);
-    if (!runtime || !model) return;
     const choice = row.byAgent[agent]?.availableInterfaces?.find(item => item.profileId === api);
-    if (api === 'auto' || choice) {
-      model.interfaceId = api;
-      delete model.api;
-      delete model.piApi;
-      delete model.route;
-    } else {
-      delete model.interfaceId;
-      model.api = api as PiModelApi;
-      if (agent === 'pi') model.piApi = api as PiModelApi;
-      const wire = providerWireProtocolForApi(api);
-      if (!wire) return;
-      // Pi gets the selected API from api/piApi. A same-endpoint generated route
-      // would look explicit after refresh and block a later Messages /v1 fix.
-      // Keep existing routes and endpoints that change for the selected API.
-      const inheritPiEndpoint = agent === 'pi' && !model.route && !runtime.requestPath &&
-        (runtime.wireProtocol === 'openai-chat' || runtime.wireProtocol === 'openai-responses' ||
-          runtime.wireProtocol === 'anthropic-messages' || runtime.wireProtocol === 'google-generative-ai') &&
-        (api === 'anthropic-messages' ||
-          ((api === 'openai-completions' || api === 'openai-responses' || api === 'google-generative-ai') &&
-            providerBaseUrlForApi(runtime.baseUrl, api) === runtime.baseUrl));
-      if (!inheritPiEndpoint) {
-        model.route = {
-          baseUrl: providerBaseUrlForApi(model.route?.baseUrl ?? runtime.baseUrl, api),
-          wireProtocol: wire,
-        };
-      }
-    }
-    setProtocolSaving(true);
-    try {
-      const result = await updateCustomProvider(config, {}, { source: 'manual-settings' });
-      if (!result.ok) toast.error(t('settings.providers.custom.toast.saveFailed'));
-    }
-    catch { toast.error(t('settings.providers.custom.toast.saveFailed')); }
-    finally { setProtocolSaving(false); }
+    await saveModelEdit(agent, row.byAgent[agent]!.id, { kind: 'interface', api, profile: !!choice }, setProtocolSaving);
   };
-
 
   const [ctxDraft, setCtxDraft] = useState('');
   const ctxDirtyRef = useRef(false);
@@ -738,9 +740,9 @@ export function ModelAdvancedDrawer({
                                   {AGENT_LABEL[agent]}
                                 </span>
                                 {agent === recommendedAgent && (
-                                  <span className="rounded-full bg-[var(--surface-chip)] px-1.5 py-0.5 text-10 text-[var(--text-tertiary)]">
+                                  <Badge size="xs">
                                     {t('newChat.modelSelector.unified.recommended')}
-                                  </span>
+                                  </Badge>
                                 )}
                               </div>
                               {protocol && (
@@ -1104,7 +1106,7 @@ export function ModelAdvancedDrawer({
                               width="sm"
                               value={field.value}
                               options={field.options}
-                              disabled={imageInputOverride.loading || localConfigurationBlocked}
+                              disabled={imageInputOverride.loading || imageInputOverride.unavailable || localConfigurationBlocked}
                               onValueChange={(value) => void imageInputOverride.setValue(
                                 value === 'default' ? null : value === 'true',
                               )}

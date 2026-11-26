@@ -454,11 +454,15 @@ describe('model group failure handling', () => {
     ['a turn without events', { reason: 'turn_no_event_timeout' }, 'transient'],
     ['a stalled Codex reconnect', { reason: 'codex_reconnect_stalled' }, 'transient'],
     ['a short rate limit', { errorStatus: 429, sdkError: 'rate_limit' }, 'transient'],
+    ['a short rate limit enriched with usageLimit by translator', { errorStatus: 429, sdkError: 'rate_limit', usageLimit: true, message: '429 Too Many Requests: rate_limit_exceeded' }, 'transient'],
+    ['a Codex rateLimitExceeded tag', { codexErrorInfo: 'rateLimitExceeded', errorStatus: 429, usageLimit: true, message: 'Too Many Requests' }, 'transient'],
     ['a rate limit reported only as text', { message: 'rate limit exceeded' }, 'transient'],
     ['an unclassified upstream error', { message: 'weird upstream boom' }, 'transient'],
     ['an unclassified failed turn', { reason: 'turn-failed', message: 'weird upstream boom' }, 'transient'],
     ['out of credit', { errorStatus: 402 }, 'connection'],
     ['an account quota', { usageLimit: true }, 'connection'],
+    ['a Claude subscription window limit with usageResetAt', { sdkError: 'rate_limit', usageLimit: true, usageResetAt: 1_900_000_000_000, message: "You've hit your session limit" }, 'connection'],
+    ['a Codex usageLimitExceeded tag', { codexErrorInfo: 'usageLimitExceeded', errorStatus: 429, usageLimit: true, message: 'usage_limit_reached' }, 'connection'],
     ['a dead login', { reason: 'provider_auth_or_access' }, 'connection'],
     ['an unauthorized key', { errorStatus: 401 }, 'connection'],
     ['an ACP agent quota', { reason: 'acp-usage-limit' }, 'connection'],
@@ -471,6 +475,8 @@ describe('model group failure handling', () => {
     ['a prompt too long for any source', { errorStatus: 400, message: 'prompt too long' }, null],
     ['a structured context error', { reason: 'turn-failed', codexErrorInfo: 'contextWindowExceeded' }, null],
     ['a statusless content block', { reason: 'turn-failed', message: 'content_policy_violation' }, null],
+    ['a misalignment policy block', { codexErrorInfo: 'misalignmentPolicyViolation', errorStatus: 403 }, null],
+    ['a provider safety refusal reason', { reason: 'provider-safety-refusal', errorStatus: 403, message: 'Output blocked by content filtering policy' }, null],
     ['a rejected approval', { reason: 'acp-request-failed', message: 'User denied permission' }, null],
     ['a local permission denial', { sdkError: 'permission_error' }, null],
     ['a provider permission denial', { sdkError: 'permission_error', errorStatus: 403 }, 'model'],
@@ -524,8 +530,11 @@ describe('model group failure handling', () => {
       pendingSchedulerAutoResumeRunBySession: new Map(), notifySchedulerAutoResumeFailed: vi.fn(),
       autoResumeAttemptToken: () => null,
     } as never);
-    const fail = async (signals: Record<string, unknown>) => {
-      const progress = (hooks.onResumableTurnError as (...args: unknown[]) => unknown)('s', signals, item);
+    let lastResume: unknown;
+    const fail = async (signals: Record<string, unknown>, onContinuedInput = false) => {
+      const failedItem = onContinuedInput ? { ...item, autoResume: true, autoResumeInfo: lastResume } : item;
+      const progress = (hooks.onResumableTurnError as (...args: unknown[]) => unknown)('s', signals, failedItem);
+      lastResume = progress;
       if (!progress) return null;
       await scheduled.shift()!();
       const call = fallback.mock.calls.at(-1)!;
@@ -533,6 +542,19 @@ describe('model group failure handling', () => {
     };
     return { fail, fallback, delays, resume, finalize, noteProgress: () => guard.noteProgress('s', lastDispatchedToken) };
   }
+
+  // Unit: an accepted CONTINUE that stalls again gets another chance only after
+  // real output. Enabled model groups keep their own source-switch retry budget.
+  it.each([
+    ['disabled', false, 1], ['disabled', true, 2], ['enabled', false, 2],
+  ] as const)('recovers repeated reconnect with group=%s progress=%s', async (policy, progress, expectedSends) => {
+    const h = groupHarness(policy);
+    const signals = { reason: 'codex_reconnect_stalled' };
+    await h.fail(signals);
+    if (progress) expect(h.noteProgress()).toBe(true);
+    await h.fail(signals, true);
+    expect(h.resume).toHaveBeenCalledTimes(expectedSends);
+  });
 
   // Product §4.1–4.5 / #12440: the hooks now run with the production guard instead of an
   // always-allow fake. Two transient failures on each of A and B must still let C receive the retry.
@@ -578,6 +600,48 @@ describe('model group failure handling', () => {
     expect(h.resume.mock.calls.at(-1)).toEqual(['s', 3, {
       agentSwitch: { from: 'Model · A', to: 'Model · B', cause: 'failed' },
     }]);
+  });
+
+  // 测试价值：依据 #12440 与 model-groups.md §4.1（429 临时频率限制应同源重试两次再切换，且不封禁整条连接；
+  // 供应商安全拦截不得触发换源绕过）；此前单测手造 429 未带 translator 实产的 usageLimit:true，漏掉了真实 429 被误判成
+  // connection 立即换源且报成 usage-limit 的回归；生产入口 createInterruptedTurnAutoResumeHooks / isBotCandidateUnavailable；
+  // 最小失败输入为带 usageLimit:true 的 429 信号与安全拦截信号；tier: unit。
+  it('retries a translator-enriched 429 twice on the same source before switching with cause overload', async () => {
+    const h = groupHarness('enabled', false);
+    const rateLimitSignals = {
+      errorStatus: 429,
+      sdkError: 'rate_limit',
+      usageLimit: true,
+      codexErrorInfo: 'rateLimitExceeded',
+      message: '429 Too Many Requests: rate_limit_exceeded',
+    };
+    for (let retry = 0; retry < 2; retry += 1) {
+      expect(await h.fail(rateLimitSignals)).toMatchObject({
+        requireRouteChange: false,
+        recovery: { retrySameSource: true, accountUnavailable: false },
+      });
+    }
+    h.fallback.mockResolvedValueOnce({
+      session: null, outcome: 'switched', sourceSwitch: { from: 'GPT · A', to: 'GPT · B' },
+    });
+    expect(await h.fail(rateLimitSignals)).toMatchObject({
+      requireRouteChange: true,
+      recovery: { retrySameSource: false, accountUnavailable: false },
+    });
+    expect(h.resume.mock.calls.at(-1)).toEqual(['s', 3, {
+      agentSwitch: { from: 'GPT · A', to: 'GPT · B', cause: 'overload' },
+    }]);
+  });
+
+  it.each([
+    { codexErrorInfo: 'misalignmentPolicyViolation', errorStatus: 403, message: 'Forbidden' },
+    { reason: 'provider-safety-refusal', errorStatus: 403, message: 'Output blocked by content filtering policy' },
+    { errorStatus: 403, message: '{"error":{"code":"safety_violation","message":"Blocked"}}' },
+  ])('never treats a provider safety refusal as a replaceable candidate or auto-resumable failure (%j)', async (signals) => {
+    const h = groupHarness();
+    expect(isBotCandidateUnavailable(signals)).toBe(false);
+    expect(await h.fail(signals)).toBeNull();
+    expect(h.resume).not.toHaveBeenCalled();
   });
 
   it('leaves a deterministic failure visible even if it carries an ordinarily retryable status', async () => {

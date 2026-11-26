@@ -22,13 +22,15 @@ const LEFT_INSET = spacing.lg;
 export type CompanionRowTrailing = { kind: 'time'; text: string } | { kind: 'working' };
 
 export function CompanionListRow({
-  avatar, title, device, trailing, preview, previewTone = 'secondary', previewPrefix, previewPrefixTestID,
+  avatar, title, titleBadge, device, trailing, preview, previewTone = 'secondary', previewPrefix, previewPrefixTestID,
   unread = false, unreadCount, mentioned = false, unreadLabel, disabled = false, last = false, accessibilityLabel, onPress, testID,
   accessibilityActions, onAccessibilityAction,
 }: {
   /** Content of the 44pt avatar box (the caller draws the shared status dot). */
   avatar: ReactNode;
   title: string;
+  /** Compact inline badge beside the title (e.g. External group mark for enterprise viewers). */
+  titleBadge?: ReactNode;
   /** Computer name, only when two rows share a name. */
   device?: string;
   trailing: CompanionRowTrailing;
@@ -60,6 +62,7 @@ export function CompanionListRow({
     <View style={[styles.body, !last && styles.divider]}>
       <View style={styles.titleRow}>
         <Text numberOfLines={1} style={styles.title}>{title}</Text>
+        {titleBadge}
         {device ? <Text numberOfLines={1} style={styles.device}>{`· ${device}`}</Text> : null}
         <View style={styles.spacer} />
         <View style={styles.trailing}>

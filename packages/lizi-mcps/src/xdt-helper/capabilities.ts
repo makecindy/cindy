@@ -177,7 +177,7 @@ export const CAPABILITIES: readonly CapabilityEntry[] = [
       '【恢复】右键「取消归档」,或项目菜单「全部取消归档」;用户在桌面端打开已归档任务直接发消息,会自动取消归档回到「活跃」。agent 用 send_to_session 发给已归档任务则返回 ARCHIVED,不会自动恢复。',
       '【归档限制】运行中、正被远程接管的任务不能归档;项目 / 对话组「全部归档」与多选归档会跳过已置顶和运行中的任务;worktree 有未提交改动时归档前自动保存 git 快照。',
       'Fork:消息操作栏「开启一个新任务」,用到该点为止的上下文创建独立新任务,原任务不变。Rewind:「回到此处」移除这条消息之后的对话记录,有 Git 保存点 / 文件 checkpoint 时可同时把工作目录文件回退到那一刻;任务运行中会先停止;远端 Claude Code 任务暂不支持。Rewind 会丢弃后续对话,确认前会提示影响范围。',
-      'agent 批量整理:control 类 rename_sessions(批量改名)、move_session(移动)、任务标签工具、archive_sessions / unarchive_sessions(每批 ≤50,把 status 在 active↔archived 间切换)、snooze_sessions(与收件箱同一「稍后处理 / 取回」:until 传时间、indefinite 或 cancel;不归档);归档与稍后处理跨电脑传 deviceId::sessionId,单次限定一台电脑;改名 / 移动 / 标签仅本机。delete_session 删除明确任务；fork_session 从指定消息分叉，rewind_session 恢复指定消息前的检查点，均支持 deviceId::sessionId。删除与回退固定走逐次确认；不能删除当前调用任务。',
+      'agent 批量整理:control 类 rename_sessions(批量改名)、move_session(移动)、任务标签工具、archive_sessions / unarchive_sessions(每批 ≤50,把 status 在 active↔archived 间切换)、snooze_sessions(与收件箱同一「稍后处理 / 取回」:until 传时间、indefinite 或 cancel;不归档);pin_sessions / unpin_sessions（置顶 / 取消置顶，可查回 pinned）、归档与稍后处理跨电脑传 deviceId::sessionId,单次限定一台电脑;改名 / 移动 / 标签仅本机。delete_session 删除明确任务；fork_session 从指定消息分叉，rewind_session 恢复指定消息前的检查点，均支持 deviceId::sessionId。删除与回退固定走逐次确认；不能删除当前调用任务。',
       '归档可逆、不删数据,经统一权威出口写库并广播 sessions:patched,侧栏即时收敛;不能归档调用方自己所在的任务。恢复不启动执行、不发旧消息、不恢复暂停自动化；之后可用 send_to_session 发送新消息。',
       '本机归档与取消归档整批原子写入；稍后处理先确认整批存在且未删除，再逐个写入，中途失败即停并返回已完成项；远程逐项执行，失败即停并返回已完成、失败与未执行项，不保证跨项事务；回执未知时先查状态再决定重试。',
       '更细的界面操作说明可查 get_capabilities({scope:"help", key:"sidebar"})。',
@@ -296,7 +296,7 @@ export const CAPABILITIES: readonly CapabilityEntry[] = [
     title: '自动更新',
     oneLiner: '后台检测并下载新版本,提示重启安装;可开「空闲时自动安装更新」;agent 可在用户确认后代为更新。',
     detail: [
-      '内置更新器在后台检测并下载新版本(断点续传 + SHA256 校验),下载完成后提示用户重启应用来安装,不会意外重启。「设置 → 关于」有「空闲时自动安装更新」开关,开启后在空闲时自动安装并重启(Linux 只在用户选择重启时应用)。',
+      '内置更新器在后台检测并下载新版本(断点续传 + SHA256 校验),下载完成后提示用户重启应用来安装,不会意外重启。「设置 → 关于」有「空闲时自动安装更新」开关,开启后在空闲时自动安装并重启(Linux 支持用户目录安装和已免密授权的系统 .deb;需要系统密码的 .deb 只在用户选择重启时应用,开关不显示)。',
       'agent 工具(cindy_helper app_update 类):check_app_update 只读检查;install_app_update 由宿主弹确认卡(写明目标版本、会重启、会中断哪些任务),用户确认后才经内置更新器下载、安装并重启,重启后结果写回发起任务;set_app_auto_update 同样经确认卡开关上述设置。只有主人本人发起的轮次能触发。',
       '不要用 shell 下载安装包或替换应用;开发版、个人版等不支持应用内更新的构建会明确返回原因。',
     ].join(' '),

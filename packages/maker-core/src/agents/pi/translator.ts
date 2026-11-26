@@ -1,3 +1,4 @@
+import { markPiResponsesCompletion, type PiResponsesCompletion } from './responses-completion.js';
 import { piToolMarkupProjection } from './tool-markup-projection.js';
 import { parseOutputLimitDetails, type OutputLimitDetails } from '@cindy/maker-shared';
 import { nativeToolMediaFields } from '@cindy/maker-shared/tool-process-media';
@@ -19,6 +20,7 @@ import { nativeToolMediaFields } from '@cindy/maker-shared/tool-process-media';
  */
 
 import { randomUUID } from 'node:crypto';
+import { formatTerminalRateLimitRetryMessage, TERMINAL_RATE_LIMIT_RETRY_REASON } from '../codex/terminal-rate-limit-retry.js';
 import { PI_NATIVE_SUBAGENT_DISPLAY_NAME } from './session-tree.js';
 import { parseMessageToolUse } from '@cindy/maker-shared/message-normalize';
 import type { StartSessionOptions } from '../base-agent.js';
@@ -26,6 +28,9 @@ import type { Logger } from '../../interfaces/logger.js';
 import { PI_SUBAGENT_RUNTIME_TOOL_NAME, PI_SUBAGENT_TOOL_NAME, subagentSpawnResultIndicatesRunning } from '@cindy/maker-shared/agent-task';
 import {
   extractNonSecretErrorSignals,
+  isProviderSafetyRefusalError,
+  matchesDeterministicUsageExhaustionText,
+  PROVIDER_SAFETY_REFUSAL_REASON,
   redactSensitiveText,
   type NonSecretErrorSignals,
 } from '@cindy/maker-shared/error-redaction';
@@ -85,6 +90,7 @@ interface PiUsageReceipt extends UsageSegment {
 interface PiAssistantMessage {
   cindyCacheRecoveryHandled?: boolean;
   role: 'assistant';
+  api?: string;
   content?: Array<Record<string, unknown>>;
   usage?: PiUsage;
   /** provider-reported duration when the runtime supplies one. */
@@ -102,7 +108,13 @@ interface PiPendingAssistantError {
   piCacheCompatibility?: import('./cache-compatibility.js').PiCacheCompatibility;
   errorStatus?: NonSecretErrorSignals['errorStatus'] | 400;
   usageLimit?: true;
-  reason?: typeof CONTEXT_OVERFLOW_REASON | typeof UPSTREAM_STREAM_INTERRUPTED_REASON | typeof PI_GATEWAY_DROP_REASON | typeof UNSUPPORTED_REQUEST_OPTION_REASON;
+  reason?:
+    | typeof UPSTREAM_OVERLOAD_REASON
+    | typeof CONTEXT_OVERFLOW_REASON
+    | typeof UPSTREAM_STREAM_INTERRUPTED_REASON
+    | typeof PI_GATEWAY_DROP_REASON
+    | typeof UNSUPPORTED_REQUEST_OPTION_REASON
+    | typeof PROVIDER_SAFETY_REFUSAL_REASON;
 }
 
 interface PiThinkingBlock {
@@ -251,6 +263,8 @@ export interface PiTranslateContext {
   rewriteToolResultText?: (text: string) => string;
   /** toolCallId → toolName for the in-flight Pi tool, so end events can gate rewrites. */
   toolNamesByCallId: Map<string, string>;
+  pendingWorkerDispatches: Set<string>;
+  workerDispatched: boolean;
   /**
    * compaction_start 锁存的 turnScope。end/boundary 必须复用，不能按结束时的
    * isStreaming 重判——idle compact 期间用户开了新 turn 时，重判会把后台边界
@@ -348,6 +362,8 @@ export function createPiTranslateContext(
     delegatedUsageIncompleteTaskIds: new Set(),
     subagentToolCalls: new Map(),
     toolNamesByCallId: new Map(),
+    pendingWorkerDispatches: new Set(),
+    workerDispatched: false,
     pendingAssistantError: null,
     terminalAssistantErrorEmitted: false,
     compactTurnScope: null,
@@ -455,6 +471,8 @@ export function disposePiTranslateContext(ctx: PiTranslateContext): void {
   ctx.compactTurnGeneration = null;
   ctx.subagentToolCalls.clear();
   ctx.toolNamesByCallId.clear();
+  ctx.pendingWorkerDispatches.clear();
+  ctx.workerDispatched = false;
 }
 
 function samplePiGenerationHeartbeat(ctx: PiTranslateContext, now = Date.now()): void {
@@ -773,22 +791,31 @@ function isPiInvalidRequestEnvelope(rawError: string): boolean {
   }
 }
 
+function isPiConcurrencyLimit(message: string): boolean {
+  return /^(?:(?:1302|429|concurrency_limit_exceeded|rate_limit_exceeded):|.{1,128} API error \(429\):)/i.test(message)
+    && /并发.{0,12}(?:超限|过高|达到上限)|too many concurrent requests|concurrency limit exceeded/i.test(message)
+    && !matchesDeterministicUsageExhaustionText(message);
+}
+
 function piAssistantErrorOf(rawError: string): PiPendingAssistantError {
   const signals = extractNonSecretErrorSignals(rawError);
   const errorStatus = signals.errorStatus ?? (isPiInvalidRequestEnvelope(rawError) ? 400 : undefined);
   const redactedError = redactSensitiveText(rawError);
+  const isSafetyRefusal = isProviderSafetyRefusalError(rawError);
   return {
     message: redactedError,
     sdkError: redactedError,
     ...(errorStatus !== undefined ? { errorStatus } : {}),
-    ...(signals.usageLimit ? { usageLimit: true } : {}),
-    ...(isContextOverflowErrorMessage(redactedError)
-      ? { reason: CONTEXT_OVERFLOW_REASON }
-      : isUnsupportedRequestOptionErrorMessage(redactedError)
-        ? { reason: UNSUPPORTED_REQUEST_OPTION_REASON }
-        : isStreamInterruptedErrorMessage(redactedError) || isPiAbortedRequest(redactedError)
-          ? { reason: UPSTREAM_STREAM_INTERRUPTED_REASON }
-          : {}),
+    ...(!isSafetyRefusal && signals.usageLimit ? { usageLimit: true } : {}),
+    ...(isSafetyRefusal
+      ? { reason: PROVIDER_SAFETY_REFUSAL_REASON }
+      : isContextOverflowErrorMessage(redactedError)
+        ? { reason: CONTEXT_OVERFLOW_REASON }
+        : isUnsupportedRequestOptionErrorMessage(redactedError)
+          ? { reason: UNSUPPORTED_REQUEST_OPTION_REASON }
+          : isStreamInterruptedErrorMessage(redactedError) || isPiAbortedRequest(redactedError)
+            ? { reason: UPSTREAM_STREAM_INTERRUPTED_REASON }
+            : {}),
   };
 }
 
@@ -836,6 +863,15 @@ function toolResultFullText(result: unknown): string {
   return parts.join('\n');
 }
 
+function confirmsWorkerDispatch(text: string): boolean {
+  try {
+    const receipt = JSON.parse(text);
+    return receipt?.ok === true && ['resumed', 'already-active', 'queued'].includes(receipt.wake_kind);
+  } catch {
+    return false;
+  }
+}
+
 /**
  * pi 的 thinking 事件把 redacted 标记放在 partial 的当前 AssistantMessage block 上。
  * 必须恢复成结构化 stage:redacted，否则占位文本会被当成普通 thinking 落库并显示。
@@ -875,6 +911,7 @@ export function translatePiEvent(
   event: PiRpcEvent,
   queue: AsyncQueue<AgentEvent>,
   ctx: PiTranslateContext,
+  responsesCompletion?: PiResponsesCompletion,
 ): void {
   const projection = piToolMarkupProjection(ctx);
   const message = event.message as PiAssistantMessage | undefined;
@@ -884,7 +921,16 @@ export function translatePiEvent(
     || message?.stopReason === 'length' || isCurrentTurnHostAbortRequested(ctx);
   if (event.type === 'message_end' && message?.role === 'assistant') projection.setMessage(message.content, preserve);
   const generation = ctx.turnGeneration;
-  translatePiEventInternal(event, projection.queue(queue) as AsyncQueue<AgentEvent>, ctx);
+  // Projection normalizes the reply and can convert a nominal completion into an
+  // error. Attach private proof to the final event object, after that projection.
+  const sink = responsesCompletion ? { push: (terminal: AgentEvent) => {
+    const result = terminal.data as { status?: string; silentStop?: boolean; result?: string } | null;
+    if (terminal.type === 'done' && result?.status === 'completed' && !result.silentStop && result.result?.trim()) {
+      markPiResponsesCompletion(terminal, responsesCompletion);
+    }
+    return queue.push(terminal);
+  } } : queue;
+  translatePiEventInternal(event, projection.queue(sink) as AsyncQueue<AgentEvent>, ctx);
   if (ctx.turnGeneration !== generation) projection.resetTurn(queue);
   if (event.type === 'message_end' && message?.role === 'assistant') projection.finish(queue, preserve);
 }
@@ -948,6 +994,8 @@ function translatePiEventInternal(
       ctx.delegatedUsageIncompleteTaskIds.clear();
       ctx.subagentToolCalls.clear();
       ctx.toolNamesByCallId.clear();
+      ctx.pendingWorkerDispatches.clear();
+      ctx.workerDispatched = false;
       ctx.streamStopTokenByIndex.clear();
       pushStatus(queue, ctx, 'Working…', true);
       return;
@@ -1043,6 +1091,12 @@ function translatePiEventInternal(
       if (transientAssistantFailure) {
         const rawError = message.errorMessage?.trim() || fullText.trim() || 'Pi agent request failed';
         ctx.pendingAssistantError = piAssistantErrorOf(rawError);
+        // Responses SSE failures lose their HTTP status. Pi settles this shape
+        // without a native retry. Let the Host's bounded overload recovery own it.
+        if (message.api === 'openai-responses' && !ctx.pendingAssistantError.reason
+          && isPiConcurrencyLimit(message.errorMessage ?? '')) {
+          ctx.pendingAssistantError.reason = UPSTREAM_OVERLOAD_REASON;
+        }
         if (ctx.pendingAssistantError.reason === UNSUPPORTED_REQUEST_OPTION_REASON) {
           const receipt = ctx.getCacheCompatibility?.();
           if (receipt) ctx.pendingAssistantError.piCacheCompatibility = { ...receipt };
@@ -1112,6 +1166,10 @@ function translatePiEventInternal(
       const toolName = String(event.toolName ?? 'tool');
       const toolArgs = (event.args as Record<string, unknown>) ?? {};
       if (toolUseId) ctx.toolNamesByCallId.set(toolUseId, toolName);
+      if (toolUseId && toolName === 'cindy_mcp_call_tool'
+          && toolArgs.server === 'cindy_orca' && toolArgs.tool === 'send_to_worker') {
+        ctx.pendingWorkerDispatches.add(toolUseId);
+      }
       queue.push({
         type: 'tool_use',
         data: {
@@ -1214,6 +1272,10 @@ function translatePiEventInternal(
           ?? '',
       );
       if (toolUseId) ctx.toolNamesByCallId.delete(toolUseId);
+      if (ctx.pendingWorkerDispatches.delete(toolUseId) && toolName === 'cindy_mcp_call_tool'
+          && !isError && confirmsWorkerDispatch(rawText)) {
+        ctx.workerDispatched = true;
+      }
       const fullText = isContextModeDoctorToolName(toolName) && ctx.rewriteToolResultText
         ? ctx.rewriteToolResultText(rawText)
         : rawText;
@@ -1289,6 +1351,9 @@ function translatePiEventInternal(
       const outputLimited = !hostAbortRequested
         && !ctx.terminalAssistantErrorEmitted
         && ctx.finalAssistantStopReason === 'length';
+      const safetyRefusalStopped = !hostAbortRequested
+        && !ctx.terminalAssistantErrorEmitted
+        && (ctx.finalAssistantStopReason === 'refusal' || ctx.finalAssistantStopReason === 'content_filter');
       const usage = {
         ...piTurnUsageOf(ctx),
         // durationMs is deliberately generation-only. Prefer the calibrated meter's
@@ -1313,6 +1378,12 @@ function translatePiEventInternal(
         // Consumers may settle on this error and ignore the paired done.
         result: ctx.finalAssistantText,
         usage,
+      } : safetyRefusalStopped && ctx.finalAssistantText.trim().length === 0 ? {
+        message: 'The model provider blocked this response under its safety policy.',
+        sdkError: `Pi response stopped with ${ctx.finalAssistantStopReason}`,
+        reason: PROVIDER_SAFETY_REFUSAL_REASON,
+        result: '',
+        usage,
       } : null);
       const outcome = terminalError || ctx.terminalAssistantErrorEmitted
         ? 'failed'
@@ -1335,7 +1406,9 @@ function translatePiEventInternal(
         });
       }
       const silentStop = outcome === 'completed'
+        && !ctx.workerDispatched
         && !hostAbortRequested
+        && !safetyRefusalStopped
         && pendingAssistantError === null
         && !ctx.terminalAssistantErrorEmitted
         && ctx.finalAssistantText.trim().length === 0;
@@ -1393,17 +1466,19 @@ function translatePiEventInternal(
         || '';
       const signals = extractNonSecretErrorSignals(rawMessage);
       const errorStatus = ctx.pendingAssistantError?.errorStatus ?? signals.errorStatus;
-      if (parseOverloadError(rawMessage, errorStatus) !== null) {
-        // 第 1 次不透出：单次抖动 pi 一次重试就过，提示只会闪一下徒增噪音
-        // （与 claude-code translator 的 api_retry 防噪口径一致）。
-        if (progress.attempt < 2) return;
+      const concurrencyLimited = isPiConcurrencyLimit(rawMessage);
+      if (concurrencyLimited || parseOverloadError(rawMessage, errorStatus) !== null) {
+        // Show concurrency limits immediately. Other capacity signals retain the debounce.
+        if (!concurrencyLimited && progress.attempt < 2) return;
         queue.push({
           type: 'error',
           data: {
-            message: formatOverloadRetryMessage(rawMessage, progress.attempt, progress.maxAttempts),
+            message: concurrencyLimited
+              ? formatTerminalRateLimitRetryMessage(rawMessage, progress.attempt, progress.maxAttempts)
+              : formatOverloadRetryMessage(rawMessage, progress.attempt, progress.maxAttempts),
             isTerminal: false,
             willRetry: true,
-            reason: UPSTREAM_OVERLOAD_REASON,
+            reason: concurrencyLimited ? TERMINAL_RATE_LIMIT_RETRY_REASON : UPSTREAM_OVERLOAD_REASON,
             ...(sdkError ? { sdkError } : {}),
             ...(errorStatus !== undefined ? { errorStatus } : {}),
           },
@@ -1466,6 +1541,9 @@ function translatePiEventInternal(
       ctx.terminalAssistantErrorEmitted = true;
       // 只有 Pi 自己的 retry budget 用尽，才挡住 Host 续跑。首次 aborted 半截流
       // 没有 auto_retry_*，必须保持无 reason，好让 Host 按网络类接走。
+      // auto_retry_end can omit finalError and fall back to the pending SSE
+      // error. Never grant Host overload recovery on top of Pi's spent budget.
+      if (finalError.reason === UPSTREAM_OVERLOAD_REASON) delete finalError.reason;
       const exhaustedReason = !finalError.reason && isNetworkishErrorMessage(finalError.message)
         ? PI_GATEWAY_DROP_REASON
         : undefined;

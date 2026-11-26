@@ -10,6 +10,7 @@ import { useTranslation } from 'react-i18next';
 
 import { computeQuotaPace, type QuotaPace } from '@/lib/quotaPace';
 import { cn } from '@/lib/utils';
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { ErrorNotice } from '@/components/ui/error-notice';
 import {
@@ -546,12 +547,13 @@ export function QuotaHoverCard({
                 ) : null}
               </div>
               {planLabel ? (
-                <span
+                <Badge
                   data-testid="quota-plan-badge"
-                  className="ml-auto max-w-[65%] shrink-0 break-words rounded-full border border-[var(--border-default)] px-1.5 py-px text-11 font-medium"
+                  tone="outline"
+                  className="ml-auto max-w-[65%] whitespace-normal break-words"
                 >
                   {planLabel}
-                </span>
+                </Badge>
               ) : null}
             </div>
           </>
