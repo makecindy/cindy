@@ -1,5 +1,5 @@
 import { isComposerAttachmentDrag } from '@/lib/composerDrop';
-import { useAlternateDraftModel } from './alternateDraftModel';
+import { applyAlternateDraftModel, useAlternateDraftModel } from './alternateDraftModel';
 import { useProjectInfo } from './hooks/useProjectInfo';
 import { ProjectSettingsDialog } from './sidebar/ProjectSettingsDialog';
 import { ResolvedProjectIcon } from './sidebar/ResolvedProjectIcon';
@@ -829,16 +829,7 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
   const localAlternate = alternateModel?.ownerGeneration === dataOwnerGeneration &&
     !savedDraft.deviceLinkDeviceId && !savedDraft.remoteHostId && !savedDraft.agentDeviceId
     ? alternateModel : null;
-  const draft = localAlternate ? {
-    ...savedDraft,
-    vendor: localAlternate.vendor,
-    agentDeviceId: localAlternate.agentDevice?.deviceId ?? null,
-    agentDeviceName: localAlternate.agentDevice?.name ?? null,
-    lastByVendor: {
-      ...savedDraft.lastByVendor,
-      [localAlternate.vendor]: { ...savedDraft.lastByVendor[localAlternate.vendor], ...localAlternate.prefs },
-    },
-  } : savedDraft;
+  const draft = applyAlternateDraftModel(savedDraft, localAlternate);
   useEffect(() => {
     if (alternateModel && !localAlternate) setAlternateModel(null);
   }, [alternateModel, localAlternate]);
