@@ -1,3 +1,4 @@
+import { mayRecordTurnUsage, turnUsageBroadcastScope } from './usage/turnUsageAdmission.js';
 /**
  * sessionSpendBroadcaster — main 端单一负责 session 级 usage 持久化。
  *
@@ -27,12 +28,10 @@ import { recordSessionContextSnapshotWith } from './localDb/sessionContextSnapsh
 import { createLogger } from './logger';
 import * as broadcastTap from './device-link/broadcast-tap.js';
 import {
-  addRegionalMoney,
-  legacyUsdMoney,
+  sessionSpendAmounts,
   normalizeRegionalMoney,
   type RegionalMoney,
 } from '../shared/regionalMoney.js';
-import { currentLedgerCurrency } from './usage/ledgerCurrency.js';
 
 const log = createLogger('sessionSpendBroadcaster');
 
@@ -53,8 +52,9 @@ export const USAGE_SESSION_CONTEXT_CHANGED = 'usage:session-context-changed';
 export interface SessionSpendPayload {
   sessionId: string;
   totalMoney: RegionalMoney;
-  /** 仅当累计金额仍是 USD 时给旧 renderer 的兼容投影。 */
+  /** All USD spend, including the USD portion of a mixed session. */
   totalCostUsd?: number;
+  totalCostUsdIsApproximate?: boolean;
 }
 
 export interface SessionTokensPayload {
@@ -93,34 +93,27 @@ export async function recordSessionTurnSpend(
   const ownerScope = captureOwnerScope();
   const normalized = normalizeRegionalMoney(money);
   if (!normalized || normalized.amount < 1e-10) return;
-  // 只接受本账号的结算币种。基准取 currentLedgerCurrency() 而不是构建区域 —— 结算币种
-  // 由服务端按账号所属租户下发,不保证等于发行区域;按区域判会让以 USD 结算的账号
-  // 「本对话」金额永远停在 0。异币种(脏数据 / 上游 bug)仍然拒收。
-  const ledgerCurrency = currentLedgerCurrency();
-  if (normalized.currency !== ledgerCurrency) {
-    log.warn(
-      `recordSessionTurnSpend rejected currency mismatch: ${normalized.currency} != ${ledgerCurrency}`,
-    );
-    return;
-  }
   try {
     const db = getDbClient().drizzle;
-    // 单币种累计列:恢复旧会话时若累计仍是旧币种，首笔当前币种费用重新起算聚合列；
-    // 消息历史保持原样，不猜测旧总额应如何换算。CASE 与写入在同一条 UPDATE 里，
-    // 避免并发混加不同单位。
-    const sameCurrency = sql`(${sessions.totalCostCurrency} IS NULL OR ${sessions.totalCostCurrency} = ${normalized.currency})`;
+    // The two persisted currencies share a legacy USD column. On a mixed session
+    // keep CNY in the tagged column and accumulate USD in its dedicated column.
+    const keepCny = sql`(${sessions.totalCostCurrency} = 'CNY' AND ${normalized.currency} = 'USD')`;
+    const moveUsd = sql`(${sessions.totalCostCurrency} = 'USD' AND ${normalized.currency} = 'CNY')`;
     await db
       .update(sessions)
       .set({
-        totalCostAmount: sql`CASE WHEN ${sameCurrency} THEN ${sessions.totalCostAmount} + ${normalized.amount} ELSE ${normalized.amount} END`,
-        totalCostCurrency: normalized.currency,
-        totalCostIsApproximate: sql`CASE WHEN ${sameCurrency} THEN (${sessions.totalCostIsApproximate} OR ${normalized.approximate ? 1 : 0}) ELSE ${normalized.approximate ? 1 : 0} END`,
+        totalCostUsdIsApproximate: sql`${sessions.totalCostUsdIsApproximate} OR CASE WHEN ${keepCny} THEN ${Number(normalized.approximate)} WHEN ${moveUsd} THEN ${sessions.totalCostIsApproximate} ELSE 0 END`,
+        totalCostUsd: sql`${sessions.totalCostUsd} + CASE WHEN ${keepCny} THEN ${normalized.amount} WHEN ${moveUsd} THEN ${sessions.totalCostAmount} ELSE 0 END`,
+        totalCostAmount: sql`CASE WHEN ${keepCny} THEN ${sessions.totalCostAmount} WHEN ${moveUsd} THEN ${normalized.amount} ELSE ${sessions.totalCostAmount} + ${normalized.amount} END`,
+        totalCostCurrency: sql`CASE WHEN ${keepCny} THEN 'CNY' ELSE ${normalized.currency} END`,
+        totalCostIsApproximate: sql`CASE WHEN ${keepCny} THEN ${sessions.totalCostIsApproximate} WHEN ${moveUsd} THEN ${normalized.approximate ? 1 : 0} ELSE (${sessions.totalCostIsApproximate} OR ${normalized.approximate ? 1 : 0}) END`,
       })
       .where(sql`${sessions.id} = ${sessionId}`)
       .run();
     const row = await db
       .select({
         totalCostUsd: sessions.totalCostUsd,
+        usdApproximate: sessions.totalCostUsdIsApproximate,
         totalCostAmount: sessions.totalCostAmount,
         totalCostCurrency: sessions.totalCostCurrency,
         totalCostIsApproximate: sessions.totalCostIsApproximate,
@@ -128,35 +121,21 @@ export async function recordSessionTurnSpend(
       .from(sessions)
       .where(sql`${sessions.id} = ${sessionId}`)
       .get();
-    const legacy = legacyUsdMoney(row?.totalCostUsd ?? 0);
     const current = normalizeRegionalMoney({
       amount: row?.totalCostAmount ?? 0,
       currency: row?.totalCostCurrency ?? normalized.currency,
       approximate: row?.totalCostIsApproximate ?? false,
       kind: 'actual-cost',
     });
-    const totalMoney =
-      legacy.amount > 0 && current
-        ? legacy.currency === current.currency
-          ? addRegionalMoney([legacy, current])
-          : current
-        : (current ?? legacy);
-    if (!isOwnerScopeCurrent(ownerScope)) return;
-    broadcastSessionSpend(
-      {
-      sessionId,
-      totalMoney,
-      ...(totalMoney.currency === 'USD' ? { totalCostUsd: totalMoney.amount } : {}),
-      },
-      ownerScope,
-    );
+    broadcastSessionSpend({sessionId, ...sessionSpendAmounts(row?.totalCostUsd ?? 0, current, row?.usdApproximate)}, ownerScope);
   } catch (err) {
     log.warn('recordSessionTurnSpend failed:', err instanceof Error ? err.message : String(err));
   }
 }
 
 export function broadcastSessionSpend(payload: SessionSpendPayload, ownerScope: OwnerScope | null = null): void {
-  if (!isOwnerScopeCurrent(ownerScope)) return;
+  ownerScope = turnUsageBroadcastScope(ownerScope, captureOwnerScope);
+  if (!mayRecordTurnUsage() || !isOwnerScopeCurrent(ownerScope)) return;
   const ownerStamp = ownerScope ? ownerScope.ownerStamp : broadcastTap.getSafeDataOwnerPushStamp?.();
   // device-link 旁路:控制端经 sessions topic(列表订阅常开,会话未打开也不丢)收到
   // 累计 cost 镜像(本模块走裸 UPDATE、不发 sessions:patched,没有这条 tap 控制端的
@@ -197,7 +176,6 @@ export async function recordSessionTurnTokens(
       .from(sessions)
       .where(sql`${sessions.id} = ${sessionId}`)
       .get();
-    if (!isOwnerScopeCurrent(ownerScope)) return;
     broadcastSessionTokens({ sessionId, totalTokens: row?.totalTokenUsage ?? 0 }, ownerScope);
   } catch (err) {
     log.warn('recordSessionTurnTokens failed:', err instanceof Error ? err.message : String(err));
@@ -205,7 +183,8 @@ export async function recordSessionTurnTokens(
 }
 
 export function broadcastSessionTokens(payload: SessionTokensPayload, ownerScope: OwnerScope | null = null): void {
-  if (!isOwnerScopeCurrent(ownerScope)) return;
+  ownerScope = turnUsageBroadcastScope(ownerScope, captureOwnerScope);
+  if (!mayRecordTurnUsage() || !isOwnerScopeCurrent(ownerScope)) return;
   const ownerStamp = ownerScope ? ownerScope.ownerStamp : broadcastTap.getSafeDataOwnerPushStamp?.();
   if (ownerScope === null) {
     broadcastTap.tapWindowBroadcast(USAGE_SESSION_TOKENS_CHANGED, payload);

@@ -214,6 +214,15 @@ function terminalErrorRecord(data: unknown): {
   };
 }
 
+/** Only the subscription backend's token-parse rejection calls for reconnecting ChatGPT. */
+export function openAiSubscriptionReconnectNotice(data: unknown, providerId: string | null): string | null {
+  if (providerId !== 'openai') return null;
+  const { errorStatus, message } = terminalErrorRecord(data);
+  if (!(errorStatus === 401 || (errorStatus === undefined && /\b401\b/.test(message)))) return null;
+  if (!/\bunauthorized_unknown\b|could not parse your authentication token/i.test(message)) return null;
+  return imText('imBot.text.shared.openAiReconnect');
+}
+
 /**
  * 终态错误是不是「供应商账号的额度 / 花费上限 / 余额用完了」。
  *
@@ -319,6 +328,9 @@ export function terminalErrorText(data: unknown, options?: QuotaFailureNoticeOpt
     toolLoopFailureNotice(data) ??
     overloadFailureNotice(message, errorStatus, codexErrorInfo) ??
     (options ? quotaFailureNotice(data, options) : null) ??
+    (data && typeof data === 'object' && 'reason' in data && data.reason === 'UPSTREAM_OVERLOADED'
+      ? imText('imBot.text.shared.retry.overloadFailed')
+      : null) ??
     message
   );
 }

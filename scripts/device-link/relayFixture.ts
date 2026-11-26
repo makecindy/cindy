@@ -1,7 +1,8 @@
 import { once } from "node:events";
-import WebSocket, { WebSocketServer } from "ws";
+import WebSocket, { WebSocketServer, type RawData } from "ws";
 import {
   CONTROL_KINDS,
+  PROVIDER_SHARE_RELAY_CAPABILITY,
   ROUTED_KINDS,
   PROTOCOL_VERSION,
   WS_MAX_PAYLOAD_BYTES,
@@ -11,7 +12,7 @@ import {
 } from "../../packages/device-link-protocol/src/index";
 
 /** Test-only wire-contract fixture, NOT the independent production relay implementation. */
-export async function createRelayFixture() {
+export async function createRelayFixture(share?: { id: string; host: string; guest: string; member: string }) {
   const server = new WebSocketServer({
     host: "127.0.0.1",
     port: 0,
@@ -23,6 +24,9 @@ export async function createRelayFixture() {
   >();
   const frames: Envelope[] = [];
   const connections = new Map<string, number>();
+  // Opt-in serial ingress fixture for the official relay's documented bounds.
+  // pause() cannot stop messages already parsed from one TCP data event.
+  const inboundBounds = new Map<string, { queued: number; peak: number; rejected: number }>();
   let drop: (frame: Envelope) => boolean = () => false;
   const send = (ws: WebSocket, frame: Envelope) => {
     if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(frame));
@@ -45,7 +49,7 @@ export async function createRelayFixture() {
     }
     connections.set(id, (connections.get(id) ?? 0) + 1);
     ws.on("error", () => {}); // Socket failures are deliberately injected by tests.
-    ws.on("message", (bytes) => {
+    const receive = (bytes: RawData) => {
       const frame = { ...JSON.parse(bytes.toString()), src: id } as Envelope;
       frames.push(frame);
       if (drop(frame)) return;
@@ -70,6 +74,7 @@ export async function createRelayFixture() {
             serverProtocolVersion: PROTOCOL_VERSION,
             deviceId: id,
             userId: "fixture-account",
+            ...(share ? { capabilities: [PROVIDER_SHARE_RELAY_CAPABILITY] } : {}),
           },
         });
         for (const peer of peers.values()) {
@@ -90,6 +95,18 @@ export async function createRelayFixture() {
         broadcast(peer.presence);
       } else if (ROUTED_KINDS.has(frame.kind)) {
         const target = peers.get(frame.dst ?? "");
+        if (frame.providerShare) {
+          const scope = frame.providerShare;
+          if (!share || scope.shareId !== share.id || !target) return;
+          const guest = { role: "guest", memberId: share.member } as const;
+          const host = { role: "host" } as const;
+          if (id === share.guest && frame.dst === share.host && scope.target.role === "host")
+            send(target.ws, { ...frame, providerShare: { ...scope, source: guest } });
+          else if (id === share.host && frame.dst === share.guest
+            && scope.target.role === "guest" && scope.target.memberId === share.member)
+            send(target.ws, { ...frame, providerShare: { ...scope, source: host } });
+          return;
+        }
         const code = !target
           ? "DEVICE_OFFLINE"
           : CONTROL_KINDS.has(frame.kind) &&
@@ -107,6 +124,20 @@ export async function createRelayFixture() {
           send(target!.ws, frame);
         }
       }
+    };
+    let tail = Promise.resolve();
+    ws.on("message", bytes => {
+      const bound = inboundBounds.get(id);
+      if (!bound) { receive(bytes); return; }
+      if (bound.queued >= 128) { bound.rejected++; ws.close(1013, 'inbound backpressure'); return; }
+      bound.queued++;
+      bound.peak = Math.max(bound.peak, bound.queued);
+      if (bound.queued >= 64) ws.pause();
+      tail = tail.then(() => {
+        receive(bytes);
+        bound.queued--;
+        if (bound.queued < 32) ws.resume();
+      });
     });
     ws.on("close", () => {
       const peer = peers.get(id);
@@ -123,6 +154,11 @@ export async function createRelayFixture() {
     url: `ws://127.0.0.1:${address.port}/api/device-link/ws`,
     frames,
     connections,
+    boundInbound(id: string) {
+      const bound = { queued: 0, peak: 0, rejected: 0 };
+      inboundBounds.set(id, bound);
+      return bound;
+    },
     dropFrames(predicate: (frame: Envelope) => boolean) {
       drop = predicate;
     },

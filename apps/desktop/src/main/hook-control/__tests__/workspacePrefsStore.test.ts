@@ -26,6 +26,8 @@ import {
   replaceChannelWorkspacePrefs,
   resolveWorkspacePrefOverrides,
   setWorkspacePref,
+  getHostWorkspacePrefsStore,
+  commitHostWorkspacePrefs,
 } from '../workspacePrefsStore';
 import {
   getWorkspaceProviderSource,
@@ -41,6 +43,20 @@ describe('workspacePrefsStore', () => {
     fs.rmSync(tmp.dir, { recursive: true, force: true });
   });
 
+  it('Host CAS keeps mirror metadata, preserves other rows, and produces a native reset tombstone', async () => {
+    setWorkspacePref('slack', 'team-a', 'repo', { model: 'model-a', agentKind: 'pi' });
+    setWorkspacePref('telegram', null, 'repo', { model: 'model-b' });
+    const store = getHostWorkspacePrefsStore(); const first = store.inspect();
+    if(first.status !== 'ready') throw new Error('fixture');
+    const beforeOther = first.value.entries.find(row => row.channel === 'telegram');
+    const result = await commitHostWorkspacePrefs([{channel:'slack',teamId:'team-a',workspace:'repo',patch:{effort:'high'}}],{expectedRevision:first.revision});
+    expect(result.value.entries.find(row=>row.channel==='telegram')).toEqual(beforeOther);
+    expect(result.value.entries.find(row=>row.channel==='slack')).toMatchObject({model:'model-a',effort:'high',dirty:true,dirtyPatch:{model:'model-a',effort:'high'},rev:2});
+    await expect(commitHostWorkspacePrefs([{channel:'telegram',teamId:null,workspace:'repo',patch:{model:'stale'}}],{expectedRevision:first.revision})).rejects.toMatchObject({code:'CONFLICT'});
+    const reset=await commitHostWorkspacePrefs([{channel:'slack',teamId:'team-a',workspace:'repo',patch:{model:null,agentKind:null,effort:null,permissionMode:null}}],{expectedRevision:result.revision});
+    expect(reset.value.entries.find(row=>row.channel==='slack')).toMatchObject({model:null,agentKind:null,effort:null,permissionMode:null,dirty:true,rev:3});
+    expect(getWorkspacePref('telegram',null,'repo').model).toBe('model-b');
+  });
   it('写读一条偏好；不同渠道/目录互不串', () => {
     setWorkspacePref('slack', null, 'chat', { model: 'claude-opus-4-8', agentKind: 'claude-code' });
     setWorkspacePref('telegram', null, 'chat', { model: 'gpt-5.5', agentKind: 'codex' });

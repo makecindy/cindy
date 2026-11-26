@@ -5,6 +5,8 @@
  * `tint` 给任务列表等状态图标用：非运行时把插件图标按透明度画成灰色剪影(与 Desktop 侧栏一致)；
  * 运行中(保留原色呼吸)以及模型选择器、输入框胶囊不传，保留图标原色。
  */
+import { ANTIGRAVITY_MARK_DATA_URL, ANTIGRAVITY_MARK_PATH } from '@cindy/maker-shared/branding';
+import Svg, { Path } from 'react-native-svg';
 import { Puzzle } from 'lucide-react-native';
 import { Image, View } from 'react-native';
 
@@ -20,6 +22,13 @@ export interface PluginEngineMarkProps {
 
 export function PluginEngineMark({ iconDataUrl, size = iconSize.sm, tint, testID }: PluginEngineMarkProps) {
   const { colors } = useTheme();
+  if (iconDataUrl === ANTIGRAVITY_MARK_DATA_URL) {
+    return (
+      <Svg width={size} height={size} viewBox="0 0 24 24" testID={testID}>
+        <Path d={ANTIGRAVITY_MARK_PATH} fill={tint ?? colors.textSecondary} />
+      </Svg>
+    );
+  }
   if (iconDataUrl) {
     return (
       <View accessible={false} pointerEvents="none" style={{ height: size, width: size }} testID={testID}>

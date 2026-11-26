@@ -8,14 +8,16 @@ import { knownStandbyGuests, reconcileStandbyGuest } from './providerShareAvaila
 import { withAvailabilityPolicyLock, rememberAvailabilityShare } from './providerShareAvailabilityPolicy.js';
 import { consistentShareAvailabilityModels, type ShareAvailabilityModel as Model } from './providerShareAvailabilityModels.js';
 /** Offline-owner admission. This contains public identities and grants, never provider credentials. */
-import { parseProviderSharePeer, ProviderShareScopeChangedError, type ProviderShareOwned } from '@cindy/device-link';
+import { createPeerTransferCooldown, parseProviderSharePeer, ProviderShareScopeChangedError, type ProviderShareOwned } from '@cindy/device-link';
 import { remoteInvocationModels, type AgentKind, type CatalogModel, type ProviderView } from '@cindy/model-providers';
 import { getDeviceId } from '../authManager.js';
 import { getClientEndpoint } from '../clientEndpointsService.js';
 import { captureProviderManagementScope } from '../provider-group/managementScope.js';
+import { activeOwnerScopeKey } from '../appSessionState.js';
 import { readProviderGroup } from '../provider-group/store.js';
 import { groupFastPolicyStore } from '../provider-group/fastPolicyStore.js';
 import { isRemoteProviderInvocationAllowed } from '../maker-host/remote-provider-access-store.js';
+import { pluginEngineKeyFromProviderId } from '../../shared/pluginEngines.js';
 import { getProviderShareUsageStore } from './providerShareUsageStore.js';
 import { remoteModelAccess } from './remoteModelAccess.js';
 import { readDeviceLinkSettings } from './settings-store.desktop.js';
@@ -42,7 +44,7 @@ export function publishShareAvailability(shares: readonly ProviderShareOwned[]):
 async function publishUnlocked(shares: readonly ProviderShareOwned[]): Promise<void> {
   const assertCurrent = captureProviderManagementScope();
   for (const share of shares) {
-    if (share.hostDeviceId !== getDeviceId()) continue;
+    if (share.hostDeviceId !== getDeviceId() || pluginEngineKeyFromProviderId(share.providerId)) continue;
     const current = await shareAvailabilityRequest<{ revision: number; executors: Executor[] }>(share.shareId, 'policy');
     assertCurrent();
     const group = readProviderGroup(share.providerId);
@@ -156,18 +158,21 @@ async function readCatalog(shareId: string): Promise<AvailabilityCatalog> {
 }
 
 const preparations = new Map<string, Promise<void>>();
+// Failure pacing only: bounded, in-memory, and never an execution permission.
+const missingStandbyProbes = createPeerTransferCooldown(() => Date.now());
+function standbyProbeKey(controller: string): string {
+  return JSON.stringify([activeOwnerScopeKey(), providerShareOwnerKey(), getClientEndpoint('deviceLinkApiBaseUrl'), controller]);
+}
 /** Called by the executor before admitting the guest. Server response, not guest input, supplies every grant field. */
 export async function prepareShareAvailability(controller: string): Promise<void> {
   const peer = parseProviderSharePeer(controller);
   if (peer?.role !== 'guest') return;
   const assertCurrent = captureProviderManagementScope();
-  const owner = providerShareOwnerKey();
-  const endpoint = getClientEndpoint('deviceLinkApiBaseUrl');
+  const key = standbyProbeKey(controller);
   const verify = () => {
     assertCurrent();
-    if (providerShareOwnerKey() !== owner || getClientEndpoint('deviceLinkApiBaseUrl') !== endpoint) throw new ProviderShareScopeChangedError();
+    if (standbyProbeKey(controller) !== key) throw new ProviderShareScopeChangedError();
   };
-  const key = JSON.stringify([owner, endpoint, controller]);
   const existing = preparations.get(key);
   if (existing) return existing;
   const pending = (async () => {
@@ -209,6 +214,7 @@ export async function prepareShareAvailability(controller: string): Promise<void
       }, true);
       verify();
     }
+    missingStandbyProbes.success(key);
   })();
   preparations.set(key, pending);
   try { await pending; } finally { if (preparations.get(key) === pending) preparations.delete(key); }
@@ -252,7 +258,21 @@ export async function beginShareAvailabilityTurn(controller: string, sessionId: 
 }
 
 export async function refreshStandbyGuests(): Promise<void> {
+  const assertCurrent = captureProviderManagementScope();
   for (const controller of knownStandbyGuests()) {
-    try { await prepareShareAvailability(controller); } catch { /* A failed read never renews a lease. */ }
+    assertCurrent();
+    const key = standbyProbeKey(controller);
+    // Live leases keep their existing renewal/revocation checks. A missing
+    // policy without a lease needs only a paced recovery probe, not every event.
+    const live = delegatedProviderShareLeases().some(item => item.peer === controller
+      && item.lease.availability);
+    if (!live && missingStandbyProbes.remaining(key)) continue;
+    try { await prepareShareAvailability(controller); }
+    catch (error) {
+      assertCurrent();
+      if (standbyProbeKey(controller) !== key) throw new ProviderShareScopeChangedError();
+      if ((error as { code?: unknown })?.code === 'NOT_FOUND') missingStandbyProbes.fail(key);
+      // A failed read never renews a lease or removes membership history.
+    }
   }
 }

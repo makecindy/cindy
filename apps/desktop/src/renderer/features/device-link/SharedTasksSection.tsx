@@ -151,7 +151,7 @@ export function SharedTasksSection({ activeSessionId, localSessions = [], runnin
       : <SessionItem key={key} {...props} />;
   };
   if (!isAuthenticated) return null;
-  return <>{(owned.length > 0 || joined.length > 0) && <section className="mx-3 mb-2 border-b border-[var(--border-default)] pb-3" aria-label={t('sharedTask.title')}
+  return <>{(owned.length > 0 || joined.length > 0) && <section className="ml-3 mr-0 mb-2 border-b border-[var(--border-default)] pb-3" aria-label={t('sharedTask.title')}
     onContextMenu={event => {
       // Task rows handle their own menus; group whitespace must not open the sidebar menu.
       event.preventDefault();

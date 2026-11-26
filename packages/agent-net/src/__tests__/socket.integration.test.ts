@@ -5,10 +5,12 @@
  * tier：integration，真实回环 HTTP/WS/UDP 和临时磁盘；临时测试密钥只存在内存，不读用户凭据。
  */
 import { afterEach, expect, it, vi } from 'vitest';
+import dgram from 'node:dgram';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { createHash, generateKeyPairSync, randomBytes } from 'node:crypto';
+import { performance as hooks } from 'node:perf_hooks';
 import { createLocalJWKSet, SignJWT } from 'jose';
 import { createAgentNetSharingAuth } from '@cindy/agent-net-relay/sharing-auth';
 import { createPrivateNetwork, startAgentNetRelay, generateIdentity, createJoinRequest, approveJoin, createDelegation, issueCertificate, signature } from '@cindy/agent-net-relay';
@@ -25,12 +27,16 @@ import { verifyCertificate, verifyDelegation } from '@cindy/agent-net-relay';
 import { nodeRelayAuthCrypto } from '@cindy/device-link/node-relay-crypto';
 import { initializeRelay, startRelayServer, createDeviceCredential, hashSecret } from '@cindy/device-link-relay';
 import { AgentNetSocket } from '../socket.js';
+import { SessionLanes } from '../session/lanes.js';
 import { AgentNetWorkerSocket, type AgentNetAppSocket } from '../workerSocket.js';
 import { startRelayGateway } from '../gateway.js';
 import { StunClient } from '../stun.js';
 import { createCoreTransport } from '../transport.js';
+import { Endpoint, type Connection, type RecvStream } from '@cindy/agent-net-core/node';
 import type { PeerChannel } from '../types.js';
-import WebSocket from 'ws';
+import WebSocket, { WebSocketServer } from 'ws';
+import { once } from 'node:events';
+import type { AddressInfo } from 'node:net';
 
 const cleanup: Array<() => Promise<unknown> | void> = [];
 afterEach(async () => { for (const dispose of cleanup.splice(0).reverse()) await dispose(); });
@@ -101,10 +107,15 @@ async function network(udp: boolean, ingress?: 'gateway', isolated = false, scop
       getToken: async () => 'local-node-marker',
       getHello: () => ({ deviceName: api.identity.deviceId, platform: 'test', appVersion: 'test', remoteControlEnabled, busy: false }),
       createWebSocket: async () => {
+        const traffic = new BigUint64Array(new SharedArrayBuffer(16));
+        if (!isolated) udpTraffic.set(api.identity.deviceId, () => ({
+          sent: Number(Atomics.load(traffic, 0)), received: Number(Atomics.load(traffic, 1)),
+        }));
         const socket = await (isolated ? AgentNetWorkerSocket : AgentNetSocket).open({
           workerFile: new URL('../../dist/node-worker.mjs', import.meta.url),
           client: api, userId: bootstrap.ownerCertificate.subject, module, udp, bindAddress: '127.0.0.1', lanDiscovery: false, scoped,
           stunServers: ['127.0.0.1:' + relay.udpAddress!.port],
+          udpTraffic: traffic,
           observeUdpTraffic: read => {
             udpTraffic.set(api.identity.deviceId, read);
             return () => { if (udpTraffic.get(api.identity.deviceId) === read) udpTraffic.delete(api.identity.deviceId); };
@@ -144,9 +155,26 @@ it.each(['gateway'] as const)('serves real V1 and encrypted V2 clients on one or
   expect(await f.controller.invoke('a-host', { channel: 'test:echo', args: ['same-origin-v2'] })).toMatchObject({ ok: true, result: 'same-origin-v2' });
   expect(f.legacyClient?.getStatus()).toBe('online');
 });
+// Regression: CI on macOS/Windows could finish RPC and still legitimately be on relay.
+// AgentNetSocket + DeviceLinkClient must deliver intact encrypted business data on
+// relay and, after explicit path selection and relay shutdown, actual direct UDP.
+// Existing coverage assumed auto selection always reached direct within 1s.
+// Minimal failing state: a healthy relay-selected peer (made deterministic below).
+// Integration tier: real certified relay, WASM and loopback sockets; no external service.
 it.each([false, true])('runs existing RPC and multi-megabyte results through certified V2 peers (UDP=%s)', async (udp) => {
   const f = await network(udp); serve(f.host);
   await f.controller.openLink('a-host', openPayload);
+  const controller = f.sockets.find((s) => s.deviceId === 'b-controller')!;
+  const host = f.sockets.find((s) => s.deviceId === 'a-host')!;
+  if (udp) {
+    // A reachable UDP candidate need not beat the loopback relay in auto mode.
+    // Start on relay explicitly so both paths get real business traffic.
+    controller.setPeerPathPreference!('a-host', 'relay');
+    await vi.waitFor(() => {
+      expect(controller.pathTo('a-host')).toBe('relay');
+      expect(host.pathTo('b-controller')).toBe('relay');
+    }, { timeout: 5_000 });
+  }
   expect(await f.controller.invoke('a-host', { channel: 'test:echo', args: ['private-business-value-0123456789'] })).toMatchObject({ ok: true, result: 'private-business-value-0123456789' });
   // This checks intact multi-megabyte delivery, not a 4-second throughput SLA.
   // Use the production SDK deadline for the large transfer; ordinary RPCs keep
@@ -157,13 +185,27 @@ it.each([false, true])('runs existing RPC and multi-megabyte results through cer
   expect(large.ok && String(large.result).length).toBe('confidential-result-'.length * 160000);
   expect(f.sockets).toHaveLength(socketCount);
   expect(f.captured.length).toBeGreaterThan(100);
-  expect(f.captured.some((bytes) => bytes.includes(Buffer.from('private-business-value-0123456789')) || bytes.includes(Buffer.from('confidential-result-')))).toBe(false);
   if (udp) {
-    await vi.waitFor(() => expect(f.sockets.some((s) => s.pathTo('a-host') === 'direct')).toBe(true));
+    // Establish the path under test, independently of auto RTT selection. This is
+    // a precondition, not a 1s connection SLA: lost probes need retransmission.
+    controller.setPeerPathPreference!('a-host', 'direct');
+    await vi.waitFor(() => {
+      expect(controller.pathTo('a-host')).toBe('direct');
+      expect(host.pathTo('b-controller')).toBe('direct');
+    }, { timeout: 5_000 });
     await f.relay.close();
-    expect(await f.controller.invoke('a-host', { channel: 'test:echo', args: ['after-relay-loss'] })).toMatchObject({ ok: true, result: 'after-relay-loss' });
+    const read = f.udpTraffic.get('a-host')!;
+    const before = read();
+    const message = randomBytes(4096).toString('base64');
+    expect(await f.controller.invoke('a-host', { channel: 'test:echo', args: [message] })).toMatchObject({ ok: true, result: message });
+    expect(await f.controller.invoke('a-host', { channel: 'test:large', args: [] }, 30_000))
+      .toMatchObject({ ok: true, result: 'confidential-result-'.repeat(160000) });
+    expect(read().sent - before.sent).toBeGreaterThanOrEqual('confidential-result-'.length * 160000);
+    expect(read().received - before.received).toBeGreaterThanOrEqual(4096);
+    expect(f.sockets).toHaveLength(socketCount);
   }
-});
+  expect(f.captured.some((bytes) => bytes.includes(Buffer.from('private-business-value-0123456789')) || bytes.includes(Buffer.from('confidential-result-')))).toBe(false);
+}, 75_000); // Two production 30s transfer budgets plus path establishment; no throughput SLA.
 
 // Main must not perform network frame parsing, Noise or retransmission work. Real worker + proxy broker,
 // rather than a mocked thread, protects the production boundary and shutdown/revocation behavior.
@@ -472,6 +514,122 @@ it('tells a directly connected peer right away when the transport closes', async
   await source.close();
   await vi.waitFor(() => expect(closed).toBe(true), { timeout: 2_000 });
 });
+/** 测试价值（Desktop 通道收正文流的边界）
+ * - 生产入口与可观察结果：Desktop worker 与 Node Host 用的 createCoreTransport 通道（CoreChannel）收到对端开的正文流（0x33）。
+ *   本端没宣告 agent-net-session-v2 时和旧节点一样关掉连接；宣告了、本端会话还没挂上时，先存的正文事件连只有键和结束的空流也计入
+ *   16 MiB 的预算（每个事件 64 字节加它的字节），超过就关连接。
+ * - Bug／规则依据：2026-11-22 审查 #12063：结束事件原来不计入预算，一个不挂会话的对端可以一直开空流，占着内存不放。
+ * - 现有覆盖缺口：其它用例里两端都是守规矩的节点。
+ * - 最小失败输入：没宣告时开一条正文流；宣告后开 300 条只有键和结束的流，再写正好让总数超过预算的字节。
+ * - tier：integration，真实核心与 127.0.0.1 UDP，对端是直接用核心开流的端点。 */
+it.each(['undeclared', 'budget'] as const)('closes a connection whose peer opens body streams it may not: %s', async (mode) => {
+  let accept!: (channel: PeerChannel) => void;
+  const accepted = new Promise<PeerChannel>((resolve) => { accept = resolve; });
+  const target = await createCoreTransport({ udp: true, bindAddress: '127.0.0.1', admit: () => true, onIncoming: (channel) => accept(channel) });
+  cleanup.push(() => target.close());
+  const raw = await Endpoint.create({ identity: generateIdentity('a-raw').transportPrivateKey, prologue: 'cindy/agent-net/device-link/2',
+    bind: { address: '127.0.0.1' } });
+  cleanup.push(() => raw.close());
+  const connection = raw.connect(Buffer.from(target.id, 'hex'), (target.dial as { udp: { address: string; port: number } }).udp);
+  const channel = await accepted;
+  let closed = false;
+  channel.onClose(() => { closed = true; });
+  await vi.waitFor(() => expect(connection.established).toBe(true));
+  const body = (key: number, bytes = new Uint8Array(0)) => {
+    const stream = connection.openStream('normal'), head = Buffer.alloc(5);
+    head[0] = 0x33; head.writeUInt32BE(key, 1);
+    stream.write(Buffer.concat([head, bytes]));
+    stream.finish();
+  };
+  if (mode === 'undeclared') {
+    body(1, new Uint8Array(10));
+    await vi.waitFor(() => expect(closed).toBe(true));
+    return;
+  }
+  channel.declareSessions!(['agent-net-session-v2']);
+  for (let round = 0; round < 6; round++) {
+    for (let index = 0; index < 50; index++) body(1 + round * 50 + index);
+    await vi.waitFor(() => expect(connection.drained).toBe(true), { timeout: 10_000 });
+  }
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  expect(closed).toBe(false);
+  // 300 ends (300 × 64) and one chunk event (64) of what fills the rest, plus a byte. The bytes alone stay under the budget.
+  body(1000, new Uint8Array(16 * 1024 * 1024 - 301 * 64 + 1));
+  await vi.waitFor(() => expect(closed).toBe(true), { timeout: 20_000 });
+}, 40_000);
+
+/** 测试价值（Node 驱动按速率发包时不空转）
+ * - 生产入口与可观察结果：`@cindy/agent-net-core/node` 的端点（Desktop 的 Agent-Net 线程与 Node Host 的核心驱动）。按速率发包、
+ *   两次发包之间不到一毫秒时，驱动所在线程大部分时间空着（事件循环利用率），而不是一轮一轮看时间。
+ * - Bug 依据：2026-11-22 容器弱网矩阵（Linux、Electron 42）：计时器精度 1 毫秒的系统（Linux、macOS）上，驱动把所有短于一毫秒的等待都当成
+ *   等不起，两毫秒没有包到达就每轮看时间，20 Mbit 线路上每 MiB 285–470 毫秒 CPU（Device Link 43–46）。Windows 的计时器精度 16 毫秒，
+ *   一直由核心判断，不受影响。
+ * - 现有覆盖缺口：`coreDriverWake.test.ts` 只测唤醒计划这个纯函数，「等不等得起」由谁判断不在里面；别的测试只看收发结果。
+ * - 最小失败输入：两个端点只经一条 JS 线路相连（单程 20 毫秒、每秒 2 MB，每 5 毫秒到一批），传 3 MB。改前 Linux 上事件循环利用率 0.47，
+ *   改后 0.11。到达均匀时确认包每一两毫秒就有一个、带着核心走，看不出空转；成批到达时两批之间没有到达。
+ * - tier：integration，两个真实 WASM 端点，线路是本进程里的计时器。 */
+it('leaves the driver thread mostly idle while it paces a transfer, instead of polling the clock', async () => {
+  const server = generateIdentity('a-server'), client = generateIdentity('b-client');
+  const accepting = await Endpoint.create({ identity: server.transportPrivateKey, prologue: 'unit-pacing', udp: false, accept: { admit: () => true } });
+  const dialing = await Endpoint.create({ identity: client.transportPrivateKey, prologue: 'unit-pacing', udp: false });
+  cleanup.push(() => accepting.close()); cleanup.push(() => dialing.close());
+  // One direction of a 2 MB/s line with 20 ms one way: datagrams leave in order at the line's rate, then travel, and arrive in
+  // 5 ms batches as over Wi-Fi aggregation or a busy relay. Between batches nothing arrives to drive the core.
+  const line = (deliver: (datagram: Uint8Array) => void) => {
+    let free = 0;
+    return (datagram: Uint8Array) => {
+      const at = Math.max(free, performance.now()) + datagram.length / 2_000;
+      free = at;
+      const copy = datagram.slice();
+      setTimeout(() => deliver(copy), Math.ceil((at + 20) / 5) * 5 - performance.now());
+    };
+  };
+  let toServer!: (datagram: Uint8Array) => void, toClient!: (datagram: Uint8Array) => void;
+  const clientLink = dialing.createLink((datagram) => toServer(datagram));
+  const serverLink = accepting.createLink((datagram) => toClient(datagram));
+  toServer = line((datagram) => serverLink.deliver(datagram));
+  toClient = line((datagram) => clientLink.deliver(datagram));
+  const total = 3_000_000;
+  let received = 0;
+  accepting.on('connection', (connection: Connection) => connection.on('stream', (stream: RecvStream) => stream.on('data', (data: Uint8Array) => { received += data.length; })));
+  const connection = dialing.connect(Buffer.from(server.transportKey, 'base64url'), clientLink.address);
+  await vi.waitFor(() => expect(connection.established).toBe(true), { timeout: 5_000 });
+  const stream = connection.openStream('normal');
+  const before = hooks.eventLoopUtilization();
+  stream.write(new Uint8Array(total));
+  await vi.waitFor(() => expect(received).toBeGreaterThanOrEqual(total), { timeout: 20_000, interval: 50 });
+  const busy = hooks.eventLoopUtilization(before).utilization;
+  // 2026-11-22 Linux container, Node 22: 0.47 before the fix, 0.11 after; Windows was already 0.1 (its timer is coarse, the core decided).
+  // The loop also runs this test's line, a timer per datagram: on GitHub's macOS runners the fixed driver measured up to 0.31 (2026-11-23).
+  expect(busy).toBeLessThan(0.4);
+}, 30_000);
+/** 测试价值（Node 驱动收回交完的流）
+ * - 生产入口与可观察结果：`@cindy/agent-net-core/node` 的连接（Desktop 的 Agent-Net 线程与 Node Host 的核心驱动）。写完、连结束标记
+ *   都交给核心的流，以及放弃了的流，不再留在连接的表里；进度和缓冲照样按流号问核心。
+ * - Bug 依据：2026-11-22 自审会话 v2：一条大消息一条流，这张表只增不减，驱动每一轮都要遍历它，长连着的连接越用越慢。
+ * - 现有覆盖缺口：会话的测试只看结果送到，看不到驱动里留着多少条流。
+ * - 最小失败输入：同一条连接上分六批共开 300 条流，各写 1 KB 后结束（核心同时最多 64 条）；再一条写了 4 MiB 后放弃。
+ * - tier：integration，两个真实 WASM 端点经 127.0.0.1 UDP。 */
+it('lets go of streams the Node driver has handed over, so its table does not grow with every large message', async () => {
+  const server = generateIdentity('a-server'), client = generateIdentity('b-client');
+  const accepting = await Endpoint.create({ identity: server.transportPrivateKey, prologue: 'unit-streams', bind: { address: '127.0.0.1' },
+    accept: { admit: () => true } });
+  const dialing = await Endpoint.create({ identity: client.transportPrivateKey, prologue: 'unit-streams', bind: { address: '127.0.0.1' } });
+  cleanup.push(() => accepting.close()); cleanup.push(() => dialing.close());
+  let received = 0;
+  accepting.on('connection', (connection: Connection) => connection.on('stream', (stream: RecvStream) => stream.on('data', (data: Uint8Array) => { received += data.length; })));
+  const connection = dialing.connect(Buffer.from(server.transportKey, 'base64url'), accepting.address());
+  await vi.waitFor(() => expect(connection.established).toBe(true));
+  for (let round = 0; round < 6; round++) {
+    for (let index = 0; index < 50; index++) { const stream = connection.openStream('normal'); stream.write(new Uint8Array(1000)); stream.finish(); }
+    await vi.waitFor(() => expect(connection.drained).toBe(true), { timeout: 10_000 });
+  }
+  await vi.waitFor(() => expect(received).toBe(300 * 1000), { timeout: 10_000 });
+  const given = connection.openStream('normal');
+  given.write(new Uint8Array(4 << 20));
+  expect(given.abandon()).not.toBeNull();
+  expect(connection.sendStreams.size).toBe(0);
+});
 /** 测试价值
  * - 生产入口与可观察结果：Desktop worker 里会话用的 createCoreTransport 会话通道（sessionWire）。积压读数算上已经交给核心、还没发出或
  *   还没确认的字节：数据刚交给核心的那一刻读数就是它的大小，不是 0。
@@ -525,6 +683,73 @@ it('tells a directly connected peer right away when its worker socket is termina
   expect(read().received - before.received).toBeGreaterThanOrEqual(4096);
   host.terminate();
   await vi.waitFor(() => expect(controller.pathTo('a-host')).toBeNull(), { timeout: 2_000 });
+});
+/** 测试价值
+ * - 生产入口与可观察结果：`AgentNetWorkerSocket.open`（Desktop 与 Node Host 用的那一层）经真实 worker 连真实中转。连上以后中转
+ *   发来一帧本机不认的消息，本机自己关掉这条连接：随后要自己连回中转（中转看到第二条连接、`relayConnected` 又为真），日志写明
+ *   是本机关的、为什么。
+ * - Bug 依据：2026-11-25 一台 Mac 04:26 的中转连接被本机关掉后再没有重连，只经中转能到的设备全部离线 4.5 小时，重启 App 才恢复。
+ *   worker 里代替 WebSocket 的对象 terminate() 后不发 'close'，Main 随后报的关闭又因它已被删掉而被丢弃，上面一层一直把这条死掉的
+ *   连接当成中转连接，从不重连。
+ * - 现有覆盖缺口：中转断开的用例都是中转或网络关的（Main 收到 close 再转给 worker），没有本机自己关的。
+ * - 最小失败输入：连上后中转发来一帧未知类型的控制消息（经本机回环转发注入）。
+ * - tier：integration，真实 worker、真实中转与证书，本机回环转发；约 1 秒。 */
+it('reconnects its relay after ending that relay connection itself over a frame it refused', async () => {
+  const f = await network(false, undefined, true);
+  f.host.stop();
+  // Between this device and the relay, so a test can send this device a frame the relay itself never would.
+  const forwarder = new WebSocketServer({ host: '127.0.0.1', port: 0 });
+  await once(forwarder, 'listening');
+  const toDevice: WebSocket[] = [];
+  forwarder.on('connection', (device, request) => {
+    toDevice.push(device);
+    const relay = new WebSocket(f.relay.url.replace(/^http/, 'ws') + request.url, { headers: { authorization: request.headers.authorization! } });
+    relay.on('message', (data, binary) => { if (device.readyState === WebSocket.OPEN) device.send(data, { binary }); });
+    device.on('message', (data, binary) => { if (relay.readyState === WebSocket.OPEN) relay.send(data, { binary }); });
+    relay.on('close', () => device.terminate()); relay.on('error', () => device.terminate());
+    device.on('close', () => relay.terminate()); device.on('error', () => relay.terminate());
+  });
+  cleanup.push(() => { for (const device of forwarder.clients) device.terminate(); forwarder.close(); });
+  const forwarderUrl = 'ws://127.0.0.1:' + (forwarder.address() as AddressInfo).port;
+  f.a.transport.createWebSocket = (url, options) => new WebSocket(forwarderUrl + new URL(url).pathname, options);
+  const warnings: string[] = [];
+  const socket = await AgentNetWorkerSocket.open({ workerFile: new URL('../../dist/node-worker.mjs', import.meta.url), client: f.a,
+    userId: f.bootstrap.ownerCertificate.subject, module: f.module, udp: false, bindAddress: '127.0.0.1', lanDiscovery: false,
+    log: { info() {}, warn: (line: string) => { warnings.push(line); } } });
+  cleanup.push(() => socket.close());
+  await vi.waitFor(() => expect(socket.relayConnected()).toBe(true));
+  expect(toDevice).toHaveLength(1);
+  toDevice[0].send(JSON.stringify({ type: 'not-a-relay-message' }));
+  await vi.waitFor(() => expect(toDevice).toHaveLength(2), { timeout: 5_000 });
+  await vi.waitFor(() => expect(socket.relayConnected()).toBe(true));
+  expect(toDevice[0].readyState).toBe(WebSocket.CLOSED);
+  expect(warnings).toEqual(['agent-net relay connection was ended by this device (INVALID_CONTROL); reconnecting']);
+});
+/** 测试价值
+ * - 生产入口与可观察结果：`AgentNetWorkerSocket.open`（Desktop 与 Node Host 用的那一层）经真实 worker 与真实中转读目录。
+ *   目录里一台设备有新旧两个设备号、同一把传输密钥时，交给业务的目录里只有新的；旧设备号不可用（`supports` 为否），
+ *   但仍算见过的 Agent-Net 设备（`knowsPeer` 为是），Desktop 据此不让它改走 Device Link、仍要它出示关闭证明。
+ * - Bug／规则依据：PR #11899 两轮审阅。worker 线程和调用它的线程各有一份「见过的设备」，后者只从收到的目录和路径事件里填；
+ *   被顶替的设备号两样都不出现，本机没有缓存、冷启动时它就成了「没见过的设备」，防降级检查对它直接放行。
+ * - 现有覆盖缺口：`portableSocket.test.ts` 的同密钥用例只到 worker 里面那一层；没有经过 worker 的。
+ * - 最小失败输入：一台已登记的设备用同一套密钥、另一个设备号再登记一次；之后不带缓存打开另一台设备的 worker socket。
+ * - tier：integration，真实 worker、真实中转与证书，不建对端连接；约 0.3 秒。 */
+it('keeps a device id superseded for sharing a transport key known through the worker when it starts without a cache', async () => {
+  const f = await network(false, undefined, true);
+  const code = await f.a.request<{ joinCode: string }>('POST', '/join-codes');
+  const join = createJoinRequest({ ...f.b.identity, deviceId: 'c-controller-renamed' }, f.bootstrap.networkId, code.joinCode, 'Controller again', 'unit-only-pairing-secret');
+  await submitJoin(f.relay.url, join);
+  await f.a.request('POST', '/join-requests/' + join.requestId + '/approve',
+    { certificate: approveJoin(f.root, join, 'unit-only-pairing-secret', f.bootstrap.ownerCertificate.subject) });
+  f.host.stop();
+  const directories: DeviceView[][] = [];
+  const socket = await AgentNetWorkerSocket.open({ workerFile: new URL('../../dist/node-worker.mjs', import.meta.url), client: f.a,
+    userId: f.bootstrap.ownerCertificate.subject, module: f.module, udp: false, bindAddress: '127.0.0.1', lanDiscovery: false,
+    onDirectory: values => { directories.push(values); } });
+  cleanup.push(() => socket.close());
+  await vi.waitFor(() => expect(directories.at(-1)?.map(view => view.certificate.deviceId).sort()).toEqual(['a-host', 'c-controller-renamed']));
+  await vi.waitFor(() => expect(socket.knowsPeer('b-controller')).toBe(true));
+  expect([socket.supports('b-controller'), socket.knowsPeer('c-controller-renamed'), socket.certificateFor('b-controller')]).toEqual([false, true, undefined]);
 });
 it('applies a member revocation immediately, rejects its cached restart and keeps another peer usable', async () => {
   const f = await network(false); serve(f.host);
@@ -638,18 +863,29 @@ it('fails frames waiting for a member the host rule then refuses, and never send
  * - Bug／规则依据：docs/agent-net-session-plan.md 第 10.1 节，Agent-Net 自建独立上层，和 Device Link 完全解耦。
  * - 现有覆盖缺口：新能力，单元测试只覆盖通道排序与会话协议，没有真实核心上的协商与收发。
  * - 最小失败输入：一次建链、一次请求、一次推送、一条 Device Link 推送；只有一端启用会话时不出现会话
- *   （对端没人读会话还先宣告的话，这一端的建链要等到超时）。
+ *   （对端没人读会话还先宣告的话，这一端的建链要等到超时）。会话 v2（两端都是新版）：推送、300 KB 结果、推送，结果走自己的流
+ *   （真实核心上流的键分片到达、流的结束），业务拿到的先后不变，结果在流上时也算在会话积压里；240 KB 文件块的 base64
+ *   按字节过线（约 240 KB，不是 320 KB），收到的字符串与原来相同。
  * - tier：integration，真实回环 WS 中转，不开 UDP。 */
 it('carries an independent session between two new nodes alongside Device Link frames', async () => {
   const f = await network(false); f.host.stop(); f.controller.stop();
-  const laneFor = (channel: string) => (channel === 'test:interactive' ? 'control' as const : 'normal' as const);
-  const pushes: unknown[] = [];
+  const laneFor = (channel: string) => (channel === 'test:interactive' ? 'control' as const : channel === 'test:bulk' ? 'background' as const : 'normal' as const);
+  const pushes: unknown[] = [], large = 'large-session-result-'.repeat(15_000);
+  const file = randomBytes(240_000).toString('base64');
+  let backlog = -1, bulkBacklog = -1;
   const a = await AgentNetSocket.open({ client: f.a, userId: f.bootstrap.ownerCertificate.subject, module: f.module, udp: false });
   const b = await AgentNetSocket.open({ client: f.b, userId: f.bootstrap.ownerCertificate.subject, module: f.module, udp: false });
   cleanup.push(() => a.close()); cleanup.push(() => b.close());
   a.useSessions({ laneFor, handlers: () => ({
     onOpen: (id) => { a.session('b-controller')!.accept(id, { appVersion: 'host' }); },
-    onRequest: (request) => { a.session('b-controller')!.respond(request.id, { ok: true, result: [request.channel, ...request.args] }); },
+    onRequest: (request) => {
+      const session = a.session('b-controller')!;
+      if (request.channel === 'test:large') session.push('test:before', 1);
+      session.respond(request.id, { ok: true, result: request.channel === 'test:large' || request.channel === 'test:bulk' ? large : request.channel === 'test:file' ? { data: file }
+        : [request.channel, ...request.args] });
+      if (request.channel === 'test:large') { backlog = session.bufferedAmount; session.push('test:after', 2); }
+      if (request.channel === 'test:bulk') bulkBacklog = session.bufferedAmount;
+    },
   }) });
   await vi.waitFor(() => expect(b.knowsPeer('a-host')).toBe(true));
   for (const socket of [a, b]) socket.send(JSON.stringify({ v: PROTOCOL_VERSION, kind: 'hello', payload: {
@@ -668,6 +904,21 @@ it('carries an independent session between two new nodes alongside Device Link f
   await expect(session.request('test:interactive', ['x'], { timeoutMs: 5_000 })).resolves.toEqual({ ok: true, result: ['test:interactive', 'x'] });
   a.session('b-controller')!.push('test:topic', { n: 1 });
   await vi.waitFor(() => expect(pushes).toEqual([['test:topic', { n: 1 }]]));
+  const bodies = vi.spyOn(SessionLanes.prototype, 'receiveBody');
+  cleanup.push(() => bodies.mockRestore());
+  await expect(session.request('test:large', [], { timeoutMs: 10_000, onSettled: () => { pushes.push('result'); } }))
+    .resolves.toEqual({ ok: true, result: large });
+  await vi.waitFor(() => expect(pushes.slice(1)).toEqual([['test:before', 1], 'result', ['test:after', 2]]));
+  expect(bodies.mock.calls.some(([, bytes]) => bytes === null)).toBe(true);
+  // The body on its own stream still counts in the session's backlog, as it would on its lane; on the background lane too, while its
+  // bytes wait here (2026-11-22 review: background bodies were left out, so file blocks could pile up unseen).
+  expect(backlog).toBeGreaterThanOrEqual(large.length);
+  await expect(session.request('test:bulk', [], { timeoutMs: 10_000 })).resolves.toMatchObject({ ok: true });
+  expect(bulkBacklog).toBeGreaterThanOrEqual(large.length);
+  // A file block's base64 crosses as its bytes and comes back as the same string.
+  const bodyBytes = () => bodies.mock.calls.reduce((total, [, bytes]) => total + (bytes?.length ?? 0), 0), before = bodyBytes();
+  await expect(session.request('test:file', [], { timeoutMs: 10_000 })).resolves.toEqual({ ok: true, result: { data: file } });
+  expect(bodyBytes() - before).toBeLessThan(250_000);
   const delivered = new Promise<Envelope>((resolve) => b.on('message', (raw) => {
     const frame = JSON.parse(raw.toString()) as Envelope; if (frame.kind === 'push') resolve(frame);
   }));
@@ -742,6 +993,43 @@ it('does not renew an expired public-directory cache or use it for an offline bu
   expect(await denied).toMatchObject({ payload: { code: 'DEVICE_OFFLINE' } });
 });
 
+/**
+ * 测试价值
+ * - 生产入口与可观察结果：AgentNetWorkerSocket 的 `setPeerPathPreference` 与 `peerRoutes()` 双路往返（directRttMs / relayRttMs）。
+ * - Bug／规则依据：2026-11-22 用户需求——跨国直连慢于中转时需支持双路测速与无断链手动切换（自动 / 直连 / 中转），且两端同步切路。
+ * - 现有覆盖缺口：此前集成测试只验证了中转打洞升级直连，未覆盖直连切回中转、双路 RTT 采集及再切回直连。
+ * - 最小失败输入：一对已直连的真实 worker 对端，依次执行 `setPeerPathPreference('a-host', 'relay')` 和 `'direct'`。
+ * - tier：integration，真实 worker、真实 WASM 核心与 V2 中转。
+ */
+it('measures both direct and relay RTTs and symmetrically switches a live peer between direct and relay without dropping RPC', async () => {
+  const f = await network(true, undefined, true); serve(f.host);
+  await f.controller.openLink('a-host', openPayload);
+  const host = f.sockets.find((socket) => socket.deviceId === 'a-host')!;
+  const controller = f.sockets.find((socket) => socket.deviceId === 'b-controller')!;
+  await vi.waitFor(() => {
+    expect(controller.pathTo('a-host')).toBe('direct');
+    expect(host.pathTo('b-controller')).toBe('direct');
+  }, { timeout: 8_000 });
+  // Switching to relay updates both sides symmetrically and keeps RPC alive without reconnecting.
+  controller.setPeerPathPreference!('a-host', 'relay');
+  await vi.waitFor(() => {
+    expect(controller.pathTo('a-host')).toBe('relay');
+    expect(host.pathTo('b-controller')).toBe('relay');
+  }, { timeout: 8_000 });
+  const relayed = controller.peerSnapshot('a-host');
+  expect(relayed).toMatchObject({ path: 'relay', pathPreference: 'relay' });
+  expect(typeof relayed?.directRttMs).toBe('number');
+  expect(typeof relayed?.relayRttMs).toBe('number');
+  expect(await f.controller.invoke('a-host', { channel: 'test:echo', args: ['via-relay'] })).toMatchObject({ ok: true, result: 'via-relay' });
+  // Switching back to direct restores direct on both sides.
+  controller.setPeerPathPreference!('a-host', 'direct');
+  await vi.waitFor(() => {
+    expect(controller.pathTo('a-host')).toBe('direct');
+    expect(host.pathTo('b-controller')).toBe('direct');
+  }, { timeout: 8_000 });
+  expect(await f.controller.invoke('a-host', { channel: 'test:echo', args: ['back-direct'] })).toMatchObject({ ok: true, result: 'back-direct' });
+});
+
 // Bug: cached identities could keep an existing direct path, but could not find it after both nodes restarted.
 // Integration tier: real signed loopback multicast LAN beacons + Noise UDP,
 // while the relay is stopped before either node opens. Bind both discovery and
@@ -765,4 +1053,168 @@ it('rediscovers certified peers on the LAN after both nodes restart without any 
   await vi.waitFor(() => expect(opened.some((s) => s.pathTo('a-host') === 'direct')).toBe(true), { timeout: 8000 });
   await guest.openLink('a-host', openPayload);
   expect(await guest.invoke('a-host', { channel: 'test:echo', args: ['cold-start-offline'] })).toMatchObject({ ok: true, result: 'cold-start-offline' });
+});
+
+/**
+ * 测试价值
+ * - 生产入口与可观察结果：`createCoreTransport` 的固定 UDP 端口配置（`bindPort`）及冲突回退语义。
+ * - Bug／规则依据：公网云主机运行 `cindy-host` / Linux Desktop 时需在安全组只放行单个固定 UDP 端口，
+ *   让对称 NAT 客户端可单向直连；端口被占用或配置非法时必须回退随机端口 `0` 并打日志，绝不阻断启动。
+ * - 现有覆盖缺口：此前 `createCoreTransport` 始终绑定随机端口 `0`，无固定端口、冲突回退与非法值分支覆盖。
+ * - 最小失败输入：先占住一个本机 UDP 端口再以同 `bindPort` 启动第二个传输；传入越界端口 `70000` 与 `0`。
+ * - tier：integration（真实本机回环 UDP 套接字与 WASM 核心，无外部网络）。
+ */
+it('binds the requested fixed UDP port and gracefully falls back to an ephemeral port on EADDRINUSE or invalid input', async () => {
+  const module = await WebAssembly.compile(await readFile(new URL('../../../agent-net-core/dist/core.wasm', import.meta.url)));
+  const probe = dgram.createSocket('udp4');
+  await new Promise<void>((resolve) => probe.bind(0, '127.0.0.1', resolve));
+  const fixedPort = probe.address().port;
+  await new Promise<void>((resolve) => probe.close(resolve));
+
+  const logs: Array<[string, string]> = [];
+  const primary = await createCoreTransport({
+    module, bindAddress: '127.0.0.1', bindPort: fixedPort,
+    admit: () => false, onIncoming: () => undefined,
+    onLog: (level, message) => { logs.push([level, message]); },
+  });
+  cleanup.push(() => primary.close());
+  const primaryPort = (primary.dial as { udp?: { port: number } }).udp?.port;
+  expect(primaryPort).toBe(fixedPort);
+  expect(logs).toContainEqual(['info', `agent-net UDP listening on fixed port ${fixedPort}`]);
+
+  // Holding fixedPort via primary: a second node requesting the same port must fall back to an ephemeral port.
+  const fallbackLogs: Array<[string, string]> = [];
+  const fallback = await createCoreTransport({
+    module, bindAddress: '127.0.0.1', bindPort: fixedPort,
+    admit: () => false, onIncoming: () => undefined,
+    onLog: (level, message) => { fallbackLogs.push([level, message]); },
+  });
+  cleanup.push(() => fallback.close());
+  const fallbackPort = (fallback.dial as { udp?: { port: number } }).udp?.port ?? 0;
+  expect(fallbackPort).toBeGreaterThan(0);
+  expect(fallbackPort).not.toBe(fixedPort);
+  expect(fallbackLogs).toContainEqual(['warn', expect.stringMatching(new RegExp(`fixed UDP port ${fixedPort} unavailable \\((EADDRINUSE|EACCES)\\); fell back to ephemeral port ${fallbackPort}`))]);
+
+  // Out-of-range port warns and falls back; port 0 keeps silent ephemeral default.
+  const invalidLogs: Array<[string, string]> = [];
+  const invalid = await createCoreTransport({
+    module, bindAddress: '127.0.0.1', bindPort: 70_000,
+    admit: () => false, onIncoming: () => undefined,
+    onLog: (level, message) => { invalidLogs.push([level, message]); },
+  });
+  cleanup.push(() => invalid.close());
+  expect((invalid.dial as { udp?: { port: number } }).udp?.port).toBeGreaterThan(0);
+  expect(invalidLogs).toContainEqual(['warn', expect.stringContaining('ignoring invalid bindPort=70000')]);
+
+  const defaultLogs: Array<[string, string]> = [];
+  const ephemeral = await createCoreTransport({
+    module, bindAddress: '127.0.0.1', bindPort: 0,
+    admit: () => false, onIncoming: () => undefined,
+    onLog: (level, message) => { defaultLogs.push([level, message]); },
+  });
+  cleanup.push(() => ephemeral.close());
+  expect((ephemeral.dial as { udp?: { port: number } }).udp?.port).toBeGreaterThan(0);
+  expect(defaultLogs).toEqual([]);
+});
+
+/**
+ * 测试价值
+ * - 生产入口与可观察结果：`createCoreTransport` 多 STUN 候选收集、增量公布与 `setStunServers` 动态追加。
+ * - Bug／规则依据：分流网络下双区 STUN 返回不同公网出口 IP；任一 STUN 超时不得阻塞本区公网与本地候选，
+ *   两个公网候选都必须去重并排在内网候选之前上报给对端。
+ * - 现有覆盖缺口：原集成测试只传单个本地 STUN，未覆盖双公网 IP 去重排序、慢/无响应 STUN 不阻塞及 `setStunServers` 增量探测。
+ * - 最小失败输入：1 个返回公网 A 的 STUN + 1 个永不回包的黑洞 STUN，启动后经 `setStunServers` 追加返回公网 B 的 STUN。
+ * - tier：integration（真实回环 UDP STUN 与 WASM 传输控制流，无外部网络，无需等待超时）。
+ */
+it('publishes multi-egress STUN candidates before private ones without waiting on an unresponsive STUN and supports late setStunServers', async () => {
+  const module = await WebAssembly.compile(await readFile(new URL('../../../agent-net-core/dist/core.wasm', import.meta.url)));
+  const startFakeStun = async (ipOctets: [number, number, number, number] | null, mappedPort: number) => {
+    const server = dgram.createSocket('udp4');
+    if (ipOctets) {
+      server.on('message', (msg, rinfo) => {
+        if (msg.length < 20 || msg.readUInt32BE(4) !== 0x2112a442) return;
+        const reply = Buffer.alloc(32);
+        reply.writeUInt16BE(0x0101, 0);
+        reply.writeUInt16BE(12, 2);
+        reply.writeUInt32BE(0x2112a442, 4);
+        msg.subarray(8, 20).copy(reply, 8);
+        reply.writeUInt16BE(0x0020, 20);
+        reply.writeUInt16BE(8, 22);
+        reply[25] = 0x01;
+        reply.writeUInt16BE(mappedPort ^ 0x2112, 26);
+        const ip = ((ipOctets[0] << 24) | (ipOctets[1] << 16) | (ipOctets[2] << 8) | ipOctets[3]) >>> 0;
+        reply.writeUInt32BE((ip ^ 0x2112a442) >>> 0, 28);
+        server.send(reply, rinfo.port, rinfo.address);
+      });
+    }
+    await new Promise<void>((resolve) => server.bind(0, '127.0.0.1', resolve));
+    cleanup.push(() => new Promise<void>((resolve) => server.close(resolve)));
+    return `127.0.0.1:${server.address().port}`;
+  };
+
+  const stunCn = await startFakeStun([120, 253, 194, 70], 41641);
+  const stunBlackhole = await startFakeStun(null, 0);
+  const stunGlobal = await startFakeStun([161, 29, 200, 234], 41641);
+
+  const peerIdentity = generateIdentity('peer-observer').transportPrivateKey;
+  let deliverToNode: ((from: string, data: Uint8Array) => void) | null = null;
+  const peer = await Endpoint.create({
+    identity: peerIdentity, prologue: 'cindy/agent-net/device-link/2', udp: false, module,
+    accept: { admit: () => true },
+  });
+  cleanup.push(() => peer.close());
+  const peerLink = peer.createLink((datagram) => { deliverToNode?.('peer-observer', datagram); }, 1);
+  const announced: Array<Array<{ address: string; port: number }>> = [];
+  peer.on('connection', (connection: Connection) => {
+    connection.on('stream', (stream: RecvStream) => {
+      let kind: number | null = null;
+      let text = '';
+      stream.on('data', (chunk: Uint8Array) => {
+        if (kind === null) { kind = chunk[0]; chunk = chunk.subarray(1); }
+        if (kind !== 0x43) return;
+        text += Buffer.from(chunk).toString('utf8');
+        for (let end = text.indexOf('\n'); end >= 0; end = text.indexOf('\n')) {
+          const parsed = JSON.parse(text.slice(0, end)) as { candidates?: Array<{ address: string; port: number }> };
+          if (Array.isArray(parsed.candidates)) announced.push(parsed.candidates);
+          text = text.slice(end + 1);
+        }
+      });
+    });
+  });
+
+  const peerId = Buffer.from(peer.publicKey).toString('hex');
+  const node = await createCoreTransport({
+    module, bindAddress: '127.0.0.1', stunServers: [stunCn, stunBlackhole],
+    admit: (id) => id === peerId, onIncoming: () => undefined,
+    relayIdOf: (id) => (id === peerId ? 'peer-observer' : undefined),
+    relay: {
+      deviceId: 'node-a',
+      uplink: {
+        kind: 'agent-net',
+        send: (_id, datagram) => { peerLink.deliver(datagram); },
+        onDatagram: (cb) => { deliverToNode = cb; },
+        close: () => undefined,
+      },
+    },
+  });
+  cleanup.push(() => node.close());
+  const channel = await node.connect({ id: peerId, dial: { relayId: 'peer-observer' } });
+  cleanup.push(() => channel.close({ drain: false }));
+
+  // Primary STUN candidate arrives immediately without waiting for the blackhole STUN timeout (1.5s).
+  await vi.waitFor(() => {
+    const latest = announced.at(-1) ?? [];
+    expect(latest[0]).toEqual({ address: '120.253.194.70', port: 41641 });
+  }, { timeout: 1_000 });
+
+  // Dynamically adding the peer official region's STUN appends the second public egress candidate ahead of 127.0.0.1.
+  node.setStunServers!([stunCn, stunBlackhole, stunGlobal]);
+  await vi.waitFor(() => {
+    const latest = announced.at(-1) ?? [];
+    expect(latest.slice(0, 2)).toEqual([
+      { address: '120.253.194.70', port: 41641 },
+      { address: '161.29.200.234', port: 41641 },
+    ]);
+    expect(latest[2]?.address).toBe('127.0.0.1');
+  }, { timeout: 1_000 });
 });

@@ -11,7 +11,7 @@ export interface BlueBubblesState {
   inbox: Record<string, { receivedAt: number; state: 'pending' | 'dispatching' | 'accepted' | 'ignored';
     echoHint?: { id: string; failed: boolean };
     stop?: { chatId: string; sentAt: number; before: string[] } }>;
-  outbox: Record<string, { chatId: string; state: 'sending' | 'sent' | 'unknown'; messageId?: string; failed?: true;
+  outbox: Record<string, { chatId: string; state: 'sending' | 'sent' | 'unknown'; messageId?: string; failed?: true; automationDenied?: true;
     /** Optional on old journals. Only retained while awaiting an authoritative ID. */
     echoSignature?: string }>;
 }
@@ -90,9 +90,13 @@ export class BlueBubblesReceipts {
   snapshot(): BlueBubblesState { return structuredClone(this.state); }
   uncertainCounts(activeDispatches: ReadonlySet<string>, activeSends: ReadonlySet<string>) {
     let uncertainInputs = 0, uncertainSends = 0;
+    let automationDenied = false;
     for (const id of this.dispatching) if (!activeDispatches.has(id)) uncertainInputs++;
-    for (const id of this.unsettledSends) if (!activeSends.has(id)) uncertainSends++;
-    return { uncertainInputs, uncertainSends };
+    for (const id of this.unsettledSends) if (!activeSends.has(id)) {
+      uncertainSends++;
+      if (this.state.outbox[id].automationDenied === true) automationDenied = true;
+    }
+    return { uncertainInputs, uncertainSends, ...(automationDenied && { automationDenied }) };
   }
   get activatedAt(): number { return this.state.activatedAt; }
   activatedAtFor(chat: string): number { return Math.max(this.state.activatedAt, this.state.chatActivatedAt?.[chat] ?? this.state.activatedAt); }
@@ -199,9 +203,10 @@ export class BlueBubblesReceipts {
       if (!messages.size) this.sentByChat.delete(row.chatId);
     }
   }
-  confirmedSend(id: string): string | undefined {
+  hasOutgoing(id: string): boolean { return Object.hasOwn(this.state.outbox, id); }
+  confirmedSend(id: string, chatId?: string): string | undefined {
     const row = this.state.outbox[id];
-    return row?.state === 'sent' ? row.messageId : undefined;
+    return row?.state === 'sent' && (chatId === undefined || row.chatId === chatId) ? row.messageId : undefined;
   }
   isOutgoing(chat: string, guid: string, tempGuid?: string): boolean {
     return this.outgoingChats.get(guid) === chat || (!!tempGuid && this.state.outbox[tempGuid]?.chatId === chat);

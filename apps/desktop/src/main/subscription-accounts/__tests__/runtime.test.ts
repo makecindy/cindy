@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { EventEmitter } from 'node:events';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type {
   SubscriptionAccountCommand,
@@ -10,6 +11,7 @@ import {
   NATIVE_SUBSCRIPTION_ACCOUNT,
   Session,
   AgentStartupStoppedError,
+  TurnDispatchRejectedError,
   AgentStartupCleanupPendingError,
   AgentNotAuthenticatedError,
   type AgentEvent,
@@ -18,9 +20,11 @@ import {
   type StartSessionOptions,
   type ForkSdkSessionOptions,
   type Logger,
+  type SendOptions,
 } from '@cindy/maker-core';
 const h = vi.hoisted(() => ({
   afterPoolWrite: undefined as (() => void) | undefined,
+  captureTunnelHttp: undefined as ((http: TunnelHandlers['http']) => void) | undefined,
   owner: 'owner-a:1',
   pools: {} as Partial<Record<SubscriptionProvider, SubscriptionPoolConfig>>,
   bindings: new Map<string, { providerId: SubscriptionProvider; accountId: string; via?: string }>(),
@@ -53,25 +57,31 @@ const h = vi.hoisted(() => ({
   /** Providers Cindy created for subscription accounts (placement.ts), by provider id. */
   created: {} as Record<string, { kind: 'openai' | 'anthropic'; name: string; account: string }>,
   strategies: {} as Record<string, string>,
+  apiMembers: [] as import('../apiKeyMembers.js').ApiKeyPoolMember[],
+  apiAllowed: true,
   copyOverrides: vi.fn(),
   storedUsage: new Map<string, object | null>(),
 }));
 // Persisted placement is replaced like the pool file; its own rules are covered in ipc.test.ts.
 vi.mock('../placement.js', () => {
   type Kind = 'openai' | 'anthropic';
-  const owner = (kind: string, id: string) => h.placement[`${kind}:${id}`] ?? kind;
+  const owner = (kind: string, id: string) => h.apiMembers.find(member => member.id === id)?.providerId
+    ?? h.placement[`${kind}:${id}`] ?? kind;
   const legacyAccount = (providerId: string) => h.pools.openai?.legacyCodexAccounts?.[providerId];
   const providerAccounts = <T extends { id: string }>(kind: string, accounts: readonly T[], providerId = kind) =>
     accounts.filter((a) => owner(kind, a.id) === providerId);
   const resolveSubscriptionPoolProvider = (providerId: string | null | undefined) => {
     if (providerId === 'openai' || providerId === 'anthropic') return { kind: providerId as Kind, providerId, ownAccount: 'default' };
+    const api = h.apiMembers.find(member => member.connectionId === providerId);
+    if (api) return { kind: 'openai' as const, providerId: api.connectionId, ownAccount: api.id, apiKey: true as const };
     const created = providerId ? h.created[providerId] : undefined;
     if (providerId && created) return { kind: created.kind, providerId, ownAccount: created.account, created: true as const };
     const legacy = providerId ? legacyAccount(providerId) : undefined;
     return providerId && legacy ? { kind: 'openai' as const, providerId, ownAccount: legacy } : null;
   };
-  const pinnedOwnAccount = (ref: { kind: Kind; providerId: string; ownAccount?: string }) =>
-    ref.ownAccount && providerAccounts(ref.kind, h.pools[ref.kind]?.accounts ?? [], ref.providerId).length === 0
+  const pinnedOwnAccount = (ref: { kind: Kind; providerId: string; ownAccount?: string; apiKey?: true }) =>
+    ref.apiKey ? (owner('openai', ref.ownAccount!) === ref.providerId ? undefined : ref.ownAccount)
+      : ref.ownAccount && providerAccounts(ref.kind, h.pools[ref.kind]?.accounts ?? [], ref.providerId).length === 0
       && h.pools[ref.kind]?.accounts.some((a) => a.id === ref.ownAccount)
       ? ref.ownAccount : undefined;
   const place = (kind: string, accountId: string, providerId: string) => {
@@ -122,6 +132,26 @@ vi.mock('../placement.js', () => {
     writeProviderStrategy: async (providerId: string, strategy: string) => { h.strategies[providerId] = strategy; },
   };
 });
+vi.mock('../apiKeyMembers.js', () => ({
+  apiKeyMemberForConnection: (id: string) => h.apiMembers.find(member => member.connectionId === id),
+  apiKeyPoolMember: (id: string) => h.apiMembers.find(member => member.id === id),
+  apiKeyPoolMembers: (provider: string) => h.apiMembers.filter(member => member.providerId === provider),
+  hasApiKeyPoolWithMultipleMembers: () => h.apiMembers.some((member, index) =>
+    h.apiMembers.slice(index + 1).some(other => other.providerId === member.providerId)),
+  apiKeyPoolAllowsAutoSwitch: () => true,
+  legacyApiKeyPoolBinding: () => undefined,
+  poolDispatchOrder: (_provider: string, accounts: { id: string }[]) => h.apiMembers.length
+    ? [...accounts].sort((a, b) => Number(h.apiMembers.some(member => member.id === b.id))
+      - Number(h.apiMembers.some(member => member.id === a.id))) : accounts,
+}));
+vi.mock('../../provider-group/localOpenAiAccounts.js', () => ({
+  hasOpenAiGroupApiModel: (_id: string, model: string) => model === 'gpt-6',
+  isLocalOpenAiGroupAccountUsable: () => h.apiAllowed,
+  isOpenAiGroupAccountUnavailable: () => !h.apiAllowed,
+  openAiGroupAccountResult: () => ({ checks: [] }),
+  captureOpenAiGroupApiResponse: () => undefined,
+  settleOpenAiGroupAccountHealth: async () => {},
+}));
 vi.mock('../../provider-group/coolingStore.js', () => ({
   readProviderGroupCooling: () => ({}),
   writeProviderGroupCooling: async () => undefined,
@@ -142,6 +172,7 @@ vi.mock('../../maker-host/nativeProviderAuthBinding.js', () => ({
 }));
 vi.mock('../nativeCli.js', () => ({
   readNativeAccount: h.read,
+  readExistingLogin: async () => ({ login: { identity: (await h.read()).identity } }),
   codexAccountRpc: h.rpc,
   readNativeCodexTokens: h.tokens,
   readNativeAccountUsage: h.usage,
@@ -186,13 +217,14 @@ vi.mock('node:fs/promises', () => ({
     readFile: h.modelCacheRead, stat: async () => { throw Object.assign(new Error('missing'), { code: 'ENOENT' }); } },
 }));
 // The host production dispatcher runs in memory; no listener or personal files.
-vi.mock('../../remote-agent/host/tunnel.js', () => ({ createRunTunnel: async () => ({
-  baseUrl: 'http://tunnel.invalid', token: 'synthetic-token', close: async () => {},
-}) }));
+vi.mock('../../remote-agent/host/tunnel.js', () => ({ createRunTunnel: async (handlers: TunnelHandlers) => {
+  h.captureTunnelHttp?.(handlers.http);
+  return { baseUrl: 'http://tunnel.invalid', token: 'synthetic-token', close: async () => {} };
+} }));
 vi.mock('../legacyAccountAccess.js', () => ({
   legacyCodexAccountCanRun: h.accountAllowed,
   openAiRouteAllowsModel: h.routeAllowed,
-  subscriptionRouteAllowsModel: (_provider: string, model: string, options: unknown) => h.routeAllowed(model, options),
+  subscriptionRouteAllowsModel: (provider: string, model: string, options: unknown) => h.routeAllowed(model, options, provider),
   setLegacyCodexAccountPaused: h.setLegacyPaused,
 }));
 vi.mock('../store.js', () => ({
@@ -216,7 +248,9 @@ vi.mock('../store.js', () => ({
     providerId: SubscriptionProvider,
     accountId: string,
     via?: string,
+    assertCurrent?: () => void,
   ) => {
+    assertCurrent?.();
     for (const key of keys) h.bindings.set(key, { providerId, accountId, ...(via && via !== providerId ? { via } : {}) });
   },
   updatePool: async (
@@ -262,6 +296,7 @@ import {
   readSubscriptionPoolAccountUsages,
   runSubscriptionAccountCommand,
   hasConnectedSubscriptionPool,
+  hasCreatedOpenAiImageAuth,
   lastConfirmedSubscriptionModelsAt,
   subscriptionProviderAccountKeys,
   observeSubscriptionAccountUsage,
@@ -275,7 +310,8 @@ import { CodexResetAutoUse, DEFAULT_CODEX_RESET_AUTO_USE } from '../../usage/cod
 import { providerGroupMemberUsageState, providerGroupCodexUsageFromReads, providerGroupUsageSnapshot } from '../../provider-group/usage.js';
 import { readLegacySubscriptionQuota } from '../legacyQuota.js';
 import { withSubscriptionAccounts } from '../agent.js';
-import { getSessionSubscriptionAccount } from '../session.js';
+import { getSessionSubscriptionAccount, registerSessionSubscriptionAccount } from '../session.js';
+import { setCustomProviderKeyReader } from '../../maker-host/provider-route.js';
 import { prepareSubscriptionAccountForSend } from '../prepareSend.js';
 import { getActiveCatalogWithCodexModels } from '../../maker-host/active-catalog.js';
 import { refreshCatalogDerivedModels } from '../../maker-host/catalog-to-descriptors.js';
@@ -286,37 +322,58 @@ import { createProviderGroupDirectory } from '../../provider-group/directory.js'
 import { createProviderGroupRouter, type ProviderGroupPersistedCooling } from '../../provider-group/router.js';
 import { createProviderGroupService, type ProviderGroupSessionRow } from '../../provider-group/service.js';
 import type { ProviderGroupBinding } from '../../provider-group/bindings.js';
+import { isProviderShareAgentDeviceId } from '../../../shared/providerShare.js';
 import { normalizeProviderGroupConfig } from '../../../shared/providerGroup.js';
+import type { LiziMcpSessionContext } from '@cindy/mcps';
+import type { RemoteHost } from '@cindy/maker-remote-ssh';
+import type { CodexHttpBridge } from '../../mcp-integrations/codexHttpBridge.desktop.js';
+import { buildCcRemoteHttpMcpServers } from '../../maker-host/cc-remote-mcp.js';
+import { isDeviceLinkInvoke } from '../../device-link/invoke-context.js';
+import type { TunnelHandlers } from '../../remote-agent/host/tunnel.js';
 import { createRemoteAgentHost, GROUP_SWITCH_TOKEN_TTL_MS } from '../../remote-agent/host/runHost.js';
-import { RemoteAgentPoller, RemoteAgentRunClient } from '../../remote-agent/controller/runClient.js';
+import { RemoteAgentPoller, RemoteAgentRunClient, remoteAgentInvoker } from '../../remote-agent/controller/runClient.js';
 import { startRemoteAgentSession, takeGroupSwitchState } from '../../remote-agent/controller/startRemote.js';
 import { createInputEnqueueHarness } from '../../maker-ipc/__tests__/inputEnqueueHarness.js';
+import { hasSendToSessionLock, sendToSessionLocks, trackSendToSessionLockRun,
+  waitForSendToSessionLock, withSendToSessionLock } from '../../maker-ipc/sendToSessionLock.js';
 import { MAKER_INVOKE } from '../../maker-ipc/channels.js';
 import type { IpcHandler } from '../../maker-ipc/ipcHandlerRegistry.js';
 import { registerMakerSessionSendHandler } from '../../maker-ipc/sessionSendHandler.js';
 import { registerStopSessionBackgroundTasksHandler } from '../../maker-ipc/stopSessionBackgroundTasksHandler.js';
-import { registerSharedAccountStopAll, sharedAccountRegisterWiring, sharedAccountSendTransaction } from '../../remote-agent/__tests__/poolHarness.js';
+import { registerSharedAccountStopAll, sharedAccountHandoffProbe, sharedAccountRegisterWiring, sharedAccountSendTransaction, sharedAccountSessionTool } from '../../remote-agent/__tests__/poolHarness.js';
+import { createContextOverflowRollover } from '../../maker-ipc/contextOverflowRollover.js';
+import { acceptSessionRuntimeMutation, applySessionRuntimeOverrideForStart, clearAllSessionRuntimeControlStates } from '../../maker-ipc/sessionRuntimeControl.js';
 import { AgentInputCoordinator, type AgentInputCoordinatorDeps } from '../../maker-ipc/agent-input-coordinator.js';
 import { providerGroupSwitchCause } from '../../provider-group/failurePolicy.js';
-import { providerShareGuestPeer } from '@cindy/device-link';
+import { DEVICE_LINK_CAPABILITY_RELIABLE_TRANSPORT, DeviceLinkClient, PROTOCOL_VERSION, REMOTE_AGENT_INVOKE_TIMEOUT_MS, providerShareGuestPeer, providerShareHostPeer, type InvokePayload, type Envelope } from '@cindy/device-link';
+import { createServer } from 'node:http';
+import { once } from 'node:events';
+import { createRelayFixture } from '../../../../../../scripts/device-link/relayFixture.js';
+import { createClient } from '../../../../../../scripts/device-link/relayClientFixture.js';
 import type { RemoteAgentOpenPayload } from '../../remote-agent/wire.js';
 import { createProviderGroupGuestSwitch } from '../../provider-group/guestSwitch.js';
 import {
   applyPendingAgentSwitchIfIdle,
   createPendingAgentSwitchRegistry,
+  performSessionAgentSwitch,
   registerMakerSessionAgentSwitchHandler,
   relocateForFreshStart,
   type AgentSwitchSessionRow,
   type MakerSessionAgentSwitchHandlerDeps,
 } from '../../maker-ipc/sessionAgentSwitchHandler.js';
-import { prependHandoffToUserMessage } from '../../maker-ipc/agentHandoff.js';
+import { composeForkOriginHandoff, createAgentHandoffPendingRegistry, extractPlainText, prependHandoffToUserMessage, type HandoffSourceMessage } from '../../maker-ipc/agentHandoff.js';
 import { hostSessionIdFor } from '../../remote-agent/host/sessionIdentity.js';
-import type { ProviderView } from '@cindy/model-providers';
+import { readAccountBinding } from '../store.js';
+import { BUNDLED_CATALOG, type ProviderView } from '@cindy/model-providers';
+import { resolveSubscriptionPoolProvider } from '../placement.js';
+import { createAccountCodexImageChannel, createCodexImageAuthAcquirer, setCodexImageAuthBinding } from '../../cindy-brain/codexImageAuthBinding.js';
 import { subscriptionPoolSources } from '../../menubar/collect.js';
 import { setAnthropicModelProbe, refreshAnthropicModelsFromProbe, syncAnthropicModelsWithClaudeLogin } from '../../maker-host/model-discovery/anthropic.js';
 const account = (id: string) => ({ id, paused: false, limit: 1, weight: 1 });
 let generation = 0;
 beforeEach(() => {
+  h.apiMembers = [];
+  h.apiAllowed = true;
   h.afterPoolWrite = undefined;
   h.owner = 'owner-a:' + ++generation;
   h.bound = true;
@@ -361,6 +418,804 @@ beforeEach(() => {
   h.strategies = {};
   h.copyOverrides.mockReset();
   h.storedUsage.clear();
+});
+
+// Unit: owner-side admission is shared by local and device-hosted starts. A
+// default login plus a capped API connection exposes double booking and grant loss.
+it('reserves one API key slot across local, paired and shared starts with live admission', async () => {
+  const model = 'gpt-6';
+  const connection = 'fixture-openai-key';
+  h.pools.openai = { strategy: 'order', accounts: [account('default')] };
+  h.apiMembers = [{ ...account('key-fixture'), limitSet: true, weight: 100, connectionId: connection, providerId: 'openai' }];
+  setCustomProviderKeyReader(id => id === connection ? 'synthetic-key' : null);
+  const forwarded: StartSessionOptions[] = [];
+  const agent = withSubscriptionAccounts({ kind: 'codex', startSession: async (options: StartSessionOptions) => {
+    forwarded.push(options);
+    return { id: randomUUID(), close: async () => {}, send: async () => {} } as unknown as AgentSessionHandle;
+  } } as unknown as BaseAgent);
+  const start = (id: string, guest?: boolean) => agent.startSession({
+    sessionId: id, providerId: 'openai', model,
+    ...(guest === undefined ? {} : { deviceHosted: { guest, ...(guest ? {
+      guestProvider: { providerId: 'openai', modelIds: [model], routeToken: 'synthetic-route' },
+    } : {}) } }),
+  } as StartSessionOptions);
+  try {
+    const local = await start('pool-local');
+    const paired = await start('pool-paired', false);
+    expect(forwarded.map(options => options.providerId)).toEqual([connection, 'openai']);
+    expect(h.bindings.get('task:pool-local')?.accountId).toBe('key-fixture');
+    expect(h.bindings.get('task:pool-paired')?.accountId).toBe('default');
+    await local.close();
+    const shared = await start('pool-shared', true);
+    expect(forwarded.at(-1)?.providerId).toBe(connection);
+    h.apiAllowed = false;
+    await expect(shared.send({ type: 'user', content: 'fixture' })).rejects.toThrow('API key account is unavailable');
+    await shared.close();
+    await paired.close();
+    const next = await start('pool-next', true);
+    expect(forwarded.at(-1)?.providerId).toBe('openai');
+    await next.close();
+  } finally {
+    setCustomProviderKeyReader(() => null);
+  }
+});
+
+// Unit: moving a member must not strand its local native history or transfer
+// old group grants to the now independent connection. Existing sharing tests
+// did not change membership while the old engine was idle.
+it('keeps an existing local Key task on its native history after removal, but not an old share', async () => {
+  const model = 'gpt-6';
+  const connection = 'detached-fixture-key';
+  const member = { ...account('detached-member'), connectionId: connection, providerId: 'openai' };
+  h.pools.openai = { strategy: 'order', accounts: [account('default')] };
+  h.apiMembers = [member];
+  setCustomProviderKeyReader(id => id === connection ? 'synthetic-key' : null);
+  const startSession = vi.fn(async (options: StartSessionOptions) => ({
+    id: options.resumeSessionId ?? randomUUID(), close: async () => {}, send: vi.fn(async () => {}),
+  } as unknown as AgentSessionHandle));
+  const agent = withSubscriptionAccounts({ kind: 'codex', startSession } as unknown as BaseAgent);
+  const start = (id: string, guest = false, providerId = 'openai', resumeSessionId?: string) => agent.startSession({
+    sessionId: id, providerId, model, resumeSessionId,
+    ...(guest ? { deviceHosted: { guest: true, guestProvider: {
+      providerId: 'openai', modelIds: [model], routeToken: 'synthetic-route',
+    } } } : {}),
+  } as StartSessionOptions);
+  try {
+    const pin = async (id: string) => {
+      const lease = await acquireSubscriptionAccount('openai', model, [], false, {
+        includeApiKeys: true, accountId: member.id,
+      });
+      await lease!.bind(['task:' + id]);
+      lease!.release();
+    };
+    await pin('detached-local');
+    await pin('detached-guest');
+    const local = await start('detached-local');
+    const guest = await start('detached-guest', true);
+    expect(startSession.mock.calls.map(([options]) => options.providerId)).toEqual([connection, connection]);
+    h.apiMembers = [{ ...member, providerId: connection }];
+
+    await local.send({ type: 'user', content: 'continue native thread' });
+    await expect(guest.send({ type: 'user', content: 'old group grant' })).rejects.toThrow('unavailable');
+    await guest.close();
+    await expect(start('detached-guest', true, 'openai', guest.id)).rejects.toThrow('unavailable');
+    expect(startSession).toHaveBeenCalledTimes(2);
+    await local.close();
+    const resumed = await start('detached-local', false, 'openai', local.id);
+    expect(startSession.mock.lastCall?.[0]).toMatchObject({ providerId: connection, resumeSessionId: local.id });
+    await resumed.close();
+
+    h.apiAllowed = false;
+    const explicit = await start('detached-new', false, connection);
+    await explicit.send({ type: 'user', content: 'explicit recovery' });
+    expect(startSession.mock.lastCall?.[0].providerId).toBe(connection);
+    expect(h.bindings.has('task:detached-new')).toBe(false);
+    await explicit.close();
+  } finally {
+    setCustomProviderKeyReader(() => null);
+  }
+});
+
+// Unit through the production pool-assembled Pi handle: catalog IDs stay on
+// the task, but the bound official Key's native methods require bare IDs.
+it('uses the bound Pi Key model ID for preview, rebuild and in-place switch', async () => {
+  const connection = 'pi-model-key';
+  const model = 'chatgpt/gpt-6';
+  const next = 'chatgpt/gpt-6-mini';
+  h.pools.openai = { strategy: 'order', accounts: [] };
+  h.apiMembers = [{ ...account('bound-key'), connectionId: connection, providerId: 'openai' }];
+  setCustomProviderKeyReader(id => id === connection ? 'synthetic-key' : null);
+  const requires = vi.fn<NonNullable<AgentSessionHandle['requiresModelSwitchRebuild']>>(async () => false);
+  const preview = vi.fn<NonNullable<AgentSessionHandle['previewModelSwitch']>>();
+  const change = vi.fn<NonNullable<AgentSessionHandle['setModel']>>(async () => {});
+  const start = vi.fn<BaseAgent['startSession']>(async () => ({
+    id: 'native-pi-model', close: async () => {}, requiresModelSwitchRebuild: requires,
+    previewModelSwitch: preview, setModel: change,
+  } as unknown as AgentSessionHandle));
+  const engine = withSubscriptionAccounts({ kind: 'pi', startSession: start } as unknown as BaseAgent);
+  try {
+    const handle = await engine.startSession({ providerId: 'openai', model } as StartSessionOptions);
+    expect(start.mock.lastCall?.[0]).toMatchObject({ providerId: connection, model: 'gpt-6' });
+    const options = { providerId: 'openai' };
+    await handle.requiresModelSwitchRebuild!(next, options);
+    await handle.previewModelSwitch!(next, options);
+    await handle.setModel!(next, options);
+    for (const call of [requires, preview, change])
+      expect(call).toHaveBeenCalledWith('gpt-6-mini', { providerId: connection });
+    await handle.close();
+  } finally { setCustomProviderKeyReader(() => null); }
+});
+
+// Unit through actual pool admission: the hosted provider range lists the
+// exact subscription ID, including when the requested account is a Key.
+it('admits a remote Key with the source Pi model and blocks an ungranted alias or member', async () => {
+  const connection = 'remote-pi-key';
+  const model = 'chatgpt/gpt-6';
+  h.pools.openai = { strategy: 'order', accounts: [] };
+  h.apiMembers = [{ ...account('remote-key'), connectionId: connection, providerId: 'openai' }];
+  setCustomProviderKeyReader(id => id === connection ? 'synthetic-key' : null);
+  const acquire = (id: string) => acquireSubscriptionAccount('openai', id, [], false, { includeApiKeys: true, remote: true, agent: 'pi' });
+  h.routeAllowed.mockImplementation((id, _options, source) => id === model && (source === 'openai' || source === connection));
+  try {
+    const lease = await acquire(model);
+    expect(lease?.apiConnectionId).toBe(connection);
+    expect(() => lease?.assertDispatchable('gpt-6')).not.toThrow();
+    h.routeAllowed.mockImplementation((id, _options, source) => id === model && source === connection);
+    expect(() => lease?.assertDispatchable('gpt-6')).toThrow();
+    await expect(acquire(model)).rejects.toThrow();
+    h.routeAllowed.mockImplementation((id, _options, source) => id === model && source === 'openai');
+    await expect(acquire(model)).rejects.toThrow();
+    await expect(acquire('gpt-6')).rejects.toThrow();
+    lease?.release();
+  } finally { setCustomProviderKeyReader(() => null); }
+});
+
+// Unit through the production pool wrapper: a native history fork is pinned
+// and offline, even when the bound key is paused for new inference. The existing
+// native subscription fork tests never exercise a key account lease.
+it('forks pinned API key history without changing the source binding or selecting a new account', async () => {
+  const connection = 'fork-key-fixture';
+  const model = 'gpt-6';
+  const member = { ...account('fork-member'), connectionId: connection, providerId: 'openai', paused: true };
+  h.pools.openai = { strategy: 'order', accounts: [account('default')] };
+  h.apiMembers = [member];
+  h.apiAllowed = false;
+  const binding = { providerId: 'openai' as const, accountId: member.id };
+  h.bindings.set('native:original-key-thread', binding);
+  setCustomProviderKeyReader(id => id === connection ? 'synthetic-key' : null);
+  const forkSdkSession = vi.fn<BaseAgent['forkSdkSession']>(async () => ({
+    newSdkSessionId: 'forked-key-thread', uuidMap: new Map<string, string>(),
+  }));
+  const startSession = vi.fn<BaseAgent['startSession']>(async () => ({
+    id: 'forked-key-thread', send: vi.fn(async () => {}), close: async () => {},
+  } as unknown as AgentSessionHandle));
+  const agent = withSubscriptionAccounts({ kind: 'codex', forkSdkSession, startSession } as unknown as BaseAgent);
+  const options = { providerId: 'openai', sourceSdkSessionId: 'original-key-thread', model, upToMessageId: undefined };
+  try {
+    const fork = await agent.forkSdkSession(options);
+    expect(forkSdkSession.mock.lastCall?.[0]).toMatchObject({ providerId: connection, model });
+    expect(h.bindings.get('native:original-key-thread')).toEqual(binding);
+    expect(h.bindings.get('native:forked-key-thread')).toEqual(binding);
+    expect(h.read).not.toHaveBeenCalled();
+    h.apiMembers = [{ ...member, paused: false, providerId: connection }];
+    h.apiAllowed = true;
+    const resumed = await agent.startSession({ providerId: 'openai', model, resumeSessionId: fork.newSdkSessionId } as StartSessionOptions);
+    expect(startSession.mock.lastCall?.[0]).toMatchObject({ providerId: connection, resumeSessionId: fork.newSdkSessionId });
+    await resumed.close();
+    await expect(agent.forkSdkSession({ ...options, hostedGuestHome: '/synthetic-guest' })).rejects.toThrow('unavailable');
+    await expect(agent.forkSdkSession({ ...options, model: 'model-not-on-key' })).rejects.toThrow('unavailable');
+    h.apiMembers = [];
+    await expect(agent.forkSdkSession(options)).rejects.toThrow('unavailable');
+    expect(forkSdkSession).toHaveBeenCalledTimes(1);
+  } finally {
+    setCustomProviderKeyReader(() => null);
+  }
+});
+
+// Unit through the production local handoff and reservation. The subscription is
+// the only native account, so a native-only sibling check hides the live Key.
+it.each([
+  { status: 429, signals: { errorStatus: 429, sdkError: 'rate_limit' }, duration: 30 * 60_000, scope: 'model:gpt-6' },
+  { status: 529, signals: { errorStatus: 529, reason: 'upstream-overload' }, duration: 2 * 60_000, scope: '' },
+])('moves a local subscription task after HTTP $status and preserves the replacement after expiry', async ({ signals, duration, scope }) => {
+  const model = 'gpt-6';
+  const connection = 'local-failover-key';
+  const now = Date.now();
+  const clock = vi.spyOn(Date, 'now').mockReturnValue(now);
+  const random = vi.spyOn(Math, 'random').mockReturnValue(0.75);
+  const row = { status: 'active', providerId: 'openai', agentKind: 'codex', model, sdkSessionId: 'old-native' as string | null };
+  const deps = { readSession: async () => row, isRunning: () => false, rebuild: vi.fn(async (_id, assertCurrent) => {
+    assertCurrent();
+    row.sdkSessionId = null;
+  }) } satisfies Parameters<typeof prepareSubscriptionAccountFailover>[1];
+  h.pools.openai = { strategy: 'weight', accounts: [{ ...account('default'), weight: 100 }] };
+  h.apiMembers = [{ ...account('replacement-key'), connectionId: connection, providerId: 'openai' }];
+  h.modelCacheRead.mockRejectedValue(Object.assign(new Error('synthetic missing file'), { code: 'ENOENT' }));
+  setCustomProviderKeyReader(id => id === connection ? 'synthetic-key' : null);
+  try {
+    const first = await acquireSubscriptionAccount('openai', model, [], false, { includeApiKeys: true });
+    expect(first?.accountId).toBe('default');
+    await first!.bind(['task:old', 'native:old-native']);
+    expect(first!.observeFailure(signals, model, 'run')).toBe(true);
+    first!.release();
+    expect(h.writeCooling).toHaveBeenCalledWith({ openai: { default: { [scope]: now + duration } } });
+    h.cooling = h.writeCooling.mock.lastCall![0];
+    h.owner = 'owner-a:' + ++generation;
+    expect(readSubscriptionAccountBlocked('openai', 'default', 'gpt-other')).toBe(scope === '');
+    h.apiAllowed = false;
+    expect(await prepareSubscriptionAccountFailover('old', deps)).toBe(false);
+    expect(deps.rebuild).not.toHaveBeenCalled();
+    expect(h.bindings.get('task:old')?.accountId).toBe('default');
+    h.apiAllowed = true;
+    expect(await prepareSubscriptionAccountFailover('old', deps)).toBe(true);
+    const replacement = await acquireSubscriptionAccount('openai', model, ['task:old'], false, { includeApiKeys: true, resuming: false });
+    expect(replacement?.apiConnectionId).toBe(connection);
+    expect(h.bindings.get('native:old-native')?.accountId).toBe('default');
+    await replacement!.bind(['task:old', 'native:new-native']);
+    replacement!.release();
+    clock.mockReturnValue(now + duration);
+    const [existing, fresh] = await Promise.all([
+      acquireSubscriptionAccount('openai', model, ['task:old', 'native:new-native'], false, { includeApiKeys: true, resuming: true }),
+      acquireSubscriptionAccount('openai', model, ['task:new'], false, { includeApiKeys: true }),
+    ]);
+    expect(existing?.apiConnectionId).toBe(connection);
+    expect(fresh?.accountId).toBe('default');
+    existing?.release();
+    fresh?.release();
+  } finally {
+    clock.mockRestore();
+    random.mockRestore();
+    setCustomProviderKeyReader(() => null);
+  }
+});
+
+// Opt-in integration: the same controller follow-up traverses a real scoped
+// WebSocket and reaches a loopback upstream on the account reserved by Main.
+// The default unit cases below cannot detect a lost offer across the transport.
+it.skipIf(process.env.CINDY_VERIFY_POOL_LOOPBACK !== '1').each([
+  { mode: 'guest', rejection: 401, code: 'invalid_api_key' },
+  { mode: 'guest', rejection: 429, code: 'credit_balance_exhausted' },
+  { mode: 'paired', rejection: 401, code: 'invalid_api_key' },
+  { mode: 'paired', rejection: 429, code: 'credit_balance_exhausted' },
+  { mode: 'guest', rejection: 429, code: 'rate_limit_exceeded', nativeFirst: true },
+  { mode: 'paired', rejection: 429, code: 'rate_limit_exceeded', nativeFirst: true },
+  { mode: 'guest', rejection: 429, code: 'rate_limit_exceeded', nativeFirst: true, partialOutput: true },
+  { mode: 'guest', rejection: 429, code: 'rate_limit_exceeded', nativeFirst: true, piFork: true },
+  { mode: 'paired', rejection: 429, code: 'rate_limit_exceeded', nativeFirst: true, piFork: true },
+])('handles a mixed $mode task over loopback after HTTP $rejection ($code, output=$partialOutput, piFork=$piFork)', async ({ mode, rejection, code, nativeFirst, partialOutput, piFork }) => {
+  const invited = mode === 'guest';
+  const share = { id: 'fixture-share', host: 'fixture-host', guest: 'fixture-guest', member: 'fixture-member' };
+  const relay = await createRelayFixture(invited ? share : undefined);
+  expect(new URL(relay.url).origin).toMatch(/^ws:\/\/127\.0\.0\.1:\d+$/);
+  const executor = createClient(relay.url, share.host, true);
+  const controller = createClient(relay.url, share.guest, false, { desktop: true });
+  const destination = invited ? providerShareHostPeer(share.id, share.host) : share.host;
+  const controllerPeer = invited ? providerShareGuestPeer(share.id, share.member, share.guest) : share.guest;
+  const requests: Array<{ account: string; text: string; status: number }> = [];
+  const upstream = createServer(async (req, res) => {
+    if (req.socket.remoteAddress !== '127.0.0.1' || req.headers.host !== `127.0.0.1:${(upstream.address() as { port: number }).port}`) {
+      res.writeHead(403).end();
+      return;
+    }
+    const parts: Buffer[] = [];
+    for await (const part of req) parts.push(Buffer.from(part));
+    const text = Buffer.concat(parts).toString();
+    const account = req.url === '/key' ? (nativeFirst ? 'B' : 'A') : req.url === '/subscription' ? (nativeFirst ? 'A' : 'B') : '?';
+    const status = account === '?' ? 400 : account === 'A' && text.includes('fixture-second-marker') ? rejection : 200;
+    requests.push({ account, text, status });
+    res.writeHead(status, { 'content-type': 'application/json' });
+    res.end(JSON.stringify(status === 200 ? { text: `fixture-reply-${account}` } : { error: { code } }));
+  }).listen(0, '127.0.0.1');
+  await once(upstream, 'listening');
+  const kind = piFork ? 'pi' as const : 'codex' as const;
+  const model = piFork ? 'chatgpt/gpt-6' : 'gpt-6';
+  const task = 'fixture-scoped-task';
+  const providerId = 'openai';
+  const credential = 'fixture-openai-key';
+  const route = invited ? `share:${share.id}` : share.host;
+  h.modelCacheRead.mockRejectedValue(Object.assign(new Error('synthetic missing file'), { code: 'ENOENT' }));
+  h.pools.openai = { strategy: 'weight', accounts: [{ ...account('default'), weight: nativeFirst ? 100 : 1 }] };
+  h.apiMembers = [{ ...account('key-fixture'), weight: nativeFirst ? 1 : 100, connectionId: credential, providerId }];
+  setCustomProviderKeyReader(id => id === credential ? 'synthetic-key' : null);
+  const random = vi.spyOn(Math, 'random').mockReturnValue(0.75);
+  const offers = createProviderGroupGuestSwitch();
+  const history: HandoffSourceMessage[] = [];
+  const replies: string[] = [];
+  const terminalErrors: Array<string | undefined> = [];
+  let native = 0;
+  let authorized = true;
+  let live: Session | undefined;
+  const pendingHandoff = createAgentHandoffPendingRegistry(async () => null, undefined,
+    piFork ? async () => handoff => composeForkOriginHandoff('synthetic-parent', handoff) : undefined);
+  if (piFork) {
+    h.routeAllowed.mockImplementation((id, _options, caller) =>
+      id === model && (caller === providerId || caller === credential));
+    history.push({ role: 'assistant', content: 'earlier branch '.repeat(110_000), createdAt: 1 });
+  }
+  let sdkSessionId: string | null = null;
+  const row = () => ({ id: task, status: 'active', agentKind: kind, model, providerId,
+    agentDeviceId: route, remoteHostId: null, orcaRole: null, sdkSessionId });
+  const log: Logger = { trace() {}, debug() {}, info: console.info, warn: console.warn, error: console.error, fatal() {}, child: () => log };
+  const agent = withSubscriptionAccounts({ kind, startSession: async (options: StartSessionOptions) => {
+    const events: AgentEvent[] = [];
+    const path = options.providerId === credential ? '/key' : '/subscription';
+    expect(options.model).toBe(piFork && path === '/key' ? 'gpt-6' : model);
+    const url = new URL(path, `http://127.0.0.1:${(upstream.address() as { port: number }).port}`);
+    if (url.hostname !== '127.0.0.1' || url.protocol !== 'http:') throw new Error('non-loopback fixture upstream');
+    let closed = false;
+    let wake: (() => void) | undefined;
+    return { id: `loopback-native-${++native}`, agentKind: kind, model,
+      setInteractionResolver() {}, abort: async () => {},
+      close: async () => { closed = true; wake?.(); },
+      send: async (input: { content: unknown }) => {
+        const result = await fetch(url, { method: 'POST', body: extractPlainText(input.content), redirect: 'error' });
+        const payload = await result.json() as { text?: string; error?: { code: string } };
+        if (!result.ok) {
+          if (path === '/key') h.apiAllowed = false; // Synthetic key health port.
+          if (partialOutput)
+            events.push({ type: 'text', source: kind, data: { text: 'fixture-visible-partial' } } as AgentEvent);
+          events.push({ type: 'error', source: kind, data: { message: JSON.stringify(payload), errorStatus: result.status,
+            ...(nativeFirst ? { sdkError: 'rate_limit' } : {}), isTerminal: true } } as AgentEvent);
+        } else {
+          events.push({ type: 'text', source: kind, data: { text: payload.text } } as AgentEvent,
+            { type: 'done', source: kind, data: {} } as AgentEvent);
+        }
+        wake?.();
+      },
+      events: async function* () {
+        while (!closed) {
+          if (events.length) yield events.shift()!;
+          else await new Promise<void>(resolve => { wake = resolve; });
+        }
+      },
+    } as unknown as AgentSessionHandle;
+  } } as unknown as BaseAgent);
+  const host = createRemoteAgentHost({
+    runsRoot: '/synthetic-mixed-loopback', isAgentAvailable: () => true,
+    isControllerAuthorized: peer => authorized && peer === controllerPeer, controllerTrust: () => invited ? 'guest' : 'owner',
+    providerAccess: { resolve: async () => authorized ? providerId : null, isAllowed: () => authorized },
+    bindGuestProviderRoute: async () => ({ routeToken: 'synthetic-route', modelIds: [model], release() {} }),
+    captureOwner: () => h.owner, isOwnerCurrent: owner => owner === h.owner,
+    canSwitchLocalAccount: ({ providerId: id, hostSessionId, model: name }) => canSwitchHostedSubscriptionAccount(id, hostSessionId, name),
+    groupRelay: { plan: async () => null, connect: () => { throw new Error('no computer group'); },
+      noteStartFailure: () => false, noteRunFailure: () => false,
+      trackRun: () => ({ setRunning() {}, release() {} }), forget: async () => {} },
+    startHosted: input => agent.startSession({ ...input.options, sessionId: input.hostSessionId,
+      workingDir: input.shadowDir, deviceHosted: { ...input.workspace, guest: invited } } as StartSessionOptions),
+  });
+  executor.client.onFrame(frame => {
+    if (!frame.src || !frame.id) return;
+    const { src, id } = frame;
+    if (frame.kind === 'link-open') executor.client.sendLinkAccept(src, id, { appVersion: 'fixture', allowlistHash: 'fixture' });
+    if (frame.kind !== 'invoke') return;
+    const payload = frame.payload as InvokePayload;
+    if (payload.channel === 'maker:subscription-accounts') {
+      const query = payload.args[0] as Parameters<typeof readSubscriptionSessionAccount>[1];
+      void readSubscriptionSessionAccount('openai', query, { remote: true, ownComputer: true }).then(result => {
+        executor.client.sendInvokeResult(src, id, { ok: true, result });
+      });
+      return;
+    }
+    void host.handle(src, payload.args[0]).then(result => {
+      executor.client.sendInvokeResult(src, id, { ok: true, result: result ?? null });
+    }, error => {
+      executor.client.sendInvokeResult(src, id, { ok: false, error: { code: 'IPC_ERROR', message: String(error) } });
+    });
+  });
+  const invoke: ConstructorParameters<typeof RemoteAgentPoller>[0] = async (args, options) => {
+    const reply = await controller.client.invoke(destination, { channel: 'maker:remote-agent', args }, undefined,
+      { beforeDispatch: options?.beforeDispatch });
+    if (!reply.ok) throw new Error(reply.error.message);
+    return reply.result;
+  };
+  const invokeAccount: Parameters<typeof probeSubscriptionAccountHandoff>[2] = (id, channel, args, options) =>
+    controller.client.invoke(id, { channel, args }, undefined, { preSend: options?.preSend });
+  const poller = new RemoteAgentPoller(invoke);
+  const open = async () => {
+    const handle = await startRemoteAgentSession(kind, { sessionId: task, model, providerId, workingDir: '/controller/work' }, {
+      invoke, poller, log, rgPath: 'rg', newId: randomUUID,
+      prepareMcp: async () => ({ servers: new Map(), dispose() {} }),
+      collectProjectFiles: async () => [], isGitRepo: async () => false,
+      ...(invited ? { groupSwitch: { token: offers.takeForOpen(task), offer: token => offers.offer(task, token) } } : {}),
+    });
+    offers.release(task);
+    sdkSessionId = handle.id;
+    const session = new Session({ id: task, agentKind: kind, permissionMode: 'bypassPermissions',
+      workDir: '/controller/work', agentDeviceId: route, handle, capabilities: {} as never, logger: log });
+    live = session;
+    session.onEvent(event => {
+      if (event.type === 'text') {
+        const text = (event.data as { text: string }).text;
+        if (text) {
+          replies.push(text);
+          history.push({ role: 'assistant', content: text, createdAt: Date.now() });
+        }
+      }
+      if (event.type === 'done') coordinator.onTurnEvent(task, 'done', undefined, undefined, event);
+      if (event.type === 'error' && (event.data as { isTerminal?: boolean }).isTerminal) {
+        const { message, ...signals } = event.data as { message?: string; errorStatus?: number };
+        terminalErrors.push(message);
+        coordinator.onTurnEvent(task, 'error', message, signals, event);
+      }
+    });
+    return session;
+  };
+  const directory = createProviderGroupDirectory({ listLocalProviders: async () => [], localDeviceName: () => 'guest',
+    listDevices: async () => [], readDeviceProviders: async () => [], listReceivedShares: () => [],
+    isMobilePlatform: () => false, now: Date.now });
+  const router = createProviderGroupRouter({ directory, readGroup: () => null, listBindings: () => ({}),
+    isTurnRunning: () => false, now: Date.now, random: () => 0 });
+  const relocate = async (retryClientId?: string, assertCurrent?: () => void) => {
+    const current = live;
+    await relocateForFreshStart({
+      getSessionRow: async () => row(), listMessagesForHandoff: async () => history,
+      applyAgentSwitchToDb: async (_task, patch) => { sdkSessionId = patch.sdkSessionId ?? null; },
+      setSessionProvider() {},
+      insertBoundaryMessage: async () => 'boundary', setPendingHandoff: pendingHandoff.set,
+      applyResumeFallbackAtomically: async () => {}, log,
+    }, { sessionId: task, agentDeviceId: route, providerId, sharedRelocation: true, retryClientId, assertCurrent });
+    await current?.close();
+    live = undefined;
+  };
+  const service = createProviderGroupService({ router, directory, readGroup: () => null,
+    readBinding: () => null, writeBinding: async () => {}, isReleased: () => false, markReleased: async () => {},
+    readSessionRow: async () => row(), resolveImplicitProvider: async () => providerId,
+    persistRoute: async () => {}, hasAssistantHistory: async () => replies.length > 0, isFailoverEligible: async () => authorized,
+    leaseRecovery: (...args) => coordinator.leaseUsageLimitRecovery(...args),
+    isLeaseCurrent: (...args) => coordinator.isUsageLimitRecoveryLeaseCurrent(...args),
+    rearmContinue: (...args) => coordinator.rearmUsageLimitWait(...args),
+    cancelContinue: (...args) => coordinator.cancelUsageLimitWait(...args),
+    isTurnRunning: () => live?.isTurnRunning() ?? false, hasLiveSession: () => !!live,
+    continueSession: (...args) => coordinator.continueAfterProviderGroupRecovery(...args),
+    readAccountSwitch: async () => readSubscriptionAccountSwitch(task, async () => row(), invokeAccount),
+    fallback: () => {}, readResetAt: () => null, now: Date.now, guestSwitch: offers, log,
+    switchAgentLocation: async (_id, _route, options) => {
+      const recovery = options?.recoveryToken === undefined ? null
+        : coordinator.snapshotUsageLimitRecovery(task, options.recoveryToken);
+      await relocate(recovery?.item.retrySourceClientId ?? recovery?.item.clientId,
+        () => { if (!options?.isCurrent?.()) throw new Error('superseded'); });
+    },
+  });
+  const tx = sharedAccountSendTransaction({
+    getSession: () => live,
+    bootstrapSession: async () => ({ session: await open(), didInjectOrcaInstructions: false, didInjectProjectContext: false }),
+    prepareUnhealthySession: async (_id, retry) => {
+      if (!invited && await probeSubscriptionAccountHandoff(task, row(), invokeAccount))
+        await relocate(retry?.userClientId);
+    },
+    peekPendingHandoff: pendingHandoff.peek, consumePendingHandoff: pendingHandoff.consume,
+    createDbMessage: async (_id, message) => {
+      if (message.role === 'user') history.push({ role: 'user', clientId: message.clientId, content: message.content, createdAt: Date.now() });
+    },
+    readScheduledPermissions: async () => ({ permissionMode: 'bypassPermissions', planModeEnabled: false }),
+  });
+  const coordinator = new AgentInputCoordinator({
+    sendToAgent: async (...args) => (await tx.sendToAgentAccepted(...args)).outcome,
+    steerToAgent: async () => {}, abortSession: async () => {}, touchUserSend: async () => {}, createUserMessage: vi.fn(),
+    isTurnRunning: () => live?.isTurnRunning() ?? false, hasPendingInteraction: () => false,
+    getAgentKind: () => kind, getSdkSessionId: async () => sdkSessionId ?? undefined,
+    getTurnGeneration: () => live?.getTurnGeneration() ?? null, getTurnSessionIdentity: () => live ?? null,
+    hasAssistantProgressAfter: async () => false, emitProjection: () => {}, persistTerminalSendError: vi.fn(),
+    providerGroupSwitchCandidate: (id, signals) => service.mayHandleTurnError(id, signals) ? providerGroupSwitchCause(signals, 'run') : null,
+    onUsageLimitedTurnError: (id, signals, _item, token) => { void service.onTurnError(id, signals, token); },
+  });
+  const enqueue = (clientId: string, text: string) => coordinator.enqueue(task, {
+    clientId, text, persistedContent: text, model, effort: 'medium', permissionMode: 'default', workingDir: '/controller/work',
+    createOpts: { agentKind: kind, model, workingDir: '/controller/work', permissionMode: 'bypassPermissions' },
+    chatMessage: { clientId, role: 'user', content: text, isStreaming: false, createdAt: new Date().toISOString() },
+  }, { manualUiSend: true });
+  try {
+    executor.client.start();
+    controller.client.start();
+    await vi.waitFor(() => expect([executor.client.getStatus(), controller.client.getStatus()]).toEqual(['online', 'online']));
+    await open();
+    enqueue('first', 'fixture-first-marker');
+    await vi.waitFor(() => expect(replies).toEqual(['fixture-reply-A']));
+    await vi.waitFor(() => expect(live?.isTurnRunning()).toBe(false));
+    enqueue('second', 'fixture-second-marker');
+    if (partialOutput) {
+      await vi.waitFor(() => expect(terminalErrors).toHaveLength(1));
+      expect(replies).toEqual(['fixture-reply-A', 'fixture-visible-partial']);
+      expect(requests.map(({ account, status }) => [account, status])).toEqual([['A', 200], ['A', rejection]]);
+      expect(h.bindings.get(`task:${hostSessionIdFor(controllerPeer, task)}`)?.accountId).toBe('default');
+      expect(offers.hasOffer(task)).toBe(false);
+      return;
+    }
+    await vi.waitFor(() => expect(replies).toEqual(['fixture-reply-A', 'fixture-reply-B']), { timeout: 5_000 });
+    expect(requests.map(({ account, status }) => [account, status])).toEqual([['A', 200], ['A', rejection], ['B', 200]]);
+    expect(requests[2].text).toContain('fixture-first-marker');
+    expect(requests[2].text).toContain('fixture-reply-A');
+    if (piFork) expect(requests[2].text).toContain('synthetic-parent');
+    expect(requests[2].text.match(/fixture-second-marker/g)).toHaveLength(1);
+    expect(h.bindings.get(`task:${hostSessionIdFor(controllerPeer, task)}`)?.accountId).toBe(nativeFirst ? 'key-fixture' : 'default');
+    await vi.waitFor(() => expect(live?.isTurnRunning()).toBe(false));
+    authorized = false;
+    await expect(live!.send('fixture-revoked-existing')).rejects.toThrow(/REMOTE_AGENT_UNAVAILABLE|REMOTE_AGENT_PROVIDER_NOT_ALLOWED/);
+    await expect(open()).rejects.toThrow(/REMOTE_AGENT_UNAVAILABLE|REMOTE_AGENT_PROVIDER_NOT_ALLOWED/);
+    expect(requests).toHaveLength(3);
+    expect(relay.frames.some(frame => frame.kind === 'invoke' && (invited
+      ? frame.providerShare?.shareId === share.id : !frame.providerShare))).toBe(true);
+    console.info('mixed pool loopback', { mode, kind, upstream: requests.map(({ account, status }) => [account, status]),
+      frames: relay.frames.filter(frame => frame.kind === 'invoke').length, revokedRequests: requests.length - 3 });
+  } finally {
+    await live?.close();
+    await host.dispose();
+    random.mockRestore();
+    setCustomProviderKeyReader(() => null);
+    controller.close();
+    executor.close();
+    await relay.close();
+    upstream.closeAllConnections();
+    await new Promise<void>(resolve => upstream.close(() => resolve()));
+  }
+}, 20_000);
+
+// Integration: controller RPC, host authorization and allocator are real.
+// The native agent and device link are in-memory fixtures. One key refusal
+// exposes a missing offer or a fresh open that accidentally keeps the old key.
+it.each(['guest-auth', 'guest-credit', 'paired-credit'] as const)(
+  'continues a mixed account task through the remote host (%s)', async scenario => {
+    h.modelCacheRead.mockRejectedValue(Object.assign(new Error('synthetic missing file'), { code: 'ENOENT' }));
+    const guest = scenario.startsWith('guest');
+    const model = 'gpt-6';
+    const credential = 'fixture-openai-key';
+    const task = 'mixed-controller-task';
+    const peer = guest ? providerShareGuestPeer('fixture-share', 'fixture-member', 'fixture-device') : 'paired-fixture';
+    h.pools.openai = { strategy: 'order', accounts: [account('default')] };
+    h.apiMembers = [{ ...account('key-fixture'), connectionId: credential, providerId: 'openai' }];
+    setCustomProviderKeyReader(id => id === credential ? 'synthetic-key' : null);
+    const requests: Array<{ connection: string; text: string }> = [];
+    let authorized = true;
+    let token: string | undefined;
+    let sequence = 0;
+    const clients: RemoteAgentRunClient[] = [];
+    const events: AgentEvent[] = [];
+    const agent = withSubscriptionAccounts({ kind: 'codex', startSession: async (options: StartSessionOptions) => {
+      const queue: AgentEvent[] = [];
+      let wake: (() => void) | undefined;
+      let closed = false;
+      const connection = options[NATIVE_SUBSCRIPTION_ACCOUNT] ? 'subscription' : options.providerId!;
+      return { id: `mixed-native-${++sequence}`, agentKind: 'codex', model,
+        setInteractionResolver() {}, abort: async () => {},
+        close: async () => { closed = true; wake?.(); },
+        send: async (input: { content: string }) => {
+          requests.push({ connection, text: input.content });
+          if (connection === credential && input.content === 'second-input') {
+            h.apiAllowed = false;
+            queue.push({ type: 'error', source: 'codex', data: { isTerminal: true,
+              ...(scenario === 'guest-auth' ? { errorStatus: 401, message: 'invalid_api_key' }
+                : { errorStatus: 429, message: '{"error":{"code":"credit_balance_exhausted"}}' }),
+            } } as AgentEvent);
+          } else queue.push({ type: 'done', source: 'codex', data: {} } as AgentEvent);
+          wake?.();
+        },
+        events: async function* () {
+          while (!closed) {
+            if (queue.length) yield queue.shift()!;
+            else await new Promise<void>(resolve => { wake = resolve; });
+          }
+        },
+      } as unknown as AgentSessionHandle;
+    } } as unknown as BaseAgent);
+    const host = createRemoteAgentHost({
+      runsRoot: '/synthetic-mixed-group', isAgentAvailable: () => true,
+      isControllerAuthorized: () => authorized, controllerTrust: () => guest ? 'guest' : 'owner',
+      providerAccess: { resolve: async () => authorized ? 'openai' : null, isAllowed: () => authorized },
+      bindGuestProviderRoute: async () => ({ routeToken: 'synthetic-route', modelIds: [model], release() {} }),
+      captureOwner: () => h.owner, isOwnerCurrent: owner => owner === h.owner,
+      canSwitchLocalAccount: ({ providerId, hostSessionId, model }) => canSwitchHostedSubscriptionAccount(providerId, hostSessionId, model),
+      groupRelay: { plan: async () => null, connect: () => { throw new Error('no computer group'); },
+        noteStartFailure: () => false, noteRunFailure: () => false,
+        trackRun: () => ({ setRunning() {}, release() {} }), forget: async () => {} },
+      startHosted: input => agent.startSession({ ...input.options, sessionId: input.hostSessionId,
+        workingDir: input.shadowDir, deviceHosted: { ...input.workspace, guest } } as StartSessionOptions),
+    });
+    const poller = new RemoteAgentPoller(async args => {
+      const result = await host.handle(peer, JSON.parse(JSON.stringify(args[0])));
+      return JSON.parse(JSON.stringify(result ?? null));
+    });
+    const open = async (selectedModel = model, capability?: string) => {
+      const active = new RemoteAgentRunClient(randomUUID(), poller, {
+        onEvent: event => events.push(event as AgentEvent),
+        onState: state => takeGroupSwitchState(state, value => { token = value; }),
+        onRequest: async () => ({ type: 'callback', value: undefined }), onWs() {}, onClosed() {},
+      }, randomUUID);
+      clients.push(active);
+      await active.open('codex', { sessionId: task, virtualWorkspace: true,
+        options: { model: selectedModel, providerId: 'openai' },
+        ...(guest ? { acceptsGroupSwitch: true, ...(capability ? { groupSwitchToken: capability } : {}) } : {}),
+        workspace: { workingDir: '/controller/work', platform: 'darwin', shell: 'bash' },
+        projectFiles: [], ancestorFiles: [], personal: { files: [] }, mcpServers: [] });
+      return active;
+    };
+    try {
+      const first = await open();
+      await first.call('send', [{ type: 'user', content: 'first-input' }]);
+      await vi.waitFor(() => expect(events.some(event => event.type === 'done')).toBe(true));
+      await first.call('send', [{ type: 'user', content: 'second-input' }]);
+      await vi.waitFor(() => expect(events.some(event => event.type === 'error')).toBe(true));
+      if (guest) expect(token).toBeTypeOf('string');
+      await first.close('close', 'navigation');
+      const replacement = await open(model, token);
+      await replacement.call('send', [{ type: 'user', content: 'first-input\nsecond-input' }]);
+      expect(requests).toEqual([
+        { connection: credential, text: 'first-input' },
+        { connection: credential, text: 'second-input' },
+        { connection: 'subscription', text: 'first-input\nsecond-input' },
+      ]);
+      expect(h.bindings.get('native:mixed-native-1')?.accountId).toBe('key-fixture');
+      expect(h.bindings.get('native:mixed-native-2')?.accountId).toBe('default');
+      await replacement.close('close', 'navigation');
+      authorized = false;
+      await expect(open()).rejects.toThrow();
+      expect(requests).toHaveLength(3);
+    } finally {
+      for (const client of clients) client.abandon('test-finished');
+      await host.dispose();
+      setCustomProviderKeyReader(() => null);
+    }
+  },
+);
+// #11322 / unit: Desktop's actual handoff callback → prepare → send transaction →
+// coordinator dispatch → subscription-wrapped native start. Existing placement tests
+// supplied B directly and missed the saved-A / accepted-B split. Minimal input:
+// task/native bound to A, saved A, accepted B. Only IO and the native engine are fake.
+describe('accepted subscription route handoff before queued dispatch', () => {
+  it.each(['executor', null])('keeps the remote-group source when execution is on %s', async agentDeviceId => {
+    const id = 'remote-assignment';
+    clearAllSessionRuntimeControlStates();
+    try {
+      acceptSessionRuntimeMutation({ sessionId: id, source: 'fallback', deferred: false, profile: {
+        agentKind: 'claude-code', agentDeviceId, providerId: 'controller-provider',
+        model: 'claude-model', effort: null, fastMode: false,
+      } });
+      const probe = vi.fn(async () => false);
+      const row = { status: 'active', agentKind: 'cc', agentDeviceId, remoteHostId: null,
+        providerId: 'assigned-provider', model: 'claude-model', sdkSessionId: 'remote-native', clearedAt: null };
+      await sharedAccountHandoffProbe(probe, 'group-owner')(id, row);
+      expect(probe).toHaveBeenCalledWith(id, expect.objectContaining(row), expect.any(Function));
+    } finally { clearAllSessionRuntimeControlStates(); }
+  });
+  it.each(['agent', 'fallback', 'unchanged', 'deferred', 'unavailable', 'cancelled', 'owner-changed'] as const)(
+    'preserves native ownership and dispatches the queue head once (%s)', async mode => {
+      const id = 'accepted-route';
+      clearAllSessionRuntimeControlStates();
+      h.pools.anthropic = { strategy: 'order', accounts: [account('default'), account('second')] };
+      await runSubscriptionAccountCommand({ action: 'place', providerId: 'anthropic', accountId: 'second', target: null });
+      const target = Object.keys(h.created)[0]!;
+      const old = await acquireSubscriptionAccount('anthropic', 'claude-model', [`task:${id}`]);
+      await old!.bind([`task:${id}`, 'native:old-native']);
+      old!.release();
+      const row = { id, status: 'active', source: 'desktop', agentKind: 'cc', providerId: 'anthropic',
+        model: 'claude-model', sdkSessionId: 'old-native' as string | null, clearedAt: null, remoteHostId: null,
+        agentDeviceId: null, contextTokens: 10, contextWindow: 200_000, workingDir: '/synthetic/work' };
+      const profile = { agentKind: 'claude-code' as const, providerId: target, model: row.model, effort: null, fastMode: false };
+      if (mode !== 'unchanged') acceptSessionRuntimeMutation({ sessionId: id,
+        source: mode === 'agent' ? 'agent' : 'fallback', profile, deferred: mode === 'deferred' });
+      if (mode === 'unavailable') h.pools.anthropic.accounts[1]!.paused = true;
+      let handoff: string | null = null;
+      let live: Session | undefined;
+      let endEvents!: () => void;
+      const eventsEnded = new Promise<void>(resolve => { endEvents = resolve; });
+      const sent = vi.fn(async () => {});
+      const nativeStart = vi.fn<BaseAgent['startSession']>(async () => ({ id: 'new-native',
+        send: sent, close: async () => { endEvents(); }, abort: async () => {}, events: async function* () { await eventsEnded; },
+        setInteractionResolver() {},
+      } as unknown as AgentSessionHandle));
+      const agent = withSubscriptionAccounts({ kind: 'claude-code', startSession: nativeStart } as unknown as BaseAgent);
+      const logger: Logger = { trace() {}, debug() {}, info() {}, warn() {}, error() {}, fatal() {}, child() { return logger; } };
+      const commits = vi.fn(async (_id: string, _handoff: string) => { row.sdkSessionId = null; });
+      const rollover = createContextOverflowRollover({
+        getSessionRow: async () => ({ ...row }),
+        needsNativeSessionHandoff: sharedAccountHandoffProbe((taskId, state) => {
+          const result = probeSubscriptionAccountHandoff(taskId, state);
+          if (mode === 'owner-changed') {
+            h.owner = 'next-owner';
+            clearAllSessionRuntimeControlStates();
+          }
+          return result;
+        }),
+        listMessages: async () => {
+          if (mode === 'cancelled') rollover.cancelRecovery(id);
+          return [{ role: 'user', content: 'Remember prior work', clientId: 'prior-user', createdAt: 1 },
+            { role: 'assistant', content: 'Step one completed', clientId: 'prior-reply', createdAt: 2 }];
+        },
+        findLatestRebuildMeta: async () => null, getLiveSession: () => live,
+        closeSession: async () => { await live?.close(); live = undefined; },
+        drainPersistQueue: async () => {}, commitRebuild: commits,
+        setPendingHandoff: (_id, text) => { handoff = text; },
+        replayUserMessage: async () => { throw new Error('Pre-send handoff must not replay'); },
+        withCloseSuppressed: (_id, run) => run(), log: { info() {}, warn() {} },
+      });
+      const persisted = vi.fn(async () => {});
+      const wiring = sharedAccountRegisterWiring({
+        getSessionRowSnapshotStrict: async () => row,
+        setSdkSessionId: nativeId => { row.sdkSessionId = nativeId; },
+        applySessionRuntimeOverrideForStart,
+        admitLocalSessionRoute: async () => {},
+        createSessionWithRuntimePlugins: async (opts: StartSessionOptions) => {
+          const handle = await agent.startSession({ ...opts, sessionId: id });
+          return live = new Session({ id, agentKind: 'claude-code', permissionMode: 'bypassPermissions',
+            workDir: row.workingDir, handle, capabilities: {} as never,
+            logger });
+        },
+      });
+      const transaction = sharedAccountSendTransaction({ ...wiring,
+        getSession: () => live, prepareUnhealthySession: taskId => rollover.prepareUnhealthySession(taskId),
+        readScheduledPermissions: async () => ({ permissionMode: 'bypassPermissions', planModeEnabled: false }),
+        peekPendingHandoff: async () => handoff, consumePendingHandoff: () => { handoff = null; },
+        createDbMessage: persisted, reconcileCreateOptsWithDb: async (_id, opts) => {
+          opts.providerId = row.providerId; opts.resumeSessionId = row.sdkSessionId ?? undefined;
+        },
+      });
+      const send = vi.fn<AgentInputCoordinatorDeps['sendToAgent']>(async (...args) => (await transaction.sendToAgentAccepted(...args)).outcome);
+      const coordinator = new AgentInputCoordinator({ sendToAgent: send, steerToAgent: async () => {},
+        abortSession: async () => {}, touchUserSend: async () => {},
+        createUserMessage: async () => { throw new Error('The send transaction owns user persistence'); },
+        isTurnRunning: () => live?.isTurnRunning() ?? false, hasPendingInteraction: () => false,
+        getAgentKind: () => 'claude-code', getSdkSessionId: async () => live?.sdkSessionId,
+        getTurnGeneration: () => live?.getTurnGeneration() ?? null, getTurnSessionIdentity: () => live ?? null,
+        emitProjection() {},
+      });
+      try {
+        const text = 'Continue remaining work';
+        coordinator.enqueue(id, { clientId: 'head-once', text, persistedContent: text,
+          model: row.model, effort: 'medium', workingDir: row.workingDir, permissionMode: 'bypassPermissions',
+          createOpts: { agentKind: 'claude-code', model: row.model, providerId: row.providerId,
+            workingDir: row.workingDir, permissionMode: 'bypassPermissions' },
+          chatMessage: { clientId: 'head-once', role: 'user', content: text, isStreaming: false, createdAt: new Date().toISOString() },
+        }, { manualUiSend: true });
+        await vi.waitFor(() => expect(send).toHaveBeenCalledOnce());
+        const outcome = await send.mock.results[0]!.value.catch((error: Error) => error);
+        if (['unavailable', 'cancelled', 'owner-changed'].includes(mode)) {
+          expect(outcome).toBeInstanceOf(Error);
+          expect((outcome as Error).message).toMatch(mode === 'unavailable' ? /No subscription account/
+            : mode === 'cancelled' ? /aborted/ : /owner changed/);
+          expect(nativeStart).not.toHaveBeenCalled();
+          expect(commits).not.toHaveBeenCalled();
+          expect(sent).not.toHaveBeenCalled();
+          expect(coordinator.getProjection(id).pendingQueue.map(item => item.clientId)).toEqual(['head-once']);
+          if (mode === 'unavailable') {
+            h.pools.anthropic.accounts[1]!.paused = false;
+            await coordinator.retryLastError(id);
+            await vi.waitFor(() => expect(send).toHaveBeenCalledTimes(2));
+            await send.mock.results[1]!.value;
+            expect(nativeStart).toHaveBeenCalledOnce();
+            expect(nativeStart.mock.calls[0]![0][NATIVE_SUBSCRIPTION_ACCOUNT]?.configDir).toBe('anthropic/second');
+            expect(nativeStart.mock.calls[0]![0].resumeSessionId).toBeUndefined();
+            expect(commits).toHaveBeenCalledOnce();
+            expect(sent).toHaveBeenCalledOnce();
+            expect(persisted).toHaveBeenCalledOnce();
+            expect(persisted.mock.calls[0]).toEqual(expect.arrayContaining([
+              id, expect.objectContaining({ clientId: 'head-once' }),
+            ]));
+            expect(coordinator.getProjection(id).pendingQueue).toEqual([]);
+          }
+        } else {
+          expect(nativeStart, JSON.stringify(outcome)).toHaveBeenCalledOnce();
+          const switched = mode === 'agent' || mode === 'fallback';
+          expect(commits).toHaveBeenCalledTimes(switched ? 1 : 0);
+          expect(nativeStart.mock.calls[0]![0][NATIVE_SUBSCRIPTION_ACCOUNT]?.configDir)
+            .toBe(switched ? 'anthropic/second' : 'anthropic/default');
+          expect(nativeStart.mock.calls[0]![0].resumeSessionId).toBe(switched ? undefined : 'old-native');
+          expect(sent, JSON.stringify(outcome)).toHaveBeenCalledOnce();
+          expect(JSON.stringify(sent.mock.calls)).toContain(text);
+          if (switched) expect(JSON.stringify(sent.mock.calls)).toContain('Step one completed');
+          expect(persisted).toHaveBeenCalledOnce();
+          expect(persisted.mock.calls[0]).toEqual(expect.arrayContaining([
+            id, expect.objectContaining({ clientId: 'head-once' }),
+          ]));
+          expect(coordinator.getProjection(id).pendingQueue).toEqual([]);
+          expect(h.bindings.get('native:new-native')?.accountId).toBe(switched ? 'second' : 'default');
+        }
+        expect(row.providerId).toBe('anthropic');
+        expect(h.bindings.get('native:old-native')?.accountId).toBe('default');
+      } finally {
+        endEvents();
+        await live?.close();
+        clearAllSessionRuntimeControlStates();
+      }
+    });
 });
 
 // Unit regression 2026-11-16: real router → host.handle(open) → account acquire,
@@ -970,6 +1825,15 @@ describe('owner-only subscription identity', () => {
     await refreshSubscriptionPoolCodexModels(true);
     expect(readSubscriptionPoolCodexModels()?.map(m => m.id)).toEqual(['astra', 'sol']);
     expect(hasUnavailableSubscriptionPoolAccount('openai')).toBe(true);
+    // #12716: disagreement about an older model must not hide an addition
+    // reported by both model/list and this synthetic account directory's cache.
+    h.modelCacheRead.mockResolvedValue(JSON.stringify({ models: ['astra', 'sol', 'new-model', 'disk-only']
+      .map(slug => ({ slug, supported_in_api: true, visibility: 'list' })) }));
+    h.rpc.mockResolvedValue({ data: [{ id: 'sol' }, { id: 'new-model' }] });
+    await refreshSubscriptionPoolCodexModels(true);
+    expect(readSubscriptionPoolCodexModels()?.map(m => m.id)).toEqual(['astra', 'sol', 'new-model']);
+    expect(hasUnavailableSubscriptionPoolAccount('openai')).toBe(true);
+    h.rpc.mockResolvedValue({ data: [{ id: 'sol' }] });
     h.modelCacheRead.mockResolvedValue(JSON.stringify({ models: [{ slug: 'sol', supported_in_api: true, visibility: 'list' }] }));
     await refreshSubscriptionPoolCodexModels(true);
     expect(readSubscriptionPoolCodexModels()?.map(m => m.id)).toEqual(['sol']);
@@ -1110,6 +1974,116 @@ describe('duplicate subscription account profiles', () => {
       expect(() => lease?.assertDispatchable()).not.toThrow();
       allowed = false;
       expect(() => lease?.assertDispatchable()).toThrow('Subscription account remote access was revoked');
+    } finally {
+      lease?.release();
+    }
+  });
+
+  // #11948 / unit: unlike legacy images, the created provider has chat auth without
+  // image OAuth until the native bridge is readable. Exercise real pooling and the
+  // hosted serializer; only the native credential transport and HTTP are synthetic.
+  it('uses only the selected provider’s image account and stops if it moves before dispatch', async () => {
+    const providerId = 'openai-sub-image-fixture';
+    const model = `${providerId}/gpt-image-2`;
+    const image = 'iVBORw0KGgo=';
+    h.pools.openai = { strategy: 'order', accounts: [account('default'), account('second')] };
+    h.created[providerId] = { kind: 'openai', name: 'Independent', account: 'second' };
+    h.placement['openai:second'] = providerId;
+    let imageAuth = false;
+    h.tokens.mockImplementation(async (directory: string) => {
+      if (directory === 'openai/second' && !imageAuth) throw new Error('No native OAuth material');
+      return { accessToken: `fixture-token:${directory}`, chatgptAccountId: `fixture-workspace:${directory}`, canDispatch: () => true };
+    });
+    const provider = {
+      ...BUNDLED_CATALOG.providers.find(candidate => candidate.id === 'openai')!,
+      id: providerId, subscriptionPool: 'openai' as const,
+    };
+    const fetchImplementation = vi.fn<typeof fetch>(async () => Response.json({ data: [{ b64_json: image }] }));
+    let moveOnSecondRead = false;
+    let reads = 0;
+    const legacy = vi.fn(async () => { throw new Error('Unexpected legacy credential read'); });
+    const observed = vi.fn(() => hasCreatedOpenAiImageAuth(providerId));
+    const unsubscribe = onSubscriptionPoolCodexModelsChanged(observed);
+    setCodexImageAuthBinding({
+      hasPoolImageAuth: hasCreatedOpenAiImageAuth,
+      getAuth: legacy,
+      onAuthFailure: vi.fn(),
+      acquireAuth: createCodexImageAuthAcquirer({
+        resolveSubscriptionPoolProvider, acquireSubscriptionAccount,
+        async getChatgptBridgeAuthForDispatch(family, selected) {
+          if (family !== 'openai' || !selected?.readCodexTokens) {
+            throw new Error('Image dispatch did not bind a native OpenAI account');
+          }
+          const tokens = await selected.readCodexTokens();
+          if (++reads === 2 && moveOnSecondRead) delete h.placement['openai:second'];
+          return { accessToken: tokens.accessToken, accountId: tokens.chatgptAccountId, canDispatch: tokens.canDispatch! };
+        },
+        invalidateChatgptBridgeAuth: async () => false,
+      }),
+    });
+    try {
+      const channel = createAccountCodexImageChannel(providerId, () => provider, { fetchImplementation });
+      const params = { model, prompt: 'Draw a circle' };
+      await refreshSubscriptionPool('openai', true);
+      await refreshSubscriptionPool(providerId, true);
+      expect(hasConnectedSubscriptionPool(providerId)).toBe(true);
+      expect(channel.ready()).toBe(false);
+      await expect(channel.generateImage(params)).rejects.toThrow('No subscription account is available');
+      expect(fetchImplementation).not.toHaveBeenCalled();
+
+      imageAuth = true;
+      await refreshSubscriptionPool(providerId, true);
+      expect(channel.ready()).toBe(true);
+      expect(observed).toHaveLastReturnedWith(true);
+      await expect(channel.generateImage(params)).resolves.toEqual({ data: [{ b64_json: image }] });
+      const [url, init] = fetchImplementation.mock.calls[0]!;
+      expect(url).toBe('https://chatgpt.com/backend-api/codex/images/generations');
+      expect(init?.headers).toMatchObject({
+        Authorization: 'Bearer fixture-token:openai/second',
+        'ChatGPT-Account-Id': 'fixture-workspace:openai/second',
+      });
+      expect(JSON.parse(String(init?.body))).toMatchObject({ model: 'gpt-image-2' });
+
+      reads = 0;
+      moveOnSecondRead = true;
+      await expect(channel.generateImage(params)).rejects.toThrow('Subscription image account was moved');
+      expect(channel.ready()).toBe(false);
+      await expect(channel.generateImage(params)).rejects.toThrow('No subscription account is available');
+      expect(fetchImplementation).toHaveBeenCalledTimes(1);
+      expect(legacy).not.toHaveBeenCalled();
+    } finally {
+      unsubscribe();
+      setCodexImageAuthBinding(null);
+    }
+  });
+
+  // #11948 / unit: a merged legacy image model's existing off switch uses
+  // the original provider namespace even when the destination's switch is on.
+  it('respects a merged legacy account’s own image model disable switch', async () => {
+    const providerId = 'openai-sub-image-fixture';
+    const legacyId = 'openai-imported';
+    const model = `${providerId}/gpt-image-2`;
+    h.pools.openai = {
+      strategy: 'order', accounts: [account('default'), account('second')],
+      legacyCodexAccounts: { [legacyId]: 'second' },
+    };
+    h.created[providerId] = { kind: 'openai', name: 'Independent', account: 'second' };
+    h.placement['openai:second'] = providerId;
+    h.tokens.mockResolvedValue({
+      accessToken: 'fixture-token', chatgptAccountId: 'fixture-workspace', canDispatch: () => true,
+    });
+    await refreshSubscriptionPool(providerId, true);
+    expect(hasCreatedOpenAiImageAuth(providerId)).toBe(true);
+    const options = { capability: 'image.generate' as const };
+    const lease = await acquireSubscriptionAccount(providerId, model, [], false, options);
+    try {
+      expect(lease?.accountId).toBe('second');
+      h.accountAllowed.mockImplementation((provider: string, modelId: string) =>
+        provider !== legacyId || modelId !== `${legacyId}/gpt-image-2`);
+      expect(hasCreatedOpenAiImageAuth(providerId)).toBe(false);
+      expect(() => lease?.assertDispatchable()).toThrow('does not allow this model');
+      await expect(acquireSubscriptionAccount(providerId, model, [], false, options))
+        .rejects.toThrow('No subscription account is available');
     } finally {
       lease?.release();
     }
@@ -1604,6 +2578,27 @@ describe('pooled Codex model discovery', () => {
     }
   });
 
+  // Unit: native Codex chat can run without a readable workspace token. A quota
+  // notification during a turn must preserve its model list and any refresh in flight.
+  it.each([true, false])('keeps the active Codex catalog through a same-plan quota notification (workspace known: %s)', async workspaceKnown => {
+    h.pools.openai = { strategy: 'order', accounts: [account('second')] };
+    h.read.mockResolvedValue({ authenticated: true, identity: 'same-login', plan: 'pro' });
+    if (!workspaceKnown) h.tokens.mockRejectedValue(new Error('native-only login'));
+    const model = 'gpt-6.2-sol';
+    h.rpc.mockResolvedValue({ data: [{ id: model }] });
+    const lease = await acquireSubscriptionAccount('openai', model, []);
+    try {
+      expect(readSubscriptionPoolCodexModels()?.map(entry => entry.id)).toEqual([model]);
+      h.rpc.mockImplementationOnce(async () => {
+        observeSubscriptionAccountUsage(lease!.account, { limitId: 'codex', planType: 'pro',
+          primary: { usedPercent: 10, windowMinutes: 300 } });
+        return { data: [{ id: model }, { id: 'new-model' }] };
+      });
+      await refreshSubscriptionPoolCodexModels(true);
+      expect(readSubscriptionPoolCodexModels()?.map(entry => entry.id)).toEqual([model, 'new-model']);
+    } finally { lease?.release(); }
+  });
+
   // PR #10327 review: failed discovery was cached as valid empty membership.
   // Unit: retry without an auth change, retain only this login's LKG, and let
   // the public manual refresh force a fresh read rather than reusing failure.
@@ -2066,6 +3061,24 @@ describe('Claude account renewal', () => {
   // Standard, independent PR #10086 review: snapshot guards covered new leases,
   // but an idle live handle could send through a profile being renewed or left
   // on the wrong identity. Exercise the real wrapper, not its guard in isolation.
+  // Unit: an external CLI can switch identities while a live task still has a fresh cache.
+  // The renewal tests change identity through Cindy. A terminal-side change must also stop send.
+  it('rechecks an externally linked subscription before a live task sends again', async () => {
+    h.pools.anthropic!.accounts = [{ ...account('second'), linkedLogin: { directory: '/fixture', identity: 'original' } }];
+    h.read.mockResolvedValue({ authenticated: true, identity: 'original' });
+    const nativeSend = vi.fn(async () => {});
+    const handle = await withSubscriptionAccounts({
+      kind: 'claude-code', startSession: async () => ({
+        id: 'linked', send: nativeSend, close: async () => {},
+        events: async function* () { yield { type: 'done', data: {} }; },
+      }),
+    } as unknown as BaseAgent).startSession({ providerId: 'anthropic', sessionId: 'linked' } as StartSessionOptions);
+    h.read.mockResolvedValue({ authenticated: true, identity: 'replacement' });
+    await expect(handle.send({ type: 'user', content: 'continue' })).rejects.toThrow('SUBSCRIPTION_ACCOUNT_LOGIN_REQUIRED');
+    expect(nativeSend).not.toHaveBeenCalled();
+    await handle.close();
+  });
+
   it.each(['account_mismatch', 'login_cancelled'])('protects an existing handle during renewal and after %s', async reason => {
     h.pools.anthropic!.accounts = [account('second')];
     let identity = 'second@example.test';
@@ -2306,6 +3319,32 @@ describe('paused account next-turn handoff', () => {
     await expect(needsSubscriptionAccountHandoff('task-a', { providerId: provider, agentKind: provider === 'anthropic' ? 'cc' : 'codex', sdkSessionId: 'new-history' })).rejects.toThrow('No subscription account');
   });
 
+  it('shares an executor decision only within one send and checks paused accounts again on retry', async () => {
+    const { withRemoteAccountReads } = await import('../remotePreflight.js');
+    const row = { providerId: 'anthropic', model: 'claude-sonnet', agentKind: 'cc', sdkSessionId: 'native-a', agentDeviceId: 'peer' };
+    const reply = (paused: boolean) => ({ ok: true, result: { providerId: 'anthropic', routeProviderId: 'anthropic', state: 'bound',
+      account: { isDefault: true, number: 1, paused, status: 'ready', switchAvailable: false } } });
+    h.remote.mockResolvedValueOnce(reply(false)).mockResolvedValueOnce(reply(true));
+    await withRemoteAccountReads(async () => {
+      expect(await needsSubscriptionAccountHandoff('task', row)).toBe(false);
+      expect(await needsSubscriptionAccountHandoff('task', row)).toBe(false);
+    });
+    await expect(withRemoteAccountReads(() => needsSubscriptionAccountHandoff('task', row))).rejects.toThrow('No subscription account');
+    expect(h.remote).toHaveBeenCalledTimes(2);
+  });
+
+  it('marks only a transient read during send preparation as waiting for the executor', async () => {
+    const { RemoteAccountReadUnavailable, withRemoteAccountReads } = await import('../remotePreflight.js');
+    const row = { providerId: 'anthropic', model: 'claude-sonnet', agentKind: 'cc', sdkSessionId: 'native-a', agentDeviceId: 'peer' };
+    const check = () => needsSubscriptionAccountHandoff('task', row);
+    const timeout = Object.assign(new Error('no result within 30000ms'), { code: 'INVOKE_TIMEOUT' });
+    const denied = Object.assign(new Error('not allowed'), { code: 'FORBIDDEN' });
+    h.remote.mockRejectedValueOnce(timeout).mockRejectedValueOnce(denied).mockRejectedValueOnce(timeout);
+    await expect(withRemoteAccountReads(check)).rejects.toBeInstanceOf(RemoteAccountReadUnavailable);
+    await expect(withRemoteAccountReads(check)).rejects.toBe(denied);
+    await expect(check()).rejects.toBe(timeout);
+  });
+
   it('checks the executing computer for a paused remote task and leaves shared providers alone', async () => {
     h.remote.mockResolvedValueOnce({ ok: true, result: { providerId: 'anthropic', state: 'bound',
       account: { isDefault: false, number: 2, paused: true, status: 'ready' } } })
@@ -2317,6 +3356,45 @@ describe('paused account next-turn handoff', () => {
     h.remote.mockClear();
     expect(await needsSubscriptionAccountHandoff('task', { ...row, agentDeviceId: 'share:someone' })).toBe(false);
     expect(h.remote).not.toHaveBeenCalled();
+  });
+
+  // Unit: older executors can report kind-only availability for a bound
+  // native id. That reply cannot authorize abandoning the saved API alias.
+  it('keeps the legacy API alias when a downgraded executor omits route admission', async () => {
+    const row = { providerId: 'legacy-api', model: 'gpt-6', agentKind: 'codex',
+      sdkSessionId: 'remote-native', agentDeviceId: 'my-other-computer' };
+    h.remote.mockResolvedValue({ ok: true, result: { providerId: 'openai', state: 'bound',
+      account: { isDefault: false, number: 2, paused: false, blocked: true, status: 'ready', switchAvailable: true } } });
+    expect(await needsSubscriptionAccountHandoff('task', row)).toBe(false);
+    expect(h.remote).toHaveBeenCalledOnce();
+    expect(h.remote.mock.calls[0][2]).toEqual([{ action: 'session', providerId: 'openai', legacyProviderId: 'legacy-api',
+      nativeSessionId: 'remote-native', model: 'gpt-6' }]);
+  });
+
+  // Unit through the paired controller's query and the executor's production
+  // account view. A hidden API alias must keep its grant and native binding.
+  it('allows only the owning computer to hand off a blocked API alias to its admitted pool', async () => {
+    const alias = 'merged-key';
+    const model = 'gpt-6';
+    const accountId = 'key-fixture';
+    const nativeSessionId = 'remote-native';
+    h.pools.openai = { strategy: 'order', accounts: [account('default')] };
+    h.apiMembers = [{ ...account(accountId), connectionId: alias, providerId: 'openai' }];
+    h.apiAllowed = false;
+    h.bindings.set(`native:${nativeSessionId}`, { providerId: 'openai', accountId, via: alias });
+    h.modelCacheRead.mockRejectedValue(Object.assign(new Error('synthetic missing file'), { code: 'ENOENT' }));
+    const query = { nativeSessionId, legacyProviderId: alias, model };
+    const owner = { remote: true, ownComputer: true };
+    await expect(readSubscriptionSessionAccount('openai', query, { remote: true })).resolves.toMatchObject({ state: 'unavailable' });
+    h.remote.mockImplementation(async () => ({ ok: true, result: await readSubscriptionSessionAccount('openai', query, owner) }));
+    const row = { providerId: alias, model, agentKind: 'codex', sdkSessionId: nativeSessionId, agentDeviceId: 'my-other-computer' };
+    expect(await needsSubscriptionAccountHandoff('task', row)).toBe(true);
+    expect(await readSubscriptionSessionAccount('openai', query, owner)).toMatchObject({
+      state: 'bound', routeProviderId: alias, replacementProviderId: 'openai', account: { blocked: true, switchAvailable: true },
+    });
+    h.routeAllowed.mockImplementation((_model, _options, provider) => provider !== 'openai');
+    expect(await needsSubscriptionAccountHandoff('task', row)).toBe(false);
+    expect(h.bindings.get(`native:${nativeSessionId}`)).toMatchObject({ accountId, via: alias });
   });
 
   // Review regressions: replacement is a new authorization route, and remote
@@ -2408,6 +3486,73 @@ describe('tasks using imported Codex connections', () => {
     h.pools.openai.accounts = [account('default')];
     await expect(agent.startSession({ providerId: 'openai-old', sessionId: 'old-task' } as StartSessionOptions)).rejects.toThrow();
     expect(start).toHaveBeenCalledOnce();
+  });
+
+  // Regression (2026-11-22): the writer check must compare against the host the session actually runs on,
+  // which carries its subscription account; a route onto another account still compares without it.
+  it('checks the thread writer host with the account the session runs on, only for that account', async () => {
+    h.pools.openai = {
+      strategy: 'round', accounts: [account('default'), account('imported')],
+      legacyCodexAccounts: { 'openai-old': 'imported' },
+    };
+    const check = vi.fn<BaseAgent['requiresCodexThreadHostTransfer']>(async () => false);
+    const agent = withSubscriptionAccounts({ kind: 'codex', requiresCodexThreadHostTransfer: check } as unknown as BaseAgent);
+    const running = { id: 'imported', configDir: 'openai/imported', assertCurrent() {}, readState: async () => ({ authenticated: true }) };
+    const release = registerSessionSubscriptionAccount('lane', running);
+    try {
+      await agent.requiresCodexThreadHostTransfer({ sessionId: 'lane', providerId: 'openai-old', model: 'gpt-5.4', threadId: 't' });
+      expect(check.mock.calls[0][0][NATIVE_SUBSCRIPTION_ACCOUNT]).toBe(running);
+      await agent.requiresCodexThreadHostTransfer({ sessionId: 'lane', providerId: 'openai', model: 'gpt-5.4', threadId: 't' });
+      expect(check.mock.calls[1][0][NATIVE_SUBSCRIPTION_ACCOUNT]).toBe(running);
+      h.pools.openai.legacyCodexAccounts = { 'openai-old': 'default' };
+      await agent.requiresCodexThreadHostTransfer({ sessionId: 'lane', providerId: 'openai-old', model: 'gpt-5.4', threadId: 't' });
+      expect(check.mock.calls[2][0][NATIVE_SUBSCRIPTION_ACCOUNT]).toBeUndefined();
+      await agent.requiresCodexThreadHostTransfer({ sessionId: 'other', providerId: 'openai', model: 'gpt-5.4', threadId: 't' });
+      expect(check.mock.calls[3][0][NATIVE_SUBSCRIPTION_ACCOUNT]).toBeUndefined();
+    } finally { release(); }
+  });
+
+  // Review (#12144): a created provider can hold several accounts; its first account is only one of them.
+  // A session running on another account of that same provider keeps its own host.
+  it('keeps the running account when it is a later account of the target provider', async () => {
+    h.pools.openai = { strategy: 'round', accounts: [account('second'), account('third'), account('elsewhere')] };
+    h.created.cprov = { kind: 'openai', name: 'Team', account: 'second' };
+    h.placement['openai:second'] = 'cprov';
+    h.placement['openai:third'] = 'cprov';
+    const check = vi.fn<BaseAgent['requiresCodexThreadHostTransfer']>(async () => false);
+    const agent = withSubscriptionAccounts({ kind: 'codex', requiresCodexThreadHostTransfer: check } as unknown as BaseAgent);
+    const running = (id: string) => ({ id, configDir: `openai/${id}`, assertCurrent() {}, readState: async () => ({ authenticated: true }) });
+    const third = running('third');
+    let release = registerSessionSubscriptionAccount('lane', third);
+    try {
+      await agent.requiresCodexThreadHostTransfer({ sessionId: 'lane', providerId: 'cprov', model: 'gpt-5.4', threadId: 't' });
+      expect(check.mock.calls[0][0][NATIVE_SUBSCRIPTION_ACCOUNT]).toBe(third);
+    } finally { release(); }
+    release = registerSessionSubscriptionAccount('lane', running('elsewhere'));
+    try {
+      await agent.requiresCodexThreadHostTransfer({ sessionId: 'lane', providerId: 'cprov', model: 'gpt-5.4', threadId: 't' });
+      expect(check.mock.calls[1][0][NATIVE_SUBSCRIPTION_ACCOUNT]).toBeUndefined();
+    } finally { release(); }
+  });
+
+  // Review (#12144): once the running account is removed, switching the idle task to another source must
+  // still reach the target's writer check instead of failing on the stale account.
+  it('checks another target normally when the running account was removed', async () => {
+    h.pools.openai = { strategy: 'round', accounts: [account('default')] };
+    const check = vi.fn<BaseAgent['requiresCodexThreadHostTransfer']>(async () => true);
+    const agent = withSubscriptionAccounts({ kind: 'codex', requiresCodexThreadHostTransfer: check } as unknown as BaseAgent);
+    let removed = false;
+    const running = { id: 'gone', configDir: 'openai/gone', readState: async () => ({ authenticated: true }),
+      assertCurrent() { if (removed) throw new Error('Subscription account was disconnected'); } };
+    const release = registerSessionSubscriptionAccount('lane', running);
+    removed = true;
+    try {
+      await expect(agent.requiresCodexThreadHostTransfer({ sessionId: 'lane', providerId: 'anthropic-api', model: 'm', threadId: 't' }))
+        .resolves.toBe(true);
+      await expect(agent.requiresCodexThreadHostTransfer({ sessionId: 'lane', providerId: 'openai', model: 'gpt-5.4', threadId: 't' }))
+        .resolves.toBe(true);
+      expect(check.mock.calls.map(([options]) => options[NATIVE_SUBSCRIPTION_ACCOUNT])).toEqual([undefined, undefined]);
+    } finally { release(); }
   });
 
   it('forks old history through the same imported account and reconnects through its old login', async () => {
@@ -3107,6 +4252,8 @@ describe('native account assignment on the executing computer', () => {
   // Unit regression (2026-11-13): account pools rejected ChatGPT before the upstream could
   // spend credits. Prior coverage asserted exhausted windows were admission failures; it never
   // started/resumed a full-window account with available, unknown or depleted cached credits.
+  // 2026-11-24 user decision: with every account's plan used up, credits remain the last resort,
+  // and the pre-send check must not hand the task to another credits-only account.
   it.each([
     { hasCredits: true, unlimited: false, balance: '52768.87' },
     null,
@@ -3126,10 +4273,48 @@ describe('native account assignment on the executing computer', () => {
     ] as const) {
       const lease = await acquireSubscriptionAccount('openai', 'gpt-6', [...keys], false, options);
       expect(lease?.account.configDir).toBe('accountId' in options ? 'openai/second' : 'openai/default');
-      expect(readSubscriptionAccountBlocked('openai', lease!.accountId, 'gpt-6')).toBe(false);
       lease!.release();
     }
+    const row = { status: 'active', providerId: 'openai', agentKind: 'codex', model: 'gpt-6', sdkSessionId: 'thread-old' };
+    const rebuild = vi.fn(async () => {});
+    expect(await readSubscriptionAccountSwitch('existing', async () => row)).toBeNull();
+    expect(await prepareSubscriptionAccountFailover('existing', {
+      readSession: async () => row, isRunning: () => false, rebuild,
+    })).toBe(false);
+    expect(rebuild).not.toHaveBeenCalled();
     expect(h.bindings.get('task:existing')?.accountId).toBe('default');
+  });
+
+  // 2026-11-24 user report: a pool of two ChatGPT accounts kept assigning and resuming tasks on the
+  // account whose weekly plan showed 0% left (spending credits) while the other had 49% left.
+  // Production entries: acquireSubscriptionAccount (new pick) and the pre-send failover; observable
+  // result: the task lands on / moves to the account with plan quota, keeping credits as the last
+  // resort once that account is full. Existing coverage only proved credits-only accounts stay
+  // admissible. Minimal failing input: 'order' pool, first account at 100%, second at 20%. tier: unit.
+  it('prefers ChatGPT accounts with plan quota over credits for new and bound tasks', async () => {
+    h.pools.openai = { strategy: 'order', accounts: [account('default'), account('second')] };
+    h.usage.mockImplementation(async (_provider: string, dir: string) => ({ codexUsage: { appServerBuckets: { codex: {
+      limitId: 'codex', updatedAt: Date.now(),
+      primary: { usedPercent: dir.endsWith('default') ? 100 : 20, windowMinutes: 10080, resetsAt: Date.now() / 1000 + 86400 },
+      secondary: null,
+    } }, webSnapshot: null }, codexCredits: { hasCredits: true, unlimited: false, balance: '32402.89' } }));
+    const fresh = await acquireSubscriptionAccount('openai', 'gpt-6', ['task:new']);
+    expect(fresh?.accountId).toBe('second');
+    // The account with plan quota is full (limit 1): credits on the exhausted account are the last resort.
+    const fallback = await acquireSubscriptionAccount('openai', 'gpt-6', ['task:other']);
+    expect(fallback?.accountId).toBe('default');
+    fallback!.release();
+    fresh!.release();
+
+    h.bindings.set('task:existing', { providerId: 'openai', accountId: 'default' });
+    const row = { status: 'active', providerId: 'openai', agentKind: 'codex', model: 'gpt-6', sdkSessionId: 'thread-old' };
+    const rebuild = vi.fn(async () => {});
+    expect(await readSubscriptionAccountSwitch('existing', async () => row)).toBe('local#openai:default');
+    expect(await prepareSubscriptionAccountFailover('existing', {
+      readSession: async () => row, isRunning: () => false, rebuild,
+    })).toBe(true);
+    expect(rebuild).toHaveBeenCalledOnce();
+    expect(h.bindings.get('task:existing')?.accountId).toBe('second');
   });
 
   // Regression: a pinned exhausted account was reported as login-or-reset even
@@ -4272,7 +5457,10 @@ describe('native account assignment on the executing computer', () => {
     await runSubscriptionAccountCommand({ action: 'place', providerId: kind, accountId: 'third', target: null });
     const [created] = Object.keys(h.created);
     expect(created).toMatch(new RegExp(`^${kind}-sub-`));
-    expect(h.copyOverrides).toHaveBeenCalledWith(kind, created);
+    const copiedOverrides = kind === 'openai'
+      ? [kind, created, { source: 'openai/gpt-image-2', target: `${created}/gpt-image-2` }]
+      : [kind, created];
+    expect(h.copyOverrides).toHaveBeenCalledWith(...copiedOverrides);
     expect(await ids(kind)).toEqual(['default', 'second']);
     expect(await pick(created!)).toBe(`${kind}/third`);
     // Review regression: a task switched to another provider used to keep its old account. A fresh
@@ -4307,7 +5495,7 @@ describe('native account assignment on the executing computer', () => {
     expect(hasConnectedSubscriptionPool(created!)).toBe(true);
     // Deleting a created provider stops using only its own accounts.
     await runSubscriptionAccountCommand({ action: 'place', providerId: kind, accountId: 'third', target: null });
-    expect(h.copyOverrides).toHaveBeenLastCalledWith(kind, created);
+    expect(h.copyOverrides).toHaveBeenLastCalledWith(...copiedOverrides);
     await runSubscriptionAccountCommand({ action: 'remove-provider', providerId: created! });
     expect(h.pools[kind]!.accounts.map(a => a.id)).toEqual(['default', 'second']);
     expect(h.created).toEqual({});
@@ -4426,14 +5614,18 @@ describe('native account assignment on the executing computer', () => {
     const start = vi.fn<(options: StartSessionOptions) => Promise<AgentSessionHandle>>(async () => ({ id: 'guest-native', close: async () => {} }) as unknown as AgentSessionHandle);
     const agent = withSubscriptionAccounts({ kind: kind === 'openai' ? 'codex' : 'claude-code', startSession: start } as unknown as BaseAgent);
     const guestProvider = { providerId, routeToken: 'fixture-route', modelIds: ['shared-model'] };
-    const options = { providerId, model: 'shared-model', deviceHosted: { guest: true, guestProvider } } as unknown as StartSessionOptions;
+    const options = { sessionId: 'guest-task', providerId, model: 'shared-model',
+      deviceHosted: { guest: true, guestProvider } } as unknown as StartSessionOptions;
     const handle = await agent.startSession(options);
     const invoked = start.mock.calls[0]![0];
     expect(invoked.deviceHosted?.guestProvider).toEqual({ ...guestProvider, providerId: invoked.providerId });
     expect(invoked[NATIVE_SUBSCRIPTION_ACCOUNT]?.configDir).toBe(`${kind}/second`);
+    expect(invoked[NATIVE_SUBSCRIPTION_ACCOUNT]?.sharedProviderId).toBe(kind === 'openai' ? providerId : undefined);
+    expect(getSessionSubscriptionAccount('guest-task')).toBe(invoked[NATIVE_SUBSCRIPTION_ACCOUNT]);
     expect(options.deviceHosted?.guestProvider).toBe(guestProvider);
     expect(guestProvider.providerId).toBe(providerId);
     await handle.close();
+    expect(getSessionSubscriptionAccount('guest-task')).toBeUndefined();
     start.mockClear();
     await expect(agent.startSession({ ...options, deviceHosted: { ...options.deviceHosted!,
       guestProvider: { ...guestProvider, providerId: 'unrelated' } } })).rejects.toThrow('REMOTE_AGENT_PROVIDER_NOT_ALLOWED');
@@ -4993,7 +6185,7 @@ describe('native account assignment on the executing computer', () => {
     const chosen = await acquireSubscriptionAccount('openai', 'chatgpt/gpt-6-astra', []);
     expect(chosen?.account.configDir).toBe('openai/second');
     try {
-      // The other account can ask upstream to spend credits even though its plan window is full.
+      // With the account that has plan quota full, the other one asks upstream to spend credits.
       const credits = await acquireSubscriptionAccount('openai', 'chatgpt/gpt-6-astra', ['task:new']);
       expect(credits?.account.configDir).toBe('openai/default');
       credits?.release();
@@ -5306,6 +6498,45 @@ describe('native account assignment on the executing computer', () => {
         // The quota read still completes and is what the account views show.
         expect(await shownQuota(row.provider, bound ?? row.account ?? 'default')).toBe(row.fresh);
       } finally { clock.mockRestore(); }
+    });
+
+    // PR #12279 (unit): both cached windows are full but still recent enough for early
+    // selection. The wrapped start must wait for the in-flight refresh before choosing
+    // credits, and use the account whose newly read window has room.
+    it('waits for an in-flight quota refresh before falling back to credits', async () => {
+      const clock = vi.spyOn(Date, 'now').mockImplementation(() => now);
+      let releaseQuota = () => {};
+      let starting: Promise<AgentSessionHandle> | undefined;
+      try {
+        h.pools.openai = { strategy: 'order', accounts: [account('default'), account('second')] };
+        h.read.mockImplementation(async (_kind: string, directory: string) => ({
+          authenticated: true, identity: directory, plan: 'plus', planType: 'plus',
+        }));
+        h.usage.mockImplementation(async (_kind: string, directory: string) => quotaFor(directory, 100));
+        await readSubscriptionPool('openai');
+        now += 4 * 60_000;
+        const gate = new Promise<void>(resolve => { releaseQuota = resolve; });
+        const quotaReads = h.usage.mock.calls.length;
+        h.usage.mockImplementation(async (_kind: string, directory: string) => {
+          await gate;
+          return quotaFor(directory, directory.endsWith('/default') ? 100 : 20);
+        });
+
+        const { start, agent } = startAgent('codex');
+        starting = agent.startSession({ providerId: 'openai', sessionId: 'task', model: 'gpt-6' } as StartSessionOptions);
+        void starting.catch(() => {});
+        await vi.waitFor(() => expect(h.usage).toHaveBeenCalledTimes(quotaReads + 2));
+        expect(start).not.toHaveBeenCalled();
+
+        releaseQuota();
+        await starting;
+        expect(start.mock.calls[0]![0][NATIVE_SUBSCRIPTION_ACCOUNT]?.configDir).toBe('openai/second');
+        expect(h.usage).toHaveBeenCalledTimes(quotaReads + 2);
+      } finally {
+        releaseQuota();
+        await starting?.then(handle => handle.close(), () => {});
+        clock.mockRestore();
+      }
     });
 
     // Same decision: returning to Cindy refreshes the account views, and a message sent meanwhile
@@ -5827,6 +7058,147 @@ describe('unbound Codex history account recovery', () => {
     });
 });
 
+// #12183, unit with synthetic storage and native engine. The allocator tests do not
+// cover the Desktop switch bootstrapping twice through the account wrapper. A transferred
+// native ID and a pool without default must still deliver the next input with full context.
+describe('Desktop handoff to a Claude pool without default', () => {
+  it.each([
+    { initial: 'unbound', reason: 'manual', candidate: 'same-pool' },
+    { initial: 'removed-default', reason: 'quota', candidate: 'same-pool' },
+    { initial: 'removed-default', reason: 'quota', candidate: 'signed-out' },
+    { initial: 'removed-default', reason: 'quota', candidate: 'different-pool' },
+    { initial: 'removed-default', reason: 'quota', candidate: 'outside-grant' },
+  ] as const)('starts the replacement only when available ($initial, $reason, $candidate)', async ({
+    initial, reason, candidate,
+  }) => {
+    const task = 'incoming-task';
+    const oldNative = 'transferred-native';
+    const newNative = 'replacement-native';
+    const model = 'claude-sonnet-5-5';
+    const history = 'Previous turn on the source computer.';
+    const input = 'Continue from there.';
+    const workingDir = '/synthetic-project';
+    h.pools.anthropic = { strategy: 'order', accounts: [account('second')] };
+    if (candidate === 'signed-out') h.read.mockResolvedValue({ authenticated: false });
+    if (candidate === 'different-pool') h.placement['anthropic:second'] = 'anthropic-sub-bbbbbbbb';
+    const originalBinding = initial === 'removed-default'
+      ? { providerId: 'anthropic' as const, accountId: 'default' }
+      : undefined;
+    if (originalBinding) {
+      h.bindings.set(`task:${task}`, originalBinding);
+      h.bindings.set(`native:${oldNative}`, originalBinding);
+    }
+    const bindings = () => [`task:${task}`, `native:${oldNative}`]
+      .map(key => readAccountBinding(key, 'anthropic')?.accountId);
+
+    const send = vi.fn(async (_message: unknown) => {});
+    const nativeStart = vi.fn(async (_options: StartSessionOptions) =>
+      ({ id: newNative, send, close: async () => {} }) as unknown as AgentSessionHandle);
+    const agent = withSubscriptionAccounts({ kind: 'claude-code', startSession: nativeStart } as unknown as BaseAgent);
+    const row: AgentSwitchSessionRow = {
+      id: task, status: 'active', agentKind: 'cc', model, providerId: 'anthropic',
+      agentDeviceId: 'source-computer', remoteHostId: null, orcaRole: null,
+      sdkSessionId: 'source-native', workingDir,
+    };
+    let live: AgentSessionHandle | undefined;
+    let pendingHandoff: string | undefined;
+    const attempts: Array<{ resume: string | null; bindings: Array<string | undefined>; error?: string }> = [];
+    const deps: MakerSessionAgentSwitchHandlerDeps = {
+      getSessionRow: async () => ({ ...row }),
+      getLiveSession: () => live && { sdkSessionId: live.id, isTurnRunning: () => false },
+      closeSession: async () => { await live?.close(); live = undefined; },
+      withCloseSuppressed: (_id, run) => run(),
+      relocateNativeHistory: async () => oldNative,
+      listMessagesForHandoff: async () => [{ role: 'assistant', content: history, createdAt: 1 }],
+      applyAgentSwitchToDb: async (_id, patch) => { Object.assign(row, patch); },
+      setSessionProvider: (_id, providerId) => { row.providerId = providerId; },
+      insertBoundaryMessage: async () => 'handoff-boundary',
+      applyResumeFallbackAtomically: async () => { row.sdkSessionId = null; },
+      setPendingHandoff: (_id, handoff) => { pendingHandoff = handoff; },
+      bootstrapSwitchedSession: async () => {
+        const resume = row.sdkSessionId;
+        let error: string | undefined;
+        try {
+          live = await agent.startSession({ sessionId: task, providerId: row.providerId,
+            workingDir, model, resumeSessionId: resume ?? undefined,
+            ...(candidate === 'outside-grant' ? { deviceHosted: {
+              workingDir, extraDirs: [], writableDirs: [], platform: 'darwin', shell: '/bin/zsh',
+              isGitRepo: false, tunnelUrl: 'http://tunnel.invalid', tunnelToken: 'synthetic-token',
+              mcpServers: [], guest: true,
+              guestProvider: { providerId: 'other-provider', routeToken: 'synthetic-grant', modelIds: [model] },
+            } } : {}),
+          });
+        } catch (failure) {
+          error = failure instanceof Error ? failure.message : String(failure);
+          throw failure;
+        } finally {
+          attempts.push({ resume, bindings: bindings(), error });
+        }
+      },
+      log: { info() {}, warn() {} },
+    };
+
+    try {
+      const result = await performSessionAgentSwitch(deps, {
+        sessionId: task, targetAgentKind: 'claude-code', model, providerId: 'anthropic',
+        agentDeviceId: null, applyNow: true,
+        ...(reason === 'quota' ? { providerGroupSwitchReason: 'quota-rebalance' as const } : {}),
+      });
+      if (live && pendingHandoff) {
+        const content = prependHandoffToUserMessage(input, pendingHandoff);
+        if (typeof content !== 'string') throw new Error('Expected a text handoff');
+        await live.send({ type: 'user', content });
+      }
+      const shouldStart = candidate === 'same-pool';
+      expect.soft(result.engineReady, JSON.stringify(attempts)).toBe(shouldStart);
+      expect.soft(attempts.map(attempt => attempt.resume)).toEqual([oldNative, null]);
+      expect.soft(attempts[0]).toMatchObject({
+        bindings: [originalBinding?.accountId, originalBinding?.accountId],
+        error: expect.stringMatching(/SUBSCRIPTION_ACCOUNT_UNAVAILABLE|Subscription account was removed/),
+      });
+      expect.soft(bindings()).toEqual([shouldStart ? 'second' : originalBinding?.accountId, originalBinding?.accountId]);
+      expect.soft(readAccountBinding(`native:${newNative}`, 'anthropic')?.accountId).toBe(shouldStart ? 'second' : undefined);
+      expect.soft(nativeStart.mock.calls.map(([options]) => options[NATIVE_SUBSCRIPTION_ACCOUNT]?.configDir))
+        .toEqual(shouldStart ? ['anthropic/second'] : []);
+      expect.soft(h.read.mock.calls.some(([, directory]) => directory === 'anthropic/default')).toBe(false);
+      expect.soft(send.mock.calls).toHaveLength(shouldStart ? 1 : 0);
+      if (shouldStart) {
+        expect(send).toHaveBeenCalledWith({ type: 'user', content: expect.stringContaining(history) });
+        expect(send).toHaveBeenCalledWith({ type: 'user', content: expect.stringContaining(input) });
+      }
+      if (candidate === 'outside-grant') expect(attempts[1]?.error).toContain('REMOTE_AGENT_PROVIDER_NOT_ALLOWED');
+    } finally {
+      await live?.close();
+    }
+  });
+
+  it.each(['new-task', 'bound-resume'] as const)(
+    'keeps the original start route for %s', async scenario => {
+      const task = 'local-task';
+      const native = 'local-native';
+      const resumeSessionId = scenario === 'new-task' ? undefined : native;
+      const originalBinding = { providerId: 'anthropic' as const, accountId: 'second' };
+      if (scenario === 'bound-resume') {
+        h.bindings.set(`task:${task}`, originalBinding);
+        h.bindings.set(`native:${native}`, originalBinding);
+      }
+      h.pools.anthropic!.accounts.shift();
+      const start = vi.fn(async (_options: StartSessionOptions) => ({ id: native, close: async () => {} }));
+      const agent = withSubscriptionAccounts({ kind: 'claude-code', startSession: start } as unknown as BaseAgent);
+      const handle = await agent.startSession({ sessionId: task, providerId: 'anthropic',
+        workingDir: '/synthetic-project', model: 'claude-sonnet-5-5', resumeSessionId });
+      try {
+        expect(readAccountBinding(`task:${task}`, 'anthropic')).toEqual(originalBinding);
+        expect(readAccountBinding(`native:${native}`, 'anthropic')).toEqual(originalBinding);
+      } finally {
+        await handle.close();
+      }
+      expect(start.mock.calls.map(([options]) => [options.resumeSessionId, options[NATIVE_SUBSCRIPTION_ACCOUNT]?.configDir]))
+        .toEqual([[resumeSessionId, 'anthropic/second']]);
+    },
+  );
+});
+
 // Unit regression (2026-11-11): retry reused a disabled account despite another account
 // having quota. Existing lease tests did not exercise pre-send context transfer.
 // The production entry must change only task ownership after durable history recovery.
@@ -6025,6 +7397,82 @@ describe('shared subscription recovery through controller and account allocation
     { original: 'second', phase: 'reconnect', boundary: 'none' },
     { original: 'second', phase: 'reconnect', boundary: 'edited-input' },
     { original: 'second', phase: 'reconnect', boundary: 'expired-host-token' },
+    // Unit integration (in-memory native agent, wire and DB): the 11-24
+    // send_to_session incident fell outside the manual/scheduler coverage.
+    // One local tool message to an idle-reclaimed shared task with one healthy
+    // spare must queue, persist once, relocate once and dispatch once.
+    { original: 'second', phase: 'session-reconnect', boundary: 'none' },
+    // Unit (real reverse HTTP frames and tool adapter, in-memory MCP server):
+    // execution on the sharing computer does not erase an owned task's bound
+    // bridge context. The idle target must queue and recover one such message.
+    { original: 'second', phase: 'session-reconnect', boundary: 'shared-sender' },
+    // Unit: a device tunnel pins the local context. SSH shares its bridge
+    // credential across tasks and cannot prove the sender, so the same
+    // overdue target must receive the SSH input via the ordinary direct path.
+    { original: 'second', phase: 'session-reconnect', boundary: 'own-device-sender' },
+    { original: 'second', phase: 'session-reconnect', boundary: 'ssh-sender' },
+    // Unit (real host/controller, in-memory device link): app-quit publishes the
+    // same idle-release event, which the quota cases did not cover. One queued
+    // input while O is offline must surface its failure and release the next item.
+    { original: 'second', phase: 'session-reconnect', boundary: 'host-quit-offline' },
+    // Unit integration: only a reclaimed live target qualifies. The same
+    // real local tool retains its prior wake kinds for the other three states.
+    // Hold an actual Session.send over a reclaimed handle to cover the race
+    // where the running check alone must prevent adding the recovery grant.
+    { original: 'second', phase: 'session-reconnect', boundary: 'connected-idle' },
+    { original: 'second', phase: 'session-reconnect', boundary: 'running-target' },
+    { original: 'second', phase: 'session-reconnect', boundary: 'cold-target' },
+    // Unit: a reclaimed non-Claude target keeps the direct tool failure and
+    // offered switch, without adding a pending input or retry hold.
+    { original: 'second', phase: 'session-reconnect', boundary: 'codex-target' },
+    { original: 'second', phase: 'session-reconnect', boundary: 'pi-target' },
+    // Unit integration: a device-link enqueue claiming an automatic origin,
+    // or a batch including such an item, must not capture the stopped open.
+    { original: 'second', phase: 'session-reconnect', boundary: 'remote-session' },
+    { original: 'second', phase: 'session-reconnect', boundary: 'remote-orca' },
+    { original: 'second', phase: 'session-reconnect', boundary: 'mixed-merge' },
+    // Unit: a Ghost rewrite edits the same object in place. The existing user
+    // edit coverage cannot prove that rewritten text loses its recovery grant.
+    { original: 'second', phase: 'session-reconnect', boundary: 'ghost-rewrite' },
+    // Unit integration: cancellation, a lost acceptance ACK and revocation
+    // during this local delivery must release its reservation without replay.
+    { original: 'second', phase: 'session-reconnect', boundary: 'withdraw-before-drain' },
+    { original: 'second', phase: 'session-reconnect', boundary: 'stop-during-open' },
+    { original: 'second', phase: 'session-reconnect', boundary: 'late-revoke' },
+    // Unit: after the real host receives send, a Device Link timeout or a closed run
+    // cannot prove non-delivery. Observe the error and the held FIFO via the real tool.
+    { original: 'second', phase: 'session-reconnect', boundary: 'replacement-ack-timeout' },
+    { original: 'second', phase: 'session-reconnect', boundary: 'replacement-closed-awaiting-ack' },
+    // Unit: exercise the real tool/coordinator/transaction with one held FIFO
+    // tail. Review found only the no-credential exit released a persisted head.
+    { original: 'second', phase: 'session-reconnect', boundary: 'late-owner-change' },
+    { original: 'second', phase: 'session-reconnect', boundary: 'late-generation-change' },
+    { original: 'second', phase: 'session-reconnect', boundary: 'late-input' },
+    { original: 'second', phase: 'session-reconnect', boundary: 'late-stale-input' },
+    { original: 'second', phase: 'session-reconnect', boundary: 'late-stop' },
+    { original: 'second', phase: 'session-reconnect', boundary: 'new-input-during-open' },
+    { original: 'second', phase: 'session-reconnect', boundary: 'close-failed' },
+    { original: 'second', phase: 'session-reconnect', boundary: 'close-not-closed' },
+    { original: 'second', phase: 'session-reconnect', boundary: 'replacement-start-failed' },
+    { original: 'second', phase: 'session-reconnect', boundary: 'replacement-send-rejected' },
+    // Unit: a provider rejection returned as accepted:false must advance the same
+    // FIFO as a thrown failure. Use the real host result and Session conversion.
+    { original: 'second', phase: 'session-reconnect', boundary: 'original-send-rejected' },
+    // Unit: beyond admission, a real client's first-write timeout differs from
+    // its reply timeout. One held socket frame (or a written request with no ACK)
+    // exercises the transport proof through send_to_session and the coordinator.
+    { original: 'second', phase: 'session-reconnect', boundary: 'original-not-written' },
+    { original: 'second', phase: 'session-reconnect', boundary: 'replacement-not-written' },
+    { original: 'second', phase: 'session-reconnect', boundary: 'original-ack-timeout' },
+    { original: 'second', phase: 'session-reconnect', boundary: 'original-accepted' },
+    // Unit: Session's own cancellation still returns a non-accepted result.
+    // Its position relative to the actual write, independently of coordinator
+    // Stop, distinguishes a safe release from an unconfirmed send.
+    { original: 'second', phase: 'session-reconnect', boundary: 'original-cancel-before-write' },
+    { original: 'second', phase: 'session-reconnect', boundary: 'replacement-cancel-before-write' },
+    { original: 'second', phase: 'session-reconnect', boundary: 'original-ack-timeout-returned' },
+    { original: 'second', phase: 'session-reconnect', boundary: 'replacement-ack-timeout-returned' },
+    { original: 'second', phase: 'session-reconnect', boundary: 'replacement-accepted-then-closed' },
     { original: 'second', phase: 'scheduled-reconnect', boundary: 'none' },
     { original: 'second', phase: 'legacy-reconnect', boundary: 'none' },
     { original: 'second', phase: 'reconnect', boundary: 'replacement-id-write-failed' },
@@ -6068,6 +7516,39 @@ describe('shared subscription recovery through controller and account allocation
     const replacementReply = new Promise<void>(resolve => { finishReplacementOpen = resolve; });
     const delayedOffer = boundary.startsWith('late-');
     let recoveryAllowed = true;
+    let ownerMatches = true;
+    let staleInput = false;
+    let runtimeGeneration = 0;
+    const replacesStoppedRun = ['replacement-start-failed', 'replacement-send-rejected', 'replacement-accepted-then-closed'].includes(boundary);
+    const originalRejected = boundary === 'original-send-rejected';
+    const notWritten = boundary === 'original-not-written' || boundary === 'replacement-not-written';
+    const originalAckTimeout = boundary === 'original-ack-timeout' || boundary === 'original-ack-timeout-returned';
+    const timeoutReturned = boundary.endsWith('ack-timeout-returned');
+    const cancelBeforeWrite = boundary.endsWith('cancel-before-write');
+    const sessionAbort = new AbortController();
+    const returnedCancellation = vi.fn();
+    const observeSessionCancellation = (session: Session) => {
+      const send = session.send.bind(session);
+      vi.spyOn(session, 'send').mockImplementationOnce(async (message, opts) => {
+        const result = await send(message, { ...opts, signal: sessionAbort.signal });
+        returnedCancellation(result);
+        return result;
+      });
+    };
+    const realSendTransport = notWritten || originalAckTimeout || timeoutReturned;
+    const originalReconnectSucceeds = boundary.startsWith('original-');
+    const targetKind = boundary === 'codex-target' ? 'codex' : boundary === 'pi-target' ? 'pi' : 'claude-code';
+    const directFailure = targetKind !== 'claude-code' || boundary === 'ssh-sender';
+    const releaseFailedHead = notWritten || originalRejected || cancelBeforeWrite || (phase === 'session-reconnect' && [
+      'late-revoke', 'late-owner-change', 'late-generation-change', 'close-failed', 'close-not-closed',
+      'replacement-start-failed', 'replacement-send-rejected',
+    ].includes(boundary));
+    const closesAwaitingAck = boundary === 'replacement-closed-awaiting-ack';
+    const unknownDispatch = originalAckTimeout || boundary === 'replacement-ack-timeout' || timeoutReturned || closesAwaitingAck;
+    const receivedBeforeClose = Promise.withResolvers<void>();
+    const settleNativeSend = Promise.withResolvers<void>();
+    let rejectedSend = false;
+    const queueTailBeforeSettlement = releaseFailedHead || unknownDispatch;
     let shareListKnown = boundary !== 'share-list-unknown';
     const published = weekly ? 'anthropic' : boundary === 'old-share' ? b : a;
     const nextAccount = original === 'default' ? 'second' : 'default';
@@ -6075,6 +7556,7 @@ describe('shared subscription recovery through controller and account allocation
     const task = `guest-${phase}-${original}-${boundary}`;
     const peer = weekly ? providerShareGuestPeer('fixture-share', 'fixture-member', 'fixture-laptop') : 'share-test-guest';
     const route = 'share:isolated-test';
+    const senderId = 'local-sender';
     h.pools.anthropic = { strategy: 'order', accounts: [account('default'), account('second')].map(entry => ({ ...entry, limit: 4 })) };
     if (!weekly) h.created[a] = { kind: 'anthropic', name: 'A', account: 'default' };
     h.created[b] = { kind: 'anthropic', name: 'B', account: 'second' };
@@ -6099,7 +7581,7 @@ describe('shared subscription recovery through controller and account allocation
     let nativeSequence = 0;
     const pendingStart = phase === 'pending-start' || phase === 'auth-pending-start';
     const agent = withSubscriptionAccounts({ kind: 'claude-code', startSession: async (options: StartSessionOptions) => {
-      starts.push(options);
+      if (options.sessionId !== hostSessionIdFor(peer, senderId)) starts.push(options);
       if (phase === 'auth-cold' && options.resumeSessionId) throw new AgentNotAuthenticatedError('claude-code');
       if (phase === 'auth-pending-start') throw new AgentStartupCleanupPendingError('not authenticated', { cause: 'not authenticated', whenStopped });
       if (phase === 'pending-start') throw new AgentStartupCleanupPendingError('usage limit exceeded', { cause: 'usage limit exceeded', whenStopped });
@@ -6110,13 +7592,26 @@ describe('shared subscription recovery through controller and account allocation
       const emit = (event: AgentEvent) => { queue.push(event); wake?.(); wake = undefined; };
       return { id, agentKind: 'claude-code', model, setInteractionResolver() {}, abort: async () => {},
         send: async (message: unknown) => {
+          if ((originalRejected || boundary === 'replacement-send-rejected') && received.length === 1 && !rejectedSend) {
+            rejectedSend = true;
+            throw new TurnDispatchRejectedError('Fixture provider rejected before dispatch');
+          }
           received.push(message);
+          if ((closesAwaitingAck || (realSendTransport && unknownDispatch)) && received.length === 2) {
+            // Keep the call result pending as well as the wire ACK. The
+            // controller can confirm delivery if either result reaches it.
+            receivedBeforeClose.resolve();
+            await settleNativeSend.promise;
+            return;
+          }
           const dir = options[NATIVE_SUBSCRIPTION_ACCOUNT]?.configDir ?? 'anthropic/default';
           if (phase !== 'idle-send' || !limited.size) emit({ type: 'text', data: { text: 'native started this turn' } } as AgentEvent);
           const terminal = limited.has(dir.split('/').at(-1)!)
             ? { type: 'error', data: { sdkError: 'rate_limit', message: 'usage limit exceeded', isTerminal: true } } as AgentEvent
             : { type: 'done', data: {} } as AgentEvent;
-          if (nextInputBeforeReplayRpc && dir.endsWith('/default') && received.length === 2) {
+          if (received.length === 2 && (unknownDispatch || boundary === 'replacement-accepted-then-closed')) {
+            // No terminal event can race the fixture's lost ACK or close.
+          } else if (nextInputBeforeReplayRpc && dir.endsWith('/default') && received.length === 2) {
             void replayTurnGate.then(() => emit(terminal));
           } else {
             emit(terminal);
@@ -6157,25 +7652,92 @@ describe('shared subscription recovery through controller and account allocation
     });
     const opens: RemoteAgentOpenPayload[] = [];
     let sendCalls = 0;
+    let executorOnline = true;
+    const offlineOpen = Promise.withResolvers<void>();
+    const failOfflineOpen = Promise.withResolvers<void>();
+    const invokeOffline = remoteAgentInvoker(route, async () => {
+      offlineOpen.resolve();
+      await failOfflineOpen.promise;
+      return { ok: false, error: { code: 'DEVICE_OFFLINE', message: 'Fixture executor is offline' } };
+    });
+    const invokeTimeout = remoteAgentInvoker(route, async () => ({
+      ok: false, error: { code: 'DEVICE_LINK_TIMEOUT', message: 'Fixture send acknowledgement timed out' },
+    }));
+    // Only the selected send uses this real client. The socket fixture can hold
+    // the frame before write or forward the actual request without returning an ACK.
+    const enteredTransport = Promise.withResolvers<void>();
+    const socket = Object.assign(new EventEmitter(), {
+      bufferedAmount: 0,
+      send: (data: string) => {
+        const frame = JSON.parse(data) as Envelope;
+        if (frame.kind === 'invoke' && frame.id) onSocketWrite?.(frame.id);
+      },
+      close: () => {},
+    });
+    let onSocketWrite: ((id: string) => void) | undefined;
+    const writtenRequestIds = new Set<string>();
+    const transportDevice = 'fixture-transport-peer';
+    const relayFrame = (envelope: Omit<Envelope, 'v'>) => socket.emit('message', JSON.stringify({
+      v: PROTOCOL_VERSION, ...envelope,
+    }));
+    const transport = realSendTransport ? new DeviceLinkClient({
+      getWsUrl: () => 'ws://fixture.invalid',
+      getToken: async () => 'fixture-token',
+      getHello: () => ({ deviceName: 'Fixture', platform: 'darwin', appVersion: '1', remoteControlEnabled: true, busy: false }),
+      createWebSocket: () => socket,
+      timing: { pingIntervalMs: 600_000 },
+    }) : undefined;
+    const invokeViaClient = transport && remoteAgentInvoker(transportDevice, (device, channel, args, opts) =>
+      transport.invoke(device, { channel, args }, 100, opts));
     const poller = new RemoteAgentPoller(async (args, invokeOptions) => {
       const request = JSON.parse(JSON.stringify(args[0]));
+      if (invokeViaClient && request.op === 'call' && request.method === 'send' && sendCalls === 1
+        && !onSocketWrite) {
+        onSocketWrite = id => {
+          // Reliable retransmissions share one request ID and host execution.
+          if (writtenRequestIds.has(id)) return;
+          writtenRequestIds.add(id);
+          sendCalls++;
+          void host.handle(peer, request);
+          if (timeoutReturned) sessionAbort.abort();
+        };
+        socket.bufferedAmount = notWritten ? 700 * 1024 : 0;
+        try {
+          return await invokeViaClient(args, { beforeDispatch: () => {
+            invokeOptions?.beforeDispatch?.();
+            enteredTransport.resolve();
+          } });
+        } finally {
+          socket.bufferedAmount = 0;
+        }
+      }
       if (nextInputBeforeReplayRpc && opens.length === 3 && sendCalls === 1
         && request.op === 'call' && request.method === 'send') {
         expect(invokeOptions?.beforeDispatch).toBeTypeOf('function');
         reachedReplayRpc();
         await replayRpcGate;
       }
-      invokeOptions?.beforeDispatch?.();
+      if (executorOnline) invokeOptions?.beforeDispatch?.();
       if (request.op === 'open') {
-        opens.push(request.payload.json);
+        if (request.payload.json.sessionId !== senderId) opens.push(request.payload.json);
         if (boundary === 'expired-host-token' && request.payload.json.groupSwitchToken) {
           // Advance only O's clock after G claims the offer. The real host
           // ignores the expired token and opens normally, as in #11081.
           hostNow += GROUP_SWITCH_TOKEN_TTL_MS + 1;
         }
       }
+      if (!executorOnline) return invokeOffline(args, invokeOptions);
       if (request.op === 'call' && request.method === 'send') sendCalls++;
       const response = await host.handle(peer, request);
+      if (unknownDispatch && sendCalls === 2 && request.op === 'call' && request.method === 'send') {
+        if (!closesAwaitingAck) return invokeTimeout(args);
+        await receivedBeforeClose.promise;
+        try {
+          await host.abortAll('navigation');
+        } finally {
+          settleNativeSend.resolve();
+        }
+      }
       if (supersededDuringOpen && opens.length === 3 && request.op === 'open' && request.payload.json.groupSwitchToken) {
         receivedReplacementOpen();
         await replacementReply;
@@ -6269,8 +7831,27 @@ describe('shared subscription recovery through controller and account allocation
       isTurnRunning: () => false, hasLiveSession: () => true, continueSession, fallback,
       readResetAt: () => null, now: Date.now, sleep: async () => {}, guestSwitch, log: { info() {}, warn() {} },
     });
-    if (weekly) vi.useFakeTimers({ toFake: ['Date', 'setInterval', 'clearInterval'] });
+    if (weekly) vi.useFakeTimers({ toFake: boundary === 'host-quit-offline' || realSendTransport
+      ? ['Date', 'setInterval', 'clearInterval', 'setTimeout', 'clearTimeout']
+      : ['Date', 'setInterval', 'clearInterval'] });
     try {
+      if (transport) {
+        transport.start();
+        await vi.advanceTimersByTimeAsync(1);
+        socket.emit('open');
+        relayFrame({ kind: 'hello-ack', payload: { serverProtocolVersion: PROTOCOL_VERSION,
+          deviceId: 'fixture-transport-self', userId: 'fixture-transport-account' } });
+        transport.onFrame(frame => {
+          if (frame.kind === 'link-open' && frame.src && frame.id) {
+            transport.sendLinkAccept(frame.src, frame.id, { appVersion: '1', allowlistHash: 'fixture' });
+          }
+        });
+        relayFrame({ kind: 'link-open', src: transportDevice, id: 'fixture-link', payload: {
+          appVersion: '1', controllerName: 'Fixture', protocolVersion: PROTOCOL_VERSION,
+          capabilities: [DEVICE_LINK_CAPABILITY_RELIABLE_TRANSPORT], transportStreamId: 'fixture-stream', transportBaseSeq: 1,
+        } });
+        await vi.advanceTimersByTimeAsync(0);
+      }
       // Created-share binding is derived using the real host's same identity function.
       const hostTask = hostSessionIdFor(peer, task);
       if (phase !== 'pre-pool') h.bindings.set(`task:${hostTask}`, {
@@ -6280,60 +7861,83 @@ describe('shared subscription recovery through controller and account allocation
       if (weekly) {
         const originalHandle = await openRemote();
         const oldNative = originalHandle.id;
-        guestSession = new Session({ id: task, agentKind: 'claude-code', permissionMode: 'bypassPermissions', workDir: '/controller/work',
+        guestSession = new Session({ id: task, agentKind: targetKind, permissionMode: 'bypassPermissions', workDir: '/controller/work',
           agentDeviceId: route, handle: originalHandle, capabilities: {} as never, logger: guestLog });
         const session = guestSession;
         const settled = new Promise<void>(resolve => session.onEvent(event => { if (event.type === 'done') resolve(); }));
         await session.send('Keep the codeword PINEAPPLE-42.');
         await settled;
 
-        hostNow += 61_000;
-        await vi.advanceTimersByTimeAsync(5_000);
-        await vi.waitFor(() => expect(guestLog.info).toHaveBeenCalledWith(
-          'remote agent connection released by the other computer', expect.any(Object)));
-        expect(host.limitUsage().total).toBe(0);
-        hostNow += 13 * 60 * 60_000;
-        await vi.advanceTimersByTimeAsync(5_000);
-        vi.mocked(guestLog.info).mockClear();
-
+        const connectedTarget = boundary === 'connected-idle' || boundary === 'cold-target';
         const resetAtMs = Date.now() + 3 * 86_400_000;
-        const exhausted = await acquireSubscriptionAccount(published, model, [], true, { accountId: original, remote: true });
-        expect(exhausted!.observeFailure({ sdkError: 'rate_limit', usageResetAt: resetAtMs }, model, 'run')).toBe(true);
-        exhausted!.release();
-        h.usage.mockImplementation(async (_kind: string, dir: string) => ({ claudeUsage: {
-          updatedAt: Date.now(), fiveHour: dir.endsWith('/second') ? null : { utilization: 11, resetsAt: Date.now() / 1000 + 3600 },
-          sevenDay: { utilization: dir.endsWith('/second') ? 100 : 3, resetsAt: resetAtMs / 1000 },
-          scoped: [{ utilization: 0, resetsAt: resetAtMs / 1000, modelDisplayName: 'Fable', modelId: null }],
-        } }));
-        await refreshSubscriptionPool(published, true);
-        const view = await readSubscriptionSessionAccount('anthropic',
-          { sessionId: hostTask, model, routeProviderId: published }, { remote: true });
-        expect(view).toMatchObject({ state: 'bound', account: { blocked: true, switchAvailable: true, status: 'limited' } });
-        expect(view).not.toHaveProperty('replacementProviderId');
+        if (boundary === 'host-quit-offline') {
+          await host.abortAll('app-quit');
+          await vi.advanceTimersByTimeAsync(5_000);
+          await vi.waitFor(() => expect(session.hasReclaimedSharedRun()).toBe(true));
+          expect(host.limitUsage().total).toBe(0);
+          executorOnline = false;
+        } else if (!connectedTarget) {
+          hostNow += 61_000;
+          await vi.advanceTimersByTimeAsync(5_000);
+          await vi.waitFor(() => expect(guestLog.info).toHaveBeenCalledWith(
+            'remote agent connection released by the other computer', expect.any(Object)));
+          expect(host.limitUsage().total).toBe(0);
+          hostNow += 13 * 60 * 60_000;
+          await vi.advanceTimersByTimeAsync(5_000);
+          vi.mocked(guestLog.info).mockClear();
+
+          if (boundary !== 'running-target' && !originalReconnectSucceeds) {
+            const exhausted = await acquireSubscriptionAccount(published, model, [], true, { accountId: original, remote: true });
+            expect(exhausted!.observeFailure({ sdkError: 'rate_limit', usageResetAt: resetAtMs }, model, 'run')).toBe(true);
+            exhausted!.release();
+            h.usage.mockImplementation(async (_kind: string, dir: string) => ({ claudeUsage: {
+              updatedAt: Date.now(), fiveHour: dir.endsWith('/second') ? null : { utilization: 11, resetsAt: Date.now() / 1000 + 3600 },
+              sevenDay: { utilization: dir.endsWith('/second') ? 100 : 3, resetsAt: resetAtMs / 1000 },
+              scoped: [{ utilization: 0, resetsAt: resetAtMs / 1000, modelDisplayName: 'Fable', modelId: null }],
+            } }));
+            await refreshSubscriptionPool(published, true);
+            const view = await readSubscriptionSessionAccount('anthropic',
+              { sessionId: hostTask, model, routeProviderId: published }, { remote: true });
+            expect(view).toMatchObject({ state: 'bound', account: { blocked: true, switchAvailable: true, status: 'limited' } });
+            expect(view).not.toHaveProperty('replacementProviderId');
+          }
+        }
 
         let live: Session | undefined = session;
         session.onStatusChange(status => {
           if (status === 'closed' && live === session) live = undefined;
         });
+        if (boundary === 'original-ack-timeout-returned') observeSessionCancellation(session);
         const persisted: string[] = [];
-        const persistedError = vi.fn();
+        const persistedError = vi.fn(() => {
+          // The executor comes online after the first failure, before the
+          // coordinator advances to the input already waiting behind it.
+          if (boundary === 'host-quit-offline') executorOnline = true;
+        });
         const onUsageLimitedTurnError = vi.fn();
         const bootstrapped = vi.fn();
+        const accepted = vi.fn();
+        const emitProjection = vi.fn();
         if (boundary === 'all-limited') {
           const spare = await acquireSubscriptionAccount(published, model, [], true, { accountId: nextAccount, remote: true });
           expect(spare!.observeFailure({ sdkError: 'rate_limit', usageResetAt: resetAtMs }, model, 'run')).toBe(true);
           spare!.release();
         }
-        if (phase === 'cold-weekly') {
+        if (phase === 'cold-weekly' || boundary === 'cold-target') {
           await session.close();
           live = undefined;
         }
         let coordinator: AgentInputCoordinator;
-        let holdEditedInput = boundary === 'edited-input';
+        let holdEditedInput = boundary === 'edited-input' || boundary === 'mixed-merge'
+          || boundary === 'withdraw-before-drain';
         const attach = (current: Session) => {
           current.onEvent(event => {
             events.push(event);
             if (event.type === 'done') coordinator.onTurnEvent(task, 'done', undefined, undefined, event);
+            if (closesAwaitingAck && event.type === 'error') {
+              const data = event.data as { isTerminal?: boolean; message?: string };
+              if (data.isTerminal) coordinator.onTurnEvent(task, 'error', data.message, undefined, event);
+            }
           });
         };
         const insertBoundary = vi.fn(async (_id: string, _body: unknown, options: { beforePublish(): Promise<void> }) => {
@@ -6351,6 +7955,8 @@ describe('shared subscription recovery through controller and account allocation
           getSession: () => live,
           closeSession: async () => { await live?.close(); live = undefined; },
           closeSessionIfCurrent: async (current: Session) => {
+            if (bootstrapped.mock.calls.length === 0 && boundary === 'close-failed') throw new Error('Fixture close failed');
+            if (bootstrapped.mock.calls.length === 0 && boundary === 'close-not-closed') return 'busy';
             if (live !== current || !await current.closeIfIdle()) return 'busy';
             live = undefined;
             return 'closed';
@@ -6366,6 +7972,8 @@ describe('shared subscription recovery through controller and account allocation
           },
           providerGroupService: service,
           providerShareAccessEpoch: () => recoveryAllowed ? 0 : 1,
+          sessionRuntimeControlOwnerEpochMatches: () => ownerMatches,
+          getSessionRuntimeControlSnapshot: () => ({ generation: runtimeGeneration }),
           // Keep the old execution lookup available even when the current
           // directory is missing the share, as with a retained Agent Net route.
           findReceivedShareForExecution: () => ({ status: authorized ? 'active' : 'revoked' }),
@@ -6385,6 +7993,8 @@ describe('shared subscription recovery through controller and account allocation
             log: guestLog,
           },
           createSessionWithRuntimePlugins: async (opts: StartSessionOptions) => {
+            const firstReplacement = replacesStoppedRun && bootstrapped.mock.calls.length === 1;
+            if (firstReplacement && boundary === 'replacement-start-failed') throw new Error('Fixture replacement startup failed');
             const handle = await openRemote(opts.resumeSessionId);
             if (boundary === 'replacement-id-write-failed') {
               row.sdkSessionId = oldNative;
@@ -6393,6 +8003,18 @@ describe('shared subscription recovery through controller and account allocation
             }
             live = guestSession = new Session({ id: task, agentKind: 'claude-code', permissionMode: 'bypassPermissions',
               workDir: '/controller/work', agentDeviceId: route, handle, capabilities: {} as never, logger: guestLog });
+            if (boundary === 'replacement-ack-timeout-returned' && bootstrapped.mock.calls.length === 1) {
+              observeSessionCancellation(live);
+            }
+            if (firstReplacement && boundary === 'replacement-accepted-then-closed') {
+              const replacement = live;
+              const nativeSend = replacement.send.bind(replacement);
+              vi.spyOn(replacement, 'send').mockImplementationOnce(async (...args) => {
+                const result = await nativeSend(...args);
+                await replacement.close();
+                return result;
+              });
+            }
             attach(live);
             return live;
           },
@@ -6414,6 +8036,8 @@ describe('shared subscription recovery through controller and account allocation
             opts.providerId = published;
             opts.resumeSessionId = row.sdkSessionId ?? undefined;
           },
+          onSharedReconnectClaimed: (id, clientId) => coordinator.markSharedReconnectPending(id, clientId),
+          onSharedReconnectFinished: (id, clientId) => coordinator.clearSharedReconnectPending(id, clientId),
           bootstrapSession: async (...args) => {
             bootstrapped();
             return wiring.bootstrapSession(...args);
@@ -6433,15 +8057,42 @@ describe('shared subscription recovery through controller and account allocation
           expect(bootstrapped).not.toHaveBeenCalled();
           return;
         }
-        const send = vi.fn<AgentInputCoordinatorDeps['sendToAgent']>(async (...args) =>
-          (await sendToAgentAccepted(...args)).outcome);
+        const send = vi.fn<AgentInputCoordinatorDeps['sendToAgent']>(async (...args) => {
+          const dispatch = async () => {
+            const [id, message, createOpts, opts] = args;
+            const recovery = opts.reconnectRecovery;
+            return (await sendToAgentAccepted(id, message, createOpts, boundary === 'late-stale-input' && recovery
+              ? { ...opts, reconnectRecovery: { ...recovery, isCurrent: () => !staleInput && recovery.isCurrent() } }
+              : opts)).outcome;
+          };
+          return boundary === 'host-quit-offline' ? withSendToSessionLock(args[0], dispatch) : dispatch();
+        });
         coordinator = new AgentInputCoordinator({
           sendToAgent: send, steerToAgent: async () => {}, abortSession: async () => {},
           touchUserSend: async () => {}, createUserMessage: vi.fn(),
           isTurnRunning: () => holdEditedInput || (live?.isTurnRunning() ?? false), hasPendingInteraction: () => false,
           getAgentKind: () => 'claude-code', getSdkSessionId: async () => live?.sdkSessionId,
           getTurnGeneration: () => live?.getTurnGeneration() ?? null, getTurnSessionIdentity: () => live ?? null,
-          emitProjection: () => {}, persistTerminalSendError: persistedError, onUsageLimitedTurnError,
+          emitProjection, persistTerminalSendError: persistedError, onUsageLimitedTurnError,
+          ...(cancelBeforeWrite ? {
+            beforeDispatchUserTurn: async (_id, item) => {
+              if (item.clientId === 'after-idle' && (boundary === 'original-cancel-before-write' || bootstrapped.mock.calls.length === 1)) {
+                expect(live?.cancelPendingSend()).toBe(true);
+              }
+            },
+          } : {}),
+          onAcceptedQueuedMessage: async (id, item) => {
+            accepted(id, item);
+            if (queueTailBeforeSettlement && item.clientId === 'after-idle') {
+              coordinator.enqueue(task, { ...inputItem('queued-tail', 'Pending separate input.'),
+                origin: { kind: 'session', senderSessionId: 'another-task', displayText: 'Pending separate input.' } });
+            }
+          },
+          ...(boundary === 'ghost-rewrite' ? {
+            screenUserMessage: async () => ({
+              action: 'rewrite' as const, ghostId: 'fixture', ghostName: 'Fixture', text: 'Rewritten input.',
+            }),
+          } : {}),
         });
         const registeredInput = nextInputBeforeReplayRpc ? createInputEnqueueHarness(coordinator, { remote: false }) : undefined;
         const inputItem = (clientId: string, body: string) => ({
@@ -6456,7 +8107,271 @@ describe('shared subscription recovery through controller and account allocation
         const enqueue = (clientId: string, body: string) => coordinator.enqueue(task, inputItem(clientId, body), {
           manualUiSend: phase !== 'scheduled-reconnect',
         });
-        if (registeredInput) await registeredInput.enqueue({}, task, inputItem('after-idle', 'Continue.'));
+        if (phase === 'session-reconnect') {
+          let nextToolClientId = 'after-idle';
+          let sender: Session | undefined;
+          const toolPorts = {
+            isDeviceLinkInvoke, isProviderShareAgentDeviceId,
+            maker: {
+              ...maker,
+              getSession: (id: string) => id === task ? live : id === senderId
+                ? sender ?? { id, agentDeviceId: null, remoteHostId: null, getStatus: () => 'active' } : undefined,
+              getSessionMeta: async (id: string) => ({
+                id, agentKind: id === task ? targetKind : 'claude-code', workDir: '/controller/work', model, sdkSessionId: row.sdkSessionId,
+              }),
+            },
+            getSessionRowSnapshot: async () => ({ ...row, status: 'active', title: 'Target', userSendAt: null }),
+            buildCreateOptsForQueuedSession: async () => inputItem('after-idle', 'Continue.').createOpts,
+            inputCoordinator: coordinator,
+            createId: () => nextToolClientId,
+            ...(boundary === 'host-quit-offline' ? {
+              sendToSessionLocks, trackSendToSessionLockRun, waitForSendToSessionLock,
+            } : {}),
+            persistUserTurnMessage: async (_id: string, msg: { clientId: string }) => { persisted.push(msg.clientId); },
+            buildCreateOptsWithStderr: (opts: object) => opts,
+            synthesizeOrcaVendorOptionsFromDb: async () => {},
+            readSessionExtraDirsFromDb: async () => [],
+            readSessionWritableDirsFromDb: async () => [],
+            ensureRemoteReadyForSessionStart: async () => {},
+            bootstrapSession: async (opts: Parameters<typeof wiring.bootstrapSession>[0]) =>
+              wiring.bootstrapSession({ ...opts, agentDeviceId: route }),
+            markOrcaRoleIfNeeded: async () => {},
+            sendUserMessageWithAwaitedGitBaseline: (current: Session, msg: string, _id: string, opts: SendOptions) =>
+              current.send(msg, opts),
+          };
+          const sendTool = sharedAccountSessionTool(senderId, toolPorts);
+          const sendFromHostedTask = async (agentDeviceId: string) => {
+            const tunnel = Promise.withResolvers<TunnelHandlers['http']>();
+            const bridgeUrl = 'http://mcp.invalid/fixture-sender';
+            let bridgeTool: typeof sendTool | undefined;
+            const fetch = vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, init) => {
+              expect(url).toBe(bridgeUrl);
+              expect(init?.body).toBeInstanceOf(Uint8Array);
+              const params = JSON.parse(Buffer.from(init?.body as Uint8Array).toString()).params;
+              expect(params.name).toBe('send_to_session');
+              if (!bridgeTool) throw new Error('Missing hosted task MCP bridge');
+              return Response.json(await bridgeTool(params.arguments.target_session_id, params.arguments.message));
+            });
+            try {
+              h.captureTunnelHttp = tunnel.resolve;
+              const handle = await startRemoteAgentSession('claude-code', {
+                sessionId: senderId, workingDir: '/controller/work', model, providerId: published,
+              }, {
+                poller, invoke: poller.invoke, rgPath: 'rg', newId: randomUUID,
+                prepareMcp: async ({ opts }) => {
+                  expect(opts.sessionId).toBe(senderId);
+                  bridgeTool = sharedAccountSessionTool(opts.sessionId!, toolPorts);
+                  return { servers: new Map([['cindy_helper', { url: bridgeUrl, headers: {} }]]), dispose() {} };
+                },
+                collectProjectFiles: async () => [], isGitRepo: async () => false,
+              });
+              h.captureTunnelHttp = undefined;
+              sender = new Session({ id: senderId, agentKind: 'claude-code', permissionMode: 'bypassPermissions',
+                workDir: '/controller/work', agentDeviceId, handle, capabilities: {} as never, logger: guestLog });
+              const http = await tunnel.promise;
+              const response = await http({
+                method: 'POST', path: '/mcp/cindy_helper',
+                headers: [['content-type', 'application/json']],
+                body: Buffer.from(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call',
+                  params: { name: 'send_to_session', arguments: { target_session_id: task, message: 'Continue.' } } })),
+              }, new AbortController().signal);
+              expect(response.status).toBe(200);
+              return JSON.parse(response.body!.toString());
+            } finally {
+              h.captureTunnelHttp = undefined;
+              await sender?.close();
+              fetch.mockRestore();
+            }
+          };
+          const sendFromSshTask = async () => {
+            const host = { id: 'fixture-ssh-host' } as RemoteHost;
+            const handle = {
+              id: 'ssh-native', agentKind: 'claude-code', model, send: vi.fn(), close: async () => {},
+              setInteractionResolver() {},
+            } as unknown as AgentSessionHandle;
+            sender = new Session({ id: senderId, agentKind: 'claude-code', permissionMode: 'bypassPermissions',
+              workDir: '/controller/work', remoteHostId: host.id, handle, capabilities: {} as never, logger: guestLog });
+            const registered = new Map<string, LiziMcpSessionContext>();
+            const bridge = {
+              instanceId: 'fixture-bridge',
+              registerSessionCtx: (id: string, context: LiziMcpSessionContext) => registered.set(id, context),
+              unregisterSessionCtx: (id: string) => registered.delete(id),
+            } as unknown as CodexHttpBridge;
+            const injected = await buildCcRemoteHttpMcpServers({
+              host, sessionId: sender.id, sessionInstanceId: sender.instanceId, workingDir: sender.workDir, vendorOptions: {},
+            }, {
+              ensureBridgeStarted: async () => ({ port: 38080, serverNames: ['cindy_helper'], bridge }),
+              ensureForward: async () => 47921,
+              getBridgeToken: () => 'fixture-ssh-bridge-token',
+            });
+            try {
+              // Model the SSH HTTP transport using the context registered by
+              // the real query builder, just as the local bridge resolves it.
+              const url = new URL(injected.servers.cindy_helper.url);
+              const context = registered.get(url.searchParams.get('session') ?? '');
+              expect(context).toMatchObject({ sessionId: sender.id, sessionInstanceId: url.searchParams.get('instance'),
+                remoteHostId: host.id, mcpCallerAttested: true });
+              if (!context?.sessionId) throw new Error('Missing SSH MCP session context');
+              return await sharedAccountSessionTool(context.sessionId, toolPorts)(task, 'Continue.');
+            } finally {
+              injected.cleanup();
+              await sender.close();
+            }
+          };
+          const remoteInput = createInputEnqueueHarness(coordinator, { remote: true });
+          if (boundary === 'running-target') {
+            // The preceding run has been reclaimed. Hold a real Session.send
+            // after it reserves the turn and before it reconnects the handle.
+            attach(session);
+            const reserved = Promise.withResolvers<void>();
+            const release = Promise.withResolvers<void>();
+            const busySend = session.send('A turn is already being sent.', { onAccepted: async () => {
+              reserved.resolve();
+              await release.promise;
+            } });
+            try {
+              await reserved.promise;
+              expect(session.isTurnRunning()).toBe(true);
+              expect(session.hasReclaimedSharedRun()).toBe(true);
+              await expect(sendTool(task, 'Continue.')).resolves.toMatchObject({
+                ok: true, wake_kind: 'queued', queued_message_id: 'after-idle',
+              });
+              expect(coordinator.getProjection(task).pendingQueue.map(item => item.clientId)).toEqual(['after-idle']);
+              expect(send).not.toHaveBeenCalled();
+            } finally {
+              release.resolve();
+              await busySend;
+            }
+            await vi.waitFor(() => expect(send).toHaveBeenCalledOnce());
+            await expect(send.mock.results[0].value).resolves.toMatchObject({ dispatched: true });
+            expect(send.mock.calls[0][3].reconnectRecovery).toBeUndefined();
+            expect(persisted).toEqual(['after-idle']);
+            return;
+          }
+          const origin = boundary === 'remote-orca' ? { kind: 'orca' as const, senderLabel: 'Lead' }
+            : { kind: 'session' as const, senderSessionId: 'local-sender', displayText: 'Continue.' };
+          if (boundary === 'remote-session' || boundary === 'remote-orca') {
+            await remoteInput.enqueue({}, task, { ...inputItem('after-idle', 'Continue.'), origin });
+          } else {
+            const sendFromSender = {
+              'shared-sender': () => sendFromHostedTask(route),
+              'own-device-sender': () => sendFromHostedTask('fixture-own-executor'),
+              'ssh-sender': sendFromSshTask,
+            };
+            const receipt = boundary in sendFromSender
+              ? await sendFromSender[boundary as keyof typeof sendFromSender]()
+              : await sendTool(task, 'Continue.');
+            if (directFailure) {
+              expect(receipt, JSON.stringify(receipt)).toMatchObject({ ok: false, errorCode: 'INTERNAL' });
+              expect(receipt).not.toHaveProperty('queued_message_id');
+              expect(session.hasReclaimedSharedRun()).toBe(true);
+              expect(coordinator.getProjection(task)).toMatchObject({ pendingQueue: [], recovery: null });
+              expect(JSON.stringify(receipt)).toContain('SUBSCRIPTION_ACCOUNT_LIMITED');
+              expect(send).not.toHaveBeenCalled();
+              expect(persisted).toEqual(['after-idle']);
+              expect(received).toHaveLength(1);
+              expect(insertBoundary).not.toHaveBeenCalled();
+              expect(guestSwitch.hasOffer(task)).toBe(true);
+              return;
+            }
+            if (boundary === 'connected-idle' || boundary === 'cold-target') {
+              expect(receipt, JSON.stringify(receipt)).toMatchObject({
+                ok: true, wake_kind: boundary === 'cold-target' ? 'resumed' : 'already-active',
+              });
+              expect(receipt).not.toHaveProperty('queued_message_id');
+              expect(send).not.toHaveBeenCalled();
+              expect(persisted).toEqual(['after-idle']);
+              expect(sendCalls).toBe(2);
+              expect(opens).toHaveLength(boundary === 'cold-target' ? 2 : 1);
+              expect(insertBoundary).not.toHaveBeenCalled();
+              return;
+            }
+            expect(receipt, JSON.stringify(receipt)).toMatchObject({ ok: true, wake_kind: 'queued', queued_message_id: 'after-idle' });
+          }
+          if (boundary === 'host-quit-offline') {
+            attach(session);
+            await vi.waitFor(() => expect(send).toHaveBeenCalledOnce());
+            await Promise.race([
+              offlineOpen.promise,
+              send.mock.results[0].value.then(
+                () => { throw new Error('Send settled before the offline request'); },
+                (error: unknown) => { throw error; },
+              ),
+            ]);
+            expect(hasSendToSessionLock(task)).toBe(true);
+            expect(persisted).toEqual(['after-idle']);
+            coordinator.enqueue(task, { ...inputItem('queued-behind-offline', 'Queued behind the offline input.'),
+              origin: { kind: 'session', senderSessionId: 'another-task', displayText: 'Queued behind the offline input.' } });
+            expect(coordinator.getProjection(task).pendingQueue.map(item => item.clientId)).toEqual(['queued-behind-offline']);
+            const failed = expect(send.mock.results[0].value).rejects.toThrow('REMOTE_AGENT_OFFLINE');
+            failOfflineOpen.resolve();
+            // The controller retries the read-only capability handshake while offline.
+            await Promise.all([failed, vi.advanceTimersByTimeAsync(8_000)]);
+            await vi.waitFor(() => expect(persistedError).toHaveBeenCalledExactlyOnceWith(task, expect.stringContaining('REMOTE_AGENT_OFFLINE')));
+            expect(emitProjection).toHaveBeenCalledWith(expect.objectContaining({
+              sessionId: task, error: expect.stringContaining('REMOTE_AGENT_OFFLINE'),
+            }));
+            expect(persisted.filter(id => id === 'after-idle')).toEqual(['after-idle']);
+            expect(received.filter((item) => JSON.stringify(item).includes('Continue.'))).toEqual([]);
+            expect(insertBoundary).not.toHaveBeenCalled();
+            expect(guestSwitch.hasOffer(task)).toBe(false);
+            await vi.waitFor(() => {
+              expect(coordinator.getProjection(task).pendingQueue.map(item => item.clientId),
+                'the already queued input must drain when the executor returns without another send').toEqual([]);
+              expect(coordinator.getProjection(task).recovery).toBeNull();
+              expect(received).toHaveLength(2);
+              expect(hasSendToSessionLock(task)).toBe(false);
+            });
+            nextToolClientId = 'after-online';
+            await expect(sendTool(task, 'Send after the executor returns.')).resolves.toMatchObject({
+              ok: true, wake_kind: 'already-active',
+            });
+            const drained = () => {
+              expect(coordinator.getProjection(task).pendingQueue.map(item => item.clientId)).toEqual([]);
+              expect(persisted).toEqual(['after-idle', 'queued-behind-offline', 'after-online']);
+              expect(received).toHaveLength(3);
+              expect(sendCalls).toBe(3);
+              expect(hasSendToSessionLock(task)).toBe(false);
+            };
+            await vi.waitFor(drained);
+            expect(received.slice(1)).toEqual([
+              expect.objectContaining({ content: expect.stringContaining('Queued behind the offline input.') }),
+              expect.objectContaining({ content: expect.stringContaining('Send after the executor returns.') }),
+            ]);
+            return;
+          }
+          if (boundary === 'withdraw-before-drain') {
+            coordinator.remove(task, 'after-idle');
+            holdEditedInput = false;
+            coordinator.resume(task);
+            expect(coordinator.getProjection(task).pendingQueue).toEqual([]);
+            expect(send).not.toHaveBeenCalled();
+            expect(opens).toHaveLength(1);
+            expect(persisted).toEqual([]);
+            return;
+          }
+          if (boundary === 'mixed-merge') {
+            await remoteInput.enqueue({}, task, { ...inputItem('no-eligibility', 'Other input.'), origin });
+            // Returning the survivor itself must also clear its in-memory eligibility.
+            expect(coordinator.mergeQueuedMessagesAtomically(task, ['after-idle', 'no-eligibility'],
+              ([survivor]) => survivor).merged).toBe(true);
+            holdEditedInput = false;
+            coordinator.resume(task);
+          }
+          if (boundary === 'remote-session' || boundary === 'remote-orca' || boundary === 'mixed-merge'
+            || boundary === 'ghost-rewrite') {
+            await vi.waitFor(() => expect(send).toHaveBeenCalledOnce());
+            expect(send.mock.calls[0][3].reconnectRecovery).toBeUndefined();
+            if (boundary === 'ghost-rewrite') {
+              expect(send.mock.calls[0][3].persistUserMessage).toMatchObject({ content: 'Rewritten input.' });
+            }
+            await expect(send.mock.results[0].value).rejects.toThrow('SUBSCRIPTION_ACCOUNT_LIMITED');
+            expect(opens).toHaveLength(2);
+            expect(insertBoundary).not.toHaveBeenCalled();
+            expect(guestSwitch.hasOffer(task)).toBe(true);
+            return;
+          }
+        } else if (registeredInput) await registeredInput.enqueue({}, task, inputItem('after-idle', 'Continue.'));
         else enqueue('after-idle', 'Continue.');
         if (holdEditedInput) {
           expect(send).not.toHaveBeenCalled();
@@ -6506,6 +8421,104 @@ describe('shared subscription recovery through controller and account allocation
           expect(persistedError).not.toHaveBeenCalled();
           return;
         }
+        if (realSendTransport) {
+          await enteredTransport.promise;
+          await vi.advanceTimersByTimeAsync(100);
+          expect(writtenRequestIds.size).toBe(notWritten ? 0 : 1);
+          if (originalAckTimeout && !timeoutReturned) {
+            await vi.advanceTimersByTimeAsync(REMOTE_AGENT_INVOKE_TIMEOUT_MS);
+          }
+        }
+        if (boundary === 'original-accepted') {
+          await expect(send.mock.results[0].value).resolves.toMatchObject({ dispatched: true });
+          expect(received).toHaveLength(2);
+          expect(coordinator.getProjection(task).recovery).toBeNull();
+          expect(bootstrapped).not.toHaveBeenCalled();
+          expect(sendCalls).toBe(2);
+          expect(persisted).toEqual(['after-idle']);
+          return;
+        }
+        if (unknownDispatch) {
+          const expectedError = closesAwaitingAck ? '[REMOTE_AGENT_EXPIRED]' : '[REMOTE_AGENT_TIMEOUT]';
+          if (closesAwaitingAck) {
+            await expect(send.mock.results[0].value).rejects.toThrow(expectedError);
+          } else {
+            await expect(send.mock.results[0].value).rejects.toMatchObject({
+              code: realSendTransport ? 'INVOKE_TIMEOUT' : 'DEVICE_LINK_TIMEOUT',
+              message: expect.stringContaining(expectedError),
+            });
+          }
+          await vi.waitFor(() => expect(coordinator.getProjection(task).recovery).toMatchObject({
+            kind: 'active-turn', item: { clientId: 'after-idle' },
+          }));
+          expect(coordinator.getQueueControlSnapshot(task).pendingQueue.map(item => item.clientId)).toEqual(['queued-tail']);
+          // A polled close may already own the visible error. The send still
+          // rejects with the actual RPC error rather than the original quota error.
+          if (!closesAwaitingAck) {
+            expect(persistedError).toHaveBeenCalledExactlyOnceWith(task, expect.stringContaining(expectedError));
+          }
+          const visibleError = coordinator.getProjection(task).error;
+          expect(visibleError).toContain(closesAwaitingAck ? 'controller-disconnected' : expectedError);
+          expect(visibleError).not.toContain('SUBSCRIPTION_ACCOUNT_LIMITED');
+          await vi.advanceTimersByTimeAsync(5_000);
+          expect(coordinator.getProjection(task).recovery).toMatchObject({
+            kind: 'active-turn', item: { clientId: 'after-idle' },
+          });
+          expect(coordinator.getQueueControlSnapshot(task).pendingQueue.map(item => item.clientId)).toEqual(['queued-tail']);
+          expect(send).toHaveBeenCalledOnce();
+          if (timeoutReturned) expect(returnedCancellation).toHaveBeenCalledExactlyOnceWith({
+            accepted: false, reason: 'cancelled-before-dispatch',
+          });
+          expect(opens).toHaveLength(originalAckTimeout ? 2 : 3);
+          if (originalAckTimeout) {
+            expect(opens[1]).not.toHaveProperty('groupSwitchToken');
+            expect(bootstrapped).not.toHaveBeenCalled();
+          }
+          expect(sendCalls).toBe(2);
+          expect(received).toHaveLength(2);
+          expect(accepted).toHaveBeenCalledOnce();
+          expect(persisted).toEqual(['after-idle']);
+          expect(insertBoundary).toHaveBeenCalledTimes(originalAckTimeout ? 0 : 1);
+          expect(guestSwitch.hasOffer(task)).toBe(false);
+          return;
+        }
+        if (boundary === 'replacement-accepted-then-closed') {
+          await expect(send.mock.results[0].value).resolves.toMatchObject({ dispatched: true });
+          expect(sendCalls).toBe(2);
+          expect(received).toHaveLength(2);
+          expect(persisted).toEqual(['after-idle']);
+          expect(insertBoundary).toHaveBeenCalledOnce();
+          expect(persistedError).not.toHaveBeenCalled();
+          expect(coordinator.getProjection(task).recovery).toBeNull();
+          return;
+        }
+        if (releaseFailedHead) {
+          if (delayedOffer) {
+            await probeGate;
+            if (boundary === 'late-owner-change') ownerMatches = false;
+            else if (boundary === 'late-generation-change') runtimeGeneration += 1;
+            else recoveryAllowed = false;
+            resolveProbe!();
+          }
+          const errorText = originalRejected ? 'Fixture provider rejected before dispatch'
+            : boundary === 'original-not-written' ? 'REMOTE_AGENT_LINK_BUSY'
+              : boundary === 'original-cancel-before-write' ? 'cancelled before vendor dispatch' : 'SUBSCRIPTION_ACCOUNT_LIMITED';
+          const firstOutcome = await send.mock.results[0].value.catch((error: unknown) => error);
+          if (originalRejected) expect(rejectedSend).toBe(true);
+          else if (notWritten) expect(writtenRequestIds.size).toBe(0);
+          await vi.waitFor(() => expect(emitProjection).toHaveBeenCalledWith(expect.objectContaining({
+            error: expect.stringContaining(errorText), recovery: null,
+          })));
+          expect(firstOutcome).toBeInstanceOf(Error);
+          expect((firstOutcome as Error).message).toContain(errorText);
+          expect(persistedError).toHaveBeenCalledWith(task, expect.stringContaining(errorText));
+          await vi.waitFor(() => expect(send).toHaveBeenCalledTimes(2));
+          await send.mock.results[1].value.catch(() => undefined);
+          expect(send.mock.calls[1][3].persistUserMessage?.clientId).toBe('queued-tail');
+          expect(persisted.filter(id => id === 'after-idle')).toEqual(['after-idle']);
+          expect(received.some(item => JSON.stringify(item).includes('Continue.'))).toBe(false);
+          return;
+        }
         if (boundary === 'replacement-id-write-failed' || boundary === 'boundary-write-failed') {
           await expect(send.mock.results[0].value).rejects.toThrow('SUBSCRIPTION_ACCOUNT_LIMITED');
           expect(opens).toHaveLength(3);
@@ -6552,6 +8565,16 @@ describe('shared subscription recovery through controller and account allocation
           if (!nextInputDuringOpen) enqueue('next-input', 'Send the next input.');
           await vi.waitFor(() => expect(send).toHaveBeenCalledTimes(2));
           const followUp = await send.mock.results[1].value.catch((error: unknown) => error);
+          if (phase === 'session-reconnect') {
+            // Stop can win before the host commits the token. The next FIFO
+            // item must leave the queue without replaying the cancelled input.
+            expect(opens).toHaveLength(4);
+            expect(opens[3]).not.toHaveProperty('groupSwitchToken');
+            expect(received).toHaveLength(1);
+            expect(coordinator.getProjection(task).pendingQueue.map(item => item.clientId)).not.toContain('after-idle');
+            expect(persisted.filter(id => id === 'after-idle')).toEqual(['after-idle']);
+            return;
+          }
           // O may already have rebound the task before the cancellation reached G.
           // The ordinary follow-up still uses the original history and no old token.
           expect(h.bindings.get(`task:${hostTask}`)?.accountId).toBe(nextAccount);
@@ -6626,6 +8649,8 @@ describe('shared subscription recovery through controller and account allocation
           await probeGate;
           if (boundary === 'late-stop') coordinator.stop(task);
           else if (boundary === 'late-input') enqueue('new-input', 'Use my latest instructions.');
+          // Model a stale coordinator owner without also aborting the input signal.
+          else if (boundary === 'late-stale-input') staleInput = true;
           else recoveryAllowed = false;
           resolveProbe!();
           if (boundary === 'late-stop') {
@@ -6635,8 +8660,15 @@ describe('shared subscription recovery through controller and account allocation
           } else {
             await expect(send.mock.results[0].value).rejects.toThrow('SUBSCRIPTION_ACCOUNT_LIMITED');
           }
+          if (boundary === 'late-stale-input') {
+            expect(live).toBe(session);
+            await vi.waitFor(() => expect(coordinator.getProjection(task).recovery).toMatchObject({
+              kind: 'active-turn', item: { clientId: 'after-idle' },
+            }));
+          }
           expect(bootstrapped).not.toHaveBeenCalled();
           expect(sendCalls).toBe(1);
+          expect(persisted.filter(id => id === 'after-idle')).toEqual(['after-idle']);
           expect(probeResults).toEqual([true]);
           expect(guestSwitch.hasOffer(task)).toBe(false);
           return;
@@ -6702,7 +8734,8 @@ describe('shared subscription recovery through controller and account allocation
         expect(dispatched).toMatchObject({ dispatched: true });
         await vi.waitFor(() => expect(events.some(event => event.type === 'done')).toBe(true));
         expect(persisted).toEqual(['after-idle']);
-        if (phase === 'reconnect') expect(insertBoundary).toHaveBeenCalledOnce();
+        if (phase === 'reconnect' || phase === 'session-reconnect') expect(insertBoundary).toHaveBeenCalledOnce();
+        if (phase === 'session-reconnect') expect(accepted).toHaveBeenCalledOnce();
         expect(persistedError).not.toHaveBeenCalled();
         expect(onUsageLimitedTurnError).not.toHaveBeenCalled();
         expect(opens).toHaveLength(3);
@@ -6718,6 +8751,15 @@ describe('shared subscription recovery through controller and account allocation
         const expectedInput = boundary === 'edited-input' ? 'Continue the edited input.' : 'Continue.';
         expect(JSON.stringify(received.at(-1)).split(expectedInput)).toHaveLength(2);
         if (boundary === 'edited-input') expect(JSON.stringify(received.at(-1))).not.toContain('Continue.');
+        if (phase === 'session-reconnect') {
+          enqueue('after-recovery', 'Next input after recovery.');
+          await vi.waitFor(() => expect(send).toHaveBeenCalledTimes(2));
+          await expect(send.mock.results[1].value).resolves.toMatchObject({ dispatched: true });
+          expect(persisted).toEqual(['after-idle', 'after-recovery']);
+          expect(sendCalls).toBe(3);
+          expect(received.at(-1)).toMatchObject({ content: 'Next input after recovery.' });
+          expect(coordinator.getProjection(task).pendingQueue).toEqual([]);
+        }
         if (boundary === 'expired-host-token') {
           expect(wireOrder).toEqual(['token']);
           expect(received).toHaveLength(2);
@@ -6872,11 +8914,14 @@ describe('shared subscription recovery through controller and account allocation
       expect(fallback).not.toHaveBeenCalled();
       expect(guestSwitch.takeForOpen(task)).toBeUndefined();
     } finally {
+      failOfflineOpen.resolve();
+      settleNativeSend.resolve();
       confirmStopped();
       resolveProbe?.();
       await guestSession?.close();
       await remoteHandle?.close({ reason: 'navigation' });
       for (const client of clients) client.abandon('test-finished');
+      transport?.stop();
       await host.dispose();
       if (weekly) vi.useRealTimers();
     }
@@ -6889,6 +8934,81 @@ describe('shared subscription recovery through controller and account allocation
 // answer or fail without a cause. Minimal input: the native account read rejects as unreachable.
 describe('unreachable account service', () => {
   const unreachable = () => new AccountServiceUnreachableError('Codex account request failed');
+
+  // #13018, unit. The allocator alone cannot prove a queued input wakes. Two tasks
+  // share a timed-out account read; drive the send transaction through native admission.
+  it('coalesces local Codex account retries and dispatches only the surviving original inputs', async () => {
+    vi.useFakeTimers();
+    const sessions = new Map<string, Session>();
+    const sent: Array<[string, unknown]> = [];
+    const logger: Logger = { trace() {}, debug() {}, info() {}, warn() {}, error() {}, fatal() {}, child: () => logger };
+    const nativeStart: BaseAgent['startSession'] = async opts => {
+      let finish!: () => void;
+      const closed = new Promise<void>(resolve => { finish = resolve; });
+      return { id: opts.sessionId!, agentKind: 'codex', model: opts.model!, steer: vi.fn(), getUsageSnapshot: vi.fn(),
+        send: async message => { sent.push([opts.sessionId!, message]); },
+        close: async () => finish(), abort: async () => {}, events: async function* () { await closed; },
+        setInteractionResolver() {},
+      };
+    };
+    const agent = withSubscriptionAccounts({ kind: 'codex', startSession: nativeStart } as BaseAgent);
+    const persisted = vi.fn(async () => {});
+    const transaction = sharedAccountSendTransaction({
+      getSession: id => sessions.get(id),
+      bootstrapSession: async opts => {
+        const id = opts.id!;
+        const handle = await agent.startSession({ ...opts, sessionId: id, providerId: 'openai',
+          resumeSessionId: 'native-' + id } as StartSessionOptions);
+        const session = new Session({ id, agentKind: 'codex', workDir: opts.workingDir,
+          permissionMode: 'default', capabilities: {} as never, handle, logger });
+        sessions.set(id, session);
+        return { session, didInjectOrcaInstructions: false, didInjectProjectContext: false };
+      },
+      createDbMessage: persisted,
+    });
+    const coordinator = new AgentInputCoordinator({
+      sendToAgent: async (...args) => (await transaction.sendToAgentAccepted(...args)).outcome,
+      steerToAgent: async () => {}, abortSession: async () => {}, touchUserSend: async () => {},
+      createUserMessage: vi.fn(), isTurnRunning: () => false, hasPendingInteraction: () => false,
+      getAgentKind: () => 'codex', getSdkSessionId: async () => undefined,
+      getTurnGeneration: () => null, emitProjection() {},
+    });
+    try {
+      h.pools.openai = { strategy: 'order', accounts: [account('second')] };
+      h.read.mockRejectedValue(unreachable());
+      const enqueue = (id: string) => {
+        h.bindings.set('task:' + id, { providerId: 'openai', accountId: 'second' });
+        coordinator.enqueue(id, { clientId: id, text: id, persistedContent: id, model: 'gpt-6',
+          effort: 'medium', workingDir: '/work', permissionMode: 'default',
+          createOpts: { agentKind: 'codex', providerId: 'openai', model: 'gpt-6', workingDir: '/work' },
+          chatMessage: { role: 'user', clientId: id, content: id, isStreaming: false, createdAt: new Date().toISOString() },
+        });
+      };
+      for (const id of ['first', 'second', 'cancelled']) enqueue(id);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(coordinator.getProjection('first').error).toContain('CODEX_ACCOUNT_READ_RETRY');
+      expect(h.read).toHaveBeenCalledTimes(1);
+      coordinator.remove('cancelled', 'cancelled');
+      await vi.advanceTimersByTimeAsync(3_000);
+      expect(h.read).toHaveBeenCalledTimes(2);
+      h.read.mockResolvedValue({ authenticated: true, identity: 'account' });
+      await vi.advanceTimersByTimeAsync(5_998);
+      expect(sent).toEqual([]);
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(sent.sort()).toEqual(['first', 'second'].map(id => [id, { type: 'user', content: id }]));
+      expect(persisted).toHaveBeenCalledTimes(2);
+      expect(h.read).toHaveBeenCalledTimes(3);
+      h.read.mockResolvedValue({ authenticated: false });
+      enqueue('signed-out');
+      await vi.advanceTimersByTimeAsync(120_000);
+      expect(coordinator.getProjection('signed-out').error).toContain('SUBSCRIPTION_ACCOUNT_LOGIN_REQUIRED');
+      expect(h.read).toHaveBeenCalledTimes(4);
+      expect(sent).toHaveLength(2);
+    } finally {
+      await Promise.all([...sessions.values()].map(session => session.close()));
+      vi.useRealTimers();
+    }
+  });
 
   // The sign-in still has to be confirmed (登录完成须确认, 2026-11-16): an offline confirmation is
   // not a completed login, but it must say the service was unreachable instead of a generic failure.
@@ -6945,7 +9065,7 @@ describe('unreachable account service', () => {
     expect(hasUnavailableSubscriptionPoolAccount('openai')).toBe(true);
     expect(hasConnectedSubscriptionPool('openai', { includeBoundAccounts: true })).toBe(false);
     expect(readSubscriptionPoolCodexModels('openai', { includeBoundAccounts: true })).toEqual([]);
-    await expect(acquireSubscriptionAccount('openai', 'gpt-kept', [])).rejects.toThrow('No subscription account is available');
+    await expect(acquireSubscriptionAccount('openai', 'gpt-kept', [])).rejects.toThrow('CODEX_ACCOUNT_SERVICE_UNREACHABLE');
 
     // Back online: the account reads again and its list is fetched afresh.
     h.read.mockResolvedValue({ authenticated: true, identity: 'account' });

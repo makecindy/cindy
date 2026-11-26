@@ -9,6 +9,7 @@ import type { ProviderView, UnifiedModelEntry } from '@cindy/model-providers';
 
 import type { AgentKind } from '@/hooks/useAgentCapabilities';
 import { cn } from '@/lib/utils';
+import { Badge } from '@/components/ui/badge';
 import { COMPOSER_MENU_ROW, menuRowAttrs } from '@/components/ui/menu-row';
 import { providerDisplayName } from '@/lib/providerDisplayName';
 import { isCustomRoutedProvider, modelSupplierLabel } from '@cindy/model-providers';
@@ -220,7 +221,7 @@ export function UnifiedModelRow({
           : t('newChat.modelSelector.unified.addFavorite')
       }
       className={cn(
-        'flex h-5 w-5 shrink-0 items-center justify-center rounded-[6px] transition-opacity',
+        'flex h-5 w-5 shrink-0 items-center justify-center rounded-lg transition-opacity',
         isFavoriteRow || justFavorited
           ? 'text-[var(--favorite-star)] opacity-100'
           : 'text-[var(--text-tertiary)] opacity-0 group-hover/row:opacity-100 focus-visible:opacity-100 hover:text-[var(--favorite-star)]',
@@ -244,7 +245,7 @@ export function UnifiedModelRow({
       title={t('newChat.modelSelector.unified.customize')}
       aria-label={t('newChat.modelSelector.unified.customize')}
       className={cn(
-        'flex h-5 w-5 shrink-0 items-center justify-center rounded-[6px] transition-opacity',
+        'flex h-5 w-5 shrink-0 items-center justify-center rounded-lg transition-opacity',
         active
           ? 'text-[var(--text-secondary)] opacity-100'
           : 'text-[var(--text-tertiary)] opacity-0 group-hover/row:opacity-100 focus-visible:opacity-100 hover:text-[var(--text-secondary)]',
@@ -255,13 +256,9 @@ export function UnifiedModelRow({
   );
   const paymentRequiredBadge =
     paymentRequired && paymentRequiredLabel ? (
-      <span
-        data-payment-required-badge
-        className="inline-flex shrink-0 items-center gap-1 rounded-full bg-[var(--surface-chip)] px-2 py-[1px] text-10 font-normal leading-[1.45] text-[var(--text-secondary)]"
-      >
-        <Lock size={10} />
+      <Badge size="xs" data-payment-required-badge icon={<Lock size={10} />}>
         {paymentRequiredLabel}
-      </span>
+      </Badge>
     ) : null;
   const paymentRequiredUnlock =
     paymentRequired && paymentRequiredUnlockLabel ? (
