@@ -1,15 +1,31 @@
 import { useSyncExternalStore } from 'react';
 import {
+  isPatchableSkippedScheduleEvent,
   projectScheduleEvent,
   type ScheduleEventProjection,
 } from '@cindy/maker-shared/schedule-events';
-import { noteScheduleEventInIndexCache } from '@/session/scheduleIndex';
+import {
+  deviceHasFailedScheduleInIndexCache,
+  hasCurrentScheduleIndexRecord,
+  noteScheduleEventInIndexCache,
+} from '@/session/scheduleIndex';
+
+export interface RemoteScheduleTimingPatch {
+  scheduleId: string;
+  lastFiredAt?: number;
+  lastFinishedAt?: number;
+  nextFireAt?: number;
+}
 
 export interface RemoteScheduleEventSnapshot {
   lastProjection: ScheduleEventProjection | null;
   runsVersion: number;
   scheduleListVersion: number;
+  /** 新主机 skipped 事件携带的原位排期时间戳补丁,供列表与详情无需整表重拉即可获知最新下次时间。 */
+  scheduleTimings: ReadonlyMap<string, RemoteScheduleTimingPatch>;
   sessionIndexVersion: number;
+  /** 仅在事件可能新增或变更远端会话行(带非空 sessionId / ready / unknown)时递增,避免纯排期事件拉整张 sessions:list。 */
+  sessionListVersion: number;
   /**
    * 未读清除类事件(unreadImpact = may-clear-schedule / clear-all,即 read / all-read)
    * 的专用计数:事件先使共享索引失效,消费方据此读取同一轮新索引。
@@ -21,17 +37,22 @@ export interface RemoteScheduleEventSnapshot {
   version: number;
 }
 
+const emptyTimings: ReadonlyMap<string, RemoteScheduleTimingPatch> = new Map();
+
 const emptySnapshot: RemoteScheduleEventSnapshot = Object.freeze({
   lastProjection: null,
   runsVersion: 0,
   scheduleListVersion: 0,
+  scheduleTimings: emptyTimings,
   sessionIndexVersion: 0,
+  sessionListVersion: 0,
   unreadClearVersion: 0,
   unreadVersion: 0,
   version: 0,
 });
 
 const snapshots = new Map<string, RemoteScheduleEventSnapshot>();
+const patchedSkippedRunIds = new Map<string, Map<string, string>>();
 // Per-device mirror invalidation generation. Unlike event `version`, this survives
 // `clearDevice()` so mounted screens can observe a presence-offline cleanup even when
 // that device had not emitted a schedule event in the current process.
@@ -48,7 +69,31 @@ function emit(): void {
 export const remoteScheduleEventStore = {
   apply(deviceId: string, payload?: unknown): void {
     if (!deviceId) return;
-    const projection = projectScheduleEvent(payload);
+    let projection = projectScheduleEvent(payload);
+    if (
+      projection.event.type === 'changed'
+      && projection.event.skippedRunId
+      && hasCurrentScheduleIndexRecord(deviceId)
+      && patchedSkippedRunIds.get(deviceId)?.get(projection.event.scheduleId) === projection.event.skippedRunId
+    ) {
+      return;
+    }
+    if (isPatchableSkippedScheduleEvent(projection.event)) {
+      const indexReady = hasCurrentScheduleIndexRecord(deviceId);
+      const needsFailureRecovery =
+        projection.event.preRunCheckSucceeded === true
+        && deviceHasFailedScheduleInIndexCache(deviceId, projection.event.scheduleId);
+      if (!indexReady || needsFailureRecovery) {
+        projection = {
+          ...projection,
+          refresh: {
+            ...projection.refresh,
+            sessionIndex: true,
+            unreadSummary: needsFailureRecovery,
+          },
+        };
+      }
+    }
     const clearsUnread = projection.unreadImpact === 'may-clear-schedule'
       || projection.unreadImpact === 'clear-all';
     // 不要求任何刷新、也不带 run 状态的事件(runtime-state 高频诊断)不换快照:否则挂载屏
@@ -62,6 +107,52 @@ export const remoteScheduleEventStore = {
       && projection.runPatch.status === 'unknown'
     ) return;
     const prev = snapshots.get(deviceId) ?? emptySnapshot;
+    let scheduleTimings = prev.scheduleTimings;
+    if (projection.event.type === 'ready' || projection.event.type === 'unknown') {
+      if (scheduleTimings.size > 0) scheduleTimings = emptyTimings;
+      patchedSkippedRunIds.delete(deviceId);
+    } else if (
+      projection.event.type === 'changed'
+      || projection.event.type === 'fired'
+      || projection.event.type === 'completed'
+      || projection.event.type === 'failed'
+      || projection.event.type === 'deferred'
+    ) {
+      patchedSkippedRunIds.get(deviceId)?.delete(projection.event.scheduleId);
+      if (scheduleTimings.has(projection.event.scheduleId)) {
+        const nextTimings = new Map(scheduleTimings);
+        nextTimings.delete(projection.event.scheduleId);
+        scheduleTimings = nextTimings;
+      }
+    } else if (
+      projection.event.type === 'skipped'
+      && (projection.event.lastFiredAt !== undefined
+        || projection.event.lastFinishedAt !== undefined
+        || projection.event.nextFireAt !== undefined)
+    ) {
+      const nextTimings = new Map(scheduleTimings);
+      nextTimings.set(projection.event.scheduleId, {
+        scheduleId: projection.event.scheduleId,
+        ...(projection.event.lastFiredAt !== undefined ? { lastFiredAt: projection.event.lastFiredAt } : {}),
+        ...(projection.event.lastFinishedAt !== undefined ? { lastFinishedAt: projection.event.lastFinishedAt } : {}),
+        ...(projection.event.nextFireAt !== undefined ? { nextFireAt: projection.event.nextFireAt } : {}),
+      });
+      scheduleTimings = nextTimings;
+      if (!projection.refresh.sessionIndex && hasCurrentScheduleIndexRecord(deviceId)) {
+        let perSchedule = patchedSkippedRunIds.get(deviceId);
+        if (!perSchedule) {
+          perSchedule = new Map();
+          patchedSkippedRunIds.set(deviceId, perSchedule);
+        }
+        perSchedule.set(projection.event.scheduleId, projection.event.runId);
+      } else {
+        patchedSkippedRunIds.get(deviceId)?.delete(projection.event.scheduleId);
+      }
+    }
+    const touchesSessionList =
+      projection.event.type === 'ready'
+      || projection.event.type === 'unknown'
+      || projection.runPatch.sessionId !== null;
     // Invalidate once before notifying all screens. Consumer-local force loads
     // otherwise launch competing scans for the same authoritative event.
     noteScheduleEventInIndexCache(deviceId, {
@@ -73,7 +164,9 @@ export const remoteScheduleEventStore = {
       lastProjection: projection,
       runsVersion: prev.runsVersion + (projection.refresh.runRefresh.mode === 'none' ? 0 : 1),
       scheduleListVersion: prev.scheduleListVersion + (projection.refresh.scheduleList ? 1 : 0),
+      scheduleTimings,
       sessionIndexVersion: prev.sessionIndexVersion + (projection.refresh.sessionIndex ? 1 : 0),
+      sessionListVersion: prev.sessionListVersion + (touchesSessionList ? 1 : 0),
       unreadClearVersion: prev.unreadClearVersion + (clearsUnread ? 1 : 0),
       unreadVersion: prev.unreadVersion + (projection.refresh.unreadSummary ? 1 : 0),
       version: prev.version + 1,
@@ -82,6 +175,7 @@ export const remoteScheduleEventStore = {
   },
 
   clearDevice(deviceId: string): void {
+    patchedSkippedRunIds.delete(deviceId);
     if (!snapshots.delete(deviceId)) return;
     emit();
   },
@@ -103,6 +197,7 @@ export const remoteScheduleEventStore = {
       // publish again after recovery clears the marker or a fresh event arrives.
       if (mirrorInvalidationVersions.has(deviceId) && !snapshots.has(deviceId)) continue;
       snapshots.delete(deviceId);
+      patchedSkippedRunIds.delete(deviceId);
       mirrorInvalidationVersions.set(
         deviceId,
         ++nextMirrorInvalidationGeneration,
@@ -121,6 +216,7 @@ export const remoteScheduleEventStore = {
   },
 
   clearAll(): void {
+    patchedSkippedRunIds.clear();
     if (snapshots.size === 0 && mirrorInvalidationVersions.size === 0) return;
     snapshots.clear();
     mirrorInvalidationVersions.clear();
@@ -158,4 +254,64 @@ export function useRemoteScheduleEventSnapshot(deviceId: string): RemoteSchedule
     remoteScheduleEventStore.subscribe,
     () => remoteScheduleEventStore.getSnapshot(deviceId),
   );
+}
+
+export function applyRemoteScheduleTimingsToIndex<
+  T extends {
+    scheduleId: string;
+    running: boolean;
+    nextFireAt?: number;
+    latestRunAt?: number;
+    scheduleStatus?: string;
+    latestFailedRun?: { nextFireAt?: number };
+  },
+>(
+  index: Map<string, T>,
+  timings: ReadonlyMap<string, RemoteScheduleTimingPatch>,
+  allowedSessionIds?: ReadonlySet<string>,
+): Map<string, T> {
+  if (index.size === 0 || timings.size === 0) return index;
+  let next: Map<string, T> | null = null;
+  for (const [sessionId, info] of index) {
+    if (allowedSessionIds && !allowedSessionIds.has(sessionId)) continue;
+    const patch = timings.get(info.scheduleId);
+    if (!patch) continue;
+    if (
+      info.latestRunAt !== undefined
+      && patch.lastFinishedAt !== undefined
+      && info.latestRunAt > patch.lastFinishedAt
+    ) {
+      continue;
+    }
+    const nextRunning = patch.lastFinishedAt !== undefined ? false : info.running;
+    const nextFireAt = patch.nextFireAt !== undefined ? patch.nextFireAt : info.nextFireAt;
+    const nextLatestRunAt = Math.max(
+      info.latestRunAt ?? 0,
+      patch.lastFinishedAt ?? patch.lastFiredAt ?? 0,
+    ) || info.latestRunAt;
+    const nextFailedRun =
+      info.latestFailedRun
+      && info.scheduleStatus === 'active'
+      && patch.nextFireAt !== undefined
+      && info.latestFailedRun.nextFireAt !== patch.nextFireAt
+        ? { ...info.latestFailedRun, nextFireAt: patch.nextFireAt }
+        : info.latestFailedRun;
+    if (
+      nextRunning === info.running
+      && nextFireAt === info.nextFireAt
+      && nextLatestRunAt === info.latestRunAt
+      && nextFailedRun === info.latestFailedRun
+    ) {
+      continue;
+    }
+    next ??= new Map(index);
+    next.set(sessionId, {
+      ...info,
+      running: nextRunning,
+      nextFireAt,
+      ...(nextLatestRunAt !== undefined ? { latestRunAt: nextLatestRunAt } : {}),
+      ...(nextFailedRun !== info.latestFailedRun ? { latestFailedRun: nextFailedRun } : {}),
+    });
+  }
+  return next ?? index;
 }

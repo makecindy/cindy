@@ -76,7 +76,7 @@ export function validPluginTaskRequest(value: unknown): value is PluginTaskReque
     getTeam: ['taskId'],
     setTeamPlan: ['taskId', 'plan'],
     releaseWorker: ['taskId', 'workerId', 'completedAt'],
-    send: ['taskId', 'requestKey', 'expectedRevision', 'text', 'context', 'attachments', 'contextAttachments', 'invocationId', 'relay'],
+    send: ['taskId', 'requestKey', 'expectedRevision', 'text', 'context', 'attachments', 'contextAttachments', 'invocationId', 'relay', 'followUps'],
     getRun: ['runId'],
     listRuns: ['taskId', 'after', 'limit'],
     readMessages: ['taskId', 'after', 'limit', 'progressForRun'],
@@ -141,6 +141,8 @@ export function validPluginTaskRequest(value: unknown): value is PluginTaskReque
   )
     return false;
   if (value.relay !== undefined && !validPluginTaskRelay(value.relay)) return false;
+  // Only an explicit opt-in: `false` would hash differently from leaving it out.
+  if (value.followUps !== undefined && value.followUps !== true) return false;
   if (value.progressForRun !== undefined && !requires('progressForRun')) return false;
   if (value.after !== undefined && !text(value.after, 1024)) return false;
   if (
@@ -247,6 +249,8 @@ export async function handlePluginTaskRequest(
         // getRun returns optional preview.text while the run's own execution is streaming.
         runPreview: true,
         runProgress: true,
+        // send `followUps: true`: word sent back by tasks that turn opened becomes follow-up runs.
+        followUps: true,
         imProjects: true,
         // imProjectConfig, confirmImPermission and imOverride on create/followImProject.
         imProjectOverrides: true,

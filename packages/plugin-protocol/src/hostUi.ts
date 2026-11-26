@@ -3,7 +3,7 @@ import { PLUGIN_APPEARANCE_FIELDS, type PluginAppearanceField } from './appearan
 const EXTENDED_HOST_UI_POSITIONS = [
   'composer.header', 'sidebar.navigation', 'session.menu', 'settings.section', 'composer.completion',
   'composer.attachment', 'sidebar.section',
-  'window.titlebar',
+  'window.titlebar', 'workdir.menu',
 ] as const;
 /** Cindy placement and Host capabilities; page content stays in MCP Apps resources. */
 export const HOST_UI_POSITIONS = [
@@ -39,6 +39,8 @@ export interface GhostHostUiContribution extends GhostHostUiAction {
   kind?: 'button' | 'select' | 'status';
   presentation?: 'sidebar' | 'popover';
   icon?: string;
+  /** Status bar button label in host typography steps. Unknown values use the default. */
+  fontSize?: 12 | 13 | 14;
   options?: { label: string; value: string }[];
   match?: GhostHostUiMatch;
   trigger?: '/' | '@';
@@ -133,7 +135,7 @@ export function parseGhostHostUi(
       } else if (!action(item)) return null;
       if ((item.position === 'message.body' || item.position === 'tool.body') &&
           (item.view === undefined || item.tool !== undefined || item.kind !== undefined && item.kind !== 'button')) return null;
-      if (['message.menu', 'session.menu', 'sidebar.navigation', 'settings.section', 'composer.completion', 'composer.attachment', 'sidebar.section', 'window.titlebar'].includes(String(item.position)) &&
+      if (['message.menu', 'session.menu', 'sidebar.navigation', 'settings.section', 'composer.completion', 'composer.attachment', 'sidebar.section', 'window.titlebar', 'workdir.menu'].includes(String(item.position)) &&
           item.kind !== undefined && item.kind !== 'button') return null;
       if (item.position === 'settings.section' && (item.view === undefined ||
           (raw.views as GhostHostUiView[]).find(view => view.id === item.view)?.scope === 'task')) return null;

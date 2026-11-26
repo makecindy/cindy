@@ -557,6 +557,7 @@ import { GhostBrowserExtensionSlot } from './browserExtensionSlot.js';
 import { createNativeBinding } from '../browser-extension/native-binding.js';
 import { loadWindowsTaskbarNative } from '../windowsTaskbarNative.js';
 import { broadcastTaskViewOpen, GhostTaskViewSlot } from './taskViewSlot.js';
+import { GhostSessionStateSlot, readGhostSessionStateRows } from './sessionStateSlot.js';
 import { LiveScreenHost } from './liveScreenHost.js';
 import { PluginLiveScreenViews } from '../remote-desktop-viewer/pluginViews.js';
 import { GhostScheduleSlot, isMainShellWindowUrl } from './scheduleSlot.js';
@@ -10208,6 +10209,10 @@ export function registerGhostIpc(): void {
     readOwner: getActiveAppSession,
     ghostIdForLogicWebContents,
   });
+  const sessionStateSlot = new GhostSessionStateSlot({
+    getGhost: findGhostForInstanceId,
+    readSessions: (sessionIds) => readGhostSessionStateRows(getDbClient(), sessionIds),
+  });
   ipcMain.handle('ghost-pipe:send', async (event, payload: unknown) => {
     const id = ghostIdForLogicWebContents(event.sender.id);
     if (!id) throwIpcError('PERMISSION_DENIED', '非意识电子脑上下文');
@@ -10215,6 +10220,14 @@ export function registerGhostIpc(): void {
     const coreResult = executionPipe(id, payload, () => !event.sender.isDestroyed() && ghostIdForLogicWebContents(event.sender.id) === id);
     if (coreResult !== undefined) return coreResult;
     const type = (payload as { type?: unknown } | null)?.type;
+    if (type === 'session-state-request') {
+      const owner = ghostOwnerScope.capture();
+      const ownerId = getActiveAppSession().dataOwnerId;
+      return sessionStateSlot.handleRequest(id, payload, () =>
+        ownerId != null && getCurrentDbClientUserId() === ownerId &&
+        ghostOwnerScope.isCurrent(owner) && ghostOwnerScope.isStable(owner) &&
+        !event.sender.isDestroyed() && ghostIdForLogicWebContents(event.sender.id) === id);
+    }
     if (type === 'ui-state-update') return publishPluginUiControl(id, payload);
     if (type === 'recommendations-update') {
       const ghost = findGhostForInstanceId(id);
@@ -10414,7 +10427,7 @@ export function registerGhostIpc(): void {
       try { return { ok: true, data: await pluginTargetSlot.handle(id, payload, assertAuthorized) }; }
       catch (error) {
         const rawCode = (error as { code?: unknown })?.code ?? (error instanceof Error ? error.message : '');
-        const code = ['PERMISSION_DENIED', 'HOST_NOT_READY', 'INVALID_PARAMS', 'INVALID_ATTACHMENTS', 'INVALID_INVOCATION', 'TASK_BUSY', 'TARGET_UNAVAILABLE', 'SUPERSEDED', 'REQUEST_KEY_CONFLICT', 'DELIVERY_UNCERTAIN', 'DELIVERY_REJECTED', 'STALE_REVISION', 'ROUTE_UNAVAILABLE'].includes(String(rawCode)) ? String(rawCode) : 'HOST_NOT_READY';
+        const code = ['PERMISSION_DENIED', 'UNSUPPORTED_CAPABILITY', 'HOST_NOT_READY', 'INVALID_PARAMS', 'INVALID_ATTACHMENTS', 'INVALID_INVOCATION', 'TASK_BUSY', 'TARGET_UNAVAILABLE', 'SUPERSEDED', 'REQUEST_KEY_CONFLICT', 'DELIVERY_UNCERTAIN', 'DELIVERY_REJECTED', 'STALE_REVISION', 'ROUTE_UNAVAILABLE'].includes(String(rawCode)) ? String(rawCode) : 'HOST_NOT_READY';
         return { ok: false, error: { code, message: code, retryable: code === 'TASK_BUSY' } };
       }
     }

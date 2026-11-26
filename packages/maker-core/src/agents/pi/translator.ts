@@ -1,3 +1,4 @@
+import { markPiResponsesCompletion, type PiResponsesCompletion } from './responses-completion.js';
 import { piToolMarkupProjection } from './tool-markup-projection.js';
 import { parseOutputLimitDetails, type OutputLimitDetails } from '@cindy/maker-shared';
 import { nativeToolMediaFields } from '@cindy/maker-shared/tool-process-media';
@@ -26,6 +27,8 @@ import type { Logger } from '../../interfaces/logger.js';
 import { PI_SUBAGENT_RUNTIME_TOOL_NAME, PI_SUBAGENT_TOOL_NAME, subagentSpawnResultIndicatesRunning } from '@cindy/maker-shared/agent-task';
 import {
   extractNonSecretErrorSignals,
+  isProviderSafetyRefusalError,
+  PROVIDER_SAFETY_REFUSAL_REASON,
   redactSensitiveText,
   type NonSecretErrorSignals,
 } from '@cindy/maker-shared/error-redaction';
@@ -102,7 +105,12 @@ interface PiPendingAssistantError {
   piCacheCompatibility?: import('./cache-compatibility.js').PiCacheCompatibility;
   errorStatus?: NonSecretErrorSignals['errorStatus'] | 400;
   usageLimit?: true;
-  reason?: typeof CONTEXT_OVERFLOW_REASON | typeof UPSTREAM_STREAM_INTERRUPTED_REASON | typeof PI_GATEWAY_DROP_REASON | typeof UNSUPPORTED_REQUEST_OPTION_REASON;
+  reason?:
+    | typeof CONTEXT_OVERFLOW_REASON
+    | typeof UPSTREAM_STREAM_INTERRUPTED_REASON
+    | typeof PI_GATEWAY_DROP_REASON
+    | typeof UNSUPPORTED_REQUEST_OPTION_REASON
+    | typeof PROVIDER_SAFETY_REFUSAL_REASON;
 }
 
 interface PiThinkingBlock {
@@ -777,18 +785,21 @@ function piAssistantErrorOf(rawError: string): PiPendingAssistantError {
   const signals = extractNonSecretErrorSignals(rawError);
   const errorStatus = signals.errorStatus ?? (isPiInvalidRequestEnvelope(rawError) ? 400 : undefined);
   const redactedError = redactSensitiveText(rawError);
+  const isSafetyRefusal = isProviderSafetyRefusalError(rawError);
   return {
     message: redactedError,
     sdkError: redactedError,
     ...(errorStatus !== undefined ? { errorStatus } : {}),
-    ...(signals.usageLimit ? { usageLimit: true } : {}),
-    ...(isContextOverflowErrorMessage(redactedError)
-      ? { reason: CONTEXT_OVERFLOW_REASON }
-      : isUnsupportedRequestOptionErrorMessage(redactedError)
-        ? { reason: UNSUPPORTED_REQUEST_OPTION_REASON }
-        : isStreamInterruptedErrorMessage(redactedError) || isPiAbortedRequest(redactedError)
-          ? { reason: UPSTREAM_STREAM_INTERRUPTED_REASON }
-          : {}),
+    ...(!isSafetyRefusal && signals.usageLimit ? { usageLimit: true } : {}),
+    ...(isSafetyRefusal
+      ? { reason: PROVIDER_SAFETY_REFUSAL_REASON }
+      : isContextOverflowErrorMessage(redactedError)
+        ? { reason: CONTEXT_OVERFLOW_REASON }
+        : isUnsupportedRequestOptionErrorMessage(redactedError)
+          ? { reason: UNSUPPORTED_REQUEST_OPTION_REASON }
+          : isStreamInterruptedErrorMessage(redactedError) || isPiAbortedRequest(redactedError)
+            ? { reason: UPSTREAM_STREAM_INTERRUPTED_REASON }
+            : {}),
   };
 }
 
@@ -875,6 +886,7 @@ export function translatePiEvent(
   event: PiRpcEvent,
   queue: AsyncQueue<AgentEvent>,
   ctx: PiTranslateContext,
+  responsesCompletion?: PiResponsesCompletion,
 ): void {
   const projection = piToolMarkupProjection(ctx);
   const message = event.message as PiAssistantMessage | undefined;
@@ -884,7 +896,16 @@ export function translatePiEvent(
     || message?.stopReason === 'length' || isCurrentTurnHostAbortRequested(ctx);
   if (event.type === 'message_end' && message?.role === 'assistant') projection.setMessage(message.content, preserve);
   const generation = ctx.turnGeneration;
-  translatePiEventInternal(event, projection.queue(queue) as AsyncQueue<AgentEvent>, ctx);
+  // Projection normalizes the reply and can convert a nominal completion into an
+  // error. Attach private proof to the final event object, after that projection.
+  const sink = responsesCompletion ? { push: (terminal: AgentEvent) => {
+    const result = terminal.data as { status?: string; silentStop?: boolean; result?: string } | null;
+    if (terminal.type === 'done' && result?.status === 'completed' && !result.silentStop && result.result?.trim()) {
+      markPiResponsesCompletion(terminal, responsesCompletion);
+    }
+    return queue.push(terminal);
+  } } : queue;
+  translatePiEventInternal(event, projection.queue(sink) as AsyncQueue<AgentEvent>, ctx);
   if (ctx.turnGeneration !== generation) projection.resetTurn(queue);
   if (event.type === 'message_end' && message?.role === 'assistant') projection.finish(queue, preserve);
 }
@@ -1289,6 +1310,9 @@ function translatePiEventInternal(
       const outputLimited = !hostAbortRequested
         && !ctx.terminalAssistantErrorEmitted
         && ctx.finalAssistantStopReason === 'length';
+      const safetyRefusalStopped = !hostAbortRequested
+        && !ctx.terminalAssistantErrorEmitted
+        && (ctx.finalAssistantStopReason === 'refusal' || ctx.finalAssistantStopReason === 'content_filter');
       const usage = {
         ...piTurnUsageOf(ctx),
         // durationMs is deliberately generation-only. Prefer the calibrated meter's
@@ -1313,6 +1337,12 @@ function translatePiEventInternal(
         // Consumers may settle on this error and ignore the paired done.
         result: ctx.finalAssistantText,
         usage,
+      } : safetyRefusalStopped && ctx.finalAssistantText.trim().length === 0 ? {
+        message: 'The model provider blocked this response under its safety policy.',
+        sdkError: `Pi response stopped with ${ctx.finalAssistantStopReason}`,
+        reason: PROVIDER_SAFETY_REFUSAL_REASON,
+        result: '',
+        usage,
       } : null);
       const outcome = terminalError || ctx.terminalAssistantErrorEmitted
         ? 'failed'
@@ -1336,6 +1366,7 @@ function translatePiEventInternal(
       }
       const silentStop = outcome === 'completed'
         && !hostAbortRequested
+        && !safetyRefusalStopped
         && pendingAssistantError === null
         && !ctx.terminalAssistantErrorEmitted
         && ctx.finalAssistantText.trim().length === 0;

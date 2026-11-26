@@ -105,6 +105,7 @@ import {
   useRemoteHomeStatusVersion,
 } from '@/session/remoteSessionStore';
 import {
+  applyRemoteScheduleTimingsToIndex,
   remoteScheduleEventStore,
   useRemoteScheduleEventSnapshot,
   useRemoteScheduleMirrorInvalidations,
@@ -417,8 +418,8 @@ function DeviceDetailScreenContent() {
   }, [loadSessions, listQueryScope]);
 
   useEffect(() => {
-    if (screenFocused && appStateActive && scheduleEventSnapshot.sessionIndexVersion > 0) void loadSessions();
-  }, [appStateActive, loadSessions, scheduleEventSnapshot.sessionIndexVersion, screenFocused]);
+    if (screenFocused && appStateActive && scheduleEventSnapshot.sessionListVersion > 0) void loadSessions();
+  }, [appStateActive, loadSessions, scheduleEventSnapshot.sessionListVersion, screenFocused]);
 
   // Once sessions have loaded, visibility alone must resume a cancelled index
   // even before the first schedule event. Keep the initial list-first ordering.
@@ -427,6 +428,7 @@ function DeviceDetailScreenContent() {
     if (!screenFocused || !appStateActive) return;
     if (
       lastSyncedAt === null
+      && scheduleEventSnapshot.sessionIndexVersion === 0
       && scheduleEventSnapshot.scheduleListVersion === 0
       && scheduleEventSnapshot.unreadClearVersion === 0
     ) return;
@@ -445,6 +447,7 @@ function DeviceDetailScreenContent() {
     deviceId,
     maker,
     lastSyncedAt,
+    scheduleEventSnapshot.sessionIndexVersion,
     scheduleEventSnapshot.scheduleListVersion,
     scheduleEventSnapshot.unreadClearVersion,
     screenFocused,
@@ -458,9 +461,13 @@ function DeviceDetailScreenContent() {
     [messageVersion, sessions],
   );
   const messagePreviewIndex = useStableValue(messagePreviewIndexRaw, mapContentEqual);
+  const effectiveScheduleIndex = useMemo(
+    () => applyRemoteScheduleTimingsToIndex(scheduleIndex, scheduleEventSnapshot.scheduleTimings),
+    [scheduleEventSnapshot.scheduleTimings, scheduleIndex],
+  );
   const filterCounts = useMemo(
-    () => summarizeRemoteSessionOverview(sessions, pendingInteractionIndex, scheduleIndex),
-    [pendingInteractionIndex, scheduleIndex, sessions],
+    () => summarizeRemoteSessionOverview(sessions, pendingInteractionIndex, effectiveScheduleIndex),
+    [effectiveScheduleIndex, pendingInteractionIndex, sessions],
   );
 
   const sections = useMemo(
@@ -469,7 +476,7 @@ function DeviceDetailScreenContent() {
       projectAliasDeviceId: deviceId,
       messagePreviewIndex,
       pendingInteractionIndex,
-      scheduleIndex,
+      scheduleIndex: effectiveScheduleIndex,
       searchQuery,
       // 自动化任务作用域页无筛选 UI 且承诺"全部 N 次运行",statusFilter 固定 'all'
       // (本页 statusFilter state 停留在初值 'active',若沿用会把归档 run 滤掉)。
@@ -483,11 +490,11 @@ function DeviceDetailScreenContent() {
     [
       automationScopeKey,
       deviceId,
+      effectiveScheduleIndex,
       projectAliases,
       i18nInstance.language,
       messagePreviewIndex,
       pendingInteractionIndex,
-      scheduleIndex,
       searchQuery,
       sessions,
       statusFilter,

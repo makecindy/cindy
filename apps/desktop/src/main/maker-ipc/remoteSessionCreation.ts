@@ -50,7 +50,7 @@ export function createRemoteSessionOpener(deps: {
   validateDirectory(path: string): Promise<HandoffWorkingDirValidation>;
   resolveExecution(options: RemoteSessionCreation): Promise<Execution>;
   prepareWorktree(id: string, directory: string): Promise<{ ok: true; path: string } | Failure>;
-  discardWorktree(id: string): Promise<unknown>;
+  discardWorktree(id: string, path: string, assertOwner: () => void): Promise<unknown>;
   broadcastCreated(id: string): void;
 }) {
   return async (id: string, input: RemoteSessionCreation, guard: TaskActionDeliveryGuard): Promise<({ ok: true } & RemoteSessionCreated) | Failure> => {
@@ -111,7 +111,7 @@ export function createRemoteSessionOpener(deps: {
           workingDir: row.workingDir ?? '', worktreePath };
       } catch (error) {
         // A database write may have committed even when its reply was lost. Keep its workspace.
-        if (worktreePath && !persistenceStarted) await deps.discardWorktree(id).catch(() => undefined);
+        if (worktreePath && !persistenceStarted) await deps.discardWorktree(id, worktreePath, assertOwner).catch(() => undefined);
         if (persistenceStarted) return { ok: false, errorCode: 'DELIVERY_UNKNOWN',
           message: 'Creation may have completed. Inspect this task ID before sending or creating again.' };
         throw error;

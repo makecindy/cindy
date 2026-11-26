@@ -161,15 +161,24 @@
 
   .plugin-catalog-filters {
     width: auto;
+    align-self: flex-end;
   }
 }
 
 @container plugin-management (max-width: 720px) {
-  .plugin-management-layout-root .plugin-management-header {
+  .plugin-management-header[data-catalog-library='plugins'] .plugin-management-header-frame {
+    gap: var(--space-2);
+  }
+
+  .plugin-management-header[data-catalog-library='plugins'] .plugin-management-actions {
+    flex-shrink: 1;
+  }
+
+  .plugin-management-header[data-catalog-library='skills'] {
     height: 7rem;
   }
 
-  .plugin-management-layout-root .plugin-management-header-frame {
+  .plugin-management-header[data-catalog-library='skills'] .plugin-management-header-frame {
     display: grid;
     grid-template-areas:
       'tools'
@@ -181,22 +190,22 @@
     row-gap: var(--space-2);
   }
 
-  .plugin-management-layout-root .plugin-motion-tabs {
+  .plugin-management-header[data-catalog-library='skills'] .plugin-management-tabs {
     grid-area: tabs;
     width: 100%;
   }
 
-  .plugin-management-layout-root .plugin-management-tab {
+  .plugin-management-header[data-catalog-library='skills'] .plugin-management-tab {
     min-width: max-content;
     flex: 1 0 auto;
   }
 
-  .plugin-management-layout-root .plugin-management-tools {
+  .plugin-management-header[data-catalog-library='skills'] .plugin-management-tools {
     grid-area: tools;
     width: 100%;
   }
 
-  .plugin-management-layout-root .plugin-management-search-control {
+  .plugin-management-header[data-catalog-library='skills'] .plugin-management-search-control {
     min-width: 0;
     max-width: none;
     flex: 1 1 auto;
@@ -208,9 +217,31 @@
     justify-content: center;
   }
 
-  .plugin-management-layout-root
-    :is(.plugin-management-action-label, .plugin-management-action-chevron) {
+  .plugin-management-layout-root .plugin-management-action-label {
     display: none;
+  }
+}
+
+@container plugin-management (max-width: 360px) {
+  .plugin-management-header[data-catalog-library='plugins'] {
+    height: 7rem;
+  }
+
+  .plugin-management-header[data-catalog-library='plugins'] .plugin-management-header-frame {
+    flex-direction: column;
+    justify-content: center;
+  }
+
+  .plugin-management-header[data-catalog-library='plugins'] :is(.plugin-management-tabs, .plugin-management-tools) {
+    flex: 0 0 auto;
+  }
+
+  .plugin-management-header[data-catalog-library='plugins'] .plugin-management-tabs {
+    align-self: flex-start;
+  }
+
+  .plugin-management-header[data-catalog-library='plugins'] .plugin-management-tools {
+    width: 100%;
   }
 }
 
@@ -264,4 +295,409 @@
     animation: none !important;
     transition: none !important;
   }
+}
+
+.plugin-catalog-frame {
+  padding-block-start: var(--space-1_5);
+}
+
+.plugin-catalog-recommendations {
+  margin-block: var(--space-6) var(--space-5);
+}
+
+.plugin-installed-empty {
+  padding-block: calc(var(--space-20) + var(--space-2)) calc(var(--space-16) - var(--space-1));
+}
+
+.plugin-catalog-virtual-grid {
+  width: calc(100% + 2 * var(--space-3_5));
+  margin-inline: calc(-1 * var(--space-3_5));
+}
+
+.plugin-catalog-heading {
+  position: sticky;
+  top: 0;
+  z-index: var(--z-raised);
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-block-size: var(--space-11);
+  background-color: var(--surface);
+}
+
+.plugin-catalog-heading::before {
+  position: absolute;
+  inset-inline: 0;
+  inset-block-end: 0;
+  block-size: 1px;
+  background: var(--border-default);
+  pointer-events: none;
+  content: '';
+}
+
+.plugin-catalog-heading-tabs.cindy-segmented {
+  min-inline-size: 0;
+  max-inline-size: calc(100% + var(--space-2));
+  margin-inline-start: calc(-1 * var(--space-2));
+  padding: 0;
+  gap: var(--space-2_5);
+  border-radius: 0;
+  background: transparent;
+  scrollbar-width: none;
+}
+
+.plugin-catalog-heading-tabs::-webkit-scrollbar {
+  display: none;
+}
+
+.plugin-catalog-heading-tabs > .cindy-segmented-plate {
+  display: none;
+}
+
+.plugin-catalog-heading-tabs > .cindy-segmented-option {
+  padding-inline: var(--space-2);
+  border: 0;
+  color: var(--text-tertiary);
+  transition: color var(--motion-fast);
+}
+
+.plugin-catalog-heading-tabs > .cindy-segmented-option[data-selected='true'] {
+  color: var(--text-primary);
+}
+
+.plugin-catalog-heading-tabs > .cindy-segmented-option[data-selected='true']::before {
+  position: absolute;
+  inset-inline: var(--space-2);
+  inset-block-end: 0;
+  block-size: 2px;
+  background: var(--text-primary);
+  content: '';
+}
+
+.plugin-catalog-heading-tabs.cindy-segmented > .cindy-segmented-option[data-selected='false']:enabled:hover {
+  background-color: transparent;
+  color: var(--text-secondary);
+}
+
+.plugin-catalog-heading-tabs > .cindy-segmented-option:enabled:active {
+  transform: none;
+}
+
+.plugin-catalog-heading-tabs > .cindy-segmented-option:focus-visible {
+  outline-offset: -2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .plugin-catalog-heading-tabs > .cindy-segmented-option {
+    transition: none;
+  }
+}
+
+.plugin-management-tabs > .cindy-segmented-option:focus-visible {
+  outline-offset: 0;
+}
+
+.plugin-catalog-heading-title {
+  display: flex;
+  align-items: center;
+  min-block-size: var(--space-11);
+}
+
+.plugin-catalog-heading-navigation {
+  position: relative;
+  min-inline-size: 0;
+  max-inline-size: 100%;
+}
+
+/* Keep the leading slot stable when search replaces the tab labels. */
+.plugin-catalog-heading-navigation > [aria-hidden='true'] {
+  visibility: hidden;
+}
+
+.plugin-catalog-heading-navigation > .plugin-catalog-heading-title {
+  position: absolute;
+  inset-block: 0;
+  inset-inline-start: 0;
+}
+
+.plugin-catalog-heading > [data-catalog-region='target'] {
+  margin-inline-start: auto;
+  flex-shrink: 0;
+  max-inline-size: 50%;
+}
+
+.plugin-catalog-heading [data-catalog-region='target'] button {
+  min-width: 0;
+  max-width: min(17.5rem, calc(100% + var(--space-3)));
+  margin-inline-end: calc(-1 * var(--space-3));
+}
+
+.plugin-recommendation-slots {
+  --plugin-recommendation-columns: 2;
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1.72fr) minmax(0, 1fr);
+  grid-template-rows: repeat(2, minmax(0, 1fr));
+  gap: var(--space-4);
+}
+
+.plugin-recommendation-slots > :first-child {
+  grid-row: span 2;
+  min-height: 17rem;
+}
+
+.plugin-recommendation-progress {
+  position: absolute;
+  grid-area: 1 / 1 / 3 / 2;
+  inset: 1px;
+  z-index: var(--z-raised);
+  overflow: hidden;
+  border-radius: calc(var(--radius-xl) - 1px);
+  pointer-events: none;
+}
+
+.plugin-recommendation-progress-line {
+  position: absolute;
+  inset: auto 0 0;
+  height: var(--space-0_5);
+  transform: scaleX(0);
+  transform-origin: left;
+  background-color: var(--text-tertiary);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .plugin-recommendation-progress { display: none; }
+}
+
+.plugin-recommendation-card {
+  display: grid;
+  grid-template: minmax(0, 1fr) / minmax(0, 1fr);
+  overflow: clip;
+}
+
+.plugin-recommendation-face {
+  position: relative;
+  display: grid;
+  grid-area: 1 / 1;
+  min-width: 0;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas: 'identity action' 'description description';
+  align-content: center;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  overflow: clip;
+}
+
+.plugin-recommendation-face[hidden] { display: none; }
+.plugin-recommendation-head { grid-area: identity; }
+.plugin-recommendation-description { grid-area: description; }
+.plugin-recommendation-card:not([data-featured='true']) .plugin-recommendation-head > span:first-child {
+  width: var(--space-10);
+  height: var(--space-10);
+}
+.plugin-recommendation-card[data-featured='false'] .plugin-catalog-name-group {
+  flex-wrap: wrap;
+  row-gap: 0;
+}
+.plugin-recommendation-card[data-featured='false'] .plugin-catalog-name {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  line-height: 1.3333;
+}
+.plugin-recommendation-actions { grid-area: action; justify-self: end; position: relative; }
+.plugin-recommendation-card[data-featured='true'] .plugin-recommendation-face {
+  grid-template-rows: minmax(var(--space-16), auto) auto;
+  align-content: start;
+  gap: var(--space-5);
+  padding: var(--space-7);
+}
+.plugin-recommendation-card[data-featured='true'] .plugin-catalog-name-group {
+  flex-wrap: wrap;
+  row-gap: 0;
+}
+.plugin-recommendation-card[data-featured='true'] .plugin-catalog-name {
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.plugin-recommendation-card[data-featured='true'] .plugin-recommendation-actions { white-space: nowrap; }
+.plugin-recommendation-card[data-featured='true'] .plugin-recommendation-description { -webkit-line-clamp: 4; }
+
+.plugin-installed-row {
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-areas: 'icon identity actions' 'icon description actions';
+}
+
+.plugin-installed-row > :first-child { grid-area: icon; align-self: center; }
+.plugin-installed-row-identity { grid-area: identity; }
+.plugin-installed-row-description { grid-area: description; align-self: start; }
+.plugin-installed-row-actions { grid-area: actions; align-self: center; }
+
+/* The action band can shorten the description without changing the identity line. */
+.plugin-installed-row[data-fixed-actions='true'] {
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  grid-template-areas: 'icon identity identity identity' 'icon description hover fixed';
+  column-gap: 0;
+}
+.plugin-installed-row[data-fixed-actions='true'] > :first-child { margin-inline-end: var(--space-4); }
+.plugin-installed-row[data-fixed-actions='true'] .plugin-installed-row-description { align-self: center; }
+.plugin-installed-row[data-fixed-actions='true'] .plugin-installed-row-hover-actions {
+  grid-area: hover;
+  margin-inline-start: var(--space-2);
+  flex-direction: row;
+}
+.plugin-installed-row[data-fixed-actions='true'] .plugin-installed-row-fixed-actions {
+  grid-area: fixed;
+  margin-inline-start: var(--space-2);
+}
+
+[data-plugin-list-scrolling] .plugin-catalog-row:not(:focus-within) {
+  background-color: transparent;
+  transition: none;
+}
+
+@media (hover: hover) and (pointer: fine) and (not (any-pointer: coarse)) {
+  .plugin-installed-row:not(:focus-within, :hover:not([data-plugin-list-scrolling] *)) .plugin-installed-row-hover-actions {
+    opacity: 0;
+    pointer-events: none;
+  }
+
+  .plugin-installed-row[data-fixed-actions='false']:has(.plugin-installed-row-hover-actions):not(:focus-within, :hover:not([data-plugin-list-scrolling] *)) .plugin-installed-row-description {
+    grid-column-end: -1;
+  }
+  .plugin-installed-row[data-fixed-actions='true']:not(:focus-within, :hover:not([data-plugin-list-scrolling] *)) .plugin-installed-row-description {
+    grid-column-end: fixed-start;
+  }
+}
+
+@container plugin-management (max-width: 800px) {
+  .plugin-catalog-name-group { flex-wrap: wrap; }
+  .plugin-catalog-name { white-space: normal; overflow-wrap: anywhere; }
+  .plugin-installed-row { column-gap: var(--space-3); }
+  .plugin-installed-row[data-fixed-actions='true'] > :first-child { margin-inline-end: var(--space-3); }
+  .plugin-installed-name-group {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: var(--space-1);
+  }
+  .plugin-installed-name {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    white-space: normal;
+    overflow-wrap: break-word;
+  }
+  .plugin-installed-row-actions {
+    flex-direction: column;
+    align-items: flex-end;
+  }
+}
+
+@container plugin-management (width < 800px) {
+  .plugin-market-row-name-group {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: var(--space-1);
+  }
+  .plugin-market-row-name-group .plugin-catalog-name {
+    overflow: visible;
+    text-overflow: clip;
+  }
+  .plugin-market-row-facts {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+  }
+  .plugin-installed-narrow-metrics:not(:empty) { display: inline-flex; }
+  .plugin-installed-wide-metrics { display: none; }
+}
+
+@container plugin-management (640px < width < 800px) {
+  .plugin-recommendation-card[data-featured='false'] .plugin-catalog-name-group {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+  .plugin-recommendation-card[data-featured='false'] .plugin-catalog-name {
+    white-space: normal;
+    overflow: visible;
+    text-overflow: clip;
+  }
+}
+
+@container plugin-management (max-width: 640px) {
+  .plugin-recommendation-slots {
+    --plugin-recommendation-columns: 1;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: none;
+  }
+  .plugin-recommendation-slots > :first-child { grid-row: auto; min-height: 0; }
+  .plugin-recommendation-progress { display: none; }
+  .plugin-update-icons { display: none; }
+}
+
+.plugin-management-header {
+  height: calc(var(--space-16) + var(--space-1));
+}
+
+.plugin-management-header[data-catalog-library='plugins'] .plugin-management-tools {
+  gap: var(--space-1);
+}
+
+.plugin-management-header[data-catalog-library='plugins'] .plugin-management-actions {
+  gap: var(--space-2);
+}
+
+.plugin-management-search-expanded {
+  flex: 0 1 15.5rem;
+  min-width: 5rem;
+}
+
+.plugin-management-search-expanded .plugin-management-search-trigger {
+  position: absolute;
+  inset-inline-start: var(--space-1);
+  pointer-events: none;
+  color: var(--text-primary);
+  z-index: var(--z-raised);
+}
+
+.plugin-management-search-expanded .plugin-management-search-clear {
+  position: absolute;
+  inset-block: 0;
+  inset-inline-end: var(--space-1);
+  margin-block: auto;
+}
+
+.plugin-publish-trigger:enabled:not([aria-disabled='true']):hover {
+  color: var(--text-primary);
+}
+
+:is(.plugin-catalog-borderless-control, [data-catalog-region='target'] > button) {
+  --button-face-bg: transparent;
+  --button-face-border: transparent;
+}
+
+.plugin-catalog-borderless-control,
+[data-catalog-region='target'] > button {
+  color: var(--text-secondary);
+}
+
+.plugin-catalog-borderless-control {
+  font-weight: 400;
+}
+
+:is(.plugin-catalog-borderless-control, .plugin-publish-trigger, [data-catalog-region='target'] > button):enabled:not([aria-disabled='true']):hover {
+  --button-face-bg: var(--surface-hover-soft);
+}
+
+:is(.plugin-catalog-borderless-control, [data-catalog-region='target'] > button):enabled:not([aria-disabled='true']):active {
+  --button-face-bg: var(--button-secondary-pressed);
+}
+
+.plugin-publish-icon {
+  flex-shrink: 0;
 }
