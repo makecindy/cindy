@@ -69,7 +69,7 @@ async function fixture(t, overrides = {}) {
     },
     isOneShotRouteDisabled: async () => false,
     oneShot: {
-      agentSupportsOneShot: () => false,
+      agentSupportsOneShot: overrides.agentSupportsOneShot ?? (() => false),
       requestUtilityText: async (_maker, prompt, opts) => {
         oneShotPrompts.push({ prompt, opts });
         if (opts?.beforeDispatch && !(await opts.beforeDispatch())) {
@@ -105,7 +105,7 @@ async function fixture(t, overrides = {}) {
       liveSessions.set(opts.id, session);
       return session;
     },
-    oneShot: async () => '',
+    oneShot: overrides.oneShot ?? (async () => ''),
   };
 
   let queue;
@@ -226,6 +226,22 @@ test('regenerateTitle reads SQLite messages, rejects empty sessions, and refuses
   const heldRun = await f.autoTitle.runAutoTitle({ sessionId: 's-empty', text: 'should skip' });
   assert.deepEqual(heldRun, { applied: false, done: false });
   assert.equal((await f.readSession('s-empty')).title, DEFAULT_DRAFT_SESSION_TITLE);
+});
+
+test('ACP auto-title keeps the placeholder when the auxiliary chain fails without dispatching to a built-in engine', async t => {
+  const engineOneShot = t.mock.fn(async () => 'Built-in engine title');
+  const f = await fixture(t, {
+    nextAiTitle: async () => ({ ok: false, reason: 'unavailable' }),
+    agentSupportsOneShot: () => true,
+    oneShot: engineOneShot,
+  });
+  await f.seedSession('s-plugin', { agentKind: 'acp' });
+  const text = 'Plan the release';
+  await f.autoTitle.runAutoTitle({ sessionId: 's-plugin', text });
+
+  assert.equal(f.oneShotPrompts.length, 1);
+  assert.equal(engineOneShot.mock.callCount(), 0);
+  assert.equal((await f.readSession('s-plugin')).title, text);
 });
 
 test('Browser runAutoTitle skips placeholder write when user-message screening hook is active', async t => {

@@ -1,6 +1,7 @@
 import { and, eq } from 'drizzle-orm';
 import type { AgentKind, Maker } from '@cindy/maker-core';
 import { DEFAULT_DRAFT_SESSION_TITLE, normalizeAutoTitle } from '@cindy/maker-shared/session-title';
+import { dbToMakerAgentKind } from '../../../desktop/src/shared/agentKindConversion.js';
 import { deriveAutoTitleSeed, type AgentInputQueuedMessage } from '../../../desktop/src/shared/agentInputQueue.js';
 import { resolveSystemLocale, type SupportedLocale } from '../../../desktop/src/shared/locale.js';
 import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../../../desktop/src/main/appSessionState.js';
@@ -83,8 +84,6 @@ export function createHostAutoTitle(deps: HostAutoTitleDeps) {
       .where(eq(sessionTable.id, sessionId))
       .limit(1);
     if (!row) return null;
-    const agentKind: OverwritableAutoTitleTarget['agentKind'] =
-      row.agentKind === 'codex' || row.agentKind === 'pi' ? row.agentKind : 'claude-code';
     const overwritable =
       row.title === DEFAULT_DRAFT_SESSION_TITLE ||
       (!!row.parentSessionId && row.title.startsWith(FORK_PLACEHOLDER_TITLE_PREFIX)) ||
@@ -92,7 +91,7 @@ export function createHostAutoTitle(deps: HostAutoTitleDeps) {
     if (!overwritable) return null;
     return {
       title: row.title,
-      agentKind,
+      agentKind: row.agentKind === 'acp' ? null : dbToMakerAgentKind(row.agentKind),
       isDefaultDraftTitle: row.title === DEFAULT_DRAFT_SESSION_TITLE,
     };
   }
