@@ -530,8 +530,11 @@ describe('model group failure handling', () => {
       pendingSchedulerAutoResumeRunBySession: new Map(), notifySchedulerAutoResumeFailed: vi.fn(),
       autoResumeAttemptToken: () => null,
     } as never);
-    const fail = async (signals: Record<string, unknown>) => {
-      const progress = (hooks.onResumableTurnError as (...args: unknown[]) => unknown)('s', signals, item);
+    let lastResume: unknown;
+    const fail = async (signals: Record<string, unknown>, onContinuedInput = false) => {
+      const failedItem = onContinuedInput ? { ...item, autoResume: true, autoResumeInfo: lastResume } : item;
+      const progress = (hooks.onResumableTurnError as (...args: unknown[]) => unknown)('s', signals, failedItem);
+      lastResume = progress;
       if (!progress) return null;
       await scheduled.shift()!();
       const call = fallback.mock.calls.at(-1)!;
@@ -539,6 +542,19 @@ describe('model group failure handling', () => {
     };
     return { fail, fallback, delays, resume, finalize, noteProgress: () => guard.noteProgress('s', lastDispatchedToken) };
   }
+
+  // Unit: an accepted CONTINUE that stalls again gets another chance only after
+  // real output. Enabled model groups keep their own source-switch retry budget.
+  it.each([
+    ['disabled', false, 1], ['disabled', true, 2], ['enabled', false, 2],
+  ] as const)('recovers repeated reconnect with group=%s progress=%s', async (policy, progress, expectedSends) => {
+    const h = groupHarness(policy);
+    const signals = { reason: 'codex_reconnect_stalled' };
+    await h.fail(signals);
+    if (progress) expect(h.noteProgress()).toBe(true);
+    await h.fail(signals, true);
+    expect(h.resume).toHaveBeenCalledTimes(expectedSends);
+  });
 
   // Product §4.1–4.5 / #12440: the hooks now run with the production guard instead of an
   // always-allow fake. Two transient failures on each of A and B must still let C receive the retry.

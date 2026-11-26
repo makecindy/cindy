@@ -69,6 +69,7 @@ import {
   isStreamInterruptedErrorMessage,
 } from '@/utils/streamInterruptError';
 import { isQuotaExhaustedErrorMessage } from '@/utils/quotaError';
+import { parseUpstreamStatusError } from '@/utils/upstreamStatusError';
 import { parseTerminalRateLimitRetryProgress } from '@/utils/rateLimitRetry';
 import type { UsageLimitRecoveryHint } from '@/lib/usageLimitRecovery';
 import { errorReasonI18nKey as resolveErrorReasonI18nKey, localizeReconnectStall } from './errorReasonI18n';
@@ -431,8 +432,20 @@ export function ErrorBanner({
     !isProviderSafetyRefusal && isOverloadErrorMessage(error, undefined, errorReason);
   const isStreamInterrupted =
     !isProviderSafetyRefusal && isStreamInterruptedErrorMessage(error, errorReason);
+  // 上游 5xx 但没带错误正文:兜底文案只会说「回复未完成」,看不出是上游拒了。
+  const upstreamStatusError = !isProviderSafetyRefusal ? parseUpstreamStatusError(error) : null;
   const overloadRetryProgress = parseOverloadRetryProgress(error);
   const errorReasonI18nKey = resolveErrorReasonI18nKey(errorReason, error);
+  // #12970 review: a history read the provider refused means the message was
+  // never accepted. That fact outranks every status word in the message —
+  // `(status 502)` and friends would otherwise land in the network/overload
+  // branches and tell the user the service was unreachable, hiding that nothing
+  // was ever sent. Both bounded diagnostics share the same priority.
+  const piRetryHistoryKey =
+    errorReasonI18nKey === 'chat.errorBanner.piRetryHistoryUnavailable'
+    || errorReasonI18nKey === 'chat.errorBanner.piRetryHistoryTooLarge'
+      ? errorReasonI18nKey
+      : undefined;
   const toolLoopI18nKey =
     errorReason === 'tool_use_loop_detected' ? getToolLoopI18nKey(toolLoop) : undefined;
   const localizedReasonError =
@@ -580,6 +593,11 @@ export function ErrorBanner({
     displayError = piCloudContextRecovery;
   } else if (isProviderSafetyRefusal) {
     displayError = t('chat.errorBanner.providerSafetyRefusal');
+    hasSpecialGuidance = false;
+  } else if (piRetryHistoryKey) {
+    // 「本次消息未发送」优先于网络/过载/上游状态等宽泛分支:历史读取被拒时上游
+    // 返回什么状态都与「这条消息根本没发出去」无关,用户先要知道的是这件事。
+    displayError = t(piRetryHistoryKey);
     hasSpecialGuidance = false;
   } else if (geminiLimit !== null) {
     displayError = t(errorReason === 'gemini-input-retry-exhausted' ? 'chat.geminiRateLimit.exhausted' : 'chat.geminiRateLimit.title');
@@ -729,6 +747,11 @@ export function ErrorBanner({
             ? 'chat.errorBanner.networkUnreachable'
             : 'chat.errorBanner.networkUnreachableNoRetry',
         );
+  } else if (upstreamStatusError) {
+    // 上游 5xx(无正文):标题直接点名状态,原始报错折叠可查。
+    // 放在网络分支之后 —— 502/503/504 仍走「服务暂时不可达」那套更贴近恢复动作的文案。
+    displayError = t('chat.errorBanner.upstreamStatusError', { status: upstreamStatusError.status });
+    hasSpecialGuidance = false;
   } else {
     // Keep the raw message available to every specialized gate above. Only
     // the final fallback uses the stable reason map, so auth/network/overload

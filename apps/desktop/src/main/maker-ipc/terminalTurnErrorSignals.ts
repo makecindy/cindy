@@ -21,6 +21,7 @@ export function readTerminalTurnErrorSignals(
               reason?: unknown;
               sdkError?: unknown;
               errorStatus?: unknown;
+              pendingToolCount?: unknown;
               reconnectHandoff?: unknown;
               toolLoop?: unknown;
               outputLimit?: unknown;
@@ -49,6 +50,10 @@ export function readTerminalTurnErrorSignals(
         ...(typeof errData?.sdkError === 'string' ? { sdkError: errData.sdkError } : {}),
         ...(typeof errData?.reason === 'string' ? { reason: errData.reason } : {}),
         ...(typeof errData?.errorStatus === 'number' ? { errorStatus: errData.errorStatus } : {}),
+        ...(errData?.reason === 'codex_reconnect_stalled' &&
+          typeof errData.pendingToolCount === 'number' &&
+          Number.isSafeInteger(errData.pendingToolCount) && errData.pendingToolCount > 0
+          ? { pendingToolCount: errData.pendingToolCount } : {}),
         ...(errData?.reason === 'codex_reconnect_stalled' ? {
           recordReconnectHandoff: (handoff: ReconnectHandoff) => {
             errData.reconnectHandoff = handoff;

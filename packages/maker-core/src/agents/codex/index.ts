@@ -6278,6 +6278,14 @@ assertRouteCurrent();
       }
     };
     let registeredRootCodexThreadId: string | undefined;
+    let mcpInstanceClosed = false;
+    const closeCodexMcpInstance = (): void => {
+      if (mcpInstanceClosed) return;
+      mcpInstanceClosed = true;
+      if (!opts.sessionInstanceId) return;
+      try { this.deps.closeCodexMcpSessionInstance?.(opts.sessionInstanceId); }
+      catch (error) { log.warn('closeCodexMcpSessionInstance threw', { error: String(error) }); }
+    };
     const unregisterCodexMcpContext = (threadId: string): void => {
       if (registeredRootCodexThreadId === threadId) registeredRootCodexThreadId = undefined;
       textOnlyPolicyCleanups.get(threadId)?.();
@@ -6662,6 +6670,7 @@ assertRouteCurrent();
       resetUpstreamIdleForTurnEnd();
       unregisterCodexMcpContext(threadId);
       unregisterDescendantCodexMcpContexts();
+      closeCodexMcpInstance();
       activeToolContexts.clear();
       approvalDenials.clear();
       completedActiveToolTurns.clear();
@@ -6898,6 +6907,7 @@ assertRouteCurrent();
       } finally {
         if (registeredRootCodexThreadId) unregisterCodexMcpContext(registeredRootCodexThreadId);
         unregisterDescendantCodexMcpContexts();
+        closeCodexMcpInstance();
         releaseHostBindingLeaseIfNeeded();
         eventQueue.end();
       }
@@ -9490,18 +9500,30 @@ assertRouteCurrent();
         const attemptDetail = reconnectStallAttempt
           ? ` Last reconnect attempt: ${reconnectStallAttempt.attempt}/${reconnectStallAttempt.maxAttempts}.`
           : '';
-        const gatewayDetail = reconnectStallErrorStatus === undefined ? '' : ` (HTTP ${reconnectStallErrorStatus})`;
-        interruptTurnForProviderFailure({
-          reason: 'codex_reconnect_stalled',
-          timeoutMs: CODEX_RECONNECT_STALL_TIMEOUT_MS,
-          ignorePendingTools: true,
-          allowPendingTurnStart,
-          logLabel: 'codex reconnect watchdog tripped — interrupting stalled turn',
-          message: `The model connection has been retrying for ${Math.round(CODEX_RECONNECT_STALL_TIMEOUT_MS / 1000)}s ` +
-            `without making progress. The turn was interrupted automatically.${attemptDetail} ` +
-            `Pending tool calls at interruption: ${pendingToolItemIds.size}.${gatewayDetail}`,
-          errorStatus: reconnectStallErrorStatus,
-        });
+        const stalledMessage =
+          `The model connection has been retrying for ${Math.round(CODEX_RECONNECT_STALL_TIMEOUT_MS / 1000)}s ` +
+          `without making progress. The turn was interrupted automatically.${attemptDetail} ` +
+          `Pending tool calls at interruption: ${pendingToolItemIds.size}.` +
+          (pendingToolItemIds.size > 0 ? ' There were unconfirmed tool results when the connection stalled.' : '');
+        const emitStalled = (reason: string, message: string): void => {
+          if (
+            !isReconnectStallCurrent() ||
+            threadId !== stalledThreadId ||
+            reconnectStallTurnGeneration !== stalledTurnGeneration
+          ) return;
+          interruptTurnForProviderFailure({
+            reason,
+            timeoutMs: CODEX_RECONNECT_STALL_TIMEOUT_MS,
+            ignorePendingTools: true,
+            allowPendingTurnStart,
+            logLabel: 'codex reconnect watchdog tripped — interrupting stalled turn',
+            message: reconnectStallErrorStatus === undefined
+              ? message : `${message} (HTTP ${reconnectStallErrorStatus})`,
+            errorStatus: reconnectStallErrorStatus,
+          });
+        };
+        // History size does not establish why the connection stalled.
+        emitStalled('codex_reconnect_stalled', stalledMessage);
       }, slice);
       (reconnectStallTimer as unknown as { unref?: () => void }).unref?.();
     }
@@ -14263,6 +14285,7 @@ assertRouteCurrent();
       resetUpstreamIdleForTurnEnd();
       unregisterCodexMcpContext(threadId);
       unregisterDescendantCodexMcpContexts();
+      closeCodexMcpInstance();
       activeToolContexts.clear();
       approvalDenials.clear();
       completedActiveToolTurns.clear();

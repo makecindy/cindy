@@ -140,10 +140,16 @@ export function createInterruptedTurnAutoResumeHooks<RuntimeSession extends obje
       const startupAdmission = signals.reason === BOT_SUBSCRIPTION_STARTUP_ADMISSION_REASON;
       const sameRouteRetryable = reportPreparation || localPreparation || isInterruptedTurnError(signals) || groupScope === 'transient';
       const erroredAt = Date.now();
-      const decision = interruptedTurnAutoResumeGuard.onInterruptedTurn(sessionId, erroredAt,
-        groupScope !== null ? { enabled: true, maxEpisodeAttempts: modelGroupEpisodeLimit }
-          : modelGroupPolicy !== undefined ? { enabled: modelGroupInputs?.isInterruptedTurnAutoResumeEnabled() } : undefined,
-      );
+      const ordinaryReconnect = groupScope === null && signals.reason === 'codex_reconnect_stalled';
+      // A resumed connection can fail much later after useful work. The guard resets
+      // its consecutive counter on real output and keeps the overall episode cap.
+      const repeatReconnect = ordinaryReconnect && item.autoResume === true &&
+        item.autoResumeInfo?.reason === signals.reason;
+      const decision = interruptedTurnAutoResumeGuard.onInterruptedTurn(sessionId, erroredAt, {
+        ...(groupScope !== null ? { enabled: true, maxEpisodeAttempts: modelGroupEpisodeLimit }
+          : modelGroupPolicy !== undefined ? { enabled: modelGroupInputs?.isInterruptedTurnAutoResumeEnabled() } : {}),
+        ...(repeatReconnect ? { maxConsecutiveAttempts: 1 } : {}),
+      });
       if (decision.action !== 'resume') {
         // 不接管 → coordinator 走常规错误呈现(落 error 行 + 红横幅 + 「继续任务」)。
         // 额度耗尽 / 熔断 / 开关关闭都走这里:自愈救不动了就把方向盘交回用户。
@@ -320,8 +326,8 @@ export function createInterruptedTurnAutoResumeHooks<RuntimeSession extends obje
         ...(typeof signals.reason === 'string' && signals.reason.length > 0
           ? { reason: signals.reason }
           : {}),
-        attempt: decision.attempt,
-        maxAttempts: decision.maxAttempts,
+        attempt: ordinaryReconnect ? 1 : decision.attempt,
+        maxAttempts: ordinaryReconnect ? 1 : decision.maxAttempts,
         sessionTotal: decision.sessionTotal,
       };
     },

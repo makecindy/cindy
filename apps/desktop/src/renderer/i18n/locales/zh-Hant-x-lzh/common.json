@@ -2778,7 +2778,7 @@
         "description": "Ubuntu 用系統 .deb 安裝套件。Arch Linux 與 Omarchy 用受管之使用者目錄安裝程式，採同一份已驗之 .deb 內容，無須 Debian 套件管理器。",
         "item1": "Ubuntu：用 sudo apt install ./cindy-<version>-<arch>.deb。Arch/Omarchy：請依 docs/linux.md 中之使用者目錄安裝指南行之。",
         "item2": "點擊更新後，系統 .deb 安裝須授權；使用者目錄安裝無須系統密碼即可易版。他套件管理器所裝之版，請經對應之套件管理器更新。",
-        "item3": "Linux x64 與 arm64 支援 Beta 渠道。Linux 唯於君擇重新啟動時施更新，閒置時不自動安裝。"
+        "item3": "Linux x64 與 arm64 支援 Beta 渠道。使用者目錄所裝者，閒時可自行安裝更新；已設免密授權的系統 .deb 所裝者，閒時亦可自行安裝更新，其餘系統 .deb 所裝者，唯於君擇重新啟動時施更新。"
       },
       "qnaTitle": "徑問",
       "qnaDescription": "未得其解？徑問君所欲為",
@@ -2853,7 +2853,7 @@
       "openLogsDirError": "日誌目錄未能啟",
       "autoUpdateLabel": "閒時自裝更新",
       "autoUpdateDescription": "更新取下既畢，若此機 10 分鐘無操作且無差事方行，則自重啟應用以成安裝。",
-      "linuxUpdateDescription": "更新於君擇重啟時生效。系統 .deb 安裝須系統密碼，使用者目錄安裝則否。他法所裝者，請以相應套件管理器更新。",
+      "linuxUpdateDescription": "系統 .deb 安裝須系統密碼，更新於君擇重啟時生效；使用者目錄安裝則無須密碼，可於閒時自行安裝。他法所裝者，請以相應套件管理器更新。",
       "autoUpdateEnabledToast": "已啟閒時自裝更新",
       "autoUpdateDisabledToast": "已闔閒時自裝更新",
       "autoUpdateSaveFailed": "自更新之設未能存",
@@ -4645,6 +4645,15 @@
       "menu": {
         "disableProvider": "停此供方",
         "enableProvider": "啟此供方",
+        "icon": "連接之徽",
+        "appearance": "名與徽",
+        "ownImage": "自擇圖",
+        "imageError": "請擇 PNG、JPG 或 WebP 圖，不逾 10 MB。",
+        "connectionIcon": {
+          "default": "如常",
+          "personal": "私用",
+          "work": "公用"
+        },
         "hideProvider": "隱於模型之選",
         "showProvider": "顯於模型之選"
       },
@@ -7237,6 +7246,30 @@
             "controller-encryption-required": "本機已選「唯用 Agent-Net」。須先於本機解此限，乃可使彼機返 Device Link。",
             "agent-net-only-relay": "此連線之網絡唯通 Agent-Net，不可返 Device Link。須先改用支援 Device Link 之線路。"
           }
+        },
+        "peerUpdate": {
+          "availableTip": "有新版 {{version}}，點之即更",
+          "downloading": "方取 {{version}}…",
+          "relaunching": "方重啟以更 {{version}}…",
+          "confirm": {
+            "title": "更「{{name}}」之 Cindy 乎？",
+            "selfTitle": "更此機之 Cindy 乎？",
+            "description": "將自 {{from}} 更至 {{to}}。既成，彼機 Cindy 將重啟，遠連暫斷。",
+            "selfDescription": "將自 {{from}} 更至 {{to}}。既成，此機 Cindy 將重啟。",
+            "busyWarning": "彼機方有行役或幕後之務，重啟則中輟。",
+            "selfBusyWarning": "此機方有行役或幕後之務，重啟則中輟。",
+            "linuxPermissionHint": "Linux 所管之裝，或須於彼機入系統密匙。",
+            "windowsPermissionHint": "若裝於護目錄，或須於彼機允系統之權。",
+            "action": "即刻更新"
+          },
+          "toast": {
+            "started": "已啟「{{name}}」更至 {{version}}",
+            "relaunching": "「{{name}}」方重啟以更 {{version}}",
+            "versionChanged": "「{{name}}」新版已易，請復啟卡片核之",
+            "noUpdate": "「{{name}}」今無可裝之新版",
+            "busy": "「{{name}}」方行他更，少頃再試",
+            "failed": "未能更「{{name}}」之 Cindy"
+          }
         }
       }
     },
@@ -9552,6 +9585,7 @@
         "createTitle": "增 MCP 伺服器",
         "editTitle": "修 MCP 伺服器",
         "desc": "僅支援遠端 http / sse 型 MCP。存後新開或重啟之 Agent 會話即可呼叫，方行之 Agent 會話不受影響。",
+        "embeddedGuide": "助手為此差事啟 MCP 設定表。依供方所示，核已填之項，補其闕，乃存之。",
         "teammateDesc": "僅支援遠端 http / sse 型 MCP。存後同伴自納為己用，於此言談下一則訊息起即可用之，毋須新開差事。"
       },
       "fields": {
@@ -13570,6 +13604,7 @@
           "overloadRetryingNoCount": "模型服務繁忙，方自動再試…",
           "overloadFailed": "⚠️ 模型服務繁忙：上游暫無餘力。可於此重發此訊再試，或於 Cindy 易一模型。（於桌面端點「再試」亦可續其差事，然其果不返此訊。）"
         },
+        "openAiReconnect": "請在 Cindy 設定 → 模型供應商 → OpenAI 中重新連線 ChatGPT，然後在這裡傳送訊息繼續。",
         "audioInputUnavailable": "今所接模型未能直辨其聲。可請 Cindy 先錄為文字，再續其事。",
         "toolLoop": {
           "generic": "模型屢呼工具過甚，Cindy 已止此輪，以免無窮循環。可遣新訊以續。",
@@ -14729,11 +14764,11 @@
         },
         "acp": {
           "ask": {
-            "label": "逐項確認",
+            "label": "預設權柄",
             "description": "Agent 求權時由君裁可；Agent 未求確認之舉，Cindy 無從攔阻。"
           },
           "default": {
-            "label": "常法",
+            "label": "預設權柄",
             "description": "依 Agent 之常法行事；其請權限，由君定之。"
           },
           "acceptEdits": {
@@ -14741,15 +14776,15 @@
             "description": "Agent 逕改文件；他事請權限，由君定之。"
           },
           "auto": {
-            "label": "自斷",
+            "label": "自審",
             "description": "Agent 自斷何事須確認；其請權限，由君定之。"
           },
           "plan": {
-            "label": "但謀劃",
+            "label": "謀定模式",
             "description": "Agent 唯析事謀劃，不改文件。"
           },
           "bypassPermissions": {
-            "label": "盡許",
+            "label": "完全存取",
             "description": "Agent 所求之權，一概自許。"
           }
         }
@@ -15574,7 +15609,10 @@
       "codexHelperUnverified": "未能核實此差事之 cindy_helper 是否可用；差事結果或無法回傳。",
       "requestFormatError": "應用程式所發請求格式有謬，此答未能竟。",
       "piRetryHistoryTooLarge": "此信未發。Pi 讀取舊錄以重試時，一幀逾本機 16 MiB 之限。可另啟任務。",
+      "piRetryHistoryUnavailable": "此信未發。Pi 讀舊錄以發信時失誤。可再試，或另啟任務。",
+      "upstreamStatusError": "上游返 {{status}}，此答未竟。",
       "messageNotSent": "此信未發。",
+      "upstreamEmpty550": "模型之服返 HTTP 550，答文空",
       "replyFailed": "答未竟",
       "queuedSendRecovery": "前訊未遣。點「再試」可依原樣遣發。若遣新訊，則取代前訊。",
       "retryTitle": "再遣末一訊",
@@ -15833,6 +15871,10 @@
       "diffUnchangedLines_one": "{{count}} 行未易",
       "diffUnchangedLines_other": "{{count}} 行未易",
       "diffPreviewLoading": "方備差異先覽…"
+    },
+    "filePreview": {
+      "changed": "卷已易",
+      "refreshHint": "點之即重載"
     },
     "textLightbox": {
       "unreadable": "此卷不能讀",
@@ -16410,7 +16452,7 @@
       "REMOTE_WORKDIR_UNAVAILABLE": "遠端工作目錄今不可用。請確認彼機上之目錄猶在，然後再試。",
       "REMOTE_OPTIMISTIC_SESSION_STATE_UNAVAILABLE": "機端暫不能確知此訊已遣否。請稍後再試，勿重遣同一訊。",
       "REMOTE_AGENT_UNAVAILABLE": "未能與行 Agent 之機通信，請閱錯誤詳情。",
-      "REMOTE_AGENT_TIMEOUT": "候行 Agent 之機回應逾時，結果未明。再試前請先察差事進展。",
+      "REMOTE_AGENT_TIMEOUT": "行 Agent 之機尚未應。請先察差事進展。若尚在行，或已有果，則無須再試。",
       "REMOTE_AGENT_LINK_BUSY": "與行 Agent 之機通信繁忙，請稍候再試。",
       "REMOTE_AGENT_UNRESPONSIVE": "行 Agent 之機屢未回應，已暫停呼叫。請稍候再試。",
       "REMOTE_AGENT_OFFLINE": "行 Agent 之機已離線，待其重連再試。",
@@ -18437,6 +18479,7 @@
         "intervalChip": "畢後計時 · {{schedule}}"
       },
       "scheduleMenu": {
+        "custom": "自定 Cron",
         "intervalMinutes": "分（每 N 分）",
         "interval": "Hourly（每 N 時）",
         "daily": "Daily（每日）",

@@ -28,6 +28,7 @@ import { readCreatedSubscriptionProvidersIfReadable } from '../../../desktop/src
 import { createLogger } from '../../../desktop/src/main/logger.js';
 import { createCatalogCache } from '../../../desktop/src/main/maker-host/catalogCache.js';
 import { readModelCatalogOverrides } from '../../../desktop/src/main/maker-host/model-catalog-override-store.js';
+import { readProviderConnectionIcons } from '../../../desktop/src/main/maker-host/provider-presentation-store.js';
 import { readModelDisableOverrides } from '../../../desktop/src/main/maker-host/model-disable-store.js';
 import { hasClaudeNativeLogin } from '../../../desktop/src/main/maker-host/claude-native-auth.js';
 import { isNativeProviderAuthBound } from '../../../desktop/src/main/maker-host/nativeProviderAuthBinding.js';
@@ -200,6 +201,7 @@ export function createHostProviderConfig(options: { profileDir: string; ownerId:
       await list();
       const service = createProviderService({
         getCatalog: getActiveCatalog,
+        getProviderConnectionIcons: readProviderConnectionIcons,
         getModelAccess: readModelDisableOverrides,
         connection: { xd: () => gatewayConnected, anthropic: hasClaudeNativeLogin,
           openai: async () => {

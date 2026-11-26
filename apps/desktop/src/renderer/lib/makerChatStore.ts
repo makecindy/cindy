@@ -488,7 +488,7 @@ export interface AskUserQuestionItem {
   id?: string;
   question: string;
   header?: string;
-  options?: Array<{ label: string; description?: string }>;
+  options?: Array<{ label: string; description?: string; preview?: string }>;
   multiSelect?: boolean;
   answerConstraints?: import('@cindy/maker-shared').AskAnswerConstraints;
 }
@@ -4316,7 +4316,10 @@ const _activeViewSessions = new Map<string, number>();
 // reloaded history shows only the persisted ErrorMessageCard.
 const _pendingErrorClearOnLeave = new Set<string>();
 /** Deferred persist IPC in flight: live 横幅点关闭/重试时还没有 persistId,等它回来再 dismiss。 */
-const _deferredTurnErrorPersist = new Map<string, Promise<string | undefined>>();
+const _deferredTurnErrorPersist = new Map<string, {
+  epoch: number;
+  promise: Promise<string | undefined>;
+}>();
 /**
  * 当前 live 终态错误的代次。error 从有到无、从无到有、或换成另一条文案时 +1。
  * 迟到的 deferred IPC / 脏信号必须对上这一代,才能绑 persistId 或清 live 横幅。
@@ -4435,19 +4438,19 @@ function persistTurnErrorDeferredTracked(
         }
         bindLiveErrorPersistId(sessionId, id, epoch);
       }
-      if (_deferredTurnErrorPersist.get(sessionId) === pending) {
+      if (_deferredTurnErrorPersist.get(sessionId)?.promise === pending) {
         _deferredTurnErrorPersist.delete(sessionId);
       }
       return id;
     })
     .catch((err: unknown) => {
-      if (_deferredTurnErrorPersist.get(sessionId) === pending) {
+      if (_deferredTurnErrorPersist.get(sessionId)?.promise === pending) {
         _deferredTurnErrorPersist.delete(sessionId);
       }
       log.warn('deferred turn error persist failed', err);
       return undefined;
     });
-  _deferredTurnErrorPersist.set(sessionId, pending);
+  _deferredTurnErrorPersist.set(sessionId, { epoch, promise: pending });
 }
 
 function bindLiveErrorPersistId(sessionId: string, persistId: string, epoch?: number): void {
@@ -7296,7 +7299,8 @@ export function handleStreamEvent(
             (question.options?.length ?? 0) === (next.options?.length ?? 0) &&
             (question.options ?? []).every((option, optionIndex) =>
               option.label === next.options?.[optionIndex]?.label &&
-              option.description === next.options?.[optionIndex]?.description,
+              option.description === next.options?.[optionIndex]?.description &&
+              option.preview === next.options?.[optionIndex]?.preview,
             );
         });
       // F1-a: ask_user 消息的落库(+ 在飞 assistant flush)已收口 main
@@ -17097,7 +17101,7 @@ function disposeLiveErrorPersist(sessionId: string): void {
     markLiveErrorRowDisposed(sessionId, persistId);
     return;
   }
-  const pending = _deferredTurnErrorPersist.get(sessionId);
+  const pending = currentPendingErrorRow(sessionId);
   if (pending) {
     void pending.then((id) => {
       if (id) markLiveErrorRowDisposed(sessionId, id);
@@ -17111,6 +17115,25 @@ function disposeLiveErrorPersist(sessionId: string): void {
     text: state.error,
     queueIds: new Set(state.pendingQueue.map((item) => item.clientId)),
   });
+}
+
+function currentPendingErrorRow(sessionId: string): Promise<string | undefined> | undefined {
+  const pending = _deferredTurnErrorPersist.get(sessionId);
+  return pending && pending.epoch === (_liveErrorEpoch.get(sessionId) ?? 0) ? pending.promise : undefined;
+}
+
+function matchesRetriedInput(
+  head: AgentInputQueuedMessage | undefined,
+  recovery: AgentInputRecovery,
+  preRetryQueueIds: Set<string>,
+): boolean {
+  if (!head || !recovery) return false;
+  if (recovery.kind === 'queue-head') return head.clientId === recovery.clientId;
+  if (preRetryQueueIds.has(head.clientId) || head.autoResume) return false;
+  const failed = recovery.item;
+  if (head.supersedesUserClientId === failed.clientId) return true;
+  const sourceId = failed.retrySourceClientId ?? failed.supersedesUserClientId ?? failed.clientId;
+  return head.originalSyntheticTrigger === 'continue' && head.retrySourceClientId === sourceId;
 }
 
 function markLiveErrorRowDisposed(sessionId: string, clientId: string): void {
@@ -17304,7 +17327,6 @@ function clearError(sessionId: string): void {
 
 function retryLastError(sessionId: string, expected?: { expectedQueueHeadClientId: string; expectedSwitchRevision: number }): Promise<void> {
   if (!sessionId) return Promise.resolve();
-  disposeLiveErrorPersist(sessionId);
   // 续跑语义在 main:coordinator 判定失败 turn 已有 assistant 产出时,用共享英文
   // 常量 CONTINUE_AFTER_ERROR_PROMPT 替代重发原文(shared/interruptedTurn.ts),
   // renderer 不传文案、不做判定。
@@ -17322,14 +17344,22 @@ function retryLastError(sessionId: string, expected?: { expectedQueueHeadClientI
   // clientId、没有 supersedesUserClientId。以点击时刻镜像的 inputRecovery
   // （projection 线上自带字段）取权威 clientId；重载后内存标记丢失时，续跑
   // 落库的新行仍能识别为本端意图（Codex review P2）。
-  const preRetryRecovery = sessions.get(sessionId)?.inputRecovery ?? null;
+  const clickedState = sessions.get(sessionId);
+  const preRetryRecovery = clickedState?.inputRecovery ?? null;
+  // A projection can clear the banner or install a new error before the IPC settles.
+  // Keep only the clicked row (or its already pending persistence receipt).
+  const clickedErrorRow = clickedState?.error
+    ? clickedState.errorPersistId ?? currentPendingErrorRow(sessionId)
+      ?? getLiveErrorMessageClientId(clickedState)
+    : null;
+  const incarnation = sessionIncarnations.get(sessionId);
   const preRetryQueueHeadClientId =
     preRetryRecovery?.kind === 'queue-head' ? preRetryRecovery.clientId : null;
   // 点击时刻的队列快照：回执里只登记**新出现**的项。点击前就在队列里的外部
   // 入队项（例如被 main 按文本标记 originalSyntheticTrigger='continue' 的
   // 外部项）不属于本次点击的产物，不能误认（Greptile review P1）。
   const preRetryQueueIds = new Set(
-    (sessions.get(sessionId)?.pendingQueue ?? []).map((item) => item.clientId),
+    (clickedState?.pendingQueue ?? []).map((item) => item.clientId),
   );
   // active-turn 重试的产物 clientId 由 main 生成、点击时刻未知，而 main 的
   // scheduleDrain（queueMicrotask）可能抢在 IPC 回执前把产物行落库——但
@@ -17369,6 +17399,15 @@ function retryLastError(sessionId: string, expected?: { expectedQueueHeadClientI
       // 项不得误认（Greptile review P1）。
       const retryTookEffect = projection.error === null && projection.recovery === null;
       if (retryTookEffect) {
+        // A concurrent clear can also return an empty error/recovery pair.
+        // Main snapshots the retried item at the head before drain can consume it.
+        if (clickedErrorRow && matchesRetriedInput(projection.pendingQueue[0], preRetryRecovery, preRetryQueueIds)) {
+          void Promise.resolve(clickedErrorRow).then((id) => {
+            if (id && sessionIncarnations.get(sessionId) === incarnation) {
+              markLiveErrorRowDisposed(sessionId, id);
+            }
+          });
+        }
         for (const item of projection.pendingQueue) {
           if (preRetryQueueIds.has(item.clientId)) continue;
           if (item.supersedesUserClientId) {
