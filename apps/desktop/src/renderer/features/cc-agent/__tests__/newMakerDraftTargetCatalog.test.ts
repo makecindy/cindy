@@ -172,6 +172,8 @@ function harness(options: {
       ? options.sourceDeviceId ?? undefined : options.sameDevice ? 'target-device' : 'old-device',
     effectiveRemoteHostId: null,
     effectiveAgentDeviceId: options.separateAgent ? 'agent-device' : undefined,
+    dataOwnerId: 'owner-test',
+    rememberDeviceTaskWorkspace: vi.fn(),
     capabilityAgentKind: 'pi',
     agentCatalogProviders: [provider('source', ['low'])],
     isSameNewMakerDevice, normalizeDbAgentKind, resolveDeviceLinkDraftDefaults,
@@ -253,6 +255,96 @@ describe('remote project draft catalog ownership', () => {
     const h = harness({ sameDevice: true, previous: selection(null) });
     await h.add();
     expect(h.current()).toEqual(selection('high'));
+  });
+
+  it('remembers and restores each device’s selected project when switching devices via handleDeviceChange', async () => {
+    const storage = new Map<string, string>();
+    vi.stubGlobal('localStorage', {
+      getItem: (key: string) => storage.get(key) ?? null,
+      setItem: (key: string, value: string) => { storage.set(key, value); },
+      removeItem: (key: string) => { storage.delete(key); },
+      clear: () => { storage.clear(); },
+    });
+    const {
+      getLastDeviceTaskWorkspace,
+      rememberDeviceTaskWorkspace,
+      resolveDeviceSwitchWorkspace,
+    } = await import('@/state/lastCreatedTaskWorkspace');
+
+    let state = {
+      deviceLinkDeviceId: null as string | null,
+      deviceLinkDeviceName: null as string | null,
+      workingDir: '/local/cindy' as string | null,
+      remoteHostId: null as string | null,
+      explicitNoProject: false,
+    };
+    const applyDraftTarget = vi.fn((req: {
+      deviceId: string | null;
+      deviceName: string | null;
+      workingDir: string | null;
+      remoteHostId?: string | null;
+      explicitNoProject?: boolean;
+    }) => {
+      state = {
+        deviceLinkDeviceId: req.deviceId,
+        deviceLinkDeviceName: req.deviceName,
+        workingDir: req.workingDir,
+        remoteHostId: req.remoteHostId ?? null,
+        explicitNoProject: req.workingDir == null && req.explicitNoProject === true,
+      };
+    });
+    const makeHandlers = () => {
+      const env = {
+        sendInFlightRef: { current: false },
+        directoryRecoveryRef: { current: null },
+        dataOwnerId: 'owner-switch',
+        draft: state,
+        effectiveDeviceLinkDeviceId: state.deviceLinkDeviceId ?? undefined,
+        effectiveRemoteHostId: state.remoteHostId,
+        effectiveWorkingDir: state.workingDir,
+        getLastDeviceTaskWorkspace,
+        rememberDeviceTaskWorkspace,
+        resolveDeviceSwitchWorkspace,
+        getDefaultNewTaskWorkingDir: () => null,
+        applyDraftTarget,
+      };
+      return {
+        handleDeviceChange: callback<(deviceId: string | null, deviceName: string | null) => void>('handleDeviceChange', env),
+        handleWorkingDirChange: callback<(dir: string | null) => void>('handleWorkingDirChange', env),
+      };
+    };
+
+    // Start on local with /local/cindy → switch to studio-a (never used → dialogue).
+    makeHandlers().handleDeviceChange('studio-a', 'Studio A');
+    expect(state).toMatchObject({ deviceLinkDeviceId: 'studio-a', workingDir: null, explicitNoProject: true });
+
+    // Pick /studio/project on studio-a → switch back to local → restores /local/cindy.
+    makeHandlers().handleWorkingDirChange('/studio/project');
+    expect(state).toMatchObject({ deviceLinkDeviceId: 'studio-a', workingDir: '/studio/project', explicitNoProject: false });
+    makeHandlers().handleDeviceChange(null, null);
+    expect(state).toMatchObject({ deviceLinkDeviceId: null, workingDir: '/local/cindy', explicitNoProject: false });
+
+    // Switch back to studio-a → restores /studio/project.
+    makeHandlers().handleDeviceChange('studio-a', 'Studio A');
+    expect(state).toMatchObject({ deviceLinkDeviceId: 'studio-a', workingDir: '/studio/project', explicitNoProject: false });
+
+    // Explicitly switch studio-a to dialogue → switch to local and back → studio-a remembers dialogue.
+    makeHandlers().handleWorkingDirChange(null);
+    makeHandlers().handleDeviceChange(null, null);
+    expect(state).toMatchObject({ deviceLinkDeviceId: null, workingDir: '/local/cindy', explicitNoProject: false });
+    makeHandlers().handleDeviceChange('studio-a', 'Studio A');
+    expect(state).toMatchObject({ deviceLinkDeviceId: 'studio-a', workingDir: null, explicitNoProject: true });
+
+    // Regression: device A remembers /local/cindy, then enters explicit dialogue (e.g. sidebar
+    // "Dialogue +" sets workingDir=null & explicitNoProject=true), switches to B, and returns to A.
+    // A must remain in dialogue instead of reverting to /local/cindy.
+    makeHandlers().handleDeviceChange(null, null);
+    expect(state).toMatchObject({ deviceLinkDeviceId: null, workingDir: '/local/cindy', explicitNoProject: false });
+    state = { ...state, workingDir: null, explicitNoProject: true };
+    makeHandlers().handleDeviceChange('studio-a', 'Studio A');
+    makeHandlers().handleDeviceChange(null, null);
+    expect(state).toMatchObject({ deviceLinkDeviceId: null, workingDir: null, explicitNoProject: true });
+    vi.unstubAllGlobals();
   });
 
   it('seeds from the fresh catalog when the same device has no prior selection', async () => {
