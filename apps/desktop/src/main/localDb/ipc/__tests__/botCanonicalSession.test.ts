@@ -6103,9 +6103,9 @@ describe('Teammate model selection shares profile persistence and route reconcil
       expect(await service.updateProfile({ callerSessionId: sessionId, expectedVersion: 1,
         modelChain: [{ id: choice!.id, effort: 'high', fastMode: false }, { id, effort: 'low' }] })).toMatchObject({ ok: true, effective: 'next-turn' });
       const after = await invoke('local-db:bots:get', 'bot-1');
+      // 2026-11-26 伙伴只用一个模型：旧版发来的备用项照样校验，但只存第一条。
       expect(await modelSettings.readEffectiveBotModelChain(after.capabilities)).toEqual([
         { harness: 'acp', providerId: 'acp-plugin:agy:agy', model: 'gemini-3-pro', effort: 'high', fastMode: false },
-        { harness: 'pi', providerId: 'xd', model: 'enabled-alternate-model', effort: 'low', fastMode: false },
       ]);
       expect(getSelectedNewMakerRoute(h.ownerScopeKey)).toEqual(appDefault);
       // Fast is not offered for plugin engines.

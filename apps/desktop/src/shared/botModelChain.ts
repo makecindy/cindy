@@ -51,9 +51,11 @@ export function normalizeBotModelChain(
 export function parseRemoteBotModelChain(value: unknown): BotModelRoute[] | null {
   if (!Array.isArray(value) || !value.length || value.length > BOT_MODEL_CHAIN_INPUT_MAX
     || value.some(route => !route || normalizeBotHarness(route.harness) !== route.harness)) return null;
-  // 每一条都要合法(旧版表单发来的备用项也一样)，否则整份拒绝；合法时只存第一条。
+  // 每一条都要合法、互不重复(旧版表单发来的备用项也一样；#12944：不同写法归成同一条路由时不悄悄丢掉一项)，
+  // 否则整份拒绝；合法时只存第一条。
   const routes = value.map(normalizeBotModelRoute);
   if (routes.some(route => route === null)) return null;
+  if (uniqueBotModelRoutes(routes as BotModelRoute[]).length !== routes.length) return null;
   return normalizeBotModelChain(routes);
 }
 
