@@ -160,19 +160,25 @@ it('withdraws an owned companion as that actor without granting removal of other
 });
 
 // Unit regression (#13127, direct path): the phone talking to the chat service had no 「群里的 Cindy」 switch.
-// It writes the same PATCH as Desktop only on servers with groupAssistant, and only as a manager.
+// As on Desktop it needs groupAssistant and a valid groupAssistantActorId, and writes the same PATCH only as a manager.
 it('switches the group Cindy as a manager only on servers with groupAssistant', async () => {
   snapshot.room.assistant = false;
-  await render();
-  expect(result.group).not.toHaveProperty('assistantEnabled');
-  await act(async () => { await expect(result.act('set-assistant', { assistant: true })).rejects.toThrow('CHAT_UNAVAILABLE'); });
+  let me: Record<string, unknown> = {};
   const original = request.getMockImplementation()!;
   request.mockImplementation(async (path, method, body, actor) => {
-    if (path === '/me') return { actor: { id: id(2), kind: 'human' }, capabilities: { groupAssistant: 1 } };
+    if (path === '/me') return { actor: { id: id(2), kind: 'human' }, ...me };
     const saved = await original(path, method, body, actor);
     if (method === 'PATCH' && body.assistant !== undefined) snapshot.room.assistant = body.assistant;
     return saved;
   });
+  for (const older of [{}, { capabilities: { groupAssistant: 1 } }, { capabilities: { groupAssistant: 1 }, groupAssistantActorId: 'cindy' }]) {
+    me = older;
+    await render(); await act(async () => { await result.refresh(); });
+    expect(result.group).not.toHaveProperty('assistantEnabled');
+    await act(async () => { await expect(result.act('set-assistant', { assistant: true })).rejects.toThrow('CHAT_UNAVAILABLE'); });
+  }
+  expect(writes()).toHaveLength(0);
+  me = { capabilities: { groupAssistant: 1 }, groupAssistantActorId: id(20) };
   await act(async () => { await result.refresh(); });
   expect(result.group).toMatchObject({ supportsGroupAssistant: true, assistantEnabled: false });
   await act(async () => { await result.act('set-assistant', { assistant: true }); });

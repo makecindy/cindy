@@ -180,8 +180,9 @@ export interface ChatSendBody {
   operationId: string; content: ChatMessage['content']; mentions: string[]; mentionAudience?: 'humans' | 'bots' | 'everyone'; threadRootId?: string;
 }
 
+const CHAT_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 export function chatId(value: string): string {
-  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value)) throw new Error('INVALID_CHAT_ID');
+  if (!CHAT_ID.test(value)) throw new Error('INVALID_CHAT_ID');
   return value;
 }
 export function chatCursor(value: unknown): string {
@@ -508,7 +509,7 @@ export function chatGroupView(page: ChatPage, selfId: string, actors: readonly C
         && !mayStopWork(members, selfId, execution.bot_id, execution.requester_id)) }, supportsAttachments: true };
 }
 
-type ChatMe = { actor: { id: string; kind: string }; capabilities?: { groupLifecycleVersion?: number; conversationListStateVersion?: number; groupSingleSpeaker?: number; independentReplies?: number; personalMask?: number; groupMemberAvatar?: number; groupMentionAudiences?: number; groupMemberInvites?: number; groupNotificationSettings?: number; groupAssistant?: number } };
+type ChatMe = { actor: { id: string; kind: string }; groupAssistantActorId?: unknown; capabilities?: { groupLifecycleVersion?: number; conversationListStateVersion?: number; groupSingleSpeaker?: number; independentReplies?: number; personalMask?: number; groupMemberAvatar?: number; groupMentionAudiences?: number; groupMemberInvites?: number; groupNotificationSettings?: number; groupAssistant?: number } };
 /** What every screen of one signed-in account may share: who it is on the Chat Server and the
  * read in flight for it. `request` must be fenced to the account, never to one screen, so a
  * screen that closes cannot fail the read another screen is waiting on. */
@@ -624,8 +625,11 @@ export function createChatServerClient(request: ChatRequest, personalList = crea
       const me = await (account.request ?? request)<ChatMe>('/me');
       if (me.actor.kind !== 'human') throw new Error('INVALID_CHAT_IDENTITY');
       const id = chatId(me.actor.id);
-      account.known = { id, at: Date.now(), capabilities: me.capabilities };
-      return { id, capabilities: me.capabilities };
+      // As on Desktop, the group's Cindy needs both the capability and a valid actor.
+      const capabilities = me.capabilities?.groupAssistant === 1 && !(typeof me.groupAssistantActorId === 'string' && CHAT_ID.test(me.groupAssistantActorId))
+        ? { ...me.capabilities, groupAssistant: undefined } : me.capabilities;
+      account.known = { id, at: Date.now(), capabilities };
+      return { id, capabilities };
     })().finally(() => { if (account.reading === reading) account.reading = undefined; });
     const me = await reading;
     adopt(me.capabilities);
