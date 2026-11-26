@@ -20,8 +20,11 @@ vi.mock('react-native', async () => {
   const React = await import('react');
   const flatten = (style: unknown): Record<string, unknown> => Array.isArray(style)
     ? Object.assign({}, ...style.map(flatten)) : style && typeof style === 'object' ? style as Record<string, unknown> : {};
-  const View = ({ children, testID, style, onLayout }: { children?: ReactNode; testID?: string; style?: unknown; onLayout?: (event: unknown) => void }) =>
-    React.createElement('div', { 'data-testid': testID, style: flatten(style), ref: (node: HTMLDivElement | null) => {
+  const View = ({ children, testID, style, onLayout, renderToHardwareTextureAndroid, collapsable }: { children?: ReactNode; testID?: string;
+    style?: unknown; onLayout?: (event: unknown) => void; renderToHardwareTextureAndroid?: boolean; collapsable?: boolean }) =>
+    React.createElement('div', { 'data-testid': testID, style: flatten(style),
+      'data-hw-layer': renderToHardwareTextureAndroid === undefined ? undefined : String(renderToHardwareTextureAndroid),
+      'data-collapsable': collapsable === undefined ? undefined : String(collapsable), ref: (node: HTMLDivElement | null) => {
       if (node && onLayout) nativeLayout.set(node, height => onLayout({ nativeEvent: { layout: { height } } }));
     } }, children);
   const ScrollView = ({ children, testID, scrollEnabled, ...props }: { children?: ReactNode; testID?: string; scrollEnabled?: boolean }) => {
@@ -40,7 +43,7 @@ const textInputProps = vi.hoisted(() => ({ current: {} as Record<string, unknown
 vi.mock('@/components/AppText', async () => {
   const React = await import('react');
   return {
-    TextInput: (props: Record<string, unknown>) => { textInputProps.current = props; return null; },
+    TextInput: (props: Record<string, unknown>) => { textInputProps.current = props; return React.createElement('i', { 'data-native-input': '' }); },
     Text: ({ children, testID, numberOfLines, style }: { children?: ReactNode; testID?: string; numberOfLines?: number; style?: unknown }) =>
       React.createElement('span', { 'data-testid': testID, 'data-lines': numberOfLines,
         'data-bg': (Object.assign({}, ...[style].flat(Infinity).filter(Boolean)) as { backgroundColor?: string }).backgroundColor ?? 'none' }, children),
@@ -216,12 +219,24 @@ it.each([
   />));
   try {
     render(false);
+    const nativeInput = container.querySelector('[data-native-input]');
     const preview = container.querySelector('[data-testid="input.collapsedPreview"]');
     expect(preview?.textContent).toBe(text);
     expect(preview?.getAttribute('data-lines')).toBe('1');
+    // Android draws the native input and the cover into one never-flattened offscreen layer, so the frame's
+    // anti-aliased clip blends a single opaque image and no native pixel shows on the capsule's curved edge.
+    // iOS keeps its children directly in the frame.
+    const layer = os === 'android' ? preview?.parentElement as HTMLElement | null : null;
+    if (os === 'android') {
+      expect(layer?.getAttribute('data-collapsable')).toBe('false');
+      expect(layer?.getAttribute('data-hw-layer')).toBe('true');
+      expect(layer?.contains(container.querySelector('[data-native-input]'))).toBe(true);
+    } else {
+      expect(container.querySelector('[data-hw-layer]')).toBeNull();
+    }
     // Under the opaque cover the frame clips to a capsule, clear of the pill's ends and border; a glass frame
     // (no cover) is left unclipped.
-    const frameStyle = (preview?.parentElement as HTMLElement | null)?.style;
+    const frameStyle = ((layer ?? preview)?.parentElement as HTMLElement | null)?.style;
     expect(frameStyle?.overflow).toBe(withGlass ? '' : 'hidden');
     expect(frameStyle?.borderRadius === '').toBe(withGlass);
     if (withGlass) {
@@ -242,6 +257,13 @@ it.each([
     expect(textInputProps.current.accessibilityElementsHidden).toBeUndefined();
     render(true);
     expect(container.querySelector('[data-testid="input.collapsedPreview"]')).toBeNull();
+    if (layer) {
+      // Opened: the layer is off, and the native input never changed parents.
+      expect(container.contains(layer) && layer.getAttribute('data-hw-layer')).toBe('false');
+      expect(layer.contains(container.querySelector('[data-native-input]'))).toBe(true);
+    }
+    // The native input is the same element throughout: never remounted by the preview or the layer.
+    expect(container.querySelector('[data-native-input]')).toBe(nativeInput);
     expect(inputStyle().color).toBe(darkColors.textPrimary);
     expect(inputStyle().opacity).toBeUndefined();
   } finally {

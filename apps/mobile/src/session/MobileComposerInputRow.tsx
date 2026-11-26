@@ -382,6 +382,30 @@ export function MobileComposerInputRow({
       value={value}
     />
   );
+  const inputContent = (
+    <>
+      {inputElement ?? (onPasteImages && !isExpoGo ? (
+        <TextInputWrapper onPaste={handleNativePaste} style={styles.pasteWrapper}>
+          {textInputElement}
+        </TextInputWrapper>
+      ) : textInputElement)}
+      {collapsedPlaceholder ? <Text
+        accessible={false} importantForAccessibility="no-hide-descendants" pointerEvents="none"
+        numberOfLines={1} ellipsizeMode="tail"
+        style={[styles.input, styles.inputGeometricSingleLine, inputStyle, StyleSheet.absoluteFill, { color: placeholderTextColor }]}
+      >{placeholder}</Text> : null}
+      {collapsedPreview ? <Text
+        accessible={false} importantForAccessibility="no-hide-descendants" pointerEvents="none"
+        numberOfLines={1} ellipsizeMode="tail"
+        // On the row's opaque surface the preview covers everything the native input draws there (glyphs,
+        // emoji, spell-check and link decorations, autofill highlight, scroll bar), while the input itself
+        // stays visible to screen readers and focusable. It is gone once the row opens.
+        style={[styles.input, styles.inputGeometricSingleLine, inputStyle, StyleSheet.absoluteFill,
+          rowSurface != null && { backgroundColor: rowSurface }]}
+        testID={`${inputTestID}.collapsedPreview`}
+      >{collapsedOverflowText}</Text> : null}
+    </>
+  );
   const inputBody = (
     <>
       {showAccessoryAbove ? (
@@ -413,26 +437,16 @@ export function MobileComposerInputRow({
             inputFrameAnimatedStyle,
           ]}
         >
-          {inputElement ?? (onPasteImages && !isExpoGo ? (
-            <TextInputWrapper onPaste={handleNativePaste} style={styles.pasteWrapper}>
-              {textInputElement}
-            </TextInputWrapper>
-          ) : textInputElement)}
-          {collapsedPlaceholder ? <Text
-            accessible={false} importantForAccessibility="no-hide-descendants" pointerEvents="none"
-            numberOfLines={1} ellipsizeMode="tail"
-            style={[styles.input, styles.inputGeometricSingleLine, inputStyle, StyleSheet.absoluteFill, { color: placeholderTextColor }]}
-          >{placeholder}</Text> : null}
-          {collapsedPreview ? <Text
-            accessible={false} importantForAccessibility="no-hide-descendants" pointerEvents="none"
-            numberOfLines={1} ellipsizeMode="tail"
-            // On the row's opaque surface the preview covers everything the native input draws there (glyphs,
-            // emoji, spell-check and link decorations, autofill highlight, scroll bar), while the input itself
-            // stays visible to screen readers and focusable. It is gone once the row opens.
-            style={[styles.input, styles.inputGeometricSingleLine, inputStyle, StyleSheet.absoluteFill,
-              rowSurface != null && { backgroundColor: rowSurface }]}
-            testID={`${inputTestID}.collapsedPreview`}
-          >{collapsedOverflowText}</Text> : null}
+          {Platform.OS === 'android' ? (
+            // Android clips each child of the capsule frame separately on its anti-aliased edge, so the native
+            // input would still blend into the edge pixels under the cover. While the opaque cover shows, input and
+            // cover are drawn into one offscreen layer first and the frame clips that single image instead.
+            // Never flattened, so the native input keeps its parent when the layer turns on or off.
+            <View collapsable={false} renderToHardwareTextureAndroid={rowSurface != null}
+              style={[styles.inputLayer, geometricSingleLine && inputFrameMinHeight == null && styles.inputFrameSingleLine]}>
+              {inputContent}
+            </View>
+          ) : inputContent}
           {inputOverlay}
           {!cardLayout && (onCollapsedPress || collapsedPreview) ? (
             // Screen readers skip this layer and reach the input itself (it only hides its glyphs, never its view),
@@ -828,6 +842,14 @@ const makeMobileComposerInputRowStyles = (colors: ThemeColors) => ({
     position: 'relative',
   },
   inputFramePreviewClip: { borderRadius: radius.pill, overflow: 'hidden' as const },
+  // Android only: fills the frame exactly like its children did, so wrapping them changes no layout.
+  inputLayer: {
+    alignSelf: 'stretch',
+    flex: 1,
+    flexDirection: 'row',
+    minWidth: 0,
+    position: 'relative',
+  },
   inputFrameSingleLine: {
     alignItems: 'center',
   },
