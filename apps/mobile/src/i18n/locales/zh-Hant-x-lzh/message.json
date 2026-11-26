@@ -267,6 +267,8 @@
     "imagesNotUploaded_other": "{{count}} 圖未能上呈",
     "waitingForNamedComputer": "俟{{name}}連通即發",
     "reconnectComputer": "重連",
+    "pendingDelivery": "待達",
+    "pendingDeliveryHint": "此訊已存於機，正候電腦確認。",
     "waitingForComputer": "候機歸來，即遣之",
     "waitingForNetwork": "待網路重通，即遣之",
     "queued": "方候",
@@ -291,7 +293,7 @@
     "goalResumed": "耗用已復，續逐其鵠",
     "goalCapacityRetry": "模型繁忙，方再逐其鵠",
     "autoResume": {
-      "separator": "連線中斷，已自續",
+      "separator": "未得答，已自續",
       "succeeded": "已復連",
       "failed": "復連未成",
       "neutral": "復連",

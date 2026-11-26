@@ -3222,20 +3222,23 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
         validate: () => validateExecutionAuthority(run),
         onTaskCreated: created => void postTaskCard(run, s, threadRootId, created),
       });
+      const words = bodyText(source).trim();
+      const visibleRequest = formatGroupRequest({ words, heading, background });
+      let message = visibleRequest;
       run.mentionable = mentionableTeammates(s, execution.bot_id);
       if (run.mentionable?.length) {
         const peers = run.mentionable.filter(member => member.botId !== execution.bot_id);
-        background.push(GROUP_TEAMMATE_HANDOFF_GUIDANCE, untrustedJsonBlock({ replyToMention: replyMention(source, run), teammates: peers.map(member => ({ name: member.name, description: localBot(member.botId)?.description?.slice(0, 300) })) }));
+        const roster = untrustedJsonBlock({ replyToMention: replyMention(source, run),
+          teammates: peers.map(member => ({ name: member.name, description: localBot(member.botId)?.description?.slice(0, 300) })) });
+        message = formatGroupRequest({ words, heading, background: [...background, GROUP_TEAMMATE_HANDOFF_GUIDANCE, roster] });
       }
-      const words = bodyText(source).trim();
-      const message = formatGroupRequest({ words, heading, background });
       // Only the owner's own message speaks for the owner; a teammate that named Cindy in its reply is labeled as itself.
       const ownWords = source.origin === 'user' && source.author?.kind === 'human' && source.authorId === selfId && !source.maskAttribution;
       const speaker = s.members.find(m => m.id === source.authorId);
-      const dispatched = await deps.dispatch({ groupAssistantTask: true, targetSessionId: sessionId, clientId: run.clientId, message, persistedContent: message,
+      const dispatched = await deps.dispatch({ groupAssistantTask: true, targetSessionId: sessionId, clientId: run.clientId, message, persistedContent: visibleRequest,
         // The requester's own words are the request this turn speaks for; the group's messages are background.
         ...(ownWords ? { autoReviewUserText: { kind: 'agent-request' as const, request: { sessionId, clientId: run.clientId, plainBody: true, delegatedText: words } } } : {}),
-        origin: { kind: 'session', senderSessionId: '', displayText: message,
+        origin: { kind: 'session', senderSessionId: '', displayText: visibleRequest,
           groupRequest: { groupId: s.room.id, groupName: s.room.name, speakerId: source.authorId,
             speakerName: speaker ? memberName(speaker, s.members) : source.author.name } },
         ...(attachments.length ? { attachments } : {}),
@@ -4097,7 +4100,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     return !mentions.all && !mentions.allBots && target && members.some(member => member.id === target && member.state === 'joined')
       ? { ...mentions, botIds: [...new Set([...mentions.botIds, target])] } : mentions;
   }
-  function resolveMentions(members: Member[], mentions: BotGroupMention) {
+  function resolveMentions(members: Member[], mentions: BotGroupMention, conversationKind?: 'direct') {
     const joined = members.filter(m => m.state === 'joined');
     // A stale explicit target must never become an unaddressed message. Check
     // every pick, including mixed valid/stale picks, before expanding Everyone.
@@ -4106,8 +4109,9 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       if (!member) throw new Error('MENTION_UNAVAILABLE');
       return member.id;
     });
-    const recipients = [...named, ...joined.filter(m => (mentions.all && m.kind === 'human') || (mentions.allBots && m.kind === 'bot')).map(m => m.id)];
-    const resolved = [...new Set(recipients.filter(target => target !== selfId))];
+    const explicit = conversationKind === 'direct' ? named.filter(id => id !== selfId) : named;
+    const recipients = [...explicit, ...joined.filter(m => m.id !== selfId && ((mentions.all && m.kind === 'human') || (mentions.allBots && m.kind === 'bot'))).map(m => m.id)];
+    const resolved = [...new Set(recipients)];
     // Old servers have no broadcast marker: keep an empty human broadcast directed.
     return mentions.all && !resolved.length && !supportsMentionAudiences ? [selfId] : resolved;
   }
@@ -4591,7 +4595,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     let result: { id: string };
     let posting = false;
     try {
-      const mentions = recovered ? [] : knownQuote?.recipients ?? (membersRead ? resolveMentions(members, i.mentions) : []);
+      const mentions = recovered ? [] : knownQuote?.recipients ?? (membersRead ? resolveMentions(members, i.mentions, i.conversationKind) : []);
       const uploaded = recovered ? [] : await media.upload(i.groupId, i.clientId, prepared?.ok ? prepared.attachments : [], selfId);
       // Cached only once the message may reach the server; a failure before this stored nothing.
       if (quote) {

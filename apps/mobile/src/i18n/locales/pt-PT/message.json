@@ -267,6 +267,8 @@
     "imagesNotUploaded_other": "Não foi possível carregar {{count}} imagens",
     "waitingForNamedComputer": "Envio automático quando {{name}} se ligar",
     "reconnectComputer": "Voltar a ligar",
+    "pendingDelivery": "A aguardar entrega",
+    "pendingDeliveryHint": "Mensagem guardada neste telemóvel. A aguardar a confirmação do computador.",
     "waitingForComputer": "Será enviado quando o computador voltar a estar disponível",
     "waitingForNetwork": "Será enviado quando voltar a estar online",
     "queued": "Em fila",
@@ -300,7 +302,7 @@
     "goalResumed": "Utilização reposta, a continuar o objetivo",
     "goalCapacityRetry": "O serviço do modelo estava ocupado — a tentar o objetivo novamente",
     "autoResume": {
-      "separator": "Ligação interrompida — retomada automaticamente",
+      "separator": "Resposta vazia — retoma automática",
       "succeeded": "Ligação restabelecida",
       "failed": "Falha ao restabelecer a ligação",
       "neutral": "Restabelecer ligação",

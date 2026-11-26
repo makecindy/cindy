@@ -322,7 +322,7 @@ beforeEach(() => {
   testI18n.language = 'zh-CN';
   (window as unknown as { electronAPI: unknown }).electronAPI = {
     subscriptionAccounts: { command: vi.fn(async () => ({
-      providerId: 'anthropic', configured: false, strategy: 'least', accounts: [{
+      providerId: 'anthropic', configured: false, strategy: 'expiring', accounts: [{
         id: 'default', status: 'signed-out', directory: '/default',
         running: 0, paused: false, limit: 4, weight: 1,
       }],

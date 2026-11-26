@@ -267,6 +267,8 @@
     "imagesNotUploaded_other": "{{count}} 张图片没传上去",
     "waitingForNamedComputer": "连上{{name}}后自动发送",
     "reconnectComputer": "立即重连",
+    "pendingDelivery": "待送达",
+    "pendingDeliveryHint": "消息已保存在手机上，正在等待电脑确认。",
     "waitingForComputer": "等电脑连上后发送",
     "waitingForNetwork": "等网络恢复后发送",
     "queued": "排队中",
@@ -299,7 +301,7 @@
     "goalResumed": "用量已恢复，继续目标",
     "goalCapacityRetry": "模型服务繁忙，正在重试目标",
     "autoResume": {
-      "separator": "连接中断，已自动继续",
+      "separator": "回复为空，已自动继续",
       "succeeded": "已重新连接",
       "failed": "重新连接未成功",
       "neutral": "重新连接",

@@ -1718,17 +1718,17 @@ describe('group composer', () => {
     expect(h.chat.act).toHaveBeenLastCalledWith('send', expect.objectContaining({ mentions: { all: false, botIds: ['abu'] } }));
   });
 
-  it('keeps the current human in the group but excludes it from mention choices and typed mentions', async () => {
+  it.each([false, true])('offers and resolves the current human only in groups (direct: %s)', async direct => {
     h.chat.server = true;
-    const data = group({ openPlan: null });
+    const data = group({ openPlan: null, ...(direct ? { conversationKind: 'direct' as const } : {}) });
     data.members.unshift({ ...data.members[0]!, botId: 'self', name: 'Me', actorKind: 'human', isSelf: true });
     await render(data);
     await type('@');
-    expect(byId('botGroup.mention.self')).toBeNull();
+    expect(!!byId('botGroup.mention.self')).toBe(!direct);
     expect(byId('botGroup.mention.mimi')).not.toBeNull();
     await type('@Me @阿布 hello');
     await click('botGroup.composer.send');
-    expect(h.chat.act).toHaveBeenLastCalledWith('send', expect.objectContaining({ mentions: { all: false, botIds: ['abu'] } }));
+    expect(h.chat.act).toHaveBeenLastCalledWith('send', expect.objectContaining({ mentions: { all: false, botIds: direct ? ['abu'] : ['self', 'abu'] } }));
   });
 
   it.each(['picked', 'manual'])('removes only the %s token identity when same-name mentions coexist', async removed => {
@@ -3260,16 +3260,22 @@ describe('mobile group threads', () => {
     expect(h.chat.markRead).not.toHaveBeenCalled();
   });
 
-  it('renders authoritative reply summary alongside the reply and More actions', async () => {
+  it.each([true, false])('opens the group topic from the reply summary without an inline reminder (unread: %s)', async unread => {
     h.chat.server = true;
-    const root = { ...rootMessage(), replyCount: 17, threadUnread: { count: 2, mentioned: true }, threadPreview: {
+    const replyAt = new Date().setHours(15, 15, 0, 0);
+    const root = { ...rootMessage(), replyCount: 17, threadUnread: unread ? { count: 2, mentioned: true } : undefined, threadPreview: {
       replies: [{ id: 'reply', authorKind: 'user' as const, authorBotId: 'other', authorName: 'Other', isSelf: false,
-        text: 'Follow-up', attachments: [], createdAt: Date.now() - 120000 }],
+        text: 'Follow-up', attachments: [], createdAt: replyAt }],
     } };
     await render(threadGroup({ messages: [root] }), 'ready', undefined, '');
-    expect(byId(`botGroup.thread.${rootId}`)?.textContent).toContain('count=17');
-    expect(byId(`botGroup.thread.${rootId}`)?.textContent).toContain('groupChat.thread.mentioned');
-    expect(byId(`botGroup.thread.${rootId}`)?.textContent).not.toContain('lastMinutes');
+    const summary = byId(`botGroup.thread.${rootId}`);
+    expect(summary?.textContent).toContain('count=17');
+    expect(summary?.textContent).not.toContain('groupChat.thread.newReplies');
+    expect(summary?.textContent).not.toContain('groupChat.thread.mentioned');
+    expect(summary?.textContent).not.toContain('lastMinutes');
+    expect(summary?.textContent).not.toContain('lastHours');
+    if (unread) expect(summary?.textContent).not.toContain('15:15');
+    else expect(summary?.textContent).toContain('15:15');
     await click(`botGroup.thread.${rootId}`); expect(h.push).toHaveBeenCalledOnce();
     await click(`botGroup.thread.context.${rootId}.action.quote`);
     expect(h.push).toHaveBeenCalledOnce(); expect(byId('botGroup.cancelReply')).not.toBeNull();

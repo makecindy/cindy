@@ -267,6 +267,8 @@
     "imagesNotUploaded_other": "{{count}} images didn't upload",
     "waitingForNamedComputer": "Sends automatically when {{name}} connects",
     "reconnectComputer": "Reconnect",
+    "pendingDelivery": "Pending delivery",
+    "pendingDeliveryHint": "Saved on this phone. Waiting for confirmation from the computer.",
     "waitingForComputer": "Sends when your computer is back",
     "waitingForNetwork": "Sends when you’re back online",
     "queued": "Queued",
@@ -299,7 +301,7 @@
     "goalResumed": "Usage restored, continuing the goal",
     "goalCapacityRetry": "Model service was busy — retrying the goal",
     "autoResume": {
-      "separator": "Connection interrupted — resumed automatically",
+      "separator": "Empty response — resumed automatically",
       "succeeded": "Reconnected",
       "failed": "Reconnect failed",
       "neutral": "Reconnect",

@@ -267,6 +267,8 @@
     "imagesNotUploaded_other": "{{count}} imagens não foram enviadas",
     "waitingForNamedComputer": "Envio automático quando {{name}} se conectar",
     "reconnectComputer": "Reconectar",
+    "pendingDelivery": "Aguardando entrega",
+    "pendingDeliveryHint": "Mensagem salva neste celular. Aguardando a confirmação do computador.",
     "waitingForComputer": "Será enviado quando seu computador voltar",
     "waitingForNetwork": "Será enviado quando você estiver online novamente",
     "queued": "Na fila",
@@ -300,7 +302,7 @@
     "goalResumed": "Limite de uso restabelecido, continuando o objetivo",
     "goalCapacityRetry": "O serviço do modelo estava ocupado — tentando o objetivo novamente",
     "autoResume": {
-      "separator": "Conexão interrompida — retomada automaticamente",
+      "separator": "Resposta vazia — retomada automaticamente",
       "succeeded": "Reconectado",
       "failed": "Falha ao reconectar",
       "neutral": "Reconectar",

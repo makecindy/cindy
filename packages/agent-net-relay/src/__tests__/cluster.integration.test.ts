@@ -554,4 +554,19 @@ describe('replicated official relay: write contention', () => {
     await writer;
     busy.close(); single.close();
   });
+  // 2026-11-26 linked Device Link shares (agent-net-linked-provider-shares.md) roll out without a RELAY_CLUSTER_COMPAT bump:
+  // a replica built before `linkedShares` writes the sharing document through this same ClusterStore path. Minimal failing
+  // input: a replica that rebuilds the document from the arrays it knows while another build's field is stored.
+  it('keeps sharing-document fields another build added when this replica writes the document', async () => {
+    const backend = createMemoryRelayCluster();
+    const [newer, older] = await Promise.all([ClusterStore.open(backend, 'newer'), ClusterStore.open(backend, 'older')]);
+    const linked = { shareId: 'v1-share', networkId: NETWORK, hostDeviceId: 'owner', ownerAccountId: 'owner-account', linkedAt: 1, generation: 1 };
+    await newer.sharingStorage().transaction(async (draft) => { draft.linkedShares = [linked]; });
+    // The other replica touches only what it knows, through the storage interface the sharing service uses.
+    await older.sharingStorage().transaction(async (draft) => { draft.bindings.push({ kind: 'shared-task', resourceId: 'task', networkId: NETWORK }); });
+    await newer.synchronize(['sharing']);
+    expect(newer.sharingStorage().read()).toMatchObject({ linkedShares: [linked], bindings: [{ resourceId: 'task' }] });
+    expect((await backend.snapshot()).find(entry => entry.key === 'sharing')?.value).toMatchObject({ linkedShares: [linked] });
+    newer.close(); older.close();
+  });
 });

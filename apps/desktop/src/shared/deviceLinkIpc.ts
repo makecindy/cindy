@@ -269,6 +269,11 @@ export interface DeviceLinkProviderShareRouteView {
   shareId: string;
   /** 本机到该分享执行端的数据路径；尚未建链时为 null。 */
   path: DeviceLinkPeerPath | 'connecting' | null;
+  /**
+   * 这条分享的数据实际由哪种连接承载：已登记的 Agent-Net 分享路由或 Agent-Net 主连接为 agent-net，
+   * 落到 Device Link 兼容连接（旧版分享、经官方中转的旧跨账号连接）为 device-link。不知道时不给。
+   */
+  protocol?: 'agent-net' | 'device-link';
   /** 端到端往返延迟(ms)；未测得为 null。 */
   rttMs: number | null;
   /** 距最近一次业务消息发出/收到多少毫秒；未收发过为 null。 */
