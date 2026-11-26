@@ -502,6 +502,9 @@ export interface MakerScheduleRunnerDeps {
  */
 class QueuedRouteDisabledError extends Error {}
 
+/** Same dispatch veto, but a bound automation can reacquire its model on a later fire. */
+class QueuedModelChangedError extends QueuedRouteDisabledError {}
+
 /** Pi 原生路由热切失败；继续派发会把任务发给旧 provider，必须在 vendor 前站下。 */
 class QueuedPiRouteSyncError extends Error {}
 
@@ -933,6 +936,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
       | 'usage-limit-wait'
       | 'routine-permission-unavailable'
       | 'routine-dispatch-invalidated'
+      | 'queued-model-changed'
       | 'queue-wait-timeout',
   ): FireResult {
     this.deps.logger.info?.(
@@ -3243,6 +3247,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
   ): Promise<FireResult> {
     const sq = this.deps.schedulerQueue;
     if (!sq) throw new Error('fireHeartbeatViaQueue requires schedulerQueue dep');
+    const modelAtEnqueue = routingBaseline.model;
     const promptToSend = buildScheduledRunPrompt(schedule, ctx, holder.preRunHookOutput);
     const origin = {
       kind: 'scheduler',
@@ -3800,6 +3805,12 @@ export class MakerScheduleRunner implements ScheduleRunner {
         }
         return this.deferFire(schedule, sessionId, 'routine-dispatch-invalidated');
       }
+      // Only the initial dispatch gate proves the prompt never ran. A failure on
+      // a replacement turn after acceptance must not replay the whole automation.
+      if (err instanceof QueuedModelChangedError && schedule.targetSessionId === sessionId &&
+          modelAtEnqueue === routingBaseline.resolvedSelection?.model && this.canDefer(schedule, ctx)) {
+        return this.deferFire(schedule, sessionId, 'queued-model-changed');
+      }
       if (err instanceof QueuedRouteDisabledError) {
         // Refused before vendor dispatch (route or engine turned off, plugin-engine task no longer
         // qualifies). A visible failure the user configured notifications for; the engine's
@@ -3924,8 +3935,11 @@ export class MakerScheduleRunner implements ScheduleRunner {
     // actual runtime at both queue boundaries, after pending user switches.
     if ((!live && !allowRebuildingSession) || (live && (live.agentKind !== selection.agentKind ||
       (live.agentDeviceId ?? null) !== (selection.agentDeviceId ?? null) ||
-      live.model !== selection.model || getSessionProvider(live.id) !== selection.providerId))) {
+      !live.model || getSessionProvider(live.id) !== selection.providerId))) {
       throw new QueuedRouteDisabledError('Scheduled model route changed before queued dispatch');
+    }
+    if (live && live.model !== selection.model) {
+      throw new QueuedModelChangedError('Scheduled model route changed before queued dispatch (model changed)');
     }
   }
 

@@ -154,12 +154,12 @@ it('notifies once when a second flush overlaps presentation of the same message'
   service.dispose();
 });
 
-// Unit: the new personal range must affect native alerts only. A merged burst
+// Unit: a mentions-only group keeps unalerted messages off the island too. A merged burst
 // uses one snapshot, filters before sender/media preparation, and never replays.
 it.each([
   { defaultScope: undefined, override: 'mentions' },
   { defaultScope: 'mentions', override: null },
-] as const)('filters a mentions-only burst without changing the island projection: %j', async ({ defaultScope, override }) => {
+] as const)('filters a mentions-only burst for both alerts and the island projection: %j', async ({ defaultScope, override }) => {
   vi.useFakeTimers();
   const ordinary = message('ordinary', { seq: '9007199254740994' });
   const snapshot = { room: { name: 'Team', kind: 'group', default_notification_scope: defaultScope }, messages: [ordinary, message('mention', { mentions: ['me'] }), message('my-bot', { mentions: ['bot-owned-by-me'] })],
@@ -172,7 +172,10 @@ it.each([
   expect(read).toHaveBeenCalledOnce();
   expect(present).toHaveBeenCalledOnce();
   expect(notify.mock.calls.map(([event]) => event.messageId)).toEqual(['mention']);
-  expect(selectChatAttentionMessage({ ...snapshot, messages: [ordinary] }, 'me')).toBe(ordinary);
+  // Regression: the island used to keep the unalerted ordinary message as its group card.
+  expect(selectChatAttentionMessage({ ...snapshot, messages: [ordinary] }, 'me')).toBeNull();
+  expect(selectChatAttentionMessage(snapshot, 'me')?.id).toBe('mention');
+  expect(selectChatAttentionMessage({ ...snapshot, room: { ...snapshot.room, kind: 'direct' }, messages: [ordinary] }, 'me')).toBe(ordinary);
   service.enqueue('room', ordinary.id);
   await vi.advanceTimersByTimeAsync(1200);
   expect(read).toHaveBeenCalledOnce();

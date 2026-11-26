@@ -1,5 +1,5 @@
 import { GithubAppCard } from '@/features/cc-agent/GithubAppCard';
-import { schedulePrTriggers } from '@cindy/maker-scheduler/pr-trigger';
+import { schedulePrTriggers, isGithubPrTriggerUrl } from '@cindy/maker-scheduler/pr-trigger';
 import { Button } from '@/components/ui/button';
 import { shouldShowOpenPathError } from '../../../../shared/openPathResult';
 /**
@@ -230,9 +230,12 @@ export function RunHistoryPane({
     ? t('scheduler.detail.manualTrigger')
     : s.intervalMs ? formatIntervalDuration(s.intervalMs, appI18n.language) : summarizeConfig(cronToConfig(s.cronExpr), t);
   const rules = schedulePrTriggers(s);
-  const prText = rules.map(rule => `${rule.url.replace('https://github.com/', '').replace('/pull/', '#').replace('/-/merge_requests/', '!')} · ${t(`scheduler.prTrigger.${rule.change}`)}`).join(', ');
+  // GitHub PR: owner/repo#N; GitLab MR: group/project!N.
+  const prText = rules.map(rule => `${rule.url.replace(/^https:\/\/github\.com\//, '').replace('/pull/', '#')
+    .replace(/^https:\/\/[^/]+\//, '').replace('/-/merge_requests/', '!')} · ${t(`scheduler.prTrigger.${rule.change}`)}`).join(', ');
+  const eventTitle = t(s.webhookTrigger?.source?.preset === 'plugin' ? 'scheduler.webhook.pluginTitle' : 'scheduler.webhook.title');
   const cronText = prText ? (s.manual ? prText : `${timingText} · ${prText}`) : s.webhookTrigger
-    ? s.manual ? t('scheduler.webhook.title') : `${timingText} · ${t('scheduler.webhook.title')}`
+    ? s.manual ? eventTitle : `${timingText} · ${eventTitle}`
     : timingText;
   const agentText = s.agentKind === 'acp'
     ? pluginEngineName ?? t('newChat.pluginEngines.genericName')
@@ -330,7 +333,8 @@ export function RunHistoryPane({
 
       {/* 连接引导与执行结果一起滚动，较小窗口仍能看完密钥和测试步骤。 */}
       <div className="min-h-0 flex-1 overflow-y-auto px-6 pb-6">
-        {rules.length > 0 && connectionSetupVisible && <GithubAppCard automation timedPrCheck={!s.manual} repositories={rules.map(rule => rule.url.split('/').slice(3, 5).join('/'))} />}
+        {rules.some(rule => isGithubPrTriggerUrl(rule.url)) && connectionSetupVisible && <GithubAppCard automation timedPrCheck={!s.manual}
+          repositories={rules.filter(rule => isGithubPrTriggerUrl(rule.url)).map(rule => rule.url.split('/').slice(3, 5).join('/'))} />}
         {s.webhookTrigger && <WebhookTriggerPanel key={s.id} schedule={s} connectionSetupVisible={connectionSetupVisible} />}
 
         {hasLoaded && (

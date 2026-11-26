@@ -628,6 +628,7 @@ describe('session list get / put', () => {
       {
         deviceId: 'dev-1',
         deviceName: 'Mac',
+        projectAliases: { platform: 'darwin', aliases: [{ projectKey: 'local:/repo', alias: 'Team' }], settingsSupported: true },
         sessions: [{
           id: 's1',
           status: 'active',
@@ -642,6 +643,7 @@ describe('session list get / put', () => {
       [{
         deviceId: 'dev-1',
         deviceName: 'Mac',
+        projectAliases: { platform: 'darwin', aliases: [{ projectKey: 'local:/repo', alias: 'Team' }] },
         sessions: [{ id: 's1', status: 'active', title: 'Keep me' }],
       }],
       undefined,

@@ -617,6 +617,28 @@ describe('AcpSession same-turn steering', () => {
     expect(events.filter((event) => event.type === 'done')).toHaveLength(1);
   });
 
+  it('treats outcome: queued (e.g. zcode-acp) as accepted without flushing or withdrawing steering', async () => {
+    const agent = createFakeAgent({ handlers: { initialize: steeringInit, '_session/steering': () => ({ outcome: 'queued' }) } });
+    const { session, events } = await open(agent);
+    const capabilityUpdates: boolean[] = [];
+    session.onCapabilitiesChange((capabilities) => capabilityUpdates.push(capabilities.sameTurnSteer.supported));
+    await session.send({ type: 'user', content: 'first' });
+    await vi.waitFor(() => expect(agent.prompts).toHaveLength(1));
+    agent.update({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Part 1.' } });
+
+    await expect(session.steer({ type: 'user', content: 'follow up' })).resolves.toBeUndefined();
+    // Queued does not flush the in-flight assistant segment early.
+    expect(finalTexts(events)).toEqual([]);
+    expect(session.capabilities.sameTurnSteer.supported).toBe(true);
+    expect(capabilityUpdates).toEqual([]);
+
+    agent.update({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: ' Part 2.' } });
+    agent.prompts[0]!.settle.resolve({ stopReason: 'end_turn' });
+    await vi.waitFor(() => expect(events.at(-1)?.type).toBe('done'));
+    expect(finalTexts(events)).toEqual(['Part 1. Part 2.']);
+    expect(agent.prompts).toHaveLength(1);
+  });
+
   it('keeps an agent without the extension as before: the message waits for the next turn', async () => {
     const agent = createFakeAgent();
     const { session } = await open(agent);
