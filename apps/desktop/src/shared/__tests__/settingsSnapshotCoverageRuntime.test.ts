@@ -139,7 +139,7 @@ afterEach(() => {
 });
 
 describe('production reader to v2 coverage seam', () => {
-  it.each(['darwin', 'win32', 'linux'] as const)('reads all 471 native leaves and projects the 453 v2 leaves on %s without placeholder fill', platform => {
+  it.each(['darwin', 'win32', 'linux'] as const)('reads all 472 native leaves and projects the 453 v2 leaves on %s without placeholder fill', platform => {
     state.platform = platform;
     const { parts, inspection, report } = noWrites(() => read());
     assertCoverage(parts);
@@ -166,6 +166,7 @@ describe('production reader to v2 coverage seam', () => {
         'im.imessage.agents.pi.providerId',
         'im.imessage.groupPermissionMode',
         'im.imessage.permissionMode',
+        'shortcuts.copy-session-link',
         'shortcuts.region-screenshot',
         'shortcuts.session-history-back',
         'shortcuts.session-history-forward',

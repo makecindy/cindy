@@ -113,6 +113,8 @@ it('sets the execution computer for a phone-joined member without assuming a dev
 
 it('lets an ordinary member save notifications without a manager or online computer, and refreshes personal changes', async () => {
   snapshot.members[0].role = 'member';
+  // Unit regression for #13029: readback must distinguish inheriting from saving the same value.
+  snapshot.room.default_notification_scope = 'mentions';
   snapshot.reads = [{ thread_key: 'main', read_seq: '7', muted: false, notification_scope: null }];
   const original = request.getMockImplementation()!;
   request.mockImplementation(async (path, method, body, actor) => {
@@ -126,9 +128,13 @@ it('lets an ordinary member save notifications without a manager or online compu
   });
   await render();
   expect(result.editable).toBe(false);
+  expect(result.group).toMatchObject({ notificationMode: 'mentions', notificationModeInherited: true });
   await act(async () => { await result.act('notifications', { mode: 'mentions' }); });
   expect(writes()).toEqual([[`/conversations/${id(1)}/read`, 'POST', { operationId: 'operation-1', readSeq: '0', notificationMode: 'mentions' }]]);
-  expect(result.group?.notificationMode).toBe('mentions');
+  expect(result.group).toMatchObject({ notificationMode: 'mentions', notificationModeInherited: false });
+  snapshot.room.default_notification_scope = 'all';
+  await act(async () => { await result.refresh(); });
+  expect(result.group).toMatchObject({ notificationMode: 'mentions', notificationModeInherited: false });
   snapshot.reads[0].muted = true;
   source = { ...source, notificationMode: 'none' };
   await render();

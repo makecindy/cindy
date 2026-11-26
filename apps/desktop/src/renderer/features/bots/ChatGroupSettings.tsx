@@ -415,7 +415,7 @@ export function ChatGroupSettings({ group }: { group: BotGroupSummary }) {
                       ...group.assistantComputers.map(device => ({ value: device.id, label: device.name }))]}
                     onValueChange={deviceId => void mutate({ type: 'assistantDevice', deviceId })} />} />}
                 {group.supportsNotificationSettings && group.notificationMode && <ChatGroupNotificationSettings key={group.id}
-                  groupId={group.id} mode={group.notificationMode} disabled={busy || !!group.archived} />}
+                  groupId={group.id} mode={group.notificationMode} inherited={group.notificationModeInherited} disabled={busy || !!group.archived} />}
               </SettingsCard>
             </SettingsSection>}
             {!dissolved && !group.archived && ownBots.length > 0 && <SettingsSection title={t(key('myTeammates'))} caption={t(key('myTeammatesCaption'))}>

@@ -312,7 +312,7 @@ export function ChatGroupSettingsSheet({ visible, group, host, identityFor, onli
               label={t('groupChat.mask.title')} value={t(`groupChat.mask.status.${mask!.state!.status}`)} accessibilityLabel={t('groupChat.mask.title')} onPress={onMask} /> : null}
           </SettingsGroup> : null}
           {!dissolved && me?.actorId && group.supportsNotificationSettings && group.notificationMode ? <GroupNotificationSettings key={scope}
-            title={direct || maskRow || group.assistantComputers ? undefined : k('me')} mode={group.notificationMode}
+            title={direct || maskRow || group.assistantComputers ? undefined : k('me')} mode={group.notificationMode} inherited={group.notificationModeInherited}
             disabled={!visible || !online || archived || busy || (direct && !management.ready)}
             save={mode => management ? management.act('notifications', { mode }) : act('notifications', { mode })} /> : null}
           {(direct || group.supportsOwnBotRemoval === true) && !dissolved && !archived && ownBots.length ? <SettingsGroup title={k('myTeammates')} footer={k('myTeammatesCaption')} testID="botGroup.settings.myTeammates">
