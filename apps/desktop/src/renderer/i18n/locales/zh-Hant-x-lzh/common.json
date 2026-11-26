@@ -2778,7 +2778,7 @@
         "description": "Ubuntu 用系統 .deb 安裝套件。Arch Linux 與 Omarchy 用受管之使用者目錄安裝程式，採同一份已驗之 .deb 內容，無須 Debian 套件管理器。",
         "item1": "Ubuntu：用 sudo apt install ./cindy-<version>-<arch>.deb。Arch/Omarchy：請依 docs/linux.md 中之使用者目錄安裝指南行之。",
         "item2": "點擊更新後，系統 .deb 安裝須授權；使用者目錄安裝無須系統密碼即可易版。他套件管理器所裝之版，請經對應之套件管理器更新。",
-        "item3": "Linux x64 與 arm64 支援 Beta 渠道。Linux 唯於君擇重新啟動時施更新，閒置時不自動安裝。"
+        "item3": "Linux x64 與 arm64 支援 Beta 渠道。使用者目錄所裝者，閒時可自行安裝更新；已設免密授權的系統 .deb 所裝者，閒時亦可自行安裝更新，其餘系統 .deb 所裝者，唯於君擇重新啟動時施更新。"
       },
       "qnaTitle": "徑問",
       "qnaDescription": "未得其解？徑問君所欲為",
@@ -2853,7 +2853,7 @@
       "openLogsDirError": "日誌目錄未能啟",
       "autoUpdateLabel": "閒時自裝更新",
       "autoUpdateDescription": "更新取下既畢，若此機 10 分鐘無操作且無差事方行，則自重啟應用以成安裝。",
-      "linuxUpdateDescription": "更新於君擇重啟時生效。系統 .deb 安裝須系統密碼，使用者目錄安裝則否。他法所裝者，請以相應套件管理器更新。",
+      "linuxUpdateDescription": "系統 .deb 安裝須系統密碼，更新於君擇重啟時生效；使用者目錄安裝則無須密碼，可於閒時自行安裝。他法所裝者，請以相應套件管理器更新。",
       "autoUpdateEnabledToast": "已啟閒時自裝更新",
       "autoUpdateDisabledToast": "已闔閒時自裝更新",
       "autoUpdateSaveFailed": "自更新之設未能存",
@@ -7122,7 +7122,14 @@
           "routeUnavailable": "不可達",
           "routeMeasuring": "測速中…",
           "routeDirectUnavailableHint": "今網路未能直達此器",
-          "routePreferenceFailed": "易道未成，請復試之"
+          "routePreferenceFailed": "易道未成，請復試之",
+          "autoRule": {
+            "title": "自動擇路之規",
+            "faster": "擇延遲更低之途，微差則尚直連。",
+            "thresholds": "中轉快於直連 25–50 ms 以上則轉中轉；直連復至差 15 ms 以內則歸直連。",
+            "cooldown": "常易隔三十息以防抖；若今途驟劣（慢二倍且逾 100 ms）則立易。",
+            "peerOverride": "若彼端自定直連或中轉，或版本尚舊，則從彼端之設與能。"
+          }
         },
         "protocol": {
           "agentNet": "Agent-Net",
@@ -7270,6 +7277,99 @@
             "busy": "「{{name}}」方行他更，少頃再試",
             "failed": "未能更「{{name}}」之 Cindy"
           }
+        },
+        "tabs": {
+          "aria": "拓撲圖觀",
+          "devices": "器聯",
+          "providers": "遠供"
+        },
+        "providers": {
+          "empty": "今無方行之遠供務。擇他機或所享之供以啟務，行間即見其徑與驛。",
+          "noMatch": "無合此篩之務、機或驛。",
+          "searchPlaceholder": "索務、機或驛…",
+          "clearFilter": "清篩",
+          "expand": "展",
+          "collapse": "斂",
+          "groupTitle": "{{provider}} 供群",
+          "groupCount": "凡 {{count}} 機",
+          "groupIdleSummary": "餘 {{count}} 機：在席 {{online}} · 離席 {{offline}}",
+          "filter": {
+            "aria": "依務態篩之",
+            "all": "諸繫之務 ({{count}})",
+            "running": "唯行中 ({{count}})"
+          },
+          "columns": {
+            "tasks": "吾務",
+            "path": "通途",
+            "machines": "遠供之機"
+          },
+          "usage": {
+            "remoteModel": "遠模",
+            "remoteTask": "遠務"
+          },
+          "bundle": {
+            "mixed": "{{running}} 行中 · {{ready}} 待命",
+            "runningOnly": "{{running}} 行中",
+            "readyOnly": "{{ready}} 待命",
+            "countBadge": "凡 {{count}}",
+            "popoverTitle": "繫於 {{name}} 之務 ({{count}})"
+          },
+          "badge": {
+            "own": "吾機",
+            "groupMember": "群員",
+            "share": "他戶所享",
+            "shareShort": "所享",
+            "shareGroup": "所享供群 · {{count}} 機",
+            "shareGroupShort": "享群 · {{count}} 機"
+          },
+          "relayRole": {
+            "officialShort": "官驛",
+            "selfHostedShort": "自驛",
+            "sharerRelayShort": "享主之驛",
+            "officialFull": "Cindy 官驛",
+            "selfHostedFull": "吾之自驛",
+            "sharerRelayFull": "享主自建之驛"
+          },
+          "status": {
+            "ready": "已備",
+            "busy": "方忙",
+            "paused": "已輟",
+            "idle": "閒置",
+            "standby": "候命"
+          },
+          "machineLine": {
+            "live": "{{flow}} · 承 {{count}} 務",
+            "ready": "已備 · 承 {{count}} 務"
+          },
+          "popover": {
+            "models": "所用之模",
+            "tasksCount": "所承之務 ({{count}})",
+            "clickToOpenHint": "點之即赴",
+            "relayHost": "驛址",
+            "relayRegion": "域",
+            "relayHop": "本機至驛",
+            "relayLoad": "經此驛者",
+            "relayLoadValue": "{{machines}} 機 · {{tasks}} 務"
+          },
+          "idleStrip": {
+            "summary": "另有 {{count}} 遠供在席候命，今無務召之",
+            "show": "展閒供",
+            "hide": "斂閒供"
+          },
+          "stats": {
+            "empty": "今無方行之遠供務",
+            "tasks": "{{total}} 務",
+            "tasksWithRunning": "{{total}} 務（{{running}} 行中）",
+            "machines": "{{active}} 供機",
+            "machinesWithTotal": "活 {{active}} / 凡 {{total}} 供機",
+            "relays": "{{count}} 驛"
+          },
+          "legend": {
+            "live": "青虛流線：方通訊息",
+            "ready": "綠實線：Agent-Net 脈通",
+            "busy": "橙點：務行中 / 機方忙",
+            "error": "朱點線：不應或已輟"
+          }
         }
       }
     },
@@ -7398,7 +7498,8 @@
       "localNetwork": {
         "label": "區域網路",
         "deniedHint": "無此權，同網之電腦與手機不得直連此機，唯經中繼，其速遲矣。",
-        "settingsHint": "請於「系統設定 › 隱私權與安全性 › 區域網路」啟 Cindy，歸此即自生效。"
+        "promptedHint": "請於系統彈框中點「允許」；若無彈框，可往系統設定手啟之。",
+        "settingsHint": "於「隱私權與安全性」覓「區域網路」而啟 Cindy；若列中無之，點「+」添此應用，歸即自效。"
       }
     },
     "imBot": {
@@ -7869,6 +7970,10 @@
         "toggle-sidebar": {
           "label": "顯隱側欄",
           "description": "收或展左側差事錄"
+        },
+        "copy-session-link": {
+          "label": "錄差事連結",
+          "description": "錄當前差事之連結"
         },
         "session-history-back": {
           "label": "前一差事",
@@ -9585,6 +9690,7 @@
         "createTitle": "增 MCP 伺服器",
         "editTitle": "修 MCP 伺服器",
         "desc": "僅支援遠端 http / sse 型 MCP。存後新開或重啟之 Agent 會話即可呼叫，方行之 Agent 會話不受影響。",
+        "embeddedGuide": "助手為此差事啟 MCP 設定表。依供方所示，核已填之項，補其闕，乃存之。",
         "teammateDesc": "僅支援遠端 http / sse 型 MCP。存後同伴自納為己用，於此言談下一則訊息起即可用之，毋須新開差事。"
       },
       "fields": {
@@ -11985,6 +12091,8 @@
         "loadEarlierFailed": "更早之訊未能載，請再試",
         "emptyTitle": "群議寂寂，尚無一言",
         "emptyDescription": "君先開言，群賢畢至，自當接續。@ 某同伴則僅令其答。",
+        "emptyDescriptionWithAssistant": "可 @Cindy，或自右上邀友與同伴。",
+        "emptyDescriptionInvite": "可自右上邀友與同伴。",
         "roundEnded": "同伴言畢",
         "stepTag": "第 {{count}} 步",
         "sending": "方遣",
@@ -12316,7 +12424,7 @@
         "loginRequired": "請先登入當前名籍，再試。",
         "requestFailed": "暫不能連群議服務，請稍後再試。",
         "copyFailed": "錄之未成，請選取連結手錄之。",
-        "createDescription": "可擇同伴，亦可先立群議，再邀友入之。",
+        "createDescription": "群既立，可邀友與同伴。",
         "settings": {
           "name": "群名",
           "topic": "群之主題",
@@ -13603,6 +13711,7 @@
           "overloadRetryingNoCount": "模型服務繁忙，方自動再試…",
           "overloadFailed": "⚠️ 模型服務繁忙：上游暫無餘力。可於此重發此訊再試，或於 Cindy 易一模型。（於桌面端點「再試」亦可續其差事，然其果不返此訊。）"
         },
+        "openAiReconnect": "請在 Cindy 設定 → 模型供應商 → OpenAI 中重新連線 ChatGPT，然後在這裡傳送訊息繼續。",
         "audioInputUnavailable": "今所接模型未能直辨其聲。可請 Cindy 先錄為文字，再續其事。",
         "toolLoop": {
           "generic": "模型屢呼工具過甚，Cindy 已止此輪，以免無窮循環。可遣新訊以續。",
@@ -15611,6 +15720,8 @@
       "codexHelperUnverified": "未能核實此差事之 cindy_helper 是否可用；差事結果或無法回傳。",
       "requestFormatError": "應用程式所發請求格式有謬，此答未能竟。",
       "piRetryHistoryTooLarge": "此信未發。Pi 讀取舊錄以重試時，一幀逾本機 16 MiB 之限。可另啟任務。",
+      "piRetryHistoryUnavailable": "此信未發。Pi 讀舊錄以發信時失誤。可再試，或另啟任務。",
+      "upstreamStatusError": "上游返 {{status}}，此答未竟。",
       "messageNotSent": "此信未發。",
       "replyFailed": "答未竟",
       "queuedSendRecovery": "前訊未遣。點「再試」可依原樣遣發。若遣新訊，則取代前訊。",
@@ -16450,7 +16561,7 @@
       "REMOTE_WORKDIR_UNAVAILABLE": "遠端工作目錄今不可用。請確認彼機上之目錄猶在，然後再試。",
       "REMOTE_OPTIMISTIC_SESSION_STATE_UNAVAILABLE": "機端暫不能確知此訊已遣否。請稍後再試，勿重遣同一訊。",
       "REMOTE_AGENT_UNAVAILABLE": "未能與行 Agent 之機通信，請閱錯誤詳情。",
-      "REMOTE_AGENT_TIMEOUT": "候行 Agent 之機回應逾時，結果未明。再試前請先察差事進展。",
+      "REMOTE_AGENT_TIMEOUT": "行 Agent 之機尚未應。請先察差事進展。若尚在行，或已有果，則無須再試。",
       "REMOTE_AGENT_LINK_BUSY": "與行 Agent 之機通信繁忙，請稍候再試。",
       "REMOTE_AGENT_UNRESPONSIVE": "行 Agent 之機屢未回應，已暫停呼叫。請稍候再試。",
       "REMOTE_AGENT_OFFLINE": "行 Agent 之機已離線，待其重連再試。",
@@ -16697,6 +16808,8 @@
       "retryIn": "{{seconds}} 秒後自試"
     },
     "subscriptionAccountError": {
+      "unreachable": "Codex 帳號服務暫不可達。",
+      "rechecking": "Codex 帳號服務暫不可達，至 {{resetAt}} 將復試。",
       "poolModelLimited": "此模型訂閱之額已盡，可先易模型。",
       "poolRetryUntil": "俟 {{resetAt}} 後可再試。",
       "poolOtherSignedOut": "另有訂閱帳號已退出，可於行此任務之機重新登入而試。",
@@ -18477,6 +18590,7 @@
         "intervalChip": "畢後計時 · {{schedule}}"
       },
       "scheduleMenu": {
+        "custom": "自定 Cron",
         "intervalMinutes": "分（每 N 分）",
         "interval": "Hourly（每 N 時）",
         "daily": "Daily（每日）",
@@ -19174,6 +19288,7 @@
     }
   },
   "commandPalette": {
+    "buddyNewHint": "於同伴設定中選「{{restart}}」，可重建當前語境，舊訊仍存。欲另議一事，可在訊息操作中選「{{startTopic}}」。",
     "viewSkillDetails": "觀技藝之詳",
     "projectSkillNotLoaded": "今之 Pi 差事尚未載此案之 Skill，新差事將自試載之",
     "pluginSkillSetup": {
@@ -22650,6 +22765,16 @@
     "refresh": "更新額度"
   },
   "subscriptionAccounts": {
+    "existing": {
+      "menu": "更多新增方式",
+      "connect": "連接既有登入…",
+      "found": "發現 {{count}} 個可連接的登入",
+      "title": "{{device}} 上的既有登入",
+      "note": "Cindy 將與終端機共用所選帳號的設定。",
+      "attach": "連接",
+      "choose": "選擇其他目錄…",
+      "unverified": "無法確認此目錄中的訂閱登入。"
+    },
     "pluginSignIn": {
       "method": "登入之法",
       "secretHint": "Key 唯付法器，藏於此帳號之篋；Cindy 不存，亦不傳他機。",

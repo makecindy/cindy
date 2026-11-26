@@ -7163,6 +7163,7 @@ function CCAgentSessionContent({
                   ) : remoteMakeCards.handlesSession ? <SessionResourceCards state={remoteMakeCards} /> : undefined}
                   // Picking 「回复」 brings the caret here, ready to type the reply.
                   focusRequest={pendingReplyQuote}
+                  showBuddyNewHint={botChatIdentity?.canonicalChat === true}
                   onSend={handleSend}
                   onComposerTyping={handleComposerTyping}
                   onBeforeVoiceInputStart={handleBeforeVoiceInputStart}

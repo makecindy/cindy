@@ -148,6 +148,8 @@ import {
   activateMessageUrl,
 } from './messageLinkActions';
 import { useOpenWithMenu } from './useOpenWithMenu';
+import { parsePrLinkUrl } from '@/features/cc-agent/PrSummaryPopoverContent';
+import { PrLinkHoverPopover, type PrLinkHoverTriggerProps } from './PrLinkHoverPopover';
 import { activateInlineLinkFromKeyboard, isSeparateLinkActivation } from './linkInteraction';
 import { useLinkContextMenu } from './useLinkContextMenu';
 
@@ -433,6 +435,8 @@ interface MarkdownRendererProps {
    * 方案 A 的安全前提)。
    */
   emitSourceLines?: boolean;
+  /** Notifies host cards when an in-app image, text or 3D preview lightbox opens or closes. */
+  onPreviewOpenChange?: (open: boolean) => void;
 }
 
 function parseSessionCardHref(href: string): {
@@ -1796,25 +1800,58 @@ function MarkdownTargetLink({
     return <span>{children}</span>;
   }
 
-  // Explicit local candidates retain the same open/copy-link menu as links.
-  return (
-    <>
+  // 注意：此处位于多个条件早返回之后，禁止放 Hook；parsePrLinkUrl 为轻纯函数。
+  const prLink =
+    allowPrivilegedLinks && target.kind === 'external' ? parsePrLinkUrl(target.href) : null;
+  const effectiveSessionId = sessionId ?? fileCtx.sessionId;
+  const renderAnchor = (prHoverProps?: PrLinkHoverTriggerProps) => (
     <a
       href={target.href}
       className={MARKDOWN_LINK_CLASS}
       onKeyDown={activateInlineLinkFromKeyboard}
-      onClick={activate}
+      onClick={(event) => {
+        prHoverProps?.onDismiss();
+        void activate(event);
+      }}
       onAuxClick={(event) => {
-        if (event.button === 1) void activate(event);
+        if (event.button === 1) {
+          prHoverProps?.onDismiss();
+          void activate(event);
+        }
       }}
       onContextMenu={(e) => {
+        prHoverProps?.onDismiss();
         if (target.kind === 'external') openWith.onContextMenu(e, target.href);
         else inlineMenu.onContextMenu(e);
       }}
       {...anchorProps}
+      onPointerEnter={(event) => {
+        (anchorProps.onPointerEnter as ((e: React.PointerEvent<HTMLAnchorElement>) => void) | undefined)?.(event);
+        prHoverProps?.onPointerEnter(event);
+      }}
+      onPointerLeave={(event) => {
+        (anchorProps.onPointerLeave as ((e: React.PointerEvent<HTMLAnchorElement>) => void) | undefined)?.(event);
+        prHoverProps?.onPointerLeave(event);
+      }}
+      onPointerDown={(event) => {
+        (anchorProps.onPointerDown as ((e: React.PointerEvent<HTMLAnchorElement>) => void) | undefined)?.(event);
+        prHoverProps?.onPointerDown(event);
+      }}
     >
       {children}
     </a>
+  );
+
+  // Explicit local candidates retain the same open/copy-link menu as links.
+  return (
+    <>
+    {prLink ? (
+      <PrLinkHoverPopover prRef={prLink} sessionId={effectiveSessionId}>
+        {(prHoverProps) => renderAnchor(prHoverProps)}
+      </PrLinkHoverPopover>
+    ) : (
+      renderAnchor()
+    )}
     {openWith.menu}
     {inlineMenu.menu}
     </>
@@ -1901,6 +1938,7 @@ const MarkdownRendererBase = memo(function MarkdownRendererBase({
   resolveImageSrc,
   emitSourceLines = false,
   gallerySection,
+  onPreviewOpenChange,
 }: MarkdownRendererProps) {
   const embeddedMediaStreaming = mediaStreaming ?? isStreaming;
   // Cap markdown re-parse + syntax highlight cost during streaming.
@@ -1992,6 +2030,12 @@ const MarkdownRendererBase = memo(function MarkdownRendererBase({
   } | null>(null);
   // model-local chip/link click → in-app 3D preview (ModelLightbox, local mode).
   const [modelLightboxPath, setModelLightboxPath] = useState<string | null>(null);
+  const previewOpen = Boolean(lightbox || textLightboxFile || modelLightboxPath);
+  useEffect(() => {
+    if (!onPreviewOpenChange) return;
+    onPreviewOpenChange(previewOpen);
+    return () => onPreviewOpenChange(false);
+  }, [previewOpen, onPreviewOpenChange]);
   // workingDir and localFileRefs are stable within a session lifecycle — they
   // only change on session switch or when the message list gains a new user
   // attachment. So in steady-state streaming, the components object is still

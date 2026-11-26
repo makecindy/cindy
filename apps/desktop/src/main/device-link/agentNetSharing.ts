@@ -16,9 +16,10 @@ import { getCurrentUserId, getDeviceId, getAuthState, getActiveAuthRealm } from 
 import { getClientEndpoint } from '../clientEndpointsService.js';
 import { outboundFetch } from '../maker-host/outbound-fetch.desktop.js';
 import { serverApiFetch } from '../serverApiClient.desktop.js';
-import { agentNetClientForRelay, currentAgentNetClient, currentAgentNetScopedTarget, isAgentNetActive, openScopedAgentNetAppSocket,
+import { agentNetClientForRelay, agentNetPeerSnapshot, agentNetRelayRoute, currentAgentNetClient, currentAgentNetScopedTarget, isAgentNetActive, openScopedAgentNetAppSocket,
   outgoingAgentNetClient, outgoingAgentNetClientForRelay, setAgentNetScopedSessionRoute } from './agentNetRuntime.js';
-import { currentOfficialAgentNetClient, outgoingOfficialAgentNetClient } from './agentNetOfficial.js';
+import { currentOfficialAgentNetClient, officialAgentNetBase, outgoingOfficialAgentNetClient } from './agentNetOfficial.js';
+import type { DeviceLinkPeerLinkView, DeviceLinkProviderShareRouteView } from '../../shared/deviceLinkIpc.js';
 import { relayDataPath, secureStorageAvailable, readRelayConfig } from './selfHostedRelayConfig.js';
 import { activeSelfHostedRelay } from './selfHostedRelayRouting.js';
 import { hostJoinBaseUrl } from './selfHostedRelayAddress.js';
@@ -836,6 +837,142 @@ export function bindAgentNetSharing(client: RoutedDeviceLinkClient, options: Sco
   for (const route of state.vault.routes) installRoute(state, route);
   return target.stop;
 }
+function safeRelayHost(server: string): string | null {
+  try {
+    return new URL(server).host || null;
+  } catch {
+    return null;
+  }
+}
+
+function peerPathRank(path: 'direct' | 'relay' | 'connecting' | null | undefined): number {
+  if (path === 'direct') return 3;
+  if (path === 'relay') return 2;
+  if (path === 'connecting') return 1;
+  return 0;
+}
+
+function fresherAgo(a: number | null, b: number | null): number | null {
+  if (a === null) return b;
+  if (b === null) return a;
+  return Math.min(a, b);
+}
+
+/**
+ * 纯内存只读投影：汇总本机 Agent-Net 上已登记或已建链的跨账号供应商分享路由。
+ * 不读盘、不拨号、不发探测帧，供「远程连接 → 远程供应商」拓扑零开销读取。
+ */
+export function agentNetProviderShareRoutes(
+  peerLinks: readonly DeviceLinkPeerLinkView[],
+): DeviceLinkProviderShareRouteView[] {
+  if (isAppSessionBoundaryPending()) return [];
+  const linkByShare = new Map<string, DeviceLinkPeerLinkView>();
+  for (const link of peerLinks) {
+    const parsed = parseProviderSharePeer(link.deviceId);
+    if (!parsed) continue;
+    const prev = linkByShare.get(parsed.shareId);
+    if (!prev || peerPathRank(link.path) > peerPathRank(prev.path)) {
+      linkByShare.set(parsed.shareId, link);
+    } else if (prev) {
+      linkByShare.set(parsed.shareId, {
+        ...prev,
+        sentAgoMs: fresherAgo(prev.sentAgoMs, link.sentAgoMs),
+        receivedAgoMs: fresherAgo(prev.receivedAgoMs, link.receivedAgoMs),
+      });
+    }
+  }
+
+  const selfHostedBase = activeSelfHostedRelay()?.baseUrl.replace(/\/+$/, '') ?? '';
+  const officialBase = officialAgentNetBase().replace(/\/+$/, '');
+  const primaryRelay = agentNetRelayRoute();
+  const out = new Map<string, DeviceLinkProviderShareRouteView>();
+
+  if (binding) {
+    for (const route of binding.session.vault.routes) {
+      if (route.kind !== 'provider-share' || route.retired) continue;
+      if (!route.guest && !route.memberId) continue;
+      const shareId = route.resourceId;
+      const via = binding.via.get(keyOf('provider-share', shareId));
+      if (via === 'blocked') continue;
+
+      const server = route.server.replace(/\/+$/, '');
+      let relayKind: DeviceLinkProviderShareRouteView['relayKind'];
+      let relayHost: string | null = null;
+      if (selfHostedBase && server === selfHostedBase) {
+        relayKind = 'self-hosted';
+      } else if ((officialBase && server === officialBase) || Boolean(route.region)) {
+        relayKind = 'official';
+      } else {
+        relayKind = 'sharer-relay';
+        relayHost = safeRelayHost(server);
+      }
+
+      const link = linkByShare.get(shareId) ?? null;
+      let path: DeviceLinkProviderShareRouteView['path'] = link?.open ? link.path : null;
+      let rttMs: number | null = link?.open ? link.rttMs : null;
+      let relayTransport: 'udp' | 'websocket' | undefined;
+      let relayRttMs: number | null = null;
+
+      if (via === 'primary' || via === undefined) {
+        relayTransport = primaryRelay?.via;
+        relayRttMs = primaryRelay?.rttMs ?? null;
+        const peerKey = link?.deviceId ?? (route.hostDeviceId ? providerShareHostPeer(shareId, route.hostDeviceId) : null);
+        const snap = peerKey ? agentNetPeerSnapshot(peerKey) : null;
+        if (snap) {
+          path = snap.path;
+          if (snap.rttMs !== null) rttMs = snap.rttMs;
+        }
+      } else {
+        const live = binding.session.sockets.get(via.connection);
+        const sock = live?.socket ?? null;
+        const scopedRelay = sock?.relayRoute?.() ?? null;
+        relayTransport = scopedRelay?.via;
+        relayRttMs = scopedRelay?.rttMs ?? null;
+        const peerKey = link?.deviceId ?? (route.hostDeviceId ? providerShareHostPeer(shareId, route.hostDeviceId) : null);
+        if (sock && peerKey) {
+          const targetId = sock.sessionDevice?.(peerKey) ?? peerKey;
+          const snap = sock.peerSnapshot(targetId);
+          if (snap) {
+            path = snap.path;
+            if (snap.rttMs !== null) rttMs = snap.rttMs;
+          }
+        }
+      }
+
+      out.set(shareId, {
+        shareId,
+        path,
+        rttMs,
+        sentAgoMs: link?.sentAgoMs ?? null,
+        receivedAgoMs: link?.receivedAgoMs ?? null,
+        relayKind,
+        relayHost,
+        ...(relayTransport ? { relayTransport } : {}),
+        relayRttMs,
+        ...(route.region ? { region: route.region } : {}),
+      });
+    }
+  }
+
+  for (const [shareId, link] of linkByShare.entries()) {
+    if (out.has(shareId)) continue;
+    const snap = agentNetPeerSnapshot(link.deviceId);
+    out.set(shareId, {
+      shareId,
+      path: snap?.path ?? (link.open ? link.path : null),
+      rttMs: snap?.rttMs ?? (link.open ? link.rttMs : null),
+      sentAgoMs: link.sentAgoMs,
+      receivedAgoMs: link.receivedAgoMs,
+      relayKind: selfHostedBase ? 'self-hosted' : 'official',
+      relayHost: null,
+      ...(primaryRelay?.via ? { relayTransport: primaryRelay.via } : {}),
+      relayRttMs: primaryRelay?.rttMs ?? null,
+    });
+  }
+
+  return Array.from(out.values());
+}
+
 export function stopAgentNetSharing(): void {
   binding?.stop();
   if (session) retire(session);
