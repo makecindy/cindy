@@ -118,6 +118,8 @@ type RemoteHostSnapshot = {
   agentProxy: AgentProxyPrefPayload | null;
   /** 隧道实时状态 (main 进程内存态); 无记录 → null。 */
   agentProxyTunnel: AgentProxyTunnelStatePayload | null;
+  /** 来自我的设备(SSH 访问控制端维护的主机)及其此刻是否可用。 */
+  device?: import('../shared/sshAccess').SshHostDeviceLabel;
 };
 /** 设备互联:REST 设备视图(同 shared/deviceLinkIpc.ts DeviceLinkDeviceView) */
 interface DeviceLinkDeviceInfo {
@@ -5035,6 +5037,7 @@ interface ElectronAPI {
   };
 
   sshAccess: import('../shared/sshAccess').SshAccessApi;
+  sshDeviceHosts: import('../shared/sshAccess').SshDeviceHostsApi;
   taskManagement: import('../shared/taskManagement').TaskManagementApi;
   sidebarSettings: {
     claimLegacyRendererOwner: () => import('../shared/sidebarSettings').SidebarLegacyRendererOwnerClaim;

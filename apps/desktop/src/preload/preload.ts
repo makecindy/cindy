@@ -6147,6 +6147,17 @@ contextBridge.exposeInMainWorld('electronAPI', {
     },
   } satisfies import('../shared/sshAccess').SshAccessApi,
 
+  // The hosts this computer keeps for the person's other devices (SSH access controller, shared/sshAccess.ts).
+  sshDeviceHosts: {
+    read: () => ipcRenderer.invoke('ssh-device-hosts:request', { operation: 'read' }),
+    restore: (deviceId: string) => ipcRenderer.invoke('ssh-device-hosts:request', { operation: 'restore', deviceId }),
+    onChanged: (callback: () => void) => {
+      const listener = () => callback();
+      ipcRenderer.on('ssh-device-hosts:changed', listener);
+      return () => ipcRenderer.removeListener('ssh-device-hosts:changed', listener);
+    },
+  } satisfies import('../shared/sshAccess').SshDeviceHostsApi,
+
   // Sidebar identity state is owner-scoped in main and every mutation/push is generation-fenced.
   taskManagement: {
     read: () => ipcRenderer.invoke('task-management:request', { operation: 'read' }),
