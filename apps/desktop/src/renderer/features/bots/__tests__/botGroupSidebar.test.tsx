@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { readTeammatesViewMode } from '../teammatesSectionPrefs';
+import { readTeammatesViewMode, writeTeammatesViewMode } from '../teammatesSectionPrefs';
 
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -27,6 +27,7 @@ vi.mock('react-i18next', () => ({
 
 const mocks = vi.hoisted(() => ({
   navigate: vi.fn(),
+  openWindow: vi.fn(async () => undefined),
   profiles: [] as unknown[],
   groups: [] as BotGroupSummary[],
   params: {} as { botId?: string; groupId?: string },
@@ -152,6 +153,7 @@ async function renderSidebar() {
 
 beforeEach(() => {
   mocks.navigate.mockReset();
+  mocks.openWindow.mockClear();
   mocks.confirm.mockReset().mockResolvedValue(true);
   mocks.manage.mockReset().mockResolvedValue({ ok: true });
   mocks.refreshGroups.mockReset();
@@ -167,7 +169,7 @@ beforeEach(() => {
   Object.defineProperty(window, 'electronAPI', {
     configurable: true,
     writable: true,
-    value: { localDb: { messages: { onCreated: () => () => undefined } }, maker: { chatServer: {
+    value: { localDb: { messages: { onCreated: () => () => undefined } }, maker: { openSessionInNewWindow: mocks.openWindow, chatServer: {
       manage: mocks.manage, status: async () => ({ enabled: false }),
     } } },
   });
@@ -306,20 +308,26 @@ describe('TeammatesSection group chats', () => {
     expect(mocks.refreshGroups).not.toHaveBeenCalled();
   });
 
-  it('restores the original row and shows the error after an archive request fails', async () => {
-    let settle!: (result: { ok: false; errorCode: string }) => void;
-    mocks.manage.mockImplementationOnce(() => new Promise(resolve => { settle = resolve; }));
-    mocks.groups = [managedGroup()];
-    await renderSidebar();
-    const row = screen.getByRole('button', { name: '周末出游' });
-    row.focus();
-    await selectArchive();
-    await waitFor(() => expect(mocks.manage).toHaveBeenCalledOnce());
-    row.blur();
-    await act(async () => { settle({ ok: false, errorCode: 'REVISION_CONFLICT' }); });
-    await waitFor(() => expect(document.activeElement).toBe(row));
-    expect(screen.getByRole('alert').textContent).toBe('bots.groupChat.server.settings.conflict');
-    expect(mocks.refreshGroups).not.toHaveBeenCalled();
+  // #13097 review / standard: the existing list test missed the collapsed subtree in icon view.
+  it.each(['list', 'icons'] as const)('shows an archive error and restores the group focus in %s view', async mode => {
+    writeTeammatesViewMode('owner', mode);
+    try {
+      let settle!: (result: { ok: false; errorCode: string }) => void;
+      mocks.manage.mockImplementationOnce(() => new Promise(resolve => { settle = resolve; }));
+      mocks.groups = [managedGroup()];
+      await renderSidebar();
+      const row = screen.getByRole('button', { name: '周末出游' });
+      row.focus();
+      await selectArchive();
+      await waitFor(() => expect(mocks.manage).toHaveBeenCalledOnce());
+      row.blur();
+      await act(async () => { settle({ ok: false, errorCode: 'REVISION_CONFLICT' }); });
+      expect(screen.getByRole('alert').textContent).toBe('bots.groupChat.server.settings.conflict');
+      await waitFor(() => expect(document.activeElement).toBe(row));
+      expect(mocks.refreshGroups).not.toHaveBeenCalled();
+    } finally {
+      writeTeammatesViewMode('owner', 'list');
+    }
   });
 
   it('keeps cancelled archives untouched and blocks old-account confirmations and responses', async () => {
@@ -353,6 +361,20 @@ describe('TeammatesSection group chats', () => {
     expect(mocks.confirm).toHaveBeenCalledOnce();
     await act(async () => { accept(true); });
     await waitFor(() => expect(mocks.manage).toHaveBeenCalledOnce());
+  });
+
+  it.each(['list', 'icons'] as const)('opens the targeted group in a separate window from the %s view', async mode => {
+    writeTeammatesViewMode('owner', mode);
+    try {
+      mocks.groups = [group({ id: 'week/end' })];
+      await renderSidebar();
+      fireEvent.contextMenu(screen.getByRole('button', { name: '周末出游' }));
+      fireEvent.click(await screen.findByRole('menuitem', { name: 'rightSidebar.tabs.contextMenu.openInWindow' }));
+      expect(mocks.openWindow).toHaveBeenCalledExactlyOnceWith('/bots/groups/week%2Fend');
+      expect(mocks.navigate).not.toHaveBeenCalled();
+    } finally {
+      writeTeammatesViewMode('owner', 'list');
+    }
   });
 
   it('offers settings but no archive for ordinary members, with keyboard access', async () => {
@@ -809,9 +831,9 @@ describe('topic reply sidebar entry', () => {
       expect(mocks.navigate).not.toHaveBeenCalled();
 
       fireEvent.contextMenu(row);
-      const menuItem = await screen.findByRole('menuitem', { name: 'ccAgent.sidebar.sessionMenu.openInNewWindow' });
+      const menuItem = await screen.findByRole('menuitem', { name: 'rightSidebar.tabs.contextMenu.openInWindow' });
       fireEvent.click(menuItem);
-      expect(openSessionInNewWindow).toHaveBeenNthCalledWith(3, '/bots/groups/g1', undefined, undefined);
+      expect(openSessionInNewWindow).toHaveBeenNthCalledWith(3, '/bots/groups/g1');
     } finally {
       (window as unknown as { electronAPI: unknown }).electronAPI = prevApi;
     }

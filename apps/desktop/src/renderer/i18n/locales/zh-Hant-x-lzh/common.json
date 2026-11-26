@@ -7122,7 +7122,14 @@
           "routeUnavailable": "不可達",
           "routeMeasuring": "測速中…",
           "routeDirectUnavailableHint": "今網路未能直達此器",
-          "routePreferenceFailed": "易道未成，請復試之"
+          "routePreferenceFailed": "易道未成，請復試之",
+          "autoRule": {
+            "title": "自動擇路之規",
+            "faster": "擇延遲更低之途，微差則尚直連。",
+            "thresholds": "中轉快於直連 25–50 ms 以上則轉中轉；直連復至差 15 ms 以內則歸直連。",
+            "cooldown": "常易隔三十息以防抖；若今途驟劣（慢二倍且逾 100 ms）則立易。",
+            "peerOverride": "若彼端自定直連或中轉，或版本尚舊，則從彼端之設與能。"
+          }
         },
         "protocol": {
           "agentNet": "Agent-Net",
@@ -7269,6 +7276,99 @@
             "noUpdate": "「{{name}}」今無可裝之新版",
             "busy": "「{{name}}」方行他更，少頃再試",
             "failed": "未能更「{{name}}」之 Cindy"
+          }
+        },
+        "tabs": {
+          "aria": "拓撲圖觀",
+          "devices": "器聯",
+          "providers": "遠供"
+        },
+        "providers": {
+          "empty": "今無方行之遠供務。擇他機或所享之供以啟務，行間即見其徑與驛。",
+          "noMatch": "無合此篩之務、機或驛。",
+          "searchPlaceholder": "索務、機或驛…",
+          "clearFilter": "清篩",
+          "expand": "展",
+          "collapse": "斂",
+          "groupTitle": "{{provider}} 供群",
+          "groupCount": "凡 {{count}} 機",
+          "groupIdleSummary": "餘 {{count}} 機：在席 {{online}} · 離席 {{offline}}",
+          "filter": {
+            "aria": "依務態篩之",
+            "all": "諸繫之務 ({{count}})",
+            "running": "唯行中 ({{count}})"
+          },
+          "columns": {
+            "tasks": "吾務",
+            "path": "通途",
+            "machines": "遠供之機"
+          },
+          "usage": {
+            "remoteModel": "遠模",
+            "remoteTask": "遠務"
+          },
+          "bundle": {
+            "mixed": "{{running}} 行中 · {{ready}} 待命",
+            "runningOnly": "{{running}} 行中",
+            "readyOnly": "{{ready}} 待命",
+            "countBadge": "凡 {{count}}",
+            "popoverTitle": "繫於 {{name}} 之務 ({{count}})"
+          },
+          "badge": {
+            "own": "吾機",
+            "groupMember": "群員",
+            "share": "他戶所享",
+            "shareShort": "所享",
+            "shareGroup": "所享供群 · {{count}} 機",
+            "shareGroupShort": "享群 · {{count}} 機"
+          },
+          "relayRole": {
+            "officialShort": "官驛",
+            "selfHostedShort": "自驛",
+            "sharerRelayShort": "享主之驛",
+            "officialFull": "Cindy 官驛",
+            "selfHostedFull": "吾之自驛",
+            "sharerRelayFull": "享主自建之驛"
+          },
+          "status": {
+            "ready": "已備",
+            "busy": "方忙",
+            "paused": "已輟",
+            "idle": "閒置",
+            "standby": "候命"
+          },
+          "machineLine": {
+            "live": "{{flow}} · 承 {{count}} 務",
+            "ready": "已備 · 承 {{count}} 務"
+          },
+          "popover": {
+            "models": "所用之模",
+            "tasksCount": "所承之務 ({{count}})",
+            "clickToOpenHint": "點之即赴",
+            "relayHost": "驛址",
+            "relayRegion": "域",
+            "relayHop": "本機至驛",
+            "relayLoad": "經此驛者",
+            "relayLoadValue": "{{machines}} 機 · {{tasks}} 務"
+          },
+          "idleStrip": {
+            "summary": "另有 {{count}} 遠供在席候命，今無務召之",
+            "show": "展閒供",
+            "hide": "斂閒供"
+          },
+          "stats": {
+            "empty": "今無方行之遠供務",
+            "tasks": "{{total}} 務",
+            "tasksWithRunning": "{{total}} 務（{{running}} 行中）",
+            "machines": "{{active}} 供機",
+            "machinesWithTotal": "活 {{active}} / 凡 {{total}} 供機",
+            "relays": "{{count}} 驛"
+          },
+          "legend": {
+            "live": "青虛流線：方通訊息",
+            "ready": "綠實線：Agent-Net 脈通",
+            "busy": "橙點：務行中 / 機方忙",
+            "error": "朱點線：不應或已輟"
           }
         }
       }
@@ -11991,6 +12091,8 @@
         "loadEarlierFailed": "更早之訊未能載，請再試",
         "emptyTitle": "群議寂寂，尚無一言",
         "emptyDescription": "君先開言，群賢畢至，自當接續。@ 某同伴則僅令其答。",
+        "emptyDescriptionWithAssistant": "可 @Cindy，或自右上邀友與同伴。",
+        "emptyDescriptionInvite": "可自右上邀友與同伴。",
         "roundEnded": "同伴言畢",
         "stepTag": "第 {{count}} 步",
         "sending": "方遣",
@@ -12322,7 +12424,7 @@
         "loginRequired": "請先登入當前名籍，再試。",
         "requestFailed": "暫不能連群議服務，請稍後再試。",
         "copyFailed": "錄之未成，請選取連結手錄之。",
-        "createDescription": "可擇同伴，亦可先立群議，再邀友入之。",
+        "createDescription": "群既立，可邀友與同伴。",
         "settings": {
           "name": "群名",
           "topic": "群之主題",
@@ -19184,6 +19286,7 @@
     }
   },
   "commandPalette": {
+    "buddyNewHint": "於同伴設定中選「{{restart}}」，可重建當前語境，舊訊仍存。欲另議一事，可在訊息操作中選「{{startTopic}}」。",
     "viewSkillDetails": "觀技藝之詳",
     "projectSkillNotLoaded": "今之 Pi 差事尚未載此案之 Skill，新差事將自試載之",
     "pluginSkillSetup": {
