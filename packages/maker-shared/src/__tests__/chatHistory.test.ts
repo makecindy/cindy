@@ -44,6 +44,21 @@ it('retains an open topic across a verified peer join and drops it on a reader m
   expect(cache.committedSnapshot('room')).toBeUndefined();
 });
 
+// Unit: rejecting receive() interrupts the shared push connection on a single room's HTTP failure.
+it('invalidates only the unverified room when its join snapshot is throttled', async () => {
+  const f = fixture();
+  const cache = f.open('self');
+  for (const id of ['room', 'other']) {
+    f.api.mockResolvedValueOnce({ room: { id }, cursor: '10', messages: [], members: [{ id: 'self', state: 'joined' }] });
+    await cache.snapshot(id);
+  }
+  f.api.mockRejectedValueOnce(new Error('RATE_LIMITED'));
+  await expect(cache.receive('room', { cursor: '11', changes: [{ type: 'membership.changed', entityId: 'peer' }] }, '10'))
+    .resolves.toBeUndefined();
+  expect(f.disk.has('room')).toBe(false);
+  expect(await cache.receive('other', { cursor: '11', changes: [] }, '10')).toBe('11');
+});
+
 // Unit tier, phone group-open latency: a store that rewrites the whole room per commit was
 // asked to commit after every step of one read (delta, metadata, page, each root lookup).
 describe('one commit per room operation (coalesceWrites)', () => {

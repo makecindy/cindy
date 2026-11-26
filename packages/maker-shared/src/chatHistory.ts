@@ -175,7 +175,7 @@ export function createChatHistory(input: {
       state.messages[message.id] = { ...previous, ...message };
   }
   /** Returns false when the membership/history boundary requires a new bootstrap. */
-  async function apply(state: ChatHistoryState, batch: ChatHistoryBatch): Promise<boolean> {
+  async function apply(state: ChatHistoryState, batch: ChatHistoryBatch, source: 'push' | 'catch-up'): Promise<boolean> {
     if (!isCursor(batch.cursor) || !Array.isArray(batch.changes)) throw new Error('CHAT_RESPONSE_INVALID');
     if (BigInt(batch.cursor) <= BigInt(state.cursor)) return true;
     const membership = batch.changes.filter(change => change.type === 'membership.changed');
@@ -187,7 +187,15 @@ export function createChatHistory(input: {
       const targets = new Set(membership.map(change => change.entityId));
       if ([...targets].some(id => !id || id === state.snapshot.room.id || prior.some(member => member.id === id && member.state === 'joined'))) return false;
       // Only preserve open pages for confirmed peer joins under the same reader membership.
-      const fresh = await input.api<ChatHistorySnapshot>(`/conversations/${state.snapshot.room.id}/snapshot`);
+      let fresh: ChatHistorySnapshot;
+      try {
+        fresh = await input.api<ChatHistorySnapshot>(`/conversations/${state.snapshot.room.id}/snapshot`);
+      } catch (error) {
+        if (source === 'catch-up') throw error;
+        // A failed join check invalidates this room. Other rooms share the push connection.
+        assertCurrent();
+        return false;
+      }
       if (fresh.room.id !== state.snapshot.room.id || !isCursor(fresh.cursor) || BigInt(fresh.cursor) < BigInt(batch.cursor)
         || JSON.stringify(fresh.members?.find(member => member.id === input.readerId)) !== JSON.stringify(reader)
         || ![...targets].every(id => fresh.members?.some(member => member.id === id && member.state === 'joined'))) return false;
@@ -332,7 +340,7 @@ export function createChatHistory(input: {
         const batch = await input.api<ChatHistoryBatch>(`/changes?scope=conversation:${room}&after=${state.cursor}&limit=100`);
         if (batch.hasMore && batch.cursor === state.cursor) throw new Error('CHAT_SYNC_STALLED');
         const moved = batch.cursor !== state.cursor;
-        if (!await apply(state, batch)) return bootstrap(room);
+        if (!await apply(state, batch, 'catch-up')) return bootstrap(room);
         // An empty delta changes nothing durable; do not rewrite the room for it.
         if (moved || !input.coalesceWrites) await save(room, state);
         if (!batch.hasMore) {
@@ -503,7 +511,7 @@ export function createChatHistory(input: {
       // Another foreground snapshot may have started this subscription beyond our durable cursor.
       // Catch up that gap instead of acknowledging unseen edits/deletions.
       if (!subscribedAfter || BigInt(subscribedAfter) > BigInt(state.cursor)) return (await ensure(room, true)).cursor;
-      if (!await apply(state, batch)) { await remove(room); return undefined; }
+      if (!await apply(state, batch, 'push')) { await remove(room); return undefined; }
       await save(room, state);
       return state.cursor;
     }),
