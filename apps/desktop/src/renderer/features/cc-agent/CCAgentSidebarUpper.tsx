@@ -3849,6 +3849,7 @@ function ExpandedView({
                  * 同样不展示，继续使用本地与已缓存内容即可。
                  */}
                 <PinnedSection
+                  inboxMode={taskListMode === 'inbox'}
                   sortBy={filter.pinnedSortBy}
                   onSortByChange={filter.setPinnedSortBy}
                   entries={sortedPinnedEntries}
@@ -3862,6 +3863,8 @@ function ExpandedView({
                     <ProjectNodeView
                       project={project}
                       displaySessions={displaySessions}
+                      inboxMode={taskListMode === 'inbox'}
+                      hideInboxActions={taskListMode === 'inbox'}
                       sessionVariant={sessionVariant}
                       statusFilter={filter.status}
                       isCollapsed={collapse.collapsed.has(project.projectKey)}

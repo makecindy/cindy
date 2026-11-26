@@ -151,6 +151,7 @@ export type SessionCardProps = SessionItemProps & {
 export const SessionCard = withSidebarNavigation<SessionCardProps>(function SessionCard({
   navigate,
   inboxMode = false,
+  hideInboxActions = false,
   session,
   isActive,
   isRunning,
@@ -874,6 +875,7 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
                 snoozeAction={snoozeAction}
                 session={session}
                 inboxMode={inboxMode}
+                hideInboxActions={hideInboxActions}
                 navigationOnly={navigationOnly}
                 pieces={cardInfoPieces}
                 prRef={cardInfoPrRef}
@@ -937,8 +939,12 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
       ) : (
         <div className="relative flex h-full flex-col px-2.5 pt-2 pb-2">
           {/* 右上角 hover 操作钮(More + Archive/Undo);archivePending 时换成红色确认胶囊。
-            时间在右下角(见下),操作钮放右上角空位、不和时间挤在一起。 */}
-          {!navigationOnly && !isEditing && !archivePending && (
+            时间在右下角(见下),操作钮放右上角空位、不和时间挤在一起。
+            收件箱模式下不显示 More / 归档；置顶区进一步隐藏稍后处理和完成，仅已归档项保留取消归档。 */}
+          {!navigationOnly &&
+            !isEditing &&
+            !archivePending &&
+            (!inboxMode || (isArchived && !remoteWritesBlocked) || (!hideInboxActions && canQuickArchive)) && (
             <div
               className={cn(
                 // peer:标题行按操作钮自身的 focus-within 让位,与其显隐条件一致。
@@ -948,16 +954,18 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
                   : 'opacity-0 group-hover/card:opacity-100 focus-within:opacity-100',
               )}
             >
-              <CardAction
-                label={t('ccAgent.sidebar.sessionMenu.moreActions')}
-                onClick={(e) => {
-                  const rect = e.currentTarget.getBoundingClientRect();
-                  prefetchRemovalPreflight();
-                  setMenuPos({ x: rect.left, y: rect.bottom + 2 });
-                }}
-              >
-                <EllipsisVertical size={13} strokeWidth={2} />
-              </CardAction>
+              {!inboxMode && (
+                <CardAction
+                  label={t('ccAgent.sidebar.sessionMenu.moreActions')}
+                  onClick={(e) => {
+                    const rect = e.currentTarget.getBoundingClientRect();
+                    prefetchRemovalPreflight();
+                    setMenuPos({ x: rect.left, y: rect.bottom + 2 });
+                  }}
+                >
+                  <EllipsisVertical size={13} strokeWidth={2} />
+                </CardAction>
+              )}
               {isArchived && !remoteWritesBlocked ? (
                 <CardAction
                   label={t('ccAgent.sidebar.sessionMenu.unarchive')}
@@ -965,6 +973,19 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
                 >
                   <Undo size={13} strokeWidth={2} />
                 </CardAction>
+              ) : canQuickArchive && inboxMode ? (
+                !hideInboxActions && (
+                  <CardAction
+                    inboxComplete
+                    label={t('ccAgent.sidebar.inbox.complete')}
+                    onClick={() => {
+                      prefetchRemovalPreflight();
+                      onAction(session.id, 'complete');
+                    }}
+                  >
+                    <Check size={13} strokeWidth={2} />
+                  </CardAction>
+                )
               ) : canQuickArchive ? (
                 <CardAction
                   label={t('ccAgent.sidebar.sessionMenu.archived')}
@@ -1014,9 +1035,12 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
               !navigationOnly &&
                 !isEditing &&
                 !archivePending &&
+                (!inboxMode || (isArchived && !remoteWritesBlocked) || (!hideInboxActions && canQuickArchive)) &&
                 (menuPos !== null
-                  ? 'pr-14'
-                  : 'group-hover/card:pr-14 peer-focus-within/card-actions:pr-14'),
+                  ? (inboxMode ? 'pr-7' : 'pr-14')
+                  : inboxMode
+                    ? 'group-hover/card:pr-7 peer-focus-within/card-actions:pr-7'
+                    : 'group-hover/card:pr-14 peer-focus-within/card-actions:pr-14'),
             )}
           >
             {/* 标题单行:与列表行同一个跑马灯,平时省略号,悬停卡片且溢出时横向带过全名。 */}
@@ -1124,7 +1148,12 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
             )}
           >
             <SessionStatusIcon
-              hideHarness={!taskInfoFields.includes('harness')}
+              hideHarness={inboxProject ? !showProject : !taskInfoFields.includes('harness')}
+              identityIcon={showProject && inboxProject ? (
+                <ResolvedProjectIcon directory={inboxProject}
+                  remoteHostId={session.remoteHostId} deviceId={session.deviceLinkDeviceId}
+                  name={sourceLabel} size={13} />
+              ) : undefined}
               session={session}
               isRunning={leftIconRunning}
               isAttached={isAttached}
@@ -1197,7 +1226,7 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
             />
           </DropdownMenuTrigger>
           <SessionTaskMenu key={`${session.deviceLinkDeviceId ?? ''}:${session.id}`}
-            snoozeAction={inboxMode && !navigationOnly ? snoozeAction : undefined}
+            snoozeAction={inboxMode && !hideInboxActions && !navigationOnly ? snoozeAction : undefined}
             session={session} open={menuPos !== null} sideOffset={2} writeBlocked={remoteWritesBlocked}
             returnFocus={() => cardRef.current?.focus()}
             onRename={handleRenameSelect} onPin={handlePinSelect}
@@ -1229,6 +1258,7 @@ function TimeActionsSlot({
   snoozeAction,
   session,
   inboxMode = false,
+  hideInboxActions = false,
   navigationOnly = false,
   pieces,
   prRef,
@@ -1250,6 +1280,7 @@ function TimeActionsSlot({
 }: {
   session: Session;
   inboxMode?: boolean;
+  hideInboxActions?: boolean;
   navigationOnly?: boolean;
   snoozeAction?: SnoozeAction;
   pieces: readonly SessionInfoPiece[];
@@ -1275,7 +1306,13 @@ function TimeActionsSlot({
   const { t } = useTranslation();
   const [snoozeOpen, setSnoozeOpen] = useState(false);
   const actionsOpen = menuOpen || snoozeOpen;
-  const canSnooze = inboxMode && !isArchived && canUnarchive && !!snoozeAction;
+  const canSnooze = inboxMode && !hideInboxActions && !isArchived && canUnarchive && !!snoozeAction;
+  const showUnarchiveAction = isArchived && canUnarchive;
+  const showCompleteAction = canQuickArchive && inboxMode && !hideInboxActions;
+  const showArchiveAction = canQuickArchive && !inboxMode;
+  const hasHoverActions =
+    !navigationOnly &&
+    (!inboxMode || canSnooze || showUnarchiveAction || showCompleteAction);
   return (
     <div className="group/slot relative ml-auto flex h-[22px] shrink-0 items-center justify-end">
       <div className="grid h-[22px] grid-cols-[max-content] items-center justify-items-end">
@@ -1284,9 +1321,9 @@ function TimeActionsSlot({
           className={cn(
             // duration 与操作钮的渐显同拍(120ms),让位/回归一进一出同步。
             'col-start-1 row-start-1 flex items-center gap-1 transition-opacity duration-[120ms]',
-            !navigationOnly && !archivePending &&
+            hasHoverActions && !archivePending &&
               'group-hover/card:opacity-0 group-hover/card:w-0 group-hover/card:overflow-hidden group-focus-within/slot:opacity-0 group-focus-within/slot:w-0 group-focus-within/slot:overflow-hidden',
-            (actionsOpen || yieldToOrdinalBadge) && 'opacity-0 w-0 overflow-hidden',
+            ((hasHoverActions && actionsOpen) || yieldToOrdinalBadge) && 'opacity-0 w-0 overflow-hidden',
             // 确认胶囊覆盖同一槽位时立即隐藏日期，避免 120ms 淡出期间文字叠在一起。
             archivePending && 'invisible opacity-0 w-0 overflow-hidden',
           )}
@@ -1341,7 +1378,7 @@ function TimeActionsSlot({
           </Button>
         )}
 
-        {!navigationOnly && !archivePending && (
+        {hasHoverActions && !archivePending && (
           <>
             <div
               aria-hidden
@@ -1351,7 +1388,7 @@ function TimeActionsSlot({
               )}
             >
               {(!inboxMode || canSnooze) && <span className="size-5 shrink-0" />}
-              {(isArchived && canUnarchive) || canQuickArchive ? (
+              {showUnarchiveAction || showCompleteAction || showArchiveAction ? (
                 <span className="size-5 shrink-0" />
               ) : null}
             </div>
@@ -1382,7 +1419,7 @@ function TimeActionsSlot({
                   <EllipsisVertical size={14} strokeWidth={2} />
                 </CardAction>
               )}
-              {isArchived && canUnarchive ? (
+              {showUnarchiveAction ? (
                 <CardAction
                   variant="list"
                   isActive={isActive}
@@ -1391,7 +1428,7 @@ function TimeActionsSlot({
                 >
                   <Undo size={14} strokeWidth={2} />
                 </CardAction>
-              ) : canQuickArchive && inboxMode ? (
+              ) : showCompleteAction ? (
                 <CardAction
                   variant="list"
                   isActive={isActive}
@@ -1401,7 +1438,7 @@ function TimeActionsSlot({
                 >
                   <Check size={14} strokeWidth={2} />
                 </CardAction>
-              ) : canQuickArchive ? (
+              ) : showArchiveAction ? (
                 <CardAction
                   variant="list"
                   isActive={isActive}

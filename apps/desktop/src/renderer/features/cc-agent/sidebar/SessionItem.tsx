@@ -256,6 +256,8 @@ export function SidebarTitleMarquee({ children, className, title }: SidebarTitle
 
 export interface SessionItemProps {
   inboxMode?: boolean;
+  /** 收件箱模式下的置顶区沿用收件箱行显示规则，但不显示稍后处理和完成按钮。 */
+  hideInboxActions?: boolean;
   /** Shared guests retain navigation and the leave-sharing menu, without owner actions or selection. */
   navigationOnly?: boolean;
   /** Shared-group identity mark. Only owners show a crown; joined tasks match ordinary rows. */
@@ -330,6 +332,7 @@ export function hasSessionSelectionModifier(modifiers?: SessionClickModifiers): 
 export const SessionItem = withSidebarNavigation<SessionItemProps>(function SessionItem({
   navigate,
   inboxMode = false,
+  hideInboxActions = false,
   session,
   isActive,
   isRunning,
@@ -856,7 +859,13 @@ export const SessionItem = withSidebarNavigation<SessionItemProps>(function Sess
     />
   ) : null;
 
-  const canSnooze = inboxMode && !isArchived && !remoteWritesBlocked && !!snoozeAction;
+  const canSnooze = inboxMode && !hideInboxActions && !isArchived && !remoteWritesBlocked && !!snoozeAction;
+  const showUnarchiveAction = isArchived && !remoteWritesBlocked;
+  const showCompleteAction = canQuickArchive && inboxMode && !hideInboxActions;
+  const showArchiveAction = canQuickArchive && !inboxMode;
+  const hasHoverActions =
+    !navigationOnly &&
+    (!inboxMode || canSnooze || showUnarchiveAction || showCompleteAction);
   const actionsOpen = menuPos !== null || snoozeOpen;
   const showAutomationRunAction =
     !inboxMode &&
@@ -905,7 +914,7 @@ export const SessionItem = withSidebarNavigation<SessionItemProps>(function Sess
           <EllipsisVertical size={14} strokeWidth={2} />
         </SessionAction>
       )}
-      {isArchived && !remoteWritesBlocked ? (
+      {showUnarchiveAction ? (
         <SessionAction
           label={t('ccAgent.sidebar.sessionMenu.unarchive')}
           onClick={() => handleUnarchiveSelect()}
@@ -913,7 +922,7 @@ export const SessionItem = withSidebarNavigation<SessionItemProps>(function Sess
         >
           <Undo size={14} strokeWidth={2} />
         </SessionAction>
-      ) : canQuickArchive && inboxMode ? (
+      ) : showCompleteAction ? (
         // 收件箱：「完成」单击生效；鼠标悬停在完成按钮上时排列冻结（TaskInbox），不会点到跳动的行。
         // 未提交改动的确认仍保留，见 handleActionClick。
         <SessionAction
@@ -927,7 +936,7 @@ export const SessionItem = withSidebarNavigation<SessionItemProps>(function Sess
         >
           <Check size={14} strokeWidth={2} />
         </SessionAction>
-      ) : canQuickArchive ? (
+      ) : showArchiveAction ? (
         <SessionAction
           label={t('ccAgent.sidebar.sessionMenu.archived')}
           onClick={() => {
@@ -1179,9 +1188,9 @@ export const SessionItem = withSidebarNavigation<SessionItemProps>(function Sess
                 'col-start-1 row-start-1 flex items-center gap-1',
                 // duration 与 action 按钮组的渐显同拍(120ms),让位/回归一进一出同步。
                 'transition-opacity duration-[120ms]',
-                !navigationOnly && !archivePending &&
+                hasHoverActions && !archivePending &&
                   'group-hover:opacity-0 group-hover:w-0 group-hover:overflow-hidden group-focus-within/slot:opacity-0 group-focus-within/slot:w-0 group-focus-within/slot:overflow-hidden',
-                actionsOpen && 'opacity-0 w-0 overflow-hidden',
+                hasHoverActions && actionsOpen && 'opacity-0 w-0 overflow-hidden',
                 archivePending && 'opacity-0 w-0 overflow-hidden',
                 // mod+1..9 序号徽标出现时同样让位:徽标独占行尾,不与时间/badge 并排。
                 ordinalBadgeLabel != null && 'opacity-0 w-0 overflow-hidden',
@@ -1254,7 +1263,7 @@ export const SessionItem = withSidebarNavigation<SessionItemProps>(function Sess
                   按钮立即还原,符合用户对 "撤回 = 回到点击前" 的直觉预期。
                 - archived：More + Undo（lucide Undo），单击直接走 unarchive，
                   不像 Archive 那样需要二次确认 pill（unarchive 非破坏性）。 */}
-            {!navigationOnly && !archivePending && (
+            {hasHoverActions && !archivePending && (
               <>
                 {/* 入流占位只负责把标题挤窄;真正的按钮保持可聚焦,不能 display:none。 */}
                 <div
@@ -1268,9 +1277,7 @@ export const SessionItem = withSidebarNavigation<SessionItemProps>(function Sess
                 >
                   {showAutomationRunAction ? <span className="size-5 shrink-0" /> : null}
                   {(!inboxMode || canSnooze) && <span className="size-5 shrink-0" />}
-                  {isArchived && !remoteWritesBlocked ? (
-                    <span className="size-5 shrink-0" />
-                  ) : canQuickArchive ? (
+                  {showUnarchiveAction || showCompleteAction || showArchiveAction ? (
                     <span className="size-5 shrink-0" />
                   ) : null}
                 </div>
@@ -1330,7 +1337,7 @@ export const SessionItem = withSidebarNavigation<SessionItemProps>(function Sess
             />
           </DropdownMenuTrigger>
           <SessionTaskMenu key={`${session.deviceLinkDeviceId ?? ''}:${session.id}`}
-            snoozeAction={inboxMode && !navigationOnly ? snoozeAction : undefined}
+            snoozeAction={inboxMode && !hideInboxActions && !navigationOnly ? snoozeAction : undefined}
             session={session} open={menuPos !== null} sideOffset={2} writeBlocked={remoteWritesBlocked}
             returnFocus={() => rowRef.current?.focus()}
             onRename={handleRenameSelect} onPin={handlePinSelect}

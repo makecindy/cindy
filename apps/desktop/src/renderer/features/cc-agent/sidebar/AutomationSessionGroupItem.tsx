@@ -60,6 +60,8 @@ import type { SessionMoveTarget } from './sessionMoveTarget';
 
 export interface AutomationSessionGroupItemProps {
   group: AutomationSessionGroup;
+  inboxMode?: boolean;
+  hideInboxActions?: boolean;
   activeSessionId?: string;
   runningSessionIds: ReadonlySet<string>;
   attachedSessionIds: ReadonlySet<string>;
@@ -113,6 +115,8 @@ export const AutomationSessionGroupItem = withSidebarNavigation<AutomationSessio
   function AutomationSessionGroupItem({
     navigate,
     group,
+    inboxMode = false,
+    hideInboxActions = false,
     activeSessionId,
     runningSessionIds,
     attachedSessionIds,
@@ -911,6 +915,8 @@ export const AutomationSessionGroupItem = withSidebarNavigation<AutomationSessio
                   (selectedSessionIds?.has(nextSession.id) ?? false));
               const commonProps = {
                 session,
+                inboxMode,
+                hideInboxActions,
                 isActive: session.id === activeSessionId,
                 isRunning: runningSessionIds.has(session.id),
                 isAttached: attachedSessionIds.has(session.id),
