@@ -1,8 +1,10 @@
 import type { RateLimitSnapshot } from '../usageBroadcaster.js';
 import {
   ADAPTIVE_QUOTA_TIERS,
+  MANUAL_QUOTA_REFRESH_COOLDOWN_MS,
   epochSecondsToMs,
   nextExponentialBackoffMs,
+  shouldAllowManualQuotaRefresh,
   shouldRefreshAdaptiveQuota,
   type AdaptiveQuotaRefreshTiming,
 } from './adaptiveQuotaRefresh.js';
@@ -35,6 +37,7 @@ interface RefreshInFlight {
 
 interface RefreshState {
   lastRefreshAt: number;
+  lastAttemptAt: number;
   activitySeq: number;
   refreshedActivitySeq: number;
   backoffMs: number;
@@ -89,8 +92,9 @@ function resolveTiming(options: CodexWebUsageRefreshOptions): AdaptiveQuotaRefre
 export function createCodexAccountUsageSnapshotReader(
   deps: CodexWebUsageRefreshDeps,
   options: CodexWebUsageRefreshOptions = {},
-): (options?: { fresh?: boolean; activity?: boolean }) => Promise<RateLimitSnapshot | null> {
+): (options?: { fresh?: boolean; activity?: boolean; manual?: boolean }) => Promise<RateLimitSnapshot | null> {
   const timing = resolveTiming(options);
+  const manualCooldownMs = Math.min(MANUAL_QUOTA_REFRESH_COOLDOWN_MS, timing.activeThrottleMs);
   const refreshInFlightByKey = new Map<string, RefreshInFlight>();
   const stateByKey = new Map<string, RefreshState>();
   let lastUnknownAccountSnapshotAccessToken: string | null = null;
@@ -104,6 +108,7 @@ export function createCodexAccountUsageSnapshotReader(
     }
     const created: RefreshState = {
       lastRefreshAt: 0,
+      lastAttemptAt: 0,
       activitySeq: 0,
       refreshedActivitySeq: 0,
       backoffMs: 0,
@@ -143,7 +148,7 @@ export function createCodexAccountUsageSnapshotReader(
   function triggerRefresh(
     accessToken: string,
     accountId: string | null,
-    opts: { force?: boolean; activity?: boolean; cachedSnapshot?: RateLimitSnapshot | null } = {},
+    opts: { force?: boolean; manual?: boolean; activity?: boolean; cachedSnapshot?: RateLimitSnapshot | null } = {},
   ): Promise<void> {
     const key = refreshKey(accessToken, accountId);
     const state = getOrCreateState(key);
@@ -156,20 +161,26 @@ export function createCodexAccountUsageSnapshotReader(
     const now = deps.now();
     const cachedResets = codexResetTimesMs(opts.cachedSnapshot);
     const resetsAtMs = cachedResets.length > 0 ? cachedResets : state.lastKnownResetsAtMs;
-    if (!opts.force && !shouldRefreshAdaptiveQuota({
-      now,
-      lastRefreshAt: state.lastRefreshAt,
-      hasActivitySinceRefresh: state.activitySeq > state.refreshedActivitySeq,
-      resetsAtMs,
-      backoffUntil: state.backoffUntil,
-      timing,
-    })) {
+    const allowed = opts.force
+      ? true
+      : opts.manual
+        ? shouldAllowManualQuotaRefresh({ now, lastAttemptAt: state.lastAttemptAt, cooldownMs: manualCooldownMs })
+        : shouldRefreshAdaptiveQuota({
+            now,
+            lastRefreshAt: state.lastRefreshAt,
+            hasActivitySinceRefresh: state.activitySeq > state.refreshedActivitySeq,
+            resetsAtMs,
+            backoffUntil: state.backoffUntil,
+            timing,
+          });
+    if (!allowed) {
       return Promise.resolve();
     }
 
     const attemptSeq = state.activitySeq;
     const prevLastRefreshAt = state.lastRefreshAt;
     state.lastRefreshAt = now;
+    state.lastAttemptAt = now;
     const refreshInFlight: RefreshInFlight = { promise: Promise.resolve() };
     refreshInFlightByKey.set(key, refreshInFlight);
     refreshInFlight.promise = (async () => {
@@ -237,7 +248,7 @@ export function createCodexAccountUsageSnapshotReader(
       await clearCachedSnapshot();
       if (!readOptions?.fresh) {
         if (await isRefreshStillCurrent(accessToken, accountId)) {
-          void triggerRefresh(accessToken, accountId, { activity: readOptions?.activity });
+          void triggerRefresh(accessToken, accountId, { activity: readOptions?.activity, manual: readOptions?.manual });
         }
         return null;
       }
@@ -256,6 +267,7 @@ export function createCodexAccountUsageSnapshotReader(
     }
     void triggerRefresh(accessToken, accountId, {
       activity: readOptions?.activity,
+      manual: readOptions?.manual,
       cachedSnapshot,
     });
     return cachedSnapshot;

@@ -86,14 +86,35 @@ export interface AdaptiveQuotaRefreshInput {
 }
 
 const CLOCK_BACKWARD_TOLERANCE_MS = 60_000;
+/** 显式手动点击刷新的最小冷却时间（毫秒），防连点打爆上游。 */
+export const MANUAL_QUOTA_REFRESH_COOLDOWN_MS = 15_000;
+
+/**
+ * 判断显式手动刷新是否放行（绕过空闲/活跃缓存与退避，仅保留短冷却）。
+ */
+export function shouldAllowManualQuotaRefresh(input: {
+  now: number;
+  lastAttemptAt: number;
+  cooldownMs?: number;
+}): boolean {
+  const { now, lastAttemptAt } = input;
+  const cooldownMs = input.cooldownMs ?? MANUAL_QUOTA_REFRESH_COOLDOWN_MS;
+  if (!Number.isFinite(lastAttemptAt) || lastAttemptAt <= 0) return true;
+  if (lastAttemptAt > now + CLOCK_BACKWARD_TOLERANCE_MS) return true;
+  return now - lastAttemptAt >= cooldownMs;
+}
 
 /**
  * 判断当前是否应当发起一次新的配额刷新。
  */
 export function shouldRefreshAdaptiveQuota(input: AdaptiveQuotaRefreshInput): boolean {
   const { now, lastRefreshAt, timing } = input;
-  if (input.backoffUntil !== undefined && input.backoffUntil > now) {
-    return false;
+  if (input.backoffUntil !== undefined && input.backoffUntil > 0) {
+    if (input.backoffUntil > now) {
+      return false;
+    }
+    // 失败退避窗口刚到期：放行一次重试，不再受更长的旧成功快照空闲 TTL 阻塞。
+    return true;
   }
   if (!Number.isFinite(lastRefreshAt) || lastRefreshAt <= 0) {
     return true;

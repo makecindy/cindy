@@ -14,8 +14,10 @@
 import type { ClaudeSubscriptionUsageSnapshot } from '../../shared/claudeSubscriptionUsage.js';
 import {
   ADAPTIVE_QUOTA_TIERS,
+  MANUAL_QUOTA_REFRESH_COOLDOWN_MS,
   epochSecondsToMs,
   nextExponentialBackoffMs,
+  shouldAllowManualQuotaRefresh,
   shouldRefreshAdaptiveQuota,
   type AdaptiveQuotaRefreshTiming,
 } from './adaptiveQuotaRefresh.js';
@@ -81,8 +83,8 @@ function resolveTiming(options: ClaudeSubscriptionUsageRefreshOptions): Adaptive
 export interface ClaudeSubscriptionUsageReader {
   /** cached-first 读(IPC handler 用):立即返回缓存快照,后台按活跃度自适应节流刷新。 */
   read(options?: { fresh?: boolean }): Promise<ClaudeSubscriptionUsageSnapshot | null>;
-  /** 显式触发一次后台刷新(turn-done 或面板轮询钩子用),同样吃节流 / 退避。 */
-  triggerRefresh(options?: { activity?: boolean }): void;
+  /** 显式触发一次后台刷新(turn-done / 面板轮询 / 手动刷新钩子用),同样吃节流 / 退避。 */
+  triggerRefresh(options?: { activity?: boolean; manual?: boolean }): void;
   /** 记录一次真实对话活动(例如 SDK rate_limit_event),让后续刷新走活跃档节流。 */
   markActivity(): void;
   /**
@@ -97,12 +99,14 @@ export function createClaudeSubscriptionUsageReader(
   options: ClaudeSubscriptionUsageRefreshOptions = {},
 ): ClaudeSubscriptionUsageReader {
   const timing = resolveTiming(options);
+  const manualCooldownMs = Math.min(MANUAL_QUOTA_REFRESH_COOLDOWN_MS, timing.activeThrottleMs);
 
   let inFlight: Promise<void> | null = null;
   let inFlightAccount: string | null = null;
   // 节流 / 退避状态按账号记 —— 换号立即重新计。
   let stateAccount: string | null = null;
   let lastRefreshAt = 0;
+  let lastAttemptAt = 0;
   let activitySeq = 0;
   let refreshedActivitySeq = 0;
   let lastKnownResetsAtMs: number[] = [];
@@ -113,6 +117,7 @@ export function createClaudeSubscriptionUsageReader(
     if (stateAccount === account) return;
     stateAccount = account;
     lastRefreshAt = 0;
+    lastAttemptAt = 0;
     activitySeq = 0;
     refreshedActivitySeq = 0;
     lastKnownResetsAtMs = [];
@@ -149,7 +154,7 @@ export function createClaudeSubscriptionUsageReader(
 
   function refreshFor(
     account: string,
-    opts: { treatAsActive?: boolean; resetsAtMs?: number[] } = {},
+    opts: { treatAsActive?: boolean; manual?: boolean; resetsAtMs?: number[] } = {},
   ): Promise<void> {
     if (inFlight) {
       // 飞行中的请求属于另一个账号:旧结果会被丢弃,收尾后按当时的账号补一次。
@@ -165,21 +170,25 @@ export function createClaudeSubscriptionUsageReader(
     resetStateForAccount(account);
     const now = deps.now();
     const resetsAtMs = opts.resetsAtMs && opts.resetsAtMs.length > 0 ? opts.resetsAtMs : lastKnownResetsAtMs;
-    if (!shouldRefreshAdaptiveQuota({
-      now,
-      lastRefreshAt,
-      hasActivitySinceRefresh: activitySeq > refreshedActivitySeq,
-      resetsAtMs,
-      backoffUntil,
-      timing,
-      treatAsActive: opts.treatAsActive,
-    })) {
+    const allowed = opts.manual
+      ? shouldAllowManualQuotaRefresh({ now, lastAttemptAt, cooldownMs: manualCooldownMs })
+      : shouldRefreshAdaptiveQuota({
+          now,
+          lastRefreshAt,
+          hasActivitySinceRefresh: activitySeq > refreshedActivitySeq,
+          resetsAtMs,
+          backoffUntil,
+          timing,
+          treatAsActive: opts.treatAsActive,
+        });
+    if (!allowed) {
       return Promise.resolve();
     }
 
     const attemptSeq = activitySeq;
     const prevLastRefreshAt = lastRefreshAt;
     lastRefreshAt = now;
+    lastAttemptAt = now;
     inFlightAccount = account;
     inFlight = (async () => {
       try {
@@ -235,22 +244,26 @@ export function createClaudeSubscriptionUsageReader(
     },
 
     triggerRefresh(opts): void {
-      if (opts?.activity !== false) {
+      const manual = opts?.manual === true;
+      if (!manual && opts?.activity !== false) {
         activitySeq += 1;
       }
       // 节流 / 退避预检在读账号之前:本方法被每个 Claude turn-done 无条件调用。
       const now = deps.now();
       if (inFlight) return;
-      if (!shouldRefreshAdaptiveQuota({
-        now,
-        lastRefreshAt,
-        hasActivitySinceRefresh: activitySeq > refreshedActivitySeq,
-        resetsAtMs: lastKnownResetsAtMs,
-        backoffUntil,
-        timing,
-      })) return;
+      const allowed = manual
+        ? shouldAllowManualQuotaRefresh({ now, lastAttemptAt, cooldownMs: manualCooldownMs })
+        : shouldRefreshAdaptiveQuota({
+            now,
+            lastRefreshAt,
+            hasActivitySinceRefresh: activitySeq > refreshedActivitySeq,
+            resetsAtMs: lastKnownResetsAtMs,
+            backoffUntil,
+            timing,
+          });
+      if (!allowed) return;
       const account = readAccountSafe();
-      if (account !== null) void refreshFor(account);
+      if (account !== null) void refreshFor(account, manual ? { manual: true } : undefined);
     },
 
     markActivity(): void {
@@ -262,6 +275,7 @@ export function createClaudeSubscriptionUsageReader(
       if (account === null) {
         stateAccount = null;
         lastRefreshAt = 0;
+        lastAttemptAt = 0;
         activitySeq = 0;
         refreshedActivitySeq = 0;
         lastKnownResetsAtMs = [];

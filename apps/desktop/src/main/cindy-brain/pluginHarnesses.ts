@@ -39,7 +39,9 @@ import { approvedGhostHarnesses, type InstalledGhost } from '../../shared/ghost.
 import { installedGhostStoragePart } from '../../shared/pluginIdentity.js';
 import {
   ADAPTIVE_QUOTA_TIERS,
+  MANUAL_QUOTA_REFRESH_COOLDOWN_MS,
   nextExponentialBackoffMs,
+  shouldAllowManualQuotaRefresh,
   shouldRefreshAdaptiveQuota,
   type AdaptiveQuotaRefreshTiming,
 } from '../usage/adaptiveQuotaRefresh.js';
@@ -235,8 +237,6 @@ function projectHarnesses(deps: PluginHarnessRegistryDeps, ghosts: InstalledGhos
 }
 
 const MAX_USAGE_CACHE_ENTRIES = 128;
-const PLUGIN_USAGE_MANUAL_COOLDOWN_MAX_MS = 15_000;
-const CLOCK_BACKWARD_TOLERANCE_MS = 60_000;
 
 interface UsageCacheEntry {
   hasValue: boolean;
@@ -253,6 +253,11 @@ interface UsageCacheEntry {
 type UsageFlightOutcome =
   | { kind: 'value'; value: GhostHarnessUsage | null }
   | { kind: 'worker-failure'; fallbackValue: GhostHarnessUsage | null };
+
+interface UsageFlightRecord {
+  generation: number;
+  promise: Promise<UsageFlightOutcome>;
+}
 
 function usageCacheKey(key: string, accountDir?: string): string {
   return `${key}\0${accountDir ? path.resolve(accountDir) : ''}`;
@@ -280,15 +285,33 @@ export function createPluginHarnessRegistry(deps: PluginHarnessRegistryDeps): Re
     ...ADAPTIVE_QUOTA_TIERS.pluginHarness,
     ...deps.usageTiming,
   };
-  const manualCooldownMs = Math.min(PLUGIN_USAGE_MANUAL_COOLDOWN_MAX_MS, timing.activeThrottleMs);
+  const manualCooldownMs = Math.min(MANUAL_QUOTA_REFRESH_COOLDOWN_MS, timing.activeThrottleMs);
   const usageCache = new Map<string, UsageCacheEntry>();
-  const usageInFlight = new Map<string, Promise<UsageFlightOutcome>>();
+  const usageInFlight = new Map<string, UsageFlightRecord>();
+  const usageGenerations = new Map<string, number>();
   let usageOwnerScope = deps.ownerScopeKey?.() ?? '';
 
+  const bumpUsageGeneration = (cacheKey: string): void => {
+    const next = (usageGenerations.get(cacheKey) ?? 0) + 1;
+    usageGenerations.delete(cacheKey);
+    usageGenerations.set(cacheKey, next);
+    if (usageGenerations.size > MAX_USAGE_CACHE_ENTRIES) {
+      const oldest = usageGenerations.keys().next().value;
+      if (oldest !== undefined) usageGenerations.delete(oldest);
+    }
+  };
+  const invalidateUsageCacheKey = (cacheKey: string): void => {
+    bumpUsageGeneration(cacheKey);
+    usageCache.delete(cacheKey);
+    usageInFlight.delete(cacheKey);
+  };
   const syncUsageOwnerScope = (): string => {
     const scope = deps.ownerScopeKey?.() ?? '';
     if (scope !== usageOwnerScope) {
       usageOwnerScope = scope;
+      for (const cacheKey of new Set([...usageCache.keys(), ...usageInFlight.keys()])) {
+        bumpUsageGeneration(cacheKey);
+      }
       usageCache.clear();
       usageInFlight.clear();
     }
@@ -321,11 +344,8 @@ export function createPluginHarnessRegistry(deps: PluginHarnessRegistryDeps): Re
   };
   const evictUsageByEngineKey = (key: string): void => {
     const prefix = `${key}\0`;
-    for (const cacheKey of [...usageCache.keys()]) {
-      if (cacheKey.startsWith(prefix)) usageCache.delete(cacheKey);
-    }
-    for (const cacheKey of [...usageInFlight.keys()]) {
-      if (cacheKey.startsWith(prefix)) usageInFlight.delete(cacheKey);
+    for (const cacheKey of new Set([...usageCache.keys(), ...usageInFlight.keys()])) {
+      if (cacheKey.startsWith(prefix)) invalidateUsageCacheKey(cacheKey);
     }
   };
   const compute = (ghosts?: InstalledGhost[]): PluginHarness[] => projectHarnesses(deps, ghosts ?? deps.listGhosts());
@@ -404,14 +424,17 @@ export function createPluginHarnessRegistry(deps: PluginHarnessRegistryDeps): Re
       const harness = find();
       const cacheKey = usageCacheKey(key, accountDir);
       if (!harness) {
-        usageCache.delete(cacheKey);
+        invalidateUsageCacheKey(cacheKey);
         return null;
       }
 
+      const currentGen = usageGenerations.get(cacheKey) ?? 0;
       const existingFlight = usageInFlight.get(cacheKey);
-      if (existingFlight) {
-        const outcome = await existingFlight;
-        if ((deps.ownerScopeKey?.() ?? '') !== scope || !find()) return null;
+      if (existingFlight && existingFlight.generation === currentGen) {
+        const outcome = await existingFlight.promise;
+        if ((deps.ownerScopeKey?.() ?? '') !== scope || (usageGenerations.get(cacheKey) ?? 0) !== existingFlight.generation || !find()) {
+          return null;
+        }
         if (outcome.kind === 'worker-failure') {
           if (options?.reportWorkerFailure) throw new Error('Plugin usage worker unavailable');
           return outcome.fallbackValue;
@@ -422,10 +445,7 @@ export function createPluginHarnessRegistry(deps: PluginHarnessRegistryDeps): Re
       const entry = usageCache.get(cacheKey);
       const now = nowFn();
       const shouldRefresh = options?.force === true
-        ? !entry
-          || entry.lastAttemptAt <= 0
-          || entry.lastAttemptAt > now + CLOCK_BACKWARD_TOLERANCE_MS
-          || now - entry.lastAttemptAt >= manualCooldownMs
+        ? shouldAllowManualQuotaRefresh({ now, lastAttemptAt: entry?.lastAttemptAt ?? 0, cooldownMs: manualCooldownMs })
         : shouldRefreshAdaptiveQuota({
             now,
             lastRefreshAt: entry?.lastRefreshAt ?? 0,
@@ -443,13 +463,14 @@ export function createPluginHarnessRegistry(deps: PluginHarnessRegistryDeps): Re
 
       const target = getOrCreateUsageEntry(cacheKey);
       const attemptSeq = target.activitySeq;
+      const startGen = usageGenerations.get(cacheKey) ?? 0;
       const flight: Promise<UsageFlightOutcome> = (async () => {
         const raw = await (accountDir === undefined
           ? read(harness.ghostId, harness.harnessId)
           : read(harness.ghostId, harness.harnessId, accountDir));
         const settledAt = nowFn();
-        if ((deps.ownerScopeKey?.() ?? '') !== scope || !find()) {
-          usageCache.delete(cacheKey);
+        if ((deps.ownerScopeKey?.() ?? '') !== scope || (usageGenerations.get(cacheKey) ?? 0) !== startGen || !find()) {
+          if ((usageGenerations.get(cacheKey) ?? 0) === startGen) usageCache.delete(cacheKey);
           return { kind: 'value', value: null };
         }
         if (raw === PLUGIN_USAGE_WORKER_FAILURE) {
@@ -471,10 +492,13 @@ export function createPluginHarnessRegistry(deps: PluginHarnessRegistryDeps): Re
         target.backoffUntil = 0;
         return { kind: 'value', value: parsed };
       })();
-      usageInFlight.set(cacheKey, flight);
+      const flightRecord: UsageFlightRecord = { generation: startGen, promise: flight };
+      usageInFlight.set(cacheKey, flightRecord);
       try {
         const outcome = await flight;
-        if ((deps.ownerScopeKey?.() ?? '') !== scope || !find()) return null;
+        if ((deps.ownerScopeKey?.() ?? '') !== scope || (usageGenerations.get(cacheKey) ?? 0) !== startGen || !find()) {
+          return null;
+        }
         if (outcome.kind === 'worker-failure') {
           if (options?.reportWorkerFailure) throw new Error('Plugin usage worker unavailable');
           return outcome.fallbackValue;
@@ -483,7 +507,7 @@ export function createPluginHarnessRegistry(deps: PluginHarnessRegistryDeps): Re
       } catch (err) {
         if (err instanceof Error && err.message === 'Plugin usage worker unavailable') throw err;
         const failedAt = nowFn();
-        if ((deps.ownerScopeKey?.() ?? '') === scope) {
+        if ((deps.ownerScopeKey?.() ?? '') === scope && (usageGenerations.get(cacheKey) ?? 0) === startGen) {
           target.lastAttemptAt = failedAt;
           target.workerFailure = true;
           target.backoffMs = nextExponentialBackoffMs(target.backoffMs, timing);
@@ -492,7 +516,7 @@ export function createPluginHarnessRegistry(deps: PluginHarnessRegistryDeps): Re
         }
         throw err;
       } finally {
-        if (usageInFlight.get(cacheKey) === flight) usageInFlight.delete(cacheKey);
+        if (usageInFlight.get(cacheKey) === flightRecord) usageInFlight.delete(cacheKey);
       }
     },
     async readAccountStatus(key, accountDir) {
@@ -518,11 +542,13 @@ export function createPluginHarnessRegistry(deps: PluginHarnessRegistryDeps): Re
         || (secret !== undefined && (!secret.trim() || secret.length > GHOST_HARNESS_ACCOUNT_SECRET_MAX))) {
         return { ok: false, error: 'invalid-secret' };
       }
+      const cacheKey = usageCacheKey(key, accountDir);
+      invalidateUsageCacheKey(cacheKey);
       const raw = await call(harness.ghostId, 'accountLogin', {
         harnessId: harness.harnessId, ...(accountDir !== undefined ? { accountDir } : {}), methodId,
         ...(secret !== undefined ? { secret } : {}),
       }, PLUGIN_HARNESS_ACCOUNT_LOGIN_TIMING);
-      usageCache.delete(usageCacheKey(key, accountDir));
+      invalidateUsageCacheKey(cacheKey);
       return parseGhostHarnessAccountLoginResult(raw);
     },
     async cancelAccountLogin(key, accountDir) {
@@ -573,6 +599,9 @@ export function createPluginHarnessRegistry(deps: PluginHarnessRegistryDeps): Re
     },
     invalidate() {
       current = null;
+      for (const cacheKey of new Set([...usageCache.keys(), ...usageInFlight.keys()])) {
+        bumpUsageGeneration(cacheKey);
+      }
       usageCache.clear();
       usageInFlight.clear();
     },

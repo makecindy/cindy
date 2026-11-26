@@ -81,10 +81,13 @@ export function readSubscriptionAccountUsage(providerId: string) {
 }
 export function triggerSubscriptionAccountUsage(
   providerId: string,
-  options?: { source?: 'turn' | 'poll' },
+  options?: { source?: 'turn' | 'poll' | 'manual' },
 ): void {
   if (!isProviderRouteMutationInProgress(providerId)) {
-    reader(providerId)?.triggerRefresh({ activity: (options?.source ?? 'turn') === 'turn' });
+    const source = options?.source ?? 'turn';
+    reader(providerId)?.triggerRefresh(
+      source === 'manual' ? { manual: true } : { activity: source === 'turn' },
+    );
   }
 }
 export async function syncSubscriptionAccountUsage(providerId: string): Promise<void> {

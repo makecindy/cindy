@@ -148,10 +148,13 @@ const claudeSubscriptionUsageReader = createClaudeSubscriptionUsageReader({
  */
 export function triggerClaudeSubscriptionUsageRefresh(
   providerId?: string,
-  options?: { source?: 'turn' | 'poll' },
+  options?: { source?: 'turn' | 'poll' | 'manual' },
 ): void {
   if (providerId && providerId !== 'anthropic') { triggerSubscriptionAccountUsage(providerId, options); return; }
-  claudeSubscriptionUsageReader.triggerRefresh({ activity: (options?.source ?? 'turn') === 'turn' });
+  const source = options?.source ?? 'turn';
+  claudeSubscriptionUsageReader.triggerRefresh(
+    source === 'manual' ? { manual: true } : { activity: source === 'turn' },
+  );
 }
 
 /**
@@ -202,10 +205,13 @@ const xaiSubscriptionUsageReader = createXaiSubscriptionUsageReader({
 /** SuperGrok 周用量:turn-done / 面板轮询钩子,节流 / 退避 / 未登录 no-op 都在 reader 内。 */
 export function triggerXaiSubscriptionUsageRefresh(
   providerId?: string,
-  options?: { source?: 'turn' | 'poll' },
+  options?: { source?: 'turn' | 'poll' | 'manual' },
 ): void {
   if (providerId && providerId !== 'xai') { triggerSubscriptionAccountUsage(providerId, options); return; }
-  xaiSubscriptionUsageReader.triggerRefresh({ activity: (options?.source ?? 'turn') === 'turn' });
+  const source = options?.source ?? 'turn';
+  xaiSubscriptionUsageReader.triggerRefresh(
+    source === 'manual' ? { manual: true } : { activity: source === 'turn' },
+  );
 }
 
 /**
@@ -248,7 +254,7 @@ let codexReadersOwner = '';
 const codexUsageReaders = new Map<string, ReturnType<typeof createCodexAccountUsageSnapshotReader>>();
 export function readCodexAccountUsageSnapshotWithWebRefresh(
   requestedProviderId?: string,
-  options?: { fresh?: boolean; activity?: boolean },
+  options?: { fresh?: boolean; activity?: boolean; manual?: boolean },
 ) {
   const providerId = normalizeCodexUsageProvider(requestedProviderId);
   const scope = activeOwnerScopeKey();
@@ -287,10 +293,15 @@ export function readCodexAccountUsageSnapshotWithWebRefresh(
  */
 export function triggerCodexAccountUsageRefresh(
   providerId?: string,
-  options?: { source?: 'turn' | 'poll' },
+  options?: { source?: 'turn' | 'poll' | 'manual' },
 ): void {
-  const activity = (options?.source ?? 'turn') === 'turn';
-  void readCodexAccountUsageSnapshotWithWebRefresh(providerId, activity ? { activity: true } : undefined).catch(() => {
+  const source = options?.source ?? 'turn';
+  const readOptions = source === 'manual'
+    ? { manual: true }
+    : source === 'turn'
+      ? { activity: true }
+      : undefined;
+  void readCodexAccountUsageSnapshotWithWebRefresh(providerId, readOptions).catch(() => {
     /* best-effort: 失败保留上一次快照, 不影响 turn 收尾 */
   });
 }

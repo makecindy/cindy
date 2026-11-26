@@ -454,4 +454,46 @@ describe('createCodexAccountUsageSnapshotReader', () => {
     await reader();
     await vi.waitFor(() => expect(fetchWebUsageSnapshot).toHaveBeenCalledTimes(2));
   });
+
+  it('allows manual refresh after 15s cooldown and retries once a post-success failure backoff expires', async () => {
+    let now = 1_000_000;
+    let cached = makeSnapshot('cached');
+    const onRefreshError = vi.fn();
+    const fetchWebUsageSnapshot = vi.fn()
+      .mockResolvedValueOnce(makeSnapshot('initial'))
+      .mockRejectedValueOnce(new Error('503'))
+      .mockResolvedValueOnce(makeSnapshot('recovered'));
+    const reader = createCodexAccountUsageSnapshotReader({
+      readCredentials: async () => ({ accessToken: 'token', accountId: 'account-id' }),
+      fetchWebUsageSnapshot,
+      recordSnapshot: async (snap) => { cached = snap; },
+      clearSnapshot: async () => {},
+      readCachedSnapshot: async () => cached,
+      now: () => now,
+      onRefreshError,
+    });
+
+    await reader();
+    await vi.waitFor(() => expect(fetchWebUsageSnapshot).toHaveBeenCalledTimes(1));
+
+    // Manual refresh within 15s is suppressed; at +60s it runs even inside the 30m idle window.
+    now += 10_000;
+    await reader({ manual: true });
+    expect(fetchWebUsageSnapshot).toHaveBeenCalledTimes(1);
+
+    now += 50_000;
+    await reader({ manual: true });
+    await vi.waitFor(() => expect(onRefreshError).toHaveBeenCalledTimes(1));
+
+    // After the 5m failure backoff expires (still well inside 30m idle TTL from t=0), passive read retries.
+    now += 4 * 60_000;
+    await reader();
+    expect(fetchWebUsageSnapshot).toHaveBeenCalledTimes(2);
+    now += 60_000;
+    await reader();
+    await vi.waitFor(() => {
+      expect(fetchWebUsageSnapshot).toHaveBeenCalledTimes(3);
+      expect(cached).toEqual(makeSnapshot('recovered'));
+    });
+  });
 });

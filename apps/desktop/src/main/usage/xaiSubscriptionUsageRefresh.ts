@@ -11,8 +11,10 @@
 import type { XaiSubscriptionUsageSnapshot } from '../../shared/xaiSubscriptionUsage.js';
 import {
   ADAPTIVE_QUOTA_TIERS,
+  MANUAL_QUOTA_REFRESH_COOLDOWN_MS,
   epochSecondsToMs,
   nextExponentialBackoffMs,
+  shouldAllowManualQuotaRefresh,
   shouldRefreshAdaptiveQuota,
   type AdaptiveQuotaRefreshTiming,
 } from './adaptiveQuotaRefresh.js';
@@ -70,7 +72,7 @@ function resolveTiming(options: XaiSubscriptionUsageRefreshOptions): AdaptiveQuo
 
 export interface XaiSubscriptionUsageReader {
   read(): Promise<XaiSubscriptionUsageSnapshot | null>;
-  triggerRefresh(options?: { activity?: boolean }): void;
+  triggerRefresh(options?: { activity?: boolean; manual?: boolean }): void;
   syncForCredentialChange(): Promise<void>;
 }
 
@@ -79,6 +81,7 @@ export function createXaiSubscriptionUsageReader(
   options: XaiSubscriptionUsageRefreshOptions = {},
 ): XaiSubscriptionUsageReader {
   const timing = resolveTiming(options);
+  const manualCooldownMs = Math.min(MANUAL_QUOTA_REFRESH_COOLDOWN_MS, timing.activeThrottleMs);
 
   let inFlight: Promise<void> | null = null;
   let inFlightToken: string | null = null;
@@ -86,6 +89,7 @@ export function createXaiSubscriptionUsageReader(
   // 只记「需要再跑一次」,不存 token。排空时重读当前凭证,迟到的旧 token 盖不掉新号。
   let queuedReplay = false;
   let lastRefreshAt = 0;
+  let lastAttemptAt = 0;
   let activitySeq = 0;
   let refreshedActivitySeq = 0;
   let lastKnownResetsAtMs: number[] = [];
@@ -109,6 +113,7 @@ export function createXaiSubscriptionUsageReader(
     queuedReplay = false;
     if (opts.resetThrottle) {
       lastRefreshAt = 0;
+      lastAttemptAt = 0;
       activitySeq = 0;
       refreshedActivitySeq = 0;
       lastKnownResetsAtMs = [];
@@ -122,8 +127,20 @@ export function createXaiSubscriptionUsageReader(
     }
   }
 
-  function markAttemptSettled(): void {
-    lastRefreshAt = deps.now();
+  function markSuccessSettled(): void {
+    const now = deps.now();
+    lastRefreshAt = now;
+    lastAttemptAt = now;
+    backoffMs = 0;
+    backoffUntil = 0;
+  }
+
+  function enterFailureBackoff(): void {
+    const now = deps.now();
+    lastAttemptAt = now;
+    backoffMs = nextExponentialBackoffMs(backoffMs, timing);
+    backoffUntil = now + backoffMs;
+    if (backoffMs === 0) lastRefreshAt = now;
   }
 
   async function runRefresh(
@@ -138,47 +155,45 @@ export function createXaiSubscriptionUsageReader(
       if (!stillCurrent || stillCurrent.accessToken !== credentials.accessToken) return;
       if (result === 'empty') {
         await deps.clearSnapshot();
-        markAttemptSettled();
+        markSuccessSettled();
         refreshedActivitySeq = Math.max(refreshedActivitySeq, attemptSeq);
         lastKnownResetsAtMs = [];
-        backoffMs = 0;
-        backoffUntil = 0;
         return;
       }
       if (!result) {
-        markAttemptSettled();
+        enterFailureBackoff();
         return;
       }
       await deps.recordSnapshot(result);
-      markAttemptSettled();
+      markSuccessSettled();
       refreshedActivitySeq = Math.max(refreshedActivitySeq, attemptSeq);
       lastKnownResetsAtMs = xaiResetTimesMs(result);
-      backoffMs = 0;
-      backoffUntil = 0;
     } catch (err) {
       if (generation !== refreshGeneration) return;
       if (deps.isUnauthorizedError(err)) {
         await clearCachedSnapshot({ resetThrottle: false });
-        lastRefreshAt = deps.now();
+        const now = deps.now();
+        lastRefreshAt = now;
+        lastAttemptAt = now;
+        backoffMs = 0;
+        backoffUntil = 0;
         refreshedActivitySeq = Math.max(refreshedActivitySeq, attemptSeq);
         lastKnownResetsAtMs = [];
         return;
       }
       if (deps.isRateLimitedError(err)) {
-        backoffMs = nextExponentialBackoffMs(backoffMs, timing);
-        backoffUntil = deps.now() + backoffMs;
-        if (backoffMs === 0) markAttemptSettled();
+        enterFailureBackoff();
         deps.onRefreshError(err);
         return;
       }
-      markAttemptSettled();
+      enterFailureBackoff();
       deps.onRefreshError(err);
     }
   }
 
   function startRefresh(
     credentials: XaiSubscriptionCredentialInfo,
-    opts?: { bypassThrottle?: boolean; resetsAtMs?: number[] },
+    opts?: { bypassThrottle?: boolean; manual?: boolean; resetsAtMs?: number[] },
   ): void {
     const now = deps.now();
     if (inFlight) {
@@ -191,16 +206,22 @@ export function createXaiSubscriptionUsageReader(
       return;
     }
     const resetsAtMs = opts?.resetsAtMs && opts.resetsAtMs.length > 0 ? opts.resetsAtMs : lastKnownResetsAtMs;
-    if (!opts?.bypassThrottle && !shouldRefreshAdaptiveQuota({
-      now,
-      lastRefreshAt,
-      hasActivitySinceRefresh: activitySeq > refreshedActivitySeq,
-      resetsAtMs,
-      backoffUntil,
-      timing,
-    })) {
+    const allowed = opts?.bypassThrottle
+      ? true
+      : opts?.manual
+        ? shouldAllowManualQuotaRefresh({ now, lastAttemptAt, cooldownMs: manualCooldownMs })
+        : shouldRefreshAdaptiveQuota({
+            now,
+            lastRefreshAt,
+            hasActivitySinceRefresh: activitySeq > refreshedActivitySeq,
+            resetsAtMs,
+            backoffUntil,
+            timing,
+          });
+    if (!allowed) {
       return;
     }
+    lastAttemptAt = now;
     const attemptSeq = activitySeq;
     const generation = refreshGeneration;
     const startedToken = credentials.accessToken;
@@ -244,20 +265,24 @@ export function createXaiSubscriptionUsageReader(
     },
 
     triggerRefresh(opts): void {
-      if (opts?.activity !== false) {
+      const manual = opts?.manual === true;
+      if (!manual && opts?.activity !== false) {
         activitySeq += 1;
       }
       const now = deps.now();
       if (inFlight) return;
-      if (now < noCredentialsUntil) return;
-      if (!shouldRefreshAdaptiveQuota({
-        now,
-        lastRefreshAt,
-        hasActivitySinceRefresh: activitySeq > refreshedActivitySeq,
-        resetsAtMs: lastKnownResetsAtMs,
-        backoffUntil,
-        timing,
-      })) return;
+      if (!manual && now < noCredentialsUntil) return;
+      const allowed = manual
+        ? shouldAllowManualQuotaRefresh({ now, lastAttemptAt, cooldownMs: manualCooldownMs })
+        : shouldRefreshAdaptiveQuota({
+            now,
+            lastRefreshAt,
+            hasActivitySinceRefresh: activitySeq > refreshedActivitySeq,
+            resetsAtMs: lastKnownResetsAtMs,
+            backoffUntil,
+            timing,
+          });
+      if (!allowed) return;
       void (async () => {
         const credentials = await readCredentialsSafe();
         if (!credentials) {
@@ -266,7 +291,7 @@ export function createXaiSubscriptionUsageReader(
         }
         noCredentialsUntil = 0;
         hadCredentials = true;
-        startRefresh(credentials);
+        startRefresh(credentials, manual ? { manual: true } : undefined);
       })();
     },
 

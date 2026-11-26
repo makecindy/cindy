@@ -262,5 +262,15 @@ describe('createClaudeSubscriptionUsageReader', () => {
     await reader.read();
     await flush();
     expect(deps.fetchSnapshot).toHaveBeenCalledTimes(5);
+
+    // 手动刷新在 15s 冷却内被抑制,超过 15s 即使处于 30m 空闲窗内也会立即刷新。
+    now += 10_000;
+    reader.triggerRefresh({ manual: true });
+    await flush();
+    expect(deps.fetchSnapshot).toHaveBeenCalledTimes(5);
+    now += 5_000;
+    reader.triggerRefresh({ manual: true });
+    await flush();
+    expect(deps.fetchSnapshot).toHaveBeenCalledTimes(6);
   });
 });

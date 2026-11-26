@@ -261,6 +261,51 @@ describe('plugin harness registry', () => {
     now += 60_000;
     expect(await registry.readUsage(key)).toMatchObject({ balances: [{ amount: '11.00' }] });
     expect(read).toHaveBeenCalledTimes(4);
+
+    // Manual force failure 1m after a fresh success still retries as soon as 10m backoff expires
+    // (does not wait out the remaining 45m idle TTL from the earlier success).
+    now += 60_000;
+    read.mockResolvedValueOnce(PLUGIN_USAGE_WORKER_FAILURE);
+    expect(await registry.readUsage(key, undefined, { force: true })).toMatchObject({ balances: [{ amount: '11.00' }] });
+    expect(read).toHaveBeenCalledTimes(5);
+    now += 9 * 60_000;
+    expect(await registry.readUsage(key)).toMatchObject({ balances: [{ amount: '11.00' }] });
+    expect(read).toHaveBeenCalledTimes(5);
+    now += 60_000;
+    read.mockResolvedValueOnce({ updatedAt: now, balances: [{ currency: 'USD', amount: '10.00' }] });
+    expect(await registry.readUsage(key)).toMatchObject({ balances: [{ amount: '10.00' }] });
+    expect(read).toHaveBeenCalledTimes(6);
+  });
+
+  it('invalidates in-flight usage probes on loginAccount so post-login reads never reuse or cache pre-login data', async () => {
+    let now = 1_000_000;
+    let releaseOld!: (value: unknown) => void;
+    const oldUsage = { updatedAt: now, balances: [{ currency: 'USD', amount: '1.00' }] };
+    const newUsage = { updatedAt: now + 5_000, balances: [{ currency: 'USD', amount: '99.00' }] };
+    const read = vi.fn()
+      .mockImplementationOnce(() => new Promise((resolve) => { releaseOld = resolve; }))
+      .mockResolvedValueOnce(newUsage);
+    const callAccount = vi.fn(async () => ({ ok: true }));
+    const { registry } = setup(
+      [ghost()],
+      { harnesses: [{ id: 'dsh', available: true, reportsUsage: true, accounts: { methods: [{ id: 'api-key', label: 'Key', kind: 'secret' }] } }] },
+      'en',
+      { now: () => now, readUsage: read, callAccount },
+    );
+    const key = 'dsh-plugin:dsh';
+
+    const preLoginRead = registry.readUsage(key);
+    await registry.loginAccount(key, undefined, 'api-key', 'sk-new-account');
+
+    // Post-login read must start a fresh worker call instead of joining the pre-login flight.
+    expect(await registry.readUsage(key)).toEqual(newUsage);
+    expect(read).toHaveBeenCalledTimes(2);
+
+    // Late pre-login probe settling afterward must not overwrite the new cache or return stale quota.
+    releaseOld(oldUsage);
+    expect(await preLoginRead).toBeNull();
+    expect(await registry.readUsage(key)).toEqual(newUsage);
+    expect(read).toHaveBeenCalledTimes(2);
   });
 
   // 引擎账号(subscription-account-pools.md 插件引擎的账号)：账号目录只给声明了登录方式的引擎，且只能是 Cindy

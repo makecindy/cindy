@@ -330,9 +330,10 @@ export class QuotaOverviewService {
           if (provider.subscriptionPoolAlias || provider.subscriptionPool || provider.subscriptionAccountPool
             || (isSubscriptionProvider(provider.id) && readPool(provider.id))) continue;
           const kind = providerWeeklyQuotaSource(provider);
-          if (kind === 'codex') triggerCodexAccountUsageRefresh(provider.id, { source: 'poll' });
-          else if (kind === 'claude') triggerClaudeSubscriptionUsageRefresh(provider.id, { source: 'poll' });
-          else if (kind === 'xai') triggerXaiSubscriptionUsageRefresh(provider.id, { source: 'poll' });
+          const source = force ? 'manual' : 'poll';
+          if (kind === 'codex') triggerCodexAccountUsageRefresh(provider.id, { source });
+          else if (kind === 'claude') triggerClaudeSubscriptionUsageRefresh(provider.id, { source });
+          else if (kind === 'xai') triggerXaiSubscriptionUsageRefresh(provider.id, { source });
         }
       })
       .catch((error) => log.warn('quota refresh could not list providers', { error: errorMessage(error) }));
