@@ -338,15 +338,26 @@ export function createGhostCardRemoteProvider(deps: {
     async list() { return { collectionId: COLLECTION, revision: '1', items: [] }; },
     async get(_context, request) {
       const { card, revision } = await read(request.ref.id);
-      const openHtml = deps.prStatus
+      const prStatusCache = new Map<string, Promise<PrStatusResult | undefined>>();
+      const readPrStatus = deps.prStatus
+        ? (key: string) => {
+          let pending = prStatusCache.get(key);
+          if (!pending) {
+            pending = deps.prStatus!(card.sessionId!, key).catch(() => undefined);
+            prStatusCache.set(key, pending);
+          }
+          return pending;
+        }
+        : undefined;
+      const openHtml = readPrStatus
         ? await omitEndedPrOpenOnly(card.html, async (key) => {
-          const status = await deps.prStatus!(card.sessionId!, key);
+          const status = await readPrStatus(key);
           return status?.ok === true && (status.status === 'merged' || status.status === 'closed');
         })
         : card.html;
       const html = await omitUnreadyPrMergeButtons(openHtml, async (key) => {
-        if (!deps.prStatus) return 'fallback';
-        const status = await deps.prStatus(card.sessionId!, key);
+        if (!readPrStatus) return 'fallback';
+        const status = await readPrStatus(key);
         if (status?.ok !== true) return 'fallback';
         if (status.status === 'open' && status.mergeState === 'CLEAN') return 'show';
         if (status.status !== 'open' || status.mergeState !== undefined) return 'hide';
@@ -366,14 +377,14 @@ export function createGhostCardRemoteProvider(deps: {
       const textSource = rich?.textHtml ?? html;
       const blocks = supportsForms && (mail || legacyMail) ? [] : projectGhostCardBlocks(supportsForms ? omitGhostCardFormPreview(textSource) : textSource, { inlineLinks: externalLinks && linksAsActions });
       const prStatus = rich && !supersededBy ? await Promise.all(rich.prStatus.map(async (slot) => {
-        const status = await deps.prStatus?.(card.sessionId!, slot.key).catch(() => undefined);
+        const status = await readPrStatus?.(slot.key);
         return { ...slot, ...(status?.ok ? { status } : {}) };
       })) : undefined;
       // The archive button shows only when this card's PR and every other PR of the task are merged (desktop's rule).
       // `auto` adds the leave-time auto-archive, which a task taken over by an IM channel never gets.
       const archiveButton = rich && !obsolete && deps.taskArchive ? readTaskArchiveButton(card.html) : undefined;
       const taskArchive = archiveButton ? await (async () => {
-        const status = await deps.prStatus?.(card.sessionId!, archiveButton.key).catch(() => undefined);
+        const status = await readPrStatus?.(archiveButton.key);
         if (status?.ok !== true || status.status !== 'merged') return undefined;
         const facts = await deps.taskArchive!(card.sessionId!).catch(() => undefined);
         return facts?.allMerged ? { auto: archiveButton.auto && !facts.attached } : undefined;
@@ -381,7 +392,7 @@ export function createGhostCardRemoteProvider(deps: {
       const items = obsolete ? [] : await Promise.all(projectGhostCardActions(html, externalLinks, rich,
         request.client.primitives.includes('plugin-card-session-links')).map(async (action) => {
         const prKey = rich && action.url ? githubPrKey(action.url) : undefined;
-        const status = prKey ? await deps.prStatus?.(card.sessionId!, prKey).catch(() => undefined) : undefined;
+        const status = prKey ? await readPrStatus?.(prKey) : undefined;
         const next = action.submit && !supportsForms ? { ...action, disabled: true } : action;
         return status?.ok ? { ...next, prState: status.status } : next;
       }));

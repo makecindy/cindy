@@ -97,6 +97,25 @@ describe('fillGhostCardPrStatus', () => {
     expect(active.style.display).toBe('none');
   });
 
+  // Regression (Greptile P2 on #12991): a button carrying both open-only and merge-ready previously
+  // captured `none!important` written by applyOpenOnly when first rendered as merged, losing its
+  // plugin fallback display once live status later became unavailable.
+  it('preserves the original plugin display when open-only and merge-ready share one button', () => {
+    document.body.innerHTML =
+      '<button data-ghost-action="pr:merge" data-ghost-pr-open-only="Octo/Repo#9" data-ghost-pr-merge-ready="Octo/Repo#9" style="display:inline-flex"></button>';
+    const btn = document.querySelector<HTMLElement>('button')!;
+    fillGhostCardPrStatus(document, () => status({ status: 'merged', mergeState: undefined }), t);
+    expect(btn.style.display).toBe('none');
+    fillGhostCardPrStatus(document, () => undefined, t);
+    expect(btn.style.display).toBe('inline-flex');
+    fillGhostCardPrStatus(document, () => status({ status: 'open', mergeState: 'BLOCKED' }), t);
+    expect(btn.style.display).toBe('none');
+    fillGhostCardPrStatus(document, () => status({ status: 'open', mergeState: 'CLEAN' }), t);
+    expect(btn.style.display).toBe('inline-flex');
+    fillGhostCardPrStatus(document, () => undefined, t);
+    expect(btn.style.display).toBe('inline-flex');
+  });
+
   // Regression: one merged card must not offer to archive a task with another unfinished PR.
   // Unit: the second PR need not have a mounted card; missing/failed status is not completion.
   it('requires every task PR to be confirmed merged before revealing archive', () => {

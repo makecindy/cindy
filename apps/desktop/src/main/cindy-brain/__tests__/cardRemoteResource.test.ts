@@ -454,6 +454,26 @@ describe('plugin-card-rich projection', () => {
     expect(await projected(activeCard, { ok: true, owner: 'o', repo: 'r', prNumber: 9, status: 'open', mergeState: 'DIRTY', title: '', htmlUrl: '', branch: '' })).toEqual([]);
     expect(await projected(activeCard, undefined)).toMatchObject([{ id: 'pr:merge', label: '合并' }]);
   });
+
+  // Regression (Greptile P2 on #12991): a single remote get() with open-only, merge-ready, status
+  // slot, archive button and PR link must query prStatus at most once per PR key.
+  it('deduplicates prStatus lookups across open-only, merge-ready, status slot, archive and links in one get', async () => {
+    const card = '<div><a data-ghost-link="https://github.com/o/r/pull/9">#9 Fix</a>'
+      + '<div data-ghost-pr-status="O/R#9">snapshot</div>'
+      + '<div data-ghost-pr-open-only="O/R#9"><button style="display:none" data-ghost-action="pr:merge" data-ghost-pr-merge-ready="O/R#9" aria-label="合并"></button></div>'
+      + '<button data-ghost-task-archive="O/R#9" aria-label="归档任务"></button></div>';
+    const lookup = vi.fn(async () => ({ ok: true, owner: 'o', repo: 'r', prNumber: 9, status: 'open', mergeState: 'CLEAN', title: '', htmlUrl: '', branch: '' }) as never);
+    const resource = await createGhostCardRemoteProvider({
+      readCard: async () => ({ sessionId: 's', callId: 'c', ghostId: 'github', html: card, v: 2, height: 100 }),
+      authorize: async () => {}, captureScope: () => () => true,
+      prStatus: lookup,
+      taskArchive: async () => ({ allMerged: false, attached: false }),
+      interactions: { externalLinks: () => true, dispatch: vi.fn(async () => true) },
+    }).get!(context, { ...request, client: { protocolVersion: 1, primitives: ['plugin-card-actions', 'plugin-card-rich'] } });
+    const items = (resource.blocks?.find(block => block.id === 'actions')?.data as Record<string, unknown>).items;
+    expect(items).toMatchObject([{ url: 'https://github.com/o/r/pull/9', prState: 'open' }, { id: 'pr:merge', label: '合并' }]);
+    expect(lookup).toHaveBeenCalledTimes(1);
+  });
 });
 
 
