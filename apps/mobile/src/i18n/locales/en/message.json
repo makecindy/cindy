@@ -133,6 +133,7 @@
     "retryRemoteMediaFetch": "Retry remote media fetch",
     "retryFetch": "Retry Fetch",
     "openMedia": "Open Media",
+    "playAudio": "Play audio",
     "readCurrentRemoteFile": "Read current remote file",
     "retryFilePreview": "Retry File Preview",
     "readCurrentFile": "Read Current File",
@@ -195,6 +196,9 @@
     "turnTokens": "{{tokens}} tokens"
   },
   "lightbox": {
+    "saveImage": "Save image",
+    "imageSaved": "Image saved",
+    "saveFailed": "Couldn’t save the image. Try again.",
     "originalUnavailable": "Original image unavailable",
     "retryOriginal": "Retry Original Image",
     "loadingOriginal": "Loading original image…",
@@ -263,6 +267,8 @@
     "imagesNotUploaded_other": "{{count}} images didn't upload",
     "waitingForNamedComputer": "Sends automatically when {{name}} connects",
     "reconnectComputer": "Reconnect",
+    "pendingDelivery": "Pending delivery",
+    "pendingDeliveryHint": "Saved on this phone. Waiting for confirmation from the computer.",
     "waitingForComputer": "Sends when your computer is back",
     "waitingForNetwork": "Sends when you’re back online",
     "queued": "Queued",
@@ -295,7 +301,7 @@
     "goalResumed": "Usage restored, continuing the goal",
     "goalCapacityRetry": "Model service was busy — retrying the goal",
     "autoResume": {
-      "separator": "Connection interrupted — resumed automatically",
+      "separator": "Empty response — resumed automatically",
       "succeeded": "Reconnected",
       "failed": "Reconnect failed",
       "neutral": "Reconnect",
@@ -460,6 +466,15 @@
     }
   },
   "attachmentPreview": {
+    "audioBackTen": "Back 10 seconds",
+    "audioForwardTen": "Forward 10 seconds",
+    "audioMute": "Mute",
+    "audioUnmute": "Unmute",
+    "audioSpeed": "Playback speed",
+    "audioOutput": "Audio output",
+    "fetchAudio": "Fetch from desktop",
+    "pauseAudio": "Pause audio",
+    "audioProgress": "Playback position",
     "more": "More actions",
     "retry": "Retry",
     "image": "Image",

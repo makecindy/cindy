@@ -22,6 +22,8 @@ export const SHARED_PROVIDER_SCOPE_DENIAL_MESSAGE =
 
 /** 本机目录及偏好清理依据。目录不可用可以立即停用，删除偏好需要单独的证据。 */
 export interface ProviderShareReceivedSnapshot {
+  /** Local notification sequence that identifies the published membership view. */
+  receivedChangeSequence?: number;
   ownerStamp: DataOwnerPushStamp;
   /** 本次目录可以替换这些区域的显示结果。 */
   confirmedRegions: readonly ProviderShareReceived['owner']['region'][];
@@ -252,6 +254,7 @@ export type ProviderShareCommand =
   /** 转分享：同意或拒绝(拒绝已同意的 = 撤回)。 */
   | { action: 'reshare-decide'; id: string; decision: 'approve' | 'reject' }
   | { action: 'received' }
+  | { action: 'retry-model-catalog'; agentDeviceId: string }
   | { action: 'received-snapshot'; favoriteRecovery?: ProviderShareFavoriteRecovery }
   | { action: 'preview'; link: string }
   | { action: 'send-request'; link: string }
@@ -290,6 +293,7 @@ export interface ProviderShareCommandResult {
   'set-member-note': { ok: true };
   'reshare-decide': { ok: true };
   received: ProviderShareReceived[];
+  'retry-model-catalog': { ok: true; receivedChangeSequence?: number };
   'received-snapshot': ProviderShareReceivedSnapshot;
   preview: ProviderShareLinkPreview;
   'send-request': ProviderShareRequestState;

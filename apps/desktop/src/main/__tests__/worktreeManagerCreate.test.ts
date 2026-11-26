@@ -90,6 +90,7 @@ describe('createWorktree naming authority', () => {
       }
       return { stdout: '', stderr: '' };
     });
+    await import('../worktree/WorktreeManagerPorts.desktop');
     manager = await import('../worktree/WorktreeManager');
   });
 
@@ -170,7 +171,7 @@ describe('createWorktree naming authority', () => {
       finishCheckout = (fail) => (fail ? reject(new Error('checkout failed')) : resolve({ stdout: '', stderr: '' }));
     });
     gitExecMock.mockImplementation((args: string[], ...rest: unknown[]) => {
-      if (args[0] === 'checkout' && args.includes(':(exclude).sivi')) {
+      if (args[0] === 'checkout' && args.includes('.')) {
         enteredCheckout();
         return checkout;
       }
@@ -234,6 +235,45 @@ describe('createWorktree naming authority', () => {
     expect(checkoutLease.release).toHaveBeenCalledOnce();
     expect(gitExecMock.mock.calls.some(([args]) => args[0] === 'worktree' && args[1] === 'remove')).toBe(failSetup);
     await manager.awaitBackgroundCheckout(sessionId);
+  });
+
+  it('waits for checkout before rolling back an unpublished registry rejection', async () => {
+    const previousGit = gitExecMock.getMockImplementation()!;
+    let finishCheckout!: () => void;
+    const checkout = new Promise<{ stdout: string; stderr: string }>((resolve) => {
+      finishCheckout = () => resolve({ stdout: '', stderr: '' });
+    });
+    gitExecMock.mockImplementation((args: string[], ...rest: unknown[]) => {
+      if (args[0] === 'checkout' && args.includes(':(exclude).sivi')) return checkout;
+      return previousGit(args, ...rest);
+    });
+    let reachedPersist!: () => void;
+    const persist = new Promise<void>((resolve) => { reachedPersist = resolve; });
+    storeSetMock.mockImplementation(async (...args: unknown[]) => {
+      reachedPersist();
+      // The real store invokes this under its registry lock.
+      await (args[2] as (() => Promise<void>) | undefined)?.();
+    });
+    let guardCalls = 0;
+    let settled = false;
+    const creating = manager.createWorktree({
+      sessionId: 'locked-rejection', baseRepo, name: 'guarded', sourceBranch: 'main',
+    }, {
+      assertWriteAllowed: () => {
+        guardCalls++;
+        if (guardCalls === 3) throw new Error('profile held');
+      },
+    }).finally(() => { settled = true; });
+    await persist;
+    try {
+      expect(settled).toBe(false);
+      expect(storeMap.has('locked-rejection')).toBe(false);
+    } finally {
+      finishCheckout();
+    }
+    await expect(creating).resolves.toMatchObject({ ok: false });
+    expect(storeMap.has('locked-rejection')).toBe(false);
+    expect(gitExecMock.mock.calls.some(([args]) => args[0] === 'worktree' && args[1] === 'remove')).toBe(true);
   });
 
   it.each(['', '   \t'])('generates a meaningful final name for blank input %j', async (name) => {
@@ -310,6 +350,7 @@ describe('createWorktree naming authority', () => {
     // profile lock and cancellation marker are real shared filesystem state.
     const creator = manager;
     vi.resetModules();
+    await import('../worktree/WorktreeManagerPorts.desktop');
     const canceller = await import('../worktree/WorktreeManager');
     let release!: () => void;
     let entered!: () => void;

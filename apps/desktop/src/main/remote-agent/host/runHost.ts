@@ -8,7 +8,7 @@ import { generateSharedImage, type SharedImageStart } from '../../cindy-media/sh
 import { remoteAgentStartupTiming } from '../startupTiming';
 import { RemoteTurnTerminalOwnership, startsRemoteProductTurn } from '../turnLifecycle';
 import { NATIVE_HISTORY_CHECKPOINT, parseNativeHistoryCommand, type NativeHistoryCheckpointSnapshot } from '../nativeHistoryTransfer';
-import { isProductTurnDoneEvent } from '@cindy/maker-shared/turn-continuation';
+import { isProductTurnDoneEvent, isTurnContinuationBoundaryEvent } from '@cindy/maker-shared/turn-continuation';
 import { parseProviderSharePeer, providerShareGuestPeer } from '@cindy/device-link';
 import { PLUGIN_ENGINE_DEFAULT_MODEL } from '../../../shared/pluginEngines.js';
 import { DEFAULT_REMOTE_AGENT_LIMITS, type RemoteAgentLimits, type RemoteAgentLimitUsage } from '../../../shared/remoteAgentLimits.js';
@@ -90,6 +90,7 @@ import {
 } from './groupRelay';
 import { PROVIDER_GROUP_LOCAL_MEMBER_KEY, type ProviderGroupUsageLimit } from '../../../shared/providerGroup';
 import { decideProviderGroupFailure, describeProviderGroupFailure, providerGroupFailureSignals, providerGroupUnavailableError } from '../../provider-group/failurePolicy';
+import { poolFailuresAfterOutput } from '../../subscription-accounts/session.js';
 import { isAccountUsageLimitError } from '../../maker-ipc/usageLimitAutoResume';
 import { projectPathText } from '../executor/workspace';
 import { listManagedSkillFiles, managedSkillDigest } from '../managedSkillDigest';
@@ -208,6 +209,7 @@ export interface HostedStartInput {
 
 /** 一次受邀者任务的出站登记(见 RemoteAgentHostDeps.bindGuestProviderRoute)。 */
 export interface GuestProviderRouteBinding {
+  estimateTurn?(event: AgentEvent): import('../sharedTurnValue.js').SharedTurnValue | undefined;
   receiptMetering?: boolean;
   modelDenial?(model: string): { code: string; message: string } | null;
   routeToken: string;
@@ -253,6 +255,8 @@ export interface RemoteAgentHostDeps {
   };
   startHosted(input: HostedStartInput): Promise<AgentSessionHandle>;
   forkHosted?(kind: RemoteAgentKind, options: ForkSdkSessionOptions): Promise<ForkSdkSessionResult>;
+  /** Scope only synchronous common guest checks; per-task leases still run independently. */
+  withPollAuthorizationSnapshot?<T>(read: () => T): T;
   /** 本机仍允许该控制端远程控制(总开关打开且未撤销)。 */
   isControllerAuthorized(controller: string): boolean;
   /**
@@ -423,6 +427,8 @@ export interface RemoteAgentGroupRelayDeps {
     capability?: 'image.generate';
     exclude: ReadonlySet<string>;
     reserve?: boolean;
+    /** Direct G→M admission has its own authenticated controller quota. */
+    direct?: true;
     /**
      * 这个受邀者的转分享键(provider-sharing.md §4.3)：分享来的组内电脑只在它的主人同意过这个人时才选；
      * 没有时一律不选分享来的电脑。
@@ -773,9 +779,10 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
   let sweepTimer: ReturnType<typeof setInterval> | null = null;
   const key = (controller: string, id: string) => `${controller}\0${id}`;
   const limitDeviceOf = (controller: string) => parseProviderSharePeer(controller)?.deviceId ?? controller;
-  function usageByDevice(): Map<string, number> {
+  function usageByDevice(exclude?: Run): Map<string, number> {
     const counts = new Map<string, number>();
     for (const run of runs.values()) {
+      if (run === exclude) continue;
       // 清理完成前仍占名额，包括正在关闭的实例。
       if (run.closedAt !== undefined && !startingRuns.has(run)) continue;
       const device = limitDeviceOf(run.controller);
@@ -783,15 +790,40 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
     }
     return counts;
   }
-  function assertRunCapacity(controller: string): void {
+  function runCapacityLimit(controller: string, exclude?: Run): 'DEVICE_LIMIT' | 'TOTAL_LIMIT' | undefined {
     const limits = deps.readLimits?.() ?? DEFAULT_REMOTE_AGENT_LIMITS;
-    const counts = usageByDevice();
+    const counts = usageByDevice(exclude);
     if ((counts.get(limitDeviceOf(controller)) ?? 0) >= limits.perDevice) {
-      fail('REMOTE_AGENT_BUSY', '[DEVICE_LIMIT] remote task limit for this device reached');
+      return 'DEVICE_LIMIT';
     }
     if ([...counts.values()].reduce((sum, count) => sum + count, 0) >= limits.total) {
-      fail('REMOTE_AGENT_BUSY', '[TOTAL_LIMIT] remote task limit for the provider computer reached');
+      return 'TOTAL_LIMIT';
     }
+  }
+  function assertRunCapacity(controller: string): void {
+    const limit = runCapacityLimit(controller);
+    if (limit) fail('REMOTE_AGENT_BUSY', limit === 'DEVICE_LIMIT'
+      ? '[DEVICE_LIMIT] remote task limit for this device reached'
+      : '[TOTAL_LIMIT] remote task limit for the provider computer reached');
+  }
+  /** A reconnect replaces only its own settled, idle instance. Never reclaim a
+   * different session/relay scope or let a closing native process stop counting. */
+  async function prepareRunCapacity(controller: string, payload: RemoteAgentOpenPayload, assertAllowed: () => void): Promise<void> {
+    if (!runCapacityLimit(controller)) return;
+    const hostSessionId = hostSessionIdFor(guestScopeOf(controller, payload.relay), payload.sessionId);
+    await withShadowLock(hostSessionId, async () => {
+      for (const other of runs.values()) {
+        assertAllowed();
+        if (other.controller !== controller || other.sessionId !== payload.sessionId || other.relayKey !== payload.relay
+          || other.closedAt !== undefined || other.closing || startingRuns.has(other) || busyForReclaim(other)) continue;
+        // Lowered limits can leave this host already above its new ceiling.
+        // Closing this instance must actually make room for its replacement.
+        if (runCapacityLimit(controller, other)) break;
+        await finishRun(other, 'superseded', 'navigation');
+        break;
+      }
+    });
+    assertRunCapacity(controller);
   }
   const trustOf = (controller: string): RemoteAgentControllerTrust => deps.controllerTrust?.(controller) ?? 'owner';
   /** 按控制端分开存放的目录名(影子工作区、附件与受邀者目录)。 */
@@ -847,44 +879,113 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
   let guestIndexWrite: Promise<void> = Promise.resolve();
   const runStarts = new WeakMap<Run, Promise<void>>();
   const runDisposals = new Map<Run, Promise<void>>();
-  const directGuestLocks = new Map<string, {
-    tail: Promise<void>;
-    forgets: Map<string, Promise<unknown>>;
-  }>();
+  type DirectGuestOutcome = { ok: true; value: unknown } | { ok: false; error: unknown };
+  interface DirectGuestOperation {
+    ready: boolean;
+    run(): Promise<unknown>;
+    settle(outcome: DirectGuestOutcome): void;
+  }
+  interface DirectGuestFlight {
+    owner: unknown;
+    work: Promise<unknown>;
+  }
+  interface DirectGuestQueue {
+    waiting: DirectGuestOperation[];
+    running?: DirectGuestOperation;
+    pending: Map<string, DirectGuestFlight>;
+    mutationEpoch: number;
+    allocation?: DirectGuestFlight & { key: string };
+  }
+  const directGuestLocks = new Map<string, DirectGuestQueue>();
   let directGuestOperations = 0;
+
+  function drainDirectGuestQueue(queue: DirectGuestQueue): void {
+    if (queue.running || !queue.waiting[0]?.ready) return;
+    const operation = queue.waiting.shift()!;
+    queue.running = operation;
+    void Promise.resolve().then(() => operation.run()).then(
+      value => operation.settle({ ok: true, value }),
+      error => operation.settle({ ok: false, error }),
+    );
+  }
 
   /** M serializes direct mutations per local account + guest, never across relay scopes.
    * O's device identity stays in the ownership check and dedupe key: another O
-   * cannot inherit a successful forget ACK. Settled queues are removed; queued
+   * cannot inherit another owner's ACK. Settled queues are removed; queued
    * work is bounded even when a native startup or filesystem operation stalls.
    */
   function withDirectGuestLock(peer: string, fn: () => Promise<unknown>,
-    forget?: { controller: string; forgetId: string; cleanupEpoch: number }): Promise<unknown> {
+    dedupe?: { kind: 'forget' | 'revoke' | 'allocate'; key: string },
+    preparation?: Promise<boolean>): Promise<unknown> {
+    // Admission may fail synchronously while decoding continues independently.
+    // Its caller observes the decode result; do not leave this derived promise unhandled.
+    void preparation?.catch(() => undefined);
     const ownerScope = deps.directGuestExecution?.ownerScope();
     if (!ownerScope) fail('REMOTE_AGENT_INVALID', 'direct guest account is unavailable');
     const scope = JSON.stringify([ownerScope, peer]);
-    const forgetKey = forget && JSON.stringify([forget.controller, forget.forgetId, forget.cleanupEpoch]);
     const previous = directGuestLocks.get(scope);
-    const duplicate = forgetKey ? previous?.forgets.get(forgetKey) : undefined;
-    if (duplicate) return duplicate;
+    const queue: DirectGuestQueue = previous
+      ?? { waiting: [], pending: new Map<string, DirectGuestFlight>(), mutationEpoch: 0 };
+    // A grant/open between two revokes is an ordering boundary: the later
+    // revoke must not borrow an ACK from before the intervening mutation.
+    const allocationKey = dedupe?.kind === 'allocate' ? dedupe.key : undefined;
+    const dedupeKey = dedupe && dedupe.kind !== 'allocate'
+      && JSON.stringify([dedupe.kind, dedupe.kind === 'revoke' ? queue.mutationEpoch : null, dedupe.key]);
+    const duplicate = allocationKey ? queue.allocation?.key === allocationKey ? queue.allocation : undefined
+      : dedupeKey ? queue.pending.get(dedupeKey) : undefined;
+    // The stable sharing account may survive a same-owner projection repair.
+    // Only join work whose captured app-session generation is still current.
+    if (duplicate && deps.isOwnerCurrent(duplicate.owner)) return duplicate.work;
+    // Only adjacent identical in-flight allocations join. A different model,
+    // task, grant, open or revoke must fence the old allocation's receipt.
+    // Fence even a refused reservation: decoded relay opens bypass this budget.
+    queue.allocation = undefined;
+    if (dedupe?.kind !== 'revoke') queue.mutationEpoch += 1;
     if (directGuestOperations >= 256) fail('REMOTE_AGENT_BUSY', 'too many pending shared task operations');
-    const queue = previous ?? { tail: Promise.resolve(), forgets: new Map<string, Promise<unknown>>() };
     const owner = deps.captureOwner();
     directGuestOperations += 1;
-    const work = queue.tail.then(() => {
-      if (disposed || !deps.isOwnerCurrent(owner) || deps.directGuestExecution?.ownerScope() !== ownerScope) {
-        fail('REMOTE_AGENT_UNAVAILABLE', 'direct guest account changed');
-      }
-      return fn();
-    });
-    const tail = work.then(() => undefined, () => undefined).finally(() => {
-      directGuestOperations -= 1;
-      if (forgetKey) queue.forgets.delete(forgetKey);
-      if (queue.tail === tail) directGuestLocks.delete(scope);
-    });
-    queue.tail = tail;
-    if (forgetKey) queue.forgets.set(forgetKey, work);
+    let resolve!: (value: unknown) => void;
+    let reject!: (error: unknown) => void;
+    const work = new Promise<unknown>((yes, no) => { resolve = yes; reject = no; });
+    let settled = false;
+    const operation: DirectGuestOperation = {
+      ready: preparation === undefined,
+      run: async () => {
+        if (disposed || !deps.isOwnerCurrent(owner) || deps.directGuestExecution?.ownerScope() !== ownerScope) {
+          fail('REMOTE_AGENT_UNAVAILABLE', 'direct guest account changed');
+        }
+        return fn();
+      },
+      settle: outcome => {
+        if (settled) return;
+        settled = true;
+        // A failed decode or confirmed relay retires before earlier work ends.
+        // Removing the entry avoids retaining an unbounded chain of dead slots.
+        const index = queue.waiting.indexOf(operation);
+        if (index >= 0) queue.waiting.splice(index, 1);
+        if (queue.running === operation) queue.running = undefined;
+        directGuestOperations -= 1;
+        if (dedupeKey && queue.pending.get(dedupeKey)?.work === work) queue.pending.delete(dedupeKey);
+        if (queue.allocation?.work === work) queue.allocation = undefined;
+        if (!queue.running && queue.waiting.length === 0) directGuestLocks.delete(scope);
+        if (outcome.ok) resolve(outcome.value);
+        else reject(outcome.error);
+        drainDirectGuestQueue(queue);
+      },
+    };
+    queue.waiting.push(operation);
+    if (dedupeKey) queue.pending.set(dedupeKey, { owner, work });
+    if (allocationKey) queue.allocation = { key: allocationKey, owner, work };
     directGuestLocks.set(scope, queue);
+    if (preparation) {
+      // Only preparation may retire a queued item early. A running mutation
+      // owns its slot until its actual result, including rejection, settles.
+      void preparation.then(needed => {
+        if (!needed) operation.settle({ ok: true, value: undefined });
+        else { operation.ready = true; drainDirectGuestQueue(queue); }
+      }, error => operation.settle({ ok: false, error }));
+    }
+    drainDirectGuestQueue(queue);
     return work;
   }
 
@@ -1947,9 +2048,18 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
     let groupTurnFailed = false;
     let streamError: unknown;
     let streamFailed = false;
+    // A product turn may span several native Codex turns, each with its own usage delta.
+    const pricedNativeTurns = new Set<string>();
     try {
-      for await (const event of handle.events()) {
+      for await (const nativeEvent of handle.events()) {
         if (run.closing) break;
+        // Only this host can attach a shared value to a local engine event.
+        let event = nativeEvent;
+        if (event.type === 'done' && event.source === 'codex' && event.data && typeof event.data === 'object'
+          && 'sharedTurnValue' in event.data) {
+          const { sharedTurnValue: _discarded, ...data } = event.data;
+          event = { ...event, data };
+        }
         if (startsRemoteProductTurn(event)) {
           run.nativeHistoryCheckpoint = undefined;
           if (!run.abortRequested) {
@@ -1965,6 +2075,11 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
         meterRunUsage(run, handle.model, event);
         if (currentTerminal) run.turnUsage = undefined;
         const failure = currentTerminal ? relayRunFailureOf(event) : null;
+        if (failure && poolFailuresAfterOutput.has(event)) {
+          groupTurnFailed = true;
+          append(run, { t: 'event', event });
+          continue;
+        }
         if (failure && isAccountFailure(failure)) {
           groupTurnFailed = true;
           await deliverAccountFailure(run, localGroupMember(run.providerId ?? ''), failure, handle.model, () => {
@@ -1998,7 +2113,24 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
             [NATIVE_HISTORY_CHECKPOINT]: { token: checkpoint.token, runId: run.id },
           } } });
         } else {
-          append(run, { t: 'event', event });
+          let outgoing = event;
+          if (run.trust === 'guest' && run.kind === 'codex' && event.source === 'codex' && event.type === 'done'
+            && event.turnScope !== 'background' && !event.agentMeta?.parentUuid && run.guestRoute?.estimateTurn
+            && (currentTerminal || isTurnContinuationBoundaryEvent(event)) && delegatedRunAllowed(run)) {
+            try {
+              const turnId = (data?.raw as { id?: unknown } | undefined)?.id;
+              if (typeof turnId === 'string' && turnId && !pricedNativeTurns.has(turnId)) {
+                const sharedTurnValue = run.guestRoute.estimateTurn(event);
+                if (sharedTurnValue) {
+                  pricedNativeTurns.add(turnId);
+                  outgoing = { ...event, data: { ...data, sharedTurnValue } };
+                }
+              }
+            } catch {
+              // Pricing is optional. A failed local lookup must still deliver the original terminal.
+            }
+          }
+          append(run, { t: 'event', event: outgoing });
         }
         emitState(run);
       }
@@ -3185,43 +3317,46 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
       const run = runs.get(key(controller, runId));
       return run && delegatedRunAllowed(run) && run.log.isValidCursor(cursor) ? [{ run, cursor }] : [];
     });
-    touch(true);
-    const initial = live();
+    const phase = <T>(read: () => T): T => deps.withPollAuthorizationSnapshot
+      ? deps.withPollAuthorizationSnapshot(read) : read();
+    const initial = phase(() => { touch(true); return live(); });
     const anyReady = initial.length < wanted.length || initial.some(({ run, cursor }) => run.log.isReady(cursor));
     if (!anyReady && waitMs > 0) await waitForAny(initial.map(({ run }) => run.log), waitMs, signal);
-    touch(false);
-    const out: RemoteAgentPollResult = { runs: [] };
-    let budget = Math.min(REMOTE_AGENT_POLL_MAX_BYTES, maxBytes);
-    const start = wanted.length ? pollRotation++ % wanted.length : 0;
-    for (let index = 0; index < wanted.length; index += 1) {
-      const { runId, cursor } = wanted[(start + index) % wanted.length];
-      const run = runs.get(key(controller, runId));
-      if (run && !delegatedRunAllowed(run)) {
-        // A sibling task may keep this guest peer authorized after this task's
-        // grant expires. Do not disguise that denial as a missing/restarted run,
-        // and never read the now-unauthorized task's buffered content.
-        void finishRun(run, 'access-revoked', 'navigation');
-        const data = Buffer.from(JSON.stringify({ t: 'closed', reason: 'access-revoked' }) + '\n');
-        out.runs.push({ runId, cursor: cursor + data.length, data: data.toString('base64'), done: true });
-        continue;
+    return phase(() => {
+      touch(false);
+      const out: RemoteAgentPollResult = { runs: [] };
+      let budget = Math.min(REMOTE_AGENT_POLL_MAX_BYTES, maxBytes);
+      const start = wanted.length ? pollRotation++ % wanted.length : 0;
+      for (let index = 0; index < wanted.length; index += 1) {
+        const { runId, cursor } = wanted[(start + index) % wanted.length];
+        const run = runs.get(key(controller, runId));
+        if (run && !delegatedRunAllowed(run)) {
+          // A sibling task may keep this guest peer authorized after this task's
+          // grant expires. Do not disguise that denial as a missing/restarted run,
+          // and never read the now-unauthorized task's buffered content.
+          void finishRun(run, 'access-revoked', 'navigation');
+          const data = Buffer.from(JSON.stringify({ t: 'closed', reason: 'access-revoked' }) + '\n');
+          out.runs.push({ runId, cursor: cursor + data.length, data: data.toString('base64'), done: true });
+          continue;
+        }
+        // 不存在或游标超出已写范围(对端状态与本机不一致)：控制端按任务丢失处理。
+        if (!run || !run.log.isValidCursor(cursor)) {
+          out.runs.push({ runId, cursor, missing: true });
+          continue;
+        }
+        const result = run.log.readNow(cursor, Math.min(REMOTE_AGENT_READ_MAX_BYTES, budget));
+        if (!result.data?.length && !result.done) continue;
+        budget -= result.data?.length ?? 0;
+        out.runs.push({
+          runId,
+          ...(result.from !== cursor ? { from: result.from } : {}),
+          cursor: result.cursor,
+          ...(result.data?.length ? { data: result.data.toString('base64') } : {}),
+          ...(result.done ? { done: true as const } : {}),
+        });
       }
-      // 不存在或游标超出已写范围(对端状态与本机不一致)：控制端按任务丢失处理。
-      if (!run || !run.log.isValidCursor(cursor)) {
-        out.runs.push({ runId, cursor, missing: true });
-        continue;
-      }
-      const result = run.log.readNow(cursor, Math.min(REMOTE_AGENT_READ_MAX_BYTES, budget));
-      if (!result.data?.length && !result.done) continue;
-      budget -= result.data?.length ?? 0;
-      out.runs.push({
-        runId,
-        ...(result.from !== cursor ? { from: result.from } : {}),
-        cursor: result.cursor,
-        ...(result.data?.length ? { data: result.data.toString('base64') } : {}),
-        ...(result.done ? { done: true as const } : {}),
-      });
-    }
-    return out;
+      return out;
+    });
   }
 
   /**
@@ -3446,6 +3581,13 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
   async function handleRequest(controller: string, request: RemoteAgentRequest,
     signal?: AbortSignal, directLocked = false): Promise<unknown> {
     if (!deps.isControllerAuthorized(controller)) fail('REMOTE_AGENT_UNAVAILABLE', 'remote control is not allowed');
+    // These route mutations serialize in the service rather than this guest
+    // queue. A later allocation must not borrow a receipt from before them.
+    if (request.op === 'direct-release' || request.op === 'direct-switch' || request.op === 'standby-prepare') {
+      const ownerScope = deps.directGuestExecution?.ownerScope();
+      const queue = ownerScope && directGuestLocks.get(JSON.stringify([ownerScope, controller]));
+      if (queue) queue.allocation = undefined;
+    }
     switch (request.op) {
       case 'native-history': {
         if (trustOf(controller) !== 'owner' || !deps.nativeHistory) fail('REMOTE_AGENT_UNSUPPORTED', 'native history transfer is unavailable');
@@ -3493,7 +3635,8 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
       case 'allocate':
       case 'standby-prepare': {
         if (trustOf(controller) !== 'guest' || !deps.directGuestExecution) fail('REMOTE_AGENT_INVALID', 'allocation is only for shared users');
-        if (request.op === 'allocate' && !directLocked) return withDirectGuestLock(controller, () => handleRequest(controller, request, signal, true));
+        if (request.op === 'allocate' && !directLocked) return withDirectGuestLock(controller,
+          () => handleRequest(controller, request, signal, true), { kind: 'allocate', key: JSON.stringify(request) });
         // An existing O-hosted task stays on its legacy route, even when an old
         // controller asks to allocate it again without a native resume ID.
         if (request.op === 'allocate' && deps.directGuestExecution.locate
@@ -3544,7 +3687,8 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
         if (trustOf(controller) !== 'owner' || !deps.directGuestExecution) fail('REMOTE_AGENT_INVALID', 'delegation requires the owner account');
         if (!directLocked) return withDirectGuestLock(
           providerShareGuestPeer(request.shareId, request.memberId, request.guestDeviceId),
-          () => handleRequest(controller, request, signal, true));
+          () => handleRequest(controller, request, signal, true), request.action === 'revoke'
+            ? { kind: 'revoke', key: JSON.stringify([controller, request]) } : undefined);
         const revoked = await deps.directGuestExecution.delegate(controller, request);
         if (request.action === 'grant') {
           try {
@@ -3660,6 +3804,7 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
                 tailTurnsToDrop: request.tailTurnsToDrop,
                 forkAtTimestampMs: request.forkAtTimestampMs,
                 workingDir,
+                hostedForkAccess: { ownComputer: !guest, assertCurrent: assertProvider },
                 ...(guest ? { hostedGuestHome: guestHomeFor(scope) } : {}),
               });
             } catch (error) {
@@ -3818,6 +3963,7 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
             available: deps.isAgentAvailable(kind) && (!guest || GUEST_SUPPORTED_AGENTS.has(kind)),
           })),
           maxRuns: limits.perDevice,
+          runCapacityAvailable: runCapacityLimit(controller) === undefined,
           idleReclaimMinutes: limits.idleMinutes ?? 0,
           uploadChunkBytes: REMOTE_AGENT_UPLOAD_CHUNK_BYTES,
           maxPayloadBytes: REMOTE_AGENT_MAX_PAYLOAD_BYTES,
@@ -3851,7 +3997,8 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
           const peer = providerShareGuestPeer(request.directGuest.shareId, request.directGuest.memberId,
             request.directGuest.guestDeviceId);
           if (!directLocked) return withDirectGuestLock(peer,
-            () => handleRequest(controller, request, signal, true), { controller, ...request.directGuest });
+            () => handleRequest(controller, request, signal, true), { kind: 'forget',
+              key: JSON.stringify([controller, request.directGuest.forgetId, request.directGuest.cleanupEpoch]) });
           const record = (await loadGuestIndex()).get(guestDigest(peer));
           const ownerScopeKey = deps.directGuestExecution.ownerScope();
           if (!ownerScopeKey) fail('REMOTE_AGENT_INVALID', 'direct guest account is unavailable');
@@ -3913,6 +4060,7 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
         return {};
       }
       case 'open': {
+        const openOwner = deps.captureOwner();
         const existing = runs.get(key(controller, request.runId));
         if (existing) {
           discardPayload(controller, request.payload);
@@ -3935,15 +4083,33 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
           discardPayload(controller, request.payload);
           fail('REMOTE_AGENT_UNSUPPORTED', `${request.agentKind} is not available to shared users on this computer`);
         }
+        if (!directLocked && controllerTrust === 'guest' && deps.directGuestExecution) {
+          // Reserve the boundary before resolvePayload's first await. Otherwise
+          // an allocation retry can borrow a receipt from before this open.
+          // Decode independently of earlier mutations: a relay open must still
+          // progress while a direct startup/forget is draining.
+          const prepared = resolvePayload(controller, request.payload).then(decodeOpenPayload);
+          const opening = (async () => withDirectGuestLock(controller, async () => {
+            const decoded = await prepared;
+            if (!deps.isOwnerCurrent(openOwner)) fail('REMOTE_AGENT_UNAVAILABLE', 'direct guest account changed');
+            return handleRequest(controller, { ...request, payload: { json: decoded } }, signal, true);
+          }, undefined, prepared.then(decoded => !decoded.relay)))();
+          // A relay does not await this provisional slot. Observe failures even
+          // when it bypasses a full or retired direct queue.
+          void opening.catch(() => undefined);
+          try {
+            const decoded = await prepared;
+            if (!decoded.relay) return await opening;
+            if (!deps.isOwnerCurrent(openOwner)) fail('REMOTE_AGENT_UNAVAILABLE', 'direct guest account changed');
+            return handleRequest(controller, { ...request, payload: { json: decoded } }, signal, true);
+          } catch (error) {
+            discardPayload(controller, request.payload);
+            throw error;
+          }
+        }
         let payload = decodeOpenPayload(await resolvePayload(controller, request.payload));
         // 供应商组的组所在电脑替受邀者中转过来的任务：不论那台是不是同账号，都按受邀者隔离运行。
         const relayKey = payload.relay;
-        if (!directLocked && controllerTrust === 'guest' && !relayKey && deps.directGuestExecution) {
-          // Uploads were consumed above. Re-enter with the decoded payload so
-          // authorization, resume lookup and runs.set all happen under the lock.
-          return withDirectGuestLock(controller, () => handleRequest(controller,
-            { ...request, payload: { json: payload } }, signal, true));
-        }
         const trust: RemoteAgentControllerTrust = relayKey ? 'guest' : controllerTrust;
         if (controllerTrust === 'guest' && !relayKey && deps.directGuestExecution
           && (pluginEngine
@@ -3968,7 +4134,6 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
           if (reshareKey) fail('REMOTE_AGENT_RESHARE_NOT_ALLOWED', 'the owner of this computer has not agreed to this user');
           failProviderNotAllowed();
         }
-        assertRunCapacity(controller);
         if (trust === 'guest') {
           // 受邀者必须用虚拟工作区：本机 Agent 只看到会话目录内的路径，附加目录也映射在其中。
           if (payload.virtualWorkspace !== true) {
@@ -4085,31 +4250,38 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
           reserved?.release();
           return {};
         }
-        // 查询供应商与续接归属期间主人可能已经撤回，而尚未登记的任务不会被 abortReshare 找到。
-        // 最后一次核对与 runs.set 之间不能 await；登记后撤回会走正常的任务收尾。
-        if (controllerTrust === 'guest' && relayKey && deps.reshare && !deps.reshare.allows(controller, reshareKey)) {
-          reserved?.release();
-          if (reshareKey) fail('REMOTE_AGENT_RESHARE_NOT_ALLOWED', 'the owner of this computer has not agreed to this user');
-          failProviderNotAllowed();
-        }
-        // 供应商查询/组分配有 await；最终检查与登记间不能再等待，防止并发 open 超额。
-        if (controllerTrust === 'guest' && !relayKey && deps.directGuestExecution
-          && (pluginEngine
-            ? deps.directGuestExecution.sessionDelegated(controller, payload.sessionId)
-              || !deps.directGuestExecution.sessionAllowed(controller, payload.sessionId)
-            : !deps.directGuestExecution.sessionAllowed(controller, payload.sessionId, builtinKindOf(request.agentKind)))) {
-          reserved?.release();
-          fail('REMOTE_AGENT_UNAVAILABLE', 'this shared task is no longer authorized');
-        }
-        try {
+        // Recheck after awaited provider/group work, before replacing an idle
+        // instance, and once more without awaits immediately before runs.set.
+        const assertOpenAllowed = () => {
+          if (disposed || !deps.isOwnerCurrent(openOwner) || !deps.isControllerAuthorized(controller)) {
+            fail('REMOTE_AGENT_UNAVAILABLE', 'remote agent host is no longer authorized');
+          }
+          if (controllerTrust === 'guest' && relayKey && deps.reshare && !deps.reshare.allows(controller, reshareKey)) {
+            if (reshareKey) fail('REMOTE_AGENT_RESHARE_NOT_ALLOWED', 'the owner of this computer has not agreed to this user');
+            failProviderNotAllowed();
+          }
+          if (controllerTrust === 'guest' && !relayKey && deps.directGuestExecution
+            && (pluginEngine
+              ? deps.directGuestExecution.sessionDelegated(controller, payload.sessionId)
+                || !deps.directGuestExecution.sessionAllowed(controller, payload.sessionId)
+              : !deps.directGuestExecution.sessionAllowed(controller, payload.sessionId, builtinKindOf(request.agentKind)))) {
+            fail('REMOTE_AGENT_UNAVAILABLE', 'this shared task is no longer authorized');
+          }
           // Admission may throw a specific pause error after the awaited group reservation.
-          // Nothing owns the reserved load until runs.set, so release it on either rejection path.
           if (pluginEngine
             ? !providerId || !deps.pluginEngines!.isOffered(providerId, controller, payload.options.model)
             : providerId && deps.providerAccess && !deps.providerAccess.isAllowed(providerId, controller, payload.options.model, payload.sessionId)) {
             failProviderNotAllowed();
           }
-          if (disposed) fail('REMOTE_AGENT_UNAVAILABLE', 'remote agent host has been disposed');
+        };
+        try {
+          // Authorization must succeed before retiring an old idle instance.
+          assertOpenAllowed();
+          await prepareRunCapacity(controller, payload, assertOpenAllowed);
+          if (runs.has(key(controller, request.runId))) { reserved?.release(); return {}; }
+          // Nothing owns the load until runs.set. Revalidate after close, then
+          // keep the final capacity check and registration synchronous.
+          assertOpenAllowed();
           assertRunCapacity(controller);
         } catch (error) {
           reserved?.release();

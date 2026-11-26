@@ -4,6 +4,8 @@ import { useTranslation } from 'react-i18next';
 import { Minus, Square, X } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
+import { toast } from '@/lib/toast';
+import { mapIpcErrorToI18nKey } from '@/utils/ipcError';
 import { Spinner } from '@/components/ui/spinner';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import { isSecondaryWindow } from '@/lib/secondaryWindow';
@@ -70,6 +72,7 @@ export function WindowControls({
   // 同步触发的 onOpenChange(false) 里也能立刻拦住 (state 还没 flush 到 props)。
   const [closing, setClosing] = useState(false);
   const closingRef = useRef(false);
+  const closeOnceRef = useRef<DesktopCloseBehavior | undefined>(undefined);
   const { t } = useTranslation();
 
   useEffect(() => {
@@ -128,12 +131,16 @@ export function WindowControls({
     if (closingRef.current) return;
     closingRef.current = true;
     setClosing(true);
-    window.electronAPI.windowClose();
+    const once = closeOnceRef.current;
+    closeOnceRef.current = undefined;
+    if (once) window.electronAPI.windowClose(once);
+    else window.electronAPI.windowClose();
   };
 
-  const continueCloseWithBehavior = async (behavior: DesktopCloseBehavior): Promise<void> => {
+  const continueCloseWithBehavior = async (behavior: DesktopCloseBehavior, once = false): Promise<void> => {
     if (behavior === 'tray') {
-      window.electronAPI.windowClose();
+      if (once) window.electronAPI.windowClose(behavior);
+      else window.electronAPI.windowClose();
       return;
     }
     if (behavior === 'minimize') {
@@ -147,6 +154,7 @@ export function WindowControls({
     } catch {
       hasInFlight = false;
     }
+    closeOnceRef.current = once ? behavior : undefined;
     if (hasInFlight) {
       setShowCloseDialog(true);
     } else {
@@ -158,6 +166,7 @@ export function WindowControls({
     if (savingCloseBehaviorRef.current) return;
     savingCloseBehaviorRef.current = true;
     setSavingCloseBehavior(true);
+    let saved = true;
     try {
       if (window.electronAPI.platform === 'linux') {
         await window.electronAPI.windowBehavior.setLinuxCloseBehavior(
@@ -168,14 +177,15 @@ export function WindowControls({
           behavior === 'tray' ? behavior : 'quit',
         );
       }
-      setShowCloseBehaviorDialog(false);
-      await continueCloseWithBehavior(behavior);
-    } catch {
-      // 弹窗尚未关闭；持久化失败时保留它，不带着未知行为进入关闭流程。
+    } catch (error) {
+      saved = false;
+      toast.error(t(mapIpcErrorToI18nKey(error, { fallback: 'ipcError.INTERNAL' })));
     } finally {
+      setShowCloseBehaviorDialog(false);
       savingCloseBehaviorRef.current = false;
       setSavingCloseBehavior(false);
     }
+    await continueCloseWithBehavior(behavior, !saved);
   };
 
   // 点 X 的入口: Windows 首次关闭先在 renderer 内选择关闭行为,之后再查是否
@@ -321,6 +331,7 @@ export function WindowControls({
           // loading 期间 Radix Action 的同步 onOpenChange(false) / Cancel /
           // 外部状态变化都一律不放过 —— 弹框必须留着直到进程死。
           if (closingRef.current && !next) return;
+          if (!next) closeOnceRef.current = undefined;
           setShowCloseDialog(next);
         }}
         title={t('titleBar.closeConfirm.title')}

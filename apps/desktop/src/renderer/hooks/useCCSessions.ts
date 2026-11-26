@@ -58,6 +58,7 @@ interface UseCCSessionsReturn {
     model?: string;
     effort?: string;
     workingDir?: string;
+    localPluginWorktree?: NonNullable<Parameters<typeof sessionService.create>[0]>['localPluginWorktree'];
     workspaceKind?: WorkspaceKind;
     permissionMode?: string;
     fastMode?: boolean | 'ultrafast';
@@ -168,6 +169,7 @@ export function useCCSessions(options?: UseCCSessionsOptions): UseCCSessionsRetu
       model?: string;
       effort?: string;
       workingDir?: string;
+      localPluginWorktree?: NonNullable<Parameters<typeof sessionService.create>[0]>['localPluginWorktree'];
       workspaceKind?: WorkspaceKind;
       permissionMode?: string;
       fastMode?: boolean | 'ultrafast';
@@ -187,12 +189,14 @@ export function useCCSessions(options?: UseCCSessionsOptions): UseCCSessionsRetu
       /** 新建页的未发送任务(见 sessionService.create)。 */
       provisional?: boolean;
     }, onCreateError?: (error: unknown) => void): Promise<Session | null> => {
+      const worktreeOwner = opts?.localPluginWorktree ? getDataOwnerGeneration() : null;
       try {
         const newSession = await sessionService.create({
           permissionMode: getDraft().newChatDefaultPermissionMode ?? 'auto',
           fastMode: false,
           ...opts,
         });
+        if (worktreeOwner && !isDataOwnerGenerationCurrent(worktreeOwner)) return null;
         // 本地 prepend：新建必然是 active 且 _count.messages=0，
         // projectGrouping 自动把它落到"未分类区"。省掉一次全量 IPC。
         sessionsStore.prependCreated(newSession);

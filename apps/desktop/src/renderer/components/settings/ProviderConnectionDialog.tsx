@@ -42,6 +42,7 @@ import {
 } from 'lucide-react';
 
 import { SegmentedControl } from '@/components/ui/segmented-control';
+import { SearchInput } from '@/components/ui/search-input';
 import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
 import { Button } from '@/components/ui/button';
@@ -60,13 +61,11 @@ import {
 } from '@/components/settings/CustomProviderRuntimeFillOverlay';
 import { extractIpcError } from '@/utils/ipcError';
 import {
-  createCustomProvider,
   customProviderWireProtocolForSave,
   piCatalogProviderIdAfterRouteEdit,
-  readCustomProviderKey,
-  updateCustomProvider,
   type RuntimeKeys,
 } from '@/lib/customProviders';
+import { localProviderSetup, useProviderSetupSource } from './providerSetupSource';
 import type { CodexImageGenerationRestartPolicy } from '@/../shared/customProviderUpdate';
 import { uniqueCustomProviderId } from '@/lib/customProviderId';
 import { modelsAfterProviderEndpointEdit } from '@/lib/customProviderEndpointEdit';
@@ -488,6 +487,8 @@ export function ProviderConnectionDialog({
   onClose: notifyClosed,
 }: ProviderConnectionDialogProps) {
   const { t, i18n } = useTranslation();
+  // The cloud instance settings page supplies its instance; otherwise this computer.
+  const api = useProviderSetupSource() ?? localProviderSetup;
   const dialog = useDialogExit(returnFocusRef);
   const suspendedRef = useRef(suspended);
   useLayoutEffect(() => { suspendedRef.current = suspended; }, [suspended]);
@@ -954,7 +955,7 @@ export function ProviderConnectionDialog({
   // 按实际构建区域排序，不随 UI 语言变化（只排序不过滤，可达性由测试连接实测裁决）。
   useEffect(() => {
     let cancelled = false;
-    void window.electronAPI.maker
+    void api
       .listProviderPresets()
       .then((r) => {
         if (!cancelled) setPresets(sortPresetsForRegion(r.presets, CURRENT_CINDY_REGION));
@@ -1132,13 +1133,13 @@ export function ProviderConnectionDialog({
             preset.runtimes[a] && followsDefaultConnection(a, rtRef.current[a], fields));
           if (!fetchAgent) return { preset: undefined, catalog: undefined };
           const runtime = preset.runtimes[fetchAgent]!;
-          const catalog = await window.electronAPI.maker.fetchProviderModels({ ...spec, agent: fetchAgent,
+          const catalog = await api.fetchProviderModels({ ...spec, agent: fetchAgent,
             allowEmpty: true, redirect: 'error',
             baseUrl: runtime.baseUrl, modelsUrl: fields.modelsUrl.trim() || runtime.modelsUrl, wireProtocol: runtime.wireProtocol ?? defaultWireFor(fetchAgent),
             headers: { ...runtime.headers, ...headers } });
           return { preset, catalog };
         }
-        const result = await window.electronAPI.maker.detectProvider?.({ ...spec, requestId });
+        const result = await api.detectProvider?.({ ...spec, requestId });
         const preset = result?.candidates.length === 1 ? all.find(p => p.id === result.candidates[0]) : undefined;
         return { preset: preset && bindAddPageProvider(preset, spec.baseUrl), catalog: result?.catalog, ambiguous: result?.reason === 'conflict' };
       })().catch(() => ({ preset: undefined, catalog: undefined, ambiguous: false }));
@@ -1174,7 +1175,7 @@ export function ProviderConnectionDialog({
     return () => {
       live = false;
       clearTimeout(timer);
-      void window.electronAPI.maker.detectProvider?.({ requestId, cancel: true }).catch(() => undefined);
+      void api.detectProvider?.({ requestId, cancel: true }).catch(() => undefined);
     };
     // A model selection/name change is not a new connection or a reason to restart detection.
   }, [detectionSignature, presets, editing, authMode, saving, dialog.open, !!onDetected, setRtSynced]);
@@ -1207,7 +1208,7 @@ export function ProviderConnectionDialog({
         if (!initial.runtimes[a]) continue;
         let k: string | null = null;
         try {
-          k = await readCustomProviderKey(initial.id, a);
+          k = await api.readCustomProviderKey(initial.id, a);
         } catch {
           failed[a] = true;
         }
@@ -1513,7 +1514,7 @@ export function ProviderConnectionDialog({
     const current = connectionTestRef.current;
     if (!current) return;
     connectionTestRef.current = null;
-    void window.electronAPI.maker.testProviderConnection({ kind: 'cancel', requestId: current.id }).catch(() => undefined);
+    void api.testProviderConnection({ kind: 'cancel', requestId: current.id }).catch(() => undefined);
   }, []);
   useLayoutEffect(() => {
     const current = connectionTestRef.current;
@@ -1586,7 +1587,7 @@ export function ProviderConnectionDialog({
     }
     setTest((prev) => ({ ...prev, [agent]: { status: 'testing' } }));
     try {
-      const result = await window.electronAPI.maker.testProviderConnection(
+      const result = await api.testProviderConnection(
         useSaved
           ? { kind: 'saved', providerId: initial!.id, agent }
           : {
@@ -1717,7 +1718,7 @@ export function ProviderConnectionDialog({
       const cached = !editing ? discoveryCache.current.get(agent) : undefined;
       const cachedResult = cached?.signature === `${agent}:${requestSig}` ? await cached.promise : undefined;
       if (providerModelFetchRequestSignature(rtRef.current[agent], authModeRef.current) !== requestSig) return;
-      const result = cachedResult?.ok ? cachedResult : await window.electronAPI.maker.fetchProviderModels({
+      const result = cachedResult?.ok ? cachedResult : await api.fetchProviderModels({
         allowEmpty: !editing,
         agent,
         baseUrl,
@@ -1891,7 +1892,7 @@ export function ProviderConnectionDialog({
         modalities: latest?.modalities ?? m.modalities,
         officialDocs: latest?.officialDocs ?? m.officialDocs,
         discoveredMetadata: m.discoveredMetadata ?? latest?.discoveredMetadata,
-        discoveredCost: m.discoveredCost ?? latest?.discoveredCost,
+        discoveredCost: m.discoveredCost,
         discoveredSource: m.discoveredSource,
         discoverySnapshotId: m.discoverySnapshotId,
         opaqueModelId: m.opaqueModelId || latest?.opaqueModelId,
@@ -1969,7 +1970,7 @@ export function ProviderConnectionDialog({
     if (initial?.auth?.native) {
       setSaving(true);
       try {
-        await updateCustomProvider({ ...initial, name: trimmedName }, {});
+        await api.updateCustomProvider({ ...initial, name: trimmedName }, {});
         onSaved();
       } catch { toast.error(t('settings.providers.custom.toast.saveFailed')); }
       finally { setSaving(false); }
@@ -2248,7 +2249,7 @@ export function ProviderConnectionDialog({
     setSaving(true);
     try {
       if (editing) {
-        const result = await updateCustomProvider(config, keys, { source: 'manual-settings' });
+        const result = await api.updateCustomProvider(config, keys, { source: 'manual-settings' });
         if (result?.ok === false) {
           setImageGenerationReloadConfirmation({ config, keys, busyCount: result.busyCount });
           savingRef.current = false;
@@ -2257,7 +2258,7 @@ export function ProviderConnectionDialog({
         }
         toast.success(t('settings.providers.custom.toast.updated'));
       } else {
-        const result = await createCustomProvider(config, keys, { source: 'manual-settings' });
+        const result = await api.createCustomProvider(config, keys, { source: 'manual-settings' });
         if (result?.ok === false) {
           setImageGenerationReloadConfirmation({ config, keys, busyCount: result.busyCount });
           savingRef.current = false;
@@ -2311,8 +2312,8 @@ export function ProviderConnectionDialog({
           codexImageGenerationRestartPolicy: policy,
         };
         const result = editing
-          ? await updateCustomProvider(pending.config, pending.keys, options)
-          : await createCustomProvider(pending.config, pending.keys, options);
+          ? await api.updateCustomProvider(pending.config, pending.keys, options)
+          : await api.createCustomProvider(pending.config, pending.keys, options);
         if (result.ok === false) {
           const next = { ...pending, busyCount: result.busyCount };
           imageGenerationReloadConfirmationRef.current = next;
@@ -2411,10 +2412,12 @@ export function ProviderConnectionDialog({
             {t('settings.providers.custom.fields.runtimeSupportsImageGenerationEndpoints')}
           </p>
           <div className="flex flex-col items-start gap-1.5">
-            <code className="max-w-full break-all rounded-md bg-[var(--surface-chip)] px-2 py-1 font-mono text-11 leading-4 text-[var(--text-primary)]">
+            {/* design: intrinsic-geometry — 行内代码，与 Markdown 行内代码同为 6px（DESIGN.md §5 内容排版） */}
+            <code className="max-w-full break-all rounded-[6px] bg-[var(--surface-chip)] px-2 py-1 font-mono text-11 leading-4 text-[var(--text-primary)]">
               /images/generations
             </code>
-            <code className="max-w-full break-all rounded-md bg-[var(--surface-chip)] px-2 py-1 font-mono text-11 leading-4 text-[var(--text-primary)]">
+            {/* design: intrinsic-geometry — 行内代码，与 Markdown 行内代码同为 6px（DESIGN.md §5 内容排版） */}
+            <code className="max-w-full break-all rounded-[6px] bg-[var(--surface-chip)] px-2 py-1 font-mono text-11 leading-4 text-[var(--text-primary)]">
               /images/edits
             </code>
           </div>
@@ -2572,10 +2575,10 @@ export function ProviderConnectionDialog({
           {!simpleAdding && <div className="flex flex-col gap-2">
             <FieldLabel>{t('settings.providers.custom.authMode.label')}</FieldLabel>
             <SegmentedControl
+              data-settings-search-action="Choose how the custom provider authenticates"
               aria-label={t('settings.providers.custom.authMode.label')}
               value={authMode}
-              height={38}
-              optionHeight={32}
+              density="lg"
               onValueChange={(mode) => {
                 changeAuthMode(mode);
                 setTest({ 'claude-code': IDLE_TEST, codex: IDLE_TEST, pi: IDLE_TEST });
@@ -2593,11 +2596,11 @@ export function ProviderConnectionDialog({
                 <div className="flex flex-col gap-1.5">
                   <FieldLabel>{t('settings.providers.custom.authMode.flowLabel')}</FieldLabel>
                   <SegmentedControl
+                    data-settings-search-action="Choose the OAuth sign-in flow for the custom provider"
                     aria-label={t('settings.providers.custom.authMode.flowLabel')}
                     value={oauthFlow}
                     onValueChange={setOauthFlow}
-                    height={38}
-                    optionHeight={32}
+                    density="lg"
                     options={(['authorization-code', 'device-code'] as const).map((flow) => ({
                       value: flow,
                       label: t(`settings.providers.custom.authMode.flow.${flow}`),
@@ -3613,19 +3616,13 @@ export function ModelPickerOverlay({
           {/* 搜索（项目多才显示）+ 全选/清空（作用于当前过滤结果） */}
           <div className="flex flex-col gap-2 px-5 pt-2">
             {picker.models.length > 8 && (
-              <input
+              <SearchInput
                 data-settings-search-action="Filter the fetched model list in the custom provider dialog"
-                ref={searchInputRef}
+                inputRef={searchInputRef}
                 value={picker.query}
-                onChange={(e) => onChange({ ...picker, query: e.target.value })}
+                onChange={(query) => onChange({ ...picker, query })}
                 placeholder={t('settings.providers.custom.fetch.searchPlaceholder')}
-                className={cn(
-                  'h-[34px] w-full rounded-full px-3.5 text-13 outline-none transition-colors',
-                  'text-[var(--settings-input-text)] placeholder:text-[var(--settings-input-placeholder)]',
-                  'border border-[var(--settings-input-border)] bg-[var(--settings-input-bg)] focus:border-[var(--settings-input-border-focus)]',
-                  'focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
-                )}
-                style={{ userSelect: 'text', WebkitUserSelect: 'text' }}
+                aria-label={t('settings.providers.custom.fetch.searchPlaceholder')}
               />
             )}
             <div className="flex items-center gap-3">

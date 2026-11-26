@@ -13,7 +13,7 @@ import { setMobileAuthOwner } from '@/auth/authOwnerGeneration';
 import { parseAttachmentOssRef } from '@/session/attachmentOssRef';
 
 const fake = vi.hoisted(() => ({ target: vi.fn(), open: vi.fn(), identity: vi.fn(), enabled: false, agentNetOnly: false,
-  createTransport: vi.fn(), rawFetch: vi.fn(), verifyCertificate: vi.fn(), readDirectory: vi.fn() }));
+  onlyEncrypted: false, createTransport: vi.fn(), rawFetch: vi.fn(), verifyCertificate: vi.fn(), readDirectory: vi.fn() }));
 vi.mock('@cindy/agent-net/portable', async original => ({ ...await original<typeof import('@cindy/agent-net/portable')>(),
   AgentNetSocket: { openWithBindings: fake.open }, NativeTransport: { create: fake.createTransport } }));
 vi.mock('@/api/client', async original => ({
@@ -28,8 +28,8 @@ vi.mock('@/device-link/agentNetIdentity', () => ({ ensureMobileAgentNetIdentity:
 vi.mock('@/device-link/selfHostedRelayRouting', () => ({ getActiveSelfHostedRelay: () => fake.agentNetOnly ? { signing: { agentNet: { certificate: {} } } } : null,
   getSelfHostedRelayRouteGeneration: () => 0, isAgentNetOnlyRoute: () => fake.agentNetOnly,
   subscribeSelfHostedRelayRoute: () => () => {}, deviceLinkMediaApiBaseUrl: () => 'https://relay.example.test' }));
-vi.mock('@/device-link/agentNetPreferences', () => ({ getMobileAgentNetPreferences: () => ({ ready: true, enabled: fake.enabled, onlyEncrypted: false, generation: 0 }),
-  mobileAgentNetRequiresEncryption: () => false, subscribeMobileAgentNetPreferences: () => () => {} }));
+vi.mock('@/device-link/agentNetPreferences', () => ({ getMobileAgentNetPreferences: () => ({ ready: true, enabled: fake.enabled, onlyEncrypted: fake.onlyEncrypted, generation: 0 }),
+  mobileAgentNetRequiresEncryption: () => fake.onlyEncrypted, subscribeMobileAgentNetPreferences: () => () => {} }));
 vi.mock('@/device-link/agentNetNotifications', () => ({ clearMobileAgentNetNotifications: vi.fn(),
   clearMobileAgentNetNotificationDelivery: vi.fn(), refreshMobileAgentNetNotificationPreferences: vi.fn(),
   mobileAgentNetNotificationScope: vi.fn(), mutateMobileAgentNetNotificationRegistration: vi.fn(),
@@ -47,7 +47,7 @@ import { openMobileAgentNetSocket, isMobileAgentNetActive, mobileAgentNetIdentit
   notifyMobileAgentNetNetworkChanged, stopMobileAgentNetRuntime } from '@/device-link/agentNetRuntime';
 import { uploadMobileAttachment } from '@/session/mobileAttachmentUpload';
 beforeEach(() => {
-  fake.target.mockReset(); fake.open.mockReset(); fake.identity.mockReset(); fake.enabled = false; fake.agentNetOnly = false;
+  fake.target.mockReset(); fake.open.mockReset(); fake.identity.mockReset(); fake.enabled = false; fake.agentNetOnly = false; fake.onlyEncrypted = false;
   fake.readDirectory.mockReset().mockResolvedValue(null);
   fake.rawFetch.mockReset().mockResolvedValue({ devices: [] });
   fake.createTransport.mockReset(); fake.verifyCertificate.mockReset().mockImplementation(verifyCertificate);
@@ -299,9 +299,11 @@ it('starts the official device-list check in parallel with identity setup and sc
 it.each([
   ['keeps offline cache mode when the directory check fails transiently', 'socket-error-0', false],
   ['closes the cached socket and falls back to Device Link when the identity is revoked (403)', 'socket-error-403', true],
+  ['shows removal when the encrypted-only phone cold starts with a revoked credential', 'encrypted-revoked', true],
   ['converts a deferred-relay explicit 403 upgrade rejection into 1006 Device Link fallback instead of terminal 4410', 'deferred-403', true],
 ] as const)('verifies a failed initial relay handshake once via directory: %s', async (_label, mode, shouldRefuse) => {
   fake.enabled = true;
+  fake.onlyEncrypted = mode === 'encrypted-revoked';
   const identity = generateIdentity('phone'), desktop = generateIdentity('desktop-lan');
   const { bootstrap } = createPrivateNetwork('Revoked mobile', identity);
   const desktopCert = { ...bootstrap.ownerCertificate, deviceId: desktop.deviceId, signingKey: desktop.signingKey, transportKey: desktop.transportKey };
@@ -318,8 +320,9 @@ it.each([
   let rejectDeferred!: (error: Error) => void;
   let useDeferred = false;
   const directory = vi.fn(async () => {
-    const status = mode === 'socket-error-403' ? 403 : 0;
-    throw Object.assign(new Error(status === 403 ? 'DEVICE_REVOKED' : 'AGENT_NET_NETWORK_ERROR'), { status });
+    const status = mode === 'socket-error-403' || mode === 'encrypted-revoked' ? 403 : 0;
+    const code = status === 403 ? 'DEVICE_REVOKED' : 'AGENT_NET_NETWORK_ERROR';
+    throw Object.assign(new Error(code), { status, code });
   });
   fake.identity.mockResolvedValue({
     api: {
@@ -349,9 +352,9 @@ it.each([
     const closedCode = new Promise<number>(resolve => socket!.once('close', code => resolve(code)));
     if (mode === 'deferred-403') rejectDeferred(new Error('AGENT_NET_UPGRADE_403'));
     if (shouldRefuse) {
-      await expect(closedCode).resolves.toBe(1006);
-      expect(mobileAgentNetIdentityRefused()).toBe(true);
-      expect(isMobileAgentNetActive()).toBe(false);
+      await expect(closedCode).resolves.toBe(fake.onlyEncrypted ? 4410 : 1006);
+      expect(mobileAgentNetIdentityRefused()).toBe(!fake.onlyEncrypted);
+      expect(isMobileAgentNetActive()).toBe(fake.onlyEncrypted);
       if (mode === 'deferred-403') expect(directory).not.toHaveBeenCalled();
     } else {
       await Promise.resolve();
@@ -362,5 +365,61 @@ it.each([
     }
   } finally {
     stopMobileAgentNetRuntime();
+  }
+});
+
+/**
+ * 测试价值
+ * - 生产入口与可观察结果：手机 `openMobileAgentNetSocket` 在官方网络下补充对向官方区域 STUN（经 `configureStunServers`），
+ *   保持 `configureUdpServer` 仅指向主中转；不阻塞建链。
+ * - Bug／规则依据：双区官方 STUN 探测在手机端同样生效且不破坏既有自建中转隔离。
+ * - 现有覆盖缺口：已有 mobile 测试仅覆盖 `private.example.test` 自建路由，未验证官方双区 STUN 路径。
+ * - 最小失败输入：官方 `https://agent-net.cindy.com.cn` 建链，双区 `/api/agent-net/info` 均返回 STUN。
+ * - tier：unit（内存桩与 mock fetch，无真实网络或等待）。
+ */
+it('supplements peer official region STUN on mobile official network without changing relayUdpServer', async () => {
+  fake.enabled = true;
+  fake.agentNetOnly = false;
+  const socket = Object.assign(new EventEmitter(), { restrictPeers: vi.fn(), close: vi.fn() });
+  socket.close.mockImplementation(() => socket.emit('close', 1000));
+  const configureUdpServer = vi.fn(async () => undefined);
+  const configureStunServers = vi.fn(async () => undefined);
+  fake.createTransport.mockResolvedValue({ supports: () => true, configureUdpServer, configureStunServers });
+  fake.open.mockImplementation(async options => {
+    await options.bindings.createTransport({});
+    return socket;
+  });
+  fake.rawFetch.mockResolvedValue({ devices: [{ deviceId: 'phone' }] });
+  fake.identity.mockResolvedValue({
+    api: {
+      base: 'https://agent-net.cindy.com.cn',
+      identity: { deviceId: 'phone' },
+      certificate: { networkId: 'account:mobile', expiresAt: Date.now() + 48 * 60 * 60_000 },
+    },
+    signer: {},
+    newTransportEngine: async () => ({ destroy: vi.fn() }),
+  });
+  const fetchMock = vi.fn(async (url: string) => {
+    if (url === 'https://agent-net.cindy.com.cn/api/agent-net/info') {
+      return Response.json({ protocolVersion: 2, mode: 'official', udpPort: 3479, stunHost: 'agent-net-stun.cindy.com.cn', features: [] });
+    }
+    if (url === 'https://agent-net.cindy.app/api/agent-net/info') {
+      return Response.json({ protocolVersion: 2, mode: 'official', udpPort: 3479, stunHost: 'agent-net-stun.cindy.app', features: [] });
+    }
+    return new Response(null, { status: 404 });
+  });
+  vi.stubGlobal('fetch', fetchMock);
+  try {
+    await expect(openMobileAgentNetSocket({ deviceId: 'phone', deviceName: 'Phone', getAccessToken: async () => 'unit-only' })).resolves.toBe(socket);
+    await vi.waitFor(() => {
+      expect(configureUdpServer).toHaveBeenCalledWith('agent-net-stun.cindy.com.cn:3479');
+      expect(configureStunServers).toHaveBeenCalledWith([
+        'agent-net-stun.cindy.com.cn:3479',
+        'agent-net-stun.cindy.app:3479',
+      ]);
+    });
+  } finally {
+    stopMobileAgentNetRuntime();
+    vi.unstubAllGlobals();
   }
 });

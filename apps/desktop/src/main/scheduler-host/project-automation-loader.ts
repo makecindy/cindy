@@ -53,12 +53,19 @@ export interface ProjectScheduleConfig {
   /** 显式模型选择的 Harness；省略时保留旧配置的跟随绑定任务语义。 */
   modelAgentKind?: 'claude-code' | 'codex' | 'pi';
   modelAgentDeviceId?: string;
+  /** Bot project model inheritance; new supplied tasks opt in, explicit models take precedence. Stored in the project file only. */
+  followTeammateModel?: boolean;
   model?: string;
   /** 可选：显式来源(供应商)id。省略 → 走原生默认来源（与旧配置字节级一致）。详见 Schedule.providerId。 */
   providerId?: string;
   /** Agent 运行位置，相对项目自动化所在电脑；省略 = 本机。 */
   agentDeviceId?: string;
   effort?: string;
+  /**
+   * 模型组(模式)id，每台电脑按自己的 model-groups.json 解析；这台电脑没有这个模式时按上面的具体模型运行。
+   * 详见 Schedule.modelGroup。
+   */
+  modelGroup?: string;
   /** Codex Fast 模式开关，仅 Codex 有意义。详见 Schedule.fastMode。 */
   fastMode?: boolean | 'ultrafast';
   useWorktree?: boolean;
@@ -133,6 +140,15 @@ export class ProjectAutomationLoader {
   async loadProjectSchedules(workingDir: string): Promise<ProjectScheduleConfig[] | null> {
     const result = await this.readProjectAutomations(workingDir);
     return result.kind === 'loaded' ? result.schedules : null;
+  }
+
+  /** Read the opt-in fresh at dispatch; stale/unreadable data must not pick another model. */
+  async followsTeammateModel(workingDir: string, id: string): Promise<boolean> {
+    const read = await this.readProjectAutomationsFromDisk(workingDir);
+    if (read.kind !== 'loaded') throw new Error('schedule route unavailable: project automation config unreadable');
+    const config = read.schedules.find(item => item.id === id);
+    if (!config) throw new Error('schedule route unavailable: project automation was removed');
+    return config.followTeammateModel === true && !config.model?.trim();
   }
 
   computeHash(content: string): string {
@@ -306,6 +322,10 @@ export class ProjectAutomationLoader {
       throw err;
     }
     const schedules = read.kind === 'loaded' ? read.schedules : [];
+    const previous = schedules.find(item => item.id === config.id);
+    // Editors rebuild the config. Ordinary edits retain the opt-in; selecting a model ends it.
+    config = { ...config, followTeammateModel: config.model?.trim() ? undefined
+      : config.followTeammateModel ?? previous?.followTeammateModel };
     const next: ProjectAutomationsFile = {
       version: 1,
       schedules: [
@@ -593,6 +613,8 @@ function scheduleConfigToCreateInput(
     // 恒带 key：配置删掉运行位置时清除已保存的位置。
     agentDeviceId: config.agentDeviceId,
     effort: config.effort,
+    // 恒带 key：配置删掉模式时清除已保存的模式。
+    modelGroup: config.modelGroup?.trim() || undefined,
     fastMode: config.fastMode,
     workspaceKind: 'project',
     workingDir,
@@ -641,6 +663,7 @@ export function schedulesDiffer(
     (schedule.providerId ?? undefined) !== (expected.providerId ?? undefined) ||
     (schedule.agentDeviceId ?? undefined) !== (expected.agentDeviceId ?? undefined) ||
     schedule.effort !== expected.effort ||
+    (schedule.modelGroup ?? undefined) !== (expected.modelGroup ?? undefined) ||
     (schedule.fastMode ?? false) !== (expected.fastMode ?? false) ||
     schedule.workspaceKind !== expected.workspaceKind ||
     !sameWorkingDir(schedule.workingDir, workingDir) ||
@@ -702,6 +725,7 @@ function isProjectScheduleConfig(value: unknown): value is ProjectScheduleConfig
     typeof config.prompt === 'string' &&
     typeof config.cronExpr === 'string' &&
     config.cronExpr.trim() !== '' &&
+    optionalBoolean(config.followTeammateModel) &&
     optionalString(config.timezone) &&
     optionalBoolean(config.recurring) &&
     optionalBoolean(config.manual) &&
@@ -720,6 +744,7 @@ function isProjectScheduleConfig(value: unknown): value is ProjectScheduleConfig
       typeof config.model === 'string' && config.model.trim() !== ''
     )) &&
     optionalString(config.effort) &&
+    (config.modelGroup === undefined || (typeof config.modelGroup === 'string' && config.modelGroup.trim().length <= 64)) &&
     (optionalBoolean(config.fastMode) || config.fastMode === 'ultrafast') &&
     optionalBoolean(config.useWorktree) &&
     optionalBoolean(config.persistentSession) &&

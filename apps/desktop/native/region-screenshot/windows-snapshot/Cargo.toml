@@ -10,9 +10,11 @@ base64 = "0.22"
 windows = { version = "0.58", features = [
   "Win32_Foundation",
   "Win32_Graphics_Dwm",
+  "Win32_Graphics_Dxgi_Common",
   "Win32_Graphics_Gdi",
   "Win32_System_Com",
   "Win32_UI_Accessibility",
+  "Win32_UI_ColorSystem",
   "Win32_UI_HiDpi",
   "Win32_UI_Input_KeyboardAndMouse",
   "Win32_UI_WindowsAndMessaging",

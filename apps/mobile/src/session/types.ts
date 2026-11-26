@@ -137,6 +137,8 @@ export interface RemoteSession {
    *  createSession 还没确认,会话页据此禁发(输入可编辑存草稿)、syncSession 守卫
    *  跳过 NOT_FOUND。fresh 对象来自服务器,天然无此标记,权威 upsert 后自净。 */
   pendingLocalCreation?: boolean;
+  /** Local retry state for a side chat whose fork has not been acknowledged. */
+  sideChatCreationError?: 'session.sideChat.unsupported' | 'session.sideChat.waitForReply' | 'session.sideChat.createFailed';
 }
 
 export interface RemoteSessionRuntimeProfile {
@@ -246,6 +248,7 @@ export interface RemoteSerializedAttachment {
 }
 
 export interface QueuedRemoteMessage {
+  waitingForRemoteAccount?: true;
   durableDelivery?: true;
   clientId: string;
   text: string;

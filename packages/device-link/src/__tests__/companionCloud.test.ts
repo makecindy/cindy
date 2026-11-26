@@ -70,4 +70,17 @@ describe("cloud companion device-link contract", () => {
       code: "FAILED",
     });
   });
+
+  // #12112, unit: desktop and phone parse a hand-over refusal before they can identify the skill.
+  it("keeps only valid skill details on an incompatible target's reply", () => {
+    const refusal = { ok: false, code: "SKILL_TARGET_OUTDATED" };
+    const oversizedSkill = { slug: "research-paper-writing", bodyBytes: 71_560 };
+    expect(parseCompanionCloudRemoteActionResult({ ...refusal, oversizedSkill: { ...oversizedSkill, content: "private" } }))
+      .toEqual({ ...refusal, oversizedSkill });
+    expect(parseCompanionCloudRemoteActionResult(refusal)).toEqual(refusal);
+    for (const invalid of [{ ...oversizedSkill, bodyBytes: -1 }, { ...oversizedSkill, slug: "../bad" }]) {
+      expect(parseCompanionCloudRemoteActionResult({ ...refusal, oversizedSkill: invalid })).toEqual(refusal);
+    }
+    expect(parseCompanionCloudRemoteActionResult({ ok: false, code: "BUSY", oversizedSkill })).toEqual({ ok: false, code: "BUSY" });
+  });
 });

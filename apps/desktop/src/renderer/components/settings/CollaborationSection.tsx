@@ -19,15 +19,11 @@ interface CollaborationSettings {
   isCustomized?: boolean;
 }
 
-type CollaborationSettingKey =
-  | 'workerSoftLimit'
-  | 'workerHardLimit'
-  | 'workerIdleReleaseMinutes';
+type CollaborationSettingKey = 'workerSoftLimit' | 'workerHardLimit' | 'workerIdleReleaseMinutes';
 
 export function CollaborationSection() {
   const { t } = useTranslation();
   const [settings, setSettings] = useState<CollaborationSettings | null>(null);
-  const idPrefix = useId();
 
   useEffect(() => {
     void window.electronAPI.localDb.orcaWorkflows
@@ -42,7 +38,7 @@ export function CollaborationSection() {
   }, []);
 
   const persist = (key: CollaborationSettingKey, value: number) => {
-    setSettings((prev) => prev ? { ...prev, [key]: value, isCustomized: true } : prev);
+    setSettings((prev) => (prev ? { ...prev, [key]: value, isCustomized: true } : prev));
     void window.electronAPI.localDb.orcaWorkflows
       .setCollaborationSetting?.(key, value)
       .then((next) => setSettings(next as CollaborationSettings))
@@ -58,25 +54,49 @@ export function CollaborationSection() {
   }
 
   return (
+    <CollaborationSectionView
+      settings={settings}
+      persist={persist}
+      reset={() => {
+        void window.electronAPI.localDb.orcaWorkflows
+          .resetCollaborationSettings?.()
+          .then((next) => {
+            setSettings(next as CollaborationSettings);
+            toast.success(t('settings.defaults.restored'));
+          })
+          .catch(() => toast.error(t('settings.defaults.restoreFailed')));
+      }}
+    />
+  );
+}
+
+/** Shared native view. Local and cloud controllers provide the same state/actions. */
+export function CollaborationSectionView({
+  settings,
+  persist,
+  reset,
+  headingStatus,
+}: {
+  settings: CollaborationSettings;
+  persist: (key: CollaborationSettingKey, value: number) => void;
+  reset: () => void;
+  /** Cloud settings: a group that could not be read says so here, in place of the heading's action. */
+  headingStatus?: React.ReactNode;
+}) {
+  const { t } = useTranslation();
+  const idPrefix = useId();
+
+  return (
     <SettingsSection
       title={t('settings.collaboration.title')}
       action={
+        headingStatus ??
         // min-h 锁住标题行高度:DefaultOverrideControls 未自定义时返回 null,若不预留
         // 高度,首次改动让「已自定义」+ 恢复按钮(30px)出现会把整段往下顶,列表抖一下。
         <div className="flex min-h-[30px] items-center">
           <DefaultOverrideControls
             isCustomized={Boolean(settings.isCustomized)}
-            onReset={() => {
-              void window.electronAPI.localDb.orcaWorkflows
-                .resetCollaborationSettings?.()
-                .then((next) => {
-                  setSettings(next as CollaborationSettings);
-                  toast.success(t('settings.defaults.restored'));
-                })
-                .catch((err) => {
-                  toast.error(err instanceof Error ? err.message : t('settings.defaults.restoreFailed'));
-                });
-            }}
+            onReset={reset}
           />
         </div>
       }

@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import ts from 'typescript';
 import { createOrcaTeamService, type OrcaTeamServiceDeps } from '../orcaTeamService.js';
-import { pluginTaskRouteAttempts, pluginTaskSelectionIsOpen } from '../pluginTaskDefaultRoute.js';
+import { pluginTaskRouteAttempts, resolveLightestPluginTaskFallback, pluginTaskSelectionIsOpen } from '../pluginTaskDefaultRoute.js';
 import { createSessionExecutionResolver } from '../sessionExecutionSelection.js';
 import { Session } from '@cindy/maker-core';
 import { handlePluginTaskRequest } from '../../cindy-brain/taskSlot.js';
@@ -23,7 +23,7 @@ import {
 } from '../pluginTaskService.js';
 import type { PluginTaskRoute, PluginTaskView } from '../../../shared/pluginTasks.js';
 import { controlOwnedSessionExecution, isSameSessionExecution, withdrawOwnedSessionInputs } from '../sessionExecutionOwnership.js';
-import { PLUGIN_TEAM_PLAN_MAX_JSON_CHARS, PLUGIN_TASK_RECEIPT_MAX_JSON_CHARS } from '../../../shared/pluginTasks.js';
+import { PLUGIN_TEAM_PLAN_MAX_JSON_CHARS, PLUGIN_TASK_FOLLOW_UP_MS, PLUGIN_TASK_RECEIPT_MAX_JSON_CHARS } from '../../../shared/pluginTasks.js';
 import { resolveRemotePluginTaskRoute, savedPluginTaskRemoteRoute } from '../pluginTaskModelRoute.js';
 import type { ProviderView } from '@cindy/model-providers';
 
@@ -401,6 +401,8 @@ function fixture() {
       ),
     forSession: async (t) =>
       copy([...rows.values()].filter((r) => r.operation === 'send' && r.targetId === t)),
+    followUpLinks: async (t) =>
+      copy([...rows.values()].filter((r) => r.operation === 'followUp' && r.targetId === t)),
     insert: async (r) => {
       expect(rows.has(r.id)).toBe(false);
       rows.set(r.id, copy(r));
@@ -618,6 +620,52 @@ it('keeps relay-free send receipts replayable and binds a relay to its request k
   await expect(f.service.send('p', { ...request, requestKey: 'relay', relay: { ...relay, sender: { ...sender, isOwner: true } } }))
     .rejects.toMatchObject({ code: 'IDEMPOTENCY_CONFLICT' });
   expect(f.deps.dispatch).toHaveBeenCalledTimes(2);
+});
+
+// unit: plugin-agent-tasks.md「后续轮次」(2026-11-25). A WeChat question's turn opened a task; its
+// result came back into the WeChat task but nothing reached WeChat, because the plugin only knows runs
+// it sent. Entries: send(followUps) → noteOpenedTask → openFollowUp → accept/settle → getRun/listRuns/
+// cancel. Observable: only word back from the task that opted-in run opened becomes a run the plugin
+// can read (never the owner's turns, other tasks, another plugin, or after the window), and the
+// plugin's dispatch checks never hold that word back. Minimal inputs: one opted-in and one plain run,
+// word from the opened task, from another task and after 7 days, a config change before acceptance.
+it('turns word back from a task an opted-in run opened into a follow-up run, and nothing else', async () => {
+  const f = fixture();
+  let clock = 1;
+  const relay = { platform: 'wechat', chatType: 'group' as const, chatName: '产品群', sender: { id: 'wxid_a', name: 'Chris', isOwner: true } };
+  const readInputRelay = vi.fn(async () => relay);
+  const service = createPluginTaskService({ ...f.deps, now: () => clock, readInputRelay });
+  const task = await service.create('p', { requestKey: 'create', title: 'WeChat group' });
+  const base = { taskId: task.taskId, expectedRevision: task.revision };
+  const plain = await service.send('p', { ...base, requestKey: 'plain', text: 'plain' });
+  const asked = await service.send('p', { ...base, requestKey: 'asked', text: '查一下', followUps: true });
+  expect([plain.followUps, asked.followUps]).toEqual([undefined, { tasks: 0 }]);
+  // A turn without the opt-in (as the owner's own turns) remembers nothing.
+  await service.noteOpenedTask(task.taskId, [plain.inputMessageId], 'helper');
+  expect(await service.openFollowUp('helper', task.taskId)).toBeUndefined();
+  await service.noteOpenedTask(task.taskId, [asked.inputMessageId], 'helper');
+  await service.noteOpenedTask(task.taskId, [asked.inputMessageId], 'helper');
+  expect(readInputRelay).toHaveBeenCalledExactlyOnceWith(task.taskId, [asked.inputMessageId]);
+  expect((await service.getRun('p', asked.runId)).followUps).toEqual({ tasks: 1, until: 1 + PLUGIN_TASK_FOLLOW_UP_MS });
+  for (const [sender, target] of [['other', task.taskId], ['helper', 'another-task']])
+    expect(await service.openFollowUp(sender, target)).toBeUndefined();
+  const followUp = (await service.openFollowUp('helper', task.taskId))!;
+  expect(followUp).toEqual({ runId: expect.any(String), clientId: `plugin-task:${followUp.runId}`, pluginId: 'p', relay });
+  // The word is already accepted for delivery: a changed task configuration never rejects it.
+  f.tasks.get(task.taskId)!.resolvedConfig = { ...f.route, model: 'changed' };
+  await expect(service.accept(task.taskId, { clientId: followUp.clientId }, f.execution)).resolves.toBeUndefined();
+  await service.settle(task.taskId, f.execution, 'completed', 'answer');
+  expect(await service.getRun('p', followUp.runId)).toMatchObject({ status: 'completed', outputMessageId: 'answer',
+    followUpOf: asked.runId, followUps: { tasks: 0 }, acceptedConfig: { model: 'changed' } });
+  expect((await service.listRuns('p', task.taskId)).items.map(run => run.runId)).toContain(followUp.runId);
+  await expect(service.getRun('other', followUp.runId)).rejects.toMatchObject({ code: 'TASK_NOT_FOUND' });
+  // Each word back is its own follow-up; the plugin cannot withdraw another task's word.
+  const next = (await service.openFollowUp('helper', task.taskId))!;
+  await expect(service.cancel('p', next.runId)).rejects.toMatchObject({ code: 'INVALID_REQUEST' });
+  await service.abandonFollowUp(next.runId);
+  expect(await service.getRun('p', next.runId)).toMatchObject({ status: 'failed' });
+  clock = 2 + PLUGIN_TASK_FOLLOW_UP_MS;
+  expect(await service.openFollowUp('helper', task.taskId)).toBeUndefined();
 });
 
 // unit: plugin-agent-tasks.md「消息附件」(2026-11-17). A relayed photo may come without words, and
@@ -1798,6 +1846,7 @@ it('an open plugin selection without a source session follows the auxiliary chai
       codex: [{ id: f.route.providerId, name: 'provider', models: ['next', 'cheap', 'nolow', 'onpi'] }] },
       resolveDefaultProviderIdForModel: () => f.route.providerId }),
   });
+  const reportFallback = vi.fn();
   const source = readFileSync(new URL('../register.ts', import.meta.url), 'utf8');
   const resolveStart = source.indexOf('    const resolveRoute = async');
   const resolve = source.slice(resolveStart, source.indexOf('    const readExecution', resolveStart));
@@ -1807,6 +1856,7 @@ it('an open plugin selection without a source session follows the auxiliary chai
       resolveSessionExecution: resolver, PluginTaskError, routeUnavailable: () => { throw Error('unavailable'); },
       getEffectiveAuxiliaryModelRefs: () => ['chain'], getEffectiveAuxiliaryModelChainSnapshot: () => 'chain',
       auxiliaryChainSessionCandidates: () => candidates, pluginTaskRouteAttempts, pluginTaskSelectionIsOpen,
+      resolveLightestPluginTaskFallback, reportPluginTaskAuxiliaryFallback: reportFallback,
       savedPluginTaskRemoteRoute, readPluginRouteProviders: async () => [],
       // Remote catalog admission is covered by resolveRemotePluginTaskRoute's own tests; mark the path taken.
       resolveRemotePluginTaskRoute: async (route: PluginTaskRoute) => ({ ...route, viaRemoteCatalog: true }) };
@@ -1824,8 +1874,16 @@ it('an open plugin selection without a source session follows the auxiliary chai
     .resolves.toMatchObject({ model: 'cheap', effort: 'low' });
   // Only when no candidate offers a light level does a model route at its default effort.
   await expect(run([{ agentKind: 'codex', providerId: f.route.providerId, model: 'nolow' }])).resolves.toMatchObject({ model: 'nolow' });
-  // No usable candidate: the new-task selection remains the last resort.
+  // No usable candidate: the new-task selection remains the last resort, at its
+  // lightest accepted effort, and the user is told (auxiliary-model-health.md, 2026-11-23).
   await expect(run([{ agentKind: 'codex', providerId: f.route.providerId, model: 'missing' }])).resolves.toMatchObject({ model: 'next', effort: 'high' });
+  expect(reportFallback).toHaveBeenLastCalledWith(expect.objectContaining({ model: 'next' }));
+  selected.model = 'cheap';
+  await expect(run([{ agentKind: 'codex', providerId: f.route.providerId, model: 'missing' }])).resolves.toMatchObject({ model: 'cheap', effort: 'low' });
+  selected.model = 'next';
+  // A chain candidate that runs clears the fallback note.
+  await run([{ agentKind: 'codex', providerId: f.route.providerId, model: 'cheap' }]);
+  expect(reportFallback).toHaveBeenLastCalledWith(null);
   // An explicit plugin model never consults the chain.
   await expect(run([{ agentKind: 'codex', providerId: f.route.providerId, model: 'cheap' }], { model: 'next' })).resolves.toMatchObject({ model: 'next' });
   // Rule (2026-11-16): a saved run location applies without an explicit route and is admitted
@@ -1916,7 +1974,8 @@ it.each([
     resolveSessionExecution: resolver, PluginTaskError, routeUnavailable: () => { throw Error('unavailable'); },
     // No auxiliary chain configured in this scenario: the new-task selection stays the inherited default.
     getEffectiveAuxiliaryModelRefs: () => [], getEffectiveAuxiliaryModelChainSnapshot: () => '',
-    auxiliaryChainSessionCandidates: () => [], pluginTaskRouteAttempts, pluginTaskSelectionIsOpen, savedPluginTaskRemoteRoute };
+    auxiliaryChainSessionCandidates: () => [], pluginTaskRouteAttempts, pluginTaskSelectionIsOpen, savedPluginTaskRemoteRoute,
+    resolveLightestPluginTaskFallback, reportPluginTaskAuxiliaryFallback: () => {} };
   const js = ts.transpileModule(`${resolve}\nreturn {${preference} resolveRoute};`, {
     compilerOptions: { target: ts.ScriptTarget.ES2022 },
   }).outputText;

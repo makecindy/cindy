@@ -7,7 +7,9 @@ import type { MenuAction } from '@react-native-menu/menu';
 import { PendingSendBubble, type PendingSendBubbleActions } from '@/session/PendingSendBubble';
 import { MessageBodyText } from '@/session/ShareMessageCheckbox';
 import { buildQueueRowPresentation, EMPTY_INPUT_PROJECTION } from '@/session/inputProjection';
-import type { MobilePendingSendItem } from '@/session/pendingSendItems';
+import { buildPendingSendItems, type MobilePendingSendItem } from '@/session/pendingSendItems';
+import { buildOutboxItem, outboxDisplayItem, outboxItemWithEnqueueFailure } from '@/session/sessionOutbox';
+import { i18n } from '@/i18n';
 import { collectMobileMessageGalleryImages, lightboxImagesForPayload } from '@/session/messageGallery';
 import { useWaitingComputerRecovery } from '@/session/useWaitingComputerRecovery';
 import type { DeviceView } from '@cindy/device-link';
@@ -134,6 +136,31 @@ function touch(type: 'Start' | 'Move' | 'End' | 'Cancel', x = 0, y = 0, count = 
   const handler = handlers.get('pendingSend.body.a')?.[`onTouch${type}`] as ((e: GestureResponderEvent) => void) | undefined;
   act(() => handler?.({ nativeEvent: { pageX: x, pageY: y, touches: Array(count).fill({}) } } as unknown as GestureResponderEvent));
 }
+
+// #4841 (unit): the touch cases do not cover a stored Android DNS failure.
+// Render the production outbox projection and check the text the user sees.
+it('shows a localized reason for a stored Expo Android DNS failure', async () => {
+  const previousLanguage = i18n.language;
+  await i18n.changeLanguage('zh-CN');
+  try {
+    const snapshot = buildOutboxItem({
+      clientId: 'a', sessionId: 'session-a', text: 'hello',
+      permissionModeAtSend: 'ask', readyAttachments: [], claimedUploads: [],
+    });
+    const failure = outboxItemWithEnqueueFailure(snapshot,
+      'fetch failed: java.net.UnknownHostException: Unable to resolve host "relay.example.invalid": No address associated with hostname');
+    const [pending] = buildPendingSendItems({
+      outbox: [outboxDisplayItem(failure)], queue: [], settling: [], editingClientId: null,
+      hiddenClientIds: new Set(), sendingClientIds: new Set(), steeringClientIds: new Set(),
+      presentationByClientId: new Map(),
+    });
+    show(pending);
+    expect(host.querySelector('[data-testid="pendingSend.error.a"]')?.textContent)
+      .toBe(i18n.t('apiErrors.networkUnavailable', { webHint: '' }));
+  } finally {
+    await i18n.changeLanguage(previousLanguage);
+  }
+});
 function flush() {
   act(() => { for (const [id, callback] of [...frames]) { frames.delete(id); callback(0); } });
 }
@@ -187,6 +214,16 @@ it('rechecks the waiting computer once, backs off, and never resubmits the messa
   expect(read).toHaveBeenCalledTimes(2);
 });
 
+// Unit: only a locally persisted text still awaiting its receipt offers delivery details.
+it('reveals the pending delivery explanation and drops it after acknowledgement', () => {
+  const awaiting = { actions: null, phase: 'sending' as const, queueIndex: null, pendingDelivery: true };
+  show(awaiting);
+  expect(host.textContent).toContain('message.queue.pendingDelivery');
+  show(awaiting, 'a');
+  expect(host.textContent).toContain('message.queue.pendingDeliveryHint');
+  show({ ...awaiting, pendingDelivery: false }, 'a');
+  expect(host.textContent).not.toContain('message.queue.pendingDelivery');
+});
 it('lets an in-flight local outbox message open its cancel action', () => {
   show({ actions: null, phase: 'sending', queueIndex: null });
   touch('Start'); touch('End'); flush();
