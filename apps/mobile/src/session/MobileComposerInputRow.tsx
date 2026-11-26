@@ -422,10 +422,11 @@ export function MobileComposerInputRow({
           >{collapsedOverflowText}</Text> : null}
           {inputOverlay}
           {!cardLayout && (onCollapsedPress || collapsedPreview) ? (
-            // VoiceOver still reaches the input itself and focuses it directly. Over a preview the first tap only
-            // opens the input; the hidden native text would otherwise take the tap at an unseen spot. Without the
-            // pill entry (Android, Reduce Motion) it focuses the input directly, keeping its selection.
-            <Pressable accessible={false} importantForAccessibility="no-hide-descendants"
+            // Screen readers skip this layer and reach the input itself (it only hides its glyphs, never its view),
+            // which they focus directly. Keyboard focus skips it too. Over a preview the first tap only opens the
+            // input; the hidden native text would otherwise take the tap at an unseen spot. Without the pill entry
+            // (Android, Reduce Motion) it focuses the input directly, keeping its selection.
+            <Pressable accessible={false} importantForAccessibility="no-hide-descendants" focusable={false}
               onPress={onCollapsedPress ?? focusInputKeepingSelection} style={StyleSheet.absoluteFill} testID={testID ? `${testID}.collapsedOpen` : undefined} />
           ) : null}
         </Reanimated.View>

@@ -23,10 +23,11 @@ vi.mock('react-native', async () => {
     scrollViewProps.current = props;
     return React.createElement('div', { 'data-testid': testID, 'data-scroll': String(scrollEnabled) }, children);
   };
-  const Pressable = ({ children, testID, onPress, accessible, importantForAccessibility }: {
-    children?: ReactNode; testID?: string; onPress?: () => void; accessible?: boolean; importantForAccessibility?: string;
+  const Pressable = ({ children, testID, onPress, accessible, importantForAccessibility, focusable }: {
+    children?: ReactNode; testID?: string; onPress?: () => void; accessible?: boolean; importantForAccessibility?: string; focusable?: boolean;
   }) => React.createElement('div', { 'data-testid': testID, onClick: onPress,
-    'data-accessible': accessible === undefined ? undefined : String(accessible), 'data-a11y': importantForAccessibility }, children);
+    'data-accessible': accessible === undefined ? undefined : String(accessible), 'data-a11y': importantForAccessibility,
+    'data-focusable': focusable === undefined ? undefined : String(focusable) }, children);
   return { View, ScrollView, Pressable, Platform: { get OS() { return platform.OS; } },
     StyleSheet: { hairlineWidth: 1, absoluteFill: {} }, Animated: {}, Easing: {} };
 });
@@ -246,6 +247,8 @@ it.each(['ios', 'android'] as const)('opens and focuses on the first tap over a 
     render({ overflow: text });
     expect(layer()?.getAttribute('data-accessible')).toBe('false');
     expect(layer()?.getAttribute('data-a11y')).toBe('no-hide-descendants');
+    // Not a label-less stop for keyboard or switch focus either; the input is the only focusable node.
+    expect(layer()?.getAttribute('data-focusable')).toBe('false');
     act(() => layer()!.click());
     expect(focus).toHaveBeenCalledTimes(1);
     expect(textInputProps.current.selection).toBeUndefined();
