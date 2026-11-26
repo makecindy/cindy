@@ -3980,6 +3980,8 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
         if (lanes.has(lane)) { hints.delete(row.id); continue; }
         for (const candidate of [...waiting.filter(older => emptyAssistantClaims.get(older.id)?.lane === lane), row]) {
           if (lanes.has(lane)) { if (candidate === row) hints.delete(row.id); break; }
+          // Each execution is asked at most once per pass.
+          if (candidate !== row) waiting.splice(waiting.indexOf(candidate), 1);
           // A claim failure (such as a rate limit) is reported to the poll, and keeps the notice.
           if (!mayRequest()) return;
           const execution = await claim(actorId, candidate.id);

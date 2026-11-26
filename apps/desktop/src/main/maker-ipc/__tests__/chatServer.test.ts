@@ -3077,8 +3077,8 @@ describe('Chat Server result delivery and refresh', () => {
     // - keeps backing off: B's own Thread runs, so B is swept every 10 s; the same empty main-group
     //   execution follows the ladder instead of being claimed on every sweep, also while a newer
     //   request waits behind B's Thread.
-    // - keeps the order: a newer request of B found only by that sweep never goes before an older
-    //   one still backing off.
+    // - keeps the order: newer requests of B found only by that sweep never go before an older one
+    //   still backing off, and that one is asked at most once per pass.
     // - execution.changed: the room stream naming the backed-off execution asks it on the next sweep.
     it.each(['recovers after one empty claim', 'keeps backing off', 'keeps the order', 'asks again on execution.changed'] as const)('busy in another group, B %s', async variant => {
       await vi.advanceTimersByTimeAsync(2000);
@@ -3090,6 +3090,7 @@ describe('Chat Server result delivery and refresh', () => {
       const rootId = message(1, peerId, '').id;
       const exec = (n: number) => ({ ...request(n), conversation_id: otherRoom, source_message_id: `50000000-0000-4000-8000-00000000077${n}` });
       const [b7, b8, b9] = [exec(7), exec(8), exec(9)];
+      const b10 = { ...exec(6), id: '40000000-0000-4000-8000-000000000010' };
       const queuedB = [b7];
       // B's next request: empty once, then claimable (recovers), or empty until `grantedAt`.
       let empty8 = 0, grantedAt = Infinity;
@@ -3098,7 +3099,7 @@ describe('Chat Server result delivery and refresh', () => {
         if (route === `/conversations/${otherRoom}/executions`) return { body: queuedB.map(e => ({ ...e, status: 'queued' })) };
         if (route === '/executions/claim' && body?.executionId) {
           const e = queuedB.find(row => row.id === body.executionId);
-          if (!e || (e === b8 && (recovers ? empty8++ === 0 : Date.now() < grantedAt))) return { body: { execution: null } };
+          if (!e || (e === b8 && recovers ? empty8++ === 0 : [b8, b9, b10].includes(e) && Date.now() < grantedAt)) return { body: { execution: null } };
           queuedB.splice(queuedB.indexOf(e), 1); return { body: { execution: e } };
         }
         const m = /\/conversations\/10000000-0000-4000-8000-000000000002\/messages\/(50000000-0000-4000-8000-00000000077(\d))$/.exec(route);
@@ -3131,9 +3132,14 @@ describe('Chat Server result delivery and refresh', () => {
         // Right after the fourth empty claim (on a sweep), the next try is 16 s out and the next sweep 10–12 s.
         for (let second = 0; second < 60 && claims8() < 4; second++) await vi.advanceTimersByTimeAsync(1000);
         expect(claims8()).toBe(4);
+        if (variant === 'keeps the order') {
+          // Two newer requests of the same conversation, refused too: one sweep asks the older one once.
+          queuedB.push(b9, b10);
+          await vi.advanceTimersByTimeAsync(13_000);
+          expect(claims8()).toBe(5);
+        }
         grantedAt = Date.now();
-        if (variant === 'keeps the order') queuedB.push(b9);
-        else socket.emit('message', JSON.stringify({ type: 'changes', scope: `conversation:${otherRoom}`, cursor: '1000',
+        if (variant !== 'keeps the order') socket.emit('message', JSON.stringify({ type: 'changes', scope: `conversation:${otherRoom}`, cursor: '1000',
           changes: [{ type: 'execution.changed', entityId: b8.id, data: { status: 'queued', botId: cindyId } }] }));
         await vi.advanceTimersByTimeAsync(13_000);
         expect(firstLines().slice(2)).toEqual(['B request 8']);
