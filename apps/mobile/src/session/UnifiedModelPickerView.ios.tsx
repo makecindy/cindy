@@ -204,7 +204,43 @@ export function UnifiedModelPickerView(p: UnifiedMobilePickerViewProps) {
         <Section
           key={group.key}
           title={group.title}
-          header={group.quota?.summary ? (
+          header={group.quota?.isMultiGroup && group.quota.groups?.length ? (
+            <HStack spacing={6}>
+              <Text modifiers={[font({ textStyle: "caption", weight: "medium" }), foregroundStyle(colors.textSecondary)]}>
+                {group.title}
+              </Text>
+              <Spacer />
+              <HStack spacing={4}>
+                {group.quota.groups.map((item, index) => (
+                  <HStack key={item.id} spacing={4}>
+                    {index > 0 ? (
+                      <Text modifiers={[font({ textStyle: "caption" }), foregroundStyle(colors.textTertiary)]}>
+                        ·
+                      </Text>
+                    ) : null}
+                    <Text modifiers={[font({ textStyle: "caption" }), foregroundStyle(colors.textTertiary)]}>
+                      {item.label}
+                    </Text>
+                    <Text
+                      modifiers={[
+                        font({ textStyle: "caption" }),
+                        foregroundStyle(
+                          item.level === "crit"
+                            ? colors.quotaBarCrit
+                            : item.level === "warn"
+                              ? colors.quotaBarWarn
+                              : colors.textSecondary,
+                        ),
+                        accessibilityLabel(item.accessibilityLabel),
+                      ]}
+                    >
+                      {`${item.remaining}%`}
+                    </Text>
+                  </HStack>
+                ))}
+              </HStack>
+            </HStack>
+          ) : group.quota?.summary ? (
             <HStack spacing={6}>
               <Text modifiers={[font({ textStyle: "caption", weight: "medium" }), foregroundStyle(colors.textSecondary)]}>
                 {group.title}
@@ -233,8 +269,8 @@ export function UnifiedModelPickerView(p: UnifiedMobilePickerViewProps) {
               key={row.key}
               modifiers={[id(`${group.key}:${row.key}`)]}
               title={row.title}
-              subtitle={[row.effortLabel, row.subtitle, row.notice].filter(Boolean).join(" · ")}
-              subtitleContent={row.subtitle || row.notice ? (
+              subtitle={[row.effortLabel, row.subtitle, row.notice, row.quotaLabel].filter(Boolean).join(" · ")}
+              subtitleContent={row.subtitle || row.notice || row.quotaLabel ? (
                 <VStack alignment="leading" spacing={2}>
                   {row.subtitle ? (
                     <Text modifiers={[font({ textStyle: "caption" }), foregroundStyle(colors.textSecondary)]}>
@@ -244,6 +280,11 @@ export function UnifiedModelPickerView(p: UnifiedMobilePickerViewProps) {
                   {row.notice ? (
                     <Text modifiers={[font({ textStyle: "footnote" }), foregroundStyle(colors.textSecondary)]}>
                       {row.notice}
+                    </Text>
+                  ) : null}
+                  {row.quotaLabel ? (
+                    <Text modifiers={[font({ textStyle: "caption2" }), foregroundStyle(colors.textTertiary)]}>
+                      {row.quotaLabel}
                     </Text>
                   ) : null}
                 </VStack>

@@ -20,6 +20,7 @@ import type { MobileAgentCapabilities } from "./agentCapabilities";
 import type { ModelPickerSheetProps } from "./ModelPickerSheet";
 import {
   buildPluginEngineGroups,
+  formatPluginEngineModelQuotaLabel,
   formatPluginEnginePickerQuota,
   type MobilePluginEngine,
   type MobilePluginEngineSelection,
@@ -975,13 +976,26 @@ export function UnifiedModelPickerSheet(
           ? t("models.pluginEngines.unavailableWithHint", { engine: name, hint })
           : t("models.pluginEngines.unavailable", { engine: name }),
       }).map((group) => {
+        const usage = pluginEngineQuotas?.[group.providerId];
         const quota = formatPluginEnginePickerQuota(
-          pluginEngineQuotas?.[group.providerId],
+          usage,
           now,
           i18n.language,
           (resetsAtSeconds, currentNow) => formatQuotaResetCountdown(resetsAtSeconds, currentNow, t, null),
         );
-        return quota ? { ...group, quota } : group;
+        const rowsWithQuota = usage
+          ? group.rows.map((row) => {
+              const quotaLabel = formatPluginEngineModelQuotaLabel(
+                usage,
+                { id: row.modelId, name: row.title },
+                now,
+                (resetsAtSeconds, currentNow, windowMinutes) =>
+                  formatQuotaResetCountdown(resetsAtSeconds, currentNow, t, windowMinutes),
+              );
+              return quotaLabel ? { ...row, quotaLabel } : row;
+            })
+          : group.rows;
+        return quota ? { ...group, quota, rows: rowsWithQuota } : { ...group, rows: rowsWithQuota };
       })
     : [];
   // Recommended/favorites can contain the only rows for a source. Keep its

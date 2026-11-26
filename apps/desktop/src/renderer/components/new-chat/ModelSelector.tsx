@@ -96,6 +96,7 @@ import {
 } from './PluginEnginesSection';
 import {
   PLUGIN_ENGINE_DEFAULT_MODEL,
+  isPluginEngineSelectable,
   isSamePluginEngineChoice,
   pluginEngineModelName,
   resolvePluginEngineEffort,
@@ -3900,7 +3901,12 @@ function ModelSelectorContentView({
                       deviceId={device.deviceId} onPicked={() => onDismiss?.()} variant="search" />
                   ))}
                   {visiblePluginEngines && visiblePluginEngines.engines.length > 0 && (
-                    <PluginEnginesSection picker={visiblePluginEngines} query={query} onPicked={() => onDismiss?.()} />
+                    <PluginEnginesSection
+                      picker={visiblePluginEngines}
+                      query={query}
+                      hostDeviceId={remoteAgent ? (homeDeviceId ?? null) : (deviceId ?? null)}
+                      onPicked={() => onDismiss?.()}
+                    />
                   )}
                 </>
               ),
@@ -3932,10 +3938,13 @@ function ModelSelectorContentView({
               // 「全部」最上方照旧列出全部引擎。
               // 自己另一台电脑上的引擎带着电脑名，格位排进那台电脑那一段(见 UnifiedModelPanel)。
               pluginEngineTabs: visiblePluginEngines.engines.map((engine) => ({
+                key: engine.key,
                 providerId: engine.providerId,
                 ...(engine.deviceId ? { deviceId: engine.deviceId } : {}),
                 name: pluginEngineChoiceLabel(engine),
                 ...(engine.iconDataUrl ? { iconDataUrl: engine.iconDataUrl } : {}),
+                ...(engine.reportsUsage ? { reportsUsage: true as const } : {}),
+                selectable: isPluginEngineSelectable(engine),
               })),
               renderPluginEngine: (providerId: string, engineDeviceId?: string) => (
                 <PluginEnginesSection
@@ -3945,6 +3954,7 @@ function ModelSelectorContentView({
                       isSamePluginEngineChoice(engine, { providerId, deviceId: engineDeviceId })),
                   }}
                   query=""
+                  hostDeviceId={remoteAgent ? (homeDeviceId ?? null) : (deviceId ?? null)}
                   onPicked={() => onDismiss?.()}
                 />
               ),
@@ -5590,6 +5600,7 @@ export function ModelSelector({
   const content = pluginEngineSession && pluginEngineSessionActive ? (
     <PluginEngineSessionPanel
       picker={pluginEngineSession}
+      deviceId={deviceId}
       disabled={switching || disabled}
       onPicked={() => setOpenWithoutAutoRefresh(false)}
     />

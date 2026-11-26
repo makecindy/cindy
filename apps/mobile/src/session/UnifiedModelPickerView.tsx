@@ -738,7 +738,7 @@ export function UnifiedModelPickerView(p: UnifiedMobilePickerViewProps) {
     return (
       <View key={row.key}>
         <Pressable
-          accessibilityLabel={[row.title, row.effortLabel, row.subtitle, row.notice].filter(Boolean).join(", ")}
+          accessibilityLabel={[row.title, row.effortLabel, row.subtitle, row.notice, row.quotaLabel].filter(Boolean).join(", ")}
           accessibilityRole="button"
           accessibilityState={{ selected: row.selected, disabled }}
           disabled={disabled}
@@ -756,6 +756,7 @@ export function UnifiedModelPickerView(p: UnifiedMobilePickerViewProps) {
             </View>
             {row.subtitle ? <Text numberOfLines={1} style={styles.rowSubtitle}>{row.subtitle}</Text> : null}
             {row.notice ? <Text style={styles.rowNotice}>{row.notice}</Text> : null}
+            {row.quotaLabel ? <Text numberOfLines={1} style={styles.quotaText}>{row.quotaLabel}</Text> : null}
           </View>
           {row.selected ? (
             <Check color={colors.textPrimary} size={iconSize.lg} strokeWidth={iconStroke.medium} />
@@ -933,27 +934,55 @@ export function UnifiedModelPickerView(p: UnifiedMobilePickerViewProps) {
       </Pressable>}
     </View>
   );
-  const pluginGroupHeading = (group: UnifiedMobilePluginEngineGroup) => (
-    <View style={styles.quotaHeading}>
-      <Text style={styles.groupLabel}>{group.title}</Text>
-      {group.quota?.summary ? (
-        <Text
-          accessibilityLabel={group.quota.accessibilityLabel}
-          testID={`${p.testID}.group.${group.key}.quota`}
-          style={[
-            styles.quotaText,
-            group.quota.level === "crit"
-              ? styles.quotaResetCrit
-              : group.quota.level === "warn"
-                ? styles.quotaResetWarn
-                : null,
-          ]}
-        >
-          {group.quota.summary}
-        </Text>
-      ) : null}
-    </View>
-  );
+  const pluginGroupHeading = (group: UnifiedMobilePluginEngineGroup) => {
+    const quota = group.quota;
+    return (
+      <View style={styles.quotaHeading}>
+        <Text style={styles.groupLabel}>{group.title}</Text>
+        {quota?.isMultiGroup && quota.groups?.length ? (
+          <View
+            accessibilityLabel={quota.accessibilityLabel}
+            style={styles.pluginMultiQuota}
+            testID={`${p.testID}.group.${group.key}.quota`}
+          >
+            {quota.groups.map((item, index) => (
+              <View key={item.id} style={styles.pluginQuotaPart}>
+                {index > 0 ? <Text style={styles.quotaText}>·</Text> : null}
+                <Text style={styles.quotaText}>{item.label}</Text>
+                <Text
+                  style={[
+                    styles.quotaText,
+                    item.level === "crit"
+                      ? styles.quotaResetCrit
+                      : item.level === "warn"
+                        ? styles.quotaResetWarn
+                        : null,
+                  ]}
+                >
+                  {`${item.remaining}%`}
+                </Text>
+              </View>
+            ))}
+          </View>
+        ) : quota?.summary ? (
+          <Text
+            accessibilityLabel={quota.accessibilityLabel}
+            testID={`${p.testID}.group.${group.key}.quota`}
+            style={[
+              styles.quotaText,
+              quota.level === "crit"
+                ? styles.quotaResetCrit
+                : quota.level === "warn"
+                  ? styles.quotaResetWarn
+                  : null,
+            ]}
+          >
+            {quota.summary}
+          </Text>
+        ) : null}
+      </View>
+    );
+  };
 
   const listPage =
     Platform.OS === "android" ? null : (
@@ -1189,6 +1218,20 @@ function makeStyles(colors: ThemeColors) {
     },
     quotaHeading: {
       flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: spacing.sm,
+    },
+    pluginMultiQuota: {
+      alignItems: "center",
+      flexDirection: "row",
+      flexShrink: 1,
+      flexWrap: "wrap",
+      gap: spacing.xs,
+      justifyContent: "flex-end",
+      paddingBottom: spacing.xs,
+    },
+    pluginQuotaPart: {
+      alignItems: "center",
+      flexDirection: "row",
+      gap: spacing.xs,
     },
     groupLabel: {
       color: colors.textTertiary,

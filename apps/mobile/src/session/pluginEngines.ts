@@ -15,7 +15,8 @@
  */
 import { ANTIGRAVITY_MARK_DATA_URL, isAntigravityEngine } from '@cindy/maker-shared/branding';
 import { useCallback, useEffect, useSyncExternalStore } from 'react';
-import { quotaLevelFromRemaining, type QuotaLevel } from '@cindy/maker-shared/quota-level';
+import { buildPluginEngineUsagePresentation, matchPluginEngineQuotaGroup } from '@cindy/maker-shared/plugin-engine-usage';
+import type { QuotaLevel } from '@cindy/maker-shared/quota-level';
 import { resolvePermissionModeForOptions } from '@cindy/maker-shared/permission-mode';
 import { createPluginHarnessUsageReader, type GhostHarnessUsage } from '@cindy/plugin-protocol';
 
@@ -334,6 +335,7 @@ export interface UnifiedMobilePluginEngineRow {
   modelId: string;
   title: string;
   subtitle?: string;
+  quotaLabel?: string;
   /** 引擎不可用时插件给的说明。 */
   notice?: string;
   iconDataUrl?: string;
@@ -345,10 +347,23 @@ export interface UnifiedMobilePluginEngineRow {
   disabled: boolean;
 }
 
+export interface UnifiedMobilePluginEngineQuotaGroup {
+  id: string;
+  label: string;
+  remaining: number;
+  level: QuotaLevel;
+  reset: string | null;
+  summary: string;
+  accessibilityLabel: string;
+}
+
 export interface UnifiedMobilePluginEngineQuota {
   summary: string;
   level: QuotaLevel;
   accessibilityLabel: string;
+  remaining?: number;
+  isMultiGroup?: boolean;
+  groups?: UnifiedMobilePluginEngineQuotaGroup[];
 }
 
 export interface UnifiedMobilePluginEngineGroup {
@@ -359,47 +374,84 @@ export interface UnifiedMobilePluginEngineGroup {
   rows: UnifiedMobilePluginEngineRow[];
 }
 
-/** Formats a plugin engine's usage snapshot into a single-line picker header readout. */
+/** Formats a plugin engine's usage snapshot into picker header quota readout(s) or a balance. */
 export function formatPluginEnginePickerQuota(
   usage: GhostHarnessUsage | null | undefined,
   now: number,
   language: string,
   countdown: (resetsAtSeconds: number, now: number) => string | null,
 ): UnifiedMobilePluginEngineQuota | undefined {
-  if (!usage) return undefined;
-  const current = (usage.windows ?? []).filter((row) => !row.resetsAt || row.resetsAt > now);
-  const first = current.reduce<(typeof current)[number] | undefined>(
-    (lowest, row) => (!lowest || row.remainingPercent < lowest.remainingPercent ? row : lowest),
-    undefined,
-  );
-  if (first) {
-    const percent = `${Math.round(first.remainingPercent)}%`;
-    const reset = first.resetsAt ? countdown(first.resetsAt / 1000, now) : null;
-    const summary = reset ? `${percent} · ${reset}` : percent;
+  const presentation = buildPluginEngineUsagePresentation(usage, now);
+  if (presentation.groups.length > 0) {
+    const groups: UnifiedMobilePluginEngineQuotaGroup[] = presentation.groups.map((group) => {
+      const label = presentation.isMultiGroup
+        ? (group.shortLabel ?? group.primary.label)
+        : group.primary.label;
+      const percent = `${group.remainingPercent}%`;
+      const reset = group.primary.resetsAt ? countdown(group.primary.resetsAt / 1000, now) : null;
+      const summary = reset ? `${percent} · ${reset}` : percent;
+      return {
+        id: group.id,
+        label,
+        remaining: group.remainingPercent,
+        level: group.level,
+        reset,
+        summary,
+        accessibilityLabel: [label, summary].filter(Boolean).join(' · '),
+      };
+    });
+    if (!presentation.isMultiGroup) {
+      const only = groups[0]!;
+      return {
+        summary: only.summary,
+        level: only.level,
+        accessibilityLabel: only.accessibilityLabel,
+        remaining: only.remaining,
+        groups,
+      };
+    }
     return {
-      summary,
-      level: quotaLevelFromRemaining(first.remainingPercent),
-      accessibilityLabel: [first.label, summary].filter(Boolean).join(' · '),
+      summary: groups.map((group) => `${group.label} ${group.remaining}%`).join(' · '),
+      level: presentation.level,
+      accessibilityLabel: groups.map((group) => group.accessibilityLabel).join(' · '),
+      isMultiGroup: true,
+      groups,
     };
   }
-  const balance = (usage.balances ?? []).find((row) => Number.isFinite(Number(row.amount)));
+  const balance = presentation.balances[0];
   if (!balance) return undefined;
-  const amount = Number(balance.amount);
   let formatted: string;
   try {
     formatted = new Intl.NumberFormat(language, {
       style: 'currency',
       currency: balance.currency,
       currencyDisplay: 'code',
-    }).format(amount);
+    }).format(balance.numericAmount);
   } catch {
     formatted = `${balance.currency} ${balance.amount}`;
   }
   return {
     summary: formatted,
-    level: amount <= 0 ? 'crit' : 'normal',
+    level: presentation.level,
     accessibilityLabel: formatted,
   };
+}
+
+/** Formats per-model quota text for a plugin engine row, matching built-in `modelQuotaLabel`. */
+export function formatPluginEngineModelQuotaLabel(
+  usage: GhostHarnessUsage | null | undefined,
+  model: { id: string; name?: string | null },
+  now: number,
+  countdown: (resetsAtSeconds: number, now: number, windowMinutes: number | null) => string | null,
+): string | undefined {
+  if (!usage || model.id === PLUGIN_ENGINE_DEFAULT_MODEL) return undefined;
+  const presentation = buildPluginEngineUsagePresentation(usage, now);
+  const group = matchPluginEngineQuotaGroup(presentation, model);
+  if (!group) return undefined;
+  const reset = group.primary.resetsAt
+    ? countdown(group.primary.resetsAt / 1000, now, group.primary.windowMinutes ?? null)
+    : null;
+  return [reset, `${group.remainingPercent}%`].filter(Boolean).join(' · ');
 }
 
 /** 插件引擎分组：引擎名命中搜索时整组列出，否则只列命中的模型；不可用的引擎可见但不能选。 */
