@@ -14,6 +14,10 @@
 import type { FeishuIM } from '@cindy/im';
 
 import { createImOrchestrator, type ImOrchestrator } from '../shared/orchestrator';
+import {
+  describeCompanionForAmbientJudge,
+  getAmbientReplyJudge,
+} from '../shared/ambientReplyJudgeRuntime';
 import type { ImOrchestratorConfig } from '../shared/types';
 import { buildFeishuAdapter } from './adapter';
 
@@ -34,7 +38,14 @@ export function wireFeishuOrchestrator(
 ): ImOrchestrator {
   return createImOrchestrator(
     buildFeishuAdapter(feishuIm, config, {
-      ...(options.companionBotId ? { companionBotId: options.companionBotId } : {}),
+      ...(options.companionBotId
+        ? {
+            companionBotId: options.companionBotId,
+            describeSelfForAmbientJudge: describeCompanionForAmbientJudge(options.companionBotId),
+          }
+        : {}),
+      // 全响应群消息先问辅助模型该不该插话(与 Telegram 同一条共享辅助模型链)。
+      ambientReplyJudge: getAmbientReplyJudge(),
     }),
     {
       ...(options.instanceKey ? { instanceKey: options.instanceKey } : {}),

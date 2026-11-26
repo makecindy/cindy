@@ -462,6 +462,22 @@ export function pushReplyAnchor(laneUserId: string, messageId: string): void {
   S().laneAnchors.set(laneUserId, state);
 }
 
+/** 查看队头待消费的群回挂锚点(不弹出)。 */
+export function peekReplyAnchor(laneUserId: string): string | undefined {
+  return S().laneAnchors.get(laneUserId)?.queue[0];
+}
+
+/**
+ * 丢弃一条未消费的群回挂锚点(ambient 消息被前置判定跳过或主模型 NO_REPLY 静默时)。
+ * 只从待消费队列移除匹配项，不动已持有的 held 锚点，避免后续真实回复错挂到被跳过的消息。
+ */
+export function discardReplyAnchor(laneUserId: string, messageId: string): void {
+  const state = S().laneAnchors.get(laneUserId);
+  if (!state) return;
+  const idx = state.queue.indexOf(messageId);
+  if (idx >= 0) state.queue.splice(idx, 1);
+}
+
 // ── patchable opener (开话题开场白卡 = 本轮流式卡) ──────────────────────────
 // 群主流 @ 开话题时, 开场白是一张「思考中」占位卡; 本轮流式卡不再新建一条
 // 回复, 而是直接 patch 这张卡 — 话题里第一条可见内容就是答案。lane → opener

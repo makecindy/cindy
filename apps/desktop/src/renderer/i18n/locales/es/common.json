@@ -13107,6 +13107,7 @@
       "groups": {
         "title": "Grupos",
         "hint": "Los grupos a los que se unió {{name}} aparecen aquí. “Siempre” = leer cada mensaje y dejar que {{name}} decida si participa (cada uno consume tokens).",
+        "feishuPermissionHint": "Antes de activar «Siempre», habilita im:message.group_msg (y también im:message.group_msg.include_bot:read para incluir mensajes de otros bots) en la consola para desarrolladores de {{platform}} Open Platform y publica una nueva versión; de lo contrario, {{platform}} solo enviará menciones con @.",
         "empty": "Aún no hay grupos. Agrega el bot a un grupo; aparecerá aquí cuando alguien hable.",
         "loadFailed": "No se pudieron cargar los grupos",
         "saveFailed": "No se guardó; se restauró el modo anterior",

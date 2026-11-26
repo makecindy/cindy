@@ -13005,6 +13005,7 @@
       "groups": {
         "title": "Gruppen",
         "hint": "Gruppen, denen {{name}} beigetreten ist, erscheinen hier. „Immer“ = jede Nachricht lesen und {{name}} entscheiden lassen, ob eine Antwort nötig ist (jede Nachricht verbraucht Tokens).",
+        "feishuPermissionHint": "Aktiviere vor dem Einschalten von „Immer“ in der {{platform}} Open Platform Developer Console die Berechtigung im:message.group_msg (sowie im:message.group_msg.include_bot:read für Nachrichten anderer Bots) und veröffentliche eine neue App-Version – sonst sendet {{platform}} nur @-Erwähnungen.",
         "empty": "Noch keine Gruppen. Füge den Bot einer Gruppe hinzu. Sobald jemand schreibt, erscheint sie hier.",
         "loadFailed": "Gruppen konnten nicht geladen werden",
         "saveFailed": "Nicht gespeichert; vorheriger Modus wiederhergestellt",

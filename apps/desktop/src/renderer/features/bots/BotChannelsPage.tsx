@@ -260,8 +260,14 @@ export function BotChannelsPage({ bot }: { bot: BotProfile }) {
                     count: view.health.uncertainInputs + view.health.uncertainSends,
                   })}</p>
                 ) : null}
-                {(view.channel === 'telegram' || view.channel === 'imessage') && view.botContextId && botImConnectionGroupsSupported(im) ? (
-                  <ConnectionGroups api={im} connectionId={view.id} botName={bot.name} refreshVersion={groupVersions[view.id] ?? 0} />
+                {(view.channel === 'telegram' || view.channel === 'imessage' || view.channel === 'feishu') && view.botContextId && botImConnectionGroupsSupported(im) ? (
+                  <ConnectionGroups
+                    api={im}
+                    connectionId={view.id}
+                    botName={bot.name}
+                    feishuPlatform={view.channel === 'feishu' ? platformName(view) : undefined}
+                    refreshVersion={groupVersions[view.id] ?? 0}
+                  />
                 ) : null}
                 {view.channel === 'discord' && im && botImConnectionDiscordChannelsSupported(im) ? (
                   <ConnectionDiscordChannels api={im} connectionId={view.id} botName={bot.name} deviceId={target.deviceId} />
@@ -314,10 +320,22 @@ export function BotChannelsPage({ bot }: { bot: BotProfile }) {
 }
 
 /**
- * 一条 Telegram 连接的「群聊」小节: 机器人进过的群 + 每群参与模式(仅 @ / 全响应)。
+ * 一条连接(Telegram / 飞书 / Lark / iMessage)的「群聊」小节: 机器人进过的群 + 每群参与模式(仅 @ / 全响应)。
  * 与 设置 → IM 机器人 的同名设置各管各的 bot; 乐观更新, 保存失败回读正本并提示。
  */
-function ConnectionGroups({ api, connectionId, botName, refreshVersion }: { api: BotImConnectionApi | null; connectionId: string; botName: string; refreshVersion: number }) {
+function ConnectionGroups({
+  api,
+  connectionId,
+  botName,
+  feishuPlatform,
+  refreshVersion,
+}: {
+  api: BotImConnectionApi | null;
+  connectionId: string;
+  botName: string;
+  feishuPlatform?: string;
+  refreshVersion: number;
+}) {
   const { t } = useBotTranslation();
   const [groups, setGroups] = useState<BotImConnectionGroup[] | null>(null);
   const [error, setError] = useState<'load' | 'save' | null>(null);
@@ -373,6 +391,11 @@ function ConnectionGroups({ api, connectionId, botName, refreshVersion }: { api:
       <p className="text-11 leading-[1.5] text-[var(--text-tertiary)]">
         {t('bots.channels.groups.hint', { name: botName })}
       </p>
+      {feishuPlatform ? (
+        <p className="text-11 leading-[1.5] text-[var(--text-tertiary)]">
+          {t('bots.channels.groups.feishuPermissionHint', { platform: feishuPlatform })}
+        </p>
+      ) : null}
       {error !== null ? (
         <p className="flex items-center gap-2 text-12 text-[var(--text-danger)]">
           <span>{t(error === 'load' ? 'bots.channels.groups.loadFailed' : 'bots.channels.groups.saveFailed')}</span>

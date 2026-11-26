@@ -4,7 +4,7 @@ export default {
   name: 'teammate-feishu',
   entry: './teammate-feishu-fixture.tsx',
   viewport: { width: 720, height: 900 },
-  real: 'BotChannelsPage add/edit dialogs and group controls, shared Input, Button, SegmentedControl, Collapse and localized text',
+  real: 'BotChannelsPage add/edit dialogs and per-group participation controls for iMessage and Feishu / Lark companion connections, shared Input, Button, SegmentedControl, Collapse and localized text',
   notCovered: 'Live platform login, credential persistence and connection handshake; real host writes are forbidden, group-edit saves and queries use in-memory fixture state',
   cases: {
     'imessage-denied': { about: 'A denied send explains macOS Automation and keeps the delivery check visible', data: { imessage: true, denied: true } },
@@ -12,6 +12,8 @@ export default {
     'imessage-narrow': { about: 'iMessage editor remains usable at 320px', data: { imessage: true }, viewport: { width: 320, height: 700 } },
     'imessage-group-add': { about: 'The first group appears immediately after a simulated settings save', data: { imessage: true, groupEdit: 'add' } },
     'imessage-group-replace': { about: 'Editing chat GUIDs removes old group controls and shows new ones', data: { imessage: true, groupEdit: 'replace' } },
+    'feishu-groups': { about: 'Feishu companion connection lists its groups with the participation toggle, token hint and permission hint', data: { feishuGroups: true } },
+    'lark-groups': { about: 'Lark companion connection names the Lark Open Platform in the permission hint', data: { feishuGroups: true, lark: true } },
     default: { about: 'Feishu creation prompt and link share one row', data: {} },
     'feishu-onboarding': { about: 'Feishu creation prompt and link share one row', data: {} },
     'feishu-lark': { about: 'Lark updates the link, description and submit label', data: { lark: true } },
@@ -39,6 +41,24 @@ export default {
         assert.equal(await page.getByRole('radio', { name: await ui.t('bots.channels.groups.mode.always'), exact: true }).isVisible(), true);
         await ui.capture('groups-refreshed');
       }
+      return;
+    }
+    if (ui.data.feishuGroups) {
+      // 群聊小节：两个群、两种档位、token 提示与平台权限提示（Feishu / Lark 文案各一）。
+      await page.getByText('Release room', { exact: true }).waitFor();
+      await page.getByText('Ops channel', { exact: true }).waitFor();
+      assert.equal(await page.getByText(await ui.t('bots.channels.groups.hint', { name: 'Cindy' }), { exact: true }).isVisible(), true);
+      const service = ui.data.lark ? 'lark' : 'feishu';
+      assert.equal(await page.getByText(await ui.t('bots.channels.groups.feishuPermissionHint', { platform: await ui.t('bots.channels.platform.' + service) }), { exact: true }).isVisible(), true);
+      const always = page.getByRole('radio', { name: await ui.t('bots.channels.groups.mode.always'), exact: true });
+      const mention = page.getByRole('radio', { name: await ui.t('bots.channels.groups.mode.mention'), exact: true });
+      assert.equal(await always.nth(0).getAttribute('aria-checked'), 'true', 'first group starts as Always');
+      assert.equal(await mention.nth(1).getAttribute('aria-checked'), 'true', 'second group starts as @ only');
+      await ui.capture('groups');
+      await always.nth(1).click();
+      assert.equal(await always.nth(1).getAttribute('aria-checked'), 'true', 'switching the second group to Always is applied');
+      assert.equal(await mention.nth(0).getAttribute('aria-checked'), 'false', 'other group keeps its own mode');
+      await ui.capture('groups-switched');
       return;
     }
     await page.getByRole('button', { name: await ui.t('bots.channels.add.button'), exact: true }).click();

@@ -12950,6 +12950,7 @@
       "groups": {
         "title": "群組",
         "hint": "{{name}} 進過的群組會出現在這裡。「全回應」= 每則訊息都看，{{name}} 自行判斷要不要插話（每則都會消耗 token）。",
+        "feishuPermissionHint": "開啟「全回應」前，請在{{platform}}開放平台開發者後台開通「取得群組中所有訊息」（im:message.group_msg，如需讀取其他機器人訊息一併開通 im:message.group_msg.include_bot:read）並發布新版本，否則平台僅推送 @ 機器人的訊息。",
         "empty": "還沒有群組。把機器人拉進群組、有人說話後就會出現在這裡。",
         "loadFailed": "無法讀取群組清單",
         "saveFailed": "沒有儲存成功，已恢復原本的模式",

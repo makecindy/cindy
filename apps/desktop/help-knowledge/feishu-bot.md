@@ -44,9 +44,10 @@ Cindy can take requests and send you DMs through a Feishu or Lark bot that you c
 
 **Group chats:**
 
-- In a group, @ the bot to ask a question. The bot opens a new thread (话题) for the reply, so the main chat stays clean and each thread is its own session.
+- In a group, @ the bot to ask a question. The bot replies in place (main chat stays in the main chat, threads stay in the thread).
 - When @-ed in the main chat, the bot reads back through recent group messages (newest first, up to about 250) and stops once they're no longer relevant to your question. It answers with that history as context, including images and files shared in the chat.
 - @-ing the bot inside an existing thread uses that thread's own history as context.
+- For a buddy's Feishu / Lark connection (**Buddy settings > Messaging platforms**), each group defaults to **@ only**, and you can switch individual groups to **Always** so the buddy reads every message and decides when to chime in (each group message consumes decision tokens; requires `im:message.group_msg` and publishing a new app version, otherwise the platform only pushes @-mentions).
 - These sessions appear in the sidebar's Chat group: thread sessions are titled like `[飞书·{group name}·{topic summary}] {id suffix}`, group sessions `[飞书·群] {group name}`, and DMs `[飞书·DM] {summary}`. Lark bots use "Lark" instead of "飞书".
 
 **Permissions for group features:**

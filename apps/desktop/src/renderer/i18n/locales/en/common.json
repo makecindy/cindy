@@ -12996,6 +12996,7 @@
       "groups": {
         "title": "Groups",
         "hint": "Groups {{name}} has joined show up here. “Always” = read every message and let {{name}} decide whether to chime in (each one costs tokens).",
+        "feishuPermissionHint": "Before turning on “Always”, enable “Read all messages in associated group chat” (im:message.group_msg; also im:message.group_msg.include_bot:read to include other bots’ messages) in the {{platform}} Open Platform Developer Console and publish a new app version — otherwise {{platform}} only pushes @-mentions.",
         "empty": "No groups yet. Add the bot to a group; it appears here once someone speaks.",
         "loadFailed": "Couldn't load groups",
         "saveFailed": "Not saved; reverted to the previous mode",

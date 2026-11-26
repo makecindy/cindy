@@ -57,8 +57,8 @@ interface RemoteGroup {
   avatarUrl: string | null;
 }
 
-let cache: { botAppId: string; at: number; groups: RemoteGroup[] } | null = null;
-let inflight: { botAppId: string; promise: Promise<RemoteGroup[]> } | null = null;
+const cacheByBot = new Map<string, { at: number; groups: RemoteGroup[] }>();
+const inflightByBot = new Map<string, Promise<RemoteGroup[]>>();
 
 function isPermissionError(err: unknown): boolean {
   const e = err as { code?: unknown; httpStatus?: unknown };
@@ -95,20 +95,62 @@ async function fetchBotGroups(im: GroupListPorts): Promise<RemoteGroup[]> {
 
 /** `refresh` = 用户点了「刷新」：不复用 30 秒内的结果，但仍与正在进行的读取合并。 */
 async function botGroups(im: GroupListPorts, botAppId: string, refresh = false): Promise<RemoteGroup[]> {
-  if (!refresh && cache && cache.botAppId === botAppId && Date.now() - cache.at < GROUP_LIST_CACHE_MS) {
-    return cache.groups;
+  const cached = cacheByBot.get(botAppId);
+  if (!refresh && cached && Date.now() - cached.at < GROUP_LIST_CACHE_MS) {
+    return cached.groups;
   }
-  if (inflight && inflight.botAppId === botAppId) return inflight.promise;
+  const existing = inflightByBot.get(botAppId);
+  if (existing) return existing;
   const promise = fetchBotGroups(im).then((groups) => {
-    cache = { botAppId, at: Date.now(), groups };
+    cacheByBot.set(botAppId, { at: Date.now(), groups });
+    if (cacheByBot.size > 32) {
+      const oldest = cacheByBot.keys().next().value;
+      if (oldest !== undefined) cacheByBot.delete(oldest);
+    }
     return groups;
   });
-  inflight = { botAppId, promise };
+  inflightByBot.set(botAppId, promise);
   try {
     return await promise;
   } finally {
-    if (inflight?.promise === promise) inflight = null;
+    if (inflightByBot.get(botAppId) === promise) inflightByBot.delete(botAppId);
   }
+}
+
+/**
+ * 伙伴页「群聊」小节列出某条飞书 / Lark 连接已知的群：
+ * 优先从在线实例拉取机器人所在的群列表（复用 30s 缓存，缺权限或离线时静默降级），
+ * 并合并本机已建任务的群与已保存为「全响应」的群，保证已开启的群始终可见并可关闭。
+ */
+export async function listFeishuKnownGroups(
+  im: GroupListPorts | null,
+  botAppId: string,
+  savedChatIds: Iterable<string> = [],
+): Promise<Array<{ chatId: string; chatName: string | null }>> {
+  const byId = new Map<string, string | null>();
+  if (im && im.getStatus().kind === 'connected') {
+    try {
+      for (const g of await botGroups(im, botAppId)) {
+        byId.set(g.chatId, g.name);
+      }
+    } catch (err) {
+      log.warn(`listFeishuKnownGroups remote fetch failed (fallback to local): ${String(err)}`);
+    }
+  }
+  try {
+    for (const g of await locallyUsedGroups(botAppId)) {
+      if (!byId.has(g.chatId)) byId.set(g.chatId, g.name);
+      else if (!byId.get(g.chatId) && g.name) byId.set(g.chatId, g.name);
+    }
+  } catch (err) {
+    log.warn(`listFeishuKnownGroups local lookup failed: ${String(err)}`);
+  }
+  for (const chatId of savedChatIds) {
+    if (chatId.startsWith('oc_') && !byId.has(chatId)) {
+      byId.set(chatId, null);
+    }
+  }
+  return [...byId.entries()].map(([chatId, chatName]) => ({ chatId, chatName }));
 }
 
 /** 机器人在本机用过的群（群主线 / 话题任务的路由键里带群 ID），用任务标题当群名。 */
@@ -288,14 +330,14 @@ export async function saveFeishuGroupSettings(
   const saved = writeFeishuGroupSettings(botAppId, chatId, update, name);
   // 头像沿用上一次从飞书读到的名单（保存不重新拉名单）。
   const avatarUrl =
-    cache?.botAppId === botAppId ? cache.groups.find((group) => group.chatId === chatId)?.avatarUrl ?? null : null;
+    cacheByBot.get(botAppId)?.groups.find((group) => group.chatId === chatId)?.avatarUrl ?? null;
   const configs = await projectConfigs(projects, new Set(saved?.projectDir ? [saved.projectDir] : []));
   return viewOf({ chatId, name, avatarUrl }, saved ?? null, projects, configs);
 }
 
 export const __testing = {
   resetCache(): void {
-    cache = null;
-    inflight = null;
+    cacheByBot.clear();
+    inflightByBot.clear();
   },
 };

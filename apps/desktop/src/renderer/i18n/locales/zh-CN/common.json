@@ -12950,6 +12950,7 @@
       "groups": {
         "title": "群聊",
         "hint": "{{name}} 进过的群会出现在这里。「全响应」= 每条消息都看，{{name}} 自己判断要不要插话（每条都会消耗 token）。",
+        "feishuPermissionHint": "开启「全响应」前，请在{{platform}}开放平台开发者后台开通「获取群组中所有消息」（im:message.group_msg，如需读取其他机器人消息一并开通 im:message.group_msg.include_bot:read）并发布新版本，否则平台仅推送 @ 机器人的消息。",
         "empty": "还没有群。把机器人拉进群、有人说话后就会出现在这里。",
         "loadFailed": "未能读取群列表",
         "saveFailed": "没保存上，已恢复原来的模式",

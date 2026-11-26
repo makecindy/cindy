@@ -211,13 +211,17 @@ export const feishuIm = createFeishuIM(host, {
 });
 /**
  * 伙伴自有飞书 / Lark 连接的传输层实例: 凭证与 TOFU 主人按连接前缀隔离、不注册设置卡
- * IPC。非主人仅可通过群 @ 进业务层，私聊只认已绑定主人。
+ * IPC。非主人可通过群 @（或已开启全响应的群消息）进业务层，私聊只认已绑定主人。
  */
-export function createBotFeishuIM(secretKeyPrefix: string): FeishuIM {
+export function createBotFeishuIM(
+  secretKeyPrefix: string,
+  options?: { groupActivation?: () => Readonly<Record<string, 'mention' | 'always'>> | undefined },
+): FeishuIM {
   return createFeishuIM(host, {
     secretKeyPrefix,
     ipc: false,
     guests: true,
+    ...(options?.groupActivation ? { groupActivation: options.groupActivation } : {}),
     shouldAnnounceLifecycle: shouldAnnounceFeishuLifecycle,
   });
 }

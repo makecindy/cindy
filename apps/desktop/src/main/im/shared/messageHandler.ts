@@ -334,8 +334,9 @@ export function createMessageHandler(
       return false;
     };
 
-    // iMessage participation mode applies before any attachment notice.
-    if (channel === 'imessage' && event.ambient === true && adapter.ambientTurnGate && await skipAmbient()) return;
+    // Ambient participation gating must run before any unsupported-attachment notice
+    // so skipped background group messages never post notices to the chat.
+    if (event.ambient === true && adapter.ambientTurnGate && await skipAmbient()) return;
 
     // An entry the model can fetch by itself (an original over the direct-delivery cap) is content.
     const hasContent = event.text.length > 0 || event.attachments.length > 0
@@ -383,8 +384,6 @@ export function createMessageHandler(
       }
     };
     if (!event.delivery) await notifyUnsupported();
-
-    if (channel !== 'imessage' && event.ambient === true && adapter.ambientTurnGate && await skipAmbient()) return;
 
     // ── invoke agent ────────────────────────────────────────────────────────
     // 本条的渠道来源事实(只进模型正文); 取不到按"不写说明"降级, 不阻断消息。与下面的
@@ -565,6 +564,7 @@ export function createMessageHandler(
             }
           : {}),
         attachments: event.attachments,
+        ...(event.ambient === true ? { ambient: true } : {}),
         // 只取 adapter 实际交给模型的回复投影(可能已被过滤成占位), 不用 event 原值。
         ...(deliveredReply ? { replyContext: deliveredReply } : {}),
         // threadScoped 渠道: scopeKey = thread root ts(thread = session 路由键)

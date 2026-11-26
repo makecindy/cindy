@@ -12959,6 +12959,7 @@
       "groups": {
         "title": "諸群",
         "hint": "{{name}} 曾入之群組現於此。「全回應」= 每則訊皆閱，由 {{name}} 自斷插話與否（每則皆耗 token）。",
+        "feishuPermissionHint": "啟「全回應」之前，請詣{{platform}}開放平台開發者後台，開通「取得群組中所有訊息」（im:message.group_msg；若需兼讀他機之言，並通 im:message.group_msg.include_bot:read）且發布新版本，否則平台唯推 @ 機器人之訊。",
         "empty": "尚無群組。引機器人入群，有人發言後即現於此。",
         "loadFailed": "不能讀群組名錄",
         "saveFailed": "未能存，已復原模式",

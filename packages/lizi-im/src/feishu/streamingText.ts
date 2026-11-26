@@ -37,6 +37,7 @@ import {
   sendFile,
   sendText,
   claimPatchableOpener,
+  discardReplyAnchor,
   recallMessage,
   getAccountEpoch,
   rearmAnchorToTrigger,
@@ -66,6 +67,17 @@ import {
 } from '../xdtRefs.js';
 
 const PATCH_THROTTLE_MS = 1500;
+/** 自主判断沉默哨兵(全响应群的 ambient turn): 模型整条回复只有它时静默不发。 */
+export const FEISHU_NO_REPLY_SENTINEL = 'NO_REPLY';
+
+function isSilentReply(text: string): boolean {
+  return text.trim() === FEISHU_NO_REPLY_SENTINEL;
+}
+
+function shouldSkipIntermediateFrame(text: string): boolean {
+  const trimmed = text.trim();
+  return trimmed === '' || FEISHU_NO_REPLY_SENTINEL.startsWith(trimmed);
+}
 /** Feishu caps serialized card request bodies at 30 KB. */
 export const FEISHU_CARD_REQUEST_MAX_BYTES = 30 * 1024;
 
@@ -194,6 +206,8 @@ export interface FeishuStreamingDeps {
   sendFinalPart(index: number, card: unknown): Promise<void>;
   /** 成功但没有任何内容: 撤回这一轮的卡片。 */
   recallEmpty(messageId: string): Promise<void>;
+  /** 惰性建卡且静默收口(空内容或 NO_REPLY, 从未发卡): 清理未消费的回复锚点。 */
+  onSilentDiscard?(): void;
   /** 终稿没能完整送达时给用户的一句说明(尽力而为)。 */
   sendNotice(text: string): Promise<void>;
   /**
@@ -346,8 +360,9 @@ class FeishuStreamingTextHandle implements StreamingTextHandle {
     if (klass === 'image-only') text = transportMessages.streaming.preparingImage;
     else if (klass === 'file-only') text = transportMessages.streaming.preparingFile;
     else text = stripXdtForStreaming(this.buffer);
-    // 还没有卡片时不为空白内容建卡(惰性建卡: 有东西可看才出现)。
-    if (this.messageIdValue === null && !text.trim()) return;
+    // 还没有卡片时不为空白或 NO_REPLY 哨兵建卡(惰性建卡: 有真实回复才出现)。
+    if (this.messageIdValue === null && shouldSkipIntermediateFrame(text)) return;
+    if (this.messageIdValue !== null && isSilentReply(text)) return;
     const snapshot = this.buffer;
     this.inFlight = (async () => {
       try {
@@ -374,10 +389,11 @@ class FeishuStreamingTextHandle implements StreamingTextHandle {
     const log = deps.log;
     const text = this.buffer;
     if (!deps.isCurrent()) return false;
-    if (!text.trim() && this.extraImageAbsPaths.length === 0) {
+    if ((!text.trim() || isSilentReply(text)) && this.extraImageAbsPaths.length === 0) {
       // A claimed opener is also the topic's reply anchor. Only its owning
       // account/round may restore that anchor after a successful recall.
       if (this.messageIdValue !== null) await deps.recallEmpty(this.messageIdValue);
+      else deps.onSilentDiscard?.();
       return true;
     }
     const media = deps.media;
@@ -552,7 +568,7 @@ class FeishuStreamingTextHandle implements StreamingTextHandle {
  */
 function personalDeps(
   openId: string,
-  opts: { threadTs?: string } | undefined,
+  opts: { threadTs?: string; ambientTriggerId?: string } | undefined,
   claimedOpener: boolean,
 ): FeishuStreamingDeps {
   const accountEpoch = getAccountEpoch();
@@ -565,15 +581,18 @@ function personalDeps(
     createCard: async (card) => (await sendCardRaw(openId, card, opts)).messageId,
     updateCard: (messageId, card) => patchCardRaw(messageId, card),
     async putFinalHead(messageId, card) {
-      if (messageId !== null) {
-        try {
-          await patchCardRaw(messageId, card);
-          return messageId;
-        } catch (err) {
-          const msg = err instanceof Error ? err.message : String(err);
-          log.warn(`[feishu/streamingText] finalize patch failed: ${msg}`);
-          if (!isCurrent()) throw err;
-        }
+      if (messageId === null) {
+        // 惰性轮次首次直接发终稿(未建过中间卡): 必须推进轮次以领取本轮回复锚点,
+        // 避免沿用上一轮 held 锚点并把本轮锚点漏给下一轮。
+        return (await sendCardRaw(openId, card, opts)).messageId;
+      }
+      try {
+        await patchCardRaw(messageId, card);
+        return messageId;
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        log.warn(`[feishu/streamingText] finalize patch failed: ${msg}`);
+        if (!isCurrent()) throw err;
       }
       // Preserve the full answer if the original card can no longer be edited.
       // Stay on this round's target and never recall the user's progress card.
@@ -585,6 +604,11 @@ function personalDeps(
     async recallEmpty(messageId) {
       await recallMessage(messageId);
       if (claimedOpener && isCurrent()) rearmAnchorToTrigger(openId, messageId);
+    },
+    onSilentDiscard() {
+      if (opts?.ambientTriggerId && isCurrent()) {
+        discardReplyAnchor(openId, opts.ambientTriggerId);
+      }
     },
     async sendNotice(text) {
       await sendText(openId, text, opts);
@@ -608,7 +632,7 @@ function personalDeps(
 export async function start(
   openId: string,
   initial: string = transportMessages.streaming.randomThinking(),
-  opts?: { threadTs?: string },
+  opts?: { threadTs?: string; lazy?: boolean; ambientTriggerId?: string },
 ): Promise<StreamingTextHandle> {
   // Preserve explicit opener callers; ordinary inbound messages never create topics.
   const claimed = opts?.threadTs ? null : claimPatchableOpener(openId);
@@ -616,6 +640,11 @@ export async function start(
     return new FeishuStreamingTextHandle(personalDeps(openId, opts, true), claimed, initial);
   }
   const deps = personalDeps(openId, opts, false);
+  // 全响应(ambient)轮次不立刻发「思考中」卡片: 直到第一帧真实非 NO_REPLY 正文才建卡,
+  // 模型决定 NO_REPLY 时从头到尾零卡片、零撤回痕迹。
+  if (opts?.lazy) {
+    return new FeishuStreamingTextHandle(deps, null, '');
+  }
   const { messageId } = await sendCardRaw(openId, buildMarkdownCardV2(initial), opts);
   return new FeishuStreamingTextHandle(deps, messageId, initial);
 }

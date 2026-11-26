@@ -192,6 +192,45 @@ describe('BotChannelsPage', () => {
     );
   });
 
+  // 测试价值：Issue #12925 飞书 / Lark 伙伴连接展示群聊参与模式与平台权限/token 提示，并支持按群切换。
+  // 覆盖 Feishu 与 Lark 两套平台名；最小输入一条已连接的飞书/Lark 伙伴连接和一个已知群。unit tier。
+  it.each(['feishu', 'lark'] as const)(
+    'shows group mode toggle and %s permission hint for companion feishu connections',
+    async (service) => {
+      let activation: 'mention' | 'always' = 'mention';
+      const groups = () => ({
+        connectionId: 'a1b2c3d4e5f6',
+        groups: [{ chatId: 'oc_ext_group', chatName: 'External Collab', activation }],
+      });
+      groupsApi = {
+        listGroups: vi.fn(async () => groups()),
+        setGroupActivation: vi.fn(async (payload: { mode: 'mention' | 'always' }) => {
+          activation = payload.mode;
+          return groups();
+        }),
+      };
+      installApi({ connections: [connection({ channel: 'feishu', service })] });
+      render(<BotChannelsPage bot={mia} />);
+
+      expect(await screen.findByText('External Collab')).toBeTruthy();
+      expect(screen.getByText('bots.channels.groups.hint:{"name":"Mia"}')).toBeTruthy();
+      expect(
+        screen.getByText(
+          `bots.channels.groups.feishuPermissionHint:{"platform":"bots.channels.platform.${service}"}`,
+        ),
+      ).toBeTruthy();
+
+      fireEvent.click(screen.getByRole('radio', { name: 'bots.channels.groups.mode.always' }));
+      await waitFor(() =>
+        expect(groupsApi.setGroupActivation).toHaveBeenCalledWith({
+          id: 'a1b2c3d4e5f6',
+          chatId: 'oc_ext_group',
+          mode: 'always',
+        }),
+      );
+    },
+  );
+
   // 已确认的归档功能：真实列表按钮应调用本连接的归档 IPC，行内二次确认后移出、失败恢复，不打开确认窗。
   // 现有测试只有 reset；最小输入一条专线。unit：可观察列表结果和错误提示。
   it.each(['done', 'failed'] as const)('archives a channel task with %s outcome', async (outcome) => {
