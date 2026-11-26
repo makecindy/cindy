@@ -1,68 +1,97 @@
 import { ChevronDown } from 'lucide-react';
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Button } from '@/components/ui/button';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { toast } from '@/lib/toast';
-import type { ExistingLogin, ExistingLoginResult, SubscriptionProvider } from '../../../shared/subscriptionAccounts';
+import { EXISTING_LOGIN_REVIEW_TTL_MS, type ExistingLogin, type ExistingLoginResult, type SubscriptionProvider } from '../../../shared/subscriptionAccounts';
+
+type ReviewAction = 'discover-logins' | 'pick-login';
+type Review = ExistingLoginResult & { action: ReviewAction; validUntil: number };
 
 export function ExistingSubscriptionLogins({ provider, disabled, children }: {
   provider: SubscriptionProvider; disabled: boolean; children: ReactNode;
 }) {
   const { t } = useTranslation();
-  const [found, setFound] = useState<ExistingLoginResult | null>(null);
+  const [found, setFound] = useState<Review | null>(null);
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
-  const alive = useRef(false);
   const operation = useRef(0);
   const api = window.electronAPI.subscriptionAccounts.existingLogins;
-  useEffect(() => {
-    alive.current = true;
-    let current = true;
-    const generation = operation.current;
-    // Only settings discovery. Ordinary account/usage refreshes never launch more profile probes.
-    void api?.({ action: 'discover-logins', providerId: provider }).then(result => {
-      if (current && generation === operation.current) setFound(result);
-    }).catch(() => {});
-    return () => { current = false; alive.current = false; operation.current++; };
+  const requestReview = useCallback(async (action: ReviewAction): Promise<Review | null> => {
+    if (!api) return null;
+    const started = Date.now();
+    const result = await api({ action, providerId: provider });
+    if (result.canceled) return null;
+    // Manual selection mints its receipt after the native picker closes. Discovery can
+    // mint several while probing, so age those from the start and allow for transport.
+    const reviewed = action === 'pick-login' ? Date.now() : started;
+    return { ...result, action, validUntil: reviewed + EXISTING_LOGIN_REVIEW_TTL_MS - 5000 };
   }, [api, provider]);
-  async function pick() {
-    if (!api || busy) return;
+
+  useEffect(() => {
+    const generation = ++operation.current;
+    void requestReview('discover-logins').then(result => {
+      if (generation === operation.current) setFound(result);
+    }).catch(() => {});
+    return () => { operation.current++; };
+  }, [requestReview]);
+
+  async function load(action: ReviewAction) {
+    if (busy) return;
     const generation = ++operation.current;
     setBusy(true);
     try {
-      const result = await api({ action: 'pick-login', providerId: provider });
-      if (!alive.current || generation !== operation.current || result.canceled) return;
+      const result = await requestReview(action);
+      if (generation !== operation.current || !result) return;
       setFound(result);
       setOpen(true);
     } catch {
-      if (alive.current) toast.error(t('subscriptionAccounts.existing.unverified'));
+      if (generation === operation.current) toast.error(t('subscriptionAccounts.existing.unverified'));
     } finally {
-      if (alive.current) setBusy(false);
+      if (generation === operation.current) setBusy(false);
     }
   }
+
+  useEffect(() => {
+    if (!found?.validUntil || !found.candidates.length) return;
+    const timer = window.setTimeout(() => {
+      setFound(current => current === found ? { ...found, validUntil: 0 } : current);
+    }, Math.max(0, found.validUntil - Date.now()));
+    return () => window.clearTimeout(timer);
+  }, [found]);
+
   async function attach(candidate: ExistingLogin) {
-    if (!api || busy) return;
+    if (!api || !found || busy) return;
+    // A suspended renderer may resume on a click before its expiry timer fires.
+    if (found.validUntil <= Date.now()) return load(found.action);
+    const generation = ++operation.current;
     setBusy(true);
     try {
       await api({ action: 'attach-login', providerId: provider, receipt: candidate.receipt });
-      if (!alive.current) return;
+      if (generation !== operation.current) return;
       setFound(previous => previous && ({ ...previous, candidates: previous.candidates.filter(row => row.receipt !== candidate.receipt) }));
       setOpen(false);
     } catch {
-      if (alive.current) {
-        setFound(previous => previous && ({ ...previous, candidates: previous.candidates.filter(row => row.receipt !== candidate.receipt) }));
+      if (generation === operation.current) {
+        // The host can consume or invalidate a receipt before our local deadline.
+        setFound(previous => previous && ({ ...previous, validUntil: 0 }));
         toast.error(t('subscriptionAccounts.existing.unverified'));
       }
     } finally {
-      if (alive.current) setBusy(false);
+      if (generation === operation.current) setBusy(false);
     }
   }
   if (!api) return <>{children}</>;
-  const candidates = found?.candidates ?? [];
+  const expired = !!found?.candidates.length && found.validUntil <= Date.now();
+  const candidates = expired ? [] : found?.candidates ?? [];
   const available = candidates.filter(candidate => !candidate.connected).length;
-  const review = () => candidates.length ? setOpen(true) : void pick();
+  const review = () => {
+    if (busy) return;
+    if (found?.candidates.length && found.validUntil > Date.now()) setOpen(true);
+    else void load(found?.candidates.length ? found.action : 'pick-login');
+  };
   return <>
     {available > 0 && <Button variant="secondary" tone="quiet" size="sm" disabled={disabled || busy}
       data-settings-search-action="Review verified existing subscription logins" onClick={review}>
@@ -91,7 +120,11 @@ export function ExistingSubscriptionLogins({ provider, disabled, children }: {
             : <Button variant="secondary" size="sm" disabled={busy} onClick={() => void attach(candidate)}
             data-settings-search-action="Connect the verified subscription account">{t('subscriptionAccounts.existing.attach')}</Button>}
         </div>)}
-        <Button variant="secondary" size="sm" tone="quiet" disabled={busy} onClick={() => void pick()}
+        {expired && found.action === 'discover-logins' && <Button variant="secondary" size="sm" disabled={busy}
+          data-settings-search-action="Review existing subscription logins again" onClick={review}>
+          {t('subscriptionAccounts.existing.connect')}
+        </Button>}
+        <Button variant="secondary" size="sm" tone="quiet" disabled={busy} onClick={() => void load('pick-login')}
           data-settings-search-action="Choose another subscription profile directory">{t('subscriptionAccounts.existing.choose')}</Button>
       </div>} />}
   </>;

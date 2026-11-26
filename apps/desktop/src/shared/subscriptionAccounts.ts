@@ -40,6 +40,7 @@ export const CODEX_POOL_RESET_PREFIX = 'openai-account:';
 export function codexResetScope(accountId: string): string {
   return accountId === 'default' ? 'openai' : `${CODEX_POOL_RESET_PREFIX}${accountId}`;
 }
+export const EXISTING_LOGIN_REVIEW_TTL_MS = 10 * 60_000;
 export interface ExistingLogin {
   connected?: boolean;
   identity: string;
@@ -76,6 +77,8 @@ export interface SubscriptionAccountConfig {
 export interface SubscriptionPoolConfig {
   /** Directory hashes the owner has removed; manual reconnection is still available. */
   dismissedLogins?: string[];
+  /** Owner-local Claude transcript locations, retained only for native history lookups. */
+  removedClaudeHistoryDirectories?: Record<string, string>;
   disconnected?: boolean;
   /** Upgrade-only: preserve an already authorized private Cindy Codex home. */
   legacyCodexDefault?: boolean;

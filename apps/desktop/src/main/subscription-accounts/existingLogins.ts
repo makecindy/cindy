@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { opendir, realpath, stat } from 'node:fs/promises';
 import { homedir, hostname } from 'node:os';
 import path from 'node:path';
-import type { ExistingLogin, LinkedLogin, SubscriptionProvider } from '../../shared/subscriptionAccounts.js';
+import { EXISTING_LOGIN_REVIEW_TTL_MS, type ExistingLogin, type LinkedLogin, type SubscriptionProvider } from '../../shared/subscriptionAccounts.js';
 import { activeOwnerScopeKey, getActiveAppSession, isAppSessionBoundaryPending } from '../appSessionState.js';
 import { getUserDataDir } from '../userDataPath.js';
 import { readExistingLogin } from './nativeCli.js';
@@ -112,7 +112,7 @@ export function existingLoginSession(provider: SubscriptionProvider) {
     }
     if (reviews.size >= 256) reviews.delete(reviews.keys().next().value!);
     const receipt = randomUUID();
-    reviews.set(receipt, { owner, provider, login: result.login, until: now + 10 * 60_000 });
+    reviews.set(receipt, { owner, provider, login: result.login, until: now + EXISTING_LOGIN_REVIEW_TTL_MS });
     return { ...result.candidate, receipt };
   }
 }

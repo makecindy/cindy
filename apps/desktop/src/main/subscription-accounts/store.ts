@@ -64,6 +64,10 @@ export function normalizePoolFile(raw: unknown): PoolFile {
         ? { legacyCodexDefault: true }
         : {}),
       ...(legacyAccounts ? { legacyCodexAccounts: legacyAccounts } : {}),
+      ...(provider === 'anthropic' && pool.removedClaudeHistoryDirectories ? {
+        removedClaudeHistoryDirectories: Object.fromEntries(Object.entries(pool.removedClaudeHistoryDirectories)
+          .filter(([id, dir]) => accountIdValid(id) && id !== 'default' && typeof dir === 'string' && path.isAbsolute(dir))),
+      } : {}),
       ...(Array.isArray(pool.dismissedLogins) ? { dismissedLogins: pool.dismissedLogins.filter(
         key => typeof key === 'string' && /^[a-f0-9]{64}$/.test(key),
       ) } : {}),
@@ -119,11 +123,16 @@ export const accountOwnerPrefix = () => {
   if (!owner) throw new Error('An active owner is required');
   return createHash('sha256').update(owner).digest('hex').slice(0, 12);
 };
-export function accountDirectory(provider: SubscriptionProvider, id: string): string {
+export function accountDirectory(provider: SubscriptionProvider, id: string, purpose: 'execution' | 'history' = 'execution'): string {
   if (!accountIdValid(id) || (id !== 'default' && !id.startsWith(`cindy-${accountOwnerPrefix()}-`)))
     throw new Error('Subscription account is unavailable');
-  const linked = id !== 'default' && readPool(provider)?.accounts.find(account => account.id === id)?.linkedLogin;
+  const pool = id === 'default' ? undefined : readPool(provider);
+  const linked = pool?.accounts.find(account => account.id === id)?.linkedLogin;
   if (linked) return linked.directory;
+  if (purpose === 'history' && provider === 'anthropic') {
+    const removedDirectory = pool?.removedClaudeHistoryDirectories?.[id];
+    if (removedDirectory) return removedDirectory;
+  }
   const legacy = provider === 'openai' ? readLegacyCodexProviderId(id) : undefined;
   if (legacy) return legacyCodexAccountHome(getUserDataDir(), getActiveAppSession().dataOwnerId, legacy);
   return path.join(
@@ -199,9 +208,15 @@ export async function updatePool(
     const next = edit(previous);
     const retained = new Set(next.accounts.map(account => account.id));
     const removed = previous.accounts.flatMap(account => account.linkedLogin && !retained.has(account.id)
-      ? [loginDirectoryKey(account.linkedLogin.directory), loginIdentityKey(account.linkedLogin)] : []);
-    return { pools: { ...value.pools, [provider]: removed.length
-      ? { ...next, dismissedLogins: [...new Set([...(next.dismissedLogins ?? []), ...removed])] } : next } };
+      ? [{ id: account.id, login: account.linkedLogin }] : []);
+    if (!removed.length) return { pools: { ...value.pools, [provider]: next } };
+    const dismissed = removed.flatMap(({ login }) => [loginDirectoryKey(login.directory), loginIdentityKey(login)]);
+    const updated = { ...next, dismissedLogins: [...new Set([...(next.dismissedLogins ?? []), ...dismissed])] };
+    if (provider === 'anthropic') {
+      updated.removedClaudeHistoryDirectories = { ...previous.removedClaudeHistoryDirectories };
+      for (const { id, login } of removed) updated.removedClaudeHistoryDirectories[id] = login.directory;
+    }
+    return { pools: { ...value.pools, [provider]: updated } };
   });
 }
 export function readAccountBinding(key: string, provider: SubscriptionProvider) {
@@ -241,7 +256,7 @@ export function readBoundSubscriptionAccountIds(provider: SubscriptionProvider):
 export function readBoundClaudeConfigDir(sdkSessionId: string): string | undefined {
   const binding = readAccountBinding(`native:${sdkSessionId}`, 'anthropic');
   return binding && binding.accountId !== 'default'
-    ? accountDirectory('anthropic', binding.accountId)
+    ? accountDirectory('anthropic', binding.accountId, 'history')
     : undefined;
 }
 export async function writeAccountBindings(
