@@ -18,7 +18,7 @@ import { deviceDisplayName } from '@/lib/deviceName';
 
 import type { RemoteDeviceSummary } from './remoteProjectsStore';
 import { isSharedTaskPeer } from '@cindy/device-link';
-import { compareDevicesByName, isMobilePlatform } from '@cindy/maker-shared/device-list';
+import { compareDevicesByName, isCindyApp, isMobilePlatform } from '@cindy/maker-shared/device-list';
 
 export type DeviceConnectionStatus = 'connected' | 'connecting' | 'rejected';
 
@@ -39,6 +39,8 @@ export interface SwitcherDevice {
 export interface BuildSwitcherDevicesInput {
   /** 全量同账号设备(device-link:list-devices);null = 尚未加载。 */
   fullList: readonly DeviceLinkDeviceView[] | null;
+  /** 完整目录确认过的成员；首份完整目录到达之前仍可使用缓存。 */
+  registeredDeviceIds?: ReadonlySet<string> | null;
   /** 已同步或保留断线缓存的被控设备(remoteProjectsStore)。 */
   syncedDevices: readonly RemoteDeviceSummary[];
   /** 被对方撤销了本机访问权限的设备 id 集合(revokedDevicesStore)。 */
@@ -47,13 +49,14 @@ export interface BuildSwitcherDevicesInput {
 
 export function buildSwitcherDevices({
   fullList,
+  registeredDeviceIds = fullList && new Set(fullList.map(device => device.deviceId)),
   syncedDevices,
   revoked,
 }: BuildSwitcherDevicesInput): SwitcherDevice[] {
   const list = fullList ?? [];
   const nameById = new Map<string, string>();
   const selfIds = new Set<string>();
-  const mobileIds = new Set<string>();
+  const controllerOnlyIds = new Set<string>();
   const onlineControllable = new Set<string>();
   // presence 单独一套:设备目录说它在线就是在线,不受「本机是否允许控它」这类本地偏好影响。
   const presenceOnline = new Set<string>();
@@ -63,9 +66,9 @@ export function buildSwitcherDevices({
       selfIds.add(d.deviceId);
       continue;
     }
-    // 手机等移动端无法被控,永不进列表(即便异常上报 remoteControlEnabled=true 也挡掉)。
-    if (isMobilePlatform(d.platform)) {
-      mobileIds.add(d.deviceId);
+    // 手机和非 Cindy App 仅作为控制端,不进电脑列表(即便自报 remoteControlEnabled=true)。
+    if (!isCindyApp(d.app) || isMobilePlatform(d.platform)) {
+      controllerOnlyIds.add(d.deviceId);
       continue;
     }
     if (d.online) presenceOnline.add(d.deviceId);
@@ -86,7 +89,13 @@ export function buildSwitcherDevices({
   // 候选 = 已连接 ∪ 被拒 ∪ 在线可控(连接中),排除本机与移动端。
   const candidates = new Set<string>([...cached.keys(), ...revoked, ...onlineControllable]);
   for (const id of selfIds) candidates.delete(id);
-  for (const id of mobileIds) candidates.delete(id);
+  for (const id of controllerOnlyIds) candidates.delete(id);
+
+  if (registeredDeviceIds) {
+    for (const id of candidates) {
+      if (!registeredDeviceIds.has(id)) candidates.delete(id);
+    }
+  }
 
   const nameSources = [...candidates].map((deviceId) => ({ deviceId, name: nameById.get(deviceId) }));
   const devices: SwitcherDevice[] = [];

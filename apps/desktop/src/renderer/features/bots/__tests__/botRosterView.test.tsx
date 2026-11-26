@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const translate = (key: string, opts?: Record<string, unknown>) =>
   opts ? `${key}:${JSON.stringify(opts)}` : key;
-vi.mock('@/contexts/AuthContext', () => ({ useAuth: () => ({ dataOwnerId: 'fixture-owner' }) }));
+vi.mock('@/contexts/AuthContext', () => ({ useAuth: () => ({ dataOwnerId: 'fixture-owner' }), useOptionalAuthDeviceId: () => null }));
 // Creation tests supply a local-only location catalog; device presence is covered by the route hook tests.
 vi.mock('@/hooks/useModelRouteDevices', () => ({
   useModelRouteDevices: () => ({ devices: [], leadAgentDeviceId: null }),
@@ -115,7 +115,7 @@ vi.mock('@/components/new-chat/ModelSelector', async () => {
 vi.mock('react-router-dom', () => ({ useNavigate: () => mocks.navigate }));
 
 vi.mock('../BotPortraitPicker', () => ({
-  BOT_PORTRAIT_COUNT: 17,
+  BOT_PORTRAIT_COUNT: 26,
   BotPortraitPicker: ({ value, onChange }: { value?: string; onChange: (value: string) => void }) => <button type="button" data-testid="portrait" onClick={() => onChange('data:image/png;base64,bWFudWFs')}>{value}</button>,
   galleryPortrait: mocks.galleryPortrait,
 }));
@@ -178,7 +178,7 @@ describe('name-only creation', () => {
     expect((screen.getByRole('textbox') as HTMLInputElement).value).toBe('');
   });
 
-  it('randomizes across all 17 portraits per new form, not by roster length', async () => {
+  it('randomizes across all 26 portraits per new form, not by roster length', async () => {
     const random = vi.spyOn(Math, 'random').mockReturnValue(0);
     const first = render(<BotRosterView inline />);
     await waitFor(() => expect(mocks.galleryPortrait).toHaveBeenCalledWith(0));
@@ -188,7 +188,7 @@ describe('name-only creation', () => {
     expect(mocks.galleryPortrait).toHaveBeenCalledTimes(1);
     first.unmount();
     render(<BotRosterView inline />);
-    await waitFor(() => expect(mocks.galleryPortrait).toHaveBeenLastCalledWith(16));
+    await waitFor(() => expect(mocks.galleryPortrait).toHaveBeenLastCalledWith(25));
   });
 
   it('does not replace a manual choice when the initial random image arrives late', async () => {
@@ -211,6 +211,47 @@ describe('name-only creation', () => {
     await waitFor(() => expect(mocks.navigate).toHaveBeenCalledWith('/bots/bot-new'));
     expect(mocks.addBotProfileAndWait).toHaveBeenCalledWith({ name: 'Mika', description: '', avatarImageBase64: 'cG9ydHJhaXQ=', prepareInvitation: true });
     expect(mocks.generateDraft).not.toHaveBeenCalled();
+  });
+
+  // #10298: creation publishes its own optimistic profile before the request settles.
+  // The existing immediate-success fixture never rendered this pending state.
+  it.each(['success', 'failure'] as const)('does not report its pending profile as a duplicate: %s', async outcome => {
+    let resolve!: (value: unknown) => void;
+    let reject!: (error: Error) => void;
+    const pending = new Promise((yes, no) => { resolve = yes; reject = no; });
+    const profile = { id: 'bot-pending', name: 'Mika', invitation: { stage: 'ready' } };
+    mocks.addBotProfileAndWait.mockImplementationOnce(() => {
+      mocks.profiles = [profile];
+      return pending;
+    });
+    render(<BotRosterView />);
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: 'Mika' } });
+    const submit = screen.getByRole('button', { name: 'bots.guided.generate' }) as HTMLButtonElement;
+    await waitFor(() => expect(submit.disabled).toBe(false));
+    fireEvent.click(submit);
+    expect(submit.disabled).toBe(true);
+    expect(screen.queryByRole('alert')).toBeNull();
+    // A programmatic second submit must still be blocked during the request.
+    fireEvent.submit(submit.closest('form')!);
+    expect(mocks.addBotProfileAndWait).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      if (outcome === 'success') resolve(profile);
+      else {
+        mocks.profiles = []; // Production rolls back its optimistic projection on failure.
+        reject(new Error('Create failed'));
+      }
+    });
+    if (outcome === 'success') {
+      expect(mocks.navigate).toHaveBeenCalledWith('/bots/bot-pending');
+    } else {
+      expect(screen.getByRole('alert').textContent).toBe('bots.createWizard.createFailed');
+      expect(mocks.navigate).not.toHaveBeenCalled();
+      expect(submit.disabled).toBe(false);
+      expect((screen.getByRole('textbox') as HTMLInputElement).value).toBe('Mika');
+      fireEvent.click(submit);
+      await waitFor(() => expect(mocks.navigate).toHaveBeenCalledWith('/bots/bot-new'));
+      expect(mocks.addBotProfileAndWait).toHaveBeenCalledTimes(2);
+    }
   });
 
   it.each([false, true])('keeps default-chain inheritance but saves only the visible explicit model: selected=%s', async selected => {
@@ -264,8 +305,13 @@ describe('name-only creation', () => {
     mocks.profiles = [{ id: 'existing', name: 'Mika', invitation: { stage: 'ready' } }];
     render(<BotRosterView inline />);
     expect(screen.queryByRole('dialog')).toBeNull();
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: 'Another buddy' } });
+    const submit = screen.getByRole('button', { name: 'bots.guided.generate' }) as HTMLButtonElement;
+    await waitFor(() => expect(submit.disabled).toBe(false));
     fireEvent.change(screen.getByRole('textbox'), { target: { value: ' Mika ' } });
-    expect((screen.getByRole('button', { name: 'bots.guided.generate' }) as HTMLButtonElement).disabled).toBe(true);
+    expect(submit.disabled).toBe(true);
+    expect(screen.getByRole('alert').textContent).toBe('bots.guided.duplicateName');
+    fireEvent.submit(submit.closest('form')!);
     expect(mocks.addBotProfileAndWait).not.toHaveBeenCalled();
   });
 

@@ -89,7 +89,7 @@ function CompanionHeaderContent({ nativeHeader, resource, deviceId, deviceName, 
       onOpenSearch={() => afterProfile(onSearch)}
       {...(homed && online ? { onOpenHome: () => afterProfile(() => setHomeSheet(true)) } : {})} />
     {homed ? <CloudHomeSwitchSheet visible={homeSheet} onClose={() => setHomeSheet(false)} botId={resource.ref.id} name={name}
-      homeDeviceId={deviceId} homeName={deviceName}
+      homeDeviceId={deviceId} homeName={deviceName} readHome={() => cloud.readHome(resource.ref.id)}
       onMoved={() => { setHomeSheet(false); navigation.returnHome(); }} /> : null}
   </>;
 }

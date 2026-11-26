@@ -1,3 +1,4 @@
+vi.mock('../../../projectCreation.js', () => ({ projectCreationRoot: async () => '/Projects' }));
 /**
  * Test value: real snapshot/mutation handlers expose only host-owned names and scoped invalidations.
  * Regression: project renames never reached device-link; existing SQLite tests did not exercise
@@ -7,7 +8,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const h = vi.hoisted(() => ({
-  trusted: { webContents: { send: vi.fn() } },
+  trusted: { isDestroyed: () => false, webContents: { send: vi.fn() } },
   untrusted: { webContents: { send: vi.fn() } },
   ownerStamp: { dataOwnerId: 'owner-a', ownerGeneration: 2 },
   scopeCurrent: true,
@@ -15,11 +16,23 @@ const h = vi.hoisted(() => ({
   tx: vi.fn(),
   tap: vi.fn(),
   handle: vi.fn(),
+  sheet: vi.fn(),
   assertTrusted: vi.fn(),
   remoteInvoke: false,
 }));
+vi.mock('../../../appSessionState.js', async (original) => ({ ...await original<typeof import('../../../appSessionState.js')>(), getActiveDataOwnerPushStamp: () => h.ownerStamp, isAppSessionBoundaryPending: () => false }));
+vi.mock('../../../projectDirectoryStore.js', () => ({ readProjectDirectories: () => ({}) }));
+vi.mock('../../../projectIconStore.js', () => ({
+  readProjectIcons: () => ({}),
+  setProjectIcon: vi.fn(),
+}));
+vi.mock('../../../projectInfoCore.js', () => ({
+  updateProjectInfo: vi.fn(),
+  readProjectIconImage: vi.fn(),
+}));
 vi.mock('electron', () => ({
-  BrowserWindow: { getAllWindows: () => [h.trusted, h.untrusted] },
+  BrowserWindow: { getAllWindows: () => [h.trusted, h.untrusted], fromWebContents: () => h.trusted },
+  dialog: { showMessageBox: h.sheet },
   ipcMain: { handle: h.handle },
 }));
 vi.mock('../../client/current', () => ({
@@ -46,6 +59,8 @@ import {
   registerProjectAliasesIpc,
   upsertProjectAlias,
 } from '../projectAliases';
+import { checkForwardedProjectWrite, forwardProjectWrite } from '../../../host-platform/project-writes.desktop.js';
+import { updateProjectInfo as writeCore } from '../../../projectInfoCore.js';
 
 describe('project alias remote snapshot and owner boundary', () => {
   beforeEach(() => {
@@ -55,6 +70,35 @@ describe('project alias remote snapshot and owner boundary', () => {
     h.assertTrusted.mockReset();
     h.read.mockResolvedValue([]);
     h.tx.mockResolvedValue(null);
+  });
+
+  // PR #11126: the IPC adapter, not request data, supplies core authorization.
+  // Unit handler regression; existing snapshot tests did not exercise mutation admission.
+  it('binds local writes to the actual sender and only trusts authenticated remote dispatch', async () => {
+    registerProjectAliasesIpc();
+    const handler = h.handle.mock.calls.find(
+      ([channel]) => channel === 'sidebar-settings:set-project-info',
+    )![1];
+    const input = { ...h.ownerStamp, projectGrantScope: 'form', authorization: { kind: 'host' }, field: 'profile' };
+    vi.mocked(writeCore).mockResolvedValue({ aliases: [], platform: process.platform });
+    await handler({ sender: { id: 42 } }, input);
+    expect(writeCore).toHaveBeenLastCalledWith(input, {
+      kind: 'renderer',
+      assertCurrent: expect.any(Function),
+      check: expect.any(Function),
+    });
+    const authorization = vi.mocked(writeCore).mock.lastCall![1];
+    if (authorization?.kind !== 'renderer') throw new Error('missing renderer confirmation');
+    h.sheet.mockResolvedValueOnce({ response: 0 });
+    await expect(authorization.check({
+      kind: 'repository', url: 'https://gitlab.com/team/demo.git', directory: '/Projects/demo-2',
+    })).rejects.toThrow('MUTATION_CANCELLED');
+    expect(h.sheet).toHaveBeenCalledWith(h.trusted, expect.objectContaining({
+      cancelId: 0, defaultId: 0, detail: expect.stringMatching(/gitlab\.com\/team\/demo\.git[\s\S]*\/Projects\/demo-2/),
+    }));
+    h.remoteInvoke = true;
+    await handler({}, input);
+    expect(writeCore).toHaveBeenLastCalledWith(input, { kind: 'host' });
   });
 
   it('requires a trusted local sender while permitting already-authorized device-link invocations', async () => {
@@ -81,6 +125,11 @@ describe('project alias remote snapshot and owner boundary', () => {
         { projectKey: 'local:C:/Repo', alias: 'Local project' },
         { projectKey: 'remote:ssh-a:/repo', alias: 'SSH project' },
       ],
+      icons: {},
+      settingsSupported: true,
+      settingsVersion: 7,
+      creationRoot: '/Projects',
+      directories: {},
       platform: process.platform,
       ownerStamp: h.ownerStamp,
     });
@@ -137,4 +186,28 @@ describe('project alias remote snapshot and owner boundary', () => {
     h.read.mockRejectedValueOnce(new Error('read failed'));
     await expect(readHostProjectAliasesSnapshot()).rejects.toThrow('read failed');
   });
+});
+
+// Unit: a split Host must call back into the original Main window before importing;
+// a stale request cannot reopen the sheet or consume another form's picker selection.
+it('checks delegated consent in the original window only while its request is open', async () => {
+  let id = '';
+  const signal = new AbortController().signal;
+  const check = { kind: 'repository' as const, url: 'https://gitlab.com/team/demo.git', directory: '/Projects/demo-2' };
+  const input = { ...h.ownerStamp, create: true, projectKey: 'local:', repositoryUrl: check.url };
+  const client = { async request(route: string, body: unknown) {
+    expect(route).toBe('/api/project-info/desktop-set');
+    const envelope = body as { requestId: string; input: unknown };
+    expect(envelope.input).toEqual(input);
+    id = envelope.requestId;
+    await expect(checkForwardedProjectWrite(id, { kind: 'picker', selection: {
+      requestedDirs: ['/Projects/art'], projectPaths: ['/Projects/art'],
+    } }, signal)).rejects.toThrow('AUTHORIZATION_REQUIRED');
+    return checkForwardedProjectWrite(id, check, signal);
+  } };
+  h.sheet.mockResolvedValueOnce({ response: 1 });
+  const event = { sender: { id: 42 } } as import('electron').IpcMainInvokeEvent;
+  await expect(forwardProjectWrite(client, event, input)).resolves.toBe(true);
+  await expect(checkForwardedProjectWrite(id, check, signal)).rejects.toThrow('PERMISSION_DENIED');
+  expect(h.sheet).toHaveBeenCalledTimes(1);
 });

@@ -65,10 +65,10 @@ export function createViewState(app, initial, { debounceMs = 500 } = {}) {
     try { return { value: next, json: snapshot(next) }; }
     catch (error) { return { value: next, error }; }
   }
-  let current = entry(value), timer, active, pending, disposed = false, listening = false;
+  let current = entry(value), timer, active, pending, disposed = false, listening = false, dirty = false;
   const subscribers = new Set();
   function listen() {
-    if (!listening) { globalThis.addEventListener?.('pagehide', controller.dispose, { once: true }); listening = true; }
+    if (!listening) { globalThis.addEventListener?.('pagehide', disposeAfterFlush, { once: true }); listening = true; }
   }
   const delay = Number.isFinite(debounceMs) ? Math.max(0, debounceMs) : 500;
   function warn(item, error) {
@@ -88,6 +88,7 @@ export function createViewState(app, initial, { debounceMs = 500 } = {}) {
       return app.request({ method: route.method, params: { state: JSON.parse(item.json) } }, McpUiResourceTeardownResultSchema);
     }).then(() => {
       item.saved = true;
+      if (current === item) dirty = false;
       batch.resolve();
     }, error => {
       item.error = error;
@@ -95,9 +96,10 @@ export function createViewState(app, initial, { debounceMs = 500 } = {}) {
       batch.reject(error);
     }).finally(() => { active = undefined; pump(); });
   }
-  function enqueue() {
+  function enqueue(force = false) {
     if (disposed) return Promise.reject(failure('VIEW_STATE_DISPOSED'));
     if (!route) return Promise.reject(failure('VIEW_STATE_UNSUPPORTED'));
+    if (!force && !dirty && !active && !pending) return Promise.resolve();
     if (current.saved) return Promise.resolve();
     if (current.error) { warn(current, current.error); return Promise.reject(current.error); }
     if (active?.item === current) return active.promise;
@@ -122,6 +124,7 @@ export function createViewState(app, initial, { debounceMs = 500 } = {}) {
       const item = entry(value);
       if (item.json !== undefined && item.json === current.json) return;
       current = item;
+      dirty = true;
       if (route) {
         listen();
         clearTimeout(timer);
@@ -130,7 +133,7 @@ export function createViewState(app, initial, { debounceMs = 500 } = {}) {
       }
       for (const listener of subscribers) listener();
     },
-    flush() { clearTimeout(timer); timer = undefined; return enqueue(); },
+    flush() { clearTimeout(timer); timer = undefined; return enqueue(true); },
     dispose() {
       disposed = true;
       clearTimeout(timer);
@@ -138,8 +141,27 @@ export function createViewState(app, initial, { debounceMs = 500 } = {}) {
       pending = undefined;
       subscribers.clear();
       if (controllers.get(app) === controller) controllers.delete(app);
-      globalThis.removeEventListener?.('pagehide', controller.dispose);
+      globalThis.removeEventListener?.('pagehide', disposeAfterFlush);
     },
+  };
+  function flushPending() {
+    clearTimeout(timer); timer = undefined;
+    return dirty ? enqueue() : Promise.resolve();
+  }
+  function disposeAfterFlush() {
+    void Promise.race([
+      flushPending().catch(() => {}),
+      new Promise(resolve => setTimeout(resolve, 900)),
+    ]).finally(() => controller.dispose());
+  }
+  const previousTeardown = app?.onteardown;
+  if (app) app.onteardown = async (...args) => {
+    await Promise.race([
+      flushPending().catch(() => {}),
+      new Promise(resolve => setTimeout(resolve, 900)),
+    ]);
+    try { return await previousTeardown?.(...args) ?? {}; }
+    finally { controller.dispose(); }
   };
   controllers.set(app, controller);
   return controller;

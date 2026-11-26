@@ -21,7 +21,7 @@
  * the Projects view, this component unmounts, watcher closes.
  */
 
-import { openHtmlFileByPreference } from '@/components/chat/useOpenWithMenu';
+import { openHtmlFileByPreference } from '@/components/chat/messageLinkActions';
 import { resolveSessionFileOrigin } from '@/lib/sessionFileOrigin';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
@@ -454,6 +454,7 @@ export function WorkdirBrowseSidebar({
         description: t('ccAgent.workdirBrowse.deleteFile.description', { name: entry.name }),
         confirmText: t('ccAgent.workdirBrowse.deleteFile.confirm'),
         cancelText: t('ccAgent.workdirBrowse.deleteFile.cancel'),
+        confirmVariant: 'destructive',
       });
       if (!ok) return;
       const res = await fileBrowserApiFor(deviceId).deleteEntry({
@@ -679,7 +680,7 @@ export function WorkdirBrowseSidebar({
           )}
         >
           <ArrowLeft size={18} className="shrink-0" />
-          <span className="leading-none mt-[2px]">{t('ccAgent.workdirBrowse.backToProjects')}</span>
+          <span className="leading-none mt-0.5">{t('ccAgent.workdirBrowse.backToProjects')}</span>
         </button>
       </div>
 
@@ -693,7 +694,7 @@ export function WorkdirBrowseSidebar({
       <div className="flex items-center justify-between pt-2 pb-1 pl-6 pr-3">
         {mode === 'search' ? (
           <div className="flex min-w-0 items-center gap-2">
-            <span className="text-sm font-semibold text-foreground">{t('ccAgent.workdirBrowse.searchPanel.headingSearch')}</span>
+            <span className="text-sm font-medium text-foreground">{t('ccAgent.workdirBrowse.searchPanel.headingSearch')}</span>
             <span className="min-w-0 truncate text-11 text-sidebar-muted">
               {displayName}
             </span>

@@ -224,6 +224,10 @@
       "light": "semantic.defaults.process-utility-icon.light",
       "dark": "semantic.defaults.process-utility-icon.dark"
     },
+    "remote-agent-net-accent": {
+      "light": "semantic.defaults.remote-agent-net-accent.light",
+      "dark": "semantic.defaults.remote-agent-net-accent.dark"
+    },
     "usage-heatmap-high": {
       "light": "component.defaults.usage-heatmap-high.light",
       "dark": "component.defaults.usage-heatmap-high.dark"
@@ -3530,7 +3534,25 @@
       "radius-offset-sm": "semantic.foundations.radius-offset-sm",
       "font-weight-normal": "semantic.foundations.font-weight-normal",
       "font-weight-medium": "semantic.foundations.font-weight-medium",
-      "font-weight-semibold": "semantic.foundations.font-weight-semibold"
+      "font-weight-semibold": "semantic.foundations.font-weight-semibold",
+      "z-below": "semantic.foundations.z-below",
+      "z-raised": "semantic.foundations.z-raised",
+      "z-page-float": "semantic.foundations.z-page-float",
+      "z-page-overlay": "semantic.foundations.z-page-overlay",
+      "z-page-top": "semantic.foundations.z-page-top",
+      "z-float": "semantic.foundations.z-float",
+      "z-float-top": "semantic.foundations.z-float-top",
+      "z-fullscreen": "semantic.foundations.z-fullscreen",
+      "z-modal": "semantic.foundations.z-modal",
+      "z-modal-raised": "semantic.foundations.z-modal-raised",
+      "z-modal-nested": "semantic.foundations.z-modal-nested",
+      "z-dropdown": "semantic.foundations.z-dropdown",
+      "z-tooltip": "semantic.foundations.z-tooltip",
+      "z-modal-popover-nested": "semantic.foundations.z-modal-popover-nested",
+      "z-modal-blocking": "semantic.foundations.z-modal-blocking",
+      "z-toast": "semantic.foundations.z-toast",
+      "z-toast-top": "semantic.foundations.z-toast-top",
+      "z-blocking-gate": "semantic.foundations.z-blocking-gate"
     },
     "numeric": {
       "10": "semantic.foundations.text-10",
@@ -3632,6 +3654,26 @@
       "ease-out": "semantic.foundations.motion-ease-out",
       "ease-in": "semantic.foundations.motion-ease-in",
       "ease-move": "semantic.foundations.motion-ease-move"
+    },
+    "zIndex": {
+      "below": "semantic.foundations.z-below",
+      "raised": "semantic.foundations.z-raised",
+      "page-float": "semantic.foundations.z-page-float",
+      "page-overlay": "semantic.foundations.z-page-overlay",
+      "page-top": "semantic.foundations.z-page-top",
+      "float": "semantic.foundations.z-float",
+      "float-top": "semantic.foundations.z-float-top",
+      "fullscreen": "semantic.foundations.z-fullscreen",
+      "modal": "semantic.foundations.z-modal",
+      "modal-raised": "semantic.foundations.z-modal-raised",
+      "modal-nested": "semantic.foundations.z-modal-nested",
+      "dropdown": "semantic.foundations.z-dropdown",
+      "tooltip": "semantic.foundations.z-tooltip",
+      "modal-popover-nested": "semantic.foundations.z-modal-popover-nested",
+      "modal-blocking": "semantic.foundations.z-modal-blocking",
+      "toast": "semantic.foundations.z-toast",
+      "toast-top": "semantic.foundations.z-toast-top",
+      "blocking-gate": "semantic.foundations.z-blocking-gate"
     }
   },
   "documentation": {

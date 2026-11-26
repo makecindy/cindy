@@ -45,8 +45,8 @@ export function teammateGroupActivity(group: {
 
 /** Server groups use the same execution and plan states on desktop and mobile. */
 export function teammateChatActivity(input: {
-  executions: readonly { status: string; updated_at?: string }[];
-  plans: readonly { status: string }[];
+  executions: readonly { status: string; updated_at?: string; plan_id?: string | null }[];
+  plans: readonly { id?: string; status: string }[];
   lastMessageAt?: number;
   planning?: boolean;
   archived?: boolean;
@@ -56,7 +56,12 @@ export function teammateChatActivity(input: {
     || input.plans.some(plan => plan.status === 'proposed' || plan.status === 'waiting')) return { phase: 'needs-interaction' };
   const recent = input.executions.filter(row => row.updated_at && Number.isFinite(Date.parse(row.updated_at))
     && Date.parse(row.updated_at) >= (input.lastMessageAt ?? 0));
-  if (recent.some(row => row.status === 'failed')) return { phase: 'error' };
+  // Ending an arrangement retires its alert, not its failed-step history. Require
+  // a matching terminal plan: an absent plan or a failure in another lane is not
+  // evidence of disposal. Pending decisions above remain independently actionable.
+  const closedPlans = new Set(input.plans.filter(plan => plan.id
+    && ['done', 'stopped', 'dismissed', 'superseded'].includes(plan.status)).map(plan => plan.id));
+  if (recent.some(row => row.status === 'failed' && (!row.plan_id || !closedPlans.has(row.plan_id)))) return { phase: 'error' };
   if (input.planning || input.executions.some(row => ['queued', 'running', 'stopping'].includes(row.status))
     || input.plans.some(plan => plan.status === 'running')) return { phase: 'running' };
   if (recent.some(row => row.status === 'succeeded')) return { phase: 'completed' };

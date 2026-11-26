@@ -185,13 +185,13 @@ function FormDialog({
       }}
     >
       <Dialog.Portal>
-        <Dialog.Overlay className="modal-scrim fixed inset-0 z-[10000]" />
+        <Dialog.Overlay className="modal-scrim fixed inset-0 z-modal" />
         <Dialog.Content
           onPointerDownOutside={(event) => event.preventDefault()}
-          className="modal-panel fixed left-1/2 top-1/2 z-[10001] flex max-h-[88vh] w-[min(480px,calc(100vw-32px))] -translate-x-1/2 -translate-y-1/2 flex-col outline-none"
+          className="modal-panel fixed left-1/2 top-1/2 z-modal-raised flex max-h-[88vh] w-[min(480px,calc(100vw-32px))] -translate-x-1/2 -translate-y-1/2 flex-col outline-none"
         >
           <div className="flex flex-col gap-1 px-4 pb-4 pt-4">
-            <Dialog.Title className="text-16 font-semibold text-[var(--confirm-title)]">{title}</Dialog.Title>
+            <Dialog.Title className="text-16 font-medium text-[var(--confirm-title)]">{title}</Dialog.Title>
             <Dialog.Description className="text-12 leading-[1.5] text-[var(--text-tertiary)]">{description}</Dialog.Description>
           </div>
           {children}
@@ -1089,14 +1089,14 @@ function DeployDialog({
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
       <Dialog.Portal>
-        <Dialog.Overlay className="modal-scrim fixed inset-0 z-[10000]" />
+        <Dialog.Overlay className="modal-scrim fixed inset-0 z-modal" />
         <Dialog.Content
           onPointerDownOutside={(event) => event.preventDefault()}
-          className="modal-panel fixed left-1/2 top-1/2 z-[10001] flex h-[min(560px,88vh)] w-[min(600px,calc(100vw-32px))] -translate-x-1/2 -translate-y-1/2 flex-col outline-none"
+          className="modal-panel fixed left-1/2 top-1/2 z-modal-raised flex h-[min(560px,88vh)] w-[min(600px,calc(100vw-32px))] -translate-x-1/2 -translate-y-1/2 flex-col outline-none"
         >
           {/* 三步共用一个固定高度:内容在中间区域滚动,换步骤、步骤推进时窗口不变高也不重新居中。 */}
           <div className="flex shrink-0 flex-wrap items-center justify-between gap-x-4 gap-y-2 px-4 pb-3 pt-4">
-            <Dialog.Title className="text-16 font-semibold text-[var(--confirm-title)]">{t(`${DEPLOY}.title`)}</Dialog.Title>
+            <Dialog.Title className="text-16 font-medium text-[var(--confirm-title)]">{t(`${DEPLOY}.title`)}</Dialog.Title>
             <DialogSteps current={view === 'form' ? 0 : view === 'progress' ? 1 : 2} />
           </div>
           {controller.error ? (

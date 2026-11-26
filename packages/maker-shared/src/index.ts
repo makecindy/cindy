@@ -1,4 +1,6 @@
 export * from './agentCapabilities.js';
+export * from './appIcons.js';
+export * from './projectSymbolIcons.js';
 export * from './agentInputProjection.js';
 export * from './agentTask.js';
 export * from './branding.js';
@@ -68,6 +70,7 @@ export * from './taskTags';
 
 export * from './workingStatus.js';
 export * from './runningTokenRateHistory.js';
+export * from './generationTrace.js';
 export * from './userBubbleAppearance.js';
 
 export type { BotDmThreadSummary } from './botDmThread.js';

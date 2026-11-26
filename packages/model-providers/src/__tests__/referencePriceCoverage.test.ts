@@ -8,6 +8,57 @@ import {
 const registry = BUNDLED_CATALOG.modelRegistry;
 const at = "2026-09-23";
 
+// Server #1384: exercise the shared price consumer, including the intentionally
+// unpublished USD high-input band. Unit tier; no account or billing writes.
+describe("November 12 merged catalog prices", () => {
+  const options = { at: "2026-11-12", officialOnly: true };
+  it.each([
+    ["minimax-global", 512000, "USD", 0.3, 1.2, 0.06],
+    ["minimax-cn", 512000, "CNY", 2.1, 8.4, 0.42],
+    ["minimax-cn", 512001, "CNY", 4.2, 16.8, 0.84],
+  ] as const)("resolves %s at %i tokens in its own market", (provider, inputTokens, currency, input, output, read) => {
+    const price = resolveModelReferencePrice(registry, provider, "MiniMax-M3", { ...options, inputTokens })?.price;
+    expect(price).toMatchObject({ currency, variant: "standard", inputPerMtok: input, outputPerMtok: output, cacheReadPerMtok: read });
+    expect(price?.cacheWritePerMtok).toBeUndefined();
+    expect(price?.cacheWrite1hPerMtok).toBeUndefined();
+    expect(resolveModelReferencePrice(registry, provider, "MiniMax-M3", { ...options, inputTokens, currency: currency === "USD" ? "CNY" : "USD" })).toBeUndefined();
+    expect(resolveModelReferencePrice(registry, provider, "MiniMax-M3", { ...options, inputTokens, at: "2026-11-11" })).toBeUndefined();
+  });
+  it("keeps unpublished bands and variants unknown", () => {
+    expect(resolveModelReferencePrice(registry, "minimax-global", "MiniMax-M3", { ...options, inputTokens: 512001 })).toBeUndefined();
+    expect(resolveModelReferencePrice(registry, "minimax-cn", "MiniMax-M3", { ...options, variant: "fast" })).toBeUndefined();
+    expect(resolveBaseModelReferencePrice(registry, "MiniMax-M3", options)).toBeUndefined();
+    for (const [model, inputTokens] of [["gpt-6.1-terra", 272001], ["muse-ember-1.0", 200001]] as const) {
+      expect(resolveBaseModelReferencePrice(registry, model, { ...options, inputTokens })).toBeUndefined();
+    }
+    expect(resolveBaseModelReferencePrice(registry, "gemini-3.1-pro-preview", { ...options, inputTokens: 200001 })?.price).toMatchObject({
+      currency: "USD", variant: "standard", inputPerMtok: 4, outputPerMtok: 18, cacheReadPerMtok: 0.4,
+    });
+    expect(resolveBaseModelReferencePrice(registry, "gemini-4-carbon", { ...options, at: "2026-12-01" })?.price).toMatchObject({
+      currency: "USD", variant: "standard", inputPerMtok: 4, outputPerMtok: 20, cacheReadPerMtok: 0.2,
+    });
+  });
+  it.each([
+    ["gpt-6.1-terra", 1, 5, 0.05],
+    ["gemini-4-carbon", 2, 10, 0.1],
+    ["muse-ember-1.0", 0.1, 0.5, 0.004],
+    ["gemini-3.1-pro-preview", 2, 12, 0.2],
+    ["gemini-3-flash-preview", 0.5, 3, 0.05],
+    ["gemini-4-hydrogen", 1.5, 7.5, 0.075],
+  ] as const)("resolves the explicit public alias %s", (model, input, output, read) => {
+    expect(resolveBaseModelReferencePrice(registry, model, options)?.price).toMatchObject({ currency: "USD", inputPerMtok: input, outputPerMtok: output, cacheReadPerMtok: read });
+    expect(resolveBaseModelReferencePrice(registry, `private/${model}`, options)).toBeUndefined();
+  });
+  it("keeps Hy4 CNY-only and Terra speed tiers distinct", () => {
+    expect(resolveBaseModelReferencePrice(registry, "tencent/hy4", { ...options, currency: "CNY" })?.price).toMatchObject({ inputPerMtok: 6, outputPerMtok: 18, cacheReadPerMtok: 0.3 });
+    expect(resolveBaseModelReferencePrice(registry, "tencent/hy4", { ...options, currency: "USD" })).toBeUndefined();
+    expect(resolveBaseModelReferencePrice(registry, "hy4", options)).toBeUndefined();
+    for (const [variant, inputTokens, input, output] of [["fast", 272000, 2, 10], ["fast", 272001, 4, 15], ["batch", 272000, 0.5, 2.5], ["batch", 272001, 1, 3.75]] as const) {
+      expect(resolveModelReferencePrice(registry, "openai", "gpt-6.1-terra", { ...options, variant, inputTokens })?.price).toMatchObject({ inputPerMtok: input, outputPerMtok: output });
+    }
+  });
+});
+
 // Unit: real shared price selectors previously returned unknown for K3 Batch.
 // Cover both markets, XD's official copy, cache TTLs and standard/date isolation.
 describe("Kimi K3 Batch tariffs adopted on November 7", () => {
@@ -224,7 +275,7 @@ describe("verified September reference-price coverage", () => {
     ).toBeUndefined();
   });
 
-  it("keeps price-only models independent of provider membership", () => {
+  it("keeps price-only models independent of XD provider membership", () => {
     expect(
       resolveBaseModelReferencePrice(registry, "muse-spark-1.3", { at })?.price,
     ).toMatchObject({
@@ -236,8 +287,62 @@ describe("verified September reference-price coverage", () => {
       registry?.models.some((m) => m.modelRef === "meta/muse-spark-1.3"),
     ).toBe(false);
     expect(
-      registry?.models.some((m) => m.modelRef === "google/gemini-3.8-flash"),
+      registry?.models.some(
+        (m) =>
+          m.modelRef === "google/gemini-3.8-flash" &&
+          m.routes.some((route) => route.providerId === "xd"),
+      ),
     ).toBe(false);
+  });
+
+  // Server #1558: direct google-gemini-api routes publish full Gemini 4/3.x/2.5 tariffs
+  // across Standard, Batch, Priority, scheduled price changes, >200K tiers and 2.5 deprecation cutoffs.
+  it("resolves complete Google Gemini API direct routes, variants, tiers and cutoffs", () => {
+    expect(
+      resolveModelReferencePrice(registry, "google-gemini-api", "gemini-4-neon", {
+        at: "2026-11-20",
+      })?.price,
+    ).toMatchObject({
+      currency: "USD", variant: "standard", inputPerMtok: 3, outputPerMtok: 15, cacheReadPerMtok: 0.15,
+    });
+    expect(
+      resolveModelReferencePrice(registry, "google-gemini-api", "gemini-4-neon", {
+        at: "2026-11-20", variant: "priority",
+      })?.price,
+    ).toMatchObject({
+      currency: "USD", variant: "priority", inputPerMtok: 5.4, outputPerMtok: 27, cacheReadPerMtok: 0.27,
+    });
+    expect(
+      resolveModelReferencePrice(registry, "google-gemini-api", "gemini-4-neon", {
+        at: "2026-11-20", variant: "batch",
+      })?.price,
+    ).toMatchObject({
+      currency: "USD", variant: "batch", inputPerMtok: 1.5, outputPerMtok: 7.5, cacheReadPerMtok: 0.075,
+    });
+    expect(
+      resolveModelReferencePrice(registry, "google-gemini-api", "gemini-2.5-pro", {
+        at: "2026-11-20", inputTokens: 250_000,
+      })?.price,
+    ).toMatchObject({
+      currency: "USD", variant: "standard", inputPerMtok: 2.5, outputPerMtok: 15, cacheReadPerMtok: 0.25,
+    });
+    expect(
+      resolveModelReferencePrice(registry, "google-gemini-api", "gemini-2.5-pro", {
+        at: "2026-12-01",
+      }),
+    ).toBeUndefined();
+    expect(
+      resolveModelReferencePrice(registry, "google-gemini-api", "gemini-2.5-flash", {
+        at: "2026-12-01",
+      }),
+    ).toBeUndefined();
+    expect(
+      resolveModelReferencePrice(registry, "google-gemini-api", "gemini-2.5-flash-lite", {
+        at: "2026-12-01",
+      })?.price,
+    ).toMatchObject({
+      currency: "USD", variant: "standard", inputPerMtok: 0.1, outputPerMtok: 0.4, cacheReadPerMtok: 0.01,
+    });
   });
 
   it("switches Gemini's promotional price at the published date", () => {
@@ -336,5 +441,26 @@ describe("Anthropic Batch reference prices vendor-effective 2026-10-22 and adopt
       expect(resolveModelReferencePrice(registry, "anthropic", id, { ...options, inputTokens: 200000 })?.price).toEqual(direct);
       expect(resolveModelReferencePrice(registry, "anthropic", id, { ...options, inputTokens: 200001 })).toBeUndefined();
     }
+  });
+});
+
+// Server #1497 / #1498: GPT-6.2 Sol and Astra shipped 2026-11-17 without a catalog price, so
+// subscription value could not be estimated. Sol works in a 500K window, so the price must
+// also resolve above the 272K boundary. Unit tier; shared price consumer, no account access.
+describe("GPT-6.2 official reference prices", () => {
+  it.each([
+    ["gpt-6.2-sol", "standard", 272000, 2, 10, 0.1, 2.5],
+    ["gpt-6.2-sol", "standard", 272001, 4, 15, 0.2, 5],
+    ["gpt-6.2-sol", "fast", 400000, 8, 30, 0.4, 10],
+    ["gpt-6.2-astra", "standard", 272000, 8, 40, 0.4, 10],
+    ["gpt-6.2-astra", "standard", 272001, 16, 60, 0.8, 20],
+    ["gpt-6.2-astra", "batch", 100000, 4, 20, 0.2, 5],
+  ] as const)("resolves %s %s at %i input tokens", (model, variant, inputTokens, input, output, read, write) => {
+    const options = { at: "2026-11-18", officialOnly: true, variant, inputTokens };
+    expect(resolveModelReferencePrice(registry, "openai", model, options)?.price).toMatchObject({
+      currency: "USD", variant, inputPerMtok: input, outputPerMtok: output, cacheReadPerMtok: read, cacheWritePerMtok: write,
+    });
+    // Released 2026-11-17: no tariff is invented for earlier usage.
+    expect(resolveBaseModelReferencePrice(registry, model, { ...options, at: "2026-11-16" })).toBeUndefined();
   });
 });

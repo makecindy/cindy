@@ -26,7 +26,7 @@ import path from 'node:path';
 import { PassThrough } from 'node:stream';
 
 import type { GhostNodeChildToWorkerMessage } from '../../shared/ghost.js';
-import { GHOST_NODE_CHILD_MODE_FLAG } from '../../shared/ghost.js';
+import { GHOST_NODE_CHILD_MODE_FLAG, GHOST_NODE_STDIO_B64_MAX_CHARS } from '../../shared/ghost.js';
 import { installVirtualStdin } from './nodeRuntimeVirtualStdin.js';
 import { NodeRequestScopes } from './nodeRequestScope.js';
 import { NodeDeviceAuthorizationClient } from './nodeDeviceAuthorizationClient.js';
@@ -216,7 +216,7 @@ parentPort.on('message', (event) => {
   }
   // 子进程原样模式的字节口(base64,防多字节字符被 chunk 边界切坏)。
   if (data.type === 'stdin-b64' && typeof data.chunk === 'string') {
-    if (data.chunk.length <= 2 * 1024 * 1024) virtualStdin.feed(Buffer.from(data.chunk, 'base64'));
+    if (data.chunk.length <= GHOST_NODE_STDIO_B64_MAX_CHARS) virtualStdin.feed(Buffer.from(data.chunk, 'base64'));
     return;
   }
   if (data.type === 'stdin-end') {
@@ -250,6 +250,16 @@ if (childMode) {
   // 的认知读参数;不暴露 spawnEntry(树深恒为 1,子进程不能再生孙进程)。
   process.argv = [process.argv[0], entryPath, ...childArgs];
 } else {
+  Object.defineProperty(globalThis, 'cindy', {
+    configurable: false, enumerable: false, writable: false,
+    value: Object.freeze({ host: Object.freeze({ call: (server: string, tool: string, args: Record<string, unknown> = {}) =>
+      hostServices.hostCall(server, tool, args) }),
+      fetch: (request: Record<string, unknown>) => hostServices.network({ ...request, op: 'fetch' }),
+      network: Object.freeze(Object.fromEntries(['open', 'read', 'send', 'close'].map(op => [op,
+        (request: Record<string, unknown>) => hostServices.network({ ...request, op }),
+      ]))),
+    }),
+  });
   // 普通模式 argv 保持旧形状([electron, 引导层, entryPath]),存量插件零变化。
   Object.defineProperty(globalThis, '__CINDY_NODE__', {
     configurable: false,

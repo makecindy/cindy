@@ -7,6 +7,14 @@ import { useTranslation } from 'react-i18next';
 import { attachmentPreviewKind } from '@cindy/maker-shared/attachment-preview';
 import { DropdownMenuItem } from '@/components/ui/dropdown-menu';
 import { Spinner } from '@/components/ui/spinner';
+import { FileTypeTile } from '@/components/ui/file-type-tile';
+import {
+  canOpenSystemPreview,
+  openSystemPreview,
+  OpenInSystemActions,
+  revealFileInFolder,
+} from '@/features/cc-agent/workdir-browse/OpenInSystemActions';
+import { formatBytes } from '@/features/cc-agent/workdir-browse/lib/fileMeta';
 import { FileBodyView } from '@/features/cc-agent/workdir-browse/FileBodyView';
 import { useFileContent } from '@/features/cc-agent/workdir-browse/hooks/useFileContent';
 import { isImagePath } from '@/features/cc-agent/workdir-browse/lib/imageExt';
@@ -153,11 +161,24 @@ export function FileLightbox({
         role="dialog"
         aria-modal="true"
         aria-label={name}
-        className={`z-[9999] text-[var(--text-primary)] outline-none ${PREVIEW_PANEL_CLASS}`}
+        className={`z-fullscreen text-[var(--text-primary)] outline-none ${PREVIEW_PANEL_CLASS}`}
         style={unrenderable ? previewCompactPanelStyle(collection ? 64 : 0) : PREVIEW_PANEL_STYLE}
       >
         <div className={`absolute inset-0 pt-16 ${collection && kind !== 'pdf' ? 'pb-16' : ''}`}>
-          {fileLocation ? (
+          {unrenderable ? (
+            <div className="flex h-full flex-col items-center justify-center gap-5 overflow-y-auto px-6 py-4 text-center">
+              <div className="flex flex-col items-center gap-3">
+                <FileTypeTile name={name} />
+                <div className="flex flex-col gap-1">
+                  <p className="text-13 text-[var(--text-secondary)]">
+                    {t('ccAgent.workdirBrowse.unrenderable.notSupported')}
+                  </p>
+                  <p className="text-12 text-[var(--text-tertiary)]">{formatBytes(content.stat.size)}</p>
+                </div>
+              </div>
+              {local && !downloadOnly && <OpenInSystemActions absPath={local} primaryOnly />}
+            </div>
+          ) : fileLocation ? (
             <FileBodyView
               workdir={fileLocation.workdir}
               relPath={fileLocation.relPath}
@@ -199,18 +220,25 @@ export function FileLightbox({
           }
           menu={
             <>
+              {!unrenderable && (
+                <DropdownMenuItem
+                  disabled={!local || downloadOnly}
+                  onClick={() => {
+                    if (local) void window.electronAPI.openPath(local);
+                  }}
+                >
+                  {t('attachmentPreview.open')}
+                </DropdownMenuItem>
+              )}
+              {unrenderable && local && !downloadOnly && canOpenSystemPreview() && (
+                <DropdownMenuItem onClick={() => void openSystemPreview(local, t('ccAgent.common.openFailed'))}>
+                  {t('ccAgent.workdirBrowse.systemPreview')}
+                </DropdownMenuItem>
+              )}
               <DropdownMenuItem
                 disabled={!local || downloadOnly}
                 onClick={() => {
-                  if (local) void window.electronAPI.openPath(local);
-                }}
-              >
-                {t('attachmentPreview.open')}
-              </DropdownMenuItem>
-              <DropdownMenuItem
-                disabled={!local || downloadOnly}
-                onClick={() => {
-                  if (local) void window.electronAPI.showItemInFolder({ filePath: local });
+                  if (local) void revealFileInFolder(local, t);
                 }}
               >
                 {t('chat.lightbox.openInExplorer')}

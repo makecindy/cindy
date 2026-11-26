@@ -88,6 +88,7 @@ CREATE TABLE sessions (
   sdk_session_id TEXT,
   total_token_usage INTEGER NOT NULL DEFAULT 0,
   total_cost_usd REAL NOT NULL DEFAULT 0,
+  total_cost_usd_is_approximate INTEGER DEFAULT 0,
   total_cost_amount REAL NOT NULL DEFAULT 0,
   total_cost_currency TEXT,
   total_cost_is_approximate INTEGER NOT NULL DEFAULT 0,
@@ -96,11 +97,13 @@ CREATE TABLE sessions (
   context_window_runtime INTEGER,
   fast_mode INTEGER NOT NULL DEFAULT 0,
   cleared_at INTEGER,
-  pinned_at INTEGER,
+  pinned_at INTEGER, snoozed_until INTEGER, snoozed_at INTEGER,
   user_send_at INTEGER,
   agent_kind TEXT NOT NULL DEFAULT 'cc',
   orca_role TEXT,
   source TEXT NOT NULL DEFAULT 'desktop',
+  side_chat_promoted INTEGER NOT NULL DEFAULT 0,
+  side_chat_close_pending INTEGER NOT NULL DEFAULT 0,
   extra_dirs TEXT NOT NULL DEFAULT '[]',
   writable_dirs TEXT NOT NULL DEFAULT '[]',
   im_bot_context_id TEXT,
@@ -389,6 +392,91 @@ describe('db worker tx handlers', () => {
   beforeAll(async () => {
     workerBundleDir = fs.mkdtempSync(path.join(os.tmpdir(), 'xdt-db-tx-worker-'));
     workerScriptPath = await buildDbWorkerBundle(path.join(workerBundleDir, 'build'));
+  });
+
+  // Both desktop worker implementations must check the owning project and protections at commit.
+  it.each([false, true])('guards confirmed project archive and restore writes (inline=%s)', async useInlineWorker => {
+    await withClient(async client => {
+      await client.exec('ALTER TABLE sessions ADD COLUMN hidden_at INTEGER');
+      await seedSession(client, 'member', { status: 'active', workingDir: '/project', workspaceKind: 'project' });
+      const projectGuard = { workingDir: '/project', projectDir: null, workspaceKind: 'project', remoteHostId: null };
+      const archive = () => client.tx('sessions.setTerminalStatus', { sessionId: 'member', status: 'archived', projectGuard });
+      const restore = () => client.tx('sessions.setStatus', { sessionIds: ['member'], status: 'active', projectGuard });
+      await client.exec("INSERT INTO im_bindings(channel,bot_context_id,user_id,target_session_id,attached_at) VALUES ('im','bot','u','member',1)");
+      await expect(archive()).rejects.toMatchObject({ code: 'PRECONDITION_FAILED' });
+      await client.exec("DELETE FROM im_bindings WHERE target_session_id = 'member'");
+      await expect(archive()).resolves.toMatchObject({ status: 'archived' });
+      await client.exec("UPDATE sessions SET remote_host_id='other' WHERE id='member'");
+      await expect(restore()).rejects.toMatchObject({ code: 'PRECONDITION_FAILED' });
+      expect(await client.queryOne("SELECT status FROM sessions WHERE id='member'")).toEqual({ status: 'archived' });
+      await client.exec("UPDATE sessions SET remote_host_id=NULL WHERE id='member'");
+      await expect(restore()).resolves.toEqual([expect.objectContaining({ status: 'active' })]);
+    }, { useInlineWorker });
+  });
+
+  // #10310, DB tier: ordinary terminal writes do not guard against fresh activity
+  // or a concurrently enabled automation. Exercise both production transports.
+  // Inbox merge regression: archive must clear both snooze fields while maintenance
+  // preserves updated_at (#10953); prior fixtures had no snooze metadata.
+  it.each([false, true])('rechecks idle eligibility in the archive transaction (inline=%s)', async useInlineWorker => {
+    await withClient(async client => {
+      await client.exec('ALTER TABLE sessions ADD COLUMN last_activity_at INTEGER');
+      await client.exec('ALTER TABLE sessions ADD COLUMN hidden_at INTEGER');
+      await client.exec('ALTER TABLE sessions ADD COLUMN worktree_path TEXT');
+      await client.exec('ALTER TABLE sessions ADD COLUMN orca_remote_lead TEXT');
+      await client.exec('CREATE TABLE schedules (target_session_id TEXT, status TEXT)');
+      await client.exec('CREATE TABLE session_goals (session_id TEXT, status TEXT)');
+      await client.exec('CREATE TABLE agent_input_queue_snapshots (session_id TEXT, payload TEXT)');
+      await seedSession(client, 'idle', { status: 'active' });
+      await client.exec("UPDATE sessions SET updated_at = 123, snoozed_until = 1000, snoozed_at = 90 WHERE id = 'idle'");
+      await client.exec("UPDATE sessions SET last_activity_at = 100 WHERE id = 'idle'");
+      const archive = () => client.tx('sessions.setTerminalStatus', { sessionId: 'idle', status: 'archived', idleArchiveCutoff: 200 });
+      await client.exec("UPDATE sessions SET last_activity_at = 300 WHERE id = 'idle'");
+      await expect(archive()).rejects.toMatchObject({ code: 'PRECONDITION_FAILED' });
+      await client.exec("UPDATE sessions SET last_activity_at = 100 WHERE id = 'idle'");
+      await client.exec("INSERT INTO schedules VALUES ('idle', 'active')");
+      await expect(archive()).rejects.toMatchObject({ code: 'PRECONDITION_FAILED' });
+      await client.exec("UPDATE schedules SET status = 'paused'");
+      await client.exec("UPDATE sessions SET pinned_at = 50 WHERE id = 'idle'");
+      await expect(archive()).rejects.toMatchObject({ code: 'PRECONDITION_FAILED' });
+      expect(await client.queryOne("SELECT status FROM sessions WHERE id = 'idle'")).toEqual({ status: 'active' });
+      await client.exec("UPDATE sessions SET pinned_at = NULL WHERE id = 'idle'");
+      await expect(archive()).resolves.toMatchObject({ sessionId: 'idle', status: 'archived' });
+      expect(await client.queryOne("SELECT updated_at AS updatedAt, snoozed_until AS snoozedUntil, snoozed_at AS snoozedAt FROM sessions WHERE id = 'idle'"))
+        .toEqual({ updatedAt: 123, snoozedUntil: null, snoozedAt: null });
+      // A manual archive continues to use the existing flow, without idle guards.
+      await seedSession(client, 'manual', { status: 'active', pinnedAt: 50 });
+      await client.exec("UPDATE sessions SET updated_at = 123 WHERE id = 'manual'");
+      await expect(client.tx('sessions.setTerminalStatus', { sessionId: 'manual', status: 'archived' }))
+        .resolves.toMatchObject({ sessionId: 'manual', status: 'archived' });
+      expect((await client.queryOne<{ updatedAt: number }>("SELECT updated_at AS updatedAt FROM sessions WHERE id = 'manual'"))!.updatedAt)
+        .toBeGreaterThan(123);
+    }, { useInlineWorker });
+  });
+
+  // #11185: DB tier, both production transports. The old renderer snapshot missed
+  // activity arriving before deletion; this exercises the final transaction guard.
+  // Minimal input: an apparently empty task is pinned/sent/started before cleanup.
+  it.each([false, true])('preserves a late task used before cleanup commits (inline=%s)', async useInlineWorker => {
+    await withClient(async client => {
+      await seedSession(client, 'late');
+      const discard = () => client.tx('sessions.setTerminalStatus', {
+        sessionId: 'late', status: 'deleted', unusedOnly: true,
+      });
+      for (const field of ['pinned_at', 'user_send_at', 'active_turn_started_at']) {
+        await client.exec(`UPDATE sessions SET ${field} = 1 WHERE id = 'late'`);
+        await expect(discard()).rejects.toMatchObject({ code: 'PRECONDITION_FAILED' });
+        expect(await client.queryOne("SELECT status FROM sessions WHERE id = 'late'"))
+          .toEqual({ status: 'active' });
+        await client.exec(`UPDATE sessions SET ${field} = NULL WHERE id = 'late'`);
+      }
+      await client.exec("INSERT INTO messages (id, client_id, session_id, role, content, created_at) VALUES ('late-msg', 'late-msg', 'late', 'user', 'hello', 1)");
+      await expect(discard()).rejects.toMatchObject({ code: 'PRECONDITION_FAILED' });
+      expect(await client.queryOne("SELECT content FROM messages WHERE id = 'late-msg'"))
+        .toEqual({ content: 'hello' });
+      await client.exec("DELETE FROM messages WHERE id = 'late-msg'");
+      await expect(discard()).resolves.toMatchObject({ status: 'deleted' });
+    }, { useInlineWorker });
   });
 
   afterAll(() => {
@@ -1743,18 +1831,30 @@ describe('db worker tx handlers', () => {
           await client.exec(
             'CREATE TABLE IF NOT EXISTS bot_session_links (id TEXT PRIMARY KEY, bot_id TEXT NOT NULL, session_id TEXT NOT NULL, role TEXT NOT NULL, route_key TEXT, created_at INTEGER NOT NULL, archived_at INTEGER)',
           );
-          for (const [id, role] of [['routine-lane', 'routine'], ['channel-lane', 'channel'], ['bot-chat', 'canonical']] as const) {
+          for (const [id, role] of [['routine-lane', 'routine'], ['channel-lane', 'channel'], ['group-lane', 'group'], ['bot-chat', 'canonical']] as const) {
             await seedSession(client, id, { source: 'bot' });
             await client.exec(
               'INSERT INTO bot_session_links (id, bot_id, session_id, role, created_at) VALUES (?, ?, ?, ?, ?)',
               [`link-${id}`, 'bot-1', id, role, Date.now()],
             );
           }
-          await expect(client.tx('sessions.setStatus', { sessionIds: ['routine-lane', 'channel-lane'], status: 'archived' }))
+          await expect(client.tx('sessions.setStatus', { sessionIds: ['routine-lane', 'channel-lane', 'group-lane'], status: 'archived' }))
             .resolves.toEqual([
               expect.objectContaining({ sessionId: 'routine-lane', source: 'bot', status: 'archived' }),
               expect.objectContaining({ sessionId: 'channel-lane', source: 'bot', status: 'archived' }),
+              expect.objectContaining({ sessionId: 'group-lane', source: 'bot', status: 'archived' }),
             ]);
+          // A -> archive -> B -> restore A: only B remains eligible for group delivery.
+          await client.exec("UPDATE bot_session_links SET route_key='group:g' WHERE session_id='group-lane'");
+          await seedSession(client, 'group-successor', { source: 'bot' });
+          await client.exec("INSERT INTO bot_session_links (id,bot_id,session_id,role,route_key,created_at) VALUES ('successor','bot-1','group-successor','group','group:g',2)");
+          await client.tx('sessions.setStatus', { sessionIds: ['group-lane'], status: 'active' });
+          await expect(client.query("SELECT s.id FROM sessions s JOIN bot_session_links l ON l.session_id=s.id WHERE l.role='group' AND l.route_key='group:g' AND l.archived_at IS NULL AND s.status='active'"))
+            .resolves.toEqual([{ id: 'group-successor' }]);
+          await client.tx('sessions.setStatus', { sessionIds: ['group-lane'], status: 'archived' });
+          await client.tx('sessions.setTerminalStatus', { sessionId: 'group-successor', status: 'deleted' });
+          await client.exec("DELETE FROM bot_session_links WHERE session_id='group-successor'");
+          await client.exec("DELETE FROM sessions WHERE id='group-successor'");
           // 一条专线 + 一条私人主对话：整批回滚，专线也保持原状态。
           await client.exec("UPDATE sessions SET status = 'active' WHERE id IN ('routine-lane', 'channel-lane')");
           await expect(client.tx('sessions.setStatus', { sessionIds: ['routine-lane', 'bot-chat'], status: 'archived' }))
@@ -1762,8 +1862,18 @@ describe('db worker tx handlers', () => {
           await expect(client.query('SELECT id, status FROM sessions ORDER BY id')).resolves.toEqual([
             { id: 'bot-chat', status: 'active' },
             { id: 'channel-lane', status: 'active' },
+            { id: 'group-lane', status: 'archived' },
             { id: 'routine-lane', status: 'active' },
           ]);
+          // All group work, including private digests, uses ordinary lifecycle.
+          await client.tx('sessions.setStatus', { sessionIds: ['group-lane'], status: 'active' });
+          await client.tx('sessions.setTerminalStatus', { sessionId: 'group-lane', status: 'deleted' });
+          await expect(client.query("SELECT status FROM sessions WHERE id='group-lane'"))
+            .resolves.toEqual([{ status: 'deleted' }]);
+          await seedSession(client, 'digest', { source: 'bot' });
+          await client.exec("INSERT INTO bot_session_links (id, bot_id, session_id, role, route_key, created_at) VALUES ('digest', 'bot-1', 'digest', 'group', 'group:g:personal-digest', 1)");
+          await expect(client.tx('sessions.setTerminalStatus', { sessionId: 'digest', status: 'deleted' }))
+            .resolves.toBeDefined();
         },
         { useInlineWorker },
       );
@@ -1835,6 +1945,13 @@ describe('db worker tx handlers', () => {
       await seedSession(client, 'active-child', { source: 'side-chat', parentSessionId: 'parent' });
       await seedSession(client, 'archived-child', { source: 'side-chat', parentSessionId: 'parent', status: 'archived' });
       await seedSession(client, 'ordinary-fork', { parentSessionId: 'parent' });
+      // An older controller or a confirmation opened before promotion must not delete this task.
+      await seedSession(client, 'promoted', { source: 'side-chat', parentSessionId: 'parent' });
+      await client.exec("UPDATE sessions SET side_chat_promoted = 1 WHERE id = 'promoted'");
+      for (const deleteTarget of [undefined, 'side-chat'] as const) {
+        await expect(client.tx('sessions.setTerminalStatus', { sessionId: 'promoted', status: 'deleted', deleteTarget }))
+          .rejects.toThrow('now an independent task');
+      }
       for (const session of ['parent', 'active-child', 'archived-child', 'ordinary-fork']) {
         await client.exec("INSERT INTO messages (id, client_id, session_id, role, content, created_at) VALUES (?, ?, ?, 'assistant', '{}', 1)", [session, session, session]);
         await client.exec("INSERT INTO mcp_app_view_states VALUES (?, ?, 'fixture', 'revision', NULL, '{}', 2)", [session, session]);
@@ -1848,6 +1965,7 @@ describe('db worker tx handlers', () => {
       await expect(client.query('SELECT id, status FROM sessions ORDER BY id')).resolves.toEqual([
         { id: 'active-child', status: 'active' }, { id: 'archived-child', status: 'archived' },
         { id: 'ordinary-fork', status: 'active' }, { id: 'parent', status: 'active' },
+        { id: 'promoted', status: 'active' },
       ]);
       await expect(client.query("SELECT session_id FROM shared_task_events WHERE kind = 'local-close'")).resolves.toEqual([]);
       expect((await client.query('SELECT message_id FROM mcp_app_view_states')).length).toBe(4);
@@ -1868,9 +1986,103 @@ describe('db worker tx handlers', () => {
       await expect(client.query('SELECT id, status FROM sessions ORDER BY id')).resolves.toEqual([
         { id: 'active-child', status: 'deleted' }, { id: 'archived-child', status: 'deleted' },
         { id: 'ordinary-fork', status: 'active' }, { id: 'parent', status: 'deleted' },
+        { id: 'promoted', status: 'active' },
       ]);
+      await expect(client.tx('sessions.setTerminalStatus', { sessionId: 'promoted', status: 'deleted', deleteTarget: 'task' }))
+        .resolves.toMatchObject({ sessionId: 'promoted', status: 'deleted' });
       await expect(client.query("SELECT session_id FROM shared_task_events WHERE kind = 'local-close' ORDER BY session_id"))
         .resolves.toEqual([{ session_id: 'active-child' }, { session_id: 'parent' }]);
+    }, { useInlineWorker });
+  });
+
+  // Integration: hold the display projection back and settle both write orders
+  // through the production DB worker, including its inline fallback.
+  it.each([false, true])('guards follow-up deletion against a Worker commit (inline=%s)', async useInlineWorker => {
+    await withClient(async client => {
+      await seedSession(client, 'parent');
+      for (const id of ['worker-wins', 'delete-wins']) {
+        await seedSession(client, id, { source: 'side-chat', parentSessionId: 'parent' });
+        await seedSession(client, id + '-worker');
+        await client.exec("INSERT INTO orca_teams (id, lead_session_id, status, created_at, updated_at) VALUES (?, ?, 'active', 1, 1)", [id, id]);
+      }
+      const createWorker = (id: string) => client.tx('orca.upsertWorker', {
+        id: id + '-worker', teamId: id, sessionId: id + '-worker', label: 'review', now: 2,
+      });
+      const closeSideChat = (sessionId: string) => client.tx('sessions.setTerminalStatus', {
+        sessionId, status: 'deleted', deleteTarget: 'side-chat',
+      });
+      await createWorker('worker-wins');
+      await expect(closeSideChat('worker-wins')).rejects.toThrow('collaboration is being linked');
+      await client.exec("UPDATE sessions SET side_chat_promoted = 1, orca_role = 'lead' WHERE id = 'worker-wins'");
+      await client.tx('sessions.setTerminalStatus', { sessionId: 'worker-wins', status: 'archived' });
+      await client.tx('sessions.setStatus', { sessionIds: ['worker-wins'], status: 'active' });
+      await client.tx('sessions.setTerminalStatus', { sessionId: 'worker-wins', status: 'archived' });
+      await client.tx('sessions.setTerminalStatus', {
+        sessionId: 'worker-wins', status: 'archived', sideChatCloseParentId: 'parent',
+      });
+      await expect(client.tx('sessions.setStatus', { sessionIds: ['worker-wins'], status: 'active' }))
+        .rejects.toThrow('Finish closing the follow-up');
+      await client.exec("UPDATE sessions SET orca_role = NULL WHERE id = 'worker-wins'");
+      await expect(client.tx('sessions.setStatus', { sessionIds: ['worker-wins'], status: 'active' }))
+        .rejects.toThrow('Finish closing the follow-up');
+      await client.exec("UPDATE sessions SET side_chat_close_pending = 0 WHERE id = 'worker-wins'");
+      await client.tx('sessions.setStatus', { sessionIds: ['worker-wins'], status: 'active' });
+      await client.exec("UPDATE sessions SET side_chat_promoted = 0 WHERE id = 'worker-wins'");
+      await closeSideChat('delete-wins');
+      await expect(createWorker('delete-wins')).rejects.toThrow('no longer active');
+      await client.tx('sessions.setTerminalStatus', { sessionId: 'parent', status: 'deleted' });
+      expect(await client.queryOne("SELECT status, side_chat_promoted FROM sessions WHERE id = 'worker-wins'"))
+        .toEqual({ status: 'active', side_chat_promoted: 0 });
+      expect(await client.query("SELECT session_id FROM orca_workers")).toEqual([{ session_id: 'worker-wins-worker' }]);
+    }, { useInlineWorker });
+  });
+
+  // DB: both production Worker-link transactions must keep a normally
+  // archived team's existing work going, while fencing an explicit close and
+  // the first member of an unfinished team whose Lead was archived first.
+  it.each([false, true])('admits Workers only to the established team of a normally archived follow-up (inline=%s)', async useInlineWorker => {
+    await withClient(async client => {
+      await seedSession(client, 'parent');
+      await seedSession(client, 'lead', { source: 'side-chat', parentSessionId: 'parent', orcaRole: 'lead' });
+      const startTeam = (teamId: string) => client.exec(
+        "INSERT INTO orca_teams (id, lead_session_id, status, created_at, updated_at) VALUES (?, 'lead', 'active', 1, 1)",
+        [teamId],
+      );
+      const archive = () => client.tx('sessions.setTerminalStatus', { sessionId: 'lead', status: 'archived' });
+      const addRemote = (id: string, teamId = 'original') => client.tx('orca.upsertWorker', {
+        id, teamId, sessionId: id, label: id, now: 2,
+        remoteExecution: {
+          deviceId: 'device', remoteSessionId: id,
+          proxySession: { title: 'Worker', model: 'model', agentKind: 'codex', effort: null, permissionMode: 'auto', fastMode: false },
+        },
+      });
+      await startTeam('original');
+      await addRemote('first');
+      await client.exec("UPDATE sessions SET side_chat_promoted = 1 WHERE id = 'lead'");
+      await archive();
+      await addRemote('added');
+
+      await client.tx('sessions.setTerminalStatus', {
+        sessionId: 'lead', status: 'archived', sideChatCloseParentId: 'parent',
+      });
+      await expect(addRemote('pending')).rejects.toThrow('no longer active');
+      await client.exec("UPDATE orca_teams SET status = 'completed' WHERE id = 'original'");
+      await client.exec("UPDATE sessions SET side_chat_close_pending = 0 WHERE id = 'lead'");
+      await client.tx('sessions.setStatus', { sessionIds: ['lead'], status: 'active' });
+      await startTeam('next');
+      await expect(addRemote('stale')).rejects.toThrow('no longer active');
+      await archive();
+      await expect(addRemote('first-in-next', 'next')).rejects.toThrow('no longer active');
+      await client.tx('sessions.setStatus', { sessionIds: ['lead'], status: 'active' });
+      await addRemote('current', 'next');
+      await client.tx('sessions.setTerminalStatus', { sessionId: 'lead', status: 'deleted', deleteTarget: 'task' });
+      await expect(addRemote('deleted', 'next')).rejects.toThrow('no longer active');
+      await expect(client.query('SELECT id, team_id FROM orca_workers ORDER BY id'))
+        .resolves.toEqual([
+          { id: 'added', team_id: 'original' }, { id: 'current', team_id: 'next' }, { id: 'first', team_id: 'original' },
+        ]);
+      await expect(client.query('SELECT id FROM sessions ORDER BY id'))
+        .resolves.toEqual([{ id: 'added' }, { id: 'current' }, { id: 'first' }, { id: 'lead' }, { id: 'parent' }]);
     }, { useInlineWorker });
   });
 
@@ -2135,7 +2347,8 @@ describe('db worker tx handlers', () => {
     }, { useInlineWorker });
   });
 
-  it.each([false, true])('recovery fork validates the full ordered prefix despite unchanged count (inline=%s)', async (useInlineWorker) => {
+  // #11482: ordinary native forks need the same edit protection as recovery forks.
+  it.each([[false, false], [false, true], [true, false], [true, true]])('fork validates the full ordered prefix despite unchanged count (inline=%s, recovery=%s)', async (useInlineWorker, recovery) => {
     await withClient(async (client) => {
       await seedSession(client, 'src');
       const originalContent = 'prefix\n'.repeat(5_000);
@@ -2151,9 +2364,9 @@ describe('db worker tx handlers', () => {
         sourceSessionId: 'src', targetCreatedAt: 200,
         newSession: sessionRow('forked', { sdkSessionId: null, parentSessionId: 'src' }),
         uuidMap: [], newMessageIds: [{ id: 'copy1', clientId: 'copy-client1' }, { id: 'copy2', clientId: 'copy-client2' }],
-        recoveryMarker: { id: 'recovery', clientId: 'handoff', createdAt: 300,
+        ...(!recovery ? { sourceMessagesDigest: computeForkSourceMessagesDigest(originalRows) } : { recoveryMarker: { id: 'recovery', clientId: 'handoff', createdAt: 300,
           sourceMessagesDigest: computeForkSourceMessagesDigest(originalRows),
-          content: JSON.stringify({ reason: 'native-session-recovery', consumed: false, handoff: 'bounded handoff from original prefix' }) },
+          content: JSON.stringify({ reason: 'native-session-recovery', consumed: false, handoff: 'bounded handoff from original prefix' }) } }),
       };
       const edits: Array<[string, unknown[]]> = [
         ["UPDATE messages SET content = ? WHERE id = 'm1'", [originalContent + 'edited beyond the handoff limit']],
@@ -2505,6 +2718,34 @@ describe('db worker tx handlers', () => {
         replacementRoute: { ...args.replacementRoute, effort: null },
       });
       expect(await client.queryOne('SELECT effort, sdk_session_id FROM sessions WHERE id = ?', ['s1'])).toEqual({ effort: 'low', sdk_session_id: null });
+    }, { useInlineWorker });
+  });
+
+  // #10187 / integration: stale resume rejection must not clear a newer runtime,
+  // overwrite preferences, or lose history if inserting the durable handoff fails.
+  it.each([false, true])('context.rebuild conditionally replaces only the rejected SDK id (inline=%s)', async useInlineWorker => {
+    await withClient(async client => {
+      await seedSession(client, 's1', { contextTokens: 42_000 });
+      await client.exec('UPDATE sessions SET sdk_session_id = ?, model = ?, provider_id = ?, effort = ?, fast_mode = ? WHERE id = ?',
+        ['rejected-native', 'current-model', 'current-provider', 'high', 1, 's1']);
+      const args = { sessionId: 's1', markerId: 'recovery', markerClientId: 'recovery',
+        markerContent: JSON.stringify({ reason: 'native-session-recovery', handoff: 'KEEP_HISTORY', consumed: false }),
+        markerCreatedAt: 1000, updatedAt: 1000, expectedSdkSessionId: 'rejected-native', expectedClearedAt: null };
+      for (const changed of [{ expectedSdkSessionId: 'stale-native' }, { expectedClearedAt: 123 }]) {
+        await expect(client.tx('context.rebuild', { ...args, ...changed })).rejects.toMatchObject({ code: 'PRECONDITION_FAILED' });
+        expect(await client.query('SELECT id FROM messages WHERE client_id = ?', ['recovery'])).toEqual([]);
+      }
+      await client.exec('UPDATE sessions SET status = ? WHERE id = ?', ['deleted', 's1']);
+      await expect(client.tx('context.rebuild', args)).rejects.toMatchObject({ code: 'PRECONDITION_FAILED' });
+      await client.exec('UPDATE sessions SET status = ? WHERE id = ?', ['active', 's1']);
+      await client.tx('context.rebuild', args);
+      expect(await client.queryOne('SELECT sdk_session_id, model, provider_id, effort, fast_mode, context_tokens FROM sessions WHERE id = ?', ['s1'])).toEqual({
+        sdk_session_id: null, model: 'current-model', provider_id: 'current-provider', effort: 'high', fast_mode: 1, context_tokens: 0,
+      });
+      expect(await client.queryOne('SELECT content FROM messages WHERE client_id = ?', ['recovery'])).toEqual({ content: args.markerContent });
+      await client.exec('UPDATE sessions SET sdk_session_id = ?, context_tokens = ? WHERE id = ?', ['rejected-native', 42_000, 's1']);
+      await expect(client.tx('context.rebuild', args)).rejects.toThrow();
+      expect(await client.queryOne('SELECT sdk_session_id, context_tokens FROM sessions WHERE id = ?', ['s1'])).toEqual({ sdk_session_id: 'rejected-native', context_tokens: 42_000 });
     }, { useInlineWorker });
   });
 

@@ -11,7 +11,8 @@ vi.mock('electron', () => ({
   },
 }));
 
-import { registerRemoteHistoryIpc, type RemoteHistoryIpcDeps } from '../history';
+import { registerRemoteHistoryIpc } from '../history.desktop';
+import type { RemoteHistoryIpcDeps } from '../history';
 
 /** Tests default to "no terminal tail"; individual cases override readTerminal. */
 function register(

@@ -1,6 +1,8 @@
+import { View } from 'react-native';
+import { ProjectPickerIcon } from './ProjectPickerIcon';
 import { deviceDisplayName } from '@/device-link/deviceName';
 import { NativeErrorNotice } from '@/components/NativeErrorNotice.ios';
-import { Button, Image, Picker, ProgressView, Text, Toggle } from '@expo/ui/swift-ui';
+import { Button, Image, Picker, ProgressView, RNHostView, Text, Toggle } from '@expo/ui/swift-ui';
 import { disabled, font, foregroundStyle, frame, pickerStyle, tag, tint } from '@expo/ui/swift-ui/modifiers';
 import { useTranslation } from 'react-i18next';
 import { workspacePathsEqual } from './workspaceSelection';
@@ -59,15 +61,20 @@ export function NewTaskSelectionSheet(p: NewTaskSelectionSheetProps) {
         </Section>
         {p.workspaces.length ? <Section>
           {p.workspaces.map(workspace => <ComposerNativeRow key={workspace.workingDir}
-            title={workspace.title} subtitle={workspace.workingDir} leading={icon('folder')}
+            title={workspace.title} subtitle={workspace.workingDir} leading={<RNHostView matchContents>
+              <View style={{ width: 24, height: 24 }}>
+                <ProjectPickerIcon deviceId={p.selectedDeviceId} workingDir={workspace.workingDir} title={workspace.title} />
+              </View>
+            </RNHostView>}
             selected={p.workspaceKind === 'project' && workspacePathsEqual(p.workingDir, workspace.workingDir)}
             disabled={workspaceUnavailable || workspace.disabled} onPress={() => p.onProject(workspace.workingDir)} testID="newSession.workspaceProjectOption" />)}
         </Section> : null}
         <Section>
-          <ComposerNativeRow title={t('session.new.chooseOtherFolder')} leading={icon('folder.badge.plus')}
+          <ComposerNativeRow title={p.browseLabel ?? t('session.new.chooseOtherFolder')} leading={icon('folder.badge.plus')}
             accessory={icon('chevron.right')} disabled={workspaceUnavailable} onPress={p.onBrowse} testID="newSession.workspaceBrowseOption" />
         </Section>
       </> : browsing ? <>
+        {p.directoryInput ? <Section><RNHostView matchContents>{p.directoryInput}</RNHostView></Section> : null}
         <Section>
           <Text modifiers={[font({ textStyle: 'footnote' }), foregroundStyle(colors.textSecondary)]}
             testID="newSession.remoteBrowseCurrentPath">{p.path || t('session.new.readingRemoteDir')}</Text>

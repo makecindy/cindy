@@ -6,10 +6,15 @@ export default {
   notCovered:
     'Native login, real quotas, dispatch and mobile rendering; host account snapshots are fixtures',
   cases: {
+    'retained-codex': { about: 'Same workspace retained Astra with the last confirmed update time' },
+    'unconfirmed-codex': { about: 'A saved Astra task during a first subscription model-list timeout' },
+    'official-plan-name': { about: 'Model source details preserve official Ultra from the selected pro-coded account' },
+    'official-plan-name-narrow': { about: 'Official Ultra model source details at 320-pixel content width', viewport: { width: 320, height: 400 } },
     'quota-low': { about: 'Single account nearly exhausted' },
     'quota-exhausted': { about: 'Single account recovery countdown' },
     'quota-pool': { about: 'Pool exhausted; earliest usable account recovery' },
     'quota-partial': { about: 'Partially exhausted pool stays quiet' },
+    'legacy-remote': { about: '#10561: a remote single-account mirror retains its reset countdown without pool support' },
     'full-panel': { about: 'Full production ModelSelector popup with pooled accounts and red reset time' },
     'full-panel-warning': { about: 'Full production ModelSelector popup with pooled accounts and yellow reset time' },
     default: { about: 'Paused first account; unique eligible second account' },
@@ -21,6 +26,26 @@ export default {
     unknown: { about: 'Unknown account prevents a misleading average but not a known reset reminder' },
   },
   async check(page, ui) {
+    if (ui.case === 'unconfirmed-codex' || ui.case === 'retained-codex') {
+      const trigger = page.getByRole('button').filter({ hasText: await ui.t('newChat.modelSelector.source.unconfirmed') });
+      await trigger.waitFor();
+      await ui.capture('saved-route');
+      await trigger.click();
+      await page.getByRole('button', { name: await ui.t('newChat.modelSelector.retryRemoteModels') }).waitFor();
+      if (ui.case === 'retained-codex') await page.locator('time[datetime]').waitFor();
+      await ui.capture('retry');
+      return;
+    }
+    if (ui.case === 'legacy-remote') {
+      await page.locator('[data-weekly-remaining="60"]').waitFor();
+      await page.getByRole('button', { name: 'Anthropic', exact: true }).hover();
+      const tooltip = page.getByRole('tooltip');
+      await tooltip.waitFor();
+      await ui.capture('remote-reset');
+      const reset = await ui.t('quotaCard.resetIn', { duration: `1${await ui.t('todaySpend.unit.hour')}` });
+      if (!(await tooltip.textContent()).includes(reset)) throw new Error('Remote rail lost the single-account reset countdown');
+      return;
+    }
     if (ui.case.startsWith('quota-')) {
       const summary = page.locator('[data-pool-quota-summary]');
       await summary.waitFor();
@@ -61,6 +86,11 @@ export default {
           ? await ui.t('providerGroup.member.accountCount', { count: 2 })
           : 'second@example.test';
     await page.locator('[data-model-source-details]').filter({ hasText: pool ? 'Anthropic' : identity }).waitFor();
+    if (ui.case.startsWith('official-plan-name')) {
+      await page.locator('[data-model-source-details]').getByText(/ · Ultra$/).waitFor();
+      await ui.capture('official-plan-name');
+      return;
+    }
     await page.getByRole('button', { name: `Anthropic · ${identity}`, exact: true }).waitFor();
     if (!pool)
       await page.locator(`[data-weekly-remaining="${ui.case === 'bound' ? 34 : 80}"]`).waitFor();

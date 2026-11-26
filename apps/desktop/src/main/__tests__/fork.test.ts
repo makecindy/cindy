@@ -17,6 +17,12 @@ import os from 'node:os';
 import path from 'node:path';
 import Database from 'better-sqlite3';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
+import { getTableConfig } from 'drizzle-orm/sqlite-core';
+import { sessions, messages } from '../localDb/schema';
+import * as schema from '../localDb/schema';
+import { createDbClientForHandle } from '../localDb/client/createDbClientForHandle';
+import { createDbClient, type DbClient } from '../localDb/client/DbClient';
+import { buildDbWorkerBundle } from '../localDb/__tests__/dbWorkerTestUtils';
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { CodexResumePreparationBlockedError } from '@cindy/maker-core';
@@ -26,6 +32,7 @@ import { RemoteAgentPoller, RemoteAgentRunClient } from '../remote-agent/control
 import { CODEX_RESUME_NOT_READY_WIRE_MESSAGE } from '@cindy/maker-shared/agent-input-projection';
 import { projectSessionContextWindow } from '../../shared/sessionContextWindow';
 import { computeForkSourceMessagesDigest } from '../localDb/forkRecoverySnapshot.js';
+import { admitTaskAction } from '../maker-ipc/taskActionAuthorization.js';
 import {
   pruneSessionContextWindowBudget,
   readSessionContextWindowBudget,
@@ -105,6 +112,8 @@ vi.mock('../maker-host/index.js', () => ({
 }));
 
 const inferProviderIdForModelMock = vi.fn();
+// Fork route/history tests use isolated storage and no live provider directory.
+vi.mock('../maker-host/model-context-settings.js', () => ({ resolveDesktopHandoffWindow: async () => null }));
 vi.mock('../maker-host/provider-route.js', () => ({
   inferProviderIdForModel: inferProviderIdForModelMock,
 }));
@@ -114,6 +123,7 @@ vi.mock('../maker-host/provider-route.js', () => ({
 type SelectStep = unknown[];
 const selectQueue: SelectStep[] = [];
 let messageDb: ReturnType<typeof drizzle> | null = null;
+let snapshotClient: DbClient | null = null;
 const txCalls: Array<{ name: string; args: unknown }> = [];
 
 type SelectChain = Record<string, unknown> & {
@@ -151,7 +161,7 @@ vi.mock('../localDb/ipc/messages.js', () => ({
 }));
 
 vi.mock('../localDb/client/current', () => ({
-  getDbClient: () => ({
+  getDbClient: () => snapshotClient ?? ({
     drizzle: fakeDb,
     tx: txMock,
     queryOne: queryOneMock,
@@ -330,6 +340,127 @@ describe('disabled Cindy Make fork boundaries', () => {
 });
 
 describe('forkSessionAtMessage', () => {
+  // #11482, unit: real createSideChat and fork.session on isolated SQLite.
+  // Existing queue fixtures cannot see source changes while the native fork awaits.
+  // Minimal races: q@1000, a@1100, then a same-millisecond append or a new Pi turn.
+  it.each([
+    ['append', 'inproc'], ['rewind', 'inproc'], ['delete', 'inproc'], ['edit', 'inproc'], ['unchanged', 'inproc'],
+    ['append', 'file'], ['append', 'inline'], ['remote-append', 'inproc'],
+    ['pi-next-turn', 'inproc'], ['pi-unchanged', 'inproc'],
+    ['codex-next-turn', 'inproc'], ['codex-anchored-next-turn', 'inproc'],
+  ] as const)(
+    'keeps the selected side-chat snapshot across native fork: %s (%s)', async (change, transport) => {
+      const root = userDataDirRef.current;
+      const isPi = change === 'pi-next-turn' || change === 'pi-unchanged';
+      const isCodex = change === 'codex-next-turn' || change === 'codex-anchored-next-turn';
+      const dbPath = transport === 'inproc' ? ':memory:' : path.join(root, 'snapshot.db');
+      const sqlite = new Database(dbPath);
+      try {
+        const definitions: string[] = [];
+        for (const table of [sessions, messages]) {
+          const config = getTableConfig(table);
+          const definition = `CREATE TABLE "${config.name}" (${config.columns.map(column =>
+            `"${column.name}" ${column.getSQLType()}${column.primary ? ' PRIMARY KEY' : ''}`,
+          ).join(', ')})`;
+          definitions.push(definition);
+          sqlite.exec(definition);
+        }
+        const db = drizzle(sqlite, { schema });
+        db.insert(sessions).values({ id: 'src-session', title: 'Snapshot', sdkSessionId: 'source-sdk',
+          createdAt: 1, updatedAt: 1,
+          ...(isPi ? { agentKind: 'pi' } : isCodex ? { agentKind: 'codex' } : {}),
+          ...(change === 'remote-append' ? { agentDeviceId: 'device-b' } : {}) }).run();
+        db.insert(messages).values([
+          { id: 'q', clientId: 'q', sessionId: 'src-session', role: 'user', content: '"question"', createdAt: 1000 },
+          { id: 'a', clientId: 'a', sessionId: 'src-session', role: 'assistant', content: '"answer"',
+            agentMeta: JSON.stringify({ uuid: 'native-anchor' }), createdAt: 1100 },
+        ]).run();
+        if (transport === 'inproc') {
+          snapshotClient = createDbClientForHandle({ db: sqlite, drizzle: db });
+        } else {
+          sqlite.exec("CREATE TABLE migration_meta (key TEXT PRIMARY KEY, value TEXT); INSERT INTO migration_meta VALUES ('schema_version', '0')");
+          const drizzleDir = path.join(root, 'drizzle');
+          await fs.mkdir(drizzleDir);
+          await fs.writeFile(path.join(drizzleDir, '0000_init.sql'), definitions.join(';\n'));
+          snapshotClient = await createDbClient({ dbPath, drizzleDir,
+            betterSqliteModulePath: require.resolve('better-sqlite3'),
+            ...(transport === 'inline' ? { useInlineWorker: true }
+              : { workerScriptPath: await buildDbWorkerBundle(path.join(root, 'worker')) }),
+          });
+        }
+        let resume!: () => void;
+        let entered!: () => void;
+        const waiting = new Promise<void>(resolve => { entered = resolve; });
+        const gate = new Promise<void>(resolve => { resume = resolve; });
+        forkSdkSessionMock.mockImplementationOnce(async () => {
+          entered();
+          await gate;
+          return { newSdkSessionId: 'child-sdk', uuidMap: new Map([['native-anchor', 'child-anchor']]),
+            usedNativeForkAnchor: change === 'codex-anchored-next-turn' };
+        });
+        if (change === 'remote-append') remoteInvokeMock.mockImplementation(async (_device, _channel, [request]) => {
+          if (request.op === 'caps') return { ok: true, result: { version: 1, agents: [], maxRuns: 16,
+            uploadChunkBytes: 1024, maxPayloadBytes: 2048, nativeFork: true } };
+          entered();
+          await gate;
+          return { ok: true, result: { newSdkSessionId: 'child-sdk', uuidMap: [['native-anchor', 'child-anchor']] } };
+        });
+        const opening = createSideChat('src-session');
+        // Attach rejection handling before changing the source.
+        const outcome = opening.then(value => ({ value, error: null }), error => ({ value: null, error }));
+        await Promise.race([waiting, opening]);
+        if (change === 'pi-next-turn' || isCodex) {
+          db.insert(messages).values({ id: 'next', clientId: 'next', sessionId: 'src-session',
+            role: 'user', content: '"next turn"', createdAt: 1200 }).run();
+        }
+        if (change === 'append' || change === 'remote-append') db.insert(messages).values({ id: 'late', clientId: 'late', sessionId: 'src-session',
+          role: 'assistant', content: '"late"', createdAt: 1100 }).run();
+        if (change === 'rewind') sqlite.prepare("UPDATE messages SET rewind_at = 1200 WHERE id = 'a'").run();
+        if (change === 'delete') sqlite.prepare("DELETE FROM messages WHERE id = 'a'").run();
+        if (change === 'edit') sqlite.prepare("UPDATE messages SET content = '\"edited\"' WHERE id = 'a'").run();
+        resume();
+        const result = await outcome;
+        if (isPi || isCodex) {
+          expect(forkSdkSessionMock).toHaveBeenCalledWith(isPi ? 'pi' : 'codex', expect.objectContaining({ tailTurnsToDrop: 0 }));
+        }
+        if (change === 'append' || change === 'remote-append' || change === 'unchanged'
+          || change === 'pi-unchanged' || change === 'codex-anchored-next-turn') {
+          expect(result.error).toBeNull();
+          expect(sqlite.prepare('SELECT role, content FROM messages WHERE session_id = ? ORDER BY created_at, rowid')
+            .all(result.value!.id)).toEqual([{ role: 'user', content: '"question"' }, { role: 'assistant', content: '"answer"' }]);
+          if (change === 'remote-append') {
+            expect(forkSdkSessionMock).not.toHaveBeenCalled();
+            expect(remoteInvokeMock).toHaveBeenLastCalledWith('device-b', 'maker:remote-agent:v1', [expect.objectContaining({ op: 'fork', upToMessageId: 'native-anchor' })]);
+          } else if (!isPi && !isCodex) {
+            expect(forkSdkSessionMock).toHaveBeenCalledWith('claude-code', expect.objectContaining({ upToMessageId: 'native-anchor' }));
+          }
+          expect(result.value!.parentSessionId).toBe('src-session');
+        } else {
+          expect(result.error).toBeInstanceOf(Error);
+          expect(result.error.message).toMatch(/length mismatch|Source history changed/);
+          expect(sqlite.prepare("SELECT count(*) AS n FROM sessions WHERE id != 'src-session'").get()).toEqual({ n: 0 });
+        }
+      } finally {
+        await snapshotClient?.dispose();
+        snapshotClient = null;
+        sqlite.close();
+      }
+    },
+  );
+  // Unit, Host tool lifecycle: an install/owner revoked while native fork awaits must not
+  // create a database task. Existing UI tests have no asynchronous authorization scope.
+  it('rejects an expired caller after native fork and before creating the task', async () => {
+    selectQueue.push([makeSourceRow({})], [makeMessageRow({ id: 'target-user', role: 'user', createdAt: 3000 })],
+      [makeMessageRow({ id: 'assistant', role: 'assistant', createdAt: 2500, agentMeta: JSON.stringify({ uuid: 'prior' }) })]);
+    let current = true;
+    const decision = await admitTaskAction({ server: 'cindy_helper', tool: 'fork_session', sessionId: 'caller', args: {} },
+      { key: 'approved', ownerInput: true, delegated: false, assertCurrent: async () => { if (!current) throw new Error('PERMISSION_DENIED'); } });
+    if (!decision.ok || !decision.run) throw new Error('expected admission');
+    forkSdkSessionMock.mockImplementationOnce(async () => { current = false; return { newSdkSessionId: 'native-fork', uuidMap: new Map() }; });
+    await expect(decision.run(() => forkSessionAtMessage('src-session', 'target-user'))).rejects.toThrow('PERMISSION_DENIED');
+    expect(txCalls).toEqual([]);
+  });
+
   it('inherits the task context-window budget (preference entry, not a session column)', async () => {
     const target = makeMessageRow({ id: 'target-user', role: 'user', createdAt: 3000 });
     const priorAssistant = makeMessageRow({
@@ -436,15 +567,17 @@ describe('forkSessionAtMessage', () => {
   it('lists archived side chats with active siblings, excluding deleted and unrelated tasks', async () => {
     const sqlite = new Database(':memory:');
     try {
-      sqlite.exec('CREATE TABLE sessions (id TEXT, parent_session_id TEXT, source TEXT, status TEXT, created_at INTEGER)');
-      const insert = sqlite.prepare('INSERT INTO sessions VALUES (?, ?, ?, ?, ?)');
+      sqlite.exec('CREATE TABLE sessions (id TEXT, parent_session_id TEXT, source TEXT, status TEXT, created_at INTEGER, side_chat_promoted INTEGER NOT NULL DEFAULT 0)');
+      const insert = sqlite.prepare('INSERT INTO sessions (id, parent_session_id, source, status, created_at) VALUES (?, ?, ?, ?, ?)');
       for (const row of [
         ['active', 'main', 'side-chat', 'active', 20],
         ['archived', 'main', 'side-chat', 'archived', 10],
         ['deleted', 'main', 'side-chat', 'deleted', 30],
         ['other-parent', 'other', 'side-chat', 'archived', 5],
         ['ordinary', 'main', 'desktop', 'archived', 6],
+        ['promoted', 'main', 'side-chat', 'active', 7],
       ]) insert.run(...row);
+      sqlite.prepare("UPDATE sessions SET side_chat_promoted = 1 WHERE id = 'promoted'").run();
       messageDb = drizzle(sqlite);
       expect(await listSideChats('main')).toEqual([{ id: 'archived' }, { id: 'active' }]);
     } finally {
@@ -1745,7 +1878,7 @@ describe('forkSessionAtMessage', () => {
     expect(remoteInvokeMock).not.toHaveBeenCalled();
     expect(forkSdkSessionMock).not.toHaveBeenCalled();
   });
-  it('rejects a historical engine boundary without a parked native session id', async () => {
+  it('rebuilds a historical fork when the engine boundary has no parked native session id', async () => {
     const target = makeMessageRow({
       id: 'historical-assistant',
       clientId: 'historical-assistant-client',
@@ -1760,6 +1893,20 @@ describe('forkSessionAtMessage', () => {
       }),
     ]);
     selectQueue.push([target]);
+    selectQueue.push([]); // no user message after the assistant target
+    selectQueue.push([
+      makeMessageRow({ role: 'user', createdAt: 2000 }),
+      target,
+    ]); // visible history copied into the fork
+    selectQueue.push([
+      makeSourceRow({
+        id: 'forked-id',
+        agentKind: 'cc',
+        model: 'claude-sonnet-4-6',
+        sdkSessionId: null,
+        parentSessionId: 'src-session',
+      }),
+    ]);
     queryOneMock.mockResolvedValueOnce(null).mockResolvedValueOnce({
       content: JSON.stringify({
         fromAgentKind: 'cc',
@@ -1769,14 +1916,26 @@ describe('forkSessionAtMessage', () => {
       }),
       created_at: 2800,
       rowid: 30,
+    }).mockResolvedValueOnce({
+      content: JSON.stringify({
+        fromAgentKind: 'codex',
+        toAgentKind: 'cc',
+        toProviderId: 'historical-cc-provider',
+      }),
+      created_at: 2000,
+      rowid: 10,
     });
 
-    await expect(
-      forkSessionAtMessage('src-session', 'historical-assistant-client'),
-    ).rejects.toMatchObject({ code: 'UNSUPPORTED_HISTORY' });
+    await forkSessionAtMessage('src-session', 'historical-assistant-client');
 
     expect(forkSdkSessionMock).not.toHaveBeenCalled();
-    expect(txCalls).toHaveLength(0);
+    const txArgs = txCalls.find((call) => call.name === 'fork.session')!.args as {
+      newSession: Record<string, unknown>;
+    };
+    expect(txArgs.newSession.agentKind).toBe('cc');
+    expect(txArgs.newSession.providerId).toBe('historical-cc-provider');
+    expect(txArgs.newSession.sdkSessionId).toBeNull();
+    expect(commitContextRebuildMock).toHaveBeenCalled();
   });
 
   it.each([
@@ -2654,9 +2813,10 @@ describe('forkSessionAtMessage', () => {
       remoteHostId: null,
     });
     const txCall = txCalls.find((c) => c.name === 'fork.session');
-    const txArgs = txCall!.args as { targetCreatedAt: number };
-    // 无边界 → MAX_SAFE_INTEGER, lt 谓词放行所有行 (= 复制全部)
-    expect(txArgs.targetCreatedAt).toBe(Number.MAX_SAFE_INTEGER);
+    const txArgs = txCall!.args as { targetCreatedAt: number; targetRowid: number };
+    // Include the selected tail, excluding later inserts even in the same millisecond.
+    expect(txArgs.targetCreatedAt).toBe(2500);
+    expect(txArgs.targetRowid).toBe(2);
   });
 
   it("assistant target (codex): drops only user turns after the reply's turn", async () => {

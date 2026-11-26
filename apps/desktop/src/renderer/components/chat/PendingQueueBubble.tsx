@@ -28,7 +28,8 @@ export interface PendingQueueBubbleProps {
   localSend?: boolean;
   simplifiedBotConversation?: boolean;
   onEdit(entry: QueuedMessage): void;
-  onSteer(clientId: string): Promise<boolean>;
+  /** Omitted when the task's engine cannot take input into its running turn: no steer item. */
+  onSteer?(clientId: string): Promise<boolean>;
   onRemove(clientId: string): void;
   onMove(clientId: string, targetIndex: number): void;
 }
@@ -55,6 +56,7 @@ export function PendingQueueBubble({
   const { t } = useTranslation();
   const presentation = getPendingQueueRowPresentation(entry);
   const editing = editingClientId === entry.clientId;
+  const queueStatus = t(entry.waitingForRemoteAccount ? 'newChat.pendingQueue.waitingForDevice' : 'newChat.pendingQueue.queued');
   const sending = entry.isPendingEnqueue || steeringClientIds.includes(entry.clientId);
   const availability = buildQueueRowPresentation({
     item: entry,
@@ -87,16 +89,15 @@ export function PendingQueueBubble({
       : presentation.isPlugin
         ? t('newChat.pendingQueue.pluginSenderFallback')
         : null);
+  // Plugin attribution can also be stamped by an edit of a composer item. Its
+  // chatMessage already has the display body, including ranges for UserMessage.
   const body = presentation.isSyntheticTrigger
     ? t(
         presentation.syntheticKind === 'continue'
           ? 'newChat.pendingQueue.syntheticContinueLabel'
           : 'newChat.pendingQueue.syntheticTriggerLabel',
       )
-    : presentation.isOrca ||
-        presentation.isScheduler ||
-        presentation.isSession ||
-        presentation.isPlugin
+    : presentation.isOrca || presentation.isScheduler || presentation.isSession
       ? (presentation.rangedSourceText ?? presentation.displayText)
       : entry.chatMessage.content;
   const status = (
@@ -113,15 +114,15 @@ export function PendingQueueBubble({
               type="button"
               disabled={busy}
               className={`flex items-center gap-1 rounded-lg px-1 hover:bg-[var(--surface-hover)] ${simplifiedBotConversation ? "min-h-8" : "min-h-6"}`}
-              aria-label={t('newChat.pendingQueue.queued')}
+              aria-label={queueStatus}
             >
               <ListEnd size={14} />
-              <span>{t('newChat.pendingQueue.queued')}</span>
+              <span>{queueStatus}</span>
               {!busy && <ChevronDown size={12} />}
             </button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end">
-            {!availability.actions.steer.disabled && (
+            {onSteer && !availability.actions.steer.disabled && (
               <DropdownMenuItem
                 className="gap-2"
                 onSelect={() => {

@@ -34,7 +34,6 @@ export function useCindyMakeBuildStop(buildId: string | undefined) {
     try {
       const accepted = await confirm(
         {
-          presentation: 'standard',
           title: t('cindyMake.history.stopConfirm.title'),
           description: t('cindyMake.history.stopConfirm.description'),
           confirmText: t('cindyMake.history.stop'),

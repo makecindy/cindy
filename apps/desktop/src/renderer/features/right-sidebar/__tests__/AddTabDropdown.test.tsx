@@ -197,6 +197,20 @@ it.each([undefined, { groupId: 'left' as const }, { onOptimisticAdd: vi.fn() }])
   expect(onSelect).not.toHaveBeenCalled();
 });
 
+// Both tab entry surfaces must resolve the same preferred navigation glyph as the sidebar.
+it.each(['menu', 'empty'])('uses the plugin navigation icon in %s', surface => {
+  m.ghosts = [{
+    enabled: true,
+    manifest: {
+      id: 'devices', name: 'Devices',
+      mainView: { html: 'view.html', preferredIcon: 'tablet-smartphone' },
+    },
+  }];
+  render(<Entries sessionId="task-1" onSelect={vi.fn()} both />);
+  const entry = within(screen.getByTestId(surface)).getByText('Devices').closest('button');
+  expect(entry?.querySelector('.lucide-tablet-smartphone')).toBeTruthy();
+});
+
 // 测试价值
 // - 生产入口与可观察结果:「+」菜单插件项;可观察的是选择时把 (tabId, 此前是否已打开) 交给宿主,
 //   独立窗口据此对「已打开」的页签切换 / 聚焦,而不是菜单关掉后毫无反应。

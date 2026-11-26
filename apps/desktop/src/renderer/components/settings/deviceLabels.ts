@@ -3,8 +3,27 @@
  */
 
 import appI18n from 'i18next';
+import { deviceDisplayName, isCindyApp } from '@cindy/maker-shared/device-list';
 
 type T = (key: string, options?: Record<string, unknown>) => string;
+
+/** The account display name takes precedence over the hostname reported by this computer. */
+export function selfDeviceName(device: Pick<DeviceLinkDeviceView, 'deviceId' | 'name' | 'selfName'>): string {
+  const hostname = device.selfName?.trim() || '';
+  return deviceDisplayName(device.deviceId, device.name, hostname === device.deviceId ? '' : hostname);
+}
+
+/** Known App names are localized; unknown self-reported identifiers remain literal. */
+export function appLabel(app: string | undefined, t: T): string {
+  if (isCindyApp(app)) return t('settings.devices.apps.cindy');
+  if (app === 'cindy-friend') return t('settings.devices.apps.cindyFriend');
+  return app!;
+}
+
+/** Preserve Cindy/legacy names, including the raw hostname used when renaming. */
+export function deviceLabel(device: { name: string; app?: string }, t: T): string {
+  return isCindyApp(device.app) ? device.name : `${appLabel(device.app, t)} · ${device.name}`;
+}
 
 export function platformLabel(platform: string | null): string {
   switch (platform) {

@@ -2,7 +2,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { promises as fsp } from 'node:fs';
 import { createHash, randomUUID } from 'node:crypto';
-import { parse as parseToml, stringify as stringifyToml } from 'smol-toml';
+import { stringify as stringifyToml } from 'smol-toml';
+import { parseCodexConfigToml as parseToml } from './codex-config-toml.js';
 import yaml from 'js-yaml';
 import {
   isCodexExplicitOnlyOverlayRoute,

@@ -1,3 +1,5 @@
+import { remoteProviderDisableKey, isProviderDisabled } from '@cindy/model-providers';
+import { readModelDisableOverrides } from '../maker-host/model-disable-store.js';
 import { parseKimiAccountUsageResult } from '../../shared/providerAccountUsage.js';
 import { kimiSource } from './collect.js';
 /**
@@ -15,17 +17,23 @@ import { kimiSource } from './collect.js';
  * while, marked with when it was seen, instead of disappearing: `retainRemoteSubscriptions`.
  */
 
+import { parseGhostHarnessUsage } from '@cindy/plugin-protocol';
 import type { ProviderView } from '@cindy/model-providers';
 import type { ClaudeSubscriptionUsageSnapshot, XaiSubscriptionUsageSnapshot } from '@cindy/maker-shared/subscription-usage';
 import { parseOpenCodeGoAccountUsageResult } from '../../shared/providerAccountUsage.js';
 
 import type { DeviceLinkDeviceView } from '../../shared/deviceLinkIpc.js';
-import { providerWeeklyQuotaSource } from '../../shared/providerQuotaSource.js';
+import {
+  PLUGIN_ENGINES_INVOKE,
+  parseOfferedPluginEngines,
+  type PluginEngineView,
+} from '../../shared/pluginEngines.js';
+import { providerUsageReaderSource, providerWeeklyQuotaSource } from '../../shared/providerQuotaSource.js';
 import { DEFAULT_ACCOUNT_USAGE_SCOPE, SUBSCRIPTION_ACCOUNTS_CHANNEL, isSubscriptionProvider, type SubscriptionPoolView } from '../../shared/subscriptionAccounts.js';
 import { readDeviceProviderViews } from '../remote-agent/controller/deviceCatalog.js';
 import { mayServeBackgroundRead } from '../usage/peerUsageSync.js';
 import type { CodexAccountUsagePayload } from '../usageBroadcaster.js';
-import { claudeSource, codexSource, opencodeGoSource, subscriptionPoolSources, xaiSource } from './collect.js';
+import { claudeSource, codexSource, opencodeGoSource, pluginEngineSource, subscriptionPoolSources, xaiSource } from './collect.js';
 import type { MenubarRemoteDevice, MenubarSubscriptionInput } from './snapshot.js';
 
 const MOBILE_PLATFORMS = new Set(['ios', 'android']);
@@ -99,7 +107,7 @@ async function readAccount(
   device: MenubarRemoteDevice,
   provider: ProviderView,
 ): Promise<MenubarSubscriptionInput[] | null> {
-  if (isSubscriptionProvider(provider.id)) {
+  if (isSubscriptionProvider(provider.id) || provider.subscriptionPool || provider.subscriptionAccountPool) {
     const response = await deps.invoke(device.id, SUBSCRIPTION_ACCOUNTS_CHANNEL, [{ action: 'read', providerId: provider.id }]);
     if (response.ok) {
       const pool = response.result;
@@ -116,7 +124,7 @@ async function readAccount(
       throw Object.assign(new Error(response.error.message), { code: response.error.code });
     }
   }
-  const kind = providerWeeklyQuotaSource(provider);
+  const kind = providerUsageReaderSource(provider);
   let source: MenubarSubscriptionInput | null = null;
   if (kind === 'kimi') {
     const response = await deps.invoke(device.id, 'maker:usage:kimi-coding', [{ providerId: provider.id }]);
@@ -140,6 +148,27 @@ async function readAccount(
   return [{ ...source, id: `remote:${device.id}:${provider.id}`, device }];
 }
 
+async function readRemotePluginEngineList(
+  deps: RemoteSubscriptionDeps,
+  deviceId: string,
+): Promise<{ ok: true; engines: PluginEngineView[] } | { ok: false }> {
+  try {
+    const response = await deps.invoke(deviceId, PLUGIN_ENGINES_INVOKE.LIST, []);
+    if (!response.ok) {
+      if (response.error.code === 'CHANNEL_NOT_ALLOWED') return { ok: true, engines: [] };
+      deps.onError?.(`remote:${deviceId}:plugin-engines`, new Error(response.error.message));
+      return { ok: false };
+    }
+    return {
+      ok: true,
+      engines: parseOfferedPluginEngines(response.result).filter((engine) => engine.reportsUsage === true),
+    };
+  } catch (error) {
+    deps.onError?.(`remote:${deviceId}:plugin-engines`, error);
+    return { ok: false };
+  }
+}
+
 /** Null when the computer's account list could not be read. */
 async function readDevice(
   deps: RemoteSubscriptionDeps,
@@ -153,25 +182,56 @@ async function readDevice(
     deps.onError?.(`remote:${device.id}:providers`, error);
     return null;
   }
+  const pluginList = await readRemotePluginEngineList(deps, device.id);
+  const pluginEngines = pluginList.ok ? pluginList.engines : [];
   const accounts = providers.filter((provider) => provider.connected && !provider.suspended && !provider.removed && !provider.subscriptionPoolAlias &&
     (isSubscriptionProvider(provider.id) || providerWeeklyQuotaSource(provider)));
   const failed: string[] = [];
-  const read = await Promise.all(
-    accounts.map(async (provider) => {
-      const key = `remote:${device.id}:${provider.id}`;
-      try {
-        const source = await readAccount(deps, device, provider);
-        // Still listed but no usable reading (empty or failed response): keep its last reading too.
-        if (!source) failed.push(key);
-        return source;
-      } catch (error) {
-        deps.onError?.(key, error);
-        failed.push(key);
-        return null;
-      }
-    }),
-  );
-  return { sources: read.flatMap(source => source ?? []), failed };
+  if (!pluginList.ok) failed.push(`remote:${device.id}:plugin-engines`);
+  const [read, pluginRead] = await Promise.all([
+    Promise.all(
+      accounts.map(async (provider) => {
+        const key = `remote:${device.id}:${provider.id}`;
+        try {
+          const source = await readAccount(deps, device, provider);
+          // Still listed but no usable reading (empty or failed response): keep its last reading too.
+          if (!source) failed.push(key);
+          return source;
+        } catch (error) {
+          deps.onError?.(key, error);
+          failed.push(key);
+          return null;
+        }
+      }),
+    ),
+    Promise.all(
+      pluginEngines.map(async (engine): Promise<MenubarSubscriptionInput | null> => {
+        const key = `remote:${device.id}:${engine.providerId}`;
+        try {
+          const response = await deps.invoke(device.id, PLUGIN_ENGINES_INVOKE.USAGE, [engine.key]);
+          if (!response.ok) {
+            if (response.error.code === 'CHANNEL_NOT_ALLOWED') return null;
+            throw Object.assign(new Error(response.error.message), { code: response.error.code });
+          }
+          const usage = parseGhostHarnessUsage(response.result);
+          if (!usage) return null;
+          return {
+            ...pluginEngineSource(engine, usage, deps.nowMs, device.id),
+            id: key,
+            device,
+          };
+        } catch (error) {
+          deps.onError?.(key, error);
+          failed.push(key);
+          return null;
+        }
+      }),
+    ),
+  ]);
+  return {
+    sources: [...read.flatMap((source) => source ?? []), ...pluginRead.filter((source): source is MenubarSubscriptionInput => source !== null)],
+    failed,
+  };
 }
 
 export async function readRemoteSubscriptions(deps: RemoteSubscriptionDeps): Promise<RemoteSubscriptionRead> {
@@ -211,15 +271,20 @@ export function retainRemoteSubscriptions(
 ): { sources: MenubarSubscriptionInput[]; seen: Map<string, RemoteSeen> } {
   const seen = new Map<string, RemoteSeen>();
   const sources: MenubarSubscriptionInput[] = [];
+  const access = readModelDisableOverrides();
+  const stopped = (source: MenubarSubscriptionInput) => !!source.device && !!source.providerId
+    && isProviderDisabled(access, remoteProviderDisableKey(source.device.id, source.providerId));
   for (const source of read.sources) {
+    if (stopped(source)) continue;
     seen.set(source.id, { source, seenAtMs: nowMs });
     sources.push(source);
   }
   for (const [id, entry] of previous) {
-    if (seen.has(id) || nowMs - entry.seenAtMs >= REMOTE_RETAIN_MS) continue;
+    if (stopped(entry.source) || seen.has(id) || nowMs - entry.seenAtMs >= REMOTE_RETAIN_MS) continue;
     const deviceId = entry.source.device?.id;
     const poolFailed = entry.source.pooled && deviceId && read.failed.has(`remote:${deviceId}:${entry.source.providerId}`);
-    if (!(deviceId && read.unreachable.has(deviceId)) && !read.failed.has(id) && !poolFailed) continue;
+    const pluginListFailed = entry.source.family === 'plugin' && !!deviceId && read.failed.has(`remote:${deviceId}:plugin-engines`);
+    if (!(deviceId && read.unreachable.has(deviceId)) && !read.failed.has(id) && !poolFailed && !pluginListFailed) continue;
     seen.set(id, entry);
     sources.push({
       ...entry.source,

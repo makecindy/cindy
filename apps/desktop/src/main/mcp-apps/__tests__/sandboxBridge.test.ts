@@ -16,12 +16,30 @@ function fixture() {
   const fetch = vi.fn<(url: string, input: { body: string }) => Promise<{ ok: boolean; json(): Promise<unknown> }>>(() => new Promise((resolve) => pending.push(resolve)));
   const window = { parent, addEventListener: (name: string, callback: (event: unknown) => void) =>
     handlers.set(name, callback) };
-  const document = { createElement: () => frame, body: { appendChild: vi.fn() } };
+  const style = { colorScheme: 'light' };
+  const document = { documentElement: { style }, createElement: () => frame, body: { appendChild: vi.fn() } };
   const html = mcpAppDirectSandboxDocument('cindy-mcp-app://view-view/resource', 'cindy-mcp-app://view/bridge');
   const script = html.slice(html.indexOf('<script>') + 8, html.indexOf('</script>'));
   new Script(script).runInNewContext({ window, document, fetch, setTimeout, clearTimeout });
-  return { handlers, parent, frame, fetch, pending };
+  return { handlers, parent, frame, fetch, pending, style };
 }
+
+// PR #12124, unit: an uninitialized App still needs live wrapper theming.
+// Exercise the emitted message handler; ordinary RPC relay tests cannot observe wrapper CSS.
+it('changes only the wrapper scheme on an exact theme message from its parent', () => {
+  const f = fixture();
+  const receive = f.handlers.get('message')!;
+  const theme = { type: 'cindy:sandbox-color-scheme', scheme: 'dark' };
+  for (const data of [{ ...theme, scheme: 'light dark' }, { ...theme, extra: true }, { scheme: 'dark' }])
+    receive({ source: f.parent, data });
+  receive({ source: f.frame.contentWindow, data: theme });
+  expect(f.style.colorScheme).toBe('light');
+  receive({ source: f.parent, data: theme });
+  expect(f.style.colorScheme).toBe('dark');
+  expect(f.frame.contentWindow.postMessage).not.toHaveBeenCalled();
+  expect(f.fetch).toHaveBeenCalledOnce(); // Only the initial poll.
+});
+
 it('ignores forged App requests and Host responses from the Renderer, relaying only the inner window', () => {
   const f = fixture();
   // G5: only add form events; top-navigation and popups remain sandboxed.
@@ -40,6 +58,16 @@ it('ignores forged App requests and Host responses from the Renderer, relaying o
   expect(f.parent.postMessage).not.toHaveBeenCalled();
   receive({ source: f.frame.contentWindow, data: { jsonrpc: '2.0', method: 'ui/notifications/sandbox-escape' } });
   expect(f.parent.postMessage).not.toHaveBeenCalled();
+});
+// PR #11917, unit: an authenticated poll can report revocation before the
+// document-removal notice arrives. Exercise the script that runs in the frame.
+it.each(['MCP_PLUGIN_UNAVAILABLE', 'MCP_APP_SERVER_CHANGED'])('preserves %s from an outstanding sandbox poll', async code => {
+  const f = fixture();
+  f.pending[0](Response.json({ code }, { status: 410 }));
+  await vi.advanceTimersByTimeAsync(0);
+  expect(f.parent.postMessage).toHaveBeenCalledWith({
+    jsonrpc: '2.0', method: 'ui/notifications/sandbox-failed', params: { code },
+  }, '*');
 });
 it('gives the UI only display state while keeping Host results on the direct App transport', async () => {
   const f = fixture();
@@ -80,6 +108,22 @@ it('still relays App readiness and size notifications to the Renderer and Host',
   }
   expect(f.parent.postMessage).toHaveBeenCalledTimes(2);
 });
+it('emits host-owned handshake and result markers, while rejecting page-forged markers', async () => {
+  const f = fixture();
+  const receive = f.handlers.get('message')!;
+  receive({ source: f.frame.contentWindow, data: { jsonrpc: '2.0', id: 1, method: 'ui/initialize', params: {} } });
+  expect(f.parent.postMessage).toHaveBeenCalledExactlyOnceWith(
+    { jsonrpc: '2.0', method: 'ui/notifications/sandbox-handshake-started' }, '*');
+  f.parent.postMessage.mockClear();
+  receive({ source: f.frame.contentWindow, data: { jsonrpc: '2.0', method: 'ui/notifications/sandbox-result-delivered' } });
+  expect(f.parent.postMessage).not.toHaveBeenCalled();
+  f.pending[0]({ ok: true, json: async () => [{ seq: 1, message: {
+    jsonrpc: '2.0', method: 'ui/notifications/tool-result', params: { structuredContent: { private: true } },
+  } }] });
+  for (let index = 0; index < 8; index++) await Promise.resolve();
+  expect(f.parent.postMessage).toHaveBeenCalledExactlyOnceWith(
+    { jsonrpc: '2.0', method: 'ui/notifications/sandbox-result-delivered' }, '*');
+});
 
 // Greptile 4427568732: a poll already on the wire can arrive after initialize.
 // Real emitted bridge script, deferred network response, reused request ID.
@@ -108,8 +152,10 @@ it('bounds replacement initialization without extending the deadline for retries
   receive('ui/notifications/initialized');
   f.parent.postMessage.mockClear();
   receive('ui/initialize');
+  f.parent.postMessage.mockClear();
   vi.advanceTimersByTime(44_000);
   receive('ui/initialize');
+  f.parent.postMessage.mockClear();
   expect(f.parent.postMessage).not.toHaveBeenCalled();
   vi.advanceTimersByTime(1_000);
   expect(f.parent.postMessage).toHaveBeenCalledExactlyOnceWith(

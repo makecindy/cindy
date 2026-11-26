@@ -211,7 +211,8 @@ export async function fetchGhostSettings(ghost: InstalledGhost, pathname: string
   const handler = path === '/secrets' || path.startsWith('/secrets/') ? ghostSecretsHandler
     : path === '/oauth' || path.startsWith('/oauth/') ? ghostOauthHandler
     : path === '/connections' || path.startsWith('/connections/') ? ghostConnectionsHandler
-    : path === '/models' ? ghostModelsHandler : null;
+    : path === '/models' ? ghostModelsHandler
+    : path === '/harnesses' ? ghostHarnessesHandler : null;
   let result: { status: number; body?: string };
   if (handler) result = await handler(args);
   else if (path === '/kv' && ghostKvStore) result = await handleGhostKvRequest({
@@ -276,6 +277,10 @@ let ghostModelPickerProvider: ((id: string, options: unknown, current: () => boo
 export function setGhostModelPickerProvider(provider: NonNullable<typeof ghostModelPickerProvider>): void {
   ghostModelPickerProvider = provider;
 }
+let ghostModelPreferencesProvider: import('./ghostPageHandler.js').GhostModelPreferencesProvider | null = null;
+export function setGhostModelPreferencesProvider(provider: import('./ghostPageHandler.js').GhostModelPreferencesProvider): void {
+  ghostModelPreferencesProvider = provider;
+}
 export function setGhostAgentModelsProvider(
   provider: (ghostId: string, agentDeviceId?: string) => Promise<GhostAgentModelsResult>,
 ): void {
@@ -318,6 +323,13 @@ let ghostModelsHandler: GhostSecretsProtocolHandler | null = null;
 /** /models：插件发布它提供给模型选择器的模型(index.ts 注入，形态同 /secrets)。 */
 export function setGhostModelsHandler(handler: GhostSecretsProtocolHandler): void {
   ghostModelsHandler = handler;
+}
+
+let ghostHarnessesHandler: GhostSecretsProtocolHandler | null = null;
+
+/** /harnesses：插件发布执行引擎可用状态(index.ts 注入，形态同 /models)。 */
+export function setGhostHarnessesHandler(handler: GhostSecretsProtocolHandler): void {
+  ghostHarnessesHandler = handler;
 }
 
 export function setGhostSecretsHandler(handler: GhostSecretsProtocolHandler): void {
@@ -530,8 +542,10 @@ function registerGhostProtocol(
     get ghostAppContextProvider() { return ghostAppContextProvider; },
     get ghostModelPickerProvider() { return ghostModelPickerProvider; },
     get ghostAgentModelsProvider() { return ghostAgentModelsProvider; },
+    get ghostModelPreferencesProvider() { return ghostModelPreferencesProvider; },
     get ghostMediaModelsProvider() { return ghostMediaModelsProvider; },
     get ghostModelsHandler() { return ghostModelsHandler; },
+    get ghostHarnessesHandler() { return ghostHarnessesHandler; },
     get ghostSecretsHandler() { return ghostSecretsHandler; },
     get ghostOauthHandler() { return ghostOauthHandler; },
     get ghostConnectionsHandler() { return ghostConnectionsHandler; },

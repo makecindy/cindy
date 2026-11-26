@@ -459,7 +459,10 @@ export function wechatCommitPreDispatchFailure(db: Database.Database, args: unkn
     const row = db
       .prepare('SELECT status FROM wechat_inbox WHERE id = ? AND binding_epoch = ?')
       .get(taskId, bindingEpoch) as InboxStatusRow | undefined;
-    if (row?.status !== 'dispatching') return false;
+    // beforeProviderStart crosses the durable acceptance barrier before send()
+    // can still reject (for example, Pi rejecting image input). Such a rejection
+    // must settle that accepted task too. Never overwrite a stop or committed final.
+    if (!row || !['dispatching', 'accepted_running', 'waiting_desktop'].includes(row.status)) return false;
     const insertOutbox = prepareOutboxInsert(db);
     for (const chunk of outbox) {
       insertOutboxChunk(insertOutbox, bindingEpoch, taskId, chunk, now);
@@ -468,7 +471,7 @@ export function wechatCommitPreDispatchFailure(db: Database.Database, args: unkn
       .prepare(
         `UPDATE wechat_inbox
          SET status = 'delivery_pending', lease_until = NULL, last_error_code = ?
-         WHERE id = ? AND binding_epoch = ? AND status = 'dispatching'`,
+         WHERE id = ? AND binding_epoch = ? AND status IN ('dispatching', 'accepted_running', 'waiting_desktop')`,
       )
       .run(errorCode, taskId, bindingEpoch);
     if (updated.changes !== 1) {

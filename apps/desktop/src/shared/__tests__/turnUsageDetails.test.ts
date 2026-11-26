@@ -4,6 +4,7 @@ import {
   aggregateTurnUsageDetails,
   buildTurnUsageDetails,
   mergeTurnUsageDetailsForMessage,
+  normalizeTurnUsageDetails,
 } from '../turnUsageDetails';
 import { DEFAULT_USAGE_CURRENCY, gatewayMoney, usdMoney } from '../regionalMoney';
 
@@ -63,6 +64,16 @@ describe('aggregateTurnUsageDetails', () => {
     const inputOnly = buildTurnUsageDetails({ inputTokens: 10, durationMs: 500 });
 
     expect(aggregateTurnUsageDetails([timed, inputOnly])).toMatchObject({ durationMs: 1_000 });
+  });
+
+  it('weighs per-step context by each segment step count', () => {
+    const first = buildTurnUsageDetails({ outputTokens: 10, steps: 2, stepContextTokens: 100_000 });
+    const second = buildTurnUsageDetails({ outputTokens: 10, steps: 4, stepContextTokens: 40_000 });
+
+    expect(aggregateTurnUsageDetails([first, second])).toMatchObject({
+      steps: 6,
+      stepContextTokens: 60_000,
+    });
   });
 
   it('keeps a complete wall clock from a tokenless terminal segment', () => {
@@ -190,5 +201,30 @@ describe('mergeTurnUsageDetailsForMessage', () => {
       ...generated,
       turnDurationMs: 6_500,
     });
+  });
+});
+
+// 生产入口：buildTurnUsageDetails / normalizeTurnUsageDetails（轮末落库与读回消息用量明细）。
+// 规则依据：轨迹只用于重现速度图，来自引擎事件与旧数据的原始值；格式不对只能丢掉图，
+// 不能让整条用量明细失效，读回落库数据时也不能把图弄丢。unit。
+describe('turn generation trace', () => {
+  const tokens = { inputTokens: 10, outputTokens: 20 };
+  const trace = { durationMs: 9000, requests: 3, speed: [[1000, 42.5]], marks: [[3000, 516, 1], [6000, 0, 1], [9000, -1, 1]], reportedOutputTokens: 1500 };
+
+  it('survives being stored and read back', () => {
+    const built = buildTurnUsageDetails({ ...tokens, trace });
+    expect(built?.trace).toEqual(trace);
+    expect(normalizeTurnUsageDetails(JSON.parse(JSON.stringify(built)))?.trace).toEqual(trace);
+  });
+
+  it.each([
+    ['no finished request', { ...trace, marks: [] }],
+    ['a malformed mark', { ...trace, marks: [[3000, 'x', 1]] }],
+    ['a negative time', { ...trace, speed: [[-1, 10]] }],
+    ['not an object', 'trace'],
+  ])('drops only the chart for %s', (_name, bad) => {
+    const built = buildTurnUsageDetails({ ...tokens, trace: bad });
+    expect(built).toMatchObject({ totalTokens: 30 });
+    expect(built).not.toHaveProperty('trace');
   });
 });

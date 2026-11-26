@@ -640,6 +640,71 @@ describe("CindyAuthClient", () => {
     );
   });
 
+  // 换绑联系方式的 wire 契约:四步都带 account token,请求体只带票据类型对应的字段;
+  // 旧服务端缺 id/changeable 时列表仍可解析(部署先后顺序不让设置页报错)。
+  it("sends contact-change steps with the account token and parses legacy contact lists", async () => {
+    const fetch = vi
+      .fn()
+      .mockResolvedValueOnce(
+        response(200, {
+          social: [],
+          contacts: [
+            { id: "cp-1", type: "phone", value: "+8613****55", verifiedAt: "2026-11-01T00:00:00.000Z", changeable: true },
+            { type: "email", value: "a***@example.com", verifiedAt: "2026-11-01T00:00:00.000Z" },
+          ],
+        }),
+      )
+      .mockResolvedValueOnce(response(202, { status: "sent", channel: "sms", maskedTarget: "+8613****55" }))
+      .mockResolvedValueOnce(
+        response(200, { changeTicket: "ticket-1", type: "phone", expiresAt: "2026-11-01T00:10:00.000Z" }),
+      )
+      .mockResolvedValueOnce(response(202, { status: "sent" }))
+      .mockResolvedValueOnce(
+        response(200, {
+          status: "ok",
+          contact: { id: "cp-1", type: "phone", value: "+8613****66", verifiedAt: "2026-11-01T00:05:00.000Z" },
+        }),
+      );
+    const auth = client(fetch);
+
+    const contacts = await auth.getAccountContacts("account-token");
+    expect(contacts[1]).toEqual({
+      type: "email",
+      value: "a***@example.com",
+      verifiedAt: "2026-11-01T00:00:00.000Z",
+    });
+    await auth.requestCurrentContactChangeCode("account-token", "cp-1");
+    const ticket = await auth.verifyCurrentContactChange("account-token", "cp-1", "123456");
+    const target = { type: "phone" as const, phone: "13700006666" };
+    await auth.requestNewContactChangeCode("account-token", ticket.changeTicket, target);
+    await expect(
+      auth.confirmContactChange("account-token", ticket.changeTicket, target, "654321"),
+    ).resolves.toMatchObject({ id: "cp-1", value: "+8613****66" });
+
+    const calls = fetch.mock.calls as Array<[string, { headers: Record<string, string>; body?: string }]>;
+    expect(calls.map(([url]) => url.replace("https://auth.example.com", ""))).toEqual([
+      "/api/me/identities",
+      "/api/me/contact/change/current/request-code",
+      "/api/me/contact/change/current/verify",
+      "/api/me/contact/change/request-code",
+      "/api/me/contact/change/confirm",
+    ]);
+    for (const [, init] of calls) {
+      expect(init.headers).toMatchObject({ Authorization: "Bearer account-token" });
+    }
+    expect(JSON.parse(calls[1]![1].body!)).toEqual({ contactId: "cp-1", locale: "zh-CN" });
+    expect(JSON.parse(calls[3]![1].body!)).toEqual({
+      changeTicket: "ticket-1",
+      phone: "13700006666",
+      locale: "zh-CN",
+    });
+    expect(JSON.parse(calls[4]![1].body!)).toEqual({
+      changeTicket: "ticket-1",
+      phone: "13700006666",
+      code: "654321",
+    });
+  });
+
   it("uses account tokens only for account control and exchanges a resource token", async () => {
     const fetch = vi
       .fn()
@@ -884,6 +949,13 @@ describe("soleAutoStartSsoMethod", () => {
 });
 
 describe("discoverSsoOrgRealm", () => {
+  // 测试价值
+  // - 生产入口与可观察结果：discoverSsoOrgRealm + CindyAuthClient；显式企业入口可使用唯一有效区域。
+  // - Bug／规则依据：国内发现成功、国际区返回非 JSON 418 时被合成为 ORG_REALM_UNAVAILABLE。
+  // - 现有覆盖缺口：原用例要求另一侧明确未找到，没有覆盖显式入口与默认严格策略的区别。
+  // - 最小失败输入：cn 有可用 SSO 连接，global 返回非 JSON 418，allowPartialSuccess=true。
+  // - tier：unit，进程内注入 fetch；超时使用假时钟，不发网络请求。
+  // - 实测耗时：单文件 0.6 秒。
   const discovery = (region: "cn" | "global") => ({
     region,
     orgName: `${region} Corp`,
@@ -908,6 +980,81 @@ describe("discoverSsoOrgRealm", () => {
       throw new AuthApiError("NETWORK_ERROR", 0, "offline");
     }),
   });
+  const apiClient = (region: "cn" | "global", fetch: AuthFetch) =>
+    new CindyAuthClient({
+      baseUrl: `https://${region}.example.invalid`,
+      region,
+      deviceId: "test-device",
+      clientType: "desktop",
+      fetch,
+    });
+
+  it.each(["cn", "global"] as const)(
+    "uses the valid %s discovery despite a non-JSON HTTP 418 only when opted in",
+    async (region) => {
+      const makeClient = (target: "cn" | "global") => apiClient(target, async () =>
+        target === region
+          ? response(200, discovery(target))
+          : new Response("<html>blocked</html>", { status: 418 }),
+      );
+      const clients = { cn: makeClient("cn"), global: makeClient("global") };
+      await expect(discoverSsoOrgRealm("corp", clients)).rejects.toMatchObject({
+        code: "ORG_REALM_UNAVAILABLE",
+      });
+      await expect(discoverSsoOrgRealm("corp", clients, {
+        allowPartialSuccess: true,
+      })).resolves.toEqual({
+        region,
+        discovery: discovery(region),
+        unconfirmedRegion: region === "cn" ? "global" : "cn",
+      });
+    },
+  );
+
+  it.each(["cn", "global"] as const)(
+    "waits for the peer timeout before selecting the valid %s discovery",
+    async (region) => {
+      vi.useFakeTimers();
+      try {
+        const makeClient = (target: "cn" | "global") => apiClient(target, async (_url, init) => {
+          if (target === region) return response(200, discovery(target));
+          return new Promise<AuthFetchResponse>((_resolve, reject) => {
+            init?.signal?.addEventListener("abort", () => reject(
+              new DOMException("timed out", "AbortError"),
+            ), { once: true });
+          });
+        });
+        const settled = vi.fn();
+        const result = discoverSsoOrgRealm("corp", {
+          cn: makeClient("cn"), global: makeClient("global"),
+        }, { allowPartialSuccess: true });
+        const failed = vi.fn();
+        const outcome = result.then(settled, failed);
+        await vi.advanceTimersByTimeAsync(14_999);
+        expect(settled).not.toHaveBeenCalled();
+        await vi.advanceTimersByTimeAsync(1);
+        await outcome;
+        expect(failed).not.toHaveBeenCalled();
+        expect(settled).toHaveBeenCalledExactlyOnceWith({
+          region,
+          discovery: discovery(region),
+          unconfirmedRegion: region === "cn" ? "global" : "cn",
+        });
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it.each([
+    ["empty connections", { ...discovery("cn"), connections: [] }, "ORG_SSO_NOT_FOUND"],
+    ["wrong region", discovery("global"), "ORG_REALM_UNAVAILABLE"],
+    ["invalid connection", { ...discovery("cn"), connections: [{ connectionId: "" }] }, "ORG_REALM_UNAVAILABLE"],
+  ] as const)("does not treat %s as a valid hit", async (_label, data, code) => {
+    await expect(discoverSsoOrgRealm("corp", {
+      cn: apiClient("cn", async () => response(200, data)), global: notFound(),
+    }, { allowPartialSuccess: true })).rejects.toMatchObject({ code });
+  });
 
   it.each([
     ["cn", found("cn"), notFound()],
@@ -917,22 +1064,22 @@ describe("discoverSsoOrgRealm", () => {
     async (region, cn, global) => {
       await expect(
         discoverSsoOrgRealm("corp", { cn, global }),
-      ).resolves.toMatchObject({
+      ).resolves.toEqual({
         region,
-        discovery: { region },
+        discovery: discovery(region),
       });
     },
   );
 
-  it("rejects an identifier present in both regions as ambiguous", async () => {
+  it.each([false, true])("rejects dual hits as ambiguous (allowPartialSuccess=%s)", async (allowPartialSuccess) => {
     await expect(
-      discoverSsoOrgRealm("corp", { cn: found("cn"), global: found("global") }),
+      discoverSsoOrgRealm("corp", { cn: found("cn"), global: found("global") }, { allowPartialSuccess }),
     ).rejects.toMatchObject({ code: "ORG_REALM_AMBIGUOUS" });
   });
 
-  it("preserves not-found only when both regions explicitly report it", async () => {
+  it.each([false, true])("preserves dual not-found (allowPartialSuccess=%s)", async (allowPartialSuccess) => {
     await expect(
-      discoverSsoOrgRealm("corp", { cn: notFound(), global: notFound() }),
+      discoverSsoOrgRealm("corp", { cn: notFound(), global: notFound() }, { allowPartialSuccess }),
     ).rejects.toMatchObject({ code: "ORG_SSO_NOT_FOUND" });
   });
 
@@ -940,6 +1087,29 @@ describe("discoverSsoOrgRealm", () => {
     await expect(
       discoverSsoOrgRealm("corp", { cn: found("cn"), global: unavailable() }),
     ).rejects.toMatchObject({ code: "ORG_REALM_UNAVAILABLE" });
+  });
+
+  it.each([
+    [found("cn"), unavailable(), "cn"],
+    [unavailable(), found("global"), "global"],
+  ] as const)("accepts a single valid hit with an unavailable peer when opted in", async (cn, global, region) => {
+    await expect(discoverSsoOrgRealm("corp", { cn, global }, {
+      allowPartialSuccess: true,
+    })).resolves.toEqual({
+      region,
+      discovery: discovery(region),
+      unconfirmedRegion: region === "cn" ? "global" : "cn",
+    });
+  });
+
+  it.each([
+    [notFound(), unavailable()],
+    [unavailable(), notFound()],
+    [unavailable(), unavailable()],
+  ])("preserves unavailable when no region has a valid hit", async (cn, global) => {
+    await expect(discoverSsoOrgRealm("corp", { cn, global }, {
+      allowPartialSuccess: true,
+    })).rejects.toMatchObject({ code: "ORG_REALM_UNAVAILABLE" });
   });
 });
 
@@ -989,9 +1159,11 @@ describe("auth session realm record", () => {
 });
 
 describe("reduceAuthFlow", () => {
-  it("keeps a cross-region discovery pending until the user confirms", () => {
+  // 测试价值：两端现有区域确认状态投影；补齐国内版→国际企业的反向用例及取消回原入口。
+  // 依据：显式企业标识跨区单命中仍须确认；原覆盖仅国际版→国内企业。tier：unit，纯状态投影。
+  it.each(["cn", "global"] as const)("keeps a %s enterprise pending until confirmation, or returns to the build region on cancellation", (targetRegion) => {
     const providers = {
-      region: "global" as const,
+      region: targetRegion === "cn" ? ("global" as const) : ("cn" as const),
       attribution: "email" as const,
       email: true,
       phone: false,
@@ -1000,22 +1172,22 @@ describe("reduceAuthFlow", () => {
     const methods = [
       {
         type: "sso" as const,
-        connectionId: "cn-sso",
+        connectionId: `${targetRegion}-sso`,
         protocol: "oidc" as const,
-        orgName: "CN Corp",
+        orgName: `${targetRegion} Corp`,
         connectionName: "Enterprise SSO",
         ssoRequired: false,
       },
     ];
     const confirmation = reduceAuthFlow(null, {
       type: "realm-switch-required",
-      targetRegion: "cn",
+      targetRegion,
       providers,
       methods,
     });
     expect(confirmation).toEqual({
       step: "realm-confirmation",
-      targetRegion: "cn",
+      targetRegion,
       providers,
       methods,
     });
@@ -1034,6 +1206,10 @@ describe("reduceAuthFlow", () => {
       email: "",
       methods,
     });
+    expect(reduceAuthFlow(confirmation, {
+      type: "providers-loaded",
+      providers: confirmation.providers,
+    })).toEqual({ step: "identifier", providers });
   });
 
   it("projects secret-bearing outcomes into public states", () => {
@@ -1079,4 +1255,40 @@ describe("reduceAuthFlow", () => {
     });
     expect(JSON.stringify(state)).not.toContain("secret-sso-ticket");
   });
+});
+
+// #8694: the Passport recovery chain must retain 503 cooldowns for both JSON
+// and non-JSON bodies. Existing 429 tests do not cover the service-busy branch.
+describe("Passport recovery Retry-After", () => {
+  it.each([false, true])(
+    "preserves 503 cooldown (invalid JSON=%s)",
+    async (invalidJson) => {
+      const now = Date.now();
+      const c = client(async () => ({
+        ok: false,
+        status: 503,
+        headers: {
+          get: (name: string) =>
+            name.toLowerCase() === "retry-after" ? "600" : null,
+        },
+        json: async () => {
+          if (invalidJson) throw new Error("not JSON");
+          return { error: { code: "BUSY" } };
+        },
+      }));
+      for (const request of [
+        () => c.refreshAccount("test-passport"),
+        () => c.exchangeAccountMembership("test-access", "original"),
+      ]) {
+        const error = await request().catch((e: unknown) => e);
+        expect(error).toMatchObject({
+          statusCode: 503,
+          retryAt: expect.any(Number),
+        });
+        expect((error as AuthApiError).retryAt).toBeGreaterThanOrEqual(
+          now + 600_000,
+        );
+      }
+    },
+  );
 });

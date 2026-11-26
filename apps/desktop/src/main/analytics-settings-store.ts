@@ -1,3 +1,4 @@
+import { validateAdditionalSettingsOverrides } from '../shared/settingsEditableCatalog.js';
 /**
  * analytics-settings-store —— 使用统计(TapDB)的同意状态与开关。
  *
@@ -26,7 +27,18 @@ import {
   type OverrideSettingsState,
 } from './maker-host/override-settings-file.js';
 
+import { inspectSettingsFile } from './maker-host/settings-inspection.js';
+
 const log = desktopMakerLogger.child('analytics-settings-store');
+
+/** 不初始化统计、不求值同意门禁，也不修改启动探针的历史证据。 */
+export function inspectAnalyticsSettings() {
+  return inspectSettingsFile({ filePath: settingsFilePath, defaults: DEFAULTS, normalize,
+    validate: (raw) => {
+      if (classifyAnalyticsContent(JSON.stringify(raw)) !== 'valid') throw new Error('Invalid setting');
+    },
+  });
+}
 
 export interface AnalyticsSettings {
   /** 用户是否已明示同意《隐私政策》。false = 一律不得初始化 TapDB。 */
@@ -78,6 +90,7 @@ function normalize(raw: unknown): AnalyticsSettings {
 }
 
 const store = createOverrideSettingsFile<AnalyticsSettings>({
+  validateOverrides: raw => validateAdditionalSettingsOverrides('privacy', raw),
   filePath: settingsFilePath,
   defaults: DEFAULTS,
   normalize,
@@ -122,21 +135,38 @@ const BOOLEAN_FIELDS = [
  * 迁移不受影响：`migrateExistingLoginAsConsented` 只在 `=== 'none'` 时迁移，而 `{}` 无论算
  * valid 还是 invalid 都 `!== 'none'`，结论一致（都不迁移）。
  */
-function classifyAnalyticsContent(fileContent: string | null): RecordProbe {
-  if (fileContent === null) return 'none';
+function parseAnalyticsRecord(fileContent: string): Record<string, unknown> | null {
   let parsed: unknown;
   try {
     parsed = JSON.parse(fileContent);
   } catch {
-    return 'invalid';
+    return null;
   }
-  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return 'invalid';
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
   const obj = parsed as Record<string, unknown>;
-  if (Object.keys(obj).length === 0) return 'invalid';
+  if (Object.keys(obj).length === 0) return null;
   for (const field of BOOLEAN_FIELDS) {
-    if (field in obj && typeof obj[field] !== 'boolean') return 'invalid';
+    if (field in obj && typeof obj[field] !== 'boolean') return null;
   }
-  return 'valid';
+  return obj;
+}
+
+function classifyAnalyticsContent(fileContent: string | null): RecordProbe {
+  if (fileContent === null) return 'none';
+  return parseAnalyticsRecord(fileContent) ? 'valid' : 'invalid';
+}
+
+/** Read the current consent without blocking main or mutating the consent store. */
+export async function readAnalyticsConsentFromDisk(): Promise<boolean | null> {
+  try {
+    const content = await fs.promises.readFile(settingsFilePath(), 'utf-8');
+    if (recordProbe === 'invalid') return null;
+    const record = parseAnalyticsRecord(content);
+    return record ? record.privacyConsentAccepted === true : null;
+  } catch (error) {
+    if (recordProbe === 'invalid') return null;
+    return (error as NodeJS.ErrnoException).code === 'ENOENT' ? false : null;
+  }
 }
 
 /** 现读盘一次并分类（文件不存在 ⇒ none；读盘本身失败 ⇒ invalid，绝不当「没有记录」）。 */
@@ -391,3 +421,6 @@ export const __testing = {
   },
   probe: () => recordProbe,
 };
+
+/** Internal Host settings adapter; no new IPC or persistence location. */
+export function getAnalyticsSettingsStore() { return store; }

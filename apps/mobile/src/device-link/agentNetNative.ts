@@ -14,6 +14,7 @@ export interface NativeAgentNetOptions {
   deviceId: string;
   legacySigning?: boolean;
   udp?: boolean;
+  enhancedTransport?: boolean;
 }
 /** Trusted app adapter. Private seeds never enter AsyncStorage, logs or an RPC. */
 export class MobileAgentNetEngine implements NativeEnginePort {
@@ -61,6 +62,24 @@ export class MobileAgentNetEngine implements NativeEnginePort {
     if (!response.ok) throw new Error(response.code || 'AGENT_NET_NATIVE_COMMAND_FAILED');
     return response.value as T;
   }
+  /** Only binaries that have it (see `AgentNetNativeModule.wait`); the transport also checks the engine's features. */
+  wait = agentNetNative?.wait ? async (maxMs: number): Promise<boolean> => {
+    if (this.destroyed || !agentNetNative?.wait) throw new Error('AGENT_NET_ENGINE_CLOSED');
+    return agentNetNative.wait(this.handle, maxMs);
+  } : undefined;
+  /** Only binaries that have it (see `AgentNetNativeModule.io`); the transport also checks the engine's features. */
+  io = agentNetNative?.io ? async (input: Uint8Array, waitMs = 0, kick = false): Promise<Uint8Array> => {
+    if (this.destroyed || !agentNetNative?.io) throw new Error('AGENT_NET_ENGINE_CLOSED');
+    this.assertCurrent();
+    const output: Uint8Array | ArrayBuffer = await agentNetNative.io(this.handle, input, waitMs, kick);
+    try { this.assertCurrent(); }
+    catch (error) { void this.destroy(); throw error; }
+    if (this.destroyed) throw new Error('AGENT_NET_ENGINE_CLOSED');
+    return output instanceof Uint8Array ? output : new Uint8Array(output);
+  } : undefined;
+  kick = agentNetNative?.kick ? (): void => {
+    if (!this.destroyed) agentNetNative?.kick?.(this.handle);
+  } : undefined;
   sign(text: string): Promise<string> { return this.command({ op: 'sign', text }); }
   random(): Promise<string> { return this.command({ op: 'random' }); }
   async destroy(): Promise<void> {

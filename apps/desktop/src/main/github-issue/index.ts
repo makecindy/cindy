@@ -6,8 +6,6 @@
  * (deferred-lookup:holder 未就绪时返回 HOST_NOT_READY,模式同 OrcaCollabService)。
  */
 
-import os from 'node:os';
-
 import { app } from 'electron';
 
 import { CURRENT_CINDY_REGION } from '../../shared/brandRegion.js';
@@ -26,6 +24,7 @@ import {
 } from './githubIssueSubmitService';
 import { invalidateMyIssuesCache } from './myIssuesRuntime.js';
 import { formatRelatedIssueLogs } from './issueDiagnostics';
+import { getIssueOsInfo } from './issueOsInfo';
 import { collectLogsFromDisk } from '../log-upload/collectRuntime';
 import { recordSubmittedIssue } from './submittedIssueLedger.js';
 import {
@@ -69,7 +68,8 @@ export async function submitGithubIssueForSession(
       message: 'Cindy 主进程 issue 提交服务尚未就绪,请告知用户稍等几秒后重试。',
     };
   }
-  const githubUserSubmitterDeps: GithubUserIssueSubmitterDeps = buildGithubUserSubmitterDeps();
+  // Keep the installation/revision that supplies the card identity until this submission ends.
+  const githubUserSubmitterDeps: GithubUserIssueSubmitterDeps = buildGithubUserSubmitterDeps({ pinInstallation: true });
   // 在**发起时**锁定账号作用域:提交要等用户确认 + 一次网络往返,期间完全可能切号。
   // 记账时拿它核对,绝不把这条提交写进另一个账号的账本(见 recordSubmittedIssue)。
   const submitScope = activeOwnerScopeKey();
@@ -81,7 +81,7 @@ export async function submitGithubIssueForSession(
         resolveGithubIssueSubmissionChoices(githubUserSubmitterDeps, workdir),
       postIssue: (submissionIdentity, bodyFactory) => {
         if (submissionIdentity.kind === 'github-user') {
-          return postGithubIssueAsUser(githubUserSubmitterDeps, submissionIdentity, bodyFactory());
+          return postGithubIssueAsUser(githubUserSubmitterDeps, submissionIdentity, bodyFactory(), req.workingDir);
         }
         return serverApiFetch<{ githubIssue: { number: number; url: string } }>(
           '/api/github/issues',
@@ -96,11 +96,7 @@ export async function submitGithubIssueForSession(
         );
       },
       getAppVersion: () => app.getVersion(),
-      getOsInfo: () => ({
-        platform: process.platform,
-        arch: process.arch,
-        osVersion: os.release(),
-      }),
+      getOsInfo: getIssueOsInfo,
       getTurnModelId,
       getRegion: () => CURRENT_CINDY_REGION,
       getFallbackLocale: () => app.getLocale(),

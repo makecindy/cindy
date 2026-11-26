@@ -3,11 +3,21 @@ import Foundation
 // Mirrors `UsageWidgetState` / `MobileUsageWidgetSnapshot` in the app (TypeScript). The app
 // writes it into the shared App Group; this extension only reads and renders.
 
+/// Recognize the existing provider ID without changing the saved account key.
+func widgetDisplayLogo(id: String, name: String, logo: String?, detailTitle: String? = nil) -> String? {
+  let options: String.CompareOptions = [.regularExpression, .caseInsensitive]
+  let knownId = id.range(of: #"(?:^|:)acp-plugin:(?:_root__|_ns__[a-z0-9-]+__)?(?:agy|agy-acp|agy-plugin|cindy-antigravity-acp|cindy-antigravity-plugin|antigravity):(?:agy|antigravity)(?:~[^:]+)?$"#, options: options) != nil
+  let legacy = [name, detailTitle].contains { $0?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "antigravity" } &&
+    id.range(of: #"(?:^|:)acp-plugin:[^:]+:[^:~]+(?:~[^:]+)?$"#, options: options) != nil
+  return knownId || legacy ? "antigravity" : logo
+}
+
 struct WidgetSource: Decodable, Identifiable {
   let id: String
   let kind: String
   let name: String
   let logo: String?
+  var displayLogo: String? { widgetDisplayLogo(id: id, name: name, logo: logo, detailTitle: detail?.title) }
   let monogram: String
   let value: String?
   let unit: String?
@@ -177,8 +187,7 @@ enum WidgetState: Decodable {
   private static func matching(_ keys: [String], in sources: [WidgetSource]) -> [WidgetSource] {
     var found: [WidgetSource] = []
     for key in keys.map(AccountKey.init(encoded:)) {
-      let source = sources.first(where: { $0.id == key.id && $0.logo == key.logo && $0.name == key.name })
-        ?? sources.first(where: { $0.logo == key.logo && $0.name == key.name })
+      let source = key.match(in: sources)
       if let source, !found.contains(where: { $0.id == source.id }) { found.append(source) }
     }
     return found
@@ -208,6 +217,11 @@ struct AccountKey {
   }
 
   var encoded: String { [id, logo ?? "", name].joined(separator: String(Self.separator)) }
+
+  func match(in sources: [WidgetSource]) -> WidgetSource? {
+    sources.first(where: { $0.id == id && $0.logo == logo && $0.name == name })
+      ?? sources.first(where: { $0.logo == logo && $0.name == name })
+  }
 }
 
 /// `UsageWidgetStore` in the app: every computer's latest state and the automatic choice.
@@ -225,11 +239,18 @@ struct WidgetStore: Decodable {
     Bundle.main.object(forInfoDictionaryKey: "CindyAppGroupId") as? String
   }
 
+  #if os(iOS)
   /// Same file name as `CindyUsageWidgetsModule` in the app.
-  static func load() -> WidgetStore? {
-    guard let group, let container = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: group),
-          let data = try? Data(contentsOf: container.appendingPathComponent("usage-widget-snapshot.json"))
+  static var fileURL: URL? {
+    guard let group, let container = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: group)
     else { return nil }
+    return container.appendingPathComponent("usage-widget-snapshot.json")
+  }
+  #endif
+
+  /// On the Mac, `fileURL` is where the desktop app writes it (`MacWidgetSupport.swift`).
+  static func load() -> WidgetStore? {
+    guard let url = fileURL, let data = try? Data(contentsOf: url) else { return nil }
     return try? JSONDecoder().decode(WidgetStore.self, from: data)
   }
 
@@ -627,7 +648,7 @@ enum WidgetText {
     ],
   ]
 
-  private static func language(_ locale: Locale) -> String {
+  static func language(_ locale: Locale) -> String {
     let id = locale.identifier
     if id.hasPrefix("zh") { return id.contains("Hant") || id.contains("TW") || id.contains("HK") ? "zh-Hant" : "zh-Hans" }
     if id.hasPrefix("ja") { return "ja" }
@@ -640,7 +661,11 @@ enum WidgetText {
   }
 
   static func text(_ key: String, locale: Locale = Locale(identifier: Locale.preferredLanguages.first ?? "en")) -> String {
-    table[language(locale)]?[key] ?? table["en"]?[key] ?? key
+    #if os(macOS)
+    // The Mac widgets read this computer, not one the phone connects to (`MacWidgetText`).
+    if let mac = MacWidgetText.text(key, language: language(locale)) { return mac }
+    #endif
+    return table[language(locale)]?[key] ?? table["en"]?[key] ?? key
   }
 
   /// Strings normally sent by the computer, for snapshots that lack them and for placeholders.

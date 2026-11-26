@@ -24,7 +24,9 @@ vi.mock('../../ownerContext.js', () => ({
   hasCommittedOwner: () => true,
 }));
 
-const { __testing, migrateLegacyNamespacedModelDisableOverrides, setModelsDisabled } =
+const { __testing, migrateLegacyNamespacedModelDisableOverrides, setModelsDisabled,
+  copyProviderDisableOverrides, clearProviderDisableOverrides, setProviderDisabled,
+  setProviderHidden, stageProviderDisableOverridesClear, readModelDisableOverrides } =
   await import('../model-disable-store.js');
 
 function readPrefsFile(): { disabledModels: Record<string, unknown> } {
@@ -44,20 +46,21 @@ describe('normalize(坏形态清洗)', () => {
           '': true,
         },
         disabledProviders: { anthropic: true, openai: 0 },
+        hiddenProviders: { xd: true, anthropic: 'yes' },
       }),
     ).toEqual({
       disabledModels: { 'xd:claude-opus-5': true },
       disabledProviders: { anthropic: true },
+      hiddenProviders: { xd: true },
     });
   });
 
   it('整体不是对象 / 段缺失 / 段不是对象 → 空表(全启用)', () => {
-    expect(__testing.normalize(null)).toEqual({ disabledModels: {}, disabledProviders: {} });
-    expect(__testing.normalize({})).toEqual({ disabledModels: {}, disabledProviders: {} });
-    expect(__testing.normalize({ disabledModels: 42, disabledProviders: 'x' })).toEqual({
-      disabledModels: {},
-      disabledProviders: {},
-    });
+    const empty = { disabledModels: {}, disabledProviders: {}, hiddenProviders: {} };
+    expect(__testing.normalize(null)).toEqual(empty);
+    // 旧版文件没有 hiddenProviders 段:升级后等同「没有隐藏任何供应商」。
+    expect(__testing.normalize({})).toEqual(empty);
+    expect(__testing.normalize({ disabledModels: 42, disabledProviders: 'x', hiddenProviders: [] })).toEqual(empty);
   });
 
   it('读入同样截断到单 section 上限:手改/灌大的文件不被完整持有与重写放大', () => {
@@ -87,6 +90,48 @@ describe('旧媒体 modelId 停用项迁移', () => {
     ]);
     expect(readPrefsFile().disabledModels['ambiguous-xd:gpt-image-2']).toBe(true);
     expect(readPrefsFile().disabledModels['ambiguous-xd:openai/gpt-image-2']).toBeUndefined();
+  });
+});
+
+// PR #10405, unit: taking an account out must keep the source model switches. This checks the
+// production store's actual persisted values, which account-selection mocks cannot cover.
+it('copies model access overrides before publishing a separate subscription provider', () => {
+  const target = 'openai-sub-12345678';
+  setModelsDisabled('openai', ['gpt-6', 'openai/gpt-image-2'], true);
+  setProviderDisabled('openai', true);
+  copyProviderDisableOverrides('openai', target, {
+    source: 'openai/gpt-image-2', target: `${target}/gpt-image-2`,
+  });
+  expect(readPrefsFile()).toMatchObject({ disabledModels: {
+    'openai:gpt-6': true, 'openai:openai/gpt-image-2': true,
+    [`${target}:gpt-6`]: true, [`${target}:${target}/gpt-image-2`]: true,
+  }, disabledProviders: { [target]: true } });
+  expect(readPrefsFile().disabledModels[`${target}:openai/gpt-image-2`]).toBeUndefined();
+  clearProviderDisableOverrides('openai');
+  clearProviderDisableOverrides(target);
+});
+
+// 依据:隐藏只收起选择器里的陈列,停用才是准入;两者写在同一文件里,最容易出的错是
+// 一个动作顺手改掉另一个。这里经真实落盘验证三条边界(tier: unit,真文件读写)。
+describe('供应商级隐藏与停用互不牵连', () => {
+  it('隐藏不写停用;「全部启用」清停用但保留隐藏;删除供应商才一并清掉且可恢复', () => {
+    setProviderHidden('xd', true);
+    expect(readModelDisableOverrides()).toMatchObject({ hiddenProviders: { xd: true }, disabledProviders: {} });
+
+    setProviderDisabled('xd', true);
+    setModelsDisabled('xd', ['gpt-6'], true);
+    clearProviderDisableOverrides('xd'); // 设置页「全部启用」走的就是这条
+    expect(readModelDisableOverrides()).toMatchObject({
+      hiddenProviders: { xd: true }, disabledProviders: {}, disabledModels: {},
+    });
+
+    const restore = stageProviderDisableOverridesClear('xd'); // 删除供应商事务
+    expect(readModelDisableOverrides().hiddenProviders).toEqual({});
+    expect(restore()).toBe(true); // 删除失败回滚:隐藏原样回来
+    expect(readModelDisableOverrides().hiddenProviders).toEqual({ xd: true });
+
+    setProviderHidden('xd', false);
+    expect(readPrefsFile()).not.toHaveProperty('hiddenProviders.xd');
   });
 });
 

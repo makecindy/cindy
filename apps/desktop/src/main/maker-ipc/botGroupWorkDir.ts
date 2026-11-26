@@ -2,14 +2,13 @@
  * Where 分工 steps run and which files a step produced
  * (docs/product-rules/bot-group-chat.md §7.4–7.5).
  *
- * - No 项目文件夹: the group's own folder under the owner's userData, created on the
- *   first 开始 and moved to the system trash when the group is deleted.
+ * - No selected project: a regular dialogue workspace for this plan.
  * - A git project: one worktree per plan, from the same preparation as other Cindy
  *   worktree tasks (`.cindy-worktrees/<name>`, branch `cindy/<name>`).
  * - Any other folder: used directly.
  */
 
-import { lstat, mkdir, readdir, stat } from 'node:fs/promises';
+import { lstat, readdir, stat } from 'node:fs/promises';
 import path from 'node:path';
 
 import { BOT_GROUP_STEP_FILES_MAX } from '../../shared/botGroupChat.js';
@@ -20,6 +19,7 @@ export type PreparedWorkDir =
 
 export interface BotGroupWorkDirDeps {
   ownerRoot: () => string;
+  defaultFolder?: (groupId: string) => Promise<string>;
   /** Whether an existing directory is inside a git repository. */
   detectRepo: (dir: string) => Promise<{ gitInstalled: boolean; isGitRepo: boolean }>;
   /** Creates the plan's worktree and returns the Session id it is registered for. */
@@ -111,13 +111,9 @@ export function createBotGroupWorkDir(deps: BotGroupWorkDirDeps) {
 
   const prepare = async (input: { groupId: string; projectDir: string | null }): Promise<PreparedWorkDir> => {
     if (!input.projectDir) {
-      const folder = botGroupFolderPath(deps.ownerRoot(), input.groupId);
-      try {
-        await mkdir(folder, { recursive: true });
-      } catch (error) {
-        return { ok: false, message: error instanceof Error ? error.message : String(error) };
-      }
-      return { ok: true, workDir: folder, branch: null, ownerSessionId: null };
+      const workDir = await deps.defaultFolder?.(input.groupId);
+      if (!workDir || !await isDirectory(workDir)) return { ok: false, message: '未能分配对话工作目录' };
+      return { ok: true, workDir, branch: null, ownerSessionId: null };
     }
     if (!(await isDirectory(input.projectDir))) return { ok: false, message: '项目文件夹不存在' };
     // A git project must never be edited in place; when its state is unknown, fail closed.

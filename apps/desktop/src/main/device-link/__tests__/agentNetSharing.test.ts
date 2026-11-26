@@ -6,14 +6,17 @@
  * Unit: memory filesystem/OS-vault/auth/network boundaries; no user data/I/O.
  */
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import { randomBytes } from 'node:crypto';
-import { generateIdentity, createPrivateNetwork, verifyRequestProof } from '@cindy/agent-net-relay';
+import { randomBytes, randomUUID } from 'node:crypto';
+import { createDelegation, generateIdentity, createPrivateNetwork, issueCertificate, signature, verifyRequestProof } from '@cindy/agent-net-relay';
+import { delegationPayload, type Delegation } from '@cindy/agent-net-protocol';
 import { AgentNetClient } from '@cindy/agent-net-relay/client';
 import { buildAgentNetSharingInvitation, parseAgentNetSharingInvitation } from '@cindy/agent-net';
-import { RoutedDeviceLinkClient, providerShareHostPeer, sharedTaskHostPeer } from '@cindy/device-link';
+import { RoutedDeviceLinkClient, providerShareGuestPeer, providerShareHostPeer, sharedTaskGuestPeer, sharedTaskHostPeer } from '@cindy/device-link';
 const state = vi.hoisted(() => ({ key: 'owner-a', pending: false, api: null as any,
-  relay: null as any, config: null as any,
+  relay: null as any, config: null as any, allowLegacy: false, privateSharing: false,
   files: new Map<string, string>(), writes: [] as string[], http: vi.fn(), card: vi.fn(), agentNetEnabled: true, onlyEncrypted: false,
+  sessionRoute: null as null | ((peer: string) => unknown),
+  scopedTarget: vi.fn(),
 }));
 vi.mock('node:fs', () => ({ default: {
   existsSync: (file: string) => state.files.has(file), statSync: (file: string) => ({ size: state.files.get(file)?.length ?? 0 }),
@@ -37,28 +40,146 @@ vi.mock('../../localDb/client/current.js', () => ({ getCurrentDbClientSnapshot: 
 vi.mock('../../localDb/sharedTasks.js', () => ({ createSharedTaskJournal: () => ({ latest: async () => [] }) }));
 vi.mock('../selfHostedRelayConfig.js', () => ({ secureStorageAvailable: () => true,
   readRelayConfig: () => state.config,
-  relayDataPath: () => '/unit-only-vault/' + state.key + '/sharing.enc' }));
+  relayDataPath: (_area: string, file: string) => '/unit-only-vault/' + state.key + '/' + (file === 'sharing-v3.enc' ? file : 'sharing.enc') }));
 vi.mock('../selfHostedRelayRouting.js', () => ({ activeSelfHostedRelay: () => state.relay }));
 vi.mock('../settings-store.desktop.js', () => ({ readDeviceLinkSettings: () => ({ agentNetEnabled: state.agentNetEnabled }) }));
 // Production accessors refuse a pending account boundary; only the outgoing
 // variants used by the handover close still resolve the old owner's client.
-vi.mock('../agentNetRuntime.js', () => ({ currentAgentNetClient: () => state.pending ? null : state.api, isAgentNetActive: () => true,
+vi.mock('../agentNetRuntime.js', () => ({ supportsPrivateAgentNetSharing: () => state.privateSharing, currentAgentNetClient: () => state.pending ? null : state.api, isAgentNetActive: () => true,
+  currentAgentNetScopedTarget: state.scopedTarget,
   outgoingAgentNetClient: () => state.api, outgoingAgentNetClientForRelay: () => { throw new Error('AGENT_NET_IDENTITY_MISMATCH'); },
-  agentNetAllowsLegacy: () => false, agentNetOnlyEncryptedByUser: () => state.onlyEncrypted, agentNetSelectionKey: () => 'selected-private', agentNetClientForRelay: () => null,
-  openScopedAgentNetAppSocket: vi.fn() }));
+  agentNetAllowsLegacy: () => state.allowLegacy, agentNetOnlyEncryptedByUser: () => state.onlyEncrypted, agentNetSelectionKey: () => 'selected-private', agentNetClientForRelay: () => null,
+  openScopedAgentNetAppSocket: vi.fn(), setAgentNetScopedSessionRoute: (route: (peer: string) => unknown) => { state.sessionRoute = route; } }));
 import { selectedAgentNetSharingRoute, rememberAgentNetSharingService, requestAgentNetSharing,
   joinAgentNetSharedTask, agentNetSharingRoute, stopAgentNetSharing, captureAgentNetSharingBoundaryClose, bindAgentNetSharing,
-  rememberAgentNetSharingHost } from '../agentNetSharing.js';
-import { resolveAgentNetProviderShareLink, providerShareApi, providerShareLinkFor, providerShareHiddenByEncryptedOnly } from '../providerShareApi.js';
+  listAgentNetSharedTasks, rememberAgentNetSharingHost, retireAgentNetSharingGuest } from '../agentNetSharing.js';
+import { checkProviderShareDelegation, resolveAgentNetProviderShareLink, providerShareApi, providerShareLinkFor, providerShareHiddenByEncryptedOnly } from '../providerShareApi.js';
 beforeEach(() => {
   state.key = 'owner-a'; state.pending = false; state.files.clear(); state.writes = [];
-  state.relay = null; state.config = null; state.agentNetEnabled = true; state.onlyEncrypted = false;
+  state.relay = null; state.config = null; state.agentNetEnabled = true; state.onlyEncrypted = false; state.allowLegacy = false;
+  state.privateSharing = false;
   state.http.mockReset(); state.card.mockReset();
+  state.scopedTarget.mockReset();
   const identity = generateIdentity('self-device'), { bootstrap } = createPrivateNetwork('Unit fixture', identity);
   state.api = new AgentNetClient('https://private.example.test', identity, bootstrap.ownerCertificate, bootstrap.rootPublicKey);
   state.card.mockResolvedValue({ card: 'unit-limited-identity-card', expiresAt: new Date(Date.now() + 300_000).toISOString() });
 });
 afterEach(() => stopAgentNetSharing());
+
+// Unit: the production authorization entry consumes one owner signature
+// from the authenticated socket during a business API outage.
+it('confirms the signed executor scope without an HTTP authorization request', async () => {
+  const owner = generateIdentity('other-owner'), guest = generateIdentity('guest');
+  const { root, bootstrap } = createPrivateNetwork('Signature fixture', owner);
+  const executor = state.api.identity;
+  const certificate = issueCertificate(root, { networkId: bootstrap.networkId, subject: bootstrap.ownerCertificate.subject,
+    identity: executor, role: 'member' });
+  state.api = new AgentNetClient(state.api.base, executor, certificate, bootstrap.rootPublicKey);
+  const generation = randomUUID(), expiresAt = Date.now() + 25_000;
+  const value = createDelegation(owner, bootstrap.ownerCertificate, { kind: 'provider-share', resourceId: 'share',
+    guest, scope: { memberId: 'member', guestSubject: 'guest-account', memberVersion: 1 } });
+  const plain = { ...value, executors: [{ generation, expiresAt, certificate }] };
+  const signed: Delegation = { ...plain, signature: signature(owner.signingPrivateKey, delegationPayload(plain)) };
+  state.scopedTarget.mockReturnValue({ delegation: signed });
+  state.http.mockRejectedValue(new TypeError('offline'));
+  const input = { shareId: 'share', memberId: 'member', guestDeviceId: guest.deviceId, executorDeviceId: executor.deviceId };
+  await expect(checkProviderShareDelegation(input, generation)).resolves.toEqual({
+    active: true, ownerDeviceId: owner.deviceId, expiresAt, generation, proofId: signed.id,
+  });
+  expect(state.scopedTarget).toHaveBeenCalledWith(providerShareGuestPeer('share', 'member', guest.deviceId));
+  expect(state.card).not.toHaveBeenCalled();
+  expect(state.http).not.toHaveBeenCalled();
+});
+
+// #11276: a second paired desktop must see the relay owner's task as its own.
+// Unit, real directory routing with one same-subject row from the other host.
+it('keeps another paired desktop’s private task in the owner’s list', async () => {
+  const route = { ...selectedAgentNetSharingRoute('shared-task')!, v: 3 as const };
+  rememberAgentNetSharingService(route);
+  state.http.mockImplementation(async (url: string, options: RequestInit) => {
+    if (!url.endsWith('/private-sharing/shared-tasks')) return Response.json({ sharedTasks: [] });
+    expect(new Headers(options.headers).get('x-agent-net-authorization')).toMatch(/^AgentNet /);
+    return Response.json({ sharedTasks: [{
+      sharedTaskId: 'other-task', hostDeviceId: 'other-device', ownerAccountId: state.api.certificate.subject,
+    }] });
+  });
+  await expect(listAgentNetSharedTasks(vi.fn())).resolves.toMatchObject({
+    sharedTasks: [{ sharedTaskId: 'other-task', hostDeviceId: 'other-device', ownerAccountId: 'account-owner-a' }],
+  });
+  expect(agentNetSharingRoute('shared-task', 'other-task')).toBeNull();
+});
+
+// #11276: the real secure-vault writer must leave the rollback-readable v2 file intact.
+// Unit, one saved old route plus one new route, with only the OS vault replaced.
+it('stores private routes outside the old sharing vault', () => {
+  const route = selectedAgentNetSharingRoute('shared-task')!;
+  rememberAgentNetSharingHost('shared-task', 'old-task', route);
+  const legacyFile = '/unit-only-vault/owner-a/sharing.enc';
+  const before = state.files.get(legacyFile);
+  rememberAgentNetSharingHost('shared-task', 'private-task', { ...route, v: 3 });
+  expect(state.files.get(legacyFile)).toBe(before);
+  stopAgentNetSharing();
+  expect(agentNetSharingRoute('shared-task', 'old-task')).toMatchObject({ v: 2 });
+  expect(agentNetSharingRoute('shared-task', 'private-task')).toMatchObject({ v: 3 });
+});
+
+// shared-task-mode: own paired tasks use same-account control, never a guest pin.
+// Unit, one verified matching member authority and an invitation to its other host.
+it('rejects a private invitation to the current member network', async () => {
+  const { server, ...route } = selectedAgentNetSharingRoute('shared-task')!;
+  const link = buildAgentNetSharingInvitation({
+    ...route, v: 3, resourceId: 'other-task', hostDeviceId: 'other-device', invitation: 'Q'.repeat(43),
+  }, server);
+  state.http.mockResolvedValueOnce(Response.json({
+    sharedTaskId: 'other-task', status: 'joined', memberId: 'guest-member', created: true,
+  }));
+  await expect(joinAgentNetSharedTask(link, 'Owner')).rejects.toThrow('SHARED_TASK_SELF_JOIN');
+  expect(state.http).not.toHaveBeenCalled();
+  expect(agentNetSharingRoute('shared-task', 'other-task')).toBeNull();
+});
+
+// #11276: an absent preview alias is not a reason to fetch or forward an official card.
+// Unit through the real invitation API, with one failed preview and a retry to the pinned relay.
+it('keeps a private provider request independent of the first preview', async () => {
+  const invitation = buildAgentNetSharingInvitation({
+    v: 3, kind: 'provider-share', resourceId: 'provider-share', invitation: 'Q'.repeat(43),
+    networkId: 'private:friend', rootPublicKey: state.api.rootPublicKey, hostDeviceId: 'other-device', region: 'global',
+  }, 'https://friend.example.test');
+  const link = resolveAgentNetProviderShareLink(invitation)!;
+  const expiresAt = new Date(Date.now() + 60_000).toISOString();
+  state.http.mockResolvedValueOnce(Response.json({ error: { code: 'UNAVAILABLE' } }, { status: 503 }));
+  await expect(link.api.preview(link.invitation)).rejects.toThrow();
+  expect(link.identityCard).toBe('private-device');
+  state.http.mockImplementation(async (url: string, options: RequestInit) => {
+    if (url.endsWith('/preview')) return Response.json({ shareId: 'provider-share', providerId: 'claude', providerLabel: 'Remote',
+      deviceName: 'Owner', owner: { displayName: 'Owner', avatarUrl: null, region: 'global' }, state: 'unused', expiresAt });
+    expect(url).toBe('https://friend.example.test/api/agent-net/private-sharing/provider-shares/requests');
+    expect(JSON.parse(String(options.body)).identityCard).toBe('private-device');
+    return Response.json({ requestId: 'request', status: 'pending', pairingCode: '1234', expiresAt });
+  });
+  await expect(link.api.sendRequest(link.invitation, 'unit-official-card')).resolves.toMatchObject({ status: 'pending' });
+  expect(state.card).not.toHaveBeenCalled();
+});
+
+// #11276: the same capability choice must drive both the card and the creation endpoint.
+// Unit through the public createLink API, with one selected self-hosted relay advertising v3.
+it('uses the selected relay’s private authorization for new provider links', async () => {
+  state.relay = { relayId: state.api.certificate.networkId.slice('private:'.length) };
+  state.config = {};
+  expect(selectedAgentNetSharingRoute('provider-share')?.v).toBe(2);
+  state.privateSharing = true;
+  state.http.mockImplementation(async (url: string, options: RequestInit) => {
+    expect(url).toBe(state.api.base + '/api/agent-net/private-sharing/provider-shares/links');
+    expect(JSON.parse(String(options.body)).identityCard).toBe('private-device');
+    return Response.json({
+      shareId: 'private-owned', linkId: 'a'.repeat(64), invitation: 'Q'.repeat(43),
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
+    });
+  });
+  const result = await providerShareApi.createLink({ providerId: 'claude', providerLabel: 'Claude', deviceName: 'Cindy' });
+  expect(parseAgentNetSharingInvitation(providerShareLinkFor(result.invitation), 'provider-share')?.receipt.v).toBe(3);
+  expect(state.card).not.toHaveBeenCalled();
+});
 // The SDK accepts loopback for local development, so its invitation tests did
 // not catch the App publishing its own loopback address to another computer.
 // Real Main route + request entry, fake OS/network boundaries; unit.
@@ -104,6 +225,117 @@ it('keeps a provider application, approval, transport identity and leave on its 
     expect(new Headers(init.headers).get('authorization')).toMatch(/^AgentNetIdentity /);
   }
   expect(state.card.mock.calls.every(([, opts]) => opts.body.audience === 'cindy-agent-net-sharing')).toBe(true);
+});
+
+// Unit: both complete and partial Agent-Net received lists must carry 429 backoff
+// across reads. The real SDK sees the HTTP header and the unaffected origin still loads.
+it.each([false, true])('waits for Retry-After in received lists (healthy second origin: %s)', async (partial) => {
+  const current = state.api;
+  state.api = new AgentNetClient(current.base, current.identity, current.certificate, current.rootPublicKey, undefined, { fetch: state.http });
+  if (partial) {
+    rememberAgentNetSharingService({ ...selectedAgentNetSharingRoute('provider-share')!,
+      server: 'https://friend.example.test', networkId: 'private:friend' });
+  }
+  const startedAt = Date.now();
+  const clock = vi.spyOn(Date, 'now').mockReturnValue(startedAt);
+  const healthyShare = {
+    shareId: 'healthy-share', memberId: 'healthy-member', providerId: 'claude', providerLabel: 'Remote',
+    hostDeviceId: 'remote-host', deviceName: 'Owner', owner: { displayName: 'Owner', avatarUrl: null, region: 'global' },
+    status: 'active', hostOnline: true, hostCapable: true,
+  };
+  let restrictedReads = 0, healthyReads = 0;
+  state.http.mockImplementation(async (url: string) => {
+    const { hostname, pathname } = new URL(String(url));
+    if (pathname.endsWith('/sharing-origins')) return Response.json({ origins: [] });
+    if (hostname === 'friend.example.test') {
+      healthyReads++;
+      return Response.json({ shares: [healthyShare] });
+    }
+    restrictedReads++;
+    return restrictedReads === 1
+      ? new Response('Too many requests', { status: 429, headers: { 'Retry-After': '90' } })
+      : Response.json({ shares: [] });
+  });
+  const readWhileThrottled = async () => {
+    if (partial) {
+      const result = await providerShareApi.listReceived();
+      expect(result.authorityIncomplete).toBe(true);
+      expect(result.map(share => share.shareId)).toEqual(['healthy-share']);
+    } else {
+      await expect(providerShareApi.listReceived()).rejects.toThrow('AGENT_NET_SHARING_SERVICES_UNAVAILABLE');
+    }
+  };
+  try {
+    await readWhileThrottled();
+    clock.mockReturnValue(startedAt + 61_000);
+    await readWhileThrottled();
+    expect(restrictedReads).toBe(1);
+    expect(healthyReads).toBe(partial ? 2 : 0);
+    clock.mockReturnValue(startedAt + 91_000);
+    expect((await providerShareApi.listReceived()).authorityIncomplete).toBeUndefined();
+    expect(restrictedReads).toBe(2);
+  } finally {
+    clock.mockRestore();
+  }
+});
+// Review #10578: a partial outage returns cached rows rather than throwing. Unit,
+// real Main API + aggregation + SDK; previous leave tests never populated that
+// cache. An older read must not refill it, and a later admission must still work.
+it.each([
+  { legacy: false, late: false },
+  { legacy: false, late: true },
+  { legacy: true, late: true },
+])('forgets a successful leave from a failed origin cache (legacy=$legacy, late=$late)', async ({ legacy, late }) => {
+  state.allowLegacy = legacy;
+  const old = state.api;
+  state.api = new AgentNetClient(old.base, old.identity, old.certificate, old.rootPublicKey, undefined, { fetch: state.http });
+  if (!legacy) rememberAgentNetSharingService({ ...selectedAgentNetSharingRoute('provider-share')!,
+    server: 'https://friend.example.test', networkId: 'private:friend' });
+  const row = (shareId: string, memberId: string) => ({ shareId, memberId, providerId: 'claude', providerLabel: 'Remote',
+    hostDeviceId: 'remote-host', deviceName: 'Owner', owner: { displayName: 'Owner', avatarUrl: null, region: 'global' },
+    status: 'active', hostOnline: true, hostCapable: true });
+  const departed = row('left-share', 'left-member'), neighbour = row('neighbour-share', 'neighbour-member');
+  const healthy = row('healthy-share', 'healthy-member');
+  let mode: 'live' | 'pending' | 'failed' = 'live', reads = 0;
+  const response = Promise.withResolvers<{ shares: typeof departed[] }>(), started = Promise.withResolvers<void>();
+  const readSource = async () => {
+    reads++;
+    if (mode === 'failed') throw new Error('source unavailable');
+    if (mode === 'pending') { started.resolve(); return response.promise; }
+    return { shares: [departed, neighbour] };
+  };
+  state.http.mockImplementation(async (url: string) => {
+    const { hostname, pathname } = new URL(String(url));
+    if (pathname.endsWith('/sharing-origins')) return Response.json({ origins: [] });
+    if (pathname.endsWith('/leave')) return Response.json({});
+    return Response.json(hostname === 'friend.example.test' ? await readSource() : { shares: [healthy] });
+  });
+  state.card.mockImplementation(async (path: string) => {
+    if (path.endsWith('/received')) return readSource();
+    if (path.endsWith('/leave')) return {};
+    return { card: 'unit-limited-identity-card', expiresAt: new Date(Date.now() + 300_000).toISOString() };
+  });
+  await providerShareApi.listReceived();
+  const neighbourSeed = agentNetSharingRoute('provider-share', 'neighbour-share')?.seed;
+  let polling: ReturnType<typeof providerShareApi.listReceived> | undefined;
+  try {
+    if (late) { mode = 'pending'; polling = providerShareApi.listReceived(); await started.promise; }
+    await providerShareApi.leave('left-member');
+    mode = 'failed'; response.resolve({ shares: [departed, neighbour] });
+    if (polling) expect((await polling).map(share => share.shareId)).not.toContain('left-share');
+    const partial = await providerShareApi.listReceived();
+    expect(partial.map(share => share.shareId).sort()).toEqual(['healthy-share', 'neighbour-share']);
+    expect(partial.authorityIncomplete).toBe(true);
+    expect(partial.unavailableShareIds).toContain('neighbour-share');
+    if (!legacy) {
+      expect(agentNetSharingRoute('provider-share', 'left-share')?.retired).toBe(true);
+      expect(agentNetSharingRoute('provider-share', 'neighbour-share')).toMatchObject({ seed: neighbourSeed, retired: false });
+    }
+    mode = 'live';
+    expect((await providerShareApi.listReceived()).map(share => share.shareId)).toContain('left-share');
+    if (!legacy) expect(agentNetSharingRoute('provider-share', 'left-share')?.retired).toBe(false);
+    expect(reads).toBe(late ? 4 : 3);
+  } finally { response.resolve({ shares: [departed, neighbour] }); await polling; }
 });
 // Bug (real owner, 2026-11-10): origin sync had saved a placeholder service for
 // the owner's own relay; the host listing reused it as each share's route, so
@@ -237,6 +469,35 @@ it('pins an explicit guest invitation and rejects a conflicting root before any 
   const conflict = buildAgentNetSharingInvitation({ ...receipt, rootPublicKey: bootstrap.rootPublicKey }, 'https://friend.example.test');
   await expect(joinAgentNetSharedTask(conflict, 'Guest')).rejects.toThrow('ROUTE_CONFLICT');
   expect(state.http).toHaveBeenCalledOnce();
+});
+// Rule (2026-11-16, cross-account on the Agent-Net session layer): a session is used only where the routed client
+// accepts that resource's scoped frames (`acceptsScopedEvent`). A guest who left keeps a retired pin and must get no
+// session either; a resource this computer never installed is accepted on the main connection only, as Device Link does.
+// Real Main vault, routed client and pins; unit.
+it('lets a cross-account session through only where the routed client accepts that resource', async () => {
+  const receipt = { v: 2 as const, kind: 'shared-task' as const, resourceId: 'left-task', invitation: randomBytes(32).toString('base64url'),
+    networkId: 'private:remote', rootPublicKey: state.api.rootPublicKey, hostDeviceId: 'remote-host', region: 'global' as const };
+  state.http.mockResolvedValue(Response.json({ sharedTaskId: receipt.resourceId, memberId: 'guest-member', status: 'joined', created: true }));
+  await joinAgentNetSharedTask(buildAgentNetSharingInvitation(receipt, 'https://friend.example.test'), 'Guest');
+  const options = { getWsUrl: () => 'wss://unavailable.example.test', getToken: async () => null,
+    getHello: () => ({ deviceName: 'Guest', platform: 'test', appVersion: '1', remoteControlEnabled: false, busy: false }),
+    createWebSocket: () => { throw new Error('PRIMARY_MUST_NOT_BE_REQUIRED'); } };
+  const primary = new RoutedDeviceLinkClient(options), stop = bindAgentNetSharing(primary, options);
+  const host = sharedTaskHostPeer(receipt.resourceId, receipt.hostDeviceId);
+  // This computer's own task on its main network, and one whose network it cannot reach (registered blocked).
+  const selected = selectedAgentNetSharingRoute('shared-task')!;
+  rememberAgentNetSharingHost('shared-task', 'own-task', selected);
+  rememberAgentNetSharingHost('shared-task', 'unreachable-task', { ...selected, networkId: 'private:other-relay' });
+  const visitor = (task: string) => sharedTaskGuestPeer(task, 'guest-member', 'guest-device');
+  expect(state.sessionRoute!(visitor('own-task'))).toBe('primary');
+  expect(state.sessionRoute!(visitor('unreachable-task'))).toBeNull();
+  expect(state.sessionRoute!(visitor('never-installed'))).toBe('primary');
+  retireAgentNetSharingGuest('shared-task', receipt.resourceId);
+  expect(primary.connectionFor(host)).not.toBe(primary);
+  expect(state.sessionRoute!(host)).toBeNull();
+  // Stopping leaves those pins retired on the routed client: no session until they are registered again.
+  stop();
+  expect(state.sessionRoute!(visitor('own-task'))).toBeNull();
 });
 it('discards a late join after an account boundary without writing into the next owner vault', async () => {
   const receipt = { v: 2 as const, kind: 'shared-task' as const, resourceId: 'late-task', invitation: randomBytes(32).toString('base64url'),

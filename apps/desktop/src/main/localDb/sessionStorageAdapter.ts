@@ -5,23 +5,22 @@
 
 import { and, eq, inArray } from 'drizzle-orm';
 
-import type { AgentKind, SessionMeta, SessionStorage, WorkspaceKind } from '@cindy/maker-core';
+import type { EngineKind, SessionMeta, SessionStorage, WorkspaceKind } from '@cindy/maker-core';
 
-import { dbToMakerAgentKind, makerToDbAgentKind } from '../../shared/agentKindConversion.js';
+import { dbToMakerEngineKind, makerToDbEngineKind, type DbEngineKind } from '../../shared/agentKindConversion.js';
 import { DESKTOP_VISIBLE_SESSION_SOURCES } from '../../shared/sessionSource.js';
 import { normalizeWorkingDirForStorage } from '../../shared/workingDir.js';
 import type { DbClient } from '../localDb/client/DbClient.js';
 import { normalizeRemoteHostId } from '../localDb/mapper.js';
 import { sessions } from '../localDb/schema.js';
 
-type DbAgentKind = 'cc' | 'codex' | 'pi';
-
-function toDbKind(k: AgentKind): DbAgentKind {
-  return makerToDbAgentKind(k);
+// Task lifecycle path: plugin-engine rows ('acp') round-trip unchanged; built-in rows map as before.
+function toDbKind(k: EngineKind): DbEngineKind {
+  return makerToDbEngineKind(k);
 }
 
-function fromDbKind(k: string): AgentKind {
-  return dbToMakerAgentKind(k);
+function fromDbKind(k: string): EngineKind {
+  return dbToMakerEngineKind(k);
 }
 
 function normalizeWorkspaceKind(value: unknown): WorkspaceKind {
@@ -37,6 +36,7 @@ function rowToMeta(row: SessionRow): SessionMeta {
     workDir: row.workingDir ?? '',
     title: row.title,
     model: row.model,
+    providerId: row.providerId,
     workspaceKind: row.workspaceKind,
     projectDir: row.projectDir,
     effort: row.effort,
@@ -80,6 +80,7 @@ export class OwnerSessionStorage implements SessionStorage {
       workspaceKind: normalizeWorkspaceKind(meta.workspaceKind),
       projectDir: normalizeWorkingDirForStorage(meta.projectDir),
       model: meta.model,
+      providerId: meta.providerId?.trim() || null,
       effort: meta.effort ?? 'high',
       permissionMode: meta.permissionMode ?? 'ask',
       fastMode: meta.fastMode ?? false,

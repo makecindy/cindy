@@ -1,4 +1,4 @@
-import type { AgentKind } from '@cindy/maker-core';
+import type { AgentKind, EngineKind } from '@cindy/maker-core';
 import type { WorkerCreationSelection } from '../../shared/workerCreationSelection';
 import type {
   OrcaLeadSessionSnapshot,
@@ -9,7 +9,8 @@ import type {
 } from './orcaWorkerCreationService';
 
 export type OrcaWorkerCreateRequest = Omit<OrcaWorkerCreateParams, 'agent'> & {
-  agent?: AgentKind;
+  /** 'acp' = 插件引擎(只在显式选择时，不进创建偏好)。 */
+  agent?: EngineKind;
   /** Host-only: MCP creation opts in; manual UI and enableTeam retain their own choices. */
   useCreationPrefs?: boolean;
 };

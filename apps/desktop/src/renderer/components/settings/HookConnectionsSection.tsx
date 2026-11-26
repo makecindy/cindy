@@ -29,6 +29,9 @@ import { imBotSettings } from './ImBotSection.settings-search';
  *   - 飞书 / Lark 卡: 同构, 绑定走应用的网页授权页, pending 时另显示一次性
  *     关联码(网页授权不可用的外部用户把它发给机器人); 服务端未宣告
  *     provider:feishu(组织还没配置飞书机器人)时给专门提示; 伙伴页不显示;
+ *   - Discord 卡(官方, 与「个人」栏的 Discord bot 无关): 同构, 关联只靠一次性
+ *     关联码 —— pending 时关联码放在动作行之前醒目显示, 用户私信给机器人或在
+ *     Discord 里执行 /bind; 「添加到 Discord」只是添加应用。伙伴页不显示;
  *   - 工作目录映射内嵌在每张渠道卡的展开区: 目录清单**设备共享**(所有渠道
  *     同一份, 刻意设计, 任一卡里增删都作用于全部渠道), 运行偏好按渠道隔离,
  *     由所在卡决定读写哪个渠道的那份(Slack 多绑定时再叠 workspace 归属
@@ -40,33 +43,26 @@ import { imBotSettings } from './ImBotSection.settings-search';
  */
 
 import { Button } from '@/components/ui/button';
-import { SettingsCard, SettingsRow } from '@/components/ui/settings-rows';
+import { SETTINGS_HINT, SettingsCard, SettingsRow } from '@/components/ui/settings-rows';
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Check, ChevronDown, Plus, Trash2 } from 'lucide-react';
+import { AlertTriangle, Check, Plus, Trash2 } from 'lucide-react';
 
 import { Switch } from '@/components/ui/switch';
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { useOptionalAuthUser } from '@/contexts/AuthContext';
 import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
 import { extractIpcError } from '@/utils/ipcError';
-import type { ImDefaultAgentKind, ImDefaultSettingsState } from '../../../shared/imDefaultSettings';
 import { acknowledgeXUsage, isXUsageAcknowledged } from '@/state/xUsageNotice';
 import { XUsageGuide } from './XUsageGuide';
+import { CompanionXAssignment } from './CompanionXAssignment';
 import {
   HOOK_BIND_REASON_ALREADY_BOUND,
   HOOK_BIND_REASON_APP_CHANGED,
   HOOK_BIND_REASON_NOT_INSTALLED,
   HOOK_CHAT_WORKSPACE_ALIAS,
-  HOOK_WORKSPACE_ALIAS_RE,
   slackHookInstallUrl,
   type HookTeamBindingView,
   type ProviderHookView,
@@ -76,17 +72,20 @@ import {
 } from '../../../shared/hookControlIpc';
 
 /** provider-neutral 渠道卡覆盖的 provider(Slack 走 legacy 专属卡)。 */
-type NeutralCardProvider = 'telegram' | 'x' | 'feishu';
+type NeutralCardProvider = 'telegram' | 'x' | 'feishu' | 'discord';
 import { useHookWorkspacePrefs, WorkspacePrefsEditor } from './HookWorkspacePrefsEditor';
+import { HOOK_DEFAULT_PERMISSION_MODE } from './hookWorkspacePrefsLogic';
 import { ImChannelSettingsCard } from './ImChannelSettingsCard';
+import { useImEntrancePlugins } from './ImPluginEntrances';
 import { useSettingsSearchNavigation } from './SettingsSearchNavigation';
+import { useSettingsTarget } from './settingsTarget';
 import {
   TelegramBehaviorSettings,
   TelegramGroupActivationSettings,
 } from './TelegramBehaviorSettings';
 
 /** 「官方」栏的渠道手风琴卡(同刻最多展开一张, 交互对齐「个人」栏)。 */
-type CindyImCard = 'slack' | 'telegram' | 'x' | 'feishu';
+type CindyImCard = 'slack' | 'telegram' | 'x' | 'feishu' | 'discord';
 
 /** 渠道卡状态徽章的色调档(映射到「个人」栏同款 --settings-badge-* token)。 */
 type ChannelBadgeTone = 'ok' | 'progress' | 'attention' | 'error';
@@ -119,8 +118,8 @@ function transportBadgeTone(status: SlackHookView['status']): ChannelBadgeTone {
   }
 }
 
-/** 收起行状态徽章(结构与 FeishuBotSection 的状态 pill 逐字对齐)。 */
-function ChannelStatusBadge({ tone, label }: { tone: ChannelBadgeTone; label: string }) {
+/** 收起行状态徽章(结构与 FeishuBotSection 的状态 pill 逐字对齐)。云实例设置的官方卡复用。 */
+export function ChannelStatusBadge({ tone, label }: { tone: ChannelBadgeTone; label: string }) {
   const color = badgeToneColor(tone);
   return (
     <span
@@ -135,202 +134,6 @@ function ChannelStatusBadge({ tone, label }: { tone: ChannelBadgeTone; label: st
       <span className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: color }} aria-hidden />
       {label}
     </span>
-  );
-}
-
-/**
- * 存量 global override 的收尾入口（**只对升级用户可见**）。
- *
- * 官方卡的「新对话配置」区块删掉后, 用户此前在那里改过的 agent / model / effort 仍以
- * global scope 落在盘上, 并继续被 session-runner(`readImDefaultSettings(undefined)`)与
- * 目录行的生效值解析当作 fallback —— 于是旧设置照旧影响所有没显式配置的目录、以及
- * 以后新加的目录, 而用户再也看不到、也改不了它(review 指出)。
- *
- * 不选"静默清除": 那会在升级瞬间悄悄改掉用户已保存的 agent / 模型。也不选"把区块留
- * 着": 那等于把这次要消除的重叠原样放回来。折中是**仅当确实存在 override 时**露出这
- * 一条: 说清它还在生效、显示它是什么、给一个恢复默认的按钮; 恢复后它永久消失, 从未
- * 设过的用户一次都看不到。
- *
- * **两张 provider-neutral 卡都挂**: global scope 是官方 Telegram 与 X 共用的那一份
- * (`session-runner` 对两者都读 `readImDefaultSettings(undefined)`)。只挂在 Telegram 上,
- * 曾设过 override 后关掉 Telegram、只用 X 的升级用户就没有入口, 旧值继续被 X 任务消费,
- * 而他只能猜"要重新打开 Telegram 才能清"(review 指出)。
- */
-/** 「恢复默认」实际会清掉的一条 override(供 UI 逐条列出; 纯数据, 文案在组件里)。 */
-export type LegacyOverrideRow =
-  | { kind: 'agentKind'; current: string; fallback: string }
-  | { kind: 'permissionMode'; current: string; fallback: string }
-  | {
-      kind: 'agent';
-      agent: string;
-      fields: Array<{ field: 'model' | 'effort' | 'source'; current: string; fallback: string }>;
-    };
-
-/**
- * 把 `customizedKeys` 展开成「这次会清掉什么」的完整清单。
- *
- * 为什么不能只显示当前 agentKind 的 model: `imDefaultSettingsReset()` 清的是**整个**
- * global scope, 包含 `agents` 里其它 agent 的 model / effort / 来源。用户可能曾切到另一个
- * agent 改过这些再切回来 —— 那些值此刻正被"显式选了该 agent、但模型档位仍跟随默认"的目录
- * 消费, 只报当前 agent 一行就等于让他在不知道范围的情况下改掉目录路由(review 指出)。
- */
-export function legacyOverrideRows(state: ImDefaultSettingsState): LegacyOverrideRow[] {
-  const rows: LegacyOverrideRow[] = [];
-  for (const key of state.customizedKeys) {
-    if (key === 'agentKind') {
-      rows.push({
-        kind: 'agentKind',
-        current: state.agentKind,
-        fallback: state.defaults.agentKind,
-      });
-      continue;
-    }
-    if (key === 'permissionMode') {
-      rows.push({
-        kind: 'permissionMode',
-        current: state.permissionMode,
-        fallback: state.defaults.permissionMode,
-      });
-      continue;
-    }
-    if (!key.startsWith('agents.')) continue;
-    const agent = key.slice('agents.'.length) as ImDefaultAgentKind;
-    const current = state.agents[agent];
-    const fallback = state.defaults.agents[agent];
-    if (!current || !fallback) continue;
-    // 只列真的不一样的子字段 —— 把三项全列出来会让人以为都被改过。
-    const fields: Array<{
-      field: 'model' | 'effort' | 'source';
-      current: string;
-      fallback: string;
-    }> = [];
-    if (current.model !== fallback.model) {
-      fields.push({ field: 'model', current: current.model, fallback: fallback.model });
-    }
-    if (current.effort !== fallback.effort) {
-      fields.push({ field: 'effort', current: current.effort, fallback: fallback.effort });
-    }
-    if (current.providerId !== fallback.providerId) {
-      fields.push({
-        field: 'source',
-        current: current.providerId ?? '',
-        fallback: fallback.providerId ?? '',
-      });
-    }
-    if (fields.length > 0) rows.push({ kind: 'agent', agent, fields });
-  }
-  return rows;
-}
-
-function useLegacyGlobalDefaults(onCleared: () => void): {
-  state: ImDefaultSettingsState | null;
-  pending: boolean;
-  restore: () => Promise<void>;
-} {
-  const { t } = useTranslation();
-  const [state, setState] = useState<ImDefaultSettingsState | null>(null);
-  const [pending, setPending] = useState(false);
-
-  useEffect(() => {
-    let active = true;
-    void window.electronAPI.maker
-      .imDefaultSettingsGet()
-      .then((next) => {
-        if (active) setState(next);
-      })
-      .catch(() => {});
-    return () => {
-      active = false;
-    };
-  }, []);
-
-  const restore = useCallback(async () => {
-    if (pending) return;
-    setPending(true);
-    try {
-      setState(await window.electronAPI.maker.imDefaultSettingsReset());
-      // 两张卡的目录行都以 global scope 为生效值解析源 —— 只刷新当前这张会让另一张
-      // 继续显示磁盘上已经不存在的旧默认(review 指出)。
-      onCleared();
-      toast.success(t('settings.defaults.restored'));
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : t('settings.defaults.restoreFailed'));
-    } finally {
-      setPending(false);
-    }
-  }, [onCleared, pending, t]);
-
-  return { state, pending, restore };
-}
-
-/** 上面那条提示的纯展示部分(状态由 useLegacyGlobalDefaults 单点持有, 两张卡共用)。 */
-function LegacyGlobalDefaultsNotice({
-  state,
-  pending,
-  onRestore,
-}: {
-  state: ImDefaultSettingsState | null;
-  pending: boolean;
-  onRestore: () => void;
-}) {
-  const { t } = useTranslation();
-  if (state === null || !state.isCustomized) return null;
-  return (
-    <div
-      data-testid="hook-legacy-global-defaults"
-      className="flex flex-col gap-1.5 rounded-xl border border-[var(--border-default)] p-2.5"
-    >
-      <span className="text-12 font-medium text-[var(--text-secondary)]">
-        {t('settings.remoteControl.hook.form.legacyDefaultsTitle')}
-      </span>
-      <span className="text-11 leading-relaxed text-[var(--text-tertiary)]">
-        {t('settings.remoteControl.hook.form.legacyDefaultsDescription')}
-      </span>
-      {/* 逐条列出**这次实际会清掉的全部** override(见 legacyOverrideRows 注释):
-          只报当前 agent 的模型, 等于让用户在不知道范围的情况下改掉目录路由。 */}
-      <ul className="m-0 flex list-none flex-col gap-0.5 p-0">
-        {legacyOverrideRows(state).map((row) => (
-          <li
-            key={row.kind === 'agent' ? `agent:${row.agent}` : row.kind}
-            data-testid="hook-legacy-global-defaults-row"
-            className="text-11 leading-relaxed text-[var(--text-tertiary)]"
-          >
-            {row.kind === 'agent'
-              ? t('settings.remoteControl.hook.form.legacyDefaultsRowAgent', {
-                  agent: row.agent,
-                  fields: row.fields
-                    .map((f) =>
-                      t(`settings.remoteControl.hook.form.legacyDefaultsField.${f.field}`, {
-                        current:
-                          f.current ||
-                          t('settings.remoteControl.hook.form.legacyDefaultsSourceFollowsGlobal'),
-                        fallback:
-                          f.fallback ||
-                          t('settings.remoteControl.hook.form.legacyDefaultsSourceFollowsGlobal'),
-                      }),
-                    )
-                    .join(t('settings.remoteControl.hook.form.legacyDefaultsFieldSeparator')),
-                })
-              : t(`settings.remoteControl.hook.form.legacyDefaultsRow.${row.kind}`, {
-                  current: row.current,
-                  fallback: row.fallback,
-                })}
-          </li>
-        ))}
-      </ul>
-      <Button data-settings-search-action="Restore legacy global IM defaults"
-        variant="secondary"
-        size="sm"
-        compact
-        type="button"
-        data-testid="hook-legacy-global-defaults-restore"
-        onClick={onRestore}
-        disabled={pending}
-        className="mt-0.5 w-fit"
-      >
-        {t('settings.defaults.restore')}
-      </Button>
-    </div>
   );
 }
 
@@ -374,7 +177,7 @@ function handleRadioGroupKeyDown(e: KeyboardEvent<HTMLDivElement>): void {
  * 视觉沿用 LanguageSection 的选中态范式与 --settings-menu-* 语义 token —— 双模式
  * 由 token 自动覆盖, 不写任何硬编码色; 选中用对勾, 与 DESIGN.md §16.3 协议 radio
  * 的仓内口径一致。模块级组件而非内联: 内联组件每次渲染都会重建类型导致子树
- * remount, 别名输入框会在输入中途失焦(同 renderWorkdirSection 的理由)。
+ * remount, 别名输入框会在输入中途失焦(同 renderProjectsSection 的理由)。
  */
 function DefaultWorkspaceRadio({
   selected,
@@ -412,74 +215,29 @@ function DefaultWorkspaceRadio({
   );
 }
 
-const RESERVED_WORKSPACE_ALIASES = new Set([
-  HOOK_CHAT_WORKSPACE_ALIAS,
-  '__proto__',
-  'prototype',
-  'constructor',
-]);
-
-/** 目录名 -> 合法别名: 只留 [A-Za-z0-9_-], 其余折叠成 '-', 撞名或保留名加序号。 */
-export function deriveAlias(dir: string, taken: ReadonlySet<string>): string {
-  const base = dir.split(/[\\/]/).filter(Boolean).pop() ?? 'ws';
-  let alias =
-    base
-      .replace(/[^A-Za-z0-9_-]+/g, '-')
-      .replace(/^-+|-+$/g, '')
-      .slice(0, 32) || 'ws';
-  if (taken.has(alias) || RESERVED_WORKSPACE_ALIASES.has(alias)) {
-    for (let i = 2; ; i++) {
-      const candidate = `${alias.slice(0, 32 - String(i).length - 1)}-${i}`;
-      if (!taken.has(candidate) && !RESERVED_WORKSPACE_ALIASES.has(candidate)) {
-        alias = candidate;
-        break;
-      }
-    }
-  }
-  return alias;
-}
-
-/** Validate a complete renderer edit before constructing its IPC payload. */
-export function workspaceRowsToMap(
-  rows: ReadonlyArray<{ alias: string; dir: string }>,
-): Record<string, string> | null {
-  const workspaces: Record<string, string> = {};
-  for (const row of rows) {
-    const alias = row.alias.trim();
-    const dir = row.dir.trim();
-    if (
-      !alias ||
-      !dir ||
-      !HOOK_WORKSPACE_ALIAS_RE.test(alias) ||
-      RESERVED_WORKSPACE_ALIASES.has(alias) ||
-      Object.hasOwn(workspaces, alias)
-    ) {
-      return null;
-    }
-    workspaces[alias] = dir;
-  }
-  return workspaces;
-}
-
-export function HookConnectionsSection({ companion }: { companion?: { id: string; name: string } } = {}) {
+export function HookConnectionsSection({ companion, projectsOnly = false }: {
+  companion?: { id: string; name: string };
+  /** Only the shared 「项目与模型」 block, for IM plugins where the Cindy group is not shown. */
+  projectsOnly?: boolean;
+} = {}) {
   const { t } = useTranslation();
+  const imPlugins = useImEntrancePlugins();
+  const { api } = useSettingsTarget();
+  const hookControl = api.hookControl;
   const { entry, activation } = useSettingsSearchNavigation();
   /** 飞书不可用时的去向因身份而异: 组织成员找管理员, 个人账号没有管理员可找。 */
   const personalAccount = useOptionalAuthUser()?.membershipKind === 'personal';
   const [hook, setHook] = useState<SlackHookView | null>(null);
-  /** 工作目录行的本地编辑态(别名输入中不被状态推送打断, blur 时提交)。 */
-  const [rows, setRows] = useState<Array<{ alias: string; dir: string }>>([]);
-  /** 最近一次与 main 对齐的 workspaces 序列化(判断外部变更用)。 */
-  const syncedRef = useRef<string>('');
   /**
    * 渠道卡同刻最多展开一张(交互对齐「个人」栏 PersonalGroupContent), 默认
    * 全收起 —— 收起行自带状态徽章与绑定摘要。打开渠道开关时自动展开对应卡,
    * 让授权进度与兜底动作(复制链接 / 安装引导)立即可见。
    */
-  const targetCard = (['slack', 'telegram', 'x', 'feishu'] as const).find(
+  const targetCard = (['slack', 'telegram', 'x', 'feishu', 'discord'] as const).find(
     (card) => entry?.targetId === 'cindy-im-' + card || entry?.fallbackTargetId === 'cindy-im-' + card,
   ) ?? null;
   const [expandedCard, setExpandedCard] = useState<CindyImCard | null>(companion ? 'x' : targetCard);
+  const projectsSectionRef = useRef<HTMLElement | null>(null);
   useLayoutEffect(() => {
     if (targetCard) setExpandedCard(targetCard);
   }, [targetCard, activation]);
@@ -500,11 +258,6 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
 
   const applyView = useCallback((view: SlackHookView) => {
     setHook(view);
-    const serialized = JSON.stringify(view.workspaces);
-    if (serialized !== syncedRef.current) {
-      syncedRef.current = serialized;
-      setRows(Object.entries(view.workspaces).map(([alias, dir]) => ({ alias, dir })));
-    }
   }, []);
   const applyPushedView = useCallback(
     (view: SlackHookView) => {
@@ -516,43 +269,18 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
 
   useEffect(() => {
     const requestedAtRevision = ++viewRevisionRef.current;
-    void window.electronAPI.hookControl
+    void hookControl
       .get()
       .then((res) => {
         if (viewRevisionRef.current === requestedAtRevision) applyView(res.hook);
       })
       .catch(() => {});
-    const unsubscribe = window.electronAPI.hookControl.onStatusChanged(applyPushedView);
+    const unsubscribe = hookControl.onStatusChanged(applyPushedView);
     return () => {
       viewRevisionRef.current += 1;
       unsubscribe();
     };
   }, [applyPushedView, applyView]);
-
-  const saveWorkspaces = useCallback(
-    async (next: Array<{ alias: string; dir: string }>) => {
-      // Reject the whole edit before assigning attacker-shaped keys to a
-      // plain object. Silently skipping/overwriting one row could persist a
-      // partial map and remove a previously valid workspace.
-      const workspaces = workspaceRowsToMap(next);
-      if (workspaces === null) {
-        toast.error(t('settings.remoteControl.hook.toast.saveFailed'));
-        return;
-      }
-      // 无变更的 blur(点进输入框又点出去)不发保存 —— 避免无谓 IPC 与状态刷新
-      if (JSON.stringify(workspaces) === syncedRef.current) return;
-      try {
-        const requestedAtRevision = ++viewRevisionRef.current;
-        const res = await window.electronAPI.hookControl.setWorkspaces(workspaces);
-        if (viewRevisionRef.current === requestedAtRevision) applyView(res.hook);
-      } catch (err) {
-        toast.error(
-          extractIpcError(err)?.message ?? t('settings.remoteControl.hook.toast.saveFailed'),
-        );
-      }
-    },
-    [applyView, t],
-  );
 
   /** Slack 授权相关动作共用一个门，避免开关/添加/重绑交叉点击创建多轮 OAuth。 */
   const runSlackAuthAction = useCallback(
@@ -588,7 +316,7 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
   const handleToggle = useCallback(
     (enabled: boolean) => {
       runSlackAuthAction(
-        () => window.electronAPI.hookControl.setEnabled(enabled),
+        () => hookControl.setEnabled(enabled),
         'settings.remoteControl.hook.toast.toggleFailed',
         enabled,
       );
@@ -617,8 +345,8 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
     selectingWorkingBindingId.current = bindingId ?? hookRef.current?.feishu.binding?.bindingId ?? null;
     setSelectingWorkingDevice(true);
     try {
-      if (bindingId === undefined) await window.electronAPI.hookControl.providerBindSelect('feishu');
-      else await window.electronAPI.hookControl.providerBindSelect('feishu', bindingId);
+      if (bindingId === undefined) await hookControl.providerBindSelect('feishu');
+      else await hookControl.providerBindSelect('feishu', bindingId);
       if (mountedRef.current && workingSelectionSequence.current === sequence) {
         toast.success(t('settings.remoteControl.hook.feishu.workingDeviceSet'));
       }
@@ -661,12 +389,12 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
     (mode: 'enable' | 'add' | 'rebind' | 'communications', teamId?: string) => {
       const action =
         mode === 'communications' && teamId
-          ? () => window.electronAPI.hookControl.setSlackCommunications(teamId, true)
+          ? () => hookControl.setSlackCommunications(teamId, true)
           : mode === 'enable'
-          ? () => window.electronAPI.hookControl.setEnabled(true)
+          ? () => hookControl.setEnabled(true)
           : mode === 'rebind' && teamId
-            ? () => window.electronAPI.hookControl.rebindTeam(teamId)
-            : () => window.electronAPI.hookControl.addBinding();
+            ? () => hookControl.rebindTeam(teamId)
+            : () => hookControl.addBinding();
       runSlackAuthAction(action, 'settings.remoteControl.hook.toast.actionFailed', true);
     },
     [runSlackAuthAction],
@@ -684,7 +412,7 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
     async (provider: NeutralCardProvider, alias: string | null) => {
       try {
         const requestedAtRevision = ++viewRevisionRef.current;
-        const res = await window.electronAPI.hookControl.setProviderDefaultWorkspace(
+        const res = await hookControl.setProviderDefaultWorkspace(
           provider,
           alias,
         );
@@ -700,7 +428,7 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
 
   const handleLifecycleAnnouncementToggle = useCallback(
     (enabled: boolean) => {
-      runHookAction(() => window.electronAPI.hookControl.setLifecycleAnnouncement(enabled), {
+      runHookAction(() => hookControl.setLifecycleAnnouncement(enabled), {
         localizedErrorOnly: true,
       });
     },
@@ -790,7 +518,7 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
       } else if (decision.multiUi) {
         // multi-team: 取消只作废这次"添加 workspace"尝试, 既有绑定不受影响
         runSlackAuthAction(
-          () => window.electronAPI.hookControl.cancelPendingBind(),
+          () => hookControl.cancelPendingBind(),
           'settings.remoteControl.hook.toast.actionFailed',
         );
       } else {
@@ -849,54 +577,24 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
     })();
   }, [xConfirmedPrincipalId, confirm, t]);
 
-  const handleAddWorkspace = async () => {
-    const res = await window.electronAPI.showOpenDirectoryDialog();
+  /**
+   * 添加项目: 选一个本机文件夹, 登记进项目列表。机器人可选的项目就是侧栏的本机项目,
+   * 所以它同时出现在侧栏里; 改名、移除在侧栏做, 这里跟着变。
+   */
+  const handleAddProject = async () => {
+    const res = await api.showOpenDirectoryDialog();
     if (res.canceled || !res.path) return;
-    const dir = res.path as string;
-    if (rows.some((r) => r.dir === dir)) return;
-    const next = [
-      ...rows,
-      {
-        alias: deriveAlias(dir, new Set([HOOK_CHAT_WORKSPACE_ALIAS, ...rows.map((r) => r.alias)])),
-        dir,
-      },
-    ];
-    setRows(next);
-    await saveWorkspaces(next);
+    try {
+      const requestedAtRevision = ++viewRevisionRef.current;
+      const added = await hookControl.addProject(res.path as string);
+      if (viewRevisionRef.current === requestedAtRevision) applyView(added.hook);
+    } catch {
+      toast.error(t('settings.remoteControl.hook.toast.addProjectFailed'));
+    }
   };
 
-  const handleRemoveWorkspace = async (index: number) => {
-    const next = rows.filter((_, i) => i !== index);
-    setRows(next);
-    await saveWorkspaces(next);
-  };
-
-  /** 更换某行的目录(保留别名 —— 偏好按别名归属, 换目录不丢偏好)。 */
-  const handleChangeDir = async (index: number) => {
-    const res = await window.electronAPI.showOpenDirectoryDialog();
-    if (res.canceled || !res.path) return;
-    const dir = res.path as string;
-    if (rows.some((r, i) => i !== index && r.dir === dir)) return;
-    const next = rows.slice();
-    next[index] = { ...next[index], dir };
-    setRows(next);
-    await saveWorkspaces(next);
-  };
-
-  // 目录清单设备共享；运行偏好按 provider 隔离。三个 hook 都始终调用，避免
-  // provider 开关切换时改变 React hook 顺序。
-  const slackPrefsState = useHookWorkspacePrefs(hook, 'slack');
-  const telegramPrefsState = useHookWorkspacePrefs(hook, 'telegram');
-  const xPrefsState = useHookWorkspacePrefs(hook, 'x');
-  const feishuPrefsState = useHookWorkspacePrefs(hook, 'feishu');
-  // 存量 global override(见 useLegacyGlobalDefaults 上方注释): 状态单点持有, 各张
-  // provider-neutral 卡共用同一份; 清掉后每张卡的生效值解析源都要重读。
-  const reloadGlobalDefaults = useCallback(() => {
-    void telegramPrefsState.reloadImDefaults();
-    void xPrefsState.reloadImDefaults();
-    void feishuPrefsState.reloadImDefaults();
-  }, [telegramPrefsState, xPrefsState, feishuPrefsState]);
-  const legacyGlobalDefaults = useLegacyGlobalDefaults(reloadGlobalDefaults);
+  // 项目清单与侧栏共用; 每个项目的模型与权限所有官方机器人共用一份。
+  const projectPrefsState = useHookWorkspacePrefs();
 
   /** 复制授权链接(远程控制兜底: 到本机浏览器打开, 规则 26)。 */
   const handleCopyLink = async () => {
@@ -923,7 +621,7 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
 
   const handleProviderToggle = (provider: NeutralCardProvider, enabled: boolean) => {
     if (enabled) setExpandedCard(provider);
-    runHookAction(() => window.electronAPI.hookControl.setProviderEnabled(provider, enabled));
+    runHookAction(() => hookControl.setProviderEnabled(provider, enabled));
   };
 
   const handleProviderOpen = (
@@ -932,8 +630,8 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
     scopeId?: string,
   ) => {
     void (scopeId
-      ? window.electronAPI.hookControl.openProviderAction(provider, action, scopeId)
-      : window.electronAPI.hookControl.openProviderAction(provider, action))
+      ? hookControl.openProviderAction(provider, action, scopeId)
+      : hookControl.openProviderAction(provider, action))
       .catch((err: unknown) => {
         toast.error(
           extractIpcError(err)?.message ?? t('settings.remoteControl.hook.toast.actionFailed'),
@@ -952,13 +650,13 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
     }
   };
 
-  /** 复制飞书关联码(网页授权不可用时, 用户把它发给机器人完成关联)。 */
-  const handleCopyBindCode = async (provider: NeutralCardProvider) => {
+  /** 复制关联码(飞书: 网页授权不可用时的兜底; Discord: 唯一的关联方式)。 */
+  const handleCopyBindCode = async (provider: 'feishu' | 'discord') => {
     const code = hook?.[provider].binding?.bindCode;
     if (!code) return;
     try {
       await navigator.clipboard.writeText(code);
-      toast.success(t('settings.remoteControl.hook.feishu.bindCode.copied'));
+      toast.success(t(`settings.remoteControl.hook.${provider}.bindCode.copied`));
     } catch {
       toast.error(t('settings.remoteControl.hook.toast.actionFailed'));
     }
@@ -991,8 +689,8 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
       setSelectingWorkingDevice(false);
     }
     runHookAction(() => selectedBindingId === undefined
-      ? window.electronAPI.hookControl.providerBindRevoke(provider)
-      : window.electronAPI.hookControl.providerBindRevoke(provider, selectedBindingId));
+      ? hookControl.providerBindRevoke(provider)
+      : hookControl.providerBindRevoke(provider, selectedBindingId));
   };
 
   /**
@@ -1031,7 +729,7 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
           current.communicationsEnabled === target.communicationsEnabled,
       );
     if (!ok || !mountedRef.current || !stillSameBinding) return;
-    runHookAction(() => window.electronAPI.hookControl.revokeTeam(target.teamId));
+    runHookAction(() => hookControl.revokeTeam(target.teamId));
   };
 
   // 数据未就绪不渲染任何内容(规则 7: 无 loading 态、不闪空状态)
@@ -1238,140 +936,126 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
     ? activeTeams.length > 0
     : hook.binding?.state === 'confirmed';
 
-  /**
-   * 工作目录映射区块(渲染进每张渠道卡的展开区): 目录清单是设备级共享的
-   * 同一份 —— 在任一渠道卡里增删目录都作用于全部渠道(区块描述已标注),
-   * 运行偏好按渠道隔离, 由所在卡决定传入哪份 prefsState, 因此不再需要
-   * 渠道切换 chip。用普通函数而非内联子组件渲染: 内联组件每次渲染都会
-   * 重建类型导致子树 remount, 别名输入框会在输入中途失焦。
-   */
-  /**
-   * 该目录当前**已保存**的别名(null = 这一行还没落盘, 或别名正在编辑中)。
-   *
-   * 默认工作目录写的是别名, 而 store 只接受 workspaces 里已有的别名 —— 所以选中态
-   * 与写入都必须以落盘的那份映射为准, 不能用别名输入框的临时值。目录路径在一次渲染
-   * 里是稳定键(rows 就按 dir 去重), 用它反查别名。
-   */
-  const savedAliasOf = (dir: string): string | null =>
-    Object.keys(hook.workspaces).find((alias) => hook.workspaces[alias] === dir) ?? null;
+  // 旧 main 快照尚无 discord 字段时按未开启处理(同 renderProviderCard 的兜底)。
+  const discordView = hook.discord as ProviderHookView | undefined;
+  // 默认项目只对没有「先选项目」这一步的渠道有意义(Slack 在每个频道里各自选)。
+  const projectsDefaultApplies =
+    hook.telegram.enabled || hook.feishu.enabled || discordView?.enabled === true ||
+    (hook.x.enabled && !hook.x.companionBotId);
+  // IM 插件(声明 imEntrance)读的也是这一份: 只装了插件、没开官方机器人时也要能改。
+  const pluginsShareProjects = !companion && imPlugins.length > 0;
+  const projectsSectionVisible = hook.enabled || projectsDefaultApplies || pluginsShareProjects;
+  // 默认项目所有官方机器人共用一个(main 侧读写时已对齐), 任取一处的值即可。
+  const sharedDefaultWorkspace =
+    hook.feishu.defaultWorkspace ?? hook.telegram.defaultWorkspace ?? hook.x.defaultWorkspace ??
+    discordView?.defaultWorkspace ?? null;
+  const setSharedDefaultWorkspace = (alias: string | null) =>
+    void setProviderDefaultWorkspace('feishu', alias);
 
-  const renderWorkdirSection = (
-    prefsState: ReturnType<typeof useHookWorkspacePrefs>,
-    chatMaxVisibleModelRows?: number,
-    /**
-     * 非空 = 该卡显示默认工作目录选择器。
-     * `chip` = 标题行右侧的下拉 chip(X 沿用); `row` = 目录行内的选中态单选
-     * (Telegram: 目录本来就一行一个, 行内选中比再开一个下拉更直白)。
-     */
-    defaultWorkspace?: {
-      value: string | null;
-      mode: 'chip' | 'row';
-      provider: NeutralCardProvider;
-    },
-    /**
-     * 非空 = 换掉区块标题与说明。飞书的目录与模型跟随 Cindy 账号和这台电脑,
-     * 不属于某个机器人或飞书账号, 通用的「按渠道独立」说不清这层归属。
-     */
-    copy?: { title: string; description: string },
-  ) => (
-    <>
-      <div className="h-px w-full bg-[var(--border-default)]" />
-      <div className="flex flex-col gap-1.5">
-        <div className="flex flex-wrap items-center gap-2">
-          <span className="text-12 font-medium text-[var(--text-secondary)]">
-            {copy?.title ?? t('settings.remoteControl.hook.form.workspacesCardTitle')}
-          </span>
-          <span className="text-12 text-[var(--text-tertiary)]">
-            · {t('settings.remoteControl.hook.form.workspacesBoundCount', { count: workdirCount })}
-          </span>
-          {/* (multi-team)偏好归属 team 切换 chip: 多绑定时显示, 选中 team
-              决定下方偏好编辑读写哪个 workspace 的那份 */}
-          {prefsState.showTeamChip ? (
-            <DropdownMenu>
-              <DropdownMenuTrigger
-                aria-label={t('settings.tina.prefs.teamChipAria')}
-                className="flex shrink-0 items-center gap-1 rounded-full bg-[var(--surface-chip)] px-2.5 py-1 text-11 text-[var(--text-secondary)] outline-none transition-colors hover:text-[var(--text-primary)]"
-              >
-                <span className="max-w-40 truncate">
-                  {prefsState.teams.find((tm) => tm.teamId === prefsState.selectedTeamId)
-                    ?.teamName ??
-                    prefsState.selectedTeamId ??
-                    ''}
-                </span>
-                <ChevronDown size={12} />
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end">
-                {prefsState.teams.map((tm) => (
-                  <DropdownMenuItem
-                    key={tm.teamId}
-                    onClick={() => prefsState.selectTeam(tm.teamId)}
-                  >
-                    {tm.teamName ?? tm.teamId}
-                  </DropdownMenuItem>
-                ))}
-              </DropdownMenuContent>
-            </DropdownMenu>
-          ) : null}
-          {/* chip 形态(X): 一条推文里没有目录选择面板的位置, 不预设就只能永远
-              落在「对话」上、碰不到本地仓库(见 setProviderDefaultWorkspace)。 */}
-          {defaultWorkspace?.mode === 'chip' ? (
-            <DropdownMenu>
-              <DropdownMenuTrigger
-                aria-label={t('settings.remoteControl.hook.form.defaultWorkspaceAria')}
-                className="flex shrink-0 items-center gap-1 rounded-full bg-[var(--surface-chip)] px-2.5 py-1 text-11 text-[var(--text-secondary)] outline-none transition-colors hover:text-[var(--text-primary)]"
-              >
-                <span className="max-w-40 truncate">
-                  {t('settings.remoteControl.hook.form.defaultWorkspaceChip', {
-                    name: defaultWorkspace.value ?? t('settings.tina.chat.title'),
-                  })}
-                </span>
-                <ChevronDown size={12} />
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end">
-                <DropdownMenuItem
-                  onClick={() => void setProviderDefaultWorkspace(defaultWorkspace.provider, null)}
-                >
-                  {t('settings.tina.chat.title')}
-                </DropdownMenuItem>
-                {Object.keys(hook.workspaces).map((alias) => (
-                  <DropdownMenuItem
-                    key={alias}
-                    onClick={() =>
-                      void setProviderDefaultWorkspace(defaultWorkspace.provider, alias)
-                    }
-                  >
-                    {alias}
-                  </DropdownMenuItem>
-                ))}
-              </DropdownMenuContent>
-            </DropdownMenu>
-          ) : null}
-        </div>
-        <span className="text-11 leading-relaxed text-[var(--text-tertiary)]">
-          {copy?.description ?? t('settings.remoteControl.hook.form.workspacesCardDescription')}
+  /** 渠道卡里指向「项目与模型」的那一行: 以前这块在每张卡里, 现在整页只有一处。 */
+  const sharedSettingsPointer = (
+    <div className="flex flex-wrap items-center gap-x-2 gap-y-1 border-t border-[var(--border-default)] pt-3 text-12 leading-[1.45] text-[var(--text-secondary)]">
+      <span>{t('settings.remoteControl.hook.form.sharedSettingsPointer')}</span>
+      <Button
+        data-settings-search-action="Scroll to the shared projects and models settings"
+        variant="secondary"
+        size="xs"
+        compact
+        type="button"
+        onClick={() => projectsSectionRef.current?.scrollIntoView({ block: 'start' })}
+      >
+        {t('settings.remoteControl.hook.form.sharedSettingsPointerAction')}
+      </Button>
+    </div>
+  );
+
+  /** 「项目与模型」里的一行: 左边项目名与目录, 右边模型与权限; 窄的时候控件掉到名称下面。 */
+  const renderProjectRow = (alias: string, title: string, hint: string, selected: boolean, onSelect: () => void) => (
+    <SettingsRow
+      key={alias}
+      wrap
+      lead={
+        projectsDefaultApplies ? (
+          <DefaultWorkspaceRadio
+            selected={selected}
+            label={t('settings.remoteControl.hook.form.defaultWorkspaceRadioAria', { name: title })}
+            onSelect={onSelect}
+          />
+        ) : undefined
+      }
+      title={
+        <span data-setting-id={imBotSettings.cindy.id} title={title}>
+          {title}
         </span>
-        {/* row 形态才需要解释"选中即默认"这层语义, 并把权限档的后果说在选之前。
-            文案不用方位词指代("下面的目录") —— 同一区块也渲染进确认门弹窗。 */}
-        {defaultWorkspace?.mode === 'row' ? (
-          <span className="text-11 leading-relaxed text-[var(--text-tertiary)]">
-            {t('settings.remoteControl.hook.form.defaultWorkspaceRowHint')}
-          </span>
-        ) : null}
-        {prefsState.hint !== null && (
-          <div className="flex items-center gap-2 text-11 text-[var(--text-tertiary)]">
-            <span>{prefsState.hint}</span>
-            {prefsState.retry !== null && (
-              <Button data-settings-search-action="Retry loading channel preferences" variant="secondary" size="xs" compact type="button" onClick={prefsState.retry}>
+      }
+      tag={
+        projectsDefaultApplies && selected
+          ? t('settings.remoteControl.hook.form.defaultProjectTag')
+          : undefined
+      }
+      hint={
+        <span className="line-clamp-2 [overflow-wrap:anywhere]" title={hint}>
+          {hint}
+        </span>
+      }
+      trailing={
+        // 模型面板与选择框同宽: 选择框太窄会把面板里的模型名截断, 所以这一侧给足宽度。
+        <div className="min-w-0 max-w-[560px] flex-[2_1_440px]">
+          <WorkspacePrefsEditor alias={alias} state={projectPrefsState} />
+        </div>
+      }
+    />
+  );
+
+  /**
+   * 「项目与模型」区块(整页只有一处, 在各渠道卡之后): 列的就是侧栏的本机项目, 每个项目的
+   * 模型与权限、以及默认项目, 所有官方机器人共用一份 —— 不再按渠道各配一遍。
+   * 放在渠道卡之后: 第一次打开某个机器人的开关时它才出现, 出现在下方不会把正在操作的卡顶走;
+   * 项目再多也不会把「连接机器人」压到屏幕外。
+   * 用普通函数而非内联子组件渲染: 内联组件每次渲染都会重建类型导致子树 remount。
+   */
+  const renderProjectsSection = () => {
+    const defaultAlias = sharedDefaultWorkspace ?? HOOK_CHAT_WORKSPACE_ALIAS;
+    // 默认项目的权限是完全访问(从没设过也是)时把后果说出来: 群里任何人 @ 机器人都会落到它里面。
+    const defaultFullAccess =
+      projectsDefaultApplies &&
+      projectPrefsState.editable &&
+      (projectPrefsState.prefsFor(defaultAlias).permissionMode ?? HOOK_DEFAULT_PERMISSION_MODE) ===
+        HOOK_DEFAULT_PERMISSION_MODE;
+    return (
+      <section
+        ref={projectsSectionRef}
+        aria-labelledby="cindy-im-projects-heading"
+        className="mt-3 flex scroll-mt-4 flex-col gap-3.5"
+      >
+        <div className="flex flex-col gap-1">
+          <h4
+            id="cindy-im-projects-heading"
+            className="text-13 font-medium leading-[1.5] text-[var(--settings-section-title)]"
+          >
+            {t('settings.remoteControl.hook.form.workspacesCardTitle')}
+            <span className="ml-1.5 font-normal text-[var(--text-tertiary)]">
+              {t('settings.remoteControl.hook.form.workspacesBoundCount', { count: workdirCount })}
+            </span>
+          </h4>
+          <p className="text-12 leading-[1.45] text-[var(--settings-section-desc)]">
+            {t(pluginsShareProjects
+              ? 'settings.remoteControl.hook.form.workspacesCardDescriptionWithPlugins'
+              : 'settings.remoteControl.hook.form.workspacesCardDescription')}
+          </p>
+        </div>
+        {projectPrefsState.hint !== null && (
+          <div className={cn('flex items-center gap-2', SETTINGS_HINT)}>
+            <span>{projectPrefsState.hint}</span>
+            {projectPrefsState.retry !== null && (
+              <Button data-settings-search-action="Retry loading channel preferences" variant="secondary" size="xs" compact type="button" onClick={projectPrefsState.retry}>
                 {t('settings.tina.prefs.retry')}
               </Button>
             )}
           </div>
         )}
-        {/* 逐条列出**这次实际会清掉的全部** override(见 legacyOverrideRows 注释):
-            只报当前 agent 的模型, 等于让用户在不知道范围的情况下改掉目录路由。 */}
-        <div
-          className="flex flex-col gap-2"
-          {...(defaultWorkspace?.mode === 'row'
+        <SettingsCard
+          {...(projectsDefaultApplies
             ? {
                 role: 'radiogroup',
                 'aria-label': t('settings.remoteControl.hook.form.defaultWorkspaceAria'),
@@ -1379,132 +1063,73 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
               }
             : {})}
         >
-          {/* 内置「对话」伪目录: 与真实目录同级, 常驻第一位, 不可改名/删除;
-            Slack 那头对应保留别名 chat, 偏好与 /model 选 chat 同一份 */}
-          <div className="flex flex-col gap-2 rounded-xl border border-[var(--border-default)] p-2.5">
-            <div className="flex items-center gap-1.5">
-              {defaultWorkspace?.mode === 'row' ? (
-                <DefaultWorkspaceRadio
-                  selected={defaultWorkspace.value === null}
-                  label={t('settings.remoteControl.hook.form.defaultWorkspaceRadioAria', {
-                    name: t('settings.tina.chat.title'),
-                  })}
-                  onSelect={() => void setProviderDefaultWorkspace(defaultWorkspace.provider, null)}
-                />
-              ) : null}
-              <span className="w-36 shrink-0 px-2.5 py-1.5 text-13 font-medium text-[var(--text-primary)]">
-                {t('settings.tina.chat.title')}
-              </span>
-              <span
-                className="min-w-0 flex-1 truncate text-12 text-[var(--text-tertiary)]"
-                title={t('settings.tina.chat.description')}
-              >
-                {t('settings.tina.chat.description')}
-              </span>
-            </div>
-            <WorkspacePrefsEditor
-              alias={HOOK_CHAT_WORKSPACE_ALIAS}
-              state={prefsState}
-              maxVisibleModelRows={chatMaxVisibleModelRows}
-            />
-          </div>
-          {rows.map((row, i) => (
-            <div
-              key={row.dir}
-              className="flex flex-col gap-2 rounded-xl border border-[var(--border-default)] p-2.5"
-            >
-              <div className="flex items-center gap-1.5">
-                {defaultWorkspace?.mode === 'row' ? (
-                  <DefaultWorkspaceRadio
-                    // **只认已保存的 alias → dir 映射**, 不看输入框里的临时值: 别名改了
-                    // 但还没 blur 落盘时, 拿它当选中判据会把未保存的名字显示成已选中,
-                    // 点下去还会把 workspaces 里不存在的别名发给 store(直接抛校验错)。
-                    // 未保存的新行(还没有对应映射)不给选 —— 先落盘再设默认。
-                    selected={
-                      savedAliasOf(row.dir) !== null &&
-                      defaultWorkspace.value === savedAliasOf(row.dir)
-                    }
-                    disabled={savedAliasOf(row.dir) === null}
-                    label={t('settings.remoteControl.hook.form.defaultWorkspaceRadioAria', {
-                      name: savedAliasOf(row.dir) ?? row.alias.trim(),
-                    })}
-                    onSelect={() => {
-                      const saved = savedAliasOf(row.dir);
-                      if (saved === null) return;
-                      void setProviderDefaultWorkspace(defaultWorkspace.provider, saved);
-                    }}
-                  />
-                ) : null}
-                <input data-setting-id={imBotSettings.cindy.id}
-                  value={row.alias}
-                  onChange={(e) => {
-                    const next = rows.slice();
-                    next[i] = { ...next[i], alias: e.target.value };
-                    setRows(next);
-                  }}
-                  onBlur={() => void saveWorkspaces(rows)}
-                  maxLength={32}
-                  className="shrink-0 w-36 rounded-lg border border-transparent px-2.5 py-1.5 text-13 text-[var(--settings-input-text)] bg-transparent outline-none hover:border-[var(--border-default)] focus:border-[var(--border-default)] transition-colors"
-                />
-                <button data-setting-id={imBotSettings.cindy.id}
-                  type="button"
-                  onClick={() => void handleChangeDir(i)}
-                  title={t('settings.remoteControl.hook.form.changeDir')}
-                  className="min-w-0 flex-1 truncate text-left text-12 text-[var(--text-tertiary)] transition-colors hover:text-[var(--text-primary)]"
-                >
-                  {row.dir}
-                </button>
-                <button data-settings-search-action="Remove this workspace from the bot connection"
-                  type="button"
-                  onClick={() => void handleRemoveWorkspace(i)}
-                  aria-label={t('settings.remoteControl.hook.form.removeWorkspace')}
-                  className="shrink-0 rounded-md p-1.5 text-[var(--text-tertiary)] transition-colors hover:text-[var(--text-primary)]"
-                >
-                  <Trash2 size={13} />
-                </button>
-              </div>
-              {/* 会话偏好编辑行: 偏好按别名归属(与 Slack /model 卡同键) */}
-              <WorkspacePrefsEditor alias={row.alias.trim()} state={prefsState} />
-            </div>
-          ))}
-        </div>
+          {/* 内置「对话」: 与真实项目同级, 常驻第一位; IM 那头对应保留名 chat, 偏好与 /model 选 chat 同一份 */}
+          {renderProjectRow(
+            HOOK_CHAT_WORKSPACE_ALIAS,
+            t('settings.tina.chat.title'),
+            t('settings.tina.chat.description'),
+            sharedDefaultWorkspace === null,
+            () => setSharedDefaultWorkspace(null),
+          )}
+          {Object.entries(hook.workspaces).map(([name, dir]) =>
+            renderProjectRow(name, name, dir, sharedDefaultWorkspace === name, () =>
+              setSharedDefaultWorkspace(name),
+            ),
+          )}
+        </SettingsCard>
+        {projectsDefaultApplies ? (
+          <p className={SETTINGS_HINT}>{t('settings.remoteControl.hook.form.defaultWorkspaceRowHint')}</p>
+        ) : null}
+        {defaultFullAccess ? (
+          <p className="flex gap-1.5 text-12 leading-[1.4] text-[var(--text-secondary)]">
+            <AlertTriangle size={14} aria-hidden className="mt-px shrink-0 text-[var(--warning-fg)]" />
+            <span>
+              {t('settings.remoteControl.hook.form.defaultProjectFullAccessWarning', {
+                name: sharedDefaultWorkspace ?? t('settings.tina.chat.title'),
+              })}
+            </span>
+          </p>
+        ) : null}
         <Button data-setting-id={imBotSettings.cindy.id}
           variant="secondary"
           size="sm"
           compact
           type="button"
-          onClick={() => void handleAddWorkspace()}
+          onClick={() => void handleAddProject()}
           className="w-fit"
         >
           <Plus size={12} />
-          {t('settings.remoteControl.hook.form.addWorkspace')}
+          {t('settings.remoteControl.hook.form.addProject')}
         </Button>
-      </div>
-    </>
-  );
+      </section>
+    );
+  };
 
   /**
    * provider-neutral 渠道卡(Telegram / X 同构)。用普通函数而非内联子组件
-   * 渲染(同 renderWorkdirSection 的理由: 内联组件类型每次渲染重建会导致
+   * 渲染(同 renderProjectsSection 的理由: 内联组件类型每次渲染重建会导致
    * 子树 remount)。动作按钮完全由 binding.actions 数据驱动 —— X 的 actions
    * 里没有 add_to_group, 加群按钮自然不渲染。
    */
-  const changeXCompanion = async () => {
+  const setXCompanion = async (botId: string | null, expectedBotId: string | null) => {
+    const requestedAtRevision = ++viewRevisionRef.current;
+    const result = await hookControl.setXCompanion(botId, expectedBotId);
+    if (viewRevisionRef.current === requestedAtRevision) applyView(result.hook);
+  };
+  /** Settings → IM bots: releases the account from the teammate it is assigned to. */
+  const removeXCompanion = async () => {
     if (companionPending) return;
     const previous = hookRef.current?.x.companionBotId ?? null;
-    if (!companion && !previous) return;
-    const removing = !companion || previous === companion.id;
+    if (!previous) return;
     setCompanionPending(true);
     try {
       const ok = await confirm({
-        title: t(`bots.channels.officialX.${removing ? 'removeTitle' : 'bindTitle'}`, { name: companion?.name }),
-        description: t(`bots.channels.officialX.${removing ? 'removeBody' : 'bindBody'}`, { name: companion?.name }),
-        confirmText: t(`bots.channels.officialX.${removing ? 'remove' : 'bind'}`),
+        title: t('bots.channels.officialX.removeTitle', { name: undefined }),
+        description: t('bots.channels.officialX.removeBody', { name: undefined }),
+        confirmText: t('bots.channels.officialX.remove'),
       });
       if (!ok) return;
-      const requestedAtRevision = ++viewRevisionRef.current;
-      const result = await window.electronAPI.hookControl.setXCompanion(removing ? null : companion!.id, previous);
-      if (viewRevisionRef.current === requestedAtRevision) applyView(result.hook);
+      await setXCompanion(null, previous);
     } catch {
       toast.error(t('settings.remoteControl.hook.toast.actionFailed'));
     } finally {
@@ -1585,12 +1210,12 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
                 onClick={() => void handleCopyProviderLink('feishu')}>{t('settings.remoteControl.hook.binding.copyLink')}</Button> : null}
               {own?.actions.includes('cancel') ? <Button variant="secondary" size="xs" compact type="button"
                 data-settings-search-action="Start or cancel linking this bot account"
-                onClick={() => runHookAction(() => window.electronAPI.hookControl.providerBindCancel('feishu'))}>{t('settings.remoteControl.hook.feishu.cancel')}</Button> : null}
+                onClick={() => runHookAction(() => hookControl.providerBindCancel('feishu'))}>{t('settings.remoteControl.hook.feishu.cancel')}</Button> : null}
             </> : <>
               {(app.appType === 'store' && view.multiBindAvailable) || accounts.length === 0 ? <Button variant={accounts.length === 0 ? 'primary' : 'secondary'} size="xs" compact type="button"
                 data-settings-search-action="Start or cancel linking this bot account"
                 disabled={busy || !view.enabled || !view.available || view.status !== 'connected'}
-                onClick={() => runHookAction(() => window.electronAPI.hookControl.providerBindStart('feishu', app.appId))}>{t(`settings.remoteControl.hook.feishu.${accounts.length > 0 ? 'linkAnotherAccount' : 'connectBot'}`)}</Button> : null}
+                onClick={() => runHookAction(() => hookControl.providerBindStart('feishu', app.appId))}>{t(`settings.remoteControl.hook.feishu.${accounts.length > 0 ? 'linkAnotherAccount' : 'connectBot'}`)}</Button> : null}
             </>}
 
           </div>
@@ -1600,21 +1225,50 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
     </div>;
   };
 
+  /**
+   * 一次性关联码。飞书: 网页授权是主路径(已自动打开), 授权页进不去的外部用户把这串码私聊
+   * 发给机器人; Discord: 关联只靠它, 私信给机器人或在 Discord 里执行 /bind。码只在 pending
+   * 时存在, 过期 / 完成后随快照消失。
+   */
+  const renderBindCode = (provider: 'feishu' | 'discord', binding: ProviderBindingView, actions: string[]) => (
+    <div className="flex flex-col gap-1.5 rounded-xl border border-[var(--border-default)] p-2.5">
+      <span className="text-11 text-[var(--text-tertiary)]">
+        {t(`settings.remoteControl.hook.${provider}.bindCode.label`)}
+      </span>
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="select-text font-mono text-16 font-medium tracking-wider text-[var(--text-primary)]">
+          {binding.bindCode}
+        </span>
+        {actions.includes('copy_bind_code') ? (
+          <Button
+            data-settings-search-action="Copy the bot link code"
+            variant="secondary"
+            size="xs"
+            compact
+            type="button"
+            onClick={() => void handleCopyBindCode(provider)}
+          >
+            {t(`settings.remoteControl.hook.${provider}.bindCode.copy`)}
+          </Button>
+        ) : null}
+      </div>
+      <span className="text-11 leading-relaxed text-[var(--text-tertiary)]">
+        {t(`settings.remoteControl.hook.${provider}.bindCode.hint`)}
+      </span>
+    </div>
+  );
+
   const renderProviderCard = (provider: NeutralCardProvider) => {
     const setting = provider === 'telegram'
       ? imBotSettings.cindyTelegram
-      : provider === 'feishu' ? imBotSettings.cindyFeishu : imBotSettings.cindyX;
+      : provider === 'feishu'
+        ? imBotSettings.cindyFeishu
+        : provider === 'discord' ? imBotSettings.cindyDiscord : imBotSettings.cindyX;
     const view = hook[provider] as ProviderHookView | undefined;
     if (view === undefined) return null; // 旧 main 快照尚无该 provider 字段时不渲染
     const cs = providerCardState(provider, view);
     const storeAccounts = provider === 'feishu' && view.multiBindAvailable === true;
     if (!cs.visible) return null;
-    const prefsState =
-      provider === 'telegram'
-        ? telegramPrefsState
-        : provider === 'feishu'
-          ? feishuPrefsState
-          : xPrefsState;
     return (
       <ImChannelSettingsCard
         id={`cindy-im-${provider}`}
@@ -1623,7 +1277,9 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
             ? 'settings.tina.prefs.providerTelegram'
             : provider === 'feishu'
               ? 'settings.tina.prefs.providerFeishu'
-              : 'settings.tina.prefs.providerX',
+              : provider === 'discord'
+                ? 'settings.tina.prefs.providerDiscord'
+                : 'settings.tina.prefs.providerX',
         )}
         description={t(`settings.remoteControl.hook.${provider}.description`)}
         routeSummary={companion ? null : cs.bindingLine}
@@ -1691,6 +1347,10 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
 
           {provider === 'feishu' && cs.confirmed && !storeAccounts && view.binding ? workingDeviceHint(view.binding) : null}
 
+          {provider === 'discord' && view.enabled && view.available && cs.inProgress && cs.binding?.bindCode
+            ? renderBindCode('discord', cs.binding, cs.actions)
+            : null}
+
           {view.enabled && view.available ? (
             <div className="flex flex-wrap items-center gap-2">
               {cs.inProgress && cs.binding?.connectUrl ? (
@@ -1725,7 +1385,7 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
                   size="xs"
                   compact
                   type="button"
-                  onClick={() => runHookAction(() => window.electronAPI.hookControl.providerBindCancel(provider))}
+                  onClick={() => runHookAction(() => hookControl.providerBindCancel(provider))}
                 >
                   {t(`settings.remoteControl.hook.${provider}.cancel`)}
                 </Button>
@@ -1780,7 +1440,7 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
                   size="xs"
                   compact
                   type="button"
-                  onClick={() => runHookAction(() => window.electronAPI.hookControl.providerBindStart(provider))}
+                  onClick={() => runHookAction(() => hookControl.providerBindStart(provider))}
                 >
                   {t(
                     cs.state === 'none' || storeAccounts
@@ -1808,35 +1468,10 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
             </>
           ) : null}
 
-          {/* 飞书关联码: 网页授权是主路径(已自动打开), 授权页进不去的外部用户把这串
-              码私聊发给机器人。码只在 pending 时存在, 过期 / 完成后随快照消失。 */}
-          {provider === 'feishu' && view.enabled && view.available && cs.inProgress && cs.binding?.bindCode ? (
-            <div className="flex flex-col gap-1.5 rounded-xl border border-[var(--border-default)] p-2.5">
-              <span className="text-11 text-[var(--text-tertiary)]">
-                {t('settings.remoteControl.hook.feishu.bindCode.label')}
-              </span>
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="select-text font-mono text-16 font-medium tracking-wider text-[var(--text-primary)]">
-                  {cs.binding.bindCode}
-                </span>
-                {cs.actions.includes('copy_bind_code') ? (
-                  <Button
-                    data-settings-search-action="Copy the Feishu bind code"
-                    variant="secondary"
-                    size="xs"
-                    compact
-                    type="button"
-                    onClick={() => void handleCopyBindCode(provider)}
-                  >
-                    {t('settings.remoteControl.hook.feishu.bindCode.copy')}
-                  </Button>
-                ) : null}
-              </div>
-              <span className="text-11 leading-relaxed text-[var(--text-tertiary)]">
-                {t('settings.remoteControl.hook.feishu.bindCode.hint')}
-              </span>
-            </div>
-          ) : null}
+          {/* 飞书关联码: 网页授权是主路径, 关联码是兜底, 放在动作行之后。 */}
+          {provider === 'feishu' && view.enabled && view.available && cs.inProgress && cs.binding?.bindCode
+            ? renderBindCode('feishu', cs.binding, cs.actions)
+            : null}
 
           </>}
 
@@ -1851,76 +1486,47 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
             <XUsageGuide companion={!!view.companionBotId} />
             {companion ? (
               <div className="flex flex-col gap-2 border-t border-[var(--border-default)] pt-3">
-                <p className="text-12 leading-relaxed text-[var(--text-secondary)]">
-                  {t(view.companionBotId === companion.id ? 'bots.channels.officialX.bound'
-                    : view.companionBotId ? 'bots.channels.officialX.boundElsewhere' : 'bots.channels.officialX.unbound', { name: companion.name })}
-                </p>
-                <Button data-setting-id={imBotSettings.cindy.id} variant="secondary" size="sm" type="button" disabled={companionPending}
-                  onClick={() => void changeXCompanion()}>
-                  {t(view.companionBotId === companion.id ? 'bots.channels.officialX.remove' : 'bots.channels.officialX.bind')}
-                </Button>
+                <CompanionXAssignment companion={companion} companionBotId={view.companionBotId ?? null}
+                  settingId={imBotSettings.cindy.id}
+                  assign={(assign, expectedBotId) => setXCompanion(assign ? companion.id : null, expectedBotId)} />
               </div>
             ) : view.companionBotId ? (
               <div className="flex flex-col gap-2 border-t border-[var(--border-default)] pt-3">
                 <p className="text-12 leading-relaxed text-[var(--text-secondary)]">{t('bots.channels.officialX.managed')}</p>
                 <Button data-setting-id={imBotSettings.cindy.id} variant="secondary" size="sm" type="button" disabled={companionPending}
-                  onClick={() => void changeXCompanion()}>{t('bots.channels.officialX.remove')}</Button>
+                  onClick={() => void removeXCompanion()}>{t('bots.channels.officialX.remove')}</Button>
               </div>
             ) : null}
           </> : null}
 
-          {/* 工作目录映射(清单共享, 偏好取本 provider 那份) */}
-          {view.enabled && !view.companionBotId
-            ? renderWorkdirSection(prefsState, undefined, {
-                value: view.defaultWorkspace,
-                // Telegram 的目录本来就一行一个, 行内选中比再开一个下拉更直白;
-                // X / 飞书沿用标题行的 chip(它们的卡上没有别的行内控件可对齐)。
-                mode: provider === 'telegram' ? 'row' : 'chip',
-                provider,
-              }, provider === 'feishu' ? {
-                title: t('settings.remoteControl.hook.feishu.settingsTitle'),
-                description: t('settings.remoteControl.hook.feishu.settingsDescription'),
-              } : undefined)
-            : null}
-          {/* 存量 global override 的收尾入口。刻意不按 provider 也不按 cs.confirmed 收:
-              global scope 是 Telegram 与 X 共用的那一份, 旧设置在绑定确认之前就已经在盘上
-              影响解析了 —— 要能看见才谈得上"可管理"。从未改过的设备一次都不会渲染。 */}
-          {view.enabled && !view.companionBotId ? (
-            <LegacyGlobalDefaultsNotice
-              state={legacyGlobalDefaults.state}
-              pending={legacyGlobalDefaults.pending}
-              onRestore={() => void legacyGlobalDefaults.restore()}
-            />
-          ) : null}
-          {provider === 'telegram' && cs.confirmed ? (
+          {/* 没有行为设置可显示时不留一个只有分割线的空容器。 */}
+          {provider === 'telegram' && cs.confirmed && view.behaviorAvailable === true ? (
             <div
               key={cs.binding?.bindingId ?? 'telegram-unbound'}
               className="mt-2 flex flex-col gap-5 border-t border-[var(--border-default)] pt-4"
             >
-              {view.behaviorAvailable === true ? (
-                <>
-                  <TelegramBehaviorSettings
-                    source="official"
-                    bindingId={cs.binding?.bindingId ?? undefined}
-                  />
-                  <TelegramGroupActivationSettings
-                    source="official"
-                    bindingId={cs.binding?.bindingId ?? undefined}
-                  />
-                </>
-              ) : null}
+              <TelegramBehaviorSettings
+                source="official"
+                bindingId={cs.binding?.bindingId ?? undefined}
+              />
+              <TelegramGroupActivationSettings
+                source="official"
+                bindingId={cs.binding?.bindingId ?? undefined}
+              />
             </div>
           ) : null}
+          {view.enabled && !view.companionBotId ? sharedSettingsPointer : null}
         </div>
       </ImChannelSettingsCard>
     );
   };
 
+  // 本地模式没有「官方」分栏: IM 插件仍读这一份, 由 ImBotSection 把只有这一块的视图放进「插件」分栏。
+  if (projectsOnly) return projectsSectionVisible ? <div className="flex flex-col gap-3">{renderProjectsSection()}</div> : null;
+
   return (
     <div className="flex flex-col gap-3">
-      {!companion ? <p className="text-12 text-[var(--text-tertiary)]">
-        {t('settings.remoteControl.hook.description')}
-      </p> : null}
+      {!companion ? <HookConnectionsDescription /> : null}
 
       {/* ── Slack 渠道卡 ─────────────────────────────────────────────── */}
       {!companion ? <ImChannelSettingsCard
@@ -1966,8 +1572,6 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
             </span>
           ) : null}
 
-          {/* 逐条列出**这次实际会清掉的全部** override(见 legacyOverrideRows 注释):
-              只报当前 agent 的模型, 等于让用户在不知道范围的情况下改掉目录路由。 */}
           {hook.enabled && !multiUi && bindingState === 'pending' && hook.binding?.authorizeUrl ? (
             <div className="flex items-center gap-2 rounded-xl border border-dashed border-[var(--border-default)] px-2.5 py-2">
               <span className="min-w-0 flex-1 truncate text-12 text-[var(--text-tertiary)]">
@@ -1979,8 +1583,6 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
             </div>
           ) : null}
 
-          {/* 逐条列出**这次实际会清掉的全部** override(见 legacyOverrideRows 注释):
-              只报当前 agent 的模型, 等于让用户在不知道范围的情况下改掉目录路由。 */}
           {isNotInstalled && (!multiUi || !hook.enabled) ? (
             <div className="flex flex-col gap-1.5">
               <div className="flex items-center gap-2">
@@ -2119,7 +1721,7 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
                         type="button"
                         onClick={() =>
                           runSlackAuthAction(
-                            () => window.electronAPI.hookControl.rebindTeam(b.teamId),
+                            () => hookControl.rebindTeam(b.teamId),
                             'settings.remoteControl.hook.toast.actionFailed',
                             true,
                           )
@@ -2138,7 +1740,7 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
                     type="button"
                     onClick={() => void handleRemoveBinding(b)}
                     aria-label={t('settings.remoteControl.hook.multi.removeAria')}
-                    className="shrink-0 rounded-md p-1.5 text-[var(--text-tertiary)] transition-colors hover:text-[var(--text-primary)]"
+                    className="shrink-0 rounded-lg p-1.5 text-[var(--text-tertiary)] transition-colors hover:text-[var(--text-primary)]"
                   >
                     <Trash2 size={13} />
                   </button>
@@ -2149,7 +1751,7 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
                         checked={b.communicationsEnabled === true}
                         disabled={hook.status !== 'connected' || slackAuthActionPending || hook.pendingBind?.state === 'pending'}
                         onCheckedChange={(enabled) => runSlackAuthAction(
-                          () => window.electronAPI.hookControl.setSlackCommunications(b.teamId, enabled),
+                          () => hookControl.setSlackCommunications(b.teamId, enabled),
                           'settings.remoteControl.hook.toast.actionFailed',
                           true,
                         )}
@@ -2176,7 +1778,7 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
                     type="button"
                     onClick={() =>
                       runSlackAuthAction(
-                        () => window.electronAPI.hookControl.cancelPendingBind(),
+                        () => hookControl.cancelPendingBind(),
                         'settings.remoteControl.hook.toast.actionFailed',
                       )
                     }
@@ -2220,7 +1822,7 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
                       type="button"
                       onClick={() =>
                         runSlackAuthAction(
-                          () => window.electronAPI.hookControl.cancelPendingBind(),
+                          () => hookControl.cancelPendingBind(),
                           'settings.remoteControl.hook.toast.actionFailed',
                         )
                       }
@@ -2290,7 +1892,7 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
                     type="button"
                     onClick={() =>
                       runSlackAuthAction(
-                        () => window.electronAPI.hookControl.cancelPendingBind(),
+                        () => hookControl.cancelPendingBind(),
                         'settings.remoteControl.hook.toast.actionFailed',
                       )
                     }
@@ -2308,7 +1910,7 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
                   type="button"
                   onClick={() =>
                     runSlackAuthAction(
-                      () => window.electronAPI.hookControl.addBinding(),
+                      () => hookControl.addBinding(),
                       'settings.remoteControl.hook.toast.actionFailed',
                       true,
                     )
@@ -2322,8 +1924,6 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
             </div>
           ) : null}
 
-          {/* 逐条列出**这次实际会清掉的全部** override(见 legacyOverrideRows 注释):
-              只报当前 agent 的模型, 等于让用户在不知道范围的情况下改掉目录路由。 */}
           {hook.enabled && !multiUi && bindingState === 'confirmed' ? (
             <span className="text-11 leading-relaxed text-[var(--text-tertiary)]">
               {t('settings.remoteControl.hook.slackBoundHint')}
@@ -2356,8 +1956,7 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
             </>
           ) : null}
 
-          {/* 工作目录映射(清单共享, 偏好取 Slack 那份) */}
-          {hook.enabled ? renderWorkdirSection(slackPrefsState, 6) : null}
+          {hook.enabled ? sharedSettingsPointer : null}
         </div>
       </ImChannelSettingsCard> : null}
 
@@ -2365,7 +1964,22 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
       {!companion ? renderProviderCard('telegram') : null}
       {/* 飞书 / Lark 没有伙伴专线, 伙伴页不显示(与 Telegram 相同)。 */}
       {!companion ? renderProviderCard('feishu') : null}
+      {/* 官方 Discord 同样没有伙伴专线; 端点下发前不显示(灰度开关)。 */}
+      {!companion ? renderProviderCard('discord') : null}
       {renderProviderCard('x')}
+
+      {/* ── 项目与模型(所有官方机器人共用, 只此一处) ─────────────────── */}
+      {projectsSectionVisible ? renderProjectsSection() : null}
     </div>
+  );
+}
+
+/** 官方渠道分组说明;云实例设置的官方分组复用。 */
+export function HookConnectionsDescription() {
+  const { t } = useTranslation();
+  return (
+    <p className="text-12 text-[var(--text-tertiary)]">
+      {t('settings.remoteControl.hook.description')}
+    </p>
   );
 }

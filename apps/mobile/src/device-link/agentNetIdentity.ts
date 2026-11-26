@@ -1,11 +1,13 @@
 import { getRandomBytes } from 'expo-crypto';
 import { sha256 } from '@noble/hashes/sha256';
+import { md5 } from '@noble/hashes/legacy';
 import { bytesToHex } from '@noble/hashes/utils';
 import { enrollmentPayload, type DeviceCertificate } from '@cindy/agent-net-protocol';
 import { PortableAgentNetClient, fromBase64Url, toBase64Url, utf8, type BinarySocket } from '@cindy/agent-net/portable';
 import { getSecureItem, setSecureItem } from '@/auth/secureStorage';
 import { getMobileAuthOwner, isMobileAuthOwnerCurrent, type MobileAuthOwnerGeneration } from '@/auth/authOwnerGeneration';
 import { getOfficialAgentNetApiBaseUrl } from '@/config/env';
+import { getMobileAgentNetPreferences } from './agentNetPreferences';
 import { MobileAgentNetEngine, type NativeAgentNetOptions } from './agentNetNative';
 import { verifyMobileAgentNetCertificate, verifyMobileAgentNetDelegation } from './agentNetProtocol';
 import { completeSelfHostedAgentNetMembership } from './selfHostedRelay';
@@ -15,6 +17,11 @@ export interface MobileAgentNetEnrollmentOptions {
   deviceId: string;
   deviceName: string;
   getAccessToken(): Promise<string | null>;
+  /**
+   * The person tapped 「重新加入」 on this removed phone (official network only): enroll now with `rejoin: true`, also while
+   * the stored certificate is unexpired (it was revoked on removal), and never fall back to that certificate on failure.
+   */
+  rejoin?: boolean;
 }
 export interface PreparedMobileAgentNetIdentity {
   scope: string;
@@ -24,7 +31,7 @@ export interface PreparedMobileAgentNetIdentity {
   seed: string;
   context: string;
   legacySigning: boolean;
-  newTransportEngine(extraGuard: () => void): Promise<MobileAgentNetEngine>;
+  newTransportEngine(extraGuard: () => void, enhancedTransport: boolean): Promise<MobileAgentNetEngine>;
   newCryptoEngine(extraGuard: () => void): Promise<MobileAgentNetEngine>;
   dispose(): Promise<void>;
 }
@@ -70,6 +77,14 @@ export async function loadExistingMobileAgentNetModeIdentity(deviceId: string): 
     throw new Error('AGENT_NET_IDENTITY_UNREADABLE');
   }
   modeIdentity = { seed: record.seed, context, deviceId, guard };
+}
+/** Whether this account already enrolled an official Agent-Net identity on this phone (read only; never enrolls). */
+export async function hasStoredMobileOfficialAgentNetIdentity(): Promise<boolean> {
+  const base = getOfficialAgentNetApiBaseUrl(), owner = getMobileAuthOwner();
+  if (getActiveSelfHostedRelay() || !base || !owner.accountKey) return false;
+  const raw = await getSecureItem('cindy.agent-net.official.v2.' + officialSlot(owner, base));
+  if (!raw) return false;
+  try { return !!(JSON.parse(raw) as OfficialRecord).certificate; } catch { return false; }
 }
 function ownerGuard(owner: MobileAuthOwnerGeneration, scope: string, deviceId: string): () => void {
   return () => {
@@ -130,11 +145,12 @@ function prepared(scope: string, base: string, signer: MobileAgentNetEngine, nat
   const existing = cached?.scope === scope && cached.api.base === base && cached.api.rootPublicKey === root ? cached.api : null;
   const api = existing ?? new PortableAgentNetClient(base, signer, certificate, root, {
     assertCurrent: guard, verifyCertificate: verifyMobileAgentNetCertificate, verifyDelegation: verifyMobileAgentNetDelegation,
-    sha256: value => toBase64Url(sha256(value)), createWebSocket: binarySocket, ownerPinnedHttp: privateHttp,
+    sha256: value => toBase64Url(sha256(value)), md5: value => md5(value), createWebSocket: binarySocket, ownerPinnedHttp: privateHttp,
+    relayUdpEnabled: () => getMobileAgentNetPreferences().enabled,
   });
   if (existing) existing.replaceCredentials(signer, certificate);
   return { scope, api, signer, seed: native.seed, context: native.context, legacySigning: native.legacySigning === true,
-    newTransportEngine(extraGuard) { return MobileAgentNetEngine.create({ ...native, udp: true }, () => { guard(); extraGuard(); }); },
+    newTransportEngine(extraGuard, enhancedTransport) { return MobileAgentNetEngine.create({ ...native, udp: true, enhancedTransport }, () => { guard(); extraGuard(); }); },
     newCryptoEngine(extraGuard) { return MobileAgentNetEngine.create({ ...native, udp: false }, () => { guard(); extraGuard(); }); },
     dispose: () => signer.destroy() };
 }
@@ -143,9 +159,16 @@ export async function ensureMobileAgentNetIdentity(options: MobileAgentNetEnroll
   const scope = mobileAgentNetIdentityScope(options.deviceId), owner = getMobileAuthOwner();
   const guard = ownerGuard(owner, scope, options.deviceId);
   guard();
-  if (cached?.scope === scope && cached.api.certificate.expiresAt - Date.now() > 24 * 60 * 60_000) return cached;
-  const existing = inflight.get(scope); if (existing) return existing;
+  const rejoin = options.rejoin === true && !getActiveSelfHostedRelay();
+  const pendingRejoin = inflight.get(scope + '\0rejoin');
+  if (pendingRejoin) return pendingRejoin;
+  if (!rejoin && cached?.scope === scope && cached.api.certificate.expiresAt - Date.now() > 24 * 60 * 60_000) return cached;
+  const flightKey = rejoin ? scope + '\0rejoin' : scope;
+  const existing = inflight.get(flightKey); if (existing) return existing;
+  // A routine load still in flight would install the revoked certificate after the rejoin; let it settle first.
+  const routine = rejoin ? inflight.get(scope)?.catch(() => undefined) : undefined;
   const work = (async () => {
+    await routine; guard();
     const route = getActiveSelfHostedRelay();
     if (route) {
       const signing = route.signing, membership = signing?.agentNet;
@@ -205,14 +228,17 @@ export async function ensureMobileAgentNetIdentity(options: MobileAgentNetEnroll
         || old.signingKey !== signer.identity.signingKey || old.transportKey !== signer.identity.transportKey)) {
         throw new Error('AGENT_NET_IDENTITY_MISMATCH');
       }
-      if (!old || old.expiresAt - Date.now() <= 24 * 60 * 60_000) {
+      if (rejoin || !old || old.expiresAt - Date.now() <= 24 * 60 * 60_000) {
         try {
           const request = { deviceId: options.deviceId, name: options.deviceName.trim().slice(0, 64),
             signingKey: signer.identity.signingKey, transportKey: signer.identity.transportKey };
           const signature = await signer.sign(enrollmentPayload(request));
           const token = await options.getAccessToken(); guard();
           if (!token) throw new Error('AGENT_NET_ACCOUNT_AUTH_REQUIRED');
-          const result = await post(base, '/enroll', { ...request, signature }, guard, 'Bearer ' + token) as {
+          // `rejoin` is outside the signed enrollment payload: the account token already authorizes it, and services that
+          // predate it ignore the field and keep refusing a revoked device (403 DEVICE_REENROLLMENT_REQUIRES_APPROVAL).
+          const result = await post(base, '/enroll', { ...request, signature, ...(rejoin ? { rejoin: true } : { reportRevocation: true }) }, guard,
+            'Bearer ' + token) as {
             rootPublicKey?: string; certificate?: DeviceCertificate;
           };
           if (typeof result.rootPublicKey !== 'string' || (record.rootPublicKey && record.rootPublicKey !== result.rootPublicKey)
@@ -226,7 +252,8 @@ export async function ensureMobileAgentNetIdentity(options: MobileAgentNetEnroll
           guard();
           // Keep the exact stored certificate only while it remains valid;
           // the runtime already retries early renewal on its existing timer.
-          if (!old || old.expiresAt <= Date.now() || !enrollmentUnavailable(error)) throw error;
+          // A rejoin never falls back: the stored certificate is the one revoked on removal.
+          if (rejoin || !old || old.expiresAt <= Date.now() || !enrollmentUnavailable(error)) throw error;
           if (cached?.scope === scope && cached.api.certificate.signature === old.signature) {
             cached.signer.assertCurrent();
             return cached;
@@ -240,6 +267,6 @@ export async function ensureMobileAgentNetIdentity(options: MobileAgentNetEnroll
       return value;
     } finally { if (!retained) await signer.destroy(); }
   })();
-  inflight.set(scope, work);
-  try { return await work; } finally { if (inflight.get(scope) === work) inflight.delete(scope); }
+  inflight.set(flightKey, work);
+  try { return await work; } finally { if (inflight.get(flightKey) === work) inflight.delete(flightKey); }
 }

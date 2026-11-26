@@ -7,14 +7,19 @@ export default {
   real: 'BotModelChainEditor, ModelRouteSelector, ModelSelector, themes and all translations',
   notCovered: 'Live catalog discovery, remote devices, persistence and model execution; fixture supplies providers and local component state',
   stubs: {
+    'src/renderer/hooks/useControllableDevices': 'export const useSelectableDevices = () => ({ devices: [], loaded: true });',
     'src/renderer/hooks/useModelRouteDevices': `export const useModelRouteDevices = ({ leadAgentDeviceId }) => ({
-      devices: leadAgentDeviceId ? [{ deviceId: leadAgentDeviceId, name: 'Shared models' }] : undefined,
+      devices: JSON.parse(document.getElementById('ui-page-context').textContent).case === 'loading-remote-favorite' ? [{ deviceId: 'fixture-device', name: 'Other computer' }]
+        : leadAgentDeviceId ? [{ deviceId: leadAgentDeviceId, name: 'Shared models' }] : undefined,
       leadAgentDeviceId: leadAgentDeviceId ?? null,
     });`,
   },
   cases: {
     default: { about: 'Unavailable primary and backup; status belongs to the model' },
     available: { about: 'Long available name with reasoning effort; no unavailable status on this model' },
+    'plugin-primary': { about: 'Choose a plugin engine as the primary model and retain the built-in backup' },
+    loading: { about: '#10207: local first snapshot pending, then ready while the saved model picker stays open' },
+    'loading-remote-favorite': { about: '#10207 review: ready other-computer favorite remains selectable while local catalog is pending' },
     'four-backups': { about: 'Four visible backups with unbroken IDs and working reorder/remove controls' },
     'global-settings': { about: 'Global settings row uses the same wrapped picker' },
     'shared-only': { about: 'Shared-only Gemini/Terra labels resolve in primary and backup triggers' },
@@ -30,6 +35,40 @@ export default {
   },
   async check(page, ui) {
     const pickers = page.locator('[data-model-settings-fixture] button[aria-haspopup="listbox"]');
+    if (ui.case === 'plugin-primary') {
+      await pickers.first().click();
+      const row = page.locator('[data-plugin-engine-model="acp-plugin:sample:engine#sample-model"]').first();
+      await row.scrollIntoViewIfNeeded();
+      await ui.capture('choose-plugin-model');
+      await row.click();
+      await pickers.first().getByText('Sample Model', { exact: false }).waitFor();
+      await pickers.nth(1).getByText('Gemini with a very long model display name', { exact: false }).waitFor();
+      await ui.capture('plugin-primary-with-backup');
+      return;
+    }
+    if (ui.case === 'loading-remote-favorite') {
+      await pickers.first().click();
+      const list = page.getByRole('listbox');
+      await list.getByText('Shared Gemini', { exact: true }).waitFor();
+      assert.equal(await list.getByRole('status').count(), 0);
+      await ui.capture('ready-favorite-local-pending');
+      await page.locator('[data-rail-item="favorites"]').click();
+      await list.getByText('Shared Gemini', { exact: true }).click();
+      await pickers.first().getByText('Shared Gemini', { exact: true }).waitFor();
+      await ui.capture('selected-remote-favorite');
+      return;
+    }
+    if (ui.case === 'loading') {
+      await pickers.first().click();
+      const list = page.getByRole('listbox');
+      await list.getByRole('status').getByText(await ui.t('newChat.modelSelector.trigger.loading'), { exact: true }).waitFor();
+      await ui.capture('pending');
+      await page.evaluate(() => window.dispatchEvent(new Event('fixture:catalog-ready')));
+      await list.getByRole('option').first().waitFor();
+      assert.equal(await list.getByRole('status').count(), 0);
+      await ui.capture('ready');
+      return;
+    }
     const expected = ui.case === 'four-backups' ? 5 : 2;
     const clipped = await pickers.evaluateAll(buttons => buttons.flatMap(button =>
       [...button.querySelectorAll('span')].filter(span => span.textContent?.trim() &&

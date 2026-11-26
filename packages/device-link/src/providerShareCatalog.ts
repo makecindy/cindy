@@ -10,6 +10,25 @@ import { providerShareIdentifier, sharedTaskDeviceId } from './protocol.js';
 export const PROVIDER_SHARE_RECEIVED_CATALOGS_CHANNEL = 'maker:provider-share:received-catalogs';
 
 /**
+ * 一条收到的分享此刻在选择器里怎么出现。Desktop(本机与远控)、Mobile、收藏与额度入口共用这一条，
+ * 不再各自判断在线状态(2026-11-23 用户裁决「保留并标注」)：
+ * - `paused`：已暂停，不列(任务正用着时由调用方保留一行)；
+ * - `available`：分享者电脑在线，或有已授权的待机副本在线；
+ * - `offline`：分享者电脑暂时离线。仍然列出并标注「暂时离线」，不因在线状态来回变化而一会儿有一会儿无；
+ *   能否选用、目录是否可信仍按目录自身的信任期与执行时的实时校验判断。
+ */
+export type ProviderSharePickerState = 'available' | 'offline' | 'paused';
+
+export function providerSharePickerState(share: {
+  status: string;
+  hostOnline?: boolean;
+  standbyOnline?: boolean;
+}): ProviderSharePickerState {
+  if (share.status !== 'active') return 'paused';
+  return share.hostOnline === true || share.standbyOnline === true ? 'available' : 'offline';
+}
+
+/**
  * 分享者电脑的名字不给受邀者(provider-sharing.md §6)：生成链接与转交已收到的分享时，
  * `deviceName` 一律填这个占位。字段本身不能省，旧版受邀者与手机按必填解析，空了会丢掉整条分享。
  */
@@ -180,7 +199,10 @@ export function scrubSharedProvider<T>(provider: T): T {
   const groupStatus = readProviderShareGroupStatus(provider);
   const guestRunning = readProviderShareGuestRunning(provider);
   const { subscriptionAccount, openAiAccount, subscriptionPoolAlias: _poolAlias, ...fields } = provider as Record<string, unknown>;
+  delete fields.subscriptionPoolTarget;
+  delete fields.subscriptionAccountKeys;
   delete fields.group;
+  delete fields.customIcon;
   // Gateway and organization artwork must not disclose the owner's organization identity.
   if (fields.id === 'xd' || fields.source === 'organization') delete fields.logoKind;
   delete fields[PROVIDER_RUNNING_TURNS_FIELD];

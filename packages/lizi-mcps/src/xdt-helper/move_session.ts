@@ -29,7 +29,7 @@ export function registerMoveSessionTool(
     name: "move_session",
     category: "control",
     description:
-      "Move an existing local Cindy task into a project or between projects. Pass an existing absolute directory as working_dir. Pass null to remove the project grouping while retaining the task’s working directory, matching the UI. Reuses Cindy’s task move path, including transcript relocation and idle runtime refresh; does not move project files or create a task. Running tasks (including a lead with running workers), IM-controlled tasks, archived/deleted tasks, Bot-owned tasks and Review tasks cannot move. SSH tasks are unsupported. Cannot move the calling task while it is executing this tool. Use list_sessions to find session_id and list_projects to find directories; create_project restores a hidden project.",
+      "Move an existing local Cindy task into a project or between projects. Pass the absolute directory of a visible, registered project as working_dir. Pass null to remove the project grouping while retaining the task’s working directory, matching the UI. Reuses Cindy’s task move path, including transcript relocation and idle runtime refresh; does not move project files or create a task. Running tasks (including a lead with running workers), IM-controlled tasks, archived/deleted tasks, Bot-owned tasks and Review tasks cannot move. SSH tasks are unsupported. Cannot move the calling task while it is executing this tool. Use list_sessions to find session_id and list_projects to find directories; create_project restores a hidden project.",
     inputShape: {
       session_id: z.string().trim().min(1).max(256),
       working_dir: z.string().trim().min(1).max(4096).nullable(),

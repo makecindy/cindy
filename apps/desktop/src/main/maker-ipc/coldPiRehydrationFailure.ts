@@ -13,6 +13,8 @@
  * 错误码与用户可见文案不变，行为仍然 fail-closed、不改路由。
  */
 
+import { isByokProviderId } from '@cindy/model-providers';
+import { AgentStartupStoppedError, PiByomRouteAbsentError } from '@cindy/maker-core';
 import type { IpcErrorCode } from '../../shared/ipc-errors.js';
 
 export type ColdPiRehydrationFailureCategory =
@@ -55,6 +57,29 @@ export class ColdPiRehydrationError extends Error {
   }
 }
 
+/** A missing native route alone does not prove a missing saved connection. */
+export async function describeMissingColdPiConnection(input: {
+  error: unknown;
+  currentProviderId: string | null | undefined;
+  providers: readonly { id: string }[];
+  providerExists: (id: string) => Promise<boolean>;
+  applyingOnSend?: boolean;
+}): Promise<{ category: string; detail: string } | null> {
+  const { error, currentProviderId } = input;
+  if (!(error instanceof ColdPiRehydrationError) || error.category !== 'bootstrap-failed') return null;
+  const cause = error.cause instanceof AgentStartupStoppedError ? error.cause.cause : error.cause;
+  if (!(cause instanceof PiByomRouteAbsentError) || cause.providerId !== currentProviderId ||
+      !currentProviderId || !/^[a-z0-9_-]{1,40}$/.test(currentProviderId) ||
+      isByokProviderId(currentProviderId) || input.providers.some(provider => provider.id === currentProviderId)) return null;
+  const exists = await input.providerExists(currentProviderId).catch(() => undefined);
+  if (exists !== false) return null;
+  return {
+    category: 'current-provider-missing',
+    detail: `the previous model connection '${currentProviderId}' is missing on this computer` +
+      (input.applyingOnSend ? '; the message was not sent' : ''),
+  };
+}
+
 /** 压成单行并截断：原因来自异常 message，可能含多行栈或超长路径。 */
 export function sanitizeColdPiRehydrationReason(raw: unknown): string {
   const text = raw instanceof Error ? raw.message : typeof raw === 'string' ? raw : String(raw ?? '');
@@ -83,14 +108,18 @@ export function describeCauseForIpc(cause: unknown): string {
  * 兜底脱敏：把 POSIX / Windows / `~` 开头的绝对路径替换为 `<path>`。类别约定文案本身不含
  * 路径，这里只防未来有人把路径拼进 detail。
  */
-export function redactLocalPaths(text: string): string {
+export function redactLocalPathText(text: string): string {
   const singleLine = text.replace(/\s+/g, ' ').trim();
   // `~/…` 先于绝对路径处理，否则 `/Library/…` 会先被吃掉而留下 `~`。路径段含空格时
   // 只能脱敏到第一个空格为止：detail 的来源是类别约定文案与错误码，这里只是兜底。
-  const redacted = singleLine
+  return singleLine
     .replace(/~[\\/][^\s'"`<>|]*/g, '<path>')
     .replace(/(?:[A-Za-z]:)?[\\/](?:[^\s'"`<>|]+[\\/])+[^\s'"`<>|]*/g, '<path>');
-  if (!redacted) return 'no error detail';
+}
+
+/** Cold-start IPC details retain their own budget; other callers bound their output. */
+export function redactLocalPaths(text: string): string {
+  const redacted = redactLocalPathText(text) || 'no error detail';
   return redacted.length > DETAIL_MAX_LENGTH
     ? `${redacted.slice(0, DETAIL_MAX_LENGTH - 1)}…`
     : redacted;

@@ -5,6 +5,7 @@
  * 账号作用域未提交时不读不写；文件坏了按没有记录处理，下次写入覆盖。旧版经模式建的记录读取时丢弃。
  * 用途：任务撞上配额时，提示「换到同一条路线里的下一个来源继续」(model-groups.md §6.1)。
  */
+import { readFile } from 'node:fs/promises';
 import {
   MODEL_GROUP_LIMITS,
   sanitizeModelGroupSelection,
@@ -48,22 +49,63 @@ function binding(value: unknown): ModelGroupSessionBinding | null {
   return selection && pickedKey && at !== null ? { selection, pickedKey, at } : null;
 }
 
-function readFrom(file: string): Map<string, ModelGroupSessionBinding> {
-  const out = new Map<string, ModelGroupSessionBinding>();
-  try {
-    const content = readAtomicFileSync(file);
-    if (!content) return out;
-    const parsed = JSON.parse(content) as { bindings?: unknown };
-    const raw = parsed?.bindings;
-    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return out;
-    for (const [sessionId, value] of Object.entries(raw as Record<string, unknown>)) {
-      const entry = binding(value);
-      if (validSessionId(sessionId) && entry) out.set(sessionId, entry);
-    }
-  } catch (error) {
-    log.warn('model group session bindings unreadable; treating as none', { error: error instanceof Error ? error.name : 'unknown' });
+type Bindings = Map<string, ModelGroupSessionBinding>;
+
+function parseBindings(content: string | null): Bindings {
+  const out: Bindings = new Map();
+  if (!content) return out;
+  const raw = (JSON.parse(content) as { bindings?: unknown })?.bindings;
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return out;
+  for (const [sessionId, value] of Object.entries(raw)) {
+    const entry = binding(value);
+    if (validSessionId(sessionId) && entry) out.set(sessionId, entry);
   }
   return out;
+}
+
+function readFrom(file: string): Bindings {
+  try {
+    return parseBindings(readAtomicFileSync(file));
+  } catch (error) {
+    log.warn('model group session bindings unreadable; treating as none', { error: error instanceof Error ? error.name : 'unknown' });
+    return new Map();
+  }
+}
+
+// Keep the current owner's bounded index. An in-flight read is shared by dispatches.
+// Windows may have only the backup after an interrupted atomic replacement.
+let dispatchIndex: { file: string; entries: Promise<Bindings> } | undefined;
+
+async function readIfPresent(file: string): Promise<string | null> {
+  try {
+    return await readFile(file, 'utf8');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    throw error;
+  }
+}
+
+async function loadDispatchIndex(file: string): Promise<Bindings> {
+  return parseBindings(await readIfPresent(file) ?? await readIfPresent(`${file}.bak`));
+}
+
+export async function readModelGroupBindingForDispatch(sessionId: string): Promise<ModelGroupSessionBinding | null> {
+  const file = filePath();
+  if (!file || !validSessionId(sessionId)) return null;
+  while (file === filePath()) {
+    if (dispatchIndex?.file !== file) dispatchIndex = { file, entries: loadDispatchIndex(file) };
+    const current = dispatchIndex;
+    try {
+      const entries = await current.entries;
+      if (dispatchIndex === current && file === filePath()) return entries.get(sessionId) ?? null;
+    } catch (error) {
+      if (dispatchIndex !== current) continue;
+      dispatchIndex = undefined;
+      log.warn('model group dispatch index unreadable', { error: error instanceof Error ? error.name : 'unknown' });
+      return null;
+    }
+  }
+  return null;
 }
 
 function writeTo(file: string, bindings: Map<string, ModelGroupSessionBinding>): void {
@@ -72,6 +114,7 @@ function writeTo(file: string, bindings: Map<string, ModelGroupSessionBinding>):
     .slice(0, MODEL_GROUP_SESSION_BINDINGS_MAX);
   try {
     atomicWriteFileSync(file, JSON.stringify({ bindings: Object.fromEntries(newest) }));
+    dispatchIndex = { file, entries: Promise.resolve(new Map(newest)) };
   } catch (error) {
     log.warn('model group session binding not saved', { error: error instanceof Error ? error.name : 'unknown' });
   }
@@ -96,12 +139,4 @@ export function readModelGroupSessionBinding(sessionId: string): ModelGroupSessi
   const file = filePath();
   if (!file || !validSessionId(sessionId)) return null;
   return readFrom(file).get(sessionId) ?? null;
-}
-
-export function clearModelGroupSessionBinding(sessionId: string): void {
-  const file = filePath();
-  if (!file || !validSessionId(sessionId)) return;
-  const bindings = readFrom(file);
-  if (!bindings.delete(sessionId)) return;
-  writeTo(file, bindings);
 }

@@ -51,6 +51,8 @@ import { createBinaryProvisioner } from '../factory.js';
 interface DownloadOpts {
   targetPath: string;
   onProgress?: (e: { loaded: number; total: number | null; percent: number | null; speedBps: number }) => void;
+  onRetry?: (e: { attempt: number; delayMs: number; cause: Error }) => void;
+  onVerifying?: () => void;
 }
 
 /** download mock 的成功实现:落一个真实 gzip 让后续解压走通。 */
@@ -123,6 +125,26 @@ describe('createBinaryProvisioner emit 时序', () => {
     expect(statusesWhenDownloadInvoked).not.toContain('downloading');
     expect(statuses).toContain('downloading');
     expect(statuses[statuses.length - 1]).toBe('ready');
+  });
+
+  // Regression (2026-11-17): retries and verification were dropped, so the splash bar sat
+  // still with no explanation. They now reach the state as standard `download` progress.
+  it('reports retries and verification without announcing a transfer that has not started', async () => {
+    const states: VendorRuntimeState[] = [];
+    mocks.download.mockImplementation(async (opts: DownloadOpts) => {
+      opts.onRetry?.({ attempt: 2, delayMs: 1000, cause: new Error('connect reset') });
+      opts.onProgress?.({ loaded: 3, total: 3, percent: 100, speedBps: 1024 });
+      opts.onVerifying?.();
+      return fulfillDownload(opts, false);
+    });
+
+    await makeProvisioner().prepare({ onProgress: (p) => states.push(p) });
+
+    const retry = states.find((p) => p.download?.phase === 'retrying');
+    expect(retry).toMatchObject({ download: { attempt: 2, retryReason: 'network' } });
+    expect(retry?.status).not.toBe('downloading');
+    expect(states.find((p) => p.download?.phase === 'verifying')?.status).toBe('verifying');
+    expect(states[states.length - 1]).toMatchObject({ status: 'ready', download: undefined });
   });
 });
 

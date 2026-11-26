@@ -102,6 +102,8 @@ interface UseCCAgentChatReturn {
   pendingQueue: QueuedMessage[];
   /** 正在尝试插话投递的队列项 clientId。 */
   steeringQueueClientIds: string[];
+  /** 当前引擎不能同轮插话：不提供插话入口，消息等这一轮结束再发。 */
+  steerUnsupported: boolean;
   /** Queue was paused by Stop and resumes only after the user clicks Continue. */
   queuePaused: boolean;
   queueEditLocks: string[];
@@ -138,6 +140,7 @@ interface UseCCAgentChatReturn {
       pastedTextRanges?: PastedTextRange[];
       slashCommandRanges?: SlashCommandRange[];
       replyQuote?: import('../../shared/chatReplyQuote').ChatReplyQuote;
+      firstMessageIdentity?: { clientId: string; createdAt: string };
       beforeEnqueue?: () => Promise<boolean>;
       onInputCreated?: (clientId: string) => void;
       onRemoteOptimisticFailure?: (clientId: string, error?: unknown) => void;
@@ -208,6 +211,7 @@ interface UseCCAgentChatReturn {
   errorIsRecoverable: boolean;
   /** Explicit retry target for ErrorBanner; null means retry is unsafe or unavailable. */
   errorRetryText: string | null;
+  queueHeadRetry: boolean;
   errorCanContinue?: boolean;
   /** live 终态错误绑定的持久化 error 行 clientId;无则没有 persist 续跑依据。 */
   errorPersistId: string | null;
@@ -442,6 +446,7 @@ export function useCCAgentChat(
         pastedTextRanges?: PastedTextRange[];
         slashCommandRanges?: SlashCommandRange[];
         replyQuote?: import('../../shared/chatReplyQuote').ChatReplyQuote;
+        firstMessageIdentity?: { clientId: string; createdAt: string };
         beforeEnqueue?: () => Promise<boolean>;
         onInputCreated?: (clientId: string) => void;
         onRemoteOptimisticFailure?: (clientId: string, error?: unknown) => void;
@@ -873,6 +878,7 @@ export function useCCAgentChat(
     pendingQueueLength,
     pendingQueue: lightState.pendingQueue,
     steeringQueueClientIds: lightState.steeringQueueClientIds,
+    steerUnsupported: lightState.steerUnsupported,
     queuePaused: lightState.queuePaused,
     queueEditLocks: lightState.queueEditLocks,
     queueInteractionLocks: lightState.queueInteractionLocks,
@@ -916,6 +922,7 @@ export function useCCAgentChat(
     // ErrorBanner 网络分支据此显示「正在自动重试…」而非「可点击重试」。
     errorIsRecoverable: !lightState.error && lightState.recoverableError != null,
     errorRetryText: lightState.errorRetryText,
+    queueHeadRetry: lightState.queueHeadRetry,
     errorCanContinue: lightState.errorCanContinue,
     errorPersistId: lightState.errorPersistId,
     disposedErrorPersistId: lightState.disposedErrorPersistId,

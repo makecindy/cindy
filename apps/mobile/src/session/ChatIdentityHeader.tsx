@@ -27,7 +27,7 @@ export const CHAT_HEADER_BLUR_FADE_INSIDE = 0;
  * 设置。点身份区默认与设置按钮打开同一份资料 / 设置；伙伴私聊的身份区打开近况（onOpenIdentity）。
  */
 export function ChatIdentityHeader({
-  nativeHeader = false, showBack = true, accessory, mark, title, subtitle, identityLabel, identityHint, controlsReady = true, onBack, onOpenSettings, onOpenIdentity, settingsLabel, testIDPrefix, settingsTestID,
+  nativeHeader = false, showBack = true, accessory, mark, title, titleBadge, subtitle, identityLabel, identityHint, controlsReady = true, onBack, onOpenSettings, onOpenIdentity, settingsLabel, testIDPrefix, settingsTestID,
 }: {
   /** The caller reserves the measured iOS navigation bar height, including the status area. */
   nativeHeader?: boolean;
@@ -36,6 +36,8 @@ export function ChatIdentityHeader({
   accessory?: ReactNode;
   mark: ReactNode;
   title: string;
+  /** Compact inline badge beside the title (e.g. External group mark for enterprise viewers). */
+  titleBadge?: ReactNode;
   /** A short line under the title: presence + computer name, or member names. */
   subtitle: ReactNode;
   identityLabel: string;
@@ -67,7 +69,10 @@ export function ChatIdentityHeader({
       disabled={!controlsReady || !identityAction} onPress={openIdentity} testID={`${testIDPrefix}.identity`}>
       {mark ? <View style={styles.mark}>{mark}</View> : null}
       <View style={styles.identityText}>
-        <Text numberOfLines={1} style={styles.title}>{title}</Text>
+        {titleBadge ? <View style={styles.titleRow}>
+          <Text numberOfLines={1} style={[styles.title, styles.titleFlexible]}>{title}</Text>
+          {titleBadge}
+        </View> : <Text numberOfLines={1} style={styles.title}>{title}</Text>}
         {typeof subtitle === 'string' ? <Text numberOfLines={1} style={styles.subtitle}>{subtitle}</Text> : subtitle}
       </View>
     </Pressable>;
@@ -95,11 +100,12 @@ function NativeChatHeader({ identity, back, actions, actionCount }: {
   const { colors } = useTheme();
   const window = useAdaptiveWindow();
   const insets = window.insets;
-  // The identity is left aligned: reserve Back once and the trailing controls once.
-  // Mirroring the trailing width on both sides truncates even short names with two actions.
+  // Reserve UIKit's side margins and inter-item clearance, as navigationTitleMaxWidth does.
+  // Spending that clearance on the identity pushes custom actions into an empty overflow
+  // menu on iOS 26. Keep Back/trailing controls once each; only the name may shrink.
   const trailingWidth = actionCount * navigationChrome.target + Math.max(0, actionCount - 1) * spacing.md;
-  const width = Math.max(0, Math.min(240, window.width - insets.left - insets.right - spacing.lg * 2
-    - (back ? navigationChrome.target + spacing.md : 0) - (actionCount ? trailingWidth + spacing.md : 0)));
+  const width = Math.max(0, Math.min(240, window.width - insets.left - insets.right - spacing.lg * 4
+    - (back ? navigationChrome.target + spacing.md : 0) - trailingWidth));
   const options = useMemo(() => ({ headerShown: true, headerTransparent: true, headerShadowVisible: false,
     headerBackVisible: false, headerTintColor: colors.textPrimary,
     headerStyle: { backgroundColor: 'transparent' }, headerTitle: '',
@@ -129,7 +135,9 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   pressed: { opacity: 0.72 },
   mark: { width: CHAT_HEADER_MARK_SIZE, height: CHAT_HEADER_MARK_SIZE },
   identityText: { flex: 1, minWidth: 0 },
+  titleRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.xs },
   title: { color: colors.textPrimary, fontSize: typeScale.body, lineHeight: lineHeight.body, fontWeight: fontWeight.semibold },
+  titleFlexible: { flexShrink: 1 },
   subtitle: { color: colors.textTertiary, fontSize: typeScale.caption, lineHeight: lineHeight.caption },
   subtitleFlexible: { flexShrink: 1 },
 });

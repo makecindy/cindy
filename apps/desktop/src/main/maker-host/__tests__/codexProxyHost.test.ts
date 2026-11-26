@@ -8,7 +8,9 @@ import type { AddressInfo } from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { translateResponsesRequest } from '@cindy/responses-chat-bridge';
+import { createResponsesChatHandler, translateResponsesRequest } from '@cindy/responses-chat-bridge';
+import { createResponsesAnthropicHandler } from '@cindy/responses-anthropic-bridge';
+import { createPiProviderFetch, handlePiProviderRequest } from '../pi-provider-transport.js';
 import { TEST_XD_GATEWAY_BASE_URL as XD_GATEWAY_BASE_URL } from '../../../test/vitest/clientEndpointsFixture';
 
 type Registry = {
@@ -35,6 +37,7 @@ const mockState = vi.hoisted(() => {
     },
     createAnthropicCompatProxy: vi.fn(),
     realStripTransforms: false,
+    requestSizeControllerFactory: undefined as typeof import('../oversized-attachment-recovery.js').createRequestSizeController | undefined,
     createPiProviderFetch: vi.fn(() => vi.fn()),
     handlePiProviderRequest: vi.fn(async () => undefined),
     createResponsesChatHandler: vi.fn(() => ({ handle: vi.fn(async () => undefined) })),
@@ -150,8 +153,6 @@ vi.mock('@cindy/anthropic-compat-proxy', async (importOriginal) => {
     stripNonCanonicalResponsesItemIdsFromBody: () => null,
     shortenOversizedResponsesItemIdsFromBody: () => null,
     stripNonAnthropicFields: mockState.stripNonAnthropicFields,
-    // 视觉桥 transform：默认短路（controller 未注入 → shouldBridge 恒 false → null 透传）。
-    createVisionBridgeTransform: () => (() => null),
     createInstructionsRegistry: () => {
       const map = new Map<string, string>();
       return {
@@ -167,8 +168,14 @@ vi.mock('@cindy/anthropic-compat-proxy', async (importOriginal) => {
 // Media-store persistence is covered by oversized-attachment-recovery.test.ts; keep the
 // real request rewrite and replace only where the preserved file is published.
 vi.mock('../oversized-attachment-recovery.js', async () => {
-  const { recoverInlineAttachments } = await vi.importActual<typeof import('@cindy/anthropic-compat-proxy')>('@cindy/anthropic-compat-proxy');
+  const { recoverInlineAttachments, controlRequestSize } = await vi.importActual<typeof import('@cindy/anthropic-compat-proxy')>('@cindy/anthropic-compat-proxy');
+  const createRequestSizeController: typeof import('../oversized-attachment-recovery.js').createRequestSizeController = (_resolveSession, preprocessor, resolveProvider) => mockState.requestSizeControllerFactory?.(_resolveSession, preprocessor, resolveProvider) ?? ({
+    enabled: () => process.env.XDT_REQUEST_SIZE_CONTROL_DISABLE !== '1',
+    format: ctx => ctx.url.includes('/responses') ? 'responses' : ctx.url.includes('/messages') ? 'anthropic' : ctx.url.includes('/chat/completions') ? 'chat' : null,
+    control: (body, format, policy) => controlRequestSize(body, format, { ...policy, preprocessor, modelFamily: 'gpt' }, async () => '/tmp/preserved.png'),
+  });
   return {
+    createRequestSizeController,
     createAttachmentRecovery: () => () => (body: Parameters<typeof recoverInlineAttachments>[0], target: number) =>
       recoverInlineAttachments(body, target, { prepare: async () => '/tmp/preserved.png', commit: async () => {} }),
   };
@@ -190,6 +197,7 @@ vi.mock('@cindy/responses-anthropic-bridge', () => ({
 // ~7s (2026-10-16), and order-shuffled runs confirm cases stay independent.
 async function freshCodexProxyHost(realStripTransforms = false) {
   mockState.realStripTransforms = realStripTransforms;
+  mockState.requestSizeControllerFactory = undefined;
   mockState.reportCindyGatewayKeyRejected.mockReset();
   mockState.gatewayBaseUrl = '';
   const host = await import('../codex-proxy-host.desktop.js');
@@ -236,6 +244,71 @@ async function runLocalRefusal(decision: unknown): Promise<{ status: number; bod
   });
   return { status, body: JSON.parse(raw) };
 }
+
+describe('standalone Codex web search routing', () => {
+  // #10747: exercise the production router with alpha/search's metadata-only
+  // identity. Existing routing cases use thread-id and cannot detect this fallthrough.
+  // Unit tier: one in-memory fixture, no upstream requests or user credentials.
+  it('routes registered metadata threads without crossing providers or overriding explicit identities', async () => {
+    const host = await freshCodexProxyHost();
+    const { buildUserProvider } = await import('@cindy/model-providers');
+    const { setCustomProviders } = await import('../active-catalog.js');
+    const { setCustomProviderKeyReader } = await import('../provider-route.js');
+    const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
+    const model = 'codex/gpt-6.1-sol';
+    const providers = [
+      { id: 'search-magpie', session: 'search-session-a', thread: 'search-thread-a', upstream: 'https://magpie.example/v1' },
+      { id: 'search-other', session: 'search-session-b', thread: 'search-thread-b', upstream: 'https://other.example/v1' },
+    ];
+    setCustomProviders(providers.map(({ id, upstream }) => buildUserProvider({
+      id, name: id, runtimes: { codex: { baseUrl: upstream, models: [{ id: model, name: model }] } },
+    })));
+    setCustomProviderKeyReader(() => 'synthetic-search-test-key');
+    for (const provider of providers) {
+      host.registerComposed(provider.session, provider.thread, 'SYNTHETIC_TEST_INSTRUCTION');
+      setSessionProvider(provider.session, provider.id);
+    }
+    host.registerChildThread(providers[1].thread, 'search-child-b');
+    host.setCodexProxyAuthInjection('env-key');
+    const metadata = (thread: string) => ({ 'x-codex-turn-metadata': JSON.stringify({ thread_id: thread }) });
+    const cases: Array<[string, Record<string, string>, string | null]> = [
+      ['metadata-only search', metadata('search-thread-a'), providers[0].upstream],
+      ['same model, second provider', metadata('search-thread-b'), providers[1].upstream],
+      ['child thread, not body id', metadata('search-child-b'), providers[1].upstream],
+      ['explicit thread wins', { ...metadata('search-thread-b'), 'thread-id': 'search-thread-a' }, providers[0].upstream],
+      ['registered request id wins', { ...metadata('search-thread-b'), 'x-client-request-id': 'search-thread-a' }, providers[0].upstream],
+      ['random request id does not hide metadata', { ...metadata('search-thread-a'), 'x-client-request-id': 'random-request-id' }, providers[0].upstream],
+      ['case-insensitive header', { 'X-Codex-Turn-Metadata': JSON.stringify({ thread_id: 'search-thread-a' }) }, providers[0].upstream],
+      ['unknown explicit thread wins', { ...metadata('search-thread-a'), 'thread-id': 'unregistered-thread' }, null],
+      ['unregistered metadata', metadata('unregistered-thread'), null],
+      ['invalid JSON', { 'x-codex-turn-metadata': '{' }, null],
+      ['non-string thread', { 'x-codex-turn-metadata': JSON.stringify({ thread_id: 42 }) }, null],
+      ['null metadata', { 'x-codex-turn-metadata': 'null' }, null],
+      ['array metadata', { 'x-codex-turn-metadata': '[]' }, null],
+      ['legacy thread header', { 'thread-id': 'search-thread-a' }, providers[0].upstream],
+      ['legacy request id', { 'x-client-request-id': 'search-thread-b' }, providers[1].upstream],
+      ['no identity', {}, null],
+    ];
+    try {
+      const route = host.createModelRoutingTransform();
+      for (const [name, headers, expected] of cases) {
+        const decision = await route({
+          // A child search can carry the root session id; it must not select a provider.
+          id: 'search-thread-a', model, input: [], commands: { search_query: [{ q: 'public query' }] },
+        }, { reqId: 1, method: 'POST', url: '/alpha/search', headers });
+        expect(decision?.upstreamOverride ?? null, name).toBe(expected);
+      }
+    } finally {
+      for (const provider of providers) {
+        clearSessionProvider(provider.session);
+        host.unregister(provider.session);
+      }
+      host.clearCodexProxyAuthInjection();
+      setCustomProviders([]);
+      setCustomProviderKeyReader(() => null);
+    }
+  });
+});
 
 describe('withCodexUpstreamRecording', () => {
   const DEFAULT_UPSTREAM = 'https://gateway.example/v1';
@@ -1316,6 +1389,68 @@ describe('chatBridgeCapabilitiesForRoute', () => {
     }
   });
 
+  // Unit regression: real routing -> native SDK -> outbound JSON. Kimi Code returned
+  // 400 "role 'developer' is not allowed"; existing native dispatch mocks never
+  // exercised that serialization. Minimal input is a reasoning model + instructions.
+  it.each<{ model: string; upstream: string; role: string; oauth?: boolean }>([
+    ...['k3', 'k3-256k', 'k3.1-pro-highspeed', 'kimi-for-coding', 'kimi-for-coding-highspeed']
+      .map(model => ({ model, upstream: 'https://api.kimi.com/coding/v1', role: 'system' })),
+    { model: 'k3', upstream: 'https://api.kimi.com/coding/v1', role: 'system', oauth: true },
+    { model: 'k3', upstream: 'https://api.kimi.com.evil.example/coding/v1', role: 'developer' },
+    { model: 'k3', upstream: 'https://api.kimi.com/coding/v10', role: 'developer' },
+    { model: 'k3', upstream: 'http://api.kimi.com/coding/v1', role: 'developer' },
+    { model: 'k3', upstream: 'https://other-provider.example/v1', role: 'developer' },
+  ])('serializes the Codex native Chat instruction role for $model at $upstream / oauth=$oauth', async ({ model, upstream, role, oauth }) => {
+    const host = await freshCodexProxyHost();
+    const { buildUserProvider, providerPresetOAuth } = await import('@cindy/model-providers');
+    const { setCustomProviders } = await import('../active-catalog.js');
+    const { setCustomProviderKeyReader, setOAuthTokenReader } = await import('../provider-route.js');
+    const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
+    const transport = await vi.importActual<typeof import('../pi-provider-transport.js')>('../pi-provider-transport.js');
+    const provider = buildUserProvider({ id: 'kimi-role', name: 'Renamed connection',
+      ...(oauth ? { auth: { method: 'oauth' as const, oauth: providerPresetOAuth('kimi')! } } : {}), runtimes: {
+      codex: { baseUrl: upstream, wireProtocol: 'openai-chat', models: [
+        { id: model, name: model, api: 'openai-completions', efforts: ['high'], defaultEffort: 'high' },
+      ] },
+    } });
+    const originalProvider = structuredClone(provider);
+    setCustomProviders([provider]);
+    setCustomProviderKeyReader(() => 'fixture-key');
+    setOAuthTokenReader(() => 'fixture-oauth');
+    host.registerComposed('session-kimi-role', 'thread-kimi-role', 'PRODUCT_PROMPT');
+    setSessionProvider('session-kimi-role', provider.id);
+    host.setCodexProxyAuthInjection('env-key');
+    try {
+      const body = { model, instructions: 'BASE_PROMPT', input: 'Reply OK', stream: true };
+      const ctx = { reqId: 10370, method: 'POST', url: '/responses', headers: { 'thread-id': 'thread-kimi-role' } };
+      const decision = await host.createModelRoutingTransform()(body, ctx);
+      if (!decision?.localHandler) throw new Error('expected native Chat handler');
+      await decision.localHandler({ rawBody: Buffer.from(JSON.stringify(body)), parsedBody: body, ctx, res: {} as never });
+      const options = vi.mocked(mockState.createPiProviderFetch as typeof transport.createPiProviderFetch).mock.lastCall?.[0];
+      const request = vi.mocked(mockState.handlePiProviderRequest as typeof transport.handlePiProviderRequest).mock.lastCall?.[1];
+      if (!options || !request) throw new Error('native dispatch was not exercised');
+      let outbound: Record<string, unknown> | undefined;
+      const fetch = transport.createPiProviderFetch({ ...options, fetchImpl: async (_url, init) => {
+        outbound = JSON.parse(String(init?.body));
+        return new Response('data: {"choices":[{"index":0,"delta":{"role":"assistant","content":"OK"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n',
+          { headers: { 'content-type': 'text/event-stream' } });
+      } });
+      const response = await fetch('https://unused.invalid', { body: JSON.stringify(request) });
+      expect(await response.text()).toContain('response.completed');
+      expect(outbound?.messages).toEqual([
+        { role, content: 'BASE_PROMPT\n\nPRODUCT_PROMPT' },
+        { role: 'user', content: [{ type: 'text', text: 'Reply OK' }] },
+      ]);
+      expect(provider).toEqual(originalProvider);
+    } finally {
+      host.unregister('session-kimi-role');
+      clearSessionProvider('session-kimi-role');
+      setCustomProviderKeyReader(() => null);
+      setOAuthTokenReader(() => null);
+      setCustomProviders([]);
+    }
+  });
+
   it('strips agent message ciphertext before a cross-provider Chat bridge request', async () => {
     const host = await freshCodexProxyHost();
     const { buildUserProvider } = await import('@cindy/model-providers');
@@ -1538,30 +1673,55 @@ describe('chatBridgeCapabilitiesForRoute', () => {
   });
 
   // #10269: Carbon discovery has only an ID, unlike the existing explicit API cases.
-  it.each(['individual', 'business', 'enterprise'].flatMap(account => ['anthropic-messages', 'openai-responses', 'openai-completions'].map(api => ({ account, api }))))('keeps the Copilot adapter for $api on the $account host', async ({ account, api }) => {
+  // #11326, unit: a discovered Responses entry must enter the native bridge with the OAuth defaults enabled.
+  it.each([
+    ...['individual', 'business', 'enterprise'].flatMap(account => ['anthropic-messages', 'openai-responses', 'openai-completions']
+      .map(api => ({ account, api, discovered: false, transparent: false }))),
+    { account: 'business', api: 'openai-responses', discovered: true, transparent: false },
+    { account: 'business', api: 'openai-responses', discovered: true, transparent: true },
+  ])('keeps the Copilot adapter for $api on the $account host (discovered: $discovered, transparent: $transparent)', async ({ account, api, discovered, transparent }) => {
     const host = await freshCodexProxyHost();
     const { setCustomProviders } = await import('../active-catalog.js');
     const { setOAuthTokenReader } = await import('../provider-route.js');
     const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
-    const { buildUserProvider, providerPresetOAuth, PROVIDER_MODEL_CATALOG, providerModelAdapterId } = await import('@cindy/model-providers');
+    const { buildUserProvider, providerPresetOAuth, PROVIDER_MODEL_CATALOG, providerModelAdapterId,
+      parseModelsListResponse, mergeDiscoveredRuntimeModels } = await import('@cindy/model-providers');
     const row = PROVIDER_MODEL_CATALOG.providers['github-copilot'].find(model => api === 'openai-completions'
       ? model.id === 'gemini-4-carbon' : model.execution.pi.api === api)!;
     const token = `fixture-token;proxy-ep=proxy.${account}.githubcopilot.com;`;
+    const modelId = discovered ? 'gpt-6.2-sol' : row.id;
+    const requestPath = '/v1/responses';
+    const upstream = transparent ? 'https://api.business.githubcopilot.com' : row.upstream;
+    const models = discovered ? mergeDiscoveredRuntimeModels([], parseModelsListResponse(
+      { data: [{ id: modelId, supported_endpoints: ['/responses'] }] }, row.upstream + '/models',
+    )!) : [{ id: row.id, name: row.name, ...(api === 'openai-completions' ? {} : { api: api as 'anthropic-messages' | 'openai-responses' }) }];
     setCustomProviders([buildUserProvider({ id: 'copilot-account', name: 'Copilot',
       auth: { method: 'oauth', oauth: providerPresetOAuth('github-copilot')! },
-      runtimes: { codex: { baseUrl: row.upstream, catalogPresetId: 'github-copilot',
+      runtimes: { codex: { baseUrl: upstream, catalogPresetId: 'github-copilot',
+        ...(transparent ? { requestPath } : {}),
         wireProtocol: api === 'openai-completions' ? 'anthropic-messages' : api as 'anthropic-messages' | 'openai-responses',
-        models: [{ id: row.id, name: row.name, ...(api === 'openai-completions' ? {} : { api: api as 'anthropic-messages' | 'openai-responses' }) }] } },
+        models } },
     })]);
     setOAuthTokenReader(() => token);
     host.registerComposed('session-copilot', 'thread-copilot', 'PRODUCT_PROMPT');
     setSessionProvider('session-copilot', 'copilot-account');
     host.setCodexProxyAuthInjection('env-key');
     try {
-      const body = { model: row.id, input: [{ role: 'user', content: 'hello' }] };
+      const body = { model: modelId, input: [{ role: 'user', content: 'hello' }] };
       const decision = await host.createModelRoutingTransform()(body, {
-        reqId: 1, method: 'POST', url: '/responses', headers: { 'thread-id': 'thread-copilot' },
+        reqId: 1, method: 'POST', url: '/responses', headers: {
+          'thread-id': 'thread-copilot',
+          ...(transparent ? { 'editor-version': 'fixture-editor' } : {}),
+        },
       });
+      if (transparent) {
+        expect(decision?.localHandler).toBeUndefined();
+        expect(decision?.pathOverride).toBe(requestPath);
+        const headers = new Headers(decision?.headerOverride);
+        expect(headers.get('editor-version')).toBeNull();
+        expect(headers.get('copilot-integration-id')).toBe('vscode-chat');
+        return;
+      }
       expect(decision).toEqual(expect.objectContaining({ localHandler: expect.any(Function) }));
       await (decision as { localHandler: (input: unknown) => Promise<void> }).localHandler({
         rawBody: Buffer.from(JSON.stringify(body)), parsedBody: body, res: {},
@@ -1569,7 +1729,8 @@ describe('chatBridgeCapabilitiesForRoute', () => {
       expect(mockState.createPiProviderFetch).toHaveBeenLastCalledWith(expect.objectContaining({
         apiKey: token,
         upstream: `https://api.${account}.githubcopilot.com`,
-        row: expect.objectContaining({ id: row.id, upstream: row.upstream }),
+        copilotOAuth: api === 'openai-responses',
+        row: expect.objectContaining({ id: modelId, upstream: row.upstream }),
       }));
       const nativeOptions = (mockState.createPiProviderFetch.mock.calls as unknown as Array<[{ row: typeof row }]>).at(-1)![0];
       expect(providerModelAdapterId(nativeOptions.row)).toBe('github-copilot');
@@ -3415,7 +3576,7 @@ describe('codex proxy host', () => {
         // upstream 是函数形态(每请求现取,model-access 下发可运行期换 endpoint);
         // 断言其当前求值 = 网关 base + /v1
         upstream: expect.any(Function),
-        // [armed HTTP recovery strip(WS 错误后落回 HTTP 即激活对应 strip), encrypted activeStrip, image generation activeStrip, provider-aware Guardian reviewer, locked Subagent route, instructions 注入, locked Subagent exec guard, Gateway 原生 web_search, 跨来源压缩块兼容, xAI ModelInput activeStrip, responses item id activeStrip(#4738), responses item id length activeStrip(#4227), DeepSeek V4.1 replay 兼容, exec function adapter, strict gateway history 兼容, xAI ModelInput sanitize, DeepSeek V4 custom tool 兼容, xAI Responses 兼容, XD Gateway Grok 兼容, ByteDance Seed tool 兼容, MiniMax effort 兼容, provider model rewrite, provider 参数归一, routed-model armed HTTP recovery strip, raw reasoning activeStrip, 视觉桥(controller 未注入 → 短路透传), 工具 ID 校正, Responses 重复工具调用清理 activeStrip(#7906), stripNonAnthropicFields, 子代理身份观察]
+        // [armed HTTP recovery strip(WS 错误后落回 HTTP 即激活对应 strip), encrypted activeStrip, image generation activeStrip, provider-aware Guardian reviewer, locked Subagent route, instructions 注入, locked Subagent exec guard, Gateway 原生 web_search, 跨来源压缩块兼容, xAI ModelInput activeStrip, responses item id activeStrip(#4738), responses item id length activeStrip(#4227), DeepSeek V4.1 replay 兼容, exec function adapter, strict gateway history 兼容, xAI ModelInput sanitize, DeepSeek V4 custom tool 兼容, xAI Responses 兼容, XD Gateway Grok 兼容, ByteDance Seed tool 兼容, MiniMax effort 兼容, provider model rewrite, provider 参数归一, routed-model armed HTTP recovery strip, raw reasoning activeStrip, 工具 ID 校正, Responses 重复工具调用清理 activeStrip(#7906), stripNonAnthropicFields, 子代理身份观察]
         transformRequest: [
           expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function),
           expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function),
@@ -3423,7 +3584,9 @@ describe('codex proxy host', () => {
           expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function),
           expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function),
           expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), // frozen custom-provider effort
-          expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function),
+          expect.any(Function), expect.any(Function), expect.any(Function),
+          expect.any(Function), // #11278: route-scoped tool audio recovery
+          expect.any(Function), // #11867: final Responses call_id projection
         ],
         transformResponse: expect.any(Function),
         routingTransform: expect.any(Function),
@@ -3434,9 +3597,12 @@ describe('codex proxy host', () => {
           expect.objectContaining({ id: 'responses_item_id_prefix' }),
           expect.objectContaining({ id: 'responses_item_id_length' }),
           expect.objectContaining({ id: 'responses_reasoning_content' }),
+          expect.objectContaining({ id: 'responses_tool_audio', applyOnUnmatchedRetry: false, allowExtraRules: false }),
           // #7906: 只去重工具 ID，不许在同一次透明重试里叠洗其它 strip。
           expect.objectContaining({ id: 'duplicate_responses_tool_call', allowExtraRules: false }),
           expect.objectContaining({ id: 'xai_model_input' }),
+          // A Responses gateway that routes Claude to Bedrock rejects hosted search; only that rejection is retried once.
+          expect.objectContaining({ id: 'bedrock_unsupported_web_search', applyOnUnmatchedRetry: false, allowExtraRules: false }),
         ]),
       }),
     );
@@ -3453,10 +3619,289 @@ describe('codex proxy host', () => {
     );
     expect(requestScopedTransforms).toHaveLength(2);
     expect(requestScopedTransforms[0]?.errorMode).toBe('reject-request');
-    const strip = mockState.createAnthropicCompatProxy.mock.calls[0][0].transformRequest.at(-3);
+    const strip = mockState.createAnthropicCompatProxy.mock.calls[0][0].transformRequest.at(-4);
     const body = { model: 'gpt-5', input: [] };
     strip(body, { url: '/responses' });
     expect(mockState.stripNonAnthropicFields).toHaveBeenCalledWith(body, { url: '/responses' });
+  });
+
+  // The shared Desktop/Node Host production assembly must use the approved
+  // 42 MiB HTTP fallback ceiling; scaled ingress behavior lives in proxy tests.
+  it('configures the shared Codex HTTP fallback ceiling at 42 MiB', async () => {
+    const host = await freshCodexProxyHost();
+    mockState.createAnthropicCompatProxy.mockResolvedValueOnce({
+      url: 'http://127.0.0.1:43210', dispose: vi.fn(async () => undefined),
+    });
+    await host.ensureCodexProxyReady();
+    expect(mockState.createAnthropicCompatProxy.mock.calls[0][0].maxRequestBodyBytes).toBe(42 * 1024 * 1024);
+  });
+
+  // Actual Codex host options + actual size controller/proxy; only the upstream
+  // is local. A 33 MiB text history fits the 42 MiB ingress but must stop at 32.
+  it('rejects a text-only Codex history between 32 and 42 MiB before upstream dispatch', async () => {
+    const host = await freshCodexProxyHost();
+    const realRecovery = await vi.importActual<typeof import('../oversized-attachment-recovery.js')>('../oversized-attachment-recovery.js');
+    mockState.requestSizeControllerFactory = realRecovery.createRequestSizeController;
+    const actual = await vi.importActual<typeof import('@cindy/anthropic-compat-proxy')>('@cindy/anthropic-compat-proxy');
+    let upstreamRequests = 0;
+    const upstream = createServer(async (req, res) => {
+      upstreamRequests++;
+      for await (const chunk of req) void chunk;
+      res.end('{}');
+    });
+    await new Promise<void>(resolve => upstream.listen(0, '127.0.0.1', resolve));
+    const upstreamUrl = `http://127.0.0.1:${(upstream.address() as AddressInfo).port}`;
+    mockState.createAnthropicCompatProxy.mockImplementation((opts: Parameters<typeof actual.createAnthropicCompatProxy>[0]) =>
+      actual.createAnthropicCompatProxy({ ...opts, upstream: upstreamUrl, resolveOutboundProxy: () => null,
+        routingTransform: async (body, ctx) => ({ ...(await opts.routingTransform?.(body, ctx)), upstreamOverride: upstreamUrl }),
+      }));
+    try {
+      await host.ensureCodexProxyReady();
+      const proxy = await mockState.createAnthropicCompatProxy.mock.results[0].value as { url: string };
+      expect(mockState.createAnthropicCompatProxy.mock.calls[0][0].maxRequestBodyBytes).toBe(42 * 1024 * 1024);
+      const prefix = '{"model":"gpt-5","input":"';
+      const raw = Buffer.from(prefix + 'x'.repeat(33 * 1024 * 1024 - prefix.length - 2) + '"}');
+      expect(raw.length).toBe(33 * 1024 * 1024);
+      const response = await fetch(`${proxy.url}/v1/responses`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: raw });
+      expect(response.status).toBe(413);
+      expect(await response.json()).toEqual({ error: { type: 'request_too_large', message: 'Request text exceeds the local 32 MiB request budget after image recovery.' } });
+      expect(upstreamRequests).toBe(0);
+      vi.stubEnv('XDT_REQUEST_SIZE_CONTROL_DISABLE', '1');
+      const disabled = await fetch(`${proxy.url}/v1/responses`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: raw });
+      expect(disabled.status).toBe(200); await disabled.text();
+      expect(upstreamRequests).toBe(1); // Disabled mode retains the production 42 MiB fallback.
+    } finally {
+      vi.unstubAllEnvs();
+      await host.disposeCodexProxy(); mockState.requestSizeControllerFactory = undefined;
+      upstream.closeAllConnections(); await new Promise<void>(resolve => upstream.close(() => resolve()));
+    }
+  });
+
+  it('pairs colliding tool IDs across resumed OpenAI requests and preserves the source history (#11867)', async () => {
+    const host = await freshCodexProxyHost();
+    mockState.createAnthropicCompatProxy.mockResolvedValueOnce({ url: 'http://127.0.0.1:43210', dispose: vi.fn() });
+    await host.ensureCodexProxyReady();
+    const config = mockState.createAnthropicCompatProxy.mock.calls[0][0];
+    const transform = config.transformRequest.at(-1);
+    const ctx = { url: '/v1/responses', upstreamBase: 'https://api.openai.com/v1', headers: {}, method: 'POST' };
+    const long = 'x'.repeat(85) + '1';
+    const other = 'x'.repeat(85) + '2';
+    const call = (call_id: string) => ({ type: 'function_call', call_id, name: 'probe', arguments: '{}' });
+    const result = (call_id: string) => ({ type: 'function_call_output', call_id, output: call_id });
+    const reserved = transform({ input: [call(long)] }, ctx).input[0].call_id;
+    const boundary = 'y'.repeat(64);
+    const history = [call(long), call(other), result(other), result(long), call(reserved), result(reserved), call(boundary), result(boundary)];
+    const snapshot = structuredClone(history);
+    const project = (input: unknown[]) => transform({ input }, ctx).input;
+    const projected = project(history);
+    const ids = projected.map((item: { call_id: string }) => item.call_id);
+    expect(new Set(ids).size).toBe(4);
+    expect(ids.every((id: string) => id.length <= 64)).toBe(true);
+    expect(ids).toEqual([ids[0], ids[1], ids[1], ids[0], reserved, reserved, boundary, boundary]);
+    expect(projected[3].output).toBe(long);
+    expect(project([...history, { role: 'user', content: 'Continue.' }]).slice(0, history.length)).toEqual(projected);
+    expect(history).toEqual(snapshot);
+    expect(transform({ input: projected }, ctx)).toBeNull();
+    expect(transform({ input: history }, { ...ctx, upstreamBase: 'https://api.openai.com.example/v1' })).toBeNull();
+    expect(transform({ input: history }, { ...ctx, url: '/v1/responses/compact' }).input).toEqual(projected);
+    const rule = config.recoveryRules.find((r: { id: string }) => r.id === 'responses_call_id_length');
+    const error = "Invalid 'input[45].call_id': string too long. Expected a string with maximum length 64, but got a string with length 86 instead.";
+    expect(rule.matches(error)).toBe(true);
+    expect(rule.matches(error.replace('call_id', 'id'))).toBe(false);
+    expect(rule.matches(error.replace('length 64', 'length 32'))).toBe(false);
+    expect(JSON.parse(rule.strip(Buffer.from(JSON.stringify({ input: history }))).toString()).input).toEqual(projected);
+  });
+
+  it.each([
+    ['/responses', false],
+    ['/_cindy/custom-provider/0123456789abcdefabcd/responses', false],
+    ['/responses', true],
+  ] as const)(
+    'recovers local IDs in one retry and remembers the limit for the next turn (%s, selected interface=%s, #11867)', async (requestPath, selectedInterface) => {
+      const host = await freshCodexProxyHost();
+      const actual = await vi.importActual<typeof import('@cindy/anthropic-compat-proxy')>('@cindy/anthropic-compat-proxy');
+      const long = 'x'.repeat(86);
+      const history = { model: 'custom-model', input: [
+        { type: 'function_call', id: 'fc_' + long, call_id: long, name: 'probe', arguments: '{}' },
+        { type: 'function_call_output', call_id: long, output: 'ok' },
+        { type: 'reasoning', encrypted_content: 'valid-encrypted-content' },
+        { type: 'item_reference', id: 'msg_' + long },
+      ] };
+      const received: typeof history[] = [];
+      const upstream = createServer(async (req, res) => {
+        let raw = '';
+        for await (const chunk of req) raw += chunk;
+        const body = JSON.parse(raw) as typeof history;
+        received.push(body);
+        const item = body.input[0];
+        const invalid = item.call_id!.length > 64 ? 'call_id' : item.id!.length > 64 ? 'id' : null;
+        res.writeHead(invalid ? 400 : 200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify(invalid ? { error: { message: `Invalid 'input[0].${invalid}': string too long. Expected a string with maximum length 64.` } } : {}));
+      });
+      await new Promise<void>(resolve => upstream.listen(0, '127.0.0.1', resolve));
+      const upstreamBase = `http://127.0.0.1:${(upstream.address() as AddressInfo).port}`;
+      const { BUNDLED_CATALOG, buildUserProvider } = await import('@cindy/model-providers');
+      const { setActiveCatalog } = await import('../active-catalog.js');
+      const { setCustomProviderKeyReader } = await import('../provider-route.js');
+      const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
+      if (selectedInterface) {
+        const route = { baseUrl: upstreamBase, wireProtocol: 'openai-responses' as const };
+        const provider = buildUserProvider({ id: 'cprov-test-interface', name: 'Synthetic provider', runtimes: {
+          codex: { ...route, models: [{ id: history.model, name: 'Selected model' }] },
+        } });
+        provider.models.codex![0]!.selectedInterface = {
+          profileId: 'synthetic-interface', providerId: provider.id, revision: '1', api: 'openai-responses',
+          wireModelId: 'actual-wire-model', route, defaults: {}, compatibility: [], preferred: true,
+        };
+        setActiveCatalog({ ...BUNDLED_CATALOG, providers: [...BUNDLED_CATALOG.providers, provider], modelRegistry: undefined });
+        setCustomProviderKeyReader(() => 'synthetic-key');
+        for (const threadId of ['oversized-call-thread', 'another-thread']) {
+          host.registerComposed(threadId, threadId, 'fixture');
+          setSessionProvider(threadId, provider.id);
+        }
+      }
+      mockState.realStripTransforms = true;
+      mockState.createAnthropicCompatProxy.mockImplementationOnce((opts: Parameters<typeof actual.createAnthropicCompatProxy>[0]) =>
+        actual.createAnthropicCompatProxy({
+          upstream: upstreamBase,
+          resolveOutboundProxy: () => null,
+          transformRequest: opts.transformRequest,
+          ...(selectedInterface ? { routingTransform: opts.routingTransform } : {}),
+          recoveryRules: [
+            ...(opts.recoveryRules ?? []),
+            actual.createEncryptedContentRecoveryRule({ enabled: () => true }),
+          ],
+        }));
+      try {
+        await host.ensureCodexProxyReady();
+        const proxy = await mockState.createAnthropicCompatProxy.mock.results[0].value as { url: string };
+        const post = async (threadId: string) => {
+          const response = await fetch(`${proxy.url}${requestPath}`, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json', 'thread-id': threadId },
+            body: JSON.stringify(history),
+          });
+          await response.text();
+          expect(response.status).toBe(200);
+        };
+        await post('oversized-call-thread');
+        expect(received).toHaveLength(2);
+        expect(received[0].input[0].call_id).toBe(long);
+        expect(received[1].input[0].id!.length).toBeLessThanOrEqual(64);
+        expect(received[1].input[0].call_id).toBe(received[1].input[1].call_id);
+        expect(received[1].input.slice(2)).toEqual(history.input.slice(2));
+        await post('oversized-call-thread');
+        expect(received[2].input).toEqual(received[1].input);
+        expect(received).toHaveLength(3);
+        await post('another-thread');
+        expect(received).toHaveLength(5);
+        expect(received[3].input[0].call_id).toBe(long);
+        if (selectedInterface) expect(received.map(body => body.model)).toEqual(Array(5).fill('actual-wire-model'));
+      } finally {
+        if (selectedInterface) {
+          for (const threadId of ['oversized-call-thread', 'another-thread']) {
+            host.unregister(threadId);
+            clearSessionProvider(threadId);
+          }
+          setCustomProviderKeyReader(() => null);
+          setActiveCatalog(BUNDLED_CATALOG);
+        }
+        await host.disposeCodexProxy();
+        mockState.realStripTransforms = false;
+        upstream.closeAllConnections();
+        await new Promise<void>(resolve => upstream.close(() => resolve()));
+      }
+    });
+
+  it('learns a terminal call_id rejection after the sole attachment retry (#11867)', async () => {
+    const host = await freshCodexProxyHost(true);
+    const actual = await vi.importActual<typeof import('@cindy/anthropic-compat-proxy')>('@cindy/anthropic-compat-proxy');
+    const attempts: Array<{ image: boolean; callId: string }> = [];
+    const long = 'x'.repeat(86);
+    const error = { error: { message: "Invalid 'input[0].call_id': maximum length 64." } };
+    const oversizedError = JSON.stringify(error) + ' '.repeat(20 * 1024);
+    let finishStream: (() => void) | undefined;
+    const upstream = createServer(async (req, res) => {
+      let raw = '';
+      for await (const chunk of req) raw += chunk;
+      const callId = JSON.parse(raw).input[0].call_id as string;
+      const image = raw.includes('data:image/png;base64,');
+      attempts.push({ image, callId });
+      const status = image ? 413 : callId.length > 64 ? 400 : 200;
+      if (status === 400 && req.headers['x-test-slow-error']) {
+        finishStream = () => res.end(oversizedError.slice(8));
+        res.writeHead(status, { 'content-type': 'application/json' });
+        res.write(oversizedError.slice(0, 8));
+        return;
+      }
+      if (status === 400) {
+        res.writeHead(status, { 'content-type': 'application/json', 'content-encoding': 'gzip' });
+        res.end(gzipSync(JSON.stringify(error)));
+        return;
+      }
+      res.writeHead(status, { 'content-type': 'application/json' });
+      res.end('{}');
+    });
+    await new Promise<void>(resolve => upstream.listen(0, '127.0.0.1', resolve));
+    const upstreamBase = `http://127.0.0.1:${(upstream.address() as AddressInfo).port}`;
+    mockState.createAnthropicCompatProxy.mockImplementationOnce((opts: Parameters<typeof actual.createAnthropicCompatProxy>[0]) =>
+      actual.createAnthropicCompatProxy({
+        upstream: upstreamBase,
+        resolveOutboundProxy: () => null,
+        transformRequest: opts.transformRequest,
+        oversizedRequestRecovery: opts.oversizedRequestRecovery,
+        recoveryRules: opts.recoveryRules,
+        responseObserver: opts.responseObserver,
+      }));
+    try {
+      await host.ensureCodexProxyReady();
+      const proxy = await mockState.createAnthropicCompatProxy.mock.results[0].value as { url: string };
+      const history = { model: 'custom-model', input: [
+        { type: 'function_call', call_id: long, name: 'probe', arguments: '{}' },
+        { type: 'function_call_output', call_id: long, output: 'ok' },
+        { type: 'message', role: 'user', content: [{
+          type: 'input_image', image_url: `data:image/png;base64,${Buffer.alloc(8000, 2).toString('base64')}`,
+        }] },
+      ] };
+      const post = (threadId: string, slow = false) => fetch(`${proxy.url}/responses`, {
+        method: 'POST', headers: { 'content-type': 'application/json', 'thread-id': threadId,
+          ...(slow ? { 'x-test-slow-error': '1' } : {}) },
+        body: JSON.stringify(history),
+        ...(slow ? { signal: AbortSignal.timeout(2000) } : {}),
+      });
+      const rejected = await post('limited-thread');
+      expect(rejected.status).toBe(400);
+      expect(await rejected.json()).toEqual(error);
+      expect(attempts).toEqual([{ image: true, callId: long }, { image: false, callId: long }]);
+
+      const next = await post('limited-thread');
+      expect(next.status).toBe(200);
+      await next.text();
+      const shortId = attempts[2]!.callId;
+      expect(shortId.length).toBeLessThanOrEqual(64);
+      expect(attempts.slice(2)).toEqual([{ image: true, callId: shortId }, { image: false, callId: shortId }]);
+
+      const unrelated = await post('different-thread');
+      expect(unrelated.status).toBe(400);
+      expect(await unrelated.json()).toEqual(error);
+      expect(attempts.slice(4)).toEqual([{ image: true, callId: long }, { image: false, callId: long }]);
+
+      // The terminal status must arrive before the provider finishes a large error.
+      const streaming = await post('stream-thread', true);
+      expect(streaming.status).toBe(400);
+      expect(finishStream).toBeTypeOf('function');
+      finishStream!();
+      expect(await streaming.text()).toBe(oversizedError);
+      const afterOversized = await post('stream-thread');
+      expect(afterOversized.status).toBe(400);
+      expect(await afterOversized.json()).toEqual(error);
+      expect(attempts.slice(-2)).toEqual([{ image: true, callId: long }, { image: false, callId: long }]);
+    } finally {
+      finishStream?.();
+      await host.disposeCodexProxy();
+      upstream.closeAllConnections();
+      await new Promise<void>(resolve => upstream.close(() => resolve()));
+    }
   });
 
   // #7055: ChatGPT closes WebSocket messages over ~16 MiB with 1009. A reconnect resends the
@@ -3472,8 +3917,8 @@ describe('codex proxy host', () => {
       webSocketTransforms: (ctx: { url: string; headers: Readonly<Record<string, string>> }) => { outbound: Transform };
     };
     const { createWebSocketMessageTransform } = await vi.importActual<typeof import('@cindy/anthropic-compat-proxy')>('@cindy/anthropic-compat-proxy');
-    const send = async (input: unknown[]): Promise<Buffer> => {
-      const payload = Buffer.from(JSON.stringify({ type: 'response.create', model: 'gpt-5.4', input }));
+    const send = async (input: unknown[], previous_response_id?: string): Promise<Buffer> => {
+      const payload = Buffer.from(JSON.stringify({ ...(previous_response_id ? { previous_response_id } : {}), type: 'response.create', model: 'gpt-5.4', input }));
       const header = Buffer.alloc(14);
       header[0] = 129; header[1] = 128 | 127; header.writeBigUInt64BE(BigInt(payload.length), 2);
       const { outbound } = proxyOpts.webSocketTransforms({ url: '/backend-api/codex/responses', headers: {} });
@@ -3489,6 +3934,13 @@ describe('codex proxy host', () => {
     };
     const image = { type: 'input_image', image_url: `data:image/png;base64,${Buffer.alloc(3 << 20, 1).toString('base64')}` };
 
+    const long = 'x'.repeat(86);
+    const exchange = [{ type: 'custom_tool_call', call_id: long }, { type: 'custom_tool_call_output', call_id: long }];
+    const replay = JSON.parse((await send(exchange)).toString()).input;
+    expect(replay[0].call_id.length).toBeLessThanOrEqual(64);
+    expect(replay[1].call_id).toBe(replay[0].call_id);
+    expect(JSON.parse((await send([exchange[1]], 'previous')).toString()).input).toEqual([exchange[1]]);
+
     const ordinary = await send([image, image]);
     expect(JSON.parse(ordinary.toString()).input).toEqual([image, image]);
 
@@ -3497,6 +3949,16 @@ describe('codex proxy host', () => {
     const input = JSON.parse(oversized.toString()).input;
     expect(input[0]).toMatchObject({ type: 'input_text', text: expect.stringContaining('/tmp/preserved.png') });
     expect(input.at(-1)).toEqual(image);
+
+    // Count crossings use the same replay even for frames below the byte limit.
+    const tiny = { type: 'input_image', image_url: 'data:image/png;base64,YQ==' };
+    const first = await send(Array.from({ length: 51 }, () => tiny));
+    const extended = await send(Array.from({ length: 52 }, () => tiny));
+    expect(JSON.parse(first.toString()).input.filter((item: { type: string }) => item.type === 'input_image')).toHaveLength(22);
+    expect(JSON.parse(extended.toString()).input.filter((item: { type: string }) => item.type === 'input_image')).toHaveLength(23);
+    expect(extended.subarray(0, first.length - 2)).toEqual(first.subarray(0, -2));
+    const incremental = await send(Array.from({ length: 52 }, () => tiny), 'prior-response');
+    expect(JSON.parse(incremental.toString()).input).toEqual(Array.from({ length: 52 }, () => tiny));
   });
 
   it('only resolves the websocket upstream for the oauth-bearer spawn identity', async () => {
@@ -3621,12 +4083,15 @@ describe('codex proxy host', () => {
     expect(disconnectWebSocketsForThread).toHaveBeenCalledWith('thread-image');
   });
 
-  it.each(['shared', 'custom-context', 'control-plane'] as const)(
-    'repairs legacy IDs after a WebSocket rejection on the %s proxy, preserving sibling connections', async (proxyKind) => {
+  // #9645: extend the real loopback recovery path beyond fc_ to saved msg_ tool IDs.
+  // The upstream rejects the original ID; HTTP replay/compact must repair it without touching peers.
+  it.each((['shared', 'custom-context', 'control-plane'] as const).flatMap(proxyKind =>
+    ['fc', 'msg'].map(prefix => ({ proxyKind, prefix })),
+  ))('repairs $prefix IDs after a WebSocket rejection on the $proxyKind proxy, preserving sibling connections', async ({ proxyKind, prefix }) => {
     const host = await freshCodexProxyHost();
-    const errorMessage = "Invalid 'input[285].id': 'fc_legacy'. Expected an ID that begins with 'ctc'.";
+    const errorMessage = `Invalid 'input[285].id': '${prefix}_legacy'. Expected an ID that begins with 'ctc'.`;
     const legacy = { model: 'gpt-6', input: [
-      { type: 'custom_tool_call', id: 'fc_legacy', name: 'exec', call_id: 'call_legacy', input: 'text(1)' },
+      { type: 'custom_tool_call', id: `${prefix}_legacy`, name: 'exec', call_id: 'call_legacy', input: 'text(1)' },
       { type: 'custom_tool_call_output', id: 'ctco_result', call_id: 'call_legacy', output: '1' },
     ] };
     const httpBodies: Array<{ input: typeof legacy.input }> = [];
@@ -3936,6 +4401,81 @@ describe('codex proxy host', () => {
     }
   });
 
+  // #9183 / #9220: real host request adaptation followed by actual proxy HTTP
+  // delivery, including its final guard after namespace restoration.
+  it.each(['collaboration', 'multi_agent_v1', 'multi_agent_v2'])('marks restored %s collaboration calls after namespace lowering (#9183)', async namespace => {
+    const host = await freshCodexProxyHost();
+    const { setXdGatewayModels } = await import('../active-catalog.js');
+    const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
+    const model = 'deepseek/deepseek-v4.1-flash';
+    setXdGatewayModels([{ id: model, agents: ['codex'] }]);
+    mockState.createAnthropicCompatProxy.mockResolvedValueOnce({ url: 'http://127.0.0.1:43210', dispose: vi.fn(async () => undefined) });
+    await host.ensureCodexProxyReady();
+    host.registerComposed('marker-session', 'marker-thread', 'PRODUCT_PROMPT');
+    setSessionProvider('marker-session', 'xd');
+    try {
+      const config = mockState.createAnthropicCompatProxy.mock.calls[0]![0];
+      const names = ['spawn_agent', 'send_message', 'followup_task'];
+      let current: any = { model, tools: [{ type: 'namespace', name: namespace, tools: names.map(name => ({
+        type: 'function', name, parameters: { type: 'object', properties: { message: { type: 'string' } } },
+      })) }] };
+      const ctx = { reqId: 1, method: 'POST', url: '/responses', upstreamBase: XD_GATEWAY_BASE_URL + '/v1', headers: { 'thread-id': 'marker-thread' } };
+      for (const transform of config.transformRequest) current = transform(current, ctx) ?? current;
+      expect(current.tools.map((tool: any) => tool.name)).toEqual(names.map(name => `${namespace}__${name}`));
+      const calls = names.map((name, i) => ({ type: 'function_call', name: `${namespace}__${name}`, call_id: `c${i}`, arguments: '{"message":"task"}' }));
+      const events = calls.flatMap(item => [
+        { type: 'response.output_item.added', item }, { type: 'response.output_item.done', item },
+      ]).concat([{ type: 'response.completed', response: { output: calls } }] as any);
+      const upstream = createServer(async (req, res) => {
+        await new Promise<void>(resolve => { req.once('end', resolve); req.resume(); });
+        res.writeHead(200, { 'content-type': 'text/event-stream' }).end(events.map(event => `data: ${JSON.stringify(event)}\n\n`).join(''));
+      });
+      await new Promise<void>(resolve => upstream.listen(0, '127.0.0.1', resolve));
+      const { createAnthropicCompatProxy } = await vi.importActual<typeof import('@cindy/anthropic-compat-proxy')>('@cindy/anthropic-compat-proxy');
+      let delivery: Awaited<ReturnType<typeof createAnthropicCompatProxy>> | undefined;
+      let wire = '';
+      try {
+        delivery = await createAnthropicCompatProxy({ upstream: `http://127.0.0.1:${(upstream.address() as AddressInfo).port}`, transformResponse: config.transformResponse, requestGuard: config.requestGuard });
+        const response = await fetch(`${delivery.url}/responses`, { method: 'POST', headers: { 'content-type': 'application/json', 'thread-id': 'marker-thread' }, body: JSON.stringify(current) });
+        expect(response.ok).toBe(true);
+        wire = await response.text();
+      } finally {
+        await delivery?.dispose(); upstream.closeAllConnections(); await new Promise<void>(resolve => upstream.close(() => resolve()));
+      }
+      const output = wire.split('\n').filter(line => line.startsWith('data: ')).map(line => JSON.parse(line.slice(6)));
+      const restored = output.flatMap(event => event.item ? [event.item] : event.response?.output ?? []);
+      expect(restored).toHaveLength(9);
+      for (const call of restored) {
+        expect(call).toMatchObject({ namespace, name: expect.stringMatching(/^(spawn_agent|send_message|followup_task)$/), encrypted_function_args: [], arguments: '{"message":"task"}' });
+      }
+    } finally {
+      host.unregister('marker-session'); clearSessionProvider('marker-session'); setXdGatewayModels([]);
+    }
+  });
+
+  it('keeps text-only enforcement frozen while normalizing collaboration replies (#9183)', async () => {
+    const host = await freshCodexProxyHost();
+    const { registerCodexTextOnlyPolicy } = await import('../codex-text-only-policy.js');
+    mockState.createAnthropicCompatProxy.mockResolvedValueOnce({ url: 'http://127.0.0.1:43210', dispose: vi.fn(async () => undefined) });
+    await host.ensureCodexProxyReady();
+    const config = mockState.createAnthropicCompatProxy.mock.calls[0]![0];
+    const ctx = { method: 'POST', url: '/responses', headers: { 'thread-id': 'marker-text-only' } };
+    let disabled = false;
+    const release = registerCodexTextOnlyPolicy('marker-text-only', () => disabled);
+    try {
+      expect(config.requestGuard({ ...ctx, url: '/images/generations' })).toBeNull();
+      disabled = true;
+      const guard = config.requestGuard(ctx);
+      const request = { model: 'synthetic', tools: [{ type: 'function', name: 'spawn_agent' }] };
+      expect(JSON.parse(guard.transformBody(Buffer.from(JSON.stringify(request))).toString())).toMatchObject({ tools: [], tool_choice: 'none' });
+      disabled = false; // A later permissive turn cannot relax this admitted response.
+      const stream = guard.response({ 'content-type': 'text/event-stream' });
+      const read = (async () => { for await (const chunk of stream) void chunk; })();
+      stream.end(`data: ${JSON.stringify({ type: 'response.output_item.done', item: { type: 'function_call', namespace: 'collaboration', name: 'spawn_agent', arguments: '{"message":"task"}' } })}\n\n`);
+      await expect(read).rejects.toThrow('text-only');
+    } finally { disabled = false; release(); }
+  });
+
   it('repairs null array fields in passthrough Responses SSE before Codex parses them (#4251)', async () => {
     const host = await freshCodexProxyHost();
     // Minimal reproduction from #4251: a third-party model behind the Responses passthrough
@@ -4017,6 +4557,13 @@ describe('codex proxy host', () => {
   });
 
   it.each([
+    ...['fc', 'fco', 'ctc', 'ctco'].map((prefix): [string, string | null] => [
+      `Invalid 'input[169].id': 'msg_history'. Expected an ID that begins with '${prefix}'.`, 'tool_item_id',
+    ]),
+    [JSON.stringify({ error: { message: 'Invalid "input[169].id": "msg_history". Expected an ID that begins with "ctc".' } }), 'tool_item_id'],
+    ["Invalid 'input[169].call_id': 'msg_history'. Expected an ID that begins with 'ctc'.", null],
+    ["Invalid 'input[169].id': 'msg_history'. Expected an ID that begins with 'msg'.", 'responses_item_id_prefix'],
+    ["Invalid 'input[169].id': 'MSG_history'. Expected an ID that begins with 'ctc'.", null],
     ["Invalid 'input[2].id': 'ctc_old'. Expected an ID that begins with 'fc'.", 'tool_item_id'],
     [JSON.stringify({ error: { message: "Invalid \"input[2].id\": \"fco_old\". Expected an ID that begins with \"ctco\"." } }), 'tool_item_id'],
     ["Invalid 'input[2].call_id': 'fc_old'. Expected an ID that begins with 'ctc'.", null],
@@ -5417,6 +5964,54 @@ describe('codex proxy host', () => {
     clearSessionProvider('session-gateway-passthrough');
   });
 
+  it.each([false, true])('removes unsupported search on the effective MiMo Pro Responses route (frozen=%s)', async frozen => {
+    const host = await freshCodexProxyHost();
+    const { buildUserProvider } = await import('@cindy/model-providers');
+    const { setCustomProviders, getActiveCatalog } = await import('../active-catalog.js');
+    const { deriveCodexCustomProviderRoutes } = await import('../codex-custom-provider-route.js');
+    const { setCustomProviderKeyReader } = await import('../provider-route.js');
+    const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
+    const provider = buildUserProvider({ id: 'mimo-fixture', name: 'MiMo fixture', runtimes: {
+      codex: { baseUrl: 'https://api.xiaomimimo.com/v1', wireProtocol: 'openai-chat', supportsImageGeneration: true,
+        models: [{ id: 'mimo-v2.6-pro', name: 'MiMo Pro' }] },
+    } });
+    // Runtime config remains Chat, but the active catalog selects the native Responses
+    // interface (the safe provider projection observed in the failing local session).
+    provider.models.codex![0] = { ...provider.models.codex![0]!, api: 'openai-responses',
+      route: { baseUrl: 'https://api.xiaomimimo.com/v1', wireProtocol: 'openai-responses' } };
+    setCustomProviders([provider]);
+    setCustomProviderKeyReader(() => 'fixture-key');
+    const routes = deriveCodexCustomProviderRoutes(getActiveCatalog()).filter(route => route.providerId === provider.id);
+    expect(routes).toHaveLength(1);
+    mockState.createAnthropicCompatProxy.mockResolvedValueOnce({ url: 'http://127.0.0.1:43210', dispose: vi.fn(async () => undefined) });
+    if (frozen) await host.ensureCodexCustomContextProxyReady('mimo-frozen', 'env-key', routes);
+    else await host.ensureCodexProxyReady();
+    host.registerComposed('mimo-search-session', 'mimo-search-thread', '');
+    setSessionProvider('mimo-search-session', 'mimo-fixture');
+    try {
+      const proxy = mockState.createAnthropicCompatProxy.mock.calls[0][0];
+      const body = { model: 'mimo-v2.6-pro', input: [{ role: 'user', content: 'hello' }],
+        tools: [{ type: 'web_search' }, { type: 'function', name: 'read_file' }] };
+      const ctx = { method: 'POST', url: frozen ? `/_cindy/custom-provider/${routes[0]!.routeId}/responses` : '/responses',
+        headers: { 'thread-id': 'mimo-search-thread' } };
+      const decision = await proxy.routingTransform(body, ctx);
+      expect(decision).not.toHaveProperty('localHandler');
+      expect(decision.upstreamOverride).toContain('api.xiaomimimo.com');
+      let current: unknown = body;
+      for (const transform of proxy.transformRequest) {
+        current = transform(current, { ...ctx, upstreamBase: decision.upstreamOverride }) ?? current;
+      }
+      expect(current).toMatchObject({ input: body.input, tools: [{ type: 'function', name: 'read_file' }] });
+      expect(body.tools).toHaveLength(2);
+    } finally {
+      clearSessionProvider('mimo-search-session');
+      host.unregister('mimo-search-session');
+      if (frozen) await host.releaseCodexCustomContextProxy('mimo-frozen');
+      setCustomProviders([]);
+      setCustomProviderKeyReader(() => null);
+    }
+  });
+
   it('normalizes xAI Codex Responses body before forwarding requests', async () => {
     const host = await freshCodexProxyHost();
     const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
@@ -6342,6 +6937,9 @@ describe('codex proxy host', () => {
       input: [
         { type: 'custom_tool_call', id: 'fc_legacy', name: 'exec', call_id: 'call_legacy', input: 'text(1)' },
         { type: 'custom_tool_call_output', id: 'ctco_result', call_id: 'call_legacy', output: '1' },
+        // #11371 P2: native-custom compact must not expand a valid 64-char msg_ result to 65.
+        { type: 'custom_tool_call', id: `msg_${'x'.repeat(60)}`, name: 'exec', call_id: 'call_large', input: 'text(2)' },
+        { type: 'custom_tool_call_output', id: `msg_${'x'.repeat(60)}`, call_id: 'call_large', output: '2' },
       ],
     };
     let current: unknown = original;
@@ -6350,24 +6948,48 @@ describe('codex proxy host', () => {
     }
     expect(current).toMatchObject({ input: [
       { ...original.input[0], id: 'ctc_legacy' }, original.input[1],
+      { ...original.input[2], id: `ctc_${'x'.repeat(60)}` },
+      { ...original.input[3], id: expect.stringMatching(/^ctco_[a-f0-9]{59}$/) },
     ] });
     expect(original.input[0].id).toBe('fc_legacy');
+    expect(original.input[3].id).toBe(`msg_${'x'.repeat(60)}`);
     expect(config.transformResponse({ reqId: 8001, responseHeaders: { 'content-type': 'application/json' } })).toBeNull();
   });
 
-  it('round-trips exec for a custom Responses Provider that lacks native custom tools', async () => {
+  // Regression: a model-level Responses override must select the same adapter as
+  // a Responses runtime default; otherwise Kimi rejects the native exec tool.
+  it.each(['openai-responses', 'openai-chat'] as const)('round-trips exec with a %s runtime default and an effective Responses model', async (wireProtocol) => {
     const host = await freshCodexProxyHost();
+    const received: Array<{ path: string; body: Record<string, unknown> }> = [];
+    const upstream = createServer((req, res) => {
+      const chunks: Buffer[] = [];
+      req.on('data', (chunk: Buffer) => chunks.push(chunk));
+      req.on('end', () => {
+        received.push({ path: req.url ?? '', body: JSON.parse(Buffer.concat(chunks).toString()) });
+        res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({
+          id: 'resp_local', object: 'response', status: 'completed', output: [
+            { type: 'message', id: 'msg_local', role: 'assistant', content: [{ type: 'output_text', text: 'continued' }] },
+          ],
+        }));
+      });
+    });
+    await new Promise<void>((resolve) => upstream.listen(0, '127.0.0.1', resolve));
+    const baseUrl = `http://127.0.0.1:${(upstream.address() as AddressInfo).port}/v1`;
     const { buildUserProvider } = await import('@cindy/model-providers');
     const { setCustomProviders } = await import('../active-catalog.js');
     const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
+    const { setCustomProviderKeyReader } = await import('../provider-route.js');
+    setCustomProviderKeyReader(() => 'fixture-key');
     setCustomProviders([buildUserProvider({
       id: 'stealth',
       name: 'Stealth',
       runtimes: {
         codex: {
-          baseUrl: 'http://127.0.0.1:43168/v1',
-          wireProtocol: 'openai-responses',
-          models: [{ id: 'stealth/ox-alpha', name: 'OX Alpha' }],
+          baseUrl,
+          wireProtocol,
+          models: [{ id: 'stealth/ox-alpha', name: 'OX Alpha', route: {
+            baseUrl, wireProtocol: 'openai-responses',
+          } }],
         },
       },
     })]);
@@ -6465,10 +7087,33 @@ describe('codex proxy host', () => {
         call_id: 'call_exec',
         input: 'text("local")',
       });
+      // Capture actual serialized HTTP bytes through the production proxy,
+      // including a resumed tool result and the upstream's following answer.
+      const actualProxy = await vi.importActual<typeof import('@cindy/anthropic-compat-proxy')>('@cindy/anthropic-compat-proxy');
+      const proxy = await actualProxy.createAnthropicCompatProxy(mockState.createAnthropicCompatProxy.mock.calls[0]![0]);
+      try {
+        const response = await fetch(`${proxy.url}/responses`, {
+          method: 'POST', headers: { 'content-type': 'application/json', 'thread-id': 'thread-stealth-exec' },
+          body: JSON.stringify({ model: 'stealth/ox-alpha', stream: false,
+            tools: [{ type: 'custom', name: 'exec', description: 'run a command' }],
+            input: [events[3].item, { type: 'custom_tool_call_output', call_id: 'call_exec', output: 'local result' }],
+          }),
+        });
+        expect(response.status).toBe(200);
+        expect(await response.json()).toMatchObject({ output: [{ content: [{ text: 'continued' }] }] });
+        expect(received).toEqual([{ path: '/v1/responses', body: expect.objectContaining({
+          tools: [expect.objectContaining({ type: 'function', name: 'exec' })],
+          input: [expect.objectContaining({ type: 'function_call', name: 'exec', call_id: 'call_exec' }),
+            expect.objectContaining({ type: 'function_call_output', call_id: 'call_exec', output: 'local result' })],
+        }) }]);
+      } finally { await proxy.dispose(); }
     } finally {
       host.unregister('session-stealth-exec');
       clearSessionProvider('session-stealth-exec');
       setCustomProviders([]);
+      setCustomProviderKeyReader(() => null);
+      upstream.closeAllConnections();
+      await new Promise<void>((resolve) => upstream.close(() => resolve()));
     }
   });
 
@@ -8390,7 +9035,7 @@ describe('codex proxy host', () => {
     await host.ensureCodexProxyReady();
 
     const transforms = mockState.createAnthropicCompatProxy.mock.calls[0]?.[0]?.transformRequest ?? [];
-    expect(transforms).toHaveLength(32); // ordinary transforms + dump + frozen custom-provider effort
+    expect(transforms).toHaveLength(33); // Includes the dump and final call_id projection.
     const ctx = {
       method: 'POST',
       url: '/v1/responses',
@@ -8416,6 +9061,144 @@ describe('codex proxy host', () => {
       body: transformedBody,
     });
   });
+
+  // Routing and response observation must identify the same rejected pre-turn request.
+  // A later sample on the root or a manual/child compaction cannot authorize handoff.
+  it('attributes a downshift denial only to the latest rejected root request', async () => {
+    const host = await freshCodexProxyHost();
+    mockState.createAnthropicCompatProxy.mockResolvedValueOnce({ url: 'http://127.0.0.1:43210', dispose: vi.fn() });
+    await host.ensureCodexProxyReady();
+    host.registerComposed('session', 'root', '');
+    host.registerChildThread('root', 'child');
+    const proxy = mockState.createAnthropicCompatProxy.mock.calls[0]![0];
+    const request = async (thread: string, kind = 'compaction', trigger = 'auto') => {
+      const headers = { 'thread-id': thread, 'x-codex-turn-metadata': JSON.stringify({
+        thread_id: thread, turn_id: 'turn', request_kind: kind,
+        compaction: { trigger, reason: 'model_downshift', phase: 'pre_turn' },
+      }) };
+      await proxy.routingTransform({ model: 'old/large' }, { url: '/v1/responses', method: 'POST', reqId: 1, headers });
+      return (status: number) => proxy.responseObserver({ status, reqId: 1, method: 'POST', url: '/v1/responses',
+        requestHeaders: headers, responseHeaders: {}, requestBody: Buffer.from('{"model":"wire-alias"}'), upstreamBase: 'https://example.invalid' });
+    };
+    const observed = () => host.getRejectedCodexDownshiftModel('session', 'root', 'turn');
+    const compact = await request('root');
+    expect(observed()).toBeUndefined();
+    compact(403);
+    expect(observed()).toEqual({ model: 'old/large', transport: 'http' });
+    expect(host.getRejectedCodexDownshiftModel('session', 'root', 'other-turn')).toBeUndefined();
+    expect(host.getRejectedCodexDownshiftModel('other-session', 'root', 'turn')).toBeUndefined();
+    (await request('child'))(403);
+    expect(host.getRejectedCodexDownshiftModel('session', 'child', 'turn')).toBeUndefined();
+    expect(observed()).toEqual({ model: 'old/large', transport: 'http' });
+    (await request('root', 'turn'))(403);
+    compact(403); // a delayed response from the earlier HTTP request
+    expect(observed()).toBeUndefined();
+    (await request('root', 'compaction', 'manual'))(403);
+    expect(observed()).toBeUndefined();
+    for (const status of [200, 401, 407, 503]) {
+      (await request('root'))(status);
+      expect(observed()).toBeUndefined();
+    }
+    const pending = await request('root');
+    host.unregister('session');
+    host.registerComposed('session', 'root', '');
+    pending(403);
+    expect(observed()).toBeUndefined();
+  });
+
+  // Run the loopback proxy through its actual bridge and upstream error response.
+  // The transparent observer alone misses local handlers.
+  it.each(['openai-chat', 'anthropic-messages', 'native-chat'] as const)(
+    'attributes only an explicit model rejection through the %s bridge',
+    async protocol => {
+      const host = await freshCodexProxyHost();
+      const proxy = await vi.importActual<typeof import('@cindy/anthropic-compat-proxy')>('@cindy/anthropic-compat-proxy');
+      const chat = await vi.importActual<typeof import('@cindy/responses-chat-bridge')>('@cindy/responses-chat-bridge');
+      const anthropic = await vi.importActual<typeof import('@cindy/responses-anthropic-bridge')>('@cindy/responses-anthropic-bridge');
+      const native = await vi.importActual<typeof import('../pi-provider-transport.js')>('../pi-provider-transport.js');
+      const { buildUserProvider } = await import('@cindy/model-providers');
+      const { setCustomProviders } = await import('../active-catalog.js');
+      const { setCustomProviderKeyReader } = await import('../provider-route.js');
+      const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
+      const upstreamPaths: string[] = [];
+      const errors = [
+        { code: 'user_model_access_denied', message: 'user not allowed to access model' },
+        { code: 'permission_error', message: 'generic permission failure'.repeat(1_000) },
+      ];
+      const upstream = createServer(async (req, res) => {
+        for await (const chunk of req) void chunk;
+        const error = errors[upstreamPaths.length];
+        upstreamPaths.push(req.url ?? '');
+        res.writeHead(403, { 'content-type': 'application/json' }).end(JSON.stringify({ error }));
+      });
+      await new Promise<void>(resolve => upstream.listen(0, '127.0.0.1', resolve));
+      try {
+        const wireProtocol = protocol === 'anthropic-messages' ? protocol : 'openai-chat';
+        const provider = buildUserProvider({
+          id: 'downshift-bridge', name: 'Bridge',
+          runtimes: { codex: {
+            wireProtocol, baseUrl: `http://127.0.0.1:${(upstream.address() as AddressInfo).port}/v1`,
+            models: [{ id: 'old/large', name: 'Old model' }],
+          } },
+        });
+        if (protocol === 'openai-chat') provider.routing.codex!.requestPath = '/custom-chat';
+        if (protocol === 'native-chat') provider.models.codex![0]!.api = 'openai-completions';
+        setCustomProviders([provider]);
+        setCustomProviderKeyReader(() => 'fixture-key');
+        setSessionProvider('bridge-session', provider.id);
+        host.registerComposed('bridge-session', 'bridge-root', '');
+        host.setCodexProxyAuthInjection('env-key');
+        mockState.createAnthropicCompatProxy.mockImplementationOnce(proxy.createAnthropicCompatProxy);
+        if (protocol === 'anthropic-messages') {
+          vi.mocked(createResponsesAnthropicHandler).mockImplementation(anthropic.createResponsesAnthropicHandler);
+        } else {
+          vi.mocked(createResponsesChatHandler).mockImplementation(chat.createResponsesChatHandler);
+        }
+        if (protocol === 'native-chat') {
+          vi.mocked(createPiProviderFetch).mockImplementation(native.createPiProviderFetch);
+          vi.mocked(handlePiProviderRequest).mockImplementation(native.handlePiProviderRequest);
+        }
+        await host.ensureCodexProxyReady();
+        const send = async (turn: string) => {
+          const response = await fetch(`${host.getCodexProxyEndpoint()}/responses`, {
+            method: 'POST',
+            headers: {
+              'content-type': 'application/json', 'thread-id': 'bridge-root',
+              'x-codex-turn-metadata': JSON.stringify({
+                thread_id: 'bridge-root', turn_id: turn, request_kind: 'compaction',
+                compaction: { trigger: 'auto', reason: 'model_downshift', phase: 'pre_turn' },
+              }),
+            },
+            body: JSON.stringify({ model: 'old/large', input: [{ role: 'user', content: 'continue' }], stream: false }),
+          });
+          return { status: response.status, body: await response.text() };
+        };
+        const first = await send('denied');
+        expect(first.body).toContain(protocol === 'native-chat' ? 'HTTP 403' : 'user_model_access_denied');
+        expect(host.getRejectedCodexDownshiftModel('bridge-session', 'bridge-root', 'denied'))
+          .toMatchObject({ model: 'old/large', transport: 'bridge' });
+        const second = await send('generic');
+        expect(second.status).toBe(protocol === 'native-chat' ? 200 : 403);
+        expect(host.getRejectedCodexDownshiftModel('bridge-session', 'bridge-root', 'generic')).toBeUndefined();
+        expect(host.getRejectedCodexDownshiftModel('bridge-session', 'bridge-root', 'denied')).toBeUndefined();
+        const upstreamPath = {
+          'openai-chat': '/v1/custom-chat', 'anthropic-messages': '/v1/messages', 'native-chat': '/v1/chat/completions',
+        }[protocol];
+        expect(upstreamPaths).toEqual([upstreamPath, upstreamPath]);
+      } finally {
+        vi.mocked(createResponsesChatHandler).mockReset();
+        vi.mocked(createResponsesAnthropicHandler).mockReset();
+        vi.mocked(createPiProviderFetch).mockReset();
+        vi.mocked(handlePiProviderRequest).mockReset();
+        clearSessionProvider('bridge-session');
+        setCustomProviders([]);
+        setCustomProviderKeyReader(() => null);
+        await host.disposeCodexProxy();
+        upstream.closeAllConnections();
+        await new Promise<void>(resolve => upstream.close(() => resolve()));
+      }
+    },
+  );
 
   it('observes non-streaming provider service_tier from upstream responses', async () => {
     const host = await freshCodexProxyHost();
@@ -8566,14 +9349,20 @@ describe('codex proxy host', () => {
     expect(host.isCodexProxyHandleReady()).toBe(true);
   });
 
-  it('keeps handle not-ready when proxy fails to start (degrade safety, no naked)', async () => {
+  it('keeps failed warmup not-ready and permits the next explicit startup attempt', async () => {
     const host = await freshCodexProxyHost();
     mockState.createAnthropicCompatProxy.mockRejectedValueOnce(new Error('port in use'));
 
     await host.ensureCodexProxyReady();
 
-    // proxy 起不来 → handle 不就绪 → spawn 据此 setActive(false) → maker-core 发 dev,不裸奔
+    // The spawn materializer rejects this state; metadata getters may still fall back.
     expect(host.isCodexProxyHandleReady()).toBe(false);
+    mockState.createAnthropicCompatProxy.mockResolvedValueOnce({
+      url: 'http://127.0.0.1:43210', dispose: vi.fn(async () => undefined),
+    });
+    await host.ensureCodexProxyReady();
+    expect(host.isCodexProxyHandleReady()).toBe(true);
+    expect(host.getCodexProxyEndpoint()).toBe('http://127.0.0.1:43210');
   });
 
   it('deduplicates concurrent proxy startup calls', async () => {
@@ -9871,10 +10660,13 @@ describe('createModelRoutingTransform —— custom Provider native imagegen pre
       for await (const chunk of req) chunks.push(Buffer.from(chunk));
       received.push({ path: req.url ?? '', body: JSON.parse(Buffer.concat(chunks).toString()),
         key: String(req.headers.authorization), account: req.headers['chatgpt-account-id'] });
-      res.writeHead(200, { 'content-type': 'application/json' }).end('{}');
+      const input = received.at(-1)?.body.input as Array<{ call_id?: string }>;
+      const overlong = (input?.[0]?.call_id?.length ?? 0) > 64;
+      res.writeHead(overlong ? 400 : 200, { 'content-type': 'application/json' }).end(JSON.stringify(overlong
+        ? { error: { message: "Invalid 'input[0].call_id': maximum length 64." } } : {}));
     });
     await new Promise<void>(resolve => upstream.listen(0, '127.0.0.1', resolve));
-    const host = await freshCodexProxyHost();
+    const host = await freshCodexProxyHost(true);
     const actual = await vi.importActual<typeof import('@cindy/anthropic-compat-proxy')>('@cindy/anthropic-compat-proxy');
     mockState.createAnthropicCompatProxy.mockImplementationOnce(actual.createAnthropicCompatProxy);
     const { BUNDLED_CATALOG, buildUserProvider } = await import('@cindy/model-providers');
@@ -9886,7 +10678,10 @@ describe('createModelRoutingTransform —— custom Provider native imagegen pre
     const providers = ['parent', 'child', 'nested'].map(id => buildUserProvider({
       id: `cprov-${id}`, name: id, runtimes: { codex: {
         baseUrl: `${endpoint}/${id}`, wireProtocol: 'openai-responses', supportsImageGeneration: true,
-        models: [{ id: `${id}-model`, name: id, reasoning: true, reasoningEfforts: ['high'] }],
+        models: [
+          { id: `${id}-model`, name: id, reasoning: true, reasoningEfforts: ['high'] },
+          ...(id === 'parent' ? [{ id: 'second-parent-model', name: 'Second', reasoning: true, reasoningEfforts: ['high'] as Array<'high'> }] : []),
+        ],
       } },
     }));
     const catalog = { ...BUNDLED_CATALOG, providers: [...BUNDLED_CATALOG.providers, ...providers] };
@@ -9906,12 +10701,12 @@ describe('createModelRoutingTransform —— custom Provider native imagegen pre
     try {
       await host.ensureCodexCustomContextProxyReady('smart-namespace', 'provider-oauth', routes);
       const proxy = host.getCodexCustomContextProxyEndpoint('smart-namespace');
-      const post = async (model: string, thread: string, parentThread?: string, kind = 'collab_spawn', routeId = parent.routeId) => {
+      const post = async (model: string, thread: string, parentThread?: string, kind = 'collab_spawn', routeId = parent.routeId, input: unknown[] = []) => {
         const response = await fetch(`${proxy}/_cindy/custom-provider/${routeId}/responses`, {
           method: 'POST', headers: { 'content-type': 'application/json', 'thread-id': thread,
             'chatgpt-account-id': 'must-not-leak',
             ...(parentThread ? { 'x-codex-parent-thread-id': parentThread, 'x-openai-subagent': kind } : {}) },
-          body: JSON.stringify({ model, input: [], vendor_field: 'retain', reasoning: { effort: 'low', summary: 'auto' } }),
+          body: JSON.stringify({ model, input, vendor_field: 'retain', reasoning: { effort: 'low', summary: 'auto' } }),
         });
         await response.text();
         return response.status;
@@ -9951,6 +10746,21 @@ describe('createModelRoutingTransform —— custom Provider native imagegen pre
       expect(received.at(-1)).toMatchObject({ path: '/child/responses', body: { model: 'child-model', reasoning: { effort: 'high' } } });
       expect(await post('nested-model', 'locked-nested', 'locked')).toBe(200);
       expect(received.at(-1)?.body.model).toBe('child-model');
+      host.unregister('smart-source');
+      host.registerComposed('smart-source', 'root', 'fixture', {
+        subagentRoute: { providerId: 'cprov-parent', catalogModel: 'second-parent-model', reasoningEffort: 'high' },
+      });
+      const long = 'x'.repeat(86);
+      const history = [
+        { type: 'function_call', call_id: long, name: 'probe', arguments: '{}' },
+        { type: 'function_call_output', call_id: long, output: 'ok' },
+      ];
+      const firstHit = received.length;
+      expect(await post('parent-model', 'same-provider-locked', 'root', 'collab_spawn', parent.routeId, history)).toBe(200);
+      expect(received).toHaveLength(firstHit + 2);
+      expect(await post('parent-model', 'same-provider-locked', 'root', 'collab_spawn', parent.routeId, history)).toBe(200);
+      expect(received).toHaveLength(firstHit + 3);
+      expect(received.slice(firstHit).map(entry => entry.body.model)).toEqual(Array(3).fill('second-parent-model'));
       // A credential read is an await boundary in route resolution: neither a
       // committed mutation nor unregister may dispatch the captured old decision.
       for (const change of ['mutation', 'unregister'] as const) {
@@ -10349,6 +11159,136 @@ it.each(['openai-chat', 'anthropic-messages'].flatMap(wireProtocol =>
     routing.setOAuthTokenReader(() => null);
     sessions.clearSessionProvider('refresh-refusal-session');
     setCustomProviders([]);
+    await host.disposeCodexProxy();
+  }
+});
+
+// Codex 0.166+ hides upstream "Selected model is at capacity" behind silent retry 1/5 and bare
+// "Reconnecting... 2/5". Verify proxy-level WebSocket + HTTP observation extracts structured,
+// secret-free capacity signals, notifies subscribers, ignores normal assistant text, and clears
+// on new outbound requests or session unregister (unit tier, no sockets).
+it('captures upstream capacity signals on WebSocket inbound frames and HTTP 503 responses without leaking bodies', async () => {
+  const host = await freshCodexProxyHost();
+  const { extractCodexUpstreamCapacitySignal } = await import('../codex-proxy-host.js');
+  mockState.createAnthropicCompatProxy.mockResolvedValueOnce({ url: 'http://127.0.0.1:43211', dispose: vi.fn() });
+  await host.ensureCodexProxyReady();
+  host.registerComposed('cap-session', 'cap-root', '');
+  host.registerChildThread('cap-root', 'cap-child');
+  const proxy = mockState.createAnthropicCompatProxy.mock.calls[0]![0];
+
+  // Pure parser rejects normal text deltas mentioning "at capacity" and extracts retry_after_seconds.
+  expect(extractCodexUpstreamCapacitySignal({
+    type: 'response.output_text.delta',
+    delta: 'Selected model is at capacity.',
+  })).toBeNull();
+  expect(extractCodexUpstreamCapacitySignal(
+    {
+      type: 'response.failed',
+      response: {
+        error: {
+          code: 'server_is_overloaded',
+          message: 'Selected model is at capacity. token=secret-value',
+          retry_after_seconds: 340,
+        },
+      },
+    },
+    { status: 503, now: 10_000 },
+  )).toEqual({
+    code: 'server_is_overloaded',
+    status: 503,
+    retryAfterMs: 340_000,
+    observedAt: 10_000,
+  });
+
+  const pushed: Array<{ threadId: string; signal: { code: string; status?: number; retryAfterMs?: number } }> = [];
+  const unsubscribe = host.subscribeCodexUpstreamCapacity('cap-session', (event) => {
+    pushed.push(event);
+  });
+
+  // Build an unmasked server->client RFC6455 text frame for webSocketTransforms.inbound.
+  const makeServerWsFrame = (payload: string): Buffer => {
+    const body = Buffer.from(payload, 'utf8');
+    if (body.length < 126) return Buffer.concat([Buffer.from([0x81, body.length]), body]);
+    const hdr = Buffer.alloc(4);
+    hdr[0] = 0x81;
+    hdr[1] = 126;
+    hdr.writeUInt16BE(body.length, 2);
+    return Buffer.concat([hdr, body]);
+  };
+  const makeClientWsFrame = (payload: string): Buffer => {
+    const body = Buffer.from(payload, 'utf8');
+    const mask = Buffer.from([1, 2, 3, 4]);
+    const masked = Buffer.alloc(body.length);
+    for (let i = 0; i < body.length; i++) masked[i] = body[i]! ^ mask[i % 4]!;
+    if (body.length < 126) return Buffer.concat([Buffer.from([0x81, 0x80 | body.length]), mask, masked]);
+    const hdr = Buffer.alloc(4);
+    hdr[0] = 0x81;
+    hdr[1] = 0x80 | 126;
+    hdr.writeUInt16BE(body.length, 2);
+    return Buffer.concat([hdr, mask, masked]);
+  };
+
+  try {
+    const transforms = proxy.webSocketTransforms({ url: '/responses', headers: { 'thread-id': 'cap-root' } });
+    transforms.inbound.resume();
+    transforms.outbound.resume();
+
+    // Normal assistant delta mentioning capacity must NOT trigger a capacity signal.
+    transforms.inbound.write(makeServerWsFrame(JSON.stringify({
+      type: 'response.output_text.delta',
+      delta: 'The cluster is at capacity',
+    })));
+    await new Promise(resolve => setImmediate(resolve));
+    expect(host.getObservedCodexUpstreamCapacity('cap-session', 'cap-root')).toBeUndefined();
+    expect(pushed).toHaveLength(0);
+
+    // Upstream WS error envelope triggers both pull getter and push subscriber.
+    transforms.inbound.write(makeServerWsFrame(JSON.stringify({
+      type: 'error',
+      status: 503,
+      error: {
+        code: 'server_is_overloaded',
+        message: 'Selected model is at capacity. Please try a different model. secret=do-not-leak',
+      },
+    })));
+    await new Promise(resolve => setImmediate(resolve));
+    const observedWs = host.getObservedCodexUpstreamCapacity('cap-session', 'cap-root');
+    expect(observedWs).toMatchObject({ code: 'server_is_overloaded', status: 503 });
+    expect(JSON.stringify(observedWs)).not.toContain('do-not-leak');
+    expect(host.getObservedCodexUpstreamCapacity('other-session', 'cap-root')).toBeUndefined();
+    expect(pushed).toHaveLength(1);
+    expect(pushed[0]).toMatchObject({ threadId: 'cap-root', signal: { code: 'server_is_overloaded', status: 503 } });
+
+    // A subsequent outbound WS request clears the prior signal.
+    transforms.outbound.write(makeClientWsFrame(JSON.stringify({ type: 'response.create', model: 'gpt-6.2-astra', input: [] })));
+    await new Promise(resolve => setImmediate(resolve));
+    expect(host.getObservedCodexUpstreamCapacity('cap-session', 'cap-root')).toBeUndefined();
+
+    // HTTP 503 response with Retry-After also records capacity signal and pushes to subscriber.
+    const httpObs = proxy.responseObserver({
+      status: 503,
+      reqId: 99,
+      method: 'POST',
+      url: '/v1/responses',
+      requestHeaders: { 'thread-id': 'cap-root' },
+      responseHeaders: { 'content-type': 'application/json', 'retry-after': '320' },
+      requestBody: Buffer.from('{}'),
+      upstreamBase: 'https://chatgpt.com/backend-api/codex',
+    });
+    httpObs?.onData?.(Buffer.from(JSON.stringify({ error: { code: 'slow_down', message: 'Selected model is at capacity.' } })));
+    httpObs?.onEnd?.();
+    expect(host.getObservedCodexUpstreamCapacity('cap-session', 'cap-root')).toMatchObject({
+      code: 'slow_down',
+      status: 503,
+      retryAfterMs: 320_000,
+    });
+    expect(pushed).toHaveLength(2);
+
+    // Unregister clears stored signal for the session.
+    host.unregister('cap-session');
+    expect(host.getObservedCodexUpstreamCapacity('cap-session', 'cap-root')).toBeUndefined();
+  } finally {
+    unsubscribe();
     await host.disposeCodexProxy();
   }
 });

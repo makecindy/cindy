@@ -7,7 +7,7 @@ export function RemoteDesktopConfirmationNotice() {
 
   return (
     <div
-      className="flex w-full max-w-[914px] items-start gap-3 rounded-[12px] border border-[var(--chat-input-border)] bg-[var(--chat-input-bg)] px-4 py-3"
+      className="flex w-full max-w-[914px] items-start gap-3 rounded-xl border border-[var(--chat-input-border)] bg-[var(--chat-input-bg)] px-4 py-3"
       data-testid="remote-desktop-confirmation-notice"
       role="status"
     >
@@ -17,7 +17,7 @@ export function RemoteDesktopConfirmationNotice() {
         size={18}
       />
       <div className="min-w-0">
-        <p className="text-14 font-semibold leading-tight text-[var(--chat-input-text)]">
+        <p className="text-14 font-medium leading-tight text-[var(--chat-input-text)]">
           {t('ccAgent.remoteDesktopConfirmation.title')}
         </p>
         <p className="mt-1 text-12 leading-relaxed text-[var(--status-bar-meta)]">

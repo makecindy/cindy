@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { selectExecutableCoreMediaModels } from '../../cindy-brain/cindyMediaCatalog.js';
 
 const serverApiFetchMock = vi.hoisted(() => vi.fn());
 const readModelDisableOverridesMock = vi.hoisted(() => vi.fn());
@@ -97,6 +98,39 @@ describe('listAvailableMediaModels', () => {
     isCatalogMediaModelVisibleMock.mockReset().mockReturnValue(true);
   });
 
+  // #10147, standard: earlier cases only shared IDs across providers. Exercise
+  // the production listing -> plugin projection with both media kinds enabled,
+  // including Gateway merging and the account-free early return.
+  it.each([false, true])('keeps same-ID image/video through listing and plugin selection (skipGateway=%s)', async skipGateway => {
+    const image = { id: 'shared', name: 'Image', providerId: 'relay', mode: 'image_generation',
+      guideDriven: true, sourceAgent: 'pi', sourceAgents: ['pi'],
+      modalities: { input: ['text'], output: ['image'] } };
+    const video = { ...image, name: 'Video', mode: 'video_generation',
+      sourceAgent: 'claude-code', sourceAgents: ['claude-code'],
+      modalities: { input: ['text'], output: ['video'] } };
+    listProviderMediaModelsMock.mockReturnValue([image, video]);
+    serverApiFetchMock.mockResolvedValue({ ...payload, models: [] });
+
+    const available = await listAvailableMediaModels();
+    expect(available.filter(model => model.providerId === 'relay')).toMatchObject([image, video]);
+    const executable = await listExecutableMediaModels([], { skipGateway });
+    expect(executable.models).toMatchObject([image, video]);
+    // The plugin also adds its local video projection. It must not remove the
+    // video because an image won a provider/id-only deduplication first.
+    expect(selectExecutableCoreMediaModels([...executable.models, video], 'video')).toMatchObject([video]);
+    expect(selectExecutableCoreMediaModels(executable.models, 'image')).toMatchObject([image]);
+  });
+
+  // Unit: declarations remain discoverable without eager Guide lookup or a
+  // Cindy AI account. The actual prepare resolves a Guide for the selected route.
+  it('lists custom declarations and exact source choices without reading Guides', async () => {
+    listProviderMediaModelsMock.mockReturnValue([{ id: 'unknown', name: 'Private', providerId: 'relay', mode: 'image_generation',
+      guideDriven: true, sourceAgents: ['codex', 'pi'], modalities: { input: ['text'], output: ['image'] } }]);
+    const result = await listExecutableMediaModels(['image.generate'], { skipGateway: true });
+    expect(result.models).toMatchObject([{ id: 'unknown', providerId: 'relay', guideDriven: true, sourceAgents: ['codex', 'pi'] }]);
+    expect(serverApiFetchMock).not.toHaveBeenCalled();
+  });
+
   // Unit contract: listAvailableMediaModels preserves the parsed summary and provider discount.
   // Existing fixtures had no pricing; minimal regression is a Gateway image with one summary.output quote.
   it('preserves the optional summary through media parsing and provider projection', async () => {
@@ -104,6 +138,25 @@ describe('listAvailableMediaModels', () => {
       summary: { input: [{ price: 0.02, unit: 'image', quantity: 1, component: 'image' }], output: [{ price: 0.3, unit: 'image', quantity: 1, component: 'image' }] } };
     serverApiFetchMock.mockResolvedValue({ ...payload, models: [{ ...payload.models[0], displayPricing, costDiscount: 0.2 }] });
     await expect(listAvailableMediaModels()).resolves.toMatchObject([{ displayPricing, costDiscount: 0.2, currency: 'CNY', providerId: 'xd' }]);
+  });
+
+  it('requests provider sources for the exact capability before returning their default', async () => {
+    listProviderMediaModelsMock.mockReturnValue([{ id: 'private-image', name: 'Image input', providerId: 'relay',
+      mode: 'image_generation', guideDriven: true, sourceAgent: 'codex', sourceAgents: ['codex'],
+      modalities: { input: ['text', 'image'], output: ['image'] } }]);
+    await expect(listAvailableMediaModels('image.edit', { skipGateway: true })).resolves.toMatchObject([
+      { providerId: 'relay', sourceAgent: 'codex', sourceAgents: ['codex'] },
+    ]);
+    expect(listProviderMediaModelsMock).toHaveBeenCalledExactlyOnceWith(['image.edit']);
+  });
+
+  it('discovers a common source when executable listing requires generation and editing together', async () => {
+    listProviderMediaModelsMock.mockReturnValue([{ id: 'private-image', name: 'Image input', providerId: 'relay',
+      mode: 'image_generation', guideDriven: true, sourceAgent: 'codex', sourceAgents: ['codex'],
+      modalities: { input: ['text', 'image'], output: ['image'] } }]);
+    const result = await listExecutableMediaModels(['image.generate', 'image.edit'], { skipGateway: true });
+    expect(result.models).toMatchObject([{ sourceAgent: 'codex', sourceAgents: ['codex'] }]);
+    expect(listProviderMediaModelsMock).toHaveBeenCalledExactlyOnceWith(['image.generate', 'image.edit']);
   });
 
   it('不带操作筛选时按 Gateway mode 返回图片/视频模型', async () => {
@@ -404,6 +457,12 @@ describe('listAvailableMediaModels', () => {
     await expect(
       listExecutableMediaModels(['image.generate'], { forceRefresh: true }),
     ).resolves.toMatchObject({ models: [{ id: modelId }] });
+    // Settings explicitly requests disabled entries so their controls can remain
+    // available; the ordinary media picker still excludes this provider.
+    readModelDisableOverridesMock.mockReturnValue({ disabledProviders: { xd: true } });
+    await expect(listExecutableMediaModels(['image.generate'], { includeDisabled: true }))
+      .resolves.toMatchObject({ models: [{ id: modelId }] });
+    readModelDisableOverridesMock.mockReturnValue({});
     resetExecutableMediaModelCache();
     isCatalogMediaModelVisibleMock.mockImplementation(
       (_providerId: string, id: string, _defaultEnabled?: boolean) => id !== modelId,

@@ -281,29 +281,38 @@ export default function SharedSessionScreen() {
   const task = remoteSessionStore.getSessions().find((task) => task.id === sessionId && task.deviceLinkDeviceId === deviceId);
   const title = detail?.title ?? task?.title ?? t('sharedTask.title');
   const deviceName = (id: string) => deviceNames[id] ?? remoteSessionStore.getSessions().find((task) => task.deviceLinkDeviceId === id)?.deviceLinkDeviceName ?? t('sharedTask.hostDevice');
-  const closeTasks = (items: SharedTaskListItem[]) => confirm(
-    t('sharedTask.closeAllTitle'),
-    t('sharedTask.closeAllBody'),
-    t('sharedTask.closeAllKeep'), t('sharedTask.closeAllAction', { count: items.length }), async (current) => {
-      const closed = new Set<string>();
-      const failed: SharedTaskListItem[] = [];
-      for (const item of items) {
-        if (!current()) return;
-        try {
-          await api.close(item.sharedTaskId);
+  const closeTasks = (items: SharedTaskListItem[]) => {
+    const privateTasks = new Set(items.filter(item => api.isPrivateOwner(item.sharedTaskId)).map(item => item.sharedTaskId));
+    confirm(
+      t('sharedTask.closeAllTitle'),
+      t('sharedTask.closeAllBody'),
+      t('sharedTask.closeAllKeep'), t('sharedTask.closeAllAction', { count: items.length }), async (current) => {
+        const closed = new Set<string>();
+        const failed: SharedTaskListItem[] = [];
+        for (const item of items) {
           if (!current()) return;
-          closed.add(item.sharedTaskId);
-        } catch {
-          if (!current()) return;
-          failed.push(item);
+          try {
+            if (privateTasks.has(item.sharedTaskId)) {
+              await link.openLink(item.hostDeviceId);
+              if (!current()) return;
+              const result = await link.invoke<{ ok: boolean }>(item.hostDeviceId, SHARED_TASK_HOST_CHANNEL,
+                [{ action: 'close', sharedTaskId: item.sharedTaskId }]);
+              if (result?.ok !== true) throw new Error('Shared task close was not confirmed');
+            } else await api.close(item.sharedTaskId);
+            if (!current()) return;
+            closed.add(item.sharedTaskId);
+          } catch {
+            if (!current()) return;
+            failed.push(item);
+          }
         }
-      }
-      if (closed.size) notifySharedTaskMembershipChanged();
-      if (!current()) return;
-      setOwned((value) => value.filter((item) => !closed.has(item.sharedTaskId)));
-      const failedCount = failed.length;
-      setNotice(t(failedCount ? 'sharedTask.closeFailedToast' : 'sharedTask.closedToast', { count: failedCount || closed.size }));
-    }, true, { items: items.map((item) => item.title + ' · ' + deviceName(item.hostDeviceId)), note: t('sharedTask.closeAllScopeNote') });
+        if (closed.size) notifySharedTaskMembershipChanged();
+        if (!current()) return;
+        setOwned((value) => value.filter((item) => !closed.has(item.sharedTaskId)));
+        const failedCount = failed.length;
+        setNotice(t(failedCount ? 'sharedTask.closeFailedToast' : 'sharedTask.closedToast', { count: failedCount || closed.size }));
+      }, true, { items: items.map((item) => item.title + ' · ' + deviceName(item.hostDeviceId)), note: t('sharedTask.closeAllScopeNote') });
+  };
   const leave = () => confirm(t('sharedTask.leaveTitle'), t('sharedTask.leaveBody'), t('sharedTask.leaveKeep'), t('sharedTask.leave'), async (current) => {
     await api.leave(guestId!);
     notifySharedTaskMembershipChanged();

@@ -1,8 +1,14 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
 import { createInteractionBroker } from './interactions.mjs';
+import { redactToolInputForUntrustedBoundary } from '../../../desktop/src/main/toolInputRedaction.ts';
 import { beginUnattendedTurn } from '../../../desktop/src/main/mcp-integrations/unattendedTurn.ts';
+import { defaultDecisionForPending } from '../../../desktop/src/main/maker-ipc/sessionEventPreparationSteps.ts';
 
 function createSession(id = 'task') {
   const session = {
@@ -49,7 +55,9 @@ test('publishes the request and resolves the decision the client returns', async
   assert.deepEqual(events[0], {
     type: 'interaction_request',
     sessionId: 'task-1',
-    request: { requestId: 'req-1', kind: 'permission' },
+    // The desktop's boundary request: a permission request carries its (here absent) tool input
+    // through the same redaction before it leaves.
+    request: { requestId: 'req-1', kind: 'permission', input: undefined },
   });
   assert.deepEqual(broker.pending('task-1').map((entry) => entry.requestId), ['req-1']);
   assert.equal(broker.respond('another-task', 'req-1', { kind: 'permission', behavior: 'allow' }), false);
@@ -164,4 +172,51 @@ test('an owner change denies a stale answer without publishing into the new acco
   assert.equal((await answer).behavior, 'deny');
   assert.equal(events.length, 1);
   broker.dispose();
+});
+
+// A permission request's tool input leaves the Host (the hub, then the event stream and the device
+// link, and the pending snapshot for reconnecting clients) through the desktop's tool-input
+// redaction; the decision still resolves the original request. Fixture credentials only.
+test('permission requests leave the Host with the desktop tool-input redaction', { timeout: 60_000 }, async () => {
+  const events = [];
+  const broker = createInteractionBroker({ hub: { publish: (event) => events.push(event) } });
+  const session = createSession();
+  broker.attach(session, 'task-proxy');
+  const input = { name: 'browser', args: { action: 'open', proxyServer: 'http://fixture-user:fixture-pass@proxy.test:8080' } };
+  const request = { requestId: 'req-proxy', kind: 'permission', toolName: 'mcp__cindy_browser__call_tool', input };
+  const decision = session.listener(request);
+  await Promise.resolve();
+  const expected = { ...request, input: redactToolInputForUntrustedBoundary(request.toolName, request.input) };
+  assert.deepEqual(events[0], { type: 'interaction_request', sessionId: 'task-proxy', request: expected });
+  assert.deepEqual(broker.pending('task-proxy'), [{ requestId: 'req-proxy', request: expected }]);
+  assert.equal(JSON.stringify([events, broker.pending('task-proxy')]).includes('fixture-pass'), false);
+  assert.equal(expected.input.args.proxyServer, '[REDACTED]');
+  assert.equal(input.args.proxyServer.includes('fixture-pass'), true, 'the original stays with the Host');
+  assert.equal(broker.respond('task-proxy', 'req-proxy', { kind: 'permission', behavior: 'deny' }), true);
+  assert.equal((await decision).behavior, 'deny');
+  // Questions are not tool calls and pass unchanged, as on the desktop.
+  const question = { requestId: 'req-question', kind: 'ask_user_question', questions: [] };
+  void session.listener(question);
+  await Promise.resolve();
+  assert.deepEqual(events.at(-1).request, question);
+  broker.dispose();
+});
+
+// Unit, the broker's real attach and detach: a task stopped with its cards pending (main.ts passes the
+// abort's reason to detach). Rule: each card gets the desktop's default decision for a card closed
+// without an answer (register.ts defaultDecisionForPending), the same one the clients are told.
+// Gap: the broker had its own fallback, whose permission decision also carried dismissed: true.
+// Minimal input: one pending card of each kind, then the task's abort.
+test('a stopped task closes its pending cards with the desktop\'s default decisions', async () => {
+  const events = [];
+  const broker = createInteractionBroker({ hub: { publish: event => events.push(event) } });
+  const session = createSession('stopped');
+  broker.attach(session, 'stopped');
+  const kinds = ['permission', 'ask_user_question', 'plan_review'];
+  const decisions = kinds.map(kind => session.listener({ requestId: `${kind}-card`, kind }));
+  broker.detach('stopped', 'session_aborted');
+  const expected = kinds.map(kind => defaultDecisionForPending(kind, 'session_aborted'));
+  assert.deepEqual(await Promise.all(decisions), expected);
+  assert.deepEqual(expected[0], { kind: 'permission', behavior: 'deny', reason: 'session_aborted' });
+  assert.deepEqual(events.filter(event => event.type === 'interaction_dismissed').map(event => event.decision), expected);
 });

@@ -5,8 +5,10 @@
  * A task stays on its bound account while that account works. Before the next send (a user
  * message, a retry or an automatic continuation), a bound account that remembers a real failure
  * (usage limit, sign-in, overload), whose trusted quota for the task model is exhausted, or that
- * is signed out moves the task to another usable account chosen by the pool policy. The running
- * turn is never interrupted, and with nowhere to go the message is sent to the original account.
+ * is signed out moves the task to another usable account chosen by the pool policy. A ChatGPT
+ * account whose plan window is used up may still run on credits, so it only moves to an account
+ * with plan quota left (2026-11-24 user decision). The running turn is never interrupted, and with
+ * nowhere to go the message is sent to the original account.
  *
  * Paused or removed accounts are handled by their own pre-send handoff, not here. A same-account
  * remote Agent task is handed off by the native-session recovery before send
@@ -18,15 +20,17 @@
  * continues on the merged `openai` route, whose own model switches must allow its model.
  */
 import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../appSessionState.js';
-import type { SubscriptionProvider } from '../../shared/subscriptionAccounts.js';
 import { readPool } from './store.js';
+import { accountProviderId, providerAccounts } from './placement.js';
+import { apiKeyPoolAllowsAutoSwitch, apiKeyPoolMembers, hasApiKeyPoolWithMultipleMembers } from './apiKeyMembers.js';
 import {
   acquireSubscriptionAccount,
   readRemoteSubscriptionAccountSwitch,
-  readSubscriptionAccountBlocked,
+  readRemoteSubscriptionAccountHandoff,
+  readSubscriptionAccountBlockReason,
   type RemoteSubscriptionInvoke,
 } from './runtime.js';
-import { mergedRouteAllowsModel, readTaskPoolAccount, type TaskPoolAccount } from './taskAccount.js';
+import { taskPoolRouteAllowsModel, readTaskPoolAccount, type TaskPoolAccount } from './taskAccount.js';
 
 export interface AccountFailoverSession {
   status: string;
@@ -48,11 +52,11 @@ export interface AccountFailoverDeps {
    */
   rebuild(id: string, assertCurrent: () => void): Promise<void>;
   /**
-   * Moves an idle task off a merged legacy Codex connection id onto the merged `openai` route
+   * Moves an idle task off a merged connection id onto the account's current provider
    * (runtime routing and the saved task source), after its context handoff. Must call
    * `assertCurrent` before writing. Without it such tasks stay on their account.
    */
-  moveRoute?(id: string, providerId: SubscriptionProvider, assertCurrent: () => void, fromProviderId: string): Promise<void>;
+  moveRoute?(id: string, providerId: string, assertCurrent: () => void, fromProviderId: string): Promise<void>;
   /** Owner-only session-account read on the task's executing computer. */
   invokeRemote?: RemoteSubscriptionInvoke;
   log?(message: string, fields: Record<string, unknown>): void;
@@ -67,19 +71,32 @@ function boundAccount(sessionId: string, row: AccountFailoverSession): BoundAcco
   const task = readTaskPoolAccount(sessionId, row);
   if (!task) return null;
   const pool = readPool(task.provider);
-  if (!pool || pool.disconnected || pool.accounts.length < 2) return null;
+  const keys = task.provider === 'openai' ? apiKeyPoolMembers(task.providerId).length : 0;
+  if (!pool || (keys && !apiKeyPoolAllowsAutoSwitch(task.providerId)) || (pool.disconnected && task.providerId === task.provider)
+    || providerAccounts(task.provider, pool.accounts, task.providerId).length + keys < 2) return null;
   return { ...task, model: row.model ?? undefined };
 }
 
 /** A task leaving a merged connection id also needs the merged route to allow its model. */
 async function routeAdmits(bound: BoundAccount): Promise<boolean> {
-  return !bound.legacyRoute || mergedRouteAllowsModel(bound.model);
+  return taskPoolRouteAllowsModel(bound, bound.model);
 }
 
 function hasMultiAccountPool(): boolean {
+  if (hasApiKeyPoolWithMultipleMembers()) return true;
   return (['anthropic', 'openai'] as const).some((provider) => {
     const pool = readPool(provider);
-    return !!pool && !pool.disconnected && pool.accounts.length > 1;
+    if (!pool) return false;
+    const counts = new Map<string, number>();
+    for (const account of pool.accounts) {
+      const owner = accountProviderId(provider, account.id);
+      if (pool.disconnected && owner === provider) continue;
+      if (provider === 'openai' && apiKeyPoolMembers(owner).length) return true;
+      const count = (counts.get(owner) ?? 0) + 1;
+      if (count > 1) return true;
+      counts.set(owner, count);
+    }
+    return false;
   });
 }
 
@@ -105,11 +122,13 @@ export async function readSubscriptionAccountSwitch(
       : null;
   }
   const bound = local ? boundAccount(sessionId, row) : null;
-  if (!bound || !readSubscriptionAccountBlocked(bound.provider, bound.accountId, bound.model)) return null;
+  const agent = row.agentKind === 'pi' ? 'pi' : 'codex';
+  const reason = bound && readSubscriptionAccountBlockReason(bound.provider, bound.accountId, bound.model, agent);
+  if (!bound || !reason) return null;
   if (!(await routeAdmits(bound))) return null;
   try {
-    await acquireSubscriptionAccount(bound.provider, bound.model, [], false, {
-      exclude: new Set([bound.accountId]), dryRun: true,
+    await acquireSubscriptionAccount(bound.providerId, bound.model, [], false, {
+      includeApiKeys: true, agent, exclude: new Set([bound.accountId]), planQuotaOnly: reason === 'plan-exhausted', dryRun: true,
     });
     return `local#${bound.provider}:${bound.accountId}`;
   } catch {
@@ -145,15 +164,16 @@ export async function prepareSubscriptionAccountFailover(
   const row = read && { ...read };
   if (row?.agentDeviceId && row.providerId && row.providerId !== 'openai' && row.providerId !== 'anthropic') {
     if (!deps.invokeRemote || !deps.moveRoute || deps.isRunning(sessionId)) return false;
-    let available: string | null;
+    let available: Awaited<ReturnType<typeof readRemoteSubscriptionAccountHandoff>>;
     try {
-      available = await readRemoteSubscriptionAccountSwitch({ ...row, agentKind: row.agentKind ?? '' }, deps.invokeRemote);
+      available = await readRemoteSubscriptionAccountHandoff({ ...row, agentKind: row.agentKind ?? '' }, deps.invokeRemote);
     } catch {
       assertOwner();
       return false;
     }
     assertOwner();
-    if (!available) return false;
+    if (!available?.available || (!available.blocked && !available.paused)) return false;
+    const destination = available.replacementProviderId ?? row.providerId;
     const assertCurrent = () => {
       assertOwner();
       if (deps.isRunning(sessionId)) throw new Error('Cannot switch a running task subscription account');
@@ -171,23 +191,27 @@ export async function prepareSubscriptionAccountFailover(
     if (row.sdkSessionId) await deps.rebuild(sessionId, assertCurrent);
     await assertSource(true);
     // The executing host admitted the merged destination; a fresh start there chooses the account.
-    await deps.moveRoute(sessionId, 'openai', assertCurrent, row.providerId);
+    if (destination !== row.providerId) await deps.moveRoute(sessionId, destination, assertCurrent, row.providerId);
     deps.log?.('subscription account failover: moved remote legacy task before send', { sessionId });
     return true;
   }
   if (!local) return false;
   const bound = row && boundAccount(sessionId, row);
   if (!bound || deps.isRunning(sessionId)) return false;
-  if (!readSubscriptionAccountBlocked(bound.provider, bound.accountId, bound.model)) return false;
-  if (bound.legacyRoute && !deps.moveRoute) return false;
+  const agent = row?.agentKind === 'pi' ? 'pi' : 'codex';
+  const reason = readSubscriptionAccountBlockReason(bound.provider, bound.accountId, bound.model, agent);
+  if (!reason) return false;
+  if (bound.previousProviderId && !deps.moveRoute) return false;
   if (!(await routeAdmits(bound))) return false;
   assertOwner();
   // Reserve the replacement with the same pool policy, limits and quota order as a new task.
   // None left (all blocked or full): keep the original account and let the send report it.
-  let lease: Awaited<ReturnType<typeof acquireSubscriptionAccount>>;
+  // A ChatGPT account with a used-up plan window can still spend credits, so it only hands the
+  // task to an account with plan quota left; otherwise the task keeps its native context.
+  let lease: import('./runtime.js').SubscriptionAccountLease | null;
   try {
-    lease = await acquireSubscriptionAccount(bound.provider, bound.model, [], false, {
-      exclude: new Set([bound.accountId]),
+    lease = await acquireSubscriptionAccount(bound.providerId, bound.model, [], false, {
+      includeApiKeys: true, agent, exclude: new Set([bound.accountId]), planQuotaOnly: reason === 'plan-exhausted',
     });
   } catch {
     return false;
@@ -198,25 +222,26 @@ export async function prepareSubscriptionAccountFailover(
       assertOwner();
       lease!.assertDispatchable();
       if (deps.isRunning(sessionId)) throw new Error('Cannot switch a running task subscription account');
-      if (readTaskPoolAccount(sessionId, row!)?.accountId !== bound.accountId)
+      const current = readTaskPoolAccount(sessionId, row!);
+      if (current?.accountId !== bound.accountId || current.providerId !== bound.providerId)
         throw new Error('The task subscription account changed');
     };
     assertCurrent();
     // Keep the old native id bound to the account that owns its history; only the task moves.
     if (row!.sdkSessionId) await deps.rebuild(sessionId, assertCurrent);
     assertCurrent();
-    if (bound.legacyRoute) {
+    if (bound.previousProviderId) {
       // The old id would pin the old account again; continue on the merged route instead.
       const latest = await deps.readSession(sessionId);
-      if (latest?.providerId !== bound.legacyRoute) throw new Error('The task route changed');
-      await deps.moveRoute!(sessionId, bound.provider, assertCurrent, bound.legacyRoute);
+      if (latest?.providerId !== bound.previousProviderId) throw new Error('The task route changed');
+      await deps.moveRoute!(sessionId, bound.providerId, assertCurrent, bound.previousProviderId);
       assertCurrent();
     }
     await lease.bind([`task:${sessionId}`]);
     lease.reserveForTask(sessionId);
     deps.log?.('subscription account failover: moved task before send', {
-      sessionId, provider: bound.provider, from: bound.accountId, to: lease.accountId,
-      ...(bound.legacyRoute ? { mergedRoute: true } : {}),
+      sessionId, provider: bound.provider, from: bound.accountId, to: lease.accountId, reason,
+      ...(bound.previousProviderId ? { mergedRoute: true } : {}),
     });
     return true;
   } finally {

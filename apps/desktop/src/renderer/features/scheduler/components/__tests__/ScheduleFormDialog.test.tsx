@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import type { Schedule, ScheduleTemplate } from '@cindy/maker-scheduler';
@@ -33,6 +33,7 @@ const state = vi.hoisted(() => ({
     { id: 'shared', efforts: ['ultra'], supportsFastMode: true },
     { id: 'remote-only', efforts: ['ultra'], supportsFastMode: true },
   ],
+  modelGroupIds: [] as string[],
 }));
 vi.mock('react-router-dom', () => ({ useNavigate: () => vi.fn() }));
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key, i18n: { exists: () => true } }) }));
@@ -78,11 +79,18 @@ vi.mock('../TemplateGallery', () => ({ TemplateGallery: () => null }));
 vi.mock('../WebhookAccountManager', () => ({ WebhookAccountManager: () => null }));
 vi.mock('../TemplateParamForm', () => ({ TemplateParamForm: () => null }));
 vi.mock('../BoundSessionCard', () => ({ BoundSessionCard: () => null }));
+vi.mock('@/features/model-groups/modelGroupsClient', async (importOriginal) => ({
+  ...await importOriginal<object>(),
+  useModelGroups: () => ({ config: { routes: state.modelGroupIds.map((id) => ({ id, name: id, strategy: 'order', sources: [] })) } }),
+}));
 vi.mock('../ScheduleChips', () => ({
   ProjectChip: () => null, ScheduleChip: () => null, ScheduleSettingsButton: () => null, ThreadPickerInline: () => null,
-  ModelEffortChip: ({ onSelect, ...selection }: { onSelect: (choice: unknown) => void }) => (
+  ModelEffortChip: ({ onSelect, followModel, ...selection }: { onSelect: (choice: unknown) => void; followModel?: { label: string; active: boolean; onFollow: () => void } }) => (
+    <>
+    {followModel && <button data-active={String(followModel.active)} onClick={followModel.onFollow}>{followModel.label}</button>}
     <button data-testid="model-selection" data-selection={JSON.stringify(selection)} onClick={() => onSelect({ engine: 'codex', modelId: 'remote-only', providerId: 'source',
       effort: 'ultra', fast: true, agentDevice: { deviceId: 'studio' } })}>select remote</button>
+    </>
   ),
 }));
 
@@ -96,7 +104,7 @@ function schedule(patch: Partial<Schedule> = {}): Schedule {
     jobType: 'prompt', createdAt: 1, updatedAt: 1, ...patch };
 }
 function mount(initial: Schedule) {
-  const onSubmit = vi.fn(async () => {});
+  const onSubmit = vi.fn(async (_input: unknown, _edit: boolean) => {});
   const element = () => <ScheduleFormDialog open initial={initial} onOpenChange={() => {}} onSubmit={onSubmit} />;
   const view = render(element());
   return { onSubmit, refresh: () => view.rerender(element()),
@@ -137,8 +145,13 @@ beforeEach(() => {
   state.localCapabilities = {};
   state.pendingCapabilities.clear();
   state.vendors = new Set(['cc', 'codex', 'pi']);
+  state.modelGroupIds = [];
   localStorage.clear();
-  vi.stubGlobal('electronAPI', { maker: { schedule: {
+  vi.stubGlobal('electronAPI', { localDb: { bots: {
+    // Opening the editor must work without loading profiles or resuming invitations (PR 10847).
+    list: vi.fn(async () => { throw new Error('full roster unavailable'); }),
+    ownsProject: async () => true,
+  } }, gitContext: { githubAppStatus: async () => ({ available: true, login: null }) }, maker: { schedule: {
     webhookReceiver: async () => 'cloud', scriptCapabilityStatus: async () => ({ statuses: [] }),
   } } });
   resetDraft();
@@ -146,9 +159,9 @@ beforeEach(() => {
 afterEach(cleanup);
 afterEach(() => vi.unstubAllGlobals());
 
-// User-requested form grouping / unit: inactive tabs unmount their fields. Existing
-// model tests do not protect configured options during a save from another tab.
-it('preserves configured options across tab switches and saving from content', async () => {
+// User-requested form grouping / unit: run options share the form with the content. Existing
+// model tests do not protect configured run options when another field is edited and saved.
+it('preserves configured run options when saving after editing the title', async () => {
   const expireAt = new Date(2027, 4, 1, 18, 30).getTime();
   const h = mount(
     schedule({
@@ -159,9 +172,7 @@ it('preserves configured options across tab switches and saving from content', a
       preRunHook: { command: 'node check.mjs' },
     }),
   );
-  fireEvent.click(screen.getByRole('tab', { name: 'scheduler.editor.layout.optionsTab' }));
   expect(screen.getByPlaceholderText('scheduler.editor.preRunHook.commandPlaceholder').getAttribute('value')).toBe('node check.mjs');
-  fireEvent.click(screen.getByRole('tab', { name: 'scheduler.editor.layout.contentTab' }));
   fireEvent.change(screen.getByPlaceholderText('scheduler.editor.promptDialog.namePlaceholder'), {
     target: { value: 'Renamed' },
   });
@@ -182,19 +193,17 @@ it('preserves configured options across tab switches and saving from content', a
 });
 
 // Unit: the optional deadline popover must update and clear the saved deadline,
-// including after leaving the content tab (the popover is then unmounted).
+// including after the popover has been closed.
 it('edits and clears a deadline through its compact picker', async () => {
   const h = mount(schedule());
   fireEvent.click(screen.getByRole('button', { name: 'scheduler.deadline.label' }));
   const input = await screen.findByLabelText('scheduler.deadline.label', { selector: 'input' });
   fireEvent.change(input, { target: { value: '2027-05-02T09:15' } });
   fireEvent.keyDown(input, { key: 'Escape' });
-  fireEvent.click(screen.getByRole('tab', { name: 'scheduler.editor.layout.optionsTab' }));
   h.save();
   await waitFor(() => expect(h.onSubmit).toHaveBeenLastCalledWith(expect.objectContaining({
     expireAt: new Date(2027, 4, 2, 9, 15).getTime(),
   }), true));
-  fireEvent.click(screen.getByRole('tab', { name: 'scheduler.editor.layout.contentTab' }));
   fireEvent.click(screen.getByRole('button', { name: 'scheduler.deadline.label' }));
   fireEvent.click(await screen.findByRole('button', { name: 'scheduler.deadline.clear' }));
   fireEvent.keyDown(screen.getByLabelText('scheduler.deadline.label', { selector: 'input' }), { key: 'Escape' });
@@ -202,12 +211,10 @@ it('edits and clears a deadline through its compact picker', async () => {
   await waitFor(() => expect(h.onSubmit).toHaveBeenLastCalledWith(expect.objectContaining({ expireAt: null }), true));
 });
 
-// An invalid pre-run command on another tab must be reachable directly after Save fails.
-it('selects the invalid tab and accepts its correction without losing the form', async () => {
+// An invalid pre-run command must stay editable in place after Save fails.
+it('reports an invalid pre-run command and accepts its correction without losing the form', async () => {
   const h = mount(schedule({ preRunHook: { command: 'node check.mjs' } }));
-  fireEvent.click(screen.getByRole('tab', { name: 'scheduler.editor.layout.optionsTab' }));
   fireEvent.change(await screen.findByPlaceholderText('scheduler.editor.preRunHook.commandPlaceholder'), { target: { value: '' } });
-  fireEvent.click(screen.getByRole('tab', { name: 'scheduler.editor.layout.contentTab' }));
   h.save();
   expect(h.onSubmit).not.toHaveBeenCalled();
   expect(state.warning).toHaveBeenCalledWith(
@@ -262,7 +269,6 @@ it('sends the explicit local Harness and location when generating a bound hook',
   state.references.set('bound', { id: 'bound', state: 'available', status: 'active', agentKind: 'claude-code', agentDeviceId: 'studio' });
   mount(schedule({ targetSessionId: 'bound', modelAgentKind: 'codex', modelAgentDeviceId: '', providerId: '',
     preRunHook: { command: 'node check.mjs' } }));
-  fireEvent.click(screen.getByRole('tab', { name: 'scheduler.editor.layout.optionsTab' }));
   fireEvent.click(await screen.findByRole('button', { name: 'scheduler.editor.preRunHook.aiModify' }));
   fireEvent.change(screen.getByPlaceholderText('scheduler.editor.preRunHook.aiPlaceholder'), { target: { value: 'check changes' } });
   fireEvent.click(screen.getByRole('button', { name: 'scheduler.editor.preRunHook.aiGenerate' }));
@@ -310,14 +316,66 @@ it.each(['agent', 'script'] as const)('keeps Webhook and timed triggering separa
   }), true));
 });
 
+// UI regression: choosing an exact PR must round-trip independently of time and Webhook settings.
+it('saves a single PR with optional timed checks and can remove the rule', async () => {
+  const form = mount(schedule({}));
+  fireEvent.click(screen.getByRole('radio', { name: 'scheduler.prTrigger.label' }));
+  const url = 'https://github.com/example/project/pull/23';
+  fireEvent.change(screen.getByRole('textbox', { name: 'scheduler.prTrigger.url' }), { target: { value: url } });
+  form.save();
+  await waitFor(() => expect(form.onSubmit).toHaveBeenLastCalledWith(expect.objectContaining({
+    manual: true, prTrigger: { url, change: 'any' }, webhookTrigger: null,
+  }), true));
+  fireEvent.click(screen.getByText('scheduler.prTrigger.timed'));
+  form.save();
+  await waitFor(() => expect(form.onSubmit).toHaveBeenLastCalledWith(expect.objectContaining({
+    manual: false, prTrigger: { url, change: 'any' },
+  }), true));
+  fireEvent.click(screen.getByRole('radio', { name: 'scheduler.editor.trigger.timed' }));
+  form.save();
+  await waitFor(() => expect(form.onSubmit).toHaveBeenLastCalledWith(expect.objectContaining({ prTrigger: null }), true));
+});
+
+// PR 12168, unit/jsdom: an MR needs a background check even with the task page closed.
+it('enables periodic checks when a GitLab MR is entered in the PR editor', async () => {
+  const form = mount(schedule({}));
+  fireEvent.click(screen.getByRole('radio', { name: 'scheduler.prTrigger.label' }));
+  const url = 'https://git.example.test/team/repo/-/merge_requests/7';
+  fireEvent.change(screen.getByRole('textbox', { name: 'scheduler.prTrigger.url' }), { target: { value: url } });
+  const timed = screen.getByRole('checkbox', { name: 'scheduler.prTrigger.timed' }) as HTMLInputElement;
+  expect(timed.checked).toBe(true);
+  expect(timed.disabled).toBe(true);
+  form.save();
+  await waitFor(() => expect(form.onSubmit).toHaveBeenCalledWith(expect.objectContaining({
+    manual: false, recurring: true, intervalMs: 300_000, cronExpr: '*/5 * * * *', prTrigger: { url, change: 'any' },
+  }), true));
+});
+
+// PR 11309, unit/jsdom: an event-only PR automation created via the API can have recurring=false.
+// Saving from the real editor must send a valid recurring schedule when timed checks are enabled.
+it('enables recurring timed checks for a saved event-only PR automation', async () => {
+  const prTrigger = { url: 'https://github.com/example/project/pull/23', change: 'merged' as const };
+  const form = mount(schedule({ manual: true, recurring: false, prTrigger }));
+  const timedChecks = screen.getByRole('checkbox', { name: 'scheduler.prTrigger.timed' });
+  expect((timedChecks as HTMLInputElement).checked).toBe(false);
+
+  fireEvent.click(timedChecks);
+  form.save();
+  await waitFor(() => expect(form.onSubmit).toHaveBeenLastCalledWith(expect.objectContaining({
+    manual: false, recurring: true, prTrigger,
+  }), true));
+});
+
 it('preserves both triggers when editing an existing timed Webhook', async () => {
-  const form = mount(schedule({ webhookTrigger: { endpointId: 'existing', events: ['issues.opened'], source: { preset: 'github' } } }));
+  const form = mount(schedule({ preRunHook: { command: 'node check.mjs https://github.com/example/project/pull/85' },
+    webhookTrigger: { endpointId: 'existing', events: ['issues.opened'], source: { preset: 'github' } } }));
   await screen.findByRole('button', { name: 'routines.advancedSettings' });
   expect(screen.getByRole('radio', { name: 'scheduler.cell.tagWebhook' }).getAttribute('aria-checked')).toBe('true');
   form.save();
   await waitFor(() => expect(form.onSubmit).toHaveBeenCalledWith(expect.objectContaining({
     manual: false, recurring: true, cronExpr: '0 9 * * *', webhookTrigger: { events: ['issues.opened'], source: { preset: 'github' } },
   }), true));
+  expect(form.onSubmit.mock.lastCall?.[0]).not.toHaveProperty('prTrigger');
 });
 
 // Event picker, unit/jsdom: real form submission must retain filters outside the
@@ -394,6 +452,24 @@ it('rejects a model missing from the selected remote catalog', () => {
   form.save();
   expect(form.onSubmit).not.toHaveBeenCalled();
   expect(state.warning).toHaveBeenCalledWith('scheduler.editor.validation.modelUnavailable');
+});
+
+// PR #11881 review r4651232118: a schedule following a mode was refused because its saved
+// fallback model had become unavailable, though each run picks from the mode. Minimal input:
+// the unavailable-model schedule above plus a mode; it saves while the mode exists, not after deletion.
+it.each([
+  { modes: ['daily'], saves: true },
+  { modes: [], saves: false },
+])('lets a schedule following a mode save without its fallback model: modes $modes', async ({ modes, saves }) => {
+  state.modelGroupIds = modes;
+  const form = mount(schedule({ agentDeviceId: 'studio', model: 'removed', modelAgentKind: 'codex', modelGroup: 'daily' }));
+  form.save();
+  if (saves) {
+    await waitFor(() => expect(form.onSubmit).toHaveBeenCalledWith(expect.objectContaining({ modelGroup: 'daily' }), true));
+  } else {
+    expect(form.onSubmit).not.toHaveBeenCalled();
+    expect(state.warning).toHaveBeenCalledWith('scheduler.editor.validation.modelUnavailable');
+  }
 });
 
 // PR #8950 P1: old peers explicitly lacking provider:list still expose model
@@ -629,4 +705,122 @@ it('does not relocate hidden Auto history outside a template source constraint',
   });
   fireEvent.click(screen.getByRole('button', { name: 'scheduler.editor.promptDialog.createAria' }));
   expect(onSubmit).not.toHaveBeenCalled();
+});
+
+// 2026-11-15 connection-choice UX, unit/jsdom: the existing legacy tests cover
+// omitted sources, not a new default or changing modes. Save the real dialog to
+// protect the persisted source and repository scope, without contacting GitHub.
+it('defaults new Webhooks to Cindy and saves the selected connection method', async () => {
+  const onSubmit = vi.fn(async () => {});
+  render(<ScheduleFormDialog open initial={null} initialValues={{ name: 'Events', prompt: 'Check events',
+    agentKind: 'codex', model: 'shared', providerId: 'source', webhookEnabled: true }}
+    onOpenChange={() => {}} onSubmit={onSubmit} />);
+  const key = 'scheduler.editor.webhook.';
+  const app = await screen.findByRole('radio', { name: key + 'cindyConnection' });
+  expect((app as HTMLInputElement).checked).toBe(true);
+  fireEvent.change(screen.getByRole('textbox', { name: key + 'repositoriesLabel' }), { target: { value: 'example/project' } });
+  const save = () => fireEvent.click(screen.getByRole('button', { name: 'scheduler.editor.promptDialog.createAria' }));
+  save();
+  await waitFor(() => expect(onSubmit).toHaveBeenLastCalledWith(expect.objectContaining({
+    webhookTrigger: { events: [], source: { preset: 'github-app', repositories: ['example/project'] } },
+  }), false));
+  fireEvent.click(screen.getByRole('radio', { name: key + 'manualConnection' }));
+  save();
+  await waitFor(() => expect(onSubmit).toHaveBeenLastCalledWith(expect.objectContaining({
+    webhookTrigger: { events: [], source: { preset: 'github' } },
+  }), false));
+  fireEvent.click(app);
+  expect((screen.getByRole('textbox', { name: key + 'repositoriesLabel' }) as HTMLTextAreaElement).value).toBe('example/project');
+});
+
+// issue 10224: the prompt card keeps its original three lines, so a long automation
+// prompt is edited in a panel-filling editor opened from it. Unit/jsdom: the toggle,
+// live text, a single field and the focus hand-back are the user-visible results a
+// second hidden textarea or a dropped focus would break.
+it('edits a long prompt in the expanded editor and returns focus on collapse', async () => {
+  const h = mount(schedule({ prompt: 'first\nsecond\nthird\nfourth' }));
+  const expand = screen.getByRole('button', { name: 'scheduler.editor.promptDialog.expandPrompt' });
+  fireEvent.click(expand);
+  const panel = screen.getByRole('group', { name: 'scheduler.editor.fields.prompt' });
+  const editor = within(panel).getByRole('textbox') as HTMLTextAreaElement;
+  expect(editor.value).toBe('first\nsecond\nthird\nfourth');
+  expect(document.querySelectorAll('textarea')).toHaveLength(1);
+  fireEvent.change(editor, { target: { value: 'rewritten in the expanded editor' } });
+  fireEvent.click(screen.getByRole('button', { name: 'scheduler.editor.promptDialog.collapsePrompt' }));
+  expect(screen.queryByRole('group', { name: 'scheduler.editor.fields.prompt' })).toBeNull();
+  const compact = document.querySelector('textarea') as HTMLTextAreaElement;
+  expect(compact.value).toBe('rewritten in the expanded editor');
+  expect(document.activeElement).toBe(expand);
+  h.save();
+  await waitFor(() => expect(h.onSubmit).toHaveBeenCalledWith(
+    expect.objectContaining({ prompt: 'rewritten in the expanded editor' }), true,
+  ));
+});
+
+// User decision 2026-11-16 / unit: use the real editor save path. Old snapshots
+// must change only after an explicit buddy-inheritance choice, never on opening.
+it.each([false, true])('keeps an old default route unless the owner selects buddy inheritance (%s)', async (chooseFollow) => {
+  const upsertSchedule = vi.fn(async (_input: { config: Record<string, unknown> }) => ({}));
+  Object.assign(window.electronAPI.maker, { projectAutomation: { upsertSchedule } });
+  const initial = schedule({ source: 'project', projectConfigId: 'future-default-task',
+    workingDir: '/data/owners/owner/bots/mia/workspace', workspaceKind: 'project',
+    fastMode: 'ultrafast',
+    persistentSession: true, preRunHook: { command: 'node custom-check.cjs', timeoutMs: 4000 } });
+  Object.assign(window.electronAPI, { fileBrowser: { readFile: vi.fn(async () => ({ ok: true,
+    data: { content: JSON.stringify({ version: 1, schedules: [{ id: initial.projectConfigId, model: 'shared' }] }), truncated: false } })) } });
+  render(<ScheduleFormDialog open initial={initial} editProjectSchedule onOpenChange={() => {}} onSubmit={vi.fn()} />);
+  const save = screen.getByRole('button', { name: 'scheduler.editor.promptDialog.saveAria' });
+  await waitFor(() => expect((save as HTMLButtonElement).disabled).toBe(false));
+  const follow = screen.getByRole('button', { name: 'scheduler.chips.model.followTeammate' });
+  expect(follow.dataset.active).toBe('false');
+  if (chooseFollow) {
+    fireEvent.click(follow);
+    expect(follow.dataset.active).toBe('true');
+  }
+  fireEvent.click(save);
+  await waitFor(() => expect(upsertSchedule).toHaveBeenCalledTimes(1));
+  const config = upsertSchedule.mock.calls[0]![0].config;
+  expect(config).toMatchObject({ cronExpr: initial.cronExpr, prompt: initial.prompt,
+    preRunHook: initial.preRunHook, persistentSession: true, followTeammateModel: chooseFollow });
+  expect(config.model).toBe(chooseFollow ? undefined : 'shared');
+  expect(config.providerId).toBe(chooseFollow ? undefined : 'source');
+  // Ordinary saves must preserve the saved speed tier; the follow choice clears it.
+  expect(config.fastMode).toBe(chooseFollow ? undefined : 'ultrafast');
+});
+
+it('reads a saved buddy-follow marker without inferring it from an empty model', async () => {
+  const initial = schedule({ source: 'project', projectConfigId: 'teammate-memory-review',
+    model: undefined, providerId: undefined, workingDir: '/data/owners/owner/bots/mia/workspace' });
+  Object.assign(window.electronAPI, { fileBrowser: { readFile: vi.fn(async () => ({ ok: true,
+    data: { content: JSON.stringify({ version: 1, schedules: [{ id: initial.projectConfigId, followTeammateModel: true }] }), truncated: false } })) } });
+  render(<ScheduleFormDialog open initial={initial} editProjectSchedule onOpenChange={() => {}} onSubmit={vi.fn()} />);
+  await waitFor(() => expect(screen.getByRole('button', { name: 'scheduler.chips.model.followTeammate' }).dataset.active).toBe('true'));
+  fireEvent.click(screen.getByTestId('model-selection'));
+  expect(screen.getByRole('button', { name: 'scheduler.chips.model.followTeammate' }).dataset.active).toBe('false');
+});
+
+// Partial project metadata must never turn an unreadable saved choice into a default.
+it.each(['ownership', 'config'])('keeps saving disabled when review %s cannot be read completely', async (failure) => {
+  if (failure === 'ownership') {
+    Object.assign(window.electronAPI.localDb.bots, { ownsProject: async () => { throw new Error('query failed'); } });
+  }
+  Object.assign(window.electronAPI, { fileBrowser: { readFile: vi.fn(async () => ({ ok: true,
+    data: { content: '{', truncated: true } })) } });
+  const initial = schedule({ source: 'project', projectConfigId: 'teammate-memory-review',
+    workingDir: '/data/owners/owner/bots/mia/workspace' });
+  render(<ScheduleFormDialog open initial={initial} editProjectSchedule onOpenChange={() => {}} onSubmit={vi.fn()} />);
+  await screen.findByText('scheduler.editor.reviewModelReadFailed');
+  expect((screen.getByRole('button', { name: 'scheduler.editor.promptDialog.saveAria' }) as HTMLButtonElement).disabled).toBe(true);
+});
+
+it('does not offer buddy inheritance for a lookalike project outside the active account roster', async () => {
+  Object.assign(window.electronAPI.localDb.bots, { ownsProject: async () => false });
+  const readFile = vi.fn();
+  Object.assign(window.electronAPI, { fileBrowser: { readFile } });
+  const initial = schedule({ source: 'project', projectConfigId: 'teammate-memory-review',
+    workingDir: '/data/owners/other/bots/mia/workspace' });
+  render(<ScheduleFormDialog open initial={initial} editProjectSchedule onOpenChange={() => {}} onSubmit={vi.fn()} />);
+  await waitFor(() => expect((screen.getByRole('button', { name: 'scheduler.editor.promptDialog.saveAria' }) as HTMLButtonElement).disabled).toBe(false));
+  expect(screen.queryByRole('button', { name: 'scheduler.chips.model.followTeammate' })).toBeNull();
+  expect(readFile).not.toHaveBeenCalled();
 });

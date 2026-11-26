@@ -249,6 +249,13 @@ describe('orcaTeamStore', () => {
     const pending = { clientIds: ['c-1'], baselineMessageId: 'old-reply' };
     await store.saveWorkerRemoteReport('worker-1', pending);
     expect(await store.getRemoteWorkerByProxySession('worker-session-1')).toMatchObject({ pendingReport: pending });
+    // #9346: a restart must retain the Lead receipt identity as well as remote input IDs.
+    const handoff = { ...pending, delivery: { clientId: 'lead-report-1', inputClientIds: ['c-1'],
+      kind: 'automatic' as const, messageId: 'reply-1' } };
+    const previous = { clientId: 'unknown-report', inputClientIds: ['c-1'], kind: 'manual' as const };
+    const chainedHandoff = { ...handoff, delivery: { ...handoff.delivery, previous } };
+    await store.saveWorkerRemoteReport('worker-1', chainedHandoff);
+    expect(await store.getRemoteWorkerByProxySession('worker-session-1')).toMatchObject({ pendingReport: chainedHandoff });
     await store.saveWorkerRemoteReport('worker-1', null, 'reply-1');
     await store.markWorkerRemoteStopConfirmed('worker-1', 1234);
     expect(await store.getRemoteWorkerByProxySession('worker-session-1')).toMatchObject({ pendingReport: null,
@@ -645,6 +652,7 @@ describe('orcaTeamStore', () => {
         sdk_session_id TEXT,
         total_token_usage INTEGER NOT NULL DEFAULT 0,
         total_cost_usd REAL NOT NULL DEFAULT 0,
+        total_cost_usd_is_approximate INTEGER DEFAULT 0,
         total_cost_amount REAL NOT NULL DEFAULT 0,
         total_cost_currency TEXT,
         total_cost_is_approximate INTEGER NOT NULL DEFAULT 0,
@@ -654,7 +662,7 @@ describe('orcaTeamStore', () => {
         fast_mode INTEGER NOT NULL DEFAULT 0,
         plan_mode_enabled INTEGER NOT NULL DEFAULT 0,
         cleared_at INTEGER,
-        pinned_at INTEGER,
+        pinned_at INTEGER, snoozed_until INTEGER, snoozed_at INTEGER,
         hidden_at INTEGER,
       notifications_muted INTEGER NOT NULL DEFAULT 0,
         summary TEXT,
@@ -666,6 +674,8 @@ describe('orcaTeamStore', () => {
         forked_at_message_id TEXT,
         worktree_path TEXT,
         source TEXT NOT NULL DEFAULT 'desktop',
+        side_chat_promoted INTEGER NOT NULL DEFAULT 0,
+        side_chat_close_pending INTEGER NOT NULL DEFAULT 0,
         feishu_open_id TEXT,
         feishu_bot_app_id TEXT,
         im_bot_context_id TEXT,

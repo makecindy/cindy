@@ -22,12 +22,15 @@ const LEFT_INSET = spacing.lg;
 export type CompanionRowTrailing = { kind: 'time'; text: string } | { kind: 'working' };
 
 export function CompanionListRow({
-  avatar, title, device, trailing, preview, previewTone = 'secondary', previewPrefix, previewPrefixTestID,
+  avatar, title, titleBadge, device, trailing, preview, previewTone = 'secondary', previewPrefix, previewPrefixTestID,
   unread = false, unreadCount, mentioned = false, unreadLabel, disabled = false, last = false, accessibilityLabel, onPress, testID,
+  accessibilityActions, onAccessibilityAction,
 }: {
   /** Content of the 44pt avatar box (the caller draws the shared status dot). */
   avatar: ReactNode;
   title: string;
+  /** Compact inline badge beside the title (e.g. External group mark for enterprise viewers). */
+  titleBadge?: ReactNode;
   /** Computer name, only when two rows share a name. */
   device?: string;
   trailing: CompanionRowTrailing;
@@ -46,14 +49,20 @@ export function CompanionListRow({
   accessibilityLabel: string;
   onPress(): void;
   testID?: string;
+  /** Actions a swipe offers on this row, for VoiceOver / TalkBack users who cannot swipe it. */
+  accessibilityActions?: readonly { name: string; label: string }[];
+  onAccessibilityAction?(name: string): void;
 }) {
   const styles = useThemedStyles(makeStyles);
   return <Pressable accessibilityRole="button" accessibilityLabel={accessibilityLabel} accessibilityState={{ disabled }}
+    accessibilityActions={accessibilityActions}
+    onAccessibilityAction={onAccessibilityAction ? event => onAccessibilityAction(event.nativeEvent.actionName) : undefined}
     disabled={disabled} onPress={onPress} style={({ pressed }) => [styles.row, pressed && !disabled && styles.pressed]} testID={testID}>
     <View style={styles.avatar}>{avatar}</View>
     <View style={[styles.body, !last && styles.divider]}>
       <View style={styles.titleRow}>
         <Text numberOfLines={1} style={styles.title}>{title}</Text>
+        {titleBadge}
         {device ? <Text numberOfLines={1} style={styles.device}>{`· ${device}`}</Text> : null}
         <View style={styles.spacer} />
         <View style={styles.trailing}>

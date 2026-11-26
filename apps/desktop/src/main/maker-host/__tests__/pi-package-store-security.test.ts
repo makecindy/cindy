@@ -7,7 +7,7 @@ import fsSync, {
   symlinkSync,
   writeFileSync,
 } from 'node:fs';
-import { createRequire } from 'node:module';
+import { createRequire, syncBuiltinESMExports } from 'node:module';
 import os from 'node:os';
 import path from 'node:path';
 import type { PiPackageMutationRequest } from '../../../shared/piPackages.js';
@@ -2321,6 +2321,50 @@ describe('Pi package executable-code boundary', () => {
     });
   });
 
+  it('retries a persisted inspection-limit recorded under a previous snapshot budget', async () => {
+    const { source } = await createSkillOnlyPackage('npm:previous-snapshot-budget');
+    const store = await import('../pi-package-store.js');
+    await expect(store.resolveManagedPiPackageResources({
+      snapshotRoot: path.join(runtime.userData, 'previous-budget-limited-snapshot'),
+      snapshotLimits: {
+        maxEntries: 1,
+        maxBytes: 1024 * 1024,
+        maxDurationMs: 10_000,
+      },
+    })).resolves.toMatchObject({ packageRoots: [] });
+
+    const statePath = path.join(
+      runtime.userData,
+      'pi-package-home',
+      'cindy-package-state.json',
+    );
+    const state = JSON.parse(await fs.readFile(statePath, 'utf8')) as {
+      snapshotUnavailablePackages: Array<{ snapshotBudget?: string }>;
+    };
+    expect(state.snapshotUnavailablePackages).toHaveLength(1);
+    // States written before the budget was recorded carry no marker. Raising the
+    // limits must retry the package instead of reusing the old failure for the
+    // rest of its six-hour window, while approvals and disabled sources stay.
+    delete state.snapshotUnavailablePackages[0]!.snapshotBudget;
+    await fs.writeFile(statePath, JSON.stringify(state));
+
+    // reset-modules: simulate the upgrade restart that reads the older state file.
+    vi.resetModules();
+    const nextStore = await import('../pi-package-store.js');
+    const recoveredRoot = path.join(runtime.userData, 'previous-budget-recovered-snapshot');
+    await expect(nextStore.resolveManagedPiPackageResources({
+      snapshotRoot: recoveredRoot,
+    })).resolves.toMatchObject({
+      skills: [expect.objectContaining({
+        path: path.join(recoveredRoot, '0', 'skills', 'managed-skill', 'SKILL.md'),
+      })],
+      packageRoots: [path.join(recoveredRoot, '0')],
+    });
+    await expect(nextStore.listPiPackages()).resolves.toMatchObject({
+      packages: [expect.objectContaining({ source, enabled: true })],
+    });
+  });
+
   it.each(['snapshot', 'metadata'] as const)('persists a deterministic inspection-stage limit for %s requests', async (mode) => {
     const { root, source } = await createPackage({ oversizedManifest: true });
     const store = await import('../pi-package-store.js');
@@ -4400,6 +4444,47 @@ describe('Pi package executable-code boundary', () => {
     }
   });
 
+  // CI #6656 / job 129924709772: a queued token event from the old directory
+  // can observe the first new token before the 2 s fallback poll reattaches.
+  // The real-OS case below cannot force that event ordering. Unit: keep real
+  // token files and the public subscription, control only fs.watch callbacks.
+  it('reattaches on a queued token event from a replaced directory before notifying peers', async () => {
+    const callbacks: Array<(event: 'rename', name: string) => void> = [];
+    const watchSpy = vi.spyOn(fsSync, 'watch').mockImplementation(((...args: unknown[]) => {
+      callbacks.push(args[2] as (event: 'rename', name: string) => void);
+      const watcher = { close: vi.fn(), on: vi.fn().mockReturnThis() };
+      return watcher as unknown as ReturnType<typeof fsSync.watch>;
+    }) as typeof fsSync.watch);
+    syncBuiltinESMExports();
+    let unsubscribe: (() => void) | undefined;
+    try {
+      const home = path.join(runtime.userData, 'pi-package-home');
+      await fs.mkdir(home, { recursive: true });
+      const store = await import('../pi-package-store.js');
+      const listener = vi.fn();
+      unsubscribe = store.onPiPackagesChanged(listener);
+      const tokenName = 'cindy-package-runtime-change-token';
+      const publish = (tag: string) => writePeerToken(path.join(home, tokenName), `runtime:${Date.now()}-${tag}\n`);
+      publish('before');
+      callbacks[0]!('rename', tokenName);
+      await vi.waitFor(() => expect(listener).toHaveBeenCalledTimes(1));
+      await fs.rm(home, { recursive: true, force: true });
+      await fs.mkdir(home, { recursive: true });
+      publish('after');
+      // This is the old handle's queued token event, not a directory-name event.
+      callbacks[0]!('rename', tokenName);
+      await vi.waitFor(() => expect(listener).toHaveBeenCalledTimes(2));
+      expect(watchSpy).toHaveBeenCalledTimes(2);
+      publish('next');
+      callbacks[1]!('rename', tokenName);
+      await vi.waitFor(() => expect(listener).toHaveBeenCalledTimes(3), { timeout: 1_000 });
+    } finally {
+      unsubscribe?.();
+      watchSpy.mockRestore();
+      syncBuiltinESMExports();
+    }
+  });
+
   it('reattaches the directory watcher after the package home is replaced', async () => {
     // Replacing the watched directory leaves a handle bound to the old one on
     // some platforms without an 'error' event. The fallback poll must replace it,
@@ -4889,9 +4974,10 @@ describe('Pi package executable-code boundary', () => {
         // creating 10,000 directory entries. The previous entry-limit fixture
         // timed out on Windows due to filesystem setup rather than the code
         // under test, while this still exercises the same inspection quarantine.
+        // Keep in step with DEFAULT_SNAPSHOT_LIMITS.maxBytes.
         const paddingFile = path.join(root, 'unused-padding.bin');
         await fs.writeFile(paddingFile, '');
-        await fs.truncate(paddingFile, 128 * 1024 * 1024 + 1);
+        await fs.truncate(paddingFile, 256 * 1024 * 1024 + 1);
       }
       return root;
     };

@@ -8,13 +8,10 @@ export interface ModelWindowConfirmationResult {
 
 interface ConfirmedModelSwitchOptions {
   invoke(confirmedContextWindow?: number): Promise<ModelWindowConfirmationResult | undefined>;
-  confirm(input: { contextWindow: number; contextTokens: number }): Promise<boolean>;
+  onWindowRebuild(): void;
 }
 
-function confirmationFromResult(result: ModelWindowConfirmationResult | undefined): {
-  contextWindow: number;
-  contextTokens: number;
-} | null {
+function confirmationFromResult(result: ModelWindowConfirmationResult | undefined): number | null {
   if (!result || result.deferred !== false || result.superseded !== false)
     throw new Error('model-window switch did not return an applied result');
   const contextWindow = result.contextWindowConfirmationRequired;
@@ -26,7 +23,7 @@ function confirmationFromResult(result: ModelWindowConfirmationResult | undefine
     typeof contextTokens === 'number' && Number.isFinite(contextTokens) && contextTokens > 0;
   if (!validWindow || !validTokens)
     throw new Error('verified model-window confirmation is invalid');
-  return { contextWindow, contextTokens };
+  return contextWindow;
 }
 
 /** A staged selection is consumed by the recovery send; immediate routes retain window confirmation. */
@@ -39,8 +36,8 @@ export async function setModelWithWindowConfirmation(
   }
   const confirmation = confirmationFromResult(result);
   if (!confirmation) return 'applied';
-  if (!(await options.confirm(confirmation))) return false;
-  return confirmationFromResult(await options.invoke(confirmation.contextWindow)) === null
+  options.onWindowRebuild();
+  return confirmationFromResult(await options.invoke(confirmation)) === null
     ? 'confirmed'
     : false;
 }

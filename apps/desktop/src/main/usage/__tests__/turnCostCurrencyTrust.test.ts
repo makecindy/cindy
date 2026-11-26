@@ -54,7 +54,6 @@ describe('inferred currency downgrades the money to an estimate', () => {
     const money = computePriceQuoteTurnMoney(
       TOKENS,
       gatewayQuote('claude-fable-5', { currencyInferred: true }),
-      'USD',
     );
     expect(money).toMatchObject({
       currency: 'USD',
@@ -65,7 +64,7 @@ describe('inferred currency downgrades the money to an estimate', () => {
   });
 
   it('keeps a server-declared currency exact', () => {
-    const money = computePriceQuoteTurnMoney(TOKENS, gatewayQuote('claude-fable-5'), 'USD');
+    const money = computePriceQuoteTurnMoney(TOKENS, gatewayQuote('claude-fable-5'));
     expect(money).toMatchObject({ approximate: false, kind: 'actual-cost' });
     expect(money?.estimateReasons).toBeUndefined();
   });

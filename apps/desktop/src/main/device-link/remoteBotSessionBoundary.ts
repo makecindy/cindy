@@ -1,4 +1,5 @@
-import { DL_HISTORY_QUERY_CHANNEL } from '@cindy/device-link';
+import { PROJECT_ARCHIVE_CHANNEL } from '../../shared/projectArchive.js';
+import { DL_HISTORY_QUERY_CHANNEL, TASK_ACTIVITY_SNAPSHOT } from '@cindy/device-link';
 import { currentDbRpcAdmissionClass, type DbRpcAdmissionClass } from '../localDb/client/rpcAdmission.js';
 
 /**
@@ -10,6 +11,7 @@ export type RemoteBotSessionAccess = 'ordinary' | 'visible' | 'hidden' | 'backgr
 
 /** 列表类 channel:插件后台隐藏任务不出现在这些结果里(与本机任务列表同口径)。 */
 const BACKGROUND_EXCLUDED_LIST_CHANNELS = new Set([
+  PROJECT_ARCHIVE_CHANNEL,
   'local-db:sessions:list',
   'maker:list-active',
 ]);
@@ -194,6 +196,7 @@ export async function assertRemoteBotInvocationAllowed(args: unknown[], channel 
 }
 
 export async function projectRemoteSessionResult(channel: string, value: unknown): Promise<unknown> {
+  if (channel === TASK_ACTIVITY_SNAPSHOT) return projectRemoteBotPush(value, channel);
   if (channel === 'local-db:conversations:search') {
     if (!lookup) throw new Error('[HOST_NOT_READY] History visibility is not ready');
     const row = record(value);
@@ -219,6 +222,15 @@ export async function projectRemoteSessionResult(channel: string, value: unknown
     // Rechecked on normal, cached and queued delivery by the existing dispatch path.
     const row = record(value);
     if (!row || row.ok !== true) return value;
+    if (Array.isArray(row.teammates)) {
+      await assertHistoryReferences(row.teammates.map(item => record(item)?.id), 'bot');
+      return value;
+    }
+    if (Array.isArray(row.relationships)) {
+      await assertHistoryReferences([row.teammateId], 'bot');
+      await assertHistoryReferences(row.relationships.map(item => record(item)?.sessionId), 'session');
+      return value;
+    }
     const listing = Array.isArray(row.sessions);
     if (!listing && !Array.isArray(row.hits)) throw new Error('[INVALID_PARAMS] Invalid history result');
     const entries = (listing ? row.sessions : row.hits) as unknown[];
@@ -256,7 +268,7 @@ export async function projectRemoteSessionResult(channel: string, value: unknown
     };
   }
   if (!lookup || ![
-      'local-db:task-tags:execute',
+      PROJECT_ARCHIVE_CHANNEL, 'local-db:task-tags:execute',
       'local-db:sessions:get', 'local-db:sessions:get-many', 'local-db:sessions:list', 'maker:list-active', 'local-db:sessions:interrupted-pending', 'local-db:bots:get', 'local-db:bots:list', 'maker:remote-resources:get', 'maker:remote-resources:list'].includes(channel)) return value;
   if (channel === 'local-db:task-tags:execute') {
     const row = record(value);
@@ -315,12 +327,32 @@ export async function projectRemoteSessionResult(channel: string, value: unknown
   return projected;
 }
 
+/** New history shapes keep the existing source-owned access rules on every delivery. */
+async function assertHistoryReferences(ids: unknown[], kind: 'session' | 'bot'): Promise<void> {
+  if (!lookup) throw new Error('[HOST_NOT_READY] History visibility is not ready');
+  if (ids.length > 1000 || ids.some(id => typeof id !== 'string' || !id || id.length > 512))
+    throw new Error('[INVALID_PARAMS] Invalid history result');
+  const unique = [...new Set(ids as string[])];
+  const access = batchLookup ? await batchLookup(unique, kind)
+    : new Map(await Promise.all(unique.map(async id => [id, await lookup!(id, kind)] as const)));
+  if (unique.some(id => kind === 'bot' ? access.get(id) !== 'visible'
+    : !['ordinary', 'visible', 'background'].includes(access.get(id) ?? 'hidden')))
+    throw new Error('[NOT_FOUND] History page is no longer available');
+}
+
 /**
  * Called at delivery, including buffered batches and offline replay. The read is
  * shared only with pushes reaching the wire boundary in the same pass (see
  * readPushSessionAccess); it is never reused once issued.
  */
 export async function projectRemoteBotPush(value: unknown, channel = ''): Promise<unknown | null> {
+  if (channel === TASK_ACTIVITY_SNAPSHOT) {
+    const selected = record(record(value)?.selected);
+    if (!selected) return value;
+    if (!lookup || typeof selected.sessionId !== 'string') return { unavailable: true };
+    const [access] = await readPushSessionAccess(lookup, [selected.sessionId]);
+    return access === 'ordinary' || access === 'visible' || access === 'background' ? value : { unavailable: true };
+  }
   if (!lookup) return value;
   const ids = sessionIds(value);
   const row = record(value);

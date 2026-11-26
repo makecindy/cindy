@@ -5,6 +5,7 @@
  */
 
 import { describe, it, expect, vi } from 'vitest';
+import { BUNDLED_CATALOG } from '@cindy/model-providers';
 import { acceptsModelSourceSnapshot, modelSourceRequestSignature } from '../model-source-snapshots.js';
 
 import {
@@ -25,6 +26,43 @@ function spec(over: Partial<ProviderModelsFetchSpec> = {}): ProviderModelsFetchS
 function fakeResponse(status: number, body: string): Response {
   return new Response(body, { status, headers: { 'content-type': 'application/json' } });
 }
+
+describe('implicit Codex model manifests', () => {
+  it('requests the Codex capability view only for an implicit Codex Responses catalog', () => {
+    expect(buildModelsFetchRequest(spec({ agent: 'codex', wireProtocol: 'openai-responses' })).url)
+      .toBe('https://api.acme.example/anthropic/v1/models?client_version=0.147.0');
+    expect(buildModelsFetchRequest(spec({ agent: 'codex' })).url)
+      .toBe('https://api.acme.example/anthropic/v1/models?client_version=0.147.0');
+    expect(buildModelsFetchRequest(spec({ agent: 'codex', wireProtocol: 'openai-chat' })).url)
+      .toBe('https://api.acme.example/anthropic/v1/models');
+    expect(buildModelsFetchRequest(spec({ agent: 'claude-code', wireProtocol: 'openai-responses' })).url)
+      .toBe('https://api.acme.example/anthropic/v1/models');
+  });
+
+  it('does not rewrite an explicitly configured model catalog', () => {
+    expect(buildModelsFetchRequest(spec({ agent: 'codex', wireProtocol: 'openai-responses',
+      modelsUrl: 'https://api.acme.example/v1/models?tenant=test' })).url)
+      .toBe('https://api.acme.example/v1/models?tenant=test');
+  });
+
+  it('falls back to the ordinary implicit catalog when the capability view is unavailable', async () => {
+    const calls: string[] = [];
+    const result = await fetchProviderModels(
+      spec({ agent: 'codex', wireProtocol: 'openai-responses' }),
+      async url => {
+        calls.push(String(url));
+        return calls.length === 1
+          ? fakeResponse(404, '{}')
+          : fakeResponse(200, '{"data":[{"id":"gpt-6.1-sol-oneai"}]}');
+      },
+    );
+    expect(result).toMatchObject({ ok: true, models: [{ id: 'gpt-6.1-sol-oneai' }] });
+    expect(calls).toEqual([
+      'https://api.acme.example/anthropic/v1/models?client_version=0.147.0',
+      'https://api.acme.example/anthropic/v1/models',
+    ]);
+  });
+});
 
 // Unit regression: real fetch entry, legacy saved /v1/models plus three inference
 // protocols. Prior account tests passed an already-correct /models URL and missed this.
@@ -49,6 +87,61 @@ it.each(['https://api.individual.githubcopilot.com.evil.test', 'https://custom.e
   const request = buildModelsFetchRequest(spec({ baseUrl }));
   expect(request.url).toBe(`${baseUrl}/v1/models`);
   expect(new Headers(request.init.headers).has('copilot-integration-id')).toBe(false);
+});
+
+describe('Token Rhythm discovery reads', () => {
+  it('shares only the equivalent Codex/Pi HTTP read while issuing independent agent receipts', async () => {
+    const preset = BUNDLED_CATALOG.presets!.find(p => p.id === 'tokenrhythm')!;
+    const agents = ['claude-code', 'codex', 'pi'] as const;
+    const requests = agents.map(agent => spec({ ...preset.runtimes[agent], agent }));
+    const transport = vi.fn<typeof fetch>(async () => fakeResponse(200, JSON.stringify({ data: [{
+      id: 'future-model', owned_by: 'fake-source', magpie_label: 'Model · fake-source',
+    }] })));
+    const results = await Promise.all(requests.map(request => fetchProviderModels(request, transport)));
+    expect(transport).toHaveBeenCalledTimes(2);
+    expect(transport.mock.calls.map(([, init]) => new Headers(init?.headers).has('anthropic-version')).sort()).toEqual([false, true]);
+    const snapshots = new Set<string>();
+    results.forEach((result, index) => {
+      expect(result.ok).toBe(true);
+      const model = result.models![0];
+      snapshots.add(model.discoverySnapshotId!);
+      const { url, init } = buildModelsFetchRequest(requests[index]);
+      const signature = modelSourceRequestSignature(url, init);
+      expect(acceptsModelSourceSnapshot(model.id, model.discoveredSource, 'new', agents[index], signature)).toBe(true);
+      expect(acceptsModelSourceSnapshot(model.id, model.discoveredSource, 'new', agents[(index + 1) % agents.length], signature)).toBe(false);
+    });
+    expect(snapshots.size).toBe(3);
+    expect(results[1].models).not.toBe(results[2].models);
+    await fetchProviderModels(requests[2], transport);
+    expect(transport).toHaveBeenCalledTimes(3);
+  });
+
+  it('separates credentials, effective headers, redirect policies and owner transports', async () => {
+    const request = spec({ agent: 'pi', baseUrl: 'https://tokenrhythm.studio/v1',
+      modelsUrl: 'https://tokenrhythm.studio/v1/models', wireProtocol: 'openai-chat' });
+    const transport = vi.fn<typeof fetch>(async () => fakeResponse(200, '{"data":[{"id":"future-model"}]}'));
+    const otherOwner = vi.fn<typeof fetch>(async () => fakeResponse(200, '{"data":[{"id":"future-model"}]}'));
+    const results = await Promise.all([
+      fetchProviderModels(request, transport),
+      fetchProviderModels({ ...request, agent: 'codex', wireProtocol: 'openai-responses' }, transport),
+      fetchProviderModels({ ...request, apiKey: 'other-fake-key' }, transport),
+      fetchProviderModels({ ...request, headers: { 'X-Account': 'other' } }, transport),
+      fetchProviderModels({ ...request, redirect: 'error' }, transport),
+      fetchProviderModels(request, otherOwner),
+    ]);
+    expect(results.every(result => result.ok)).toBe(true);
+    expect(transport).toHaveBeenCalledTimes(4);
+    expect(otherOwner).toHaveBeenCalledOnce();
+  });
+
+  it.each(['https://tokenrhythm.studio/v1/models?view=chat', 'https://tokenrhythm.studio.evil.test/v1/models',
+    'https://custom.example/v1/models'])('does not merge a custom or filtered view at %s', async modelsUrl => {
+    const request = spec({ agent: 'pi', baseUrl: new URL(modelsUrl).origin + '/v1', modelsUrl, wireProtocol: 'openai-chat' });
+    const transport = vi.fn<typeof fetch>(async () => fakeResponse(200, '{"data":[{"id":"future-model"}]}'));
+    expect((await Promise.all([fetchProviderModels(request, transport), fetchProviderModels(request, transport)]))
+      .every(result => result.ok)).toBe(true);
+    expect(transport).toHaveBeenCalledTimes(2);
+  });
 });
 
 describe('import discovery limits', () => {
@@ -177,7 +270,7 @@ describe('import discovery limits', () => {
       expect(init?.redirect).toBe('error');
       return fakeResponse(200, JSON.stringify({ name: 'magpie' }));
     });
-    expect(result).toEqual({ ok: true, models: [] });
+    expect(result).toEqual({ ok: true, models: [], complete: true });
   });
 
   it.each([
@@ -212,7 +305,7 @@ describe('import discovery limits', () => {
       expect(new Headers(init?.headers).get('authorization')).toBe('Bearer sk-test');
       return fakeResponse(200, JSON.stringify({ object: 'list', data: [] }));
     });
-    expect(result).toEqual({ ok: true, models: [] });
+    expect(result).toEqual({ ok: true, models: [], complete: true });
   });
 
   it.each([{}, { data: [{}] }, { data: [null] }, { data: [{ id: '' }] }, { models: [] },
@@ -304,7 +397,7 @@ describe('buildModelsFetchRequest', () => {
     const result = await fetchProviderModels(spec({ agent: 'codex',
       baseUrl: 'https://sub2api.example/backend-api/codex', wireProtocol: 'openai-responses',
     }), async (url, init) => {
-      expect(url).toBe('https://sub2api.example/backend-api/codex/models');
+      expect(url).toBe('https://sub2api.example/backend-api/codex/models?client_version=0.147.0');
       expect(init?.headers).toMatchObject({ authorization: 'Bearer sk-test' });
       return fakeResponse(200, JSON.stringify({ models: [{ slug: 'gpt-6-sol',
         supported_reasoning_levels: [{ effort: 'high' }, { effort: 'max' }], default_reasoning_level: 'high',
@@ -699,16 +792,28 @@ it('does not rewrite private Google-compatible discovery or an explicit catalog'
   }
 });
 
-it.each([404, 405])('falls back from an unavailable manifest (%i) on the same authenticated endpoint', async status => {
+  it.each([404, 405])('falls back from an unavailable implicit manifest (%i) on the same authenticated endpoint', async status => {
   const fetcher = vi.fn()
     .mockResolvedValueOnce(fakeResponse(status, '{}'))
     .mockResolvedValueOnce(fakeResponse(200, '{"data":[{"id":"grok-4.7","reasoningEfforts":["low","high"]}]}'));
-  const result = await fetchProviderModels(spec({ baseUrl: 'https://relay.example/proxy/v1',
-    modelsUrl: 'https://relay.example/proxy/v1/models?client_version=0.147.0&tenant=test',
-  }), fetcher);
+    const result = await fetchProviderModels(spec({ agent: 'codex', wireProtocol: 'openai-responses', baseUrl: 'https://relay.example/proxy/v1' }), fetcher);
   expect(result).toMatchObject({ ok: true, models: [{ id: 'grok-4.7', discoveredMetadata: { efforts: ['low', 'high'] } }] });
   expect(fetcher).toHaveBeenCalledTimes(2);
-  expect(fetcher.mock.calls[1][0]).toBe('https://relay.example/proxy/v1/models?tenant=test');
+  expect(fetcher.mock.calls[1][0]).toBe('https://relay.example/proxy/v1/models');
+  expect(fetcher.mock.calls[1][1].headers).toEqual(fetcher.mock.calls[0][1].headers);
+});
+
+it.each([404, 405])('falls back from an explicit manifest after %i', async status => {
+  const fetcher = vi.fn()
+    .mockResolvedValueOnce(fakeResponse(status, '{}'))
+    .mockResolvedValueOnce(fakeResponse(200, '{"data":[{"id":"grok-4.7","reasoningEfforts":["low","high"]}]}'));
+  const modelsUrl = 'https://relay.example/proxy/v1/models?client_version=0.147.0&tenant=test';
+  const result = await fetchProviderModels(spec({ agent: 'codex', wireProtocol: 'openai-responses',
+    baseUrl: 'https://relay.example/proxy/v1', modelsUrl }), fetcher);
+  expect(result).toMatchObject({ ok: true, models: [{ id: 'grok-4.7', discoveredMetadata: { efforts: ['low', 'high'] } }] });
+  expect(fetcher).toHaveBeenCalledTimes(2);
+  expect(String(fetcher.mock.calls[0][0])).toBe(modelsUrl);
+  expect(String(fetcher.mock.calls[1][0])).toBe('https://relay.example/proxy/v1/models?tenant=test');
   expect(fetcher.mock.calls[1][1].headers).toEqual(fetcher.mock.calls[0][1].headers);
 });
 
@@ -728,6 +833,7 @@ describe('ElevenLabs catalog authentication', () => {
     expect(result.url).toBe('https://api.elevenlabs.io/v1/models');
     expect(result.init.headers).toEqual({ 'xi-api-key': 'fake-eleven-key' });
   });
+
   it('does not guess ElevenLabs authentication for a custom host or leak a stale key in no-auth mode', () => {
     const custom = buildModelsFetchRequest(spec({ agent: 'codex', baseUrl: 'https://elevenlabs.example/v1', apiKey: 'fake-key' }));
     expect(custom.init.headers).toEqual({ authorization: 'Bearer fake-key' });

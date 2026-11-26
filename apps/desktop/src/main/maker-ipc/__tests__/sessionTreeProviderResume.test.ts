@@ -1,4 +1,5 @@
 import { createSessionOptionsReconciler } from '../sessionOptionsReconciler.js';
+import { hydrateProviderIdBeforeSessionStart } from '../sessionProviderBootstrap.js';
 import type { MakerSessionCreateOpts } from '../sessionRequest.js';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
@@ -28,7 +29,9 @@ describe('Pi session-tree lazy resume provider route', () => {
       '// ── Session 生命周期',
     );
 
-    expect(listSkills).toContain('const kind = requireAgentKind(agentKind);');
+    // Every kind is still validated; `acp` (a plugin-engine task's `/` menu, #12732) is the only addition
+    // and, like Pi, reads Pi's shared directories, so it takes the same shared-Skill refresh below.
+    expect(listSkills).toContain("const kind = agentKind === 'acp' ? 'acp' : requireAgentKind(agentKind);");
     expect(listSkills).toContain('await desktopClaudeAuthAdapter.ensureSharedGlobalSkills();');
     // Guard discovery order independently of optional host verification arguments.
     const skillsDiscoveryIdx = listSkills.indexOf('maker.listAgentSkills(');
@@ -60,17 +63,15 @@ describe('Pi session-tree lazy resume provider route', () => {
   });
 
   it('keeps the same three-state route contract across every persisted-session bootstrap', async () => {
-    const preHydrate = sourceBetween(
-      'async function hydrateProviderIdBeforeSessionStart',
-      'async function markOrcaRoleIfNeeded',
-    );
     const queued = sourceBetween(
       'async function buildCreateOptsForQueuedSession',
       'async function enqueueSendToSessionMessage',
     );
 
-    expect(preHydrate).toContain('o.providerId = row.providerId?.trim() || null;');
     for (const providerId of [null, undefined, 'selected-provider']) {
+      const options: { id: string; providerId?: string | null } = { id: 'task' };
+      await hydrateProviderIdBeforeSessionStart(options, async () => providerId);
+      expect(options.providerId).toBe(providerId);
       const co = { agentKind: 'pi', providerId: 'stale' } as MakerSessionCreateOpts;
       await createSessionOptionsReconciler({ log: { warn() {} },
         readSession: async () => ({ model: 'm', agentKind: 'pi', providerId }) })('task', co);

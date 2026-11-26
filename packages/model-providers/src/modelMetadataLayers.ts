@@ -34,6 +34,10 @@ export interface ModelMetadata {
   supportsFastMode?: boolean;
   supportsImageInput?: boolean;
   supportsToolCalls?: boolean;
+  /** Upstream can support reasoning without publishing selectable levels. */
+  supportsReasoning?: boolean;
+  /** Explicit wire value for the off state, outside the selectable effort list. */
+  reasoningOffEffort?: "none";
   reasoningRequired?: boolean;
 }
 export interface BaseModel {
@@ -59,6 +63,8 @@ export const MODEL_METADATA_FIELDS = [
   "supportsFastMode",
   "supportsImageInput",
   "supportsToolCalls",
+  "supportsReasoning",
+  "reasoningOffEffort",
   "reasoningRequired",
 ] as const;
 const efforts = new Set([
@@ -119,6 +125,7 @@ export function validModelMetadata(value: unknown): value is ModelMetadata {
         v.every((e) => efforts.has(e)) &&
         new Set(v).size === v.length
       );
+    if (key === "reasoningOffEffort") return v === "none";
     if (key === "defaultEffort") return v === null || efforts.has(v as string);
     return typeof v === "boolean";
   });
@@ -146,6 +153,15 @@ export function mergeModelMetadata(
       result.modalities = {
         ...result.modalities,
         input: result.modalities.input.filter((modality) => modality !== 'image'),
+      };
+    }
+    // A higher-priority explicit enable restores image after a lower-layer denial.
+    // Same-layer modalities remain authoritative; never invent an output list.
+    if (fields.supportsImageInput === true && fields.modalities === undefined &&
+        result.modalities && !result.modalities.input.includes('image')) {
+      result.modalities = {
+        ...result.modalities,
+        input: [...result.modalities.input, 'image'],
       };
     }
   }
@@ -503,10 +519,23 @@ export function mergeDiscoveredRuntimeModels(
     const accountCapabilities = model.supportsUltrafastMode !== undefined ||
       (index >= 0 && models[index].supportsUltrafastMode !== undefined)
       ? { supportsUltrafastMode: model.supportsUltrafastMode === true } : {};
-    const discoveredMetadata = mergeModelMetadata(
-      index >= 0 ? models[index].discoveredMetadata : undefined,
-      pickModelMetadata(model.discoveredMetadata ?? model),
-    );
+    const previousMetadata = index >= 0 ? models[index].discoveredMetadata : undefined;
+    const incomingMetadata = pickModelMetadata(model.discoveredMetadata ?? model);
+    const discoveredMetadata = mergeModelMetadata(previousMetadata, incomingMetadata);
+    // A reasoning capability inventory describes this response, not the last
+    // response that happened to publish levels or an explicit off value.
+    if (previousMetadata?.supportsReasoning !== undefined && incomingMetadata.supportsReasoning === undefined) {
+      delete discoveredMetadata.supportsReasoning;
+    }
+    if (incomingMetadata.reasoningOffEffort === undefined) delete discoveredMetadata.reasoningOffEffort;
+    // Older parsers inferred [] from incomplete supported_parameters. There is no
+    // provenance to distinguish that from a real denial in the saved snapshot.
+    // Require a refreshed declaration to retain an empty discovered effort list;
+    // user overrides live outside this layer and are never removed here.
+    if (incomingMetadata.efforts === undefined &&
+        (previousMetadata?.supportsReasoning !== undefined || previousMetadata?.efforts?.length === 0)) {
+      delete discoveredMetadata.efforts;
+    }
     // Sparse refreshes can supply either half of this pair. Validate after merging
     // with the last snapshot, without shrinking its working window to a bad maximum.
     if (discoveredMetadata.contextWindow !== undefined &&
@@ -526,9 +555,10 @@ export function mergeDiscoveredRuntimeModels(
         ...(model.discoveredCost ? { discoveredCost: model.discoveredCost } : {}),
         ...(hideNew ? { defaultEnabled: false } : {}),
       });
-    else
+    else {
+      const { discoveredCost: _staleCost, ...existingModel } = models[index];
       models[index] = {
-        ...models[index],
+        ...existingModel,
         ...accountCapabilities,
         discoveredSource: model.discoveredSource,
         ...((model.opaqueModelId || models[index].opaqueModelId) ? { opaqueModelId: true as const } : {}),
@@ -537,6 +567,7 @@ export function mergeDiscoveredRuntimeModels(
         discoveredMetadata,
         ...(model.discoveredCost ? { discoveredCost: model.discoveredCost } : {}),
       };
+    }
   }
   return [...added, ...models];
 }
