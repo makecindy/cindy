@@ -4,9 +4,14 @@ const mocks = vi.hoisted(() => ({
   loadURL: vi.fn(),
   loadFile: vi.fn(),
   installWindowZoomRestoration: vi.fn(),
+  browserWindowOptions: [] as Array<Record<string, unknown>>,
+  readWindowThemeSnapshot: vi.fn<() => { mode: string; needsTransparentWindow?: boolean } | null>(() => null),
 }));
 vi.mock('electron', () => ({
   BrowserWindow: class {
+    constructor(options: Record<string, unknown>) {
+      mocks.browserWindowOptions.push(options);
+    }
     webContents = { on: vi.fn(), once: vi.fn(), setWindowOpenHandler: vi.fn() };
     once = vi.fn();
     hookWindowMessage = vi.fn();
@@ -37,15 +42,22 @@ vi.mock('../appearance-settings-ipc.js', () => ({
 vi.mock('../mainWindowFullscreenStartup.js', () => ({
   installWindowFullscreenStateBroadcast: vi.fn(),
 }));
-vi.mock('../window-theme-mode-store.js', () => ({ readWindowThemeSnapshot: () => null }));
+vi.mock('../window-theme-mode-store.js', () => ({
+  readWindowThemeSnapshot: () => mocks.readWindowThemeSnapshot(),
+}));
 
 import { openSessionInNewWindow } from '../secondary-windows';
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mocks.browserWindowOptions.length = 0;
+  mocks.readWindowThemeSnapshot.mockReturnValue(null);
   vi.stubGlobal('MAIN_WINDOW_VITE_NAME', 'main_window');
 });
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+});
 
 describe('session window link targets', () => {
   it('encodes remote device and message anchors into the development window URL', () => {
@@ -85,5 +97,28 @@ describe('session window link targets', () => {
     vi.stubGlobal('MAIN_WINDOW_VITE_DEV_SERVER_URL', undefined);
     openSessionInNewWindow('task', null);
     expect(mocks.installWindowZoomRestoration).toHaveBeenCalledOnce();
+  });
+
+  // Regression (#11670): macOS secondary windows previously passed `transparent: true` unconditionally
+  // (causing WindowServer GPU overhead) and omitted initial `vibrancy: 'hud'`, which left
+  // `contentOpaque = 1` when switched to `transparent: false`. Existing tests only checked URL/zoom.
+  it('uses a non-transparent macOS window with hud vibrancy by default and respects persisted transparent hint', () => {
+    vi.stubGlobal('MAIN_WINDOW_VITE_DEV_SERVER_URL', undefined);
+    vi.spyOn(process, 'platform', 'get').mockReturnValue('darwin');
+
+    openSessionInNewWindow('task-default', null);
+    expect(mocks.browserWindowOptions[0]).toMatchObject({
+      transparent: false,
+      backgroundColor: '#00000000',
+      vibrancy: 'hud',
+    });
+
+    mocks.readWindowThemeSnapshot.mockReturnValue({ mode: 'dark', needsTransparentWindow: true });
+    openSessionInNewWindow('task-transparent', null);
+    expect(mocks.browserWindowOptions[1]).toMatchObject({
+      transparent: true,
+      backgroundColor: '#00000000',
+      vibrancy: 'hud',
+    });
   });
 });
