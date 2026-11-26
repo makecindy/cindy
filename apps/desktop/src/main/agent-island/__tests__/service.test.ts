@@ -41,6 +41,7 @@ import { markAppContentWindow } from '../../windowFocusClassifier.js';
 import type { AgentIslandService } from '../service.js';
 import type { AgentIslandCompanionIdentity } from '../companionIdentity.js';
 import { setDeepLinkMainWindow, takePendingDeepLink } from '../../deepLink.js';
+import { registerSecondaryAppWindow, unregisterSecondaryAppWindow } from '../../secondaryWindowRegistry.js';
 import { runDeviceLinkInvokeContext } from '../../device-link/invoke-context.js';
 import { setTaskChangeListener, type TaskChangeEvent } from '../../localDb/taskEvents.js';
 import { getSafeDataOwnerPushStamp } from '../../device-link/broadcast-tap.js';
@@ -7937,4 +7938,247 @@ it('preserves async pushes across Stop until their own settlement', async () => 
     vi.mocked(retireAnsweredMobileNotifications).mockReset();
     vi.mocked(retireReadMobileNotifications).mockReset();
   }
+});
+
+// 测试价值:
+// - 生产入口与可观察结果: AgentIslandService.focusSession + AGENT_ISLAND_SET_VISIBLE_SESSION_CHANNEL +
+//   AGENT_ISLAND_CONSUME_ENTRY_ALERT_CHANNEL; 点击灵动岛任务/群聊/伙伴/分屏卡片时优先唤起已拖出副窗口，不抢主窗口。
+// - Bug／规则依据: 用户点击灵动岛消息时，若任务或消息已有拖出的独立窗口，应优先打开该窗口而非主窗口。
+// - 现有覆盖缺口: 此前 service.test.ts 仅覆盖副窗口已聚焦时的不回落主窗，未覆盖副窗口失焦/最小化、群聊消息、远程伙伴及分屏副窗场景。
+// - 最小失败输入: 拖出任务或群聊到副窗口后切到其它应用或主窗口，再点击灵动岛对应卡片。
+// - tier: unit（纯内存 Electron mock）。
+describe('灵动岛点击优先唤起已拖出的副窗口', () => {
+  function createMockWindow(options: {
+    url: string;
+    focused?: boolean;
+    visible?: boolean;
+    minimized?: boolean;
+  }) {
+    let focused = options.focused ?? false;
+    let visible = options.visible ?? true;
+    let minimized = options.minimized ?? false;
+    let destroyed = false;
+    let currentUrl = options.url;
+    const send = vi.fn();
+    const show = vi.fn(() => { visible = true; });
+    const restore = vi.fn(() => { minimized = false; });
+    const focus = vi.fn(() => { focused = true; });
+    const moveTop = vi.fn();
+    const setAlwaysOnTop = vi.fn();
+    const win = {
+      isDestroyed: () => destroyed,
+      isFocused: () => focused,
+      isVisible: () => visible,
+      isMinimized: () => minimized,
+      show,
+      restore,
+      focus,
+      moveTop,
+      setAlwaysOnTop,
+      on: vi.fn(),
+      once: vi.fn(),
+      webContents: {
+        isDestroyed: () => destroyed,
+        isLoading: () => false,
+        getURL: () => currentUrl,
+        on: vi.fn(),
+        send,
+      },
+    } as unknown as BrowserWindow;
+    return {
+      win,
+      send,
+      show,
+      restore,
+      focus,
+      setUrl: (next: string) => { currentUrl = next; },
+      setFocused: (next: boolean) => { focused = next; },
+      destroy: () => {
+        destroyed = true;
+        unregisterSecondaryAppWindow(win);
+      },
+    };
+  }
+
+  it('focuses an unfocused or minimized secondary window for a task instead of the main window, and falls back after closing', async () => {
+    const { AgentIslandService } = await import('../service.js');
+    const publish = vi.fn(() => true);
+    const main = createMockWindow({ url: 'http://localhost:5173/#/cc-agent/task-a', focused: true });
+    const secondary = createMockWindow({
+      url: 'http://localhost:5173/?secondaryWindow=1&bootSession=task-a#/cc-agent/task-a',
+      focused: false,
+      minimized: true,
+    });
+    setDeepLinkMainWindow(main.win);
+    registerSecondaryAppWindow(secondary.win, { bootSession: 'task-a', bootDeviceId: null });
+    try {
+      const service = new AgentIslandService({
+        getMainWindow: () => main.win,
+        nativeHost: { failed: false, publish },
+      });
+      syncEnabledForTest(service, publish);
+      service.registerIpc();
+      service.setAppFocused(true);
+      mocks.browserWindowFromWebContents.mockReturnValue(main.win);
+      await registeredIpcHandler(AGENT_ISLAND_SET_VISIBLE_SESSION_CHANNEL)({ sender: main.win.webContents }, 'task-a');
+      service.handleUserPrompt({ sessionId: 'task-a', agentKind: 'codex' }, 'ship feature');
+
+      (service as unknown as { focusSession(id: string): void }).focusSession('task-a');
+
+      expect(secondary.restore).toHaveBeenCalledOnce();
+      expect(secondary.focus).toHaveBeenCalledOnce();
+      expect(secondary.send).not.toHaveBeenCalled();
+      expect(main.focus).not.toHaveBeenCalled();
+      expect(main.send).not.toHaveBeenCalled();
+
+      // 副窗切走或关闭后，再次点击回到主窗口
+      secondary.destroy();
+      service.setAppFocused(false);
+      (service as unknown as { focusSession(id: string): void }).focusSession('task-a');
+      expect(main.focus).toHaveBeenCalledOnce();
+      expect(main.send).toHaveBeenCalledWith('deep-link:navigate', { type: 'session', id: 'task-a' });
+    } finally {
+      secondary.destroy();
+      setDeepLinkMainWindow(null);
+    }
+  });
+
+  it('focuses a detached group-chat window and routes the clicked message anchor to it', async () => {
+    const { AgentIslandService } = await import('../service.js');
+    const publish = vi.fn(() => true);
+    const main = createMockWindow({ url: 'http://localhost:5173/#/cc-agent/other', focused: false });
+    const secondary = createMockWindow({
+      url: 'http://localhost:5173/?secondaryWindow=1&bootSession=%2Fbots%2Fgroups%2Fgrp-1#/bots/groups/grp-1',
+      focused: false,
+    });
+    setDeepLinkMainWindow(main.win);
+    registerSecondaryAppWindow(secondary.win, { bootSession: '/bots/groups/grp-1', bootDeviceId: null });
+    try {
+      const service = new AgentIslandService({
+        getMainWindow: () => main.win,
+        nativeHost: { failed: false, publish },
+      });
+      syncEnabledForTest(service, publish);
+      service.setGroupChat('grp-1', {
+        groupId: 'grp-1',
+        name: 'Release',
+        messageId: 'msg-9',
+        threadRootId: 'root-3',
+        mentioned: true,
+        preview: 'Ready to ship',
+        lastMessageAt: Date.now(),
+        members: [],
+      });
+
+      (service as unknown as { focusSession(id: string): void }).focusSession('chat-group:grp-1');
+
+      expect(secondary.focus).toHaveBeenCalledOnce();
+      expect(secondary.send).toHaveBeenCalledWith('deep-link:navigate', {
+        type: 'chat-message',
+        groupId: 'grp-1',
+        messageId: 'msg-9',
+        threadRootId: 'root-3',
+      });
+      expect(main.focus).not.toHaveBeenCalled();
+      expect(main.send).not.toHaveBeenCalled();
+    } finally {
+      secondary.destroy();
+      setDeepLinkMainWindow(null);
+    }
+  });
+
+  it('matches a detached remote companion window by companion identity without touching the main window', async () => {
+    const { AgentIslandService } = await import('../service.js');
+    const publish = vi.fn(() => true);
+    const main = createMockWindow({ url: 'http://localhost:5173/#/cc-agent/other', focused: false });
+    const secondary = createMockWindow({
+      url: 'http://localhost:5173/?secondaryWindow=1&bootSession=%2Fbots%2Fremote%2Fstudio%2Fbot-1#/bots/remote/studio/bot-1',
+      focused: false,
+    });
+    setDeepLinkMainWindow(main.win);
+    registerSecondaryAppWindow(secondary.win, { bootSession: '/bots/remote/studio/bot-1', bootDeviceId: null });
+    try {
+      const service = new AgentIslandService({
+        getMainWindow: () => main.win,
+        nativeHost: { failed: false, publish },
+      });
+      syncEnabledForTest(service, publish);
+      service.setCompanionChats([{
+        sessionId: 'remote-bot-session',
+        botId: 'bot-1',
+        deviceId: 'studio',
+        companion: { name: 'Ada', avatar: 'sparkles', avatarColor: '#6366f1' },
+        visible: true,
+        unread: true,
+        lastMessageAt: Date.now(),
+        preview: 'Done',
+      }]);
+
+      (service as unknown as { focusSession(id: string): void }).focusSession('remote-bot-session');
+
+      expect(secondary.focus).toHaveBeenCalledOnce();
+      expect(secondary.send).not.toHaveBeenCalled();
+      expect(main.focus).not.toHaveBeenCalled();
+      expect(main.send).not.toHaveBeenCalled();
+    } finally {
+      secondary.destroy();
+      setDeepLinkMainWindow(null);
+    }
+  });
+
+  it('routes a split-pane session click to its secondary window and scopes entry-alert disposal to that window', async () => {
+    const { AgentIslandService } = await import('../service.js');
+    const publish = vi.fn(() => true);
+    const main = createMockWindow({ url: 'http://localhost:5173/#/cc-agent/main-task', focused: false });
+    const secondary = createMockWindow({
+      url: 'http://localhost:5173/?secondaryWindow=1&bootSession=pane-a#/cc-agent/pane-a',
+      focused: false,
+    });
+    setDeepLinkMainWindow(main.win);
+    registerSecondaryAppWindow(secondary.win, { bootSession: 'pane-a', bootDeviceId: null });
+    try {
+      const service = new AgentIslandService({
+        getMainWindow: () => main.win,
+        nativeHost: { failed: false, publish },
+      });
+      syncEnabledForTest(service, publish);
+      service.registerIpc();
+      mocks.browserWindowFromWebContents.mockImplementation((sender: unknown) => {
+        if (sender === secondary.win.webContents) return secondary.win;
+        if (sender === main.win.webContents) return main.win;
+        return null;
+      });
+      // 副窗失焦时上报分屏内包含 pane-b，不应覆盖全局 visibleSession，但应记住该副窗承载 pane-b
+      await registeredIpcHandler(AGENT_ISLAND_SET_VISIBLE_SESSION_CHANNEL)(
+        { sender: secondary.win.webContents },
+        ['pane-a', 'pane-b'],
+      );
+      service.handleAgentEvent({ sessionId: 'pane-b', agentKind: 'codex' }, terminalErrorEvent('failed'));
+
+      (service as unknown as { focusSession(id: string): void }).focusSession('pane-b');
+
+      expect(secondary.focus).toHaveBeenCalledOnce();
+      expect(main.focus).not.toHaveBeenCalled();
+      expect(main.send).not.toHaveBeenCalled();
+      expect(secondary.send).toHaveBeenCalledWith(
+        'deep-link:navigate',
+        expect.objectContaining({ type: 'session', id: 'pane-b', islandEntryId: expect.any(String) }),
+      );
+      const entryId = (secondary.send.mock.calls[0]?.[1] as { islandEntryId: string }).islandEntryId;
+
+      // 主窗口不能代副窗消费此次点击的提醒，只有命中的副窗可以消费
+      const consumeHandler = registeredIpcHandler(AGENT_ISLAND_CONSUME_ENTRY_ALERT_CHANNEL);
+      expect(consumeHandler({ sender: main.win.webContents }, 'pane-b', entryId)).toEqual({
+        ok: true,
+        consumed: false,
+      });
+      expect(consumeHandler({ sender: secondary.win.webContents }, 'pane-b', entryId)).toEqual({
+        ok: true,
+        consumed: true,
+      });
+    } finally {
+      secondary.destroy();
+      setDeepLinkMainWindow(null);
+    }
+  });
 });
