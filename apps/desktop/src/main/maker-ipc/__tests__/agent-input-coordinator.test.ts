@@ -20684,4 +20684,49 @@ describe('queue message hold (stop point)', () => {
     expect(projection.pendingQueue.map((item) => item.clientId)).toEqual(['a', 'b']);
     expect(heldIds(h, sid)).toEqual(['a']);
   });
+
+  it('refuses a merge that would swallow the stop point', async () => {
+    // 合并会删掉被并条目并重建结果:停点行一旦被并进去,后面的人就被动恢复自动发送。
+    // 保护必须落在合并原语这唯一入口上,Lead 合并与 Worker 回报合并都走同一处。
+    const { h, sid } = await withQueued(['a', 'b', 'c']);
+    h.coordinator.hold(sid, 'b');
+
+    const merge = (ids: string[]) =>
+      h.coordinator.mergeQueuedMessagesAtomically(sid, ids, ([survivor]) => ({
+        ...survivor!,
+        text: 'merged',
+        persistedContent: 'merged',
+      })).merged;
+
+    expect(merge(['b', 'c'])).toBe(false);
+    expect(heldIds(h, sid)).toEqual(['b']);
+    expect(queuedIds(h, sid)).toEqual(['a', 'b', 'c']);
+
+    // 停点挪到队尾后,相邻两条照旧可合:保护只针对停点行,没把合并能力一并打死。
+    h.coordinator.hold(sid, 'c');
+    expect(merge(['a', 'b'])).toBe(true);
+    expect(heldIds(h, sid)).toEqual(['c']);
+  });
+
+  it('never leaves the stop point on an answered async question', async () => {
+    // 异步回答不出现在队列界面上,没有菜单入口;停点落上去就再也解不开。
+    const h = createHarness();
+    const sid = 'hold-async-tail';
+    h.setRunning(true);
+    await h.coordinator.ensureQueueRestored(sid);
+    h.coordinator.enqueue(sid, makeItem('a', 'first'));
+    h.coordinator.enqueue(sid, makeItem('question-reply:answered:q1', 'hidden answer'));
+    await flush();
+    const hasHold = () => h.coordinator.getProjection(sid).pendingQueue.some((item) => item.held === true);
+
+    // 直接挂到隐藏条目上:拒绝。
+    h.coordinator.hold(sid, 'question-reply:answered:q1');
+    expect(hasHold()).toBe(false);
+
+    // 删除持有停点的可见条目:停点不迁移到隐藏条目上。
+    h.coordinator.hold(sid, 'a');
+    expect(hasHold()).toBe(true);
+    h.coordinator.remove(sid, 'a');
+    expect(hasHold()).toBe(false);
+  });
 });

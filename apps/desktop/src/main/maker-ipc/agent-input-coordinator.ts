@@ -17,6 +17,7 @@ import { SnapshotOperationDeadlineError } from '../utils/operationBudget.js';
 import { ProviderGroupUsageLimitError } from '../provider-group/failurePolicy.js';
 import { MCP_APP_MESSAGE_GUARD, isUnrestorableMcpAppMessage, queuedAppMessageGuard, type McpAppMessageGuard } from '../mcp-apps/message.js';
 import { isOwnerOwnMessage } from '../input-handoff/ownerMessage.js';
+import { isAnsweredAsyncQuestionClientId } from '@cindy/maker-shared/interaction';
 /**
  * AgentInputCoordinator — main 侧排队输入事务协调器。
  *
@@ -3834,12 +3835,13 @@ export class AgentInputCoordinator {
       target,
     );
     // 正在投递(插话中 / 未跨过 accepted 边界的 active turn)的条目不接受停点:
-    // 它已经不属于可编排的队列内容。
+    // 它已经不属于可编排的队列内容。异步回答不在队列界面上,没有「继续」入口,
+    // 停点落上去就解不开 —— 与 remove() 迁移停点时跳过它们是同一条不变量。
     const consuming =
       state.steeringQueueClientIds.includes(clientId) ||
       state.directSteeringItems.some((item) => item.clientId === clientId) ||
       (state.activeTurn?.item?.clientId === clientId && !isActiveTurnDispatched(state.activeTurn));
-    if (!target || target.held === true || consuming) {
+    if (!target || target.held === true || consuming || isAnsweredAsyncQuestionClientId(clientId)) {
       return this.getProjection(sessionId);
     }
     // 只替换真正变化的条目:其余条目保持对象身份,恢复快照的 provenance
@@ -3879,6 +3881,15 @@ export class AgentInputCoordinator {
     if (item.held !== true) return item;
     const { held: _held, ...rest } = item;
     return rest;
+  }
+
+  /** 从 from 开始的第一条在队列界面可见的条目;异步回答不在界面上,停点不能落在它身上。 */
+  private nextVisibleQueueIndex(queue: readonly AgentInputQueuedMessage[], from: number): number {
+    for (let index = Math.max(0, from); index < queue.length; index += 1) {
+      const item = queue[index];
+      if (item && !isAnsweredAsyncQuestionClientId(item.clientId)) return index;
+    }
+    return -1;
   }
 
   /** 只在真发生替换时新建数组,不改队列顺序。 */
@@ -4393,13 +4404,15 @@ export class AgentInputCoordinator {
     const removedIndex = state.pendingQueue.findIndex((q) => q.clientId === clientId);
     const removed = removedIndex >= 0 ? state.pendingQueue[removedIndex] : undefined;
     state.pendingQueue = state.pendingQueue.filter((q) => q.clientId !== clientId);
-    // 停点被删掉时把停点交给原位置的下一条:删除不等于恢复自动发送。
-    // filter 保序,removedIndex 现在正好指向原位置的下一项。
+    // 停点被删掉时把停点交给原位置之后的第一条**可见**消息:删除不等于恢复自动发送。
+    // 跳过不可见的异步回答 —— 它没有队列菜单入口,停点落到它身上用户就再也解不开了。
+    // 后面没有可见消息时停点自然消失:队列里只剩系统回答,没有可暂停的对象。
     if (removed?.held === true) {
-      const next = state.pendingQueue[removedIndex];
+      const nextIndex = this.nextVisibleQueueIndex(state.pendingQueue, removedIndex);
+      const next = nextIndex >= 0 ? state.pendingQueue[nextIndex] : undefined;
       // 继承停点的条目也是被替换的对象:同样要迁移恢复标记与重试谱系。
       if (next) {
-        state.pendingQueue[removedIndex] = this.preserveRestoredQueueProvenance(next, {
+        state.pendingQueue[nextIndex] = this.preserveRestoredQueueProvenance(next, {
           ...next,
           held: true,
         });
@@ -4637,6 +4650,11 @@ export class AgentInputCoordinator {
       return { merged: false, projection: this.getProjection(sessionId) };
     }
     const presentTargets = targets as AgentInputQueuedMessage[];
+    // 停点是用户的手。合并会删掉这条并重建结果,后面的消息就被动恢复了自动发送;
+    // 拒绝放在协调器这唯一入口,Lead 合并与 Worker 回报合并走同一保护。
+    if (presentTargets.some(item => item.held === true)) {
+      return { merged: false, projection: this.getProjection(sessionId) };
+    }
     const replacement = buildReplacement(presentTargets);
     const survivor = presentTargets[0];
     if (

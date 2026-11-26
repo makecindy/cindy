@@ -218,6 +218,21 @@ describe('session queue control service', () => {
     await expect(stuck.hold(params)).resolves.toMatchObject({ ok: false, errorCode: 'MESSAGE_CONSUMING' });
     await expect(stuck.hold({ ...params, authorize: () => ({ ok: false, message: 'no' }) }))
       .resolves.toMatchObject({ ok: false, errorCode: 'NOT_AUTHORIZED' });
+
+    // 异步回答在队列界面上没有行、没有「继续」入口:必须说明原因,不能报成「正在投递」。
+    const hiddenId = 'question-reply:answered:q1';
+    const hidden = createSessionQueueControlService({
+      getSnapshot: async () => ({ pendingQueue: [queued(hiddenId)], consumingClientIds: [] }),
+      replaceQueuedMessage: vi.fn(),
+      removeQueuedMessage: vi.fn(),
+      ...noReorder,
+      holdQueuedMessage,
+    });
+    await expect(hidden.hold({ ...params, queuedMessageId: hiddenId })).resolves.toMatchObject({
+      ok: false,
+      errorCode: 'INVALID_ARGS',
+    });
+    expect(holdQueuedMessage).not.toHaveBeenCalledWith('s', hiddenId);
   });
 });
 

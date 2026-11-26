@@ -1,5 +1,6 @@
 import type { AgentInputQueuedMessage } from '../../shared/agentInputQueue.js';
 import type { ControlSteerOutcome } from './agent-input-coordinator.desktop.js';
+import { isAnsweredAsyncQuestionClientId } from '@cindy/maker-shared/interaction';
 
 export type SessionQueueControlFailureCode =
   | 'QUEUED_MESSAGE_NOT_FOUND'
@@ -244,6 +245,15 @@ export function createSessionQueueControlService(deps: SessionQueueControlDeps) 
     async hold(params: BaseControlParams): Promise<SessionQueueControlResult> {
       const resolved = await resolve(params);
       if (!resolved.ok) return resolved;
+      // 异步回答不在队列界面上,没有「继续」入口;协调器会静默拒绝,这里先把原因说清楚,
+      // 免得调用方把它当成「正在投递」而去等一个不会变的队列。
+      if (isAnsweredAsyncQuestionClientId(params.queuedMessageId)) {
+        return {
+          ok: false,
+          errorCode: 'INVALID_ARGS',
+          message: `queued message ${params.queuedMessageId} is an automatic answer with no row in the queue; hold a visible message instead`,
+        };
+      }
       await params.beforeMutation?.();
       deps.holdQueuedMessage(params.sessionId, params.queuedMessageId);
       // coordinator 对「刚好开始投递」的那一帧是静默拒绝的，回读确认，别让调用方
