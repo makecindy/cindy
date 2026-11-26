@@ -2778,7 +2778,7 @@
         "description": "Ubuntu는 시스템 .deb 패키지를 사용합니다. Arch Linux와 Omarchy는 같은 검증된 .deb 콘텐츠를 관리되는 사용자 디렉터리에 설치합니다. Debian 패키지 관리자는 필요하지 않습니다.",
         "item1": "Ubuntu: sudo apt install ./cindy-<version>-<arch>.deb를 실행하세요. Arch/Omarchy: docs/linux.md의 사용자 설치 안내를 따르세요.",
         "item2": "업데이트 시 시스템 .deb 설치는 인증을 요청하고, 사용자 설치는 시스템 비밀번호 없이 버전을 전환합니다. 다른 패키지 관리자로 설치한 경우 해당 관리자로 업데이트하세요.",
-        "item3": "Linux x64와 arm64는 Beta 채널을 지원합니다. Linux 업데이트는 재시작을 선택할 때만 적용되며 유휴 상태에서 자동으로 설치되지 않습니다."
+        "item3": "Linux x64와 arm64는 Beta 채널을 지원합니다. 사용자 설치는 유휴 상태일 때 업데이트를 자동으로 설치할 수 있으며, 비밀번호 없이 인증되도록 설정된 시스템 .deb 설치도 유휴 상태일 때 업데이트를 자동으로 설치할 수 있습니다. 그 밖의 시스템 .deb 설치는 재시작을 선택할 때만 업데이트가 적용됩니다."
       },
       "qnaTitle": "바로 질문하기",
       "qnaDescription": "답을 찾지 못했나요? 하고 싶은 일을 질문하세요.",
@@ -2853,7 +2853,7 @@
       "openLogsDirError": "로그 디렉터리를 열지 못했습니다",
       "autoUpdateLabel": "유휴 상태일 때 업데이트 설치",
       "autoUpdateDescription": "업데이트 다운로드가 완료된 뒤, 이 컴퓨터가 10분 동안 조작되지 않았고 실행 중인 작업이 없으면 앱을 자동으로 다시 시작해 설치합니다.",
-      "linuxUpdateDescription": "재시작을 선택하면 업데이트가 적용됩니다. 시스템 .deb 설치에는 시스템 비밀번호가 필요하지만 사용자 설치에는 필요하지 않습니다. 다른 설치 방식은 패키지 관리자를 사용하세요.",
+      "linuxUpdateDescription": "시스템 .deb 설치에는 시스템 비밀번호가 필요하므로 재시작을 선택할 때 업데이트가 적용됩니다. 사용자 설치는 비밀번호가 필요 없고 유휴 상태일 때 자동으로 설치할 수 있습니다. 다른 설치 방식은 패키지 관리자를 사용하세요.",
       "autoUpdateEnabledToast": "유휴 상태 자동 업데이트 설치가 켜졌습니다",
       "autoUpdateDisabledToast": "유휴 상태 자동 업데이트 설치가 꺼졌습니다",
       "autoUpdateSaveFailed": "자동 업데이트 설정을 저장하지 못했습니다",
@@ -7398,7 +7398,8 @@
       "localNetwork": {
         "label": "로컬 네트워크",
         "deniedHint": "이 권한이 없으면 같은 네트워크의 컴퓨터와 휴대폰이 이 컴퓨터에 직접 연결할 수 없고 릴레이를 거쳐야 해서 느려집니다.",
-        "settingsHint": "시스템 설정 › 개인정보 보호 및 보안 › 로컬 네트워크에서 Cindy를 켜세요. 돌아오면 바로 적용됩니다."
+        "promptedHint": "macOS 권한 알림에서 허용을 클릭하세요. 알림이 뜨지 않으면 시스템 설정에서 직접 켤 수 있습니다.",
+        "settingsHint": "개인정보 보호 및 보안에서 로컬 네트워크를 열고 Cindy를 켜세요. 목록에 없으면 +를 눌러 이 앱을 추가하면 돌아오는 즉시 적용됩니다."
       }
     },
     "imBot": {
@@ -7869,6 +7870,10 @@
         "toggle-sidebar": {
           "label": "사이드바 전환",
           "description": "왼쪽 세션 목록을 접거나 펼칩니다"
+        },
+        "copy-session-link": {
+          "label": "세션 링크 복사",
+          "description": "열려 있는 세션의 링크 복사"
         },
         "session-history-back": {
           "label": "이전 세션",
@@ -9585,6 +9590,7 @@
         "createTitle": "MCP 서버 추가",
         "editTitle": "MCP 서버 편집",
         "desc": "원격 http / sse 형식의 MCP만 지원합니다. 저장 후 새로 시작하는 Agent 세션에서 호출할 수 있으며 진행 중인 Agent 세션에는 영향을 주지 않습니다.",
+        "embeddedGuide": "어시스턴트가 현재 작업에 사용할 MCP 설정 양식을 열었습니다. 서비스 제공자의 안내에 따라 미리 입력된 정보를 확인하고, 빠진 항목을 채운 뒤 설정을 저장하세요.",
         "teammateDesc": "원격 http / sse 형식의 MCP만 지원합니다. 저장하면 동반자가 자신의 도구에 추가하고, 이 채팅의 다음 메시지부터 사용할 수 있습니다. 새 세션은 필요 없습니다."
       },
       "fields": {
@@ -13603,6 +13609,7 @@
           "overloadRetryingNoCount": "모델 서비스가 혼잡합니다. 자동으로 다시 시도하는 중입니다…",
           "overloadFailed": "⚠️ 모델 서비스가 혼잡합니다. 상위 서비스에 여유 용량이 없습니다. 여기서 이 메시지를 다시 보내 재시도하거나 Cindy에서 다른 모델로 바꿔 주세요. (데스크톱에서 “다시 시도”를 눌러도 작업은 이어지지만, 결과는 이 메시지로 돌아오지 않습니다.)"
         },
+        "openAiReconnect": "Cindy의 설정 → 모델 제공자 → OpenAI에서 ChatGPT를 다시 연결한 후 여기에 메시지를 보내세요.",
         "audioInputUnavailable": "현재 모델 연결에서는 오디오를 직접 읽을 수 없습니다. Cindy에게 먼저 오디오를 텍스트로 변환한 후 계속해 달라고 요청하세요.",
         "toolLoop": {
           "generic": "모델이 도구를 너무 여러 번 반복 호출해서, 무한 루프를 막기 위해 Cindy가 이번 턴을 중지했습니다. 새 메시지를 보내면 이어서 진행할 수 있습니다.",
@@ -15616,8 +15623,9 @@
       "codexHelperUnverified": "이 작업에서 cindy_helper를 사용할 수 있는지 확인하지 못했습니다. 작업 결과를 보고하지 못할 수 있습니다.",
       "requestFormatError": "앱이 보낸 요청 형식에 문제가 있어 답변을 완료하지 못했습니다.",
       "piRetryHistoryTooLarge": "메시지를 보내지 못했습니다. Pi가 재시도에 필요한 기록을 읽는 동안 데이터 프레임이 로컬 한도인 16 MiB를 초과했습니다. 새 작업에서 계속할 수 있습니다.",
+      "piRetryHistoryUnavailable": "메시지를 보내지 못했습니다. Pi가 전송에 필요한 기록을 읽지 못했습니다. 다시 시도하거나 새 작업에서 계속할 수 있습니다.",
+      "upstreamStatusError": "상위 서비스가 {{status}}를 반환하여 이 답변이 완료되지 않았습니다.",
       "messageNotSent": "메시지를 보내지 못했습니다.",
-      "upstreamEmpty550": "모델 서비스에서 빈 응답과 함께 HTTP 550을 반환했어요",
       "replyFailed": "답변을 완료하지 못했습니다",
       "queuedSendRecovery": "이전 메시지가 전송되지 않았습니다. ‘다시 시도’를 누르면 그대로 보낼 수 있습니다. 새 메시지를 보내면 이전 메시지를 대체합니다.",
       "retryTitle": "마지막 메시지 다시 보내기",
@@ -16456,7 +16464,7 @@
       "REMOTE_WORKDIR_UNAVAILABLE": "원격 작업 디렉터리를 지금 사용할 수 없습니다. 그 컴퓨터에 폴더가 아직 있는지 확인한 뒤 다시 시도하세요.",
       "REMOTE_OPTIMISTIC_SESSION_STATE_UNAVAILABLE": "컴퓨터에서 이 메시지가 이미 전송됐는지 아직 확인할 수 없습니다. 잠시 후 다시 시도하고, 같은 메시지를 중복으로 보내지 마세요.",
       "REMOTE_AGENT_UNAVAILABLE": "Agent를 실행하는 컴퓨터와 통신하지 못했습니다. 오류 세부 정보를 확인하세요.",
-      "REMOTE_AGENT_TIMEOUT": "Agent를 실행하는 컴퓨터의 응답 대기 시간이 초과되었습니다. 결과는 아직 확인되지 않았습니다. 다시 시도하기 전에 세션 진행 상황을 확인하세요.",
+      "REMOTE_AGENT_TIMEOUT": "Agent를 실행하는 컴퓨터에서 아직 응답이 없습니다. 세션 진행 상황을 먼저 확인하세요. 실행 중이거나 이미 완료되었다면 다시 시도할 필요가 없습니다.",
       "REMOTE_AGENT_LINK_BUSY": "Agent를 실행하는 컴퓨터와의 통신이 혼잡합니다. 잠시 후 다시 시도하세요.",
       "REMOTE_AGENT_UNRESPONSIVE": "Agent를 실행하는 컴퓨터가 반복해서 응답하지 않아 호출을 일시 중지했습니다. 잠시 후 다시 시도하세요.",
       "REMOTE_AGENT_OFFLINE": "Agent를 실행하는 컴퓨터가 오프라인입니다. 다시 연결된 후에 시도하세요.",
@@ -16694,6 +16702,8 @@
       "retryIn": "{{seconds}}초 후 자동 재시도"
     },
     "subscriptionAccountError": {
+      "unreachable": "현재 Codex 계정 서비스에 연결할 수 없습니다.",
+      "rechecking": "현재 Codex 계정 서비스에 연결할 수 없습니다. {{resetAt}}에 다시 시도합니다.",
       "poolModelLimited": "이 모델의 구독 사용량이 한도에 도달했습니다. 다른 모델로 전환할 수 있습니다.",
       "poolRetryUntil": "{{resetAt}} 이후에 다시 시도할 수 있습니다.",
       "poolOtherSignedOut": "다른 구독 계정이 로그아웃되어 있습니다. 작업을 실행하는 컴퓨터에서 로그인한 후 다시 시도할 수 있습니다.",
@@ -22648,6 +22658,16 @@
     "refresh": "할당량 새로고침"
   },
   "subscriptionAccounts": {
+    "existing": {
+      "menu": "계정 추가 방법",
+      "connect": "기존 로그인 연결…",
+      "found": "연결 가능 {{count}}개",
+      "title": "{{device}}의 로그인",
+      "note": "Cindy와 CLI가 선택한 계정의 설정을 공유합니다.",
+      "attach": "연결",
+      "choose": "다른 폴더 선택…",
+      "unverified": "이 구독 로그인을 확인할 수 없습니다."
+    },
     "pluginSignIn": {
       "method": "로그인 방법",
       "secretHint": "키는 플러그인에만 전달되며 이 계정 전용 폴더에 저장됩니다. Cindy는 키를 저장하지 않고 다른 컴퓨터로 보내지도 않습니다.",
