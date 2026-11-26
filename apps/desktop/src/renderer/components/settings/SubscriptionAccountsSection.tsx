@@ -1,4 +1,6 @@
 import {
+  ArrowDown,
+  ArrowUp,
   ChartNoAxesColumn,
   CircleMinus,
   FolderOpen,
@@ -73,6 +75,8 @@ import {
   useMoveSubscriptionAccount,
   useSubscriptionPlacementTargets,
 } from './SubscriptionPlacement';
+import type { OpenAiGroupAccount } from '../../../shared/openAiAccountGroup';
+import { openAiGroupFailureKey } from './OpenAiAccountGroupSection';
 import { pluginEngineUsageAccount } from '../status/pluginEngineUsageAccount';
 import { usePluginEngines } from '@/hooks/usePluginEngines';
 import { usePluginEngineSignIn } from './PluginEngineSignIn';
@@ -174,6 +178,7 @@ export function SubscriptionAccountsSection({
   defaultUsage,
   dashboard,
   expectAccounts = true,
+  openAiAccounts,
 }: {
   /** The provider whose accounts are listed: built-in, created or a legacy Codex connection. */
   providerId: string;
@@ -186,6 +191,7 @@ export function SubscriptionAccountsSection({
   dashboard?: { label: string; onOpen: () => void };
   /** Whether the first read is likely to list an account, so its row's space is held meanwhile. */
   expectAccounts?: boolean;
+  openAiAccounts?: readonly OpenAiGroupAccount[];
 }) {
   const { t, i18n } = useTranslation();
   const locale = i18n?.resolvedLanguage ?? i18n?.language;
@@ -196,6 +202,8 @@ export function SubscriptionAccountsSection({
   const [failed, setFailed] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [testing, setTesting] = useState<ReadonlySet<string>>(() => new Set());
+  const activeTests = useRef(new Set<string>());
   const login = useRef<string | null>(null);
   const inFlight = useRef(false);
   // A plugin engine provider (2026-11-23): accounts sign in through the plugin's own methods.
@@ -281,7 +289,31 @@ export function SubscriptionAccountsSection({
     const result = await window.electronAPI.openPath(directory);
     if (shouldShowOpenPathError(result)) toast.error(t('subscriptionAccounts.openDirectoryFailed'));
   };
+  const testKey = async (connectionId: string, agent: 'codex' | 'pi') => {
+    const key = `${connectionId}:${agent}`;
+    if (activeTests.current.has(key)) return;
+    activeTests.current.add(key);
+    setTesting(new Set(activeTests.current));
+    try {
+      const result = await window.electronAPI.providerGroup.command({ action: 'account-test', providerId, accountId: connectionId, agent });
+      if (!result.ok) toast.error(t(openAiGroupFailureKey(result.code)));
+    } catch {
+      toast.error(t('subscriptionAccounts.failed'));
+    } finally {
+      activeTests.current.delete(key);
+      setTesting(new Set(activeTests.current));
+      await refresh();
+    }
+  };
   const accounts = view && !isUnusedDefaultSlot(view.accounts) ? view.accounts : [];
+  const mixed = accounts.some(account => account.apiKey);
+  const moveInOrder = (index: number, offset: number) => {
+    const ids = accounts.map(account => account.id);
+    const next = index + offset;
+    if (next < 0 || next >= ids.length) return;
+    [ids[index], ids[next]] = [ids[next], ids[index]];
+    void run({ action: 'reorder', providerId, accountIds: ids });
+  };
   // Strategy and weights only choose between accounts; a single account has nothing to balance.
   const balancing = accounts.length > 1;
   return (
@@ -302,13 +334,14 @@ export function SubscriptionAccountsSection({
         </div>
         <div className="flex flex-wrap items-center gap-1.5">
           {/* A built-in provider holds the CLI default login and is never merged away as a whole. */}
-          {(plugin ? !!pluginInfo?.separate : providerId !== kind) && accounts.length > 0 && (
+          {(openAiAccounts || ((plugin ? !!pluginInfo?.separate : providerId !== kind) && accounts.length > 0)) && (
             <MergeProviderButton
-              {...(plugin ? { targets: placementTargets } : { kind })}
+              {...(plugin ? { targets: placementTargets } : { kind: providerId !== kind && accounts.length > 0 ? kind : null })}
               providerId={providerId}
               providerName={providerName ?? providerId}
               disabled={busy}
               onDone={() => void refresh()}
+              openAiAccounts={openAiAccounts}
             />
           )}
           {dashboard && (
@@ -372,6 +405,7 @@ export function SubscriptionAccountsSection({
               {/* Same control and option order as the provider group strategy (ProviderGroupSection). */}
               <SegmentedControl
                 {...accountSetting.controlProps}
+                optionClassName="shrink-0"
                 aria-label={t('subscriptionAccounts.strategy')}
                 value={view.strategy === 'usage' ? 'least' : view.strategy}
                 disabled={busy}
@@ -404,7 +438,7 @@ export function SubscriptionAccountsSection({
                 const name =
                   account.identity ||
                   t('providerGroup.member.accountFallback', { index: index + 1 });
-                const plan = plugin ? account.plan :
+                const plan = account.apiKey ? t('settings.providers.custom.fields.apiKey') : plugin ? account.plan :
                   kind === 'openai'
                     ? formatCodexPlanLabel(account.planType ?? account.plan)
                     : formatClaudeSubscriptionPlanLabel(account.plan, account.planTier, account.planDisplayName);
@@ -464,7 +498,7 @@ export function SubscriptionAccountsSection({
                 const resetScope = account.codexResetProviderId ?? codexResetScope(account.id);
                 // Reset settings do not depend on a successful usage read. A replaced
                 // identity remounts the reader; ordinary running-count changes do not.
-                const resetNode = !plugin && kind === 'openai' && connected ? (
+                const resetNode = !plugin && kind === 'openai' && connected && !account.apiKey ? (
                   <AccountResetCredits key={`${resetScope}:${account.identity ?? ''}`} scope={resetScope} />
                 ) : null;
                 const usageNode =
@@ -486,7 +520,7 @@ export function SubscriptionAccountsSection({
                     <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
                       <div
                         className={cn(
-                          'flex min-w-[180px] flex-1 items-center gap-3',
+                          'flex min-w-[min(180px,100%)] flex-1 items-center gap-3',
                           account.paused && 'opacity-60',
                         )}
                       >
@@ -539,7 +573,7 @@ export function SubscriptionAccountsSection({
                                 {t('subscriptionAccounts.loginAgain')}
                               </Button>
                             )}
-                            {account.status === 'unavailable' && (
+                            {account.status === 'unavailable' && !account.apiKey && (
                               <Button data-settings-search-action="Retry reading this unavailable subscription account" variant="secondary" tone="quiet" size="sm"
                                 disabled={refreshing || busy} onClick={() => void refresh()}>
                                 {t('commonUi.retry')}
@@ -549,6 +583,12 @@ export function SubscriptionAccountsSection({
                         </div>
                       </div>
                       {!identityOnly && <div className="ml-auto flex max-w-full shrink-0 flex-wrap items-center justify-end gap-2">
+                        {mixed && view.strategy === 'order' && <div className="flex items-center gap-1">
+                          <Button {...accountSetting.controlProps} variant="secondary" tone="quiet" compact size="sm" aria-label={t('modelGroups.settings.moveUp')}
+                            disabled={busy || index === 0} onClick={() => moveInOrder(index, -1)}><ArrowUp size={14} /></Button>
+                          <Button {...accountSetting.controlProps} variant="secondary" tone="quiet" compact size="sm" aria-label={t('modelGroups.settings.moveDown')}
+                            disabled={busy || index === accounts.length - 1} onClick={() => moveInOrder(index, 1)}><ArrowDown size={14} /></Button>
+                        </div>}
                         <Select
                           {...accountSetting.controlProps}
                           label={t('providerGroup.member.limitAria', { name })}
@@ -608,7 +648,19 @@ export function SubscriptionAccountsSection({
                             })
                           }
                         />
-                        <DropdownMenu>
+                        {account.apiKey?.checks.map(check => {
+                          const connectionId = account.apiKey!.connectionId;
+                          const pending = testing.has(`${connectionId}:${check.agent}`);
+                          const test = t('settings.providers.custom.test.button');
+                          const engine = check.agent === 'pi' ? 'Pi' : 'Codex';
+                          const label = account.apiKey!.checks.length > 1 ? `${test} · ${engine}` : test;
+                          return <Button key={check.agent} data-settings-search-action="Test this pool API key on the selected engine" variant="secondary" tone="quiet" size="sm" loading={pending}
+                            aria-label={`${label} · ${name}`} disabled={pending || busy}
+                            onClick={() => void testKey(connectionId, check.agent)}>
+                            {label}
+                          </Button>;
+                        })}
+                        {account.apiKey?.connectionId !== providerId && <DropdownMenu>
                           <DropdownMenuTrigger asChild>
                             {/* Below the button, so the tip shown on keyboard focus (e.g. after Esc
                                 closes the menu) never covers the controls wrapped above it. */}
@@ -629,7 +681,7 @@ export function SubscriptionAccountsSection({
                             </Tip>
                           </DropdownMenuTrigger>
                           <DropdownMenuContent align="end">
-                            <DropdownMenuItem
+                            {!account.apiKey && <><DropdownMenuItem
                               disabled={busy || account.running > 0}
                               onSelect={signIn}
                             >
@@ -654,14 +706,14 @@ export function SubscriptionAccountsSection({
                               disabled={busy}
                               onMove={(target) => void moveAccount({ id: account.id, name }, target)}
                             />
-                            <DropdownMenuSeparator />
+                            <DropdownMenuSeparator /></>}
                             <DropdownMenuItem
                               variant="danger"
                               disabled={busy || account.running > 0}
                               onSelect={() => {
                                 void confirm({
                                   title: t('subscriptionAccounts.removeTitle', { name }),
-                                  description: t('subscriptionAccounts.removeDescription'),
+                                  description: t(account.apiKey ? 'openAiAccountGroup.removeDescription' : 'subscriptionAccounts.removeDescription'),
                                   confirmText: t('subscriptionAccounts.remove'),
                                   confirmVariant: 'destructive',
                                 }).then((ok) => {
@@ -678,9 +730,14 @@ export function SubscriptionAccountsSection({
                               {t('subscriptionAccounts.remove')}
                             </DropdownMenuItem>
                           </DropdownMenuContent>
-                        </DropdownMenu>
+                        </DropdownMenu>}
                       </div>}
                     </div>
+                    {account.apiKey?.checks.flatMap(check => check.result ? [
+                      <p key={check.agent} role="status" className="mt-1 text-12 text-[var(--text-secondary)]">
+                        {check.result.ok ? t('openAiAccountGroup.testPassed') : t(openAiGroupFailureKey(check.result.code))}
+                      </p>,
+                    ] : [])}
                     {/* Usage sits under the account name (from the avatar edge when narrow, so the
                         labels keep their column); the right edge meets the row controls. */}
                     {usageNode && (

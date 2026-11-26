@@ -276,6 +276,7 @@ export function SessionShareImportWizard({
               </AlertDialog.Description>
               <div className="relative">
                 <input
+                  data-settings-search-action="Enters the password that unlocks an imported task package"
                   type={showPass ? 'text' : 'password'}
                   value={password}
                   onChange={(e) => {
@@ -288,7 +289,7 @@ export function SessionShareImportWizard({
                   placeholder={t('sessionShare.import.passwordPlaceholder')}
                   autoFocus
                   disabled={unlocking}
-                  className="h-8 w-full rounded-md border bg-transparent px-2 pr-8 text-sm outline-none"
+                  className="h-8 w-full rounded-full border bg-transparent px-2 pr-8 text-sm outline-none"
                   style={{
                     borderColor: passwordError ? 'var(--error-border)' : 'var(--border-default)',
                     color: 'var(--confirm-title)',
@@ -341,7 +342,7 @@ export function SessionShareImportWizard({
 
               {/* 风险提示:分享包来自他人,历史内容可能影响 AI 后续行为,续聊时
                   agent 具备本机文件读写与命令执行能力——确认导入前必须让用户知情。 */}
-              <div className="flex items-start gap-2 rounded-md bg-[var(--warning-bg-soft)] px-3 py-2">
+              <div className="flex items-start gap-2 rounded-lg bg-[var(--warning-bg-soft)] px-3 py-2">
                 <ShieldAlert
                   size={14}
                   className="mt-0.5 shrink-0 text-[var(--confirm-desc)]"
@@ -363,7 +364,7 @@ export function SessionShareImportWizard({
                   <div className="flex items-center gap-2">
                     <div
                       title={workingDir || undefined}
-                      className="h-8 min-w-0 flex-1 truncate rounded-md border px-2 text-sm leading-8"
+                      className="h-8 min-w-0 flex-1 truncate rounded-full border px-2 text-sm leading-8"
                       style={{
                         borderColor: 'var(--border-default)',
                         color: workingDir ? 'var(--confirm-title)' : 'var(--text-tertiary)',

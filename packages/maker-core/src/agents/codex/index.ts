@@ -62,6 +62,7 @@ import {
   type AgentSessionHandle,
   type AgentDeps,
   type CodexDownshiftModelRejection,
+  type CodexUpstreamCapacitySignal,
   type CodexExtraSpawnConfig,
   type StartSessionOptions,
   type OneShotOptions,
@@ -153,6 +154,7 @@ import { REVIEW_SENSITIVE_CREDENTIAL_GLOB_PATTERNS } from '../shared/sensitive-c
 import { pickTurnStartStatus, type OneShotState } from '../shared/turn-start-phrases.js';
 import {
   OVERLOAD_RETRY_MAX_ATTEMPTS,
+  UPSTREAM_OVERLOAD_REASON,
   overloadRetryDelayMs,
   parseOverloadError,
 } from '../shared/overload-error.js';
@@ -1089,6 +1091,17 @@ const CODEX_UPSTREAM_IDLE_SUSPEND_GAP_MS = 30_000;
 const CODEX_RECONNECT_STALL_TIMEOUT_MS = RETRY_ESCALATION_MAX_ELAPSED_MS;
 
 /**
+ * 新版 Codex (0.166+) 会把 `Selected model is at capacity` 纳入内部 `responses_retry`
+ * 并给 300s+ 退避（且 1/5 不推 error 通知、2/5 只发裸 `Reconnecting... 2/5`）。
+ * 代理层或通知确认容量过载时收紧重连等待上限到 30s，与 overload-error.ts 的客户端
+ * 容量重试窗口保持一致：短抖动仍可自愈，持续容量故障不再静默干等 6–8 分钟。
+ */
+const CODEX_CAPACITY_STALL_TIMEOUT_MS = 30_000;
+/** 上游明确给出超过 120s 看门狗的退避时，仅留短宽限让非重试路径收口后立即转 upstream-overload。 */
+const CODEX_CAPACITY_LONG_BACKOFF_GRACE_MS = 1_500;
+const CODEX_CAPACITY_ERROR_MESSAGE = 'Selected model is at capacity. Please try a different model.';
+
+/**
  * WebSocket 重试用尽后 Codex 改走 HTTPS 时推的 `warning`。之后要先上传完整历史才有事件,
  * 慢网下可达数分钟,不再属于重连序列:清掉重连 deadline,由 Codex 自身 HTTP 超时与
  * upstream-idle 看门狗兜底。
@@ -2021,7 +2034,7 @@ export class CodexAgent extends BaseAgent {
             ...(this.deps.disableCodexPluginRuntime ? ['--disable', 'plugins', '--disable', 'remote_plugin'] : []),
             '-c', 'cli_auth_credentials_store="ephemeral"',
           ],
-          onProcessSpawned: (pid) => this.deps.registerLocalCodexAppServerProcess?.({ pid, role: 'control-plane-service' }),
+          onProcessSpawned: (pid, child) => this.deps.registerLocalCodexAppServerProcess?.({ pid, child, role: 'control-plane-service' }),
         }),
         requireEphemeralAuth: true,
         logger: this.deps.logger,
@@ -3402,8 +3415,8 @@ assertRouteCurrent();
           : extraArgs,
         // 必须把注销函数交回 transport：进程退出后登记要随之移除，
         // 退出回收（codex-tool-tree-reaper）据此认领 PID，残留登记遇 PID 复用会误杀。
-        onProcessSpawned: (pid) => this.deps.registerLocalCodexAppServerProcess?.({
-          pid,
+        onProcessSpawned: (pid, child) => this.deps.registerLocalCodexAppServerProcess?.({
+          pid, child,
           role:
             hostPurpose === 'control-plane'
               ? 'control-plane-service'
@@ -4646,6 +4659,7 @@ assertRouteCurrent();
      */
     let overloadRetry: {
       retry: (continueHistory?: boolean) => Promise<void>;
+      inputAcceptedInNativeHistory: boolean;
       /**
        * 同一 logical send 已消耗的外层重放次数，所有 provider failure policy 共享。
        * policy 切换不重置：否则 capacity 4 次 + terminal-rate-limit 2 次会把同一条
@@ -5433,7 +5447,7 @@ assertRouteCurrent();
         ...(reviewMode
           ? {
               hostPurpose: 'review' as const,
-              ...(opts.fastMode === true && this.deps.needsCodexFastCatalog?.(opts.providerId, opts.model)
+              ...(opts.fastMode && this.deps.needsCodexFastCatalog?.(opts.providerId, opts.model)
                 ? { customContextModel: opts.model, customContextProviderId: opts.providerId }
                 : {}),
             }
@@ -6264,6 +6278,14 @@ assertRouteCurrent();
       }
     };
     let registeredRootCodexThreadId: string | undefined;
+    let mcpInstanceClosed = false;
+    const closeCodexMcpInstance = (): void => {
+      if (mcpInstanceClosed) return;
+      mcpInstanceClosed = true;
+      if (!opts.sessionInstanceId) return;
+      try { this.deps.closeCodexMcpSessionInstance?.(opts.sessionInstanceId); }
+      catch (error) { log.warn('closeCodexMcpSessionInstance threw', { error: String(error) }); }
+    };
     const unregisterCodexMcpContext = (threadId: string): void => {
       if (registeredRootCodexThreadId === threadId) registeredRootCodexThreadId = undefined;
       textOnlyPolicyCleanups.get(threadId)?.();
@@ -6648,6 +6670,7 @@ assertRouteCurrent();
       resetUpstreamIdleForTurnEnd();
       unregisterCodexMcpContext(threadId);
       unregisterDescendantCodexMcpContexts();
+      closeCodexMcpInstance();
       activeToolContexts.clear();
       approvalDenials.clear();
       completedActiveToolTurns.clear();
@@ -6884,6 +6907,7 @@ assertRouteCurrent();
       } finally {
         if (registeredRootCodexThreadId) unregisterCodexMcpContext(registeredRootCodexThreadId);
         unregisterDescendantCodexMcpContexts();
+        closeCodexMcpInstance();
         releaseHostBindingLeaseIfNeeded();
         eventQueue.end();
       }
@@ -9185,6 +9209,11 @@ assertRouteCurrent();
     let reconnectStallTurnId: string | null = null;
     let reconnectStallTurnGeneration = 0;
     let reconnectStallErrorStatus: number | undefined;
+    let reconnectStallCapacitySignal: CodexUpstreamCapacitySignal | null = null;
+    let upstreamCapacityIgnoredThrough = 0;
+    let reconnectStallCapacityNoticeEmitted = false;
+    let reconnectStallTimeoutBudgetMs = CODEX_RECONNECT_STALL_TIMEOUT_MS;
+    let unsubscribeUpstreamCapacity: (() => void) | null = null;
     // Keep the reconnect status visible and the provider turn busy until the
     // bounded interrupt handshake settles; otherwise the Desktop
     // auto-resume backoff can admit a new turn while the old server turn is
@@ -9230,8 +9259,20 @@ assertRouteCurrent();
       reconnectStallTurnId = null;
       reconnectStallTurnGeneration = 0;
       reconnectStallErrorStatus = undefined;
+      reconnectStallCapacitySignal = null;
+      reconnectStallCapacityNoticeEmitted = false;
+      reconnectStallTimeoutBudgetMs = CODEX_RECONNECT_STALL_TIMEOUT_MS;
       reconnectStallRemainingMs = 0;
       reconnectStallSliceStartedAt = 0;
+    }
+
+    function consumeObservedCapacityAfterRecovery(): void {
+      if (reconnectStallCapacitySignal) {
+        upstreamCapacityIgnoredThrough = Math.max(
+          upstreamCapacityIgnoredThrough,
+          reconnectStallCapacitySignal.observedAt,
+        );
+      }
     }
     /**
      * Adopt a root turn exactly once, regardless of whether the turn/start RPC
@@ -9434,6 +9475,26 @@ assertRouteCurrent();
         const stalledThreadId = threadId;
         const stalledTurnGeneration = reconnectStallTurnGeneration;
         const allowPendingTurnStart = !isTurnInFlight;
+        const activeCapacity = reconnectStallCapacitySignal;
+        if (activeCapacity) {
+          const capacityTimeoutMs = reconnectStallTimeoutBudgetMs;
+          if (
+            !isReconnectStallCurrent() ||
+            threadId !== stalledThreadId ||
+            reconnectStallTurnGeneration !== stalledTurnGeneration
+          ) return;
+          interruptTurnForProviderFailure({
+            reason: UPSTREAM_OVERLOAD_REASON,
+            codexErrorInfo: 'serverOverloaded',
+            timeoutMs: capacityTimeoutMs,
+            ignorePendingTools: true,
+            allowPendingTurnStart,
+            logLabel: 'codex capacity retry watchdog tripped — interrupting stalled turn',
+            message: CODEX_CAPACITY_ERROR_MESSAGE,
+            errorStatus: activeCapacity.status ?? reconnectStallErrorStatus,
+          });
+          return;
+        }
         const stalledMessage =
           `The model connection has been retrying for ${Math.round(CODEX_RECONNECT_STALL_TIMEOUT_MS / 1000)}s ` +
           'without making progress; the turn was interrupted automatically. ' +
@@ -9461,7 +9522,16 @@ assertRouteCurrent();
       (reconnectStallTimer as unknown as { unref?: () => void }).unref?.();
     }
 
-    function armReconnectStall(turnId = currentTurnId): void {
+    function capacityStallTimeoutFor(signal: CodexUpstreamCapacitySignal): number {
+      return signal.retryAfterMs !== undefined && signal.retryAfterMs > CODEX_RECONNECT_STALL_TIMEOUT_MS
+        ? CODEX_CAPACITY_LONG_BACKOFF_GRACE_MS
+        : CODEX_CAPACITY_STALL_TIMEOUT_MS;
+    }
+
+    function armReconnectStall(
+      turnId = currentTurnId,
+      timeoutMs = CODEX_RECONNECT_STALL_TIMEOUT_MS,
+    ): void {
       if (
         closed ||
         reconnectStallCleanupTurnId !== null ||
@@ -9469,17 +9539,67 @@ assertRouteCurrent();
         !turnId ||
         compactingTurnIds.has(turnId)
       ) return;
-      // 同一 turn 的后续 `2/5`、`3/5` 只更新 UI，不重置整个重连序列的 deadline。
-      if (reconnectStallTimer || reconnectStallRemainingMs > 0) return;
+      if (reconnectStallTimer || reconnectStallRemainingMs > 0) {
+        // 同一 turn 的后续 `2/5`、`3/5` 只更新 UI，不延长既定 deadline；但从普通 120s
+        // 重连收紧到容量过载（30s 或长退避快速失败）时允许缩短剩余等待时间。
+        if (timeoutMs >= reconnectStallTimeoutBudgetMs) return;
+        const liveRemaining =
+          captureWatchdogRemainingMs(
+            reconnectStallTimer,
+            reconnectStallRemainingMs,
+            reconnectStallSliceStartedAt,
+          ) ?? reconnectStallRemainingMs;
+        if (reconnectStallTimer) {
+          clearTimeout(reconnectStallTimer);
+          reconnectStallTimer = null;
+        }
+        reconnectStallTimeoutBudgetMs = timeoutMs;
+        reconnectStallRemainingMs = Math.max(1, Math.min(liveRemaining, timeoutMs));
+        armReconnectStallSlice();
+        return;
+      }
       reconnectStallTurnId = turnId;
       reconnectStallTurnGeneration = turnStartGeneration;
-      reconnectStallRemainingMs = CODEX_RECONNECT_STALL_TIMEOUT_MS;
+      reconnectStallTimeoutBudgetMs = timeoutMs;
+      reconnectStallRemainingMs = timeoutMs;
       armReconnectStallSlice();
+    }
+
+    function handleObservedUpstreamCapacity(
+      signal: CodexUpstreamCapacitySignal,
+      opts: { turnId?: string | null; emitNotice?: boolean } = {},
+    ): void {
+      if (closed || reconnectStallCleanupTurnId !== null) return;
+      const targetTurnId = opts.turnId || currentTurnId || (isTurnStartPending ? reconnectStallTurnId : null);
+      if (!targetTurnId || (!isTurnInFlight && !isTurnStartPending) || compactingTurnIds.has(targetTurnId)) return;
+      if (!opts.turnId && pendingToolItemIds.size > 0) return;
+      reconnectStallCapacitySignal = signal;
+      if (signal.status === 502 || signal.status === 503 || signal.status === 504) {
+        reconnectStallErrorStatus = signal.status;
+      }
+      armReconnectStall(targetTurnId, capacityStallTimeoutFor(signal));
+      if (opts.emitNotice !== false && !reconnectStallCapacityNoticeEmitted) {
+        reconnectStallCapacityNoticeEmitted = true;
+        eventQueue.push({
+          type: 'error',
+          data: {
+            reason: UPSTREAM_OVERLOAD_REASON,
+            codexErrorInfo: 'serverOverloaded',
+            ...(signal.status !== undefined ? { errorStatus: signal.status } : {}),
+            message: CODEX_CAPACITY_ERROR_MESSAGE,
+            isTerminal: false,
+            willRetry: true,
+          },
+          source: 'codex',
+        });
+      }
     }
     function restoreReconnectStall(
       turnId: string,
       turnGeneration: number,
       remainingMs: number,
+      capacitySignal: CodexUpstreamCapacitySignal | null = null,
+      timeoutBudgetMs = CODEX_RECONNECT_STALL_TIMEOUT_MS,
     ): void {
       if (reconnectStallTimer || reconnectStallRemainingMs > 0) return;
       if (
@@ -9492,9 +9612,11 @@ assertRouteCurrent();
       ) return;
       reconnectStallTurnId = turnId;
       reconnectStallTurnGeneration = turnGeneration;
+      reconnectStallCapacitySignal = capacitySignal;
+      reconnectStallTimeoutBudgetMs = timeoutBudgetMs;
       reconnectStallRemainingMs = Math.max(
         1,
-        Math.min(remainingMs, CODEX_RECONNECT_STALL_TIMEOUT_MS),
+        Math.min(remainingMs, timeoutBudgetMs),
       );
       armReconnectStallSlice();
     }
@@ -9526,7 +9648,14 @@ assertRouteCurrent();
     }
 
     function observeReconnectStallEvent(event: AgentEvent): void {
-      const data = event.data as { message?: unknown; isTerminal?: unknown; willRetry?: unknown; errorStatus?: unknown } | null | undefined;
+      const data = event.data as {
+        message?: unknown;
+        isTerminal?: unknown;
+        willRetry?: unknown;
+        errorStatus?: unknown;
+        reason?: unknown;
+        codexErrorInfo?: unknown;
+      } | null | undefined;
       const message = typeof data?.message === 'string' ? data.message : null;
       const isReconnectNotice =
         event.type === 'error' &&
@@ -9535,7 +9664,21 @@ assertRouteCurrent();
         message !== null &&
         parseReconnectAttemptMessage(message) !== null;
       if (isReconnectNotice) {
-        armReconnectStall();
+        const isCapacityNotice =
+          data?.reason === UPSTREAM_OVERLOAD_REASON || data?.codexErrorInfo === 'serverOverloaded';
+        if (isCapacityNotice && !reconnectStallCapacitySignal) {
+          reconnectStallCapacitySignal = {
+            code: 'server_is_overloaded',
+            ...(typeof data?.errorStatus === 'number' ? { status: data.errorStatus } : {}),
+            observedAt: Date.now(),
+          };
+        }
+        armReconnectStall(
+          currentTurnId,
+          reconnectStallCapacitySignal
+            ? capacityStallTimeoutFor(reconnectStallCapacitySignal)
+            : CODEX_RECONNECT_STALL_TIMEOUT_MS,
+        );
         // The queue probe sees only accepted root-turn events. Keep the latest
         // known gateway status within this retry episode; progress clears it.
         if (reconnectStallTurnId && (data?.errorStatus === 502 || data?.errorStatus === 503 || data?.errorStatus === 504)) {
@@ -9544,6 +9687,7 @@ assertRouteCurrent();
         return;
       }
       if (isReconnectRecoveryEvent(event)) {
+        consumeObservedCapacityAfterRecovery();
         clearReconnectStall();
         // Descendant/background events are filtered by the queue probe. Real
         // root-turn progress starts a new retry episode within the same turn.
@@ -9556,6 +9700,7 @@ assertRouteCurrent();
      */
     function interruptTurnForProviderFailure(opts?: {
       reason?: string;
+      codexErrorInfo?: string;
       timeoutMs?: number;
       message?: string;
       logLabel?: string;
@@ -9577,8 +9722,9 @@ assertRouteCurrent();
       const turnId = currentTurnId ?? pendingTurnId;
       const timeoutReason = opts?.reason ?? 'upstream_response_idle_timeout';
       const isModelRejection = opts?.modelRejectionError !== undefined;
+      const isCapacityStall = timeoutReason === UPSTREAM_OVERLOAD_REASON;
       const deferTurnCleanupUntilInterrupt =
-        isModelRejection || timeoutReason === 'codex_reconnect_stalled' ||
+        isModelRejection || isCapacityStall || timeoutReason === 'codex_reconnect_stalled' ||
         timeoutReason === 'upstream_response_idle_timeout';
       if (deferTurnCleanupUntilInterrupt && !pendingTurnId && turnId) {
         // Keep Session.isTurnRunning() true until the interrupt ACK (or the
@@ -9602,19 +9748,21 @@ assertRouteCurrent();
         // message 仅作非 renderer 消费方(IM / orca / 日志)的英文兜底。
         reason: timeoutReason,
         ...(opts?.errorStatus !== undefined ? { errorStatus: opts.errorStatus } : {}),
+        ...(opts?.codexErrorInfo ? { codexErrorInfo: opts.codexErrorInfo } : {}),
         message: opts?.message ??
           (`The upstream response has been silent for ${Math.round(idleMs / 1000)}s; ` +
             'the turn was interrupted automatically to avoid hanging forever. ' +
             'You can send the next message to continue.'),
         isTerminal: true,
         ...(isModelRejection ? { willRetry: false } : {
+          ...(isCapacityStall ? { willRetry: false } : {}),
           idleMs, lastEventType: upstreamIdleLastEventType, msSinceLastEvent: msSinceLast,
         }),
       };
       // Publish the failure only after interrupt settles: a late successful
       // completion must win, and recovery must not race the still-running turn.
       const deferTimeoutError =
-        (isModelRejection || timeoutReason === 'codex_reconnect_stalled') &&
+        (isModelRejection || isCapacityStall || timeoutReason === 'codex_reconnect_stalled') &&
         !pendingTurnId && !!turnId;
       const interruptedSend = overloadRetry;
       let timeoutEmitted = false;
@@ -9856,6 +10004,16 @@ assertRouteCurrent();
       if (!accepted) releaseYieldContinuationEvent(ev);
       return accepted;
     };
+
+    if (!opts.remoteHostId && sid && this.deps.subscribeCodexUpstreamCapacity) {
+      unsubscribeUpstreamCapacity = this.deps.subscribeCodexUpstreamCapacity(
+        sid,
+        ({ threadId: eventThreadId, signal }) => {
+          if (eventThreadId !== threadId) return;
+          handleObservedUpstreamCapacity(signal);
+        },
+      );
+    }
 
     // ── ServerRequest handlers (Phase 2 approval, Phase 5 dismiss-on-mode-change) ──
     const commandExecutionApproval = async (
@@ -10933,7 +11091,7 @@ assertRouteCurrent();
       publishedLiveRate = Boolean(usage.tokenSpeed?.streaming && usage.tokenSpeed.rate > 0);
       eventQueue.push({
         type: 'status',
-        data: { status: text, ...usage, isRunning: true },
+        data: { status: text, ...usage, isRunning: true, ...(manualCompact ? { manualCompact: true } : {}) },
         source: 'codex',
       });
     }
@@ -12681,7 +12839,11 @@ assertRouteCurrent();
       state.timer = setTimeout(() => {
         state.timer = null;
         if (closed || overloadRetry !== state) return;
-        void state.retry(continueSummaryHistory).catch((error) => {
+        // Codex has already committed this input to the thread. Starting the
+        // next turn with the same input would append it to the model history again.
+        const continueHistory = continueSummaryHistory
+          || (policy.kind === 'terminal-rate-limit' && state.inputAcceptedInNativeHistory);
+        void state.retry(continueHistory).catch((error) => {
           // 取消之后 RPC 才 reject：Stop / close / 新 send 都已经各自收口过这一轮
           // （abort 与新 send 会把 overloadRetry 置 null，close 会置 closed）。
           // 此时再报一次 terminal error + Done 会让 UI 二次收口，并把用户主动停止
@@ -13447,6 +13609,10 @@ assertRouteCurrent();
           return;
         }
         if (collabTerminalKey) handledCollabTerminalItemIds.add(collabTerminalKey);
+        if (params.item.type === 'userMessage' && params.turnId === currentTurnId && overloadRetry
+          && turnOriginByTurnId.get(params.turnId)?.sendGen === overloadRetry.sendGen) {
+          overloadRetry.inputAcceptedInNativeHistory = true;
+        }
         if (params.item.type === 'contextCompaction') {
           compactingTurnIds.delete(params.turnId);
           if (ownsManualCompact(params.turnId)) manualCompact!.boundarySeen = true;
@@ -13823,10 +13989,43 @@ assertRouteCurrent();
           targetsCurrentTurn &&
           parseReconnectAttemptMessage(params.error?.message ?? '') !== null
         ) {
-          // error notification 可能抢在 turnStarted / turn/start response 前到达；这里
-          // 先按 params.turnId 绑定 deadline，turnStarted 随后会把 generation 重新绑定
-          // 到已接受的 turn，不让这类乱序事件漏掉静默重连卡死。
-          armReconnectStall(params.turnId || currentTurnId);
+          const reconnectTurnId = params.turnId || currentTurnId;
+          const turnStartedAt = reconnectTurnId ? turnOriginByTurnId.get(reconnectTurnId)?.startedAtMs ?? 0 : 0;
+          const observedCapacity =
+            reconnectStallCapacitySignal
+            ?? (!opts.remoteHostId && sid
+              ? (() => {
+                const latest = this.deps.getObservedCodexUpstreamCapacity?.(sid, threadId);
+                return latest && latest.observedAt >= turnStartedAt - 5_000
+                  && latest.observedAt > upstreamCapacityIgnoredThrough ? latest : null;
+              })()
+              : null)
+            ?? (parseOverloadError(
+              params.error?.message ?? '',
+              undefined,
+              codexErrorInfoTag(params.error?.codexErrorInfo),
+            )?.kind === 'capacity'
+              ? { code: 'server_is_overloaded' as const, observedAt: Date.now() }
+              : null);
+          if (observedCapacity) {
+            reconnectStallCapacityNoticeEmitted = true;
+            handleObservedUpstreamCapacity(observedCapacity, {
+              turnId: reconnectTurnId,
+              emitNotice: false,
+            });
+            effectiveParams = {
+              ...effectiveParams,
+              error: {
+                ...effectiveParams.error,
+                codexErrorInfo: 'serverOverloaded',
+              },
+            };
+          } else {
+            // error notification 可能抢在 turnStarted / turn/start response 前到达；这里
+            // 先按 params.turnId 绑定 deadline，turnStarted 随后会把 generation 重新绑定
+            // 到已接受的 turn，不让这类乱序事件漏掉静默重连卡死。
+            armReconnectStall(reconnectTurnId);
+          }
         }
         if (isTerminalError && isTransportError && !targetsCurrentTurn) {
           translateErrorNotification(effectiveParams, eventQueue, { rt: translatorRt, log });
@@ -13860,9 +14059,14 @@ assertRouteCurrent();
           const isCompactionReconnect =
             compactingTurnIds.has(params.turnId || currentTurnId || '') &&
             parseReconnectAttemptMessage(rawMessage) !== null;
-          // The upstream-idle watchdog bounds native compaction. A later
-          // reconnect notice must not reintroduce the short retry deadline.
-          if (!isAuthRelatedErrorMessage(rawMessage) && !isRateLimitBackoff && !isCompactionReconnect) {
+          // The upstream-idle watchdog bounds native compaction, and the capacity
+          // watchdog bounds proxy/server-confirmed model-at-capacity retries.
+          if (
+            !isAuthRelatedErrorMessage(rawMessage)
+            && !isRateLimitBackoff
+            && !isCompactionReconnect
+            && !reconnectStallCapacitySignal
+          ) {
             const decision = turnRetryTracker.track(
               params.turnId || currentTurnId || '(pending)',
               Date.now(),
@@ -14061,9 +14265,12 @@ assertRouteCurrent();
       translatorRt.samplingSegments.clear();
       resetCodexGenerationTiming(translatorRt);
       clearReconnectStall();
+      try { unsubscribeUpstreamCapacity?.(); } catch { /* ignore */ }
+      unsubscribeUpstreamCapacity = null;
       resetUpstreamIdleForTurnEnd();
       unregisterCodexMcpContext(threadId);
       unregisterDescendantCodexMcpContexts();
+      closeCodexMcpInstance();
       activeToolContexts.clear();
       approvalDenials.clear();
       completedActiveToolTurns.clear();
@@ -14577,6 +14784,7 @@ assertRouteCurrent();
         let continueNativeHistory = false;
         overloadRetry = {
           attempt: 0,
+          inputAcceptedInNativeHistory: false,
           automaticRecoveryAttempted: false,
           pendingAutomaticRecovery: null,
           timer: null,
@@ -15133,6 +15341,8 @@ assertRouteCurrent();
           : null;
         const reconnectGenerationAtStop = reconnectStallTurnGeneration;
         const reconnectErrorStatusAtStop = reconnectStallErrorStatus;
+        const reconnectCapacitySignalAtStop = reconnectStallCapacitySignal;
+        const reconnectTimeoutBudgetAtStop = reconnectStallTimeoutBudgetMs;
         let watchdogActivityVersionAtStop = 0;
         let watchdogsRestored = false;
         const restoreWatchdogsIfStillRunning = (): void => {
@@ -15160,6 +15370,8 @@ assertRouteCurrent();
               turnId,
               reconnectGenerationAtStop,
               reconnectRemainingAtStop,
+              reconnectCapacitySignalAtStop,
+              reconnectTimeoutBudgetAtStop,
             );
             if (reconnectStallTurnId === turnId) reconnectStallErrorStatus = reconnectErrorStatusAtStop;
           }
@@ -15807,7 +16019,11 @@ assertRouteCurrent();
           };
         });
         const operation = manualCompact;
-        eventQueue.push({ type: 'status', data: { status: 'Compacting context…', ...usageTracker.snapshot(), isRunning: true }, source: 'codex' });
+        eventQueue.push({
+          type: 'status',
+          data: { status: 'Compacting context…', ...usageTracker.snapshot(), isRunning: true, manualCompact: true },
+          source: 'codex',
+        });
         void host.request(Method.ThreadCompactStart, { threadId }).catch((error: unknown) => {
           if (manualCompact !== operation) return; // A native terminal may precede the ACK.
           // Admission may have timed out after the server accepted it. Unsubscribe

@@ -2411,10 +2411,12 @@ export function ProviderConnectionDialog({
             {t('settings.providers.custom.fields.runtimeSupportsImageGenerationEndpoints')}
           </p>
           <div className="flex flex-col items-start gap-1.5">
-            <code className="max-w-full break-all rounded-md bg-[var(--surface-chip)] px-2 py-1 font-mono text-11 leading-4 text-[var(--text-primary)]">
+            {/* design: intrinsic-geometry — 行内代码，与 Markdown 行内代码同为 6px（DESIGN.md §5 内容排版） */}
+            <code className="max-w-full break-all rounded-[6px] bg-[var(--surface-chip)] px-2 py-1 font-mono text-11 leading-4 text-[var(--text-primary)]">
               /images/generations
             </code>
-            <code className="max-w-full break-all rounded-md bg-[var(--surface-chip)] px-2 py-1 font-mono text-11 leading-4 text-[var(--text-primary)]">
+            {/* design: intrinsic-geometry — 行内代码，与 Markdown 行内代码同为 6px（DESIGN.md §5 内容排版） */}
+            <code className="max-w-full break-all rounded-[6px] bg-[var(--surface-chip)] px-2 py-1 font-mono text-11 leading-4 text-[var(--text-primary)]">
               /images/edits
             </code>
           </div>

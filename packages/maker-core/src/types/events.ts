@@ -569,6 +569,8 @@ export interface ForkSdkSessionOptions {
   [NATIVE_SUBSCRIPTION_ACCOUNT]?: NativeSubscriptionAccount;
   /** Host-resolved shared-provider storage. Never accepted directly from a remote caller. */
   hostedGuestHome?: string;
+  /** Execution-owner grant for hosted history. Attached after checking the request, never on the wire. */
+  hostedForkAccess?: { ownComputer: boolean; assertCurrent(): void };
   /** 源 session 的 SDK sessionId (从 sessions.sdk_session_id 取)。 */
   sourceSdkSessionId: string;
   /**

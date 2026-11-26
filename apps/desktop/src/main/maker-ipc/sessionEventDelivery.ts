@@ -151,8 +151,10 @@ export function deliverSessionEvent(
     });
   } else {
     const payload = { sessionId: session.id, event: broadcastEvent, persistId, resolvedContent };
-    if ((event.type === 'tool_use' || event.type === 'text') && event.source === 'claude-code' && !session.remoteHostId &&
-        event[CLAUDE_EXPLICIT_ROOT_BOUNDARY] === true) {
+    const sdkRoot = (event.type === 'tool_use' || event.type === 'text') &&
+      event.source === 'claude-code' && !session.remoteHostId &&
+      event[CLAUDE_EXPLICIT_ROOT_BOUNDARY] === true;
+    if (sdkRoot || stream.deviceHostedRootDelta) {
       deps.broadcastToAllWindows(MAKER_PUSH.EVENT, payload, undefined, {
         ...payload,
         event: { ...broadcastEvent, agentMeta: { ...broadcastEvent.agentMeta, parentUuid: null } },

@@ -768,6 +768,7 @@ describe('event types the desktop pipeline acts on, classified for the Host', ()
     },
     image: { host: 'turn-executor.mjs deliverCodexGeneratedImage (agent/generated-images.ts over the shared generatedImageDelivery.ts)' },
     interaction_dismissed: { host: 'turn-executor.mjs handleInteractionDismissedEvent (sessionEventPreparationSteps.ts, shared), in or out of a turn' },
+    interaction_request: { host: 'interactions.mjs scoped pending interaction and push' },
     plan_mode_changed: { host: 'turn-executor.mjs persistAgentPlanModeChange (shared persistAgentPlanModeChangeWith)' },
     status: {
       host: 'turn-executor.mjs context snapshot (shared), background activity',
@@ -775,8 +776,11 @@ describe('event types the desktop pipeline acts on, classified for the Host', ()
     },
     text: {
       host: 'history.event (sessionEventStreamCore, shared); turn-executor.mjs routeStandaloneTextEvent (sessionEventPreparationSteps.ts, shared)',
-      platform: 'sessionEventDelivery.ts projects confirmed Claude root text ownership for local Electron windows only',
+      platform: 'sessionEventDelivery.ts projects the Claude root text assembly lane for local Electron windows only',
     },
+    thinking: { host: 'history.event (sessionEventStreamCore, shared)' },
+    tool_result: { host: 'history.event (sessionEventStreamCore, shared)' },
+    tool_result_full: { host: 'history.event (sessionEventStreamCore, shared)' },
     tool_use: {
       host: 'history.event (sessionEventStreamCore, shared); turn-executor.mjs publishes the redacted tool event',
       platform: 'sessionEventDelivery.ts projects confirmed Claude root ownership for local Electron windows only',

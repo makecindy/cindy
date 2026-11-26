@@ -437,7 +437,7 @@ export function PinnedSection({
                 aria-label={toggleLabel}
                 aria-expanded={!collapsed}
                 className={cn(
-                  'flex h-5 w-5 shrink-0 items-center justify-center rounded-md',
+                  'flex h-5 w-5 shrink-0 items-center justify-center rounded-lg',
                   // 无灰底 hover(2026-07 用户定稿):纯色加深反馈,与段标题一致。
                   'text-[var(--sidebar-list-muted)]',
                   'transition-colors hover:text-[var(--sidebar-nav-text)]',
@@ -457,7 +457,7 @@ export function PinnedSection({
                 type="button"
                 aria-label={t('ccAgent.sidebar.viewStyle')}
                 className={cn(
-                  'flex h-5 w-5 shrink-0 items-center justify-center rounded-md',
+                  'flex h-5 w-5 shrink-0 items-center justify-center rounded-lg',
                   'text-[var(--sidebar-list-muted)]',
                   'transition-colors hover:text-[var(--sidebar-nav-text)]',
                 )}

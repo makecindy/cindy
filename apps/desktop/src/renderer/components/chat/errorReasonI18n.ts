@@ -62,11 +62,20 @@ export const ERROR_REASON_I18N_KEYS: Record<string, string> = {
 
 /** Also correct persisted failures from hosts that used the old overflow reason or lacked the safety reason. */
 export function errorReasonI18nKey(reason: string | null | undefined, message: string): string | undefined {
+  if (message.startsWith('provider-rejected-before-dispatch: [PI_RETRY_HISTORY_FRAME_TOO_LARGE] ')) {
+    return 'chat.errorBanner.piRetryHistoryTooLarge';
+  }
+  if (message.startsWith('provider-rejected-before-dispatch: Provider rejected the Session send before dispatch: ')) {
+    return 'chat.errorBanner.messageNotSent';
+  }
   if ((!reason || reason === 'context-overflow') && isRemoteCompactEncryptedContentError(message, reason)) {
     return 'chat.errorBanner.remoteCompactEncryptedContent';
   }
   if (isProviderSafetyRefusalError(message, reason)) {
     return 'chat.errorBanner.providerSafetyRefusal';
+  }
+  if (!reason && /^550 status code \(no body\)$/i.test(message.trim())) {
+    return 'chat.errorBanner.upstreamEmpty550';
   }
   return reason ? ERROR_REASON_I18N_KEYS[reason] : undefined;
 }

@@ -56,7 +56,13 @@ function Card({ view, now, hidden }: { view: MenubarView; now: number; hidden: b
     const timer = setTimeout(() => setLeaving(null), PAGE_SLIDE_MS);
     return () => clearTimeout(timer);
   }, [leaving, page]);
-  const measure = () => window.quotaTray.resize((inner.current?.offsetHeight ?? 0) + (header.current?.offsetHeight ?? 0) + (footer.current?.offsetHeight ?? 0));
+  // Ask for whole pixels at or above the exact content height. `offsetHeight` rounds each part to
+  // the nearest pixel, so a request could fall a fraction short: the overflow showed a scrollbar,
+  // which on Windows and Linux narrows the page, wraps a line more, asks for more, hides the
+  // scrollbar again and asks for less, so the card jumped up and down nonstop (2026-11-26). The
+  // parts have no vertical transforms (pages only slide sideways), so their boxes are their layout.
+  const measure = () => window.quotaTray.resize(Math.ceil([inner.current, header.current, footer.current]
+    .reduce((height, element) => height + (element?.getBoundingClientRect().height ?? 0), 0)));
   useLayoutEffect(() => {
     // Each page is its own element, so the observer follows the page on screen.
     const observer = new ResizeObserver(measure);

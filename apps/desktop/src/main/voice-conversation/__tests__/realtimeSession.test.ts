@@ -214,18 +214,23 @@ describe.each<RealtimeProtocol>(['openai-realtime', 'qwen-audio-realtime'])(
         content_index: 0,
         delta: Buffer.alloc(48_000).toString('base64'),
       });
-      await f.flush();
+      // Wait for the client to consume the audio before acknowledging playback.
+      await vi.waitFor(() => {
+        expect(f.events).toContainEqual({ type: 'realtime-audio', itemId: 'answer' });
+      });
       f.session.interrupt({ itemId: 'answer', playedMs: 250 });
       f.send({ type: 'response.done', response: { id: 'response', status: 'cancelled' } });
-      await f.flush();
       expect((await f.session.read('answer')).pcm.byteLength).toBe(0);
-      expect(f.received).toContainEqual(
-        expect.objectContaining(
-          protocol === 'openai-realtime'
-            ? { type: 'conversation.item.truncate', item_id: 'answer', audio_end_ms: 250 }
-            : { type: 'conversation.item.delete', item_id: 'answer' },
-        ),
-      );
+      // Qwen deletes only after response.done; also wait for the return trip.
+      await vi.waitFor(() => {
+        expect(f.received).toContainEqual(
+          expect.objectContaining(
+            protocol === 'openai-realtime'
+              ? { type: 'conversation.item.truncate', item_id: 'answer', audio_end_ms: 250 }
+              : { type: 'conversation.item.delete', item_id: 'answer' },
+          ),
+        );
+      });
     });
 
     it('keeps question answers out of task handoff and drops all output after ownership changes', async () => {
@@ -279,19 +284,22 @@ describe.each<RealtimeProtocol>(['openai-realtime', 'qwen-audio-realtime'])(
       f.session.audio(new ArrayBuffer(32_000));
       f.session.setMuted(true);
       f.session.setMuted(false);
-      await f.flush();
+      const appendedAudio = await vi.waitFor(() => {
+        const appends = f.received.filter(e => e.type === 'input_audio_buffer.append');
+        expect(appends).toHaveLength(2);
+        return appends;
+      });
 
       // A provider reports the start of its buffered prefix, not the first voiced sample.
       const bytesPerMs = protocol === 'openai-realtime' ? 48 : 32;
-      const resumedAt = f.received.filter(e => e.type === 'input_audio_buffer.append')
+      const resumedAt = appendedAudio
         .reduce((ms, e) => ms + Buffer.from(e.audio, 'base64').length / bytesPerMs, 0);
       f.session.audio(new ArrayBuffer(640));
       for (const [id, start] of [['late', 100], ['fresh', resumedAt - 300]] as const) {
         f.send({ type: 'input_audio_buffer.speech_started', item_id: id, audio_start_ms: start });
         f.send({ type: 'conversation.item.input_audio_transcription.completed', item_id: id, transcript: id });
       }
-      await f.flush();
-      expect(f.turns).toEqual([['fresh', 'user', 'fresh']]);
+      await vi.waitFor(() => expect(f.turns).toEqual([['fresh', 'user', 'fresh']]));
     });
 
     it('suppresses a muted unfinished utterance and its automatic response after unmute', async () => {

@@ -40,10 +40,11 @@ export function persistSessionStreamEventCore(
   } = deps.persistence;
   const { broadcastSubagentRunsChanged } = deps;
   const { event, eventAgentMeta } = prepared;
-  const localClaude = event.source === 'claude-code' && !session.remoteHostId;
+  const routeClaudeByParent = event.source === 'claude-code' && !session.remoteHostId;
   let persistId: string | undefined;
   let resolvedContent: string | undefined;
   let persistedOnly = false;
+  let deviceHostedRootDelta = false;
   if (
     event.source === 'codex' &&
     event.turnScope !== 'background' &&
@@ -97,9 +98,13 @@ export function persistSessionStreamEventCore(
     const textMeta = pluginProgress
       ? { ...eventAgentMeta, pluginProgressInputId: progressInput }
       : eventAgentMeta;
-    persistId = localClaude
+    persistId = routeClaudeByParent
       ? onAssistantTextEvent(session.id, td, textMeta, event.turnScope, true)
       : onAssistantTextEvent(session.id, td, textMeta, event.turnScope);
+    // Device-hosted events lose SDK symbols in JSON. The writer still knows
+    // which buffer it chose for this ordinary delta and can project that lane.
+    deviceHostedRootDelta = Boolean(routeClaudeByParent && session.agentDeviceId &&
+      persistId && td?.isFinal === false && td.isFullText !== true && !textMeta?.parentUuid);
     // Codex commentary carries a complete item snapshot. Keep Claude's block
     // confirmations buffered until tool_use so later blocks cannot be written twice.
     // A late Codex snapshot must not flush a newer streaming answer.
@@ -129,7 +134,7 @@ export function persistSessionStreamEventCore(
     const acpTool = session.agentKind === 'acp';
     persistedOnly = acpTool && data.acpInputPatch === true;
     if (!persistedOnly && event.turnScope !== 'background') {
-      if (localClaude) {
+      if (routeClaudeByParent) {
         flushAssistantBlock(session.id, eventAgentMeta, eventAgentMeta?.parentUuid ?? null);
       } else {
         flushAssistantBlock(session.id, eventAgentMeta);
@@ -229,7 +234,8 @@ export function persistSessionStreamEventCore(
         });
       });
   }
-  return { persistId, resolvedContent, ...(persistedOnly ? { persistedOnly: true } : {}) };
+  return { persistId, resolvedContent, ...(persistedOnly ? { persistedOnly: true } : {}),
+    ...(deviceHostedRootDelta ? { deviceHostedRootDelta: true } : {}) };
 }
 
 export type SessionStreamResult = ReturnType<typeof persistSessionStreamEventCore>;

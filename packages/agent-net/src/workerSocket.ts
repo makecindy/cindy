@@ -30,6 +30,8 @@ export type AgentNetAppSocket = Pick<import('./socket.js').AgentNetSocket,
     lastKnownCertificateFor?(id: string): DeviceCertificate | undefined;
     /** This computer changed networks (see AgentNetWorkerSocket.networkChanged). */
     networkChanged?(): void;
+    /** Updates STUN servers on the running transport (e.g. peer official region STUN). */
+    setStunServers?(servers: readonly string[]): void;
     /** A relay connection of this socket is open now (see AgentNetWorkerSocket.relayConnected; event `relay`). */
     relayConnected?(): boolean;
     /** The last round trip to the relay, in ms (see AgentNetWorkerSocket.relayRttMs). */
@@ -182,8 +184,8 @@ export class AgentNetWorkerSocket extends EventEmitter implements AgentNetAppSoc
       socket.worker.once('exit', () => { finish(new Error('AGENT_NET_WORKER_EXITED')); socket.dispose(1006); });
     });
     const { onDirectory: _directory, onDelegationRequests: _requests, onDelegations: _grants, onPathChanged: _path, onRelayReplaced, tap: _tap, client: _client, workerFile: _file, assertCurrent: _guard,
-      log: _log, uplinkKeepalive: _keepalive, uplinkMaxQueueDelayMs: _queueDelay, networkChangeProbeMs: _probe, pathMoveLogIntervalMs: _moveLog,
-      relayStuckMs: _stuck, onRelayClosed: _relayClosed, observeUdpTraffic, ...portable } = options;
+      log: _log, onLog: _onLog, uplinkKeepalive: _keepalive, uplinkMaxQueueDelayMs: _queueDelay, networkChangeProbeMs: _probe, pathMoveLogIntervalMs: _moveLog,
+      relayStuckMs: _stuck, onRelayClosed: _relayClosed, observeUdpTraffic, native, ...portable } = options;
     if (observeUdpTraffic) {
       // Only two integers cross the thread boundary. Sampling doesn't copy packets or post per-datagram messages.
       const bytes = new BigUint64Array(new SharedArrayBuffer(2 * BigUint64Array.BYTES_PER_ELEMENT));
@@ -191,8 +193,11 @@ export class AgentNetWorkerSocket extends EventEmitter implements AgentNetAppSoc
       const stop = observeUdpTraffic(() => ({ sent: Number(Atomics.load(bytes, 0)), received: Number(Atomics.load(bytes, 1)) }));
       socket.worker.once('exit', stop);
     }
+    // The worker loads the native engine itself (socket.ts `native`); only the module's path crosses, and it reports which
+    // engine it runs on (`engine`).
     socket.worker.postMessage({ type: 'init', options: portable, client: workerClient(options.client), tap: !!options.tap,
-      reportRelayReplacements: !!onRelayReplaced });
+      reportRelayReplacements: !!onRelayReplaced,
+      nativeBinding: typeof native?.binding === 'string' ? native.binding : undefined });
     try { await ready; socket.watchRelayRestart(); setImmediate(() => { if (!socket.closed) socket.emit('open'); }); return socket; }
     catch (error) { socket.dispose(1006); throw error; }
   }
@@ -212,6 +217,11 @@ export class AgentNetWorkerSocket extends EventEmitter implements AgentNetAppSoc
     if (this.closed) return;
     for (const ws of this.network.values()) this.probeRelayConnection(ws, 'a network change');
     this.worker.postMessage({ type: 'network-changed' });
+  }
+  /** Updates STUN servers on the running transport (e.g. when a peer official region's STUN resolves asynchronously). */
+  setStunServers(servers: readonly string[]): void {
+    if (this.closed) return;
+    this.worker.postMessage({ type: 'set-stun-servers', servers: [...servers] });
   }
   /** Session requests to a relayed peer timed out: let the transport judge whether relay UDP carries data (relayUdp.ts). */
   relayStalled(): void {
@@ -260,14 +270,28 @@ export class AgentNetWorkerSocket extends EventEmitter implements AgentNetAppSoc
     if (via === this.relayVia) return;
     this.relayVia = via;
     const suspension = via === 'websocket' ? reported?.udpSuspension : undefined;
-    const cause = suspension?.reason === 'data-silence' ? 'carried no data back'
-      : suspension?.reason === 'request-timeouts' ? 'session requests over it timed out'
-        : suspension?.reason === 'unacked-sends' ? 'packets sent over it went unacknowledged' : null;
+    const cause = suspension?.reason === 'probe-failed' ? 'failed full-size UDP probe'
+      : suspension?.reason === 'data-silence' ? 'carried no data back'
+        : suspension?.reason === 'request-timeouts' ? 'session requests over it timed out'
+          : suspension?.reason === 'unacked-sends' ? 'packets sent over it went unacknowledged' : null;
     const why = cause && typeof suspension?.cooldownMs === 'number'
       ? ` (relay UDP answered registrations but ${cause}; retrying UDP in ${Math.round(suspension.cooldownMs / 1000)}s)`
       : '';
     this.options.log?.info(`agent-net relayed datagrams now go over the relay ${via === 'udp' ? 'UDP port' : 'WebSocket'}${why}`);
     this.emit('relay-route', via);
+  }
+  /** The engine the worker's transport runs on, as it reported it: `native` (Rust, its own thread) or `wasm`. */
+  private engine: 'native' | 'wasm' | null = null;
+  engineInUse(): 'native' | 'wasm' | null { return this.engine; }
+  private noteEngine(engine: unknown, code: unknown): void {
+    if (engine !== 'native' && engine !== 'wasm') return;
+    this.engine = engine;
+    const reason = typeof code === 'string' && /^[A-Z0-9_]{1,80}$/.test(code) ? code : null;
+    if (engine === 'native') this.options.log?.info('agent-net transport runs on the native engine');
+    else if (reason) {
+      this.options.log?.warn(`agent-net native engine unavailable (${reason}); the transport runs on WASM`);
+      this.options.native?.onFallback?.(reason);
+    }
   }
   private readonly pingSentAt = new WeakMap<WebSocket, number>();
   private pingRelay(ws: WebSocket): void {
@@ -466,7 +490,13 @@ export class AgentNetWorkerSocket extends EventEmitter implements AgentNetAppSoc
     if (message.type === 'buffered') { this.setRemoteQueued(message.queued); return; }
     if (message.type === 'path') { this.logPath(message.id, message.path); this.options.onPathChanged?.(message.id, message.path); return; }
     if (message.type === 'frame-in') { this.emit('message', { toString: () => message.frame }); return; }
+    if (message.type === 'log' && typeof message.message === 'string') {
+      if (message.level === 'warn') this.options.log?.warn(message.message);
+      else if (message.level === 'info') this.options.log?.info(message.message);
+      return;
+    }
     if (message.type === 'tap') { this.options.tap?.(message.data, message.via); return; }
+    if (message.type === 'engine') { this.noteEngine(message.engine, message.code); return; }
     if (message.type === 'ws-open') {
       this.relayAttemptAt = performance.now();
       const expected = this.client.base.replace(/^http/, 'ws') + this.client.path('/ws');
