@@ -4960,6 +4960,12 @@
         "hint": "Envoie un message privé via le bot Feishu ou Lark associé ; uniquement lorsque la fenêtre n'est pas au premier plan.",
         "disabledHint": "Configurez d'abord le bot et envoyez-lui un message privé une fois pour finaliser la liaison."
       },
+      "replyFormat": {
+        "label": "Format de réponse",
+        "card": "Carte",
+        "text": "Texte brut",
+        "hint": "Le texte brut envoie toute la réponse en un seul message, sans le journal d'activité. Les cartes d'autorisation et de commande continuent de fonctionner."
+      },
       "bind": "Lier",
       "groups": {
         "title": "Conversations de groupe",

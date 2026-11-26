@@ -4904,6 +4904,12 @@
         "hint": "Sends a private message via the linked Feishu or Lark bot; only when the window is unfocused.",
         "disabledHint": "First set up the bot and DM it once to complete binding."
       },
+      "replyFormat": {
+        "label": "Reply format",
+        "card": "Card",
+        "text": "Plain text",
+        "hint": "Plain text sends the whole answer in one message without the activity log. Permission and command cards still work."
+      },
       "bind": "Bind",
       "groups": {
         "title": "Group chats",

@@ -15,6 +15,7 @@ import { ImChannelSettingsCard, useImChannelSettingsSummary } from './ImChannelS
 import { ImDefaultSettingsSection } from './ImDefaultSettingsSection';
 import { FeishuBotNotificationSection } from './FeishuBotNotificationSection';
 import { FeishuGroupSettingsSection } from './FeishuGroupSettingsSection';
+import { FeishuReplyFormatSection } from './FeishuReplyFormatSection';
 
 const APP_LAUNCHER_URL: Record<FeishuBotService, string> = {
   feishu: 'https://open.feishu.cn/page/launcher?from=backend_oneclick',
@@ -82,6 +83,8 @@ export function FeishuBotSection({
       }
       notificationSettings={
         <>
+          <FeishuReplyFormatSection />
+          <div className="h-px w-full bg-[var(--border-default)]" />
           <FeishuGroupSettingsSection />
           <div className="h-px w-full bg-[var(--border-default)]" />
           <FeishuBotNotificationSection />

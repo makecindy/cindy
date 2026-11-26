@@ -273,6 +273,25 @@ describe('FeishuIM reply format', () => {
     expect(outboundMocks.sendInteractive).not.toHaveBeenCalled();
   });
 
+  it('applies a format change on the next reply without recreating the transport', async () => {
+    let format: 'card' | 'text' = 'card';
+    const im = makeIm(() => format);
+
+    const cardHandle = await im.startStreamingText('ou_owner');
+    expect(streamingMocks.start).toHaveBeenCalledTimes(1);
+
+    format = 'text';
+    const textHandle = await im.startStreamingText('ou_owner');
+    expect(streamingMocks.start).toHaveBeenCalledTimes(1);
+    await textHandle.finalize('纯文本回答');
+    expect(outboundMocks.sendText.mock.calls.map((call) => call[1])).toEqual(['纯文本回答']);
+
+    // 已经发出的卡片 handle 不受影响: 切换只作用于之后的轮次。
+    await cardHandle.finalize('卡片回答');
+    expect(outboundMocks.sendText).toHaveBeenCalledTimes(1);
+    expect(streamingMocks.start).toHaveBeenCalledTimes(1);
+  });
+
   it('keeps the card for markdown notices by default', async () => {
     const im = makeIm();
     await im.sendMarkdownText('ou_owner', '**已连接**');

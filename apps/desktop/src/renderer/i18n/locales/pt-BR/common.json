@@ -4960,6 +4960,12 @@
         "hint": "Envia uma mensagem privada pelo bot vinculado do Feishu ou Lark; apenas quando a janela está sem foco.",
         "disabledHint": "Primeiro configure o bot e envie uma mensagem privada a ele para concluir o vínculo."
       },
+      "replyFormat": {
+        "label": "Formato da resposta",
+        "card": "Cartão",
+        "text": "Texto simples",
+        "hint": "O texto simples envia a resposta inteira em uma única mensagem, sem o registro de atividade. Os cartões de permissão e comando continuam funcionando."
+      },
       "bind": "Vincular",
       "groups": {
         "title": "Conversas em grupo",

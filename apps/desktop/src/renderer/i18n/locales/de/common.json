@@ -4904,6 +4904,12 @@
         "hint": "Sendet eine private Nachricht über den verknüpften Feishu- oder Lark-Bot; nur, wenn das Fenster nicht fokussiert ist.",
         "disabledHint": "Richte zuerst den Bot ein und sende ihm einmal eine Direktnachricht, um die Verknüpfung abzuschließen."
       },
+      "replyFormat": {
+        "label": "Antwortformat",
+        "card": "Karte",
+        "text": "Nur Text",
+        "hint": "Reiner Text sendet die ganze Antwort in einer Nachricht, ohne Aktivitätsprotokoll. Berechtigungs- und Befehlskarten funktionieren weiterhin."
+      },
       "bind": "Verknüpfen",
       "groups": {
         "title": "Gruppenchats",
