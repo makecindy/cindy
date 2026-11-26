@@ -10551,6 +10551,9 @@
       },
       "partial": "No se pudieron consultar algunas computadoras en este momento, por lo que los totales pueden ser menores que los reales. Revisa el estado de cada dispositivo en la lista de dispositivos."
     },
+    "referenceValue": "Valor estimado",
+    "partialEstimate": "Parte del uso sin estimar",
+    "estimateUnavailable": "Sin estimación",
     "cacheHitTooltip": "Lectura de caché / (entrada + lectura de caché + escritura de caché): la misma fórmula que en la tarjeta del mensaje.",
     "summary": {
       "title": "Descripción general"

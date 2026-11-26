@@ -302,3 +302,17 @@ IM 轮次只有已知的读和搜索操作可以经上述条件直接放行，�
 时 fail-closed，不会无闸运行。不新增 channel、中转帧或 IPC。实现见 maker-core `agents/acp/{protocol,capabilities,session}.ts`
 与 Desktop `im/shared/turnRunner.ts`；回归见 `acp-session.test.ts`「AcpSession per-turn permission gate」与
 `channelToolPolicy.test.ts`。
+
+## ACP 每轮用量参考价
+
+ACP 连接可以在模型选择项（含分组中的具体选项）的 `_meta.cindy.referencePrice` 声明该项
+`value` 对应模型的参考价。币种 `currency` 支持 `USD`、`CNY`。可选字段
+`inputPerMtok`、`outputPerMtok`、`cacheReadPerMtok`、`cacheWritePerMtok` 分别为每百万
+非缓存输入、输出、缓存读、缓存写 token 的币种金额。零表示已知免费，省略表示未知。
+会话发送 `session/prompt` 时从该连接当前模型的唯一匹配项取价。该轮实际用到的分项都有
+有效报价时，持有任务账本的电脑记录参考估值。相同模型名的其他连接或 API 报价不参与。
+旧引擎继续上报 token，缺价的回合保留用量。旧客户端忽略额外元数据。
+
+每日小组件快照沿用版本 1 和原有三个金额槽、实际支出 `paid`。新增可选 `acpEstimate`
+（当前币种的已知 ACP 估值之和，含零）和 `acpMissingPrice`（有用量未计入估值）。
+旧读取方可以忽略两项，新读取方收到只有 ACP token 的旧快照时显示暂无估值。自建中转透明传递快照。

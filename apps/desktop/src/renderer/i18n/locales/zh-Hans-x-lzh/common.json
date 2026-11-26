@@ -10432,6 +10432,9 @@
       },
       "partial": "部分之机暂读不得最新耗用，合计或偏少。可于设备清单观各台之状。"
     },
+    "referenceValue": "估值",
+    "partialEstimate": "部分用量未估",
+    "estimateUnavailable": "暂无估值",
     "cacheHitTooltip": "缓存读取 ÷（输入 + 缓存读取 + 缓存写入），与讯卡同一计法。",
     "summary": {
       "title": "综览"

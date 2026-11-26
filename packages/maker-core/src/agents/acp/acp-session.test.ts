@@ -999,8 +999,11 @@ describe('AcpSession model and effort', () => {
 
   // #12433 (unit): an active prompt's usage belongs to its model even if the
   // endpoint changes its model option before returning the prompt result.
-  it('reports the model selected when the metered prompt was sent', async () => {
-    const agent = createFakeAgent({ configOptions });
+  it('reports the model and connection quote selected when the metered prompt was sent', async () => {
+    const usagePrice = { currency: 'USD', inputPerMtok: 2, outputPerMtok: 4 };
+    const agent = createFakeAgent({ configOptions: [{ ...configOptions[0], options: [
+      { value: 'v4-flash', name: 'Flash', _meta: { cindy: { referencePrice: usagePrice } } },
+    ] }] });
     const { session, events } = await open(agent);
     await session.send({ type: 'user', content: 'hi' });
     await vi.waitFor(() => expect(agent.prompts).toHaveLength(1));
@@ -1013,7 +1016,7 @@ describe('AcpSession model and effort', () => {
       stopReason: 'end_turn', usage: { inputTokens: 1, outputTokens: 0 },
     });
     await vi.waitFor(() => expect(events.at(-1)).toMatchObject({
-      type: 'done', data: { usageModel: 'v4-flash', usage: { inputTokens: 1 } },
+      type: 'done', data: { usageModel: 'v4-flash', usagePrice, usage: { inputTokens: 1 } },
     }));
   });
 

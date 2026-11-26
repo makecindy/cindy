@@ -62,7 +62,7 @@ it('starts at consent, retries snapshots, attributes auxiliary receipts, and iso
       ),
     );
     db.exec(`CREATE TABLE daily_model_usage(day TEXT,agent_kind TEXT,model TEXT,cost_currency TEXT,cost_amount REAL,
-      cost_is_approximate INTEGER,input_tokens INTEGER,output_tokens INTEGER,cache_read_tokens INTEGER,cache_create_tokens INTEGER,
+      acp_missing_price INTEGER, cost_is_approximate INTEGER,input_tokens INTEGER,output_tokens INTEGER,cache_read_tokens INTEGER,cache_create_tokens INTEGER,
       updated_at INTEGER, PRIMARY KEY(day,agent_kind,model,cost_currency))`);
     db.exec(`CREATE TABLE auxiliary_usage_receipts(recorded_at INTEGER,day TEXT,provider_id TEXT,model TEXT,
       input_tokens INTEGER,output_tokens INTEGER,cache_read_tokens INTEGER,cache_create_tokens INTEGER)`);

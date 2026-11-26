@@ -10476,6 +10476,9 @@
       },
       "partial": "Einige Computer konnten gerade nicht ausgelesen werden. Die Gesamtwerte sind daher möglicherweise zu niedrig. Prüfe den Status jedes Geräts in der Geräteliste."
     },
+    "referenceValue": "Referenzwert",
+    "partialEstimate": "Teilweise ohne Schätzung",
+    "estimateUnavailable": "Keine Schätzung",
     "cacheHitTooltip": "Cache-Lesen / (Eingabe + Cache-Lesen + Cache-Schreiben) — dieselbe Formel wie auf der Nachrichtenkarte.",
     "summary": {
       "title": "Übersicht"

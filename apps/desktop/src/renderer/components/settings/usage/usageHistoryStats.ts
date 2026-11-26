@@ -1,7 +1,7 @@
 /**
  * usageHistoryStats — 用量历史页的纯聚合函数 (无 DOM / 无 IPC 依赖, 便于单测)。
  *
- * 口径约定 (与 issue #2785 的裁决一致): 本页只统计 token, 不出现任何金额、账户额度或预算。
+ * 口径约定 (与 issue #2785 的裁决一致): 排行与趋势按 token 统计。ACP 模型行同时展示该连接的参考估值。
  * 因此这里的「活跃日」按**当日有 token 记录**判定, 而不是 payload 自带的 `streak`
  * —— 那个字段用 `ACTIVE_DAY_MIN_USD` 打在 `daily_spend` 上, 订阅用户恒为 0。
  *
@@ -22,6 +22,8 @@ export interface UsageDay {
 export type UsageHistoryRange = 'all' | '30d' | '7d' | 'today' | `day:${string}`;
 
 export interface ModelTokenRow {
+  estimate?: UsageHistoryModel['estimatedMoney'];
+  acpMissingPrice?: boolean;
   key: string;
   agentKind: UsageAgentKind;
   model: string;
@@ -131,6 +133,11 @@ export function filterUsageHistoryPayload(
     const cacheReadTokens = row.cacheReadTokens ?? 0;
     const cacheCreateTokens = row.cacheCreateTokens ?? 0;
     if (existing) {
+      if (row.agentKind === 'acp') {
+        if (row.acpMissingPrice || !row.acpHasEstimate) existing.acpMissingPrice = true;
+        if (row.acpHasEstimate) existing.estimatedMoney = { ...row.subscriptionEstimateMoney,
+          amount: (existing.estimatedMoney?.amount ?? 0) + row.subscriptionEstimateMoney.amount };
+      }
       existing.inputTokens += inputTokens;
       existing.outputTokens += outputTokens;
       existing.cacheReadTokens += cacheReadTokens;
@@ -141,8 +148,9 @@ export function filterUsageHistoryPayload(
       agentKind: row.agentKind,
       model: row.model,
       money: row.money,
+      ...(row.agentKind === 'acp' ? { acpMissingPrice: row.acpMissingPrice || !row.acpHasEstimate } : {}),
       estimatedMoney:
-        row.subscriptionEstimateMoney.amount > 0 ? row.subscriptionEstimateMoney : null,
+        row.acpHasEstimate || row.subscriptionEstimateMoney.amount > 0 ? row.subscriptionEstimateMoney : null,
       inputTokens,
       outputTokens,
       cacheReadTokens,
@@ -244,7 +252,7 @@ export function computeTokenStreak(
  * API 与订阅两个计费维度带着 `#billing=api` / `#billing=subscription` 后缀分行
  * (`main/usage/usageHistory.ts` 的 byKey), 暴露到 payload 时后缀已被 displayModelName 剥掉。
  * 直接用展示名建 key 会渲染出两行看不出区别的同名模型、产生重复 React key,
- * 并让「用到的模型」数与 Agent 表的模型数多算。本页只统计 token, 不区分计费维度, 合并即可。
+ * 并让「用到的模型」数与 Agent 表的模型数多算。token 排行不区分计费维度。
  */
 export function buildModelRows(payload: UsageHistoryPayload | null): ModelTokenRow[] {
   if (!payload) return [];
@@ -264,6 +272,7 @@ export function buildModelRows(payload: UsageHistoryPayload | null): ModelTokenR
     }
     merged.set(key, {
       key,
+      ...(model.agentKind === 'acp' ? { estimate: model.estimatedMoney, acpMissingPrice: model.acpMissingPrice || !model.estimatedMoney } : {}),
       agentKind: model.agentKind,
       model: model.model,
       tokens,

@@ -899,6 +899,8 @@ export class AcpSession {
     this.usage = { ...this.usage, tokenUsage: 0 };
     this.emit([{ type: 'status', data: { status: 'running', ...this.usage, isRunning: true } }]);
     const usageModel = this.model;
+    const choices = findModelOption(this.configOptions)?.options.filter(choice => choice.value === usageModel);
+    const usagePrice = choices?.length === 1 ? choices[0]?.referencePrice : undefined;
     const params: AcpRecord = { sessionId: this.id, prompt: next.blocks };
     if (turn.permissionTurnId) {
       params._meta = { permissionGate: {
@@ -910,7 +912,7 @@ export class AcpSession {
       (result) => {
         // The prompt result is the only per-turn token report; `usage_update` only carries the context size.
         const usage = normalizeTurnUsage(result);
-        this.finishTurn(turn.token, { stopReason: normalizeStopReason(result), ...(usage ? { usage, usageModel } : {}) });
+        this.finishTurn(turn.token, { stopReason: normalizeStopReason(result), ...(usage ? { usage, usageModel, usagePrice } : {}) });
       },
       (error: unknown) => this.finishTurn(turn.token, this.errorOutcome(error)),
     );

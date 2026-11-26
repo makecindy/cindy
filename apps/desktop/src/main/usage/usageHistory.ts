@@ -106,6 +106,7 @@ function usageAgentKind(value: string): UsageHistoryModel['agentKind'] {
 }
 
 export interface UsageHistoryModel {
+  acpMissingPrice?: boolean;
   agentKind: 'claude-code' | 'codex' | 'pi' | 'acp' | 'media' | 'auxiliary';
   model: string;
   /** SDK 实报美元 (Claude); Codex 恒 0。 */
@@ -120,6 +121,8 @@ export interface UsageHistoryModel {
 
 /** 每日 × 模型的一行明细 — 右栏堆叠柱状图的分段数据。 */
 export interface UsageHistoryModelDay {
+  acpHasEstimate?: boolean;
+  acpMissingPrice?: boolean;
   requestCount?: number;
   source?: string;
   providerId?: string;
@@ -245,6 +248,7 @@ export function combineUsageDeviceRows(sources: readonly UsageDeviceRows[]): Usa
         modelByKey.set(key, { ...row });
         continue;
       }
+      if (row.acpMissingPrice) existing.acpMissingPrice = true;
       existing.money =
         addCompatibleRegionalMoney([existing.money, row.money], row.money.currency) ?? existing.money;
       if (row.requestCount !== undefined) existing.requestCount = (existing.requestCount ?? 0) + row.requestCount;
@@ -671,7 +675,7 @@ export async function readUsageHistoryWith(
       const quote = getSubscriptionValuePriceFor(usageAgentKind(row.agentKind), displayModelName(row.model), pricing, row.day, priceOverrides);
       money = computePriceQuoteTurnMoney(row, quote) ?? money;
     }
-    if (money.amount > 0) available.add(money.currency);
+    if (money.amount > 0 || (row.agentKind === 'acp' && money.kind === 'value-estimate')) available.add(money.currency);
     return { ...row, money };
   });
   const currencies = [...available].sort();
@@ -715,6 +719,8 @@ export async function readUsageHistoryWith(
   const allModelRows = pricedModels.map((row) => ({
     ...row,
     money: keepCompatibleMoney(row.money),
+    acpHasEstimate: row.agentKind === 'acp' && row.money.kind === 'value-estimate' && row.money.currency === ledgerCurrency,
+    acpMissingPrice: row.agentKind === 'acp' && (row.acpMissingPrice === true || row.money.kind !== 'value-estimate' || row.money.currency !== ledgerCurrency),
   }));
   const modelRows = modelCutoff === null
     ? allModelRows
@@ -802,9 +808,10 @@ export async function readUsageHistoryWith(
     agg.outputTokens += row.outputTokens;
     agg.cacheReadTokens += row.cacheReadTokens;
     agg.cacheCreateTokens += row.cacheCreateTokens;
-    if (isSubscriptionUsageModel(row.model)) {
+    if (row.acpMissingPrice) agg.acpMissingPrice = true;
+    if (row.acpHasEstimate || (agentKind !== 'acp' && isSubscriptionUsageModel(row.model))) {
       const estimate = row.money.kind === 'value-estimate' ? row.money : null;
-      if (estimate?.amount) {
+      if (estimate && (estimate.amount || row.acpHasEstimate)) {
         const estimates = subscriptionEstimatesByKey.get(key) ?? [];
         estimates.push(estimate);
         subscriptionEstimatesByKey.set(key, estimates);
@@ -827,10 +834,11 @@ export async function readUsageHistoryWith(
     const agentKind = usageAgentKind(row.agentKind);
     const model = agentKind === 'acp' ? row.model : displayModelName(row.model);
     const apiMoney = row.money.kind === 'actual-cost' ? row.money : zeroActual();
-    const subscriptionEstimateMoney = isSubscriptionUsageModel(row.model) && row.money.kind === 'value-estimate'
+    const subscriptionEstimateMoney = (row.acpHasEstimate || (agentKind !== 'acp' && isSubscriptionUsageModel(row.model))) && row.money.kind === 'value-estimate'
       ? row.money : zeroEstimate();
     const money = apiMoney.amount > 0 ? apiMoney : subscriptionEstimateMoney;
     return {
+      ...(agentKind === 'acp' ? { acpHasEstimate: row.acpHasEstimate, acpMissingPrice: Boolean(row.acpMissingPrice) } : {}),
       day: row.day,
       agentKind,
       requestCount: row.requestCount,

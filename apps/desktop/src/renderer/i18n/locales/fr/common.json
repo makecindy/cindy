@@ -10551,6 +10551,9 @@
       },
       "partial": "Certains ordinateurs n'ont pas pu être lus pour l'instant ; les totaux peuvent donc être sous-estimés. Vérifiez l'état de chaque appareil dans la liste des appareils."
     },
+    "referenceValue": "Valeur estimée",
+    "partialEstimate": "Utilisation partiellement estimée",
+    "estimateUnavailable": "Estimation indisponible",
     "cacheHitTooltip": "Lecture du cache / (entrée + lecture du cache + écriture du cache), soit la même formule que sur la carte du message.",
     "summary": {
       "title": "Vue d'ensemble"

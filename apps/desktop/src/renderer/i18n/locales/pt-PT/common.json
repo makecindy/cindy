@@ -10551,6 +10551,9 @@
       },
       "partial": "Não foi possível ler os dados de alguns computadores agora, pelo que os totais podem estar abaixo do real. Verifique o estado de cada dispositivo na lista de dispositivos."
     },
+    "referenceValue": "Valor estimado",
+    "partialEstimate": "Parte da utilização sem estimativa",
+    "estimateUnavailable": "Sem estimativa",
     "cacheHitTooltip": "Leitura da cache / (entrada + leitura da cache + escrita na cache) — a mesma fórmula do cartão da mensagem.",
     "summary": {
       "title": "Visão geral"

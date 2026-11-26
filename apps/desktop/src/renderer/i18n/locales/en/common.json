@@ -10476,6 +10476,9 @@
       },
       "partial": "Some computers couldn't be read just now, so totals may be low. Check each device's status in the device list."
     },
+    "referenceValue": "Reference value",
+    "partialEstimate": "Some usage has no estimate",
+    "estimateUnavailable": "No estimate",
     "cacheHitTooltip": "Cache read / (input + cache read + cache write) — the same formula as the message card.",
     "summary": {
       "title": "Overview"

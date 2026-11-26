@@ -10432,6 +10432,9 @@
       },
       "partial": "部分电脑暂时读不到最新用量，合计可能偏少。可在设备列表中查看各台状态。"
     },
+    "referenceValue": "参考估值",
+    "partialEstimate": "部分用量暂无估值",
+    "estimateUnavailable": "暂无估值",
     "cacheHitTooltip": "缓存读取 ÷（输入 + 缓存读取 + 缓存写入），与消息卡片同口径。",
     "summary": {
       "title": "概览"

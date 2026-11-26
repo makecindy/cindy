@@ -29,6 +29,7 @@ export interface DailyModelUsageDelta {
 export interface DailyModelUsageRow {
   day: string;
   agentKind: string;
+  acpMissingPrice?: boolean;
   requestCount?: number;
   source?: string;
   providerId?: string;
@@ -88,6 +89,7 @@ export async function getModelUsageSince(sinceDayKey: string): Promise<DailyMode
       day: dailyModelUsage.day,
       agentKind: dailyModelUsage.agentKind,
       model: dailyModelUsage.model,
+      acpMissingPrice: dailyModelUsage.acpMissingPrice,
       costUsd: dailyModelUsage.costUsd,
       costAmount: dailyModelUsage.costAmount,
       costCurrency: dailyModelUsage.costCurrency,
@@ -109,23 +111,24 @@ export async function getModelUsageSince(sinceDayKey: string): Promise<DailyMode
   );
   return [
     ...rows.map((row) => {
-      const isSubscriptionValue = row.model.endsWith('#billing=subscription');
-      const isExplicitUnpricedSubscription =
-        isSubscriptionValue && row.costAmount === 0 && Boolean(row.costIsApproximate);
+      const isEstimate = row.agentKind === 'acp' ? row.costIsApproximate : row.model.endsWith('#billing=subscription');
+      const explicitZeroEstimate =
+        isEstimate && row.costAmount === 0 && Boolean(row.costIsApproximate);
       const legacy = legacyUsdMoney(row.costUsd);
       const current =
-        row.costCurrency && (row.costAmount > 0 || isExplicitUnpricedSubscription)
+        row.costCurrency && (row.costAmount > 0 || explicitZeroEstimate)
           ? normalizeRegionalMoney({
               amount: row.costAmount,
               currency: row.costCurrency,
-              approximate: isSubscriptionValue || row.costIsApproximate,
-              kind: isSubscriptionValue ? 'value-estimate' : 'actual-cost',
-              ...(isSubscriptionValue
+              approximate: isEstimate || row.costIsApproximate,
+              kind: isEstimate ? 'value-estimate' : 'actual-cost',
+              ...(isEstimate
                 ? { estimateReasons: ['subscription-value', 'reference-price'] }
                 : {}),
             })
           : undefined;
       return {
+        ...(row.agentKind === 'acp' && row.acpMissingPrice !== false ? { acpMissingPrice: true } : {}),
         day: row.day,
         agentKind: row.agentKind,
         model: row.model,

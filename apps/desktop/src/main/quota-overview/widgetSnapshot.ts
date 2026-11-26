@@ -104,7 +104,7 @@ export function buildUsageWidgetSnapshot(
       daily: count > 0 && data ? data.daily.slice(-count).map((day, i) => {
         const models = seriesDaily?.[i];
         const modelTokens = seriesTokens?.[i];
-        return { money: day.money, paid: day.paid, tokens: day.tokens, ...(models && modelTokens ? { models, modelTokens } : {}) };
+        return { ...day, ...(models && modelTokens ? { models, modelTokens } : {}) };
       }) : [],
       ...(seriesDaily ? { models: series!.models } : {}),
     },

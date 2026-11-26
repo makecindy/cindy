@@ -83,6 +83,8 @@ export interface MobileUsageWidgetDetail {
 export interface MobileUsageWidgetDay {
   /** Subscription-equivalent value by harness: claude-code, codex, pi. */
   money: [number, number, number];
+  acpEstimate?: number;
+  acpMissingPrice?: boolean;
   paid: number;
   tokens: [number, number, number, ...number[]];
   /** Value per `usage.models` entry, then everything else (one more than the model count). */

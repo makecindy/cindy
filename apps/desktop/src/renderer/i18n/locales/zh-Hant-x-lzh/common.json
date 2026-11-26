@@ -10432,6 +10432,9 @@
       },
       "partial": "部分之機暫讀不得最新耗用，合計或偏少。可於裝置清單觀各臺之狀。"
     },
+    "referenceValue": "估值",
+    "partialEstimate": "部分用量未估",
+    "estimateUnavailable": "暫無估值",
     "cacheHitTooltip": "快取讀取 ÷（輸入 + 快取讀取 + 快取寫入），與訊卡同一計法。",
     "summary": {
       "title": "綜覽"

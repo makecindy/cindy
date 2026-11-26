@@ -2014,6 +2014,7 @@ export const dailyModelUsage = sqliteTable(
       .notNull()
       .default('USD'),
     costIsApproximate: integer('cost_is_approximate', { mode: 'boolean' }).notNull().default(false),
+    acpMissingPrice: integer('acp_missing_price', { mode: 'boolean' }),
     inputTokens: integer('input_tokens').notNull().default(0),
     outputTokens: integer('output_tokens').notNull().default(0),
     cacheReadTokens: integer('cache_read_tokens').notNull().default(0),

@@ -10432,6 +10432,9 @@
       },
       "partial": "部分電腦暫時讀不到最新用量，合計可能偏少。可在裝置清單中查看各台狀態。"
     },
+    "referenceValue": "參考估值",
+    "partialEstimate": "部分用量暫無估值",
+    "estimateUnavailable": "暫無估值",
     "cacheHitTooltip": "快取讀取 ÷（輸入 + 快取讀取 + 快取寫入），與訊息卡片同口徑。",
     "summary": {
       "title": "概覽"

@@ -36,6 +36,7 @@ import type { Session } from '@/lib/ccAgent.types';
 import { onPatch as onSessionPatch } from '@/lib/sessionsBus';
 
 export interface UsageHistoryModel {
+  acpMissingPrice?: boolean;
   agentKind: 'claude-code' | 'codex' | 'pi' | 'acp' | 'media' | 'auxiliary';
   model: string;
   money: RegionalMoney;
@@ -48,6 +49,8 @@ export interface UsageHistoryModel {
 
 /** 每日 × 模型明细 — 右栏堆叠柱状图分段。 */
 export interface UsageHistoryModelDay {
+  acpHasEstimate?: boolean;
+  acpMissingPrice?: boolean;
   source?: string;
   providerId?: string;
   requestCount?: number;
@@ -162,6 +165,8 @@ interface StoredUsageHistoryDay {
 }
 
 interface StoredUsageHistoryModelDay {
+  acpHasEstimate?: boolean;
+  acpMissingPrice?: boolean;
   source?: unknown;
   providerId?: unknown;
   requestCount?: unknown;
@@ -182,6 +187,7 @@ interface StoredUsageHistoryModelDay {
 }
 
 interface StoredUsageHistoryModel {
+  acpMissingPrice?: boolean;
   agentKind?: unknown;
   model?: unknown;
   money?: unknown;
@@ -306,6 +312,7 @@ function readSnapshot(scopeKey: string): UsageHistoryPayload | null {
           (row.agentKind === 'codex'
             ? legacyEstimate(row.amountUsd)
             : legacyActual(row.amountUsd)),
+        ...(row.agentKind === 'acp' ? { acpHasEstimate: row.acpHasEstimate === true, acpMissingPrice: row.acpMissingPrice ?? !row.acpHasEstimate } : {}),
         apiMoney: normalizeRegionalMoney(row.apiMoney) ?? legacyActual(row.apiCostUsd),
         subscriptionEstimateMoney:
           normalizeRegionalMoney(row.subscriptionEstimateMoney) ??
@@ -334,6 +341,7 @@ function readSnapshot(scopeKey: string): UsageHistoryPayload | null {
         agentKind: row.agentKind as UsageHistoryModel['agentKind'],
         model: row.model as string,
         money: normalizeRegionalMoney(row.money) ?? legacyActual(row.costUsd),
+        ...(row.acpMissingPrice ? { acpMissingPrice: true } : {}),
         estimatedMoney:
           normalizeRegionalMoney(row.estimatedMoney) ??
           (typeof row.estimatedCostUsd === 'number'

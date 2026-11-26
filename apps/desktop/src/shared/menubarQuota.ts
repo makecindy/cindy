@@ -174,6 +174,8 @@ export interface MenubarUsageScopeData {
   daily: {
     /** Subscription-equivalent value by harness: claude-code, codex, pi. */
     money: [number, number, number];
+    acpEstimate?: number;
+    acpMissingPrice?: boolean;
     /** Actually paid (API) part of `money`, summed across harnesses. */
     paid: number;
     tokens: [number, number, number, ...number[]];

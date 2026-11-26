@@ -2381,6 +2381,7 @@ describe('usage through the production event pipeline', () => {
     Object.defineProperty(h.session, 'agentDeviceId', { value: agentDeviceId });
     const done = { type: 'done', sessionTurnGeneration: 1, data: {
       type: 'acp/prompt_end', status: 'completed', usageModel: 'original-model',
+      usagePrice: { currency: 'USD', inputPerMtok: 2, outputPerMtok: 4, cacheReadPerMtok: 1 },
       usage: { inputTokens: 2161, outputTokens: 15, cacheReadTokens: 9459, cacheCreationTokens: 0 },
     } } satisfies AgentEvent;
     try {
@@ -2390,6 +2391,7 @@ describe('usage through the production event pipeline', () => {
       await vi.advanceTimersByTimeAsync(0);
       expect(effects.fn('recordModelTurnUsage')).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
         agentKind: 'acp', model: 'original-model', sessionId: 'task',
+        money: expect.objectContaining({ kind: 'value-estimate', currency: 'USD', amount: expect.closeTo(0.013841, 10) }),
         inputTokensDelta: 2161, outputTokensDelta: 15, cacheReadTokensDelta: 9459, cacheCreateTokensDelta: 0,
       }));
       expect(effects.fn('rebroadcastTodaySpend').mock.invocationCallOrder[0])
@@ -2399,7 +2401,21 @@ describe('usage through the production event pipeline', () => {
       } } });
       expect(effects.fn('recordModelTurnUsage')).toHaveBeenCalledTimes(2);
       expect(effects.fn('recordModelTurnUsage')).toHaveBeenLastCalledWith(expect.objectContaining({
+        money: expect.objectContaining({ amount: 0, kind: 'value-estimate' }),
         inputTokensDelta: 0, outputTokensDelta: 0, cacheReadTokensDelta: 0, cacheCreateTokensDelta: 0,
+      }));
+      // A positive cache-write count needs its own rate even with an input rate.
+      h.emit({ ...done, sessionTurnGeneration: 4, data: { ...done.data, usage: { ...done.data.usage, cacheCreationTokens: 5 } } });
+      expect(effects.fn('recordModelTurnUsage')).toHaveBeenLastCalledWith(expect.objectContaining({ money: undefined, cacheCreateTokensDelta: 5 }));
+      h.emit({ ...done, sessionTurnGeneration: 5, data: { ...done.data,
+        usagePrice: { currency: 'USD', inputPerMtok: 0, outputPerMtok: 0, cacheReadPerMtok: 0 } } });
+      expect(effects.fn('recordModelTurnUsage')).toHaveBeenLastCalledWith(expect.objectContaining({
+        money: expect.objectContaining({ amount: 0, kind: 'value-estimate' }), cacheReadTokensDelta: 9459,
+      }));
+      h.emit({ ...done, sessionTurnGeneration: 6, data: { ...done.data,
+        usagePrice: { currency: 'USD', inputPerMtok: 2, outputPerMtok: 4 } } });
+      expect(effects.fn('recordModelTurnUsage')).toHaveBeenLastCalledWith(expect.objectContaining({
+        money: undefined, cacheReadTokensDelta: 9459,
       }));
     } finally {
       await h.dispose();

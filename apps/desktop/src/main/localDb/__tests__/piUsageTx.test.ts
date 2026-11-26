@@ -16,7 +16,7 @@ describe('Pi request usage transaction', () => {
       CREATE TABLE pi_usage_receipts(session_id TEXT, settlement_id TEXT, receipt_id TEXT,
         recorded_at INTEGER, priced INTEGER DEFAULT 0, pricing_payload TEXT, PRIMARY KEY(session_id, settlement_id, receipt_id));
       CREATE TABLE daily_model_usage(day TEXT, agent_kind TEXT, model TEXT, cost_currency TEXT,
-        cost_amount REAL DEFAULT 0, cost_is_approximate INTEGER DEFAULT 0, input_tokens INTEGER DEFAULT 0,
+        cost_amount REAL DEFAULT 0, acp_missing_price INTEGER, cost_is_approximate INTEGER DEFAULT 0, input_tokens INTEGER DEFAULT 0,
         output_tokens INTEGER DEFAULT 0, cache_read_tokens INTEGER DEFAULT 0, cache_create_tokens INTEGER DEFAULT 0,
         updated_at INTEGER, PRIMARY KEY(day, agent_kind, model, cost_currency));
       CREATE TABLE daily_session_usage(day TEXT, session_id TEXT, tokens INTEGER, updated_at INTEGER,
