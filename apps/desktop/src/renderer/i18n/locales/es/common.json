@@ -11688,7 +11688,11 @@
     "model": {
       "description": "Elige los modelos que usa este amigo.",
       "primary": "Modelo principal",
-      "restoreDefault": "Restaurar modelo predeterminado"
+      "restoreDefault": "Restaurar modelo predeterminado",
+      "followsDefault": "Usa el modelo predeterminado",
+      "ownModel": "Modelo propio",
+      "managedInSettings": "Los modelos de los compañeros se configuran en Proveedores → Enrutamiento inteligente.",
+      "openSettings": "Abrir ajustes"
     },
     "modelChain": {
       "primary": "Modelo principal",
@@ -12849,7 +12853,7 @@
       "arrivingLater": "{{name}} se movió a esta computadora y aún se está preparando. Pronto aparecerá entre tus amigos",
       "arrivalPermissions": "{{name}} ahora usa los permisos predeterminados de esta computadora.",
       "arrivalModel": "El modelo guardado de {{name}} no está disponible en esta computadora, así que usa el modelo predeterminado de esta computadora.",
-      "arrivalModelSetup": "{{name}} ya está en esta computadora, pero aún no tiene un modelo disponible. Conecta un proveedor de modelos o elige un modelo en los ajustes de este amigo, en Modelo.",
+      "arrivalModelSetup": "{{name}} llegó a esta computadora, pero aún no tiene un modelo utilizable. Conecta un proveedor de modelos o configura el modelo predeterminado de compañeros en Proveedores → Enrutamiento inteligente.",
       "arrivalPartialContent": "{{name}} ahora se ejecuta en esta computadora, pero algunos elementos sincronizados no se pudieron restaurar. Sus copias en la nube siguen intactas.",
       "missingProfileTitle": "¿Continuar con {{name}} usando el perfil predeterminado?",
       "missingProfileDescription": "La computadora principal original aún no subió la personalidad ni la descripción de {{name}}. Si esa computadora se reinstaló o no se puede recuperar, puedes continuar aquí con un perfil predeterminado y conservar las conversaciones y el contenido ya sincronizados.",
@@ -23225,10 +23229,26 @@
       "byProvider": "Por proveedor"
     },
     "buddies": {
-      "title": "Compañeros",
-      "description": "Qué modelo usa cada compañero y a qué modelos de reserva cambia si algo falla. También puedes elegir una ruta inteligente: decide la fuente cada vez.",
+      "title": "Modelos de los compañeros",
+      "description": "Los compañeros comparten un modelo predeterminado; da a uno su propio modelo solo si necesita algo distinto. Para que cambie de fuente cuando algo falle, elige un enrutamiento inteligente.",
       "saveFailed": "No se guardó el modelo del compañero. Inténtalo de nuevo.",
-      "remoteHint": "En {{device}}"
+      "defaultLabel": "Modelo predeterminado",
+      "defaultHint": "Todos los compañeros lo usan salvo que se indique otra cosa, incluidos los nuevos y los que se traen de otra computadora.",
+      "ownTitle": "Compañeros con su propio modelo",
+      "ownTitleWithRest_many": "Compañeros con su propio modelo · {{count}} más usan el predeterminado",
+      "ownTitleWithRest_one": "Compañeros con su propio modelo · {{count}} más usa el predeterminado",
+      "ownTitleWithRest_other": "Compañeros con su propio modelo · {{count}} más usan el predeterminado",
+      "addOwn": "Dar a un compañero su propio modelo",
+      "allFollow": "Todos los compañeros usan el modelo predeterminado.",
+      "otherComputers": "Compañeros en otras computadoras",
+      "deviceBuddies_many": "{{count}} compañeros",
+      "deviceBuddies_one": "{{count}} compañero",
+      "deviceBuddies_other": "{{count}} compañeros",
+      "devicePageTitle": "Compañeros en {{device}}",
+      "devicePageHint": "Elige entre los modelos y enrutamientos inteligentes que puede usar esa computadora. Se guarda allí.",
+      "deviceDefaultReadOnly": "Actualiza esa computadora para cambiar aquí su modelo predeterminado.",
+      "deviceUnavailable": "Ahora no se pueden leer los ajustes de compañeros de esa computadora. Comprueba que esté en línea y vuelve a abrirlo.",
+      "deviceLoading": "Leyendo los ajustes de esa computadora…"
     }
   },
   "projectSettings": {

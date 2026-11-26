@@ -5,7 +5,7 @@
 import type { BotModelRoute } from '../../../shared/botModelChain';
 import type { BotCapabilities } from './botStore';
 
-/** 选成这条模型链(第一项是平时用的，其余是备用)；链是空的时不改。 */
+/** 选成这个模型(伙伴只用一个模型，2026-11-26 起不再有备用)；是空的时不改。 */
 export function capabilitiesWithModelChain(current: BotCapabilities, modelChain: BotModelRoute[]): BotCapabilities | null {
   const primary = modelChain[0];
   if (!primary) return null;
@@ -37,6 +37,11 @@ export function capabilitiesFollowingDefault(current: BotCapabilities, defaultCh
     modelChain: defaultChain,
     modelChainOverride: null,
   };
+}
+
+/** 这位伙伴跟随默认模型(没有单独设置)。智能路由页的伙伴一栏与伙伴页都按这一个判断。 */
+export function followsDefaultModel(capabilities: Pick<BotCapabilities, 'modelChainOverride'>): boolean {
+  return capabilities.modelChainOverride === null;
 }
 
 /** 现在显示的链：跟随默认时是默认链。 */

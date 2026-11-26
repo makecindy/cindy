@@ -11555,7 +11555,11 @@
     "model": {
       "description": "이 동반자가 사용할 모델을 선택합니다.",
       "primary": "기본 모델",
-      "restoreDefault": "기본 모델로 되돌리기"
+      "restoreDefault": "기본 모델로 되돌리기",
+      "followsDefault": "기본 모델 사용",
+      "ownModel": "별도 모델",
+      "managedInSettings": "버디 모델은 「제공자 → 스마트 라우팅」에서 한곳에 설정합니다.",
+      "openSettings": "설정 열기"
     },
     "modelChain": {
       "primary": "기본 모델",
@@ -12701,7 +12705,7 @@
       "arrivingLater": "{{name}}이(가) 이 컴퓨터로 옮겨졌고 아직 준비 중입니다. 곧 동반자 목록에 표시됩니다",
       "arrivalPermissions": "{{name}}은(는) 이 컴퓨터의 기본 권한으로 실행됩니다.",
       "arrivalModel": "{{name}}에 저장된 모델을 이 컴퓨터에서 사용할 수 없어 이 컴퓨터의 기본 모델을 사용합니다.",
-      "arrivalModelSetup": "{{name}}이(가) 이 컴퓨터로 옮겨졌지만 아직 사용할 수 있는 모델이 없습니다. 모델 제공자를 연결하거나 이 동반자의 ‘설정 → 모델’에서 모델을 선택하세요.",
+      "arrivalModelSetup": "{{name}}이(가) 이 컴퓨터로 왔지만 아직 사용할 수 있는 모델이 없습니다. 모델 제공자를 연결하거나 「제공자 → 스마트 라우팅」에서 버디 기본 모델을 설정하세요.",
       "arrivalPartialContent": "{{name}}이(가) 이제 이 컴퓨터에서 실행되지만 일부 동기화된 항목은 복원하지 못했습니다. 클라우드의 원본은 그대로 유지됩니다.",
       "missingProfileTitle": "기본 프로필로 {{name}}을(를) 계속할까요?",
       "missingProfileDescription": "기존 주 컴퓨터에서 {{name}}의 프로필이 아직 업로드되지 않았습니다. 기존 컴퓨터를 재설치했거나 복구할 수 없다면 여기서 기본 프로필로 계속할 수 있으며, 클라우드에 동기화된 대화와 내용은 그대로 유지됩니다.",
@@ -22914,10 +22918,22 @@
       "byProvider": "공급자별"
     },
     "buddies": {
-      "title": "버디",
-      "description": "각 버디가 평소 쓰는 모델과 문제가 생겼을 때 바꿔 쓸 예비 모델입니다. 스마트 라우팅의 라우트도 고를 수 있으며, 이때는 매번 어떤 소스를 쓸지 라우트가 정합니다.",
+      "title": "버디 모델",
+      "description": "버디는 하나의 기본 모델을 함께 쓰고, 다른 모델이 필요한 버디만 따로 설정합니다. 문제가 생겼을 때 소스를 자동으로 바꾸려면 스마트 라우팅을 선택하세요.",
       "saveFailed": "버디 모델을 저장하지 못했습니다. 다시 시도하세요.",
-      "remoteHint": "{{device}}에서"
+      "defaultLabel": "기본 모델",
+      "defaultHint": "따로 설정하지 않은 모든 버디가 사용합니다. 새 버디와 다른 컴퓨터에서 가져온 버디도 마찬가지입니다.",
+      "ownTitle": "따로 설정한 버디",
+      "ownTitleWithRest_other": "따로 설정한 버디 · 나머지 {{count}}명은 기본 모델 사용",
+      "addOwn": "버디에게 별도 모델 설정",
+      "allFollow": "모든 버디가 기본 모델을 사용합니다.",
+      "otherComputers": "다른 컴퓨터의 버디",
+      "deviceBuddies_other": "버디 {{count}}명",
+      "devicePageTitle": "{{device}}의 버디",
+      "devicePageHint": "그 컴퓨터에서 쓸 수 있는 모델과 스마트 라우팅 중에서 선택하며, 그 컴퓨터에 저장됩니다.",
+      "deviceDefaultReadOnly": "그 컴퓨터를 업데이트하면 여기서 기본 모델을 바꿀 수 있습니다.",
+      "deviceUnavailable": "지금은 그 컴퓨터의 버디 설정을 읽을 수 없습니다. 온라인인지 확인한 뒤 다시 여세요.",
+      "deviceLoading": "그 컴퓨터의 설정을 읽는 중…"
     }
   },
   "projectSettings": {

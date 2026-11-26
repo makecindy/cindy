@@ -14,7 +14,7 @@ import { personalizationDetailsSettings } from './PersonalizationDetails.setting
 import { personalizationSettings } from './PersonalizationSettings.settings-search';
 import { SubagentModelSection } from './SubagentModelSection';
 
-export function OtherModelSettings() {
+export function OtherModelSettings({ onOpenBuddyDevice }: { onOpenBuddyDevice?(deviceId: string): void } = {}) {
   const { t } = useTranslation();
   const { mode, dataOwnerId } = useAuth();
   return (
@@ -25,7 +25,7 @@ export function OtherModelSettings() {
       <section id={personalizationDetailsSettings.auxiliaryModelsTitle.targetId} aria-label={t(personalizationSettings.auxiliaryModels.titleKey)}>
         <AuxiliaryModelSection key={`auxiliary-models:${mode}:${dataOwnerId ?? 'none'}`} />
       </section>
-      <BuddyModelSettings key={`buddy-models:${mode}:${dataOwnerId ?? 'none'}`} />
+      <BuddyModelSettings key={`buddy-models:${mode}:${dataOwnerId ?? 'none'}`} {...(onOpenBuddyDevice ? { onOpenDevice: onOpenBuddyDevice } : {})} />
     </>
   );
 }

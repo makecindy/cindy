@@ -11688,7 +11688,11 @@
     "model": {
       "description": "Escolha os modelos que este amigo usa.",
       "primary": "Modelo principal",
-      "restoreDefault": "Restaurar modelo padrão"
+      "restoreDefault": "Restaurar modelo padrão",
+      "followsDefault": "Usa o modelo padrão",
+      "ownModel": "Modelo próprio",
+      "managedInSettings": "Os modelos dos parceiros são definidos em Provedores → Roteamento inteligente.",
+      "openSettings": "Abrir configurações"
     },
     "modelChain": {
       "primary": "Modelo principal",
@@ -12849,7 +12853,7 @@
       "arrivingLater": "{{name}} foi transferido para este computador e ainda está sendo preparado. Em breve aparecerá entre seus amigos",
       "arrivalPermissions": "{{name}} agora usa as permissões padrão deste computador.",
       "arrivalModel": "O modelo salvo de {{name}} não está disponível neste computador, por isso ele segue o modelo padrão deste computador.",
-      "arrivalModelSetup": "{{name}} está neste computador, mas ainda não há um modelo disponível. Conecte um provedor de modelos ou escolha um modelo nas configurações deste amigo, em Modelo.",
+      "arrivalModelSetup": "{{name}} chegou a este computador, mas ainda não tem um modelo utilizável. Conecte um provedor de modelos ou defina o modelo padrão dos parceiros em Provedores → Roteamento inteligente.",
       "arrivalPartialContent": "{{name}} agora roda neste computador, mas alguns itens sincronizados não puderam ser restaurados. As cópias na nuvem continuam intactas.",
       "missingProfileTitle": "Continuar {{name}} com o perfil padrão?",
       "missingProfileDescription": "O computador principal original ainda não enviou o perfil de {{name}}. Se esse computador foi reinstalado ou não pode ser recuperado, você pode continuar aqui com o perfil padrão mantendo as conversas e os conteúdos já sincronizados.",
@@ -23226,10 +23230,26 @@
       "byProvider": "Por provedor"
     },
     "buddies": {
-      "title": "Parceiros",
-      "description": "Qual modelo cada parceiro usa e para quais reservas ele troca quando algo dá errado. Uma rota inteligente também serve: ela decide a fonte a cada vez.",
+      "title": "Modelos dos parceiros",
+      "description": "Os parceiros compartilham um modelo padrão; dê um modelo próprio só a quem precisa de algo diferente. Para que um parceiro troque de fonte quando algo falhar, escolha um roteamento inteligente.",
       "saveFailed": "O modelo do parceiro não foi salvo. Tente novamente.",
-      "remoteHint": "Em {{device}}"
+      "defaultLabel": "Modelo padrão",
+      "defaultHint": "Todos os parceiros usam este, salvo configuração diferente, inclusive os novos e os trazidos de outro computador.",
+      "ownTitle": "Parceiros com modelo próprio",
+      "ownTitleWithRest_many": "Parceiros com modelo próprio · {{count}} outros usam o padrão",
+      "ownTitleWithRest_one": "Parceiros com modelo próprio · {{count}} outro usa o padrão",
+      "ownTitleWithRest_other": "Parceiros com modelo próprio · {{count}} outros usam o padrão",
+      "addOwn": "Dar a um parceiro um modelo próprio",
+      "allFollow": "Todos os parceiros usam o modelo padrão.",
+      "otherComputers": "Parceiros em outros computadores",
+      "deviceBuddies_many": "{{count}} parceiros",
+      "deviceBuddies_one": "{{count}} parceiro",
+      "deviceBuddies_other": "{{count}} parceiros",
+      "devicePageTitle": "Parceiros em {{device}}",
+      "devicePageHint": "Escolha entre os modelos e roteamentos inteligentes que esse computador pode usar. Salvo nele.",
+      "deviceDefaultReadOnly": "Atualize esse computador para mudar aqui o modelo padrão dele.",
+      "deviceUnavailable": "Não é possível ler agora as configurações de parceiros desse computador. Verifique se ele está online e abra de novo.",
+      "deviceLoading": "Lendo as configurações desse computador…"
     }
   },
   "projectSettings": {

@@ -11688,7 +11688,11 @@
     "model": {
       "description": "Choisissez les modèles utilisés par cet ami.",
       "primary": "Modèle principal",
-      "restoreDefault": "Rétablir le modèle par défaut"
+      "restoreDefault": "Rétablir le modèle par défaut",
+      "followsDefault": "Utilise le modèle par défaut",
+      "ownModel": "Modèle propre",
+      "managedInSettings": "Les modèles des compagnons se règlent dans Fournisseurs → Routage intelligent.",
+      "openSettings": "Ouvrir les réglages"
     },
     "modelChain": {
       "primary": "Modèle principal",
@@ -12849,7 +12853,7 @@
       "arrivingLater": "{{name}} a été déplacé vers cet ordinateur et est encore en cours de préparation. Il apparaîtra bientôt dans vos amis",
       "arrivalPermissions": "{{name}} utilise désormais les autorisations par défaut de cet ordinateur.",
       "arrivalModel": "Le modèle enregistré de {{name}} n'est pas disponible sur cet ordinateur ; il utilise donc le modèle par défaut de cet ordinateur.",
-      "arrivalModelSetup": "{{name}} est sur cet ordinateur, mais aucun modèle n’est encore disponible. Connectez un fournisseur de modèles ou choisissez un modèle dans les réglages de cet ami, à la rubrique Modèle.",
+      "arrivalModelSetup": "{{name}} est arrivé sur cet ordinateur mais n’a pas encore de modèle utilisable. Connectez un fournisseur de modèles ou réglez le modèle par défaut des compagnons dans Fournisseurs → Routage intelligent.",
       "arrivalPartialContent": "{{name}} fonctionne désormais sur cet ordinateur, mais certains éléments synchronisés n’ont pas pu être restaurés. Leurs copies dans le cloud restent intactes.",
       "missingProfileTitle": "Continuer avec {{name}} et un profil par défaut ?",
       "missingProfileDescription": "L’ordinateur principal d’origine n’a pas encore envoyé le profil de {{name}}. Si cet ordinateur a été réinstallé ou ne peut pas être récupéré, vous pouvez continuer ici avec un profil par défaut tout en conservant les conversations et contenus déjà synchronisés.",
@@ -23225,10 +23229,26 @@
       "byProvider": "Par fournisseur"
     },
     "buddies": {
-      "title": "Compagnons",
-      "description": "Le modèle utilisé par chaque compagnon et les modèles de secours vers lesquels il bascule en cas de problème. Une route intelligente est aussi possible : elle choisit la source à chaque fois.",
+      "title": "Modèles des compagnons",
+      "description": "Les compagnons partagent un modèle par défaut ; n’en donnez un propre qu’à celui qui a besoin d’autre chose. Pour qu’un compagnon change de source en cas de problème, choisissez un routage intelligent.",
       "saveFailed": "Le modèle du compagnon n’a pas été enregistré. Réessayez.",
-      "remoteHint": "Sur {{device}}"
+      "defaultLabel": "Modèle par défaut",
+      "defaultHint": "Tous les compagnons l’utilisent sauf réglage contraire, y compris les nouveaux et ceux repris d’un autre ordinateur.",
+      "ownTitle": "Compagnons avec leur propre modèle",
+      "ownTitleWithRest_many": "Compagnons avec leur propre modèle · {{count}} autres utilisent le défaut",
+      "ownTitleWithRest_one": "Compagnons avec leur propre modèle · {{count}} autre utilise le défaut",
+      "ownTitleWithRest_other": "Compagnons avec leur propre modèle · {{count}} autres utilisent le défaut",
+      "addOwn": "Donner à un compagnon son propre modèle",
+      "allFollow": "Tous les compagnons utilisent le modèle par défaut.",
+      "otherComputers": "Compagnons sur d’autres ordinateurs",
+      "deviceBuddies_many": "{{count}} compagnons",
+      "deviceBuddies_one": "{{count}} compagnon",
+      "deviceBuddies_other": "{{count}} compagnons",
+      "devicePageTitle": "Compagnons sur {{device}}",
+      "devicePageHint": "Choisissez parmi les modèles et routages intelligents utilisables sur cet ordinateur. Enregistré sur celui-ci.",
+      "deviceDefaultReadOnly": "Mettez cet ordinateur à jour pour modifier ici son modèle par défaut.",
+      "deviceUnavailable": "Impossible de lire les réglages des compagnons de cet ordinateur pour le moment. Vérifiez qu’il est en ligne, puis rouvrez.",
+      "deviceLoading": "Lecture des réglages de cet ordinateur…"
     }
   },
   "projectSettings": {

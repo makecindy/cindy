@@ -11601,7 +11601,11 @@
     "model": {
       "description": "Choose the models this buddy uses.",
       "primary": "Primary Model",
-      "restoreDefault": "Restore default model"
+      "restoreDefault": "Restore default model",
+      "followsDefault": "Uses the default model",
+      "ownModel": "Own model",
+      "managedInSettings": "Buddy models are set in Providers → Smart routing.",
+      "openSettings": "Open settings"
     },
     "modelChain": {
       "primary": "Primary model",
@@ -12747,7 +12751,7 @@
       "arrivingLater": "{{name}} moved to this computer and is still getting ready. It will appear in your buddies soon",
       "arrivalPermissions": "{{name}} now uses this computer’s default permissions.",
       "arrivalModel": "{{name}}’s saved model isn’t available on this computer, so it follows this computer’s default model.",
-      "arrivalModelSetup": "{{name}} is on this computer, but no model is available yet. Connect a model provider or choose a model in this buddy’s settings under Model.",
+      "arrivalModelSetup": "{{name}} has arrived on this computer but has no usable model yet. Connect a model provider, or set the buddy default model in Providers → Smart routing.",
       "arrivalPartialContent": "{{name}} now runs on this computer, though some synced items couldn’t be restored. Their cloud copies remain intact.",
       "missingProfileTitle": "Start {{name}} with default profile?",
       "missingProfileDescription": "The original main computer hasn’t uploaded {{name}}’s persona or description yet. If that computer was reinstalled or can’t be recovered, you can continue here with a default profile while keeping any synced conversations and content.",
@@ -23004,10 +23008,24 @@
       "byProvider": "By provider"
     },
     "buddies": {
-      "title": "Buddies",
-      "description": "Which model each buddy uses, and which backups it switches to when something goes wrong. A smart route works too: it decides the source each time.",
+      "title": "Buddy models",
+      "description": "Buddies share one default model; give a buddy its own only when it needs something different. To have a buddy switch sources when something goes wrong, pick a smart route.",
       "saveFailed": "The buddy’s model was not saved. Try again.",
-      "remoteHint": "On {{device}}"
+      "defaultLabel": "Default model",
+      "defaultHint": "Every buddy uses it unless set otherwise, including new buddies and buddies taken over from another computer.",
+      "ownTitle": "Buddies with their own model",
+      "ownTitleWithRest_one": "Buddies with their own model · {{count}} other uses the default",
+      "ownTitleWithRest_other": "Buddies with their own model · {{count}} others use the default",
+      "addOwn": "Give a buddy its own model",
+      "allFollow": "All buddies use the default model.",
+      "otherComputers": "Buddies on other computers",
+      "deviceBuddies_one": "{{count}} buddy",
+      "deviceBuddies_other": "{{count}} buddies",
+      "devicePageTitle": "Buddies on {{device}}",
+      "devicePageHint": "Pick from the models and smart routes that computer can use. Saved on that computer.",
+      "deviceDefaultReadOnly": "Update that computer to change its default model here.",
+      "deviceUnavailable": "Can’t read that computer’s buddy settings right now. Make sure it’s online, then open this again.",
+      "deviceLoading": "Reading that computer’s settings…"
     }
   },
   "projectSettings": {

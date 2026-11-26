@@ -613,15 +613,11 @@ export function SourceRouteDetail({ route, config, options, save, onBack }: {
  * 其他地方用的模型：Subagent、辅助模型与每位伙伴的模型都直接在这一页改(OtherModelSettings)，不再是跳去别处的入口。
  * 伙伴的模型编辑器带路由，需要在路由里渲染。
  */
-export function ModelSettingsElsewhere() {
+export function ModelSettingsElsewhere({ onOpenBuddyDevice }: { onOpenBuddyDevice?(deviceId: string): void }) {
   const routed = useInRouterContext();
-  return routed ? <ElsewhereRows /> : null;
-}
-
-function ElsewhereRows() {
-  return (
+  return routed ? (
     <Suspense fallback={null}>
-      <OtherModelSettings />
+      <OtherModelSettings {...(onOpenBuddyDevice ? { onOpenBuddyDevice } : {})} />
     </Suspense>
-  );
+  ) : null;
 }

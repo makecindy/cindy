@@ -3,7 +3,7 @@
  * 来源本身仍在「模型供应商」里连接和管理；这里只引用已连接的模型。每次改动立即保存。
  * 产品规则见 docs/product-rules/model-groups.md。
  */
-import { Activity, useCallback, useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react';
+import { Activity, lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react';
 import { ArrowDown, ArrowUp, Plus, Waypoints, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
@@ -64,7 +64,12 @@ const log = createLogger('ModelGroupsSection');
 const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
 const UNSET_EFFORT = '__unset__';
 
-type View = { kind: 'list' } | { kind: 'route'; id: string } | { kind: 'source'; id: string };
+type View = { kind: 'list' } | { kind: 'route'; id: string } | { kind: 'source'; id: string }
+  /** 另一台电脑上的伙伴用哪个模型(id 是那台电脑)。 */
+  | { kind: 'buddies'; id: string };
+
+/** 另一台电脑上的伙伴模型页：只在点进去时取(带着伙伴设置的远程读写)。 */
+const RemoteBuddyModelsPage = lazy(() => import('./RemoteBuddyModelsPage').then((module) => ({ default: module.RemoteBuddyModelsPage })));
 
 /** 路由列表里两种路由各自的小标题：与模型供应商页左栏的分组标题同一档字。 */
 const ROUTE_KIND_LABEL = 'px-1 text-12 font-medium leading-[1.33] text-[var(--text-tertiary)]';
@@ -91,7 +96,7 @@ export function ModelGroupsSection({ scrollRef, focusProvider }: {
   const [view, setView] = useState<View>({ kind: 'list' });
   const route = view.kind === 'route' ? userRoutes.find((item) => item.id === view.id) : undefined;
   const sourceRoute = view.kind === 'source' ? sourceRoutes.find((item) => item.id === view.id) : undefined;
-  const subpageOpen = !!(route ?? sourceRoute);
+  const subpageOpen = !!(route ?? sourceRoute) || view.kind === 'buddies';
   // 打开着的路由在别处被删掉、或自动合成的那条因为断开不见了：回到列表，免得它之后重新出现时又突然跳进去。
   // 只认已经显示过的那一条——刚新建、刚转换的路由要等配置推过来才有，不能当成不见了(2026-11-26 排查)。
   const shownView = useRef<string | null>(null);
@@ -184,7 +189,13 @@ export function ModelGroupsSection({ scrollRef, focusProvider }: {
   // 打开某条路由的详情时列表不卸载，只是隐藏：返回时关系图不重放进场动画、展开的「最近的选择」还开着、下面几块不再一块块冒出来
   // (2026-11-26 排查)。
   let detail: ReactNode = null;
-  if (sourceRoute) {
+  if (view.kind === 'buddies') {
+    detail = (
+      <Suspense fallback={null}>
+        <RemoteBuddyModelsPage deviceId={view.id} onBack={back} />
+      </Suspense>
+    );
+  } else if (sourceRoute) {
     detail = <SourceRouteDetail route={sourceRoute} config={config} options={sourceOptions} save={save} onBack={back} />;
   } else if (route) {
     // 按来源本身找、不按界面上的序号：连点或另一处刚改过时，改的仍是点的那一行(2026-11-26 排查)。
@@ -491,7 +502,7 @@ export function ModelGroupsSection({ scrollRef, focusProvider }: {
           )}
         </div>
       </SettingsSection>
-      <ModelSettingsElsewhere />
+      <ModelSettingsElsewhere onOpenBuddyDevice={(deviceId) => { captureScroll(); setView({ kind: 'buddies', id: deviceId }); }} />
     </SettingsSection>
   );
   return (

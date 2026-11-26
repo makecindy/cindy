@@ -11601,7 +11601,11 @@
     "model": {
       "description": "Wähle die Modelle für diesen Freund.",
       "primary": "Primäres Modell",
-      "restoreDefault": "Standardmodell wiederherstellen"
+      "restoreDefault": "Standardmodell wiederherstellen",
+      "followsDefault": "Nutzt das Standardmodell",
+      "ownModel": "Eigenes Modell",
+      "managedInSettings": "Buddy-Modelle werden unter Anbieter → Smartes Routing festgelegt.",
+      "openSettings": "Einstellungen öffnen"
     },
     "modelChain": {
       "primary": "Primäres Modell",
@@ -12747,7 +12751,7 @@
       "arrivingLater": "{{name}} wurde auf diesen Computer verschoben und wird noch vorbereitet. Der Freund erscheint bald in deiner Liste",
       "arrivalPermissions": "{{name}} nutzt jetzt die Standardberechtigungen dieses Computers.",
       "arrivalModel": "Das für {{name}} gespeicherte Modell ist auf diesem Computer nicht verfügbar. Daher wird das Standardmodell dieses Computers verwendet.",
-      "arrivalModelSetup": "{{name}} ist jetzt auf diesem Computer, aber noch ohne verfügbares Modell. Verbinde einen Modellanbieter oder wähle unter „Modell“ in den Einstellungen dieses Freundes ein Modell aus.",
+      "arrivalModelSetup": "{{name}} ist auf diesem Computer angekommen, hat aber noch kein nutzbares Modell. Verbinde einen Modellanbieter oder lege das Standardmodell für Buddies unter Anbieter → Smartes Routing fest.",
       "arrivalPartialContent": "{{name}} läuft jetzt auf diesem Computer, aber einige synchronisierte Inhalte konnten nicht wiederhergestellt werden. Die Cloud-Kopien bleiben erhalten.",
       "missingProfileTitle": "{{name}} mit Standardprofil starten?",
       "missingProfileDescription": "Der ursprüngliche Hauptcomputer hat Persönlichkeit und Beschreibung von {{name}} noch nicht hochgeladen. Wenn dieser Computer neu installiert wurde oder nicht mehr erreichbar ist, kannst du hier mit einem Standardprofil fortfahren. Bereits synchronisierte Unterhaltungen und Inhalte bleiben erhalten.",
@@ -23004,10 +23008,24 @@
       "byProvider": "Nach Anbieter"
     },
     "buddies": {
-      "title": "Buddies",
-      "description": "Welches Modell jeder Buddy nutzt und auf welche Ersatzmodelle er bei Problemen wechselt. Auch eine Route aus dem smarten Routing ist möglich: Sie bestimmt jedes Mal die Quelle.",
+      "title": "Buddy-Modelle",
+      "description": "Buddies nutzen ein gemeinsames Standardmodell; gib einem Buddy nur dann ein eigenes, wenn er etwas anderes braucht. Damit ein Buddy bei Problemen die Quelle wechselt, wähle ein Smartes Routing.",
       "saveFailed": "Das Modell des Buddys wurde nicht gespeichert. Versuche es erneut.",
-      "remoteHint": "Auf {{device}}"
+      "defaultLabel": "Standardmodell",
+      "defaultHint": "Alle Buddies nutzen es, sofern nicht anders festgelegt – auch neue und von einem anderen Computer übernommene Buddies.",
+      "ownTitle": "Buddies mit eigenem Modell",
+      "ownTitleWithRest_one": "Buddies mit eigenem Modell · {{count}} weiterer nutzt den Standard",
+      "ownTitleWithRest_other": "Buddies mit eigenem Modell · {{count}} weitere nutzen den Standard",
+      "addOwn": "Einem Buddy ein eigenes Modell geben",
+      "allFollow": "Alle Buddies nutzen das Standardmodell.",
+      "otherComputers": "Buddies auf anderen Computern",
+      "deviceBuddies_one": "{{count}} Buddy",
+      "deviceBuddies_other": "{{count}} Buddies",
+      "devicePageTitle": "Buddies auf {{device}}",
+      "devicePageHint": "Wähle aus den Modellen und Smarten Routings, die dieser Computer nutzen kann. Wird dort gespeichert.",
+      "deviceDefaultReadOnly": "Aktualisiere diesen Computer, um sein Standardmodell hier zu ändern.",
+      "deviceUnavailable": "Die Buddy-Einstellungen dieses Computers können gerade nicht gelesen werden. Prüfe, ob er online ist, und öffne sie erneut.",
+      "deviceLoading": "Einstellungen dieses Computers werden gelesen …"
     }
   },
   "projectSettings": {

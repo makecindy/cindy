@@ -960,11 +960,11 @@ describe('Bot canonical Session lifecycle', () => {
       const route: BotModelRoute = { harness: 'pi', providerId: state === 'implicit' ? null : 'xd', model: 'z-ai/glm-5.3-flash', effort: 'high', fastMode: false };
       if (state === 'disconnected') h.providers[0]!.connected = false;
       if (state === 'deleted') h.providers = [];
-      // A stale backup must not prevent saving a usable primary.
+      // A stale backup from an older peer must not prevent saving a usable primary; 2026-11-26 single-model decision: only the first route is kept.
       const modelChainOverride = [route, { ...route, model: 'stale-backup' }];
       const saving = invoke('local-db:bots:update', { id: 'desktop-settings', capabilities: { modelChainOverride } });
       if (state === 'available' || state === 'implicit') {
-        await expect(saving).resolves.toMatchObject({ capabilities: { modelChainOverride } });
+        await expect(saving).resolves.toMatchObject({ capabilities: { modelChainOverride: [route] } });
       } else {
         await expect(saving).rejects.toThrow('Model route unavailable');
         expect(h.sqlite!.prepare("SELECT * FROM bot_profile_versions WHERE bot_id = 'desktop-settings'").all()).toEqual(before);

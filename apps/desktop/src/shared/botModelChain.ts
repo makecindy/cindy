@@ -1,6 +1,15 @@
 import { normalizeCompanionModelRoute, modelRouteLocationKey, type CompanionModelRoute } from '@cindy/maker-shared/model-route';
 
-export const BOT_MODEL_CHAIN_MAX = 5;
+/**
+ * 伙伴只用一个模型(或一条智能路由)：2026-11-26 用户裁决取消备用模型，想要出问题时自动换来源就选一条智能路由，
+ * 由路由接替(model-groups.md §6.2)。存下、生效、展示都只认第一条。
+ */
+export const BOT_MODEL_CHAIN_MAX = 1;
+
+/**
+ * 旧版电脑、手机、云端记录与 Agent 工具仍可能发来最多 5 条(原来的首选 + 备用)：照样接受，不让保存失败，只用第一条。
+ */
+export const BOT_MODEL_CHAIN_INPUT_MAX = 5;
 
 export type BotHarness = CompanionModelRoute['harness'];
 
@@ -40,10 +49,12 @@ export function normalizeBotModelChain(
 
 /** A remote form must save every submitted route, in order, or reject the entire edit. */
 export function parseRemoteBotModelChain(value: unknown): BotModelRoute[] | null {
-  if (!Array.isArray(value) || !value.length || value.length > BOT_MODEL_CHAIN_MAX
+  if (!Array.isArray(value) || !value.length || value.length > BOT_MODEL_CHAIN_INPUT_MAX
     || value.some(route => !route || normalizeBotHarness(route.harness) !== route.harness)) return null;
-  const routes = normalizeBotModelChain(value);
-  return routes.length === value.length ? routes : null;
+  // 每一条都要合法(旧版表单发来的备用项也一样)，否则整份拒绝；合法时只存第一条。
+  const routes = value.map(normalizeBotModelRoute);
+  if (routes.some(route => route === null)) return null;
+  return normalizeBotModelChain(routes);
 }
 
 /** A group entry and a plain route with the same fallback model are different choices. */

@@ -11555,7 +11555,11 @@
     "model": {
       "description": "選擇這位夥伴使用的模型。",
       "primary": "主模型",
-      "restoreDefault": "恢復預設模型"
+      "restoreDefault": "恢復預設模型",
+      "followsDefault": "用預設模型",
+      "ownModel": "單獨設定的模型",
+      "managedInSettings": "夥伴的模型在「模型供應商 → 智慧路由」裡統一設定。",
+      "openSettings": "前往設定"
     },
     "modelChain": {
       "primary": "首選模型",
@@ -12701,7 +12705,7 @@
       "arrivingLater": "{{name}} 已換到這台電腦，還在準備中，稍後會出現在夥伴列表裡",
       "arrivalPermissions": "{{name}} 已依這台電腦的預設權限運作。",
       "arrivalModel": "{{name}} 先前選的模型在這台電腦上無法使用，已改用這台電腦的預設模型。",
-      "arrivalModelSetup": "{{name}} 已來到這台電腦，但還沒有可用模型。請連接模型供應商，或在這位夥伴的「設定 → 模型」選擇模型。",
+      "arrivalModelSetup": "{{name}} 已來到這台電腦，但還沒有可用模型。請連接模型供應商，或在「模型供應商 → 智慧路由」裡設定夥伴的預設模型。",
       "arrivalPartialContent": "{{name}} 已來到這台電腦，部分雲端內容未能恢復，原內容仍保留在雲端。",
       "missingProfileTitle": "用初始資料繼續 {{name}}？",
       "missingProfileDescription": "原主力電腦還沒上傳 {{name}} 的人設與簡介。如果原電腦已重裝或無法恢復，可以在這台電腦用初始資料繼續，已同步到雲端的對話和內容仍會保留。",
@@ -22909,10 +22913,22 @@
       "byProvider": "按供應商"
     },
     "buddies": {
-      "title": "夥伴",
-      "description": "每位夥伴平時用哪個模型、出問題時換到哪幾個備用。也能選智慧路由，由路由決定每次用哪個來源。",
+      "title": "夥伴的模型",
+      "description": "夥伴都用一個預設模型，個別需要不同的再單獨設定。想讓夥伴出問題時自動換來源，就選一條智慧路由。",
       "saveFailed": "夥伴的模型沒有儲存，請重試",
-      "remoteHint": "在 {{device}} 上"
+      "defaultLabel": "預設模型",
+      "defaultHint": "夥伴預設都用它，新建的和從別台電腦接過來的夥伴也用它。",
+      "ownTitle": "單獨設定的夥伴",
+      "ownTitleWithRest_other": "單獨設定的夥伴 · 其餘 {{count}} 位用預設",
+      "addOwn": "為一位夥伴單獨設定",
+      "allFollow": "現在所有夥伴都用預設模型。",
+      "otherComputers": "其他電腦上的夥伴",
+      "deviceBuddies_other": "{{count}} 位夥伴",
+      "devicePageTitle": "{{device}} 上的夥伴",
+      "devicePageHint": "從那台電腦能用的模型和智慧路由裡選，儲存在那台電腦上。",
+      "deviceDefaultReadOnly": "那台電腦更新到新版本後，才能在這裡改它的預設模型。",
+      "deviceUnavailable": "現在讀不到那台電腦的夥伴設定。確認它在線上後再開啟。",
+      "deviceLoading": "正在讀取那台電腦的設定…"
     }
   },
   "projectSettings": {

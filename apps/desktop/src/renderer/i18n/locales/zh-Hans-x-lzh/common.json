@@ -11555,7 +11555,11 @@
     "model": {
       "description": "择此同伴所用之模型。",
       "primary": "主模型",
-      "restoreDefault": "复预设模型"
+      "restoreDefault": "复预设模型",
+      "followsDefault": "用默认模型",
+      "ownModel": "单设之模型",
+      "managedInSettings": "伙伴之模型统设于「模型供方 → 智能路由」。",
+      "openSettings": "往设"
     },
     "modelChain": {
       "primary": "首选模型",
@@ -12701,7 +12705,7 @@
       "arrivingLater": "{{name}} 已移至此机，方在筹备，稍后将现于同伴录中",
       "arrivalPermissions": "{{name}} 已依此机预设权柄运作。",
       "arrivalModel": "{{name}} 前所选之模型此机不可用，已改用此机预设模型。",
-      "arrivalModelSetup": "{{name}} 已至此机，然尚无可用模型。请连结模型供方，或于此同伴之「设置 → 模型」择一模型。",
+      "arrivalModelSetup": "{{name}} 已至此机，然尚无可用模型。请连模型供方，或于「模型供方 → 智能路由」设伙伴之默认模型。",
       "arrivalPartialContent": "{{name}} 已至此机，部分云端所存未能复原，原物仍留于云端。",
       "missingProfileTitle": "以初设资料续 {{name}} 乎？",
       "missingProfileDescription": "原主力电脑尚未传 {{name}} 之人设与简介。若原机已重装或不可复，可于此机以初设资料续之，已同步云端之对话与所存仍保留。",
@@ -22914,10 +22918,22 @@
       "byProvider": "依供应商"
     },
     "buddies": {
-      "title": "伙伴",
-      "description": "诸伙伴常用何模型，有失则换何备。亦可择智能路由之路，每番用何源由路定之。",
+      "title": "伙伴之模型",
+      "description": "伙伴共用一默认模型，有需异者乃单设。欲其遇故自换来源，则择一智能路由。",
       "saveFailed": "伙伴之模型未存，请再试",
-      "remoteHint": "在 {{device}}"
+      "defaultLabel": "默认模型",
+      "defaultHint": "伙伴皆用之，新建者及自他机接来者亦然。",
+      "ownTitle": "单设之伙伴",
+      "ownTitleWithRest_other": "单设之伙伴 · 余 {{count}} 位用默认",
+      "addOwn": "为一伙伴单设",
+      "allFollow": "今伙伴皆用默认模型。",
+      "otherComputers": "他机之伙伴",
+      "deviceBuddies_other": "伙伴 {{count}} 位",
+      "devicePageTitle": "{{device}} 之伙伴",
+      "devicePageHint": "于彼机可用之模型与智能路由中择之，存于彼机。",
+      "deviceDefaultReadOnly": "彼机更新后，方可于此改其默认模型。",
+      "deviceUnavailable": "今不能读彼机伙伴之设。确其在线后再开。",
+      "deviceLoading": "方读彼机之设…"
     }
   },
   "projectSettings": {

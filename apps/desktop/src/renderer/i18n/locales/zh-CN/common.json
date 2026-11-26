@@ -11555,7 +11555,11 @@
     "model": {
       "description": "选择这个伙伴使用的模型。",
       "primary": "主模型",
-      "restoreDefault": "恢复默认模型"
+      "restoreDefault": "恢复默认模型",
+      "followsDefault": "用默认模型",
+      "ownModel": "单独设置的模型",
+      "managedInSettings": "伙伴的模型在「模型供应商 → 智能路由」里统一设置。",
+      "openSettings": "去设置"
     },
     "modelChain": {
       "primary": "主模型",
@@ -12701,7 +12705,7 @@
       "arrivingLater": "{{name}} 已换到这台电脑，还在准备中，稍后会出现在伙伴列表里",
       "arrivalPermissions": "{{name}} 已按这台电脑的默认权限运行。",
       "arrivalModel": "{{name}} 之前选的模型在这台电脑上不可用，已改用这台电脑的默认模型。",
-      "arrivalModelSetup": "{{name}} 已来到这台电脑，但还没有可用模型。请连接模型供应商，或打开这位伙伴的「设置 → 模型」选择模型。",
+      "arrivalModelSetup": "{{name}} 已来到这台电脑，但还没有可用模型。请连接模型供应商，或在「模型供应商 → 智能路由」里设置伙伴的默认模型。",
       "arrivalPartialContent": "{{name}} 已来到这台电脑，部分云端内容未能恢复，原内容仍保留在云端。",
       "missingProfileTitle": "用初始资料继续 {{name}}？",
       "missingProfileDescription": "原主力电脑还没上传 {{name}} 的人设和简介。如果原电脑已重装或无法恢复，可以在这台电脑用初始资料继续，已同步到云端的对话和内容仍会保留。",
@@ -22909,10 +22913,22 @@
       "byProvider": "按供应商"
     },
     "buddies": {
-      "title": "伙伴",
-      "description": "每位伙伴平时用哪个模型、出问题时换到哪几个备用。也能选智能路由，由路由决定每次用哪个来源。",
+      "title": "伙伴的模型",
+      "description": "伙伴都用一个默认模型，个别需要不同的再单独设置。想让伙伴出问题时自动换来源，就选一条智能路由。",
       "saveFailed": "伙伴的模型没有保存，请重试",
-      "remoteHint": "在 {{device}} 上"
+      "defaultLabel": "默认模型",
+      "defaultHint": "伙伴默认都用它，新建的和从别的电脑接过来的伙伴也用它。",
+      "ownTitle": "单独设置的伙伴",
+      "ownTitleWithRest_other": "单独设置的伙伴 · 其余 {{count}} 位用默认",
+      "addOwn": "为一位伙伴单独设置",
+      "allFollow": "现在所有伙伴都用默认模型。",
+      "otherComputers": "其他电脑上的伙伴",
+      "deviceBuddies_other": "{{count}} 位伙伴",
+      "devicePageTitle": "{{device}} 上的伙伴",
+      "devicePageHint": "从那台电脑能用的模型和智能路由里选，保存在那台电脑上。",
+      "deviceDefaultReadOnly": "那台电脑更新到新版本后，才能在这里改它的默认模型。",
+      "deviceUnavailable": "现在读不到那台电脑的伙伴设置。确认它在线后再打开。",
+      "deviceLoading": "正在读取那台电脑的设置…"
     }
   },
   "projectSettings": {

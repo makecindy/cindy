@@ -1,95 +1,82 @@
 /**
- * 「模型供应商 → 智能路由」页里的伙伴一栏：这台电脑上每位伙伴用哪个模型、备用哪几个，直接在这里改(2026-11-26 用户反馈：
- * 原来只有一个入口跳去伙伴页)。编辑器与存下的形状都和伙伴自己的「模型」页同一份(BotModelChainEditor、botModelChainPatch)，
- * 两处改的是同一个设置。伙伴的其余设置仍在伙伴页。另一台电脑上的伙伴各占一行、点开到它的设置：它们的模型在那台的目录里选。
+ * 「模型供应商 → 智能路由」页里的伙伴一栏(2026-11-26 用户裁决，方案 B「默认为主」)：这台电脑的伙伴默认模型，
+ * 只列单独设置了模型的伙伴；其他电脑上的伙伴每台电脑一行，点进去是那台电脑同样的一页(RemoteBuddyModelsPage)，
+ * 在这里改、保存到那台电脑，不跳到伙伴的设置页。伙伴的设置页里只留一行说明和入口。
+ * 存下的形状与伙伴自己的设置相同(botModelChainPatch)。
  */
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 
 import { SettingsCard, SettingsRow, SettingsSection } from '@/components/ui/settings-rows';
-import { useRemoteBots } from '@/features/bots/useRemoteBots';
+import { capabilitiesFollowingDefault, capabilitiesWithModelChain } from '@/features/bots/botModelChainPatch';
+import { setBotGlobalModelChain, useBotProfiles } from '@/features/bots/botStore';
+import { useBotTranslation } from '@/features/bots/botPronounContext';
 import { useCompanionCloud } from '@/features/bots/companionCloudStore';
 import { cloudRemoteBots, withoutShadowedBots } from '@/features/bots/companionCloudPresentation';
-import { toast } from '@/lib/toast';
-import { BotModelChainEditor } from '@/features/bots/BotModelChainEditor';
-import { capabilitiesFollowingDefault, capabilitiesWithModelChain, displayedModelChain } from '@/features/bots/botModelChainPatch';
-import { useBotProfiles, type BotCapabilities, type BotProfile } from '@/features/bots/botStore';
-import { useBotTranslation } from '@/features/bots/botPronounContext';
 import { localBotSettingsTarget } from '@/features/bots/localBotSettingsTarget';
-import type { BotModelRoute } from '../../../shared/botModelChain';
+import { useRemoteBots } from '@/features/bots/useRemoteBots';
+import { toast } from '@/lib/toast';
+import { BuddyModelPanel } from './BuddyModelPanel';
+import { modelGroupsSettings } from './ModelGroupsSection.settings-search';
 
-export function BuddyModelSettings() {
+const GROUP_LABEL = 'px-1 text-12 font-medium leading-[1.33] text-[var(--text-tertiary)]';
+
+export function BuddyModelSettings({ onOpenDevice }: { onOpenDevice?(deviceId: string): void }) {
   const { t } = useBotTranslation();
   const navigate = useNavigate();
   const profiles = useBotProfiles();
   const rosterRemote = useRemoteBots();
   const cloud = useCompanionCloud();
-  // 与伙伴页同一份名册：交给别的电脑运行的本机副本不在这里改(改了也到不了它)，每个云端伙伴只在它的主力电脑上列一行。
+  // 与伙伴页同一份名册：交给别的电脑运行的本机副本不在这里改，每个云端伙伴只在它的主力电脑上列一行。
   const roster = useMemo(() => withoutShadowedBots(profiles.filter((bot) => bot.status !== 'archived'), cloud), [profiles, cloud]);
-  const remote = useMemo(() => cloudRemoteBots(cloud, rosterRemote), [cloud, rosterRemote]);
+  const devices = useMemo(() => {
+    const byDevice = new Map<string, { deviceId: string; name: string; count: number }>();
+    for (const bot of cloudRemoteBots(cloud, rosterRemote)) {
+      const entry = byDevice.get(bot.deviceId) ?? { deviceId: bot.deviceId, name: bot.deviceName, count: 0 };
+      entry.count += 1;
+      byDevice.set(bot.deviceId, entry);
+    }
+    // 按电脑名排，名册更新时顺序不跳。
+    return [...byDevice.values()].sort((a, b) => a.name.localeCompare(b.name));
+  }, [cloud, rosterRemote]);
   const defaultChain = localBotSettingsTarget.useDefaultModelChain();
   const hiddenVendors = localBotSettingsTarget.useHiddenVendors();
-  if (roster.length === 0 && remote.length === 0) return null;
-  return (
-    <SettingsSection title={t('modelGroups.buddies.title')} description={t('modelGroups.buddies.description')} testId="model-settings-buddies">
-      {roster.map((bot) => (
-        <BuddyModelCard key={bot.id} bot={bot} defaultChain={defaultChain} hiddenVendors={hiddenVendors}
-          onNavigateToProviders={() => navigate('/settings?tab=providers')} />
-      ))}
-      {remote.length > 0 ? (
-        <SettingsCard>
-          {remote.map((bot) => (
-            <SettingsRow key={`${bot.deviceId}\u0000${bot.id}`} data-remote-buddy-model={bot.id} title={bot.name}
-              hint={t('modelGroups.buddies.remoteHint', { device: bot.deviceName })} chevron
-              onClick={() => navigate(`/bots/remote/${encodeURIComponent(bot.deviceId)}/${encodeURIComponent(bot.id)}?settings=1&settingsPage=model`)} />
-          ))}
-        </SettingsCard>
-      ) : null}
-    </SettingsSection>
-  );
-}
+  const failed = () => toast.error(t('modelGroups.buddies.saveFailed'));
 
-function BuddyModelCard({ bot, defaultChain, hiddenVendors, onNavigateToProviders }: {
-  bot: BotProfile;
-  defaultChain: BotModelRoute[];
-  hiddenVendors: ReturnType<typeof localBotSettingsTarget.useHiddenVendors>;
-  onNavigateToProviders: () => void;
-}) {
-  const { t } = useBotTranslation();
-  // 先显示改后的样子，存失败再退回；伙伴页那边改了(档案更新)就跟着换。
-  const [capabilities, setCapabilities] = useState<BotCapabilities>(bot.capabilities);
-  const saved = useRef(bot.capabilities);
-  useEffect(() => {
-    saved.current = bot.capabilities;
-    setCapabilities(bot.capabilities);
-  }, [bot.capabilities]);
-  const save = (next: BotCapabilities) => {
-    setCapabilities(next);
-    void localBotSettingsTarget.profile.update(bot.id, { capabilities: next }).catch(() => {
-      setCapabilities(saved.current);
-      toast.error(t('modelGroups.buddies.saveFailed'));
-    });
-  };
-  const following = capabilities.modelChainOverride === null;
   return (
-    <SettingsCard>
-      <div data-buddy-model={bot.id}>
-        <BotModelChainEditor
-          layout="settings"
-          settingsRows={{
-            primaryLabel: bot.name,
-            primaryHint: t(following ? 'bots.guided.modelFollowsDefault' : 'bots.guided.modelForThisBot'),
+    <div id={modelGroupsSettings.buddies.targetId}>
+      <SettingsSection title={t('modelGroups.buddies.title')} description={t('modelGroups.buddies.description')} testId="model-settings-buddies">
+        <BuddyModelPanel
+          defaultChain={defaultChain}
+          onDefaultChange={(chain) => { void setBotGlobalModelChain(chain).catch(failed); }}
+          buddies={roster.map((bot) => ({ id: bot.id, name: bot.name, avatar: bot, capabilities: bot.capabilities }))}
+          onSetBuddy={(id, chain) => {
+            const bot = roster.find((item) => item.id === id);
+            if (!bot) return;
+            const next = chain ? capabilitiesWithModelChain(bot.capabilities, chain) : capabilitiesFollowingDefault(bot.capabilities, defaultChain);
+            if (next) void localBotSettingsTarget.profile.update(bot.id, { capabilities: next }).catch(failed);
           }}
           hiddenVendors={hiddenVendors}
-          value={displayedModelChain(capabilities, defaultChain)}
-          onChange={(modelChain) => {
-            const next = capabilitiesWithModelChain(capabilities, modelChain);
-            if (next) save(next);
-          }}
-          {...(following ? {} : { onRestoreDefault: () => save(capabilitiesFollowingDefault(capabilities, defaultChain)) })}
-          onNavigateToProviders={onNavigateToProviders}
+          onNavigateToProviders={() => navigate('/settings?tab=providers')}
         />
-      </div>
-    </SettingsCard>
+        {devices.length > 0 ? (
+          <div className="mt-3 flex min-w-0 flex-col gap-2">
+            <div className={GROUP_LABEL}>{t('modelGroups.buddies.otherComputers')}</div>
+            <SettingsCard>
+              {devices.map((device) => (
+                <SettingsRow
+                  key={device.deviceId}
+                  data-remote-buddy-device={device.deviceId}
+                  title={device.name}
+                  hint={t('modelGroups.buddies.deviceBuddies', { count: device.count })}
+                  chevron
+                  {...(onOpenDevice ? { onClick: () => onOpenDevice(device.deviceId) } : {})}
+                />
+              ))}
+            </SettingsCard>
+          </div>
+        ) : null}
+      </SettingsSection>
+    </div>
   );
 }

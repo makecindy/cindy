@@ -44,7 +44,7 @@ import {
   type BotProfile,
 } from './botStore';
 import { useBotSettingsTarget } from './useBotSettingsTarget';
-import { capabilitiesFollowingDefault, capabilitiesWithModelChain, displayedModelChain } from './botModelChainPatch';
+import { displayedModelChain, followsDefaultModel } from './botModelChainPatch';
 import { BotRosterView } from './BotRosterView';
 import { BotAvatar } from './BotAvatar';
 import { BotBasicProfileFields } from './BotBasicProfileFields';
@@ -628,23 +628,28 @@ export function BotSettings({
           className="pt-3"
           aria-label={t('bots.settingsTabs.model')}
         >
-          <div data-testid="bot-model-controls" className="min-w-0">
-            <div data-testid="bot-primary-model-controls">
+          {/* 伙伴的模型统一在「模型供应商 → 智能路由」里设置(2026-11-26 用户裁决)：这里只说现状并给入口，不再有第二个编辑器。 */}
+          <div data-testid="bot-model-controls" className="flex min-w-0 flex-col gap-3">
+            <div data-testid="bot-primary-model-controls" className="flex min-w-0 flex-col gap-1.5">
+              <span className="text-12 leading-[1.5] text-[var(--text-tertiary)]">
+                {t('bots.model.primary')}
+                <span aria-hidden="true"> · </span>
+                <span>{followsDefaultModel(capabilities) ? t('bots.model.followsDefault') : t('bots.model.ownModel')}</span>
+              </span>
               <BotModelChainEditor
-                label={t('bots.model.primary')}
                 hiddenVendors={hiddenVendors}
                 deviceId={target.deviceId}
-                onRestoreDefault={() => {
-                  setCapabilities((current) => capabilitiesFollowingDefault(current, defaultModelChain));
-                  autosave.onEdit('model');
-                }}
                 value={shownModelChain}
-                onChange={(modelChain) => {
-                  if (!modelChain[0]) return;
-                  setCapabilities((current) => capabilitiesWithModelChain(current, modelChain) ?? current);
-                  autosave.onEdit('model');
-                }}
+                disabled
+                onChange={() => undefined}
               />
+            </div>
+            <div className="flex min-w-0 flex-wrap items-center justify-between gap-x-3 gap-y-2">
+              <span className="min-w-0 flex-1 text-13 leading-[1.5] text-[var(--text-secondary)]">{t('bots.model.managedInSettings')}</span>
+              <Button variant="secondary" size="md" compact type="button" className="shrink-0"
+                onClick={() => navigate('/settings?tab=model-groups&section=buddies')}>
+                {t('bots.model.openSettings')}
+              </Button>
             </div>
           </div>
         </section>
@@ -734,7 +739,8 @@ export function BotSettings({
                     {t('bots.homeFolder.open')}
                   </Button>
                 </SettingsBlock>
-              ) : null}
+              ) : null}
+
               {!isRemote && folderError ? (
                 <SettingsBlock className="px-5 py-3">
                   <p className="text-12 text-[var(--text-danger)]" role="alert">
@@ -1121,7 +1127,7 @@ export function BotsHomeView() {
     return (
       <main className="flex h-full items-center justify-center px-6" role="main">
         <BotInvitationWelcome bot={selectedBot}
-          onConfigureModel={() => navigate(`/bots/${selectedBot.id}?settings=1&settingsPage=model`)} />
+          onConfigureModel={() => navigate('/settings?tab=model-groups&section=buddies')} />
       </main>
     );
 
