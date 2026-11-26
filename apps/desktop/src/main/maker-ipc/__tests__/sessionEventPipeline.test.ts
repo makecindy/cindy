@@ -1,3 +1,8 @@
+import { acceptSharedTurnValue } from '../../remote-agent/sharedTurnValue.js';
+import { createGuestProviderRouteBinder } from '../../remote-agent/host/providerAccess.js';
+import { bindPoolExecutionRoute, registerSessionSubscriptionAccount } from '../../subscription-accounts/session.js';
+import { providerShareGuestPeer } from '@cindy/device-link';
+import type { ProviderView } from '@cindy/model-providers';
 import { installCompanyUsageCapture, installExecutionReporting } from '../../usage/companyTokenFacts.js';
 import { botLearningTracker } from '../botLearningTracker.js';
 import { learningTurnIdentity } from '../botLearningFeedback.js';
@@ -133,6 +138,8 @@ vi.mock('../schedule.js', () => ({
 }));
 vi.mock('../../maker-host/session-provider-store.js', () => ({
   getSessionProvider: effects.fn('getSessionProvider'),
+  setSessionProvider: vi.fn(),
+  clearSessionProvider: vi.fn(),
 }));
 vi.mock('../../maker-host/active-catalog.js', () => ({
   getActiveCatalog: effects.fn('getActiveCatalog'),
@@ -2876,6 +2883,88 @@ describe('usage through the production event pipeline', () => {
             turnUsageDetails: expect.objectContaining({ turnDurationMs: 100 }),
           }),
         );
+      await h.dispose();
+    },
+  );
+
+  // #6777, unit: the previous remote cases only exercised token fallback. A shared Codex
+  // done needs one executor-priced estimate on the assistant, even with both kinds of cache.
+  it.each(['authorized', 'legacy', 'unbound', 'different task', 'different source', 'missing price', 'gateway mode', 'API pool member', 'invalid currency'] as const)(
+    'settles the shared Codex message against its own executor receipt (%s)', async scenario => {
+      const h = harness();
+      pricing(true);
+      const device = 'share:fixture';
+      Object.defineProperty(h.session, 'agentDeviceId', { value: device });
+      const provider = 'openai-owner-account';
+      effects.fn('getCodexProviderSubscriptionValuePrice').mockReturnValue(scenario === 'missing price' ? undefined : {
+        providerId: provider, modelId: segment.model, source: 'user-override', currency: 'CNY',
+        inputPerMtok: 1, outputPerMtok: 2, cacheReadPerMtok: 3, cacheCreatePerMtok: 4,
+      });
+      const turn = {
+        ...usage('codex'), cacheCreationTokens: 4, segments: [{ ...segment, cacheCreateTokens: 4 }],
+        execution: { providerId: 'openai', model: segment.model, credentialMode: scenario === 'gateway mode' ? 'gateway-key' : 'oauth-bearer' },
+      };
+      const model = { id: segment.model, name: segment.model, contextWindow: 128000, efforts: [], defaultEffort: null };
+      const view: ProviderView = { id: provider, name: 'Shared account', agents: ['codex'], connected: true, auth: { method: 'oauth', native: 'codex' },
+        source: 'user', routing: {}, models: { codex: [model] } };
+      effects.fn('getSessionProvider').mockImplementation(id => id === 'executor-task' ? provider : 'openai');
+      const bind = createGuestProviderRouteBinder({
+        readProviders: async () => [view], guestAccess: () => ({ memberId: 'member', providerId: provider }),
+        providerAllowed: () => true, ownerAllowed: () => false,
+        modelAccess: { allows: () => true, read: () => ({ models: null, providerModels: null }) },
+      });
+      const binding = await bind({ controller: providerShareGuestPeer('fixture', 'member', 'device'), kind: 'codex',
+        providerId: provider, hostSessionId: 'executor-task', sessionId: 'task', isCurrent: () => true });
+      const release = scenario === 'API pool member'
+        ? bindPoolExecutionRoute('executor-task', { providerId: provider, connectionId: 'api-account',
+            assertCurrent() {}, captureTurnRejection: () => undefined })
+        : registerSessionSubscriptionAccount('executor-task', { id: 'native', configDir: 'fixture',
+        sharedProviderId: scenario === 'different source' ? 'other' : provider,
+        assertCurrent() {}, readState: async () => ({ authenticated: true }),
+      });
+      let receipt;
+      try { receipt = binding?.estimateTurn?.(event('done', { usage: turn })); }
+      finally { release(); binding?.release(); }
+      const value = scenario === 'invalid currency' ? { ...receipt, currency: 'unknown' } : receipt;
+      const raw = event('done', JSON.parse(JSON.stringify({ usage: turn, sharedTurnValue: scenario === 'legacy' ? undefined : value })),
+        scenario === 'authorized' ? { turnContinuationId: 1, sessionTurnGeneration: 7 } : {});
+      h.emit(scenario === 'unbound' ? raw : acceptSharedTurnValue(raw, scenario === 'different task' ? 'other' : 'task', device));
+      await microtasks();
+      expect(effects.fn('recordModelTurnUsage')).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+        money: undefined, inputTokensDelta: 100, outputTokensDelta: 20, cacheReadTokensDelta: 10, cacheCreateTokensDelta: 4,
+      }));
+      expect(effects.fn('recordSessionTurnTokens')).toHaveBeenCalledExactlyOnceWith('task', 134);
+      if (scenario === 'authorized') {
+        const money = { amount: 186 / 1_000_000, kind: 'value-estimate', currency: 'CNY', approximate: true };
+        expect(effects.fn('recordSchedulerTurnCost')).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+          clientId: 'assistant-row', money, requireMessage: true, actualAmounts: [], estimatedAmounts: [money],
+        }));
+        // The resumed native turn has independent usage and no new assistant output.
+        effects.fn('consumeLastAssistantPersistId').mockReturnValue(undefined);
+        const finish = () => event('done', { usage: turn, sharedTurnValue: value }, { sessionTurnGeneration: 7 });
+        h.emit(acceptSharedTurnValue(event('done', { usage: turn }, { turnContinuationId: 2, sessionTurnGeneration: 7 }), 'task', device));
+        await microtasks();
+        expect(effects.fn('recordSchedulerTurnCost')).toHaveBeenLastCalledWith(expect.objectContaining({
+          clientId: 'assistant-row', money, estimatedAmounts: [money],
+          turnUsageDetails: expect.objectContaining({ totalTokens: 268 }),
+        }));
+        h.emit(acceptSharedTurnValue(finish(), 'task', device));
+        await microtasks();
+        expect(effects.fn('recordSchedulerTurnCost')).toHaveBeenLastCalledWith(expect.objectContaining({
+          clientId: 'assistant-row', money: { ...money, amount: money.amount * 2 },
+          turnUsageDetails: expect.objectContaining({ totalTokens: 402, cacheReadTokens: 30, cacheCreateTokens: 12 }),
+        }));
+        h.emit(acceptSharedTurnValue({ ...finish(), sessionTurnGeneration: 8 }, 'task', device));
+        await microtasks();
+        expect(effects.fn('recordSchedulerTurnCost')).toHaveBeenLastCalledWith(expect.objectContaining({
+          clientId: undefined, money, requireMessage: true,
+        }));
+      } else {
+        expect(effects.fn('recordSchedulerTurnCost')).not.toHaveBeenCalled();
+        expect(effects.fn('recordTurnUsageOnMessage')).toHaveBeenCalledOnce();
+      }
+      expect(effects.fn('recordSessionTurnSpend')).not.toHaveBeenCalled();
+      expect(effects.fn('recordTurnSpend')).not.toHaveBeenCalled();
       await h.dispose();
     },
   );
