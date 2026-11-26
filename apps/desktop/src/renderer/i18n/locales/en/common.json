@@ -1429,6 +1429,9 @@
     "ENDPOINT_NOT_FOUND": "Endpoint not found (404). Check the base URL",
     "CONTEXT_TOO_LONG": "Context exceeds the model's length limit",
     "WIRE_INCOMPATIBLE": "Endpoint is not fully compatible with this protocol (unrecognized request fields)",
+    "INVALID_PROBE_RESPONSE": "The model service returned an empty or invalid response",
+    "PROBE_NO_OUTPUT": "The connection test could not confirm that the model generated output",
+    "PROBE_REFUSED": "The model service refused or blocked the test prompt",
     "UPSTREAM_ERROR": "Upstream server error (5xx). Try again later",
     "UPSTREAM_UNREACHABLE": "Cannot reach the endpoint. Check your network and the base URL",
     "TIMEOUT": "Connection timed out. Check your network and the base URL",
@@ -2723,6 +2726,60 @@
         }
       }
     },
+    "contactChange": {
+      "phone": {
+        "rowTitle": "Sign-in phone number",
+        "rowHint": "Used to sign in and receive verification codes",
+        "change": "Change phone number",
+        "verifyTitle": "Verify current phone number",
+        "introDescription": "To keep your account secure, verify your current phone number before changing it.",
+        "newTitle": "Enter new phone number",
+        "newDescription": "After the change, sign in with the new number. The old number will no longer sign in to this account.",
+        "inputLabel": "New phone number",
+        "placeholder": "Enter your phone number",
+        "success": "Phone number changed to {{target}}"
+      },
+      "email": {
+        "rowTitle": "Sign-in email",
+        "rowHint": "Used to sign in and receive verification codes",
+        "change": "Change email",
+        "verifyTitle": "Verify current email",
+        "introDescription": "To keep your account secure, verify your current email before changing it.",
+        "newTitle": "Enter new email",
+        "newDescription": "After the change, sign in with the new email. The old email will no longer sign in to this account.",
+        "inputLabel": "New email address",
+        "placeholder": "Enter your email address",
+        "success": "Email changed to {{target}}"
+      },
+      "codeSent": "A verification code was sent to {{target}}",
+      "codeLabel": "Verification code",
+      "codePlaceholder": "6-digit code",
+      "sendCode": "Send code",
+      "next": "Next",
+      "confirm": "Confirm change",
+      "cancel": "Cancel",
+      "resend": "Resend code",
+      "resendIn": "Resend in {{seconds}}s",
+      "errors": {
+        "INVALID_CODE": "The verification code is incorrect or expired.",
+        "CODE_ATTEMPTS_EXCEEDED": "Too many incorrect attempts. Request a new code.",
+        "CONTACT_TAKEN": "This phone number or email is already linked to another account.",
+        "CONTACT_UNCHANGED": "This is the same as your current phone number or email.",
+        "CONTACT_CHANGE_TICKET_INVALID": "Verification expired. Verify your current phone number or email again.",
+        "AUTH_FLOW_SUPERSEDED": "Your sign-in changed. Start again.",
+        "CONTACT_CHANGE_UNAVAILABLE": "This account can't change its sign-in method here.",
+        "CONTACT_CHANGE_BUSY": "The previous step is still in progress.",
+        "RATE_LIMITED": "Too many attempts. Wait a moment and try again.",
+        "RATE_LIMITED_UNTIL": "Too many attempts. Try again after {{time}} (local time).",
+        "INVALID_PARAMS": "The format is invalid. Check it and try again.",
+        "EMAIL_DOMAIN_BLOCKED": "This email can't be used. Try another one.",
+        "EMAIL_PATTERN_BLOCKED": "This email can't be used. Try another one.",
+        "ACCOUNT_DELETION_PENDING": "This account is scheduled for deletion and can't be changed.",
+        "NETWORK_ERROR": "Network connection failed. Check your network and try again.",
+        "REQUEST_TIMEOUT": "The request timed out. Try again.",
+        "fallback": "Something went wrong. Try again later."
+      }
+    },
     "help": {
       "title": "Help",
       "description": "Learn how to get work done with {{appName}}.",
@@ -3006,7 +3063,12 @@
         "reconcileButton": "Check",
         "reconcileFailed": "Check failed",
         "reconcileHealthy": "Ledger and disk match. No issues found.",
-        "reconcileIssues": "Issues found: {{orphans}} untracked files ({{orphanSize}}), {{missing}} missing files, {{stray}} unrecognized entries. See the app log for the full list."
+        "reconcileIssues": "Issues found: {{orphans}} untracked files ({{orphanSize}}), {{missing}} missing files, {{stray}} unrecognized entries. See the app log for the full list.",
+        "buddyWorkspaceDirectoryTitle": "Buddy workspace",
+        "buddyWorkspaceDirectoryDescription": "Where new buddies create their workspaces. Existing buddies stay where they are and can be moved individually in their Advanced configuration.",
+        "buddyWorkspaceDirectoryDetails": "Cindy creates an account-specific subfolder here for new buddies' workspaces while keeping their canonical paths linked.",
+        "buddyWorkspaceDirectoryChoose": "Change directory",
+        "buddyWorkspaceDirectoryFailed": "Could not update the buddy workspace folder."
       },
       "piKernel": {
         "manage": "Manage Pi version",
@@ -10071,6 +10133,18 @@
       "title": "Auto-update failed",
       "description": "The updater could not be launched, possibly blocked by system security policy. Please download the latest installer manually.",
       "confirm": "Go to download"
+    },
+    "workspaceMigration": {
+      "title": "Moving buddy workspace",
+      "progressLabel": "Buddy workspace migration progress",
+      "safetyHint": "Copying and verifying files before switching. Keep Cindy open until it finishes.",
+      "phase": {
+        "preparing": "Preparing workspace",
+        "copying": "Copying files",
+        "verifying": "Verifying files",
+        "switching": "Switching location",
+        "cleaning": "Cleaning up backup"
+      }
     }
   },
   "welcome": {
@@ -11404,6 +11478,69 @@
           "routines": "Routines to check",
           "upgrade": "Not carried over automatically"
         }
+      },
+      "workspaceLocation": {
+        "title": "Workspace location",
+        "description": "Move this buddy's workspace to another local disk to free system-drive space. Cindy keeps the original path linked so existing tasks, automations, and scripts keep working.",
+        "movedDescription": "Existing tasks and scripts still use the original path.",
+        "chooseDialogTitle": "Choose destination folder for buddy workspace",
+        "fullPath": "Full path",
+        "targetPathLabel": "Target folder",
+        "currentPathLabel": "Current folder",
+        "defaultPathLabel": "Target folder (default)",
+        "logicalPathLabel": "Original linked path",
+        "copyPath": "Copy path",
+        "pathCopied": "Path copied",
+        "pathCopyFailed": "Could not copy path",
+        "openTarget": "Open folder",
+        "moveAction": "Move workspace",
+        "moveBackAction": "Back to default",
+        "chooseAnother": "Choose another folder",
+        "restartNow": "Restart now",
+        "restartAndMove": "Restart and move",
+        "scheduleNextRestart": "Move on next restart",
+        "cancel": "Cancel",
+        "dismissFailed": "Dismiss",
+        "scheduledToast": "Workspace move scheduled for the next restart",
+        "cancelledToast": "Workspace move cancelled",
+        "previewTitle": "Ready to move workspace",
+        "previewSummary": "File size: {{size}}",
+        "previewNotice": "Close any apps or scripts using this workspace before restarting.",
+        "previewClaudeSkillsNotice": "If the workspace has no Git repository of its own, Claude Code may discover skills in parent folders at the new location. To avoid this, choose a location with no Claude Code skills in its parent folders.",
+        "pendingHint": "Close external programs using this workspace, then restart Cindy to start the move.",
+        "unavailableTitle": "Moved workspace is unavailable",
+        "unavailableDescription": "Cindy could not reach {{target}}. Reconnect the drive or restore the folder; Cindy will not create an empty folder over it.",
+        "errorTitle": "Workspace could not be moved",
+        "failedTitle": "Previous workspace move failed",
+        "interruptedTitle": "Workspace move needs recovery",
+        "backupRemainingHint": "Original backup kept for review at: {{backup}}",
+        "personalPreviewHint": "Close personal preview instances and start the primary Cindy build to schedule or run workspace moves.",
+        "status": {
+          "default": "Default",
+          "pending": "Pending restart",
+          "moved": "Moved",
+          "failed": "Failed",
+          "interrupted": "Recovery needed",
+          "unavailable": "Unavailable"
+        },
+        "warnings": {
+          "waitingExclusive": "Waiting for an exclusive startup. Close other Cindy instances sharing this profile, then restart Cindy to run the move.",
+          "receiptUpdateFailed": "The workspace is usable, but updating the migration record failed and will be retried on the next restart."
+        },
+        "errors": {
+          "insufficientSpace": "The target drive does not have enough free space for this workspace.",
+          "overlapsCindyData": "Choose a folder outside Cindy's own data directory and outside the current workspace.",
+          "localDiskRequired": "Choose a local disk folder rather than a network share.",
+          "unsupportedFileOrHardLink": "This workspace contains hard links or special files that cannot be moved safely right now.",
+          "alreadyRedirected": "Cindy does not recognize the link at this workspace location. Keep the link and its files as they are.",
+          "botHomeRedirected": "This buddy's home folder is manually redirected, so Cindy cannot move its workspace automatically.",
+          "targetExists": "The destination folder already exists. Choose a different location.",
+          "workspaceChanged": "Files in the workspace changed during verification. Close external programs using it and try again.",
+          "backupRetained": "The move succeeded, but the backup differed and was kept so nothing is lost.",
+          "backupCleanupIncomplete": "The move succeeded, but cleaning up the temporary backup did not finish; Cindy will retry on the next restart.",
+          "cutoverInterrupted": "The previous switch was interrupted and Cindy restored the original workspace. Choose a new empty folder to retry.",
+          "generic": "Could not complete the workspace move request. Try again."
+        }
       }
     },
     "profile": {
@@ -12348,7 +12485,8 @@
         "dissolved": "This group has been dissolved. You can still read the available history.",
         "failed": "Could not complete this action. Try again.",
         "lastOwner": "Transfer ownership or dissolve this group before leaving."
-      }
+      },
+      "externalBadge": "External"
     },
     "joined": {
       "today": "Joined today",
@@ -13556,6 +13694,7 @@
         },
         "slash": {
           "detachFailed": "❌ Couldn't end the takeover: {{error}}",
+          "pluginEngineModelsUnavailable": "This task's plugin engine isn't available right now, so its models can't be listed.",
           "companionManaged": "🧭 This connection is handed over to a buddy, so the model, permissions and working directory follow the buddy's settings. Change them in the buddy settings in Cindy."
         },
         "turn": {
@@ -15509,6 +15648,8 @@
       "codexHelperUnavailable": "cindy_helper is enabled but unavailable in this task. Task result reporting may be unavailable.",
       "codexHelperUnverified": "Could not verify cindy_helper for this task. Task result reporting may be unavailable.",
       "requestFormatError": "The app sent an invalid request, so this reply could not be completed.",
+      "piRetryHistoryTooLarge": "Your message was not sent. Pi could not read the history needed to retry after a frame exceeded the local 16 MiB limit. You can continue in a new task.",
+      "messageNotSent": "Your message was not sent.",
       "replyFailed": "Could not complete the reply",
       "queuedSendRecovery": "Your message wasn’t sent. Select Retry to send it as is. Sending a new message will replace it.",
       "retryTitle": "Resend the last message",
@@ -22542,6 +22683,19 @@
     "rendered": "View document",
     "wrap": "Wrap lines",
     "lineNumbers": "Line numbers"
+  },
+  "openAiAccountGroup": {
+    "strategy": "Account group strategy",
+    "leastHint": "Prefer the connection running the fewest tasks",
+    "quotaHint": "When subscription usage is available, Cindy uses it to choose eligible connections before applying the group strategy.",
+    "removeDescription": "This connection will stop receiving new tasks from the group. Tasks already running will stay on this connection.",
+    "mergeDescription": "New tasks started through {{target}} can use both providers. Sign-ins, keys and existing tasks stay where they are. Cindy will test the API key for {{apiKey}} before adding the scheduling connection.",
+    "modelUnavailable": "This connection cannot use the model chosen for the test. Test again to try another candidate.",
+    "noTestModel": "No configured model is available for testing. Check which models your OpenAI project can use, then refresh or update this connection’s model list.",
+    "billingPaused": "Group assignment paused due to insufficient balance or a billing limit.",
+    "title": "Account group",
+    "testPassed": "Test passed",
+    "refresh": "Refresh quota"
   },
   "subscriptionAccounts": {
     "pluginSignIn": {

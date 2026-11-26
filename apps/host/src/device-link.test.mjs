@@ -17,6 +17,7 @@ import { DeviceLinkClient, PROTOCOL_VERSION, FILE_PEER_CHANNEL, REMOTE_AGENT_CHA
 import { AgentNetWorkerSocket } from '@cindy/agent-net';
 import { createPrivateNetwork, generateIdentity, issueCertificate } from '@cindy/agent-net-relay';
 import { readDeviceLinkInvokeSourceDevice, readDeviceLinkModelSelectionOrigin } from '../../desktop/src/main/device-link/invoke-context.ts';
+import { getOfficialAgentNetPeerBase, parseAgentNetUdpPort } from '../../desktop/src/main/device-link/agentNetStunDiscovery.ts';
 import { createHostDeviceLink, HOST_DISPATCH_PORTS_WHILE_HELD } from './device-link.ts';
 import { createHostSessionHandoff } from './agent/session-handoff.ts';
 import { setSessionOpeningModelAdmission } from '../../desktop/src/main/localDb/sessionOpening.ts';
@@ -1168,4 +1169,34 @@ test('cindy-host remote rejoin reports why it could not rejoin, and asks the off
   assert.deepEqual(await rejoin(), { result: 'rejoined', agentNet: 'skipped' });
   assert.deepEqual(requests.map(([route, opts]) => [route, opts.method, opts.body]),
     [['/api/device-link/rejoin', 'POST', {}], ['/api/device-link/rejoin', 'POST', {}]]);
+});
+
+// Test value (engineering-conventions §3.2)
+// - Production entry and observable result: Node Host's shared `parseAgentNetUdpPort` (`CINDY_AGENT_NET_UDP_PORT`) and
+//   `getOfficialAgentNetPeerBase` helpers run without Electron, validate 1..65535 (warning and falling back to ephemeral on
+//   invalid input), and map official CN <-> Global bases while returning null for self-hosted/custom URLs.
+// - Rule: architecture-invariants §5 (shared core tested under Host runtime); dual-region STUN privacy boundary.
+// - Coverage gap: desktop Vitest tests run under desktop's toolchain; Host's Node runner verifies zero-Electron import and env parsing.
+// - Minimal failing input: valid port '41641', '0'/empty, invalid '70000'/'abc', and official vs self-hosted URLs.
+// - Tier: unit, pure functions in Node Host runner.
+test('Node Host parses CINDY_AGENT_NET_UDP_PORT and pairs only official Agent-Net regions', () => {
+  const warnings = [];
+  const log = { warn: msg => warnings.push(msg) };
+  assert.equal(parseAgentNetUdpPort(undefined, log), undefined);
+  assert.equal(parseAgentNetUdpPort('', log), undefined);
+  assert.equal(parseAgentNetUdpPort('0', log), undefined);
+  assert.equal(parseAgentNetUdpPort('1', log), 1);
+  assert.equal(parseAgentNetUdpPort(' 41641 ', log), 41641);
+  assert.equal(parseAgentNetUdpPort('65535', log), 65535);
+  assert.equal(warnings.length, 0);
+
+  for (const invalid of ['-1', '65536', '70000', '41641.5', 'abc', '41641px']) {
+    assert.equal(parseAgentNetUdpPort(invalid, log), undefined);
+  }
+  assert.equal(warnings.length, 6);
+
+  assert.equal(getOfficialAgentNetPeerBase('https://agent-net.cindy.com.cn'), 'https://agent-net.cindy.app');
+  assert.equal(getOfficialAgentNetPeerBase('https://agent-net.cindy.app/'), 'https://agent-net.cindy.com.cn');
+  assert.equal(getOfficialAgentNetPeerBase('https://self-hosted.example.test'), null);
+  assert.equal(getOfficialAgentNetPeerBase('http://127.0.0.1:8787'), null);
 });
