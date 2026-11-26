@@ -5255,6 +5255,77 @@ describe('Pi package executable-code boundary', () => {
     )).resolves.toMatchObject({ affectedPackage: { source, enabled: true } });
   });
 
+  // 测试价值：生产入口 resolveManagedPiPackageResources；用户可观察到换目录攻击是否把包外文件带入会话快照。
+  // Bug／规则依据：PR #12975 的 P2 review：父目录在遍历中换成外部 symlink 后，单文件身份比较仍一致，会在目录稳定性检查前读到包外内容。
+  // 现有覆盖缺口：已有 symlink 用例只覆盖文件条目本身越界，不覆盖已 canonical 的父目录在子文件 lstat 时发生替换。
+  // 最小失败输入：包内 data 子树在子文件 lstat 时改成指向包外同名文件的目录 junction；旧实现会打开包外文件。
+  // tier：unit（进程内 fs 时序注入，无真实等待）。
+  it('rejects a parent replaced by a symlink before reading its children', async () => {
+    const packageRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-pi-parent-swap-pkg-'));
+    const outsideRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-pi-parent-swap-outside-'));
+    roots.push(packageRoot, outsideRoot);
+    const dataDir = path.join(packageRoot, 'data');
+    const payload = path.join(dataDir, 'payload.txt');
+    const outsideData = path.join(outsideRoot, 'data');
+    const outsidePayload = path.join(outsideData, 'payload.txt');
+    await fs.mkdir(path.join(packageRoot, 'extensions'), { recursive: true });
+    await fs.mkdir(dataDir);
+    await fs.mkdir(outsideData);
+    await fs.writeFile(path.join(packageRoot, 'package.json'), JSON.stringify({
+      name: 'parent-swap',
+      version: '1.0.0',
+      pi: { extensions: ['./extensions/index.js'] },
+    }));
+    await fs.writeFile(
+      path.join(packageRoot, 'extensions', 'index.js'),
+      'export default function setup() {}\n',
+    );
+    await fs.writeFile(payload, 'inside');
+    await fs.writeFile(outsidePayload, 'outside');
+    const source = 'npm:parent-swap';
+    runtime.listOutput = `User packages:\n  ${source}\n    ${packageRoot}\n`;
+
+    const store = await import('../pi-package-store.js');
+    await mutateAuthorized(store, { action: 'set-enabled', source, enabled: true });
+
+    const originalLstat = fs.lstat.bind(fs);
+    const originalOpen = fs.open.bind(fs);
+    let swapped = false;
+    const payloadOpens: string[] = [];
+    const lstatSpy = vi.spyOn(fs, 'lstat').mockImplementation(async (...args) => {
+      const stat = await originalLstat(...args as Parameters<typeof fs.lstat>);
+      if (!swapped && path.resolve(String(args[0])) === path.resolve(payload)) {
+        swapped = true;
+        await fs.rm(dataDir, { recursive: true, force: true });
+        await fs.symlink(outsideData, dataDir, process.platform === 'win32' ? 'junction' : 'dir');
+      }
+      return stat;
+    });
+    const openSpy = vi.spyOn(fs, 'open').mockImplementation(async (...args) => {
+      // The swapped junction keeps the original child path, so detect the
+      // read by that path rather than the hidden target.
+      if (path.resolve(String(args[0])) === path.resolve(payload)) {
+        payloadOpens.push(String(args[0]));
+      }
+      return originalOpen(...args as Parameters<typeof fs.open>);
+    });
+    let snapshot;
+    try {
+      snapshot = await store.resolveManagedPiPackageResources({
+        snapshotRoot: path.join(runtime.userData, 'parent-swap-snapshot'),
+      });
+    } finally {
+      openSpy.mockRestore();
+      lstatSpy.mockRestore();
+    }
+
+    expect(swapped).toBe(true);
+    expect(payloadOpens).toEqual([]);
+    expect(snapshot).toEqual({
+      extensions: [], skills: [], promptTemplates: [], packageRoots: [],
+    });
+  }, 30_000);
+
   it('does not project convention resources that resolve outside the package root', async () => {
     const packageRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-pi-package-confined-'));
     const outsideRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-pi-package-outside-'));
