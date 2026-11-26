@@ -62,6 +62,7 @@ export interface MakerSessionCreateHandlerDeps<
     agentKind: string;
     workDir: string;
     session: unknown;
+    inputDelivery?: { inputDeliveryVersion: 1; clearBoundaryMs: number | null };
   } | null>;
   bootstrapSession(opts: MakerSessionCreateOpts): Promise<{
     session: TSession;

@@ -10678,7 +10678,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         notifyPluginSessionCreated: (input) => notifyGhostSessionEvent('created', input),
       });
       assertSessionCreationCurrent();
-      return { sessionId: row.id, agentKind: o.agentKind, workDir: row.workingDir!, session: row };
+      return { sessionId: row.id, agentKind: o.agentKind, workDir: row.workingDir!, session: row,
+        // This is the persisted row's boundary, not a mobile assumption that new tasks are empty.
+        // Enqueue rechecks it and acknowledges only after durable queue persistence.
+        inputDelivery: { inputDeliveryVersion: 1, clearBoundaryMs: row.clearedAt ? Date.parse(row.clearedAt) : null },
+      };
     },
     // CREATE_SESSION 同样先走 remote ensure:remote draft (尤其 collab
     // lead) 的 SSH 重连 / agent 安装 / codex daemon MCP 注入必须先于

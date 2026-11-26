@@ -1003,7 +1003,7 @@ async function persistPrecreatedSessionCreateStarted(task: InternalTask): Promis
 async function createSessionIdempotent(
   task: InternalTask,
   effectiveDraft: NewSessionDraft,
-): Promise<{ workDir: string | null; finalDraft: NewSessionDraft; session?: RemoteSession }> {
+): Promise<{ workDir: string | null; finalDraft: NewSessionDraft; session?: RemoteSession; inputDelivery?: FirstSendSessionSnapshot['inputDelivery'] }> {
   const { maker } = task.params.transport;
   const sleep = task.params.sleep ?? realSleep;
   // 鉴权后联合校验的最终草稿(codex review P2):只影响本次创建,不改 task.draft
@@ -1104,7 +1104,7 @@ async function createSessionIdempotent(
       if (!result || result.sessionId !== task.sessionId) {
         throw new Error(i18n.t('session.new.worktreeCleanupPending'));
       }
-      return { workDir: result.workDir ?? null, finalDraft: effectiveDraft, session: result.session };
+      return { workDir: result.workDir ?? null, finalDraft: effectiveDraft, session: result.session, inputDelivery: result.inputDelivery };
     } catch (error) {
       if (isStaleNewSessionOwnerError(error)) throw error;
       try {
@@ -1156,7 +1156,7 @@ async function createSessionIdempotent(
         // 错误会话。按确定性失败收敛到重试面(不自动重试,避免再建一个空会话)。
         throw new Error(i18n.t('session.new.sessionIdNotAdopted'));
       }
-      return { workDir: result.workDir ?? null, finalDraft: effectiveDraft, session: result.session };
+      return { workDir: result.workDir ?? null, finalDraft: effectiveDraft, session: result.session, inputDelivery: result.inputDelivery };
     } catch (err) {
       if (isStaleNewSessionOwnerError(err)) throw err;
       // 确定性失败(鉴权 / 参数 / 路径 guard 等)重试无意义,直接抛给重试面;
@@ -1452,7 +1452,7 @@ async function runPipeline(task: InternalTask): Promise<void> {
           && effectiveFinalDraft.workspaceKind === 'dialogue' && !task.precreatedWorktree
           && !params.orcaEnable && !effectiveFinalDraft.agentDeviceId && !effectiveFinalDraft.pluginEngine
           && params.attachments.length === 0
-          ? { session: freshSession, connectionEpoch: createEpoch, createdAt }
+          ? { session: freshSession, connectionEpoch: createEpoch, createdAt, inputDelivery: createOutcome.inputDelivery }
           : undefined;
         await params.transport.handoffFirstMessage(queuedDraft, snapshot);
         assertTaskOwnerCurrent(task);

@@ -39,7 +39,8 @@ describe('maker session CREATE_SESSION IPC handler', () => {
   it('durably opens a deferred dialogue without starting the Agent', async () => {
     const harness = new IpcHarness();
     const prepared = { sessionId: 'session-1', agentKind: 'codex', workDir: '/dialogues/session-1',
-      session: { id: 'session-1', workingDir: '/dialogues/session-1', source: null } };
+      session: { id: 'session-1', workingDir: '/dialogues/session-1', source: null },
+      inputDelivery: { inputDeliveryVersion: 1, clearBoundaryMs: null } };
     const prepareSession = vi.fn().mockResolvedValue(prepared);
     const deps = createDeps({ prepareSession, bootstrapSession: vi.fn(() => new Promise(() => {})) });
     registerMakerSessionCreateHandler(harness, deps);

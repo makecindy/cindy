@@ -2050,6 +2050,24 @@ describe('new session model', () => {
     expect(pickInitialNewSessionWorkspace('', recentWorkspaces, '   ')).toBe('/repo/latest');
   });
 
+  // Unit, #11841: malformed/legacy replies must not suppress receipt/boundary queries.
+  // Existing normalization coverage only checked the task id and directory.
+  it.each([undefined, null, {}, [], { inputDeliveryVersion: 2, clearBoundaryMs: null },
+    { inputDeliveryVersion: 1 }, { inputDeliveryVersion: 1, clearBoundaryMs: -1 },
+    { inputDeliveryVersion: 1, clearBoundaryMs: '0' }, { inputDeliveryVersion: 1, clearBoundaryMs: NaN },
+    { inputDeliveryVersion: 1, clearBoundaryMs: Infinity },
+  ])('does not adopt invalid creation delivery metadata: %j', inputDelivery => {
+    expect(normalizeCreateSessionResult({ sessionId: 's', workDir: '/dialogue',
+      session: { id: 's', workingDir: '/dialogue' }, inputDelivery })?.inputDelivery).toBeUndefined();
+  });
+  it.each([null, 0, 123])('binds a creation boundary %s to the matching task and directory', clearBoundaryMs => {
+    const inputDelivery = { inputDeliveryVersion: 1, clearBoundaryMs };
+    const result = { sessionId: 's', workDir: '/dialogue', inputDelivery };
+    expect(normalizeCreateSessionResult({ ...result, session: { id: 's', workingDir: '/dialogue' } })?.inputDelivery).toEqual(inputDelivery);
+    expect(normalizeCreateSessionResult({ ...result, session: { id: 'other', workingDir: '/dialogue' } })?.inputDelivery).toBeUndefined();
+    expect(normalizeCreateSessionResult({ ...result, session: { id: 's', workingDir: '/other' } })?.inputDelivery).toBeUndefined();
+  });
+
   it('normalizes create results and can synthesize a fallback session row', () => {
     const result = normalizeCreateSessionResult({
       sessionId: 's-new',

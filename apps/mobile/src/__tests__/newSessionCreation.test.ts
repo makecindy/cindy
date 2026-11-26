@@ -13,7 +13,9 @@ import type { RemoteSerializedAttachment } from '@/session/types';
 import { createDurableOutbox, type DurableOutboxRecord } from '@/session/durableOutbox';
 import { buildOutboxItem } from '@/session/sessionOutbox';
 import { DeviceLinkTopicRegistry } from '@/device-link/topicRegistry';
-import { createOutboxMessageLeases, outboxNeedsReconciliation, outboxSessionIsHidden } from '@/session/mobileOutboxSessionAdapter';
+import { createOutboxMessageLeases, createOutboxSessionAccess, outboxNeedsReconciliation, outboxSessionIsHidden } from '@/session/mobileOutboxSessionAdapter';
+import { createDurableOutboxDelivery, type DeliveryProjection } from '@/session/durableOutboxDelivery';
+import { EMPTY_INPUT_PROJECTION } from '@/session/inputProjection';
 
 const recoveryStorage = vi.hoisted(() => new Map<string, string>());
 const persistCancelledDraft = vi.hoisted(() => vi.fn(async () => {}));
@@ -66,7 +68,7 @@ import {
 import { remoteSessionStore } from '@/session/remoteSessionStore';
 import { takeOrcaStartFailure } from '@/session/orcaTeam';
 import { sessionFromCreateResult, type NewSessionDraft } from '@/session/newSession';
-import { readFirstSendSession, rememberFirstSendSession, type FirstSendSessionSnapshot } from '@/session/firstSendSessionSnapshot';
+import { handoffFirstSendSession, readFirstSendProjection, readFirstSendSession, rememberFirstSendSession, type FirstSendSessionSnapshot } from '@/session/firstSendSessionSnapshot';
 import {
   __testing as recoveryTesting,
   listPendingPrecreatedWorktrees,
@@ -1746,7 +1748,8 @@ describe('newSessionCreation pipeline', () => {
     const maker = makeMaker({
       createSession: vi.fn(async () => {
         if (reconnecting) epoch += 1;
-        return { sessionId, workDir: session.workingDir, session };
+        return { sessionId, workDir: session.workingDir, session,
+          inputDelivery: { inputDeliveryVersion: 1, clearBoundaryMs: null } };
       }),
     });
     const params = makeParams(sessionId, maker, { draft });
@@ -1765,6 +1768,9 @@ describe('newSessionCreation pipeline', () => {
     expect(readFirstSendSession(record, epoch + 1)).toBeUndefined();
     expect(readFirstSendSession({ ...record }, epoch)).toBeUndefined();
     const snapshot = handoff.mock.calls[0]?.[1];
+    if (!reconnecting) expect(snapshot).toMatchObject({
+      inputDelivery: { inputDeliveryVersion: 1, clearBoundaryMs: null },
+    });
     if (snapshot) {
       const clock = vi.spyOn(Date, 'now').mockReturnValue(snapshot.createdAt + 5_000);
       try {
@@ -1774,6 +1780,87 @@ describe('newSessionCreation pipeline', () => {
       }
     }
   });
+
+  // Unit, #11841: the older 800ms test bypassed durable handoff and its projection RPC.
+  // Use the real creation pipeline, outbox storage, access policy and delivery runner.
+  // A held enqueue receipt must retain phone ownership; a fresh create reply saves one RPC.
+  it.each(['fresh', 'legacy', 'reconnected', 'expired', 'edited', 'owner-changed', 'cleared'] as const)(
+    'delivers a newly created dialogue through the durable outbox: %s', async (mode) => {
+      const sessionId = 's2';
+      const draft = { ...DRAFT, workspaceKind: 'dialogue' as const, workingDir: '' };
+      const session = { ...sessionFromCreateResult({ sessionId, workDir: '/dialogue/first' }, draft), source: null };
+      const data = new Map<string, string>();
+      const store = createDurableOutbox({
+        getAllKeys: async () => [...data.keys()], getItem: async key => data.get(key) ?? null,
+        setItem: async (key, value) => { data.set(key, value); }, removeItem: async key => { data.delete(key); },
+      });
+      await store.activate('owner-a');
+      await store.add({ ...recoveryOutboxRecord(sessionId), state: 'queued', suspended: true });
+      editOutbox.records.mockImplementation(() => [...store.getSnapshot()]);
+      const maker = makeMaker({ createSession: vi.fn(async () => ({
+        sessionId, workDir: session.workingDir, session,
+        ...(mode === 'legacy' ? {} : { inputDelivery: { inputDeliveryVersion: 1, clearBoundaryMs: null } }),
+      })) });
+      let epoch = 4;
+      let current = true;
+      const params = makeParams(sessionId, maker, { draft, firstMessageClientId: `message-${sessionId}` });
+      params.transport.getConnectionEpoch = () => epoch;
+      params.transport.handoffFirstMessage = async (template, snapshot) => {
+        await handoffFirstSendSession(store, store.getSnapshot()[0]!, template, snapshot, () => current);
+      };
+      startNewSessionCreation(params);
+      await flushPipeline();
+      expect(getNewSessionCreationTask(sessionId)).toBeNull();
+      if (mode === 'reconnected') epoch += 1;
+      if (mode === 'edited') await store.update(store.getSnapshot()[0]!, { error: undefined });
+      if (mode === 'owner-changed') current = false;
+      const now = Date.now();
+      const clock = mode === 'expired' ? vi.spyOn(Date, 'now').mockReturnValue(now + 5_000) : undefined;
+      const access = createOutboxSessionAccess({
+        getSessions: () => remoteSessionStore.getSessions(), getRecords: () => store.getSnapshot(),
+        isCurrent: () => current, guard: () => { if (!current) throw new Error('owner changed'); },
+        invoke: vi.fn(), readSession: async () => session,
+        freshSession: r => readFirstSendSession(r, epoch), isForeground: () => true,
+        canConnect: () => true, isCreationHeld: () => false,
+        hasCreationTask: id => getNewSessionCreationTask(id) !== null, needsReconciliation: () => true,
+      });
+      const projection: DeliveryProjection = { ...EMPTY_INPUT_PROJECTION, sessionId,
+        inputDeliveryVersion: 1, clearBoundaryMs: null };
+      const readProjection = vi.fn(async () => mode === 'cleared' ? { ...projection, clearBoundaryMs: 9 } : projection);
+      let acknowledge!: (value: DeliveryProjection) => void;
+      const receipt = new Promise<DeliveryProjection>(resolve => { acknowledge = resolve; });
+      const enqueue = vi.fn(async () => receipt);
+      const cleared = new Error('REMOTE_OPTIMISTIC_INPUT_CLEARED');
+      if (mode === 'cleared') enqueue.mockRejectedValueOnce(cleared);
+      const runner = createDurableOutboxDelivery({
+        store, isCurrent: () => current, canRun: access.canRun, sessionPolicy: access.sessionPolicy,
+        knownProjection: r => readFirstSendProjection(r, epoch), projection: readProjection,
+        staleClearBoundary: error => error === cleared,
+        session: async () => session, prepare: async r => r.template!, enqueue,
+        upload: async () => { throw new Error('unexpected upload'); },
+        cancel: async () => false, history: async () => false, bindProjection: () => () => {},
+        cleanup: async () => {}, discardUploads: () => {}, retryable: () => false,
+        describe: String, confirmationMessage: 'unconfirmed', clearedMessage: 'cleared',
+      });
+      const delivery = runner.run();
+      try {
+        await flushPipeline();
+        expect(readProjection).toHaveBeenCalledTimes(mode === 'fresh' || mode === 'owner-changed' ? 0 : 1);
+        expect(enqueue).toHaveBeenCalledTimes(mode === 'owner-changed' ? 0 : 1);
+        expect(store.getSnapshot()[0]?.state).toBe(mode === 'owner-changed' ? 'queued' : mode === 'cleared' ? 'failed' : 'sending');
+        acknowledge(projection);
+        await delivery;
+        expect(store.getSnapshot()[0]?.state).toBe(mode === 'owner-changed' ? 'queued' : mode === 'cleared' ? 'failed' : 'host-owned');
+        if (mode === 'cleared') expect(store.getSnapshot()[0]).toMatchObject({ clearBoundaryMs: null, error: 'cleared' });
+        expect(maker.input.enqueue).not.toHaveBeenCalled();
+      } finally {
+        acknowledge(projection);
+        await delivery;
+        runner.stop();
+        clock?.mockRestore();
+      }
+    },
+  );
 
   it('keeps the creation task recoverable when saving the first-message handoff fails', async () => {
     const maker = makeMaker(); const params = makeParams('durable-first-failed', maker, { firstMessageClientId: 'saved-id' });

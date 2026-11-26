@@ -56,7 +56,7 @@ import { modelNeedsReselection } from '@/session/modelReselection';
 import { completePrecreatedWorktreeRecovery } from '@/session/completePrecreatedWorktreeRecovery';
 
 import { mobileDurableOutbox, getCurrentMobileOutboxRecords } from '@/session/mobileDurableOutbox';
-import { rememberFirstSendSession } from '@/session/firstSendSessionSnapshot';
+import { handoffFirstSendSession } from '@/session/firstSendSessionSnapshot';
 
 import type { DurableOutboxRecord } from '@/session/durableOutbox';
 import { stripTrailingPathSeparators } from '@cindy/maker-shared/path-text';
@@ -4464,11 +4464,7 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
             if (!isCurrentOwner()) throw new Error('OUTBOX_OWNER_CHANGED');
             const record = getCurrentMobileOutboxRecords().find((r) => r.item.sessionId === sessionId && r.item.clientId === firstMessageClientId);
             if (!record) throw new Error('OUTBOX_STALE_WRITE');
-            const queued = await mobileDurableOutbox.update(record, {
-              template: item, state: 'queued', suspended: false, error: undefined,
-            });
-            // The live creation task still holds delivery until the handoff returns.
-            if (snapshot && isCurrentOwner()) rememberFirstSendSession(queued, snapshot);
+            await handoffFirstSendSession(mobileDurableOutbox, record, item, snapshot, isCurrentOwner);
           } : undefined,
           openLink,
           subscribe,

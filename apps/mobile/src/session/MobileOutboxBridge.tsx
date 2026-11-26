@@ -55,7 +55,7 @@ import { validateOutboxResourceBinding } from './outboxResourceBinding';
 import { findRemoteHistoryView } from "./remoteHistoryViews";
 import type { DurableOutboxRecord } from "./durableOutbox";
 import { canDeliverNewSessionInBackground, endNewSessionBackgroundDelivery } from "./newSessionBackgroundDelivery";
-import { readFirstSendSession } from "./firstSendSessionSnapshot";
+import { readFirstSendProjection, readFirstSendSession } from "./firstSendSessionSnapshot";
 import {
   canConnectOutboxPeer,
   createOutboxMessageLeases,
@@ -187,6 +187,8 @@ export function MobileOutboxBridge() {
       },
       knownProjection: (r) => {
         const epoch = connectionEpochFor(r.deviceId);
+        const created = readFirstSendProjection(r, epoch);
+        if (created) return created;
         const boundary = knownClearBoundaries.get(outboxSessionKey(r));
         if (durableHosts.get(r.deviceId) !== epoch || boundary?.epoch !== epoch) return undefined;
         return {

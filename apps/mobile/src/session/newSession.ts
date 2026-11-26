@@ -25,6 +25,7 @@ import { isCindyAutoModelId } from '@cindy/model-providers/provider-identity';
 import { effectiveSourceIdForModel, movedCindyAutoSourceId, type ProviderView } from '@cindy/model-providers/registry';
 import { reconcileEffortForModel, type ProviderModelRow } from './providerModelSections';
 import type { RemoteSession } from './types';
+import type { FirstSendInputDelivery } from './firstSendSessionSnapshot';
 
 export type NewSessionAgentKind = 'claude-code' | 'codex' | 'pi';
 export type NewSessionWorkspaceKind = 'project' | 'dialogue';
@@ -170,6 +171,7 @@ export function applyRemoteAgentPick(
 
 export interface CreateSessionResult {
   session?: RemoteSession;
+  inputDelivery?: FirstSendInputDelivery;
   sessionId: string;
   agentKind?: string;
   workDir?: string;
@@ -1201,13 +1203,19 @@ export function normalizeCreateSessionResult(value: unknown): CreateSessionResul
   const record = value as Record<string, unknown>;
   const sessionId = record.sessionId;
   if (typeof sessionId !== 'string' || sessionId.length === 0) return null;
+  const delivery = record.inputDelivery && typeof record.inputDelivery === 'object' && !Array.isArray(record.inputDelivery)
+    ? record.inputDelivery as Record<string, unknown> : undefined;
+  const inputDelivery: FirstSendInputDelivery | undefined = delivery?.inputDeliveryVersion === 1
+    && (delivery.clearBoundaryMs === null || (typeof delivery.clearBoundaryMs === 'number'
+      && Number.isFinite(delivery.clearBoundaryMs) && delivery.clearBoundaryMs >= 0))
+    ? { inputDeliveryVersion: 1, clearBoundaryMs: delivery.clearBoundaryMs } : undefined;
   return {
     sessionId,
     ...(record.session && typeof record.session === 'object' && !Array.isArray(record.session)
       && (record.session as RemoteSession).id === sessionId
       && typeof (record.session as RemoteSession).workingDir === 'string'
       && (record.session as RemoteSession).workingDir === record.workDir
-      ? { session: record.session as RemoteSession } : {}),
+      ? { session: record.session as RemoteSession, ...(inputDelivery ? { inputDelivery } : {}) } : {}),
     agentKind: readString(record.agentKind),
     workDir: readString(record.workDir),
     capabilities: record.capabilities,
