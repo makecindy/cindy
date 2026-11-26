@@ -25,7 +25,7 @@ import { useImageLoadFailure } from './useImageLoadFailure';
 import { ChatLoadingImage } from './ChatLoadingImage';
 import { FileTypeIcon } from '@/components/ui/file-type-icon';
 import { CHAT_CODE_CLASS, CHAT_CODE_SURFACE_CLASS, CHAT_ICON_BUTTON_CLASS } from './chatChrome';
-import { createElement, memo, useId, useCallback, useEffect, useRef, useState, useMemo, isValidElement, type HTMLAttributes, type ReactNode } from 'react';
+import { createElement, memo, useId, useCallback, useEffect, useLayoutEffect, useRef, useState, useMemo, isValidElement, type HTMLAttributes, type ReactNode } from 'react';
 import ReactMarkdown, { defaultUrlTransform } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import remarkCjkFriendly from 'remark-cjk-friendly';
@@ -58,6 +58,7 @@ import {
 import { repairStreamingMarkdown } from './repairStreamingMarkdown';
 import { StreamingMarkdownChunk } from './StreamingMarkdownChunk';
 import { splitStreamingMarkdownChunks } from './streamingMarkdownChunks';
+import { assignStreamingHeadingIds, rehypeMarkHeadingSlugText } from './streamingHeadingIds';
 import { useStreamingReveal } from './streamingReveal';
 import { useReducedMotion } from '@/hooks/useReducedMotion';
 import { isHomePath, resolveRemoteHomePath, useRemoteHomePath } from '@/hooks/useRemoteHomePath';
@@ -276,6 +277,11 @@ const REHYPE_PLUGINS: PluggableList = [
   rehypeHighlightShared,
   rehypeFencedCodeMarker,
 ];
+// 流式分片各自解析，rehype-slug 的去重计数跨不了分片：同一位置改为只记录标题文本，
+// 提交后由 assignStreamingHeadingIds 按文档顺序统一分配 id（见 streamingHeadingIds.ts）。
+const STREAMING_REHYPE_PLUGINS: PluggableList = REHYPE_PLUGINS.map((plugin) =>
+  plugin === rehypeSlug ? rehypeMarkHeadingSlugText : plugin,
+);
 
 /** MarkdownRenderer 与所有“实际是否渲染”判定共用的输入归一化。 */
 export function normalizeMarkdownRendererContent(
@@ -2119,12 +2125,18 @@ const MarkdownRendererBase = memo(function MarkdownRendererBase({
       embeddedMediaStreaming,
     ],
   );
+  const markdownRootRef = useRef<HTMLDivElement>(null);
+  // 没有依赖数组：任何一次提交都可能新增或替换标题元素（尾块重解析），每次按文档
+  // 顺序重排 id。只查询带 data-slug-text 的标题，开销与标题数成正比。
+  useLayoutEffect(() => {
+    if (isStreaming && markdownRootRef.current) assignStreamingHeadingIds(markdownRootRef.current);
+  });
   const urlTransform = resolveImageSrc
     ? allowlistedImageUrlTransform
     : allowPrivilegedLinks ? trustedUrlTransform : previewSafeUrlTransform;
 
   return (
-    <div className="msg-markdown select-text">
+    <div ref={markdownRootRef} className="msg-markdown select-text">
       {isStreaming ? (
         streamingChunks.map((chunk) => (
           <StreamingMarkdownChunk
@@ -2134,13 +2146,12 @@ const MarkdownRendererBase = memo(function MarkdownRendererBase({
             remarkPlugins={
               allowPrivilegedLinks ? REMARK_PLUGINS_PRIVILEGED : REMARK_PLUGINS
             }
-            rehypePlugins={REHYPE_PLUGINS}
+            rehypePlugins={STREAMING_REHYPE_PLUGINS}
             components={components}
             urlTransform={urlTransform}
             wordFadeState={wordFadeState}
             emitSourceLines={emitSourceLines}
             wholeDocument={streamingChunks.length === 1}
-            headingSeed={chunk.headingSeed}
           />
         ))
       ) : (

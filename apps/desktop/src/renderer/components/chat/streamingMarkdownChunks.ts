@@ -2,12 +2,6 @@ export interface StreamingMarkdownChunk {
   /** 原文中的稳定起点，可直接作为 React key 与淡入状态分片 key。 */
   start: number;
   content: string;
-  /**
-   * 本分片之前所有标题的显示文本（JSON 字符串数组）。分片各自跑 rehype-slug 时
-   * 用它预置去重计数，标题 id 与整篇解析一致；没有前序标题时省略。字符串形式
-   * 让 React.memo 能按值比较。
-   */
-  headingSeed?: string;
 }
 
 function isTopLevelContinuation(line: string): boolean {
@@ -48,130 +42,6 @@ function hasGlobalMarkdownDefinitions(markdown: string): boolean {
   return /^ {0,3}\[(?:\\[^\r\n]|[^\]\\\r\n])+\]:/m.test(markdown);
 }
 
-interface HeadingLine {
-  /** 标题所在行在原文中的起点。 */
-  offset: number;
-  /** 与渲染后 hast 文本等价的标题文本；无法从源码可靠还原时为 null。 */
-  text: string | null;
-}
-
-/**
- * 标题源码里只含这些「渲染后只删掉符号」的语法时，源码去掉符号即等于渲染文本：
- * 强调 `*`、行内 code、删除线 `~`。github-slugger 本来就会删掉这些符号，所以
- * 预置去重计数与整篇解析完全一致。链接、转义、HTML、实体、公式、下划线强调、
- * 裸 URL（会被截断/改写）都可能改变显示文本，遇到就回退整篇解析。
- */
-const UNSAFE_HEADING_SOURCE = /[[\]<>&\\$_!]|:\/\//;
-
-function headingTextFromSource(source: string): string | null {
-  if (UNSAFE_HEADING_SOURCE.test(source)) return null;
-  return source.replace(/[*`~]/g, '').trim();
-}
-
-function collectHeadings(markdown: string): HeadingLine[] {
-  const headings: HeadingLine[] = [];
-  let fence: FenceState | null = null;
-  let offset = 0;
-  const lines = markdown.split('\n');
-  for (let index = 0; index < lines.length; index++) {
-    const lineOffset = offset;
-    const line = lines[index].replace(/\r$/, '');
-    offset += lines[index].length + 1;
-    const fenceRun = readFenceRun(line);
-    if (fenceRun) {
-      if (!fence) fence = { marker: fenceRun.marker, length: fenceRun.length };
-      else if (
-        fenceRun.marker === fence.marker &&
-        fenceRun.length >= fence.length &&
-        fenceRun.rest.trim().length === 0
-      ) {
-        fence = null;
-      }
-      continue;
-    }
-    if (fence) continue;
-    const atx = /^ {0,3}#{1,6}(?:[\t ]+(.*?))?(?:[\t ]+#+)?[\t ]*$/.exec(line);
-    if (atx) {
-      headings.push({ offset: lineOffset, text: headingTextFromSource(atx[1] ?? '') });
-      continue;
-    }
-    const next = lines[index + 1]?.replace(/\r$/, '');
-    if (line.trim().length > 0 && next !== undefined && /^ {0,3}(?:=+|-+)[\t ]*$/.test(next)) {
-      // Setext 标题的文本可以跨多行段落，源码无法逐行还原：保守地回退整篇。
-      headings.push({ offset: lineOffset, text: null });
-    }
-  }
-  return headings;
-}
-
-function hasMultipleHeadings(markdown: string): boolean {
-  const lines = markdown.split(/\r?\n/);
-  let headingCount = 0;
-  let fence: FenceState | null = null;
-
-  for (let index = 0; index < lines.length; index++) {
-    const line = lines[index];
-    const fenceRun = readFenceRun(line);
-    if (fenceRun) {
-      if (!fence) fence = { marker: fenceRun.marker, length: fenceRun.length };
-      else if (
-        fenceRun.marker === fence.marker &&
-        fenceRun.length >= fence.length &&
-        fenceRun.rest.trim().length === 0
-      ) {
-        fence = null;
-      }
-      continue;
-    }
-    if (fence) continue;
-
-    const isAtx = /^ {0,3}#{1,6}(?:[\t ]+|$)/.test(line);
-    const isSetext =
-      line.trim().length > 0 &&
-      index + 1 < lines.length &&
-      /^ {0,3}(?:=+|-+)[\t ]*$/.test(lines[index + 1]);
-    if ((isAtx || isSetext) && ++headingCount > 1) return true;
-  }
-  return false;
-}
-
-/** 引用、列表标记与缩进：其后的标题属于嵌套容器。 */
-const CONTAINER_PREFIX = /^(?:[\t ]*(?:>[\t ]?|[-+*][\t ]+|\d{1,9}[.)][\t ]+))*[\t ]*/;
-
-/**
- * 引用、列表里的标题（以及缩进超过 3 格的标题）也会被 rehype-slug 计数，但
- * collectHeadings 只认顶层标题，分片的 headingSeed 会漏掉它们，后面同名标题的
- * -1/-2 后缀就和整篇解析对不上。出现这种标题时回退整篇。围栏内的行不算；
- * 缩进代码块里的 # 行会被保守地当成标题，只少做一次优化。
- */
-function hasNestedHeading(markdown: string): boolean {
-  const lines = markdown.split(/\r?\n/);
-  let fence: FenceState | null = null;
-  let previous = '';
-  for (const line of lines) {
-    const prefix = CONTAINER_PREFIX.exec(line)?.[0] ?? '';
-    const inner = line.slice(prefix.length);
-    const fenceRun = /^(`{3,}|~{3,})(.*)$/.exec(inner);
-    if (fenceRun) {
-      const marker = fenceRun[1][0] as '`' | '~';
-      if (!fence) fence = { marker, length: fenceRun[1].length };
-      else if (marker === fence.marker && fenceRun[1].length >= fence.length && fenceRun[2].trim().length === 0) {
-        fence = null;
-      }
-      previous = '';
-      continue;
-    }
-    if (fence) continue;
-    const nested = prefix.length > 3 || /[^\t ]|\t/.test(prefix);
-    if (nested) {
-      if (/^#{1,6}(?:[\t ]|$)/.test(inner)) return true;
-      if (previous.length > 0 && /^(?:=+|-+)[\t ]*$/.test(inner)) return true;
-    }
-    previous = inner.trim();
-  }
-  return false;
-}
-
 function hasPotentialHtmlBlock(markdown: string): boolean {
   return /^ {0,3}<(?:!--|\?|!\[CDATA\[|![A-Za-z]|\/?[A-Za-z][A-Za-z0-9-]*(?:[\t />]|$))/m.test(
     markdown,
@@ -179,17 +49,11 @@ function hasPotentialHtmlBlock(markdown: string): boolean {
 }
 
 /**
- * 多个标题本身不再强制整篇解析：分片用 headingSeed 预置 slug 去重计数即可得到与
- * 整篇一致的 id。标题文本无法从源码可靠还原（见 UNSAFE_HEADING_SOURCE），或引用、列表里
- * 也有标题（见 hasNestedHeading）时回退整篇。
+ * 多个标题不再强制整篇解析：流式期间标题 id 不在分片内各自计算，而是渲染后按
+ * 文档顺序统一分配（streamingHeadingIds.ts），与整篇解析的去重结果一致。
  */
-function needsWholeDocumentContext(markdown: string, headings: HeadingLine[] | null): boolean {
-  return (
-    hasGlobalMarkdownDefinitions(markdown) ||
-    (headings !== null && headings.some((heading) => heading.text === null)) ||
-    hasPotentialHtmlBlock(markdown) ||
-    hasNestedHeading(markdown)
-  );
+function needsWholeDocumentContext(markdown: string): boolean {
+  return hasGlobalMarkdownDefinitions(markdown) || hasPotentialHtmlBlock(markdown);
 }
 
 export const STREAMING_MARKDOWN_THROTTLE_BASE_MS = 100;
@@ -198,8 +62,8 @@ export const STREAMING_MARKDOWN_THROTTLE_MAX_MS = 400;
 /**
  * Choose a bounded stream update interval from the amount of Markdown work.
  *
- * Multi-heading documents intentionally stay one ReactMarkdown tree so heading
- * ids, reference definitions, and raw HTML keep their document-wide context.
+ * Documents with reference definitions or raw HTML stay one ReactMarkdown tree
+ * so they keep their document-wide context.
  * Increasing the interval for those expensive trees reduces repeated parse /
  * highlight work without changing the rendered source or chunk boundaries.
  * The caller still flushes the latest value when streaming ends.
@@ -230,11 +94,10 @@ export function getStreamingMarkdownThrottleInterval(markdown: string): number {
  * 后续 token 只会让最后一个块重新走 Markdown 解析。
  */
 export function splitStreamingMarkdownChunks(markdown: string): StreamingMarkdownChunk[] {
-  if (!markdown.includes('\n\n') && !markdown.includes('\r\n\r\n')) {
-    return [{ start: 0, content: markdown }];
-  }
-  const headings = hasMultipleHeadings(markdown) ? collectHeadings(markdown) : null;
-  if (needsWholeDocumentContext(markdown, headings)) {
+  if (
+    (!markdown.includes('\n\n') && !markdown.includes('\r\n\r\n')) ||
+    needsWholeDocumentContext(markdown)
+  ) {
     return [{ start: 0, content: markdown }];
   }
 
@@ -293,20 +156,12 @@ export function splitStreamingMarkdownChunks(markdown: string): StreamingMarkdow
   if (boundaries.length === 0) return [{ start: 0, content: markdown }];
 
   const chunks: StreamingMarkdownChunk[] = [];
-  const withSeed = (chunkStart: number, content: string): StreamingMarkdownChunk => {
-    const seed = (headings ?? [])
-      .filter((heading) => heading.offset < chunkStart)
-      .map((heading) => heading.text);
-    return seed.length > 0
-      ? { start: chunkStart, content, headingSeed: JSON.stringify(seed) }
-      : { start: chunkStart, content };
-  };
   let start = 0;
   for (const boundary of boundaries) {
     if (boundary <= start || boundary > markdown.length) continue;
-    chunks.push(withSeed(start, markdown.slice(start, boundary)));
+    chunks.push({ start, content: markdown.slice(start, boundary) });
     start = boundary;
   }
-  chunks.push(withSeed(start, markdown.slice(start)));
+  chunks.push({ start, content: markdown.slice(start) });
   return chunks;
 }
