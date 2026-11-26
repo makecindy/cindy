@@ -340,7 +340,7 @@
     "tabOwned": "吾所发起",
     "startIntro": "邀同僚尽览此差事，与同一 Agent 并肩协作。",
     "runsOnThisDevice": "行于此机",
-    "inviteNotice": "持邀请链接者登门即可入，所得 Agent 使用权柄与东道同。",
+    "inviteNotice": "持邀请链接者登门即可入，所得 Agent 使用权柄与东道同。 虽仅共享子目录，客亦可阅全 Git 仓之现改。",
     "offlineAutoClose": "东道之机久脱机，共享将自终。",
     "inviteBoxHint": "遣链接予同僚，彼点之即可入；亦可于 Cindy 中点「入共事」贴此链接。",
     "invitationMessage": "邀君入「{{title}}」\n{{link}}\n点链接即入；若 Cindy 未启，可于 Cindy 中点「入共事」并贴此链接。",
@@ -401,7 +401,7 @@
       "progress": "今占 {{used}}% · 上限 {{limit}}%",
       "paused": "此模型已暂停，请另择可用之模型。",
       "recommendation": "荐用 {{model}}",
-      "unsupported": "此供方群组暂不支持模型占比之限。",
+      "unsupported": "此机组暂不支持模型占比之限。",
       "basis": "近 7 个自然日 · 输入＋输出 token，不计缓存",
       "maxPercent": "占个人耗用之上限",
       "empty": "尚无耗用数据",
@@ -496,23 +496,23 @@
         "confirm": "删分享"
       },
       "reshare": {
-        "applying": "欲经 {{owner}} 之供方组使用",
+        "applying": "欲经 {{owner}} 之机组使用",
         "requestedAt": "{{time}}所请",
         "usageHint": "许之，则 {{name}} 之差事可于此机运行，耗用计于 {{owner}} 名下",
         "approve": "许",
         "reject": "拒",
-        "summaryUsing_other": "{{count}} 人经 {{owner}} 之供方组使用",
-        "summaryOwner": "经 {{owner}} 之供方组",
+        "summaryUsing_other": "{{count}} 人经 {{owner}} 之机组使用",
+        "summaryOwner": "经 {{owner}} 之机组",
         "summaryDeclined_other": "{{count}} 人未许",
         "stateApproved": "已许",
         "stateRejected": "未许",
         "revoke": "撤许",
         "revokeAria": "撤对 {{name}} 之许",
         "approveAria": "许 {{name}} 使用",
-        "toastApproved": "已许 {{name}} 经 {{owner}} 之供方组用 {{provider}}",
+        "toastApproved": "已许 {{name}} 经 {{owner}} 之机组用 {{provider}}",
         "toastRejected": "已拒 {{name}} 之请",
         "toastRevoked": "已撤对 {{name}} 之许，方行之差事已止",
-        "listTitle": "经 {{owner}} 之供方组使用"
+        "listTitle": "经 {{owner}} 之机组使用"
       },
       "memberNote": {
         "add": "添备注",
@@ -558,7 +558,7 @@
       "requestedAt": "{{time}}经君之分享链接所请",
       "pairingHint": "许之前，可经遣链接之管道问彼一句：「君所见之配对码为何？」相符乃许。",
       "callout": "许之，则 {{name}} 可于己之差事中用 {{provider}} 之模型。Agent 于此机运行，耗用计入君之 {{provider}}。君可随时于「{{provider}} · 远程与分享」中闭之或删之。",
-      "calloutGroup": "许之，则 {{name}} 可于己之差事中用 {{provider}} 之模型。由供方组择一机运行 Agent，耗用计入君之 {{provider}}。君可随时于「{{provider}} · 远程与分享」中闭之或删之。",
+      "calloutGroup": "许之，则 {{name}} 可于己之差事中用 {{provider}} 之模型。由机组择一机运行 Agent，耗用计入君之 {{provider}}。君可随时于「{{provider}} · 远程与分享」中闭之或删之。",
       "calloutRemote": "许之，则 {{name}} 可于己之差事中用 {{provider}} 之模型。Agent 于供方所在之机运行，耗用计入君之 {{provider}}。君可随时于「{{provider}} · 远程与分享」中闭之或删之。",
       "calloutClaudeEmail": "{{name}} 用之时，Agent 可见君登录 Claude 所用之电子邮件地址。",
       "calloutUnknown": "若君不识申请之人，请拒之；拒后此链接即废。",
@@ -698,7 +698,7 @@
       "rejectedTitle": "分享之请未准",
       "rejectedBody": "{{name}} 未许分享 {{provider}}",
       "reshareTitle": "新使用之请",
-      "reshareBody": "{{name}} 欲经 {{owner}} 之供方组，用君所分享之 {{provider}}"
+      "reshareBody": "{{name}} 欲经 {{owner}} 之机组，用君所分享之 {{provider}}"
     },
     "runLimits": {
       "title": "远程差事之数",
@@ -710,7 +710,7 @@
       "idleHint": "差事闲置满此时长，此机即终其 Agent，名额随释；彼再遣讯时，将自动接回原言谈。方行之差事不收回。填 0 则永不收回。",
       "idleInvalid": "请填 0～{{max}} 之整数。",
       "usage": "今占 {{used}} / {{total}}，出自 {{devices}} 台设备；单台设备至多占 {{largest}} 个。",
-      "applyHint": "存后即生效。调低上限不断既有差事，仅限添加。供方组转送，按直接连接之设备计数。",
+      "applyHint": "存后即生效。调低上限不断既有差事，仅限添加。机组转送，按直接连接之设备计数。",
       "save": "存之",
       "reset": "复预设",
       "saved": "远程差事之数已存",
@@ -754,7 +754,7 @@
   },
   "providerGroup": {
     "management": {
-      "note": "方理 {{device}} 上之供方组。所改将存于彼机，请保其在线。",
+      "note": "方理 {{device}} 上之机组。所改将存于彼机，请保其在线。",
       "unsupported": "立组之机上之 Cindy 版本，暂不支持远程管理。请先更新彼机之 Cindy。"
     },
     "page": {
@@ -824,27 +824,13 @@
       "emptyRange": "此间无耗用，风平浪静。"
     },
     "section": {
-      "title": "供方组",
+      "title": "机组",
       "addComputer": "增机",
       "delete": "删组",
       "empty": "纳他机上之 {{provider}}，千帆并济，差事自择一机而行",
-      "loading": "方读供方组…",
-      "loadFailed": "供方组未能读",
+      "loading": "方读机组…",
+      "loadFailed": "机组未能读",
       "note": "此机上之差事，及受君分享者之差事，皆由组择一机运行 Agent"
-    },
-    "strategy": {
-      "label": "组之策",
-      "least": "最闲者先",
-      "round": "轮替",
-      "order": "依序",
-      "weight": "依权重",
-      "quotaFirst": "能读订阅耗用时，先用将重置而所余尚多之机，使各名籍按时均匀用尽；相差无几时，依组之策",
-      "description": {
-        "least": "予最闲之机",
-        "round": "依序轮替",
-        "order": "居前者先",
-        "weight": "依权重之比"
-      }
     },
     "autoSwitch": {
       "label": "自动易机",
@@ -901,9 +887,9 @@
         }
       },
       "removeConfirm": {
-        "title": "移 {{name}} 出供方组乎？",
+        "title": "移 {{name}} 出机组乎？",
         "description": "此后不再分新差事予之；已于其上方行之差事，仍留彼机。",
-        "lastDescription": "此乃组中末一机，移出则 {{provider}} 之供方组将删。",
+        "lastDescription": "此乃组中末一机，移出则 {{provider}} 之机组将删。",
         "confirm": "出组"
       },
       "sourceGroupOwner": "组所在之机",
@@ -939,12 +925,12 @@
       "send": "续发此讯"
     },
     "deleteConfirm": {
-      "title": "删 {{provider}} 之供方组乎？",
+      "title": "删 {{provider}} 之机组乎？",
       "description": "此后此机之新差事皆于此机运行；已分至他机之差事，仍留彼机。",
-      "confirm": "删供方组"
+      "confirm": "删机组"
     },
     "add": {
-      "title": "纳机入 {{provider}} 之供方组",
+      "title": "纳机入 {{provider}} 之机组",
       "sourceAria": "机之来源",
       "tabAvailable": "已可用者",
       "tabLink": "分享之链",
@@ -953,17 +939,17 @@
       "loadFailed": "可纳之机未能读",
       "empty": "无可纳之机。请于他机上对 {{provider}} 启「允许远程调用」，或以他人之分享链接申请。",
       "alreadyMember": "已在组中",
-      "confirm": "纳入供方组",
+      "confirm": "纳入机组",
       "cancel": "罢",
       "linkDescription": "贴他人所分享之 {{provider}} 链接，彼许之后，归「已可用者」勾选纳之。",
       "remoteLinkDescription": "请于供方组所在机上之「模型供方」设置中入分享链接。彼许之后，再归「已可用者」勾选纳之。",
       "pasteLink": "贴分享链接"
     },
     "toast": {
-      "added_other": "已纳 {{count}} 台机入 {{provider}} 之供方组",
-      "addedAccounts_other": "已纳 {{count}} 个名籍入 {{provider}} 之供方组",
-      "removed": "已移 {{name}} 出供方组",
-      "deleted": "已删 {{provider}} 之供方组"
+      "added_other": "已纳 {{count}} 台机入 {{provider}} 之机组",
+      "addedAccounts_other": "已纳 {{count}} 个名籍入 {{provider}} 之账号组",
+      "removed": "已移 {{name}} 出机组",
+      "deleted": "已删 {{provider}} 之机组"
     }
   },
   "regionScreenshot": {
@@ -1360,7 +1346,7 @@
     "DEVICE_LINK_BUSY": "远程方忙，请稍后再试。",
     "INVALID_PARAMS": "参数无效，请察之而后再试。",
     "PRECONDITION_FAILED": "今之状态下不能行此操作，请稍后再试。",
-    "PROVIDER_GROUP_CHANGED": "供方组已于他处修改，此番操作未行。请察最新设置而后重为之",
+    "PROVIDER_GROUP_CHANGED": "机组已于他处修改，此番操作未行。请察最新设置而后重为之",
     "MODEL_CONTEXT_USAGE_UNKNOWN": "模型未易：不能确知今差事已用之上下文。请留今模型，或新开差事后再择",
     "MODEL_WINDOW_CURRENT_CONTEXT_UNKNOWN": "模型未易：不能确知今模型之上下文窗口。请察自订模型之窗口设置；若不能改，请留今模型或新开差事",
     "MODEL_WINDOW_TARGET_CONTEXT_UNKNOWN": "模型未易：不能确知目标模型之上下文窗口。请察自订模型之窗口设置；若不能改，请另择模型或新开差事",
@@ -1871,7 +1857,7 @@
       "imBot": "IM 机器人",
       "ghosts": "法器",
       "cindyMake": "Cindy Make",
-      "modelGroups": "模型组"
+      "modelGroups": "智能路由"
     },
     "sections": {
       "user": "用者",
@@ -2535,7 +2521,7 @@
       "skinLabel": "角色",
       "skinHint": "任务胶囊与灵动岛中所显之角色。",
       "soundLabel": "事之音",
-      "soundHint": "事件设音，则独奏所择之声；未设或关之，则从系统通知之设。",
+      "soundHint": "为诸类提醒择 8-bit 之音，任务胶囊与灵动岛共之；点按之音唯触任务胶囊时鸣。",
       "soundAria": "切换任务胶囊之音",
       "soundSelectAria": "{{event}}之音",
       "soundPreviewAria": "先听{{event}}之音",
@@ -2590,7 +2576,7 @@
         "select": "点击"
       },
       "soundOptions": {
-        "none": "随系统",
+        "none": "无",
         "startup-chime": "启动之音",
         "ring-chime": "圆环之音",
         "item-found": "得宝",
@@ -4284,9 +4270,12 @@
           "compaction": {
             "title": "自缩",
             "hint": "占用达所择比例时整理上下文。比例愈低，压缩愈早；实际时机仍受引擎所限。",
-            "default": "{{pct}}%（常例）",
-            "timing": "施于此来源下该模型诸可用引擎。后续运行生效，不断方生之内容。"
+            "timing": "施于此来源下该模型诸可用引擎。后续运行生效，不断方生之内容。",
+            "defaultBadge": "默认",
+            "sliderAria": "调整自动压缩阈值",
+            "restoreAria": "还原自动压缩的默认比例"
           },
+          "antigravityHydrogenDescription": "宜日常编程，执行迅捷。",
           "contextLimitRoute": "今 {{tokens}} tokens",
           "contextLimitOverWindow": "已逾上游所宣之长度，请求或将未成。",
           "restoreDefault": "复预设",
@@ -4374,9 +4363,9 @@
         "detailNote": "Agent 行于 {{device}}，用彼机之登门与限额。新开差事时于模型清单中择之即可；欲改此供方，请至彼机之「规制 → 模型供方」。",
         "modelsTitle": "可用之模型",
         "modelsEmpty": "此供方于彼机尚无可用之模型，虚席以待。",
-        "rowLabelGroup": "{{provider}} · {{device}} · 供方组",
-        "groupBadge_other": "供方组 · {{count}} 台机",
-        "groupNote": "{{device}} 已将此供方立为供方组。于模型清单中择之以新开差事，{{device}} 将依组策略分差事予下列一机运行；彼机有恙，自换一机续之。{{device}} 在线时，君可自此处之「远程与分享」理此组及分享。",
+        "rowLabelGroup": "{{provider}} · {{device}} · 机组",
+        "groupBadge_other": "机组 · {{count}} 台机",
+        "groupNote": "{{device}} 已将此供方立为机组。于模型清单中择之以新开差事，{{device}} 将依组策略分差事予下列一机运行；彼机有恙，自换一机续之。{{device}} 在线时，君可自此处之「远程与分享」理此组及分享。",
         "groupMembersTitle": "组内之机",
         "groupMembersFailed": "暂不能读组内诸机之状态。",
         "hiddenBanner": "已隐于此机模型之选。所藏与方用之差事皆不受其扰。"
@@ -4428,7 +4417,7 @@
         "remoteAccess": {
           "label": "许远程调用",
           "description": "启之，则君之他机与君所分享之人，可用此供方之模型；Agent 行于此机，用此机之登门与限额。",
-          "descriptionGroup": "启之，则君之他机与君所分享之人，可用此供方之模型，由供方组择一机行 Agent。",
+          "descriptionGroup": "启之，则君之他机与君所分享之人，可用此供方之模型，由机组择一机行 Agent。",
           "ariaLabel": "许君之他机与君所分享之人调用此供方",
           "writeFailed": "远程调用之设未能存，请再试",
           "followsPool": "此连接已并入「{{pool}}」，随其「许远程调用」，请于「{{pool}}」中改之。"
@@ -4733,6 +4722,7 @@
         "discoveryHint": "下列型号由供方目录传回，尚未验其语声调用。",
         "saved": "已增",
         "reference": "参照型号",
+        "realtimeConfirmed": "实时端点已验",
         "discovered": "目录所回",
         "more": "余语声型号（{{count}}）",
         "manual": "亲书语声型号",
@@ -5631,7 +5621,8 @@
           "runtime": "辅佐模型近屡请而败，差事命名、摘要与字幕翻译等法器差事或受其累。",
           "open": "往规制"
         }
-      }
+      },
+      "missingRoute": "已删之模式"
     },
     "compaction": {
       "codex": {
@@ -8728,8 +8719,8 @@
         "hostTools_controlDetail": "得循 Cindy 之器改、藏、复及治既有任务与项目，并在本机导入原生任务文件。",
         "hostTools_handoff": "任务传言",
         "hostTools_handoffDetail": "得循 Cindy 之器传消息于既有任务。需当前任务之境者，须明指任务。",
-        "hostTools_usage": "查用量及供应商组状态",
-        "hostTools_usageDetail": "可查现用 Cindy 账号于此机所接 Claude/Codex 之账号标识、方案、配额时段及更新时间，亦可查此机及同账号已授权他机所记每日、型号用量、估算费用、供应商组配置与状态，及可见成员、设备之标识、名称与头像。不得取订阅登录邮址、账号目录、内部指纹、凭证或档案，亦不得改账号或设置。亦可查有权访问之任务额度，含同账号已授权他机及准予阅额度之分享供应商。",
+        "hostTools_usage": "查用量及机组状态",
+        "hostTools_usageDetail": "可查现用 Cindy 账号于此机所接 Claude/Codex 之账号标识、方案、配额时段及更新时间，亦可查此机及同账号已授权他机所记每日、型号用量、估算费用、机组配置与状态，及可见成员、设备之标识、名称与头像。不得取订阅登录邮址、账号目录、内部指纹、凭证或档案，亦不得改账号或设置。亦可查有权访问之任务额度，含同账号已授权他机及准予阅额度之分享供应商。",
         "hostTools_settings": "应用设置",
         "hostTools_settingsDetail": "得循 Cindy 之器阅改应用设置；不返密钥，秘文仍由主人亲填。",
         "hostTools_scheduler": "自动化治办",
@@ -8832,6 +8823,8 @@
         "networkSecretOauthDetail": "登录与令牌由 Cindy 代管，可新授权，亦可择同服务既连之账号。请核下列所请之权；用既连账号时，以其已有之权为准。",
         "networkConnections": "可连君所增之 {{label}}",
         "networkConnectionsDetail": "地址于此法器之设置界面中增之；每增一地址皆须君确认，君所供之凭证仅注入相应地址。",
+        "networkConnectionsGlabCli": "可连君所增之 {{label}}，并先用此机 glab 已登之实例",
+        "networkConnectionsGlabCliDetail": "君于法器设置中所增之实例凭证为先；未另增之实例，主机按需取此机 glab 之登录令牌，唯注入其自身之 HTTPS 请求，法器代码不得读取或存留令牌。",
         "codeDetailNetwork": "于独立沙箱中运行，不能访问君之文件；网络仅限上方所声明之网域，由主机代发。",
         "codeDetailWithNode": "面板 UI 于独立沙箱中运行；此机处理之能由上方所声明之 Node 运行环境提供。",
         "added": "新",
@@ -8860,7 +8853,7 @@
         "nodeChildSpawnDetail": "仅能启其包内已申报之 JS 文件(与主程序同等本机权柄)，不能行任意命令；法器禁用或退出时，子处理程序一并关闭。",
         "skill": "为 AI 助手增技艺「{{name}}」",
         "skillDetail": "技艺乃一份指令文件，AI 将视为己之指令加载而行，具君之全部权柄，于 Claude Code 与 Codex、一切案中皆生效——不受本法器沙箱所约。法器启用期间持续可用，禁用或卸除即移除；仅对某卷匣关闭本法器，不能隐之。此处不能先览技艺全文——请仅纳君所信之法器。",
-        "routineEvents": "例行差事事件",
+        "routineEvents": "自动化之事",
         "mcpUi": "可于言谈中示交互页面",
         "mcpUiDomains": "页面可连之网域：{{domains}}",
         "mcpAppOnly": "唯页面可用",
@@ -11706,18 +11699,14 @@
     "model": {
       "description": "择此同伴所用之模型。",
       "primary": "主模型",
-      "restoreDefault": "复预设模型"
+      "restoreDefault": "复预设模型",
+      "followsDefault": "用默认模型",
+      "ownModel": "单设之模型",
+      "managedInSettings": "伙伴之模型统设于「模型供方 → 智能路由」。",
+      "openSettings": "往设"
     },
     "modelChain": {
-      "primary": "首选模型",
-      "fallback": "备选 {{index}}",
-      "routeLabel": "模型候选 {{index}}",
-      "add": "增备选模型",
-      "remove": "去此候选",
-      "moveUp": "上之",
-      "moveDown": "下之",
-      "description": "至多设 5 模型。当前候选不可用时，同伴依序自行接替，不劳君易差事或再试。",
-      "options": "备选模型（{{count}}）"
+      "routeLabel": "模型候选 {{index}}"
     },
     "actions": {
       "message": "遣讯",
@@ -12140,7 +12129,9 @@
           "GROUP_AUTHORIZATION_REQUIRED": "{{name}} 的工具调用未执行：群内授权已失效或不允许此操作。请由伙伴主人在当前群重新发起。",
           "GROUP_AUTHORIZATION_UNAVAILABLE": "暂时无法核验 {{name}} 的群聊授权，这次工具调用未执行。请在连接恢复后重试。",
           "ATTACHMENTS_UNAVAILABLE": "部分附件未交给 {{name}}（下载失败或数量限制）。请重新发送本次需要的附件。",
-          "GROUP_ASSISTANT_UNAVAILABLE": "{{name}}，连君之 Cindy，而后 Cindy 可代君行事（君之电脑今无在线之 Cindy）。"
+          "GROUP_ASSISTANT_UNAVAILABLE": "{{name}}，连君之 Cindy，而后 Cindy 可代君行事（君之电脑今无在线之 Cindy）。",
+          "GROUP_ASSISTANT_DEVICE_REQUIRED": "{{name}}，请择本群执行之机，既择即续此事。",
+          "GROUP_ASSISTANT_DEVICE_OFFLINE": "{{name}} 于本群所择之机已离线。"
         }
       },
       "settings": {
@@ -12555,6 +12546,8 @@
           "accessToolsHint": "可用 {{name}} 已有之工具与君之私人数据，结果全群可见。原有操作审批照常；撤回之后，已成之操作不可撤销。",
           "capabilitiesRow": "{{name}} 之工具与授权",
           "accessMenu": "于本群之权柄",
+          "assistantComputer": "执行之机",
+          "chooseComputer": "择机",
           "notifications": {
             "title": "消息告知",
             "all": "凡讯皆告",
@@ -12854,7 +12847,7 @@
       "arrivingLater": "{{name}} 已移至此机，方在筹备，稍后将现于同伴录中",
       "arrivalPermissions": "{{name}} 已依此机预设权柄运作。",
       "arrivalModel": "{{name}} 前所选之模型此机不可用，已改用此机预设模型。",
-      "arrivalModelSetup": "{{name}} 已至此机，然尚无可用模型。请连结模型供方，或于此同伴之「设置 → 模型」择一模型。",
+      "arrivalModelSetup": "{{name}} 已至此机，然尚无可用模型。请连模型供方，或于「模型供方 → 智能路由」设伙伴之默认模型。",
       "arrivalPartialContent": "{{name}} 已至此机，部分云端所存未能复原，原物仍留于云端。",
       "missingProfileTitle": "以初设资料续 {{name}} 乎？",
       "missingProfileDescription": "原主力电脑尚未传 {{name}} 之人设与简介。若原机已重装或不可复，可于此机以初设资料续之，已同步云端之对话与所存仍保留。",
@@ -14803,7 +14796,7 @@
         "providerGroupLabel": "{{provider}} · {{group}}",
         "providerGroupRunningOn": "今行于 {{device}}",
         "providerGroupRunningHere": "今行于此机",
-        "providerGroupUnassigned": "始后由供方组择一机，耗用依彼机而示"
+        "providerGroupUnassigned": "始后由机组择一机，耗用依彼机而示"
       },
       "modelListAria": "模型录",
       "speed": {
@@ -16266,6 +16259,7 @@
       },
       "autoResumePending": {
         "label": "方重连",
+        "continuingWithProgress": "自动续行中（{{attempt}}/{{total}}）…",
         "labelWithProgress": "方重连 {{attempt}}/{{total}}",
         "groupSwitch": "方易一机续之"
       },
@@ -16580,7 +16574,7 @@
       "REMOTE_AGENT_SHARE_UNAVAILABLE": "所分享之供方暂不可用：对方之机或不在线，或对方暂罢分享。可稍后再试，或易他模型续之。",
       "REMOTE_AGENT_SHARE_LEGACY_DISABLED": "此乃旧版分享，启「唯用 Agent-Net」时暂不可用。关此开关即可续之，亦可易他模型。",
       "REMOTE_AGENT_GROUP_USAGE_LIMIT": "此模型之可用名籍已达耗用上限。可改用他模型，或待限额重置后续之。",
-      "REMOTE_AGENT_GROUP_UNAVAILABLE": "供方组中之机今皆不能行此差事：或皆脱机、已暂停分配、方冷却，或无此模型。可至此供方之「远程与分享」页察组内之机。",
+      "REMOTE_AGENT_GROUP_UNAVAILABLE": "机组中之机今皆不能行此差事：或皆脱机、已暂停分配、方冷却，或无此模型。可至此供方之「远程与分享」页察组内之机。",
       "REMOTE_AGENT_GROUP_FULL": "可行此务之账号或电脑，并行皆已至上限。俟运行之务毕，或于供应商设置中增其上限。",
       "SUBSCRIPTION_ACCOUNTS_FULL": "可行此务之账号或电脑，并行皆已至上限。俟运行之务毕，或于供应商设置中增其上限。",
       "REMOTE_AGENT_DEVICE_LIMIT": "此设备所留远程差事之数已达上限。可封存暂不用之差事，或请远方之机主于「远程与分享」中提高上限。",
@@ -17548,7 +17542,14 @@
         "snoozeFailed": "未能保存稍后处理时间，请检查连接并确认任务所属电脑已更新。",
         "hours": "{{count}} 小时后",
         "hours_one": "{{count}} 小时后",
-        "hours_other": "{{count}} 小时后"
+        "hours_other": "{{count}} 小时后",
+        "pendingSync": "待同步",
+        "pendingArchiveSync": "俟电脑上线自归档",
+        "offlineCompleteRejectedDirty": "「{{title}}」已返待处：worktree 尚有未呈之改，须复核方归档。",
+        "offlineCompleteRejectedNewActivity": "「{{title}}」已返待处：离线期间此差事有新进。",
+        "offlineCompleteRejectedRunning": "「{{title}}」已返待处：此差事方行。",
+        "offlineCompleteRejectedAttached": "「{{title}}」已返待处：此差事方受接管或共治，未自归档。",
+        "offlineCompleteRejectedPreflight": "「{{title}}」已返待处：未克核验 worktree，须手核方归档。"
       },
       "taskListMode": {
         "heading": "任务模式",
@@ -17780,8 +17781,8 @@
           }
         },
         "gitlab": {
-          "missing": "未见 GitLab CLI（glab），故无 MR 状态。装 glab 并登录乃可见。",
-          "notLoggedIn": "本机 glab 未登录 {{host}}，故无 MR 状态。于终端行 glab auth login，登录乃可见。",
+          "missing": "未见 GitLab CLI（glab），GitLab 法器亦无此实例之连，故无 MR 状态。装 glab 并登录，或于 GitLab 法器添此实例，乃可见。",
+          "notLoggedIn": "本机 glab 未登录 {{host}}，GitLab 法器亦无此实例之连，故无 MR 状态。于终端行 glab auth login，或于 GitLab 法器添此实例，乃可见。",
           "unsupported": "此机尚不支持 GitLab MR 状态",
           "openAria": "于浏览器开 MR !{{number}}",
           "summaryAria": "MR !{{number}} 概览",
@@ -18007,6 +18008,13 @@
         "active": "筛 {{count}}",
         "reset": "重设",
         "allProjects": "诸案"
+      },
+      "match": {
+        "label": "检词",
+        "any": "任一词",
+        "all": "诸词俱备",
+        "help": "择“全部关键词”，以空格分词，诸词须同见于一则消息。以“精确短语”寻相连之文。标题另验。",
+        "partial": "所得或有未尽，请细其词或限其案。"
       }
     }
   },
@@ -18207,7 +18215,8 @@
         "pause": "暂止",
         "deleteAutomation": "删自运"
       },
-      "tagWebhook": "Webhook"
+      "tagWebhook": "Webhook",
+      "tagPluginEvent": "法器之事"
     },
     "detail": {
       "manualTrigger": "手触",
@@ -18316,7 +18325,7 @@
           "sessions_dispatch": "派差事",
           "feishu_read": "读飞书之讯",
           "settings_read": "读分享成员",
-          "usage_read": "查用量及供应商组状态"
+          "usage_read": "查用量及机组状态"
         },
         "project": "案之目录",
         "capabilitiesLabel": "许呼之能",
@@ -18330,7 +18339,7 @@
           "sessions_dispatch": "立或唤 {{appName}} 差事，并递讯",
           "feishu_read": "列近日活跃之言谈；取指定言谈（群/单聊）之近讯",
           "settings_read": "读己所分享成员及其可用模型，含同账号已授权他机；不改设置",
-          "usage_read": "可查现用 Cindy 账号于此机所接 Claude/Codex 之账号标识、方案、配额时段及更新时间，亦可查此机及同账号已授权他机所记每日、型号用量、估算费用、供应商组配置与状态，及可见成员、设备之标识、名称与头像。不得取订阅登录邮址、账号目录、内部指纹、凭证或档案，亦不得改账号或设置"
+          "usage_read": "可查现用 Cindy 账号于此机所接 Claude/Codex 之账号标识、方案、配额时段及更新时间，亦可查此机及同账号已授权他机所记每日、型号用量、估算费用、机组配置与状态，及可见成员、设备之标识、名称与头像。不得取订阅登录邮址、账号目录、内部指纹、凭证或档案，亦不得改账号或设置"
         },
         "capabilityWarn": {
           "ghostMissing": "依「{{name}}」法器，今未纳——差事行时此能必败",
@@ -18548,11 +18557,123 @@
         "cindyConnectionTitle": "GitHub · 经 Cindy 连接",
         "manualConnectionTitle": "GitHub · 手动 Webhook",
         "githubAppHint": "于执行此任务之电脑连接 GitHub App，授权所列仓库，无须另设 Webhook 地址或密钥。",
-        "githubAppPaused": "任务已暂停，事件不启之。"
+        "githubAppPaused": "任务已暂停，事件不启之。",
+        "plugin": {
+          "source": "法器之事",
+          "label": "择法器与事",
+          "empty": "本机尚无能报事之法器。装而启用申明有事之法器，乃可于此择之。",
+          "unavailable": "法器不可用",
+          "remove": "除之",
+          "hint": "法器不代汝滤事，虽此自动化自发之讯亦然；当否处之，宜于提示或前置检查中言明。机寐、机关或法器停用之时，事不可得。",
+          "offlineHint": "机寐、机关或法器停用之时，事不可得；不容遗漏者，宜另设定时之察。",
+          "required": "请至少择一法器之事",
+          "state": {
+            "listening": "方听",
+            "disconnected": "已断",
+            "error": "连接有误",
+            "stopped": "未行",
+            "unknown": "待法器报其状"
+          },
+          "filterOnly": "唯察",
+          "filterField": "字段",
+          "filterOperator": "约",
+          "filterValue": "值",
+          "filterRemove": "除此约",
+          "filterAdd": "增「唯察」之约",
+          "operators": {
+            "equals": "等于",
+            "contains": "含",
+            "not-equals": "不等于"
+          }
+        },
+        "scopeLabel": "所及",
+        "scope": {
+          "repository": "全库",
+          "repositoryHint": "库有新事则行，如新 PR、评语、CI 竣事。",
+          "repositoryNeedsAccount": "须登 Cindy 之号，乃能受库之事。",
+          "item": "指定之 PR 或 Issue",
+          "itemHint": "唯察一 PR 或 Issue：PR 状实有变乃行，Issue 有新动则行。",
+          "project": "全项",
+          "projectHint": "项有新事则行，如新 MR、Issue、流水竣事。",
+          "gitlabItem": "指定之 MR 或 Issue",
+          "gitlabItemHint": "唯察一 MR 或 Issue：MR 状实有变乃行，Issue 有变则行。"
+        },
+        "item": {
+          "label": "PR 或 Issue",
+          "placeholder": "42、#42、owner/repo#42 或链",
+          "hint": "书编号、owner/repo#编号，或贴 PR / Issue 之链，Cindy 自辨其类。",
+          "resolving": "辨之中…",
+          "pr": "PR #{{number}}",
+          "issue": "Issue #{{number}}",
+          "closed": "已闭",
+          "required": "请书所察之 PR 或 Issue，待其辨毕。",
+          "issueHint": "指定 Issue 借 Cindy 所连之 GitHub App 受事，须登 Cindy 之号。",
+          "errors": {
+            "invalid": "请书编号、#编号、owner/repo#编号，或 GitHub 上 PR / Issue 之链。",
+            "no-repository": "唯书编号则须知其库，请书 owner/repo#42，或贴其链。",
+            "not-connected": "连 GitHub 而后能辨 PR 抑 Issue。",
+            "not-found": "此库无此编号，或君无权观之。",
+            "unavailable": "暂不能连 GitHub，请稍后再试。",
+            "needs-account": "此乃 Issue。指定 Issue 须登 Cindy 之号，并借 Cindy 连 GitHub。"
+          },
+          "issueChange": {
+            "any": "Issue 有新动",
+            "comment": "有新评",
+            "closed": "Issue 已闭",
+            "reopened": "Issue 复开"
+          },
+          "mr": "MR !{{number}}"
+        },
+        "gitlabSignedConnection": "签名之令（GitLab 十九以上）",
+        "gitlabSignedConnectionHint": "于 GitLab 项之 Webhook 设中用签名之令，更为稳妥。",
+        "gitlabTokenConnection": "Secret token",
+        "gitlabTokenConnectionHint": "宜于旧版 GitLab：于 Webhook 设中书 Secret token。",
+        "gitlabPluginConnection": "借 GitLab 法器",
+        "gitlabPluginConnectionHint": "以 GitLab 法器所连之号，每分一察，无须于 GitLab 设 Webhook，亦无须登 Cindy 之号。机寐或机关之时所变，不复补报。",
+        "gitlabMrPollConnection": "按时察其进止",
+        "gitlabMrPollConnectionHint": "依「兼按时省察」之期读 MR 之状（不行差事），先取法器所录之号，次取此机 glab 之登。",
+        "gitlabSetupHint": "存后于差事详情取收址与密钥，书于 GitLab 项之「设置 › Webhooks」。",
+        "gitlabItem": {
+          "label": "MR 或 Issue",
+          "placeholder": "!12、#12、group/project!12 或链",
+          "hint": "MR 书 !编号，Issue 书 #编号，亦可径贴其链。",
+          "required": "请书所察之 MR 或 Issue。",
+          "mrHint": "GitLab 无推报，Cindy 依「兼定时察」之时读 MR 之状（不行差事），用此机 glab 之登，或 GitLab 法器所连之号。",
+          "mrPluginHint": "GitLab 法器每分一察此 MR，新提交、评注、核准及管线成败皆在其中。",
+          "issueHint": "借 GitLab Webhook 受此 Issue 之变。评语之事不能辨 MR 与 Issue，故唯应 Issue 自身之新立、修改、闭与复开。",
+          "issuePluginHint": "GitLab 法器每分一察此 Issue，新评亦在其中。",
+          "errors": {
+            "invalid": "请依 !12（MR）、#12（Issue）或 group/project!12 之式书之，亦可贴 GitLab 之链。",
+            "ambiguous": "GitLab 之 MR 与 Issue 编号各别，请书 !12（MR）或 #12（Issue），或贴其链。",
+            "needs-link": "指定 MR 须知 GitLab 之所，请贴 MR 之链。",
+            "needs-account": "此乃 Issue。指定 GitLab Issue，须装 GitLab 法器，或登 Cindy 之号以受 GitLab Webhook。"
+          },
+          "mrChange": {
+            "any": "MR 有新动",
+            "merged": "MR 已合",
+            "review": "审有新动",
+            "ci": "流水之状有变"
+          },
+          "issueChange": {
+            "any": "Issue 有变",
+            "comment": "Issue 有新评",
+            "closed": "Issue 已闭",
+            "reopened": "Issue 复开"
+          }
+        },
+        "gitlabPlugin": {
+          "projectLabel": "项目",
+          "projectHint": "书 group/project 或项目之链。法器连数实例者，宜贴其链。",
+          "projectInvalid": "宜书 group/project 或以 https 起之项目链。",
+          "eventsLabel": "事",
+          "eventsHint": "皆不择者，应此项目诸事。",
+          "unavailable": "GitLab 法器未装或已停，请于「法器」启之，然后存。"
+        }
       },
       "trigger": {
         "label": "触发方式",
-        "timed": "定时"
+        "timed": "定时",
+        "event": "事"
       },
       "runSettings": "运行设置"
     },
@@ -18631,7 +18752,7 @@
         "categoryListAria": "{{category}} 模型",
         "effortListAria": "思之深浅",
         "boundLocationLocked": "所系差事仍于原机行之，请择彼机之模型。",
-        "modelGroupTitle": "模型组「{{name}}」：新立任务则依式择源"
+        "modelGroupTitle": "智能路由「{{name}}」：每行而起新任务，则择一源"
       }
     },
     "toast": {
@@ -18843,7 +18964,8 @@
         "reconnectConfirm": "重连 Webhook 乎？",
         "reconnectConfirmHint": "此举将占一名额并生新受信之址。请以新址与密钥更设发信方。",
         "reconnectFailed": "暂未能重连，请察所余名额后再试。"
-      }
+      },
+      "pluginTitle": "法器之事触发"
     }
   },
   "issueTracker": {
@@ -20074,6 +20196,9 @@
       "permissionTightenInterruptFailed": "收紧权柄时未能止方行之差事，其或将免确认而行至终；如有需要，请手止之。",
       "codexAutoReviewUnavailable": "自动审批暂不可用，此举已阻，权柄已改为预设。请再试，需时当问于君。",
       "hostShellCommandBlocked": "Cindy 已阻此 Shell 命令。请察其命令，改用可用之工具或命令续之。",
+      "reconnectAutoResumeExhausted": "自动续行已达重试之限。",
+      "reconnectAutoResumeDisabled": "自动续行未启。",
+      "codexReconnectStalled": "模型断连，两分钟未复。",
       "upstreamResponseIdleTimeout": "模型久无所应，此轮已自断，以免空待无期。已成之工具调用皆存，径遣下一讯即可续之。",
       "codexHistoryOversized": "图之历史过巨，未能自复。请遣「继续」，Cindy 当接续今之差事。",
       "codexHistoryOversizedRemote": "此段历史中有过巨之图，远程压缩遣之不出。请于行 Codex 之机开此差事再遣，Cindy 将自略其图而续之。",
@@ -21120,7 +21245,7 @@
   "routines": {
     "hourly": "每时",
     "everyMinutes": "每 {{count}} 分",
-    "pluginCapability": "向例行差事呈已声明之事，唯触发君所设之例行差事",
+    "pluginCapability": "向自动化呈已声明之事，唯触发择此法器之自动化",
     "advancedSettings": "高级之设"
   },
   "cindyMakeDoctor": {
@@ -22747,9 +22872,6 @@
     }
   },
   "openAiAccountGroup": {
-    "strategy": "账号组策略",
-    "leastHint": "优先分给运行任务最少的连接",
-    "quotaHint": "能读取订阅用量时，会先按用量筛选连接，再按组策略分配。",
     "removeDescription": "此连接将不再接收组内的新任务。正在运行的任务仍留在原连接。",
     "mergeDescription": "从 {{target}} 新建的任务可以使用这两个供应商。登录、密钥和已有任务保留在原处。建立调度关系前，Cindy 会测试 {{apiKey}} 的 API Key。",
     "modelUnavailable": "此连接无法调用本次自动选中的模型。再次测试可尝试其他候选。",
@@ -22821,7 +22943,6 @@
       "useCodex": "以 Codex 登录"
     },
     "title": "订阅账号",
-    "strategy": "负载均衡",
     "add": "添加账号",
     "defaultTag": "默认",
     "ready": "已连接",
@@ -22896,14 +23017,15 @@
     "refreshFailed": "主题已装入，清单未能更新，请于外观规制中重新整理"
   },
   "modelGroups": {
-    "title": "模型组",
-    "description": "合模型供方已有之数源为一项。择模型时于「模型组」取之，此番用何源，由 Cindy 定夺。",
-    "routes": "模式",
-    "routesDescription": "一模式纳数源，新差事起时，依择法取其一。",
+    "title": "智能路由",
+    "description": "合模型供方已有之数源为一项。择模型时于「智能路由」取之，此番用何源，由 Cindy 定夺。",
+    "routes": "路",
+    "routesDescription": "合数源为一项。源可为整供方（择模型如常，由路定用何者），亦可为某一模型。同家之数供方，自合之。",
+    "sourceCount_one": "{{count}} 源",
     "sourceCount_other": "{{count}} 源",
     "strategy": {
       "expiring": {
-        "title": "将废者先用",
+        "title": "自择",
         "hint": "订阅限额余多而将重设者先用，不使虚掷；限额不可读之源居后。"
       },
       "order": {
@@ -22932,12 +23054,15 @@
       }
     },
     "picker": {
-      "empty": "尚无模型组。于设定合数源为一模式，即可于此择之。",
-      "manage": "理模型组",
-      "deviceTitle": "模型组 · {{device}}",
+      "empty": "尚无智能路由。于设定合数源为一路，即可于此择之。",
+      "manage": "理智能路由",
+      "deviceTitle": "智能路由 · {{device}}",
       "switched": "「{{name}}」已将此差事易为 {{model}}",
       "switchUnavailable": "「{{name}}」今无可供此差事之源，模型未易。",
-      "chooseUnavailable": "「{{name}}」今无可用之源，未取之。"
+      "chooseUnavailable": "「{{name}}」今无可用之源，未取之。",
+      "mergedLabel_other": "{{name}} · 路（{{count}} 源）",
+      "routeDecides": "此番用何源，由路「{{name}}」定之",
+      "quotaOf": "额度：{{name}}"
     },
     "why": {
       "expiringQuota": "限额尚余 {{left}}%，{{reset}} 重设，故先用之",
@@ -22949,7 +23074,7 @@
       "soonestUntil": "诸源限额皆尽，彼最先复（{{reset}}）",
       "standby": "此番未及",
       "standbyQuota": "限额尚余 {{left}}%，{{reset}} 方重设，姑留之",
-      "off": "已于此模式停用",
+      "off": "已于此路停用",
       "unavailable": "未连线，或此模型今不可择",
       "limited": "限额已尽",
       "limitedUntil": "限额已尽，{{reset}} 复",
@@ -22969,18 +23094,19 @@
     },
     "settings": {
       "autoSwitch": {
-        "title": "遇阻自换来源",
-        "hint": "此模式所用来源有阻，则自换次一可用者，并于该轮下书明。关之，则仅于出错时提议换源。"
+        "title": "遇阻自换源",
+        "hint": "此路所用之源有阻，则自换次一可用者，并于该轮下书明。关之，则仅于出错时提议换源。"
       },
-      "newRoute": "立模式",
-      "newRouteName": "新模式",
-      "routesEmpty": "尚无模式。立其一，纳数源于中。",
-      "scopeNote": "模型组用于此机之差事：起新差事时定一源；于行中之差事择之，即时易一次，此后不自易。",
-      "back": "归模型组",
+      "newRoute": "立新路",
+      "newRouteName": "新路",
+      "routesEmpty": "尚无路。立其一，纳数源于中。",
+      "scopeNote": "智能路由用于此机之差事：起新差事时定一源；于行中之差事择之，即时易一次，此后不自易。",
+      "back": "归智能路由",
       "name": "名",
       "nameHint": "择模型时显此名。",
-      "routeShownAs": "择模型时见于「模型组」。",
+      "routeShownAs": "择模型时见于「智能路由」。",
       "pick": "此番用何者",
+      "moreStrategies": "他法",
       "effort": "思之深浅",
       "effortUnset": "不指定",
       "effortHint": "所择模型不支此档时，依其常例而行。",
@@ -22990,14 +23116,15 @@
       "sources": "可用之源",
       "sourcesHint": "可纳不同模型；实用何者，书于差事之中。",
       "sourcesEmpty": "尚无源。于下增已连线之模型。",
-      "sourcesFull": "一模式至多 {{count}} 源。",
+      "sourcesEmptyMerged": "尚无源。于下增已连线之供应者。",
+      "sourcesFull": "一路至多 {{count}} 源。",
       "addSource": "增源",
       "chooseModel": "择一模型",
       "notConnected": "未连线",
       "moveUp": "上移",
       "moveDown": "下移",
-      "remove": "逐出此模式",
-      "useSource": "令此模式用 {{name}}",
+      "remove": "逐出此路",
+      "useSource": "令此路用 {{name}}",
       "try": {
         "title": "试之",
         "hint": "观今起新差事将用何者。不遣讯，不耗限额。",
@@ -23005,11 +23132,14 @@
         "picked": "用之",
         "standby": "备用",
         "skipped": "略过",
-        "unavailable": "此模式今无可用之源，新差事将用君原择之模型。"
+        "unavailable": "此路今无可用之源，新差事将用君原择之模型。",
+        "failed": "未能试出，请再试。",
+        "model": "试何模型"
       },
-      "deleteRoute": "删此模式",
+      "deleteRoute": "删此路",
       "deleteRouteConfirmTitle": "删「{{name}}」？",
-      "deleteRouteConfirmDescription": "他模式中改行此式之时段例外将一并删除。已起之差事不受影响。",
+      "deleteRouteConfirmDescription": "他路中改行此路之时段例外将一并删除。已起之差事不受影响。",
+      "deleteMergedRouteConfirmDescription": "已起之差事不受影响。",
       "delete": "删除",
       "cancel": "罢",
       "saveFailed": "未能存之，请再试。",
@@ -23034,23 +23164,70 @@
         "addHours": "增",
         "sameHour": "起讫不可同时。",
         "full": "至多 {{count}} 条例外。",
-        "needOtherRoute": "再立一模式，方可依时段改行之。"
+        "needOtherRoute": "再立一路，方可依时段改行之。"
       }
     },
     "overview": {
       "mapTitle": "今如何行",
-      "mapDescription": "自左而右：行何模式，终落何源。点模式可修之。",
+      "mapDescription": "自左而右：行何路，终落何源。点路可修之。",
       "columnSources": "源",
       "columnEmpty": "尚无",
-      "openRoute": "启模式「{{name}}」",
+      "openRoute": "启路「{{name}}」",
       "recentTitle": "近日所择",
-      "recentEmpty": "尚无差事用过模式。",
-      "keptOriginal": "其中今无可用之模型，仍用原择之模型。",
+      "recentEmpty": "尚无差事用过路。",
+      "keptOriginal": "路中今无可用者，仍用原择之模型。",
       "keptOriginalShort": "仍用原模型",
       "latest": "近一差事所行之路"
     },
     "switchOffer": {
       "action": "易用 {{model}} 续之"
+    },
+    "auto": {
+      "accounts_one": "{{count}} 账号",
+      "accounts_other": "{{count}} 账号",
+      "computers_one": "{{count}} 机",
+      "computers_other": "{{count}} 机",
+      "pickFor": "{{name}} 之择法",
+      "hiddenTag": "已隐",
+      "show": "择模型时列之",
+      "assignedBy": "新差事依「{{strategy}}」分之",
+      "adjust": "于智能路由调之"
+    },
+    "sources": {
+      "models_one": "{{count}} 模型",
+      "models_other": "{{count}} 模型",
+      "autoTag": "自成",
+      "chooseProvider": "择供应商",
+      "removeAria": "自此路去 {{name}}",
+      "note": "自成之路随供应商之连接增减：其员不可增删，然可易其先后、定其权重、停其一，亦可易择法或隐此路。",
+      "providers_one": "{{count}} 供应商",
+      "providers_other": "{{count}} 供应商",
+      "addWhole": "添整供应商",
+      "addWholeHint": "其诸模型皆入此路：择模型时此路如一供应商，择模型如常，由路定用何员。",
+      "addModelHint": "独添某供应商之某模型：择此路时依择法于诸源择其一。",
+      "detailHint": "此路合整供应商：择模型时如一供应商，择模型与思深如常，由路定用何员。"
+    },
+    "kinds": {
+      "byModel": "依模型",
+      "byProvider": "依供应商"
+    },
+    "buddies": {
+      "title": "伙伴之模型",
+      "description": "伙伴共用一默认模型，有需异者乃单设。欲其遇故自换来源，则择一智能路由。",
+      "saveFailed": "伙伴之模型未存，请再试",
+      "defaultLabel": "默认模型",
+      "defaultHint": "伙伴皆用之，新建者及自他机接来者亦然。",
+      "ownTitle": "单设之伙伴",
+      "ownTitleWithRest_other": "单设之伙伴 · 余 {{count}} 位用默认",
+      "addOwn": "为一伙伴单设",
+      "allFollow": "今伙伴皆用默认模型。",
+      "otherComputers": "他机之伙伴",
+      "deviceBuddies_other": "伙伴 {{count}} 位",
+      "devicePageTitle": "{{device}} 之伙伴",
+      "devicePageHint": "于彼机可用之模型与智能路由中择之，存于彼机。",
+      "deviceDefaultReadOnly": "彼机更新后，方可于此改其默认模型。",
+      "deviceUnavailable": "今不能读彼机伙伴之设。确其在线后再开。",
+      "deviceLoading": "方读彼机之设…"
     }
   },
   "projectSettings": {

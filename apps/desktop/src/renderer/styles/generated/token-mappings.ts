@@ -59,6 +59,10 @@ export const SCALABLE_APPEARANCE_TOKENS = {
     "value": 1000,
     "unit": "ms"
   },
+  "--motion-stream-word": {
+    "value": 500,
+    "unit": "ms"
+  },
   "--motion-sidebar-title-marquee-per-viewport": {
     "value": 2400,
     "unit": "ms"

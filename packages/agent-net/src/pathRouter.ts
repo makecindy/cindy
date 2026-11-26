@@ -230,6 +230,19 @@ export class PathRouter<R> {
     this.applyRoutePreference(true);
   }
 
+  /** 本机换网或重建 UDP 套接字后：清掉旧网络的直连测速缓存与自动切路冷却，若此刻走中转则立即重新探测直连。 */
+  onLocalNetworkChanged(): void {
+    if (this.port.closed()) return;
+    this.lastAutoSwitchAt = Number.NEGATIVE_INFINITY;
+    this.measuredDirectRttMs = null;
+    this.measuredDirectAt = 0;
+    this.nextCandidate = 0;
+    if (this.port.path() === 'relay') {
+      if (this.effectivePreferRelay()) this.measureStandbyPath();
+      else this.probeCandidates();
+    }
+  }
+
   /** A `probe-rtt` sample: the round trip a validation measured on `address` (`relay`: it is this peer's relay path). */
   onProbeRtt(address: DirectAddress | R, relay: boolean, rttUs: number): void {
     if (this.port.closed()) return;
