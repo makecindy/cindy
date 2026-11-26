@@ -148,6 +148,8 @@ import {
   activateMessageUrl,
 } from './messageLinkActions';
 import { useOpenWithMenu } from './useOpenWithMenu';
+import { parsePrLinkUrl } from '@/features/cc-agent/PrSummaryPopoverContent';
+import { PrLinkHoverPopover, type PrLinkHoverTriggerProps } from './PrLinkHoverPopover';
 import { activateInlineLinkFromKeyboard, isSeparateLinkActivation } from './linkInteraction';
 import { useLinkContextMenu } from './useLinkContextMenu';
 
@@ -1796,25 +1798,59 @@ function MarkdownTargetLink({
     return <span>{children}</span>;
   }
 
-  // Explicit local candidates retain the same open/copy-link menu as links.
-  return (
-    <>
+  const prLink = useMemo(
+    () => (allowPrivilegedLinks && target.kind === 'external' ? parsePrLinkUrl(target.href) : null),
+    [allowPrivilegedLinks, target.kind, target.href],
+  );
+  const effectiveSessionId = sessionId ?? fileCtx.sessionId;
+  const renderAnchor = (prHoverProps?: PrLinkHoverTriggerProps) => (
     <a
       href={target.href}
       className={MARKDOWN_LINK_CLASS}
       onKeyDown={activateInlineLinkFromKeyboard}
-      onClick={activate}
+      onClick={(event) => {
+        prHoverProps?.onDismiss();
+        void activate(event);
+      }}
       onAuxClick={(event) => {
-        if (event.button === 1) void activate(event);
+        if (event.button === 1) {
+          prHoverProps?.onDismiss();
+          void activate(event);
+        }
       }}
       onContextMenu={(e) => {
+        prHoverProps?.onDismiss();
         if (target.kind === 'external') openWith.onContextMenu(e, target.href);
         else inlineMenu.onContextMenu(e);
       }}
       {...anchorProps}
+      onPointerEnter={(event) => {
+        (anchorProps.onPointerEnter as ((e: React.PointerEvent<HTMLAnchorElement>) => void) | undefined)?.(event);
+        prHoverProps?.onPointerEnter(event);
+      }}
+      onPointerLeave={(event) => {
+        (anchorProps.onPointerLeave as ((e: React.PointerEvent<HTMLAnchorElement>) => void) | undefined)?.(event);
+        prHoverProps?.onPointerLeave(event);
+      }}
+      onPointerDown={(event) => {
+        (anchorProps.onPointerDown as ((e: React.PointerEvent<HTMLAnchorElement>) => void) | undefined)?.(event);
+        prHoverProps?.onPointerDown(event);
+      }}
     >
       {children}
     </a>
+  );
+
+  // Explicit local candidates retain the same open/copy-link menu as links.
+  return (
+    <>
+    {prLink ? (
+      <PrLinkHoverPopover prRef={prLink} sessionId={effectiveSessionId}>
+        {(prHoverProps) => renderAnchor(prHoverProps)}
+      </PrLinkHoverPopover>
+    ) : (
+      renderAnchor()
+    )}
     {openWith.menu}
     {inlineMenu.menu}
     </>
