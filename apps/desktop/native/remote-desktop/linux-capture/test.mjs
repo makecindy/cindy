@@ -26,6 +26,7 @@ test('native capture bounds buffers and scales padded rows without distortion', 
 #define main capture_entry
 #include ${JSON.stringify(path.join(source, 'main.c'))}
 #undef main
+#include ${JSON.stringify(path.join(source, 'cursor_shape.h'))}
 #include <assert.h>
 int main(void) {
   uint32_t invalid[][4] = {
@@ -83,17 +84,35 @@ int main(void) {
   cc.scale=1;cc.x=1280;cc.y=800;cursor_json(2560,1600);puts("");
   cc.scale=1.6;cc.x=800;cc.y=500;cursor_json(2560,1600);puts("");
   cc.x=-20;cc.y=2000;cursor_json(2560,1600);puts("");
+  // Both CSS and legacy cursor-font names map to the viewer's keywords.
+  const char *shapes[][2]={{"left_ptr","default"},{"xterm","text"},{"text","text"},
+    {"hand2","pointer"},{"sb_h_double_arrow","ew-resize"},{"bottom_right_corner","nwse-resize"},
+    {"fd_double_arrow","nesw-resize"},{"fleur","move"},{"watch","wait"},
+    {"left_ptr_watch","progress"},{"dnd-no-drop","not-allowed"},{"question_arrow","help"}};
+  for(unsigned i=0;i<sizeof(shapes)/sizeof(shapes[0]);i++)
+    assert(!strcmp(cursor_shape_for_name(shapes[i][0]),shapes[i][1]));
+  assert(!cursor_shape_for_name(NULL) && !cursor_shape_for_name("") &&
+         !cursor_shape_for_name("e29285e634086352946a0e7090d73106"));
+  // Every JPEG backend honors bottom-up rows and byte order.
+  unsigned char raster[2*2*4]={10,20,200,0, 10,20,200,0, 200,20,10,0, 200,20,10,0};
+  unsigned char *jpeg=NULL; unsigned long length=0;
+  assert(!jpeg_encode(raster,2,8,2,1,1,90,&jpeg,&length) && length>4 && jpeg[0]==0xff && jpeg[1]==0xd8);
+  jpeg_release(jpeg);
+  assert(jpeg_encode(raster,2,4,2,1,0,90,&jpeg,&length) && !jpeg);
+  jpeg_close();
   return 0;
 }
 `,
     );
-    const flags = run('pkg-config', [
-      '--cflags',
-      '--libs',
-      'wayland-client',
-      'libturbojpeg',
-      'libpng',
-    ]).split(/\s+/);
+    const flags = run('pkg-config', ['--cflags', '--libs', 'wayland-client', 'libpng']).split(
+      /\s+/,
+    );
+    // Compile the optional X11 backend under the sanitizers too, as build.mjs does.
+    const x11 = spawnSync('pkg-config', ['--cflags', '--libs', 'x11', 'xfixes', 'xext'], {
+      encoding: 'utf8',
+    });
+    const x11Defines = x11.status === 0 ? ['-DCINDY_X11', '-DCINDY_XSHM'] : [];
+    const x11Flags = x11.status === 0 ? x11.stdout.trim().split(/\s+/).filter(Boolean) : [];
     run('cc', [
       '-std=c11',
       '-Wall',
@@ -101,6 +120,7 @@ int main(void) {
       '-Werror',
       '-O2',
       '-fsanitize=address,undefined',
+      ...x11Defines,
       testSource,
       ...[
         'wlr-screencopy-unstable-v1',
@@ -111,6 +131,9 @@ int main(void) {
       '-I',
       output,
       ...flags,
+      ...x11Flags,
+      '-lm',
+      '-ldl',
       '-o',
       path.join(output, 'test'),
     ]);

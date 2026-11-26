@@ -5639,11 +5639,17 @@ describe('model context limit IPC', () => {
     });
     await harness.invoke(MAKER_INVOKE.MODEL_COMPACTION_SET, target, 80, stamp);
     expect(writeModelCompaction).toHaveBeenCalledExactlyOnceWith([primary, related], 80);
-    for (const invalid of [49, 91, 80.5, '80', NaN]) {
+    // Owner ruling 2026-10-29: the ratio range is back to 50–95 with 1% granularity.
+    await harness.invoke(MAKER_INVOKE.MODEL_COMPACTION_SET, target, 95, stamp);
+    expect(writeModelCompaction).toHaveBeenLastCalledWith([primary, related], 95);
+    await harness.invoke(MAKER_INVOKE.MODEL_COMPACTION_SET, target, 91, stamp);
+    expect(writeModelCompaction).toHaveBeenLastCalledWith([primary, related], 91);
+    expect(writeModelCompaction).toHaveBeenCalledTimes(3);
+    for (const invalid of [49, 96, 80.5, '80', NaN]) {
       await expect(harness.invoke(MAKER_INVOKE.MODEL_COMPACTION_SET, target, invalid, stamp)).rejects.toThrow();
     }
     await expect(harness.invoke(MAKER_INVOKE.MODEL_COMPACTION_SET, target, 70, { ...stamp, ownerGeneration: 0 })).rejects.toThrow();
-    expect(writeModelCompaction).toHaveBeenCalledTimes(1);
+    expect(writeModelCompaction).toHaveBeenCalledTimes(3);
   });
 
   it('returns native facts separately from model preferences without writing or launching a task', async () => {
@@ -5810,6 +5816,34 @@ describe('provider connection management', () => {
     expect(deps.removeCustomProviderKey).not.toHaveBeenCalled();
     expect(deps.prepareCodexCustomProviderHostChange).not.toHaveBeenCalled();
     expect(deps.finalizeCodexCustomProviderHostChange).not.toHaveBeenCalled();
+  });
+  // Unit: one appearance save changes the selected connection; a failed rename restores its old icon.
+  it('applies the name and icon together and restores the icon if the name cannot be saved', async () => {
+    mountDb();
+    const config = { ...validConfig, id: 'glm-team' };
+    await createCustomProvider(config);
+    const artwork: Record<string, 'work' | 'mark-glm'> = { [config.id]: 'work' };
+    vi.spyOn(providerPresentation, 'readProviderConnectionIcons').mockReturnValue(artwork);
+    vi.spyOn(providerPresentation, 'setProviderConnectionIcon').mockImplementation(async (id, icon) => {
+      if (icon === null) delete artwork[id];
+      else if (icon === 'work' || icon === 'mark-glm') artwork[id] = icon;
+    });
+    const harness = new IpcHarness();
+    registerProviderHandlers(harness, makeDeps({
+      listProviders: async () => [{ id: config.id, source: 'user' } as ProviderView],
+      currentOwnerSession: () => ({ dataOwnerId: 'owner-a', generation: 1 }),
+    }));
+    const save = (icon: string) => harness.invoke(MAKER_INVOKE.PROVIDER_PRESENTATION_SET, {
+      providerId: config.id, action: 'appearance', name: 'Team', icon, dataOwnerId: 'owner-a', ownerGeneration: 1,
+    });
+    await expect(save('https://invalid.example/logo')).rejects.toThrow();
+    const update = vi.spyOn(customProviderStore, 'updateCustomProvider').mockRejectedValueOnce(new Error('write failed'));
+    await expect(save('mark-glm')).rejects.toThrow();
+    expect(artwork[config.id]).toBe('work');
+    update.mockRestore();
+    await save('mark-glm');
+    expect(await getCustomProvider(config.id)).toMatchObject({ name: 'Team' });
+    expect(artwork[config.id]).toBe('mark-glm');
   });
   it('stores managed Ollama rename with its configuration and drops it when deleting and readding', async () => {
     mountDb();

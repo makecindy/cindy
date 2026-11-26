@@ -881,6 +881,11 @@ impl Connection {
         self.send_streams.get_mut(&stream).map(|state| state.finishing = true).is_some()
     }
 
+    /// 有没读走的数据或没取的流事件：宿主据此决定要不要叫应用来读，不用每到一个包都把所有流读一遍（原生引擎的 `pump`）。
+    pub fn has_unread(&self) -> bool {
+        self.ready_bytes > 0 || !self.events.is_empty()
+    }
+
     /// 取下一个流事件。
     pub fn poll_event(&mut self) -> Option<StreamEvent> {
         self.events.pop_front()

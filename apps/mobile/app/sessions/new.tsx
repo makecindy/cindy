@@ -252,6 +252,7 @@ import {
   NEW_SESSION_AGENT_OPTIONS,
   availableNewSessionAgentOptions,
   defaultPermissionModeForNewSessionAgent,
+  resolvePermissionModeForNewSessionAgent,
   buildRemoteCreateSessionOptions,
   buildRecentWorkspaceOptions,
   filterRemoteDirectoryEntries,
@@ -2498,11 +2499,23 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
     const sequence = ++runtimeActionSeqRef.current;
     const targetCapabilities = normalizeMobileAgentCapabilities(await maker.getCapabilities(config.agent));
     if (!targetCapabilities) return false;
-    const storedPermission = newSessionPreferences?.permissionModeByAgent[config.agent];
-    const permission = config.agent === draft.agentKind ? draft.permissionMode
-      : (storedPermission ?? defaultPermissionModeForNewSessionAgent(config.agent));
-    if (config.agent !== draft.agentKind && !(await confirmFullAccessChange(draft.permissionMode, permission, {
-      restoringRememberedChoice: storedPermission !== undefined,
+    const currentEffectivePermission = activePluginEngine?.permissionMode ?? draft.permissionMode;
+    const preferredPermission =
+      newSessionPreferences?.lastPermissionMode
+      ?? currentEffectivePermission
+      ?? newSessionPreferences?.permissionModeByAgent[config.agent]
+      ?? defaultPermissionModeForNewSessionAgent(config.agent);
+    const permission = resolvePermissionModeForNewSessionAgent(
+      config.agent,
+      preferredPermission,
+      targetCapabilities.permissionModes.map((option) => option.id),
+    );
+    const hasRememberedPermission =
+      newSessionPreferences?.lastPermissionMode !== undefined
+      || newSessionPreferences?.permissionModeByAgent[config.agent] !== undefined
+      || activePluginEngine !== null;
+    if (permission !== currentEffectivePermission && !(await confirmFullAccessChange(currentEffectivePermission, permission, {
+      restoringRememberedChoice: hasRememberedPermission,
     }))) return false;
     if (deviceAtStart !== selectedDeviceRef.current || sequence !== runtimeActionSeqRef.current) return false;
     userTouchedRuntimeRef.current = true;
@@ -2537,11 +2550,11 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
       },
     });
     return true;
-  }, [creating, selectedDeviceId, maker, newSessionPreferences, draft.agentKind, draft.permissionMode, requestHostChoiceWrite]);
+  }, [creating, selectedDeviceId, maker, newSessionPreferences, activePluginEngine, draft.agentKind, draft.permissionMode, requestHostChoiceWrite]);
 
   // 扁平回退(被控端 0 供应商):只落 model、清来源(默认路由),effort 跟随 capabilities reconcile。
-  // 选中插件引擎的一行：任务将以该引擎在被控电脑本机运行；权限模式按该引擎提供的档位(换了引擎用
-  // 它的默认档)，不写内置 Harness 的权限记忆。协同草稿与另一台电脑的模型选择一并作废。
+  // 选中插件引擎的一行：任务将以该引擎在被控电脑本机运行；权限模式沿用新建任务跨引擎统一的权限选择
+  // (目标引擎不支持时由 pluginEnginePermissionMode 安全回落)。协同草稿与另一台电脑的模型选择一并作废。
   const selectPluginEngineForDraft = useCallback((selection: MobilePluginEngineSelection): boolean => {
     if (creating || !selectedDeviceId) return false;
     userTouchedRuntimeRef.current = true;
@@ -2549,14 +2562,16 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
     setRemoteAgentChoice(null);
     setCollabDraft(null);
     setModelGroupChoice(null);
+    const carriedPermission = newSessionPreferences?.lastPermissionMode ?? draft.permissionMode;
     setPluginEngineChoice((current) => ({
       controlledDeviceId: selectedDeviceId,
       selection,
-      permissionMode: current?.controlledDeviceId === selectedDeviceId
-        && current.selection.providerId === selection.providerId ? current.permissionMode : null,
+      permissionMode:
+        (current?.controlledDeviceId === selectedDeviceId ? current.permissionMode : null)
+        ?? carriedPermission,
     }));
     return true;
-  }, [creating, selectedDeviceId]);
+  }, [creating, selectedDeviceId, newSessionPreferences?.lastPermissionMode, draft.permissionMode]);
   const draftPluginEngineOptions = useMemo(() => (
     pluginEngineDraftEligible && pluginEngines.engines.length
       ? {
@@ -2639,12 +2654,28 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
     setPermissionSheetOpen(true);
   }, []);
 
-  // 用户直接选权限档即生效(独立选择器与模型浮窗共用同一语义),
-  // 非 plan 档写 per-agent 记忆(内存 + 落盘;对齐桌面 lastByVendor)。
+  // 用户直接选权限档即生效(独立选择器与模型浮窗共用同一语义)，
+  // 跨内置 Harness 与插件引擎统一记住最近一次选择，切模型或切引擎时沿用。
   const selectPermissionMode = useCallback((mode: string) => {
     if (activePluginEngine) {
-      // 插件引擎的权限只跟着这次选择，不写内置 Harness 的权限记忆。
       setPluginEngineChoice((current) => (current ? { ...current, permissionMode: mode } : current));
+      const builtinPermission = resolvePermissionModeForNewSessionAgent(draft.agentKind, mode);
+      patchDraft({ permissionMode: builtinPermission });
+      setNewSessionPreferences((prev) => prev
+        ? {
+            ...prev,
+            lastPermissionMode: mode,
+            ...(mode !== 'plan'
+              ? { permissionModeByAgent: { ...prev.permissionModeByAgent, [draft.agentKind]: builtinPermission } }
+              : {}),
+          }
+        : prev);
+      void saveNewSessionPreferences({
+        lastPermissionMode: mode,
+        ...(mode !== 'plan'
+          ? { permissionModeForAgent: { agentKind: draft.agentKind, mode: builtinPermission } }
+          : {}),
+      });
       return;
     }
     void (async () => {
@@ -2654,14 +2685,16 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
       setNewSessionPreferences((prev) => prev
         ? {
             ...prev,
+            lastPermissionMode: mode,
             permissionModeByAgent: { ...prev.permissionModeByAgent, [draft.agentKind]: mode },
           }
         : prev);
       void saveNewSessionPreferences({
+        lastPermissionMode: mode,
         permissionModeForAgent: { agentKind: draft.agentKind, mode },
       });
     })();
-  }, [activePluginEngine, draft.agentKind, draft.permissionMode, patchDraft]);
+  }, [activePluginEngine, draft.agentKind, patchDraft]);
 
   // —— worktree 资格探测:目录 / 设备 / 链路变化即重探(seq 防竞态,旧结果作废)。
   // CHANNEL_NOT_ALLOWED(老被控端)→ unsupported；OFF 时隐藏，旧 ON 镜像保留关闭
@@ -3799,12 +3832,19 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
     explicitProviderModelSelectionRef.current = null;
     const seqAtTrigger = ++runtimeActionSeqRef.current;
     void saveNewSessionPreferences({ agentKind: nextKind });
-    const storedPermissionMode = newSessionPreferences?.permissionModeByAgent[nextKind];
-    const nextPermissionMode =
-      storedPermissionMode ??
-      defaultPermissionModeForNewSessionAgent(nextKind);
-    void confirmFullAccessChange(draft.permissionMode, nextPermissionMode, {
-      restoringRememberedChoice: storedPermissionMode !== undefined,
+    const currentEffectivePermission = activePluginEngine?.permissionMode ?? draft.permissionMode;
+    const preferredPermission =
+      newSessionPreferences?.lastPermissionMode
+      ?? currentEffectivePermission
+      ?? newSessionPreferences?.permissionModeByAgent[nextKind]
+      ?? defaultPermissionModeForNewSessionAgent(nextKind);
+    const nextPermissionMode = resolvePermissionModeForNewSessionAgent(nextKind, preferredPermission);
+    const hasRememberedPermission =
+      newSessionPreferences?.lastPermissionMode !== undefined
+      || newSessionPreferences?.permissionModeByAgent[nextKind] !== undefined
+      || activePluginEngine !== null;
+    void confirmFullAccessChange(currentEffectivePermission, nextPermissionMode, {
+      restoringRememberedChoice: hasRememberedPermission,
     }).then(async (confirmed) => {
       // 被控电脑默认还在读:等读完再选模型(切换已标记手动,之后自动默认不会再补)。
       await waitHostDraftDefaults(selectedDeviceId, nextKind);
@@ -3855,7 +3895,7 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
         };
       });
     });
-  }, [draft.agentKind, draft.permissionMode, deviceProviders.providers, deviceProviders.modelVisibilityOverrides, hostRuntimeFor, newSessionPreferences, selectedDeviceId, waitHostDraftDefaults]);
+  }, [activePluginEngine, draft.agentKind, draft.permissionMode, deviceProviders.providers, deviceProviders.modelVisibilityOverrides, hostRuntimeFor, newSessionPreferences, selectedDeviceId, waitHostDraftDefaults]);
 
   // 选中的 agent 在被控端未注册(如 Pi 二进制缺失)时,coerce 到首个可用来源,避免用户停在
   // 被隐藏的选项、并防止创建出注定 requireAgent 报错的会话。仅在已拉到可用集后收敛一次。

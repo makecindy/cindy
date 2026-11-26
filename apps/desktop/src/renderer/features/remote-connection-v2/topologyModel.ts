@@ -114,7 +114,7 @@ export interface TopologyStats {
 }
 
 export interface TopologyModel {
-  self: { name: string; platform: string | null } | null;
+  self: { name: string; platform: string | null; appVersion?: string | null } | null;
   nodes: TopologyNode[];
   byId: Map<string, TopologyNode>;
   groups: TopologyGroup[];
@@ -318,6 +318,7 @@ export function buildTopology(input: BuildTopologyInput): TopologyModel {
     self: self ? {
       name: selfDeviceName(self),
       platform: self.platform,
+      appVersion: self.appVersion ?? null,
     } : null,
     nodes,
     byId,
