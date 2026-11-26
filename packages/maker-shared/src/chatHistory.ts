@@ -53,6 +53,10 @@ export function createChatHistory(input: {
   maxIdleMessages?: number;
 }) {
   const chains = new Map<string, Promise<unknown>>();
+  // Rooms whose projection this instance built from a snapshot and has seen only in-order
+  // arrivals since. Only they skip copies of the latest page (see apply()); every other room,
+  // including one restored from the store, keeps one copy per arrival as before.
+  const simple = new Set<string>();
   // coalesceWrites: the room state awaiting its single commit, and what may run only after it.
   const unsaved = new Map<string, ChatHistoryState>();
   const afterCommit = new Map<string, Array<() => void>>();
@@ -84,7 +88,7 @@ export function createChatHistory(input: {
           return result;
         }
         catch (error) {
-          unsaved.delete(room); afterCommit.delete(room);
+          unsaved.delete(room); afterCommit.delete(room); simple.delete(room);
           states.delete(room); checked.delete(room); metadataConnection.delete(room);
           if (errorCode(error) === 'CHAT_CACHE_CONFLICT' && attempt < 2) continue;
           if (ROOM_LOST.includes(errorCode(error))) {
@@ -123,7 +127,6 @@ export function createChatHistory(input: {
     // Older writers preserve unknown JSON fields but cannot record exact targets.
     // Disk/CAS restores must conservatively repair their stale flags through pages.
     if (state && (state.stalePages?.length || state.staleLookups?.length)) delete state.staleAggregates;
-    if (state) repairLateRows(state);
     return state;
   }
   async function save(room: string, state: ChatHistoryState, keepPage?: string) {
@@ -162,6 +165,7 @@ export function createChatHistory(input: {
     const snapshot = await input.api<ChatHistorySnapshot>(`/conversations/${room}/snapshot`);
     if (!isCursor(snapshot.cursor) || snapshot.room.id !== room || !Array.isArray(snapshot.messages)) throw new Error('CHAT_RESPONSE_INVALID');
     const state: ChatHistoryState = { generation: input.newGeneration(), snapshot, cursor: snapshot.cursor, messages: {}, pages: {}, staleAggregates: [], metadataDirty: false };
+    simple.add(room);
     for (const message of snapshot.messages) state.messages[message.id] = message;
     await save(room, state);
     committed(room, () => { if (metadataDirty.get(room) === invalidation) metadataDirty.delete(room); });
@@ -205,9 +209,17 @@ export function createChatHistory(input: {
           }
         }
         if (change.type === 'message.created') {
+          // Not newer than every stored range (late or re-delivered): stored pages may now miss it.
+          const room = state.snapshot.room.id;
+          for (const [key, ids] of Object.entries(state.pages)) {
+            const query = new URLSearchParams(key); const before = query.get('before');
+            const newest = before !== null ? BigInt(before) - 1n : ids[0] ? BigInt(state.messages[ids[0]]!.seq) : -1n;
+            if (BigInt(message.seq) <= newest) simple.delete(room);
+          }
           for (const key of Object.keys(state.pages)) {
             const query = new URLSearchParams(key);
-            if (query.has('before') || !inView(query, message)) continue;
+            if (query.has('before')) continue;
+            if (query.get('all') !== 'true' && (query.get('threadRootId') ?? null) !== (message.threadRootId ?? null)) continue;
             const ids = state.pages[key]!;
             // The authorized change body is enough to maintain the latest page.
             // Keep the old bounded range for pagination without re-downloading the head.
@@ -216,28 +228,21 @@ export function createChatHistory(input: {
               .slice(0, Number(query.get('limit') ?? 100));
             // Preserve the old window as bounded coverage: new arrivals shift pagination
             // boundaries, but must not make every older page download again. One copy per
-            // arrival would fill the page budget with near-identical windows, so copy only
-            // when no page coveredPage() may use already bridges the new head down to the
-            // departing message.
+            // arrival fills the page budget with near-identical windows. In a room with only
+            // in-order arrivals since this instance built it, copy only when no fresh page already
+            // bridges the new head down to the departing message. Anything else keeps the old
+            // behaviour: the reading side relies on those copies after late arrivals.
             const first = ids[0] && state.messages[ids[0]];
-            if (first && (query.has('after') || BigInt(message.seq) <= BigInt(first.seq) || !bridged(state, query, ids.at(-1)!, latest.at(-1)!))) {
-              query.set('before', String(BigInt(first.seq) + 1n)); state.pages[query.toString()] = ids;
-              if (state.stalePages?.includes(key)) stale(state, query.toString());
+            if (first) {
+              const copy = new URLSearchParams(query); copy.set('before', String(BigInt(first.seq) + 1n));
+              if (query.has('after') || Object.hasOwn(state.pages, copy.toString()) || BigInt(message.seq) <= BigInt(first.seq)
+                || !simple.has(state.snapshot.room.id) || !bridged(state, query, ids.at(-1)!, latest.at(-1)!)) {
+                state.pages[copy.toString()] = ids;
+                if (state.stalePages?.includes(key)) stale(state, copy.toString());
+              }
             }
             if (query.has('after')) { delete state.pages[key]; continue; }
             state.pages[key] = latest;
-          }
-          // Every stored older page covered its whole range when saved. A late arrival inside that
-          // range (also the copy just made from the head without it) joins the page, so stitching
-          // never skips it and no row the page kept is pruned.
-          const seq = BigInt(message.seq);
-          for (const [key, ids] of Object.entries(state.pages)) {
-            const query = new URLSearchParams(key);
-            const before = query.get('before'); const after = query.get('after');
-            // An in-order arrival is newer than every stored bound and stops here.
-            if (before === null || seq >= BigInt(before) || (after !== null && seq <= BigInt(after)) || !inView(query, message)) continue;
-            const last = ids.length < Number(query.get('limit') ?? 100) ? undefined : BigInt(state.messages[ids.at(-1)!]!.seq);
-            if ((last === undefined || seq > last) && !ids.includes(message.id)) fill(state, key, [message.id]);
           }
         }
       } else if (!['execution.changed', 'plan.changed'].includes(change.type)) state.metadataDirty = true;
@@ -251,65 +256,11 @@ export function createChatHistory(input: {
   function bridged(state: ChatHistoryState, head: URLSearchParams, leaving: string, oldest: string) {
     const position = BigInt(state.messages[oldest]!.seq);
     return Object.entries(state.pages).some(([key, ids]) => {
-      const before = new URLSearchParams(key).get('before');
-      return before !== null && BigInt(before) >= position && !state.stalePages?.includes(key) && ids.includes(leaving) && sameView(key, head);
-    });
-  }
-  function inView(query: URLSearchParams, message: ChatHistoryMessage) {
-    return query.get('all') === 'true' || (query.get('threadRootId') ?? null) === (message.threadRootId ?? null);
-  }
-  function sameView(key: string, view: URLSearchParams) {
-    const query = new URLSearchParams(key);
-    return ['threadRootId', 'all', 'after'].every(field => query.get(field) === view.get(field));
-  }
-  /** Add rows that arrived late to a stored older page, which covered its whole range when saved.
-   * It keeps its newest rows up to its limit; the rest move to exact pages directly below it. */
-  function fill(state: ChatHistoryState, key: string, extra: string[]) {
-    const query = new URLSearchParams(key);
-    const limit = Number(query.get('limit') ?? 100);
-    const rows = [...new Set([...state.pages[key]!, ...extra])]
-      .sort((a, b) => BigInt(state.messages[a]!.seq) > BigInt(state.messages[b]!.seq) ? -1 : 1);
-    const wasStale = state.stalePages?.includes(key);
-    for (let start = 0; start < rows.length; start += limit) {
-      const chunk = rows.slice(start, start + limit);
-      let page = key;
-      if (start > 0) {
-        const below = new URLSearchParams(query);
-        below.set('before', state.messages[rows[start - 1]!]!.seq); below.set('limit', String(chunk.length));
-        page = below.toString();
-        if (wasStale) stale(state, page);
-      }
-      state.pages[page] = chunk;
-    }
-  }
-  /** A cache from an older build may hold an older page saved before a late arrival that another
-   * page of the same view places inside its range. Repair it once on restore, as apply() does. */
-  function repairLateRows(state: ChatHistoryState) {
-    const views = new Map<string, Array<[string, string[]]>>();
-    for (const [key, ids] of Object.entries(state.pages)) {
       const query = new URLSearchParams(key);
-      const view = JSON.stringify(['threadRootId', 'all', 'after'].map(field => query.get(field)));
-      views.set(view, [...(views.get(view) ?? []), [key, ids]]);
-    }
-    for (const pages of views.values()) {
-      const rows = [...new Set(pages.flatMap(([, ids]) => ids))].map(id => ({ id, seq: BigInt(state.messages[id]!.seq) }))
-        .sort((a, b) => a.seq < b.seq ? -1 : a.seq > b.seq ? 1 : 0);
-      const below = (bound: bigint) => {
-        let low = 0, high = rows.length;
-        while (low < high) { const middle = (low + high) >> 1; if (rows[middle]!.seq < bound) low = middle + 1; else high = middle; }
-        return low;
-      };
-      for (const [key, ids] of pages) {
-        const query = new URLSearchParams(key);
-        const before = query.get('before');
-        if (before === null) continue; // Latest pages follow the change stream; only older ranges are checked.
-        const upper = below(BigInt(before));
-        const lower = ids.length < Number(query.get('limit') ?? 100) ? 0 : below(BigInt(state.messages[ids.at(-1)!]!.seq));
-        if (upper - lower <= new Set(ids).size) continue;
-        const own = new Set(ids);
-        fill(state, key, rows.slice(lower, upper).map(row => row.id).filter(id => !own.has(id)));
-      }
-    }
+      const before = query.get('before');
+      return before !== null && BigInt(before) >= position && !state.stalePages?.includes(key) && ids.includes(leaving)
+        && ['threadRootId', 'all', 'after'].every(field => query.get(field) === head.get(field));
+    });
   }
   function stale(state: ChatHistoryState, key: string) {
     state.stalePages ??= [];
@@ -419,7 +370,8 @@ export function createChatHistory(input: {
     const limit = Number(query.get('limit') ?? 100);
     let position = BigInt(before);
     const found = new Map<string, ChatHistoryMessage>();
-    const candidates = Object.entries(state.pages).filter(([key]) => !state.stalePages?.includes(key) && sameView(key, query));
+    const candidates = Object.entries(state.pages).filter(([key]) => !state.stalePages?.includes(key)
+      && ['threadRootId', 'all', 'after'].every(field => new URLSearchParams(key).get(field) === query.get(field)));
     while (candidates.length) {
       const covering = candidates.find(([key, ids]) => {
         const upper = new URLSearchParams(key).get('before');

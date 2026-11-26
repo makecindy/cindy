@@ -279,82 +279,58 @@ describe('durable chat history', () => {
     expect(shown).toEqual([...seqs].reverse().map(String));
     expect(f.api).not.toHaveBeenCalled();
   });
-  // Unit, late arrivals (self-review, then maintainer review of #13284): a message committed
-  // out of seq order lands inside an older range saved without it. With fewer saved copies,
-  // stitching must still return it when scrolling up from the newest page, falling back to
-  // the server where no complete page covers a range.
-  it.each([
-    { initial: [4, 5, 6], limit: 3, arrivals: [8, 7, 9, 10, 11] },
-    { initial: [2, 4, 6, 8, 10, 12, 14, 16, 18, 20], limit: 5, arrivals: [22, 19, 24, 28, 26, 30, 32] },
-  ])('returns late message $arrivals.1 when scrolling up after it arrived', async ({ initial, limit, arrivals }) => {
-    const f = fixture(); const cache = f.open();
-    const seqs = [...initial];
-    const serve = (query: URLSearchParams) => seqs.filter(seq => seq < Number(query.get('before') ?? Infinity))
-      .sort((a, b) => b - a).slice(0, Number(query.get('limit'))).map(String);
+  // Unit, maintainer review rounds of #13284: the first five sequences each broke one earlier version
+  // of the change above (late arrivals, restarts, the 500-page budget); the rest cross the switch from
+  // skipped copies back to one copy per arrival (first late or repeated message). Scrolling up from the
+  // newest page and the projections of
+  // rows already shown must equal the server. The restart cases write the cache through this module;
+  // with a late arrival in them it keeps the old copies, so the cache has the shape the previous build wrote.
+  const even = (from: number, to: number) => Array.from({ length: (to - from) / 2 + 1 }, (_, i) => from + 2 * i);
+  type Step = ['read', number, { pages?: number; from?: number }?] | ['message' | 'repeat' | 'delete' | 'project', number]
+    | ['batch', number[]] | ['restart'];
+  const live = (from: number, to: number) => even(from, to).map(n => ['message', n] as Step);
+  it.each<[string, number[], Step[]]>([
+    ['late 19 under limit=5', even(2, 20), [['read', 5, { pages: 1 }], ...[22, 19, 24, 28, 26, 30, 32].map(n => ['message', n] as Step), ['read', 5]]],
+    ['late 4 then restart', even(6, 402), [['read', 100], ['message', 404], ['message', 4], ['restart'], ['read', 100]]],
+    ['tombstone after late 199', even(2, 400), [['read', 100], ['message', 199], ['delete', 150], ['project', 150]]],
+    ['late 203 and 205 then restart', even(2, 400), [['read', 100, { pages: 1 }], ['message', 402], ['message', 203], ['message', 205],
+      ...even(404, 598).map(n => ['message', n] as Step), ['restart'], ['read', 100, { from: 400 }]]],
+    ['tombstone at the page budget', even(2, 1996), [['read', 2, { pages: 499 }], ['message', 1], ['message', 3], ['delete', 2], ['project', 2]]],
+    ['first late message after skipped copies', even(2, 20), [['read', 3, { pages: 1 }], ...live(22, 40), ['message', 19], ['message', 42],
+      ['read', 3], ['delete', 10], ['project', 10]]],
+    ['repeated message after skipped copies', even(2, 20), [['read', 3, { pages: 1 }], ...live(22, 30), ['repeat', 24], ...live(32, 36), ['read', 3]]],
+  ])('matches the server: %s', async (_name, initial, steps) => {
+    const f = fixture();
+    const rows = new Map(initial.map(n => [n, f.message(String(n))]));
+    const serve = (query: URLSearchParams) => [...rows.values()].filter(m => Number(m.seq) < Number(query.get('before') ?? Infinity))
+      .sort((a, b) => Number(b.seq) - Number(a.seq)).slice(0, Number(query.get('limit')));
+    let cursor = 10;
     f.api.mockImplementation(async route => route.endsWith('/snapshot') ? { room: { id: 'room' }, messages: [], cursor: '10' }
-      : serve(new URL(`https://fixture${route}`).searchParams).map(id => f.message(id)));
-    await cache.page('room', new URLSearchParams(`limit=${limit}`));
-    for (const [n, seq] of arrivals.entries()) {
-      seqs.push(seq);
-      await cache.receive('room', { cursor: String(11 + n), changes: [{ type: 'message.created', data: { message: f.message(String(seq)) } }] }, '10');
+      : route.startsWith('/changes?') ? { cursor: String(cursor), changes: [] } : serve(new URL(`https://fixture${route}`).searchParams));
+    let cache = f.open();
+    for (const step of steps) {
+      if (step[0] === 'restart') cache = f.open();
+      else if (step[0] === 'project') expect((await cache.projection('room', [String(step[1])])).messages).toEqual([rows.get(step[1])]);
+      else if (step[0] === 'read') {
+        const [, limit, { pages = Infinity, from } = {}] = step;
+        let before = from;
+        for (let n = 0; n < pages; n++) {
+          const query = new URLSearchParams({ limit: String(limit), ...(before === undefined ? {} : { before: String(before) }) });
+          const page = await cache.page('room', query);
+          expect(page.map(m => m.id), query.toString()).toEqual(serve(query).map(m => m.id));
+          if (page.length < limit) break;
+          before = Number(page.at(-1)!.seq);
+        }
+      } else if (step[0] === 'batch' || step[0] === 'repeat') {
+        const created = step[0] === 'batch' ? step[1].map(n => f.message(String(n))) : [rows.get(step[1])!];
+        for (const row of created) rows.set(Number(row.seq), row);
+        await cache.receive('room', { cursor: String(++cursor), changes: created.map(row => ({ type: 'message.created', data: { message: row } })) }, '10');
+      } else {
+        const row = step[0] === 'delete' ? f.message(String(step[1]), 2, true) : f.message(String(step[1]));
+        rows.set(step[1], row);
+        await cache.receive('room', { cursor: String(++cursor), changes: [{ type: step[0] === 'delete' ? 'message.deleted' : 'message.created', data: { message: row } }] }, '10');
+      }
     }
-    // Stored pages keep their contract (ChatHistoryState.pages): exact server page membership.
-    for (const [key, ids] of Object.entries(f.disk.get('room')!.pages)) expect(ids, key).toEqual(serve(new URLSearchParams(key)));
-    const shown: string[] = [];
-    let page = await cache.page('room', new URLSearchParams(`limit=${limit}`));
-    while (page.length) {
-      shown.push(...page.map(m => m.id));
-      page = page.length < limit ? [] : await cache.page('room', new URLSearchParams(`limit=${limit}&before=${page.at(-1)!.seq}`));
-    }
-    expect(shown).toEqual([...seqs].sort((a, b) => b - a).map(String));
-  });
-  // Unit, maintainer review of #13284: a cache from an older build can already hold an older page
-  // saved before a late arrival that another page of the view holds. Restore repairs it.
-  it('repairs an older page that another page proves incomplete when a cache is restored', async () => {
-    const f = fixture();
-    const state: ChatHistoryState = { generation: 'saved', snapshot: { room: { id: 'room' }, messages: [], cursor: '10' },
-      cursor: '10', messages: {}, pages: {}, metadataDirty: false };
-    for (const seq of [12, 14, 16, 18, 19, 20, 22, 24, 26, 28]) state.messages[String(seq)] = f.message(String(seq));
-    state.pages['limit=5'] = ['28', '26', '24', '22', '20'];
-    state.pages['limit=5&before=21'] = ['20', '18', '16', '14', '12']; // saved before 19 arrived
-    state.pages['limit=5&before=23'] = ['22', '20', '19', '18', '16'];
-    f.disk.set('room', state);
-    f.api.mockImplementation(async route => route.startsWith('/changes?') ? { cursor: '10', changes: [] } : []);
-    const cache = f.open();
-    expect((await cache.page('room', new URLSearchParams('limit=5&before=22'))).map(m => m.id)).toEqual(['20', '19', '18', '16', '14']);
-    expect(f.api.mock.calls.filter(([route]) => route.includes('/messages?'))).toEqual([]);
-  });
-  // Unit, maintainer review of #13284 (second round). A cache from an older build pruned a late
-  // older row, so its short oldest page cannot prove the start of history: read the server.
-  it('reads the server instead of ending history at an older build\'s short page', async () => {
-    const f = fixture();
-    const state: ChatHistoryState = { generation: 'saved', snapshot: { room: { id: 'room' }, messages: [], cursor: '10' },
-      cursor: '10', messages: {}, pages: {}, metadataDirty: false };
-    for (const seq of [6, 8, 10, 12]) state.messages[String(seq)] = f.message(String(seq));
-    state.pages['limit=3'] = ['12', '10', '8'];
-    state.pages['limit=3&before=8'] = ['6']; // 4 arrived late and the older build pruned it
-    f.disk.set('room', state);
-    f.api.mockImplementation(async route => route.startsWith('/changes?') ? { cursor: '10', changes: [] } : [f.message('4')]);
-    expect((await f.open().page('room', new URLSearchParams('limit=3&before=6'))).map(m => m.id)).toEqual(['4']);
-    expect(f.api.mock.calls.map(([route]) => route)).toContain('/conversations/room/messages?limit=3&before=6');
-  });
-  // Unit, maintainer review of #13284 (second round): an older page a late arrival outdated must keep
-  // its loaded rows, so a later tombstone still reaches a screen that keeps them open.
-  it('applies a tombstone to a loaded older row after a late arrival into its page', async () => {
-    const f = fixture(); const cache = f.open();
-    const seqs = [2, 4, 6, 8, 10, 12];
-    f.api.mockImplementation(async route => {
-      if (route.endsWith('/snapshot')) return { room: { id: 'room' }, messages: [], cursor: '10' };
-      const before = Number(new URL(`https://fixture${route}`).searchParams.get('before') ?? Infinity);
-      return seqs.filter(seq => seq < before).reverse().slice(0, 3).map(seq => f.message(String(seq)));
-    });
-    await cache.page('room', new URLSearchParams('limit=3'));
-    await cache.page('room', new URLSearchParams('limit=3&before=8'));
-    await cache.receive('room', { cursor: '11', changes: [{ type: 'message.created', data: { message: f.message('5') } }] }, '10');
-    await cache.receive('room', { cursor: '12', changes: [{ type: 'message.deleted', data: { message: f.message('2', 2, true) } }] }, '10');
-    f.api.mockClear();
-    expect((await cache.projection('room', ['2'])).messages).toEqual([f.message('2', 2, true)]);
-    expect(f.api.mock.calls.filter(([route]) => route.includes('/messages'))).toEqual([]);
   });
   it('reuses covered pages after restart and applies edits and tombstones outside the latest window', async () => {
     const f = fixture();
