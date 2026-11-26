@@ -305,7 +305,7 @@ export function ChatGroupSettingsSheet({ visible, group, host, identityFor, onli
               label={t('groupChat.mask.title')} value={t(`groupChat.mask.status.${mask!.state!.status}`)} accessibilityLabel={t('groupChat.mask.title')} onPress={onMask} /> : null}
           </SettingsGroup> : null}
           {!dissolved && me?.actorId && group.supportsNotificationSettings && group.notificationMode ? <GroupNotificationSettings key={scope}
-            title={direct || maskRow ? undefined : k('me')} mode={group.notificationMode}
+            title={direct || maskRow ? undefined : k('me')} mode={group.notificationMode} inherited={group.notificationModeInherited}
             disabled={!visible || !online || archived || busy || (direct && !management.ready)}
             save={mode => management ? management.act('notifications', { mode }) : act('notifications', { mode })} /> : null}
           {(direct || group.supportsOwnBotRemoval === true) && !dissolved && !archived && ownBots.length ? <SettingsGroup title={k('myTeammates')} footer={k('myTeammatesCaption')} testID="botGroup.settings.myTeammates">
@@ -468,6 +468,11 @@ function ManagePage({ k, group, owner, writable, online, busy, direct, settings,
         { id: 'mentioned', title: t('groupChat.settings.replyModeMentioned') }, { id: 'all', title: t('groupChat.settings.replyModeAll') },
       ], 'replyMode', 'botGroup.settings.replyMode')}
     </SettingsGroup>
+    {!direct && group.supportsGroupAssistant && typeof group.assistantEnabled === 'boolean' ? <SettingsGroup footer={k('assistantHint')}>
+      <SettingsSwitchRow label={k('assistant')} value={group.assistantEnabled}
+        disabled={!writable || busy || !group.supportsAssistantManagement || group.revision === undefined} switchTestID="botGroup.settings.assistant"
+        onValueChange={assistant => { void settings('set-assistant', { assistant }); }} />
+    </SettingsGroup> : null}
     {group.supportsMentionAudiences && owner ? <SettingsGroup footer={t('groupChat.settings.allowMentionAllBotsHint')}>
       <SettingsSwitchRow label={t('groupChat.settings.allowMentionAllBots')} value={group.allowMentionAllBots === true}
         disabled={!writable || busy} switchTestID="botGroup.settings.allowMentionAllBots"

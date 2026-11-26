@@ -3,6 +3,7 @@ import { Check } from 'lucide-react';
 import { Trans, useTranslation } from 'react-i18next';
 import type { BillingCatalogOffer, BillingCatalogProduct } from '../../../shared/billing';
 import { formatBillingAmount } from './money';
+import { Badge } from '@/components/ui/badge';
 
 export type ComparisonOffer = {
   offer: BillingCatalogOffer;
@@ -147,9 +148,9 @@ export function PlanComparison({
               <div className="flex min-h-7 flex-wrap items-center gap-2">
                 <h3 className="break-words text-14 font-medium">{product.name}</h3>
                 {offers.some((option) => option.current) && (
-                  <span className="rounded-full bg-[var(--surface-chip)] px-2 py-1 text-10 text-[var(--text-secondary)]">
+                  <Badge size="xs">
                     {t('billing.catalog.currentPlan')}
-                  </span>
+                  </Badge>
                 )}
               </div>
               <div className="mt-5 text-28 font-medium tabular-nums">
