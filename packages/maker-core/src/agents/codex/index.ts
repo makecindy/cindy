@@ -8311,10 +8311,10 @@ assertRouteCurrent();
           assertRecoveryCurrent();
           await reportExpectedRuntimeMcpAvailability(reports, recoverySignal);
           assertRecoveryCurrent();
+          if (reports.has('cindy_orca') && !reports.get('cindy_orca') && Date.now() >= orcaProbeNotBefore) {
+            orcaProbeNotBefore = Date.now() + 30_000;
+          }
           if (![...reports.values()].some(report => report?.state === 'failed')) {
-            if (reports.has('cindy_orca') && !reports.get('cindy_orca') && Date.now() >= orcaProbeNotBefore) {
-              orcaProbeNotBefore = Date.now() + 30_000;
-            }
             const onlyOrcaNeedsRecheck = reports.has('cindy_orca') && !reports.get('cindy_orca')
               && [...reports].every(([name, report]) => name === 'cindy_orca' || (report && report.state !== 'pending'));
             if (onlyOrcaNeedsRecheck) mcpRecoveryNotBefore = orcaProbeNotBefore;
