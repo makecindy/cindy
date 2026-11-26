@@ -147,7 +147,9 @@ function HostRow({
     : `${snap.config.user}@${snap.config.hostname}:${snap.config.port}${via}`;
 
   return (
-    <div className="flex items-center gap-3 px-5 py-4">
+    // In a narrow settings column the actions take a line of their own (right-aligned) instead of squeezing the name,
+    // alias and status into a sliver; once the text has 16rem beside them the row stays on one line.
+    <div className="flex flex-wrap items-center gap-3 px-5 py-4">
       <button
         type="button"
         onClick={onToggleExpanded}
@@ -174,29 +176,38 @@ function HostRow({
         <Server size={18} />
       </div>
 
-      <div className="flex flex-1 flex-col gap-0.5 min-w-0">
-        <div className="flex items-center gap-2">
+      <div className="flex min-w-0 grow basis-64 flex-col gap-0.5">
+        {/* Name, alias and status wrap as whole pieces, never letter by letter; a name or alias wider than the column
+            is cut off and its title carries the whole text. */}
+        <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5">
           <span
-            className="text-14 font-medium leading-tight"
+            className="min-w-0 max-w-full truncate text-14 font-medium leading-tight"
             style={{ color: 'var(--settings-section-title)' }}
+            title={displayName}
           >
             {displayName}
           </span>
           {displayName !== snap.config.id && (
-            <code className="text-11" style={{ color: 'var(--settings-integration-subtitle)' }}>
+            <code
+              className="min-w-0 max-w-full truncate text-11"
+              style={{ color: 'var(--settings-integration-subtitle)' }}
+              title={snap.config.id}
+            >
               {snap.config.id}
             </code>
           )}
-          <span
-            className="h-1.5 w-1.5 rounded-full"
-            style={{ backgroundColor: dot }}
-            aria-hidden
-          />
-          <span
-            className="text-12"
-            style={{ color: 'var(--settings-integration-subtitle)' }}
-          >
-            {t(`settings.${label}`)}
+          <span className="flex shrink-0 items-center gap-2 whitespace-nowrap">
+            <span
+              className="h-1.5 w-1.5 rounded-full"
+              style={{ backgroundColor: dot }}
+              aria-hidden
+            />
+            <span
+              className="text-12"
+              style={{ color: 'var(--settings-integration-subtitle)' }}
+            >
+              {t(`settings.${label}`)}
+            </span>
           </span>
         </div>
         <span
@@ -240,7 +251,7 @@ function HostRow({
         )}
       </div>
 
-      <div className="flex items-center gap-2">
+      <div className="ml-auto flex items-center gap-2">
         {/* AutoConnect — 启动时是否自动连这个 host. 控件本身不算"动作", 但放
             在 action chips 区第一位最容易扫到, 也方便快速切换。disabled 仅在
             busy(connect/disconnect 进行中)时锁住, 避免与正在进行的 transition

@@ -103,6 +103,12 @@ export default {
       await ssh.getByText(from, { exact: false }).first().waitFor();
       assert.equal(await ssh.getByText(from, { exact: false }).count(), 3);
       assert.equal(await ssh.getByText(await ui.t('settings.remote.deviceUnavailable'), { exact: true }).count(), 2);
+      // A host's title keeps its name whole and its alias beside it, also in the narrowest column: the actions take a
+      // line of their own there instead of squeezing the title letter by letter.
+      const nameBox = await ssh.getByText('VM-4-7-ubuntu', { exact: true }).boundingBox();
+      const aliasBox = await ssh.getByText('cindy-vm-4-7-ubuntu', { exact: true }).boundingBox();
+      assert.ok(nameBox.height < 24, `the host name wrapped (${nameBox.height}px tall)`);
+      assert.ok(Math.abs(nameBox.y + nameBox.height / 2 - (aliasBox.y + aliasBox.height / 2)) < 4, 'the alias left the name\'s line');
       await ssh.scrollIntoViewIfNeeded();
       await ui.capture('ssh-list');
       // Editing one keeps its connection read-only (main refuses such edits too).
