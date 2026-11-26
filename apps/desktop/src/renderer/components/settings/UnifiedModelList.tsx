@@ -1048,22 +1048,21 @@ export function UnifiedModelList({
    */
   const rowAdvancedButton = (row: UnionModelRow) => (
     <Tip text={t('settings.providers.models.advanced.open')}>
-      <button
+      <Button
         data-settings-search-action="Open advanced settings for this model"
         type="button"
+        variant="secondary"
+        tone="quiet"
+        size="xs"
         aria-label={t('settings.providers.models.advanced.openAria', {
           name: localizedModelName(row.name, t),
         })}
         onClick={() => openAdvanced(row)}
-        className={cn(
-          'flex h-6 w-6 shrink-0 items-center justify-center rounded-full opacity-0 transition-opacity',
-          'hover:bg-[var(--surface-hover)] focus-visible:opacity-100 group-hover:opacity-100',
-          advancedOpen && advancedRow?.id === row.id && 'opacity-100',
-        )}
+        className="w-6 px-0"
         style={{ color: 'var(--text-tertiary)' }}
       >
         <SlidersHorizontal size={14} />
-      </button>
+      </Button>
     </Tip>
   );
 

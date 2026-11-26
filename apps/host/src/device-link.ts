@@ -182,6 +182,10 @@ export interface HostDeviceLinkPorts {
   publish?(event: any): void;
   /** A precreated Worktree is claimed as soon as its DB row or live runtime exists. */
   isSessionClaimed(sessionId: string): Promise<boolean>;
+  autoTitle?: {
+    generateTitle(rawRequest: unknown): Promise<{ title: string | null }>;
+    regenerateTitle(rawRequest: unknown): Promise<{ title: string | null }>;
+  };
   /** Coexistence plan A: the refusal while a desktop uses this profile, or null. */
   profileHold?(): ProfileHold | null;
   /** The remote plugin OAuth entry; the desktop's plugin-oauth runtime unless a test passes its own. */
@@ -640,6 +644,23 @@ export function createHostDeviceLink(deps: HostDeviceLinkPorts) {
       },
     });
   });
+  if (deps.autoTitle) {
+    const autoTitle = deps.autoTitle;
+    registry.register(MAKER_INVOKE.GENERATE_TITLE, async ([rawRequest]) => {
+      assertCurrent();
+      refuseWhileHeld();
+      const result = await autoTitle.generateTitle(rawRequest);
+      assertCurrent();
+      return result;
+    });
+    registry.register(MAKER_INVOKE.REGENERATE_TITLE, async ([rawRequest]) => {
+      assertCurrent();
+      refuseWhileHeld();
+      const result = await autoTitle.regenerateTitle(rawRequest);
+      assertCurrent();
+      return result;
+    });
+  }
   registry.register(MAKER_INVOKE.SET_MODEL, async ([sessionId, model, wireProviderId, revision, wireSelection]) => {
     const { providerId, selection } = normalizeDeviceLinkSetModelWireArgs(true,
       deviceLinkInvokeControllerSupports(CONTROLLER_CAPABILITY_SET_MODEL_EXPLICIT_PROVIDER_NULL_V1),

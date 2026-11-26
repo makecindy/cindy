@@ -6,9 +6,9 @@ export default {
   name: 'attachment-preview-frame',
   entry: './preview.tsx',
   viewport: { width: 1280, height: 800 },
-  real: 'TextLightbox, FileLightbox, FileBodyView, UnrenderablePlaceholder, OpenInSystemActions, ImageLightbox, PreviewChrome and imagePreviewWindow (non-modal image window geometry)',
+  real: 'TextLightbox, FileLightbox, FileBodyView, UnrenderablePlaceholder, OpenInSystemActions, ImageLightbox, PreviewChrome (floating panel, scrim, header), imagePreviewWindow (non-modal image window geometry) and MarkdownRenderer',
   notCovered:
-    'Native traffic lights and Electron drag regions (geometry only), real file reads, Windows window controls, video/model/Mermaid viewers and Mobile; dock labels are inline English defaults pending LQA; file stat, document text and image bytes are fixture data',
+    'Native traffic lights and Electron drag regions (geometry only), real file reads, Windows window controls, video/model/Mermaid viewers and Mobile; dock labels are inline English defaults pending LQA; file stat, document text and image bytes are fixture data; the 「文件已变更」 state is fixture data (its detection and refresh are covered by the targeted vitest); the remote stale copy is fixture data (the refresh outcome handling is covered by the targeted vitest)',
   stubs: {
     'src/renderer/features/cc-agent/workdir-browse/PdfPreview':
       'export function PdfPreview() { throw new Error("PDF is outside this fixture"); }',
@@ -23,6 +23,8 @@ export default {
       about: 'A 320px-wide viewport degrades the image window without horizontal overflow',
       viewport: { width: 320, height: 600 },
     },
+    changed: { about: 'The same document panel with the 「文件已变更」 hint at the top right' },
+    stale: { about: 'A remote file whose refetch only reached a cached copy, marked 「历史副本」 in the header' },
   },
   async ready(page) {
     await page.waitForFunction(
@@ -149,7 +151,7 @@ export default {
       return { top: r.top, left: r.left, right: r.right, bottom: r.bottom, radius: getComputedStyle(node).borderTopLeftRadius };
     });
     assert.equal(panel.radius, '12px');
-    if (ui.case === 'default') {
+    if (ui.case === 'default' || ui.case === 'stale') {
       // 打不开的文件用居中小窗。
       assert.equal(panel.right - panel.left, 480);
       assert.equal(panel.bottom - panel.top, 360);
@@ -161,6 +163,19 @@ export default {
       assert.equal(panel.left, MARGIN);
       assert.equal(viewport.width - panel.right, MARGIN);
       assert.equal(viewport.height - panel.bottom, MARGIN);
+    }
+    if (ui.case === 'stale') {
+      // 远端不可达:手上只有历史副本,头部标出来,别让人以为是最新版。
+      const stale = page.getByText(await ui.t('chat.remoteFile.staleBadge'));
+      assert.equal(await stale.count(), 1);
+    }
+    if (ui.case === 'changed') {
+      // 预览期间文件被改动:右上角给出「文件已变更」,点一下才刷新内容。
+      const badge = page.getByRole('button', { name: await ui.t('chat.filePreview.changed') });
+      assert.equal(await badge.count(), 1);
+      const header = page.locator('header').filter({ has: badge });
+      assert.equal(await header.count(), 1);
+      await badge.click();
     }
     if (ui.case !== 'default') return;
     const dialog = page.getByRole('dialog');

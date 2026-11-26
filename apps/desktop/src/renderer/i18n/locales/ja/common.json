@@ -5653,7 +5653,7 @@
       "title": "パーソナライズ",
       "subtitle": "カスタムプロンプト",
       "description": "アシスタントに追加の指示やコンテキストを与えます。",
-      "placeholder": "ここにカスタム指示を入力してください。Claude / Codex のシステムプロンプト末尾に追加されます。\n\n· {{appName}} の内蔵セッションのみに適用されます。既存のセッションは起動時スナップショットを保持し、変更は次回の新規セッションから有効になります。\n· すべての Claude Code セッション(ターミナルや他の IDE を含む)で強制的に有効にするには、~/.claude/settings.json に SessionStart フックを設定してください(harness レベルの強制)。\n· Codex CLI は ~/.codex/hooks.json に SessionStart フックを設定すると harness レベルで強制注入できます（CC と同等）。または ~/.codex/AGENTS.md による自動読み込み（ソフト制約、モデルが無視する場合あり）も利用できます。",
+      "placeholder": "ここにカスタム指示を入力してください。Claude / Codex のシステムプロンプト末尾に追加されます。\n\n· {{appName}} の内蔵セッションのみに適用されます。既存のセッションは起動時スナップショットを保持し、変更は次回の新規セッションから有効になります。\n· すべての Claude Code セッション(ターミナルや他の IDE を含む)で強制的に有効にするには、~/.claude/settings.json に SessionStart フックを設定してください(Harness レベルの強制)。\n· Codex CLI は ~/.codex/hooks.json に SessionStart フックを設定すると Harness レベルで強制注入できます（CC と同等）。または ~/.codex/AGENTS.md による自動読み込み（ソフト制約、モデルが無視する場合あり）も利用できます。",
       "ariaLabel": "カスタム指示",
       "save": "保存",
       "overLimit": " — 文字数制限を超過",
@@ -5854,7 +5854,7 @@
       "uninstallTitle": "Pi 拡張機能をアンインストールしますか？",
       "uninstallDescription": "{{name}} をこのデバイスから削除します。すでに開いている Pi タスクは、閉じるまで古い拡張機能を保持します。",
       "confirmUninstall": "アンインストール",
-      "extensionDialogConfirm": "確認",
+      "extensionDialogConfirm": "続行",
       "cancel": "キャンセル",
       "relativePathUnsupported": "設定からローカル拡張機能を入れる場合は絶対パスを使ってください。./extension のような相対パスは Pi タスクからインストールできます。",
       "resources": {
@@ -9763,7 +9763,7 @@
       "allow": "許可",
       "deny": "拒否",
       "questionTitle": "回答が必要です",
-      "submit": "送信",
+      "submit": "回答を送信",
       "planTitle": "プランの確認",
       "approve": "承認",
       "requestChanges": "修正を依頼",
@@ -10323,10 +10323,10 @@
       }
     },
     "byAgent": {
-      "title": "Agent / harness 別",
+      "title": "Agent / Harness 別",
       "subtitle": "直近 30 日",
       "col": {
-        "agent": "Agent / harness",
+        "agent": "Agent / Harness",
         "total": "直近 30 日のトークン",
         "totalInRange": "{{range}}のトークン",
         "share": "割合",
@@ -12332,7 +12332,7 @@
           "soleOwnerHint": "メンバーはあなただけです。グループをアーカイブすると履歴が残り、後で再開できます。",
           "archive": "グループをアーカイブ",
           "archiveHint": "アーカイブすると、すべてのメンバーに対して新しいメッセージと仲間の実行が停止します。履歴は保持されます。グループを検索して履歴を閲覧したり、アーカイブを解除したりできます。",
-          "confirm": "確認",
+          "confirm": "続行",
           "lastOwner": "退出またはオーナーを削除する前に、別のメンバーに所有権を譲渡してください。",
           "conflict": "設定が更新されました。再読み込みしてお試しください。",
           "unarchive": "アーカイブを解除",
@@ -13188,7 +13188,7 @@
       }
     },
     "confirmDialog": {
-      "confirm": "確認",
+      "confirm": "続行",
       "cancel": "キャンセル",
       "dontShowAgain": "次回から表示しない"
     },
@@ -15412,7 +15412,7 @@
       "back": "戻る",
       "skip": "スキップ",
       "next": "次へ",
-      "submit": "送信",
+      "submit": "回答を送信",
       "sendAndContinue": "送信して続行",
       "close": "閉じる",
       "customAnswer": "別の回答を入力…",
@@ -15842,6 +15842,10 @@
       "diffUnchangedLines_one": "変更なし {{count}} 行",
       "diffUnchangedLines_other": "変更なし {{count}} 行",
       "diffPreviewLoading": "差分プレビューを準備しています…"
+    },
+    "filePreview": {
+      "changed": "ファイルが変更されました",
+      "refreshHint": "クリックして更新"
     },
     "textLightbox": {
       "unreadable": "このファイルを読み取れません",

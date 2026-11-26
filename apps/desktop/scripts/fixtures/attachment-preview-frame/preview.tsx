@@ -3,11 +3,16 @@ import { mountPage, subscription } from '../../ui-page/harness';
 import { FileLightbox } from '../../../src/renderer/components/chat/FileLightbox';
 import { TextLightbox } from '../../../src/renderer/components/chat/TextLightbox';
 import { ImageLightbox } from '../../../src/renderer/components/chat/ImageLightbox';
+import { FileChangedBadge } from '../../../src/renderer/components/chat/FilePreviewLightboxHost';
+import { ChatSessionFileProvider } from '../../../src/renderer/components/chat/ChatSessionFileContext';
+import { LOCAL_FILE_ORIGIN } from '../../../src/renderer/lib/sessionFileOrigin';
 import { ToastContainer } from '../../../src/renderer/components/ui/toast/ToastContainer';
 
 const SHEET = '/fixture/2026-11-03-发票核对清单.xlsx';
 const SHEET_CACHE = '/fixture/cache-473d6dd49fb70e80510e-internal-name.xlsx';
 const MARKDOWN = '/fixture/2026-11-03-发票核对说明.md';
+// 远端取回后的本地副本路径(stale 场景:远端不可达,只剩这份历史副本)。
+const CACHED_SHEET = '/fixture/cached/2026-11-03-发票核对清单.xlsx';
 
 const markdown = [
   '# 发票核对说明',
@@ -67,21 +72,39 @@ function Conversation() {
   );
 }
 
-function Fixture({ kind }: { kind: 'sheet' | 'markdown' | 'image' }) {
+function Fixture({ kind }: { kind: 'sheet' | 'markdown' | 'image' | 'changed' | 'stale' }) {
   const [open, setOpen] = useState(true);
   const [image] = useState(sampleImage);
+  // stale 场景是远程会话:取回只拿到历史副本,面板上要标出来。
+  const remote = kind === 'stale';
   return (
-    <>
+    <ChatSessionFileProvider
+      value={{
+        sessionId: 'fixture-session',
+        workingDir: '/fixture',
+        origin: remote ? { kind: 'device', deviceId: 'device-1' } : LOCAL_FILE_ORIGIN,
+      }}
+    >
       <Conversation />
       <ToastContainer />
       {open && kind === 'sheet' && <FileLightbox filePath={SHEET_CACHE} fileName={SHEET.split('/').pop()} onClose={() => setOpen(false)} />}
       {open && kind === 'markdown' && (
         <TextLightbox filePath={MARKDOWN} onClose={() => setOpen(false)} />
       )}
+      {open && kind === 'changed' && (
+        <TextLightbox
+          filePath={MARKDOWN}
+          onClose={() => setOpen(false)}
+          changedBadge={<FileChangedBadge onClick={() => {}} />}
+        />
+      )}
+      {open && kind === 'stale' && (
+        <FileLightbox filePath={SHEET} fileName={SHEET.split('/').pop()} onClose={() => setOpen(false)} />
+      )}
       {open && kind === 'image' && (
         <ImageLightbox src={image} filename="示例图片.png" onClose={() => setOpen(false)} />
       )}
-    </>
+    </ChatSessionFileProvider>
   );
 }
 
@@ -91,6 +114,13 @@ mountPage({
     platform: 'win32',
     openSystemPreview: async () => true,
     fileBrowser: {
+      // 远程取回:只拿到历史副本(stale),面板上要标出来。
+      chatFetch: async () => ({
+        ok: true,
+        cachePath: CACHED_SHEET,
+        size: 61_133,
+        stale: true,
+      }),
       readFile: async () => ({ ok: false, code: 'BINARY_FILE', message: 'binary' }),
       stat: async ({ relPath }: { relPath: string }) => ({
         relPath,
@@ -111,7 +141,11 @@ mountPage({
           ? 'image'
           : ctx.case === 'markdown'
             ? 'markdown'
-            : 'sheet'
+            : ctx.case === 'changed'
+              ? 'changed'
+              : ctx.case === 'stale'
+                ? 'stale'
+                : 'sheet'
       }
     />
   ),

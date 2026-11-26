@@ -5898,7 +5898,7 @@
       "uninstallTitle": "Pi-Erweiterung deinstallieren?",
       "uninstallDescription": "{{name}} wird von diesem Gerät entfernt. Pi-Aufgaben, die bereits geöffnet sind, behalten die alte Erweiterung, bis sie geschlossen werden.",
       "confirmUninstall": "Deinstallieren",
-      "extensionDialogConfirm": "Bestätigen",
+      "extensionDialogConfirm": "Weiter",
       "cancel": "Abbrechen",
       "resources": {
         "extension": "Erweiterungscode",
@@ -9807,7 +9807,7 @@
       "allow": "Erlauben",
       "deny": "Ablehnen",
       "questionTitle": "Deine Eingabe ist erforderlich",
-      "submit": "Absenden",
+      "submit": "Antwort senden",
       "planTitle": "Planprüfung",
       "approve": "Genehmigen",
       "requestChanges": "Änderungen anfordern",
@@ -12367,7 +12367,7 @@
           "soleOwnerHint": "Du bist das einzige verbliebene Mitglied. Archiviere diese Gruppe, um ihren Verlauf zu behalten und sie später wiederherzustellen.",
           "archive": "Gruppe archivieren",
           "archiveHint": "Durch das Archivieren wird diese Gruppe für alle Mitglieder deaktiviert. Neue Nachrichten und Ausführungen von Freunden werden gestoppt. Der Verlauf bleibt erhalten. Suche nach der Gruppe, um ihren Verlauf anzusehen oder die Archivierung aufzuheben.",
-          "confirm": "Bestätigen",
+          "confirm": "Weiter",
           "lastOwner": "Übertrage die Inhaberschaft auf ein anderes Mitglied, bevor du die Gruppe verlässt oder den aktuellen Inhaber entfernst.",
           "conflict": "Jemand hat diese Gruppe aktualisiert. Lade sie neu und versuche es erneut.",
           "unarchive": "Archivierung aufheben",
@@ -13235,7 +13235,7 @@
       }
     },
     "confirmDialog": {
-      "confirm": "Bestätigen",
+      "confirm": "Weiter",
       "cancel": "Abbrechen",
       "dontShowAgain": "Nicht mehr anzeigen"
     },
@@ -15437,7 +15437,7 @@
       "back": "Zurück",
       "skip": "Überspringen",
       "next": "Weiter",
-      "submit": "Absenden",
+      "submit": "Antwort senden",
       "sendAndContinue": "Senden und fortfahren",
       "close": "Schließen",
       "customAnswer": "Etwas anderes eingeben…",
@@ -15871,6 +15871,10 @@
       "diffUnchangedLines_one": "{{count}} unveränderte Zeile",
       "diffUnchangedLines_other": "{{count}} unveränderte Zeilen",
       "diffPreviewLoading": "Diff-Vorschau wird vorbereitet…"
+    },
+    "filePreview": {
+      "changed": "Datei geändert",
+      "refreshHint": "Zum Aktualisieren klicken"
     },
     "textLightbox": {
       "unreadable": "Diese Datei kann nicht gelesen werden",
