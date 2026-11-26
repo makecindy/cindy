@@ -6,14 +6,15 @@ import { mountPage } from '../../ui-page/harness';
 
 mountPage({
   render: ({ data }) => {
-    const { side, count, width } = data as {
+    const { side, count, inheritedCount = count, width } = data as {
       side: 'left' | 'right';
       count: number;
+      inheritedCount?: number;
       width: number;
     };
     const style = {
       width,
-      [`--content-top-${side}-actions-inset`]: `${count * 32}px`,
+      [`--content-top-${side}-actions-inset`]: `${inheritedCount * 32}px`,
     } as CSSProperties;
 
     return (
@@ -39,7 +40,7 @@ mountPage({
               <RightSidebarToggle collapsed side={side} onToggle={() => {}} />
             </div>
           )}
-          <RemoteSessionLoading compact />
+          <RemoteSessionLoading compact reserveCornerActions={count > 0} />
         </section>
       </div>
     );

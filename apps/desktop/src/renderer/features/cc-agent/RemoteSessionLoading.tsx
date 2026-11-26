@@ -11,7 +11,10 @@ import { useTranslation } from 'react-i18next';
 
 import { Spinner } from '@/components/ui/spinner';
 
-export function RemoteSessionLoading({ compact = false }: { compact?: boolean }) {
+export function RemoteSessionLoading({
+  compact = false,
+  reserveCornerActions = false,
+}: { compact?: boolean; reserveCornerActions?: boolean }) {
   const { t } = useTranslation();
   if (compact) {
     return (
@@ -21,14 +24,18 @@ export function RemoteSessionLoading({ compact = false }: { compact?: boolean })
       >
         {/* MainLayout's floating buttons are one 28px row. Float their insets so
             the whole status moves underneath when it cannot fit alongside them. */}
-        <span
-          aria-hidden="true"
-          className="float-left h-[min(1.75rem,var(--content-top-left-actions-inset,0px))] w-[var(--content-top-left-actions-inset,0px)]"
-        />
-        <span
-          aria-hidden="true"
-          className="float-right h-[min(1.75rem,var(--content-top-right-actions-inset,0px))] w-[var(--content-top-right-actions-inset,0px)]"
-        />
+        {reserveCornerActions && (
+          <>
+            <span
+              aria-hidden="true"
+              className="float-left h-[min(1.75rem,var(--content-top-left-actions-inset,0px))] w-[var(--content-top-left-actions-inset,0px)]"
+            />
+            <span
+              aria-hidden="true"
+              className="float-right h-[min(1.75rem,var(--content-top-right-actions-inset,0px))] w-[var(--content-top-right-actions-inset,0px)]"
+            />
+          </>
+        )}
         <span className="inline-flex max-w-full items-center gap-2 pb-1 align-top">
           <Spinner size={14} />
           <span className="min-w-0 [overflow-wrap:anywhere]">{t('ccAgent.remoteSession.syncing')}</span>

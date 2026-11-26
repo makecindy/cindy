@@ -10,7 +10,7 @@ export default {
     default: { about: 'Sync status and two right-corner actions', data: { side: 'right', count: 2, width: 300 } },
     'narrow-right': { about: 'Status drops below the actions when the line is too short', data: { side: 'right', count: 2, width: 172, below: true } },
     'narrow-left': { about: 'Left-side controls reserve space in a narrow pane', data: { side: 'left', count: 4, width: 200, below: true } },
-    embedded: { about: 'No corner actions in an embedded panel', data: { side: 'right', count: 0, width: 260 } },
+    embedded: { about: 'No local corner actions despite inheriting the window inset', data: { side: 'right', count: 0, inheritedCount: 5, width: 280 } },
   },
   async check(page, ui) {
     const status = page.getByRole('status');
@@ -25,6 +25,7 @@ export default {
 
     if (!ui.data.count) {
       assert.equal(right, row.x + row.width - 16, 'Embedded status keeps its original right alignment');
+      assert.ok(top < row.y + 12, 'Embedded status does not drop below unrelated window actions');
       return;
     }
     const actions = await page.locator('[data-corner-actions]').boundingBox();
