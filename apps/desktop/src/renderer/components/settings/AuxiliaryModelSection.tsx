@@ -198,6 +198,13 @@ export function AuxiliaryModelSectionView({
       savingRef.current = false;
     }
   };
+  // 智能路由的几项：合并整个供应商的写成「Anthropic · 路由（2 个来源）」，与选模型面板同一写法；自己排的归在「智能路由」下。
+  const pickerOptions = useMemo(() => options.map((option) => (option.route
+    ? { ...option, group: option.route.kind === 'merged'
+      ? t('modelGroups.picker.mergedLabel', { name: option.route.name, count: option.route.members })
+      : t('modelGroups.title'),
+    ...(option.route.name ? {} : { modelName: t('settings.auxiliaryModels.missingRoute') }) }
+    : option)), [options, t]);
   const models = Array.isArray(savedModels) ? savedModels : [];
   const customized = models.length > 0;
   const showCustom = customized || drafting;
@@ -271,7 +278,7 @@ export function AuxiliaryModelSectionView({
   const failed = saveState === 'failed' || saveState === 'restoreFailed';
   const failedSlot = failedTest && SLOT_I18N[activeModels.indexOf(failedTest.model)];
   const failedModel = failedTest && localizedModelName(
-    options.find(option => option.id === failedTest.model)?.modelName ?? failedTest.model, t,
+    pickerOptions.find(option => option.id === failedTest.model)?.modelName ?? failedTest.model, t,
   );
   const providerMessage = failedTest?.upstreamMessage;
   const foldDetails = providerMessage && (providerMessage.length > 200 || providerMessage.split('\n').length > 3);
@@ -382,7 +389,7 @@ export function AuxiliaryModelSectionView({
               const selectedByOtherSlot = new Set(
                 activeModels.filter((entry, slotIndex) => slotIndex !== index && entry),
               );
-              const slotOptions = options.filter(
+              const slotOptions = pickerOptions.filter(
                 (option) => option.id === pin || !selectedByOtherSlot.has(option.id),
               );
               return (

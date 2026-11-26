@@ -340,7 +340,7 @@
     "tabOwned": "Von mir geteilt",
     "startIntro": "Lade jemanden ein, alles in dieser Aufgabe zu lesen und mit demselben Agent zu arbeiten.",
     "runsOnThisDevice": "Läuft auf diesem Gerät",
-    "inviteNotice": "Alle, die den Einladungslink haben, können nach der Anmeldung beitreten und erhalten denselben Agent-Zugriff wie der Host.",
+    "inviteNotice": "Alle, die den Einladungslink haben, können nach der Anmeldung beitreten und erhalten denselben Agent-Zugriff wie der Host. Gäste können die aktuellen Änderungen im gesamten Git-Repository einsehen, auch wenn nur ein Unterordner geteilt wird.",
     "offlineAutoClose": "Die Freigabe endet automatisch, wenn der Host-Computer offline bleibt.",
     "inviteBoxHint": "Sende den Link an dein Teammitglied. Es kann ihn zum Beitreten öffnen oder in Cindy unter „Geteilter Aufgabe beitreten“ einfügen.",
     "invitationMessage": "Du bist eingeladen, „{{title}}“ beizutreten\n{{link}}\nÖffne den Link, um beizutreten. Falls Cindy nicht geöffnet wird, wähle in Cindy „Geteilter Aufgabe beitreten“ und füge diesen Link ein.",
@@ -401,7 +401,7 @@
       "progress": "Aktueller Anteil {{used}} % · Limit {{limit}} %",
       "paused": "Dieses Modell ist pausiert. Wähle ein anderes verfügbares Modell.",
       "recommendation": "Empfohlen: {{model}}",
-      "unsupported": "Modellanteil-Limits werden für diese Anbietergruppe noch nicht unterstützt.",
+      "unsupported": "Modellanteil-Limits werden für diese Computergruppe noch nicht unterstützt.",
       "basis": "Letzte 7 Kalendertage · Eingabe- und Ausgabetoken, ohne Cache",
       "maxPercent": "Maximaler Anteil der persönlichen Nutzung",
       "empty": "Keine Nutzung erfasst",
@@ -498,14 +498,14 @@
         "confirm": "Freigabe entfernen"
       },
       "reshare": {
-        "applying": "möchte den Anbieter über die Anbietergruppe von {{owner}} nutzen",
+        "applying": "möchte den Anbieter über die Computergruppe von {{owner}} nutzen",
         "requestedAt": "Angefragt {{time}}",
         "usageHint": "Wenn du zustimmst, können die Sitzungen von {{name}} auf diesem Computer laufen und die Nutzung wird {{owner}} zugerechnet.",
         "approve": "Zustimmen",
         "reject": "Ablehnen",
         "summaryUsing_one": "{{count}} Person nutzt den Anbieter über die Anbietergruppe von {{owner}}",
-        "summaryUsing_other": "{{count}} Personen nutzen den Anbieter über die Anbietergruppe von {{owner}}",
-        "summaryOwner": "Über die Anbietergruppe von {{owner}}",
+        "summaryUsing_other": "{{count}} Personen nutzen den Anbieter über die Computergruppe von {{owner}}",
+        "summaryOwner": "Über die Computergruppe von {{owner}}",
         "summaryDeclined_one": "{{count}} abgelehnt",
         "summaryDeclined_other": "{{count}} abgelehnt",
         "stateApproved": "Zugestimmt",
@@ -513,10 +513,10 @@
         "revoke": "Zurückziehen",
         "revokeAria": "Zustimmung für {{name}} zurückziehen",
         "approveAria": "Nutzung durch {{name}} zustimmen",
-        "toastApproved": "{{name}} kann {{provider}} jetzt über die Anbietergruppe von {{owner}} nutzen",
+        "toastApproved": "{{name}} kann {{provider}} jetzt über die Computergruppe von {{owner}} nutzen",
         "toastRejected": "Anfrage von {{name}} abgelehnt",
         "toastRevoked": "Zustimmung für {{name}} zurückgezogen. Laufende Sitzungen wurden gestoppt.",
-        "listTitle": "Nutzung über die Anbietergruppe von {{owner}}"
+        "listTitle": "Nutzung über die Computergruppe von {{owner}}"
       },
       "memberNote": {
         "add": "Notiz festlegen",
@@ -562,7 +562,7 @@
       "requestedAt": "Angefragt {{time}} über deinen Freigabelink",
       "pairingHint": "Bevor du zustimmst, kannst du über den Kanal, über den du den Link gesendet hast, nachfragen: „Welchen Kopplungscode siehst du?“ Stimme zu, wenn er übereinstimmt.",
       "callout": "Nach deiner Zustimmung kann {{name}} Modelle von {{provider}} in eigenen Sitzungen nutzen. Der Agent läuft auf diesem Computer und die Nutzung wird auf dein Kontingent bei {{provider}} angerechnet. Du kannst den Zugriff jederzeit unter „{{provider}} · Remote & Freigabe“ pausieren oder entfernen.",
-      "calloutGroup": "Nach deiner Zustimmung kann {{name}} Modelle von {{provider}} in eigenen Sitzungen nutzen. Die Anbietergruppe wählt den Computer aus, auf dem der Agent läuft, und die Nutzung wird auf dein Kontingent bei {{provider}} angerechnet. Du kannst den Zugriff jederzeit unter „{{provider}} · Remote & Freigabe“ pausieren oder entfernen.",
+      "calloutGroup": "Nach deiner Zustimmung kann {{name}} Modelle von {{provider}} in eigenen Sitzungen nutzen. Die Computergruppe wählt den Computer aus, auf dem der Agent läuft, und die Nutzung wird auf dein Kontingent bei {{provider}} angerechnet. Du kannst den Zugriff jederzeit unter „{{provider}} · Remote & Freigabe“ pausieren oder entfernen.",
       "calloutRemote": "Nach deiner Zustimmung kann {{name}} Modelle von {{provider}} in eigenen Sitzungen nutzen. Der Agent läuft auf dem Computer, der diesen Anbieter bereitstellt, und die Nutzung wird auf dein Kontingent bei {{provider}} angerechnet. Du kannst den Zugriff jederzeit unter „{{provider}} · Remote & Freigabe“ pausieren oder entfernen.",
       "calloutClaudeEmail": "Während {{name}} die Freigabe nutzt, kann der Agent die E-Mail-Adresse sehen, mit der du dich bei Claude anmeldest.",
       "calloutUnknown": "Wenn du diese Person nicht kennst, lehne ab. Nach der Ablehnung funktioniert der Link nicht mehr.",
@@ -702,7 +702,7 @@
       "rejectedTitle": "Freigabeanfrage abgelehnt",
       "rejectedBody": "{{name}} hat die Freigabe von {{provider}} abgelehnt",
       "reshareTitle": "Neue Nutzungsanfrage",
-      "reshareBody": "{{name}} möchte deinen freigegebenen Anbieter {{provider}} über die Anbietergruppe von {{owner}} nutzen"
+      "reshareBody": "{{name}} möchte deinen freigegebenen Anbieter {{provider}} über die Computergruppe von {{owner}} nutzen"
     },
     "runLimits": {
       "title": "Limits für Remote-Sitzungen",
@@ -758,7 +758,7 @@
   },
   "providerGroup": {
     "management": {
-      "note": "Du verwaltest die Anbietergruppe auf {{device}}. Änderungen werden auf diesem Computer gespeichert. Lass ihn online.",
+      "note": "Du verwaltest die Computergruppe auf {{device}}. Änderungen werden auf diesem Computer gespeichert. Lass ihn online.",
       "unsupported": "Die Cindy-Version auf dem Computer mit dieser Gruppe unterstützt noch keine Fernverwaltung. Aktualisiere zuerst Cindy auf diesem Computer."
     },
     "page": {
@@ -829,27 +829,13 @@
       "emptyRange": "Keine Nutzung in diesem Zeitraum"
     },
     "section": {
-      "title": "Anbietergruppe",
+      "title": "Computergruppe",
       "addComputer": "Computer hinzufügen",
       "delete": "Gruppe löschen",
       "empty": "{{provider}} von deinen anderen Computern hinzufügen, damit für Aufgaben automatisch einer ausgewählt wird",
-      "loading": "Anbietergruppe wird geladen…",
-      "loadFailed": "Anbietergruppe konnte nicht geladen werden",
+      "loading": "Computergruppe wird geladen…",
+      "loadFailed": "Computergruppe konnte nicht geladen werden",
       "note": "Für Sitzungen auf diesem Computer und Sitzungen von Personen, mit denen du teilst, wählt die Gruppe den Computer aus, auf dem der Agent läuft"
-    },
-    "strategy": {
-      "label": "Gruppenstrategie",
-      "least": "Geringste Auslastung",
-      "round": "Round Robin",
-      "order": "Der Reihe nach",
-      "weight": "Nach Gewichtung",
-      "quotaFirst": "Wenn die Abonnementnutzung verfügbar ist, werden Computer bevorzugt, deren Kontingent bald zurückgesetzt wird und noch reichlich übrig ist. So wird jedes Konto im Laufe der Zeit gleichmäßig ausgeschöpft. Bei ähnlichen Werten gilt die Gruppenstrategie",
-      "description": {
-        "least": "Nutzt den Computer mit der geringsten Auslastung",
-        "round": "Wechselt reihum zwischen den Computern",
-        "order": "Bevorzugt Computer weiter oben in der Liste",
-        "weight": "Verteilt nach Gewichtung"
-      }
     },
     "autoSwitch": {
       "label": "Computer automatisch wechseln",
@@ -909,9 +895,9 @@
         }
       },
       "removeConfirm": {
-        "title": "{{name}} aus der Anbietergruppe entfernen?",
+        "title": "{{name}} aus der Computergruppe entfernen?",
         "description": "Es werden keine neuen Aufgaben mehr zugewiesen. Bereits laufende Aufgaben bleiben auf dem jeweiligen Computer.",
-        "lastDescription": "Da es sich um den letzten Computer in der Gruppe handelt, wird durch das Entfernen die Anbietergruppe {{provider}} gelöscht.",
+        "lastDescription": "Da es sich um den letzten Computer in der Gruppe handelt, wird durch das Entfernen die Computergruppe {{provider}} gelöscht.",
         "confirm": "Aus Gruppe entfernen"
       },
       "sourceGroupOwner": "Hostet die Gruppe",
@@ -949,12 +935,12 @@
       "send": "Nachricht senden"
     },
     "deleteConfirm": {
-      "title": "Anbietergruppe {{provider}} löschen?",
+      "title": "Computergruppe {{provider}} löschen?",
       "description": "Neue Aufgaben auf diesem Computer werden hier ausgeführt. Aufgaben, die sich bereits auf anderen Computern befinden, bleiben dort, wo sie sind.",
       "confirm": "Gruppe löschen"
     },
     "add": {
-      "title": "Computer zur Anbietergruppe {{provider}} hinzufügen",
+      "title": "Computer zur Computergruppe {{provider}} hinzufügen",
       "sourceAria": "Computerquelle",
       "tabAvailable": "Bereits verfügbar",
       "tabLink": "Freigabelink",
@@ -971,11 +957,11 @@
     },
     "toast": {
       "added_one": "{{count}} Computer zur Anbietergruppe {{provider}} hinzugefügt",
-      "added_other": "{{count}} Computer zur Anbietergruppe {{provider}} hinzugefügt",
+      "added_other": "{{count}} Computer zur Computergruppe {{provider}} hinzugefügt",
       "addedAccounts_one": "{{count}} Konto zur Anbietergruppe {{provider}} hinzugefügt",
-      "addedAccounts_other": "{{count}} Konten zur Anbietergruppe {{provider}} hinzugefügt",
-      "removed": "{{name}} aus der Anbietergruppe entfernt",
-      "deleted": "Anbietergruppe {{provider}} gelöscht"
+      "addedAccounts_other": "{{count}} Konten zur Kontogruppe {{provider}} hinzugefügt",
+      "removed": "{{name}} aus der Computergruppe entfernt",
+      "deleted": "Computergruppe {{provider}} gelöscht"
     }
   },
   "regionScreenshot": {
@@ -1373,7 +1359,7 @@
     "DEVICE_LINK_BUSY": "Der Remotecomputer ist ausgelastet. Versuche es in Kürze erneut.",
     "INVALID_PARAMS": "Ungültige Eingabe. Überprüfe sie und versuch es erneut.",
     "PRECONDITION_FAILED": "Diese Aktion ist im aktuellen Zustand nicht verfügbar. Versuch es erneut.",
-    "PROVIDER_GROUP_CHANGED": "Die Anbietergruppe wurde an anderer Stelle geändert, daher wurde diese Aktion nicht angewendet. Überprüfe die aktuellen Einstellungen und versuch es erneut.",
+    "PROVIDER_GROUP_CHANGED": "Die Computergruppe wurde an anderer Stelle geändert, daher wurde diese Aktion nicht angewendet. Überprüfe die aktuellen Einstellungen und versuch es erneut.",
     "MODEL_CONTEXT_USAGE_UNKNOWN": "Modell nicht gewechselt: Cindy kann nicht überprüfen, wie viel Kontext diese Aufgabe nutzt. Behalte das aktuelle Modell bei oder starte eine neue Aufgabe.",
     "MODEL_WINDOW_CURRENT_CONTEXT_UNKNOWN": "Modell nicht gewechselt: Cindy kann das Kontextfenster des aktuellen Modells nicht überprüfen. Prüfe bei einem benutzerdefinierten Modell die Einstellung für das Kontextfenster. Falls sie sich nicht ändern lässt, behalte das aktuelle Modell bei oder starte eine neue Aufgabe.",
     "MODEL_WINDOW_TARGET_CONTEXT_UNKNOWN": "Modell nicht gewechselt: Cindy kann das Kontextfenster des Zielmodells nicht überprüfen. Prüfe bei einem benutzerdefinierten Modell die Einstellung für das Kontextfenster. Falls sie sich nicht ändern lässt, wähle ein anderes Modell oder starte eine neue Aufgabe.",
@@ -1901,7 +1887,7 @@
       "imBot": "IM-Bots",
       "ghosts": "Plugins",
       "cindyMake": "Cindy Make",
-      "modelGroups": "Modellgruppen"
+      "modelGroups": "Smartes Routing"
     },
     "sections": {
       "user": "Benutzer",
@@ -2808,7 +2794,7 @@
         "description": "Ubuntu verwendet System-.deb-Pakete. Arch Linux und Omarchy verwenden das verwaltete Benutzerinstallationsprogramm mit derselben verifizierten .deb-Nutzlast, ohne einen Debian-Paketmanager.",
         "item1": "Ubuntu: sudo apt install ./cindy-<version>-<arch>.deb verwenden. Arch/Omarchy: der Anleitung zur Benutzerinstallation in docs/linux.md folgen.",
         "item2": "Nach Auswahl von „Aktualisieren“ erfordern systemweite .deb-Installationen eine Autorisierung; verwaltete Benutzerinstallationen wechseln die Version ohne Systempasswort. Andere paketverwaltete Installationen verwenden ihren Paketmanager.",
-        "item3": "Linux x64 und arm64 unterstützen den Beta-Kanal. Linux-Updates werden nur angewendet, wenn du einen Neustart auswählst, niemals automatisch bei Inaktivität."
+        "item3": "Linux x64 und arm64 unterstützen den Beta-Kanal. Verwaltete Benutzerinstallationen können Updates im Leerlauf automatisch installieren; systemweite .deb-Installationen mit passwortloser Autorisierung können Updates ebenfalls im Leerlauf installieren, während andere systemweite .deb-Installationen Updates nur bei einem von dir gewählten Neustart anwenden."
       },
       "qnaTitle": "Direkt fragen",
       "qnaDescription": "Brauchst du noch Hilfe? Frag, wie du dein Vorhaben umsetzen kannst.",
@@ -2883,7 +2869,7 @@
       "openLogsDirError": "Protokollverzeichnis konnte nicht geöffnet werden",
       "autoUpdateLabel": "Updates bei Inaktivität installieren",
       "autoUpdateDescription": "Nach dem Herunterladen eines Updates die App zur Installation neu starten, wenn dieser Computer seit 10 Minuten inaktiv ist und keine Aufgaben ausgeführt werden.",
-      "linuxUpdateDescription": "Updates erfordern einen von dir gewählten Neustart. Systemweite .deb-Installationen fragen nach deinem Systempasswort; verwaltete Benutzerinstallationen nicht. Andere Installationen verwenden ihren Paketmanager.",
+      "linuxUpdateDescription": "Systemweite .deb-Installationen fragen nach deinem Systempasswort, daher werden Updates erst bei einem von dir gewählten Neustart angewendet. Verwaltete Benutzerinstallationen brauchen kein Passwort und können sich im Leerlauf aktualisieren. Andere Installationen verwenden ihren Paketmanager.",
       "autoUpdateEnabledToast": "Updateinstallation im Leerlauf aktiviert",
       "autoUpdateDisabledToast": "Updateinstallation im Leerlauf deaktiviert",
       "autoUpdateSaveFailed": "Einstellungen für automatische Updates konnten nicht gespeichert werden",
@@ -4326,9 +4312,12 @@
           "compaction": {
             "title": "Automatische Komprimierung",
             "hint": "Kontext beim gewählten Auslastungsprozentsatz komprimieren. Niedrigere Werte führen zu früherer Komprimierung; die Engine-Limits gelten weiterhin.",
-            "default": "{{pct}} % (Standard)",
-            "timing": "Gilt für alle verfügbaren Engines für dieses Modell und diese Quelle bei nachfolgenden Durchläufen, ohne eine Antwort zu unterbrechen."
+            "timing": "Gilt für alle verfügbaren Engines für dieses Modell und diese Quelle bei nachfolgenden Durchläufen, ohne eine Antwort zu unterbrechen.",
+            "defaultBadge": "Standard",
+            "sliderAria": "Schwelle für die automatische Komprimierung anpassen",
+            "restoreAria": "Standardmäßiges Verhältnis der automatischen Komprimierung wiederherstellen"
           },
+          "antigravityHydrogenDescription": "Für alltägliche Programmieraufgaben und schnelle Ausführung.",
           "contextLimitRoute": "Aktuell {{tokens}} Tokens",
           "contextLimitOverWindow": "Über dem vom Anbieter angegebenen Kontextfenster; Anfragen können fehlschlagen.",
           "restoreDefault": "Standard wiederherstellen",
@@ -4416,10 +4405,10 @@
         "detailNote": "Der Agent läuft auf {{device}} und nutzt die Anmeldung und das Kontingent dieses Computers. Um ihn zu nutzen, wähle ihn beim Start einer Aufgabe in der Modellliste aus. Um diesen Anbieter zu ändern, öffne auf diesem Computer Einstellungen → Anbieter.",
         "modelsTitle": "Verfügbare Modelle",
         "modelsEmpty": "Für diesen Anbieter sind auf diesem Computer noch keine Modelle verfügbar.",
-        "rowLabelGroup": "{{provider}} · {{device}} · Anbietergruppe",
+        "rowLabelGroup": "{{provider}} · {{device}} · Computergruppe",
         "groupBadge_one": "Anbietergruppe · {{count}} Computer",
-        "groupBadge_other": "Anbietergruppe · {{count}} Computer",
-        "groupNote": "{{device}} hat diesen Anbieter zu einer Anbietergruppe gemacht. Wenn du damit eine Aufgabe startest, weist {{device}} sie gemäß der Gruppenstrategie einem der unten aufgeführten Computer zu und verschiebt sie auf einen anderen, falls bei diesem Computer ein Problem auftritt. Solange {{device}} online ist, kannst du die Gruppe und ihre Freigaben hier unter „Fernzugriff & Freigabe“ verwalten.",
+        "groupBadge_other": "Computergruppe · {{count}} Computer",
+        "groupNote": "{{device}} hat diesen Anbieter zu einer Computergruppe gemacht. Wenn du damit eine Aufgabe startest, weist {{device}} sie gemäß der Gruppenstrategie einem der unten aufgeführten Computer zu und verschiebt sie auf einen anderen, falls bei diesem Computer ein Problem auftritt. Solange {{device}} online ist, kannst du die Gruppe und ihre Freigaben hier unter „Fernzugriff & Freigabe“ verwalten.",
         "groupMembersTitle": "Computer in der Gruppe",
         "groupMembersFailed": "Der Status der Computer in der Gruppe konnte gerade nicht abgerufen werden.",
         "hiddenBanner": "In der Modellauswahl auf diesem Computer ausgeblendet. Favoriten und Sitzungen, die ihn verwenden, sind nicht betroffen."
@@ -4471,7 +4460,7 @@
         "remoteAccess": {
           "label": "Remote-Nutzung erlauben",
           "description": "Wenn aktiviert, können deine anderen Computer und die Personen, mit denen du teilst, die Modelle dieses Anbieters nutzen. Der Agent läuft auf diesem Computer und nutzt dessen Anmeldung und Kontingent.",
-          "descriptionGroup": "Wenn aktiviert, können deine anderen Computer und die Personen, mit denen du teilst, die Modelle dieses Anbieters nutzen. Die Anbietergruppe wählt den Computer aus, auf dem der Agent läuft.",
+          "descriptionGroup": "Wenn aktiviert, können deine anderen Computer und die Personen, mit denen du teilst, die Modelle dieses Anbieters nutzen. Die Computergruppe wählt den Computer aus, auf dem der Agent läuft.",
           "ariaLabel": "Deinen anderen Computern und den Personen, mit denen du teilst, die Nutzung dieses Anbieters erlauben",
           "writeFailed": "Die Fernzugriffseinstellung konnte nicht gespeichert werden. Bitte versuche es erneut.",
           "followsPool": "Diese Verbindung wurde in „{{pool}}“ zusammengeführt und folgt dessen „Remote-Nutzung erlauben“. Ändere es dort."
@@ -4688,6 +4677,15 @@
       "menu": {
         "disableProvider": "Diesen Anbieter deaktivieren",
         "enableProvider": "Diesen Anbieter aktivieren",
+        "icon": "Verbindungssymbol",
+        "appearance": "Name und Symbol",
+        "ownImage": "Bild auswählen",
+        "imageError": "Wähle ein PNG-, JPG- oder WebP-Bild unter 10 MB.",
+        "connectionIcon": {
+          "default": "Standard",
+          "personal": "Privat",
+          "work": "Arbeit"
+        },
         "hideProvider": "In der Modellauswahl ausblenden",
         "showProvider": "In der Modellauswahl anzeigen"
       },
@@ -4767,6 +4765,7 @@
         "discoveryHint": "Diese Modelle wurden vom Anbieterkatalog zurückgegeben. Die Sprachausführung wurde nicht getestet.",
         "saved": "Hinzugefügt",
         "reference": "Referenz",
+        "realtimeConfirmed": "Echtzeit-Endpunkt bestätigt",
         "discovered": "Erkannt",
         "more": "Weitere Sprachmodelle ({{count}})",
         "manual": "ID eines Sprachmodells eingeben",
@@ -5665,7 +5664,8 @@
           "runtime": "Die letzten Anfragen an Hilfsmodelle sind fehlgeschlagen. Aufgabentitel, Zusammenfassungen und Plugin-Aufgaben wie die Untertitelübersetzung können betroffen sein.",
           "open": "Einstellungen öffnen"
         }
-      }
+      },
+      "missingRoute": "Gelöschter Modus"
     },
     "compaction": {
       "codex": {
@@ -5898,7 +5898,7 @@
       "uninstallTitle": "Pi-Erweiterung deinstallieren?",
       "uninstallDescription": "{{name}} wird von diesem Gerät entfernt. Pi-Aufgaben, die bereits geöffnet sind, behalten die alte Erweiterung, bis sie geschlossen werden.",
       "confirmUninstall": "Deinstallieren",
-      "extensionDialogConfirm": "Bestätigen",
+      "extensionDialogConfirm": "Weiter",
       "cancel": "Abbrechen",
       "resources": {
         "extension": "Erweiterungscode",
@@ -7156,7 +7156,14 @@
           "routeUnavailable": "Nicht verfügbar",
           "routeMeasuring": "Wird gemessen…",
           "routeDirectUnavailableHint": "Direktverbindung ist in diesem Netzwerk derzeit nicht verfügbar",
-          "routePreferenceFailed": "Route konnte nicht gewechselt werden. Bitte erneut versuchen."
+          "routePreferenceFailed": "Route konnte nicht gewechselt werden. Bitte erneut versuchen.",
+          "autoRule": {
+            "title": "Regeln für automatische Routenwahl",
+            "faster": "Wählt den Weg mit geringerer Latenz und bevorzugt Direktverbindung bei minimalem Unterschied.",
+            "thresholds": "Wechselt auf Relay, sobald es 25–50 ms+ schneller ist; kehrt zurück, wenn Direkt innerhalb von 15 ms liegt.",
+            "cooldown": "30 s Abkühlzeit gegen Hin-und-her-Wechsel; bei starker Verschlechterung (≥ 2× langsamer und ≥ 100 ms schlechter) sofortiger Wechsel.",
+            "peerOverride": "Hat die Gegenseite Direkt/Relay fest gewählt oder nutzt eine ältere Version, gilt deren Einstellung bzw. Fähigkeit."
+          }
         },
         "protocol": {
           "agentNet": "Agent-Net",
@@ -7279,6 +7286,122 @@
           "disableBlocked": {
             "controller-encryption-required": "Auf diesem Computer ist „Nur Agent-Net verwenden“ aktiviert. Deaktiviere es hier, bevor du den anderen Computer zu Device Link zurückwechselst.",
             "agent-net-only-relay": "Diese Verbindung nutzt ein Netzwerk, das nur Agent-Net unterstützt. Wähle zuerst einen Verbindungsweg, der Device Link unterstützt."
+          }
+        },
+        "peerUpdate": {
+          "availableTip": "Version {{version}} verfügbar – zum Aktualisieren klicken",
+          "downloading": "{{version}} wird heruntergeladen…",
+          "relaunching": "Neustart zur Installation von {{version}}…",
+          "confirm": {
+            "title": "Cindy auf „{{name}}“ aktualisieren?",
+            "selfTitle": "Cindy auf diesem Computer aktualisieren?",
+            "description": "Cindy wird von {{from}} auf {{to}} aktualisiert und auf diesem Gerät neu gestartet. Fernverbindungen werden kurz unterbrochen.",
+            "selfDescription": "Cindy wird von {{from}} auf {{to}} aktualisiert und auf diesem Computer neu gestartet.",
+            "busyWarning": "Laufende Aufgaben oder Hintergrundarbeiten auf diesem Gerät werden durch den Neustart unterbrochen.",
+            "selfBusyWarning": "Laufende Aufgaben oder Hintergrundarbeiten auf diesem Computer werden durch den Neustart unterbrochen.",
+            "linuxPermissionHint": "Bei verwalteten Linux-Installationen ist auf dem Zielgerät möglicherweise ein Systempasswort erforderlich.",
+            "windowsPermissionHint": "Bei einer Installation in einem geschützten Ordner ist auf dem Zielgerät möglicherweise eine Systemberechtigung erforderlich.",
+            "action": "Jetzt aktualisieren"
+          },
+          "toast": {
+            "started": "„{{name}}“ wird auf {{version}} aktualisiert",
+            "relaunching": "„{{name}}“ startet neu, um {{version}} zu installieren",
+            "versionChanged": "Die verfügbare Version auf „{{name}}“ hat sich geändert. Karte erneut öffnen.",
+            "noUpdate": "Auf „{{name}}“ ist kein installierbares Update verfügbar.",
+            "busy": "Auf „{{name}}“ läuft bereits ein Update. Kurz warten und erneut versuchen.",
+            "failed": "Cindy auf „{{name}}“ konnte nicht aktualisiert werden."
+          }
+        },
+        "tabs": {
+          "aria": "Topologieansicht",
+          "devices": "Geräteverbindungen",
+          "providers": "Remote-Anbieter"
+        },
+        "providers": {
+          "empty": "Derzeit laufen keine Aufgaben über einen Remote-Anbieter. Sobald eine Aufgabe auf einem anderen Computer oder geteilten Anbieter läuft, erscheinen Route und Relay hier.",
+          "noMatch": "Keine Aufgaben, Geräte oder Relays entsprechen dem Filter.",
+          "searchPlaceholder": "Aufgaben, Geräte oder Relays suchen…",
+          "clearFilter": "Filter zurücksetzen",
+          "expand": "Erweitern",
+          "collapse": "Einklappen",
+          "groupTitle": "{{provider}}-Anbietergruppe",
+          "groupCount": "{{count}} gesamt",
+          "groupIdleSummary": "{{count}} weitere Mitglieder: {{online}} online · {{offline}} offline",
+          "filter": {
+            "aria": "Nach Aufgabenstatus filtern",
+            "all": "Alle Aufgaben ({{count}})",
+            "running": "Nur laufend ({{count}})"
+          },
+          "columns": {
+            "tasks": "Meine Aufgaben",
+            "path": "Route",
+            "machines": "Remote-Anbietergeräte"
+          },
+          "usage": {
+            "remoteModel": "Remote-Modell"
+          },
+          "bundle": {
+            "mixed": "{{running}} laufend · {{ready}} bereit",
+            "runningOnly": "{{running}} laufend",
+            "readyOnly": "{{ready}} bereit",
+            "countBadge": "{{count}} ges.",
+            "popoverTitle": "Aufgaben auf {{name}} ({{count}})"
+          },
+          "badge": {
+            "own": "Mein Computer",
+            "groupMember": "Gruppe",
+            "share": "Geteilter Anbieter",
+            "shareShort": "Geteilt",
+            "shareGroup": "Geteilte Gruppe · {{count}}",
+            "shareGroupShort": "Gruppe · {{count}}"
+          },
+          "relayRole": {
+            "officialShort": "Offiziell",
+            "selfHostedShort": "Selbst gehostet",
+            "sharerRelayShort": "Teiler-Relay",
+            "officialFull": "Cindy Offizielles Relay",
+            "selfHostedFull": "Selbst gehostetes Relay",
+            "sharerRelayFull": "Selbst gehostetes Relay des Teilers"
+          },
+          "status": {
+            "ready": "Online",
+            "busy": "Beschäftigt",
+            "paused": "Pausiert",
+            "idle": "Inaktiv",
+            "standby": "Bereit"
+          },
+          "machineLine": {
+            "live": "{{flow}} · {{count}} Aufgaben",
+            "ready": "Bereit · {{count}} Aufgaben"
+          },
+          "popover": {
+            "models": "Aktive Modelle",
+            "tasksCount": "Verknüpfte Aufgaben ({{count}})",
+            "clickToOpenHint": "Zum Öffnen klicken",
+            "relayHost": "Relay-Adresse",
+            "relayRegion": "Region",
+            "relayHop": "Lokal zum Relay",
+            "relayLoad": "Über dieses Relay",
+            "relayLoadValue": "{{machines}} Geräte · {{tasks}} Aufgaben"
+          },
+          "idleStrip": {
+            "summary": "{{count}} weitere Online-Remote-Anbieter sind derzeit inaktiv",
+            "show": "Inaktive Anbieter anzeigen",
+            "hide": "Inaktive Anbieter ausblenden"
+          },
+          "stats": {
+            "empty": "Keine laufenden Remote-Anbieter-Aufgaben",
+            "tasks": "{{total}} Aufgaben",
+            "tasksWithRunning": "{{total}} Aufgaben ({{running}} laufend)",
+            "machines": "{{active}} Anbietergeräte",
+            "machinesWithTotal": "{{active}} aktiv / {{total}} Anbietergeräte",
+            "relays": "{{count}} Relays"
+          },
+          "legend": {
+            "live": "Blaue gestrichelte Linie: Datenaustausch aktiv",
+            "ready": "Grüne Linie: Agent-Net-Verbindung bereit",
+            "busy": "Oranger Punkt: Aufgabe aktiv / Gerät beschäftigt",
+            "error": "Rot gepunktet: Keine Antwort oder pausiert"
           }
         }
       }
@@ -7408,7 +7531,8 @@
       "localNetwork": {
         "label": "Lokales Netzwerk",
         "deniedHint": "Ohne diese Berechtigung können sich Computer und Telefone im selben Netzwerk nicht direkt mit diesem Computer verbinden. Sie laufen über das Relay, was langsamer ist.",
-        "settingsHint": "Aktiviere Cindy unter Systemeinstellungen › Datenschutz & Sicherheit › Lokales Netzwerk. Die Änderung gilt, sobald du zurückkommst."
+        "promptedHint": "Klicke im macOS-Hinweis auf „Erlauben“. Wenn kein Hinweis erscheint, öffne die Systemeinstellungen.",
+        "settingsHint": "Öffne unter „Datenschutz & Sicherheit“ den Punkt „Lokales Netzwerk“ und aktiviere Cindy. Fehlt Cindy in der Liste, füge diese App über „+“ hinzu — die Änderung gilt sofort."
       }
     },
     "imBot": {
@@ -7879,6 +8003,10 @@
         "toggle-sidebar": {
           "label": "Seitenleiste umschalten",
           "description": "Seitenleiste mit der Sitzungsliste ein- oder ausklappen"
+        },
+        "copy-session-link": {
+          "label": "Sitzungslink kopieren",
+          "description": "Link der geöffneten Sitzung kopieren"
         },
         "session-history-back": {
           "label": "Vorherige Aufgabe",
@@ -8648,8 +8776,8 @@
         "hostTools_controlDetail": "Mit Cindys Werkzeugen vorhandene Aufgaben und Projekte bearbeiten, archivieren, wiederherstellen und steuern sowie native Aufgabendateien auf diesem Computer importieren.",
         "hostTools_handoff": "Aufgabennachrichten",
         "hostTools_handoffDetail": "Mit Cindys Werkzeugen Nachrichten an vorhandene Aufgaben senden. Vorgänge, die eine aktuelle Aufgabe benötigen, erfordern ein ausdrücklich angegebenes Ziel.",
-        "hostTools_usage": "Nutzung und Anbietergruppenstatus lesen",
-        "hostTools_usageDetail": "Liest IDs, Tarife, Kontingentzeiträume und Aktualisierungszeiten lokaler Claude/Codex-Konten, die mit deinem Cindy-Konto verbunden sind. Liest erfasste Nutzung nach Tag und Modell, geschätzte Kosten, Konfiguration und Status von Anbietergruppen sowie sichtbare IDs, Namen und Avatare von Mitgliedern und Geräten auf diesem Computer oder anderen autorisierten Computern desselben Kontos. Kein Zugriff auf Anmelde-E-Mail-Adressen von Abonnements, Kontoverzeichnisse, interne Identitätsfingerabdrücke, Zugangsdaten oder Dateien; keine Änderung von Konten oder Einstellungen. Liest auch das Kontingent für zugängliche Aufgaben, einschließlich autorisierter Computer im selben Konto und Freigaben, bei denen die Kontingentanzeige erlaubt ist.",
+        "hostTools_usage": "Nutzung und Computergruppenstatus lesen",
+        "hostTools_usageDetail": "Liest IDs, Tarife, Kontingentzeiträume und Aktualisierungszeiten lokaler Claude/Codex-Konten, die mit deinem Cindy-Konto verbunden sind. Liest erfasste Nutzung nach Tag und Modell, geschätzte Kosten, Konfiguration und Status von Computergruppen sowie sichtbare IDs, Namen und Avatare von Mitgliedern und Geräten auf diesem Computer oder anderen autorisierten Computern desselben Kontos. Kein Zugriff auf Anmelde-E-Mail-Adressen von Abonnements, Kontoverzeichnisse, interne Identitätsfingerabdrücke, Zugangsdaten oder Dateien; keine Änderung von Konten oder Einstellungen. Liest auch das Kontingent für zugängliche Aufgaben, einschließlich autorisierter Computer im selben Konto und Freigaben, bei denen die Kontingentanzeige erlaubt ist.",
         "hostTools_settings": "App-Einstellungen",
         "hostTools_settingsDetail": "Mit Cindys Werkzeugen die App-Konfiguration lesen und ändern. Geheimnisse werden nicht zurückgegeben; vertrauliche Eingaben machst du selbst.",
         "hostTools_scheduler": "Automatisierungsverwaltung",
@@ -9596,6 +9724,7 @@
         "createTitle": "MCP-Server hinzufügen",
         "editTitle": "MCP-Server bearbeiten",
         "desc": "Nur Remote-MCP über http / sse. Neue Agent-Sitzungen können ihn nach dem Speichern aufrufen; laufende Agent-Sitzungen bleiben unverändert.",
+        "embeddedGuide": "Dein Assistent hat dieses Formular geöffnet, um MCP für die aktuelle Aufgabe einzurichten. Prüfe die vorausgefüllten Angaben anhand der Anleitung des Anbieters, ergänze fehlende Angaben und speichere die Konfiguration.",
         "teammateDesc": "Nur Remote-MCP über http / sse. Nach dem Speichern fügt dein Freund ihn seinen Werkzeugen hinzu und kann ihn ab der nächsten Nachricht in diesem Chat nutzen; eine neue Sitzung ist nicht nötig."
       },
       "fields": {
@@ -9807,7 +9936,7 @@
       "allow": "Erlauben",
       "deny": "Ablehnen",
       "questionTitle": "Deine Eingabe ist erforderlich",
-      "submit": "Absenden",
+      "submit": "Antwort senden",
       "planTitle": "Planprüfung",
       "approve": "Genehmigen",
       "requestChanges": "Änderungen anfordern",
@@ -11614,18 +11743,14 @@
     "model": {
       "description": "Wähle die Modelle für diesen Freund.",
       "primary": "Primäres Modell",
-      "restoreDefault": "Standardmodell wiederherstellen"
+      "restoreDefault": "Standardmodell wiederherstellen",
+      "followsDefault": "Nutzt das Standardmodell",
+      "ownModel": "Eigenes Modell",
+      "managedInSettings": "Buddy-Modelle werden unter Anbieter → Smartes Routing festgelegt.",
+      "openSettings": "Einstellungen öffnen"
     },
     "modelChain": {
-      "primary": "Primäres Modell",
-      "fallback": "Ersatzmodell {{index}}",
-      "routeLabel": "Modellkandidat {{index}}",
-      "add": "Ersatzmodell hinzufügen",
-      "remove": "Diesen Kandidaten entfernen",
-      "moveUp": "Nach oben verschieben",
-      "moveDown": "Nach unten verschieben",
-      "description": "Konfiguriere bis zu 5 Modelle. Ist eines nicht verfügbar, fährt der Freund automatisch mit dem nächsten fort – ohne Aufgabenwechsel oder manuellen Neuversuch.",
-      "options": "Ersatzmodelle ({{count}})"
+      "routeLabel": "Modellkandidat {{index}}"
     },
     "actions": {
       "message": "Nachricht",
@@ -11998,6 +12123,8 @@
         "loadEarlierFailed": "Frühere Nachrichten konnten nicht geladen werden. Versuch es erneut.",
         "emptyTitle": "Noch keine Nachrichten in dieser Gruppe",
         "emptyDescription": "Sag etwas zum Einstieg, dann beteiligen sich deine Freunde. Erwähne einen Freund mit @, damit nur dieser antwortet.",
+        "emptyDescriptionWithAssistant": "Du kannst Cindy mit @ erwähnen oder über das Menü oben rechts Personen einladen und Freunde hinzufügen.",
+        "emptyDescriptionInvite": "Über das Einladungsmenü oben rechts kannst du Personen einladen und Freunde hinzufügen.",
         "roundEnded": "Freunde sind fertig",
         "stepTag": "Schritt {{count}}",
         "sending": "Wird gesendet",
@@ -12329,7 +12456,7 @@
         "loginRequired": "Melde dich bei deinem Konto an und versuche es erneut.",
         "requestFailed": "Der Chatdienst ist nicht verfügbar. Versuche es gleich noch einmal.",
         "copyFailed": "Kopieren fehlgeschlagen. Wähle den Link aus und kopiere ihn manuell.",
-        "createDescription": "Wähle Freunde aus oder erstelle zuerst die Gruppe und lade dann Personen ein.",
+        "createDescription": "Nach dem Erstellen kannst du Personen einladen und Freunde hinzufügen.",
         "settings": {
           "name": "Gruppenname",
           "topic": "Thema",
@@ -12367,7 +12494,7 @@
           "soleOwnerHint": "Du bist das einzige verbliebene Mitglied. Archiviere diese Gruppe, um ihren Verlauf zu behalten und sie später wiederherzustellen.",
           "archive": "Gruppe archivieren",
           "archiveHint": "Durch das Archivieren wird diese Gruppe für alle Mitglieder deaktiviert. Neue Nachrichten und Ausführungen von Freunden werden gestoppt. Der Verlauf bleibt erhalten. Suche nach der Gruppe, um ihren Verlauf anzusehen oder die Archivierung aufzuheben.",
-          "confirm": "Bestätigen",
+          "confirm": "Weiter",
           "lastOwner": "Übertrage die Inhaberschaft auf ein anderes Mitglied, bevor du die Gruppe verlässt oder den aktuellen Inhaber entfernst.",
           "conflict": "Jemand hat diese Gruppe aktualisiert. Lade sie neu und versuche es erneut.",
           "unarchive": "Archivierung aufheben",
@@ -12760,7 +12887,7 @@
       "arrivingLater": "{{name}} wurde auf diesen Computer verschoben und wird noch vorbereitet. Der Freund erscheint bald in deiner Liste",
       "arrivalPermissions": "{{name}} nutzt jetzt die Standardberechtigungen dieses Computers.",
       "arrivalModel": "Das für {{name}} gespeicherte Modell ist auf diesem Computer nicht verfügbar. Daher wird das Standardmodell dieses Computers verwendet.",
-      "arrivalModelSetup": "{{name}} ist jetzt auf diesem Computer, aber noch ohne verfügbares Modell. Verbinde einen Modellanbieter oder wähle unter „Modell“ in den Einstellungen dieses Freundes ein Modell aus.",
+      "arrivalModelSetup": "{{name}} ist auf diesem Computer angekommen, hat aber noch kein nutzbares Modell. Verbinde einen Modellanbieter oder lege das Standardmodell für Buddies unter Anbieter → Smartes Routing fest.",
       "arrivalPartialContent": "{{name}} läuft jetzt auf diesem Computer, aber einige synchronisierte Inhalte konnten nicht wiederhergestellt werden. Die Cloud-Kopien bleiben erhalten.",
       "missingProfileTitle": "{{name}} mit Standardprofil starten?",
       "missingProfileDescription": "Der ursprüngliche Hauptcomputer hat Persönlichkeit und Beschreibung von {{name}} noch nicht hochgeladen. Wenn dieser Computer neu installiert wurde oder nicht mehr erreichbar ist, kannst du hier mit einem Standardprofil fortfahren. Bereits synchronisierte Unterhaltungen und Inhalte bleiben erhalten.",
@@ -13235,7 +13362,7 @@
       }
     },
     "confirmDialog": {
-      "confirm": "Bestätigen",
+      "confirm": "Weiter",
       "cancel": "Abbrechen",
       "dontShowAgain": "Nicht mehr anzeigen"
     },
@@ -13624,6 +13751,7 @@
           "overloadRetryingNoCount": "Der Modelldienst ist ausgelastet. Automatischer neuer Versuch…",
           "overloadFailed": "⚠️ Der Modelldienst ist ausgelastet — der vorgeschaltete Dienst hat derzeit keine Kapazität. Sende diese Nachricht hier erneut, um es noch einmal zu versuchen, oder wechsle in Cindy zu einem anderen Modell. (Ein Klick auf „Erneut versuchen“ in der Desktop-App setzt die Aufgabe ebenfalls fort, aber das Ergebnis kommt nicht in dieser Nachricht an.)"
         },
+        "openAiReconnect": "Verbinde ChatGPT in Cindy unter Einstellungen → Anbieter → OpenAI erneut und sende hier eine Nachricht.",
         "audioInputUnavailable": "Über diese Modellverbindung lässt sich Audio nicht direkt verarbeiten. Bitte Cindy, die Aufnahme zuerst zu transkribieren und dann fortzufahren.",
         "toolLoop": {
           "generic": "Das Modell hat zu oft wiederholt Tools aufgerufen. Cindy hat diese Runde beendet, um eine Endlosschleife zu vermeiden. Sende eine neue Nachricht, um fortzufahren.",
@@ -14718,7 +14846,7 @@
         "providerGroupLabel": "{{provider}} · {{group}}",
         "providerGroupRunningOn": "Läuft auf {{device}}",
         "providerGroupRunningHere": "Läuft auf diesem Computer",
-        "providerGroupUnassigned": "Die Anbietergruppe wählt beim Start der Aufgabe einen Computer; die Nutzung wird dann für diesen Computer angezeigt"
+        "providerGroupUnassigned": "Die Computergruppe wählt beim Start der Aufgabe einen Computer; die Nutzung wird dann für diesen Computer angezeigt"
       },
       "speed": {
         "label": "Geschwindigkeit",
@@ -14784,27 +14912,27 @@
         },
         "acp": {
           "ask": {
-            "label": "Jedes Mal bestätigen",
+            "label": "Standardberechtigungen",
             "description": "Du bestätigst, wenn der Agent eine Berechtigung anfragt. Aktionen, für die der Agent nicht nachfragt, kann Cindy nicht blockieren."
           },
           "default": {
-            "label": "Standard",
+            "label": "Standardberechtigungen",
             "description": "Der Agent arbeitet in seinem Standardmodus; seine Berechtigungsanfragen bestätigst du."
           },
           "acceptEdits": {
-            "label": "Änderungen akzeptieren",
+            "label": "Änderungen automatisch akzeptieren",
             "description": "Der Agent bearbeitet Dateien direkt; andere Berechtigungsanfragen bestätigst du."
           },
           "auto": {
-            "label": "Automatisch",
+            "label": "Automatische Prüfung",
             "description": "Der Agent entscheidet, was eine Bestätigung braucht; seine Anfragen bestätigst du."
           },
           "plan": {
-            "label": "Nur planen",
+            "label": "Planmodus",
             "description": "Der Agent analysiert und plant nur; er bearbeitet keine Dateien."
           },
           "bypassPermissions": {
-            "label": "Alles erlauben",
+            "label": "Vollzugriff",
             "description": "Alle Berechtigungen, die der Agent anfragt, werden automatisch erteilt."
           }
         }
@@ -15437,7 +15565,7 @@
       "back": "Zurück",
       "skip": "Überspringen",
       "next": "Weiter",
-      "submit": "Absenden",
+      "submit": "Antwort senden",
       "sendAndContinue": "Senden und fortfahren",
       "close": "Schließen",
       "customAnswer": "Etwas anderes eingeben…",
@@ -15612,6 +15740,8 @@
       "codexHelperUnverified": "Es konnte nicht geprüft werden, ob cindy_helper für diese Aufgabe verfügbar ist. Das Aufgabenergebnis kann möglicherweise nicht übermittelt werden.",
       "requestFormatError": "Die App hat eine ungültige Anfrage gesendet. Daher konnte diese Antwort nicht abgeschlossen werden.",
       "piRetryHistoryTooLarge": "Deine Nachricht wurde nicht gesendet. Beim Lesen des Verlaufs für den erneuten Versuch wurde das lokale Limit von 16 MiB für einen Datenrahmen überschritten. Du kannst in einer neuen Aufgabe fortfahren.",
+      "piRetryHistoryUnavailable": "Deine Nachricht wurde nicht gesendet. Pi konnte den Verlauf, der zum Senden nötig ist, nicht lesen. Du kannst es erneut versuchen oder in einer neuen Aufgabe fortfahren.",
+      "upstreamStatusError": "Der vorgeschaltete Dienst hat {{status}} zurückgegeben – die Antwort konnte nicht abgeschlossen werden.",
       "messageNotSent": "Deine Nachricht wurde nicht gesendet.",
       "replyFailed": "Antwort konnte nicht abgeschlossen werden",
       "queuedSendRecovery": "Deine Nachricht wurde nicht gesendet. Wähle „Erneut versuchen“, um sie unverändert zu senden. Eine neue Nachricht ersetzt sie.",
@@ -15871,6 +16001,10 @@
       "diffUnchangedLines_one": "{{count}} unveränderte Zeile",
       "diffUnchangedLines_other": "{{count}} unveränderte Zeilen",
       "diffPreviewLoading": "Diff-Vorschau wird vorbereitet…"
+    },
+    "filePreview": {
+      "changed": "Datei geändert",
+      "refreshHint": "Zum Aktualisieren klicken"
     },
     "textLightbox": {
       "unreadable": "Diese Datei kann nicht gelesen werden",
@@ -16153,10 +16287,11 @@
         "groupSwitch": "Automatisch auf einem anderen Computer fortgesetzt"
       },
       "autoResumeSeparator": {
-        "label": "Verbindung unterbrochen — automatisch fortgesetzt"
+        "label": "Leere Antwort – automatisch fortgesetzt"
       },
       "autoResumePending": {
         "label": "Verbindung wird wiederhergestellt",
+        "continuingWithProgress": "Automatische Fortsetzung ({{attempt}}/{{total}})…",
         "labelWithProgress": "Verbindung wird wiederhergestellt {{attempt}}/{{total}}",
         "groupSwitch": "Wechsel zu einem anderen Computer"
       },
@@ -16447,7 +16582,7 @@
       "REMOTE_WORKDIR_UNAVAILABLE": "Das Remote-Arbeitsverzeichnis ist nicht verfügbar. Prüfe, ob das Verzeichnis auf diesem Computer noch existiert, und versuch es erneut.",
       "REMOTE_OPTIMISTIC_SESSION_STATE_UNAVAILABLE": "Der Computer kann noch nicht bestätigen, ob diese Nachricht gesendet wurde. Warte kurz und versuch es erneut. Sende dieselbe Nachricht nicht zweimal.",
       "REMOTE_AGENT_UNAVAILABLE": "Die Kommunikation mit dem Computer, auf dem der Agent läuft, ist fehlgeschlagen. Prüfe die Fehlerdetails.",
-      "REMOTE_AGENT_TIMEOUT": "Zeitüberschreitung beim Warten auf den Computer, auf dem der Agent läuft. Das Ergebnis ist unklar. Prüfe die Aufgabe, bevor du es erneut versuchst.",
+      "REMOTE_AGENT_TIMEOUT": "Der Computer, auf dem der Agent läuft, hat noch nicht geantwortet. Prüfe den Stand der Aufgabe. Wenn sie noch läuft oder bereits abgeschlossen ist, brauchst du sie nicht erneut zu starten.",
       "REMOTE_AGENT_LINK_BUSY": "Die Kommunikation mit dem Computer, auf dem der Agent läuft, ist ausgelastet. Warte einen Moment, bevor du es erneut versuchst.",
       "REMOTE_AGENT_UNRESPONSIVE": "Der Computer, auf dem der Agent läuft, hat wiederholt nicht geantwortet. Aufrufe wurden deshalb vorübergehend pausiert. Warte einen Moment, bevor du es erneut versuchst.",
       "REMOTE_AGENT_OFFLINE": "Der Computer, auf dem der Agent läuft, ist offline. Versuche es erneut, sobald er wieder verbunden ist.",
@@ -16471,7 +16606,7 @@
       "REMOTE_AGENT_SHARE_UNAVAILABLE": "Der freigegebene Anbieter ist vorübergehend nicht verfügbar. Der Computer des Eigentümers ist möglicherweise offline oder die Freigabe ist derzeit deaktiviert. Versuch es später erneut oder wechsle zu einem anderen Modell, um fortzufahren.",
       "REMOTE_AGENT_SHARE_LEGACY_DISABLED": "Dies ist eine ältere Freigabe; sie ist nicht nutzbar, solange „Nur Agent-Net verwenden“ aktiviert ist. Schalte die Option aus, um fortzufahren, oder wechsle zu einem anderen Modell.",
       "REMOTE_AGENT_GROUP_USAGE_LIMIT": "Die verfügbaren Konten für dieses Modell haben ihr Nutzungslimit erreicht. Wechsle das Modell oder fahre fort, wenn das Kontingent zurückgesetzt wird.",
-      "REMOTE_AGENT_GROUP_UNAVAILABLE": "Derzeit kann kein Computer in der Anbietergruppe diese Aufgabe ausführen. Sie sind möglicherweise offline, pausiert, in einer Abkühlphase oder haben dieses Modell nicht. Prüfe die Gruppe auf der Seite „Remote & Freigabe“ dieses Anbieters.",
+      "REMOTE_AGENT_GROUP_UNAVAILABLE": "Derzeit kann kein Computer in der Computergruppe diese Aufgabe ausführen. Sie sind möglicherweise offline, pausiert, in einer Abkühlphase oder haben dieses Modell nicht. Prüfe die Gruppe auf der Seite „Remote & Freigabe“ dieses Anbieters.",
       "REMOTE_AGENT_GROUP_FULL": "Alle Konten bzw. Computer, die diese Aufgabe ausführen können, haben ihr Parallelitätslimit erreicht. Warte, bis eine laufende Aufgabe endet, oder erhöhe das Limit in den Anbietereinstellungen.",
       "SUBSCRIPTION_ACCOUNTS_FULL": "Alle Konten bzw. Computer, die diese Aufgabe ausführen können, haben ihr Parallelitätslimit erreicht. Warte, bis eine laufende Aufgabe endet, oder erhöhe das Limit in den Anbietereinstellungen.",
       "REMOTE_AGENT_DEVICE_LIMIT": "Dieses Gerät hat sein Limit für Remote-Sitzungen erreicht. Archiviere ungenutzte Sitzungen oder bitte den Eigentümer des Anbieters, das Limit unter „Remote & Freigabe“ zu erhöhen.",
@@ -16731,6 +16866,8 @@
       "retryIn": "Automatischer Versuch in {{seconds}} s"
     },
     "subscriptionAccountError": {
+      "unreachable": "Der Codex-Kontodienst ist vorübergehend nicht erreichbar.",
+      "rechecking": "Der Codex-Kontodienst ist vorübergehend nicht erreichbar. Neuer Versuch um {{resetAt}}.",
       "poolModelLimited": "Das Nutzungslimit des Abos für dieses Modell ist erreicht. Sie können das Modell wechseln.",
       "poolRetryUntil": "Versuchen Sie es nach {{resetAt}} erneut.",
       "poolOtherSignedOut": "Ein weiteres Abo-Konto ist abgemeldet. Melden Sie es auf dem Computer an, der die Aufgabe ausführt, und versuchen Sie es erneut.",
@@ -17474,7 +17611,14 @@
         "snoozeFailed": "Die Zeit konnte nicht gespeichert werden. Prüfe die Verbindung und aktualisiere den Computer mit dieser Aufgabe.",
         "hours": "In {{count}} Stunden",
         "hours_one": "In {{count}} Stunde",
-        "hours_other": "In {{count}} Stunden"
+        "hours_other": "In {{count}} Stunden",
+        "pendingSync": "Synchronisierung ausstehend",
+        "pendingArchiveSync": "Wird archiviert, sobald der Computer wieder online ist",
+        "offlineCompleteRejectedDirty": "„{{title}}“ wurde nach Ausstehend zurückgestellt: nicht übertragene Änderungen im Worktree erfordern eine Bestätigung vor dem Archivieren.",
+        "offlineCompleteRejectedNewActivity": "„{{title}}“ wurde nach Ausstehend zurückgestellt: Während der Offline-Zeit gab es neue Aktivitäten auf dem Computer.",
+        "offlineCompleteRejectedRunning": "„{{title}}“ wurde nach Ausstehend zurückgestellt: Die Aufgabe wird derzeit ausgeführt.",
+        "offlineCompleteRejectedAttached": "„{{title}}“ wurde nach Ausstehend zurückgestellt: Die Aufgabe ist verbunden oder geteilt und wurde nicht automatisch archiviert.",
+        "offlineCompleteRejectedPreflight": "„{{title}}“ wurde nach Ausstehend zurückgestellt: Der Worktree-Status konnte vor dem Archivieren nicht geprüft werden."
       },
       "taskListMode": {
         "heading": "Aufgabenmodus",
@@ -18242,7 +18386,7 @@
           "sessions_dispatch": "Sitzungen zuweisen",
           "feishu_read": "Feishu-Nachrichten lesen",
           "settings_read": "Freigabemitglieder lesen",
-          "usage_read": "Nutzung und Anbietergruppenstatus lesen"
+          "usage_read": "Nutzung und Computergruppenstatus lesen"
         },
         "project": "Projektverzeichnis",
         "capabilitiesLabel": "Erlaubte Funktionen",
@@ -18256,7 +18400,7 @@
           "sessions_dispatch": "{{appName}}-Sitzungen erstellen oder aktivieren und Nachrichten zustellen",
           "feishu_read": "Zuletzt aktive Chats auflisten; aktuelle Nachrichten aus einem Chat abrufen (Gruppe oder Direktnachricht)",
           "settings_read": "Liest Mitglieder deiner Freigaben und deren erlaubte Modelle auf diesem Computer oder anderen autorisierten Computern desselben Kontos; keine Änderungen",
-          "usage_read": "Liest IDs, Tarife, Kontingentzeiträume und Aktualisierungszeiten lokaler Claude/Codex-Konten, die mit deinem Cindy-Konto verbunden sind. Liest erfasste Nutzung nach Tag und Modell, geschätzte Kosten, Konfiguration und Status von Anbietergruppen sowie sichtbare IDs, Namen und Avatare von Mitgliedern und Geräten auf diesem Computer oder anderen autorisierten Computern desselben Kontos. Kein Zugriff auf Anmelde-E-Mail-Adressen von Abonnements, Kontoverzeichnisse, interne Identitätsfingerabdrücke, Zugangsdaten oder Dateien; keine Änderung von Konten oder Einstellungen."
+          "usage_read": "Liest IDs, Tarife, Kontingentzeiträume und Aktualisierungszeiten lokaler Claude/Codex-Konten, die mit deinem Cindy-Konto verbunden sind. Liest erfasste Nutzung nach Tag und Modell, geschätzte Kosten, Konfiguration und Status von Computergruppen sowie sichtbare IDs, Namen und Avatare von Mitgliedern und Geräten auf diesem Computer oder anderen autorisierten Computern desselben Kontos. Kein Zugriff auf Anmelde-E-Mail-Adressen von Abonnements, Kontoverzeichnisse, interne Identitätsfingerabdrücke, Zugangsdaten oder Dateien; keine Änderung von Konten oder Einstellungen."
         },
         "capabilityWarn": {
           "ghostMissing": "Erfordert das Plugin „{{name}}“, das nicht installiert ist — diese Funktion wird zur Laufzeit fehlschlagen",
@@ -18511,6 +18655,7 @@
         "intervalChip": "Nach Abschluss · {{schedule}}"
       },
       "scheduleMenu": {
+        "custom": "Benutzerdefinierter Cron",
         "intervalMinutes": "Minütlich (alle N Minuten)",
         "interval": "Stündlich (alle N Stunden)",
         "daily": "Täglich (jeden Tag)",
@@ -18556,7 +18701,7 @@
         "categoryListAria": "{{category}}-Modelle",
         "effortListAria": "Denkintensität",
         "boundLocationLocked": "Gebundene Aufgaben laufen weiterhin auf ihrem bisherigen Computer. Wähle ein Modell von diesem Computer.",
-        "modelGroupTitle": "Modellgruppe „{{name}}“: wählt eine Quelle, wenn eine neue Aufgabe erstellt wird"
+        "modelGroupTitle": "Smartes Routing „{{name}}“: wählt eine Quelle, wenn ein Lauf eine neue Aufgabe startet"
       }
     },
     "toast": {
@@ -19209,6 +19354,7 @@
     }
   },
   "commandPalette": {
+    "buddyNewHint": "Wähle in den Einstellungen des Freunds „{{restart}}“, um den Arbeitskontext neu aufzubauen und den Nachrichtenverlauf zu behalten. Für eine separate Diskussion wähle „{{startTopic}}“ in den Aktionen einer Nachricht.",
     "viewSkillDetails": "Skill-Details anzeigen",
     "projectSkillNotLoaded": "Diese Pi-Aufgabe hat diesen Projekt-Skill noch nicht geladen. Neue Aufgaben versuchen automatisch, ihn zu laden.",
     "pluginSkillSetup": {
@@ -19999,6 +20145,9 @@
       "permissionTightenInterruptFailed": "Die laufende Aufgabe konnte beim Einschränken der Berechtigungen nicht gestoppt werden; sie läuft möglicherweise bis zum Abschluss ohne Genehmigungsabfragen weiter. Stoppe sie bei Bedarf manuell.",
       "codexAutoReviewUnavailable": "Die automatische Prüfung ist vorübergehend nicht verfügbar. Die aktuelle Aktion wurde blockiert und die Berechtigungen auf Standard umgestellt. Versuche die Anfrage erneut; Cindy fragt bei Bedarf nach.",
       "hostShellCommandBlocked": "Cindy hat diesen Shell-Befehl blockiert. Prüfe den Befehl und verwende ein verfügbares Tool oder einen verfügbaren Befehl, um fortzufahren.",
+      "reconnectAutoResumeExhausted": "Die maximale Anzahl automatischer Fortsetzungsversuche ist erreicht.",
+      "reconnectAutoResumeDisabled": "Die automatische Fortsetzung ist deaktiviert.",
+      "codexReconnectStalled": "Die Modellverbindung konnte innerhalb von 2 Minuten nicht wiederhergestellt werden.",
       "upstreamResponseIdleTimeout": "Das Modell hat lange nicht mehr geantwortet. Daher wurde diese Runde unterbrochen, um endloses Warten zu vermeiden. Abgeschlossene Tool-Aufrufe bleiben erhalten — sende die nächste Nachricht, um fortzufahren.",
       "codexHistoryOversized": "Der Bildverlauf ist zu groß für eine automatische Fortsetzung. Sende „Fortsetzen“, damit Cindy die aktuelle Aufgabe wieder aufnimmt.",
       "codexHistoryOversizedRemote": "Der Verlauf dieser Aufgabe enthält zu große Bilder, sodass die Remote-Komprimierung nicht abgeschlossen werden kann. Öffne die Aufgabe auf dem Computer, auf dem Codex läuft, und sende erneut; Cindy lässt diese Bilder dort weg.",
@@ -22685,9 +22834,6 @@
     "lineNumbers": "Zeilennummern"
   },
   "openAiAccountGroup": {
-    "strategy": "Strategie der Kontogruppe",
-    "leastHint": "Verbindung mit den wenigsten laufenden Aufgaben bevorzugen",
-    "quotaHint": "Wenn Abo-Nutzungsdaten vorliegen, wählt Cindy die geeigneten Verbindungen anhand dieser Daten aus und wendet dann die Gruppenstrategie an.",
     "removeDescription": "Diese Verbindung erhält keine neuen Aufgaben aus der Gruppe. Laufende Aufgaben bleiben auf dieser Verbindung.",
     "mergeDescription": "Über {{target}} gestartete neue Aufgaben können beide Anbieter nutzen. Anmeldungen, Schlüssel und bestehende Aufgaben bleiben am bisherigen Ort. Vor der Verknüpfung testet Cindy den API-Schlüssel von {{apiKey}}.",
     "modelUnavailable": "Diese Verbindung kann das ausgewählte Testmodell nicht verwenden. Ein erneuter Test kann ein anderes Modell ausprobieren.",
@@ -22698,6 +22844,16 @@
     "refresh": "Kontingent aktualisieren"
   },
   "subscriptionAccounts": {
+    "existing": {
+      "menu": "Weitere Anmeldeoptionen",
+      "connect": "Vorhandene Anmeldung verbinden…",
+      "found": "{{count}} verfügbar",
+      "title": "Anmeldungen auf {{device}}",
+      "note": "Cindy und die CLI verwenden dieselbe Kontokonfiguration.",
+      "attach": "Verbinden",
+      "choose": "Anderen Ordner wählen…",
+      "unverified": "Die Anmeldung konnte nicht bestätigt werden."
+    },
     "pluginSignIn": {
       "method": "Anmeldemethode",
       "secretHint": "Der Schlüssel geht nur an das Plugin, das ihn im eigenen Ordner dieses Kontos speichert. Cindy speichert ihn nicht und sendet ihn nicht an andere Computer.",
@@ -22749,7 +22905,6 @@
       "useCodex": "Mit Codex anmelden"
     },
     "title": "Abonnementkonten",
-    "strategy": "Lastverteilung",
     "add": "Konto hinzufügen",
     "defaultTag": "Standard",
     "ready": "Verbunden",
@@ -22824,20 +22979,20 @@
     "refreshFailed": "Das Theme wurde installiert, aber die Liste konnte nicht aktualisiert werden. Aktualisiere sie in den Darstellungseinstellungen."
   },
   "modelGroups": {
-    "title": "Modellgruppen",
-    "description": "Fasse mehrere Quellen, die du unter Anbieter bereits hast, zu einer Auswahl zusammen. Wähle sie in der Modellauswahl unter „Modellgruppen“, und Cindy entscheidet, welche Quelle verwendet wird.",
-    "routes": "Modi",
-    "routesDescription": "Ein Modus enthält mehrere Quellen. Jede neue Aufgabe wählt eine nach der Regel des Modus.",
+    "title": "Smartes Routing",
+    "description": "Fasse Quellen, die du unter Modellanbieter bereits hast, zu einer Auswahl zusammen. Wähle sie in der Modellauswahl unter „Smartes Routing“, und Cindy entscheidet, welche Quelle verwendet wird.",
+    "routes": "Routen",
+    "routesDescription": "Fasse mehrere Quellen zu einer Auswahl zusammen. Eine Quelle kann ein ganzer Anbieter sein (du wählst wie gewohnt ein Modell, und die Route entscheidet, wer es ausführt) oder ein bestimmtes Modell. Anbieter derselben Marke werden automatisch zusammengefasst.",
     "sourceCount_one": "{{count}} Quelle",
     "sourceCount_other": "{{count}} Quellen",
     "strategy": {
       "expiring": {
-        "title": "Bald Verfallendes zuerst",
+        "title": "Automatisch",
         "hint": "Nutzt zuerst das Abo-Kontingent, von dem viel übrig ist und das bald zurückgesetzt wird, damit nichts verfällt. Quellen ohne lesbares Kontingent kommen danach."
       },
       "order": {
         "title": "Der Reihe nach",
-        "hint": "Wechselt erst zur nächsten Quelle, wenn die vorherige nicht nutzbar ist."
+        "hint": "Wechselt erst zur nächsten Quelle, wenn die darüber nicht nutzbar ist."
       },
       "rotate": {
         "title": "Abwechselnd",
@@ -22861,12 +23016,16 @@
       }
     },
     "picker": {
-      "empty": "Noch keine Modellgruppen. Fasse in den Einstellungen mehrere Quellen zu einem Modus zusammen, um ihn hier auszuwählen.",
-      "manage": "Modellgruppen verwalten",
-      "deviceTitle": "Modellgruppen · {{device}}",
+      "empty": "Noch kein smartes Routing. Fasse in den Einstellungen mehrere Quellen zu einer Route zusammen, um sie hier auszuwählen.",
+      "manage": "Smartes Routing verwalten",
+      "deviceTitle": "Smartes Routing · {{device}}",
       "switched": "„{{name}}“ hat diese Aufgabe auf {{model}} umgestellt",
       "switchUnavailable": "„{{name}}“ hat gerade keine Quelle, die diese Aufgabe nutzen kann. Das Modell wurde nicht geändert.",
-      "chooseUnavailable": "„{{name}}“ hat gerade keine nutzbare Quelle und wurde nicht ausgewählt."
+      "chooseUnavailable": "„{{name}}“ hat gerade keine nutzbare Quelle und wurde nicht ausgewählt.",
+      "mergedLabel_one": "{{name}} · Route ({{count}} Quelle)",
+      "mergedLabel_other": "{{name}} · Route ({{count}} Quellen)",
+      "routeDecides": "Die Route „{{name}}“ bestimmt, welche Quelle diese Aufgabe nutzt",
+      "quotaOf": "Kontingent: {{name}}"
     },
     "why": {
       "expiringQuota": "Noch {{left}} % Kontingent, Zurücksetzung am {{reset}} – daher zuerst",
@@ -22878,7 +23037,7 @@
       "soonestUntil": "Alle Quellen haben ihr Kontingent aufgebraucht; diese erholt sich zuerst ({{reset}})",
       "standby": "Diesmal nicht an der Reihe",
       "standbyQuota": "Noch {{left}} % Kontingent, Zurücksetzung erst am {{reset}} – wird aufgespart",
-      "off": "In diesem Modus deaktiviert",
+      "off": "In dieser Route deaktiviert",
       "unavailable": "Nicht verbunden, oder dieses Modell ist gerade nicht wählbar",
       "limited": "Kontingent aufgebraucht",
       "limitedUntil": "Kontingent aufgebraucht bis {{reset}}",
@@ -22893,23 +23052,24 @@
       "noVision": "Die Nachricht enthält Bilder, und diese Quelle kann keine Bilder sehen",
       "exceptionImage": "Die Nachricht enthält Bilder, daher wurden nur Quellen berücksichtigt, die Bilder sehen können",
       "exceptionImageFallback": "Die Nachricht enthält Bilder, aber keine Quelle kann Bilder sehen – daher wie üblich gewählt",
-      "exceptionHours": "In diesem Zeitraum wird „{{name}}“ verwendet",
+      "exceptionHours": "In diesem Zeitraum wird stattdessen „{{name}}“ verwendet",
       "separator": "; "
     },
     "settings": {
       "autoSwitch": {
-        "title": "Bei Problemen automatisch die Quelle wechseln",
-        "hint": "Fällt die Quelle dieses Modus aus, zur nächsten nutzbaren wechseln und es unter dem Durchgang vermerken. Ausgeschaltet wird der Wechsel nur beim Fehler angeboten."
+        "title": "Quelle automatisch wechseln, wenn eine ausfällt",
+        "hint": "Fällt die Quelle aus, die diese Route gerade nutzt, wird zur nächsten nutzbaren gewechselt und das unter diesem Durchgang vermerkt. Ist die Option aus, wird ein Wechsel nur beim Fehler angeboten."
       },
-      "newRoute": "Neuer Modus",
-      "newRouteName": "Neuer Modus",
-      "routesEmpty": "Noch keine Modi. Erstelle einen und füge mehrere Quellen hinzu.",
-      "scopeNote": "Modellgruppen gelten für Aufgaben auf diesem Computer. Eine neue Aufgabe wählt beim Start eine Quelle. Wählst du eine in einer laufenden Aufgabe, wird sofort einmal gewechselt; danach wechselt sie nicht von selbst.",
-      "back": "Zurück zu Modellgruppen",
+      "newRoute": "Neue Route",
+      "newRouteName": "Neue Route",
+      "routesEmpty": "Noch keine Routen. Erstelle eine und füge mehrere Quellen hinzu.",
+      "scopeNote": "Smartes Routing gilt für Aufgaben auf diesem Computer. Eine neue Aufgabe wählt beim Start eine Quelle. Wählst du eine Route in einer laufenden Aufgabe, wird sofort einmal gewechselt; danach wechselt sie nicht von selbst.",
+      "back": "Zurück zum smarten Routing",
       "name": "Name",
       "nameHint": "Wird in der Modellauswahl angezeigt.",
-      "routeShownAs": "Wird in der Modellauswahl unter „Modellgruppen“ angezeigt.",
+      "routeShownAs": "Wird in der Modellauswahl unter „Smartes Routing“ angezeigt.",
       "pick": "Welche verwendet wird",
+      "moreStrategies": "Weitere Optionen",
       "effort": "Denkintensität",
       "effortUnset": "Nicht festgelegt",
       "effortHint": "Unterstützt das gewählte Modell diese Stufe nicht, läuft es mit seinem Standard.",
@@ -22919,14 +23079,15 @@
       "sources": "Nutzbare Quellen",
       "sourcesHint": "Verschiedene Modelle können nebeneinander stehen. Die Aufgabe zeigt, welches verwendet wurde.",
       "sourcesEmpty": "Noch keine Quellen. Füge unten ein verbundenes Modell hinzu.",
-      "sourcesFull": "Ein Modus fasst bis zu {{count}} Quellen.",
+      "sourcesEmptyMerged": "Noch keine Quellen. Füge unten einen verbundenen Anbieter hinzu.",
+      "sourcesFull": "Eine Route fasst bis zu {{count}} Quellen.",
       "addSource": "Quelle hinzufügen",
       "chooseModel": "Modell auswählen",
       "notConnected": "Nicht verbunden",
       "moveUp": "Nach oben",
       "moveDown": "Nach unten",
-      "remove": "Aus diesem Modus entfernen",
-      "useSource": "{{name}} in diesem Modus verwenden",
+      "remove": "Aus dieser Route entfernen",
+      "useSource": "Diese Route {{name}} verwenden lassen",
       "try": {
         "title": "Ausprobieren",
         "hint": "Sieh nach, welche Quelle eine neue Aufgabe jetzt verwenden würde. Es wird nichts gesendet und kein Kontingent verbraucht.",
@@ -22934,11 +23095,14 @@
         "picked": "Diese verwenden",
         "standby": "Reserve",
         "skipped": "Übersprungen",
-        "unavailable": "Keine Quelle dieses Modus ist gerade nutzbar. Eine neue Aufgabe verwendet das Modell, das du ausgewählt hattest."
+        "unavailable": "Keine Quelle dieser Route ist gerade nutzbar. Eine neue Aufgabe verwendet das Modell, das du ausgewählt hattest.",
+        "failed": "Die Vorschau konnte nicht ausgeführt werden. Versuche es erneut.",
+        "model": "Zu testendes Modell"
       },
-      "deleteRoute": "Diesen Modus löschen",
+      "deleteRoute": "Diese Route löschen",
       "deleteRouteConfirmTitle": "„{{name}}“ löschen?",
-      "deleteRouteConfirmDescription": "Tageszeit-Ausnahmen anderer Modi, die zu ihm wechseln, werden ebenfalls gelöscht. Bereits gestartete Aufgaben sind nicht betroffen.",
+      "deleteRouteConfirmDescription": "Tageszeit-Ausnahmen anderer Routen, die zu ihr wechseln, werden ebenfalls entfernt. Bereits gestartete Aufgaben sind nicht betroffen.",
+      "deleteMergedRouteConfirmDescription": "Bereits gestartete Aufgaben sind nicht betroffen.",
       "delete": "Löschen",
       "cancel": "Abbrechen",
       "saveFailed": "Speichern fehlgeschlagen. Versuche es erneut.",
@@ -22947,8 +23111,8 @@
         "hint": "Werden vor der Auswahlregel geprüft, von oben nach unten.",
         "empty": "Noch keine Ausnahmen. Jede neue Aufgabe folgt der Auswahlregel oben.",
         "imageRule": "Wenn die Nachricht Bilder enthält, nur Quellen verwenden, die Bilder sehen können",
-        "hoursRule": "{{from}}–{{to}}: „{{name}}“ verwenden",
-        "hoursRuleDays": "{{days}} {{from}}–{{to}}: „{{name}}“ verwenden",
+        "hoursRule": "{{from}}–{{to}}: stattdessen „{{name}}“ verwenden",
+        "hoursRuleDays": "{{days}} {{from}}–{{to}}: stattdessen „{{name}}“ verwenden",
         "remove": "Diese Ausnahme entfernen",
         "add": "Ausnahme hinzufügen",
         "choose": "Situation auswählen",
@@ -22963,23 +23127,72 @@
         "addHours": "Hinzufügen",
         "sameHour": "Beginn und Ende dürfen nicht gleich sein.",
         "full": "Bis zu {{count}} Ausnahmen.",
-        "needOtherRoute": "Erstelle einen weiteren Modus, um nach Tageszeit dorthin zu wechseln."
+        "needOtherRoute": "Erstelle eine weitere Route, um nach Tageszeit zu ihr zu wechseln."
       }
     },
     "overview": {
       "mapTitle": "So wählen neue Aufgaben ein Modell",
-      "mapDescription": "Von links nach rechts: der Modus und die Quelle, bei der es landet. Klicke auf einen Modus, um ihn zu ändern.",
+      "mapDescription": "Von links nach rechts: die Route, die eine neue Aufgabe nimmt, und die Quelle, bei der sie landet. Klicke auf eine Route, um sie zu ändern.",
       "columnSources": "Quellen",
       "columnEmpty": "Noch keine",
-      "openRoute": "Modus „{{name}}“ öffnen",
+      "openRoute": "Route „{{name}}“ öffnen",
       "recentTitle": "Letzte Auswahl",
-      "recentEmpty": "Noch keine Aufgabe hat einen Modus verwendet.",
+      "recentEmpty": "Noch keine Aufgabe hat eine Route verwendet.",
       "keptOriginal": "Darin war kein Modell verfügbar, daher blieb die Aufgabe beim Modell, das du gewählt hattest.",
       "keptOriginalShort": "Dein Modell wurde beibehalten",
       "latest": "Der Weg der letzten Aufgabe"
     },
     "switchOffer": {
       "action": "Mit {{model}} fortfahren"
+    },
+    "auto": {
+      "accounts_one": "{{count}} Konto",
+      "accounts_other": "{{count}} Konten",
+      "computers_one": "{{count}} Computer",
+      "computers_other": "{{count}} Computer",
+      "pickFor": "Strategie für {{name}}",
+      "hiddenTag": "Ausgeblendet",
+      "show": "In der Modellauswahl anzeigen",
+      "assignedBy": "Neue Aufgaben werden nach „{{strategy}}“ verteilt",
+      "adjust": "Unter „Smartes Routing“ anpassen"
+    },
+    "sources": {
+      "models_one": "{{count}} Modell",
+      "models_other": "{{count}} Modelle",
+      "autoTag": "Automatisch",
+      "chooseProvider": "Anbieter wählen",
+      "removeAria": "{{name}} aus dieser Route entfernen",
+      "note": "Automatische Routen folgen deinen verbundenen Anbietern. Mitglieder lassen sich nicht hinzufügen oder entfernen, aber du kannst sie umsortieren, Gewichte festlegen, einzelne ausschalten, die Strategie ändern oder die Route ausblenden.",
+      "providers_one": "{{count}} Anbieter",
+      "providers_other": "{{count}} Anbieter",
+      "addWhole": "Ganzen Anbieter hinzufügen",
+      "addWholeHint": "Alle seine Modelle gehören dann zu dieser Route. In der Modellauswahl verhält sich die Route wie ein Anbieter: Wähle wie gewohnt ein Modell, und die Route entscheidet, welches Mitglied es ausführt.",
+      "addModelHint": "Füge ein Modell eines Anbieters hinzu. Wird diese Route gewählt, nimmt sie eine dieser Quellen nach ihrer Strategie.",
+      "detailHint": "Diese Route fasst ganze Anbieter zusammen. In der Modellauswahl verhält sie sich wie ein Anbieter: Wähle Modell und Denkintensität wie gewohnt, und die Route entscheidet, welches Mitglied es ausführt."
+    },
+    "kinds": {
+      "byModel": "Nach Modell",
+      "byProvider": "Nach Anbieter"
+    },
+    "buddies": {
+      "title": "Buddy-Modelle",
+      "description": "Buddies nutzen ein gemeinsames Standardmodell; gib einem Buddy nur dann ein eigenes, wenn er etwas anderes braucht. Damit ein Buddy bei Problemen die Quelle wechselt, wähle ein Smartes Routing.",
+      "saveFailed": "Das Modell des Buddys wurde nicht gespeichert. Versuche es erneut.",
+      "defaultLabel": "Standardmodell",
+      "defaultHint": "Alle Buddies nutzen es, sofern nicht anders festgelegt – auch neue und von einem anderen Computer übernommene Buddies.",
+      "ownTitle": "Buddies mit eigenem Modell",
+      "ownTitleWithRest_one": "Buddies mit eigenem Modell · {{count}} weiterer nutzt den Standard",
+      "ownTitleWithRest_other": "Buddies mit eigenem Modell · {{count}} weitere nutzen den Standard",
+      "addOwn": "Einem Buddy ein eigenes Modell geben",
+      "allFollow": "Alle Buddies nutzen das Standardmodell.",
+      "otherComputers": "Buddies auf anderen Computern",
+      "deviceBuddies_one": "{{count}} Buddy",
+      "deviceBuddies_other": "{{count}} Buddies",
+      "devicePageTitle": "Buddies auf {{device}}",
+      "devicePageHint": "Wähle aus den Modellen und Smarten Routings, die dieser Computer nutzen kann. Wird dort gespeichert.",
+      "deviceDefaultReadOnly": "Aktualisiere diesen Computer, um sein Standardmodell hier zu ändern.",
+      "deviceUnavailable": "Die Buddy-Einstellungen dieses Computers können gerade nicht gelesen werden. Prüfe, ob er online ist, und öffne sie erneut.",
+      "deviceLoading": "Einstellungen dieses Computers werden gelesen …"
     }
   },
   "projectSettings": {
