@@ -13306,6 +13306,7 @@
   },
   "commonUi": {
     "retry": "다시 시도",
+    "clearSearch": "검색 지우기",
     "listSeparator": ", ",
     "crossAgentConvert": {
       "asking": {

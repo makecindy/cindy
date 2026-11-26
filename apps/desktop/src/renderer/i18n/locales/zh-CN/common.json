@@ -13306,6 +13306,7 @@
   },
   "commonUi": {
     "retry": "重试",
+    "clearSearch": "清除搜索",
     "listSeparator": "、",
     "crossAgentConvert": {
       "asking": {

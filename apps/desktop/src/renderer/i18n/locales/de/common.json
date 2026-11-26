@@ -13353,6 +13353,7 @@
   },
   "commonUi": {
     "retry": "Erneut versuchen",
+    "clearSearch": "Suche leeren",
     "listSeparator": ", ",
     "crossAgentConvert": {
       "asking": {

@@ -13456,6 +13456,7 @@
   },
   "commonUi": {
     "retry": "Tentar novamente",
+    "clearSearch": "Limpar pesquisa",
     "listSeparator": ", ",
     "crossAgentConvert": {
       "asking": {
