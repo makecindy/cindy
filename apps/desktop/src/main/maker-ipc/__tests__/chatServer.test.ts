@@ -1381,6 +1381,25 @@ describe('Chat Server result delivery and refresh', () => {
       .toMatchObject({ ok: false, errorCode: 'SERVICE_ERROR' });
     expect(deps.log.warn).toHaveBeenCalledWith('Chat request failed', expect.objectContaining({ route: '/conversations/:id/messages', status: 500, code: 'UPSTREAM_FAILED' }));
     expect(JSON.stringify(vi.mocked(deps.log.warn).mock.calls)).not.toMatch(/private body|secret text/);
+    expect(vi.mocked(deps.log.warn).mock.calls[0]![1]).not.toHaveProperty('caller');
+  });
+
+  // 2026-11-26: a GET /conversations/:id/messages/:id answered 400 every ~4 s for 13 minutes and the
+  // template alone could not say who asked. A 400 now names the calling functions (code identifiers
+  // only, no IDs or text), past Node's scheduler frames. Unit tier, faked Chat Server.
+  it('names the caller of a request the server refuses as malformed, without IDs', async () => {
+    deps.log = { warn: vi.fn() };
+    fixture.handle.mockImplementation((route, method) => {
+      if (route.endsWith('/members')) return { body: [] };
+      if (route.endsWith('/messages') && method === 'POST') return { status: 400, body: { error: { code: 'INVALID_INPUT', message: 'secret text', details: [{ path: [], code: 'invalid_format' }] } } };
+      return response(route);
+    });
+    await service.sendMessage({ groupId: roomId, text: 'private body', clientId: 'send-400-test', mentions: { all: false, botIds: [] } });
+    const fields = vi.mocked(deps.log.warn).mock.calls.find(([name]) => name === 'Chat request failed')![1] as Record<string, unknown>;
+    expect(fields).toMatchObject({ route: '/conversations/:id/messages', status: 400, code: 'INVALID_INPUT' });
+    // Code locations of this build only: a base file name and line, no directory.
+    expect(fields.caller).toMatch(/^[\w$<>]*@chatServer\.ts:\d+( < [\w$<>]*@[\w.$-]+:\d+)?$/);
+    expect(JSON.stringify(fields)).not.toContain(roomId);
   });
 
   it.each([
