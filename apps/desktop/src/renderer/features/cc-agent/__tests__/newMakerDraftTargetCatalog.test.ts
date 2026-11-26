@@ -8,6 +8,7 @@ import { clearDraft, getDraft, saveDraft } from '@/lib/composerDraftStore';
 import type { Effort, ProviderView } from '@cindy/model-providers';
 import { chatEligibleSourcesForModel, effectiveSourceIdForModel, getModel, isModelSelectableForNewRoute, reconcileInvocationEffort } from '@cindy/model-providers';
 import { isDeviceModelVisible, resolveFastSupported } from '@/lib/providerModels';
+import * as taskDraft from '@/state/newMakerDraft';
 import type { RemoteProjectTarget } from '@/components/new-chat/AddRemoteProjectDialog';
 import type { AgentCapabilities } from '@/hooks/useAgentCapabilities';
 import { parseDeviceProvidersPayload } from '@/hooks/useDeviceProviders';
@@ -204,12 +205,36 @@ function harness(options: {
   const add = callback<(target: RemoteProjectTarget) => Promise<void>>('handleRemoteProjectAdded', { ...bindings, applyDraftTarget });
   return {
     invoke, patchDraft, setRemoteDraftState, defaults, dlSeedKeyRef,
+    changeDevice: () => callback<(id: string, name: string) => void>('handleDeviceChange', {
+      applyDraftTarget, effectiveDeviceLinkDeviceId: bindings.effectiveDeviceLinkDeviceId,
+      sendInFlightRef: { current: false }, directoryRecoveryRef: { current: null },
+    })('target-device', 'Target'),
     current: () => current,
     add: () => add({ kind: 'device-link', deviceId: 'target-device', deviceName: 'Target', path: '/remote/project' }),
   };
 }
 
 describe('remote project draft catalog ownership', () => {
+  // PR #12916: exercise the device picker and real store together. A local
+  // plugin selection must never be carried into the controlled computer's draft.
+  it('drops the local agy Worker when the device picker switches to a controlled computer', () => {
+    taskDraft.__reloadForTest();
+    try {
+      taskDraft.patchCollab({
+        enabled: true, worker: 'acp',
+        workerConfig: { role: 'developer', providerId: 'acp-plugin:agy-plugin:agy', model: 'gemini-3-pro' },
+      });
+      expect(taskDraft.getDraft().collab.worker).toBe('acp');
+      const h = harness({ sourceDeviceId: null });
+      h.patchDraft.mockImplementation(taskDraft.patchDraft);
+      h.changeDevice();
+      expect(taskDraft.getDraft().deviceLinkDeviceId).toBe('target-device');
+      expect(taskDraft.getDraft().collab).toEqual({ enabled: false, worker: 'codex' });
+    } finally {
+      taskDraft.clearDraft();
+    }
+  });
+
   it.each([false, true])('seeds the new task device using its source-level efforts (previous separate Agent: %s)', async (separateAgent) => {
     const h = harness({ separateAgent, previous: selection('low') });
     await h.add();
