@@ -15045,7 +15045,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       },
       // taskId is the session id; the snapshot is the streaming block only (resets after a tool call).
       readLivePreview: taskId => ({ execution: readExecution(taskId), text: getSessionTextSnapshot(taskId)?.event.data.text ?? null }),
-      cancel: async (pluginId, taskId, inputClientIds, execution) => {
+      cancel: async (pluginId, taskId, inputClientIds, execution, rejectedInputOnly) => {
         assertPlugin(pluginId);
         await inputCoordinator.ensureQueueRestored(taskId);
         assertCurrent();
@@ -15056,10 +15056,23 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             await pluginTaskServiceForCurrentOwner!().get(pluginId, taskId);
             assertPlugin(pluginId);
           },
-          getQueueControlSnapshot: sessionId => inputCoordinator.getQueueControlSnapshot(sessionId),
+          getQueueControlSnapshot: sessionId => {
+            const snapshot = inputCoordinator.getQueueControlSnapshot(sessionId);
+            return rejectedInputOnly
+              ? { pendingQueue: snapshot.pendingQueue.filter(item => inputClientIds.includes(item.clientId)) }
+              : snapshot;
+          },
           remove: (sessionId, clientId) => inputCoordinator.remove(sessionId, clientId),
         }, owns: value => { assertPlugin(pluginId); return inputClientIds.includes(value); }, flush: awaitAgentInputQueueSnapshotPersistence });
         assertCurrent();
+        if (rejectedInputOnly) {
+          assertPlugin(pluginId);
+          const queue = inputCoordinator.getQueueInspection(taskId);
+          if (queue.some(item => inputClientIds.includes(item.queuedMessageId))
+            || inputClientIds.includes(inputCoordinator.getActiveInputClientId(taskId) ?? '')) {
+            throw new PluginTaskError('TASK_BUSY', 'The task is consuming this input', true);
+          }
+        }
         if (!execution) return 'cancelled';
         let stopped = false;
         const applied = await controlOwnedSessionExecution({
