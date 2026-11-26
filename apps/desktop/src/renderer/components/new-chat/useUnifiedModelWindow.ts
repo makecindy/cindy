@@ -29,7 +29,9 @@ export function useUnifiedModelWindow({ enabled, sections, listRef, flyAnchor, i
     const byKey = new Map<string, number>();
     const byAnchor = new Map<string, number>();
     if (enabled) sections.forEach((section, sectionIndex) => {
-      items.push({ key: JSON.stringify([section.key]), sectionIndex, row: null });
+      const headerKey = JSON.stringify([section.key]);
+      byKey.set(headerKey, items.length);
+      items.push({ key: headerKey, sectionIndex, row: null });
       section.rows.forEach((row, rowIndex) => {
         const anchor = anchorKey(row.anchor);
         const key = JSON.stringify([section.key, anchor]);
@@ -78,7 +80,7 @@ export function useUnifiedModelWindow({ enabled, sections, listRef, flyAnchor, i
     return row && start < viewportEnd && end > scrollOffset && !isRowDisabled(row);
   });
   const visibleEntryKey = items[visibleTabItem?.index ?? -1]?.key;
-  const entryKey = focusedIndex === undefined
+  const entryKey = focusedIndex === undefined || !items[focusedIndex]?.row
     ? visibleEntryKey ?? items[firstSelectableIndex]?.key
     : focusedKey;
 

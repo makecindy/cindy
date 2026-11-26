@@ -1768,7 +1768,7 @@ function UnifiedModelPanelContent({
     const matchingFavorite = row.recent
       ? favorites.find((favorite) => {
           if (favorite.providerId !== row.entry.providerId) return false;
-          if (resolveStoredModelEntry(entries, favorite.providerId, favorite.modelId) !== row.entry) return false;
+          if (resolveStoredModelEntry(resolvableEntries, favorite.providerId, favorite.modelId) !== row.entry) return false;
           const favoriteConfig = resolveFavoriteRowConfig({
             entry: row.entry,
             item: favorite,
@@ -2043,7 +2043,7 @@ function UnifiedModelPanelContent({
                               paddingTop: item.row && item.rowIndex > 0 ? 4 : undefined,
                             }}
                             data-index={measurement.index}
-                            data-window-key={item.row ? item.key : undefined}
+                            data-window-key={item.key}
                           >
                             {item.row ? renderOption(item.row, {
                               tabIndex: modelWindow.entryKey === item.key ? 0 : -1,
