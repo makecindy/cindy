@@ -1,8 +1,8 @@
 /**
  * host-daemons 平台来源的解析层。
  *
- * 这层是唯一的「平台文本 → 条目」入口，本机只有 Windows，macOS/Linux 的输出没法实机
- * 复现，只能靠真实样例文本（plutil/launchctl/systemctl/crontab 的原始格式）锁住解析。
+ * 这层是唯一的「平台文本 → 条目」入口。macOS 本机没有环境，只用真实样例文本锁住
+ * 解析；Linux 侧在 WSL2 Ubuntu 上做过真实的 systemd / crontab 建、跑、停、删验证。
  */
 
 import { describe, expect, it } from 'vitest';
@@ -19,7 +19,7 @@ import {
   parseLaunchctlList,
   toHostDaemonTrigger,
 } from '../launchAgents.js';
-import { parseSystemdListUnits, parseSystemdUnitFile } from '../systemdUser.js';
+import { parseSystemdListUnits, parseSystemdUnitFile, stateOf } from '../systemdUser.js';
 
 describe('launchd', () => {
   it('按 plutil 真实输出取 Label、命令与触发', () => {
@@ -99,6 +99,19 @@ describe('systemd 用户单元', () => {
     expect(units.get('cindy-probe.timer')).toEqual({ active: 'active', sub: 'waiting' });
     expect(units.get('gpg-agent.service')).toEqual({ active: 'inactive', sub: 'dead' });
     expect(units.size).toBe(4);
+  });
+
+  it('timer 条目跟随它 service 的运行状态，等待触发不算正在运行', () => {
+    // WSL 实测：`systemctl --user start foo.service` 后 timer 仍是 waiting，
+    // 只看 timer 自己的 active 会让「立即运行」后状态永远停在待执行。
+    const runtime = new Map([
+      ['cindy-probe.timer', { active: 'active', sub: 'waiting' }],
+      ['cindy-probe.service', { active: 'active', sub: 'running' }],
+    ]);
+    expect(stateOf('cindy-probe.timer', runtime)).toBe('running');
+    runtime.set('cindy-probe.service', { active: 'inactive', sub: 'dead' });
+    expect(stateOf('cindy-probe.timer', runtime)).toBe('ready');
+    expect(stateOf('cindy-probe.timer', new Map())).toBe('ready');
   });
 });
 

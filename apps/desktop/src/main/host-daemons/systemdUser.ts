@@ -81,12 +81,13 @@ export function parseSystemdListUnits(stdout: string): Map<string, SystemdUnitRu
   return units;
 }
 
-function stateOf(unit: string, runtime: SystemdUnitRuntime | undefined): HostDaemonState {
-  if (!runtime) return 'ready';
-  if (runtime.active === 'inactive' || runtime.active === 'failed') return 'ready';
-  // timer 的 active 是「等待下一次触发」，不是正在跑；service 的 running 才是。
-  if (unit.endsWith('.timer')) return 'ready';
-  return runtime.sub === 'running' ? 'running' : 'ready';
+export function stateOf(unit: string, runtime: Map<string, SystemdUnitRuntime>): HostDaemonState {
+  // timer 自己的 active 是「等待下一次触发」；它对应的 service 在跑才算正在运行。
+  const key = unit.endsWith('.timer') ? `${stem(unit)}.service` : unit;
+  const unitRuntime = runtime.get(key);
+  if (!unitRuntime) return 'ready';
+  if (unitRuntime.active === 'inactive' || unitRuntime.active === 'failed') return 'ready';
+  return unitRuntime.sub === 'running' ? 'running' : 'ready';
 }
 
 function triggerOf(file: SystemdUnitFile): HostDaemonTrigger {
@@ -177,7 +178,7 @@ export function createSystemdUserAdapter(deps: SystemdUserAdapterDeps = {}): Hos
           id: `systemd-user:${unit}`,
           name: unit,
           kind: 'systemd-unit',
-          state: stateOf(unit, runtime.get(unit)),
+          state: stateOf(unit, runtime),
           command: file.execStart || serviceFile?.execStart || file.schedule,
           trigger: triggerOf(file),
           attributionNeedles: [unit],
