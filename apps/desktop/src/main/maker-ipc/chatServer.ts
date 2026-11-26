@@ -3179,7 +3179,8 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       }
       const words = bodyText(source).trim();
       const message = formatGroupRequest({ words, heading, background });
-      const excerpt = quotedMessage ? botGroupQuoteExcerpt(markdownPreviewText(quotedText(quotedMessage))) : quote?.excerpt;
+      const originalText = quotedMessage && quotedText(quotedMessage);
+      const excerpt = originalText === undefined ? quote?.excerpt : botGroupQuoteExcerpt(markdownPreviewText(originalText) || originalText);
       const note = quote && excerpt ? t('bots.groupChat.assistant.replyingTo')
         .replace(/{{name}}|{{text}}/g, token => token === '{{name}}' ? quote.authorName : excerpt) : undefined;
       const visible = formatGroupRequest({ words, note, heading, background: visibleBackground });

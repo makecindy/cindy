@@ -2717,7 +2717,11 @@ describe('Chat Server result delivery and refresh', () => {
         await vi.advanceTimersByTimeAsync(12_000);
       }
       else {
-        history.push(message(5, teammateId, 'Please review this', { origin: 'bot' }));
+        const original = message(1, peerId, '<Widget />');
+        history.push(original);
+        const quote = buildBotGroupQuoteCard({ messageId: original.id, authorName: 'Ann',
+          authorKind: 'user', excerpt: '<Widget />', sequence: 1, attachmentCount: 0, attachmentName: null });
+        history.push(message(5, teammateId, '', { origin: 'bot', content: [quote, { type: 'text', text: 'Please review this' }] }));
         queue.push(request(5));
         await vi.advanceTimersByTimeAsync(12_000);
       }
@@ -2725,7 +2729,7 @@ describe('Chat Server result delivery and refresh', () => {
       expect(input!.message).toContain('Luna');
       const expected = sender === 'user'
         ? '@Cindy When is the review?\n\n' + t('bots.groupChat.assistant.replyingTo').replace('{{name}}', 'Ann').replace('{{text}}', 'Item Date Review Friday')
-        : 'Please review this';
+        : 'Please review this\n\n' + t('bots.groupChat.assistant.replyingTo').replace('{{name}}', 'Ann').replace('{{text}}', '<Widget />');
       expect(input!.persistedContent).toBe(expected);
       expect(input!.origin).toMatchObject({ displayText: expected });
       const context = [...input!.message.matchAll(/<untrusted-data>\n(.*?)\n<\/untrusted-data>/g)]
