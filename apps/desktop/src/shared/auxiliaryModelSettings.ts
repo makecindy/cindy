@@ -52,6 +52,12 @@ export interface AuxiliaryModelOption {
   route?: { kind: 'route' | 'merged'; name: string; members: number };
 }
 
+/**
+ * 设置里选辅助模型时，自己排的那些路由合在一格里的格位标识。带 `sroute:` 前缀，侧栏把它和合并供应商的路由排在一起，
+ * 但它本身就画成路由图形，不再叠「合并供应商」的角标。
+ */
+export const OWN_ROUTES_PROVIDER_ID = 'sroute:mine';
+
 export interface AuxiliaryModelSettingsState extends AuxiliaryModelSettings {
   isCustomized: boolean;
   customizedKeys: string[];

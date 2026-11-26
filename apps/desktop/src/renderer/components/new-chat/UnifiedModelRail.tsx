@@ -39,6 +39,7 @@ import {
 import { QUOTA_FILL_COLOR_CLASSES, quotaSeverity } from '../status/QuotaBar';
 import { RouteSourceMark } from '@/components/icons/RouteSourceMark';
 import { isSourceRouteProviderId } from '@/features/model-groups/sourceRouteProviders';
+import { OWN_ROUTES_PROVIDER_ID } from '../../../shared/auxiliaryModelSettings';
 
 /**
  * UnifiedModelRail —— 统一面板左侧的视图筛选栏(model-selector-unified §1.2 / §1.6)。
@@ -267,6 +268,9 @@ export function UnifiedModelRail({
                   iconDataUrl={engineTab?.iconDataUrl}
                   className=""
                 />
+              ) : item.kind === 'provider' && item.providerId === OWN_ROUTES_PROVIDER_ID ? (
+                // 自己排的路由合在一格(辅助模型)：与「智能路由」格同一个图形，不叠合并供应商的角标。
+                <Waypoints size={16} />
               ) : item.kind === 'provider' && isSourceRouteProviderId(item.providerId) ? (
                 // 合并了整个供应商的路由：品牌图形 + 路由角标，不与普通供应商混淆。
                 <RouteSourceMark markSize={16}>

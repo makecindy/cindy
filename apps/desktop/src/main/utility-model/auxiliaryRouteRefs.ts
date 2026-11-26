@@ -10,14 +10,13 @@
  */
 import { encodeCatalogModelPin, type CatalogModelPinRoute } from '../../shared/catalogModelPin.js';
 import { encodeAuxiliaryRouteRef } from '../../shared/auxiliaryModelChain.js';
-import type { AuxiliaryModelOption } from '../../shared/auxiliaryModelSettings.js';
+import { OWN_ROUTES_PROVIDER_ID, type AuxiliaryModelOption } from '../../shared/auxiliaryModelSettings.js';
 import type { ModelGroupCandidate, ModelGroupRoute } from '../../shared/modelGroups.js';
 import { activeOwnerScopeKey } from '../appSessionState.js';
 import { readModelGroupsConfig } from '../model-groups/store.js';
 
 const PREFERRED_TTL_MS = 30_000;
-/** 设置里选辅助模型时，自己排的那些路由合在一格里的格位标识。 */
-const MINE = 'sroute:mine';
+const MINE = OWN_ROUTES_PROVIDER_ID;
 
 /** 智能路由的配置读不出来时按没有路由处理：辅助模型的设置与请求不因它失败。 */
 function routes(): ModelGroupRoute[] {
@@ -103,7 +102,7 @@ export function buildAuxiliaryRouteOptions(usable: ReadonlyMap<string, Auxiliary
       label: route.name,
       group: route.parent?.name ?? route.name,
       // 合并整个供应商的路由：与选模型面板同一个格位标识(sroute:<id>)，模型行是那个模型；
-      // 自己排的路由：都归在一格里(sroute:mine)，每条路由是一行。两种都带 sroute: 前缀，侧栏把它们排在最前并加路由角标。
+      // 自己排的路由：都归在一格里(sroute:mine)，每条路由是一行。两种都带 sroute: 前缀，侧栏把它们排在最前；只有合并供应商的那种加路由角标。
       providerId: route.parent ? `sroute:${route.parent.id}` : MINE,
       agentKind,
       modelId: route.parent ? head.model : route.id,
