@@ -561,6 +561,7 @@ describe('independent V2 relay', () => {
   it('fences linked Device Link provider shares: native IDs, other accounts, the private book, restarts and waiting guests', async () => {
     const actor = (token: string) => token === 'Bearer unit-owner' ? { accountId: 'owner-account', deviceId: 'owner' }
       : token === 'Bearer other-owner' ? { accountId: 'other-account', deviceId: 'owner' }
+      : token === 'Bearer impostor' ? { accountId: 'impostor-account', deviceId: 'guest-device-0' }
       : token === 'Bearer second-host' ? { accountId: 'owner-account', deviceId: 'second' }
       : /^Bearer guest-\d+$/.test(token) ? { accountId: 'guest-account', deviceId: 'guest-device-' + token.slice(13) } : null;
     // A clock the case holds still: removing and linking again within one millisecond must not reuse a generation.
@@ -618,7 +619,13 @@ describe('independent V2 relay', () => {
     const delegation = await f.client.acceptDelegationRequest(directory.delegationRequests[0], () => undefined);
     const signed = new AgentNetClient(f.relay.url, guests.get('0')!, f.certificate, f.rootPublicKey, delegation);
     await expect(signed.directory()).resolves.toBeDefined();
-    for (let n = 1; n < 64; n++) expect((await ask(n)).status).toBe(200);
+    // Another account claiming the same device ID is a separate (unsigned) guest: it neither replaces nor disconnects this one.
+    const impostor = generateIdentity('guest-device-0');
+    expect((await call('/sharing/transport', 'POST', { kind: 'provider-share', resourceId: 'v1-share', memberId: 'v1-member-0',
+      signingKey: impostor.signingKey, transportKey: impostor.transportKey }, 'Bearer impostor', false, impostor)).body).toMatchObject({ status: 'pending' });
+    await expect(signed.directory()).resolves.toBeDefined();
+    // The impostor is one waiting guest; 62 more leave exactly one place.
+    for (let n = 1; n < 63; n++) expect((await ask(n)).status).toBe(200);
     // Two new guests racing for the last place: the write rechecks it, so exactly one gets in.
     const raced = await Promise.all([ask(64), ask(65)]);
     expect(raced.map(response => response.status).sort()).toEqual([200, 429]);

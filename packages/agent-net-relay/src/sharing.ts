@@ -46,7 +46,8 @@ export interface SharingHost {
   changed(networkIds: readonly string[]): void;
   requests(): DelegationRequest[];
   /** `admit` reruns inside the write (and on every retry) with the other unexpired requests; false refuses with 429. */
-  saveRequest(request: DelegationRequest, admit?: (pending: readonly DelegationRequest[]) => boolean): Promise<void>;
+  /** `bySubject`: replace only this account's request for the device (device IDs are unique per account, not globally). */
+  saveRequest(request: DelegationRequest, admit?: (pending: readonly DelegationRequest[]) => boolean, bySubject?: boolean): Promise<void>;
   grant(request: DelegationRequest): { rootPublicKey: string; certificate: DeviceCertificate; delegation?: Delegation; revoked?: boolean };
   remember(account: string, device: string, nonce: string): void | Promise<void>;
   /** Per-device request budget, applied once the identity is verified; throws to refuse. */
@@ -281,18 +282,20 @@ export function createAgentNetSharing(options: AgentNetSharingOptions, host: Sha
           const waitingForSignature = (r: DelegationRequest) => r.networkId === linked.networkId && r.kind === 'provider-share'
             && r.resourceId === resourceId && r.expiresAt > now && r.hostDeviceId === linked.hostDeviceId
             && r.scope.memberVersion === linked.generation && !host.grant(r).delegation;
-          // No new place: renewing a signed request with the same keys, or replacing this device's own waiting request.
-          const exempt = (!!existing && !!host.grant(existing).delegation)
-            || waiting.some(r => r.guestDeviceId === actor.deviceId && waitingForSignature(r));
-          const unsignedGuests = (pending: readonly DelegationRequest[]) => new Set(pending.filter(r => r.guestDeviceId !== actor.deviceId
-            && waitingForSignature(r)).map(r => r.guestDeviceId)).size;
+          // A guest is its device within its account: device IDs are unique per account only, so another account claiming the
+          // same ID is a different guest and never replaces (or shares a place with) this one.
+          const own = (r: DelegationRequest) => r.guestDeviceId === actor.deviceId && r.scope.guestSubject === actor.accountId;
+          // No new place: renewing a signed request with the same keys, or replacing this guest's own waiting request.
+          const exempt = (!!existing && !!host.grant(existing).delegation) || waiting.some(r => own(r) && waitingForSignature(r));
+          const unsignedGuests = (pending: readonly DelegationRequest[]) => new Set(pending.filter(r => !own(r) && waitingForSignature(r))
+            .map(r => r.guestDeviceId + '\0' + r.scope.guestSubject)).size;
           const admit = (pending: readonly DelegationRequest[]) => exempt || unsignedGuests(pending) < MAX_LINKED_SHARE_PENDING_GUESTS;
           if (!admit(waiting)) throw new AppError('TOO_MANY_REQUESTS', 429, 'Too many pending guests');
           request = { id: existing && !host.grant(existing).revoked ? existing.id : randomUUID(), kind: 'provider-share', resourceId,
             hostDeviceId: linked.hostDeviceId, networkId: linked.networkId, scope: { memberId, guestSubject: actor.accountId, memberVersion: linked.generation },
             guestDeviceId: actor.deviceId, guestSigningKey: signingKey, guestTransportKey: transportKey,
             requestedAt: now, expiresAt: now + MAX_GRANT_LIFETIME_MS };
-          await host.saveRequest(request, admit); host.changed([linked.networkId]);
+          await host.saveRequest(request, admit, true); host.changed([linked.networkId]);
           const grant = host.grant(request);
           result = { id: request.id, status: grant.delegation ? 'ready' : 'pending', networkId: request.networkId,
             rootPublicKey: grant.rootPublicKey, certificate: grant.certificate, ...(grant.delegation ? { delegation: grant.delegation } : {}) };
