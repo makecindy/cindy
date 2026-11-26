@@ -861,9 +861,12 @@ function fresherAgo(a: number | null, b: number | null): number | null {
 /**
  * 纯内存只读投影：汇总本机 Agent-Net 上已登记或已建链的跨账号供应商分享路由。
  * 不读盘、不拨号、不发探测帧，供「远程连接 → 远程供应商」拓扑零开销读取。
+ * 只在主连接走 Agent-Net 时调用；`carriedByPrimary(peer)` 回答该 peer 是否由主连接承载——
+ * 没登记 Agent-Net 分享路由、又不在主连接上的，落在 Device Link 兼容连接上（2026-11-26 用户要求写出实际协议）。
  */
 export function agentNetProviderShareRoutes(
   peerLinks: readonly DeviceLinkPeerLinkView[],
+  carriedByPrimary: (peer: string) => boolean,
 ): DeviceLinkProviderShareRouteView[] {
   if (isAppSessionBoundaryPending()) return [];
   const linkByShare = new Map<string, DeviceLinkPeerLinkView>();
@@ -942,6 +945,8 @@ export function agentNetProviderShareRoutes(
       out.set(shareId, {
         shareId,
         path,
+        // 已登记的分享路由要么在 Agent-Net 主连接上，要么是专用的 Agent-Net 分享连接。
+        protocol: 'agent-net',
         rttMs,
         sentAgoMs: link?.sentAgoMs ?? null,
         receivedAgoMs: link?.receivedAgoMs ?? null,
@@ -956,10 +961,27 @@ export function agentNetProviderShareRoutes(
 
   for (const [shareId, link] of linkByShare.entries()) {
     if (out.has(shareId)) continue;
+    if (!carriedByPrimary(link.deviceId)) {
+      // Device Link 兼容连接（旧版分享 / 旧跨账号连接）只经官方中转的 WebSocket；它的中转往返这里拿不到，不借用 Agent-Net 主中转的值。
+      out.set(shareId, {
+        shareId,
+        path: link.open ? link.path : null,
+        protocol: 'device-link',
+        rttMs: link.open ? link.rttMs : null,
+        sentAgoMs: link.sentAgoMs,
+        receivedAgoMs: link.receivedAgoMs,
+        relayKind: 'official',
+        relayHost: null,
+        relayTransport: 'websocket',
+        relayRttMs: null,
+      });
+      continue;
+    }
     const snap = agentNetPeerSnapshot(link.deviceId);
     out.set(shareId, {
       shareId,
       path: snap?.path ?? (link.open ? link.path : null),
+      protocol: 'agent-net',
       rttMs: snap?.rttMs ?? (link.open ? link.rttMs : null),
       sentAgoMs: link.sentAgoMs,
       receivedAgoMs: link.receivedAgoMs,

@@ -7304,8 +7304,7 @@
             "machines": "远程供应商机器"
           },
           "usage": {
-            "remoteModel": "远程模型",
-            "remoteTask": "远程任务"
+            "remoteModel": "远程模型"
           },
           "bundle": {
             "mixed": "{{running}} 个运行中 · {{ready}} 个就绪",

@@ -23,26 +23,49 @@ import type {
 } from '../../../shared/deviceLinkIpc';
 
 import { shapeD, type LineShape } from './topologyGeometry';
-import { flowOf, mergeFlows, type TopologyFlow } from './topologyModel';
+import { flowOf, mergeFlows, type LinkTransport, type TopologyFlow } from './topologyModel';
+
+/** 数据实际走哪种连接：Agent-Net 或 Device Link；还没建链或不知道时为 null。 */
+export type ProviderLinkProtocol = 'agent-net' | 'device-link';
+
+/**
+ * 与设备连接拓扑同一套底层传输写法（product-rules/agent-net.md 拓扑节）：
+ * Agent-Net 直连是 UDP、经中转随中转实际走法（UDP / WS）；Device Link 直连是 WebRTC、经中转是 WS。
+ */
+function providerLinkTransport(
+  protocol: ProviderLinkProtocol | null,
+  path: 'direct' | 'relay' | null,
+  relayTransport: 'udp' | 'websocket' | null,
+): LinkTransport | null {
+  if (!path) return null;
+  if (protocol === 'device-link') return path === 'direct' ? 'webrtc' : 'websocket';
+  return path === 'direct' ? 'udp' : relayTransport;
+}
+
+/** 同账号电脑：开着的控制链路说了算（加密的新版连接是 Agent-Net），没有时 Agent-Net 已有路径即 Agent-Net；与设备连接页一致。 */
+function ownLinkProtocol(
+  path: 'direct' | 'relay' | null,
+  encrypted: boolean | undefined,
+): ProviderLinkProtocol | null {
+  if (!path || encrypted === undefined) return null;
+  return encrypted ? 'agent-net' : 'device-link';
+}
 
 export type ProviderTopologyScope = 'all' | 'running';
 export type ProviderMachineKind = 'own' | 'share';
-export type ProviderTaskUsageKind = 'remote-model' | 'remote-task';
 export type ProviderRelayKind = 'official' | 'self-hosted' | 'sharer-relay';
 export type ProviderMachineStatus = 'direct' | 'relay' | 'connecting' | 'unlinked' | 'error' | 'offline';
 
-/** 某台远程供应商机器承载的任务项（点击后直接跳转对应会话）。 */
+/** 本机任务借用某台远程供应商机器的模型（点击后直接跳转对应会话）。 */
 export interface ProviderTopologyTask {
   id: string;
   title: string;
   model: string;
   providerId: string | null;
-  usageKind: ProviderTaskUsageKind;
   running: boolean;
   updatedAt: string;
   /** 仅用于导航路由解析（resolveSessionRoute），保留原始会话引用。 */
   session: Session;
-  isRemoteControlled: boolean;
 }
 
 /** 中转站节点：区分我的自建中转、官方中转（含跨区）与分享方自建中转。 */
@@ -81,7 +104,8 @@ export interface ProviderTopologyMachine {
   status: ProviderMachineStatus;
   routeMode: 'direct' | 'relay' | 'unlinked';
   relayId: string | null;
-  transport: 'udp' | 'websocket' | null;
+  protocol: ProviderLinkProtocol | null;
+  transport: LinkTransport | null;
   rttMs: number | null;
   directRttMs: number | null;
   relayRttMs: number | null;
@@ -141,7 +165,8 @@ export interface IdleStandbyProvider {
   shareProviderId: string | null;
   routeMode: 'direct' | 'relay' | null;
   relayName: string | null;
-  transport: 'udp' | 'websocket' | null;
+  protocol: ProviderLinkProtocol | null;
+  transport: LinkTransport | null;
   rttMs: number | null;
   directRttMs: number | null;
   relayRttMs: number | null;
@@ -259,27 +284,16 @@ export function buildProviderTopology(input: BuildProviderTopologyInput): Provid
     (input.peerLinks.providerShareRoutes ?? []).map((r) => [r.shareId, r] as const),
   );
 
-  // 1) 按目标远程机器（own deviceId 或 share:<shareId>）归集所有非归档、非隐藏的活跃任务
+  // 1) 按目标远程机器（own deviceId 或 share:<shareId>）归集本机任务里借用别的电脑模型的活跃任务。
+  //    住在别的电脑上的任务（经远程控制浏览到的，带 deviceLinkDeviceId）跑的是那台电脑自己的模型，
   const tasksByAgentDevice = new Map<string, ProviderTopologyTask[]>();
   const seenSessionIds = new Set<string>();
 
   for (const session of input.sessions) {
     if (session.status !== 'active' || session.hiddenAt) continue;
     if (seenSessionIds.has(session.id)) continue;
-
-    let agentDeviceId: string | null = null;
-    let usageKind: ProviderTaskUsageKind = 'remote-model';
-    let isRemoteControlled = false;
-
-    if (session.agentDeviceId && session.agentDeviceId !== selfId) {
-      agentDeviceId = session.agentDeviceId;
-      usageKind = 'remote-model';
-    } else if (session.deviceLinkDeviceId && session.deviceLinkDeviceId !== selfId) {
-      agentDeviceId = session.deviceLinkDeviceId;
-      usageKind = 'remote-task';
-      isRemoteControlled = true;
-    }
-
+    if (session.deviceLinkDeviceId) continue;
+    const agentDeviceId = session.agentDeviceId && session.agentDeviceId !== selfId ? session.agentDeviceId : null;
     if (!agentDeviceId) continue;
     seenSessionIds.add(session.id);
 
@@ -288,11 +302,9 @@ export function buildProviderTopology(input: BuildProviderTopologyInput): Provid
       title: getSessionDisplayTitle(session, input.unnamedSessionLabel ?? session.title ?? session.id) || session.id,
       model: formatModelShort(session.model || ''),
       providerId: session.providerId ?? null,
-      usageKind,
       running: input.runningSessionIds.has(session.id),
       updatedAt: session.userSendAt || session.lastActivityAt || session.updatedAt || '',
       session,
-      isRemoteControlled,
     };
 
     const list = tasksByAgentDevice.get(agentDeviceId) ?? [];
@@ -486,6 +498,7 @@ export function buildProviderTopology(input: BuildProviderTopologyInput): Provid
         shareRoute && (status === 'direct' || status === 'relay')
           ? flowOf({ sentAgoMs: shareRoute.sentAgoMs, receivedAgoMs: shareRoute.receivedAgoMs })
           : null;
+      const shareProtocol = path === 'direct' || path === 'relay' ? shareRoute?.protocol ?? null : null;
 
       allMachines.push({
         id: `share:${shareId}`,
@@ -505,7 +518,12 @@ export function buildProviderTopology(input: BuildProviderTopologyInput): Provid
         status,
         routeMode,
         relayId,
-        transport: path === 'direct' ? 'udp' : shareRoute?.relayTransport ?? input.peerLinks.relayTransport ?? null,
+        protocol: shareProtocol,
+        transport: providerLinkTransport(
+          shareProtocol,
+          routeMode === 'unlinked' ? null : routeMode,
+          shareRoute?.relayTransport ?? input.peerLinks.relayTransport ?? null,
+        ),
         rttMs: shareRoute?.rttMs ?? null,
         directRttMs: null,
         relayRttMs: shareRoute?.relayRttMs ?? null,
@@ -551,6 +569,7 @@ export function buildProviderTopology(input: BuildProviderTopologyInput): Provid
         control && (status === 'direct' || status === 'relay')
           ? flowOf(control)
           : null;
+      const ownProtocol = ownLinkProtocol(activePath, control ? control.encrypted : agentNetPath ? true : undefined);
 
       const ownName = device?.name ?? tasks[0]?.session.deviceLinkDeviceName ?? agentDeviceId;
       allMachines.push({
@@ -571,12 +590,8 @@ export function buildProviderTopology(input: BuildProviderTopologyInput): Provid
         status,
         routeMode,
         relayId,
-        transport:
-          activePath === 'direct'
-            ? 'udp'
-            : activePath === 'relay'
-              ? input.peerLinks.relayTransport ?? null
-              : null,
+        protocol: ownProtocol,
+        transport: providerLinkTransport(ownProtocol, activePath, input.peerLinks.relayTransport ?? null),
         rttMs: control ? control.rttMs : route?.rttMs ?? null,
         directRttMs: route?.directRttMs ?? null,
         relayRttMs: route?.relayRttMs ?? null,
@@ -751,6 +766,7 @@ export function buildProviderTopology(input: BuildProviderTopologyInput): Provid
     const rt = agentNetByDeviceId.get(dev.deviceId);
     const lk = linkByDeviceId.get(dev.deviceId);
     const p = lk?.open ? lk.path : rt?.path === 'connecting' ? null : rt?.path ?? null;
+    const idleOwnProtocol = ownLinkProtocol(p, lk?.open ? lk.encrypted : p ? true : undefined);
     idleProviders.push({
       id: `own:${dev.deviceId}`,
       kind: 'own',
@@ -763,7 +779,8 @@ export function buildProviderTopology(input: BuildProviderTopologyInput): Provid
       shareProviderId: null,
       routeMode: p,
       relayName: p === 'relay' ? input.primaryRelayName : null,
-      transport: p === 'direct' ? 'udp' : p === 'relay' ? input.peerLinks.relayTransport ?? null : null,
+      protocol: idleOwnProtocol,
+      transport: providerLinkTransport(idleOwnProtocol, p, input.peerLinks.relayTransport ?? null),
       rttMs: lk?.open ? lk.rttMs : rt?.rttMs ?? null,
       directRttMs: rt?.directRttMs ?? null,
       relayRttMs: rt?.relayRttMs ?? null,
@@ -797,7 +814,12 @@ export function buildProviderTopology(input: BuildProviderTopologyInput): Provid
               ? input.primaryRelayName
               : input.officialRelayLabel
           : null,
-      transport: p === 'direct' ? 'udp' : sr?.relayTransport ?? input.peerLinks.relayTransport ?? null,
+      protocol: p ? sr?.protocol ?? null : null,
+      transport: providerLinkTransport(
+        p ? sr?.protocol ?? null : null,
+        p,
+        sr?.relayTransport ?? input.peerLinks.relayTransport ?? null,
+      ),
       rttMs: sr?.rttMs ?? null,
       directRttMs: null,
       relayRttMs: sr?.relayRttMs ?? null,
@@ -880,8 +902,10 @@ export interface ProviderMachineLayout {
   leftH: number;
   taskBoxes: ProviderTaskBoxLayout[];
   joinPoint: { x: number; y: number } | null;
-  directPillPos: { x: number; y: number; w: number } | null;
-  branchRttPos: { x: number; y: number; w: number } | null;
+  /** 直连徽章：w 是放得下的最小宽度，maxW 是束点到机器卡片之间可用的最大宽度（徽章按文字撑开，不超过它）。 */
+  directPillPos: { x: number; y: number; w: number; maxW: number } | null;
+  /** 中转到机器那段线上的延迟标签；maxW 是中转站与机器卡片之间的可用宽度（协议标签不超过它）。 */
+  branchRttPos: { x: number; y: number; w: number; maxW: number } | null;
   flow: TopologyFlow | null;
 }
 
@@ -893,6 +917,12 @@ export interface ProviderRelayLayout {
   h: number;
   cy: number;
   flow: TopologyFlow | null;
+  /**
+   * 经这台中转的机器都走同一种协议时就是它（写在中转站下面）；中转只转发，前后两段一定是同一种协议。
+   * 不同机器混用 Agent-Net 与 Device Link 时为 null，并由 mixedProtocols 让各条分支各写各的。
+   */
+  protocol: ProviderLinkProtocol | null;
+  mixedProtocols: boolean;
 }
 
 export interface ProviderGroupLayout {
@@ -958,6 +988,8 @@ const GRP_FOOT_H = 28;
 const IDLE_ROW_H = 30;
 const BLOCK_GAP = 16;
 const RELAY_H = 44;
+/** 中转站下面写协议（Agent-Net / Device Link）的那一行高度。 */
+const RELAY_LABEL_H = 20;
 
 export function layoutProviderTopology(
   model: ProviderTopologyModel,
@@ -1102,9 +1134,9 @@ export function layoutProviderTopology(
     }
   }
 
-  const h = Math.max(140, cursorY - BLOCK_GAP + 10);
+  let h = Math.max(140, cursorY - BLOCK_GAP + 10);
 
-  // 计算每台中转站垂直位置（同中转机器均值 + 垂直碰撞避让）
+  // 计算每台中转站垂直位置（同中转机器均值 + 垂直碰撞避让；中转站下面留出写协议的一行）
   const relays: ProviderRelayLayout[] = [];
   const relayLayoutById = new Map<string, ProviderRelayLayout>();
   for (const relay of model.relays) {
@@ -1112,22 +1144,31 @@ export function layoutProviderTopology(
     if (attached.length === 0) continue;
     let cy = (attached[0].cy + attached[attached.length - 1].cy) / 2;
     for (const prev of relays) {
-      if (Math.abs(cy - prev.cy) < RELAY_H + 10) {
-        cy = prev.cy + RELAY_H + 10;
+      if (Math.abs(cy - prev.cy) < RELAY_H + RELAY_LABEL_H + 10) {
+        cy = prev.cy + RELAY_H + RELAY_LABEL_H + 10;
       }
     }
     const flow = mergeFlows(attached.map((ml) => ml.flow));
+    const protocols = new Set(attached.map((ml) => ml.machine.protocol).filter((p): p is ProviderLinkProtocol => p !== null));
+    const protocol = protocols.size === 1 ? [...protocols][0] : null;
+    const mixedProtocols = protocols.size > 1;
+    const relayDisplay: ProviderTopologyRelay = protocol === 'device-link' || mixedProtocols
+      ? { ...relay, transport: mixedProtocols ? null : 'websocket', hopRttMs: null }
+      : relay;
     const rl: ProviderRelayLayout = {
-      relay,
+      relay: relayDisplay,
       x: xRelayLeft,
       top: Math.round(cy - RELAY_H / 2),
       w: relayW,
       h: RELAY_H,
       cy,
       flow,
+      protocol,
+      mixedProtocols,
     };
     relays.push(rl);
     relayLayoutById.set(relay.id, rl);
+    h = Math.max(h, rl.top + RELAY_H + (rl.protocol ? RELAY_LABEL_H : 0) + 10);
   }
 
   const lines: ProviderLineGeom[] = [];
@@ -1208,6 +1249,7 @@ export function layoutProviderTopology(
           x: Math.round((xRelayRight + xTargetIn) / 2),
           y: Math.round((rl.cy + ml.cy) / 2),
           w: rttW,
+          maxW: xTargetIn - xRelayRight - 6,
         };
       }
     } else {
@@ -1229,6 +1271,7 @@ export function layoutProviderTopology(
           x: midCenter,
           y: Math.round(ml.cy),
           w: pillW,
+          maxW: Math.max(pillW, 2 * Math.min(midCenter - xJoin, xTargetIn - midCenter) - 12),
         };
       }
     }

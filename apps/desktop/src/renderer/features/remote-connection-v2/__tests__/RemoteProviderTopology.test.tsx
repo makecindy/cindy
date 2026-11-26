@@ -10,7 +10,7 @@
  * tier:unit(jsdom 组件)。实测耗时：<1s。
  */
 
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('react-i18next', async (importOriginal) => {
@@ -122,7 +122,7 @@ function buildFixtureModel() {
 
   const peerLinks: DeviceLinkPeerLinksSnapshot = {
     links: [
-      { deviceId: 'dev-mac', open: true, path: 'direct', rttMs: 4, sentAgoMs: 500, receivedAgoMs: 200 },
+      { deviceId: 'dev-mac', encrypted: true, open: true, path: 'direct', rttMs: 4, sentAgoMs: 500, receivedAgoMs: 200 },
     ],
     agentNetRoutes: [
       { deviceId: 'dev-mac', path: 'direct', rttMs: 4, directRttMs: 4, relayRttMs: 18, pathPreference: 'auto' },
@@ -131,13 +131,14 @@ function buildFixtureModel() {
       {
         shareId: 'sh-1',
         path: 'relay',
+        protocol: 'device-link',
         rttMs: 28,
         sentAgoMs: null,
         receivedAgoMs: null,
         relayKind: 'official',
         relayHost: null,
-        relayTransport: 'udp',
-        relayRttMs: 16,
+        relayTransport: 'websocket',
+        relayRttMs: null,
         region: 'cn-east',
       },
     ],
@@ -187,6 +188,18 @@ describe('RemoteProviderTopology', () => {
     expect(shareBadge).not.toBeNull();
     expect(shareBadge?.parentElement?.textContent?.trim()).toBe('C');
 
+    // 2026-11-26 用户要求：不点开卡片也能看出数据走 Agent-Net 还是 Device Link——
+    // 直连写在中间线路标签下面；经中转的写在中转站下面一次就够（中转只转发，前后两段是同一种协议），分支上不再重复。
+    const directPill = container.querySelector('.rcv2-prov-direct-pill');
+    expect(directPill?.textContent).toBe('直连 · UDP 4 ms');
+    expect(directPill?.nextElementSibling?.textContent).toBe('Agent-Net');
+    const relayNode = container.querySelector('.rcv2-prov-relay');
+    expect(relayNode?.textContent).toContain('WS');
+    expect(relayNode?.previousElementSibling?.textContent).toBe('Device Link');
+    const relayRtt = container.querySelector('.rcv2-prov-rtt-pill');
+    expect(relayRtt?.textContent).toBe('28 ms');
+    expect(container.querySelectorAll('.rcv2-prov-protocol-tag')).toHaveLength(2);
+
     // Click the Task Bundle card (>= 3 running tasks on Mac Studio) to expand task popover
     const bundleButton = screen.getByRole('button', { name: /3 个运行中/ });
     fireEvent.click(bundleButton);
@@ -212,6 +225,7 @@ describe('RemoteProviderTopology', () => {
     render(
       <RemoteProviderTopology
         model={model}
+        primaryRelayName="Cindy 中转"
         onOpenTask={onOpenTask}
         onPathPreferenceChange={onPathPreferenceChange}
       />,
@@ -226,6 +240,18 @@ describe('RemoteProviderTopology', () => {
     // Open Mac Studio machine popover, check auto-route rule info button, and switch path preference to relay
     const macCard = screen.getByRole('button', { name: /Mac Studio/ });
     fireEvent.click(macCard);
+    // 2026-11-26 用户要求：路径与延迟改成设备卡片的「线路选择」写法——直连、经「中转」中转各一行写最近测得的延迟，
+    // 传输协议单列在「连接方式」，不再有把两条延迟挤在一起的「延迟」行。
+    expect(screen.getByText('经「Cindy 中转」中转')).not.toBeNull();
+    expect(screen.getByText('4 ms')).not.toBeNull();
+    expect(screen.getByText('18 ms')).not.toBeNull();
+    expect(screen.getByText('最近测得')).not.toBeNull();
+    expect(screen.queryByText('延迟')).toBeNull();
+    expect(screen.getByText('连接方式')).not.toBeNull();
+    // 「连接方式」写出数据实际走的协议与底层传输（同账号机器经加密控制链路直连 → Agent-Net · UDP）。
+    const machineCard = within(screen.getByRole('dialog'));
+    expect(machineCard.getByText('Agent-Net')).not.toBeNull();
+    expect(machineCard.getByText('· UDP')).not.toBeNull();
     const infoBtn = screen.getByRole('button', { name: '自动选路规则' });
     fireEvent.click(infoBtn);
     expect(screen.getByText(/25–50 ms/)).not.toBeNull();

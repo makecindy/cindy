@@ -7304,8 +7304,7 @@
             "machines": "遠端供應商機器"
           },
           "usage": {
-            "remoteModel": "遠端模型",
-            "remoteTask": "遠端任務"
+            "remoteModel": "遠端模型"
           },
           "bundle": {
             "mixed": "{{running}} 個執行中 · {{ready}} 個就緒",
