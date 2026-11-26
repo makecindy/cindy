@@ -4041,7 +4041,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     return !mentions.all && !mentions.allBots && target && members.some(member => member.id === target && member.state === 'joined')
       ? { ...mentions, botIds: [...new Set([...mentions.botIds, target])] } : mentions;
   }
-  function resolveMentions(members: Member[], mentions: BotGroupMention) {
+  function resolveMentions(members: Member[], mentions: BotGroupMention, conversationKind?: 'direct') {
     const joined = members.filter(m => m.state === 'joined');
     // A stale explicit target must never become an unaddressed message. Check
     // every pick, including mixed valid/stale picks, before expanding Everyone.
@@ -4050,7 +4050,8 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       if (!member) throw new Error('MENTION_UNAVAILABLE');
       return member.id;
     });
-    const recipients = [...named, ...joined.filter(m => m.id !== selfId && ((mentions.all && m.kind === 'human') || (mentions.allBots && m.kind === 'bot'))).map(m => m.id)];
+    const explicit = conversationKind === 'direct' ? named.filter(id => id !== selfId) : named;
+    const recipients = [...explicit, ...joined.filter(m => m.id !== selfId && ((mentions.all && m.kind === 'human') || (mentions.allBots && m.kind === 'bot'))).map(m => m.id)];
     const resolved = [...new Set(recipients)];
     // Old servers have no broadcast marker: keep an empty human broadcast directed.
     return mentions.all && !resolved.length && !supportsMentionAudiences ? [selfId] : resolved;
@@ -4535,7 +4536,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     let result: { id: string };
     let posting = false;
     try {
-      const mentions = recovered ? [] : knownQuote?.recipients ?? (membersRead ? resolveMentions(members, i.mentions) : []);
+      const mentions = recovered ? [] : knownQuote?.recipients ?? (membersRead ? resolveMentions(members, i.mentions, i.conversationKind) : []);
       const uploaded = recovered ? [] : await media.upload(i.groupId, i.clientId, prepared?.ok ? prepared.attachments : [], selfId);
       // Cached only once the message may reach the server; a failure before this stored nothing.
       if (quote) {

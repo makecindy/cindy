@@ -599,18 +599,18 @@ it('refuses a late PUT result after account changes before media completion', as
   expect(h.auth.apiFetch.mock.calls.some(([path]) => path.endsWith('/messages'))).toBe(false);
 });
 
-it('preserves an explicitly mentioned current actor while everyone excludes the sender', async () => {
+it.each(['group', 'direct'])('preserves explicit self only in groups and excludes the sender from broadcasts (%s)', async kind => {
   const other = '00000000-0000-4000-8000-000000000003';
   const original = h.auth.apiFetch.getMockImplementation()!;
   h.auth.apiFetch.mockImplementation(async (path, options) => {
     const value = await original(path, options);
     if (path.endsWith('/members')) return [...value, { ...value[0], id: other, name: 'Other', ownerActorId: other }];
-    return path.endsWith('/snapshot') ? { ...value, members: [...value.members, { ...value.members[0], id: other, name: 'Other', ownerActorId: other }] } : value;
+    return path.endsWith('/snapshot') ? { ...value, room: { ...value.room, kind }, members: [...value.members, { ...value.members[0], id: other, name: 'Other', ownerActorId: other }] } : value;
   });
   showChat = true; await render();
   for (const all of [false, true]) {
     await act(async () => { await send({ text: 'hello', clientId: `fixture-${all}`, mentions: { all, botIds: [self, other] } }); });
-    expect(h.auth.apiFetch).toHaveBeenCalledWith(`/v1/conversations/${id}/messages`, expect.objectContaining({ method: 'POST', body: { operationId: `fixture-${all}`, content: [{ type: 'text', text: 'hello' }], mentions: [self, other] } }));
+    expect(h.auth.apiFetch).toHaveBeenCalledWith(`/v1/conversations/${id}/messages`, expect.objectContaining({ method: 'POST', body: { operationId: `fixture-${all}`, content: [{ type: 'text', text: 'hello' }], mentions: kind === 'direct' ? [other] : [self, other] } }));
   }
   await act(async () => { await send({ text: 'hello', clientId: 'broadcast-only', mentions: { all: true, botIds: [] } }); });
   expect(h.auth.apiFetch).toHaveBeenCalledWith(`/v1/conversations/${id}/messages`, expect.objectContaining({ method: 'POST', body: { operationId: 'broadcast-only', content: [{ type: 'text', text: 'hello' }], mentions: [other] } }));
