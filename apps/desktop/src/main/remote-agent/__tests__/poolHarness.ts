@@ -120,6 +120,7 @@ export function sharedAccountSessionTool(dispatcherSessionId: string, ports: Rec
     AUTO_REVIEW_DELEGATED_CONTINUATION: Symbol(), verifiedOwnerRequestText: noop,
     isDeviceLinkInvoke: () => false,
     hostPluginInputSource: noop, readSenderIdentity: none, sessionQueueOriginForDispatcher,
+    withPluginTaskService: none, getSessionActiveInputClientIds: () => [],
     extractPlainText: String, assertReviewExternalInputAllowed: none, syncBotLanePermission: none,
     reconcileBotModelRoute: none, refreshBotCapabilityEpochBeforeSend: none, assertSessionNotRestarting: noop,
     sendToSessionLocks: new Map(), waitForSendToSessionLock: none,

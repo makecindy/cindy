@@ -16,6 +16,12 @@ import { acceptTransportStatement } from './agentNetTransportStatement.js';
 import { agentNetStunServer } from '@cindy/agent-net-protocol';
 import { AgentNetMembership } from '@cindy/agent-net';
 import { readAgentNetDirectoryCache, writeAgentNetDirectoryCache } from './agentNetDirectoryCache.js';
+import {
+  getCachedPeerOfficialStunServer,
+  getOfficialAgentNetPeerBase,
+  mergeStunServers,
+  readPeerOfficialStunServer,
+} from './agentNetStunDiscovery.js';
 
 /** One record in the launcher's credential store: the seed, and once enrolled the certificate and private keys. */
 interface StoredIdentity {
@@ -54,6 +60,8 @@ export interface AgentNetNodePorts {
    * 直连的设备照常可用（和 Desktop 一样）。
    */
   directoryCacheFile?(): string | null;
+  /** Optional fixed local UDP listening port (`1..65535`) for Agent-Net direct transport; undefined/0 uses an ephemeral port. */
+  bindPort?(): number | undefined;
   log: { info(message: string): void; warn(message: string): void };
 }
 
@@ -250,6 +258,8 @@ export function createAgentNetNode(ports: AgentNetNodePorts) {
     const liveMembers = () => { const now = currentMembership(); return now && membershipKey === openedKey && ports.current() ? now : null; };
     const listing = members && !members.hasDeviceList()
       ? Promise.race([members.prime(), new Promise<void>((resolve) => { (setTimeout(resolve, 3000) as { unref?: () => void }).unref?.(); })]) : null;
+    const peerOfficialBase = getOfficialAgentNetPeerBase(api.base);
+    const peerStunLookup = peerOfficialBase ? readPeerOfficialStunServer(peerOfficialBase, ports.fetch) : null;
     const module = await ports.coreModule(); assertLatest();
     const cacheFile = ports.directoryCacheFile?.() ?? null;
     const cache = cacheFile ? await readAgentNetDirectoryCache(cacheFile, assertLatest) : { devices: [], expiresAt: 0 };
@@ -258,22 +268,30 @@ export function createAgentNetNode(ports: AgentNetNodePorts) {
       cache.devices.push({ certificate: api.certificate, name: '', online: false, remoteControlEnabled: false, capabilities: [] });
     }
     members?.noteDirectory(cache.devices.filter((view) => view?.certificate?.deviceId).map((view) => ({ deviceId: view.certificate.deviceId, online: false })));
-    const stunServers: string[] = [];
+    let primaryStun: string | null = null;
+    let primaryMode: unknown;
     let relayUdpServer: string | undefined;
     let answered = false;
     try {
       const response = await ports.fetch(api.base + '/api/agent-net/info', { signal: AbortSignal.timeout(5000) });
-      const server = response.ok ? agentNetStunServer(api.base, await response.json()) : null;
+      const info: unknown = response.ok ? await response.json() : null;
+      const server = response.ok ? agentNetStunServer(api.base, info) : null;
       answered = response.ok;
-      if (server) { stunServers.push(server); relayUdpServer = server; lastUdpServer.set(api.base, server); }
+      if (answered && info && typeof info === 'object') primaryMode = (info as { mode?: unknown }).mode;
+      if (server) { primaryStun = server; relayUdpServer = server; lastUdpServer.set(api.base, server); }
       else if (answered) lastUdpServer.delete(api.base);
     } catch { /* An older relay publishes neither; the node stays on its WebSocket. */ }
     assertLatest();
     // As the Desktop (agentNetRuntime.ts): when /info cannot be read the last UDP server of this service is kept.
     const remembered = answered ? undefined : lastUdpServer.get(api.base);
-    if (remembered) { stunServers.push(remembered); relayUdpServer = remembered; }
+    if (remembered) { primaryStun = remembered; relayUdpServer = remembered; }
     if (listing) { await listing; assertLatest(); }
+    const allowPeerStun = peerOfficialBase !== null && primaryMode !== 'self-hosted';
+    const initialPeerStun = allowPeerStun ? getCachedPeerOfficialStunServer(peerOfficialBase) : null;
+    const stunServers = mergeStunServers(primaryStun, initialPeerStun);
+    const bindPort = ports.bindPort?.();
     const opened = await AgentNetWorkerSocket.open({ workerFile, client: api, assertCurrent, module, userId, stunServers, relayUdpServer,
+      ...(bindPort !== undefined ? { bindPort } : {}),
       cachedDirectory: cache.devices, directoryExpiresAt: cache.expiresAt,
       ...(members ? { peerRule: members.rule() } : {}),
       onDirectory(directory) {
@@ -283,6 +301,16 @@ export function createAgentNetNode(ports: AgentNetNodePorts) {
       log: ports.log, onPathChanged(deviceId, route) { if (route) connectedAt.set(deviceId, performance.now()); else connectedAt.delete(deviceId); } });
     try { assertLatest(); } catch (error) { opened.close(); throw error; }
     const previous = socket; socket = opened; client = api; previous?.close();
+    if (allowPeerStun && peerStunLookup?.pending) {
+      void peerStunLookup.pending.then((peerStun) => {
+        if (socket !== opened) return;
+        try { assertLatest(); } catch { return; }
+        const updated = mergeStunServers(primaryStun, peerStun);
+        if (updated.length !== stunServers.length || updated.some((server, index) => server !== stunServers[index])) {
+          opened.setStunServers?.(updated);
+        }
+      });
+    }
     const live = liveMembers();
     if (live) opened.restrictPeers?.(live.rule());
     if (sessionConfig) opened.useSessions?.(sessionConfig);

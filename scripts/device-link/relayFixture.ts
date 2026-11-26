@@ -2,6 +2,7 @@ import { once } from "node:events";
 import WebSocket, { WebSocketServer } from "ws";
 import {
   CONTROL_KINDS,
+  PROVIDER_SHARE_RELAY_CAPABILITY,
   ROUTED_KINDS,
   PROTOCOL_VERSION,
   WS_MAX_PAYLOAD_BYTES,
@@ -11,7 +12,7 @@ import {
 } from "../../packages/device-link-protocol/src/index";
 
 /** Test-only wire-contract fixture, NOT the independent production relay implementation. */
-export async function createRelayFixture() {
+export async function createRelayFixture(share?: { id: string; host: string; guest: string; member: string }) {
   const server = new WebSocketServer({
     host: "127.0.0.1",
     port: 0,
@@ -70,6 +71,7 @@ export async function createRelayFixture() {
             serverProtocolVersion: PROTOCOL_VERSION,
             deviceId: id,
             userId: "fixture-account",
+            ...(share ? { capabilities: [PROVIDER_SHARE_RELAY_CAPABILITY] } : {}),
           },
         });
         for (const peer of peers.values()) {
@@ -90,6 +92,18 @@ export async function createRelayFixture() {
         broadcast(peer.presence);
       } else if (ROUTED_KINDS.has(frame.kind)) {
         const target = peers.get(frame.dst ?? "");
+        if (frame.providerShare) {
+          const scope = frame.providerShare;
+          if (!share || scope.shareId !== share.id || !target) return;
+          const guest = { role: "guest", memberId: share.member } as const;
+          const host = { role: "host" } as const;
+          if (id === share.guest && frame.dst === share.host && scope.target.role === "host")
+            send(target.ws, { ...frame, providerShare: { ...scope, source: guest } });
+          else if (id === share.host && frame.dst === share.guest
+            && scope.target.role === "guest" && scope.target.memberId === share.member)
+            send(target.ws, { ...frame, providerShare: { ...scope, source: host } });
+          return;
+        }
         const code = !target
           ? "DEVICE_OFFLINE"
           : CONTROL_KINDS.has(frame.kind) &&

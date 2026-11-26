@@ -6,6 +6,7 @@ import { executeProviderShareManagementCommand, parseProviderShareCommand } from
 import { throwIpcError } from '../utils/ipcValidate.js';
 import { createProviderGroupCommandDeps, executeProviderGroupCommand, parseProviderGroupCommand } from './ipc.js';
 import { captureProviderManagementScope } from './managementScope.js';
+import { publicProviderGroupConfig, type ProviderGroupView } from '../../shared/providerGroup.js';
 
 export function parseProviderManagementRequest(raw: unknown): ProviderManagementRequest {
   if (!isProviderManagementRequest(raw)) throwIpcError('INVALID_PARAMS', 'Invalid provider management request');
@@ -36,5 +37,9 @@ export async function handleProviderManagementRequest(
     ? await executeProviderGroupCommand(createProviderGroupCommandDeps(options), request.command)
     : await executeProviderShareManagementCommand(request.command);
   assertCurrent();
+  if (request.action === 'manage-group' && request.command.action !== 'candidates') {
+    const view = result as ProviderGroupView;
+    return { result: { ...view, config: view.config ? publicProviderGroupConfig(view.config) : null }, respondedAt: Date.now() };
+  }
   return { result, respondedAt: Date.now() };
 }

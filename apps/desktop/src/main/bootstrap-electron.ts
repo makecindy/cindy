@@ -345,6 +345,7 @@ import {
   warmStaleProcessProvenance,
 } from './ownerNamespaceMigration.js';
 import { createAccountDeletionIpcHandlers } from './accountDeletionIpc';
+import { createAccountContactChangeHandlers } from './accountContactChange';
 import * as profileEdit from './profileEdit';
 import { uploadPublicAsset } from './ossPublicUpload';
 import { toSdrAvatarImage } from './hdrAvatarToSdr';
@@ -560,6 +561,12 @@ import {
   readDialogueWorkspaceSettings,
   writeDialogueWorkspaceDirectory,
 } from './dialogue-workspace-settings.js';
+import {
+  checkBuddyWorkspaceDirectoryWritable,
+  customBuddyWorkspaceRoot,
+  readBuddyWorkspaceSettings,
+  writeBuddyWorkspaceDirectory,
+} from './buddy-workspace-settings.js';
 import { writeDbSlimmingDevRelaunchSignal } from './localDb/devDbSlimmingRelaunch';
 import {
   cancelDbSlimmingStartupProgress,
@@ -567,6 +574,15 @@ import {
   subscribeDbSlimmingStartupProgress,
 } from './localDb/dbSlimmingStartupState';
 import { DB_SLIMMING_STARTUP_PROGRESS_CHANGED_CHANNEL } from '../shared/localDbMaintenance';
+import { WORKSPACE_MIGRATION_STARTUP_PROGRESS_CHANGED_CHANNEL } from '../shared/workspaceMigration';
+import { createWorkspaceMigrationIpcHandlers } from './workspace-migration/ipc';
+import {
+  getWorkspaceMigrationStartupProgress,
+  subscribeWorkspaceMigrationStartupProgress,
+} from './workspace-migration/startupState';
+import { companionHomes, isCompanionShadowed } from './companion-cloud/homes';
+import { botProfiles } from './localDb/schema';
+import { eq } from 'drizzle-orm';
 import {
   resolveBetterSqliteModuleEntry,
   resolveBetterSqliteNativeBinding,
@@ -609,7 +625,7 @@ import {
   stopAllPiSubagentRunsForExit,
 } from '@cindy/maker-core/pi-subagent-runs';
 
-import { onQuit, installQuitHandler } from './lifecycle';
+import { onQuit, installQuitHandler, trackMainWindow } from './lifecycle';
 import { initStartupDiagnostics, noteSystemResume, noteSystemSuspend } from './startup-diagnostics';
 import { isRunningUnderArm64Translation } from './arm64Translation';
 import { createStartupGateStallReporter } from './startupGateStallReport';
@@ -1372,6 +1388,8 @@ import {
   getGoalTeardownGeneration,
 } from './goal-host/index.js';
 import { startLearnHost, getLearnController, resetLearnController } from './learn-host/index.js';
+import { admitPluginEngineSwitchTarget } from './maker-ipc/pluginEngineSessionAdmission.js';
+import { listPluginEngineViews } from './maker-ipc/pluginEnginesIpc.js';
 import { fetchHubSkillReference } from './learn-host/hubReference.js';
 import { registerLearnIpc, broadcastLearnEvent } from './learn-host/registerIpc.js';
 import { registerGoalHandlers, broadcastGoalStatus } from './maker-ipc/goal.js';
@@ -1863,6 +1881,8 @@ async function attemptStartSchedulerOnce(): Promise<void> {
     startLearnHost({
       maker,
       broadcast: broadcastLearnEvent,
+      admitPluginEngine: (target) => admitPluginEngineSwitchTarget(target as Parameters<typeof admitPluginEngineSwitchTarget>[0],
+        listPluginEngineViews()),
       fetchHubSkill: (slug, catalogScope) =>
         fetchHubSkillReference(learnMarketService, slug, catalogScope),
       ...automationGitBaselineHooks,
@@ -3187,7 +3207,18 @@ authManager.setStableOwnerPostCommitTask(async ({ reason, scopeKey, dataOwnerId 
     && getActiveAppSession().dataOwnerId === dataOwnerId;
   if (!isCurrent()) return 'deferred';
   scheduleNativeHistoryBackupCleanup();
-  if (getMakerIfReady()) refreshHostToolProviderOwner(getActiveDataOwnerPushStamp());
+  if (getMakerIfReady()) {
+    refreshHostToolProviderOwner(getActiveDataOwnerPushStamp());
+  } else if (dataOwnerId !== null && makerProviderRefreshConfigured) {
+    // Login can discard Maker before residents resume. The normal constructor
+    // registers this owner's Host tools, even before post-DB initialization.
+    try {
+      getMakerCore();
+    } catch {
+      // Keep the existing post-DB fallback without logging initialization data.
+      ownerBackgroundLog.warn('Host tool registration before resident plugin startup failed');
+    }
+  }
   const builtinOutcome = await builtinPostCommitStep.run(scopeKey, async () => {
     if (!isCurrent()) return 'deferred';
     const outcome = await runStableOwnerPostCommitTask(reason, { scopeKey, dataOwnerId });
@@ -4782,6 +4813,7 @@ const createWindow = () => {
   installSelectionContextMenu(mainWindow);
   installWindowResponsivenessDiagnostics(mainWindow, { label: 'main' });
   mainWindowRef = mainWindow;
+  trackMainWindow(mainWindow, () => isQuitting);
   applyMainWindowBackgroundThrottling();
   applyPageZoomLevel(mainWindow, getPersistedWindowZoom());
   mainWindow.webContents.on('did-finish-load', () => {
@@ -5403,11 +5435,11 @@ const registerIpcHandlers = () => {
     clearTimeout(summaryTimer);
     stopIslandUpdates();
   });
-  setSessionsSubscribedListener((controllerDeviceId) => {
+  setSessionsSubscribedListener((controllerDeviceId, sessionId) => {
     publishHostTaskActivity(readHostActivity, controllerDeviceId);
     getAgentIslandService()?.replaySessionActivity((payload) => {
       pushSessionActivityToController(controllerDeviceId, payload);
-    });
+    }, sessionId);
   });
 
   // macOS 菜单栏余量:原生 helper 在 Agent Island 之后启动,复用它的任务活动订阅。
@@ -7200,6 +7232,59 @@ const registerIpcHandlers = () => {
   ipcMain.handle('auth:account-deletion:consume-restored-notice', () =>
     accountDeletionHandlers.consumeRestoredNotice(),
   );
+
+  // ── 换绑登录联系方式 IPC(设置 → 用户卡片;业务体在 accountContactChange.ts) ──
+  // changeTicket 与 account token 只留在 main,renderer 只拿打码展示值与错误码。
+  // 流程按发起窗口(webContents id)隔离,窗口销毁时作废它的流程。
+  const contactChangeLog = createLogger('accountContactChange');
+  const contactChangeHandlers = createAccountContactChangeHandlers({
+    getSession: () => authManager.getContactChangeSession(),
+    isSessionCurrent: (session) => authManager.isContactChangeSessionCurrent(session),
+    issueAccountToken: (session) =>
+      authManager.issuePassportAccountToken(session.realm, session.passportId),
+    createClient: (realm) => authManager.createContactChangeAuthClient(realm),
+    runProtected: (session, request) => authManager.runProtectedAccountRequest(session, request),
+    reloadProfile: () => authManager.reloadCurrentMembershipProfile(),
+    now: () => Date.now(),
+    logWarn: (message, error) => contactChangeLog.warn(message, error),
+  });
+  const contactChangeOwners = new Set<number>();
+  const contactChangeOwner = (event: Electron.IpcMainInvokeEvent): number => {
+    const sender = event.sender;
+    const owner = sender.id;
+    if (!contactChangeOwners.has(owner)) {
+      contactChangeOwners.add(owner);
+      sender.once('destroyed', () => {
+        contactChangeOwners.delete(owner);
+        contactChangeHandlers.cancel(owner);
+      });
+    }
+    return owner;
+  };
+  ipcMain.handle('auth:contact-change:get-availability', (event) => {
+    assertTrustedAppRendererEvent(event);
+    return contactChangeHandlers.getAvailability();
+  });
+  ipcMain.handle('auth:contact-change:request-current-code', (event) => {
+    assertTrustedAppRendererEvent(event);
+    return contactChangeHandlers.requestCurrentCode(contactChangeOwner(event));
+  });
+  ipcMain.handle('auth:contact-change:verify-current-code', (event, code: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    return contactChangeHandlers.verifyCurrentCode(contactChangeOwner(event), code);
+  });
+  ipcMain.handle('auth:contact-change:request-new-code', (event, value: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    return contactChangeHandlers.requestNewCode(contactChangeOwner(event), value);
+  });
+  ipcMain.handle('auth:contact-change:confirm', (event, input: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    return contactChangeHandlers.confirm(contactChangeOwner(event), input);
+  });
+  ipcMain.handle('auth:contact-change:cancel', (event) => {
+    assertTrustedAppRendererEvent(event);
+    contactChangeHandlers.cancel(event.sender.id);
+  });
 
   // ── Profile 编辑 IPC(设置 → 用户卡片编辑;业务体在 profileEdit.ts,
   //    资料直写 auth-server,头像经 oss-server 预签名直传) ──
@@ -9782,6 +9867,47 @@ const registerIpcHandlers = () => {
       });
     }
 
+    const buddyWorkspaceHandlers = createDialogueWorkspaceHandlers({
+      captureScope: () => {
+        if (!getActiveAppSession().dataOwnerId || isAppSessionBoundaryPending()) {
+          throwIpcError('PRECONDITION_FAILED', 'buddy workspace requires an active owner');
+        }
+        return activeOwnerScopeKey();
+      },
+      isScopeCurrent: (scope) => !isAppSessionBoundaryPending() && activeOwnerScopeKey() === scope,
+      read: readBuddyWorkspaceSettings,
+      write: writeBuddyWorkspaceDirectory,
+      chooseDirectory: async () => {
+        const options: Electron.OpenDialogOptions = {
+          title: t('settings.about.storage.buddyWorkspaceDirectoryChoose'),
+          properties: ['openDirectory', 'createDirectory'],
+        };
+        const ownerWindow = BrowserWindow.getFocusedWindow() ?? mainWindowRef;
+        const result =
+          ownerWindow && !ownerWindow.isDestroyed()
+            ? await dialog.showOpenDialog(ownerWindow, options)
+            : await dialog.showOpenDialog(options);
+        return result.canceled ? null : (result.filePaths[0] ?? null);
+      },
+      resolveDirectory: (selected) =>
+        customBuddyWorkspaceRoot(selected, path.basename(ownerScopedUserDataPath())),
+      checkWritable: (directory) =>
+        checkBuddyWorkspaceDirectoryWritable(ownerScopedUserDataPath(), directory),
+      openDirectory: (directory) => shell.openPath(directory),
+    });
+    for (const action of ['get', 'choose', 'reset', 'open'] as const) {
+      ipcMain.handle('buddy-workspace:' + action, async (event) => {
+        assertTrustedAppRendererEvent(event);
+        try {
+          return await buddyWorkspaceHandlers[action]();
+        } catch (error) {
+          if (isIpcError(error)) throw error;
+          dbClientLog.warn('buddy workspace settings request failed', { action });
+          throwIpcError('INTERNAL', 'buddy workspace settings request failed');
+        }
+      });
+    }
+
     // Projects root and "new project from task": native pickers stay on this computer (not in device-link).
     const chooseProjectsFolder = async () => {
       const options: Electron.OpenDialogOptions = {
@@ -10019,6 +10145,117 @@ const registerIpcHandlers = () => {
       const target = mainWindowRef;
       if (!target || target.isDestroyed() || target.webContents.isDestroyed()) return;
       target.webContents.send(DB_SLIMMING_STARTUP_PROGRESS_CHANGED_CHANNEL, progress);
+    });
+
+    const workspaceMigrationHandlers = createWorkspaceMigrationIpcHandlers({
+      captureOwner: () => {
+        const ownerId = getActiveAppSession().dataOwnerId;
+        if (!ownerId || isAppSessionBoundaryPending()) return null;
+        return {
+          ownerId,
+          scopeKey: activeOwnerScopeKey(),
+          ownerRoot: ownerScopedUserDataPath(),
+        };
+      },
+      isOwnerCurrent: ({ ownerId, scopeKey }) =>
+        !isAppSessionBoundaryPending() &&
+        getActiveAppSession().dataOwnerId === ownerId &&
+        activeOwnerScopeKey() === scopeKey,
+      canSchedule: () => process.env.XDT_PASSIVE_SHARED_USER_DATA !== '1',
+      assertLocalBuddy: async (botId) => {
+        const db = getDbClient();
+        const [profile] = await db.drizzle
+          .select({ status: botProfiles.status })
+          .from(botProfiles)
+          .where(eq(botProfiles.id, botId))
+          .limit(1);
+        if (!profile || profile.status === 'deleting') {
+          throwIpcError('NOT_FOUND', 'BUDDY_NOT_FOUND');
+        }
+        if (isCompanionShadowed(botId) || !companionHomes.isHomeHere(botId)) {
+          throwIpcError('PRECONDITION_FAILED', 'BUDDY_WORKSPACE_IS_ON_ANOTHER_COMPUTER');
+        }
+      },
+      selectTargetParentDirectory: async () => {
+        const options = {
+          title: t('bots.homeFolder.workspaceLocation.chooseDialogTitle'),
+          properties: ['openDirectory', 'createDirectory'] as Array<
+            'openDirectory' | 'createDirectory'
+          >,
+        };
+        const ownerWindow = BrowserWindow.getFocusedWindow() ?? mainWindowRef;
+        const result =
+          ownerWindow && !ownerWindow.isDestroyed()
+            ? await dialog.showOpenDialog(ownerWindow, options)
+            : await dialog.showOpenDialog(options);
+        return result.canceled ? null : (result.filePaths[0] ?? null);
+      },
+      relaunch: (botId) => {
+        dbClientLog.info('buddy workspace migration relaunch requested', { botId });
+        if (app.isPackaged) {
+          app.relaunch({ args: process.argv.slice(1) });
+        } else {
+          writeDbSlimmingDevRelaunchSignal(`workspace-migration:${botId}`);
+        }
+        app.quit();
+      },
+    });
+    const invokeWorkspaceMigrationIpc = async <T>(
+      action: string,
+      operation: () => T | Promise<T>,
+    ): Promise<T> => {
+      try {
+        return await operation();
+      } catch (error) {
+        if (isIpcError(error)) throw error;
+        dbClientLog.error('workspace migration IPC failed', {
+          action,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        throwIpcError(
+          'INTERNAL',
+          error instanceof Error ? error.message : 'workspace migration request failed',
+        );
+      }
+    };
+    ipcMain.handle('local-db:bots:workspace-migration:status', (event, botId) => {
+      assertTrustedAppRendererEvent(event);
+      return invokeWorkspaceMigrationIpc('status', () =>
+        workspaceMigrationHandlers.getStatus(botId),
+      );
+    });
+    ipcMain.handle('local-db:bots:workspace-migration:choose-target', (event, botId, useDefault) => {
+      assertTrustedAppRendererEvent(event);
+      return invokeWorkspaceMigrationIpc('choose-target', () =>
+        workspaceMigrationHandlers.chooseTarget(botId, useDefault),
+      );
+    });
+    ipcMain.handle('local-db:bots:workspace-migration:schedule', (event, input) => {
+      assertTrustedAppRendererEvent(event);
+      return invokeWorkspaceMigrationIpc('schedule', () =>
+        workspaceMigrationHandlers.schedule(input),
+      );
+    });
+    ipcMain.handle('local-db:bots:workspace-migration:cancel', (event, botId) => {
+      assertTrustedAppRendererEvent(event);
+      return invokeWorkspaceMigrationIpc('cancel', () =>
+        workspaceMigrationHandlers.cancel(botId),
+      );
+    });
+    ipcMain.handle('local-db:bots:workspace-migration:restart', (event, botId) => {
+      assertTrustedAppRendererEvent(event);
+      return invokeWorkspaceMigrationIpc('restart', () =>
+        workspaceMigrationHandlers.restartForPending(botId),
+      );
+    });
+    ipcMain.handle('local-db:bots:workspace-migration:startup-progress', (event) => {
+      assertTrustedAppRendererEvent(event);
+      return getWorkspaceMigrationStartupProgress();
+    });
+    subscribeWorkspaceMigrationStartupProgress((progress) => {
+      const target = mainWindowRef;
+      if (!target || target.isDestroyed() || target.webContents.isDestroyed()) return;
+      target.webContents.send(WORKSPACE_MIGRATION_STARTUP_PROGRESS_CHANGED_CHANNEL, progress);
     });
   }
 

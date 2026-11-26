@@ -79,6 +79,9 @@ import { observeRemoteSendPush } from './remoteSendTrace.js';
 import {
   computeAllowlistHash,
   canCoalesceRemoteListing,
+  normalizeRemoteListingArgsKey,
+  isPeerResetRetryableReadChannel,
+  parseInvokeTransferOptions,
   isInteractiveInvoke,
   isCompletedInvokeRetryableReadChannel,
   INVOKE_TIMEOUT_OVERRIDES_MS,
@@ -184,6 +187,7 @@ import type * as broadcastTap from './broadcast-tap';
 import { createOfflinePushQueue } from './offlinePushQueue';
 import { SessionPatchStage, type SessionPatch } from './sessionPatchStage';
 import { LatestStatePushStage, latestStatePushKey } from './latestStatePushStage';
+import { ScheduleEventPushStage } from './scheduleEventPushStage';
 import { createPushFailureLog } from './pushFailureLog';
 import * as subscriptions from './subscriptions';
 import { LEGACY_TOPIC, type ActiveController } from './subscriptions';
@@ -358,8 +362,8 @@ interface QueuedRemoteInvokeResult {
   queuedAt: number;
 }
 
-/** `sessions` 订阅出现时通知 host replay 当前列表级轻量状态。 */
-type SessionsSubscribedListener = (controllerDeviceId: string) => void;
+/** 列表或共享任务订阅恢复时通知 host 定向补发活动状态。 */
+type SessionsSubscribedListener = (controllerDeviceId: string, sessionId?: string) => void;
 
 /**
  * 一个待发批段。按 ownerStamp 分段:ownerStamp 是数据归属水印、批内必须一致,
@@ -1649,9 +1653,9 @@ function shouldAcquireRemoteInvokeBusyLease(
   return !UPDATE_RELAUNCH_NON_BLOCKING_INVOKE_CHANNELS.has(payload.channel);
 }
 
-function notifySessionsSubscribed(controllerDeviceId: string): void {
+function notifySessionsSubscribed(controllerDeviceId: string, sessionId?: string): void {
   try {
-    onSessionsSubscribed?.(controllerDeviceId);
+    onSessionsSubscribed?.(controllerDeviceId, sessionId);
   } catch (err) {
     log.warn(`sessions subscribe replay failed for ${shortId(controllerDeviceId)}: ${String(err)}`);
   }
@@ -2222,10 +2226,66 @@ function clearAllMakerEventBatchStages(): void {
 const sessionActivityStages = new Map<string, SessionActivityStage>();
 const sessionPatchStages = new Map<string, SessionPatchStage>();
 const latestStatePushStages = new Map<string, LatestStatePushStage>();
+const scheduleEventPushStages = new Map<string, ScheduleEventPushStage>();
 
 function clearLatestStatePushStage(dst: string): void {
   latestStatePushStages.get(dst)?.dispose();
   latestStatePushStages.delete(dst);
+}
+
+function clearScheduleEventPushStage(dst: string): void {
+  scheduleEventPushStages.get(dst)?.dispose();
+  scheduleEventPushStages.delete(dst);
+}
+
+function wakePeerPushStages(dst?: string): void {
+  if (dst !== undefined) {
+    scheduleEventPushStages.get(dst)?.nudge();
+    latestStatePushStages.get(dst)?.nudge();
+    return;
+  }
+  for (const stage of scheduleEventPushStages.values()) stage.nudge();
+  for (const stage of latestStatePushStages.values()) stage.nudge();
+}
+
+function stageScheduleEventPush(
+  dst: string,
+  payload: unknown,
+  ownerStamp?: PushOwnerStamp,
+): void {
+  let stage = scheduleEventPushStages.get(dst);
+  if (stage && !makerEventBatchOwnerStampEquals(stage.ownerStamp, ownerStamp)) {
+    clearScheduleEventPushStage(dst);
+    stage = undefined;
+  }
+  if (!stage) {
+    const owner = broadcastTap.captureDataOwnerBroadcastScope();
+    const subscribed = () => broadcastTap.isDataOwnerBroadcastScopeCurrent(owner)
+      && subscriptions.getControllersForTopic('sessions').includes(dst);
+    const created: ScheduleEventPushStage = new ScheduleEventPushStage(ownerStamp,
+      () => {
+        if (!subscribed()) {
+          if (scheduleEventPushStages.get(dst) === created) clearScheduleEventPushStage(dst);
+          return false;
+        }
+        return canSendSessionState(dst);
+      },
+      async (item, isCurrent) => {
+        let failure: unknown;
+        await sendBotCheckedPush(dst, 'maker:schedule:event', item, (projected) => {
+          if (!isCurrent() || !subscribed()) return;
+          sendSessionState(dst, 'maker:schedule:event', projected, ownerStamp);
+          observeRemoteSendPush('maker:schedule:event', projected);
+        }, (error) => { failure = error; });
+        if (failure) throw failure;
+      },
+      (error) => reportPushFailure(dst, 'maker:schedule:event', error),
+      () => activeClient?.hasReliableSendProgress?.(dst) !== false,
+    );
+    stage = created;
+    scheduleEventPushStages.set(dst, stage);
+  }
+  stage.enqueue(payload);
 }
 
 /**
@@ -2266,7 +2326,10 @@ function stageLatestStatePush(
           observeRemoteSendPush(item.channel, projected);
         }, (error) => { failure = error; });
         if (failure) throw failure;
-      }, (item, error) => reportPushFailure(dst, item.channel, error));
+      },
+      (item, error) => reportPushFailure(dst, item.channel, error),
+      () => activeClient?.hasReliableSendProgress?.(dst) !== false,
+    );
     stage = created;
     latestStatePushStages.set(dst, stage);
   }
@@ -2424,6 +2487,7 @@ function clearAllSessionActivityStages(): void {
   for (const dst of [...sessionActivityStages.keys()]) clearSessionActivityStage(dst);
   for (const dst of [...sessionPatchStages.keys()]) clearSessionPatchStage(dst);
   for (const dst of [...latestStatePushStages.keys()]) clearLatestStatePushStage(dst);
+  for (const dst of [...scheduleEventPushStages.keys()]) clearScheduleEventPushStage(dst);
 }
 
 // Same-account iPhones opt in. Use the existing owner-fenced, coalescing sessions
@@ -2441,7 +2505,7 @@ function publishHostTaskActivity(read: () => ForegroundHostTaskActivity | null, 
 }
 
 /**
- * 会话活动 replay 的**定向**投递:只发给刚完成 sessions 订阅的那一台控制端。
+ * 会话活动 replay 的**定向**投递:只发给刚完成列表或共享任务订阅的控制端。
  * 走同一条 latest-wins 暂存链路(与 tap 路径同 key 合并),不经 topic 扇出——
  * 一台控制端 subscribe 不应把全量活动快照重复灌给其它所有控制端
  * (v0.1.26 线上:两台手机互相被对方的 subscribe 风暴灌爆窗口)。
@@ -2451,7 +2515,9 @@ function pushSessionActivityToController(
   payload: unknown,
 ): void {
   if (!activeClient) return;
-  if (!subscriptions.getControllersForTopic('sessions').includes(controllerDeviceId)) return;
+  const sessionId = sessionActivityKey(payload);
+  const topic: Topic = isSharedTaskPeer(controllerDeviceId) && sessionId ? `session:${sessionId}` : 'sessions';
+  if (!subscriptions.getControllersForTopic(topic).includes(controllerDeviceId)) return;
   stageSessionActivityPush(controllerDeviceId, payload, broadcastTap.getSafeDataOwnerPushStamp?.());
 }
 
@@ -2738,6 +2804,13 @@ function forwardPush(channel: string, payload: unknown, ownerStamp?: PushOwnerSt
       stageLatestStatePush(dst, latestStateKey, channel, targetPayload, ownerStamp);
       continue;
     }
+    if (channel === 'maker:schedule:event' && !isSharedTaskPeer(dst) && !isProviderSharePeer(dst)) {
+      const existingScheduleStage = scheduleEventPushStages.get(dst);
+      if (!canSendSessionState(dst) || (existingScheduleStage && existingScheduleStage.size > 0)) {
+        stageScheduleEventPush(dst, targetPayload, ownerStamp);
+        continue;
+      }
+    }
     // agent 事件流是本条链路的帧数大头:对声明了微批能力的控制端合并成
     // 「每窗口一帧」(见 stageMakerEventPush)。未声明能力的控制端照旧逐帧,
     // 因此旧控制端零感知。sessionId 取自 topic 路由所用的同一字段,取不到时
@@ -3008,6 +3081,7 @@ function deactivateControllerState(
   clearSessionActivityStage(deviceId);
   clearSessionPatchStage(deviceId);
   clearLatestStatePushStage(deviceId);
+  clearScheduleEventPushStage(deviceId);
   clearSessionSyncStage(deviceId);
   clearMakerEventBatchStage(deviceId);
   cancelLinkAcceptRetry(deviceId, preservePendingOpen);
@@ -3116,6 +3190,7 @@ function wireInboundDispatch(client: PeerLinks): () => void {
   activeClient = client;
   // 历史页增量的被控端基页与列表增量基准同时释放：控制端被主动关掉时，普通断线保留。
   const offReleased = client.onInboundPeerReleased((peer) => clearHistoryViewDeltas(peer));
+  const offProgress = client.onPeerSendProgress?.((peer) => wakePeerPushStages(peer));
   const offFrame = client.onFrame((env: Envelope) => {
     // 可靠传输的 ACK 边界是“已进入本地执行状态机”，不是“耗时 IPC 已执行完成”。
     // handleInvoke 会在第一次 await 前登记 in-flight requestId 去重；这里不把它的
@@ -3126,6 +3201,7 @@ function wireInboundDispatch(client: PeerLinks): () => void {
   });
   return () => {
     offReleased();
+    offProgress?.();
     offFrame();
   };
 }
@@ -3136,6 +3212,7 @@ async function handleFrame(client: PeerLinks, env: Envelope): Promise<void> {
     case 'link-open':
       if (!src || !env.id) return;
       handleLinkOpen(client, src, env.id, env.payload as LinkOpenPayload | undefined);
+      wakePeerPushStages(src);
       return;
     case 'link-close':
       if (!src) return;
@@ -3167,6 +3244,7 @@ async function handleFrame(client: PeerLinks, env: Envelope): Promise<void> {
       return;
     case 'invoke':
       if (!src || !env.id) return;
+      wakePeerPushStages(src);
       await handleInvoke(client, src, env.id, env.payload as InvokePayload);
       return;
     default:
@@ -3430,6 +3508,19 @@ async function handleInvoke(
       throw new DeviceLinkError('BACKPRESSURE', 'admission failure invoke-result could not be queued');
     }
     return;
+  }
+  if (!isScopedPeer(src) && payload?.transfer) {
+    const transferOpts = parseInvokeTransferOptions(payload.transfer);
+    if (transferOpts?.retired) {
+      for (const retiredId of transferOpts.retired) {
+        if (retiredId === requestId) continue;
+        const retiredKey = `${src}\u0000${retiredId}`;
+        const retiredQueued = remoteInvokeResultOutbox.get(retiredKey);
+        if (retiredQueued?.channel && isPeerResetRetryableReadChannel(retiredQueued.channel)) {
+          removeRemoteInvokeResultOutboxEntry(retiredKey, false);
+        }
+      }
+    }
   }
   const queued = remoteInvokeResultOutbox.get(cacheKey);
   if (queued) {
@@ -3781,7 +3872,10 @@ function currentRemoteInvokeAdmissionFailure(src: string): InvokeResultPayload |
 }
 
 function remoteListingFlightKey(src: string, payload: InvokePayload): string {
-  return `${src}\u0000${payload.channel}\u0000${JSON.stringify(payload.args ?? [])}`;
+  const normalized = normalizeRemoteListingArgsKey(payload.channel, payload.args);
+  return normalized
+    ? `${src}\u0000${normalized.key}`
+    : `${src}\u0000${payload.channel}\u0000${JSON.stringify(payload.args ?? [])}`;
 }
 
 function isDbWorkerOverloadedError(message: string): boolean {
@@ -4231,6 +4325,7 @@ function scheduleRemoteInvokeResultOutboxFlush(): void {
 
 /** ws-online 等连接级事件的全量 flush 入口(index.ts 接线);挂起的慢扫描立即换快挡。 */
 function flushRemoteInvokeResultOutboxOnReconnect(): void {
+  wakePeerPushStages();
   if (remoteInvokeResultOutbox.size === 0) return;
   clearRemoteInvokeResultOutboxTimer();
   flushRemoteInvokeResultOutbox();
@@ -4729,6 +4824,7 @@ function handleSubscriptionFrame(
       clearSessionActivityStage(src);
       clearSessionPatchStage(src);
       clearLatestStatePushStage(src);
+      clearScheduleEventPushStage(src);
     }
     // 退订 session:<id> 后该会话的待发事件批同样不应再投递(控制端已不要这条流)。
     for (const topic of topics) {
@@ -4747,6 +4843,13 @@ function handleSubscriptionFrame(
     // 不先收口就会让新帧先于断线前的文本送达,重现「终态后冒出文本」。
     flushMakerEventBatchesFor(src);
     drainOfflinePushQueueTo(src, topics);
+    // Replay after the backlog so an old running frame cannot overwrite the
+    // current terminal state. Shared guests subscribe to their task, not lists.
+    if (isSharedTaskPeer(src)) {
+      for (const topic of topics) {
+        if (topic.startsWith('session:')) notifySessionsSubscribed(src, topic.slice('session:'.length));
+      }
+    }
     if (subscriptions.controllerSupports(src, CONTROLLER_CAPABILITY_SESSION_TEXT_SNAPSHOT_V1)) {
       // Capture and enqueue synchronously: old batches/backlog precede this
       // snapshot and subsequent live deltas follow it through the same DB gate.
@@ -5748,6 +5851,19 @@ const __testing = {
   latestStatePushStageSize(deviceId: string): number {
     return latestStatePushStages.get(deviceId)?.size ?? 0;
   },
+  latestStatePushStageHasActiveTimer(deviceId: string): boolean {
+    return latestStatePushStages.get(deviceId)?.hasActiveTimer ?? false;
+  },
+  scheduleEventPushStageSize(deviceId: string): number {
+    return scheduleEventPushStages.get(deviceId)?.size ?? 0;
+  },
+  scheduleEventPushStageBytes(deviceId: string): number {
+    return scheduleEventPushStages.get(deviceId)?.byteSize ?? 0;
+  },
+  scheduleEventPushStageHasActiveTimer(deviceId: string): boolean {
+    return scheduleEventPushStages.get(deviceId)?.hasActiveTimer ?? false;
+  },
+  wakePeerPushStages,
   sessionActivityWindowSoftCap: SESSION_ACTIVITY_WINDOW_SOFT_CAP,
   sessionActivityStageMaxKeys: SESSION_ACTIVITY_STAGE_MAX_KEYS,
   sessionActivityDrainRetryMs: SESSION_ACTIVITY_DRAIN_RETRY_MS,
