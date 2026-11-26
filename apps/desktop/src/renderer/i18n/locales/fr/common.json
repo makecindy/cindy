@@ -345,7 +345,7 @@
     "tabOwned": "Partagées par moi",
     "startIntro": "Invitez un coéquipier à consulter tout le contenu de cette tâche et à travailler avec le même Agent.",
     "runsOnThisDevice": "S'exécute sur cet appareil",
-    "inviteNotice": "Toute personne disposant du lien d'invitation peut rejoindre la tâche après s'être connectée, avec le même accès à l'Agent que l'hôte.",
+    "inviteNotice": "Toute personne disposant du lien d'invitation peut rejoindre la tâche après s'être connectée, avec le même accès à l'Agent que l'hôte. Les invités peuvent consulter les modifications en cours de tout le dépôt Git, même si seul un sous-dossier est partagé.",
     "offlineAutoClose": "Le partage prend fin automatiquement si l'ordinateur de l'hôte reste hors ligne.",
     "inviteBoxHint": "Envoyez le lien à votre coéquipier. Il peut l'ouvrir pour rejoindre la tâche, ou le coller dans « Rejoindre une tâche partagée » dans Cindy.",
     "invitationMessage": "Vous êtes invité à rejoindre « {{title}} »\n{{link}}\nOuvrez le lien pour rejoindre la tâche. Si Cindy ne s'ouvre pas, choisissez « Rejoindre une tâche partagée » dans Cindy et collez ce lien.",
@@ -406,7 +406,7 @@
       "progress": "Part actuelle {{used}} % · limite {{limit}} %",
       "paused": "Ce modèle est en pause. Choisissez un autre modèle disponible.",
       "recommendation": "Recommandé : {{model}}",
-      "unsupported": "Les limites de part par modèle ne sont pas encore prises en charge pour ce groupe de fournisseurs.",
+      "unsupported": "Les limites de part par modèle ne sont pas encore prises en charge pour ce groupe d'ordinateurs.",
       "basis": "7 derniers jours calendaires · jetons d'entrée + de sortie, hors cache",
       "maxPercent": "Part maximale de la consommation personnelle",
       "empty": "Aucune consommation enregistrée",
@@ -505,14 +505,14 @@
         "confirm": "Retirer le partage"
       },
       "reshare": {
-        "applying": "souhaite l'utiliser via le groupe de fournisseurs de {{owner}}",
+        "applying": "souhaite l'utiliser via le groupe d'ordinateurs de {{owner}}",
         "requestedAt": "Demandé {{time}}",
         "usageHint": "Si vous acceptez, les sessions de {{name}} pourront s'exécuter sur cet ordinateur, et la consommation sera comptabilisée pour {{owner}}",
         "approve": "Accepter",
         "reject": "Refuser",
         "summaryUsing_one": "{{count}} personne l'utilise via le groupe de fournisseurs de {{owner}}",
-        "summaryUsing_other": "{{count}} personnes l'utilisent via le groupe de fournisseurs de {{owner}}",
-        "summaryOwner": "Via le groupe de fournisseurs de {{owner}}",
+        "summaryUsing_other": "{{count}} personnes l'utilisent via le groupe d'ordinateurs de {{owner}}",
+        "summaryOwner": "Via le groupe d'ordinateurs de {{owner}}",
         "summaryDeclined_one": "{{count}} refusée",
         "summaryDeclined_other": "{{count}} refusées",
         "stateApproved": "Accepté",
@@ -520,10 +520,10 @@
         "revoke": "Retirer l'accord",
         "revokeAria": "Retirer l'accord donné à {{name}}",
         "approveAria": "Accepter que {{name}} l'utilise",
-        "toastApproved": "{{name}} peut désormais utiliser {{provider}} via le groupe de fournisseurs de {{owner}}",
+        "toastApproved": "{{name}} peut désormais utiliser {{provider}} via le groupe d'ordinateurs de {{owner}}",
         "toastRejected": "Demande de {{name}} refusée",
         "toastRevoked": "Accord retiré pour {{name}}. Les sessions en cours d'exécution ont été arrêtées.",
-        "listTitle": "L'utilisent via le groupe de fournisseurs de {{owner}}",
+        "listTitle": "L'utilisent via le groupe d'ordinateurs de {{owner}}",
         "summaryUsing_many": "{{count}} personnes l'utilisent via le groupe de fournisseurs de {{owner}}",
         "summaryDeclined_many": "{{count}} refusées"
       },
@@ -571,7 +571,7 @@
       "requestedAt": "Demandé {{time}} via votre lien de partage",
       "pairingHint": "Avant d'approuver, vous pouvez lui demander via le canal par lequel vous avez envoyé le lien : « Quel code d'appairage voyez-vous ? » Approuvez s'il correspond.",
       "callout": "Une fois la demande approuvée, {{name}} pourra utiliser les modèles {{provider}} dans ses propres sessions. L'Agent s'exécute sur cet ordinateur et la consommation est imputée à votre {{provider}}. Vous pouvez suspendre ou retirer l'accès à tout moment dans « {{provider}} · Accès distant et partage ».",
-      "calloutGroup": "Une fois la demande approuvée, {{name}} pourra utiliser les modèles {{provider}} dans ses propres sessions. Le groupe de fournisseurs choisit l'ordinateur qui exécute l'Agent, et la consommation est imputée à votre {{provider}}. Vous pouvez suspendre ou retirer l'accès à tout moment dans « {{provider}} · Accès distant et partage ».",
+      "calloutGroup": "Une fois la demande approuvée, {{name}} pourra utiliser les modèles {{provider}} dans ses propres sessions. Le groupe d'ordinateurs choisit l'ordinateur qui exécute l'Agent, et la consommation est imputée à votre {{provider}}. Vous pouvez suspendre ou retirer l'accès à tout moment dans « {{provider}} · Accès distant et partage ».",
       "calloutRemote": "Une fois la demande approuvée, {{name}} pourra utiliser les modèles {{provider}} dans ses propres sessions. L'Agent s'exécute sur l'ordinateur qui héberge ce fournisseur et la consommation est imputée à votre {{provider}}. Vous pouvez suspendre ou retirer l'accès à tout moment dans « {{provider}} · Accès distant et partage ».",
       "calloutClaudeEmail": "Pendant que {{name}} l'utilise, l'Agent peut voir l'adresse e-mail avec laquelle vous vous connectez à Claude.",
       "calloutUnknown": "Si vous ne connaissez pas cette personne, refusez ; le lien cesse de fonctionner une fois la demande refusée.",
@@ -711,7 +711,7 @@
       "rejectedTitle": "Demande de partage refusée",
       "rejectedBody": "{{name}} a refusé de partager {{provider}}",
       "reshareTitle": "Nouvelle demande d'utilisation",
-      "reshareBody": "{{name}} souhaite utiliser votre {{provider}} partagé via le groupe de fournisseurs de {{owner}}"
+      "reshareBody": "{{name}} souhaite utiliser votre {{provider}} partagé via le groupe d'ordinateurs de {{owner}}"
     },
     "runLimits": {
       "title": "Limites de sessions à distance",
@@ -767,7 +767,7 @@
   },
   "providerGroup": {
     "management": {
-      "note": "Gestion du groupe de fournisseurs sur {{device}}. Les modifications sont enregistrées sur cet ordinateur ; gardez-le en ligne.",
+      "note": "Gestion du groupe d'ordinateurs sur {{device}}. Les modifications sont enregistrées sur cet ordinateur ; gardez-le en ligne.",
       "unsupported": "La version de Cindy sur l'ordinateur qui héberge ce groupe ne prend pas encore en charge la gestion à distance. Mettez d'abord à jour Cindy sur cet ordinateur."
     },
     "page": {
@@ -839,27 +839,13 @@
       "computerCount_many": "{{count}} ordinateurs"
     },
     "section": {
-      "title": "Groupe de fournisseurs",
+      "title": "Groupe d'ordinateurs",
       "addComputer": "Ajouter un ordinateur",
       "delete": "Supprimer le groupe",
       "empty": "Ajoutez {{provider}} depuis vos autres ordinateurs : les tâches en choisiront un automatiquement",
-      "loading": "Chargement du groupe de fournisseurs…",
-      "loadFailed": "Impossible de charger le groupe de fournisseurs",
+      "loading": "Chargement du groupe d'ordinateurs…",
+      "loadFailed": "Impossible de charger le groupe d'ordinateurs",
       "note": "Pour les sessions de cet ordinateur et celles des personnes avec qui vous partagez, le groupe choisit l'ordinateur qui exécute l'Agent"
-    },
-    "strategy": {
-      "label": "Stratégie du groupe",
-      "least": "Le moins occupé",
-      "round": "Tourniquet",
-      "order": "Dans l'ordre",
-      "weight": "Par poids",
-      "quotaFirst": "Lorsque la consommation de l'abonnement est disponible, les ordinateurs dont le quota se réinitialise bientôt avec une large marge restante passent en premier, afin que chaque compte soit consommé de façon régulière dans le temps ; les ordinateurs similaires suivent la stratégie du groupe",
-      "description": {
-        "least": "Va à l'ordinateur le moins occupé",
-        "round": "Alterne entre les ordinateurs",
-        "order": "Les premiers de la liste d'abord",
-        "weight": "Répartition selon le poids"
-      }
     },
     "autoSwitch": {
       "label": "Changer d'ordinateur automatiquement",
@@ -919,9 +905,9 @@
         }
       },
       "removeConfirm": {
-        "title": "Retirer {{name}} du groupe de fournisseurs ?",
+        "title": "Retirer {{name}} du groupe d'ordinateurs ?",
         "description": "Il ne recevra plus de nouvelles tâches. Les tâches déjà en cours d'exécution sur cet ordinateur y restent.",
-        "lastDescription": "C'est le dernier ordinateur du groupe : le retirer supprime le groupe de fournisseurs {{provider}}.",
+        "lastDescription": "C'est le dernier ordinateur du groupe : le retirer supprime le groupe d'ordinateurs {{provider}}.",
         "confirm": "Retirer du groupe"
       },
       "sourceGroupOwner": "Héberge le groupe",
@@ -964,12 +950,12 @@
       "send": "Envoyer le message"
     },
     "deleteConfirm": {
-      "title": "Supprimer le groupe de fournisseurs {{provider}} ?",
+      "title": "Supprimer le groupe d'ordinateurs {{provider}} ?",
       "description": "Les nouvelles tâches de cet ordinateur s'exécuteront ici. Les tâches déjà présentes sur d'autres ordinateurs y restent.",
       "confirm": "Supprimer le groupe"
     },
     "add": {
-      "title": "Ajouter des ordinateurs au groupe de fournisseurs {{provider}}",
+      "title": "Ajouter des ordinateurs au groupe d'ordinateurs {{provider}}",
       "sourceAria": "Source de l'ordinateur",
       "tabAvailable": "Déjà disponibles",
       "tabLink": "Lien de partage",
@@ -986,11 +972,11 @@
     },
     "toast": {
       "added_one": "{{count}} ordinateur ajouté au groupe de fournisseurs {{provider}}",
-      "added_other": "{{count}} ordinateurs ajoutés au groupe de fournisseurs {{provider}}",
+      "added_other": "{{count}} ordinateurs ajoutés au groupe d'ordinateurs {{provider}}",
       "addedAccounts_one": "{{count}} compte ajouté au groupe de fournisseurs {{provider}}",
-      "addedAccounts_other": "{{count}} comptes ajoutés au groupe de fournisseurs {{provider}}",
-      "removed": "{{name}} retiré du groupe de fournisseurs",
-      "deleted": "Groupe de fournisseurs {{provider}} supprimé",
+      "addedAccounts_other": "{{count}} comptes ajoutés au groupe de comptes {{provider}}",
+      "removed": "{{name}} retiré du groupe d'ordinateurs",
+      "deleted": "Groupe d'ordinateurs {{provider}} supprimé",
       "added_many": "{{count}} ordinateurs ajoutés au groupe de fournisseurs {{provider}}",
       "addedAccounts_many": "{{count}} comptes ajoutés au groupe de fournisseurs {{provider}}"
     }
@@ -1391,7 +1377,7 @@
     "DEVICE_LINK_BUSY": "L'ordinateur distant est occupé. Réessayez dans un instant.",
     "INVALID_PARAMS": "Saisie invalide. Vérifiez et réessayez.",
     "PRECONDITION_FAILED": "Cette action n'est pas disponible dans l'état actuel. Réessayez.",
-    "PROVIDER_GROUP_CHANGED": "Le groupe de fournisseurs a été modifié ailleurs ; cette action n'a donc pas été appliquée. Consultez les derniers paramètres et réessayez.",
+    "PROVIDER_GROUP_CHANGED": "Le groupe d'ordinateurs a été modifié ailleurs ; cette action n'a donc pas été appliquée. Consultez les derniers paramètres et réessayez.",
     "MODEL_CONTEXT_USAGE_UNKNOWN": "Modèle non changé : Cindy ne peut pas vérifier la quantité de contexte utilisée par cette tâche. Conservez le modèle actuel ou démarrez une nouvelle tâche.",
     "MODEL_WINDOW_CURRENT_CONTEXT_UNKNOWN": "Modèle non changé : Cindy ne peut pas vérifier la fenêtre de contexte du modèle actuel. Vérifiez le paramètre de fenêtre d'un modèle personnalisé. S'il ne peut pas être modifié, conservez le modèle actuel ou démarrez une nouvelle tâche.",
     "MODEL_WINDOW_TARGET_CONTEXT_UNKNOWN": "Modèle non changé : Cindy ne peut pas vérifier la fenêtre de contexte du modèle cible. Vérifiez le paramètre de fenêtre d'un modèle personnalisé. S'il ne peut pas être modifié, choisissez un autre modèle ou démarrez une nouvelle tâche.",
@@ -1939,7 +1925,7 @@
       "imBot": "Bots de messagerie",
       "ghosts": "Plugins",
       "cindyMake": "Cindy Make",
-      "modelGroups": "Groupes de modèles"
+      "modelGroups": "Routage intelligent"
     },
     "sections": {
       "user": "Utilisateur",
@@ -4380,8 +4366,10 @@
           "compaction": {
             "title": "Compactage automatique",
             "hint": "Compacter le contexte au pourcentage d'utilisation sélectionné. Une valeur plus basse compacte plus tôt ; les limites du moteur s'appliquent toujours.",
-            "default": "{{pct}} % (par défaut)",
-            "timing": "S'applique à tous les moteurs disponibles pour ce modèle et cette source lors des exécutions suivantes, sans interrompre une réponse."
+            "timing": "S'applique à tous les moteurs disponibles pour ce modèle et cette source lors des exécutions suivantes, sans interrompre une réponse.",
+            "defaultBadge": "Par défaut",
+            "sliderAria": "Ajuster le seuil de compactage automatique",
+            "restoreAria": "Rétablir le ratio de compactage automatique par défaut"
           },
           "contextLimitRoute": "Actuellement {{tokens}} jetons",
           "contextLimitOverWindow": "Supérieur à la fenêtre déclarée par le fournisseur ; les requêtes peuvent échouer.",
@@ -4471,10 +4459,10 @@
         "detailNote": "L'Agent s'exécute sur {{device}}, avec la connexion et le quota de cet ordinateur. Pour l'utiliser, choisissez-le dans la liste des modèles au lancement d'une tâche. Pour modifier ce fournisseur, allez dans Paramètres → Fournisseurs sur cet ordinateur.",
         "modelsTitle": "Modèles disponibles",
         "modelsEmpty": "Ce fournisseur n'a encore aucun modèle disponible sur cet ordinateur.",
-        "rowLabelGroup": "{{provider}} · {{device}} · Groupe de fournisseurs",
+        "rowLabelGroup": "{{provider}} · {{device}} · Groupe d'ordinateurs",
         "groupBadge_one": "Groupe de fournisseurs · {{count}} ordinateur",
-        "groupBadge_other": "Groupe de fournisseurs · {{count}} ordinateurs",
-        "groupNote": "{{device}} a fait de ce fournisseur un groupe de fournisseurs. Lorsque vous lancez une tâche avec celui-ci, {{device}} l'attribue à l'un des ordinateurs ci-dessous selon la stratégie du groupe, et la déplace vers un autre si cet ordinateur rencontre un problème. Tant que {{device}} est en ligne, utilisez Accès distant et partage ici pour gérer le groupe et ses partages.",
+        "groupBadge_other": "Groupe d'ordinateurs · {{count}} ordinateurs",
+        "groupNote": "{{device}} a fait de ce fournisseur un groupe d'ordinateurs. Lorsque vous lancez une tâche avec celui-ci, {{device}} l'attribue à l'un des ordinateurs ci-dessous selon la stratégie du groupe, et la déplace vers un autre si cet ordinateur rencontre un problème. Tant que {{device}} est en ligne, utilisez Accès distant et partage ici pour gérer le groupe et ses partages.",
         "groupMembersTitle": "Ordinateurs du groupe",
         "groupMembersFailed": "Impossible d'obtenir pour le moment l'état des ordinateurs du groupe.",
         "groupBadge_many": "Groupe de fournisseurs · {{count}} ordinateurs",
@@ -4527,7 +4515,7 @@
         "remoteAccess": {
           "label": "Autoriser l'utilisation à distance",
           "description": "Lorsque cette option est activée, vos autres ordinateurs et les personnes avec qui vous partagez peuvent utiliser les modèles de ce fournisseur. L'Agent s'exécute sur cet ordinateur, avec la connexion et le quota de cet ordinateur.",
-          "descriptionGroup": "Lorsque cette option est activée, vos autres ordinateurs et les personnes avec qui vous partagez peuvent utiliser les modèles de ce fournisseur. Le groupe de fournisseurs choisit l'ordinateur qui exécute l'Agent.",
+          "descriptionGroup": "Lorsque cette option est activée, vos autres ordinateurs et les personnes avec qui vous partagez peuvent utiliser les modèles de ce fournisseur. Le groupe d'ordinateurs choisit l'ordinateur qui exécute l'Agent.",
           "ariaLabel": "Autoriser vos autres ordinateurs et les personnes avec qui vous partagez à utiliser ce fournisseur",
           "writeFailed": "Impossible d'enregistrer le paramètre d'accès à distance. Veuillez réessayer.",
           "followsPool": "Cette connexion a été fusionnée dans « {{pool}} » et suit son réglage « Autoriser l'utilisation à distance ». Modifiez-le là-bas."
@@ -4832,6 +4820,7 @@
         "discoveryHint": "Ces modèles ont été renvoyés par le catalogue du fournisseur. La synthèse vocale n'a pas été testée.",
         "saved": "Ajouté",
         "reference": "Référence",
+        "realtimeConfirmed": "Point de terminaison temps réel confirmé",
         "discovered": "Détecté",
         "more": "Plus de modèles vocaux ({{count}})",
         "manual": "Saisir un ID de modèle vocal",
@@ -5734,7 +5723,8 @@
           "runtime": "Les dernières requêtes aux modèles auxiliaires ont échoué. Le nommage des tâches, les résumés et les tâches de plugins comme la traduction des sous-titres peuvent être concernés.",
           "open": "Ouvrir les paramètres"
         }
-      }
+      },
+      "missingRoute": "Mode supprimé"
     },
     "compaction": {
       "codex": {
@@ -8859,8 +8849,8 @@
         "hostTools_controlDetail": "Utiliser les outils de Cindy pour modifier, archiver, restaurer et contrôler les tâches et projets existants, et importer des fichiers de tâches au format natif sur cet ordinateur.",
         "hostTools_handoff": "Messages aux tâches",
         "hostTools_handoffDetail": "Utiliser les outils de Cindy pour envoyer des messages aux tâches existantes. Une opération nécessitant le contexte de la tâche actuelle exige une cible explicite.",
-        "hostTools_usage": "Lire l’utilisation et l’état des groupes de fournisseurs",
-        "hostTools_usageDetail": "Lire les identifiants, offres, périodes de quota et dates de mise à jour des comptes Claude/Codex locaux connectés à votre compte Cindy. Lire l’utilisation enregistrée par jour et par modèle, les coûts estimés, la configuration et l’état des groupes de fournisseurs, ainsi que les identifiants, noms et avatars visibles des membres et appareils sur cet ordinateur ou d’autres ordinateurs autorisés du même compte. Ne permet pas de lire les adresses e-mail de connexion aux abonnements, les dossiers de comptes, les empreintes d’identité internes, les identifiants de connexion ou les fichiers, ni de modifier les comptes ou réglages. Lire aussi le quota des tâches accessibles, y compris sur un ordinateur autorisé du même compte ou via un fournisseur partagé qui autorise l’affichage du quota.",
+        "hostTools_usage": "Lire l’utilisation et l’état des groupes d'ordinateurs",
+        "hostTools_usageDetail": "Lire les identifiants, offres, périodes de quota et dates de mise à jour des comptes Claude/Codex locaux connectés à votre compte Cindy. Lire l’utilisation enregistrée par jour et par modèle, les coûts estimés, la configuration et l’état des groupes d'ordinateurs, ainsi que les identifiants, noms et avatars visibles des membres et appareils sur cet ordinateur ou d’autres ordinateurs autorisés du même compte. Ne permet pas de lire les adresses e-mail de connexion aux abonnements, les dossiers de comptes, les empreintes d’identité internes, les identifiants de connexion ou les fichiers, ni de modifier les comptes ou réglages. Lire aussi le quota des tâches accessibles, y compris sur un ordinateur autorisé du même compte ou via un fournisseur partagé qui autorise l’affichage du quota.",
         "hostTools_settings": "Paramètres de l’application",
         "hostTools_settingsDetail": "Utiliser les outils de Cindy pour lire et modifier la configuration. Aucun secret n’est renvoyé et les saisies confidentielles restent à votre charge.",
         "hostTools_scheduler": "Gestion des automatisations",
@@ -11839,18 +11829,14 @@
     "model": {
       "description": "Choisissez les modèles utilisés par cet ami.",
       "primary": "Modèle principal",
-      "restoreDefault": "Rétablir le modèle par défaut"
+      "restoreDefault": "Rétablir le modèle par défaut",
+      "followsDefault": "Utilise le modèle par défaut",
+      "ownModel": "Modèle propre",
+      "managedInSettings": "Les modèles des compagnons se règlent dans Fournisseurs → Routage intelligent.",
+      "openSettings": "Ouvrir les réglages"
     },
     "modelChain": {
-      "primary": "Modèle principal",
-      "fallback": "Secours {{index}}",
-      "routeLabel": "Modèle candidat {{index}}",
-      "add": "Ajouter un modèle de secours",
-      "remove": "Retirer ce candidat",
-      "moveUp": "Monter",
-      "moveDown": "Descendre",
-      "description": "Configurez jusqu'à 5 modèles. Si l'un d'eux est indisponible, l’ami continue automatiquement avec le suivant, sans changer de tâche ni réessayer manuellement.",
-      "options": "Modèles de secours ({{count}})"
+      "routeLabel": "Modèle candidat {{index}}"
     },
     "actions": {
       "message": "Écrire",
@@ -13002,7 +12988,7 @@
       "arrivingLater": "{{name}} a été déplacé vers cet ordinateur et est encore en cours de préparation. Il apparaîtra bientôt dans vos amis",
       "arrivalPermissions": "{{name}} utilise désormais les autorisations par défaut de cet ordinateur.",
       "arrivalModel": "Le modèle enregistré de {{name}} n'est pas disponible sur cet ordinateur ; il utilise donc le modèle par défaut de cet ordinateur.",
-      "arrivalModelSetup": "{{name}} est sur cet ordinateur, mais aucun modèle n’est encore disponible. Connectez un fournisseur de modèles ou choisissez un modèle dans les réglages de cet ami, à la rubrique Modèle.",
+      "arrivalModelSetup": "{{name}} est arrivé sur cet ordinateur mais n’a pas encore de modèle utilisable. Connectez un fournisseur de modèles ou réglez le modèle par défaut des compagnons dans Fournisseurs → Routage intelligent.",
       "arrivalPartialContent": "{{name}} fonctionne désormais sur cet ordinateur, mais certains éléments synchronisés n’ont pas pu être restaurés. Leurs copies dans le cloud restent intactes.",
       "missingProfileTitle": "Continuer avec {{name}} et un profil par défaut ?",
       "missingProfileDescription": "L’ordinateur principal d’origine n’a pas encore envoyé le profil de {{name}}. Si cet ordinateur a été réinstallé ou ne peut pas être récupéré, vous pouvez continuer ici avec un profil par défaut tout en conservant les conversations et contenus déjà synchronisés.",
@@ -14977,7 +14963,7 @@
         "providerGroupLabel": "{{provider}} · {{group}}",
         "providerGroupRunningOn": "S'exécute sur {{device}}",
         "providerGroupRunningHere": "S'exécute sur cet ordinateur",
-        "providerGroupUnassigned": "Le groupe de fournisseurs choisit un ordinateur au démarrage de la tâche ; la consommation s'affiche ensuite pour cet ordinateur"
+        "providerGroupUnassigned": "Le groupe d'ordinateurs choisit un ordinateur au démarrage de la tâche ; la consommation s'affiche ensuite pour cet ordinateur"
       },
       "speed": {
         "label": "Vitesse",
@@ -16762,7 +16748,7 @@
       "REMOTE_AGENT_SHARE_UNAVAILABLE": "Le fournisseur partagé est temporairement indisponible. L'ordinateur du propriétaire est peut-être hors ligne, ou le partage est désactivé pour le moment. Réessayez plus tard ou passez à un autre modèle pour continuer.",
       "REMOTE_AGENT_SHARE_LEGACY_DISABLED": "Ceci est un ancien partage, inutilisable tant que « Utiliser uniquement Agent-Net » est activé. Désactivez cette option pour continuer, ou passez à un autre modèle.",
       "REMOTE_AGENT_GROUP_USAGE_LIMIT": "Les comptes disponibles pour ce modèle ont atteint leur limite d'utilisation. Changez de modèle ou continuez lorsque le quota sera réinitialisé.",
-      "REMOTE_AGENT_GROUP_UNAVAILABLE": "Aucun ordinateur du groupe de fournisseurs ne peut exécuter cette tâche pour le moment. Ils sont peut-être hors ligne, en pause, en période de refroidissement ou ne disposent pas de ce modèle. Vérifiez le groupe sur la page Accès distant et partage de ce fournisseur.",
+      "REMOTE_AGENT_GROUP_UNAVAILABLE": "Aucun ordinateur du groupe d'ordinateurs ne peut exécuter cette tâche pour le moment. Ils sont peut-être hors ligne, en pause, en période de refroidissement ou ne disposent pas de ce modèle. Vérifiez le groupe sur la page Accès distant et partage de ce fournisseur.",
       "REMOTE_AGENT_GROUP_FULL": "Tous les comptes ou ordinateurs pouvant exécuter cette tâche ont atteint leur limite de tâches simultanées. Attendez la fin d’une tâche en cours ou augmentez la limite dans les réglages du fournisseur.",
       "SUBSCRIPTION_ACCOUNTS_FULL": "Tous les comptes ou ordinateurs pouvant exécuter cette tâche ont atteint leur limite de tâches simultanées. Attendez la fin d’une tâche en cours ou augmentez la limite dans les réglages du fournisseur.",
       "REMOTE_AGENT_DEVICE_LIMIT": "Cet appareil a atteint sa limite de sessions distantes. Archivez les sessions inutilisées ou demandez au propriétaire du fournisseur de relever la limite dans Accès distant et partage.",
@@ -18560,7 +18546,7 @@
           "sessions_dispatch": "Répartir des sessions",
           "feishu_read": "Lire les messages Feishu",
           "settings_read": "Lire les membres des partages",
-          "usage_read": "Lire l’utilisation et l’état des groupes de fournisseurs"
+          "usage_read": "Lire l’utilisation et l’état des groupes d'ordinateurs"
         },
         "project": "Répertoire du projet",
         "capabilitiesLabel": "Capacités autorisées",
@@ -18574,7 +18560,7 @@
           "sessions_dispatch": "Créer ou réveiller des sessions {{appName}} et leur transmettre des messages",
           "feishu_read": "Lister les conversations récemment actives ; récupérer les messages récents d'une conversation (groupe ou message privé)",
           "settings_read": "Lire les membres de vos partages et leurs modèles autorisés sur cet ordinateur ou d’autres ordinateurs autorisés du même compte ; aucune modification",
-          "usage_read": "Lire les identifiants, offres, périodes de quota et dates de mise à jour des comptes Claude/Codex locaux connectés à votre compte Cindy. Lire l’utilisation enregistrée par jour et par modèle, les coûts estimés, la configuration et l’état des groupes de fournisseurs, ainsi que les identifiants, noms et avatars visibles des membres et appareils sur cet ordinateur ou d’autres ordinateurs autorisés du même compte. Ne permet pas de lire les adresses e-mail de connexion aux abonnements, les dossiers de comptes, les empreintes d’identité internes, les identifiants de connexion ou les fichiers, ni de modifier les comptes ou réglages."
+          "usage_read": "Lire les identifiants, offres, périodes de quota et dates de mise à jour des comptes Claude/Codex locaux connectés à votre compte Cindy. Lire l’utilisation enregistrée par jour et par modèle, les coûts estimés, la configuration et l’état des groupes d'ordinateurs, ainsi que les identifiants, noms et avatars visibles des membres et appareils sur cet ordinateur ou d’autres ordinateurs autorisés du même compte. Ne permet pas de lire les adresses e-mail de connexion aux abonnements, les dossiers de comptes, les empreintes d’identité internes, les identifiants de connexion ou les fichiers, ni de modifier les comptes ou réglages."
         },
         "capabilityWarn": {
           "ghostMissing": "Nécessite le plugin « {{name}} », qui n'est pas installé : cette capacité échouera à l'exécution",
@@ -18875,7 +18861,7 @@
         "categoryListAria": "Modèles {{category}}",
         "effortListAria": "Effort de raisonnement",
         "boundLocationLocked": "Les tâches liées continuent de s'exécuter là où elles se trouvent. Choisissez un modèle de cet ordinateur.",
-        "modelGroupTitle": "Groupe de modèles « {{name}} » : choisit une source à la création d’une nouvelle tâche"
+        "modelGroupTitle": "Routage intelligent « {{name}} » : choisit une source quand une exécution démarre une nouvelle tâche"
       }
     },
     "toast": {
@@ -23051,9 +23037,6 @@
     "lineNumbers": "Numéros de ligne"
   },
   "openAiAccountGroup": {
-    "strategy": "Stratégie du groupe de comptes",
-    "leastHint": "Privilégier la connexion qui exécute le moins de tâches",
-    "quotaHint": "Lorsque les données d’utilisation des abonnements sont disponibles, Cindy filtre les connexions selon leur utilisation avant d’appliquer la stratégie du groupe.",
     "removeDescription": "Cette connexion ne recevra plus de nouvelles tâches du groupe. Les tâches en cours resteront sur cette connexion.",
     "mergeDescription": "Les nouvelles tâches lancées via {{target}} pourront utiliser les deux fournisseurs. Les connexions, les clés et les tâches existantes restent en place. Cindy testera la clé API de {{apiKey}} avant de relier les fournisseurs.",
     "modelUnavailable": "Cette connexion ne peut pas utiliser le modèle choisi pour le test. Un nouveau test peut essayer un autre modèle.",
@@ -23125,7 +23108,6 @@
       "useCodex": "Se connecter avec Codex"
     },
     "title": "Comptes d’abonnement",
-    "strategy": "Répartition de charge",
     "add": "Ajouter un compte",
     "defaultTag": "Par défaut",
     "ready": "Connecté",
@@ -23200,21 +23182,21 @@
     "refreshFailed": "Le thème est installé, mais la liste n’a pas pu être actualisée. Actualise-la dans les paramètres d’apparence."
   },
   "modelGroups": {
-    "title": "Groupes de modèles",
-    "description": "Regroupez plusieurs sources déjà présentes dans Fournisseurs en un seul choix. Sélectionnez-le sous « Groupes de modèles » dans le sélecteur de modèles et Cindy décide quelle source utiliser.",
-    "routes": "Modes",
-    "routesDescription": "Un mode contient plusieurs sources. Chaque nouvelle tâche en choisit une selon la règle du mode.",
+    "title": "Routage intelligent",
+    "description": "Regroupez des sources déjà présentes dans Fournisseurs de modèles en un seul choix. Sélectionnez-le sous « Routage intelligent » dans le sélecteur de modèles et Cindy décide quelle source utiliser.",
+    "routes": "Routes",
+    "routesDescription": "Regroupez plusieurs sources en un seul choix. Une source peut être un fournisseur entier (choisissez un modèle comme d’habitude et la route décide lequel l’exécute) ou un modèle précis. Les fournisseurs d’une même marque sont regroupés automatiquement.",
     "sourceCount_one": "{{count}} source",
     "sourceCount_many": "{{count}} sources",
     "sourceCount_other": "{{count}} sources",
     "strategy": {
       "expiring": {
-        "title": "Bientôt expiré d'abord",
+        "title": "Automatique",
         "hint": "Utilise d'abord le quota d'abonnement le plus fourni et sur le point d'être réinitialisé, pour ne rien perdre. Les sources sans quota lisible passent après."
       },
       "order": {
         "title": "Dans l'ordre",
-        "hint": "Passe à la source suivante seulement si la précédente est inutilisable."
+        "hint": "Passe à la source suivante seulement si celle du dessus est inutilisable."
       },
       "rotate": {
         "title": "À tour de rôle",
@@ -23238,12 +23220,17 @@
       }
     },
     "picker": {
-      "empty": "Aucun groupe de modèles pour l'instant. Regroupez plusieurs sources en un mode dans les Réglages pour le choisir ici.",
-      "manage": "Gérer les groupes de modèles",
-      "deviceTitle": "Groupes de modèles · {{device}}",
+      "empty": "Aucun routage intelligent pour l'instant. Regroupez quelques sources en une route dans les Réglages pour la choisir ici.",
+      "manage": "Gérer le routage intelligent",
+      "deviceTitle": "Routage intelligent · {{device}}",
       "switched": "« {{name}} » a basculé cette tâche sur {{model}}",
       "switchUnavailable": "« {{name}} » n'a pour l'instant aucune source utilisable par cette tâche. Le modèle n'a pas changé.",
-      "chooseUnavailable": "« {{name}} » n’a pour l’instant aucune source utilisable : il n’a pas été choisi."
+      "chooseUnavailable": "« {{name}} » n’a pour l’instant aucune source utilisable : elle n’a pas été choisie.",
+      "mergedLabel_many": "{{name}} · route ({{count}} sources)",
+      "mergedLabel_one": "{{name}} · route ({{count}} source)",
+      "mergedLabel_other": "{{name}} · route ({{count}} sources)",
+      "routeDecides": "La route « {{name}} » décide de la source utilisée par cette tâche",
+      "quotaOf": "Quota : {{name}}"
     },
     "why": {
       "expiringQuota": "Il lui reste {{left}} % de quota, réinitialisé le {{reset}} : elle passe en premier",
@@ -23255,7 +23242,7 @@
       "soonestUntil": "Toutes les sources ont épuisé leur quota ; celle-ci revient en premier ({{reset}})",
       "standby": "Ce n'est pas son tour",
       "standbyQuota": "Il lui reste {{left}} % de quota, réinitialisé seulement le {{reset}} : elle est gardée pour plus tard",
-      "off": "Désactivée dans ce mode",
+      "off": "Désactivée dans cette route",
       "unavailable": "Non connectée, ou ce modèle ne peut pas être choisi pour l'instant",
       "limited": "Quota épuisé",
       "limitedUntil": "Quota épuisé jusqu'au {{reset}}",
@@ -23270,23 +23257,24 @@
       "noVision": "Le message contient des images et cette source ne peut pas les voir",
       "exceptionImage": "Le message contient des images : seules les sources capables de les voir ont été prises en compte",
       "exceptionImageFallback": "Le message contient des images, mais aucune source ne peut les voir : choix habituel",
-      "exceptionHours": "Sur cette plage horaire, utilise « {{name}} »",
+      "exceptionHours": "Sur cette plage horaire, utilise « {{name}} » à la place",
       "separator": " ; "
     },
     "settings": {
       "autoSwitch": {
-        "title": "Changer de source automatiquement en cas de problème",
-        "hint": "Quand la source utilisée par ce mode échoue, passer à la suivante utilisable et le noter sous ce tour. Désactivé, le changement est seulement proposé sur l’erreur."
+        "title": "Changer de source automatiquement en cas d’échec",
+        "hint": "Quand la source utilisée par cette route échoue, passer à la suivante utilisable et le noter sous ce tour. Désactivé, le changement est seulement proposé sur l’erreur."
       },
-      "newRoute": "Nouveau mode",
-      "newRouteName": "Nouveau mode",
-      "routesEmpty": "Aucun mode pour l'instant. Créez-en un et ajoutez-y plusieurs sources.",
-      "scopeNote": "Les groupes de modèles s'appliquent aux tâches de cet ordinateur. Une nouvelle tâche choisit une source au démarrage. En choisir un dans une tâche en cours la bascule une fois, tout de suite ; elle ne change plus d'elle-même ensuite.",
-      "back": "Retour aux groupes de modèles",
+      "newRoute": "Nouvelle route",
+      "newRouteName": "Nouvelle route",
+      "routesEmpty": "Aucune route pour l'instant. Créez-en une et ajoutez-y quelques sources.",
+      "scopeNote": "Le routage intelligent s'applique aux tâches de cet ordinateur. Une nouvelle tâche choisit une source au démarrage. En choisir une dans une tâche en cours la bascule une fois, tout de suite ; elle ne change plus d'elle-même ensuite.",
+      "back": "Retour au routage intelligent",
       "name": "Nom",
       "nameHint": "Affiché dans le sélecteur de modèles.",
-      "routeShownAs": "Affiché sous « Groupes de modèles » dans le sélecteur de modèles.",
+      "routeShownAs": "Affiché sous « Routage intelligent » dans le sélecteur de modèles.",
       "pick": "Laquelle utiliser",
+      "moreStrategies": "Autres options",
       "effort": "Effort de raisonnement",
       "effortUnset": "Non défini",
       "effortHint": "Si le modèle choisi ne prend pas en charge ce niveau, il s'exécute avec sa valeur par défaut.",
@@ -23296,14 +23284,15 @@
       "sources": "Sources utilisables",
       "sourcesHint": "Des modèles différents peuvent cohabiter. La tâche indique lequel a été utilisé.",
       "sourcesEmpty": "Aucune source pour l'instant. Ajoutez ci-dessous un modèle connecté.",
-      "sourcesFull": "Un mode accepte jusqu'à {{count}} sources.",
+      "sourcesEmptyMerged": "Aucune source pour l'instant. Ajoutez ci-dessous un fournisseur connecté.",
+      "sourcesFull": "Une route accepte jusqu'à {{count}} sources.",
       "addSource": "Ajouter une source",
       "chooseModel": "Choisir un modèle",
       "notConnected": "Non connectée",
       "moveUp": "Monter",
       "moveDown": "Descendre",
-      "remove": "Retirer de ce mode",
-      "useSource": "Autoriser ce mode à utiliser {{name}}",
+      "remove": "Retirer de cette route",
+      "useSource": "Autoriser cette route à utiliser {{name}}",
       "try": {
         "title": "Essayer",
         "hint": "Voyez quelle source une nouvelle tâche utiliserait maintenant. Rien n'est envoyé et aucun quota n'est consommé.",
@@ -23311,11 +23300,14 @@
         "picked": "Utiliser celle-ci",
         "standby": "En réserve",
         "skipped": "Ignorée",
-        "unavailable": "Aucune source de ce mode n'est utilisable pour l'instant. Une nouvelle tâche utilisera le modèle que vous aviez sélectionné."
+        "unavailable": "Aucune source de cette route n'est utilisable pour l'instant. Une nouvelle tâche utilisera le modèle que vous aviez sélectionné.",
+        "failed": "Impossible de lancer l'essai. Réessayez.",
+        "model": "Modèle à tester"
       },
-      "deleteRoute": "Supprimer ce mode",
+      "deleteRoute": "Supprimer cette route",
       "deleteRouteConfirmTitle": "Supprimer « {{name}} » ?",
-      "deleteRouteConfirmDescription": "Les exceptions horaires d'autres modes qui basculent vers lui sont supprimées aussi. Les tâches déjà lancées ne sont pas affectées.",
+      "deleteRouteConfirmDescription": "Les exceptions horaires d'autres routes qui basculent vers elle sont supprimées aussi. Les tâches déjà lancées ne sont pas affectées.",
+      "deleteMergedRouteConfirmDescription": "Les tâches déjà lancées ne sont pas affectées.",
       "delete": "Supprimer",
       "cancel": "Annuler",
       "saveFailed": "Enregistrement impossible. Réessayez.",
@@ -23324,8 +23316,8 @@
         "hint": "Vérifiées avant la règle de choix, de haut en bas.",
         "empty": "Aucune exception pour l'instant. Chaque nouvelle tâche suit la règle de choix ci-dessus.",
         "imageRule": "Quand le message contient des images, n'utiliser que les sources capables de les voir",
-        "hoursRule": "{{from}}–{{to}} : utiliser « {{name}} »",
-        "hoursRuleDays": "{{days}} {{from}}–{{to}} : utiliser « {{name}} »",
+        "hoursRule": "{{from}}–{{to}} : utiliser « {{name}} » à la place",
+        "hoursRuleDays": "{{days}} {{from}}–{{to}} : utiliser « {{name}} » à la place",
         "remove": "Supprimer cette exception",
         "add": "Ajouter une exception",
         "choose": "Choisir une situation",
@@ -23340,23 +23332,78 @@
         "addHours": "Ajouter",
         "sameHour": "Le début et la fin ne peuvent pas être identiques.",
         "full": "Jusqu'à {{count}} exceptions.",
-        "needOtherRoute": "Créez un autre mode pour pouvoir y basculer selon l'heure."
+        "needOtherRoute": "Créez une autre route pour pouvoir y basculer selon l'heure."
       }
     },
     "overview": {
       "mapTitle": "Comment les nouvelles tâches choisissent un modèle",
-      "mapDescription": "De gauche à droite : le mode emprunté et la source retenue. Cliquez sur un mode pour le modifier.",
+      "mapDescription": "De gauche à droite : la route empruntée par une nouvelle tâche et la source où elle aboutit. Cliquez sur une route pour la modifier.",
       "columnSources": "Sources",
-      "columnEmpty": "Aucun pour l'instant",
-      "openRoute": "Ouvrir le mode « {{name}} »",
+      "columnEmpty": "Aucune pour l'instant",
+      "openRoute": "Ouvrir la route « {{name}} »",
       "recentTitle": "Choix récents",
-      "recentEmpty": "Aucune tâche n'a encore utilisé de mode.",
-      "keptOriginal": "Aucun modèle n'était disponible : la tâche a gardé le modèle que vous aviez choisi.",
+      "recentEmpty": "Aucune tâche n'a encore utilisé de route.",
+      "keptOriginal": "Rien n'y était disponible : la tâche a gardé le modèle que vous aviez choisi.",
       "keptOriginalShort": "Votre modèle a été conservé",
       "latest": "Le chemin suivi par la dernière tâche"
     },
     "switchOffer": {
       "action": "Continuer avec {{model}}"
+    },
+    "auto": {
+      "accounts_one": "{{count}} compte",
+      "accounts_many": "{{count}} comptes",
+      "accounts_other": "{{count}} comptes",
+      "computers_one": "{{count}} ordinateur",
+      "computers_many": "{{count}} ordinateurs",
+      "computers_other": "{{count}} ordinateurs",
+      "pickFor": "Stratégie pour {{name}}",
+      "hiddenTag": "Masqué",
+      "show": "Afficher dans le sélecteur de modèles",
+      "assignedBy": "Les nouvelles tâches sont réparties selon « {{strategy}} »",
+      "adjust": "Ajuster dans Routage intelligent"
+    },
+    "sources": {
+      "models_one": "{{count}} modèle",
+      "models_many": "{{count}} modèles",
+      "models_other": "{{count}} modèles",
+      "autoTag": "Automatique",
+      "chooseProvider": "Choisir un fournisseur",
+      "removeAria": "Retirer {{name}} de cette route",
+      "note": "Les routes automatiques suivent vos fournisseurs connectés. Vous ne pouvez pas ajouter ni retirer de membres, mais vous pouvez les réordonner, définir des poids, en désactiver un, changer la stratégie ou masquer la route.",
+      "providers_one": "{{count}} fournisseur",
+      "providers_many": "{{count}} fournisseurs",
+      "providers_other": "{{count}} fournisseurs",
+      "addWhole": "Ajouter un fournisseur entier",
+      "addWholeHint": "Tous ses modèles rejoignent cette route. Dans le sélecteur de modèles, la route fonctionne comme un fournisseur : choisissez un modèle comme d’habitude et la route décide quel membre l’exécute.",
+      "addModelHint": "Ajoutez un modèle d’un fournisseur. Choisir cette route sélectionne l’une de ces sources selon sa stratégie.",
+      "detailHint": "Cette route réunit des fournisseurs entiers. Dans le sélecteur de modèles, elle fonctionne comme un fournisseur : choisissez le modèle et l’effort comme d’habitude et la route décide quel membre l’exécute."
+    },
+    "kinds": {
+      "byModel": "Par modèle",
+      "byProvider": "Par fournisseur"
+    },
+    "buddies": {
+      "title": "Modèles des compagnons",
+      "description": "Les compagnons partagent un modèle par défaut ; n’en donnez un propre qu’à celui qui a besoin d’autre chose. Pour qu’un compagnon change de source en cas de problème, choisissez un routage intelligent.",
+      "saveFailed": "Le modèle du compagnon n’a pas été enregistré. Réessayez.",
+      "defaultLabel": "Modèle par défaut",
+      "defaultHint": "Tous les compagnons l’utilisent sauf réglage contraire, y compris les nouveaux et ceux repris d’un autre ordinateur.",
+      "ownTitle": "Compagnons avec leur propre modèle",
+      "ownTitleWithRest_many": "Compagnons avec leur propre modèle · {{count}} autres utilisent le défaut",
+      "ownTitleWithRest_one": "Compagnons avec leur propre modèle · {{count}} autre utilise le défaut",
+      "ownTitleWithRest_other": "Compagnons avec leur propre modèle · {{count}} autres utilisent le défaut",
+      "addOwn": "Donner à un compagnon son propre modèle",
+      "allFollow": "Tous les compagnons utilisent le modèle par défaut.",
+      "otherComputers": "Compagnons sur d’autres ordinateurs",
+      "deviceBuddies_many": "{{count}} compagnons",
+      "deviceBuddies_one": "{{count}} compagnon",
+      "deviceBuddies_other": "{{count}} compagnons",
+      "devicePageTitle": "Compagnons sur {{device}}",
+      "devicePageHint": "Choisissez parmi les modèles et routages intelligents utilisables sur cet ordinateur. Enregistré sur celui-ci.",
+      "deviceDefaultReadOnly": "Mettez cet ordinateur à jour pour modifier ici son modèle par défaut.",
+      "deviceUnavailable": "Impossible de lire les réglages des compagnons de cet ordinateur pour le moment. Vérifiez qu’il est en ligne, puis rouvrez.",
+      "deviceLoading": "Lecture des réglages de cet ordinateur…"
     }
   },
   "projectSettings": {

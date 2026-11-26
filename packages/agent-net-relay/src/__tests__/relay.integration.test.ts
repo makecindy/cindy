@@ -561,9 +561,12 @@ describe('independent V2 relay', () => {
   it('fences linked Device Link provider shares: native IDs, other accounts, the private book, restarts and waiting guests', async () => {
     const actor = (token: string) => token === 'Bearer unit-owner' ? { accountId: 'owner-account', deviceId: 'owner' }
       : token === 'Bearer other-owner' ? { accountId: 'other-account', deviceId: 'owner' }
+      : token === 'Bearer impostor' ? { accountId: 'impostor-account', deviceId: 'guest-device-0' }
       : token === 'Bearer second-host' ? { accountId: 'owner-account', deviceId: 'second' }
       : /^Bearer guest-\d+$/.test(token) ? { accountId: 'guest-account', deviceId: 'guest-device-' + token.slice(13) } : null;
-    const f = await fixture({ sharing: {
+    // A clock the case holds still: removing and linking again within one millisecond must not reuse a generation.
+    const clock = Date.now();
+    const f = await fixture({ now: () => clock, sharing: {
       async authenticate(req) { const found = actor(String(req.headers.authorization));
         if (!found) throw new AppError('UNAUTHORIZED', 401, 'Unit auth rejected'); return { ...found, networkId: f.certificate.networkId }; },
       providers: { hostCapability: 'provider-share-v1', identityCards: {
@@ -582,8 +585,8 @@ describe('independent V2 relay', () => {
       }, ...(body ? { body } : {}) });
       return { status: response.status, body: await response.json() as any };
     };
-    const ask = (n: number, resourceId = 'v1-share') => {
-      const identity = guests.get(String(n)) ?? generateIdentity('guest-device-' + n); guests.set(String(n), identity);
+    const ask = (n: number, resourceId = 'v1-share', fresh = false) => {
+      const identity = !fresh && guests.get(String(n)) || generateIdentity('guest-device-' + n); guests.set(String(n), identity);
       return call('/sharing/transport', 'POST', { kind: 'provider-share', resourceId, memberId: 'v1-member-' + n,
         signingKey: identity.signingKey, transportKey: identity.transportKey }, 'Bearer guest-' + n, false, identity);
     };
@@ -616,12 +619,21 @@ describe('independent V2 relay', () => {
     const delegation = await f.client.acceptDelegationRequest(directory.delegationRequests[0], () => undefined);
     const signed = new AgentNetClient(f.relay.url, guests.get('0')!, f.certificate, f.rootPublicKey, delegation);
     await expect(signed.directory()).resolves.toBeDefined();
-    for (let n = 1; n < 64; n++) expect((await ask(n)).status).toBe(200);
+    // Another account claiming the same device ID is a separate (unsigned) guest: it neither replaces nor disconnects this one.
+    const impostor = generateIdentity('guest-device-0');
+    expect((await call('/sharing/transport', 'POST', { kind: 'provider-share', resourceId: 'v1-share', memberId: 'v1-member-0',
+      signingKey: impostor.signingKey, transportKey: impostor.transportKey }, 'Bearer impostor', false, impostor)).body).toMatchObject({ status: 'pending' });
+    await expect(signed.directory()).resolves.toBeDefined();
+    // The impostor is one waiting guest; 62 more leave exactly one place.
+    for (let n = 1; n < 63; n++) expect((await ask(n)).status).toBe(200);
     // Two new guests racing for the last place: the write rechecks it, so exactly one gets in.
     const raced = await Promise.all([ask(64), ask(65)]);
     expect(raced.map(response => response.status).sort()).toEqual([200, 429]);
     expect(raced.find(response => response.status === 429)?.body).toMatchObject({ error: { code: 'TOO_MANY_REQUESTS' } });
     expect((await ask(66)).status).toBe(429);
+    // The signed device renews with its keys (no new place) but cannot add a new unsigned request with fresh keys.
+    expect((await ask(0)).status).toBe(200);
+    expect((await ask(0, 'v1-share', true)).status).toBe(429);
     // A guest already waiting may still renew; removing the link withdraws the signed lease at once.
     expect((await ask(3)).status).toBe(200);
     expect((await call('/sharing/provider-shares/linked/v1-share/remove', 'POST', {})).body).toEqual({ removed: true });
@@ -632,6 +644,8 @@ describe('independent V2 relay', () => {
     await expect(signed.directory()).rejects.toMatchObject({ code: 'GRANT_INVALID' });
     const again = await ask(0);
     expect(again.body.id).not.toBe(first.body.id);
+    // Requests left from the earlier registration can never be signed and no longer hold places.
+    expect((await ask(70)).status).toBe(200);
     // Another computer of the account takes the share over: the guest's request moves to it under a new ID it can sign.
     const second = await f.join('second');
     expect((await call('/sharing/provider-shares/linked', 'POST', { shareId: 'v1-share' }, 'Bearer second-host', second.client)).status).toBe(200);

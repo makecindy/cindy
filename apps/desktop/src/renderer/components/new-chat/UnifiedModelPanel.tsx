@@ -212,6 +212,8 @@ export interface UnifiedModelPanelProps {
    * 不显示某一台的配额。缺省 = 都按目录归属读。
    */
   providerGroupUsage?: ProviderGroupUsageOf;
+  /** 合并整个供应商的路由那一格显示谁的额度(sourceRouteProviders.ts 的 usageMember)。 */
+  routeUsageMember?: (providerId: string) => { provider: ProviderView; agentDeviceId: string | null } | null;
   /** 保留付费模型为锁定展示行，并把点击交给统一付费提示。 */
   includePaymentRequired?: boolean;
   paymentRequiredLabel?: string;
@@ -475,6 +477,7 @@ function UnifiedModelPanelContent({
   interactionDisabled = false,
   providerUsage = null,
   providerGroupUsage,
+  routeUsageMember,
   includePaymentRequired = false,
   paymentRequiredLabel,
   paymentRequiredUnlockLabel,
@@ -1597,6 +1600,7 @@ function UnifiedModelPanelContent({
       <UnifiedModelRail
         providerUsage={providerUsage}
         {...(providerGroupUsage ? { providerGroupUsage } : {})}
+        {...(routeUsageMember ? { routeUsageMember } : {})}
         items={railItems}
         active={effectiveRail}
         onSelect={handleRailSelect}
