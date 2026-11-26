@@ -6659,7 +6659,7 @@ describe('sidebar topic reply navigation', () => {
                 { kind: 'issue', provider: 'github', host: 'github.com', owner: 'makecindy', repo: 'cindy', number: 13022, url: 'https://github.com/makecindy/cindy/issues/13022' },
                 { kind: 'pr', provider: 'github', host: 'github.com', owner: 'makecindy', repo: 'cindy', number: 13080, url: 'https://github.com/makecindy/cindy/pull/13080' },
               ],
-              lastReply: { authorName: 'Alice', text: 'Looks good', createdAt: 3000 },
+              lastReply: { authorName: 'Alice', text: 'Looks good', createdAt: Date.now() },
             },
             {
               rootId: mentionRoot,
@@ -6727,7 +6727,12 @@ describe('sidebar topic reply navigation', () => {
 
     // Switch to All and search.
     fireEvent.click(within(panel).getByRole('tab', { name: 'bots.groupChat.server.thread.filterAll' }));
+    const older = within(panel).getByRole('button', { name: /ccAgent.sidebar.dateGroup.older/ });
+    expect(older.getAttribute('aria-expanded')).toBe('false');
+    expect(within(panel).queryByText('Random coffee chat')).toBeNull();
+    fireEvent.click(older);
     expect(within(panel).getByText('Random coffee chat')).toBeTruthy();
+    fireEvent.click(older);
     const search = within(panel).getByTestId('bot-group-thread-search');
     fireEvent.change(search, { target: { value: 'coffee' } });
     expect(within(panel).getByText('Random coffee chat')).toBeTruthy();

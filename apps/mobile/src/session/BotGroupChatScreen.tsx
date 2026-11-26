@@ -757,7 +757,7 @@ function BotGroupChatContent({ deviceId, deviceName, groupId, messageId, notific
     Keyboard.dismiss();
     if (filter) setThreadListFilter(filter);
     setThreadsOpen(true);
-    chat.backfillThreads?.();
+    chat.backfillThreads?.(mask.threadMessages);
   };
   const threadsButton = canBrowseThreads ? (
     <HomeHeaderGlassButton

@@ -640,7 +640,13 @@ const THREAD_BACKFILL_PAGE_SIZE = 100;
 const THREAD_BACKFILL_MAX_PAGES = 10;
 const THREAD_HYDRATE_MAX_THREADS = 40;
 const THREAD_HYDRATE_CONCURRENCY = 4;
-const THREAD_BACKFILL_MAX_MESSAGES = 400;
+export const THREAD_BACKFILL_MAX_MESSAGES = 400;
+
+export interface ThreadBackfill {
+  messages: ChatMessage[];
+  roots: Record<string, ChatMessage | null>;
+  retryRoots: string[];
+}
 
 export function createChatServerClient(request: ChatRequest, personalList = createConversationListState(),
   openHistory?: (human: string) => Promise<ChatHistory>, inviteShares?: ChatInviteShares, account: ChatAccountIdentity = {}) {
@@ -809,7 +815,9 @@ export function createChatServerClient(request: ChatRequest, personalList = crea
       const path = `/conversations/${chatId(roomId)}/mentions`;
       if (readIds?.length) await request(`${path}/read`, 'POST', { operationId, messageIds: readIds.map(chatId) });
       const page = await request<{ messages: Array<ChatMessage & { reply?: { content: ChatMessage['content']; maskAttribution: NonNullable<ChatMessage['maskAttribution']> } }> ; hasMore: boolean }>(`${path}?limit=100${before ? `&before=${chatCursor(before)}` : ''}`);
-      return { hasMore: page.hasMore, mentions: page.messages.map((message): ChatMaskMention => ({
+      const threadMessages = page.messages.filter(message => !message.deleted && message.threadRootId
+        && message.mentionAudience !== 'everyone' && message.mentionAudience !== 'humans');
+      return { hasMore: page.hasMore, threadMessages, mentions: page.messages.map((message): ChatMaskMention => ({
         messageId: message.id, sequence: message.seq, threadRootId: message.threadRootId ?? undefined,
         authorName: message.author.name, text: contentText(message),
         ...(message.reply ? { reply: { companion: message.reply.maskAttribution.companion,
@@ -1092,7 +1100,8 @@ export function createChatServerClient(request: ChatRequest, personalList = crea
         ...(Array.isArray(executions) ? { executions } : {}) };
     },
     /** Bounded historical backfill for the in-group 话题 index without bloating durable room history. */
-    async backfillThreads(roomId: string, snapshot: ChatSnapshot, seedMessages: readonly ChatMessage[], signal?: AbortSignal) {
+    async backfillThreads(roomId: string, snapshot: ChatSnapshot, seedMessages: readonly ChatMessage[], signal?: AbortSignal,
+      mentions: readonly ChatMessage[] = [], previous?: ThreadBackfill): Promise<ThreadBackfill> {
       const room = chatId(roomId);
       const stored = await cache();
       const byId = new Map<string, ChatMessage>();
@@ -1100,9 +1109,9 @@ export function createChatServerClient(request: ChatRequest, personalList = crea
         const existing = byId.get(m.id);
         if (!existing || (m.revision ?? 0) >= (existing.revision ?? 0)) byId.set(m.id, m);
       };
-      for (const m of [...(stored?.cachedMessages?.<ChatMessage>(room) ?? []), ...seedMessages, ...snapshot.messages]) put(m);
-      if (seedMessages.length >= THREAD_BACKFILL_PAGE_SIZE || snapshot.messages.length >= THREAD_BACKFILL_PAGE_SIZE) {
-        let minSeq = [...byId.values()].filter(m => !m.threadRootId).reduce<bigint | null>((min, m) => {
+      for (const m of [...(previous?.messages ?? []), ...mentions, ...(stored?.cachedMessages?.<ChatMessage>(room) ?? []), ...seedMessages, ...snapshot.messages]) put(m);
+      if (!previous && (seedMessages.length >= THREAD_BACKFILL_PAGE_SIZE || snapshot.messages.length >= THREAD_BACKFILL_PAGE_SIZE)) {
+        let minSeq = [...seedMessages, ...snapshot.messages].filter(m => !m.threadRootId).reduce<bigint | null>((min, m) => {
           const seq = BigInt(chatCursor(m.seq));
           return min === null || seq < min ? seq : min;
         }, null);
@@ -1124,7 +1133,8 @@ export function createChatServerClient(request: ChatRequest, personalList = crea
         }
       }
       const rootIds = new Set<string>();
-      const priorityRootIds = new Set<string>();
+      const mentionRoots = new Set(mentions.flatMap(message => message.threadRootId ?? []));
+      const priorityRootIds = new Set(mentionRoots);
       const latestSeqByRoot = new Map<string, bigint>();
       const noteSeq = (rootId: string, seqStr: string) => {
         const seq = BigInt(chatCursor(seqStr));
@@ -1147,17 +1157,22 @@ export function createChatServerClient(request: ChatRequest, personalList = crea
         }
       }
       const hydrateRootIds = [...rootIds].sort((a, b) => {
+        const mentionDiff = Number(mentionRoots.has(b)) - Number(mentionRoots.has(a));
+        if (mentionDiff) return mentionDiff;
         const prioDiff = Number(priorityRootIds.has(b)) - Number(priorityRootIds.has(a));
         if (prioDiff !== 0) return prioDiff;
         const diff = (latestSeqByRoot.get(b) ?? 0n) - (latestSeqByRoot.get(a) ?? 0n);
         return diff > 0n ? 1 : diff < 0n ? -1 : 0;
       }).slice(0, THREAD_HYDRATE_MAX_THREADS);
-      const roots: Record<string, ChatMessage | null> = {};
-      const missingRoots = hydrateRootIds.filter(id => !byId.has(id));
+      const retryRoots = new Set<string>();
+      const roots: Record<string, ChatMessage | null> = Object.fromEntries(hydrateRootIds
+        .filter(id => previous?.roots[id] === null && !byId.has(id)).map(id => [id, null]));
+      const missingRoots = hydrateRootIds.filter(id => !byId.has(id) && roots[id] !== null);
       if (missingRoots.length && !signal?.aborted) {
         for (const [id, result] of await lookup(room, missingRoots.map(chatId))) {
           if ('message' in result) { put(result.message); roots[id] = result.message; }
           else if (denied(result.error)) roots[id] = null;
+          else retryRoots.add(id);
         }
       }
       const replyCounts = new Map<string, number>();
@@ -1167,7 +1182,7 @@ export function createChatServerClient(request: ChatRequest, personalList = crea
         }
       }
       const needReplies = hydrateRootIds.filter(id => {
-        if (roots[id] === null) return false;
+        if (roots[id] === null || retryRoots.has(id)) return false;
         const root = byId.get(id);
         if (root?.deleted) return false;
         const expected = Math.min(root?.replyCount ?? 1, THREAD_BACKFILL_PAGE_SIZE);
@@ -1182,19 +1197,28 @@ export function createChatServerClient(request: ChatRequest, personalList = crea
             try {
               const query = new URLSearchParams({ threadRootId: rootId, limit: String(THREAD_BACKFILL_PAGE_SIZE) });
               const batch = await request<ChatMessage[]>(`/conversations/${room}/messages?${query}`, 'GET', undefined, undefined, signal);
-              if (Array.isArray(batch)) for (const m of batch) put(m);
-            } catch { /* best-effort hydration per thread */ }
+              if (!Array.isArray(batch)) throw new Error('INVALID_CHAT_MESSAGES');
+              for (const m of batch) put(m);
+            } catch (error) {
+              if (denied(error)) roots[rootId] = null;
+              else retryRoots.add(rootId);
+              if ((error as { status?: number })?.status === 429) cursor = needReplies.length;
+            }
           }
         }));
       }
+      const mentionIds = new Set(mentions.map(message => message.id));
+      const keepMention = (id: string) => mentionIds.has(id) || mentionRoots.has(id);
       const messages = [...byId.values()]
         .filter(m => !!m.threadRootId || (!m.deleted && (m.replyCount ?? 0) > 0))
         .sort((a, b) => {
+          const priority = Number(keepMention(b.id)) - Number(keepMention(a.id));
+          if (priority) return priority;
           const diff = BigInt(chatCursor(b.seq)) - BigInt(chatCursor(a.seq));
           return diff > 0n ? 1 : diff < 0n ? -1 : 0;
         })
         .slice(0, THREAD_BACKFILL_MAX_MESSAGES);
-      return { messages, roots };
+      return { messages, roots, retryRoots: [...retryRoots] };
     },
     async actPlan(roomId: string, plan: ChatPlan, input: ChatPlanAction, operationId: string, current = () => true, signal?: AbortSignal) {
       const room = chatId(roomId);

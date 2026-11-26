@@ -1467,3 +1467,32 @@ it('backfills historical threads from older pages and snapshot reads on mobile',
     lastMention: expect.objectContaining({ messageId: oldMention.id }),
   })]);
 });
+
+it('uses the main-page cursor with an isolated cached lookup and retries missing replies without rescanning history', async () => {
+  const root = { ...message(6), replyCount: 2 };
+  const mention = { ...message(8), threadRootId: root.id, authorId: id(11), mentions: [id(10)] };
+  const reply = { ...message(7), threadRootId: root.id };
+  const page = Array.from({ length: 100 }, (_, i) => message(200 + i)).reverse();
+  const snap = { ...snapshot(), messages: page, reads: [] };
+  let attempts = 0;
+  const request = vi.fn(async (route: string) => {
+    if (route === '/me') return { actor: { id: id(10), kind: 'human' } };
+    if (route.includes('threadRootId=')) {
+      if (++attempts === 1) throw Object.assign(new Error('busy'), { status: 429 });
+      return [reply, mention];
+    }
+    return [];
+  });
+  const client = createChatServerClient(request as never, undefined, async () => ({
+    cachedMessages: () => [{ ...message(1), seq: '1' }],
+    lookup: async () => new Map([[root.id, { message: root }]]),
+  }) as never);
+  const partial = await client.backfillThreads(id(1), snap, page, undefined, [mention]);
+  expect(partial.retryRoots).toEqual([root.id]);
+  const completed = await client.backfillThreads(id(1), snap, page, undefined, [mention], partial);
+  expect(completed.retryRoots).toEqual([]);
+  expect(request.mock.calls.filter(([route]) => route.includes('before=')).map(([route]) => route))
+    .toEqual([`/conversations/${id(1)}/messages?limit=100&before=${page.at(-1)!.seq}`]);
+  expect(chatGroupView({ snapshot: snap, before: null, messages: page, cachedMessages: completed.messages }, id(10)).threads)
+    .toContainEqual(expect.objectContaining({ rootId: root.id, participated: true, mentionedMe: true }));
+});

@@ -4,7 +4,7 @@
  * Decouples findability (participated / @mentioned / followed) from notifications (follow).
  */
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { ArrowUpRight, Bell, BellRing, CircleDot, GitPullRequest, MessagesSquare, Search, X } from 'lucide-react';
+import { ArrowUpRight, Bell, BellRing, ChevronRight, CircleDot, GitPullRequest, MessagesSquare, Search, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { prStatusKey, prStatusQuery, type PrIdentity } from '@cindy/maker-shared';
 import {
@@ -107,7 +107,7 @@ function ThreadCodeRefChip({
           {showDot ? (
             <span
               aria-hidden
-              className="absolute -right-[1.5px] -top-[1.5px] size-[5px] rounded-full bg-[var(--status-bar-accent)] shadow-[0_0_0_1.25px_var(--surface)]"
+              className="absolute -right-[1.5px] -top-[1.5px] size-[5px] rounded-full bg-[var(--status-bar-accent)] outline outline-1 outline-[var(--surface)]"
             />
           ) : null}
         </span>
@@ -313,6 +313,7 @@ export function ChatThreadListPanel({
   const { t } = useTranslation();
   const isDark = useIsDarkMode();
   const [query, setQuery] = useState('');
+  const [olderOpen, setOlderOpen] = useState(false);
   const [togglingIds, setTogglingIds] = useState<ReadonlySet<string>>(new Set());
   const [prStatuses, setPrStatuses] = useState<ReadonlyMap<string, PrStatusResult>>(() => new Map());
   const fetchedPrKeysRef = useRef<Set<string>>(new Set());
@@ -336,9 +337,31 @@ export function ChatThreadListPanel({
   );
   const totalShown = unread.length + recent.length;
 
+  const weekStart = new Date();
+  const dayStart = weekStart.setHours(0, 0, 0, 0);
+  const cutoff = weekStart.setDate(weekStart.getDate() - 6);
+  const searching = query.trim().length > 0;
+  const showOlder = olderOpen || searching;
+  const sections = useMemo(() => {
+    const today: BotGroupThreadSummary[] = [];
+    const week: BotGroupThreadSummary[] = [];
+    const older: BotGroupThreadSummary[] = [];
+    for (const thread of recent) {
+      const activity = botGroupThreadActivityAt(thread);
+      if (activity >= dayStart) today.push(thread);
+      else if (activity >= cutoff) week.push(thread);
+      else older.push(thread);
+    }
+    return [
+      { label: key('listNews'), rows: unread, older: false },
+      { label: 'ccAgent.sidebar.dateGroup.today', rows: today, older: false },
+      { label: 'menubar.fact.last7Days', rows: week, older: false },
+      { label: 'ccAgent.sidebar.dateGroup.older', rows: older, older: true },
+    ].filter(section => section.rows.length);
+  }, [cutoff, dayStart, recent, unread]);
   const visiblePrs = useMemo(() => {
     const map = new Map<string, PrIdentity>();
-    for (const thread of [...unread, ...recent]) {
+    for (const thread of sections.flatMap(section => section.older && !showOlder ? [] : section.rows)) {
       const { pr } = pickBotGroupThreadDisplayRefs(thread.refs);
       if (!pr) continue;
       const identity = toPrIdentity(pr);
@@ -347,7 +370,7 @@ export function ChatThreadListPanel({
       if (map.size >= MAX_TASK_STATUS_QUERIES) break;
     }
     return map;
-  }, [unread, recent]);
+  }, [sections, showOlder]);
   const visiblePrsRef = useRef(visiblePrs);
   visiblePrsRef.current = visiblePrs;
   const visiblePrKey = useMemo(() => [...visiblePrs.keys()].join(','), [visiblePrs]);
@@ -508,12 +531,23 @@ export function ChatThreadListPanel({
             </div>
           ) : (
             <div className="flex flex-col gap-0.5">
-              {unread.length > 0 ? (
-                <>
-                  <p className="px-2.5 pb-1 pt-1 text-12 font-medium text-[var(--text-tertiary)]">
-                    {t(key('listNews'))}
-                  </p>
-                  {unread.map(thread => (
+              {sections.map(section => (
+                <section key={section.label}>
+                  {section.older && !searching ? (
+                    <button
+                      type="button"
+                      aria-expanded={olderOpen}
+                      onClick={() => setOlderOpen(open => !open)}
+                      className={cn('flex w-full items-center gap-1.5 rounded-lg px-2.5 py-2 text-12 text-[var(--text-tertiary)] hover:bg-[var(--surface-hover)]', FOCUS)}
+                    >
+                      <ChevronRight size={13} aria-hidden className={olderOpen ? 'rotate-90' : undefined} />
+                      {t(section.label)}
+                      <span className="tabular-nums">{section.rows.length}</span>
+                    </button>
+                  ) : (
+                    <h3 className="px-2.5 py-1 text-12 font-medium text-[var(--text-tertiary)]">{t(section.label)}</h3>
+                  )}
+                  {(!section.older || showOlder) && section.rows.map(thread => (
                     <ThreadIndexRow
                       key={thread.rootId}
                       thread={thread}
@@ -526,30 +560,8 @@ export function ChatThreadListPanel({
                       onLocateRoot={onLocateRoot ? () => onLocateRoot(thread.rootId) : undefined}
                     />
                   ))}
-                </>
-              ) : null}
-              {recent.length > 0 ? (
-                <>
-                  {unread.length > 0 ? (
-                    <p className="px-2.5 pb-1 pt-2.5 text-12 font-medium text-[var(--text-tertiary)]">
-                      {t(key('listRecent'))}
-                    </p>
-                  ) : null}
-                  {recent.map(thread => (
-                    <ThreadIndexRow
-                      key={thread.rootId}
-                      thread={thread}
-                      members={members}
-                      prStatuses={prStatuses}
-                      isDark={isDark}
-                      togglingFollow={togglingIds.has(thread.rootId)}
-                      onOpen={() => openThread(thread)}
-                      onToggleFollow={thread.following !== undefined ? () => void toggleFollow(thread) : undefined}
-                      onLocateRoot={onLocateRoot ? () => onLocateRoot(thread.rootId) : undefined}
-                    />
-                  ))}
-                </>
-              ) : null}
+                </section>
+              ))}
               {syncing ? (
                 <div data-testid="bot-group-thread-syncing" className="flex items-center justify-center gap-1.5 px-3 py-3 text-12 text-[var(--text-tertiary)]">
                   <Spinner size={12} />

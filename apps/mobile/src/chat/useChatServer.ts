@@ -14,7 +14,7 @@ import { createChatInviteShares } from './chatInviteShare';
 import { cacheChatRoster, forgetRemoteResource, hideCachedChatRooms, markRemoteResourceRead, peekCachedChatRoster, readCachedChatRoster } from '@/device-link/remoteResourceCache';
 import { useRemoteSyncCoordinator } from '@/device-link/remoteSyncTask';
 import type { BotGroupChatState } from '@/session/useBotGroupChat';
-import { chatAccessLost, chatCursor, chatGroupView, chatThreadMetadata, chatHttpsUrl, chatRoomRow, chatReadAt, chatReadSequence, chatLastReplyAt, chatLastReplySequence, createChatServerClient, type ChatAccountIdentity, type ChatActor, type ChatPage, type ChatRequest, type ChatSnapshot } from './chatServerClient';
+import { chatAccessLost, chatCursor, chatGroupView, chatThreadMetadata, chatHttpsUrl, chatRoomRow, chatReadAt, chatReadSequence, chatLastReplyAt, chatLastReplySequence, createChatServerClient, type ChatAccountIdentity, type ChatActor, type ChatMessage, type ThreadBackfill, type ChatPage, type ChatRequest, type ChatSnapshot } from './chatServerClient';
 import { subscribeChatServer } from './chatServerSubscription';
 import { createChatHistory, type ChatHistory } from '@cindy/maker-shared/chat-history';
 import { createMobileChatHistoryStore, mobileChatHistoryStoreEpoch } from './chatHistoryStore';
@@ -367,8 +367,30 @@ export function useChatServerGroup(groupId: string, enabled: boolean, threadRoot
     if (valid()) { void forgetRemoteResource(api.userId, groupId); void forgetChatMessages(groupId); }
     setState({ identity, value: { kind: 'missing' }, online: false, loadingOlder: false });
   }, [valid, api.userId, groupId, identity]);
-  // Keep room-wide activity for settings; the chat screen scopes its timeline to the current topic.
-  const view = useCallback((next: ChatPage, self: string, actors: ChatActor[]) => ({ ...chatGroupView(next, self, actors, 'group'), ...api.client.lifecycleCapabilities() }), [api]);
+  const [threadsSyncing, setThreadsSyncing] = useState(false);
+  const index = useRef<{ identity: string; generation: number; revision?: string; result: ThreadBackfill; mentionVersion: string } | null>(null);
+  const backfillInFlight = useRef<AbortController | null>(null);
+  const retryAtRef = useRef(0);
+  useEffect(() => {
+    setThreadsSyncing(false);
+    return () => {
+      backfillInFlight.current?.abort();
+      backfillInFlight.current = null;
+      index.current = null;
+      retryAtRef.current = 0;
+    };
+  }, [identity]);
+  const currentIndex = useCallback((revision?: string) => {
+    const saved = index.current;
+    return saved?.identity === identity && saved.generation === accessGeneration.current && saved.revision === revision ? saved : null;
+  }, [identity]);
+  const view = useCallback((next: ChatPage, self: string, actors: ChatActor[]) => {
+    const history = currentIndex(next.historyRevision)?.result;
+    // Enrich only the displayed index. The timeline and its on-disk copy keep their original window.
+    const shown = history ? { ...next, cachedMessages: [...history.messages, ...(next.cachedMessages ?? [])],
+      threadRoots: { ...history.roots, ...next.threadRoots } } : next;
+    return { ...chatGroupView(shown, self, actors, 'group'), ...api.client.lifecycleCapabilities() };
+  }, [api, currentIndex]);
   const hydrate = useCallback(async (previous: NonNullable<typeof page.current>) => {
     const enriched = await api.client.hydrateThreads(groupId, previous.page);
     if (!valid() || page.current !== previous || olderPending.current) return;
@@ -484,6 +506,16 @@ export function useChatServerGroup(groupId: string, enabled: boolean, threadRoot
         }, reset: async () => { await api.client.resyncListState(); await api.client.refreshHistory(groupId, true); await request({ reason: 'connected' }); }, changed: async changes => {
           let personalOnly = !!changes?.length, reads = true;
           for (const change of changes ?? []) {
+            if (change.type === 'message.updated' || change.type === 'message.deleted' || change.type === 'membership.changed') {
+              // A targeted edit or an access change can invalidate rows outside the current page.
+              backfillInFlight.current?.abort();
+              if (change.type === 'membership.changed') index.current = null;
+              else if (index.current && change.entityId) {
+                const saved = index.current.result;
+                saved.messages = saved.messages.filter(m => m.id !== change.entityId);
+                delete saved.roots[change.entityId];
+              }
+            }
             if (change.type === 'conversation.list.changed') api.client.personalList.merge(change.data);
             // The account's own read position (this phone's receipt, or another of its devices)
             // carries its new value: merge it instead of downloading the room again.
@@ -709,48 +741,35 @@ export function useChatServerGroup(groupId: string, enabled: boolean, threadRoot
     await api.client.react(groupId, messageId, emoji, present, operationId);
     if (valid()) reload();
   }, [valid, enabled, api, groupId, reload]);
-  const [threadsSyncing, setThreadsSyncing] = useState(false);
-  const backfilledIdentity = useRef<string | null>(null);
-  const backfillRetryAt = useRef<{ identity: string; at: number } | null>(null);
-  const backfillInFlight = useRef<AbortController | null>(null);
-  useEffect(() => () => { backfillInFlight.current?.abort(); backfillInFlight.current = null; }, [identity]);
-  const backfillThreads = useCallback(() => {
-    if (!valid() || !enabled || threadRootId) return;
-    if (backfilledIdentity.current === identity || backfillInFlight.current) return;
-    if (backfillRetryAt.current?.identity === identity && Date.now() < backfillRetryAt.current.at) return;
+  const backfillThreads = useCallback((mentions: readonly ChatMessage[] = []) => {
     const current = page.current;
-    if (!current || current.identity !== identity || current.page.snapshot.room.kind === 'direct') return;
+    if (!valid() || !enabled || threadRootId || !current || current.identity !== identity
+      || current.page.snapshot.room.kind === 'direct' || backfillInFlight.current) return;
+    const previous = currentIndex(current.page.historyRevision);
+    const mentionVersion = mentions.map(m => m.id + ':' + (m.revision ?? 0)).join(',');
+    if (previous && !previous.result.retryRoots.length && previous.mentionVersion === mentionVersion) return;
+    if (Date.now() < retryAtRef.current) return;
     const controller = new AbortController();
+    const generation = accessGeneration.current;
     backfillInFlight.current = controller;
     setThreadsSyncing(true);
-    void api.client.backfillThreads(groupId, current.page.snapshot, current.page.messages, controller.signal)
+    void api.client.backfillThreads(groupId, current.page.snapshot, current.page.messages, controller.signal, mentions, previous?.result)
       .then(result => {
-        if (controller.signal.aborted || !valid()) return;
-        backfilledIdentity.current = identity;
-        backfillRetryAt.current = null;
-        const latestNow = page.current;
-        if (!latestNow || latestNow.identity !== identity) return;
-        const mergedMap = new Map<string, (typeof latestNow.page.messages)[number]>();
-        for (const m of [...(latestNow.page.cachedMessages ?? []), ...result.messages]) {
-          const prev = mergedMap.get(m.id);
-          if (!prev || (m.revision ?? 0) >= (prev.revision ?? 0)) mergedMap.set(m.id, m);
-        }
-        const next: ChatPage = {
-          ...latestNow.page,
-          cachedMessages: [...mergedMap.values()],
-          threadRoots: { ...(latestNow.page.threadRoots ?? {}), ...result.roots },
-        };
-        page.current = { ...latestNow, page: next };
-        setState(old => old.identity === identity ? { ...old, value: { kind: 'ready', group: view(next, latestNow.self, latestNow.actors) } } : old);
+        const latest = page.current;
+        if (controller.signal.aborted || !valid() || generation !== accessGeneration.current || latest?.identity !== identity
+          || current.page.historyRevision !== latest.page.historyRevision) return;
+        index.current = { identity, generation, revision: latest.page.historyRevision, result, mentionVersion };
+        retryAtRef.current = result.retryRoots.length ? Date.now() + 60_000 : 0;
+        setState(old => old.identity === identity ? { ...old, value: { kind: 'ready', group: view(latest.page, latest.self, latest.actors) } } : old);
       })
-      .catch(() => {
-        if (!controller.signal.aborted) backfillRetryAt.current = { identity, at: Date.now() + 60_000 };
-      })
+      .catch(() => { if (!controller.signal.aborted) retryAtRef.current = Date.now() + 60_000; })
       .finally(() => {
-        if (backfillInFlight.current === controller) backfillInFlight.current = null;
-        if (valid()) setThreadsSyncing(false);
+        if (backfillInFlight.current === controller) {
+          backfillInFlight.current = null;
+          if (valid()) setThreadsSyncing(false);
+        }
       });
-  }, [valid, enabled, threadRootId, identity, api, groupId, view]);
+  }, [valid, enabled, threadRootId, currentIndex, identity, api, groupId, view]);
   const latest = page.current?.identity === identity ? page.current : null;
   const retryAt = latest?.page.threadRetryAt;
   useEffect(() => {

@@ -6371,6 +6371,22 @@ describe('Chat Server result delivery and refresh', () => {
       expect(result.group.threads?.[0]?.lastMention).toBeUndefined();
     });
 
+    it('keeps locally known titles and participation beyond the remote hydration budget', async () => {
+      const roots = Array.from({ length: 41 }, (_, i) => ({
+        ...msg(`70000000-0000-4000-8000-000000002${String(i).padStart(3, '0')}`, i + 1, selfId),
+        replyCount: 1, content: [{ type: 'text', text: `Topic ${i}` }],
+      })).reverse();
+      fixture.handle.mockImplementation((route, method, body) => {
+        if (route.endsWith('/snapshot')) return { body: { room: room(roomId), members, messages: roots, cursor: '65', reads: [] } };
+        if (route.endsWith('/messages?limit=100')) return { body: roots };
+        return threadResponse(route, method, body);
+      });
+      const result = await service.getGroup(roomId, { includeHistoricalThreads: true });
+      if (!result.ok) throw new Error('Expected group');
+      expect(result.group.threads).toHaveLength(41);
+      expect(result.group.threads).toContainEqual(expect.objectContaining({ rootId: roots[40]!.id, rootText: 'Topic 0', participated: true }));
+    });
+
     it('traces historical Threads from reads and older pages when includeHistoricalThreads is requested', async () => {
       const oldRootId = '70000000-0000-4000-8000-000000000070';
       const oldRoot = { ...msg(oldRootId, 10, aliceId), replyCount: 2, content: [{ type: 'text', text: 'Earlier architecture thread' }] };

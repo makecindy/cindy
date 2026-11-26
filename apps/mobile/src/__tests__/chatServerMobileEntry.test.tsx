@@ -113,6 +113,28 @@ it('keeps an unchanged direct group timeline stable across refresh and thread hy
   expect(chat.state.kind).toBe('missing');
 });
 
+it('retains an old mention across a complete group refresh without writing the reply to the timeline cache', async () => {
+  const rootId = '00000000-0000-4000-8000-000000000017';
+  const mention = { id: '00000000-0000-4000-8000-000000000018', threadRootId: rootId, seq: '18',
+    authorId: rootId, author: { kind: 'human', name: 'Member' }, createdAt: '2026-10-09',
+    content: [{ type: 'text', text: 'Please confirm' }], deleted: false, mentions: [self] };
+  const original = h.auth.apiFetch.getMockImplementation()!;
+  h.auth.apiFetch.mockImplementation(async (path, options) => {
+    if (path.endsWith('/messages/' + rootId)) return { ...mention, id: rootId, seq: '17', threadRootId: null,
+      mentions: [], replyCount: 1, content: [{ type: 'text', text: 'Earlier decision' }] };
+    const result = await original(path, options);
+    return path.endsWith('/snapshot') ? { ...result, reads: [] } : result;
+  });
+  showChat = true;
+  await render();
+  await act(async () => { chat.backfillThreads!([mention]); });
+  const expected = { kind: 'ready', group: { threads: [expect.objectContaining({ rootId, mentionedMe: true })] } };
+  expect(chat.state).toMatchObject(expected);
+  await act(async () => { chat.reload(); });
+  expect(chat.state).toMatchObject(expected);
+  expect(peekChatMessages(id)?.page.cachedMessages?.map(message => message.id) ?? []).not.toContain(mention.id);
+});
+
 // Integration tier, group-open latency (2026-11-17): opening a group ran the whole read two or
 // three times (focus, realtime handshake, the echo of the reader's own read position), each a
 // serial chain of requests, from a client that shared nothing with the list behind it.

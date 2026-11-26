@@ -1005,7 +1005,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     threadBackfillState.set(roomId, { status: 'running' });
     void (async () => {
       try {
-        const seed = [...page, ...s.messages, ...(history()?.cachedMessages<Message>(roomId) ?? [])]
+        const seed = [...page, ...s.messages]
           .filter(m => !m.threadRootId);
         const initialMinSeq = seed.reduce<bigint | null>((min, m) => {
           const seq = BigInt(m.seq);
@@ -1995,7 +1995,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     };
     const summaries: BotGroupThreadSummary[] = [];
     for (const rootId of rootIds) {
-      const resolvedRoot = roots.get(rootId);
+      const resolvedRoot = roots.has(rootId) ? roots.get(rootId) : knownById.get(rootId);
       if (resolvedRoot === null) continue;
       const root = resolvedRoot ?? undefined;
       if (root?.deleted) continue;
@@ -2471,7 +2471,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       && BigInt(m.seq) > (reads.get(m.threadRootId ?? 'main') ?? 0n)) : null;
     if (reads) for (const view of [...messages, ...(messageUpdates ?? [])]) if (!view.threadRootId && (view.replyCount ?? 0) > 0) view.threadUnread = threadUnread(view.id, s.messages, reads, s.mentionReadIds);
     const hydrateHistorical = !direct && !summaryOnly && o.includeHistoricalThreads === true;
-    if (hydrateHistorical) startThreadHistoryBackfill(roomId, s, page);
+    if (hydrateHistorical && !o.beforeSequence) startThreadHistoryBackfill(roomId, s, page);
     const threadList = reads && !direct ? threadSummaries(roomId, s, page, reads, hydrateHistorical) : undefined;
     const threadsSyncing = hydrateHistorical && (threadBackfillState.get(roomId)?.status === 'running' || threads.hasPending(roomId));
     messages.sort((a, b) => a.sequence - b.sequence);
