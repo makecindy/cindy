@@ -8311,7 +8311,9 @@ assertRouteCurrent();
           await reportExpectedRuntimeMcpAvailability(reports, recoverySignal);
           assertRecoveryCurrent();
           if (![...reports.values()].some(report => report?.state === 'failed')) {
-            if (reports.has('cindy_orca') && !reports.get('cindy_orca')) mcpRecoveryNotBefore = Date.now() + 30_000;
+            const onlyOrcaNeedsRecheck = reports.has('cindy_orca') && !reports.get('cindy_orca')
+              && [...reports].every(([name, report]) => name === 'cindy_orca' || (report && report.state !== 'pending'));
+            if (onlyOrcaNeedsRecheck) mcpRecoveryNotBefore = Date.now() + 30_000;
             return;
           }
           // Unloading a thread also stops native children/terminals. Leave those
