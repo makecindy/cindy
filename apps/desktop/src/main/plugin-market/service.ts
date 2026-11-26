@@ -3686,7 +3686,9 @@ export class PluginMarketService {
             }), ...(options.verifiedServerRoot ? { serverRoot: options.verifiedServerRoot } : {}),
             ...remoteOperationBindingOf(options.remoteOperation, evidence.rawManifestSha256) };
             if (simulatorMigration) {
-              if (!currentRecordNow || !ledger.migrateSimulatorInstallation(currentRecordNow, next)) {
+              // 契约 V2.10：本次远程更新生成的新绑定由这里显式交给账本；恢复中断迁移的路径不传，旧绑定因此被清除。
+              if (!currentRecordNow ||
+                  !ledger.migrateSimulatorInstallation(currentRecordNow, next, next.remoteOperationBinding)) {
                 throwIpcError('PRECONDITION_FAILED', 'Simulator market route changed during migration');
               }
             } else if (resubscribeSubject) {

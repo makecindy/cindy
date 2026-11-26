@@ -80,10 +80,14 @@ export interface PluginMarketInstallationRecord {
    * `management:begin` 安装／更新提交的。`controller` 是发起方设备身份的本机不可逆标识（不存原始设备号），
    * `keyId` 是算它的密钥，`rawManifestSha256` 是当次装入的包。投影时要求包摘要仍等于记录当前的值、keyId 等于
    * 当前密钥、controller 等于请求方，否则缺省。其它路径重装或更新都会整条重写记录，旧值不会残留。
-   * 契约 V2.10：沿用旧记录写回的路径里，凡是卸载、重新接回或重新提交包的（markRemovedRecord、
-   * restoreDisconnectedInstallation、replaceManifestIdentityAfterPackageCommit、migrateSimulatorInstallation）都经
-   * withoutRemoteOperationBinding 丢弃它；只有换装失败时原样恢复整条旧记录（restoreInstallation）会保留，因为包也
-   * 回到了那一份。这样「操作号相等 ⇒ 当前包就是那次操作装的」才成立。
+   * 契约 V2.10：继承来的绑定清除，本次事务新生成的绑定保留。
+   * - markRemovedRecord、restoreDisconnectedInstallation、replaceManifestIdentityAfterPackageCommit 的调用方都只持有
+   *   继承的旧记录，不会生成新绑定，所以一律经 withoutRemoteOperationBinding 清除。
+   * - migrateSimulatorInstallation 有两个调用方：远程更新提交时会生成本次操作的新绑定，中断迁移的恢复只复制旧记录。
+   *   因此新绑定只能由调用方显式传入，`next` 里带来的一律不认，缺省即清除。
+   * - 换装失败时原样恢复整条旧记录（restoreInstallation）会保留，因为包也回到了那一份。
+   * - 其余新绑定都随整条新记录经 upsertInstallation／upsertInstallationAndClearOptOut 写入。
+   * 这样「操作号相等 ⇒ 当前包就是那次操作装的」才成立。
    *
    * 存量兼容同 `sourceIdBinding`：只增可选字段，`validRecord` 不检查它；旧记录缺省；降级时旧版本保留未知字段、
    * 重写记录时丢弃，结果都是缺省（控制端未确认）。
@@ -679,8 +683,16 @@ export class PluginMarketLedger {
     return true;
   }
 
-  /** The simulator keeps its server resource; replace both local route keys in one ledger write. */
-  migrateSimulatorInstallation(expected: PluginMarketInstallationRecord, next: PluginMarketInstallationRecord): boolean {
+  /**
+   * The simulator keeps its server resource; replace both local route keys in one ledger write.
+   * 契约 V2.10：`remoteOperationBinding` 只取这次迁移事务显式传入的那份（远程更新提交时生成）。`next` 上带来的一律
+   * 丢弃，缺省即清除，所以中断迁移的恢复复制旧记录时不会带回旧操作号。
+   */
+  migrateSimulatorInstallation(
+    expected: PluginMarketInstallationRecord,
+    next: PluginMarketInstallationRecord,
+    remoteOperationBinding?: PluginMarketInstallationRecord['remoteOperationBinding'],
+  ): boolean {
     const data = this.read();
     const current = data.installations[pluginLedgerRecordKey(expected)];
     const target = data.installations[pluginLedgerRecordKey(next)];
@@ -689,7 +701,10 @@ export class PluginMarketLedger {
         current.scope !== 'public' || next.scope !== 'public' || current.namespace != null || next.namespace !== null ||
         current.pluginId !== next.pluginId || (current.source !== 'market' && current.source !== 'legacy-adopted') ||
         (target && target.installed)) return false;
-    this.replaceRecord(data, current, withoutRemoteOperationBinding(next));
+    this.replaceRecord(data, current, {
+      ...withoutRemoteOperationBinding(next),
+      ...(remoteOperationBinding ? { remoteOperationBinding } : {}),
+    });
     this.write(data);
     return true;
   }
