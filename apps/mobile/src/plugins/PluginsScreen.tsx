@@ -437,9 +437,12 @@ function PluginDirectory() {
    * on a detail only by a reply that is that install (the same rule).
    */
   const showDetail = async (row: HostedRemoteCollectionItem, fromRecord?: string | null) => {
-    if (fromRecord) detailFromRecord.current = { key: row.key, operationId: fromRecord };
+    if (fromRecord) {
+      // The install the person asked to open: the token the record proved at the press (it may be read again meanwhile).
+      const token = pluginCheckConclusion(fromRecord)?.approvalToken;
+      detailFromRecord.current = token ? { key: row.key, operationId: fromRecord, approvalToken: token } : undefined;
+    }
     else if (fromRecord === null || detailFromRecord.current?.key !== row.key) detailFromRecord.current = undefined;
-    const held = detailFromRecord.current;
     shownIdentity.current.delete(row.key);
     const generation = ++detailGeneration.current,
       owner = getMobileAuthOwner();
@@ -470,23 +473,13 @@ function PluginDirectory() {
         generation === detailGeneration.current &&
         isMobileAuthOwnerCurrent(owner)
       ) {
-        const shown = { deviceId: row.host.deviceId, instanceKey: row.item.ref.id, approvalToken: installedApprovalToken(resource.revision) };
-        const record = held ? pluginCheckConclusion(held.operationId) : undefined;
-        if (held && (!record || !pluginConclusionShownBy(record, shown))) {
-          // Not the install the record proved (replaced under the same key, or the record is no longer proven): nothing
-          // of it is shown or counted as seen; the record reads the computer again (nothing moves when that read is back).
-          setDetailReplaced(true);
-          if (record && !record.told) void retryPluginCheckReadback(held.operationId);
-          return;
-        }
-        shownIdentity.current.set(row.key, shown);
+        if (!acceptDetailReply(row, resource)) return;
         setDetail(resource);
         setSelected((current) =>
           current?.row.key === row.key
             ? { ...current, row: { ...row, item: resource } }
             : current,
         );
-        tellShown(row.key);
       }
     } catch {
       if (
@@ -964,7 +957,8 @@ function PluginDirectory() {
     if (uncertainFactsRead.current === key) return;
     uncertainFactsRead.current = key;
     void getRemoteResource(invoke, row.host, row.item.ref, i18n.language, ["plugin-capabilities"]).then((resource) => {
-      if (generation === detailGeneration.current && liveSelection.current.epoch === epoch && isMobileAuthOwnerCurrent(owner) && liveSelection.current.key === row.key && liveSelection.current.focused && liveSelection.current.online) setDetail(resource);
+      if (generation === detailGeneration.current && liveSelection.current.epoch === epoch && isMobileAuthOwnerCurrent(owner) && liveSelection.current.key === row.key && liveSelection.current.focused && liveSelection.current.online
+        && acceptDetailReply(row, resource)) setDetail(resource);
     }).catch(() => { /* Existing author page stays usable; an uncertain background read needs no second notice. */ });
   }, [uncertainConfiguration, selected?.row.key, focused, online, detailLoading, detailFailed, connectionEpoch, auth.accountGeneration]);
   const renderedGeneration = detailGeneration.current;
@@ -1166,7 +1160,7 @@ function PluginDirectory() {
    * Route 3: the detail an operation was started from, brought up to date by its own read after the result, counts that
    * operation as seen once it is proven, if the reply shown is its install (`broughtUpToDate`: operation → row).
    */
-  const detailFromRecord = useRef<{ key: string; operationId: string } | undefined>(undefined);
+  const detailFromRecord = useRef<{ key: string; operationId: string; approvalToken: string } | undefined>(undefined);
   const shownIdentity = useRef(new Map<string, PluginDetailIdentity>());
   const broughtUpToDate = useRef(new Map<string, string>());
   const tellIfShown = (operationId: string, rowKey: string) => {
@@ -1179,6 +1173,28 @@ function PluginDirectory() {
   const detailUpToDateFor = (operationId: string, rowKey: string) => {
     broughtUpToDate.current.set(operationId, rowKey);
     tellIfShown(operationId, rowKey);
+  };
+  /**
+   * Every installed-detail reply about to be shown passes here (`showDetail`, and the background read of uncertain
+   * setup facts). While the detail is held to a record ("Open plugin"), a reply of another install (its approval token
+   * is not the one the record proved when it was pressed) is not shown: "This plugin was replaced", and the record is
+   * read again if it is still proven (a record being read already needs no second read). A reply that is shown sets the
+   * install the row shows and counts every record it proves as seen (route 2), by `pluginConclusionShownBy`.
+   */
+  const acceptDetailReply = (row: HostedRemoteCollectionItem, resource: { revision?: string }): boolean => {
+    const shown: PluginDetailIdentity = { deviceId: row.host.deviceId, instanceKey: row.item.ref.id, approvalToken: installedApprovalToken(resource.revision) };
+    const held = detailFromRecord.current?.key === row.key ? detailFromRecord.current : undefined;
+    if (held && shown.approvalToken !== held.approvalToken) {
+      shownIdentity.current.delete(row.key);
+      setDetailReplaced(true);
+      const record = pluginCheckConclusion(held.operationId);
+      if (record?.readback === "verified" && !record.told) void retryPluginCheckReadback(held.operationId);
+      return false;
+    }
+    shownIdentity.current.set(row.key, shown);
+    if (held) broughtUpToDate.current.set(held.operationId, row.key);  // proven again later: seen by this reply then
+    tellShown(row.key);
+    return true;
   };
   const completedOperation = useRef<{ operationId: string; row?: HostedRemoteCollectionItem; generation: number;
     /** How many detail reads had been issued when the result was first known here. */
@@ -1200,6 +1216,9 @@ function PluginDirectory() {
     // as this operation's, or why not) is the list's one read of the success. While the snapshot read is out nothing
     // happens; a failed one leaves the detail as it is (as before this operation; the result is listed at the top).
     const done = completedOperation.current!;
+    // An operation the person started from this detail succeeded: it shows that operation's result now, no longer the
+    // install a record proved before.
+    if (done.row && detailFromRecord.current?.key === done.row.key) detailFromRecord.current = undefined;
     if (done.settled || state.finalReadback !== "read") return;
     done.settled = true;
     const { row, generation, owner } = done;

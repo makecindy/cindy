@@ -1297,6 +1297,42 @@ describe("market read fences and lost-receipt facts", () => {
         expect({ shown: detailStatus() !== "replaced" && detailStatus() !== "loading", record: told() })
           .toEqual({ shown: true, record: [{ readback: "verified", told: false }] });
       });
+      // Pre-push review (2026-11-26) on 93f1926003: a plugin change notification while the detail's read was out made the
+      // record "being read" at the reply, and the same install was taken for a replaced one, for good. Now the reply is
+      // checked against the token the record proved when "Open plugin" was pressed; the record counts as seen once read
+      // again. Minimal failing input on 93f1926003: this test.
+      it("\"Open plugin\"; a change notification while the detail's read is out; the same install answers: the detail is shown, and the record is seen once read again", async () => {
+        const world = fresh();
+        const requests = wire(world);
+        await provenWhileAway(world);
+        const hold = holds();
+        fixture.read.mockImplementation(async (_invoke: any, _host: any, ref: any) => { await hold.wait("detail"); return { ...row().item, ref, blocks: [] }; });
+        await click("plugins.checks.open");
+        const reads = lightReads(requests);
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+        try {
+          await act(async () => { fixture.resourceListeners.forEach((listener) => listener("mac", { collectionId: "plugins" })); });
+          hold.release("detail");
+          await act(async () => { await vi.advanceTimersByTimeAsync(600); });
+        } finally { vi.useRealTimers(); }
+        await settle(30);
+        expect({ status: detailStatus(), record: told(), reread: lightReads(requests) - reads })
+          .toEqual({ status: undefined, record: [{ readback: "verified", told: true }], reread: 1 });
+      });
+      // Pre-push review (2026-11-26) on 93f1926003: the background read of uncertain setup facts showed its reply without
+      // the check. Now it passes the same check: another install's reply is not shown.
+      it("\"Open plugin\" shows a detail whose setup facts are uncertain; replaced before the background read answers: that reply is not shown", async () => {
+        const world = fresh();
+        wire(world);
+        await provenWhileAway(world);
+        let reads = 0;
+        fixture.read.mockImplementation(async (_invoke: any, _host: any, ref: any) => (++reads === 1
+          ? { ...row().item, ref, blocks: [{ id: "capabilities", primitive: "plugin-capabilities", data: { tasks: true, usage: "not parseable" } }] }
+          : { ...row().item, ref, revision: JSON.stringify(["1", `approved:${B_REVISION}`]), blocks: [{ id: "capabilities", primitive: "plugin-capabilities", data: { tasks: true } }] }));
+        await click("plugins.checks.open");
+        await settle(30);
+        expect({ reads, status: detailStatus() }).toEqual({ reads: 2, status: "replaced" });
+      });
       it("control: proven and not replaced: \"Open plugin\" shows the detail and counts the record as seen", async () => {
         const world = fresh();
         wire(world);

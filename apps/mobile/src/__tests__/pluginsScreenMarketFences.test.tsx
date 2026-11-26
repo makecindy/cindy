@@ -1535,6 +1535,42 @@ describe("market read fences and lost-receipt facts", () => {
         await click("plugins.slotHolder.show");
         expect(byId("plugins.checks.open")).toBeNull();
       });
+      // Pre-push review (2026-11-26) on 93f1926003: the detail opened from a record stayed held to that record after the
+      // person updated the plugin from it, so the update's own result (a new install) was taken for a replaced one and
+      // the update stayed listed. Now an operation started from that detail releases the hold. Failed on 93f1926003.
+      it("a detail opened from a record; the person updates the plugin from it: the new install is shown and the update is seen", async () => {
+        const world = host({ ui: true });
+        // The release on the market has the same pages as the installed one (only its version moves on).
+        world.market.manifest = { ...JSON.parse(JSON.stringify(world.plugin.manifest)), version: "2" };
+        let readFails = false;
+        fixture.read.mockImplementation(async (_invoke: any, _host: any, ref: any) => {
+          if (readFails) throw new Error("[TIMEOUT] remote invoke timed out");
+          return { ...row().item, ref, revision: JSON.stringify([world.plugin.manifest.version, `approved:${world.plugin.approval.revision}`]), blocks: [] };
+        });
+        // The update the computer commits installs a new package: a new approval revision under the same key.
+        const wire = fixture.wire.getMockImplementation()!;
+        fixture.wire.mockImplementation(async (...args: any[]) => {
+          const reply = await (wire as any)(...args);
+          if (args[2]?.[0]?.actionId === "management:begin" && args[2]?.[0]?.input?.kind === "install")
+            world.plugin.approval = { state: "approved", revision: "cccccccc-cccc-4ccc-8ccc-cccccccccccc" };
+          return reply;
+        });
+        await open(390);
+        readFails = true;                                                       // the page approval is not seen on this detail
+        await act(async () => { fixture.props.get("detail").uiApprovalNotice.actions[0].onPress(); });
+        await settle(30);
+        readFails = false;
+        await click("plugins.slotHolder.show");
+        await click("plugins.checks.open");
+        await settle(20);
+        expect({ status: fixture.props.get("detail").model.status, results: results() })
+          .toEqual({ status: undefined, results: [{ entry: "page-approval", result: "succeeded", readback: "verified", told: true }] });
+        const spy = vi.spyOn(expoCrypto, "randomUUID").mockImplementationOnce(() => "update-operation" as any);   // its own operation
+        try { await update(); await settle(30); } finally { spy.mockRestore(); }
+        expect({ status: fixture.props.get("detail").model.status, results: results(), banner: banner() })
+          .toEqual({ status: undefined, banner: "", results: [{ entry: "page-approval", result: "succeeded", readback: "verified", told: true },
+            { entry: "update", result: "succeeded", readback: "verified", told: true }] });
+      });
       it("page approval; the reads after it time out; the computer comes back: approved on screen and nothing stays listed", async () => {
         const world = host({ ui: true });
         world.hold = timesOut;
