@@ -4275,6 +4275,7 @@
             "sliderAria": "調整自動壓縮門檻",
             "restoreAria": "還原自動壓縮的預設比例"
           },
+          "antigravityHydrogenDescription": "宜日常編程，執行迅捷。",
           "contextLimitRoute": "今 {{tokens}} tokens",
           "contextLimitOverWindow": "已逾上游所宣之長度，請求或將未成。",
           "restoreDefault": "復預設",

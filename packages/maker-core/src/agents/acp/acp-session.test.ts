@@ -1002,6 +1002,49 @@ describe('AcpSession model and effort', () => {
     await expect(session.setModel('gpt-x')).rejects.toThrow('does not offer');
   });
 
+  // A usage report has no model id. It must not follow a new selection, and
+  // changes in used tokens alone must not refresh the displayed facts.
+  it('reports ACP context for the confirmed selection and explicit image support', async () => {
+    const choice = deferred<AcpRecord>();
+    const next = configOptions.map(option =>
+      option.id === 'model' ? { ...option, currentValue: 'v4-pro' } : option);
+    const agent = createFakeAgent({
+      agentCapabilities: { promptCapabilities: { image: false } },
+      configOptions,
+      handlers: { 'session/set_config_option': () => choice.promise },
+    });
+    const { session, ended } = await open(agent);
+    const report = vi.fn();
+    session.observeReportedModelDetails(report);
+    expect(report).toHaveBeenLastCalledWith({ modelId: 'v4-flash', imageInput: false });
+    agent.update({ sessionUpdate: 'usage_update', size: 524288, used: 0 });
+    agent.update({ sessionUpdate: 'usage_update', size: 524288, used: 40 });
+    expect(report).toHaveBeenCalledTimes(2);
+    expect(report).toHaveBeenLastCalledWith({ modelId: 'v4-flash', imageInput: false, contextWindow: 524288 });
+    const switching = session.setModel('v4-pro');
+    agent.update({ sessionUpdate: 'usage_update', size: 128000, used: 100 });
+    expect(report).toHaveBeenCalledTimes(2);
+    choice.resolve({ configOptions: next });
+    await switching;
+    expect(report).toHaveBeenLastCalledWith({ modelId: 'v4-pro', imageInput: false });
+    agent.update({ sessionUpdate: 'usage_update', size: 256000, used: 130 });
+    expect(report).toHaveBeenLastCalledWith({ modelId: 'v4-pro', imageInput: false, contextWindow: 256000 });
+    agent.exit();
+    await ended;
+    expect(report).toHaveBeenLastCalledWith(undefined);
+  });
+
+  it('does not present omitted image support as an explicit no', async () => {
+    const agent = createFakeAgent({ configOptions });
+    const { session } = await open(agent);
+    const report = vi.fn();
+    session.observeReportedModelDetails(report);
+    expect(report).toHaveBeenLastCalledWith(undefined);
+    agent.update({ sessionUpdate: 'usage_update', size: 64000, used: 0 });
+    expect(report).toHaveBeenLastCalledWith({ modelId: 'v4-flash', contextWindow: 64000 });
+    await session.close();
+  });
+
   // #12433 (unit): an active prompt's usage belongs to its model even if the
   // endpoint changes its model option before returning the prompt result.
   it('reports the model selected when the metered prompt was sent', async () => {

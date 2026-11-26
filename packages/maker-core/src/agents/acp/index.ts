@@ -32,6 +32,7 @@ export {
   openAcpSession,
   type AcpClientInfo,
   type AcpResumeOutcome,
+  type AcpReportedModelDetails,
   type OpenAcpSessionOptions,
 } from './session.js';
 export {

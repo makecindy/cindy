@@ -4371,6 +4371,7 @@
             "sliderAria": "Ajustar el umbral de compactación automática",
             "restoreAria": "Restaurar la proporción de compactación automática predeterminada"
           },
+          "antigravityHydrogenDescription": "Diseñado para la programación diaria y la ejecución rápida.",
           "contextLimitRoute": "{{tokens}} tokens actuales",
           "contextLimitOverWindow": "Por encima de la ventana declarada por el proveedor; las solicitudes pueden fallar.",
           "restoreDefault": "Restaurar valor predeterminado",

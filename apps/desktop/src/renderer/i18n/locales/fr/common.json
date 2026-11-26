@@ -4371,6 +4371,7 @@
             "sliderAria": "Ajuster le seuil de compactage automatique",
             "restoreAria": "Rétablir le ratio de compactage automatique par défaut"
           },
+          "antigravityHydrogenDescription": "Conçu pour le développement au quotidien et l’exécution rapide.",
           "contextLimitRoute": "Actuellement {{tokens}} jetons",
           "contextLimitOverWindow": "Supérieur à la fenêtre déclarée par le fournisseur ; les requêtes peuvent échouer.",
           "restoreDefault": "Réinitialiser",

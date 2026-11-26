@@ -4275,6 +4275,7 @@
             "sliderAria": "调整自动压缩触发阈值",
             "restoreAria": "恢复自动压缩比例的默认设置"
           },
+          "antigravityHydrogenDescription": "为日常编程和快速执行而设计。",
           "contextLimitRoute": "当前 {{tokens}} tokens",
           "contextLimitOverWindow": "已超过供应商声明的上下文窗口，请求可能失败。",
           "restoreDefault": "恢复默认",
