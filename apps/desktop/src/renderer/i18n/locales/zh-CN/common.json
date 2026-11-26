@@ -340,7 +340,7 @@
     "tabOwned": "我发起的",
     "startIntro": "邀请伙伴查看这个任务的全部内容，一起与同一个 Agent 协作。",
     "runsOnThisDevice": "运行在这台电脑",
-    "inviteNotice": "持有邀请链接的用户登录后即可加入，拥有与房主相同的 Agent 使用权限。",
+    "inviteNotice": "持有邀请链接的用户登录后即可加入，拥有与房主相同的 Agent 使用权限。 即使只共享子目录，访客也能查看整个 Git 仓库当前的改动。",
     "offlineAutoClose": "房主电脑持续离线后，共享会自动结束。",
     "inviteBoxHint": "将链接发送给伙伴，对方点击即可加入，也可在 Cindy 中点「加入共享任务」粘贴链接。",
     "invitationMessage": "邀请你加入「{{title}}」\n{{link}}\n点击链接加入；如果没能打开 Cindy，可在 Cindy 中点「加入共享任务」并粘贴这条链接。",

@@ -345,7 +345,7 @@
     "tabOwned": "Compartilhadas por mim",
     "startIntro": "Convide um colega para ler tudo nesta tarefa e trabalhar com o mesmo Agent.",
     "runsOnThisDevice": "Executado neste dispositivo",
-    "inviteNotice": "Qualquer pessoa com o link de convite pode participar após entrar, com o mesmo acesso ao Agent que o anfitrião.",
+    "inviteNotice": "Qualquer pessoa com o link de convite pode participar após entrar, com o mesmo acesso ao Agent que o anfitrião. Os convidados podem revisar as alterações atuais de todo o repositório Git, mesmo quando apenas uma subpasta é compartilhada.",
     "offlineAutoClose": "O compartilhamento termina automaticamente se o computador do anfitrião permanecer offline.",
     "inviteBoxHint": "Envie o link ao seu colega. Ele pode abri-lo para participar ou colá-lo em Entrar na tarefa compartilhada no Cindy.",
     "invitationMessage": "Você recebeu um convite para participar de “{{title}}”\n{{link}}\nAbra o link para participar. Se o Cindy não abrir, escolha Entrar na tarefa compartilhada no Cindy e cole este link.",

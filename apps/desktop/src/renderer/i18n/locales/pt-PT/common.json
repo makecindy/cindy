@@ -345,7 +345,7 @@
     "tabOwned": "Partilhadas por mim",
     "startIntro": "Convide um colega para ler todo o conteúdo desta tarefa e trabalhar com o mesmo Agent.",
     "runsOnThisDevice": "Executada neste dispositivo",
-    "inviteNotice": "Qualquer pessoa com a ligação de convite pode aderir após iniciar sessão, com o mesmo acesso ao Agent que o anfitrião.",
+    "inviteNotice": "Qualquer pessoa com a ligação de convite pode aderir após iniciar sessão, com o mesmo acesso ao Agent que o anfitrião. Os convidados podem rever as alterações atuais em todo o repositório Git, mesmo quando se partilha apenas uma subpasta.",
     "offlineAutoClose": "A partilha termina automaticamente se o computador do anfitrião permanecer offline.",
     "inviteBoxHint": "Envie a ligação ao seu colega. Pode abri-la para aderir ou colá-la em Aderir à tarefa partilhada no Cindy.",
     "invitationMessage": "Tem um convite para aderir a «{{title}}»\n{{link}}\nAbra a ligação para aderir. Se o Cindy não abrir, escolha Aderir à tarefa partilhada no Cindy e cole esta ligação.",

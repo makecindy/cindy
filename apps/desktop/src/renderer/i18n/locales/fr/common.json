@@ -345,7 +345,7 @@
     "tabOwned": "Partagées par moi",
     "startIntro": "Invitez un coéquipier à consulter tout le contenu de cette tâche et à travailler avec le même Agent.",
     "runsOnThisDevice": "S'exécute sur cet appareil",
-    "inviteNotice": "Toute personne disposant du lien d'invitation peut rejoindre la tâche après s'être connectée, avec le même accès à l'Agent que l'hôte.",
+    "inviteNotice": "Toute personne disposant du lien d'invitation peut rejoindre la tâche après s'être connectée, avec le même accès à l'Agent que l'hôte. Les invités peuvent consulter les modifications en cours de tout le dépôt Git, même si seul un sous-dossier est partagé.",
     "offlineAutoClose": "Le partage prend fin automatiquement si l'ordinateur de l'hôte reste hors ligne.",
     "inviteBoxHint": "Envoyez le lien à votre coéquipier. Il peut l'ouvrir pour rejoindre la tâche, ou le coller dans « Rejoindre une tâche partagée » dans Cindy.",
     "invitationMessage": "Vous êtes invité à rejoindre « {{title}} »\n{{link}}\nOuvrez le lien pour rejoindre la tâche. Si Cindy ne s'ouvre pas, choisissez « Rejoindre une tâche partagée » dans Cindy et collez ce lien.",
