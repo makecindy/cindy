@@ -170,6 +170,14 @@ const StreamingBody = memo(function StreamingBody({
   );
 });
 
+/**
+ * Text a completed reply shows. /goal 裁决 JSON 块与伙伴开场选项只在显示层剥离(原文仍保留在
+ * DB / transcript)。The task image gallery collects reply images from this same text.
+ */
+export function assistantDisplayContent(content: string, botStarterOptions?: readonly string[]): string {
+  return stripStarterOptionList(stripGoalVerdictBlock(content), botStarterOptions ?? []);
+}
+
 interface AssistantMessageProps {
   pluginUi: PluginUiMessageCandidates;
   /** F1 transit: pass through to MarkdownRenderer for local-path resolution
@@ -348,9 +356,7 @@ export const AssistantMessage = memo(function AssistantMessage({
     });
   }, [botQuote, content, currentSessionId, messageClientId, messageDeepLink]);
 
-  // /goal:隐藏助手输出末尾由 goal 协议要求模型吐出的裁决 JSON 块(仅显示层剥离,
-  // 原文仍保留在 DB / transcript)。pattern:末尾的 ```json {...goal_status...} ``` 围栏块。
-  const displayContent = stripStarterOptionList(stripGoalVerdictBlock(content), botStarterOptions ?? []);
+  const displayContent = assistantDisplayContent(content, botStarterOptions);
   const streamFadeKey = messageClientId
     ? `${currentSessionId ?? ''}\u0000${messageClientId}`
     : undefined;
@@ -420,7 +426,7 @@ export const AssistantMessage = memo(function AssistantMessage({
           </div>
         )}
         <div data-selection-quote-body="" className="contents">
-          {renderPluginUiBody(pluginUi.messageBody ? { position: 'message.body', role: 'assistant', sessionId: currentSessionId,
+          {renderPluginUiBody(pluginUi.messageBody ? { position: 'message.body', role: 'assistant', sessionId: currentSessionId, clientId: messageClientId,
             disabled: !!ghostRenderCard || !!remoteHostId,
             context: () => ({ message: { clientId: messageClientId, role: 'assistant', content, isStreaming } }) } : undefined,
           ghostRenderCard && messageClientId && !showOriginal ? (
@@ -457,6 +463,7 @@ export const AssistantMessage = memo(function AssistantMessage({
               content={displayContent}
               isStreaming={isStreaming}
               streamFadeKey={streamFadeKey}
+              galleryMessageKey={messageClientId}
               localFileRefs={localFileRefs}
               currentSessionId={currentSessionId}
               currentSessionTitle={currentSessionTitle}

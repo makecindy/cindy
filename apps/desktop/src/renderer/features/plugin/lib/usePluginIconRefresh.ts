@@ -1,7 +1,7 @@
 import type { PluginIconMetadata } from '@cindy/plugin-protocol';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
-const ICON_REFRESH_LEAD_MS = 30_000;
+export const ICON_REFRESH_LEAD_MS = 30_000;
 const ICON_REFRESH_MIN_DELAY_MS = 1_000;
 const ICON_ERROR_RECOVERY_COOLDOWN_MS = 30_000;
 const ICON_REFRESH_RETRY_DELAY_MS = 30_000;

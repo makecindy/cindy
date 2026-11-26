@@ -106,8 +106,10 @@
     --z-dropdown: 10010;
     --z-tooltip: 10011;
     --z-modal-popover-nested: 10020;
+    --z-modal-blocking: 10050;
     --z-toast: 10100;
     --z-toast-top: 10101;
+    --z-blocking-gate: 10200;
     --quota-bar-fill: var(--text-secondary);
     --quota-bar-warn: var(--warning-fg);
     --quota-bar-crit: var(--error-flat);

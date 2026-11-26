@@ -5,6 +5,7 @@ import { createRequire } from 'node:module';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
+import { setImmediate as nextTurn } from 'node:timers/promises';
 import { chromium } from 'playwright-core';
 
 import { beginAppSessionBoundary, commitVolatileAppSession, getActiveDataOwnerPushStamp, LOCAL_DATA_OWNER_ID } from '../../../desktop/src/main/appSessionState.ts';
@@ -191,18 +192,21 @@ async function fixture(t, { executable, resident = true, node = false, services 
     desktopExited: () => { desktopPresent = false; }, hold: () => runtime.pauseForDesktop(holdMessage) };
 }
 
-function installBrowserSubstitute(t, { beforePage, beforeToolAnswer } = {}) {
+function installBrowserSubstitute(t, { beforePage, beforeBinding, beforeToolAnswer } = {}) {
   const pages = [];
   let contextCount = 0;
+  let contextsClosed = 0;
+  let browsersClosed = 0;
   let closeObserver;
   const received = [];
   t.mock.method(chromium, 'launch', async () => {
     const browser = {
-      once() {}, isConnected: () => true, async close() {},
+      once() {}, isConnected: () => true, async close() { browsersClosed++; },
       async newContext() {
         contextCount++;
         return {
-          once() {}, on() {}, route() {}, routeWebSocket() {}, async close() {}, browser: () => browser,
+          once() {}, on() {}, route() {}, routeWebSocket() {},
+          async close() { contextsClosed++; }, browser: () => browser,
           async newPage() {
             await beforePage?.();
             let closed = false;
@@ -211,7 +215,10 @@ function installBrowserSubstitute(t, { beforePage, beforeToolAnswer } = {}) {
             const page = {
               on() {}, isClosed: () => closed, mainFrame: () => frame, route() {},
               async close() { closed = true; closeObserver?.(); },
-              exposeBinding(_name, handler) { binding = handler; },
+              async exposeBinding(_name, handler) {
+                if (beforeBinding) await beforeBinding(page);
+                binding = handler;
+              },
               async goto(url) { loadUrl = url; },
               async addScriptTag() {},
               async evaluateHandle() {
@@ -236,7 +243,8 @@ function installBrowserSubstitute(t, { beforePage, beforeToolAnswer } = {}) {
     };
     return browser;
   });
-  return { pages, received, contexts: () => contextCount, observeClose: observer => { closeObserver = observer; } };
+  return { pages, received, contexts: () => contextCount, contextsClosed: () => contextsClosed,
+    browsersClosed: () => browsersClosed, observeClose: observer => { closeObserver = observer; } };
 }
 
 async function filesIn(root) {
@@ -504,6 +512,42 @@ test('stopping a still-loading logic page rejects its startup waiter', async t =
   assert.equal(runtime.stateOf(f.id), 'off');
 });
 
+// §3.2 integration with a substituted browser. The real Host runtime must
+// shut down after a lost binding reply, after preserving both Page and Context
+// during the normal grace period. The newPage regression does not cover either.
+test('plugin runtime closes the browser even when a logic-page binding never settles', { timeout: 5_000 }, async t => {
+  const installing = Promise.withResolvers();
+  const cleanupBinding = Promise.withResolvers();
+  const browser = installBrowserSubstitute(t, { beforeBinding(page) {
+    installing.resolve(page);
+    return cleanupBinding.promise;
+  } });
+  const f = await fixture(t, { resident: false });
+  await f.runtime.reconcile();
+  const call = f.call();
+  const page = await installing.promise;
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const closing = f.runtime.close();
+  try {
+    await nextTurn();
+    t.mock.timers.tick(2_000);
+    await nextTurn();
+    assert.equal(page.isClosed(), false, 'page close waits for binding setup');
+    assert.equal(browser.contextsClosed(), 0, 'partition close waits for binding setup');
+    t.mock.timers.tick(3_000);
+    await nextTurn();
+    assert.equal(page.isClosed(), true);
+    assert.equal(browser.contextsClosed(), 1);
+    assert.equal(browser.browsersClosed(), 1, 'browser closes within the grace limit');
+    await closing;
+    assert.equal((await call).ok, false);
+  } finally {
+    cleanupBinding.resolve();
+    t.mock.timers.reset();
+    await closing;
+  }
+});
+
 test('pause reports an in-flight Node tool as uncertain without an external fetch', realPage, async t => {
   const f = await fixture(t, { executable: executablePath, node: true });
   await f.runtime.reconcile();
@@ -619,8 +663,44 @@ test('an open settings page cannot wake a plugin or change KV during the hold', 
   assert.deepEqual(await write({ value: 'during' }), { status: 409, json: held });
   const wake = await panel.evaluate(async () => { const response = await fetch('/wake'); return { status: response.status, json: await response.json() }; });
   assert.deepEqual(wake, { status: 409, json: held });
-  await f.runtime.resumeAfterDesktop();
-  assert.deepEqual(await panel.evaluate(async () => (await fetch('/kv')).json()), { value: 'before' });
+
+  // Stop while the resumed resident is registering its binding. The actual
+  // Playwright binding reply creates a child Disposable on the logic page.
+  const bindingStarted = Promise.withResolvers();
+  const finishBinding = Promise.withResolvers();
+  const context = panel.context();
+  const closeContext = t.mock.method(context, 'close');
+  const newPage = context.newPage.bind(context);
+  t.mock.method(context, 'newPage', async () => {
+    const page = await newPage();
+    const exposeBinding = page.exposeBinding.bind(page);
+    t.mock.method(page, 'exposeBinding', async (...args) => {
+      bindingStarted.resolve(page);
+      await finishBinding.promise;
+      return exposeBinding(...args);
+    });
+    return page;
+  });
+  let page;
+  let closing;
+  const requests = [];
+  try {
+    await f.runtime.resumeAfterDesktop();
+    assert.deepEqual(await panel.evaluate(async () => (await fetch('/kv')).json()), { value: 'before' });
+    page = await bindingStarted.promise;
+    page.on('request', request => requests.push(request.url()));
+    const closePage = t.mock.method(page, 'close');
+    closing = f.runtime.close();
+    await nextTurn();
+    assert.equal(closePage.mock.callCount(), 0);
+    assert.equal(closeContext.mock.callCount(), 0);
+    assert.equal(page.isClosed(), false, 'the binding still has a live parent page');
+  } finally {
+    finishBinding.resolve();
+    await closing;
+  }
+  assert.equal(page.isClosed(), true);
+  assert.deepEqual(requests, [], 'the stopped resident never loads its entry');
 });
 
 test('real observer delivery resumes on the next event without replaying a held event', realPage, async t => {

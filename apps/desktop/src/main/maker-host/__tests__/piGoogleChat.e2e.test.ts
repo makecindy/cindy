@@ -105,7 +105,10 @@ describe.skipIf(!existsSync(binary))('Google Chat launch through real Pi', () =>
     // #11023: the private gateway URL is intentionally unavailable. The strict
     // loopback reproduces its reported store rejection without a paid endpoint.
     { status: 200, staleRoute: false, customGateway: true },
-  ])('settles HTTP $status (stale route: $staleRoute, custom: $customGateway)', async ({ status, staleRoute, customGateway }) => {
+    // #12771: a second connection offering the same model retains native wire defaults.
+    { status: 200, staleRoute: false, customGateway: true, neighbor: true },
+  ])('settles HTTP $status (stale route: $staleRoute, custom: $customGateway, neighbor: $neighbor)', async ({ status, staleRoute, customGateway, neighbor }) => {
+    const strictGateway = customGateway && !neighbor;
     const root = mkdtempSync(path.join(tmpdir(), 'cindy-google-chat-'));
     const agentHome = path.join(root, 'agent');
     const workingDir = path.join(root, 'work');
@@ -120,17 +123,19 @@ describe.skipIf(!existsSync(binary))('Google Chat launch through real Pi', () =>
       for await (const chunk of req) chunks.push(Buffer.from(chunk));
       const body = JSON.parse(Buffer.concat(chunks).toString());
       const hasStore = Object.hasOwn(body, 'store');
-      const code = hasStore ? 400 : status;
+      const rejectsRetention = strictGateway && Object.hasOwn(body, 'prompt_cache_retention');
+      const code = rejectsRetention ? 422 : hasStore && !neighbor ? 400 : status;
       requests.push({ url: req.url ?? '', body, status: code });
       if (code !== 200) {
         res.writeHead(code, { 'content-type': 'application/json' });
         res.end(JSON.stringify({ error: { code, status: code === 401 ? 'UNAUTHENTICATED' : 'INVALID_ARGUMENT',
-          message: hasStore ? 'Invalid JSON payload received. Unknown name "store": Cannot find field.'
+          message: rejectsRetention ? 'extra_forbidden: body.prompt_cache_retention'
+            : hasStore ? 'Invalid JSON payload received. Unknown name "store": Cannot find field.'
             : code === 401 ? 'API key not valid. Please pass a valid API key.' : 'Missing required field: messages.' } }));
         return;
       }
       res.writeHead(200, { 'content-type': 'text/event-stream' });
-      if (customGateway && requests.length === 1) {
+      if (strictGateway && requests.length === 1) {
         for (const choice of [
           { index: 0, delta: { role: 'assistant', tool_calls: [{ index: 0,
             id: longId, type: 'function', function: { name: 'read', arguments: JSON.stringify({ path: fixture }) },
@@ -155,7 +160,7 @@ describe.skipIf(!existsSync(binary))('Google Chat launch through real Pi', () =>
       const official = 'https://generativelanguage.googleapis.com/v1beta/openai';
       const upstream = customGateway ? 'https://truefoundry.example.invalid/v1' : official;
       const modelId = customGateway ? 'production-chat' : 'gemini-3.8-flash';
-      const config = { id: 'google-fixture', name: 'Google', runtimes: { pi: {
+      const config = { id: neighbor ? 'adjacent-fixture' : 'google-fixture', name: 'Google', runtimes: { pi: {
         ...(!customGateway ? { catalogPresetId: 'google-gemini-api' } : {}),
         baseUrl: upstream, wireProtocol: 'openai-chat' as const,
         models: [{ id: modelId, name: modelId,
@@ -172,7 +177,9 @@ describe.skipIf(!existsSync(binary))('Google Chat launch through real Pi', () =>
         // The persisted local override is sanitized and projected through the
         // production catalog path, not injected into Pi's generated models.json.
         const parsed = sanitizeModelCatalogOverrides({ patches: {
-          [`${encodeURIComponent(custom.id)}:${modelId}`]: { perAgent: { pi: { supportsStore: false, maxToolCallIdLength: 64 } } },
+          [`google-fixture:${modelId}`]: { perAgent: { pi: {
+            supportsLongCacheRetention: false, supportsStore: false, maxToolCallIdLength: 64,
+          } } },
         } });
         expect(parsed.invalid).toEqual([]);
         custom.models.pi = custom.models.pi!.map(model =>
@@ -212,9 +219,13 @@ describe.skipIf(!existsSync(binary))('Google Chat launch through real Pi', () =>
       const elapsedMs = performance.now() - started;
       expect(requests.map(request => ({ url: request.url, hasStore: Object.hasOwn(request.body, 'store'),
         status: request.status })), JSON.stringify(events.filter(event => event.type === 'error' || event.type === 'done')))
-        .toEqual(Array.from({ length: customGateway ? 2 : 1 }, () => ({ url: '/v1beta/openai/chat/completions', hasStore: false, status })));
-      expect(serialized.providers[provider.id].models[0].compat.supportsStore).toBe(false);
-      if (customGateway) {
+        .toEqual(Array.from({ length: strictGateway ? 2 : 1 }, () => ({ url: '/v1beta/openai/chat/completions', hasStore: !!neighbor, status })));
+      if (neighbor) {
+        expect(requests[0].body).toMatchObject({ store: false, prompt_cache_retention: '24h' });
+      } else {
+        expect(serialized.providers[provider.id].models[0].compat.supportsStore).toBe(false);
+      }
+      if (strictGateway) {
         expect(serialized.providers[provider.id].models[0].compat.maxToolCallIdLength).toBe(64);
         const messages = requests[1].body.messages as Array<{ role: string; tool_calls?: Array<{ id: string }>; tool_call_id?: string }>;
         const callId = messages.flatMap(message => message.tool_calls ?? [])[0].id;

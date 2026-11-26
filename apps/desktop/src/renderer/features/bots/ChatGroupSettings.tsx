@@ -21,8 +21,10 @@ import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { ProfileEditDialog } from '@/components/settings/ProfileEditDialog';
 import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
 import { cn } from '@/lib/utils';
+import { chatGroupHumanDisplayName } from '@cindy/maker-shared/botGroupPresentation';
 import type { BotGroupMemberView, BotGroupSummary, ChatGroupAction } from '../../../shared/botGroupChat';
 import { groupRepositoryLabel, parseGroupRepository } from '../../../shared/botGroupChat';
+import { BotGroupExternalBadge } from './BotGroupExternalBadge';
 import { GroupMaskAvatar, useOpenGroupMask } from './GroupMaskControls';
 import { useGroupMask } from './groupMaskPresentation';
 import { ChatBotAccessField } from './ChatBotAccessField';
@@ -286,7 +288,7 @@ export function ChatGroupSettings({ group }: { group: BotGroupSummary }) {
               }} />} />}
           <SettingsRow wrap title={t(shared('replyMode'))}
             hint={t(replyMode === 'mentioned' ? key('replyModeMentionedNote') : assistantAnswers ? key('replyModeAssistantNote') : shared('replyModeNote'))}
-            trailing={<Select label={t(shared('replyMode'))} value={replyMode} disabled={busy} size="compact" className="max-w-[220px]"
+            trailing={<Select label={t(shared('replyMode'))} value={replyMode} disabled={busy} size="compact"
               options={(['mentioned', 'all'] as const).map(value => ({ value,
                 label: t(value === 'all' && assistantAnswers ? key('replyModeAssistant') : REPLY_MODE_LABELS[value]) }))}
               onValueChange={value => void saveRules({ replyMode: value as typeof replyMode })} />} />
@@ -298,7 +300,7 @@ export function ChatGroupSettings({ group }: { group: BotGroupSummary }) {
           {/* Single-speaker servers always answer one teammate at a time, so there is no speaking mode. */}
           {!group.singleSpeaker && <SettingsRow wrap title={t(shared('speakingMode'))}
             hint={t(shared(speakingMode === 'auto' ? 'speakingModeAutoNote' : 'speakingModeSequentialNote'))}
-            trailing={<Select label={t(shared('speakingMode'))} value={speakingMode} disabled={busy} size="compact" className="max-w-[220px]"
+            trailing={<Select label={t(shared('speakingMode'))} value={speakingMode} disabled={busy} size="compact"
               options={(['auto', 'sequential'] as const).map(value => ({ value, label: t(SPEAKING_MODE_LABELS[value]) }))}
               onValueChange={value => void saveRules({ speakingMode: value as typeof speakingMode })} />} />}
         </SettingsCard>
@@ -355,7 +357,7 @@ export function ChatGroupSettings({ group }: { group: BotGroupSummary }) {
       </div>
       <form id="chat-group-profile" onSubmit={saveNickname}>
         <FormField label={t(key('nickname'))} hint={t(key('nicknameHint'))}>{props =>
-          <Input {...props} size="md" value={nickname} maxLength={40} placeholder={me.displayName} disabled={busy}
+          <Input {...props} size="md" value={nickname} maxLength={40} placeholder={chatGroupHumanDisplayName({ ...me, nickname: null, name: me.displayName ?? me.name })} disabled={busy}
             onChange={value => { nicknameDirty.current = true; setNickname(value); }} />}</FormField>
       </form>
     </>;
@@ -454,7 +456,10 @@ function Hero({ group, name, me, invite }: { group: BotGroupSummary; name: strin
   return <div className="flex items-center gap-3">
     <BotGroupSidebarAvatar members={group.members} compact />
     <div className="min-w-0 flex-1">
-      <p className="text-16 font-medium leading-[1.375] text-[var(--text-primary)] [overflow-wrap:anywhere]">{name}</p>
+      <p className="flex flex-wrap items-center gap-1.5 text-16 font-medium leading-[1.375] text-[var(--text-primary)] [overflow-wrap:anywhere]">
+        <span>{name}</span>
+        {group.external === true && <BotGroupExternalBadge />}
+      </p>
       <p className="mt-0.5 text-13 leading-[1.38] tabular-nums text-[var(--text-secondary)]">
         {t('bots.groupChat.memberCount', { count: group.members.length })}{role && ` · ${role}`}
       </p>

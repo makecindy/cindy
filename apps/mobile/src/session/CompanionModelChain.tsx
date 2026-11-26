@@ -30,7 +30,7 @@ import { useRemoteAgentCatalogs } from './useRemoteAgentCatalogs';
 export type { CompanionModelRoute } from '@cindy/maker-shared/model-route';
 /** 来源数 · 选法 · 推理强度，与 Desktop 选择器里模型组那一行同一写法。 */
 function modelGroupHint(group: CompanionModelGroup, t: TFunction): string {
-  return [t('models.modelGroups.sourceCount', { count: group.sources }), t(`models.modelGroups.strategy.${group.strategy}`),
+  return [t('models.modelGroups.sourceCount', { count: group.sources }), group.strategy ? t(`models.modelGroups.strategy.${group.strategy}`) : '',
     group.effort ? t(`models.options.effortLevels.${group.effort}`, { defaultValue: group.effort }) : ''].filter(Boolean).join(' · ');
 }
 export function readCompanionModelChain(value: unknown): CompanionModelRoute[] {
@@ -67,7 +67,7 @@ export function CompanionModelChain({ deviceId, values, onChange, onPick, disabl
       const engine = !route.agentDeviceId ? findPluginEngine(pluginEngines.engines, route.providerId) : null;
       title = pluginEngineModelName(engine, route.model)
         ?? (route.model === PLUGIN_ENGINE_DEFAULT_MODEL ? t('models.pluginEngines.defaultModel') : route.model);
-      detail = [engine?.name ?? t('models.pluginEngines.sectionTitle'), remote?.name, effort].filter(Boolean).join(' · ');
+      detail = [engine?.name ?? t('models.pluginEngines.genericName'), remote?.name, effort].filter(Boolean).join(' · ');
     } else {
       const agent = route.harness === 'claude' ? 'claude-code' : route.harness;
       const routeProviders = route.agentDeviceId ? remote?.providers ?? [] : providers;

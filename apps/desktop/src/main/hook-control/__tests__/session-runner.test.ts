@@ -719,6 +719,30 @@ describe('hook task model selection on next send', () => {
     expect(h.readImDefaultSettings).toHaveBeenCalledWith();
   });
 
+  // 规则: docs/dev-rules/im-turn-flow.md §0 —— 官方机器人共用一套项目配置。官方 Discord 上线时
+  // 共用那份已是正本: 没有按渠道的旧行要等并入, 也没有 /model 卡, 服务端便签(dispatch options)
+  // 不作数, 更不能读个人 Discord bot 的 'discord' 默认值。
+  // 最小失败输入: source.im='discord' + 共用行有模型 + 派发带旧便签; 修复前取值链认不出 discord,
+  // 直接用便签里的 stale-model / low。生产入口: runner.run 的跟随默认取值链; tier: unit。
+  it('官方 Discord 只读共用项目配置: 不等并入, 也不吃服务端便签', async () => {
+    h.useActualDefaults = true;
+    h.isSharedPrefsAdopted.mockReturnValue(false);
+    h.getWorkspacePref.mockImplementation((...args: unknown[]) => args[0] === 'shared'
+      ? { workspace: 'repo', agentKind: 'claude-code', model: 'test-model', effort: null, permissionMode: null }
+      : null);
+    await createMakerHookSessionRunner({ log }).run(baseReq({
+      isNew: false, model: 'stale-model', effort: 'low', workspaceAlias: 'repo',
+      source: { im: 'discord', userText: 'hello' },
+    }));
+    const policy = h.followPolicy.mock.calls[0][0];
+    const target = await policy.resolveTarget([connectedProvider('xd', [catalogModel('test-model')])]);
+    expect(target).toMatchObject({ agentKind: 'claude-code', model: 'test-model', effort: 'high' });
+    expect(h.getWorkspacePref).toHaveBeenCalledWith('shared', null, 'repo');
+    expect(h.getWorkspaceProviderSource).toHaveBeenCalledWith('shared', null, 'repo');
+    expect((h.getWorkspacePref.mock.calls as unknown[][]).some((call) => call[0] === 'discord')).toBe(false);
+    expect(h.isSharedPrefsAdopted).not.toHaveBeenCalledWith('discord');
+  });
+
   // 规则: 所有官方机器人共用一套项目配置(sharedProjectPrefs.ts)。升级后某个渠道还没连上过
   // 服务端时, 它原有的按渠道偏好尚未并入共用的那一份 —— 这段时间必须继续按它自己的行跑,
   // 否则用户原先给这个项目配的模型会在升级后悄悄变回默认。
@@ -1038,6 +1062,18 @@ describe('hook session 精确接管边界', () => {
     const info = await createMakerHookSessionRunner({ log }).inspect('previous', () => true);
     expect(info?.usable).toBe(false);
     expect(info?.resumableArchive === true).toBe(canResume);
+  });
+
+  // PR #12405: a shared project can contain a private teammate task. Ordinary hook
+  // routing must distinguish it even when active; archived/remote cases don't cover this (unit).
+  it('identifies teammate-owned tasks during hook target inspection', async () => {
+    const { getSessionRowSnapshotStrict } = await import('../../localDb/ipc/sessions.js');
+    vi.mocked(getSessionRowSnapshotStrict).mockResolvedValueOnce({
+      status: 'active', source: 'bot', workingDir: '/repo', title: null, userSendAt: 1,
+      workspaceKind: 'project', providerId: null,
+    });
+    await expect(createMakerHookSessionRunner({ log }).inspect('companion'))
+      .resolves.toMatchObject({ companionOwned: true });
   });
 
   it('拒绝接管 SSH 远程会话和内部 worker 会话', async () => {
@@ -1494,11 +1530,14 @@ describe('hook session-runner 的 userSendAt 时序(未分类误判回归)', () 
   });
 
   it.each([
-    ['telegram', 'telegram:dm:bot:user:g0', 'telegram'],
+    ['telegram', 'telegram:dm:bot:user:g0', 'telegram', 'telegram'],
     // 官方飞书的 vendorOptions.source 刻意不是 'feishu'(个人飞书 bot 会话的值):
     // cindy_feishu_bot 据此追加官方会话提示, 插件配置按无桌面交互面收口。
-    ['feishu', 'feishu:dm:cli_app:ou_user:g0', 'feishu-hook'],
-  ] as const)('官方 %s 新会话保留 provider 标记并把包命令留给 Desktop 确认', async (im, externalKey, vendorSource) => {
+    ['feishu', 'feishu:dm:cli_app:ou_user:g0', 'feishu-hook', 'feishu'],
+    // 安全回归: 官方 Discord 的任务行若记成 'discord'(个人 Discord bot 的来源值), 启动时会被
+    // 个人 bot 的逻辑强制归入「对话」分组并改写成托管目录, cindy_discord 也会把它当个人 bot 任务。
+    ['discord', 'discord:dm:100000000000000001:200000000000000002:g0', 'discord-hook', 'discord-hook'],
+  ] as const)('官方 %s 新会话保留 provider 标记并把包命令留给 Desktop 确认', async (im, externalKey, vendorSource, dbSource) => {
     const runner = createMakerHookSessionRunner({ log });
     const outcome = await runner.run(
       baseReq({
@@ -1522,7 +1561,7 @@ describe('hook session-runner 的 userSendAt 时序(未分类误判回归)', () 
       origin: { kind: 'hook', source: im },
       rawChannelText: 'hello',
     });
-    expect(h.setSessionSourceInDb).toHaveBeenCalledWith('sess-new', im);
+    expect(h.setSessionSourceInDb).toHaveBeenCalledWith('sess-new', dbSource);
   });
 
   it.each([
@@ -1532,6 +1571,8 @@ describe('hook session-runner 的 userSendAt 时序(未分类误判回归)', () 
     // 安全回归: 官方飞书 hook 的 source.im 与个人飞书 bot 同为 'feishu', 但它是服务端
     // 转发的轮次, 不得拿到个人 bot 的可信 IM origin(否则包管理命令绕过桌面确认)。
     ['feishu', { kind: 'hook', source: 'feishu' }],
+    // 同理: 官方 Discord 与个人 Discord bot 同为 'discord', 只能拿 hook origin。
+    ['discord', { kind: 'hook', source: 'discord' }],
   ] as const)('线程来源 %s 使用 source.userText 作为确定性命令原文', async (im, expectedOrigin) => {
     const runner = createMakerHookSessionRunner({ log });
     const rawCommand = 'pi install npm:context-mode';
@@ -2685,7 +2726,8 @@ describe('进度快照(turn.progress 链路)', () => {
     expect(session.setPermissionModeTracked).not.toHaveBeenCalled();
   });
 
-  it('Telegram 群轮次仍取 turn lease, 且到 observer 收口(含后台任务)才释放', async () => {
+  // 官方 Discord 的服务器频道轮次同样多人可见(dispatcher 的 deriveLaneKind 判为 group)。
+  it.each(['telegram', 'discord'] as const)('%s 群轮次仍取 turn lease, 且到 observer 收口(含后台任务)才释放', async (im) => {
     // lease 与权限档是两件事: 上一版把它跟临时降档一起删了, 于是「前台 done →
     // 后台任务续跑」的空窗里 Desktop 轮次会被放进来共享 session 事件流 / origin /
     // 交互路由(codex review #1490)。这里锁住「取了、且不早放」。
@@ -2693,7 +2735,7 @@ describe('进度快照(turn.progress 链路)', () => {
       makeManualSession(opts.id ?? 'sess-x'),
     );
     const runner = createMakerHookSessionRunner({ log });
-    const p = runner.run(baseReq({ source: { im: 'telegram', userText: 'hi' }, laneKind: 'group' }));
+    const p = runner.run(baseReq({ source: { im, userText: 'hi' }, laneKind: 'group' }));
     await flush();
 
     const session = await fakeMaker.createSession.mock.results[0].value;
@@ -3151,6 +3193,7 @@ describe('上游过载自动重试期间的渠道进度(零产出窗口)', () =>
     h.eventCbs.get('sess-new')?.({ type: 'done', data: { result: 'late result' } });
     const outcome = await pending;
     expect(outcome.status).toBe('error');
+    expect(outcome.errorReason).toBe(reason);
     if (text.startsWith('![')) {
       expect(outcome.finalText).toContain('🖼️ _shot_');
       expect(outcome.finalText).not.toContain('shot.png');
@@ -3172,6 +3215,7 @@ describe('上游过载自动重试期间的渠道进度(零产出窗口)', () =>
     } });
     const outcome = await pending;
     expect(outcome.status).toBe('error');
+    expect(outcome.errorReason).toBe('output-limit');
     expect(outcome.errorMessage).toContain('131064');
     expect(outcome.errorMessage).toContain('131072');
     expect(outcome.errorMessage).toContain('降低推理强度');

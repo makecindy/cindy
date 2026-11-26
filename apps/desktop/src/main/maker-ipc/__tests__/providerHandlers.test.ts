@@ -1,3 +1,4 @@
+import { streamSimple as streamPiChat } from '@earendil-works/pi-ai/api/openai-completions';
 import { remoteProviderDisableKey } from '@cindy/model-providers';
 import * as customProviderStore from '../../maker-host/custom-provider-store.js';
 import { configureModelSettingsActions, manageAppModels } from '../../app-settings/models';
@@ -25,6 +26,7 @@ import { clearCurrentDbClient, setCurrentDbClient } from '../../localDb/client/c
 import * as schema from '../../localDb/schema.js';
 import { createCustomProvider, getCustomProvider, listCustomProviders, mergeDiscoveredModelsIntoConfig, updateCustomProviderIfUnchanged, revokeCodexAccountUltrafast } from '../../maker-host/custom-provider-store.js';
 import { issueModelSourceSnapshot } from '../../maker-host/model-source-snapshots.js';
+import { buildPiNativeProvidersFromConfigs } from '../../maker-host/pi-native-catalog.js';
 import { fetchProviderModels } from '../../maker-host/provider-model-fetch.js';
 import { deriveModelsDiscoveryUrl } from '../../maker-host/generic-oauth.desktop.js';
 import { codexCustomProviderConfigSignature } from '../../maker-host/codex-custom-provider-route.js';
@@ -45,7 +47,7 @@ import { throwIpcError } from '../../utils/ipcValidate.js';
 import { MAKER_INVOKE, MAKER_PUSH } from '../channels.js';
 import { registerProviderHandlers, type ProviderHandlerDeps } from '../providerHandlers.js';
 import { clearModelVisibilityMirror, waitForModelVisibilityMirror, getModelVisibilityMirrorSnapshot, setModelVisibilityMirror } from '../../maker-host/model-visibility-mirror.js';
-import { runDeviceLinkInvokeContext } from '../../device-link/invoke-context.js';
+import { runDeviceLinkInvokeContext, readDeviceLinkModelSelectionOrigin } from '../../device-link/invoke-context.js';
 import { extractIpcError } from '../../../renderer/utils/ipcError';
 import * as providerPresentation from '../../maker-host/provider-presentation-store.js';
 import * as llamaCppService from '../../local-model-runtime/llamaCppService.js';
@@ -3392,6 +3394,31 @@ describe('provider:custom:* CRUD handlers', () => {
     expect((await listCustomProviders())[0]?.auth).toEqual(oauthConfig.auth);
   });
 
+  it('cloud credential replacement keeps newer configuration committed by the native queue', async () => {
+    mountDb(); const harness = new IpcHarness();
+    const config = imageProviderConfig('cloud-fixture');
+    await createCustomProvider(config);
+    let replace!: import('../ipcHandlerRegistry.js').IpcHandler;
+    let release!: () => void; const blocked = new Promise<void>(resolve => { release = resolve; });
+    let entered!: () => void; const preparing = new Promise<void>(resolve => { entered = resolve; });
+    let preparations = 0;
+    const storeKey = vi.fn(() => true);
+    registerProviderHandlers(harness, makeDeps({
+      registerCloudCredentialReplacement: handler => { replace = handler; },
+      prepareCodexCustomProviderHostChange: vi.fn(async () => { if (++preparations === 1) { entered(); await blocked; } }),
+      storeCustomProviderKey: storeKey,
+    }));
+    const newer = { ...config, name: 'Native edit', runtimes: { ...config.runtimes, codex: { ...config.runtimes.codex!, baseUrl: 'https://new.example.test/v1' } } };
+    const update = harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_UPDATE, newer);
+    await preparing;
+    const replacement = replace({}, config.id, { codex: 'fixture-key' });
+    await new Promise(resolve => setTimeout(resolve, 0)); release();
+    await expect(update).resolves.toMatchObject({ok:true});
+    await expect(replacement).resolves.toMatchObject({ok:true});
+    expect(await getCustomProvider(config.id)).toMatchObject({name:'Native edit',runtimes:{codex:{baseUrl:'https://new.example.test/v1'}}});
+    expect(storeKey).toHaveBeenCalledWith(config.id, 'codex', 'fixture-key');
+  });
+
   it('serializes provider updates so a failed write restores credentials before the next edit', async () => {
     mountDb();
     const harness = new IpcHarness();
@@ -4862,7 +4889,8 @@ describe('provider:oauth mutation ordering', () => {
         discoveredSource: { kind: 'magpie', providerId: 'New account' } }], 'pi', 'fixture-request');
     });
     const broadcastToAllWindows = vi.fn();
-    const bindings = { subscriptionAccountKind: () => null, isCodexAccountProvider: () => false,
+    // The closure first checks for a cloud settings call; none is running here.
+    const bindings = { cloudManagementExecution: () => null, subscriptionAccountKind: () => null, isCodexAccountProvider: () => false,
       getActiveCatalog: () => catalog, storedCustomProviderId, runGenericOAuthLogin,
       broadcastToAllWindows, MAKER_PUSH, deriveModelsDiscoveryUrl, discoverGenericOAuthModels,
       getCustomProvider, mergeDiscoveredModelsIntoConfig, updateCustomProviderIfUnchanged,
@@ -5636,6 +5664,48 @@ describe('model context limit IPC', () => {
       .rejects.toThrow();
   });
 
+  // #11716/#4477 unit: synthetic remote senders may read fixed numeric metadata,
+  // but scoped callers and all preference writes must retain their sender gate.
+  it('allows only the authorized same-account native read while preserving local and mutation trust gates', async () => {
+    const harness = new IpcHarness();
+    const native = { contextWindow: 100_000, usableContextWindow: 95_000, autoCompactTokenLimit: 90_000,
+      modelMaxContextWindow: 100_000, source: 'runtime' as const, fallbackModel: false };
+    const readNative = vi.fn(async () => native);
+    registerProviderHandlers(harness, makeDeps({
+      assertTrustedSender: () => { throwIpcError('PERMISSION_DENIED', 'untrusted sender'); },
+      isRemoteContextRead: () => readDeviceLinkModelSelectionOrigin() === 'owner',
+      readModelContextLimit: () => ({ limit: 800_000, isCustomized: true }),
+      writeModelContextLimit: vi.fn(),
+      readCodexContextWindowInfo: readNative,
+    }));
+    const target = { ...primary, sessionId: 'remote-task' };
+    const channel = MAKER_INVOKE.MODEL_CONTEXT_LIMIT_GET;
+    await expect(harness.invoke(channel, target)).rejects.toThrow('PERMISSION_DENIED');
+    await expect(runDeviceLinkInvokeContext({ controllerDeviceId: 'device-a', channel }, () => harness.invoke(channel, target)))
+      .resolves.toMatchObject({ codexContext: native });
+    await expect(runDeviceLinkInvokeContext({ controllerDeviceId: '', channel }, () => harness.invoke(channel, target)))
+      .rejects.toThrow('PERMISSION_DENIED');
+    await expect(runDeviceLinkInvokeContext({ controllerDeviceId: 'device-a', channel },
+      () => harness.invoke(MAKER_INVOKE.MODEL_CONTEXT_LIMIT_SET, target, 50_000, stamp)))
+      .rejects.toThrow('PERMISSION_DENIED');
+    expect(readNative).toHaveBeenCalledExactlyOnceWith(primary, 'remote-task');
+  });
+  it('rejects a native context read that finishes after an account switch', async () => {
+    let finish!: (value: null) => void;
+    let generation = 1;
+    const harness = new IpcHarness();
+    registerProviderHandlers(harness, makeDeps({
+      currentOwnerSession: () => ({ dataOwnerId: 'owner-a', generation }),
+      readModelContextLimit: () => ({ limit: null, isCustomized: false }),
+      readCodexContextWindowInfo: () => new Promise(resolve => { finish = resolve; }),
+      writeModelContextLimit: vi.fn(),
+    }));
+    const request = harness.invoke(MAKER_INVOKE.MODEL_CONTEXT_LIMIT_GET, primary);
+    generation++;
+    finish(null);
+    await expect(request).rejects.toThrow('active account changed during context read');
+  });
+
   it('validates every alias then writes one atomic edit with the current owner', async () => {
     const harness = new IpcHarness();
     const deps = makeDeps({
@@ -6206,6 +6276,23 @@ describe('speech additions through the real provider update handler', () => {
 });
 
 // A saved explicit default becomes omitted in ProviderView; opening Settings must not make it stale.
+it('appends realtime through the production model mutation queue without changing chat models, keys or other options', async () => {
+  mountDb();
+  const harness = new IpcHarness();
+  const deps = makeDeps();
+  registerProviderHandlers(harness, deps);
+  await harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_CREATE, validConfig);
+  const realtime = { id: 'my-native-model', name: 'Realtime', mode: 'realtime' as const, modalities: { input: ['audio', 'text'], output: ['audio', 'text'] } };
+  const request = { ...validConfig, runtimes: { codex: { ...validConfig.runtimes.codex!, models: [realtime] } } };
+  await expect(harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_UPDATE, request, {}, { appendRealtimeModelsOnly: true })).resolves.toEqual({ ok: true });
+  expect((await getCustomProvider(validConfig.id))?.runtimes.codex?.models).toEqual([...validConfig.runtimes.codex!.models, realtime]);
+  await expect(harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_UPDATE, request, {}, { appendRealtimeModelsOnly: true, appendSpeechModelsOnly: true })).rejects.toThrow(/INVALID_PARAMS/);
+  await expect(harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_UPDATE, request, {}, {
+    appendRealtimeModelsOnly: true, removeWithdrawnModels: [{ agent: 'codex', modelId: 'existing' }],
+  })).rejects.toThrow(/INVALID_PARAMS/);
+  await expect(harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_UPDATE, request, { codex: 'replacement' }, { appendRealtimeModelsOnly: true })).rejects.toThrow(/INVALID_PARAMS/);
+});
+
 it('speech additions accept an unchanged projected default protocol and preserve its declaration', async () => {
   mountDb();
   const harness = new IpcHarness();
@@ -6718,6 +6805,86 @@ describe('Agent API connection configuration', () => {
     })).rejects.toThrow('Connection changed');
     expect(deps.storeCustomProviderKey).not.toHaveBeenCalled();
   });
+  // #12603, unit: Settings refresh persists a Go /models response and feeds Pi's
+  // launch config. The flat discovery fixtures miss nested reasoning declarations.
+  it('refreshes OpenCode Go reasoning capabilities without inventing selectable levels', async () => {
+    const preset = BUNDLED_CATALOG.presets!.find(entry => entry.id === 'opencode-go')!;
+    const data = [
+      { id: 'hy4-flash-free', capabilities: { reasoning: { supported: true, effort: ['none', 'high'] } } },
+      { id: 'hungerg-free', capabilities: { reasoning: { supported: true } } },
+      { id: 'fixture-disabled', capabilities: { reasoning: { supported: false, effort: ['high'] } } },
+      { id: 'fixture-unspecified' },
+      { id: 'fixture-overridden', capabilities: { reasoning: { supported: true, effort: ['high'] } } },
+    ];
+    let discovery: typeof data = data;
+    setup({
+      listPresets: () => [preset],
+      readCustomProviderKeyForMutation: () => 'synthetic-key',
+      fetchModels: spec => fetchProviderModels(spec, async url => {
+        expect(String(url)).toBe('https://opencode.ai/zen/go/v1/models');
+        return Response.json({ data: discovery });
+      }),
+    });
+    const config = {
+      id: 'fixture-opencode-go', name: preset.name, auth: { method: 'apiKey' as const },
+      runtimes: { pi: { ...preset.runtimes.pi!, catalogPresetId: preset.id, models: [
+        { id: 'fixture-overridden', name: 'Override', reasoning: true, reasoningEfforts: ['low' as const] },
+      ] } },
+    };
+    await createCustomProvider(config);
+    const refresh = () => manageAppModels({ operation: 'connection', change: {
+      action: 'refreshModels', providerId: config.id, agent: 'pi',
+    } }, async () => {});
+    expect(await refresh()).toMatchObject({ saved: true, discoveredModelCount: data.length });
+    const saved = (await getCustomProvider(config.id))!;
+    const catalog = buildUserProvider(saved, { presets: BUNDLED_CATALOG.presets, modelRegistry: BUNDLED_CATALOG.modelRegistry });
+    const projected = catalog.models.pi!;
+    expect(projected.map(model => [model.id, model.efforts])).toEqual([
+      ['hy4-flash-free', ['high']], ['hungerg-free', []], ['fixture-disabled', []],
+      ['fixture-unspecified', []], ['fixture-overridden', ['low']],
+    ]);
+    expect(projected.map(model => model.supportsReasoning)).toEqual([true, true, false, undefined, true]);
+    const launch = buildPiNativeProvidersFromConfigs([saved], () => 'synthetic-key', undefined, undefined,
+      { ...BUNDLED_CATALOG, providers: [catalog] }).providers[0]!;
+    expect(launch.models).toMatchObject([
+      { id: 'hy4-flash-free', reasoning: true, thinkingLevelMap: { off: 'none', high: 'high', low: null } },
+      { id: 'hungerg-free', reasoning: true, thinkingLevelMap: { high: null, low: null } },
+      { id: 'fixture-disabled', reasoning: false },
+      { id: 'fixture-unspecified', reasoning: false },
+      { id: 'fixture-overridden', reasoning: true, thinkingLevelMap: { high: null, low: 'low' } },
+    ]);
+    const capture = async (id: string, reasoning?: 'high') => {
+      const model = launch.models.find(candidate => candidate.id === id)!;
+      const fetch = vi.fn<typeof globalThis.fetch>(async (_url, _init) =>
+        new Response('data: [DONE]\n\n', { headers: { 'content-type': 'text/event-stream' } }));
+      await streamPiChat({
+        id: model.id, name: model.name!, api: 'openai-completions', provider: launch.id,
+        baseUrl: launch.baseUrl!, reasoning: model.reasoning!, thinkingLevelMap: model.thinkingLevelMap,
+        input: ['text'], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 100_000, maxTokens: 1024, compat: model.compat,
+      }, { messages: [{ role: 'user', content: 'fixture', timestamp: 0 }] },
+      { apiKey: 'synthetic-key', reasoning, fetch }).result();
+      expect(fetch).toHaveBeenCalledTimes(1);
+      const [url, init] = fetch.mock.calls[0];
+      expect(String(url)).toBe('https://opencode.ai/zen/go/v1/chat/completions');
+      return JSON.parse(String(init?.body));
+    };
+    expect(await capture('hy4-flash-free', 'high')).toMatchObject({ reasoning_effort: 'high' });
+    expect(await capture('hy4-flash-free')).toMatchObject({ reasoning_effort: 'none' });
+    expect(await capture('hungerg-free')).not.toHaveProperty('reasoning_effort');
+
+    discovery = [
+      { id: 'hy4-flash-free', capabilities: { reasoning: { supported: true } } },
+      { id: 'hungerg-free' },
+    ];
+    expect(await refresh()).toMatchObject({ saved: true, discoveredModelCount: discovery.length });
+    const refreshed = buildUserProvider((await getCustomProvider(config.id))!).models.pi!;
+    expect(refreshed.find(model => model.id === 'hy4-flash-free')).toMatchObject({ supportsReasoning: true, efforts: [] });
+    expect(refreshed.find(model => model.id === 'hy4-flash-free')?.reasoningOffEffort).toBeUndefined();
+    expect(refreshed.find(model => model.id === 'hungerg-free')?.supportsReasoning).toBeUndefined();
+
+  });
+
   // #9276 review, unit: prior discovery coverage retained a manually named model,
   // missing a newly discovered model's rename in the final selector projection.
   it('keeps an explicit name over discovery metadata, including after another refresh', async () => {

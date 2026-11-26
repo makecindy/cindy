@@ -11,7 +11,8 @@ import * as activeCatalogForHostParity from '../active-catalog.js';
 import { calibrateDraftModel } from '../../../shared/draftModelCalibration.js';
 import { resolveAutomaticImSettings } from '../../../shared/imAutomaticModel.js';
 import { IM_DEFAULT_SETTINGS } from '../../../shared/imDefaultSettings.js';
-import { readCreatedSubscriptionProviders } from '../../subscription-accounts/placement.js';
+import { accountProviderId, readCreatedSubscriptionProviders } from '../../subscription-accounts/placement.js';
+import { remoteAccessProviderId } from '../mergedProviderPool.js';
 import { createHostProviderConfig } from '../../../../../host/src/agent/provider-config.js';
 import { projectSubscriptionPoolCatalog } from '../subscriptionPoolCatalog.js';
 import { createHostModelContext } from '../../../../../host/src/agent/model-context.js';
@@ -88,9 +89,11 @@ vi.mock('../../subscription-accounts/placement.js', async (importOriginal) => {
   };
   return {
     ...actual,
-    accountProviderId: owner,
+    accountProviderId: (kind: Parameters<typeof actual.accountProviderId>[0], id: string) =>
+      h.actualPlacement ? actual.accountProviderId(kind, id) : owner(kind, id),
     readMergedLegacyCodexAccountId: merged,
-    readMergedProviderAccount: merged,
+    readMergedProviderAccount: (id: string) =>
+      h.actualPlacement ? actual.readMergedProviderAccount(id) : merged(id),
     restoreAutoMergedLegacyCodexAccounts: h.restoreLegacy,
     readCreatedSubscriptionProviders: () => {
       if (h.placementError) throw h.placementError;
@@ -326,6 +329,9 @@ import {
   XAI_API_CUSTOM_PROVIDER_ID,
 } from '@cindy/model-providers';
 import { resolveScheduledModelSelection } from '../../maker-ipc/scheduledModelSelection.js';
+import * as providerMediaRuntime from '../../cindy-media/providerMediaRuntime.js';
+import { createAccountCodexImageChannel, setCodexImageAuthBinding } from '../../cindy-brain/codexImageAuthBinding.js';
+import { ImageChannelRegistry } from '../../cindy-brain/imageChannelRegistry.js';
 import { deriveCindyMediaConfig } from '../../cindy-brain/cindyMediaCatalog.js';
 import { listEvaluationModels } from '../../cindy-evaluate/models.js';
 import { setModelVisibilityMirror, clearModelVisibilityMirror } from '../model-visibility-mirror.js';
@@ -663,18 +669,59 @@ describe('provider catalog realm reload', () => {
   // page was opened. Real provider list wiring; account reads are stood in by `h.refreshed`.
   it('reads created subscription providers with the built-in one when listing providers', async () => {
     const previous = getActiveCatalog();
+    const providerId = 'openai-sub-fixture';
+    const modelId = `${providerId}/gpt-image-2`;
+    const registry = new ImageChannelRegistry();
+    let readyProvider = 'openai';
+    setCodexImageAuthBinding({
+      hasPoolImageAuth: id => id === readyProvider,
+      getAuth: vi.fn(),
+      onAuthFailure: vi.fn(),
+    });
+    registry.register(providerId, createAccountCodexImageChannel(
+      providerId, () => getActiveCatalog().providers.find(provider => provider.id === providerId), {},
+    ));
+    const readyModels = vi.spyOn(providerMediaRuntime, 'listReadyProviderMediaModels').mockImplementation(() =>
+      registry.isProviderReady(providerId, modelId) ? [{
+        providerId, id: modelId, name: 'GPT Image Gen', mode: 'image_generation',
+        modalities: { input: ['text', 'image'], output: ['image'] },
+      }] : []);
     h.pool = { strategy: 'least', accounts: [{ id: 'second', paused: false, limit: 4, weight: 1 }] };
     h.created = { 'openai-sub-fixture': { kind: 'openai', name: 'OpenAI · second', account: 'second' } };
+    h.poolModelsByProvider = { 'openai-sub-fixture': [{
+      id: 'gpt-fixture', name: 'Fixture', contextWindow: 100_000, efforts: [], defaultEffort: null,
+    }] };
     try {
-      setActiveCatalog(BUNDLED_CATALOG);
+      const catalog = structuredClone(BUNDLED_CATALOG);
+      catalog.providers.find(provider => provider.id === 'openai')!.imageDefaults = {
+        standard: 'openai/gpt-image-2',
+      };
+      setActiveCatalog(catalog);
       h.customProviderRead.mockResolvedValue([]);
       await refreshCustomProvidersIntoCatalog();
       const service = getDesktopProviderService({ allowSideEffects: false });
       const created = async (snapshotOnly: boolean) =>
         (await service.listProviders({ snapshotOnly })).find(provider => provider.id === 'openai-sub-fixture');
       expect((await created(true))?.connected).toBe(false);
-      expect((await created(false))?.connected).toBe(true);
+      activeCatalogForHostParity.setOpenAiImagesApiKeyConfigured(true);
+      expect(await created(false)).toMatchObject({
+        connected: true,
+        models: expect.objectContaining({ codex: expect.arrayContaining([expect.objectContaining({ id: 'gpt-fixture' })]) }),
+        imageModels: [{ id: modelId, name: 'GPT Image Gen' }],
+        availableMediaModelIds: [],
+      });
+      expect(getActiveCatalog().providers.find(provider => provider.id === providerId)?.imageDefaults)
+        .toEqual({ standard: modelId });
+      readyProvider = providerId;
+      expect(await created(false)).toMatchObject({
+        imageModels: [{ id: modelId, name: 'GPT Image Gen' }],
+        availableMediaModelIds: [modelId],
+      });
     } finally {
+      readyModels.mockRestore();
+      setCodexImageAuthBinding(null);
+      activeCatalogForHostParity.setOpenAiImagesApiKeyConfigured(false);
+      h.poolModelsByProvider = {};
       h.pool = null;
       h.created = {};
       h.refreshed.clear();
@@ -882,6 +929,40 @@ describe('provider catalog realm reload', () => {
     } finally {
       publish.mockRestore(); await config.close(); setCustomProviders([]);
       h.profileRoot = null; h.owner = previousOwner; h.actualPlacement = false; h.customProviderRead.mockReset();
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  // Unit: production remote-use resolver over the real placement file. External edits may
+  // lag by one minute, but repeated checks must not slide that window; two images suffice.
+  it('bounds cached remote account membership to one minute after an external replacement', async () => {
+    let at = 1_000_000;
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => at);
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'cindy-placement-auth-'));
+    const previousOwner = h.owner;
+    const previousPool = h.pool;
+    h.profileRoot = root; h.owner = randomUUID(); h.actualPlacement = true;
+    h.pool = { strategy: 'least', accounts: [{ id: 'default', paused: false, limit: 4, weight: 1 }] };
+    const provider = 'openai-sub-1234abcd';
+    const file = path.join(root, h.owner, 'subscription-account-placement.json');
+    const image = (target: string) => JSON.stringify({ accounts: { 'openai:default': target },
+      providers: { [provider]: { kind: 'openai', name: 'Fixture', account: 'default' } } });
+    try {
+      await fsp.mkdir(path.dirname(file), { recursive: true });
+      await fsp.writeFile(file, image('openai'));
+      expect(remoteAccessProviderId(provider)).toBe('openai');
+      await fsp.writeFile(`${file}.replacement`, image(provider));
+      await fsp.rename(`${file}.replacement`, file);
+      expect(accountProviderId('openai', 'default')).toBe('openai'); // Ordinary cached view.
+      expect(remoteAccessProviderId(provider)).toBe('openai');
+      at += 59_999;
+      expect(remoteAccessProviderId(provider)).toBe('openai');
+      at++;
+      expect(remoteAccessProviderId(provider)).toBe(provider);
+      expect(accountProviderId('openai', 'default')).toBe(provider);
+    } finally {
+      h.pool = previousPool; h.profileRoot = null; h.owner = previousOwner; h.actualPlacement = false;
+      clock.mockRestore();
       await fsp.rm(root, { recursive: true, force: true });
     }
   });

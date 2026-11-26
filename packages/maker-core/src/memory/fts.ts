@@ -119,13 +119,10 @@ export class MemoryFts {
     const parsed = parseQuery(query);
     if (parsed.terms.length === 0) return [];
     const limit = Math.max(1, Math.min(opts.limit ?? DEFAULT_LIMIT, MAX_LIMIT));
-    // top = bm25 最佳 limit 条 (完整列); seen 用轻量查询取全部 MATCH 命中
-    // filename, 保证 fallback 里只剩 MATCH 永远命不中的 true LIKE-only
-    const top = this.searchMatch(parsed.matchQuery, opts, limit);
-    const seen = new Set(this.searchMatchFilenames(parsed.matchQuery, opts));
-    // seen 交给 LIKE 臂在截断前排除: 先按 limit 截断再过滤时, 排在前面的重复行会占满
-    // 名额, 真正的 LIKE-only 子串命中反而被丢掉, 下面预留的那个名额也就失效了。
-    const phraseHits = this.searchLike([parsed.matchQuery], opts, seen);
+    const escapedQuery = escapeFtsQuery(parsed.matchQuery);
+    const top = this.searchMatch(escapedQuery, opts, limit);
+    // MATCH 有结果时，LIKE 必须在 SQLite 截取候选池前排除全部 MATCH 命中。
+    const phraseHits = this.searchLike([parsed.matchQuery], opts, top.length > 0 ? escapedQuery : undefined);
     if (top.length > 0 || phraseHits.length > 0) {
       if (limit > 1 && top.length >= limit && phraseHits.length > 0) {
         // MATCH 已满 limit: 预留 1 个名额给 LIKE-only 子串命中, 避免中文子串结果
@@ -141,9 +138,7 @@ export class MemoryFts {
   }
 
   /** FTS5 MATCH 路径; query 语法错静默返空(让 LIKE 兜底接管) */
-  private searchMatch(query: string, opts: SearchOptions, limit: number): SearchHit[] {
-    const escapedQuery = escapeFtsQuery(query);
-
+  private searchMatch(escapedQuery: string, opts: SearchOptions, limit: number): SearchHit[] {
     let sql = `SELECT filename, type, title,
                       snippet(${TABLE}, -1, '<mark>', '</mark>', '…', ${SNIPPET_TOKEN_RADIUS}) AS snippet,
                       bm25(${TABLE}) AS score
@@ -183,28 +178,6 @@ export class MemoryFts {
   }
 
   /**
-   * 轻量查询: 只取全部 MATCH 命中的 filename (不计算 snippet/bm25) —
-   * 用于构建 seen 集合, 让 LIKE 兜底只剩 true LIKE-only 候选。
-   */
-  private searchMatchFilenames(query: string, opts: SearchOptions): string[] {
-    const escapedQuery = escapeFtsQuery(query);
-    let sql = `SELECT filename FROM ${TABLE} WHERE ${TABLE} MATCH ?`;
-    const params: unknown[] = [escapedQuery];
-    if (opts.type) {
-      sql += ` AND type = ?`;
-      params.push(opts.type);
-    }
-    try {
-      const rows = this.db.prepare(sql).all(...params) as Array<{ filename: string }>;
-      return rows.map((r) => r.filename);
-    } catch (e) {
-      const msg = (e as Error).message;
-      if (msg.includes('syntax error') || msg.includes('malformed MATCH expression')) return [];
-      throw new MemoryError('io-error', `fts match-filenames failed: ${msg}`);
-    }
-  }
-
-  /**
    * LIKE 臂: 每个词各一组 (title/description/body) 条件, OR 召回 — 多词查询不再
    * 要求原文出现同一字面串 (「登录 失败」命中「登录…失败」)。
    * 大小写不敏感(LIKE 默认 ASCII 不敏感, CJK 逐字节精确)。
@@ -214,13 +187,12 @@ export class MemoryFts {
    * 候选之外的高密度文档会被放弃; 覆盖词数优先做第一排序键, 让全词文档不会被
    * 大量部分命中挤出候选。
    *
-   * `exclude` 是要在截断前排除的 filename (MATCH 臂已覆盖的行) — 排除发生在截取前,
-   * 免得重复行占满 limit 名额。
+   * `excludeMatch` 是已成功执行并找到结果的 FTS 表达式，用同一类型过滤排除已命中的文件。
    */
   private searchLike(
     terms: readonly string[],
     opts: SearchOptions,
-    exclude?: ReadonlySet<string>,
+    excludeMatch?: string,
   ): SearchHit[] {
     const clauses = terms.map(
       () => `(title LIKE ? ESCAPE '!' OR description LIKE ? ESCAPE '!' OR body LIKE ? ESCAPE '!')`,
@@ -254,6 +226,14 @@ export class MemoryFts {
     if (opts.type) {
       sql += ` AND type = ?`;
       params.push(opts.type);
+    }
+    if (excludeMatch !== undefined) {
+      sql += ` AND filename NOT IN (
+        SELECT filename FROM ${TABLE} WHERE ${TABLE} MATCH ? AND filename IS NOT NULL
+        ${opts.type ? 'AND type = ?' : ''}
+      )`;
+      params.push(excludeMatch);
+      if (opts.type) params.push(opts.type);
     }
     // 候选池截断: 先覆盖词数, 再粗排分, 同分时正文短的优先 (密度高的更像精确命中)。
     sql +=
@@ -297,7 +277,6 @@ export class MemoryFts {
       // 只为最终返回的少数命中构建片段, 不在上千条命中上跑正则标记
       const hits: SearchHit[] = [];
       for (const hit of ordered) {
-        if (exclude?.has(hit.row.filename)) continue;
         hits.push({
           filename: hit.row.filename,
           type: hit.row.type as MemoryType,

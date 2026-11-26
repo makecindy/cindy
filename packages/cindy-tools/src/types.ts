@@ -13,6 +13,8 @@
  * 会话内恒定。
  */
 
+import type { z } from 'zod';
+
 /** 意识注册的单个工具(来自 ghost.json 的 tools 声明,host 透传)。 */
 export interface CindyGhostToolInfo {
   name: string;
@@ -414,6 +416,8 @@ export interface CindyGhostsMcpDeps {
     namespace?: string | null;
     tool: string;
     args: Record<string, unknown>;
+    /** Host-selected startup alias. Never sourced from tool arguments. */
+    startupToolName?: string;
     /** Host-only cancellation from the MCP request; never enters plugin args. */
     signal?: AbortSignal;
     /**
@@ -478,6 +482,15 @@ export interface CindyGhostsMcpDeps {
    * 实时清单仍以 ghost_list 为准。缺省 = 不注入(描述与今日基线一致)。
    */
   getRosterItems?(): Array<Pick<CindyGhostInfo, 'id' | 'name' | 'command' | 'recall' | 'namespace'>>;
+  /** Fixed by the host when constructing this session's existing MCP server. */
+  startupTools?: readonly {
+    name: string;
+    ghostId: string;
+    namespace: string | null;
+    tool: string;
+    description: string;
+    inputSchema: z.ZodType<{ args: Record<string, unknown> }>;
+  }[];
   /** 意识编写手册(markdown,随主机版本走;agent 写意识前先读)。 */
   forgeGuide(): Promise<string>;
   /**

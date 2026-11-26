@@ -53,6 +53,8 @@ function makeHost(
   started: Started[],
   options: {
     nativeId?: string;
+    withPollAuthorizationSnapshot?: Parameters<typeof createRemoteAgentHost>[0]['withPollAuthorizationSnapshot'];
+    authorized?: () => boolean;
     directGuestExecution?: Parameters<typeof createRemoteAgentHost>[0]['directGuestExecution'];
     forkHosted?: Parameters<typeof createRemoteAgentHost>[0]['forkHosted'];
     purge?: (ids: readonly string[], nativeIds: readonly string[]) => Promise<void>;
@@ -118,7 +120,8 @@ function makeHost(
       };
       return handle;
     },
-    isControllerAuthorized: () => true,
+    isControllerAuthorized: options.authorized ?? (() => true),
+    withPollAuthorizationSnapshot: options.withPollAuthorizationSnapshot,
     controllerTrust: (controller) => (controller === GUEST ? 'guest' : 'owner'),
     ...(options.providerAccess === false ? {} : {
       providerAccess: {
@@ -255,6 +258,41 @@ describe('shared image authorization and relay', () => {
 });
 
 describe('guest shadow workspace', () => {
+  // Unit: real Host.handle poll. Two sibling tasks used to multiply common file checks fourfold.
+  // Prior tests covered lease loss, not synchronous phase reuse; no network/real waits.
+  it('scopes common checks to each synchronous poll phase while checking each task after wait', async () => {
+    const common = vi.fn(() => true);
+    let cached: boolean | undefined;
+    let inPhase = false;
+    const leases = new Set(['first', 'second']);
+    const sessionAllowed = vi.fn((_controller: string, session: string) => leases.has(session));
+    const host = makeHost([], {
+      authorized: () => inPhase ? (cached ??= common()) : common(),
+      withPollAuthorizationSnapshot: read => { inPhase = true; cached = undefined; try { return read(); } finally { inPhase = false; cached = undefined; } },
+      directGuestExecution: {
+        ownerScope: () => 'fake-owner', sessionAllowed, sessionDelegated: () => true,
+        allocate: async () => null, status: () => {}, release: async () => {}, switch: async () => ({}),
+        usage: async () => {}, delegate: async () => true, forget: () => true,
+      },
+    });
+    try {
+      await host.handle(GUEST, { op: 'open', runId: RUN_1, agentKind: 'claude-code', payload: { json: openPayload('first') } });
+      await host.handle(GUEST, { op: 'open', runId: RUN_2, agentKind: 'claude-code', payload: { json: openPayload('second') } });
+      await waitForStarted(host, GUEST, RUN_1); await waitForStarted(host, GUEST, RUN_2);
+      const drain = await host.handle(GUEST, { op: 'poll', runs: [{ runId: RUN_1, cursor: 0 }, { runId: RUN_2, cursor: 0 }], waitMs: 0 }) as { runs: Array<{ runId: string; cursor: number }> };
+      common.mockClear(); sessionAllowed.mockClear();
+      vi.useFakeTimers();
+      const pending = host.handle(GUEST, { op: 'poll', runs: drain.runs.map(({ runId, cursor }) => ({ runId, cursor })), waitMs: 50 });
+      leases.delete('first');
+      await vi.advanceTimersByTimeAsync(50);
+      const result = await pending as { runs: Array<{ runId: string; data?: string }> };
+      expect(common.mock.calls.length).toBeLessThanOrEqual(3); // request gate + two phases, independent of run count
+      expect(Buffer.from(result.runs.find(r => r.runId === RUN_1)?.data ?? '', 'base64').toString()).toContain('access-revoked');
+      expect(result.runs.find(r => r.runId === RUN_2)?.data).toBeUndefined();
+      expect(sessionAllowed.mock.calls.some(([, id]) => id === 'second')).toBe(true);
+    } finally { vi.useRealTimers(); await host.dispose(); }
+  });
+
   it('admits each standby turn and releases its receipt after completion or revoked close', async () => {
     const started: Started[] = [];
     let authorized = true;
@@ -885,25 +923,28 @@ describe('guest provider access and usage', () => {
     const bind = vi.fn(async () => ({ routeToken: 'route-token', modelIds: ['claude-opus'], release }));
     const started: Started[] = [];
     const host = makeHost(started, { bindGuestProviderRoute: bind });
-    await host.handle(GUEST, { op: 'open', runId: RUN_1, agentKind: kind, payload: { json: openPayload('task-1') } });
-    await host.handle(OWNER, { op: 'open', runId: RUN_2, agentKind: kind, payload: { json: openPayload('task-2') } });
-    // Open acknowledges before filesystem preparation/startHosted finishes.
-    // Keep Linux's default; Windows already allows this suite 60s for async disk I/O.
-    await vi.waitFor(() => expect(started).toHaveLength(2), {
-      timeout: process.platform === 'win32' ? 10_000 : 1_000,
-    });
-    const guestRun = started.find((entry) => entry.input.guest)!;
-    const ownerRun = started.find((entry) => !entry.input.guest)!;
-    expect(bind).toHaveBeenCalledTimes(1);
-    expect(bind).toHaveBeenCalledWith(expect.objectContaining({ kind, hostSessionId: hostSessionIdFor(GUEST, 'task-1'), providerId: 'shared-provider' }));
-    expect(guestRun.input.guestProvider).toEqual({ providerId: 'shared-provider', modelIds: ['claude-opus'], routeToken: 'route-token' });
-    // 同账号任务不登记、不带供应商边界。
-    expect(ownerRun.input.guestProvider).toBeUndefined();
-    expect(release).not.toHaveBeenCalled();
-    await host.handle(GUEST, { op: 'close', runId: RUN_1, mode: 'close', reason: 'navigation' });
-    expect(release).toHaveBeenCalledTimes(1);
-    host.dispose();
-    await vi.waitFor(() => expect(fs.existsSync(sessionRoot(GUEST, 'task-1'))).toBe(false));
+    try {
+      await host.handle(GUEST, { op: 'open', runId: RUN_1, agentKind: kind, payload: { json: openPayload('task-1') } });
+      await host.handle(OWNER, { op: 'open', runId: RUN_2, agentKind: kind, payload: { json: openPayload('task-2') } });
+      // Open acknowledges before filesystem preparation/startHosted finishes.
+      // Keep Linux's default; Windows already allows this suite 60s for async disk I/O.
+      await vi.waitFor(() => expect(started).toHaveLength(2), {
+        timeout: process.platform === 'win32' ? 10_000 : 1_000,
+      });
+      const guestRun = started.find((entry) => entry.input.guest)!;
+      const ownerRun = started.find((entry) => !entry.input.guest)!;
+      expect(bind).toHaveBeenCalledTimes(1);
+      expect(bind).toHaveBeenCalledWith(expect.objectContaining({ kind, hostSessionId: hostSessionIdFor(GUEST, 'task-1'), providerId: 'shared-provider' }));
+      expect(guestRun.input.guestProvider).toEqual({ providerId: 'shared-provider', modelIds: ['claude-opus'], routeToken: 'route-token' });
+      // 同账号任务不登记、不带供应商边界。
+      expect(ownerRun.input.guestProvider).toBeUndefined();
+      expect(release).not.toHaveBeenCalled();
+      await host.handle(GUEST, { op: 'close', runId: RUN_1, mode: 'close', reason: 'navigation' });
+      expect(release).toHaveBeenCalledTimes(1);
+    } finally {
+      await host.dispose();
+    }
+    expect(fs.existsSync(sessionRoot(GUEST, 'task-1'))).toBe(false);
   });
 
   it('tells a slow route bind that the guest reopened the task, so the stale run never registers', async () => {
@@ -1010,8 +1051,12 @@ describe('guest provider access and usage', () => {
     } as unknown as AgentEvent;
     const recordOwnerUsage = vi.fn();
     const started: Started[] = [];
-    const host = makeHost(started, { events: [done], recordOwnerUsage, ownerCurrent: () => false });
+    // Start under a valid owner, then switch before the asynchronous startup
+    // emits its late turn. Opening an already stale owner is now rejected.
+    let ownerCurrent = true;
+    const host = makeHost(started, { events: [done], recordOwnerUsage, ownerCurrent: () => ownerCurrent });
     await host.handle(OWNER, { op: 'open', runId: RUN_2, agentKind: 'claude-code', payload: { json: openPayload('task-2') } });
+    ownerCurrent = false;
     await vi.waitFor(async () => {
       const poll = await host.handle(OWNER, { op: 'poll', runs: [{ runId: RUN_2, cursor: 0 }], waitMs: 0 }) as { runs: Array<{ data?: string }> };
       expect(Buffer.from(poll.runs[0]?.data ?? '', 'base64').toString('utf8')).toContain('"t":"event","event":{"type":"done"');

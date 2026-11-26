@@ -35,7 +35,17 @@
   "retryAccess": "Tentar aceder novamente",
   "recheck": "Verificar novamente",
   "deviceRemovedTitle": "Dispositivo removido",
-  "deviceRemovedHint": "Termine sessão e inicie sessão novamente para voltar à lista de dispositivos.",
+  "deviceRemovedHint": "Este telemóvel foi removido da sua conta. Toque em «Reintegrar» para o recuperar.",
+  "rejoin": {
+    "action": "Reintegrar",
+    "busy": "A reintegrar",
+    "doneTitle": "Reintegrado",
+    "agentNetUnavailable": "O serviço Agent-Net ainda não suporta a reintegração; por agora, este telemóvel liga-se sem Agent-Net.",
+    "failedTitle": "Não foi possível reintegrar",
+    "failed": "Verifique a rede e tente novamente.",
+    "unsupported": "O serviço ainda não suporta a reintegração. Termine sessão e inicie sessão novamente.",
+    "agentNetUnsupported": "O serviço Agent-Net ainda não suporta a reintegração. Desative «Usar apenas ligações encriptadas» para recuperar este telemóvel sem Agent-Net."
+  },
   "authFailedTitle": "Sessão expirada",
   "authFailedHint": "A sua sessão expirou. Termine sessão e inicie sessão novamente.",
   "replacedTitle": "Ligação substituída",

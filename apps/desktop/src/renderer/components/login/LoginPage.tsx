@@ -24,7 +24,7 @@ import { setLoginEmailCaptchaGate } from '@/lib/loginCaptchaGate';
 import { flashScrollbar } from '@/lib/scrollbarAutoHide';
 import { WindowControls } from '@/components/title-bar/WindowControls';
 import { CredentialStoreHelpDialog } from '@/components/auth/CredentialStoreHelpDialog';
-import { useLogin } from '@/hooks/useLogin';
+import { useLogin, type UseLoginReturn } from '@/hooks/useLogin';
 import { endLoginFirstLaunchLightGate, loginFirstLaunchLightActive } from '@/hooks/useTheme';
 import { LOGIN_HANDOFF_TIMINGS, useLoginHandoff } from '@/contexts/LoginHandoffContext';
 
@@ -127,6 +127,19 @@ export function LoginPage({
   onClose?: () => void;
 }) {
   // AddAccountLoginPage owns initialization: a second load would race its flow reset.
+  const login = useLogin({ autoLoad: intent !== 'add-account' });
+  return <LoginPageView intent={intent} onClose={onClose} login={login} />;
+}
+
+/** Shared presentation for local and cloud login. The controller owns the target;
+ * this view must never select a credential store or switch the local account. */
+export function LoginPageView({ intent = 'sign-in', onClose, login, targetLabel, captchaChallengeUrl }: {
+  intent?: 'sign-in' | 'add-account' | 'cloud-instance';
+  onClose?: () => void;
+  login: Pick<UseLoginReturn, 'isLoading' | 'errorCode' | 'retryAt' | 'loginState' | 'dispatch' | 'dispatchWithResult' | 'clearError'> & Partial<UseLoginReturn>;
+  targetLabel?: string;
+  captchaChallengeUrl?: string;
+}) {
   const {
     isLoading,
     errorCode,
@@ -141,7 +154,7 @@ export function LoginPage({
     dispatchWithResult,
     clearError,
     enterLocalMode,
-  } = useLogin({ autoLoad: intent !== 'add-account' });
+  } = login;
   const { t, i18n } = useTranslation();
   const [credentialHelpOpen, setCredentialHelpOpen] = useState(false);
   // Client mode: the Host serving this window did not start. The window shows why and offers no sign-in or
@@ -156,7 +169,7 @@ export function LoginPage({
     (errorCode === 'RATE_LIMITED' ||
       (loginState?.step === 'error' && loginState.code === 'RATE_LIMITED'));
   const handoff = useLoginHandoff();
-  const isAddAccount = intent === 'add-account';
+  const isAddAccount = intent !== 'sign-in';
   const canLeaveProviderLoad =
     !loginState || loginState.step === 'error' || loginState.step === 'entry';
   const accountListRef = useRef<HTMLDivElement>(null);
@@ -563,7 +576,7 @@ export function LoginPage({
     try {
       let baseUrl: string;
       try {
-        baseUrl = await window.electronAPI.authGetCaptchaChallengeUrl();
+        baseUrl = captchaChallengeUrl ?? await window.electronAPI.authGetCaptchaChallengeUrl();
         const target = new URL(baseUrl);
         target.searchParams.set('action', captchaRequiredActionForVerificationKind(kind));
         baseUrl = target.toString();
@@ -753,8 +766,8 @@ export function LoginPage({
               不受主题控制),改由下方本地校验渲染设计稿定义的红边+红字错误态。 */}
           <form onSubmit={submitIdentifier} noValidate>
             <LoginTitleBlock
-              title={t('login.title')}
-              subtitle={t('login.subtitle')}
+              title={targetLabel ? t('cloudSettings.onboarding.initialize') : t('login.title')}
+              subtitle={targetLabel ?? t('login.subtitle')}
               regionPill={regionPillKey ? t(regionPillKey) : undefined}
             />
             <LoginInput
@@ -1332,6 +1345,11 @@ export function LoginPage({
       // A rate limit can cover a still-valid form. Dismiss only the notice:
       // resetting main's flow would discard its ticket and require another code.
       const resumeForm = rateLimited && loginState !== null && !canLeaveProviderLoad;
+      // Not a transient failure: the cloud instance needs its claiming account.
+      const ownershipMismatch =
+        !credentialStoreFailed &&
+        !rateLimited &&
+        (loginState?.step === 'error' ? loginState.code : errorCode) === 'LOGIN_OWNERSHIP_MISMATCH';
       const returnFromError = () => {
         if (localModePendingRef.current) return;
         if (isAddAccount && onClose) {
@@ -1357,10 +1375,16 @@ export function LoginPage({
             <LoginTitleBlock
               subtitleMaxLines={networkResponseFailed ? 6 : undefined}
               title={t(
-                credentialStoreFailed ? 'credentialStore.dialog.title' : 'login.unavailable',
+                credentialStoreFailed
+                  ? 'credentialStore.dialog.title'
+                  : ownershipMismatch
+                    ? 'login.ownershipMismatch.title'
+                    : 'login.unavailable',
               )}
               subtitle={
-                rateLimited
+                ownershipMismatch
+                  ? t('login.errors.LOGIN_OWNERSHIP_MISMATCH')
+                  : rateLimited
                   ? typeof retryAt === 'number' &&
                     Number.isFinite(retryAt) &&
                     Math.abs(retryAt) <= 8.64e15
@@ -1395,23 +1419,27 @@ export function LoginPage({
                 : t(
                     credentialStoreFailed || rateLimited
                       ? 'credentialStore.banner.viewHelp'
-                      : 'login.retry',
+                      : ownershipMismatch
+                        ? 'login.ownershipMismatch.switchAccount'
+                        : 'login.retry',
                   )}
             </LoginPrimaryButton>
-            <LoginErrorText>
-              {networkResponseFailed ? `HTTP ${httpStatus}` : t(
-                `login.errors.${
-                  credentialStoreFailed
-                    ? 'CREDENTIAL_STORE_UNAVAILABLE'
-                    : loginState?.step === 'error'
-                      ? loginState.code
-                      : errorCode
-                }`,
-                {
-                  defaultValue: t('login.errors.fallback'),
-                },
-              )}
-            </LoginErrorText>
+            {!ownershipMismatch && (
+              <LoginErrorText>
+                {networkResponseFailed ? `HTTP ${httpStatus}` : t(
+                  `login.errors.${
+                    credentialStoreFailed
+                      ? 'CREDENTIAL_STORE_UNAVAILABLE'
+                      : loginState?.step === 'error'
+                        ? loginState.code
+                        : errorCode
+                  }`,
+                  {
+                    defaultValue: t('login.errors.fallback'),
+                  },
+                )}
+              </LoginErrorText>
+            )}
           </LoginPanel>
         ),
       };
@@ -1580,12 +1608,17 @@ export function LoginPage({
         className="absolute left-0 top-0 z-40 flex w-full items-center justify-end"
         style={{ height: DRAG_BAR_HEIGHT, WebkitAppRegion: 'drag' } as React.CSSProperties}
       >
+        {targetLabel ? (
+          <span data-testid="cloud-login-target" className="pointer-events-none absolute left-1/2 max-w-[60%] -translate-x-1/2 truncate text-13" style={{ color: LOGIN_COLORS.secondaryText }}>
+            {t('cloudSettings.onboarding.initialize')} · {targetLabel}
+          </span>
+        ) : null}
         {!isMac ? (
           <div
             className="flex h-full items-center"
             style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
           >
-            <WindowControls />
+            <WindowControls onClose={intent === 'cloud-instance' ? onClose : undefined} />
           </div>
         ) : null}
       </div>

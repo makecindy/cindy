@@ -646,5 +646,6 @@
     },
     "externalFormatError": "Öffne den vollständigen Link aus der ursprünglichen Nachricht erneut."
   },
-  "waitingForOwner": "Wartet auf Bestätigung"
+  "waitingForOwner": "Wartet auf Bestätigung",
+  "externalBadge": "Extern"
 }

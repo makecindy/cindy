@@ -135,7 +135,7 @@ import {
   startProviderShareCrossRegion,
   stopProviderShareCrossRegion,
 } from '../providerShareCrossRegion';
-import { DeviceLinkError, PROVIDER_METADATA_TRUST_MS, providerShareHostPeer } from '@cindy/device-link';
+import { DeviceLinkError, PROVIDER_METADATA_TRUST_MS, REMOTE_CATALOG_FRESH_MS, providerShareHostPeer } from '@cindy/device-link';
 import { sha256Hex } from '../providerShareApi';
 import { captureProviderShareGroupRecovery, findReceivedShare, getConfirmedReceivedShareIds, getReceivedSharesSnapshot, onProviderShareReceivedChanged, isReceivedSharesReady, previewProviderShare, refreshReceivedShares, resolveRemoteAgentTarget, resolveRemoteAgentTargetWhenReady, sendProviderShareRequest, startProviderShareGuest, stopProviderShareGuest } from '../providerShareGuest';
 import { createProviderGroupRemoteClient } from '../../provider-group/remoteClient';
@@ -1063,6 +1063,28 @@ describe('cross-region provider share', () => {
     await expect(resolveRemoteAgentTargetWhenReady(`share:${usable}`)).resolves.toBe(providerShareHostPeer(usable, 'owner-pc'));
   });
 
+
+  // Unit: a known peer-region share can recover after one network error, while a rate limit
+  // follows the existing regional backoff. The ordinary read never starts the extra session.
+  it.each([
+    ['network', '[DEVICE_LINK_NOT_CONNECTED] Provider share service unreachable', 1],
+    ['rate limit', '[PRECONDITION_FAILED] Provider share request rejected', 0],
+  ])('bounds explicit catalog retries after a peer-region %s failure', async (_kind, message, expected) => {
+    state.responses.set('/session', { shares: [share], credential: CREDENTIAL, expiresAt: new Date(Date.now() + 60_000).toISOString() });
+    startProviderShareGuest({ changed: vi.fn(), settled: vi.fn() }, { userDataDir: dir });
+    await refreshProviderShareCrossRegion('global');
+    state.responses.set('/session', new Error(message));
+    await refreshProviderShareCrossRegion('global');
+    const sessions = () => state.calls.filter(({ path }) => path.endsWith('/session')).length;
+    const before = sessions();
+    await expect(resolveRemoteAgentTargetWhenReady('share:share-x')).rejects.toThrow('DEVICE_LINK_NOT_CONNECTED');
+    expect(sessions()).toBe(before);
+    const retry = () => resolveRemoteAgentTargetWhenReady('share:share-x', { retryDirectory: true });
+    await Promise.all([retry(), retry()].map(result => expect(result).rejects.toThrow('DEVICE_LINK_NOT_CONNECTED')));
+    await expect(retry()).rejects.toThrow('DEVICE_LINK_NOT_CONNECTED');
+    expect(sessions() - before).toBe(expected);
+  });
+
   it('does not confirm an incomplete or failed peer list for favorite cleanup', async () => {
     expect(getConfirmedCrossRegionReceivedRegions()).toEqual([]);
     state.responses.set('/requests', { requestId: 'r1', status: 'pending', pairingCode: '0042', expiresAt: new Date().toISOString(), requestToken: TOKEN });
@@ -1283,6 +1305,7 @@ describe('cross-region provider share', () => {
   });
 
   it('keeps a cached model list from claiming the offline host is online', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'performance'] });
     state.responses.set('/session', {
       credential: CREDENTIAL, expiresAt: new Date(Date.now() + 86_400_000).toISOString(), shares: [share],
     });
@@ -1290,6 +1313,8 @@ describe('cross-region provider share', () => {
     await refreshProviderShareCrossRegion('global');
     const peer = providerShareHostPeer(share.shareId, share.hostDeviceId);
     await crossRegionInvoke(peer, 'maker:provider:list', []);
+    // Past the shared fresh window the next catalog read reaches the (now offline) host again.
+    vi.advanceTimersByTime(REMOTE_CATALOG_FRESH_MS);
     state.invokeError = new DeviceLinkError('DEVICE_OFFLINE', 'offline');
     await expect(crossRegionInvoke(peer, 'maker:provider:list', [])).resolves.toMatchObject({
       ok: true, result: { providerContinuity: { stale: true } },
