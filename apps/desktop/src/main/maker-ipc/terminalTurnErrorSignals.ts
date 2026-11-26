@@ -21,6 +21,7 @@ export function readTerminalTurnErrorSignals(
               reason?: unknown;
               sdkError?: unknown;
               errorStatus?: unknown;
+              pendingToolCount?: unknown;
               toolLoop?: unknown;
               outputLimit?: unknown;
               usageLimit?: unknown;
@@ -48,6 +49,10 @@ export function readTerminalTurnErrorSignals(
         ...(typeof errData?.sdkError === 'string' ? { sdkError: errData.sdkError } : {}),
         ...(typeof errData?.reason === 'string' ? { reason: errData.reason } : {}),
         ...(typeof errData?.errorStatus === 'number' ? { errorStatus: errData.errorStatus } : {}),
+        ...(errData?.reason === 'codex_reconnect_stalled' &&
+          typeof errData.pendingToolCount === 'number' &&
+          Number.isSafeInteger(errData.pendingToolCount) && errData.pendingToolCount > 0
+          ? { pendingToolCount: errData.pendingToolCount } : {}),
         ...(toolLoop ? { toolLoop } : {}),
         ...(outputLimit ? { outputLimit } : {}),
         // 账号限额信号:普通任务据此等额度重置后自动继续(见 usageLimitAutoResume.ts)。

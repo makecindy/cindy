@@ -248,6 +248,25 @@ it.each(["clip.mp4", "Antigravity-English-UI-Cindy-Animated-Product-Walkthrough.
   },
 );
 
+it("keeps the preview actions available when the title is omitted", () => {
+  const close = vi.fn();
+  const fileInfo = vi.fn();
+  const host = mount(<NativePreviewHeader
+    onClose={close}
+    closeLabel="Close"
+    closeDisabled={false}
+    closeTestID="preview.close"
+    moreLabel="More"
+    actions={[{ key: "fileInfo", label: "File info", onPress: fileInfo }]}
+  />);
+
+  expect(host.querySelector('[data-testid="preview.title"]')).toBeNull();
+  act(() => host.querySelector<HTMLButtonElement>('[data-testid="preview.close"]')!.click());
+  act(() => host.querySelector<HTMLButtonElement>('[data-testid="preview.more"] button')!.click());
+  expect(close).toHaveBeenCalledOnce();
+  expect(fileInfo).toHaveBeenCalledOnce();
+});
+
 // Sidebar scrolling and task selection update the trigger without changing its
 // choices. Those updates must not resend every Toggle through the native bridge.
 it("keeps native choices idle on trigger updates and refreshes changed choices and callbacks", () => {

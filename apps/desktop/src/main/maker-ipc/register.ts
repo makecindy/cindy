@@ -1723,7 +1723,7 @@ import {
 } from '../cindy-brain/pluginTaskPrefsStore.js';
 import { isGhostPickedDir } from '../cindy-brain/pickGrantsStore.js';
 import { createSessionExecutionResolver, resolveSessionExecutionSelection } from './sessionExecutionSelection.js';
-import { createGhostAgentTurnRunner } from './ghostAgentTurnRunner.js';
+import { createGhostAgentTurnRunner, createLocalGhostSessionAdmission } from './ghostAgentTurnRunner.js';
 import { createGhostErrandRunner } from './ghostErrandRunner.js';
 import {
   createPluginTaskSession,
@@ -6100,9 +6100,19 @@ const sessionBindings = createSessionBindingLifecycle<WiredSession, WiredSession
       shouldPreserveSessionRuntimeFallbackAutoResume(session, closeReason) ||
       (closeReason === 'unexpected' && session.wasClosedByRuntime() &&
         agentInputCoordinatorHolder?.hasUsageLimitRecovery(session.id) === true);
+    // Scheduled turns deliberately skip the ordinary UI switch hold. Preserve
+    // their exact live run/token during our source close as well; otherwise
+    // teardown abandons the recovery that is driving this relocation itself.
+    const scheduledGroupRecovery = pendingSchedulerAutoResumeRunBySession.get(session.id);
+    const scheduledGroupOrigin = scheduledGroupRecovery?.providerGroupPending
+      ? agentInputCoordinatorHolder?.scheduledQuotaOrigin(session.id) : undefined;
+    const preserveScheduledGroupRecovery = scheduledGroupRecovery?.providerGroupPending === true &&
+      scheduledGroupRecovery.usageLimitToken !== undefined &&
+      agentInputCoordinatorHolder?.hasUsageLimitRecovery(session.id, scheduledGroupRecovery.usageLimitToken) === true &&
+      scheduledGroupOrigin?.kind === 'scheduler' && scheduledGroupOrigin.runId === scheduledGroupRecovery.runId;
     const preserveProviderGroupRecovery =
       closeReason === 'agent-switch' &&
-      agentInputCoordinatorHolder?.hasProviderGroupSwitchHold(session.id) === true;
+      (agentInputCoordinatorHolder?.hasProviderGroupSwitchHold(session.id) === true || preserveScheduledGroupRecovery);
     pendingContinuationOnlyAutoResumeRebuilds.delete(session);
     return {
       closeReason,
@@ -7416,6 +7426,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       // 与 Lead 相同的位置，所以缺省 false 时控制端不提供。
       supportsOrcaWorkerAgentDevice: true,
       supportsOrcaWorkerModelGroup: true,
+      supportsSideChatChildId: true,
       // 新控制端只有看到此位，才对本机上的协同 Lead / 本机 Worker 列出其他电脑与分享、允许换 Agent
       // 所在电脑。v0.1.104–v0.1.110 的 host 会以 UNSUPPORTED_CAPABILITY 拒绝这类换位置，缺省 false
       // 时控制端不提供。
@@ -14625,7 +14636,26 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   };
   setGhostAgentTurnRunner(createGhostAgentTurnRunner({
     readSessionMeta: sessionId => maker.getSessionMeta(sessionId),
-    admitLocalSession: sessionId => resolveSessionExecution({}, sessionId),
+    admitLocalSession: createLocalGhostSessionAdmission({
+      captureOwner: captureSessionOwner,
+      readSessionMeta: sessionId => maker.getSessionMeta(sessionId),
+      hasPendingAgentSwitch: sessionId => Boolean(agentSwitchPending.get(sessionId)),
+      admitBuiltinSession: sessionId => resolveSessionExecution({}, sessionId),
+      admitPluginEngineSession: source => admitPluginEngineSession(
+        {
+          agentKind: source.agentKind as Parameters<typeof admitPluginEngineSession>[0]['agentKind'],
+          model: source.model,
+          providerId: source.providerId,
+          effort: source.effort ?? '',
+          fastMode: false,
+          remoteHostId: source.remoteHostId,
+          agentDeviceId: source.agentDeviceId,
+        },
+        getPluginHarnessRegistry().list(),
+        pluginEngineModelsOf,
+        pluginEngineSettingsOf,
+      ),
+    }),
     readPluginName: getInstalledGhostName,
     send: sendToSessionInternal,
     readLatestAssistant: async sessionId => {
