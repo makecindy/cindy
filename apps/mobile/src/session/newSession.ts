@@ -1,4 +1,5 @@
 import { composerSlashInvocationName, leadingSlashInvocation } from '@cindy/maker-shared/composer-palette';
+import { resolvePermissionModeForOptions } from '@cindy/maker-shared/permission-mode';
 import { buildComposerPaletteCacheKey } from './composerPaletteCache';
 import { deviceDisplayName } from '@/device-link/deviceName';
 import { getSessionListActivityAt } from '@cindy/maker-shared/session-activity';
@@ -188,11 +189,34 @@ export interface NewSessionDeviceOption {
   name: string;
 }
 
+export const BUILTIN_AGENT_PERMISSION_MODES: Record<NewSessionAgentKind, readonly string[]> = {
+  'claude-code': ['ask', 'acceptEdits', 'auto', 'bypassPermissions'],
+  codex: ['ask', 'auto', 'bypassPermissions'],
+  pi: ['ask', 'auto', 'bypassPermissions'],
+};
+
+/** 将跨引擎统一的权限选择解析为指定内置 Agent 支持的权限档（ask <-> default，不支持时安全回落）。 */
+export function resolvePermissionModeForNewSessionAgent(
+  agentKind: NewSessionAgentKind,
+  preferred: string | null | undefined,
+  supportedIds?: readonly string[],
+): string {
+  const options = supportedIds && supportedIds.length > 0
+    ? supportedIds
+    : BUILTIN_AGENT_PERMISSION_MODES[agentKind];
+  return resolvePermissionModeForOptions(preferred, options, 'ask');
+}
+
 export interface NewSessionStoredPreferences {
   agentKind: NewSessionAgentKind | null;
   device: NewSessionDeviceOption | null;
   /** 上次显式选择的项目/对话模式；null 表示尚未选择，沿用入口默认。 */
   workspaceKind: NewSessionWorkspaceKind | null;
+  /**
+   * 跨内置 Harness / 插件引擎统一的最近一次新建任务权限选择；
+   * 切换任意内置引擎或插件引擎时优先沿用它，不支持时按目标引擎安全回落。
+   */
+  lastPermissionMode?: string | null;
   /**
    * 每个 agent 上次在新建页显式选过的权限档(对齐桌面 lastByVendor 的权限记忆语义);
    * 没选过 = 缺失,回落该 agent 的安全种子默认。'plan' 不入记忆(计划模式是独立开关)。
@@ -204,6 +228,11 @@ export interface NewSessionStoredPreferences {
    * 按设备归属,避免把一台电脑的路径套到另一台;没有记忆的设备沿用最近项目默认逻辑。
    */
   workingDirByDevice: Record<string, string>;
+  /**
+   * 每台被控电脑上次在新建页显式选择的工作区模式(deviceId → 'project' | 'dialogue')。
+   * 按账号与设备保存，切换电脑时按目标电脑自己的记忆恢复项目或对话。
+   */
+  workspaceKindByDevice: Record<string, NewSessionWorkspaceKind>;
   /**
    * 每台被控电脑上、每个 agent 上次在新建页显式选的另一台电脑或分享来的模型
    * (被控电脑 deviceId → agent → 选择)。选回被控电脑自己的模型即清掉;打开新建页时恢复,
@@ -1157,6 +1186,62 @@ export function pickInitialNewSessionWorkspace(
   // 记忆目录原样返回(首尾空格可能是路径的一部分),只用 trim 判空。
   if (rememberedWorkingDir?.trim()) return rememberedWorkingDir;
   return recentWorkspaces[0]?.workingDir ?? null;
+}
+
+/**
+ * Resolve the initial workspace mode when the new-task screen opens for a settled device.
+ * Uses the device's own remembered workspace mode first, falling back to the legacy global
+ * workspaceKind when that device has no per-device entry.
+ */
+export function resolveInitialNewSessionWorkspaceKind(input: {
+  deviceId: string;
+  preferences: Pick<NewSessionStoredPreferences, 'workspaceKind' | 'workspaceKindByDevice'> | null;
+  workspaceKindOverrides?: Record<string, NewSessionWorkspaceKind>;
+}): NewSessionWorkspaceKind | null {
+  const deviceId = input.deviceId.trim();
+  if (deviceId) {
+    const deviceKind =
+      input.workspaceKindOverrides?.[deviceId]
+      ?? input.preferences?.workspaceKindByDevice?.[deviceId]
+      ?? null;
+    if (deviceKind) return deviceKind;
+  }
+  return input.preferences?.workspaceKind ?? null;
+}
+
+/**
+ * Resolve the target device's workspace when switching computers in the new-task form.
+ * Restores that device's own last chosen project or explicit dialogue instead of letting
+ * another computer's dialogue mode hide this device's remembered project.
+ */
+export function resolveWorkspaceForDeviceSwitch(input: {
+  currentWorkspaceKind: NewSessionWorkspaceKind;
+  targetDeviceId: string;
+  preferences: Pick<NewSessionStoredPreferences, 'workingDirByDevice' | 'workspaceKindByDevice'> | null;
+  workingDirOverrides?: Record<string, string>;
+  workspaceKindOverrides?: Record<string, NewSessionWorkspaceKind>;
+}): { workspaceKind: NewSessionWorkspaceKind; workingDir: string } {
+  const rememberedKind =
+    input.workspaceKindOverrides?.[input.targetDeviceId]
+    ?? input.preferences?.workspaceKindByDevice?.[input.targetDeviceId]
+    ?? null;
+  const rememberedDir =
+    input.workingDirOverrides?.[input.targetDeviceId]
+    ?? input.preferences?.workingDirByDevice?.[input.targetDeviceId]
+    ?? null;
+  if (rememberedKind === 'dialogue') {
+    return { workspaceKind: 'dialogue', workingDir: '' };
+  }
+  if (rememberedDir?.trim()) {
+    return { workspaceKind: 'project', workingDir: rememberedDir };
+  }
+  if (rememberedKind === 'project') {
+    return { workspaceKind: 'project', workingDir: '' };
+  }
+  return {
+    workspaceKind: input.currentWorkspaceKind,
+    workingDir: '',
+  };
 }
 
 export function buildRemoteCreateSessionOptions(draft: NewSessionDraft, projectDir?: string): CreateSessionOptions {

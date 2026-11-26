@@ -9,6 +9,7 @@ import { registerRuntimeSettingsSection } from './app-settings/runtime.js';
 import type { AppSettingsWriteGuard } from './app-settings/service.js';
 import { z as settingsSchema } from 'zod';
 import { flushPluginUsageLifecycle } from './plugin-usage/current.js';
+import { flushProviderShareUsageStore } from './device-link/providerShareUsageStore.js';
 import { scheduleNativeHistoryBackupCleanup } from './remote-agent/controller/nativeHistoryBackup.js';
 import { flushSessionPiTurnUsage, retryPendingPiUsageReceipts } from './maker-ipc/piUsageReceipts.js';
 import { onUsagePricingChanged } from './usage/pricingChanges.js';
@@ -764,7 +765,8 @@ import { closeSharedTasksBeforeLogout } from './device-link/sharedTaskRuntime.js
 import { closeSharedTasksBeforeAccountHandover } from './device-link/sharedTaskAccountBoundary.js';
 import { registerSharedTaskIpc } from './device-link/sharedTaskIpc.js';
 import { registerProviderShareIpc } from './device-link/providerShareRuntime.js';
-import { agentNetSwitchRemoteHandler, registerSelfHostedRelayIpc } from './device-link/selfHostedRelayRuntime.js';
+import { agentNetSwitchRemoteHandler, registerSelfHostedRelayIpc, setLocalPeerAppUpdateHandler } from './device-link/selfHostedRelayRuntime.js';
+import { getDesktopPeerAppUpdateHandler } from './device-link/peerAppUpdate.desktop.js';
 import { registerProviderGroupIpc } from './provider-group/ipc.js';
 import { registerSubscriptionAccountsIpc } from './subscription-accounts/ipc.js';
 import { startUpgradeSplitRepair } from './subscription-accounts/upgradeSplitRepair.desktop.js';
@@ -781,6 +783,7 @@ import {
   pushSessionActivityToController,
   setSessionsSubscribedListener,
   setAgentNetSwitchRemoteHandler,
+  setPeerAppUpdateRemoteHandler,
   getCloudPrivateInvokeHandler,
   getProviderGroupRemoteHandler,
 } from './device-link/dispatch.desktop';
@@ -791,6 +794,7 @@ import {
   setMirrorCacheReadGate,
 } from './device-link/ipc';
 import { getMirrorCache, MirrorCachePurgeError } from './device-link/mirrorCacheStore';
+import { getOfflineInboxIntentStore } from './device-link/offlineInboxIntentStore';
 import { drainPurgeQueue, enqueuePurge } from './device-link/mirrorCachePurgeQueue';
 import { assertCaptureHealthy, dispatchLocalInvoke } from './device-link/invoke-registry';
 import { registerSettingsNavigationIpc } from './settingsNavigationIpc';
@@ -2503,6 +2507,11 @@ async function teardownAuthAccountBoundary(reason: string): Promise<void> {
           },
         );
       }
+    }
+    try {
+      await getOfflineInboxIntentStore().clearAll();
+    } catch (err) {
+      authBoundaryPurgeLog.warn(`clear offline inbox intents on ${reason} failed:`, err);
     }
     // Cindy relay owns long-lived transports plus account-scoped task/binding
     // state. Drain ingress before discarding the owner-scoped store; otherwise a
@@ -11377,6 +11386,10 @@ app.on('ready', async () => {
   registerSelfHostedRelayIpc();
   // 同账号电脑远程切换这台电脑的 Agent-Net(docs/product-rules/agent-net.md「远程切换其他电脑的连接方式」)。
   setAgentNetSwitchRemoteHandler(agentNetSwitchRemoteHandler());
+  // 同账号电脑(以及本机拓扑卡片)查询与触发内置应用更新，复用 updateService 既有链路。
+  const peerAppUpdateHandler = getDesktopPeerAppUpdateHandler();
+  setLocalPeerAppUpdateHandler(peerAppUpdateHandler);
+  setPeerAppUpdateRemoteHandler(peerAppUpdateHandler);
   registerProviderGroupIpc({ reshare: providerGroupReshare });
   registerSubscriptionAccountsIpc();
   // 0.1.137–0.1.139 拆坏的内置订阅供应商自动并回(subscription-account-pools.md「升级拆坏的自动并回」)。
@@ -11896,6 +11909,8 @@ onQuit('git-context', () => disposeGitContext(), 'async');
 // Post-async 阶段: 串行跑, 确保依赖 async 阶段产物的清理 (WAL checkpoint by close)。
 const stopPiUsageRecovery = onUsagePricingChanged(() => { void retryPendingPiUsageReceipts(); });
 onQuit('pi-usage-recovery', stopPiUsageRecovery, 'sync');
+// Final turn receipts are emitted while async Maker shutdown drains; checkpoint afterwards.
+onQuit('provider-share-usage', flushProviderShareUsageStore, 'post-async');
 onQuit('db-client', async () => {
   await flushPluginTaskLifecycle();
   await flushPluginUsageLifecycle();

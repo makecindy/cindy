@@ -1,5 +1,5 @@
 import type { Schedule, ScheduleWebhookEvent } from '@cindy/maker-scheduler';
-import { schedulePrTriggers } from '@cindy/maker-scheduler';
+import { isGithubPrTriggerUrl, schedulePrTriggers } from '@cindy/maker-scheduler';
 
 export const GITHUB_WATCH_SCHEDULE = '__github_pr_watch__';
 export const GITHUB_EVENT_CACHE_TTL_MS = 5 * 60_000;
@@ -32,9 +32,8 @@ export function followedGithubPrs(schedules: readonly Schedule[]): string[] {
   const urls = new Set<string>();
   for (const schedule of schedules) {
     if (schedule.status !== 'active') continue;
-    for (const trigger of schedulePrTriggers(schedule)) {
-      if (/^https:\/\/github\.com\/[^/]+\/[^/]+\/pull\/\d+$/.test(trigger.url)) urls.add(trigger.url);
-    }
+    // GitLab MRs are followed by timed status reads, never through the GitHub App subscription.
+    for (const trigger of schedulePrTriggers(schedule)) if (isGithubPrTriggerUrl(trigger.url)) urls.add(trigger.url);
   }
   return [...urls];
 }

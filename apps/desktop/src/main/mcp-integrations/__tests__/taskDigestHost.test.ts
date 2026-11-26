@@ -27,6 +27,7 @@ import { resolveSessionQueueCounts } from '../../maker-ipc/sessionQueueInspectio
 import { XdtHelperToolRegistry } from '../../../../../../packages/lizi-mcps/src/lizi_xdtHelperToolRegistry.js';
 import { registerGetTaskDigestTool } from '../../../../../../packages/lizi-mcps/src/xdt-helper/get_task_digest.js';
 import type { XdtHelperHistoryDeps } from '../../../../../../packages/lizi-mcps/src/xdt-helper/_history_types.js';
+import type { WatchedSession } from '../../../shared/botAutonomy.js';
 
 const row = { title: 'synthetic task', status: 'active', source: 'desktop', agentKind: 'pi', model: 'model', providerId: 'gateway', clearedAt: null, activeTurnStartedAt: 100 };
 function setup(phase = 'error', errorStatus: number | null = 502) {
@@ -38,9 +39,90 @@ function setup(phase = 'error', errorStatus: number | null = 502) {
     readRuntimeFacts: vi.fn(async () => ({ live: null, closed: null, terminalError: errorStatus === null ? null : { errorStatus, sdkError: `HTTP ${errorStatus}: upstream unavailable` } })),
   };
   const deps = createDesktopTaskDigestDeps(host);
-  return { host, read: createTaskDigestReader(deps) };
+  return { host, deps, read: createTaskDigestReader(deps) };
 }
 beforeEach(() => { state.rows = [{ ...row }]; state.stored.mockReset().mockResolvedValue(null); });
+
+// #13146, unit: the tool JSON must preserve a plugin engine from host data,
+// including the task row when no built-in profile exists. Failed ACP tasks must
+// skip built-in suggestions. The existing host tests only exercised Pi rows.
+describe('desktop task digest route identity', () => {
+  it.each([
+    { variant: 'no profile', harness: 'acp', phase: 'running' },
+    { variant: 'runtime throws', harness: 'acp', phase: 'idle' },
+    { variant: 'ACP profile', harness: 'acp', phase: 'running' },
+    { variant: 'errored', harness: 'acp', phase: 'errored' },
+    { variant: 'usage-limit', harness: 'acp', phase: 'usage-limit' },
+    { variant: 'remote ACP row', harness: 'acp', phase: 'running' },
+    { variant: 'legacy ACP row without provider', harness: 'acp', phase: 'running' },
+    { variant: 'legacy remote row', harness: null, phase: 'running' },
+    { variant: 'Pi profile', harness: 'pi', phase: 'running' },
+    { variant: 'Claude Code profile', harness: 'claude-code', phase: 'running' },
+    { variant: 'Codex profile', harness: 'codex', phase: 'running' },
+  ] as const)('projects $variant as JSON with the expected route', async ({ variant, harness, phase }) => {
+    const { host, deps } = setup('running');
+    const sessionId = 'synthetic-task';
+    const pluginProviderId = 'acp-plugin:fixture:sample';
+    const agentKind = harness ?? undefined;
+    const legacy = variant === 'legacy remote row' || variant === 'legacy ACP row without provider';
+    const providerId = legacy ? undefined : harness === 'acp' ? pluginProviderId : 'gateway';
+    const profile = { agentKind, model: 'fixture-model', providerId };
+    const hasProfile = variant === 'ACP profile' || (harness !== 'acp' && harness !== null);
+    const taskRow = { ...row, ...profile, ...(hasProfile && { model: 'stored-model' }) };
+    state.rows = [taskRow];
+    const remote = variant === 'remote ACP row' || legacy;
+    const key = remote ? `fixture-device::${sessionId}` : sessionId;
+    if (remote) {
+      vi.mocked(host.invokeRemote).mockImplementation(async (_device, channel) => ({
+        ok: true,
+        result: channel === 'local-db:sessions:get' ? taskRow :
+          channel === 'maker:list-active' ? (legacy ? [{ sessionId, isTurnRunning: true }] :
+            { format: 'active-sessions-v2', sessions: [{ sessionId, isTurnRunning: true }] }) : [],
+      }));
+    } else if (variant === 'runtime throws') {
+      vi.mocked(host.getSessionRuntime).mockRejectedValue(new Error('no built-in runtime profile'));
+    } else {
+      vi.mocked(host.getSessionRuntime).mockResolvedValue({
+        ok: true,
+        runtime: {
+          phase: phase === 'errored' ? 'error' : 'running',
+          ...(hasProfile && { effectiveProfile: profile }),
+        },
+      });
+    }
+    if (phase === 'usage-limit') {
+      const watched: WatchedSession = {
+        sessionId, deviceId: null, deviceName: null, online: true, title: row.title, workingDir: null,
+        phase, phaseSince: 100, lastActivityAt: 100, startedAt: null,
+        pendingQuestion: null, error: 'fixture usage limit', errorReason: null,
+        creatorBotId: null, followerBotId: null, source: 'user',
+      };
+      deps.watched = () => watched;
+    }
+    const suggestRoute = vi.spyOn(deps.local, 'suggestRoute');
+    const registry = new XdtHelperToolRegistry();
+    const unexpectedHistoryRead = async () => { throw new Error('Unexpected history read'); };
+    registerGetTaskDigestTool(registry, {
+      history: {
+        listWorkdirs: unexpectedHistoryRead,
+        listSessions: unexpectedHistoryRead,
+        getMessages: unexpectedHistoryRead,
+        searchChatHistory: unexpectedHistoryRead,
+        taskDigest: createTaskDigestReader(deps),
+        resolveSessionScope: async () => ({ ok: true, sessionIds: [key] }),
+      },
+      getSessionContext: () => ({ sessionId: 'fixture-caller', agentKind: 'codex', workingDir: '/synthetic' }),
+    });
+    const block = (await registry.call('get_task_digest', { session_id: key })).content[0];
+    if (block.type !== 'text') throw new Error('Expected digest JSON');
+    expect(Buffer.byteLength(block.text, 'utf8')).toBeLessThanOrEqual(2048);
+    expect(JSON.parse(block.text)).toMatchObject({
+      ok: true, session_id: key, phase, suggested_route: null,
+      current_route: harness === null ? null : { harness, provider_id: providerId ?? null, model: profile.model },
+    });
+    expect(suggestRoute).not.toHaveBeenCalled();
+  });
+});
 
 describe('desktop task digest error sources', () => {
   it.each([502, 403])('returns HTTP %s from runtime even without a caller or watcher', async (status) => {
@@ -200,7 +282,12 @@ it('reports the pause of a stopped ordinary task in its registered digest', asyn
     console.info('digest evidence', { phase: result.phase, queuedCount: result.queued_count,
       canonicalQueuePaused: projection.queuePaused, digestQueuePaused: result.queue_paused });
     expect(result).toMatchObject({ ok: true, phase, queued_count: queuedCount });
-    expect(coordinator.getProjection(sessionId)).toEqual(projection);
+    // Reading the second snapshot advances its wire sequence once. The digest
+    // between the two reads must leave every queue field and the clock alone.
+    expect(coordinator.getProjection(sessionId)).toEqual({
+      ...projection,
+      queueSnapshot: { ...projection.queueSnapshot, sequence: projection.queueSnapshot!.sequence + 1 },
+    });
     expect([send, save, load].map(fn => fn.mock.calls.length)).toEqual(calls);
     expect(projection.queuePaused).toBe(queuePaused);
     return result.queue_paused;

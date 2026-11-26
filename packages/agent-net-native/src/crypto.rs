@@ -35,6 +35,16 @@ impl NativeCrypto {
             notification: Arc::new(StaticSecret::from(*notification_seed)) })
     }
 
+    /// An identity whose keys are stored rather than derived (the Desktop keeps some that way): the X25519 transport secret
+    /// and the Ed25519 signing seed as they are. Its notification key is random for this engine: the Desktop seals and opens
+    /// notifications in JS and never asks the engine for it.
+    pub fn from_keys(transport: &[u8; 32], signing_seed: &[u8; 32]) -> Result<Self, &'static str> {
+        let signing = Ed25519KeyPair::from_seed_unchecked(signing_seed).map_err(|_| "INVALID_SIGNING_KEY")?;
+        let notification = Zeroizing::new(Self::random::<32>());
+        Ok(Self { transport: Arc::new(StaticSecret::from(*transport)), signing: Arc::new(signing),
+            notification: Arc::new(StaticSecret::from(*notification)) })
+    }
+
     pub fn signing_public(&self) -> &[u8] { self.signing.public_key().as_ref() }
     pub fn notification_secret(&self) -> [u8; 32] { self.notification.to_bytes() }
     pub fn notification_public(&self) -> [u8; 32] { PublicKey::from(&*self.notification).to_bytes() }
