@@ -163,10 +163,11 @@ vi.mock('@/update/canaryChannelStore', () => ({ clearCanaryChannel: async () => 
 vi.mock('@/update/betaChannelStore', () => ({ prepareBetaChannelForDevice: async () => {} }));
 vi.mock('@/update/fetchLatestRelease', () => ({}));
 
-import { AuthApiError, accountVaultKey } from '@cindy/auth-client';
+import { AuthApiError, accountVaultKey, passportVaultKey } from '@cindy/auth-client';
 import { ApiError } from '@/api/client';
 import { MOBILE_ACCOUNT_VAULT_KEY } from '../mobileAccountVault';
 import { AuthProvider, useAuth } from '../AuthContext';
+import { setMobileAuthOwner } from '../authOwnerGeneration';
 import { botGroupComposerDraftId } from '@/session/botGroupComposerDraft';
 import { flushComposerDraftWrites, saveComposerDraft, __testing as composerDraftTesting } from '@/session/composerDraftStore';
 import AddAccountScreen from '../../../app/add-account';
@@ -300,6 +301,7 @@ describe('browser auth session lifecycle (real AuthProvider, mocked native/netwo
     const draftKey = (accountKey: string) => composerDraftTesting.storageKeyForSession(
       botGroupComposerDraftId({ accountKey, deviceId: 'mac', groupId: 'g1' })!);
     const siblingKey = accountVaultKey('cn', 'sibling');
+    const memberOnlyKey = accountVaultKey('cn', 'member-only');
     async function signInWithTwoSavedAccounts(sibling = false) {
       seedSession(membership.id);
       const vault = JSON.parse(native.storage.get(MOBILE_ACCOUNT_VAULT_KEY)!);
@@ -308,11 +310,14 @@ describe('browser auth session lifecycle (real AuthProvider, mocked native/netwo
       // Another membership under the signed-in passport.
       if (sibling) vault.resources[siblingKey] = { realm: 'cn', lastUsedAt: 0, refreshToken: 'sibling-refresh',
         metadata: { ...membership, id: 'sibling', membershipId: 'sibling' } };
+      // A membership saved only on the passport, with no resource session of its own.
+      if (sibling) vault.passports[passportVaultKey('cn', 'passport')] = { realm: 'cn', passportId: 'passport',
+        accountRefreshToken: 'passport-refresh', memberships: [{ ...membership, id: 'member-only', membershipId: 'member-only' }] };
       native.storage.set(MOBILE_ACCOUNT_VAULT_KEY, JSON.stringify(vault));
       native.refresh.mockResolvedValue({ membership, accessToken: 'fixture-access', refreshToken: 'rotated' });
       await restartProvider();
       expect(auth.isAuthenticated && auth.user?.id === membership.id).toBe(true);
-      for (const accountKey of [accountVaultKey('cn', membership.id), otherKey, ...(sibling ? [siblingKey] : [])]) {
+      for (const accountKey of [accountVaultKey('cn', membership.id), otherKey, ...(sibling ? [siblingKey, memberOnlyKey] : [])]) {
         saveComposerDraft(botGroupComposerDraftId({ accountKey, deviceId: 'mac', groupId: 'g1' })!, `draft of ${accountKey}`);
       }
       await flushComposerDraftWrites();
@@ -331,6 +336,23 @@ describe('browser auth session lifecycle (real AuthProvider, mocked native/netwo
       await act(async () => { await auth.confirmAccountDeletion({ challengeId: 'c', receiptToken: 'r', code: '123456' }); });
       expect(native.asyncStorage.has(draftKey(accountVaultKey('cn', membership.id)))).toBe(false);
       expect(native.asyncStorage.has(draftKey(siblingKey))).toBe(false);
+      expect(native.asyncStorage.has(draftKey(memberOnlyKey))).toBe(false);
+      expect(native.asyncStorage.get(draftKey(otherKey))).toBe(`draft of ${otherKey}`);
+    });
+
+    // Unit regression (review of #13286): a cold start whose refresh is rejected has no cached user, so the
+    // session clear had no account key; the rejected account is known and its drafts must still go.
+    it('clears the rejected account\'s draft on a cold-start refresh rejection without a cached user', async () => {
+      await signInWithTwoSavedAccounts();
+      await act(async () => root.unmount());
+      // A new process: no cached profile and no published owner.
+      native.storage.delete(profileKey);
+      setMobileAuthOwner(null);
+      native.refresh.mockRejectedValue(new AuthApiError('INVALID_REFRESH_TOKEN', 401, 'revoked'));
+      root = createRoot(document.createElement('div'));
+      await act(async () => { root.render(<AuthProvider><Probe /></AuthProvider>); });
+      expect(auth.initialized && !auth.isAuthenticated).toBe(true);
+      expect(native.asyncStorage.has(draftKey(accountVaultKey('cn', membership.id)))).toBe(false);
       expect(native.asyncStorage.get(draftKey(otherKey))).toBe(`draft of ${otherKey}`);
     });
 

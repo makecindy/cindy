@@ -1444,6 +1444,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
                 throw removalError;
               }
               refreshSavedAccountsSnapshotBestEffort();
+              // The rejected account is known even when no cached user is (cold start); its group drafts go with it.
+              if (authGenerationRef.current === generation) {
+                await clearBotGroupComposerDraftsForAccounts([rejectedAccountKey]).catch(() => undefined);
+              }
             }
             if (authGenerationRef.current !== generation) return null;
             await terminateSessionImplRef.current(isAccountUnavailableAuthError(error) ? 'ACCOUNT_UNAVAILABLE' : 'SESSION_EXPIRED');
@@ -3325,12 +3329,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       // 清理，不再调用普通 logout，以免覆盖或依赖已撤销的会话。receipt 已在
       // challenge 返回前持久化，不做可能阻断本地登出的冗余二次写入。
       await serializeRefreshTokenMutation(async () => {
-        // Deleting the passport removes every membership saved under it; their group drafts go with them.
-        const deletedAccountKeys = await readMobileAccountVault()
-          .then((vault) => Object.entries(vault.resources)
-            .filter(([, resource]) => resource.realm === deletedRealm && resource.metadata.passportId === deletedPassportId)
-            .map(([key]) => key))
-          .catch(() => [] as string[]);
+        // Deleting the passport removes every membership saved under it (the vault transaction reports which);
+        // their group drafts go with them.
+        let deletedAccountKeys: string[] = [];
         const deletedOwnerIsCurrent =
           activeAuthRealmRef.current === deletedRealm &&
           userRef.current?.passportId === deletedPassportId;
@@ -3339,7 +3340,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           // owner check, vault cleanup and runtime clear so a newly selected
           // account can never be cleared by this older deletion response.
           try {
-            await removeMobilePassport(deletedRealm, deletedPassportId);
+            deletedAccountKeys = await removeMobilePassport(deletedRealm, deletedPassportId);
           } finally {
             await deleteSecureItem(AUTH_SESSION_KEY).catch(() => undefined);
             await clearLocalSession({ persistedAuthAlreadyCleared: true });
@@ -3347,7 +3348,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           }
           return;
         }
-        await removeMobilePassport(deletedRealm, deletedPassportId);
+        deletedAccountKeys = await removeMobilePassport(deletedRealm, deletedPassportId);
         await clearBotGroupComposerDraftsForAccounts(deletedAccountKeys).catch(() => undefined);
       });
       refreshSavedAccountsSnapshotBestEffort();

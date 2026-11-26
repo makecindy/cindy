@@ -325,6 +325,27 @@ describe('composerDraftStore', () => {
     expect(readComposerDraftSync(id)).toBeNull();
   });
 
+  // Unit regression (review of #13286): a read of a disk-only draft that starts while the prefix clear is
+  // still listing keys must not keep the old text in memory after the clear removes it.
+  it('does not let a read that starts during a prefix clear keep the draft', async () => {
+    const asyncStorage = (await import('@react-native-async-storage/async-storage')).default;
+    const { __testing, clearComposerDraftsWithPrefix, readComposerDraft, readComposerDraftSync } = await import('@/session/composerDraftStore');
+    const id = 'bot-group:a:mac:g1:';
+    store.set(__testing.storageKeyForSession(id), 'on disk only');
+    let releaseKeys!: () => void;
+    vi.mocked(asyncStorage.getAllKeys).mockImplementationOnce(() => new Promise((resolve) => {
+      releaseKeys = () => resolve([...store.keys()]);
+    }));
+    const clearing = clearComposerDraftsWithPrefix('bot-group:');
+    await flushMicrotasks();
+    const reading = readComposerDraft(id);
+    releaseKeys();
+    await clearing;
+    expect(await reading).toBeNull();
+    expect(readComposerDraftSync(id)).toBeNull();
+    expect(store.has(__testing.storageKeyForSession(id))).toBe(false);
+  });
+
   // Unit regression (review of #13286): ending one account's session must keep another saved
   // account's group draft; the key is realm-qualified, so the same member id in two realms differs.
   it('clears one account\'s group drafts and keeps the other account\'s, across realms', async () => {

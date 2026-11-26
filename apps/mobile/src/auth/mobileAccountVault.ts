@@ -664,15 +664,23 @@ export async function removeMobileSavedAccount(accountKey: string): Promise<void
   });
 }
 
-export async function removeMobilePassport(realm: AuthRegion, passportId: string): Promise<void> {
-  await mutateMobileAccountVault((vault) => {
-    delete vault.passports[passportVaultKey(realm, passportId)];
+/** Removes a passport and every membership saved under it; returns the account keys that went with it. */
+export async function removeMobilePassport(realm: AuthRegion, passportId: string): Promise<string[]> {
+  return mutateMobileAccountVault((vault) => {
+    const removed = new Set<string>();
+    const passportKey = passportVaultKey(realm, passportId);
+    for (const membership of vault.passports[passportKey]?.memberships ?? []) {
+      removed.add(accountVaultKey(realm, membership.membershipId));
+    }
+    delete vault.passports[passportKey];
     for (const [key, resource] of Object.entries(vault.resources)) {
       if (resource.realm === realm && resource.metadata.passportId === passportId) {
+        removed.add(key);
         delete vault.resources[key];
         if (vault.activeAccountKey === key) vault.activeAccountKey = null;
       }
     }
+    return [...removed];
   });
 }
 

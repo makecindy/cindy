@@ -146,18 +146,15 @@ export function BotGroupComposer({
     saveComposerDraft(draftId, value);
     markBotGroupComposerDraftChanged(draftId);
   };
-  // A send's text goes back only while that send still owns the draft: not after signing out, and, once its
-  // chat was left, not after anything was typed, cleared or sent there since. While the chat is open the
-  // input and the draft come back together.
+  // A send's text goes back only while that send still owns the draft: its account was not cleared, and
+  // nothing was typed, cleared, put back or sent for this draft since, here or after reopening the chat.
+  // The input and the stored draft then come back together.
   const draftOwnerOf = () => ({
     generation: draftId ? botGroupComposerDraftGeneration(draftId) : '',
     version: draftId ? botGroupComposerDraftVersion(draftId) : 0,
   });
-  const putBackDraft = (value: string, owner: ReturnType<typeof draftOwnerOf>) => {
-    if (!draftId || owner.generation !== botGroupComposerDraftGeneration(draftId)) return;
-    if (!mountedRef.current && owner.version !== botGroupComposerDraftVersion(draftId)) return;
-    persistDraft(value);
-  };
+  const ownsDraft = (owner: ReturnType<typeof draftOwnerOf>) => !draftId
+    || (owner.generation === botGroupComposerDraftGeneration(draftId) && owner.version === botGroupComposerDraftVersion(draftId));
   const draftEditedRef = useRef(false);
   useEffect(() => {
     if (!draftId) return;
@@ -306,14 +303,11 @@ export function BotGroupComposer({
     setCaret(0);
     setTracked([]);
     const restoreDraft = () => {
-      if (!mountedRef.current) {
-        putBackDraft(draft, draftOwner);
-        return;
-      }
-      if (textRef.current) return;
+      if (!ownsDraft(draftOwner)) return;
+      persistDraft(draft);
+      if (!mountedRef.current || textRef.current) return;
       setText(draft);
       setTracked(draftTracked);
-      putBackDraft(draft, draftOwner);
       // The tag comes back only with its own draft, never onto newly typed text.
     };
     let release: (() => void) | null = null;
@@ -327,7 +321,7 @@ export function BotGroupComposer({
       setWaitingUploads(false);
       // Nothing is sent once the chat is left; the words wait as this chat's draft.
       if (discarded) {
-        if (!mountedRef.current || !textRef.current) putBackDraft(draft, draftOwner);
+        if (ownsDraft(draftOwner)) persistDraft(draft);
         return;
       }
       const attachments = attachmentsSupported ? [...tray.attachmentsRef.current] : [];

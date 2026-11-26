@@ -1730,6 +1730,25 @@ describe('group composer', () => {
     expect(h.row.value).toBe('发出去的');
   });
 
+  // Unit regression (review of #13286): staying on the page, typing and then clearing the input while a
+  // send waits must win over that send failing afterwards, in the input and in the stored draft.
+  it('does not put a failed send back over an input cleared on the same page', async () => {
+    h.chat.server = true;
+    const data = group({ openPlan: null });
+    let fail!: (error: Error) => void;
+    h.chat.act.mockImplementationOnce(() => new Promise((_resolve, reject) => { fail = reject; }));
+    await render(data, 'ready', undefined, '');
+    await type('发出去的');
+    await click('botGroup.composer.send');
+    await type('又写了点');
+    await act(async () => h.row.onChangeText(''));
+    await act(async () => { fail(new Error('[NOT_CONNECTED] offline')); });
+    expect(h.row.value).toBe('');
+    await render(data, 'ready', undefined, '', 'g2');
+    await render(data, 'ready', undefined, '');
+    expect(h.row.value).toBe('');
+  });
+
   // Unit regression (review of #13286): clearing the reopened input on purpose must win over an
   // earlier send that fails afterwards.
   it('does not put a late failed send back over an input cleared after reopening', async () => {
