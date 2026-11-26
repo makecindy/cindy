@@ -20,7 +20,7 @@
  *   1. `//` 行注释 → `%%`(所有图类型通用)
  *   2. 仅 flowchart / graph(其它图类型会被下列规则误伤——er 的 `||--o{`
  *      基数、sequence 的 `->>` 箭头等——按首行图类型闸住):
- *      - `subgraph Id[...]` 缺空格 → `subgraph Id [...]`
+ *      - `subgraph Id[...]` 缺空格 → `subgraph Id [...]`;标题含 unicode 箭头时加引号
  *      - 未加引号的边标签 `-->|text|` → `-->|"text"|`(引号混用易翻车,统一补齐)
  *      - 含危险字符的节点标签 `Id[text]` / `Id(text)` / `Id{text}` → 标签加引号
  *      - unicode 箭头(→ ⟶ ➔ ➜ ⇒ ⟹)→ `-->`(跳过引号和形状变体标签,最后执行)
@@ -166,6 +166,19 @@ function makeNodeLabelQuoter(re: RegExp, open: string, close: string) {
     });
 }
 
+const SUBGRAPH_BRACKET_TITLE_RE = /^(\s*subgraph\s+[A-Za-z0-9_-]+ \[)([^[\]"]+)(\]\s*)$/;
+const SUBGRAPH_BARE_TITLE_RE = /^(\s*subgraph\s+)([^\s"[\];][^"[\];]*?)(\s*)$/;
+
+/**
+ * subgraph 标题 `Id [text]` 或裸标题含 unicode 箭头时补引号。节点标签 pass 匹配不到
+ * 标题(Id 与 `[` 之间有空格),不补引号的话最后一步箭头替换会改写标题文本。
+ */
+function quoteSubgraphTitle(line: string): string {
+  const m = SUBGRAPH_BRACKET_TITLE_RE.exec(line) ?? SUBGRAPH_BARE_TITLE_RE.exec(line);
+  if (!m || m[2].search(UNICODE_ARROW_RE) === -1) return line;
+  return `${m[1]}"${m[2]}"${m[3]}`;
+}
+
 const quoteSquareLabels = makeNodeLabelQuoter(/([A-Za-z0-9_-]+)\[([^[\]"|]+)\]/g, '[', ']');
 const quoteRoundLabels = makeNodeLabelQuoter(/([A-Za-z0-9_-]+)\(([^()"|]+)\)/g, '(', ')');
 const quoteCurlyLabels = makeNodeLabelQuoter(/([A-Za-z0-9_-]+)\{([^{}"|]+)\}/g, '{', '}');
@@ -177,7 +190,9 @@ function repairLines(source: string, flowchart: boolean, startsOnNewLine = true)
     if (!flowchart || !line.trim() || (atLineStart && line.trimStart().startsWith('%%'))) {
       return line;
     }
-    let fixed = atLineStart ? line.replace(/^(\s*subgraph\s+[A-Za-z0-9_-]+)\[/, '$1 [') : line;
+    let fixed = atLineStart
+      ? quoteSubgraphTitle(line.replace(/^(\s*subgraph\s+[A-Za-z0-9_-]+)\[/, '$1 ['))
+      : line;
     // 加引号不改渲染文本，必须先于箭头替换。
     fixed = mapOutsideQuotes(fixed, quoteEdgeLabels);
     fixed = mapOutsideQuotes(fixed, quoteSquareLabels);
