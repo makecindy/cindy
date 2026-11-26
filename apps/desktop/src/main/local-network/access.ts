@@ -77,7 +77,8 @@ export function classifyLocalNetworkProbe(
 export class LocalNetworkAccessService {
   private reading: Promise<LocalNetworkAccess> | null = null;
   private cached: { value: LocalNetworkAccess; at: number } | null = null;
-  private requesting: Promise<LocalNetworkAccess> | null = null;
+  private promptRequesting: Promise<LocalNetworkAccess> | null = null;
+  private settingsRequesting: Promise<LocalNetworkAccess> | null = null;
   private readonly listeners = new Set<(access: LocalNetworkAccess, previous: LocalNetworkAccess | null) => void>();
   private last: LocalNetworkAccess | null = null;
   private settingsStage: LocalNetworkSettingsStage = 'none';
@@ -117,16 +118,18 @@ export class LocalNetworkAccessService {
    *
    * Explicit (`openSettings: true`): opens System Settings only when the user asks
    * for it (for example when macOS already recorded a denial and will not prompt
-   * again). A second open uses a separate System Settings window (`open -n`),
-   * falling back to the standard window if macOS refuses another instance.
+   * again). Tracked separately from prompt probes so clicking "Open System Settings"
+   * in one surface is never swallowed by an in-flight prompt settle wait from another.
+   * A second open uses a separate System Settings window (`open -n`), falling back
+   * to the standard window if macOS refuses another instance.
    */
   request(options: LocalNetworkRequestOptions = {}): Promise<LocalNetworkAccess> {
     if (this.deps.platform !== 'darwin') return Promise.resolve('notRequired');
-    if (this.requesting) return this.requesting;
-    this.requesting = (async () => {
-      const first = await this.read({ fresh: true });
-      if (first !== 'denied') return first;
-      if (options.openSettings) {
+    if (options.openSettings) {
+      if (this.settingsRequesting) return this.settingsRequesting;
+      const run = (async () => {
+        const current = await this.read({ fresh: true });
+        if (current !== 'denied') return current;
         const useSeparate = options.separateWindow === true || this.settingsStage === 'standard';
         if (useSeparate) {
           this.settingsStage = 'separate';
@@ -139,14 +142,25 @@ export class LocalNetworkAccessService {
           this.settingsStage = 'standard';
           await this.deps.openSettings(false);
         }
-        return first;
-      }
+        return current;
+      })().finally(() => {
+        if (this.settingsRequesting === run) this.settingsRequesting = null;
+      });
+      this.settingsRequesting = run;
+      return run;
+    }
+    if (this.settingsRequesting) return this.settingsRequesting;
+    if (this.promptRequesting) return this.promptRequesting;
+    const run = (async () => {
+      const first = await this.read({ fresh: true });
+      if (first !== 'denied') return first;
       await this.deps.wait(PROMPT_SETTLE_MS);
       return this.read({ fresh: true });
     })().finally(() => {
-      this.requesting = null;
+      if (this.promptRequesting === run) this.promptRequesting = null;
     });
-    return this.requesting;
+    this.promptRequesting = run;
+    return run;
   }
 
   /** Called on every observed change, including the first reading. */

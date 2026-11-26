@@ -119,6 +119,33 @@ describe('local network access', () => {
     expect(calls).toEqual([false, true, false]);
   });
 
+  it('does not swallow an explicit openSettings click while a prompt probe is settling', async () => {
+    let releasePromptWait: (() => void) | null = null;
+    let markWaitEntered: (() => void) | null = null;
+    const waitEntered = new Promise<void>((resolve) => {
+      markWaitEntered = resolve;
+    });
+    const { access, openSettings } = service(['hostUnreachable', 'hostUnreachable', 'hostUnreachable'], {
+      wait: () =>
+        new Promise<void>((resolve) => {
+          releasePromptWait = resolve;
+          markWaitEntered?.();
+        }),
+    });
+
+    const promptPromise = access.request();
+    await waitEntered;
+
+    const settingsResult = await access.request({ openSettings: true });
+    expect(settingsResult).toBe('denied');
+    expect(openSettings).toHaveBeenCalledTimes(1);
+    expect(openSettings).toHaveBeenCalledWith(false);
+    expect(access.settingsOpenStage).toBe('standard');
+
+    releasePromptWait!();
+    expect(await promptPromise).toBe('denied');
+  });
+
   it('notifies listeners once per change so a grant can restart direct connections', async () => {
     const { access, advance } = service(['hostUnreachable', 'hostUnreachable', 'refused']);
     const changes: Array<[string, string | null]> = [];

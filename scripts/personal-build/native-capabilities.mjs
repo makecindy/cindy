@@ -234,7 +234,7 @@ export function prepareStableNativeCapabilities(root, options = {}) {
     bundleId:personalBundleId(options.name || 'personal', options.region || 'global'), signingIdentity:identity,
     sources:names.sort().map(name => [name,digest(path.join(root,name))]),
     builder:digest(fileURLToPath(import.meta.url)), storeBuilder:digest(path.join(here,'runtime-store.mjs')),
-    machoUuidHelper:digest(path.join(root,'scripts/macos-macho-uuid.mjs'))};
+    machoUuidHelper:digest(path.join(here,'../macos-macho-uuid.mjs'))};
   const runtime = prepareRuntime({store, inputs, signingIdentity:identity,
     build:app => prepareNativeCapabilities(root, {...options,runtimeApp:app,signingIdentity:identity}), verifySignature:verifyDeveloperSignature});
   const resources = path.join(root,'apps/desktop/resources/tools/agent-island');
