@@ -101,6 +101,35 @@ describe('normalizeMathDelimiters — link destination 保护', () => {
     expect(normalizeMathDelimiters(src)).toBe('[r]: ./run\\(1\\).md\n正文 $a$ 公式');
   });
 
+  // #9440 / review 4625603886: next-line reference destinations are URL
+  // syntax too; preserve them while ordinary following math still converts.
+  it('protects next-line reference destinations and keeps surrounding math', () => {
+    for (const target of ['docs/a\\(1\\).md', 'docs/a\\[1\\].md', '<docs/a\\>b\\(1\\).md>', '<docs/a b\\(1\\).md>', 'docs/a\\ b\\(1\\).md']) {
+      const source = '[f]:\n ' + target + '\n\n\\(x\\)';
+      for (const preserveLineCount of [false, true]) {
+        expect(normalizeMathDelimiters(source, { preserveLineCount })).toBe('[f]:\n ' + target + '\n\n$x$');
+      }
+    }
+    expect(normalizeMathDelimiters('[f]:\n\n\\(x\\)')).toBe('[f]:\n\n$x$');
+    expect(normalizeMathDelimiters('[f]:\n# heading \\(x\\)')).toBe('[f]:\n# heading $x$');
+  });
+
+  // #9440 user review: a destination-shaped token followed by prose is not
+  // a definition. Actual normalizer result, both source-line modes, unit tier.
+  it('does not protect prose math as an incomplete continuation definition', () => {
+    for (const preserveLineCount of [false, true]) {
+      expect(normalizeMathDelimiters('[note]:\n \\(x\\) plus text', { preserveLineCount }))
+        .toBe('[note]:\n $x$ plus text');
+      for (const title of ['"caption"', '"first\nsecond"']) {
+        const source = '[f]:\n docs/a\\(1\\).md ' + title + '\n\n\\(x\\)';
+        expect(normalizeMathDelimiters(source, { preserveLineCount }))
+          .toBe('[f]:\n docs/a\\(1\\).md ' + title + '\n\n$x$');
+      }
+      expect(normalizeMathDelimiters('[f]:\n \\(x\\) "unfinished\n\ntext', { preserveLineCount }))
+        .toBe('[f]:\n $x$ "unfinished\n\ntext');
+    }
+  });
+
   it('reference 定义在文末无换行同样保护', () => {
     const src = '公式 \\(x\\)\n[img]: ./a\\[1\\].png';
     expect(normalizeMathDelimiters(src)).toBe('公式 $x$\n[img]: ./a\\[1\\].png');
@@ -369,4 +398,77 @@ describe('tokenizeInlineMath', () => {
     expect(plain('x^{a_b}')).toBe('x^(a_b)');
     expect(plain('2^{n_1+n_2}')).toBe('2^(n₁+n₂)');
   });
+});
+
+
+// #9440 final reviewer: titles belong to the complete definition protection;
+// malformed headers remain prose and must not suppress shared math conversion.
+it('protects valid continuation titles and rejects empty or footnote labels', () => {
+  for (const separator of [' ', '\n ']) {
+    const source = '[f]:\n docs/a\\(1\\).md' + separator + '"\\[x\\]"\n\n[file][f]';
+    for (const preserveLineCount of [false, true]) {
+      expect(normalizeMathDelimiters(source, { preserveLineCount })).toBe(source);
+    }
+  }
+  for (const label of ['', ' ', '^1']) {
+    expect(normalizeMathDelimiters('[' + label + ']:\n\\(x\\)')).toBe('[' + label + ']:\n$x$');
+  }
+});
+
+
+// #9440: validate complete literal titles before code segmentation; assert
+// shared preprocessing output, including ordinary math after the definition.
+describe('reference titles containing code markers', () => {
+  for (const [name, title] of [
+    ['inline ticks', '"caption `code` \\[x\\]"'],
+    ['fence lines', '"caption\n```\n\\[x\\]\n```\nend"'],
+  ]) {
+    it('protects a complete title with ' + name, () => {
+      const source = '[f]:\n docs/a\\(1\\).md ' + title + '\n\n[file][f]\n\n\\(z\\)';
+      for (const preserveLineCount of [false, true]) {
+        expect(normalizeMathDelimiters(source, { preserveLineCount })).toBe(source.slice(0, -5) + '$z$');
+      }
+    });
+  }
+});
+
+
+it('keeps real code literal around reference-looking lines and complete titled definitions', () => {
+  for (const source of [
+    '`literal\n[f]: docs/a\\(1\\).md\n\\(x\\)`\n\n\\(z\\)',
+    '```\n[f]: docs/a\\(1\\).md "caption `code`"\n\\(x\\)\n```\n\n\\(z\\)',
+    '[f]: docs/a\\(1\\).md "caption\n```\n\\[x\\]\n```\nend"\n\n\\(z\\)',
+    '[f]:\n docs/a\\(1\\).md "caption\n[g]: path \\"open\nend"\n\n\\(z\\)',
+  ]) {
+    expect(normalizeMathDelimiters(source)).toBe(source.slice(0, -5) + '$z$');
+  }
+});
+
+
+// #9440 reviewer: an invalid definition-shaped line cannot consume a real
+// cross-line code opener. Assert the shared production normalizer's output.
+it('keeps code spans literal after invalid reference-shaped headers', () => {
+  const source = '[f]: invalid `code\n\\(x\\)`\n\n\\(z\\)';
+  expect(normalizeMathDelimiters(source)).toBe('[f]: invalid `code\n\\(x\\)`\n\n$z$');
+});
+
+
+it('normalizes continuation prose after a header inside an open paragraph', () => {
+  for (const preserveLineCount of [false, true]) {
+    for (const prefix of ['text', 'text `code`', '**text** `code`']) {
+      expect(normalizeMathDelimiters(prefix + '\n[id]:\n\\(x\\)', { preserveLineCount })).toBe(prefix + '\n[id]:\n$x$');
+    }
+    const root = 'text\n\n[id]:\n docs/a\\(1\\).md';
+    expect(normalizeMathDelimiters(root, { preserveLineCount })).toBe(root);
+  }
+});
+
+
+it('protects continuation targets after table and HTML block boundaries', () => {
+  for (const prefix of ['name | value\n--- | ---', '| name | value |\n| one | two |', '<!-- complete -->', '<!DOCTYPE html>', '<?xml version="1"?>', '<![CDATA[<!--]]>\n', '<?xml value="<!--"?>\n', '<!DOCTYPE x "a <!-- b">\n', '<![CDATA[\n<!--\n]]>\n', '<?xml\n<!--\n?>\n', '<!DOCTYPE x "a\n<!--\nb">\n', '<!DOCTYPE x "a >\n<!--\nb">\n']) {
+    const source = prefix + '\n[f]:\n docs/a\\(1\\).md\n\n\\(x\\)';
+    for (const preserveLineCount of [false, true]) {
+      expect(normalizeMathDelimiters(source, { preserveLineCount })).toBe(source.slice(0, -5) + '$x$');
+    }
+  }
 });
