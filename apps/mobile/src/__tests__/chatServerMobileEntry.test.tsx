@@ -155,6 +155,37 @@ describe('opening a group the account already knows', () => {
     });
     return { opened, frame: async (value: unknown) => { await act(async () => { opened.at(-1)!.onmessage!({ data: JSON.stringify(value) }); }); } };
   }
+  it('keeps participation and refreshes links after editing a reply found only by backfill', async () => {
+    const socket = sockets();
+    const rootId = '00000000-0000-4000-8000-000000000017';
+    const reply = { id: '00000000-0000-4000-8000-000000000018', threadRootId: rootId, seq: '18',
+      authorId: self, author: { kind: 'human', name: 'Me' }, createdAt: '2026-10-09', deleted: false, revision: 1,
+      content: [{ type: 'text', text: 'https://github.com/makecindy/cindy/issues/123' }] };
+    const edited = { ...reply, revision: 2, content: [{ type: 'text', text: 'https://github.com/makecindy/cindy/pull/456' }] };
+    const original = h.auth.apiFetch.getMockImplementation()!;
+    h.auth.apiFetch.mockImplementation(async (path, options) => {
+      if (path.endsWith('/messages/' + reply.id)) return edited;
+      if (path.endsWith('/messages/' + rootId)) return { ...reply, id: rootId, seq: '17', threadRootId: null,
+        authorId: rootId, replyCount: 1, content: [{ type: 'text', text: 'Earlier discussion' }] };
+      const result = await original(path, options);
+      return path.endsWith('/snapshot') ? { ...result, reads: [] } : result;
+    });
+    showChat = true;
+    await render();
+    await socket.frame({ type: 'ready', actorId: self });
+    const openIndex = () => act(async () => { chat.backfillThreads!([reply]); });
+    const thread = () => chat.state.kind === 'ready' && chat.state.group.threads?.find(item => item.rootId === rootId);
+    await openIndex();
+    expect(thread()).toMatchObject({ participated: true, refs: [{ number: 123 }] });
+    await socket.frame({ type: 'changes', scope: `conversation:${id}`, cursor: '2',
+      changes: [{ type: 'message.updated', entityId: reply.id, data: {} }] });
+    await openIndex();
+    expect(thread()).toMatchObject({ participated: true, refs: [{ kind: 'pr', number: 456 }] });
+    h.auth.apiFetch.mockClear();
+    await openIndex();
+    expect(requests()).toEqual([]);
+    expect(peekChatMessages(id)?.page.cachedMessages?.map(message => message.id) ?? []).not.toContain(reply.id);
+  });
   it('reuses the identity and the room the list just verified', async () => {
     await render();
     expect(roster.items).toHaveLength(1);

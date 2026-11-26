@@ -510,10 +510,16 @@ export function useChatServerGroup(groupId: string, enabled: boolean, threadRoot
               // A targeted edit or an access change can invalidate rows outside the current page.
               backfillInFlight.current?.abort();
               if (change.type === 'membership.changed') index.current = null;
-              else if (index.current && change.entityId) {
+              else if (index.current) {
+                const id = change.entityId ?? (change.data as { message?: { id?: unknown } } | null)?.message?.id;
                 const saved = index.current.result;
-                saved.messages = saved.messages.filter(m => m.id !== change.entityId);
-                delete saved.roots[change.entityId];
+                if (typeof id === 'string') {
+                  const retained = saved.messages.findIndex(message => message.id === id);
+                  if (change.type === 'message.deleted') saved.pendingEdits.delete(id);
+                  else if (retained >= 0 || saved.roots[id]) saved.pendingEdits.add(id);
+                  if (retained >= 0) saved.messages.splice(retained, 1);
+                  delete saved.roots[id];
+                }
               }
             }
             if (change.type === 'conversation.list.changed') api.client.personalList.merge(change.data);
@@ -747,7 +753,7 @@ export function useChatServerGroup(groupId: string, enabled: boolean, threadRoot
       || current.page.snapshot.room.kind === 'direct' || backfillInFlight.current) return;
     const previous = currentIndex(current.page.historyRevision);
     const mentionVersion = mentions.map(m => m.id + ':' + (m.revision ?? 0)).join(',');
-    if (previous && !previous.result.retryRoots.length && previous.mentionVersion === mentionVersion) return;
+    if (previous && !previous.result.retryRoots.length && !previous.result.pendingEdits.size && previous.mentionVersion === mentionVersion) return;
     if (Date.now() < retryAtRef.current) return;
     const controller = new AbortController();
     const generation = accessGeneration.current;
@@ -759,7 +765,7 @@ export function useChatServerGroup(groupId: string, enabled: boolean, threadRoot
         if (controller.signal.aborted || !valid() || generation !== accessGeneration.current || latest?.identity !== identity
           || current.page.historyRevision !== latest.page.historyRevision) return;
         index.current = { identity, generation, revision: latest.page.historyRevision, result, mentionVersion };
-        retryAtRef.current = result.retryRoots.length ? Date.now() + 60_000 : 0;
+        retryAtRef.current = result.retryRoots.length || result.pendingEdits.size ? Date.now() + 60_000 : 0;
         setState(old => old.identity === identity ? { ...old, value: { kind: 'ready', group: view(latest.page, latest.self, latest.actors) } } : old);
       })
       .catch(() => { if (!controller.signal.aborted) retryAtRef.current = Date.now() + 60_000; })

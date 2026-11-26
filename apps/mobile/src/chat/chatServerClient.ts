@@ -646,6 +646,7 @@ export interface ThreadBackfill {
   messages: ChatMessage[];
   roots: Record<string, ChatMessage | null>;
   retryRoots: string[];
+  pendingEdits: Set<string>;
 }
 
 export function createChatServerClient(request: ChatRequest, personalList = createConversationListState(),
@@ -760,20 +761,22 @@ export function createChatServerClient(request: ChatRequest, personalList = crea
     return me.id;
   }
   /** Bounded parallel single-message reads; a failure belongs to its own ID. */
-  async function lookup(room: string, ids: readonly string[]): Promise<Map<string, { message: ChatMessage } | { error: unknown }>> {
-    const stored = await cache();
-    if (stored) return stored.lookup<ChatMessage>(room, ids);
+  async function fetchMessages(room: string, ids: readonly string[], signal?: AbortSignal): Promise<Map<string, { message: ChatMessage } | { error: unknown }>> {
     const found = new Map<string, { message: ChatMessage } | { error: unknown }>();
     const wanted = [...new Set(ids)];
     let next = 0;
     await Promise.all(Array.from({ length: Math.min(4, wanted.length) }, async () => {
-      while (next < wanted.length) {
+      while (next < wanted.length && !signal?.aborted) {
         const id = wanted[next++]!;
-        try { found.set(id, { message: await request<ChatMessage>(`/conversations/${room}/messages/${chatId(id)}`) }); }
+        try { found.set(id, { message: await request<ChatMessage>(`/conversations/${room}/messages/${chatId(id)}`, 'GET', undefined, undefined, signal) }); }
         catch (error) { found.set(id, { error }); }
       }
     }));
     return found;
+  }
+  async function lookup(room: string, ids: readonly string[]) {
+    const stored = await cache();
+    return stored ? stored.lookup<ChatMessage>(room, ids) : fetchMessages(room, ids);
   }
   const denied = (error: unknown) => [403, 404, 410].includes((error as { status?: number })?.status ?? 0);
   return {
@@ -1110,6 +1113,16 @@ export function createChatServerClient(request: ChatRequest, personalList = crea
         if (!existing || (m.revision ?? 0) >= (existing.revision ?? 0)) byId.set(m.id, m);
       };
       for (const m of [...(previous?.messages ?? []), ...mentions, ...(stored?.cachedMessages?.<ChatMessage>(room) ?? []), ...seedMessages, ...snapshot.messages]) put(m);
+      const pendingEdits = new Set(previous?.pendingEdits);
+      for (const id of pendingEdits) byId.delete(id);
+      if (pendingEdits.size) {
+        const batch = [...pendingEdits].slice(0, THREAD_HYDRATE_MAX_THREADS);
+        for (const [id, result] of await fetchMessages(room, batch, signal)) {
+          if ('message' in result) put(result.message);
+          else if (!denied(result.error)) continue;
+          pendingEdits.delete(id);
+        }
+      }
       if (!previous && (seedMessages.length >= THREAD_BACKFILL_PAGE_SIZE || snapshot.messages.length >= THREAD_BACKFILL_PAGE_SIZE)) {
         let minSeq = [...seedMessages, ...snapshot.messages].filter(m => !m.threadRootId).reduce<bigint | null>((min, m) => {
           const seq = BigInt(chatCursor(m.seq));
@@ -1218,7 +1231,7 @@ export function createChatServerClient(request: ChatRequest, personalList = crea
           return diff > 0n ? 1 : diff < 0n ? -1 : 0;
         })
         .slice(0, THREAD_BACKFILL_MAX_MESSAGES);
-      return { messages, roots, retryRoots: [...retryRoots] };
+      return { messages, roots, retryRoots: [...retryRoots], pendingEdits };
     },
     async actPlan(roomId: string, plan: ChatPlan, input: ChatPlanAction, operationId: string, current = () => true, signal?: AbortSignal) {
       const room = chatId(roomId);
