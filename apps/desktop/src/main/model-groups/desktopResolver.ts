@@ -123,7 +123,10 @@ async function localViews() {
   return views;
 }
 
-/** 电脑组的「下一台」要读组里各台的状态(含别的电脑)：同一组、同一模型在组的轮流进度不变时一分钟内只读一次，同时来的共用一次。 */
+/**
+ * 电脑组的「下一台」：组的轮流进度不变时一分钟内复用同一个预判，同时来的共用一次。进度变了(派发过一次)就按此刻的进度重算，
+ * 各台的账号池摘要由电脑组在一分钟内复用(只预判时不再问那台电脑)，重算不增加远端读取。
+ */
 const INNER_GROUP_TTL_MS = 60_000;
 const innerGroups = new Map<string, { at: number; value: Promise<ModelGroupInnerQuota | null> }>();
 

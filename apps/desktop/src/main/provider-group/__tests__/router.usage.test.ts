@@ -186,6 +186,21 @@ describe('provider-group quota routing', () => {
       .toMatchObject({ kind: 'member', member: { key: 'local' } });
   });
 
+  // 2026-11-26 review(MagicLizi P1)：这台有模型级冷却、账号池里另有账号能接时，正式派发会确认并解除冷却后照常派给它；
+  // 只预判时也要按「能接」算(否则只有这一台时报用不了，外层转去别的来源)，但不写冷却，写入留给正式派发。
+  it('previews a cooled member its pool can still serve without clearing the cooling, then dispatches to it', async () => {
+    const h = harness(async () => true);
+    h.config.members[1].paused = true;
+    h.router.markCooling('anthropic', 'local', NOW + 100_000, OPUS);
+    const writes = h.writeCooling.mock.calls.length;
+    expect(await h.router.pick({ providerId: 'anthropic', agentKind: 'claude-code', model: OPUS, preview: true }))
+      .toMatchObject({ kind: 'member', member: { key: 'local' } });
+    expect(h.router.coolingUntil('anthropic', 'local', OPUS)).toBe(NOW + 100_000);
+    expect(h.writeCooling.mock.calls.length).toBe(writes);
+    expect(await h.pick(OPUS)).toMatchObject({ kind: 'member', member: { key: 'local' } });
+    expect(h.router.coolingUntil('anthropic', 'local', OPUS)).toBeNull();
+  });
+
   // #9833, unit: recovery must not erase newer failures or unrelated scopes.
   // Previous cooldown tests had no asynchronous pool confirmation in pick().
   it('recovers only the confirmed model and retains newer failures while sharing an in-flight read', async () => {

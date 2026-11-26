@@ -108,11 +108,11 @@ describe('subscription pools within a group', () => {
   });
 
   // 2026-11-26 review(Greptile、MagicLizi P1)：外层智能路由预判电脑组下一台时与正式派发同一次选路(只预判)：
-  // A 有两个账号、B 一个，轮流时 A 刚接了一单，正式派发还会给 A；按展示数据推算会报 B。预判也不能推进轮流。
-  it('previews the member the next real dispatch takes, without advancing the rotation', async () => {
-    const router = harness({}, {}, [], { ...config, strategy: 'rotate' }, {
-      readPoolScheduling: async m => summary(m.kind === 'local' ? 2 : 1, 0),
-    });
+  // A 有两个账号、B 一个，轮流时 A 刚接了一单，正式派发还会给 A；按展示数据推算会报 B。预判也不能推进轮流，
+  // 一分钟内也不为每次预判再问一次各台的账号池摘要(先后两次派发之间的预判不增加读取)。
+  it('previews the member the next real dispatch takes, without advancing the rotation or re-reading pool summaries', async () => {
+    const readPoolScheduling = vi.fn(async (m: ProviderGroupMember) => summary(m.kind === 'local' ? 2 : 1, 0));
+    const router = harness({}, {}, [], { ...config, strategy: 'rotate' }, { readPoolScheduling });
     const pick = (preview?: true) => router.pick({ providerId: 'anthropic', agentKind: 'claude-code', model: MODEL, localTask: true, ...(preview ? { preview } : {}) });
     const keyOf = (result: Awaited<ReturnType<typeof pick>>) => (result.kind === 'member' ? result.member.key : null);
     expect(keyOf(await pick())).toBe('local');
@@ -122,8 +122,12 @@ describe('subscription pools within a group', () => {
     // 再预判一次也一样：预判不占 A 的第二个槽位。
     expect(keyOf(await pick(true))).toBe('local');
     expect(router.pickProgress?.('anthropic')).toMatchObject({ lastPicked: 'local', roundPicks: 1 });
+    // 第一次派发读了两台；之后的预判沿用这份摘要。
+    expect(readPoolScheduling).toHaveBeenCalledTimes(2);
     expect(keyOf(await pick())).toBe('local');
+    expect(readPoolScheduling).toHaveBeenCalledTimes(4);
     expect(keyOf(await pick(true))).toBe(remote.key);
+    expect(readPoolScheduling).toHaveBeenCalledTimes(4);
     expect(keyOf(await pick())).toBe(remote.key);
   });
 

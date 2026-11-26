@@ -129,6 +129,9 @@ export interface ProviderGroupPickInput {
   preview?: true;
 }
 
+/** 只预判时复用账号池摘要的时长(外层智能路由按内层判断：同一组、同一模型一分钟问一次)。 */
+export const PROVIDER_GROUP_PREVIEW_FACTS_MS = 60_000;
+
 /** 本机任务选中后、开始运行一轮之前的临时占用时长(与同账号电脑选中后的临时占用相同)。 */
 export const PROVIDER_GROUP_LOCAL_PROVISIONAL_MS = 30_000;
 
@@ -210,41 +213,61 @@ export function createProviderGroupRouter(deps: ProviderGroupRouterDeps): Provid
   const tried = new Map<string, { at: number; keys: Set<string> }>();
   /** 本机任务刚选中、还没开始运行一轮的临时占用：任务 id → 那台。 */
   const provisional = new Map<string, { providerId: string; memberKey: string; until: number }>();
-  const poolReads = new Map<string, { cooling: Record<string, number>; result: Promise<boolean | null> }>();
+  /** apply = 读到「另一个账号能接」时解除冷却；只预判(preview)发起的读取不写，正式派发复用这次读取时再打开。 */
+  const poolReads = new Map<string, { cooling: Record<string, number>; apply: boolean; result: Promise<boolean | null> }>();
+  /**
+   * 只预判时用的账号池摘要：一分钟内复用最近一次读到的(正式派发与预判读到的都记)，不为每次预判再问一次那台电脑
+   * (model-groups.md：外层按内层判断时同一组、同一模型一分钟一次)。轮流进度与本机占用仍按此刻的算。
+   */
+  const previewSchedules = new Map<string, { at: number; summary: SubscriptionPoolScheduling }>();
 
+  /**
+   * 账号池里另有账号能接这个模型时解除这台的模型级冷却。返回这次是否确认能接。preview 时只确认、不写冷却：
+   * 写入留给正式派发(它复用同一次读取时把 apply 打开，晚到的确认也照写)。
+   */
   async function recoverPoolCooling(providerId: string, member: ProviderGroupMember, model: string, remote: boolean,
-    ownComputer: boolean): Promise<void> {
-    if (!deps.readPoolModelAvailability || member.kind === 'share') return;
+    ownComputer: boolean, preview = false): Promise<boolean> {
+    if (!deps.readPoolModelAvailability || member.kind === 'share') return false;
     const key = coolKey(providerId, member.key);
     const remembered = cooling.get(key);
     const scope = coolingScope(model);
-    if (!scope || !remembered || !(remembered[scope] > deps.now())) return;
+    if (!scope || !remembered || !(remembered[scope] > deps.now())) return false;
+    const clear = () => {
+      // A newer failure or an expired/removed scope must not be undone.
+      if (cooling.get(key) === remembered && remembered[scope] > deps.now()) {
+        const next = { ...remembered };
+        delete next[scope];
+        cooling.set(key, next);
+        persistCooling();
+      }
+    };
     // Local-only account grants cannot serve as proof for a remote route.
     const readKey = `${key}\u0000${model}\u0000${remote}\u0000${ownComputer}`;
     let read = poolReads.get(readKey);
     if (!read) {
-      read = { cooling: remembered, result: deps.readPoolModelAvailability(member, model,
+      const entry: { cooling: Record<string, number>; apply: boolean; result: Promise<boolean | null> } = {
+        cooling: remembered, apply: !preview, result: Promise.resolve(null),
+      };
+      entry.result = deps.readPoolModelAvailability(member, model,
         { remote, ...(remote && ownComputer ? { ownComputer: true } : {}) }).catch(() => null).then(available => {
         // Keep the caller's wait bounded, but use a late confirmation on the next pick.
-        // A newer failure or an expired/removed scope must not be undone.
-        if (available === true && cooling.get(key) === remembered && remembered[scope] > deps.now()) {
-          const next = { ...remembered };
-          delete next[scope];
-          cooling.set(key, next);
-          persistCooling();
-        }
+        if (available === true && entry.apply) clear();
         return available;
-      }) };
+      });
+      read = entry;
       poolReads.set(readKey, read);
       void read.result.finally(() => { if (poolReads.get(readKey) === read) poolReads.delete(readKey); });
-    }
+    } else if (!preview) read.apply = true;
     // Keep one request in flight, but never reuse its evidence for a later failure.
-    if (read.cooling !== remembered) return;
+    if (read.cooling !== remembered) return false;
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
-      await Promise.race([read.result, new Promise<null>((resolve) => {
+      const available = await Promise.race([read.result, new Promise<null>((resolve) => {
         timer = setTimeout(() => resolve(null), PROVIDER_GROUP_USAGE_READ_TIMEOUT_MS);
       })]);
+      // 复用了预判发起、已经读完的那次：正式派发在这里补写。
+      if (available === true && !preview) clear();
+      return available === true;
     } finally {
       clearTimeout(timer);
     }
@@ -260,14 +283,15 @@ export function createProviderGroupRouter(deps: ProviderGroupRouterDeps): Provid
     return entry.keys;
   }
 
-  function coolingUntil(providerId: string, memberKey: string, model?: string): number | null {
+  function coolingUntil(providerId: string, memberKey: string, model?: string, modelRecovered = false): number | null {
     const key = coolKey(providerId, memberKey);
     const scopes = currentCooling(cooling.get(key), deps.now());
     if (Object.keys(scopes).length === 0) {
       cooling.delete(key);
       return null;
     }
-    const until = Math.max(scopes[''] ?? 0, scopes[coolingScope(model)] ?? 0);
+    // 预判时账号池已确认另有账号能接：模型级冷却按已解除算(不写回)，整台的冷却照旧。
+    const until = Math.max(scopes[''] ?? 0, modelRecovered ? 0 : scopes[coolingScope(model)] ?? 0);
     return until || null;
   }
 
@@ -325,10 +349,11 @@ export function createProviderGroupRouter(deps: ProviderGroupRouterDeps): Provid
   }
 
   /** 能接这个模型的任务：提供模型、不在冷却、配额没用完，且目录预算尚未到期。 */
-  function usableFor(input: Pick<ProviderGroupPickInput, 'providerId' | 'agentKind' | 'model' | 'capability'>) {
+  function usableFor(input: Pick<ProviderGroupPickInput, 'providerId' | 'agentKind' | 'model' | 'capability'>,
+    recovered?: ReadonlySet<string>) {
     return (r: ResolvedProviderGroupMember) =>
       (r.providerContinuity === undefined || r.providerContinuity.remainingMs > 0)
-      && offersModel(r, input) && coolingUntil(input.providerId, r.member.key, input.model) === null
+      && offersModel(r, input) && coolingUntil(input.providerId, r.member.key, input.model, recovered?.has(r.member.key)) === null
       && !providerGroupMemberUsageState(r, input.model, deps.now(), input.agentKind).limited;
   }
 
@@ -356,7 +381,10 @@ export function createProviderGroupRouter(deps: ProviderGroupRouterDeps): Provid
       if (config.localAccountIds?.length) return { kind: 'unavailable', resolved: [] };
       // Continuity snapshots keep new-task discovery available, but cannot
       // justify moving an existing task just to balance cached quota/load.
-      const offers = usableFor(input);
+      // 只预判时：账号池确认另有账号能接、冷却本会被正式派发解除的那几台(不写回冷却)。
+      const recovered = new Set<string>();
+      const cooledUntil = (memberKey: string) => coolingUntil(input.providerId, memberKey, input.model, recovered.has(memberKey));
+      const offers = usableFor(input, recovered);
       const usable = (r: ResolvedProviderGroupMember) => offers(r)
         && (!input.quotaRebalance || !r.providerContinuity?.stale);
       const paused = pausedFor(input);
@@ -374,31 +402,45 @@ export function createProviderGroupRouter(deps: ProviderGroupRouterDeps): Provid
           && memberRunning(input.providerId, r) < effectiveConcurrencyLimit(r.member),
         ...(input.fresh ? { fresh: true } : {}),
       });
-      if (!input.preview) await Promise.all(resolved.filter((r) => !r.pending && !r.providerContinuity?.stale
+      await Promise.all(resolved.filter((r) => !r.pending && !r.providerContinuity?.stale
         && offersModel(r, input) && !paused(r) && !input.exclude?.has(r.member.key))
-        .map((r) => {
+        .map(async (r) => {
           const options = poolReadOptions(input, r.member);
-          return recoverPoolCooling(input.providerId, r.member, input.model, options.remote, options.ownComputer);
+          if (await recoverPoolCooling(input.providerId, r.member, input.model, options.remote, options.ownComputer, input.preview === true)
+            && input.preview) recovered.add(r.member.key);
         }));
       const schedules = new Map<string, SubscriptionPoolScheduling>();
       if (deps.readPoolScheduling && !input.quotaRebalance) await Promise.all(resolved
         .filter(r => !r.pending && !r.providerContinuity?.stale && r.member.kind !== 'share'
-          && offersModel(r, input) && coolingUntil(input.providerId, r.member.key, input.model) === null
+          && offersModel(r, input) && cooledUntil(r.member.key) === null
           && !paused(r) && !input.exclude?.has(r.member.key))
         .map(async r => {
           const model = input.capability === 'image.generate' && r.view
             ? providerGroupImageModelId(r.view, input.providerId, input.model) : input.model;
           if (!model) return;
+          const options = poolReadOptions(input, r.member);
+          const factsKey = [input.providerId, r.member.key, model, options.remote, options.ownComputer, input.capability ?? ''].join('\u0000');
+          const known = previewSchedules.get(factsKey);
+          if (input.preview && known && deps.now() - known.at < PROVIDER_GROUP_PREVIEW_FACTS_MS) {
+            schedules.set(r.member.key, known.summary);
+            return;
+          }
           let timer: ReturnType<typeof setTimeout> | undefined;
           try {
             const summary = await Promise.race([
               deps.readPoolScheduling!(r.member, model, {
-                ...poolReadOptions(input, r.member),
+                ...options,
                 ...(input.capability ? { capability: input.capability } : {}),
               }).catch(() => null),
               new Promise<null>(resolve => { timer = setTimeout(() => resolve(null), PROVIDER_GROUP_USAGE_READ_TIMEOUT_MS); }),
             ]);
-            if (summary) schedules.set(r.member.key, summary);
+            if (summary) {
+              schedules.set(r.member.key, summary);
+              previewSchedules.set(factsKey, { at: deps.now(), summary });
+              if (previewSchedules.size > 256) for (const [entry, item] of previewSchedules) {
+                if (deps.now() - item.at >= PROVIDER_GROUP_PREVIEW_FACTS_MS) previewSchedules.delete(entry);
+              }
+            }
           } finally { clearTimeout(timer); }
         }));
       const now = deps.now();
@@ -419,7 +461,7 @@ export function createProviderGroupRouter(deps: ProviderGroupRouterDeps): Provid
         const ready = schedule
           ? (r.providerContinuity === undefined || r.providerContinuity.remainingMs > 0)
             && offersModel(r, input)
-            && coolingUntil(input.providerId, r.member.key, input.model) === null
+            && cooledUntil(r.member.key) === null
           : usable(r);
         return {
           key: r.member.key,
@@ -466,7 +508,7 @@ export function createProviderGroupRouter(deps: ProviderGroupRouterDeps): Provid
             // A reset is useful only once this member's existing cooldown also ends.
             // A cooldown alone is not evidence of when an unknown quota resets.
             return { ...quota, resetAtMs: quota.resetAtMs === null ? null
-              : Math.max(quota.resetAtMs, coolingUntil(input.providerId, r.member.key, input.model) ?? 0) };
+              : Math.max(quota.resetAtMs, cooledUntil(r.member.key) ?? 0) };
           })
           .filter((quota) => quota.limited);
         const resets = limited.flatMap((quota) => quota.resetAtMs === null ? [] : [quota.resetAtMs]);
