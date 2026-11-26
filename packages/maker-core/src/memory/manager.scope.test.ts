@@ -805,12 +805,12 @@ describe('MakerMemoryManager · owner scope guard (#2341)', () => {
     await store.writeRaw('heading-note.md', '# Old Heading\n\nBody text\n');
     const headingNote = await store.read('heading-note.md');
     await store.update('heading-note.md', headingNote.frontmatter.updatedAt, {
-      title: 'New Heading',
+      title: 'Price $& / $\' Heading',
       description: 'Body text',
       body: '# Old Heading\n\nBody text',
     });
     const rereadHeading = await store.read('heading-note.md');
-    expect(rereadHeading.frontmatter.title).toBe('New Heading');
+    expect(rereadHeading.frontmatter.title).toBe('Price $& / $\' Heading');
 
     // A single 54 KB note must still be truncated under the 48,000 char review budget.
     await store.writeRaw('huge-note.md', `# Huge\n\n${'a'.repeat(54_000)}\n`);

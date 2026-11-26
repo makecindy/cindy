@@ -493,7 +493,7 @@ export class MemoryStorage {
           const cleanTitle = changes.title.replace(/\r?\n/g, ' ').trim();
           const hasH1 = /^#\s+[^\r\n]*/.test(trimmedBody);
           fileText = hasH1
-            ? `${trimmedBody.replace(/^#\s+[^\r\n]*/, `# ${cleanTitle}`)}\n`
+            ? `${trimmedBody.replace(/^#\s+[^\r\n]*/, () => `# ${cleanTitle}`)}\n`
             : `# ${cleanTitle}\n\n${trimmedBody}\n`;
         } else {
           // Preserve arbitrary custom YAML fields (e.g. tags, source, date) on freeform notes.

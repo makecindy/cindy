@@ -33,6 +33,7 @@ import { isTeammateProjectIgnoreReady } from './botProjectGitignore.js';
 import { teammateWorkspaceDir } from './botProjectMemory.js';
 import {
   createGlobalMemoryTidyCoordinator,
+  TIDY_MIN_HUMAN_MESSAGES,
   type GlobalMemoryTidyCoordinator,
   type TidyTeammateInput,
 } from './globalMemoryTidy.js';
@@ -249,22 +250,52 @@ function isHumanMessageRow(row: { content: string; agentMeta: string | null }): 
 }
 
 async function countHumanMessagesSince(botId: string, sinceMs: number, untilMs: number): Promise<number> {
-  const rows = await getDbClient().query<{ content: string; agent_meta: string | null }>(
-    `SELECT m.content, m.agent_meta
-     FROM bot_session_links l
-     JOIN messages m ON m.session_id = l.session_id
-     WHERE l.bot_id = ?
-       AND m.role = 'user'
-       AND m.rewind_at IS NULL
-       AND m.created_at > ?
-       AND m.created_at <= ?
-     ORDER BY m.created_at DESC
-     LIMIT 200`,
-    [botId, sinceMs, untilMs],
-  );
+  const PAGE_SIZE = 200;
+  let cursorCreatedAt = untilMs;
+  let cursorId: string | null = null;
   let count = 0;
-  for (const row of rows) {
-    if (isHumanMessageRow({ content: row.content, agentMeta: row.agent_meta })) count += 1;
+
+  type UserMessageRow = { id: string; created_at: number; content: string; agent_meta: string | null };
+  while (count < TIDY_MIN_HUMAN_MESSAGES) {
+    const rows: UserMessageRow[] = cursorId === null
+      ? await getDbClient().query<UserMessageRow>(
+        `SELECT m.id, m.created_at, m.content, m.agent_meta
+         FROM bot_session_links l
+         JOIN messages m ON m.session_id = l.session_id
+         WHERE l.bot_id = ?
+           AND m.role = 'user'
+           AND m.rewind_at IS NULL
+           AND m.created_at > ?
+           AND m.created_at <= ?
+         ORDER BY m.created_at DESC, m.id DESC
+         LIMIT ?`,
+        [botId, sinceMs, cursorCreatedAt, PAGE_SIZE],
+      )
+      : await getDbClient().query<UserMessageRow>(
+        `SELECT m.id, m.created_at, m.content, m.agent_meta
+         FROM bot_session_links l
+         JOIN messages m ON m.session_id = l.session_id
+         WHERE l.bot_id = ?
+           AND m.role = 'user'
+           AND m.rewind_at IS NULL
+           AND m.created_at > ?
+           AND (m.created_at < ? OR (m.created_at = ? AND m.id < ?))
+         ORDER BY m.created_at DESC, m.id DESC
+         LIMIT ?`,
+        [botId, sinceMs, cursorCreatedAt, cursorCreatedAt, cursorId, PAGE_SIZE],
+      );
+
+    if (rows.length === 0) break;
+    for (const row of rows) {
+      if (isHumanMessageRow({ content: row.content, agentMeta: row.agent_meta })) {
+        count += 1;
+        if (count >= TIDY_MIN_HUMAN_MESSAGES) break;
+      }
+    }
+    if (rows.length < PAGE_SIZE) break;
+    const last = rows[rows.length - 1]!;
+    cursorCreatedAt = last.created_at;
+    cursorId = last.id;
   }
   return count;
 }
