@@ -1731,7 +1731,7 @@ import {
   writeGhostErrandSessionId,
 } from '../cindy-brain/pluginTaskPrefsStore.js';
 import { isGhostPickedDir } from '../cindy-brain/pickGrantsStore.js';
-import { createSessionExecutionResolver, resolveSessionExecutionSelection } from './sessionExecutionSelection.js';
+import { createSessionExecutionResolver, resolveSessionExecutionSelection, SessionModelUnavailableError } from './sessionExecutionSelection.js';
 import { createGhostAgentTurnRunner, createLocalGhostSessionAdmission } from './ghostAgentTurnRunner.js';
 import { createGhostErrandRunner } from './ghostErrandRunner.js';
 import {
@@ -14148,7 +14148,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             // Reuse the local picker policy, including hidden/disabled models and engine defaults.
             const engines = listPluginEngineViews();
             const plugin = teammatePluginEngineModelChoices(engines)[0];
-            if (!plugin) throw new Error('MODEL_UNAVAILABLE');
+            if (!plugin) throw new SessionModelUnavailableError('MODEL_UNAVAILABLE');
             const { providerId } = plugin.route;
             const { model, effort, permissionMode } = admitPluginEngineSwitchTarget({ providerId, model: plugin.route.model }, engines);
             log.warn('group-cindy: selected engine unusable here, answering with an available model', { from, to: model });
@@ -14171,14 +14171,14 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           } });
         };
         const { row } = await (async () => {
-          if (remoteEngine) return openAvailableModel('remote-engine');
-          if (pluginSelection) {
-            const { model, effort, permissionMode } = admitPluginEngineSwitchTarget(pluginSelection, listPluginEngineViews());
-            return openSession({ assertCurrent: assertOwner, body: { title, projectDir,
-              workspaceKind: projectDir ? 'project' : 'dialogue', workingDir: projectDir ?? undefined, agentKind: 'acp', providerId: pluginSelection.providerId,
-              model, effort, permissionMode } });
-          }
+          if (remoteEngine || (!pluginSelection && route?.agentDeviceId)) return openAvailableModel('remote-engine');
           try {
+            if (pluginSelection) {
+              const { model, effort, permissionMode } = admitPluginEngineSwitchTarget(pluginSelection, listPluginEngineViews());
+              return await openSession({ assertCurrent: assertOwner, body: { title, projectDir,
+                workspaceKind: projectDir ? 'project' : 'dialogue', workingDir: projectDir ?? undefined, agentKind: 'acp', providerId: pluginSelection.providerId,
+                model, effort, permissionMode } });
+            }
             return await openSession({ assertCurrent: assertOwner, body: {
               title, projectDir, workspaceKind: projectDir ? 'project' : 'dialogue', workingDir: projectDir ?? undefined,
               ...(route && agentKind ? { agentKind: agentKind === 'claude-code' ? 'cc' as const : agentKind, model: route.model,
@@ -14186,11 +14186,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
               permissionMode: permissionModeOrAsk(agentKind ? getRemoteNewMakerDefaults(agentKind).permissionMode : undefined),
             } });
           } catch (error) {
-            const message = error instanceof Error ? error.message : String(error);
-            // 群Cindy 的"新建任务默认模型"可能来自旧账号/旧草稿，对本账号不可用；回退一次让宿主编排可用模型。
-            // 只认真正的"模型不可用"，不要把 Fast/effort 校验失败的通用"重新选择模型"提示也当成回退信号。
-            if (!route || !/not available for/.test(message)) throw error;
-            return openAvailableModel(route.model);
+            // Only admission failures known to occur before creating a task are safe to fall back from.
+            if (!(error instanceof SessionModelUnavailableError)) throw error;
+            return openAvailableModel(pluginSelection?.model ?? route?.model ?? 'no-selection');
           }
         })();
         // Before its first turn starts, so the task starts with the 群协作 Skill.
@@ -14204,7 +14202,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           message: error instanceof Error ? error.message : String(error),
         });
         const message = error instanceof Error ? error.message : String(error);
-        return { ok: false as const, errorCode: message === 'MODEL_UNAVAILABLE' ? 'MODEL_UNAVAILABLE' : 'LANE_UNAVAILABLE', message };
+        return { ok: false as const, errorCode: error instanceof SessionModelUnavailableError ? 'MODEL_UNAVAILABLE' : 'LANE_UNAVAILABLE', message };
       }
     },
     isGroupInputLive: (sessionId, clientId) => agentInputCoordinatorHolder?.isInputLive(sessionId, clientId) ?? false,
