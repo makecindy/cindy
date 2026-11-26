@@ -816,6 +816,85 @@ describe('resolveSendToSessionCreateRoute', () => {
       }
     });
 
+    it('preserves the source model and effort when a plugin-engine task only changes provider_device_id', async () => {
+      const acpSource = {
+        agentKind: 'acp' as const,
+        providerId: AGY_PROVIDER,
+        model: 'gemini-4-neon',
+        effort: 'xhigh' as const,
+        fastMode: false as const,
+        permissionMode: 'bypassPermissions' as const,
+      };
+      // Remote target disallows default model, yet offers the source's exact engine + model + effort.
+      const remoteOnlyLocation = pluginDeps({
+        remote: async () => [agyEngine({ defaultModelAllowed: false })],
+      });
+      expect(await resolveSendToSessionCreateRoute({
+        source: acpSource,
+        sourceAgentDeviceId: null,
+        sourceIsSsh: false,
+        requestedAgentDeviceId: 'device-b',
+      }, remoteOnlyLocation)).toEqual({
+        ok: true,
+        agentDeviceId: 'device-b',
+        config: {
+          agentKind: 'acp',
+          providerId: AGY_PROVIDER,
+          model: 'gemini-4-neon',
+          effort: 'xhigh',
+          fastMode: false,
+          permissionMode: 'bypassPermissions',
+        },
+      });
+
+      // Remote → local also preserves the model and falls back to target saved effort when source effort is unsupported.
+      const backToLocal = pluginDeps({
+        local: [agyEngine({
+          models: [{ id: 'gemini-4-neon', displayName: 'Gemini 4 Neon', efforts: ['low', 'high'] }],
+          modelEfforts: { 'gemini-4-neon': 'high' },
+        })],
+      });
+      expect(await resolveSendToSessionCreateRoute({
+        source: acpSource,
+        sourceAgentDeviceId: 'device-a',
+        sourceIsSsh: false,
+        requestedAgentDeviceId: null,
+      }, backToLocal)).toMatchObject({
+        ok: true,
+        agentDeviceId: null,
+        config: { agentKind: 'acp', providerId: AGY_PROVIDER, model: 'gemini-4-neon', effort: 'high' },
+      });
+
+      // Target lacks the source model (missing or empty model catalog) → PROVIDER_ROUTE_UNAVAILABLE, no silent fallback to default.
+      for (const remoteModels of [[{ id: 'gemini-no-levels', displayName: 'No Levels' }], []]) {
+        const missingOnTarget = pluginDeps({
+          remote: async () => [agyEngine({ models: remoteModels })],
+        });
+        expect(await resolveSendToSessionCreateRoute({
+          source: acpSource,
+          sourceAgentDeviceId: null,
+          sourceIsSsh: false,
+          requestedAgentDeviceId: 'device-b',
+        }, missingOnTarget)).toMatchObject({ ok: false, errorCode: 'PROVIDER_ROUTE_UNAVAILABLE' });
+      }
+
+      // Changing location AND switching to a different plugin engine without specifying model uses 'default'.
+      const switchedEngine = pluginDeps({
+        remote: async () => [dshEngine()],
+      });
+      expect(await resolveSendToSessionCreateRoute({
+        source: acpSource,
+        sourceAgentDeviceId: null,
+        sourceIsSsh: false,
+        requestedAgentDeviceId: 'device-b',
+        overrides: { agentKind: 'acp', providerId: DSH_PROVIDER },
+      }, switchedEngine)).toMatchObject({
+        ok: true,
+        agentDeviceId: 'device-b',
+        config: { agentKind: 'acp', providerId: DSH_PROVIDER, model: 'default', effort: undefined },
+      });
+    });
+
     it.each([
       {
         name: 'missing provider_id when switching from built-in',

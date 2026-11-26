@@ -345,7 +345,7 @@ export function resolveSendToSessionPluginEngineConfig(params: {
     }
     providerId = trimmed;
   } else if (source.agentKind === 'acp' && pluginEngineKeyFromProviderId(source.providerId)) {
-    providerId = source.providerId!;
+    providerId = source.providerId!.trim();
   } else {
     return {
       ok: false,
@@ -382,7 +382,9 @@ export function resolveSendToSessionPluginEngineConfig(params: {
     };
   }
 
-  const sameEngine = source.agentKind === 'acp' && source.providerId === providerId && !locationChanged;
+  // 只换 provider_device_id 不换引擎时仍继承原模型与（目标支持的）原 effort，
+  // 再按目标位置的目录校验，与内置引擎的「只换位置保留模型」契约一致。
+  const samePluginEngine = source.agentKind === 'acp' && source.providerId?.trim() === providerId;
   let model: string;
   if (overrides.model !== undefined) {
     if (!overrides.model.trim()) {
@@ -394,7 +396,7 @@ export function resolveSendToSessionPluginEngineConfig(params: {
     }
     model = overrides.model;
   } else {
-    model = sameEngine && source.model.trim() ? source.model : PLUGIN_ENGINE_DEFAULT_MODEL;
+    model = samePluginEngine && source.model.trim() ? source.model : PLUGIN_ENGINE_DEFAULT_MODEL;
   }
 
   if (engine.disabledModels?.some((item) => item.id === model)) {
@@ -426,13 +428,13 @@ export function resolveSendToSessionPluginEngineConfig(params: {
         message: `${engine.name} 当前没有开放这个模型。valid: ${validModels.join(', ') || 'none'}`,
       };
     }
-    if (engine.models.length > 0 || overrides.model !== undefined) {
+    if (engine.models.length > 0 || overrides.model !== undefined || locationChanged) {
       return {
         ok: false,
         errorCode: locationChanged ? 'PROVIDER_ROUTE_UNAVAILABLE' : 'INVALID_ARGS',
         message:
           `model "${model}" not available for plugin engine "${engine.name}" (${providerId})`
-          + `${locationChanged ? ' on the selected agent_device_id' : ''}. `
+          + `${locationChanged ? (agentDeviceId ? ` on provider_device_id "${agentDeviceId}"` : ' on the local computer') : ''}. `
           + `valid: ${validModels.join(', ') || 'none'}`,
       };
     }
@@ -453,7 +455,7 @@ export function resolveSendToSessionPluginEngineConfig(params: {
     }
     effort = overrides.effort;
   } else {
-    const sameModel = sameEngine && model === source.model;
+    const sameModel = samePluginEngine && model === source.model;
     if (sameModel && isPluginEngineEffort(source.effort) && offered.includes(source.effort)) {
       effort = source.effort;
     } else if (saved && offered.includes(saved)) {
