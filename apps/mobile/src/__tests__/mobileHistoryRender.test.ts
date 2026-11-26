@@ -562,4 +562,45 @@ it('relocates an async ask_user when streaming prefix cache spans its reply', ()
     .filter((item) => item.type === 'message')
     .map((item) => item.type === 'message' ? `${item.message.kind}:${item.message.source.clientId}` : '');
   expect(ids).toEqual(['user:u0', 'assistant:a0', 'user:u1', 'assistant:proposal', 'ask_user:ask1', 'assistant:stream']);
+
+  // Also verify trusted-prefix invalidation when a cached history prefix holds an unpaired
+  // answered async ask_user and its question-reply:answered: arrives later in the streaming tail.
+  const token = {};
+  const cachedBeforeReply: RemoteMessage[] = [
+    make('u0', 'user', '第一轮', 0),
+    make('ask1', 'ask_user', {
+      requestId: reqId,
+      questions: [{ id: reqId, question: '继续吗？' }],
+      status: 'answered',
+      answers: { [reqId]: '照此开工' },
+    }, 15),
+    make('a0', 'assistant', '第一轮回复', 20, { turnCompleted: true }),
+    make('u1', 'user', '第二轮', 30),
+    make('stream', 'assistant', '正在开工…', 35, { isStreaming: true }),
+  ];
+  const cachedPrefix = buildMobileStreamingRenderWindow({
+    cacheKey: 'zh-CN',
+    messages: cachedBeforeReply,
+    messageStructureToken: token,
+    messageStructureChangedIndexes: new Set([4]),
+    options: { sessionId: 'session', isSessionStreaming: true },
+  });
+  expect(cachedPrefix.prefix?.mode).toBe('history');
+  const withTailReply = [
+    ...cachedBeforeReply.slice(0, 4),
+    make(`question-reply:answered:${reqId}:abc`, 'user', '> 继续吗？\n\n照此开工', 60),
+    make('stream', 'assistant', '正在开工…', 65, { isStreaming: true }),
+  ];
+  const afterReply = buildMobileStreamingRenderWindow({
+    cacheKey: 'zh-CN',
+    messages: withTailReply,
+    messageStructureToken: token,
+    messageStructureChangedIndexes: new Set([4, 5]),
+    options: { sessionId: 'session', isSessionStreaming: true },
+    previousPrefix: cachedPrefix.prefix,
+  });
+  const afterIds = afterReply.items
+    .filter((item) => item.type === 'message')
+    .map((item) => item.type === 'message' ? `${item.message.kind}:${item.message.source.clientId}` : '');
+  expect(afterIds).toEqual(['user:u0', 'assistant:a0', 'user:u1', 'ask_user:ask1', 'assistant:stream']);
 });

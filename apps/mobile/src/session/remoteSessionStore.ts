@@ -2,7 +2,7 @@ import { isTeammateTask } from './teammateTaskSource';
 import { applyMobileSessionRebalancePreferencePatch } from './sessionRebalanceCache';
 import { receiveTokenSpeedSnapshot, type TokenSpeedSnapshot } from '@cindy/maker-shared/usage-format';
 import { historyTurnEnded, nextHistoryCacheReceipt } from '@cindy/maker-shared/message-window';
-import { isAnsweredAsyncQuestionClientId } from '@cindy/maker-shared/interaction';
+import { answeredAsyncQuestionRequestId, isAnsweredAsyncQuestionClientId } from '@cindy/maker-shared/interaction';
 import { normalizeTaskTags, reconcileTaskTags } from '@cindy/maker-shared';
 import {
   createContext,
@@ -329,10 +329,74 @@ function syntheticInteractionClientId(kind: 'ask_user_question' | 'plan_review',
   return `${kind === 'ask_user_question' ? OPTIMISTIC_ASK_CLIENT_ID_PREFIX : OPTIMISTIC_PLAN_CLIENT_ID_PREFIX}${requestId}`;
 }
 
+function hasAnsweredAsyncQuestionReply(
+  list: readonly RemoteMessage[],
+  requestId: string,
+): boolean {
+  return list.some(
+    (row) => row.role === 'user' && answeredAsyncQuestionRequestId(row.clientId) === requestId,
+  );
+}
+
+function stripOptimisticAsyncAnswer(row: RemoteMessage): RemoteMessage {
+  const nextMeta = { ...(row.agentMeta ?? {}) };
+  delete nextMeta.optimisticAsyncAnswer;
+  return {
+    ...row,
+    agentMeta: Object.keys(nextMeta).length > 0 ? nextMeta : null,
+    cacheReceipt: nextHistoryCacheReceipt(),
+  };
+}
+
+function clearOptimisticAsyncAnswerForReply(
+  list: readonly RemoteMessage[],
+  replyMessage: RemoteMessage,
+): RemoteMessage[] | null {
+  if (replyMessage.role !== 'user') return null;
+  const requestId = answeredAsyncQuestionRequestId(replyMessage.clientId);
+  if (!requestId) return null;
+  let changed = false;
+  const next = list.map((row) => {
+    if (
+      row.role !== 'ask_user'
+      || row.agentMeta?.optimisticAsyncAnswer !== true
+      || readMessageInteractionRequestId(row) !== requestId
+    ) {
+      return row;
+    }
+    changed = true;
+    return stripOptimisticAsyncAnswer(row);
+  });
+  return changed ? next : null;
+}
+
+function clearPairedOptimisticAsyncAnswers(list: RemoteMessage[]): RemoteMessage[] {
+  if (!list.some((row) => row.role === 'ask_user' && row.agentMeta?.optimisticAsyncAnswer === true)) {
+    return list;
+  }
+  const replyRequestIds = new Set<string>();
+  for (const row of list) {
+    if (row.role !== 'user') continue;
+    const requestId = answeredAsyncQuestionRequestId(row.clientId);
+    if (requestId) replyRequestIds.add(requestId);
+  }
+  if (replyRequestIds.size === 0) return list;
+  let changed = false;
+  const next = list.map((row) => {
+    if (row.role !== 'ask_user' || row.agentMeta?.optimisticAsyncAnswer !== true) return row;
+    const requestId = readMessageInteractionRequestId(row);
+    if (!requestId || !replyRequestIds.has(requestId)) return row;
+    changed = true;
+    return stripOptimisticAsyncAnswer(row);
+  });
+  return changed ? next : list;
+}
+
 function preserveInFlightOptimisticInteraction(
   sessionId: string,
   existing: RemoteMessage | undefined,
   incoming: RemoteMessage,
+  extraRows?: readonly RemoteMessage[],
 ): RemoteMessage {
   if (!existing || existing.role !== incoming.role) return incoming;
   if (existing.role !== 'ask_user' && existing.role !== 'plan_review') return incoming;
@@ -352,17 +416,16 @@ function preserveInFlightOptimisticInteraction(
       ...(incoming.rowid !== undefined ? { rowid: incoming.rowid } : {}),
     };
   }
-  // Keep an optimistic async answer anchored at the tail across the brief gap
-  // between Host's ask_user update and the matching question-reply:answered: push.
+  // Keep an optimistic async answer anchored at the tail across the gap between
+  // Host's ask_user update and the matching question-reply:answered: push
+  // (including queued async replies whose user row persists after the current turn).
   if (
     existing.role === 'ask_user'
     && existing.agentMeta?.optimisticAsyncAnswer === true
     && isRecord(incoming.content)
     && readString(incoming.content, 'status') === 'answered'
-    && (inFlightInteractionResolves.has(key) || confirmedInteractionDismissals.has(key))
-    && !(messages.get(sessionId) ?? []).some(
-      (row) => row.role === 'user' && isAnsweredAsyncQuestionClientId(row.clientId) && row.clientId.includes(`:${requestId}:`),
-    )
+    && !hasAnsweredAsyncQuestionReply(messages.get(sessionId) ?? emptyMessages, requestId)
+    && (!extraRows || !hasAnsweredAsyncQuestionReply(extraRows, requestId))
   ) {
     return {
       ...incoming,
@@ -498,10 +561,13 @@ function applyInteractionResolutionToMessages(
     existing?.content,
   );
   const acceptedAt = Date.now();
-  const isAsyncOptimistic = params.optimistic === true
-    && kind === 'ask_user_question'
-    && params.item?.request.delivery === 'async'
-    && decision.dismissed !== true;
+  const shouldAnchorAsyncTail = kind === 'ask_user_question'
+    && decision.dismissed !== true
+    && !hasAnsweredAsyncQuestionReply(existingList, requestId)
+    && (
+      params.item?.request.delivery === 'async'
+      || existing?.agentMeta?.optimisticAsyncAnswer === true
+    );
   const rollbackKey = interactionResolveKey(sessionId, requestId);
 
   if (existing) {
@@ -510,9 +576,9 @@ function applyInteractionResolutionToMessages(
     }
     const nextMeta: Record<string, unknown> = {
       ...(existing.agentMeta ?? {}),
-      autoReviewUserText: { text: '', acceptedAt },
+      ...(existing.agentMeta?.autoReviewUserText ? {} : { autoReviewUserText: { text: '', acceptedAt } }),
     };
-    if (isAsyncOptimistic) nextMeta.optimisticAsyncAnswer = true;
+    if (shouldAnchorAsyncTail) nextMeta.optimisticAsyncAnswer = true;
     else delete nextMeta.optimisticAsyncAnswer;
     const updated: RemoteMessage = {
       ...existing,
@@ -548,7 +614,7 @@ function applyInteractionResolutionToMessages(
     cacheReceipt: nextHistoryCacheReceipt(),
     agentMeta: {
       autoReviewUserText: { text: '', acceptedAt },
-      ...(isAsyncOptimistic ? { optimisticAsyncAnswer: true } : {}),
+      ...(shouldAnchorAsyncTail ? { optimisticAsyncAnswer: true } : {}),
     },
   };
   messages.set(sessionId, normalizeMessages([...existingList, inserted]));
@@ -2959,7 +3025,8 @@ function upsertMessage(
     preservesGeneratedStream = true;
   }
   if (index < 0) {
-    messages.set(sessionId, normalizeMessages([...existing, message]));
+    const base = clearOptimisticAsyncAnswerForReply(existing, message) ?? existing;
+    messages.set(sessionId, normalizeMessages([...base, message]));
     applyMessageWriteRetention(sessionId);
     if (isPersistedAssistantMessage(message) && fallbackIndex < 0 && !preservesGeneratedStream) {
       retireGeneratedStreamingFallback(sessionId);
@@ -2995,7 +3062,8 @@ function upsertMessage(
     if (isPersistedAssistantMessage(message) && !preservesGeneratedStream) retireGeneratedStreamingFallback(sessionId);
     return hadPendingIdentity;
   }
-  const next = existing.slice();
+  const base = clearOptimisticAsyncAnswerForReply(existing, replacement) ?? existing;
+  const next = base.slice();
   next[index] = replacement;
   // A live delta only changes content/metadata; sorting the whole window on
   // every 32 ms flush needlessly allocates and scans all rows.  Callers that
@@ -4348,7 +4416,12 @@ export const remoteSessionStore = {
       }
       byKey.set(
         key,
-        preserveInFlightOptimisticInteraction(sessionId, existingMatch, preferCompleteMessage(existingMatch, item)),
+        preserveInFlightOptimisticInteraction(
+          sessionId,
+          existingMatch,
+          preferCompleteMessage(existingMatch, item),
+          list,
+        ),
       );
       if (item.role === 'assistant') {
         forgetPendingLiveAssistantMessageIdentity(
@@ -4362,7 +4435,10 @@ export const remoteSessionStore = {
       }
     }
 
-    const next = normalizeWindowForRetention(sessionId, normalizeMessages([...byKey.values()]));
+    const next = normalizeWindowForRetention(
+      sessionId,
+      normalizeMessages(clearPairedOptimisticAsyncAnswers([...byKey.values()])),
+    );
     // 记账在相等早退**之前**(同 setMessages):这一页是服务端一次给出的连续段,它带来的结论与
     // "窗口内容有没有变"无关。被早退跳过时这次权威响应就白来了(#1210 review)。
     coverLatestPage(sessionId, latestOldestCreatedAt, latestNewestCreatedAt, joinedCoverage);
@@ -4473,7 +4549,12 @@ export const remoteSessionStore = {
       }
       byKey.set(
         key,
-        preserveInFlightOptimisticInteraction(sessionId, existingMatch, preferCompleteMessage(existingMatch, item)),
+        preserveInFlightOptimisticInteraction(
+          sessionId,
+          existingMatch,
+          preferCompleteMessage(existingMatch, item),
+          list,
+        ),
       );
       if (item.role === 'assistant') {
         forgetPendingLiveAssistantMessageIdentity(
@@ -4486,7 +4567,10 @@ export const remoteSessionStore = {
         );
       }
     }
-    const next = normalizeWindowForRetention(sessionId, normalizeMessages([...byKey.values()]));
+    const next = normalizeWindowForRetention(
+      sessionId,
+      normalizeMessages(clearPairedOptimisticAsyncAnswers([...byKey.values()])),
+    );
     if (remoteMessageListsEqual(messages.get(sessionId) ?? emptyMessages, next)) {
       if (textFlushed || projectionSettled) emit();
       return;

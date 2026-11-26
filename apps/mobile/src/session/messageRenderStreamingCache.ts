@@ -20,7 +20,13 @@ import type { RemoteMessage } from '@/session/types';
 import { contentToPreview } from '@/utils/contentPreview';
 import { remoteMessageCompletesTurn, remoteUserMessageIsSynthetic } from '@/session/messageNormalize';
 
+interface PrefixAsyncQuestionMetadata {
+  answeredAskRequestIds: ReadonlySet<string>;
+  hasOptimisticAsyncAnswer: boolean;
+}
+
 export interface MobileStreamingRenderPrefixCache {
+  asyncQuestionMeta?: PrefixAsyncQuestionMetadata;
   boundaryMessage?: RemoteMessage;
   cacheKey: string;
   items: readonly MobileMessageRenderItem[];
@@ -160,6 +166,11 @@ export function buildMobileStreamingRenderWindow(
         && previousPrefix.boundaryMessage === messages[stableAssistantBoundary]
         ? previousPrefix.markdownImageUrls
         : undefined,
+      trustedPreviousBoundary?.mode === 'truncated-turn'
+        && trustedPreviousBoundary.messages.length === stableAssistantBoundary + 1
+        && trustedPreviousBoundary.boundaryMessage === messages[stableAssistantBoundary]
+        ? trustedPreviousBoundary.asyncQuestionMeta
+        : undefined,
     )
   ) {
     return buildTruncatedActiveTurnWindow({
@@ -175,7 +186,14 @@ export function buildMobileStreamingRenderWindow(
       taskUpdates,
     });
   }
-  if (activeTurnStart <= 0 || prefixHasRelocatedAsyncQuestion(messages, activeTurnStart)) {
+  const cachedHistoryAsyncQuestionMeta = trustedPreviousBoundary?.mode === 'history'
+    && trustedPreviousBoundary.messages.length === activeTurnStart
+    ? trustedPreviousBoundary.asyncQuestionMeta
+    : undefined;
+  if (
+    activeTurnStart <= 0
+    || prefixHasRelocatedAsyncQuestion(messages, activeTurnStart, cachedHistoryAsyncQuestionMeta)
+  ) {
     const items = buildMobileMessageRenderItems(messages, options, taskUpdates);
     const result = {
       diffCount: countMobileRenderItemDiffs(items),
@@ -224,6 +242,7 @@ export function buildMobileStreamingRenderWindow(
   const prefix = canReusePrefix
     ? previousPrefix
     : {
+        asyncQuestionMeta: collectPrefixAsyncQuestionMetadata(prefixMessages, prefixMessages.length),
         cacheKey,
         diffCount: countMobileRenderItemDiffs(prefixItems),
         items: prefixItems,
@@ -436,6 +455,7 @@ function buildTruncatedTurnPrefix(input: {
   if (boundaryItemIndex < 0) return null;
   const prefixMessages = input.messages.slice(0, boundaryIndex + 1);
   return {
+    asyncQuestionMeta: collectPrefixAsyncQuestionMetadata(prefixMessages, prefixMessages.length),
     boundaryMessage,
     cacheKey: input.cacheKey,
     diffCount: countMobileRenderItemDiffs(input.items.slice(0, boundaryItemIndex + 1)),
@@ -538,6 +558,7 @@ function stableAssistantBoundaryCanSplit(
   boundaryIndex: number,
   cachedPrefixToolUseIds?: ReadonlySet<string>,
   cachedPrefixMarkdownImageUrls?: ReadonlySet<string>,
+  cachedPrefixAsyncQuestionMeta?: PrefixAsyncQuestionMetadata,
 ): boolean {
   // The boundary assistant is rebuilt with the active tail and then discarded as a duplicate.
   // If it contains an inline image, however, full-turn normalization may use it to remove an
@@ -545,7 +566,7 @@ function stableAssistantBoundaryCanSplit(
   // cannot diverge when the completed assistant and its following delta arrive in one batch.
   if (
     collectMobileMarkdownImages(contentToPreview(messages[boundaryIndex]?.content)).length > 0
-    || prefixHasRelocatedAsyncQuestion(messages, boundaryIndex + 1)
+    || prefixHasRelocatedAsyncQuestion(messages, boundaryIndex + 1, cachedPrefixAsyncQuestionMeta)
   ) {
     return false;
   }
@@ -691,33 +712,61 @@ function remoteToolUseId(message: RemoteMessage): string | null {
   return typeof value === 'string' && value.length > 0 ? value : null;
 }
 
+function collectPrefixAsyncQuestionMetadata(
+  messages: readonly RemoteMessage[],
+  endExclusive: number,
+): PrefixAsyncQuestionMetadata {
+  const end = Math.min(messages.length, Math.max(0, endExclusive));
+  const prefixReplyRequestIds = new Set<string>();
+  const answeredAskRequestIds = new Set<string>();
+  const optimisticAskRequestIds = new Set<string>();
+  let hasAnonymousOptimisticAsk = false;
+  for (let index = 0; index < end; index += 1) {
+    const message = messages[index];
+    if (message.role === 'user') {
+      const requestId = answeredAsyncQuestionRequestId(message.clientId);
+      if (requestId) prefixReplyRequestIds.add(requestId);
+      continue;
+    }
+    if (message.role !== 'ask_user') continue;
+    const content = message.content && typeof message.content === 'object' && !Array.isArray(message.content)
+      ? (message.content as Record<string, unknown>)
+      : null;
+    const requestId = typeof content?.requestId === 'string' && content.requestId.length > 0
+      ? content.requestId
+      : null;
+    if (message.agentMeta?.optimisticAsyncAnswer === true) {
+      if (requestId) optimisticAskRequestIds.add(requestId);
+      else hasAnonymousOptimisticAsk = true;
+    }
+    if (content?.status === 'answered' && requestId) {
+      answeredAskRequestIds.add(requestId);
+    }
+  }
+  for (const requestId of prefixReplyRequestIds) {
+    answeredAskRequestIds.delete(requestId);
+    optimisticAskRequestIds.delete(requestId);
+  }
+  return {
+    answeredAskRequestIds,
+    hasOptimisticAsyncAnswer: hasAnonymousOptimisticAsk || optimisticAskRequestIds.size > 0,
+  };
+}
+
 function prefixHasRelocatedAsyncQuestion(
   messages: readonly RemoteMessage[],
   splitIndex: number,
+  cachedPrefixMeta?: PrefixAsyncQuestionMetadata,
 ): boolean {
   if (splitIndex <= 0 || splitIndex >= messages.length) return false;
-  const tailReplyRequestIds = new Set<string>();
+  const prefixMeta = cachedPrefixMeta ?? collectPrefixAsyncQuestionMetadata(messages, splitIndex);
+  if (prefixMeta.hasOptimisticAsyncAnswer) return true;
+  if (prefixMeta.answeredAskRequestIds.size === 0) return false;
   for (let index = splitIndex; index < messages.length; index += 1) {
     const message = messages[index];
     if (message.role !== 'user') continue;
     const requestId = answeredAsyncQuestionRequestId(message.clientId);
-    if (requestId) tailReplyRequestIds.add(requestId);
-  }
-  for (let index = 0; index < splitIndex; index += 1) {
-    const message = messages[index];
-    if (message.role !== 'ask_user') continue;
-    if (message.agentMeta?.optimisticAsyncAnswer === true) return true;
-    if (tailReplyRequestIds.size === 0) continue;
-    const content = message.content && typeof message.content === 'object' && !Array.isArray(message.content)
-      ? (message.content as Record<string, unknown>)
-      : null;
-    if (
-      content?.status === 'answered'
-      && typeof content.requestId === 'string'
-      && tailReplyRequestIds.has(content.requestId)
-    ) {
-      return true;
-    }
+    if (requestId && prefixMeta.answeredAskRequestIds.has(requestId)) return true;
   }
   return false;
 }

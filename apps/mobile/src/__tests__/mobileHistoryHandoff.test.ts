@@ -580,11 +580,13 @@ describe('mobile history handoff', () => {
     }
   });
 
-  // Unit regression (live async mid-work question stays at answer slot across all 4 handoff frames):
+  // Unit regression (live async mid-work question stays at answer slot across all handoff frames):
   // Root cause: async ask_user persisted before proposal prose jumped above prose on submit,
-  // vanished at the answer position, or flickered between Host's ask_user and reply pushes.
-  // Minimal failing input: user -> work -> async ask_user -> proposal assistant -> live submit.
-  it('keeps an async question anchored after proposal prose across optimistic submit, pushes, and refresh', async () => {
+  // lost its optimisticAsyncAnswer tail anchor on maker:interaction-dismissed (resolved) while
+  // Host's reply was still queued, or flickered between Host's ask_user and reply pushes.
+  // Minimal failing input: user -> work -> async ask_user -> proposal assistant -> live submit
+  // -> resolved push before reply -> ask_user push -> reply push -> refresh.
+  it('keeps an async question anchored after proposal prose across optimistic submit, resolved push, pushes, and refresh', async () => {
     remoteSessionStore.clear();
     const sessionId = 's-async-live';
     const requestId = 'async-question:req-1';
@@ -649,6 +651,7 @@ describe('mobile history handoff', () => {
           ? `${item.message.kind}:${item.message.source.clientId}`
           : item.type);
     };
+    const storedAskRow = () => remoteSessionStore.getMessages(sessionId).find((row) => row.clientId === persistId);
     try {
       view.setActive(true);
       await view.refresh();
@@ -660,23 +663,42 @@ describe('mobile history handoff', () => {
         item: pendingInteraction,
         decision: { kind: 'ask_user_question', answers: { [requestId]: '照此开工' } },
       });
+      expect(storedAskRow()?.agentMeta?.optimisticAsyncAnswer).toBe(true);
       expect(renderSequence()).toEqual(['user:u1', 'work_group', 'assistant:a1', `ask_user:${persistId}`]);
 
-      // Frame 2: Host ask_user update arrives before question-reply:answered: — still anchored below proposal.
+      // Frame 2: maker:interaction-dismissed (resolved) arrives before queued question-reply:answered:
+      // even though pendingItem was already removed in Frame 1 — must keep tail anchor (no jump back).
+      remoteSessionStore.applyRemotePush('dev-1', 'maker:interaction-dismissed', {
+        sessionId,
+        requestId,
+        reason: 'resolved',
+        resolvedAs: 'allow',
+        decision: { kind: 'ask_user_question', answers: { [requestId]: '照此开工' } },
+      });
+      expect(storedAskRow()?.agentMeta?.optimisticAsyncAnswer).toBe(true);
+      expect(renderSequence()).toEqual(['user:u1', 'work_group', 'assistant:a1', `ask_user:${persistId}`]);
+
+      // Frame 3: resolve settles and pending snapshot clears confirmed dismissals while Host's
+      // reply is still queued; Host's ask_user update still stays anchored below proposal prose.
+      remoteSessionStore.settleOptimisticInteractionDismiss(sessionId, requestId, { kind: 'confirmed' });
+      remoteSessionStore.setPendingInteractions(sessionId, []);
       remoteSessionStore.applyRemotePush('dev-1', 'local-db:messages:created', {
         sessionId,
         message: answeredAskRow,
       });
+      expect(storedAskRow()?.agentMeta?.optimisticAsyncAnswer).toBe(true);
       expect(renderSequence()).toEqual(['user:u1', 'work_group', 'assistant:a1', `ask_user:${persistId}`]);
 
-      // Frame 3: Host question-reply:answered: push arrives — Q/A stays at the exact same spot, no duplicate bubble.
+      // Frame 4: Host question-reply:answered: push arrives — tail anchor retires cleanly and Q/A
+      // stays at the exact same spot with no duplicate bubble.
       remoteSessionStore.applyRemotePush('dev-1', 'local-db:messages:created', {
         sessionId,
         message: replyRow,
       });
+      expect(storedAskRow()?.agentMeta?.optimisticAsyncAnswer).toBeUndefined();
       expect(renderSequence()).toEqual(['user:u1', 'work_group', 'assistant:a1', `ask_user:${persistId}`]);
 
-      // Frame 4: authoritative history refresh completes — identical natural sequence.
+      // Frame 5: authoritative history refresh completes — identical natural sequence.
       pageRows = [userRow, thinkRow, answeredAskRow, proposalRow, replyRow];
       await view.refresh(false, true);
       expect(renderSequence()).toEqual(['user:u1', 'work_group', 'assistant:a1', `ask_user:${persistId}`]);
