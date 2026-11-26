@@ -8823,6 +8823,8 @@
         "networkSecretOauthDetail": "登录与令牌由 Cindy 代管，可新授权，亦可择同服务既连之账号。请核下列所请之权；用既连账号时，以其已有之权为准。",
         "networkConnections": "可连君所增之 {{label}}",
         "networkConnectionsDetail": "地址于此法器之设置界面中增之；每增一地址皆须君确认，君所供之凭证仅注入相应地址。",
+        "networkConnectionsGlabCli": "可连君所增之 {{label}}，并先用此机 glab 已登之实例",
+        "networkConnectionsGlabCliDetail": "君于法器设置中所增之实例凭证为先；未另增之实例，主机按需取此机 glab 之登录令牌，唯注入其自身之 HTTPS 请求，法器代码不得读取或存留令牌。",
         "codeDetailNetwork": "于独立沙箱中运行，不能访问君之文件；网络仅限上方所声明之网域，由主机代发。",
         "codeDetailWithNode": "面板 UI 于独立沙箱中运行；此机处理之能由上方所声明之 Node 运行环境提供。",
         "added": "新",
@@ -8851,7 +8853,7 @@
         "nodeChildSpawnDetail": "仅能启其包内已申报之 JS 文件(与主程序同等本机权柄)，不能行任意命令；法器禁用或退出时，子处理程序一并关闭。",
         "skill": "为 AI 助手增技艺「{{name}}」",
         "skillDetail": "技艺乃一份指令文件，AI 将视为己之指令加载而行，具君之全部权柄，于 Claude Code 与 Codex、一切案中皆生效——不受本法器沙箱所约。法器启用期间持续可用，禁用或卸除即移除；仅对某卷匣关闭本法器，不能隐之。此处不能先览技艺全文——请仅纳君所信之法器。",
-        "routineEvents": "例行差事事件",
+        "routineEvents": "自动化之事",
         "mcpUi": "可于言谈中示交互页面",
         "mcpUiDomains": "页面可连之网域：{{domains}}",
         "mcpAppOnly": "唯页面可用",
@@ -12127,7 +12129,9 @@
           "GROUP_AUTHORIZATION_REQUIRED": "{{name}} 的工具调用未执行：群内授权已失效或不允许此操作。请由伙伴主人在当前群重新发起。",
           "GROUP_AUTHORIZATION_UNAVAILABLE": "暂时无法核验 {{name}} 的群聊授权，这次工具调用未执行。请在连接恢复后重试。",
           "ATTACHMENTS_UNAVAILABLE": "部分附件未交给 {{name}}（下载失败或数量限制）。请重新发送本次需要的附件。",
-          "GROUP_ASSISTANT_UNAVAILABLE": "{{name}}，连君之 Cindy，而后 Cindy 可代君行事（君之电脑今无在线之 Cindy）。"
+          "GROUP_ASSISTANT_UNAVAILABLE": "{{name}}，连君之 Cindy，而后 Cindy 可代君行事（君之电脑今无在线之 Cindy）。",
+          "GROUP_ASSISTANT_DEVICE_REQUIRED": "{{name}}，请择本群执行之机，既择即续此事。",
+          "GROUP_ASSISTANT_DEVICE_OFFLINE": "{{name}} 于本群所择之机已离线。"
         }
       },
       "settings": {
@@ -12542,6 +12546,8 @@
           "accessToolsHint": "可用 {{name}} 已有之工具与君之私人数据，结果全群可见。原有操作审批照常；撤回之后，已成之操作不可撤销。",
           "capabilitiesRow": "{{name}} 之工具与授权",
           "accessMenu": "于本群之权柄",
+          "assistantComputer": "执行之机",
+          "chooseComputer": "择机",
           "notifications": {
             "title": "消息告知",
             "all": "凡讯皆告",
@@ -17776,8 +17782,8 @@
           }
         },
         "gitlab": {
-          "missing": "未见 GitLab CLI（glab），故无 MR 状态。装 glab 并登录乃可见。",
-          "notLoggedIn": "本机 glab 未登录 {{host}}，故无 MR 状态。于终端行 glab auth login，登录乃可见。",
+          "missing": "未见 GitLab CLI（glab），GitLab 法器亦无此实例之连，故无 MR 状态。装 glab 并登录，或于 GitLab 法器添此实例，乃可见。",
+          "notLoggedIn": "本机 glab 未登录 {{host}}，GitLab 法器亦无此实例之连，故无 MR 状态。于终端行 glab auth login，或于 GitLab 法器添此实例，乃可见。",
           "unsupported": "此机尚不支持 GitLab MR 状态",
           "openAria": "于浏览器开 MR !{{number}}",
           "summaryAria": "MR !{{number}} 概览",
@@ -18003,6 +18009,13 @@
         "active": "筛 {{count}}",
         "reset": "重设",
         "allProjects": "诸案"
+      },
+      "match": {
+        "label": "检词",
+        "any": "任一词",
+        "all": "诸词俱备",
+        "help": "择“全部关键词”，以空格分词，诸词须同见于一则消息。以“精确短语”寻相连之文。标题另验。",
+        "partial": "所得或有未尽，请细其词或限其案。"
       }
     }
   },
@@ -18203,7 +18216,8 @@
         "pause": "暂止",
         "deleteAutomation": "删自运"
       },
-      "tagWebhook": "Webhook"
+      "tagWebhook": "Webhook",
+      "tagPluginEvent": "法器之事"
     },
     "detail": {
       "manualTrigger": "手触",
@@ -18544,11 +18558,123 @@
         "cindyConnectionTitle": "GitHub · 经 Cindy 连接",
         "manualConnectionTitle": "GitHub · 手动 Webhook",
         "githubAppHint": "于执行此任务之电脑连接 GitHub App，授权所列仓库，无须另设 Webhook 地址或密钥。",
-        "githubAppPaused": "任务已暂停，事件不启之。"
+        "githubAppPaused": "任务已暂停，事件不启之。",
+        "plugin": {
+          "source": "法器之事",
+          "label": "择法器与事",
+          "empty": "本机尚无能报事之法器。装而启用申明有事之法器，乃可于此择之。",
+          "unavailable": "法器不可用",
+          "remove": "除之",
+          "hint": "法器不代汝滤事，虽此自动化自发之讯亦然；当否处之，宜于提示或前置检查中言明。机寐、机关或法器停用之时，事不可得。",
+          "offlineHint": "机寐、机关或法器停用之时，事不可得；不容遗漏者，宜另设定时之察。",
+          "required": "请至少择一法器之事",
+          "state": {
+            "listening": "方听",
+            "disconnected": "已断",
+            "error": "连接有误",
+            "stopped": "未行",
+            "unknown": "待法器报其状"
+          },
+          "filterOnly": "唯察",
+          "filterField": "字段",
+          "filterOperator": "约",
+          "filterValue": "值",
+          "filterRemove": "除此约",
+          "filterAdd": "增「唯察」之约",
+          "operators": {
+            "equals": "等于",
+            "contains": "含",
+            "not-equals": "不等于"
+          }
+        },
+        "scopeLabel": "所及",
+        "scope": {
+          "repository": "全库",
+          "repositoryHint": "库有新事则行，如新 PR、评语、CI 竣事。",
+          "repositoryNeedsAccount": "须登 Cindy 之号，乃能受库之事。",
+          "item": "指定之 PR 或 Issue",
+          "itemHint": "唯察一 PR 或 Issue：PR 状实有变乃行，Issue 有新动则行。",
+          "project": "全项",
+          "projectHint": "项有新事则行，如新 MR、Issue、流水竣事。",
+          "gitlabItem": "指定之 MR 或 Issue",
+          "gitlabItemHint": "唯察一 MR 或 Issue：MR 状实有变乃行，Issue 有变则行。"
+        },
+        "item": {
+          "label": "PR 或 Issue",
+          "placeholder": "42、#42、owner/repo#42 或链",
+          "hint": "书编号、owner/repo#编号，或贴 PR / Issue 之链，Cindy 自辨其类。",
+          "resolving": "辨之中…",
+          "pr": "PR #{{number}}",
+          "issue": "Issue #{{number}}",
+          "closed": "已闭",
+          "required": "请书所察之 PR 或 Issue，待其辨毕。",
+          "issueHint": "指定 Issue 借 Cindy 所连之 GitHub App 受事，须登 Cindy 之号。",
+          "errors": {
+            "invalid": "请书编号、#编号、owner/repo#编号，或 GitHub 上 PR / Issue 之链。",
+            "no-repository": "唯书编号则须知其库，请书 owner/repo#42，或贴其链。",
+            "not-connected": "连 GitHub 而后能辨 PR 抑 Issue。",
+            "not-found": "此库无此编号，或君无权观之。",
+            "unavailable": "暂不能连 GitHub，请稍后再试。",
+            "needs-account": "此乃 Issue。指定 Issue 须登 Cindy 之号，并借 Cindy 连 GitHub。"
+          },
+          "issueChange": {
+            "any": "Issue 有新动",
+            "comment": "有新评",
+            "closed": "Issue 已闭",
+            "reopened": "Issue 复开"
+          },
+          "mr": "MR !{{number}}"
+        },
+        "gitlabSignedConnection": "签名之令（GitLab 十九以上）",
+        "gitlabSignedConnectionHint": "于 GitLab 项之 Webhook 设中用签名之令，更为稳妥。",
+        "gitlabTokenConnection": "Secret token",
+        "gitlabTokenConnectionHint": "宜于旧版 GitLab：于 Webhook 设中书 Secret token。",
+        "gitlabPluginConnection": "借 GitLab 法器",
+        "gitlabPluginConnectionHint": "以 GitLab 法器所连之号，每分一察，无须于 GitLab 设 Webhook，亦无须登 Cindy 之号。机寐或机关之时所变，不复补报。",
+        "gitlabMrPollConnection": "按时察其进止",
+        "gitlabMrPollConnectionHint": "依「兼按时省察」之期读 MR 之状（不行差事），先取法器所录之号，次取此机 glab 之登。",
+        "gitlabSetupHint": "存后于差事详情取收址与密钥，书于 GitLab 项之「设置 › Webhooks」。",
+        "gitlabItem": {
+          "label": "MR 或 Issue",
+          "placeholder": "!12、#12、group/project!12 或链",
+          "hint": "MR 书 !编号，Issue 书 #编号，亦可径贴其链。",
+          "required": "请书所察之 MR 或 Issue。",
+          "mrHint": "GitLab 无推报，Cindy 依「兼定时察」之时读 MR 之状（不行差事），用此机 glab 之登，或 GitLab 法器所连之号。",
+          "mrPluginHint": "GitLab 法器每分一察此 MR，新提交、评注、核准及管线成败皆在其中。",
+          "issueHint": "借 GitLab Webhook 受此 Issue 之变。评语之事不能辨 MR 与 Issue，故唯应 Issue 自身之新立、修改、闭与复开。",
+          "issuePluginHint": "GitLab 法器每分一察此 Issue，新评亦在其中。",
+          "errors": {
+            "invalid": "请依 !12（MR）、#12（Issue）或 group/project!12 之式书之，亦可贴 GitLab 之链。",
+            "ambiguous": "GitLab 之 MR 与 Issue 编号各别，请书 !12（MR）或 #12（Issue），或贴其链。",
+            "needs-link": "指定 MR 须知 GitLab 之所，请贴 MR 之链。",
+            "needs-account": "此乃 Issue。指定 GitLab Issue，须装 GitLab 法器，或登 Cindy 之号以受 GitLab Webhook。"
+          },
+          "mrChange": {
+            "any": "MR 有新动",
+            "merged": "MR 已合",
+            "review": "审有新动",
+            "ci": "流水之状有变"
+          },
+          "issueChange": {
+            "any": "Issue 有变",
+            "comment": "Issue 有新评",
+            "closed": "Issue 已闭",
+            "reopened": "Issue 复开"
+          }
+        },
+        "gitlabPlugin": {
+          "projectLabel": "项目",
+          "projectHint": "书 group/project 或项目之链。法器连数实例者，宜贴其链。",
+          "projectInvalid": "宜书 group/project 或以 https 起之项目链。",
+          "eventsLabel": "事",
+          "eventsHint": "皆不择者，应此项目诸事。",
+          "unavailable": "GitLab 法器未装或已停，请于「法器」启之，然后存。"
+        }
       },
       "trigger": {
         "label": "触发方式",
-        "timed": "定时"
+        "timed": "定时",
+        "event": "事"
       },
       "runSettings": "运行设置"
     },
@@ -18839,7 +18965,8 @@
         "reconnectConfirm": "重连 Webhook 乎？",
         "reconnectConfirmHint": "此举将占一名额并生新受信之址。请以新址与密钥更设发信方。",
         "reconnectFailed": "暂未能重连，请察所余名额后再试。"
-      }
+      },
+      "pluginTitle": "法器之事触发"
     }
   },
   "issueTracker": {
@@ -21119,7 +21246,7 @@
   "routines": {
     "hourly": "每时",
     "everyMinutes": "每 {{count}} 分",
-    "pluginCapability": "向例行差事呈已声明之事，唯触发君所设之例行差事",
+    "pluginCapability": "向自动化呈已声明之事，唯触发择此法器之自动化",
     "advancedSettings": "高级之设"
   },
   "cindyMakeDoctor": {

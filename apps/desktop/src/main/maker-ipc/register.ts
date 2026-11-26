@@ -6990,6 +6990,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   initGithubIssueSubmit(
     issueConfirmBridge,
     (sessionId) => turnModelPromiseBySession.get(sessionId) ?? readSessionModelForUsage(sessionId),
+    (sessionId) => maker.getSession(sessionId)?.agentKind === 'acp',
   );
   initRenameSessionsConfirm(renameSessionsConfirmBridge);
 
@@ -7470,6 +7471,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       // Older hosts keep only known columns and would report success while dropping the trigger.
       supportsSchedulePrTrigger: true,
       supportsScheduleWebhookTrigger: true,
+      // webhookTrigger.source {preset:'plugin'}: older hosts reject the unknown source.
+      supportsSchedulePluginEventTrigger: true,
       // 定时任务能存模型组(模式)；旧端会丢掉 modelGroup 后照样报成功，调用方须先看到此能力。
       supportsScheduleModelGroup: true,
       // Remote schedule_create checks workingDir on this computer before insert.

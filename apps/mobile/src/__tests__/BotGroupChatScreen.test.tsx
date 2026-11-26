@@ -2049,6 +2049,19 @@ describe('group settings', () => {
     expect(byId('botGroup.settings')).not.toBeNull();
   }
 
+  // Unit: a regular member can switch their computer even through a desktop with no personal-mask entry.
+  it.each([true, false])('switches the member’s group assistant computer in settings (direct=%s)', async direct => {
+    const data = group({ serverBacked: true, supportsSettingsManagement: true, revision: 5, assistantDeviceId: 'mac',
+      assistantComputers: [{ id: 'mac', name: 'Mac' }, { id: 'win', name: 'Windows' }] });
+    data.members[0] = { ...data.members[0], actorId: 'human', actorKind: 'human', isSelf: true, role: 'member' };
+    h.chat.server = direct;
+    const manage = vi.fn(async () => ({ effects: [] }));
+    if (direct) h.management = { group: data, editable: false, ready: true, loading: false, reason: 'permission', act: manage, refresh: vi.fn() };
+    await openSettings(data);
+    await click('botGroup.settings.assistantComputer.action.win');
+    expect(direct ? manage : h.chat.act).toHaveBeenCalledWith('assistantDevice', direct ? { deviceId: 'win' } : { expectedRevision: 5, deviceId: 'win' });
+  });
+
   // Unit regression for #13029: the native menu can persist a displayed inherited
   // mode on the real settings sheet, while selecting the confirmed mode is a no-op.
   it('saves the inherited notification option once as a personal preference', async () => {

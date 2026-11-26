@@ -513,7 +513,7 @@ describe('GitLab MR status', () => {
     repo: 'project',
     prNumber: 7,
   };
-  it('uses the exact plugin host when glab is unavailable and discards a read across an account switch', async () => {
+  it('prefers the exact plugin host over local glab, falls back to glab, and discards a read across an account switch', async () => {
     const cli = createGlabCliTokenSource({ exec: vi.fn((_bin, _args, _opts, cb) => cb({ code: 'ENOENT' }, '')) as never });
     let owner = 'first';
     const readPlugin = vi.fn(async (host: string) => host === q.host ? 'fixture' : null);
@@ -524,9 +524,7 @@ describe('GitLab MR status', () => {
       return 'fixture';
     })).toMatchObject({ ok: false });
     cli.rejectToken(q.host);
-    readPlugin.mockClear();
-    expect(await readGitlabStatusToken(q.host, cli, () => owner, readPlugin)).toMatchObject({ ok: false });
-    expect(readPlugin).not.toHaveBeenCalled();
+    expect(await readGitlabStatusToken(q.host, cli, () => owner, async () => null)).toEqual({ ok: false, reason: 'glab-not-logged-in' });
   });
 
   // The title bar should remain usable on self-managed instances with an older GraphQL schema.
@@ -948,6 +946,23 @@ describe('PR follow watch', () => {
     expect(runNow).toHaveBeenCalledTimes(1);
     await look(300_000);
     expect(runNow).toHaveBeenCalledTimes(1);
+  });
+
+  // 2026-11-24: a specific GitLab MR is a prTrigger followed by timed status reads. It must never be
+  // sent to the GitHub App subscription, and a verified merge observed by the shared reader runs it.
+  it('follows a GitLab MR trigger through status observations only', async () => {
+    const mr = 'https://gitlab.example.com/group/app/-/merge_requests/12';
+    const tasks = [schedule('mr', mr, { prTrigger: { url: mr, change: 'merged' } })];
+    const runNow = vi.fn(async () => null);
+    const watch = new PrFollowWatch({ listActive: async () => tasks, runNow, inflight: () => 0,
+      autoRunAllowed: () => true, hasCapacity: () => true });
+    expect(followedGithubPrs(tasks)).toEqual([]);
+    const query = { provider: 'gitlab' as const, host: 'gitlab.example.com', owner: 'group', repo: 'app', prNumber: 12 };
+    watch.observe(query, { ok: true, status: 'open' } as never);
+    watch.observe(query, { ok: true, status: 'merged' } as never);
+    await new Promise(resolve => setImmediate(resolve));
+    expect(runNow).toHaveBeenCalledTimes(1);
+    expect(runNow.mock.calls[0]?.slice(0, 3)).toEqual(['mr', expect.objectContaining({ detail: mr }), tasks[0]]);
   });
 
   it('runs the selected merge condition for event-only automations, independent of an incidental hook URL', async () => {

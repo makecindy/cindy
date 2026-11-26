@@ -300,6 +300,43 @@ describe('bot group remote resources', () => {
     expect(botGroupRemotePreview(summary())).toMatchObject({ translations: { 'zh-CN': '阿布：写好了' } });
   });
 
+  // Unit: server-backed groups proxied to mobile must not emit `generation` or running plan
+  // previews when only another user's Cindy or companion is active.
+  it('omits remote running state when only another user’s agent is speaking in a server group', () => {
+    const members = [
+      { botId: 'cindy', actorKind: 'bot' as const, assistant: true, isOwned: false, name: 'Cindy', avatar: '', avatarColor: 'violet', status: 'active' as const },
+      { botId: 'mimi', actorKind: 'bot' as const, isOwned: true, name: '咪咪', avatar: '', avatarColor: 'blue', status: 'active' as const },
+    ];
+    const peerOnly = summary({
+      serverBacked: true,
+      members,
+      speakingBotIds: ['cindy'],
+      teammateActivity: { phase: 'idle' },
+      openPlan: { id: 'p1', status: 'running', currentStep: 0, stepCount: 2, currentBotName: 'Cindy', currentStepStatus: 'running' },
+      round: { status: 'running', canContinue: false, othersActive: true, speakers: [
+        { botId: 'cindy', executionId: 'e1', isSelfRequested: false, executionStatus: 'running', sessionId: null, activity: 'step' },
+      ] },
+    });
+    const peerItem = botGroupRemoteItem(peerOnly);
+    expect(peerItem.display.generation).toBeUndefined();
+    expect(peerItem.display.teammateActivity).toEqual({ phase: 'idle' });
+    expect(peerItem.display.preview).toMatchObject({ translations: { 'zh-CN': '阿布：写好了' } });
+
+    const ownActive = summary({
+      serverBacked: true,
+      members,
+      speakingBotIds: ['cindy', 'mimi'],
+      teammateActivity: { phase: 'running' },
+      round: { status: 'running', canContinue: false, othersActive: true, speakers: [
+        { botId: 'cindy', executionId: 'e1', isSelfRequested: false, executionStatus: 'running', sessionId: null, activity: 'reply' },
+        { botId: 'mimi', executionId: 'e2', isSelfRequested: false, executionStatus: 'running', sessionId: 'lane-mimi', activity: 'reply' },
+      ] },
+    });
+    const ownItem = botGroupRemoteItem(ownActive);
+    expect(ownItem.display.generation).toEqual({ phase: 'processing', startedAt: null });
+    expect(ownItem.display.teammateActivity).toEqual({ phase: 'running' });
+  });
+
   it('localizes join previews for every phone language without an author prefix', () => {
     const preview = botGroupRemotePreview(summary({ openPlan: null, lastMessage: { authorKind: 'system',
       authorName: 'Taylor', noticeCode: 'member-joined', preview: 'Fallback', createdAt: 50 } }));
@@ -414,6 +451,11 @@ describe('bot group remote resources', () => {
       actionId: 'read', resourceRef: ref('g1'), input: { messageId: 'm2' } });
     expect(service.chatServer.manage).toHaveBeenCalledWith({ groupId: 'g1', action: { type: 'read', messageId: 'm2' } });
     expect(read.effects).toEqual([]);
+
+    service.getGroup.mockResolvedValueOnce({ ok: true, group: detail({ serverBacked: true, assistantComputers: [{ id: 'second', name: 'Windows' }] }) });
+    await remoteResourceRegistry.invoke(context, { client: client(), collectionId: BOT_GROUP_REMOTE_COLLECTION_ID,
+      actionId: 'assistantDevice', resourceRef: ref('g1'), input: { deviceId: 'second' } });
+    expect(service.chatServer.manage).toHaveBeenCalledWith({ groupId: 'g1', action: { type: 'assistantDevice', deviceId: 'second' } });
 
     service.getGroup.mockResolvedValueOnce({ ok: true, group: detail({ serverBacked: true, supportsNotificationSettings: true, notificationMode: 'all' }) });
     await remoteResourceRegistry.invoke(context, { client: client(), collectionId: BOT_GROUP_REMOTE_COLLECTION_ID,

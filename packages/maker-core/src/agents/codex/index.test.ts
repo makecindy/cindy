@@ -9625,15 +9625,18 @@ describe('CodexAgent MCP thread context hooks', () => {
     // 4 小时的已完成会话被写 app-server force-retired 错误)。修复后 host 发结构化
     // hostForcedRetire 信号,由每个 session 按自身状态收口:空闲订阅者静默失效,
     // 真实在飞的订阅者收到终态错误 + Done。
-    const agent = new CodexAgent(createDeps());
+    const closeCodexMcpSessionInstance = vi.fn();
+    const agent = new CodexAgent(createDeps({}, { closeCodexMcpSessionInstance }));
 
     const idleHandle = await agent.startSession({
       sessionId: 'session-force-retire-idle',
+      sessionInstanceId: 'instance-force-retire-idle',
       model: 'gpt-5.4',
       workingDir: '/repo-local',
     });
     const busyHandle = await agent.startSession({
       sessionId: 'session-force-retire-busy',
+      sessionInstanceId: 'instance-force-retire-busy',
       model: 'gpt-5.4',
       workingDir: '/repo-local',
     });
@@ -9663,6 +9666,13 @@ describe('CodexAgent MCP thread context hooks', () => {
     expect(idleHandle.isTurnRunning?.()).toBe(false);
 
     await agent.forceDisposeLocalHostForAuthChange('test forced retire with idle subscriber');
+
+    // #13076: host retirement ends both streams without a caller invoking close().
+    // Unit tier, real retirement entry with fake app-server transport. Both live
+    // instances must reach the bridge port even when no public close follows.
+    expect(closeCodexMcpSessionInstance.mock.calls.map(([id]) => id).sort()).toEqual([
+      'instance-force-retire-busy', 'instance-force-retire-idle',
+    ]);
 
     // busy 会话:照旧收到一次终态 transport error + Done,isTurnRunning 复位。
     expect(busyHandle.isTurnRunning?.()).toBe(false);
@@ -12028,7 +12038,8 @@ describe('CodexAgent MCP thread context hooks', () => {
   });
 
   it('retires the captured host and rejects an unused-thread replacement when release fails', async () => {
-    const agent = new CodexAgent(createDeps());
+    const closeCodexMcpSessionInstance = vi.fn();
+    const agent = new CodexAgent(createDeps({}, { closeCodexMcpSessionInstance }));
     let threadStartSeq = 0;
     const host = installFakeHost(agent, (method) => {
       if (method === Method.ThreadStart) {
@@ -12049,6 +12060,7 @@ describe('CodexAgent MCP thread context hooks', () => {
       .mockResolvedValue(undefined);
     const handle = await agent.startSession({
       sessionId: 'session-unused-replacement-release-failure',
+      sessionInstanceId: 'instance-unused-replacement-release-failure',
       model: 'gpt-5.4',
       workingDir: '/repo',
     });
@@ -12071,6 +12083,9 @@ describe('CodexAgent MCP thread context hooks', () => {
       expect.objectContaining({ failIfActive: true }),
     );
     expect(host.subscribeThread).toHaveBeenCalledTimes(1);
+    // #13076, unit: a rejected unsubscribe can terminate the handle directly,
+    // without the public close path. The dead instance must release its bridge.
+    expect(closeCodexMcpSessionInstance).toHaveBeenCalledExactlyOnceWith('instance-unused-replacement-release-failure');
   });
 
   describe('automatic remote compaction summary fallback', () => {
@@ -37581,6 +37596,29 @@ describe('Codex native manual compaction', () => {
     started(); completed();
     await expect(result).resolves.toEqual({ noop: true });
     await handle.close();
+  });
+
+  // #13076 review, unit tier: a rejected native compact request ends the handle
+  // internally. Explicit-close coverage misses this path to the bridge port.
+  it('releases the bridge instance when a failed compact ends the session internally', async () => {
+    const closeCodexMcpSessionInstance = vi.fn();
+    const agent = new CodexAgent(createDeps({}, { closeCodexMcpSessionInstance }));
+    installFakeHost(agent, (method) => {
+      if (method === Method.ThreadCompactStart) throw new Error('compact admission failed');
+      return undefined;
+    });
+    const handle = await agent.startSession({
+      sessionId: 'compact-bridge-release',
+      sessionInstanceId: 'instance-compact-bridge-release',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+    const ended = (async () => { for await (const _event of handle.events()) { /* drain */ } })();
+    await expect(handle.compactSession!()).rejects.toThrow('compact admission failed');
+    await ended;
+    expect(closeCodexMcpSessionInstance).toHaveBeenCalledExactlyOnceWith('instance-compact-bridge-release');
+    await handle.close();
+    expect(closeCodexMcpSessionInstance).toHaveBeenCalledTimes(1);
   });
 
   it('refreshes context from the native zero-cost compact frame with unchanged billing totals', async () => {
