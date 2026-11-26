@@ -218,6 +218,8 @@ export interface UnifiedMobilePluginEngineOptions {
   active: MobilePluginEngineSelection | null;
   /** 返回 false = 没有应用(选择器留在原地)。 */
   onSelect(selection: MobilePluginEngineSelection): Promise<boolean> | boolean;
+  /** 仅调整思考深度时留在原地；未提供时沿用 onSelect。 */
+  onConfigure?(selection: MobilePluginEngineSelection): Promise<boolean> | boolean;
   /** 选择器打开时调用：读一次列表，请插件重新上报模型。 */
   onOpen?(): void;
 }
@@ -1194,7 +1196,10 @@ export function UnifiedModelPickerSheet(
     if (row.disabled || !pluginEngineOptions) return;
     void transact(async (isCurrent) => {
       const nextEffort = effort ?? row.effort ?? undefined;
-      const applied = await pluginEngineOptions.onSelect({
+      const handler = effort !== undefined && pluginEngineOptions.onConfigure
+        ? pluginEngineOptions.onConfigure
+        : pluginEngineOptions.onSelect;
+      const applied = await handler({
         providerId: row.providerId,
         modelId: row.modelId,
         ...(nextEffort ? { effort: nextEffort } : {}),

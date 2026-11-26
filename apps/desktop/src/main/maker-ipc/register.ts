@@ -57,7 +57,12 @@ import { openSession, setSessionOpeningModelAdmission } from '../localDb/session
 import { createPluginTaskReviewResolver } from './pluginTaskReviewContext.js';
 import { createPluginTargetReviewLoader } from '../cindy-brain/pluginTargetReview.js';
 import { isPluginTaskPermissionAllowed, assertPluginTaskResult, createPluginTaskService, PluginTaskError, type PluginTaskService } from './pluginTaskService.js';
-import { resolveRemotePluginTaskRoute, savedPluginTaskRemoteRoute } from './pluginTaskModelRoute.js';
+import {
+  applyPluginTaskModelRoute,
+  resolvePluginTaskReadRoute,
+  resolveRemotePluginTaskRoute,
+  savedPluginTaskRemoteRoute,
+} from './pluginTaskModelRoute.js';
 import { readPluginImProjectCatalog, currentPluginImProjectWorkspaces } from '../hook-control/ipc.js';
 import { resolveSharedImProjectConfig, sharedImProjectFingerprint } from '../hook-control/session-runner.js';
 import { getSharedProjectPref } from '../hook-control/sharedProjectPrefs.js';
@@ -14951,88 +14956,64 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         return config ? clampPluginTaskPermissionMode(config.permissionMode) : undefined;
       },
       readLiveSession: taskId => maker.getSession(taskId),
-      setModel: async (taskId, route, assertUnchanged, permissionMode) => {
-        const targetAgent = route.agentKind === 'cc' ? 'claude-code' : route.agentKind;
-        const switchViaAgentSwitch = async () => {
-          try {
-            const switched = await performSessionAgentSwitch(agentSwitchDeps, {
-              sessionId: taskId,
-              targetAgentKind: targetAgent,
-              model: route.model,
-              providerId: route.providerId,
-              effort: route.effort || null,
-              fastMode: targetAgent === 'acp' ? false : route.fastMode,
-              agentDeviceId: route.agentDeviceId ?? null,
-              runtimeSource: 'agent',
-              assertSelectionCurrent: () => {},
-              beforeMutation: assertUnchanged,
-            });
-            if (permissionMode !== undefined) {
-              await assertUnchanged();
-              await commitSessionPermissionMode(taskId, permissionMode, false, assertUnchanged);
-            }
-            return { status: switched.deferred ? 'deferred' as const : 'applied' as const };
-          } catch (error) {
-            if (error instanceof PluginTaskError) throw error;
-            throw new PluginTaskError('ROUTE_UNAVAILABLE', error instanceof Error ? error.message : '任务模型不可用，请重新选择');
-          }
-        };
-        if (targetAgent === 'acp') {
-          await assertUnchanged();
-          return switchViaAgentSwitch();
-        }
-        let current: Awaited<ReturnType<typeof sessionControlService.getSessionRuntime>>;
-        try {
-          current = await sessionControlService.getSessionRuntime({ targetSessionId: taskId });
-        } catch (error) {
-          // A task currently running on a plugin engine has no built-in runtime profile;
-          // route its switch back to a built-in harness through performSessionAgentSwitch.
-          const [taskRow] = await snapshot.client.drizzle
-            .select({ agentKind: sessions.agentKind })
-            .from(sessions)
-            .where(eq(sessions.id, taskId))
-            .limit(1);
-          if (taskRow && isPluginEngineKind(taskRow.agentKind)) {
-            await assertUnchanged();
-            return switchViaAgentSwitch();
-          }
-          throw error;
-        }
-        if (!current.ok) throw new PluginTaskError('TASK_NOT_FOUND', current.message);
-        await assertUnchanged();
-        const pendingAgent = current.runtime.pendingMutation?.profile.agentKind;
-        const location = route.agentDeviceId ?? null;
-        const selectedLocation = (current.runtime.pendingMutation?.profile ?? current.runtime.effectiveProfile).agentDeviceId ?? null;
-        const selectLocation = location !== selectedLocation || location !== (current.runtime.effectiveProfile.agentDeviceId ?? null);
-        const selectHarness = current.runtime.effectiveProfile.agentKind !== targetAgent
-          || (pendingAgent !== undefined && pendingAgent !== targetAgent) || selectLocation || !!location;
-        // Project continuation can choose a mode the previous Agent cannot use.
-        // Complete its ordinary idle handoff before applying the new permission.
-        const permissionHandoff = permissionMode !== undefined && current.runtime.effectiveProfile.agentKind !== targetAgent;
-        const result = await sessionControlService.setSessionRuntime({ targetSessionId: taskId,
-          expectedGeneration: current.runtime.runtimeGeneration,
-          beforeMutation: assertUnchanged,
-          patch: { ...(selectHarness ? { harness: targetAgent } : {}),
-            ...(selectLocation || location ? { agentDeviceId: location } : {}),
-            model: route.model, providerId: route.providerId, effort: (route.effort || null) as Effort | null,
-            fastMode: route.fastMode, ...(permissionMode && !permissionHandoff ? { permissionMode } : {}) } });
-        if (!result.ok) throw new PluginTaskError(result.errorCode, result.message);
-        if (permissionHandoff) {
-          await assertUnchanged();
-          await applyPendingAgentSwitchIfIdle(agentSwitchDeps, taskId, { bootstrapAfterSwitch: true });
-          await assertUnchanged();
-          const changed = await sessionControlService.getSessionRuntime({ targetSessionId: taskId });
-          if (!changed.ok) throw new PluginTaskError('TASK_NOT_FOUND', changed.message);
-          if (changed.runtime.effectiveProfile.agentKind !== targetAgent)
-            throw new PluginTaskError('TASK_BUSY', 'Wait for the selected Agent to become available');
-          const permission = await sessionControlService.setSessionRuntime({ targetSessionId: taskId,
-            expectedGeneration: changed.runtime.runtimeGeneration, beforeMutation: assertUnchanged,
-            patch: { permissionMode } });
-          if (!permission.ok) throw new PluginTaskError(permission.errorCode, permission.message);
-          return { status: permission.status };
-        }
-        return { status: result.status };
-      },
+      setModel: async (taskId, route, assertUnchanged, permissionMode) =>
+        applyPluginTaskModelRoute(
+          {
+            readTaskRow: async (id) => {
+              const [taskRow] = await snapshot.client.drizzle
+                .select({
+                  agentKind: sessions.agentKind,
+                  providerId: sessions.providerId,
+                  agentDeviceId: sessions.agentDeviceId,
+                })
+                .from(sessions)
+                .where(eq(sessions.id, id))
+                .limit(1);
+              return taskRow ?? null;
+            },
+            readPendingSwitch: (id) => agentSwitchPending.get(id),
+            performAgentSwitch: (params) =>
+              performSessionAgentSwitch(agentSwitchDeps, {
+                sessionId: params.sessionId,
+                targetAgentKind: params.targetAgentKind,
+                model: params.model,
+                providerId: params.providerId,
+                effort: params.effort,
+                fastMode: params.fastMode,
+                agentDeviceId: params.agentDeviceId,
+                runtimeSource: 'agent',
+                assertSelectionCurrent: () => {},
+                beforeMutation: params.beforeMutation,
+              }),
+            applySamePluginEngineModel: (params) =>
+              applySessionRuntimeSelection(
+                params.sessionId,
+                params.model,
+                params.providerId,
+                { effort: params.effort, fastMode: false },
+                { source: 'user', beforeMutation: params.beforeMutation },
+              ),
+            commitPermissionMode: (id, mode, beforeMutation) =>
+              commitSessionPermissionMode(id, mode, false, beforeMutation),
+            getBuiltinSessionRuntime: (id) =>
+              sessionControlService.getSessionRuntime({ targetSessionId: id }),
+            setBuiltinSessionRuntime: (params) =>
+              sessionControlService.setSessionRuntime(params),
+            setBuiltinPermissionMode: ({ targetSessionId, expectedGeneration, beforeMutation, permissionMode: mode }) =>
+              sessionControlService.setSessionRuntime({
+                targetSessionId,
+                expectedGeneration,
+                beforeMutation,
+                patch: { permissionMode: mode },
+              }),
+            applyPendingSwitchIfIdle: (id) =>
+              applyPendingAgentSwitchIfIdle(agentSwitchDeps, id, { bootstrapAfterSwitch: true }),
+          },
+          taskId,
+          route,
+          assertUnchanged,
+          permissionMode,
+        ),
       assertTeamPlanUnstarted: async taskId => {
         assertCurrent();
         await drainPersistQueue();
@@ -15124,21 +15105,19 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         const runtime = await readSessionRuntimeProfiles(taskId);
         assertCurrent();
         // A queued input will execute the accepted next-send route. Keep its
-        // receipt stable as a deferred model/Harness switch reaches that boundary.
-        const selected = runtime?.pendingMutation?.profile ?? runtime?.effective;
-        let resolvedConfig: PluginTaskRoute = selected
-          ? { agentKind: selected.agentKind === 'claude-code' ? 'cc' : selected.agentKind,
-            ...(selected.agentDeviceId ? { agentDeviceId: selected.agentDeviceId } : {}),
-            providerId: selected.providerId ?? '', model: selected.model,
-            effort: selected.effort ?? '', fastMode: selected.fastMode }
-          : { agentKind: row.agentKind as PluginTaskRoute['agentKind'], providerId: row.providerId ?? '', model: row.model, effort: row.effort, fastMode: row.fastMode,
-            ...(row.agentDeviceId ? { agentDeviceId: row.agentDeviceId } : {}) };
+        // receipt stable as a deferred model/Harness switch reaches that boundary,
+        // including transitions to or from a plugin engine (`acp`).
+        let { resolvedConfig, hasPendingRoute } = resolvePluginTaskReadRoute({
+          row,
+          runtime,
+          pendingSwitch: agentSwitchPending.get(taskId),
+        });
         // A group may assign this task to a different executor before input acceptance.
         // Keep the chosen source stable only while the ordinary group service verifies
         // that the task's actual location still belongs to that exact binding.
         let group: { groupDeviceId: string | null; providerId: string } | null | undefined;
         try {
-          group = !runtime?.pendingMutation && readProviderGroupBinding(taskId)
+          group = !hasPendingRoute && readProviderGroupBinding(taskId)
             ? await providerGroupService?.sessionGroup(taskId) : null;
         } catch {
           // Unavailable group metadata cannot hide local history or prevent stopping

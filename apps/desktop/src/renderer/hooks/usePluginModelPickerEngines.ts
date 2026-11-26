@@ -5,6 +5,7 @@ import type { PluginEnginesPickerProps } from '@/components/new-chat/PluginEngin
 import { useOptionalAuthDeviceId } from '@/contexts/AuthContext';
 import { useProviderShareAgentDevices } from '@/features/provider-share/useProviderShareAgentDevices';
 import { useSelectableDevices } from '@/hooks/useControllableDevices';
+import { useControlledModelLocations } from '@/hooks/useControlledModelLocations';
 import {
   findPluginEngine,
   requestPluginEnginesRefresh,
@@ -15,10 +16,13 @@ import {
 import { deviceDisplayName } from '@/lib/deviceName';
 import {
   PLUGIN_ENGINE_DEFAULT_MODEL,
+  controlledPluginEngineSources,
   remotePluginEngineChoices,
   type PluginEngineChoice,
   type PluginEngineSelection,
+  type PluginEngineSource,
 } from '@/lib/pluginEngineSelection';
+import { modelCatalogKey } from '../../shared/controlledModelCatalog';
 import { isPluginEngineEffort } from '../../shared/pluginEngines';
 import { isProviderShareAgentDeviceId } from '../../shared/providerShare';
 
@@ -41,6 +45,7 @@ export function usePluginModelPickerEngines({
   hostDeviceId,
   active,
   onSelect,
+  onSelectEffort,
 }: {
   enabled: boolean;
   allowRemote: boolean;
@@ -48,6 +53,7 @@ export function usePluginModelPickerEngines({
   hostDeviceId?: string;
   active: PluginModelPickerActiveRoute | null | undefined;
   onSelect(selection: PluginEngineSelection): void | boolean | Promise<boolean>;
+  onSelectEffort?(selection: PluginEngineSelection): void | boolean | Promise<boolean>;
 }): PluginEnginesPickerProps | undefined {
   const selfDeviceId = useOptionalAuthDeviceId();
   const { devices: selectableDevices } = useSelectableDevices();
@@ -59,10 +65,15 @@ export function usePluginModelPickerEngines({
   const {
     pluginEngineDevices: sharedPluginEngineDevices = [],
     nameFor: providerShareDeviceName,
+    isReceived: isReceivedProviderShare,
   } = useProviderShareAgentDevices(rememberedDeviceIds, hostDeviceId);
+  const hostLocations = useControlledModelLocations(
+    enabled && allowRemote && hostDeviceId ? hostDeviceId : undefined,
+    selfDeviceId,
+  );
 
   const localNeeded = enabled
-    && (!hostDeviceId || (!!selfDeviceId && activeAgentDeviceId === selfDeviceId));
+    && (!hostDeviceId || (!!selfDeviceId && activeAgentDeviceId === selfDeviceId && hostLocations === undefined));
   const localEngines = usePluginEngines(localNeeded);
   const {
     engines: remoteHostEngines,
@@ -90,41 +101,84 @@ export function usePluginModelPickerEngines({
                 ? [[activeAgentDeviceId, providerShareDeviceName?.(activeAgentDeviceId) ?? null] as [string, string | null]]
                 : []),
             ]
-          : (activeAgentDeviceId && activeAgentDeviceId !== hostDeviceId && activeAgentDeviceId !== selfDeviceId && !isSharedTaskPeer(activeAgentDeviceId)
-              ? [[
-                  activeAgentDeviceId,
-                  selectableDevices.find((item) => item.deviceId === activeAgentDeviceId)?.name
-                    ?? providerShareDeviceName?.(activeAgentDeviceId)
-                    ?? null,
-                ] as [string, string | null]]
-              : []),
+          : hostLocations !== undefined
+            ? (() => {
+                const sources = controlledPluginEngineSources(
+                  hostDeviceId,
+                  hostLocations.map(({ agentDeviceId, name, favoriteSource }) => ({
+                    deviceId: agentDeviceId,
+                    name,
+                    ...(favoriteSource ? { favoriteSource } : {}),
+                  })),
+                  (id) => (isReceivedProviderShare?.(id) ? providerShareDeviceName?.(id) : null),
+                );
+                if (
+                  activeAgentDeviceId
+                  && activeAgentDeviceId !== hostDeviceId
+                  && !isSharedTaskPeer(activeAgentDeviceId)
+                  && !sources.some((item) => item.deviceId === activeAgentDeviceId)
+                ) {
+                  sources.push({
+                    deviceId: activeAgentDeviceId,
+                    name: selectableDevices.find((item) => item.deviceId === activeAgentDeviceId)?.name
+                      ?? providerShareDeviceName?.(activeAgentDeviceId)
+                      ?? null,
+                    catalogueKey: modelCatalogKey(activeAgentDeviceId, hostDeviceId)!,
+                  });
+                }
+                return sources.map(({ deviceId: id, name, catalogueKey }): [string, string | null, string?] => [
+                  id,
+                  name ?? null,
+                  catalogueKey,
+                ]);
+              })()
+            : (activeAgentDeviceId && activeAgentDeviceId !== hostDeviceId && activeAgentDeviceId !== selfDeviceId && !isSharedTaskPeer(activeAgentDeviceId)
+                ? [[
+                    activeAgentDeviceId,
+                    selectableDevices.find((item) => item.deviceId === activeAgentDeviceId)?.name
+                      ?? providerShareDeviceName?.(activeAgentDeviceId)
+                      ?? null,
+                  ] as [string, string | null]]
+                : []),
       )
     : '[]';
 
-  const remoteDevices = useMemo(
-    () => (JSON.parse(deviceEntriesKey) as Array<[string, string | null]>).map(([deviceId, name]) => ({ deviceId, name })),
+  const remoteDevices = useMemo<readonly PluginEngineSource[]>(
+    () => (JSON.parse(deviceEntriesKey) as Array<[string, string | null, string?]>).map(
+      ([deviceId, name, catalogueKey]) => ({ deviceId, name, ...(catalogueKey ? { catalogueKey } : {}) }),
+    ),
     [deviceEntriesKey],
   );
-  const remoteDeviceIds = useMemo(() => remoteDevices.map((device) => device.deviceId), [remoteDevices]);
-  const { catalogues: devicePluginEngines, read: readDevicePluginEngines } = useDevicesPluginEngines(remoteDeviceIds);
+  const remoteCatalogueKeys = useMemo(
+    () => remoteDevices.map((device) => device.catalogueKey ?? device.deviceId),
+    [remoteDevices],
+  );
+  const { catalogues: devicePluginEngines, read: readDevicePluginEngines } = useDevicesPluginEngines(remoteCatalogueKeys);
 
+  const activeCatalogueKey = activeAgentDeviceId
+    ? (remoteDevices.find((device) => device.deviceId === activeAgentDeviceId)?.catalogueKey ?? activeAgentDeviceId)
+    : null;
   useEffect(() => {
-    if (!enabled || !activeAgentDeviceId || !remoteDeviceIds.includes(activeAgentDeviceId)) return;
-    readDevicePluginEngines(activeAgentDeviceId);
-  }, [enabled, activeAgentDeviceId, remoteDeviceIds, readDevicePluginEngines]);
+    if (!enabled || !activeCatalogueKey || !remoteCatalogueKeys.includes(activeCatalogueKey)) return;
+    readDevicePluginEngines(activeCatalogueKey);
+  }, [enabled, activeCatalogueKey, remoteCatalogueKeys, readDevicePluginEngines]);
 
   const engines = useMemo<readonly PluginEngineChoice[]>(() => {
     if (!enabled) return [];
+    const remoteChoices = allowRemote
+      ? remotePluginEngineChoices(remoteDevices, devicePluginEngines, deviceDisplayName, localEngines)
+      : [];
     if (hostDeviceId) {
-      const base: PluginEngineChoice[] = [...(remoteHostEngines ?? [])];
-      if (active?.agentKind === 'acp' && active.providerId && activeAgentDeviceId) {
+      const own: PluginEngineChoice[] = [...(remoteHostEngines ?? [])];
+      const base: PluginEngineChoice[] = remoteChoices.length ? [...own, ...remoteChoices] : own;
+      if (active?.agentKind === 'acp' && active.providerId && activeAgentDeviceId && activeAgentDeviceId !== hostDeviceId) {
         if (!base.some((item) => item.providerId === active.providerId && item.deviceId === activeAgentDeviceId)) {
-          const source = activeAgentDeviceId === selfDeviceId
-            ? localEngines
-            : (devicePluginEngines.get(activeAgentDeviceId) ?? []);
+          const source = (activeCatalogueKey ? devicePluginEngines.get(activeCatalogueKey) : null)
+            ?? (activeAgentDeviceId === selfDeviceId && hostLocations === undefined ? localEngines : []);
           const engine = findPluginEngine(source, active.providerId);
           if (engine) {
-            const name = selectableDevices.find((item) => item.deviceId === activeAgentDeviceId)?.name
+            const name = remoteDevices.find((item) => item.deviceId === activeAgentDeviceId)?.name
+              ?? selectableDevices.find((item) => item.deviceId === activeAgentDeviceId)?.name
               ?? providerShareDeviceName?.(activeAgentDeviceId)
               ?? undefined;
             base.push({ ...engine, deviceId: activeAgentDeviceId, deviceName: deviceDisplayName(activeAgentDeviceId, name) });
@@ -133,9 +187,6 @@ export function usePluginModelPickerEngines({
       }
       return base;
     }
-    const remoteChoices = allowRemote
-      ? remotePluginEngineChoices(remoteDevices, devicePluginEngines, deviceDisplayName, localEngines)
-      : [];
     return remoteChoices.length ? [...localEngines, ...remoteChoices] : localEngines;
   }, [
     enabled,
@@ -144,7 +195,9 @@ export function usePluginModelPickerEngines({
     active?.agentKind,
     active?.providerId,
     activeAgentDeviceId,
+    activeCatalogueKey,
     selfDeviceId,
+    hostLocations,
     localEngines,
     devicePluginEngines,
     selectableDevices,
@@ -177,14 +230,15 @@ export function usePluginModelPickerEngines({
 
   return useMemo<PluginEnginesPickerProps | undefined>(() => {
     if (!enabled) return undefined;
-    if (!activeSelection && engines.length === 0 && remoteDeviceIds.length === 0 && !hostDeviceId) {
+    if (!activeSelection && engines.length === 0 && remoteCatalogueKeys.length === 0 && !hostDeviceId) {
       return undefined;
     }
     return {
       engines,
       active: activeSelection,
       onSelect,
+      ...(onSelectEffort ? { onSelectEffort } : {}),
       readCatalogue,
     };
-  }, [enabled, activeSelection, engines, remoteDeviceIds.length, hostDeviceId, onSelect, readCatalogue]);
+  }, [enabled, activeSelection, engines, remoteCatalogueKeys.length, hostDeviceId, onSelect, onSelectEffort, readCatalogue]);
 }

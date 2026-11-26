@@ -160,7 +160,15 @@ export function PluginModelPicker({
               pluginEngines: {
                 engines: pluginEngines.engines,
                 active: pluginEngineSelection,
+                onConfigure: (next) => {
+                  setSelection(null);
+                  setAgentDeviceId(null);
+                  setPluginEngineSelection(next);
+                  return true;
+                },
                 onSelect: (next) => {
+                  setSelection(null);
+                  setAgentDeviceId(null);
                   setPluginEngineSelection(next);
                   return answer({
                     agentKind: "acp",

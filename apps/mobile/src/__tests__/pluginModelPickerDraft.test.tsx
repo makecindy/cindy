@@ -13,6 +13,7 @@ import { act, createElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { PluginModelPicker } from '@/plugins/PluginModelPicker';
+import { clearPluginEngineCache, type MobilePluginEngine } from '@/session/pluginEngines';
 import type { PluginModelPickerRequest } from '@cindy/device-link';
 
 const state = vi.hoisted(() => ({
@@ -24,19 +25,19 @@ const state = vi.hoisted(() => ({
   answer: vi.fn(async () => ({ handled: true, accepted: true })),
   maker: {
     getCapabilities: vi.fn(async () => ({ hasFastMode: true, availableModels: [] })),
-    listPluginEngines: vi.fn(async () => []),
+    listPluginEngines: vi.fn(async (): Promise<MobilePluginEngine[]> => []),
     refreshPluginEngines: vi.fn(async () => {}),
   },
 }));
 vi.mock('@/session/useRemoteAgentCatalogs', () => ({ useRemoteAgentCatalogs: () => state.remoteCatalogs }));
 vi.mock('react-native', () => ({ Platform: { OS: 'android' }, Alert: { alert: vi.fn() } }));
-vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
+vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key, i18n: { language: 'en' } }) }));
 vi.mock('expo-crypto', () => ({ randomUUID: () => 'draft-favorite' }));
 vi.mock('@react-native-async-storage/async-storage', () => ({
   default: { getItem: async () => null, setItem: state.setItem },
 }));
 vi.mock('@/auth/authOwnerGeneration', () => ({
-  getMobileAuthOwner: () => ({ accountKey: 'owner' }),
+  getMobileAuthOwner: () => ({ accountKey: 'owner', accountId: 'owner' }),
   isMobileAuthOwnerCurrent: () => true,
   subscribeMobileAuthOwner: () => () => {},
 }));
@@ -76,9 +77,11 @@ const request: PluginModelPickerRequest = {
   requestId: 'request', ghostId: 'plugin', ghostName: 'Plugin', expiresAt: Date.now() + 90_000,
 };
 beforeEach(() => {
+  clearPluginEngineCache();
   state.setItem.mockClear();
   state.saveFavorites.mockClear();
   state.answer.mockClear();
+  state.maker.listPluginEngines.mockReset().mockResolvedValue([]);
   state.favorites = [];
   state.remoteCatalogs = [];
   root = createRoot(document.createElement('div'));
@@ -151,5 +154,38 @@ it('retains the share source when editing and selecting a remote model', async (
   expect(state.answer).toHaveBeenCalledWith(expect.objectContaining({
     agentDeviceId: 'share:fixture', providerId: 'account', model: 'codex/model', effort: 'high',
   }));
+  expectNoWrites();
+});
+
+it('keeps ACP effort adjustments in draft until the user taps the plugin engine row', async () => {
+  state.maker.listPluginEngines.mockResolvedValueOnce([{
+    key: 'antigravity:agy',
+    providerId: 'acp-plugin:antigravity:agy',
+    name: 'Antigravity',
+    availability: { state: 'available' },
+    models: [{ id: 'gemini-4-neon', displayName: 'Gemini 4 Neon', efforts: ['low', 'high'], defaultEffort: 'low' }],
+    permissionModes: [{ id: 'ask', displayName: 'Ask' }],
+    defaultPermissionMode: 'ask',
+  }]);
+  await mount({
+    agentKind: 'acp',
+    providerId: 'acp-plugin:antigravity:agy',
+    model: 'gemini-4-neon',
+    effort: 'low',
+    fastMode: false,
+  });
+  const acpRow = () => state.view.pluginEngines.groups[0].rows[0];
+  expect(acpRow().effort).toBe('low');
+  await act(async () => state.view.pluginEngines.onSelect(acpRow(), 'high'));
+  expect(state.answer).not.toHaveBeenCalled();
+  expect(acpRow().effort).toBe('high');
+  await act(async () => state.view.pluginEngines.onSelect(acpRow()));
+  expect(state.answer).toHaveBeenCalledExactlyOnceWith({
+    agentKind: 'acp',
+    providerId: 'acp-plugin:antigravity:agy',
+    model: 'gemini-4-neon',
+    effort: 'high',
+    fastMode: false,
+  });
   expectNoWrites();
 });

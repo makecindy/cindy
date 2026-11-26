@@ -56,6 +56,19 @@ vi.mock('@/components/new-chat/ModelRouteSelector', () => ({
       >
         Choose plugin engine
       </button>
+      <button
+        onClick={() =>
+          props.pluginEngines?.onSelectEffort?.({
+            providerId: 'acp-plugin:antigravity:agy',
+            modelId: 'gemini-4-neon',
+            effort: 'max',
+            ...(selectedLocation ? { deviceId: selectedLocation } : {}),
+          })
+        }
+      >
+        Adjust plugin engine effort
+      </button>
+      <button onClick={() => props.onDismiss?.()}>Dismiss popover</button>
     </>
   ),
 }));
@@ -266,6 +279,33 @@ it('returns a confirmed plugin engine (acp) selection with effort and run locati
     model: 'gemini-4-neon',
     agentKind: 'acp',
     effort: 'high',
+    fastMode: false,
+  }));
+});
+
+it('keeps ACP effort adjustments in popover draft until dismiss and cancels on Escape', async () => {
+  render(<PluginModelPickerHost />);
+  act(() => push({
+    ...request,
+    initial: {
+      agentKind: 'acp',
+      providerId: 'acp-plugin:antigravity:agy',
+      model: 'gemini-4-neon',
+      effort: 'low',
+      fastMode: false,
+    },
+    pageAnchor: {
+      guestId: 42, rect: { x: 20, y: 30, width: 160, height: 32 },
+    },
+  }));
+  fireEvent.click(screen.getByText('Adjust plugin engine effort'));
+  expect(resolve).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByText('Dismiss popover'));
+  await waitFor(() => expect(resolve).toHaveBeenCalledExactlyOnceWith('request', {
+    providerId: 'acp-plugin:antigravity:agy',
+    model: 'gemini-4-neon',
+    agentKind: 'acp',
+    effort: 'max',
     fastMode: false,
   }));
 });

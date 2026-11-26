@@ -55,20 +55,30 @@ export function GhostCardModelSelect({
     draft.current = next;
     setRoute(next);
   };
+  const toPluginEngineSelection = (selection: {
+    providerId: string;
+    modelId?: string;
+    effort?: string;
+    deviceId?: string;
+  }): GhostCardModelSelection => ({
+    agentKind: 'acp',
+    providerId: selection.providerId,
+    model: selection.modelId || PLUGIN_ENGINE_DEFAULT_MODEL,
+    effort: selection.effort ?? '',
+    fastMode: false,
+    ...(selection.deviceId ? { agentDeviceId: selection.deviceId } : {}),
+  });
   const pluginEngines = usePluginModelPickerEngines({
     enabled: true,
     allowRemote: true,
     active: route,
     onSelect: (selection) => {
       picked.current = true;
-      update({
-        agentKind: 'acp',
-        providerId: selection.providerId,
-        model: selection.modelId || PLUGIN_ENGINE_DEFAULT_MODEL,
-        effort: selection.effort ?? '',
-        fastMode: false,
-        ...(selection.deviceId ? { agentDeviceId: selection.deviceId } : {}),
-      });
+      update(toPluginEngineSelection(selection));
+      return true;
+    },
+    onSelectEffort: (selection) => {
+      update(toPluginEngineSelection(selection));
       return true;
     },
   });

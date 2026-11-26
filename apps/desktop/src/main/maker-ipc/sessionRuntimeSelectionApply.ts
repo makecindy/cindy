@@ -415,6 +415,7 @@ export function createHandleSetModel(bindPorts: () => SessionRuntimeSelectionPor
           throwIpcError('INVALID_PARAMS', 'Fast is unavailable for plugin engines');
         }
         // Keep the same owner, write authorization and send lock across the ACP round trip.
+        if (internalOptions.beforeMutation) await internalOptions.beforeMutation();
         assertRuntimeOwnerCurrent();
         assertSharedTaskCurrent.admit();
         const target = engineElsewhere

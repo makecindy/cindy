@@ -131,21 +131,31 @@ export function PluginModelPickerPopover({
     draft.current = value;
     setRoute(value);
   };
+  const toPluginEngineRoute = (selection: {
+    providerId: string;
+    modelId?: string;
+    effort?: string;
+    deviceId?: string;
+  }): PluginModelPickerRoute => ({
+    ...(selection.deviceId ? { agentDeviceId: selection.deviceId } : {}),
+    agentKind: 'acp',
+    providerId: selection.providerId,
+    model: selection.modelId || PLUGIN_ENGINE_DEFAULT_MODEL,
+    effort: selection.effort ?? '',
+    fastMode: false,
+  });
   const pluginEngines = usePluginModelPickerEngines({
     enabled: true,
     allowRemote: request.allowRemote === true,
     active: route,
     onSelect: async (selection) => {
-      const next: PluginModelPickerRoute = {
-        ...(selection.deviceId ? { agentDeviceId: selection.deviceId } : {}),
-        agentKind: 'acp',
-        providerId: selection.providerId,
-        model: selection.modelId || PLUGIN_ENGINE_DEFAULT_MODEL,
-        effort: selection.effort ?? '',
-        fastMode: false,
-      };
+      const next = toPluginEngineRoute(selection);
       update(next);
       return answer(next);
+    },
+    onSelectEffort: (selection) => {
+      update(toPluginEngineRoute(selection));
+      return true;
     },
   });
   const close = () => {
