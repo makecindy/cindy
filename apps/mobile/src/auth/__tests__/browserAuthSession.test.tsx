@@ -519,6 +519,31 @@ describe('browser auth session lifecycle (real AuthProvider, mocked native/netwo
       expect(await draftShownFor(otherKey)).toBe(`draft of ${otherKey}`);
     });
 
+    // Maintainer review of 735df6e1de (point 1): deleting the current account goes on clearing the local session when
+    // removing the passport fails; the record still names the account with no session record, so it is voided later.
+    it('voids a deleted account\'s drafts when removing its passport fails once', async () => {
+      await signInWithSavedAccounts();
+      let failVault = true;
+      native.writeSecure.mockImplementation(async (key: string, value: string) => {
+        if (key === MOBILE_ACCOUNT_VAULT_KEY && failVault) { failVault = false; throw new Error('keychain write failed'); }
+        native.storage.set(key, value);
+      });
+      native.confirmDeletion.mockResolvedValue({ status: 'scheduled' });
+      await act(async () => {
+        await expect(auth.confirmAccountDeletion({ challengeId: 'c', receiptToken: 'r', code: '123456' })).rejects.toThrow('keychain write failed');
+      });
+      await drain();
+      expect(failVault).toBe(false);
+      expect(native.storage.has(sessionKey)).toBe(false);
+      expect(auth.isAuthenticated).toBe(false);
+      expect(epochsNow()[currentKey]).toBe(epochOf(currentKey));
+      await restartProvider();
+      expect(auth.isAuthenticated && auth.user?.id === membership.id).toBe(true);
+      expect(currentKey in epochsNow()).toBe(false);
+      expect(await draftShownFor(currentKey)).toBeNull();
+      expect(await draftShownFor(otherKey)).toBe(`draft of ${otherKey}`);
+    });
+
     // Maintainer review of 735df6e1de (point 2): with the draft still on disk because the first storage operation
     // failed, a restart (fresh storage modules) must not read it back.
     it.each([
