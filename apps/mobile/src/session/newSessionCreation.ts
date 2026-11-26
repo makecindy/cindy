@@ -60,6 +60,11 @@ import type { MobileLocalAttachmentUploadCandidate } from './mobileLocalAttachme
 import { noteLocalSend } from './localSendMotion';
 import type { FirstSendSessionSnapshot } from './firstSendSessionSnapshot';
 import {
+  logNewSessionCreationTiming,
+  startNewSessionCreationTimer,
+  type NewSessionCreationTimer,
+} from './newSessionCreationTiming';
+import {
   forgetPendingPrecreatedWorktree,
   parseDiscardPrecreatedAck,
   registerPendingPrecreatedWorktree,
@@ -185,6 +190,8 @@ interface InternalTask extends NewSessionCreationTask {
   precreatedWorktreeSessionCreateStarted: boolean;
   /** onSessionCreated 已经调用过(重试同一个任务时不再调用)。 */
   sessionCreatedNotified?: boolean;
+  /** 首条消息已交出、管线正常收口(只用于计时记录的结果)。 */
+  handedOff?: boolean;
   params: NewSessionCreationParams;
 }
 
@@ -406,7 +413,7 @@ export function retryNewSessionCreation(sessionId: string): void {
   ), task.firstMessageSessionRefs);
   remoteSessionStore.setInputProjectionOptimistically(sessionId, buildOptimisticProjection(sessionId, queued));
   emit();
-  void runPipeline(task);
+  void runPipeline(task, true);
 }
 
 /**
@@ -969,6 +976,7 @@ function finishTask(task: InternalTask): void {
   }
   forgetPrecreatedRecoveryRecord(task);
   tasks.delete(task.sessionId);
+  task.handedOff = true;
   emit();
 }
 
@@ -1255,7 +1263,28 @@ function cancelStaleOwnerTask(task: InternalTask): void {
   emit();
 }
 
-async function runPipeline(task: InternalTask): Promise<void> {
+async function runPipeline(task: InternalTask, retry = false): Promise<void> {
+  const timer = startNewSessionCreationTimer({
+    startedAt: task.startedAt,
+    clientId: task.firstMessageClientId,
+    agentKind: task.draft.agentKind,
+    durable: Boolean(task.params.transport.handoffFirstMessage),
+    worktree: Boolean(task.params.precreatedWorktree),
+    retry,
+  });
+  try {
+    await runPipelineSteps(task, timer);
+  } finally {
+    try {
+      logNewSessionCreationTiming(timer.finish(task.handedOff ? 'handed-off'
+        : task.status === 'running' ? 'dismissed' : task.status));
+    } catch {
+      // 诊断不能影响创建。
+    }
+  }
+}
+
+async function runPipelineSteps(task: InternalTask, timer: NewSessionCreationTimer): Promise<void> {
   const phase = (value: SlowSendPhase) => {
     task.phase = value;
     mobileDebugLog('debug', 'new-session', 'creation phase', {
@@ -1293,11 +1322,13 @@ async function runPipeline(task: InternalTask): Promise<void> {
       }
     }
     mobileDebugLog('debug', 'new-session', 'creation linking', { client: task.firstMessageClientId.slice(-8) });
+    timer.lap('claim');
     await withTransientRemoteRetry(async () => {
       assertTaskOwnerCurrent(task);
       await openLink(params.deviceId);
       assertTaskOwnerCurrent(task);
     });
+    timer.lap('link');
     // The synchronous session owner above already holds `sessions`. Do not
     // acquire the New Session route's owner here: the form may have unmounted
     // while linking. Mounted pages own their existing cancellable ACK recovery.
@@ -1317,6 +1348,7 @@ async function runPipeline(task: InternalTask): Promise<void> {
       }
     })();
     const auth = await freshUnauthenticated;
+    timer.lap('modelCheck');
     assertTaskOwnerCurrent(task);
     if (auth?.unauthenticated) {
       params.onUnauthenticated();
@@ -1334,16 +1366,19 @@ async function runPipeline(task: InternalTask): Promise<void> {
       assertTaskOwnerCurrent(task);
     }
     const finalDraft: NewSessionDraft = draftPatch ? { ...task.draft, ...draftPatch } : task.draft;
+    timer.lap('revalidate');
 
     phase('creating');
     // The durable outbox resolves when preparing delivery, including cold recovery.
     // Direct enqueue resolves after openLink, before creating any host session.
     const creationDraft = params.transport.handoffFirstMessage ? finalDraft
       : await resolveNewSessionSkillDraft(finalDraft, params.deviceId, maker);
+    timer.lap('skill');
     assertTaskOwnerCurrent(task);
     const createEpoch = params.transport.getConnectionEpoch?.();
     const createOutcome = await createSessionIdempotent(task, creationDraft);
     const createdAt = Date.now();
+    timer.lap('create');
     // started 写盘后二次重验可能修正草稿(codex review P2:将 started 后修正的
     // 草稿传给排队消息)——createOpts 用修正版创建,排队消息合成也必须用同一
     // 修正版:否则 getSession 弱网失败时 sessionForQueue 按旧 finalDraft 合成,
@@ -1386,6 +1421,7 @@ async function runPipeline(task: InternalTask): Promise<void> {
       if (isStaleNewSessionOwnerError(error)) throw error;
       freshSession = null;
     }
+    timer.lap('read');
 
     // 重跑管线(enqueue 失败后重试)时团队可能已建成:权威行已是 Lead 就不再开启。
     if (params.orcaEnable && freshSession?.orcaRole !== 'lead') {
@@ -1399,6 +1435,7 @@ async function runPipeline(task: InternalTask): Promise<void> {
         rememberOrcaStartFailure(sessionId, describeOrcaError(error, null));
       }
       assertTaskOwnerCurrent(task);
+      timer.lap('team');
     }
 
     if (params.planModeArm && !params.transport.handoffFirstMessage) {
@@ -1410,6 +1447,7 @@ async function runPipeline(task: InternalTask): Promise<void> {
         // best-effort
       }
       assertTaskOwnerCurrent(task);
+      timer.lap('planMode');
     }
 
     // 同 clientId 重建 queued(workingDir 等 lazy-create 材料以权威会话为准):
@@ -1463,6 +1501,7 @@ async function runPipeline(task: InternalTask): Promise<void> {
         mobileDebugLog('debug', 'new-session', 'first input handoff started', { client: task.firstMessageClientId.slice(-8) });
         await params.transport.handoffFirstMessage(queuedDraft, snapshot);
         mobileDebugLog('debug', 'new-session', 'first input handoff persisted', { client: task.firstMessageClientId.slice(-8) });
+        timer.lap('handoff');
         assertTaskOwnerCurrent(task);
         remoteSessionStore.applySessionPatch(params.deviceId, sessionId, { pendingLocalCreation: false });
         finishTask(task);
@@ -1544,6 +1583,7 @@ async function runPipeline(task: InternalTask): Promise<void> {
       }
       assertTaskOwnerCurrent(task);
     }
+    timer.lap('handoff');
 
     // 收口前主动清合成行的 pendingLocalCreation 禁发标:正常情况下上面的 fresh
     // getSession 已用权威行(无标)覆盖,但弱网下 getSession 可能失败,靠会话页

@@ -7,7 +7,7 @@ import type { remoteSessionStore } from './remoteSessionStore';
 import { outboxItemAttachments } from './sessionOutbox';
 import type { RemoteSession } from './types';
 
-type SessionSource = Pick<RemoteSession, 'id' | 'source' | 'deviceLinkDeviceId'>;
+type SessionSource = Pick<RemoteSession, 'id' | 'source' | 'deviceLinkDeviceId' | 'pendingLocalCreation'>;
 type OutboxLease = ReturnType<typeof remoteSessionStore.acquireSessionMessageWork>;
 
 const findOutboxSession = (record: DurableOutboxRecord, sessions: readonly SessionSource[]) =>
@@ -91,16 +91,19 @@ export function createOutboxSessionAccess(deps: OutboxSessionAccessDeps) {
     });
     return read;
   };
-  const canRun = (record: DurableOutboxRecord) =>
-    !record.chat && (deps.isForeground() || deps.canDeliverInBackground?.(record) === true) &&
-    (hidden(record) ||
+  const canRun = (record: DurableOutboxRecord) => {
+    if (record.chat || (!deps.isForeground() && deps.canDeliverInBackground?.(record) !== true)) return false;
+    const row = knownSession(record);
+    return (!CINDY_MAKE_ENABLED && isCindyMakeSource(row?.source)) ||
       isDurableOutboxSettled(record) ||
       (!record.suspended &&
         !record.creation?.cancelled &&
         deps.needsReconciliation(record) &&
+        !(row?.source === 'side-chat' && row.pendingLocalCreation) &&
         !deps.isCreationHeld(record.item.sessionId) &&
         deps.canConnect(record.deviceId) &&
-        !deps.hasCreationTask(record.item.sessionId)));
+        !deps.hasCreationTask(record.item.sessionId));
+  };
   const sessionPolicy = (record: DurableOutboxRecord) =>
     cindyMakeOutboxPolicy(record, {
       knownSession: () => knownSession(record),

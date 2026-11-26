@@ -2299,6 +2299,16 @@ describe('local-db:sessions:update handler wiring', () => {
     expect(h.relocate).not.toHaveBeenCalled();
   });
 
+  it('persists a project move without relocating a bound worktree or its transcript', async () => {
+    const worktree = path.join(h.userDataDir!, '.cindy-worktrees', 'task');
+    h.sqlite!.prepare('UPDATE sessions SET working_dir = ? WHERE id = ?').run(worktree, 'cc-local');
+    await invokeUpdate('cc-local', { workspaceKind: 'project', workingDir: '/new/project' });
+    expect(h.sqlite!.prepare('SELECT working_dir, project_dir FROM sessions WHERE id = ?').get('cc-local'))
+      .toEqual({ working_dir: worktree, project_dir: '/new/project' });
+    expect(h.closeSession).not.toHaveBeenCalled();
+    expect(h.relocate).not.toHaveBeenCalled();
+  });
+
   it('still allows moving a worktree session back to a dialogue', async () => {
     const worktreeDir = path.join(h.userDataDir!, '.cindy-worktrees', 'steady-goodall');
     h.sqlite!.prepare('UPDATE sessions SET working_dir = ? WHERE id = ?').run(worktreeDir, 'cc-local');

@@ -6278,6 +6278,14 @@ assertRouteCurrent();
       }
     };
     let registeredRootCodexThreadId: string | undefined;
+    let mcpInstanceClosed = false;
+    const closeCodexMcpInstance = (): void => {
+      if (mcpInstanceClosed) return;
+      mcpInstanceClosed = true;
+      if (!opts.sessionInstanceId) return;
+      try { this.deps.closeCodexMcpSessionInstance?.(opts.sessionInstanceId); }
+      catch (error) { log.warn('closeCodexMcpSessionInstance threw', { error: String(error) }); }
+    };
     const unregisterCodexMcpContext = (threadId: string): void => {
       if (registeredRootCodexThreadId === threadId) registeredRootCodexThreadId = undefined;
       textOnlyPolicyCleanups.get(threadId)?.();
@@ -6662,6 +6670,7 @@ assertRouteCurrent();
       resetUpstreamIdleForTurnEnd();
       unregisterCodexMcpContext(threadId);
       unregisterDescendantCodexMcpContexts();
+      closeCodexMcpInstance();
       activeToolContexts.clear();
       approvalDenials.clear();
       completedActiveToolTurns.clear();
@@ -6898,6 +6907,7 @@ assertRouteCurrent();
       } finally {
         if (registeredRootCodexThreadId) unregisterCodexMcpContext(registeredRootCodexThreadId);
         unregisterDescendantCodexMcpContexts();
+        closeCodexMcpInstance();
         releaseHostBindingLeaseIfNeeded();
         eventQueue.end();
       }
@@ -14260,6 +14270,7 @@ assertRouteCurrent();
       resetUpstreamIdleForTurnEnd();
       unregisterCodexMcpContext(threadId);
       unregisterDescendantCodexMcpContexts();
+      closeCodexMcpInstance();
       activeToolContexts.clear();
       approvalDenials.clear();
       completedActiveToolTurns.clear();
