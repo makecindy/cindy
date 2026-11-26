@@ -4906,6 +4906,69 @@ describe('Scheduler', () => {
     expect(after?.lastFiredAt).toBeUndefined();
   });
 
+  // 测试价值
+  // - 生产入口与可观察结果：Scheduler.tick 连续顺延超过 3 次后按阶梯退避（封顶 15 分钟）拉长 nextFireAt，并在第 5 次起输出结构化 warn 日志与带 deferReason/consecutiveDeferrals 的 deferred 事件；正常执行或 pause/resume 后计数清零。
+  // - Bug／规则依据：修复绑定任务卡在 90 秒无限静默顺延黑洞、零日志且持续空转的线上问题。
+  // - 现有覆盖缺口：既有 deferred 用例仅验证单次顺延的 nextFireAt = fireTime + RETRY，未覆盖连续顺延退避、诊断告警与恢复重置。
+  // - 最小失败输入与 tier：unit，内存 fake clock + runner 连续返回 12 次 { deferred: true, deferRetryMs: 90_000, deferReason: 'already-queued' } 后恢复成功。
+  it('escalates retry delay and logs warning on sustained consecutive deferrals, then resets after running', async () => {
+    const RETRY = 90_000;
+    let shouldDefer = true;
+    const logger: Logger = { warn: vi.fn(), info: vi.fn(), debug: vi.fn(), error: vi.fn() };
+    const local = makeHarness({
+      logger,
+      runnerImpl: async (s) =>
+        shouldDefer
+          ? { sessionId: `sess-${s.id}`, deferred: true, deferRetryMs: RETRY, deferReason: 'already-queued' }
+          : { sessionId: `sess-${s.id}`, resultText: 'ok' },
+    });
+    const deferredEvents: Array<{ deferReason?: string; consecutiveDeferrals?: number }> = [];
+    local.scheduler.on('deferred', (e) => {
+      deferredEvents.push({ deferReason: e.deferReason, consecutiveDeferrals: e.consecutiveDeferrals });
+    });
+    const sch = await local.scheduler.create({ ...baseInput });
+    const observedDelays: number[] = [];
+    let now = Date.UTC(2026, 0, 1, 0, 1, 5);
+    for (let i = 0; i < 11; i += 1) {
+      local.clock.setTo(now);
+      await local.scheduler.tick();
+      const row = await local.storage.get(sch.id);
+      const delay = (row?.nextFireAt ?? 0) - now;
+      observedDelays.push(delay);
+      now = row!.nextFireAt!;
+    }
+    // 1-3: 90s; 4-6: 180s; 7-10: 360s; 11+: 900s (15 min cap)
+    expect(observedDelays).toEqual([
+      90_000, 90_000, 90_000,
+      180_000, 180_000, 180_000,
+      360_000, 360_000, 360_000, 360_000,
+      900_000,
+    ]);
+    expect(deferredEvents[0]).toEqual({ deferReason: 'already-queued', consecutiveDeferrals: 1 });
+    expect(deferredEvents[4]).toEqual({ deferReason: 'already-queued', consecutiveDeferrals: 5 });
+    expect(logger.warn).toHaveBeenCalledWith(
+      'schedule repeatedly deferred without running',
+      expect.objectContaining({
+        scheduleId: sch.id,
+        consecutiveDeferrals: 5,
+        deferReason: 'already-queued',
+        nextRetryMs: 180_000,
+      }),
+    );
+
+    // Once a real run settles, the deferral streak resets back to fast 90s retry.
+    shouldDefer = false;
+    local.clock.setTo(now);
+    await local.scheduler.tick();
+    const afterSuccess = await local.storage.get(sch.id);
+    shouldDefer = true;
+    const nextDue = afterSuccess!.nextFireAt!;
+    local.clock.setTo(nextDue);
+    await local.scheduler.tick();
+    const afterResetDefer = await local.storage.get(sch.id);
+    expect(afterResetDefer!.nextFireAt! - nextDue).toBe(RETRY);
+  });
+
   it('heartbeat schedule passes targetSessionId through to runner.fire', async () => {
     await h.scheduler.create({
       ...baseInput,
