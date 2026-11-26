@@ -74,7 +74,7 @@ export async function listBotDelegationHistory(callerSessionId: string): Promise
     || caller.sessionSource !== 'bot'
     || (caller.sessionStatus !== 'active' && caller.sessionStatus !== 'archived')
     || caller.profileStatus === 'deleting'
-    || !['canonical', 'history', 'thread', 'routine', 'delegation', 'group'].includes(caller.role)) {
+    || !['canonical', 'chat', 'history', 'thread', 'routine', 'delegation', 'group'].includes(caller.role)) {
     return { ok: false, errorCode: 'NOT_A_BOT_SESSION', message: '当前任务不属于任何伙伴' };
   }
   const originRoute = caller.role === 'group' ? '$.groupOriginRoute' : caller.role === 'thread' ? '$.threadOriginRoute' : null;

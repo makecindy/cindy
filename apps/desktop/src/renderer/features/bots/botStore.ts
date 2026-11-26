@@ -161,9 +161,12 @@ export interface BotSessionProjection {
    * counting sessions.
    */
   kind: 'chat' | 'worker' | 'history' | 'group' | 'channel' | 'thread' | 'routine';
+  createdAt?: number;
   updatedAt: number;
+  lastActivityAt?: number | null;
+  preview?: string | null;
   status?: 'active' | 'archived' | 'deleted';
-  role?: 'canonical' | 'delegation' | 'history' | 'group' | 'channel' | 'thread' | 'routine';
+  role?: 'canonical' | 'chat' | 'delegation' | 'history' | 'group' | 'channel' | 'thread' | 'routine';
   /** Group-lane only: the group whose chat owns this hidden Session. */
   groupId?: string;
   /** Private-chat topic only: the main-chat message the topic was opened on. */

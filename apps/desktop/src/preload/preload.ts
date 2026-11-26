@@ -6461,6 +6461,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
       update: (body: unknown): Promise<unknown> => ipcRenderer.invoke('local-db:bots:update', body),
       createCanonicalSession: (body: unknown): Promise<unknown> =>
         ipcRenderer.invoke('local-db:bots:create-canonical-session', body),
+      createChatSession: (body: { botId: string; title: string }): Promise<unknown> =>
+        ipcRenderer.invoke('local-db:bots:create-chat-session', body),
       history: (botId: string): Promise<unknown[]> =>
         ipcRenderer.invoke('local-db:bots:history', botId),
       dmThread: {

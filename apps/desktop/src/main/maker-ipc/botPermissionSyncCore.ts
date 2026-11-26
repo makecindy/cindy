@@ -81,8 +81,8 @@ export function createBotPermissionSync(ports: {
     if (!owner) return;
     const rows = await owner.client.query<{ sessionId: string }>(`SELECT l.session_id AS sessionId
       FROM bot_session_links l JOIN bot_session_links c ON c.bot_id = l.bot_id
-      WHERE c.session_id = ? AND c.role IN ('canonical', 'channel', 'group', 'thread', 'routine') AND c.archived_at IS NULL
-        AND l.role IN ('canonical', 'channel', 'group', 'thread', 'routine') AND l.archived_at IS NULL
+      WHERE c.session_id = ? AND c.role IN ('canonical', 'chat', 'channel', 'group', 'thread', 'routine') AND c.archived_at IS NULL
+        AND l.role IN ('canonical', 'chat', 'channel', 'group', 'thread', 'routine') AND l.archived_at IS NULL
         AND l.session_id != c.session_id`, [canonicalSessionId]);
     if (getCurrentDbClientSnapshot() !== owner) throw new Error('Account changed during lane permission update');
     await syncBotPermissionRows(rows.map(row => row.sessionId));
@@ -93,7 +93,7 @@ export function createBotPermissionSync(ports: {
     const owner = getCurrentDbClientSnapshot();
     if (!owner) return;
     const rows = await owner.client.query<{ sessionId: string }>(`SELECT session_id AS sessionId
-      FROM bot_session_links WHERE bot_id = ? AND role IN ('canonical', 'channel', 'group', 'thread', 'routine')
+      FROM bot_session_links WHERE bot_id = ? AND role IN ('canonical', 'chat', 'channel', 'group', 'thread', 'routine')
         AND archived_at IS NULL AND session_id != ?`, [botId, excludedSessionId]);
     if (getCurrentDbClientSnapshot() !== owner) throw new Error('Account changed during lane permission update');
     await syncBotPermissionRows(rows.map(row => row.sessionId));

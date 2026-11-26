@@ -31,7 +31,12 @@ export function useBotUnreadSync(): void {
       startBotGroupSync(),
       // The inbox places a teammate by the snooze of its main conversation, wherever it was set.
       window.electronAPI?.localDb?.sessionsPush?.onPatched?.((payload, stamp) => {
-        if (!isDataOwnerPushCurrent(stamp) || !('snoozedUntil' in payload.patch || 'lastTurnEndedAt' in payload.patch)) return;
+        if (!isDataOwnerPushCurrent(stamp) || !(
+          'snoozedUntil' in payload.patch ||
+          'lastTurnEndedAt' in payload.patch ||
+          'title' in payload.patch ||
+          'status' in payload.patch
+        )) return;
         if (getBotProfiles().some(bot => bot.sessions.some(session => session.id === payload.sessionId))) refresh();
       }),
       window.electronAPI?.localDb?.messages?.onCreated?.((payload, stamp) => {

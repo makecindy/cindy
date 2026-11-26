@@ -88,6 +88,7 @@
 | `/apps/:ghostId` | GhostMainViewFeatureLayout | `desktop.plugins.app-main` |
 | `/bots` | BotsHomeView | `desktop.bots` |
 | `/bots/:botId` | BotsHomeView | `desktop.bots` |
+| `/bots/:botId/conversations` | BotConversationDirectory | `desktop.bots` |
 | `/bots/:botId/direct/:threadId` | BotDirectMessageView | `desktop.bots` |
 | `/bots/:botId/history/:sessionId` | BotHistorySessionView | `desktop.bots` |
 | `/bots/:botId/session/:sessionId` | BotSessionView | `desktop.bots` |

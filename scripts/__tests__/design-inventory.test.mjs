@@ -115,6 +115,7 @@ test('extractRouterFacts: 真实 router.tsx 的三类去向逐条钉死', () => 
     '/apps/:ghostId GhostMainViewFeatureLayout',
     '/bots BotsHomeView',
     '/bots/:botId BotsHomeView',
+    '/bots/:botId/conversations BotConversationDirectory',
     '/bots/:botId/direct/:threadId BotDirectMessageView',
     '/bots/:botId/history/:sessionId BotHistorySessionView',
     '/bots/:botId/session/:sessionId BotSessionView',

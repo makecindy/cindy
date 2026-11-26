@@ -11677,7 +11677,24 @@
     "chat": {
       "newMessagesBoundary": "NUEVO",
       "composerPlaceholder": "Dile algo a {{name}}…",
-      "composerPlaceholderLatin": "Dile algo a {{name}}…"
+      "composerPlaceholderLatin": "Dile algo a {{name}}…",
+      "directoryTitle": "Conversaciones con {{name}}",
+      "directoryDescription": "Cada conversación tiene su propio historial. El perfil, los ajustes y los recuerdos guardados del compañero se comparten entre todas.",
+      "emptyTitle": "Aún no hay conversaciones",
+      "emptyDescription": "Empieza una conversación con {{name}}. Su perfil y sus recuerdos guardados estarán disponibles en todas las conversaciones.",
+      "untitledConversation": "Conversación sin título",
+      "mainConversation": "Conversación principal",
+      "newSession": "Iniciar una conversación nueva",
+      "deleteCurrent": "Eliminar esta conversación",
+      "createFailed": "No se pudo crear una conversación. Inténtalo de nuevo.",
+      "deleteTitle": "Eliminar esta conversación",
+      "deleteDescription": "Solo se eliminará el historial de esta conversación. El compañero, la configuración y los recuerdos guardados se conservarán.",
+      "deleteConfirm": "Eliminar conversación",
+      "cancel": "Conservar conversación",
+      "emptyPreview": "Aún no hay mensajes",
+      "searchPlaceholder": "Buscar conversaciones…",
+      "noSearchResults": "No hay conversaciones que coincidan",
+      "clearSearch": "Borrar búsqueda"
     },
     "globalSettings": {
       "restoreHint": "Restaura el modelo recomendado para los amigos. Los modelos personalizados de cada amigo no cambian.",

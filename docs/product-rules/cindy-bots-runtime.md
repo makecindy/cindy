@@ -75,7 +75,7 @@ Pi、Claude Code、Codex 是执行引擎，它们的原生工具说明不定义�
 主人询问过去的话题时，不要求先点名渠道，也不默认限制当前工作目录或任务创建日期。
 `get_teammate_state` 在主人可读范围返回本机连接分配、状态和历史检索说明；连接分配不是
 历史归属证据，也不代表实时在线。访客自查不增加主人连接信息。
-按 `search_chat_history(query, teammate_id)` 搜索已保存的 `bot_session_links`，包含主任务、
+按 `search_chat_history(query, teammate_id)` 搜索已保存的 `bot_session_links`，包含主任务、伙伴另开的对话、
 历史、话题及渠道专线；按 `list_sessions(teammate_id, time_field=activity)` 查最近活跃的旧任务，
 不因任务已归档而漏掉。命中后用 `get_chat_history` 阅读原文，并区分任务 `source` 与关联的渠道。
 
@@ -92,8 +92,16 @@ Bot Profile
 │   ├── SOUL.md                   身份
 │   └── workspace/                伙伴的项目（V2，Git 仓库）：项目规则、技能、自动化与记忆
 ├── canonical Session             长期主任务与用户时间线
+├── chat Sessions                 用户显式创建的独立伙伴对话
 └── history Sessions              仅用于旧版本数据与异常恢复后的记录
 ```
+
+当前 Desktop 实现仅在伙伴主力电脑提供对话目录：canonical Session 保留原有主时间线，也是现有 IM 主人消息的入口和目录的初始条目。
+用户从本机伙伴头像打开按最近活动日期分组的对话目录；新建 chat Session 沿用普通会话的自动主题标题，每条 chat 有独立的消息记录与模型上下文，但继续使用同一个
+Profile、Home、模型与权限设置及伙伴长期记忆。新建不会替换、清空或迁移 canonical 历史。用户可以单独删除任一 canonical 或 chat
+Session；这只删除所选对话记录，不删除伙伴、设置或共享资料。删除 canonical 后再次打开伙伴主页会按既有恢复流程创建新的主对话，
+其余 chat 仍保留。canonical 与 chat 的完整记录继续按伙伴归属受限检索；只有明确进行历史检索时才跨 Session 读取消息。
+远程 Buddy 入口、其他电脑和手机是否使用同一目录尚待产品决定，本段只记录当前 Desktop 落地范围。
 
 伙伴属于账号而不是某台电脑：同一伙伴只在它的主力电脑上运行，其他电脑与手机通过云端对话层查看并可接管，
 规则见 [云端伙伴](cloud-companions.md)。
@@ -321,8 +329,10 @@ iOS / Android `/sessions/:sessionId`），完整复用已有任务界面与操�
 ### 3.1 稳定主任务
 
 - 一个伙伴默认始终复用同一条 canonical Session，不按日期、空闲时长或打开次数更换。
-- 每次消息和其他伙伴、任务经 `send_to_session` 发来的消息都先解析同一条权威 canonical link；不得在这些入口各自
-  维护一套“是否换任务”的判断。
+- 当前 Desktop 实现中，用户主动新建的伙伴 chat 是独立 Session，不替换 canonical，也不迁移或清除已有主时间线；用户逐条删除 chat 时只结束并清理该 Session。
+  远程 Buddy、其他电脑及手机是否采用同一目录与会话生命周期尚待产品决定。
+- 云端私聊、IM 主人消息与把伙伴作为目标的 `send_to_session` 仍解析同一条权威 canonical link；不得在这些入口各自
+  维护一套“是否换任务”的判断。当前 Desktop 的 chat Session 内发送的消息只写入当前 chat，不并入 canonical 时间线。
 - Profile 更新只推进主任务下一轮使用的身份与能力版本，不创建新任务。
 - 只有 canonical Session 确实丢失或已删除时，恢复流程才可以用 CAS 建立替代任务；健康的
   主任务不能被普通创建入口覆盖。
@@ -330,7 +340,7 @@ iOS / Android `/sessions/:sessionId`），完整复用已有任务界面与操�
 
 ### 3.2 上下文沿用 Session 原生压缩（2026-10-23）
 
-伙伴的主任务、私聊话题、IM 群／外部私聊专线和伙伴群聊专线，均长期复用各自的同一条 Session。
+伙伴的主任务、当前 Desktop 实现中用户另开的独立对话、私聊话题、IM 群／外部私聊专线和伙伴群聊专线，均长期复用各自的同一条 Session。
 健康上下文交给 Session / Harness 已有压缩机制，不因伙伴身份另外添加上下文维护自动化：
 
 - 不按空闲时长（包括隔夜 12 小时）、打开次数或 70% / 90% 占用提前重建原生会话。

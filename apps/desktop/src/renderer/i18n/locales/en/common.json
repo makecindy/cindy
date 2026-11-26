@@ -11590,7 +11590,24 @@
     "chat": {
       "newMessagesBoundary": "NEW",
       "composerPlaceholder": "Say something to {{name}}…",
-      "composerPlaceholderLatin": "Say something to {{name}}…"
+      "composerPlaceholderLatin": "Say something to {{name}}…",
+      "directoryTitle": "Conversations with {{name}}",
+      "directoryDescription": "Each conversation has its own history. The buddy’s profile, settings, and saved long-term memories are shared across conversations.",
+      "emptyTitle": "No conversations yet",
+      "emptyDescription": "Start a conversation with {{name}}. Their profile and saved memories stay available in every conversation.",
+      "untitledConversation": "Untitled conversation",
+      "mainConversation": "Main conversation",
+      "newSession": "Start new conversation",
+      "deleteCurrent": "Delete this conversation",
+      "createFailed": "Could not create a new conversation. Try again.",
+      "deleteTitle": "Delete this conversation",
+      "deleteDescription": "Only this conversation history will be deleted. The buddy, settings, and saved memories will stay.",
+      "deleteConfirm": "Delete conversation",
+      "cancel": "Keep conversation",
+      "emptyPreview": "No messages yet",
+      "searchPlaceholder": "Search conversations…",
+      "noSearchResults": "No matching conversations",
+      "clearSearch": "Clear search"
     },
     "globalSettings": {
       "restoreHint": "Restore the recommended buddy model. Individual buddies’ custom models stay unchanged.",

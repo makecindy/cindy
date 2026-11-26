@@ -17,7 +17,7 @@ export async function readBotAuthorizationBot(sessionId: string): Promise<{ id: 
       and(
         eq(botSessionLinks.sessionId, sessionId),
         // The owner's Bot Chat: the permanent Chat and its private-chat topics.
-        inArray(botSessionLinks.role, ['canonical', 'thread', 'routine']),
+        inArray(botSessionLinks.role, ['canonical', 'chat', 'thread', 'routine']),
         isNull(botSessionLinks.archivedAt),
         ne(sessions.status, 'deleted'),
         ne(sessions.status, 'archived'),

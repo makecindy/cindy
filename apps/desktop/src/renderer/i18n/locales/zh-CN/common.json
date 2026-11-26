@@ -11544,7 +11544,24 @@
     "chat": {
       "newMessagesBoundary": "NEW",
       "composerPlaceholder": "跟{{name}}说点什么…",
-      "composerPlaceholderLatin": "跟 {{name}} 说点什么…"
+      "composerPlaceholderLatin": "跟 {{name}} 说点什么…",
+      "directoryTitle": "和 {{name}} 的对话",
+      "directoryDescription": "每段对话都有独立记录。伙伴的资料、设置和已保存的长期记忆会在所有对话间共享。",
+      "emptyTitle": "还没有对话",
+      "emptyDescription": "开始和 {{name}} 聊聊吧。伙伴资料和已保存的记忆会在每段对话中保留。",
+      "untitledConversation": "未命名对话",
+      "mainConversation": "主对话",
+      "newSession": "开始新对话",
+      "deleteCurrent": "删除这段对话",
+      "createFailed": "无法创建新对话，请重试。",
+      "deleteTitle": "删除这段对话",
+      "deleteDescription": "只删除这段对话记录。伙伴、设置和已保存的记忆会保留。",
+      "deleteConfirm": "删除对话",
+      "cancel": "保留对话",
+      "emptyPreview": "还没有消息",
+      "searchPlaceholder": "搜索对话…",
+      "noSearchResults": "没有匹配的对话",
+      "clearSearch": "清除搜索"
     },
     "globalSettings": {
       "restoreHint": "恢复伙伴推荐模型，单个伙伴的自定义模型保持不变。",

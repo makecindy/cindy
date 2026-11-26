@@ -38,7 +38,7 @@ export interface CompanionFailoverSnapshot {
 }
 
 export function isActiveCompanionFailoverSession(companion: CompanionFailoverSnapshot | null): boolean {
-  return !!companion && (companion.role === 'canonical' || companion.role === 'thread')
+  return !!companion && (companion.role === 'canonical' || companion.role === 'chat' || companion.role === 'thread')
     && companion.profileStatus === 'active' && companion.hiddenAt === null && !companion.shadowed;
 }
 

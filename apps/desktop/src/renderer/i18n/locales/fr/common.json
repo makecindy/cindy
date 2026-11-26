@@ -11677,7 +11677,24 @@
     "chat": {
       "newMessagesBoundary": "NOUVEAU",
       "composerPlaceholder": "Dites quelque chose à {{name}}…",
-      "composerPlaceholderLatin": "Dites quelque chose à {{name}}…"
+      "composerPlaceholderLatin": "Dites quelque chose à {{name}}…",
+      "directoryTitle": "Conversations avec {{name}}",
+      "directoryDescription": "Chaque conversation a son propre historique. Le profil, les réglages et les souvenirs enregistrés de votre compagnon sont partagés entre toutes les conversations.",
+      "emptyTitle": "Aucune conversation pour le moment",
+      "emptyDescription": "Commencez une conversation avec {{name}}. Son profil et ses souvenirs enregistrés restent disponibles dans chaque conversation.",
+      "untitledConversation": "Conversation sans titre",
+      "mainConversation": "Conversation principale",
+      "newSession": "Démarrer une nouvelle conversation",
+      "deleteCurrent": "Supprimer cette conversation",
+      "createFailed": "Impossible de créer une conversation. Réessayez.",
+      "deleteTitle": "Supprimer cette conversation",
+      "deleteDescription": "Seule cette conversation perdra son historique. Le compagnon, ses réglages et ses souvenirs enregistrés seront conservés.",
+      "deleteConfirm": "Supprimer la conversation",
+      "cancel": "Conserver la conversation",
+      "emptyPreview": "Aucun message pour le moment",
+      "searchPlaceholder": "Rechercher des conversations…",
+      "noSearchResults": "Aucune conversation correspondante",
+      "clearSearch": "Effacer la recherche"
     },
     "globalSettings": {
       "restoreHint": "Rétablit le modèle recommandé pour les amis. Les modèles personnalisés de chaque ami restent inchangés.",

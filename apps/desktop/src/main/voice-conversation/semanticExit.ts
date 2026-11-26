@@ -57,7 +57,7 @@ export async function readVoiceCompanionRoute(botId: string, sessionId: string):
   // credentials when a saved selection is missing or cannot be called locally.
   if (
     !row ||
-    row.role !== 'canonical' ||
+    (row.role !== 'canonical' && row.role !== 'chat') ||
     row.archivedAt !== null ||
     row.hiddenAt !== null ||
     row.botStatus === 'archived' ||

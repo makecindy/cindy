@@ -1229,6 +1229,16 @@ async function readProfile(
   if (canonicalSessionId) await flushAssistantSamplingMetadata(canonicalSessionId);
   owner.assertCurrent();
   const latestMessage = await readCanonicalChatPreview(db, canonicalSessionId, canonicalClearedAt);
+  const chatPreviewBySession = new Map<string, string | null>();
+  for (const link of links) {
+    if (link.role !== 'chat') continue;
+    const row = byId.get(link.sessionId);
+    if (!row || row.status !== 'active') continue;
+    if (typeof row.listPreview === 'string' && row.listPreview.trim()) continue;
+    owner.assertCurrent();
+    const fallback = await readCanonicalChatPreview(db, row.id, row.clearedAt ?? null);
+    chatPreviewBySession.set(row.id, fallback.preview);
+  }
   const unreadCount = await countCanonicalUnread(
     db,
     canonicalSessionId,
@@ -1345,12 +1355,18 @@ async function readProfile(
       if (!row) return [];
       const groupId = link.role === 'group' ? parseBotGroupIdFromRouteKey(link.routeKey) : null;
       const threadRoot = link.role === 'thread' ? parseBotDmThreadRouteKey(link.routeKey) : null;
+      const preview =
+        typeof row.listPreview === 'string' && row.listPreview.trim()
+          ? row.listPreview.trim()
+          : row.id === canonicalSessionId
+            ? latestMessage.preview
+            : chatPreviewBySession.get(row.id) ?? null;
       return [
         {
           id: row.id,
           title: row.title,
           kind:
-            link.role === 'canonical'
+            link.role === 'canonical' || link.role === 'chat'
               ? 'chat'
               : link.role === 'delegation'
                 ? 'worker'
@@ -1363,7 +1379,10 @@ async function readProfile(
                       : link.role === 'thread'
                         ? 'thread'
                         : 'history',
+          createdAt: row.createdAt,
           updatedAt: row.updatedAt,
+          lastActivityAt: row.lastActivityAt ?? row.userSendAt ?? row.updatedAt,
+          preview,
           status: row.status,
           role: link.role,
           // 群专线没有自己的页面:通知 / 灵动岛入口要据此回到它所在的群。
@@ -2301,7 +2320,7 @@ export async function updateBotProfile(raw: unknown, expectedVersion?: number,
     && Object.prototype.hasOwnProperty.call(body.capabilities, 'permissions');
   const modelFollowers = acceptsModelSelection ? await db.select({ sessionId: botSessionLinks.sessionId })
     .from(botSessionLinks).where(and(eq(botSessionLinks.botId, id),
-      inArray(botSessionLinks.role, ['canonical', 'group', 'channel', 'thread', 'routine']),
+      inArray(botSessionLinks.role, ['canonical', 'chat', 'group', 'channel', 'thread', 'routine']),
       isNull(botSessionLinks.archivedAt))) : [];
   const commitProfile = async () => {
     await coordinateBotModelSelection(modelFollowers.map((link) => link.sessionId), async () => {
@@ -2863,6 +2882,49 @@ export function registerBotIpc(onCreatedTopic?: (id: string, subject: string, in
       ? { ...input, expectedProfileVersion: derived.to }
       : input, beforeCommit, hostOptions);
   };
+
+  ipcMain.handle('local-db:bots:create-chat-session', async (event, raw: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    const body = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw as Record<string, unknown> : {};
+    const botId = readText(body.botId, 'botId', 128, true);
+    const title = readText(body.title, 'title', 128, true);
+    const owner = captureBotOperationOwner();
+    // Match canonical creation: user edits to the shared Buddy profile become
+    // the identity used by the new chat, while the existing main chat stays put.
+    await reconcileBotProfileFolder(botId);
+    owner.assertCurrent();
+    const client = getDbClient();
+    const db = client.drizzle;
+    const [profile] = await db.select().from(botProfiles).where(eq(botProfiles.id, botId)).limit(1);
+    if (!profile || profile.status !== 'active') throwIpcError('PRECONDITION_FAILED', '伙伴当前不可用');
+    const [version] = await db.select().from(botProfileVersions).where(and(
+      eq(botProfileVersions.botId, botId), eq(botProfileVersions.version, profile.currentVersion),
+    )).limit(1);
+    if (!version) throwIpcError('PRECONDITION_FAILED', '伙伴资料版本不存在');
+    const config = parseJson(version.capabilitiesJson);
+    const invitation = botInvitationProgress(config.invitation);
+    if (invitation && invitation.stage !== 'ready' && invitation.stage !== 'welcome')
+      throwIpcError('PRECONDITION_FAILED', '伙伴正在准备见面');
+    const primaryRoute = await readEffectiveBotPrimaryRoute(config);
+    owner.assertCurrent();
+    if (!primaryRoute) throwIpcError('PRECONDITION_FAILED', '请先连接模型供应商或选择伙伴模型');
+    const now = Date.now();
+    const sessionId = resolveBusinessSessionId(undefined);
+    const workspace = await privateBotWorkspace(botId, readBotProjectMode(config), { ownerUserDataPath: () => owner.userDataDir });
+    owner.assertCurrent();
+    await openSession({ id: sessionId, now, source: 'bot', assertCurrent: owner.assertCurrent,
+      body: { title, ...workspace, ...botSessionRouteFields(config, primaryRoute) },
+    }, async (insertRow, assertCurrent) => {
+      assertCurrent();
+      return client.tx('bots.createChatSession', { botId, expectedProfileVersion: profile.currentVersion,
+        session: botSessionPayload(insertRow), now });
+    });
+    owner.assertCurrent();
+    const [createdRow] = await db.select().from(sessions).where(eq(sessions.id, sessionId)).limit(1);
+    if (!createdRow) throwIpcError('NOT_FOUND', 'Bot 对话任务不存在');
+    broadcastBotProfileChanged({ botId, change: 'updated' });
+    return sessionToCamel({ ...createdRow, messageCount: 0, latestMessageContent: null, latestMessageRole: null });
+  });
 
   ipcMain.handle('local-db:bots:create-canonical-session', async (event, raw: unknown) => {
     assertTrustedAppRendererEvent(event);

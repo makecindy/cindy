@@ -461,9 +461,10 @@ export const botSessionLinks = sqliteTable(
       .references(() => sessions.id, { onDelete: 'cascade' }),
     /** ProfileVersion pinned when this Session became canonical/delegation-linked. */
     profileVersion: integer('profile_version').notNull().default(1),
-    // TS-only enum (SQLite `text`, no CHECK): `channel` = 伙伴接管的个人 IM 群 / 话题专线；
-    // `thread` = 主人私聊里的话题（route_key = dm-thread:<根消息 Session>:<根消息 clientId>）。
-    role: text('role', { enum: ['canonical', 'history', 'delegation', 'group', 'channel', 'thread', 'routine'] }).notNull(),
+    // TS-only enum (SQLite `text`, no CHECK): `chat` = user-created independent Buddy conversations;
+    // `channel` = adopted personal IM groups / topic routes; `thread` = owner-chat topics
+    // (route_key = dm-thread:<root Session>:<root message clientId>).
+    role: text('role', { enum: ['canonical', 'chat', 'history', 'delegation', 'group', 'channel', 'thread', 'routine'] }).notNull(),
     routeKey: text('route_key'),
     createdAt: integer('created_at').notNull(),
     archivedAt: integer('archived_at'),

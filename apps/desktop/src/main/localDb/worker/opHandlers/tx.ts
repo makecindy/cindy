@@ -171,6 +171,8 @@ function dispatchTransaction(db: Database.Database, args: unknown): unknown {
       return botsReconcileCanonicalLink(db, txArgs);
     case 'bots.replaceCanonicalSession':
       return botsReplaceCanonicalSession(db, txArgs);
+    case 'bots.createChatSession':
+      return botsCreateChatSession(db, txArgs);
     case 'bots.prepareRuntime':
       return botsPrepareRuntime(db, txArgs);
     case 'bots.finishRuntime':
@@ -536,7 +538,7 @@ function botsUpdateProfile(db: Database.Database, args: unknown): { currentVersi
           agent_kind AS agentKind, model, provider_id AS providerId, effort, fast_mode AS fastMode
           FROM sessions WHERE id IN
           (SELECT session_id FROM bot_session_links WHERE bot_id = ?
-            AND role IN ('canonical', 'group', 'channel', 'thread', 'routine') AND archived_at IS NULL)`)
+            AND role IN ('canonical', 'chat', 'group', 'channel', 'thread', 'routine') AND archived_at IS NULL)`)
           .all(id) as Array<{ id: string; baseline: string | null; agentKind: string; model: string;
             providerId: string | null; effort: string; fastMode: number | string }>;
 
@@ -558,7 +560,7 @@ function botsUpdateProfile(db: Database.Database, args: unknown): { currentVersi
       // their next runtime bootstrap. Route/worker links remain pinned to their
       // creation version.
       db.prepare(`UPDATE bot_session_links SET profile_version = ?
-        WHERE bot_id = ? AND role IN ('canonical', 'group', 'channel', 'thread', 'routine') AND archived_at IS NULL`)
+        WHERE bot_id = ? AND role IN ('canonical', 'chat', 'group', 'channel', 'thread', 'routine') AND archived_at IS NULL`)
         .run(nextVersion, id);
     }
     if (permissionMode !== undefined) {
@@ -566,7 +568,7 @@ function botsUpdateProfile(db: Database.Database, args: unknown): { currentVersi
       // Group and IM channel lanes run under the same permission profile as the
       // Bot's canonical Chat (per-turn group policies still apply on top).
       db.prepare(`UPDATE sessions SET permission_mode = ? WHERE id IN
-        (SELECT session_id FROM bot_session_links WHERE bot_id = ? AND role IN ('canonical', 'group', 'channel', 'thread', 'routine') AND archived_at IS NULL)`)
+        (SELECT session_id FROM bot_session_links WHERE bot_id = ? AND role IN ('canonical', 'chat', 'group', 'channel', 'thread', 'routine') AND archived_at IS NULL)`)
         .run(mode, id);
     }
     return { currentVersion: nextVersion };
@@ -732,6 +734,32 @@ function botsReplaceCanonicalSession(
       now,
     );
     return { created: true, canonicalSessionId: sessionId, archivedCanonicalSessionId: archived };
+  })();
+}
+
+function botsCreateChatSession(db: Database.Database, args: unknown): { sessionId: string } {
+  const p = asRecord(args, 'bots.createChatSession args');
+  const botId = expectString(p.botId, 'botId');
+  const expectedVersion = expectNumber(p.expectedProfileVersion, 'expectedProfileVersion');
+  const s = asRecord(p.session, 'session');
+  const now = expectNumber(p.now, 'now');
+  return db.transaction(() => {
+    const bot = db.prepare(`SELECT status, current_version AS currentVersion
+      FROM bot_profiles WHERE id = ?`).get(botId) as { status: string; currentVersion: number } | undefined;
+    if (!bot || bot.status !== 'active')
+      throw Object.assign(new Error('Bot is unavailable'), { code: bot ? 'PRECONDITION_FAILED' : 'NOT_FOUND' });
+    if (bot.currentVersion !== expectedVersion)
+      throw Object.assign(new Error('Bot Profile changed, refresh and retry'), { code: 'PRECONDITION_FAILED' });
+    const version = db.prepare('SELECT version FROM bot_profile_versions WHERE bot_id = ? AND version = ?')
+      .get(botId, bot.currentVersion) as { version: number } | undefined;
+    if (!version) throw Object.assign(new Error('Bot profile version is missing'), { code: 'PRECONDITION_FAILED' });
+    const sessionId = expectString(s.id, 'session.id');
+    insertBotSession(db, { ...s, id: sessionId, parentSessionId: null });
+    db.prepare(`INSERT INTO bot_session_links
+      (id, bot_id, session_id, profile_version, role, route_key, created_at, archived_at)
+      VALUES (?, ?, ?, ?, 'chat', NULL, ?, NULL)`)
+      .run(`chat:${sessionId}`, botId, sessionId, version.version, now);
+    return { sessionId };
   })();
 }
 
@@ -1144,7 +1172,7 @@ function botsPersistSessionPermission(
       return { updated: true };
     }
     const link = db.prepare(`SELECT bot_id AS botId FROM bot_session_links
-      WHERE session_id = ? AND role IN ('canonical', 'channel', 'group', 'thread', 'routine')
+      WHERE session_id = ? AND role IN ('canonical', 'chat', 'channel', 'group', 'thread', 'routine')
         AND archived_at IS NULL`).get(sessionId) as { botId: string } | undefined;
     if (link) {
       const profile = db.prepare('SELECT current_version AS version FROM bot_profiles WHERE id = ?')
@@ -1176,7 +1204,7 @@ function botsPersistSessionPermission(
     if (link) {
       db.prepare(`UPDATE sessions SET permission_mode = ?, updated_at = ? WHERE source = 'bot' AND status = 'active' AND id IN
         (SELECT session_id FROM bot_session_links WHERE bot_id = ?
-          AND role IN ('canonical', 'group', 'channel', 'thread', 'routine') AND archived_at IS NULL)`)
+          AND role IN ('canonical', 'chat', 'group', 'channel', 'thread', 'routine') AND archived_at IS NULL)`)
         .run(mode, Date.now(), link.botId);
     } else {
       db.prepare('UPDATE sessions SET permission_mode = ?, updated_at = ? WHERE id = ?')
@@ -1195,7 +1223,7 @@ function botsReconcileLanePermission(db: Database.Database, args: unknown): { mo
       JOIN sessions s ON s.id = l.session_id
       JOIN bot_profiles p ON p.id = l.bot_id
       LEFT JOIN bot_profile_versions v ON v.bot_id = p.id AND v.version = p.current_version
-      WHERE l.session_id = ? AND l.role IN ('canonical', 'channel', 'group', 'thread', 'routine') AND l.archived_at IS NULL
+      WHERE l.session_id = ? AND l.role IN ('canonical', 'chat', 'channel', 'group', 'thread', 'routine') AND l.archived_at IS NULL
         AND s.source = 'bot' AND s.status = 'active' AND p.status = 'active'`).get(sessionId) as
       { json: string | null; botId: string; role: string; previousMode: string } | undefined;
     if (!row) return { mode: null, changed: false };
@@ -2160,6 +2188,7 @@ function sessionsRenameTitles(db: Database.Database, args: unknown): Array<{
 }
 
 const TASK_LIST_BOT_LANE_SQL = "SELECT 1 FROM bot_session_links WHERE session_id = ? AND role IN ('routine', 'channel', 'group') LIMIT 1";
+const DELETABLE_BOT_CHAT_SQL = "SELECT 1 FROM bot_session_links WHERE session_id = ? AND role IN ('canonical', 'chat') AND archived_at IS NULL LIMIT 1";
 
 // 批量归档 / 取消归档:存在性预检 + 状态更新放进同一事务,任一 id 缺失整批回滚(全有才写)。
 // 本文件是 inproc 回滚口;默认热路径走 file worker 的同名 handler(client/WorkerThreadTransport.ts)。
@@ -2296,8 +2325,9 @@ function sessionsSetTerminalStatus(db: Database.Database, args: unknown): Sessio
         && Boolean(db.prepare(`SELECT id FROM sessions WHERE id = ? AND ${COMMITTED_SIDE_CHAT_WORKER_SQL}`).get(sessionId));
       assertSessionDeleteTarget({ ...existing, hasCommittedWorker }, payload.deleteTarget);
     }
-    // Routine/channel lanes are listed with ordinary tasks and follow their lifecycle.
-    if (existing.source === 'bot' && !db.prepare(TASK_LIST_BOT_LANE_SQL).get(sessionId)) throw Object.assign(new Error('Bot sessions must use Bot lifecycle: ' + sessionId), { code: 'PRECONDITION_FAILED' });
+    // Owner chats are not ordinary tasks, but may be deleted one at a time without deleting the Bot.
+    const deletableBotChat = existing.source === 'bot' && status === 'deleted' && db.prepare(DELETABLE_BOT_CHAT_SQL).get(sessionId);
+    if (existing.source === 'bot' && !db.prepare(TASK_LIST_BOT_LANE_SQL).get(sessionId) && !deletableBotChat) throw Object.assign(new Error('Bot sessions must use Bot lifecycle: ' + sessionId), { code: 'PRECONDITION_FAILED' });
     const now = Date.now();
     if (existing.source === 'bot') {
       db.prepare("UPDATE bot_session_links SET archived_at = COALESCE(archived_at, ?) WHERE session_id = ? AND role = 'group'").run(now, sessionId);

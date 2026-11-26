@@ -1207,6 +1207,7 @@ function sessionsRenameTitles(readyDb, args) {
 }
 
 const TASK_LIST_BOT_LANE_SQL = "SELECT 1 FROM bot_session_links WHERE session_id = ? AND role IN ('routine', 'channel', 'group') LIMIT 1";
+const DELETABLE_BOT_CHAT_SQL = "SELECT 1 FROM bot_session_links WHERE session_id = ? AND role IN ('canonical', 'chat') AND archived_at IS NULL LIMIT 1";
 
 // ⚠️ 与 worker/opHandlers/tx.ts 的 sessionsSetStatus 必须逐字保持一致。
 function sessionsSetStatus(readyDb, args) {
@@ -1310,8 +1311,9 @@ function sessionsSetTerminalStatus(readyDb, args) {
         && Boolean(readyDb.prepare('SELECT id FROM sessions WHERE id = ? AND ' + COMMITTED_SIDE_CHAT_WORKER_SQL).get(sessionId));
       assertSessionDeleteTarget({ ...existing, hasCommittedWorker }, payload.deleteTarget);
     }
-    // Routine/channel lanes are listed with ordinary tasks and follow their lifecycle.
-    if (existing.source === 'bot' && !readyDb.prepare(TASK_LIST_BOT_LANE_SQL).get(sessionId)) throw Object.assign(new Error('Bot sessions must use Bot lifecycle: ' + sessionId), { code: 'PRECONDITION_FAILED' });
+    // Owner chats are not ordinary tasks, but may be deleted one at a time without deleting the Bot.
+    const deletableBotChat = existing.source === 'bot' && status === 'deleted' && readyDb.prepare(DELETABLE_BOT_CHAT_SQL).get(sessionId);
+    if (existing.source === 'bot' && !readyDb.prepare(TASK_LIST_BOT_LANE_SQL).get(sessionId) && !deletableBotChat) throw Object.assign(new Error('Bot sessions must use Bot lifecycle: ' + sessionId), { code: 'PRECONDITION_FAILED' });
     const now = Date.now();
     if (existing.source === 'bot') {
       readyDb.prepare("UPDATE bot_session_links SET archived_at = COALESCE(archived_at, ?) WHERE session_id = ? AND role = 'group'").run(now, sessionId);

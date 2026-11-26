@@ -1,13 +1,10 @@
 /**
- * The ContentHeader lockup for a teammate's canonical chat.
+ * The ContentHeader lockup for a teammate's personal chat.
  *
  * A Bot chat is not a task the user manages, so it does not get the task header
- * (rename / pin / archive / export …). It gets what an IM conversation gets: who
- * you are talking to, and the way into their settings. Two entrances, both
- * leading to the same place — the name/avatar lockup itself, and the gear at the
- * right end of the bar — because "click the name" is the discoverable one and
- * "the gear is on the right" is the learned one. Every teammate with a live main
- * task (this computer's or another computer's) also gets the 近况 popover here —
+ * (rename / pin / archive / export …). It gets the buddy identity and an entry to
+ * that buddy's conversation directory, with settings kept on the gear. Every
+ * teammate with a live main task (this computer's or another computer's) also gets the 近况 popover here —
  * where it runs (and switching computers), the user's todos and its outputs —
  * plus, for local teammates, the IM-style "add people" entry that turns this chat
  * into a group or brings the teammate into one.
@@ -53,6 +50,17 @@ export function BotSessionContentHeader({ bot }: { bot: BotChatIdentity }) {
     search.set('settings', '1');
     navigate(`${location.pathname}?${search.toString()}`);
   };
+  const openDirectory = () => {
+    if (bot.deviceId) {
+      openSettings();
+      return;
+    }
+    const search = new URLSearchParams(location.search);
+    search.delete('settings');
+    search.delete('settingsPage');
+    const query = search.toString();
+    navigate('/bots/' + encodeURIComponent(bot.id) + '/conversations' + (query ? '?' + query : ''));
+  };
 
   return (
     <div
@@ -61,8 +69,8 @@ export function BotSessionContentHeader({ bot }: { bot: BotChatIdentity }) {
     >
       <button
         type="button"
-        onClick={openSettings}
-        title={bot.deviceName || t('bots.settings')}
+        onClick={openDirectory}
+        title={bot.deviceId ? t('bots.settings') : t('bots.chat.directoryTitle', { name: bot.name })}
         className="flex min-w-0 items-center gap-2 rounded-full px-2 py-1 text-13 font-medium text-[var(--text-primary)] hover:bg-[var(--surface-hover)]"
         style={WINDOW_NO_DRAG_STYLE}
       >

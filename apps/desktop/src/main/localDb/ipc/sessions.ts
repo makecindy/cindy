@@ -150,7 +150,7 @@ import { withSessionRouteLock, withSessionRouteLocks } from '../sessionRouteLock
 import type { SessionDeleteTarget } from '@cindy/maker-shared/device-link-contract';
 import { assertSessionDeleteTarget, COMMITTED_SIDE_CHAT_WORKER_SQL } from '../sessionDeleteTarget.js';
 import { noteSessionsRestoring } from '../sessionRestoreRetention.js';
-import { isTaskListBotLane, restoreArchivedTaskForSend } from '../archivedTaskRestore.js';
+import { isDeletableBotChat, isTaskListBotLane, restoreArchivedTaskForSend } from '../archivedTaskRestore.js';
 import { applyAgentSwitchResumeFallbackAtomicallyWithPorts, applyAgentSwitchToSessionRowWithPorts, type AgentSwitchRowPatch } from '../agentSwitchRows.js';
 import { cleanupSessionRuntimeForTerminalStatus } from '../sessionRuntimeCleanup.js';
 import { requestSessionArchiveSync } from '../sessionArchiveSync.js';
@@ -1600,7 +1600,7 @@ export function registerSessionIpc(
       const db = getDbClient().drizzle;
       const updated = await withStatusWriteLock(db, sid, 'active', async () => {
         if (!isOwnerScopeCurrent(ownerScope)) return null;
-        await assertGenericSessionLifecycleAllowed(db, sid);
+        await assertGenericSessionLifecycleAllowed(db, sid, 'active');
         // Bulk restore uses this CAS path instead of writeSessionPatch. Persist
         // the same retention before activation, then fence the async owner boundary.
         await noteSessionsRestoring([sid], db);
@@ -1749,7 +1749,7 @@ async function cancelValidatedCreation(
     .from(sessions).where(eq(sessions.id, sessionId)).limit(1);
   if (!target) throwIpcError('NOT_FOUND', 'Session 不存在');
   if (status === 'deleted') assertDeleteTarget(target, deleteTarget);
-  await assertGenericSessionLifecycleAllowed(dbClient.drizzle, sessionId);
+  await assertGenericSessionLifecycleAllowed(dbClient.drizzle, sessionId, status);
   assertCurrent();
   if (getDbClient() !== dbClient) throwIpcError('PRECONDITION_FAILED', 'Session owner changed');
   // Follow-ups are already persisted. A pending close must not cancel their runtime before commit.
@@ -1894,7 +1894,7 @@ export async function updateSessionInDb(
       p.status,
       async () => {
         moveGuard?.assertCurrent();
-        if (p.status !== undefined) await assertGenericSessionLifecycleAllowed(db, sid);
+        if (p.status !== undefined) await assertGenericSessionLifecycleAllowed(db, sid, p.status);
         await moveGuard?.beforeWrite?.();
         moveGuard?.assertCurrent();
         const terminal = p.status === 'archived' || p.status === 'deleted';
@@ -2239,7 +2239,7 @@ export async function patchSessionMetaInDb(
     beforeWrite();
   };
   const updated = await withStatusWriteLock(db, sessionId, patch.status, async () => {
-    if (patch.status !== undefined) await assertGenericSessionLifecycleAllowed(db, sessionId);
+    if (patch.status !== undefined) await assertGenericSessionLifecycleAllowed(db, sessionId, patch.status);
     beforeWrite();
     const terminal = patch.status === 'archived' || patch.status === 'deleted';
     if (terminal) {
@@ -2362,13 +2362,18 @@ export async function patchSessionMetaInDb(
 async function assertGenericSessionLifecycleAllowed(
   db: DbClient['drizzle'],
   sessionId: string,
+  status?: unknown,
 ): Promise<void> {
   const [target] = await db
     .select({ source: sessions.source })
     .from(sessions)
     .where(eq(sessions.id, sessionId))
     .limit(1);
-  if (target?.source === 'bot' && !(await isTaskListBotLane(db, sessionId))) {
+  if (
+    target?.source === 'bot' &&
+    !(await isTaskListBotLane(db, sessionId)) &&
+    !(status === 'deleted' && (await isDeletableBotChat(db, sessionId)))
+  ) {
     throwIpcError(
       'PRECONDITION_FAILED',
       'Bot task lifecycle is managed by teammate recovery and history controls',

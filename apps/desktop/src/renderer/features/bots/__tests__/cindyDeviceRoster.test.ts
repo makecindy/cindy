@@ -3,7 +3,8 @@ import { cindyDeviceOptions, isCindyDeviceBot } from '../cindyDeviceRoster';
 import type { BotProfile } from '../botStore';
 import type { RemoteBot } from '../remoteBotRoster';
 
-const local = { id: 'local', name: 'Renamed', templateId: 'cindy', status: 'active' } as BotProfile;
+const local = { id: 'local', name: 'Renamed', templateId: 'cindy', status: 'active',
+  sessions: [{ id: 'local-chat', role: 'canonical', status: 'active' }], canonicalSessionId: 'local-chat' } as BotProfile;
 const remote = (deviceId: string, extra = {}): RemoteBot => ({
   id: 'cindy-default',
   name: 'Remote renamed',
@@ -43,7 +44,7 @@ describe('Cindy device roster', () => {
       'Local',
     );
     expect(options.map((option) => option.label)).toEqual(['Local', 'Mac (1)', 'Mac (2)']);
-    expect(options[0]).toMatchObject({ route: '/bots/local', unread: true, unreadCount: 3 });
+    expect(options[0]).toMatchObject({ route: '/bots/local/conversations', unread: true, unreadCount: 3 });
     expect(options[1]).toMatchObject({
       route: '/bots/remote/a/cindy-default',
       unread: true,
