@@ -54,7 +54,8 @@ export function BotGroupThreadFollow({ nativeHeader = false, following, online, 
     disabled, busy, testID: 'botGroup.thread.follow', onPress: toggle }} />;
 }
 
-export function BotGroupThreadShare({ share, mentionContext, resolveMedia, resolveServerMedia, onRetry, messageKey, messageId, onOpenDiagram, interactive = true, active = true }: {
+export function BotGroupThreadShare({ groupId, share, mentionContext, resolveMedia, resolveServerMedia, onRetry, messageKey, messageId, onOpenDiagram, interactive = true, active = true }: {
+  groupId?: string;
   messageKey?: string; messageId?: string;
   share: BotGroupThreadShareView; resolveMedia: ResolveRemoteMediaFn;
   onOpenDiagram?: (source: string) => void; interactive?: boolean; active?: boolean;
@@ -68,7 +69,7 @@ export function BotGroupThreadShare({ share, mentionContext, resolveMedia, resol
       : share.status === 'unavailable' ? <Text style={styles.note}>{t('groupChat.thread.sourceUnavailable')}</Text>
       : <>
         <Text style={styles.count}>{share.authorName}{share.edited ? ` · ${t('groupChat.thread.edited')}` : ''}</Text>
-        {share.attachments.length ? <BotGroupMessageAttachments messageId={share.messageId} attachments={share.attachments} align="left" onResolveRemoteMedia={resolveMedia} resolveServerMedia={resolveServerMedia} /> : null}
+        {share.attachments.length ? <BotGroupMessageAttachments messageId={share.messageId} roomId={groupId} attachments={share.attachments} align="left" onResolveRemoteMedia={resolveMedia} resolveServerMedia={resolveServerMedia} /> : null}
         <BotGroupMarkdownText readOnly messageKey={messageKey} messageId={messageId} richContent active={active} interactive={interactive} onOpenDiagram={onOpenDiagram} content={share.content} authorKind={share.authorKind} mentionContext={mentionContext} />
       </>}
   </View>;

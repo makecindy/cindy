@@ -19,6 +19,7 @@ import { subscribeChatServer } from './chatServerSubscription';
 import { createChatHistory, type ChatHistory } from '@cindy/maker-shared/chat-history';
 import { createMobileChatHistoryStore, mobileChatHistoryStoreEpoch } from './chatHistoryStore';
 import { cacheChatMessages, flushChatMessageCache, forgetChatMessages, peekChatMessages, readChatMessages, subscribeChatInvalidation } from './chatMessageCache';
+import { clearChatServerMediaCache, forgetChatServerMediaRoom } from './chatServerMediaCache';
 import { useJsonSnapshotState } from '@/utils/useStableValue';
 import { createChatServerUpload } from './chatServerUpload';
 import { uploadPublicAvatar } from './publicAvatarUpload';
@@ -223,7 +224,9 @@ export function useChatServerRoster(enabled: boolean) {
               rows.push(chatRoomRow(room, value, self, activity));
             }
           } catch (error) {
-            if (!chatAccessLost(error)) {
+            if (chatAccessLost(error)) {
+              forgetChatServerMediaRoom(room.id);
+            } else {
               mobileDebugLog('warn', 'recovery', 'companion-roster-refresh', { source: 'group-detail', status: (error as { status?: number })?.status });
               partial = true;
               const previous = cached.items.find(row => row.item.ref.id === room.id);
@@ -256,7 +259,10 @@ export function useChatServerRoster(enabled: boolean) {
       if (!run.isStale() && api.current()) {
         mobileDebugLog('warn', 'recovery', 'companion-roster-refresh', { source: 'group-list', status: (error as { status?: number })?.status });
         setState(old => ({ owner: api.owner, rooms: old.owner === api.owner && !chatAccessLost(error) ? old.rooms.filter(row => !api.client.personalList.hidden(row.item.ref.id)) : [], loading: false, refreshing: false, error: error instanceof Error && error.message === 'CHAT_ENDPOINT_UNAVAILABLE' ? error.message : 'CHAT_LIST_FAILED' }));
-        if (chatAccessLost(error)) await cacheChatRoster(api.userId, api.realm, [], known.current.ids);
+        if (chatAccessLost(error)) {
+          clearChatServerMediaCache({ clearNativeImageCache: true });
+          await cacheChatRoster(api.userId, api.realm, [], known.current.ids);
+        }
       }
     }
   }, api.owner);
@@ -308,8 +314,10 @@ export function useChatServerRoster(enabled: boolean) {
   useEffect(() => api.client.personalList.subscribe(() => {
     if (!api.current()) return;
     for (const id of api.client.personalList.ids()) known.current.ids.add(id);
+    const hiddenIds = api.client.personalList.ids().filter(id => api.client.personalList.hidden(id));
+    for (const id of hiddenIds) forgetChatServerMediaRoom(id);
     setState(old => old.owner !== api.owner ? old : { ...old, rooms: old.rooms.filter(row => !api.client.personalList.hidden(row.item.ref.id)) });
-    void hideCachedChatRooms(api.userId, api.realm, api.client.personalList.ids().filter(id => api.client.personalList.hidden(id)));
+    void hideCachedChatRooms(api.userId, api.realm, hiddenIds);
   }), [api]);
   const own = state.owner === api.owner;
   return { items: own ? state.rooms : [], serverIds: known.current.ids, loading: api.enabled && (!own || state.loading),
@@ -364,6 +372,7 @@ export function useChatServerGroup(groupId: string, enabled: boolean, threadRoot
   const valid = useCallback(() => api.current() && active.current === identity, [api, identity]);
   const loseAccess = useCallback(() => {
     accessGeneration.current++; freshRead.current = false; page.current = null;
+    forgetChatServerMediaRoom(groupId);
     if (valid()) { void forgetRemoteResource(api.userId, groupId); void forgetChatMessages(groupId); }
     setState({ identity, value: { kind: 'missing' }, online: false, loadingOlder: false });
   }, [valid, api.userId, groupId, identity]);
@@ -587,6 +596,7 @@ export function useChatServerGroup(groupId: string, enabled: boolean, threadRoot
       const operationId = (await import('expo-crypto')).randomUUID();
       if (action === 'hide') {
         await api.client.hide(groupId, operationId);
+        forgetChatServerMediaRoom(groupId);
         if (valid()) { accessGeneration.current++; page.current = null; setState({ identity, value: { kind: 'missing' }, online: true, loadingOlder: false });
           await forgetRemoteResource(api.userId, groupId); await forgetChatMessages(groupId); }
       } else if (action === 'leave') {
@@ -673,7 +683,10 @@ export function useChatServerGroup(groupId: string, enabled: boolean, threadRoot
     if (!api.current()) throw new Error('OWNER_CHANGED');
     if ((value as { conversationId?: unknown } | null)?.conversationId !== groupId) throw new Error('INVALID_CHAT_LIST_STATE');
     api.client.personalList.merge(value);
-    if (api.current() && api.client.personalList.hidden(groupId)) await forgetRemoteResource(api.userId, groupId);
+    if (api.current() && api.client.personalList.hidden(groupId)) {
+      forgetChatServerMediaRoom(groupId);
+      await forgetRemoteResource(api.userId, groupId);
+    }
   }, [api, groupId]);
   const followThread = useCallback(async (following: boolean) => {
     if (!valid() || !enabled || !threadRootId) throw new Error('THREAD_FOLLOW_UNSUPPORTED');

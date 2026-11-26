@@ -4,6 +4,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { buildBotGroupCapabilityNotice, BOT_GROUP_RUNTIME_FAILURE_CODES, type BotGroupRemoteChatData } from '@cindy/maker-shared/botGroupChat';
 import { chatGroupView, chatRoomRow, createChatServerClient, type ChatMessage, type ChatPage } from '@/chat/chatServerClient';
+import { clearChatServerMediaCache } from '@/chat/chatServerMediaCache';
 import { shareSelectionStore } from '@/session/shareSelectionStore';
 import { i18n, SUPPORTED_LOCALES } from '@/i18n';
 import { resolveBotGroupMentions } from '@cindy/maker-shared/botGroupMentions';
@@ -484,6 +485,7 @@ beforeEach(() => {
   h.scrolls = {}; h.placeCell.clear(); h.rowWindow = null; h.speakerDisclosure = false;
   h.nativeMenus = true;
   shareSelectionStore.exit();
+  clearChatServerMediaCache();
   h.management = null;
   h.cloudRows = null;
   h.navigation = { index: 0, routes: [{ params: {} }] }; h.hardwareBack = null;

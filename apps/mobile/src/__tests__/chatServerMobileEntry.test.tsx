@@ -766,8 +766,14 @@ it.each([403, 404])('clears revoked access immediately when a send returns %s', 
   expect(chat.online).toBe(false);
   await expect(send({ text: 'again', clientId: 'fixture-no-page', mentions: { all: false, botIds: [] } })).rejects.toThrow('CHAT_READ_FAILED');
 });
-it.each([403, 404])('clears revoked access when attachment authorization returns %s', async (status) => {
+it.each([403, 404])('clears revoked access and cached room media when attachment authorization returns %s', async (status) => {
   showChat = true; await render();
+  const { setCachedServerMedia, peekCachedServerMedia, chatServerMediaRoomEpoch } = await import('@/chat/chatServerMediaCache');
+  setCachedServerMedia('owner:1', id, {
+    id: self, name: 'photo.png', category: 'image', mimeType: 'image/png', size: 10,
+    url: 'https://cdn.example.invalid/photo.png?sig=1', path: null,
+  });
+  const epochBefore = chatServerMediaRoomEpoch(id);
   const original = h.auth.apiFetch.getMockImplementation()!;
   h.auth.apiFetch.mockImplementation(async (path, options) => {
     if (path.includes('/media/')) throw Object.assign(new Error('NOT_MEMBER'), { status });
@@ -776,6 +782,8 @@ it.each([403, 404])('clears revoked access when attachment authorization returns
   await act(async () => { await expect(chat.media!(self)).rejects.toMatchObject({ status }); });
   expect(chat.state.kind).toBe('missing');
   expect(chat.online).toBe(false);
+  expect(peekCachedServerMedia('owner:1', id, self)).toBeNull();
+  expect(chatServerMediaRoomEpoch(id)).toBeGreaterThan(epochBefore);
 });
 it('keeps authorized history when only the attachment is missing', async () => {
   showChat = true; await render();
