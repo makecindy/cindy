@@ -67,8 +67,6 @@ export interface HostDaemonTarget {
 /** 外部命令结果：非 0 退出码不算异常（「没有 crontab」也是正常分支）。 */
 export interface ExecResult {
   stdout: string;
-  /** stderr：破坏性动作靠它区分「对象本来就不在」与真正的失败，后者必须中断。 */
-  stderr?: string;
   /** 退出码；命令没启动起来或被信号结束时没有。 */
   code?: number;
   failed: boolean;

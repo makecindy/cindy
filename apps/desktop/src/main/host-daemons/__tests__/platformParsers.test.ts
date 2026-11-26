@@ -7,7 +7,7 @@
 
 import { mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
@@ -19,6 +19,7 @@ import {
   removeCronLine,
 } from '../crontab.js';
 import {
+  createLaunchAgentsAdapter,
   parseLaunchAgentPlist,
   parseLaunchctlList,
   toHostDaemonTrigger,
@@ -29,6 +30,7 @@ import {
   parseSystemdUnitFile,
   stateOf,
 } from '../systemdUser.js';
+import type { ExecResult } from '../target.js';
 
 describe('launchd', () => {
   it('按 plutil 真实输出取 Label、命令与触发', () => {
@@ -191,9 +193,9 @@ describe('crontab', () => {
     const adapter = createCrontabAdapter({
       exec: async (file, args, options) => {
         await new Promise((resolve) => setTimeout(resolve, 5));
-        if (args[0] === '-l') return { stdout: table.text, stderr: '', failed: false };
+        if (args[0] === '-l') return { stdout: table.text, failed: false };
         table.text = options?.input ?? '';
-        return { stdout: '', stderr: '', failed: false };
+        return { stdout: '', failed: false };
       },
     });
     await Promise.all([
@@ -308,6 +310,78 @@ describe('systemd 动作契约（真目录 + 假 systemctl）', () => {
       await expect(stat(join(dir, 'cron-a.timer'))).resolves.toBeTruthy();
     } finally {
       await cleanup();
+    }
+  });
+});
+
+describe('launchd 动作契约（真目录 + 假 launchctl）', () => {
+  // macOS 本机没有环境：动作只锁「失败不报成功」这类结果，不冒充 launchctl 的行为。
+  const LABEL = 'com.example.probe';
+  const plist: Record<string, string> = {
+    [`${LABEL}.plist`]: JSON.stringify({ Label: LABEL, Program: '/bin/true' }),
+  };
+
+  async function withAgents(ctl: (args: string[]) => ExecResult | undefined) {
+    const dir = await mkdtemp(join(tmpdir(), 'host-daemons-'));
+    for (const name of Object.keys(plist)) await writeFile(join(dir, name), '<plist/>', 'utf8');
+    const commands: string[][] = [];
+    const adapter = createLaunchAgentsAdapter({
+      dir,
+      exec: async (command, args) => {
+        commands.push([command, ...args]);
+        // plutil 读的是盘上真实存在的那个文件。
+        if (command === 'plutil') {
+          return { stdout: plist[basename(args.at(-1) ?? '')] ?? '', failed: false };
+        }
+        return ctl(args) ?? { stdout: '', failed: false };
+      },
+    });
+    return { adapter, commands, dir, cleanup: () => rm(dir, { recursive: true, force: true }) };
+  }
+
+  it('已加载的 agent 卸载失败时不删文件；本来就没加载的 agent 直接删', async () => {
+    const stuck = await withAgents((args) =>
+      args[0] === 'bootout' ? { stdout: '', failed: true } : undefined,
+    );
+    // `launchctl list <Label>` 非 0 = 没加载。
+    const notLoaded = await withAgents((args) =>
+      args[0] === 'list' && args.length === 2 ? { stdout: '', failed: true } : undefined,
+    );
+    try {
+      await expect(stuck.adapter.remove(`launch-agent:${LABEL}`)).rejects.toThrow(
+        'could not be unloaded',
+      );
+      await expect(stat(join(stuck.dir, `${LABEL}.plist`))).resolves.toBeTruthy();
+
+      await notLoaded.adapter.remove(`launch-agent:${LABEL}`);
+      expect(notLoaded.commands.some((c) => c[1] === 'bootout')).toBe(false);
+      await expect(stat(join(notLoaded.dir, `${LABEL}.plist`))).rejects.toMatchObject({
+        code: 'ENOENT',
+      });
+    } finally {
+      await stuck.cleanup();
+      await notLoaded.cleanup();
+    }
+  });
+
+  it('bootstrap 之后 kickstart 仍失败时不报成功', async () => {
+    let kickstarts = 0;
+    const started = await withAgents(
+      (args) =>
+        args[0] === 'kickstart' && ++kickstarts === 1 ? { stdout: '', failed: true } : undefined,
+    );
+    const failed = await withAgents(
+      (args) => (args[0] === 'kickstart' ? { stdout: '', failed: true } : undefined),
+    );
+    try {
+      await started.adapter.run(`launch-agent:${LABEL}`);
+      expect(kickstarts).toBe(2);
+      await expect(failed.adapter.run(`launch-agent:${LABEL}`)).rejects.toThrow(
+        'could not be started',
+      );
+    } finally {
+      await started.cleanup();
+      await failed.cleanup();
     }
   });
 });

@@ -95,14 +95,9 @@ function guiDomain(): string {
   return `gui/${process.getuid?.() ?? 0}`;
 }
 
-async function scanJobs(): Promise<Map<string, { running: boolean }>> {
-  const { stdout, failed } = await runCommand('launchctl', ['list']);
+async function scanJobs(exec: RunCommand): Promise<Map<string, { running: boolean }>> {
+  const { stdout, failed } = await exec('launchctl', ['list']);
   return failed ? new Map() : parseLaunchctlList(stdout);
-}
-
-/** launchctl 对「job 没加载」的报错措辞：bootout 在这种情况下返回非 0，可以忽略。 */
-export function hasNoSuchJob(stderr: string): boolean {
-  return /no such process|not found|service not found|\b3:\s/i.test(stderr);
 }
 
 export interface LaunchAgentsAdapterDeps {
@@ -150,7 +145,7 @@ export function createLaunchAgentsAdapter(deps: LaunchAgentsAdapterDeps = {}): H
     idPrefix: 'launch-agent:',
 
     async scan() {
-      const jobs = await scanJobs();
+      const jobs = await scanJobs(exec);
       let names: string[];
       try {
         names = await readdir(dir);
@@ -215,9 +210,12 @@ export function createLaunchAgentsAdapter(deps: LaunchAgentsAdapterDeps = {}): H
       const label = id.slice('launch-agent:'.length);
       // 先 bootout 再删文件：删掉文件后 launchd 仍持有已加载的 job，直到注销。
       // 卸载真失败时不能继续删：那会留下一个还活着、却从清单里消失的 job。
-      // `bootout` 对未加载的 label 也返回非 0，这是唯一可以忽略的失败。
-      const { failed, stderr } = await exec('launchctl', ['bootout', `${guiDomain()}/${label}`]);
-      if (failed && !hasNoSuchJob(stderr ?? '')) throw new Error('launch agent could not be unloaded');
+      // 「本来就没加载」用 `launchctl list <Label>` 的退出码正面判定：`bootout` 对它同样
+      // 返回非 0，只认退出码就不用担心 launchctl 各版本的报错措辞。
+      const loaded = !(await exec('launchctl', ['list', label])).failed;
+      if (loaded && (await exec('launchctl', ['bootout', `${guiDomain()}/${label}`])).failed) {
+        throw new Error('launch agent could not be unloaded');
+      }
       // 卸载之后、删文件之前再定位一次：此刻盘上属于这个 Label 的文件才是该删的那个。
       const path = await locate(label);
       if (!path) throw new Error('launch agent is no longer present');
