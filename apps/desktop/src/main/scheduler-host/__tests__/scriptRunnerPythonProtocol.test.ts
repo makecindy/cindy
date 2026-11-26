@@ -7,7 +7,7 @@
  * 机器上没有可用的 python 时整组 skip(不阻塞无 Python 的 CI 环境)。
  */
 import { spawnSync } from 'node:child_process';
-import { appendFileSync, cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -166,12 +166,15 @@ describe.skipIf(!PYTHON)('script automation Python client', () => {
         error: probe.error?.message,
         stderr: probe.stderr,
       };
-      // The workspace reporter suppresses successful Vitest output. Keep Windows CI
-      // measurements in the job summary even when both handshakes finish on time.
-      if (process.platform === 'win32' && process.env.GITHUB_STEP_SUMMARY) {
-        appendFileSync(
-          process.env.GITHUB_STEP_SUMMARY,
-          `Python negotiation (${diagnostics.host}): \`${diagnostics.executable}\`, ${diagnostics.elapsedMs} ms, status ${probe.status}.\n\n`,
+      // Successful worker output is suppressed. The unit shard uploads the whole
+      // timings directory; its aggregation script reads only .json files.
+      const timings = process.env.XDT_VITEST_FILE_TIMINGS;
+      if (timings) {
+        const directory = path.dirname(timings);
+        mkdirSync(directory, { recursive: true });
+        writeFileSync(
+          path.join(directory, `python-negotiation-${diagnostics.host}.txt`),
+          `${JSON.stringify(diagnostics)}\n`,
         );
       }
       expect(probe.status, JSON.stringify(diagnostics)).toBe(0);
