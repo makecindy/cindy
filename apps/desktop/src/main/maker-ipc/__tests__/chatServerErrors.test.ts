@@ -1,5 +1,19 @@
 import { describe, expect, it } from 'vitest';
-import { chatErrorDiagnostic, chatGroupFailure, missingGroupCode } from '../chatServerErrors.js';
+import { chatErrorDiagnostic, chatGroupFailure, chatRouteNonIds, missingGroupCode } from '../chatServerErrors.js';
+
+// The 400 diagnostic names which ID slot was not an ID, never the slot's value.
+describe('chatRouteNonIds', () => {
+  const words = ['conversations', 'messages', 'readers', 'me'];
+  const room = '2768ca52-c901-4718-84c8-c617a967c594';
+  it.each([
+    [`/conversations/${room}/messages/${room}`, []],
+    [`/conversations/${room}/messages/execution-failure:abc:0`, ['messages']],
+    [`/conversations/local-group/messages/${room}/readers?x=1`, ['conversations']],
+    ['/conversations/me', []],
+  ])('%s', (route, expected) => {
+    expect(chatRouteNonIds(route, words)).toEqual(expected);
+  });
+});
 
 describe('chat group errors', () => {
   it.each([

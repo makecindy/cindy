@@ -23,7 +23,7 @@ import { MIRROR_ATTACHMENT_MAX_BYTES } from '../companion-cloud/mirror.js';
 import { request as httpRequest } from 'node:http';
 import { request as httpsRequest } from 'node:https';
 import { migrateLocalGroups, type ChatContentBlock } from './chatServerMigration.js';
-import { chatErrorDiagnostic, chatGroupFailure, chatRetryDeadline, contentShapes, detailsDiagnostic, missingGroupCode } from './chatServerErrors.js';
+import { chatErrorDiagnostic, chatGroupFailure, chatRequestCaller, chatRetryDeadline, chatRouteNonIds, contentShapes, detailsDiagnostic, missingGroupCode } from './chatServerErrors.js';
 import { chatInviteShareBase, createChatInviteShare, notifyChatInviteRevoked, resolveChatInviteShare } from './chatInviteShares.js';
 import { createChatMedia } from './chatServerMedia.js';
 import { mergeChatReplyAttachments } from './chatServerReplyAttachments.js';
@@ -236,6 +236,8 @@ class SettlementRefused extends Error {
   constructor(readonly refusal: unknown) { super('SETTLEMENT_REFUSED'); }
 }
 const CHAT_AUTH_RETRY_MS = 60_000;
+/** Fixed words of Chat routes kept in failure logs; every other segment is logged as `:id`. */
+const CHAT_ROUTE_WORDS = ['conversations','media','complete','messages','plans','members','snapshot','import','actors','me','executions','conversation-list-state','preferences'];
 const HISTORY_UPGRADE_RETRY_DELAYS_MS = [60_000, 120_000, 240_000, 300_000, 300_000];
 function historyUpgradeRetryAt(error: unknown, failures: number): number {
   const delay = HISTORY_UPGRADE_RETRY_DELAYS_MS[Math.min(failures, HISTORY_UPGRADE_RETRY_DELAYS_MS.length) - 1]!;
@@ -885,6 +887,8 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     const token = getAccessToken();
     if (!token) return Promise.reject(new Error('AUTH_REQUIRED'));
     const started = Date.now();
+    // Read only when the server refuses the request as malformed (see the failure log below).
+    const callSite = new Error();
     return new Promise<T>((resolve, reject) => {
       const req = (url.protocol === 'https:' ? httpsRequest : httpRequest)(url, {
         method, headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json',
@@ -935,12 +939,17 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       gate?.observe(error);
       if (error instanceof WorkRequestDeferred) throw error;
       const routeTemplate = route.split('?')[0].split('/').map(part =>
-        ['conversations','media','complete','messages','plans','members','snapshot','import','actors','me','executions','conversation-list-state','preferences'].includes(part) || !part ? part : ':id').join('/');
+        CHAT_ROUTE_WORDS.includes(part) || !part ? part : ':id').join('/');
       const operation = data && typeof data === 'object' && 'operationId' in data ? data.operationId : null;
       const details = error instanceof ChatResponseError ? detailsDiagnostic(error.details) : undefined;
+      // A malformed request repeats until its caller changes; name the caller and the non-ID slot
+      // so the template alone (`/conversations/:id/messages/:id`) is not all there is to go on.
+      const malformed = error instanceof ChatResponseError && error.status === 400;
+      const nonIds = malformed ? chatRouteNonIds(route, CHAT_ROUTE_WORDS) : [];
+      const caller = malformed ? chatRequestCaller(callSite.stack) : undefined;
       deps.log?.warn('Chat request failed', { route: routeTemplate, method, durationMs: Date.now() - started,
         ...(typeof operation === 'string' ? { trace: createHash('sha256').update(operation).digest('hex').slice(0, 16) } : {}), ...chatErrorDiagnostic(error),
-        ...(details === undefined ? {} : { details }) });
+        ...(details === undefined ? {} : { details }), ...(caller ? { caller } : {}), ...(nonIds.length ? { nonIds } : {}) });
       throw error;
     });
   }

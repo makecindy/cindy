@@ -72,6 +72,45 @@ export function detailsDiagnostic(details: unknown): unknown {
   return narrow(details, 0, null);
 }
 
+/** Request plumbing frames; the first other frames are the code that asked. */
+const REQUEST_FRAMES = new Set(['request', 'api', 'workApi', 'foregroundApi', 'backgroundApi']);
+const STACK_FRAME = /^\s*at (?:async )?(?:(?:new )?([\w$.<>]+) \()?(.+?):(\d+):\d+\)?$/;
+
+/**
+ * Who issued a refused Chat request, read from a call-site `Error` captured before the request
+ * started (V8 formats the stack only when read, so capture is cheap). Callers are mostly
+ * anonymous closures, so each frame is `name@file:line` with the file's base name only: a code
+ * location of this build, never a directory, argument or ID. Node's own frames are skipped.
+ * Two frames tell a shared reader from its caller.
+ */
+export function chatRequestCaller(stack: string | undefined): string | undefined {
+  if (!stack) return undefined;
+  const frames: string[] = [];
+  for (const line of stack.split('\n').slice(1)) {
+    const match = STACK_FRAME.exec(line);
+    if (!match) continue;
+    const name = match[1]?.split('.').pop() ?? '';
+    const file = match[2]!.split(/[\\/]/).pop()!.split('?')[0]!;
+    if (match[2]!.startsWith('node:') || REQUEST_FRAMES.has(name) || !/^[\w.$-]+$/.test(file)) continue;
+    frames.push(`${/^[\w$<>]*$/.test(name) ? name : ''}@${file}:${match[3]}`);
+    if (frames.length === 2) break;
+  }
+  return frames.length ? frames.join(' < ') : undefined;
+}
+
+const CHAT_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * The collection words of a Chat route whose following segment is not an ID (the server's
+ * `invalid_format`), e.g. `['messages']` for a local placeholder message ID. Only the fixed
+ * collection words leave; the segment itself is never logged.
+ */
+export function chatRouteNonIds(route: string, collections: readonly string[]): string[] {
+  const parts = route.split('?')[0]!.split('/');
+  return parts.flatMap((part, index) => index > 0 && part && collections.includes(parts[index - 1]!)
+    && !collections.includes(part) && !CHAT_ID.test(part) ? [parts[index - 1]!] : []);
+}
+
 /** Stable localized categories for desktop and remote controllers; raw errors stay private. */
 export function chatGroupFailure(error: unknown): BotGroupFailure {
   const { code: raw, status } = chatErrorDiagnostic(error);
