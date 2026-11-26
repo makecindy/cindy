@@ -1,5 +1,6 @@
 const DEFAULT_RATE_LIMIT_BACKOFF_MS = 60_000;
 const DEFAULT_MAX_CONCURRENT_REQUESTS = 6;
+const MAX_CACHE_ENTRIES = 1_000;
 
 function rateLimitBucket(path: string): 'graphql' | 'rest' {
   return path === '/graphql' || path.startsWith('/graphql?') ? 'graphql' : 'rest';
@@ -82,8 +83,11 @@ export class GithubReadTransport {
   ): Promise<unknown> {
     const key = `${scope}:${path}:${JSON.stringify(options.body ?? null)}`;
     const cached = this.cache.get(key);
-    if (!options.refresh && cached && cached.observedAt + (options.ttl ?? 60_000) > this.now())
+    if (!options.refresh && cached && cached.observedAt + (options.ttl ?? 60_000) > this.now()) {
+      this.cache.delete(key);
+      this.cache.set(key, cached);
       return cached.data;
+    }
     const existing = this.pending.get(key);
     if (existing) return existing;
     const generation = this.generation;
@@ -142,6 +146,8 @@ export class GithubReadTransport {
         }
         if (response.status === 304 && cached) {
           cached.observedAt = this.now();
+          this.cache.delete(key);
+          this.cache.set(key, cached);
           if (cached.data && typeof cached.data === 'object')
             this.observations.set(cached.data, cached.observedAt);
           return cached.data;
@@ -152,10 +158,17 @@ export class GithubReadTransport {
           });
         const data: unknown = await response.json();
         if (generation !== this.generation) throw new Error('GITHUB_AUTH_CHANGED');
-        if (data && typeof data === 'object') this.observations.set(data, this.now());
-        if (JSON.stringify(data).length > 2_000_000) return data;
-        if (this.cache.size >= 100) this.cache.delete(this.cache.keys().next().value!);
-        this.cache.set(key, { data, etag: response.headers.get('etag'), observedAt: this.now() });
+        const observedAt = this.now();
+        if (data && typeof data === 'object') this.observations.set(data, observedAt);
+        const etag = response.headers.get('etag');
+        const ttl = options.ttl ?? 60_000;
+        // Skip caching responses that can neither serve a TTL hit nor revalidate via If-None-Match
+        // (e.g. POST /graphql status reads with ttl: 0), so they do not evict reusable REST ETags.
+        const reusable = ttl > 0 || (!options.body && Boolean(etag));
+        this.cache.delete(key);
+        if (!reusable || JSON.stringify(data).length > 2_000_000) return data;
+        if (this.cache.size >= MAX_CACHE_ENTRIES) this.cache.delete(this.cache.keys().next().value!);
+        this.cache.set(key, { data, etag, observedAt });
         return data;
       } finally {
         this.releaseSlot();
