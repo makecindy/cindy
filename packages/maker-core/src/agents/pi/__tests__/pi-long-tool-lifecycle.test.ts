@@ -232,7 +232,7 @@ describe('Pi long tool lifecycle through real stdio RPC', () => {
 
   // #10651: cover host-only termination as well as translator completion using
   // the production queue/Session. The fixture never executes markup as a tool.
-  it.each(['completed', 'rpc', 'exit', 'stop'] as const)('handles pending DSML through %s', async outcome => {
+  it.each(['completed', 'compaction-close', 'rpc', 'exit', 'stop'] as const)('handles pending DSML through %s', async outcome => {
     const { events, transport, nativeFrames } = await start();
     const raw = '<|DSML|function_calls><|DSML|invoke name="bash"><|DSML|parameter name="command" string="true">echo fixture</|DSML|parameter></|DSML|invoke></|DSML|function_calls>';
     const write = vi.spyOn(transport, 'writeLine');
@@ -241,13 +241,19 @@ describe('Pi long tool lifecycle through real stdio RPC', () => {
       { type: 'message_update', assistantMessageEvent: { type: 'text_delta', delta: raw } },
     ] }));
     await vi.waitFor(() => expect(nativeFrames).toContain('message_update'));
-    if (outcome === 'completed') {
+    if (outcome === 'completed' || outcome === 'compaction-close') {
       await transport.writeLine(JSON.stringify({ type: 'fixture_frames', frames: [
         { type: 'tool_execution_end', toolCallId: 'build-1', toolName: 'bash', result: { content: [] } },
         { type: 'message_end', message: { role: 'assistant', content: [{ type: 'text', text: raw }],
           stopReason: 'stop', usage: { input: 10, output: 3, cacheRead: 2, cacheWrite: 1 } } },
-        { type: 'agent_settled' },
+        ...(outcome === 'completed' ? [{ type: 'agent_settled' }] : [
+          { type: 'agent_end' }, { type: 'compaction_start', reason: 'threshold' },
+        ]),
       ] }));
+      if (outcome === 'compaction-close') {
+        await vi.waitFor(() => expect(nativeFrames).toContain('compaction_start'));
+        await session!.close();
+      }
     } else if (outcome === 'stop') await session!.abort();
     else await transport.writeLine(JSON.stringify({ type: outcome === 'rpc' ? 'fixture_lose_rpc' : 'fixture_exit' }));
     await vi.waitFor(() => expect(events.some(e => e.type === 'done' || e.type === 'error')).toBe(true));
@@ -257,11 +263,40 @@ describe('Pi long tool lifecycle through real stdio RPC', () => {
       expect(events.find(e => e.type === 'error')?.data).toMatchObject({ reason: 'unexecuted-tool-markup' });
       expect(events.find(e => e.type === 'done')?.data).toMatchObject({ status: 'failed', silentStop: false,
         usage: { inputTokens: 10, outputTokens: 3, cacheReadTokens: 2, cacheCreationTokens: 1 } });
+    } else if (outcome === 'compaction-close') {
+      expect(text).not.toContain('DSML');
+      expect(events.filter(e => e.type === 'done' || e.type === 'error')).toMatchObject([
+        { type: 'error', data: { isTerminal: true } },
+      ]);
     } else {
       expect(text).toContain(raw);
       expect(events.some(e => (e.data as { reason?: string })?.reason === 'unexecuted-tool-markup')).toBe(false);
     }
     expect(events.filter(e => e.type === 'tool_use')).toHaveLength(1); // Only the fixture's pre-existing build.
+    expect(write.mock.calls.map(([line]) => JSON.parse(line).type)).not.toContain('prompt');
+  });
+
+  // #12516: the existing mid-generation close misses a delivered reply whose
+  // threshold compaction is interrupted. Exercise the same isolated stdio fixture.
+  it('cancels once on close during threshold compaction after reply delivery', async () => {
+    const { events, transport } = await start();
+    const write = vi.spyOn(transport, 'writeLine');
+    await transport.writeLine(JSON.stringify({ type: 'fixture_finish', omit: 'agent_settled' }));
+    await transport.writeLine(JSON.stringify({ type: 'fixture_frames', frames: [
+      { type: 'agent_end' }, { type: 'compaction_start', reason: 'threshold' },
+    ] }));
+    await vi.waitFor(() => expect(events).toContainEqual(expect.objectContaining({
+      type: 'status', data: expect.objectContaining({ status: 'Compacting context…' }),
+    })));
+    expect(events).toContainEqual(expect.objectContaining({
+      type: 'text', data: expect.objectContaining({ text: 'Build finished.', isFinal: true }),
+    }));
+    const terminals = () => events.filter(event => event.type === 'done' || event.type === 'error');
+    expect(terminals()).toEqual([]);
+    await session!.close();
+    expect(terminals()).toMatchObject([{ type: 'done', data: {
+      status: 'cancelled', usage: { inputTokens: 10, outputTokens: 3 },
+    } }]);
     expect(write.mock.calls.map(([line]) => JSON.parse(line).type)).not.toContain('prompt');
   });
 

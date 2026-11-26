@@ -146,9 +146,9 @@ describe('market result visibility', () => {
     view({ market: 'archived' });
     expect(await screen.findByText('停止维护，现已归档')).toBeTruthy();
     await waitFor(() => expect(review.markRead).toHaveBeenCalledWith('plugin', 'archive'));
-    fireEvent.click(screen.getByText(`${prefix}.history`));
-    expect(await screen.findByText(`${prefix}.event.archived`)).toBeTruthy();
+    expect(await screen.findByRole('heading', { name: /market\.archived/ })).toBeTruthy();
     expect(screen.getByText('归档处理原因')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: new RegExp(`${prefix}.marketChanges`) })).toBeNull();
   });
   it('keeps a market result unread when the displayed detail predates that event', async () => {
     review.updates = [{ pluginId: 'plugin', key: 'disabled', status: 'disabled', decidedAt: '2026-10-17T00:00:00.000Z', unread: true,

@@ -19,7 +19,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { generateKeyPairSync, randomBytes, randomUUID } from 'node:crypto';
 import { createSocket } from 'node:dgram';
-import { once } from 'node:events';
+import { on, once } from 'node:events';
 import type { AddressInfo, Socket } from 'node:net';
 import { createServer } from 'node:http';
 import { Readable } from 'node:stream';
@@ -34,7 +34,8 @@ import { generateIdentity, issueCertificate, publicBytes, createJoinRequest, app
 import { AppError } from '@cindy/device-link-sharing/errors';
 import { AgentNetClient, authorization, submitJoin, pollJoin, submitTenantJoin, pollTenantJoin, encryptMedia, decryptMedia, type AgentNetUplink } from '../client.js';
 import { uploadEncryptedMedia, openEncryptedMedia } from '../media.js';
-import { encodeUdpRegister, encodeUdpUp, udpRelayPeerHash, verifyUdpDown, verifyUdpRegisterAck, type UdpRelayCredentials } from '../udpRelay.js';
+import { UDP_RELAY_PROBE_BYTES, UDP_RELAY_PROBE_FEATURE, encodeUdpProbe, encodeUdpRegister, encodeUdpUp, udpRelayPeerHash,
+  verifyUdpDown, verifyUdpProbeAck, verifyUdpRegisterAck, type UdpRelayCredentials } from '../udpRelay.js';
 import { createHash } from 'node:crypto';
 
 // Integration: HTTPS and UDP can sit behind different load balancers. /info must
@@ -860,6 +861,85 @@ describe('independent V2 relay', () => {
     await vi.waitFor(() => expect(wsTags).toEqual([1, 2, 3, 4, 10, 11, 13]));
     expect(member.downs().map((down) => down.datagram[0]).sort()).toEqual([5, 6, 7]);
     expect(elsewhere.downs()).toEqual([]);
+  });
+
+  // Integration (2026-11-25): clients verify hop-1 full-size UDP reachability directly with the relay
+  // (0xE5/0xE6) instead of inferring hop-1 health from end-to-end peer retransmits. Smallest failing input:
+  // one unproven probe (must be ignored), one proven 1350B probe (must return non-amplifying 1342B ack),
+  // plus replayed/tampered/wrong-key probes (must be dropped). Tier: integration.
+  it('answers full-size UDP probes only for proven addresses with non-amplifying acks and rejects replays or tampering', async () => {
+    const f = await fixture();
+    const info = await (await fetch(f.relay.url + API + '/info')).json() as { features: string[] };
+    expect(info.features).toContain(UDP_RELAY_PROBE_FEATURE);
+    const a = await f.client.connect(); f.uplinks.push(a);
+    expect(a.udp?.probe).toBe(true);
+
+    const openUdp = async (credentials: UdpRelayCredentials) => {
+      const socket = createSocket('udp4'); cleanups.push(() => { socket.close(); });
+      await new Promise<void>((resolve) => socket.bind(0, '127.0.0.1', resolve));
+      const received: Buffer[] = []; socket.on('message', (packet) => received.push(packet));
+      const send = (packet: Uint8Array) => socket.send(packet, f.relay.udpAddress!.port, '127.0.0.1');
+      const regAcks = () => received.map((p) => verifyUdpRegisterAck(p, credentials)).filter((v) => v !== null);
+      const probeAcks = () => received.map((p) => verifyUdpProbeAck(p, credentials)).filter((v) => v !== null);
+      return { received, send, regAcks, probeAcks };
+    };
+    const owner = await openUdp(a.udp!);
+    const elsewhere = await openUdp(a.udp!);
+
+    // Before the address is proven, full-size probes must be ignored (zero amplification to unproven sources).
+    owner.send(encodeUdpProbe(a.udp!, 1n));
+    owner.send(encodeUdpRegister(a.udp!, 1n, false));
+    await vi.waitFor(() => expect(owner.regAcks()).toHaveLength(1));
+    expect(owner.probeAcks()).toEqual([]);
+
+    // Prove the address via cookie, even with receiving=false (probing during suspension).
+    owner.send(encodeUdpRegister(a.udp!, 2n, false, owner.regAcks()[0].cookie));
+    await vi.waitFor(() => expect(owner.regAcks().at(-1)).toMatchObject({ counter: 2n, proven: true }));
+
+    // A probe from another unproven socket with valid credentials is still ignored.
+    elsewhere.send(encodeUdpProbe(a.udp!, 2n));
+    // Tampered padding and wrong key are ignored; a valid 1350B probe gets a strictly shorter 1342B ack.
+    const tampered = encodeUdpProbe(a.udp!, 3n); tampered[tampered.length - 1] ^= 1;
+    owner.send(tampered);
+    owner.send(encodeUdpProbe({ session: a.udp!.session, key: Buffer.alloc(32, 9) }, 4n));
+    const valid = encodeUdpProbe(a.udp!, 5n, UDP_RELAY_PROBE_BYTES);
+    owner.send(valid);
+    await vi.waitFor(() => expect(owner.probeAcks()).toHaveLength(1));
+    expect(owner.probeAcks()[0]).toEqual({ counter: 5n, size: UDP_RELAY_PROBE_BYTES - 8 });
+    expect(owner.probeAcks()[0].size).toBeLessThan(valid.length);
+
+    // Replayed or older counter is dropped; a newer counter is answered.
+    owner.send(valid);
+    owner.send(encodeUdpProbe(a.udp!, 4n));
+    owner.send(encodeUdpProbe(a.udp!, 6n));
+    await vi.waitFor(() => expect(owner.probeAcks().map((ack) => ack.counter)).toEqual([5n, 6n]));
+    expect(elsewhere.received).toEqual([]);
+  });
+
+  // Integration: a phone must be able to verify the authenticated WebSocket
+  // independently of any peer. Previously any non-presence control closed it.
+  it('answers the mobile relay probe on the authenticated socket', async () => {
+    const f = await fixture();
+    const ws = new WebSocket(f.relay.url.replace(/^http/, 'ws') + API + '/ws', {
+      headers: { authorization: authorization(f.owner, f.certificate, 'GET', API + '/ws') },
+    });
+    cleanups.push(() => { ws.terminate(); });
+    const messages = on(ws, 'message', { signal: AbortSignal.timeout(3_000) });
+    try {
+      const { value: [hello] } = await messages.next();
+      expect(JSON.parse(hello.toString())).toMatchObject({ type: 'hello', relayProbe: true });
+      ws.send('{"type":"relay-probe"}');
+      // The relay can broadcast directory updates on the same socket before replying.
+      for await (const [data] of messages) {
+        const frame = JSON.parse(data.toString());
+        if (frame.type === 'directory') continue;
+        expect(frame).toEqual({ type: 'relay-pong' });
+        return;
+      }
+      throw new Error('Relay message stream ended before relay-pong');
+    } finally {
+      await messages.return?.();
+    }
   });
 
   // 2026-11-17 review: UDP credentials are a reusable secret. On an owner-pinned private relay over plain http (the

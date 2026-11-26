@@ -13,10 +13,10 @@ vi.mock('react-i18next', () => ({ useTranslation: translation.read }));
 // Presenter lifetime is covered separately at McpAppCard; replace only that boundary here.
 vi.mock('../PluginUiView', async () => {
   const { useEffect } = await import('react');
-  return { PluginUiView: () => { useEffect(() => { page.mounted(); return page.released; }, []); return <div>Local page</div>; } };
+  return { PluginUiView: ({ context }: { context?: unknown }) => { useEffect(() => { page.mounted(context); return page.released; }, []); return <div>Local page</div>; } };
 });
 import { memo } from 'react';
-import { EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES, PluginUiBody, PluginUiProvider, PluginUiSlot, PluginUiSlotControls, PluginUiSidebarSections, readPluginUiEntries, renderPluginUiBody, usePluginUiMessageCandidates, type PluginUiMessageCandidates } from '../PluginUiContributions';
+import { EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES, PluginUiBody, PluginUiProvider, PluginUiSlot, PluginUiSlotControls, PluginUiWorkdirButton, PluginUiSidebarSections, readPluginUiEntries, renderPluginUiBody, usePluginUiMessageCandidates, type PluginUiMessageCandidates } from '../PluginUiContributions';
 
 // 生产入口：真实 Provider/正文/控件；只替换已装投影与 IPC，Main 订阅适配器不替换。
 // 规则与旧回归：无候选历史行不发请求、不构造数据；原测试只覆盖 App frame。
@@ -58,6 +58,36 @@ it.each(['composer.toolbar', 'composer.header'] as const)('opens a %s page only 
   fireEvent.click(screen.getByRole('button', { name: 'Open here' }));
   await waitFor(() => expect(screen.queryByText('Local page')).toBeNull());
   expect(page.released).toHaveBeenCalledTimes(1);
+});
+
+// Unit: the workdir chip is a native folder shortcut until a plugin contributes.
+// An approved popover must open from its menu and disappear on revocation.
+it('keeps the native folder action and opens a workdir plugin only after selection', async () => {
+  const openDirectory = vi.fn();
+  const scene = () => <PluginUiProvider><PluginUiWorkdirButton sessionId="task-a" path="/project" onOpenDirectory={openDirectory}>
+    Project
+  </PluginUiWorkdirButton></PluginUiProvider>;
+  const view = render(scene());
+  fireEvent.click(screen.getByRole('button'));
+  expect(openDirectory).toHaveBeenCalledOnce();
+  expect(invoke).not.toHaveBeenCalled();
+  installed.ghosts = [{ enabled: true, dir: '/fixture', approval: { state: 'approved', revision: 'one' },
+    manifest: { schemaVersion: 3, id: 'editor', name: 'Editor', kind: 'chip', entry: 'main.js', version: '1', tools: [],
+      mcpApps: { ui: { resources: [{ uri: 'ui://open', file: 'open.html' }], tools: {} }, host: {
+        views: [{ id: 'open', title: 'Open', resourceUri: 'ui://open', scope: 'task' }],
+        contributions: [{ id: 'open', title: 'Open in', position: 'workdir.menu', view: 'open', presentation: 'popover' }],
+      } } } }];
+  view.rerender(scene());
+  fireEvent.keyDown(screen.getByRole('button', { name: 'Project' }), { key: 'Enter' });
+  expect(screen.getByRole('menuitem', { name: 'ccAgent.layout.openWorkingDirAria' })).toBeTruthy();
+  expect(page.mounted).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole('menuitem', { name: 'Open in · Editor' }));
+  expect(await screen.findByText('Local page')).toBeTruthy();
+  expect(page.mounted).toHaveBeenCalledWith({ workingDir: '/project' });
+  installed.ghosts = [];
+  view.rerender(scene());
+  expect(screen.queryByText('Local page')).toBeNull();
+  expect(screen.getByRole('button', { name: 'ccAgent.layout.openWorkingDirAria' })).toBeTruthy();
 });
 
 // Unit: the new header slot must leave no wrapper or IPC when empty,

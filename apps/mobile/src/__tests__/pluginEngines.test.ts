@@ -18,6 +18,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import { sharedTaskHostPeer } from '@cindy/device-link';
+import { ANTIGRAVITY_MARK_DATA_URL } from '@cindy/maker-shared/branding';
 import { setMobileAuthOwner } from '@/auth/authOwnerGeneration';
 import { createMobileMakerTransport, type RemoteInvoke } from '@/device-link/mobileMakerTransport';
 import { applyPluginEnginePick, buildRemoteCreateSessionOptions, type NewSessionDraft } from '@/session/newSession';
@@ -51,6 +52,15 @@ const desktopView = {
   ],
   defaultPermissionMode: 'default',
 };
+
+// Unit / #12735: old desktops can send generic engine IDs and stale artwork
+// to the model picker and task metadata. The exact engine name identifies the mark.
+it('projects the legacy Antigravity engine mark and preserves other artwork', () => {
+  const legacy = { ...desktopView, providerId: 'acp-plugin:legacy:cli', ghostId: 'legacy', name: 'Antigravity' };
+  const [antigravity, other] = normalizePluginEngines([legacy, desktopView]);
+  expect(antigravity?.iconDataUrl).toBe(ANTIGRAVITY_MARK_DATA_URL);
+  expect(other?.iconDataUrl).toBe(desktopView.iconDataUrl);
+});
 
 describe('reading the engines of the controlled computer', () => {
   it('reads the list over device-link and keeps only well-formed engines', async () => {
@@ -229,6 +239,15 @@ describe('creating a task on a plugin engine', () => {
       fastMode: false, workspaceKind: 'project', workingDir: '/repo',
     });
     expect(opts).not.toHaveProperty('agentDeviceId');
+  });
+
+  // 桌面对插件引擎隐藏额外目录、引擎也不接受；手机此前仍把记住的额外目录带进创建。最小失败输入：extraDirs=['/docs']。
+  it('does not send extra directories the engine cannot use', () => {
+    const opts = buildRemoteCreateSessionOptions(applyPluginEnginePick({ ...draft, extraDirs: ['/docs'] }, {
+      providerId: DSH, model: 'deepseek-v4', effort: '', permissionMode: 'default',
+    }));
+    expect(opts).not.toHaveProperty('extraDirs');
+    expect(buildRemoteCreateSessionOptions({ ...draft, extraDirs: ['/docs'] })).toMatchObject({ extraDirs: ['/docs'] });
   });
 
   it('leaves the built-in options untouched when no engine is picked', () => {

@@ -640,7 +640,7 @@ export const AutomationSessionGroupItem = withSidebarNavigation<AutomationSessio
                 aria-expanded={!collapsed}
                 aria-label={toggleGroupLabel}
                 className={cn(
-                  'flex size-5 shrink-0 items-center justify-center rounded-md',
+                  'flex size-5 shrink-0 items-center justify-center rounded-lg',
                   hasActiveHidden
                     ? 'hover:bg-[color-mix(in_srgb,var(--sidebar-item-active-foreground)_14%,transparent)]'
                     : 'hover:bg-sidebar-item-hover',
@@ -770,10 +770,10 @@ export const AutomationSessionGroupItem = withSidebarNavigation<AutomationSessio
                     <div
                       className={cn(
                         'absolute right-0 top-0 flex h-6 items-center gap-0.5',
-                        'opacity-0 transition-opacity',
+                        'transition-opacity',
                         menuOpen
                           ? 'opacity-100'
-                          : 'group-hover:opacity-100 group-focus-within/slot:opacity-100',
+                          : 'pointer-events-none opacity-0 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within/slot:pointer-events-auto group-focus-within/slot:opacity-100',
                       )}
                     >
                       {/* 高频 Run 继续直点;Edit/Pause/Resume/Delete 收进 More 菜单,避免 Edit
@@ -793,7 +793,7 @@ export const AutomationSessionGroupItem = withSidebarNavigation<AutomationSessio
                             }}
                             aria-label={t('ccAgent.sidebar.automationGroup.menu.runNow')}
                             className={cn(
-                              'flex size-5 shrink-0 items-center justify-center rounded-md',
+                              'flex size-5 shrink-0 items-center justify-center rounded-lg',
                               'transition-colors',
                               actionButtonToneClassName,
                             )}
@@ -819,7 +819,7 @@ export const AutomationSessionGroupItem = withSidebarNavigation<AutomationSessio
                                 onPointerDown={(event) => event.stopPropagation()}
                                 aria-label={t('ccAgent.sidebar.automationGroup.menu.more')}
                                 className={cn(
-                                  'flex size-5 shrink-0 items-center justify-center rounded-md',
+                                  'flex size-5 shrink-0 items-center justify-center rounded-lg',
                                   'transition-colors',
                                   actionButtonToneClassName,
                                 )}

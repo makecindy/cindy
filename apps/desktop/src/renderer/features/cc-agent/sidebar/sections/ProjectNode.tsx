@@ -183,6 +183,7 @@ export const ProjectNode = memo(function ProjectNode({
         collapsedAttentionTone={collapsedAttentionTone}
         hideRemoteMachineLabel={hideRemoteMachineLabel}
         lamp={lamp}
+        sessionVariant={sessionVariant}
         onToggle={onToggle}
         onSettings={onSettings}
         onRenameProject={onRenameProject}
@@ -237,6 +238,7 @@ type ProjectHeaderProps = Pick<
   | 'collapsedAttentionTone'
   | 'hideRemoteMachineLabel'
   | 'lamp'
+  | 'sessionVariant'
   | 'onToggle'
   | 'onSettings'
   | 'onRenameProject'
@@ -254,6 +256,7 @@ const ProjectHeader = memo(function ProjectHeader({
   isCollapsed,
   collapsedAttentionTone = null,
   hideRemoteMachineLabel = false,
+  sessionVariant = 'text',
   onToggle,
   onSettings,
   onRenameProject,
@@ -371,7 +374,8 @@ const ProjectHeader = memo(function ProjectHeader({
           // 2026-07 用户定稿:项目行作分组容器退后半步,让会话行更突出)。
           // h-8 + rounded-full:hover 底与顶部导航行 / 会话行同款药丸形,三处
           // 高度、圆角、左右边界(同容器 w-full)完全一致(2026-07 用户定稿)。
-          'group flex h-8 w-full items-center gap-2.5 rounded-full pl-3 pr-2',
+          'group flex h-8 w-full items-center gap-2.5 rounded-full pl-3',
+          sessionVariant === 'list' ? 'pr-2.5' : 'pr-2',
           'text-sm font-normal text-[var(--sidebar-list-muted)]',
           // 整行点击 = toggle 折叠，常态用 pointer。即便支持手动拖拽排序也不显示
           // grab 光标——只有真正进入拖拽时（SortableList onStart 给 body 挂
@@ -415,7 +419,7 @@ const ProjectHeader = memo(function ProjectHeader({
               }}
               onClick={(e) => e.stopPropagation()}
               className={cn(
-                'min-w-0 flex-1 h-6 px-1.5 rounded',
+                'min-w-0 flex-1 h-6 px-1.5 rounded-full',
                 'text-sm font-normal text-foreground',
                 'bg-transparent outline-none',
                 'border-[1.5px] border-[var(--focus-ring)]',
@@ -711,7 +715,7 @@ function ProjectAction({ label, onClick, disabled = false, children }: ProjectAc
         onPointerDown={(e) => e.stopPropagation()}
         onKeyDown={(e) => e.stopPropagation()}
         className={cn(
-          'shrink-0 size-5 flex items-center justify-center rounded-md',
+          'shrink-0 size-5 flex items-center justify-center rounded-lg',
           'text-sidebar-action-icon hover:text-foreground',
           'hover:bg-sidebar-item-hover focus:outline-none',
           'disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent',

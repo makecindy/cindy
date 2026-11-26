@@ -9,12 +9,14 @@
 
 import { timingSafeEqual } from 'node:crypto';
 import type { NativeSubscriptionAccount } from '@cindy/maker-core';
+import { captureHostedSessionModelAccess } from './session-provider-store.js';
 
 interface ActivePiProxySession {
   token: string;
   controller: AbortController;
   resolveProviderId: () => string | null;
   scope: 'session' | 'subagent-route';
+  hostedModelAccess: ReturnType<typeof captureHostedSessionModelAccess>;
   nativeSubscriptionAccount?: NativeSubscriptionAccount;
 }
 
@@ -51,6 +53,7 @@ export function registerPiProxySession(
     controller: new AbortController(),
     resolveProviderId,
     nativeSubscriptionAccount: options.nativeSubscriptionAccount,
+    hostedModelAccess: captureHostedSessionModelAccess(sessionId),
     scope: options.scope === 'subagent-route' ? 'subagent-route' as const : 'session' as const,
   };
   const registrations = activeSessions.get(sessionId) ?? new Map();
@@ -97,6 +100,11 @@ export function isPiProxySubagentRoute(
   candidate: string | null,
 ): boolean {
   return findPiProxySession(sessionId, candidate)?.scope === 'subagent-route';
+}
+
+/** Retain the exact hosted grant until the token closes, even if it was revoked or replaced first. */
+export function getPiProxyHostedModelAccess(sessionId: string, candidate: string | null) {
+  return findPiProxySession(sessionId, candidate)?.hostedModelAccess;
 }
 
 /** Test isolation only. */
