@@ -165,11 +165,15 @@ describe('specific GitLab MR or issue', () => {
 describe('GitLab through the GitLab plugin', () => {
   it.each([
     ['group/app', { project: 'group/app' }],
+    ['group/app///', { project: 'group/app' }],
     ['https://Git.Example.com/Group/Sub/App/-/merge_requests', { host: 'git.example.com', project: 'group/sub/app' }],
-    ['https://git.example.com/group/app.git', { host: 'git.example.com', project: 'group/app' }],
+    ['https://git.example.com///group/app/-///', { host: 'git.example.com', project: 'group/app' }],
+    ['https://git.example.com/group/app.git/', { host: 'git.example.com', project: 'group/app' }],
     ['http://git.example.com/group/app', null],
     ['app', null],
     ['host:22/group/app', null],
+    [`${'/'.repeat(1500)}a`, null],
+    [`https://git.example.com/${'/'.repeat(3000)}`, null],
   ])('reads project %s', (input, expected) => {
     expect(parseGitlabProjectReference(input)).toEqual(expected);
   });

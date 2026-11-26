@@ -14,9 +14,23 @@ export interface GithubItemReference {
   kind?: 'pr';
 }
 
+const MAX_REFERENCE_INPUT_LENGTH = 2048;
+
 const positive = (text: string): number | null => {
   const value = Number(text);
   return Number.isSafeInteger(value) && value > 0 ? value : null;
+};
+
+const trimStartSlashes = (value: string): string => {
+  let start = 0;
+  while (start < value.length && value.charCodeAt(start) === 47) start += 1;
+  return value.slice(start);
+};
+
+const trimEndSlashes = (value: string): string => {
+  let end = value.length;
+  while (end > 0 && value.charCodeAt(end - 1) === 47) end -= 1;
+  return value.slice(0, end);
 };
 
 /**
@@ -24,6 +38,7 @@ const positive = (text: string): number | null => {
  * 支持：42、#42、owner/repo#42、https://github.com/owner/repo/pull/42、…/issues/42（可带尾部路径）。
  */
 export function parseGithubItemReference(input: string, defaultRepository?: string): GithubItemReference | null {
+  if (input.length > MAX_REFERENCE_INPUT_LENGTH) return null;
   const text = input.trim();
   if (!text) return null;
   const bare = /^#?(\d+)$/.exec(text);
@@ -44,7 +59,7 @@ export function parseGithubItemReference(input: string, defaultRepository?: stri
     return null;
   }
   if (url.protocol !== 'https:' || url.hostname.toLowerCase() !== 'github.com' || url.port || url.username || url.password) return null;
-  const match = /^\/([^/]+\/[^/]+)\/(pull|issues)\/(\d+)(?:\/.*)?$/.exec(url.pathname);
+  const match = /^\/([^/]+\/[^/]+)\/(pull|issues)\/(\d+)(?:\/|$)/.exec(url.pathname);
   if (!match || !REPOSITORY.test(match[1]!)) return null;
   const number = positive(match[3]!);
   if (!number) return null;
@@ -94,6 +109,7 @@ const GITLAB_PROJECT = /^[a-z\d_.-]+(?:\/[a-z\d_.-]+)+$/i;
 const GITLAB_HOST = /^[a-z\d](?:[a-z\d.-]*[a-z\d])?$/i;
 
 export function parseGitlabItemReference(input: string, known?: { host?: string; project: string }): GitlabItemReference | null {
+  if (input.length > MAX_REFERENCE_INPUT_LENGTH) return null;
   const text = input.trim();
   if (!text) return null;
   const kindOf = (sigil: string): 'mr' | 'issue' => (sigil === '!' ? 'mr' : 'issue');
@@ -119,11 +135,14 @@ export function parseGitlabItemReference(input: string, known?: { host?: string;
     return null;
   }
   if (url.protocol !== 'https:' || url.port || url.username || url.password || !GITLAB_HOST.test(url.hostname)) return null;
-  const match = /^\/(.+?)\/-\/(merge_requests|issues|work_items)\/(\d+)(?:\/.*)?$/.exec(url.pathname);
-  if (!match || !validProject(match[1]!)) return null;
-  const number = positive(match[3]!);
+  const dashSlash = url.pathname.indexOf('/-/');
+  if (dashSlash <= 1) return null;
+  const project = url.pathname.slice(1, dashSlash);
+  const match = /^\/-\/(merge_requests|issues|work_items)\/(\d+)(?:\/|$)/.exec(url.pathname.slice(dashSlash));
+  if (!match || !validProject(project)) return null;
+  const number = positive(match[2]!);
   if (!number) return null;
-  return { host: url.hostname.toLowerCase(), project: match[1]!.toLowerCase(), number, kind: match[2] === 'merge_requests' ? 'mr' : 'issue' };
+  return { host: url.hostname.toLowerCase(), project: project.toLowerCase(), number, kind: match[1] === 'merge_requests' ? 'mr' : 'issue' };
 }
 
 export function gitlabItemUrl(item: GitlabItemReference & { host: string }): string {
@@ -157,12 +176,13 @@ export function gitlabIssueChangeFromEvents(events: readonly string[] | undefine
 
 /** GitLab 插件的安装身份：官方安装为 cindy-gitlab，命名空间安装（如本机开发版）以 __cindy-gitlab 结尾。 */
 export function isGitlabPluginId(id: string): boolean {
-  return /(^|[/:]|__)cindy-gitlab$/.test(id);
+  return id === 'cindy-gitlab' || id.endsWith('/cindy-gitlab') || id.endsWith(':cindy-gitlab') || id.endsWith('__cindy-gitlab');
 }
 
 /** group/project 或项目链接（可带 /-/ 后的页面路径）；链接给出实例地址。 */
 export function parseGitlabProjectReference(input: string): { host?: string; project: string } | null {
-  const text = input.trim().replace(/\/+$/, '');
+  if (input.length > MAX_REFERENCE_INPUT_LENGTH) return null;
+  const text = trimEndSlashes(input.trim());
   if (!text) return null;
   const valid = (project: string) => GITLAB_PROJECT.test(project) && !project.split('/').some((part) => part === '.' || part === '..');
   if (!/^https?:\/\//i.test(text)) return !text.includes(':') && valid(text) ? { project: text.toLowerCase() } : null;
@@ -173,7 +193,12 @@ export function parseGitlabProjectReference(input: string): { host?: string; pro
     return null;
   }
   if (url.protocol !== 'https:' || url.port || url.username || url.password || !GITLAB_HOST.test(url.hostname)) return null;
-  const project = url.pathname.replace(/^\/+/, '').replace(/\/-(?:\/.*)?$/, '').replace(/\/+$/, '').replace(/\.git$/i, '');
+  let rawPath = trimStartSlashes(url.pathname);
+  const dashSlash = rawPath.indexOf('/-/');
+  if (dashSlash >= 0) rawPath = rawPath.slice(0, dashSlash);
+  else if (rawPath.endsWith('/-')) rawPath = rawPath.slice(0, -2);
+  let project = trimEndSlashes(rawPath);
+  if (project.toLowerCase().endsWith('.git')) project = project.slice(0, -4);
   return valid(project) ? { host: url.hostname.toLowerCase(), project: project.toLowerCase() } : null;
 }
 
