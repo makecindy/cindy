@@ -9498,6 +9498,9 @@ assertRouteCurrent();
         const stalledMessage =
           `The model connection has been retrying for ${Math.round(CODEX_RECONNECT_STALL_TIMEOUT_MS / 1000)}s ` +
           'without making progress; the turn was interrupted automatically. ' +
+          (pendingToolItemIds.size > 0
+            ? 'There were unconfirmed tool results when the connection stalled. '
+            : '') +
           'You can send the next message to continue.';
         const emitStalled = (reason: string, message: string): void => {
           if (
@@ -9748,6 +9751,10 @@ assertRouteCurrent();
         // message 仅作非 renderer 消费方(IM / orca / 日志)的英文兜底。
         reason: timeoutReason,
         ...(opts?.errorStatus !== undefined ? { errorStatus: opts.errorStatus } : {}),
+        // Snapshot before interrupt cleanup clears the set. A missing completion
+        // leaves the outcome unknown even if the tool already took effect.
+        ...(timeoutReason === 'codex_reconnect_stalled' && pendingToolItemIds.size > 0
+          ? { pendingToolCount: pendingToolItemIds.size } : {}),
         ...(opts?.codexErrorInfo ? { codexErrorInfo: opts.codexErrorInfo } : {}),
         message: opts?.message ??
           (`The upstream response has been silent for ${Math.round(idleMs / 1000)}s; ` +
