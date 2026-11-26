@@ -413,7 +413,8 @@ function BotGroupTimelineItemImpl(props: BotGroupTimelineItemProps) {
   const mask = useGroupMask();
   const { t } = useTranslation();
   const { authorName, members, mentionLabels, locale, shareScope, sharing } = props;
-  // This actor's reactions show at once, before the server confirms them.
+  // This actor's reactions show at once, before the server confirms them. Reaction badges still get the
+  // server copy (`props.message`) and lay the pending change over it, so who-reacted reads follow the server.
   const message = useOptimisticReactions(props.reactionGroupId, props.message);
   const attribution = message.maskAttribution ? { self: maskIdentity(message.maskAttribution.self), companion: maskIdentity(message.maskAttribution.companion) }
     : mask?.attributions[message.id];
@@ -484,7 +485,7 @@ function BotGroupTimelineItemImpl(props: BotGroupTimelineItemProps) {
       interactive={props.readersEnabled === true && !sharing} />
   ) : null;
   // Your own message's reactions hang over the left corner of its bubble, or of its first block without text.
-  const reactions = hasReactions ? <ChatMessageReactions corner groupId={props.reactionGroupId} message={message} members={members} reactionRevision={props.reactionRevision} align="right" onChanged={props.onChanged} /> : null;
+  const reactions = hasReactions ? <ChatMessageReactions corner groupId={props.reactionGroupId} message={props.message} members={members} reactionRevision={props.reactionRevision} align="right" onChanged={props.onChanged} /> : null;
   const quote = props.quoteDisplay ? (
     <BotGroupQuoteBlock
       display={props.quoteDisplay}
@@ -647,7 +648,7 @@ function BotGroupTimelineItemImpl(props: BotGroupTimelineItemProps) {
           ) : null}
           <div className={cn('relative flex min-w-0 flex-col', CHAT_BUBBLE_COLUMN_CLASS,
             message.authorKind === 'bot' && hasRichAnswer(share?.content ?? message.content) && 'w-full')}>
-            <ChatMessageReactions corner groupId={props.reactionGroupId} message={message} members={members} reactionRevision={props.reactionRevision} onChanged={props.onChanged} />
+            <ChatMessageReactions corner groupId={props.reactionGroupId} message={props.message} members={members} reactionRevision={props.reactionRevision} onChanged={props.onChanged} />
             {message.process && message.process.groupId === props.reactionGroupId ? <BotGroupProcess process={message.process}
               member={members.find(member => member.botId === message.authorBotId)} /> : null}
             <ChatBubble data-testid="bot-group-bubble" className="flex flex-col gap-2">

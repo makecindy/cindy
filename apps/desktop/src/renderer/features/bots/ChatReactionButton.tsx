@@ -50,8 +50,15 @@ function withSelf(reactors: ChatReactor[], reaction: Reaction, members: readonly
  * badge shows their avatars instead of a number; avatars come from the group member projection,
  * and actors without one fall back to an initial, never an invented identity.
  */
-export function ChatReactionButton({ groupId, messageId, reaction, revision = 0, members, disabled, onToggle, corner = false }: {
-  groupId?: string; messageId: string; reaction: Reaction; revision?: string | number; members?: readonly BotGroupMemberView[]; disabled: boolean; onToggle: () => void;
+export function ChatReactionButton({ groupId, messageId, reaction, serverReaction = reaction, revision = 0, members, disabled, onToggle, corner = false }: {
+  groupId?: string; messageId: string; reaction: Reaction;
+  /**
+   * The server's copy behind an optimistic `reaction` (`null` when the server has none yet). Who reacted is
+   * read for this copy only, so taps that are still saving never trigger reads; your own change is laid
+   * over the list that was read.
+   */
+  serverReaction?: Reaction | null;
+  revision?: string | number; members?: readonly BotGroupMemberView[]; disabled: boolean; onToggle: () => void;
   /** Pinned to a bubble's corner: a small card-colored badge, your own reaction marked by a stronger outline. */
   corner?: boolean;
 }) {
@@ -59,7 +66,7 @@ export function ChatReactionButton({ groupId, messageId, reaction, revision = 0,
   const [loaded, setLoaded] = useState<Loaded | null>(null);
   // Changes on every add/remove, local or remote — including a same-count swap of who reacted,
   // which only the message's realtime reaction revision reveals.
-  const summary = `${reaction.count}:${reaction.me}:${revision}`;
+  const summary = `${serverReaction?.count ?? 0}:${serverReaction?.me ?? false}:${revision}`;
   const wantsAvatars = !!groupId && reaction.count > 0 && reaction.count <= REACTION_AVATAR_LIMIT;
   // Only badges near the viewport read, so opening a long history does not fire one read per badge.
   const badgeRef = useRef<HTMLButtonElement>(null);

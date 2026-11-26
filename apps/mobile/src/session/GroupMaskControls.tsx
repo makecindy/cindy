@@ -61,7 +61,8 @@ export function GroupMaskSettingsSheet({ visible, mask, onClose, onClosed }: { v
         {state.toolAccessSupported ? pick(t(key('toolAccess')), settings.access ?? 'chat', ['chat', 'tools'].map(id => ({ id, title: t(key(`access.${id}`)) })), async access => {
           const owner = state.self.id;
           if (access === 'tools' && !await showConfirm({ title: t(key('access.authorizeTitle'), { name: state.companions.find(c => c.id === settings.companionId)?.name ?? '' }), message: t(key('access.toolsHint')), cancelLabel: t('devices.common.cancel'), confirmLabel: t(key('access.confirm')) })) return;
-          if (live.current.visible && live.current.owner === owner && live.current.companionId === settings.companionId) live.current.update({ access: access as 'chat' | 'tools' });
+          // Bound to the companion the choice was confirmed for, even while a switch to it is still saving.
+          if (live.current.visible && live.current.owner === owner && live.current.companionId === settings.companionId) live.current.update({ access: access as 'chat' | 'tools', companionId: settings.companionId });
         }) : null}
         {pick(t(key('triggerLabel')), settings.trigger, ['always', 'manual', 'scheduled'].map(id => ({ id, title: t(key(`trigger.${id}`)) })), trigger => mask.update({ trigger: trigger as typeof settings.trigger }))}
         {settings.trigger === 'scheduled' ? <View style={styles.row}>

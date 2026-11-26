@@ -11,6 +11,8 @@ import { ChatThreadPanel } from '../ChatThreadPanel';
 import { BotGroupThreadHint } from '../BotGroupThreadHint';
 import { GroupMaskProvider } from '../GroupMaskProvider';
 import { GroupMaskIndicator } from '../GroupMaskControls';
+import { GroupMaskSettings } from '../GroupMaskSettings';
+import { ConfirmDialogProvider } from '@/components/ui/confirm-dialog-provider';
 import { GroupMaskContext, useGroupMask, useReadLocatedMention, type GroupMaskPresentation } from '../groupMaskPresentation';
 import { botGroupThreadDraftKey } from '../botGroupAttachments';
 import { discardDraft, getAllDraftAttachmentUrls, getDraft, saveDraft } from '@/lib/composerDraftStore';
@@ -120,6 +122,21 @@ describe('chat interaction controls', () => {
     await act(async () => finish({ ok: false, errorCode: 'NETWORK_ERROR' }));
     expect(screen.getByTestId('mask-enabled').textContent).toBe('on');
     expect(screen.getByRole('alert').textContent).toBe('Save failed');
+  });
+  // Unit, PR #13176 review (P1): settings stay usable while a companion switch saves, so a tool grant
+  // confirmed for the shown companion must carry that companion; otherwise a failed switch would let the
+  // queued grant apply to the previously saved one.
+  it('binds a tool grant to the companion it was confirmed for while a switch is still saving', async () => {
+    const update = vi.fn();
+    const mask = { groupId: 'room', loading: false, saving: true, error: false, status: 'enabled', manualRunning: false,
+      self: { id: 'human', name: 'Alex', avatarUrl: null }, toolAccessSupported: true, unreadMentions: [], attributions: {},
+      companions: [{ id: 'a', name: 'Ada', avatarUrl: null }, { id: 'b', name: 'Bo', avatarUrl: null }],
+      settings: { ...maskState().settings, companionId: 'b', access: 'chat' }, update, retry: vi.fn() } as unknown as GroupMaskPresentation;
+    render(<ConfirmDialogProvider><GroupMaskContext.Provider value={mask}><GroupMaskSettings groupId="room" /></GroupMaskContext.Provider></ConfirmDialogProvider>);
+    fireEvent.click(screen.getByRole('combobox', { name: 'bots.groupChat.mask.toolAccess' }));
+    fireEvent.click(screen.getByRole('option', { name: 'bots.groupChat.server.settings.accessTools' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'bots.groupChat.server.settings.confirm' }));
+    await waitFor(() => expect(update).toHaveBeenCalledWith({ access: 'tools', companionId: 'b' }));
   });
   // Unit: actual Provider actions, missing coverage for permanent delegation.
   // A keystroke must not send a takeover; an explicit disable must still persist.
@@ -843,9 +860,12 @@ describe('chat interaction controls', () => {
     const changed = vi.fn();
     render(<ChatMessageActions pluginUi={EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES} shareScope="group:room" groupId="room" message={message} onChanged={changed} />);
     const badge = () => screen.getByRole('button', { name: /reaction(Count|Who)$/ });
-    fireEvent.click(badge());
+    await waitFor(() => expect(mocks.reactors).toHaveBeenCalledOnce());
+    // Taps that are still saving change only the shown count: who reacted is not read again per tap.
+    fireEvent.click(badge()); fireEvent.click(badge()); fireEvent.click(badge());
     expect(badge().getAttribute('aria-pressed')).toBe('false');
     expect(reactionShown(badge())).toBe(1);
+    expect(mocks.reactors).toHaveBeenCalledOnce();
     await act(async () => answer({ ok: false, errorCode: 'FORBIDDEN' }));
     expect(badge().getAttribute('aria-pressed')).toBe('true');
     expect(reactionShown(badge())).toBe(2);

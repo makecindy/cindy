@@ -55,7 +55,9 @@ export function GroupMaskSettings({ groupId }: { groupId: string }) {
               description: t('bots.groupChat.server.settings.toolsHint'), confirmText: t('bots.groupChat.server.settings.confirm'),
               cancelText: t('bots.cancel'), confirmVariant: 'destructive' })) return;
             if (mounted.current && isDataOwnerGenerationCurrent(owner) && current.current?.groupId === groupId && current.current.settings.companionId === companionId)
-              current.current.update({ access: access as 'chat' | 'tools' });
+              // Bound to the companion the choice was confirmed for: if an earlier switch to it has not
+              // saved (or failed), this save still targets that companion, never the previously saved one.
+              current.current.update({ access: access as 'chat' | 'tools', companionId });
           }} />}
       </SettingsCard>
       {config.enabled && <SettingsCard>

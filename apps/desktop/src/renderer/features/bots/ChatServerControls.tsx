@@ -70,7 +70,8 @@ export function ChatMessageReactions({ groupId, message: serverMessage, members,
         corner ? cn('relative z-[5] -mb-2 max-w-[calc(100%+10px)] flex-wrap', align === 'right' ? 'self-start -ml-2.5 flex-row-reverse' : 'self-end -mr-2.5 justify-end')
           : cn('mt-1 flex-wrap', align === 'right' && 'justify-end'))}>
       {message.reactions.map(reaction => (
-        <ChatReactionButton key={reaction.emoji} groupId={groupId} messageId={message.id} reaction={reaction} revision={reactionRevision} members={members}
+        <ChatReactionButton key={reaction.emoji} groupId={groupId} messageId={message.id} reaction={reaction}
+          serverReaction={serverMessage.reactions?.find(r => r.emoji === reaction.emoji) ?? null} revision={reactionRevision} members={members}
           corner={corner} disabled={!groupId} onToggle={() => react(reaction.emoji, !reaction.me)} />
       ))}
     </div>
