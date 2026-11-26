@@ -15786,7 +15786,6 @@
       "piRetryHistoryUnavailable": "Message non envoyé. Pi n’a pas pu lire l’historique nécessaire à l’envoi. Vous pouvez réessayer ou continuer dans une nouvelle tâche.",
       "upstreamStatusError": "Le service en amont a renvoyé {{status}} ; la réponse n’a pas pu aboutir.",
       "messageNotSent": "Message non envoyé.",
-      "upstreamEmpty550": "Le service du modèle a renvoyé HTTP 550 avec une réponse vide",
       "replyFailed": "Impossible de terminer la réponse",
       "queuedSendRecovery": "Ton message n’a pas été envoyé. Sélectionne « Réessayer » pour le renvoyer tel quel. Si tu envoies un nouveau message, il remplacera le précédent.",
       "retryTitle": "Renvoyer le dernier message",

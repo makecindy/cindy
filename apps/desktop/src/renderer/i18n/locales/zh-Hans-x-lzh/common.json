@@ -15612,7 +15612,6 @@
       "piRetryHistoryUnavailable": "此信未发。Pi 读旧录以发信时失误。可再试，或另启任务。",
       "upstreamStatusError": "上游返 {{status}}，此答未竟。",
       "messageNotSent": "此信未发。",
-      "upstreamEmpty550": "模型之服返 HTTP 550，答文空",
       "replyFailed": "答未竟",
       "queuedSendRecovery": "前讯未遣。点「再试」可依原样遣发。若遣新讯，则取代前讯。",
       "retryTitle": "再遣末一讯",
