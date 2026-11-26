@@ -2015,6 +2015,7 @@ function CCAgentSessionContent({
     retryLastError,
     continueAfterSilentStop,
     errorReason,
+    reconnectHandoff,
     toolLoop,
     outputLimit,
     insertSystemCard,
@@ -2844,7 +2845,7 @@ function CCAgentSessionContent({
     ? activeReconnect.groupSwitchPending
       ? t('chat.systemCard.autoResumePending.groupSwitch')
       : activeReconnect.attempt !== undefined && activeReconnect.maxAttempts !== undefined
-      ? t('chat.systemCard.autoResumePending.labelWithProgress', {
+      ? t(activeReconnect.reconnectStalled ? 'chat.systemCard.autoResumePending.continuingWithProgress' : 'chat.systemCard.autoResumePending.labelWithProgress', {
           attempt: activeReconnect.attempt,
           total: activeReconnect.maxAttempts,
         })
@@ -6385,6 +6386,7 @@ function CCAgentSessionContent({
                   errorText={errorTailText}
                   dismissOnEscape={viewVisible && ownsHardwareTaskActions}
                   errorReason={errorTailMsg?.errorReason}
+                  reconnectHandoff={errorTailMsg?.reconnectHandoff}
                   toolLoop={errorTailMsg?.toolLoop}
                   outputLimit={errorTailMsg?.outputLimit}
                   onContinue={handleErrorTailContinue}
@@ -6460,6 +6462,7 @@ function CCAgentSessionContent({
                 error={error}
                 dismissOnEscape={viewVisible && ownsHardwareTaskActions}
                 errorReason={errorReason}
+                reconnectHandoff={reconnectHandoff}
                 toolLoop={toolLoop}
                 outputLimit={outputLimit}
                 isRecoverable={errorIsRecoverable}

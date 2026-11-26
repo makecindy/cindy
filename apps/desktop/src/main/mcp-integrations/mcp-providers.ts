@@ -26,7 +26,7 @@ import { getGhostFsSlot, getGhostStorageService } from '../cindy-brain/index.js'
 import { createStorageToolExecutor } from '../cindy-brain/storageToolAccess.js';
 import { getDesktopHostTerminalService } from '../terminal/terminalService.desktop.js';
 import { getDefaultShellPref } from '../terminal/terminalPrefsStore.js';
-import { findGhostForInstanceId } from '../cindy-brain/index.js';
+import { findGhostForInstanceId, ghostEventSourceCandidates } from '../cindy-brain/index.js';
 import { searchGhostRuntimeMemories } from '../cindy-brain/index.js';
 import { getPiKernelManager } from '../agent-binaries/index.js';
 import { PiKernelError } from '../agent-binaries/pi-kernel-manager.js';
@@ -161,6 +161,7 @@ import { commitTaskRewind } from '../maker-ipc/rewind.js';
 import { authorizeGroupTool, reportGroupTaskCreated } from '../maker-ipc/botGroupToolAuthorization.js';
 import { createSharedTaskTools, type SharedTaskCallerAccess } from './sharedTaskTools.js';
 import { createSharedTaskProgressReader } from './sharedTaskProgress.js';
+import { createSharedTaskDelivery } from './sharedTaskDelivery.js';
 import { assertTaskActionCurrent, captureTaskActionSyncGuard, taskActionRevocationCode } from '../maker-ipc/taskActionAuthorization.js';
 import {
   getSessionRowSnapshot,
@@ -637,6 +638,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
       // 仅 description 生成模式需要,tool-call 时才解引用。
       webhookStatus: (schedule) => getScheduleWebhookHost()?.status(schedule) ?? null,
       webhookReceiver: scheduleWebhookReceiver,
+      pluginEventSources: async () => ghostEventSourceCandidates(),
       webhookManagement: {
         list: async () => {
           const host = getScheduleWebhookHost();
@@ -1285,6 +1287,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
             },
           }
         : {}),
+      sendToSharedTask: createSharedTaskDelivery({ ...sharedTaskCallerAccess, invoke: deps.invokeRemote, assertActionCurrent: assertTaskActionCurrent }),
       sendToSession: async ({
         device,
         targetSessionId,

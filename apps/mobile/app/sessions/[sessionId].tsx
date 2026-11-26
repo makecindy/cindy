@@ -4885,7 +4885,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     const attempt = typeof pending.attempt === 'number' ? pending.attempt : 0;
     const maxAttempts = typeof pending.maxAttempts === 'number' ? pending.maxAttempts : 0;
     return attempt > 0 && maxAttempts > 0
-      ? { label: t('message.systemCard.autoResume.pendingWithProgress', { attempt, total: maxAttempts }) }
+      ? { label: t(pending.reason === 'codex_reconnect_stalled' ? 'message.systemCard.autoResume.continuingWithProgress' : 'message.systemCard.autoResume.pendingWithProgress', { attempt, total: maxAttempts }) }
       : { label: t('message.systemCard.autoResume.pending') };
   }, [inputProjection.autoResumePending, t]);
   useEffect(() => {
@@ -11489,6 +11489,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
                             不在这里,它们是消息流里的 pending_send 项。 */}
                         <InlineQueueSection
                           busy={queueBusy || historyRecoveryBusy}
+                          isRunning={remoteSessionRunning || isSessionStreaming}
                           onRecoverHistory={canRecoverHistory ? () => void recoverReadableHistory() : undefined}
                           sessionSource={currentSession?.source}
                           onClearError={clearQueueError}

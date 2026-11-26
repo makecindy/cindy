@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "5bc45c7d-5bbb-46f9-8fb6-4044f33b2a79",
+  "id": "18b32762-8d1a-4730-a1b3-2c984846780b",
   "prevId": "cb417ef8-6561-4771-a291-5d37e762f26a",
   "tables": {
     "account_usage_snapshots": {
@@ -2264,13 +2264,6 @@
           "autoincrement": false,
           "default": false
         },
-        "acp_missing_price": {
-          "name": "acp_missing_price",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
         "input_tokens": {
           "name": "input_tokens",
           "type": "integer",
@@ -2511,6 +2504,23 @@
           "name": "daily_token_attribution_day_provider_billing_source_model_pk"
         }
       },
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "deleted_chat_vector_rows": {
+      "name": "deleted_chat_vector_rows",
+      "columns": {
+        "rowid": {
+          "name": "rowid",
+          "type": "integer",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
       "uniqueConstraints": {},
       "checkConstraints": {}
     },

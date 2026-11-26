@@ -59,7 +59,8 @@ export async function refreshGithubPrEvents(
         const updatedAt = typeof result.metadata?.updated_at === 'string' && result.metadata.updated_at
           ? result.metadata.updated_at
           : undefined;
-        if (notify.has(url) && (before === undefined || before === after)) {
+        const changed = before !== undefined && changesBetween(before, after).length > 0;
+        if (notify.has(url) && !changed) {
           if (refresh.reason === 'event' || !watch.notifyChange) {
             await watch.notify(url, isCurrent);
             if (isCurrent()) watch.markCommentReconciled?.(pr, updatedAt);
@@ -67,7 +68,7 @@ export async function refreshGithubPrEvents(
             await watch.notifyChange(url, 'reconcile', isCurrent);
             if (isCurrent()) watch.markCommentReconciled?.(pr, updatedAt);
           }
-        } else if (before !== after && isCurrent()) {
+        } else if (changed && isCurrent()) {
           watch.markCommentReconciled?.(pr, updatedAt);
         }
       } catch (error) {

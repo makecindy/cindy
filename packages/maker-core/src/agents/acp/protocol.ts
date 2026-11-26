@@ -30,12 +30,13 @@ export type AcpElicitationResult =
 
 /**
  * Same-turn steering. ACP v1 has no way to add input to a running prompt, so
- * agents that can do it (claude-agent-acp, codex-acp, oh-my-pi, ...) share this
- * extension request: `{ sessionId, prompt: ContentBlock[], _meta? }`, answered
- * with `{ outcome: 'injected' | 'promptRequired' | 'startedNewTurn' }`. Agents
- * advertise it in the `initialize` result as top-level `_meta.steering.supported: true`.
- * Request `_meta.steering.idleBehavior: 'promptRequired'` asks an agent whose turn
- * already ended to hand the content back instead of starting a turn on its own.
+ * agents that can do it (claude-agent-acp, codex-acp, oh-my-pi, zcode-acp, ...)
+ * share this extension request: `{ sessionId, prompt: ContentBlock[], _meta? }`,
+ * answered with `{ outcome: 'injected' | 'queued' | 'promptRequired' | 'startedNewTurn' }`.
+ * Agents advertise it in the `initialize` result as top-level
+ * `_meta.steering.supported: true`. Request `_meta.steering.idleBehavior: 'promptRequired'`
+ * asks an agent whose turn already ended to hand the content back instead of
+ * starting a turn on its own.
  */
 export const ACP_STEERING_METHOD = '_session/steering';
 

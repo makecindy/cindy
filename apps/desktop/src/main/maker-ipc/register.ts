@@ -4,7 +4,11 @@ import { readContextRecoverySessionWithPorts, classifyCodexHistoryWithPorts, com
 import { desktopContextRecoveryAbortSignal } from './contextRecoveryAssembly.desktop.js';
 import { createSessionContextWindowBudgetReconcile } from './sessionContextWindowBudgetReconcile.js';
 import { appliedContextWindowBudgets, pendingSessionContextWindowBudgetReconciles } from './sessionContextWindowBudgetState.js';
-import { needsSubscriptionAccountHandoff, hasRestoredPooledCodexQuota } from '../subscription-accounts/runtime.js';
+import {
+  needsSubscriptionAccountHandoff,
+  hasRestoredPooledCodexQuota,
+  readSubscriptionTaskUsage,
+} from '../subscription-accounts/runtime.js';
 import { withRemoteAccountReads } from '../subscription-accounts/remotePreflight.js';
 import { prepareSubscriptionAccountForSend } from '../subscription-accounts/prepareSend.js';
 import { accountProviderId, readMergedProviderAccount, resolveSubscriptionPoolProvider as resolveSubscriptionPoolProviderRef } from '../subscription-accounts/placement.js';
@@ -1350,6 +1354,8 @@ import {
   codexAccountUsageLimit,
   sessionUsesOtherMachineAccount,
   subscriptionFamilyOf,
+  subscriptionPoolAccountUsageLimit,
+  type AccountUsageLimit,
 } from '../usage/accountUsageLimit.js';
 import { parseGeminiInputRateLimit } from '@cindy/maker-shared/error-redaction';
 import { UsageLimitAutoResume } from './usageLimitAutoResume.js';
@@ -1854,6 +1860,35 @@ export function resolveSessionRuntimeRoute(
  * 只服务订阅账号:API key / Coding Plan / 网关等来源的普通 429 即使带 Retry-After,也不是
  * 周期额度耗尽,按产品规则只报错不等待。
  */
+/**
+ * Read a local task's bound/pooled subscription usage limit via the subscription pool.
+ * Returns `undefined` when no subscription pool applies (including pre-pool built-in
+ * sessions with a native session id) so callers fall back to the default-account reader.
+ */
+export async function readLocalSubscriptionTaskUsageLimit(
+  family: 'claude' | 'codex',
+  keys: {
+    sessionId: string;
+    nativeSessionId?: string | null;
+    providerId?: string | null;
+    agentKind: string;
+    modelId?: string | null;
+  },
+  options: { fresh?: boolean } = {},
+): Promise<AccountUsageLimit | null | undefined> {
+  const poolProvider = family === 'claude' ? 'anthropic' : 'openai';
+  const pooled = await readSubscriptionTaskUsage(
+    poolProvider,
+    { sessionId: keys.sessionId, nativeSessionId: keys.nativeSessionId, providerId: keys.providerId },
+    options,
+  );
+  if (pooled === undefined) return undefined;
+  return subscriptionPoolAccountUsageLimit(family, pooled, {
+    agentKind: keys.agentKind,
+    modelId: keys.modelId,
+  });
+}
+
 async function resolveSessionUsageResetAt(
   sessionId: string,
   signals: InterruptedTurnErrorSignals,
@@ -1884,11 +1919,21 @@ async function resolveSessionUsageResetAt(
           preSend: () => { if (scope !== activeOwnerScopeKey()) throw new Error('Account changed'); },
         }));
     },
-    readLocalLimit: async ({ agentKind, providerId, modelId }, family) => family === 'claude'
+    readLocalLimit: async ({ agentKind, providerId, modelId, sdkSessionId }, family) => {
+      if (family === 'claude' || family === 'codex') {
+        const pooled = await readLocalSubscriptionTaskUsageLimit(
+          family,
+          { sessionId, nativeSessionId: sdkSessionId, providerId, agentKind, modelId },
+          { fresh: true },
+        );
+        if (pooled !== undefined) return pooled;
+      }
+      return family === 'claude'
         ? claudeAccountUsageLimit(await readClaudeSubscriptionUsageSnapshotForDeviceLink(providerId ?? undefined, { fresh: true }), modelId)
         : family === 'codex'
           ? codexAccountUsageLimit(await readCodexAccountUsageSnapshotWithWebRefresh(providerId ?? undefined, { fresh: true }), { agentKind, modelId })
-          : readAccountUsageLimit(agentKind, providerId, modelId),
+          : readAccountUsageLimit(agentKind, providerId, modelId);
+    },
     unavailable: (error) => log.info('usage reset lookup unavailable; retaining provider error hint', { sessionId, error: String(error) }),
   });
 }
@@ -2017,9 +2062,7 @@ const usageLimitAutoResume = new UsageLimitAutoResume({
   isEligible: isUsageLimitAutoResumeEligible,
   resolveResetAt: resolveSessionUsageResetAt,
   // Same-account remote Agent tasks ask their executing computer (subscription-account-pools.md 账号间自动换号).
-  canSwitchAccount: async (sessionId) =>
-    await canSwitchPluginEngineTaskAccount(sessionId, readSubscriptionRuntimeSession).catch(() => false)
-    || canSwitchSubscriptionAccount(sessionId, readSubscriptionRuntimeSession, remoteBackgroundInvoke),
+  canSwitchAccount: canSwitchTaskAccount,
   arm: (sessionId, token, resumeAt) =>
     agentInputCoordinatorHolder?.armUsageLimitWait(sessionId, token, resumeAt) ?? false,
   isCurrent: (sessionId, token) =>
@@ -2078,7 +2121,7 @@ export async function hasRestoredCodexQuota(sessionId: string, expectedProvider:
   if (!kind) return false;
   const route = resolveSessionRuntimeRoute(sessionId, kind, row);
   const providerId = route.providerId ?? (kind === 'codex' ? 'openai' : null);
-  if (providerId === 'openai') {
+  if (providerId && subscriptionFamilyOf(kind, providerId) === 'codex') {
     const restored = await hasRestoredPooledCodexQuota(expectedProvider, sessionId, row.sdkSessionId, route.modelId);
     if (restored !== null) return restored;
   }
@@ -5256,6 +5299,12 @@ const subscriptionAccountRecoveryDeps = {
   log: (message: string, fields: Record<string, unknown>) => log.info(message, fields),
 } satisfies AccountFailoverDeps;
 
+/** 同池是否存在另一个此刻可接手该任务的健康账号（订阅池 / 混合池 / 插件引擎多账号池）。 */
+export async function canSwitchTaskAccount(sessionId: string): Promise<boolean> {
+  return (await canSwitchPluginEngineTaskAccount(sessionId, readSubscriptionRuntimeSession).catch(() => false))
+    || canSwitchSubscriptionAccount(sessionId, readSubscriptionRuntimeSession, remoteBackgroundInvoke);
+}
+
 /** 直发路径在 createSession / 重读 live session 之前换掉不能用的订阅账号、关掉不健康原生会话。 */
 export async function prepareUnhealthySessionForSend(
   sessionId: string,
@@ -6678,6 +6727,17 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
   });
   registration.disposers.push(session.onEvent(emitWiredSessionEvent));
   registration.disposers.push(session.onRuntimeRecovery(emitWiredSessionEvent));
+  let lastSteerSupported = session.capabilities?.sameTurnSteer?.supported;
+  registration.disposers.push(
+    session.onCapabilitiesChange((capabilities) => {
+      const nextSteerSupported = capabilities?.sameTurnSteer?.supported;
+      if (nextSteerSupported === lastSteerSupported) return;
+      lastSteerSupported = nextSteerSupported;
+      if (!ownerDb || getCurrentDbClientSnapshot() !== ownerDb) return;
+      if (sessionBindings.getSession(session.id) !== session) return;
+      agentInputCoordinatorHolder?.refreshProjection(session.id);
+    }),
+  );
   sessionBindings.attachStatusListener(registration);
 
   // 注入 interaction listener (permission/ask/plan 三合一,renderer 按 kind 弹不同 UI)
@@ -6980,6 +7040,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   initGithubIssueSubmit(
     issueConfirmBridge,
     (sessionId) => turnModelPromiseBySession.get(sessionId) ?? readSessionModelForUsage(sessionId),
+    (sessionId) => maker.getSession(sessionId)?.agentKind === 'acp',
   );
   initRenameSessionsConfirm(renameSessionsConfirmBridge);
 
@@ -7460,6 +7521,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       // Older hosts keep only known columns and would report success while dropping the trigger.
       supportsSchedulePrTrigger: true,
       supportsScheduleWebhookTrigger: true,
+      // webhookTrigger.source {preset:'plugin'}: older hosts reject the unknown source.
+      supportsSchedulePluginEventTrigger: true,
       // 定时任务能存模型组(模式)；旧端会丢掉 modelGroup 后照样报成功，调用方须先看到此能力。
       supportsScheduleModelGroup: true,
       // Remote schedule_create checks workingDir on this computer before insert.
