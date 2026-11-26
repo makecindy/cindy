@@ -71,10 +71,14 @@ export {
   tokenPairSchema,
 } from "./types.js";
 export type {
+  AccountContact,
   AccountDeletionAvailability,
   AccountDeletionChallenge,
   AccountDeletionStatus,
   AccountMembership,
+  ContactChangeCodeSent,
+  ContactChangeTarget,
+  ContactChangeTicket,
   AccountTokenPair,
   AuthClientType,
   AuthFlowAction,

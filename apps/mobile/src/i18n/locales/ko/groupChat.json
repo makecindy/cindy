@@ -646,5 +646,6 @@
     },
     "externalFormatError": "원래 메시지에서 전체 링크를 다시 열어 주세요."
   },
-  "waitingForOwner": "소유자 확인 대기 중"
+  "waitingForOwner": "소유자 확인 대기 중",
+  "externalBadge": "외부"
 }

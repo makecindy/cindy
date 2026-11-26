@@ -646,5 +646,6 @@
     },
     "externalFormatError": "元のメッセージから完全なリンクを開き直してください。"
   },
-  "waitingForOwner": "所有者の確認待ち"
+  "waitingForOwner": "所有者の確認待ち",
+  "externalBadge": "外部"
 }
