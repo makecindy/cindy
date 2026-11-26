@@ -15660,6 +15660,7 @@
       "label_many": "{{count}} nouveaux messages"
     },
     "messageNavRail": {
+      "jumpToStart": "Aller au début de la conversation",
       "you": "Vous",
       "aria": "Navigation entre les prompts",
       "jumpAria": "Aller au prompt {{index}} : {{preview}}",

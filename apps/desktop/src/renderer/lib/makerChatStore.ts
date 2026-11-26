@@ -14868,6 +14868,20 @@ async function loadAroundMessage(
   );
 }
 
+async function loadConversationStart(sessionId: string): Promise<string | null> {
+  if (remoteProjectsStore.getSessionDeviceId(sessionId)) return null;
+  const owner = getDataOwnerGeneration();
+  const epoch = _messagesEpoch.get(sessionId) ?? 0;
+  const rows = await messageService.list(sessionId, { fromStart: true });
+  if (owner !== getDataOwnerGeneration() || epoch !== (_messagesEpoch.get(sessionId) ?? 0)) return null;
+  const target = rows.find((row) => !isNonAnchorHistoryRow(row));
+  if (!target) return null;
+  const found = await loadAroundMessageClientId(sessionId, target.clientId, { radius: 60 });
+  return owner === getDataOwnerGeneration() && epoch === (_messagesEpoch.get(sessionId) ?? 0)
+    ? found?.clientId ?? null
+    : null;
+}
+
 async function loadAroundMessageClientId(
   sessionId: string,
   clientId: string,
@@ -19292,6 +19306,7 @@ export const makerChatStore = {
   loadOlderMessages,
   loadAroundMessage,
   loadAroundMessageClientId,
+  loadConversationStart,
   sendMessage,
   prewarmSession,
   /** #2194: MessageStream 强 pin 门控——区分本端发送与外部注入的 user 消息。 */

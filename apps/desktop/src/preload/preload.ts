@@ -6777,7 +6777,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
         ipcRenderer.invoke('local-db:messages:work-details', sessionId, ref, opts),
       list: (
         sessionId: string,
-        opts?: { limit?: number; before?: string; beforeTs?: number },
+        opts?: { limit?: number; before?: string; beforeTs?: number; fromStart?: boolean },
       ): Promise<unknown> => ipcRenderer.invoke('local-db:messages:list', sessionId, opts),
       estimatedSessionValue: (sessionId: string, options?: { includeBreakdown?: boolean; clientId?: string }): Promise<unknown> =>
         ipcRenderer.invoke('local-db:messages:estimatedSessionValue', sessionId, ...(options ? [options] : [])),

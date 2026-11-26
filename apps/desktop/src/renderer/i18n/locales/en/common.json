@@ -15567,6 +15567,7 @@
       "label_other": "{{count}} new messages"
     },
     "messageNavRail": {
+      "jumpToStart": "Jump to the start",
       "you": "You",
       "aria": "Prompt navigation",
       "jumpAria": "Jump to prompt {{index}}: {{preview}}",

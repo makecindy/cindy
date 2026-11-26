@@ -15504,6 +15504,7 @@
       "label_other": "{{count}} 則新訊息"
     },
     "messageNavRail": {
+      "jumpToStart": "跳到對話開頭",
       "you": "你",
       "aria": "提問導航",
       "jumpAria": "跳轉到第 {{index}} 則提問：{{preview}}",

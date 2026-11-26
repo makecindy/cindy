@@ -24,7 +24,7 @@ function wrap<T>(p: Promise<T>): Promise<T> {
 
 export async function list(
   sessionId: string,
-  opts?: { limit?: number; before?: string; beforeTs?: number },
+  opts?: { limit?: number; before?: string; beforeTs?: number; fromStart?: boolean },
 ): Promise<Message[]> {
   return wrap(window.electronAPI.localDb.messages.list(sessionId, opts));
 }

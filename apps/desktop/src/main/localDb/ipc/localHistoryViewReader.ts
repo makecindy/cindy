@@ -83,7 +83,9 @@ export interface PriorUserRoundCost {
 
 /** `readMessagesList` of the desktop, with its two process-specific steps as ports. */
 export function createReadMessagesList(ports: LocalHistoryReadPorts) {
-  return async function readMessagesList(sessionId: unknown, opts: unknown, skipImport = false, outline = false) {
+  return async function readMessagesList(
+    sessionId: unknown, opts: unknown, skipImport = false, outline = false, fromStart = false,
+  ) {
     const sid = requireString(sessionId, 'sessionId');
     const limit = outline ? 1000 : clampLimit((opts as { limit?: number } | undefined)?.limit);
     const before = (opts as { before?: string } | undefined)?.before;
@@ -91,7 +93,7 @@ export function createReadMessagesList(ports: LocalHistoryReadPorts) {
     const after = (opts as { after?: string } | undefined)?.after;
     const imageDbClient = getDbClient();
     const db = imageDbClient.drizzle;
-    if (!before && beforeTs == null && !after && !outline) {
+    if (!before && beforeTs == null && !after && !outline && !fromStart) {
       void recoverGeneratedImagesForHistory(sid).catch(() => undefined);
     }
 
@@ -162,6 +164,7 @@ export function createReadMessagesList(ports: LocalHistoryReadPorts) {
     if (clearedAtMs !== null) conds.push(gt(messages.createdAt, clearedAtMs));
     const whereExpr = and(...conds);
 
+    const ascending = fromStart || afterCursor !== null;
     const rows = await db
       .select({
         ...getMessageSelectFields(),
@@ -171,8 +174,8 @@ export function createReadMessagesList(ports: LocalHistoryReadPorts) {
       .from(messages)
       .where(whereExpr)
       .orderBy(
-        afterCursor ? asc(messages.createdAt) : desc(messages.createdAt),
-        afterCursor ? asc(messageRowid) : desc(messageRowid),
+        ascending ? asc(messages.createdAt) : desc(messages.createdAt),
+        ascending ? asc(messageRowid) : desc(messageRowid),
       )
       .limit(limit);
     const orderedRows = afterCursor ? rows.slice().reverse() : rows;

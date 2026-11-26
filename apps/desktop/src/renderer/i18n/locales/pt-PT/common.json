@@ -15660,6 +15660,7 @@
       "label_many": "{{count}} novas mensagens"
     },
     "messageNavRail": {
+      "jumpToStart": "Ir para o início da conversa",
       "you": "Eu",
       "aria": "Navegação entre pedidos",
       "jumpAria": "Ir para o pedido {{index}}: {{preview}}",

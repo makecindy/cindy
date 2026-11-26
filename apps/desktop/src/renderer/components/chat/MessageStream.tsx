@@ -5535,7 +5535,9 @@ export function MessageStream({
   //   - programmaticScrollRef 打开 → scroll handler 在动画期间不会误判为"用户上滚"
   //   - 原生 smooth 由浏览器接管（~300ms），不手写 rAF
   //   - 动画期间 ResizeObserver 仍可正常 pinToBottom，auto-follow 无缝接入
+  const railJumpSeqRef = useRef(0);
   const scrollToBottomSmooth = useCallback(() => {
+    railJumpSeqRef.current += 1;
     const el = scrollRef.current;
     if (!el) return;
     if (contentRef.current) contentRef.current.style.minHeight = '';
@@ -6604,7 +6606,7 @@ export function MessageStream({
     runAutomaticLoad,
   ]);
 
-  const railJumpSeqRef = useRef(0);
+  const [jumpingToStart, setJumpingToStart] = useState(false);
   const [railJumpRequest, setRailJumpRequest] = useState<{ id: string; seq: number } | null>(null);
   const lastAppliedRailJumpRef = useRef(0);
   const handleNavRailJump = useCallback(
@@ -6624,6 +6626,28 @@ export function MessageStream({
     },
     [cancelFocusJump],
   );
+
+  const handleNavRailJumpToStart = useCallback(() => {
+    if (!sessionId || jumpingToStart) return;
+    const sequence = railJumpSeqRef.current;
+    const owner = getDataOwnerGeneration();
+    const root = scrollRef.current;
+    if (!root) return;
+    const input = new AbortController();
+    const cancel = () => { railJumpSeqRef.current += 1; };
+    root.addEventListener('wheel', cancel, { passive: true, once: true, signal: input.signal });
+    root.addEventListener('touchstart', cancel, { passive: true, once: true, signal: input.signal });
+    setJumpingToStart(true);
+    void makerChatStore.loadConversationStart(sessionId).then((id) => {
+      if (id && root === scrollRef.current &&
+        railJumpSeqRef.current === sequence && owner === getDataOwnerGeneration()) {
+        handleNavRailJump(id);
+      }
+    }, () => undefined).finally(() => {
+      input.abort();
+      if (root === scrollRef.current) setJumpingToStart(false);
+    });
+  }, [handleNavRailJump, jumpingToStart, sessionId]);
 
   useLayoutEffect(() => {
     if (!railJumpRequest) return;
@@ -7316,6 +7340,11 @@ export function MessageStream({
                 getContentMaxWidth={getContentWidth}
                 bottomOffset={resolvedBottomPadding}
                 onJump={handleNavRailJump}
+                onJumpToStart={sessionId && !ownerDeviceId && !remoteHostId &&
+                  historyVisibleAfter === undefined &&
+                  (hasMoreMessages || historyWindowHasIsland || allRenderItems.length > RENDER_WINDOW_FIRST_PAINT_ITEMS)
+                  ? handleNavRailJumpToStart : undefined}
+                jumpingToStart={jumpingToStart}
                 onNavCoverageChange={setNavRailCoversNav}
                 sessionId={sessionId}
                 resetKey={sessionId}

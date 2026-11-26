@@ -45,6 +45,8 @@ import {
   type WheelEvent as ReactWheelEvent,
 } from 'react';
 import { useTranslation } from 'react-i18next';
+import { ArrowUpToLine } from 'lucide-react';
+import { Button } from '@/components/ui/button';
 
 import { formatAbsolute } from '@/hooks/useRelativeTime';
 import { SessionNavigationModeProvider } from '@/features/cc-agent/embeddedSessionNavigation';
@@ -105,6 +107,8 @@ export interface MessageNavRailProps {
   bottomOffset: number;
   /** 点击刻度 → 跳到该提问。目标可能在渲染窗口外,由父级扩窗后滚动。 */
   onJump: (clientId: string) => void;
+  onJumpToStart?: () => void;
+  jumpingToStart?: boolean;
   /**
    * "导航条覆盖导航"变化上报(出场资格)。父级用它做入口去重:覆盖时抑制
    * "跳到上一条提问"chip,导航条缺席时 chip 回归。与淡入淡出无关 —— chip
@@ -158,6 +162,8 @@ export function MessageNavRail({
   getContentMaxWidth,
   bottomOffset,
   onJump,
+  onJumpToStart,
+  jumpingToStart,
   onNavCoverageChange,
   resetKey,
   sessionId,
@@ -734,6 +740,24 @@ export function MessageNavRail({
        * (在 <Tip> 外面套一层 Provider 没用 —— 内层会把外层遮住。)
        */}
       <Tooltip.Provider delayDuration={150} skipDelayDuration={700}>
+        {onJumpToStart && (
+          <Tooltip.Root>
+            <Tooltip.Trigger asChild>
+              <Button
+                type="button"
+                tone="quiet"
+                size="xs"
+                aria-label={t('chat.messageNavRail.jumpToStart')}
+                className="pointer-events-auto absolute left-0 top-0 w-6 px-0"
+                onClick={onJumpToStart}
+                loading={jumpingToStart}
+              >
+                <ArrowUpToLine size={14} aria-hidden="true" />
+              </Button>
+            </Tooltip.Trigger>
+            <Tooltip.Content side="right">{t('chat.messageNavRail.jumpToStart')}</Tooltip.Content>
+          </Tooltip.Root>
+        )}
         {plan.hiddenBefore > 0 ? (
           <Tooltip.Root>
             <Tooltip.Trigger asChild>
