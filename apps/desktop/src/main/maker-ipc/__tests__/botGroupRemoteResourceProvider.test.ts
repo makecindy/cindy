@@ -160,6 +160,24 @@ describe('bot group remote resources', () => {
     expect(botGroupRemoteChatData(detail({ serverBacked: true, revision: 3 })).supportsSettingsManagement).toBe(true);
   });
 
+  // #13127 (unit): even a modified controller must use the current group's manager and revision.
+  it('forwards a group assistant change only for a supported group and its manager', async () => {
+    const group = detail({ serverBacked: true, supportsGroupAssistant: true, assistantEnabled: true, revision: 5 });
+    const change = () => remoteResourceRegistry.invoke(context, { client: client(), collectionId: BOT_GROUP_REMOTE_COLLECTION_ID,
+      actionId: 'set-assistant', resourceRef: ref('g1'), input: { assistant: false, expectedRevision: 5 } });
+    service.getGroup.mockResolvedValue({ ok: true, group });
+    await expect(change()).rejects.toMatchObject({ message: 'ROLE_REQUIRED' });
+    group.members[0] = { ...group.members[0], role: 'admin', isOwned: true };
+    group.supportsGroupAssistant = false;
+    await expect(change()).rejects.toMatchObject({ message: 'UNSUPPORTED_OPERATION' });
+    expect(service.chatServer.manage).not.toHaveBeenCalled();
+    group.supportsGroupAssistant = true;
+    expect(botGroupRemoteChatData(group)).toMatchObject({ assistantEnabled: true, supportsAssistantManagement: true });
+    await expect(change()).resolves.toMatchObject({ effects: [{ kind: 'refresh-resource', ref: ref('g1') }] });
+    expect(service.chatServer.manage).toHaveBeenCalledWith({ groupId: 'g1', action: { type: 'update', assistant: false,
+      expectedRevision: 5, name: group.name, topic: '', description: '' } });
+  });
+
   it('rejects a stale settings snapshot before calling the group service', async () => {
     service.getGroup.mockResolvedValue({ ok: true, group: detail({ serverBacked: true, revision: 5 }) });
     await expect(remoteResourceRegistry.invoke(context, { client: client(), collectionId: BOT_GROUP_REMOTE_COLLECTION_ID,
@@ -396,6 +414,11 @@ describe('bot group remote resources', () => {
       actionId: 'read', resourceRef: ref('g1'), input: { messageId: 'm2' } });
     expect(service.chatServer.manage).toHaveBeenCalledWith({ groupId: 'g1', action: { type: 'read', messageId: 'm2' } });
     expect(read.effects).toEqual([]);
+
+    service.getGroup.mockResolvedValueOnce({ ok: true, group: detail({ serverBacked: true, assistantComputers: [{ id: 'second', name: 'Windows' }] }) });
+    await remoteResourceRegistry.invoke(context, { client: client(), collectionId: BOT_GROUP_REMOTE_COLLECTION_ID,
+      actionId: 'assistantDevice', resourceRef: ref('g1'), input: { deviceId: 'second' } });
+    expect(service.chatServer.manage).toHaveBeenCalledWith({ groupId: 'g1', action: { type: 'assistantDevice', deviceId: 'second' } });
 
     service.getGroup.mockResolvedValueOnce({ ok: true, group: detail({ serverBacked: true, supportsNotificationSettings: true, notificationMode: 'all' }) });
     await remoteResourceRegistry.invoke(context, { client: client(), collectionId: BOT_GROUP_REMOTE_COLLECTION_ID,

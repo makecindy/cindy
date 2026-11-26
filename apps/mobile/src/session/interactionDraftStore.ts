@@ -50,7 +50,7 @@ export function askQuestionsIdentity(questions: AskQuestion[]): string {
     question.header,
     question.multiSelect,
     question.answerConstraints,
-    (question.options ?? []).map((option) => [option.label, option.description]),
+    (question.options ?? []).map((option) => [option.label, option.description, option.preview]),
   ]));
 }
 

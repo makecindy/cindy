@@ -14,7 +14,7 @@
 import { activeOwnerScopeKey, ownerScopedUserDataPath } from '../appSessionState.js';
 import { createOverrideSettingsFile } from '../maker-host/override-settings-file.js';
 import { desktopMakerLogger } from '../maker-host/logger-adapter.js';
-import { PROVIDER_GROUP_STRATEGIES, type ProviderGroupStrategy } from '../../shared/providerGroup.js';
+import { DEFAULT_ROUTE_STRATEGY, routeStrategyOf, type RouteStrategy } from '../../shared/routeStrategy.js';
 import { MAX_SUBSCRIPTION_ACCOUNTS } from '../../shared/subscriptionAccounts.js';
 import { isPluginEngineAccountId, removePluginEngineAccountsOfPlugin } from './paths.js';
 
@@ -35,10 +35,10 @@ export interface PluginEngineAccountConfig {
 }
 
 export interface PluginEnginePoolConfig {
-  strategy: ProviderGroupStrategy;
+  strategy: RouteStrategy;
   accounts: PluginEngineAccountConfig[];
   /** Separate providers the user took accounts out into, by provider id suffix. */
-  providers?: Record<string, { strategy: ProviderGroupStrategy }>;
+  providers?: Record<string, { strategy: RouteStrategy }>;
   /** Account → separate provider suffix; absent = the engine's own provider. */
   placement?: Record<string, string>;
 }
@@ -62,12 +62,12 @@ const IDENTITY_MAX = 320;
 
 export const DEFAULT_PLUGIN_ENGINE_ACCOUNT: PluginEngineAccountConfig = { id: 'default', paused: false, limit: 4, weight: 1 };
 export const defaultPluginEnginePool = (): PluginEnginePoolConfig => ({
-  strategy: 'least',
+  strategy: DEFAULT_ROUTE_STRATEGY,
   accounts: [{ ...DEFAULT_PLUGIN_ENGINE_ACCOUNT }],
 });
 
-function strategyOf(value: unknown): ProviderGroupStrategy {
-  return PROVIDER_GROUP_STRATEGIES.includes(value as ProviderGroupStrategy) ? value as ProviderGroupStrategy : 'least';
+function strategyOf(value: unknown): RouteStrategy {
+  return routeStrategyOf(value);
 }
 
 function normalizeAccount(raw: unknown): PluginEngineAccountConfig | null {

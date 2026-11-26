@@ -92,6 +92,14 @@ import {
 import { isPluginEngineKind } from '../../../shared/pluginEngines';
 import { extractIpcError } from '@/utils/ipcError';
 import { remoteProjectAliases } from './remoteProjectAliases';
+import {
+  clearOfflineInboxIntentsForDevice,
+  listAllOfflineInboxIntents,
+  resetOfflineInboxIntents,
+  startOfflineInboxIntentsSync,
+  subscribeOfflineInboxIntents,
+} from './offlineInboxIntentsStore';
+import { replayOfflineInboxIntentsForDevice } from './offlineInboxReplay';
 
 const log = createLogger('device-link-remote-projects');
 
@@ -665,6 +673,7 @@ export function useDeviceLinkRemoteProjects(
       // 被控端明确拒绝我们:盘上那份镜像缓存也不该留(尊重对方的拒绝,不在本机留副本)。
       cacheHydrationBlocked.add(deviceId);
       clearCachedDevice(deviceId);
+      void clearOfflineInboxIntentsForDevice(deviceId);
       evictDeviceCapabilities(deviceId);
       evictDeviceProviders(deviceId);
       evictDeviceGitSafetySettings(deviceId);
@@ -770,7 +779,10 @@ export function useDeviceLinkRemoteProjects(
         }
         // Bootstrap follows a gap in live pushes (start, reconnect). Read changed tasks ahead
         // so opening them shows what the list already shows; one window does it for all.
-        if (windowRole === 'main') void makerChatStore.prefetchRemoteHistories(deviceId);
+        if (windowRole === 'main') {
+          void makerChatStore.prefetchRemoteHistories(deviceId);
+          void replayOfflineInboxIntentsForDevice(deviceId);
+        }
       }
       // 未被撤销(ok 或普通失败):清掉可能残留的「已撤销」标记(被控端恢复 → 自动接回的收尾)。
       revokedDevicesStore.clearRevoked(deviceId);
@@ -884,6 +896,7 @@ export function useDeviceLinkRemoteProjects(
           // 否则下次冷启动会把一台已经不该出现的设备画回侧边栏。
           cacheHydrationBlocked.add(d.deviceId);
           clearCachedDevice(d.deviceId);
+          void clearOfflineInboxIntentsForDevice(d.deviceId);
           evictRemotePluginEngines(d.deviceId);
         }
         evictDeviceCapabilities(d.deviceId);
@@ -1033,6 +1046,7 @@ export function useDeviceLinkRemoteProjects(
               // listDevices 离线时纠正不了(review: codex P1)。
               cacheHydrationBlocked.add(deviceId);
               clearCachedDevice(deviceId);
+              void clearOfflineInboxIntentsForDevice(deviceId);
             }
             // 拿到新目录:目录重读退避到此为止,下一次目录不可用时再从头开始。
             stopDirectoryRetry();
@@ -1578,6 +1592,7 @@ export function useDeviceLinkRemoteProjects(
         // 盘上仍可能留着上一次运行写下的缓存。
         cacheHydrationBlocked.add(p.deviceId);
         clearCachedDevice(p.deviceId);
+        void clearOfflineInboxIntentsForDevice(p.deviceId);
         return;
       }
       reseed();
@@ -1594,6 +1609,7 @@ export function useDeviceLinkRemoteProjects(
       directoryGeneration += 1;
       cacheHydrationBlocked.add(deviceId);
       clearCachedDevice(deviceId);
+      void clearOfflineInboxIntentsForDevice(deviceId);
       cancelDeviceReseeds(deviceId);
       clearArchivedSessionRetry(deviceId);
       sessionsSubscribeRetry.delete(deviceId);
@@ -1619,8 +1635,23 @@ export function useDeviceLinkRemoteProjects(
       scheduleSessionListPersist(collectSessionListSnapshot);
     });
 
+    const stopOfflineInboxSync = startOfflineInboxIntentsSync();
+    const offOfflineInboxReplay =
+      windowRole === 'main'
+        ? subscribeOfflineInboxIntents(() => {
+            if (disposed) return;
+            const queuedDevices = new Set(listAllOfflineInboxIntents().map((intent) => intent.deviceId));
+            for (const deviceId of queuedDevices) {
+              if (isDeviceConnected(deviceId)) void replayOfflineInboxIntentsForDevice(deviceId);
+            }
+          })
+        : null;
+
     return () => {
       disposed = true;
+      stopOfflineInboxSync();
+      offOfflineInboxReplay?.();
+      resetOfflineInboxIntents();
       clearTimeout(initialDiscoveryTimer);
       stopDirectoryRetry();
       for (const { timer } of scheduleEventRefreshes.values()) clearTimeout(timer);

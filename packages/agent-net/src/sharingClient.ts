@@ -1,5 +1,5 @@
 import { MAX_CONTROL_BYTES, requestPayload, sharingIdentityPayload, stripTrailingSlashes } from '@cindy/agent-net-protocol';
-import { concatBytes, decodeUtf8, toBase64Url, utf8 } from './portableBytes.js';
+import { concatBytes, decodeUtf8, fromBase64Url, toBase64Url, utf8 } from './portableBytes.js';
 import type { AgentNetSigner } from './portableClient.js';
 
 export interface SharingRequestOptions { method: string; body?: unknown; isCurrent?(): boolean; signal?: AbortSignal; applicant?: AgentNetSigner;
@@ -22,6 +22,20 @@ export class AgentNetSharingError extends Error {
   constructor(readonly status: number, readonly code: string, readonly retryAt?: number) { super(code); }
 }
 
+/** Lifetime the account service granted, read from the card's own iat/exp.
+ * Both come from the issuer's clock, so this device's wall-clock skew cannot
+ * reject a fresh card; the bound mirrors the relay's `exp - iat <= 300` check.
+ * Claims are only used for local bookkeeping; the relay verifies the signature. */
+function cardLifetimeMs(card: string): number | undefined {
+  const parts = card.split('.');
+  if (parts.length !== 3) return;
+  let claims: { iat?: unknown; exp?: unknown } | null;
+  try { claims = JSON.parse(decodeUtf8(fromBase64Url(parts[1]))); } catch { return; }
+  const { iat, exp } = claims ?? {};
+  if (typeof iat !== 'number' || typeof exp !== 'number' || !Number.isFinite(iat) || !Number.isFinite(exp)
+    || exp <= iat || exp - iat > 300) return;
+  return (exp - iat) * 1000;
+}
 function retryDeadline(headers: Headers): number | undefined {
   const value = headers.get('retry-after')?.trim();
   if (!value) return;
@@ -57,11 +71,16 @@ export class AgentNetSharingClient {
     const { networkId, rootPublicKey, signer } = this.options;
     const bytes = this.options.hash(utf8(sharingIdentityPayload(networkId, rootPublicKey, signer.identity.deviceId, signer.identity.signingKey)));
     const nonce = Array.from(bytes, n => n.toString(16).padStart(2, '0')).join('');
+    // The response's absolute expiresAt is in the issuer's clock; comparing it
+    // with this device's clock rejected every card once the device ran >5s slow.
+    // Count the granted lifetime from before the request instead: issuance comes
+    // later, so the local deadline never outlives the real one.
+    const requestedAt = Date.now();
     this.cardRequest = this.options.getIdentityCard(nonce).then(value => {
-      this.current(); const expiresAt = Date.parse(value.expiresAt);
-      if (!value.card || value.card.length > 8192 || !Number.isFinite(expiresAt) || expiresAt <= Date.now()
-        || expiresAt > Date.now() + 305_000) throw new Error('INVALID_AGENT_NET_IDENTITY_CARD');
-      this.cached = { card: value.card, expiresAt }; return value.card;
+      this.current();
+      const lifetime = typeof value.card === 'string' && value.card.length <= 8192 ? cardLifetimeMs(value.card) : undefined;
+      if (lifetime === undefined) throw new Error('INVALID_AGENT_NET_IDENTITY_CARD');
+      this.cached = { card: value.card, expiresAt: requestedAt + lifetime }; return value.card;
     }).finally(() => { this.cardRequest = null; });
     return this.cardRequest;
   }

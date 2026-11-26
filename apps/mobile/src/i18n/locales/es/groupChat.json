@@ -180,7 +180,9 @@
       "GROUP_AUTHORIZATION_REQUIRED": "{{name}} no pudo ejecutar la herramienta: la autorización del grupo ha caducado o no permite esta acción. La persona propietaria del amigo puede volver a solicitarla en este grupo.",
       "GROUP_AUTHORIZATION_UNAVAILABLE": "No se pudo verificar la autorización de grupo de {{name}}, por lo que la herramienta no se ejecutó. Vuelve a intentarlo cuando se restablezca la conexión.",
       "ATTACHMENTS_UNAVAILABLE": "Algunos adjuntos no llegaron a {{name}} por un fallo de descarga o por el límite de adjuntos. Vuelve a enviar los archivos necesarios para esta solicitud.",
-      "GROUP_ASSISTANT_UNAVAILABLE": "{{name}}, conecta tu Cindy para que Cindy pueda trabajar por ti (ahora no tienes ningún Cindy conectado)."
+      "GROUP_ASSISTANT_UNAVAILABLE": "{{name}}, conecta tu Cindy para que Cindy pueda trabajar por ti (ahora no tienes ningún Cindy conectado).",
+      "GROUP_ASSISTANT_DEVICE_REQUIRED": "{{name}}, elige un equipo para este grupo para continuar con la solicitud.",
+      "GROUP_ASSISTANT_DEVICE_OFFLINE": "El equipo que {{name}} eligió para este grupo está desconectado."
     }
   },
   "plan": {
@@ -509,10 +511,12 @@
       "tools": "Herramientas e información autorizadas por el propietario.",
       "authorizeTitle": "¿Permitir que este grupo utilice las herramientas y la información de {{name}}?",
       "toolsHint": "Los miembros pueden utilizar las herramientas existentes y la información privada de este amigo. Los resultados son visibles para todos. Se siguen aplicando las reglas de aprobación existentes. La revocación detiene las solicitudes activas, pero no puede deshacer las acciones completadas.",
-      "confirm": "Confirmar"
+      "confirm": "Permitir herramientas"
     }
   },
   "groupSettings": {
+    "assistantComputer": "Equipo de ejecución",
+    "chooseComputer": "Elegir equipo",
     "tabSettings": "Configuración",
     "youAreOwner": "Eres el propietario",
     "youAreAdmin": "Eres administrador",
@@ -554,6 +558,8 @@
     "accessChat": "Solo chat del grupo",
     "accessTools": "Puede usar herramientas e información",
     "replies": "Cómo responden los amigos",
+    "assistant": "Cindy del grupo",
+    "assistantHint": "Trabaja en el ordenador de quien la menciona con @.",
     "replyModeMentionedNote": "Los amigos no responden a menos que alguien los mencione con @.",
     "work": "Repartos de trabajo",
     "organizerHint": "Decide quién realiza cada paso. De forma predeterminada, es el primer amigo.",
@@ -598,7 +604,7 @@
     "removeOwnHint": "{{name}} dejará de recibir mensajes de «{{group}}». Se conserva el historial; los otros grupos y chats privados no se ven afectados.",
     "removeOwnActiveHint": "Se detendrán sus solicitudes activas en este grupo. Las tareas iniciadas de forma independiente seguirán ejecutándose.",
     "stopAndRemove": "Detener y quitar",
-    "confirm": "Confirmar",
+    "confirm": "Permitir herramientas",
     "inviteTitle": "Invitar al grupo",
     "reusableLink": "Sin vencimiento · Reutilizable por varias personas",
     "singleUseUntil": "Un solo uso · Vence el {{date}}",

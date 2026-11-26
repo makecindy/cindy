@@ -19,6 +19,7 @@ import {
 } from "react-native";
 import { useTranslation } from "react-i18next";
 import type { BotGroupAttachment } from "@cindy/maker-shared/botGroupChat";
+import { attachmentPreviewKind } from "@cindy/maker-shared/attachment-preview";
 import {
   MessageListVisibilityContext,
   useMessageListItemVisible,
@@ -145,6 +146,7 @@ export function BotGroupMessageAttachments({
       );
     }
   };
+  const deviceAudio = deviceFile && attachmentPreviewKind(deviceFile.name, deviceFile.mimeType) === "audio";
   const deviceSource =
     deviceFile?.url ??
     (deviceFile?.path
@@ -179,14 +181,15 @@ export function BotGroupMessageAttachments({
         <RemoteAttachmentPreview
           key={`${accountGeneration}:${deviceFile.id}`}
           name={deviceFile.name}
-          resolve={(signal) =>
+          mediaKind={deviceAudio ? "audio" : undefined}
+          resolve={(signal, forceRefresh) =>
             onResolveRemoteMedia(
               {
-                kind: deviceFile.category === "image" ? "image" : "file",
+                kind: deviceAudio ? "audio" : deviceFile.category === "image" ? "image" : "file",
                 url: deviceSource,
                 previewable: false,
               },
-              { front: true, signal },
+              { front: true, signal, ...(forceRefresh ? { forceRefresh: true } : {}) },
             )
           }
           onClose={() => setDeviceFile(null)}
