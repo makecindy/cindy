@@ -15392,6 +15392,7 @@
         "diverged": "Las ramas local y remota tienen cambios diferentes. Resuelve las diferencias antes de cambiar de rama.",
         "missing": "La rama seleccionada ya no existe. Actualiza la lista.",
         "git": "No se pudo completar la operación. Revisa la rama actual y los cambios guardados antes de reintentar",
+        "timeout": "Se agotó el tiempo al comprobar el estado de Git. Los repositorios grandes o con muchos cambios sin confirmar pueden tardar demasiado; organiza los cambios o usa worktree.",
         "savedMissing": "Estos cambios guardados ya no están disponibles",
         "undoUnavailable": "Ya no se puede deshacer este cambio de rama"
       },

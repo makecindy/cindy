@@ -15267,6 +15267,7 @@
         "diverged": "Der lokale und der entfernte Branch haben unterschiedliche Änderungen. Kläre diese Unterschiede vor dem Wechsel.",
         "missing": "Der ausgewählte Branch existiert nicht mehr. Aktualisiere die Liste.",
         "git": "Der Vorgang konnte nicht abgeschlossen werden. Prüfe den aktuellen Branch und gespeicherte Änderungen und versuche es erneut",
+        "timeout": "Zeitüberschreitung beim Prüfen des Git-Status. Große Repositories oder viele nicht übernommene Änderungen können zu lange dauern. Bereinige die Änderungen oder verwende worktree.",
         "savedMissing": "Diese gespeicherten Änderungen sind nicht mehr verfügbar",
         "undoUnavailable": "Dieser Branch-Wechsel lässt sich nicht mehr rückgängig machen"
       },

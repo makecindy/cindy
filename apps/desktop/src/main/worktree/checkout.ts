@@ -1,6 +1,6 @@
 import path from 'node:path';
 import fs from 'node:fs/promises';
-import { createReadStream } from 'node:fs';
+import fsSync, { type BigIntStats } from 'node:fs';
 import { createHash, randomUUID } from 'node:crypto';
 import { gitExec, GitExecError } from './gitExec';
 import { fetchCheckoutSource, withBranchMutation } from './branchSync';
@@ -16,6 +16,14 @@ export interface CheckoutActivity extends CheckoutSession {
   workDir: string;
   remoteHostId?: string | null;
 }
+export interface CheckoutServiceOptions {
+  /** Timeout for full working-tree Git scans (status, read-tree, ls-files, diff). Default 25s. */
+  scanTimeoutMs?: number;
+  /** Maximum dirty files hashed by content bytes before switching to lstat metadata. Default 256. */
+  fingerprintContentFileLimit?: number;
+  /** Maximum cumulative bytes streamed into the fingerprint hash. Default 16 MiB. */
+  fingerprintContentByteBudget?: number;
+}
 type Receipt = CheckoutReceipt & {
   repo: string;
   head: string;
@@ -23,6 +31,10 @@ type Receipt = CheckoutReceipt & {
   carrySnapshot?: string;
   fingerprint: string;
 };
+const DEFAULT_SCAN_TIMEOUT_MS = 25_000;
+const DEFAULT_FINGERPRINT_CONTENT_FILE_LIMIT = 256;
+const DEFAULT_FINGERPRINT_CONTENT_BYTE_BUDGET = 16 * 1024 * 1024;
+const FINGERPRINT_STAT_CONCURRENCY = 32;
 const readOpts = { timeoutMs: 5_000, extraEnv: { LC_ALL: 'C', GIT_OPTIONAL_LOCKS: '0' } };
 const writeOpts = { extraEnv: { LC_ALL: 'C', GIT_TERMINAL_PROMPT: '0' } };
 const stashPrefix = ' [cindy-checkout-v1:';
@@ -44,11 +56,91 @@ async function optional(repo: string, ...args: string[]) {
   }
 }
 const localBranch = (branch: string) => branch.replace(/^refs\/remotes\/origin\//, '');
+const isGitTimeout = (error: unknown): boolean => error instanceof GitExecError && error.timedOut;
+
+async function hashDirtyFiles(
+  hash: ReturnType<typeof createHash>,
+  repo: string,
+  files: readonly string[],
+  contentFileLimit: number,
+  contentByteBudget: number,
+): Promise<void> {
+  if (!files.length) return;
+  const stats = new Array<BigIntStats | null>(files.length).fill(null);
+  let nextIndex = 0;
+  const workerCount = Math.min(FINGERPRINT_STAT_CONCURRENCY, files.length);
+  await Promise.all(
+    Array.from({ length: workerCount }, async () => {
+      while (nextIndex < files.length) {
+        const index = nextIndex++;
+        stats[index] = await fs
+          .lstat(path.join(repo, files[index]), { bigint: true })
+          .catch(() => null);
+      }
+    }),
+  );
+  // Content-hash normal dirty sets so rewriting identical bytes keeps the same fingerprint;
+  // fall back to lstat metadata once file count or cumulative bytes exceed the budget so large
+  // repos with tens of thousands of modified assets do not stream hundreds of megabytes per read.
+  const allowContent = files.length <= contentFileLimit;
+  let remainingBytes = contentByteBudget;
+  for (let i = 0; i < files.length; i++) {
+    const file = files[i];
+    const full = path.join(repo, file);
+    const stat = stats[i];
+    hash.update('\0').update(file).update('\0');
+    if (!stat) {
+      hash.update('missing');
+      continue;
+    }
+    if (stat.isSymbolicLink()) {
+      hash.update('link:').update(await fs.readlink(full).catch(() => ''));
+      continue;
+    }
+    if (stat.isFile()) {
+      const size = Number(stat.size);
+      if (allowContent && Number.isSafeInteger(size) && size <= remainingBytes) {
+        remainingBytes -= size;
+        hash.update('bytes:');
+        try {
+          for await (const chunk of fsSync.createReadStream(full)) hash.update(chunk);
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') hash.update('\0vanished');
+          else throw error;
+        }
+      } else {
+        hash.update(`stat:${stat.size}:${stat.mtimeNs}:${stat.ctimeNs}:${stat.ino}:${stat.mode}`);
+      }
+      continue;
+    }
+    hash.update(`other:${stat.mode}:${stat.mtimeNs}`);
+  }
+}
 
 /** Checkout owns no preference or database state. Saved changes remain reachable in refs/stash. */
-export function createCheckoutService(listActivity: () => Promise<CheckoutActivity[]>) {
+export function createCheckoutService(
+  listActivity: () => Promise<CheckoutActivity[]>,
+  options: CheckoutServiceOptions = {},
+) {
+  // Full-tree scans stay under device-link's 30s invoke window so remote controllers receive a
+  // structured checkout:timeout rather than a transport drop on genuinely stalled repositories.
+  const scanOpts = {
+    timeoutMs: options.scanTimeoutMs ?? DEFAULT_SCAN_TIMEOUT_MS,
+    extraEnv: { LC_ALL: 'C', GIT_OPTIONAL_LOCKS: '0' },
+  };
+  const fingerprintContentFileLimit =
+    options.fingerprintContentFileLimit ?? DEFAULT_FINGERPRINT_CONTENT_FILE_LIMIT;
+  const fingerprintContentByteBudget =
+    options.fingerprintContentByteBudget ?? DEFAULT_FINGERPRINT_CONTENT_BYTE_BUDGET;
   const receipts = new Map<string, Receipt>();
   const active = new Set<string>();
+  const inFlightStatus = new Map<string, Promise<CheckoutStatus>>();
+  function clearInFlightStatus(repo: string) {
+    const prefix = `${repo}\0`;
+    for (const key of inFlightStatus.keys()) {
+      if (key.startsWith(prefix)) inFlightStatus.delete(key);
+    }
+  }
   async function root(input: string) {
     const repo = await fs.realpath(input);
     const top = await fs.realpath(await git(repo, 'rev-parse', '--show-toplevel'));
@@ -78,8 +170,11 @@ export function createCheckoutService(listActivity: () => Promise<CheckoutActivi
     }
     return result;
   }
-  async function status(input: string, target?: string, ownLock = false): Promise<CheckoutStatus> {
-    const repo = await root(input);
+  async function computeStatus(
+    repo: string,
+    target?: string,
+    ownLock = false,
+  ): Promise<CheckoutStatus> {
     if (target) await git(repo, 'check-ref-format', '--branch', localBranch(target));
     const head = (await optional(repo, 'rev-parse', '--verify', 'HEAD')) ?? '';
     const current = head
@@ -107,7 +202,7 @@ export function createCheckoutService(listActivity: () => Promise<CheckoutActivi
       await gitExec(
         ['status', '--porcelain=v1', '-z', '--untracked-files=all', '--ignore-submodules=none'],
         repo,
-        readOpts,
+        scanOpts,
       )
     ).stdout;
     const fields = porcelain.split('\0');
@@ -166,19 +261,17 @@ export function createCheckoutService(listActivity: () => Promise<CheckoutActivi
         await gitExec(
           ['diff', '--cached', '--raw', '-z', ...(head ? ['HEAD'] : []), '--'],
           repo,
-          readOpts,
+          scanOpts,
         )
       ).stdout,
     );
-    // Include untracked bytes: a confirmation must not silently include subsequently edited files.
-    for (const file of files) {
-      const full = path.join(repo, file);
-      const stat = await fs.lstat(full).catch(() => null);
-      if (stat?.isSymbolicLink()) hash.update(await fs.readlink(full));
-      else if (stat?.isFile()) {
-        for await (const chunk of createReadStream(full)) hash.update(chunk);
-      }
-    }
+    await hashDirtyFiles(
+      hash,
+      repo,
+      files,
+      fingerprintContentFileLimit,
+      fingerprintContentByteBudget,
+    );
     let blocked: CheckoutBlock | undefined = fields.some((row) => /^(?:.U|U.|AA|DD) /.test(row))
       ? 'operation'
       : undefined;
@@ -213,8 +306,9 @@ export function createCheckoutService(listActivity: () => Promise<CheckoutActivi
           try {
             // Git's two-tree merge accounts for index contents, working files and
             // untracked collisions, including staged content matching the target.
-            await gitExec(['read-tree', '-m', '-u', '-n', 'HEAD', commit], repo, readOpts);
-          } catch {
+            await gitExec(['read-tree', '-m', '-u', '-n', 'HEAD', commit], repo, scanOpts);
+          } catch (error) {
+            if (isGitTimeout(error)) throw error;
             // A failed or indeterminate dry-run must not enable the carry action.
             carryAllowed = false;
           }
@@ -226,7 +320,7 @@ export function createCheckoutService(listActivity: () => Promise<CheckoutActivi
             await gitExec(
               ['ls-files', '--others', '--ignored', '--exclude-standard', '--directory', '-z'],
               repo,
-              readOpts,
+              scanOpts,
             )
           ).stdout
             .split('\0')
@@ -234,7 +328,7 @@ export function createCheckoutService(listActivity: () => Promise<CheckoutActivi
             .map((file) => file.replace(/\/$/, ''));
           if (ignored.length) {
             const changes = (
-              await gitExec(['diff', '--name-only', '-z', 'HEAD', commit, '--'], repo, readOpts)
+              await gitExec(['diff', '--name-only', '-z', 'HEAD', commit, '--'], repo, scanOpts)
             ).stdout
               .split('\0')
               .filter(Boolean);
@@ -247,7 +341,8 @@ export function createCheckoutService(listActivity: () => Promise<CheckoutActivi
               blocked ??= 'conflict';
             }
           }
-        } catch {
+        } catch (error) {
+          if (isGitTimeout(error)) throw error;
           carryAllowed = false;
           blocked ??= 'git';
         }
@@ -278,6 +373,17 @@ export function createCheckoutService(listActivity: () => Promise<CheckoutActivi
       stashes: (await stashes(repo)).filter((s) => s.branch === current),
     };
   }
+  async function status(input: string, target?: string): Promise<CheckoutStatus> {
+    const repo = await root(input);
+    const key = `${repo}\0${target ?? ''}`;
+    const existing = inFlightStatus.get(key);
+    if (existing) return existing;
+    const pending = computeStatus(repo, target, false).finally(() => {
+      if (inFlightStatus.get(key) === pending) inFlightStatus.delete(key);
+    });
+    inFlightStatus.set(key, pending);
+    return pending;
+  }
   async function applyStash(repo: string, id: string) {
     // Apply first, drop only after success; conflicts always leave the named stash recoverable.
     await write(repo, 'stash', 'apply', '--index', id);
@@ -288,15 +394,17 @@ export function createCheckoutService(listActivity: () => Promise<CheckoutActivi
   async function locked<T>(repo: string, fn: () => Promise<T>) {
     if (active.has(repo)) throw new Error('Checkout already running');
     active.add(repo);
+    clearInFlightStatus(repo);
     try {
       return await withBranchMutation(repo, fn);
     } finally {
+      clearInFlightStatus(repo);
       active.delete(repo);
     }
   }
   // The service lock is excluded from its own preflight, while competing callers remain blocked.
   async function preflight(repo: string, target?: string) {
-    return status(repo, target, true);
+    return computeStatus(repo, target, true);
   }
   return {
     status,
@@ -347,7 +455,7 @@ export function createCheckoutService(listActivity: () => Promise<CheckoutActivi
         assertScope();
         const carrySnapshot =
           strategy === 'carry' && before.files.length
-            ? (await git(repo, 'stash', 'create')) || undefined
+            ? (await gitExec(['stash', 'create'], repo, writeOpts)).stdout.trim() || undefined
             : undefined;
         let stash: string | undefined;
         if (strategy === 'stash' && before.files.length) {
