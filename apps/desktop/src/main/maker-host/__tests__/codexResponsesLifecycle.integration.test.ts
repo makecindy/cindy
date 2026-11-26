@@ -28,29 +28,35 @@ const binary = process.env.CINDY_TEST_CODEX_BINARY;
 // diagnosis with absent/partial text or reasoning and accept the next distinct
 // input after native cleanup. Unit mocks cannot verify these native boundaries.
 it.skipIf(!binary).each([
-  { routeKind: 'ordinary', truncationOnly: false },
-  { routeKind: 'namespaced', truncationOnly: false },
-  { routeKind: 'hosted', truncationOnly: false },
-  { routeKind: 'namespaced', truncationOnly: true },
-])('diagnoses Responses lifecycle on $routeKind (output-limit=$truncationOnly)', async ({ routeKind, truncationOnly }) => {
+  { routeKind: 'ordinary', truncationOnly: false, refreshInstructions: false },
+  { routeKind: 'namespaced', truncationOnly: false, refreshInstructions: false },
+  { routeKind: 'hosted', truncationOnly: false, refreshInstructions: false },
+  { routeKind: 'namespaced', truncationOnly: true, refreshInstructions: false },
+  { routeKind: 'ordinary', truncationOnly: false, refreshInstructions: true },
+])('diagnoses Responses lifecycle on $routeKind (output-limit=$truncationOnly, refresh=$refreshInstructions)', async ({
+  routeKind, truncationOnly, refreshInstructions,
+}) => {
   fixture.root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-4509-'));
   const home = path.join(fixture.root, 'home');
   const codex = path.join(fixture.root, 'codex');
   const work = path.join(fixture.root, 'work');
   for (const dir of [home, codex, work]) fs.mkdirSync(dir);
   const homeSpy = vi.spyOn(os, 'homedir').mockReturnValue(home);
-  const cases = truncationOnly ? ['incomplete', 'incomplete-partial', 'incomplete-reasoning'] : routeKind === 'hosted'
+  const cases = refreshInstructions ? ['valid'] : truncationOnly ? ['incomplete', 'incomplete-partial', 'incomplete-reasoning'] : routeKind === 'hosted'
     ? ['orphan']
     : ['orphan', 'valid', 'done-only', 'missing-done', 'empty', 'incomplete'];
   let testCase = '';
   const requests: string[] = [];
+  const requestBodies: string[] = [];
   const server = createServer(async (req, res) => {
-    for await (const _ of req) { /* drain synthetic body */ }
+    let body = '';
+    for await (const chunk of req) body += String(chunk);
     if (req.method !== 'POST' || req.url !== '/v1/responses') {
       res.writeHead(404).end();
       return;
     }
     requests.push(testCase);
+    if (refreshInstructions) requestBodies.push(body);
     const response = { id: 'resp_replay', object: 'response', model: 'probe-model' };
     const item = { id: 'msg_1', type: 'message', role: 'assistant' };
     const events: Record<string, unknown>[] = [
@@ -136,7 +142,8 @@ it.skipIf(!binary).each([
       }),
       registerCodexSystemPromptForThread: ({ sessionId, threadId, text, ...options }) => proxy.registerComposed(sessionId, threadId, text, options),
     });
-    const handle = await agent.startSession({ sessionId, providerId, model: 'probe-model', workingDir: work, makerMemoryEnabled: false });
+    const startOptions = { sessionId, providerId, model: 'probe-model', workingDir: work, makerMemoryEnabled: false };
+    const handle = await agent.startSession({ ...startOptions, userPrompt: 'ORIGINAL_PERSONAL_STYLE_FIXTURE' });
     try {
       for (testCase of cases) {
         const collect = (async () => {
@@ -182,6 +189,30 @@ it.skipIf(!binary).each([
       }
       expect(requests).toEqual(cases);
     } finally { await handle.close(); }
+    // Native-resume regression: the initial runtime's personal instructions
+    // must be replaced on the provider request while the exact thread survives.
+    if (refreshInstructions) {
+      expect(handle.codexUsesProxyInstructions).toBe(true);
+      expect(requestBodies[0]).toContain('ORIGINAL_PERSONAL_STYLE_FIXTURE');
+      const resumed = await agent.startSession({
+        ...startOptions, resumeSessionId: handle.id, codexHistoryHasProductPrompt: false,
+        userPrompt: 'UPDATED_PERSONAL_STYLE_FIXTURE', vendorOptions: { _cindyRequireNativeResume: true },
+      });
+      try {
+        expect(resumed.id).toBe(handle.id);
+        expect(resumed.codexUsesProxyInstructions).toBe(true);
+        testCase = 'valid';
+        const finished = (async () => {
+          for await (const event of resumed.events()) {
+            if (event.type === 'done' || event.type === 'error') return event;
+          }
+        })();
+        await resumed.send({ type: 'user', content: 'Next instruction after refresh' }, { throwOnStartFailure: true });
+        expect(await finished).toMatchObject({ type: 'done' });
+        expect(requestBodies.at(-1)).toContain('UPDATED_PERSONAL_STYLE_FIXTURE');
+        expect(requestBodies.at(-1)).not.toContain('ORIGINAL_PERSONAL_STYLE_FIXTURE');
+      } finally { await resumed.close(); }
+    }
   } finally {
     await agent?.dispose();
     proxy.unregister(sessionId);

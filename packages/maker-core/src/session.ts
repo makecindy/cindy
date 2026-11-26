@@ -2072,6 +2072,10 @@ export class Session {
     return this.handle.codexProxyActive;
   }
 
+  get codexUsesProxyInstructions(): boolean | undefined {
+    return this.handle.codexUsesProxyInstructions;
+  }
+
   /** Codex-only: app-server 确认的 thread 级 model provider 身份。 */
   get codexThreadModelProviderId(): string | undefined {
     return this.handle.codexThreadModelProviderId;

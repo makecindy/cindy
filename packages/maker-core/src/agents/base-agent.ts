@@ -2731,6 +2731,8 @@ export interface AgentSessionHandle {
   ): () => void;
   /** Codex-only: 当前会话绑定的 app-server host 是否经 loopback proxy 出口。 */
   readonly codexProxyActive?: boolean;
+  /** This thread reads developer instructions from the HTTP proxy on resume. */
+  readonly codexUsesProxyInstructions?: boolean;
   /** Local runtime identity, never serialized to the remote wire protocol. */
   readonly codexHostKey?: string;
   /**

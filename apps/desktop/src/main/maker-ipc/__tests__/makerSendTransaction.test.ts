@@ -207,6 +207,26 @@ describe('local application task takeover', () => {
   });
 });
 
+// Unit regression at SEND: constructing a new native runtime is useful only
+// if this exact user turn uses it. A failed resume must not dispatch or cold-start.
+it.each([false, true])('uses the refreshed send target only after successful resume (failure=%s)', async failure => {
+  const { deps, session } = createDeps();
+  const replacement = createSession();
+  deps.refreshPersonalizationBeforeSend = async () => {
+    if (failure) throw new Error('Original history is unavailable');
+    return replacement;
+  };
+  const result = await createMakerSendTransaction(deps).sendToAgentAccepted('session-1', 'Next instruction');
+  expect(session.send).not.toHaveBeenCalled();
+  expect(deps.bootstrapSession).not.toHaveBeenCalled();
+  if (failure) {
+    expect(result.outcome).toMatchObject({ kind: 'host-send', message: 'Original history is unavailable' });
+    expect(replacement.send).not.toHaveBeenCalled();
+  } else {
+    expect(replacement.send).toHaveBeenCalledOnce();
+  }
+});
+
 describe('project resource drift recycling', () => {
   function driftDeps() {
     const { deps, session } = createDeps();

@@ -440,6 +440,9 @@ export interface MakerSendTransactionDeps {
   beforeDispatchDirectUserTurn?: (sessionId: string, signal?: AbortSignal) => void | Promise<void>;
   /** Capture product lifecycle state before async preparation; commit only at vendor dispatch. */
   prepareProductTurn?: (sessionId: string) => (() => void) | undefined;
+  refreshPersonalizationBeforeSend?(
+    sessionId: string, live: MakerSendTransactionSession | undefined, options: MakerSendOptions,
+  ): Promise<MakerSendTransactionSession | undefined>;
   /** Synchronous final fence immediately before Session.send enters vendor code. */
   assertBeforeVendorDispatch?: (sessionId: string, sendOpts: unknown) => void;
   /** Launcher-owned durable startup fence. A failed write must prevent provider
@@ -1269,16 +1272,14 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
         return toCompatibleMakerSendResult(createHostSendFailure(error.action === 'skip' ? 'PLUGIN_TURN_SKIPPED' : 'PLUGIN_TURN_BLOCKED',
           'The selected system prompt provider is unavailable.'));
       }
-      // 发送前的准备期间就被停止(如供应商组正在等原电脑恢复)：不再打开会话、不再派发，与 Session 在派发前
-      // 收到取消是同一个结果，由调用方按「派发前取消」收尾。
-      if (requestedSendOpts.signal?.aborted) {
-        return toCompatibleMakerSendResult(
-          toDesktopSessionDispatchOutcome(
-            { accepted: false, reason: 'cancelled-before-dispatch' },
-            { source: 'maker-ipc', context: `SEND/${sessionId}/before-session` },
-          ),
-        );
-      }
+      // Stop during runtime preparation has the same result as cancellation before native dispatch.
+      const cancelledBeforeSession = () => toCompatibleMakerSendResult(
+        toDesktopSessionDispatchOutcome(
+          { accepted: false, reason: 'cancelled-before-dispatch' },
+          { source: 'maker-ipc', context: `SEND/${sessionId}/before-session` },
+        ),
+      );
+      if (requestedSendOpts.signal?.aborted) return cancelledBeforeSession();
       let retryHandoff: { full: string; forRetry: string } | undefined;
       const retrySource = requestedSendOpts.persistUserMessage?.automaticReplaySourceClientId;
       await deps.prepareUnhealthySession?.(sessionId, retrySource ? {
@@ -1294,19 +1295,31 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
         deps.log.info('send: error session requires recovery before dispatch', { sessionId });
         sess = undefined;
       }
+      if (sess?.isTurnRunning()) {
+        throwIpcError('SESSION_RUNNING', `Session ${sessionId} is already running a turn`);
+      }
+      const sessionBeforeRefresh = sess;
+      try {
+        if (deps.refreshPersonalizationBeforeSend) {
+          sess = await deps.refreshPersonalizationBeforeSend(sessionId, sess ?? undefined, requestedSendOpts);
+        }
+      } catch (error) {
+        if (requestedSendOpts.signal?.aborted) return cancelledBeforeSession();
+        return toCompatibleMakerSendResult(createHostSendFailure(
+          'REHYDRATE_FAILED', error instanceof Error ? error.message : 'Could not apply updated personal instructions.',
+        ));
+      }
+      if (requestedSendOpts.signal?.aborted) return cancelledBeforeSession();
       // 会话中途新增的项目资源(如 openspec init):空闲时经 Maker 以
       // 'runtime-refresh' 回收运行时(session:closed 带刷新原因,IM runner 保留
       // 排队回合),下面的 lazy bootstrap 会重扫重算 argv 后再投递
       // (见 Session.hasRecyclableProjectResourceDrift 的空闲口径说明)。
       // 无 createOpts 的直发/老链路调用无法走 lazy-create 重建,跳过回收按
       // 原运行时投递(维持回收前行为,不把触发消息拒成 NOT_FOUND)。
-      if (createOpts && sess?.hasRecyclableProjectResourceDrift?.()) {
+      if (createOpts && sess === sessionBeforeRefresh && sess?.hasRecyclableProjectResourceDrift?.()) {
         await deps.closeSessionIfCurrent(sessionId);
         deps.log.info('send: project resources drifted, recycling runtime before dispatch', { sessionId });
         sess = undefined;
-      }
-      if (sess?.isTurnRunning()) {
-        throwIpcError('SESSION_RUNNING', `Session ${sessionId} is already running a turn`);
       }
       await deps.ensureRemoteReadyForSessionStart({ session: sess, createOpts });
 
