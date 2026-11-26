@@ -244,7 +244,7 @@ beforeEach(async () => {
 });
 afterEach(async () => { await act(async () => root.unmount()); });
 
-// Contract for the transport stand-ins in pluginsScreen.test.tsx (transportSend) and pluginManagement.test.ts
+// Contract for the transport stand-ins in pluginsScreenHarness.tsx (transportSend) and pluginManagement.test.ts
 // (maintainer review 08:48 of #12684): through the real Provider, a caller's preSend runs first at entry, before the
 // device-link client is asked to send, and last inside the client right before the first socket write; a failure
 // after that write keeps its in-flight mark, and a refusal at the last check is the caller's own error.
