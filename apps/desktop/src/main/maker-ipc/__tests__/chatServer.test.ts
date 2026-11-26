@@ -1381,6 +1381,25 @@ describe('Chat Server result delivery and refresh', () => {
       .toMatchObject({ ok: false, errorCode: 'SERVICE_ERROR' });
     expect(deps.log.warn).toHaveBeenCalledWith('Chat request failed', expect.objectContaining({ route: '/conversations/:id/messages', status: 500, code: 'UPSTREAM_FAILED' }));
     expect(JSON.stringify(vi.mocked(deps.log.warn).mock.calls)).not.toMatch(/private body|secret text/);
+    expect(vi.mocked(deps.log.warn).mock.calls[0]![1]).not.toHaveProperty('caller');
+  });
+
+  // 2026-11-26: a GET /conversations/:id/messages/:id answered 400 every ~4 s for 13 minutes and the
+  // template alone could not say who asked. A 400 now names the calling functions (code identifiers
+  // only, no IDs or text), past Node's scheduler frames. Unit tier, faked Chat Server.
+  it('names the caller of a request the server refuses as malformed, without IDs', async () => {
+    deps.log = { warn: vi.fn() };
+    fixture.handle.mockImplementation((route, method) => {
+      if (route.endsWith('/members')) return { body: [] };
+      if (route.endsWith('/messages') && method === 'POST') return { status: 400, body: { error: { code: 'INVALID_INPUT', message: 'secret text', details: [{ path: [], code: 'invalid_format' }] } } };
+      return response(route);
+    });
+    await service.sendMessage({ groupId: roomId, text: 'private body', clientId: 'send-400-test', mentions: { all: false, botIds: [] } });
+    const fields = vi.mocked(deps.log.warn).mock.calls.find(([name]) => name === 'Chat request failed')![1] as Record<string, unknown>;
+    expect(fields).toMatchObject({ route: '/conversations/:id/messages', status: 400, code: 'INVALID_INPUT' });
+    // Code locations of this build only: a base file name and line, no directory.
+    expect(fields.caller).toMatch(/^[\w$<>]*@chatServer\.ts:\d+( < [\w$<>]*@[\w.$-]+:\d+)?$/);
+    expect(JSON.stringify(fields)).not.toContain(roomId);
   });
 
   it.each([
@@ -2653,6 +2672,9 @@ describe('Chat Server result delivery and refresh', () => {
         await service.settleLaneTurn({ ...terminal, sessionId: 'group-task-1', activeInputClientId: dispatched()[0]!.clientId, resultText: 'Hi' });
         const input = await sendQuoted();
         expect(input.attachments).toEqual([downloaded(1), downloaded(2)]);
+        const note = t('bots.groupChat.assistant.replyingTo').replace('{{name}}', 'Ann').replace('{{text}}', 'lesson-1.docx');
+        expect(input.persistedContent).toContain(note);
+        expect(input.origin).toMatchObject({ displayText: input.persistedContent });
         expect(fixture.download.mock.calls).toEqual([[roomId, file(1).mediaId], [roomId, file(2).mediaId]]);
         expect(fixture.handle.mock.calls.filter(([route]) => route === `/conversations/${roomId}/messages/${message(1, peerId, '').id}`)).toHaveLength(1);
         expect(fixture.handle.mock.calls.some(([route]) => route === `/conversations/${roomId}/messages/${message(2, peerId, '').id}`)).toBe(false);
@@ -2748,21 +2770,31 @@ describe('Chat Server result delivery and refresh', () => {
       fixture.handle.mockImplementation((route, method, body) => route === '/me'
         ? { body: { actor: { id: selfId }, capabilities: { groupAssistant: 1, groupAssistantDevice: 1, groupTeammateMentions: 1 }, groupAssistantActorId: cindyId } }
         : original(route, method, body));
-      const words = 'Please review the teammates column';
-      const excerpt = '| name | teammates | | --- | --- | | A | B |';
-      const earlier = message(2, peerId, 'Use the draft');
-      const quote = buildBotGroupQuoteCard({ messageId: earlier.id, authorName: 'Ann', authorKind: 'user',
-        excerpt, attachmentCount: 0, attachmentName: null, sequence: 2 });
-      history.push(earlier, message(5, sender === 'user' ? selfId : teammateId, words, {
-        origin: sender === 'user' ? 'user' : 'bot', content: [{ type: 'text', text: words }, quote],
-      }));
-      queue.push(request(5));
-      await vi.advanceTimersByTimeAsync(12_000);
+      if (sender === 'user') {
+        const table = '| Item | Date |\n| --- | --- |\n| Review | Friday |';
+        history.push(message(1, peerId, table));
+        const quote = buildBotGroupQuoteCard({ messageId: history[0]!.id, authorName: 'Ann',
+          authorKind: 'user', excerpt: table.replaceAll('\n', ' '), sequence: 1, attachmentCount: 0, attachmentName: null });
+        history.push(message(5, selfId, '', { content: [quote, { type: 'text', text: '@Cindy When is the review?' }] }));
+        queue.push(request(5));
+        await vi.advanceTimersByTimeAsync(12_000);
+      }
+      else {
+        const original = message(1, peerId, '<Widget />');
+        history.push(original);
+        const quote = buildBotGroupQuoteCard({ messageId: original.id, authorName: 'Ann',
+          authorKind: 'user', excerpt: '<Widget />', sequence: 1, attachmentCount: 0, attachmentName: null });
+        history.push(message(5, teammateId, '', { origin: 'bot', content: [quote, { type: 'text', text: 'Please review the teammates column' }] }));
+        queue.push(request(5));
+        await vi.advanceTimersByTimeAsync(12_000);
+      }
       const [input] = dispatched();
-      const quoteLine = t('bots.groupChat.assistant.replyingTo').replace('{{name}}', 'Ann').replace('{{text}}', excerpt);
-      const visible = `${words}\n\n${t('bots.groupChat.assistant.groupRecent')}\n${quoteLine}\nAnn：Use the draft`;
-      expect(input).toMatchObject({ persistedContent: visible, origin: { displayText: visible } });
-      expect(input!.message).toContain(visible);
+      expect(input!.message).toContain('Luna');
+      const expected = sender === 'user'
+        ? '@Cindy When is the review?\n\n' + t('bots.groupChat.assistant.replyingTo').replace('{{name}}', 'Ann').replace('{{text}}', 'Item Date Review Friday')
+        : 'Please review the teammates column\n\n' + t('bots.groupChat.assistant.replyingTo').replace('{{name}}', 'Ann').replace('{{text}}', '<Widget />');
+      expect(input!.persistedContent).toBe(expected);
+      expect(input!.origin).toMatchObject({ displayText: expected });
       expect(input!.message).toContain('Answer whoever asked.');
       const context = [...input!.message.matchAll(/<untrusted-data>\n(.*?)\n<\/untrusted-data>/g)]
         .map(match => JSON.parse(match[1])).find(block => block.teammates);
@@ -3097,6 +3129,8 @@ describe('Chat Server result delivery and refresh', () => {
       if (!result.ok) throw new Error(result.errorCode);
       expect(result.group.round.speakers.map(s => s.executionStatus)).toEqual([status, 'running']);
       expect(result.group.round.canStop).toBe(requester === selfId && status === 'running');
+      // Only this account's own working agent (here self-requested Cindy) drives the roster running indicator.
+      expect(result.group.teammateActivity?.phase).toBe(requester === selfId ? 'running' : 'idle');
     });
 
     // The member list shows the group's Cindy as plain Cindy with Cindy's artwork, nobody's teammate;

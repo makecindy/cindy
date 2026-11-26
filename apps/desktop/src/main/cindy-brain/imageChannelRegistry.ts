@@ -119,10 +119,16 @@ export class ImageChannelRegistry {
     return this.channels.get(providerId)?.imageProtocol;
   }
 
+  /** Read once per provider during a synchronous catalog projection. */
+  readyChannel(providerId: string): ImageChannel | undefined {
+    const channel = this.channels.get(providerId);
+    return channel?.ready() === true ? channel : undefined;
+  }
+
   /** 白名单派生用:未注册 = 不就绪(目录数据先行时的乱序安全兜底)。 */
   isProviderReady(providerId: string, modelId?: string): boolean {
-    const channel = this.channels.get(providerId);
-    return channel?.ready() === true &&
+    const channel = this.readyChannel(providerId);
+    return channel !== undefined &&
       (modelId === undefined || channel.isModelReady?.(modelId) !== false);
   }
 

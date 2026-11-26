@@ -250,6 +250,7 @@
     "edit": "修",
     "steer": "插言",
     "steerQueued": "尚未送达，讯仍在队列中。",
+    "steerUnsupportedNotice": "此引擎不受插话，待遣之讯俟此轮毕乃遣。",
     "moveUp": "前移一位",
     "moveDown": "后移一位",
     "cancelSend": "罢遣",
