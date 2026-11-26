@@ -306,6 +306,8 @@
     },
     "allowMemberInvites": "Tous les membres peuvent inviter des amis",
     "allowMemberInvitesHint": "Si activé, tous les membres du groupe peuvent inviter des amis. Seuls le propriétaire et les administrateurs peuvent modifier ce réglage.",
+    "allowMentionAllHumans": "Autoriser la mention de tout le monde",
+    "allowMentionAllHumansHint": "Les membres peuvent mentionner toutes les personnes du groupe à la fois.",
     "allowMentionAllBots": "Autoriser @tous les amis",
     "allowMentionAllBotsHint": "Seul le propriétaire du groupe peut le modifier. Tous les amis peuvent répondre : prudence en grand groupe. Sans effet sur l’IA qui répond pour vous.",
     "notifications": {
@@ -344,6 +346,7 @@
     "lifecycleUnavailable": "Le serveur ou l'ordinateur actuel ne prend pas encore en charge cette action.",
     "groupDissolved": "Ce groupe a été dissous. Vous pouvez toujours lire l'historique disponible.",
     "lastOwner": "Transférez la propriété ou dissolvez ce groupe avant de le quitter.",
+    "allHumansMentionDisabled": "Les mentions de tout le monde sont désactivées dans ce groupe.",
     "allBotsMentionDisabled": "Le propriétaire du groupe n’a pas encore activé @Tous les amis.",
     "turnAlreadyStarted": "Cet ami a déjà commencé et ne peut plus être ignoré",
     "stopOwnershipUnknown": "Impossible d’arrêter une partie du travail, car son demandeur n’a pas pu être vérifié.",

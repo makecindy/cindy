@@ -772,7 +772,7 @@ export function ChatThreadPanel({ group, rootId, speakers = [], onStop, stopping
             <Button variant="secondary" size="sm" compact disabled={readOnly} loading={[...unposted].some(id => posting.has(id))} onClick={() => void retryUnposted()}>
               {t(key('thread.retryPost'))}</Button>
           </div>}
-            <BotGroupComposer allowMentionAllBots={group.supportsMentionAudiences === true && group.allowMentionAllBots === true}
+            <BotGroupComposer allowMentionAllHumans={group.allowMentionAllHumans !== false} allowMentionAllBots={group.supportsMentionAudiences === true && group.allowMentionAllBots === true}
               mode="thread"
               groupId={group.id}
               draftKey={attachmentScope}

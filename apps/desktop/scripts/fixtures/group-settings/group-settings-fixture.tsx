@@ -52,6 +52,7 @@ const group = {
   ...(data.assistant ? { supportsGroupAssistant: true, assistantEnabled: data.assistant === 'on', supportsGroupProject: true,
     project: { kind: 'github', repo: 'makecindy/cindy' } } : {}),
   organizerBotId: data.alone ? null : 'aster', projectDir: data.role === 'member' ? null : '/Users/nana/Projects/cindy', autoContinue: false,
+  supportsHumanMentionSettings: true, allowMentionAllHumans: true,
   supportsMentionAudiences: true, allowMentionAllBots: true,
   supportsMemberInvites: true, allowMemberInvites: data.memberInvites === true,
   supportsDissolve: true, supportsGroupLeave: true, supportsListRemoval: true, supportsMemberAvatar: true,

@@ -12043,6 +12043,8 @@
         "projectDirSaveFailed": "專案資料夾沒能儲存，確認資料夾還在後再試",
         "allowMemberInvites": "允許所有成員邀請朋友",
         "allowMemberInvitesHint": "開啟後，已加入的所有成員都可邀請朋友。僅群主和管理員可變更。",
+        "allowMentionAllHumans": "允許 @所有人",
+        "allowMentionAllHumansHint": "群組成員可以一次提及群組裡的所有人。",
         "allowMentionAllBots": "允許 @所有夥伴",
         "allowMentionAllBotsHint": "僅群主可更改。夥伴可能都會回覆，大群請謹慎開啟。此開關不影響 AI 代答。"
       },
@@ -12073,6 +12075,7 @@
         "lifecycleUnavailable": "目前伺服器或電腦尚不支援此操作。",
         "groupDissolved": "群聊已解散，仍可查看有權存取的歷史訊息。",
         "lastOwner": "請先轉讓群主或解散群聊，再退出。",
+        "allHumansMentionDisabled": "本群組已關閉「提及所有人」。",
         "allBotsMentionDisabled": "群主尚未開啟 @所有夥伴。",
         "turnAlreadyStarted": "這位夥伴已開始執行，不能略過"
       },

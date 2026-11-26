@@ -40,7 +40,7 @@ beforeEach(() => {
   ] };
   source = chatGroupView({ snapshot, messages: [], before: null }, id(2));
   request.mockImplementation(async (path, method, body) => {
-    if (path === '/me') return { actor: { id: id(2), kind: 'human' }, capabilities: { groupSingleSpeaker: 1 } };
+    if (path === '/me') return { actor: { id: id(2), kind: 'human' }, capabilities: { groupSingleSpeaker: 1, groupHumanMentionSettings: 1 } };
     if (path === '/actors') return [{ id: id(4), kind: 'bot', externalId: 'offline-bot', name: 'Offline bot', avatar: null, homeDeviceId: null }];
     if (path.endsWith('/snapshot')) return structuredClone(snapshot);
     if (method === 'PATCH') {
@@ -48,6 +48,7 @@ beforeEach(() => {
       if (body.expectedRevision !== snapshot.room.revision) throw Object.assign(new Error('REVISION_CONFLICT'), { status: 409 });
       if (body.name !== undefined) snapshot.room.name = body.name;
       if (body.description !== undefined) snapshot.room.description = body.description;
+      if (body.allowMentionAllHumans !== undefined) snapshot.room.allow_mention_all_humans = body.allowMentionAllHumans;
       if (body.allowMemberInvites !== undefined) snapshot.room.allow_member_invites = body.allowMemberInvites;
       snapshot.room.revision++;
       return { revision: snapshot.room.revision };
@@ -67,9 +68,9 @@ it('reads and saves cloud settings and offers offline companions without any hos
   expect(result.group).toMatchObject({ description: 'Original', singleSpeaker: true });
   expect(result.group?.members.find(member => member.actorId === id(3))?.homeDeviceId).toBe('pc');
   expect(candidates.rows.map(row => row.id)).toEqual([id(4)]);
-  await act(async () => { await result.act('update', { name: 'Renamed', description: 'Shared background', replyMode: 'mentioned', organizerBotId: id(3), allowMemberInvites: true }); });
-  expect(writes()[0]).toEqual([`/conversations/${id(1)}`, 'PATCH', { operationId: 'operation-1', expectedRevision: 4, name: 'Renamed', description: 'Shared background', responseMode: 'mentioned', organizerId: id(3), allowMemberInvites: true }, id(2)]);
-  expect(result.group).toMatchObject({ name: 'Renamed', description: 'Shared background', revision: 5, allowMemberInvites: true });
+  await act(async () => { await result.act('update', { name: 'Renamed', description: 'Shared background', replyMode: 'mentioned', organizerBotId: id(3), allowMemberInvites: true, allowMentionAllHumans: false }); });
+  expect(writes()[0]).toEqual([`/conversations/${id(1)}`, 'PATCH', { operationId: 'operation-1', expectedRevision: 4, name: 'Renamed', description: 'Shared background', responseMode: 'mentioned', organizerId: id(3), allowMemberInvites: true, allowMentionAllHumans: false }, id(2)]);
+  expect(result.group).toMatchObject({ name: 'Renamed', description: 'Shared background', revision: 5, allowMemberInvites: true, allowMentionAllHumans: false });
   await act(async () => { await result.act('add-member', { botId: id(4) }); await result.act('set-member-role', { actorId: id(3), role: 'admin' }); await result.act('remove-member', { actorId: id(3) }); });
   expect(writes().slice(1).map(call => call[2])).toEqual([
     { operationId: 'operation-2', actorId: id(4), action: 'invite' },

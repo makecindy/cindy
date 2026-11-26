@@ -12043,6 +12043,8 @@
         "projectDirSaveFailed": "项目文件夹没能保存，确认文件夹还在后再试",
         "allowMemberInvites": "允许所有成员邀请朋友",
         "allowMemberInvitesHint": "开启后，已加入的所有成员都可邀请朋友。仅群主和管理员可更改。",
+        "allowMentionAllHumans": "允许 @所有人",
+        "allowMentionAllHumansHint": "群成员可以一次提及群里所有人。",
         "allowMentionAllBots": "允许 @所有伙伴",
         "allowMentionAllBotsHint": "仅群主可更改。伙伴可能都会回复，大群请谨慎开启。此开关不影响 AI 代答。"
       },
@@ -12073,6 +12075,7 @@
         "lifecycleUnavailable": "当前服务器或电脑暂不支持此操作。",
         "groupDissolved": "群聊已解散，仍可查看有权访问的历史消息。",
         "lastOwner": "请先转让群主或解散群聊，再退出。",
+        "allHumansMentionDisabled": "本群已关闭「提及所有人」。",
         "allBotsMentionDisabled": "群主尚未开启 @所有伙伴。",
         "turnAlreadyStarted": "这位伙伴已开始执行，不能跳过"
       },

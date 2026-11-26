@@ -468,6 +468,11 @@ function ManagePage({ k, group, owner, writable, online, busy, direct, settings,
         { id: 'mentioned', title: t('groupChat.settings.replyModeMentioned') }, { id: 'all', title: t('groupChat.settings.replyModeAll') },
       ], 'replyMode', 'botGroup.settings.replyMode')}
     </SettingsGroup>
+    {group.supportsHumanMentionSettings ? <SettingsGroup footer={t('groupChat.settings.allowMentionAllHumansHint')}>
+      <SettingsSwitchRow label={t('groupChat.settings.allowMentionAllHumans')} value={group.allowMentionAllHumans !== false}
+        disabled={!writable || busy} switchTestID="botGroup.settings.allowMentionAllHumans"
+        onValueChange={allowMentionAllHumans => { void settings('update', { allowMentionAllHumans }); }} />
+    </SettingsGroup> : null}
     {group.supportsMentionAudiences && owner ? <SettingsGroup footer={t('groupChat.settings.allowMentionAllBotsHint')}>
       <SettingsSwitchRow label={t('groupChat.settings.allowMentionAllBots')} value={group.allowMentionAllBots === true}
         disabled={!writable || busy} switchTestID="botGroup.settings.allowMentionAllBots"

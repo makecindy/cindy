@@ -12181,6 +12181,8 @@
         "projectDirSaveFailed": "Não foi possível salvar a pasta do projeto. Verifique se a pasta ainda existe e tente novamente.",
         "allowMemberInvites": "Permitir que todos convidem amigos",
         "allowMemberInvitesHint": "Quando ativado, todos os membros do grupo podem convidar amigos. Só o proprietário e os administradores podem alterar esta opção.",
+        "allowMentionAllHumans": "Permitir @Todos",
+        "allowMentionAllHumansHint": "Os membros podem mencionar todas as pessoas do grupo de uma só vez.",
         "allowMentionAllBots": "Permitir @todos os amigos",
         "allowMentionAllBotsHint": "Só o proprietário do grupo pode alterar. Todos os amigos podem responder; cuidado em grupos grandes. Não afeta a IA que responde em seu nome."
       },
@@ -12211,6 +12213,7 @@
         "lifecycleUnavailable": "O servidor ou computador atual ainda não oferece suporte a esta ação.",
         "groupDissolved": "Este grupo foi dissolvido. Você ainda pode ler o histórico disponível.",
         "lastOwner": "Transfira a propriedade ou dissolva este grupo antes de sair.",
+        "allHumansMentionDisabled": "As menções a todas as pessoas estão desativadas neste grupo.",
         "allBotsMentionDisabled": "O proprietário do grupo ainda não ativou @Todos os amigos.",
         "turnAlreadyStarted": "Este amigo já começou e não pode ser pulado"
       },

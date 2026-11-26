@@ -12043,6 +12043,8 @@
         "projectDirSaveFailed": "案之卷匣未能存，确其尚存后再试",
         "allowMemberInvites": "许诸成员邀友",
         "allowMemberInvitesHint": "启之，已入群者皆可邀友。唯群主与管理员可改。",
+        "allowMentionAllHumans": "许 @众人",
+        "allowMentionAllHumansHint": "群员可一呼众人。",
         "allowMentionAllBots": "许 @诸同伴",
         "allowMentionAllBotsHint": "唯群主可改。诸同伴或皆回复，大群宜慎启之。此开关不涉 AI 代答。"
       },
@@ -12073,6 +12075,7 @@
         "lifecycleUnavailable": "当前服务器或电脑尚不支此操作。",
         "groupDissolved": "群议已散，仍可览有权访问之旧讯。",
         "lastOwner": "请先转让群主或解散群议，再退出。",
+        "allHumansMentionDisabled": "此群已禁呼众人。",
         "allBotsMentionDisabled": "群主尚未启 @诸同伴。",
         "turnAlreadyStarted": "此同伴已始行，不可略过"
       },

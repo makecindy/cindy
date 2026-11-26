@@ -1136,6 +1136,19 @@ describe('chat interaction controls', () => {
       expect(labels().some(label => label?.includes('allBots'))).toBe(false);
     });
 
+    // Unit UI: legacy thread aliases used to broadcast even when the picker row was hidden.
+    it('treats a disabled human broadcast as text while still addressing a named member', async () => {
+      mocks.reply.mockResolvedValue({ ok: true, messageId: 'reply' });
+      render(<ChatThreadPanel group={{ ...group, members: namesakes, supportsHumanMentionSettings: true, allowMentionAllHumans: false }} rootId="root" onClose={vi.fn()} />);
+      const input = screen.getByRole('textbox', { name: k('replyPlaceholder') }) as HTMLTextAreaElement;
+      type(input, '@');
+      expect(labels()).toEqual(['Ann', 'Ann', 'Bo']);
+      type(input, '@everyone @Bo');
+      fireEvent.click(screen.getByRole('button', { name: k('sendReply') }));
+      await waitFor(() => expect(mocks.reply).toHaveBeenCalledOnce());
+      expect(mocks.reply.mock.calls[0]![0].mentions).toEqual({ all: false, botIds: [namesakes[2]!.botId] });
+    });
+
     it('opens on @ with the main composer candidates, filters, and picks a namesake by keyboard', async () => {
       const input = renderThread();
       type(input, '@');

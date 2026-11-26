@@ -16,6 +16,7 @@ export default {
     'src/renderer/features/bots/BotRosterView': 'export const BotRosterView = () => null;',
   },
   cases: {
+    'human-mentions': { about: 'Admin can manage human broadcasts independently of owner-only companion broadcasts', data: { role: 'admin' } },
     'member-invites': { about: 'Owner manages friend invitations; members can still invite their own teammates', data: { role: 'owner', memberInvites: true } },
     default: { about: 'Owner: 群管理 with 解散, member menus, invite menu with both items', data: { role: 'owner' } },
     dismissal: { about: 'Scrim and × close, nested layers stay isolated, Escape backs out of subpages, reopening clears route state', data: { role: 'owner' } },
@@ -36,6 +37,16 @@ export default {
     const dialog = page.getByRole('dialog');
     const invite = page.getByTestId('chat-group-invite');
     const manage = await row(page, await t('manage'));
+    if (ui.case === 'human-mentions') {
+      await manage.click();
+      const toggle = dialog.getByRole('switch', { name: await ui.t('bots.groupChat.settings.allowMentionAllHumans'), exact: true });
+      await toggle.waitFor();
+      assert.equal(await toggle.getAttribute('aria-checked'), 'true');
+      assert.equal(await dialog.getByRole('switch', { name: await ui.t('bots.groupChat.settings.allowMentionAllBots'), exact: true }).count(), 0);
+      await toggle.scrollIntoViewIfNeeded();
+      await ui.capture('human-mentions');
+      return;
+    }
     if (ui.case === 'member-invites') {
       await manage.click();
       const toggle = dialog.getByRole('switch', { name: await ui.t('bots.groupChat.settings.allowMemberInvites') });

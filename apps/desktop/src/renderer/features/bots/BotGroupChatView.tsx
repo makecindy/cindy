@@ -1612,7 +1612,7 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
         </div>}
         <div data-chat-composer-stack className={sharing ? 'flex justify-center' : undefined}>
           {sharing ? <ShareSelectionBar sessionId={shareScope} barWidth="var(--cindy-input-width)"
-            getContentWidth={() => contentRef.current?.querySelector('article')?.getBoundingClientRect().width ?? 914} /> : group.archived || group.dissolvedAt ? <p className="border-t border-[var(--border-default)] p-4 text-center text-13 text-[var(--text-tertiary)]">{t(group.dissolvedAt ? 'bots.groupChat.lifecycle.dissolved' : 'bots.groupChat.server.settings.archived')}</p> : <BotGroupComposer allowMentionAllBots={group.supportsMentionAudiences === true && group.allowMentionAllBots === true}
+            getContentWidth={() => contentRef.current?.querySelector('article')?.getBoundingClientRect().width ?? 914} /> : group.archived || group.dissolvedAt ? <p className="border-t border-[var(--border-default)] p-4 text-center text-13 text-[var(--text-tertiary)]">{t(group.dissolvedAt ? 'bots.groupChat.lifecycle.dissolved' : 'bots.groupChat.server.settings.archived')}</p> : <BotGroupComposer allowMentionAllHumans={group.allowMentionAllHumans !== false} allowMentionAllBots={group.supportsMentionAudiences === true && group.allowMentionAllBots === true}
             groupId={group.id}
             conversationKind={direct ? 'direct' : undefined}
             draftKey={attachmentScope}

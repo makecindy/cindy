@@ -56,7 +56,7 @@ export function useBotGroupMentionPicker({
   textareaRef,
   allLabels,
   disabled = false,
-  allowMentionAllBots = false,
+  allowMentionAllHumans = true, allowMentionAllBots = false,
 }: {
   text: string;
   /** Read-only composer states close the list and reject pending picks. */
@@ -68,6 +68,7 @@ export function useBotGroupMentionPicker({
   textareaRef: RefObject<BotGroupTextInput | null>;
   /** Labels that mean 「所有人」 when resolving; the first is the one offered. Defaults to the UI label. */
   allLabels?: readonly string[];
+  allowMentionAllHumans?: boolean;
   allowMentionAllBots?: boolean;
 }) {
   const { t } = useTranslation();
@@ -96,7 +97,7 @@ export function useBotGroupMentionPicker({
   const allLabel = t('bots.groupChat.mention.all');
   const allBotsLabel = t('bots.groupChat.mention.allBots');
   const allBotLabels = useMemo(() => [allBotsLabel, 'bots'], [allBotsLabel]);
-  const resolveLabels = useMemo(() => allLabels ?? [allLabel], [allLabels, allLabel]);
+  const resolveLabels = useMemo(() => allowMentionAllHumans ? allLabels ?? [allLabel] : [], [allowMentionAllHumans, allLabels, allLabel]);
   // You never name yourself: the host drops you from the targets (as on mobile).
   const mentionMembers = useMemo(() => chatGroupMentionRoster(members), [members]);
   const activeMembers = useMemo(() => mentionMembers.filter(isActiveBotGroupMember), [mentionMembers]);
@@ -104,7 +105,7 @@ export function useBotGroupMentionPicker({
   const options = useMemo<MentionOption[]>(() => {
     if (!query || activeMembers.length === 0) return [];
     const everyone: MentionOption[] =
-      filterBotGroupMentionCandidates(query.query, [{ name: allLabel }]).length > 0
+      allowMentionAllHumans && filterBotGroupMentionCandidates(query.query, [{ name: allLabel }]).length > 0
         ? [{ kind: 'all', label: allLabel }]
         : [];
     const people = filterBotGroupMentionCandidates(query.query, activeMembers).map(
@@ -113,7 +114,7 @@ export function useBotGroupMentionPicker({
     const allBots: MentionOption[] = allowMentionAllBots && filterBotGroupMentionCandidates(query.query, [{ name: allBotsLabel }]).length
       ? [{ kind: 'allBots', label: allBotsLabel }] : [];
     return [...everyone, ...allBots, ...people];
-  }, [activeMembers, allLabel, allBotsLabel, allowMentionAllBots, query]);
+  }, [activeMembers, allLabel, allBotsLabel, allowMentionAllHumans, allowMentionAllBots, query]);
   const open = query !== null && options.length > 0 && dismissedStart !== query.start;
   const activeIndex = Math.min(highlight, Math.max(0, options.length - 1));
 

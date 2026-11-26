@@ -80,12 +80,13 @@ type MentionOption =
   | { kind: 'member'; label: string; member: BotGroupMemberView };
 
 export function BotGroupComposer({
-  pullThrough, members, identityFor, deviceId, online, allowMentionAllBots = false, running, canStop = true, stopPending = false, planState, attachmentsSupported, uploadAttachment, quoteMessageId, focusRequest, onSend, onStop, topic = false, placeholder: placeholderOverride, maskIndicator, onParticipate,
+  pullThrough, members, identityFor, deviceId, online, allowMentionAllHumans = true, allowMentionAllBots = false, running, canStop = true, stopPending = false, planState, attachmentsSupported, uploadAttachment, quoteMessageId, focusRequest, onSend, onStop, topic = false, placeholder: placeholderOverride, maskIndicator, onParticipate,
 }: {
   pullThrough?: ComposerPullThroughBridge;
   maskIndicator?: import('react').ReactNode;
   onParticipate?(): void;
   members: readonly BotGroupMemberView[];
+  allowMentionAllHumans?: boolean;
   allowMentionAllBots?: boolean;
   identityFor: BotGroupIdentityLookup;
   deviceId: string;
@@ -161,12 +162,13 @@ export function BotGroupComposer({
   const mentionMembers = useMemo(() => chatGroupMentionRoster(members), [members]);
   const mentionCandidates = useMemo(() => mentionMembers.filter(isActiveBotGroupMember), [mentionMembers]);
   const allLabel = t('groupChat.mention.all');
+  const allLabels = useMemo(() => allowMentionAllHumans ? [allLabel] : [], [allowMentionAllHumans, allLabel]);
   const allBotsLabel = t('groupChat.mention.allBots');
   const allBotLabels = [allBotsLabel, 'bots'];
   const query = focused ? findBotGroupMentionQuery(text, caret, mentionCandidates) : null;
   const options = useMemo<MentionOption[]>(() => {
     if (!query || mentionCandidates.length === 0) return [];
-    const everyone: MentionOption[] = filterBotGroupMentionCandidates(query.query, [{ name: allLabel }]).length > 0
+    const everyone: MentionOption[] = allowMentionAllHumans && filterBotGroupMentionCandidates(query.query, [{ name: allLabel }]).length > 0
       ? [{ kind: 'all', label: allLabel }]
       : [];
     const people = filterBotGroupMentionCandidates(query.query, mentionCandidates)
@@ -174,7 +176,7 @@ export function BotGroupComposer({
     const allBots: MentionOption[] = allowMentionAllBots && filterBotGroupMentionCandidates(query.query, [{ name: allBotsLabel }]).length
       ? [{ kind: 'allBots', label: allBotsLabel }] : [];
     return [...everyone, ...allBots, ...people];
-  }, [mentionCandidates, allLabel, allBotsLabel, allowMentionAllBots, query]);
+  }, [mentionCandidates, allLabel, allBotsLabel, allowMentionAllHumans, allowMentionAllBots, query]);
   const pickerOpen = query !== null && options.length > 0;
 
   const trimmed = text.trim();
@@ -228,7 +230,7 @@ export function BotGroupComposer({
     setTracked(current => {
       const remaining = retainBotGroupTrackedMentions(text, next.text, {
         members: mentionMembers,
-        allLabels: [allLabel], allBotLabels, tracked: current, editStart: query.start, editEnd: caret,
+        allLabels, allBotLabels, tracked: current, editStart: query.start, editEnd: caret,
       });
       return option.kind === 'member' ? [...remaining, { botId: option.member.botId, label: option.label, start: query.start }] : remaining;
     });
@@ -243,7 +245,7 @@ export function BotGroupComposer({
     // One @ names one member: a typed name several members share stays in the draft to be picked.
     const [ambiguousName] = ambiguousBotGroupMentionLabels(draft, {
       members: mentionMembers,
-      allLabels: [allLabel], allBotLabels, tracked: draftTracked,
+      allLabels, allBotLabels, tracked: draftTracked,
     });
     if (ambiguousName) {
       Alert.alert(t('groupChat.errors.mentionAmbiguous', { name: ambiguousName }));
@@ -279,7 +281,7 @@ export function BotGroupComposer({
       const attachmentIds = attachments.map((attachment) => attachment.id);
       const mentions = resolveBotGroupMentions(draft, {
         members: mentionMembers,
-        allLabels: [allLabel], allBotLabels,
+        allLabels, allBotLabels,
         tracked: draftTracked,
       });
       // Targets and attachments are part of the same send intent.
@@ -405,7 +407,7 @@ export function BotGroupComposer({
         setText(value);
         setTracked(current => retainBotGroupTrackedMentions(text, value, {
           members: mentionMembers,
-          allLabels: [allLabel], allBotLabels,
+          allLabels, allBotLabels,
           tracked: current,
           editStart,
           editEnd,

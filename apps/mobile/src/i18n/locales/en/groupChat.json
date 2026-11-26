@@ -311,6 +311,8 @@
     },
     "allowMemberInvites": "Let all members invite friends",
     "allowMemberInvitesHint": "When on, all joined members can invite friends. Only the group owner and admins can change this.",
+    "allowMentionAllHumans": "Allow @Everyone",
+    "allowMentionAllHumansHint": "Members can mention all people in the group at once.",
     "allowMentionAllBots": "Allow @all buddies",
     "allowMentionAllBotsHint": "Only the group owner can change this. Buddies may all reply; use with care in large groups. AI replies on your behalf are independent."
   },
@@ -338,6 +340,7 @@
     "lifecycleUnavailable": "The current server or computer does not support this action yet.",
     "groupDissolved": "This group has been dissolved. You can still read the available history.",
     "lastOwner": "Transfer ownership or dissolve this group before leaving.",
+    "allHumansMentionDisabled": "Mentions of everyone are turned off in this group.",
     "allBotsMentionDisabled": "The group owner has not enabled @all buddies.",
     "turnAlreadyStarted": "This buddy has already started and cannot be skipped",
     "stopOwnershipUnknown": "Could not stop some work because its requester could not be verified.",

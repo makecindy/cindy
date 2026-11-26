@@ -195,7 +195,7 @@ export function BotGroupComposer({
   disabled = false,
   planState = null,
   divisionSteps = false,
-  allowMentionAllBots = false,
+  allowMentionAllHumans = true, allowMentionAllBots = false,
   attachments: attachmentState = NO_ATTACHMENTS,
   attachmentScope = '',
   dragOver = false,
@@ -224,6 +224,7 @@ export function BotGroupComposer({
   planState?: BotGroupComposerPlanState | null;
   /** Server groups: a 分工 that writes out who does what starts as written; otherwise the organizer arranges it (§7.0). */
   divisionSteps?: boolean;
+  allowMentionAllHumans?: boolean;
   allowMentionAllBots?: boolean;
   attachments?: BotGroupComposerAttachments;
   /** Scope for writing annotated images before send (see botGroupAttachmentScope). */
@@ -313,7 +314,7 @@ export function BotGroupComposer({
     members,
     textareaRef,
     allLabels: thread ? threadAllLabels : undefined,
-    allowMentionAllBots,
+    allowMentionAllHumans, allowMentionAllBots,
   });
   const [recordingSeconds, setRecordingSeconds] = useState(0);
   useEffect(() => {

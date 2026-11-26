@@ -12043,6 +12043,8 @@
         "projectDirSaveFailed": "プロジェクトフォルダを保存できませんでした。フォルダがまだあるか確認してから、もう一度お試しください",
         "allowMemberInvites": "全メンバーによる友達の招待を許可",
         "allowMemberInvitesHint": "オンにすると、参加済みの全メンバーが友達を招待できます。変更できるのはグループオーナーと管理者のみです。",
+        "allowMentionAllHumans": "全員へのメンションを許可",
+        "allowMentionAllHumansHint": "グループのメンバー全員に一度に呼びかけられます。",
         "allowMentionAllBots": "すべての仲間への @ を許可",
         "allowMentionAllBotsHint": "変更できるのはグループ所有者のみです。すべての仲間が返信する可能性があるため、大人数のグループでは慎重に有効にしてください。AI代理返信には影響しません。"
       },
@@ -12073,6 +12075,7 @@
         "lifecycleUnavailable": "現在のサーバーまたはコンピューターは、この操作にまだ対応していません。",
         "groupDissolved": "このグループは解散しました。閲覧権限のある履歴は引き続き確認できます。",
         "lastOwner": "退出する前にオーナーを譲渡するか、グループを解散してください。",
+        "allHumansMentionDisabled": "このグループでは全員へのメンションは無効です。",
         "allBotsMentionDisabled": "グループ所有者がすべての仲間への @ を有効にしていません。",
         "turnAlreadyStarted": "この仲間はすでに実行を開始しているため、スキップできません"
       },

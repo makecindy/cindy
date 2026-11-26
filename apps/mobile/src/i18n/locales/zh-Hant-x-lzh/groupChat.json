@@ -300,6 +300,8 @@
     },
     "allowMemberInvites": "許諸成員邀友",
     "allowMemberInvitesHint": "啟之，已入群者皆可邀友。唯群主與管理員可改。",
+    "allowMentionAllHumans": "許 @眾人",
+    "allowMentionAllHumansHint": "群員可一呼眾人。",
     "allowMentionAllBots": "許 @諸同伴",
     "allowMentionAllBotsHint": "唯群主可改。同伴或皆作覆，大群慎啟之。此開關不涉 AI 代答。",
     "notifications": {
@@ -338,6 +340,7 @@
     "lifecycleUnavailable": "今之伺服器或機尚不支援此舉。",
     "groupDissolved": "群議已散，仍可觀有權存取之舊訊。",
     "lastOwner": "請先讓渡群主或解散群議，然後退出。",
+    "allHumansMentionDisabled": "此群已禁呼眾人。",
     "allBotsMentionDisabled": "群主未啟 @諸同伴。",
     "turnAlreadyStarted": "此同伴已啟，不可略過",
     "stopOwnershipUnknown": "部分工作未能停止：無從確認由誰發起",

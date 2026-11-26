@@ -292,6 +292,11 @@ export function ChatGroupSettings({ group }: { group: BotGroupSummary }) {
               options={(['mentioned', 'all'] as const).map(value => ({ value,
                 label: t(value === 'all' && assistantAnswers ? key('replyModeAssistant') : REPLY_MODE_LABELS[value]) }))}
               onValueChange={value => void saveRules({ replyMode: value as typeof replyMode })} />} />
+          {group.supportsHumanMentionSettings && manager && <SettingsRow wrap title={t(shared('allowMentionAllHumans'))} hint={t(shared('allowMentionAllHumansHint'))}
+            trailing={<Switch aria-label={t(shared('allowMentionAllHumans'))} checked={group.allowMentionAllHumans !== false}
+              disabled={busy || group.revision === undefined} onCheckedChange={allowMentionAllHumans => {
+                if (group.revision !== undefined) void mutate({ type: 'update', name: group.name, topic: group.topic ?? '', description: group.description ?? '', expectedRevision: group.revision, allowMentionAllHumans });
+              }} />} />}
           {group.supportsMentionAudiences && owner && <SettingsRow wrap title={t(shared('allowMentionAllBots'))} hint={t(shared('allowMentionAllBotsHint'))}
             trailing={<Switch aria-label={t(shared('allowMentionAllBots'))} checked={group.allowMentionAllBots === true}
               disabled={busy || group.revision === undefined} onCheckedChange={allowMentionAllBots => {
