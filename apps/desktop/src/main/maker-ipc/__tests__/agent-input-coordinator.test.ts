@@ -19622,7 +19622,7 @@ describe('provider group computer switch hold', () => {
       memberLabel: member => member.key, invalidate: vi.fn(),
     };
     const router = createProviderGroupRouter({ directory, readGroup: () => config,
-      listBindings: () => ({ [sid]: binding }), isTurnRunning: () => false, now: () => now, random: () => 0 });
+      listBindings: () => ({ [sid]: binding }), isTurnRunning: () => false, now: () => now});
     const fallback = vi.fn();
     const directGuest = { ownerRoute: 'share:group', requestSwitch: async () => offerToken };
     group = createProviderGroupService({
@@ -19961,7 +19961,7 @@ describe('provider group computer switch hold', () => {
     let group!: ReturnType<typeof createProviderGroupService>;
     const h = createHarness({ providerGroupSwitchCandidate: (id, signals) => group.mayHandleTurnError(id, signals) ? providerGroupSwitchCause(signals, 'run') : null });
     const fallback = vi.fn();
-    const remoteRead = vi.fn(async () => ({ strategy: 'least', autoSwitch: false, members: [] }));
+    const remoteRead = vi.fn(async () => ({ strategy: 'expiring', autoSwitch: false, members: [] }));
     group = createProviderGroupService({
       readBinding: () => ({ providerId: 'codex', memberKey: 'local', groupDeviceId: 'other', at: 1 }),
       remote: { readGroup: remoteRead },

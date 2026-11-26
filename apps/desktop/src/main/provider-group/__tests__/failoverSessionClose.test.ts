@@ -293,7 +293,6 @@ function setup(options: { bComesBack?: boolean; scheduled?: boolean; shared?: bo
     listBindings: () => Object.fromEntries(bindings),
     isTurnRunning: () => false,
     now: () => 1_000_000,
-    random: () => 0,
   });
   let readRowGate: { opened: Promise<void>; open: () => void } | null = null;
   let probeGate: { opened: Promise<void>; open: () => void } | null = null;

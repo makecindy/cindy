@@ -439,7 +439,7 @@ describe('provider share invoke', () => {
     const projected = __testing.projectProviderListForShare({
       providers: [{
         id: 'anthropic', name: 'Anthropic', remoteInvocationEnabled: true,
-        group: { strategy: 'least', autoSwitch: true, members: [{ key: 'device:mini:a', kind: 'device', agentDeviceId: 'mini', providerId: 'a', label: 'Mini' }] },
+        group: { strategy: 'expiring', autoSwitch: true, members: [{ key: 'device:mini:a', kind: 'device', agentDeviceId: 'mini', providerId: 'a', label: 'Mini' }] },
       }],
     }, 'anthropic') as { providers: Array<Record<string, unknown>> };
     expect(projected.providers[0]).not.toHaveProperty('group');
@@ -452,7 +452,7 @@ describe('provider share invoke', () => {
     const projected = __testing.projectProviderListForShare({
       providers: [{
         id: 'anthropic', name: 'Anthropic', remoteInvocationEnabled: true, groupSize: 99,
-        group: { strategy: 'least', autoSwitch: true, members: [{ key: 'device:mini:a', kind: 'device', agentDeviceId: 'mini', providerId: 'a', label: 'Mini' }] },
+        group: { strategy: 'expiring', autoSwitch: true, members: [{ key: 'device:mini:a', kind: 'device', agentDeviceId: 'mini', providerId: 'a', label: 'Mini' }] },
       }],
     }, 'anthropic') as { providers: Array<Record<string, unknown>> };
     // 台数只来自本机的组设置，目录里原有的值不算；组内电脑名单照旧不给。
