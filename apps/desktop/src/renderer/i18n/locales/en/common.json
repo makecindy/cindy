@@ -2003,7 +2003,8 @@
         "title": "Edit {{id}}",
         "submit": "Save changes",
         "connectionFieldsReadOnly": "Connection details from SSH configuration are read-only here. Display name, auto-connect, and Agent Proxy remain editable.",
-        "authenticationFromSshConfig": "Authentication comes from SSH configuration."
+        "authenticationFromSshConfig": "Authentication comes from SSH configuration.",
+        "deviceHostReadOnly": "Cindy keeps the connection details in line with your device, so they’re read-only here. Display name, auto-connect, and Agent Proxy remain editable."
       },
       "keys": {
         "title": "Set up SSH key",
@@ -2219,7 +2220,9 @@
         "cancel": "Keep Existing Key",
         "trust": "Trust New Key and Reconnect",
         "updateFailed": "Could not update host trust. The connection details or saved key may have changed, or the trust file could not be written. Reconnect to refresh the fingerprints and check the file permissions."
-      }
+      },
+      "fromMyDevice": "From my devices",
+      "deviceUnavailable": "Unavailable"
     },
     "appearance": {
       "chatLayout": {

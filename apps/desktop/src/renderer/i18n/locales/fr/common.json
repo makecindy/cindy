@@ -2041,7 +2041,8 @@
         "title": "Modifier {{id}}",
         "submit": "Enregistrer",
         "connectionFieldsReadOnly": "Les détails de connexion issus de la configuration SSH sont ici en lecture seule. Le nom d'affichage, la connexion automatique et Agent Proxy restent modifiables.",
-        "authenticationFromSshConfig": "L'authentification provient de la configuration SSH."
+        "authenticationFromSshConfig": "L'authentification provient de la configuration SSH.",
+        "deviceHostReadOnly": "Cindy maintient les détails de connexion selon votre appareil ; ils sont donc ici en lecture seule. Le nom d'affichage, la connexion automatique et Agent Proxy restent modifiables."
       },
       "keys": {
         "title": "Configurer une clé SSH",
@@ -2257,7 +2258,9 @@
         "cancel": "Conserver la clé existante",
         "trust": "Approuver la nouvelle clé et se reconnecter",
         "updateFailed": "Impossible de mettre à jour la confiance de l'hôte. Les détails de connexion ou la clé enregistrée ont peut-être changé, ou le fichier de confiance n'a pas pu être écrit. Reconnectez-vous pour actualiser les empreintes et vérifiez les autorisations du fichier."
-      }
+      },
+      "fromMyDevice": "De mes appareils",
+      "deviceUnavailable": "Indisponible"
     },
     "appearance": {
       "chatLayout": {

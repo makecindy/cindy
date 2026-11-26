@@ -188,6 +188,18 @@ function HostRow({
               : 'settings.remote.readOnlyFromSshConfig')}
           </span>
         )}
+        {/* 「来自我的设备」: kept by Cindy for one of the person's own devices; unavailable while that device's
+            SSH access is off, blocked, revoked for this computer, or the device left the account. */}
+        {snap.config.deviceHost && (
+          <span className="flex flex-wrap items-center gap-1.5 text-11" style={{ color: 'var(--settings-integration-subtitle)' }}>
+            {t('settings.remote.fromMyDevice')}
+            {snap.device && !snap.device.available && (
+              <span className="whitespace-nowrap rounded-full bg-[var(--surface-chip)] px-2 py-0.5 font-medium leading-none text-[var(--text-secondary)]">
+                {t('settings.remote.deviceUnavailable')}
+              </span>
+            )}
+          </span>
+        )}
         {!snap.config.managedByCindy && snap.config.authMethod === 'agent' && (
           <span className="text-11 leading-relaxed" style={{ color: 'var(--settings-integration-subtitle)' }}>
             {t('settings.remote.importedAgentHint')}
@@ -426,6 +438,11 @@ interface HostFormProps {
   busy: boolean;
   connectionFieldsReadOnly?: boolean;
   managedAliasConflict?: boolean;
+  /**
+   * A host Cindy keeps for one of the person's own devices: its connection follows the device, so its connection
+   * fields are read-only as well.
+   */
+  deviceHost?: boolean;
   onSubmit: (form: AddFormState) => void;
   onCancel: () => void;
 }
@@ -434,11 +451,13 @@ function HostForm({
   mode,
   initial,
   busy,
-  connectionFieldsReadOnly = false,
+  connectionFieldsReadOnly: externalConnection = false,
   managedAliasConflict = false,
+  deviceHost = false,
   onSubmit,
   onCancel,
 }: HostFormProps) {
+  const connectionFieldsReadOnly = externalConnection || deviceHost;
   const { t } = useTranslation();
   const [form, setForm] = useState<AddFormState>(initial ?? EMPTY_FORM);
   // Local dialog state. Three open modes — they share the same dialog but
@@ -540,9 +559,11 @@ function HostForm({
 
       {connectionFieldsReadOnly && (
         <p className="text-11" style={{ color: 'var(--settings-integration-subtitle)' }}>
-          {t(managedAliasConflict
-            ? 'settings.remote.managedAliasConflict'
-            : 'settings.remote.edit.connectionFieldsReadOnly')}
+          {t(deviceHost
+            ? 'settings.remote.edit.deviceHostReadOnly'
+            : managedAliasConflict
+              ? 'settings.remote.managedAliasConflict'
+              : 'settings.remote.edit.connectionFieldsReadOnly')}
         </p>
       )}
 
@@ -1448,6 +1469,7 @@ export function RemoteSection({ showTitle = true }: { showTitle?: boolean } = {}
                   }}
                   connectionFieldsReadOnly={!snap.config.managedByCindy}
                   managedAliasConflict={snap.config.managedAliasConflict}
+                  deviceHost={snap.config.deviceHost === true}
                   onSubmit={handleEdit}
                   onCancel={() => setEditingId(null)}
                 />

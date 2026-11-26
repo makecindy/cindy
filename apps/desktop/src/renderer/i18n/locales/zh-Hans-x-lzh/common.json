@@ -1973,7 +1973,8 @@
         "title": "修 {{id}}",
         "submit": "存所改",
         "connectionFieldsReadOnly": "出自 SSH 设置之连接信息于此唯读；显示名称、自动连接与 Agent Proxy 仍可改。",
-        "authenticationFromSshConfig": "验证信息出自 SSH 设置。"
+        "authenticationFromSshConfig": "验证信息出自 SSH 设置。",
+        "deviceHostReadOnly": "连接信息由 Cindy 依君之设备自动维护，于此唯读；显示名称、自动连接与 Agent Proxy 仍可改。"
       },
       "keys": {
         "title": "配 SSH 密钥",
@@ -2189,7 +2190,9 @@
         "cancel": "留原密钥",
         "trust": "信新密钥并重连",
         "updateFailed": "无法更新主机信任之录。连接信息或已存密钥或已变，抑或记录卷不可写。请重连以更新指纹，并查卷之权柄"
-      }
+      },
+      "fromMyDevice": "出自吾之设备",
+      "deviceUnavailable": "暂不可用"
     },
     "appearance": {
       "chatLayout": {

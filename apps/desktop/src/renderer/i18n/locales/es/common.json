@@ -2041,7 +2041,8 @@
         "title": "Editar {{id}}",
         "submit": "Guardar cambios",
         "connectionFieldsReadOnly": "Los detalles de conexión de la configuración SSH son de solo lectura aquí. El nombre para mostrar, la conexión automática y el proxy Agent siguen siendo editables.",
-        "authenticationFromSshConfig": "La autenticación proviene de la configuración SSH."
+        "authenticationFromSshConfig": "La autenticación proviene de la configuración SSH.",
+        "deviceHostReadOnly": "Cindy mantiene los detalles de conexión según tu dispositivo, así que aquí son de solo lectura. El nombre para mostrar, la conexión automática y el proxy Agent siguen siendo editables."
       },
       "keys": {
         "title": "Configurar la clave SSH",
@@ -2257,7 +2258,9 @@
         "cancel": "Mantener la clave existente",
         "trust": "Confiar en la nueva clave y reconectar",
         "updateFailed": "No se pudo actualizar la confianza del host. Es posible que los detalles de conexión o la clave guardada hayan cambiado o que no se haya podido escribir el archivo de confianza. Vuelve a conectarte para actualizar las huellas digitales y revisa los permisos del archivo."
-      }
+      },
+      "fromMyDevice": "De mis dispositivos",
+      "deviceUnavailable": "No disponible"
     },
     "appearance": {
       "chatLayout": {

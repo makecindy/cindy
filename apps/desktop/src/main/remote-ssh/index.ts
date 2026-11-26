@@ -878,6 +878,8 @@ type RendererHostConfig = Pick<HostConfig,
   identityFileConfigured: boolean;
   /** Display-only basename; the absolute local path remains main-only. */
   identityFileName?: string;
+  /** Cindy keeps this host for one of the person's own devices: its connection fields are not edited here. */
+  deviceHost?: true;
 };
 
 export type HostSnapshotWithPrefs = Omit<HostSnapshot, 'config' | 'lastError'> & {
@@ -918,6 +920,7 @@ function toRendererHostConfig(config: HostConfig): RendererHostConfig {
     source: config.source,
     managedByCindy: config.managedByCindy,
     ...(config.managedAliasConflict ? { managedAliasConflict: true } : {}),
+    ...(isDeviceHost(config) ? { deviceHost: true as const } : {}),
   };
 }
 

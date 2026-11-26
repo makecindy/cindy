@@ -107,6 +107,8 @@ type RemoteHostSnapshot = {
     source: 'ssh-config' | 'manual';
     managedByCindy: boolean;
     managedAliasConflict?: boolean;
+    /** 「来自我的设备」:Cindy 按那台设备维护连接信息,这里不能改连接字段。 */
+    deviceHost?: true;
   };
   status: import('@cindy/maker-remote-ssh').RemoteStatus;
   lastError?: string;

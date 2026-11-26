@@ -1973,7 +1973,8 @@
         "title": "編輯 {{id}}",
         "submit": "儲存修改",
         "connectionFieldsReadOnly": "來自 SSH 設定的連線資訊在此為唯讀；顯示名稱、自動連線和 Agent Proxy 仍可修改。",
-        "authenticationFromSshConfig": "驗證資訊來自 SSH 設定。"
+        "authenticationFromSshConfig": "驗證資訊來自 SSH 設定。",
+        "deviceHostReadOnly": "連線資訊由 Cindy 依你的裝置自動維護，在此為唯讀；顯示名稱、自動連線和 Agent Proxy 仍可修改。"
       },
       "keys": {
         "title": "配置 SSH 金鑰",
@@ -2189,7 +2190,9 @@
         "cancel": "保留原金鑰",
         "trust": "信任新金鑰並重新連線",
         "updateFailed": "無法更新主機信任記錄。連線資訊或已存金鑰可能已變更，也可能無法寫入記錄檔。請重新連線以更新指紋，並檢查檔案權限"
-      }
+      },
+      "fromMyDevice": "來自我的裝置",
+      "deviceUnavailable": "暫不可用"
     },
     "appearance": {
       "chatLayout": {

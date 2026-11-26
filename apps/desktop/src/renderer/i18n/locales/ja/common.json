@@ -1973,7 +1973,8 @@
         "title": "{{id}} を編集",
         "submit": "変更を保存",
         "connectionFieldsReadOnly": "SSH 設定から読み込まれた接続情報はここでは読み取り専用です。表示名、自動接続、Agent Proxy は変更できます。",
-        "authenticationFromSshConfig": "認証情報は SSH 設定から読み込まれます。"
+        "authenticationFromSshConfig": "認証情報は SSH 設定から読み込まれます。",
+        "deviceHostReadOnly": "接続情報は Cindy がデバイスに合わせて自動で管理するため、ここでは読み取り専用です。表示名、自動接続、Agent Proxy は変更できます。"
       },
       "keys": {
         "title": "SSH 鍵を設定",
@@ -2189,7 +2190,9 @@
         "cancel": "元の鍵を保持",
         "trust": "新しい鍵を信頼して再接続",
         "updateFailed": "ホストの信頼記録を更新できませんでした。接続情報や保存済みの鍵が変更されたか、記録ファイルに書き込めない可能性があります。再接続してフィンガープリントを再取得し、ファイルの権限を確認してください。"
-      }
+      },
+      "fromMyDevice": "自分のデバイスから",
+      "deviceUnavailable": "利用不可"
     },
     "appearance": {
       "chatLayout": {

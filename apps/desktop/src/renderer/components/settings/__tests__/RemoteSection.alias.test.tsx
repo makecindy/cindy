@@ -148,3 +148,25 @@ it('keeps an existing Chinese alias editable through its display name', async ()
   ).toBe(false);
   expect(alias.hasAttribute('aria-invalid')).toBe(false);
 });
+
+// SSH access to the person's own devices (decision 6): a host Cindy keeps for one of their devices says so
+// (「来自我的设备」), shows when it cannot be used, and its connection fields stay read-only in the edit form
+// (main refuses such edits too). An ordinary Cindy host is unchanged.
+it('labels a host of the person\'s own device, marks it unavailable and keeps its connection read-only', async () => {
+  const deviceHost: RemoteHostSnapshot = {
+    ...legacyHost,
+    config: { ...legacyHost.config, id: 'cindy-studio', hostname: '203.0.113.7', authMethod: 'key', identityFileConfigured: true, deviceHost: true },
+    device: { deviceId: 'studio', available: false },
+  };
+  vi.stubGlobal('electronAPI', {
+    remoteSsh: { list: async () => ({ hosts: [deviceHost, legacyHost] }), onStatusChanged: () => () => {} },
+  });
+  render(<RemoteSection />);
+  await act(async () => {});
+  expect(screen.getAllByText('settings.remote.fromMyDevice')).toHaveLength(1);
+  expect(screen.getAllByText('settings.remote.deviceUnavailable')).toHaveLength(1);
+  fireEvent.click(screen.getAllByRole('button', { name: 'settings.remote.button.edit' })[0]!);
+  expect((screen.getByDisplayValue('203.0.113.7') as HTMLInputElement).disabled).toBe(true);
+  expect(screen.getByText('settings.remote.edit.deviceHostReadOnly')).toBeTruthy();
+  expect((screen.getByLabelText('settings.remote.add.displayName') as HTMLInputElement).disabled).toBe(false);
+});

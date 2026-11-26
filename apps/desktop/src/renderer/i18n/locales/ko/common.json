@@ -1973,7 +1973,8 @@
         "title": "{{id}} 편집",
         "submit": "변경 저장",
         "connectionFieldsReadOnly": "SSH 설정에서 가져온 연결 정보는 여기서 읽기 전용입니다. 표시 이름, 자동 연결, Agent Proxy는 수정할 수 있습니다.",
-        "authenticationFromSshConfig": "인증 정보는 SSH 설정에서 가져옵니다."
+        "authenticationFromSshConfig": "인증 정보는 SSH 설정에서 가져옵니다.",
+        "deviceHostReadOnly": "연결 정보는 Cindy가 기기에 맞춰 자동으로 관리하므로 여기서는 읽기 전용입니다. 표시 이름, 자동 연결, Agent Proxy는 수정할 수 있습니다."
       },
       "keys": {
         "title": "SSH 키 설정",
@@ -2189,7 +2190,9 @@
         "cancel": "기존 키 유지",
         "trust": "새 키 신뢰 및 다시 연결",
         "updateFailed": "호스트 신뢰 기록을 업데이트할 수 없습니다. 연결 정보나 저장된 키가 변경되었거나 기록 파일에 쓸 수 없을 수 있습니다. 다시 연결하여 지문을 새로 확인하고 파일 권한을 확인하세요."
-      }
+      },
+      "fromMyDevice": "내 기기에서",
+      "deviceUnavailable": "사용 불가"
     },
     "appearance": {
       "chatLayout": {

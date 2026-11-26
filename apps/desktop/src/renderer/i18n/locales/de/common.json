@@ -2003,7 +2003,8 @@
         "title": "{{id}} bearbeiten",
         "submit": "Änderungen speichern",
         "connectionFieldsReadOnly": "Verbindungsdetails aus der SSH-Konfiguration sind hier schreibgeschützt. Anzeigename, automatische Verbindung und Agent Proxy bleiben bearbeitbar.",
-        "authenticationFromSshConfig": "Die Authentifizierung wird durch die SSH-Konfiguration festgelegt."
+        "authenticationFromSshConfig": "Die Authentifizierung wird durch die SSH-Konfiguration festgelegt.",
+        "deviceHostReadOnly": "Cindy hält die Verbindungsdetails passend zu deinem Gerät aktuell, deshalb sind sie hier schreibgeschützt. Anzeigename, automatische Verbindung und Agent Proxy bleiben bearbeitbar."
       },
       "keys": {
         "title": "SSH-Schlüssel einrichten",
@@ -2219,7 +2220,9 @@
         "cancel": "Bestehenden Schlüssel behalten",
         "trust": "Neuem Schlüssel vertrauen und erneut verbinden",
         "updateFailed": "Das Host-Vertrauen konnte nicht aktualisiert werden. Die Verbindungsdaten oder der gespeicherte Schlüssel könnten sich geändert haben, oder die Vertrauensdatei konnte nicht geschrieben werden. Verbinde dich erneut, um die Fingerabdrücke zu aktualisieren, und prüfe die Dateiberechtigungen."
-      }
+      },
+      "fromMyDevice": "Von meinen Geräten",
+      "deviceUnavailable": "Nicht verfügbar"
     },
     "appearance": {
       "chatLayout": {
