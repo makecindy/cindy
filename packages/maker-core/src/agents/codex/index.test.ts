@@ -6160,6 +6160,12 @@ describe('CodexAgent.startSession developerInstructions', () => {
   // wording, authentication failures and a wrong process route stay errors.
   it.each([
     { code: -32600, data: undefined },
+    ...[
+      'thread/resume error -32600: failed to load configuration: missing provider declaration',
+      "thread/start error -32600: failed to load configuration: Cannot change this thread's model provider from `cindy_gateway` to `cindy_openai` on resume.",
+      "thread/resume error -32600: failed to load configuration: Cannot change this thread's model provider from `cindy_openai` to `cindy_gateway` on resume.",
+      "thread/resume error -32600: failed to load configuration: Cannot change this thread's model provider from `cindy_gateway` to `another_provider` on resume.",
+    ].map(reason => ({ code: -32600, data: undefined, message: `codex app-server ${reason}` })),
     { code: -32600, data: { type: 'modelProviderMismatch', modelProvider: 'cindy_openai', currentModelProvider: 'cindy_gateway' } },
     { code: -32600, data: { type: 'modelProviderMismatch', modelProvider: 'cindy_openai', currentModelProvider: 'cindy_openai' } },
     { code: -32000, data: { type: 'modelProviderMismatch', modelProvider: 'cindy_gateway', currentModelProvider: 'cindy_openai' } },

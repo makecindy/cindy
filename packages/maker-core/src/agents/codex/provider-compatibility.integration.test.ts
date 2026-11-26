@@ -8,6 +8,7 @@ import { mkdtemp, mkdir, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { createServer } from 'node:http';
+import { DatabaseSync } from 'node:sqlite';
 import { expect, it } from 'vitest';
 import { CodexAgent } from './index.js';
 import type { AgentSessionHandle } from '../base-agent.js';
@@ -163,6 +164,26 @@ it.skipIf(!binaryPath)('keeps Cindy AI, subscription and custom routes usable ac
       const next = await open('cindy', provider, model, previousId);
       const nextId = await next.send(`SWITCH_TO_${nativeProvider}`, nativeProvider, 'HISTORY_CINDY_SENTINEL');
       await next.close();
+      if (provider === 'custom-probe') {
+        // #13314: the very first child must resume on its own ID with the selected history.
+        const parentPath = locations.get(nextId)!;
+        const parentHistory = await readFile(parentPath, 'utf8');
+        const { newSdkSessionId } = await agent.forkSdkSession({ sourceSdkSessionId: nextId,
+          providerId: provider, model, workingDir: work, upToMessageId: undefined });
+        const childHistory = await readFile(locations.get(newSdkSessionId)!, 'utf8');
+        expect(JSON.parse(childHistory.split('\n', 1)[0]).payload).toMatchObject({
+          id: newSdkSessionId, forked_from_id: nextId, model_provider: nativeProvider,
+        });
+        const database = new DatabaseSync(path.join(home, 'state_5.sqlite'), { readOnly: true });
+        try {
+          expect(database.prepare('SELECT model_provider FROM threads WHERE id = ?').get(newSdkSessionId))
+            .toMatchObject({ model_provider: nativeProvider });
+        } finally { database.close(); }
+        const child = await open('side-chat', provider, model, newSdkSessionId);
+        expect(await child.send('SIDE_CHAT_FIRST_TURN', nativeProvider, 'HISTORY_CINDY_SENTINEL')).toBe(newSdkSessionId);
+        await child.close();
+        expect(await readFile(parentPath, 'utf8')).toBe(parentHistory);
+      }
       if (nextId !== previousId) expect(await readFile(sourcePath, 'utf8')).toBe(source);
       previousId = nextId;
     }
@@ -189,6 +210,6 @@ it.skipIf(!binaryPath)('keeps Cindy AI, subscription and custom routes usable ac
     for (const handle of handles) await handle.close();
     await agent.dispose();
     await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
-    await rm(root, { recursive: true, force: true });
+    await rm(root, { recursive: true, force: true, maxRetries: 6, retryDelay: 100 });
   }
 }, 60_000);

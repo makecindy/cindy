@@ -987,7 +987,11 @@ function isExactUnloadedThreadReadError(error: unknown, threadId: string): boole
 /** A native refusal proves no writer was loaded, and the selected route is active. */
 function isSavedModelProviderMismatch(error: unknown, selectedProvider: string | undefined): boolean {
   if (!selectedProvider || typeof error !== 'object' || error === null) return false;
-  const { code, data } = error as { code?: unknown; data?: Record<string, unknown> };
+  const { code, data, message } = error as { code?: unknown; data?: Record<string, unknown>; message?: unknown };
+  if (data === undefined && typeof message === 'string') {
+    const match = /^codex app-server thread\/resume error -32600: failed to load configuration: Cannot change this thread's model provider from `([\w.-]+)` to `([\w.-]+)` on resume\.$/.exec(message);
+    return code === -32600 && match?.[2] === selectedProvider && match[1] !== selectedProvider;
+  }
   return code === -32600 && data?.type === 'modelProviderMismatch'
     && data.currentModelProvider === selectedProvider
     && typeof data.modelProvider === 'string' && data.modelProvider.length > 0
@@ -16398,6 +16402,9 @@ assertRouteCurrent();
             releaseForkLease = leased.release;
             forkHost = host;
             stage = 'host-start';
+            const customProvider = guestCodexHome || forkAccountId || nativeSubscriptionAccount || opts.remoteHostId
+              ? null : host.getCustomProviderModelProviderId?.(opts.providerId, opts.model);
+            if (customProvider) await host.selectModelProvider(customProvider);
             const initResp = await host.ensureStarted();
             // Child rollout discovery scans this.codexHome. The fork host may be
             // the first host started by this process, so hydrate it here.
@@ -16453,6 +16460,7 @@ assertRouteCurrent();
             }
             const params: ThreadForkParams = {
               threadId: opts.sourceSdkSessionId,
+              ...(customProvider ? { modelProvider: customProvider } : {}),
               ...(preparedSourcePath ? { path: preparedSourcePath } : {}),
               ...(!usedNativeForkAnchor ? { persistExtendedHistory: true } : {}),
               ...(usedNativeForkAnchor ? { lastTurnId } : {}),
