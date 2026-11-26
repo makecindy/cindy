@@ -11,6 +11,7 @@ export interface MobileMediaPlayerStatus {
   currentTime?: number;
   duration?: number;
   paused?: boolean;
+  canStart?: boolean;
   canSeek?: boolean;
   advanced?: boolean;
   muted?: boolean;
@@ -149,6 +150,7 @@ export function buildMediaPlayerWebViewHtml({
         };
         ${externalControls ? `
         payload.paused = media.paused;
+        payload.canStart = media.readyState >= media.HAVE_METADATA;
         payload.canSeek = canSeek();
         payload.muted = media.muted;
         payload.rate = media.playbackRate;
@@ -242,6 +244,7 @@ export function buildMediaPlayerWebViewHtml({
         emit(audioState(), undefined, true);
       });
       function reportPosition() { emit(audioState(), undefined, true); }
+      media.addEventListener('loadedmetadata', reportPosition);
       media.addEventListener('volumechange', reportPosition);
       media.addEventListener('ratechange', reportPosition);
       if (canRoute) {
@@ -286,6 +289,7 @@ export function parseMediaPlayerWebViewMessage(data: string): MobileMediaPlayerS
       currentTime: finiteNumber(value.currentTime),
       duration: finiteNumber(value.duration),
       ...(typeof value.paused === 'boolean' ? { paused: value.paused } : {}),
+      ...(typeof value.canStart === 'boolean' ? { canStart: value.canStart } : {}),
       ...(typeof value.canSeek === 'boolean' ? { canSeek: value.canSeek } : {}),
       ...(value.advanced === true ? { advanced: true } : {}),
       ...(typeof value.muted === 'boolean' ? { muted: value.muted } : {}),

@@ -42,7 +42,8 @@ export function AudioAttachmentPlayer({
   const [dragTime, setDragTime] = useState<number | null>(null);
   const failed = readFailed || status?.state === 'error';
   const playing = status?.state === 'playing' || (status?.state === 'waiting' && status.paused === false);
-  const loading = !status || (status.state === 'waiting' && !playing);
+  // iOS can stop preloading at metadata until the user requests play.
+  const loading = !status || (status.state === 'waiting' && !playing && !status.canStart);
   const duration = status?.duration ?? 0;
   const canSeek = !failed && status?.canSeek === true && duration > 0;
   const clampTime = (seconds: number) => Math.max(0, Math.min(seconds, duration));

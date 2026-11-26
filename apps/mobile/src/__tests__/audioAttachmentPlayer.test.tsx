@@ -140,6 +140,18 @@ describe('full-screen audio attachment controls', () => {
     expect(runtime.player.play).toHaveBeenCalledTimes(2);
   });
 
+  it('can start playback when iOS has loaded metadata and is waiting for play', () => {
+    render();
+    emit('waiting', { paused: true, duration: 3.75, canSeek: true, canStart: true });
+    expect(node('audioToggle').disabled).toBe(false);
+    expect(node('audioToggle').accessibilityLabel).toBe('message.renderer.playAudio');
+    node('audioToggle').onPress();
+    expect(runtime.player.play).toHaveBeenCalledOnce();
+    expect(node('audioToggle').accessibilityLabel).toBe('message.renderer.playAudio');
+    emit('playing', { paused: false, currentTime: 1, duration: 3.75 });
+    expect(node('audioElapsed').children).toBe('00:01');
+  });
+
   it('previews a forward and backward drag and sends a single seek when released', () => {
     render();
     act(() => node('audioProgress').onLayout({ nativeEvent: { layout: { width: 212 } } }));

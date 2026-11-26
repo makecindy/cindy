@@ -127,6 +127,8 @@ describe('mediaPlayerWebView', () => {
       ended: false,
       duration: 60,
       currentTime: 0,
+      readyState: 0,
+      HAVE_METADATA: 1,
       seekable: { length: 0, start: () => 0, end: () => 60 },
       play: vi.fn<() => Promise<void>>(),
       pause() { audio.paused = true; },
@@ -144,6 +146,9 @@ describe('mediaPlayerWebView', () => {
     const send = (target: EventTarget, command: Parameters<typeof buildMediaPlayerWebViewCommand>[0], seconds?: number) => {
       target.dispatchEvent(new MessageEvent('message', { data: buildMediaPlayerWebViewCommand(command, seconds) }));
     };
+    audio.readyState = 1;
+    audio.dispatchEvent(new Event('loadedmetadata'));
+    expect(events.at(-1)).toMatchObject({ state: 'waiting', paused: true, canStart: true });
     audio.dispatchEvent(new Event('canplay'));
     expect(events.at(-1)).toMatchObject({ state: 'ready', paused: true, canSeek: false });
     send(window, 'seek', 40);
