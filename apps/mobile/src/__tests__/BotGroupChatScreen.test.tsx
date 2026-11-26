@@ -201,7 +201,7 @@ vi.mock('@/utils/useTaskListBack', () => ({ useTaskListBack: () => h.leave }));
 vi.mock('@/platform/chrome/AnchoredPullDownMenu', () => ({ AnchoredPullDownMenu: ({ children }: any) => children }));
 vi.mock('@/device-link/remoteResourceCache', () => ({ markRemoteResourceRead: h.markRead }));
 vi.mock('@/device-link/remoteResourceAvailability', () => ({ readRemoteCollectionCache: () => [] }));
-vi.mock('@/platform/chrome', () => ({ showConfirm: h.confirm }));
+vi.mock('@/platform/chrome', async () => ({ showConfirm: h.confirm, ...(await import('@/platform/chrome/NativeSwitch')) }));
 vi.mock('@/platform/chrome/NativeSwitch', () => ({ NativeSwitch: ({ testID, value, disabled, onValueChange }: any) =>
   el('button', { 'data-testid': testID, role: 'switch', 'aria-checked': value, disabled, onClick: () => onValueChange(!value) }) }));
 vi.mock('@/platform/chrome/NativePullDownMenu', () => ({
@@ -2419,6 +2419,21 @@ describe('group settings', () => {
     await click('botGroup.settings.leave');
     expect(h.chat.act).toHaveBeenCalledWith('leave', undefined);
     expect(h.leave).toHaveBeenCalledOnce();
+  });
+
+  // #13127 (unit): older computers can report the assistant state without accepting the write.
+  it.each([true, false])('uses the computer assistant switch only when writable (%s)', async supported => {
+    const data = group({ serverBacked: true, supportsSettingsManagement: true, revision: 5,
+      supportsGroupAssistant: true, assistantEnabled: true, supportsAssistantManagement: supported });
+    data.members[0] = { ...data.members[0], isSelf: true, role: 'admin' };
+    await openSettings(data);
+    await click('botGroup.settings.manage');
+    const toggle = byId('botGroup.settings.assistant');
+    expect(toggle?.getAttribute('aria-checked')).toBe('true');
+    expect(toggle?.disabled).toBe(!supported);
+    await click('botGroup.settings.assistant');
+    if (supported) expect(h.chat.act).toHaveBeenCalledWith('set-assistant', { assistant: false, expectedRevision: 5 });
+    else expect(h.chat.act).not.toHaveBeenCalled();
   });
 
   // The computer ignores topic and description; renaming there must not send an empty 群简介 over the real one.
