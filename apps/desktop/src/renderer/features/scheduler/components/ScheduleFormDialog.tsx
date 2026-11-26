@@ -344,6 +344,9 @@ export function ScheduleFormDialog({
             ? { type: 'route' as const, id: scheduleModelGroupId }
             : null,
           onSelect: (selection: ModelGroupSelection) => selectModelGroup(selection.id),
+          // 合并整个供应商的路由像一个供应商列出来：选其中的模型后补记这条路由，每次运行由它决定用哪个成员。
+          // 表单是函数式更新，与紧挨着的选模型在同一次点击里合并。
+          onAttach: (selection: ModelGroupSelection) => selectModelGroup(selection.id),
           onManage: () => navigateToModelGroups('/settings?tab=model-groups'),
         }
       : undefined,
@@ -1051,8 +1054,7 @@ export function ScheduleFormDialog({
                                     onChangeDestination={setDestination}
                                   />
                                 )}
-                                {/* 插件引擎任务不用 worktree(引擎只拿到任务工作目录)。 */}
-                                {!hideWorkspaceFields && form.workspaceKind === 'project' && !pluginEngineChoice && (
+                                {!hideWorkspaceFields && form.workspaceKind === 'project' && (
                                   <>
                                     <div className="w-0.5 shrink-0" aria-hidden />
                                     <ScheduleSettingsButton

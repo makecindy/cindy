@@ -20,11 +20,16 @@ import { createHash, randomBytes, randomUUID } from 'node:crypto';
 
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
-import { createCatalogTransport } from './antigravityToolCatalog.js';
+import { createCatalogTransport, type ObservedMcpToolCallResult } from './antigravityToolCatalog.js';
 import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js';
 import { runWithLiziMcpSessionContext, type LiziMcpSessionContext } from '@cindy/mcps';
 
-import type { Logger } from '@cindy/maker-core';
+import {
+  createMcpToolResultBucket,
+  type Logger,
+  type McpToolResultBucket,
+  type TakeMcpToolResult,
+} from '@cindy/maker-core';
 import {
   createCodexMcpThreadContextStore,
   isSameCodexMcpSessionContext,
@@ -85,6 +90,14 @@ export interface CodexHttpBridge {
   unregisterSessionToken(sessionId: string, expectedToken?: string, generation?: number): void;
   /** 当前存活的 MCP streamable-http 会话数(诊断用,见 countLiveBridgeMcpSessions)。 */
   mcpSessionCount(): number;
+  /**
+   * Records Host MCP `tools/call` responses for one ACP session instance so empty ACP
+   * `tool_call_update` completions can backfill `tool_result_full` (cards, media tokens).
+   */
+  enableMcpToolResultRecording?(
+    sessionId: string,
+    sessionInstanceId?: string,
+  ): { take: TakeMcpToolResult; clear: () => void; dispose: () => void };
   shutdown(): Promise<void>;
 }
 
@@ -137,6 +150,8 @@ interface DispatchOpts {
   isInstanceGenerationCurrent?: () => boolean;
   /** Local Codex per-thread URL identity. null means an unbound legacy URL. */
   threadInstanceQuery: string | null;
+  /** Optional Host MCP `tools/call` output observer for opted-in ACP sessions. */
+  onToolCallResult?: (receipt: ObservedMcpToolCallResult) => void;
 }
 
 interface SessionTransport {
@@ -144,6 +159,7 @@ interface SessionTransport {
   mcpServer: McpServer;
   ownerSessionId?: string;
   ownerSessionInstanceId?: string;
+  lastActivityAt: number;
 }
 
 /** One policy-controlled tools/call that must not reach its MCP transport. */
@@ -190,6 +206,9 @@ const { appServerIds } = ports;
 const SERVER_HEADER = 'Lizi_MCPS/1.0';
 const MCP_PATH_PREFIX = '/mcp/';
 const SHUTDOWN_TIMEOUT_MS = 5_000;
+const ORPHAN_TRANSPORT_IDLE_TIMEOUT_MS = 30 * 60 * 1000;
+const ORPHAN_TRANSPORT_SWEEP_INTERVAL_MS = 5 * 60 * 1000;
+const MAX_ORPHAN_TRANSPORTS = 256;
 
 /**
  * 「gate 集合 → 远端注入名单」的唯一合成规则:协同段 = available ∩ 协同白名单
@@ -308,6 +327,38 @@ async function startCodexHttpBridge(
   // 用的 token 注销 → pi 的 bridge 请求全部 401。
   const sessionTokenBySessionId = new Map<string, { token: string; generation: number }>();
   let nextTokenGeneration = 0;
+  // Opt-in Host MCP `tools/call` output receipts for ACP sessions whose engine omits
+  // `content`/`rawOutput` on `tool_call_update`. Keyed by sessionId (+ instanceId when present).
+  const receiptBuckets = new Map<string, McpToolResultBucket>();
+  const receiptBucketKey = (sessionId: string, sessionInstanceId?: string): string =>
+    sessionInstanceId ? `${sessionId}\0${sessionInstanceId}` : sessionId;
+  const findReceiptBucket = (sessionId: string, sessionInstanceId?: string): McpToolResultBucket | undefined =>
+    receiptBuckets.get(receiptBucketKey(sessionId, sessionInstanceId))
+    ?? (sessionInstanceId ? receiptBuckets.get(sessionId) : undefined);
+
+  const closeTransport = (transports: Map<string, SessionTransport>, sessionId: string): void => {
+    const entry = transports.get(sessionId);
+    if (!entry) return;
+    transports.delete(sessionId);
+    void entry.transport.close().catch((e: unknown) => {
+      log.warn('transport close threw', { message: (e as Error).message });
+    });
+  };
+
+  const sweepOrphanTransports = (): void => {
+    const now = Date.now();
+    for (const transports of transportsByServer.values()) {
+      const orphaned = [...transports.entries()]
+        .filter(([, entry]) => !entry.ownerSessionId && !entry.ownerSessionInstanceId)
+        .sort(([, a], [, b]) => a.lastActivityAt - b.lastActivityAt);
+      for (const [index, [sessionId, entry]] of orphaned.entries()) {
+        if (index >= orphaned.length - MAX_ORPHAN_TRANSPORTS &&
+            now - entry.lastActivityAt < ORPHAN_TRANSPORT_IDLE_TIMEOUT_MS) break;
+        closeTransport(transports, sessionId);
+      }
+    }
+  };
+  let orphanSweepTimer: NodeJS.Timeout | undefined;
 
   const httpServer = http.createServer((req, res) => runTaskActionRequest(async () => {
     res.setHeader('Server', SERVER_HEADER);
@@ -495,6 +546,13 @@ async function startCodexHttpBridge(
           isInstanceGenerationCurrent: handshake ? () => handshake.generation === generation : undefined,
           threadInstanceQuery: sessionQuery === null ? instanceQuery : null,
           remoteBotHelper: isScopedRemoteToken && serverName === REMOTE_BOT_HELPER_SERVER_NAME,
+          ...(sessionQuery && findReceiptBucket(sessionQuery, ownerSessionInstanceId)
+            ? {
+                onToolCallResult: (receipt: ObservedMcpToolCallResult) => {
+                  findReceiptBucket(sessionQuery, ownerSessionInstanceId)?.record(receipt);
+                },
+              }
+            : {}),
         });
       } finally {
         if (handshake && handshakeInstance !== undefined && --handshake.pending === 0) {
@@ -562,6 +620,8 @@ async function startCodexHttpBridge(
 
   const addr = httpServer.address() as AddressInfo;
   const port = addr.port;
+  orphanSweepTimer = setInterval(sweepOrphanTransports, ORPHAN_TRANSPORT_SWEEP_INTERVAL_MS);
+  orphanSweepTimer.unref?.();
 
   log.info('http bridge listening', {
     port,
@@ -616,10 +676,14 @@ async function startCodexHttpBridge(
 
   const shutdown = async (): Promise<void> => {
     liveBridges.delete(bridge);
+    if (orphanSweepTimer) clearInterval(orphanSweepTimer);
     log.info('shutting down http bridge', {
       activeSockets: liveSockets.size,
       activeTransports: countTransports(transportsByServer),
     });
+
+    for (const bucket of receiptBuckets.values()) bucket.clear();
+    receiptBuckets.clear();
 
     // 1. 关所有 mcp transport (会断 codex 端的长连接)
     for (const transports of transportsByServer.values()) {
@@ -704,6 +768,21 @@ async function startCodexHttpBridge(
       sessionTokenBySessionId.delete(sessionId);
     },
     mcpSessionCount: () => countTransports(transportsByServer),
+    enableMcpToolResultRecording: (sessionId, sessionInstanceId) => {
+      const key = receiptBucketKey(sessionId, sessionInstanceId);
+      const bucket = createMcpToolResultBucket();
+      receiptBuckets.set(key, bucket);
+      return {
+        take: (query) => bucket.take(query),
+        clear: () => {
+          bucket.clear();
+        },
+        dispose: () => {
+          bucket.clear();
+          if (receiptBuckets.get(key) === bucket) receiptBuckets.delete(key);
+        },
+      };
+    },
     shutdown,
   };
   liveBridges.add(bridge);
@@ -781,6 +860,7 @@ async function dispatchToTransport(opts: DispatchOpts): Promise<void> {
       res.end('Unknown session');
       return;
     }
+    existing.lastActivityAt = Date.now();
     // A cindy transport created with a concrete task may expose its private
     // startup catalog. The transport ID alone does not identify that task.
     if (serverName === 'cindy' && existing.ownerSessionInstanceId &&
@@ -956,10 +1036,16 @@ async function dispatchToTransport(opts: DispatchOpts): Promise<void> {
   const transport = createCatalogTransport(body.params.clientInfo.name, serverName, opts.serverNames, {
     sessionIdGenerator: () => randomUUID(),
     onsessioninitialized: (newId) => {
-      transports.set(newId, { transport, mcpServer, ownerSessionId, ownerSessionInstanceId });
+      transports.set(newId, {
+        transport,
+        mcpServer,
+        ownerSessionId,
+        ownerSessionInstanceId,
+        lastActivityAt: Date.now(),
+      });
       log.debug('mcp session initialized', { serverName, sessionId: newId });
     },
-  });
+  }, opts.onToolCallResult);
   transport.onclose = () => {
     if (transport.sessionId) {
       transports.delete(transport.sessionId);

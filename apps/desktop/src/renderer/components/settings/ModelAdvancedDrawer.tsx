@@ -1,6 +1,7 @@
 import { modelImageInputDefault } from '../../../shared/modelImageInputOverride';
 import { displayPricingComponent, isDisplayPricingTableRedundant } from '@/lib/displayPricingFormat';
 import { DisplayPricingDetails, DisplayPricingQuote } from '@/components/DisplayPricingDetails';
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { localizedModelDescription } from '@/lib/modelDescriptions';
 import { providerDisplayName } from '@/lib/providerDisplayName';
@@ -739,9 +740,9 @@ export function ModelAdvancedDrawer({
                                   {AGENT_LABEL[agent]}
                                 </span>
                                 {agent === recommendedAgent && (
-                                  <span className="rounded-full bg-[var(--surface-chip)] px-1.5 py-0.5 text-10 text-[var(--text-tertiary)]">
+                                  <Badge size="xs">
                                     {t('newChat.modelSelector.unified.recommended')}
-                                  </span>
+                                  </Badge>
                                 )}
                               </div>
                               {protocol && (
@@ -997,7 +998,9 @@ export function ModelAdvancedDrawer({
                       )}
                       {ctx.compaction && (
                         <ModelCompactionSettings policy={ctx.compaction}
-                          disabled={paymentRequired || ctx.loading || localConfigurationBlocked}
+                          // 不用 ctx.loading 禁用：Radix 在 disabled 时会吞掉方向键，
+                          // 键盘用户就只能一下一格地等写入完成。写入在 main 侧已串行。
+                          disabled={paymentRequired || localConfigurationBlocked}
                           onChange={ctx.setCompaction} />
                       )}
                     </Section>

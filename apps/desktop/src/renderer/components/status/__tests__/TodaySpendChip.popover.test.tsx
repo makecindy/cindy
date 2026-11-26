@@ -291,8 +291,12 @@ beforeEach(() => {
   });
 });
 
-afterEach(() => {
-  cleanup();
+afterEach(async () => {
+  // Drain React work while jsdom is still alive; synchronous cleanup can leave
+  // scheduler callbacks accessing window after Vitest tears the environment down.
+  await act(async () => {
+    cleanup();
+  });
   vi.clearAllTimers();
   vi.useRealTimers();
   vi.clearAllMocks();

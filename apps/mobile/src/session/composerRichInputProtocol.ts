@@ -12,6 +12,7 @@ export type ComposerWebMessage =
   | { type: 'height'; height: number }
   | { type: 'scroll-edge'; atTop: boolean; atBottom: boolean }
   | { type: 'change'; document: unknown; documentId?: number }
+  | { type: 'hidden-snapshot'; capturedAt: number; documentId: number; document: unknown; pendingPaste: boolean }
   | { type: 'snapshot'; requestId: number; documentId: number; document: unknown; pendingPaste: boolean }
   | { type: 'selection'; documentId: number; before: ComposerSelectionPrefix; through: ComposerSelectionPrefix }
   | { type: 'paste-text-request'; requestId: string; text?: string }
@@ -62,6 +63,11 @@ export function parseComposerWebMessage(raw: string): ComposerWebMessage | null 
       if (message.documentId !== undefined && !isOffset(message.documentId)) return null;
       return { type: 'change', document: message.document,
         ...(message.documentId === undefined ? {} : { documentId: message.documentId as number }) };
+    }
+    if (message.type === 'hidden-snapshot') {
+      if (!isOffset(message.capturedAt) || !isOffset(message.documentId) || typeof message.pendingPaste !== 'boolean') return null;
+      return { type: 'hidden-snapshot', capturedAt: message.capturedAt, documentId: message.documentId,
+        document: message.document, pendingPaste: message.pendingPaste };
     }
     if (message.type === 'snapshot') {
       if (!isOffset(message.requestId) || !isOffset(message.documentId) || typeof message.pendingPaste !== 'boolean') return null;

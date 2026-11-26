@@ -1,5 +1,8 @@
 import {
+  ArrowDown,
+  ArrowUp,
   ChartNoAxesColumn,
+  ChevronRight,
   CircleMinus,
   FolderOpen,
   LogIn,
@@ -17,9 +20,9 @@ import {
   type ReactNode,
 } from 'react';
 import { useTranslation } from 'react-i18next';
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Select } from '@/components/ui/select';
-import { SegmentedControl } from '@/components/ui/segmented-control';
 import { Switch } from '@/components/ui/switch';
 import { Spinner } from '@/components/ui/spinner';
 import { Tip } from '@/components/ui/tooltip';
@@ -44,6 +47,7 @@ import {
   QuotaWindowSubgridContext,
 } from '../status/QuotaHoverCard';
 import { buildSubscriptionAccountUsageCard } from '../status/usageCardModel';
+import { QUOTA_TEXT_COLOR_CLASSES, quotaSeverity } from '../status/QuotaBar';
 import {
   isPluginEngineProviderIdShape,
   isUnusedDefaultAccount,
@@ -57,11 +61,11 @@ import {
   CONCURRENCY_LIMIT_UNLIMITED,
   concurrencyLimitFromOption,
   concurrencyLimitOptionValue,
-  type ProviderGroupStrategy,
 } from '../../../shared/providerGroup';
 import { shouldShowOpenPathError } from '../../../shared/openPathResult';
 import { isClassicalLocale, modernLocaleOf } from '../../../shared/locale';
 import { providersSettings } from './ProvidersSection.settings-search';
+import { RouteStrategyNote } from './RouteStrategyNote';
 import { useSettingDefinition } from './useSettingDefinition';
 import { codexResetScope } from '../../../shared/subscriptionAccounts';
 import { useCodexRateLimits } from '@/hooks/useCodexRateLimits';
@@ -73,8 +77,11 @@ import {
   useMoveSubscriptionAccount,
   useSubscriptionPlacementTargets,
 } from './SubscriptionPlacement';
+import type { OpenAiGroupAccount } from '../../../shared/openAiAccountGroup';
+import { openAiGroupFailureKey } from './OpenAiAccountGroupSection';
 import { pluginEngineUsageAccount } from '../status/pluginEngineUsageAccount';
 import { usePluginEngines } from '@/hooks/usePluginEngines';
+import { ExistingSubscriptionLogins } from './ExistingSubscriptionLogins';
 import { usePluginEngineSignIn } from './PluginEngineSignIn';
 
 /** `acp-plugin:<plugin>:<engine>[~<suffix>]` → `<plugin>:<engine>`. */
@@ -90,7 +97,6 @@ function AccountResetCredits({ scope }: { scope: string }) {
     onReset={credit => void reset.reset(credit)} />;
 }
 
-const strategies: ProviderGroupStrategy[] = ['least', 'round', 'order', 'weight'];
 const statusDot: Record<SubscriptionAccountView['status'], string> = {
   ready: 'var(--remote-status-ready)',
   limited: 'var(--warning-fg)',
@@ -118,7 +124,12 @@ const LOADING_REVEAL_MS = 200;
  * row's space from the first frame (invisible until the reveal), so a quick read changes only
  * the contents, not the page height; static, without shimmer.
  */
-function AccountListPlaceholder({ reserve, label }: { reserve: boolean; label: string }) {
+function AccountListPlaceholder({ reserve, label, compact = false }: {
+  reserve: boolean;
+  label: string;
+  /** 账号区收起时：占摘要那一行，读完换成摘要，高度不变。 */
+  compact?: boolean;
+}) {
   const [visible, setVisible] = useState(false);
   useEffect(() => {
     const timer = window.setTimeout(() => setVisible(true), LOADING_REVEAL_MS);
@@ -126,6 +137,16 @@ function AccountListPlaceholder({ reserve, label }: { reserve: boolean; label: s
   }, []);
   if (!reserve && !visible) return null;
   const block = 'rounded-full bg-[var(--surface-chip)]';
+  if (compact) {
+    return (
+      <div role="status" aria-label={label} data-testid="subscription-accounts-loading" className="mt-1.5 flex h-[17px] items-center">
+        <div aria-hidden="true" className={cn('flex items-center gap-4', visible ? 'animate-fade-in' : 'invisible')}>
+          <span className={cn('h-2.5 w-36', block)} />
+          <span className={cn('h-2.5 w-14', block)} />
+        </div>
+      </div>
+    );
+  }
   return (
     <div
       role="status"
@@ -156,9 +177,9 @@ function AccountListPlaceholder({ reserve, label }: { reserve: boolean; label: s
 
 function AccountTag({ children }: { children: ReactNode }) {
   return (
-    <span className="flex h-[18px] shrink-0 items-center rounded-full border border-[var(--settings-integration-avatar-border)] px-2 text-11 font-medium text-[var(--text-tertiary)]">
+    <Badge tone="outline">
       {children}
-    </span>
+    </Badge>
   );
 }
 
@@ -174,6 +195,7 @@ export function SubscriptionAccountsSection({
   defaultUsage,
   dashboard,
   expectAccounts = true,
+  openAiAccounts,
 }: {
   /** The provider whose accounts are listed: built-in, created or a legacy Codex connection. */
   providerId: string;
@@ -186,6 +208,7 @@ export function SubscriptionAccountsSection({
   dashboard?: { label: string; onOpen: () => void };
   /** Whether the first read is likely to list an account, so its row's space is held meanwhile. */
   expectAccounts?: boolean;
+  openAiAccounts?: readonly OpenAiGroupAccount[];
 }) {
   const { t, i18n } = useTranslation();
   const locale = i18n?.resolvedLanguage ?? i18n?.language;
@@ -196,6 +219,8 @@ export function SubscriptionAccountsSection({
   const [failed, setFailed] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [testing, setTesting] = useState<ReadonlySet<string>>(() => new Set());
+  const activeTests = useRef(new Set<string>());
   const login = useRef<string | null>(null);
   const inFlight = useRef(false);
   // A plugin engine provider (2026-11-23): accounts sign in through the plugin's own methods.
@@ -281,34 +306,113 @@ export function SubscriptionAccountsSection({
     const result = await window.electronAPI.openPath(directory);
     if (shouldShowOpenPathError(result)) toast.error(t('subscriptionAccounts.openDirectoryFailed'));
   };
+  const testKey = async (connectionId: string, agent: 'codex' | 'pi') => {
+    const key = `${connectionId}:${agent}`;
+    if (activeTests.current.has(key)) return;
+    activeTests.current.add(key);
+    setTesting(new Set(activeTests.current));
+    try {
+      const result = await window.electronAPI.providerGroup.command({ action: 'account-test', providerId, accountId: connectionId, agent });
+      if (!result.ok) toast.error(t(openAiGroupFailureKey(result.code)));
+    } catch {
+      toast.error(t('subscriptionAccounts.failed'));
+    } finally {
+      activeTests.current.delete(key);
+      setTesting(new Set(activeTests.current));
+      await refresh();
+    }
+  };
+  const addButton = (
+    <Button
+      data-settings-search-action="Add a subscription account or cancel its pending sign-in"
+      variant="secondary"
+      size="sm"
+      disabled={busy && !login.current}
+      onClick={() => {
+        if (login.current)
+          void window.electronAPI.subscriptionAccounts
+            .command({ action: 'cancel', providerId, loginKey: login.current })
+            .catch(() => toast.error(t('subscriptionAccounts.failed')));
+        else void signInFields(t('subscriptionAccounts.add')).then((fields) => {
+          if (fields) void run({ action: 'add', providerId, loginKey: crypto.randomUUID(), ...fields });
+        });
+      }}
+    >
+      {busy ? <Spinner size={13} /> : <Plus size={14} />}
+      {login.current ? t('settings.providers.button.cancel') : t('subscriptionAccounts.add')}
+    </Button>
+  );
   const accounts = view && !isUnusedDefaultSlot(view.accounts) ? view.accounts : [];
+  const mixed = accounts.some(account => account.apiKey);
+  const moveInOrder = (index: number, offset: number) => {
+    const ids = accounts.map(account => account.id);
+    const next = index + offset;
+    if (next < 0 || next >= ids.length) return;
+    [ids[index], ids[next]] = [ids[next], ids[index]];
+    void run({ action: 'reorder', providerId, accountIds: ids });
+  };
   // Strategy and weights only choose between accounts; a single account has nothing to balance.
   const balancing = accounts.length > 1;
+  // 账号区默认收成一行（2026-11-24 用户裁决：用量不占大块篇幅，模型列表才是这页的主体）：每个账号的余量写在这一行，
+  // 点开才是账号列表、额度窗口、额度重置与分配设置，功能一样不少。有账号要登录、读取失败、正在登录或还没有账号时
+  // 自动展开，不把需要处理的事藏起来；用户自己点过之后按用户的。
+  const [openChoice, setOpenChoice] = useState<boolean | null>(null);
+  // 只看读到的结果：读取中、正在登录、后台刷新偶尔失败都不算(否则先展开再自己收起，页面跳一下，2026-11-26 排查)。
+  // 第一次就没读到才算要处理。
+  const needsAttention = (failed && !view) || (!!view && (accounts.length === 0
+    || accounts.some((account) => account.status === 'signed-out' || account.status === 'unavailable' || !!account.authIssue)));
+  // 自动展开过就留着：登录完成后不在用户眼前自己收起，由用户来收。
+  const [autoOpened, setAutoOpened] = useState(false);
+  if (needsAttention && !autoOpened) setAutoOpened(true);
+  const expanded = openChoice ?? autoOpened;
+  const summaryNow = Date.now();
+  const summary = accounts.map((account, index) => {
+    const card = plugin ? null : buildSubscriptionAccountUsageCard(account.usage, t, summaryNow, locale);
+    // 最紧的那个额度窗口代表这个账号：剩余 = 100 - 已用。
+    const remaining = card && card.windows.length > 0
+      ? Math.round(Math.max(0, Math.min(...card.windows.map((item) => 100 - item.window.utilization))))
+      : null;
+    return {
+      id: account.id,
+      name: account.identity || t('providerGroup.member.accountFallback', { index: index + 1 }),
+      remaining,
+    };
+  });
   return (
     <section
       {...accountSetting.anchorProps}
-      className="border-t border-[var(--border-default)] px-5 py-5 [container-type:inline-size]"
+      className={cn('border-t border-[var(--border-default)] px-5 [container-type:inline-size]', expanded ? 'py-5' : 'py-3.5')}
       data-testid="subscription-accounts"
     >
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex flex-wrap items-center gap-2">
           <h3 className="text-16 font-medium text-[var(--text-primary)]">
-            {t('subscriptionAccounts.title')}
+            <button
+              type="button"
+              data-settings-search-action="Expand or collapse the subscription accounts, usage and resets of this provider"
+              aria-expanded={expanded}
+              onClick={() => setOpenChoice(!expanded)}
+              className="-ml-1.5 flex items-center gap-1 rounded-lg px-1.5 py-0.5 text-left transition-colors hover:bg-[var(--surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]"
+            >
+              <ChevronRight size={14} aria-hidden className={cn('shrink-0 text-[var(--text-tertiary)] transition-transform motion-reduce:transition-none', expanded && 'rotate-90')} />
+              {t('subscriptionAccounts.title')}
+              {accounts.length > 0 && (
+                <span className="ml-1 text-12 font-normal tabular-nums text-[var(--text-tertiary)]">{accounts.length}</span>
+              )}
+            </button>
           </h3>
-          {accounts.length > 0 && (
-            <span className="text-12 text-[var(--text-tertiary)]">{accounts.length}</span>
-          )}
           {locationLabel && <span className="text-12 text-[var(--text-secondary)]">{locationLabel}</span>}
         </div>
         <div className="flex flex-wrap items-center gap-1.5">
           {/* A built-in provider holds the CLI default login and is never merged away as a whole. */}
-          {(plugin ? !!pluginInfo?.separate : providerId !== kind) && accounts.length > 0 && (
+          {(openAiAccounts || ((plugin ? !!pluginInfo?.separate : providerId !== kind) && accounts.length > 0)) && (
             <MergeProviderButton
-              {...(plugin ? { targets: placementTargets } : { kind })}
+              {...(plugin ? { targets: placementTargets } : { kind: providerId !== kind && accounts.length > 0 ? kind : null })}
               providerId={providerId}
               providerName={providerName ?? providerId}
               disabled={busy}
               onDone={() => void refresh()}
+              openAiAccounts={openAiAccounts}
             />
           )}
           {dashboard && (
@@ -323,26 +427,37 @@ export function SubscriptionAccountsSection({
               {dashboard.label}
             </Button>
           )}
-          {(!plugin || pluginMethods.length > 0) && <Button
-            data-settings-search-action="Add a subscription account or cancel its pending sign-in"
-            variant="secondary"
-            size="sm"
-            disabled={busy && !login.current}
-            onClick={() => {
-              if (login.current)
-                void window.electronAPI.subscriptionAccounts
-                  .command({ action: 'cancel', providerId, loginKey: login.current })
-                  .catch(() => toast.error(t('subscriptionAccounts.failed')));
-              else void signInFields(t('subscriptionAccounts.add')).then((fields) => {
-                if (fields) void run({ action: 'add', providerId, loginKey: crypto.randomUUID(), ...fields });
-              });
-            }}
-          >
-            {busy ? <Spinner size={13} /> : <Plus size={14} />}
-            {login.current ? t('settings.providers.button.cancel') : t('subscriptionAccounts.add')}
-          </Button>}
+          {(providerId === 'anthropic' || providerId === 'openai') ? (
+            <ExistingSubscriptionLogins key={providerId} provider={providerId} disabled={busy}>{addButton}</ExistingSubscriptionLogins>
+          ) : (!plugin || pluginMethods.length > 0) && addButton}
         </div>
       </div>
+      {/* 收起时第一次读取还没回来：在摘要的位置占一行，不让这一块只剩标题、看不出在读。 */}
+      {!expanded && !view && !failed && (
+        <AccountListPlaceholder compact reserve={expectAccounts} label={t('ccAgent.common.loading')} />
+      )}
+      {!expanded && summary.length > 0 && (
+        <button
+          type="button"
+          data-testid="subscription-accounts-summary"
+          data-settings-search-action="Expand the subscription accounts of this provider"
+          aria-expanded={false}
+          onClick={() => setOpenChoice(true)}
+          className="mt-1.5 flex w-full flex-wrap items-center gap-x-4 gap-y-1 rounded-lg text-left text-12 leading-[1.4] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]"
+        >
+          {summary.map((item) => (
+            <span key={item.id} className="flex min-w-0 items-center gap-1.5 text-[var(--text-secondary)]">
+              <span className="min-w-0 [overflow-wrap:anywhere]">{item.name}</span>
+              {item.remaining !== null && (
+                <span className={cn('shrink-0 tabular-nums', QUOTA_TEXT_COLOR_CLASSES[quotaSeverity(100 - item.remaining)] ?? 'text-[var(--text-tertiary)]')}>
+                  {t('quotaCard.remainingPercent', { percent: item.remaining })}
+                </span>
+              )}
+            </span>
+          ))}
+        </button>
+      )}
+      <div data-testid="subscription-accounts-body" className={expanded ? undefined : 'hidden'}>
       {failed && (
         <div className="mt-3 flex flex-wrap items-center gap-2">
           <p role="alert" className="text-12 text-[var(--text-danger)]">
@@ -353,7 +468,7 @@ export function SubscriptionAccountsSection({
           </Button>
         </div>
       )}
-      {!view && !failed && (
+      {expanded && !view && !failed && (
         <AccountListPlaceholder reserve={expectAccounts} label={t('ccAgent.common.loading')} />
       )}
       {/* A failed refresh keeps the loaded list, whose default row already holds the card. */}
@@ -364,33 +479,8 @@ export function SubscriptionAccountsSection({
       )}
       {view && accounts.length > 0 && (
         <>
-          {balancing && (
-            <div className="mt-4 flex flex-wrap items-center justify-between gap-2">
-              <span className="text-13 font-medium text-[var(--text-secondary)]">
-                {t('subscriptionAccounts.strategy')}
-              </span>
-              {/* Same control and option order as the provider group strategy (ProviderGroupSection). */}
-              <SegmentedControl
-                {...accountSetting.controlProps}
-                aria-label={t('subscriptionAccounts.strategy')}
-                value={view.strategy === 'usage' ? 'least' : view.strategy}
-                disabled={busy}
-                options={strategies.map((value) => ({
-                  value,
-                  label: t(`providerGroup.strategy.${value}`),
-                }))}
-                onValueChange={(value) => {
-                  // Only a changed strategy is saved, as with the previous picker.
-                  if (value === (view.strategy === 'usage' ? 'least' : view.strategy)) return;
-                  void run({
-                    action: 'configure',
-                    providerId,
-                    strategy: value,
-                  });
-                }}
-              />
-            </div>
-          )}
+          {/* 几个账号就是一条自动路由：选法只在「智能路由」里改，这里说明现状并给出入口。 */}
+          {balancing && <RouteStrategyNote strategy={view.strategy} providerId={providerId} />}
           {/* One grid for every account: each usage card joins it as a subgrid, so the bars of all
               accounts start and end at the same columns. */}
           <QuotaWindowSubgridContext.Provider value={true}>
@@ -404,7 +494,7 @@ export function SubscriptionAccountsSection({
                 const name =
                   account.identity ||
                   t('providerGroup.member.accountFallback', { index: index + 1 });
-                const plan = plugin ? account.plan :
+                const plan = account.apiKey ? t('settings.providers.custom.fields.apiKey') : plugin ? account.plan :
                   kind === 'openai'
                     ? formatCodexPlanLabel(account.planType ?? account.plan)
                     : formatClaudeSubscriptionPlanLabel(account.plan, account.planTier, account.planDisplayName);
@@ -464,7 +554,7 @@ export function SubscriptionAccountsSection({
                 const resetScope = account.codexResetProviderId ?? codexResetScope(account.id);
                 // Reset settings do not depend on a successful usage read. A replaced
                 // identity remounts the reader; ordinary running-count changes do not.
-                const resetNode = !plugin && kind === 'openai' && connected ? (
+                const resetNode = !plugin && kind === 'openai' && connected && !account.apiKey ? (
                   <AccountResetCredits key={`${resetScope}:${account.identity ?? ''}`} scope={resetScope} />
                 ) : null;
                 const usageNode =
@@ -486,7 +576,7 @@ export function SubscriptionAccountsSection({
                     <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
                       <div
                         className={cn(
-                          'flex min-w-[180px] flex-1 items-center gap-3',
+                          'flex min-w-[min(180px,100%)] flex-1 items-center gap-3',
                           account.paused && 'opacity-60',
                         )}
                       >
@@ -539,7 +629,7 @@ export function SubscriptionAccountsSection({
                                 {t('subscriptionAccounts.loginAgain')}
                               </Button>
                             )}
-                            {account.status === 'unavailable' && (
+                            {account.status === 'unavailable' && !account.apiKey && (
                               <Button data-settings-search-action="Retry reading this unavailable subscription account" variant="secondary" tone="quiet" size="sm"
                                 disabled={refreshing || busy} onClick={() => void refresh()}>
                                 {t('commonUi.retry')}
@@ -549,6 +639,12 @@ export function SubscriptionAccountsSection({
                         </div>
                       </div>
                       {!identityOnly && <div className="ml-auto flex max-w-full shrink-0 flex-wrap items-center justify-end gap-2">
+                        {mixed && view.strategy === 'order' && <div className="flex items-center gap-1">
+                          <Button {...accountSetting.controlProps} variant="secondary" tone="quiet" compact size="sm" aria-label={t('modelGroups.settings.moveUp')}
+                            disabled={busy || index === 0} onClick={() => moveInOrder(index, -1)}><ArrowUp size={14} /></Button>
+                          <Button {...accountSetting.controlProps} variant="secondary" tone="quiet" compact size="sm" aria-label={t('modelGroups.settings.moveDown')}
+                            disabled={busy || index === accounts.length - 1} onClick={() => moveInOrder(index, 1)}><ArrowDown size={14} /></Button>
+                        </div>}
                         <Select
                           {...accountSetting.controlProps}
                           label={t('providerGroup.member.limitAria', { name })}
@@ -572,7 +668,7 @@ export function SubscriptionAccountsSection({
                             })
                           }
                         />
-                        {balancing && view.strategy === 'weight' && (
+                        {balancing && view.strategy === 'weighted' && (
                           <Select
                             {...accountSetting.controlProps}
                             label={t('providerGroup.member.weightAria', { name })}
@@ -608,7 +704,19 @@ export function SubscriptionAccountsSection({
                             })
                           }
                         />
-                        <DropdownMenu>
+                        {account.apiKey?.checks.map(check => {
+                          const connectionId = account.apiKey!.connectionId;
+                          const pending = testing.has(`${connectionId}:${check.agent}`);
+                          const test = t('settings.providers.custom.test.button');
+                          const engine = check.agent === 'pi' ? 'Pi' : 'Codex';
+                          const label = account.apiKey!.checks.length > 1 ? `${test} · ${engine}` : test;
+                          return <Button key={check.agent} data-settings-search-action="Test this pool API key on the selected engine" variant="secondary" tone="quiet" size="sm" loading={pending}
+                            aria-label={`${label} · ${name}`} disabled={pending || busy}
+                            onClick={() => void testKey(connectionId, check.agent)}>
+                            {label}
+                          </Button>;
+                        })}
+                        {account.apiKey?.connectionId !== providerId && <DropdownMenu>
                           <DropdownMenuTrigger asChild>
                             {/* Below the button, so the tip shown on keyboard focus (e.g. after Esc
                                 closes the menu) never covers the controls wrapped above it. */}
@@ -629,7 +737,7 @@ export function SubscriptionAccountsSection({
                             </Tip>
                           </DropdownMenuTrigger>
                           <DropdownMenuContent align="end">
-                            <DropdownMenuItem
+                            {!account.apiKey && <><DropdownMenuItem
                               disabled={busy || account.running > 0}
                               onSelect={signIn}
                             >
@@ -654,14 +762,14 @@ export function SubscriptionAccountsSection({
                               disabled={busy}
                               onMove={(target) => void moveAccount({ id: account.id, name }, target)}
                             />
-                            <DropdownMenuSeparator />
+                            <DropdownMenuSeparator /></>}
                             <DropdownMenuItem
                               variant="danger"
                               disabled={busy || account.running > 0}
                               onSelect={() => {
                                 void confirm({
                                   title: t('subscriptionAccounts.removeTitle', { name }),
-                                  description: t('subscriptionAccounts.removeDescription'),
+                                  description: t(account.apiKey ? 'openAiAccountGroup.removeDescription' : 'subscriptionAccounts.removeDescription'),
                                   confirmText: t('subscriptionAccounts.remove'),
                                   confirmVariant: 'destructive',
                                 }).then((ok) => {
@@ -678,9 +786,14 @@ export function SubscriptionAccountsSection({
                               {t('subscriptionAccounts.remove')}
                             </DropdownMenuItem>
                           </DropdownMenuContent>
-                        </DropdownMenu>
+                        </DropdownMenu>}
                       </div>}
                     </div>
+                    {account.apiKey?.checks.flatMap(check => check.result ? [
+                      <p key={check.agent} role="status" className="mt-1 text-12 text-[var(--text-secondary)]">
+                        {check.result.ok ? t('openAiAccountGroup.testPassed') : t(openAiGroupFailureKey(check.result.code))}
+                      </p>,
+                    ] : [])}
                     {/* Usage sits under the account name (from the avatar edge when narrow, so the
                         labels keep their column); the right edge meets the row controls. */}
                     {usageNode && (
@@ -701,6 +814,7 @@ export function SubscriptionAccountsSection({
           </QuotaWindowSubgridContext.Provider>
         </>
       )}
+      </div>
     </section>
   );
 }

@@ -7232,7 +7232,8 @@ describe('CodexAgent.startSession developerInstructions', () => {
   });
 
   it.each([false, true])('requires current teammate baseline delivery on native resume (injection rejected: %s)', async (rejectInjection) => {
-    const agent = new CodexAgent(createDeps({}));
+    const closeCodexMcpSessionInstance = vi.fn();
+    const agent = new CodexAgent(createDeps({}, { closeCodexMcpSessionInstance }));
     const host = installFakeHost(agent, method => {
       if (method !== Method.ThreadInjectItems) return undefined;
       if (rejectInjection) throw new Error('instruction injection rejected');
@@ -7240,6 +7241,7 @@ describe('CodexAgent.startSession developerInstructions', () => {
     }, { userAgent: 'mock-codex/0.153.4' });
     const started = agent.startSession({
       sessionId: 'old-teammate', resumeSessionId: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
+      sessionInstanceId: 'failed-startup-mcp-instance',
       codexHistoryHasProductPrompt: true,
       workingDir: '/repo', model: 'gpt-5.6-luna', providerId: 'openai', effort: 'medium',
       botProfilePrompt: 'EXISTING USER PERSONA', botProfileContextPrompt: 'CURRENT TEAMMATE GUIDE',
@@ -7252,10 +7254,13 @@ describe('CodexAgent.startSession developerInstructions', () => {
     });
     if (rejectInjection) {
       await expect(started).rejects.toThrow('instruction injection rejected');
+      // Failed startup can already own MCP transports from tools/list discovery.
+      expect(closeCodexMcpSessionInstance).toHaveBeenCalledExactlyOnceWith('failed-startup-mcp-instance');
       expect(host.request.mock.calls.some(([method]) => method === Method.ThreadStart || method === Method.TurnStart)).toBe(false);
       return;
     }
     const handle = await started;
+    expect(closeCodexMcpSessionInstance).not.toHaveBeenCalled();
     const calls = host.request.mock.calls;
     const resume = calls.findIndex(([method]) => method === Method.ThreadResume);
     const inject = calls.findIndex(([method]) => method === Method.ThreadInjectItems);
@@ -11611,9 +11616,11 @@ describe('CodexAgent MCP thread context hooks', () => {
   it('registers and unregisters Codex MCP thread context for local sessions', async () => {
     const registerCodexMcpThreadContext = vi.fn();
     const unregisterCodexMcpThreadContext = vi.fn();
+    const closeCodexMcpSessionInstance = vi.fn();
     const agent = new CodexAgent(createDeps({}, {
       registerCodexMcpThreadContext,
       unregisterCodexMcpThreadContext,
+      closeCodexMcpSessionInstance,
     }));
     installFakeHost(agent);
 
@@ -11642,6 +11649,11 @@ describe('CodexAgent MCP thread context hooks', () => {
       'start-thread-id',
       'instance-codex-mcp-context',
     );
+    // Regression: unregistering thread identity alone retained each instance's
+    // HTTP McpServer. The unit fake observes the Host cleanup contract on close.
+    expect(closeCodexMcpSessionInstance).toHaveBeenCalledExactlyOnceWith('instance-codex-mcp-context');
+    await handle.close();
+    expect(closeCodexMcpSessionInstance).toHaveBeenCalledTimes(1);
   });
 
   it.each([{ resume: false, remote: false }, { resume: true, remote: false }, { resume: false, remote: true }, { resume: true, remote: true }])('registers discovery identity around native startup ($resume, $remote)', async ({ resume, remote }) => {
@@ -13345,7 +13357,9 @@ describe('CodexAgent MCP thread context hooks', () => {
       }
     });
 
-    it('retries a zero-output terminal 429 after the daemon exhausts its own retry budget', async () => {
+    // Unit: a native user-message receipt means retrying with the original input
+    // would add another copy to the same thread and the next upstream payload.
+    it.each([false, true])('retries a terminal 429 after native retries (input recorded: %s)', async (inputRecorded) => {
       vi.useFakeTimers();
       try {
         const agent = new CodexAgent(createDeps());
@@ -13364,6 +13378,10 @@ describe('CodexAgent MCP thread context hooks', () => {
           for await (const event of handle.events()) events.push(event);
         })();
 
+        if (inputRecorded) handlers.itemCompleted?.({
+          threadId: 'start-thread-id', turnId: 'turn-1',
+          item: { id: 'user-input', type: 'userMessage', text: 'hello' },
+        });
         handlers.error({
           threadId: 'start-thread-id',
           turnId: 'turn-1',
@@ -13400,6 +13418,8 @@ describe('CodexAgent MCP thread context hooks', () => {
 
         await vi.advanceTimersByTimeAsync(20_000);
         expect(turnStartCount(host)).toBe(2);
+        expect(host.request.mock.calls.filter(([method]) => method === Method.TurnStart).at(-1)?.[1])
+          .toMatchObject({ input: inputRecorded ? [] : [{ type: 'text', text: 'hello' }] });
 
         await handle.close();
       } finally {
@@ -13516,11 +13536,20 @@ describe('CodexAgent MCP thread context hooks', () => {
       },
     );
 
-    it('does not outer-retry a terminal 429 after the turn produced output', async () => {
+    it.each(['reasoning', 'tool'])('does not outer-retry a terminal 429 after %s', async (progress) => {
       vi.useFakeTimers();
       try {
         const agent = new CodexAgent(createDeps());
-        const host = installCapacityHost(agent);
+        let starts = 0;
+        let counter = 0;
+        const runCounterTool = () => { counter += 1; };
+        const host = installFakeHost(agent, (method) => {
+          if (method !== Method.TurnStart) return undefined;
+          starts += 1;
+          // The controlled native engine runs the side effect if input is sent again.
+          if (starts > 1 && progress === 'tool') runCounterTool();
+          return { turn: { id: `turn-${starts}` } };
+        });
         const handle = await agent.startSession({
           sessionId: 'session-terminal-rate-limit-output',
           model: 'gpt-5.4',
@@ -13529,14 +13558,16 @@ describe('CodexAgent MCP thread context hooks', () => {
         await handle.send({ type: 'user', content: 'hello' });
 
         const handlers = host.getThreadHandlers();
-        if (!handlers?.error || !handlers.reasoningTextDelta) {
+        if (!handlers?.error || !handlers.reasoningTextDelta || !handlers.itemCompleted) {
           throw new Error('expected handlers');
         }
-        handlers.reasoningTextDelta({
-          threadId: 'start-thread-id',
-          turnId: 'turn-1',
-          delta: 'already working',
-        } as never);
+        if (progress === 'tool') {
+          runCounterTool();
+          handlers.itemCompleted({ threadId: 'start-thread-id', turnId: 'turn-1',
+            item: { id: 'counter-tool', type: 'commandExecution', command: 'increment fixture counter', status: 'completed' } });
+        } else {
+          handlers.reasoningTextDelta({ threadId: 'start-thread-id', turnId: 'turn-1', delta: 'already working' } as never);
+        }
         handlers.error({
           threadId: 'start-thread-id',
           turnId: 'turn-1',
@@ -13551,6 +13582,7 @@ describe('CodexAgent MCP thread context hooks', () => {
         await vi.advanceTimersByTimeAsync(40_000);
 
         expect(turnStartCount(host)).toBe(1);
+        if (progress === 'tool') expect(counter).toBe(1);
         expect(handle.isTurnRunning?.()).toBe(false);
 
         await handle.close();
@@ -33826,8 +33858,9 @@ describe('CodexAgent reconnect-stall watchdog', () => {
   });
 
   // #11032: exercise the actual Agent event queue + timed interrupt, not a helper.
-  // Existing watchdog cases omit native structured gateway status (unit, fake clock).
-  it('retains the latest safe upstream status through watchdog settlement and clears it for the next turn', async () => {
+  // One started command with no completion must survive interrupt cleanup as an
+  // unconfirmed result; a later turn must not inherit it or the gateway status (unit, fake clock).
+  it('retains the pending tool count and latest safe upstream status through watchdog settlement and clears them for the next turn', async () => {
     vi.useFakeTimers();
     try {
       const { handle, handlers, seen } = await startReconnectTurn(new CodexAgent(createDeps()), 'gateway-diagnostics');
@@ -33838,14 +33871,20 @@ describe('CodexAgent reconnect-stall watchdog', () => {
           additionalDetails: 'https://private.invalid/?token=secret PRIVATE_RESPONSE EOF',
         },
       } as never);
+      handlers.itemStarted?.({ threadId: 'start-thread-id', turnId: 'turn-1',
+        item: { type: 'commandExecution', id: 'cmd-pending', command: 'build' },
+      } as never);
       reconnect('turn-1', 1, 502);
       await vi.advanceTimersByTimeAsync(60_000);
       reconnect('turn-1', 2, 503);
       reconnect('turn-1', 3); // A status-less progress notice must not erase known facts.
       await vi.advanceTimersByTimeAsync(60_001);
       expect(seen).toContainEqual(expect.objectContaining({ type: 'error', data: expect.objectContaining({
-        reason: 'codex_reconnect_stalled', errorStatus: 503, isTerminal: true,
+        reason: 'codex_reconnect_stalled', errorStatus: 503, pendingToolCount: 1, isTerminal: true,
         message: expect.stringContaining('(HTTP 503)'), idleMs: 120_000,
+      }) }));
+      expect(seen).toContainEqual(expect.objectContaining({ type: 'error', data: expect.objectContaining({
+        message: expect.stringContaining('unconfirmed tool results'),
       }) }));
       expect(JSON.stringify(seen)).not.toMatch(/private|secret|PRIVATE_RESPONSE|EOF/);
       const priorEnd = seen.length;
@@ -33857,6 +33896,7 @@ describe('CodexAgent reconnect-stall watchdog', () => {
       const terminal = seen.slice(priorEnd).find(e => e.type === 'error' && (e.data as { reason?: string }).reason === 'codex_reconnect_stalled');
       expect(terminal).toBeDefined();
       expect(terminal!.data).not.toHaveProperty('errorStatus');
+      expect(terminal!.data).not.toHaveProperty('pendingToolCount');
       expect((terminal!.data as { message: string }).message).not.toContain('HTTP');
       await handle.close();
     } finally { vi.useRealTimers(); }

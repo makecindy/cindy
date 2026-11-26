@@ -139,8 +139,8 @@ import {
 import type { CodexSubagentRouteSnapshot } from './codex-subagent-config.js';
 import { getSessionProvider, hasHostedSessionModelAccess, hostedSessionModelAllowed } from './session-provider-store.js';
 import { SHARED_PROVIDER_SCOPE_DENIAL_MESSAGE } from '../../shared/providerShare.js';
-import { captureGuestRequestUsage, guestProviderModelDenial, guestProviderModelAllowed, guestProviderOffersModel, guestProviderRouteForSession, hostedProviderOffersModel } from './guest-provider-route-store.js';
-import { getSessionSubscriptionAccount } from '../subscription-accounts/session.js';
+import { captureGuestRequestUsage, guestProviderModelDenial, guestProviderModelAllowed, guestProviderOffersModel, guestProviderRouteForSession, hostedProviderOffersModel, poolAuthorizationProvider } from './guest-provider-route-store.js';
+import { getSessionSubscriptionAccount, readPoolExecutionRoute } from '../subscription-accounts/session.js';
 import { composeResponseObservers } from './claude-rate-limit-headers-observer.js';
 import { createProviderUpstreamErrorObserver, reportProviderUpstreamError } from './provider-upstream-error-observer.js';
 import { xaiServerSideTools } from './xai-server-side-tools.js';
@@ -999,7 +999,7 @@ function providerContextForRequest(
   }
   return {
     sessionId,
-    providerId: sessionId ? getSessionProvider(sessionId) : null,
+    providerId: readPoolExecutionRoute(sessionId)?.connectionId ?? (sessionId ? getSessionProvider(sessionId) : null),
     catalogModel: requestModel,
   };
 }
@@ -3096,11 +3096,12 @@ function codexGuestRouteRefusal(sessionId?: string | null, model = '', kind: 'sc
   return async (body, ctx) => {
     const requestModel = isPlainObject(body) && typeof body.model === 'string' ? body.model : '';
     const requestSessionId = sessionIdFromHeaders(ctx.headers);
+    const grantProviderId = poolAuthorizationProvider(guestSessionId, providerId);
     // This proxy belongs to one guest. Headerless calls use that binding, and
     // headers cannot borrow another guest's grants, even on the same provider.
     if (guestSessionId && ((requestSessionId && requestSessionId !== guestSessionId)
-      || guestProviderRouteForSession(guestSessionId)?.providerId !== providerId
-      || getSessionProvider(guestSessionId) !== providerId)) return codexGuestRouteRefusal();
+      || !grantProviderId || guestProviderRouteForSession(guestSessionId)?.providerId !== grantProviderId
+      || getSessionProvider(guestSessionId) !== grantProviderId)) return codexGuestRouteRefusal();
     const authInjection = frozenAuthInjection ?? getCodexProxyAuthInjection();
     if (account?.sharedProviderId && (authInjection !== 'oauth-bearer' || !leaseIsCurrent()))
       return codexGuestRouteRefusal();
@@ -3120,6 +3121,11 @@ function codexGuestRouteRefusal(sessionId?: string | null, model = '', kind: 'sc
       : undefined;
     if (!await guestProviderModelAllowed(providerId, reviewerModel ?? requestModel, sessionId)) return codexGuestRouteRefusal(sessionId, reviewerModel ?? requestModel, 'model');
     if (customPath.kind !== 'not-custom-provider-route') return undefined;
+    if (grantProviderId !== providerId) {
+      if (sessionId && requestSessionId === sessionId && ctx.method === 'POST' && ctx.url.split('?', 1)[0]?.endsWith('/responses'))
+        return undefined; // The owner-side pool route resolves and revalidates this exact connection.
+      return codexGuestRouteRefusal();
+    }
     if (ctx.url.split('?', 1)[0]?.endsWith('/responses')) {
       const effectiveModel = providerAwareGuardianReviewerModel(body, ctx.headers, authInjection) ?? requestModel;
       if (effectiveModel !== requestModel && !await guestProviderModelAllowed(providerId, effectiveModel, sessionId)) return codexGuestRouteRefusal(sessionId, effectiveModel, 'model');
@@ -3545,6 +3551,17 @@ function resolveCodexCustomProviderRoutingDecision(
     // Provider/catalog model。嵌套子线程继承同一份路由快照。
     const subagentRoute = subagentRouteFromHeaders(ctx.headers);
     const model = subagentRoute?.catalogModel ?? reportedModel;
+    const poolRoute = readPoolExecutionRoute(sessionId);
+    if (poolRoute && model) {
+      const valid = () => readPoolExecutionRoute(sessionId) === poolRoute
+        && poolAuthorizationProvider(sessionId, poolRoute.connectionId, model) !== null;
+      if (!valid() || (subagentRoute && subagentRoute.providerId !== poolRoute.connectionId))
+        return codexCustomProviderRouteFailure(403, 'pool_account_route_unavailable');
+      return resolveProviderRouteDecision(poolRoute.connectionId, 'codex', _readGatewayKey(), model, sessionId)
+        .then(resolved => resolved?.decision && valid()
+          ? { ...resolved.decision, dispatchGenerationValid: valid }
+          : codexCustomProviderRouteFailure(403, 'pool_account_route_unavailable'));
+    }
     const explicitProviderId = subagentRoute?.providerId
       ?? (sessionId ? getSessionProvider(sessionId) : null);
     const authorizationModel = model === CODEX_AUTO_REVIEW_MODEL && guardianParentThreadIdFromHeaders(ctx.headers) && sessionId
@@ -4239,9 +4256,11 @@ async function createCodexProxyHandle(
       createCodexResponseObserver(),
       createProviderUpstreamErrorObserver({
         agent: 'codex',
+        resolveUserSessionId: headers => guardianParentThreadIdFromHeaders(headers) || isCollabSpawnRequest(headers)
+          ? null : sessionIdFromHeaders(headers) ?? null,
         resolveUserProviderId: (requestHeaders) => {
           const sessionId = sessionIdFromHeaders(requestHeaders);
-          return sessionId ? getUserProviderIdForSession(sessionId) : null;
+          return readPoolExecutionRoute(sessionId)?.connectionId ?? (sessionId ? getUserProviderIdForSession(sessionId) : null);
         },
         resolveUserProviderName: (providerId) =>
           getActiveCatalog().providers.find((provider) => provider.id === providerId)?.name ?? null,

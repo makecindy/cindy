@@ -124,6 +124,7 @@ const NO_INIT = buildAcpCapabilities(
     },
     authMethods: [],
     steering: false,
+    permissionGate: false,
   },
   [],
 );
@@ -262,6 +263,7 @@ export class AcpAgent extends BaseAgent {
           // that trusts the engine as a whole (collaboration Workers) treats every call as the task's own.
           mcpCallerKind: opts.pluginEngineTrustedCaller === true ? 'root' : 'unknown',
           mcpCallerAttested: opts.pluginEngineTrustedCaller === true,
+          recordMcpToolResults: true,
         });
       } catch (error) {
         logger.error('acp: Cindy tool bridge unavailable; starting without Cindy tools', {
@@ -348,6 +350,7 @@ export class AcpAgent extends BaseAgent {
           ...(companionBriefing ? { resumedCompanionBriefing: companionBriefing } : {}),
           ...(skillCommandNames.length > 0 ? { skillCommandNames } : {}),
           ...(expandSlashInvocation ? { expandSlashInvocation } : {}),
+          ...(extra?.takeMcpToolResult ? { takeMcpToolResult: extra.takeMcpToolResult } : {}),
           logger,
           onEnded: disposeBridge,
         });

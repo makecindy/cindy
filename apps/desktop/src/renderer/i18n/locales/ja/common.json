@@ -340,7 +340,7 @@
     "tabOwned": "自分が共有中",
     "startIntro": "パートナーを招待して、このセッションのすべての内容を共有し、同じ Agent で協力できます。",
     "runsOnThisDevice": "このパソコンで実行中",
-    "inviteNotice": "招待リンクを持つユーザーはログイン後に参加でき、ホストと同じ Agent 権限を持ちます。",
+    "inviteNotice": "招待リンクを持つユーザーはログイン後に参加でき、ホストと同じ Agent 権限を持ちます。 サブフォルダーを共有した場合も、ゲストは Git リポジトリ全体の現在の変更を確認できます。",
     "offlineAutoClose": "ホストのパソコンがオフラインのままだと、共有は自動的に終了します。",
     "inviteBoxHint": "リンクを送ると、相手はクリックして参加できます。Cindy の「共有タスクに参加」にリンクを貼り付けて参加することもできます。",
     "invitationMessage": "「{{title}}」への招待です\n{{link}}\nリンクを開いて参加してください。Cindy が開かない場合は、Cindy の「共有タスクに参加」からこのリンクを貼り付けてください。",
@@ -401,7 +401,7 @@
       "progress": "現在 {{used}}% · 上限 {{limit}}%",
       "paused": "このモデルは停止中です。他の利用可能なモデルを選んでください。",
       "recommendation": "おすすめ：{{model}}",
-      "unsupported": "このプロバイダーグループではモデル使用割合の制限に未対応です。",
+      "unsupported": "このコンピューターグループではモデル使用割合の制限に未対応です。",
       "basis": "直近7暦日 · 入力＋出力トークン（キャッシュを除く）",
       "maxPercent": "個人使用量に占める割合の上限",
       "empty": "使用記録がありません",
@@ -496,23 +496,23 @@
         "confirm": "共有を削除"
       },
       "reshare": {
-        "applying": "{{owner}} のプロバイダーグループ経由での利用を希望しています",
+        "applying": "{{owner}} のコンピューターグループ経由での利用を希望しています",
         "requestedAt": "{{time}}にリクエスト",
         "usageHint": "同意すると、{{name}} のセッションをこのパソコンで実行でき、使用量は {{owner}} の分として記録されます",
         "approve": "同意",
         "reject": "拒否",
-        "summaryUsing_other": "{{count}} 人が {{owner}} のプロバイダーグループ経由で利用",
-        "summaryOwner": "{{owner}} のプロバイダーグループ経由",
+        "summaryUsing_other": "{{count}} 人が {{owner}} のコンピューターグループ経由で利用",
+        "summaryOwner": "{{owner}} のコンピューターグループ経由",
         "summaryDeclined_other": "{{count}} 人は未同意",
         "stateApproved": "同意済み",
         "stateRejected": "未同意",
         "revoke": "同意を取り消す",
         "revokeAria": "{{name}} への同意を取り消す",
         "approveAria": "{{name}} の利用に同意する",
-        "toastApproved": "{{name}} が {{owner}} のプロバイダーグループ経由で {{provider}} を使えるようにしました",
+        "toastApproved": "{{name}} が {{owner}} のコンピューターグループ経由で {{provider}} を使えるようにしました",
         "toastRejected": "{{name}} のリクエストを拒否しました",
         "toastRevoked": "{{name}} への同意を取り消しました。実行中のセッションは停止しました",
-        "listTitle": "{{owner}} のプロバイダーグループ経由で利用"
+        "listTitle": "{{owner}} のコンピューターグループ経由で利用"
       },
       "memberNote": {
         "add": "メモを設定",
@@ -558,7 +558,7 @@
       "requestedAt": "共有リンクから申請: {{time}}",
       "pairingHint": "承認する前に、リンクを送ったのと同じ方法で「表示されているペアリングコードは？」と相手に確認できます。一致したら承認してください。",
       "callout": "承認すると、{{name}} は自分のセッションで {{provider}} のモデルを使えます。Agent はこのパソコンで実行され、使用量はあなたの {{provider}} に計上されます。「{{provider}} · リモートと共有」からいつでも停止または削除できます。",
-      "calloutGroup": "承認すると、{{name}} は自分のセッションで {{provider}} のモデルを使えます。Agent はプロバイダーグループが選んだパソコンで実行され、使用量はあなたの {{provider}} に計上されます。「{{provider}} · リモートと共有」からいつでも停止または削除できます。",
+      "calloutGroup": "承認すると、{{name}} は自分のセッションで {{provider}} のモデルを使えます。Agent はコンピューターグループが選んだパソコンで実行され、使用量はあなたの {{provider}} に計上されます。「{{provider}} · リモートと共有」からいつでも停止または削除できます。",
       "calloutRemote": "承認すると、{{name}} は自分のセッションで {{provider}} のモデルを使えます。Agent はこのプロバイダーを提供するパソコンで実行され、使用量はあなたの {{provider}} に計上されます。「{{provider}} · リモートと共有」からいつでも停止または削除できます。",
       "calloutClaudeEmail": "{{name}} が使用している間、Agent はあなたが Claude へのログインに使っているメールアドレスを確認できます。",
       "calloutUnknown": "申請者に心当たりがない場合は拒否してください。拒否するとこのリンクは無効になります。",
@@ -698,7 +698,7 @@
       "rejectedTitle": "共有の申請は承認されませんでした",
       "rejectedBody": "{{name}} は {{provider}} の共有を承認しませんでした",
       "reshareTitle": "新しい利用リクエスト",
-      "reshareBody": "{{name}} が {{owner}} のプロバイダーグループ経由で、あなたの共有した {{provider}} を使いたいと希望しています"
+      "reshareBody": "{{name}} が {{owner}} のコンピューターグループ経由で、あなたの共有した {{provider}} を使いたいと希望しています"
     },
     "runLimits": {
       "title": "リモートセッション数",
@@ -754,7 +754,7 @@
   },
   "providerGroup": {
     "management": {
-      "note": "{{device}} のプロバイダーグループを管理しています。変更はそのパソコンに保存されます。オンラインの状態にしておいてください。",
+      "note": "{{device}} のコンピューターグループを管理しています。変更はそのパソコンに保存されます。オンラインの状態にしておいてください。",
       "unsupported": "グループを作成したパソコンの Cindy は、まだリモート管理に対応していません。先にそのパソコンの Cindy を更新してください。"
     },
     "page": {
@@ -824,27 +824,13 @@
       "emptyRange": "この期間の使用量はありません"
     },
     "section": {
-      "title": "プロバイダーグループ",
+      "title": "コンピューターグループ",
       "addComputer": "パソコンを追加",
       "delete": "グループを削除",
       "empty": "ほかのパソコンの {{provider}} を追加すると、セッションが自動でいずれかを選んで実行します",
-      "loading": "プロバイダーグループを読み込み中…",
-      "loadFailed": "プロバイダーグループを読み込めませんでした",
+      "loading": "コンピューターグループを読み込み中…",
+      "loadFailed": "コンピューターグループを読み込めませんでした",
       "note": "このパソコンのセッションと共有相手のセッションは、グループが選んだパソコンで Agent が実行されます"
-    },
-    "strategy": {
-      "label": "グループの割り当て方式",
-      "least": "空き優先",
-      "round": "順番に",
-      "order": "並び順",
-      "weight": "重み付け",
-      "quotaFirst": "サブスクリプションの使用量を取得できる場合、リセットが近く残りの多いパソコンを優先し、各アカウントを時間に沿って均等に使い切ります。同程度ならグループの割り当て方式で選びます",
-      "description": {
-        "least": "空いているパソコンへ",
-        "round": "順番に割り当て",
-        "order": "上のパソコンを優先",
-        "weight": "重みの比率で"
-      }
     },
     "autoSwitch": {
       "label": "パソコンを自動で切り替え",
@@ -901,9 +887,9 @@
         }
       },
       "removeConfirm": {
-        "title": "{{name}} をプロバイダーグループから外しますか？",
+        "title": "{{name}} をコンピューターグループから外しますか？",
         "description": "新しいセッションは割り当てられなくなります。すでにそこで実行中のセッションはそのパソコンに残ります。",
-        "lastDescription": "グループ内の最後のパソコンです。外すと {{provider}} のプロバイダーグループは削除されます。",
+        "lastDescription": "グループ内の最後のパソコンです。外すと {{provider}} のコンピューターグループは削除されます。",
         "confirm": "グループから外す"
       },
       "sourceGroupOwner": "グループを作成したパソコン",
@@ -939,12 +925,12 @@
       "send": "メッセージを送信"
     },
     "deleteConfirm": {
-      "title": "{{provider}} のプロバイダーグループを削除しますか？",
+      "title": "{{provider}} のコンピューターグループを削除しますか？",
       "description": "このパソコンの新しいセッションはこのパソコンで実行されます。ほかのパソコンに割り当て済みのセッションはそのまま残ります。",
       "confirm": "グループを削除"
     },
     "add": {
-      "title": "{{provider}} のプロバイダーグループにパソコンを追加",
+      "title": "{{provider}} のコンピューターグループにパソコンを追加",
       "sourceAria": "パソコンの追加元",
       "tabAvailable": "すでに使えるもの",
       "tabLink": "共有リンク",
@@ -960,10 +946,10 @@
       "pasteLink": "共有リンクを貼り付け"
     },
     "toast": {
-      "added_other": "{{count}} 台のパソコンを {{provider}} のプロバイダーグループに追加しました",
-      "addedAccounts_other": "{{count}} 個のアカウントを {{provider}} のプロバイダーグループに追加しました",
-      "removed": "{{name}} をプロバイダーグループから外しました",
-      "deleted": "{{provider}} のプロバイダーグループを削除しました"
+      "added_other": "{{count}} 台のパソコンを {{provider}} のコンピューターグループに追加しました",
+      "addedAccounts_other": "{{count}} 個のアカウントを {{provider}} のアカウントグループに追加しました",
+      "removed": "{{name}} をコンピューターグループから外しました",
+      "deleted": "{{provider}} のコンピューターグループを削除しました"
     }
   },
   "regionScreenshot": {
@@ -1360,7 +1346,7 @@
     "DEVICE_LINK_BUSY": "接続先のコンピュータが混み合っています。しばらくしてから再試行してください。",
     "INVALID_PARAMS": "入力内容が無効です。確認して再試行してください。",
     "PRECONDITION_FAILED": "現在の状態ではこの操作を実行できません。しばらくしてから再試行してください。",
-    "PROVIDER_GROUP_CHANGED": "プロバイダーグループが別の場所で変更されたため、この操作は適用されませんでした。最新の設定を確認してから、もう一度操作してください。",
+    "PROVIDER_GROUP_CHANGED": "コンピューターグループが別の場所で変更されたため、この操作は適用されませんでした。最新の設定を確認してから、もう一度操作してください。",
     "MODEL_CONTEXT_USAGE_UNKNOWN": "モデルは切り替わっていません。現在のタスクで使用中のコンテキスト量を確認できません。現在のモデルを維持するか、新しいタスクを作成してください。",
     "MODEL_WINDOW_CURRENT_CONTEXT_UNKNOWN": "モデルは切り替わっていません。現在のモデルのコンテキストウィンドウを確認できません。カスタムモデルのウィンドウ設定を確認してください。変更できない場合は、現在のモデルを維持するか、新しいタスクを作成してください。",
     "MODEL_WINDOW_TARGET_CONTEXT_UNKNOWN": "モデルは切り替わっていません。対象モデルのコンテキストウィンドウを確認できません。カスタムモデルのウィンドウ設定を確認してください。変更できない場合は、別のモデルを選ぶか、新しいタスクを作成してください。",
@@ -1416,6 +1402,9 @@
     "ENDPOINT_NOT_FOUND": "エンドポイントが見つかりません（404）。ベース URL を確認してください",
     "CONTEXT_TOO_LONG": "コンテキストがモデルの上限を超えています",
     "WIRE_INCOMPATIBLE": "エンドポイントがこのプロトコルと完全には互換していません（認識できないリクエストフィールドがあります）",
+    "INVALID_PROBE_RESPONSE": "モデルサービスから空または無効な応答が返されました",
+    "PROBE_NO_OUTPUT": "接続テストでモデルの出力を確認できませんでした",
+    "PROBE_REFUSED": "モデルサービスがテストリクエストを拒否または遮断しました",
     "UPSTREAM_ERROR": "上流サーバーエラー（5xx）です。しばらくしてから再試行してください",
     "UPSTREAM_UNREACHABLE": "エンドポイントに接続できません。ネットワークとベース URL を確認してください",
     "TIMEOUT": "接続がタイムアウトしました。ネットワークとベース URL を確認してください",
@@ -1868,7 +1857,7 @@
       "imBot": "IM ボット",
       "ghosts": "プラグイン",
       "cindyMake": "Cindy Make",
-      "modelGroups": "モデルグループ"
+      "modelGroups": "スマートルーティング"
     },
     "sections": {
       "user": "ユーザー",
@@ -2693,6 +2682,60 @@
         }
       }
     },
+    "contactChange": {
+      "phone": {
+        "rowTitle": "ログイン用の電話番号",
+        "rowHint": "ログインと認証コードの受信に使用します",
+        "change": "電話番号を変更",
+        "verifyTitle": "現在の電話番号を確認",
+        "introDescription": "アカウントを保護するため、変更する前に現在登録している電話番号を確認してください。",
+        "newTitle": "新しい電話番号を入力",
+        "newDescription": "変更後は新しい電話番号でログインしてください。以前の電話番号ではこのアカウントにログインできなくなります。",
+        "inputLabel": "新しい電話番号",
+        "placeholder": "電話番号を入力",
+        "success": "電話番号を {{target}} に変更しました"
+      },
+      "email": {
+        "rowTitle": "ログイン用のメールアドレス",
+        "rowHint": "ログインと認証コードの受信に使用します",
+        "change": "メールアドレスを変更",
+        "verifyTitle": "現在のメールアドレスを確認",
+        "introDescription": "アカウントを保護するため、変更する前に現在登録しているメールアドレスを確認してください。",
+        "newTitle": "新しいメールアドレスを入力",
+        "newDescription": "変更後は新しいメールアドレスでログインしてください。以前のメールアドレスではこのアカウントにログインできなくなります。",
+        "inputLabel": "新しいメールアドレス",
+        "placeholder": "メールアドレスを入力",
+        "success": "メールアドレスを {{target}} に変更しました"
+      },
+      "codeSent": "{{target}} に認証コードを送信しました",
+      "codeLabel": "認証コード",
+      "codePlaceholder": "6 桁のコード",
+      "sendCode": "コードを送信",
+      "next": "次へ",
+      "confirm": "変更を確定",
+      "cancel": "キャンセル",
+      "resend": "コードを再送信",
+      "resendIn": "{{seconds}} 秒後に再送信できます",
+      "errors": {
+        "INVALID_CODE": "認証コードが間違っているか期限切れです。",
+        "CODE_ATTEMPTS_EXCEEDED": "入力ミスが多すぎます。新しいコードを取得してください。",
+        "CONTACT_TAKEN": "この電話番号またはメールアドレスは別のアカウントに登録されています。",
+        "CONTACT_UNCHANGED": "現在登録している電話番号またはメールアドレスと同じです。",
+        "CONTACT_CHANGE_TICKET_INVALID": "確認の有効期限が切れました。現在の電話番号またはメールアドレスをもう一度確認してください。",
+        "AUTH_FLOW_SUPERSEDED": "ログイン状態が変わりました。最初からやり直してください。",
+        "CONTACT_CHANGE_UNAVAILABLE": "このアカウントではここでログイン方法を変更できません。",
+        "CONTACT_CHANGE_BUSY": "前の手順をまだ処理しています。",
+        "RATE_LIMITED": "操作が多すぎます。しばらく待ってから再試行してください。",
+        "RATE_LIMITED_UNTIL": "操作が多すぎます。{{time}}（現地時間）以降に再試行してください。",
+        "INVALID_PARAMS": "形式が正しくありません。確認して再試行してください。",
+        "EMAIL_DOMAIN_BLOCKED": "このメールアドレスは使用できません。別のアドレスをお試しください。",
+        "EMAIL_PATTERN_BLOCKED": "このメールアドレスは使用できません。別のアドレスをお試しください。",
+        "ACCOUNT_DELETION_PENDING": "このアカウントは削除待ちのため変更できません。",
+        "NETWORK_ERROR": "ネットワークに接続できません。接続を確認して再試行してください。",
+        "REQUEST_TIMEOUT": "リクエストがタイムアウトしました。再試行してください。",
+        "fallback": "問題が発生しました。しばらくしてから再試行してください。"
+      }
+    },
     "help": {
       "title": "ヘルプ",
       "description": "{{appName}} で作業を進める方法をご案内します。",
@@ -2721,7 +2764,7 @@
         "description": "Ubuntu はシステムの .deb パッケージを使用します。Arch Linux と Omarchy は、同じ検証済み .deb の内容をユーザーディレクトリにインストールします。Debian のパッケージマネージャーは不要です。",
         "item1": "Ubuntu：sudo apt install ./cindy-<version>-<arch>.deb を実行します。Arch/Omarchy：docs/linux.md のユーザーインストール手順に従ってください。",
         "item2": "更新時、システムの .deb インストールは認証を要求します。ユーザーインストールはシステムパスワードなしでバージョンを切り替えます。それ以外は対応するパッケージマネージャーで更新してください。",
-        "item3": "Linux x64 と arm64 は Beta チャネルに対応しています。更新は再起動を選択したときのみ適用され、アイドル時には自動適用されません。"
+        "item3": "Linux x64 と arm64 は Beta チャネルに対応しています。ユーザーインストールはアイドル時に更新を自動でインストールできます。パスワードなしの認証を設定したシステム .deb インストールもアイドル時に更新を自動でインストールできます。それ以外のシステム .deb インストールでは、再起動を選択したときのみ更新が適用されます。"
       },
       "qnaTitle": "そのまま質問する",
       "qnaDescription": "答えが見つからなければ、やりたいことを質問してください。",
@@ -2796,7 +2839,7 @@
       "openLogsDirError": "ログディレクトリを開けませんでした",
       "autoUpdateLabel": "アイドル時に更新をインストール",
       "autoUpdateDescription": "更新のダウンロード完了後、このコンピューターが 10 分間操作されず、実行中のタスクがない場合に、アプリを自動的に再起動してインストールします。",
-      "linuxUpdateDescription": "更新は再起動を選択したときに適用されます。システムの .deb インストールにはシステムパスワードが必要ですが、ユーザーインストールには不要です。それ以外はパッケージマネージャーで更新してください。",
+      "linuxUpdateDescription": "システムの .deb インストールにはシステムパスワードが必要なため、更新は再起動を選択したときに適用されます。ユーザーインストールはパスワード不要で、アイドル時に自動でインストールできます。それ以外はパッケージマネージャーで更新してください。",
       "autoUpdateEnabledToast": "アイドル時の更新インストールを有効にしました",
       "autoUpdateDisabledToast": "アイドル時の更新インストールを無効にしました",
       "autoUpdateSaveFailed": "自動更新設定を保存できませんでした",
@@ -2976,7 +3019,12 @@
         "reconcileButton": "診断",
         "reconcileFailed": "診断に失敗しました",
         "reconcileHealthy": "台帳とディスクは一致しています。異常はありません。",
-        "reconcileIssues": "異常を検出: 台帳にないファイル {{orphans}} 件({{orphanSize}})、欠損ファイル {{missing}} 件、認識できない項目 {{stray}} 件。詳細はアプリログをご覧ください。"
+        "reconcileIssues": "異常を検出: 台帳にないファイル {{orphans}} 件({{orphanSize}})、欠損ファイル {{missing}} 件、認識できない項目 {{stray}} 件。詳細はアプリログをご覧ください。",
+        "buddyWorkspaceDirectoryTitle": "仲間のワークスペース",
+        "buddyWorkspaceDirectoryDescription": "新しく作成する仲間のワークスペースの保存先です。既存の仲間は現在の場所に留まり、詳細設定から個別に移動できます。",
+        "buddyWorkspaceDirectoryDetails": "新しい仲間のワークスペース用にアカウント別のサブフォルダーを作成し、元のパスにはリンクを保持します。",
+        "buddyWorkspaceDirectoryChoose": "フォルダーを変更",
+        "buddyWorkspaceDirectoryFailed": "仲間のワークスペースフォルダーを更新できませんでした。"
       },
       "piKernel": {
         "manage": "Pi のバージョンを管理",
@@ -4222,7 +4270,9 @@
           "compaction": {
             "title": "自動圧縮",
             "hint": "使用量が選択した割合に達するとコンテキストを整理します。低い値ほど早く圧縮します。実際のタイミングはエンジンの制限に従います。",
-            "default": "{{pct}}%（既定）",
+            "defaultBadge": "既定",
+            "sliderAria": "自動圧縮のトリガー閾値を調整",
+            "restoreAria": "自動圧縮の比率を既定値に戻す",
             "timing": "この提供元のモデルで利用可能なすべてのエンジンに適用します。以降の実行で有効になり、生成中の応答は中断しません。"
           },
           "contextLimitRoute": "現在 {{tokens}} tokens",
@@ -4312,9 +4362,9 @@
         "detailNote": "Agent は {{device}} で動き、そのパソコンのログインとクォータを使います。タスクを新規作成するときにモデル一覧で選ぶと使えます。このプロバイダーを変更するには、そのパソコンの「設定 → モデルプロバイダー」を開いてください。",
         "modelsTitle": "利用できるモデル",
         "modelsEmpty": "このプロバイダーには、そのパソコンで利用できるモデルがまだありません。",
-        "rowLabelGroup": "{{provider}} · {{device}} · プロバイダーグループ",
-        "groupBadge_other": "プロバイダーグループ · {{count}} 台のパソコン",
-        "groupNote": "{{device}} はこのプロバイダーをプロバイダーグループにしています。モデル一覧で選んでタスクを新規作成すると、{{device}} がグループの割り当て方式に従って下のいずれかのパソコンにタスクを割り当て、そのパソコンで問題が起きたら別のパソコンに切り替えて続けます。{{device}} がオンラインなら、ここから「リモートと共有」を開いてグループと共有を管理できます。",
+        "rowLabelGroup": "{{provider}} · {{device}} · コンピューターグループ",
+        "groupBadge_other": "コンピューターグループ · {{count}} 台のパソコン",
+        "groupNote": "{{device}} はこのプロバイダーをコンピューターグループにしています。モデル一覧で選んでタスクを新規作成すると、{{device}} がグループの割り当て方式に従って下のいずれかのパソコンにタスクを割り当て、そのパソコンで問題が起きたら別のパソコンに切り替えて続けます。{{device}} がオンラインなら、ここから「リモートと共有」を開いてグループと共有を管理できます。",
         "groupMembersTitle": "グループ内のパソコン",
         "groupMembersFailed": "グループ内のパソコンの状態を今は取得できません。",
         "hiddenBanner": "このコンピューターのモデル選択で非表示になっています。お気に入りや使用中のセッションには影響しません。"
@@ -4366,7 +4416,7 @@
         "remoteAccess": {
           "label": "リモート利用を許可",
           "description": "オンにすると、あなたの他のパソコンと共有相手がこのプロバイダーのモデルを使えます。Agent はこのパソコン上で、このパソコンのログインとクォータを使って実行されます。",
-          "descriptionGroup": "オンにすると、あなたの他のパソコンと共有相手がこのプロバイダーのモデルを使えます。Agent はプロバイダーグループが選んだパソコンで実行されます。",
+          "descriptionGroup": "オンにすると、あなたの他のパソコンと共有相手がこのプロバイダーのモデルを使えます。Agent はコンピューターグループが選んだパソコンで実行されます。",
           "ariaLabel": "他のパソコンと共有相手にこのプロバイダーの利用を許可",
           "writeFailed": "リモート利用の設定を保存できませんでした。もう一度お試しください。",
           "followsPool": "この接続は「{{pool}}」に統合され、その「リモート利用を許可」に従います。「{{pool}}」で変更してください。"
@@ -4583,6 +4633,15 @@
       "menu": {
         "disableProvider": "このプロバイダーを無効にする",
         "enableProvider": "このプロバイダーを有効にする",
+        "icon": "接続アイコン",
+        "appearance": "名前とアイコン",
+        "ownImage": "画像を選ぶ",
+        "imageError": "10 MB 以下の PNG、JPG、WebP 画像を選んでください。",
+        "connectionIcon": {
+          "default": "デフォルト",
+          "personal": "個人用",
+          "work": "仕事用"
+        },
         "hideProvider": "モデル選択で非表示にする",
         "showProvider": "モデル選択に表示する"
       },
@@ -4662,6 +4721,7 @@
         "discoveryHint": "以下はプロバイダーのカタログから取得したモデルです。音声の実行は未検証です。",
         "saved": "追加済み",
         "reference": "参考モデル",
+        "realtimeConfirmed": "リアルタイム接続先で確認済み",
         "discovered": "取得済み",
         "more": "その他の音声モデル（{{count}}）",
         "manual": "音声モデル ID を入力",
@@ -5560,7 +5620,8 @@
           "runtime": "補助モデルへのリクエストが続けて失敗しています。タスクの命名、要約、字幕翻訳などのプラグインタスクに影響する可能性があります。",
           "open": "設定を開く"
         }
-      }
+      },
+      "missingRoute": "削除されたモード"
     },
     "compaction": {
       "codex": {
@@ -5591,7 +5652,7 @@
       "title": "パーソナライズ",
       "subtitle": "カスタムプロンプト",
       "description": "アシスタントに追加の指示やコンテキストを与えます。",
-      "placeholder": "ここにカスタム指示を入力してください。Claude / Codex のシステムプロンプト末尾に追加されます。\n\n· {{appName}} の内蔵セッションのみに適用されます。既存のセッションは起動時スナップショットを保持し、変更は次回の新規セッションから有効になります。\n· すべての Claude Code セッション(ターミナルや他の IDE を含む)で強制的に有効にするには、~/.claude/settings.json に SessionStart フックを設定してください(harness レベルの強制)。\n· Codex CLI は ~/.codex/hooks.json に SessionStart フックを設定すると harness レベルで強制注入できます（CC と同等）。または ~/.codex/AGENTS.md による自動読み込み（ソフト制約、モデルが無視する場合あり）も利用できます。",
+      "placeholder": "ここにカスタム指示を入力してください。Claude / Codex のシステムプロンプト末尾に追加されます。\n\n· {{appName}} の内蔵セッションのみに適用されます。既存のセッションは起動時スナップショットを保持し、変更は次回の新規セッションから有効になります。\n· すべての Claude Code セッション(ターミナルや他の IDE を含む)で強制的に有効にするには、~/.claude/settings.json に SessionStart フックを設定してください(Harness レベルの強制)。\n· Codex CLI は ~/.codex/hooks.json に SessionStart フックを設定すると Harness レベルで強制注入できます（CC と同等）。または ~/.codex/AGENTS.md による自動読み込み（ソフト制約、モデルが無視する場合あり）も利用できます。",
       "ariaLabel": "カスタム指示",
       "save": "保存",
       "overLimit": " — 文字数制限を超過",
@@ -5792,7 +5853,7 @@
       "uninstallTitle": "Pi 拡張機能をアンインストールしますか？",
       "uninstallDescription": "{{name}} をこのデバイスから削除します。すでに開いている Pi タスクは、閉じるまで古い拡張機能を保持します。",
       "confirmUninstall": "アンインストール",
-      "extensionDialogConfirm": "確認",
+      "extensionDialogConfirm": "続行",
       "cancel": "キャンセル",
       "relativePathUnsupported": "設定からローカル拡張機能を入れる場合は絶対パスを使ってください。./extension のような相対パスは Pi タスクからインストールできます。",
       "resources": {
@@ -7051,7 +7112,14 @@
           "routeUnavailable": "利用不可",
           "routeMeasuring": "計測中…",
           "routeDirectUnavailableHint": "現在のネットワークではこのデバイスに直接接続できません",
-          "routePreferenceFailed": "ルートの切り替えに失敗しました。もう一度お試しください。"
+          "routePreferenceFailed": "ルートの切り替えに失敗しました。もう一度お試しください。",
+          "autoRule": {
+            "title": "自動ルーティング規則",
+            "faster": "より低遅延な経路を優先し、差がわずかな場合は直接接続を選びます。",
+            "thresholds": "リレーが直接接続より 25–50 ms 以上速い場合にリレーへ切替；直接接続が差 15 ms 以内に回復すると戻ります。",
+            "cooldown": "通常切替は 30 秒のクールダウンあり；現在の経路が大幅に悪化（2 倍以上かつ 100 ms 以上の遅延差）すると即座に切り替えます。",
+            "peerOverride": "相手側が直接接続/リレーを固定している場合や旧バージョンの場合は、相手側の設定や機能が優先されます。"
+          }
         },
         "protocol": {
           "agentNet": "Agent-Net",
@@ -7174,6 +7242,122 @@
           "disableBlocked": {
             "controller-encryption-required": "この端末では「Agent-Net のみ使用」が有効です。相手を Device Link に戻す前に、この端末で無効にしてください。",
             "agent-net-only-relay": "この接続のネットワークは Agent-Net のみに対応しています。Device Link に対応する接続経路に変更してから戻してください。"
+          }
+        },
+        "peerUpdate": {
+          "availableTip": "新バージョン {{version}} があります（クリックして更新）",
+          "downloading": "{{version}} をダウンロード中…",
+          "relaunching": "{{version}} に更新するため再起動中…",
+          "confirm": {
+            "title": "「{{name}}」の Cindy を更新しますか？",
+            "selfTitle": "このコンピュータの Cindy を更新しますか？",
+            "description": "Cindy を {{from}} から {{to}} に更新して再起動します。リモート接続は一時的に切断されます。",
+            "selfDescription": "Cindy を {{from}} から {{to}} に更新し、このコンピュータで再起動します。",
+            "busyWarning": "実行中のタスクやバックグラウンド処理は再起動によって中断されます。",
+            "selfBusyWarning": "このコンピュータで実行中のタスクやバックグラウンド処理は再起動によって中断されます。",
+            "linuxPermissionHint": "Linux の管理パッケージでは、対象デバイスでシステムパスワードの入力が必要になる場合があります。",
+            "windowsPermissionHint": "保護されたフォルダにインストールされている場合、対象デバイスでシステム権限の確認が必要になることがあります。",
+            "action": "今すぐ更新"
+          },
+          "toast": {
+            "started": "「{{name}}」の {{version}} への更新を開始しました",
+            "relaunching": "「{{name}}」は {{version}} を適用するため再起動中です",
+            "versionChanged": "「{{name}}」の利用可能なバージョンが変わりました。カードを開き直して確認してください。",
+            "noUpdate": "「{{name}}」にインストール可能な更新はありません。",
+            "busy": "「{{name}}」では別の更新が進行中です。しばらくしてから再試行してください。",
+            "failed": "「{{name}}」の Cindy を更新できませんでした。"
+          }
+        },
+        "tabs": {
+          "aria": "トポロジー表示",
+          "devices": "デバイス接続",
+          "providers": "リモートプロバイダー"
+        },
+        "providers": {
+          "empty": "現在実行中のリモートプロバイダータスクはありません。他のコンピュータや共有プロバイダーでタスクを実行すると、実行中の経路とリレーがここに表示されます。",
+          "noMatch": "条件に一致するタスク、マシン、またはリレーはありません。",
+          "searchPlaceholder": "タスク、マシン、リレーを検索…",
+          "clearFilter": "フィルターをクリア",
+          "expand": "展開",
+          "collapse": "折りたたむ",
+          "groupTitle": "{{provider}} プロバイダーグループ",
+          "groupCount": "計 {{count}} 台",
+          "groupIdleSummary": "他のメンバー {{count}} 台：オンライン {{online}} · オフライン {{offline}}",
+          "filter": {
+            "aria": "タスク状態で絞り込む",
+            "all": "関連タスク ({{count}})",
+            "running": "実行中のみ ({{count}})"
+          },
+          "columns": {
+            "tasks": "マイタスク",
+            "path": "経路",
+            "machines": "リモートプロバイダーマシン"
+          },
+          "usage": {
+            "remoteModel": "リモートモデル"
+          },
+          "bundle": {
+            "mixed": "実行中 {{running}} · 待機 {{ready}}",
+            "runningOnly": "実行中 {{running}}",
+            "readyOnly": "待機 {{ready}}",
+            "countBadge": "計 {{count}}",
+            "popoverTitle": "{{name}} のタスク ({{count}})"
+          },
+          "badge": {
+            "own": "自分のPC",
+            "groupMember": "グループ",
+            "share": "共有プロバイダー",
+            "shareShort": "共有",
+            "shareGroup": "共有グループ · {{count}} 台",
+            "shareGroupShort": "共有組 · {{count}} 台"
+          },
+          "relayRole": {
+            "officialShort": "公式",
+            "selfHostedShort": "自前",
+            "sharerRelayShort": "共有元リレー",
+            "officialFull": "Cindy 公式リレー",
+            "selfHostedFull": "自前リレー",
+            "sharerRelayFull": "共有元の自前リレー"
+          },
+          "status": {
+            "ready": "オンライン",
+            "busy": "ビジー",
+            "paused": "一時停止",
+            "idle": "待機中",
+            "standby": "待機中"
+          },
+          "machineLine": {
+            "live": "{{flow}} · {{count}} タスク",
+            "ready": "準備完了 · {{count}} タスク"
+          },
+          "popover": {
+            "models": "使用中のモデル",
+            "tasksCount": "紐づくタスク ({{count}})",
+            "clickToOpenHint": "クリックで開く",
+            "relayHost": "リレーホスト",
+            "relayRegion": "リージョン",
+            "relayHop": "リレーまで",
+            "relayLoad": "経由中",
+            "relayLoadValue": "{{machines}} 台 · {{tasks}} タスク"
+          },
+          "idleStrip": {
+            "summary": "他に {{count}} 台のオンラインリモートプロバイダーが待機中です",
+            "show": "待機プロバイダーを表示",
+            "hide": "待機プロバイダーを隠す"
+          },
+          "stats": {
+            "empty": "実行中のリモートプロバイダータスクはありません",
+            "tasks": "{{total}} タスク",
+            "tasksWithRunning": "{{total}} タスク（実行中 {{running}}）",
+            "machines": "{{active}} 台のプロバイダー",
+            "machinesWithTotal": "稼働 {{active}} / 計 {{total}} 台のプロバイダー",
+            "relays": "{{count}} リレー"
+          },
+          "legend": {
+            "live": "青い破線：通信中",
+            "ready": "緑の実線：Agent-Net 接続済み",
+            "busy": "オレンジ点：タスク実行中 / ビジー",
+            "error": "赤い点線：無応答または一時停止"
           }
         }
       }
@@ -7303,7 +7487,8 @@
       "localNetwork": {
         "label": "ローカルネットワーク",
         "deniedHint": "この権限がないと、同じネットワーク上のコンピュータやスマートフォンはこのコンピュータに直接接続できず、リレー経由になるため遅くなります。",
-        "settingsHint": "「システム設定 › プライバシーとセキュリティ › ローカルネットワーク」で Cindy をオンにしてください。戻るとすぐに反映されます。"
+        "promptedHint": "macOS の確認ダイアログで「許可」をクリックしてください。表示されない場合はシステム設定から手動でオンにします。",
+        "settingsHint": "「プライバシーとセキュリティ」で「ローカルネットワーク」を開き、Cindy をオンにしてください。一覧にない場合は「+」からこのアプリを追加すると戻ってすぐ反映されます。"
       }
     },
     "imBot": {
@@ -7774,6 +7959,10 @@
         "toggle-sidebar": {
           "label": "サイドバーを切り替え",
           "description": "左側のセッションリストを折りたたみ・展開します"
+        },
+        "copy-session-link": {
+          "label": "セッションリンクをコピー",
+          "description": "開いているセッションのリンクをコピー"
         },
         "session-history-back": {
           "label": "前のセッション",
@@ -8543,8 +8732,8 @@
         "hostTools_controlDetail": "Cindy のタスクツールで既存のタスクやプロジェクトを編集、アーカイブ、復元、操作し、このパソコンにネイティブ形式のタスクファイルをインポートできます。",
         "hostTools_handoff": "タスクへの送信",
         "hostTools_handoffDetail": "Cindy のタスクツールで既存のタスクにメッセージを送信できます。現在のタスク情報が必要な操作では、対象のタスクを明示する必要があります。",
-        "hostTools_usage": "使用量とプロバイダーグループの状態を読み取る",
-        "hostTools_usageDetail": "現在の Cindy アカウントに接続された、このコンピューター上の Claude/Codex のアカウント ID、プラン、クォータ期間、更新時刻を読み取ります。このコンピューターと、同じアカウントで許可された他のコンピューターの記録済みの日別・モデル別使用量、推定費用、プロバイダーグループの設定と状態、表示可能なメンバー・デバイスの ID、名前、アバターも読み取ります。サブスクリプションのログインメール、アカウントのディレクトリ、内部フィンガープリント、認証情報、ファイルの読み取りや、アカウント・設定の変更はできません。アクセス権のあるタスクのクォータも読み取ります。同じアカウントで許可された別のコンピューターや、クォータの閲覧が許可された共有プロバイダーも対象です。",
+        "hostTools_usage": "使用量とコンピューターグループの状態を読み取る",
+        "hostTools_usageDetail": "現在の Cindy アカウントに接続された、このコンピューター上の Claude/Codex のアカウント ID、プラン、クォータ期間、更新時刻を読み取ります。このコンピューターと、同じアカウントで許可された他のコンピューターの記録済みの日別・モデル別使用量、推定費用、コンピューターグループの設定と状態、表示可能なメンバー・デバイスの ID、名前、アバターも読み取ります。サブスクリプションのログインメール、アカウントのディレクトリ、内部フィンガープリント、認証情報、ファイルの読み取りや、アカウント・設定の変更はできません。アクセス権のあるタスクのクォータも読み取ります。同じアカウントで許可された別のコンピューターや、クォータの閲覧が許可された共有プロバイダーも対象です。",
         "hostTools_settings": "アプリ設定",
         "hostTools_settingsDetail": "Cindy の設定ツールでアプリの設定を読み取り、変更できます。秘密情報は返されず、機密情報の入力は本人が行います。",
         "hostTools_scheduler": "自動化の管理",
@@ -9490,6 +9679,7 @@
         "createTitle": "MCP サーバーを追加",
         "editTitle": "MCP サーバーを編集",
         "desc": "リモート http / sse 型の MCP のみ対応。保存後、新しい Agent セッションから呼び出せます。実行中の Agent セッションには影響しません。",
+        "embeddedGuide": "アシスタントがこのタスクで使う MCP の設定フォームを開きました。サービスプロバイダーの案内に従って入力済みの内容を確認し、不足している項目を入力してから設定を保存してください。",
         "teammateDesc": "リモート http / sse 型の MCP のみ対応。保存すると仲間が自分のツールに追加し、このチャットの次のメッセージから使えます。新しいセッションは不要です。"
       },
       "fields": {
@@ -9701,7 +9891,7 @@
       "allow": "許可",
       "deny": "拒否",
       "questionTitle": "回答が必要です",
-      "submit": "送信",
+      "submit": "回答を送信",
       "planTitle": "プランの確認",
       "approve": "承認",
       "requestChanges": "修正を依頼",
@@ -10027,6 +10217,18 @@
       "title": "自動更新に失敗しました",
       "description": "アップデーターを起動できませんでした。システムのセキュリティポリシーによりブロックされた可能性があります。最新のインストーラーを手動でダウンロードしてください。",
       "confirm": "ダウンロードへ"
+    },
+    "workspaceMigration": {
+      "title": "仲間のワークスペースを移動中",
+      "progressLabel": "仲間ワークスペース移動の進捗",
+      "safetyHint": "切り替え前にファイルをコピー・検証しています。完了まで Cindy を閉じないでください。",
+      "phase": {
+        "preparing": "移動を準備中",
+        "copying": "ファイルをコピー中",
+        "verifying": "ファイルを検証中",
+        "switching": "場所を切り替え中",
+        "cleaning": "バックアップを整理中"
+      }
     }
   },
   "welcome": {
@@ -10249,10 +10451,10 @@
       }
     },
     "byAgent": {
-      "title": "Agent / harness 別",
+      "title": "Agent / Harness 別",
       "subtitle": "直近 30 日",
       "col": {
-        "agent": "Agent / harness",
+        "agent": "Agent / Harness",
         "total": "直近 30 日のトークン",
         "totalInRange": "{{range}}のトークン",
         "share": "割合",
@@ -11358,6 +11560,69 @@
           "routines": "確認が必要な定期タスク",
           "upgrade": "自動では引き継げなかったもの"
         }
+      },
+      "workspaceLocation": {
+        "title": "ワークスペースの場所",
+        "description": "この仲間のワークスペースを別のローカルディスクへ移動し、システムドライブの空き容量を確保できます。元のパスにはリンクが残るため、既存のタスク・自動化・スクリプトはそのまま動作します。",
+        "movedDescription": "既存のタスクやスクリプトは引き続き元のパスを使用します。",
+        "chooseDialogTitle": "ワークスペースの移動先フォルダーを選択",
+        "fullPath": "フルパス",
+        "targetPathLabel": "移動先フォルダー",
+        "currentPathLabel": "現在のフォルダー",
+        "defaultPathLabel": "移動先（既定の場所）",
+        "logicalPathLabel": "元のリンクパス",
+        "copyPath": "パスをコピー",
+        "pathCopied": "パスをコピーしました",
+        "pathCopyFailed": "パスをコピーできませんでした",
+        "openTarget": "フォルダーを開く",
+        "moveAction": "ワークスペースを移動",
+        "moveBackAction": "既定の場所に戻す",
+        "chooseAnother": "別のフォルダーを選択",
+        "restartNow": "今すぐ再起動",
+        "restartAndMove": "再起動して移動",
+        "scheduleNextRestart": "次回起動時に移動",
+        "cancel": "キャンセル",
+        "dismissFailed": "閉じる",
+        "scheduledToast": "次回の Cindy 再起動時に移動を実行するよう予約しました",
+        "cancelledToast": "ワークスペースの移動をキャンセルしました",
+        "previewTitle": "ワークスペースの移動準備完了",
+        "previewSummary": "ファイルサイズ：{{size}}",
+        "previewNotice": "再起動前に、このワークスペースを使用中のアプリやスクリプトを終了してください。",
+        "previewClaudeSkillsNotice": "ワークスペースに独自の Git リポジトリがない場合、移動後に Claude Code が移動先の上位フォルダーにあるスキルを検出することがあります。これを避けるには、上位フォルダーに Claude Code のスキルがない場所を選んでください。",
+        "pendingHint": "このフォルダーを使用中の外部アプリを閉じてから Cindy を再起動してください。",
+        "unavailableTitle": "移動後のワークスペースにアクセスできません",
+        "unavailableDescription": "{{target}} に到達できませんでした。ドライブを再接続するかフォルダーを復元してください。空のフォルダーで上書きされることはありません。",
+        "errorTitle": "ワークスペースを移動できませんでした",
+        "failedTitle": "前回のワークスペース移動に失敗しました",
+        "interruptedTitle": "ワークスペース移動の復旧が必要です",
+        "backupRemainingHint": "確認用に元のバックアップを保持しています: {{backup}}",
+        "personalPreviewHint": "このプロファイルを共有する個人プレビュー版を閉じ、通常の Cindy から移動を予約・実行してください。",
+        "status": {
+          "default": "デフォルト",
+          "pending": "再起動待ち",
+          "moved": "移動済み",
+          "failed": "失敗",
+          "interrupted": "要復旧",
+          "unavailable": "利用不可"
+        },
+        "warnings": {
+          "waitingExclusive": "排他起動を待機中です。同じデータを共有する他の Cindy インスタンスを閉じて再起動してください。",
+          "receiptUpdateFailed": "ワークスペースは利用可能ですが、移動記録の更新に失敗しました。次回の再起動時に再試行します。"
+        },
+        "errors": {
+          "insufficientSpace": "移動先ドライブの空き容量が不足しています。",
+          "overlapsCindyData": "Cindy のデータフォルダーおよび現在のワークスペース外のフォルダーを選択してください。",
+          "localDiskRequired": "ネットワーク共有ではなくローカルディスク上のフォルダーを選択してください。",
+          "unsupportedFileOrHardLink": "ハードリンクまたは特殊ファイルが含まれているため、現在安全に移動できません。",
+          "alreadyRedirected": "Cindy はこのワークスペースのフォルダーリンクを認識できません。リンクとファイルはそのままにしてください。",
+          "botHomeRedirected": "この仲間のホームフォルダーは手動でリダイレクトされているため、自動移動できません。",
+          "targetExists": "移動先フォルダーがすでに存在します。別の場所を選択してください。",
+          "workspaceChanged": "検証中にファイルが変更されました。外部アプリを閉じてやり直してください。",
+          "backupRetained": "移動は完了しましたが、バックアップに差分があったため保護のため残しました。",
+          "backupCleanupIncomplete": "移動は完了しましたが、一時バックアップの削除が未完了です。次回起動時に再試行します。",
+          "cutoverInterrupted": "前回の切り替えが中断され、元のワークスペースを復元しました。新しい空フォルダーを選んでやり直してください。",
+          "generic": "ワークスペースの移動を完了できませんでした。もう一度お試しください。"
+        }
       }
     },
     "profile": {
@@ -11431,18 +11696,14 @@
     "model": {
       "description": "この仲間が使用するモデルを選びます。",
       "primary": "メインモデル",
-      "restoreDefault": "デフォルトのモデルに戻す"
+      "restoreDefault": "デフォルトのモデルに戻す",
+      "followsDefault": "デフォルトモデルを使用",
+      "ownModel": "個別のモデル",
+      "managedInSettings": "バディのモデルは「プロバイダー → スマートルーティング」でまとめて設定します。",
+      "openSettings": "設定を開く"
     },
     "modelChain": {
-      "primary": "優先モデル",
-      "fallback": "予備 {{index}}",
-      "routeLabel": "モデル候補 {{index}}",
-      "add": "予備モデルを追加",
-      "remove": "この候補を削除",
-      "moveUp": "上へ移動",
-      "moveDown": "下へ移動",
-      "description": "モデルを最大5件設定できます。候補が利用できない場合、仲間が順番に自動で切り替えるため、タスクの切り替えや手動再試行は不要です。",
-      "options": "予備のモデル（{{count}}）"
+      "routeLabel": "モデル候補 {{index}}"
     },
     "actions": {
       "message": "メッセージ",
@@ -11815,6 +12076,8 @@
         "loadEarlierFailed": "以前のメッセージを読み込めませんでした。もう一度お試しください",
         "emptyTitle": "このグループにはまだメッセージがありません",
         "emptyDescription": "話しかけると仲間たちが会話を続けます。@ で仲間を指名すると、その仲間だけが返信します。",
+        "emptyDescriptionWithAssistant": "@Cindy に話しかけたり、右上の招待メニューから友だちを招待したり、仲間を追加したりできます。",
+        "emptyDescriptionInvite": "右上の招待メニューから友だちを招待したり、仲間を追加したりできます。",
         "roundEnded": "仲間たちの発言が終わりました",
         "stepTag": "ステップ {{count}}",
         "sending": "送信中",
@@ -12146,7 +12409,7 @@
         "loginRequired": "ログインしてから再試行してください。",
         "requestFailed": "チャットサービスに接続できません。しばらくしてから再試行してください。",
         "copyFailed": "コピーできませんでした。リンクを選択して手動でコピーしてください。",
-        "createDescription": "仲間を選ぶか、先にグループを作成してから友達を招待できます。",
+        "createDescription": "グループの作成後に、友だちを招待したり、仲間を追加したりできます。",
         "settings": {
           "notifications": {
             "title": "メッセージ通知",
@@ -12195,7 +12458,7 @@
           "soleOwnerHint": "メンバーはあなただけです。グループをアーカイブすると履歴が残り、後で再開できます。",
           "archive": "グループをアーカイブ",
           "archiveHint": "アーカイブすると、すべてのメンバーに対して新しいメッセージと仲間の実行が停止します。履歴は保持されます。グループを検索して履歴を閲覧したり、アーカイブを解除したりできます。",
-          "confirm": "確認",
+          "confirm": "続行",
           "lastOwner": "退出またはオーナーを削除する前に、別のメンバーに所有権を譲渡してください。",
           "conflict": "設定が更新されました。再読み込みしてお試しください。",
           "unarchive": "アーカイブを解除",
@@ -12577,7 +12840,7 @@
       "arrivingLater": "{{name}} はこのパソコンに移り、準備中です。まもなく仲間一覧に表示されます",
       "arrivalPermissions": "{{name}} はこのパソコンの既定の権限で動作します。",
       "arrivalModel": "{{name}} の保存済みモデルはこのパソコンでは使えないため、このパソコンの既定モデルを使います。",
-      "arrivalModelSetup": "{{name}} はこのパソコンに移りましたが、使えるモデルがまだありません。モデルプロバイダーを接続するか、この仲間の「設定 → モデル」でモデルを選んでください。",
+      "arrivalModelSetup": "{{name}} はこのコンピューターに来ましたが、まだ使えるモデルがありません。モデルプロバイダーを接続するか、「プロバイダー → スマートルーティング」でバディのデフォルトモデルを設定してください。",
       "arrivalPartialContent": "{{name}} はこのパソコンで動作するようになりましたが、一部の同期データは復元できませんでした。クラウド上の元データはそのまま残っています。",
       "missingProfileTitle": "初期プロフィールで {{name}} を続けますか？",
       "missingProfileDescription": "元のメインコンピューターから {{name}} のプロフィールがまだアップロードされていません。元のパソコンを再インストールした場合や復旧できない場合は、初期プロフィールでこのパソコンから続けられます。クラウドに同期済みの会話や内容はそのまま残ります。",
@@ -13051,7 +13314,7 @@
       }
     },
     "confirmDialog": {
-      "confirm": "確認",
+      "confirm": "続行",
       "cancel": "キャンセル",
       "dontShowAgain": "次回から表示しない"
     },
@@ -13433,6 +13696,7 @@
           "overloadRetryingNoCount": "モデルサービスが混雑しています。自動で再試行しています…",
           "overloadFailed": "⚠️ モデルサービスが混雑しています。上流に空き容量がありません。ここでこのメッセージを再送して再試行するか、Cindy で別のモデルに切り替えてください。（デスクトップ版で「再試行」を押してもタスクは続行できますが、結果はこのメッセージには戻りません。）"
         },
+        "openAiReconnect": "Cindy の設定 → プロバイダー → OpenAI で ChatGPT に再接続し、このチャットにメッセージを送信してください。",
         "audioInputUnavailable": "現在のモデル接続では音声を直接読み取れません。先に音声を文字に起こしてから続けるよう Cindy に依頼してください。",
         "toolLoop": {
           "generic": "モデルがツールを繰り返し呼び出した回数が多すぎるため、無限ループを避けるために Cindy はこのターンを停止しました。新しいメッセージを送ると続行できます。",
@@ -13503,6 +13767,7 @@
         },
         "slash": {
           "detachFailed": "❌ 引き継ぎを終了できませんでした: {{error}}",
+          "pluginEngineModelsUnavailable": "このタスクのプラグインエンジンは現在利用できないため、モデルを一覧表示できません。",
           "companionManaged": "🧭 この接続は仲間に任されているため、モデル・権限・作業ディレクトリは仲間の設定に従います。Cindy の仲間の設定で変更してください。"
         },
         "turn": {
@@ -14525,7 +14790,7 @@
         "providerGroupLabel": "{{provider}} · {{group}}",
         "providerGroupRunningOn": "現在 {{device}} で実行中",
         "providerGroupRunningHere": "現在このパソコンで実行中",
-        "providerGroupUnassigned": "開始時にプロバイダーグループがパソコンを選び、使用量はそのパソコンの分を表示します"
+        "providerGroupUnassigned": "開始時にコンピューターグループがパソコンを選び、使用量はそのパソコンの分を表示します"
       },
       "speed": {
         "label": "速度",
@@ -14591,11 +14856,11 @@
         },
         "acp": {
           "ask": {
-            "label": "その都度確認",
+            "label": "デフォルト権限",
             "description": "Agent が権限を求めたときにあなたが確認します。Agent が確認を求めない操作は Cindy では止められません。"
           },
           "default": {
-            "label": "デフォルト",
+            "label": "デフォルト権限",
             "description": "Agent の既定の動作で進めます。権限の要求はあなたが確認します。"
           },
           "acceptEdits": {
@@ -14603,15 +14868,15 @@
             "description": "Agent はファイルを直接編集します。その他の権限の要求はあなたが確認します。"
           },
           "auto": {
-            "label": "自動",
+            "label": "自動レビュー",
             "description": "確認が必要な操作は Agent が判断します。要求された権限はあなたが確認します。"
           },
           "plan": {
-            "label": "計画のみ",
+            "label": "計画モード",
             "description": "Agent は分析と計画だけを行い、ファイルは編集しません。"
           },
           "bypassPermissions": {
-            "label": "すべて許可",
+            "label": "フルアクセス",
             "description": "Agent が求める権限はすべて自動で許可されます。"
           }
         }
@@ -15274,7 +15539,7 @@
       "back": "戻る",
       "skip": "スキップ",
       "next": "次へ",
-      "submit": "送信",
+      "submit": "回答を送信",
       "sendAndContinue": "送信して続行",
       "close": "閉じる",
       "customAnswer": "別の回答を入力…",
@@ -15444,6 +15709,10 @@
       "codexHelperUnavailable": "このタスクでは cindy_helper が有効ですが、利用できません。タスクの結果を報告できない可能性があります。",
       "codexHelperUnverified": "このタスクの cindy_helper が利用可能か確認できませんでした。タスクの結果を報告できない可能性があります。",
       "requestFormatError": "アプリが送信したリクエストの形式に問題があり、返信を完了できませんでした。",
+      "piRetryHistoryTooLarge": "メッセージは送信されませんでした。Pi が再試行に必要な履歴を読み込む際に、データフレームがローカルの上限（16 MiB）を超えました。新しいタスクで続けられます。",
+      "piRetryHistoryUnavailable": "メッセージは送信されませんでした。Pi が送信に必要な履歴を読み込めませんでした。再試行するか、新しいタスクで続けてください。",
+      "upstreamStatusError": "上流が {{status}} を返したため、この返信は完了しませんでした。",
+      "messageNotSent": "メッセージは送信されませんでした。",
       "replyFailed": "返信を完了できませんでした",
       "queuedSendRecovery": "直前のメッセージは送信されていません。「再試行」でそのまま送信できます。新しいメッセージを送ると、直前のメッセージは置き換わります。",
       "retryTitle": "最後のメッセージを再送信",
@@ -15702,6 +15971,10 @@
       "diffUnchangedLines_one": "変更なし {{count}} 行",
       "diffUnchangedLines_other": "変更なし {{count}} 行",
       "diffPreviewLoading": "差分プレビューを準備しています…"
+    },
+    "filePreview": {
+      "changed": "ファイルが変更されました",
+      "refreshHint": "クリックして更新"
     },
     "textLightbox": {
       "unreadable": "このファイルを読み取れません",
@@ -15984,7 +16257,7 @@
         "groupSwitch": "別のパソコンに自動で切り替えて続行しました"
       },
       "autoResumeSeparator": {
-        "label": "接続が中断されたため、自動的に再開しました"
+        "label": "応答が空だったため、自動で再開しました"
       },
       "autoResumePending": {
         "label": "再接続中",
@@ -16278,7 +16551,7 @@
       "REMOTE_WORKDIR_UNAVAILABLE": "リモートの作業ディレクトリを今は使えません。そのパソコンにフォルダがまだあるか確認してから、再試行してください。",
       "REMOTE_OPTIMISTIC_SESSION_STATE_UNAVAILABLE": "パソコン側で、このメッセージが送信済みかまだ確認できません。少し待ってから再試行し、同じメッセージを重ねて送らないでください。",
       "REMOTE_AGENT_UNAVAILABLE": "Agent を実行しているパソコンと通信できませんでした。エラーの詳細を確認してください。",
-      "REMOTE_AGENT_TIMEOUT": "Agent を実行しているパソコンからの応答がタイムアウトしました。結果は未確認です。再試行する前にセッションの進行状況を確認してください。",
+      "REMOTE_AGENT_TIMEOUT": "Agent を実行するパソコンからまだ応答がありません。セッションの進行状況を確認してください。実行中または完了していれば、再試行は不要です。",
       "REMOTE_AGENT_LINK_BUSY": "Agent を実行しているパソコンとの通信が混雑しています。しばらく待ってから再試行してください。",
       "REMOTE_AGENT_UNRESPONSIVE": "Agent を実行しているパソコンが繰り返し応答しなかったため、呼び出しを一時停止しました。しばらく待ってから再試行してください。",
       "REMOTE_AGENT_OFFLINE": "Agent を実行しているパソコンはオフラインです。再接続後に再試行してください。",
@@ -16302,7 +16575,7 @@
       "REMOTE_AGENT_SHARE_UNAVAILABLE": "共有されたプロバイダーは一時的に利用できません。共有した人のパソコンがオフラインか、共有が一時的にオフになっている可能性があります。後でもう一度試すか、別のモデルに切り替えて続けられます。",
       "REMOTE_AGENT_SHARE_LEGACY_DISABLED": "これは旧方式の共有のため、「Agent-Net のみ使用」がオンの間は使えません。オフにすると続けられます。別のモデルに切り替えることもできます。",
       "REMOTE_AGENT_GROUP_USAGE_LIMIT": "このモデルを利用できるアカウントの使用量が上限に達しました。別のモデルに切り替えるか、上限のリセット後に続行できます。",
-      "REMOTE_AGENT_GROUP_UNAVAILABLE": "プロバイダーグループ内のパソコンは現在このセッションを実行できません。オフライン、割り当て停止中、クールダウン中、またはこのモデルがない可能性があります。このプロバイダーの「リモートと共有」ページでグループを確認してください。",
+      "REMOTE_AGENT_GROUP_UNAVAILABLE": "コンピューターグループ内のパソコンは現在このセッションを実行できません。オフライン、割り当て停止中、クールダウン中、またはこのモデルがない可能性があります。このプロバイダーの「リモートと共有」ページでグループを確認してください。",
       "REMOTE_AGENT_GROUP_FULL": "このタスクを実行できるアカウントまたはパソコンはすべて同時実行数の上限に達しています。実行中のタスクが終わるのを待つか、プロバイダー設定で上限を引き上げてください。",
       "SUBSCRIPTION_ACCOUNTS_FULL": "このタスクを実行できるアカウントまたはパソコンはすべて同時実行数の上限に達しています。実行中のタスクが終わるのを待つか、プロバイダー設定で上限を引き上げてください。",
       "REMOTE_AGENT_DEVICE_LIMIT": "このデバイスのリモートセッション数が上限に達しました。不要なセッションをアーカイブするか、リモートのパソコンの所有者に「リモートと共有」で上限の変更を依頼してください。",
@@ -16516,6 +16789,8 @@
       "retryIn": "{{seconds}} 秒後に自動で再試行"
     },
     "subscriptionAccountError": {
+      "unreachable": "一時的に Codex アカウントサービスに接続できません。",
+      "rechecking": "一時的に Codex アカウントサービスに接続できません。{{resetAt}} に再試行します。",
       "poolModelLimited": "このモデルのサブスクリプション利用枠が上限に達しました。別のモデルに切り替えられます。",
       "poolRetryUntil": "{{resetAt}} 以降に再試行できます。",
       "poolOtherSignedOut": "別のサブスクリプションアカウントはログアウトしています。タスクを実行するコンピューターでログインして再試行できます。",
@@ -18027,7 +18302,7 @@
           "sessions_dispatch": "セッションのディスパッチ",
           "feishu_read": "Feishu メッセージの読み取り",
           "settings_read": "共有メンバーを読み取る",
-          "usage_read": "使用量とプロバイダーグループの状態を読み取る"
+          "usage_read": "使用量とコンピューターグループの状態を読み取る"
         },
         "project": "プロジェクトディレクトリ",
         "capabilitiesLabel": "許可する機能",
@@ -18041,7 +18316,7 @@
           "sessions_dispatch": "{{appName}} セッションの作成・再開とメッセージ送信",
           "feishu_read": "最近アクティブなチャットの一覧取得、指定チャット（グループ/DM）の最新メッセージ取得",
           "settings_read": "自分が共有したメンバーと利用可能なモデルを、このコンピューターまたは同じアカウントで許可された他のコンピューターから読み取る。変更は行わない",
-          "usage_read": "現在の Cindy アカウントに接続された、このコンピューター上の Claude/Codex のアカウント ID、プラン、クォータ期間、更新時刻を読み取ります。このコンピューターと、同じアカウントで許可された他のコンピューターの記録済みの日別・モデル別使用量、推定費用、プロバイダーグループの設定と状態、表示可能なメンバー・デバイスの ID、名前、アバターも読み取ります。サブスクリプションのログインメール、アカウントのディレクトリ、内部フィンガープリント、認証情報、ファイルの読み取りや、アカウント・設定の変更はできません。"
+          "usage_read": "現在の Cindy アカウントに接続された、このコンピューター上の Claude/Codex のアカウント ID、プラン、クォータ期間、更新時刻を読み取ります。このコンピューターと、同じアカウントで許可された他のコンピューターの記録済みの日別・モデル別使用量、推定費用、コンピューターグループの設定と状態、表示可能なメンバー・デバイスの ID、名前、アバターも読み取ります。サブスクリプションのログインメール、アカウントのディレクトリ、内部フィンガープリント、認証情報、ファイルの読み取りや、アカウント・設定の変更はできません。"
         },
         "capabilityWarn": {
           "ghostMissing": "「{{name}}」プラグインが必要ですが未インストールです——実行時にこの機能は失敗します",
@@ -18296,6 +18571,7 @@
         "intervalChip": "完了後に計時 · {{schedule}}"
       },
       "scheduleMenu": {
+        "custom": "カスタム Cron",
         "intervalMinutes": "分（N 分ごと）",
         "interval": "Hourly（N 時間ごと）",
         "daily": "Daily（毎日）",
@@ -18341,7 +18617,7 @@
         "categoryListAria": "{{category}} モデル",
         "effortListAria": "推論強度",
         "boundLocationLocked": "連携したタスクは元のコンピューターで実行されます。そのコンピューターのモデルを選んでください。",
-        "modelGroupTitle": "モデルグループ「{{name}}」：新しいタスクを作るときにソースを選びます"
+        "modelGroupTitle": "スマートルーティング「{{name}}」：実行で新しいタスクを始めるときにソースを選びます"
       }
     },
     "toast": {
@@ -18993,6 +19269,7 @@
     }
   },
   "commandPalette": {
+    "buddyNewHint": "仲間の設定で「{{restart}}」を選ぶと、作業コンテキストを再構築し、メッセージ履歴を保持できます。別の話題を話し合うには、メッセージの操作から「{{startTopic}}」を選んでください。",
     "viewSkillDetails": "スキルの詳細を見る",
     "projectSkillNotLoaded": "現在の Pi タスクでは、このプロジェクト Skill はまだ読み込まれていません。新しいタスクでは自動的に読み込みを試みます。",
     "pluginSkillSetup": {
@@ -22455,7 +22732,27 @@
     "wrap": "行の折り返し",
     "lineNumbers": "行番号"
   },
+  "openAiAccountGroup": {
+    "removeDescription": "この接続にはグループの新しいタスクが割り当てられなくなります。実行中のタスクはこの接続に残ります。",
+    "mergeDescription": "{{target}} で新しく作成したタスクは両方のプロバイダーを利用できます。ログイン、キー、既存のタスクは元のままです。連携する前に Cindy が {{apiKey}} の API キーをテストします。",
+    "modelUnavailable": "この接続ではテスト用に選んだモデルを使用できません。再テストすると別の候補を試せます。",
+    "noTestModel": "テストに使える設定済みモデルがありません。OpenAI プロジェクトで使用できるモデルを確認し、この接続のモデル一覧を再取得または更新してください。",
+    "billingPaused": "残高不足または請求上限のため、グループの割り当てを停止中。",
+    "title": "アカウントグループ",
+    "testPassed": "テスト成功",
+    "refresh": "利用枠を更新"
+  },
   "subscriptionAccounts": {
+    "existing": {
+      "menu": "アカウントの追加方法",
+      "connect": "既存のログインを接続…",
+      "found": "接続可能 {{count}} 件",
+      "title": "{{device}} のログイン",
+      "note": "Cindy は選択したアカウントの設定を CLI と共有します。",
+      "attach": "接続",
+      "choose": "別のフォルダを選択…",
+      "unverified": "このフォルダのサブスクリプションを確認できませんでした。"
+    },
     "pluginSignIn": {
       "method": "ログイン方法",
       "secretHint": "キーはプラグインにだけ渡され、このアカウント専用のフォルダーに保存されます。Cindy は保存せず、ほかのコンピューターにも送信しません。",
@@ -22507,7 +22804,6 @@
       "useCodex": "Codex でログイン"
     },
     "title": "サブスクリプションアカウント",
-    "strategy": "負荷分散",
     "add": "アカウントを追加",
     "defaultTag": "既定",
     "ready": "接続済み",
@@ -22582,14 +22878,15 @@
     "refreshFailed": "テーマはインストールされましたが、一覧を更新できませんでした。外観設定で更新してください"
   },
   "modelGroups": {
-    "title": "モデルグループ",
-    "description": "モデルプロバイダーに接続済みのソースをいくつかまとめて、ひとつの選択肢にします。モデル選択の「モデルグループ」で選ぶと、今回どのソースを使うかは Cindy が決めます。",
-    "routes": "モード",
-    "routesDescription": "モードには複数のソースを入れます。新しいタスクを始めるとき、選び方に従ってひとつを選びます。",
+    "title": "スマートルーティング",
+    "description": "モデルプロバイダーに接続済みのソースをいくつかまとめて、ひとつの選択肢にします。モデル選択の「スマートルーティング」で選ぶと、どのソースを使うかは Cindy が決めます。",
+    "routes": "ルート",
+    "routesDescription": "複数のソースをひとつの選択肢にまとめます。ソースはプロバイダー全体（いつもどおりモデルを選ぶと、どれで動かすかはルートが決めます）でも、特定のモデル 1 つでもかまいません。同じブランドのプロバイダーは自動でまとめられます。",
+    "sourceCount_one": "ソース {{count}} 件",
     "sourceCount_other": "ソース {{count}} 件",
     "strategy": {
       "expiring": {
-        "title": "失効が近いものを先に",
+        "title": "自動",
         "hint": "残りが多く、もうすぐリセットされるサブスクリプションのクォータから使い、無駄にしません。クォータを読み取れないソースは後回しです。"
       },
       "order": {
@@ -22618,12 +22915,15 @@
       }
     },
     "picker": {
-      "empty": "モデルグループはまだありません。設定で複数のソースをモードにまとめると、ここで選べます。",
-      "manage": "モデルグループを管理",
-      "deviceTitle": "モデルグループ · {{device}}",
-      "switched": "「{{name}}」でこのタスクを {{model}} に切り替えました",
+      "empty": "スマートルーティングはまだありません。設定で複数のソースをルートにまとめると、ここで選べます。",
+      "manage": "スマートルーティングを管理",
+      "deviceTitle": "スマートルーティング · {{device}}",
+      "switched": "「{{name}}」がこのタスクを {{model}} に切り替えました",
       "switchUnavailable": "「{{name}}」には、今このタスクで使えるソースがありません。モデルは変更していません。",
-      "chooseUnavailable": "「{{name}}」には今使えるソースがないため、選択しませんでした。"
+      "chooseUnavailable": "「{{name}}」には今使えるソースがないため、選択しませんでした。",
+      "mergedLabel_other": "{{name}} · ルート（ソース {{count}} 件）",
+      "routeDecides": "このタスクで使うソースはルート「{{name}}」が決めます",
+      "quotaOf": "クォータ：{{name}}"
     },
     "why": {
       "expiringQuota": "残り {{left}}%、{{reset}} にリセットされるため先に使用",
@@ -22633,9 +22933,9 @@
       "only": "今使えるのはこれだけ",
       "soonest": "すべてのソースのクォータを使い切りました。これが最も早く回復します",
       "soonestUntil": "すべてのソースのクォータを使い切りました。これが最も早く回復します（{{reset}}）",
-      "standby": "今回は順番ではありません",
+      "standby": "今回は選ばれませんでした",
       "standbyQuota": "残り {{left}}%、リセットは {{reset}} のため温存",
-      "off": "このモードではオフ",
+      "off": "このルートではオフ",
       "unavailable": "未接続、またはこのモデルは今選べません",
       "limited": "クォータを使い切りました",
       "limitedUntil": "クォータを使い切りました。{{reset}} に回復",
@@ -22656,17 +22956,18 @@
     "settings": {
       "autoSwitch": {
         "title": "問題が起きたらソースを自動で切り替える",
-        "hint": "このモードで使用中のソースに問題が起きたら、次に使えるソースへ自動で切り替え、そのターンの下に記録します。オフにすると、エラー時に切り替えを提案するだけです。"
+        "hint": "このルートで使用中のソースに問題が起きたら、次に使えるソースへ自動で切り替え、そのターンの下に記録します。オフにすると、エラー時に切り替えを提案するだけです。"
       },
-      "newRoute": "モードを作成",
-      "newRouteName": "新しいモード",
-      "routesEmpty": "モードはまだありません。作成してソースを追加してください。",
-      "scopeNote": "モデルグループは、このコンピューターのタスクで使われます。新しいタスクは開始時にソースをひとつ決めます。進行中のタスクで選ぶと、その場で一度だけ切り替わり、その後は自動では変わりません。",
-      "back": "モデルグループに戻る",
+      "newRoute": "ルートを作成",
+      "newRouteName": "新しいルート",
+      "routesEmpty": "ルートはまだありません。作成してソースをいくつか追加してください。",
+      "scopeNote": "スマートルーティングは、このコンピューターのタスクで使われます。新しいタスクは開始時にソースをひとつ決めます。進行中のタスクで選ぶと、その場で一度だけ切り替わり、その後は自動では変わりません。",
+      "back": "スマートルーティングに戻る",
       "name": "名前",
       "nameHint": "モデル選択に表示される名前です。",
-      "routeShownAs": "モデル選択の「モデルグループ」に表示されます。",
+      "routeShownAs": "モデル選択の「スマートルーティング」に表示されます。",
       "pick": "今回どれを使うか",
+      "moreStrategies": "その他",
       "effort": "推論強度",
       "effortUnset": "指定しない",
       "effortHint": "選ばれたモデルがこのレベルに対応していない場合は、そのモデルの既定で実行します。",
@@ -22676,26 +22977,30 @@
       "sources": "使えるソース",
       "sourcesHint": "異なるモデルを一緒に入れられます。実際に使ったものはタスクに表示されます。",
       "sourcesEmpty": "ソースはまだありません。下から接続済みのモデルを追加してください。",
-      "sourcesFull": "モードに入れられるソースは最大 {{count}} 件です。",
+      "sourcesEmptyMerged": "ソースはまだありません。下から接続済みのプロバイダーを追加してください。",
+      "sourcesFull": "ルートに入れられるソースは最大 {{count}} 件です。",
       "addSource": "ソースを追加",
       "chooseModel": "モデルを選択",
       "notConnected": "未接続",
       "moveUp": "上へ移動",
       "moveDown": "下へ移動",
-      "remove": "このモードから外す",
-      "useSource": "このモードで {{name}} を使う",
+      "remove": "このルートから外す",
+      "useSource": "このルートで {{name}} を使う",
       "try": {
         "title": "試してみる",
-        "hint": "今新しいタスクを始めるとどれを使うかを確認します。メッセージは送信されず、クォータも消費しません。",
+        "hint": "今新しいタスクを始めるとどのソースを使うかを確認します。メッセージは送信されず、クォータも消費しません。",
         "run": "選ばれるソースを見る",
         "picked": "これを使用",
         "standby": "待機",
         "skipped": "スキップ",
-        "unavailable": "このモードには今使えるソースがありません。新しいタスクは元々選んでいたモデルを使います。"
+        "unavailable": "このルートには今使えるソースがありません。新しいタスクは元々選んでいたモデルを使います。",
+        "failed": "試せませんでした。もう一度お試しください。",
+        "model": "試すモデル"
       },
-      "deleteRoute": "このモードを削除",
+      "deleteRoute": "このルートを削除",
       "deleteRouteConfirmTitle": "「{{name}}」を削除しますか？",
-      "deleteRouteConfirmDescription": "ほかのモードにある、このモードに切り替える時間帯の例外も一緒に削除されます。開始済みのタスクには影響しません。",
+      "deleteRouteConfirmDescription": "ほかのルートにある、このルートに切り替える時間帯の例外も一緒に削除されます。開始済みのタスクには影響しません。",
+      "deleteMergedRouteConfirmDescription": "開始済みのタスクには影響しません。",
       "delete": "削除",
       "cancel": "キャンセル",
       "saveFailed": "保存できませんでした。もう一度お試しください。",
@@ -22720,23 +23025,70 @@
         "addHours": "追加",
         "sameHour": "開始と終了を同じ時刻にはできません。",
         "full": "例外は最大 {{count}} 件です。",
-        "needOtherRoute": "時間帯で切り替えるには、モードをもうひとつ作成してください。"
+        "needOtherRoute": "時間帯で切り替えるには、ルートをもうひとつ作成してください。"
       }
     },
     "overview": {
       "mapTitle": "新しいタスクのモデルの決まり方",
-      "mapDescription": "左から右へ：通るモードと、最後に行き着くソース。モードをクリックすると変更できます。",
+      "mapDescription": "左から右へ：新しいタスクが通るルートと、最後に行き着くソース。ルートをクリックすると変更できます。",
       "columnSources": "ソース",
       "columnEmpty": "まだありません",
-      "openRoute": "モード「{{name}}」を開く",
+      "openRoute": "ルート「{{name}}」を開く",
       "recentTitle": "最近の選択",
-      "recentEmpty": "モードを使ったタスクはまだありません。",
-      "keptOriginal": "今使えるモデルがなかったため、元々選んでいたモデルを使いました。",
+      "recentEmpty": "ルートを使ったタスクはまだありません。",
+      "keptOriginal": "ルート内に今使えるものがなかったため、タスクは選んでいたモデルのままにしました。",
       "keptOriginalShort": "元のモデルを使用",
       "latest": "直近のタスクが通った経路"
     },
     "switchOffer": {
       "action": "{{model}} に切り替えて続行"
+    },
+    "auto": {
+      "accounts_one": "アカウント {{count}} 件",
+      "accounts_other": "アカウント {{count}} 件",
+      "computers_one": "コンピューター {{count}} 台",
+      "computers_other": "コンピューター {{count}} 台",
+      "pickFor": "{{name}} の選び方",
+      "hiddenTag": "非表示",
+      "show": "モデル選択に表示する",
+      "assignedBy": "新しいタスクは「{{strategy}}」で割り当てます",
+      "adjust": "スマートルーティングで調整"
+    },
+    "sources": {
+      "models_one": "モデル {{count}} 件",
+      "models_other": "モデル {{count}} 件",
+      "autoTag": "自動",
+      "chooseProvider": "プロバイダーを選択",
+      "removeAria": "{{name}} をこのルートから外す",
+      "note": "自動のルートは接続中のプロバイダーに追従します。メンバーの追加と削除はできませんが、順番の入れ替え、重みの設定、個別のオフ、選び方の変更、ルートの非表示はできます。",
+      "providers_one": "プロバイダー {{count}} 件",
+      "providers_other": "プロバイダー {{count}} 件",
+      "addWhole": "プロバイダー全体を追加",
+      "addWholeHint": "そのすべてのモデルがこのルートに入ります。モデル選択ではルートが 1 つのプロバイダーのように扱われ、いつもどおりモデルを選ぶと、どのメンバーで動かすかはルートが決めます。",
+      "addModelHint": "1 つのプロバイダーからモデルを 1 つ追加します。このルートを選ぶと、選び方に従ってこれらのソースから 1 つが選ばれます。",
+      "detailHint": "このルートはプロバイダー全体をまとめています。モデル選択では 1 つのプロバイダーのように扱われ、いつもどおりモデルと推論強度を選ぶと、どのメンバーで動かすかはルートが決めます。"
+    },
+    "kinds": {
+      "byModel": "モデル別",
+      "byProvider": "プロバイダー別"
+    },
+    "buddies": {
+      "title": "バディのモデル",
+      "description": "バディは共通のデフォルトモデルを使い、違うものが必要なバディだけ個別に設定します。問題時にソースを自動で切り替えたい場合は、スマートルーティングを選びます。",
+      "saveFailed": "バディのモデルを保存できませんでした。もう一度お試しください。",
+      "defaultLabel": "デフォルトモデル",
+      "defaultHint": "個別設定がないバディはすべてこれを使います。新しいバディや別のコンピューターから引き継いだバディも同じです。",
+      "ownTitle": "個別に設定したバディ",
+      "ownTitleWithRest_other": "個別に設定したバディ · ほか {{count}} 人はデフォルト",
+      "addOwn": "バディに個別のモデルを設定",
+      "allFollow": "すべてのバディがデフォルトモデルを使っています。",
+      "otherComputers": "ほかのコンピューターのバディ",
+      "deviceBuddies_other": "バディ {{count}} 人",
+      "devicePageTitle": "{{device}} のバディ",
+      "devicePageHint": "そのコンピューターで使えるモデルとスマートルーティングから選び、そのコンピューターに保存します。",
+      "deviceDefaultReadOnly": "そのコンピューターを更新すると、ここでデフォルトモデルを変更できます。",
+      "deviceUnavailable": "今はそのコンピューターのバディ設定を読み取れません。オンラインか確認してから開き直してください。",
+      "deviceLoading": "そのコンピューターの設定を読み取っています…"
     }
   },
   "projectSettings": {

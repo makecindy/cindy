@@ -4659,6 +4659,7 @@ assertRouteCurrent();
      */
     let overloadRetry: {
       retry: (continueHistory?: boolean) => Promise<void>;
+      inputAcceptedInNativeHistory: boolean;
       /**
        * 同一 logical send 已消耗的外层重放次数，所有 provider failure policy 共享。
        * policy 切换不重置：否则 capacity 4 次 + terminal-rate-limit 2 次会把同一条
@@ -6277,6 +6278,14 @@ assertRouteCurrent();
       }
     };
     let registeredRootCodexThreadId: string | undefined;
+    let mcpInstanceClosed = false;
+    const closeCodexMcpInstance = (): void => {
+      if (mcpInstanceClosed) return;
+      mcpInstanceClosed = true;
+      if (!opts.sessionInstanceId) return;
+      try { this.deps.closeCodexMcpSessionInstance?.(opts.sessionInstanceId); }
+      catch (error) { log.warn('closeCodexMcpSessionInstance threw', { error: String(error) }); }
+    };
     const unregisterCodexMcpContext = (threadId: string): void => {
       if (registeredRootCodexThreadId === threadId) registeredRootCodexThreadId = undefined;
       textOnlyPolicyCleanups.get(threadId)?.();
@@ -6661,6 +6670,7 @@ assertRouteCurrent();
       resetUpstreamIdleForTurnEnd();
       unregisterCodexMcpContext(threadId);
       unregisterDescendantCodexMcpContexts();
+      closeCodexMcpInstance();
       activeToolContexts.clear();
       approvalDenials.clear();
       completedActiveToolTurns.clear();
@@ -6897,6 +6907,7 @@ assertRouteCurrent();
       } finally {
         if (registeredRootCodexThreadId) unregisterCodexMcpContext(registeredRootCodexThreadId);
         unregisterDescendantCodexMcpContexts();
+        closeCodexMcpInstance();
         releaseHostBindingLeaseIfNeeded();
         eventQueue.end();
       }
@@ -9487,6 +9498,9 @@ assertRouteCurrent();
         const stalledMessage =
           `The model connection has been retrying for ${Math.round(CODEX_RECONNECT_STALL_TIMEOUT_MS / 1000)}s ` +
           'without making progress; the turn was interrupted automatically. ' +
+          (pendingToolItemIds.size > 0
+            ? 'There were unconfirmed tool results when the connection stalled. '
+            : '') +
           'You can send the next message to continue.';
         const emitStalled = (reason: string, message: string): void => {
           if (
@@ -9737,6 +9751,10 @@ assertRouteCurrent();
         // message 仅作非 renderer 消费方(IM / orca / 日志)的英文兜底。
         reason: timeoutReason,
         ...(opts?.errorStatus !== undefined ? { errorStatus: opts.errorStatus } : {}),
+        // Snapshot before interrupt cleanup clears the set. A missing completion
+        // leaves the outcome unknown even if the tool already took effect.
+        ...(timeoutReason === 'codex_reconnect_stalled' && pendingToolItemIds.size > 0
+          ? { pendingToolCount: pendingToolItemIds.size } : {}),
         ...(opts?.codexErrorInfo ? { codexErrorInfo: opts.codexErrorInfo } : {}),
         message: opts?.message ??
           (`The upstream response has been silent for ${Math.round(idleMs / 1000)}s; ` +
@@ -12828,7 +12846,11 @@ assertRouteCurrent();
       state.timer = setTimeout(() => {
         state.timer = null;
         if (closed || overloadRetry !== state) return;
-        void state.retry(continueSummaryHistory).catch((error) => {
+        // Codex has already committed this input to the thread. Starting the
+        // next turn with the same input would append it to the model history again.
+        const continueHistory = continueSummaryHistory
+          || (policy.kind === 'terminal-rate-limit' && state.inputAcceptedInNativeHistory);
+        void state.retry(continueHistory).catch((error) => {
           // 取消之后 RPC 才 reject：Stop / close / 新 send 都已经各自收口过这一轮
           // （abort 与新 send 会把 overloadRetry 置 null，close 会置 closed）。
           // 此时再报一次 terminal error + Done 会让 UI 二次收口，并把用户主动停止
@@ -13594,6 +13616,10 @@ assertRouteCurrent();
           return;
         }
         if (collabTerminalKey) handledCollabTerminalItemIds.add(collabTerminalKey);
+        if (params.item.type === 'userMessage' && params.turnId === currentTurnId && overloadRetry
+          && turnOriginByTurnId.get(params.turnId)?.sendGen === overloadRetry.sendGen) {
+          overloadRetry.inputAcceptedInNativeHistory = true;
+        }
         if (params.item.type === 'contextCompaction') {
           compactingTurnIds.delete(params.turnId);
           if (ownsManualCompact(params.turnId)) manualCompact!.boundarySeen = true;
@@ -14251,6 +14277,7 @@ assertRouteCurrent();
       resetUpstreamIdleForTurnEnd();
       unregisterCodexMcpContext(threadId);
       unregisterDescendantCodexMcpContexts();
+      closeCodexMcpInstance();
       activeToolContexts.clear();
       approvalDenials.clear();
       completedActiveToolTurns.clear();
@@ -14764,6 +14791,7 @@ assertRouteCurrent();
         let continueNativeHistory = false;
         overloadRetry = {
           attempt: 0,
+          inputAcceptedInNativeHistory: false,
           automaticRecoveryAttempted: false,
           pendingAutomaticRecovery: null,
           timer: null,

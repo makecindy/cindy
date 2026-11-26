@@ -27,6 +27,8 @@ import {
 } from '@cindy/maker-shared/error-redaction';
 import { parseMessageToolUse } from '@cindy/maker-shared/message-normalize';
 import type { AgentEvent } from '../../types/events.js';
+import type { TakeMcpToolResult } from '../base-agent.js';
+import { parseAcpMcpToolName } from './mcp-tool-result.js';
 import {
   asNonEmptyString,
   asRecord,
@@ -54,6 +56,10 @@ export interface AcpUpdateTranslatorOptions {
   /** Unique per session; keeps thinking block ids distinct. */
   blockIdPrefix: string;
   now?: () => number;
+  /** Host MCP result fallback for engines that omit MCP tool outputs on `tool_call_update`. */
+  takeMcpToolResult?: TakeMcpToolResult;
+  /** Accepted Host MCP server names for disambiguating server names that contain underscores. */
+  mcpServerNames?: readonly string[];
 }
 
 export type AcpTurnOutcome =
@@ -196,10 +202,10 @@ export class AcpUpdateTranslator {
    * Registers a tool call seen outside `session/update` (the permission request
    * carries one) so its card exists before the user is asked about it.
    */
-  noteToolCall(fields: AcpToolCallFields): AgentEvent[] {
+  noteToolCall(fields: AcpToolCallFields): { events: AgentEvent[]; toolCall: AcpToolCallFields } {
     const events: AgentEvent[] = [];
-    this.upsertTool(fields, events);
-    return events;
+    const tool = this.upsertTool(fields, events);
+    return { events, toolCall: { ...tool, ...fields } };
   }
 
   /** Closes open text / thinking segments without ending the turn (used before a new turn starts). */
@@ -279,7 +285,7 @@ export class AcpUpdateTranslator {
     return events;
   }
 
-  private upsertTool(fields: AcpToolCallFields, events: AgentEvent[]): void {
+  private upsertTool(fields: AcpToolCallFields, events: AgentEvent[]): ToolState {
     this.flushText(events);
     this.closeThinking(events);
     let tool = this.tools.get(fields.toolCallId);
@@ -304,6 +310,7 @@ export class AcpUpdateTranslator {
     if (!tool.settled && (tool.status === 'completed' || tool.status === 'failed')) {
       this.settleTool(tool, events, tool.status === 'failed' ? 'failed' : 'done');
     }
+    return tool;
   }
 
   private emitToolUse(tool: ToolState, events: AgentEvent[], inputPatch = false): void {
@@ -328,8 +335,25 @@ export class AcpUpdateTranslator {
 
   private settleTool(tool: ToolState, events: AgentEvent[], result: 'done' | 'failed' | 'interrupted'): void {
     tool.settled = true;
-    const isError = result !== 'done';
-    const rendered = renderAcpToolContent(tool.content, tool.rawOutput);
+    let isError = result !== 'done';
+    let rendered = renderAcpToolContent(tool.content, tool.rawOutput);
+    if (this.options.takeMcpToolResult) {
+      const parsed = (tool.name ? parseAcpMcpToolName(tool.name, this.options.mcpServerNames) : null)
+        ?? (tool.title ? parseAcpMcpToolName(tool.title, this.options.mcpServerNames) : null);
+      if (parsed) {
+        // Always retire the matching Host receipt when an MCP call settles so a native-output
+        // or interrupted call cannot leave a stale receipt for a later identical call.
+        const receipt = this.options.takeMcpToolResult({
+          serverName: parsed.serverName,
+          toolName: parsed.toolName,
+          input: tool.rawInput,
+        });
+        if (receipt && !rendered && result !== 'interrupted') {
+          rendered = clip(receipt.fullText);
+          if (receipt.isError) isError = true;
+        }
+      }
+    }
     const fullText = result === 'interrupted' && !rendered ? 'Interrupted before the tool finished.' : rendered;
     events.push({ type: 'tool_result_full', data: { toolUseId: tool.toolCallId, fullText, isError } });
     events.push({ type: 'tool_result', data: { summary: isError ? 'failed' : 'done', toolUseIds: [tool.toolCallId] } });
