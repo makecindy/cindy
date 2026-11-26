@@ -133,6 +133,7 @@ export function startActivityPushSync(options: {
   let running: Promise<void> | undefined;
   let pending = false;
   let pendingRefresh = false;
+  let foregroundOnly = true;
   let deferredRegistration = false;
   let retry: ReturnType<typeof setTimeout> | undefined;
   let last: string | undefined;
@@ -184,16 +185,19 @@ export function startActivityPushSync(options: {
     )
       throw new Error("stale-activity-owner");
   };
+  let backgroundDemand = false;
   const retryAfter = (delay: number) => {
     retry ??= setTimeout(() => {
       retry = undefined;
-      void sync();
+      const automatic = !backgroundDemand;
+      backgroundDemand = false;
+      void sync(false, automatic);
     }, Math.min(delay, 2_147_483_647));
   };
-  const attempt = async (refresh: boolean) => {
+  const attempt = async (refresh: boolean, automatic: boolean) => {
     try {
       assertCurrent();
-      if (unsupported) return;
+      if (unsupported || (automatic && AppState.currentState !== "active")) return;
       const registration = await native.getPushRegistration!();
       assertCurrent();
       if (registration.accountScope !== options.accountScope) return;
@@ -264,6 +268,8 @@ export function startActivityPushSync(options: {
       }
       if (failure?.enabled === registration.enabled && Date.now() < failure.until && (key !== last || wantsRefresh)) {
         deferredRegistration ||= key !== last;
+        // A newly observed token still needs one registration if the phone locks.
+        backgroundDemand ||= !automatic && key !== last;
         retryAfter(failure.until - Date.now());
         if (!accepted) options.onRegistered(false);
         return;
@@ -280,6 +286,7 @@ export function startActivityPushSync(options: {
       }
       // Auth acquisition may span backgrounding; don't send a recovery that
       // was only eligible while foreground. Token changes still register normally.
+      if (automatic && AppState.currentState !== "active") return;
       const refreshStale = shouldRefresh && AppState.currentState === "active";
       if (key === last && !refreshStale) return;
       const refreshedAt = Date.now();
@@ -318,6 +325,7 @@ export function startActivityPushSync(options: {
       }
       recovery.failure = undefined;
       deferredRegistration = false;
+      backgroundDemand = false;
       clearTimeout(retry);
       retry = undefined;
       if (wantsRefresh && recovery.pendingRefreshActivity !== undefined) retryAfter(Math.max(0, refreshAt - Date.now()));
@@ -357,15 +365,18 @@ export function startActivityPushSync(options: {
       }
     }
   };
-  const sync = (refresh = false) => {
+  const sync = (refresh = false, automatic = false) => {
+    foregroundOnly &&= automatic;
     pending = true;
     pendingRefresh ||= refresh;
     running ??= Promise.resolve().then(async () => {
       try {
         while (pending && !controller.signal.aborted) {
           const refreshNow = pendingRefresh;
+          const automaticOnly = foregroundOnly;
+          foregroundOnly = true;
           pending = pendingRefresh = false;
-          await attempt(refreshNow);
+          await attempt(refreshNow, automaticOnly);
         }
       } finally {
         running = undefined;

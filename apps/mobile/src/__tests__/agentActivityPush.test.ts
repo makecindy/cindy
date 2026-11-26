@@ -437,7 +437,7 @@ it.each(["recovered", "rotated"])("starts a new expiry window after %s registrat
 
 // Unit, #13216: events during a failed PUT used to queue a complete registration
 // for every notification. Check native reads and the actual latest PUT on retry.
-it("coalesces native events across a failed request and backs off subsequent failures", async () => {
+it.each([false, true])("coalesces native events and backs off subsequent failures (background=%s)", async background => {
   vi.useFakeTimers();
   const opts = options();
   const sync = startActivityPushSync(opts);
@@ -462,7 +462,13 @@ it("coalesces native events across a failed request and backs off subsequent fai
     // No subsequent event: the newest token is still owed to the service.
     await vi.advanceTimersByTimeAsync(4_999);
     expect(fetchMock).toHaveBeenCalledTimes(3);
+    if (background) fixture.appState.currentState = "background";
     await vi.advanceTimersByTimeAsync(1);
+    if (background) {
+      expect(fetchMock).toHaveBeenCalledTimes(3);
+      fixture.appState.currentState = "active";
+      await sync.sync(true);
+    }
     expect(fetchMock).toHaveBeenCalledTimes(4);
     expect(JSON.parse(fetchMock.mock.calls[3][1]!.body as string).startToken).toBe("latest");
   } finally { sync.dispose(); vi.useRealTimers(); }
