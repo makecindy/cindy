@@ -2,6 +2,7 @@ import { formatCompactionDuration, formatSessionDuration, formatShellDuration } 
 import { IMPORT_SOURCE_NAMES, ImportSourceMark } from '@/components/icons/ImportSourceMark';
 import { isImportSourceId } from '../../../shared/sessionImport';
 import { InputHandoffRecordRow, readInputHandoffRecordData } from '@/features/input-handoff/InputHandoffRecordRow';
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { BotSessionTaskResultCard } from '@/features/bots/BotSessionTaskResultCard';
 /**
@@ -1672,15 +1673,9 @@ function CmdCard({ data }: { data?: Record<string, unknown> }) {
   // 文案区分 ok / timeout / spawn-err / exit code。
   const statusText = timedOut ? 'timeout' : spawnError ? 'spawn err' : `exit ${exitCode}`;
   const statusChip = (
-    <span
-      className={cn(
-        'shrink-0 px-2 py-px rounded-full font-mono text-11',
-        'bg-[var(--msg-tool-card-bg)] text-[var(--msg-tool-text)]',
-        'border border-[var(--msg-tool-card-border)]',
-      )}
-    >
+    <Badge tone="outline" mono className="bg-[var(--msg-tool-card-bg)] text-[var(--msg-tool-text)]">
       {statusText}
-    </span>
+    </Badge>
   );
 
   // cmdLine + 各种输出块共用同一个等宽 + 灰度 Card-tone block (12px radius 是

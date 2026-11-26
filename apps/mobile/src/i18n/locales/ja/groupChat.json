@@ -548,6 +548,8 @@
     "accessChat": "グループ内の会話のみ",
     "accessTools": "ツールと情報を利用可",
     "replies": "仲間の返信",
+    "assistant": "グループの Cindy",
+    "assistantHint": "@ した人のパソコンで動きます。",
     "replyModeMentionedNote": "@ されない限り、仲間は返信しません。",
     "work": "役割分担",
     "organizerHint": "誰がどのステップを担当するかを決めます。既定は最初の仲間です。",

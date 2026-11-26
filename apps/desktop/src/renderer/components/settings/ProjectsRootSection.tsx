@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ChevronRight, Folder, Info, RotateCcw } from 'lucide-react';
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { SETTINGS_HINT, SettingsBlock, SettingsCard, SettingsRow } from '@/components/ui/settings-rows';
 import { Tip } from '@/components/ui/tooltip';
@@ -56,9 +57,7 @@ export function ProjectsRootSection() {
       <SettingsRow
         wrap
         title={<span role="heading" aria-level={3}>{t('settings.about.storage.projectsRootTitle')}</span>}
-        tag={state && <span className="rounded-full bg-[var(--surface-chip)] px-2 py-0.5 text-11 text-[var(--text-secondary)]">
-          {t(SOURCE_BADGE_KEYS[state.source])}
-        </span>}
+        tag={state && <Badge>{t(SOURCE_BADGE_KEYS[state.source])}</Badge>}
         hint={state && (
           <span className="flex min-w-0 items-center gap-1.5" title={state.path}>
             <Folder size={15} className="shrink-0" aria-hidden />

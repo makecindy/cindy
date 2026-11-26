@@ -7165,7 +7165,14 @@
           "routeUnavailable": "Nicht verfügbar",
           "routeMeasuring": "Wird gemessen…",
           "routeDirectUnavailableHint": "Direktverbindung ist in diesem Netzwerk derzeit nicht verfügbar",
-          "routePreferenceFailed": "Route konnte nicht gewechselt werden. Bitte erneut versuchen."
+          "routePreferenceFailed": "Route konnte nicht gewechselt werden. Bitte erneut versuchen.",
+          "autoRule": {
+            "title": "Regeln für automatische Routenwahl",
+            "faster": "Wählt den Weg mit geringerer Latenz und bevorzugt Direktverbindung bei minimalem Unterschied.",
+            "thresholds": "Wechselt auf Relay, sobald es 25–50 ms+ schneller ist; kehrt zurück, wenn Direkt innerhalb von 15 ms liegt.",
+            "cooldown": "30 s Abkühlzeit gegen Hin-und-her-Wechsel; bei starker Verschlechterung (≥ 2× langsamer und ≥ 100 ms schlechter) sofortiger Wechsel.",
+            "peerOverride": "Hat die Gegenseite Direkt/Relay fest gewählt oder nutzt eine ältere Version, gilt deren Einstellung bzw. Fähigkeit."
+          }
         },
         "protocol": {
           "agentNet": "Agent-Net",
@@ -7312,6 +7319,99 @@
             "noUpdate": "Auf „{{name}}“ ist kein installierbares Update verfügbar.",
             "busy": "Auf „{{name}}“ läuft bereits ein Update. Kurz warten und erneut versuchen.",
             "failed": "Cindy auf „{{name}}“ konnte nicht aktualisiert werden."
+          }
+        },
+        "tabs": {
+          "aria": "Topologieansicht",
+          "devices": "Geräteverbindungen",
+          "providers": "Remote-Anbieter"
+        },
+        "providers": {
+          "empty": "Derzeit laufen keine Aufgaben über einen Remote-Anbieter. Sobald eine Aufgabe auf einem anderen Computer oder geteilten Anbieter läuft, erscheinen Route und Relay hier.",
+          "noMatch": "Keine Aufgaben, Geräte oder Relays entsprechen dem Filter.",
+          "searchPlaceholder": "Aufgaben, Geräte oder Relays suchen…",
+          "clearFilter": "Filter zurücksetzen",
+          "expand": "Erweitern",
+          "collapse": "Einklappen",
+          "groupTitle": "{{provider}}-Anbietergruppe",
+          "groupCount": "{{count}} gesamt",
+          "groupIdleSummary": "{{count}} weitere Mitglieder: {{online}} online · {{offline}} offline",
+          "filter": {
+            "aria": "Nach Aufgabenstatus filtern",
+            "all": "Alle Aufgaben ({{count}})",
+            "running": "Nur laufend ({{count}})"
+          },
+          "columns": {
+            "tasks": "Meine Aufgaben",
+            "path": "Route",
+            "machines": "Remote-Anbietergeräte"
+          },
+          "usage": {
+            "remoteModel": "Remote-Modell",
+            "remoteTask": "Remote-Aufgabe"
+          },
+          "bundle": {
+            "mixed": "{{running}} laufend · {{ready}} bereit",
+            "runningOnly": "{{running}} laufend",
+            "readyOnly": "{{ready}} bereit",
+            "countBadge": "{{count}} ges.",
+            "popoverTitle": "Aufgaben auf {{name}} ({{count}})"
+          },
+          "badge": {
+            "own": "Mein Computer",
+            "groupMember": "Gruppe",
+            "share": "Geteilter Anbieter",
+            "shareShort": "Geteilt",
+            "shareGroup": "Geteilte Gruppe · {{count}}",
+            "shareGroupShort": "Gruppe · {{count}}"
+          },
+          "relayRole": {
+            "officialShort": "Offiziell",
+            "selfHostedShort": "Selbst gehostet",
+            "sharerRelayShort": "Teiler-Relay",
+            "officialFull": "Cindy Offizielles Relay",
+            "selfHostedFull": "Selbst gehostetes Relay",
+            "sharerRelayFull": "Selbst gehostetes Relay des Teilers"
+          },
+          "status": {
+            "ready": "Online",
+            "busy": "Beschäftigt",
+            "paused": "Pausiert",
+            "idle": "Inaktiv",
+            "standby": "Bereit"
+          },
+          "machineLine": {
+            "live": "{{flow}} · {{count}} Aufgaben",
+            "ready": "Bereit · {{count}} Aufgaben"
+          },
+          "popover": {
+            "models": "Aktive Modelle",
+            "tasksCount": "Verknüpfte Aufgaben ({{count}})",
+            "clickToOpenHint": "Zum Öffnen klicken",
+            "relayHost": "Relay-Adresse",
+            "relayRegion": "Region",
+            "relayHop": "Lokal zum Relay",
+            "relayLoad": "Über dieses Relay",
+            "relayLoadValue": "{{machines}} Geräte · {{tasks}} Aufgaben"
+          },
+          "idleStrip": {
+            "summary": "{{count}} weitere Online-Remote-Anbieter sind derzeit inaktiv",
+            "show": "Inaktive Anbieter anzeigen",
+            "hide": "Inaktive Anbieter ausblenden"
+          },
+          "stats": {
+            "empty": "Keine laufenden Remote-Anbieter-Aufgaben",
+            "tasks": "{{total}} Aufgaben",
+            "tasksWithRunning": "{{total}} Aufgaben ({{running}} laufend)",
+            "machines": "{{active}} Anbietergeräte",
+            "machinesWithTotal": "{{active}} aktiv / {{total}} Anbietergeräte",
+            "relays": "{{count}} Relays"
+          },
+          "legend": {
+            "live": "Blaue gestrichelte Linie: Datenaustausch aktiv",
+            "ready": "Grüne Linie: Agent-Net-Verbindung bereit",
+            "busy": "Oranger Punkt: Aufgabe aktiv / Gerät beschäftigt",
+            "error": "Rot gepunktet: Keine Antwort oder pausiert"
           }
         }
       }
@@ -12037,6 +12137,8 @@
         "loadEarlierFailed": "Frühere Nachrichten konnten nicht geladen werden. Versuch es erneut.",
         "emptyTitle": "Noch keine Nachrichten in dieser Gruppe",
         "emptyDescription": "Sag etwas zum Einstieg, dann beteiligen sich deine Freunde. Erwähne einen Freund mit @, damit nur dieser antwortet.",
+        "emptyDescriptionWithAssistant": "Du kannst Cindy mit @ erwähnen oder über das Menü oben rechts Personen einladen und Freunde hinzufügen.",
+        "emptyDescriptionInvite": "Über das Einladungsmenü oben rechts kannst du Personen einladen und Freunde hinzufügen.",
         "roundEnded": "Freunde sind fertig",
         "stepTag": "Schritt {{count}}",
         "sending": "Wird gesendet",
@@ -12370,7 +12472,7 @@
         "loginRequired": "Melde dich bei deinem Konto an und versuche es erneut.",
         "requestFailed": "Der Chatdienst ist nicht verfügbar. Versuche es gleich noch einmal.",
         "copyFailed": "Kopieren fehlgeschlagen. Wähle den Link aus und kopiere ihn manuell.",
-        "createDescription": "Wähle Freunde aus oder erstelle zuerst die Gruppe und lade dann Personen ein.",
+        "createDescription": "Nach dem Erstellen kannst du Personen einladen und Freunde hinzufügen.",
         "settings": {
           "name": "Gruppenname",
           "topic": "Thema",
@@ -19262,6 +19364,7 @@
     }
   },
   "commandPalette": {
+    "buddyNewHint": "Wähle in den Einstellungen des Freunds „{{restart}}“, um den Arbeitskontext neu aufzubauen und den Nachrichtenverlauf zu behalten. Für eine separate Diskussion wähle „{{startTopic}}“ in den Aktionen einer Nachricht.",
     "viewSkillDetails": "Skill-Details anzeigen",
     "projectSkillNotLoaded": "Diese Pi-Aufgabe hat diesen Projekt-Skill noch nicht geladen. Neue Aufgaben versuchen automatisch, ihn zu laden.",
     "pluginSkillSetup": {

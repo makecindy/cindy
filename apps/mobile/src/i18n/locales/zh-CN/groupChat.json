@@ -548,6 +548,8 @@
     "accessChat": "仅群内交流",
     "accessTools": "可用工具与资料",
     "replies": "伙伴怎么接话",
+    "assistant": "群里的 Cindy",
+    "assistantHint": "谁 @ 它，就在谁自己的电脑上做。",
     "replyModeMentionedNote": "不 @ 人时，伙伴不会接话。",
     "work": "分工",
     "organizerHint": "安排谁做哪一步；默认是第一位伙伴。",

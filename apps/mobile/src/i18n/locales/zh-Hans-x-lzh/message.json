@@ -133,6 +133,7 @@
     "retryRemoteMediaFetch": "再取远程媒体",
     "retryFetch": "再取",
     "openMedia": "启媒体",
+    "playAudio": "播音",
     "readCurrentRemoteFile": "读今之远程卷",
     "retryFilePreview": "再览其卷",
     "readCurrentFile": "读今之卷",
@@ -463,6 +464,15 @@
     }
   },
   "attachmentPreview": {
+    "audioBackTen": "退十秒",
+    "audioForwardTen": "进十秒",
+    "audioMute": "静音",
+    "audioUnmute": "复声",
+    "audioSpeed": "奏速",
+    "audioOutput": "音出何处",
+    "fetchAudio": "取自电脑",
+    "pauseAudio": "暂止音声",
+    "audioProgress": "奏至何处",
     "more": "更多操作",
     "retry": "再试",
     "image": "图",
