@@ -3514,6 +3514,40 @@ interface SchemaParameterSurface {
   truncated: boolean;
 }
 
+/**
+ * 恒假 schema 的对象形态: not 一个空约束(空对象或 true)对任何实例都不成立 —— 空 schema
+ * 匹配一切, not 它就什么都不匹配。与字面量 false 同一处理: 永不可行的分支不能参与
+ * 「每条路径都必填」的判定, 它的零信号不是「这条路径没要求 name」的证据
+ * (Codex P1 on #10908 第 17 轮)。not 旁边还有别的关键词也一样: not 空约束已经让实例
+ * 全部落空, 其余关键词改变不了这一点。
+ */
+function isAlwaysFalseSchema(schema: unknown): boolean {
+  if (schema === false) return true;
+  if (!isPlainRecord(schema)) return false;
+  const not = schema.not;
+  return not === true || (isPlainRecord(not) && Object.keys(not).length === 0);
+}
+
+/**
+ * 条件分支(if/then/else)的静态裁决: 这份 if 是否对任何实例恒成立或恒不成立。恒成立的写法是
+ * 字面量 true 与没有任何关键词的空对象(无约束, 匹配一切); 恒不成立的是字面量 false 与
+ * not 空约束。判不了(有真实约束、或结论取决于实例)返回 null, then/else 照旧各算一条路径。
+ * 判据只认写法本身, 不猜实例: {type:'object'} 这类「恰好总是成立」的约束不做推断,
+ * 否则判错一次就把另一条真实路径丢了(Codex P1 on #10908 第 17 轮)。
+ */
+function staticSchemaVerdict(schema: unknown): boolean | null {
+  if (schema === true) return true;
+  if (schema === false) return false;
+  if (!isPlainRecord(schema)) return null;
+  const keys = Object.keys(schema);
+  if (keys.length === 0) return true;
+  if (keys.length === 1 && schema.not !== undefined) {
+    const not = schema.not;
+    if (not === true || (isPlainRecord(not) && Object.keys(not).length === 0)) return false;
+  }
+  return null;
+}
+
 function schemaParameterSurface(schema: Record<string, unknown> | undefined): SchemaParameterSurface | null {
   if (!schema) return null;
   const surface: SchemaParameterSurface = {
@@ -3567,11 +3601,7 @@ function schemaParameterSurface(schema: Record<string, unknown> | undefined): Sc
       // 外层那层 args 被剥掉(Codex P1 on #10908 第 16 轮, 3539 行)。所以沿这条路径把目标的
       // 分支结构重建一遍, 而不是只把它的合取信号并进来。
       // 重放栈里已有的节点不再重放: 环, 否则递归不止。
-      if (!replaying.has(node)) {
-        replaying.add(node);
-        walkBranches(node, depth, group);
-        replaying.delete(node);
-      }
+      if (!replaying.has(node)) replayBranches(node, depth, group);
       return known;
     }
     // 第一次看到的节点一律占预算, 不是对象的分支(true / false)与超深的节点也不例外: 它们不占的话
@@ -3706,9 +3736,10 @@ function schemaParameterSurface(schema: Record<string, unknown> | undefined): Sc
           surface.truncated = true;
           break;
         }
-        if (branch === false) {
-          // 永不可行的分支: 零信号但不占位; 仍占节点预算, 否则全是 false 的巨型数组
-          // 能把 512 节点上限变成 O(数组长度) 扫描(Codex P2 on #10908 第 16 轮)。
+        if (branch === false || isAlwaysFalseSchema(branch)) {
+          // 永不可行的分支(字面量 false, 以及对象形态的恒假写法: 空约束的 not): 零信号但不占位;
+          // 仍占节点预算, 否则全是恒假分支的巨型数组能把 512 节点上限变成 O(数组长度) 扫描
+          // (Codex P2 on #10908 第 16 轮; 对象形态见第 17 轮)。
           remainingNodes--;
           continue;
         }
@@ -3724,14 +3755,26 @@ function schemaParameterSurface(schema: Record<string, unknown> | undefined): Sc
     // 'then' 与 'else' 是一对互斥路径(条件成立走 then, 不成立走 else): 两条都声明 name 必填,
     // 沿这条路径 name 就必填(Codex P1 on #10908 第 16 轮, 3663 行)。只有一条时不传播 ——
     // 另一条路径不要求 name。
+    // 但 if 静态可判时例外: 恒成立(true / 无约束的空对象)的 if 让 else 永远走不到, then
+    // 无条件生效; 恒不成立(false / not 空约束)的 if 让 then 走不到。走不到的分支不参与
+    // 「每条路径都必填」的判定, 也不收它的声明名 —— 实际调用里不可能带上那些字段; 选中的
+    // 那条按合取边并进当前组, 它的必填就是这条路径自己的必填(Codex P1 on #10908 第 17 轮, 3735 行)。
+    const ifVerdict = node.if !== undefined ? staticSchemaVerdict(node.if) : null;
+    const selectedConditional = ifVerdict === true ? 'then' : ifVerdict === false ? 'else' : null;
     const conditionalAlternatives: EnvelopeGroup[] = [];
     for (const keyword of SCHEMA_CONDITIONAL_KEYWORDS) {
       if (node[keyword] === undefined) continue;
-      const nested = branchGroup(group);
       if (keyword === 'if') {
+        const nested = branchGroup(group);
         walk(node[keyword], depth + 1, nested);
         continue;
       }
+      if (selectedConditional !== null) {
+        if (keyword !== selectedConditional) continue;
+        walk(node[keyword], depth + 1, group);
+        continue;
+      }
+      const nested = branchGroup(group);
       conditionalAlternatives.push(nested);
       walk(node[keyword], depth + 1, nested);
     }
@@ -3752,6 +3795,27 @@ function schemaParameterSurface(schema: Record<string, unknown> | undefined): Sc
         walk(dependency, depth + 1, branchGroup(group));
       }
     }
+  };
+  // 重放一个已走过节点的分支结构。与首次走到不同, 重放入口只把节点自己的组合登记到这条路径上
+  // —— 引用包装层({$ref: ...} / {$dynamicRef: ...})自己没有组合, 分支在被引用的文档里:
+  // 重放要顺着引用走过去, 否则两条并集分支引用同一份共享定义、定义里又套着引用时, 第二条
+  // 路径看不见引用后面的分支, 它们缓存的合取位是零, 「沿这条路径必填」的证据就丢了
+  // (Codex P1 on #10908 第 17 轮, 3572 行)。首次走到时不走这里: 那时引用已经按合取边
+  // walk 进来, 被引用节点自己的 walkBranches 已登记过一次, 再走会重复起组。
+  // 重放栈里已有的节点不再重放: 环, 否则递归不止。
+  const replayBranches = (node: Record<string, unknown>, depth: number, group: EnvelopeGroup): void => {
+    if (replaying.has(node)) return;
+    replaying.add(node);
+    walkBranches(node, depth, group);
+    if (typeof node.$ref === 'string') {
+      const resolved = resolveLocalSchemaRef(schema, node.$ref);
+      if (isPlainRecord(resolved)) replayBranches(resolved, depth + 1, group);
+    }
+    if (typeof node.$dynamicRef === 'string') {
+      const resolved = resolveLocalSchemaRef(schema, node.$dynamicRef);
+      if (isPlainRecord(resolved)) replayBranches(resolved, depth + 1, group);
+    }
+    replaying.delete(node);
   };
   walk(schema, 0, rootGroup);
   surface.envelope = settleEnvelope(groups);
@@ -4376,20 +4440,29 @@ function normalizeGatewayArgs(
     ? lookupInnerTool(entrySelfInnerName)
     : null;
   const entrySelfDeclaresArgs = entrySelfInnerTool ? schemaDeclaresArgs(entrySelfInnerTool.inputSchema) : null;
+  // 内层工具自己就是 entry tool(selector === tool.name)时, 容器里的 name 是内层工具自己的参数
+  // (不是重复信封): 内层工具本地查不到、判不了时按「剥一层」走是把内层工具的 name/args 剥掉 ——
+  // 判不出来就不猜, 标出来代拉内层 schema 再判(Codex P1 on #10908 第 16 轮)。这种形态与「撞名」
+  // 的判据同源: 都是「容器里的 name 是内层工具自己的参数, 还是重复信封」。查到了但那份 schema
+  // 判不了(无 properties 也未放开额外字段, 三态里的 null)同样算「判不出来」—— null 不是
+  // 「没有」的证据, 拿它当「没有」剥一层, 内层工具的参数就被剥掉了(Codex P1 on #10908 第 17 轮)。
+  const innerUndecidable = innerTool === null || innerDeclaresArgs === null;
   const innerSchemaPending = envelopeSchema
     && containerLooksEnvelope
     && selector !== undefined
     && params.name === selector
-    && innerTool === null
+    && innerUndecidable
     ? params.name as string
     : undefined;
   // 内层工具自己就是 entry tool(selector === tool.name)时, 容器里的 name 是内层工具自己的参数
   // (不是重复信封): 内层工具本地查不到、判不了时按「剥一层」走是把内层工具的 name/args 剥掉 ——
   // 判不出来就不猜, 标出来代拉内层 schema 再判(Codex P1 on #10908 第 16 轮)。这种形态与「撞名」
-  // 的判据同源: 都是「容器里的 name 是内层工具自己的参数, 还是重复信封」。
+  // 的判据同源: 都是「容器里的 name 是内层工具自己的参数, 还是重复信封」。查到了但那份 schema
+  // 判不了(三态里的 null)同样算判不出来 —— null 不是「没有」的证据, 同样先代拉(Codex P1 on
+  // #10908 第 17 轮)。
   const entrySelfPending = envelopeSchema
     && entrySelfShape
-    && entrySelfInnerTool === null
+    && entrySelfDeclaresArgs === null
     ? entrySelfInnerName
     : undefined;
   // 内层工具自己就是 entry tool(selector === tool.name)时, args 容器里又是个 {name, args}
@@ -4399,8 +4472,11 @@ function normalizeGatewayArgs(
   // 层真的叫 call_tool 时, 它的参数会被剥掉、发错层(Codex P1 on #10908 第 16 轮, 4292 行)。
   // 现在按同一判据: 同一个选择器写了两遍 → 容器里没有 args 才剥; 选择器是入口自己 → 看入口
   // 名那个内层工具的 schema(查不到就先代拉一次内层列表), 判不出来就拒收, 不猜层数。
+  // 剥层只在「内层确实没有 args」时做(三态里的 false): 查不到或判不了都先按「两层都留」走,
+  // 交给代拉出来的真实 schema 定; 代拉后仍判不了就拒收(见 resolveInnerSchema)—— null 不是
+  // 「没有」的证据, 拿 null 当「没有」剥层就是猜层数(Codex P1 on #10908 第 17 轮, 4383 行)。
   const repeatsEnvelope = containerLooksEnvelope && selector !== undefined && (
-    (params.name === selector && innerDeclaresArgs !== true)
+    (params.name === selector && innerDeclaresArgs === false)
     || (entrySelfShape && entrySelfDeclaresArgs === false)
   );
   // 信封判不了: schema 看不全, 但已看到的表态仍与信封兼容, 而顶层给了 name。它可能是信封层的
@@ -4470,6 +4546,13 @@ function normalizeGatewayArgs(
     if (nestedInnerArgs) {
       // 嵌套信封旁的兄弟键是**内层**工具的参数: 外层信封 schema 判不了它们, 收进内层 args 层,
       // 交给内层工具自己校验(Codex P1 on #10908 第 16 轮, 4346 行)。
+      // 但内层 args 已有同名键时内层为准: 那一层就是内层工具自己的参数, 顶层散键是同一参数的
+      // 重复给法 —— 与顶层的「同名以 args 为准」同一口径。照旧盖掉等于替模型改写它已经写对的
+      // 层(Codex P1 on #10908 第 17 轮, 4473 行): 顶层那份记进 shadowed, 不出现在转发的参数里。
+      if (Object.prototype.hasOwnProperty.call(nestedInnerArgs, key)) {
+        shadowed.push(key);
+        continue;
+      }
       setOwnArgument(nestedInnerArgs, key, value);
       folded.push(key);
       continue;

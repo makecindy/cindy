@@ -6012,3 +6012,220 @@ it('counts impossible alternatives against the schema walk budget', async () => 
   expect(performance.now() - started).toBeLessThan(1000);
   expect(requests).toHaveLength(0);
 });
+
+// 评审 P1(嵌套信封旁的同名散键盖掉内层): {args:{name:'schedule_list',args:{status:'inactive'}}, status:'active'}
+// —— 兄弟键收进嵌套 args 层时直接覆盖: 内层 args 里已有的 status('inactive')被顶层的
+// status('active')盖掉。内层那一层就是内层工具自己的参数, 顶层散键是同一参数的重复给法,
+// 与顶层的「同名以 args 为准」同一口径: 内层为准, 顶层那份记进 shadowed 并点名
+// (Codex P1 on #10908 第 17 轮, 4473 行)。
+//
+// - 生产入口与可观察结果:CindyMcpGateway.executeCall 真正发出的 tools/call 参数与回执。
+// - Bug 依据:codex 对 #10908 第 17 轮的 P1。
+// - 覆盖缺口:上一轮只盖了「内层 args 没有同名键」的收纳, 没盖「内层已有同名键」时的裁决。
+// - 最小失败输入:{args:{name:'schedule_list',args:{status:'inactive'}}, status:'active'}。
+// - tier:unit(编译网关片段 + 假 client, 无真实等待)。
+it('lets the nested inner args win over a same-named flat sibling', async () => {
+  const { Gateway } = loadGatewayHarness();
+  const requests: Array<{ method: string; params: unknown }> = [];
+  const client = { request: async (method: string, params: unknown) => {
+    requests.push({ method, params });
+    return { content: [{ type: 'text', text: 'TAGGED' }] };
+  } };
+  const gateway = new Gateway();
+  gateway.add('cindy_scheduler', client, [{
+    name: 'call_tool',
+    inputSchema: { type: 'object', properties: { name: { type: 'string' }, args: { type: 'object' } }, required: ['name'] },
+  }]);
+  gateway.register({ registerTool: () => undefined });
+  await gateway.listResult({ server: 'cindy_scheduler', tool: 'call_tool' });
+  // 内层 args 里已有 status('inactive'): 顶层同名的散键让位, 不盖掉内层那层。
+  const result = await gateway.executeCall({
+    server: 'cindy_scheduler', tool: 'call_tool',
+    args: { name: 'schedule_list', args: { status: 'inactive' } }, status: 'active',
+  });
+  expect(requests).toHaveLength(1);
+  expect(requests[0].params).toEqual({
+    name: 'call_tool',
+    arguments: { name: 'schedule_list', args: { status: 'inactive' } },
+  });
+  // 顶层那份没有采用, 回执里点名, 模型能看出服务端按内层那个值执行。
+  const note = result.content.map(block => block.text ?? '').join('\n');
+  expect(note).toContain('(args wins): status.');
+  // 内层 args 里没有同名键时照旧收纳(上一轮的行为不变)。
+  await gateway.executeCall({
+    server: 'cindy_scheduler', tool: 'call_tool',
+    args: { name: 'schedule_list', args: {} }, status: 'active',
+  });
+  expect(requests[1].params).toEqual({
+    name: 'call_tool',
+    arguments: { name: 'schedule_list', args: { status: 'active' } },
+  });
+});
+
+// 评审 P1(内层工具在本地但 schema 判不了时不再剥层): 内层工具本地就有, 但它的 schema 是
+// 宽松形状({type:'object'}, 无 properties 也未放开额外字段)—— schemaDeclaresArgs 只能给出
+// null(判不了)。旧判据 innerTool === null 只在「查不到」时才标 pending, 查到了就跳过代拉;
+// 剥层判据又把 null 当「没有」, 同一个选择器写了两遍的调用被剥掉一层, 内层工具自己的参数层
+// 丢失、按缺省值执行还返回成功(Codex P1 on #10908 第 17 轮, 4383 行)。现在查到但判不了
+// 同样算「判不出来」: 先按两层都留, 标 pending 代拉服务端那份内层 schema, 代拉后仍判不了
+// 就拒收并指路。
+//
+// - 生产入口与可观察结果:CindyMcpGateway.executeCall 拒收并指路, 且发过一次内层列表代拉。
+// - Bug 依据:codex 对 #10908 第 17 轮的 P1。
+// - 覆盖缺口:pending 只盖了「内层工具本地查不到」, 没盖「查到了但 schema 判不了」。
+// - 最小失败输入:内层 run 的 schema = {type:'object'} + {name:'run', args:{name:'run', args:{cwd}}}。
+// - tier:unit(编译网关片段 + 假 client, 无真实等待)。
+it('probes the server list when the local inner schema cannot decide a repeated envelope', async () => {
+  const { Gateway } = loadGatewayHarness();
+  const requests: Array<{ method: string; params: unknown }> = [];
+  const client = { request: async (method: string, params: unknown) => {
+    requests.push({ method, params });
+    // 内层列表给不出(不是合法 JSON): 代拉之后仍判不了。
+    return { content: [{ type: 'text', text: 'TAGGED' }] };
+  } };
+  const gateway = new Gateway();
+  gateway.add('cindy_registry', client, [
+    { name: 'call_tool', inputSchema: { type: 'object', properties: { name: { type: 'string' }, args: { type: 'object' } }, required: ['name'] } },
+    // 内层工具本地就在, 但 schema 太宽: 判不了它有没有 args 参数。
+    { name: 'run', inputSchema: { type: 'object' } },
+  ]);
+  gateway.register({ registerTool: () => undefined });
+  await gateway.listResult({ server: 'cindy_registry', tool: 'call_tool' });
+  // 同一个选择器写了两遍 + 内层 schema 判不了: 不猜层数, 拒收并指路。
+  await expect(gateway.executeCall({
+    server: 'cindy_registry', tool: 'call_tool', name: 'run', args: { name: 'run', args: { cwd: '/work' } },
+  })).rejects.toThrow(/Keep exactly one level/);
+  // 判据不定层时先代拉了一次服务端内层列表。
+  expect(requests.some(r => (r.params as { name?: unknown } | undefined)?.name === 'list_tools')).toBe(true);
+  // 拒收发生在发出任何 tools/call 之前: 服务端没有收到这次调用。
+  expect(requests.filter(r => (r.params as { name?: unknown } | undefined)?.name === 'call_tool')).toHaveLength(0);
+});
+
+// 评审 P1(静态可判的条件分支仍按两条路径算): if: true 时 JSON Schema 恒选 then, else 永远
+// 走不到 —— 旧实现把 then/else 都登记成候选路径, else 没要求 name, 「每条路径都必填」不成立,
+// 信封判不出来, 平铺调用的 args 层被拆掉(Codex P1 on #10908 第 17 轮, 3738 行)。if 静态
+// 可判(恒成立: true / 无约束空对象; 恒不成立: false / not 空约束)时只认选中的那条:
+// 走不到的分支不收名字也不参与判定, 选中的那条按合取边并进当前组。
+//
+// - 生产入口与可观察结果:CindyMcpGateway.executeCall 真正发出的 tools/call 参数。
+// - Bug 依据:codex 对 #10908 第 17 轮的 P1。
+// - 覆盖缺口:条件分支只盖了「then/else 都可能被选中」的传播, 没盖「if 静态可判」。
+// - 最小失败输入:inputSchema = {if:true, then:{name,args + required:['name']}, else:{properties:{foo}}} + 平铺调用。
+// - tier:unit(编译网关片段 + 假 client, 无真实等待)。
+it('honors a statically decided conditional when detecting the envelope', async () => {
+  const { Gateway } = loadGatewayHarness();
+  const requests: Array<{ method: string; params: unknown }> = [];
+  const client = { request: async (method: string, params: unknown) => {
+    requests.push({ method, params });
+    return { content: [{ type: 'text', text: 'TAGGED' }] };
+  } };
+  const gateway = new Gateway();
+  gateway.add('cindy_memory', client, [{
+    name: 'call_tool',
+    inputSchema: {
+      type: 'object',
+      // if: true 恒成立 → then 无条件生效, else 走不到(它声明的 foo 也永远不会出现)。
+      if: true,
+      then: { type: 'object', properties: { name: { type: 'string' }, args: { type: 'object' } }, required: ['name'] },
+      else: { type: 'object', properties: { foo: { type: 'string' } } },
+    },
+  }]);
+  gateway.register({ registerTool: () => undefined });
+  await gateway.listResult({ server: 'cindy_memory', tool: 'call_tool' });
+  await gateway.executeCall({ server: 'cindy_memory', tool: 'call_tool', name: 'memory_write', args: { type: 'project' } });
+  expect(requests).toHaveLength(1);
+  expect(requests[0].params).toEqual({
+    name: 'call_tool',
+    arguments: { name: 'memory_write', args: { type: 'project' } },
+  });
+  const note = (await gateway.executeCall({
+    server: 'cindy_memory', tool: 'call_tool', name: 'schedule_list', args: { status: 'active' },
+  })).content.map(block => block.text ?? '').join('\n');
+  expect(note).toContain('Cindy rebuilt the {"name", "args"} envelope from the flattened call before forwarding.');
+});
+
+// 评审 P1(对象形态的恒假分支仍占位): 恒假不只字面量 false —— not 一个空约束(空对象)对
+// 任何实例都不成立。旧判据只认 branch === false, 对象形态的恒假分支照常成组, 零信号被当成
+// 「这条路径没要求 name」的证据, 「每条路径都必填」不成立, 平铺调用的 args 层被拆掉
+// (Codex P1 on #10908 第 17 轮, 3709 行)。对象形态与字面量 false 同一处理: 跳过不占位。
+//
+// - 生产入口与可观察结果:CindyMcpGateway.executeCall 真正发出的 tools/call 参数。
+// - Bug 依据:codex 对 #10908 第 17 轮的 P1。
+// - 覆盖缺口:恒假分支只盖了字面量 false, 没盖对象形态。
+// - 最小失败输入:anyOf = [{not:{}}, {信封}] + 平铺调用。
+// - tier:unit(编译网关片段 + 假 client, 无真实等待)。
+it('skips object-form always-false alternatives when detecting envelopes', async () => {
+  const { Gateway } = loadGatewayHarness();
+  const requests: Array<{ method: string; params: unknown }> = [];
+  const client = { request: async (method: string, params: unknown) => {
+    requests.push({ method, params });
+    return { content: [{ type: 'text', text: 'TAGGED' }] };
+  } };
+  const gateway = new Gateway();
+  gateway.add('cindy_memory', client, [{
+    name: 'call_tool',
+    inputSchema: {
+      type: 'object',
+      anyOf: [
+        // not 一个空约束: 空 schema 匹配一切, not 它就什么都不匹配 —— 恒假, 与 false 同待。
+        { not: {} },
+        { type: 'object', properties: { name: { type: 'string' }, args: { type: 'object' } }, required: ['name'] },
+      ],
+    },
+  }]);
+  gateway.register({ registerTool: () => undefined });
+  await gateway.listResult({ server: 'cindy_memory', tool: 'call_tool' });
+  await gateway.executeCall({ server: 'cindy_memory', tool: 'call_tool', name: 'memory_write', args: { type: 'project' } });
+  expect(requests).toHaveLength(1);
+  expect(requests[0].params).toEqual({
+    name: 'call_tool',
+    arguments: { name: 'memory_write', args: { type: 'project' } },
+  });
+});
+
+// 评审 P1(重放丢掉引用后面的分支): 并集分支是引用包装层({$ref: ...})时, 包装层自己没有
+// 组合, 分支在被引用的文档里。上一轮的重放只把目标自己的组合登记到这条路径上 —— 引用后面
+// 的分支结构全被丢掉, 目标缓存的合取位又是零(必填证据在被引用文档的分支里, 不在合取位上),
+// 这条路径就成了「没要求 name」的证据, 信封判不出来, 平铺调用的 args 层被拆掉(Codex P1 on
+// #10908 第 17 轮, 3572 行)。重放要顺着 $ref / $dynamicRef 走到被引用文档再登记分支。
+//
+// - 生产入口与可观察结果:CindyMcpGateway.executeCall 真正发出的 tools/call 参数。
+// - Bug 依据:codex 对 #10908 第 17 轮的 P1。
+// - 覆盖缺口:上一轮的重放只盖了「目标自己带分支」, 没盖「目标是个引用包装层」。
+// - 最小失败输入:并集分支引用 $defs.A;A 的并集分支引用 $defs.B;B 的并集两支都要求 name。
+// - tier:unit(编译网关片段 + 假 client, 无真实等待)。
+it('replays branch evidence through referenced wrappers', async () => {
+  const { Gateway } = loadGatewayHarness();
+  const requests: Array<{ method: string; params: unknown }> = [];
+  const client = { request: async (method: string, params: unknown) => {
+    requests.push({ method, params });
+    return { content: [{ type: 'text', text: 'TAGGED' }] };
+  } };
+  const gateway = new Gateway();
+  const envelopeBranch = (via: string) => ({
+    type: 'object',
+    properties: { name: { type: 'string' }, args: { type: 'object', properties: { via: { type: 'string', const: via } } } },
+    required: ['name'],
+  });
+  gateway.add('cindy_memory', client, [{
+    name: 'call_tool',
+    inputSchema: {
+      type: 'object',
+      // 两条外层分支引用同一份共享定义 A; A 的并集分支各自引用第二份共享定义 B;
+      // 只有 B 的嵌套并集(两支都要求 name)给出必填证据。包装层自己没有组合。
+      anyOf: [{ $ref: '#/$defs/A' }, { $ref: '#/$defs/A' }],
+      $defs: {
+        A: { anyOf: [{ $ref: '#/$defs/B' }, { $ref: '#/$defs/B' }] },
+        B: { anyOf: [envelopeBranch('first'), envelopeBranch('second')] },
+      },
+    },
+  }]);
+  gateway.register({ registerTool: () => undefined });
+  await gateway.listResult({ server: 'cindy_memory', tool: 'call_tool' });
+  await gateway.executeCall({ server: 'cindy_memory', tool: 'call_tool', name: 'memory_write', args: { type: 'project' } });
+  expect(requests).toHaveLength(1);
+  expect(requests[0].params).toEqual({
+    name: 'call_tool',
+    arguments: { name: 'memory_write', args: { type: 'project' } },
+  });
+});
