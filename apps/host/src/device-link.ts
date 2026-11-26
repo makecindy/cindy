@@ -6,9 +6,11 @@ import WebSocket from 'ws';
 import {
   CONTROLLER_CAPABILITY_SET_MODEL_EXPLICIT_PROVIDER_NULL_V1, DEVICE_LINK_CAPABILITY_BACKGROUND_LINK_V1,
   DL_HISTORY_MESSAGES_CHANNEL, DL_SESSION_HANDOFF_CHANNEL, MACHINE_STATUS_CHANNEL, ORCA_REMOTE_WORKER_MODELS_CHANNEL,
-  DeviceLinkClient, RoutedDeviceLinkClient, isScopedPeer, resolveRemoteInvokeTimeoutMs,
+  DeviceLinkClient, RoutedDeviceLinkClient, isScopedPeer, resolveRemoteInvokeTimeoutMs, SSH_ACCESS_ANNOUNCE_CHANNEL,
   type DeviceInfo, type DeviceLinkClientOptions, type LinkAcceptPayload, type MachineStatus,
 } from '@cindy/device-link';
+import type { SshAccessTarget } from '../../desktop/src/main/ssh-access/sshAccessTargetCore.js';
+import { createHostSshAccessTarget, runSshAccessCommand, type HostSshAccessMachine } from './ssh-access.js';
 import { createAgentNetNode, type AgentNetNodePorts } from '../../desktop/src/main/device-link/agentNetNode.js';
 import { rejoinRemovedDevice } from '../../desktop/src/main/device-link/deviceRejoin.js';
 import { AgentNetSessionLinks, agentNetSessionLane, routeSessionPeers, type PeerLinks } from '@cindy/agent-net';
@@ -139,8 +141,9 @@ export const HOST_DISPATCH_PORTS_WHILE_HELD = Object.freeze({
   projectInteractionDismissedForRemote: 'read',
   projectInteractionRequestForRemote: 'read',
   remoteWorkingDirRejectionToIpcError: 'read',
-  // SSH access target (ssh-access/sshAccessTargetCore.ts): not assembled on the Host yet.
-  sshAccessTarget: 'unbound',
+  // ssh-access.ts: status reads only read; enrolment, withdrawal and every file write are refused while held
+  // (the target's canWrite port), because the desktop's own target owns the profile's record and block then.
+  sshAccessTarget: 'refused-at-entry',
 } as const satisfies Record<keyof InboundDispatchPorts, 'read' | 'service-gate' | 'refused-at-entry' | 'unbound'>);
 type UnboundDispatchPort = { [K in keyof typeof HOST_DISPATCH_PORTS_WHILE_HELD]:
   (typeof HOST_DISPATCH_PORTS_WHILE_HELD)[K] extends 'unbound' ? K : never }[keyof typeof HOST_DISPATCH_PORTS_WHILE_HELD];
@@ -213,6 +216,16 @@ export interface HostDeviceLinkPorts {
    * Absent: `cindy-host remote rejoin` reports that this Host cannot rejoin.
    */
   officialDeviceLinkFetch?(path: string, opts: { method: 'POST'; body: Record<string, never>; timeoutMs: number }): Promise<unknown>;
+  /**
+   * The account's device ids (the official Device Link device list) for the SSH access target's membership check, read on
+   * the shared membership schedule; absent or null: removed devices are only dropped once a list can be read.
+   */
+  deviceDirectory?(): Promise<readonly string[] | null>;
+  /**
+   * The machine SSH access manages (ssh-access.ts `nodeSshAccessMachine`). Absent: this Host does not offer SSH access
+   * (requests answer [SSH_ACCESS_UNAVAILABLE]) and never touches ~/.ssh.
+   */
+  sshAccessMachine?: HostSshAccessMachine;
 }
 
 function readGitSafetyWire() {
@@ -730,6 +743,10 @@ export function createHostDeviceLink(deps: HostDeviceLinkPorts) {
   const unboundPorts = Object.fromEntries(Object.entries(HOST_DISPATCH_PORTS_WHILE_HELD)
     .filter(([, kind]) => kind === 'unbound').map(([name]) => [name, undefined]));
   const interactions = createInteractionProjection(supportsRemotePluginOauth);
+  /** 「允许我的其他设备 SSH 到这台电脑」 (ssh-access.ts), created once the connection exists below. */
+  let sshAccess: SshAccessTarget | null = null;
+  /** Online peers and their self-reported platform, for SSH access announcements. */
+  const onlinePeers = new Map<string, string | null>();
   const dispatchPorts = explicitPorts<InboundDispatchPorts>({
     ...(unboundPorts as Record<UnboundDispatchPort, undefined>),
     // A machine status read opens a background link even on the ordinary relay.
@@ -775,6 +792,7 @@ export function createHostDeviceLink(deps: HostDeviceLinkPorts) {
     projectInteractionRequestForRemote: interactions.projectInteractionRequestForRemote,
     projectInteractionDismissedForRemote,
     RECOVERY_CHECKPOINT_MARKER, remoteWorkingDirRejectionToIpcError,
+    sshAccessTarget: () => (current() ? sshAccess : null),
   });
   assertDispatchPortsClassified(dispatchPorts);
   const dispatch = createInboundDispatch(dispatchPorts);
@@ -889,6 +907,7 @@ export function createHostDeviceLink(deps: HostDeviceLinkPorts) {
   const unbind = dispatch.wireInboundDispatch(client);
   const offStatus = client.onStatusChange(status => {
     if (status !== 'online') {
+      onlinePeers.clear();
       // Like the Desktop: while Agent-Net is on, controllers carried by another connection (phones and older Desktops on the
       // Device Link relay, cross-account peers on their own) are outside the main connection's fault; 2026-11-17 review: an
       // Agent-Net drop logged every phone out of this Host. Off, every controller as before.
@@ -925,9 +944,13 @@ export function createHostDeviceLink(deps: HostDeviceLinkPorts) {
   });
   const offPresence = client.onPresenceChanged(value => {
     if (value.online) {
+      const wasOnline = onlinePeers.has(value.deviceId);
+      onlinePeers.set(value.deviceId, value.platform ?? null);
       setControllerPlatform(value.deviceId, value.platform ?? null);
       if (value.deviceName) dispatch.setControllerDisplayName(value.deviceId, value.deviceName);
+      if (!wasOnline && isDesktopPlatform(value.platform) && !isScopedPeer(value.deviceId)) sshAccess?.peerOnline(value.deviceId);
     } else {
+      onlinePeers.delete(value.deviceId);
       setControllerPlatform(value.deviceId, null);
       releaseAppsInBackground([value.deviceId]);
       dispatch.handleControllerOffline(value.deviceId);
@@ -983,8 +1006,38 @@ export function createHostDeviceLink(deps: HostDeviceLinkPorts) {
           persistId: event.persistId, resolvedContent: event.resolvedContent });
     }
   });
+  sshAccess = deps.sshAccessMachine ? createHostSshAccessTarget({
+    profileDir: deps.profileDir,
+    machine: deps.sshAccessMachine,
+    readSettings: () => {
+      const { remoteControlEnabled, revokedControllers, sshAccessEnabled } = settings.readDeviceLinkSettings();
+      return { remoteControlEnabled, revokedControllers, ...(sshAccessEnabled === undefined ? {} : { sshAccessEnabled }) };
+    },
+    writeEnabledOverride: async (value) => {
+      await settings.updateDeviceLinkSetting('sshAccessEnabled', () => {
+        assertCurrent();
+        refuseWhileHeld();
+        return value;
+      });
+    },
+    onlineDesktopPeers: () => [...onlinePeers].filter(([deviceId, platform]) => isDesktopPlatform(platform) && !isScopedPeer(deviceId)
+      && deviceId !== client.getSelfDeviceId()).map(([deviceId]) => deviceId),
+    sendAnnounce: (deviceId, payload) => client.sendPush(deviceId, SSH_ACCESS_ANNOUNCE_CHANNEL, payload),
+    revokeDevice: async (deviceId) => { await revoke(deviceId); },
+    deviceName: (deviceId) => dispatch.getControllerDisplayName(deviceId),
+    readDeviceDirectory: async () => (current() && deps.deviceDirectory ? deps.deviceDirectory() : null),
+    canWrite: () => current() && !deps.profileHold?.(),
+  }) : null;
+  /** The per-device revoke shared by `cindy-host remote revoke` and the SSH access device rows. */
+  async function revoke(deviceId: string) {
+    assertCurrent();
+    if (!deviceId || deviceId.length > 256) throw new Error('Invalid controller device ID');
+    await settings.updateDeviceLinkSetting('revokedControllers', ids => [...new Set([...ids, deviceId])]);
+    access.noteControllerAccessDenied(deviceId); dispatch.purgeRevokedController(deviceId);
+  }
   const sync = () => {
     if (!current()) return;
+    sshAccess?.settingsChanged();
     const value = settings.readDeviceLinkSettings();
     access.syncRemoteControlAccessGeneration();
     for (const id of value.revokedControllers) {
@@ -1008,6 +1061,9 @@ export function createHostDeviceLink(deps: HostDeviceLinkPorts) {
   // External local edits share the same settings file, just as desktop does.
   const poll = setInterval(sync, 2_000); poll.unref();
   sync();
+  // Rewrites this profile's SSH keys for the signed-in owner and clears the cloud boot gate (a cloud guest's sshd reads
+  // only that file); runs whether or not remote control is on, since off means the file must be empty.
+  void sshAccess?.activate();
   return {
     canAuthorize: (peer: string) => current() && client.getStatus() === 'online' && deps.canRegister()
       && settings.readDeviceLinkSettings().remoteControlEnabled && !settings.readDeviceLinkSettings().revokedControllers.includes(peer),
@@ -1088,15 +1144,22 @@ export function createHostDeviceLink(deps: HostDeviceLinkPorts) {
       }
     },
     async revoke(deviceId: string) {
-      assertCurrent();
-      if (!deviceId || deviceId.length > 256) throw new Error('Invalid controller device ID');
-      await settings.updateDeviceLinkSetting('revokedControllers', ids => [...new Set([...ids, deviceId])]);
-      access.noteControllerAccessDenied(deviceId); dispatch.purgeRevokedController(deviceId);
+      await revoke(deviceId);
       return this.state();
+    },
+    /** `cindy-host remote ssh-access …` / `ssh-key …` (ssh-access.ts runSshAccessCommand). */
+    async sshAccess(action: string, body: { publicKey?: unknown; label?: unknown; fingerprint?: unknown }) {
+      assertCurrent();
+      if (!sshAccess) throw new Error('SSH access is not available on this Host');
+      return runSshAccessCommand(sshAccess, action, body);
+    },
+    /** Sign-out: this profile's SSH keys leave the authorized keys file before the owner runtime goes away. */
+    async sshAccessSignedOut() {
+      await sshAccess?.signedOut();
     },
     async stop() {
       if (closed) return;
-      closed = true; cancelPluginOauth();
+      closed = true; cancelPluginOauth(); sshAccess?.deactivate();
       clearInterval(poll); offSettings(); offEvents(); offPresence(); offIssue(); offCompatibilityIssue?.(); offStatus(); unbind();
       dispatch.dropAllControllers(client, 'shutdown'); client.stop(); agentNet?.close(); registry.clear(); clearControllerPlatforms();
       await releaseApps();

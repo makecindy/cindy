@@ -76,10 +76,11 @@ export async function requestHostStop(profile) {
   return controlRequest(profile, endpoint, '/control/stop', { instanceId: endpoint.instanceId });
 }
 
-export async function requestHostRemote(profile, action, deviceId) {
+export async function requestHostRemote(profile, action, deviceId, extra = {}) {
   const endpoint = readHostEndpoint(profile);
   if (!endpoint?.instanceId) throw new Error('Start Cindy Host first using the same data directory');
   // 「重新加入」 waits on two service requests (Device Link, then Agent-Net enrollment, up to 10 s each).
-  return controlRequest(profile, endpoint, '/control/remote', { instanceId: endpoint.instanceId, action, deviceId },
-    action === 'rejoin' ? 30_000 : undefined);
+  // SSH access commands rewrite the authorized keys file and may end SSH sessions (a 2 s grace period).
+  return controlRequest(profile, endpoint, '/control/remote', { ...extra, instanceId: endpoint.instanceId, action, deviceId },
+    action === 'rejoin' || action.startsWith('ssh-') ? 30_000 : undefined);
 }
