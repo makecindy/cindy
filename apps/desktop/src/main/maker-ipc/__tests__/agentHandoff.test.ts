@@ -4,6 +4,7 @@ import {
   buildForkOriginHandoff,
   composeForkOriginHandoff,
   buildHandoff,
+  buildUserReplayHandoff,
   buildHandoffText,
   createAgentHandoffPendingRegistry,
   describeHandoffUserSource,
@@ -908,7 +909,7 @@ describe('createAgentHandoffPendingRegistry', () => {
     // fork 出子会话后、首发前切引擎:切换流程走 setPendingHandoff 直接写内存,
     // 不经 DB fallback。没有这层组合,来源标记会被整条跳过。
     const query = vi.fn(async () => null);
-    const decorate = vi.fn(async (_sid: string, handoff: string) => `FORK-ORIGIN\n\n${handoff}`);
+    const decorate = vi.fn(async () => (handoff: string) => `FORK-ORIGIN\n\n${handoff}`);
     const reg = createAgentHandoffPendingRegistry(query, undefined, decorate);
     reg.set('s1', 'SWITCH-HANDOFF');
     expect(await reg.peek('s1')).toBe('FORK-ORIGIN\n\nSWITCH-HANDOFF');
@@ -916,12 +917,38 @@ describe('createAgentHandoffPendingRegistry', () => {
   });
 
   it('decorate 结果回写缓存:重试 peek 不重跑 DB 查询,也不会叠加', async () => {
-    const decorate = vi.fn(async (_sid: string, handoff: string) => `FORK\n\n${handoff}`);
+    const decorate = vi.fn(async () => (handoff: string) => `FORK\n\n${handoff}`);
     const reg = createAgentHandoffPendingRegistry(async () => null, undefined, decorate);
     reg.set('s1', 'SWITCH-HANDOFF');
     expect(await reg.peek('s1')).toBe('FORK\n\nSWITCH-HANDOFF');
     // 首发被拒 → 未 consume → 重试再 peek
     expect(await reg.peek('s1')).toBe('FORK\n\nSWITCH-HANDOFF');
+    expect(decorate).toHaveBeenCalledTimes(1);
+  });
+
+  // Unit through the send-side pending registry and the real fork composer.
+  // Unlike the prefix-only decorator test, the long history cannot be restored
+  // by replacing a suffix. Only this replay's client ID may omit a message.
+  it('deduplicates a retried message by ID even after decorating a long fork', async () => {
+    const current = 'unique-retry-input';
+    const options = { fromLabel: 'Codex', toLabel: 'Pi', sessionId: 'fork', targetContextWindow: 500_000 };
+    const source = [
+      { role: 'user' as const, clientId: 'older', content: 'earlier-identical-text', createdAt: 1 },
+      { role: 'assistant' as const, content: 'history '.repeat(110_000), createdAt: 2 },
+      { role: 'user' as const, clientId: 'retry-id', content: current, createdAt: 3 },
+    ];
+    const { handoff } = buildHandoff(source, options);
+    const replay = buildUserReplayHandoff(source, options, 'retry-id')!;
+    const decorate = vi.fn(async () => (note: string) => composeForkOriginHandoff('parent', note));
+    const reg = createAgentHandoffPendingRegistry(async () => null, undefined, decorate);
+    reg.set('fork', handoff, undefined, replay);
+    const full = await reg.peek('fork', 'different-id');
+    expect(full).toContain(current);
+    expect(full?.endsWith(handoff)).toBe(false);
+    const retry = await reg.peek('fork', 'retry-id');
+    expect(retry).toBe(composeForkOriginHandoff('parent', replay.text));
+    expect(retry).not.toContain(current);
+    expect(await reg.peek('fork', 'different-id')).toBe(full);
     expect(decorate).toHaveBeenCalledTimes(1);
   });
 
@@ -951,9 +978,9 @@ describe('createAgentHandoffPendingRegistry', () => {
 
   it('decorate 失败不写缓存,下次 peek 仍重试组合', async () => {
     let fail = true;
-    const decorate = vi.fn(async (_sid: string, handoff: string) => {
+    const decorate = vi.fn(async () => {
       if (fail) throw new Error('db down');
-      return `FORK\n\n${handoff}`;
+      return (handoff: string) => `FORK\n\n${handoff}`;
     });
     const reg = createAgentHandoffPendingRegistry(async () => null, undefined, decorate);
     reg.set('s1', 'SWITCH-HANDOFF');
@@ -1080,7 +1107,7 @@ describe('createAgentHandoffPendingRegistry', () => {
   });
 
   it('consume 后不触发 decorate(消费语义不被组合钩子破坏)', async () => {
-    const decorate = vi.fn(async (_sid: string, handoff: string) => `X${handoff}`);
+    const decorate = vi.fn(async () => (handoff: string) => `X${handoff}`);
     const reg = createAgentHandoffPendingRegistry(async () => null, undefined, decorate);
     reg.set('s1', 'H');
     await reg.peek('s1');
@@ -1091,7 +1118,7 @@ describe('createAgentHandoffPendingRegistry', () => {
 
   it('DB fallback 缓存的值不再 decorate:首发未 accepted 的重试不会拿到两份来源标记', async () => {
     const query = vi.fn(async () => 'COMPOSED-BY-QUERY');
-    const decorate = vi.fn(async (_sid: string, handoff: string) => `FORK\n\n${handoff}`);
+    const decorate = vi.fn(async () => (handoff: string) => `FORK\n\n${handoff}`);
     const reg = createAgentHandoffPendingRegistry(query, undefined, decorate);
     expect(await reg.peek('s1')).toBe('COMPOSED-BY-QUERY');
     // 未 accepted → 未 consume → 重试再 peek，仍是同一份，不叠加
@@ -1104,7 +1131,7 @@ describe('createAgentHandoffPendingRegistry', () => {
     const reg = createAgentHandoffPendingRegistry(
       async () => 'COMPOSED-BY-QUERY',
       undefined,
-      async (_sid: string, handoff: string) => `FORK\n\n${handoff}`,
+      async () => (handoff: string) => `FORK\n\n${handoff}`,
     );
     await reg.peek('s1');
     reg.set('s1', 'SWITCH-HANDOFF');

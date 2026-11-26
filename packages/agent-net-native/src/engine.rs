@@ -84,10 +84,6 @@ pub struct NativeEngine {
     stun: Option<Stun>,
     local_streams: BTreeMap<u32, BTreeSet<u32>>,
     udp: Option<Udp>,
-    /// Per connection: retransmitted segments, packets sent and whether it was relayed at the last sample, and the growth on
-    /// connections relayed between two samples (relayUdp.ts `RelaySendCounters`): relay UDP's check for unacknowledged sends.
-    relay_sends: BTreeMap<u32, (u64, u64, bool)>,
-    relayed_totals: (u64, u64),
     clock: Instant,
     now: u64,
     streams: BTreeMap<u32, BTreeSet<u32>>,
@@ -130,7 +126,7 @@ impl NativeEngine {
         #[cfg(windows)]
         let signal = udp.as_ref().and_then(|udp| crate::wait::SocketSignal::new(udp.socket())).map(std::sync::Arc::new);
         Ok(Self { crypto, device_id, enhanced_transport, endpoint, admitted, relay_tags: BTreeMap::new(), relay_links: BTreeMap::new(), relay_udp: None,
-            stun: None, local_streams: BTreeMap::new(), udp, relay_sends: BTreeMap::new(), relayed_totals: (0, 0), clock: Instant::now(), now: 0,
+            stun: None, local_streams: BTreeMap::new(), udp, clock: Instant::now(), now: 0,
             streams: BTreeMap::new(), finishing: BTreeMap::new(), poisoned: false, outbox: Vec::new(), stash: None, blobs: Vec::new(),
             reported: String::new(), reported_hash: 0, media: Default::default(), media_http: None, #[cfg(windows)] signal })
     }
@@ -247,9 +243,10 @@ impl NativeEngine {
             },
             "preferRelay" => Ok(json!(self.endpoint.set_prefer_relay(number(command, "id")?, command["prefer"] == true))),
             "migrate" => {
-                // A new network: connections send from the new address at once; ask STUN again for the new outside address.
+                // A new network: connections send from the new address at once; ask STUN again and re-probe relay UDP.
                 self.endpoint.on_local_address_change(self.now);
                 if let Some(stun) = &mut self.stun { stun.restart(); }
+                if let Some(relay) = &mut self.relay_udp && let Some(socket) = &self.udp { relay.network_changed(self.now, socket); }
                 Ok(Value::Null)
             },
             "stun" => {
@@ -279,12 +276,20 @@ impl NativeEngine {
             let session = bytes(&command["session"])?.try_into().map_err(|_| "INVALID_RELAY_UDP_CREDENTIALS")?;
             let key = zeroize::Zeroizing::new(bytes(&command["key"])?);
             let key = key.as_slice().try_into().map_err(|_| "INVALID_RELAY_UDP_CREDENTIALS")?;
-            Some(Credentials { session, key })
+            let probe = command["probe"].as_bool().unwrap_or(false);
+            Some(Credentials { session, key, probe })
         };
-        if self.relay_udp.as_ref().is_none_or(|current| current.server_name != server) {
-            self.relay_udp = Some(RelayUdp::new(server).ok_or("INVALID_RELAY_UDP_SERVER")?);
+        match self.relay_udp.as_mut() {
+            Some(current) => {
+                if !current.set_server(server) { return Err("INVALID_RELAY_UDP_SERVER"); }
+                current.set_credentials(credentials);
+            },
+            None => {
+                let mut relay = RelayUdp::new(server).ok_or("INVALID_RELAY_UDP_SERVER")?;
+                relay.set_credentials(credentials);
+                self.relay_udp = Some(relay);
+            },
         }
-        self.relay_udp.as_mut().expect("set above").set_credentials(credentials);
         Ok(Value::Null)
     }
     fn replace_admission(&mut self, command: &Value) -> Result<Value, &'static str> {
@@ -456,34 +461,23 @@ impl NativeEngine {
                     Err(_) => break,
                 }
             }
-        }
-        if self.udp.is_some() {
-            let relayed_sends = if self.relay_udp.as_ref().is_some_and(|relay| relay.sample_due(now)) { Some(self.relayed_send_counters()) } else { None };
-            if let (Some(relay), Some(socket)) = (&mut self.relay_udp, &self.udp) { relay.tick(now, socket, relayed_sends); }
-            if let (Some(stun), Some(socket)) = (&mut self.stun, &self.udp) { stun.tick(now, socket, NativeCrypto::random::<12>); }
+            if let Some(relay) = &mut self.relay_udp {
+                relay.tick(now, socket);
+                if relay.sample_due(now) {
+                    let send_stats: Vec<(u32, bool, u64, u64, u64)> = self.endpoint.ids().filter_map(|id| {
+                        let is_relay = matches!(self.endpoint.peer_addr(id), Some(Address::Link(_)));
+                        let stats = self.endpoint.connection(id)?.stats();
+                        Some((id, is_relay, stats.retransmitted_segments, stats.packets_sent, stats.acknowledged_bytes))
+                    }).collect();
+                    relay.observe_relayed_sends(now, socket, &send_stats);
+                } else if !relay.up(now) {
+                    relay.observe_relayed_sends(now, socket, &[]);
+                }
+            }
+            if let Some(stun) = &mut self.stun { stun.tick(now, socket, NativeCrypto::random::<12>); }
         }
         self.endpoint.tick(now);
         self.transmit(&mut io);
-    }
-    /// Retransmitted segments and packets sent so far on connections that stayed relayed between two samples (relayUdp.ts
-    /// `RelaySendCounters`): the core counts over a connection's whole life, through moves between direct and relayed paths, so
-    /// only growth while relayed at both samples counts, and a connection seen for the first time gives just its baseline.
-    fn relayed_send_counters(&mut self) -> (u64, u64) {
-        let mut next = BTreeMap::new();
-        let ids: Vec<u32> = self.endpoint.ids().collect();
-        for id in ids {
-            let relayed = matches!(self.endpoint.peer_addr(id), Some(Address::Link(_)));
-            let Some(connection) = self.endpoint.connection(id) else { continue; };
-            let stats = connection.stats();
-            let (retransmitted, sent) = (stats.retransmitted_segments, stats.packets_sent);
-            if let Some(&(before_retransmitted, before_sent, before_relayed)) = self.relay_sends.get(&id) && before_relayed && relayed {
-                self.relayed_totals.0 += retransmitted.saturating_sub(before_retransmitted);
-                self.relayed_totals.1 += sent.saturating_sub(before_sent);
-            }
-            next.insert(id, (retransmitted, sent, relayed));
-        }
-        self.relay_sends = next;
-        self.relayed_totals
     }
     /// Sends what the core has due now: directly, over relay UDP, or into the outbox for the application's relay WebSocket.
     fn transmit(&mut self, io: &mut [u8; IO_SIZE]) {

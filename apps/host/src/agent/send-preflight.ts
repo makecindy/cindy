@@ -1,3 +1,6 @@
+import { apiKeyMemberForConnection, apiKeyPoolMember, apiKeyPoolMembers, legacyApiKeyPoolBinding } from '../../../desktop/src/main/subscription-accounts/apiKeyMembers.js';
+import { providerAccounts } from '../../../desktop/src/main/subscription-accounts/placement.js';
+import { readAccountBinding, readPool } from '../../../desktop/src/main/subscription-accounts/store.js';
 import path from 'node:path';
 import { throwIpcError } from '../../../desktop/src/main/utils/ipcValidate.js';
 
@@ -32,12 +35,30 @@ export function createHostProviderExecutionCheck({ hostProviderBindings, hostPro
   hostProviderBindings: { readProviderGroupBinding(sessionId: string): unknown };
   hostProviderGroups: { readProviderGroup(providerId: string): unknown };
 }) {
-  return (id: string, providerId?: string | null) => {
+  return (id: string, providerId?: string | null, nativeId?: string | null) => {
     if (hostProviderBindings.readProviderGroupBinding(id)
-      || (providerId && hostProviderGroups.readProviderGroup(providerId))) {
+      || (providerId && hostProviderGroups.readProviderGroup(providerId))
+      || isMixedOpenAiPoolRoute(id, providerId, nativeId)) {
       throw new Error('[UNSUPPORTED_CAPABILITY] Host does not yet support provider groups');
     }
   };
+}
+
+/** The flattened local account pool need not have an outer provider group settings row. */
+function isMixedOpenAiPoolRoute(id: string, providerId?: string | null, nativeId?: string | null): boolean {
+  // Re-read the canonical placements and binding store rather than using a catalog label.
+  const config = readPool('openai');
+  if (providerId) {
+    const own = apiKeyMemberForConnection(providerId);
+    if ((own && own.providerId !== providerId)
+      || apiKeyPoolMembers(providerId).some(member => member.connectionId !== providerId)
+      || (own && config && providerAccounts('openai', config.accounts, providerId).length > 0)
+      || legacyApiKeyPoolBinding(id, providerId)) return true;
+  }
+  return [id && `task:${id}`, nativeId && `native:${nativeId}`].some(key => {
+    const binding = key ? readAccountBinding(key, 'openai') : undefined;
+    return !!binding && !!apiKeyPoolMember(binding.accountId);
+  });
 }
 
 /** Preserve Host's existing text/mention/local-file input. Desktop cache and

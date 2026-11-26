@@ -42,14 +42,19 @@ export function createPluginHarnessUsageReader() {
       scope.set(engine, read);
       return read;
     },
-    /** A catalogue is authoritative for which engines can report usage. Model changes leave their reads intact. */
+    /**
+     * A catalogue is authoritative for which engines can report usage. Model changes leave their reads
+     * intact. A read of one task's account (`<engine>|task:<id>`, engines with several accounts) belongs
+     * to its engine; engine keys never contain `|`.
+     */
     retainReportingEngines(owner: object, device: string | null, engines: readonly { key: string; reportsUsage?: boolean }[]): void {
       const targets = owners.get(owner);
       const scope = targets?.get(device);
       if (!targets || !scope) return;
       const reporting = new Set(engines.filter(engine => engine.reportsUsage === true).map(engine => engine.key));
       for (const key of scope.keys()) {
-        if (!reporting.has(key)) scope.delete(key);
+        const separator = key.indexOf('|');
+        if (!reporting.has(separator < 0 ? key : key.slice(0, separator))) scope.delete(key);
       }
       if (!scope.size) targets.delete(device);
     },

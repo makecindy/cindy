@@ -97,6 +97,8 @@ export interface SessionWire {
   openBody?(lane: 'control' | 'normal' | 'background', key: number): SessionBodyWriter | null;
   /** Bytes of a body stream the peer opened (after its kind and key), then `null` once that stream ended. Same rule as `onData`. */
   onBody?(handler: (key: number, bytes: Uint8Array | null) => void): void;
+  /** Optional: fires when the underlying channel backlog drains (`PeerChannel.onDrain`). */
+  onDrain?(handler: () => void): void;
 }
 /**
  * `onDrain` fires when the socket backlog falls back to this or below. Same as Device Link's socket low watermark
@@ -111,7 +113,7 @@ export interface RelayRoute {
   via: 'udp' | 'websocket';
   rttMs: number | null;
   /** On the WebSocket because the relay UDP carried registrations but no data (relayUdp.ts); retried after `cooldownMs`. */
-  udpSuspension?: { reason: 'data-silence' | 'request-timeouts' | 'unacked-sends'; cooldownMs: number };
+  udpSuspension?: { reason: 'data-silence' | 'request-timeouts' | 'unacked-sends' | 'probe-failed'; cooldownMs: number };
 }
 export interface Transport {
   readonly id: string;
@@ -120,6 +122,8 @@ export interface Transport {
   close(): Promise<void>;
   /** This computer changed networks: connections send from the new address now (the peer follows) and candidates are gathered again. */
   networkChanged?(): void;
+  /** Updates the STUN server list (e.g. when a peer official region's STUN resolves asynchronously) and queries any newly added servers. */
+  setStunServers?(servers: readonly string[]): void;
   /** Session requests to a relayed peer timed out; relay UDP may carry registrations but no data (relayUdp.ts noteStall). */
   relayStalled?(): void;
   /** The roster or the peer rule changed: a transport that mirrors the admitted peers elsewhere (the phone's engine) does it now. */
@@ -135,7 +139,7 @@ export interface TransportOptions {
   onIncoming(channel: PeerChannel): void;
   relay?: { uplink: Pick<AgentNetUplink, 'kind' | 'send' | 'onDatagram' | 'close'>; deviceId: string;
     /** The current relay session's UDP credentials; changes when the relay WebSocket reconnects. */
-    udpCredentials?(): { session: Uint8Array; key: Uint8Array } | null };
+    udpCredentials?(): { session: Uint8Array; key: Uint8Array; probe?: boolean } | null };
   /** The relay's UDP address (`host:port`, the same port as its STUN). With credentials, relayed datagrams use UDP. */
   relayUdpServer?: string;
   relayIdOf?(remoteId: string): string | undefined;
@@ -146,6 +150,8 @@ export interface TransportOptions {
   udp?: boolean;
   reprobeMs?: number;
   bindAddress?: string;
+  /** Optional fixed local UDP listening port (`1..65535`). Falls back to ephemeral port `0` if busy (`EADDRINUSE` / `EACCES`) or unset. */
+  bindPort?: number;
   stunServers?: string[];
   publicCandidatesOnly?: boolean;
   identity?: KeyObject;
@@ -158,6 +164,8 @@ export interface TransportOptions {
    * transport does on its own; the phones pass none and the engine resolves names as before.
    */
   resolveUdpServer?(server: string): Promise<string>;
+  /** Optional plain-text transport lifecycle/fallback logger (no addresses, keys or payloads). */
+  onLog?(level: 'info' | 'warn', message: string): void;
 }
 /** Early stream events are bounded by the core's receive credit; do not lose them during admission. */
 export class ChannelEvents {

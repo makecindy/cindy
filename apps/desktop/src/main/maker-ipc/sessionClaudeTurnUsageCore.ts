@@ -89,7 +89,7 @@ export function recordSessionClaudeTurnUsage(
   // (今日 / session / per-message / 按模型) 同源同值。
   // 守卫: index.ts:388 stream_end fallback / codex done 不带 total_cost_usd, typeof 检查会跳过。
   if (event.type === 'done' && event.source === 'claude-code') {
-    const turnContext = deps.turnUsageContextBySession.get(session.id) ?? captureTurnUsageContext(session.id, undefined, 'claude-code');
+    const turnContext = deps.turnUsageContextBySession.get(session.id) ?? captureTurnUsageContext(session.id, undefined, 'claude-code', session.model);
     deps.turnUsageContextBySession.delete(session.id);
     const modelPromise =
       deps.turnModelPromiseBySession.get(session.id) ?? deps.readSessionModelForUsage(session.id);
@@ -251,6 +251,18 @@ export function recordSessionClaudeTurnUsage(
           billingRoute === 'xd-gateway'
             ? await getGatewayModelPricingForModel().catch(() => null)
             : getReferenceModelPricing();
+        const resolvedTurnModel = normalizeModelIdForPricing(
+          await modelPromise.catch(() => 'unknown'),
+        );
+        const selectedModel =
+          resolvedTurnModel !== 'unknown'
+            ? resolvedTurnModel
+            : normalizeModelIdForPricing(turnContext.selectedModel);
+        const claudeOpaqueModelIds = turnContext.opaqueModelIdsByAgent?.['claude-code'];
+        const isSelectedOpaque = Boolean(
+          claudeOpaqueModelIds?.length &&
+            (selectedModel === 'unknown' || claudeOpaqueModelIds.includes(selectedModel)),
+        );
         const { turnMoney, actualByCurrency, estimatedTurnMoney, perModel } = resolveClaudeTurnCostSinks(
           deltas,
           pricing,
@@ -259,6 +271,15 @@ export function recordSessionClaudeTurnUsage(
             billingRoute,
             region: CURRENT_CINDY_REGION,
             accessKind: turnContext.accessKind,
+            ...(selectedModel !== 'unknown' ? { selectedModel } : {}),
+            ...(isSelectedOpaque ? { opaqueModelId: true } : {}),
+            opaqueModelIds: claudeOpaqueModelIds,
+            ...(turnContext.officialAnthropicApi !== undefined
+              ? { officialAnthropicApi: turnContext.officialAnthropicApi }
+              : {}),
+            ...(turnContext.officialAnthropicModels !== undefined
+              ? { officialAnthropicModels: turnContext.officialAnthropicModels }
+              : {}),
           },
           claudeUsageSegments,
           claudeUsageSegmentsComplete,
@@ -474,6 +495,16 @@ export function recordSessionClaudeTurnUsage(
         // explicitly selected provider API. Remote/unknown routing cannot
         // be attributed to this local account and must stay usage-only.
         if (route !== 'provider-api' || turnContext.accessKind === 'managed') {
+          await recordUsageOnly();
+          return;
+        }
+        const claudeOpaqueModelIds = turnContext.opaqueModelIdsByAgent?.['claude-code'];
+        const normalizedFallbackModel = normalizeModelIdForPricing(resolvedModel);
+        if (
+          claudeOpaqueModelIds?.length &&
+          (normalizedFallbackModel === 'unknown' ||
+            claudeOpaqueModelIds.includes(normalizedFallbackModel))
+        ) {
           await recordUsageOnly();
           return;
         }

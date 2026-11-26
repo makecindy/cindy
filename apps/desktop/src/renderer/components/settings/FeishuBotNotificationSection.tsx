@@ -14,7 +14,6 @@ export function FeishuBotNotificationSection() {
   } = useFeishuBot();
   const { enabled: sessionNotifyEnabled, setEnabled: setSessionNotifyEnabled } =
     useFeishuNotificationSettings();
-  const { t } = useTranslation();
 
   const feishuReady = Boolean(ownerOpenId);
 
@@ -29,12 +28,45 @@ export function FeishuBotNotificationSection() {
   if (!hasSavedCreds) return null;
 
   return (
+    <FeishuBotNotificationSectionView
+      ownerBound={feishuReady}
+      lifecycleAnnouncement={lifecycleAnnouncement}
+      setLifecycleAnnouncement={setLifecycleAnnouncement}
+      sessionNotifyEnabled={sessionNotifyEnabled}
+      setSessionNotifyEnabled={setSessionNotifyEnabled}
+    />
+  );
+}
+
+/** Shared toggles; the cloud surface supplies the target's values and writes. */
+export function FeishuBotNotificationSectionView({
+  ownerBound,
+  lifecycleAnnouncement,
+  setLifecycleAnnouncement,
+  sessionNotifyEnabled,
+  setSessionNotifyEnabled,
+  disabled = false,
+  sessionDisabled = false,
+}: {
+  ownerBound: boolean;
+  lifecycleAnnouncement: boolean;
+  setLifecycleAnnouncement(enabled: boolean): void;
+  sessionNotifyEnabled: boolean;
+  setSessionNotifyEnabled(enabled: boolean): void;
+  disabled?: boolean;
+  /** The session toggle alone is unavailable, e.g. its preference is not readable. */
+  sessionDisabled?: boolean;
+}) {
+  const { t } = useTranslation();
+
+  return (
     <>
       <ImLifecycleAnnouncementSection
         label={t('settings.feishuBot.lifecycleAnnouncement.label')}
         cellLabel={t('settings.feishuBot.lifecycleAnnouncement.cellLabel')}
         hint={t('settings.feishuBot.lifecycleAnnouncement.hint')}
         checked={lifecycleAnnouncement}
+        disabled={disabled}
         onCheckedChange={setLifecycleAnnouncement}
       />
       <div className="h-px w-full bg-[var(--border-default)]" />
@@ -42,14 +74,14 @@ export function FeishuBotNotificationSection() {
         label={t('settings.feishuBot.sessionNotification.label')}
         cellLabel={t('settings.feishuBot.sessionNotification.cellLabel')}
         hint={
-          feishuReady
+          ownerBound
             ? t('settings.feishuBot.sessionNotification.hint')
             : t('settings.feishuBot.sessionNotification.disabledHint')
         }
-        checked={sessionNotifyEnabled && feishuReady}
-        disabled={!feishuReady}
+        checked={sessionNotifyEnabled && ownerBound}
+        disabled={disabled || sessionDisabled || !ownerBound}
         onCheckedChange={(next) => {
-          if (feishuReady) setSessionNotifyEnabled(next);
+          if (ownerBound) setSessionNotifyEnabled(next);
         }}
       />
     </>

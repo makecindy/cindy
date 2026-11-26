@@ -17,6 +17,7 @@ export interface AgentNetSocketOptions extends Omit<PortableSocketOptions, 'clie
   module?: WebAssembly.Module;
   udp?: boolean;
   bindAddress?: string;
+  bindPort?: number;
   stunServers?: string[];
   /** The relay's UDP address for relayed datagrams; see TransportOptions.relayUdpServer. */
   relayUdpServer?: string;
@@ -27,9 +28,10 @@ export interface AgentNetSocketOptions extends Omit<PortableSocketOptions, 'clie
   /**
    * The native engine (packages/agent-net-native/node): its module, given as the path to load it from. The engine gets the
    * client identity's own keys. Without it, or when it fails, the transport is the WASM core as before; `onFallback` says why.
-   * Tests and benchmarks that tap datagrams or bind an address keep the WASM core, which has those.
+   * Tests and benchmarks that tap datagrams or bind an address/port keep the WASM core, which has those.
    */
   native?: { binding: NodeNativeBinding | string; onFallback?(code: string): void };
+  onLog?: TransportOptions['onLog'];
 }
 /** Node bindings; device-link routing and framing are shared with mobile. */
 export class AgentNetSocket extends PortableSocket {
@@ -56,15 +58,15 @@ export class AgentNetSocket extends PortableSocket {
         options.assertCurrent?.();
       },
       createTransport: async request => {
-        const native = options.native && !options.tap && !options.bindAddress ? options.native : undefined;
+        const native = options.native && !options.tap && !options.bindAddress && !options.bindPort ? options.native : undefined;
         if (native) {
           try { return await createNativeTransport(options, native, request); }
           catch (error) { native.onFallback?.(error instanceof Error && /^[A-Z0-9_]{1,80}$/.test(error.message) ? error.message : 'AGENT_NET_NATIVE_FAILED'); }
         }
         return createCoreTransport({ ...request,
           identity: options.client.identity.transportPrivateKey, module: options.module,
-          bindAddress: options.bindAddress, udp: options.udp, stunServers: options.stunServers, tap: options.tap,
-          udpTraffic: options.udpTraffic,
+          bindAddress: options.bindAddress, bindPort: options.bindPort, udp: options.udp, stunServers: options.stunServers, tap: options.tap,
+          udpTraffic: options.udpTraffic, onLog: options.onLog,
           relayUdpServer: options.relayUdpServer, publicCandidatesOnly: options.publicCandidatesOnly,
         });
       },

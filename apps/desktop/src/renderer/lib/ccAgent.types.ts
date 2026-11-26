@@ -138,6 +138,8 @@ export interface CcMeta {
   botLearning?: import('@cindy/maker-shared/bot-learning').BotLearningReceipt[];
   /** Provider text phase, retained to exclude commentary from notification previews. */
   assistantPhase?: string;
+  /** Set only on finished user-visible progress for a foreground plugin task input. */
+  pluginProgressInputId?: string;
   /** Native text item identity, used to reconcile streamed and imported history. */
   agentMessageId?: string;
   /** Codex item text is durable but its sampling request has not yet been accepted. */

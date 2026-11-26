@@ -1,3 +1,7 @@
+import { validateAdditionalSettingsOverrides } from '../../../shared/settingsEditableCatalog.js';
+import { validateOptionalSettingsFields } from '../../maker-host/settings-inspection.js';
+import { inspectSettingsJson } from '../../maker-host/inspect-settings-json.js';
+import path from 'node:path';
 /**
  * main/im/telegram/behaviorStore.ts
  * ---------------------------------------------------------------------------
@@ -63,6 +67,10 @@ export function setTelegramGroupActivation(
 }
 
 const file = createOverrideSettingsFile<TelegramBehaviorConfig>({
+  validateOverrides: raw => {
+    validateAdditionalSettingsOverrides('telegramBehavior', raw);
+    if (raw.groupActivation !== undefined && !isRecordOfActivation(raw.groupActivation)) throw new Error('Invalid group activation');
+  },
   filePath: () => ownerScopedImUserDataPath('telegram-bot-behavior.json'),
   defaults: TELEGRAM_DEFAULT_BEHAVIOR,
   normalize,
@@ -89,12 +97,27 @@ function normalizePersona(raw: unknown): TelegramPersonaConfig {
 }
 
 const personaFile = createOverrideSettingsFile<TelegramPersonaConfig>({
+  validateOverrides: raw => validateAdditionalSettingsOverrides('telegramPersona', raw),
   filePath: () => ownerScopedImUserDataPath('telegram-bot-persona.json'),
   defaults: PERSONA_DEFAULTS,
   normalize: normalizePersona,
   log,
   label: 'telegram-bot-persona',
 });
+
+export function inspectTelegramPersona(root: string) {
+  return inspectSettingsJson(path.join(root, 'telegram-bot-persona.json'), raw => {
+    validateOptionalSettingsFields(raw, { botName: value => typeof value === 'string', soul: value => typeof value === 'string' });
+    return normalizePersona(raw);
+  });
+}
+
+export function inspectTelegramBehavior(root: string) {
+  return inspectSettingsJson(path.join(root, 'telegram-bot-behavior.json'), raw => {
+    validateOptionalSettingsFields(raw, { emojiReactions: value => typeof value === 'string' && EMOJI_LEVELS.has(value), replyQuoteGroup: value => typeof value === 'string' && GROUP_QUOTE_MODES.has(value), replyQuoteDm: value => typeof value === 'string' && DM_QUOTE_MODES.has(value), groupActivation: isRecordOfActivation });
+    return normalize(raw);
+  });
+}
 
 export function readTelegramPersona(): TelegramPersonaConfig {
   return personaFile.read();
@@ -139,3 +162,7 @@ function normalizePatch(
   }
   return next;
 }
+
+/** Internal Host settings adapter; no new IPC or persistence location. */
+export function getTelegramBehaviorSettingsStore() { return file; }
+export function getTelegramPersonaSettingsStore() { return personaFile; }

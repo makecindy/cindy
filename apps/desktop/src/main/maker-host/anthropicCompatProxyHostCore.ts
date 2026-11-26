@@ -19,6 +19,7 @@ import {
   createToolExchangeAdjacencyRecoveryRule,
   createToolUseProviderSpecificFieldsRecoveryRule,
   createToolReferenceRecoveryRule,
+  createNativeMcpHistoryRecoveryRule,
   createXaiModelInputRecoveryRule,
   createXaiModelInputSanitizeTransform,
   createAnthropicEffortCompatibilityRule,
@@ -66,12 +67,15 @@ import {
 import { createClaudeGatewayErrorObserver } from './claude-gateway-error-observer.js';
 import { shouldApplyExclusiveProviderReroute } from './model-route-guard.js';
 import { getSessionProvider, hasHostedSessionModelAccess } from './session-provider-store.js';
+import { readPoolExecutionRoute } from '../subscription-accounts/session.js';
 import { SHARED_PROVIDER_SCOPE_DENIAL_MESSAGE } from '../../shared/providerShare.js';
 import {
   GUEST_ROUTE_HEADER,
   guestProviderOffersModel,
   guestProviderModelDenial,
+  hostedPiChildOffersModel,
   hostedProviderOffersModel,
+  poolAuthorizationProvider,
   guestProviderRouteForSession,
   guestProviderRouteForToken,
   type GuestProviderRoute,
@@ -119,6 +123,8 @@ import {
 } from './claude-session-background-activity.js';
 import {
   authenticatePiProxySession,
+  getPiProxyHostedModelAccess,
+  getPiProxySessionSignal,
   getPiProxySessionProvider,
   getPiProxySubscriptionAccount,
   isPiProxySubagentRoute,
@@ -678,6 +684,25 @@ function createModelRoutingTransform(): RoutingTransform {
       : false;
     const selectedPiProviderId = piSessionId ? getSessionProvider(piSessionId) : null;
     const piGuest = piSessionId ? guestProviderRouteForSession(piSessionId) : null;
+    const poolRoute = readPoolExecutionRoute(piSessionId);
+    const hostedAccess = piSessionId ? getPiProxyHostedModelAccess(piSessionId, claimedPiSessionToken) : undefined;
+    if (hostedAccess && !hostedAccess.isCurrent())
+      return refuseGuestProviderRoute(403, 'remote_model_not_allowed', 'This model is not available for this remote task.');
+    const piSignal = piSessionId
+      ? getPiProxySessionSignal(piSessionId, claimedPiSessionToken) : null;
+    const childProviderId = piProviderId ?? 'xd';
+    const authorizeHostedChild = subagentRoute && !piGuest && piSignal && piSessionId && hostedAccess ? (model: string) =>
+      !piSignal.aborted && hostedPiChildOffersModel(piSessionId, childProviderId, model, hostedAccess.allowsModel) : undefined;
+    // Native HTTP and pooled Key forwarding both use the grant captured when
+    // this root token was minted, not whichever grant is now bound to the task.
+    const authorizeHostedRoot = !subagentRoute && piSignal && piSessionId && piProviderId && hostedAccess ? (model: string) =>
+      hostedAccess.isCurrent() && hostedProviderOffersModel(piSessionId, piProviderId, 'pi', model)
+      && hostedAccess.isCurrent() && !piSignal.aborted : undefined;
+    // The header must still match its own token. Only the live, owner-issued
+    // pool reservation may route that token through a different connection.
+    const pooledPiRoute = !subagentRoute && poolRoute?.logicalModel && selectedPiProviderId !== null
+      && piProviderId && piProviderId !== selectedPiProviderId
+      && poolAuthorizationProvider(piSessionId, piProviderId) === selectedPiProviderId;
     if (
       piSessionId
       && (
@@ -686,10 +711,12 @@ function createModelRoutingTransform(): RoutingTransform {
           piProviderId !== null
           && selectedPiProviderId !== null
           && piProviderId !== selectedPiProviderId
+          && !pooledPiRoute
         ))
         || (!subagentRoute && (
           (isOpenAiSubscriptionProviderId(selectedPiProviderId) || isXaiSubscriptionProviderId(selectedPiProviderId))
           && piProviderId !== selectedPiProviderId
+          && !pooledPiRoute
         ))
       )
     ) {
@@ -717,9 +744,17 @@ function createModelRoutingTransform(): RoutingTransform {
       };
     }
     // 供应商分享受邀者的 Pi 会话：令牌只为分享的供应商签发，这里按登记再复核一次(含子代理令牌)。
-    if (piGuest && !piRequestStaysOnGuestProvider(piGuest, piProviderId, registeredPiProviderId)) {
+    if (piGuest && ((subagentRoute && poolRoute && poolRoute.connectionId !== poolRoute.providerId)
+      || (!(pooledPiRoute && piGuest.providerId === selectedPiProviderId)
+        && !piRequestStaysOnGuestProvider(piGuest, piProviderId, registeredPiProviderId)))) {
       return refuseGuestProviderRoute(403, 'shared_provider_only', SHARED_PROVIDER_SCOPE_DENIAL_MESSAGE);
     }
+    // An async route lookup must finish before the final live model-grant
+    // check, and the original provider in the session store must not win routing.
+    const pooledPiModel = pooledPiRoute && isPlainObject(body) && typeof body.model === 'string' ? body.model : undefined;
+    const pooledPiDecision = pooledPiRoute && piProviderId && pooledPiModel
+      ? await resolveProviderRouteDecision(piProviderId, 'pi', _readGatewayKey(), pooledPiModel, piSessionId ?? undefined).catch(() => null)
+      : null;
     // Pi's native ChatGPT transport sends zstd JSON. The generic proxy keeps
     // those bytes opaque; the native handler decodes and checks the live grant
     // before forwarding. An unparsed compressed body is not a missing model.
@@ -727,8 +762,9 @@ function createModelRoutingTransform(): RoutingTransform {
       && isOpenAiSubscriptionProviderId(piProviderId)
       && ctx.headers['content-encoding']?.toLowerCase() === 'zstd'
       && !isPlainObject(body);
-    if ((piGuest || hasHostedSessionModelAccess(piSessionId)) && !nativeCompressedPiRequest) {
-      const providerId = piGuest?.providerId ?? piProviderId ?? selectedPiProviderId;
+    let childRequestModels: string[] = [];
+    if ((piGuest || authorizeHostedChild || hasHostedSessionModelAccess(piSessionId)) && !nativeCompressedPiRequest) {
+      const providerId = piGuest?.providerId ?? (authorizeHostedChild ? childProviderId : piProviderId ?? selectedPiProviderId);
       // Check the live member grant before native handlers and all other Pi routing branches.
       // Google's native API puts the authoritative model in the URL instead of body.model.
       const requestModels: string[] = [];
@@ -746,7 +782,7 @@ function createModelRoutingTransform(): RoutingTransform {
       for (const model of requestModels) {
         const allowed = piGuest
           ? await guestProviderOffersModel(piGuest.providerId, 'pi', model, piGuest.sessionId)
-          : hostedProviderOffersModel(piSessionId, providerId, 'pi', model);
+          : authorizeHostedChild ? authorizeHostedChild(model) : hostedProviderOffersModel(piSessionId, providerId, 'pi', model);
         if (!allowed) { deniedModel = model; break; }
       }
       if (requestModels.length === 0 || deniedModel !== undefined) {
@@ -755,6 +791,21 @@ function createModelRoutingTransform(): RoutingTransform {
         return piGuest ? refuseGuestForeignRoute(deniedModel ?? '')
           : refuseGuestProviderRoute(403, 'remote_model_not_allowed', 'This model is not available for this remote task.');
       }
+      if (authorizeHostedChild) childRequestModels = requestModels;
+    }
+    if (pooledPiRoute && piSessionId && piProviderId) {
+      const decision = pooledPiDecision?.decision;
+      if (!decision || !pooledPiModel) return unavailablePiProviderRoute(piProviderId);
+      const poolIsCurrent = () => piSignal !== null && !piSignal.aborted
+        && getPiProxySessionProvider(piSessionId, claimedPiSessionToken) === piProviderId
+        && readPoolExecutionRoute(piSessionId) === poolRoute
+        && poolAuthorizationProvider(piSessionId, piProviderId, pooledPiModel) === selectedPiProviderId
+        && (authorizeHostedRoot?.(pooledPiModel) ?? !hasHostedSessionModelAccess(piSessionId));
+      if (!poolIsCurrent()) return unavailablePiProviderRoute(piProviderId);
+      return {
+        ...decision,
+        dispatchGenerationValid: () => poolIsCurrent() && decision.dispatchGenerationValid?.() !== false,
+      };
     }
     if (piSessionId && piProviderId && (isOpenAiSubscriptionProviderId(piProviderId) || isXaiSubscriptionProviderId(piProviderId))) {
       return {
@@ -762,7 +813,7 @@ function createModelRoutingTransform(): RoutingTransform {
         // authenticates and forwards it; the xAI forwarder also restores its
         // provider server tools, but no Claude protocol bridge runs.
         localHandler: getPiNativeSubscriptionHandler(piProviderId, piSessionId, undefined,
-          getPiProxySubscriptionAccount(piSessionId, claimedPiSessionToken)),
+          getPiProxySubscriptionAccount(piSessionId, claimedPiSessionToken), authorizeHostedChild ?? authorizeHostedRoot),
       };
     }
     const isPiGatewayRequest = Boolean(
@@ -923,11 +974,15 @@ function createModelRoutingTransform(): RoutingTransform {
       // key 时更会把 `sk-ant-oat` 占位 token 直发 api.anthropic.com。这里的
       // piProviderId 已过 registered 匹配门,就是授权边界也是路由来源;openai /
       // xai 在上方已按同一判据早返回,'xd' 留给网关分支(记账 + sanitize)。
-      return resolveProviderRouteDecision(piProviderId, 'pi', gatewayKey)
-        .then((resolved) => withCopilotForwardHeaders(
+      return resolveProviderRouteDecision(piProviderId, 'pi', gatewayKey, authorizeHostedChild ? wireModel : undefined)
+        .then((resolved) => {
+          if (authorizeHostedChild && !childRequestModels.every(authorizeHostedChild))
+            return refuseGuestProviderRoute(403, 'remote_model_not_allowed', 'This model is not available for this remote task.');
+          return withCopilotForwardHeaders(
           resolved?.decision ?? null, !!wireModel && resolved?.routing.authStrategy === 'oauth-token'
             && /\/responses\/?$/.test(ctx.url.split('?', 1)[0]), ctx,
-        ) ?? unavailablePiProviderRoute(piProviderId))
+          ) ?? unavailablePiProviderRoute(piProviderId);
+        })
         .catch(() => unavailablePiProviderRoute(piProviderId));
     }
 
@@ -1291,6 +1346,23 @@ async function startAnthropicCompatProxy(generation: number): Promise<void> {
           resolveUserProviderName: (providerId) =>
             getActiveCatalog().providers.find((provider) => provider.id === providerId)?.name ?? null,
         }),
+        createProviderUpstreamErrorObserver({
+          agent: 'pi',
+          healthOnly: true,
+          resolveUserSessionId: headers => {
+            const sessionId = headerValue(headers, 'x-cindy-pi-session-id');
+            const token = headerValue(headers, 'x-cindy-pi-session-token');
+            return sessionId && authenticatePiProxySession(sessionId, token)
+              && !isPiProxySubagentRoute(sessionId, token) ? sessionId : null;
+          },
+          // Only accept a provider pinned by the same authenticated Pi runtime.
+          resolveUserProviderId: (headers) => {
+            const sessionId = headerValue(headers, 'x-cindy-pi-session-id');
+            const token = headerValue(headers, 'x-cindy-pi-session-token');
+            const providerId = sessionId ? getPiProxySessionProvider(sessionId, token) : null;
+            return sessionId && providerId ? getUserProviderIdForSession(sessionId, providerId) : null;
+          },
+        }),
       ),
       transformRequest: [
         // Pi 的通用 openai-responses adapter 不发送 text.verbosity；只对 Cindy
@@ -1379,6 +1451,7 @@ async function startAnthropicCompatProxy(generation: number): Promise<void> {
         }),
         createToolUseProviderSpecificFieldsRecoveryRule(),
         createToolReferenceRecoveryRule(),
+        createNativeMcpHistoryRecoveryRule(),
         // tool 配对断裂 400(moonshot `tool_call_id is not found` / Anthropic
         // `unexpected tool_use_id` / `tool_use ids were found without tool_result`
         // / OpenAI 系 wording)→ 组合结构修复重发,always-on。

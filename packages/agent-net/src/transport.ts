@@ -266,6 +266,7 @@ class CoreChannel implements PeerChannel {
         this.bodyHandler = handler;
         for (const [key, bytes] of this.earlyBodies.splice(0)) handler(key, bytes);
       },
+      onDrain: (handler) => this.onDrain(handler),
     };
   }
 
@@ -390,12 +391,18 @@ export async function createCoreTransport(options: TransportOptions): Promise<Tr
     return false;
   };
   let stun: StunClient | null = null;
-  endpoint = await Endpoint.create({
-    identity: options.identity ?? generateIdentity(),
+  const identity = options.identity ?? generateIdentity();
+  const bindAddress = options.bindAddress ?? '0.0.0.0';
+  const requestedPort = validBindPort(options.bindPort);
+  if (options.bindPort !== undefined && options.bindPort !== 0 && requestedPort === undefined) {
+    options.onLog?.('warn', `agent-net ignoring invalid bindPort=${String(options.bindPort)}; using ephemeral UDP port`);
+  }
+  const createEndpoint = (port: number) => Endpoint.create({
+    identity,
     prologue: PROLOGUE,
     sendPacketSize: SEND_PACKET_SIZE,
     ...(options.module ? { module: options.module } : {}),
-    bind: { address: options.bindAddress ?? '0.0.0.0' },
+    bind: { address: bindAddress, port },
     udp,
     udpTraffic: options.udpTraffic,
     accept: { admit },
@@ -408,6 +415,19 @@ export async function createCoreTransport(options: TransportOptions): Promise<Tr
         }
       : {}),
   });
+  if (udp && requestedPort !== undefined) {
+    try {
+      endpoint = await createEndpoint(requestedPort);
+      options.onLog?.('info', `agent-net UDP listening on fixed port ${endpoint.address().port}`);
+    } catch (error) {
+      const errCode = (error as NodeJS.ErrnoException | null)?.code;
+      if (errCode !== 'EADDRINUSE' && errCode !== 'EACCES') throw error;
+      endpoint = await createEndpoint(0);
+      options.onLog?.('warn', `agent-net fixed UDP port ${requestedPort} unavailable (${errCode}); fell back to ephemeral port ${endpoint.address().port}`);
+    }
+  } else {
+    endpoint = await createEndpoint(0);
+  }
   relay?.uplink.onDatagram((relayId, datagram) => { relayUdp?.noteInbound(false); linkFor(relayId).deliver(datagram); });
   if (udp && relay?.udpCredentials && options.relayUdpServer) {
     const credentials = relay.udpCredentials;
@@ -417,12 +437,15 @@ export async function createCoreTransport(options: TransportOptions): Promise<Tr
       credentials: () => credentials(),
       peers: () => (options.admittedPeers?.() ?? []).map((peer) => peer.relayId),
       deliver: (relayId, datagram) => linkFor(relayId).deliver(datagram),
-      // 只算一直走中转的那段：直连的丢包、刚换到中转的连接的历史都与中转 UDP 无关（RelaySendCounters）。
-      relayedSendCounters: () => relaySends.sample(function* () {
+      // 只算一直走中转的那段，并按连接拆分：直连的历史重传不算进来，单一对端抖动/掉线也不连坐其他健康对端（RelaySendCounters）。
+      relayedSendCounters: () => relaySends.sampleDetailed(function* () {
         for (const channel of channels) {
           const stats = channel.stats();
-          if (stats) yield { key: channel, relay: channel.addressKind() === 'relay',
-            retransmitted: stats.retransmittedSegments ?? 0, sent: stats.packetsSent ?? 0 };
+          if (stats) yield {
+            key: channel, relay: channel.addressKind() === 'relay',
+            retransmitted: stats.retransmittedSegments ?? 0, sent: stats.packetsSent ?? 0,
+            acknowledgedBytes: stats.acknowledgedBytes ?? 0,
+          };
         }
       }()),
     });
@@ -441,15 +464,35 @@ export async function createCoreTransport(options: TransportOptions): Promise<Tr
   };
   // Install admission listeners before any DNS/STUN wait. Relay RPC never waits for a UDP response.
   endpoint.on('connection', (connection: Connection) => options.onIncoming(channelFor(connection)));
+  let activeStunServers = dedupeStunServers(options.stunServers ?? []);
   let gathering = 0;
+  let roundFound: Address[] = [];
+  const publishCandidates = () => {
+    const next = normalizeCandidates(roundFound, publicOnly);
+    if (sameCandidateList(candidates, next)) return;
+    candidates.splice(0, candidates.length, ...next);
+    for (const channel of channels) channel.announceCandidates();
+  };
+  const queryStunServers = (round: number, servers: readonly string[]) => {
+    if (!servers.length || closed || round !== gathering) return;
+    if (!stun) stun = new StunClient((to, datagram) => endpoint.sendUdp(to, datagram));
+    const client = stun;
+    // 每个 STUN 独立并行查询、先到先公布，避免慢区或被墙的 STUN 阻塞本地与本区公网候选。
+    for (const server of servers) {
+      void client.query(server).then((mapped) => {
+        if (closed || round !== gathering || !mapped) return;
+        roundFound.push(mapped);
+        publishCandidates();
+      }).catch(() => undefined);
+    }
+  };
   const gather = () => {
     const round = ++gathering;
-    void gatherCandidates(endpoint, options.stunServers ?? [], (client) => { stun?.close(); stun = client; }).then((gathered) => {
-      if (closed || round !== gathering) return;
-      candidates.splice(0, candidates.length, ...gathered.filter((address) => !publicOnly || !isPrivate(address.address))
-        .sort((a, b) => Number(isPrivate(a.address)) - Number(isPrivate(b.address))).slice(0, MAX_CANDIDATES));
-      for (const channel of channels) channel.announceCandidates();
-    }).catch(() => undefined);
+    stun?.close();
+    stun = null;
+    roundFound = localInterfaceCandidates(endpoint);
+    publishCandidates();
+    queryStunServers(round, activeStunServers);
   };
   if (udp) gather();
   const dial: CoreDial = { ...(udp ? { udp: endpoint.address() } : {}), ...(relay ? { relayId: relay.deviceId } : {}) };
@@ -483,9 +526,19 @@ export async function createCoreTransport(options: TransportOptions): Promise<Tr
     },
     networkChanged() {
       if (closed) return;
-      // 换了网络：每条连接马上从新地址发包，对端看到新地址就跟过来（不等下一次保活）；候选地址按新网络重新收集。
+      // 换了网络：每条连接马上从新地址发包，对端看到新地址就跟过来（不等下一次保活）；候选地址按新网络重新收集；
+      // 中转 UDP 清掉旧网络的冷却并重新登记、探测。
       endpoint.localAddressChanged();
       if (udp) gather();
+      relayUdp?.networkChanged();
+    },
+    setStunServers(servers: readonly string[]) {
+      if (closed) return;
+      const next = dedupeStunServers(servers);
+      const previous = new Set(activeStunServers);
+      const added = next.filter((server) => !previous.has(server));
+      activeStunServers = next;
+      if (udp && added.length) queryStunServers(gathering, added);
     },
     relayStalled() { relayUdp?.noteStall(); },
     relayRoute() {
@@ -509,7 +562,7 @@ export async function createCoreTransport(options: TransportOptions): Promise<Tr
  * 候选地址：本机 UDP 地址（绑在 `0.0.0.0` 时是各网卡的 IPv4 地址），加上各 STUN 服务器看到的外部地址。
  * 同一台机器问不同的 STUN 服务器可能看到不同的外部地址（国内外分流出口不同），所以每个都问、去重后都给对端。
  */
-async function gatherCandidates(endpoint: Endpoint, stunServers: string[], install: (client: StunClient) => void): Promise<Address[]> {
+function localInterfaceCandidates(endpoint: Endpoint): Address[] {
   const local = endpoint.address();
   const found: Address[] = [];
   if (local.address === '0.0.0.0') {
@@ -519,19 +572,41 @@ async function gatherCandidates(endpoint: Endpoint, stunServers: string[], insta
   } else {
     found.push(local);
   }
-  if (stunServers.length) {
-    const client = new StunClient((to, datagram) => endpoint.sendUdp(to, datagram));
-    install(client);
-    const mapped = await Promise.all(stunServers.map((server) => client.query(server).catch(() => null)));
-    for (const address of mapped) if (address) found.push(address);
-  }
+  return found;
+}
+
+function normalizeCandidates(found: readonly Address[], publicOnly: boolean): Address[] {
   const seen = new Set<string>();
-  return found.filter((address) => {
-    const key = `${address.address}:${address.port}`;
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
+  return found
+    .filter((address) => {
+      if (publicOnly && isPrivate(address.address)) return false;
+      const key = `${address.address}:${address.port}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .sort((a, b) => Number(isPrivate(a.address)) - Number(isPrivate(b.address)))
+    .slice(0, MAX_CANDIDATES);
+}
+
+function sameCandidateList(a: readonly Address[], b: readonly Address[]): boolean {
+  return a.length === b.length && a.every((item, index) => item.address === b[index].address && item.port === b[index].port);
+}
+
+function dedupeStunServers(servers: readonly string[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const raw of servers) {
+    const server = typeof raw === 'string' ? raw.trim() : '';
+    if (!server || seen.has(server)) continue;
+    seen.add(server);
+    out.push(server);
+  }
+  return out;
+}
+
+function validBindPort(port: unknown): number | undefined {
+  return typeof port === 'number' && Number.isInteger(port) && port >= 1 && port <= 65_535 ? port : undefined;
 }
 
 /** 私有地址：局域网、运营商 NAT、链路本地。 */

@@ -22,6 +22,8 @@ import { readDisabledSkillPaths } from '../skillhub/activationPreferences';
 import { resolveLocalMcpDuplicateChoices } from './mcp-duplicate-preferences.js';
 import { cindyMakeManager } from '../cindy-make/manager.js';
 import { makeSourceRoot } from '../cindy-make/sourcePaths.js';
+import { captureHostPersonalization } from '../host-settings/startup.js';
+import { isManagedCloudInstance } from '../host-settings/personalization.js';
 import { clearCodexAccountUsageSnapshot } from '../usageBroadcaster.js';
 /**
  * apps/desktop/src/main/maker-host
@@ -37,9 +39,11 @@ import { createMediaDownloadContext } from '../cindy-media/mediaDownloadApproval
 import { setPluginModelPickerAgentProvider, setPluginRouteAgentStatusProvider } from '../cindy-brain/ghostModelPicker.js';
 import { isCodexAccountProvider, setCodexAccountRetirement } from './codex-account-auth.desktop.js';
 import { withSubscriptionAccounts } from '../subscription-accounts/agent.js';
+import { prepareLegacyOpenAiPool } from '../subscription-accounts/openAiPoolMerge.js';
 import { onSubscriptionPoolCodexModelsChanged, onSubscriptionPoolClaudeModelsChanged } from '../subscription-accounts/runtime.js';
 import { NATIVE_SUBSCRIPTION_ACCOUNT } from '@cindy/maker-core';
 import { installPluginEngines } from './acp-host.js';
+import { createPluginEngineSkillLister } from './pluginEngineSkills.js';
 import { builtinAgentKindOrNull } from './engineKind.js';
 import { readCodexThreadStorageReadOnly, prepareCodexResumeSession, resolveCodexThreadStorage, recordCodexThreadLocation } from './codex-thread-storage.js';
 import { createSessionArchiveSync, prepareArchiveSessions } from './session-archive-sync.js';
@@ -239,7 +243,7 @@ import {
   prepareCodexGuestModelCatalog,
   readNativeCodexCatalog, findCodexCatalogModel, nativeCodexFallbackModel, patchCodexModelMaxContextWindow,
 } from './codex-custom-context-catalog.js';
-import { buildPiAgent } from './pi-host.js';
+import { buildPiAgent, desktopPiAuthAdapter } from './pi-host.js';
 import {
   captureLocalPiPackageRuntimeInvalidationSnapshot,
   settleLocalPiPackageRuntimeSnapshot,
@@ -288,6 +292,8 @@ import { ACCOUNT_PROVIDER_NOT_READY_CODE } from '../../shared/accountProviderRea
 import { listBotImConnectionsForBot } from '../im/shared/botImConnectionStore.js';
 import {
   getRejectedCodexDownshiftModel,
+  getObservedCodexUpstreamCapacity,
+  subscribeCodexUpstreamCapacity,
   armCodexHttpRecovery,
   clearCodexProxyAuthInjection,
   ensureCodexControlPlaneProxyReady,
@@ -313,6 +319,8 @@ import {
 } from './codex-proxy-host.desktop.js';
 import { createDesktopMcpProviders } from '../mcp-integrations/mcp-providers.js';
 import { getGhostRosterPrompt } from '../mcp-integrations/ghost.desktop.js';
+import { STARTUP_GHOST_TOOLS_OWNER_KEY } from '../cindy-brain/startupGhostTool.js';
+import { readSessionSource } from '../localDb/sessionDispatchSnapshot.js';
 import { getPiExtraSpawnConfig, invalidatePiEnvironment } from '../mcp-integrations/piEnvironment.desktop.js';
 import { captureKnownFileBefore, noteOpaqueTurnChange } from '../turn-change-set/store.js';
 import {
@@ -418,6 +426,7 @@ import { createDesktopOrcaTeamStoreAdapter } from './orcaTeamStoreAdapter.js';
 import { broadcastOrcaWorkerChanged } from './orcaWorkerBroadcast.js';
 import {
   getDesktopClaudeReadOnlyAllowedTools,
+  getDesktopMcpToolApprovalEvidence,
   getDesktopMcpToolApprovalPolicy,
 } from './mcp-tool-approval-policy.js';
 import { mapCodexAppServerModelsToCatalog } from './codex-model-discovery.js';
@@ -1152,6 +1161,12 @@ export function getMaker(): Maker {
       // 只读活跃 Session 的运行时真相。权限切换是 runtime-first、DB-second，
       // 因此插件过户自动放行不得回退 sessions.permission_mode；会话不再 active
       // 时同样 fail closed。闭包在 MCP tool-call 时执行，此时 _maker 已装配完成。
+      isStartupToolSessionCurrent: (sessionId: string, instanceId: string, workdir: string) => {
+        const session = _maker?.getSession(sessionId);
+        return !!session && session.instanceId === instanceId && session.workDir === workdir &&
+          session.getStatus() === 'active' && !session.hasStartedClosing() &&
+          !session.remoteHostId && !isAppSessionBoundaryPending();
+      },
       getLiveSessionGrantState: (sessionId: string, sessionInstanceId: string) => {
         if (!sessionInstanceId) return null;
         const session = _maker?.getSession(sessionId);
@@ -1482,6 +1497,7 @@ export function getMaker(): Maker {
       // 行时, Claude 只剩上面那份静态只读白名单, 可信第一方 server 的 call_tool
       // (浏览器自动化等高频入口)会逐次弹窗, 与 Codex 侧的静默执行行为分叉。
       getMcpToolApprovalPolicy: getDesktopMcpToolApprovalPolicy,
+      getMcpToolApprovalEvidence: getDesktopMcpToolApprovalEvidence,
       resolveClaudeSubagentModelAccess: resolveDesktopClaudeSubagentModelAccess,
       // 模型清单 SSoT = 目录（providers.json，OSS 运行时真源 / bundled 兜底）。maker-core 的
       // CLAUDE_MODELS 已删、availableModels 起始为空；host 从账号可选目录派生 cc 列表注入
@@ -1766,7 +1782,7 @@ export function getMaker(): Maker {
       get binaryPath() { return codexPath(); },
       logger: desktopMakerLogger,
       disableCodexPluginRuntime: true,
-      registerLocalCodexAppServerProcess: ({ pid, role }) => registerCodexProcessRole(pid, role),
+      registerLocalCodexAppServerProcess: ({ pid, role, child }) => registerCodexProcessRole(pid, role, child),
       // Codex 也接 Cindy MCP providers (跟 claude 共享同一份 provider instances);
       // codex 子进程没法消费 in-process JS instance, prepareCodexExtraSpawnConfig
       // 起 streamable-HTTP bridge 把 instance 通过 -c 'mcp_servers...=...' 注入。
@@ -1898,6 +1914,7 @@ export function getMaker(): Maker {
         registerCodexMcpThreadContext(threadId, {
           agentKind: 'codex',
           sessionId,
+          startupCatalogKey: vendorOptions,
           mcpCallerKind,
           mcpCallerAttested,
           ...(sessionInstanceId ? { sessionInstanceId } : {}),
@@ -1974,6 +1991,8 @@ export function getMaker(): Maker {
       getCodexSubagentIdentity: ({ childThreadId }) =>
         getObservedCodexSubagentIdentity(childThreadId),
       getRejectedCodexDownshiftModel,
+      getObservedCodexUpstreamCapacity,
+      subscribeCodexUpstreamCapacity,
       armCodexHttpRecovery,
       registerCodexChildThreadForParent: ({ parentThreadId, childThreadId }) => {
         registerCodexProxyChildThread(parentThreadId, childThreadId);
@@ -1989,6 +2008,7 @@ export function getMaker(): Maker {
       // 只有已 review 的第一方只读/媒体工具静默。
       // 详见 AgentDeps.getMcpToolApprovalPolicy。
       getMcpToolApprovalPolicy: getDesktopMcpToolApprovalPolicy,
+      getMcpToolApprovalEvidence: getDesktopMcpToolApprovalEvidence,
       // 远端 Codex (P2): 给 session 标 remoteHostId 的, CodexAgent 通过这个钩子拿
       // 远端 transport — SSH 连接已有 ConnectionPool (remote-ssh feature 起的) 管,
       // 这里包一层把 RemoteHost + SshDaemonTransport 装起来。
@@ -2054,6 +2074,7 @@ export function getMaker(): Maker {
         getState: desktopCodexAuthAdapter.getState.bind(desktopCodexAuthAdapter),
         resolveCodexHistoryHome: async threadId => (await readCodexThreadStorageReadOnly(threadId))?.historyHome,
         resolveDefaultProvider: model => model ? resolveConnectedDefaultProviderIdForModel(model, 'codex') : null,
+        preparePool: prepareLegacyOpenAiPool,
       }),
     };
     attachAgentsToMakerMemory(makerMemoryManager, makerAgents);
@@ -2454,7 +2475,9 @@ export function getMaker(): Maker {
       },
     });
     const piAgent = buildPiAgentForDesktop();
-    if (piAgent) makerAgents.pi = withSubscriptionAccounts(piAgent);
+    if (piAgent) makerAgents.pi = withSubscriptionAccounts(piAgent, {
+      getState: desktopPiAuthAdapter.getState, preparePool: prepareLegacyOpenAiPool,
+    });
 
     const buildBotRuntimeDeps = (skillLinksChanged = false): BotProfileRuntimeDeps => ({
       getUserName: () => getAuthState().user?.name,
@@ -2631,6 +2654,8 @@ export function getMaker(): Maker {
           }
           // 所有创建路径共用的派发边界,opts.providerId 此刻已是本次启动的终值。
           freezeSessionProviderAtStart(sessionId, opts.providerId);
+          // 托管云实例:没有经过 IPC 装配的创建路径也用实例自己的个性化正文。
+          if (!opts.hostStartupPreferences && isManagedCloudInstance()) await captureHostPersonalization(opts);
           const interfaceProvider = getActiveCatalog().providers.find(p => p.id === opts.providerId);
           // Plugin engines are not catalog providers: no model interface to record.
           const interfaceKind = builtinAgentKindOrNull(opts.agentKind);
@@ -2652,6 +2677,20 @@ export function getMaker(): Maker {
             getActiveCatalog(),
           );
           await preparePersistedOrcaSessionStart(sessionId, opts as MakerSessionCreateOpts);
+          // Resolve the startup tool surface from the persisted task, not the
+          // source or marker supplied by a renderer or queued request.
+          if (opts.vendorOptions && STARTUP_GHOST_TOOLS_OWNER_KEY in opts.vendorOptions) {
+            opts.vendorOptions = { ...opts.vendorOptions };
+            delete opts.vendorOptions[STARTUP_GHOST_TOOLS_OWNER_KEY];
+          }
+          if (['claude-code', 'codex', 'pi'].includes(opts.agentKind) && !opts.reviewMode &&
+              !opts.remoteHostId && !opts.agentDeviceId && !opts.vendorOptions?.orcaRole) {
+            const owner = activeOwnerScopeKey();
+            const source = await readSessionSource(sessionId).catch(() => null);
+            if (source === 'desktop' && owner === activeOwnerScopeKey() && !isAppSessionBoundaryPending()) {
+              opts.vendorOptions = { ...opts.vendorOptions, [STARTUP_GHOST_TOOLS_OWNER_KEY]: owner };
+            }
+          }
           if (opts.agentKind === 'pi' && opts.thinkingEnabled === undefined) {
             const thinkingEnabled = getThinkingEnabledFromMemory(
               opts.agentKind,
@@ -2878,6 +2917,14 @@ export function getMaker(): Maker {
       appVersion: app.getVersion(),
       mcpProviders: piMcpProviders,
       makerMemory: makerMemoryManager,
+      getGhostRosterPrompt,
+      // Same Skill scope as the built-in Pi engine (Cindy-managed and plugin Skills, Pi's discovery
+      // directories, the user's enable switches), discovered in the isolated scan process.
+      listSessionSkills: createPluginEngineSkillLister({
+        listManagedSkills: listCindyManagedSkills,
+        scanCustomizations: scanLocalCustomizations,
+        readDisabledSkillPaths: () => readDisabledSkillPaths(),
+      }),
     });
     botRuntimeResourcePreflight = async (opts) => {
       const preflightOpts = { ...opts };
@@ -2889,7 +2936,9 @@ export function getMaker(): Maker {
       if (!_maker || _maker.listAvailableAgents().includes('pi')) return false;
       const next = buildPiAgentForDesktop();
       if (!next) return false;
-      const registered = _maker.registerAgent('pi', withSubscriptionAccounts(next));
+      const registered = _maker.registerAgent('pi', withSubscriptionAccounts(next, {
+        getState: desktopPiAuthAdapter.getState, preparePool: prepareLegacyOpenAiPool,
+      }));
       if (!registered) {
         void next.dispose().catch((error) => {
           desktopMakerLogger.warn('discarding Pi agent after registration race failed', {

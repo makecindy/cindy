@@ -19,6 +19,17 @@ export const storageManagementCardSettings = defineSettings({
     titleKey: TAB_LABEL_KEY['storage'],
     sectionKey: 'settings.about.storage.title',
   },
+  taskExportDirectory: {
+    id: 'storage.taskExportDirectory',
+    tab: 'storage',
+    targetId: 'settings-task-export-directory',
+    fallbackTargetId: 'settings-panel-storage',
+    titleKey: 'settings.about.storage.taskExportDirectoryTitle',
+    descriptionKey: 'settings.about.storage.taskExportDirectoryDescription',
+    sectionKey: 'settings.tabs.storage',
+    keywordKeys: ['settings.about.storage.taskExportDirectoryChoose', 'settings.about.storage.taskExportDirectoryReset'],
+    aliases: ['导出目录', 'export folder'],
+  },
   aboutStorageDatabaseSectionTitle: {
     id: 'settings.about.storage.databaseSectionTitle',
     fallbackTargetId: 'settings-panel-storage',

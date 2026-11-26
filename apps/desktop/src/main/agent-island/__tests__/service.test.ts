@@ -34,6 +34,8 @@ import {
   type AgentIslandSoundSettings,
 } from '../../../shared/agentIsland.js';
 import { AGENT_ISLAND_DISPLAY_CONFIG } from '../displayConfig.js';
+import { clearOrcaManualInterruptTestingState, forgetKnownOrcaWorkerSession, markKnownOrcaWorkerSession } from '../../maker-ipc/orcaManualInterrupt.js';
+import { createSessionActivityReader } from '../../maker-ipc/sessionActivityProjection.js';
 import type { AgentIslandNativeFrame } from '../MacAgentIslandNativeHost.js';
 import { markAppContentWindow } from '../../windowFocusClassifier.js';
 import type { AgentIslandService } from '../service.js';
@@ -237,6 +239,7 @@ afterEach(async () => {
 });
 
 beforeEach(async () => {
+  clearOrcaManualInterruptTestingState();
   mocks.attached.mockReset().mockReturnValue(null);
   mocks.confirmIslandArchive.mockReset().mockResolvedValue(true);
   mocks.patchSessionMetaInDb.mockReset();
@@ -635,6 +638,130 @@ describe('Agent Island expanded content height', () => {
 });
 
 describe('AgentIslandService native publishing', () => {
+  // Regression #12558: notification policy must not remove Worker lifecycle evidence.
+  // Production entry: service events -> canonical snapshots/relay and task overview.
+  // Existing coverage only exercised ordinary tasks or source-scanned the old exclusion.
+  // Minimal unit input: known Worker error -> new running status -> output -> done.
+  it.each(['continue', 'auto-resume'] as const)('keeps a recovered Worker observable and quiet after %s', async (source) => {
+    const { AgentIslandService } = await import('../service.js');
+    const meta = { sessionId: 'worker', agentKind: 'codex' };
+    markKnownOrcaWorkerSession(meta.sessionId);
+    const service = new AgentIslandService({
+      getMainWindow: () => null,
+      nativeHost: { failed: false, headless: true, publish: () => true, suspend: () => undefined },
+    });
+    service.setEnabled(false);
+    const persistedRead = vi.fn(async () => ({
+      status: 'active', title: 'worker', startedAt: 10, endedAt: 20, clearedAt: null,
+    }));
+    const readActivity = createSessionActivityReader({
+      getLiveSnapshot: id => service.getSessionActivitySnapshot(id),
+      getPersistedFacts: persistedRead,
+      getLatestTerminal: async () => ({ status: 'error', createdAt: 20 }),
+    });
+    service.handleAgentEvent(meta, terminalErrorEvent('interrupted'));
+    expect(service.getSessionActivitySnapshot(meta.sessionId)?.phase).toBe('error');
+
+    if (source === 'continue') {
+      service.handleUserPrompt(meta, 'continue', { clientId: 'continue' });
+      service.handleUserPromptDispatching(meta.sessionId);
+      service.commitUserPrompt(meta.sessionId, 'continue');
+      service.handleAgentEvent(meta, { type: 'status', source: 'codex', data: { isRunning: true, status: 'Running' } });
+    } else {
+      // A real tool start also proves recovery if a running status was missed.
+      service.handleAgentEvent(meta, { type: 'tool_use', source: 'codex', data: { toolUseId: 'new-tool', toolName: 'exec', input: {} } });
+      service.handleAgentEvent(meta, { type: 'tool_result', source: 'codex', data: { toolUseIds: ['new-tool'], summary: 'done' } });
+    }
+    service.handleAgentEvent(meta, textEvent(`output after ${source}`, true));
+    expect(await readActivity(meta.sessionId)).toMatchObject({ phase: 'running', currentTurnActive: true });
+    expect(service.getTaskOverview()).toEqual([]);
+    service.handleAgentEvent(meta, doneEvent());
+    expect(await readActivity(meta.sessionId)).toMatchObject({ phase: 'completed', currentTurnActive: false });
+    expect(persistedRead).not.toHaveBeenCalled();
+    expect(service.getTaskOverview()).toEqual([]);
+    expect(mocks.tapWindowBroadcast).not.toHaveBeenCalledWith(SESSION_ACTIVITY_CHANNEL,
+      expect.objectContaining({ sessionId: meta.sessionId, phase: 'completed' }));
+    const replay = vi.fn();
+    service.replaySessionActivity(replay);
+    expect(replay).not.toHaveBeenCalled();
+  });
+
+  it('does not report a rejected Worker preview as a running turn', async () => {
+    const { AgentIslandService } = await import('../service.js');
+    const meta = { sessionId: 'worker', agentKind: 'codex' };
+    markKnownOrcaWorkerSession(meta.sessionId);
+    const service = new AgentIslandService({
+      getMainWindow: () => null,
+      nativeHost: { failed: false, headless: true, publish: () => true, suspend: () => undefined },
+    });
+    service.setEnabled(false);
+    service.handleAgentEvent(meta, terminalErrorEvent('not accepted'));
+    service.handleUserPrompt(meta, 'try again', { clientId: 'rejected' });
+    service.rollbackUserPrompt(meta.sessionId, 'rejected');
+    expect(service.getSessionActivitySnapshot(meta.sessionId)).toMatchObject({ phase: 'error', currentTurnActive: false });
+    expect(service.getTaskOverview()).toEqual([]);
+  });
+
+  it('hides an existing entry when marked as a Worker without discarding its activity', async () => {
+    const { AgentIslandService } = await import('../service.js');
+    const service = new AgentIslandService({
+      getMainWindow: () => null,
+      nativeHost: { failed: false, headless: true, publish: () => true, suspend: () => undefined },
+    });
+    service.setEnabled(false);
+    service.handleAgentEvent({ sessionId: 'worker' }, { type: 'status', data: { isRunning: true, status: 'Running' } });
+    expect(service.getTaskOverview()).toHaveLength(1);
+    expect(service.getForegroundTaskActivity()).toMatchObject({ runningCount: 1 });
+    markKnownOrcaWorkerSession('worker');
+    service.handleNotificationMuteChanged();
+    expect(service.getTaskOverview()).toEqual([]);
+    // The phone island adds each computer's report; a Worker the desktop island hides must not count there.
+    expect(service.getForegroundTaskActivity()).toMatchObject({ runningCount: 0, selected: null });
+    expect(service.getSessionActivitySnapshot('worker')?.phase).toBe('running');
+    service.handleSessionStopped('worker');
+    service.handleAgentEvent({ sessionId: 'worker' }, doneEvent());
+    expect(service.getSessionActivitySnapshot('worker')?.phase).not.toBe('completed');
+    service.resetRuntimeState();
+    expect(service.getSessionActivitySnapshots()).toEqual([]);
+  });
+
+  // #12570 review, unit: archive/end-team discard -> identity removal -> late
+  // process-close must not reintroduce a terminal Worker as an ordinary unread
+  // task, sound or public relay row. Existing tests stopped at known-Worker done.
+  it.each(['completed', 'error'] as const)('keeps a forgotten %s Worker out of notifications after a late close', async phase => {
+    const { AgentIslandService } = await import('../service.js');
+    const publish = vi.fn<(state: AgentIslandDisplayState) => boolean>(() => true);
+    const playSound = vi.fn();
+    const service = new AgentIslandService({
+      getMainWindow: () => null,
+      nativeHost: { failed: false, publish, playSound },
+    });
+    syncEnabledForTest(service, publish);
+    const meta = { sessionId: 'archived-worker', agentKind: 'codex' };
+    markKnownOrcaWorkerSession(meta.sessionId);
+    service.handleAgentEvent(meta, { type: 'status', data: { isRunning: true, status: 'Running' } });
+    service.handleAgentEvent(meta, phase === 'error' ? terminalErrorEvent('interrupted') : doneEvent());
+    expect(service.getSessionActivitySnapshot(meta.sessionId)?.phase).toBe(phase);
+    // A process closed by end-team first still retains unread evidence quietly.
+    service.handleSessionClosed(meta.sessionId, { reason: 'process-closed' });
+    expect(service.getSessionActivitySnapshot(meta.sessionId)?.phase).toBe(phase);
+    expect(service.getTaskOverview()).toEqual([]);
+
+    // register's production forget boundary is exercised in makerOrcaRoleMarking.
+    service.handleSessionClosed(meta.sessionId, { reason: 'discarded' });
+    forgetKnownOrcaWorkerSession(meta.sessionId);
+    service.handleSessionClosed(meta.sessionId, { reason: 'process-closed' });
+    service.handleNotificationMuteChanged();
+    expect(service.getSessionActivitySnapshot(meta.sessionId)).toBeNull();
+    expect(service.getTaskOverview()).toEqual([]);
+    expect(playSound).not.toHaveBeenCalled();
+    expect(mocks.tapWindowBroadcast).not.toHaveBeenCalledWith(SESSION_ACTIVITY_CHANNEL,
+      expect.objectContaining({ sessionId: meta.sessionId }));
+    const replay = vi.fn();
+    service.replaySessionActivity(replay);
+    expect(replay).not.toHaveBeenCalled();
+    service.resetRuntimeState();
+  });
   beforeEach(async () => {
     // Load after the outer mock setup, outside the first behavior test's budget.
     // Cold Vite transforms can otherwise consume its entire 5-second timeout.
@@ -1541,11 +1668,14 @@ describe('AgentIslandService native publishing', () => {
         service as unknown as { state: { sessions: Map<string, unknown>; remoteUnreadTerminals: Map<string, unknown> } }
       ).state;
       expect(sessions.sessions.has('s1')).toBe(true);
+      expect(service.getForegroundTaskActivity()).toMatchObject({ unreadCount: 1 });
       mocks.tapWindowBroadcast.mockClear();
 
       await vi.advanceTimersByTimeAsync(AGENT_ISLAND_COMPLETED_RETENTION_MS + 50);
       expect(sessions.sessions.has('s1')).toBe(false);
       expect(sessions.remoteUnreadTerminals.has('s1')).toBe(true);
+      // The sidebar dot stays until read, but the phone island drops it with the desktop island.
+      expect(service.getForegroundTaskActivity()).toMatchObject({ unreadCount: 0, selected: null });
       expect(mocks.tapWindowBroadcast).toHaveBeenCalledWith(
         SESSION_ACTIVITY_CHANNEL,
         expect.objectContaining({ sessionId: 's1', phase: 'completed', attention: true }),

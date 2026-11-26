@@ -201,7 +201,7 @@ function PrChip({
   const [settingsOpen, setSettingsOpen] = useState(false);
   // A remote task's card is read from its computer by the task page; shared-task guests have none.
   const prCard = useSessionPrCard(session.id, prStatusKey(prRef),
-    (summaryOpen || settingsOpen) && canManage && !readOnly && prRef.provider !== 'gitlab');
+    (summaryOpen || settingsOpen) && canManage && !readOnly);
   useEffect(() => {
     if (!prCard || (status?.ok && (status.status === 'merged' || status.status === 'closed'))) setSettingsOpen(false);
   }, [prCard, status]);
@@ -410,7 +410,7 @@ function PrChip({
           >
             <span
               className={cn(
-                'inline-flex min-h-5 items-center justify-center gap-1 rounded-md px-1.5 py-0.5 transition-colors group-hover/pr-action:bg-titlebar-button-hover group-focus-visible/pr-action:ring-2 group-focus-visible/pr-action:ring-[var(--focus-ring)]',
+                'inline-flex min-h-5 items-center justify-center gap-1 rounded-full px-1.5 py-0.5 transition-colors group-hover/pr-action:bg-titlebar-button-hover group-focus-visible/pr-action:ring-2 group-focus-visible/pr-action:ring-[var(--focus-ring)]',
                 summaryOpen && 'bg-titlebar-button-hover',
               )}
             >
@@ -506,6 +506,7 @@ function PrChip({
                   event.preventDefault();
                   void window.electronAPI.openExternal(sessionPrUrl(prRef));
                 }}
+                // 无框文字按钮：圆角只塑形键盘焦点环（DESIGN.md §5 登记）
                 className="group block min-w-0 flex-1 rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
               >
                 <span className="flex items-center gap-1 text-12 text-[var(--text-secondary)]">

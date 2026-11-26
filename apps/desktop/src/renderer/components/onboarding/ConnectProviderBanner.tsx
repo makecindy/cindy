@@ -37,7 +37,7 @@ export function ConnectProviderBanner({
     <div
       data-testid="connect-provider-banner"
       className={cn(
-        'mx-auto flex select-none items-center gap-2 rounded-md px-3 py-2',
+        'mx-auto flex select-none items-center gap-2 rounded-xl px-3 py-2',
         'border border-[var(--border-default)] bg-[var(--surface-elevated)]',
         className,
       )}

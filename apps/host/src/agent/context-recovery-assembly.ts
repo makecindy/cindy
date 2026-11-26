@@ -140,6 +140,9 @@ export function createHostContextRecoveryRollover(host: HostRecoveryPorts, runti
     // - a subscription account change that needs a native session handoff: the Host has no
     //   subscription account handoff before a send yet (release table, row 30), so none is reported.
     needsNativeSessionHandoff: undefined,
+    // - the any-engine runtime lookup for an account handoff: getLiveSession below already returns
+    //   every engine's runtime here, and the Host runs no plugin engine accounts.
+    getRuntimeSession: undefined,
     // A cold Pi runtime resumed only to read its context for a smaller window: the same binding the
     // model change uses (register.ts binds one function into both, as here).
     rehydrateColdPiRuntimeForWindowVerification: host.rehydrateColdPiRuntimeForWindowVerification,
