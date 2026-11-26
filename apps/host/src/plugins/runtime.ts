@@ -538,6 +538,13 @@ export async function createHostPluginRuntime(options: PluginRuntimeOptions) {
     log,
   });
   function startResident(ghost: InstalledGhost) {
+    // Mirror Desktop's spawnIfResident (cindy-brain/index.ts): lift the harness spawn gate
+    // set by node.stopAndWait() whenever an enabled, available plugin (resident or on-demand)
+    // is safely back in place after re-enable, update, or desktop-hold recovery.
+    const storagePart = installedGhostStoragePart(ghost);
+    if (!pausedReason() && isCurrent(ghost) && identityLookup.isGhostAvailableForActiveSession(storagePart)) {
+      node.resumeHarnesses(storagePart);
+    }
     spawnResidentGhost(ghost, {
       isAvailable: () => !pausedReason() && isCurrent(ghost),
       startNode: item => track(node.startResident(item)),

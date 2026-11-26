@@ -5562,7 +5562,7 @@ test('idle release: watchers scan once started and stop when the owner runtime i
   h.queue.startIdleRelease();
   t.mock.timers.tick(60_000);
   await new Promise(resolve => setImmediate(resolve));
-  assert.equal(scans, 2, 'the Claude and Codex watchers scan each minute');
+  assert.equal(scans, 3, 'the Claude, Codex and ACP watchers scan each minute');
   await h.queue.dispose();
   scans = 0;
   t.mock.timers.tick(120_000);

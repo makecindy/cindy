@@ -30,6 +30,7 @@ import { createHostDeviceLink } from '../device-link.ts';
 import { createHostService } from '../service.mjs';
 import { createHostNodeRuntimeBroker } from './node-process.ts';
 import { createHostPluginEngines } from './plugin-engines.ts';
+import { createHostPluginRuntime } from './runtime.ts';
 import { lifoCleanup } from '../test-support/cleanup.mjs';
 
 import { commitVolatileAppSession } from '../../../desktop/src/main/appSessionState.ts';
@@ -633,4 +634,117 @@ test('Host PLUGIN_ENGINES_INVOKE, admission, Device Link projection, and remote-
     channel: REMOTE_AGENT_CHANNEL,
     args: [{ op: 'close', runId: '00000000-0000-4000-8000-000000000012', mode: 'close', reason: 'controller-closed' }],
   });
+});
+
+// Review (#13296, Greptile P1): an on-demand plugin that provides an ACP harness does not run a
+// resident node worker, so node.stopAndWait() during disable or desktop hold would leave
+// harnessSpawnBlocked set forever unless startResident() calls node.resumeHarnesses() on recovery.
+test('on-demand ACP plugin harnesses can spawn again after disable/re-enable and desktop pause/resume', { timeout: TEST_TIMEOUT_MS }, async (t) => {
+  t = lifoCleanup(t);
+  const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-host-ondemand-acp-'));
+  t.after(() => fs.rmSync(profile, { recursive: true, force: true }));
+  const ownerId = 'owner-ondemand-acp';
+  configureHostOwner({ userDataDir: profile, ownerId });
+  configureAppDataDir(path.join(profile, 'app-data'));
+
+  const pluginDir = path.join(profile, 'plugin-ondemand-acp');
+  fs.mkdirSync(pluginDir, { recursive: true });
+  fs.writeFileSync(path.join(pluginDir, 'main.js'), '// on-demand logic');
+  fs.writeFileSync(path.join(pluginDir, 'worker.js'), '// unused worker');
+  fs.writeFileSync(path.join(pluginDir, 'acp.js'), `
+    let buf = '';
+    process.stdin.setEncoding('utf8');
+    process.stdin.on('data', (chunk) => {
+      buf += chunk;
+      let idx;
+      while ((idx = buf.indexOf('\\n')) >= 0) {
+        const line = buf.slice(0, idx);
+        buf = buf.slice(idx + 1);
+        if (!line.trim()) continue;
+        const msg = JSON.parse(line);
+        process.stdout.write(JSON.stringify({ id: msg.id, ok: true }) + '\\n');
+      }
+    });
+  `);
+
+  let ghost = makeHarnessGhost(pluginDir);
+  const ghostKey = installedGhostStoragePart(ghost);
+  const harnessKey = `${ghostKey}:engine`;
+  let desktopHeld = false;
+  const manager = {
+    list: () => [ghost],
+    listAsync: async () => [ghost],
+    listNotificationCandidatesAsync: async () => [],
+    findInstalledInstance: (id) => (id === ghostKey ? ghost : null),
+    hasPendingMutationRecovery: () => false,
+    setEnabled: async (_relId, next, _token, check) => {
+      check?.();
+      ghost = { ...ghost, enabled: next };
+      return { ghost };
+    },
+  };
+
+  const secrets = new Map();
+  const pluginRuntime = await createHostPluginRuntime({
+    profileDir: profile,
+    ownerId,
+    manager,
+    isProfileHeld: () => desktopHeld,
+    credentials: {
+      read: (key) => secrets.get(key) ?? null,
+      write: (key, value) => { secrets.set(key, value); },
+      remove: (key) => { secrets.delete(key); },
+    },
+    getLoginEmail: () => null,
+    modelRouteSources: () => ({ localViews: async () => [], localAgents: () => [] }),
+    appContext: () => ({ ok: true, context: { uiLocale: 'en' } }),
+    getSession: () => undefined,
+    requestFileConfirmation: async () => false,
+    publish() {},
+    assets: {
+      nodeWorker: path.join(profile, 'unused-node-worker.cjs'),
+      libraryWorker: path.join(profile, 'unused-library-worker.mjs'),
+      bridgeSource: '',
+      executablePath: null,
+      close: async () => {},
+    },
+  });
+  t.after(() => pluginRuntime.close());
+  await pluginRuntime.reconcile();
+
+  const pingHarness = async () => {
+    const proc = await getPluginHarnessRegistry().spawn(harnessKey);
+    const transport = createAcpProcessTransport(proc, { debug() {}, info() {}, warn() {}, error() {}, child() { return this; } });
+    try {
+      const reply = new Promise((resolve) => {
+        transport.onLine((line) => resolve(JSON.parse(line)));
+      });
+      transport.write(JSON.stringify({ id: 1, method: 'ping' }));
+      return await reply;
+    } finally {
+      await transport.close();
+    }
+  };
+
+  // Baseline spawn works.
+  assert.deepEqual(await pingHarness(), { id: 1, ok: true });
+
+  // 1. Disable -> blocked; re-enable -> harnessSpawnBlocked lifted and spawn succeeds again.
+  await pluginRuntime.setEnabled(ghostKey, false);
+  assert.equal(getPluginHarnessRegistry().list().length, 0);
+  await assert.rejects(getPluginHarnessRegistry().spawn(harnessKey), /not available|stopping/i);
+
+  await pluginRuntime.setEnabled(ghostKey, true);
+  assert.equal(getPluginHarnessRegistry().list().length, 1);
+  assert.deepEqual(await pingHarness(), { id: 1, ok: true });
+
+  // 2. Desktop pause -> blocked; desktop resume -> harnessSpawnBlocked lifted and spawn succeeds again.
+  desktopHeld = true;
+  pluginRuntime.pauseForDesktop('Desktop is using the profile');
+  await assert.rejects(getPluginHarnessRegistry().spawn(harnessKey), /Desktop is using the profile|stopping/i);
+
+  desktopHeld = false;
+  assert.equal(await pluginRuntime.resumeAfterDesktop(), true);
+  assert.equal(getPluginHarnessRegistry().list().length, 1);
+  assert.deepEqual(await pingHarness(), { id: 1, ok: true });
 });
