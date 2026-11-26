@@ -81,7 +81,8 @@ export default {
       if (item.kind === 'wizard') await row.click();
     } else await page.getByText('UI catalog probe', { exact: true }).click();
     if (preset.id === 'command-code') {
-      await page.getByRole('button', { name: await ui.t('settings.providers.custom.test.button'), exact: true }).click();
+      const test = page.getByRole('button', { name: await ui.t('settings.providers.custom.test.button'), exact: true });
+      await test.click();
       await page.waitForFunction(() => window.templateEvidence.tested);
       const probe = await page.evaluate(() => window.templateEvidence.tested);
       assert.equal(probe.kind, 'adhoc');
@@ -89,6 +90,17 @@ export default {
       assert.equal(probe.spec.apiKey, 'fake-ui-key');
       assert.equal(probe.spec.wireProtocol, preset.runtimes[probe.spec.agent].wireProtocol);
       assert.equal(await page.evaluate(() => window.templateEvidence.saved), undefined);
+      assert.equal(await test.getAttribute('aria-busy'), 'true');
+      assert.equal(await finish.getAttribute('aria-busy'), null);
+      const cancel = page.getByRole('button', { name: await ui.t('settings.providers.wizard.cancel'), exact: true });
+      assert.equal(await cancel.isEnabled(), true);
+      const initialCount = await page.evaluate(() => window.templateToasts().length);
+      const model = page.getByText('UI catalog probe', { exact: true });
+      await model.click();
+      await page.evaluate(() => window.templateEvidence.resolveProbe());
+      await page.waitForFunction(() => !document.querySelector('button[aria-busy="true"]'));
+      assert.equal(await page.evaluate(() => window.templateToasts().length), initialCount);
+      await model.click();
     }
     await ui.capture('models');
     await finish.click();
