@@ -193,7 +193,7 @@ A 不直接读取目标安装目录。原目录选择请求通过 Main 的固定
     此字段的记录，结果是缺省；旧版本的卸载标记、摘要补写保留字段，但不改来源与包摘要，绑定仍然成立。
 - **操作级安装证据 `installedOperationId`**（市场条目可选字段，服务端与自定义市场都给）：
   - 远程 `management:begin` 且 `kind === 'install'`（首装与更新；控制端从已装详情发起的更新也走这个 kind）提交
-    成功时，Host 在安装记录里写可选字段 `remoteOperationBinding: {operationId, controller, keyId, rawManifestSha256}`。
+    成功时，Host 在安装记录里写可选字段 `remoteOperationBinding: {operationId, controller, keyId, rawManifestSha256, approval}`。
     `controller` 是发起方设备身份（device-link 的 controllerDeviceId）用本机来源标识密钥、独立域名 HMAC 得到的不可逆
     标识，不存原始设备号；`keyId` 同来源标识。其它路径（电脑本机、后台自动更新、Agent、`install-file`、
     `install-share`）不写，并且会整条重写记录，旧证据不残留。
@@ -226,6 +226,15 @@ A 不直接读取目标安装目录。原目录选择请求通过 Main 的固定
     - 换装失败时原样恢复整条旧记录会保留，因为包也回到了那一份。
     - 其余新绑定随整条新记录写入。`sourceIdBinding` 在这些路径上保留：它绑定来源指纹与 raw manifest 摘要，换包或换来源后自然失效；
     恢复与迁移两条只对从不带它的服务端记录生效。
+  - **同一响应里，带 `'self'` 的条目与 `ghosts[]` 中对应实例出自同一次安装；做不到时降为 `'unattributed'`。**
+    - 绑定里的 `approval` 是那次落位后实例的批准令牌（每次落位新铸）。没有它的绑定不投影。
+    - 归属在最后一个 await 之后同步复核，三项都对上才给 `'self'`：
+      1. 账本记录仍是核实时那一份（任何安装、更新、重装、卸载、换源都会重写记录）。
+      2. 快照里的实例仍是那次安装。
+      3. 同一时刻读出、随后原样放进响应的 `ghosts` 里，该实例仍是那次安装（批准令牌与版本相同）。
+    - 复核发现换装时整次重读一次，仍换装则降级；重读最多一次。
+    - catalog、recommendations、market-detail 不含实例，同样复核，保证 `'self'` 指读取那一刻的当前安装。
+    - 跨请求拼用（甲响应的归属配乙响应的实例）Host 无法单方面保证：条目上没有安装代次可供关联。
   - 条目上的 `releaseId`／`version` 永远是**目录当前发行**。已装版本在 snapshot 的 `ghosts[]`
     （`manifest.version`）里，条目上没有「已装发行」字段。核实不比较版本，操作绑定已钉住已装包。
 - **白名单与缺省**：
@@ -252,6 +261,8 @@ A 不直接读取目标安装目录。原目录选择请求通过 Main 的固定
     记录里不提供「打开」。
   - 回执过期（`management:operation` 返回 NOT_FOUND）后读 `management:market-detail`：只有 1 算「已成功且当前实例
     就是它装的」；其余按未确认收口，不判成功也不判失败、不打开实例，也不重发安装或批准。
+  - Host 只保证同一响应内归属与实例一致（`management:snapshot` 同时带 `market.items` 与 `ghosts`）。把 market-detail
+    的归属与先前快照里的实例拼用，Host 无法保证（见上文「当前安装的归属」）。
   - **不得**拿条目的 `releaseId`／`version` 与本次尝试比较：目录只推进版本时原安装仍在，比较会误判。
     `installedSourceId` 与 `originSource.sourceId` 一致只说明「来自哪里」，同样不能代替这一判定；它仍用于确认前的
     来源比对与换源判断。

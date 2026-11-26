@@ -129,7 +129,11 @@ vi.mock('../../cindy-brain/index.js', () => ({
       );
       if (runtimeGhost) runtimeGhost.dir = dir;
     }
-    await options.afterCommitInLock?.(installed, {
+    // Production hands over the placed instance with its (freshly minted) approval; the list default stands in for it.
+    await options.afterCommitInLock?.({
+      ...installed,
+      approval: (installed as { approval?: unknown }).approval ?? { state: 'approved', revision: '00000000-0000-4000-8000-000000000001' },
+    } as typeof installed, {
       rawManifestSha256: crypto.createHash('sha256').update(bytes).digest('hex'),
       legacyManifestDigest: ghostManifestDigest(
         ghostManifestToLegacyV2DigestFormat(
@@ -3121,8 +3125,19 @@ describe('installed operation attribution through remote management (V2.10)', ()
   const pick = (value: Wire, keys: readonly string[]) =>
     Object.fromEntries(keys.filter((key) => key in value).map((key) => [key, value[key]]));
 
-  /** 远程管理的真实入口，市场读写的装配与 bootstrap-electron 相同。 */
-  function remoteManagement(service: PluginMarketService) {
+  /**
+   * 远程管理的真实入口，市场读写的装配与 bootstrap-electron 的装配相同。`gate` 只用于交错用例：市场读完后、
+   * 交回出口前执行（模拟出口的 await 间隙里发生换装）；`projects` 模拟并行的项目读取。
+   */
+  function remoteManagement(service: PluginMarketService, options: {
+    gate?: (read: 'snapshot' | 'catalog' | 'detail') => Promise<void>;
+    projects?: () => Promise<never[]>;
+  } = {}) {
+    const gated = async <V>(read: 'snapshot' | 'catalog' | 'detail', value: Promise<V>): Promise<V> => {
+      const result = await value;
+      await options.gate?.(read);
+      return result;
+    };
     const management = new RemotePluginManagement({
       list: () => runtime.ghosts.map((ghost) => ({
         ...ghost,
@@ -3130,18 +3145,19 @@ describe('installed operation attribution through remote management (V2.10)', ()
       })) as unknown as InstalledGhost[],
       capture: () => () => true,
       captureReceipt: () => () => true,
+      ...(options.projects ? { projects: { list: options.projects, disabled: () => [], setDisabled: () => {} } } : {}),
       market: {
-        snapshot: (legacyCatalog) => service.snapshot({ discoveryOnly: true, legacyCatalog }),
-        query: (input) => service.query(input),
+        snapshot: (legacyCatalog) => gated('snapshot', service.snapshot({ discoveryOnly: true, legacyCatalog })),
+        query: (input) => gated('catalog', service.query(input)),
         recommendations: () => service.recommendations(),
-        detail: (id) => service.detail(id),
-        install: async (id, options, prompt, assertCurrent, assertScope, remoteOperation) => {
-          await service.install(id, options, {
+        detail: (id) => gated('detail', service.detail(id)),
+        install: async (id, installOptions, prompt, assertCurrent, assertScope, remoteOperation) => {
+          await service.install(id, installOptions, {
             consent: { prompt, initiator: 'user' }, assertCurrent, assertScope,
             ...(remoteOperation ? { remoteOperation } : {}),
           });
         },
-        installedOperations: (items, controller) => service.withInstalledOperationIds(items, controller),
+        installedOperations: (items, controller, live) => service.withInstalledOperationIds(items, controller, live),
       },
       setEnabled: async () => {},
       uninstall: async () => {},
@@ -3341,19 +3357,118 @@ describe('installed operation attribution through remote management (V2.10)', ()
     expect(Object.keys(conflict)).not.toContain('installedOperationAttribution');
   });
 
-  // 成对一致（改前失败：V2.9 另读一次账本，投影前已被本机更新的条目拿不到它自己那次的操作号）。
-  it('takes the attribution from the same installation snapshot as the item it annotates', async () => {
+  // 成对一致（改前失败：V2.9 另读一次账本，条目的 installState 与操作号可能来自两次读取）。
+  // 2026-11-26 #12684 复审 c6efda5691：投影前已被换装的条目不再给出它那次的操作号，而是降为未证实并报告换装。
+  it('never attributes an item to an installation that was replaced before it was projected', async () => {
     const m = customMarket();
     await m.remote.installRemotely('phone-a', 'op-0000000000000001', m.pluginId);
     const before = await m.h.service.detail(m.pluginId);
     m.publish('2.0.0');
     await m.installLocally();
-    // The item was projected before the local update: its state and its attribution both describe that installation.
-    expect(pick((await m.h.service.withInstalledOperationIds([before], 'phone-a'))[0] as unknown as Wire, EXIT_KEYS))
-      .toEqual(SELF('op-0000000000000001'));
+    // The item was projected before the local update; its installation is no longer the current one.
+    const onChanged = vi.fn();
+    expect(pick((await m.h.service.withInstalledOperationIds([before], 'phone-a',
+      { ghosts: () => runtime.ghosts as unknown as InstalledGhost[], onChanged }))[0] as unknown as Wire, EXIT_KEYS))
+      .toEqual(UNATTRIBUTED());
+    expect(onChanged).toHaveBeenCalled();
     // An item projected now describes the current installation on both counts.
     expect(pick((await m.h.service.withInstalledOperationIds([await m.h.service.detail(m.pluginId)], 'phone-a'))[0] as
       unknown as Wire, EXIT_KEYS)).toEqual(UNATTRIBUTED());
+  });
+
+  /* 测试价值（#12684 维护者复审 c6efda5691 的 Host 问题，PR #12731）
+   * - 生产入口与可观察结果：RemotePluginManagement.invoke 的 snapshot（read:'installed'）、read:'catalog'、
+   *   market-detail 响应里，带 'self' 的市场条目与同一响应 ghosts[] 中对应实例的配对。
+   * - 缺口：市场先读到安装 A，并行的项目读取或投影前的 await 间隙里同一实例被换装成 B，响应仍给 self + A，
+   *   ghosts 已是 B，手机据此会为 B 打开 A 的凭据。
+   * - 最小失败输入：A 由 phone-a 远程装入；市场读完后暂缓，期间本机换装（新版本，或同版本、同批准修订）；放行。
+   * - 改前失败：在 0b93a48c25 上，四条交错用例都返回 self + A；有界重读一条改前只读一次。
+   * - tier：unit（临时目录，本地来源，运行时替身；交错由出口依赖的暂缓点控制）。
+   */
+  describe('the Host exit never pairs one installation\'s evidence with another installation', () => {
+    const deferred = () => {
+      let resolve!: () => void;
+      const promise = new Promise<void>((done) => { resolve = done; });
+      return { promise, resolve };
+    };
+    const itemOf = (items: Wire[], pluginId: string) => items.find((item) => item.pluginId === pluginId)!;
+    const ghostOf = (response: Wire, ghostId: string) =>
+      (response.ghosts as Array<{ manifest: { id: string; version: string } }>).find((ghost) => ghost.manifest.id === ghostId)!;
+
+    it.each([
+      ['a newer version', '2.0.0'],
+      ['the same version with the same approval revision', '1.0.0'],
+    ])('re-reads the snapshot when the instance is replaced by %s while projects are read', async (_label, swapTo) => {
+      const m = customMarket();
+      await m.remote.installRemotely('phone-a', 'op-0000000000000001', m.pluginId);
+      const marketRead = deferred();
+      const projectsHeld = deferred();
+      let projectReads = 0;
+      const remote = remoteManagement(m.h.service, {
+        gate: async (read) => { if (read === 'snapshot') marketRead.resolve(); },
+        projects: async () => { projectReads++; if (projectReads === 1) await projectsHeld.promise; return []; },
+      });
+      const pending = remote.invoke('phone-a', 'snapshot', { read: 'installed' });
+      await marketRead.promise;
+      // The market has read installation A; the parallel project read is still pending. Replace the instance now.
+      m.publish(swapTo);
+      await m.installLocally();
+      projectsHeld.resolve();
+      const response = await pending;
+      const item = itemOf((response.market as { items: Wire[] }).items, m.pluginId);
+      expect(ghostOf(response, 'alpha').manifest.version).toBe(swapTo);
+      // B was installed locally: the evidence of A must not be handed out with B's instance.
+      expect(pick(item, EXIT_KEYS)).toEqual(UNATTRIBUTED());
+      expect(projectReads).toBe(2);
+    });
+
+    it.each(['detail', 'catalog'] as const)('re-reads %s when the instance is replaced before attribution', async (exit) => {
+      const m = customMarket();
+      await m.remote.installRemotely('phone-a', 'op-0000000000000001', m.pluginId);
+      let swapped = false;
+      const remote = remoteManagement(m.h.service, {
+        gate: async (read) => {
+          if (read !== exit || swapped) return;
+          swapped = true;
+          await m.installLocally(); // same version, same approval revision: only the installation record differs
+        },
+      });
+      const item = exit === 'detail'
+        ? await remote.detail('phone-a', m.pluginId)
+        : itemOf((await remote.invoke('phone-a', 'snapshot', { read: 'catalog' })).items as Wire[], m.pluginId);
+      expect(pick(item, EXIT_KEYS)).toEqual(UNATTRIBUTED());
+    });
+
+    it('does not attribute when the instance in the response was replaced before the ledger was written', async () => {
+      const m = customMarket();
+      await m.remote.installRemotely('phone-a', 'op-0000000000000001', m.pluginId);
+      // The package landed with a new approval revision; the ledger write of that commit has not happened yet.
+      const remote = remoteManagement(m.h.service, {
+        gate: async (read) => {
+          if (read !== 'detail') return;
+          runtime.ghosts = runtime.ghosts.map((ghost) => ({
+            ...ghost, approval: { state: 'approved', revision: '00000000-0000-4000-8000-0000000000b2' } }));
+        },
+      });
+      expect(pick(await remote.detail('phone-a', m.pluginId), EXIT_KEYS)).toEqual(UNATTRIBUTED());
+    });
+
+    it('keeps the evidence when nothing changed in between, and re-reads at most once while it keeps changing', async () => {
+      const m = customMarket();
+      await m.remote.installRemotely('phone-a', 'op-0000000000000001', m.pluginId);
+      expect(pick(await m.remote.detail('phone-a', m.pluginId), EXIT_KEYS)).toEqual(SELF('op-0000000000000001'));
+      // Another controller reinstalls on every read: bounded, and the answer is never A's evidence.
+      let reads = 0;
+      const remote = remoteManagement(m.h.service, {
+        gate: async (read) => {
+          if (read !== 'detail') return;
+          reads++;
+          await m.remote.installRemotely('phone-b', `op-000000000000010${reads}`, m.pluginId);
+        },
+      });
+      expect(pick(await remote.detail('phone-a', m.pluginId), EXIT_KEYS)).toEqual(UNATTRIBUTED());
+      expect(reads).toBe(2);
+    });
   });
 
   // 各处一致（改前失败：V2.10 之前没有这个字段）。

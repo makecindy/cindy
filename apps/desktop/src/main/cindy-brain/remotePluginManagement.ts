@@ -104,7 +104,12 @@ export interface RemotePluginManagementDeps {
      * 契约 V2.9／V2.10：按 `controller` 给已装条目定归属：它自己那次操作装的给 `'self'` + `installedOperationId`，
      * 其余 `'unattributed'`。缺省时远程响应里的已装条目一律 `'unattributed'`。
      */
-    installedOperations?<T extends PluginMarketItem>(items: readonly T[], controller: string): Promise<T[]>;
+    installedOperations?<T extends PluginMarketItem>(
+      items: readonly T[],
+      controller: string,
+      /** 契约 V2.10：复核用的实例列表（最后一个 await 之后同步读取，出口原样放进同一响应）与换装回调。 */
+      live?: { ghosts(): readonly InstalledGhost[]; onChanged?(): void },
+    ): Promise<T[]>;
   };
   setEnabled(
     id: string,
@@ -306,18 +311,52 @@ export class RemotePluginManagement {
     this.prune();
   }
   /**
-   * 契约 V2.9／V2.10：远程响应里「当前安装归属」的出口。服务层按请求方给出结论；这里再经同一个
-   * projectInstalledOperationAttribution 收口，只有 `'self'` 且带合法操作号的才保留，已装条目其余一律
-   * `'unattributed'`。服务层不支持归属时同样得到 `'unattributed'`，不会把别人的结论或缺省漏出去。
+   * 契约 V2.9／V2.10：远程响应里「当前安装归属」的出口。
+   * - 服务层按请求方给出结论，并在最后一个 await 之后同步复核：`'self'` 只给仍是当前安装、且就是这里返回的
+   *   `ghosts` 里那个实例的那次安装。`ghosts` 在复核那一刻读取，出口随后原样放进同一响应，中间没有 await。
+   * - 这里再经同一个 projectInstalledOperationAttribution 收口：只有 `'self'` 且带合法操作号的才保留，已装条目
+   *   其余一律 `'unattributed'`。服务层不支持归属时同样得到 `'unattributed'`。
+   * - `changed` 表示复核时发现换装、已降级，由调用方决定是否整次重读一次。
    */
-  private async withOperations<T extends PluginMarketItem>(peer: string, items: readonly T[]): Promise<T[]> {
+  private async withOperations<T extends PluginMarketItem>(
+    peer: string,
+    items: readonly T[],
+  ): Promise<{ items: T[]; ghosts: InstalledGhost[]; changed: boolean }> {
+    let ghosts: InstalledGhost[] | undefined;
+    let changed = false;
     const projected = this.deps.market.installedOperations
-      ? await this.deps.market.installedOperations(items, peer)
+      ? await this.deps.market.installedOperations(items, peer, {
+        ghosts: () => (ghosts = this.deps.list()),
+        onChanged: () => { changed = true; },
+      })
       : items.map((item) => projectInstalledOperationAttribution(item, null));
-    return projected.map((item) => projectInstalledOperationAttribution(
-      item,
-      item.installedOperationAttribution === 'self' ? item.installedOperationId : null,
-    ));
+    return {
+      items: projected.map((item) => projectInstalledOperationAttribution(
+        item,
+        item.installedOperationAttribution === 'self' ? item.installedOperationId : null,
+      )),
+      ghosts: ghosts ?? this.deps.list(),
+      changed,
+    };
+  }
+
+  /**
+   * 读市场数据并投影归属。复核发现换装时整次重读一次；第二次仍发现换装就用已降级的结果（宁可不给「打开」）。
+   * 重读最多一次，频繁换装时也不会循环。`current()` 失效返回 null。
+   */
+  private async readAttributed<V>(
+    peer: string,
+    current: () => boolean,
+    read: () => Promise<V>,
+    itemsOf: (value: V) => readonly PluginMarketItem[],
+  ): Promise<{ value: V; items: PluginMarketItem[]; ghosts: InstalledGhost[] } | null> {
+    for (let attempt = 0; ; attempt++) {
+      const value = await read();
+      if (!current()) return null;
+      const projected = await this.withOperations(peer, itemsOf(value));
+      if (!current()) return null;
+      if (!projected.changed || attempt >= 1) return { value, items: projected.items, ghosts: projected.ghosts };
+    }
   }
   async invoke(
     peer: string,
@@ -345,31 +384,31 @@ export class RemotePluginManagement {
       if (!current()) return unavailable();
       if (read === 'capabilities') return result({ catalogPaging: !!this.deps.market.query && !!this.deps.market.recommendations });
       if (read === 'catalog' || read === 'recommendations') {
-        const value = read === 'catalog' && this.deps.market.query
-          ? await this.deps.market.query(input.query as PluginMarketQuery ?? {})
-          : read === 'recommendations' && this.deps.market.recommendations
-            ? await this.deps.market.recommendations() : null;
-        if (!current()) return unavailable();
-        const projected = !value ? value : Array.isArray(value)
-          ? await this.withOperations(peer, value)
-          : { ...value, items: await this.withOperations(peer, value.items) };
-        if (!current()) return unavailable();
-        return result(projected);
+        const read$ = async (): Promise<PluginMarketPage | PluginMarketItem[] | null> =>
+          read === 'catalog' && this.deps.market.query
+            ? await this.deps.market.query(input.query as PluginMarketQuery ?? {})
+            : read === 'recommendations' && this.deps.market.recommendations
+              ? await this.deps.market.recommendations() : null;
+        const attributed = await this.readAttributed(peer, current, read$,
+          (value) => !value ? [] : Array.isArray(value) ? value : value.items);
+        if (!attributed) return unavailable();
+        const { value, items } = attributed;
+        return result(!value ? value : Array.isArray(value) ? items : { ...value, items });
       }
-      const [snapshot, projects] = await Promise.all([
-        this.deps.market.snapshot(read === undefined),
-        this.deps.projects?.list(),
-      ]);
-      if (!current()) return unavailable();
-      const market = { ...snapshot, items: await this.withOperations(peer, snapshot.items) };
-      if (!current()) return unavailable();
+      const attributed = await this.readAttributed(peer, current,
+        () => Promise.all([this.deps.market.snapshot(read === undefined), this.deps.projects?.list()]),
+        ([snapshot]) => snapshot.items);
+      if (!attributed) return unavailable();
+      const { value: [snapshot, projects], ghosts } = attributed;
+      const market = { ...snapshot, items: attributed.items };
       const browsed = this.browsedProjects.get(peer)?.project;
       const scopeProjects = browsed && projects
         ? [browsed, ...projects.filter((project) => project.id !== browsed.id)]
         : projects;
       return result({
         version: 1,
-        ghosts: this.deps.list().map(ghost => ({ ...projectManagedGhost(ghost),
+        // 与上面归属复核时是同一份实例列表（契约 V2.10：带 'self' 的条目与这里的对应实例出自同一次安装）。
+        ghosts: ghosts.map(ghost => ({ ...projectManagedGhost(ghost),
           ...(this.deps.publication && ghost.publishingSource?.kind === 'local' ? { publishingSource: ghost.publishingSource } : {}),
           ...(this.deps.ui?.suppressed(ghost) ? { uiPromptSuppressed: true } : {}),
         })),
@@ -442,11 +481,10 @@ export class RemotePluginManagement {
       if (Object.keys(input).some((k) => k !== 'pluginId')) return invalid();
       const current = this.deps.capture(peer);
       if (!current()) return unavailable();
-      const detail = await this.deps.market.detail(str(input.pluginId, 1024));
-      if (!current()) return unavailable();
-      const [projected] = await this.withOperations(peer, [detail]);
-      if (!current()) return unavailable();
-      return result(projected);
+      const pluginId = str(input.pluginId, 1024);
+      const attributed = await this.readAttributed(peer, current, () => this.deps.market.detail(pluginId), (detail) => [detail]);
+      if (!attributed) return unavailable();
+      return result(attributed.items[0]);
     }
     if (request.actionId === 'management:operation') {
       if (Object.keys(input).some((k) => k !== 'operationId')) return invalid();
