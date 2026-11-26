@@ -4645,6 +4645,15 @@
       "menu": {
         "disableProvider": "停此供方",
         "enableProvider": "启此供方",
+        "icon": "连接之徽",
+        "appearance": "名与徽",
+        "ownImage": "自择图",
+        "imageError": "请择 PNG、JPG 或 WebP 图，不逾 10 MB。",
+        "connectionIcon": {
+          "default": "如常",
+          "personal": "私用",
+          "work": "公用"
+        },
         "hideProvider": "隐于模型之选",
         "showProvider": "显于模型之选"
       },
@@ -7236,6 +7245,30 @@
           "disableBlocked": {
             "controller-encryption-required": "本机已选「唯用 Agent-Net」。须先于本机解此限，乃可使彼机返 Device Link。",
             "agent-net-only-relay": "此连线之网络唯通 Agent-Net，不可返 Device Link。须先改用支持 Device Link 之线路。"
+          }
+        },
+        "peerUpdate": {
+          "availableTip": "有新版 {{version}}，点之即更",
+          "downloading": "方取 {{version}}…",
+          "relaunching": "方重启以更 {{version}}…",
+          "confirm": {
+            "title": "更「{{name}}」之 Cindy 乎？",
+            "selfTitle": "更此机之 Cindy 乎？",
+            "description": "将自 {{from}} 更至 {{to}}。既成，彼机 Cindy 将重启，远连暂断。",
+            "selfDescription": "将自 {{from}} 更至 {{to}}。既成，此机 Cindy 将重启。",
+            "busyWarning": "彼机方有行役或幕后之务，重启则中辍。",
+            "selfBusyWarning": "此机方有行役或幕后之务，重启则中辍。",
+            "linuxPermissionHint": "Linux 所管之装，或须于彼机入系统密匙。",
+            "windowsPermissionHint": "若装于护目录，或须于彼机允系统之权。",
+            "action": "即刻更新"
+          },
+          "toast": {
+            "started": "已启「{{name}}」更至 {{version}}",
+            "relaunching": "「{{name}}」方重启以更 {{version}}",
+            "versionChanged": "「{{name}}」新版已易，请复启卡片核之",
+            "noUpdate": "「{{name}}」今无可装之新版",
+            "busy": "「{{name}}」方行他更，少顷再试",
+            "failed": "未能更「{{name}}」之 Cindy"
           }
         }
       }
@@ -14729,11 +14762,11 @@
         },
         "acp": {
           "ask": {
-            "label": "逐项确认",
+            "label": "预设权柄",
             "description": "Agent 求权时由君裁可；Agent 未求确认之举，Cindy 无从拦阻。"
           },
           "default": {
-            "label": "常法",
+            "label": "预设权柄",
             "description": "依 Agent 之常法行事；其请权限，由君定之。"
           },
           "acceptEdits": {
@@ -14741,15 +14774,15 @@
             "description": "Agent 径改文件；他事请权限，由君定之。"
           },
           "auto": {
-            "label": "自断",
+            "label": "自审",
             "description": "Agent 自断何事须确认；其请权限，由君定之。"
           },
           "plan": {
-            "label": "但谋划",
+            "label": "谋定模式",
             "description": "Agent 唯析事谋划，不改文件。"
           },
           "bypassPermissions": {
-            "label": "尽许",
+            "label": "完全访问",
             "description": "Agent 所求之权，一概自许。"
           }
         }
@@ -15575,6 +15608,7 @@
       "requestFormatError": "应用程序所发请求格式有谬，此答未能竟。",
       "piRetryHistoryTooLarge": "此信未发。Pi 读取旧录以重试时，一帧逾本机 16 MiB 之限。可另启任务。",
       "messageNotSent": "此信未发。",
+      "upstreamEmpty550": "模型之服返 HTTP 550，答文空",
       "replyFailed": "答未竟",
       "queuedSendRecovery": "前讯未遣。点「再试」可依原样遣发。若遣新讯，则取代前讯。",
       "retryTitle": "再遣末一讯",
@@ -15833,6 +15867,10 @@
       "diffUnchangedLines_one": "{{count}} 行未易",
       "diffUnchangedLines_other": "{{count}} 行未易",
       "diffPreviewLoading": "方备差异先览…"
+    },
+    "filePreview": {
+      "changed": "卷已易",
+      "refreshHint": "点之即重载"
     },
     "textLightbox": {
       "unreadable": "此卷不能读",
@@ -18436,6 +18474,7 @@
         "intervalChip": "毕后计时 · {{schedule}}"
       },
       "scheduleMenu": {
+        "custom": "自定 Cron",
         "intervalMinutes": "分（每 N 分）",
         "interval": "Hourly（每 N 时）",
         "daily": "Daily（每日）",
