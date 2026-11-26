@@ -7398,7 +7398,8 @@
       "localNetwork": {
         "label": "區域網路",
         "deniedHint": "沒有這個權限時，同一網路下的電腦和手機無法直接連線這台電腦，只能經中繼，速度會變慢。",
-        "settingsHint": "請在「系統設定 › 隱私權與安全性 › 區域網路」裡開啟 Cindy，回到這裡會自動生效。"
+        "promptedHint": "請在彈出的系統視窗中點擊「允許」；若沒有彈窗，可前往系統設定手動開啟。",
+        "settingsHint": "在「隱私權與安全性」裡找到「區域網路」並開啟 Cindy；若清單中沒有，點左下角「+」加入目前 App，回到這裡會自動生效。"
       }
     },
     "imBot": {
@@ -7869,6 +7870,10 @@
         "toggle-sidebar": {
           "label": "切換側邊欄",
           "description": "收起或展開左側任務列表"
+        },
+        "copy-session-link": {
+          "label": "複製任務連結",
+          "description": "複製目前開啟的任務連結"
         },
         "session-history-back": {
           "label": "上一個任務",
@@ -15620,7 +15625,6 @@
       "piRetryHistoryUnavailable": "這則訊息未送出。Pi 讀取傳送所需的歷史記錄時失敗。你可以重試，或在新任務中繼續。",
       "upstreamStatusError": "上游回傳 {{status}}，本次回覆未完成。",
       "messageNotSent": "這則訊息未送出。",
-      "upstreamEmpty550": "模型服務回傳 HTTP 550（無回應內容）",
       "replyFailed": "回覆未完成",
       "queuedSendRecovery": "上一則訊息尚未傳送。點選「重試」可原樣傳送。傳送新訊息會取代這一則。",
       "retryTitle": "重新傳送最後一則訊息",
@@ -16698,6 +16702,8 @@
       "retryIn": "{{seconds}} 秒後自動重試"
     },
     "subscriptionAccountError": {
+      "unreachable": "暫時無法連上 Codex 帳號服務。",
+      "rechecking": "暫時無法連上 Codex 帳號服務，將於 {{resetAt}} 自動重試。",
       "poolModelLimited": "目前模型的訂閱額度已達上限。可以先切換模型。",
       "poolRetryUntil": "可在 {{resetAt}} 後重試。",
       "poolOtherSignedOut": "另有訂閱帳號已登出，可在執行任務的電腦上重新登入後重試。",
@@ -22652,6 +22658,16 @@
     "refresh": "重新整理配額"
   },
   "subscriptionAccounts": {
+    "existing": {
+      "menu": "更多新增方式",
+      "connect": "連接既有登入…",
+      "found": "發現 {{count}} 個可連接的登入",
+      "title": "{{device}} 上的既有登入",
+      "note": "Cindy 將與終端機共用所選帳號的設定。",
+      "attach": "連接",
+      "choose": "選擇其他目錄…",
+      "unverified": "無法確認此目錄中的訂閱登入。"
+    },
     "pluginSignIn": {
       "method": "登入方式",
       "secretHint": "Key 只交給插件，儲存在這個帳號自己的資料夾裡；Cindy 不會保存，也不會傳到其他電腦。",
