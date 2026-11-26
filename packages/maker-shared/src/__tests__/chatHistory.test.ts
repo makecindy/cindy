@@ -308,22 +308,9 @@ describe('durable chat history', () => {
     }
     expect(shown).toEqual([...seqs].sort((a, b) => b - a).map(String));
   });
-  // Unit, second self-review: fewer copies left a short (start-of-history) page whose last row
-  // is where scrolling stops as the only proof that nothing older exists; main served it from cache.
-  it('reaches the start of a small room from cache after live messages', async () => {
-    const f = fixture(); const cache = f.open();
-    f.api.mockImplementation(async route => route.endsWith('/snapshot')
-      ? { room: { id: 'room' }, messages: [], cursor: '10' } : [f.message('10')]);
-    await cache.page('room', new URLSearchParams('limit=3'));
-    for (const [n, seq] of [20, 21, 22, 23].entries())
-      await cache.receive('room', { cursor: String(11 + n), changes: [{ type: 'message.created', data: { message: f.message(String(seq)) } }] }, '10');
-    f.api.mockClear();
-    expect((await cache.page('room', new URLSearchParams('limit=3&before=21'))).map(m => m.id)).toEqual(['20', '10']);
-    expect(f.api).not.toHaveBeenCalled();
-  });
-  // Unit, maintainer review of #13284: a cache from an older build can already hold a page saved
-  // before a late arrival. Another page of the view proves it incomplete; skip it, read the server.
-  it('does not stitch through an older page that another page proves incomplete', async () => {
+  // Unit, maintainer review of #13284: a cache from an older build can already hold an older page
+  // saved before a late arrival that another page of the view holds. Restore repairs it.
+  it('repairs an older page that another page proves incomplete when a cache is restored', async () => {
     const f = fixture();
     const state: ChatHistoryState = { generation: 'saved', snapshot: { room: { id: 'room' }, messages: [], cursor: '10' },
       cursor: '10', messages: {}, pages: {}, metadataDirty: false };
@@ -332,10 +319,42 @@ describe('durable chat history', () => {
     state.pages['limit=5&before=21'] = ['20', '18', '16', '14', '12']; // saved before 19 arrived
     state.pages['limit=5&before=23'] = ['22', '20', '19', '18', '16'];
     f.disk.set('room', state);
-    f.api.mockImplementation(async route => route.startsWith('/changes?') ? { cursor: '10', changes: [] }
-      : [20, 19, 18, 16, 14].map(seq => f.message(String(seq))));
-    expect((await f.open().page('room', new URLSearchParams('limit=5&before=22'))).map(m => m.id)).toEqual(['20', '19', '18', '16', '14']);
-    expect(f.api.mock.calls.map(([route]) => route)).toContain('/conversations/room/messages?limit=5&before=22');
+    f.api.mockImplementation(async route => route.startsWith('/changes?') ? { cursor: '10', changes: [] } : []);
+    const cache = f.open();
+    expect((await cache.page('room', new URLSearchParams('limit=5&before=22'))).map(m => m.id)).toEqual(['20', '19', '18', '16', '14']);
+    expect(f.api.mock.calls.filter(([route]) => route.includes('/messages?'))).toEqual([]);
+  });
+  // Unit, maintainer review of #13284 (second round). A cache from an older build pruned a late
+  // older row, so its short oldest page cannot prove the start of history: read the server.
+  it('reads the server instead of ending history at an older build\'s short page', async () => {
+    const f = fixture();
+    const state: ChatHistoryState = { generation: 'saved', snapshot: { room: { id: 'room' }, messages: [], cursor: '10' },
+      cursor: '10', messages: {}, pages: {}, metadataDirty: false };
+    for (const seq of [6, 8, 10, 12]) state.messages[String(seq)] = f.message(String(seq));
+    state.pages['limit=3'] = ['12', '10', '8'];
+    state.pages['limit=3&before=8'] = ['6']; // 4 arrived late and the older build pruned it
+    f.disk.set('room', state);
+    f.api.mockImplementation(async route => route.startsWith('/changes?') ? { cursor: '10', changes: [] } : [f.message('4')]);
+    expect((await f.open().page('room', new URLSearchParams('limit=3&before=6'))).map(m => m.id)).toEqual(['4']);
+    expect(f.api.mock.calls.map(([route]) => route)).toContain('/conversations/room/messages?limit=3&before=6');
+  });
+  // Unit, maintainer review of #13284 (second round): an older page a late arrival outdated must keep
+  // its loaded rows, so a later tombstone still reaches a screen that keeps them open.
+  it('applies a tombstone to a loaded older row after a late arrival into its page', async () => {
+    const f = fixture(); const cache = f.open();
+    const seqs = [2, 4, 6, 8, 10, 12];
+    f.api.mockImplementation(async route => {
+      if (route.endsWith('/snapshot')) return { room: { id: 'room' }, messages: [], cursor: '10' };
+      const before = Number(new URL(`https://fixture${route}`).searchParams.get('before') ?? Infinity);
+      return seqs.filter(seq => seq < before).reverse().slice(0, 3).map(seq => f.message(String(seq)));
+    });
+    await cache.page('room', new URLSearchParams('limit=3'));
+    await cache.page('room', new URLSearchParams('limit=3&before=8'));
+    await cache.receive('room', { cursor: '11', changes: [{ type: 'message.created', data: { message: f.message('5') } }] }, '10');
+    await cache.receive('room', { cursor: '12', changes: [{ type: 'message.deleted', data: { message: f.message('2', 2, true) } }] }, '10');
+    f.api.mockClear();
+    expect((await cache.projection('room', ['2'])).messages).toEqual([f.message('2', 2, true)]);
+    expect(f.api.mock.calls.filter(([route]) => route.includes('/messages'))).toEqual([]);
   });
   it('reuses covered pages after restart and applies edits and tombstones outside the latest window', async () => {
     const f = fixture();
