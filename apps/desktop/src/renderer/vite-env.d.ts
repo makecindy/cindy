@@ -187,6 +187,7 @@ interface DeviceLinkPeerLinksSnapshot {
   traffic?: import('../shared/deviceLinkIpc').LinkTrafficSnapshot;
   links: DeviceLinkPeerLinkView[];
   agentNetRoutes?: import('../shared/deviceLinkIpc').DeviceLinkAgentNetPeerRouteView[];
+  providerShareRoutes?: import('../shared/deviceLinkIpc').DeviceLinkProviderShareRouteView[];
   relayProtocol?: 'agent-net' | 'device-link';
   /** 经中转的数据走中转的 UDP 端口还是 WebSocket(见 shared/deviceLinkIpc.ts) */
   relayTransport?: 'udp' | 'websocket';
@@ -4601,6 +4602,24 @@ interface ElectronAPI {
       /** 清掉一台设备的缓存;deviceId 必填(登出的整体清理由 main 在账号边界自己做) */
       clear: (deviceId: string) => Promise<{ ok: true }>;
     };
+    offlineInboxIntents: {
+      list: () => Promise<import('@cindy/maker-shared/offline-inbox-intent').OfflineInboxIntent[]>;
+      upsert: (
+        intent: import('@cindy/maker-shared/offline-inbox-intent').OfflineInboxIntent,
+      ) => Promise<import('@cindy/maker-shared/offline-inbox-intent').OfflineInboxIntent[]>;
+      remove: (
+        deviceId: string,
+        sessionId: string,
+      ) => Promise<import('@cindy/maker-shared/offline-inbox-intent').OfflineInboxIntent[]>;
+      clearDevice: (
+        deviceId: string,
+      ) => Promise<import('@cindy/maker-shared/offline-inbox-intent').OfflineInboxIntent[]>;
+      onChanged: (
+        callback: (payload: {
+          intents: import('@cindy/maker-shared/offline-inbox-intent').OfflineInboxIntent[];
+        }) => void,
+      ) => () => void;
+    };
   };
 
   // ── Remote SSH (Phase A) ───────────────────────────────────────────────
@@ -6174,11 +6193,14 @@ interface ElectronAPI {
       apiKey?: string | null;
       headers?: Record<string, string>;
       /** 已保存供应商 id:main 侧据此并入 main-only 鉴权请求头(renderer 不回读明文头)。 */
+      refreshBatch?: string;
+      catalogPresetId?: string;
       savedProviderId?: string;
     }) => Promise<{
       ok: boolean;
       models?: import('@cindy/model-providers').DiscoveredModel[];
       /** true only when every catalog page was read; absent = unknown. */
+      glmFlashProbe?: 'unknown' | 'unavailable';
       complete?: boolean;
       /** Saved-provider fetches only: receipt to pass back as `listingReceipts` when saving. */
       listingReceipt?: string;

@@ -1977,20 +1977,17 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
         })();
         await handle.send({ type: 'user', content: 'inspect unavailable MCP' });
         await done;
-        await waitFor(() => {
+        const failures = [
+          /connect rejecting_remote failed: HTTP 401/,
+          /connect slow_remote failed: startup timed out during initialize after \d+ms \(startup budget 50ms, request limit 5000ms\)/,
+          /connect stalling_body_remote failed: startup timed out during initialize after \d+ms \(startup budget 50ms, request limit 5000ms\)/,
+          /connect paginated_timeout_remote failed: startup timed out during tools\/list after \d+ms \(startup budget 200ms, request limit 5000ms\)/,
+        ];
+        await vi.waitFor(() => {
           const logs = JSON.stringify(entries);
-          return (
-              logs.includes('HTTP 401')
-            && logs.includes('connect slow_remote failed: request timed out')
-            && logs.includes('connect stalling_body_remote failed: request timed out')
-            && logs.includes('connect paginated_timeout_remote failed: request timed out')
-            );
-          });
+          for (const failure of failures) expect(logs).toMatch(failure);
+        }, { timeout: 5000 });
         const logs = JSON.stringify(entries);
-        expect(logs).toContain('connect rejecting_remote failed: HTTP 401');
-        expect(logs).toContain('connect slow_remote failed: request timed out');
-        expect(logs).toContain('connect stalling_body_remote failed: request timed out');
-        expect(logs).toContain('connect paginated_timeout_remote failed: request timed out');
         expect(timedOutPaginationCursors).toEqual([undefined, 'slow-page']);
         const requestBodies = modelRequestBodies.slice(requestBodyStart);
         expect(requestBodies.some((body) =>
