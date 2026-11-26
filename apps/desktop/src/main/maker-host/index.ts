@@ -39,6 +39,7 @@ import { createMediaDownloadContext } from '../cindy-media/mediaDownloadApproval
 import { setPluginModelPickerAgentProvider, setPluginRouteAgentStatusProvider } from '../cindy-brain/ghostModelPicker.js';
 import { isCodexAccountProvider, setCodexAccountRetirement } from './codex-account-auth.desktop.js';
 import { withSubscriptionAccounts } from '../subscription-accounts/agent.js';
+import { prepareLegacyOpenAiPool } from '../subscription-accounts/openAiPoolMerge.js';
 import { onSubscriptionPoolCodexModelsChanged, onSubscriptionPoolClaudeModelsChanged } from '../subscription-accounts/runtime.js';
 import { NATIVE_SUBSCRIPTION_ACCOUNT } from '@cindy/maker-core';
 import { installPluginEngines } from './acp-host.js';
@@ -242,7 +243,7 @@ import {
   prepareCodexGuestModelCatalog,
   readNativeCodexCatalog, findCodexCatalogModel, nativeCodexFallbackModel, patchCodexModelMaxContextWindow,
 } from './codex-custom-context-catalog.js';
-import { buildPiAgent } from './pi-host.js';
+import { buildPiAgent, desktopPiAuthAdapter } from './pi-host.js';
 import {
   captureLocalPiPackageRuntimeInvalidationSnapshot,
   settleLocalPiPackageRuntimeSnapshot,
@@ -291,6 +292,8 @@ import { ACCOUNT_PROVIDER_NOT_READY_CODE } from '../../shared/accountProviderRea
 import { listBotImConnectionsForBot } from '../im/shared/botImConnectionStore.js';
 import {
   getRejectedCodexDownshiftModel,
+  getObservedCodexUpstreamCapacity,
+  subscribeCodexUpstreamCapacity,
   armCodexHttpRecovery,
   clearCodexProxyAuthInjection,
   ensureCodexControlPlaneProxyReady,
@@ -1988,6 +1991,8 @@ export function getMaker(): Maker {
       getCodexSubagentIdentity: ({ childThreadId }) =>
         getObservedCodexSubagentIdentity(childThreadId),
       getRejectedCodexDownshiftModel,
+      getObservedCodexUpstreamCapacity,
+      subscribeCodexUpstreamCapacity,
       armCodexHttpRecovery,
       registerCodexChildThreadForParent: ({ parentThreadId, childThreadId }) => {
         registerCodexProxyChildThread(parentThreadId, childThreadId);
@@ -2069,6 +2074,7 @@ export function getMaker(): Maker {
         getState: desktopCodexAuthAdapter.getState.bind(desktopCodexAuthAdapter),
         resolveCodexHistoryHome: async threadId => (await readCodexThreadStorageReadOnly(threadId))?.historyHome,
         resolveDefaultProvider: model => model ? resolveConnectedDefaultProviderIdForModel(model, 'codex') : null,
+        preparePool: prepareLegacyOpenAiPool,
       }),
     };
     attachAgentsToMakerMemory(makerMemoryManager, makerAgents);
@@ -2469,7 +2475,9 @@ export function getMaker(): Maker {
       },
     });
     const piAgent = buildPiAgentForDesktop();
-    if (piAgent) makerAgents.pi = withSubscriptionAccounts(piAgent);
+    if (piAgent) makerAgents.pi = withSubscriptionAccounts(piAgent, {
+      getState: desktopPiAuthAdapter.getState, preparePool: prepareLegacyOpenAiPool,
+    });
 
     const buildBotRuntimeDeps = (skillLinksChanged = false): BotProfileRuntimeDeps => ({
       getUserName: () => getAuthState().user?.name,
@@ -2928,7 +2936,9 @@ export function getMaker(): Maker {
       if (!_maker || _maker.listAvailableAgents().includes('pi')) return false;
       const next = buildPiAgentForDesktop();
       if (!next) return false;
-      const registered = _maker.registerAgent('pi', withSubscriptionAccounts(next));
+      const registered = _maker.registerAgent('pi', withSubscriptionAccounts(next, {
+        getState: desktopPiAuthAdapter.getState, preparePool: prepareLegacyOpenAiPool,
+      }));
       if (!registered) {
         void next.dispose().catch((error) => {
           desktopMakerLogger.warn('discarding Pi agent after registration race failed', {

@@ -834,6 +834,28 @@ it('finds canonical root and organization instance keys without listing', () => 
 });
 
 describe('PluginMarketService migration and defaultInstall', () => {
+  it('preserves the sorted cursor and treats a server rejection as a catalog restart', async () => {
+    const h = harness([summary()]);
+    const opaqueCursor = 'v1.' + 'a'.repeat(180);
+    const sortValue = '2026-11-22T15:40:00Z';
+    const sorts = [{ key: 'updated', label: '最近更新', metric: { kind: 'date' as const, label: '更新时间' } }];
+    h.api.catalog.mockResolvedValueOnce({
+      schemaVersion: 2, plugins: [{ ...summary(), sortValue }], counts: null, nextCursor: opaqueCursor, sort: 'updated',
+      sorts, currentOrganization: null,
+    });
+    const page = await h.service.query({ scope: 'public', sort: 'default', counts: false });
+    expect(page).toMatchObject({ sort: 'updated', sorts, items: [{ sortValue }] });
+    expect(page.nextCursor).not.toBeNull();
+    await expect(h.service.query({ scope: 'public', sort: 'trending', counts: false, cursor: page.nextCursor }))
+      .rejects.toMatchObject({ code: 'INVALID_PARAMS' });
+    h.api.catalog.mockRejectedValueOnce(Object.assign(new Error('request failed'), {
+      code: 'INVALID_PARAMS', statusCode: 400,
+    }));
+    await expect(h.service.query({ scope: 'public', sort: 'updated', counts: false, cursor: page.nextCursor }))
+      .rejects.toMatchObject({ code: 'PLUGIN_LIST_CHANGED' });
+    expect(h.api.catalog).toHaveBeenLastCalledWith(expect.objectContaining({ sort: 'updated', cursor: opaqueCursor }));
+  });
+
   // Unit regression: even with custom sources configured, official engine discovery must not
   // open a local source or enumerate installations for each candidate on the cold or warm path.
   it('classifies public official engines by release without opening custom sources or scanning installations', async () => {
@@ -1895,6 +1917,14 @@ describe('PluginMarketService migration and defaultInstall', () => {
       unavailableReason: null,
     });
     expect(runtime.install).not.toHaveBeenCalled();
+  });
+
+  // Unit: catalog and detail must expose the server's actual package size.
+  it('projects the published package size into catalog and detail items', async () => {
+    const item = summary();
+    const h = harness([item]);
+    await expect(h.service.query()).resolves.toMatchObject({ items: [{ sizeBytes: item.currentRelease.sizeBytes }] });
+    await expect(h.service.detail(item.id)).resolves.toMatchObject({ sizeBytes: item.currentRelease.sizeBytes });
   });
 
   it('passes exact server download statistics through snapshots and details', async () => {
@@ -6856,6 +6886,27 @@ describe('organization default Plugin takeover', () => {
 });
 
 describe('market detail 响应身份绑定', () => {
+  it('reads recent updates without scanning other plugin installations', async () => {
+    const item = summary({ namespace: null });
+    const h = harness([item]);
+    const rawManifest = manifest(item.ghostId);
+    const dir = installRuntimeGhost(rawManifest);
+    runtime.ghosts.push(...Array.from({ length: 29 }, (_, index) => ghostEntry(`unrelated-${index}`)));
+    const installed = { ...runtime.ghosts[0], dir, namespace: null,
+      approval: { state: 'approved', revision: 'fixture' } } as unknown as InstalledGhost;
+    runtime.findInstalledInstance = vi.fn((id: string) => id === item.ghostId ? installed : undefined);
+    const updates = [{ version: '1.0.0', publishedAt: '2026-07-23T00:00:00.000Z', releaseNotes: 'Notes' }];
+    const response = { ...detail(item), updates };
+    h.api.detail.mockResolvedValueOnce(response);
+
+    const result = await h.service.detail(item.id, { includeUpdates: true });
+
+    expect(result.updates).toEqual(updates);
+    expect(h.api.resolve).toHaveBeenCalledTimes(1);
+    expect(h.api.detail).toHaveBeenCalledExactlyOnceWith(item.id, { includeUpdates: true });
+    expect(runtime.listScans).toBe(0);
+  });
+
   it('rejects a detail response that changes the default-install policy', async () => {
     const item = organizationDefaultSummary();
     const h = harness([item]);

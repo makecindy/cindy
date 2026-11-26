@@ -49,6 +49,11 @@ type DesktopAccountDeletionConfirmResult =
 type DesktopAccountDeletionStatusResult =
   import('../shared/authIpc').DesktopAccountDeletionStatusResult;
 type DesktopAccountSwitcherSnapshot = import('../shared/authIpc').DesktopAccountSwitcherSnapshot;
+type DesktopContactChangeAvailability = import('../shared/authIpc').DesktopContactChangeAvailability;
+type DesktopContactChangeCodeSent = import('../shared/authIpc').DesktopContactChangeCodeSent;
+type DesktopContactChangeCompleted = import('../shared/authIpc').DesktopContactChangeCompleted;
+type DesktopContactChangeResult<T> = import('../shared/authIpc').DesktopContactChangeResult<T>;
+type DesktopContactChangeVerified = import('../shared/authIpc').DesktopContactChangeVerified;
 type PendingRemotePrecreatedWorktree =
   import('../shared/remotePrecreatedWorktreeLedger').PendingRemotePrecreatedWorktree;
 type PendingRemotePrecreatedWorktreeTarget =
@@ -1831,7 +1836,7 @@ interface ElectronAPI {
     lookup: (ghostIds: string[]) => Promise<import('../shared/pluginMarket').PluginMarketSnapshot>;
     recommendations: (pluginIds?: string[]) => Promise<import('../shared/pluginMarket').PluginMarketItem[]>;
     snapshot: () => Promise<import('../shared/pluginMarket').PluginMarketSnapshot>;
-    detail: (pluginId: string) => Promise<import('../shared/pluginMarket').PluginMarketDetail>;
+    detail: (pluginId: string, options?: { includeReadme?: boolean; includeUpdates?: boolean }) => Promise<import('../shared/pluginMarket').PluginMarketDetail>;
     prepareShare: (pluginId: string, options?: import('../shared/share').ShareOptions) => Promise<import('../shared/share').ShareContent>;
     prepareLocalShare: (instanceId: string, operationId: string, options: import('../shared/share').ShareOptions, expected: import('../shared/share').LocalPluginShareBinding, uploadConfirmed: boolean) => Promise<import('../shared/share').SharePreparation>;
     localShareDetail: (snapshotId: string) => Promise<import('@cindy/plugin-protocol').LocalPluginShareSnapshot>;
@@ -2410,6 +2415,17 @@ interface ElectronAPI {
   authGetAccountDeletionStatus: () => Promise<DesktopAccountDeletionStatusResult>;
   authClearAccountDeletionReceipt: () => Promise<void>;
   authConsumeAccountDeletionRestoredNotice: () => Promise<boolean>;
+  authGetContactChangeAvailability: () => Promise<DesktopContactChangeAvailability>;
+  authRequestContactChangeCurrentCode: () => Promise<DesktopContactChangeResult<DesktopContactChangeCodeSent>>;
+  authVerifyContactChangeCurrentCode: (
+    code: string,
+  ) => Promise<DesktopContactChangeResult<DesktopContactChangeVerified>>;
+  authRequestContactChangeNewCode: (value: string) => Promise<DesktopContactChangeResult<null>>;
+  authConfirmContactChange: (input: {
+    value: string;
+    code: string;
+  }) => Promise<DesktopContactChangeResult<DesktopContactChangeCompleted>>;
+  authCancelContactChange: () => Promise<void>;
   onAuthStateChange: (callback: (state: AuthStateChangePayload) => void) => () => void;
   onAuthSessionExpired: (callback: (state: AuthSessionExpiredPayload) => void) => () => void;
 
@@ -4161,6 +4177,12 @@ interface ElectronAPI {
     choose(): Promise<import('../shared/dialogueWorkspaceSettings').DialogueWorkspaceSettingsState>;
     reset(): Promise<import('../shared/dialogueWorkspaceSettings').DialogueWorkspaceSettingsState>;
   };
+  buddyWorkspace?: {
+    open(): Promise<{ success: boolean }>;
+    get(): Promise<import('../shared/buddyWorkspaceSettings').BuddyWorkspaceSettingsState>;
+    choose(): Promise<import('../shared/buddyWorkspaceSettings').BuddyWorkspaceSettingsState>;
+    reset(): Promise<import('../shared/buddyWorkspaceSettings').BuddyWorkspaceSettingsState>;
+  };
   projectsRoot: {
     get(): Promise<import('../shared/projectsRoot').ProjectsRootState>;
     choose(): Promise<import('../shared/projectsRoot').ProjectsRootState>;
@@ -5300,6 +5322,32 @@ interface ElectronAPI {
     bots: {
       ownsProject: (workingDir: string) => Promise<boolean>;
       projectRepository: (botId: string, retry: boolean) => Promise<import('../shared/botProjectMode').BotProjectRepositoryStatus>;
+      workspaceMigration?: {
+        getStatus: (
+          botId: string,
+        ) => Promise<import('../shared/workspaceMigration').WorkspaceMigrationStatus>;
+        chooseTarget: (
+          botId: string,
+          useDefault?: boolean,
+        ) => Promise<import('../shared/workspaceMigration').WorkspaceMigrationChooseTargetResult>;
+        schedule: (
+          input: import('../shared/workspaceMigration').WorkspaceMigrationScheduleInput,
+        ) => Promise<import('../shared/workspaceMigration').WorkspaceMigrationScheduleResult>;
+        cancel: (
+          botId: string,
+        ) => Promise<import('../shared/workspaceMigration').WorkspaceMigrationStatus>;
+        restart: (botId: string) => Promise<{ relaunching: boolean }>;
+        getStartupProgress: () => Promise<
+          import('../shared/workspaceMigration').WorkspaceMigrationStartupProgress | null
+        >;
+        onStartupProgress: (
+          callback: (
+            progress:
+              | import('../shared/workspaceMigration').WorkspaceMigrationStartupProgress
+              | null,
+          ) => void,
+        ) => () => void;
+      };
       getModelChainSettings: () => Promise<{
         modelChain: import('../shared/botModelChain').BotModelRoute[];
         isCustomized: boolean;
@@ -7318,7 +7366,8 @@ interface ElectronAPI {
     /** 输入框推荐提示词:turn 结束后预测用户下一步输入。 */
     predictNextPrompt: (request: {
       sessionId: string;
-      agentKind: 'claude-code' | 'codex' | 'pi';
+      /** 'acp' = plugin-engine task (auxiliary chain only). */
+      agentKind: 'claude-code' | 'codex' | 'pi' | 'acp';
       messages: Array<{ role: string; content: string }>;
       workingDir?: string;
       turnGen: number;
