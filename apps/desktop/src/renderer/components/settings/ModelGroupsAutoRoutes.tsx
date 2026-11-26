@@ -69,7 +69,7 @@ function StrategySelect({ label, value, disabled, onChange, strategies = SAME_SO
   const { t } = useTranslation();
   const groups = useMemo(() => routeStrategySelectGroups(strategies, t), [t, strategies]);
   return (
-    <Select label={label} value={value} groups={groups} width="sm" disabled={disabled}
+    <Select data-settings-search-action="Sets how a route, an account pool or a computer group picks its next member" label={label} value={value} groups={groups} width="sm" disabled={disabled}
       onValueChange={(next) => { if (next !== value) onChange(next as RouteStrategy); }} />
   );
 }
@@ -176,6 +176,7 @@ function AccountsRouteRow({ provider, plain = null }: { provider: Provider; plai
                 {view.strategy === 'weighted' && (
                   <span className="mr-2 flex items-center">
                     <Select
+                      data-settings-search-action="Sets how many new tasks one account gets when the pool picks by weight"
                       label={t('providerGroup.member.weightAria', { name })}
                       value={String(account.weight)}
                       disabled={saving}
@@ -290,6 +291,7 @@ function ComputersRouteRow({ provider, initial }: { provider: Provider; initial:
                 {config.strategy === 'weighted' && (
                   <span className="mr-2 flex items-center">
                     <Select
+                      data-settings-search-action="Sets how many new tasks one computer or account gets when the group picks by weight"
                       label={t('providerGroup.member.weightAria', { name })}
                       value={String(member.weight)}
                       disabled={saving}
@@ -418,7 +420,7 @@ export function WholeProviderAddRow({ options, taken, onAdd }: {
       hint={t('modelGroups.sources.addWholeHint')}
       wrap
       trailing={
-        <Select label={t('modelGroups.sources.addWhole')} value={ADD_NONE} width="sm"
+        <Select data-settings-search-action="Adds a whole provider as a source of this route" label={t('modelGroups.sources.addWhole')} value={ADD_NONE} width="sm"
           options={[{ value: ADD_NONE, label: t('modelGroups.sources.chooseProvider') }, ...addable.map((option) => ({ value: option.key, label: option.label }))]}
           onValueChange={(key) => {
             const option = addable.find((item) => item.key === key);
@@ -529,13 +531,13 @@ export function SourceRouteDetail({ route, config, options, save, onBack }: {
                 title={t('modelGroups.settings.autoSwitch.title')}
                 hint={t('modelGroups.settings.autoSwitch.hint')}
                 wrap
-                trailing={<Switch checked={modelGroupAutoSwitchOn(route)} aria-label={t('modelGroups.settings.autoSwitch.title')} onCheckedChange={setAutoSwitch} />}
+                trailing={<Switch data-settings-search-action="Turns automatic switching to the next source on or off for this route" checked={modelGroupAutoSwitchOn(route)} aria-label={t('modelGroups.settings.autoSwitch.title')} onCheckedChange={setAutoSwitch} />}
               />
               {route.auto && (
                 <SettingsRow
                   title={t('modelGroups.auto.show')}
                   wrap
-                  trailing={<Switch checked={!route.hidden} aria-label={t('modelGroups.auto.show')} onCheckedChange={(shown) => setHidden(!shown)} />}
+                  trailing={<Switch data-settings-search-action="Shows or hides an automatic route in the model picker" checked={!route.hidden} aria-label={t('modelGroups.auto.show')} onCheckedChange={(shown) => setHidden(!shown)} />}
                 />
               )}
             </SettingsCard>
@@ -591,6 +593,7 @@ export function SourceRouteDetail({ route, config, options, save, onBack }: {
                             onClick={() => void setSources((sources) => sources.filter((item) => optionKey(item) !== key))}><X size={15} /></RowIconButton>
                         )}
                         <Switch
+                          data-settings-search-action="Turns one source of this route on or off"
                           className="ml-2"
                           checked={!source.off}
                           aria-label={t('modelGroups.settings.useSource', { name: label })}

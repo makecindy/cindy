@@ -25,7 +25,7 @@ export function RouteStrategyNote({ strategy, className, providerId }: { strateg
         <span className="text-12 leading-[1.5] text-[var(--text-tertiary)]">{t(`modelGroups.strategy.${strategy}.hint`)}</span>
       </span>
       {open && (
-        <button type="button" onClick={() => open(providerId)}
+        <button type="button" data-settings-search-action="Opens Smart routing at this provider's accounts or computers to change how they are picked" onClick={() => open(providerId)}
           className="inline-flex min-h-8 shrink-0 items-center gap-0.5 rounded-lg px-2 text-13 text-[var(--text-secondary)] transition-colors hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--border-focus)]">
           {t('modelGroups.auto.adjust')}
           <ChevronRight size={14} aria-hidden />

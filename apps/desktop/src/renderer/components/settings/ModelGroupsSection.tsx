@@ -239,7 +239,6 @@ export function ModelGroupsSection({ scrollRef, focusProvider }: {
             <SettingsSection>
               <SettingsCard>
                 <RouteNameRow key={route.id} value={route.name} label={t('modelGroups.settings.name')} hint={t('modelGroups.settings.nameHint')}
-                  searchAction="Renames one user-created route; the list is indexed by its section entry"
                   onCommit={(name) => updateRoute(route.id, (current) => ({ ...current, name }))} />
                 <SettingsRow
                   title={t('modelGroups.settings.pick')}

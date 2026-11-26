@@ -14,11 +14,10 @@ import { SettingsTextInput } from './SettingsTextInput';
  * 路由的名字：失焦或回车时保存。回车保存后焦点还在框里，之后失焦会再走一次：同一个名字不重复保存；
  * 没保存成功时可以原样再提交一次(2026-11-26 排查)。
  */
-export function RouteNameRow({ value, label, hint, searchAction, onCommit }: {
+export function RouteNameRow({ value, label, hint, onCommit }: {
   value: string;
   label: string;
   hint: string;
-  searchAction?: string;
   onCommit(next: string): Promise<boolean>;
 }) {
   const [draft, setDraft] = useState(value);
@@ -41,7 +40,7 @@ export function RouteNameRow({ value, label, hint, searchAction, onCommit }: {
       trailing={
         <SettingsTextInput
           aria-label={label}
-          {...(searchAction ? { 'data-settings-search-action': searchAction } : {})}
+          data-settings-search-action="Renames one route; the routes list is indexed by its section entry"
           value={draft}
           maxLength={MODEL_GROUP_LIMITS.name}
           onChange={setDraft}

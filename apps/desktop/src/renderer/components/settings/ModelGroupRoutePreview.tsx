@@ -60,7 +60,7 @@ export function ModelGroupRoutePreview({ routes, nameCandidates, resetKey }: {
       action={
         <div className="flex min-w-0 items-center gap-2">
           {routes.length > 1 && (
-            <Select label={t('modelGroups.settings.try.model')} value={target?.id ?? ''} options={modelOptions}
+            <Select data-settings-search-action="Chooses which model to preview; changes no setting" label={t('modelGroups.settings.try.model')} value={target?.id ?? ''} options={modelOptions}
               onValueChange={(value) => setChosen(value)} width="sm" className="shrink" />
           )}
           <Button variant="secondary" size="md" loading={previewing} disabled={!target || target.candidates.length === 0} onClick={() => void run()}

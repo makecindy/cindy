@@ -71,6 +71,7 @@ export function BuddyModelPanel({
     <div className="flex min-w-0 flex-col gap-3">
       <SettingsCard>
         <BotModelChainEditor
+          data-settings-search-action="Sets the model buddies use unless one has its own; indexed by the buddy models section entry"
           layout="settings"
           settingsRows={{
             primaryLabel: t('modelGroups.buddies.defaultLabel'),
@@ -96,6 +97,7 @@ export function BuddyModelPanel({
             {own.map((buddy) => (
               <BotModelChainEditor
                 key={buddy.id}
+                data-settings-search-action="Sets one buddy's own model or returns it to the default; indexed by the buddy models section entry"
                 layout="settings"
                 settingsRows={{ primaryLabel: buddy.name, primaryLead: <BotAvatar bot={buddy.avatar} size="sm" /> }}
                 value={buddy.capabilities.modelChain}
@@ -111,6 +113,7 @@ export function BuddyModelPanel({
                 hint={own.length === 0 ? t('modelGroups.buddies.allFollow') : undefined}
                 trailing={
                   <Select
+                    data-settings-search-action="Gives a buddy that follows the default its own model"
                     label={t('modelGroups.buddies.addOwn')}
                     value=""
                     options={addOptions}
