@@ -129,7 +129,6 @@ export function SessionHandoffCard({
           {/* Shape and size from Badge; the colours stay on the send button's slots, which some
               themes tint differently from the CTA accent. */}
           <Badge
-            size="xs"
             tone={solidBadge ? 'neutral' : 'outline'}
             className={
               solidBadge

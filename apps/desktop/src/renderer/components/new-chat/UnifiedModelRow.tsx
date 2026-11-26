@@ -256,7 +256,7 @@ export function UnifiedModelRow({
   );
   const paymentRequiredBadge =
     paymentRequired && paymentRequiredLabel ? (
-      <Badge data-payment-required-badge size="xs" icon={<Lock size={10} />}>
+      <Badge data-payment-required-badge icon={<Lock size={10} />}>
         {paymentRequiredLabel}
       </Badge>
     ) : null;

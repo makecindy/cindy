@@ -29,7 +29,7 @@ export function MarketInstallStatus({ skill, onUpdate, updating = false }: Marke
     );
   }
   return skill.installedLocally ? (
-    <Badge size="xs">
+    <Badge>
       {t('skillhub.home.installed')}
     </Badge>
   ) : null;

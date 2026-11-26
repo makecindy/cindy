@@ -127,7 +127,7 @@ export const litFractionalMarks = (paidPct: number, tier: 1 | 2 | 3): number =>
  */
 export function PriceFreeBadge({ label }: { label: string }) {
   return (
-    <Badge data-price-free size="xs">
+    <Badge data-price-free>
       {label}
     </Badge>
   );

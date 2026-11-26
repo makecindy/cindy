@@ -414,7 +414,7 @@ function CustomTag({ label }: { label: string }) {
 }
 
 function BetaTag({ label }: { label: string }) {
-  return <Badge tone="outline" size="xs">{label}</Badge>;
+  return <Badge tone="outline" size="xs" className="bg-[var(--settings-badge-bg)]">{label}</Badge>;
 }
 
 // ---------------------------------------------------------------------------
@@ -2420,7 +2420,7 @@ function CindySigninRow({ selected, onSelect }: { selected: boolean; onSelect: (
         {t('settings.providers.xd.title')}
       </span>
       {/* 徽标不大写不加字距:224px 窄栏里 en「RECOMMENDED」会把行名挤成「Cin…」。 */}
-      <Badge tone="outline" size="xs">
+      <Badge tone="outline">
         {t('settings.providers.xdSignin.badge')}
       </Badge>
     </button>

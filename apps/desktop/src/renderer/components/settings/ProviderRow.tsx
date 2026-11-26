@@ -63,7 +63,7 @@ export function ProviderRow({
         {name}
       </span>
       {beta && (
-        <Badge tone="outline" size="xs">
+        <Badge tone="outline" size="xs" className="bg-[var(--settings-badge-bg)]">
           {t('settings.providers.local.beta')}
         </Badge>
       )}

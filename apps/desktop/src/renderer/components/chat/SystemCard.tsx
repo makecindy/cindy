@@ -1673,7 +1673,7 @@ function CmdCard({ data }: { data?: Record<string, unknown> }) {
   // 文案区分 ok / timeout / spawn-err / exit code。
   const statusText = timedOut ? 'timeout' : spawnError ? 'spawn err' : `exit ${exitCode}`;
   const statusChip = (
-    <Badge tone="outline" mono>
+    <Badge tone="outline" mono className="bg-[var(--msg-tool-card-bg)] text-[var(--msg-tool-text)]">
       {statusText}
     </Badge>
   );

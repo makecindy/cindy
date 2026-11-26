@@ -148,7 +148,7 @@ export function PlanComparison({
               <div className="flex min-h-7 flex-wrap items-center gap-2">
                 <h3 className="break-words text-14 font-medium">{product.name}</h3>
                 {offers.some((option) => option.current) && (
-                  <Badge size="xs">
+                  <Badge>
                     {t('billing.catalog.currentPlan')}
                   </Badge>
                 )}

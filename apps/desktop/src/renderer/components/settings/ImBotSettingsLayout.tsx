@@ -23,7 +23,7 @@ export function ImBotSettingsFrame({
     <div className="flex flex-col gap-2">
       <SettingsPageHeader
         title={t(imBotSettings.imBot.sectionKey)}
-        adornment={<Badge tone="outline" size="xs">
+        adornment={<Badge tone="outline" size="xs" className="bg-[var(--settings-badge-bg)]">
           {t('settings.imBot.beta')}
         </Badge>}
       />
