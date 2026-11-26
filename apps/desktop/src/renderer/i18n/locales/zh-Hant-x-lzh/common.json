@@ -4275,6 +4275,7 @@
             "sliderAria": "調整自動壓縮門檻",
             "restoreAria": "還原自動壓縮的預設比例"
           },
+          "antigravityHydrogenDescription": "宜日常編程，執行迅捷。",
           "contextLimitRoute": "今 {{tokens}} tokens",
           "contextLimitOverWindow": "已逾上游所宣之長度，請求或將未成。",
           "restoreDefault": "復預設",
@@ -16252,6 +16253,7 @@
       },
       "autoResumePending": {
         "label": "方重連",
+        "continuingWithProgress": "自動續行中（{{attempt}}/{{total}}）…",
         "labelWithProgress": "方重連 {{attempt}}/{{total}}",
         "groupSwitch": "方易一機續之"
       },
@@ -17534,7 +17536,14 @@
         "snoozeFailed": "無法儲存稍後處理時間，請檢查連線並確認任務所在電腦已更新。",
         "hours": "{{count}} 小時後",
         "hours_one": "{{count}} 小時後",
-        "hours_other": "{{count}} 小時後"
+        "hours_other": "{{count}} 小時後",
+        "pendingSync": "待同步",
+        "pendingArchiveSync": "俟電腦上線自歸檔",
+        "offlineCompleteRejectedDirty": "「{{title}}」已返待處：worktree 尚有未呈之改，須覆核方歸檔。",
+        "offlineCompleteRejectedNewActivity": "「{{title}}」已返待處：離線期間此差事有新進。",
+        "offlineCompleteRejectedRunning": "「{{title}}」已返待處：此差事方行。",
+        "offlineCompleteRejectedAttached": "「{{title}}」已返待處：此差事方受接管或共治，未自歸檔。",
+        "offlineCompleteRejectedPreflight": "「{{title}}」已返待處：未克核驗 worktree，須手核方歸檔。"
       },
       "taskListMode": {
         "heading": "任務模式",
@@ -20060,6 +20069,9 @@
       "permissionTightenInterruptFailed": "收緊權柄時未能止方行之差事，其或將免確認而行至終；如有需要，請手止之。",
       "codexAutoReviewUnavailable": "自動審批暫不可用，此舉已阻，權柄已改為預設。請再試，需時當問於君。",
       "hostShellCommandBlocked": "Cindy 已阻此 Shell 命令。請察其命令，改用可用之工具或命令續之。",
+      "reconnectAutoResumeExhausted": "自動續行已達重試之限。",
+      "reconnectAutoResumeDisabled": "自動續行未啟。",
+      "codexReconnectStalled": "模型斷連，兩分鐘未復。",
       "upstreamResponseIdleTimeout": "模型久無所應，此輪已自斷，以免空待無期。已成之工具呼叫皆存，逕遣下一訊即可續之。",
       "codexHistoryOversized": "圖之歷史過鉅，未能自復。請遣「繼續」，Cindy 當接續今之差事。",
       "codexHistoryOversizedRemote": "此段歷史中有過鉅之圖，遠端壓縮遣之不出。請於行 Codex 之機開此差事再遣，Cindy 將自略其圖而續之。",

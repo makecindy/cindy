@@ -4317,6 +4317,7 @@
             "sliderAria": "Schwelle für die automatische Komprimierung anpassen",
             "restoreAria": "Standardmäßiges Verhältnis der automatischen Komprimierung wiederherstellen"
           },
+          "antigravityHydrogenDescription": "Für alltägliche Programmieraufgaben und schnelle Ausführung.",
           "contextLimitRoute": "Aktuell {{tokens}} Tokens",
           "contextLimitOverWindow": "Über dem vom Anbieter angegebenen Kontextfenster; Anfragen können fehlschlagen.",
           "restoreDefault": "Standard wiederherstellen",
@@ -16290,6 +16291,7 @@
       },
       "autoResumePending": {
         "label": "Verbindung wird wiederhergestellt",
+        "continuingWithProgress": "Automatische Fortsetzung ({{attempt}}/{{total}})…",
         "labelWithProgress": "Verbindung wird wiederhergestellt {{attempt}}/{{total}}",
         "groupSwitch": "Wechsel zu einem anderen Computer"
       },
@@ -17609,7 +17611,14 @@
         "snoozeFailed": "Die Zeit konnte nicht gespeichert werden. Prüfe die Verbindung und aktualisiere den Computer mit dieser Aufgabe.",
         "hours": "In {{count}} Stunden",
         "hours_one": "In {{count}} Stunde",
-        "hours_other": "In {{count}} Stunden"
+        "hours_other": "In {{count}} Stunden",
+        "pendingSync": "Synchronisierung ausstehend",
+        "pendingArchiveSync": "Wird archiviert, sobald der Computer wieder online ist",
+        "offlineCompleteRejectedDirty": "„{{title}}“ wurde nach Ausstehend zurückgestellt: nicht übertragene Änderungen im Worktree erfordern eine Bestätigung vor dem Archivieren.",
+        "offlineCompleteRejectedNewActivity": "„{{title}}“ wurde nach Ausstehend zurückgestellt: Während der Offline-Zeit gab es neue Aktivitäten auf dem Computer.",
+        "offlineCompleteRejectedRunning": "„{{title}}“ wurde nach Ausstehend zurückgestellt: Die Aufgabe wird derzeit ausgeführt.",
+        "offlineCompleteRejectedAttached": "„{{title}}“ wurde nach Ausstehend zurückgestellt: Die Aufgabe ist verbunden oder geteilt und wurde nicht automatisch archiviert.",
+        "offlineCompleteRejectedPreflight": "„{{title}}“ wurde nach Ausstehend zurückgestellt: Der Worktree-Status konnte vor dem Archivieren nicht geprüft werden."
       },
       "taskListMode": {
         "heading": "Aufgabenmodus",
@@ -20136,6 +20145,9 @@
       "permissionTightenInterruptFailed": "Die laufende Aufgabe konnte beim Einschränken der Berechtigungen nicht gestoppt werden; sie läuft möglicherweise bis zum Abschluss ohne Genehmigungsabfragen weiter. Stoppe sie bei Bedarf manuell.",
       "codexAutoReviewUnavailable": "Die automatische Prüfung ist vorübergehend nicht verfügbar. Die aktuelle Aktion wurde blockiert und die Berechtigungen auf Standard umgestellt. Versuche die Anfrage erneut; Cindy fragt bei Bedarf nach.",
       "hostShellCommandBlocked": "Cindy hat diesen Shell-Befehl blockiert. Prüfe den Befehl und verwende ein verfügbares Tool oder einen verfügbaren Befehl, um fortzufahren.",
+      "reconnectAutoResumeExhausted": "Die maximale Anzahl automatischer Fortsetzungsversuche ist erreicht.",
+      "reconnectAutoResumeDisabled": "Die automatische Fortsetzung ist deaktiviert.",
+      "codexReconnectStalled": "Die Modellverbindung konnte innerhalb von 2 Minuten nicht wiederhergestellt werden.",
       "upstreamResponseIdleTimeout": "Das Modell hat lange nicht mehr geantwortet. Daher wurde diese Runde unterbrochen, um endloses Warten zu vermeiden. Abgeschlossene Tool-Aufrufe bleiben erhalten — sende die nächste Nachricht, um fortzufahren.",
       "codexHistoryOversized": "Der Bildverlauf ist zu groß für eine automatische Fortsetzung. Sende „Fortsetzen“, damit Cindy die aktuelle Aufgabe wieder aufnimmt.",
       "codexHistoryOversizedRemote": "Der Verlauf dieser Aufgabe enthält zu große Bilder, sodass die Remote-Komprimierung nicht abgeschlossen werden kann. Öffne die Aufgabe auf dem Computer, auf dem Codex läuft, und sende erneut; Cindy lässt diese Bilder dort weg.",

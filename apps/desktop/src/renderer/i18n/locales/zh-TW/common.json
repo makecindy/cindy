@@ -4275,6 +4275,7 @@
             "restoreAria": "恢復自動壓縮比例的預設設定",
             "timing": "套用至此來源下該模型的所有可用引擎。後續執行生效，不中斷正在產生的內容。"
           },
+          "antigravityHydrogenDescription": "專為日常程式開發與快速執行設計。",
           "contextLimitRoute": "目前 {{tokens}} tokens",
           "contextLimitOverWindow": "已超過上游宣告的長度，可能導致請求失敗。",
           "restoreDefault": "恢復預設",
@@ -16260,6 +16261,7 @@
       },
       "autoResumePending": {
         "label": "重新連線中",
+        "continuingWithProgress": "正在自動繼續（{{attempt}}/{{total}}）…",
         "labelWithProgress": "重新連線中 {{attempt}}/{{total}}",
         "groupSwitch": "正在換一台電腦繼續"
       },
@@ -17534,7 +17536,14 @@
         "snoozeFailed": "無法儲存稍後處理時間，請檢查連線並確認任務所在電腦已更新。",
         "hours": "{{count}} 小時後",
         "hours_one": "{{count}} 小時後",
-        "hours_other": "{{count}} 小時後"
+        "hours_other": "{{count}} 小時後",
+        "pendingSync": "待同步",
+        "pendingArchiveSync": "電腦上線後自動歸檔",
+        "offlineCompleteRejectedDirty": "「{{title}}」已退回待處理：worktree 有未提交改動，需確認後再歸檔。",
+        "offlineCompleteRejectedNewActivity": "「{{title}}」已退回待處理：電腦離線期間該任務有新進展。",
+        "offlineCompleteRejectedRunning": "「{{title}}」已退回待處理：該任務正在執行中。",
+        "offlineCompleteRejectedAttached": "「{{title}}」已退回待處理：該任務正被接管或處於共享狀態，未自動歸檔。",
+        "offlineCompleteRejectedPreflight": "「{{title}}」已退回待處理：未能核驗 worktree 狀態，需手動確認後歸檔。"
       },
       "taskListMode": {
         "heading": "任務模式",
@@ -20060,6 +20069,9 @@
       "permissionTightenInterruptFailed": "收緊權限時未能停止正在執行的任務，它可能會繼續免確認執行直到結束；如有需要請手動停止。",
       "codexAutoReviewUnavailable": "自動審批暫時不可用，當前操作已阻止並切換為預設權限。請重試，需要時會詢問你。",
       "hostShellCommandBlocked": "Cindy 已阻止這條 Shell 命令。請檢查命令，並使用可用的工具或命令繼續。",
+      "reconnectAutoResumeExhausted": "自動續跑已達重試次數上限。",
+      "reconnectAutoResumeDisabled": "自動續跑已關閉。",
+      "codexReconnectStalled": "模型連線在 2 分鐘內未能恢復。",
       "upstreamResponseIdleTimeout": "模型長時間沒有任何響應，本輪已自動中斷以免無限等待。已完成的工具呼叫都保留，可以直接發下一條訊息繼續。",
       "codexHistoryOversized": "圖片歷史太大，沒能自動恢復。請傳送「繼續」，Cindy 會接著完成目前任務。",
       "codexHistoryOversizedRemote": "這段歷史裡有過大的圖片，遠端壓縮送不出去。請在執行 Codex 的那台電腦上打開任務後再傳送，Cindy 會自動略去這些圖片並繼續。",

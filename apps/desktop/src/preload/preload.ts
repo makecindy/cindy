@@ -1012,6 +1012,9 @@ const fanOutDeviceLinkPeerLinkReset = createIpcFanOut(DEVICE_LINK_PUSH.PEER_LINK
 // 远程连接拓扑:对端链路变化(payload = 全量快照)
 const fanOutDeviceLinkPeerLinksChanged = createIpcFanOut(DEVICE_LINK_PUSH.PEER_LINKS_CHANGED);
 const fanOutDeviceLinkDeviceDirectoryInvalidated = createIpcFanOut(DEVICE_LINK_PUSH.DEVICE_DIRECTORY_INVALIDATED);
+const fanOutDeviceLinkOfflineInboxIntentsChanged = createIpcFanOut(
+  DEVICE_LINK_PUSH.OFFLINE_INBOX_INTENTS_CHANGED,
+);
 
 // device-link 模型列表写穿:被控端本地 main → 自身 renderer,把控制端写穿的草稿 / 会话 pref
 // 交给 renderer 调它原来的本地 setter。仅被控端进程会收到(控制端从不收 → 监听不误触发)。
@@ -5587,6 +5590,35 @@ contextBridge.exposeInMainWorld('electronAPI', {
        */
       clear: (deviceId: string): Promise<{ ok: true }> =>
         ipcRenderer.invoke('device-link:mirror-cache:clear', { deviceId }),
+    },
+    offlineInboxIntents: {
+      list: (): Promise<import('@cindy/maker-shared/offline-inbox-intent').OfflineInboxIntent[]> =>
+        ipcRenderer.invoke(DEVICE_LINK_INVOKE.OFFLINE_INBOX_INTENTS_LIST),
+      upsert: (
+        intent: import('@cindy/maker-shared/offline-inbox-intent').OfflineInboxIntent,
+      ): Promise<import('@cindy/maker-shared/offline-inbox-intent').OfflineInboxIntent[]> =>
+        ipcRenderer.invoke(DEVICE_LINK_INVOKE.OFFLINE_INBOX_INTENTS_UPSERT, { intent }),
+      remove: (
+        deviceId: string,
+        sessionId: string,
+      ): Promise<import('@cindy/maker-shared/offline-inbox-intent').OfflineInboxIntent[]> =>
+        ipcRenderer.invoke(DEVICE_LINK_INVOKE.OFFLINE_INBOX_INTENTS_REMOVE, { deviceId, sessionId }),
+      clearDevice: (
+        deviceId: string,
+      ): Promise<import('@cindy/maker-shared/offline-inbox-intent').OfflineInboxIntent[]> =>
+        ipcRenderer.invoke(DEVICE_LINK_INVOKE.OFFLINE_INBOX_INTENTS_CLEAR_DEVICE, { deviceId }),
+      onChanged: (
+        callback: (payload: {
+          intents: import('@cindy/maker-shared/offline-inbox-intent').OfflineInboxIntent[];
+        }) => void,
+      ): (() => void) =>
+        fanOutDeviceLinkOfflineInboxIntentsChanged((data) =>
+          callback(
+            data as {
+              intents: import('@cindy/maker-shared/offline-inbox-intent').OfflineInboxIntent[];
+            },
+          ),
+        ),
     },
   },
 

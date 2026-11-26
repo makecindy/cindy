@@ -22,6 +22,7 @@ export * from './goalVerdict.js';
 export * from './interaction.js';
 export * from './internalCitation.js';
 export * from './liveTaskPriority.js';
+export * from './offlineInboxIntent.js';
 export * from './mathMarkdown.js';
 export * from './mermaidAutofix.js';
 export * from './messageRender.js';

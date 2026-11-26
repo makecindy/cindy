@@ -72,7 +72,7 @@ function createFakeAgent(options: FakeAgentOptions = {}) {
   const lineListeners = new Set<(line: string) => void>();
   const closeListeners = new Set<(info: AcpTransportClosed) => void>();
   const sent: AcpRecord[] = [];
-  const pendingAgentRequests = new Map<number, (result: AcpRecord) => void>();
+  const pendingAgentRequests = new Map<number, (message: AcpRecord) => void>();
   const prompts: Array<{ params: AcpRecord; settle: ReturnType<typeof deferred<AcpRecord>> }> = [];
   let nextAgentRequestId = 1000;
   let closed = false;
@@ -114,7 +114,7 @@ function createFakeAgent(options: FakeAgentOptions = {}) {
       }
       return;
     }
-    if (typeof message.id === 'number') pendingAgentRequests.get(message.id)?.((message.result ?? {}) as AcpRecord);
+    if (typeof message.id === 'number') pendingAgentRequests.get(message.id)?.(message);
   };
 
   const transport: AcpLineTransport = {
@@ -153,8 +153,15 @@ function createFakeAgent(options: FakeAgentOptions = {}) {
     requestPermission(params: AcpRecord): Promise<AcpRecord> {
       const id = nextAgentRequestId++;
       return new Promise((resolve) => {
-        pendingAgentRequests.set(id, resolve);
+        pendingAgentRequests.set(id, (msg) => resolve((msg.result ?? {}) as AcpRecord));
         toClient({ jsonrpc: '2.0', id, method: 'session/request_permission', params: { sessionId: 'sess-1', ...params } });
+      });
+    },
+    requestElicitation(params: AcpRecord): Promise<AcpRecord> {
+      const id = nextAgentRequestId++;
+      return new Promise((resolve) => {
+        pendingAgentRequests.set(id, resolve);
+        toClient({ jsonrpc: '2.0', id, method: 'elicitation/create', params: { sessionId: 'sess-1', ...params } });
       });
     },
     exit() {
@@ -232,7 +239,14 @@ describe('openAcpSession handshake', () => {
     const [initialize, sessionNew] = agent.sent;
     expect(initialize).toMatchObject({
       method: 'initialize',
-      params: { protocolVersion: 1, clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false } },
+      params: {
+        protocolVersion: 1,
+        clientCapabilities: {
+          fs: { readTextFile: false, writeTextFile: false },
+          terminal: false,
+          elicitation: { form: {} },
+        },
+      },
     });
     expect(sessionNew).toMatchObject({ method: 'session/new', params: { cwd: '/work/project' } });
     expect((sessionNew.params as AcpRecord).mcpServers).toEqual([{ name: 'local', command: '/bin/tool', args: [], env: [] }]);
@@ -1000,6 +1014,49 @@ describe('AcpSession model and effort', () => {
     expect(session.model).toBe('v4-pro');
     expect(changes).toEqual(['v4-pro']);
     await expect(session.setModel('gpt-x')).rejects.toThrow('does not offer');
+  });
+
+  // A usage report has no model id. It must not follow a new selection, and
+  // changes in used tokens alone must not refresh the displayed facts.
+  it('reports ACP context for the confirmed selection and explicit image support', async () => {
+    const choice = deferred<AcpRecord>();
+    const next = configOptions.map(option =>
+      option.id === 'model' ? { ...option, currentValue: 'v4-pro' } : option);
+    const agent = createFakeAgent({
+      agentCapabilities: { promptCapabilities: { image: false } },
+      configOptions,
+      handlers: { 'session/set_config_option': () => choice.promise },
+    });
+    const { session, ended } = await open(agent);
+    const report = vi.fn();
+    session.observeReportedModelDetails(report);
+    expect(report).toHaveBeenLastCalledWith({ modelId: 'v4-flash', imageInput: false });
+    agent.update({ sessionUpdate: 'usage_update', size: 524288, used: 0 });
+    agent.update({ sessionUpdate: 'usage_update', size: 524288, used: 40 });
+    expect(report).toHaveBeenCalledTimes(2);
+    expect(report).toHaveBeenLastCalledWith({ modelId: 'v4-flash', imageInput: false, contextWindow: 524288 });
+    const switching = session.setModel('v4-pro');
+    agent.update({ sessionUpdate: 'usage_update', size: 128000, used: 100 });
+    expect(report).toHaveBeenCalledTimes(2);
+    choice.resolve({ configOptions: next });
+    await switching;
+    expect(report).toHaveBeenLastCalledWith({ modelId: 'v4-pro', imageInput: false });
+    agent.update({ sessionUpdate: 'usage_update', size: 256000, used: 130 });
+    expect(report).toHaveBeenLastCalledWith({ modelId: 'v4-pro', imageInput: false, contextWindow: 256000 });
+    agent.exit();
+    await ended;
+    expect(report).toHaveBeenLastCalledWith(undefined);
+  });
+
+  it('does not present omitted image support as an explicit no', async () => {
+    const agent = createFakeAgent({ configOptions });
+    const { session } = await open(agent);
+    const report = vi.fn();
+    session.observeReportedModelDetails(report);
+    expect(report).toHaveBeenLastCalledWith(undefined);
+    agent.update({ sessionUpdate: 'usage_update', size: 64000, used: 0 });
+    expect(report).toHaveBeenLastCalledWith({ modelId: 'v4-flash', contextWindow: 64000 });
+    await session.close();
   });
 
   // #12433 (unit): an active prompt's usage belongs to its model even if the
@@ -2409,5 +2466,468 @@ describe('AcpSession turnChangeCapture', () => {
     agent.prompts[0]!.settle.resolve({ stopReason: 'end_turn' });
     await session.close();
     await ended;
+  });
+});
+
+describe('AcpSession form elicitation, plans, additionalDirectories, planMode and context usage', () => {
+  // Rule: ACP `elicitation/create` (form mode) maps into Cindy's `ask_user_question` interaction card,
+  // collapsing companion `*_other` write-in fields into the single question's custom-answer slot.
+  // Minimal failing input: Antigravity-shaped `q1` (oneOf) + `q1_other` and `q2` (array/anyOf) + `q2_other`.
+  // Tier: unit.
+  it('translates ACP form elicitation (single, multi-select, write-in) into ask_user_question cards', async () => {
+    const agent = createFakeAgent();
+    const { session } = await open(agent);
+    const seen: InteractionRequest[] = [];
+    session.setInteractionResolver(async (request) => {
+      seen.push(request);
+      return {
+        kind: 'ask_user_question',
+        answers: {
+          q1: 'Option B',
+          q2: JSON.stringify(['Choice 1', 'Extra custom note']),
+        },
+      };
+    });
+    await session.send({ type: 'user', content: 'redesign' });
+    await vi.waitFor(() => expect(agent.prompts).toHaveLength(1));
+
+    const reply = await agent.requestElicitation({
+      toolCallId: 'call_ask_1',
+      mode: 'form',
+      message: 'The agent has 2 questions.',
+      requestedSchema: {
+        type: 'object',
+        properties: {
+          q1: {
+            type: 'string',
+            title: 'Which scope?',
+            oneOf: [
+              { const: '1', title: '(Recommended) Option A' },
+              { const: '2', title: 'Option B' },
+            ],
+          },
+          q1_other: {
+            type: 'string',
+            title: 'Other',
+            description: 'Optional free-form answer to: Which scope?',
+          },
+          q2: {
+            type: 'array',
+            title: 'Which extras?',
+            items: {
+              anyOf: [
+                { const: '1', title: 'Choice 1' },
+                { const: '2', title: 'Choice 2' },
+              ],
+            },
+          },
+          q2_other: {
+            type: 'string',
+            title: 'Other',
+            description: 'Optional free-form answer to: Which extras?',
+          },
+        },
+      },
+    });
+
+    expect(seen).toEqual([
+      {
+        kind: 'ask_user_question',
+        requestId: 'acp-elicitation-1',
+        toolUseId: 'call_ask_1',
+        questions: [
+          {
+            id: 'q1',
+            question: 'Which scope?',
+            options: [{ label: '(Recommended) Option A' }, { label: 'Option B' }],
+            multiSelect: false,
+          },
+          {
+            id: 'q2',
+            question: 'Which extras?',
+            options: [{ label: 'Choice 1' }, { label: 'Choice 2' }],
+            multiSelect: true,
+          },
+        ],
+      },
+    ]);
+    expect(reply.result).toEqual({
+      action: 'accept',
+      content: {
+        q1: '2',
+        q2: ['1'],
+        q2_other: 'Extra custom note',
+      },
+    });
+
+    // Single-select custom write-in routes to `q1_other`, skip returns `decline`, and abort returns `cancel`.
+    session.setInteractionResolver(async () => ({
+      kind: 'ask_user_question',
+      answers: { q1: 'My custom scope' },
+    }));
+    const writeInReply = await agent.requestElicitation({
+      mode: 'form',
+      message: 'The agent has 1 question.',
+      requestedSchema: {
+        type: 'object',
+        properties: {
+          q1: {
+            type: 'string',
+            title: 'Which scope?',
+            oneOf: [{ const: '1', title: 'Option A' }],
+          },
+          q1_other: { type: 'string', title: 'Other' },
+        },
+      },
+    });
+    expect(writeInReply.result).toEqual({
+      action: 'accept',
+      content: { q1_other: 'My custom scope' },
+    });
+
+    session.setInteractionResolver(async () => ({ kind: 'ask_user_question', answers: {} }));
+    const skipped = await agent.requestElicitation({
+      mode: 'form',
+      requestedSchema: {
+        type: 'object',
+        properties: { note: { type: 'string', title: 'Any note?' } },
+      },
+    });
+    expect(skipped.result).toEqual({ action: 'decline' });
+
+    // Unsupported mode (`url`) or password fields are rejected with JSON-RPC -32602 so the agent can fall back.
+    const urlReply = await agent.requestElicitation({
+      mode: 'url',
+      url: 'https://example.test/auth',
+      message: 'Sign in',
+    });
+    expect(urlReply.error).toMatchObject({ code: -32602 });
+
+    const secretReply = await agent.requestElicitation({
+      mode: 'form',
+      requestedSchema: {
+        type: 'object',
+        properties: { token: { type: 'string', format: 'password', title: 'API key' } },
+      },
+    });
+    expect(secretReply.error).toMatchObject({ code: -32602 });
+
+    // Aborting while a question card is open cancels the elicitation immediately.
+    const hanging = deferred<InteractionDecision>();
+    let aborted = false;
+    session.setInteractionResolver((_req, signal) => {
+      signal?.addEventListener('abort', () => { aborted = true; }, { once: true });
+      return hanging.promise;
+    });
+    const pendingElicitation = agent.requestElicitation({
+      mode: 'form',
+      requestedSchema: {
+        type: 'object',
+        properties: { confirm: { type: 'boolean', title: 'Proceed?' } },
+      },
+    });
+    await vi.waitFor(() => expect(agent.prompts).toHaveLength(1));
+    await session.abort();
+    expect(await pendingElicitation).toMatchObject({ result: { action: 'cancel' } });
+    expect(aborted).toBe(true);
+    agent.prompts[0]!.settle.resolve({ stopReason: 'cancelled' });
+    await session.close();
+  });
+
+  // Rule: ACP `plan` and `plan_update` notifications emit Cindy's standard `update_plan` snapshot tool_use
+  // so PinnedPlanPanel and inline plan cards render on desktop and mobile.
+  // Minimal failing input: `session/update` with `sessionUpdate: 'plan'` or `'plan_update'`.
+  // Tier: unit.
+  it('translates ACP plan and plan_update notifications into update_plan snapshot events', async () => {
+    const agent = createFakeAgent();
+    const { session, events } = await open(agent);
+    await session.send({ type: 'user', content: 'work' });
+    await vi.waitFor(() => expect(agent.prompts).toHaveLength(1));
+
+    agent.update({
+      sessionUpdate: 'plan',
+      entries: [
+        { content: 'Inspect codebase', priority: 'high', status: 'completed' },
+        { content: 'Implement fix', priority: 'high', status: 'in_progress' },
+        { content: 'Run tests', priority: 'medium', status: 'pending' },
+      ],
+    });
+    agent.update({
+      sessionUpdate: 'plan_update',
+      plan: {
+        type: 'items',
+        planId: 'custom-plan',
+        entries: [
+          { content: 'Step 1', priority: 'high', status: 'completed' },
+          { content: 'Step 2', priority: 'medium', status: 'cancelled' },
+        ],
+      },
+    });
+    agent.prompts[0]!.settle.resolve({ stopReason: 'end_turn' });
+    await vi.waitFor(() => expect(events.some((e) => e.type === 'done')).toBe(true));
+
+    const planEvents = events.filter((e) => e.type === 'tool_use' && (e.data as AcpRecord).toolName === 'update_plan');
+    expect(planEvents).toEqual([
+      {
+        type: 'tool_use',
+        data: {
+          toolUseId: 'plan:acp-sess-1-plan-1',
+          toolName: 'update_plan',
+          runtimeActivity: 'snapshot',
+          input: {
+            plan: [
+              { step: 'Inspect codebase', status: 'completed' },
+              { step: 'Implement fix', status: 'in_progress' },
+              { step: 'Run tests', status: 'pending' },
+            ],
+          },
+        },
+      },
+      {
+        type: 'tool_use',
+        data: {
+          toolUseId: 'plan:custom-plan',
+          toolName: 'update_plan',
+          runtimeActivity: 'snapshot',
+          input: {
+            plan: [
+              { step: 'Step 1', status: 'completed' },
+              { step: 'Step 2', status: 'completed' },
+            ],
+          },
+        },
+      },
+    ]);
+    await session.close();
+  });
+
+  // Rule: ACP agents advertising `sessionCapabilities.additionalDirectories`, `plan` mode, and `usage_update`
+  // expose Cindy `extraDirs`, `planMode`, and `getContextUsage` dynamically.
+  // Minimal failing input: initialize with `additionalDirectories: {}`, `mode` option containing `plan`, and `usage_update`.
+  // Tier: unit.
+  it('supports additionalDirectories, planMode toggle, and getContextUsage when negotiated', async () => {
+    const configOptions = [
+      { id: 'model', name: 'Model', category: 'model', type: 'select', currentValue: 'gemini-4-neon', options: [{ value: 'gemini-4-neon', name: 'Gemini 4 Neon' }] },
+      { id: 'mode', name: 'Mode', category: 'mode', type: 'select', currentValue: 'default', options: [{ value: 'default', name: 'Default' }, { value: 'plan', name: 'Plan' }] },
+    ];
+    let currentMode = 'default';
+    const agent = createFakeAgent({
+      agentCapabilities: { sessionCapabilities: { additionalDirectories: {}, resume: {} } },
+      configOptions,
+      handlers: {
+        'session/set_config_option': (params) => {
+          if (params.configId === 'mode' && typeof params.value === 'string') currentMode = params.value;
+          return {
+            configOptions: configOptions.map((opt) => opt.id === 'mode' ? { ...opt, currentValue: currentMode } : opt),
+          };
+        },
+      },
+    });
+    const { session } = await open(agent, { extraDirs: ['/extra/a', '/extra/b', '/extra/a'] });
+
+    const sessionNew = agent.sent.find((m) => m.method === 'session/new');
+    expect((sessionNew?.params as AcpRecord).additionalDirectories).toEqual(['/extra/a', '/extra/b']);
+    expect(session.capabilities.extraDirs.supported).toBe(true);
+    expect(session.capabilities.planMode?.supported).toBe(true);
+    expect(session.getPlanMode()).toBe(false);
+
+    await session.setPlanMode(true);
+    expect(session.getPlanMode()).toBe(true);
+    await session.setPlanMode(false);
+    expect(session.getPlanMode()).toBe(false);
+
+    await session.setExtraDirs(['/extra/c']);
+
+    // An engine advertising additionalDirectories without session/resume or session/load rejects live dir changes.
+    const nonResumable = createFakeAgent({
+      agentCapabilities: { loadSession: false, sessionCapabilities: { additionalDirectories: {} } },
+    });
+    const { session: unresumableSession } = await open(nonResumable, { extraDirs: ['/extra/a'] });
+    await expect(unresumableSession.setExtraDirs(['/extra/a'])).resolves.toBeUndefined();
+    await expect(unresumableSession.setExtraDirs(['/extra/b'])).rejects.toThrow();
+    await unresumableSession.close();
+
+    // Context usage is unavailable before the agent reports a context window, then reflects `usage_update` + turn usage.
+    await expect(session.getContextUsage()).rejects.toThrow();
+    await session.send({ type: 'user', content: 'hi' });
+    await vi.waitFor(() => expect(agent.prompts).toHaveLength(1));
+    agent.update({ sessionUpdate: 'usage_update', used: 25_000, size: 200_000 });
+    agent.prompts[0]!.settle.resolve({
+      stopReason: 'end_turn',
+      usage: { inputTokens: 1_000, outputTokens: 200, cachedReadTokens: 500, cachedWriteTokens: 0, totalTokens: 1_700 },
+    });
+    await vi.waitFor(() => expect(session.isTurnRunning()).toBe(false));
+    expect(session.getUsageSnapshot().contextWindow).toBe(200_000);
+
+    expect(await session.getContextUsage()).toMatchObject({
+      totalTokens: 25_000,
+      maxTokens: 200_000,
+      rawMaxTokens: 200_000,
+      percentage: 12.5,
+      model: 'gemini-4-neon',
+      apiUsage: {
+        input_tokens: 1_000,
+        output_tokens: 200,
+        cache_creation_input_tokens: 0,
+        cache_read_input_tokens: 500,
+      },
+    });
+    await session.close();
+  });
+
+  it('mutates live vendorOptions in-place and queues role briefing on setVendorOptions', async () => {
+    const agent = createFakeAgent();
+    const capturedContexts: Array<Record<string, unknown>> = [];
+    const engine = new AcpAgent({
+      auth: { getState: async () => ({ authenticated: true }), triggerLogin: async () => ({ authenticated: true }), logout: async () => {}, getAuthEnv: async () => ({}) },
+      runtimeConfig: {},
+      binaryPath: '',
+      logger: silentLogger,
+      clientInfo: { name: 'cindy', version: 'test' },
+      endpoints: { connect: async () => agent.transport },
+      preparePiExtraSpawnConfig: async (_providers, ctx) => {
+        capturedContexts.push(ctx as unknown as Record<string, unknown>);
+        return null;
+      },
+    });
+    const session = await engine.startSession({
+      workingDir: '/w',
+      model: '',
+      providerId: 'acp-plugin:dsh-acp:dsh',
+      pluginEngineTrustedCaller: true,
+    });
+    const vendorOptions = capturedContexts[0]?.vendorOptions as Record<string, unknown>;
+    expect(vendorOptions).toEqual({});
+
+    await session.setVendorOptions!({
+      orcaRole: 'lead',
+      orcaWorkflowId: 'team-1',
+      orcaLeadSessionId: 'lead-1',
+      pluginEngineRoleBriefing: 'You are now the Orca Lead.',
+    });
+    expect(vendorOptions).toEqual({
+      orcaRole: 'lead',
+      orcaWorkflowId: 'team-1',
+      orcaLeadSessionId: 'lead-1',
+    });
+
+    await session.send({ type: 'user', content: 'delegate this task' });
+    await vi.waitFor(() => expect(agent.prompts).toHaveLength(1));
+    const blocks = agent.prompts[0]!.params.prompt as Array<{ type: string; text: string }>;
+    expect(blocks.map((b) => b.text).join('\n')).toContain('You are now the Orca Lead.');
+    expect(blocks.map((b) => b.text).join('\n')).toContain('delegate this task');
+
+    agent.prompts[0]!.settle.resolve({ stopReason: 'end_turn' });
+    await vi.waitFor(() => expect(session.isTurnRunning?.()).toBe(false));
+
+    await session.setVendorOptions!({ orcaRole: null, orcaWorkflowId: null, orcaLeadSessionId: null });
+    expect(vendorOptions).toEqual({});
+    await session.close();
+  });
+
+  it('enforces elicitation schema invariants: required choices, multi-select custom text, and minItems/maxItems', async () => {
+    const agent = createFakeAgent();
+    const { session } = await open(agent);
+
+    // 1. Required choice paired with optional *_other is NOT folded so the required choice can never go missing.
+    session.setInteractionResolver(async (request) => {
+      if (request.kind !== 'ask_user_question') throw new Error('unexpected');
+      expect(request.questions).toHaveLength(2);
+      expect(request.questions[0]?.id).toBe('q1');
+      expect(request.questions[1]?.id).toBe('q1_other');
+      // Attempting custom-only answer for required q1 declines instead of omitting q1.
+      return { kind: 'ask_user_question', answers: { q1: 'not-a-choice', q1_other: 'extra note' } };
+    });
+    expect((await agent.requestElicitation({
+      mode: 'form',
+      message: 'Pick one',
+      requestedSchema: {
+        type: 'object',
+        required: ['q1'],
+        properties: {
+          q1: { type: 'string', title: 'Choice', oneOf: [{ const: 'a', title: 'Alpha' }, { const: 'b', title: 'Beta' }] },
+          q1_other: { type: 'string', title: 'Other' },
+        },
+      },
+    })).result).toEqual({ action: 'decline' });
+
+    // 2. Multi-select without a companion write-in key rejects mixed listed + custom text instead of dropping custom text.
+    session.setInteractionResolver(async () => ({
+      kind: 'ask_user_question',
+      answers: { tags: JSON.stringify(['Alpha', 'unlisted custom text']) },
+    }));
+    expect((await agent.requestElicitation({
+      mode: 'form',
+      message: 'Pick tags',
+      requestedSchema: {
+        type: 'object',
+        properties: {
+          tags: {
+            type: 'array',
+            title: 'Tags',
+            minItems: 1,
+            maxItems: 2,
+            items: { anyOf: [{ const: 'a', title: 'Alpha' }, { const: 'b', title: 'Beta' }, { const: 'c', title: 'Gamma' }] },
+          },
+        },
+      },
+    })).result).toEqual({ action: 'decline' });
+
+    // 3. Multi-select enforces maxItems / minItems bounds.
+    session.setInteractionResolver(async () => ({
+      kind: 'ask_user_question',
+      answers: { tags: JSON.stringify(['Alpha', 'Beta', 'Gamma']) },
+    }));
+    expect((await agent.requestElicitation({
+      mode: 'form',
+      message: 'Pick at most two',
+      requestedSchema: {
+        type: 'object',
+        properties: {
+          tags: {
+            type: 'array',
+            title: 'Tags',
+            minItems: 1,
+            maxItems: 2,
+            items: { anyOf: [{ const: 'a', title: 'Alpha' }, { const: 'b', title: 'Beta' }, { const: 'c', title: 'Gamma' }] },
+          },
+        },
+      },
+    })).result).toEqual({ action: 'decline' });
+
+    session.setInteractionResolver(async () => ({
+      kind: 'ask_user_question',
+      answers: { tags: JSON.stringify(['Alpha', 'Beta']) },
+    }));
+    expect((await agent.requestElicitation({
+      mode: 'form',
+      message: 'Pick at most two',
+      requestedSchema: {
+        type: 'object',
+        properties: {
+          tags: {
+            type: 'array',
+            title: 'Tags',
+            minItems: 1,
+            maxItems: 2,
+            items: { anyOf: [{ const: 'a', title: 'Alpha' }, { const: 'b', title: 'Beta' }, { const: 'c', title: 'Gamma' }] },
+          },
+        },
+      },
+    })).result).toEqual({ action: 'accept', content: { tags: ['a', 'b'] } });
+
+    // 4. Impossible minItems > maxItems schema is rejected with -32602.
+    expect((await agent.requestElicitation({
+      mode: 'form',
+      message: 'Invalid bounds',
+      requestedSchema: {
+        type: 'object',
+        properties: {
+          tags: { type: 'array', minItems: 3, maxItems: 1, items: { enum: ['a', 'b'] } },
+        },
+      },
+    })).error).toMatchObject({ code: -32602 });
+
+    await session.close();
   });
 });

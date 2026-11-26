@@ -4275,6 +4275,7 @@
             "restoreAria": "自動圧縮の比率を既定値に戻す",
             "timing": "この提供元のモデルで利用可能なすべてのエンジンに適用します。以降の実行で有効になり、生成中の応答は中断しません。"
           },
+          "antigravityHydrogenDescription": "日常のコーディングや素早い実行向け。",
           "contextLimitRoute": "現在 {{tokens}} tokens",
           "contextLimitOverWindow": "プロバイダーが宣言した上限を超えています。リクエストが失敗する可能性があります。",
           "restoreDefault": "既定に戻す",
@@ -16261,6 +16262,7 @@
       },
       "autoResumePending": {
         "label": "再接続中",
+        "continuingWithProgress": "自動で続行中（{{attempt}}/{{total}}）…",
         "labelWithProgress": "再接続中 {{attempt}}/{{total}}",
         "groupSwitch": "別のパソコンに切り替え中"
       },
@@ -17534,7 +17536,14 @@
         "snoozeFailed": "後で処理する時刻を保存できませんでした。接続を確認し、タスクがあるコンピューターを更新してください。",
         "hours": "{{count}} 時間後",
         "hours_one": "{{count}} 時間後",
-        "hours_other": "{{count}} 時間後"
+        "hours_other": "{{count}} 時間後",
+        "pendingSync": "同期待ち",
+        "pendingArchiveSync": "コンピューターがオンラインになり次第アーカイブ",
+        "offlineCompleteRejectedDirty": "「{{title}}」を保留中に戻しました：worktree に未コミットの変更があるため、確認後にアーカイブしてください。",
+        "offlineCompleteRejectedNewActivity": "「{{title}}」を保留中に戻しました：オフライン中にこのタスクに新しい動きがありました。",
+        "offlineCompleteRejectedRunning": "「{{title}}」を保留中に戻しました：タスクは現在実行中です。",
+        "offlineCompleteRejectedAttached": "「{{title}}」を保留中に戻しました：接続中または共有中のため自動アーカイブできませんでした。",
+        "offlineCompleteRejectedPreflight": "「{{title}}」を保留中に戻しました：アーカイブ前に worktree の状態を確認できませんでした。"
       },
       "taskListMode": {
         "heading": "タスクモード",
@@ -20060,6 +20069,9 @@
       "permissionTightenInterruptFailed": "権限を厳格化する際に実行中のタスクを停止できませんでした。タスクは終了まで確認なしで実行され続ける可能性があります。必要に応じて手動で停止してください。",
       "codexAutoReviewUnavailable": "自動レビューは一時的に利用できません。現在の操作をブロックし、デフォルト権限に切り替えました。もう一度実行してください。必要な場合は確認します。",
       "hostShellCommandBlocked": "Cindy がこのシェルコマンドをブロックしました。コマンドを確認し、利用可能なツールまたはコマンドで続行してください。",
+      "reconnectAutoResumeExhausted": "自動続行の試行回数が上限に達しました。",
+      "reconnectAutoResumeDisabled": "自動続行はオフです。",
+      "codexReconnectStalled": "2 分以内にモデルとの接続を復旧できませんでした。",
       "upstreamResponseIdleTimeout": "モデルから長時間応答がなかったため、無限待機を避けるためこのターンを自動中断しました。完了したツール呼び出しは保持されています。次のメッセージを送信して続行できます。",
       "codexHistoryOversized": "画像の履歴が大きすぎて、自動では再開できません。「続けて」と送ると、Cindy が現在のタスクを再開します。",
       "codexHistoryOversizedRemote": "履歴に過大な画像があり、リモート圧縮を完了できません。Codex を実行している端末でこのタスクを開いて再送信してください。Cindy が画像を省略して続けます。",

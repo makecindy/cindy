@@ -4317,6 +4317,7 @@
             "restoreAria": "Restore the default automatic compaction ratio",
             "timing": "Applies to all available engines for this model and source on subsequent runs, without interrupting a response."
           },
+          "antigravityHydrogenDescription": "Designed for everyday coding and fast execution.",
           "contextLimitRoute": "Current {{tokens}} tokens",
           "contextLimitOverWindow": "Above the provider’s declared window; requests may fail.",
           "restoreDefault": "Restore default",
@@ -16327,6 +16328,7 @@
       },
       "autoResumePending": {
         "label": "Reconnecting",
+        "continuingWithProgress": "Continuing automatically ({{attempt}}/{{total}})…",
         "labelWithProgress": "Reconnecting {{attempt}}/{{total}}",
         "groupSwitch": "Switching to another computer"
       },
@@ -17609,7 +17611,14 @@
         "snoozeFailed": "Could not save the snooze time. Check the connection and update the computer hosting this task.",
         "hours": "In {{count}} hours",
         "hours_one": "In {{count}} hour",
-        "hours_other": "In {{count}} hours"
+        "hours_other": "In {{count}} hours",
+        "pendingSync": "Pending sync",
+        "pendingArchiveSync": "Will archive when computer is online",
+        "offlineCompleteRejectedDirty": "“{{title}}” returned to Pending: uncommitted changes in its worktree need confirmation before archiving.",
+        "offlineCompleteRejectedNewActivity": "“{{title}}” returned to Pending: new activity arrived on its computer while offline.",
+        "offlineCompleteRejectedRunning": "“{{title}}” returned to Pending: the task is currently running.",
+        "offlineCompleteRejectedAttached": "“{{title}}” returned to Pending: the task is currently attached or shared and could not be archived automatically.",
+        "offlineCompleteRejectedPreflight": "“{{title}}” returned to Pending: could not verify its worktree before archiving."
       },
       "taskListMode": {
         "heading": "Task mode",
@@ -20136,6 +20145,9 @@
       "permissionTightenInterruptFailed": "Failed to stop the running task while tightening permissions; it may keep running without approval prompts until it finishes. Stop it manually if needed.",
       "codexAutoReviewUnavailable": "Auto-review is temporarily unavailable. The current action was blocked and permissions switched to Default. Retry the request; Cindy will ask when needed.",
       "hostShellCommandBlocked": "Cindy blocked this shell command. Check the command and use an available tool or command to continue.",
+      "reconnectAutoResumeExhausted": "Automatic continuation reached its retry limit.",
+      "reconnectAutoResumeDisabled": "Automatic continuation is turned off.",
+      "codexReconnectStalled": "The model connection did not recover within 2 minutes.",
       "upstreamResponseIdleTimeout": "The model stopped responding for a long time, so this turn was interrupted to avoid hanging forever. Completed tool calls are preserved — send the next message to continue.",
       "codexHistoryOversized": "The image history is too large to resume automatically. Send “Continue”, and Cindy will pick up the current task.",
       "codexHistoryOversizedRemote": "This task’s history includes oversized images, so remote compaction cannot finish. Open the task on the machine running Codex and send again; Cindy will omit those images there.",

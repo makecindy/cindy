@@ -308,6 +308,7 @@
       "neutral": "Reconectar",
       "usageReset": "Limite de uso redefinido, continuação automática",
       "pending": "Reconectando…",
+      "continuingWithProgress": "Continuando automaticamente ({{attempt}}/{{total}})…",
       "pendingWithProgress": "Reconectando {{attempt}}/{{total}}…",
       "groupSwitchPending": "Mudando para outro computador…",
       "details": "Tentativa {{attempt}}/{{total}} · {{count}} reconexões nesta sessão",

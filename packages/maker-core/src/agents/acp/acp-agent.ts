@@ -48,6 +48,7 @@ import {
   openAcpSession,
   type AcpClientInfo,
   type AcpSession,
+  type AcpReportedModelDetails,
 } from './session.js';
 
 export const ACP_PLUGIN_PROVIDER_PREFIX = 'acp-plugin:';
@@ -105,6 +106,8 @@ export interface AcpAgentDeps extends AgentDeps {
   clientInfo: AcpClientInfo;
   /** Remembers what the agent offered so pickers can show it before the next start. */
   onSessionCapabilities?: (harnessKey: string, capabilities: Capabilities) => void;
+  /** Captures the local settings owner before the endpoint starts. */
+  observeModelDetails?: (providerId: string) => (details: AcpReportedModelDetails | undefined) => void;
   /**
    * The Skills a task in this directory can use (the same discovery and enablement as the built-in Pi
    * engine): the briefing ahead of the first message, `/<skill>` expansion and the `/` menu. A failure
@@ -120,7 +123,7 @@ const NO_INIT = buildAcpCapabilities(
       loadSession: false,
       promptCapabilities: { image: false, audio: false, embeddedContext: false },
       mcpCapabilities: { http: false, sse: false },
-      sessionCapabilities: { resume: false, close: false, list: false },
+      sessionCapabilities: { resume: false, close: false, list: false, additionalDirectories: false },
     },
     authMethods: [],
     steering: false,
@@ -242,8 +245,18 @@ export class AcpAgent extends BaseAgent {
       throw new AgentStartupStoppedError(new Error('A plugin engine task needs its harness id (acp-plugin:<plugin>:<harness>)'));
     }
 
+    const managed = opts[NATIVE_SUBSCRIPTION_ACCOUNT];
+    // The base provider can rotate through managed logins. Their details belong only to a
+    // separate account provider, never to the original login or a guest's settings.
+    const observeDetails = !hosted && opts.providerId
+      && (!managed || managed.defaultProfile || opts.providerId !== acpProviderIdForHarness(harnessKey))
+      ? this.acpDeps.observeModelDetails?.(opts.providerId)
+      : undefined;
     const logger = this.deps.logger.child(`acp:${harnessKey}`);
     const botMcpPolicy = isolatedBotProfile(opts.botRuntimeProfile)?.mcpPolicy;
+    // Mutable object shared by reference with the host MCP bridge so live
+    // `setVendorOptions` calls (e.g. upgrading a live task to Orca Lead) take effect immediately.
+    const liveVendorOptions: Record<string, unknown> = { ...(opts.vendorOptions ?? {}) };
     let extra: PiExtraSpawnConfig | null = null;
     // Hosted for another computer: Cindy tools are that computer's and arrive through the tunnel,
     // so this computer's own tool bridge (and its installed plugins, memory, sessions) stays out.
@@ -258,9 +271,9 @@ export class AcpAgent extends BaseAgent {
           ...(opts.makerMemoryScopeKey ? { memoryScopeKey: opts.makerMemoryScopeKey } : {}),
           memoryEnabled: opts.makerMemoryEnabled === true,
           ...(botMcpPolicy ? { botMcpPolicy } : {}),
-          ...(opts.vendorOptions ? { vendorOptions: opts.vendorOptions } : {}),
+          vendorOptions: liveVendorOptions,
           // The external agent's own sub-agents may call tools; Cindy cannot attest who called. A host
-          // that trusts the engine as a whole (collaboration Workers) treats every call as the task's own.
+          // that trusts the engine as a whole treats every call as the task's own.
           mcpCallerKind: opts.pluginEngineTrustedCaller === true ? 'root' : 'unknown',
           mcpCallerAttested: opts.pluginEngineTrustedCaller === true,
           recordMcpToolResults: true,
@@ -346,6 +359,8 @@ export class AcpAgent extends BaseAgent {
           ...(opts.botRuntimeProfile || hosted ? { requireSelectedModel: true } : {}),
           ...(opts.effort ? { effort: opts.effort } : {}),
           ...(opts.permissionMode ? { permissionMode: opts.permissionMode } : {}),
+          ...(opts.planMode ? { planMode: true } : {}),
+          ...(!hosted && opts.extraDirs && opts.extraDirs.length > 0 ? { extraDirs: opts.extraDirs } : {}),
           // Device-hosted tasks mutate files on the controller computer through cindy_exec,
           // where RemoteExecutor captures pre-write snapshots on the real workspace.
           ...(!hosted && opts.sessionId && this.deps.turnChangeCapture
@@ -357,6 +372,13 @@ export class AcpAgent extends BaseAgent {
           ...(expandSlashInvocation ? { expandSlashInvocation } : {}),
           ...(extra?.takeMcpToolResult ? { takeMcpToolResult: extra.takeMcpToolResult } : {}),
           logger,
+          onVendorOptionsChange: (patch) => {
+            for (const [key, value] of Object.entries(patch)) {
+              if (key === 'pluginEngineRoleBriefing') continue;
+              if (value === null || value === undefined) delete liveVendorOptions[key];
+              else liveVendorOptions[key] = value;
+            }
+          },
           onEnded: disposeBridge,
         });
       } catch (error) {
@@ -377,6 +399,7 @@ export class AcpAgent extends BaseAgent {
 
     try {
       const session = await open();
+      if (observeDetails) session.observeReportedModelDetails(observeDetails);
       this.acpDeps.onSessionCapabilities?.(harnessKey, session.capabilities);
       session.onCapabilitiesChange((capabilities) => this.acpDeps.onSessionCapabilities?.(harnessKey, capabilities));
       return session;

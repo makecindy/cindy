@@ -477,7 +477,14 @@
         "nextWeek": "下週",
         "indefinite": "無期",
         "custom": "自定…",
-        "invalidTime": "請選擇來歲以內之未來日期時辰。"
+        "invalidTime": "請選擇來歲以內之未來日期時辰。",
+        "pendingSync": "待同步",
+        "pendingArchiveSync": "俟電腦上線自歸檔",
+        "offlineCompleteRejectedDirty": "「{{title}}」已返待處：worktree 尚有未呈之改，須覆核方歸檔。",
+        "offlineCompleteRejectedNewActivity": "「{{title}}」已返待處：離線期間此差事有新進。",
+        "offlineCompleteRejectedRunning": "「{{title}}」已返待處：此差事方行。",
+        "offlineCompleteRejectedAttached": "「{{title}}」已返待處：此差事方受接管或共治，未自歸檔。",
+        "offlineCompleteRejectedPreflight": "「{{title}}」已返待處：未克核驗 worktree，須手核方歸檔。"
       },
       "taskListMode": {
         "enterInbox": "轉至收件匣",
