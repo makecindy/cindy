@@ -160,6 +160,7 @@ interface Running {
   lane?: string;
   laneLookup?: Promise<void>;
   attachmentAfter?: string;
+  readMentionReplyQuote?: () => Promise<BotGroupQuoteView | undefined>;
   textProgress?: { scope: string; after: string; seen: Map<string, string> };
   settlement?: { terminal: BotGroupLaneTerminal; cancelled?: boolean; payload?: Record<string, unknown>; reply?: { sourceText: string; text: string; attachments: ChatUploadAttachment[] }; fileReply?: Awaited<ReturnType<typeof prepareChatReplyFiles>>; retryAt: number; keepLease?: boolean; refused?: boolean };
   delivery?: Promise<void>;
@@ -1840,7 +1841,8 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
    * message can be quoted; the snapshot never comes from the controller's input. A thread
    * share's own text is only its card's fallback, so a share is not quotable either.
    */
-  async function quoteSnapshot(roomId: string, messageId: string, members: Promise<Member[]>, direct: boolean): Promise<BotGroupQuoteView & { recipientActorId?: string }> {
+  async function quoteSnapshot(roomId: string, messageId: string, members: Promise<Member[]>, direct: boolean,
+    accepts?: (message: Message) => boolean): Promise<BotGroupQuoteView & { recipientActorId?: string }> {
     let quoted: Message;
     try {
       quoted = await api<Message>(`/conversations/${roomId}/messages/${messageId}`);
@@ -1850,7 +1852,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     }
     const resolvedMembers = await members;
     const view = messageView(quoted, resolvedMembers, direct ? [] : resolvedMembers);
-    if (quoted.id !== messageId || quoted.deleted || quoted.threadRootId !== null || quoted.origin === 'system'
+    if (quoted.id !== messageId || quoted.deleted || quoted.threadRootId !== null || quoted.origin === 'system' || (accepts && !accepts(quoted))
       || view.kind !== 'message' || view.authorKind === 'system' || readBotGroupThreadShareCard(quoted)) throw new Error('QUOTE_UNAVAILABLE');
     return { ...botGroupQuoteFromMessage({ ...view, content: quotedText(quoted),
       attachments: quotedAttachments(quoted) }),
@@ -2803,10 +2805,14 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       refusal = await attempt();
       if (!invalidInput(refusal) && (!refusal || refusal instanceof ChatResponseError)) supportsTeammateMentions = false;
     }
+    if (run.readMentionReplyQuote && contentRefusal(action, refusal)
+      && dropSettlementCard(payload, 'cindy.quote')) {
+      refusal = await attempt();
+    }
     if (!refusal) return;
     if (!contentRefusal(action, refusal)) throw refusal;
     reportRefusal(run, action, refusal, payload.content, 1);
-    if (!dropProcessLocator(payload)) throw new SettlementRefused(refusal);
+    if (!dropSettlementCard(payload, 'cindy.work-record')) throw new SettlementRefused(refusal);
     const retried = await attempt();
     if (!retried) return;
     if (!contentRefusal(action, retried)) throw retried;
@@ -2825,11 +2831,11 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       && error.status >= 400 && error.status < 500 && error.status !== 408
       && ['INVALID_INPUT', 'INVALID_PARAMS', 'REQUEST_FAILED'].includes(error.message);
   }
-  /** Drops the optional locator block the retry leaves out; `false` when there is nothing to drop. */
-  function dropProcessLocator(payload: Record<string, unknown>): boolean {
+  /** Drops an optional card after a definite content refusal. */
+  function dropSettlementCard(payload: Record<string, unknown>, namespace: string): boolean {
     if (!Array.isArray(payload.content)) return false;
     const kept = (payload.content as unknown[]).filter(block =>
-      (block as { namespace?: unknown } | null)?.namespace !== 'cindy.work-record');
+      (block as { namespace?: unknown } | null)?.namespace !== namespace);
     if (kept.length === payload.content.length) return false;
     payload.content = kept;
     return true;
@@ -2942,13 +2948,15 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
             failureCodes.set(`${run.execution.id}:${run.execution.epoch}`, terminal.failureCode ?? 'RUNTIME_ERROR');
             if (failureCodes.size > 1000) failureCodes.delete(failureCodes.keys().next().value!);
           }
+          const quote = terminal.outcome !== 'error' && (!isBotGroupNoReplyText(text) || files.length)
+            ? await run.readMentionReplyQuote?.() : undefined;
           pending.payload = terminal.outcome === 'error' ? { detail: botGroupRuntimeFailureDetail(terminal.failureCode ?? 'RUNTIME_ERROR') }
             : { ...(isBotGroupNoReplyText(text) && !files.length ? {} : {
               ...(() => {
                 const named = run.mentionable?.length ? resolveBotGroupMentions(contentText, { members: run.mentionable, allLabels: [] }).botIds.filter(target => target !== run.execution.bot_id) : [];
                 return named.length ? { mentions: named } : {};
               })(),
-              content: [{ type: 'text', text: contentText.slice(0, 16000) || '已完成' }, ...files, botGroupProcessCard({ groupId: run.execution.conversation_id, executionId: run.execution.id, sessionId: run.sessionId, clientId: run.clientId, durationMs: run.durationMs, ...(selfDeviceId ? { deviceId: selfDeviceId } : {}) })] }),
+              content: [...(quote ? [buildBotGroupQuoteCard(quote)] : []), { type: 'text', text: contentText.slice(0, 16000) || '已完成' }, ...files, botGroupProcessCard({ groupId: run.execution.conversation_id, executionId: run.execution.id, sessionId: run.sessionId, clientId: run.clientId, durationMs: run.durationMs, ...(selfDeviceId ? { deviceId: selfDeviceId } : {}) })] }),
               // A single-speaker server never chains rounds, so there is nothing to continue.
               ...(singleSpeaker || run.execution.mask_owner_id ? {} : { continueDiscussion: !run.plan && !isBotGroupNoReplyText(text) }) };
         }
@@ -3457,6 +3465,18 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       const lane = await laneSetup;
       const { history, source, threadRootId, thread, focusMessages, quotedMessage, attachments, missingAttachments, mediaDelivery } = await contextRead;
       if (!current()) throw new Error('OWNER_CHANGED');
+      if (execution.mask_kind === 'reply' && execution.mask_owner_id === selfId && source && !run.plan) {
+        // The claim carries one source ID and no trigger reason. Only a directed
+        // main-timeline mention without a competing quote identifies this case.
+        const directedMention = (message: Message) => message.threadRootId === null && !message.deleted
+          && message.origin === 'user' && message.author.kind === 'human'
+          && (!message.mentionAudience || message.mentionAudience === 'bots')
+          && message.mentions?.includes(selfId) === true && !message.content.some(block => block.namespace === 'cindy.quote');
+        if (directedMention(source)) {
+          run.readMentionReplyQuote = async () => quoteSnapshot(s.room.id, execution.source_message_id,
+            Promise.resolve(s.members), false, directedMention).catch(() => undefined);
+        }
+      }
       if (missingAttachments.length) void postCapabilityNotice(run, 'ATTACHMENTS_UNAVAILABLE', threadRootId ?? undefined);
       const runtime = laneContext(lane.sessionId);
       const contextScope = JSON.stringify([s.room.id, threadRootId, run.plan?.id, execution.access_mode, execution.access_revision, execution.mask_owner_id]);
