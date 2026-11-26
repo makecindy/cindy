@@ -7,8 +7,10 @@ import {
   ScrollView,
   StyleSheet,
   Switch,
+  useWindowDimensions,
   View,
 } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useTranslation } from "react-i18next";
 import type { PluginNativeIntent } from "@cindy/device-link";
 import {
@@ -52,6 +54,8 @@ export function PluginScheduleDraft({
   const { t } = useTranslation(),
     { colors } = useTheme(),
     styles = useThemedStyles(makeStyles);
+  const insets = useSafeAreaInsets();
+  const { height } = useWindowDimensions();
   const link = useDeviceLink(),
     maker = useMobileMakerTransport(deviceId),
     providers = useDeviceProviders(deviceId);
@@ -205,7 +209,8 @@ export function PluginScheduleDraft({
       >
         <ScrollView
           keyboardShouldPersistTaps="handled"
-          contentContainerStyle={styles.sheet}
+          style={{ flexGrow: 0, maxHeight: height - insets.top - spacing.lg }}
+          contentContainerStyle={[styles.sheet, { paddingBottom: insets.bottom + spacing.lg }]}
         >
           <Text style={styles.title}>{t("plugins.automationDraft")}</Text>
           <Text style={styles.hint}>

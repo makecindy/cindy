@@ -14,6 +14,7 @@ vi.mock("react-native", () => ({
   ActivityIndicator: () => null,
   AppState: { currentState: "active" },
   Platform: { OS: "ios" },
+  useWindowDimensions: () => ({ width: 402, height: 874 }),
   ScrollView: "div",
   StyleSheet: { create: (v: unknown) => v },
   View: "div",
@@ -25,6 +26,9 @@ vi.mock("react-native", () => ({
 }));
 vi.mock("react-i18next", () => ({
   useTranslation: () => ({ t: (key: string) => key }),
+}));
+vi.mock("react-native-safe-area-context", () => ({
+  useSafeAreaInsets: () => ({ top: 62, bottom: 34, left: 0, right: 0 }),
 }));
 vi.mock("@/theme", () => ({
   fontWeight: {},
