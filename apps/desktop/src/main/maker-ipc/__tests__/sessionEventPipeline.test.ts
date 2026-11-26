@@ -489,18 +489,18 @@ describe('production Session event pipeline', () => {
     } finally { await current.dispose(); }
   });
 
-  // #11032: safe diagnostics must reach live delivery, continuation classification
-  // and the existing persistence writer. No schema/UI/continuation policy changes.
-  it('retains gateway diagnostics for live and persisted watchdog consumers', async () => {
+  // Unit: exercise the event pipeline with one unconfirmed command. A reconnect
+  // used to preserve HTTP status but drop tool state before the coordinator saw it.
+  it('retains gateway and pending-tool diagnostics for watchdog consumers', async () => {
     const h = harness();
     h.deps.redactEventForRenderer.mockImplementation(value => value);
     const data = { message: 'The model connection has been retrying for 120s without making progress. (HTTP 502)',
-      reason: 'codex_reconnect_stalled', errorStatus: 502, isTerminal: true, idleMs: 120000 };
+      reason: 'codex_reconnect_stalled', errorStatus: 502, pendingToolCount: 1, isTerminal: true, idleMs: 120000 };
     try {
       h.emit(event('error', data));
       await microtasks();
       expect(h.deps.agentInputCoordinatorHolder.onTurnEvent).toHaveBeenCalledWith(
-        'task', 'error', data.message, expect.objectContaining({ reason: data.reason, errorStatus: 502 }), expect.any(Object),
+        'task', 'error', data.message, expect.objectContaining({ reason: data.reason, errorStatus: 502, pendingToolCount: 1 }), expect.any(Object),
       );
       expect(h.deps.broadcastToAllWindows).toHaveBeenCalledWith('maker:event', expect.objectContaining({
         event: expect.objectContaining({ type: 'error', data }),

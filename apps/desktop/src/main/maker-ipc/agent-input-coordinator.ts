@@ -57,6 +57,7 @@ import { REPLY_QUOTE_SOURCE_CONTENT } from './chatReplyQuoteNote.js';
 import type { touchUserSendInDb } from '../localDb/ipc/sessions.js';
 import type { AgentInputQueueSnapshotState } from '../localDb/agentInputQueueSnapshots.js';
 import {
+  codexReconnectRecoveryNote,
   isContinuationOnlyAutoResumeReason,
   isUnexpectedWorkerStreamEnd,
   type InterruptedTurnErrorSignals,
@@ -1475,6 +1476,8 @@ export class AgentInputCoordinator {
   private readonly acceptedHistoryReplays = new WeakSet<AgentInputQueuedMessage>();
   private readonly retrySwitchRevisions = new WeakMap<AgentInputQueuedMessage, number>();
   private readonly scheduledQuotaRetryItems = new WeakSet<object>();
+  /** Model-only diagnostics follow the exact failed recovery and its queued continuation. */
+  private readonly reconnectRecoveryNotes = new WeakMap<NonNullable<AgentInputRecovery> | AgentInputQueuedMessage, string>();
   /** The quota classification belongs to the recovery, and survives runtime/token replacement. */
   private readonly accountLimitRecoveries = new WeakSet<object>();
   /** Only this saved continuation can cross a restore pause; the ordinary queue stays paused. */
@@ -3869,7 +3872,10 @@ export class AgentInputCoordinator {
         ? { ...usageWait.info, ...(state.error && !providerRestart ? { error: state.error } : {}) }
         : null;
     const attemptToken = opts?.auto ? (opts.attemptToken ?? null) : null;
-    const continuationOnly = providerRestart || Boolean(
+    const reconnectNote = this.reconnectRecoveryNotes.get(recovery) ??
+      ((state.errorReason ?? state.autoResumePending?.reason) === 'codex_reconnect_stalled'
+        ? codexReconnectRecoveryNote({}) : undefined);
+    const continuationOnly = providerRestart || reconnectNote !== undefined || Boolean(
       opts?.auto && isContinuationOnlyAutoResumeReason(previousAutoResumeInfo?.reason),
     );
     // Group inputs are hidden in the transcript and omitted by engine handoff.
@@ -4011,9 +4017,9 @@ export class AgentInputCoordinator {
           // 一并误藏(窗口从更早的行一直铺到本条)。
           retrySourceClientId: recovery.item.retrySourceClientId ?? recovery.item.supersedesUserClientId ?? recovery.item.clientId,
           supersedesUserClientId: undefined,
-          // 自动恢复不是计划批准：保留原 Plan/权限选项，不能因隐藏 CONTINUE
-          // 降到 Full access。人工 Retry 仍沿用既有合成 UI 动作策略。
-          createOpts: automatic
+          // A reconnect continuation, including a manual one, resumes the
+          // original task under the same Plan and permission options.
+          createOpts: automatic || reconnectNote !== undefined
             ? { ...recovery.item.createOpts }
             : { ...recovery.item.createOpts, planMode: false },
           chatMessage: {
@@ -4120,6 +4126,7 @@ export class AgentInputCoordinator {
       // This copy comes from the main process's saved active turn (or restored
       // active-turn receipt). Queue-head failures have never crossed that boundary.
       this.acceptedHistoryReplays.add(item);
+      if (continueItem && reconnectNote) this.reconnectRecoveryNotes.set(item, reconnectNote);
       inheritTelegramQuestionRetry(recovery.item, item);
       if ((opts?.auto && attemptToken !== null) || usageWait) {
         this.pendingAutoResumeRecoveries.set(item.clientId, {
@@ -6123,7 +6130,7 @@ export class AgentInputCoordinator {
       // Wire-only: derived from the live queue at this dispatch. The queue item and the stored
       // replay copy (agentFacingWireContent, readable through history) never carry it.
       const wireUserMessage = appendNoteToMakerUserMessage(
-        makerUserMessage,
+        appendNoteToMakerUserMessage(makerUserMessage, this.reconnectRecoveryNotes.get(head)),
         this.describeQueueBehindDispatch(sessionId, head),
       );
       active.sendStarted = true;
@@ -7973,6 +7980,12 @@ export class AgentInputCoordinator {
     signals?: Omit<InterruptedTurnErrorSignals, 'message'>,
     preferProviderGroup = true,
   ): AutoResumeInfo | null {
+    if (signals?.reason === 'codex_reconnect_stalled') {
+      const recovery = this.states.get(sessionId)?.recovery;
+      if (recovery?.kind === 'active-turn' && recovery.item === item) {
+        this.reconnectRecoveryNotes.set(recovery, codexReconnectRecoveryNote(signals));
+      }
+    }
     if (!this.deps.onResumableTurnError) return null;
     // 容量/额度错误到达终态时先交给供应商组；组异步拒绝后，
     // resumeAfterProviderGroupDeclined 以 preferProviderGroup=false 回到原有恢复。
