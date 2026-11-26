@@ -21,14 +21,15 @@ const SCENARIOS: PluginMarketVisualScenario[] = ["normal", "outdated", "unavaila
  * a success whose first installed read fails, a failure; `running`: still under way. `readingBack`: a success after
  * which the computer's installed reads stay out (the list says it is still reading); `changed`: a success after which
  * the plugin is at another version (changed on the computer since); `gone`: the operation takes effect (not an
- * uninstall) and the computer then forgets its receipt (NOT_FOUND from then on). After a success, as the computer
+ * uninstall) and the computer then forgets its receipt (NOT_FOUND from then on); `goneUnattributed`: the same, but the
+ * computer's record of the install is not attributed to this phone's operation (V2.10 ②). After a success, as the computer
  * answers in each situation (dispatcher R-4): `reinstalled`, the computer installed the same version again itself (no
  * evidence for this phone); `uninstalledAfter`, the plugin was uninstalled; `catalogAhead`, only the catalog published
  * its next release (this install stays, `update-available`, still this phone's evidence); `legacyHost`, the computer
  * answers from then on as an older one (no attribution fields, V2.10 ③).
  */
 export type VisualCheckBehavior = "running" | "waiting" | "consent" | "succeeded" | "unread" | "failed" | "readingBack" | "changed" | "gone"
-  | "goneUnread" | "reinstalled" | "uninstalledAfter" | "catalogAhead" | "legacyHost";
+  | "goneUnread" | "goneUnattributed" | "reinstalled" | "uninstalledAfter" | "catalogAhead" | "legacyHost";
 const scripted = new Map<string, { behavior: VisualCheckBehavior; lookups: number }>();
 export function scriptVisualCheckOperation(operationId: string, behavior: VisualCheckBehavior) {
   scripted.set(operationId, { behavior, lookups: 0 });
@@ -376,9 +377,10 @@ function receipt(operationId: string) {
     script.lookups += 1;
     if (script.behavior === "running") return { operationId, phase: "running" };
     if (script.behavior === "waiting" || script.lookups === 1) throw failure("INVALID_RESPONSE");
-    if (script.behavior === "gone" || script.behavior === "goneUnread") {
+    if (script.behavior === "gone" || script.behavior === "goneUnread" || script.behavior === "goneUnattributed") {
       if (script.behavior === "goneUnread") catalogUnreadable = true;
-      if (op.kind !== "uninstall") installed.set(instanceKey(demo.ghostId), { demo, enabled: true, version: RELEASE, operationId });
+      if (op.kind !== "uninstall") installed.set(instanceKey(demo.ghostId), { demo, enabled: true, version: RELEASE,
+        ...(script.behavior === "goneUnattributed" ? {} : { operationId }) });
       operations.delete(operationId);
       throw failure("NOT_FOUND");
     }

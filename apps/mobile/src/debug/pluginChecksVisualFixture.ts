@@ -14,10 +14,10 @@ import type { PluginSlotEntry } from "@/plugins/pluginManagementSlot";
  */
 export type VisualCheckState = "running" | "waiting" | "offline" | "awaitingYou" | "succeeded" | "unread" | "failed" | "untracked" | "many"
   | "readingBack" | "changed" | "uninstalled" | "decideBlocked" | "unprovableUninstall" | "updateGone"
-  | "reinstalled" | "goneSince" | "catalogAhead" | "legacyHost" | "recordMissing" | "results" | "attention";
+  | "reinstalled" | "goneSince" | "catalogAhead" | "legacyHost" | "recordMissing" | "results" | "attention" | "updateGoneUnattributed";
 export const VISUAL_CHECK_STATES: VisualCheckState[] = ["running", "waiting", "offline", "awaitingYou", "succeeded", "unread", "failed", "untracked", "many",
   "readingBack", "changed", "uninstalled", "decideBlocked", "unprovableUninstall", "updateGone", "reinstalled", "goneSince", "catalogAhead", "legacyHost",
-  "recordMissing", "results", "attention"];
+  "recordMissing", "results", "attention", "updateGoneUnattributed"];
 /** A computer that is not in the account's list: its pending check shows as offline. */
 const AWAY_DEVICE = { deviceId: "cindy-visual-mock-away", deviceName: "CINDY Away Mock Mac" };
 /** The online mock computer (visualMock's VISUAL_MOCK_DEVICE_ID; not imported, so this module stays out of its imports). */
@@ -83,6 +83,8 @@ export async function seedPluginChecksForVisualMock(state: string): Promise<(() 
     case "unprovableUninstall": { const c = await seedOne(WEATHER, "gone", MAC, "uninstall"); return () => { void c?.reconcile(); }; }
     // An update that took effect and whose receipt expired: verified from the computer's record of it ("Installed", Go to Installed).
     case "updateGone": { const c = await seedOne(READING, "gone", MAC, "update"); return () => { void c?.reconcile(); }; }
+    // The same update, but the computer's record of it is not this phone's (V2.10 ②): cannot be confirmed, "Go to Installed".
+    case "updateGoneUnattributed": { const c = await seedOne(READING, "goneUnattributed", MAC, "update"); return () => { void c?.reconcile(); }; }
     // A consent waiting for this phone while another operation holds the computer: "View and decide" says it must wait.
     case "decideBlocked": {
       // The check's result is unknown first (it lets go of the computer's slot), the other operation then takes the

@@ -56,13 +56,26 @@ export function PluginManagementConfirmation(
   // sheet stays compact once reviewed. Regular is unchanged.
   const [reviewedFor, setReviewedFor] = useState<string | null>(null);
   const reviewed = !!consent && reviewedFor === consent.requestId;
-  const compact = plan.mode === "compact" || reviewed;
+  // Checked on the real layout (Android reshoot 2026-11-26, 1080×1600 at text size 2.0: the estimate above said the
+  // identity block fits, while the native bottom sheet caps its content at 85% of the window and this sheet takes 85% of
+  // that, so the list got far less than planned): when the regular list shows
+  // less than the whole identity block (where it installs, where it comes from) without scrolling, this consent goes
+  // compact. Kept for this consent at this window and text size, so the compact layout cannot flip it back.
+  const fitKey = consent ? JSON.stringify([consent.requestId, windowWidth, windowHeight, fontScale]) : null;
+  const [crampedFor, setCrampedFor] = useState<string | null>(null);
+  const cramped = fitKey !== null && crampedFor === fitKey;
+  const compact = plan.mode === "compact" || reviewed || cramped;
   const needsReview = compact && !reviewed && info?.allowBlocked !== true;
+  const list = useScrollOverflow(), summary = useScrollOverflow();
+  useEffect(() => {
+    if (!fitKey || compact || measured.identity <= 0 || list.area.visible <= 0) return;
+    // A fade over the list's lower edge dims what lies under it: the block has to end above it.
+    if (measured.identity + (list.overflow ? FADE_HEIGHT : 0) > list.area.visible) setCrampedFor(fitKey);
+  }, [fitKey, compact, measured.identity, list.area.visible, list.overflow]);
   const listRef = useRef<ScrollViewInstance>(null);
   // Back to the list's top after "Review", and for each new consent (another requestId), so a second consent does not
   // open where the previous one was scrolled to (iOS: its new view id does the same).
   useEffect(() => { listRef.current?.scrollTo({ y: 0, animated: false }); }, [reviewed, consent?.requestId]);
-  const list = useScrollOverflow(), summary = useScrollOverflow();
   // Large text on a narrow screen: the buttons stack so each label shows in full (as the plugin notices do). Wide enough
   // (landscape, tablets) they stay side by side, labels wrapping inside them, so the text keeps more room (K-3).
   const stacked = fontScale > 1.2 && windowWidth < CONSENT_SIDE_BY_SIDE_MIN_WIDTH;

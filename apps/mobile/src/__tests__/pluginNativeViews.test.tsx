@@ -1805,9 +1805,10 @@ describe("pinned high-risk permission", () => {
     const plan = planConsentSheet({ available, identity: 380, heading: 30, lines: [40, 40, 40, 40, 40], gap: 4 });
     expect(plan).toMatchObject({ mode: "regular", clipped: true });
     expect(scroll().style.maxHeight).toBe(plan.mode === "regular" && plan.summaryLines);
-    // The list grows longer than its room: a text-free fade floats over its lower edge and no height changes (J-1).
+    // The list grows longer than its room: a text-free fade floats over its lower edge and no height changes (J-1). Its
+    // room still holds the whole identity block (380) above the fade (otherwise the sheet goes compact, see below).
     const textBefore = container.textContent;
-    act(() => bridge.props.get("plugins.management.list").onLayout({ nativeEvent: { layout: { height: 300 } } }));
+    act(() => bridge.props.get("plugins.management.list").onLayout({ nativeEvent: { layout: { height: 420 } } }));
     act(() => bridge.props.get("plugins.management.list").onContentSizeChange(390, 1200));
     expect(container.querySelector('[data-testid="plugins.management.listFade"]')).not.toBeNull();
     expect(container.textContent).toBe(textBefore);
@@ -1815,6 +1816,48 @@ describe("pinned high-risk permission", () => {
     // Large text: the buttons stack, Allow on top (column-reverse), labels wrapping.
     expect(bridge.props.get("plugins.management.actions").style).toContainEqual({ flexDirection: "column-reverse" });
   });
+  /* 测试价值（Android 复拍 2026-11-26，eb018bba36）
+   * - 生产入口与可观察结果：两端真实确认面板组件；观察主按钮是「查看来源和权限」还是「允许」。
+   * - 依据：「安装目标 + 来源」不滚动就看不全时必须是紧凑档（先查看再允许）。1080×1600、字号 2.0 下估算说放得下，原生
+   *   底部面板的高度上限让列表实际只剩一小段，官方来源走了常规档，不滚动就能点「允许」。判定改为看实际列表高度。
+   * - 最小失败输入：估算为常规档（身份块 200、摘要五项各 20），列表实际可视 150（Android）/ 150（iOS）；改前主按钮是
+   *   「允许」。对照：可视 300 时仍是常规档。tier: unit。
+   */
+  it.each([[150, "review"], [300, "allow"]] as const)(
+    "Android: the regular list shows %s of a 200-high identity block: the main button is %s", (visible, button) => {
+      bridge.fontScale = 1;
+      const { container } = mount(AndroidManagementConfirmation, props(allFive));
+      const layout = (id: string, height: number) => act(() => bridge.props.get(id).onLayout({ nativeEvent: { layout: { height } } }));
+      layout("plugins.management.identity", 200);
+      layout("plugins.management.actions", 44);
+      const heading = () => (bridge.props.get("plugins.management.highRisk").children as any[]).flat().find((child: any) => child?.props?.testID === "plugins.management.highRiskTitle");
+      act(() => heading().props.onLayout({ nativeEvent: { layout: { height: 20 } } }));
+      const scroll = () => bridge.props.get("plugins.management.highRiskScroll");
+      const lines = (Array.isArray(scroll().children) ? scroll().children : [scroll().children]).flat().filter(Boolean);
+      lines.forEach((line: any) => act(() => line.props.onLayout({ nativeEvent: { layout: { height: 20 } } })));
+      const shown = (id: string) => container.querySelector(`[data-testid="${id}"]`) !== null;
+      expect({ review: shown("plugins.management.review"), allow: shown("plugins.management.allow") }, "the estimate says regular").toEqual({ review: false, allow: true });
+      act(() => bridge.props.get("plugins.management.list").onLayout({ nativeEvent: { layout: { height: visible } } }));
+      act(() => bridge.props.get("plugins.management.list").onContentSizeChange(390, 1200));
+      expect({ review: shown("plugins.management.review"), allow: shown("plugins.management.allow") })
+        .toEqual({ review: button === "review", allow: button === "allow" });
+    });
+  it.each([[150, "review"], [300, "allow"]] as const)(
+    "iOS: the regular list shows %s of a 200-high identity block: the main button is %s", (visible, button) => {
+      bridge.fontScale = 1;
+      const { container } = mount(PluginManagementConfirmation, props(allFive));
+      geometry("plugins.management.identity", 200);
+      geometry("plugins.management.actions", 44);
+      geometry("plugins.management.highRiskTitle", 20);
+      const items = () => [...bridge.props.values()].filter((p: any) => fiveLines.includes(p.children));
+      items().forEach((item: any) => act(() => item.modifiers.find((m: any) => m.onGeometryChange).onGeometryChange({ width: 300, height: 20 })));
+      const shown = (id: string) => container.querySelector(`[data-testid="${id}"]`) !== null;
+      expect({ review: shown("plugins.management.review"), allow: shown("plugins.management.allow") }, "the estimate says regular").toEqual({ review: false, allow: true });
+      const list = bridge.props.get("plugins.managementConfirmation").nativeContentModifiers.find((m: any) => m.scrollGeometry);
+      act(() => list.scrollGeometry({ contentOffsetY: 0, containerHeight: visible, contentHeight: 1200 }));
+      expect({ review: shown("plugins.management.review"), allow: shown("plugins.management.allow") })
+        .toEqual({ review: button === "review", allow: button === "allow" });
+    });
   it("Android puts everything in one scroll area above fixed buttons when they do not fit (maintainer's numbers)", () => {
     bridge.fontScale = 2;
     const { container } = mount(AndroidManagementConfirmation, props(allFive));

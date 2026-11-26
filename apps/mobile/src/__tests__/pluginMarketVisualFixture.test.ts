@@ -148,9 +148,12 @@ describe("more pending-check states from cindy://plugins?checks=<state>", () => 
     ["changed", () => expect(ended()).toEqual([["market-install", "succeeded", "unconfirmed"]])],
     ["uninstalled", () => expect(ended()).toEqual([["uninstall", "succeeded", "none"]])],
     ["updateGone", () => expect(ended()).toEqual([["update", "installed", "verified"]])],
+    // Android reshoot 2026-11-26 could not reach it: the receipt is gone and the computer's record is not this phone's
+    // (V2.10 ②, not confirmed).
+    ["updateGoneUnattributed", () => expect(ended()).toEqual([["update", "mismatch", "none"]])],
     ["unprovableUninstall", () => expect(__retainedForTests.checks().map((c) => [c.entry, c.unprovable])).toEqual([["uninstall", { present: true }]])],
     // Dispatcher R-4: a success, then the computer answers as it does when it reinstalled the same version itself, when
-    // the plugin was uninstalled, and when only its catalog moved on (still this install: Open).
+    // the plugin was uninstalled, and when only its catalog moved on (still this install: Go to Installed).
     ["reinstalled", () => expect(ended()).toEqual([["market-install", "succeeded", "unconfirmed"]])],
     ["legacyHost", () => expect(ended()).toEqual([["market-install", "succeeded", "legacy"]])],
     ["goneSince", () => expect(ended()).toEqual([["market-install", "succeeded", "gone"]])],

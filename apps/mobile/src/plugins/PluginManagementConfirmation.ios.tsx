@@ -23,7 +23,7 @@ import {
   usePluginConsent,
   type PluginManagementConfirmationProps,
 } from "./usePluginConsent";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useWindowDimensions } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { CONSENT_FADE_HEIGHT, CONSENT_SIDE_BY_SIDE_MIN_WIDTH, consentSummaryFadeAllowed, planConsentSheet,
@@ -63,7 +63,13 @@ export function PluginManagementConfirmation(
     const next = geometry.contentHeight > geometry.containerHeight + 1 && geometry.contentOffsetY + geometry.containerHeight < geometry.contentHeight - 2;
     setMore((current) => current[key] === next ? current : { ...current, [key]: next });
   };
-  const listGeometry = useScrollGeometryChange(watchMore("list"));
+  // The list's visible height and whether it scrolls, from its own geometry (the real-layout check below).
+  const [listArea, setListArea] = useState({ visible: 0, overflow: false });
+  const listGeometry = useScrollGeometryChange((geometry: { contentOffsetY: number; containerHeight: number; contentHeight: number }) => {
+    watchMore("list")(geometry);
+    const visible = Math.floor(geometry.containerHeight), overflow = geometry.contentHeight > geometry.containerHeight + 1;
+    setListArea((current) => current.visible === visible && current.overflow === overflow ? current : { visible, overflow });
+  });
   const summaryGeometry = useScrollGeometryChange(watchMore("summary"));
   const fade = (testID: string, shown: boolean) => (
     <Rectangle testID={testID} modifiers={[
@@ -83,7 +89,19 @@ export function PluginManagementConfirmation(
   // would measure differently). Regular is unchanged: there the summary is pinned above the buttons.
   const [reviewedFor, setReviewedFor] = useState<string | null>(null);
   const reviewed = !!consent && reviewedFor === consent.requestId;
-  const compact = plan.mode === "compact" || reviewed;
+  // Checked on the real layout, as on Android (reshoot 2026-11-26): the usable height above is an estimate (header and
+  // footer constants). When the regular list shows less than the whole identity block (where it installs, where it
+  // comes from) without scrolling, this consent goes compact; kept for this consent at this window and text size, so
+  // the compact layout cannot flip it back.
+  const fitKey = consent ? JSON.stringify([consent.requestId, windowWidth, windowHeight, fontScale]) : null;
+  const [crampedFor, setCrampedFor] = useState<string | null>(null);
+  const cramped = fitKey !== null && crampedFor === fitKey;
+  const compact = plan.mode === "compact" || reviewed || cramped;
+  useEffect(() => {
+    if (!fitKey || compact || measured.identity <= 0 || listArea.visible <= 0) return;
+    // The list's top padding comes first; a fade over its lower edge dims what lies under it.
+    if (spacing.sm + measured.identity + (listArea.overflow ? CONSENT_FADE_HEIGHT : 0) > listArea.visible) setCrampedFor(fitKey);
+  }, [fitKey, compact, measured.identity, listArea.visible, listArea.overflow]);
   const needsReview = compact && !reviewed && info?.allowBlocked !== true;
   const [summaryHeight, setSummaryHeight] = useState(0);
   // Large text on a narrow screen: the buttons stack so each label shows in full; wide enough (landscape, iPad) they stay
