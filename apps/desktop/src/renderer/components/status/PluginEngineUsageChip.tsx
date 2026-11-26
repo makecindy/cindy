@@ -93,6 +93,7 @@ export function PluginEngineUsageChip({ engineKey, name, deviceId, running, sess
     <Popover open={menu.open} onOpenChange={menu.onOpenChange} modal={false}>
       <PopoverTrigger asChild>
         <button type="button" {...menu.triggerProps} onClick={event => { if (menu.open) event.preventDefault(); }} aria-label={[title, first?.label, reset, value].filter(Boolean).join(' · ')}
+          // 无框文字按钮：圆角只塑形键盘焦点环（DESIGN.md §5 登记）
           className="flex min-w-0 items-center gap-1 rounded-sm text-12 font-medium tabular-nums text-[var(--text-secondary)] hover:text-[var(--text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]">
           {first && <span title={first.label} className="max-w-28 truncate">{first.label}</span>}
           {reset && <span className="whitespace-nowrap">{reset}</span>}

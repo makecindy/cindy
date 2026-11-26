@@ -25,6 +25,7 @@ import {
   MODEL_SPECTRUM_COLORS,
   PROVIDER_LOGO_PATHS,
   CINDY_MARK_TRANSFORM, CINDY_MARK_PATH, CINDY_MARK_EARRING_PATH, CINDY_MARK_EARRING_COLOR,
+  CONNECTION_BRANDS, isConnectionBrand, isProviderConnectionImage,
   isProviderLogoKind,
   resolveProviderLogoKind,
   type ProviderLogoRouting,
@@ -128,7 +129,7 @@ function MobileCustomProviderIcon({ svg, children, color, remote }: {
   remote?: boolean;
 }) {
   const { mode } = useTheme();
-  const themedSvg = resolveProviderSvgColorScheme(svg, mode);
+  const themedSvg = isProviderConnectionImage(svg) ? svg : resolveProviderSvgColorScheme(svg, mode);
   return (
     <MobileProviderImage
       key={themedSvg}
@@ -151,7 +152,7 @@ function MobileProviderImage({ svg, fallback, color, remote }: {
   const { colors } = useTheme();
   if (failed) return fallback;
   // expo-image's native data URL loaders support base64 on both platforms.
-  const uri = `data:image/svg+xml;base64,${btoa(String.fromCharCode(...utf8Bytes(svg)))}`;
+  const uri = isProviderConnectionImage(svg) ? svg : `data:image/svg+xml;base64,${btoa(String.fromCharCode(...utf8Bytes(svg)))}`;
   return withRemote(
     <View accessible={false} style={styles.markBox}>
       <Image source={{ uri }} contentFit="contain" style={{ width: GLYPH_SIZE, height: GLYPH_SIZE }}
@@ -175,9 +176,10 @@ function DefaultProviderMark({
   const { colors } = useTheme();
   const fill = color ?? colors.textSecondary;
 
-  const kind = isProviderLogoKind(logoKind)
+  const selected = isProviderLogoKind(logoKind)
     ? logoKind
     : resolveProviderLogoKind(providerId ?? '', routing);
+  const kind = isConnectionBrand(selected) ? CONNECTION_BRANDS[selected] : selected;
 
   switch (kind) {
     case 'anthropic':
@@ -262,7 +264,7 @@ export interface MobileModelIconMarkProps {
 
 /**
  * 模型行 / composer 药丸的图标 —— 统一规则(与桌面 ModelIconMark 同源,共享
- * resolveModelIconKind 口径):优先使用模型目录的厂牌 `icon`，缺省时回落来源供应商标。
+ * resolveModelIconKind 口径):已选的连接图标优先，否则使用模型厂牌 `icon`，缺省时回落来源供应商标。
  * 禁止在客户端按 model id 猜厂牌。
  */
 export function MobileModelIconMark({
@@ -277,7 +279,7 @@ export function MobileModelIconMark({
 }: MobileModelIconMarkProps) {
   const styles = useThemedStyles(makeStyles);
   const { colors } = useTheme();
-  const kind = resolveModelIconKind(icon);
+  const kind = resolveModelIconKind(icon, logoKind, customIcon);
   if (kind) {
     const fill = color ?? colors.textSecondary;
     if (kind === 'cindy') {

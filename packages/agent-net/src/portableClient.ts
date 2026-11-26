@@ -22,13 +22,14 @@ function udpCredentialsAllowed(wsUrl: string): boolean {
   return /^wss:\/\//i.test(wsUrl) || /^ws:\/\/(127\.0\.0\.1|localhost|\[::1\])(:\d+)?(\/|$)/i.test(wsUrl);
 }
 /** A malformed credential only disables UDP for this session; it never fails the handshake. */
-function udpCredentials(value: unknown): { session: Uint8Array; key: Uint8Array } | null {
+function udpCredentials(value: unknown): { session: Uint8Array; key: Uint8Array; probe?: boolean } | null {
   if (!value || typeof value !== 'object') return null;
-  const { session, key } = value as { session?: unknown; key?: unknown };
+  const { session, key, probe } = value as { session?: unknown; key?: unknown; probe?: unknown };
   if (typeof session !== 'string' || typeof key !== 'string') return null;
   try {
-    const credentials = { session: fromBase64Url(session), key: fromBase64Url(key) };
-    return credentials.session.length === 8 && credentials.key.length === 32 ? credentials : null;
+    const sessionBytes = fromBase64Url(session), keyBytes = fromBase64Url(key);
+    if (sessionBytes.length !== 8 || keyBytes.length !== 32) return null;
+    return probe === true ? { session: sessionBytes, key: keyBytes, probe: true } : { session: sessionBytes, key: keyBytes };
   } catch { return null; }
 }
 
@@ -344,14 +345,37 @@ function bufferedBytes(ws: BinarySocket): number {
   return typeof ws.bufferedAmount === 'number' && Number.isFinite(ws.bufferedAmount) && ws.bufferedAmount > 0 ? ws.bufferedAmount : 0;
 }
 
+const RELAY_PROBE_TIMEOUT_MS = 15_000;
+
 class PortableUplink extends SocketEvents implements SocketUplink {
   readonly kind = 'agent-net';
   devices: DeviceView[] = [];
   delegations: Delegation[] = [];
   delegationRequests: DelegationRequest[] = [];
   notifications = false;
+  private supportsRelayProbe = false;
+  private probeTimer: ReturnType<typeof setTimeout> | null = null;
+  private lastProbeAt = -Infinity;
+
+  probeRelay(): void {
+    const now = performance.now();
+    if (!this.supportsRelayProbe || this.closed || this.probeTimer || now - this.lastProbeAt < RELAY_PROBE_TIMEOUT_MS) return;
+    this.lastProbeAt = now;
+    this.probeTimer = setTimeout(() => {
+      this.probeTimer = null;
+      // The app may have been suspended. A delayed JS timer is not a failed round trip.
+      if (performance.now() - now > 2 * RELAY_PROBE_TIMEOUT_MS) return;
+      this.close();
+      this.emitClose(1006);
+    }, RELAY_PROBE_TIMEOUT_MS);
+    try { this.ws.send('{"type":"relay-probe"}'); } catch { this.close(); this.emitClose(1006); }
+  }
+  private clearProbe(): void {
+    if (this.probeTimer !== null) clearTimeout(this.probeTimer);
+    this.probeTimer = null;
+  }
   /** This session's relay UDP credentials when the relay offered them; null keeps every relayed datagram on the WebSocket. */
-  udp: { session: Uint8Array; key: Uint8Array } | null = null;
+  udp: { session: Uint8Array; key: Uint8Array; probe?: boolean } | null = null;
   private receiver: ((deviceId: string, data: Uint8Array) => void) | null = null;
   private pending: [string, Uint8Array][] = [];
   private pendingBytes = 0;
@@ -405,6 +429,7 @@ class PortableUplink extends SocketEvents implements SocketUplink {
       };
       ws.onclose = event => {
         clearTimeout(timer); if (!established) reject(new Error('AGENT_NET_CLOSED_' + event.code));
+        uplink.clearProbe();
         uplink.closed = true;
         uplink.clearStall();
         if (established) uplink.emitClose(event.code);
@@ -418,7 +443,11 @@ class PortableUplink extends SocketEvents implements SocketUplink {
           client.options.assertCurrent();
           if (typeof event.data === 'string') {
             if (utf8(event.data).length > MAX_CONTROL_BYTES) throw new Error('INVALID_CONTROL');
-            const message = JSON.parse(event.data) as { type: string; deviceId: string; protocolVersion?: number; notifications?: boolean; devices: DeviceView[]; delegations: Delegation[]; delegationRequests?: DelegationRequest[] };
+            const message = JSON.parse(event.data) as { type: string; deviceId: string; protocolVersion?: number; notifications?: boolean; relayProbe?: boolean; devices: DeviceView[]; delegations: Delegation[]; delegationRequests?: DelegationRequest[] };
+            if (message.type === 'relay-pong' && receivedHello && uplink.supportsRelayProbe) {
+              uplink.clearProbe();
+              return;
+            }
             const requests = message.delegationRequests ?? [];
             if (!['hello', 'directory'].includes(message.type) || !Array.isArray(message.devices) || !Array.isArray(message.delegations)
               || !Array.isArray(requests) || !client.trustedDirectory(message.devices, message.delegations, requests)) throw new Error('UNTRUSTED_DIRECTORY');
@@ -428,6 +457,7 @@ class PortableUplink extends SocketEvents implements SocketUplink {
             if (message.type === 'hello') {
               if (receivedHello || message.protocolVersion !== 2
                 || message.deviceId !== (client.delegation ? 'guest:' + client.delegation.id : client.identity.deviceId)) throw new Error('INVALID_HELLO');
+              uplink.supportsRelayProbe = !client.delegation && message.relayProbe === true;
               uplink.notifications = message.notifications === true;
               uplink.udp = askUdp ? udpCredentials((message as { udp?: unknown }).udp) : null;
               receivedHello = true; established = true; clearTimeout(timer); resolve(uplink);
@@ -509,6 +539,7 @@ class PortableUplink extends SocketEvents implements SocketUplink {
       platform: metadata.platform, app: metadata.app, appVersion: metadata.appVersion, busy: metadata.busy, deviceName: metadata.deviceName }));
   }
   close(): void {
+    this.clearProbe();
     if (this.closed) return;
     this.closed = true;
     this.clearStall();

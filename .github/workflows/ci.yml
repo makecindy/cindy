@@ -60,6 +60,16 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Verify managed voice prompt compatibility
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before || 'HEAD^' }}
+        run: |
+          if ! git diff --quiet "$BASE_REF" HEAD -- packages/voice-input-core/src \
+            ':(exclude)packages/voice-input-core/src/__tests__/**' \
+            config/endpoint{,.global}.json scripts/check-voice-refinement-compat.mjs; then
+            pnpm exec vite-node scripts/check-voice-refinement-compat.mjs
+          fi
+
       # 纯文本扫描、秒级返回：逐用例重置模块、真实等待和普通单测读源码文本只允许
       # 比基线少（engineering-conventions.md §3.2 性能预算），在耗时步骤前快速失败。
       - name: Check unit test hygiene
@@ -416,10 +426,20 @@ jobs:
           cache: pnpm
           cache-dependency-path: pnpm-lock.yaml
 
+      # setup-node restores the package store. pnpm keeps its lockfile verification
+      # result separately and checks the lockfile and active policies on reuse.
+      - name: Restore pnpm lockfile verification
+        id: pnpm-verification
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/pnpm-cache/lockfile-verified.jsonl
+          key: pnpm-verified-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml', 'pnpm-workspace.yaml', 'package.json', '.npmrc') }}
+
       - name: Install dependencies
         id: install
         env:
           PNPM_STORE_CACHE_HIT: ${{ steps.setup-node.outputs.cache-hit }}
+          pnpm_config_cache_dir: ${{ runner.temp }}/pnpm-cache
         run: ./scripts/ci-windows-install.ps1 -ReportPath (Join-Path $env:RUNNER_TEMP 'pnpm-install.json')
 
       - name: Upload slow or failed pnpm install diagnostics
@@ -430,6 +450,13 @@ jobs:
           name: pnpm-install-windows-shard-${{ matrix.shard }}-attempt-${{ github.run_attempt }}
           path: ${{ runner.temp }}/pnpm-install.json
           retention-days: 7
+
+      - name: Save verified lockfile from main
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && matrix.shard == 1 && steps.pnpm-verification.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/pnpm-cache/lockfile-verified.jsonl
+          key: ${{ steps.pnpm-verification.outputs.cache-primary-key }}
 
       # 缓存 bundled ripgrep：各分片都要装，GitHub Releases 偶发 504 时会整批变红。
       # 命中后 install:ripgrep 按 .version 标记直接跳过下载。

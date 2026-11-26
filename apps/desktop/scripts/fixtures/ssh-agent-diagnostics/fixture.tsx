@@ -16,6 +16,7 @@ void mountPage({
         config: {
           id: 'build-server', hostname: 'build.example.com', user: 'developer', port: 22,
           authMethod: 'agent', source: 'ssh-config', managedByCindy: false,
+          ...(ctx.case === 'managed-alias-conflict' ? { managedAliasConflict: true } : {}),
           identityFileConfigured: true, identityFileName: 'id_ed25519',
         },
         status: 'disconnected', statusChangedAt: 0, autoConnect: false,

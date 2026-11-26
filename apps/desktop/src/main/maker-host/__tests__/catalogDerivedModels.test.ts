@@ -344,7 +344,13 @@ describe('deriveAvailableModels — dynamic-first catalog contract', () => {
       model('gateway-vision', { modalities: { input: ['text', 'image'], output: ['text'] } }),
       model('gateway-text', { modalities: { input: ['text'], output: ['text'] } }),
       model('gateway-unknown'),
+      model('gateway-empty-input', { modalities: { input: [], output: [] } }),
+      model('gateway-explicitly-disabled', {
+        modalities: { input: [], output: [] },
+        supportsImageInput: false,
+      }),
     ];
+    xd!.models.codex = [...xd!.models.pi];
 
     expect(resolvePiRuntimeModelDescriptor(catalog, 'cindy', 'gateway-vision')).toMatchObject({
       supportsImageInput: true,
@@ -352,9 +358,19 @@ describe('deriveAvailableModels — dynamic-first catalog contract', () => {
     expect(resolvePiRuntimeModelDescriptor(catalog, 'cindy', 'gateway-text')).toMatchObject({
       supportsImageInput: false,
     });
-    expect(resolvePiRuntimeModelDescriptor(catalog, 'cindy', 'gateway-unknown')).not.toHaveProperty(
-      'supportsImageInput',
-    );
+    const piModels = deriveAvailableModels(catalog, 'pi');
+    for (const id of ['gateway-unknown', 'gateway-empty-input']) {
+      const runtime = resolvePiRuntimeModelDescriptor(catalog, 'xd', id);
+      const listed = piModels.find((entry) => entry.id === id);
+      expect(runtime).toMatchObject({ id });
+      expect(listed).toMatchObject({ id });
+      expect(runtime).not.toHaveProperty('supportsImageInput');
+      expect(listed).not.toHaveProperty('supportsImageInput');
+    }
+    expect(resolvePiRuntimeModelDescriptor(catalog, 'xd', 'gateway-explicitly-disabled'))
+      .toMatchObject({ supportsImageInput: false });
+    expect(deriveAvailableModels(catalog, 'codex').find((entry) => entry.id === 'gateway-empty-input'))
+      .toMatchObject({ supportsImageInput: false });
   });
 
   it('bundled(未注入)派生 = xai 离线 fallback,其它动态供应商不贡献条目', () => {

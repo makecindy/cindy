@@ -22,6 +22,8 @@ export function useScheduleRunSummary(schedules: readonly Schedule[]): ScheduleR
     [schedules],
   );
   const [summary, setSummary] = useState(EMPTY_SUMMARY);
+  const summaryRef = useRef(summary);
+  summaryRef.current = summary;
   const refreshSeqRef = useRef(0);
 
   const refresh = useCallback(async () => {
@@ -72,13 +74,16 @@ export function useScheduleRunSummary(schedules: readonly Schedule[]): ScheduleR
       if (!isDataOwnerPushCurrent(ownerStamp)) return;
       const event = raw as SchedulerEvent;
       if (
-        event.type === 'fired' ||
         event.type === 'completed' ||
         event.type === 'failed' ||
         event.type === 'session-bound' ||
         event.type === 'changed' ||
         event.type === 'read' ||
-        event.type === 'all-read'
+        event.type === 'all-read' ||
+        (event.type === 'skipped' &&
+          event.preRunCheckSucceeded === true &&
+          (summaryRef.current.unreadRunCounts.has(event.scheduleId) ||
+            summaryRef.current.unrecoveredFailures.has(event.scheduleId)))
       ) {
         void refresh();
       }

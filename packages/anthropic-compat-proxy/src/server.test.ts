@@ -25,6 +25,7 @@ import {
   createToolExchangeAdjacencyRecoveryRule,
   createToolUseProviderSpecificFieldsRecoveryRule,
   createToolReferenceRecoveryRule,
+  createNativeMcpHistoryRecoveryRule,
   createVllmResponsesCompatibilityRule,
   dedupeDuplicateToolUseIds,
   repairToolExchangeAdjacency,
@@ -1075,6 +1076,65 @@ describe('unsupported native tool references (#8593)', () => {
         content: [{ type: 'text', text: 'Available tool: lookup' }, { type: 'text', text: 'found' }] });
       expect(retried.tools).toEqual(request.tools);
     } else expect(JSON.parse(upstream.bodies[0]!)).toEqual(request);
+  });
+});
+
+describe('native MCP history recovery', () => {
+  const nativeUse = {
+    type: 'mcp_tool_use', id: 'mcp-1', name: 'lookup', server_name: 'example', input: { query: 'color' },
+  };
+  const nativeResult = {
+    type: 'mcp_tool_result', tool_use_id: 'mcp-1', is_error: false,
+    content: [{ type: 'text', text: 'color: blue' }],
+  };
+  const ordinaryUse = { type: 'tool_use', id: 'tool-1', name: 'echo', input: {} };
+  const ordinaryResult = { type: 'tool_result', tool_use_id: 'tool-1', content: 'echoed' };
+  const request = {
+    model: 'MiniMax-test', max_tokens: 128,
+    tools: [{ name: 'echo', input_schema: { type: 'object' } }],
+    messages: [
+      { role: 'user', content: 'Look up the color' },
+      { role: 'assistant', content: [{ type: 'text', text: 'Looking it up' }, nativeUse, nativeResult, ordinaryUse] },
+      { role: 'user', content: [ordinaryResult, { type: 'text', text: 'Continue' }] },
+    ],
+  };
+  const rejection = "invalid params, messages.1.content.1: unsupported content type 'mcp_tool_use' (2013)";
+
+  it.each([
+    ['recovered', 200, 2],
+    ['accepted', 200, 1],
+    ['unrelated rejection', 400, 1],
+    ['still rejected after retry', 400, 2],
+  ] as const)('%s keeps the original exchange and bounds the retry', async (scenario, expectedStatus, count) => {
+    const upstream = await startFakeUpstream((index, _raw, res) => {
+      const accepted = scenario === 'accepted' || (scenario === 'recovered' && index > 0);
+      res.writeHead(accepted ? 200 : 400, { 'content-type': 'application/json' });
+      res.end(JSON.stringify(accepted ? { content: [{ type: 'text', text: 'blue' }] } : {
+        error: { message: scenario === 'unrelated rejection' ? 'invalid API key' : rejection },
+      }));
+    });
+    upstreamClose = upstream.close;
+    proxy = await createAnthropicCompatProxy({
+      upstream: upstream.url,
+      transformRequest: [repairToolExchangeAdjacency, dedupeDuplicateToolUseIds],
+      recoveryRules: [createToolReferenceRecoveryRule(), createNativeMcpHistoryRecoveryRule()],
+    });
+
+    const response = await post(proxy.url, request);
+
+    expect(response.status).toBe(expectedStatus);
+    expect(upstream.bodies).toHaveLength(count);
+    expect(JSON.parse(upstream.bodies[0]!)).toEqual(request);
+    if (count === 2) {
+      const retried = JSON.parse(upstream.bodies[1]!);
+      const content = retried.messages[1].content;
+      expect(content[0]).toEqual(request.messages[1]!.content[0]);
+      expect(content[1]).toEqual({ type: 'text', text: 'Historical MCP call: ' + JSON.stringify(nativeUse) });
+      expect(content[2]).toEqual({ type: 'text', text: 'Historical MCP result: ' + JSON.stringify(nativeResult) });
+      expect(content[3]).toEqual(ordinaryUse);
+      expect(retried.messages[2]).toEqual(request.messages[2]);
+      expect(retried.tools).toEqual(request.tools);
+    }
   });
 });
 

@@ -4,7 +4,9 @@ import { deviceDisplayName } from '@/lib/deviceName';
 import { ProviderShareQuotaViewingContext, useProviderShareQuotaViewing } from '@/features/provider-share/useProviderShareWeeklyQuota';
 import { SpeedIcon } from './SpeedIcon';
 import { ErrorNotice } from '@/components/ui/error-notice';
+import { SearchInput } from '@/components/ui/search-input';
 import { DisplayPricingDetails } from '@/components/DisplayPricingDetails';
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Spinner } from '@/components/ui/spinner';
 import { localizedModelDescription } from '@/lib/modelDescriptions';
@@ -117,6 +119,7 @@ import {
 import { useApiKey } from '@/hooks/useApiKey';
 import { useConnectedSource } from '@/hooks/useConnectedSource';
 import { useGatewayModelPricing, useReferenceModelPricing } from '@/hooks/useModelPricing';
+import { retryProviderShareCatalog } from '@/lib/remoteCatalogSnapshot';
 import { useModelAccessStatus } from '@/hooks/useModelAccessStatus';
 import { requestPluginEnginesRefresh } from '@/hooks/usePluginEngines';
 import { useProviders } from '@/hooks/useProviders';
@@ -508,7 +511,7 @@ function DefaultProviderMark({
 
 /**
  * 模型行 / trigger 的图标 —— 统一规则(桌面与手机同源,见 resolveModelIconKind):
- * 优先使用模型目录的厂牌 `icon`，缺省时回落来源供应商标。
+ * 已选的连接图标优先，否则使用模型厂牌 `icon`，缺省时回落来源供应商标。
  * 禁止在客户端按 model id 猜厂牌。
  */
 export function ModelIconMark({
@@ -534,7 +537,7 @@ export function ModelIconMark({
   withMargin?: boolean;
   dense?: boolean;
 }) {
-  const kind = resolveModelIconKind(icon);
+  const kind = resolveModelIconKind(icon, logoKind, customIcon);
   if (kind) {
     const common = cn(withMargin && 'mr-1.5', 'shrink-0', colorClass);
     const markSize = dense ? 12.3 : 13;
@@ -621,12 +624,9 @@ function resolvedTranslationLanguage(
 
 function ModelPromotionBadge({ children }: { children: ReactNode }) {
   return (
-    <span
-      data-model-promotion-badge
-      className="inline-flex shrink-0 items-center rounded-full bg-[var(--accent-cta-bg)] px-2 py-px text-11 font-medium leading-[1.45] text-[var(--accent-pure-cta-fg)]"
-    >
+    <Badge data-model-promotion-badge tone="accent">
       {children}
-    </span>
+    </Badge>
   );
 }
 
@@ -1602,13 +1602,17 @@ function ModelSelectorContentView({
       : undefined;
   const retryRemoteModels = useCallback(() => {
     if (!catalogDeviceId) return;
+    if (isProviderShareAgentDeviceId(deviceId)) {
+      void retryProviderShareCatalog(catalogDeviceId).catch(() => undefined);
+      return;
+    }
     evictDeviceCapabilities(catalogDeviceId);
     evictDeviceProviders(catalogDeviceId);
     void Promise.allSettled([
       prefetchDeviceCapabilities(catalogDeviceId),
       prefetchDeviceProviders(catalogDeviceId),
     ]);
-  }, [catalogDeviceId]);
+  }, [catalogDeviceId, deviceId]);
 
   const visibilityVersion = useModelVisibilityVersion();
   const [query, setQuery] = useState('');
@@ -3417,13 +3421,9 @@ function ModelSelectorContentView({
                         </span>
                       )}
                       {paymentRequired && (
-                        <span
-                          data-payment-required-badge
-                          className="flex shrink-0 items-center gap-1 rounded-full bg-[var(--surface-chip)] px-2 py-0.5 text-11 text-[var(--text-secondary)]"
-                        >
-                          <Lock size={11} />
+                        <Badge data-payment-required-badge icon={<Lock size={11} />}>
                           {t('newChat.modelSelector.paymentRequired.badge')}
-                        </span>
+                        </Badge>
                       )}
                       {isHiddenSelectedModel && (
                         <span
@@ -3434,15 +3434,14 @@ function ModelSelectorContentView({
                         </span>
                       )}
                       {showSubscriptionTag && (
-                        <span
+                        <Badge
                           aria-label={t('settings.providers.models.subscription')}
                           title={t('settings.providers.models.subscription')}
-                          className="inline-flex shrink-0 items-center rounded-full bg-[var(--surface-chip)] px-2 py-px text-11 font-medium text-[var(--text-secondary)]"
                         >
                           {t('newChat.modelSelector.meta.subscriptionBadgeCompact', {
                             defaultValue: t('settings.providers.models.subscription'),
                           })}
-                        </span>
+                        </Badge>
                       )}
                       {showPromotionTag && rowPromotionLabel && (
                         <ModelPromotionBadge>{rowPromotionLabel}</ModelPromotionBadge>
@@ -3611,42 +3610,18 @@ function ModelSelectorContentView({
   const showRemoteStatusFooter =
     remoteStatusInList !== null && (hasAnyModel || trimmedQuery.length > 0);
 
-  // 搜索框 —— 药丸样式,**只给既有分段面板用**。统一面板的搜索行是设计稿的无框平铺形态
+  // 搜索框 —— 共享 SearchInput(panel 档),**只给既有分段面板用**。统一面板的搜索行是设计稿的无框平铺形态
   // (见下方 unifiedPanel 分支),与这里的胶囊框是两套视觉,刻意不共用;共用的只有
   // placeholder / a11y 名的同一条 i18n key。
   const searchField = (
-    <div
-      className={cn(
-        'flex items-center gap-2 rounded-full border border-[var(--model-dropdown-border)] px-3 py-1.5 transition-colors',
-        interactionDisabled
-          ? 'cursor-not-allowed bg-[var(--surface-elevated-soft)]'
-          : 'bg-[var(--surface)]',
-      )}
-    >
-      <Search
-        size={16}
-        className={cn(
-          'shrink-0',
-          interactionDisabled
-            ? 'text-[var(--text-disabled-tertiary)]'
-            : 'text-[var(--text-tertiary)]',
-        )}
-      />
-      <input
-        type="text"
-        disabled={interactionDisabled}
-        value={query}
-        onChange={(e) => setQuery(e.target.value)}
-        placeholder={t('newChat.modelSelector.search.placeholderAll')}
-        className={cn(
-          'min-w-0 flex-1 bg-transparent text-14 outline-none',
-          interactionDisabled
-            ? 'cursor-not-allowed text-[var(--text-disabled)] placeholder:text-[var(--text-disabled)]'
-            : 'text-[var(--model-item-text)] placeholder:text-[var(--text-placeholder)]',
-        )}
-        aria-label={t('newChat.modelSelector.search.placeholderAll')}
-      />
-    </div>
+    <SearchInput
+      surface="panel"
+      disabled={interactionDisabled}
+      value={query}
+      onChange={setQuery}
+      placeholder={t('newChat.modelSelector.search.placeholderAll')}
+      aria-label={t('newChat.modelSelector.search.placeholderAll')}
+    />
   );
 
   // ── 统一模型选择器面板(opt-in,M3 / M4)────────────────────────────────────
@@ -4350,12 +4325,9 @@ function ModelSelectorContentView({
                 <div className="flex min-w-0 items-center gap-2 px-3 pb-0.5 pt-1 text-12 font-medium leading-[1.33] text-[var(--cmd-palette-item-meta)]">
                   <span className="min-w-0 truncate">{providerDisplayName(sec.provider, t)}</span>
                   {!deviceId && sec.provider.id === 'xd' && modelAccessAccountTier === 'free' && (
-                    <span
-                      data-testid="cindy-ai-model-group-free-tier-badge"
-                      className="ml-auto inline-flex shrink-0 items-center rounded-full bg-[var(--surface-chip)] px-2 py-px text-11 font-medium leading-[1.45] text-[var(--text-secondary)]"
-                    >
+                    <Badge data-testid="cindy-ai-model-group-free-tier-badge" className="ml-auto">
                       {t('settings.providers.xd.accountTier.free')}
-                    </span>
+                    </Badge>
                   )}
                 </div>
                 <div className="flex flex-col gap-0.5">
@@ -5076,7 +5048,7 @@ export function ModelSelector({
         name: pluginEngineSession.engineName,
         engine: pluginEngineSession.engine,
         modelId: pluginEngineSession.modelId,
-        effort: resolvePluginEngineEffort(pluginEngineSession.engine, pluginEngineSession.modelId, pluginEngineSession.effort),
+        effort: resolvePluginEngineEffort(pluginEngineSession.engine, pluginEngineSession.modelId, pluginEngineSession.effort, 'session'),
       }
     : (() => {
         const active = pluginEngines?.active;

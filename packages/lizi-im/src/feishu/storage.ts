@@ -116,10 +116,9 @@ export function readLifecycleAnnouncement(): boolean {
   return raw !== 'false';
 }
 
-export function writeLifecycleAnnouncement(enabled: boolean): void {
+export function writeLifecycleAnnouncement(enabled: boolean): boolean {
   const secrets = getHost().secrets;
-  if (!secrets.isAvailable()) return;
-  secrets.write(K(KEY_LIFECYCLE_ANNOUNCEMENT), String(enabled));
+  return secrets.isAvailable() && secrets.write(K(KEY_LIFECYCLE_ANNOUNCEMENT), String(enabled));
 }
 
 function normalizeService(value: string | null): FeishuService {

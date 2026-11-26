@@ -172,7 +172,7 @@ export function OrcaSplitView({
               <button
                 type="button"
                 aria-label={t('newChat.collaboration.stopAria')}
-                className="inline-flex h-4 w-4 items-center justify-center rounded text-muted-foreground opacity-0 transition-opacity hover:bg-muted/70 hover:text-foreground group-hover/worker:opacity-100 focus-visible:opacity-100"
+                className="inline-flex h-4 w-4 items-center justify-center rounded-full text-muted-foreground opacity-0 transition-opacity hover:bg-muted/70 hover:text-foreground group-hover/worker:opacity-100 focus-visible:opacity-100"
                 onClick={() => {
                   void requestStopCollab();
                 }}

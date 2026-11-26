@@ -4,12 +4,13 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { eq } from 'drizzle-orm';
 import { Scheduler, type Logger, type FireContext, type PreRunPluginConfig, type Schedule, type ScheduleRunner, type Notifier } from '@cindy/maker-scheduler';
+import { isGitlabMrTriggerUrl } from '@cindy/maker-scheduler/pr-trigger';
 import type { Maker } from '@cindy/maker-core';
 import type { GhostControlPointResult, GhostScheduleRunPointData } from '../../shared/ghost.js';
 import type { DiagnosePreRunHookFailure } from './pre-run-hook-diagnosis';
 import { sessions } from '../localDb/schema.js';
 import { isReviewSessionSource } from '../../shared/sessionSource.js';
-import { dbToMakerAgentKind } from '../../shared/agentKindConversion.js';
+import { dbToMakerAgentKind, isPluginEngineKind } from '../../shared/agentKindConversion.js';
 import { assertScheduledHarnessSupported } from '../maker-ipc/scheduledModelSelection';
 import type { DrizzleScheduleStorage, SchedulerDrizzleDb } from './storage';
 import { ProjectAutomationLoader } from './project-automation-loader';
@@ -24,7 +25,7 @@ import { runSchedulerStartup } from './scheduler-startup-lifecycle';
 
 export interface SchedulerHostStartDeps {
   /** Reconcile a timed PR check through this host’s status observer. */
-  refreshSchedulePr?(url: string): Promise<void>;
+  refreshSchedulePr?(url: string, schedule?: Schedule): Promise<void>;
   maker: Maker;
   getDb: () => SchedulerDrizzleDb;
   logger: Logger;
@@ -104,10 +105,12 @@ export function createSchedulerHost<Deps extends SchedulerHostStartDeps>(runtime
         withScheduleLock(schedule.id, ctx.signal, async () => {
           ctx.assertFireContext?.();
           // A timed reconciliation samples the same observer as App and foreground updates.
-          // Existing all-change checks retain their own polling and review/CI pacing.
-          if (ctx.timed && schedule.prTrigger && !(schedule.prTrigger.change === 'any' && schedule.preRunHook)) {
+          // GitHub follow scripts already do their own polling. MR timers sample status
+          // even with a pre-run hook; the hook runs when the observer dispatches work.
+          const trigger = schedule.prTrigger;
+          if (ctx.timed && trigger && (isGitlabMrTriggerUrl(trigger.url) || trigger.change !== 'any' || !schedule.preRunHook)) {
             if (!deps.refreshSchedulePr) throw new Error('PR status lookup is unavailable on this host');
-            await deps.refreshSchedulePr(schedule.prTrigger.url);
+            await deps.refreshSchedulePr(trigger.url, schedule);
             return { sessionId: '', skipped: true };
           }
           // 所有定时任务(Agent / 脚本)的唯一入口：插件前置检查放在检查脚本、建任务之前。
@@ -175,6 +178,10 @@ export function createSchedulerHost<Deps extends SchedulerHostStartDeps>(runtime
         // 插件引擎只用于每次新建任务的自动任务(docs/plans/acp-plugin-bridge.md)，不能绑定已有任务。
         if (selection.modelAgentKind === 'acp') {
           throw new Error('A plugin engine schedule starts a new task each run');
+        }
+        // 绑定插件引擎任务时按用户续发消息运行：沿用任务自己的引擎与模型(scheduler-host/runner.ts boundPluginEngineRefusal)。
+        if (isPluginEngineKind(row?.agentKind) && selection.modelAgentKind) {
+          throw new Error('An automation linked to a plugin engine task uses the task\'s own model; save it without choosing a model');
         }
         assertScheduledHarnessSupported(row ? {
           ...row, agentKind: dbToMakerAgentKind(row.agentKind),

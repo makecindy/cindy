@@ -160,7 +160,7 @@ export function TaskListPane({
             <div key={group.workingDir} className="flex flex-col">
               <div
                 className={cn(
-                  'flex h-8 items-center gap-1.5 rounded-md px-1.5',
+                  'flex h-8 items-center gap-1.5 rounded-lg px-1.5',
                   'cursor-pointer text-xs font-medium text-[var(--msg-assistant-text)] transition-colors',
                   'hover:bg-[var(--surface-hover)]',
                 )}

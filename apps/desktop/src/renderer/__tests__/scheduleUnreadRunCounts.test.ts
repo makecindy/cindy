@@ -26,6 +26,10 @@ function mountCounts(runs: ScheduleSidebarIndexRun[]) {
     ...renderHook(() => useScheduleRunSummary(schedules)),
     read: () => listener?.({ type: 'read', scheduleId: 'schedule-1' }),
     complete: () => listener?.({ type: 'completed', scheduleId: 'schedule-1', runId: 'success', sessionId: 'session-1' }),
+    skipAfterHealthyCheck: () => listener?.({
+      type: 'skipped', scheduleId: 'schedule-1', runId: 'skip',
+      sessionId: '', preRunCheckSucceeded: true,
+    }),
   };
 }
 
@@ -61,6 +65,19 @@ it('keeps a sessionless failure visible after its run is marked read', async () 
   await act(async () => view.read());
   expect(view.result.current.unreadRunCounts.has('schedule-1')).toBe(false);
   expect(view.result.current.unrecoveredFailures.get('schedule-1')?.runId).toBe('failure');
+});
+
+// #10941, renderer unit: completion coverage misses a healthy skip after the
+// last unread dot is cleared. The list hook must drop the read precheck warning.
+it('clears a read precheck failure after a healthy skip', async () => {
+  const runs = [run({ readAt: 15, failureKind: 'precheck' })];
+  const view = mountCounts(runs);
+  await waitFor(() => expect(view.result.current.unrecoveredFailures.get('schedule-1')?.runId).toBe('failure'));
+  expect(view.result.current.unreadRunCounts.has('schedule-1')).toBe(false);
+
+  runs[0].failureRecovered = true;
+  await act(async () => view.skipAfterHealthyCheck());
+  expect(view.result.current.unrecoveredFailures.has('schedule-1')).toBe(false);
 });
 
 it('honors host recovery flags without requiring the success row or a session binding', async () => {

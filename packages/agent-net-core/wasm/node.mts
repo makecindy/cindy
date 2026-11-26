@@ -843,9 +843,13 @@ export class Endpoint extends EventEmitter {
     // 发往已关闭端口的包换回的 ICMP、网络不可达都不是致命错误，可靠层会重传。
     socket.on('error', () => undefined);
     return new Promise((resolve, reject) => {
-      socket.once('error', reject);
+      const onError = (error: Error) => {
+        try { socket.close(); } catch { /* ignore */ }
+        reject(error);
+      };
+      socket.once('error', onError);
       socket.bind(port, address, () => {
-        socket.off('error', reject);
+        socket.off('error', onError);
         this.socket = socket;
         resolve();
       });

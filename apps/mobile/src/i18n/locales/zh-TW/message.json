@@ -133,6 +133,7 @@
     "retryRemoteMediaFetch": "重試取回遠端媒體",
     "retryFetch": "重試取回",
     "openMedia": "開啟媒體",
+    "playAudio": "播放音訊",
     "readCurrentRemoteFile": "讀取當前遠端檔案",
     "retryFilePreview": "重試檔案預覽",
     "readCurrentFile": "讀取當前檔案",
@@ -195,6 +196,9 @@
     "turnTokens": "{{tokens}} tokens"
   },
   "lightbox": {
+    "saveImage": "儲存原圖",
+    "imageSaved": "圖片已儲存",
+    "saveFailed": "圖片儲存失敗，請再試一次",
     "originalUnavailable": "原圖暫時無法載入",
     "retryOriginal": "重試原圖",
     "loadingOriginal": "正在載入原圖…",
@@ -460,6 +464,15 @@
     }
   },
   "attachmentPreview": {
+    "audioBackTen": "倒退 10 秒",
+    "audioForwardTen": "快轉 10 秒",
+    "audioMute": "靜音",
+    "audioUnmute": "取消靜音",
+    "audioSpeed": "播放速度",
+    "audioOutput": "音訊輸出",
+    "fetchAudio": "從電腦取得",
+    "pauseAudio": "暫停音訊",
+    "audioProgress": "播放進度",
     "more": "更多操作",
     "retry": "重試",
     "image": "圖片",
