@@ -11258,6 +11258,7 @@
       "refresh": "刷新",
       "loadFailed": "无法读取后台项目",
       "refreshFailed": "刷新失败；此列表可能不是最新的",
+      "incomplete": "有来源未能读取；此列表可能不完整",
       "unsupported": "此电脑的系统不列后台项目",
       "empty": "还没有由任务创建的后台项目",
       "owner": "创建者：{{title}}",

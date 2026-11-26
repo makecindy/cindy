@@ -11387,6 +11387,7 @@
       "refresh": "Actualiser",
       "loadFailed": "Impossible de lire les éléments en arrière-plan",
       "refreshFailed": "Échec de l’actualisation ; cette liste peut être obsolète",
+      "incomplete": "Certaines sources n’ont pas pu être lues ; cette liste peut être incomplète",
       "unsupported": "Les éléments en arrière-plan ne sont pas disponibles sur ce système",
       "empty": "Aucun élément en arrière-plan créé par des tâches pour le moment",
       "owner": "Créé par : {{title}}",

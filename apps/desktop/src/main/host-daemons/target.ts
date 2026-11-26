@@ -12,6 +12,9 @@ import type {
   HostDaemonState,
   HostDaemonTrigger,
 } from '../../shared/hostDaemons.js';
+import { createLogger } from '../logger.js';
+
+const log = createLogger('host-daemons');
 
 /** 适配器归一化后的常驻项；state / command / trigger 已是界面用语。 */
 export interface RawHostDaemon {
@@ -58,8 +61,19 @@ export interface HostDaemonAdapter {
   remove(id: string): Promise<void>;
 }
 
+/**
+ * 一次扫描的结果。`entries` 只是「这次确实读到的」；没读到的来源如实列在 `unread`
+ * 里 —— 读失败 ≠ 没有：编排层不会把它们的条目当作已删除（见 service.ts）。
+ */
+export interface HostDaemonScan {
+  entries: RawHostDaemon[];
+  /** 这一轮没读全的来源（各自的 id 前缀）。 */
+  unread: string[];
+}
+
 export interface HostDaemonTarget {
-  scan(): Promise<RawHostDaemon[]>;
+  /** 读到多少算多少：单个来源失败不抛出，记进 `unread`。 */
+  scan(): Promise<HostDaemonScan>;
   stop(id: string): Promise<void>;
   run(id: string): Promise<void>;
   remove(id: string): Promise<void>;
@@ -68,8 +82,12 @@ export interface HostDaemonTarget {
 /** 外部命令结果：非 0 退出码不算异常（「没有 crontab」也是正常分支）。 */
 export interface ExecResult {
   stdout: string;
+  /** stderr 的原文；适配器用它区分几种固定的「业务上为空」输出。 */
+  stderr?: string;
   /** 退出码；命令没启动起来或被信号结束时没有。 */
   code?: number;
+  /** 命令本身不存在（这台机器没装）：这个来源不存在，既不是成功也不是读到了空结果。 */
+  notInstalled?: boolean;
   failed: boolean;
 }
 
@@ -90,9 +108,25 @@ export function combineHostDaemonAdapters(
 
   return {
     async scan() {
-      // 单个来源失败（没有 launchctl / systemctl、目录不存在）不该让整张清单消失。
-      const results = await Promise.all(adapters.map((adapter) => adapter.scan().catch(() => [])));
-      return results.flat();
+      // 单个来源失败（目录读不了、命令启动不了）不该让整张清单消失；但它没读到的条目
+      // 也不能就此算作「已删除」，所以失败要如实带回去。
+      const results = await Promise.all(
+        adapters.map(async (adapter) => ({
+          prefix: adapter.idPrefix,
+          entries: await adapter.scan().catch((err: unknown) => {
+            // 界面只知道「没读到」；原因只在这里留下，否则无从排查。
+            log.warn('host daemon source unreadable', {
+              source: adapter.idPrefix,
+              error: err instanceof Error ? err.message : String(err),
+            });
+            return null;
+          }),
+        })),
+      );
+      return {
+        entries: results.flatMap((result) => result.entries ?? []),
+        unread: results.filter((result) => result.entries === null).map((result) => result.prefix),
+      };
     },
     async stop(id) {
       await route(id).stop(id);

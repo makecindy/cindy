@@ -36,6 +36,10 @@ function asStringArray(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : [];
 }
 
+function isMissingPath(error: unknown): boolean {
+  return (error as NodeJS.ErrnoException | undefined)?.code === 'ENOENT';
+}
+
 /** plutil 输出的 JSON → 归一化字段。字段缺失都按「没有」，不让整条失效。 */
 export function parseLaunchAgentPlist(json: string, fallbackLabel: string): LaunchAgentPlist | null {
   let raw: Record<string, unknown>;
@@ -97,7 +101,9 @@ function guiDomain(): string {
 
 async function scanJobs(exec: RunCommand): Promise<Map<string, { running: boolean }>> {
   const { stdout, failed } = await exec('launchctl', ['list']);
-  return failed ? new Map() : parseLaunchctlList(stdout);
+  // 读不到已加载的 job 不等于「一个都没加载」：那样运行中的条目会被显示成就绪。
+  if (failed) throw new Error('launchctl list failed');
+  return parseLaunchctlList(stdout);
 }
 
 export interface LaunchAgentsAdapterDeps {
@@ -149,8 +155,9 @@ export function createLaunchAgentsAdapter(deps: LaunchAgentsAdapterDeps = {}): H
       let names: string[];
       try {
         names = await readdir(dir);
-      } catch {
-        // 目录不存在 = 这台机器上没有任何用户 agent，不是错误。
+      } catch (error) {
+        // 目录不存在 = 这台机器上没有任何用户 agent，不是错误；其余读失败不能当成空目录。
+        if (!isMissingPath(error)) throw error;
         seen = new Map();
         return [];
       }

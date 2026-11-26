@@ -211,10 +211,13 @@ import {
   type TerminateAgentProcessResult,
 } from '../shared/processMonitor';
 import {
+  HOST_DAEMONS_CHANGED_EVENT,
   HOST_DAEMONS_DELETE_CHANNEL,
   HOST_DAEMONS_LIST_CHANNEL,
   HOST_DAEMONS_RUN_CHANNEL,
   HOST_DAEMONS_STOP_CHANNEL,
+  HOST_DAEMONS_SUBSCRIBE_CHANNEL,
+  HOST_DAEMONS_UNSUBSCRIBE_CHANNEL,
   type HostDaemonActionRequest,
   type HostDaemonsSnapshot,
 } from '../shared/hostDaemons';
@@ -749,6 +752,8 @@ const fanOutRsbBrowserBridgeUnpin = createIpcFanOut('rsb-browser-bridge:unpin');
 const fanOutRsbBrowserBridgeResourceEvent = createIpcFanOut('rsb-browser-bridge:resource-event');
 // 资源用量面板:main 订阅驱动采样推送(面板打开才有流量)。
 const fanOutProcessMonitorSample = createIpcFanOut(PROCESS_MONITOR_SAMPLE_CHANNEL);
+// 本机常驻清单:main 推进归属核对后通知重读(订阅期间才有流量)。
+const fanOutHostDaemonsChanged = createIpcFanOut(HOST_DAEMONS_CHANGED_EVENT);
 // Phase 3: RsbWebviewBackend (open/focus/close) push 给 renderer 让它代调 store。
 const fanOutRsbBrowserBridgeTabOpRequest = createIpcFanOut('rsb-browser-bridge:tab-op-request');
 // session-git-pr-context: HEAD 分支变化 / session PR 引用变化推送
@@ -6926,10 +6931,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
       fanOutRsbBrowserBridgeResourceEvent(cb as IpcCallback),
   },
 
-  // ── 资源用量面板(process-monitor)────────────────────────────────────────
+  // ── 本机常驻清单(host-daemons)─────────────────────────────────────────
   /**
-   * 订阅期间 main 才采样(面板关闭零开销);onSample 回调只收业务 payload。
-   * terminate 只对本产品 spawn 的 agent 根进程有效,归属由 main 重新校验。
+   * list 只读;归属核对由 main 在订阅期间自己推进,每轮结束经 onChanged 通知重读。
+   * stop/remove 由 main 重新扫描并复核归属,renderer 传来的 id 只是候选。
    */
   hostDaemons: {
     list: (): Promise<HostDaemonsSnapshot> => ipcRenderer.invoke(HOST_DAEMONS_LIST_CHANNEL),
@@ -6939,8 +6944,16 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke(HOST_DAEMONS_RUN_CHANNEL, request),
     remove: (request: HostDaemonActionRequest): Promise<{ ok: true }> =>
       ipcRenderer.invoke(HOST_DAEMONS_DELETE_CHANNEL, request),
+    subscribe: (): Promise<void> => ipcRenderer.invoke(HOST_DAEMONS_SUBSCRIBE_CHANNEL),
+    unsubscribe: (): Promise<void> => ipcRenderer.invoke(HOST_DAEMONS_UNSUBSCRIBE_CHANNEL),
+    onChanged: (cb: () => void): (() => void) => fanOutHostDaemonsChanged(cb),
   },
 
+  // ── 资源用量面板(process-monitor)────────────────────────────────────────
+  /**
+   * 订阅期间 main 才采样(面板关闭零开销);onSample 回调只收业务 payload。
+   * terminate 只对本产品 spawn 的 agent 根进程有效,归属由 main 重新校验。
+   */
   processMonitor: {
     subscribe: (): Promise<void> => ipcRenderer.invoke(PROCESS_MONITOR_SUBSCRIBE_CHANNEL),
     unsubscribe: (): Promise<void> => ipcRenderer.invoke(PROCESS_MONITOR_UNSUBSCRIBE_CHANNEL),

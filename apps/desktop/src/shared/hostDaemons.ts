@@ -16,7 +16,7 @@
  * 远程会话、不落库到可共享位置。
  */
 
-/** renderer → main(invoke)：扫描并返回本机常驻快照。 */
+/** renderer → main(invoke)：返回本机常驻快照。只读：扫描平台 + 读台账，不推进归属、不写任何记录。 */
 export const HOST_DAEMONS_LIST_CHANNEL = 'host-daemons:list';
 /** renderer → main(invoke)：停止一次运行（不动任务定义）。 */
 export const HOST_DAEMONS_STOP_CHANNEL = 'host-daemons:stop';
@@ -24,6 +24,14 @@ export const HOST_DAEMONS_STOP_CHANNEL = 'host-daemons:stop';
 export const HOST_DAEMONS_RUN_CHANNEL = 'host-daemons:run';
 /** renderer → main(invoke)：从这台电脑删除常驻项。 */
 export const HOST_DAEMONS_DELETE_CHANNEL = 'host-daemons:delete';
+/**
+ * renderer → main(invoke)：面板可见，请 main 开始推进归属核对（subscribe 等第一轮做完才回）；
+ * 不可见时退订。推进与写台账只在这条订阅期间由 main 自己做，列表读不走这条写路径。
+ */
+export const HOST_DAEMONS_SUBSCRIBE_CHANNEL = 'host-daemons:subscribe';
+export const HOST_DAEMONS_UNSUBSCRIBE_CHANNEL = 'host-daemons:unsubscribe';
+/** main → renderer(push)：一轮推进结束、清单可能变了。只发给仍加载着可信页面的窗口。 */
+export const HOST_DAEMONS_CHANGED_EVENT = 'host-daemons:changed';
 
 export type HostDaemonKind =
   | 'scheduled-task'
@@ -67,10 +75,20 @@ export interface HostDaemonsSnapshot {
    * 冷盘的大库上一次拉不完，进度留在 main。不算「无关」，也还不进清单。
    */
   pendingCount: number;
-  /** 还有条目待核对时，界面隔多少毫秒再拉一次；null = 本次已核对完。 */
-  retryAfterMs: number | null;
+  /**
+   * 这一轮有来源没读全（目录读不了、命令失败）：清单可能缺条目。读失败不等于没有，
+   * 上层据此不清理「消失」条目的记录，界面也如实提示。
+   */
+  incomplete: boolean;
 }
 
 export interface HostDaemonActionRequest {
   id: string;
+}
+
+/** refresh() 的回执：还有没有在核对，隔多久再推进一轮。 */
+export interface HostDaemonsRefreshResult {
+  pendingCount: number;
+  /** 还要再推进时给出的间隔；没有待核对的条目时为 null。 */
+  retryAfterMs: number | null;
 }

@@ -31,7 +31,8 @@ import {
   stateOf,
   unitTextDependsOn,
 } from '../systemdUser.js';
-import type { ExecResult } from '../target.js';
+import { combineHostDaemonAdapters } from '../target.js';
+import type { ExecResult, RawHostDaemon } from '../target.js';
 
 describe('launchd', () => {
   it('按 plutil 真实输出取 Label、命令与触发', () => {
@@ -453,5 +454,120 @@ describe('launchd 动作契约（真目录 + 假 launchctl）', () => {
       await started.cleanup();
       await failed.cleanup();
     }
+  });
+});
+
+/**
+ * 读失败 ≠ 没读到。清单层只有「扫描完整」才敢把没扫到的条目当作已删除，所以来源
+ * 适配器必须把「读失败」和「本来就没有」分开：后者才是空表。
+ */
+describe('来源适配器：读失败和空表分开报', () => {
+  const scanCrontab = (result: ExecResult) =>
+    createCrontabAdapter({ exec: async () => result }).scan();
+
+  it('crontab：读到空表或「没有 crontab」才算空，其余失败如实抛出', async () => {
+    // Vixie cron 实测：没有 crontab 时以 1 退出并报「no crontab for <用户>」；没装 cron
+    // 是命令起不来。其余失败（无权限、被信号结束）如果也当成空表，所有条目都会被
+    // 当作已删除，归属记录清掉之后再也找不回来。
+    await expect(scanCrontab({ stdout: '', failed: false })).resolves.toEqual([]);
+    await expect(
+      scanCrontab({ stdout: '', failed: true, code: 1, stderr: 'no crontab for someone' }),
+    ).resolves.toEqual([]);
+    await expect(
+      scanCrontab({ stdout: '', failed: true, notInstalled: true }),
+    ).resolves.toEqual([]);
+    await expect(
+      scanCrontab({
+        stdout: '',
+        failed: true,
+        code: 1,
+        stderr: '/var/spool/cron: Permission denied',
+      }),
+    ).rejects.toThrow('crontab -l failed (1)');
+    await expect(scanCrontab({ stdout: '', failed: true })).rejects.toThrow(
+      'crontab -l failed',
+    );
+  });
+
+  async function expectDirHonesty(make: (dir: string) => { scan: () => Promise<unknown> }) {
+    // EACCES 造不出来（测试不提权）：目录不存在 = 本来就没有；目录位置上放一个普通
+    // 文件 = readdir 以非 ENOENT 的错误失败，等同于读不了。
+    const base = await mkdtemp(join(tmpdir(), 'host-daemons-dir-'));
+    const blocked = join(base, 'blocked');
+    await writeFile(blocked, 'not a directory', 'utf8');
+    try {
+      await expect(make(join(base, 'absent')).scan()).resolves.toEqual([]);
+      await expect(make(blocked).scan()).rejects.toThrow();
+    } finally {
+      await rm(base, { recursive: true, force: true });
+    }
+  }
+
+  it('launchd：目录不存在才是没有 agent，读不了如实抛出', async () => {
+    await expectDirHonesty(
+      (dir) =>
+        createLaunchAgentsAdapter({ dir, exec: async () => ({ stdout: '', failed: false }) }),
+    );
+  });
+
+  it('systemd：目录不存在才是没有单元，读不了如实抛出', async () => {
+    await expectDirHonesty(
+      (dir) =>
+        createSystemdUserAdapter({ dir, exec: async () => ({ stdout: '', failed: false }) }),
+    );
+  });
+
+  it('launchd：运行状态读不到时不冒充「没有在运行的任务」', async () => {
+    const base = await mkdtemp(join(tmpdir(), 'host-daemons-jobs-'));
+    const label = `com.cindy.unreadable.${process.pid}`;
+    await writeFile(
+      join(base, `${label}.plist`),
+      `<?xml version="1.0" encoding="UTF-8"?>
+      <plist version="1.0"><dict>
+        <key>Label</key><string>${label}</string>
+        <key>ProgramArguments</key><array><string>/bin/sleep</string><string>600</string></array>
+      </dict></plist>`,
+      'utf8',
+    );
+    try {
+      await expect(
+        createLaunchAgentsAdapter({
+          dir: base,
+          exec: async () => ({ stdout: '', failed: true }),
+        }).scan(),
+      ).rejects.toThrow('launchctl list failed');
+    } finally {
+      await rm(base, { recursive: true, force: true });
+    }
+  });
+
+  it('组合层：一个来源读不了不拖垮整张清单，并如实报出没读到的来源', async () => {
+    const entry: RawHostDaemon = {
+      id: 'cron-entry:a',
+      name: 'a',
+      kind: 'cron-entry',
+      state: 'ready',
+      trigger: 'schedule',
+      command: '/bin/a',
+      attributionNeedles: ['/bin/a'],
+      definitionMtimeMs: null,
+      lastRunAtMs: null,
+      stoppable: false,
+    };
+    const noop = async () => {};
+    const target = combineHostDaemonAdapters([
+      {
+        idPrefix: 'launch-agent:',
+        scan: async () => {
+          throw new Error('EACCES: permission denied');
+        },
+        stop: noop,
+        run: noop,
+        remove: noop,
+      },
+      { idPrefix: 'cron-entry:', scan: async () => [entry], stop: noop, run: noop, remove: noop },
+    ]);
+
+    expect(await target!.scan()).toEqual({ entries: [entry], unread: ['launch-agent:'] });
   });
 });

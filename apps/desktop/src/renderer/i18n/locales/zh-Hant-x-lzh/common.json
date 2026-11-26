@@ -11258,6 +11258,7 @@
       "refresh": "重新整理",
       "loadFailed": "無法讀取背景項目",
       "refreshFailed": "重新整理失敗；此列表可能不是最新的",
+      "incomplete": "有來源未能讀取；此列表可能不完整",
       "unsupported": "此電腦之系統不列本機常駐",
       "empty": "尚未有由任務建立的背景項目",
       "owner": "建立者：{{title}}",

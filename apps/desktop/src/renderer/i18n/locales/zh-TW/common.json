@@ -11205,6 +11205,7 @@
       "refresh": "重新整理",
       "loadFailed": "讀取本機常駐失敗",
       "refreshFailed": "重新整理失敗，清單可能不是最新的",
+      "incomplete": "有來源未能讀取，清單可能不完整",
       "unsupported": "這台電腦的系統不提供本機常駐清單",
       "empty": "還沒有由任務建立的本機常駐項目",
       "owner": "建立任務：{{title}}",

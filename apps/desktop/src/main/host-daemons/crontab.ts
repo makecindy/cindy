@@ -113,10 +113,18 @@ export function createCrontabAdapter(deps: CrontabAdapterDeps = {}): HostDaemonA
   const exec = deps.exec ?? runCommand;
   const launch = deps.launch ?? defaultLaunch;
 
+  /**
+   * 读失败要抛出：读失败 ≠ 空表 —— 空表会让上层数以「条目都删了」，顺手清掉它们的
+   * 记录（见 service.ts）。只有「成功读到」和两种固定的「本来就没有」才返回文本。
+   */
   async function readCrontab(): Promise<string> {
-    const { stdout, failed } = await exec('crontab', ['-l']);
-    // 没有 crontab 时 crontab -l 以非 0 退出且 stderr 说 no crontab；按空处理。
-    return failed ? '' : stdout;
+    const result = await exec('crontab', ['-l']);
+    if (!result.failed) return result.stdout;
+    // 命令没启动起来 = 这台机器没装 cron：这个来源不存在，不是读失败。
+    if (result.notInstalled) return '';
+    // 没有 crontab 时以 1 退出，stderr 是「no crontab for <用户>」（Vixie cron 实测）。
+    if (/^no crontab for \S+/m.test(result.stderr ?? '')) return '';
+    throw new Error(`crontab -l failed (${result.code}): ${(result.stderr ?? '').trim()}`);
   }
 
   /**

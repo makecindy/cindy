@@ -256,7 +256,9 @@ export function createSystemdUserAdapter(deps: SystemdUserAdapterDeps = {}): Hos
       let names: string[];
       try {
         names = await readdir(dir);
-      } catch {
+      } catch (error) {
+        // 目录不存在 = 没有任何用户单元，不是错误；其余读失败不能当成空目录。
+        if ((error as NodeJS.ErrnoException | undefined)?.code !== 'ENOENT') throw error;
         return [];
       }
       const parsed = new Map<string, SystemdUnitFile>();

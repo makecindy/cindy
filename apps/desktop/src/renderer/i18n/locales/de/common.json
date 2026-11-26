@@ -11302,6 +11302,7 @@
       "refresh": "Aktualisieren",
       "loadFailed": "Hintergrundelemente konnten nicht gelesen werden",
       "refreshFailed": "Aktualisierung fehlgeschlagen; diese Liste ist möglicherweise veraltet",
+      "incomplete": "Einige Quellen konnten nicht gelesen werden; diese Liste ist möglicherweise unvollständig",
       "unsupported": "Hintergrundelemente sind auf diesem System nicht verfügbar",
       "empty": "Noch keine von Aufgaben erstellten Hintergrundelemente",
       "owner": "Erstellt von: {{title}}",

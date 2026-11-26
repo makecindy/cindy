@@ -3139,8 +3139,12 @@ registerAwayGuardIpc({
 // ── 本机常驻清单 IPC ─────────────────────────────────────────────────
 // 与资源监视器共用「本机、可信 renderer」边界；只有带 Cindy 归属证据的计划任务
 // 会出现在清单里（判定见 host-daemons/service.ts），停止/删除在 main 重新校验。
+// list 只读；归属核对由 main 自己的后台任务在面板可见时推进（工程规范 §8.2 / §8.3），
+// 每轮结束推一条变化通知，界面重读。
 let hostDaemonsService: HostDaemonsService | null = null;
 registerHostDaemonsIpc({
+  // 与进程采样同一道闸：隐藏预热的资源窗口不触发后台推进。
+  allowsRefresh: (sender) => resourceUsageWindowController.allowsProcessMonitorSampling(sender),
   getService: () => {
     hostDaemonsService ??= createHostDaemonsService({
       // 来源按平台装配：Windows 计划任务 / macOS LaunchAgents / Linux systemd 用户单元，

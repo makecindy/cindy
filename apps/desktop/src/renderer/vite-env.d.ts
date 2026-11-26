@@ -5850,8 +5850,9 @@ interface ElectronAPI {
   };
 
   /**
-   * 本机常驻清单(host-daemons):只有带 Cindy 归属证据的 Windows 计划任务会返回;
+   * 本机常驻清单(host-daemons):只有带 Cindy 归属证据的条目会返回;
    * stop/remove 由 main 重新扫描并复核归属,renderer 传来的 id 只是候选。
+   * list 只读;归属核对由 main 在订阅期间自己推进,每轮结束经 onChanged 通知重读。
    */
   hostDaemons: {
     list: () => Promise<import('../shared/hostDaemons').HostDaemonsSnapshot>;
@@ -5864,6 +5865,9 @@ interface ElectronAPI {
     remove: (
       request: import('../shared/hostDaemons').HostDaemonActionRequest,
     ) => Promise<{ ok: true }>;
+    subscribe: () => Promise<void>;
+    unsubscribe: () => Promise<void>;
+    onChanged: (cb: () => void) => () => void;
   };
 
   /**

@@ -4,8 +4,8 @@
  *
  * 数据全部来自 main（扫描 + 归属判定 + 台账），这里只负责呈现与二次确认。
  * 列表里不会出现与本机任务无关的常驻项（例如用户自己装的 v2rayN）：main 只返回
- * 有 Cindy 归属证据的条目，其余只回一个数量。归属还在核对历史记录的条目同样先不列，
- * 由界面按 main 给的间隔静默重拉，直到核对完。
+ * 有 Cindy 归属证据的条目，其余只回一个数量。归属还在核对历史记录的条目同样先不列：
+ * 核对由 main 在订阅期间自己推进，这里收到变化通知后重读，不轮询。
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -20,6 +20,9 @@ import type { HostDaemonEntry, HostDaemonsSnapshot } from '../../../../../shared
 
 type PendingAction = { entry: HostDaemonEntry; action: 'stop' | 'delete' };
 
+/** 变化通知的合并窗口：同一轮 main 只发一条，留一点余量吸收相邻两条。 */
+const CHANGE_COALESCE_MS = 200;
+
 export function HostDaemonsView({ visible }: { visible: boolean }) {
   const { t } = useTranslation();
   const [snapshot, setSnapshot] = useState<HostDaemonsSnapshot | null>(null);
@@ -30,7 +33,7 @@ export function HostDaemonsView({ visible }: { visible: boolean }) {
   // 请求序号：慢扫描返回时丢弃过期结果，避免旧响应覆盖新状态。
   const loadSeq = useRef(0);
 
-  // quiet：核对历史期间的自动重拉，不进加载态（列表和刷新按钮保持可用）。
+  // quiet：变化通知触发的重读不进加载态（列表和刷新按钮保持可用）。
   const load = useCallback(async (quiet = false) => {
     const seq = ++loadSeq.current;
     if (!quiet) setLoading(true);
@@ -47,24 +50,53 @@ export function HostDaemonsView({ visible }: { visible: boolean }) {
     }
   }, []);
 
-  // 只在看得见时工作：收起时停下，重新展开时补拉一次。
+  // 归属核对在 main 推进（本机历史记录可能很大，一次读不完）。可见期间订阅；main 每轮
+  // 结束发一次变化通知，这里重读清单。list 只读台账，所以首屏先等订阅把第一轮推进
+  // 做完再读，不会先闪一下空清单。
+  const [changedTick, setChangedTick] = useState(0);
   useEffect(() => {
-    if (visible) void load();
+    if (!visible) return;
+    const api = window.electronAPI.hostDaemons;
+    const off = api.onChanged(() => setChangedTick((n) => n + 1));
+    let cancelled = false;
+    // 静默重读：首屏的加载态来自初始状态；面板重新可见时旧清单先留着，结果到了原地替换。
+    void api
+      .subscribe()
+      .catch(() => undefined)
+      .then(() => {
+        if (!cancelled) void load(true);
+      });
+    return () => {
+      cancelled = true;
+      off();
+      void api.unsubscribe();
+    };
   }, [visible, load]);
 
-  // 归属还在核对历史的条目：按 main 给的间隔静默重拉。pollTick 让失败的一次也会排下一次，
-  // 否则一次瞬时的读取失败会让核对停在那里。
-  const [pollTick, setPollTick] = useState(0);
-  const pendingCount = snapshot?.pendingCount ?? 0;
-  const retryAfterMs = snapshot?.retryAfterMs ?? 0;
+  // 重读的合并规则（工程规范 §8.6）：短窗口内多次通知只读一次；读取在途时只记一笔，
+  // 做完补读一次；读取失败不自转（下一次只由新的通知、可见性变化或手动刷新触发）。
+  const followUp = useRef(false);
+  const reading = useRef(false);
   useEffect(() => {
-    if (!visible || pendingCount === 0) return;
+    if (changedTick === 0) return;
     const timer = setTimeout(async () => {
-      await load(true);
-      setPollTick((n) => n + 1);
-    }, retryAfterMs);
+      if (reading.current) {
+        followUp.current = true;
+        return;
+      }
+      reading.current = true;
+      try {
+        await load(true);
+        while (followUp.current) {
+          followUp.current = false;
+          await load(true);
+        }
+      } finally {
+        reading.current = false;
+      }
+    }, CHANGE_COALESCE_MS);
     return () => clearTimeout(timer);
-  }, [visible, pendingCount, retryAfterMs, pollTick, load]);
+  }, [changedTick, load]);
 
   const runAction = async () => {
     if (!pending || busy) return;
@@ -199,14 +231,19 @@ export function HostDaemonsView({ visible }: { visible: boolean }) {
 
       <div className="host-daemons-footer">
         <div className="host-daemons-note">
-          {/* 保留旧列表时也要说清楚它可能不是最新的（停止/删除后的状态同理）。 */}
+          {/* 保留旧列表时也要说清楚它可能不是最新的（停止/删除后的状态同理）；
+              有来源没读全时清单同样可能缺项，如实说明。 */}
           {failed
             ? t('rightSidebar.hostDaemons.refreshFailed')
-            : pendingCount > 0
-              ? t('rightSidebar.hostDaemons.checking', { count: pendingCount })
-              : entries.length > 0 && (snapshot?.unrelatedCount ?? 0) > 0
-                ? t('rightSidebar.hostDaemons.unrelated', { count: snapshot?.unrelatedCount ?? 0 })
-                : ''}
+            : snapshot?.incomplete
+              ? t('rightSidebar.hostDaemons.incomplete')
+              : (snapshot?.pendingCount ?? 0) > 0
+                ? t('rightSidebar.hostDaemons.checking', { count: snapshot?.pendingCount ?? 0 })
+                : entries.length > 0 && (snapshot?.unrelatedCount ?? 0) > 0
+                  ? t('rightSidebar.hostDaemons.unrelated', {
+                      count: snapshot?.unrelatedCount ?? 0,
+                    })
+                  : ''}
         </div>
         <Button variant="secondary" size="xs" disabled={loading} onClick={() => void load()}>
           <RefreshCw aria-hidden size={12} strokeWidth={1.8} />

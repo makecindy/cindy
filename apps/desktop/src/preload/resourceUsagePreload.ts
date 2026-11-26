@@ -6,8 +6,11 @@ import { createAppearanceSnapshotBridge } from './appearanceSnapshot';
 import {
   HOST_DAEMONS_DELETE_CHANNEL,
   HOST_DAEMONS_LIST_CHANNEL,
+  HOST_DAEMONS_CHANGED_EVENT,
   HOST_DAEMONS_RUN_CHANNEL,
   HOST_DAEMONS_STOP_CHANNEL,
+  HOST_DAEMONS_SUBSCRIBE_CHANNEL,
+  HOST_DAEMONS_UNSUBSCRIBE_CHANNEL,
   type HostDaemonActionRequest,
   type HostDaemonsSnapshot,
 } from '../shared/hostDaemons';
@@ -127,6 +130,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke(HOST_DAEMONS_RUN_CHANNEL, request),
     remove: (request: HostDaemonActionRequest): Promise<{ ok: true }> =>
       ipcRenderer.invoke(HOST_DAEMONS_DELETE_CHANNEL, request),
+    subscribe: (): Promise<void> => ipcRenderer.invoke(HOST_DAEMONS_SUBSCRIBE_CHANNEL),
+    unsubscribe: (): Promise<void> => ipcRenderer.invoke(HOST_DAEMONS_UNSUBSCRIBE_CHANNEL),
+    onChanged: (cb: () => void): (() => void) => onPayload(HOST_DAEMONS_CHANGED_EVENT, cb),
   },
   processMonitor: {
     subscribe: (): Promise<void> => ipcRenderer.invoke(PROCESS_MONITOR_SUBSCRIBE_CHANNEL),

@@ -11249,6 +11249,7 @@
       "refresh": "Refresh",
       "loadFailed": "Couldn't read background items",
       "refreshFailed": "Refresh failed; this list may be out of date",
+      "incomplete": "Some sources couldn’t be read; this list may be incomplete",
       "unsupported": "Background items aren't available on this system",
       "empty": "No background items created by tasks yet",
       "owner": "Created by: {{title}}",

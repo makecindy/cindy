@@ -11387,6 +11387,7 @@
       "refresh": "Actualizar",
       "loadFailed": "No se pudieron leer los elementos en segundo plano",
       "refreshFailed": "La actualización falló; puede que esta lista no esté al día",
+      "incomplete": "No se pudieron leer algunos orígenes; puede que esta lista esté incompleta",
       "unsupported": "Los elementos en segundo plano no están disponibles en este sistema",
       "empty": "Todavía no hay elementos en segundo plano creados por tareas",
       "owner": "Creado por: {{title}}",
