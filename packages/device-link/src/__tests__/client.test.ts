@@ -7,7 +7,7 @@ import { PROVIDER_SHARE_DIRECT_SIGNAL_CAPABILITY } from '@cindy/device-link-prot
 import { gunzipSync, gzipSync } from 'node:zlib';
 import { describe, it, expect, vi } from 'vitest';
 import { REMOTE_AGENT_CHANNEL, REMOTE_AGENT_READ_WAIT_MS } from '../remoteAgent.js';
-import { DeviceLinkClient, DeviceLinkUnsentInvokeError, DeviceLinkRegistrationRemovedError, SYSTEM_SUSPEND_RECONNECT_HOLD_MS, computeReconnectDelayMs, type WsLike } from '../client.js';
+import { DeviceLinkClient, DeviceLinkUnsentInvokeError, DeviceLinkRegistrationRemovedError, SERVER_RETRY_MAX_WAIT_MS, SYSTEM_SUSPEND_RECONNECT_HOLD_MS, computeReconnectDelayMs, type WsLike } from '../client.js';
 import {
   PROTOCOL_VERSION,
   DeviceLinkError,
@@ -12570,6 +12570,56 @@ it.each(['socket close', 'factory refusal'])('stops automatic reconnect after de
   expect(h.client.getStatus()).toBe('online');
   expect(h.client.getConnectionIssue()).toBeNull();
   h.client.stop();
+});
+
+// #13041：分享传输建连收到 429 时，连接工厂抛出带 retryAt 的错误(AgentNetSharingError 解析的
+// Retry-After)。修复前 client 只按 1 秒起的普通退避重试，期限内照样反复请求被限流的接口。
+// 最小失败输入：工厂第一次抛 { retryAt: now + 60s },期限内触发网络变化、唤醒与 stop/start。
+// 不变量：期限前任何入口都不调用工厂；没有期限时保持原退避；异常的超长期限按上限封顶。
+it.each([
+  { label: 'no server deadline', retryAfterMs: null, earliestMs: 0 },
+  { label: 'Retry-After 60s', retryAfterMs: 60_000, earliestMs: 60_000 },
+  { label: 'Retry-After beyond the cap', retryAfterMs: 2 * 60 * 60_000, earliestMs: SERVER_RETRY_MAX_WAIT_MS },
+])('does not call the socket factory before a server retry deadline ($label)', async ({ retryAfterMs, earliestMs }) => {
+  vi.useFakeTimers();
+  const random = vi.spyOn(Math, 'random').mockReturnValue(0.9999);
+  let attempts = 0;
+  const h = makeHarness({
+    // 假 socket 不回 pong；心跳拉长到用例之外，只看建连节奏。
+    timing: { reconnectBaseMs: 1_000, reconnectMaxMs: 30_000, pingIntervalMs: 60 * 60_000 },
+    beforeSocket: () => {
+      attempts++;
+      if (attempts > 1) return;
+      throw Object.assign(new Error('TOO_MANY_REQUESTS'), {
+        status: 429,
+        retryAt: retryAfterMs === null ? undefined : Date.now() + retryAfterMs,
+      });
+    },
+  });
+  try {
+    h.client.start();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(attempts).toBe(1);
+    if (earliestMs > 0) {
+      await vi.advanceTimersByTimeAsync(earliestMs - 1_000);
+      h.client.connectNow('foreground', { overrideCongestionCooldown: true });
+      h.client.restartConnection('system-resume');
+      h.client.stop();
+      h.client.start();
+      await vi.advanceTimersByTimeAsync(500);
+      expect(attempts).toBe(1);
+      expect(h.client.getStatus()).toBe('connecting');
+    }
+    // 期限(或无期限时的首档退避)过后正常建连上线。
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(attempts).toBe(2);
+    h.current().ack();
+    expect(h.client.getStatus()).toBe('online');
+  } finally {
+    h.client.stop();
+    random.mockRestore();
+    vi.useRealTimers();
+  }
 });
 
 /**
