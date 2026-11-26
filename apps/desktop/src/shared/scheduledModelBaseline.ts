@@ -1,6 +1,15 @@
 import type { MakerEngineKindWire } from './agentKindConversion';
 
-/** Only model preferences; native checkpoints and permission settings keep their own lifecycle. */
+export const SCHEDULED_BASELINE_PERMISSION_MODES = [
+  'ask', 'default', 'acceptEdits', 'plan', 'auto', 'bypassPermissions',
+] as const;
+export type ScheduledBaselinePermissionMode = (typeof SCHEDULED_BASELINE_PERMISSION_MODES)[number];
+
+export function isScheduledBaselinePermissionMode(value: unknown): value is ScheduledBaselinePermissionMode {
+  return typeof value === 'string' && (SCHEDULED_BASELINE_PERMISSION_MODES as readonly string[]).includes(value);
+}
+
+/** Model preferences and permission mode restored after a temporary scheduled switch; native checkpoints keep their own lifecycle. */
 export interface ScheduledModelBaseline {
   scopeId: string;
   /** Permanent profile save not yet accepted by the runtime; survives pause/restart. */
@@ -11,6 +20,7 @@ export interface ScheduledModelBaseline {
   providerId: string | null;
   effort: 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra' | null;
   fastMode: boolean | 'ultrafast';
+  permissionMode?: ScheduledBaselinePermissionMode;
 }
 
 export function parseScheduledModelBaseline(value: unknown): ScheduledModelBaseline | null {
@@ -28,7 +38,8 @@ export function parseScheduledModelBaseline(value: unknown): ScheduledModelBasel
       (parsed.providerId !== null && typeof parsed.providerId !== 'string') ||
       (parsed.agentKind === 'acp' && (!parsed.providerId || !parsed.providerId.startsWith('acp-plugin:') || parsed.providerId.length <= 'acp-plugin:'.length)) ||
       (effort !== null && !['minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'].includes(effort)) ||
-      (typeof parsed.fastMode !== 'boolean' && parsed.fastMode !== 'ultrafast')) return null;
+      (typeof parsed.fastMode !== 'boolean' && parsed.fastMode !== 'ultrafast') ||
+      (parsed.permissionMode !== undefined && !isScheduledBaselinePermissionMode(parsed.permissionMode))) return null;
     return { ...parsed, effort, fastMode: parsed.agentKind === 'acp' ? false : parsed.fastMode };
   } catch {
     return null;

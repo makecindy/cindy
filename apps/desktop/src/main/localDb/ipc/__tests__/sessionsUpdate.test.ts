@@ -1355,6 +1355,7 @@ describe('local-db:sessions:update handler wiring', () => {
       providerId: 'acp-plugin:agy:agy',
       effort: 'high',
       fastMode: false,
+      permissionMode: 'bypassPermissions',
     });
     expect(projector({
       id: sessionId,
@@ -1371,6 +1372,7 @@ describe('local-db:sessions:update handler wiring', () => {
       providerId: 'acp-plugin:agy:agy',
       effort: 'high',
       fastMode: false,
+      permissionMode: 'bypassPermissions',
       runtimeBaseline: undefined,
       runtimeEffective: undefined,
       runtimePending: null,
@@ -1384,6 +1386,7 @@ describe('local-db:sessions:update handler wiring', () => {
       providerId: 'openai',
       effort: 'high',
       fastMode: true,
+      permissionMode: 'acceptEdits',
     });
     expect(projector({
       id: sessionId,
@@ -1400,6 +1403,7 @@ describe('local-db:sessions:update handler wiring', () => {
       providerId: 'openai',
       effort: 'high',
       fastMode: true,
+      permissionMode: 'acceptEdits',
       runtimeBaselineRecoveryPending: true,
     });
   });

@@ -100,7 +100,7 @@ import {
 import { withRehydrateCloseSuppressed } from '../maker-host/rehydrateCloseSuppression.js';
 import { crossesCodexAppliedCustomProviderIdentity } from '../maker-host/codex-custom-provider-route.js';
 import { PluginEngineUnsupportedError } from '../maker-host/engineKind.js';
-import { isPluginEngineKind } from '../../shared/agentKindConversion.js';
+import { dbToMakerEngineKind, isPluginEngineKind } from '../../shared/agentKindConversion.js';
 import { ensureDialogueWorkspaceDir } from '../localDb/dialogueWorkspace';
 import { AcceptedCallbackDispatchCancelled } from '../maker-ipc/acceptedCallbackRunner.js';
 import { schedulerFailureDetail } from '../maker-ipc/schedulerQueueBridge.js';
@@ -3314,22 +3314,27 @@ export class MakerScheduleRunner implements ScheduleRunner {
           : schedule.prompt,
       origin,
       onPreparing: async () => {
-        this.assertQueuedModelSelection(this.deps.maker.getSession(sessionId), routingBaseline.resolvedSelection);
+        await this.assertQueuedModelSelectionForPreparing(sessionId, routingBaseline.resolvedSelection);
         this.assertQueuedExplicitRoute(this.deps.maker.getSession(sessionId), routingBaseline.explicitRoute);
         if (schedule.targetSessionId && this.deps.prepareModelPreferences) {
-          // A plugin-engine task keeps its own model; it has no scheduled model scope.
-          if ((this.deps.maker.getSession(sessionId)?.agentKind ?? routingBaseline.agentKind) !== 'acp') {
-            await this.deps.prepareModelPreferences(sessionId, hasScheduledModelOverride(schedule));
-          }
+          await this.deps.prepareModelPreferences(sessionId, hasScheduledModelOverride(schedule));
           // Preparation may settle a newer owner choice even when this run
-          // overrides only effort/Fast. Refresh inherited axes at dispatch;
+          // overrides only effort/Fast, or restore a built-in owner from a
+          // temporary plugin-engine switch. Refresh inherited axes at dispatch;
           // explicit schedule axes and resolved-selection fences still win.
-          // A task that moved to a plugin engine meanwhile is checked at dispatch.
           const meta = await this.deps.maker.getSessionMeta(sessionId);
+          const rowSnapshot = !meta || getSessionProvider(sessionId) === undefined
+            ? await this.runtime.getSessionRowSnapshot(sessionId)
+            : null;
+          const refreshedProviderId = getSessionProvider(sessionId)
+            ?? (rowSnapshot ? (rowSnapshot.providerId ?? null) : (meta ? null : routingBaseline.providerId));
           routingBaseline = {
-            ...routingBaseline, model: meta?.model, agentKind: meta?.agentKind,
-            effort: meta?.effort, fastMode: schedule.fastMode ?? meta?.fastMode,
-            providerId: getSessionProvider(sessionId) ?? null,
+            ...routingBaseline,
+            model: meta ? meta.model : (rowSnapshot?.model ?? routingBaseline.model),
+            agentKind: meta ? meta.agentKind : (rowSnapshot ? dbToMakerEngineKind(rowSnapshot.agentKind) : routingBaseline.agentKind),
+            effort: meta ? meta.effort : routingBaseline.effort,
+            fastMode: schedule.fastMode ?? (meta ? meta.fastMode : routingBaseline.fastMode),
+            providerId: refreshedProviderId,
           };
         }
         const preparingLive = this.deps.maker.getSession(sessionId);
@@ -3813,6 +3818,40 @@ export class MakerScheduleRunner implements ScheduleRunner {
     throwIfFireAborted(ctx.signal, 'agent turn dispatch');
     if (!schedule.targetSessionId && !schedule.persistentSession) holder.closeOnAbort = true;
     return { sessionId, skipped: true, resultText: error.message };
+  }
+
+  private async assertQueuedModelSelectionForPreparing(
+    sessionId: string,
+    selection: ScheduledModelSelection | undefined,
+  ): Promise<void> {
+    if (!selection) return;
+    const live = this.deps.maker.getSession(sessionId);
+    if (selection.agentKind !== 'acp') {
+      this.assertQueuedModelSelection(live, selection);
+      return;
+    }
+    // Switching to a plugin engine closes the previous live session and defers
+    // plugin startup to the send transaction's lazy-create. Verify the saved
+    // route before startup; onAccepted verifies the started live session again.
+    if (live) {
+      const providerId = getSessionProvider(live.id)
+        ?? (await this.runtime.getSessionRowSnapshot(sessionId))?.providerId ?? null;
+      if (live.agentKind !== 'acp' || live.remoteHostId
+        || (live.agentDeviceId ?? null) !== (selection.agentDeviceId ?? null)
+        || providerId !== selection.providerId
+        || (selection.model !== 'default' && live.model !== selection.model)) {
+        throw new QueuedRouteDisabledError('Scheduled model route changed before queued dispatch');
+      }
+      return;
+    }
+    const row = await this.runtime.getSessionRowSnapshot(sessionId);
+    const providerId = getSessionProvider(sessionId) ?? row?.providerId ?? null;
+    if (row?.status !== 'active' || !isPluginEngineKind(row.agentKind) || row.remoteHostId
+      || (row.agentDeviceId ?? null) !== (selection.agentDeviceId ?? null)
+      || providerId !== selection.providerId
+      || (selection.model !== 'default' && row.model !== selection.model)) {
+      throw new QueuedRouteDisabledError('Scheduled model route changed before queued dispatch');
+    }
   }
 
   private assertQueuedModelSelection(

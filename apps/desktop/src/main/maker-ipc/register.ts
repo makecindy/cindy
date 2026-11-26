@@ -320,7 +320,7 @@ import {
   type ScheduledModelSelectionLease,
   writeScheduledModelBaselineIfProfileCurrent,
 } from './scheduledModelSelection';
-import { parseScheduledModelBaseline } from '../../shared/scheduledModelBaseline';
+import { isScheduledBaselinePermissionMode, parseScheduledModelBaseline } from '../../shared/scheduledModelBaseline';
 import { createColdPiRehydrationBinding } from './coldPiRehydrationBinding.js';
 import {
   createRecoverRemoteRuntimeAxisPersistence,
@@ -12075,6 +12075,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             providerId: route.providerId,
             model: route.model,
             effort: route.effort,
+            permissionMode: route.permissionMode,
           }, listPluginEngineViews());
           return {
             agentKind: 'acp',
@@ -12083,6 +12084,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             model: admitted.model,
             effort: (admitted.effort || null) as ScheduledModelSelection['effort'],
             fastMode: false,
+            ...(route.permissionMode !== undefined && isScheduledBaselinePermissionMode(admitted.permissionMode)
+              ? { permissionMode: admitted.permissionMode }
+              : {}),
           };
         } catch (error) {
           throwIpcError('MODEL_SELECTION_UNAVAILABLE', error instanceof Error ? error.message : String(error));
@@ -12099,6 +12103,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         sessionId, targetAgentKind: route.agentKind, model: route.model,
         agentDeviceId: route.agentDeviceId,
         providerId: route.providerId, effort: route.effort, fastMode: route.fastMode,
+        ...(route.permissionMode ? { permissionMode: route.permissionMode } : {}),
         applyNow: true, configStaged: true, signal,
       });
       // An automatic model choice does not exit the owner's plan mode.
@@ -12121,6 +12126,16 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       if (result.deferred) throw new ScheduledModelSelectionBusyError('Scheduled model selection deferred');
       if (result.superseded || runtimeSelectionRequiresModelWindowConfirmation(result)) {
         throw new Error('Scheduled model selection could not be applied');
+      }
+      if (route.permissionMode) {
+        const live = maker.getSession(sessionId);
+        if (live && live.stablePermissionModeState?.mode !== route.permissionMode) {
+          await live.setPermissionMode(route.permissionMode);
+        }
+        const currentRow = await agentSwitchDeps.getSessionRow(sessionId);
+        if (currentRow?.permissionMode !== route.permissionMode) {
+          await persistSessionFields(sessionId, { permissionMode: route.permissionMode });
+        }
       }
     },
   });
@@ -12149,7 +12164,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     read: async (sessionId) => {
       const [row] = await getDbClient().drizzle.select({
         agentKind: sessions.agentKind, model: sessions.model, providerId: sessions.providerId,
-        effort: sessions.effort, fastMode: sessions.fastMode, baseline: sessions.scheduledModelBaseline,
+        effort: sessions.effort, fastMode: sessions.fastMode, permissionMode: sessions.permissionMode,
+        baseline: sessions.scheduledModelBaseline,
         agentDeviceId: sessions.agentDeviceId, source: sessions.source,
         status: sessions.status, botId: botProfiles.id, profileVersion: botProfiles.currentVersion,
       }).from(sessions)
@@ -12162,6 +12178,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         agentKind: dbToMakerEngineKind(row.agentKind), model: row.model, providerId: row.providerId,
         agentDeviceId: row.agentDeviceId,
         effort: row.effort, fastMode: row.agentKind === 'acp' ? false : row.fastMode,
+        ...(isScheduledBaselinePermissionMode(row.permissionMode) ? { permissionMode: row.permissionMode } : {}),
       } } : null;
     },
     write: async (sessionId, baseline, profileRevision, expectedBaseline = null, restoredProfile) => {
@@ -12188,6 +12205,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
               ? ('' as typeof sessions.$inferInsert['effort'])
               : (saved.effort ?? undefined),
             fastMode: isPluginEngineKind(saved.agentKind) ? false : saved.fastMode,
+            ...(saved.permissionMode ? { permissionMode: saved.permissionMode } : {}),
           } : {}),
         })
         .where(and(eq(sessions.id, sessionId), expectedBaseline === null

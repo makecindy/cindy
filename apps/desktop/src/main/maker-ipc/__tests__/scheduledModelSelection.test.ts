@@ -831,3 +831,80 @@ describe('scheduled model discovery recovery', () => {
     })).rejects.toThrow('owner changed');
   });
 });
+
+// Greptile P1 regression: a temporary switch to a plugin engine narrows permissionMode to a mode
+// that plugin supports (e.g. acceptEdits → default). The scheduled baseline must capture and
+// restore the owner's original permissionMode across both built-in and cross-plugin switches.
+describe('scheduled baseline permissionMode preservation', () => {
+  it('captures permissionMode once and restores it after temporary plugin switches narrow the row', async () => {
+    let profile: ScheduledModelSelection = {
+      agentKind: 'claude-code',
+      agentDeviceId: null,
+      model: 'claude-sonnet-4-6',
+      providerId: 'anthropic',
+      effort: 'high',
+      fastMode: false,
+      permissionMode: 'acceptEdits',
+    };
+    let baseline: string | null = null;
+    const switchHarness = vi.fn(async (route: ScheduledModelSelection) => {
+      profile = {
+        ...route,
+        permissionMode: route.agentKind === 'acp' ? 'default' : (route.permissionMode ?? profile.permissionMode),
+      };
+      return { engineReady: true };
+    });
+    const applyModel = vi.fn(async (route: ScheduledModelSelection) => {
+      profile = { ...profile, ...route };
+    });
+    const scope = createScheduledModelScope({
+      createId: () => 'scope-perm',
+      read: async () => ({ profile, baseline }),
+      write: async (_id, value) => { baseline = value ? JSON.stringify(value) : null; },
+      isBusy: () => false,
+      apply: async (_id, route) => applyScheduledModelSelection(route, {
+        getTarget: async () => ({
+          agentKind: profile.agentKind,
+          providerId: profile.providerId,
+          agentDeviceId: profile.agentDeviceId,
+          status: 'active',
+          source: 'desktop',
+        }),
+        isBusy: () => false,
+        resolveSelection: async (next) => next,
+        switchHarness,
+        applyModel,
+      }),
+    });
+
+    await scope.begin('task');
+    // Temporary switch to plugin engine narrows permissionMode to 'default'.
+    await applyScheduledModelSelection({
+      agentKind: 'acp',
+      agentDeviceId: null,
+      model: 'gemini-4',
+      providerId: 'acp-plugin:agy:agy',
+      effort: 'high',
+      fastMode: false,
+    }, {
+      getTarget: async () => ({ agentKind: profile.agentKind, providerId: profile.providerId, agentDeviceId: null, status: 'active', source: 'desktop' }),
+      isBusy: () => false,
+      resolveSelection: async (next) => next,
+      switchHarness,
+      applyModel,
+    });
+    expect(profile.permissionMode).toBe('default');
+    // A second automation reuses the original baseline without overwriting its saved permissionMode.
+    await scope.begin('task');
+    expect(JSON.parse(baseline!)).toMatchObject({ permissionMode: 'acceptEdits' });
+
+    // Restoring the original built-in engine passes permissionMode='acceptEdits' back through switchHarness.
+    await scope.restore('task');
+    expect(baseline).toBeNull();
+    expect(switchHarness).toHaveBeenLastCalledWith(expect.objectContaining({
+      agentKind: 'claude-code',
+      permissionMode: 'acceptEdits',
+    }));
+    expect(profile.permissionMode).toBe('acceptEdits');
+  });
+});

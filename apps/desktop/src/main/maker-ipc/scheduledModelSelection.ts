@@ -14,6 +14,8 @@ export interface ScheduledModelSelection {
   providerId: string | null;
   effort: Effort | null;
   fastMode: boolean | 'ultrafast';
+  /** Restored when returning from a temporary scheduled switch that narrowed permissionMode. */
+  permissionMode?: ScheduledModelBaseline['permissionMode'];
 }
 
 export type BuiltinScheduledModelSelection = Omit<ScheduledModelSelection, 'agentKind'> & {

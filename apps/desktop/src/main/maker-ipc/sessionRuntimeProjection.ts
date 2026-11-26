@@ -79,6 +79,7 @@ export function createSessionRuntimeProjection(ports: SessionRuntimeProjectionPo
     );
   };
   const projectScheduledPreferences = (sessionId: string, saved: ScheduledModelBaseline): ReturnType<SessionRuntimeProjector> => {
+    const permissionProjection = saved.permissionMode ? { permissionMode: saved.permissionMode } : {};
     if (saved.agentKind === 'acp') {
       return {
         agentKind: 'acp' as unknown as NonNullable<ReturnType<SessionRuntimeProjector>['agentKind']>,
@@ -87,6 +88,7 @@ export function createSessionRuntimeProjection(ports: SessionRuntimeProjectionPo
         providerId: saved.providerId,
         effort: saved.effort ?? '',
         fastMode: false as const,
+        ...permissionProjection,
         runtimeBaseline: undefined,
         runtimeEffective: undefined,
         runtimePending: null,
@@ -106,6 +108,7 @@ export function createSessionRuntimeProjection(ports: SessionRuntimeProjectionPo
       providerId: baseline.providerId,
       effort: baseline.effort ?? '',
       fastMode: baseline.fastMode,
+      ...permissionProjection,
       runtimeBaseline: baseline,
       runtimeEffective: baseline,
       runtimePending: null,

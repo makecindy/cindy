@@ -917,6 +917,8 @@ export async function performSessionAgentSwitch(
      * (provider-groups.md §6.2「任务进行中换号」)。只在真正换了电脑时写。
      */
     providerGroupSwitchReason?: 'quota-rebalance';
+    /** 仅限 main 内部(不接受 IPC 传入)：定时任务恢复原引擎时一并还原被临时插件引擎收窄的权限模式。 */
+    permissionMode?: string;
   },
 ): Promise<SessionAgentSwitchResult> {
   const ownerGeneration = deps.readOwnerGeneration?.();
@@ -1016,7 +1018,8 @@ export async function performSessionAgentSwitch(
       providerId: normalizedProviderId as string,
       model,
       effort: params.effort,
-      permissionMode: row.permissionMode ?? null,
+      permissionMode: (typeof params.permissionMode === 'string' && params.permissionMode ? params.permissionMode : null)
+        ?? row.permissionMode ?? null,
     };
     if (!pluginTargetDeviceId) {
       if (!deps.admitPluginEngineTarget) {
@@ -1509,6 +1512,7 @@ export async function performSessionAgentSwitch(
             sdkSessionId: relocatedNativeId ?? parked?.sdkSessionId ?? null,
             ...(typeof params.effort === 'string' && params.effort ? { effort: params.effort } : {}),
             ...((typeof params.fastMode === 'boolean' || params.fastMode === 'ultrafast') ? { fastMode: params.fastMode } : {}),
+            ...(typeof params.permissionMode === 'string' && params.permissionMode ? { permissionMode: params.permissionMode } : {}),
             // 同机换连接／组选回的当前位置在另一台电脑时也带上位置：提交按它判断窗口该查哪台的目录，不能拿本机目录。
             ...(agentDeviceChanges || ((orcaGroupReturnRebuild || providerConnectionChanges) && targetAgentDeviceId)
               ? { agentDeviceId: targetAgentDeviceId }
