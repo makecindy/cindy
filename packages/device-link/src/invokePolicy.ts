@@ -36,6 +36,8 @@ const BACKGROUND_INVOKE_CHANNELS = new Set([
   'maker:usage:zhipu-coding-plan',
   // Authorized display-only quota/history; never starts a model task.
   'provider-share:insights:v1',
+  // A guest moving a Device Link share to Agent-Net in the background; nobody waits on it.
+  'provider-share:agent-net-link:v1',
   // 远程任务状态栏的定时复查(每 15 秒两次只读);后台任务面板挂载水合同用,可让位于用户操作。
   'maker:session-background-activity',
   'maker:session-background-tasks:list',
