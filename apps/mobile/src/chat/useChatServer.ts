@@ -474,6 +474,7 @@ export function useChatServerGroup(groupId: string, enabled: boolean, threadRoot
     online: true, loadingOlder: false }));
   const page = useRef<{ identity: string; page: ChatPage; self: string; actors: ChatActor[] } | null>(cached ? { identity, ...cached } : null);
   const accessGeneration = useRef(0);
+  const deferredMetadataVersion = useRef(0);
   const freshRead = useRef(false);
   const fullRead = useRef({ identity, at: 0 });
   const recoveryControl = useRef<{ identity: string; schedule: (retryAt?: number) => void; ensureScheduled: (retryAt?: number) => void; clear: () => void; reset: () => void } | null>(null);
@@ -585,6 +586,7 @@ export function useChatServerGroup(groupId: string, enabled: boolean, threadRoot
         page.current = { identity, page: mergedPartial, self: selfId, actors: actorsList };
         setState({ identity, value: { kind: 'ready', group: view(mergedPartial, selfId, actorsList) }, online: true, loadingOlder: false });
       };
+      const metadataVersionAtLoad = deferredMetadataVersion.current;
       const [loadedNext, self, actors] = await Promise.all([
         api.client.load(groupId, oldest, threadRootId, 0, verified?.page, { previous: previous ?? undefined, skipMetadata, onMessages }),
         api.client.me(),
@@ -594,7 +596,9 @@ export function useChatServerGroup(groupId: string, enabled: boolean, threadRoot
       if (run.isStale() || !valid() || generation !== accessGeneration.current) return;
       // Replace the reauthorized window; no stale history survives changed access.
       if (api.client.personalList.hidden(groupId)) { loseAccess(); return; }
-      const next = preserveNewerPush(loadedNext);
+      // A push deferred during this read still needs a metadata fetch after cooldown.
+      const deferredDuringLoad = deferredMetadataVersion.current !== metadataVersionAtLoad;
+      const next = preserveNewerPush(deferredDuringLoad ? { ...loadedNext, metadataIncomplete: true } : loadedNext);
       const complete = !next.metadataIncomplete;
       freshRead.current = complete;
       const reused = !!verified && next.messages === verified.page.messages;
@@ -619,7 +623,8 @@ export function useChatServerGroup(groupId: string, enabled: boolean, threadRoot
       setState({ identity, value: { kind: 'ready', group: view(next, self, actors) }, online: true, loadingOlder: false });
       void hydrate(page.current).catch(() => undefined);
       if (!complete && recoveryControl.current?.identity === identity) {
-        recoveryControl.current.schedule(next.metadataRetryAt);
+        if (deferredDuringLoad && !loadedNext.metadataRetryAt) recoveryControl.current.ensureScheduled();
+        else recoveryControl.current.schedule(next.metadataRetryAt);
       }
     } catch (error) {
       if (run.isStale() || !valid() || generation !== accessGeneration.current) return;
@@ -651,12 +656,14 @@ export function useChatServerGroup(groupId: string, enabled: boolean, threadRoot
         const step = GROUP_RECOVERY_BACKOFF_MS[Math.min(backoffAttempts, GROUP_RECOVERY_BACKOFF_MS.length - 1)]!;
         backoffAttempts++;
         const waitMs = Math.max(step, (retryAt ?? 0) - Date.now(), api.rateLimitRemainingMs());
-        backoffTimer = setTimeout(() => {
+        const retry = () => {
           backoffTimer = undefined;
-          if (active.current === identity && AppState.currentState === 'active' && !freshRead.current) {
-            void request({ reason: 'changed' });
-          }
-        }, waitMs);
+          if (active.current !== identity || AppState.currentState !== 'active' || freshRead.current) return;
+          const remaining = api.rateLimitRemainingMs();
+          if (remaining > 0) backoffTimer = setTimeout(retry, remaining);
+          else void request({ reason: 'changed' });
+        };
+        backoffTimer = setTimeout(retry, waitMs);
       },
       ensureScheduled: (retryAt?: number) => {
         if (!backoffTimer) control.schedule(retryAt);
@@ -778,6 +785,7 @@ export function useChatServerGroup(groupId: string, enabled: boolean, threadRoot
                 void request({ reason: 'changed' });
               } else if (wantsMetadata) {
                 if (metadataCoolingDown) {
+                  deferredMetadataVersion.current++;
                   if (page.current?.identity === identity && !page.current.page.metadataIncomplete) {
                     page.current = { ...page.current, page: { ...page.current.page, metadataIncomplete: true } };
                   }

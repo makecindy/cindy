@@ -1667,6 +1667,48 @@ describe('incremental mobile group sync and 429 resilience', () => {
     expect(chat.state).toMatchObject({ kind: 'ready', group: { messages: [{ content: 'First' }, { content: 'Arrived mid-load' }] } });
   });
 
+  it.each([false, true])('recovers an execution change after a stale read finishes (cooldown extended: %s)', async extended => {
+    vi.useFakeTimers();
+    const { opened, deliver } = fakeSockets();
+    const original = h.auth.apiFetch.getMockImplementation()!;
+    let holdPlans = false;
+    let releasePlans: (() => void) | undefined;
+    let failed = false;
+    h.auth.apiFetch.mockImplementation(async (path, options) => {
+      if (path === '/v1/actors') {
+        if (holdPlans) throw Object.assign(new Error('RATE_LIMITED'), { status: 429, retryAt: Date.now() + 6_000 });
+        return [];
+      }
+      if (holdPlans && path.endsWith('/plans')) await new Promise<void>(resolve => { releasePlans = resolve; });
+      if (path.includes('/media/')) throw Object.assign(new Error('RATE_LIMITED'), { status: 429, retryAt: Date.now() + 5_000 });
+      if (failed && path.includes('/execution-failures?')) {
+        return [{ id, source_message_id: self, bot_id: self, epoch: 1, status: 'failed', failure_code: 'AUTH_REQUIRED' }];
+      }
+      return original(path, options);
+    });
+    showChat = true; await render();
+    const ws = opened.at(-1)!;
+    await deliver(ws, { type: 'ready', actorId: self });
+    holdPlans = true;
+    await act(async () => { chat.reload(); });
+    expect(releasePlans).toBeDefined();
+    h.auth.apiFetch.mockClear();
+    failed = true;
+    await deliver(ws, { type: 'changes', scope: `conversation:${id}`, cursor: '2',
+      changes: [{ type: 'execution.changed', entityId: id, data: {} }] });
+    await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
+    holdPlans = false;
+    await act(async () => { releasePlans!(); });
+    if (extended) await act(async () => { await expect(chat.media!(self)).rejects.toMatchObject({ status: 429 }); });
+    await act(async () => { await vi.advanceTimersByTimeAsync((extended ? 5_000 : 1_000) - 1); });
+    expect(h.auth.apiFetch.mock.calls.filter(([path]) => path.endsWith('/executions'))).toHaveLength(0);
+    await act(async () => { await vi.advanceTimersByTimeAsync(1); });
+    expect(chat.state).toMatchObject({ kind: 'ready', group: { messages: [
+      { content: 'Fixture message' }, { runtimeFailureCode: 'AUTH_REQUIRED' },
+    ] } });
+    expect(h.auth.apiFetch.mock.calls.filter(([path]) => path.endsWith('/executions'))).toHaveLength(1);
+  });
+
   it('respects 429 cooldown for incoming messages even when degraded state still holds live room work', async () => {
     vi.useFakeTimers();
     const { opened, deliver } = fakeSockets();
