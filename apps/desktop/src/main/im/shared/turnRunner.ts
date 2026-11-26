@@ -3294,13 +3294,29 @@ export function createTurnRunner(
         }
         return;
       }
+      if (turn.overloadRetryPending || turn.overloadRetryTimer !== null) {
+        // 失败轮次已进入外层过载重试判定/退避：忽略该轮的尾帧（例如 Codex
+        // turn/completed(failed) 在终态 error 之后补发的同代次 done），防止误把半截回答
+        // 按成功收口并取消重试。
+        if (event.type === 'session_id') return persistSdkSessionId(localSessionId, event.data);
+        return;
+      }
       switch (event.type) {
         case 'text':
           return handleTextEvent(turn, event);
         // Keep reasoning private on Feishu/Discord. Slack hook-control has an
         // explicit live-work surface and opts into the compact thinking row.
-        case 'thinking':
+        case 'thinking': {
+          const data = event.data as { text?: unknown; stage?: unknown } | null;
+          if (
+            data &&
+            (data.stage === 'redacted' ||
+              (typeof data.text === 'string' && data.text.trim().length > 0))
+          ) {
+            turn.hadOutput = true;
+          }
           return;
+        }
         case 'tool_use':
           // 过程展示: 折叠进卡片顶部的滚动时间线(turnActivity.ts), 让用户在
           // 长 agentic turn 里看到"正在干什么", 而不是盯占位符干等结果。
@@ -4544,19 +4560,28 @@ export function createTurnRunner(
         },
         onAccepted: async () => {
           if (!markAttachedImTurnHeadlessDispatched(turn, rowId, turn.reusesExistingSession === true)) return;
+          const replyTargetClientId = item.prePersistedUserMessage?.clientId;
           if (turn.hadOutput) {
             const persisted = await persistUserMessage({
               sessionId: rowId,
               text: CONTINUE_AFTER_ERROR_PROMPT,
               autoResume: true,
             });
-            if (persisted && hasBuiltinAgentKind(state.makerSession)) {
-              await beginTurnChangeSetAtDispatch(state.makerSession, persisted.clientId);
+            const inputClientId = replyTargetClientId ?? persisted?.clientId;
+            if (item.channelToolScope && inputClientId) {
+              item.channelToolScope.inputClientId = inputClientId;
+            }
+            const anchorClientId = persisted?.clientId ?? replyTargetClientId;
+            if (anchorClientId && hasBuiltinAgentKind(state.makerSession)) {
+              await beginTurnChangeSetAtDispatch(state.makerSession, anchorClientId);
               retryTurnChangeSetStarted = true;
             }
-          } else if (item.prePersistedUserMessage?.clientId && hasBuiltinAgentKind(state.makerSession)) {
-            await beginTurnChangeSetAtDispatch(state.makerSession, item.prePersistedUserMessage.clientId);
-            retryTurnChangeSetStarted = true;
+          } else if (replyTargetClientId) {
+            if (item.channelToolScope) item.channelToolScope.inputClientId = replyTargetClientId;
+            if (hasBuiltinAgentKind(state.makerSession)) {
+              await beginTurnChangeSetAtDispatch(state.makerSession, replyTargetClientId);
+              retryTurnChangeSetStarted = true;
+            }
           }
         },
       });

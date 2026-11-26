@@ -245,6 +245,14 @@ export function observeHookTurn(
       if (ev.type === 'thinking') {
         // Desktop 不把 thinking 当 assistant block 边界: presenter 只投影思考活动
         // 本身、不 flush 正文; pushThinkingStep 变化时才刷帧。
+        const thinkingData = ev.data as { text?: unknown; stage?: unknown } | null;
+        if (
+          thinkingData &&
+          (thinkingData.stage === 'redacted' ||
+            (typeof thinkingData.text === 'string' && thinkingData.text.trim().length > 0))
+        ) {
+          hasOutput = true;
+        }
         if (presenter.applyThinking(ev)) {
           hasOutput = true;
           presenter.ensureProgressTicker();

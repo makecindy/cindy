@@ -6022,5 +6022,145 @@ describe('初始流式输出面创建失败的收口降级(#2164)', () => {
         vi.useRealTimers();
       }
     });
+
+    it('ignores trailing done emitted after a terminal overload error and completes via retry', async () => {
+      vi.useFakeTimers();
+      try {
+        const handle = {
+          messageId: 'stream-overload-trailing-done',
+          append: vi.fn(),
+          replace: vi.fn(),
+          finalize: vi.fn(),
+          close: vi.fn(),
+        };
+        mocks.feishuIm.startStreamingText.mockResolvedValue(handle);
+        const sentMessages: unknown[] = [];
+        const harness = createSessionHarness(async (msg) => {
+          sentMessages.push(msg);
+          return { accepted: true };
+        }, SESSION_ID);
+        mocks.getMaker.mockReturnValue(createMakerHarness(harness.session));
+        const localRunner = createTurnRunner(fakeAdapter, fakeRepo, fakeCards, {
+          canSwitchAccount: vi.fn(async () => true),
+          prepareUnhealthySession: vi.fn(async () => undefined),
+        });
+        const onTurnComplete = vi.fn();
+        await localRunner.runAgentTurn({
+          botContextId: BOT_ID,
+          userId: USER_ID,
+          text: '排查任务',
+          attachments: [],
+          userMessageId: 'msg-ov-trailing',
+          onTurnComplete,
+        });
+        await vi.advanceTimersByTimeAsync(0);
+
+        // Codex turn/completed(failed) 可能在终态过载 error 之后立即补发同代次 done。
+        harness.emit({ type: 'text', data: { text: '半截回答', isFinal: false } });
+        harness.emit({
+          type: 'error',
+          data: {
+            message: 'Selected model is at capacity.',
+            reason: 'upstream-overload',
+            isTerminal: true,
+          },
+        });
+        harness.emit({ type: 'done', data: {} });
+        await vi.advanceTimersByTimeAsync(0);
+
+        // 失败尾帧 done 绝不能提前把半截回答按成功收口或取消重试。
+        expect(onTurnComplete).not.toHaveBeenCalled();
+        expect(handle.finalize).not.toHaveBeenCalled();
+
+        await vi.advanceTimersByTimeAsync(1_600);
+        expect(sentMessages).toHaveLength(2);
+        expect(String((sentMessages[1] as { content: unknown }).content)).toContain('[UI_ACTION_TRIGGER]');
+
+        harness.emit({ type: 'text', data: { text: '重试完成完整回答', isFinal: true } });
+        harness.emit({ type: 'done', data: {} });
+        await vi.advanceTimersByTimeAsync(0);
+
+        expect(onTurnComplete).toHaveBeenCalledTimes(1);
+        expect(handle.finalize).toHaveBeenCalledTimes(1);
+        expect(String(handle.finalize.mock.calls[0][0])).toContain('重试完成完整回答');
+        await localRunner.disposeAllSessions();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('treats thinking-only output as hadOutput and preserves channelToolScope.inputClientId across retry', async () => {
+      vi.useFakeTimers();
+      try {
+        const handle = {
+          messageId: 'stream-overload-thinking',
+          append: vi.fn(),
+          replace: vi.fn(),
+          finalize: vi.fn(),
+          close: vi.fn(),
+        };
+        mocks.feishuIm.startStreamingText.mockResolvedValue(handle);
+        mocks.persistUserMessage
+          .mockResolvedValueOnce({ clientId: 'orig-client-id' })
+          .mockResolvedValueOnce({ clientId: 'resume-client-id' });
+        const sentMessages: unknown[] = [];
+        const harness = createSessionHarness(async (msg) => {
+          sentMessages.push(msg);
+          return { accepted: true };
+        }, SESSION_ID);
+        mocks.getMaker.mockReturnValue(createMakerHarness(harness.session));
+        const channelToolScope: ChannelToolScope = {
+          channel: 'discord',
+          botId: BOT_ID,
+          chatId: USER_ID,
+          laneUserId: USER_ID,
+          chatKind: 'group',
+          companion: true,
+          requesterIsOwner: true,
+        };
+        const localRunner = createTurnRunner(fakeAdapter, fakeRepo, fakeCards, {
+          canSwitchAccount: vi.fn(async () => true),
+          prepareUnhealthySession: vi.fn(async () => undefined),
+        });
+        const onTurnComplete = vi.fn();
+        await localRunner.runAgentTurn({
+          botContextId: BOT_ID,
+          userId: USER_ID,
+          text: '带思考的提问',
+          attachments: [],
+          userMessageId: 'msg-ov-thinking',
+          channelToolScope,
+          onTurnComplete,
+        });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(channelToolScope.inputClientId).toBe('orig-client-id');
+
+        // 仅产生有效 thinking 后命中过载：仍视为已有产出，走隐藏续跑而非重发原提问。
+        harness.emit({ type: 'thinking', data: { blockId: 'b1', text: '正在分析依赖图', stage: 'delta' } });
+        harness.emit({
+          type: 'error',
+          data: {
+            message: 'Selected model is at capacity.',
+            reason: 'upstream-overload',
+            isTerminal: true,
+          },
+        });
+        await vi.advanceTimersByTimeAsync(1_600);
+
+        expect(sentMessages).toHaveLength(2);
+        expect(String((sentMessages[1] as { content: unknown }).content)).toContain('[UI_ACTION_TRIGGER]');
+        expect(String((sentMessages[1] as { content: unknown }).content)).not.toContain('带思考的提问');
+        // 重试 onAccepted 后仍保留与原入站消息的 inputClientId 关联。
+        expect(channelToolScope.inputClientId).toBe('orig-client-id');
+
+        harness.emit({ type: 'text', data: { text: '分析完成', isFinal: true } });
+        harness.emit({ type: 'done', data: {} });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(onTurnComplete).toHaveBeenCalledTimes(1);
+        await localRunner.disposeAllSessions();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
   });
 });

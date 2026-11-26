@@ -3359,6 +3359,52 @@ describe('上游过载自动重试期间的渠道进度(零产出窗口)', () =>
     expect(fakeMaker.createSession).toHaveBeenCalledTimes(1);
   });
 
+  it('退避等待期间收到取消信号时立即中止，不等完退避窗口', async () => {
+    setMainLocale('zh-CN');
+    vi.useFakeTimers();
+    try {
+      fakeMaker.createSession.mockResolvedValueOnce(makeManualSession('sess-new'));
+      h.canSwitchTaskAccount.mockResolvedValueOnce(false);
+      let cancelled = false;
+      const cancelController = new AbortController();
+      const onTurnTerminal = vi.fn();
+      const runner = createMakerHookSessionRunner({ log });
+
+      const runPromise = runner.run(
+        baseReq({
+          isCancelRequested: () => cancelled,
+          cancelSignal: cancelController.signal,
+          onTurnTerminal,
+        }),
+      );
+      await vi.advanceTimersByTimeAsync(0);
+
+      const cb = h.eventCbs.get('sess-new')!;
+      cb({ type: 'text', data: { text: '部分输出', isFinal: false } });
+      cb({
+        type: 'error',
+        data: {
+          message: 'Selected model is at capacity.',
+          reason: 'upstream-overload',
+          isTerminal: true,
+        },
+      });
+      await vi.advanceTimersByTimeAsync(0);
+
+      // 不推进退避计时器（原本至少 2250ms），触发取消信号应立即收口。
+      cancelled = true;
+      cancelController.abort();
+      const outcome = await runPromise;
+
+      expect(outcome.status).toBe('error');
+      expect(onTurnTerminal).toHaveBeenCalledTimes(1);
+      expect(fakeMaker.createSession).toHaveBeenCalledTimes(1);
+    } finally {
+      h.canSwitchTaskAccount.mockReset().mockResolvedValue(false);
+      vi.useRealTimers();
+    }
+  });
+
   it.each([
     ['output-limit', 'partial answer'],
     ['output-limit', ''],

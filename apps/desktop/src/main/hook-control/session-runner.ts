@@ -1939,8 +1939,31 @@ export function createMakerHookSessionRunner(deps: {
               sharedPresenter.scheduleProgress();
             }
             await new Promise<void>((resolve) => {
-              const timer = setTimeout(resolve, delayMs);
+              const shouldStop = (): boolean =>
+                Boolean(req.isCancelRequested?.()) || !accountStillCurrent() || req.cancelSignal?.aborted === true;
+              if (shouldStop()) {
+                resolve();
+                return;
+              }
+              let settled = false;
+              let timer: ReturnType<typeof setTimeout> | null = null;
+              let poll: ReturnType<typeof setInterval> | null = null;
+              const finish = (): void => {
+                if (settled) return;
+                settled = true;
+                if (timer !== null) clearTimeout(timer);
+                if (poll !== null) clearInterval(poll);
+                req.cancelSignal?.removeEventListener('abort', finish);
+                resolve();
+              };
+              req.cancelSignal?.addEventListener('abort', finish, { once: true });
+              timer = setTimeout(finish, delayMs);
               timer.unref?.();
+              // 兼容未传 cancelSignal 的调用方以及账号切换边界，无需等完整个退避窗口。
+              poll = setInterval(() => {
+                if (shouldStop()) finish();
+              }, 200);
+              poll.unref?.();
             });
             if (req.isCancelRequested?.() || !accountStillCurrent()) {
               notifyTurnTerminalOnce();
