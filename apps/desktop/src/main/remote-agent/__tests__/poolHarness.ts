@@ -120,6 +120,7 @@ export function sharedAccountSessionTool(dispatcherSessionId: string, ports: Rec
     AUTO_REVIEW_DELEGATED_CONTINUATION: Symbol(), verifiedOwnerRequestText: noop,
     isDeviceLinkInvoke: () => false,
     hostPluginInputSource: noop, readSenderIdentity: none, sessionQueueOriginForDispatcher,
+    withPluginTaskService: none, getSessionActiveInputClientIds: () => [],
     extractPlainText: String, assertReviewExternalInputAllowed: none, syncBotLanePermission: none,
     reconcileBotModelRoute: none, refreshBotCapabilityEpochBeforeSend: none, assertSessionNotRestarting: noop,
     sendToSessionLocks: new Map(), waitForSendToSessionLock: none,
@@ -173,6 +174,7 @@ export function sharedAccountRegisterWiring(ports: Record<string, unknown> & {
   type Row = Awaited<ReturnType<typeof ports.getSessionRowSnapshotStrict>>;
   const same = (field: keyof Row, value: unknown) => (row: Row) => row[field] === value;
   const bindings = {
+    getInstanceConfig: () => null,
     currentSessionCreationSignal: noop,
     captureDataOwnerBroadcastScope: noop,
     isDataOwnerBroadcastScopeCurrent: () => true,

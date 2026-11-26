@@ -62,6 +62,7 @@
   "unified": {
     "remoteCopyUnavailableOn": "「{{device}}」上的 {{provider}} 现在无法使用。",
     "remoteCopyUnavailableOnTaskComputer": "任务所在电脑上的 {{provider}} 现在无法使用。",
+    "accountCount_one": "{{count}} 个账号",
     "accountCount_other": "{{count}} 个账号",
     "accountFallback": "账号 {{index}}",
     "favoriteConfiguration": "收藏此配置",
@@ -113,6 +114,7 @@
   },
   "modelGroups": {
     "title": "模型组",
+    "sourceCount_one": "{{count}} 个来源",
     "sourceCount_other": "{{count}} 个来源",
     "strategy": {
       "expiring": "快作废的先用",
@@ -155,7 +157,6 @@
     "genericName": "插件引擎",
     "defaultModel": "默认模型",
     "unavailable": "{{engine}} 暂不可用",
-    "unavailableWithHint": "{{engine}} 暂不可用：{{hint}}",
-    "worktreeUnsupported": "插件引擎暂不支持在 worktree 中新建任务，请取消勾选 worktree 后再发送"
+    "unavailableWithHint": "{{engine}} 暂不可用：{{hint}}"
   }
 }

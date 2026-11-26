@@ -105,6 +105,7 @@ function pipeline() {
     activeOwnerScopeKey: () => scope,
     getActiveAppSession: () => ({ dataOwnerId: owner }),
     getMakerIfReady: () => null,
+    makerProviderRefreshConfigured: false,
     scheduleNativeHistoryBackupCleanup: () => {},
     runStableOwnerPostCommitTask: builtin,
     syncDefaultMarketPlugins: syncMarket,

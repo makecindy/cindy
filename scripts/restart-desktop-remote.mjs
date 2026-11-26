@@ -1078,12 +1078,12 @@ function devScriptForMode(mode) {
   return mode === 'local' ? 'dev:desktop' : 'dev:desktop:remote';
 }
 
-function packageManagerCommand(mode) {
+function packageManagerCommand(mode, startupArgs = []) {
   const runnerPath = path.join(rootDir, 'scripts', 'desktop-dev-runner.mjs');
   if (process.platform === 'win32') {
-    return `${cmdDoubleQuote(process.execPath)} ${cmdDoubleQuote(runnerPath)} ${mode}`;
+    return `${cmdDoubleQuote(process.execPath)} ${cmdDoubleQuote(runnerPath)} ${mode}${startupArgs.map((arg) => ` ${cmdDoubleQuote(arg)}`).join('')}`;
   }
-  return `${shellSingleQuote(process.execPath)} ${shellSingleQuote(runnerPath)} ${shellSingleQuote(mode)}`;
+  return `${shellSingleQuote(process.execPath)} ${shellSingleQuote(runnerPath)} ${shellSingleQuote(mode)}${startupArgs.map((arg) => ` ${shellSingleQuote(arg)}`).join('')}`;
 }
 
 function darwinEnvPrefix() {
@@ -1220,9 +1220,9 @@ export function devEnvPrefix(env = process.env, platform = process.platform) {
     .join(' ') + ' ';
 }
 
-function launchInSystemTerminal(mode) {
+function launchInSystemTerminal(mode, startupArgs) {
   if (process.platform === 'win32') {
-    const command = `cd /d ${cmdDoubleQuote(rootDir)} && ${devEnvPrefix()}${packageManagerCommand(mode)}`;
+    const command = `cd /d ${cmdDoubleQuote(rootDir)} && ${devEnvPrefix()}${packageManagerCommand(mode, startupArgs)}`;
     const script = [
       "Start-Process -FilePath 'cmd.exe'",
       `-ArgumentList @('/c', ${psSingleQuote(command)})`,
@@ -1244,7 +1244,7 @@ function launchInSystemTerminal(mode) {
     fs.mkdirSync(path.dirname(logPath), { recursive: true });
     fs.rmSync(logPath, { force: true });
     fs.rmSync(`${logPath}.fifo`, { force: true });
-    const command = `${darwinEnvPrefix()}${darwinStaleDevEnvUnset()}cd ${shellSingleQuote(rootDir)} && ${darwinTerminalLoggedCommand(packageManagerCommand(mode), logPath, { envPrefix: devEnvPrefix() })}; exitCode=$?; exit $exitCode`;
+    const command = `${darwinEnvPrefix()}${darwinStaleDevEnvUnset()}cd ${shellSingleQuote(rootDir)} && ${darwinTerminalLoggedCommand(packageManagerCommand(mode, startupArgs), logPath, { envPrefix: devEnvPrefix() })}; exitCode=$?; exit $exitCode`;
     const { scriptPath, args } = prepareDarwinTerminalLaunch(command);
     // osascript 在 do script 之前失败（自动化权限被拒、脚本错误）时临时脚本不会被 source，
     // 首行自删不会发生；按失败退出尽力删除，避免留下含开发环境变量的文件。
@@ -1278,17 +1278,17 @@ function launchInSystemTerminal(mode) {
   return null;
 }
 
-function startDesktopDev(mode, reuseTerminal = false) {
+function startDesktopDev(mode, reuseTerminal = false, startupArgs = []) {
   console.log(`==> Starting desktop ${mode} dev...`);
 
   if (!reuseTerminal && !hasInteractiveTty() && (process.platform === 'win32' || process.platform === 'darwin')) {
-    return launchInSystemTerminal(mode) ?? null;
+    return launchInSystemTerminal(mode, startupArgs) ?? null;
   }
 
   const logPath = reuseTerminal ? desktopDevTerminalLogPath() : null;
   const child = reuseTerminal
-    ? launchDarwinDevInCurrentTerminal(packageManagerCommand(mode), logPath)
-    : spawn(process.execPath, [path.join(rootDir, 'scripts', 'desktop-dev-runner.mjs'), mode], {
+    ? launchDarwinDevInCurrentTerminal(packageManagerCommand(mode, startupArgs), logPath)
+    : spawn(process.execPath, [path.join(rootDir, 'scripts', 'desktop-dev-runner.mjs'), mode, ...startupArgs], {
     cwd: rootDir,
     stdio: 'inherit',
     windowsHide: false,
@@ -1845,7 +1845,12 @@ async function main() {
       isolationName: process.env.XDT_ISOLATED_NAME || '',
     });
   }
-  const terminalLogPath = startDesktopDev(mode, reuseTerminal);
+  // Re-pass the explicit file as CLI intent: the child wrapper must still ignore
+  // unrelated inherited XDT_ENDPOINT_MANIFEST_FILE values.
+  const startupArgs = argv.some((arg) => arg === '--endpoints-file' || arg.startsWith('--endpoints-file='))
+    ? [`--endpoints-file=${path.resolve(rootDir, startupConfig.endpointManifestFile)}`]
+    : [];
+  const terminalLogPath = startDesktopDev(mode, reuseTerminal, startupArgs);
   // 所有非 ready 的结论（启动失败、超时、ready 后进程退出导致的 WHOAMI_MISMATCH）
   // 都先打印终端日志末尾，并在 verdict 里带上 log=。
   const printFailedVerdict = (verdict) => {

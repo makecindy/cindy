@@ -632,7 +632,9 @@ export function remoteAgentLinkError(error: { code?: string; message?: string } 
   const causeCode = typeof code === 'string' && code !== 'IPC_ERROR' ? code : envelopeCode;
   const displayCode = remoteAgentLinkGuidanceCode(causeCode);
   const diagnostic = displayCode && causeCode && envelopeCode !== causeCode ? `[${causeCode}] ${message}` : message;
-  const keepRemoteError = !displayCode && /^\[REMOTE_[A-Z_]+\]/.test(message);
+  const keepRemoteError = ((code === 'ACCESS_REVOKED' || code === 'REMOTE_DISABLED')
+    && envelopeCode?.startsWith('REMOTE_AGENT_SHARE_') === true)
+    || (!displayCode && /^\[REMOTE_[A-Z_]+\]/.test(message));
   // The requested route may be a share/group rather than a resolved computer.
   // Report only this known reference and channel, not a guessed name or status.
   const context = target ? `\nrequestedTarget=${shortDeviceRef(target)}; channel=${REMOTE_AGENT_CHANNEL}` : '';
