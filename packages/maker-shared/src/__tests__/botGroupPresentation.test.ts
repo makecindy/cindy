@@ -20,8 +20,12 @@ import {
   botGroupNewMessageCount,
   botGroupActivityAt,
   latestBotGroupMessage,
+  filterBotGroupThreads,
+  hasActionableGroupThreads,
+  isBotGroupThreadActionable,
+  isBotGroupThreadMine,
 } from '../botGroupPresentation.js';
-import { chatGroupTalkRouteKey, groupLaneOfRouteKey, isChatOnlyGroupLane, BOT_GROUP_RUNTIME_FAILURE_CODES, readBotGroupExecutionFailure, type BotGroupErrorCode, type BotGroupExecutionFailureView, type BotGroupMemberView, type BotGroupMessageView, type BotGroupNoticeCode, type BotGroupOpenPlanSummary, type BotGroupPlanStepStatus, type BotGroupPlanView, type BotGroupSummary } from '../botGroupChat.js';
+import { chatGroupTalkRouteKey, groupLaneOfRouteKey, isChatOnlyGroupLane, BOT_GROUP_RUNTIME_FAILURE_CODES, readBotGroupExecutionFailure, type BotGroupErrorCode, type BotGroupExecutionFailureView, type BotGroupMemberView, type BotGroupMessageView, type BotGroupNoticeCode, type BotGroupOpenPlanSummary, type BotGroupPlanStepStatus, type BotGroupPlanView, type BotGroupSummary, type BotGroupThreadSummary } from '../botGroupChat.js';
 
 describe('group list activity', () => {
   it('keeps creation as a floor without treating settings edits as activity', () => {
@@ -495,5 +499,58 @@ describe('enterprise human display name formatting', () => {
     const bot = { id: 'b1', kind: 'bot', state: 'joined', name: 'Cindy', ownerActorId: 'h1', ownerName: '林知行' };
     expect(chatGroupOwnerName(bot, [owner, bot])).toBe('林知行');
     expect(chatGroupMemberName(bot, [owner, bot])).toBe('Cindy (林知行)');
+  });
+});
+
+// Basis: bot-group-chat.md §10「群聊里的话题索引与提示」— decouples findability (participated /
+// read @mentions / followed) from quiet actionable unreads without letting old unreads scramble order.
+describe('in-group thread index filtering and quiet unread projection', () => {
+  const thread = (overrides: Partial<BotGroupThreadSummary> & { rootId: string }): BotGroupThreadSummary => ({
+    rootAuthorName: 'Alice',
+    rootAuthorBotId: 'alice',
+    rootText: `Root ${overrides.rootId}`,
+    replyCount: 2,
+    unread: { count: 0, mentioned: false },
+    following: false,
+    lastReply: { authorName: 'Bob', text: `Reply ${overrides.rootId}`, createdAt: 100 },
+    ...overrides,
+  });
+
+  const threads: BotGroupThreadSummary[] = [
+    thread({ rootId: 'participated-quiet', participated: true, unread: { count: 2, mentioned: false }, lastReply: { authorName: 'Bob', text: 'Updated PR', createdAt: 300 } }),
+    thread({ rootId: 'read-mention', mentionedMe: true, unread: { count: 0, mentioned: false }, lastMention: { messageId: 'm-read', authorName: 'Carol', text: '@me please check billing', createdAt: 250 }, lastReply: { authorName: 'Carol', text: 'done', createdAt: 260 } }),
+    thread({ rootId: 'unread-mention', mentionedMe: true, unread: { count: 1, mentioned: true, latest: 9 }, lastMention: { messageId: 'm-new', authorName: 'Dan', text: '@me deploy now', createdAt: 150 }, lastReply: { authorName: 'Dan', text: '@me deploy now', createdAt: 150 } }),
+    thread({ rootId: 'followed-unread', following: true, unread: { count: 3, mentioned: false, latest: 12 }, lastReply: { authorName: 'Eve', text: 'New build ready', createdAt: 400 } }),
+    thread({ rootId: 'unrelated', unread: { count: 4, mentioned: false }, lastReply: { authorName: 'Frank', text: 'Lunch plans', createdAt: 500 } }),
+  ];
+
+  it('keeps participated and read @mentions discoverable under mine while keeping notifications quiet', () => {
+    expect(isBotGroupThreadMine(threads[0]!)).toBe(true);
+    expect(isBotGroupThreadActionable(threads[0]!)).toBe(false);
+    expect(isBotGroupThreadMine(threads[4]!)).toBe(false);
+
+    const mine = filterBotGroupThreads(threads, 'mine', '');
+    expect(mine.unread.map(t => t.rootId)).toEqual(['followed-unread', 'unread-mention']);
+    expect(mine.recent.map(t => t.rootId)).toEqual(['participated-quiet', 'read-mention']);
+
+    const mentions = filterBotGroupThreads(threads, 'mentions', '');
+    expect(mentions.unread.map(t => t.rootId)).toEqual(['unread-mention']);
+    expect(mentions.recent.map(t => t.rootId)).toEqual(['read-mention']);
+
+    const all = filterBotGroupThreads(threads, 'all', '');
+    expect(all.unread.map(t => t.rootId)).toEqual(['followed-unread', 'unread-mention']);
+    expect(all.recent.map(t => t.rootId)).toEqual(['unrelated', 'participated-quiet', 'read-mention']);
+  });
+
+  it('filters by query across root text, last reply, mention snippet, and responder names', () => {
+    expect(filterBotGroupThreads(threads, 'mine', 'billing').recent.map(t => t.rootId)).toEqual(['read-mention']);
+    expect(filterBotGroupThreads(threads, 'all', 'lunch').recent.map(t => t.rootId)).toEqual(['unrelated']);
+    expect(filterBotGroupThreads(threads, 'mine', 'deploy').unread.map(t => t.rootId)).toEqual(['unread-mention']);
+  });
+
+  it('suppresses the header unread dot when only non-followed participated threads have replies or the sole unread thread is open', () => {
+    expect(hasActionableGroupThreads([threads[0]!, threads[1]!, threads[4]!])).toBe(false);
+    expect(hasActionableGroupThreads([threads[2]!], null)).toBe(true);
+    expect(hasActionableGroupThreads([threads[2]!], 'unread-mention')).toBe(false);
   });
 });

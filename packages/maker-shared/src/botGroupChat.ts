@@ -310,6 +310,21 @@ export interface BotGroupThreadUnread {
   latest?: number;
 }
 
+/** One responder in a Thread summary's avatar stack. */
+export interface BotGroupThreadResponder {
+  id: string;
+  authorBotId: string | null;
+  authorName: string;
+}
+
+/** Latest message in a Thread that explicitly mentioned this reader (persists after read). */
+export interface BotGroupThreadMentionSummary {
+  messageId: string;
+  authorName: string;
+  text: string;
+  createdAt: number;
+}
+
 /**
  * One Thread of the group for the in-chat 话题 list (bot-group-chat.md §10「话题未读与提示」).
  * Root text and author come from the server's copy; empty while that copy is still being read.
@@ -319,10 +334,19 @@ export interface BotGroupThreadSummary {
   rootAuthorName: string;
   rootAuthorBotId: string | null;
   rootText: string;
+  rootCreatedAt?: number;
   replyCount: number;
   unread: BotGroupThreadUnread;
   /** The reader chose to follow it; absent when the server keeps no read state. */
   following?: boolean;
+  /** The reader started this Thread or posted a reply (including personal AI stand-in). */
+  participated?: boolean;
+  /** Someone mentioned this reader in the root or a reply (persists after reading). */
+  mentionedMe?: boolean;
+  /** Newest message that mentioned this reader, for direct jump from the @me view. */
+  lastMention?: BotGroupThreadMentionSummary | null;
+  /** Up to 3 distinct recent responders for the compact avatar stack. */
+  responders?: BotGroupThreadResponder[];
   lastReply: { authorName: string; text: string; createdAt: number } | null;
 }
 

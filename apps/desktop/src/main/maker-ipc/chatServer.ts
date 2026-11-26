@@ -1811,27 +1811,83 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     }
     return count ? { count, mentioned, latest } : { count, mentioned };
   }
-  /** The group's Threads with replies in the newest window, unread ones first, newest reply next. */
+  /** The group's Threads with replies across the snapshot and retained room cache, unread first, newest reply next. */
   function threadSummaries(roomId: string, s: Snapshot, page: Message[], reads: Map<string, bigint>): BotGroupThreadSummary[] {
-    const known = [...s.messages, ...page];
+    const knownById = new Map<string, Message>();
+    for (const m of [...(history()?.cachedMessages<Message>(roomId) ?? []), ...page, ...s.messages]) {
+      const existing = knownById.get(m.id);
+      if (!existing || (m.revision ?? 0) >= (existing.revision ?? 0)) knownById.set(m.id, m);
+    }
+    const known = [...knownById.values()];
     const rootIds = new Set<string>();
-    for (const m of s.messages) if (m.threadRootId) rootIds.add(m.threadRootId);
-    for (const m of known) if (!m.threadRootId && (m.replyCount ?? 0) > 0) rootIds.add(m.id);
+    const repliesByRoot = new Map<string, Message[]>();
+    for (const m of known) {
+      if (m.threadRootId) {
+        rootIds.add(m.threadRootId);
+        if (!m.deleted && m.origin !== 'system') {
+          const list = repliesByRoot.get(m.threadRootId) ?? [];
+          list.push(m);
+          repliesByRoot.set(m.threadRootId, list);
+        }
+      } else if (!m.deleted && (m.replyCount ?? 0) > 0) {
+        rootIds.add(m.id);
+      }
+    }
     // A root outside the window is read in the background; its summary fills in on the next refresh.
     const roots = threads.sources(roomId, [...rootIds], known);
     const followed = new Set(s.reads?.filter(read => read.following).map(read => read.thread_key));
+    const isSelfActivity = (m: Message) => !m.deleted && m.origin !== 'system'
+      && (m.authorId === selfId || m.maskAttribution?.self.id === selfId);
+    const compareSeqDesc = (a: Message, b: Message) => {
+      const diff = BigInt(b.seq) - BigInt(a.seq);
+      return diff > 0n ? 1 : diff < 0n ? -1 : 0;
+    };
     return [...rootIds].map((rootId): BotGroupThreadSummary => {
       const root = roots.get(rootId) ?? undefined;
       const rootView = root ? messageView(root, s.members) : null;
-      // The snapshot is newest first.
-      const last = s.messages.find(m => m.threadRootId === rootId && !m.deleted && m.origin !== 'system');
+      const replies = (repliesByRoot.get(rootId) ?? []).sort(compareSeqDesc);
+      const last = replies[0];
       const lastView = last ? messageView(last, s.members) : null;
-      return { rootId, rootAuthorName: rootView?.authorName ?? '', rootAuthorBotId: rootView?.authorBotId ?? null,
+      const participated = (root ? isSelfActivity(root) : false) || replies.some(isSelfActivity);
+      const mentionCandidates = [
+        ...(root && !root.deleted && root.origin !== 'system' ? [root] : []),
+        ...replies,
+      ].filter(m => m.authorId !== selfId && m.mentions?.includes(selfId)).sort(compareSeqDesc);
+      const latestMention = mentionCandidates[0];
+      const latestMentionView = latestMention ? messageView(latestMention, s.members) : null;
+      const seenResponders = new Set<string>();
+      const responders = replies.filter(reply => {
+        if (seenResponders.has(reply.authorId)) return false;
+        seenResponders.add(reply.authorId);
+        return true;
+      }).slice(0, 3).reverse().map(reply => {
+        const view = messageView(reply, s.members);
+        return { id: reply.id, authorBotId: view.authorBotId, authorName: view.authorName };
+      });
+      const rootCreatedAt = root ? Date.parse(root.createdAt) : undefined;
+      return {
+        rootId,
+        rootAuthorName: rootView?.authorName ?? '',
+        rootAuthorBotId: rootView?.authorBotId ?? null,
         rootText: root && !root.deleted ? threadPreviewText(root) || mediaNames(root) : '',
-        replyCount: root?.replyCount ?? s.messages.filter(m => m.threadRootId === rootId).length,
-        unread: threadUnread(rootId, s.messages, reads, s.mentionReadIds), following: followed.has(rootId),
-        lastReply: last && lastView ? { authorName: lastView.authorName, text: threadPreviewText(last) || mediaNames(last), createdAt: lastView.createdAt } : null };
-    }).sort((a, b) => Number(b.unread.count > 0) - Number(a.unread.count > 0) || (b.lastReply?.createdAt ?? 0) - (a.lastReply?.createdAt ?? 0))
+        ...(rootCreatedAt !== undefined && Number.isFinite(rootCreatedAt) ? { rootCreatedAt } : {}),
+        replyCount: Math.max(root?.replyCount ?? 0, replies.length),
+        unread: threadUnread(rootId, s.messages, reads, s.mentionReadIds),
+        following: followed.has(rootId),
+        ...(participated ? { participated: true } : {}),
+        ...(mentionCandidates.length > 0 ? { mentionedMe: true } : {}),
+        ...(latestMention && latestMentionView ? {
+          lastMention: {
+            messageId: latestMention.id,
+            authorName: latestMentionView.authorName,
+            text: threadPreviewText(latestMention) || mediaNames(latestMention),
+            createdAt: latestMentionView.createdAt,
+          },
+        } : {}),
+        ...(responders.length > 0 ? { responders } : {}),
+        lastReply: last && lastView ? { authorName: lastView.authorName, text: threadPreviewText(last) || mediaNames(last), createdAt: lastView.createdAt } : null,
+      };
+    }).sort((a, b) => Number(b.unread.count > 0) - Number(a.unread.count > 0) || (b.lastReply?.createdAt ?? b.rootCreatedAt ?? 0) - (a.lastReply?.createdAt ?? a.rootCreatedAt ?? 0))
       .slice(0, THREAD_LIST_LIMIT);
   }
   /**

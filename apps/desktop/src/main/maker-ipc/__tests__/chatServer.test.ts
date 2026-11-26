@@ -6338,7 +6338,18 @@ describe('Chat Server result delivery and refresh', () => {
       // Only Alice's reply after seq 2 counts; the deleted one never does.
       expect(read.group.messages.find(m => m.id === rootId)!.threadUnread).toEqual({ count: 1, mentioned: true, latest: Number(mentioning.seq) });
       expect(read.group.threads).toEqual([expect.objectContaining({ rootId, rootText: '周末去哪？ @Bot', rootAuthorName: 'Alice',
+        mentionedMe: true, lastMention: expect.objectContaining({ messageId: mentioning.id, authorName: 'Alice' }),
         unread: { count: 1, mentioned: true, latest: Number(mentioning.seq) }, lastReply: expect.objectContaining({ authorName: 'Alice', text: `text of ${aliceReply}` }) })]);
+      // Reading the thread clears unread, while mentionedMe and participated (when self replied) persist for the in-group 话题 index.
+      const selfReply = msg('70000000-0000-4000-8000-000000000009', 9, selfId, { threadRootId: rootId });
+      fixture.handle.mockImplementation((route, method, body) =>
+        route.endsWith('/snapshot') ? { body: { room: room(roomId), members, messages: [...shares, selfReply, mentioning, replies[1], replies[0], root].sort((a, b) => Number(b.seq) - Number(a.seq)), cursor: '9', reads: [{ thread_key: rootId, read_seq: '9' }] } }
+          : threadResponse(route, method, body));
+      const afterRead = await service.getGroup(roomId);
+      if (!afterRead.ok) throw new Error('Expected group');
+      expect(afterRead.group.threads).toEqual([expect.objectContaining({ rootId,
+        participated: true, mentionedMe: true, lastMention: expect.objectContaining({ messageId: mentioning.id }),
+        unread: { count: 0, mentioned: false } })]);
       // An older server keeps no read state: nothing is shown as unread rather than everything.
       withReads(undefined);
       const older = await service.getGroup(roomId);

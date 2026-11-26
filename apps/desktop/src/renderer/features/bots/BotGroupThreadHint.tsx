@@ -96,12 +96,14 @@ function MentionRow({ entry, onLocate }: { entry: GroupMaskMention; onLocate: ()
   );
 }
 
-export function BotGroupThreadHint({ threads, members, openRootId, onOpen, mentions = [], onLocateMention, onReadMentions, saving = false, suppressed = false }: {
+export function BotGroupThreadHint({ threads, members, openRootId, onOpen, onOpenList, mentions = [], onLocateMention, onReadMentions, saving = false, suppressed = false }: {
   threads: readonly BotGroupThreadSummary[];
   members: readonly BotGroupMemberView[];
   /** The Thread open beside the chat: already being read, so it never asks for attention. */
   openRootId: string | null;
-  onOpen: (rootId: string) => void;
+  onOpen: (rootId: string, focusMessageId?: string) => void;
+  /** Opens the persistent right-side 话题 index instead of the transient popover when multiple threads have updates. */
+  onOpenList?: (filter?: 'mine' | 'mentions' | 'all') => void;
   mentions?: readonly GroupMaskMention[];
   onLocateMention?: (mention: GroupMaskMention) => void;
   onReadMentions?: () => void;
@@ -122,15 +124,28 @@ export function BotGroupThreadHint({ threads, members, openRootId, onOpen, menti
   const mentionedRoots = new Set(mentions.flatMap(entry => entry.threadRootId ? [entry.threadRootId] : []));
   const listedHints = hinted.filter(thread => !mentionedRoots.has(thread.rootId));
   const others = threads.filter(thread => !hinted.includes(thread) && !mentionedRoots.has(thread.rootId));
-  const showList = mentions.length > 0 || hinted.length !== 1;
-  const open = (rootId: string) => { setListOpen(false); onOpen(rootId); };
+  const usePopover = mentions.length > 0 || (!onOpenList && hinted.length !== 1);
+  const open = (rootId: string, focusMessageId?: string) => {
+    setListOpen(false);
+    if (focusMessageId) onOpen(rootId, focusMessageId);
+    else onOpen(rootId);
+  };
+  const handlePrimaryClick = () => {
+    if (usePopover) { setListOpen(value => !value); return; }
+    if (hinted.length === 1) {
+      const single = hinted[0]!;
+      open(single.rootId, single.unread.mentioned ? single.lastMention?.messageId : undefined);
+      return;
+    }
+    onOpenList?.(mentioned ? 'mentions' : 'mine');
+  };
   return (
-    <Popover open={listOpen && !suppressed} onOpenChange={setListOpen}>
+    <Popover open={usePopover && listOpen && !suppressed} onOpenChange={setListOpen}>
       <PopoverAnchor asChild>
         <div data-thread-hint="" className="pointer-events-auto absolute bottom-2 right-2 z-raised flex max-w-[calc(100%-16px)] items-center rounded-full border border-[var(--border-default)] bg-[var(--surface-elevated)] text-13 text-[var(--text-primary)]">
           <button type="button" data-testid="group-attention-hint" data-count={mentions.length}
-            aria-haspopup={showList ? 'dialog' : undefined} aria-expanded={showList ? listOpen : undefined}
-            onClick={() => (showList ? setListOpen(value => !value) : open(hinted[0]!.rootId))}
+            aria-haspopup={usePopover ? 'dialog' : undefined} aria-expanded={usePopover ? listOpen : undefined}
+            onClick={handlePrimaryClick}
             className={cn('flex min-w-0 items-center gap-2 rounded-full py-1.5 pl-3 pr-1 leading-5', FOCUS)}>
             {mentions.length ? <AtSign size={14} aria-hidden className="shrink-0 text-[var(--text-secondary)]" />
               : <MessagesSquare size={14} aria-hidden className="shrink-0 text-[var(--text-secondary)]" />}

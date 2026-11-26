@@ -13,7 +13,7 @@ import { useProcessDisclosureScroll } from './useProcessDisclosureScroll';
  * 服务器的回复到了原地替换；失败撤掉、文字放回，原因写在输入框上方。
  */
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
-import { Bell, BellRing, CornerDownRight, MessageSquareShare } from 'lucide-react';
+import { ArrowLeft, Bell, BellRing, CornerDownRight, MessageSquareShare } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
@@ -190,7 +190,7 @@ export function animateThreadPanel(panel: HTMLElement, direction: 'open' | 'clos
  * `quoteSources` are the main timeline's verified messages (older pages included), so a
  * 话题 root's quote reads the same as it does in the timeline; without them, the latest page.
  */
-export function ChatThreadPanel({ group, rootId, speakers = [], onStop, stopping = false, quoteSources = group.messages, focus, sharedReplies, onPostPending, onRevealShare, onClose, resize }: {
+export function ChatThreadPanel({ group, rootId, speakers = [], onStop, stopping = false, quoteSources = group.messages, focus, sharedReplies, onPostPending, onRevealShare, onBack, onClose, resize }: {
   speakers?: BotGroupLiveSpeaker[];
   onStop?: (scope?: 'all') => void;
   stopping?: boolean;
@@ -201,6 +201,8 @@ export function ChatThreadPanel({ group, rootId, speakers = [], onStop, stopping
   onPostPending?: (source: BotGroupMessageView) => (messageId: string | null) => void;
   /** Scroll the main chat to a share; false when it is not loaded there. */
   onRevealShare?: (messageId: string) => boolean;
+  /** Return to the in-group 话题 index inside the same right-side panel. */
+  onBack?: () => void;
   onClose: () => void;
   resize?: ThreadPanelResize;
 }) {
@@ -701,7 +703,17 @@ export function ChatThreadPanel({ group, rootId, speakers = [], onStop, stopping
   const executionSpeakers = liveEntries.flatMap(entry => entry.kind === 'work' && entry.value.activity !== 'planning' ? [entry.value] : []);
   const canStopMine = executionSpeakers.some(speaker => canStopBotGroupSpeaker(group, { ...speaker, botId: speaker.member.botId })) && group.round.canStop !== false;
   const stopSpeaker = [...executionSpeakers].reverse().find(speaker => group && canStopBotGroupSpeaker(group, { ...speaker, botId: speaker.member.botId }));
-  return <ThreadPanel inlineActions={false} panelRef={panelRef} resize={resize} onClose={onClose} actions={<>
+  return <ThreadPanel inlineActions={false} panelRef={panelRef} resize={resize} onClose={onClose}
+    leading={onBack ? (
+      <Tip text={t(key('thread.backToList'))}>
+        <Button variant="secondary" tone="quiet" size="md"
+          className="-ml-2 w-8 rounded-none px-0 [&::before]:rounded-full"
+          aria-label={t(key('thread.backToList'))} onClick={onBack}>
+          <ArrowLeft size={16} aria-hidden />
+        </Button>
+      </Tip>
+    ) : undefined}
+    actions={<>
             {following !== undefined ? (
               <Tip text={t(key(following ? 'thread.unfollowTip' : 'thread.followTip'))}>
                 <Button variant="secondary" tone="quiet" size="sm" aria-pressed={following} data-thread-follow=""

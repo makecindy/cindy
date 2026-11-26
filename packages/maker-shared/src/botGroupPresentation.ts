@@ -18,6 +18,7 @@ import {
   type BotGroupPlanView,
   type BotGroupReplyMode,
   type BotGroupSummary,
+  type BotGroupThreadSummary,
 } from './botGroupChat.js';
 
 interface ChatGroupNamedMember {
@@ -564,4 +565,84 @@ export function botGroupQueueWindow(plan: BotGroupPlanView): { start: number; en
   const active = plan.steps.findIndex((step) => step.status !== 'done' && step.status !== 'skipped');
   const start = Math.min(Math.max((active < 0 ? count - 1 : active) - 1, 0), count - QUEUE_VISIBLE_STEPS);
   return { start, end: start + QUEUE_VISIBLE_STEPS };
+}
+
+// ---- In-group 话题 index (Desktop + Mobile) ---------------------------------------------
+
+export type BotGroupThreadFilter = 'mine' | 'mentions' | 'all';
+
+/** Threads the reader participated in, was mentioned in (read or unread), or explicitly follows. */
+export function isBotGroupThreadMine(thread: BotGroupThreadSummary): boolean {
+  return thread.participated === true
+    || thread.mentionedMe === true
+    || thread.following === true
+    || thread.unread.mentioned === true;
+}
+
+/** Quiet actionable-unread gate: only unread @mentions or unread replies in followed threads. */
+export function isBotGroupThreadActionable(thread: BotGroupThreadSummary, openRootId: string | null = null): boolean {
+  return thread.rootId !== openRootId
+    && thread.unread.count > 0
+    && (thread.unread.mentioned === true || thread.following === true);
+}
+
+/** True when any thread in the group has an actionable unread reply (drives the quiet header dot). */
+export function hasActionableGroupThreads(
+  threads: readonly BotGroupThreadSummary[] | undefined,
+  openRootId: string | null = null,
+): boolean {
+  return Boolean(threads?.some(thread => isBotGroupThreadActionable(thread, openRootId)));
+}
+
+/** Chronological anchor for sorting the thread index (newest activity first). */
+export function botGroupThreadActivityAt(thread: BotGroupThreadSummary): number {
+  const candidates = [thread.lastReply?.createdAt, thread.lastMention?.createdAt, thread.rootCreatedAt];
+  return candidates.reduce<number>((latest, value) => (typeof value === 'number' && Number.isFinite(value) ? Math.max(latest, value) : latest), 0);
+}
+
+function matchesBotGroupThreadQuery(thread: BotGroupThreadSummary, needle: string): boolean {
+  if (!needle) return true;
+  const fields = [
+    thread.rootText,
+    thread.rootAuthorName,
+    thread.lastReply?.text,
+    thread.lastReply?.authorName,
+    thread.lastMention?.text,
+    thread.lastMention?.authorName,
+    ...(thread.responders?.map(responder => responder.authorName) ?? []),
+  ];
+  return fields.some(field => typeof field === 'string' && field.toLocaleLowerCase().includes(needle));
+}
+
+function compareBotGroupThreadsByActivity(a: BotGroupThreadSummary, b: BotGroupThreadSummary): number {
+  return botGroupThreadActivityAt(b) - botGroupThreadActivityAt(a) || a.rootId.localeCompare(b.rootId);
+}
+
+/**
+ * Projects a group's threads for the quiet in-group 话题 index:
+ * - Filters by scope (`mine` / `mentions` / `all`) and search query.
+ * - Keeps actionable unread threads in a compact leading section without letting old unreads
+ *   corrupt chronological order in the main list.
+ */
+export function filterBotGroupThreads(
+  threads: readonly BotGroupThreadSummary[],
+  filter: BotGroupThreadFilter,
+  query: string,
+  openRootId: string | null = null,
+): { unread: BotGroupThreadSummary[]; recent: BotGroupThreadSummary[] } {
+  const needle = query.trim().toLocaleLowerCase();
+  const matched = threads.filter((thread) => {
+    if (filter === 'mine' && !isBotGroupThreadMine(thread)) return false;
+    if (filter === 'mentions' && !(thread.mentionedMe === true || thread.unread.mentioned === true)) return false;
+    return matchesBotGroupThreadQuery(thread, needle);
+  });
+  const unread: BotGroupThreadSummary[] = [];
+  const recent: BotGroupThreadSummary[] = [];
+  for (const thread of matched) {
+    if (isBotGroupThreadActionable(thread, openRootId)) unread.push(thread);
+    else recent.push(thread);
+  }
+  unread.sort(compareBotGroupThreadsByActivity);
+  recent.sort(compareBotGroupThreadsByActivity);
+  return { unread, recent };
 }

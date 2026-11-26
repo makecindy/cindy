@@ -1384,3 +1384,25 @@ it.each([10, 11].flatMap(requester => ['running', 'stopping'].map(status => ({ r
   expect(view.round.speakers.map(s => s.executionStatus)).toEqual([status, 'running']);
   expect(view.round.canStop).toBe(requester === 11 && status === 'running');
 });
+
+// Unit: bot-group-chat.md §10 in-group 话题 index on mobile direct groups.
+// Verifies participated, mentionedMe, lastMention, responders and unread projection survive read.
+it('projects group thread summaries with participation and persistent @mention targets', () => {
+  const root = { ...message(20), authorId: id(11), author: { kind: 'human', name: 'Peer' }, replyCount: 2, content: [{ type: 'text', text: 'Release checklist' }] };
+  const myReply = { ...message(21), authorId: id(10), author: { kind: 'human', name: 'Me' }, threadRootId: root.id, content: [{ type: 'text', text: 'I will check iOS' }] };
+  const mentionReply = { ...message(22), authorId: id(11), author: { kind: 'human', name: 'Peer' }, threadRootId: root.id, mentions: [id(10)], content: [{ type: 'text', text: '@Me ready to ship?' }] };
+  const snap = { ...snapshot(), messages: [mentionReply, myReply, root], reads: [{ thread_key: root.id, read_seq: mentionReply.seq, following: false }] };
+  const view = chatGroupView({ snapshot: snap, messages: [root], before: null }, id(10));
+  expect(view.threads).toEqual([expect.objectContaining({
+    rootId: root.id,
+    rootText: 'Release checklist',
+    replyCount: 2,
+    participated: true,
+    mentionedMe: true,
+    following: false,
+    unread: { count: 0, mentioned: false },
+    lastMention: expect.objectContaining({ messageId: mentionReply.id, text: '@Me ready to ship?' }),
+    lastReply: expect.objectContaining({ text: '@Me ready to ship?' }),
+  })]);
+  expect(view.threads?.[0]?.responders?.map(r => r.authorBotId)).toEqual([id(10), id(11)]);
+});

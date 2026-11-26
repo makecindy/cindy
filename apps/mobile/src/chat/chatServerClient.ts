@@ -15,7 +15,7 @@ import type { HostedRemoteCollectionItem } from '@/device-link/remoteResources';
 import i18next from 'i18next';
 import { DEFAULT_LOCALE, SUPPORTED_LOCALES } from '@/i18n/locale';
 import { mobileMarkdownPreviewText } from '@/session/messageMarkdown';
-import { buildBotGroupThreadShareCard, botGroupThreadShareOperationId, readBotGroupThreadShareCard, type BotGroupThreadShareView } from '@cindy/maker-shared/botGroupChat';
+import { buildBotGroupThreadShareCard, botGroupThreadShareOperationId, readBotGroupThreadShareCard, type BotGroupThreadShareView, type BotGroupThreadSummary } from '@cindy/maker-shared/botGroupChat';
 import type { RemoteSerializedAttachment } from '@/session/types';
 import type { BotGroupPlanView } from '@cindy/maker-shared/botGroupChat';
 
@@ -99,6 +99,8 @@ export type ChatPlanAction = { action: 'start' | 'dismiss' | 'continue' | 'retry
   | { action: 'skip'; position: number; executionId?: string };
 export interface ChatPage { threadRootId?: string; snapshot: ChatSnapshot; messages: ChatMessage[]; before: string | null; failures?: ChatExecutionFailure[]; executions?: ChatExecution[]; historyRevision?: string;
   plans?: ChatPlan[];
+  /** Retained in-memory room messages from durable history (used for in-group 话题 index). */
+  cachedMessages?: ChatMessage[];
   /** Authorized enrichments only; raw card fallback is never a resolved source. */
   threadSources?: Record<string, ChatMessage | null>; threadRoots?: Record<string, ChatMessage | null>; threadRetryAt?: number; previewMessages?: ChatMessage[];
 }
@@ -424,8 +426,96 @@ export function chatGroupView(page: ChatPage, selfId: string, actors: readonly C
     const read = page.snapshot.reads.find(read => read.thread_key === rootId)?.read_seq ?? '0';
     const unread = page.snapshot.messages.filter(reply => reply.threadRootId === rootId && !reply.deleted && reply.origin !== 'system'
       && reply.origin !== 'import' && reply.authorId !== selfId && BigInt(chatCursor(reply.seq)) > BigInt(chatCursor(read)));
-    return { count: unread.length, mentioned: unread.some(reply => reply.mentions?.includes(selfId)) };
+    const latest = unread.reduce((max, reply) => Math.max(max, Number(chatCursor(reply.seq))), 0);
+    return { count: unread.length, mentioned: unread.some(reply => reply.mentions?.includes(selfId)), ...(unread.length ? { latest } : {}) };
   };
+  const groupThreads = (() => {
+    if (room.kind === 'direct' || !page.snapshot.reads) return undefined;
+    const poolById = new Map<string, ChatMessage>();
+    for (const message of [...(page.cachedMessages ?? []), ...(page.previewMessages ?? []), ...page.messages, ...page.snapshot.messages]) {
+      const existing = poolById.get(message.id);
+      if (!existing || (message.revision ?? 0) >= (existing.revision ?? 0)) poolById.set(message.id, message);
+    }
+    for (const root of Object.values(page.threadRoots ?? {})) {
+      if (root) {
+        const existing = poolById.get(root.id);
+        if (!existing || (root.revision ?? 0) >= (existing.revision ?? 0)) poolById.set(root.id, root);
+      }
+    }
+    const rootIds = new Set<string>();
+    const repliesByRoot = new Map<string, ChatMessage[]>();
+    for (const message of poolById.values()) {
+      if (message.threadRootId) {
+        rootIds.add(message.threadRootId);
+        if (!message.deleted && message.origin !== 'system') {
+          const list = repliesByRoot.get(message.threadRootId) ?? [];
+          list.push(message);
+          repliesByRoot.set(message.threadRootId, list);
+        }
+      } else if (!message.deleted && (message.replyCount ?? 0) > 0) {
+        rootIds.add(message.id);
+      }
+    }
+    const followed = new Set(page.snapshot.reads.filter(read => read.following).map(read => read.thread_key));
+    const isSelfActivity = (message: ChatMessage) => !message.deleted && message.origin !== 'system'
+      && (message.authorId === selfId || message.maskAttribution?.self.id === selfId);
+    const compareSeqDesc = (a: ChatMessage, b: ChatMessage) => {
+      const diff = BigInt(chatCursor(b.seq)) - BigInt(chatCursor(a.seq));
+      return diff > 0n ? 1 : diff < 0n ? -1 : 0;
+    };
+    const snippetFor = (message: ChatMessage) => {
+      const text = mobileMarkdownPreviewText(contentText(message));
+      if (text) return text;
+      const media = chatMessageAttachments(message)[0];
+      return media ? media.name : '';
+    };
+    return [...rootIds].map((rootId): BotGroupThreadSummary => {
+      const root = poolById.get(rootId);
+      const replies = (repliesByRoot.get(rootId) ?? []).sort(compareSeqDesc);
+      const latest = replies[0];
+      const participated = (root ? isSelfActivity(root) : false) || replies.some(isSelfActivity);
+      const mentions = [
+        ...(root && !root.deleted && root.origin !== 'system' ? [root] : []),
+        ...replies,
+      ].filter(message => message.authorId !== selfId && message.mentions?.includes(selfId)).sort(compareSeqDesc);
+      const latestMention = mentions[0];
+      const seenResponders = new Set<string>();
+      const responders = replies.filter(reply => {
+        if (seenResponders.has(reply.authorId)) return false;
+        seenResponders.add(reply.authorId);
+        return true;
+      }).slice(0, 3).reverse().map(reply => ({
+        id: reply.id,
+        authorBotId: reply.authorId,
+        authorName: authorName(reply),
+      }));
+      const rootCreatedAt = root ? Date.parse(root.createdAt) : undefined;
+      return {
+        rootId,
+        rootAuthorName: root ? authorName(root) : '',
+        rootAuthorBotId: root ? root.authorId : null,
+        rootText: root && !root.deleted ? snippetFor(root) : '',
+        ...(rootCreatedAt !== undefined && Number.isFinite(rootCreatedAt) ? { rootCreatedAt } : {}),
+        replyCount: Math.max(root?.replyCount ?? 0, replies.length),
+        unread: threadUnreadFor(rootId) ?? { count: 0, mentioned: false },
+        following: followed.has(rootId),
+        ...(participated ? { participated: true } : {}),
+        ...(mentions.length > 0 ? { mentionedMe: true } : {}),
+        ...(latestMention ? {
+          lastMention: {
+            messageId: latestMention.id,
+            authorName: authorName(latestMention),
+            text: snippetFor(latestMention),
+            createdAt: Date.parse(latestMention.createdAt),
+          },
+        } : {}),
+        ...(responders.length > 0 ? { responders } : {}),
+        lastReply: latest ? { authorName: authorName(latest), text: snippetFor(latest), createdAt: Date.parse(latest.createdAt) } : null,
+      };
+    }).sort((a, b) => Number(b.unread.count > 0) - Number(a.unread.count > 0)
+      || (b.lastReply?.createdAt ?? b.rootCreatedAt ?? 0) - (a.lastReply?.createdAt ?? a.rootCreatedAt ?? 0))
+      .slice(0, 50);
+  })();
   for (const view of messages) {
     const message = known.get(view.id)!;
     if (!message.threadRootId && message.replyCount) {
@@ -494,6 +584,7 @@ export function chatGroupView(page: ChatPage, selfId: string, actors: readonly C
     openPlan: open ? { id: open.id, status: open.status, currentStep: open.currentStep, stepCount: open.steps.length,
       currentBotName: currentStep?.botName ?? null, currentStepStatus: currentStep?.status ?? null, ...(open.kind ? { kind: open.kind } : {}) } : null,
     plans, messages: projectBotGroupExecutionFailures(messages, failures),
+    ...(groupThreads ? { threads: groupThreads } : {}),
     hasMoreBefore: page.before !== null, round: { canStop: (page.plans ?? []).some(p => canStopBotGroupPlan(p, selfId, (bot, requester) => mayStopWork(members, selfId, bot, requester)) && ['proposed', 'running', 'waiting'].includes(p.status)) || executions.some(e => ['queued', 'running', 'needs_input'].includes(e.status)
         && mayStopWork(members, selfId, e.bot_id, e.requester_id)), status: executions.length ? 'running' : 'idle', speakers, canContinue: false,
       othersActive: executions.some(execution => ['queued', 'running', 'needs_input'].includes(execution.status)
@@ -953,7 +1044,9 @@ export function createChatServerClient(request: ChatRequest, personalList = crea
         if (attempt >= 2) throw new Error('CHAT_HISTORY_CHANGED');
         return this.load(roomId, undefined, threadRootId, attempt + 1);
       }
+      const cachedMessages = stored?.cachedMessages?.<ChatMessage>(room);
       return { snapshot, messages, before, ...(plans ? { plans } : {}), ...(projection ? { historyRevision: projection.generation } : {}),
+        ...(cachedMessages?.length ? { cachedMessages } : {}),
         ...(threadRootId ? { threadRootId } : {}), failures: executionFailures,
         ...(Array.isArray(executions) ? { executions } : {}) };
     },

@@ -181,7 +181,7 @@ vi.mock('react-i18next', async (importOriginal) => {
 });
 vi.mock('expo-crypto', () => ({ randomUUID: () => `uuid-${++h.uuid}` }));
 vi.mock('lucide-react-native', () => Object.fromEntries(
-  ['Copy', 'Share', 'ArrowUpRight', 'CornerDownRight', 'Circle', 'Bell', 'ChevronLeft', 'Settings2', 'Plus', 'Square', 'Users', 'X', 'Check', 'CircleAlert', 'CircleCheck', 'CircleDashed', 'FileText', 'Sparkles', 'Folder', 'Camera', 'Image',
+  ['Copy', 'Share', 'ArrowUpRight', 'CornerDownRight', 'Circle', 'Bell', 'BellRing', 'ChevronLeft', 'MessagesSquare', 'Search', 'Settings2', 'Plus', 'Square', 'Users', 'X', 'Check', 'CircleAlert', 'CircleCheck', 'CircleDashed', 'FileText', 'Sparkles', 'Folder', 'Camera', 'Image',
     'Minus', 'ChevronUp', 'CircleMinus', 'Layers', 'ListChecks', 'ListTodo', 'Ellipsis', 'ChevronRight', 'ChevronDown', 'Reply', 'SlidersHorizontal', 'UserPlus']
     .map((name) => [name, () => null]),
 ));
@@ -3703,4 +3703,69 @@ it.each([undefined, 'topic-a'])('keeps group stopping when only topic work exist
     expect(h.chat.act).toHaveBeenLastCalledWith('stop');
     expect(byId('botGroup.work.stopMenu.action.all')).toBeNull();
   }
+});
+
+// Unit: in-group thread index sheet must show quiet header entry + actionable dot,
+// filter by mine/mentions/all + search, and route to lastMention in the mentions tab.
+it('opens the in-group thread index sheet, filters tabs and search, and jumps to the mention message', async () => {
+  h.chat.server = true;
+  const threads = [
+    {
+      rootId: 'root-mention',
+      rootText: 'Release checklist',
+      rootAuthorName: 'Alice',
+      rootAuthorBotId: 'alice',
+      rootCreatedAt: 1_000,
+      replyCount: 3,
+      following: false,
+      participated: false,
+      mentionedMe: true,
+      lastReply: { messageId: 'm-tail', authorName: 'Bob', text: 'Updated notes', createdAt: 3_000 },
+      lastMention: { messageId: 'm-mention', authorName: 'Alice', text: '@Me please verify', createdAt: 2_500 },
+      responders: [{ id: 'alice', authorName: 'Alice', authorBotId: 'alice' }],
+      unread: { count: 2, mentioned: true },
+    },
+    {
+      rootId: 'root-other',
+      rootText: 'Random chatter',
+      rootAuthorName: 'Bob',
+      rootAuthorBotId: 'bob',
+      rootCreatedAt: 500,
+      replyCount: 1,
+      following: false,
+      participated: false,
+      mentionedMe: false,
+      lastReply: { messageId: 'o-1', authorName: 'Bob', text: 'Unrelated', createdAt: 1_500 },
+      responders: [{ id: 'bob', authorName: 'Bob', authorBotId: 'bob' }],
+      unread: { count: 0, mentioned: false },
+    },
+  ];
+  await render(group({ serverBacked: true, threads }), 'ready', undefined, '');
+  expect(byId('botGroup.threadsButton')).not.toBeNull();
+  expect(byId('botGroup.threadsUnreadDot')).not.toBeNull();
+  expect(byId('botGroup.threadHint')).not.toBeNull();
+
+  await click('botGroup.threadsButton');
+  expect(byId('botGroup.threadIndex.sheet')).not.toBeNull();
+  // Default filter is 'mine': only mentioned/participated/following threads appear.
+  expect(byId('botGroup.threadIndex.row.root-mention')).not.toBeNull();
+  expect(byId('botGroup.threadIndex.row.root-other')).toBeNull();
+
+  // Switch to 'all': both threads appear; search narrows them.
+  await click('botGroup.threadIndex.filter.all');
+  expect(byId('botGroup.threadIndex.row.root-other')).not.toBeNull();
+  await act(async () => h.inputs['botGroup.threadIndex.search'].onChangeText('chatter'));
+  expect(byId('botGroup.threadIndex.row.root-other')).not.toBeNull();
+  expect(byId('botGroup.threadIndex.row.root-mention')).toBeNull();
+  await act(async () => h.inputs['botGroup.threadIndex.search'].onChangeText(''));
+
+  // Switch to 'mentions' and tap the mentioned thread: navigates with lastMention.messageId.
+  await click('botGroup.threadIndex.filter.mentions');
+  expect(byId('botGroup.threadIndex.row.root-mention')).not.toBeNull();
+  expect(byId('botGroup.threadIndex.row.root-other')).toBeNull();
+  await click('botGroup.threadIndex.row.root-mention');
+  expect(h.push).toHaveBeenLastCalledWith({
+    pathname: '/companions/groups/[groupId]',
+    params: { groupId: 'g1', threadRootId: 'root-mention', messageId: 'm-mention' },
+  });
 });
