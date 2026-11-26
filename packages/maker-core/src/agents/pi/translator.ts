@@ -259,6 +259,8 @@ export interface PiTranslateContext {
   rewriteToolResultText?: (text: string) => string;
   /** toolCallId → toolName for the in-flight Pi tool, so end events can gate rewrites. */
   toolNamesByCallId: Map<string, string>;
+  pendingWorkerDispatches: Set<string>;
+  workerDispatched: boolean;
   /**
    * compaction_start 锁存的 turnScope。end/boundary 必须复用，不能按结束时的
    * isStreaming 重判——idle compact 期间用户开了新 turn 时，重判会把后台边界
@@ -356,6 +358,8 @@ export function createPiTranslateContext(
     delegatedUsageIncompleteTaskIds: new Set(),
     subagentToolCalls: new Map(),
     toolNamesByCallId: new Map(),
+    pendingWorkerDispatches: new Set(),
+    workerDispatched: false,
     pendingAssistantError: null,
     terminalAssistantErrorEmitted: false,
     compactTurnScope: null,
@@ -463,6 +467,8 @@ export function disposePiTranslateContext(ctx: PiTranslateContext): void {
   ctx.compactTurnGeneration = null;
   ctx.subagentToolCalls.clear();
   ctx.toolNamesByCallId.clear();
+  ctx.pendingWorkerDispatches.clear();
+  ctx.workerDispatched = false;
 }
 
 function samplePiGenerationHeartbeat(ctx: PiTranslateContext, now = Date.now()): void {
@@ -847,6 +853,15 @@ function toolResultFullText(result: unknown): string {
   return parts.join('\n');
 }
 
+function confirmsWorkerDispatch(text: string): boolean {
+  try {
+    const receipt = JSON.parse(text);
+    return receipt?.ok === true && ['resumed', 'already-active', 'queued'].includes(receipt.wake_kind);
+  } catch {
+    return false;
+  }
+}
+
 /**
  * pi 的 thinking 事件把 redacted 标记放在 partial 的当前 AssistantMessage block 上。
  * 必须恢复成结构化 stage:redacted，否则占位文本会被当成普通 thinking 落库并显示。
@@ -969,6 +984,8 @@ function translatePiEventInternal(
       ctx.delegatedUsageIncompleteTaskIds.clear();
       ctx.subagentToolCalls.clear();
       ctx.toolNamesByCallId.clear();
+      ctx.pendingWorkerDispatches.clear();
+      ctx.workerDispatched = false;
       ctx.streamStopTokenByIndex.clear();
       pushStatus(queue, ctx, 'Working…', true);
       return;
@@ -1133,6 +1150,10 @@ function translatePiEventInternal(
       const toolName = String(event.toolName ?? 'tool');
       const toolArgs = (event.args as Record<string, unknown>) ?? {};
       if (toolUseId) ctx.toolNamesByCallId.set(toolUseId, toolName);
+      if (toolUseId && toolName === 'cindy_mcp_call_tool'
+          && toolArgs.server === 'cindy_orca' && toolArgs.tool === 'send_to_worker') {
+        ctx.pendingWorkerDispatches.add(toolUseId);
+      }
       queue.push({
         type: 'tool_use',
         data: {
@@ -1235,6 +1256,10 @@ function translatePiEventInternal(
           ?? '',
       );
       if (toolUseId) ctx.toolNamesByCallId.delete(toolUseId);
+      if (ctx.pendingWorkerDispatches.delete(toolUseId) && toolName === 'cindy_mcp_call_tool'
+          && !isError && confirmsWorkerDispatch(rawText)) {
+        ctx.workerDispatched = true;
+      }
       const fullText = isContextModeDoctorToolName(toolName) && ctx.rewriteToolResultText
         ? ctx.rewriteToolResultText(rawText)
         : rawText;
@@ -1365,6 +1390,7 @@ function translatePiEventInternal(
         });
       }
       const silentStop = outcome === 'completed'
+        && !ctx.workerDispatched
         && !hostAbortRequested
         && !safetyRefusalStopped
         && pendingAssistantError === null

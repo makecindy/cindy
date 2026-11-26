@@ -290,7 +290,7 @@
     "goalResumed": "耗用已复，续逐其鹄",
     "goalCapacityRetry": "模型繁忙，方再逐其鹄",
     "autoResume": {
-      "separator": "连接中断，已自续",
+      "separator": "未得答，已自续",
       "succeeded": "已复连",
       "failed": "复连未成",
       "neutral": "复连",

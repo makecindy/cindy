@@ -16115,7 +16115,7 @@
         "groupSwitch": "已自易一机续之"
       },
       "autoResumeSeparator": {
-        "label": "连接中断，已自续"
+        "label": "未得答，已自续"
       },
       "autoResumePending": {
         "label": "方重连",

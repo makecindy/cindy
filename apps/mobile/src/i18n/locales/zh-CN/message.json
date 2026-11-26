@@ -298,7 +298,7 @@
     "goalResumed": "用量已恢复，继续目标",
     "goalCapacityRetry": "模型服务繁忙，正在重试目标",
     "autoResume": {
-      "separator": "连接中断，已自动继续",
+      "separator": "回复为空，已自动继续",
       "succeeded": "已重新连接",
       "failed": "重新连接未成功",
       "neutral": "重新连接",

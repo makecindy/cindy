@@ -2050,6 +2050,34 @@ describe('pi translator', () => {
   });
 
   it.each([
+    ['resumed', true, undefined],
+    ['already-active', true, undefined],
+    ['queued', true, undefined],
+    ['queued', false, true],
+    ['unknown', true, true],
+  ])('settles a worker send with wake kind %s and ok=%s', (wakeKind, ok, expectedSilentStop) => {
+    // #13114, unit: a confirmed dispatch followed by an empty reply must not wake the Lead.
+    const ctx = createPiTranslateContext(noopLogger);
+    const { queue, events } = makeQueue();
+    const tool = { toolCallId: 'dispatch', toolName: 'cindy_mcp_call_tool' };
+    const args = { server: 'cindy_orca', tool: 'send_to_worker', args: { worker_id: 'worker', message: 'work' } };
+    const result = { content: [{ type: 'text', text: JSON.stringify({ ok, wake_kind: wakeKind }) }] };
+    translatePiEvent(ev({ type: 'agent_start' }), queue, ctx);
+    translatePiEvent(ev({ type: 'tool_execution_start', ...tool, args }), queue, ctx);
+    translatePiEvent(ev({ type: 'tool_execution_end', ...tool, result, isError: false }), queue, ctx);
+    translatePiEvent(ev({ type: 'message_end', message: { role: 'assistant', stopReason: 'stop', content: [] } }), queue, ctx);
+    translatePiEvent(ev({ type: 'agent_settled' }), queue, ctx);
+    const done = events.find((event) => event.type === 'done');
+    expect(done?.data).toMatchObject({ status: 'completed', result: '' });
+    expect((done?.data as { silentStop?: boolean }).silentStop).toBe(expectedSilentStop);
+    const next = makeQueue();
+    translatePiEvent(ev({ type: 'agent_start' }), next.queue, ctx);
+    translatePiEvent(ev({ type: 'tool_execution_end', ...tool, result }), next.queue, ctx);
+    translatePiEvent(ev({ type: 'agent_settled' }), next.queue, ctx);
+    expect(next.events.find((event) => event.type === 'done')?.data).toMatchObject({ silentStop: true });
+  });
+
+  it.each([
     ['empty', []],
     ['thinking-only', [{ type: 'thinking', thinking: 'Considering the result' }]],
   ])('does not let earlier progress hide a final %s response', (_name, content) => {
