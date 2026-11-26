@@ -65,12 +65,14 @@ export async function createCredentialStore(options) {
     decrypt: value => codec.decrypt(value),
     read(recordKey) {
       const file = recordPath(recordKey);
+      let encrypted;
       try {
-        return codec.decrypt(fs.readFileSync(file, 'utf8'));
+        encrypted = fs.readFileSync(file, 'utf8');
       } catch (error) {
         if (error?.code === 'ENOENT') return null;
         throw error;
       }
+      return codec.decrypt(encrypted);
     },
     write(recordKey, value) {
       fs.mkdirSync(dir, { recursive: true, mode: 0o700 });

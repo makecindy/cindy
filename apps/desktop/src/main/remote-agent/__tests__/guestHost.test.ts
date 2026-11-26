@@ -30,6 +30,7 @@ import { managedSkillDigest } from '../managedSkillDigest';
 import { createRemoteAgentHost, hostSessionIdFor, type HostedStartInput } from '../host/runHost';
 import { TunnelLinkActivity } from '../host/linkActivity';
 import { installExecutionReporting } from '../../usage/companyTokenFacts';
+import { createCompanyTokenReportingCore } from '../../usage/companyTokenReportingCore';
 import * as runTunnel from '../host/tunnel';
 
 const RUN_1 = '11111111-1111-4111-8111-111111111111';
@@ -941,8 +942,8 @@ describe('guest provider access and usage', () => {
 
   it('records only the authorized executor turn and projects away session, provider and cost', async () => {
     const record = vi.fn();
-    const redeem = vi.fn(async () => ({ receipt: RUN_2, record }));
-    installExecutionReporting({ available: () => true, direct: () => true, issue: async () => null,
+    const redeem = vi.fn(async () => ({ receipt: RUN_2, current: () => true, record }));
+    installExecutionReporting({ available: () => true, captureBoundary: () => () => true, direct: () => true, issue: async () => null,
       challenge: nonce => ({ nonce, recipient: 'a'.repeat(64) }), redeem });
     const events = [
       { type: 'status', source: 'claude-code', data: { isRunning: true, providerInitiatedTurn: true } },
@@ -1203,79 +1204,241 @@ describe('#6479 bounded resume projection', () => {
   }
 });
 
-it.each([true, false])('records a running turn on late authorization only while its original owner is still current (%s)', async (keepOwner) => {
-  let release!: () => void;
-  const terminal = new Promise<void>(resolve => { release = resolve; });
+// Resolves after the real event pump has consumed the last event; no sleeps or polling on disk.
+function meteringStream(events: AsyncIterable<AgentEvent> | AgentEvent[]) {
+  const drained = Promise.withResolvers<void>();
+  return {
+    drained: drained.promise,
+    async *[Symbol.asyncIterator]() {
+      try { yield* events; drained.resolve(); }
+      catch (error) { drained.reject(error); throw error; }
+    },
+  };
+}
+
+// Exercise the actual Host handshake and persisted execution receipts. Admission must not
+// pin an old receipt even if the provider starts the next turn before the renewal arrives.
+it.each(['UTC midnight', 'expiry', 'midnight during the turn', 'executor change during the turn'])('checks the turn boundary on renewal after %s on the same connection', async reason => {
+  vi.useFakeTimers({ toFake: ['Date'] });
+  const nearMidnight = reason.includes('midnight');
+  const sameBoundary = !reason.includes('during the turn');
+  let device = 'executor';
+  const before = Date.parse(nearMidnight ? '2030-01-01T23:59:59Z' : '2030-01-01T10:00:00Z');
+  vi.setSystemTime(before);
+  const model = 'claude-opus';
+  let receipt = RUN_1;
+  const policy = { orgRevision: 1, memberRevision: 1, participating: true, models: [model] };
+  const reporting = createCompanyTokenReportingCore({
+    dir: root, identity: () => ({ orgId: 'org', member: 'member', owner: 'org/member', generation: 1,
+      base: 'https://fixture.invalid', device, token: 'fixture' }),
+    recovering: () => false, isAnalyticsAllowed: () => true, direct: () => true,
+    subscribeAuth: () => () => {}, subscribeSettings: () => () => {},
+    fetch: async url => {
+      if (url.endsWith('/api/me')) return Response.json({ passportId: 'fixture', identities: [], membership: {
+        id: 'member', orgId: 'org', kind: 'org', role: 'member', displayName: 'Member', orgName: 'Org', email: null,
+        companyTokenReporting: policy } });
+      if (!url.endsWith('/redeem')) throw new Error('unexpected request');
+      return Response.json({ receipt, orgRevision: 1, memberRevision: 1, day: new Date().toISOString().slice(0, 10),
+        expires: Date.now() + (nearMidnight ? 60_000 : 1_000) });
+    },
+  });
+  installExecutionReporting(reporting.execution);
+  const start = { type: 'status', source: 'claude-code', data: { isRunning: true, providerInitiatedTurn: true } } as AgentEvent;
+  const done = (inputTokens: number): AgentEvent => ({ type: 'done', source: 'claude-code',
+    data: { modelUsageCumulativeStartsAtZero: true, modelUsage: { [model]: { inputTokens } } } });
+  const grant = async () => {
+    await host.handle(GUEST, { op: 'company-reporting-challenge', runId: RUN_1 });
+    return host.handle(GUEST, { op: 'company-reporting-grant', runId: RUN_1, grant: 'fixture' });
+  };
+  async function* events() {
+    yield start;
+    yield done(2);
+    if (sameBoundary) vi.setSystemTime(before + 2_000);
+    yield start;
+    if (reason === 'midnight during the turn') vi.setSystemTime(before + 2_000);
+    if (reason === 'executor change during the turn') device = 'another-executor';
+    receipt = RUN_2;
+    await grant();
+    yield done(7);
+  }
+  const stream = meteringStream(events());
+  const host = makeHost([], { events: stream });
+  try {
+    reporting.refresh();
+    await vi.waitFor(() => expect(reporting.execution.available()).toBe(true));
+    expect(await grant()).toEqual({ authorized: true });
+    await host.handle(GUEST, { op: 'open', runId: RUN_1, agentKind: 'claude-code', payload: { json: openPayload('rollover') } });
+    await stream.drained;
+    const rows = (id: string) => JSON.parse(fs.readFileSync(path.join(root, 'company-token-executor', id), 'utf8')).rows;
+    expect(rows(RUN_1)).toEqual([expect.objectContaining({ model, day: '2030-01-01', input: 2 })]);
+    if (!sameBoundary) {
+      expect(fs.existsSync(path.join(root, 'company-token-executor', RUN_2))).toBe(false);
+    } else {
+      expect(rows(RUN_2)).toEqual([expect.objectContaining({ model, day: nearMidnight ? '2030-01-02' : '2030-01-01', input: 5 })]);
+    }
+  } finally {
+    await host.dispose();
+    reporting.dispose();
+    installExecutionReporting(undefined);
+    vi.useRealTimers();
+  }
+});
+
+it('never transfers pending Claude usage across turns or an already attributed turn across receipts', async () => {
+  const first = vi.fn(), second = vi.fn();
+  const model = 'claude-opus';
+  const start = { type: 'status', source: 'claude-code', data: { isRunning: true, providerInitiatedTurn: true } } as AgentEvent;
+  const snapshot = (inputTokens: number): AgentEvent => ({ type: 'status', source: 'claude-code',
+    data: { requestUsage: { epoch: 'same-process', models: [{ model, inputTokens }] } } });
+  const done = (inputTokens: number): AgentEvent => ({ type: 'done', source: 'claude-code',
+    data: { requestUsage: { epoch: 'same-process', models: [{ model, inputTokens }] },
+      modelUsageCumulativeStartsAtZero: true, modelUsage: { [model]: { inputTokens } } } });
+  const grant = async (id: string) => {
+    await host.handle(GUEST, { op: 'company-reporting-challenge', runId: RUN_1 });
+    await host.handle(GUEST, { op: 'company-reporting-grant', runId: RUN_1, grant: id });
+  };
+  installExecutionReporting({ available: () => true, captureBoundary: () => () => true, direct: () => true,
+    challenge: nonce => ({ nonce, recipient: 'a'.repeat(64) }), issue: async () => null,
+    redeem: async (_nonce, id) => ({ receipt: id, current: () => true, record: id === RUN_1 ? first : second }) });
+  async function* events() {
+    yield start; yield snapshot(5); yield done(5); // Entire turn ends without a grant.
+    yield start; yield snapshot(8);
+    await grant(RUN_1); await grant(RUN_1); // The second ACK must not flush the same delta again.
+    await grant(RUN_2); // Different origin while this turn is still bound to the first.
+    yield done(12);
+    yield start; yield snapshot(14); yield done(14);
+  }
+  const stream = meteringStream(events());
+  const host = makeHost([], { events: stream, recordGuestUsage: vi.fn() });
+  try {
+    await host.handle(GUEST, { op: 'open', runId: RUN_1, agentKind: 'claude-code', payload: { json: openPayload('turn-boundary') } });
+    await stream.drained;
+    const row = (input: number) => [{ model, input, output: 0, cacheRead: 0, cacheWrite: 0 }];
+    expect(first.mock.calls).toEqual([[row(3)], [row(4)]]);
+    expect(second.mock.calls).toEqual([[row(2)]]);
+  } finally {
+    await host.dispose();
+    installExecutionReporting(undefined);
+  }
+});
+
+it('settles the failed Codex receipt against its own send even if the next send is admitted first', async () => {
+  const first = vi.fn(), next = vi.fn();
+  installExecutionReporting({ available: () => true, captureBoundary: () => () => true, direct: () => true,
+    challenge: nonce => ({ nonce, recipient: 'a'.repeat(64) }), issue: async () => null,
+    redeem: async (_nonce, id) => ({ receipt: id, current: () => true, record: id === RUN_1 ? first : next }) });
+  const grant = async (id: string) => {
+    await host.handle(GUEST, { op: 'company-reporting-challenge', runId: RUN_1 });
+    await host.handle(GUEST, { op: 'company-reporting-grant', runId: RUN_1, grant: id });
+  };
+  const done = (id: string, status: string, promptTokens: number): AgentEvent => ({ type: 'done', source: 'codex',
+    data: { type: 'codex/event/task_complete', raw: { id, status }, usage: { promptTokens, completionTokens: 1,
+      execution: { model: 'fixture', providerId: 'byok', credentialMode: 'api-key' } } } });
+  const started: Started[] = [];
+  async function* events() {
+    yield { type: 'text', source: 'codex', data: { text: 'working' } } as AgentEvent;
+    yield { type: 'error', source: 'codex', data: { isTerminal: true, reason: 'turn-failed' } } as AgentEvent;
+    await grant(RUN_2);
+    await host.handle(GUEST, { op: 'call', runId: RUN_1, callId: CALL_1, method: 'send',
+      payload: { json: [{ content: 'next turn', attachments: [] }] } });
+    await vi.waitFor(() => expect(started[0].sends).toHaveLength(1));
+    yield done('first', 'failed', 3);
+    yield done('first', 'failed', 3);
+    yield done('next', 'completed', 7);
+  }
+  const stream = meteringStream(events());
+  const host = makeHost(started, { events: stream });
+  try {
+    await grant(RUN_1);
+    await host.handle(GUEST, { op: 'open', runId: RUN_1, agentKind: 'codex', payload: { json: openPayload('paired-done') } });
+    await stream.drained;
+    const row = (input: number) => [{ model: 'fixture', input, output: 1, cacheRead: 0, cacheWrite: 0 }];
+    expect(first.mock.calls).toEqual([[row(3)]]);
+    expect(next.mock.calls).toEqual([[row(7)]]);
+  } finally {
+    await host.dispose();
+    installExecutionReporting(undefined);
+  }
+});
+
+it.each([true, false])('settles the Claude snapshot preceding a late grant once for the original turn boundary (%s)', async (keepOwner) => {
+  const terminal = Promise.withResolvers<void>();
+  const observed = Promise.withResolvers<void>();
   const exposed = { current: true };
   const record = vi.fn();
   const ledger = vi.fn();
   async function* turn() {
     yield { type: 'status', source: 'claude-code', data: { isRunning: true, providerInitiatedTurn: true } } as AgentEvent;
-    await terminal;
+    yield { type: 'status', source: 'claude-code', data: { requestUsage: { epoch: 'sdk', models: [
+      { model: 'claude-opus-4-6', inputTokens: 12, outputTokens: 3 },
+    ] } } } as AgentEvent;
+    observed.resolve();
+    await terminal.promise;
     yield { type: 'done', source: 'claude-code', data: { modelUsageCumulativeStartsAtZero: true,
       modelUsage: { 'claude-opus-4-6': { inputTokens: 12, outputTokens: 3, costUSD: 0 } } } } as AgentEvent;
   }
   installExecutionReporting({
     available: () => true, captureBoundary: () => () => exposed.current, direct: () => true,
     challenge: nonce => ({ nonce, recipient: 'a'.repeat(64) }), issue: async () => null,
-    redeem: async () => ({ receipt: RUN_1, record }),
+    redeem: async () => ({ receipt: RUN_1, current: () => true, record }),
   });
-  const host = makeHost([], { events: turn(), recordGuestUsage: ledger });
+  const stream = meteringStream(turn());
+  const host = makeHost([], { events: stream, recordGuestUsage: ledger });
   try {
     await host.handle(GUEST, { op: 'open', runId: RUN_1, agentKind: 'claude-code', payload: { json: openPayload('late-usage', {}) } });
     await waitForStarted(host, GUEST, RUN_1);
-    await vi.waitFor(async () => {
-      const polled = await host.handle(GUEST, { op: 'poll', runs: [{ runId: RUN_1, cursor: 0 }], waitMs: 0 }) as { runs: { data?: string }[] };
-      expect(Buffer.from(polled.runs[0]?.data ?? '', 'base64').toString()).toContain('"isRunning":true');
-    });
+    await observed.promise;
     exposed.current = keepOwner;
     await host.handle(GUEST, { op: 'company-reporting-challenge', runId: RUN_1 });
     await host.handle(GUEST, { op: 'company-reporting-grant', runId: RUN_1, grant: 'opaque-test-grant' });
-    release();
-    await vi.waitFor(() => expect(ledger.mock.calls.some(([, sample]) =>
-      sample.samples.some((row: { inputTokens: number }) => row.inputTokens === 12))).toBe(true));
+    terminal.resolve();
+    await stream.drained;
     if (keepOwner) {
       expect(record.mock.calls).toEqual([[[{ model: 'claude-opus-4-6', input: 12, output: 3, cacheRead: 0, cacheWrite: 0 }]]]);
     } else {
       expect(record).not.toHaveBeenCalled();
     }
   } finally {
-    release();
+    terminal.resolve();
     await host.dispose();
     installExecutionReporting(undefined);
   }
 });
 
 it.each([
-  ['provider-oauth', 'byok', true],
-  ['gateway-key', 'byok', false],
-  ['provider-oauth', 'gateway-alias', false],
-  ['provider-oauth', 'unconfirmed', false],
-] as const)('uses final Codex route for a hosted turn (%s, %s)', async (credentialMode, providerId, accepted) => {
+  ['provider-oauth', 'byok', true, false],
+  ['provider-oauth', 'byok', true, true],
+  ['gateway-key', 'byok', false, false],
+  ['gateway-key', 'byok', false, true],
+  ['provider-oauth', 'gateway-alias', false, false],
+  ['provider-oauth', 'unconfirmed', false, false],
+] as const)('uses final Codex route for a hosted turn (%s, %s, accepted=%s, failed=%s)', async (credentialMode, providerId, accepted, failed) => {
   const record = vi.fn();
   const model = 'gpt-test';
+  const done = { type: 'done', source: 'codex', data: { type: 'codex/event/task_complete',
+    raw: { id: 'fixture-turn', status: failed ? 'failed' : 'completed' },
+    usage: { execution: { providerId, credentialMode, model }, promptTokens: 47, completionTokens: 8,
+      cachedTokens: 4, cacheCreationTokens: 2 } } } as AgentEvent;
   const events = [
     { type: 'text', source: 'codex', data: { text: 'working' } },
     { type: 'status', source: 'codex', data: { requestUsage: {
       epoch: 'process', models: [{ model, inputTokens: 47, outputTokens: 8, cacheReadTokens: 4, cacheCreateTokens: 2 }],
     } } },
-    { type: 'done', source: 'codex', data: { usage: { execution: { providerId, credentialMode, model },
-      promptTokens: 47, completionTokens: 8, cachedTokens: 4, cacheCreationTokens: 2 } } },
+    ...(failed ? [{ type: 'error', source: 'codex', data: { isTerminal: true, reason: 'turn-failed' } }, done] : []),
+    done,
   ] as AgentEvent[];
   installExecutionReporting({
-    available: () => true, direct: id => id === 'shared-provider' || id === 'byok',
+    available: () => true, captureBoundary: () => () => true, direct: id => id === 'shared-provider' || id === 'byok',
     challenge: nonce => ({ nonce, recipient: 'a'.repeat(64) }), issue: async () => null,
-    redeem: async () => ({ receipt: RUN_1, record }),
+    redeem: async () => ({ receipt: RUN_1, current: () => true, record }),
   });
-  const host = makeHost([], { events });
+  const stream = meteringStream(events);
+  const host = makeHost([], { events: stream });
   try {
     await host.handle(GUEST, { op: 'company-reporting-challenge', runId: RUN_1 });
     await host.handle(GUEST, { op: 'company-reporting-grant', runId: RUN_1, grant: 'fixture' });
     await host.handle(GUEST, { op: 'open', runId: RUN_1, agentKind: 'codex', payload: { json: openPayload('remote-codex') } });
-    await vi.waitFor(async () => {
-      const poll = await host.handle(GUEST, { op: 'poll', runs: [{ runId: RUN_1, cursor: 0 }], waitMs: 0 }) as { runs: { data?: string }[] };
-      expect(Buffer.from(poll.runs[0]?.data ?? '', 'base64').toString()).toContain('"type":"done"');
-    });
+    await stream.drained;
     expect(record.mock.calls).toEqual(accepted ? [[[{ model, input: 47, output: 8, cacheRead: 4, cacheWrite: 2 }]]] : []);
   } finally {
     await host.dispose();

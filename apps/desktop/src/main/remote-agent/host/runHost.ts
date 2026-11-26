@@ -1,6 +1,7 @@
 import { codexTurnSegments, recordCompanyCodexTokens } from '../../usage/companyCodexTokens.js';
 import { recordCompanyPiRoots } from '../../usage/companyPiReceipts.js';
-import { companyExecutionReporting, companyModelTokens, readCompanyExecutionChallenge, type CaptureCompanyUsage } from '../../usage/companyTokenFacts.js';
+import { companyExecutionReporting, companyModelTokens, readCompanyExecutionChallenge, type CompanyExecutionReceipt } from '../../usage/companyTokenFacts.js';
+import { HostedCompanyTurn } from './companyTurnUsage.js';
 import { bindHostedAttachmentPreservation } from '../../maker-host/attachmentPreservation.js';
 import { remoteAttachmentPreservation, ATTACHMENT_PRESERVATION_PATH } from '../attachmentPreservation.js';
 import type { GeneratedImageUpstream } from '../../cindy-media/generatedImageJournal';
@@ -488,10 +489,8 @@ interface PendingReverse {
 }
 
 interface Run {
-  reportingReceipt?: string;
-  authorizedUsage?: CaptureCompanyUsage;
-  turnUsage?: CaptureCompanyUsage;
-  companyTurnBoundary?: () => boolean;
+  authorization?: CompanyExecutionReceipt;
+  companyTurn?: HostedCompanyTurn;
   groupProviderId?: string;
   id: string;
   sessionId?: string;
@@ -761,7 +760,7 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
   // Credentials only cross the control channel. Ownership and expiry are checked again at attachment.
   const reportingHandshakes = new Map<string, { nonce?: string; expires: number; owner: unknown; run?: Run;
     relay?: RelayBackend;
-    authorization?: { receipt: string; record: CaptureCompanyUsage } }>();
+    authorization?: CompanyExecutionReceipt }>();
   // A close can finish before native startup returns its handle. Keep that
   // reservation until startup has disposed any resources that arrived late.
   const startingRuns = new WeakSet<Run>();
@@ -1334,7 +1333,10 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
     });
     if (typeof state.turnRunning === 'boolean') {
       run.turnRunning = state.turnRunning;
-      if (run.activeTurn === undefined && state.turnRunning) run.activeTurn = true;
+      if (run.activeTurn === undefined && state.turnRunning) {
+        bindCompanyUsage(run);
+        run.activeTurn = true;
+      }
       run.groupLoad?.setRunning(state.turnRunning);
     }
     const serialized = JSON.stringify(state);
@@ -1982,6 +1984,9 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
   async function pumpEvents(run: Run, handle: AgentSessionHandle): Promise<void> {
     /** 供应商组：本机这一台上这一轮出过终态错误。 */
     let groupTurnFailed = false;
+    // The native Codex error and its usage-bearing done are consecutive in this event stream.
+    let failedCodex: { turn?: HostedCompanyTurn; send?: string } | undefined;
+    let lastCodexDoneId: string | undefined;
     let streamError: unknown;
     let streamFailed = false;
     try {
@@ -1990,19 +1995,33 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
         if (startsRemoteProductTurn(event)) {
           run.nativeHistoryCheckpoint = undefined;
           if (!run.abortRequested) {
-            if (!run.activeTurn) bindCompanyUsage(run);
+            if (!run.activeTurn && !run.companyTurn) bindCompanyUsage(run);
             run.activeTurn = true;
           }
         }
+        const failed = failedCodex;
+        failedCodex = undefined;
+        const codexDone = event.source === 'codex' && isProductTurnDoneEvent(event) && event.turnScope !== 'background';
+        const nativeTurn = codexDone ? (event.data as { raw?: { id?: string; status?: string } } | null)?.raw : undefined;
+        const repeatedDone = typeof nativeTurn?.id === 'string' && nativeTurn.id === lastCodexDoneId;
+        if (typeof nativeTurn?.id === 'string') lastCodexDoneId = nativeTurn.id;
+        const pairedDone = failed && codexDone && !repeatedDone && (failed.send === run.lastSendCallId ||
+          nativeTurn?.status === 'failed' || nativeTurn?.status === 'interrupted');
+        const previousSend = pairedDone && failed.send !== run.lastSendCallId;
         const currentTerminal = (run.terminalOwnership ??= new RemoteTurnTerminalOwnership()).observe(event);
         if (currentTerminal) {
           run.activeTurn = false;
           run.abortRequested = false;
         }
-        meterRunUsage(run, handle.model, event);
-        if (currentTerminal) {
-          run.turnUsage = undefined;
-          run.companyTurnBoundary = undefined;
+        // A fenced prior done cannot settle the new turn. Continuation receipts still belong to the live turn.
+        const staleDone = repeatedDone || (isProductTurnDoneEvent(event) && !currentTerminal);
+        const usageTurn = pairedDone ? failed.turn : staleDone ? undefined : run.companyTurn;
+        meterRunUsage(run, handle.model, event, usageTurn);
+        if (currentTerminal && !previousSend && !repeatedDone) {
+          if (run.kind === 'codex' && event.source === 'codex' && event.type === 'error') {
+            failedCodex = { turn: run.companyTurn, send: run.lastSendCallId };
+          }
+          run.companyTurn = undefined;
         }
         const failure = currentTerminal ? relayRunFailureOf(event) : null;
         if (failure && isAccountFailure(failure)) {
@@ -2080,31 +2099,35 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
 
   function bindCompanyUsage(run: Run) {
     const reporting = companyExecutionReporting();
-    const local = !run.relay && (run.guestRoute || run.ownerRoute) && run.providerId &&
-      run.kind !== REMOTE_AGENT_PLUGIN_ENGINE_KIND && reporting?.direct(run.providerId, run.kind);
-    run.companyTurnBoundary = local ? reporting?.captureBoundary?.() : undefined;
-    run.turnUsage = local && reporting?.available() ? run.authorizedUsage : undefined;
+    const boundary = !run.relay && (run.guestRoute || run.ownerRoute) && run.providerId &&
+      run.kind !== REMOTE_AGENT_PLUGIN_ENGINE_KIND && reporting?.direct(run.providerId, run.kind)
+      ? reporting.captureBoundary?.() : undefined;
+    run.companyTurn = boundary ? new HostedCompanyTurn(boundary, run.authorization) : undefined;
   }
 
-  function meterRunUsage(run: Run, model: string | undefined, event: AgentEvent): void {
+  function meterRunUsage(run: Run, model: string | undefined, event: AgentEvent, turn: HostedCompanyTurn | undefined): void {
     const record = run.trust === 'guest' ? deps.recordGuestUsage : deps.recordOwnerUsage;
     // 换了账号之后迟到的这一轮不记：用量账本按账号存放，记进去会落到新账号名下。
-    if ((!record && !run.turnUsage && !run.companyTurnBoundary) || (event.type !== 'done' && event.type !== 'status') || !deps.isOwnerCurrent(run.owner)) return;
+    if ((!record && !turn) || (event.type !== 'done' && event.type !== 'status') || !deps.isOwnerCurrent(run.owner)) return;
     // 插件引擎用它自己的账号直连厂商：同账号电脑不另记用量，受邀者仍记轮次与引擎上报的 token 供分享管理页查看。
     if (run.kind === REMOTE_AGENT_PLUGIN_ENGINE_KIND && run.trust !== 'guest') return;
     run.usageMeter ??= createGuestUsageMeter(run.kind);
     try {
       const observed = run.usageMeter.observe(event, model ?? '');
-      if (run.kind !== REMOTE_AGENT_PLUGIN_ENGINE_KIND && !run.relay && run.turnUsage && run.providerId && companyExecutionReporting()?.direct(run.providerId, run.kind)) {
+      if (turn && (event.type === 'done' || (run.kind === 'claude-code' && observed.length)) &&
+          run.kind !== REMOTE_AGENT_PLUGIN_ENGINE_KIND && !run.relay && run.providerId &&
+          deps.isControllerAuthorized(run.controller) && delegatedRunAllowed(run) && companyExecutionReporting()?.direct(run.providerId, run.kind)) {
         if (run.kind === 'pi') {
-          if (event.type === 'done' && event.source === 'pi') {
+          const recordCompany = turn.record;
+          if (recordCompany && event.type === 'done' && event.source === 'pi') {
             const usage = (event.data as { usage?: { receipts?: unknown; segments?: unknown; segmentsComplete?: boolean } } | undefined)?.usage;
-            recordCompanyPiRoots(run.turnUsage, usage?.receipts ?? (usage?.segmentsComplete ? usage.segments : undefined));
+            recordCompanyPiRoots(recordCompany, usage?.receipts ?? (usage?.segmentsComplete ? usage.segments : undefined));
           }
         } else if (run.kind === 'codex') {
           // Live snapshots are cumulative and carry no executing credential. The final receipt
           // supplies both the actual route and this turn's counters, including after a reroute.
-          if (event.type === 'done' && event.source === 'codex') {
+          const recordCompany = turn.record;
+          if (recordCompany && event.type === 'done' && event.source === 'codex') {
             const usage = (event.data as { usage?: {
               execution?: { providerId?: string | null; credentialMode?: string; model?: string };
               promptTokens: number; completionTokens: number; cachedTokens?: number; cacheCreationTokens?: number; segments?: unknown;
@@ -2115,12 +2138,12 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
                   actual.providerId === null && actual.credentialMode === 'oauth-bearer')) {
               const counts = { input: usage.promptTokens, output: usage.completionTokens,
                 cacheRead: usage.cachedTokens ?? 0, cacheWrite: usage.cacheCreationTokens ?? 0 };
-              recordCompanyCodexTokens(run.turnUsage, codexTurnSegments(usage.segments, counts), counts,
+              recordCompanyCodexTokens(recordCompany, codexTurnSegments(usage.segments, counts), counts,
                 usage.segments === undefined ? actual.model : undefined);
             }
           }
         } else if (observed.length) {
-          run.turnUsage(observed.map(sample => companyModelTokens(sample.model, sample)));
+          turn.observeClaude(observed.map(sample => companyModelTokens(sample.model, sample)));
         }
       }
       // Native proxy receipts already include root and child tokens. Terminal events only count turns.
@@ -2587,7 +2610,7 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
       backend.client = new RemoteAgentRunClient(randomUUID(), connection.poller, {
         onEvent: (event) => {
           if (run.closing || run.relay !== backend) return;
-          meterRunUsage(run, backend.model, event as AgentEvent);
+          meterRunUsage(run, backend.model, event as AgentEvent, undefined);
           const deliver = () => {
             if (!run.closing) append(run, { t: 'event', event }, {
               agentDeviceId: current.agentDeviceId,
@@ -2683,10 +2706,8 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
         // 受邀者那边还有这个任务的工作(它在拉取本机时报的 hold)：接着报给组内电脑，免得那台按闲置收回。
         holdsRemote: () => run.heldAt !== undefined && now() - run.heldAt < REMOTE_HOLD_FRESH_MS,
       }, randomUUID, deps.log);
-      run.authorizedUsage = undefined;
-      run.reportingReceipt = undefined;
-      run.turnUsage = undefined;
-      run.companyTurnBoundary = undefined;
+      run.authorization = undefined;
+      run.companyTurn = undefined;
       run.relay = backend;
       run.terminalOwnership = new RemoteTurnTerminalOwnership();
       try {
@@ -3053,6 +3074,7 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
     let admission: Run['standbyAdmission'];
     let standbyTurn: Run['standbyTurn'];
     let sendInvoked = false;
+    let previousCompanyTurn: HostedCompanyTurn | undefined;
     try {
       if (run.closing) fail('REMOTE_AGENT_EXPIRED', 'task has ended');
       if (!delegatedRunAllowed(run)) fail('REMOTE_AGENT_UNAVAILABLE', 'this shared task is no longer authorized');
@@ -3164,7 +3186,10 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
             if (error instanceof TurnDispatchRejectedError) throw error;
             throw new TurnDispatchRejectedError(error instanceof Error ? error.message : String(error), { cause: error });
           }
-          if (!run.activeTurn) bindCompanyUsage(run);
+          if (!run.activeTurn) {
+            previousCompanyTurn = run.companyTurn;
+            bindCompanyUsage(run);
+          }
           takeGroupNewRound(run, callId, method, rawArgs);
           sendInvoked = true;
         }
@@ -3198,6 +3223,7 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
         } else if (!sendInvoked || info.code === 'TURN_DISPATCH_REJECTED' || accountFailure) {
           run.activeTurn = false;
         }
+        if (!run.activeTurn) run.companyTurn = previous?.aborted && !previous.terminal ? previousCompanyTurn : undefined;
         if (run.accountFailure) await run.accountFailure.delivery;
         else if (isAccountSendFailure(info)) {
           await deliverAccountFailure(run, localGroupMember(run.providerId ?? ''), info, handle?.model ?? run.authorizedModel ?? '');
@@ -3883,19 +3909,18 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
         if (!pending || !nonce || pending.expires <= now() || !deps.isOwnerCurrent(pending.owner)) return {};
         pending.nonce = undefined;
         const record = await companyExecutionReporting()?.redeem(nonce, request.grant);
-        if (!record || reportingHandshakes.get(k) !== pending || pending.expires <= now() ||
+        if (!record?.current() || reportingHandshakes.get(k) !== pending || pending.expires <= now() ||
             !deps.isOwnerCurrent(pending.owner) || !deps.isControllerAuthorized(controller)) return {};
         const run = runs.get(k);
         if (pending.run && run !== pending.run) return {};
         if (!run) { pending.authorization = record; return { authorized: true }; }
         reportingHandshakes.delete(k);
         if (!run.closing && !run.relay && deps.isOwnerCurrent(run.owner) && delegatedRunAllowed(run)) {
-          // A live, still-unsettled turn keeps its original local owner and UTC-day boundary.
-          // Never attach a new member's authorization to a different receipt's running turn.
-          if ((run.turnUsage && run.reportingReceipt === record.receipt) ||
-              (!run.turnUsage && run.activeTurn && !run.abortRequested && run.companyTurnBoundary?.())) run.turnUsage = record.record;
-          run.authorizedUsage = record.record;
-          run.reportingReceipt = record.receipt;
+          run.authorization = record;
+          if (run.companyTurn && !run.abortRequested &&
+              run.providerId && run.kind !== REMOTE_AGENT_PLUGIN_ENGINE_KIND && companyExecutionReporting()?.direct(run.providerId, run.kind)) {
+            run.companyTurn.authorize(record);
+          }
           return { authorized: true };
         }
         return {};
@@ -4223,7 +4248,7 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
         const reporting = pending && now() < pending.expires && deps.isOwnerCurrent(pending.owner) ? pending.authorization : undefined;
         if (reporting) reportingHandshakes.delete(key(controller, request.runId));
         const run: Run = {
-          reportingReceipt: reporting?.receipt, authorizedUsage: reporting?.record,
+          authorization: reporting,
           // Routing hints prevent group loops; they are not permission to skip
           // this executor's policy. Direct and relayed guests inherit its local
           // group restriction even when the caller says it was already assigned.

@@ -16,9 +16,8 @@ import type { EngineKind } from '@cindy/maker-core';
 import { createHostClaudeProxyRuntime } from './agent/claude-proxy-runtime.js';
 import { createAvailabilityPolicy } from '../../desktop/src/main/device-link/providerShareAvailabilityPolicyCore.js';
 import { configureWindowsAtomicRename } from '../../desktop/src/main/windowsAtomicRename.js';
-import { isDefinitiveRefreshError } from '../../desktop/src/main/authRefreshError.js';
 import type { HostStartFailureReason } from '../../desktop/src/shared/hostStartFailure.js';
-import { classifyHostStartFailure, HostAccountMismatchError, HostSignInRequiredError } from './start-failure.js';
+import { classifyHostStartFailure, endsHostSession, HostAccountMismatchError, HostSignInRequiredError } from './start-failure.js';
 import { AuthRefreshBackoff } from '../../desktop/src/main/authRefreshBackoff.js';
 import { AUTH_ACCOUNT_VAULT_LOCK_FILE } from '../../desktop/src/main/authRefreshCommit.js';
 import { createUserSession } from '../../desktop/src/main/localDb/ipc/createUserSession.js';
@@ -84,7 +83,7 @@ import { discoverHostOwner, ownerDatabasePath, resolveHostDataDir, resolveHostRe
 import { acquireHostRuntimeLease, acquireHostServiceLease, type HostRuntimeLease } from './runtime-lock.js';
 import { publishHostEndpoint, readHostProcessStatus, requestHostStop, requestHostRemote } from './control.mjs';
 import { readAdoptedSessionState } from './credentials/session.mjs';
-import { hostAccountVaultLock, HostRefreshDeferredError, HostSessionMissingError, refreshHostSession } from './auth/refresh.mjs';
+import { hostAccountVaultLock, HostRefreshDeferredError, refreshHostSession } from './auth/refresh.mjs';
 import { configureHostOwner, readClaudeSubscriptionState } from './agent/claude-auth.mjs';
 import { attachAgentsToMakerMemory, type createHostMemoryManager } from './agent/memory.mjs';
 import { createHostAgentGraph } from './agent/runtime.js';
@@ -120,7 +119,7 @@ import { hostAuthFetch } from './auth-fetch.mjs';
 import type { Effort, PermissionMode } from '@cindy/maker-core';
 import { createRequire } from 'node:module';
 import { readAuthEndpoints } from './auth/endpoints.mjs';
-import { assertHostSessionRegion, HostCrossRegionPersonalAccountError, hostPackageRegion } from './auth/region-policy.js';
+import { assertHostSessionRegion, hostPackageRegion } from './auth/region-policy.js';
 import { logoutHostSession } from './auth/logout.mjs';
 import { listInstalledPlugins } from './plugins.mjs';
 import { createHostGhostManager } from './plugins-installed.ts';
@@ -257,7 +256,8 @@ if (command === '--help' || command === '-h') {
     const login = await readAdoptedSessionState({
       userDataDir: resolveHostDataDir(),
       keyringApplication: process.env.CINDY_HOST_KEYRING_APPLICATION?.trim() || undefined,
-    }).catch(() => ({ authenticated: null, realm: null, credentialStoreUnavailable: true }));
+    }).then(({ authenticated, realm }) => ({ authenticated, realm }))
+      .catch(() => ({ authenticated: null, realm: null, credentialStoreUnavailable: true }));
     const processStatus = await readHostProcessStatus(resolveHostDataDir());
     const state = { ...login, ...processStatus,
       skillProjectionBoundary: readStatusSkillProjectionBoundary(processStatus) };
@@ -603,7 +603,7 @@ async function performAuthRefresh(): Promise<boolean> {
   } catch (error) {
     // Only a definitive rejection of the token still stored, or a stored session that is gone, ends
     // the session (in this process; no stored credential is deleted). Anything else renews again later.
-    if (isDefinitiveRefreshError(error) || error instanceof HostSessionMissingError || error instanceof HostCrossRegionPersonalAccountError) {
+    if (endsHostSession(error)) {
       // Refresh may belong to an admitted HTTP request. Raise the boundary now,
       // but let that request unwind before waiting for the HTTP drain.
       void invalidateHostSession('account-unavailable').catch(error => {
@@ -760,6 +760,16 @@ let makerMemory: ReturnType<typeof createHostMemoryManager> | null = null;
 /** Non-secret projection of the adopted Desktop login; never tokens. */
 let account: { authenticated: boolean; realm: string | null; error?: string } = { authenticated: false, realm: null };
 
+async function readStartupSession() {
+  const state = await readAdoptedSessionState({
+    userDataDir: resolveHostDataDir(),
+    keyringApplication: process.env.CINDY_HOST_KEYRING_APPLICATION?.trim() || undefined,
+  });
+  // A desktop can sign out while this Host is stopped. Only proven absence is destructive.
+  if (state.recordMissing) companyReporting.signOut();
+  return state;
+}
+
 /**
  * Initialize storage only after verifying the signed-in membership. An explicit
  * owner selects a profile; it is never evidence of a successful login.
@@ -812,10 +822,7 @@ async function ensureRuntime(ownerId: string): Promise<void> {
   // database or constructing an agent. Refresh errors here must not be swallowed
   // by the periodic refresh path: an account B login cannot run on A's data.
   if (!currentSessionToken) {
-    const state = await readAdoptedSessionState({
-      userDataDir: dataDir,
-      keyringApplication: process.env.CINDY_HOST_KEYRING_APPLICATION?.trim() || undefined,
-    });
+    const state = await readStartupSession();
     account = { authenticated: false, realm: state.realm };
     if (!state.authenticated) throw new HostSignInRequiredError();
     if (state.authenticated) {
@@ -2472,7 +2479,7 @@ server.listen(PORT, '127.0.0.1', () => {
         // A newly signed-in preview has credentials but no database yet. Resolve
         // the authenticated membership before creating its first owner database;
         // never invent an owner or copy the running desktop's account files.
-        const state = await readAdoptedSessionState({ userDataDir: resolveHostDataDir() });
+        const state = await readStartupSession();
         account = { authenticated: false, realm: state.realm };
         if (state.authenticated) initialUser = await resolveAccountUser();
         if (!initialUser) { runtime.detail = discovered.reason ?? 'owner is unknown'; return; }
@@ -2486,16 +2493,13 @@ server.listen(PORT, '127.0.0.1', () => {
     await ensureRuntime(owner);
     startDeviceLink();
     if (account.authenticated) { scheduleAuthRefresh(); return; }
-    const state = await readAdoptedSessionState({
-      userDataDir: resolveHostDataDir(),
-      keyringApplication: process.env.CINDY_HOST_KEYRING_APPLICATION?.trim() || undefined,
-    });
+    const state = await readStartupSession();
     account = { authenticated: false, realm: state.realm };
     // A renewal that succeeds schedules the next one; one that fails for now retries with backoff.
     if (state.authenticated) await refreshAuthSession();
-    else companyReporting.signOut();
   })().catch(async (error: unknown) => {
     const blocked = runtime.state === 'blocked';
+    if (endsHostSession(error)) companyReporting.signOut();
     try { await disposeOwnerRuntime(); }
     catch (cleanupError) { console.error('cindy-host startup cleanup failed:', cleanupError); }
     finally { commitVolatileAppSession('signed-out', null, true); }

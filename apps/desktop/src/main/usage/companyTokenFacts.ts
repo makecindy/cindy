@@ -52,17 +52,24 @@ export function readCompanyExecutionChallenge(value: unknown): CompanyExecutionC
 }
 
 type CompanyAgent = 'claude-code' | 'codex' | 'pi';
+export interface CompanyExecutionReceipt {
+  receipt: string;
+  /** Rechecked at turn admission, renewal and settlement; a redeemed callback can go stale. */
+  current(): boolean;
+  record: CaptureCompanyUsage;
+}
+export type CompanyTurnBoundary = (model?: string) => boolean;
 export interface CompanyExecutionReporting {
   direct(providerId: string, kind: CompanyAgent): boolean;
   available(): boolean;
   /** A live receipt may arrive during an already admitted turn. This guard pins its reporting boundary. */
-  captureBoundary?(): (() => boolean) | undefined;
+  captureBoundary?(): CompanyTurnBoundary | undefined;
   challenge(nonce: string): CompanyExecutionChallenge | null;
   issue(challenge: CompanyExecutionChallenge): Promise<string | null>;
   redeem(
     nonce: string,
     grant: string,
-  ): Promise<{ receipt: string; record: CaptureCompanyUsage } | undefined>;
+  ): Promise<CompanyExecutionReceipt | undefined>;
 }
 let execution: CompanyExecutionReporting | undefined;
 export function installExecutionReporting(service: CompanyExecutionReporting | undefined) {

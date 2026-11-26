@@ -3412,7 +3412,7 @@ it('pins the reporting grant to the selected execution device and records a rela
   installExecutionReporting({
     available: () => true, captureBoundary: () => () => true, direct: () => true, issue,
     challenge: nonce => ({ nonce, recipient: 'a'.repeat(64) }),
-    redeem: async (nonce, grant) => grant === 'fixture-' + nonce ? { receipt: 'synthetic-receipt', record } : undefined,
+    redeem: async (nonce, grant) => grant === 'fixture-' + nonce ? { receipt: 'synthetic-receipt', current: () => true, record } : undefined,
   });
   const guest = await openAsGuest(env, GUEST_A, openPayload(SESSION));
   try {

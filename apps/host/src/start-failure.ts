@@ -29,6 +29,11 @@ function isSignInServiceUnreachable(error: unknown): boolean {
     && (error.code === 'NETWORK_ERROR' || error.code === 'REQUEST_TIMEOUT');
 }
 
+export function endsHostSession(error: unknown): boolean {
+  return error instanceof HostSessionMissingError || error instanceof HostCrossRegionPersonalAccountError ||
+    isDefinitiveRefreshError(error);
+}
+
 /**
  * Why a start failed, for the windows (auth state `hostUnavailable`), or null when the start ended as an
  * ordinary signed-out state: no saved session, a session the server rejected or that is gone, a personal
@@ -37,8 +42,7 @@ function isSignInServiceUnreachable(error: unknown): boolean {
  * pids or account details and stays in `runtime.detail`.
  */
 export function classifyHostStartFailure(error: unknown): HostStartFailureReason | null {
-  if (error instanceof HostSignInRequiredError || error instanceof HostSessionMissingError
-    || error instanceof HostCrossRegionPersonalAccountError || isDefinitiveRefreshError(error)) return null;
+  if (error instanceof HostSignInRequiredError || endsHostSession(error)) return null;
   if (error instanceof HostProfileInUseError) return 'HOST_PROFILE_IN_USE_BY_DESKTOP';
   if (error instanceof HostAccountMismatchError) return 'HOST_ACCOUNT_MISMATCH';
   if (error instanceof OwnerDatabaseError) {

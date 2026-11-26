@@ -4,7 +4,7 @@ import path from 'node:path';
 import { meResponseSchema } from '@cindy/auth-client';
 import { dailyUploadSlot, latestUploadableDay } from './enterpriseDailyUpload.js';
 import { CompanyTokenQueue, projectUsage, type CompanyPolicy } from './companyTokenQueue.js';
-import type { CaptureCompanyUsage, CompanyExecutionReporting, CompanyModelTokens } from './companyTokenFacts.js';
+import type { CaptureCompanyUsage, CompanyExecutionReporting, CompanyModelTokens, CompanyTurnBoundary } from './companyTokenFacts.js';
 
 const POLICY_CHECK_INTERVAL_MS = 12 * 60 * 60_000;
 const RETRY_INTERVAL_MS = 5 * 60_000;
@@ -103,9 +103,9 @@ export function createCompanyTokenReportingCore(ports: ReportingRuntime) {
   let syncing = false;
   let rerun = false;
   let disposed = false;
-  const visible = () => {
+  const visible = (checkedIdentity?: ReportingIdentity | null) => {
     if (!policy || disposed || !isAnalyticsAllowed()) return null;
-    const who = identity();
+    const who = checkedIdentity === undefined ? identity() : checkedIdentity;
     return who?.owner === policy.owner &&
       who.generation === policy.generation &&
       Date.now() < policy.until
@@ -302,20 +302,27 @@ export function createCompanyTokenReportingCore(ports: ReportingRuntime) {
       }
     };
   }
+  function captureBoundary(): CompanyTurnBoundary | undefined {
+    const who = identity();
+    const initial = visible(who);
+    if (!who || !initial?.participating) return;
+    const { device, base } = who;
+    const version = invalidation;
+    const day = new Date().toISOString().slice(0, 10);
+    return model => {
+      const executor = identity();
+      const active = visible(executor);
+      return version === invalidation && active?.participating === true &&
+        executor?.device === device && executor.base === base &&
+        active.owner === initial.owner && active.generation === initial.generation &&
+        active.orgRevision === initial.orgRevision && active.memberRevision === initial.memberRevision &&
+        new Date().toISOString().slice(0, 10) === day &&
+        (model === undefined || active.models.has(model));
+    };
+  }
   const execution: CompanyExecutionReporting = {
     direct: ports.direct,
-    captureBoundary() {
-      const initial = visible();
-      if (!initial?.participating) return;
-      const version = invalidation;
-      const day = new Date().toISOString().slice(0, 10);
-      return () => {
-        const active = visible();
-        return version === invalidation && active?.participating === true &&
-          active.owner === initial.owner && active.orgRevision === initial.orgRevision &&
-          active.memberRevision === initial.memberRevision && new Date().toISOString().slice(0, 10) === day;
-      };
-    },
+    captureBoundary,
     available() {
       return visible()?.participating === true;
     },
@@ -350,18 +357,19 @@ export function createCompanyTokenReportingCore(ports: ReportingRuntime) {
         : null;
     },
     async redeem(nonce, grant) {
-      const p = visible(),
-        who = identity();
-      if (!p?.participating || !who) return;
-      const version = invalidation;
+      const boundary = captureBoundary();
+      const who = identity();
+      if (!boundary || !who) return;
       const data = await (
         await request(who, endpoint(who) + '/redeem', 'POST', { nonce, grant })
       ).json();
       if (
         !current(who) ||
-        invalidation !== version ||
+        !boundary() ||
         !receiptId.test(data.receipt) ||
         !Number.isSafeInteger(data.expires) ||
+        data.expires <= Date.now() ||
+        data.day !== new Date().toISOString().slice(0, 10) ||
         !Number.isSafeInteger(data.orgRevision) ||
         !Number.isSafeInteger(data.memberRevision)
       )
@@ -372,22 +380,14 @@ export function createCompanyTokenReportingCore(ports: ReportingRuntime) {
         memberRevision: data.memberRevision,
       };
       liveReceipts.set(data.receipt, data.expires);
+      const usable = () => boundary() && liveReceipts.has(data.receipt) && Date.now() < data.expires;
       return {
         receipt: data.receipt,
+        current: usable,
         record(samples) {
           const active = visible();
-          if (
-            !active?.participating ||
-            active.generation !== who.generation ||
-            active.owner !== who.owner ||
-            invalidation !== version ||
-            !liveReceipts.has(data.receipt) ||
-            Date.now() >= data.expires
-          )
-            return;
-          const day = new Date().toISOString().slice(0, 10);
-          if (day !== data.day) return;
-          const rows = projectTurn(active.models, day, samples);
+          if (!active || !usable()) return;
+          const rows = projectTurn(active.models, data.day, samples);
           if (!rows.length) return;
           try {
             mkdirSync(delegatedDir, { recursive: true, mode: 0o700 });
