@@ -320,9 +320,14 @@ export function SubscriptionAccountsSection({
   // 点开才是账号列表、额度窗口、额度重置与分配设置，功能一样不少。有账号要登录、读取失败、正在登录或还没有账号时
   // 自动展开，不把需要处理的事藏起来；用户自己点过之后按用户的。
   const [openChoice, setOpenChoice] = useState<boolean | null>(null);
-  const needsAttention = failed || busy || !view || accounts.length === 0
-    || accounts.some((account) => account.status === 'signed-out' || account.status === 'unavailable' || !!account.authIssue);
-  const expanded = openChoice ?? needsAttention;
+  // 只看读到的结果：读取中、正在登录、后台刷新偶尔失败都不算(否则先展开再自己收起，页面跳一下，2026-11-26 排查)。
+  // 第一次就没读到才算要处理。
+  const needsAttention = (failed && !view) || (!!view && (accounts.length === 0
+    || accounts.some((account) => account.status === 'signed-out' || account.status === 'unavailable' || !!account.authIssue)));
+  // 自动展开过就留着：登录完成后不在用户眼前自己收起，由用户来收。
+  const [autoOpened, setAutoOpened] = useState(false);
+  if (needsAttention && !autoOpened) setAutoOpened(true);
+  const expanded = openChoice ?? autoOpened;
   const summaryNow = Date.now();
   const summary = accounts.map((account, index) => {
     const card = plugin ? null : buildSubscriptionAccountUsageCard(account.usage, t, summaryNow, locale);
@@ -410,7 +415,7 @@ export function SubscriptionAccountsSection({
           type="button"
           data-testid="subscription-accounts-summary"
           data-settings-search-action="Expand the subscription accounts of this provider"
-          aria-label={t('subscriptionAccounts.title')}
+          aria-expanded={false}
           onClick={() => setOpenChoice(true)}
           className="mt-1.5 flex w-full flex-wrap items-center gap-x-4 gap-y-1 rounded-lg text-left text-12 leading-[1.4] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]"
         >
@@ -449,7 +454,7 @@ export function SubscriptionAccountsSection({
       {view && accounts.length > 0 && (
         <>
           {/* 几个账号就是一条自动路由：选法只在「智能路由」里改，这里说明现状并给出入口。 */}
-          {balancing && <RouteStrategyNote strategy={view.strategy} />}
+          {balancing && <RouteStrategyNote strategy={view.strategy} providerId={providerId} />}
           {/* One grid for every account: each usage card joins it as a subgrid, so the bars of all
               accounts start and end at the same columns. */}
           <QuotaWindowSubgridContext.Provider value={true}>

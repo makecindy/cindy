@@ -52,12 +52,19 @@ export function SubagentModelSection() {
   // Subagent 也能选一条智能路由(2026-11-26 用户裁决)：只列自己排的、含本机 Claude Code 来源的路由。子代理跑在主任务的
   // 来源上，用的是路由里与主任务同一个供应商的那个模型；合并整个供应商的路由对它等于直接选模型，不另列。
   const { config: groupsConfig } = useModelGroups();
-  const subagentRoutes = useMemo(() => ({
-    ...groupsConfig,
-    routes: groupsConfig.routes.filter((route) => !route.parent
-      && route.candidates.some((candidate) => candidate.agentKind === 'cc' && !candidate.agentDeviceId && !candidate.off)),
-  }), [groupsConfig]);
   const [settings, setSettings] = useState<SubagentModelSettingsState | null>(null);
+  // 选着的路由删掉了、或者里面不再有本机 Claude Code 来源：仍列在那里并写明，不让按钮变成空白(与辅助模型同一种写法)。
+  const activeRouteId = auxiliaryRouteRefId(settings?.claudeCode ?? '');
+  const missingRouteName = t('settings.auxiliaryModels.missingRoute');
+  const subagentRoutes = useMemo(() => {
+    const routes = groupsConfig.routes.filter((route) => !route.parent
+      && route.candidates.some((candidate) => candidate.agentKind === 'cc' && !candidate.agentDeviceId && !candidate.off));
+    if (activeRouteId && !routes.some((route) => route.id === activeRouteId)) {
+      const kept = groupsConfig.routes.find((route) => route.id === activeRouteId && !route.parent);
+      routes.push(kept ?? { id: activeRouteId, name: missingRouteName, strategy: 'expiring', candidates: [] });
+    }
+    return { ...groupsConfig, routes };
+  }, [groupsConfig, activeRouteId, missingRouteName]);
   const [pending, setPending] = useState(false);
   const pendingRef = useRef(false);
   const settingsRef = useRef<SubagentModelSettingsState | null>(null);

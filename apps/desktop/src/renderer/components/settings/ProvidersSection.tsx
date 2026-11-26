@@ -199,7 +199,10 @@ import { isCustomRoutedProvider, isOrganizationManagedProvider, storedCustomProv
 
 // 「智能路由」那一页点开才加载(与它还是单独一个设置页时一样)：它带着关系图、路由编辑和选模型面板一大串代码，
 // 跟着模型供应商页一起加载的话，打开模型供应商页要先等这些代码，「加载中」会多停一两秒。
-const ModelGroupsSection = lazy(() => import('./ModelGroupsSection').then(module => ({ default: module.ModelGroupsSection })));
+const loadModelGroupsSection = () => import('./ModelGroupsSection');
+const ModelGroupsSection = lazy(() => loadModelGroupsSection().then(module => ({ default: module.ModelGroupsSection })));
+// 智能路由页下方的 Subagent、辅助模型、伙伴几块(ModelGroupsAutoRoutes 里按需加载的同一个模块)。
+const loadOtherModelSettings = () => import('./OtherModelSettings');
 
 // 点了按钮才出现的几块(添加供应商向导、连接弹窗、语音模型弹窗、分享管理页)用到时再加载：它们和各自依赖的代码加起来
 // 比页面本身还大，跟着页面一起加载时，第一次打开要先等它们(2026-11-25 实测占第一次打开耗时的大头)。
@@ -213,7 +216,8 @@ const ProviderConnectionDialog = lazy(() => loadProviderConnectionDialog().then(
 const AddSpeechModelsDialog = lazy(() => loadAddSpeechModelsDialog().then(module => ({ default: module.AddSpeechModelsDialog })));
 const ProviderShareManagePage = lazy(() => loadProviderShareManagePage().then(module => ({ default: module.ProviderShareManagePage })));
 function preloadProviderDialogs(): void {
-  for (const load of [loadAddProviderWizard, loadProviderConnectionDialog, loadAddSpeechModelsDialog, loadProviderShareManagePage]) {
+  // 智能路由页也一起预取：第一次点开时右栏不再先闪一下「加载中」、下面几块不再一块块冒出来(2026-11-26 排查)。
+  for (const load of [loadModelGroupsSection, loadOtherModelSettings, loadAddProviderWizard, loadProviderConnectionDialog, loadAddSpeechModelsDialog, loadProviderShareManagePage]) {
     // 取不回来不要紧：真要用时 lazy 会再取一次并走它自己的错误处理。
     void load().catch(() => undefined);
   }
@@ -2603,7 +2607,7 @@ function SuggestionRow({
   const cliName = localCliDisplayName(detection.cli);
   const title = providerDisplayName(provider, t);
   return (
-    <button data-settings-search-action="Open the labeled provider setup or account action"
+    <button data-provider-suggestion data-settings-search-action="Open the labeled provider setup or account action"
       type="button"
       onClick={onClick}
       title={t(
@@ -2650,8 +2654,16 @@ export function ProvidersSection({ routing = false, onRoutingChange }: {
   onRoutingChange?: (routing: boolean) => void;
 } = {}) {
   const { t } = useTranslation();
-  const openSmartRouting = useCallback(() => onRoutingChange?.(true), [onRoutingChange]);
+  // 从供应商页的「调整」过来：带着是哪个供应商，智能路由页落到它的账号或电脑那一行。
+  const [routingFocus, setRoutingFocus] = useState<{ providerId: string; at: number } | null>(null);
+  const openSmartRouting = useCallback((providerId?: string) => {
+    if (providerId) setRoutingFocus({ providerId, at: Date.now() });
+    onRoutingChange?.(true);
+  }, [onRoutingChange]);
   const routingPaneRef = useRef<HTMLDivElement | null>(null);
+  // 进过一次智能路由就一直留着那一格(见右栏)；没进过时不加载它。
+  const [routingVisited, setRoutingVisited] = useState(routing);
+  if (routing && !routingVisited) setRoutingVisited(true);
   useEffect(() => {
     if (typeof requestIdleCallback === 'function') {
       const id = requestIdleCallback(preloadProviderDialogs, { timeout: 4_000 });
@@ -3799,9 +3811,12 @@ export function ProvidersSection({ routing = false, onRoutingChange }: {
             <div
               data-testid="provider-list-scroll"
               className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto p-2"
-              // 点左栏里任何一个供应商（或它的展开/排序控件之外的按钮）时，右栏从智能路由回到供应商。
+              // 点左栏里的一个供应商时，右栏从智能路由回到供应商。展开/收起分组、行上的菜单、检测到的本机 CLI
+              // (它打开添加向导)不算选中供应商，留在智能路由。
               onClickCapture={(event) => {
-                if (routing && !(event.target as HTMLElement).closest('[data-provider-routing-entry]')) onRoutingChange?.(false);
+                if (routing && !(event.target as HTMLElement).closest(
+                  '[data-provider-routing-entry],[aria-expanded],[aria-haspopup],[data-provider-suggestion]',
+                )) onRoutingChange?.(false);
               }}
             >
               <button
@@ -3936,11 +3951,22 @@ export function ProvidersSection({ routing = false, onRoutingChange }: {
 
           {/* 右栏身份固定；说明、资产和模型共用 DetailHeader 的滚动区。 */}
           <OpenSmartRoutingContext.Provider value={onRoutingChange ? openSmartRouting : null}>
+          {/* 智能路由与供应商详情各自一格，进过一次就留着(隐藏时不显示、效果暂停)：来回切换不重建，
+              路由页里打开的详情、草稿、试一下的结果、展开的「最近的选择」都还在(2026-11-26 用户反馈)。 */}
+          {routingVisited && (
+            <Activity mode={routing ? 'visible' : 'hidden'}>
+              <div ref={routingPaneRef} id="settings-panel-model-groups" data-testid="provider-routing-pane" className="min-h-0 min-w-0 flex-1 overflow-y-auto px-5 py-5">
+                <Suspense fallback={<div role="status" className="py-1 text-13 leading-[1.5] text-[var(--text-secondary)]">{t('ccAgent.common.loading')}</div>}>
+                  {/* 滚动的是这一格：进出某条路由的详情时，回到列表要落在原来的位置。 */}
+                  <ModelGroupsSection scrollRef={routingPaneRef} focusProvider={routingFocus} />
+                </Suspense>
+              </div>
+            </Activity>
+          )}
+          <Activity mode={routing ? 'hidden' : 'visible'}>
           <div
             key={
-              routing
-                ? 'routing'
-                : selectedShare || retryCatalogShareId
+              selectedShare || retryCatalogShareId
                 ? `share:${selectedShare?.shareId ?? retryCatalogShareId}`
                 : selectedRemote
                   ? `remote:${selectedRemote.key}`
@@ -3952,14 +3978,7 @@ export function ProvidersSection({ routing = false, onRoutingChange }: {
             }
             className="flex min-h-0 min-w-0 flex-1 flex-col"
           >
-            {routing ? (
-              <div ref={routingPaneRef} id="settings-panel-model-groups" data-testid="provider-routing-pane" className="min-h-0 flex-1 overflow-y-auto px-5 py-5">
-                <Suspense fallback={<div role="status" className="py-1 text-13 leading-[1.5] text-[var(--text-secondary)]">{t('ccAgent.common.loading')}</div>}>
-                  {/* 滚动的是这一格：进出某条路由的详情时，回到列表要落在原来的位置。 */}
-                  <ModelGroupsSection scrollRef={routingPaneRef} />
-                </Suspense>
-              </div>
-            ) : selectedShare ? (
+            {selectedShare ? (
               <ProviderShareReceivedDetail share={selectedShare} />
             ) : retryCatalogShareId ? (
               <ProviderShareReceivedCatalogRetry shareId={retryCatalogShareId} />
@@ -4323,6 +4342,7 @@ export function ProvidersSection({ routing = false, onRoutingChange }: {
               </div>
             )}
           </div>
+          </Activity>
           </OpenSmartRoutingContext.Provider>
         </div>
       )}

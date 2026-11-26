@@ -3,8 +3,8 @@
  * 来源本身仍在「模型供应商」里连接和管理；这里只引用已连接的模型。每次改动立即保存。
  * 产品规则见 docs/product-rules/model-groups.md。
  */
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react';
-import { ArrowDown, ArrowUp, Check, CornerDownRight, Minus, Play, Plus, Waypoints, X } from 'lucide-react';
+import { Activity, useCallback, useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react';
+import { ArrowDown, ArrowUp, Plus, Waypoints, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { ModelSelector, ProviderMark } from '@/components/new-chat/ModelSelector';
@@ -21,10 +21,7 @@ import {
   SettingsSection,
 } from '@/components/ui/settings-rows';
 import { Switch } from '@/components/ui/switch';
-import { Tip } from '@/components/ui/tooltip';
 import {
-  modelGroupExceptionText,
-  modelGroupWhyText,
   saveModelGroups,
   useModelGroupCandidateNames,
   useModelGroups,
@@ -41,7 +38,6 @@ import {
   modelGroupCandidateKey,
   modelGroupWeight,
   type ModelGroupCandidate,
-  type ModelGroupResolveResult,
   type ModelGroupRoute,
   type ModelGroupsConfig,
   type ModelGroupStrategy,
@@ -58,8 +54,7 @@ import {
 } from './ModelGroupsAutoRoutes';
 import { modelGroupsSettings } from './ModelGroupsSection.settings-search';
 import { ModelGroupsOverview } from './ModelGroupsOverview';
-import { RowIconButton, WeightInput } from './ModelGroupRowControls';
-import { SettingsTextInput } from './SettingsTextInput';
+import { RouteNameRow, RowIconButton, WeightInput } from './ModelGroupRowControls';
 import { useSettingsSubpageBack } from './useSettingsEscape';
 import { useSettingsSearchNavigation } from './SettingsSearchNavigation';
 import { useSettingsSectionTarget } from './useSettingsSectionTarget';
@@ -71,40 +66,15 @@ const UNSET_EFFORT = '__unset__';
 
 type View = { kind: 'list' } | { kind: 'route'; id: string } | { kind: 'source'; id: string };
 
-function NameRow({ value, label, hint, onCommit }: { value: string; label: string; hint: string; onCommit(next: string): void }) {
-  const [draft, setDraft] = useState(value);
-  const commit = () => {
-    const next = draft.trim().slice(0, MODEL_GROUP_LIMITS.name);
-    if (next && next !== value) onCommit(next);
-    else setDraft(value);
-  };
-  return (
-    <SettingsRow
-      title={label}
-      hint={hint}
-      wrap
-      trailing={
-        <SettingsTextInput
-          aria-label={label}
-          data-settings-search-action="Renames one user-created route; the list is indexed by its section entry"
-          value={draft}
-          maxLength={MODEL_GROUP_LIMITS.name}
-          onChange={setDraft}
-          onBlur={commit}
-          onKeyDown={(event) => { if (event.key === 'Enter') event.currentTarget.blur(); }}
-          className="w-[240px] max-w-full"
-        />
-      }
-    />
-  );
-}
-
 /** 路由列表里两种路由各自的小标题：与模型供应商页左栏的分组标题同一档字。 */
 const ROUTE_KIND_LABEL = 'px-1 text-12 font-medium leading-[1.33] text-[var(--text-tertiary)]';
 
-export function ModelGroupsSection({ scrollRef }: { scrollRef?: RefObject<HTMLDivElement | null> }) {
-  const { t, i18n } = useTranslation();
-  const locale = i18n.resolvedLanguage ?? i18n.language;
+export function ModelGroupsSection({ scrollRef, focusProvider }: {
+  scrollRef?: RefObject<HTMLDivElement | null>;
+  /** 从某个供应商的「调整」过来：落到它的账号或电脑那一行；它在某条合并路由里时先打开那条路由。 */
+  focusProvider?: { providerId: string; at: number } | null;
+}) {
+  const { t } = useTranslation();
   const { confirm } = useConfirmDialog();
   // 设置页读全部：隐藏了的自动路由要能在这里找回。
   const { config, loaded } = useModelGroups(true, { includeHidden: true });
@@ -122,6 +92,18 @@ export function ModelGroupsSection({ scrollRef }: { scrollRef?: RefObject<HTMLDi
   const route = view.kind === 'route' ? userRoutes.find((item) => item.id === view.id) : undefined;
   const sourceRoute = view.kind === 'source' ? sourceRoutes.find((item) => item.id === view.id) : undefined;
   const subpageOpen = !!(route ?? sourceRoute);
+  // 打开着的路由在别处被删掉、或自动合成的那条因为断开不见了：回到列表，免得它之后重新出现时又突然跳进去。
+  // 只认已经显示过的那一条——刚新建、刚转换的路由要等配置推过来才有，不能当成不见了(2026-11-26 排查)。
+  const shownView = useRef<string | null>(null);
+  const viewKey = view.kind === 'list' ? null : `${view.kind}:${view.id}`;
+  useEffect(() => {
+    if (subpageOpen) {
+      shownView.current = viewKey;
+    } else if (viewKey && shownView.current === viewKey) {
+      shownView.current = null;
+      setView({ kind: 'list' });
+    }
+  }, [subpageOpen, viewKey]);
   const { entry, activation } = useSettingsSearchNavigation();
   // 这一页并在模型供应商页里、自己滚动：从设置搜索或别处的「去设置」过来时，由这里把要找的那一项滚到眼前
   // (设置页外层那个滚动区不动)。
@@ -131,6 +113,30 @@ export function ModelGroupsSection({ scrollRef }: { scrollRef?: RefObject<HTMLDi
   useEffect(() => {
     if (entry?.tab === 'model-groups') setView({ kind: 'list' });
   }, [entry, activation]);
+  // 从某个供应商的「调整」过来：它在某条合并路由里(本机成员)时打开那条路由，否则回到列表；再把它的账号或电脑那一行
+  // 滚到眼前并把焦点放上去(2026-11-26 排查：原来落在页面最上面，还要自己找)。
+  const focusAt = focusProvider?.at;
+  useEffect(() => {
+    if (!focusProvider) return;
+    const owner = (config.sourceRoutes ?? []).find((item) => item.sources.some((source) => !source.agentDeviceId && source.providerId === focusProvider.providerId));
+    setView(owner ? { kind: 'source', id: owner.id } : { kind: 'list' });
+    const selector = `[data-auto-route="accounts:${CSS.escape(focusProvider.providerId)}"],[data-auto-route="computers:${CSS.escape(focusProvider.providerId)}"]`;
+    let tries = 0;
+    let frame = 0;
+    const find = () => {
+      const row = (scrollRef?.current ?? document).querySelector<HTMLElement>(selector);
+      if (row) {
+        row.scrollIntoView({ block: 'center' });
+        row.querySelector<HTMLElement>('button,[role="combobox"],select')?.focus({ preventScroll: true });
+        return;
+      }
+      // 账号要读一次才列得出来：最多等一秒半。
+      if (++tries < 90) frame = requestAnimationFrame(find);
+    };
+    frame = requestAnimationFrame(find);
+    return () => cancelAnimationFrame(frame);
+    // 只在又一次点「调整」时执行(依赖只写 focusAt)；配置之后的变化不再把视图拉回来。
+  }, [focusAt]);
   const captureScroll = useSettingsSubpageScroll(scrollRef, subpageOpen ? 1 : 0, activation);
 
   const save = useCallback(async (change: (latest: ModelGroupsConfig) => ModelGroupsConfig) => {
@@ -175,16 +181,30 @@ export function ModelGroupsSection({ scrollRef }: { scrollRef?: RefObject<HTMLDi
   useSettingsSubpageBack(subpageOpen ? back : null);
 
   // ── 路线详情 ───────────────────────────────────────────────────────────────
+  // 打开某条路由的详情时列表不卸载，只是隐藏：返回时关系图不重放进场动画、展开的「最近的选择」还开着、下面几块不再一块块冒出来
+  // (2026-11-26 排查)。
+  let detail: ReactNode = null;
   if (sourceRoute) {
-    return <SourceRouteDetail route={sourceRoute} config={config} options={sourceOptions} save={save} onBack={back} />;
-  }
-  if (route) {
-    const move = (index: number, delta: number) => updateRoute(route.id, (current) => {
+    detail = <SourceRouteDetail route={sourceRoute} config={config} options={sourceOptions} save={save} onBack={back} />;
+  } else if (route) {
+    // 按来源本身找、不按界面上的序号：连点或另一处刚改过时，改的仍是点的那一行(2026-11-26 排查)。
+    const move = (key: string, delta: number) => updateRoute(route.id, (current) => {
+      const index = current.candidates.findIndex((item) => modelGroupCandidateKey(item) === key);
+      const to = index + delta;
+      if (index < 0 || to < 0 || to >= current.candidates.length) return current;
       const candidates = [...current.candidates];
       const [item] = candidates.splice(index, 1);
-      candidates.splice(index + delta, 0, item);
+      candidates.splice(to, 0, item!);
       return { ...current, candidates };
     });
+    const patchCandidate = (key: string, patch: (candidate: ModelGroupCandidate) => ModelGroupCandidate | null) => updateRoute(route.id, (current) => ({
+      ...current,
+      candidates: current.candidates.flatMap((item) => {
+        if (modelGroupCandidateKey(item) !== key) return [item];
+        const next = patch(item);
+        return next ? [next] : [];
+      }),
+    }));
     const removeRoute = async () => {
       if (!await confirm({
         title: t('modelGroups.settings.deleteRouteConfirmTitle', { name: route.name }),
@@ -196,7 +216,7 @@ export function ModelGroupsSection({ scrollRef }: { scrollRef?: RefObject<HTMLDi
       if (await save((latest) => ({ ...latest, routes: latest.routes.filter((item) => item.id !== route.id) }))) back();
     };
     const full = route.candidates.length >= MODEL_GROUP_LIMITS.candidates;
-    return (
+    detail = (
       <SettingsPageScope>
         <section className="flex min-w-0 flex-col" data-testid="model-group-route-detail">
           <SettingsPageHeader
@@ -209,8 +229,9 @@ export function ModelGroupsSection({ scrollRef }: { scrollRef?: RefObject<HTMLDi
           <div className="mt-6 flex min-w-0 flex-col gap-9">
             <SettingsSection>
               <SettingsCard>
-                <NameRow key={route.id} value={route.name} label={t('modelGroups.settings.name')} hint={t('modelGroups.settings.nameHint')}
-                  onCommit={(name) => void updateRoute(route.id, (current) => ({ ...current, name }))} />
+                <RouteNameRow key={route.id} value={route.name} label={t('modelGroups.settings.name')} hint={t('modelGroups.settings.nameHint')}
+                  searchAction="Renames one user-created route; the list is indexed by its section entry"
+                  onCommit={(name) => updateRoute(route.id, (current) => ({ ...current, name }))} />
                 <SettingsRow
                   title={t('modelGroups.settings.pick')}
                   hint={t(`modelGroups.strategy.${route.strategy}.hint`)}
@@ -275,9 +296,10 @@ export function ModelGroupsSection({ scrollRef }: { scrollRef?: RefObject<HTMLDi
                 {route.candidates.map((candidate, index) => {
                   const names = namesOf(candidate);
                   const label = `${names.modelName} · ${names.sourceLabel}`;
+                  const key = modelGroupCandidateKey(candidate);
                   return (
                     <SettingsRow
-                      key={modelGroupCandidateKey(candidate)}
+                      key={key}
                       media
                       data-model-group-candidate={index}
                       lead={
@@ -298,39 +320,33 @@ export function ModelGroupsSection({ scrollRef }: { scrollRef?: RefObject<HTMLDi
                           {route.strategy === 'weighted' && (
                             <span className="mr-2 flex items-center">
                               <WeightInput
-                                key={`${modelGroupCandidateKey(candidate)}:${modelGroupWeight(candidate.weight)}`}
+                                key={`${key}:${modelGroupWeight(candidate.weight)}`}
                                 value={modelGroupWeight(candidate.weight)}
                                 label={t('modelGroups.settings.weightAria', { name: label })}
-                                onCommit={(weight) => updateRoute(route.id, (current) => ({
-                                  ...current,
-                                  candidates: current.candidates.map((item, i) => {
-                                    if (i !== index) return item;
-                                    const { weight: _weight, ...rest } = item;
-                                    void _weight;
-                                    return weight === 1 ? rest : { ...rest, weight };
-                                  }),
-                                }))}
+                                onCommit={(weight) => patchCandidate(key, (item) => {
+                                  const { weight: _weight, ...rest } = item;
+                                  void _weight;
+                                  return weight === 1 ? rest : { ...rest, weight };
+                                })}
                               />
                             </span>
                           )}
-                          <RowIconButton label={t('modelGroups.settings.moveUp')} disabled={index === 0} onClick={() => void move(index, -1)}><ArrowUp size={15} /></RowIconButton>
-                          <RowIconButton label={t('modelGroups.settings.moveDown')} disabled={index === route.candidates.length - 1} onClick={() => void move(index, 1)}><ArrowDown size={15} /></RowIconButton>
+                          <RowIconButton label={t('modelGroups.settings.moveUp')} disabled={index === 0} onClick={() => move(key, -1)}
+                            move={{ row: key, direction: 'up' }}><ArrowUp size={15} /></RowIconButton>
+                          <RowIconButton label={t('modelGroups.settings.moveDown')} disabled={index === route.candidates.length - 1} onClick={() => move(key, 1)}
+                            move={{ row: key, direction: 'down' }}><ArrowDown size={15} /></RowIconButton>
                           <RowIconButton label={t('modelGroups.settings.remove')}
-                            onClick={() => void updateRoute(route.id, (current) => ({ ...current, candidates: current.candidates.filter((_, i) => i !== index) }))}><X size={15} /></RowIconButton>
+                            onClick={() => void patchCandidate(key, () => null)}><X size={15} /></RowIconButton>
                           <Switch
                             data-setting-id={modelGroupsSettings.routes.id}
                             className="ml-2"
                             checked={!candidate.off}
                             aria-label={t('modelGroups.settings.useSource', { name: label })}
-                            onCheckedChange={(on) => void updateRoute(route.id, (current) => ({
-                              ...current,
-                              candidates: current.candidates.map((item, i) => {
-                                if (i !== index) return item;
-                                const { off: _off, ...rest } = item;
-                                void _off;
-                                return on ? rest : { ...rest, off: true };
-                              }),
-                            }))}
+                            onCheckedChange={(on) => void patchCandidate(key, (item) => {
+                              const { off: _off, ...rest } = item;
+                              void _off;
+                              return on ? rest : { ...rest, off: true };
+                            })}
                           />
                         </span>
                       }
@@ -397,8 +413,8 @@ export function ModelGroupsSection({ scrollRef }: { scrollRef?: RefObject<HTMLDi
               onChange={(next) => updateRoute(route.id, (current) => ({ ...current, exceptions: next }))}
             />
 
-            {/* 配置一改，旧的试用结果作废：换 key 重来。 */}
-            <ModelGroupRoutePreview key={JSON.stringify(route)} routes={[route]} nameCandidates={allCandidates} />
+            {/* 配置一改，旧的试用结果作废(resetKey)。 */}
+            <ModelGroupRoutePreview key={route.id} resetKey={JSON.stringify(route)} routes={[route]} nameCandidates={allCandidates} />
 
             <SettingsSection>
               <SettingsCard>
@@ -413,7 +429,7 @@ export function ModelGroupsSection({ scrollRef }: { scrollRef?: RefObject<HTMLDi
   }
 
   // ── 列表 ───────────────────────────────────────────────────────────────────
-  return (
+  const list = (
     <SettingsSection variant="page" title={t('modelGroups.title')} description={t('modelGroups.description')} testId="model-groups-settings">
       <ModelGroupsOverview config={config}
         onOpenRoute={(id) => { if (userRoutes.some((item) => item.id === id)) openRoute(id); }}
@@ -477,5 +493,11 @@ export function ModelGroupsSection({ scrollRef }: { scrollRef?: RefObject<HTMLDi
       </SettingsSection>
       <ModelSettingsElsewhere />
     </SettingsSection>
+  );
+  return (
+    <>
+      {detail}
+      <Activity mode={detail ? 'hidden' : 'visible'}>{list}</Activity>
+    </>
   );
 }

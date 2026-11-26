@@ -3,11 +3,13 @@
  * 原来只有一个入口跳去伙伴页)。编辑器与存下的形状都和伙伴自己的「模型」页同一份(BotModelChainEditor、botModelChainPatch)，
  * 两处改的是同一个设置。伙伴的其余设置仍在伙伴页。另一台电脑上的伙伴各占一行、点开到它的设置：它们的模型在那台的目录里选。
  */
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 
 import { SettingsCard, SettingsRow, SettingsSection } from '@/components/ui/settings-rows';
 import { useRemoteBots } from '@/features/bots/useRemoteBots';
+import { useCompanionCloud } from '@/features/bots/companionCloudStore';
+import { cloudRemoteBots, withoutShadowedBots } from '@/features/bots/companionCloudPresentation';
 import { toast } from '@/lib/toast';
 import { BotModelChainEditor } from '@/features/bots/BotModelChainEditor';
 import { capabilitiesFollowingDefault, capabilitiesWithModelChain, displayedModelChain } from '@/features/bots/botModelChainPatch';
@@ -19,10 +21,14 @@ import type { BotModelRoute } from '../../../shared/botModelChain';
 export function BuddyModelSettings() {
   const { t } = useBotTranslation();
   const navigate = useNavigate();
-  const roster = useBotProfiles().filter((bot) => bot.status !== 'archived');
+  const profiles = useBotProfiles();
+  const rosterRemote = useRemoteBots();
+  const cloud = useCompanionCloud();
+  // 与伙伴页同一份名册：交给别的电脑运行的本机副本不在这里改(改了也到不了它)，每个云端伙伴只在它的主力电脑上列一行。
+  const roster = useMemo(() => withoutShadowedBots(profiles.filter((bot) => bot.status !== 'archived'), cloud), [profiles, cloud]);
+  const remote = useMemo(() => cloudRemoteBots(cloud, rosterRemote), [cloud, rosterRemote]);
   const defaultChain = localBotSettingsTarget.useDefaultModelChain();
   const hiddenVendors = localBotSettingsTarget.useHiddenVendors();
-  const remote = useRemoteBots();
   if (roster.length === 0 && remote.length === 0) return null;
   return (
     <SettingsSection title={t('modelGroups.buddies.title')} description={t('modelGroups.buddies.description')} testId="model-settings-buddies">
@@ -35,7 +41,7 @@ export function BuddyModelSettings() {
           {remote.map((bot) => (
             <SettingsRow key={`${bot.deviceId}\u0000${bot.id}`} data-remote-buddy-model={bot.id} title={bot.name}
               hint={t('modelGroups.buddies.remoteHint', { device: bot.deviceName })} chevron
-              onClick={() => navigate(`/bots/remote/${encodeURIComponent(bot.deviceId)}/${encodeURIComponent(bot.id)}`)} />
+              onClick={() => navigate(`/bots/remote/${encodeURIComponent(bot.deviceId)}/${encodeURIComponent(bot.id)}?settings=1&settingsPage=model`)} />
           ))}
         </SettingsCard>
       ) : null}

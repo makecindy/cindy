@@ -1,7 +1,7 @@
 /**
  * 路由详情里的「试一下」：列出每个来源这次会被选中、备用还是跳过及原因；只看不选(dry run)，不推进轮流、不记进「最近的选择」。
  * 按模型排的路由与合并整个供应商的路由共用这一块(2026-11-26：后者原来没有)。后者在每个模型上各是一条路由，先选一个模型再试。
- * 配置改过以后旧结果作废：调用方用 key 换掉这一块即可。
+ * 配置改过以后旧结果作废(resetKey 变了就不再显示)；选着要试的那个模型不变，免得改个权重下拉又跳回第一个。
  */
 import { useMemo, useState } from 'react';
 import { Check, CornerDownRight, Minus, Play } from 'lucide-react';
@@ -22,7 +22,9 @@ import { modelGroupCandidateKey, type ModelGroupResolveResult, type ModelGroupRo
 
 const log = createLogger('ModelGroupRoutePreview');
 
-export function ModelGroupRoutePreview({ routes, nameCandidates }: {
+export function ModelGroupRoutePreview({ routes, nameCandidates, resetKey }: {
+  /** 路由配置的指纹：变了以后上一次的结果作废。 */
+  resetKey: string;
   /** 可以试的路由：按模型排的路由是它自己一条；合并整个供应商的路由是它在每个模型上的展开(先选模型)。 */
   routes: readonly ModelGroupRoute[];
   /** 「试一下」里可能出现的来源(时段例外能改走到别的路由)，名字一起备好。 */
@@ -33,18 +35,19 @@ export function ModelGroupRoutePreview({ routes, nameCandidates }: {
   const namesOf = useModelGroupCandidateNames(nameCandidates);
   const [chosen, setChosen] = useState<string | null>(null);
   const target = routes.find((route) => route.id === chosen) ?? routes[0];
-  const [preview, setPreview] = useState<{ routeId: string; result: ModelGroupResolveResult } | null>(null);
+  const [preview, setPreview] = useState<{ routeId: string; resetKey: string; result: ModelGroupResolveResult } | null>(null);
   const [previewing, setPreviewing] = useState(false);
-  const shown = target && preview?.routeId === target.id ? preview.result : null;
+  const shown = target && preview?.routeId === target.id && preview.resetKey === resetKey ? preview.result : null;
   const modelOptions = useMemo(() => routes.map((route) => ({ value: route.id, label: route.name })), [routes]);
   const run = async () => {
     if (!target) return;
     setPreviewing(true);
     try {
-      setPreview({ routeId: target.id, result: await window.electronAPI.modelGroups.resolve({ selection: { type: 'route', id: target.id }, dryRun: true }) });
+      const result = await window.electronAPI.modelGroups.resolve({ selection: { type: 'route', id: target.id }, dryRun: true });
+      setPreview({ routeId: target.id, resetKey, result });
     } catch (error) {
       log.warn('preview failed', error);
-      toast.error(t('modelGroups.settings.saveFailed'));
+      toast.error(t('modelGroups.settings.try.failed'));
     } finally {
       setPreviewing(false);
     }

@@ -3,7 +3,7 @@
 // 2026-11-13 主人试用反馈：关系图里的来源只在被选中过之后才显示余量，同一个订阅账号的其它来源一片空白。
 // 余量现在来自打开总览时只看不选的解析(与「试一下」同一份)，从没被选中过的来源也要显示。
 // 真实入口：ModelGroupsOverview 渲染 + window.electronAPI.modelGroups 的 resolve / decisions。Tier: unit。
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { createRef } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -21,8 +21,11 @@ const namesOf = (candidate: { model: string; providerId: string }) => ({
   provider: undefined, modelName: candidate.model, sourceName: candidate.providerId,
   sourceLabel: candidate.providerId, known: true, connected: true,
 });
+const saveSpy = vi.fn<(change: (latest: ModelGroupsConfig) => ModelGroupsConfig) => Promise<void>>();
+vi.mock('@/lib/toast', () => ({ toast: { error: vi.fn(), success: vi.fn() } }));
 vi.mock('@/features/model-groups/modelGroupsClient', () => ({
   modelGroupWhyText: () => '',
+  saveModelGroups: (change: (latest: ModelGroupsConfig) => ModelGroupsConfig) => saveSpy(change),
   useModelGroupCandidateNames: () => namesOf,
   useModelGroups: () => ({ config, loaded: true }),
 }));
@@ -99,4 +102,44 @@ it.each(['button', 'Escape'])('opens a route at the top and restores the model g
   else fireEvent.click(screen.getByRole('button', { name: 'modelGroups.settings.back' }));
   expect(await screen.findByTestId('model-groups-settings')).toBeTruthy();
   expect(container.scrollTop).toBe(560);
+});
+
+// 2026-11-26 排查(unit)：路由详情里的改动经真实 ModelGroupsSection 存到 saveModelGroups，按「最新配置」改。
+// 覆盖缺口：原来按界面上的序号挪、改名失败后同一个名字再也提交不了，现有用例都不进详情页保存。
+// 最小输入：两个来源的路由，配置推回来之前连点两次「下移」；改名第一次保存失败、原样再回车。
+describe('ModelGroupsSection route edits', () => {
+  const openDetail = async () => {
+    Object.assign(window, { electronAPI: { modelGroups: {
+      decisions: vi.fn().mockResolvedValue([]), resolve: vi.fn().mockResolvedValue({ trace: [] }),
+    } } });
+    vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} });
+    const scrollRef = createRef<HTMLDivElement>();
+    render(<SettingsEscapeHarness><div ref={scrollRef}><ModelGroupsSection scrollRef={scrollRef} /></div></SettingsEscapeHarness>);
+    fireEvent.click(screen.getByRole('button', { name: 'modelGroups.overview.openRoute' }));
+    return screen.findByTestId('model-group-route-detail');
+  };
+
+  it('moves the clicked source even when the list has not caught up with the last move', async () => {
+    let latest = config;
+    saveSpy.mockReset().mockImplementation(async (change) => { latest = change(latest); });
+    const detail = await openDetail();
+    const down = within(detail).getAllByRole('button', { name: 'modelGroups.settings.moveDown' })[0]!;
+    fireEvent.click(down);
+    await waitFor(() => expect(saveSpy).toHaveBeenCalledTimes(1));
+    fireEvent.click(down);
+    await waitFor(() => expect(saveSpy).toHaveBeenCalledTimes(2));
+    expect(latest.routes[0]!.candidates.map((item) => item.model)).toEqual(['terra', 'sol']);
+  });
+
+  it('lets the same new name be saved again after a failed save', async () => {
+    saveSpy.mockReset().mockRejectedValueOnce(new Error('offline')).mockResolvedValue(undefined);
+    const detail = await openDetail();
+    const name = within(detail).getByRole('textbox', { name: 'modelGroups.settings.name' });
+    fireEvent.change(name, { target: { value: 'Daily' } });
+    fireEvent.keyDown(name, { key: 'Enter' });
+    await waitFor(() => expect(saveSpy).toHaveBeenCalledTimes(1));
+    await Promise.resolve();
+    fireEvent.keyDown(name, { key: 'Enter' });
+    await waitFor(() => expect(saveSpy).toHaveBeenCalledTimes(2));
+  });
 });

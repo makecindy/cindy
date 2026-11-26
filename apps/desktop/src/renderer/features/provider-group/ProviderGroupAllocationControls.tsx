@@ -23,7 +23,7 @@ export function ProviderGroupStrategyControl({ strategy, disabled, onChange, loc
   localAccounts?: boolean;
 }) {
   const { t } = useTranslation();
-  const label = t(localAccounts ? 'openAiAccountGroup.strategy' : 'providerGroup.strategy.label');
+  const label = t(localAccounts ? 'openAiAccountGroup.strategy' : 'modelGroups.settings.pick');
   return (
     <SettingsBlock className="flex flex-col gap-1.5">
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -34,7 +34,7 @@ export function ProviderGroupStrategyControl({ strategy, disabled, onChange, loc
       </div>
       <span className="text-12 leading-[1.4] text-[var(--text-secondary)]">{t(`modelGroups.strategy.${strategy}.hint`)}</span>
       <span className="text-12 leading-[1.4] text-[var(--text-tertiary)]">
-        {t(localAccounts ? 'openAiAccountGroup.quotaHint' : 'providerGroup.strategy.quotaFirst')}
+        {t(localAccounts ? 'openAiAccountGroup.quotaHint' : 'modelGroups.auto.quotaFirst')}
       </span>
     </SettingsBlock>
   );

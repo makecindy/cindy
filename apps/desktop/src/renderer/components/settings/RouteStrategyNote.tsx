@@ -9,9 +9,10 @@ import { useTranslation } from 'react-i18next';
 import type { RouteStrategy } from '../../../shared/routeStrategy';
 
 /** 打开设置里的「智能路由」。不在供应商页里(测试、别的窗口)时为 null，说明照常显示，只是没有入口。 */
-export const OpenSmartRoutingContext = createContext<(() => void) | null>(null);
+export const OpenSmartRoutingContext = createContext<((providerId?: string) => void) | null>(null);
 
-export function RouteStrategyNote({ strategy, className }: { strategy: RouteStrategy; className?: string }) {
+/** `providerId`：点「调整」后落到智能路由里这个供应商的账号或电脑那一行(在合并路由里时先打开那条路由)。 */
+export function RouteStrategyNote({ strategy, className, providerId }: { strategy: RouteStrategy; className?: string; providerId?: string }) {
   const { t } = useTranslation();
   const open = useContext(OpenSmartRoutingContext);
   return (
@@ -24,7 +25,7 @@ export function RouteStrategyNote({ strategy, className }: { strategy: RouteStra
         <span className="text-12 leading-[1.5] text-[var(--text-tertiary)]">{t('modelGroups.auto.quotaFirst')}</span>
       </span>
       {open && (
-        <button type="button" onClick={open}
+        <button type="button" onClick={() => open(providerId)}
           className="inline-flex min-h-8 shrink-0 items-center gap-0.5 rounded-lg px-2 text-13 text-[var(--text-secondary)] transition-colors hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--border-focus)]">
           {t('modelGroups.auto.adjust')}
           <ChevronRight size={14} aria-hidden />

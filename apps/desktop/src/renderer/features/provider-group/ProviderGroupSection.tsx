@@ -221,10 +221,16 @@ export function ProviderGroupSection({ providerId, providerName, deviceId, devic
                 </div>
               );
             })}
-            {/* 组里的几台电脑就是一条自动路由：选法只在「智能路由」里改，这里说明现状并给出入口。 */}
-            <SettingsBlock>
-              <RouteStrategyNote strategy={config.strategy} className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1" />
-            </SettingsBlock>
+            {/* 组里的几台电脑就是一条自动路由：选法在「智能路由」里改，这里说明现状并给出入口。
+                组在另一台电脑上(deviceId)时这台的智能路由管不到它，选法仍在这里改，存到那台。 */}
+            {deviceId ? (
+              <ProviderGroupStrategyControl strategy={config.strategy} disabled={blocked}
+                onChange={strategy => void save({ ...config, strategy })} />
+            ) : (
+              <SettingsBlock>
+                <RouteStrategyNote strategy={config.strategy} providerId={providerId} className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1" />
+              </SettingsBlock>
+            )}
             <SettingsRow
               title={t('providerGroup.autoSwitch.label')}
               hint={t('providerGroup.autoSwitch.description')}

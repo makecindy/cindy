@@ -6,12 +6,13 @@
  * 一个供应商里的几个账号、几台电脑上同一个供应商合成的组，也是同一套选法、同一个选择函数，选法在这里改。
  * 成员可以是本机的供应商，也可以是其他电脑上的或别人分享来的。
  */
-import { lazy, Suspense, useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { Fragment, lazy, Suspense, useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { ArrowDown, ArrowUp, Waypoints, X } from 'lucide-react';
-import { useInRouterContext, useNavigate } from 'react-router-dom';
+import { useInRouterContext } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 
 import { ProviderMark } from '@/components/new-chat/ModelSelector';
+import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { Select } from '@/components/ui/select';
 import { Switch } from '@/components/ui/switch';
 import {
@@ -47,8 +48,7 @@ import { ModelGroupRoutePreview } from './ModelGroupRoutePreview';
 import { providerGroupDeviceCount, type ProviderGroupConfig } from '../../../shared/providerGroup';
 import { SAME_SOURCE_ROUTE_STRATEGIES, type RouteStrategy } from '../../../shared/routeStrategy';
 import type { SubscriptionPoolView } from '../../../shared/subscriptionAccounts';
-import { RowIconButton, WeightInput } from './ModelGroupRowControls';
-import { SettingsTextInput } from './SettingsTextInput';
+import { RouteNameRow, RowIconButton, WeightInput } from './ModelGroupRowControls';
 
 type Provider = ReturnType<typeof useProviders>['providers'][number];
 
@@ -184,8 +184,10 @@ function AccountsRouteRow({ provider, plain = null }: { provider: Provider; plai
                     />
                   </span>
                 )}
-                <RowIconButton label={t('modelGroups.settings.moveUp')} disabled={saving || index === 0} onClick={() => void move(index, -1)}><ArrowUp size={15} /></RowIconButton>
-                <RowIconButton label={t('modelGroups.settings.moveDown')} disabled={saving || index === view.accounts.length - 1} onClick={() => void move(index, 1)}><ArrowDown size={15} /></RowIconButton>
+                <RowIconButton label={t('modelGroups.settings.moveUp')} busy={saving} disabled={index === 0} onClick={() => move(index, -1)}
+                  move={{ row: `account:${account.id}`, direction: 'up' }}><ArrowUp size={15} /></RowIconButton>
+                <RowIconButton label={t('modelGroups.settings.moveDown')} busy={saving} disabled={index === view.accounts.length - 1} onClick={() => move(index, 1)}
+                  move={{ row: `account:${account.id}`, direction: 'down' }}><ArrowDown size={15} /></RowIconButton>
               </span>
             }
           />
@@ -261,10 +263,12 @@ function ComputersRouteRow({ provider, initial }: { provider: Provider; initial:
                     />
                   </span>
                 )}
-                <RowIconButton label={t('modelGroups.settings.moveUp')} disabled={saving || index === 0}
-                  onClick={() => void saveMembers(swap(config.members, index, index - 1))}><ArrowUp size={15} /></RowIconButton>
-                <RowIconButton label={t('modelGroups.settings.moveDown')} disabled={saving || index === config.members.length - 1}
-                  onClick={() => void saveMembers(swap(config.members, index, index + 1))}><ArrowDown size={15} /></RowIconButton>
+                <RowIconButton label={t('modelGroups.settings.moveUp')} busy={saving} disabled={index === 0}
+                  move={{ row: `computer:${member.key}`, direction: 'up' }}
+                  onClick={() => saveMembers(swap(config.members, index, index - 1))}><ArrowUp size={15} /></RowIconButton>
+                <RowIconButton label={t('modelGroups.settings.moveDown')} busy={saving} disabled={index === config.members.length - 1}
+                  move={{ row: `computer:${member.key}`, direction: 'down' }}
+                  onClick={() => saveMembers(swap(config.members, index, index + 1))}><ArrowDown size={15} /></RowIconButton>
               </span>
             }
           />
@@ -287,6 +291,8 @@ export interface SourceOption {
   agentDeviceId?: string;
   label: string;
   provider: Provider;
+  /** 现在能用(已连接、没暂停)。不能用的也列着，只为成员行照样显示名字、标出「未连接」，不能新加。 */
+  usable: boolean;
 }
 
 const optionKey = (source: Pick<ModelGroupSource, 'providerId' | 'agentDeviceId'>) => `${source.agentDeviceId ?? ''}\u0000${source.providerId}`;
@@ -298,12 +304,13 @@ export function useSourceOptions(): SourceOption[] {
   const deviceIds = useMemo(() => (devices ?? []).map((device) => device.deviceId), [devices]);
   const catalogs = useDevicesProviders(deviceIds, { retainDisplaySnapshot: true });
   return useMemo(() => [
-    ...providers.filter(usableProvider).map((provider): SourceOption => ({
-      key: optionKey({ providerId: provider.id }), providerId: provider.id, label: provider.name, provider,
+    ...providers.filter((provider) => !provider.removed).map((provider): SourceOption => ({
+      key: optionKey({ providerId: provider.id }), providerId: provider.id, label: provider.name, provider, usable: usableProvider(provider),
     })),
     ...(devices ?? []).flatMap((device) => (catalogs.get(device.deviceId)?.providers ?? [])
-      .filter((provider) => usableProvider(provider) && provider.remoteInvocationEnabled !== false)
+      .filter((provider) => !provider.removed && provider.remoteInvocationEnabled !== false)
       .map((provider): SourceOption => ({
+        usable: usableProvider(provider),
         key: optionKey({ providerId: provider.id, agentDeviceId: device.deviceId }),
         providerId: provider.id, agentDeviceId: device.deviceId,
         // 分享的名字已经是「供应商 · 分享者」；其他电脑写「供应商 · 电脑名」。
@@ -323,10 +330,11 @@ export function ProviderAllocationRows({ config }: { config: ModelGroupsConfig }
       {providers.filter(usableProvider).flatMap((provider) => {
         if (members.has(provider.id)) return [];
         const group = groups[provider.id];
-        if (group) return [<ComputersRouteRow key={`computers:${provider.id}`} provider={provider} initial={group} />];
-        // 账号数以已核实的登录身份为准；只有一个账号的供应商没有可分配的，不列。
-        if ((provider.subscriptionAccountKeys?.length ?? 0) >= 2) return [<AccountsRouteRow key={`accounts:${provider.id}`} provider={provider} />];
-        return [];
+        // 账号数以已核实的登录身份为准；只有一个账号的供应商没有可分配的，不列。几台电脑合成了组、又有几个账号时两行都列。
+        return [
+          ...(group ? [<ComputersRouteRow key={`computers:${provider.id}`} provider={provider} initial={group} />] : []),
+          ...((provider.subscriptionAccountKeys?.length ?? 0) >= 2 ? [<AccountsRouteRow key={`accounts:${provider.id}`} provider={provider} />] : []),
+        ];
       })}
     </>
   );
@@ -365,7 +373,7 @@ export function WholeProviderAddRow({ options, taken, onAdd }: {
   options: readonly SourceOption[]; taken: readonly ModelGroupSource[]; onAdd(source: ModelGroupSource): void;
 }) {
   const { t } = useTranslation();
-  const addable = options.filter((option) => !taken.some((source) => optionKey(source) === option.key));
+  const addable = options.filter((option) => option.usable && !taken.some((source) => optionKey(source) === option.key));
   if (addable.length === 0) return null;
   return (
     <SettingsRow
@@ -393,7 +401,9 @@ export function SourceRouteDetail({ route, config, options, save, onBack }: {
   onBack(): void;
 }) {
   const { t } = useTranslation();
-  const patchOwn = (patch: (current: ModelGroupSourceRoute) => ModelGroupSourceRoute) => void save((latest) => ({
+  const { confirm } = useConfirmDialog();
+  const localGroups = useLocalProviderGroups();
+  const patchOwn = (patch: (current: ModelGroupSourceRoute) => ModelGroupSourceRoute) => save((latest) => ({
     ...latest, sourceRoutes: (latest.sourceRoutes ?? []).map((item) => (item.id === route.id ? patch(item) : item)),
   }));
   const setStrategy = (strategy: RouteStrategy) => (route.auto
@@ -414,6 +424,13 @@ export function SourceRouteDetail({ route, config, options, save, onBack }: {
     return { ...latest, hiddenAuto: hidden ? [...rest, route.id] : rest };
   });
   const remove = async () => {
+    if (!await confirm({
+      title: t('modelGroups.settings.deleteRouteConfirmTitle', { name: route.name }),
+      description: t('modelGroups.settings.deleteMergedRouteConfirmDescription'),
+      confirmText: t('modelGroups.settings.delete'),
+      cancelText: t('modelGroups.settings.cancel'),
+      confirmVariant: 'destructive',
+    })) return;
     if (await save((latest) => ({ ...latest, sourceRoutes: (latest.sourceRoutes ?? []).filter((item) => item.id !== route.id) }))) onBack();
   };
   const expanded = useMemo(() => config.routes.filter((item) => item.parent?.id === route.id), [config, route.id]);
@@ -438,10 +455,13 @@ export function SourceRouteDetail({ route, config, options, save, onBack }: {
   });
   const patchSource = (key: string, patch: (source: ModelGroupSource) => ModelGroupSource) =>
     setSources((sources) => sources.map((item) => (optionKey(item) === key ? patch(item) : item)));
-  const moveSource = (index: number, delta: number) => setSources((sources) => {
+  const moveSource = (key: string, delta: number) => setSources((sources) => {
+    const index = sources.findIndex((item) => optionKey(item) === key);
+    const to = index + delta;
+    if (index < 0 || to < 0 || to >= sources.length) return sources;
     const next = [...sources];
     const [item] = next.splice(index, 1);
-    next.splice(index + delta, 0, item);
+    next.splice(to, 0, item!);
     return next;
   });
   return (
@@ -456,7 +476,10 @@ export function SourceRouteDetail({ route, config, options, save, onBack }: {
         <div className="mt-6 flex min-w-0 flex-col gap-9">
           <SettingsSection>
             <SettingsCard>
-              {!route.auto && <SourceRouteName route={route} onCommit={(name) => patchOwn((current) => ({ ...current, name }))} />}
+              {!route.auto && (
+                <RouteNameRow key={route.id} value={route.name} label={t('modelGroups.settings.name')} hint={t('modelGroups.settings.nameHint')}
+                  onCommit={(name) => patchOwn((current) => ({ ...current, name }))} />
+              )}
               <SettingsRow
                 title={t('modelGroups.settings.pick')}
                 hint={t(`modelGroups.strategy.${route.strategy}.hint`)}
@@ -504,7 +527,7 @@ export function SourceRouteDetail({ route, config, options, save, onBack }: {
                       </span>
                     }
                     title={label}
-                    tag={option ? undefined : t('modelGroups.settings.notConnected')}
+                    tag={option?.usable ? undefined : t('modelGroups.settings.notConnected')}
                     className={cn(source.off && '[&>span:nth-child(-n+2)]:opacity-60')}
                     trailing={
                       <span className="flex shrink-0 items-center gap-1">
@@ -522,8 +545,10 @@ export function SourceRouteDetail({ route, config, options, save, onBack }: {
                             />
                           </span>
                         )}
-                        <RowIconButton label={t('modelGroups.settings.moveUp')} disabled={index === 0} onClick={() => void moveSource(index, -1)}><ArrowUp size={15} /></RowIconButton>
-                        <RowIconButton label={t('modelGroups.settings.moveDown')} disabled={index === route.sources.length - 1} onClick={() => void moveSource(index, 1)}><ArrowDown size={15} /></RowIconButton>
+                        <RowIconButton label={t('modelGroups.settings.moveUp')} disabled={index === 0} onClick={() => moveSource(key, -1)}
+                          move={{ row: `source:${key}`, direction: 'up' }}><ArrowUp size={15} /></RowIconButton>
+                        <RowIconButton label={t('modelGroups.settings.moveDown')} disabled={index === route.sources.length - 1} onClick={() => moveSource(key, 1)}
+                          move={{ row: `source:${key}`, direction: 'down' }}><ArrowDown size={15} /></RowIconButton>
                         {!route.auto && (
                           <RowIconButton label={t('modelGroups.sources.removeAria', { name: label })}
                             onClick={() => void setSources((sources) => sources.filter((item) => optionKey(item) !== key))}><X size={15} /></RowIconButton>
@@ -542,13 +567,19 @@ export function SourceRouteDetail({ route, config, options, save, onBack }: {
                     }
                   />
                 );
-                // 本机成员自己有几个账号时，账号之间怎么分紧跟在它下面改。
-                return option && !source.agentDeviceId && (option.provider.subscriptionAccountKeys?.length ?? 0) >= 2
-                  ? <AccountsRouteRow key={key} provider={option.provider} plain={member} />
-                  : member;
+                // 本机成员自己有几个账号、或几台电脑合成了组时，怎么分紧跟在它下面改(这里是它们唯一能改选法的地方)。
+                if (!option || source.agentDeviceId) return member;
+                const localGroup = localGroups[option.provider.id];
+                const accounts = (option.provider.subscriptionAccountKeys?.length ?? 0) >= 2;
+                return (
+                  <Fragment key={key}>
+                    {accounts ? <AccountsRouteRow provider={option.provider} plain={member} /> : member}
+                    {localGroup && <ComputersRouteRow provider={option.provider} initial={localGroup} />}
+                  </Fragment>
+                );
               })}
               {route.sources.length === 0 && (
-                <SettingsBlock className="text-13 leading-[1.5] text-[var(--text-secondary)]">{t('modelGroups.settings.sourcesEmpty')}</SettingsBlock>
+                <SettingsBlock className="text-13 leading-[1.5] text-[var(--text-secondary)]">{t('modelGroups.settings.sourcesEmptyMerged')}</SettingsBlock>
               )}
               {!route.auto && route.sources.length < MODEL_GROUP_LIMITS.candidates && (
                 <WholeProviderAddRow options={options} taken={route.sources}
@@ -564,7 +595,7 @@ export function SourceRouteDetail({ route, config, options, save, onBack }: {
             routes={config.routes.filter((item) => !item.parent)}
             onChange={(next) => setExceptions(next)}
           />
-          <ModelGroupRoutePreview key={`try:${JSON.stringify(route)}`} routes={expanded} nameCandidates={expandedCandidates} />
+          <ModelGroupRoutePreview key={`try:${route.id}`} resetKey={JSON.stringify(route)} routes={expanded} nameCandidates={expandedCandidates} />
           {!route.auto && (
             <SettingsSection>
               <SettingsCard>
@@ -575,29 +606,6 @@ export function SourceRouteDetail({ route, config, options, save, onBack }: {
         </div>
       </div>
     </SettingsPageScope>
-  );
-}
-
-function SourceRouteName({ route, onCommit }: { route: ModelGroupSourceRoute; onCommit(name: string): void }) {
-  const { t } = useTranslation();
-  const [draft, setDraft] = useState(route.name);
-  const commit = () => {
-    const next = draft.trim().slice(0, MODEL_GROUP_LIMITS.name);
-    if (next && next !== route.name) onCommit(next);
-    else setDraft(route.name);
-  };
-  return (
-    <SettingsRow
-      title={t('modelGroups.settings.name')}
-      hint={t('modelGroups.settings.nameHint')}
-      wrap
-      trailing={
-        <SettingsTextInput aria-label={t('modelGroups.settings.name')} value={draft} maxLength={MODEL_GROUP_LIMITS.name}
-          onChange={setDraft} onBlur={commit}
-          onKeyDown={(event) => { if (event.key === 'Enter') event.currentTarget.blur(); }}
-          className="w-[240px] max-w-full" />
-      }
-    />
   );
 }
 

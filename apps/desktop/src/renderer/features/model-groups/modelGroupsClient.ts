@@ -213,10 +213,18 @@ export function useModelGroupCandidateNames(
     const list = candidate.agentDeviceId ? remoteAgentProviders(catalog?.providers ?? []) : providers;
     const provider = list.find((item) => item.id === candidate.providerId);
     const model = provider?.models[agent]?.find((item) => item.id === candidate.model);
-    const sourceName = provider?.name ?? (fallback?.sourceName || candidate.providerId);
+    // 那个位置的目录里没有(分享已收回、对方改了目录、还没读到)：先在别处已经读到的目录里找同一个模型和供应商的名字，
+    // 都找不到才显示 id，不在界面上露出 claude-opus-5-5、anthropic 这样的原始写法。
+    const everywhere = [providers, ...[...catalogs.values()].map((item) => item.providers ?? [])];
+    const knownModel = model ?? everywhere.flatMap((views) => views.flatMap((view) => view.models[agent] ?? []))
+      .find((item) => item.id === candidate.model);
+    const knownProvider = provider ?? everywhere.flat().find((view) => view.id === candidate.providerId);
+    const sourceName = provider?.name ?? (fallback?.sourceName && fallback.sourceName !== candidate.providerId
+      ? fallback.sourceName : knownProvider?.name ?? fallback?.sourceName ?? candidate.providerId);
     return {
       provider,
-      modelName: model?.name ?? (fallback?.modelName || candidate.model),
+      modelName: model?.name ?? (fallback?.modelName && fallback.modelName !== candidate.model
+        ? fallback.modelName : knownModel?.name ?? fallback?.modelName ?? candidate.model),
       sourceName,
       sourceLabel: modelGroupSourceLabel({ sourceName, agentDeviceId: candidate.agentDeviceId }, locationName, t),
       known: !!provider,

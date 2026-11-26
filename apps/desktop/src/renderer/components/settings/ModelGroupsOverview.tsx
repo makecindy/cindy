@@ -162,8 +162,8 @@ function useLiveSourceQuota(routes: readonly ModelGroupRoute[]): ReadonlyMap<str
           }
         }
         // 新读数里读不到的来源，沿用手头那份里有的：不让已经显示的数又消失。
+        // 手头读数(cachedQuota)同样合并：改了来源以后，已经显示的百分比不先消失再出现(2026-11-26 排查)。
         setLive((previous) => {
-          if (cachedQuota) return next;
           const merged = new Map(previous);
           for (const [key, value] of next) if (value || !merged.get(key)) merged.set(key, value);
           return merged;
