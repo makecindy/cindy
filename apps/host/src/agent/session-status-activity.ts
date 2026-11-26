@@ -1,8 +1,9 @@
 import type { AgentEvent } from '@cindy/maker-core';
 import type { ForegroundHostTaskActivity, SessionActivityPayload } from '@cindy/device-link';
-import { projectSessionActivity } from '@cindy/maker-shared/session-activity';
+import { DeferredSessionCompletions } from '../../../desktop/src/main/agent-island/deferredSessionCompletions.js';
+import { toSessionActivity } from '../../../desktop/src/main/agent-island/sessionActivitySnapshot.js';
 import { isTurnContinuationBoundaryEvent } from '@cindy/maker-shared/turn-continuation';
-import type { AgentIslandSessionActivity, AgentIslandSessionPhase, AgentIslandSessionSnapshot } from '../../../desktop/src/shared/agentIsland.js';
+import type { AgentIslandSessionActivity, AgentIslandSessionPhase } from '../../../desktop/src/shared/agentIsland.js';
 import { AGENT_ISLAND_DISPLAY_CONFIG } from '../../../desktop/src/main/agent-island/displayConfig.js';
 import { shouldNotifyAgentIslandForSession } from '../../../desktop/src/main/agent-island/notificationPolicy.js';
 import {
@@ -13,7 +14,6 @@ import {
   buildAllSessionActivitySnapshots,
   buildLocalAgentIslandTaskOverview,
   closeAgentIslandSessionPreservingUnread,
-  completedReplySummary,
   createAgentIslandState,
   getNextAgentIslandTimerAt,
   patchAgentIslandMetadata,
@@ -90,48 +90,6 @@ function lruAdd<K>(set: Set<K>, key: K, limit: number): void {
   }
 }
 
-function safeSessionActionSummary(snapshot: AgentIslandSessionSnapshot): string {
-  if (snapshot.phase === 'needs-interaction') {
-    if (snapshot.interactionKind === 'permission') return '等待权限确认';
-    if (snapshot.interactionKind === 'ask_user_question') return '等待用户回答';
-    if (snapshot.interactionKind === 'plan_review') return '等待计划确认';
-    if (snapshot.interactionKind === 'plugin_setup') return '等待插件配置';
-    if (snapshot.interactionKind === 'input_handoff') return '等待代输入';
-    return '等待用户确认';
-  }
-  if (snapshot.phase === 'completed') return '运行已正常结束';
-  if (snapshot.phase === 'error') return '运行出错';
-  const latestKind = snapshot.activityLines.at(-1)?.kind;
-  if (latestKind === 'tool') return '正在运行工具';
-  if (latestKind === 'assistant') return '正在生成回复';
-  if (latestKind === 'user') return '正在处理新消息';
-  return '正在运行';
-}
-
-function toSessionActivity(s: AgentIslandSessionSnapshot): AgentIslandSessionActivity {
-  return {
-    ...(s.completionToken ? { completionToken: s.completionToken } : {}),
-    ...(s.completionNotification ? { completionNotification: s.completionNotification } : {}),
-    ...projectSessionActivity({
-      sessionId: s.sessionId,
-      recordStatus: 'active',
-      title: s.title,
-      source: 'live',
-      livePhase: s.phase,
-      startedAtMs: s.startedAt,
-      lastActivityAtMs: s.lastActivityAt,
-      currentActionSummary: safeSessionActionSummary(s),
-      interactionKind: s.interactionKind,
-      attention: s.attention,
-    }),
-    phase: s.phase,
-    interactionKind: s.interactionKind,
-    compactDetail: s.phase === 'completed' ? completedReplySummary(s) : s.compactDetail,
-    summaryFormat: 'plain-text',
-    workingPhase: s.workingPhase,
-  };
-}
-
 function isCancelledTerminalEvent(event: AgentEvent): boolean {
   if (isTurnContinuationBoundaryEvent(event)) return false;
   if (event.type !== 'done' && event.type !== 'status') return false;
@@ -185,7 +143,7 @@ export function createHostSessionActivityTracker(ports: HostSessionActivityTrack
   const stoppingSessions = new Set<string>();
   const stoppedSessions = new Map<string, number>();
   const silentStopPending = new Set<string>();
-  const deferredCompletions = new Map<string, AgentEvent>();
+  const deferredCompletions = new DeferredSessionCompletions(id => ports.hasPendingQueuedWork?.(id) === true, MAX_SILENT_STOP_PENDING);
   const standaloneInteractionSessions = new Set<string>();
   const pendingAutoResumeErrors = new Map<string, AgentEvent>();
   let foregroundSummaryKey = '';
@@ -341,10 +299,7 @@ export function createHostSessionActivityTracker(ports: HostSessionActivityTrack
   };
 
   const applySettledCompletion = (sessionId: string, doneEvent: AgentEvent) => {
-    if (ports.hasPendingQueuedWork?.(sessionId) === true) {
-      lruSet(deferredCompletions, sessionId, doneEvent, MAX_SILENT_STOP_PENDING);
-      return;
-    }
+    if (deferredCompletions.deferIfPending(sessionId, doneEvent)) return;
     deferredCompletions.delete(sessionId);
     if (applyAgentIslandEvent(state, hydrateMeta(sessionId), doneEvent, now())) {
       ensureSessionMetaHydrated(sessionId);
@@ -384,12 +339,9 @@ export function createHostSessionActivityTracker(ports: HostSessionActivityTrack
       }
 
       if (event.type === 'queue_emptied') {
-        const deferred = deferredCompletions.get(id);
-        if (deferred && ports.hasPendingQueuedWork?.(id) !== true) {
-          deferredCompletions.delete(id);
-          if (!stoppedSessions.has(id) && !stoppingSessions.has(id)) {
-            if (applyAgentIslandEvent(state, hydrateMeta(id), deferred, now())) publishNow();
-          }
+        const deferred = deferredCompletions.takeIfReady(id);
+        if (deferred && !stoppedSessions.has(id) && !stoppingSessions.has(id)) {
+          if (applyAgentIslandEvent(state, hydrateMeta(id), deferred.event, now())) publishNow();
         }
         return;
       }

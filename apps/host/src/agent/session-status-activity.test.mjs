@@ -321,6 +321,15 @@ test('Host session activity tracker suppresses autoResumePending errors, retains
     tracker.handleEvent({ sessionId: 's-queue', event: { type: 'status', data: { isRunning: true } } });
     tracker.handleEvent({ sessionId: 's-queue', event: { type: 'done', data: {} } });
     assert.equal(tracker.getSessionActivity('s-queue')?.phase, 'running');
+    // The next queued turn starts before a late empty notification for the previous one.
+    tracker.handleEvent({ sessionId: 's-queue', event: { type: 'status', data: { isRunning: true } } });
+    queued = false;
+    tracker.handleEvent({ type: 'queue_emptied', sessionId: 's-queue' });
+    assert.equal(tracker.getSessionActivity('s-queue')?.phase, 'running');
+
+    // Removing the last pending input during persistence must settle this turn's completion.
+    queued = true;
+    tracker.handleEvent({ sessionId: 's-queue', event: { type: 'done', data: {} } });
     queued = false;
     tracker.handleEvent({ type: 'input_projection', sessionId: 's-queue', projection: { sessionId: 's-queue', turnInProgress: true, pendingQueue: [] } });
     assert.equal(tracker.getSessionActivity('s-queue')?.phase, 'running');
