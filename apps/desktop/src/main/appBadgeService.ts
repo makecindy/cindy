@@ -53,10 +53,10 @@ export function initAppBadgeService(deps: AppBadgeServiceDeps): void {
     if (!isDataOwnerPushStamp(snapshot)) {
       throwIpcError('INVALID_PARAMS', 'App attention snapshot requires an owner stamp');
     }
-    const { count, sessionIds, windowsSilentIncrease = 0 } = snapshot as typeof snapshot & {
+    const { count, sessionIds, windowsHasNewAttention } = snapshot as typeof snapshot & {
       count?: unknown;
       sessionIds?: unknown;
-      windowsSilentIncrease?: unknown;
+      windowsHasNewAttention?: unknown;
     };
     if (
       typeof count !== 'number' ||
@@ -66,13 +66,8 @@ export function initAppBadgeService(deps: AppBadgeServiceDeps): void {
     ) {
       throwIpcError('INVALID_PARAMS', 'App attention count exceeds the supported inventory range');
     }
-    if (
-      typeof windowsSilentIncrease !== 'number' ||
-      !Number.isSafeInteger(windowsSilentIncrease) ||
-      windowsSilentIncrease < 0 ||
-      windowsSilentIncrease > count
-    ) {
-      throwIpcError('INVALID_PARAMS', 'Windows silent increase must be within the badge count');
+    if (windowsHasNewAttention !== undefined && typeof windowsHasNewAttention !== 'boolean') {
+      throwIpcError('INVALID_PARAMS', 'Windows new attention must be a boolean');
     }
     if (!Array.isArray(sessionIds) || sessionIds.length > MAX_SNAPSHOT_SESSION_IDS) {
       throwIpcError('INVALID_PARAMS', 'App attention snapshot requires session IDs');
@@ -101,8 +96,9 @@ export function initAppBadgeService(deps: AppBadgeServiceDeps): void {
     projectedAttentionCount = count;
     // 曾进入普通目录的任务始终归投影管理，删除/断连后不能被旧通知重新计入。
     for (const sessionId of uniqueSessionIds) projectedSessionIds.add(sessionId);
-    if (count !== previousCount) {
-      applyBadge(count === 0 || count - previousCount > windowsSilentIncrease);
+    const flash = process.platform === 'win32' && (windowsHasNewAttention ?? count > previousCount);
+    if (count !== previousCount || (count > 0 && flash)) {
+      applyBadge(count === 0 || flash);
     }
   });
   ipcMain.handle(

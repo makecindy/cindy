@@ -365,7 +365,7 @@ it('keeps muted group unread in navigation without adding it to the Windows task
   view.rerender(<AppBadgeAttentionSync />);
   expect(state.publish).toHaveBeenLastCalledWith(expect.objectContaining({
     count: 4,
-    windowsSilentIncrease: 1,
+    windowsHasNewAttention: false,
   }));
 
   botState.groups = [{ ...group, notificationMode: 'none' }];
@@ -378,6 +378,34 @@ it('keeps muted group unread in navigation without adding it to the Windows task
   view.rerender(<AppBadgeAttentionSync />);
   expect(state.publish).toHaveBeenLastCalledWith(expect.objectContaining({
     count: 4,
-    windowsSilentIncrease: 1,
+    windowsHasNewAttention: false,
+  }));
+});
+
+// PR #13211: a new unread group must request a Windows flash even when another
+// group is muted in the same refresh. The total alone can stay unchanged (unit).
+it('requests a Windows flash for a new unread group in a mixed refresh', () => {
+  vi.stubGlobal('electronAPI', { platform: 'win32', notificationSetAppAttentionCount: state.publish });
+  const restored = { id: 'restored', notificationMode: 'none' };
+  const silenced = { id: 'silenced', notificationMode: 'all' };
+  const arriving = { id: 'arriving', notificationMode: 'all' };
+  const read = { id: 'read', notificationMode: 'all' };
+  botState.groups = [restored, silenced, arriving, read];
+  botState.unreadGroups = new Set([restored.id, silenced.id, read.id]);
+  const view = render(<AppBadgeAttentionSync />);
+  expect(state.publish).toHaveBeenLastCalledWith(expect.objectContaining({ count: 5 }));
+
+  state.publish.mockClear();
+  botState.groups = [
+    { ...restored, notificationMode: 'all' },
+    { ...silenced, notificationMode: 'none' },
+    arriving,
+    read,
+  ];
+  botState.unreadGroups = new Set([restored.id, silenced.id, arriving.id]);
+  view.rerender(<AppBadgeAttentionSync />);
+  expect(state.publish).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+    count: 5,
+    windowsHasNewAttention: true,
   }));
 });

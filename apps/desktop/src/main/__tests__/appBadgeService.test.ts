@@ -393,17 +393,20 @@ describe('appBadgeService', () => {
     expect(flashFrame).toHaveBeenLastCalledWith(false);
   });
 
-  // Re-enabling notifications can restore an unread group without a new alert (unit).
-  it('only flashes Windows for an increase beyond the restored unread groups', async () => {
+  // PR #13211: the badge IPC distinguishes a quiet restoration from a new alert
+  // even if the total stays the same or falls in a mixed refresh (unit).
+  it('flashes Windows for new attention independently of a positive total change', async () => {
     await freshService('win32');
     const send = registeredHandlers.get('notification:set-app-attention-count')!;
     const snapshot = { sessionIds: [], dataOwnerId: owner.dataOwnerId, ownerGeneration: owner.generation };
-    await send({ sender: mainWebContents }, { ...snapshot, count: 1, windowsSilentIncrease: 1 });
-    expect(setOverlayIcon).toHaveBeenLastCalledWith(overlayIcon, 'Tasks needing attention: 1');
+    await send({ sender: mainWebContents }, { ...snapshot, count: 2, windowsHasNewAttention: false });
+    expect(setOverlayIcon).toHaveBeenLastCalledWith(overlayIcon, 'Tasks needing attention: 2');
     expect(flashFrame).not.toHaveBeenCalled();
 
-    await send({ sender: mainWebContents }, { ...snapshot, count: 3, windowsSilentIncrease: 1 });
-    expect(flashFrame).toHaveBeenCalledWith(true);
+    await send({ sender: mainWebContents }, { ...snapshot, count: 2, windowsHasNewAttention: true });
+    await send({ sender: mainWebContents }, { ...snapshot, count: 1, windowsHasNewAttention: true });
+    expect(setOverlayIcon).toHaveBeenLastCalledWith(overlayIcon, 'Tasks needing attention: 1');
+    expect(flashFrame.mock.calls).toEqual([[true], [true]]);
   });
 
   it('refreshes Windows descriptions without changing attention or flashing again', async () => {

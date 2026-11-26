@@ -52,6 +52,8 @@ export function AppBadgeAttentionSync() {
     count: number;
     sessionIds: string[];
     mutedGroupIds: Set<string>;
+    unreadBadgeGroupIds: Set<string>;
+    nonGroupCount: number;
   } | null>(null);
   const { sessions, isLoading, error } = useCCSessions({ includeArchived: 'active' });
   // all 桶保留已归档目录 ID 用于通知去重；不能让它的历史上限挤掉 active 桶。
@@ -104,23 +106,27 @@ export function AppBadgeAttentionSync() {
     const mutedGroupIds = new Set(
       isWindows ? groups.filter(group => group.notificationMode === 'none').map(group => group.id) : [],
     );
-    const badgeGroups = unreadGroups.filter(group => !mutedGroupIds.has(group.id));
-    // List refreshes can combine message arrivals and preference changes.
-    // A newly unmuted group's unread can update the badge but cannot prove a live alert.
-    const windowsSilentIncrease = previous
-      ? badgeGroups.filter(group => previous.mutedGroupIds.has(group.id)).length
-      : 0;
-    const badgeCount = count + unreadLocalBots + badgeGroups.length;
-    const next = { owner, count: badgeCount, sessionIds: catalogSessionIds, mutedGroupIds };
+    const unreadBadgeGroupIds = new Set(
+      unreadGroups.filter(group => !mutedGroupIds.has(group.id)).map(group => group.id),
+    );
+    const nonGroupCount = count + unreadLocalBots;
+    const badgeCount = nonGroupCount + unreadBadgeGroupIds.size;
+    // Batch refreshes can restore muted unread and remove old attention while new unread arrives.
+    const windowsHasNewAttention = isWindows && previous
+      ? nonGroupCount > previous.nonGroupCount || [...unreadBadgeGroupIds].some(
+          id => !previous.unreadBadgeGroupIds.has(id) && !previous.mutedGroupIds.has(id),
+        )
+      : undefined;
+    const next = { owner, count: badgeCount, sessionIds: catalogSessionIds, mutedGroupIds, unreadBadgeGroupIds, nonGroupCount };
     previousBadge.current = next;
-    if (previous?.count === badgeCount && previous.sessionIds === catalogSessionIds) return;
+    if (previous?.count === badgeCount && previous.sessionIds === catalogSessionIds && !windowsHasNewAttention) return;
     void window.electronAPI
       .notificationSetAppAttentionCount({
         count: badgeCount,
         sessionIds: catalogSessionIds,
         dataOwnerId: owner.dataOwnerId,
         ownerGeneration: owner.generation,
-        ...(windowsSilentIncrease > 0 ? { windowsSilentIncrease } : {}),
+        ...(windowsHasNewAttention !== undefined ? { windowsHasNewAttention } : {}),
       })
       .catch((err: unknown) => {
         if (previousBadge.current === next) previousBadge.current = previous;
