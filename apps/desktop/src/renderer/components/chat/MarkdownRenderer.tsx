@@ -217,11 +217,12 @@ function isMermaidCodeChild(child: ReactNode): boolean {
 // 跳过 link 内 text,不会把 `session/<uuid>` 误当相对路径)。两个数组都是模块级
 // 常量,引用稳定,不破坏 react-markdown 的 re-parse 优化。
 // remarkMath: `$...$` / `$$...$$` → inlineMath / math 节点(micromark 语法扩展,
-// parse 阶段生效,与其它 transformer 的相对顺序无关)。`\(...\)` / `\[...\]` 定界
-// 符在 parse 前由 normalizeMathDelimiters 归一化成 dollar 形式(desktop / mobile
-// 共用实现,见 @cindy/maker-shared 的 mathMarkdown.ts)。remarkStrictInlineMath
-// 紧随其后,把松散配对的 inlineMath(货币文本、跨 code span)降级回原文,
-// 规则与 mobile parser 对齐。
+// parse 阶段生效)。`\(...\)` / `\[...\]` 定界符在 parse 前由 normalizeMathDelimiters
+// 归一化成 dollar 形式(desktop / mobile 共用实现,见 @cindy/maker-shared 的
+// mathMarkdown.ts)。remarkStrictInlineMath 紧随 remarkMath 注册,在 micromark
+// 词法层替换松散的 inline `mathText` tokenizer(规则与 mobile parser 对齐),
+// 让货币文本/跨反引号/跨行的 `$` 在分词阶段直接回退成普通字符,不吞掉两个 `$`
+// 之间的行内代码、链接或加粗。
 // remarkGfm singleTilde:false — 删除线只认标准 GFM 的 `~~text~~`,单个 `~` 保持
 // 字面量。默认 singleTilde:true 会把「4~6……4~6」这类区间写法中间整段划成删除线,
 // mobile 自研 parser(messageMarkdown.ts)本就只匹配 `~~`,此处对齐。

@@ -2071,6 +2071,76 @@ describe('LaTeX math(块级 $$ 围栏与 inline $ 定界符)', () => {
       },
     ]);
   });
+
+  // 截图同形回归(双端一致): 含 `\[...\]` 转义方括号的会话/普通/本地链接在表格与有序列表中
+  // 不被误转成 display math 块, 且移动端链接解析器正确匹配并反转义 label 里的方括号。
+  it('转义方括号链接在表格、有序列表与货币混排中保持完整结构(双端一致)', () => {
+    const md = [
+      '| 类别 | 数量 | 说明与代表项 |',
+      '| --- | ---: | --- |',
+      '| 过期定时任务 | 10 | `torchlight2` 旧巡检，如 [\\[Schedule\\] PR 审查](cindy://session/s1?device=d1)、[\\[Schedule\\] 每日汇总](cindy://session/s2?device=d1) 等 |',
+      '',
+      '1. [NAS管理](cindy://session/s3)（11-20）',
+      '2. [\\[飞书·Cindy·CRT鸣谢添加感谢zkyo创意\\] 805a77](cindy://session/s4)（10-21）',
+      '3. [新西兰公司年报缴纳指南](cindy://session/s5)（10-11）— GST（$11,629.25）付款码 `GST31032027` 与 [码头泊位](cindy://session/s6) NZ$5M。',
+    ].join('\n');
+
+    const blocks = parseMobileMarkdown(md);
+    expect(blocks.map((block) => block.type)).toEqual([
+      'table',
+      'list_item',
+      'list_item',
+      'list_item',
+    ]);
+
+    const table = blocks[0];
+    if (table.type !== 'table') throw new Error('expected table');
+    expect(table.rows).toHaveLength(1);
+    expect(table.rows[0].cells[2]).toEqual([
+      { type: 'code', text: 'torchlight2' },
+      { type: 'text', text: ' 旧巡检，如 ' },
+      { type: 'link', text: '[Schedule] PR 审查', url: 'cindy://session/s1?device=d1' },
+      { type: 'text', text: '、' },
+      { type: 'link', text: '[Schedule] 每日汇总', url: 'cindy://session/s2?device=d1' },
+      { type: 'text', text: ' 等' },
+    ]);
+
+    const item2 = blocks[2];
+    if (item2.type !== 'list_item') throw new Error('expected list_item');
+    expect(item2.inlines).toEqual([
+      { type: 'link', text: '[飞书·Cindy·CRT鸣谢添加感谢zkyo创意] 805a77', url: 'cindy://session/s4' },
+      { type: 'text', text: '（10-21）' },
+    ]);
+
+    const item3 = blocks[3];
+    if (item3.type !== 'list_item') throw new Error('expected list_item');
+    expect(item3.inlines).toEqual([
+      { type: 'link', text: '新西兰公司年报缴纳指南', url: 'cindy://session/s5' },
+      { type: 'text', text: '（10-11）— GST（$11,629.25）付款码 ' },
+      { type: 'code', text: 'GST31032027' },
+      { type: 'text', text: ' 与 ' },
+      { type: 'link', text: '码头泊位', url: 'cindy://session/s6' },
+      { type: 'text', text: ' NZ$5M。' },
+    ]);
+  });
+
+  it('移动端链接 label 支持转义方括号、平衡嵌套方括号与本地路径链接, 异常大量 ]( 保持线性', () => {
+    expect(
+      parseMobileMarkdownInlines(
+        '见 [[WIP] 文档](https://example.com/a) 和 [\\[RFC\\] 源码](src/a.ts "标题")',
+      ),
+    ).toEqual([
+      { type: 'text', text: '见 ' },
+      { type: 'link', text: '[WIP] 文档', url: 'https://example.com/a' },
+      { type: 'text', text: ' 和 ' },
+      { type: 'link', text: '[RFC] 源码', url: 'src/a.ts' },
+    ]);
+
+    const adversarial = '[x ' + '](https://example.com/a) '.repeat(4000);
+    const started = Date.now();
+    parseMobileMarkdownInlines(adversarial);
+    expect(Date.now() - started).toBeLessThan(1000);
+  });
 });
 
 describe('title 剥离不得灾难性回溯(ReDoS)', () => {

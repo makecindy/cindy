@@ -11,7 +11,7 @@ import {
   resolveChatAbsPath,
   toWorkdirRel,
 } from '@/session/chatPathCandidate';
-import { DEEP_LINK_SCHEME_GROUP } from '@/session/sessionLinks';
+import { DEEP_LINK_SCHEME_GROUP, unescapeMarkdownLabelBrackets } from '@/session/sessionLinks';
 // App bootstrap initializes this instance; parsing summaries must not initialize React bindings.
 import i18n from 'i18next';
 import { createMarkdownRegexSearch } from './markdownRegexSearch';
@@ -1304,6 +1304,8 @@ function createInlineParseContext(input: string, startsInsideHtmlComment: boolea
   let probe: string | undefined;
   let imagesAllowed: boolean | undefined;
   let bareUrl: ReturnType<typeof matchBareUrl> | undefined;
+  let markdownLink: ReturnType<typeof matchMarkdownLink> | undefined;
+  let localPathLink: ReturnType<typeof matchLocalPathLink> | undefined;
   const commentProbe = () => (probe ??= blankEscapedAngles(blankCodeSpans(input)));
   return {
     startsInsideHtmlComment,
@@ -1312,6 +1314,18 @@ function createInlineParseContext(input: string, startsInsideHtmlComment: boolea
     hasMarkdownImage: input.includes('!['),
     hasHtmlImage: HTML_IMG_HINT_RE.test(input),
     commentProbe,
+    nextLink: (from: number) => {
+      if (markdownLink === undefined || (markdownLink !== null && markdownLink.index < from)) {
+        markdownLink = matchMarkdownLink(input, from);
+      }
+      return markdownLink;
+    },
+    nextLocalPathLink: (from: number) => {
+      if (localPathLink === undefined || (localPathLink !== null && localPathLink.index < from)) {
+        localPathLink = matchLocalPathLink(input, from);
+      }
+      return localPathLink;
+    },
     nextBareUrl: (from: number) => {
       // parseInlines advances monotonically. Reuse only this paragraph's pending
       // candidate (including a miss), never a token whose start was consumed.
@@ -1349,29 +1363,13 @@ function findNextInlineToken(
     // markdown 源码,review P1)。cindy-media 只收字节仓严格地址中的视频
     // 后缀;由 managedMediaKind 让渲染层走既有媒体查看器/远端取件,绝不把
     // 私有 scheme 交给 Linking.openURL。
-    context.search.next('Link', from, () => matchRegex(
-      input,
-      from,
-      new RegExp(
-        `\\[([^\\]]+)\\]\\(((?:https?://|(?:${DEEP_LINK_SCHEME_GROUP})://(?:session|project)/)[^)\\s]+|cindy-media://blobs/[0-9a-f]{64}\\.(?:mp4|webm|mov))\\)`,
-        'g',
-      ),
-      (match) => {
-        const url = trimUrlPunctuation(match[2]);
-        return {
-          type: 'link' as const,
-          text: match[1],
-          url,
-          ...(url.startsWith('cindy-media://') ? { managedMediaKind: 'video' as const } : {}),
-        };
-      },
-      undefined,
-      context.search.exec,
-    )),
+    // label 采用 CommonMark 方括号平衡回扫(支持 `[\[Schedule\] 标题](url)` /
+    // `[[WIP] 标题](url)` 等转义或嵌套方括号,并在展示前反转义 `\[` / `\]`)。
+    context.nextLink(from),
     // 本地路径链接:[README.md](/abs/path/README.md:17) 这类模型高频输出形态。
     // URL 经 classifyChatPathLinkTarget 判形状(http/session 之外的路径形态才收),
     // 渲染层再经被控端 stat 决定点亮 chip 还是保持纯文本标签。
-    context.search.next('LocalPathLink', from, () => matchLocalPathLink(input, from, context)),
+    context.nextLocalPathLink(from),
     // 正文纯文本里裸写的本地路径(`见 src/App.tsx 第 20 行`、`改的是 C:\proj\a.ts`):
     // 模型高频形态,桌面端由 remarkLocalPathLinks 切成 link 节点,这里补齐同一入口。
     // 产出 link inline 后与 `[label](path)` 形态共用 LinkPathChipSpan → 远端 stat →
@@ -1451,6 +1449,63 @@ function matchBareUrl(input: string, from: number) {
   return raw;
 }
 
+// 从 `](` 的 `]` 处向左按 CommonMark 方括号平衡语义找配对 `[`(跳过反斜杠转义
+// `\[` / `\]`,不跨行,不越过 minStart),与 sessionLinks.findMarkdownLabelStart 同口径。
+function findMarkdownLabelStartFrom(
+  text: string,
+  closeBracketIndex: number,
+  minStart: number,
+): number {
+  if (isBackslashEscaped(text, closeBracketIndex)) return -1;
+  let depth = 1;
+  for (let cursor = closeBracketIndex - 1; cursor >= minStart; cursor -= 1) {
+    const code = text.charCodeAt(cursor);
+    if (code === 10 /* \n */) return -1;
+    if (code !== 91 /* [ */ && code !== 93 /* ] */) continue;
+    if (isBackslashEscaped(text, cursor)) continue;
+    if (code === 93) depth += 1;
+    else if (--depth === 0) return cursor;
+  }
+  return -1;
+}
+
+const MARKDOWN_LINK_CLOSE_RE_SOURCE =
+  `\\]\\(((?:https?://|(?:${DEEP_LINK_SCHEME_GROUP})://(?:session|project)/)[^)\\s]+|cindy-media://blobs/[0-9a-f]{64}\\.(?:mp4|webm|mov))\\)`;
+
+function matchMarkdownLink(
+  input: string,
+  from: number,
+): { index: number; end: number; inline: MobileMarkdownInline } | null {
+  if (input.indexOf('](', from) === -1 || input.indexOf('[', from) === -1) return null;
+  const closeRe = new RegExp(MARKDOWN_LINK_CLOSE_RE_SOURCE, 'g');
+  closeRe.lastIndex = from;
+  let minStart = from;
+  let match: RegExpExecArray | null;
+  while ((match = closeRe.exec(input)) !== null) {
+    const closeIdx = match.index;
+    if (isBackslashEscaped(input, closeIdx)) continue;
+    const labelStart = findMarkdownLabelStartFrom(input, closeIdx, minStart);
+    if (labelStart === -1) {
+      // 未找到配对 `[`:该 `]` 之前没有可跨过的未闭合 `[`,推进下界保持严格 O(n)
+      minStart = closeIdx + 1;
+      continue;
+    }
+    if (closeIdx <= labelStart + 1) continue;
+    const url = trimUrlPunctuation(match[1]);
+    return {
+      index: labelStart,
+      end: closeIdx + match[0].length,
+      inline: {
+        type: 'link',
+        text: unescapeMarkdownLabelBrackets(input.slice(labelStart + 1, closeIdx)),
+        url,
+        ...(url.startsWith('cindy-media://') ? { managedMediaKind: 'video' as const } : {}),
+      },
+    };
+  }
+  return null;
+}
+
 // 本地路径链接 matcher:通用 [text](url) 形态逐个 exec,URL 过
 // classifyChatPathLinkTarget 形状门(http(s) / 会话深链 / mailto 等 scheme 不收,
 // 那些归原有 matcher);`![alt](url)` 是图片语法,前置 `!` 时跳过——图片 matcher
@@ -1465,22 +1520,34 @@ function matchBareUrl(input: string, from: number) {
 function matchLocalPathLink(
   input: string,
   from: number,
-  context: InlineParseContext,
 ): { index: number; end: number; inline: MobileMarkdownInline } | null {
-  if (!input.includes('](')) return null;
+  if (input.indexOf('](', from) === -1 || input.indexOf('[', from) === -1) return null;
   // 正则每次调用新建:g 标志的 lastIndex 是可变状态,模块级共享在提前 return /
   // 未过重置路径时会漏匹配(bot review 实捉);同文件其它 matcher 也是每调用新建字面量。
-  const re = /\[([^\]]+)\]\((<[^>\n]+>|(?:[^()\n]|\([^()\n]*\))+)\)/g;
-  re.lastIndex = from;
+  const closeRe = /\]\((<[^>\n]+>|(?:[^()\n]|\([^()\n]*\))+)\)/g;
+  closeRe.lastIndex = from;
+  let minStart = from;
   let match: RegExpExecArray | null;
-  while ((match = context.search.exec(re)) !== null) {
-    if (match.index > 0 && input[match.index - 1] === '!') continue;
-    const url = parseLocalMarkdownDestination(match[2]);
+  while ((match = closeRe.exec(input)) !== null) {
+    const closeIdx = match.index;
+    if (isBackslashEscaped(input, closeIdx)) continue;
+    const labelStart = findMarkdownLabelStartFrom(input, closeIdx, minStart);
+    if (labelStart === -1) {
+      minStart = closeIdx + 1;
+      continue;
+    }
+    if (closeIdx <= labelStart + 1) continue;
+    if (labelStart > 0 && input[labelStart - 1] === '!') continue;
+    const url = parseLocalMarkdownDestination(match[1]);
     if (!url || !classifyChatPathLinkTarget(url)) continue;
     return {
-      index: match.index,
-      end: match.index + match[0].length,
-      inline: { type: 'link', text: match[1], url },
+      index: labelStart,
+      end: closeIdx + match[0].length,
+      inline: {
+        type: 'link',
+        text: unescapeMarkdownLabelBrackets(input.slice(labelStart + 1, closeIdx)),
+        url,
+      },
     };
   }
   return null;
