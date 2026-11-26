@@ -1037,6 +1037,8 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
   // enabled, approved plugin provides a harness; built-in engines stay untouched either way.
   const listPluginEngineSkills = createPluginEngineSkillLister({
     listManagedSkills: () => options.getManagedSkills?.() ?? Promise.resolve([]),
+    // SkillHub discovery isolation is M2 (release table section 4), matching Claude/Codex/Pi above;
+    // once M2 adds Host's isolated customization scanner, wire it here too.
     scanCustomizations: (_engine, scanOpts) => scanPiCustomizations(scanOpts),
     readDisabledSkillPaths: () => readDisabledSkillPaths(),
   });
