@@ -1,5 +1,5 @@
 import { isComposerAttachmentDrag } from '@/lib/composerDrop';
-import { useAlternateDraftModel } from './alternateDraftModel';
+import { forgetRemoteAlternateDraftModel, useAlternateDraftModel } from './alternateDraftModel';
 import { useProjectInfo } from './hooks/useProjectInfo';
 import { ProjectSettingsDialog } from './sidebar/ProjectSettingsDialog';
 import { ResolvedProjectIcon } from './sidebar/ResolvedProjectIcon';
@@ -1288,6 +1288,7 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
           active: activePluginModel,
           onSelect: (model: GhostPickerModel) => {
             setAlternateModel(null);
+            forgetRemoteAlternateDraftModel();
             patchDraft({
               pluginModel: { pluginId: model.pluginId, modelId: model.id }, modelGroup: null, pluginEngine: null,
             });
@@ -1492,6 +1493,7 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
               return;
             }
             setAlternateModel(null);
+            forgetRemoteAlternateDraftModel();
             const currentDraft = getDraft();
             const leavesAgentDevice = !!currentDraft.agentDeviceId;
             if (leavesAgentDevice) {
@@ -1587,6 +1589,7 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
           active: activeModelGroup,
           onSelect: (selection: ModelGroupSelection) => {
             setAlternateModel(null);
+            forgetRemoteAlternateDraftModel();
             setRemoteDraftPluginEngine(null);
             patchDraft({ modelGroup: selection, pluginModel: null, pluginEngine: null });
           },
@@ -3546,7 +3549,8 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
       return;
     }
     handledDialogueTargetRequestRef.current = dialogueTargetRequest.requestId;
-    setAlternateModel(null);
+    // 另起新建时只丢本机替代模型；远程替代与正常选的远程模型一样沿用(见 alternateDraftModel)。
+    if (!alternateModel?.agentDevice) setAlternateModel(null);
     // 同路由的对话目标是比在途目录恢复更新的用户选择。先推进同一 sequence owner，
     // 让旧 restore completion 只能释放锁，不能把目录重新写回草稿。
     modePickerSelectionSeqRef.current += 1;
@@ -3586,7 +3590,11 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
     const token = `${dataOwnerId}:${location.key}`;
     if (handledGenericDefaultLocationRef.current === token) return;
     handledGenericDefaultLocationRef.current = token;
-    if (location.state?.workspacePrompt === 'generic' && alternateModel?.pageKey !== location.key) setAlternateModel(null);
+    if (
+      location.state?.workspacePrompt === 'generic' &&
+      alternateModel?.pageKey !== location.key &&
+      !alternateModel?.agentDevice
+    ) setAlternateModel(null);
     if (location.state?.restoreLastCreatedWorkspace === true) {
       const workspace = getLastCreatedTaskWorkspace(dataOwnerId);
       if (workspace) {
@@ -4138,6 +4146,7 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
         return;
       }
       setAlternateModel(null);
+      forgetRemoteAlternateDraftModel();
       setRemoteDraftPluginEngine(null);
       // 收藏锚点写进**目标引擎的槽**(Chris 2026-08-19 起持久化,见 draftFavoriteAnchor 的
       // 说明):记的是 uid + **本次写进草稿的 wire id**,失效判定才有可比的同类值。
@@ -4501,6 +4510,7 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
     log.warn('[new-maker] selected agent computer is no longer selectable, running the agent here');
     if (localAlternate) {
       setAlternateModel(null);
+      forgetRemoteAlternateDraftModel();
       setDlSel(null);
       return;
     }
@@ -8315,7 +8325,8 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
                       usesDeviceCatalog ? undefined : handleRememberedEffortChange
                     }
                   />
-                  {!newGoalOpen && (localModelIssueText || localAlternate) && (
+                  {/* 远程替代会沿用到之后的新建任务，不再是「仅用于本次任务」。 */}
+                  {!newGoalOpen && (localModelIssueText || (localAlternate && !localAlternate.agentDevice)) && (
                     <p role="status" className="mt-2 px-3 text-12 text-[var(--text-secondary)]">
                       {localModelIssueText ?? t('ccAgent.draft.savedModel.thisTaskOnly')}
                     </p>
