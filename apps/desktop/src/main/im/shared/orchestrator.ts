@@ -20,6 +20,7 @@ import { bindingStore } from '../binding';
 import {
   acquirePendingAgentSwitchForDirectSend,
   acquirePendingAgentSwitchForImSend,
+  canSwitchTaskAccount,
   prepareUnhealthySessionForSend,
   registerSwitchedSessionVendorOptionsResolver,
 } from '../../maker-ipc/register';
@@ -183,7 +184,8 @@ export function createImOrchestrator(
         : acquirePendingAgentSwitchForDirectSend(sessionId),
     channelDefaultRoute: defaultRouteSync,
     // 发送前故障恢复与桌面直发同源；健康上下文交给 Session 原生压缩。
-    prepareUnhealthySession: async (sessionId) => { await prepareUnhealthySessionForSend(sessionId); },
+    canSwitchAccount: canSwitchTaskAccount,
+    prepareUnhealthySession: async (sessionId, retry) => { await prepareUnhealthySessionForSend(sessionId, retry); },
     // 伙伴自有连接: 消息落在伙伴的主任务 / 隐藏专线上。
     ...(options.companionBotId
       ? { companion: createImCompanionRouteDeps(options.companionBotId) }

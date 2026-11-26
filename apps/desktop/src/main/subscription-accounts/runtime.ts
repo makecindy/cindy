@@ -3026,7 +3026,7 @@ export async function acquireSubscriptionAccount(
       const signals = providerGroupFailureSignals(error);
       const decision = decideProviderGroupFailure(signals, phase);
       if (decision.action !== 'switch') return false;
-      if (api) return decision.cause === 'auth' || decision.cause === 'usage-limit';
+      if (api) return decision.cause === 'auth' || decision.cause === 'usage-limit' || decision.cause === 'overload';
       // Same causes and durations as a group member (provider-groups.md §5 冷却): the task model
       // until its quota resets; login or overload failures cool the whole account briefly.
       if (!decision.cool) return true;
