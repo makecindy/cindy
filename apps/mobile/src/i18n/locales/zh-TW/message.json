@@ -267,7 +267,7 @@
     "waitingForNamedComputer": "連上{{name}}後自動傳送",
     "reconnectComputer": "立即重連",
     "pendingDelivery": "待送達",
-    "pendingDeliveryHint": "訊息已儲存在手機上，連線恢復後會繼續傳送。",
+    "pendingDeliveryHint": "訊息已儲存在手機上，正在等待電腦確認。",
     "waitingForComputer": "等電腦連上後傳送",
     "waitingForNetwork": "等網路恢復後傳送",
     "queued": "排隊中",

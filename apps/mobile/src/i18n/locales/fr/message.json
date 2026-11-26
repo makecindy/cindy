@@ -267,7 +267,7 @@
     "waitingForNamedComputer": "Envoi automatique dès que {{name}} se reconnecte",
     "reconnectComputer": "Reconnecter",
     "pendingDelivery": "En attente de livraison",
-    "pendingDeliveryHint": "Message enregistré sur ce téléphone. L’envoi reprendra à la reconnexion.",
+    "pendingDeliveryHint": "Message enregistré sur ce téléphone. En attente de confirmation de l’ordinateur.",
     "waitingForComputer": "Envoi au retour de l'ordinateur",
     "waitingForNetwork": "Envoi au retour du réseau",
     "queued": "En file d'attente",

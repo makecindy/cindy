@@ -267,7 +267,7 @@
     "waitingForNamedComputer": "{{name}} に接続したら自動送信",
     "reconnectComputer": "再接続",
     "pendingDelivery": "配信待ち",
-    "pendingDeliveryHint": "この端末に保存しました。接続が戻ると送信を再開します。",
+    "pendingDeliveryHint": "この端末に保存しました。パソコンからの確認を待っています。",
     "waitingForComputer": "パソコンにつながったら送信",
     "waitingForNetwork": "ネットワークが戻ったら送信",
     "queued": "順番待ち",

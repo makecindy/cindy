@@ -267,7 +267,7 @@
     "waitingForNamedComputer": "Envio automático quando {{name}} se ligar",
     "reconnectComputer": "Voltar a ligar",
     "pendingDelivery": "A aguardar entrega",
-    "pendingDeliveryHint": "Mensagem guardada neste telemóvel. O envio continuará quando a ligação for restabelecida.",
+    "pendingDeliveryHint": "Mensagem guardada neste telemóvel. A aguardar a confirmação do computador.",
     "waitingForComputer": "Será enviado quando o computador voltar a estar disponível",
     "waitingForNetwork": "Será enviado quando voltar a estar online",
     "queued": "Em fila",

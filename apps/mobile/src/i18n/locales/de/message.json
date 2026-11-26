@@ -267,7 +267,7 @@
     "waitingForNamedComputer": "Wird automatisch gesendet, sobald {{name}} verbunden ist",
     "reconnectComputer": "Neu verbinden",
     "pendingDelivery": "Zustellung ausstehend",
-    "pendingDeliveryHint": "Auf diesem Gerät gespeichert. Der Versand wird fortgesetzt, sobald eine Verbindung besteht.",
+    "pendingDeliveryHint": "Auf diesem Gerät gespeichert. Warten auf die Bestätigung des Computers.",
     "waitingForComputer": "Wird gesendet, sobald dein Computer wieder verbunden ist",
     "waitingForNetwork": "Wird gesendet, sobald du wieder online bist",
     "queued": "In der Warteschlange",
