@@ -6,7 +6,7 @@
  * Slack、Discord 和 `/new` 都走这里，避免渠道之间借用同一份用户选择。
  */
 
-import type { AgentKind, Effort, PermissionMode } from '@cindy/maker-core';
+import type { AgentKind, Effort, EngineKind, PermissionMode } from '@cindy/maker-core';
 import { resolveAutomaticImSettings, resolvedImDefaultFingerprint, usesAutomaticImModel } from '../../shared/imAutomaticModel.js';
 import {
   chatEligibleSourcesForModel,
@@ -28,6 +28,8 @@ import {
 import {
   IM_DEFAULT_EFFORT_OVERRIDES,
   IM_DEFAULT_SETTINGS,
+  imDefaultAgentSettingsOf,
+  type ImDefaultAgentEffort,
   type ImDefaultAgentSettings,
   type ImDefaultSettingsChannel,
   type ImDefaultSettings,
@@ -37,6 +39,12 @@ import {
 import { createLogger } from '../logger';
 import { getMaker } from '../maker-host';
 import { getDesktopProviderService } from '../maker-host/createDesktopProviderService';
+import { listPluginEngineViews } from '../maker-ipc/pluginEnginesIpc.js';
+import {
+  admitPluginEngineSwitchTarget,
+  isDisallowedPluginEngineDeviceId,
+} from '../maker-ipc/pluginEngineSessionAdmission.js';
+import { readRemotePluginEngines } from '../remote-agent/controller/deviceCatalog.js';
 import { readImDefaultSettings } from './defaultSettingsStore';
 import { readImRemoteProviderRoute } from './remoteProviderRoute';
 import { getModelVisibilityOverride, waitForModelVisibilityMirror } from '../maker-host/model-visibility-mirror';
@@ -80,9 +88,9 @@ export async function projectImDefaultSettings<T extends ImDefaultSettings>(raw:
 
 export interface ResolvedImSessionDefaults {
   agentDeviceId?: string | null;
-  agentKind: AgentKind;
+  agentKind: EngineKind;
   model: string;
-  effort: Effort;
+  effort: ImDefaultAgentEffort;
   providerId: string | null;
   permissionMode: PermissionMode;
   fastMode: boolean | 'ultrafast';
@@ -93,8 +101,19 @@ export interface ResolvedImSessionDefaults {
 export function getImDefaultEffortFor(
   agentKind: AgentKind,
   modelId: string,
+  overrides?: Readonly<Partial<Record<string, Effort>>>,
+): Effort;
+export function getImDefaultEffortFor(
+  agentKind: EngineKind,
+  modelId: string,
+  overrides?: Readonly<Partial<Record<string, Effort>>>,
+): ImDefaultAgentEffort;
+export function getImDefaultEffortFor(
+  agentKind: EngineKind,
+  modelId: string,
   overrides: Readonly<Partial<Record<string, Effort>>> = IM_DEFAULT_EFFORT_OVERRIDES,
-): Effort {
+): ImDefaultAgentEffort {
+  if (agentKind === 'acp') return '';
   const model = getMaker()
     .getCapabilities(agentKind)
     .availableModels.find((m) => m.id === modelId);
@@ -142,20 +161,49 @@ export async function resolveImSessionDefaults(
     if (!resolved) throw new Error('im default session has no available chat model; connect or enable a model in settings');
     return {
       agentKind: resolved.agentKind,
-      ...resolved.agents[resolved.agentKind],
+      ...imDefaultAgentSettingsOf(resolved, resolved.agentKind),
       permissionMode: raw.permissionMode ?? config.defaultPermissionMode,
       fastMode: false,
       fingerprint: resolvedImDefaultFingerprint(fingerprintImDefaultSettings(raw), resolved),
     };
   }
+  if (raw.agentKind === 'acp') {
+    const acp = imDefaultAgentSettingsOf(raw, 'acp');
+    if (isDisallowedPluginEngineDeviceId(acp.agentDeviceId)) {
+      throw new Error('无效的插件引擎运行位置。请重新选择插件引擎。');
+    }
+    const engines = acp.agentDeviceId
+      ? await readRemotePluginEngines(acp.agentDeviceId)
+      : listPluginEngineViews();
+    const admitted = admitPluginEngineSwitchTarget(
+      {
+        providerId: acp.providerId,
+        model: acp.model,
+        effort: acp.effort,
+        permissionMode: raw.permissionMode ?? config.defaultPermissionMode,
+      },
+      engines,
+    );
+    return {
+      ...(acp.agentDeviceId ? { agentDeviceId: acp.agentDeviceId } : {}),
+      agentKind: 'acp',
+      model: admitted.model,
+      effort: admitted.effort,
+      providerId: acp.providerId,
+      permissionMode: admitted.permissionMode,
+      fastMode: false,
+      fingerprint: fingerprintImDefaultSettings(raw),
+    };
+  }
   const remote = raw.agents[raw.agentKind];
   if (remote.agentDeviceId) {
     const { model } = await readImRemoteProviderRoute({ ...remote, agentDeviceId: remote.agentDeviceId, agentKind: raw.agentKind });
+    const requestedEffort: Effort = remote.effort || 'high';
     return {
       ...remote,
       agentKind: raw.agentKind,
-      effort: model.efforts.includes(remote.effort) || !model.efforts.length
-        ? remote.effort : model.defaultEffort ?? model.efforts[0],
+      effort: model.efforts.includes(requestedEffort) || !model.efforts.length
+        ? requestedEffort : model.defaultEffort ?? model.efforts[0],
       permissionMode: raw.permissionMode ?? config.defaultPermissionMode,
       fastMode: false,
       fingerprint: fingerprintImDefaultSettings(raw),
@@ -181,7 +229,7 @@ export async function resolveImSessionDefaults(
   const effort = resolveEffort(
     agentKind,
     model.modelId,
-    agentSettings.effort,
+    agentSettings.effort || 'high',
     config.effortOverrides,
     providers,
     providerId,
@@ -216,7 +264,7 @@ export function readImDefaultSettingsFingerprint(
  */
 export function readImRawDefaultRoute(channel?: ImDefaultSettingsChannel): ImDefaultRoute {
   const raw = readImDefaultSettings(channel);
-  const settings = raw.agents[raw.agentKind];
+  const settings = imDefaultAgentSettingsOf(raw, raw.agentKind);
   return {
     agentKind: raw.agentKind,
     model: settings.model,
@@ -287,7 +335,7 @@ function pickModel(
   // 硬编码系统兜底同样过准入(PR #744 review 第十五轮):走到这里时该 agent 的
   // 启用来源已全部耗尽,目录可用而硬编码模型也被停用 ⇒ 抛错走 IM 既有失败路径,
   // 绝不让 turnRunner 拿停用模型直建付费会话;目录不可用保持旧兜底(降级窗口)。
-  const systemAgent = IM_DEFAULT_SETTINGS.agentKind;
+  const systemAgent: AgentKind = IM_DEFAULT_SETTINGS.agentKind;
   const systemFallbackModel = IM_DEFAULT_SETTINGS.agents[systemAgent].model;
   if (providers) {
     const lenient = resolveLenientRoute(providers, systemAgent, systemFallbackModel, null);

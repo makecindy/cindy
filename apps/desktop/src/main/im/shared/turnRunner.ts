@@ -773,8 +773,7 @@ function routeOfRow(
 ): ImDefaultRoute {
   return {
     agentDeviceId: row.agentDeviceId ?? null,
-    // Channel default routes are built-in; a plugin-engine row ('acp') simply never matches one.
-    agentKind: row.agentKind as AgentKind,
+    agentKind: row.agentKind,
     model: row.model,
     providerId: row.providerId,
     effort: row.effort,
@@ -2423,7 +2422,7 @@ export function createTurnRunner(
         agentKind,
         workingDir: row.workingDir,
         model: row.model,
-        effort: row.effort,
+        effort: row.effort || undefined,
         permissionMode: row.permissionMode,
         fastMode: row.fastMode,
         // 保留 DB 的 null 语义：Pi 用 null 表示清除显式 provider，不能退化为 undefined。
@@ -2785,7 +2784,7 @@ export function createTurnRunner(
       agentKind: row.agentKind,
       workingDir: row.workingDir,
       model: row.model,
-      effort: row.effort,
+      effort: row.effort || undefined,
       permissionMode: row.permissionMode,
       fastMode: row.fastMode,
       // 保留 DB 的 null 语义：Pi 用 null 表示清除显式 provider，不能退化为 undefined。

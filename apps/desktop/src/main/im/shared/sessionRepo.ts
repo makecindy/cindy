@@ -703,7 +703,8 @@ function rowFromDefaults(
     agentKind: defaults.agentKind,
     workingDir,
     model: defaults.model,
-    effort: defaults.effort,
+    // Plugin engines without effort modes use '' in storage (matching pluginEngineSessionAdmission).
+    effort: defaults.effort as Effort,
     permissionMode: defaults.permissionMode,
     fastMode: defaults.fastMode,
     sdkSessionId: null,
@@ -716,8 +717,7 @@ function rowFromDefaults(
 
 /** 按渠道默认建出 / 重置的行对应的跟随记录; 非默认来源的行返回 null。 */
 function defaultRouteRecordFor(row: ImSessionRow): string | null {
-  // Channel defaults are built-in routes; a task on a plugin engine never follows them.
-  if (!row.defaultRouteFingerprint || row.agentKind === 'acp') return null;
+  if (!row.defaultRouteFingerprint) return null;
   return buildImDefaultRouteRecord(row.defaultRouteFingerprint, {
     agentKind: row.agentKind,
     model: row.model,

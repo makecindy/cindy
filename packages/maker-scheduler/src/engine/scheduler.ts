@@ -189,15 +189,15 @@ function validateScheduleExecutionShape(
       throw new Error('Explicit scheduled model Harness requires a supported Harness and model');
     }
   }
-  // 插件引擎(docs/plans/acp-plugin-bridge.md)支持每次新建任务(含 worktree 与另一台电脑)
-  // 或绑定普通桌面任务临时切换执行；不支持持续会话(scheduler 任务)与脚本执行。
+  // 插件引擎(docs/plans/acp-plugin-bridge.md)支持新建任务(含 worktree 与另一台电脑)、
+  // 持续会话及绑定任意非 SSH 任务(含临时切换)；仅脚本执行不可用。
   // 独立任务只改了其中一半(例如旧端把 agentKind 写回内置引擎)时整份拒绝，不悄悄换引擎。
   if (schedule.agentKind === 'acp' || schedule.modelAgentKind === 'acp') {
-    const boundOrdinaryTask = Boolean(schedule.targetSessionId) && !schedule.persistentSession;
-    const boundFollowsOwnTask = boundOrdinaryTask && !schedule.modelAgentKind && !schedule.model?.trim();
-    const boundBuiltinOverride = boundOrdinaryTask && schedule.modelAgentKind != null && schedule.modelAgentKind !== 'acp';
+    const boundTask = Boolean(schedule.targetSessionId);
+    const boundFollowsOwnTask = boundTask && !schedule.modelAgentKind && !schedule.model?.trim();
+    const boundBuiltinOverride = boundTask && schedule.modelAgentKind != null && schedule.modelAgentKind !== 'acp';
     if (!boundFollowsOwnTask && !boundBuiltinOverride) {
-      if (schedule.modelAgentKind !== 'acp' || (!boundOrdinaryTask && schedule.agentKind !== 'acp')) {
+      if (schedule.modelAgentKind !== 'acp' || (!boundTask && schedule.agentKind !== 'acp')) {
         throw new Error('A plugin engine schedule must choose the plugin engine as its model');
       }
       if (!schedule.providerId?.startsWith(PLUGIN_ENGINE_PROVIDER_PREFIX)
@@ -206,9 +206,6 @@ function validateScheduleExecutionShape(
       }
       if ((schedule.executionMode ?? 'agent') !== 'agent') {
         throw new Error('Script schedules cannot use a plugin engine');
-      }
-      if (schedule.persistentSession) {
-        throw new Error('A plugin engine schedule cannot use a persistent session');
       }
     }
   }

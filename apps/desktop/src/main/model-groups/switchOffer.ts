@@ -40,7 +40,7 @@ export interface ModelGroupSwitchOfferDeps {
 }
 
 function isModelGroupAgentKind(value: unknown): value is ModelGroupAgentKind {
-  return value === 'cc' || value === 'codex' || value === 'pi';
+  return value === 'cc' || value === 'codex' || value === 'pi' || value === 'acp';
 }
 
 /**
@@ -116,9 +116,11 @@ export async function computeModelGroupSwitchOffer(
     pick.index !== null && !('limitedUntilMs' in pick.trace[pick.index]) ? pick : null;
   // 自动接替先在同一引擎的来源里按选法挑(同一引擎内换来源不用交接、上下文不丢)；没有才跨引擎(§4.2，2026-11-26 排查补上)。
   // 横幅里的手动提议照 §6.1 按选法挑，由用户决定。
+  const isSameEngine = (a: { agentKind: ModelGroupAgentKind; providerId: string }, b: { agentKind: ModelGroupAgentKind; providerId: string }) =>
+    a.agentKind === b.agentKind && (a.agentKind !== 'acp' || a.providerId === b.providerId);
   const sameEngine: ModelGroupRoute = {
     ...eligible,
-    candidates: eligible.candidates.map((candidate) => (candidate.agentKind === current.agentKind ? candidate : { ...candidate, off: true })),
+    candidates: eligible.candidates.map((candidate) => (isSameEngine(candidate, current) ? candidate : { ...candidate, off: true })),
   };
   const picked = (recovery && sameEngine.candidates.some((candidate) => !candidate.off) ? usablePick(pickFrom(sameEngine)) : null)
     ?? usablePick(pickFrom(eligible));
@@ -139,6 +141,6 @@ export async function computeModelGroupSwitchOffer(
     sourceName: entry.sourceName,
     ...(recovery && facts[picked.index].effort ? { effort: facts[picked.index].effort } : {}),
     ...(recovery && facts[picked.index].fastMode ? { fastMode: facts[picked.index].fastMode } : {}),
-    crossEngine: candidate.agentKind !== current.agentKind,
+    crossEngine: !isSameEngine(candidate, current),
   };
 }

@@ -229,36 +229,23 @@ function boundPluginEngineRefusal(
   const requestedPluginDeviceId = schedule.modelAgentDeviceId === undefined
     ? (target?.agentDeviceId ?? schedule.agentDeviceId ?? null)
     : (schedule.modelAgentDeviceId || null);
-  if (schedule.source === 'bot' || target?.source === 'bot') {
-    reason = 'Teammate routines cannot run on a plugin engine yet.';
-  } else if (selectsPluginEngine) {
-    if (schedule.persistentSession) {
-      reason = 'A plugin engine schedule cannot use a persistent session.';
-    } else if (isDisallowedPluginEngineDeviceId(requestedPluginDeviceId)) {
+  if (selectsPluginEngine) {
+    if (isDisallowedPluginEngineDeviceId(requestedPluginDeviceId)) {
       reason = 'This plugin engine location cannot be used for scheduled tasks.';
     } else if (target?.remoteHostId) {
       reason = 'SSH automation targets must keep their current Harness.';
-    } else if (target?.orcaRole || target?.orcaRemoteLead) {
-      reason = 'Collaborative tasks cannot switch to or from a plugin engine.';
-    } else if (target?.source && target.source !== 'desktop' && target.source !== 'scheduler') {
-      reason = 'This task cannot switch to or from a plugin engine.';
     } else if (targetIsPluginEngine && isDisallowedPluginEngineDeviceId(target?.agentDeviceId)) {
       reason = 'This plugin engine task location cannot be used for scheduled tasks.';
     }
   } else if (targetIsPluginEngine) {
-    if (schedule.persistentSession) {
-      reason = 'A plugin engine schedule cannot use a persistent session.';
-    } else if (target?.remoteHostId) {
+    if (target?.remoteHostId) {
       reason = 'SSH automation targets must keep their current Harness.';
     } else if (isDisallowedPluginEngineDeviceId(target?.agentDeviceId)) {
       reason = 'This plugin engine task location cannot be used for scheduled tasks.';
-    } else if (schedule.modelAgentKind && schedule.model?.trim()) {
-      if (target?.orcaRole || target?.orcaRemoteLead) {
-        reason = 'Collaborative tasks cannot switch to or from a plugin engine.';
-      } else if (target?.source && target.source !== 'desktop' && target.source !== 'scheduler') {
-        reason = 'This task cannot switch to or from a plugin engine.';
-      }
-    } else if (schedule.modelAgentKind || schedule.model?.trim() || schedule.providerId?.trim() || schedule.effort) {
+    } else if (
+      !(schedule.modelAgentKind && schedule.model?.trim())
+      && (schedule.modelAgentKind || schedule.model?.trim() || schedule.providerId?.trim() || schedule.effort)
+    ) {
       reason = 'An automation linked to a plugin engine task uses the task\'s own model; remove the model choice from the automation.';
     }
   }
@@ -719,7 +706,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
     // 选着模式时新建任务由模式选来源，存下的具体模型只是兜底：模式此刻能选出可用来源就放行(只看不提交)，
     // 选不出来才要求兜底模型可用。
     const groupId = schedule.modelGroup?.trim();
-    if (groupId && schedule.agentKind !== 'acp' && this.deps.modelGroupStart) {
+    if (groupId && this.deps.modelGroupStart) {
       const usable = await this.deps.modelGroupStart.canRoute(groupId, { localOnly: !!schedule.primaryHostKey?.trim() })
         .catch(() => false);
       if (usable) return;
@@ -776,14 +763,13 @@ export class MakerScheduleRunner implements ScheduleRunner {
     schedule: Schedule,
     agentDeviceId?: string | null,
   ): Promise<{ model: string; effort: string }> {
-    const boundOverride = Boolean(schedule.targetSessionId) && !schedule.persistentSession;
+    const hasBoundTarget = Boolean(schedule.targetSessionId);
     const resolvedDeviceId = agentDeviceId !== undefined
       ? (agentDeviceId?.trim() || null)
       : ((schedule.modelAgentDeviceId ?? schedule.agentDeviceId)?.trim() || null);
     if (!this.deps.admitPluginEngine
       || schedule.modelAgentKind !== 'acp'
-      || (!boundOverride && schedule.agentKind !== 'acp')
-      || schedule.persistentSession
+      || (!hasBoundTarget && schedule.agentKind !== 'acp')
       || isDisallowedPluginEngineDeviceId(resolvedDeviceId)
       || schedule.executionMode === 'script') {
       throw new PluginEngineUnsupportedError(SCHEDULED_TASKS_FEATURE);
@@ -1166,7 +1152,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
     // 脚本与插件引擎任务不按模式选。只在本机运行的自动化只在本机的来源里选。
     const groupId = schedule.modelGroup?.trim();
     const groupApplies = !!groupId && !ctx.resumeSessionId && (schedule.executionMode ?? 'agent') !== 'script'
-      && schedule.agentKind !== 'acp' && !!this.deps.modelGroupStart;
+      && !!this.deps.modelGroupStart;
     const startsNewTask = groupApplies && await this.startsNewTask(schedule);
     if (groupApplies && !startsNewTask && await this.deps.modelGroupStart!.exists(groupId!).catch(() => false)) {
       // 发到还在的任务：按那个任务自己的模式走，沿用它当前的来源(与续跑同一做法)。存下的具体模型只是新建任务
@@ -1188,11 +1174,16 @@ export class MakerScheduleRunner implements ScheduleRunner {
       throwIfFireAborted(ctx.signal, 'runner entry');
       if (prepared?.route) {
         const { route } = prepared;
-        schedule = { ...schedule, fastMode: false,
-          modelAgentKind: route.agentKind === 'cc' ? 'claude-code' : route.agentKind,
+        const routedAgentKind: EngineKind = route.agentKind === 'cc' ? 'claude-code' : route.agentKind;
+        schedule = {
+          ...schedule,
+          fastMode: false,
+          ...(routedAgentKind === 'acp' ? { agentKind: 'acp' } : {}),
+          modelAgentKind: routedAgentKind,
           model: route.model, providerId: route.providerId, effort: route.effort,
           // '' = 本机：选中的来源在哪台，新任务就在哪台运行。
-          modelAgentDeviceId: route.agentDeviceId ?? '' };
+          modelAgentDeviceId: route.agentDeviceId ?? '',
+        };
       }
       if (prepared) holder.modelGroupStart = prepared.token;
     }
@@ -1420,7 +1411,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
     let heartbeatWorkingDir: string | undefined;
     let heartbeatModel: string | undefined;
     let heartbeatEffort: string | undefined;
-    let heartbeatAgentKind: AgentKind | undefined;
+    let heartbeatAgentKind: EngineKind | undefined;
     // 持续会话沿用 session 自己存的 fast 态（与 model 同源取 meta）。
     let heartbeatFastMode: boolean | 'ultrafast' | undefined;
     let heartbeatPermissions: { permissionMode: PermissionMode; planMode: boolean } | undefined;
@@ -1441,10 +1432,11 @@ export class MakerScheduleRunner implements ScheduleRunner {
       if (restorePending) return restorePending;
       if (!schedule.modelAgentKind && schedule.model?.trim()) {
         const currentAgentKind = (await this.deps.maker.getSessionMeta(sessionId).catch(() => null))?.agentKind;
-        // Never switch a plugin-engine task to the schedule's Harness: refuse it.
-        const legacyModelAgentKind = legacyCrossHarnessModelAgentKind(schedule, scheduledBuiltinAgentKind(currentAgentKind));
-        // Fire-local only: the saved schedule keeps its original shape.
-        if (legacyModelAgentKind) schedule = { ...schedule, modelAgentKind: legacyModelAgentKind };
+        if (currentAgentKind !== 'acp') {
+          const legacyModelAgentKind = legacyCrossHarnessModelAgentKind(schedule, currentAgentKind);
+          // Fire-local only: the saved schedule keeps its original shape.
+          if (legacyModelAgentKind) schedule = { ...schedule, modelAgentKind: legacyModelAgentKind };
+        }
       }
       const selection: ScheduledModelSelection | undefined =
         schedule.modelAgentKind && schedule.model?.trim()
@@ -1772,8 +1764,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
         heartbeatWorkingDir = meta?.workDir;
         heartbeatModel = meta?.model;
         heartbeatEffort = meta?.effort;
-        // Plugin-engine tasks returned through their queue above.
-        heartbeatAgentKind = scheduledBuiltinAgentKind(meta?.agentKind);
+        heartbeatAgentKind = meta?.agentKind;
         heartbeatFastMode = meta?.fastMode;
         heartbeatProviderId = row?.providerId ?? null;
         // A resumed/rebuilt task keeps its current location, including relocation
@@ -1855,15 +1846,27 @@ export class MakerScheduleRunner implements ScheduleRunner {
     // 它不在内置模型目录里：只属于内置引擎的步骤一律经 builtinKind()，插件引擎万一走到会明确拒绝，
     // 绝不被当成内置引擎；插件引擎改按本机或目标电脑此刻提供的引擎准入，不可用时本次运行明确失败。
     const pluginEngineRun = effectiveAgentKind === 'acp';
-    if (pluginEngineRun && isHeartbeat) throw new PluginEngineUnsupportedError(SCHEDULED_TASKS_FEATURE);
     const builtinKind = (): AgentKind => scheduledBuiltinAgentKind(effectiveAgentKind);
     // 新建任务的 Agent 在另一台电脑运行:模型与来源属于那台的已授权目录,本机的默认路由、
     // 停用轴与能力表都不适用,统一交给 resolveModelSelection / admitScheduledPluginEngine 按那台目录解析。
     // 绑定的任务仍存在时运行位置跟随它(heartbeat 分支由 acquirePendingAgentSwitch 按任务所在位置解析)。
     const freshAgentDeviceId = isHeartbeat ? null
       : (schedule.modelAgentDeviceId ?? schedule.agentDeviceId)?.trim() || null;
+    const pluginEngineDeviceId = isHeartbeat
+      ? (resolvedSelection?.agentDeviceId !== undefined
+          ? resolvedSelection.agentDeviceId
+          : (schedule.modelAgentDeviceId !== undefined
+              ? (schedule.modelAgentDeviceId.trim() || null)
+              : (heartbeatAgentDeviceId ?? null)))
+      : freshAgentDeviceId;
     const pluginEngineRoute = pluginEngineRun
-      ? await this.admitScheduledPluginEngine(schedule, freshAgentDeviceId)
+      ? await this.admitScheduledPluginEngine({
+          ...schedule,
+          modelAgentKind: 'acp',
+          providerId: schedule.providerId?.trim() || heartbeatProviderId || undefined,
+          model: schedule.model?.trim() || heartbeatModel || 'default',
+          effort: schedule.effort ?? heartbeatEffort,
+        }, pluginEngineDeviceId)
       : null;
     const rawModel = schedule.model?.trim()
       ? schedule.model
@@ -2038,7 +2041,6 @@ export class MakerScheduleRunner implements ScheduleRunner {
     let preflightProviderId: string | null = null;
     if (reusedLiveSession) {
       const liveSession = this.deps.maker.getSession(sessionId);
-      if (liveSession?.agentKind === 'acp') throw new PluginEngineUnsupportedError(SCHEDULED_TASKS_FEATURE);
       const currentProviderId = getSessionProvider(sessionId) ?? heartbeatProviderId;
       // 隐式改道(reroutedProviderId)也是本次 fire 的落地来源:跨凭证家族的改道
       // (如停用 XD 默认 → 改道 Anthropic)若不进本判定,会复用旧凭证 spawn 的
@@ -2049,6 +2051,25 @@ export class MakerScheduleRunner implements ScheduleRunner {
         materializedDefaultProviderId ??
         currentProviderId;
       preflightProviderId = nextProviderId;
+      if (liveSession?.agentKind === 'acp') {
+        if (effectiveAgentKind !== 'acp' || (nextProviderId ?? null) !== (currentProviderId ?? null)) {
+          try {
+            await prepareLocalSessionCredentialModeSwitch({
+              maker: this.deps.maker,
+              sessionId,
+              isSessionInTurn: this.runtime.isSessionInTurn,
+              signal: ctx.signal,
+            });
+          } catch (err) {
+            if (err instanceof CredentialModeSwitchBusyError) {
+              return this.failOrDeferSessionRunning(schedule, ctx, sessionId, isHeartbeat);
+            }
+            throw err;
+          }
+          throwIfFireAborted(ctx.signal, 'session creation');
+          reusedLiveSession = false;
+        }
+      } else {
       const credentialSwitchInput = liveSession && !agentDeviceId
         ? {
             agentKind: liveSession.agentKind,
@@ -2216,6 +2237,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
             toWorkingDir: workingDir,
           });
         }
+      }
       }
     }
     if (!agentDeviceId && isHeartbeat && effectiveAgentKind === 'pi' && !reusedLiveSession && resumeSessionId) {

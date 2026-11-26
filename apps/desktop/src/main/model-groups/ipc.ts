@@ -18,6 +18,7 @@ import {
   sanitizeModelGroupSelection,
   type ModelGroupResolveRequest,
 } from '../../shared/modelGroups.js';
+import { pluginEngineKeyFromProviderId } from '../../shared/pluginEngines.js';
 import { isDeviceLinkInvoke } from '../device-link/invoke-context.js';
 import { getDbClient } from '../localDb/client/current.js';
 import { createMessage } from '../localDb/ipc/messages.js';
@@ -132,8 +133,9 @@ export function registerModelGroupsIpc(): void {
     const agentDeviceId = route.agentDeviceId === undefined || route.agentDeviceId === null
       ? undefined
       : modelGroupAgentDeviceId(route.agentDeviceId);
-    if (!selection || (agentKind !== 'cc' && agentKind !== 'codex' && agentKind !== 'pi')
+    if (!selection || (agentKind !== 'cc' && agentKind !== 'codex' && agentKind !== 'pi' && agentKind !== 'acp')
       || typeof providerId !== 'string' || !providerId || providerId.length > MODEL_GROUP_LIMITS.field
+      || (agentKind === 'acp' && !pluginEngineKeyFromProviderId(providerId))
       || typeof model !== 'string' || !model || model.length > MODEL_GROUP_LIMITS.field
       || agentDeviceId === null) {
       throwIpcError('INVALID_PARAMS', 'model group selection and route are required');

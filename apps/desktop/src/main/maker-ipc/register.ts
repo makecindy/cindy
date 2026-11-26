@@ -4900,18 +4900,18 @@ export async function prepareScheduledModelPreferencesUnderLock(sessionId: strin
 /** 会话级完整路由选择(引擎 + 模型 + 来源 + 档位 + Fast)。 */
 export interface SessionRouteSelection {
   agentDeviceId?: string | null;
-  agentKind: AgentKind;
+  agentKind: EngineKind;
   model: string;
   providerId: string | null;
   effort: string | null;
   fastMode: boolean | 'ultrafast';
 }
-type CompanionSessionRouteSelection = Omit<SessionRouteSelection, 'agentKind'> & { agentKind: EngineKind };
+type CompanionSessionRouteSelection = SessionRouteSelection;
 
 let readPendingAgentSwitchRouteHolder:
   ((sessionId: string) => PendingAgentSwitchRouteRead | undefined) | null = null;
 let applySessionRouteUnderSendLockHolder:
-  ((sessionId: string, route: SessionRouteSelection | null, currentAgentKind: AgentKind) => Promise<'applied' | 'staged'>) | null = null;
+  ((sessionId: string, route: SessionRouteSelection | null, currentAgentKind: EngineKind, currentProviderId?: string | null) => Promise<'applied' | 'staged'>) | null = null;
 /**
  * 切换引擎后重建会话时补回渠道专属 vendorOptions(IM 的会话 id / 对端等)。
  * 切换建会话只读 DB 行, 不补的话 IM 任务切完引擎会悄悄丢掉 bot 专属工具。
@@ -5389,11 +5389,12 @@ export function readPendingAgentSwitchRoute(
 export async function applySessionRouteUnderSendLock(
   sessionId: string,
   route: SessionRouteSelection | null,
-  currentAgentKind: AgentKind,
+  currentAgentKind: EngineKind,
+  currentProviderId?: string | null,
 ): Promise<'applied' | 'staged'> {
   const apply = applySessionRouteUnderSendLockHolder;
   if (!apply) throw new Error('Session route selection is not initialized');
-  return apply(sessionId, route, currentAgentKind);
+  return apply(sessionId, route, currentAgentKind, currentProviderId);
 }
 
 /** 注册切换后重建会话用的 vendorOptions 解析器; 返回注销函数。 */
@@ -10898,7 +10899,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         status: row.status,
         workingDir: row.workingDir,
         model: row.model,
-        agentKind: row.agentKind === 'cc' ? 'claude-code' : (row.agentKind as 'codex' | 'pi'),
+        agentKind: row.agentKind === 'cc' ? 'claude-code' : (row.agentKind as 'codex' | 'pi' | 'acp'),
         effort: row.effort,
         fastMode: row.fastMode,
         agentDeviceId: row.agentDeviceId,
@@ -10915,6 +10916,19 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         return () => { if (getCurrentDbClientSnapshot() !== owner) throwIpcError('PRECONDITION_FAILED', 'Worker account changed'); };
       },
       resolveAgentSelection: async request => {
+        if (request.agentKind === 'acp') {
+          try {
+            const admitted = admitPluginEngineSwitchTarget({
+              providerId: request.providerId ?? null,
+              model: request.model?.trim() || 'default',
+              effort: request.effort,
+              permissionMode: request.permissionMode,
+            }, await readOfferedRemotePluginEngines(request.agentDeviceId!));
+            return { ...request, model: admitted.model, effort: admitted.effort || undefined, fastMode: false };
+          } catch (error) {
+            throwIpcError('INVALID_PARAMS', error instanceof Error ? error.message : 'Worker plugin engine is unavailable');
+          }
+        }
         const views = await readDeviceProviderViews(remoteBackgroundInvoke, request.agentDeviceId!);
         const routing = deviceWorkerRoutingContext(views, request.agentKind);
         const models = routing.remoteCodexModels ?? [];
@@ -10941,7 +10955,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         await getDbClient().drizzle.insert(sessions).values(row).run();
       },
       bootstrapSession: async (opened, assertCurrent, modelGroupStart) => {
-        const agentKind = opened.agentKind === 'codex' || opened.agentKind === 'pi'
+        const agentKind = opened.agentKind === 'codex' || opened.agentKind === 'pi' || opened.agentKind === 'acp'
           ? opened.agentKind
           : 'claude-code';
         await bootstrapSession(buildCreateOptsWithStderr({
@@ -14936,7 +14950,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         }
         const config = await resolveSharedImProjectConfig(alias, log);
         target.assertCurrent();
-        if (!config.providerId || !(GHOST_ERRAND_PERMISSION_MODES as readonly string[]).includes(config.permissionMode))
+        if (!config.providerId || config.agentKind === 'acp' || !(GHOST_ERRAND_PERMISSION_MODES as readonly string[]).includes(config.permissionMode))
           throw new PluginTaskError('ROUTE_UNAVAILABLE', 'The selected project configuration is unavailable');
         return { ...target,
           permissionMode: config.permissionMode as GhostErrandPermissionMode,
@@ -17358,9 +17372,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     ensureRemoteReadyForSessionStart: async (params) => {
       await ensureRemoteReadyForSessionStart({ createOpts: params.createOpts });
     },
-    // 插件引擎 Worker(docs/plans/acp-plugin-bridge.md)只有经下面的准入才会走到这里(本机运行)。
     bootstrapSession: (...args: Parameters<typeof bootstrapSession>) => bootstrapSession(...args),
-    admitPluginEngineWorker: (target) => admitPluginEngineSwitchTarget(target, listPluginEngineViews()),
+    admitPluginEngineWorker: async (target) => admitPluginEngineSwitchTarget(
+      target,
+      target.agentDeviceId ? await readOfferedRemotePluginEngines(target.agentDeviceId) : listPluginEngineViews(),
+    ),
     addOrUpdateWorker: async (worker) => {
       await addOrUpdateWorker(worker);
     },
@@ -17875,7 +17891,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       const pick = await pickModelGroupRoute(groupId, options);
       return pick && {
         route: {
-          agentKind: dbToMakerAgentKind(pick.route.agentKind),
+          agentKind: dbToMakerEngineKind(pick.route.agentKind),
           model: pick.route.model,
           providerId: pick.route.providerId,
           effort: pick.route.effort ?? null,
@@ -17970,8 +17986,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
 
   readPendingAgentSwitchRouteHolder = (sessionId) => {
     const intent = agentSwitchPending.get(sessionId);
-    // 只给 IM 默认路由同步读；IM 任务不能切到插件引擎，插件引擎意图按「没有」处理。
-    return intent && intent.targetAgentKind !== 'acp'
+    return intent
       ? {
           agentKind: intent.targetAgentKind,
           model: intent.model,
@@ -17982,12 +17997,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         }
       : undefined;
   };
-  applySessionRouteUnderSendLockHolder = async (sessionId, route, currentAgentKind) => {
+  applySessionRouteUnderSendLockHolder = async (sessionId, route, currentAgentKind, currentProviderId) => {
     // route=null: 只应用此前已登记(且仍在)的意图。
     let staged = agentSwitchPending.get(sessionId);
     try {
       if (route) {
-        await stageSessionRouteSelection(sessionId, route, currentAgentKind);
+        await stageSessionRouteSelection(sessionId, route, currentAgentKind, currentProviderId);
         // 登记时系统可能改道来源; 按登记后的意图对象认「自己的」, 不按字段比较。
         staged = agentSwitchPending.get(sessionId);
       }

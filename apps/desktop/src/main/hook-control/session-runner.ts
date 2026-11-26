@@ -114,9 +114,22 @@ import { resolveSafe as resolveCindyMediaUrl } from '../cindy-media/blobStore.de
 import { ingestMedia, supportedMime as isCindyMediaMime } from '../cindy-media/ingest.js';
 import { worktreeStore, WorktreeManager } from '../worktree/index.js';
 import { readImDefaultSettings } from '../im/defaultSettingsStore.js';
-import { isImDefaultPermissionMode } from '../../shared/imDefaultSettings.js';
+import {
+  imDefaultAgentSettingsOf,
+  isImDefaultPermissionMode,
+} from '../../shared/imDefaultSettings.js';
+import {
+  PLUGIN_ENGINE_DEFAULT_MODEL,
+  pluginEngineKeyFromProviderId,
+} from '../../shared/pluginEngines.js';
 import { readImRemoteAutomaticDefaults, readImRemotePermissionModes, readImRemoteProviderRoute } from '../im/remoteProviderRoute.js';
 import { resolveImAutomaticDefaults } from '../im/defaultSessionSettings.js';
+import { listPluginEngineViews } from '../maker-ipc/pluginEnginesIpc.js';
+import {
+  admitPluginEngineSwitchTarget,
+  isDisallowedPluginEngineDeviceId,
+} from '../maker-ipc/pluginEngineSessionAdmission.js';
+import { readRemotePluginEngines } from '../remote-agent/controller/deviceCatalog.js';
 import { getWorkspaceProviderRoute } from './workspaceProviderSourceStore.js';
 import {
   SHARED_PREFS_CHANNEL,
@@ -350,7 +363,77 @@ async function resolveNewSessionConfig(
   const { channel, mergedOverrides, workdirProviderId, workdirRoute, imDefaults } = inputs;
   let defaults = imDefaults;
   const selectedAgent = mergedOverrides.agentKind;
-  const selectedDefaultAgent = selectedAgent === 'claude-code' || selectedAgent === 'codex' || selectedAgent === 'pi' ? selectedAgent : imDefaults.agentKind;
+  const effectiveRequestedAgent: EngineKind =
+    selectedAgent === 'claude-code' ||
+    selectedAgent === 'codex' ||
+    selectedAgent === 'pi' ||
+    selectedAgent === 'acp'
+      ? selectedAgent
+      : imDefaults.agentKind;
+  if (effectiveRequestedAgent === 'acp') {
+    const defaultAcp = imDefaultAgentSettingsOf(imDefaults, 'acp');
+    const explicitAcpSource =
+      workdirRoute && pluginEngineKeyFromProviderId(workdirRoute.providerId) ? workdirRoute : null;
+    const acpProviderId = explicitAcpSource?.providerId ?? defaultAcp.providerId;
+    const acpDeviceId = explicitAcpSource
+      ? (explicitAcpSource.agentDeviceId ?? null)
+      : (defaultAcp.agentDeviceId ?? null);
+    if (!pluginEngineKeyFromProviderId(acpProviderId)) {
+      throw new Error(
+        `${HOOK_ROUTE_UNAVAILABLE_PREFIX} selected plugin engine is unavailable${routeReselectHint()}`,
+      );
+    }
+    if (isDisallowedPluginEngineDeviceId(acpDeviceId)) {
+      throw new Error(
+        `${HOOK_ROUTE_UNAVAILABLE_PREFIX} selected plugin engine location is invalid${routeReselectHint()}`,
+      );
+    }
+    const engines = acpDeviceId
+      ? await readRemotePluginEngines(acpDeviceId)
+      : listPluginEngineViews();
+    const requestedModel =
+      mergedOverrides.model?.trim() || defaultAcp.model.trim() || PLUGIN_ENGINE_DEFAULT_MODEL;
+    const requestedEffort = mergedOverrides.effort ?? (defaultAcp.effort || undefined);
+    const engineKey = pluginEngineKeyFromProviderId(acpProviderId);
+    const matchedEngine = engines.find((item) => item.key === engineKey);
+    const requestedPermissionMode = mergedOverrides.permissionMode;
+    if (
+      acpDeviceId &&
+      requestedPermissionMode !== null &&
+      matchedEngine &&
+      (!isImDefaultPermissionMode(requestedPermissionMode) ||
+        !matchedEngine.permissionModes.some((mode) => mode.id === requestedPermissionMode))
+    ) {
+      throw new Error(
+        'Selected permission mode is unavailable for the remote agent' + routeReselectHint(),
+      );
+    }
+    const admitted = admitPluginEngineSwitchTarget(
+      {
+        providerId: acpProviderId,
+        model: requestedModel,
+        effort: requestedEffort,
+        permissionMode: requestedPermissionMode ?? 'bypassPermissions',
+      },
+      engines,
+    );
+    const permissionMode =
+      requestedPermissionMode === null
+        ? 'bypassPermissions'
+        : matchedEngine && matchedEngine.permissionModes.some((mode) => mode.id === requestedPermissionMode)
+          ? requestedPermissionMode
+          : (matchedEngine?.permissionModes[0]?.id ?? admitted.permissionMode);
+    return {
+      ...(acpDeviceId ? { agentDeviceId: acpDeviceId } : {}),
+      agentKind: 'acp',
+      model: admitted.model,
+      effort: admitted.effort || undefined,
+      permissionMode,
+      providerId: acpProviderId,
+      fingerprint,
+    };
+  }
+  const selectedDefaultAgent = effectiveRequestedAgent;
   const automatic = usesAutomaticImModel({ ...imDefaults, agentKind: selectedDefaultAgent }) && mergedOverrides.model === null;
   if (automatic) {
     const automaticAgent = selectedAgent === 'claude-code' || selectedAgent === 'codex' || selectedAgent === 'pi' ? selectedAgent : undefined;
@@ -366,9 +449,14 @@ async function resolveNewSessionConfig(
     if (!resolved) throw new Error(`${HOOK_ROUTE_UNAVAILABLE_PREFIX} no available default model${routeReselectHint()}`);
     defaults = resolved;
   }
-  const requestedAgent = mergedOverrides.agentKind === 'claude-code' || mergedOverrides.agentKind === 'codex' || mergedOverrides.agentKind === 'pi'
-    ? mergedOverrides.agentKind : defaults.agentKind;
-  const defaultRoute = defaults.agents[requestedAgent];
+  const requestedAgent: 'claude-code' | 'codex' | 'pi' =
+    mergedOverrides.agentKind === 'claude-code' || mergedOverrides.agentKind === 'codex' || mergedOverrides.agentKind === 'pi'
+      ? mergedOverrides.agentKind
+      : defaults.agentKind === 'acp'
+        ? selectedDefaultAgent
+        : defaults.agentKind;
+  const builtinDefaults = { ...defaults, agentKind: requestedAgent };
+  const defaultRoute = builtinDefaults.agents[requestedAgent];
   const agentDeviceId = workdirRoute ? workdirRoute.agentDeviceId : defaultRoute.agentDeviceId;
   if (agentDeviceId) {
     const providerId = workdirRoute?.providerId ?? defaultRoute.providerId;
@@ -386,7 +474,7 @@ async function resolveNewSessionConfig(
       throw new Error('Selected permission mode is unavailable for the remote agent' + routeReselectHint());
     }
     const remote = resolveHookSessionConfig({
-      readDefaults: () => defaults,
+      readDefaults: () => builtinDefaults,
       getModels: () => [model],
       getPermissionModes: () => requestedPermissionMode === null ? [] : [requestedPermissionMode],
       log,
@@ -397,7 +485,7 @@ async function resolveNewSessionConfig(
 
   const resolved = resolveHookSessionConfig(
     {
-      readDefaults: () => defaults,
+      readDefaults: () => builtinDefaults,
       // 可执行清单按**启用**口径,不叠加「显示 / 隐藏」偏好:隐藏只是陈列过滤
       // (选择器不列),被 IM 显式点名或兜底选中仍然合法;停用的模型与供应商已由
       // visibleModelUnion 内建的准入过滤(model.disabled / suspended)剔除,点名

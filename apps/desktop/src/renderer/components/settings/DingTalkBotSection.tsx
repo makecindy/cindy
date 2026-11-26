@@ -9,7 +9,7 @@ import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { useDingTalkBot } from '@/hooks/useDingTalkBot';
 import { cn } from '@/lib/utils';
 import { ImChannelSettingsCard, useImChannelSettingsSummary } from './ImChannelSettingsCard';
-import { ImDefaultSettingsSection } from './ImDefaultSettingsSection';
+import { ImDefaultSettingsSection, imDefaultRouteSummaryText } from './ImDefaultSettingsSection';
 
 const DEVELOPER_PORTAL_URL = 'https://open-dev.dingtalk.com/';
 
@@ -101,11 +101,7 @@ export function DingTalkBotSectionView({
       id={`${idPrefix}${imBotSettings.dingtalk.targetId}`}
       title={t(imBotSettings.dingtalk.titleKey)}
       description={t('settings.dingtalkBot.description')}
-      routeSummary={
-        routeSummary
-          ? `${t(`settings.imBot.defaults.agents.${routeSummary.agentKind}`)} · ${routeSummary.model}`
-          : null
-      }
+      routeSummary={routeSummary ? imDefaultRouteSummaryText(routeSummary, t) : null}
       expanded={expanded}
       onToggle={onToggle}
       status={

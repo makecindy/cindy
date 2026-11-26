@@ -15,7 +15,7 @@ import { useEffect, useState, type Dispatch, type ReactNode, type SetStateAction
 
 import { Collapse } from '@/components/ui/collapse';
 import { cn } from '@/lib/utils';
-import type { ImDefaultSettingsChannel } from '../../../shared/imDefaultSettings';
+import { imDefaultAgentSettingsOf, type ImDefaultSettingsChannel } from '../../../shared/imDefaultSettings';
 import type { ImDefaultSettingsSummary } from './ImDefaultSettingsSection';
 
 export function useImChannelSettingsSummary(
@@ -31,7 +31,7 @@ export function useImChannelSettingsSummary(
         if (cancelled) return;
         setSummary({
           agentKind: settings.agentKind,
-          model: settings.agents[settings.agentKind].model,
+          model: imDefaultAgentSettingsOf(settings, settings.agentKind).model,
         });
       })
       .catch(() => {

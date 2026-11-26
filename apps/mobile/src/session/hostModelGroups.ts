@@ -121,7 +121,7 @@ export function useHostModelGroupPickerOptions(
 
 // —— 选路结果(那台电脑送来的，按不可信数据收) ——
 
-export type HostModelGroupAgentKind = 'cc' | 'codex' | 'pi';
+export type HostModelGroupAgentKind = 'cc' | 'codex' | 'pi' | 'acp';
 
 export interface HostModelGroupRoute {
   agentKind: HostModelGroupAgentKind;
@@ -164,7 +164,12 @@ export function parseHostModelGroupResult(raw: unknown): HostModelGroupResult | 
   const agentKind = route?.agentKind;
   const providerId = str(route?.providerId, 256);
   const model = str(route?.model, 256);
-  if ((agentKind !== 'cc' && agentKind !== 'codex' && agentKind !== 'pi') || !providerId || !model) return null;
+  if (
+    (agentKind !== 'cc' && agentKind !== 'codex' && agentKind !== 'pi' && agentKind !== 'acp')
+    || !providerId
+    || (agentKind === 'acp' && !providerId.startsWith('acp-plugin:'))
+    || !model
+  ) return null;
   const agentDeviceId = str(route?.agentDeviceId, 256);
   const effort = str(route?.effort, 32);
   const quota = record(value.quota);
@@ -200,6 +205,21 @@ export function parseHostModelGroupResult(raw: unknown): HostModelGroupResult | 
 export function applyHostModelGroupRoute(draft: NewSessionDraft, result: HostModelGroupResult | null): NewSessionDraft {
   if (result?.outcome !== 'routed') return draft;
   const { route } = result;
+  if (route.agentKind === 'acp') {
+    const next: NewSessionDraft = {
+      ...draft,
+      fastMode: false,
+      pluginEngine: {
+        providerId: route.providerId,
+        model: route.model,
+        effort: route.effort ?? '',
+        permissionMode: draft.permissionMode,
+      },
+    };
+    if (route.agentDeviceId) next.agentDeviceId = route.agentDeviceId;
+    else delete next.agentDeviceId;
+    return next;
+  }
   const next: NewSessionDraft = {
     ...draft,
     agentKind: route.agentKind === 'cc' ? 'claude-code' : route.agentKind,

@@ -8,7 +8,7 @@ import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { useWechatBot } from '@/hooks/useWechatBot';
 import { cn } from '@/lib/utils';
 import { ImChannelSettingsCard, useImChannelSettingsSummary } from './ImChannelSettingsCard';
-import { ImDefaultSettingsSection } from './ImDefaultSettingsSection';
+import { ImDefaultSettingsSection, imDefaultRouteSummaryText } from './ImDefaultSettingsSection';
 import { ResetGroupButton } from '@/components/ui/reset-buttons';
 
 const STATUS_KEYS: Record<WechatBotPhase, string> = {
@@ -197,7 +197,7 @@ export function WechatBotSectionView({
       routeSummary={
         companion ? (assigned === companion.id ? companion.name : null)
           : assigned ? t('settings.wechatBot.companion.assigned')
-            : routeSummary ? `${t(`settings.imBot.defaults.agents.${routeSummary.agentKind}`)} · ${routeSummary.model}` : null
+            : routeSummary ? imDefaultRouteSummaryText(routeSummary, t) : null
       }
       expanded={expanded}
       onToggle={onToggle}

@@ -7,6 +7,7 @@ import { Activity, lazy, Suspense, useCallback, useEffect, useMemo, useRef, useS
 import { ArrowDown, ArrowUp, Plus, Waypoints, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
+import { PluginEngineIcon } from '@/components/icons/PluginEngineIcon';
 import { ModelSelector, ProviderMark } from '@/components/new-chat/ModelSelector';
 import { Button } from '@/components/ui/button';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
@@ -28,7 +29,9 @@ import {
 } from '@/features/model-groups/modelGroupsClient';
 import { routeStrategySelectGroups } from '@/features/model-groups/routeStrategyOptions';
 import { useModelRouteDevices } from '@/hooks/useModelRouteDevices';
+import { usePickerPluginEngines } from '@/hooks/usePickerPluginEngines';
 import { createLogger } from '@/lib/logger';
+import { PLUGIN_ENGINE_DEFAULT_MODEL, type PluginEngineSelection } from '@/lib/pluginEngineSelection';
 import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
 
@@ -94,6 +97,7 @@ export function ModelGroupsSection({ scrollRef, focusProvider }: {
   const namesOf = useModelGroupCandidateNames(allCandidates);
   // 「添加来源」与其它设置页一样列出其他电脑与分享来的供应商；选中哪一行，来源就连同运行位置一起存。
   const routeDevices = useModelRouteDevices({ controlledDeviceId: null, leadAgentDeviceId: null });
+  const pickerPluginEngines = usePickerPluginEngines({ enabled: true });
   const [view, setView] = useState<View>({ kind: 'list' });
   const route = view.kind === 'route' ? userRoutes.find((item) => item.id === view.id) : undefined;
   const sourceRoute = view.kind === 'source' ? sourceRoutes.find((item) => item.id === view.id) : undefined;
@@ -314,8 +318,12 @@ export function ModelGroupsSection({ scrollRef, focusProvider }: {
                         <span className="flex items-center gap-3">
                           <span className="w-4 text-center text-12 tabular-nums leading-[1.33] text-[var(--text-tertiary)]">{index + 1}</span>
                           <SettingsRowIcon>
-                            <ProviderMark providerId={candidate.providerId} name={names.provider?.name} routing={names.provider?.routing} logoKind={names.provider?.logoKind} customIcon={names.provider?.customIcon}
-                              colorClass="text-[var(--text-primary)]" withMargin={false} />
+                            {candidate.agentKind === 'acp' ? (
+                              <PluginEngineIcon iconDataUrl={names.pluginEngine?.iconDataUrl} size={16} />
+                            ) : (
+                              <ProviderMark providerId={candidate.providerId} name={names.provider?.name} routing={names.provider?.routing} logoKind={names.provider?.logoKind} customIcon={names.provider?.customIcon}
+                                colorClass="text-[var(--text-primary)]" withMargin={false} />
+                            )}
                           </SettingsRowIcon>
                         </span>
                       }
@@ -387,6 +395,25 @@ export function ModelGroupsSection({ scrollRef, focusProvider }: {
                       <ModelSelector
                         data-setting-id={modelGroupsSettings.routes.id}
                         remoteAgent={routeDevices.devices && { devices: routeDevices.devices, selectedDeviceId: null }}
+                        pluginEngines={
+                          pickerPluginEngines.hasSources
+                            ? {
+                                engines: pickerPluginEngines.engines,
+                                active: null,
+                                readCatalogue: pickerPluginEngines.readCatalogue,
+                                onSelect: (selection: PluginEngineSelection) => {
+                                  const added: ModelGroupCandidate = {
+                                    agentKind: 'acp',
+                                    providerId: selection.providerId,
+                                    model: selection.modelId || PLUGIN_ENGINE_DEFAULT_MODEL,
+                                    ...(selection.deviceId ? { agentDeviceId: selection.deviceId } : {}),
+                                  };
+                                  if (route.candidates.some((item) => modelGroupCandidateKey(item) === modelGroupCandidateKey(added))) return true;
+                                  return updateRoute(route.id, (current) => ({ ...current, candidates: [...current.candidates, added] }));
+                                },
+                              }
+                            : undefined
+                        }
                         disabled={full}
                         modelId=""
                         effort=""

@@ -13,14 +13,16 @@
  */
 
 import {
+  DEFAULT_ACP_IM_AGENT_SETTINGS,
   IM_DEFAULT_SETTINGS,
   isImDefaultAgentKind,
-  isImDefaultEffort,
+  isImDefaultEffortForAgent,
   isImDefaultPermissionMode,
   type ImDefaultAgentKind,
   type ImDefaultAgentSettings,
   type ImDefaultSettingsPatch,
 } from '../../shared/imDefaultSettings.js';
+import { pluginEngineKeyFromProviderId } from '../../shared/pluginEngines.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
 
 export function parseImDefaultSettingsPatch(raw: unknown): ImDefaultSettingsPatch {
@@ -55,9 +57,8 @@ export function parseImDefaultSettingsPatch(raw: unknown): ImDefaultSettingsPatc
     }
     const agentInput = input.agents as Record<string, unknown>;
     const agentsPatch: NonNullable<ImDefaultSettingsPatch['agents']> = {};
-    // 三个 harness 必须对称解析；漏掉 pi 会让 IM 设置页切 Pi 后改模型静默丢弃
-    // (store 本身支持 pi，见 defaultSettingsStore / IM_DEFAULT_SETTINGS.agents.pi)。
-    for (const kind of ['claude-code', 'codex', 'pi'] as const) {
+    // 所有引擎(含插件引擎 acp)必须对称解析；漏掉任一项会让 IM 设置页改模型静默丢弃。
+    for (const kind of ['claude-code', 'codex', 'pi', 'acp'] as const) {
       if (kind in agentInput) {
         agentsPatch[kind] = parseImDefaultAgentSettings(kind, agentInput[kind]);
       }
@@ -78,7 +79,7 @@ function parseImDefaultAgentSettings(
   agentKind: ImDefaultAgentKind,
   raw: unknown,
 ): ImDefaultAgentSettings {
-  const defaults = IM_DEFAULT_SETTINGS.agents[agentKind];
+  const defaults = agentKind === 'acp' ? DEFAULT_ACP_IM_AGENT_SETTINGS : IM_DEFAULT_SETTINGS.agents[agentKind];
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
     return { ...defaults };
   }
@@ -109,10 +110,18 @@ function parseImDefaultAgentSettings(
     model = input.model.trim();
   }
   if ('effort' in input) {
-    if (!isImDefaultEffort(input.effort)) {
+    if (!isImDefaultEffortForAgent(agentKind, input.effort)) {
       throwIpcError('INVALID_PARAMS', 'im default effort invalid');
     }
     effort = input.effort;
+  }
+  if (agentKind === 'acp' && (providerId || model)) {
+    if (!pluginEngineKeyFromProviderId(providerId)) {
+      throwIpcError('INVALID_PARAMS', 'im default plugin engine providerId invalid');
+    }
+    if (!model) {
+      throwIpcError('INVALID_PARAMS', 'im default plugin engine model required');
+    }
   }
   if (agentDeviceId && !providerId) throwIpcError('INVALID_PARAMS', 'remote providerId required');
   if (agentDeviceId && !model) throwIpcError('INVALID_PARAMS', 'remote model required');

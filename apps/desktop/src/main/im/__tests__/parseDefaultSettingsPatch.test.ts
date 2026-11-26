@@ -96,4 +96,39 @@ describe('parseImDefaultSettingsPatch', () => {
     expect(Object.keys(parsed).sort()).toEqual(Object.keys(IM_DEFAULT_SETTINGS).sort());
     expect(parsed).toEqual(nonDefault);
   });
+
+  // 生产入口与可观察结果：parseImDefaultSettingsPatch 解析 agentKind='acp' 与 agents.acp。
+  // 规则依据：2026-11-27 全系统放开插件模型，IM 新对话默认设置与飞书群设置须支持本地与远程插件引擎及空 effort。
+  // 覆盖缺口：此前 patch 解析只认三内置引擎，提交 acp 或 effort='' 会抛错导致 UI 弹回。
+  // 最小失败输入与 tier：unit，提交合法 acp-plugin providerId 与空 effort，以及非法 providerId。
+  it('parses plugin engine defaults with optional empty effort and rejects invalid plugin providerId', () => {
+    const parsed = parseImDefaultSettingsPatch({
+      agentKind: 'acp',
+      agents: {
+        acp: {
+          providerId: 'acp-plugin:dsh-acp:dsh',
+          model: 'deepseek-v4',
+          effort: '',
+          agentDeviceId: 'studio',
+        },
+      },
+    });
+    expect(parsed).toEqual({
+      agentKind: 'acp',
+      agents: {
+        acp: {
+          providerId: 'acp-plugin:dsh-acp:dsh',
+          model: 'deepseek-v4',
+          effort: '',
+          agentDeviceId: 'studio',
+        },
+      },
+    });
+    expect(() =>
+      parseImDefaultSettingsPatch({
+        agentKind: 'acp',
+        agents: { acp: { providerId: 'openai', model: 'deepseek-v4', effort: '' } },
+      }),
+    ).toThrow(/providerId/i);
+  });
 });

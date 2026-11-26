@@ -20,7 +20,7 @@ import { Button } from '@/components/ui/button';
 import { ErrorNotice } from '@/components/ui/error-notice';
 import { Select } from '@/components/ui/select';
 import { useModelPickerAgents } from '@/hooks/useAvailableAgents';
-import { usePluginEngines } from '@/hooks/usePluginEngines';
+import { usePickerPluginEngines } from '@/hooks/usePickerPluginEngines';
 import { resolveActivePluginEngine, type PluginEngineSelection } from '@/lib/pluginEngineSelection';
 import type { PluginEngineEffort } from '../../../shared/pluginEngines';
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
@@ -292,40 +292,57 @@ export function CreateWorkerPopover({
   const localProjectEnabled =
     !!leadSessionId && !leadDeviceId && !sshRemote && !executionDeviceId && !isSidebarWindow();
   const project = useWorkerProjectSelection(open, leadSessionId, localProjectEnabled);
-  // 选中的插件引擎；null = 用内置模型。引擎只在本机启动，worktree 与内置 Worker 相同。被停用、卸载或报告
-  // 不可用时按没选处理，回到下面的内置模型。
+  // 选中的插件引擎；null = 用内置模型。支持本机、同账号其他电脑与分享的插件引擎，也支持被控/远端执行电脑。
+  // 被停用、卸载或报告不可用时按没选处理，回到下面的内置模型。
   const [pluginEngine, setPluginEngine] = useState<PluginEngineSelection | null>(null);
   useEffect(() => { if (!open) setPluginEngine(null); }, [open]);
-  const pluginEnginesAllowed = pluginEnginesEnabled && !leadDeviceId && !sshRemote && !executionDeviceId;
+  useEffect(() => { setPluginEngine(null); }, [executionDeviceId]);
+  const pluginEnginesAllowed = pluginEnginesEnabled && !sshRemote;
+  const rememberedPluginDeviceIds = useMemo(
+    () => (pluginEngine?.deviceId ? [pluginEngine.deviceId] : []),
+    [pluginEngine?.deviceId],
+  );
   // 面板常驻挂载：只在打开期间订阅引擎列表，关闭即停止。
-  const pluginEngineList = usePluginEngines(open && pluginEnginesAllowed);
+  const pickerPluginEngines = usePickerPluginEngines({
+    enabled: open && pluginEnginesAllowed,
+    hostDeviceId: workerHostDeviceId,
+    rememberedDeviceIds: rememberedPluginDeviceIds,
+  });
   const activePluginEngine = useMemo(
-    () => (pluginEnginesAllowed ? resolveActivePluginEngine(pluginEngineList, pluginEngine) : null),
-    [pluginEnginesAllowed, pluginEngineList, pluginEngine],
+    () => (pluginEnginesAllowed ? resolveActivePluginEngine(pickerPluginEngines.engines, pluginEngine) : null),
+    [pluginEnginesAllowed, pickerPluginEngines.engines, pluginEngine],
   );
   const pluginEnginePicker = useMemo(
-    () => pluginEnginesAllowed && pluginEngineList.length
+    () => pluginEnginesAllowed && (pickerPluginEngines.hasSources || !!pluginEngine)
       ? {
-          engines: pluginEngineList,
+          engines: pickerPluginEngines.engines,
           active: activePluginEngine
             ? {
                 providerId: activePluginEngine.engine.providerId,
                 modelId: activePluginEngine.modelId,
+                ...(activePluginEngine.engine.deviceId ? { deviceId: activePluginEngine.engine.deviceId } : {}),
                 ...(activePluginEngine.effort ? { effort: activePluginEngine.effort } : {}),
               }
             : null,
+          readCatalogue: pickerPluginEngines.readCatalogue,
           onSelect: (selection: PluginEngineSelection) => {
             setModelGroup(null);
-            // 插件引擎只在这台电脑运行：Worker 的 Agent 位置一并收回本机。
-            setAgentDeviceId(null);
+            setAgentDeviceId(selection.deviceId ?? null);
             setPluginEngine((previous) => {
-              const effort = selection.effort ?? previous?.effort;
-              return { providerId: selection.providerId, modelId: selection.modelId, ...(effort ? { effort } : {}) };
+              const sameChoice = previous?.providerId === selection.providerId
+                && (previous?.deviceId ?? null) === (selection.deviceId ?? null);
+              const effort = selection.effort ?? (sameChoice ? previous?.effort : undefined);
+              return {
+                providerId: selection.providerId,
+                modelId: selection.modelId,
+                ...(selection.deviceId ? { deviceId: selection.deviceId } : {}),
+                ...(effort ? { effort } : {}),
+              };
             });
           },
         }
       : undefined,
-    [pluginEnginesAllowed, pluginEngineList, activePluginEngine],
+    [pluginEnginesAllowed, pickerPluginEngines.hasSources, pickerPluginEngines.engines, pickerPluginEngines.readCatalogue, pluginEngine, activePluginEngine],
   );
   const trimmedRemoteDir = remoteDir.trim();
   const remoteDirInvalid =
@@ -1121,7 +1138,7 @@ export function CreateWorkerPopover({
     submittingRef.current = true;
     setIsSubmitting(true);
     if (activePluginEngine) {
-      // 插件引擎 Worker：在这台电脑运行，不用内置模型目录、来源与 Fast；内置模型的记忆不改。
+      // 插件引擎 Worker：支持本机、其他电脑与分享；不用内置模型目录、来源与 Fast；内置模型的记忆不改。
       try {
         await onCreate({
           ...(localProjectEnabled ? project.fields : {}),
@@ -1134,7 +1151,14 @@ export function CreateWorkerPopover({
           ...(supportsWorkerPermissionModeSelection
             ? { workerPermissionMode: selectedWorkerPermissionMode }
             : {}),
-          ...(agentLocationSelectable ? { agentDeviceId: null } : {}),
+          ...(executionDevice
+            ? {
+                executionDeviceId: executionDevice.deviceId,
+                executionDeviceName: executionDevice.name,
+                ...(remoteDirMode === 'path' ? { workingDir: trimmedRemoteDir } : {}),
+              }
+            : {}),
+          ...(agentLocationSelectable ? { agentDeviceId: activePluginEngine.engine.deviceId ?? null } : {}),
         });
       } finally {
         submittingRef.current = false;
@@ -1518,6 +1542,7 @@ export function CreateWorkerPopover({
                       ? ORCA_WORKER_PERMISSION_MODES
                       : AUTO_ONLY_WORKER_PERMISSION_MODES
                   }
+                  pluginEngineModes={activePluginEngine?.engine.permissionModes}
                 />
               </div>
             )}

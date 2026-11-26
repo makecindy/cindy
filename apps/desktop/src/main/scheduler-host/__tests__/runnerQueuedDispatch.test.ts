@@ -1594,12 +1594,17 @@ describe('MakerScheduleRunner queued dispatch (busy bound session)', () => {
     h.emit({ type: 'done', data: {} });
     expect(await followTask).toMatchObject({ sessionId: SESSION_ID });
 
-    // 2. Persistent schedule targeting an ACP task stays refused before enqueue.
-    await expect(runner.fire(
+    // 2. Persistent schedule targeting an ACP task runs on the same plugin engine via queue.
+    const persistentTask = runner.fire(
       heartbeatSchedule({ persistentSession: true, model: undefined, modelAgentKind: undefined }),
       createFireContext(),
-    )).rejects.toThrow('cannot use a persistent session');
-    expect(latestNotifiedRun(notifier)).toMatchObject({ status: 'failed' });
+    );
+    await vi.waitFor(() => expect(queue.enqueueCalls).toHaveLength(2));
+    await queue.accept();
+    await vi.waitFor(() => expect(h.listenerCount()).toBe(1));
+    h.emit({ type: 'done', data: {} });
+    expect(await persistentTask).toMatchObject({ sessionId: SESSION_ID });
+    expect(latestNotifiedRun(notifier)).toMatchObject({ status: 'success' });
 
     // 3. Explicit built-in override on source='scheduler' ACP task switches and dispatches.
     const overrideQueue = createQueueHarness({ busy: false });

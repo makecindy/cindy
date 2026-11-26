@@ -1950,12 +1950,11 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
   const currentPluginEngineIsRemote = !!currentSession?.agentDeviceId && currentSession.agentDeviceId !== deviceId;
   const pluginEngineTargetId = pluginEngineExecutionDeviceId(currentSession?.agentDeviceId, pluginEngineSwitchIntent);
   const pluginEngineTargetIsRemote = !!pluginEngineTargetId && pluginEngineTargetId !== deviceId;
-  // 换到 / 换出插件引擎只限被控电脑本机的普通任务，与 Desktop 的切换准入一致。
+  // 与 Desktop 切换准入一致：放开所有非只读、非归档、非 SSH、非 review、非共享访客会话的插件引擎切换。
   const pluginEngineSwitchEligible = !!currentSession && !!deviceId && !isSharedTaskPeer(deviceId)
     // Agent 在另一台电脑的任务照样可以：选插件引擎时 Agent 回到被控电脑(被控端负责换位置)。
     && !currentSession.remoteHostId
-    && !currentSession.orcaRole && !currentSession.orcaRemoteLead
-    && (currentSession.source == null || currentSession.source === 'desktop')
+    && currentSession.source !== 'review'
     && currentSession.status !== 'archived';
   const pluginEngines = usePluginEngines(maker, deviceId, pluginEngineTask || pluginEngineSwitchEligible);
   const currentPluginEngine = pluginEngineTask && !currentPluginEngineIsRemote
@@ -9634,8 +9633,8 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
   // 挑一个来源，再走选模型的同一条路径换过去(跨引擎、换位置按既有意图登记)。不留选中态，之后不会自己再换。
   // 分享来的任务、SSH、插件引擎任务、伙伴等非 Desktop 任务不提供；那台是旧版本时整段不出现。
   const sessionModelGroupsEligible = !!currentSession && !!deviceId && !isSharedTaskPeer(deviceId)
-    && !currentSession.remoteHostId && !pluginEngineTask
-    && (currentSession.source == null || currentSession.source === 'desktop')
+    && !currentSession.remoteHostId
+    && currentSession.source !== 'review'
     && currentSession.status !== 'archived';
   const sessionHostModelGroups = useHostModelGroups(deviceId, maker, sessionModelGroupsEligible && modelSheetOpen);
   const switchSessionByModelGroup = useCallback(async (id: string): Promise<boolean> => {
@@ -9650,23 +9649,29 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       return false;
     }
     const { route } = result;
-    const applied = await selectUnifiedComposerModel(
-      {
-        agent: route.agentKind === 'cc' ? 'claude-code' : route.agentKind,
-        modelId: route.model,
-        providerId: route.providerId,
-        effort: route.effort ?? '',
-        fast: false,
-      },
-      route.agentDeviceId ? { deviceId: route.agentDeviceId } : undefined,
-    );
+    const applied = route.agentKind === 'acp'
+      ? await selectComposerPluginEngine({
+          providerId: route.providerId,
+          modelId: route.model,
+          ...(isPluginEngineEffort(route.effort) ? { effort: route.effort } : {}),
+        })
+      : await selectUnifiedComposerModel(
+          {
+            agent: route.agentKind === 'cc' ? 'claude-code' : route.agentKind,
+            modelId: route.model,
+            providerId: route.providerId,
+            effort: route.effort ?? '',
+            fast: false,
+          },
+          route.agentDeviceId ? { deviceId: route.agentDeviceId } : undefined,
+        );
     if (!applied) return false;
     // 记下是经哪个模式换的：那台之后撞配额时据此提议同一模式里的下一个来源。
     applyHostModelGroupResult(maker, sessionId, id, result, null);
     showTransientNotice(t('models.modelGroups.picker.switched', { name: result.groupName, model: `${result.modelName} · ${result.sourceName}` }));
     return true;
   }, [currentSession, canUseRemoteSessionControls, controlBusy, sessionHostModelGroups, deviceId, maker, nextAgentDeviceId,
-    selectUnifiedComposerModel, sessionId, showTransientNotice, t]);
+    selectComposerPluginEngine, selectUnifiedComposerModel, sessionId, showTransientNotice, t]);
   const composerModelGroupOptions = useHostModelGroupPickerOptions(
     sessionModelGroupsEligible ? sessionHostModelGroups : null, null, switchSessionByModelGroup, t,
   );

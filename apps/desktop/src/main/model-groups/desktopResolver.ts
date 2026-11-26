@@ -9,11 +9,12 @@ import { getGoalController } from '../goal-host/index.js';
 import { getSessionRowSnapshot } from '../localDb/sessionDispatchSnapshot.js';
 import { getDesktopProviderService } from '../maker-host/createDesktopProviderService.js';
 import { isRemoteProviderInvocationAllowed } from '../maker-host/remote-provider-access-store.js';
+import { listPluginEngineViews } from '../maker-ipc/pluginEnginesIpc.js';
 import { readWorkerAgentLocations } from '../maker-ipc/workerAgentLocations.js';
 import { getQuotaOverviewService } from '../quota-overview/service.js';
 import { getGatewayModelPricing } from '../usage/modelPricing.js';
 import { getReferenceModelPricing } from '../usage/referenceModelPricing.js';
-import { readDeviceProviderCatalog } from '../remote-agent/controller/deviceCatalog.js';
+import { readDeviceProviderCatalog, readRemotePluginEngines } from '../remote-agent/controller/deviceCatalog.js';
 import { recordModelGroupDecision } from './decisionLog.js';
 import { createModelGroupResolver, modelGroupQuotaKey, MODEL_GROUP_REMOTE_WAIT_MS } from './resolver.js';
 import { readModelGroupSessionBinding } from './sessionBindings.js';
@@ -73,7 +74,8 @@ function publishCatalog(): void {
     ...(remoteCatalogs?.scope === scope ? { remote: remoteCatalogs.value } : {}),
     // 与解析路由时同一个判断；别的位置上的来源按那个位置的目录看，执行时那台还会再拦一次。
     available: (candidate, locationViews, agents) =>
-      isPluginModelPickerRouteAvailable({ ...candidate, effort: '', fastMode: false }, locationViews as ProviderView[], agents),
+      candidate.agentKind !== 'acp'
+      && isPluginModelPickerRouteAvailable({ ...candidate, agentKind: candidate.agentKind, effort: '', fastMode: false }, locationViews as ProviderView[], agents),
   });
 }
 
@@ -135,7 +137,8 @@ const innerGroups = new Map<string, { at: number; value: Promise<ModelGroupInner
  * 账号，报能不能用、快满没、急不急、余量，外层智能路由按它判断，与内层实际会用的一致。只读：不占位、不推进轮流或计数。
  * 单个账号、没有组的来源返回 null，照旧按额度总览里那一份判断。
  */
-function innerQuota(source: { providerId: string; model: string; agentKind: 'cc' | 'codex' | 'pi' }): Promise<ModelGroupInnerQuota | null> {
+function innerQuota(source: { providerId: string; model: string; agentKind: 'cc' | 'codex' | 'pi' | 'acp' }): Promise<ModelGroupInnerQuota | null> {
+  if (source.agentKind === 'acp') return Promise.resolve(null);
   const agent = source.agentKind === 'cc' ? 'claude-code' as const : source.agentKind;
   const config = readProviderGroup(source.providerId);
   if (config) {
@@ -205,6 +208,8 @@ export const resolver = createModelGroupResolver({
   config: readModelGroupsConfigForSelected,
   recordDecision: recordModelGroupDecision,
   views: localViews,
+  pluginEngines: listPluginEngineViews,
+  remotePluginEngines: readRemotePluginEngines,
   // 另一台电脑借这台跑 Agent 时只用开了「允许被远程调用」的连接(与设置里那个开关同一份)。
   remoteInvocable: isRemoteProviderInvocationAllowed,
   agents: getPluginModelPickerAgents,

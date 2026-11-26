@@ -79,7 +79,7 @@ describe('checkDiscordSessionAuth', () => {
     });
     const checkAuth = vi.fn(
       async (
-        row: { agentKind: AgentKind; model: string; providerId: string | null },
+        row: { agentKind: 'claude-code' | 'codex' | 'pi' | 'acp'; model: string; providerId: string | null },
         providerSnapshot: ProviderView[] | null | undefined,
         receivedDeps: ImAuthCheckDeps,
       ) => {

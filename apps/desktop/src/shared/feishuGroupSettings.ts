@@ -12,12 +12,13 @@
 
 import {
   isImDefaultAgentKind,
-  isImDefaultEffort,
+  isImDefaultEffortForAgent,
   isImDefaultPermissionMode,
+  type ImDefaultAgentEffort,
   type ImDefaultAgentKind,
-  type ImDefaultEffort,
   type ImDefaultPermissionMode,
 } from './imDefaultSettings.js';
+import { pluginEngineKeyFromProviderId } from './pluginEngines.js';
 
 export interface FeishuGroupRoute {
   agentKind: ImDefaultAgentKind;
@@ -25,7 +26,7 @@ export interface FeishuGroupRoute {
   providerId: string | null;
   /** Agent 所在电脑；share:<id> 表示分享来的供应商；null 为本机。 */
   agentDeviceId: string | null;
-  effort: ImDefaultEffort;
+  effort: ImDefaultAgentEffort;
 }
 
 /** 渲染端可见的一个群的设置。 */
@@ -127,13 +128,14 @@ function optionalId(value: unknown): string | null | undefined {
 export function parseFeishuGroupRoute(value: unknown): FeishuGroupRoute | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
   const raw = value as Record<string, unknown>;
-  if (!isImDefaultAgentKind(raw.agentKind) || !isImDefaultEffort(raw.effort)) return null;
+  if (!isImDefaultAgentKind(raw.agentKind) || !isImDefaultEffortForAgent(raw.agentKind, raw.effort)) return null;
   if (typeof raw.model !== 'string') return null;
   const model = raw.model.trim();
   if (!model || model.length > MAX_ID_LENGTH) return null;
   const providerId = optionalId(raw.providerId ?? null);
   const agentDeviceId = optionalId(raw.agentDeviceId ?? null);
   if (providerId === undefined || agentDeviceId === undefined) return null;
+  if (raw.agentKind === 'acp' && !pluginEngineKeyFromProviderId(providerId)) return null;
   return { agentKind: raw.agentKind, model, providerId, agentDeviceId, effort: raw.effort };
 }
 

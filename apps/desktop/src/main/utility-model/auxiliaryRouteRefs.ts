@@ -28,15 +28,26 @@ function routes(): ModelGroupRoute[] {
   }
 }
 
-const agentOf = (kind: ModelGroupCandidate['agentKind']): CatalogModelPinRoute['agentKind'] => (kind === 'cc' ? 'claude-code' : kind);
+type BuiltinModelGroupCandidate = ModelGroupCandidate & {
+  agentKind: Exclude<ModelGroupCandidate['agentKind'], 'acp'>;
+};
 
-function pinOf(candidate: Pick<ModelGroupCandidate, 'agentKind' | 'providerId' | 'model'>): string {
+const isBuiltinCandidate = (candidate: ModelGroupCandidate): candidate is BuiltinModelGroupCandidate =>
+  candidate.agentKind !== 'acp';
+
+const agentOf = (kind: BuiltinModelGroupCandidate['agentKind']): CatalogModelPinRoute['agentKind'] =>
+  (kind === 'cc' ? 'claude-code' : kind);
+
+function pinOf(candidate: Pick<BuiltinModelGroupCandidate, 'agentKind' | 'providerId' | 'model'>): string {
   return encodeCatalogModelPin({ providerId: candidate.providerId, agentKind: agentOf(candidate.agentKind), model: candidate.model });
 }
 
-/** 路由里辅助请求能用的来源：本机、没停用。 */
-function localCandidates(route: ModelGroupRoute): ModelGroupCandidate[] {
-  return route.candidates.filter((candidate) => !candidate.off && !candidate.agentDeviceId);
+/** 路由里辅助请求能用的来源：本机、没停用、非插件引擎(直接 HTTP 一次性请求)。 */
+function localCandidates(route: ModelGroupRoute): BuiltinModelGroupCandidate[] {
+  return route.candidates.filter(
+    (candidate): candidate is BuiltinModelGroupCandidate =>
+      !candidate.off && !candidate.agentDeviceId && isBuiltinCandidate(candidate),
+  );
 }
 
 /** 路由此刻会先用的本机来源；pin 为 null = 这次解析没选出本机来源或解析失败(同样等满刷新间隔再试)。 */
@@ -57,7 +68,14 @@ function refreshPreferred(routeId: string): void {
     .then((result) => {
       if (activeOwnerScopeKey() !== scope) return;
       // 每次尝试都记下时间：选不出本机来源或失败时也等满刷新间隔，不随每次读辅助链重新解析。
-      preferred.set(key, { scope, pin: result.outcome === 'routed' && !result.route.agentDeviceId ? pinOf(result.route) : null, at: Date.now() });
+      preferred.set(key, {
+        scope,
+        pin:
+          result.outcome === 'routed' && !result.route.agentDeviceId && result.route.agentKind !== 'acp'
+            ? pinOf(result.route as BuiltinModelGroupCandidate)
+            : null,
+        at: Date.now(),
+      });
     })
     .catch(() => { if (activeOwnerScopeKey() === scope) preferred.set(key, { scope, pin: null, at: Date.now() }); })
     .finally(() => refreshing.delete(key));
@@ -67,7 +85,7 @@ function refreshPreferred(routeId: string): void {
  * 一条路由里本机、没停用的来源，按「路由此刻会选的排第一、其余照路由里的先后」排好。路由不存在时为空。
  * 辅助模型与 Subagent 共用：它们都只能用本机的来源，也都不能等一次选路。
  */
-export function localRouteCandidatesInPickOrder(routeId: string): ModelGroupCandidate[] {
+export function localRouteCandidatesInPickOrder(routeId: string): BuiltinModelGroupCandidate[] {
   let config: ReturnType<typeof readModelGroupsConfigForSelected>;
   try {
     // 按已选的路由解析：合并路由只剩一个能用连接时照样展开到它。
@@ -102,7 +120,7 @@ export function buildAuxiliaryRouteOptions(usable: ReadonlyMap<string, Auxiliary
     const id = encodeAuxiliaryRouteRef(route.id);
     if (route.hidden && !selected.includes(id)) continue;
     const members = localCandidates(route);
-    const head = members[0] ?? route.candidates[0];
+    const head = members[0] ?? route.candidates.find(isBuiltinCandidate);
     if (!head) continue;
     const usableMembers = members.filter((candidate) => usable.has(pinOf(candidate)));
     const sample = usable.get(pinOf(usableMembers[0] ?? head));
@@ -127,13 +145,17 @@ export function buildAuxiliaryRouteOptions(usable: ReadonlyMap<string, Auxiliary
       route: { kind: route.parent ? 'merged' : 'route', name: route.parent?.name ?? route.name, members: members.length },
     });
   }
-  // 选着的路由已经删掉了：留一项不可用的，界面能认出它、能换掉，不显示成一串 id。
+  // 选着的路由已经删掉或仅含插件引擎(轻量调用不能拉起 ACP 进程)：留一项不可用的，界面能认出它、能换掉。
+  const knownRoutes = routes();
   for (const ref of selected) {
     if (!ref.startsWith('route:') || options.some((option) => option.id === ref)) continue;
+    const existing = knownRoutes.find((route) => encodeAuxiliaryRouteRef(route.id) === ref);
+    const name = existing?.name ?? '';
     options.push({
-      id: ref, label: '', group: '', providerId: MINE, agentKind: 'codex', modelId: ref, modelName: '',
+      id: ref, label: name, group: existing?.parent?.name ?? name, providerId: MINE, agentKind: 'codex',
+      modelId: existing ? existing.id : ref, modelName: name,
       budget: false, subscription: false, agentSuffix: '', available: false,
-      route: { kind: 'route', name: '', members: 0 },
+      route: { kind: existing?.parent ? 'merged' : 'route', name: existing?.parent?.name ?? name, members: 0 },
     });
   }
   return options;

@@ -11,6 +11,8 @@ import path from 'node:path';
 import { app } from 'electron';
 
 import {
+  BUILTIN_IM_DEFAULT_AGENT_KINDS,
+  DEFAULT_ACP_IM_AGENT_SETTINGS,
   IM_DEFAULT_SETTINGS,
   IM_DEFAULT_SETTINGS_CHANNELS,
   type ImDefaultAgentKind,
@@ -21,6 +23,7 @@ import {
   type ImDefaultSettings,
   isImDefaultAgentKind,
   isImDefaultEffort,
+  isImDefaultEffortForAgent,
   isImDefaultPermissionMode,
 } from '../../shared/imDefaultSettings.js';
 import { desktopMakerLogger } from '../maker-host/logger-adapter.js';
@@ -38,11 +41,16 @@ function validateInspectionSettings(raw: Record<string, unknown>): void {
   validateOptionalSettingsFields(raw, { agentKind: isImDefaultAgentKind, permissionMode: isImDefaultPermissionMode,
     groupPermissionMode: isImDefaultPermissionMode, groupCtrPermissionMode: isImDefaultPermissionMode,
     providerId: nullableText, model: value => typeof value === 'string', effort: isImDefaultEffort, agents: isRecord });
-  if (isRecord(raw.agents)) for (const agent of ['claude-code', 'codex', 'pi']) {
+  if (isRecord(raw.agents)) for (const agent of [...BUILTIN_IM_DEFAULT_AGENT_KINDS, 'acp'] as const) {
     const route = raw.agents[agent];
     if (route === undefined) continue;
     if (!isRecord(route)) throw new Error('invalid IM route');
-    validateOptionalSettingsFields(route, { providerId: nullableText, model: value => typeof value === 'string', effort: isImDefaultEffort });
+    validateOptionalSettingsFields(route, {
+      agentDeviceId: nullableText,
+      providerId: nullableText,
+      model: value => typeof value === 'string',
+      effort: value => isImDefaultEffortForAgent(agent, value),
+    });
   }
 }
 function inspectNormalizeDocument(raw: Record<string, unknown>): ImDefaultSettingsDocument {
@@ -97,6 +105,11 @@ function normalizeSettings(raw: unknown): ImDefaultSettings {
   const agentKind = isImDefaultAgentKind(r.agentKind) ? r.agentKind : IM_DEFAULT_SETTINGS.agentKind;
   const rawAgents = isRecord(r.agents) ? r.agents : {};
   const legacySettings = legacyAgentSettings(r);
+  const rawAcp = rawAgents.acp;
+  const normalizedAcp = rawAcp !== undefined ? normalizeAgentSettings('acp', rawAcp) : null;
+  const includeAcp =
+    agentKind === 'acp' ||
+    (normalizedAcp !== null && !agentSettingsEqual(normalizedAcp, DEFAULT_ACP_IM_AGENT_SETTINGS));
   return {
     agentKind,
     permissionMode: isImDefaultPermissionMode(r.permissionMode)
@@ -120,6 +133,7 @@ function normalizeSettings(raw: unknown): ImDefaultSettings {
         'pi',
         rawAgentOrLegacy(rawAgents, 'pi', agentKind, legacySettings),
       ),
+      ...(includeAcp ? { acp: normalizedAcp ?? { ...DEFAULT_ACP_IM_AGENT_SETTINGS } } : {}),
     },
   };
 }
@@ -230,19 +244,23 @@ function rawAgentOrLegacy(
   return agentSettingsMatchesDefaults(target, raw) ? legacySettings : raw;
 }
 
+function defaultAgentSettingsFor(agentKind: ImDefaultAgentKind): ImDefaultAgentSettings {
+  return agentKind === 'acp' ? DEFAULT_ACP_IM_AGENT_SETTINGS : IM_DEFAULT_SETTINGS.agents[agentKind];
+}
+
 function agentSettingsMatchesDefaults(
   agentKind: ImDefaultAgentKind,
   raw: Record<string, unknown>,
 ): boolean {
   const normalized = normalizeAgentSettings(agentKind, raw);
-  return JSON.stringify(normalized) === JSON.stringify(IM_DEFAULT_SETTINGS.agents[agentKind]);
+  return JSON.stringify(normalized) === JSON.stringify(defaultAgentSettingsFor(agentKind));
 }
 
 function normalizeAgentSettings(
   agentKind: ImDefaultAgentKind,
   raw: unknown,
 ): ImDefaultAgentSettings {
-  const defaults = IM_DEFAULT_SETTINGS.agents[agentKind];
+  const defaults = defaultAgentSettingsFor(agentKind);
   if (!isRecord(raw)) return { ...defaults };
   return {
     ...(typeof raw.agentDeviceId === 'string' && raw.agentDeviceId.trim()
@@ -250,7 +268,7 @@ function normalizeAgentSettings(
     providerId:
       typeof raw.providerId === 'string' && raw.providerId.trim() ? raw.providerId.trim() : null,
     model: typeof raw.model === 'string' && raw.model.trim() ? raw.model.trim() : defaults.model,
-    effort: isImDefaultEffort(raw.effort) ? raw.effort : defaults.effort,
+    effort: isImDefaultEffortForAgent(agentKind, raw.effort) ? raw.effort : defaults.effort,
   };
 }
 
@@ -413,10 +431,13 @@ function settingsOverrides(
     overrides.groupPermissionMode = value.groupPermissionMode;
   }
   const agents: Partial<Record<ImDefaultAgentKind, ImDefaultAgentSettings>> = {};
-  for (const agentKind of ['claude-code', 'codex', 'pi'] as const) {
+  for (const agentKind of BUILTIN_IM_DEFAULT_AGENT_KINDS) {
     if (!agentSettingsEqual(value.agents[agentKind], defaults.agents[agentKind])) {
       agents[agentKind] = value.agents[agentKind];
     }
+  }
+  if (value.agents.acp && !agentSettingsEqual(value.agents.acp, DEFAULT_ACP_IM_AGENT_SETTINGS)) {
+    agents.acp = value.agents.acp;
   }
   if (Object.keys(agents).length > 0) overrides.agents = agents;
   return overrides;
@@ -429,10 +450,13 @@ function settingsCustomizedKeys(value: ImDefaultSettings, defaults: ImDefaultSet
   if (value.groupPermissionMode !== defaults.groupPermissionMode) {
     keys.push('groupPermissionMode');
   }
-  for (const agentKind of ['claude-code', 'codex', 'pi'] as const) {
+  for (const agentKind of BUILTIN_IM_DEFAULT_AGENT_KINDS) {
     if (!agentSettingsEqual(value.agents[agentKind], defaults.agents[agentKind])) {
       keys.push(`agents.${agentKind}`);
     }
+  }
+  if (value.agents.acp && !agentSettingsEqual(value.agents.acp, DEFAULT_ACP_IM_AGENT_SETTINGS)) {
+    keys.push('agents.acp');
   }
   return keys;
 }
@@ -451,6 +475,7 @@ function cloneSettings(settings: ImDefaultSettings): ImDefaultSettings {
       'claude-code': { ...settings.agents['claude-code'] },
       codex: { ...settings.agents.codex },
       pi: { ...settings.agents.pi },
+      ...(settings.agents.acp ? { acp: { ...settings.agents.acp } } : {}),
     },
   };
 }

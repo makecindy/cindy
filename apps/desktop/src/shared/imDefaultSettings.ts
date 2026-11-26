@@ -1,7 +1,15 @@
-export type ImDefaultAgentKind = 'claude-code' | 'codex' | 'pi';
+export type BuiltinImDefaultAgentKind = 'claude-code' | 'codex' | 'pi';
+export type ImDefaultAgentKind = BuiltinImDefaultAgentKind | 'acp';
+export const BUILTIN_IM_DEFAULT_AGENT_KINDS: readonly BuiltinImDefaultAgentKind[] = [
+  'claude-code',
+  'codex',
+  'pi',
+];
 export type ImDefaultPermissionMode =
   'ask' | 'default' | 'acceptEdits' | 'plan' | 'auto' | 'bypassPermissions';
 export type ImDefaultEffort = 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra';
+/** Plugin engine models may have no selectable reasoning level ('' = keep engine default). */
+export type ImDefaultAgentEffort = ImDefaultEffort | '';
 /**
  * IM channel scopes that keep independent new-conversation routing preferences.
  * 'telegram' 指个人 Telegram bot(main/im/telegram);官方 Telegram hook 通道
@@ -17,10 +25,27 @@ export interface ImDefaultAgentSettings {
   providerId: string | null;
   /** Empty means automatic selection from the current catalog, never a wire model ID. */
   model: string;
-  effort: ImDefaultEffort;
+  effort: ImDefaultAgentEffort;
 }
 
-export type ImDefaultAgentSettingsMap = Record<ImDefaultAgentKind, ImDefaultAgentSettings>;
+export type ImDefaultAgentSettingsMap =
+  Record<BuiltinImDefaultAgentKind, ImDefaultAgentSettings> & {
+    /** Plugin engine default slot (optional so IM_DEFAULT_SETTINGS.agents keeps legacy JSON key shape). */
+    acp?: ImDefaultAgentSettings;
+  };
+
+export const DEFAULT_ACP_IM_AGENT_SETTINGS: ImDefaultAgentSettings = {
+  providerId: null,
+  model: '',
+  effort: '',
+};
+
+export function imDefaultAgentSettingsOf(
+  settings: Pick<ImDefaultSettings, 'agents'>,
+  agentKind: ImDefaultAgentKind,
+): ImDefaultAgentSettings {
+  return settings.agents[agentKind] ?? DEFAULT_ACP_IM_AGENT_SETTINGS;
+}
 
 export interface ImDefaultSettings {
   agentKind: ImDefaultAgentKind;
@@ -55,7 +80,7 @@ export interface ImDefaultSettingsState extends ImDefaultSettings {
   defaults: ImDefaultSettings;
 }
 
-export const IM_DEFAULT_SETTINGS: ImDefaultSettings = {
+export const IM_DEFAULT_SETTINGS: ImDefaultSettings & { agentKind: BuiltinImDefaultAgentKind } = {
   agentKind: 'claude-code',
   permissionMode: 'auto',
   groupPermissionMode: 'auto',
@@ -95,7 +120,8 @@ export const IM_DEFAULT_EFFORT_OVERRIDES: Readonly<Partial<Record<string, ImDefa
   'codex/gpt-5.5': 'high',
 };
 
-const AGENT_KINDS = new Set<ImDefaultAgentKind>(['claude-code', 'codex', 'pi']);
+const BUILTIN_AGENT_KINDS = new Set<BuiltinImDefaultAgentKind>(['claude-code', 'codex', 'pi']);
+const AGENT_KINDS = new Set<ImDefaultAgentKind>(['claude-code', 'codex', 'pi', 'acp']);
 const EFFORTS = new Set<ImDefaultEffort>([
   'minimal',
   'low',
@@ -137,12 +163,23 @@ export function isUnconditionalTurnPolicyChannel(channel: ImDefaultSettingsChann
   return UNCONDITIONAL_TURN_POLICY_CHANNELS.includes(channel);
 }
 
+export function isBuiltinImDefaultAgentKind(value: unknown): value is BuiltinImDefaultAgentKind {
+  return typeof value === 'string' && BUILTIN_AGENT_KINDS.has(value as BuiltinImDefaultAgentKind);
+}
+
 export function isImDefaultAgentKind(value: unknown): value is ImDefaultAgentKind {
   return typeof value === 'string' && AGENT_KINDS.has(value as ImDefaultAgentKind);
 }
 
 export function isImDefaultEffort(value: unknown): value is ImDefaultEffort {
   return typeof value === 'string' && EFFORTS.has(value as ImDefaultEffort);
+}
+
+export function isImDefaultEffortForAgent(
+  agentKind: ImDefaultAgentKind,
+  value: unknown,
+): value is ImDefaultAgentEffort {
+  return isImDefaultEffort(value) || (agentKind === 'acp' && value === '');
 }
 
 export function isImDefaultPermissionMode(value: unknown): value is ImDefaultPermissionMode {

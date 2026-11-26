@@ -8,13 +8,13 @@
  * `/new` / 跟随切换成功)都在 `sessions.im_default_route` 记下当时的设置指纹与
  * **读回的实际路由**; 之后任务当前路由与记录不一致 = 有人单独改过。
  */
-import type { AgentKind } from '@cindy/maker-core';
+import type { EngineKind } from '@cindy/maker-core';
 
 import type { ImDefaultSettings } from '../../../shared/imDefaultSettings.js';
 
 export interface ImDefaultRoute {
   agentDeviceId?: string | null;
-  agentKind: AgentKind;
+  agentKind: EngineKind;
   model: string;
   providerId: string | null;
   effort: string | null;
@@ -44,34 +44,48 @@ export interface ImDefaultRouteRecord {
   manual?: true;
 }
 
-const AGENT_KINDS: readonly AgentKind[] = ['claude-code', 'codex', 'pi'];
+const BUILTIN_AGENT_KINDS = ['claude-code', 'codex', 'pi'] as const;
+const ENGINE_KINDS: readonly EngineKind[] = ['claude-code', 'codex', 'pi', 'acp'];
 
 /**
- * 渠道原始设置里影响路由的部分。三个引擎都算进去: 选定引擎的模型全被停用时
- * 解析会回落到别的引擎, 那边的设置同样决定落点。权限档不在内 —— 它不跟随。
+ * 渠道原始设置里影响路由的部分。三个内置引擎都算进去: 选定引擎的模型全被停用时
+ * 解析会回落到别的引擎, 那边的设置同样决定落点；选到或配置了插件引擎时同样纳入指纹。
+ * 权限档不在内 —— 它不跟随。
  */
 export function fingerprintImDefaultSettings(raw: ImDefaultSettings): string {
+  const builtin = BUILTIN_AGENT_KINDS.map((agent) => {
+    const settings = raw.agents[agent];
+    return settings ? [settings.providerId ?? null, settings.model, settings.effort,
+      ...(settings.agentDeviceId ? [settings.agentDeviceId] : [])] : null;
+  });
+  const acpSettings = (raw.agents as Partial<Record<EngineKind, { providerId: string | null; model: string; effort: string; agentDeviceId?: string | null }>>).acp;
+  const includeAcp = raw.agentKind === 'acp' || Boolean(acpSettings?.providerId || acpSettings?.model);
+  if (!includeAcp) {
+    return JSON.stringify([raw.agentKind, builtin]);
+  }
   return JSON.stringify([
     raw.agentKind,
-    AGENT_KINDS.map((agent) => {
-      const settings = raw.agents[agent];
-      return settings ? [settings.providerId ?? null, settings.model, settings.effort,
-        ...(settings.agentDeviceId ? [settings.agentDeviceId] : [])] : null;
-    }),
+    [
+      ...builtin,
+      acpSettings
+        ? [acpSettings.providerId ?? null, acpSettings.model, acpSettings.effort,
+            ...(acpSettings.agentDeviceId ? [acpSettings.agentDeviceId] : [])]
+        : null,
+    ],
   ]);
 }
 
 function parseRoute(value: unknown): ImDefaultRoute | null {
   if (!value || typeof value !== 'object') return null;
   const r = value as Record<string, unknown>;
-  if (!AGENT_KINDS.includes(r.agentKind as AgentKind)) return null;
+  if (!ENGINE_KINDS.includes(r.agentKind as EngineKind)) return null;
   if (typeof r.model !== 'string' || !r.model) return null;
   if (r.providerId !== null && typeof r.providerId !== 'string') return null;
   if (r.effort !== null && typeof r.effort !== 'string') return null;
   if (r.agentDeviceId != null && typeof r.agentDeviceId !== 'string') return null;
   return {
     ...(r.agentDeviceId ? { agentDeviceId: r.agentDeviceId as string } : {}),
-    agentKind: r.agentKind as AgentKind,
+    agentKind: r.agentKind as EngineKind,
     model: r.model,
     providerId: (r.providerId as string | null) || null,
     effort: (r.effort as string | null) || null,
@@ -152,7 +166,7 @@ export function sameImDefaultRoute(
     a.agentKind === b.agentKind &&
     (a.agentDeviceId ?? null) === (b.agentDeviceId ?? null) &&
     a.model === b.model &&
-    (a.effort ?? null) === (b.effort ?? null) &&
+    (a.effort || null) === (b.effort || null) &&
     normalizeProvider(a) === normalizeProvider(b)
   );
 }

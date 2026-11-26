@@ -17,9 +17,9 @@ function project(domain: ImSettingsDomain, snapshot: ReturnType<ReturnType<typeo
   const channel = channels[domain];
   const document = interpretHostImDefaults(snapshot.value), defaults = interpretHostImDefaults({});
   const effective = channel ? document.channels[channel] : document.global;
-  // This wire version only describes routes executed on this Host. Do not turn
-  // a saved remote-Agent route into a local route by dropping its device binding.
-  if (Object.values(effective.agents).some(route => route.agentDeviceId)) {
+  // This wire version only describes built-in routes executed on this Host. Do not turn
+  // a saved remote-Agent or plugin-engine route into a local built-in route by dropping its binding.
+  if (effective.agentKind === 'acp' || Object.values(effective.agents).some(route => route?.agentDeviceId)) {
     return { status: 'unavailable', revision: null };
   }
   const scope = channel ? record(record(snapshot.value.channels)[channel]) : record(snapshot.value.global);
