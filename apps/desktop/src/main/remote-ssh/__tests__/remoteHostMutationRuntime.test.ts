@@ -1,4 +1,4 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { execSync } from 'node:child_process';
 import { mkdtempSync, mkdirSync, symlinkSync, rmSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -25,6 +25,8 @@ const mocks = vi.hoisted(() => ({
   dbLimit: vi.fn(),
   logWarn: vi.fn(),
   send: vi.fn(),
+  /** This file's own profile directory (mkdtemp, removed afterwards), where Cindy's host-key store is written. */
+  userData: '',
 }));
 
 vi.mock('../../logger.js', async (importOriginal) => {
@@ -43,8 +45,16 @@ vi.mock('../../logger.js', async (importOriginal) => {
 
 vi.mock('electron', async (importOriginal) => {
   const actual = await importOriginal<typeof import('electron')>();
+  const fs = await import('node:fs');
+  const os = await import('node:os');
+  const path = await import('node:path');
+  mocks.userData = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-remote-ssh-runtime-'));
   return {
     ...actual,
+    // Not the electron stub's shared userData: pins written here must not leak into other runs or worktrees.
+    app: Object.assign(Object.create(actual.app), {
+      getPath: (name: string) => (name === 'userData' ? mocks.userData : actual.app.getPath(name as never)),
+    }),
     ipcMain: {
       ...actual.ipcMain,
       handle: vi.fn((channel: string, handler: (...args: any[]) => unknown) => {
@@ -202,6 +212,10 @@ beforeAll(async () => {
   initialListResult = await handler(REMOTE_SSH_INVOKE.LIST)({});
   mocks.readSshConfigDetailed.mockResolvedValue(successfulRead([]));
   await handler(REMOTE_SSH_INVOKE.RELOAD_CONFIG)({});
+});
+
+afterAll(() => {
+  if (mocks.userData) rmSync(mocks.userData, { recursive: true, force: true });
 });
 
 beforeEach(async () => {
@@ -830,10 +844,11 @@ describe('remote SSH mutation runtime semantics', () => {
 /*
  * SSH access to the person's own devices (decisions 6 and 8, 2026-11-26). Entry points: the main-only
  * upsertPinnedDeviceHost, the Settings UPDATE/REMOVE/LIST handlers and new-computer setup's host list, with the
- * managed writers mocked as above and the real host-key store. Observable: the pinned key in known-hosts.json under
+ * managed writers mocked as above and the real host-key store (in this file's own profile directory). Observable: the pinned key in known-hosts.json under
  * the HostKeyAlias, the block written with strict checking, a deleted host reported missing instead of re-added, an
  * alias that is someone else's left alone, connection fields of a device host refused in Settings, the
- * 「来自我的设备」 label on LIST and the removal reaching the controller. Unit tier.
+ * 「来自我的设备」 label on LIST, 「主机指纹已核对」 (hostKeyPinned) only for a key that really is pinned, and the removal
+ * reaching the controller. Unit tier.
  */
 describe('hosts for the person\'s own devices', () => {
   const spec = (overrides: Partial<PinnedDeviceHostSpec> = {}): PinnedDeviceHostSpec => ({
@@ -891,6 +906,31 @@ describe('hosts for the person\'s own devices', () => {
     expect(mocks.addManagedHostWithInclude).not.toHaveBeenCalled();
     expect(mocks.updateManagedHostFields).not.toHaveBeenCalled();
     expect(await getRemoteSshHostKeyStore().get('cindy-device-abc123')).toBe('SHA256:pinned-second');
+  });
+
+  // 「主机指纹已核对」 follows the pin itself, not the device-host flag: a device host whose key is missing from the store,
+  // or whose block no longer requires a known key, is not reported pinned.
+  it('reports a device host\'s key pinned only when its block requires a known key and Cindy\'s store holds one', async () => {
+    const store = getRemoteSshHostKeyStore();
+    const pinned = onDisk(spec({ alias: 'cindy-cloud', hostKeyAlias: 'cindy-device-cloud01' }));
+    const unpinned = onDisk(spec({ alias: 'cindy-mini', hostKeyAlias: 'cindy-device-mini01' }));
+    const { strictHostKeyChecking: _strict, ...lax } = onDisk(spec({ alias: 'cindy-lax', hostKeyAlias: 'cindy-device-lax01' }));
+    await store.pin('cindy-device-cloud01', 'SHA256:cloud');
+    await store.pin('cindy-device-lax01', 'SHA256:lax');
+    const hosts = [pinned, unpinned, lax, host('dev-server')];
+    await getRemoteSshPool().hydrate(hosts);
+    mocks.readSshConfigDetailed.mockImplementation(async () => successfulRead(hosts));
+    const listed = await handler(REMOTE_SSH_INVOKE.LIST)({});
+    expect(listed.hosts.filter((entry: { hostKeyPinned?: true }) => entry.hostKeyPinned).map((entry: { config: { id: string } }) => entry.config.id))
+      .toEqual(['cindy-cloud']);
+
+    // Pinned here by the controller: the status push that follows says so without another read of the store.
+    mocks.send.mockClear();
+    await expect(upsertPinnedDeviceHost(spec({ alias: 'cindy-mini', hostKeyAlias: 'cindy-device-mini01', hostKeyFingerprint: 'SHA256:mini' }), { expectPresent: true }))
+      .resolves.toBe('unchanged');
+    expect(mocks.send).toHaveBeenCalledWith(REMOTE_SSH_PUSH.STATUS_CHANGED, expect.objectContaining({
+      config: expect.objectContaining({ id: 'cindy-mini' }), hostKeyPinned: true,
+    }));
   });
 
   it('refuses Settings edits of a device host\'s connection, labels it on LIST, tells the controller of its removal and keeps it out of setup', async () => {

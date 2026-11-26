@@ -2222,6 +2222,7 @@
         "updateFailed": "Could not update host trust. The connection details or saved key may have changed, or the trust file could not be written. Reconnect to refresh the fingerprints and check the file permissions."
       },
       "fromMyDevice": "From my devices",
+      "fromMyDeviceKeyPinned": "From my devices · Fingerprint verified",
       "deviceUnavailable": "Unavailable"
     },
     "appearance": {

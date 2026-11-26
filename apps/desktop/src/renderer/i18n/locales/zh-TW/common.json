@@ -2192,6 +2192,7 @@
         "updateFailed": "無法更新主機信任記錄。連線資訊或已存金鑰可能已變更，也可能無法寫入記錄檔。請重新連線以更新指紋，並檢查檔案權限"
       },
       "fromMyDevice": "來自我的裝置",
+      "fromMyDeviceKeyPinned": "來自我的裝置 · 主機指紋已核對",
       "deviceUnavailable": "暫不可用"
     },
     "appearance": {

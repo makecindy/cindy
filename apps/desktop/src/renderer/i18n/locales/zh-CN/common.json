@@ -2192,6 +2192,7 @@
         "updateFailed": "无法更新主机信任记录。连接信息或已存密钥可能已变化，也可能无法写入记录文件。请重新连接以刷新指纹，并检查文件权限"
       },
       "fromMyDevice": "来自我的设备",
+      "fromMyDeviceKeyPinned": "来自我的设备 · 主机指纹已核对",
       "deviceUnavailable": "暂不可用"
     },
     "appearance": {

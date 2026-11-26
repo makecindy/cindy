@@ -2260,6 +2260,7 @@
         "updateFailed": "Não foi possível atualizar a confiança no anfitrião. Os dados de ligação ou a chave guardada podem ter mudado, ou não foi possível escrever no ficheiro de confiança. Volte a ligar para atualizar as impressões digitais e verifique as permissões do ficheiro."
       },
       "fromMyDevice": "Dos meus dispositivos",
+      "fromMyDeviceKeyPinned": "Dos meus dispositivos · Impressão digital do anfitrião verificada",
       "deviceUnavailable": "Indisponível"
     },
     "appearance": {

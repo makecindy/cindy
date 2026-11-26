@@ -2192,6 +2192,7 @@
         "updateFailed": "호스트 신뢰 기록을 업데이트할 수 없습니다. 연결 정보나 저장된 키가 변경되었거나 기록 파일에 쓸 수 없을 수 있습니다. 다시 연결하여 지문을 새로 확인하고 파일 권한을 확인하세요."
       },
       "fromMyDevice": "내 기기에서",
+      "fromMyDeviceKeyPinned": "내 기기에서 · 호스트 지문 확인됨",
       "deviceUnavailable": "사용 불가"
     },
     "appearance": {

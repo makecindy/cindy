@@ -683,6 +683,38 @@ function isDeviceHost(config: HostConfig): boolean {
   return config.managedByCindy && isDeviceHostKeyAlias(config.hostKeyAlias);
 }
 
+/**
+ * Whether Cindy's host-key store holds a key under each device host's HostKeyAlias, as last read: when the SSH list is
+ * read and whenever a device host is pinned here. Snapshots, status pushes included, use it without reading the file.
+ */
+const pinnedDeviceHostKeys = new Map<string, boolean>();
+
+/**
+ * 「主机指纹已核对」: a host of the person's own devices whose own block requires a known key (StrictHostKeyChecking
+ * yes) and whose HostKeyAlias has a key in Cindy's host-key store, so Cindy's connections accept no other key.
+ */
+function deviceHostKeyPinned(config: HostConfig): boolean {
+  return isDeviceHost(config) && config.strictHostKeyChecking === true
+    && pinnedDeviceHostKeys.get(config.hostKeyAlias!) === true;
+}
+
+/** Reads the store again, from disk as a connection would, for the device hosts in the list. */
+async function refreshPinnedDeviceHostKeys(): Promise<void> {
+  const aliases = new Set(getPool().list().flatMap(({ config }) => (isDeviceHost(config) ? [config.hostKeyAlias!] : [])));
+  if (!aliases.size) return;
+  const store = getSharedHostKeyStore();
+  store.reload();
+  for (const alias of aliases) {
+    let pinned = false;
+    try {
+      pinned = (await store.get(alias)) !== null;
+    } catch {
+      // An unreadable store refuses every connection, so no key counts as pinned.
+    }
+    pinnedDeviceHostKeys.set(alias, pinned);
+  }
+}
+
 /** Compare only fields the Settings form can write before the disk re-read. */
 function editableConnectionFieldsChanged(left: HostConfig, right: HostConfig): boolean {
   return left.hostname !== right.hostname
@@ -892,6 +924,8 @@ export type HostSnapshotWithPrefs = Omit<HostSnapshot, 'config' | 'lastError'> &
   agentProxyTunnel: AgentProxyTunnelState | null;
   /** The host belongs to one of the person's own devices (「来自我的设备」) and whether it can be used now. */
   device?: SshHostDeviceLabel;
+  /** A device host whose key is pinned (「主机指纹已核对」); see deviceHostKeyPinned. */
+  hostKeyPinned?: true;
 };
 
 function portableBasename(value: string): string {
@@ -940,6 +974,7 @@ function withPrefs(snapshot: HostSnapshot): HostSnapshotWithPrefs {
     agentProxy: getSshHostAgentProxy(id),
     agentProxyTunnel: getAgentProxyTunnelState(id),
     ...(device ? { device } : {}),
+    ...(deviceHostKeyPinned(snapshot.config) ? { hostKeyPinned: true as const } : {}),
   };
 }
 
@@ -1290,6 +1325,7 @@ export async function reloadRemoteSshConfig(): Promise<ReturnType<typeof current
   } catch (err) {
     log.warn('failed to reload SSH config', { error: String(err) });
   }
+  await refreshPinnedDeviceHostKeys();
   return currentRemoteSshListResult();
 }
 
@@ -1556,6 +1592,7 @@ export async function upsertPinnedDeviceHost(
     };
     // Pinned before the alias is published or moved, so no connection ever meets an unpinned key.
     await getSharedHostKeyStore().pin(spec.hostKeyAlias, spec.hostKeyFingerprint);
+    pinnedDeviceHostKeys.set(spec.hostKeyAlias, true);
     let outcome: PinnedDeviceHostOutcome;
     if (!existing) {
       const receipt = await addManagedHostWithInclude(cfg, sshConfigPath, managedSshConfigPath);
@@ -1672,6 +1709,7 @@ export function registerRemoteSshIpc(): void {
   ipcMain.handle(REMOTE_SSH_INVOKE.LIST, async (event) => {
     assertTrustedAppRendererEvent(event);
     await ensureHydrated();
+    await refreshPinnedDeviceHostKeys();
     return currentRemoteSshListResult();
   });
 

@@ -2192,6 +2192,7 @@
         "updateFailed": "無法更新主機信任之錄。連線資訊或已存金鑰或已變，抑或記錄卷不可寫。請重連以更新指紋，並查卷之權柄"
       },
       "fromMyDevice": "出自吾之裝置",
+      "fromMyDeviceKeyPinned": "出自吾之裝置 · 主機指紋已核",
       "deviceUnavailable": "暫不可用"
     },
     "appearance": {

@@ -2192,6 +2192,7 @@
         "updateFailed": "无法更新主机信任之录。连接信息或已存密钥或已变，抑或记录卷不可写。请重连以更新指纹，并查卷之权柄"
       },
       "fromMyDevice": "出自吾之设备",
+      "fromMyDeviceKeyPinned": "出自吾之设备 · 主机指纹已核",
       "deviceUnavailable": "暂不可用"
     },
     "appearance": {

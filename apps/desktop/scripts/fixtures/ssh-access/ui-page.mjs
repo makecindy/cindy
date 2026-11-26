@@ -14,7 +14,7 @@ const NARROW_LIST = { width: 540, height: 1000 };
 
 const scene = (name, about, extra = {}) => ({ about, data: { scene: name }, ...extra });
 const TARGET = 'A Cindy cloud host (Linux) lets the owner\'s other devices in over SSH: on by default, the terminal alias, two devices and a pasted key; adding a key checks it, removing a device asks first (remote control goes too, its sessions end) and warns about a session whose key could not be identified, ending all sessions reports the count';
-const CONTROLLER = 'This Mac keeps SSH hosts for the other devices: the terminal command and Connect on the cloud host\'s card, Add back for a host the person deleted, Needs update for an old Cindy, unavailable while the device has SSH off or Remote Login off (the card says which); the SSH list marks them 「来自我的设备」, offers the terminal command to copy next to the alias and keeps their connection read-only';
+const CONTROLLER = 'This Mac keeps SSH hosts for the other devices: the terminal command and Connect on the cloud host\'s card, Add back for a host the person deleted, Needs update for an old Cindy, unavailable while the device has SSH off or Remote Login off (the card says which); the SSH list marks them 「来自我的设备」 (with 「主机指纹已核对」 where the host key is pinned), offers the terminal command to copy next to the alias and keeps their connection read-only';
 
 export default {
   name: 'ssh-access',
@@ -96,12 +96,14 @@ export default {
       await ready.getByRole('button', { name: await k('device.connect'), exact: true }).click();
       await page.getByText(await k('device.connected', { name: 'VM-4-7-ubuntu' })).waitFor();
 
-      // The SSH list: the device hosts say where they come from, the unusable ones say so.
+      // The SSH list: the device hosts say where they come from, and that their host fingerprint was checked only where
+      // the key is pinned (not on the Mac mini, whose pin is gone); the unusable ones say so.
       const ssh = page.locator('#settings-search-target-remote-ssh');
       await ssh.locator(':scope > button').click();
-      const from = await ui.t('settings.remote.fromMyDevice');
-      await ssh.getByText(from, { exact: false }).first().waitFor();
-      assert.equal(await ssh.getByText(from, { exact: false }).count(), 3);
+      const pinned = await ui.t('settings.remote.fromMyDeviceKeyPinned');
+      await ssh.getByText(pinned, { exact: true }).first().waitFor();
+      assert.equal(await ssh.getByText(pinned, { exact: true }).count(), 2);
+      assert.equal(await ssh.getByText(await ui.t('settings.remote.fromMyDevice'), { exact: true }).count(), 1);
       assert.equal(await ssh.getByText(await ui.t('settings.remote.deviceUnavailable'), { exact: true }).count(), 2);
       // Each device host offers its terminal command next to the alias, as on its card; dev-server does not.
       assert.equal(await ssh.getByRole('button', { name: await k('device.copy') }).count(), 3);

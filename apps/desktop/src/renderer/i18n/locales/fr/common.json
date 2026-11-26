@@ -2260,6 +2260,7 @@
         "updateFailed": "Impossible de mettre à jour la confiance de l'hôte. Les détails de connexion ou la clé enregistrée ont peut-être changé, ou le fichier de confiance n'a pas pu être écrit. Reconnectez-vous pour actualiser les empreintes et vérifiez les autorisations du fichier."
       },
       "fromMyDevice": "De mes appareils",
+      "fromMyDeviceKeyPinned": "De mes appareils · Empreinte de l'hôte vérifiée",
       "deviceUnavailable": "Indisponible"
     },
     "appearance": {

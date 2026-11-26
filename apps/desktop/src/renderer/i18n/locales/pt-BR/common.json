@@ -2260,6 +2260,7 @@
         "updateFailed": "Não foi possível atualizar a confiança do host. Os detalhes da conexão ou a chave salva podem ter mudado, ou não foi possível gravar o arquivo de confiança. Reconecte para atualizar as impressões digitais e verifique as permissões do arquivo."
       },
       "fromMyDevice": "Dos meus dispositivos",
+      "fromMyDeviceKeyPinned": "Dos meus dispositivos · Impressão digital do host verificada",
       "deviceUnavailable": "Indisponível"
     },
     "appearance": {

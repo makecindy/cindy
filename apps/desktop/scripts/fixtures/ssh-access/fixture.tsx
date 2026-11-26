@@ -154,6 +154,8 @@ const ENDPOINTS: Record<string, { hostname: string; user: string }> = {
   [MINI]: { hostname: '192.168.1.42', user: 'studio' },
   [IMAC]: { hostname: '192.168.1.57', user: 'office' },
 };
+/** Device hosts whose key main reports pinned; the Mac mini's pin is gone (Cindy's host-key file was reset). */
+const PINNED = new Set([CLOUD, IMAC]);
 
 function sshHosts(): RemoteHostSnapshot[] {
   if (scene !== 'controller') return [];
@@ -162,6 +164,7 @@ function sshHosts(): RemoteHostSnapshot[] {
   return [
     ...listed.map((view) => sshHost(view.hostId!, names.get(view.deviceId) ?? view.hostId!, ENDPOINTS[view.deviceId]?.hostname ?? '192.168.1.31', ENDPOINTS[view.deviceId]?.user ?? 'dash', {
       device: { deviceId: view.deviceId, available: view.state === 'ready' },
+      ...(PINNED.has(view.deviceId) ? { hostKeyPinned: true as const } : {}),
     }, true)),
     sshHost('dev-server', 'dev-server', 'dev.example.com', 'dash'),
   ];

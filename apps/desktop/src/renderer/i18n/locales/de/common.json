@@ -2222,6 +2222,7 @@
         "updateFailed": "Das Host-Vertrauen konnte nicht aktualisiert werden. Die Verbindungsdaten oder der gespeicherte Schlüssel könnten sich geändert haben, oder die Vertrauensdatei konnte nicht geschrieben werden. Verbinde dich erneut, um die Fingerabdrücke zu aktualisieren, und prüfe die Dateiberechtigungen."
       },
       "fromMyDevice": "Von meinen Geräten",
+      "fromMyDeviceKeyPinned": "Von meinen Geräten · Fingerabdruck des Hosts überprüft",
       "deviceUnavailable": "Nicht verfügbar"
     },
     "appearance": {

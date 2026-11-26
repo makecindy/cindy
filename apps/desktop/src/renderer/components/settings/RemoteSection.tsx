@@ -234,7 +234,8 @@ function HostRow({
                   {snap.config.id}
                 </code>
               )}
-              {/* The button is taller than the text; the negative margin keeps the title line as tall as before. */}
+              {/* The button is taller than the text; the negative margin keeps this title line about as tall as
+                  the other hosts' ones. */}
               {command && (
                 <span className="-my-1 flex shrink-0">
                   <SshCommandCopyButton command={command} />
@@ -278,11 +279,12 @@ function HostRow({
               : 'settings.remote.readOnlyFromSshConfig')}
           </span>
         )}
-        {/* 「来自我的设备」: kept by Cindy for one of the person's own devices; unavailable while that device's
-            SSH access is off, blocked, revoked for this computer, or the device left the account. */}
+        {/* 「来自我的设备」: kept by Cindy for one of the person's own devices, with 「主机指纹已核对」 only while main
+            reports its key really pinned (hostKeyPinned), not because it is a device host; unavailable while that
+            device's SSH access is off, blocked, revoked for this computer, or the device left the account. */}
         {snap.config.deviceHost && (
           <span className="flex flex-wrap items-center gap-1.5 text-11" style={{ color: 'var(--settings-integration-subtitle)' }}>
-            {t('settings.remote.fromMyDevice')}
+            <span>{t(snap.hostKeyPinned ? 'settings.remote.fromMyDeviceKeyPinned' : 'settings.remote.fromMyDevice')}</span>
             {snap.device && !snap.device.available && (
               <span className="whitespace-nowrap rounded-full bg-[var(--surface-chip)] px-2 py-0.5 font-medium leading-none text-[var(--text-secondary)]">
                 {t('settings.remote.deviceUnavailable')}

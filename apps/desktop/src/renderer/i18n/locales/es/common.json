@@ -2260,6 +2260,7 @@
         "updateFailed": "No se pudo actualizar la confianza del host. Es posible que los detalles de conexión o la clave guardada hayan cambiado o que no se haya podido escribir el archivo de confianza. Vuelve a conectarte para actualizar las huellas digitales y revisa los permisos del archivo."
       },
       "fromMyDevice": "De mis dispositivos",
+      "fromMyDeviceKeyPinned": "De mis dispositivos · Huella digital del host verificada",
       "deviceUnavailable": "No disponible"
     },
     "appearance": {
