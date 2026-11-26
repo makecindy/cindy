@@ -1266,6 +1266,8 @@ export interface AgentDeps {
     threadId: string,
     expectedSessionInstanceId?: string,
   ) => void;
+  /** Release instance-owned MCP transports on handle termination, not on thread replacement. */
+  closeCodexMcpSessionInstance?: (sessionInstanceId: string) => void;
 
   /**
    * Codex 专用:为远端机器构造一个 codex app-server transport。
@@ -1938,11 +1940,39 @@ export const PI_REQUEST_BODY_RECOVERY_EXHAUSTED = 'PI_REQUEST_BODY_RECOVERY_EXHA
 /** The provider explicitly rejected the turn before accepting any work. */
 export class TurnDispatchRejectedError extends Error {
   readonly code = 'TURN_DISPATCH_REJECTED';
-  readonly diagnostic?: 'pi-retry-history-frame-too-large';
+  /**
+   * Bounded rejection cause for the host to act on. Only host-selected enums
+   * live here — never SDK/CLI text, prompts or task output.
+   * - `pi-retry-history-frame-too-large`: the history read needed to replay a
+   *   retry hit the local 16 MiB frame limit.
+   * - `pi-retry-history-unavailable`: the same history read failed for another
+   *   reason (upstream refused it, RPC error). The message was never accepted
+   *   by the provider, so the host must say "not sent" rather than "reply
+   *   failed".
+   */
+  readonly diagnostic?: 'pi-retry-history-frame-too-large' | 'pi-retry-history-unavailable';
+  /**
+   * Bounded HTTP status the upstream answered with (400–599), when the
+   * rejection carries one. A number only — never the upstream body.
+   */
+  readonly upstreamStatus?: number;
 
-  constructor(msg: string, options?: ErrorOptions & { diagnostic?: TurnDispatchRejectedError['diagnostic'] }) {
+  constructor(
+    msg: string,
+    options?: ErrorOptions & {
+      diagnostic?: TurnDispatchRejectedError['diagnostic'];
+      upstreamStatus?: number;
+    },
+  ) {
     super(msg, options);
     this.diagnostic = options?.diagnostic;
+    this.upstreamStatus =
+      typeof options?.upstreamStatus === 'number' &&
+      Number.isInteger(options.upstreamStatus) &&
+      options.upstreamStatus >= 400 &&
+      options.upstreamStatus <= 599
+        ? options.upstreamStatus
+        : undefined;
     this.name = 'TurnDispatchRejectedError';
   }
 }
@@ -2484,7 +2514,7 @@ export class TurnPermissionPolicyUnsupportedError extends Error {
   readonly code = 'TURN_PERMISSION_POLICY_UNSUPPORTED';
 
   constructor(
-    /** 'acp' = a plugin engine, which cannot enforce a per-turn policy in any mode. */
+    /** 'acp' = a plugin engine (enforces per-turn policies only when it advertises permissionGate outside bypassPermissions). */
     readonly agentKind: EngineKind,
     readonly permissionMode: PermissionMode,
   ) {

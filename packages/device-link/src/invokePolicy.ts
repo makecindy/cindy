@@ -33,6 +33,7 @@ const BACKGROUND_INVOKE_CHANNELS = new Set([
   'git-context:mr-status',
   'maker:schedule:list-sidebar-index-runs',
   'maker:usage:device-rows',
+  'maker:usage:zhipu-coding-plan',
   // Authorized display-only quota/history; never starts a model task.
   'provider-share:insights:v1',
   // 远程任务状态栏的定时复查(每 15 秒两次只读);后台任务面板挂载水合同用,可让位于用户操作。

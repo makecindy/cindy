@@ -187,6 +187,7 @@ interface DeviceLinkPeerLinksSnapshot {
   traffic?: import('../shared/deviceLinkIpc').LinkTrafficSnapshot;
   links: DeviceLinkPeerLinkView[];
   agentNetRoutes?: import('../shared/deviceLinkIpc').DeviceLinkAgentNetPeerRouteView[];
+  providerShareRoutes?: import('../shared/deviceLinkIpc').DeviceLinkProviderShareRouteView[];
   relayProtocol?: 'agent-net' | 'device-link';
   /** 经中转的数据走中转的 UDP 端口还是 WebSocket(见 shared/deviceLinkIpc.ts) */
   relayTransport?: 'udp' | 'websocket';
@@ -923,6 +924,7 @@ interface CCAgentUserMessagePersistedPayload {
 interface CCAgentAskUserQuestionOption {
   label: string;
   description?: string;
+  preview?: string;
 }
 
 interface CCAgentAskUserQuestionItem {
@@ -1027,6 +1029,8 @@ interface AutoUpdateSettingsPayload {
   autoRelaunchOnIdle: boolean;
   isCustomized?: boolean;
   defaultAutoRelaunchOnIdle?: boolean;
+  /** False when this installation cannot install unattended (Linux system .deb). */
+  unattendedInstallSupported?: boolean;
 }
 
 /* ── 跨 Agent 工作区互转 wire 类型（同 main/cross-agent-convert/types.ts） ── */
@@ -4424,6 +4428,7 @@ interface ElectronAPI {
     onReshareRequested(cb: () => void): () => void;
   };
   subscriptionAccounts: {
+    existingLogins?(request: import('../shared/subscriptionAccounts').ExistingLoginRequest): Promise<import('../shared/subscriptionAccounts').ExistingLoginResult>;
     onChanged(cb: (event: { providerId: import('../shared/subscriptionAccounts').SubscriptionProvider; resetAccountId?: string }) => void): () => void;
     command(command: import('../shared/subscriptionAccounts').SubscriptionAccountCommand): Promise<import('../shared/subscriptionAccounts').SubscriptionPoolView>;
     /** Validate the reply with parseSubscriptionSessionAccountView. */
@@ -6042,7 +6047,8 @@ interface ElectronAPI {
     // 模型供应商目录（只读）—— 内置目录元数据 + 各供应商实时连接状态。
     setProviderPresentation: (input: {
       providerId?: string;
-      action: 'rename' | 'remove' | 'restore';
+      action: 'rename' | 'remove' | 'restore' | 'appearance';
+      icon?: import('@cindy/model-providers/branding').ConnectionArtwork | null;
       name?: string;
       dataOwnerId: string | null;
       ownerGeneration: number;

@@ -107,10 +107,15 @@ async function network(udp: boolean, ingress?: 'gateway', isolated = false, scop
       getToken: async () => 'local-node-marker',
       getHello: () => ({ deviceName: api.identity.deviceId, platform: 'test', appVersion: 'test', remoteControlEnabled, busy: false }),
       createWebSocket: async () => {
+        const traffic = new BigUint64Array(new SharedArrayBuffer(16));
+        if (!isolated) udpTraffic.set(api.identity.deviceId, () => ({
+          sent: Number(Atomics.load(traffic, 0)), received: Number(Atomics.load(traffic, 1)),
+        }));
         const socket = await (isolated ? AgentNetWorkerSocket : AgentNetSocket).open({
           workerFile: new URL('../../dist/node-worker.mjs', import.meta.url),
           client: api, userId: bootstrap.ownerCertificate.subject, module, udp, bindAddress: '127.0.0.1', lanDiscovery: false, scoped,
           stunServers: ['127.0.0.1:' + relay.udpAddress!.port],
+          udpTraffic: traffic,
           observeUdpTraffic: read => {
             udpTraffic.set(api.identity.deviceId, read);
             return () => { if (udpTraffic.get(api.identity.deviceId) === read) udpTraffic.delete(api.identity.deviceId); };
@@ -150,9 +155,26 @@ it.each(['gateway'] as const)('serves real V1 and encrypted V2 clients on one or
   expect(await f.controller.invoke('a-host', { channel: 'test:echo', args: ['same-origin-v2'] })).toMatchObject({ ok: true, result: 'same-origin-v2' });
   expect(f.legacyClient?.getStatus()).toBe('online');
 });
+// Regression: CI on macOS/Windows could finish RPC and still legitimately be on relay.
+// AgentNetSocket + DeviceLinkClient must deliver intact encrypted business data on
+// relay and, after explicit path selection and relay shutdown, actual direct UDP.
+// Existing coverage assumed auto selection always reached direct within 1s.
+// Minimal failing state: a healthy relay-selected peer (made deterministic below).
+// Integration tier: real certified relay, WASM and loopback sockets; no external service.
 it.each([false, true])('runs existing RPC and multi-megabyte results through certified V2 peers (UDP=%s)', async (udp) => {
   const f = await network(udp); serve(f.host);
   await f.controller.openLink('a-host', openPayload);
+  const controller = f.sockets.find((s) => s.deviceId === 'b-controller')!;
+  const host = f.sockets.find((s) => s.deviceId === 'a-host')!;
+  if (udp) {
+    // A reachable UDP candidate need not beat the loopback relay in auto mode.
+    // Start on relay explicitly so both paths get real business traffic.
+    controller.setPeerPathPreference!('a-host', 'relay');
+    await vi.waitFor(() => {
+      expect(controller.pathTo('a-host')).toBe('relay');
+      expect(host.pathTo('b-controller')).toBe('relay');
+    }, { timeout: 5_000 });
+  }
   expect(await f.controller.invoke('a-host', { channel: 'test:echo', args: ['private-business-value-0123456789'] })).toMatchObject({ ok: true, result: 'private-business-value-0123456789' });
   // This checks intact multi-megabyte delivery, not a 4-second throughput SLA.
   // Use the production SDK deadline for the large transfer; ordinary RPCs keep
@@ -163,13 +185,27 @@ it.each([false, true])('runs existing RPC and multi-megabyte results through cer
   expect(large.ok && String(large.result).length).toBe('confidential-result-'.length * 160000);
   expect(f.sockets).toHaveLength(socketCount);
   expect(f.captured.length).toBeGreaterThan(100);
-  expect(f.captured.some((bytes) => bytes.includes(Buffer.from('private-business-value-0123456789')) || bytes.includes(Buffer.from('confidential-result-')))).toBe(false);
   if (udp) {
-    await vi.waitFor(() => expect(f.sockets.some((s) => s.pathTo('a-host') === 'direct')).toBe(true));
+    // Establish the path under test, independently of auto RTT selection. This is
+    // a precondition, not a 1s connection SLA: lost probes need retransmission.
+    controller.setPeerPathPreference!('a-host', 'direct');
+    await vi.waitFor(() => {
+      expect(controller.pathTo('a-host')).toBe('direct');
+      expect(host.pathTo('b-controller')).toBe('direct');
+    }, { timeout: 5_000 });
     await f.relay.close();
-    expect(await f.controller.invoke('a-host', { channel: 'test:echo', args: ['after-relay-loss'] })).toMatchObject({ ok: true, result: 'after-relay-loss' });
+    const read = f.udpTraffic.get('a-host')!;
+    const before = read();
+    const message = randomBytes(4096).toString('base64');
+    expect(await f.controller.invoke('a-host', { channel: 'test:echo', args: [message] })).toMatchObject({ ok: true, result: message });
+    expect(await f.controller.invoke('a-host', { channel: 'test:large', args: [] }, 30_000))
+      .toMatchObject({ ok: true, result: 'confidential-result-'.repeat(160000) });
+    expect(read().sent - before.sent).toBeGreaterThanOrEqual('confidential-result-'.length * 160000);
+    expect(read().received - before.received).toBeGreaterThanOrEqual(4096);
+    expect(f.sockets).toHaveLength(socketCount);
   }
-});
+  expect(f.captured.some((bytes) => bytes.includes(Buffer.from('private-business-value-0123456789')) || bytes.includes(Buffer.from('confidential-result-')))).toBe(false);
+}, 75_000); // Two production 30s transfer budgets plus path establishment; no throughput SLA.
 
 // Main must not perform network frame parsing, Noise or retransmission work. Real worker + proxy broker,
 // rather than a mocked thread, protects the production boundary and shutdown/revocation behavior.
@@ -564,7 +600,8 @@ it('leaves the driver thread mostly idle while it paces a transfer, instead of p
   await vi.waitFor(() => expect(received).toBeGreaterThanOrEqual(total), { timeout: 20_000, interval: 50 });
   const busy = hooks.eventLoopUtilization(before).utilization;
   // 2026-11-22 Linux container, Node 22: 0.47 before the fix, 0.11 after; Windows was already 0.1 (its timer is coarse, the core decided).
-  expect(busy).toBeLessThan(0.3);
+  // The loop also runs this test's line, a timer per datagram: on GitHub's macOS runners the fixed driver measured up to 0.31 (2026-11-23).
+  expect(busy).toBeLessThan(0.4);
 }, 30_000);
 /** 测试价值（Node 驱动收回交完的流）
  * - 生产入口与可观察结果：`@cindy/agent-net-core/node` 的连接（Desktop 的 Agent-Net 线程与 Node Host 的核心驱动）。写完、连结束标记

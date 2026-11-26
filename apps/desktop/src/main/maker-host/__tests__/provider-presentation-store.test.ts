@@ -17,6 +17,8 @@ vi.mock('../../appSessionState.js', () => ({
 }));
 const {
   readProviderPresentation,
+  readProviderConnectionIcons,
+  setProviderConnectionIcon,
   setProviderPresentation,
   readLocalCodexPresentation,
   renameLocalCodexProvider,
@@ -90,6 +92,21 @@ it('rejects empty or oversized names without changing the saved name', async () 
   await expect(renameLocalCodexProvider('  ')).rejects.toThrow();
   await expect(renameLocalCodexProvider('a'.repeat(129))).rejects.toThrow();
   expect(readLocalCodexPresentation()).toEqual({ name: 'My OpenAI', removed: false });
+});
+
+// Unit: two accounts at the same brand need independent, resettable picker marks.
+it('keeps icons scoped to each connection and owner when resetting one of two identical brands', async () => {
+  owner = 'icon-owner';
+  try {
+    await setProviderConnectionIcon('glm-home', 'personal');
+    await setProviderConnectionIcon('glm-team', 'work');
+    expect(readProviderConnectionIcons()).toEqual({ 'glm-home': 'personal', 'glm-team': 'work' });
+    owner = 'another-icon-owner';
+    expect(readProviderConnectionIcons()).toEqual({});
+    owner = 'icon-owner';
+    await setProviderConnectionIcon('glm-team', null);
+    expect(readProviderConnectionIcons()).toEqual({ 'glm-home': 'personal' });
+  } finally { owner = 'first'; }
 });
 
 it('keeps each native connection and local service name separate', async () => {
