@@ -15496,7 +15496,7 @@
       "label_other": "新讯 {{count}} 条"
     },
     "messageNavRail": {
-      "jumpToStart": "至会话之首",
+      "jumpToStart": "至言谈之首",
       "you": "君",
       "aria": "问目导览",
       "jumpAria": "至第 {{index}} 问：{{preview}}",

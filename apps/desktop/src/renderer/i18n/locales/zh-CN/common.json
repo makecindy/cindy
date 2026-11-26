@@ -15505,7 +15505,7 @@
       "label_other": "{{count}} 条新消息"
     },
     "messageNavRail": {
-      "jumpToStart": "跳到会话开头",
+      "jumpToStart": "跳到对话开头",
       "you": "你",
       "aria": "提问导航",
       "jumpAria": "跳转到第 {{index}} 条提问：{{preview}}",
