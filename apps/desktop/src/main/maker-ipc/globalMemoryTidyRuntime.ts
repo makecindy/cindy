@@ -22,6 +22,7 @@ import { broadcastSessionPatched } from '../localDb/ipc/sessions.js';
 import { botProfiles, botSessionLinks, messages, scheduleRuns, schedules, sessions } from '../localDb/schema.js';
 import { createLogger } from '../logger.js';
 import { getMakerIfReady } from '../maker-host/index.js';
+import { assertDesktopSendDispatched } from '../maker-host/send-outcome.js';
 import { isTrustedAppRendererWindow } from '../security/trustedAppRenderer.js';
 import { inspectAppDefaultModel } from './appDefaultModelControl.js';
 import {
@@ -248,7 +249,7 @@ function isHumanMessageRow(row: { content: string; agentMeta: string | null }): 
 }
 
 async function countHumanMessagesSince(botId: string, sinceMs: number, untilMs: number): Promise<number> {
-  const rows = await getDbClient().queryAll<{ content: string; agent_meta: string | null }>(
+  const rows = await getDbClient().query<{ content: string; agent_meta: string | null }>(
     `SELECT m.content, m.agent_meta
      FROM bot_session_links l
      JOIN messages m ON m.session_id = l.session_id
@@ -359,59 +360,73 @@ async function executeGlobalTidyPrompt(input: {
   let finalText = '';
   let streamedText = '';
   let terminalError: string | null = null;
+  let settled = false;
+  let resolveTurn!: () => void;
+  const turnFinished = new Promise<void>((resolve) => {
+    resolveTurn = resolve;
+  });
+
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  const finish = () => {
+    if (settled) return;
+    settled = true;
+    if (timer) {
+      clearTimeout(timer);
+      timer = null;
+    }
+    unsubscribe();
+    resolveTurn();
+  };
+
+  const unsubscribe = session.onEvent((event: AgentEvent) => {
+    if (event.type === 'text') {
+      const data = event.data as { text?: string; isFinal?: boolean } | undefined;
+      const chunk = typeof data?.text === 'string' ? data.text : '';
+      if (data?.isFinal) {
+        finalText = chunk;
+      } else if (chunk) {
+        streamedText += chunk;
+      }
+      return;
+    }
+    if (event.type === 'done') {
+      finish();
+      return;
+    }
+    if (event.type === 'error' && isTerminalAgentErrorEvent(event)) {
+      const data = event.data as { message?: string } | undefined;
+      terminalError = typeof data?.message === 'string' && data.message.trim()
+        ? data.message.trim()
+        : 'Tidy turn failed';
+      finish();
+    }
+  });
 
   try {
-    await new Promise<void>((resolve) => {
-      let settled = false;
-      const finish = () => {
-        if (settled) return;
-        settled = true;
-        clearTimeout(timer);
-        unsubscribe();
-        resolve();
-      };
+    timer = setTimeout(() => {
+      terminalError = 'Global memory tidy timed out';
+      void session.abort().catch(() => {});
+      finish();
+    }, TIDY_TURN_TIMEOUT_MS);
 
-      const timer = setTimeout(() => {
-        terminalError = 'Global memory tidy timed out';
-        void session.abort().catch(() => {});
-        finish();
-      }, TIDY_TURN_TIMEOUT_MS);
+    const sendOutcome = await session.send({ type: 'user', content: input.prompt });
+    assertDesktopSendDispatched(sendOutcome, 'global-memory-tidy');
 
-      const unsubscribe = session.onEvent((event: AgentEvent) => {
-        if (event.type === 'text') {
-          const data = event.data as { text?: string; isFinal?: boolean } | undefined;
-          const chunk = typeof data?.text === 'string' ? data.text : '';
-          if (data?.isFinal) {
-            finalText = chunk;
-          } else if (chunk) {
-            streamedText += chunk;
-          }
-          return;
-        }
-        if (event.type === 'done') {
-          finish();
-          return;
-        }
-        if (event.type === 'error' && isTerminalAgentErrorEvent(event)) {
-          const data = event.data as { message?: string } | undefined;
-          terminalError = typeof data?.message === 'string' && data.message.trim()
-            ? data.message.trim()
-            : 'Tidy turn failed';
-          finish();
-        }
-      });
-
-      void session.send({ type: 'user', content: input.prompt }).catch((error) => {
-        terminalError = error instanceof Error ? error.message : String(error);
-        finish();
-      });
-    });
+    await turnFinished;
 
     if (terminalError) {
       return { ok: false, output: terminalError, sessionId: session.id };
     }
     return { ok: true, output: (finalText || streamedText).trim(), sessionId: session.id };
+  } catch (error) {
+    finish();
+    return {
+      ok: false,
+      output: error instanceof Error ? error.message : String(error),
+      sessionId: session.id,
+    };
   } finally {
+    finish();
     await maker.closeSession(session.id).catch((error) => {
       log.warn('failed to close ephemeral global tidy session', { sessionId: session.id, error: String(error) });
     });
