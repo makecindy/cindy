@@ -12265,7 +12265,9 @@
           "GROUP_AUTHORIZATION_REQUIRED": "{{name}} no pudo ejecutar la herramienta: la autorización del grupo ha caducado o no permite esta acción. La persona propietaria del amigo puede volver a solicitarla en este grupo.",
           "GROUP_AUTHORIZATION_UNAVAILABLE": "No se pudo verificar la autorización de grupo de {{name}}, por lo que la herramienta no se ejecutó. Vuelve a intentarlo cuando se restablezca la conexión.",
           "ATTACHMENTS_UNAVAILABLE": "Algunos adjuntos no llegaron a {{name}} por un fallo de descarga o por el límite de adjuntos. Vuelve a enviar los archivos necesarios para esta solicitud.",
-          "GROUP_ASSISTANT_UNAVAILABLE": "{{name}}, conecta tu Cindy para que Cindy pueda trabajar por ti (ahora no tienes ningún Cindy conectado)."
+          "GROUP_ASSISTANT_UNAVAILABLE": "{{name}}, conecta tu Cindy para que Cindy pueda trabajar por ti (ahora no tienes ningún Cindy conectado).",
+          "GROUP_ASSISTANT_DEVICE_REQUIRED": "{{name}}, elige un equipo para este grupo para continuar con la solicitud.",
+          "GROUP_ASSISTANT_DEVICE_OFFLINE": "El equipo que {{name}} eligió para este grupo está desconectado."
         }
       },
       "settings": {
@@ -12686,6 +12688,8 @@
           "accessToolsHint": "Puede usar las herramientas existentes de {{name}} y tu información privada. Los resultados son visibles para todos. Se siguen aplicando las reglas de aprobación; revocar el acceso no deshace las acciones ya completadas.",
           "capabilitiesRow": "Herramientas y acceso de {{name}}",
           "accessMenu": "Permisos aquí",
+          "assistantComputer": "Equipo de ejecución",
+          "chooseComputer": "Elegir equipo",
           "notifications": {
             "title": "Notificaciones de mensajes",
             "all": "Todos los mensajes",

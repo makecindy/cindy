@@ -12173,7 +12173,9 @@
           "GROUP_AUTHORIZATION_REQUIRED": "{{name}} konnte dieses Werkzeug nicht ausführen: Die Gruppenberechtigung ist abgelaufen oder erlaubt diese Aktion nicht. Der Besitzer des Freundes kann die Anfrage in dieser Gruppe erneut stellen.",
           "GROUP_AUTHORIZATION_UNAVAILABLE": "Die Gruppenberechtigung für {{name}} konnte nicht überprüft werden. Dieses Werkzeug wurde daher nicht ausgeführt. Versuche es erneut, sobald die Verbindung wiederhergestellt ist.",
           "ATTACHMENTS_UNAVAILABLE": "Einige Anhänge wurden {{name}} wegen eines Downloadfehlers oder der maximalen Anzahl an Anhängen nicht übermittelt. Sende die für diese Anfrage benötigten Anhänge erneut.",
-          "GROUP_ASSISTANT_UNAVAILABLE": "{{name}}, verbinde dein Cindy, damit Cindy für dich arbeiten kann (gerade ist kein Cindy von dir online)."
+          "GROUP_ASSISTANT_UNAVAILABLE": "{{name}}, verbinde dein Cindy, damit Cindy für dich arbeiten kann (gerade ist kein Cindy von dir online).",
+          "GROUP_ASSISTANT_DEVICE_REQUIRED": "{{name}}, wähle einen Computer für diese Gruppe, um die Anfrage fortzusetzen.",
+          "GROUP_ASSISTANT_DEVICE_OFFLINE": "Der von {{name}} für diese Gruppe gewählte Computer ist offline."
         }
       },
       "settings": {
@@ -12588,6 +12590,8 @@
           "accessToolsHint": "Kann die vorhandenen Tools von {{name}} und deine privaten Informationen nutzen. Ergebnisse sind für alle sichtbar. Bisherige Freigaberegeln gelten weiter; ein Widerruf des Zugriffs macht bereits ausgeführte Aktionen nicht rückgängig.",
           "capabilitiesRow": "Tools und Zugriffsrechte von {{name}}",
           "accessMenu": "Berechtigungen in dieser Gruppe",
+          "assistantComputer": "Ausführender Computer",
+          "chooseComputer": "Computer auswählen",
           "notifications": {
             "title": "Nachrichtenbenachrichtigungen",
             "all": "Alle Nachrichten",
