@@ -2395,8 +2395,12 @@ export class ClaudeCodeAgent extends BaseAgent {
     };
     const pendingInteractions = new Map<string, PendingEntry>();
 
+    const CLAUDE_ASK_USER_QUESTION_DISMISSED_MESSAGE =
+      'The question was dismissed before the user answered it. Do not assume an answer or proceed as if the user approved; ask again if needed or wait for the user.';
+
     function safeDefaultDecision(kind: InteractionRequest['kind'], reason: string): InteractionDecision {
-      if (kind === 'ask_user_question') return { kind: 'ask_user_question', answers: {} };
+      if (kind === 'ask_user_question') return { kind: 'ask_user_question', answers: {}, dismissed: true };
+      if (kind === 'plan_review') return { kind: 'plan_review', behavior: 'deny', reason, dismissed: true };
       return { kind, behavior: 'deny', reason } as InteractionDecision;
     }
 
@@ -2462,7 +2466,7 @@ export class ClaudeCodeAgent extends BaseAgent {
         const dismissedPayload: InteractionDismissedEvent = {
           requestId,
           reason,
-          resolvedAs: resolveAs,
+          resolvedAs: entry.kind === 'ask_user_question' ? 'deny' : resolveAs,
         };
         eventQueue.push({ type: 'interaction_dismissed', data: dismissedPayload, source: 'claude-code' });
       }
@@ -2475,8 +2479,7 @@ export class ClaudeCodeAgent extends BaseAgent {
       entry.settled = true;
       pendingInteractions.delete(requestId);
       entry.resolve(safeDefaultDecision(entry.kind, reason));
-      const resolvedAs = entry.kind === 'ask_user_question' ? 'allow' : 'deny';
-      eventQueue.push({ type: 'interaction_dismissed', data: { requestId, reason, resolvedAs }, source: 'claude-code' });
+      eventQueue.push({ type: 'interaction_dismissed', data: { requestId, reason, resolvedAs: 'deny' }, source: 'claude-code' });
     }
 
     function dismissDirectorySensitivePending(reason: string): void {
@@ -2566,6 +2569,12 @@ export class ClaudeCodeAgent extends BaseAgent {
         if (decision.kind !== 'ask_user_question') {
           log.warn('AskUserQuestion got mismatched decision', { decKind: decision.kind });
           return { behavior: 'deny', message: 'resolver kind mismatch' };
+        }
+        if (decision.dismissed === true) {
+          return {
+            behavior: 'deny',
+            message: CLAUDE_ASK_USER_QUESTION_DISMISSED_MESSAGE,
+          };
         }
         // 澄清答案同样改变本轮授权范围(用户把范围从 src/ 收窄到 build/ 后,后续 `rm -rf src` 必须按
         // 澄清后的意图裁决)→ 并入有界 review intent 并清空决策缓存,否则 reviewer 仍按原含糊请求
@@ -3530,8 +3539,9 @@ export class ClaudeCodeAgent extends BaseAgent {
       let awaitingToolResult = false;
       try {
         const result = await approve();
-        const decision = result as { kind?: string; behavior?: string } | null;
-        awaitingToolResult = decision?.behavior === 'allow' || decision?.kind === 'ask_user_question';
+        const decision = result as { kind?: string; behavior?: string; dismissed?: boolean } | null;
+        awaitingToolResult = decision?.behavior === 'allow'
+          || (decision?.kind === 'ask_user_question' && decision?.behavior !== 'deny' && decision?.dismissed !== true);
         return result;
       } finally {
         // Allowed tools stay protected until tool_result. Denial / failure may
@@ -4116,7 +4126,22 @@ export class ClaudeCodeAgent extends BaseAgent {
                 questions: (params.questions ?? askInput.questions ?? []) as AskUserQuestionItem[],
               });
               if (decision.kind !== 'ask_user_question') {
-                return { kind: 'ask_user_question', answers: {} };
+                return {
+                  kind: 'ask_user_question',
+                  behavior: 'deny',
+                  answers: {},
+                  dismissed: true,
+                  reason: 'resolver kind mismatch',
+                };
+              }
+              if (decision.dismissed === true) {
+                return {
+                  kind: 'ask_user_question',
+                  behavior: 'deny',
+                  answers: {},
+                  dismissed: true,
+                  reason: CLAUDE_ASK_USER_QUESTION_DISMISSED_MESSAGE,
+                };
               }
               // 远端澄清同样改变本轮授权范围(用户把范围从 src/ 收窄到 build/)→ 与本地 AskUserQuestion
               // 分支一致地并入有界 review intent 并清空裁决缓存,否则后续工具仍按澄清前的意图裁决、
