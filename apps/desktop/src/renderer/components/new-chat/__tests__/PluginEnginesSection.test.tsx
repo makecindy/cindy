@@ -829,22 +829,33 @@ describe('plugin engines in the new-task picker', () => {
 
 // 2026-11-19 用户决定：Agent 公布了自己的模式时，权限菜单显示这些模式并在末尾保留「全部允许」(插件基座通用)。
 describe('agent working modes of a plugin engine', () => {
-  it('starts in the agent’s default mode and keeps only modes the engine offers', () => {
-    const start = (permissionMode?: 'plan' | 'ask' | 'bypassPermissions') =>
-      resolveActivePluginEngine([agy, dsh], { providerId: agy.providerId, modelId: 'default', ...(permissionMode ? { permissionMode } : {}) })!
-        .permissionMode;
+  it('starts in the agent’s default mode, carries unified draft permissions and fails closed when unsupported', () => {
+    const start = (permissionMode?: 'plan' | 'ask' | 'auto' | 'acceptEdits' | 'bypassPermissions', fallback?: 'ask' | 'auto' | 'acceptEdits' | 'bypassPermissions') =>
+      resolveActivePluginEngine(
+        [agy, dsh],
+        { providerId: agy.providerId, modelId: 'default', ...(permissionMode ? { permissionMode } : {}) },
+        fallback,
+      )!.permissionMode;
     expect(start()).toBe('default');
     expect(start('plan')).toBe('plan');
     expect(start('bypassPermissions')).toBe('bypassPermissions');
-    // Cindy's generic 'ask' is not one of this agent's modes: the agent's default instead.
+    // Unified cross-harness fallback: built-in permission carries into Antigravity when selection omitted it.
+    expect(start(undefined, 'bypassPermissions')).toBe('bypassPermissions');
+    expect(start(undefined, 'auto')).toBe('auto');
+    expect(start(undefined, 'acceptEdits')).toBe('acceptEdits');
+    // Cindy's canonical 'ask' is recognized as Antigravity's 'default' mode.
     expect(start('ask')).toBe('default');
-    // An engine without modes keeps Cindy's two; a removed engine keeps only Full access.
+    expect(start(undefined, 'ask')).toBe('default');
+    // Generic ACP without agent modes keeps bypassPermissions, recognizes 'default' as 'ask', and fails closed for 'auto'/'plan'.
+    expect(pluginEnginePermissionMode('bypassPermissions', dsh)).toBe('bypassPermissions');
+    expect(pluginEnginePermissionMode('default', dsh)).toBe('ask');
+    expect(pluginEnginePermissionMode('auto', dsh)).toBe('ask');
     expect(pluginEnginePermissionMode('plan', dsh)).toBe('ask');
     expect(pluginEnginePermissionMode('bypassPermissions', null)).toBe('bypassPermissions');
     expect(pluginEnginePermissionMode('plan', null)).toBe('ask');
   });
 
-  it('lists the agent’s modes in its order with Full access last in the permission menu', async () => {
+  it('lists the agent’s modes in its order with unified labels and Full access last in the permission menu', async () => {
     const onPermissionModeChange = vi.fn();
     render(React.createElement(PermissionSelector, {
       permissionMode: 'plan', onPermissionModeChange, pluginEngineModes: agy.permissionModes, useMorphPopover: false,
@@ -854,7 +865,7 @@ describe('agent working modes of a plugin engine', () => {
     await act(async () => {
       fireEvent.click(trigger);
     });
-    const labels = ['Default', 'Accept edits', 'Auto', 'Plan', 'Full access'];
+    const labels = agy.permissionModes.map((mode) => mode.displayName);
     const options = labels.map((label) => screen.getAllByText(label).at(-1)!);
     expect(options.map((node) => labels.indexOf(node.textContent!))).toEqual([0, 1, 2, 3, 4]);
     for (let index = 1; index < options.length; index += 1) {

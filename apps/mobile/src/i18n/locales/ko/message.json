@@ -133,6 +133,7 @@
     "retryRemoteMediaFetch": "원격 미디어 가져오기 재시도",
     "retryFetch": "가져오기 재시도",
     "openMedia": "미디어 열기",
+    "playAudio": "오디오 재생",
     "readCurrentRemoteFile": "현재 원격 파일 읽기",
     "retryFilePreview": "파일 미리보기 재시도",
     "readCurrentFile": "현재 파일 읽기",
@@ -463,6 +464,15 @@
     }
   },
   "attachmentPreview": {
+    "audioBackTen": "10초 뒤로",
+    "audioForwardTen": "10초 앞으로",
+    "audioMute": "음소거",
+    "audioUnmute": "음소거 해제",
+    "audioSpeed": "재생 속도",
+    "audioOutput": "오디오 출력",
+    "fetchAudio": "컴퓨터에서 가져오기",
+    "pauseAudio": "오디오 일시 정지",
+    "audioProgress": "재생 위치",
     "more": "추가 작업",
     "retry": "다시 시도",
     "image": "이미지",

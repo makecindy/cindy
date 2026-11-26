@@ -20,6 +20,7 @@ vi.mock('@/components/ui/confirm-dialog-provider', () => ({
 }));
 
 import { SubscriptionAccountsSection, SubscriptionPoolViewCache } from '../SubscriptionAccountsSection';
+import { ExistingSubscriptionLogins } from '../ExistingSubscriptionLogins';
 import { MergeProviderButton } from '../SubscriptionPlacement';
 
 /* 测试价值：多账号设置页曾给每个账号另画一条周用量条，又在底部重复原用量卡，且漏掉
@@ -67,6 +68,61 @@ beforeEach(() => {
     // Providers an account may move to (2026-11-13); none of the same kind unless a test adds them.
     maker: { listProviders: vi.fn(async () => ({ providers: [] })) },
   };
+});
+
+// #12999, unit: leave settings and then the review dialog open past the host's ten-minute
+// receipt lifetime. Other account tests never let a reviewed login change before confirmation.
+it('reviews the current login again after idle time, without background scans or attaching an old receipt', async () => {
+  vi.useFakeTimers();
+  try {
+    const result = (identity: string) => ({ computer: 'Fixture', candidates: [
+      { identity, directory: '/fixture/.claude-person', receipt: identity },
+    ] });
+    const api = vi.fn().mockResolvedValueOnce(result('initial'))
+      .mockResolvedValueOnce(result('on-open')).mockResolvedValueOnce(result('on-confirm'))
+      .mockResolvedValue({ computer: 'Fixture', candidates: [] });
+    window.electronAPI.subscriptionAccounts.existingLogins = api;
+    await act(async () => { render(<ExistingSubscriptionLogins provider="anthropic" disabled={false}>Add</ExistingSubscriptionLogins>); });
+    expect(screen.getByRole('button', { name: 'subscriptionAccounts.existing.found' })).toBeTruthy();
+    act(() => { vi.advanceTimersByTime(11 * 60_000); });
+    expect(screen.queryByRole('button', { name: 'subscriptionAccounts.existing.found' })).toBeNull();
+    expect(api).toHaveBeenCalledTimes(1);
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'subscriptionAccounts.existing.menu' }), { button: 0, pointerType: 'mouse' });
+    await act(async () => { fireEvent.click(screen.getByRole('menuitem', { name: 'subscriptionAccounts.existing.connect' })); });
+    expect(screen.getByText('on-open')).toBeTruthy();
+    act(() => { vi.advanceTimersByTime(11 * 60_000); });
+    expect(screen.queryByRole('button', { name: 'subscriptionAccounts.existing.attach' })).toBeNull();
+    expect(api).toHaveBeenCalledTimes(2);
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'subscriptionAccounts.existing.connect' })); });
+    expect(screen.getByText('on-confirm')).toBeTruthy();
+    expect(api.mock.calls.map(([request]) => request.action)).toEqual(Array(3).fill('discover-logins'));
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'subscriptionAccounts.existing.attach' })); });
+    expect(api).toHaveBeenLastCalledWith({ action: 'attach-login', providerId: 'anthropic', receipt: 'on-confirm' });
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+// A folder picked outside the discovery roots can only be verified again through the picker.
+it('keeps an expired custom folder selection on the explicit picker path', async () => {
+  vi.useFakeTimers();
+  try {
+    const api = vi.fn().mockResolvedValueOnce({ computer: 'Fixture', candidates: [] })
+      .mockResolvedValueOnce({ computer: 'Fixture', candidates: [{ identity: 'custom', directory: '/custom', receipt: 'old' }] })
+      .mockResolvedValueOnce({ computer: 'Fixture', canceled: true, candidates: [] });
+    window.electronAPI.subscriptionAccounts.existingLogins = api;
+    await act(async () => { render(<ExistingSubscriptionLogins provider="openai" disabled={false}>Add</ExistingSubscriptionLogins>); });
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'subscriptionAccounts.existing.menu' }), { button: 0, pointerType: 'mouse' });
+    await act(async () => { fireEvent.click(screen.getByRole('menuitem')); });
+    expect(screen.getByText('custom')).toBeTruthy();
+    act(() => { vi.advanceTimersByTime(11 * 60_000); });
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'subscriptionAccounts.existing.choose' })); });
+    expect(api.mock.calls.map(([request]) => request.action)).toEqual(['discover-logins', 'pick-login', 'pick-login']);
+    expect(screen.queryByRole('button', { name: 'subscriptionAccounts.existing.attach' })).toBeNull();
+  } finally {
+    vi.useRealTimers();
+  }
 });
 
 // Unit through the real placement controls with IPC fixtures. The mixed

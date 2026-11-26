@@ -2778,7 +2778,7 @@
         "description": "Ubuntu 使用系统 .deb 安装包。Arch Linux 和 Omarchy 使用受管理的用户目录安装器，复用同一份经过校验的 .deb 内容，无需 Debian 包管理器。",
         "item1": "Ubuntu：使用 sudo apt install ./cindy-<version>-<arch>.deb。Arch/Omarchy：请按 docs/linux.md 中的用户目录安装指南操作。",
         "item2": "点击更新后，系统 .deb 安装需要授权；用户目录安装无需系统密码即可切换版本。其他包管理器安装的版本请通过对应包管理器更新。",
-        "item3": "Linux x64 和 arm64 支持 Beta 渠道。Linux 仅在你选择重启时应用更新，不会在空闲时自动安装。"
+        "item3": "Linux x64 和 arm64 支持 Beta 渠道。用户目录安装可在空闲时自动安装更新；已配置免密授权的系统 .deb 安装也可在空闲时自动安装更新，其他系统 .deb 安装仅在你选择重启时应用更新。"
       },
       "qnaTitle": "直接提问",
       "qnaDescription": "没找到答案？直接问你想做什么",
@@ -2853,7 +2853,7 @@
       "openLogsDirError": "打开日志目录失败",
       "autoUpdateLabel": "空闲时自动安装更新",
       "autoUpdateDescription": "更新下载完成后，当这台电脑 10 分钟无操作且没有任务运行时，自动重启应用完成安装。",
-      "linuxUpdateDescription": "更新在你选择重启时生效。系统 .deb 安装需要系统密码，用户目录安装不需要。其他安装方式请通过对应包管理器更新。",
+      "linuxUpdateDescription": "系统 .deb 安装需要系统密码，更新在你选择重启时生效；用户目录安装不需要密码，可在空闲时自动安装。其他安装方式请通过对应包管理器更新。",
       "autoUpdateEnabledToast": "已开启空闲时自动安装更新",
       "autoUpdateDisabledToast": "已关闭空闲时自动安装更新",
       "autoUpdateSaveFailed": "保存自动更新设置失败",
@@ -4645,6 +4645,15 @@
       "menu": {
         "disableProvider": "停用此供应商",
         "enableProvider": "启用此供应商",
+        "icon": "连接图标",
+        "appearance": "名称与图标",
+        "ownImage": "选择自己的图片",
+        "imageError": "请选择 10 MB 以内的 PNG、JPG 或 WebP 图片。",
+        "connectionIcon": {
+          "default": "默认",
+          "personal": "个人",
+          "work": "工作"
+        },
         "hideProvider": "在模型选择器中隐藏",
         "showProvider": "在模型选择器中显示"
       },
@@ -5855,7 +5864,7 @@
       "uninstallTitle": "卸载 Pi 扩展？",
       "uninstallDescription": "将从这台设备移除 {{name}}。当前已打开的 Pi 任务仍会保留旧扩展，关闭后才会彻底卸载。",
       "confirmUninstall": "卸载",
-      "extensionDialogConfirm": "确认",
+      "extensionDialogConfirm": "继续",
       "cancel": "取消",
       "resources": {
         "extension": "扩展代码",
@@ -7113,7 +7122,14 @@
           "routeUnavailable": "不可用",
           "routeMeasuring": "测速中…",
           "routeDirectUnavailableHint": "当前网络无法直连此设备",
-          "routePreferenceFailed": "切换线路失败，请重试"
+          "routePreferenceFailed": "切换线路失败，请重试",
+          "autoRule": {
+            "title": "自动选路规则",
+            "faster": "优先选择延迟更低的线路，低延迟微差时偏好直连。",
+            "thresholds": "中转比直连快 25–50 ms 以上自动切到中转；直连恢复至相差 15 ms 以内时切回直连。",
+            "cooldown": "常规切换间隔 30 秒防抖；当前线路大幅劣化（慢 2 倍且超 100 ms）时立即切换。",
+            "peerOverride": "若对端手动锁定了直连或中转，或对端版本较旧，则以对端设置或能力为准。"
+          }
         },
         "protocol": {
           "agentNet": "Agent-Net",
@@ -7236,6 +7252,123 @@
           "disableBlocked": {
             "controller-encryption-required": "这台电脑开启了「仅使用 Agent-Net」。请先在这台电脑关闭此选项，才能把对方切回 Device Link。",
             "agent-net-only-relay": "此连接使用仅支持 Agent-Net 的网络，无法切回 Device Link。请先改用支持 Device Link 的连接线路。"
+          }
+        },
+        "peerUpdate": {
+          "availableTip": "有新版本 {{version}}，点击更新",
+          "downloading": "正在下载 {{version}}…",
+          "relaunching": "正在重启更新到 {{version}}…",
+          "confirm": {
+            "title": "更新「{{name}}」上的 Cindy？",
+            "selfTitle": "更新这台电脑上的 Cindy？",
+            "description": "将把 Cindy 从 {{from}} 更新到 {{to}}。更新完成后该设备会重启 Cindy，远程连接会短暂断开。",
+            "selfDescription": "将把 Cindy 从 {{from}} 更新到 {{to}}。更新完成后这台电脑上的 Cindy 会重启。",
+            "busyWarning": "该设备当前有运行中的任务或后台工作，重启会将其打断。",
+            "selfBusyWarning": "这台电脑当前有运行中的任务或后台工作，重启会将其打断。",
+            "linuxPermissionHint": "Linux 受管安装可能需要在目标设备上输入系统密码。",
+            "windowsPermissionHint": "若安装在受保护目录，可能需要在目标设备上确认系统权限。",
+            "action": "立即更新"
+          },
+          "toast": {
+            "started": "已开始将「{{name}}」更新到 {{version}}",
+            "relaunching": "「{{name}}」正在重启更新到 {{version}}",
+            "versionChanged": "「{{name}}」的新版本已变化，请重新打开卡片确认",
+            "noUpdate": "「{{name}}」当前没有可安装的新版本",
+            "busy": "「{{name}}」正在执行另一次更新，请稍后再试",
+            "failed": "未能更新「{{name}}」上的 Cindy"
+          }
+        },
+        "tabs": {
+          "aria": "拓扑视图",
+          "devices": "设备连接",
+          "providers": "远程供应商"
+        },
+        "providers": {
+          "empty": "当前没有运行中的远程供应商任务。发起任务时选择其他电脑或分享来的供应商，运行期间会在这里实时显示任务、中转和远程机器的连接路径。",
+          "noMatch": "没有匹配当前筛选条件的任务、机器或中转。",
+          "searchPlaceholder": "搜索任务、机器或中转…",
+          "clearFilter": "清除筛选",
+          "expand": "展开",
+          "collapse": "收起",
+          "groupTitle": "{{provider}} 供应商组",
+          "groupCount": "共 {{count}} 台",
+          "groupIdleSummary": "其余 {{count}} 台组内成员：{{online}} 在线 · {{offline}} 离线",
+          "filter": {
+            "aria": "按任务状态筛选",
+            "all": "全部关联任务 ({{count}})",
+            "running": "仅运行中 ({{count}})"
+          },
+          "columns": {
+            "tasks": "我的任务",
+            "path": "传输路径",
+            "machines": "远程供应商机器"
+          },
+          "usage": {
+            "remoteModel": "远程模型",
+            "remoteTask": "远程任务"
+          },
+          "bundle": {
+            "mixed": "{{running}} 个运行中 · {{ready}} 个就绪",
+            "runningOnly": "{{running}} 个运行中",
+            "readyOnly": "{{ready}} 个就绪",
+            "countBadge": "共 {{count}}",
+            "popoverTitle": "绑定至 {{name}} 的任务 ({{count}})"
+          },
+          "badge": {
+            "own": "我的电脑",
+            "groupMember": "组节点",
+            "share": "跨账号分享",
+            "shareShort": "分享",
+            "shareGroup": "跨账号分享组 · {{count}} 台",
+            "shareGroupShort": "分享组 · {{count}} 台"
+          },
+          "relayRole": {
+            "officialShort": "官方",
+            "selfHostedShort": "自建",
+            "sharerRelayShort": "分享方中转",
+            "officialFull": "Cindy 官方中转",
+            "selfHostedFull": "我的自建中转",
+            "sharerRelayFull": "分享方自建中转"
+          },
+          "status": {
+            "ready": "在线就绪",
+            "busy": "忙碌",
+            "paused": "已暂停",
+            "idle": "空闲",
+            "standby": "在线待命"
+          },
+          "machineLine": {
+            "live": "{{flow}} · 承载 {{count}} 个任务",
+            "ready": "已就绪 · 承载 {{count}} 个任务"
+          },
+          "popover": {
+            "models": "在用模型",
+            "tasksCount": "承载任务 ({{count}})",
+            "clickToOpenHint": "点击打开任务",
+            "relayHost": "中转地址",
+            "relayRegion": "区域",
+            "relayHop": "本机到中转",
+            "relayLoad": "经此中转",
+            "relayLoadValue": "{{machines}} 台机器 · {{tasks}} 个任务"
+          },
+          "idleStrip": {
+            "summary": "另有 {{count}} 台在线远程供应商当前无任务调用",
+            "show": "展开空闲供应商",
+            "hide": "收起空闲供应商"
+          },
+          "stats": {
+            "empty": "当前无运行中的远程供应商任务",
+            "tasks": "{{total}} 个任务",
+            "tasksWithRunning": "{{total}} 个任务（{{running}} 运行中）",
+            "machines": "{{active}} 台供应商机器",
+            "machinesWithTotal": "{{active}} 台活跃 / 共 {{total}} 台供应商机器",
+            "relays": "{{count}} 台中转"
+          },
+          "legend": {
+            "live": "蓝色流动虚线：正在收发消息",
+            "ready": "绿色实线：Agent-Net 链路已就绪",
+            "busy": "橙点：任务运行中 / 机器忙碌",
+            "error": "红色点线：无响应或已暂停"
           }
         }
       }
@@ -7365,7 +7498,8 @@
       "localNetwork": {
         "label": "本地网络",
         "deniedHint": "没有这个权限时，同一网络下的电脑和手机无法直接连接这台电脑，只能经中转，速度会变慢。",
-        "settingsHint": "请在「系统设置 › 隐私与安全性 › 本地网络」里打开 Cindy，回到这里会自动生效。"
+        "promptedHint": "请在弹出的系统窗口中点击「允许」；若没有弹窗，可前往系统设置手动开启。",
+        "settingsHint": "在「隐私与安全性」里找到「本地网络」并开启 Cindy；若列表里没有，点左下角「+」添加当前应用，回到这里会自动生效。"
       }
     },
     "imBot": {
@@ -7830,6 +7964,10 @@
         "toggle-sidebar": {
           "label": "切换侧边栏",
           "description": "收起或展开左侧任务列表"
+        },
+        "copy-session-link": {
+          "label": "复制任务链接",
+          "description": "复制当前打开的任务链接"
         },
         "session-history-back": {
           "label": "上一个任务",
@@ -9554,6 +9692,7 @@
         "createTitle": "添加 MCP 服务器",
         "editTitle": "编辑 MCP 服务器",
         "desc": "仅支持远程 http / sse 型 MCP。保存后新建或重启的 Agent 会话即可调用，正在运行的 Agent 会话不受影响。",
+        "embeddedGuide": "助手为当前任务打开了 MCP 配置表单。请按服务供应商的说明核对已填信息，补全缺项，再保存配置。",
         "teammateDesc": "仅支持远程 http / sse 型 MCP。保存后伙伴会把它加入自己的工具，在本对话的下一条消息起即可使用，无需新建任务。"
       },
       "fields": {
@@ -9765,7 +9904,7 @@
       "allow": "允许",
       "deny": "拒绝",
       "questionTitle": "需要你回答",
-      "submit": "提交",
+      "submit": "发送答复",
       "planTitle": "计划待审核",
       "approve": "批准",
       "requestChanges": "要求修改",
@@ -11954,6 +12093,8 @@
         "loadEarlierFailed": "更早的消息没能加载，请再试一次",
         "emptyTitle": "群里还没有消息",
         "emptyDescription": "说一句话开始，伙伴们会接着聊。@ 某位伙伴就只让它回答。",
+        "emptyDescriptionWithAssistant": "可以 @Cindy，或从右上角邀请朋友和伙伴。",
+        "emptyDescriptionInvite": "可以从右上角邀请朋友和伙伴。",
         "roundEnded": "伙伴们说完了",
         "stepTag": "第 {{count}} 步",
         "sending": "发送中",
@@ -12285,7 +12426,7 @@
         "loginRequired": "请先登录当前账号，再重试。",
         "requestFailed": "群聊服务暂时无法连接，请稍后重试。",
         "copyFailed": "复制失败，请选中链接手动复制。",
-        "createDescription": "伙伴可以选，也可以先建群，再邀请朋友加入。",
+        "createDescription": "创建后可以邀请朋友和伙伴。",
         "settings": {
           "notifications": {
             "title": "消息通知",
@@ -12334,7 +12475,7 @@
           "soleOwnerHint": "群里只剩你。可以归档群，保留历史记录，以后再恢复使用。",
           "archive": "归档群",
           "archiveHint": "归档会对所有成员停用本群，停止新消息和伙伴执行。历史记录保留，之后可通过搜索找到本群、查看历史并取消归档。",
-          "confirm": "确认",
+          "confirm": "继续",
           "lastOwner": "请先将群主转让给其他成员，再退出或移除当前群主。",
           "conflict": "群设置已被其他成员更新，请刷新后重试。",
           "unarchive": "取消归档",
@@ -13190,7 +13331,7 @@
       }
     },
     "confirmDialog": {
-      "confirm": "确认",
+      "confirm": "继续",
       "cancel": "取消",
       "dontShowAgain": "下次不再提示"
     },
@@ -13572,6 +13713,7 @@
           "overloadRetryingNoCount": "模型服务繁忙，正在自动重试…",
           "overloadFailed": "⚠️ 模型服务繁忙：上游暂时没有可用容量。请直接在这里重发这条消息重试，或在 Cindy 里换一个模型。（在桌面端点「重试」也能继续任务，但结果不会回到这条消息里。）"
         },
+        "openAiReconnect": "请在 Cindy 设置 → 模型供应商 → OpenAI 中重新连接 ChatGPT，然后在这里发一条消息继续。",
         "audioInputUnavailable": "当前模型连接无法直接读取音频。可以让 Cindy 先把音频转成文字，再继续处理。",
         "toolLoop": {
           "generic": "模型重复调用工具次数过多，Cindy 已停止本轮以避免无限循环。可以发送新消息继续。",
@@ -14731,27 +14873,27 @@
         },
         "acp": {
           "ask": {
-            "label": "逐项确认",
+            "label": "默认权限",
             "description": "Agent 请求权限时由你确认。Agent 没有请求确认的操作，Cindy 无法拦截。"
           },
           "default": {
-            "label": "默认",
+            "label": "默认权限",
             "description": "按 Agent 自己的默认方式工作；它请求权限时由你确认。"
           },
           "acceptEdits": {
-            "label": "自动接受编辑",
+            "label": "允许编辑",
             "description": "Agent 直接修改文件；其他请求权限的操作由你确认。"
           },
           "auto": {
-            "label": "自动",
+            "label": "自动审批",
             "description": "由 Agent 自行判断哪些操作需要确认；它请求权限时由你确认。"
           },
           "plan": {
-            "label": "只规划",
+            "label": "计划模式",
             "description": "Agent 只分析和制定计划，不修改文件。"
           },
           "bypassPermissions": {
-            "label": "全部允许",
+            "label": "完全访问",
             "description": "Agent 请求的权限一律自动允许。"
           }
         }
@@ -15414,7 +15556,7 @@
       "back": "返回",
       "skip": "跳过",
       "next": "下一题",
-      "submit": "提交",
+      "submit": "发送答复",
       "sendAndContinue": "发送并继续",
       "close": "关闭",
       "customAnswer": "输入其他回答…",
@@ -15585,6 +15727,8 @@
       "codexHelperUnverified": "未能核实此任务的 cindy_helper 是否可用，任务结果可能无法回传。",
       "requestFormatError": "应用发送的请求格式有误，本次回复未能完成。",
       "piRetryHistoryTooLarge": "本次消息未发送。Pi 读取重试所需的历史记录时，有一帧数据超过本地 16 MiB 限制。你可以在新任务中继续。",
+      "piRetryHistoryUnavailable": "本次消息未发送。Pi 读取发送所需的历史记录失败。你可以重试，或在新任务中继续。",
+      "upstreamStatusError": "上游返回 {{status}}，本次回复未完成。",
       "messageNotSent": "本次消息未发送。",
       "replyFailed": "回复未完成",
       "queuedSendRecovery": "上一条消息未发送。点「重试」可原样发送。发送新消息会替换这一条。",
@@ -15844,6 +15988,10 @@
       "diffUnchangedLines_one": "{{count}} 行未变",
       "diffUnchangedLines_other": "{{count}} 行未变",
       "diffPreviewLoading": "正在准备差异预览…"
+    },
+    "filePreview": {
+      "changed": "文件已变更",
+      "refreshHint": "点击刷新"
     },
     "textLightbox": {
       "unreadable": "无法读取该文件",
@@ -16420,7 +16568,7 @@
       "REMOTE_WORKDIR_UNAVAILABLE": "远端工作目录现在不可用。请确认那台电脑上的目录还在，然后重试。",
       "REMOTE_OPTIMISTIC_SESSION_STATE_UNAVAILABLE": "电脑端暂时无法确认这条消息是否已经发出。请稍后再试，不要重复发送同一条。",
       "REMOTE_AGENT_UNAVAILABLE": "未能与运行 Agent 的电脑通信，请查看错误详情。",
-      "REMOTE_AGENT_TIMEOUT": "等待运行 Agent 的电脑响应超时，结果尚未确认。重试前先检查任务进展。",
+      "REMOTE_AGENT_TIMEOUT": "运行 Agent 的电脑还没回复。请先查看任务进展。如果任务还在运行或已有结果，就不用重试。",
       "REMOTE_AGENT_LINK_BUSY": "与运行 Agent 的电脑之间的通信繁忙，请稍后重试。",
       "REMOTE_AGENT_UNRESPONSIVE": "运行 Agent 的电脑多次未响应，调用被暂时暂停。请稍后重试。",
       "REMOTE_AGENT_OFFLINE": "运行 Agent 的电脑当前离线，待重新上线后重试。",
@@ -16658,6 +16806,8 @@
       "retryIn": "{{seconds}} 秒后自动重试"
     },
     "subscriptionAccountError": {
+      "unreachable": "暂时连不上 Codex 账号服务。",
+      "rechecking": "暂时连不上 Codex 账号服务，将于 {{resetAt}} 自动重试。",
       "poolModelLimited": "当前模型的订阅额度已达上限。可以先切换模型。",
       "poolRetryUntil": "可在 {{resetAt}} 后重试。",
       "poolOtherSignedOut": "另有订阅账号已登出，可在执行任务的电脑上重新登录后重试。",
@@ -18551,6 +18701,7 @@
         "intervalChip": "完成后计时 · {{schedule}}"
       },
       "scheduleMenu": {
+        "custom": "自定义 Cron",
         "intervalMinutes": "分钟（每 N 分钟）",
         "interval": "小时（每 N 小时）",
         "daily": "每天",
@@ -19249,6 +19400,7 @@
     }
   },
   "commandPalette": {
+    "buddyNewHint": "在伙伴设置中选择「{{restart}}」，可重建工作上下文并保留历史消息。想单独讨论一件事，可以在消息操作中选择「{{startTopic}}」。",
     "viewSkillDetails": "查看技能详情",
     "projectSkillNotLoaded": "当前 Pi 任务尚未加载此项目 Skill，新任务会自动尝试加载",
     "pluginSkillSetup": {
@@ -22725,6 +22877,16 @@
     "refresh": "刷新配额"
   },
   "subscriptionAccounts": {
+    "existing": {
+      "menu": "更多添加方式",
+      "connect": "连接已有登录…",
+      "found": "发现 {{count}} 个可连接的登录",
+      "title": "{{device}} 上的已有登录",
+      "note": "Cindy 将与终端共用所选账号的配置。",
+      "attach": "连接",
+      "choose": "选择其他目录…",
+      "unverified": "未能核实该目录中的订阅登录。"
+    },
     "pluginSignIn": {
       "method": "登录方式",
       "secretHint": "Key 只交给插件，保存在这个账号自己的文件夹里；Cindy 不保存，也不会发到其他电脑。",
