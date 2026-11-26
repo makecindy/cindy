@@ -116,6 +116,7 @@ export function PluginPendingChecksSheet({ visible, lines, conclusions, isOnline
    * computer found the instance (only then "Open", and only on a computer still listed), is still reading, did not find
    * it, or failed to read ("Read again"); an uninstall has nothing to open.
    */
+  const installedEntry = (deviceId: string) => canOpen(deviceId) ? { showInstalled: true } : { openUnavailable: true };
   const ended = (line: PluginOperationLine): { text: string; open?: string; readAgain?: string; stop?: string; openUnavailable?: boolean; showInstalled?: boolean } => {
     const operationId = line.check?.operationId ?? (line.concluded ? line.key : undefined);
     const conclusion = operationId ? conclusions.find((item) => item.operationId === operationId) : undefined;
@@ -124,7 +125,9 @@ export function PluginPendingChecksSheet({ visible, lines, conclusions, isOnline
     if (pluginConclusionSettled(conclusion)) settledSeen.current.add(conclusion.operationId);
     if (conclusion.result === "notInstalled") return { text: t("plugins.market.unconfirmedNotInstalled") };
     if (conclusion.result === "mismatch") return { text: t("plugins.market.unconfirmedMismatch") };
-    if (conclusion.result === "legacy") return { text: t("plugins.market.unconfirmedLegacy"), showInstalled: true };
+    // "Go to Installed" only while its computer is in this account's list (maintainer review 14:25 #3): otherwise the
+    // record stays, says that computer is not available, and offers no way to another computer's list.
+    if (conclusion.result === "legacy") return { text: t("plugins.market.unconfirmedLegacy"), ...installedEntry(conclusion.who.deviceId) };
     if (conclusion.result !== "succeeded" && conclusion.result !== "installed") return { text: t("plugins.checks.result." + conclusion.result) };
     if (conclusion.entry === "uninstall") return { text: t("plugins.checks.result.uninstalled") };
     const done = t("plugins.checks.result." + conclusion.result);
@@ -144,7 +147,7 @@ export function PluginPendingChecksSheet({ visible, lines, conclusions, isOnline
       // The success stands as a past result; the computer's facts now do not name this operation's instance.
       case "gone": case "unconfirmed": return { text: t(PLUGIN_NOT_OPENED_TEXT[conclusion.readback]) };
       // An older computer gives no evidence (V2.10 ③): the person opens it from the installed list.
-      case "legacy": return { text: t(PLUGIN_NOT_OPENED_TEXT.legacy), showInstalled: true };
+      case "legacy": return { text: t(PLUGIN_NOT_OPENED_TEXT.legacy), ...installedEntry(conclusion.who.deviceId) };
       case "failed": return { text: t("plugins.checks.result.succeededUnread"), readAgain: conclusion.operationId, stop: conclusion.operationId };
       default: return { text: done };
     }

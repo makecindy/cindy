@@ -1227,6 +1227,8 @@ function PluginDirectory() {
    * reads are fenced), on the record's computer, in the installed segment. Nothing particular opens.
    */
   const showInstalledOf = (who: { deviceId: string }) => {
+    // Its computer left this account's list: nothing to go to (the list of checks offers no entry then).
+    if (!knownTarget(who.deviceId)) return;
     setChecksOpen(false);
     // A search typed earlier would filter the installed list (the plugin may not match it); the native search field
     // (iOS) is cleared with it.

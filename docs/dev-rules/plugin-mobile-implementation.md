@@ -271,6 +271,8 @@
     得出结论时重读一次。`finalReadback` 的事件排列仍由 `pluginManagementReadback.test.ts` 检查（「查询说进行中、随后写入自己的回包带回
     结果」这种跨连接变化的顺序不在排列里，由同文件末尾的定向用例和页面层用例覆盖）。
   - 「去已安装」同时清空搜索词（含 iOS 原生搜索框），否则已安装列表会被之前输入的词筛空。
+  - 记录所属的电脑已不在账号的电脑列表里时，不给「去已安装」：那一行留在记录面板，写明那台电脑不可用（与「打开插件」
+    不可用同一句），不把用户带到另一台电脑的已安装列表（维护者 14:25 第 3 条）。
 
   Host 在各情形下对这台手机的实际回答（调度要求 R-3；依据契约 V2.10 正文与样例，`apps/desktop/src/main/plugin-market/service.ts`
   的目录投影与归属投影，以及 Host 用例「produces the contract samples byte for byte」等；手机用例的夹具 `hostPluginInstallFacts.ts`

@@ -2982,7 +2982,9 @@ describe("market install recovery", () => {
     // The record's computer is no longer in the account's list when "Go to Installed" is pressed: the computer shown stays
     // (there is none to switch to) and only the segment changes. Locks the current behaviour; whether "Go to Installed"
     // should be offered at all then is a proposal for the maintainer. Tier: unit/jsdom.
-    it("Go to Installed when the record's computer is no longer listed: the computer shown stays, the segment changes", async () => {
+    // Maintainer review 14:25 #3 (replaces 8fc0f5d79e, which locked the old behaviour: the button took the person to
+    // another computer's list): the record stays, says its computer is not available, and offers no "Go to Installed".
+    it("Go to Installed when the record's computer is no longer listed: the record stays, says that computer is not available, no entry", async () => {
       fixture.extraDevices = [{ deviceId: "pc", name: "PC", platform: "win32", remoteControlEnabled: true }];
       const world: World = { operation: () => receipt("running"), installed: false };
       const requests = await toPanel(world);
@@ -2997,12 +2999,13 @@ describe("market install recovery", () => {
       world.facts = { ghosts: [demoGhost], record: { ...item, ...evidenceOf(CONTRACT_SAMPLES.olderHost) } };
       await verifyFrom(requests);
       expect(status()).toContain("plugins.checks.result.legacyHost");
+      expect(byId("plugins.checks.showInstalled")).not.toBeNull();             // its computer listed: the entry is there
       fixture.removedDevices.add("mac");
       await act(async () => root.render(createElement(PluginsScreen)));
-      await click("plugins.checks.showInstalled");
       await settle(6);
-      expect(byId("plugins.checks")).toBeNull();
-      expect(fixture.props.get("directory")).toMatchObject({ deviceId: "pc", segment: "installed" });
+      expect({ entry: byId("plugins.checks.showInstalled"), why: status().includes("plugins.checks.openUnavailable"), sheet: byId("plugins.checks") !== null })
+        .toEqual({ entry: null, why: true, sheet: true });
+      expect(fixture.props.get("directory")).toMatchObject({ deviceId: "pc", segment: "market" });
     });
     // As the computer answers (dispatcher R-3): an older package of the same plugin installed over it rewrites the record
     // (no evidence for this phone, the record an older release on this route); the root instance gone with one of the same
