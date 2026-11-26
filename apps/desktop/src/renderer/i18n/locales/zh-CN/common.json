@@ -7233,6 +7233,30 @@
             "controller-encryption-required": "这台电脑开启了「仅使用 Agent-Net」。请先在这台电脑关闭此选项，才能把对方切回 Device Link。",
             "agent-net-only-relay": "此连接使用仅支持 Agent-Net 的网络，无法切回 Device Link。请先改用支持 Device Link 的连接线路。"
           }
+        },
+        "peerUpdate": {
+          "availableTip": "有新版本 {{version}}，点击更新",
+          "downloading": "正在下载 {{version}}…",
+          "relaunching": "正在重启更新到 {{version}}…",
+          "confirm": {
+            "title": "更新「{{name}}」上的 Cindy？",
+            "selfTitle": "更新这台电脑上的 Cindy？",
+            "description": "将把 Cindy 从 {{from}} 更新到 {{to}}。更新完成后该设备会重启 Cindy，远程连接会短暂断开。",
+            "selfDescription": "将把 Cindy 从 {{from}} 更新到 {{to}}。更新完成后这台电脑上的 Cindy 会重启。",
+            "busyWarning": "该设备当前有运行中的任务或后台工作，重启会将其打断。",
+            "selfBusyWarning": "这台电脑当前有运行中的任务或后台工作，重启会将其打断。",
+            "linuxPermissionHint": "Linux 受管安装可能需要在目标设备上输入系统密码。",
+            "windowsPermissionHint": "若安装在受保护目录，可能需要在目标设备上确认系统权限。",
+            "action": "立即更新"
+          },
+          "toast": {
+            "started": "已开始将「{{name}}」更新到 {{version}}",
+            "relaunching": "「{{name}}」正在重启更新到 {{version}}",
+            "versionChanged": "「{{name}}」的新版本已变化，请重新打开卡片确认",
+            "noUpdate": "「{{name}}」当前没有可安装的新版本",
+            "busy": "「{{name}}」正在执行另一次更新，请稍后再试",
+            "failed": "未能更新「{{name}}」上的 Cindy"
+          }
         }
       }
     },
@@ -14721,27 +14745,27 @@
         },
         "acp": {
           "ask": {
-            "label": "逐项确认",
+            "label": "默认权限",
             "description": "Agent 请求权限时由你确认。Agent 没有请求确认的操作，Cindy 无法拦截。"
           },
           "default": {
-            "label": "默认",
+            "label": "默认权限",
             "description": "按 Agent 自己的默认方式工作；它请求权限时由你确认。"
           },
           "acceptEdits": {
-            "label": "自动接受编辑",
+            "label": "允许编辑",
             "description": "Agent 直接修改文件；其他请求权限的操作由你确认。"
           },
           "auto": {
-            "label": "自动",
+            "label": "自动审批",
             "description": "由 Agent 自行判断哪些操作需要确认；它请求权限时由你确认。"
           },
           "plan": {
-            "label": "只规划",
+            "label": "计划模式",
             "description": "Agent 只分析和制定计划，不修改文件。"
           },
           "bypassPermissions": {
-            "label": "全部允许",
+            "label": "完全访问",
             "description": "Agent 请求的权限一律自动允许。"
           }
         }

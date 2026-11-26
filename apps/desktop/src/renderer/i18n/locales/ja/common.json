@@ -7233,6 +7233,30 @@
             "controller-encryption-required": "この端末では「Agent-Net のみ使用」が有効です。相手を Device Link に戻す前に、この端末で無効にしてください。",
             "agent-net-only-relay": "この接続のネットワークは Agent-Net のみに対応しています。Device Link に対応する接続経路に変更してから戻してください。"
           }
+        },
+        "peerUpdate": {
+          "availableTip": "新バージョン {{version}} があります（クリックして更新）",
+          "downloading": "{{version}} をダウンロード中…",
+          "relaunching": "{{version}} に更新するため再起動中…",
+          "confirm": {
+            "title": "「{{name}}」の Cindy を更新しますか？",
+            "selfTitle": "このコンピュータの Cindy を更新しますか？",
+            "description": "Cindy を {{from}} から {{to}} に更新して再起動します。リモート接続は一時的に切断されます。",
+            "selfDescription": "Cindy を {{from}} から {{to}} に更新し、このコンピュータで再起動します。",
+            "busyWarning": "実行中のタスクやバックグラウンド処理は再起動によって中断されます。",
+            "selfBusyWarning": "このコンピュータで実行中のタスクやバックグラウンド処理は再起動によって中断されます。",
+            "linuxPermissionHint": "Linux の管理パッケージでは、対象デバイスでシステムパスワードの入力が必要になる場合があります。",
+            "windowsPermissionHint": "保護されたフォルダにインストールされている場合、対象デバイスでシステム権限の確認が必要になることがあります。",
+            "action": "今すぐ更新"
+          },
+          "toast": {
+            "started": "「{{name}}」の {{version}} への更新を開始しました",
+            "relaunching": "「{{name}}」は {{version}} を適用するため再起動中です",
+            "versionChanged": "「{{name}}」の利用可能なバージョンが変わりました。カードを開き直して確認してください。",
+            "noUpdate": "「{{name}}」にインストール可能な更新はありません。",
+            "busy": "「{{name}}」では別の更新が進行中です。しばらくしてから再試行してください。",
+            "failed": "「{{name}}」の Cindy を更新できませんでした。"
+          }
         }
       }
     },
@@ -14721,11 +14745,11 @@
         },
         "acp": {
           "ask": {
-            "label": "その都度確認",
+            "label": "デフォルト権限",
             "description": "Agent が権限を求めたときにあなたが確認します。Agent が確認を求めない操作は Cindy では止められません。"
           },
           "default": {
-            "label": "デフォルト",
+            "label": "デフォルト権限",
             "description": "Agent の既定の動作で進めます。権限の要求はあなたが確認します。"
           },
           "acceptEdits": {
@@ -14733,15 +14757,15 @@
             "description": "Agent はファイルを直接編集します。その他の権限の要求はあなたが確認します。"
           },
           "auto": {
-            "label": "自動",
+            "label": "自動レビュー",
             "description": "確認が必要な操作は Agent が判断します。要求された権限はあなたが確認します。"
           },
           "plan": {
-            "label": "計画のみ",
+            "label": "計画モード",
             "description": "Agent は分析と計画だけを行い、ファイルは編集しません。"
           },
           "bypassPermissions": {
-            "label": "すべて許可",
+            "label": "フルアクセス",
             "description": "Agent が求める権限はすべて自動で許可されます。"
           }
         }

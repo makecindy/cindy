@@ -7233,6 +7233,30 @@
             "controller-encryption-required": "這台電腦開啟了「僅使用 Agent-Net」。請先在這台電腦關閉此選項，才能把對方切回 Device Link。",
             "agent-net-only-relay": "此連線使用僅支援 Agent-Net 的網路，無法切回 Device Link。請先改用支援 Device Link 的連線路線。"
           }
+        },
+        "peerUpdate": {
+          "availableTip": "有新版本 {{version}}，點擊更新",
+          "downloading": "正在下載 {{version}}…",
+          "relaunching": "正在重新啟動並更新至 {{version}}…",
+          "confirm": {
+            "title": "更新「{{name}}」上的 Cindy？",
+            "selfTitle": "更新這台電腦上的 Cindy？",
+            "description": "將把 Cindy 從 {{from}} 更新至 {{to}}。更新完成後該裝置會重新啟動 Cindy，遠端連線會短暫中斷。",
+            "selfDescription": "將把 Cindy 從 {{from}} 更新至 {{to}}。更新完成後這台電腦上的 Cindy 會重新啟動。",
+            "busyWarning": "該裝置目前有執行中的任務或背景工作，重新啟動會將其中斷。",
+            "selfBusyWarning": "這台電腦目前有執行中的任務或背景工作，重新啟動會將其中斷。",
+            "linuxPermissionHint": "Linux 受管安裝可能需要在目標裝置上輸入系統密碼。",
+            "windowsPermissionHint": "若安裝在受保護目錄，可能需要在目標裝置上確認系統權限。",
+            "action": "立即更新"
+          },
+          "toast": {
+            "started": "已開始將「{{name}}」更新至 {{version}}",
+            "relaunching": "「{{name}}」正在重新啟動並更新至 {{version}}",
+            "versionChanged": "「{{name}}」的新版本已變更，請重新開啟卡片確認",
+            "noUpdate": "「{{name}}」目前沒有可安裝的新版本",
+            "busy": "「{{name}}」正在執行另一次更新，請稍後再試",
+            "failed": "未能更新「{{name}}」上的 Cindy"
+          }
         }
       }
     },
@@ -14721,27 +14745,27 @@
         },
         "acp": {
           "ask": {
-            "label": "逐項確認",
+            "label": "預設權限",
             "description": "Agent 請求權限時由你確認。Agent 沒有請求確認的操作，Cindy 無法攔截。"
           },
           "default": {
-            "label": "預設",
+            "label": "預設權限",
             "description": "依 Agent 自己的預設方式工作；它請求權限時由你確認。"
           },
           "acceptEdits": {
-            "label": "自動接受編輯",
+            "label": "允許編輯",
             "description": "Agent 直接修改檔案；其他請求權限的操作由你確認。"
           },
           "auto": {
-            "label": "自動",
+            "label": "自動審核",
             "description": "由 Agent 自行判斷哪些操作需要確認；它請求權限時由你確認。"
           },
           "plan": {
-            "label": "只規劃",
+            "label": "計畫模式",
             "description": "Agent 只分析並制定計畫，不修改檔案。"
           },
           "bypassPermissions": {
-            "label": "全部允許",
+            "label": "完全訪問",
             "description": "Agent 請求的權限一律自動允許。"
           }
         }

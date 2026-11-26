@@ -7233,6 +7233,30 @@
             "controller-encryption-required": "이 컴퓨터는 “Agent-Net만 사용”이 켜져 있습니다. 다른 컴퓨터를 Device Link로 되돌리려면 먼저 여기에서 이 설정을 꺼 주세요.",
             "agent-net-only-relay": "이 연결의 네트워크는 Agent-Net만 지원합니다. 되돌리려면 먼저 Device Link를 지원하는 연결 경로로 바꿔 주세요."
           }
+        },
+        "peerUpdate": {
+          "availableTip": "새 버전 {{version}} 사용 가능 — 클릭하여 업데이트",
+          "downloading": "{{version}} 다운로드 중…",
+          "relaunching": "{{version}} 설치를 위해 다시 시작 중…",
+          "confirm": {
+            "title": "“{{name}}”의 Cindy를 업데이트할까요?",
+            "selfTitle": "이 컴퓨터의 Cindy를 업데이트할까요?",
+            "description": "Cindy를 {{from}}에서 {{to}}(으)로 업데이트하고 다시 시작합니다. 원격 연결이 잠시 끊깁니다.",
+            "selfDescription": "Cindy를 {{from}}에서 {{to}}(으)로 업데이트하고 이 컴퓨터에서 다시 시작합니다.",
+            "busyWarning": "해당 기기에서 실행 중인 작업이나 백그라운드 작업이 재시작으로 중단됩니다.",
+            "selfBusyWarning": "이 컴퓨터에서 실행 중인 작업이나 백그라운드 작업이 재시작으로 중단됩니다.",
+            "linuxPermissionHint": "Linux 관리 설치에서는 대상 기기에서 시스템 비밀번호 입력이 필요할 수 있습니다.",
+            "windowsPermissionHint": "보호된 폴더에 설치된 경우 대상 기기에서 시스템 권한 확인이 필요할 수 있습니다.",
+            "action": "지금 업데이트"
+          },
+          "toast": {
+            "started": "“{{name}}”을(를) {{version}}(으)로 업데이트하는 중입니다",
+            "relaunching": "“{{name}}”이(가) {{version}} 적용을 위해 다시 시작 중입니다",
+            "versionChanged": "“{{name}}”의 새 버전이 변경되었습니다. 카드를 다시 열어 확인하세요.",
+            "noUpdate": "“{{name}}”에 설치할 수 있는 업데이트가 없습니다.",
+            "busy": "“{{name}}”에서 다른 업데이트가 진행 중입니다. 잠시 후 다시 시도하세요.",
+            "failed": "“{{name}}”의 Cindy를 업데이트하지 못했습니다."
+          }
         }
       }
     },
@@ -14721,11 +14745,11 @@
         },
         "acp": {
           "ask": {
-            "label": "매번 확인",
+            "label": "기본 권한",
             "description": "Agent가 권한을 요청하면 직접 확인합니다. Agent가 확인을 요청하지 않는 작업은 Cindy가 막을 수 없습니다."
           },
           "default": {
-            "label": "기본",
+            "label": "기본 권한",
             "description": "Agent의 기본 방식으로 작업합니다. 권한 요청은 직접 확인합니다."
           },
           "acceptEdits": {
@@ -14733,15 +14757,15 @@
             "description": "Agent가 파일을 바로 수정합니다. 그 밖의 권한 요청은 직접 확인합니다."
           },
           "auto": {
-            "label": "자동",
+            "label": "자동 리뷰",
             "description": "확인이 필요한 작업은 Agent가 판단합니다. 요청된 권한은 직접 확인합니다."
           },
           "plan": {
-            "label": "계획만",
+            "label": "계획 모드",
             "description": "Agent가 분석과 계획만 하고 파일은 수정하지 않습니다."
           },
           "bypassPermissions": {
-            "label": "모두 허용",
+            "label": "전체 접근",
             "description": "Agent가 요청하는 권한을 모두 자동으로 허용합니다."
           }
         }

@@ -7276,6 +7276,30 @@
             "controller-encryption-required": "Auf diesem Computer ist „Nur Agent-Net verwenden“ aktiviert. Deaktiviere es hier, bevor du den anderen Computer zu Device Link zurückwechselst.",
             "agent-net-only-relay": "Diese Verbindung nutzt ein Netzwerk, das nur Agent-Net unterstützt. Wähle zuerst einen Verbindungsweg, der Device Link unterstützt."
           }
+        },
+        "peerUpdate": {
+          "availableTip": "Version {{version}} verfügbar – zum Aktualisieren klicken",
+          "downloading": "{{version}} wird heruntergeladen…",
+          "relaunching": "Neustart zur Installation von {{version}}…",
+          "confirm": {
+            "title": "Cindy auf „{{name}}“ aktualisieren?",
+            "selfTitle": "Cindy auf diesem Computer aktualisieren?",
+            "description": "Cindy wird von {{from}} auf {{to}} aktualisiert und auf diesem Gerät neu gestartet. Fernverbindungen werden kurz unterbrochen.",
+            "selfDescription": "Cindy wird von {{from}} auf {{to}} aktualisiert und auf diesem Computer neu gestartet.",
+            "busyWarning": "Laufende Aufgaben oder Hintergrundarbeiten auf diesem Gerät werden durch den Neustart unterbrochen.",
+            "selfBusyWarning": "Laufende Aufgaben oder Hintergrundarbeiten auf diesem Computer werden durch den Neustart unterbrochen.",
+            "linuxPermissionHint": "Bei verwalteten Linux-Installationen ist auf dem Zielgerät möglicherweise ein Systempasswort erforderlich.",
+            "windowsPermissionHint": "Bei einer Installation in einem geschützten Ordner ist auf dem Zielgerät möglicherweise eine Systemberechtigung erforderlich.",
+            "action": "Jetzt aktualisieren"
+          },
+          "toast": {
+            "started": "„{{name}}“ wird auf {{version}} aktualisiert",
+            "relaunching": "„{{name}}“ startet neu, um {{version}} zu installieren",
+            "versionChanged": "Die verfügbare Version auf „{{name}}“ hat sich geändert. Karte erneut öffnen.",
+            "noUpdate": "Auf „{{name}}“ ist kein installierbares Update verfügbar.",
+            "busy": "Auf „{{name}}“ läuft bereits ein Update. Kurz warten und erneut versuchen.",
+            "failed": "Cindy auf „{{name}}“ konnte nicht aktualisiert werden."
+          }
         }
       }
     },
@@ -14776,27 +14800,27 @@
         },
         "acp": {
           "ask": {
-            "label": "Jedes Mal bestätigen",
+            "label": "Standardberechtigungen",
             "description": "Du bestätigst, wenn der Agent eine Berechtigung anfragt. Aktionen, für die der Agent nicht nachfragt, kann Cindy nicht blockieren."
           },
           "default": {
-            "label": "Standard",
+            "label": "Standardberechtigungen",
             "description": "Der Agent arbeitet in seinem Standardmodus; seine Berechtigungsanfragen bestätigst du."
           },
           "acceptEdits": {
-            "label": "Änderungen akzeptieren",
+            "label": "Änderungen automatisch akzeptieren",
             "description": "Der Agent bearbeitet Dateien direkt; andere Berechtigungsanfragen bestätigst du."
           },
           "auto": {
-            "label": "Automatisch",
+            "label": "Automatische Prüfung",
             "description": "Der Agent entscheidet, was eine Bestätigung braucht; seine Anfragen bestätigst du."
           },
           "plan": {
-            "label": "Nur planen",
+            "label": "Planmodus",
             "description": "Der Agent analysiert und plant nur; er bearbeitet keine Dateien."
           },
           "bypassPermissions": {
-            "label": "Alles erlauben",
+            "label": "Vollzugriff",
             "description": "Alle Berechtigungen, die der Agent anfragt, werden automatisch erteilt."
           }
         }

@@ -7345,6 +7345,30 @@
             "controller-encryption-required": "Este ordenador tiene activado «Usar solo Agent-Net». Desactívalo aquí antes de volver el otro ordenador a Device Link.",
             "agent-net-only-relay": "Esta conexión usa una red que solo admite Agent-Net. Elige una ruta compatible con Device Link antes de volver."
           }
+        },
+        "peerUpdate": {
+          "availableTip": "Versión {{version}} disponible: haz clic para actualizar",
+          "downloading": "Descargando {{version}}…",
+          "relaunching": "Reiniciando para instalar {{version}}…",
+          "confirm": {
+            "title": "¿Actualizar Cindy en «{{name}}»?",
+            "selfTitle": "¿Actualizar Cindy en este ordenador?",
+            "description": "Cindy se actualizará de {{from}} a {{to}} y se reiniciará en ese dispositivo. La conexión remota se interrumpirá brevemente.",
+            "selfDescription": "Cindy se actualizará de {{from}} a {{to}} y se reiniciará en este ordenador.",
+            "busyWarning": "Las tareas en ejecución o trabajos en segundo plano en ese dispositivo se interrumpirán al reiniciar.",
+            "selfBusyWarning": "Las tareas en ejecución o trabajos en segundo plano en este ordenador se interrumpirán al reiniciar.",
+            "linuxPermissionHint": "Las instalaciones gestionadas en Linux pueden pedir la contraseña del sistema en el dispositivo de destino.",
+            "windowsPermissionHint": "Si está instalado en una carpeta protegida, puede pedir permisos del sistema en el dispositivo de destino.",
+            "action": "Actualizar ahora"
+          },
+          "toast": {
+            "started": "Actualizando «{{name}}» a {{version}}",
+            "relaunching": "«{{name}}» se está reiniciando para instalar {{version}}",
+            "versionChanged": "La versión disponible en «{{name}}» cambió. Vuelve a abrir la tarjeta para revisar.",
+            "noUpdate": "No hay ninguna actualización instalable disponible en «{{name}}».",
+            "busy": "«{{name}}» ya está ejecutando otra actualización. Inténtalo en un momento.",
+            "failed": "No se pudo actualizar Cindy en «{{name}}»."
+          }
         }
       }
     },
@@ -14894,27 +14918,27 @@
         },
         "acp": {
           "ask": {
-            "label": "Confirmar cada vez",
+            "label": "Permisos predeterminados",
             "description": "Confirmas cuando el Agent pide permiso. Cindy no puede bloquear las acciones para las que el Agent no pide confirmación."
           },
           "default": {
-            "label": "Predeterminado",
+            "label": "Permisos predeterminados",
             "description": "El agente trabaja a su manera predeterminada; tú confirmas sus solicitudes de permiso."
           },
           "acceptEdits": {
-            "label": "Aceptar ediciones",
+            "label": "Aceptar ediciones automáticamente",
             "description": "El agente edita archivos directamente; tú confirmas sus demás solicitudes de permiso."
           },
           "auto": {
-            "label": "Automático",
+            "label": "Revisión automática",
             "description": "El agente decide qué necesita confirmación; tú confirmas las solicitudes que haga."
           },
           "plan": {
-            "label": "Solo planificar",
+            "label": "Modo de plan",
             "description": "El agente solo analiza y planifica; no edita archivos."
           },
           "bypassPermissions": {
-            "label": "Permitir todo",
+            "label": "Acceso completo",
             "description": "Todos los permisos que pida el Agent se conceden automáticamente."
           }
         }
