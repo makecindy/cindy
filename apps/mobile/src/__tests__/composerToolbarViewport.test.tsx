@@ -8,6 +8,7 @@ import type { SharedValue } from 'react-native-reanimated';
 const nativeLayout = vi.hoisted(() => new WeakMap<Element, (height: number) => void>());
 
 const scrollViewProps = vi.hoisted(() => ({ current: {} as Record<string, unknown> }));
+const platform = vi.hoisted(() => ({ OS: 'ios' as 'ios' | 'android' }));
 vi.mock('expo-constants', () => ({ default: { executionEnvironment: 'bare' }, ExecutionEnvironment: { StoreClient: 'storeClient' } }));
 vi.mock('react-native', async () => {
   const React = await import('react');
@@ -21,7 +22,7 @@ vi.mock('react-native', async () => {
     scrollViewProps.current = props;
     return React.createElement('div', { 'data-testid': testID, 'data-scroll': String(scrollEnabled) }, children);
   };
-  return { View, ScrollView, Pressable: View, Platform: { OS: 'ios' },
+  return { View, ScrollView, Pressable: View, Platform: { get OS() { return platform.OS; } },
     StyleSheet: { hairlineWidth: 1, absoluteFill: {} }, Animated: {}, Easing: {} };
 });
 const textInputProps = vi.hoisted(() => ({ current: {} as Record<string, unknown> }));
@@ -181,12 +182,15 @@ it('keeps typed text visible when the card body overflows and reports a hidden t
 
 // Unit regression: text longer than the collapsed pill showed its last line with the line above cut in
 // half. Render the real row: collapsed, it reads from the start on one line and the native text is hidden
-// with a colour Android does not read as "unset" (0, which 'transparent' is); opened, it shows again.
-it('shows collapsed overflow text from its start on one line and restores the native text when opened', () => {
+// without leaving the input untappable; opened, the native text shows again even with the text still passed.
+// iOS hides it with transparent text; Android with opacity 0, because its renderer reads colour 0
+// ('transparent') as unset and draws black, which put two layers of text on top of each other.
+it.each(['ios', 'android'] as const)('shows collapsed overflow text from its start on one line and restores the native text when opened (%s)', (os) => {
+  platform.OS = os;
   const container = document.createElement('div');
   const root = createRoot(container);
   const text = 'please check this draft keeps the mention and wraps over several lines';
-  const flatColor = () => Object.assign({}, ...[textInputProps.current.style].flat(Infinity).filter(Boolean)).color;
+  const inputStyle = () => Object.assign({}, ...[textInputProps.current.style].flat(Infinity).filter(Boolean)) as { color?: string; opacity?: number };
   const render = (cardActive: boolean) => act(() => root.render(<MobileComposerInputRow
     accessibilityLabel="Message" inputTestID="input" placeholder="Message" placeholderTextColor="inherit" value={text}
     onChangeText={() => {}} cardActive={cardActive} collapsedOverflowText={text} testID="composer"
@@ -196,9 +200,22 @@ it('shows collapsed overflow text from its start on one line and restores the na
     const preview = container.querySelector('[data-testid="input.collapsedPreview"]');
     expect(preview?.textContent).toBe(text);
     expect(preview?.getAttribute('data-lines')).toBe('1');
-    expect(flatColor()).toBe('rgba(255, 255, 255, 0)');
+    if (os === 'ios') {
+      expect(inputStyle().color).toBe('transparent');
+      expect(inputStyle().opacity).toBeUndefined();
+    } else {
+      expect(inputStyle().opacity).toBe(0);
+      expect(inputStyle().color).not.toBe('transparent');
+    }
+    // The native input stays the tappable, focusable element.
+    expect(textInputProps.current.editable).not.toBe(false);
+    expect(textInputProps.current.pointerEvents).toBeUndefined();
     render(true);
     expect(container.querySelector('[data-testid="input.collapsedPreview"]')).toBeNull();
-    expect(flatColor()).not.toBe('rgba(255, 255, 255, 0)');
-  } finally { act(() => root.unmount()); }
+    expect(inputStyle().color).not.toBe('transparent');
+    expect(inputStyle().opacity).toBeUndefined();
+  } finally {
+    act(() => root.unmount());
+    platform.OS = 'ios';
+  }
 });

@@ -869,9 +869,10 @@ const makeMobileComposerInputRowStyles = (colors: ThemeColors) => ({
     paddingTop: COMPOSER_TEXT_PADDING_TOP,
     textAlignVertical: 'top',
   },
-  // Not 'transparent': that is colour 0, which Android's renderer reads as "no colour" and draws in the
-  // default black. Alpha 0 over a non-zero RGB is invisible on both platforms.
-  inputUnderPreview: { color: 'rgba(255, 255, 255, 0)' },
+  // Hides the native text under the one-line preview; the input stays laid out, tappable and readable.
+  // iOS: transparent text (a view below 0.01 opacity would stop receiving taps). Android: opacity 0, since its
+  // new-architecture renderer reads colour 0 ('transparent') as unset and draws the default black.
+  inputUnderPreview: Platform.OS === 'android' ? { opacity: 0 } : { color: 'transparent' },
   inputGeometricSingleLine: {
     paddingBottom: COMPOSER_TEXT_GEOMETRIC_PADDING_BOTTOM,
     paddingTop: COMPOSER_TEXT_GEOMETRIC_PADDING_TOP,

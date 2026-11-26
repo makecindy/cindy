@@ -1589,7 +1589,8 @@ describe('group composer', () => {
   // Unit regression: multi-line text left in the composer folded into the one-line pill scrolled to its
   // end, the line above cut in half. The composer must hand the row its text to show from the start,
   // only while folded and overflowing.
-  it('hands multi-line text to the folded pill to show from its start until the composer opens', async () => {
+  it.each(['ios', 'android'] as const)('hands multi-line text to the folded pill to show from its start until the composer opens (%s)', async os => {
+    h.platform.OS = os;
     const long = 'please check this text keeps the mention and wraps over several lines';
     await render(group({ openPlan: null }));
     await type(long);
@@ -1599,6 +1600,8 @@ describe('group composer', () => {
     await act(async () => h.row.onBlur());
     expect(h.row.cardActive).toBe(false);
     expect(h.row.collapsedOverflowText).toBe(long);
+    // The folded input stays editable, so a tap can still focus it.
+    expect(h.row.editable).toBe(true);
     await act(async () => h.row.onContentSizeChange({ nativeEvent: { contentSize: { height: 28 } } }));
     expect(h.row.collapsedOverflowText).toBeUndefined();
     await act(async () => h.row.onContentSizeChange({ nativeEvent: { contentSize: { height: 84 } } }));
