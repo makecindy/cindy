@@ -539,3 +539,35 @@ it('routes a delegated project mutation through its window-bound authorization a
   expect(forwardProjectWrite).toHaveBeenCalledWith(client, event, input);
   expect(client.request).not.toHaveBeenCalled();
 });
+
+it('enforces trusted renderer admission for local-db:messages:work-details in Host client mode', async () => {
+  const handlers = new Map<string, (event: unknown, ...args: unknown[]) => unknown>();
+  const ipcMain = {
+    handle: (ch: string, fn: (event: unknown, ...args: unknown[]) => unknown) => handlers.set(ch, fn),
+    removeHandler: (ch: string) => handlers.delete(ch),
+  };
+  let trustedChecks = 0;
+  let requestedPath: string | null = null;
+  registerHostDelegatedIpc({
+    ipcMain,
+    client: {
+      request: async (path: string) => { requestedPath = path; return { messages: [] }; },
+    },
+    assertTrusted: () => { trustedChecks += 1; },
+  });
+  const handler = handlers.get('local-db:messages:work-details');
+  expect(handler).toBeTypeOf('function');
+  await handler!({}, 's1', { key: 'work-1', firstMessageId: 'm1', lastMessageId: 'm2' }, {});
+  expect(trustedChecks).toBe(1);
+  expect(requestedPath).toBe('/api/messages/work-details');
+
+  const noGuardHandlers = new Map<string, (event: unknown, ...args: unknown[]) => unknown>();
+  registerHostDelegatedIpc({
+    ipcMain: {
+      handle: (ch: string, fn: (event: unknown, ...args: unknown[]) => unknown) => noGuardHandlers.set(ch, fn),
+      removeHandler: (ch: string) => noGuardHandlers.delete(ch),
+    },
+    client: { request: async () => ({ messages: [] }) },
+  });
+  await expect(noGuardHandlers.get('local-db:messages:work-details')!({}, 's1', {}, {})).rejects.toThrow(/Trusted renderer admission is required/);
+});

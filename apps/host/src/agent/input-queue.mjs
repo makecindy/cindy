@@ -255,7 +255,10 @@ export function createInputQueue(deps) {
       history: id => executor.autoResumeHistory(id),
       getSession: id => deps.getMaker()?.getSession(id),
       createDbMessage: (id, input, options) => deps.persistMessage?.(id, input, options),
-      onTakeoverReleased: id => releaseResumeOrigin(id),
+      onTakeoverReleased: (id, reason) => releaseResumeOrigin(id, reason),
+      onSuppressedErrorSurfaced: (id, detail) => {
+        if (isCurrent()) deps.hub?.publish({ type: 'auto_resume_error_surfaced', sessionId: id, detail });
+      },
       maybeApplySessionRuntimeFallback: deps.maybeApplySessionRuntimeFallback,
       pendingSessionRuntimeFallbackRebuilds: deps.pendingSessionRuntimeFallbackRebuilds,
       isProfileHeld: () => profileHold !== null,
@@ -267,14 +270,17 @@ export function createInputQueue(deps) {
     const resumeOrigins = new Map();
     // A resume that gives up writes the held error row (once) or drops the takeover: the input it
     // continued stopped there, so its stream gets the interrupted receipt once that row is stored.
-    function releaseResumeOrigin(id) {
+    function releaseResumeOrigin(id, reason) {
       const origin = resumeOrigins.get(id);
       if (origin === undefined) return;
       resumeOrigins.delete(id);
       const history = executor.autoResumeHistory(id);
       void history.drain().then(() => {
         if (history.hasFailedWrites() || !isCurrent()) return;
-        deps.hub?.publish({ type: 'input_receipt', sessionId: id, inputClientId: origin, clientId: origin, status: 'interrupted' });
+        deps.hub?.publish({
+          type: 'input_receipt', sessionId: id, inputClientId: origin, clientId: origin, status: 'interrupted',
+          ...(reason === 'error-surfaced' ? { autoResumeErrorSurfaced: true } : {}),
+        });
       });
     }
     const executor = createTurnExecutor({ ...deps, storedSessionOptions,
@@ -432,6 +438,9 @@ export function createInputQueue(deps) {
       await state.aborting;
       await state.commands.catch(() => {});
       await flushed(id);
+      if (!coordinator.hasPendingQueuedWork(id) && isCurrent()) {
+        deps.hub?.publish({ type: 'queue_emptied', sessionId: id });
+      }
       return project(coordinator.getProjection(id));
     }
     if (deps.createContextRecoveryRollover) {
@@ -685,7 +694,13 @@ export function createInputQueue(deps) {
           }
         });
       },
-      remove: (id, clientId) => mutate(id, () => coordinator.remove(id, clientId)),
+      remove: (id, clientId) => mutate(id, () => {
+        const res = coordinator.remove(id, clientId);
+        if (!coordinator.hasPendingQueuedWork(id) && isCurrent()) {
+          deps.hub?.publish({ type: 'queue_emptied', sessionId: id });
+        }
+        return res;
+      }),
       updateText: (id, clientId, text) => mutate(id, () => coordinator.updateText(id, clientId, text)),
       updateContent(id, clientId, item) {
         return command(id, async (state, admission) => {
@@ -725,6 +740,9 @@ export function createInputQueue(deps) {
       clearSession: id => stop(id, { keepQueue: false }),
       /** The running turn's accepted input, as the desktop's Auto-review context reads it. */
       acceptedInputProvenance: id => coordinator.getAcceptedInputProvenance(id),
+      whenTurnErrorPersisted: (id, persistId) => executor.whenTurnErrorPersisted?.(id, persistId) ?? Promise.resolve(),
+      getHistoryToolName: (id, toolUseId) => executor.getHistoryToolName?.(id, toolUseId) ?? '',
+      hasPendingQueuedWork: id => coordinator.hasPendingQueuedWork(id),
       async disposeSession(id) {
         stateFor(id).closed = true;
         await stop(id);

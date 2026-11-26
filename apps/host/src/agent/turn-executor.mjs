@@ -1454,16 +1454,30 @@ export function createTurnExecutor(deps) {
     async abort(id) {
       const turn = turns.get(id);
       if (turn) turn.abortRequested = true;
+      deps.hub.publish({ type: 'turn_stop_requested', sessionId: id });
       // Host-originated plugin/file confirmations are outside Session's own
       // interaction listener. Settle them before awaiting provider shutdown,
       // while retaining the listener needed by the next turn in this task.
       deps.interactions?.cancelHostWaits?.(id);
       await turn?.preparing?.catch(() => {});
       const session = deps.getMaker()?.getSession(id);
-      if (session) await session.abort();
+      try {
+        if (session) await session.abort();
+      } catch (error) {
+        if (turn) turn.abortRequested = false;
+        deps.hub.publish({ type: 'turn_stop_failed', sessionId: id });
+        throw error;
+      }
+      deps.hub.publish({ type: 'turn_stopped', sessionId: id });
       // A failed abort throws above and retains the active boundary/listener.
       // A real maker-core Session can settle abort before the provider is idle.
       if (turn && session?.isTurnRunning?.() !== true) await finish(id, turn);
+    },
+    whenTurnErrorPersisted(id, persistId) {
+      return histories.get(id)?.whenTurnErrorPersisted(id, persistId) ?? Promise.resolve();
+    },
+    getHistoryToolName(id, toolUseId) {
+      return histories.get(id)?.getHistoryToolName(id, toolUseId) ?? '';
     },
     async retryPersistence(id) {
       const turn = turns.get(id);
