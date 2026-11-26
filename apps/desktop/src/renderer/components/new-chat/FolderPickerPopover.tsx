@@ -151,29 +151,37 @@ function handleFolderPickerWheel(e: WheelEvent) {
   const current = e.currentTarget;
   if (!(current instanceof HTMLElement)) return;
   const target = e.target instanceof Element ? e.target : null;
-  // Keep native wheel/trackpad scrolling inside the list (including SVG icons).
-  // Its overscroll-contain prevents scrolling the page at either boundary.
-  if (target?.closest('[data-folder-picker-scroll="true"]')) return;
+  const deltaY = normalizeWheelDeltaY(e);
+  const list = current.querySelector<HTMLElement>('[data-folder-picker-scroll="true"]');
+  // In a window too short for the whole menu, the section above the pinned
+  // actions scrolls as well. Once the list cannot move further, the same wheel
+  // moves that section so the rows it hides can still be reached.
+  const section = current.querySelector<HTMLElement>('[data-folder-picker-section="true"]');
+  const rowList = target?.closest<HTMLElement>('[data-folder-picker-scroll="true"]') ?? null;
+  // Over the list (including SVG icons), keep native wheel/trackpad scrolling
+  // while it can still move this way. Its overscroll-contain stops the browser
+  // from passing the rest outward, so at its end hand the wheel to the section.
+  if (rowList && (canScrollBy(rowList, deltaY) || !canScrollBy(section, deltaY))) return;
 
   // Heading, search and footer forward to the list. Cancel first so the browser
   // cannot also scroll an ancestor; a non-cancelable event must not be forwarded.
   if (!e.cancelable || e.defaultPrevented) return;
   e.preventDefault();
-  const deltaY = normalizeWheelDeltaY(e);
-  const list = current.querySelector<HTMLElement>('[data-folder-picker-scroll="true"]');
-  // In a window too short for the whole menu, the section above the pinned
-  // actions scrolls as well. Once the list cannot move further, the same wheel
-  // moves that section so the rest of the list can still be reached.
-  const section = current.querySelector<HTMLElement>('[data-folder-picker-section="true"]');
-    const scrollRoot = canScrollBy(list, deltaY) ? list : canScrollBy(section, deltaY) ? section : null;
-    if (!scrollRoot) return;
+  const scrollRoot = rowList
+    ? section
+    : canScrollBy(list, deltaY)
+      ? list
+      : canScrollBy(section, deltaY)
+        ? section
+        : null;
+  if (!scrollRoot) return;
 
-    scrollRoot.scrollTop += deltaY;
-  }
+  scrollRoot.scrollTop += deltaY;
+}
 
-  interface FolderPickerPopoverProps {
-    open: boolean;
-    onOpenChange: (open: boolean) => void;
+interface FolderPickerPopoverProps {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
   onSelect: (
     folderPath: string,
     source: FolderPickerSelectSource,

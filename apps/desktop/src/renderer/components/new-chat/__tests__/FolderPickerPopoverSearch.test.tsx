@@ -332,7 +332,13 @@ describe('FolderPickerPopover wheel routing', () => {
   // section above the pinned "new project / add remote project" actions scrolls.
   // Minimal failing input: list already at its end, section still scrollable —
   // before the cap there was no such section and the rest was unreachable.
-  it('scrolls the section above the pinned actions once the list reaches its end', () => {
+  // The pointer may sit on the heading or stay on a project row: the list's own
+  // overscroll-contain stops the browser passing the wheel outward, so a row
+  // wheel at the list's end must be handed over too (review on #13341).
+  it.each([
+    ['the projects heading', () => screen.getByText('newChat.folderPicker.projects')],
+    ['a project row', () => document.querySelector<HTMLElement>('[data-folder-picker-scroll] svg')!],
+  ])('scrolls the section above the pinned actions from %s once the list reaches its end', (_, at) => {
     renderPicker(manyProjects);
     const list = scrollList();
     list.scrollTop = 748;
@@ -343,7 +349,7 @@ describe('FolderPickerPopover wheel routing', () => {
     });
     const wheel = new WheelEvent('wheel', { bubbles: true, cancelable: true, deltaY: 24 });
 
-    fireEvent(screen.getByText('newChat.folderPicker.projects'), wheel);
+    fireEvent(at(), wheel);
 
     expect(wheel.defaultPrevented).toBe(true);
     expect(list.scrollTop).toBe(748);
