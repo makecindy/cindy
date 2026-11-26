@@ -758,6 +758,7 @@ import type {
 } from '@cindy/maker-shared/device-link-contract';
 import {
   REMOTE_MEDIA_NEVER_EXPIRES,
+  cacheInlineRemoteMedia,
   localCopyResolvedMedia,
   resolveMobileRemoteMedia,
   type MobileRemoteMediaPresignResult,
@@ -2179,22 +2180,8 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
             { baseUrl: deviceLinkMediaApiBaseUrl(ossKey), method: 'POST', body: { key: ossKey } },
           ),
         }, { ...opts, ...(media.thumbnail ? { thumbnail: true } : {}) });
-        // inline 缩略图:字节已随回包到手(data URI 可直接渲染),落盘后换 file://
-        // 引用(data URI 常驻队列缓存吃内存,且 RN Image 对超长 uri 不友好)。
-        // 无在世 OSS 对象,不进 pendingDiskStores 的 DELETE 编排。
         if (resolved.inlineBase64 && diskCache) {
-          await diskCache.storeBytes(diskSource, resolved.inlineBase64, resolved.mimeType).catch(() => undefined);
-          const hit = await diskCache.lookup(diskSource).catch(() => null);
-          return {
-            // 落盘成功换 file://;失败回退 data URI 仍可渲染。剥掉 inlineBase64,
-            // 队列缓存不用常驻一份 base64 大字符串。
-            url: hit?.uri ?? resolved.url,
-            ossKey: '',
-            mimeType: resolved.mimeType,
-            size: hit?.size ?? resolved.size,
-            expiresAt: resolved.expiresAt,
-            previewable: resolved.previewable,
-          };
+          return cacheInlineRemoteMedia(media.kind, resolved, diskCache, diskSource);
         }
         if (media.kind === 'image' && resolved.previewable && diskCache && !retainedImage) {
           // 登记落盘 promise(按 ossKey):退屏 DELETE 会先等它结束再删对象。
