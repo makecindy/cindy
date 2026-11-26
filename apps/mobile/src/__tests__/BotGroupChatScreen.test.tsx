@@ -2049,6 +2049,23 @@ describe('group settings', () => {
     expect(byId('botGroup.settings')).not.toBeNull();
   }
 
+  // Unit regression for #13029: the native menu can persist a displayed inherited
+  // mode on the real settings sheet, while selecting the confirmed mode is a no-op.
+  it('saves the inherited notification option once as a personal preference', async () => {
+    const data = group({ serverBacked: true, supportsNotificationSettings: true,
+      notificationMode: 'mentions', notificationModeInherited: true });
+    data.members[0] = { ...data.members[0], actorId: 'human', actorKind: 'human', isSelf: true, role: 'member' };
+    await openSettings(data);
+    const option = 'botGroup.settings.notifications.action.mentions';
+    expect(byId(option)?.getAttribute('data-state')).toBeNull();
+    await click(option);
+    expect(h.chat.act).toHaveBeenCalledExactlyOnceWith('notifications', { mode: 'mentions' });
+    await render({ ...data, notificationModeInherited: false });
+    expect(byId(option)?.getAttribute('data-state')).toBe('on');
+    await click(option);
+    expect(h.chat.act).toHaveBeenCalledTimes(1);
+  });
+
   // Unit regression: server settings through an upgraded host previously hid My companions.
   // Exercise real screen/sheet navigation, confirmation and action, plus the old-host fallback.
   it.each([true, false])('withdraws own companions from their settings page (direct=%s)', async direct => {

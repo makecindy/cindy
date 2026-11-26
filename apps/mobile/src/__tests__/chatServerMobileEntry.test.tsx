@@ -248,13 +248,13 @@ describe('opening a group the account already knows', () => {
       if (path.endsWith('/read')) return { readSeq: options.body.readSeq, following: false, muted: false, markedUnread: false, notificationScope: null };
       if (path.includes('/messages?')) return messages;
       const value = await original(path, options);
-      return path.endsWith('/snapshot') ? { ...value, messages, cursor: '7', reads: [{ thread_key: 'main', read_seq: '6' }] } : value;
+      return path.endsWith('/snapshot') ? { ...value, room: { ...value.room, default_notification_scope: 'mentions' }, messages, cursor: '7', reads: [{ thread_key: 'main', read_seq: '6' }] } : value;
     });
     showChat = true; await render();
     await socket.frame({ type: 'ready', actorId: self });
     const shown = () => chat.state.kind === 'ready' ? chat.state.group : undefined;
     const mainRead = () => peekChatMessages(id)?.page.snapshot.reads?.find(read => read.thread_key === 'main');
-    expect(shown()?.notificationMode).toBe('all');
+    expect(shown()?.notificationMode).toBe('mentions');
     h.auth.apiFetch.mockClear();
     await act(async () => { await chat.markRead!(messages.map(message => message.id)); });
     const event = (cursor: string, data: unknown) => socket.frame({ type: 'changes', scope: `actor:${self}`, cursor, changes: [{ type: 'read.changed', entityId: id, data }] });

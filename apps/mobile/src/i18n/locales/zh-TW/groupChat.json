@@ -528,7 +528,7 @@
       "tools": "主人已授權工具與資料",
       "authorizeTitle": "授權本群使用 {{name}} 的工具與資料？",
       "toolsHint": "本群成員可使用夥伴現有的工具與私人資料，結果對全群可見。原有操作核准仍有效；撤回會停止進行中的請求，已執行的操作無法撤銷。",
-      "confirm": "確認"
+      "confirm": "允許使用工具"
     }
   },
   "groupSettings": {
@@ -617,7 +617,7 @@
     "removeOwnHint": "{{name}} 將不再接收「{{group}}」的訊息。歷史訊息會保留，其他群和私聊不受影響。",
     "removeOwnActiveHint": "移出會停止它在本群的執行中請求。已獨立開啟的任務繼續執行。",
     "stopAndRemove": "停止並移出",
-    "confirm": "確認",
+    "confirm": "允許使用工具",
     "inviteTitle": "邀請加入群聊",
     "reusableLink": "長期有效 · 可供多人重複使用",
     "singleUseUntil": "只能使用一次 · {{date}} 到期",

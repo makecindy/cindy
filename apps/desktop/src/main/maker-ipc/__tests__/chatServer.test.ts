@@ -3594,6 +3594,12 @@ describe('Chat Server result delivery and refresh', () => {
     ['authentication_failed private credential', 'AUTH_REQUIRED'],
     ['[REMOTE_AGENT_BUSY] [DEVICE_LIMIT] private credential', 'REMOTE_DEVICE_LIMIT'],
     ['[REMOTE_AGENT_BUSY] [TOTAL_LIMIT] private credential', 'REMOTE_TOTAL_LIMIT'],
+    // #10821: device-link IPC and remote Agent wrappers reach group settlement as local messages.
+    ['[DEVICE_LINK_TIMEOUT] private endpoint', 'RUNTIME_TIMEOUT'],
+    ['[REMOTE_AGENT_TIMEOUT] [INVOKE_TIMEOUT] private endpoint', 'RUNTIME_TIMEOUT'],
+    ['[REMOTE_AGENT_UNAVAILABLE] [DEVICE_LINK_NOT_CONNECTED] private endpoint', 'NETWORK_ERROR'],
+    ['[REMOTE_AGENT_OFFLINE] [DEVICE_OFFLINE] private endpoint', 'NETWORK_ERROR'],
+    ['[REMOTE_AGENT_UNAVAILABLE] private endpoint', 'RUNTIME_ERROR'],
     ['ECONNRESET private endpoint', 'NETWORK_ERROR'],
     ['pi rpc timeout after 30000ms: prompt /private/path', 'RUNTIME_TIMEOUT'],
   ])('classifies an unqueued dispatch rejection from its local message: %s', async (message, code) => {
@@ -3603,6 +3609,7 @@ describe('Chat Server result delivery and refresh', () => {
     expect(failures).toHaveLength(1);
     expect(failures[0][2]).toMatchObject({ detail: `cindy-runtime-error:${code}` });
     expect(JSON.stringify(failures)).not.toContain(message);
+    expect(JSON.stringify(failures)).not.toContain('private endpoint');
     expect(deps.abortLane).toHaveBeenCalledExactlyOnceWith('lane');
   });
 

@@ -537,7 +537,7 @@
       "tools": "Outils et informations autorisés par le propriétaire",
       "authorizeTitle": "Autoriser ce groupe à utiliser les outils et les informations de {{name}} ?",
       "toolsHint": "Les membres pourront utiliser les outils existants et les informations privées de cet ami. Les résultats sont visibles par tous. Les règles d'approbation existantes restent appliquées. La révocation arrête les demandes en cours, mais ne peut pas annuler les actions déjà terminées.",
-      "confirm": "Confirmer"
+      "confirm": "Autoriser les outils"
     }
   },
   "groupSettings": {
@@ -626,7 +626,7 @@
     "removeOwnHint": "{{name}} ne recevra plus les messages de « {{group}} ». L’historique est conservé ; les autres groupes et discussions privées ne sont pas affectés.",
     "removeOwnActiveHint": "Ses demandes en cours dans ce groupe seront arrêtées. Les tâches lancées indépendamment continueront.",
     "stopAndRemove": "Arrêter et retirer",
-    "confirm": "Confirmer",
+    "confirm": "Autoriser les outils",
     "inviteTitle": "Inviter dans le groupe",
     "reusableLink": "Sans expiration · Réutilisable par plusieurs personnes",
     "singleUseUntil": "Usage unique · Expire le {{date}}",
