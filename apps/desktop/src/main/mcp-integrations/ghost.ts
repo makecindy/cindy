@@ -1979,14 +1979,35 @@ function getCindyGhostsMcpDeps(
       };
     },
   });
+  const BUILTIN_MCP_SERVER_HINTS: Record<string, string> = {
+    cindy: 'Built-in MCP server `cindy` is the plugin gateway itself (ghost_list / ghost_info / ghost_call), not an installed plugin. For Cindy host controls (worktree, session title, send_to_session), call built-in MCP server `cindy_helper` directly instead of ghost_info / ghost_market_search.',
+    'cindy-helper': 'Built-in MCP server `cindy_helper` is a Cindy host toolset, not an installed plugin. Call `cindy_helper` `list_tools` / `call_tool` directly instead of ghost_info / ghost_call / ghost_market_search.',
+    'cindy-scheduler': 'Built-in MCP server `cindy_scheduler` is a Cindy host toolset, not an installed plugin. Call `cindy_scheduler` `list_tools` / `call_tool` directly instead of ghost_info / ghost_call / ghost_market_search.',
+    'cindy-memory': 'Built-in MCP server `cindy_memory` is a Cindy host toolset, not an installed plugin. Call `cindy_memory` `list_tools` / `call_tool` directly instead of ghost_info / ghost_call / ghost_market_search.',
+    'cindy-browser': 'Built-in MCP server `cindy_browser` is a Cindy host toolset, not an installed plugin. Call `cindy_browser` `list_tools` / `call_tool` directly instead of ghost_info / ghost_call / ghost_market_search.',
+    'cindy-computer': 'Built-in MCP server `cindy_computer` is a Cindy host toolset, not an installed plugin. Call `cindy_computer` `list_tools` / `call_tool` directly instead of ghost_info / ghost_call / ghost_market_search.',
+    'cindy-ssh': 'Built-in MCP server `cindy_ssh` is a Cindy host toolset, not an installed plugin. Call `cindy_ssh` `list_tools` / `call_tool` directly instead of ghost_info / ghost_call / ghost_market_search.',
+    'cindy-orca': 'Built-in MCP server `cindy_orca` is a Cindy host toolset, not an installed plugin. Call `cindy_orca` tools directly instead of ghost_info / ghost_call / ghost_market_search.',
+    'cindy-docs': 'Built-in MCP server `cindy_docs` is a Cindy host toolset, not an installed plugin. Call `cindy_docs` tools directly instead of ghost_info / ghost_call / ghost_market_search.',
+    'cindy-wechat': 'Built-in MCP server `cindy_wechat` is a Cindy host toolset, not an installed plugin. Call `cindy_wechat` `list_tools` / `call_tool` directly instead of ghost_info / ghost_call / ghost_market_search.',
+    'cindy-slack': 'Built-in MCP server `cindy_slack` is a Cindy host toolset, not an installed plugin. Call `cindy_slack` tools directly instead of ghost_info / ghost_call / ghost_market_search.',
+    'cindy-discord': 'Built-in MCP server `cindy_discord` is a Cindy host toolset, not an installed plugin. Call `cindy_discord` tools directly instead of ghost_info / ghost_call / ghost_market_search.',
+    'cindy-feishu-bot': 'Built-in MCP server `cindy_feishu_bot` is a Cindy host toolset, not an installed plugin. Call `cindy_feishu_bot` tools directly instead of ghost_info / ghost_call / ghost_market_search.',
+    'cindy-group-history': 'Built-in MCP server `cindy_group_history` is a Cindy host toolset, not an installed plugin. Call `cindy_group_history` tools directly instead of ghost_info / ghost_call / ghost_market_search.',
+    'cindy-imessage': 'Built-in MCP server `cindy_imessage` is a Cindy host toolset, not an installed plugin. Call `cindy_imessage` tools directly instead of ghost_info / ghost_call / ghost_market_search.',
+    'cindy-telegram-bot': 'Built-in MCP server `cindy_telegram_bot` is a Cindy host toolset, not an installed plugin. Call `cindy_telegram_bot` tools directly instead of ghost_info / ghost_call / ghost_market_search.',
+  };
   async function visibilityFailure(
     failure: Extract<ReturnType<typeof classifyGhostVisibility>, { ok: false }>,
     installed: InstalledGhost[], ghostId: string, namespace?: string | null,
   ) {
     // GHOST_NOT_FOUND can also hide a signed-out or tool-less installation.
     // Plugin pages and stale grants must never discover marketplace identities.
-    if (pageCall || failure.errorCode !== 'GHOST_NOT_FOUND' || !isValidGhostId(ghostId) ||
+    if (pageCall || failure.errorCode !== 'GHOST_NOT_FOUND' ||
         installed.some(ghost => ghost.manifest.id === ghostId)) return failure;
+    const builtinHint = BUILTIN_MCP_SERVER_HINTS[ghostId.trim().toLowerCase().replace(/_/g, '-')];
+    if (builtinHint) return { ...failure, message: failure.message + ' ' + builtinHint };
+    if (!isValidGhostId(ghostId)) return failure;
     const identity = JSON.stringify({ ghost_id: ghostId, ...(namespace !== undefined ? { namespace } : {}) });
     const next = marketTools
       ? 'If this plugin is required for the request, use ghost_market_search with query ' + JSON.stringify(ghostId) +

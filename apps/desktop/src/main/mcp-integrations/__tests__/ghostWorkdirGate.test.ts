@@ -1830,6 +1830,25 @@ describe('花名册 / ghost_list 过滤', () => {
     });
   });
 
+  it.each([
+    ['cindy-helper', 'cindy_helper'],
+    ['cindy_helper', 'cindy_helper'],
+    ['cindy-scheduler', 'cindy_scheduler'],
+    ['cindy_scheduler', 'cindy_scheduler'],
+    ['cindy', 'cindy_helper'],
+  ])('ghost_info 对内置 MCP 名 %s 返回精准纠偏而非市场搜索', async (requestedId, expectedServer) => {
+    const result = await makeDeps().getAwakeGhost(requestedId);
+    expect(result).toEqual({
+      ok: false,
+      errorCode: 'GHOST_NOT_FOUND',
+      message: expect.stringContaining(expectedServer),
+    });
+    if (!result.ok) {
+      expect(result.message).toContain('not an installed plugin');
+      expect(result.message).not.toContain('Plugins settings link for the task computer');
+    }
+  });
+
   it('ghost_info 对未启用目标返回 GHOST_ASLEEP', async () => {
     listMock.mockReturnValue([
       { ...(chipGhost('sleeping') as Record<string, unknown>), enabled: false },
