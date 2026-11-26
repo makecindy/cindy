@@ -205,6 +205,11 @@ export interface NewSessionStoredPreferences {
    */
   workingDirByDevice: Record<string, string>;
   /**
+   * 每台被控电脑上次在新建页显式选择的工作区模式(deviceId → 'project' | 'dialogue')。
+   * 按账号与设备保存，切换电脑时按目标电脑自己的记忆恢复项目或对话。
+   */
+  workspaceKindByDevice: Record<string, NewSessionWorkspaceKind>;
+  /**
    * 每台被控电脑上、每个 agent 上次在新建页显式选的另一台电脑或分享来的模型
    * (被控电脑 deviceId → agent → 选择)。选回被控电脑自己的模型即清掉;打开新建页时恢复,
    * 那台电脑 / 那个分享此刻用不了时回到被控电脑的默认。与 workingDirByDevice 同样按账号存。
@@ -1157,6 +1162,41 @@ export function pickInitialNewSessionWorkspace(
   // 记忆目录原样返回(首尾空格可能是路径的一部分),只用 trim 判空。
   if (rememberedWorkingDir?.trim()) return rememberedWorkingDir;
   return recentWorkspaces[0]?.workingDir ?? null;
+}
+
+/**
+ * Resolve the target device's workspace when switching computers in the new-task form.
+ * Restores that device's own last chosen project or explicit dialogue instead of letting
+ * another computer's dialogue mode hide this device's remembered project.
+ */
+export function resolveWorkspaceForDeviceSwitch(input: {
+  currentWorkspaceKind: NewSessionWorkspaceKind;
+  targetDeviceId: string;
+  preferences: Pick<NewSessionStoredPreferences, 'workingDirByDevice' | 'workspaceKindByDevice'> | null;
+  workingDirOverrides?: Record<string, string>;
+  workspaceKindOverrides?: Record<string, NewSessionWorkspaceKind>;
+}): { workspaceKind: NewSessionWorkspaceKind; workingDir: string } {
+  const rememberedKind =
+    input.workspaceKindOverrides?.[input.targetDeviceId]
+    ?? input.preferences?.workspaceKindByDevice?.[input.targetDeviceId]
+    ?? null;
+  const rememberedDir =
+    input.workingDirOverrides?.[input.targetDeviceId]
+    ?? input.preferences?.workingDirByDevice?.[input.targetDeviceId]
+    ?? null;
+  if (rememberedKind === 'dialogue') {
+    return { workspaceKind: 'dialogue', workingDir: '' };
+  }
+  if (rememberedDir?.trim()) {
+    return { workspaceKind: 'project', workingDir: rememberedDir };
+  }
+  if (rememberedKind === 'project') {
+    return { workspaceKind: 'project', workingDir: '' };
+  }
+  return {
+    workspaceKind: input.currentWorkspaceKind,
+    workingDir: '',
+  };
 }
 
 export function buildRemoteCreateSessionOptions(draft: NewSessionDraft, projectDir?: string): CreateSessionOptions {

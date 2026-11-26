@@ -178,3 +178,5 @@ SSH Claude 的项目目录仅从目标主机已验证的项目配置取得，绑
 ## 桌面新建任务的默认项目
 
 通用「新建任务」沿用当前账号在这台桌面客户端上最近一次成功新建任务时选择的电脑和项目。「对话」也作为选择记住。选择托管 worktree 时记住所属项目。浏览其他任务和创建失败都不会改写记录。项目行或对话分组的「＋」始终采用点选的目标。尚无创建记录时，沿用原有草稿、当前任务电脑及本机默认工作目录的规则。
+
+在新建任务中切换不同设备时，桌面端与手机端均按当前账号与设备记住上次在该设备选择的项目（含显式选择的「对话」）：切换到另一台设备时恢复该设备上次选中的项目，切回原设备时也恢复原设备的项目；尚未记录过选择的设备在桌面端回落本机默认工作目录或该设备的「对话」，在手机端沿用现有最近项目／目录选择逻辑。实现与回归见桌面 [`lastCreatedTaskWorkspace.ts`](../../apps/desktop/src/renderer/state/lastCreatedTaskWorkspace.ts) / [`NewMakerDraftRoute.tsx`](../../apps/desktop/src/renderer/features/cc-agent/NewMakerDraftRoute.tsx) 与手机 [`useNewSessionWorkspace.ts`](../../apps/mobile/src/session/useNewSessionWorkspace.ts) / [`newSessionPreferenceStore.ts`](../../apps/mobile/src/session/newSessionPreferenceStore.ts)。
