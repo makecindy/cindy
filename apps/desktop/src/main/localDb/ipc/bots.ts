@@ -56,7 +56,14 @@ import {
   readEffectiveBotPrimaryRoute,
   writeBotModelChainSettings,
 } from '../../maker-host/bot-model-chain-settings-store.js';
-import { extractMessagePreview, sessionToCamel } from '../mapper.js';
+import { extractMessagePreview, finalizePlainPreview, sessionToCamel } from '../mapper.js';
+import {
+  LATEST_VISIBLE_PREVIEW_FILTER_SQL,
+  LIST_PREVIEW_EXTRACT_SQL,
+  SESSION_LIST_PROJECTION_BACKFILL_SQL,
+  serializeSessionListProjectionBackfill,
+  type SessionListProjectionBackfillItem,
+} from '../sessionListProjection.js';
 import { normalizeBotToolCapabilities } from '../../../shared/botCapabilitySelection.js';
 import {
   botProfileContentChanged,
@@ -1230,14 +1237,76 @@ async function readProfile(
   owner.assertCurrent();
   const latestMessage = await readCanonicalChatPreview(db, canonicalSessionId, canonicalClearedAt);
   const chatPreviewBySession = new Map<string, string | null>();
+  const missingChatPreviewIds: string[] = [];
   for (const link of links) {
     if (link.role !== 'chat') continue;
     const row = byId.get(link.sessionId);
     if (!row || row.status !== 'active') continue;
     if (typeof row.listPreview === 'string' && row.listPreview.trim()) continue;
+    if (row.listMessageCount === 0) continue;
+    missingChatPreviewIds.push(row.id);
+  }
+  const uniqueMissingChatIds = [...new Set(missingChatPreviewIds)];
+  const chatPreviewBackfill: SessionListProjectionBackfillItem[] = [];
+  const outerSessionIdSql = sql`${sql.identifier('sessions')}.${sql.identifier('id')}`;
+  const outerSessionClearedAtSql = sql`${sql.identifier('sessions')}.${sql.identifier('cleared_at')}`;
+  for (let offset = 0; offset < uniqueMissingChatIds.length; offset += 200) {
     owner.assertCurrent();
-    const fallback = await readCanonicalChatPreview(db, row.id, row.clearedAt ?? null);
-    chatPreviewBySession.set(row.id, fallback.preview);
+    const batch = uniqueMissingChatIds.slice(offset, offset + 200);
+    const previewRows = await db
+      .select({
+        id: sessions.id,
+        latestMessageExtract: sql<string | null>`(
+          SELECT ${sql.raw(LIST_PREVIEW_EXTRACT_SQL)} FROM messages m
+          WHERE m.session_id = ${outerSessionIdSql}
+            AND ${sql.raw(LATEST_VISIBLE_PREVIEW_FILTER_SQL)}
+            AND (${outerSessionClearedAtSql} IS NULL OR m.created_at > ${outerSessionClearedAtSql})
+          ORDER BY m.created_at DESC, m.rowid DESC LIMIT 1
+        )`.as('latest_message_extract'),
+        latestMessageRole: sql<string | null>`(
+          SELECT m.role FROM messages m
+          WHERE m.session_id = ${outerSessionIdSql}
+            AND ${sql.raw(LATEST_VISIBLE_PREVIEW_FILTER_SQL)}
+            AND (${outerSessionClearedAtSql} IS NULL OR m.created_at > ${outerSessionClearedAtSql})
+          ORDER BY m.created_at DESC, m.rowid DESC LIMIT 1
+        )`.as('latest_message_role'),
+        messageCount: sql<number>`(
+          SELECT count(*) FROM messages m
+          WHERE m.session_id = ${outerSessionIdSql}
+        )`.as('message_count'),
+      })
+      .from(sessions)
+      .where(inArray(sessions.id, batch));
+    owner.assertCurrent();
+    for (const previewRow of previewRows) {
+      const preview =
+        previewRow.latestMessageExtract != null
+          ? finalizePlainPreview(previewRow.latestMessageExtract, previewRow.latestMessageRole)
+          : null;
+      chatPreviewBySession.set(previewRow.id, preview);
+      const running = getMakerIfReady()?.getSession(previewRow.id)?.isTurnRunning?.() === true;
+      if (!running && (preview != null || previewRow.messageCount === 0)) {
+        chatPreviewBackfill.push({
+          id: previewRow.id,
+          ...(preview != null ? { preview, role: previewRow.latestMessageRole } : {}),
+          count: previewRow.messageCount,
+        });
+      }
+    }
+  }
+  if (chatPreviewBackfill.length > 0 && typeof client.exec === 'function') {
+    owner.assertCurrent();
+    try {
+      await client.exec(SESSION_LIST_PROJECTION_BACKFILL_SQL, [
+        serializeSessionListProjectionBackfill(chatPreviewBackfill),
+      ]);
+    } catch (err) {
+      log.warn('bot chat preview projection backfill failed', {
+        botId,
+        count: chatPreviewBackfill.length,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
   }
   const unreadCount = await countCanonicalUnread(
     db,
@@ -1356,10 +1425,10 @@ async function readProfile(
       const groupId = link.role === 'group' ? parseBotGroupIdFromRouteKey(link.routeKey) : null;
       const threadRoot = link.role === 'thread' ? parseBotDmThreadRouteKey(link.routeKey) : null;
       const preview =
-        typeof row.listPreview === 'string' && row.listPreview.trim()
-          ? row.listPreview.trim()
-          : row.id === canonicalSessionId
-            ? latestMessage.preview
+        row.id === canonicalSessionId
+          ? latestMessage.preview
+          : typeof row.listPreview === 'string' && row.listPreview.trim()
+            ? finalizePlainPreview(row.listPreview, row.listPreviewRole)
             : chatPreviewBySession.get(row.id) ?? null;
       return [
         {

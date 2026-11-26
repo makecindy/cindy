@@ -168,6 +168,7 @@ vi.mock('../../client/current', () => ({
       readonly drizzle: typeof h.db;
       tx: (name: string, args: unknown) => Promise<unknown>;
       query: (sql: string, params: unknown[]) => Promise<unknown[]>;
+      exec: (sql: string, params?: unknown[]) => Promise<{ changes: number; lastInsertRowid: number | bigint }>;
     } } | null = null;
     return () => {
       if (!current || current.key !== h.ownerScopeKey) current = {
@@ -176,13 +177,31 @@ vi.mock('../../client/current', () => ({
           get drizzle() { return h.db; },
           tx: (name, args) => h.tx!(name, args),
           query: async (sql, params) => h.sqlite!.prepare(sql).all(...params),
+          exec: async (sql, params = []) => {
+            const info = h.sqlite!.prepare(sql).run(...params);
+            return { changes: info.changes, lastInsertRowid: info.lastInsertRowid };
+          },
         },
       };
       return current;
     };
   })(),
-  getDbClient: () => ({ drizzle: h.db, tx: h.tx }),
-  tryGetDbClient: () => h.dbReady ? ({ drizzle: h.db, tx: h.tx }) : null,
+  getDbClient: () => ({
+    drizzle: h.db,
+    tx: h.tx,
+    exec: async (sql: string, params: unknown[] = []) => {
+      const info = h.sqlite!.prepare(sql).run(...params);
+      return { changes: info.changes, lastInsertRowid: info.lastInsertRowid };
+    },
+  }),
+  tryGetDbClient: () => h.dbReady ? ({
+    drizzle: h.db,
+    tx: h.tx,
+    exec: async (sql: string, params: unknown[] = []) => {
+      const info = h.sqlite!.prepare(sql).run(...params);
+      return { changes: info.changes, lastInsertRowid: info.lastInsertRowid };
+    },
+  }) : null,
 }));
 vi.mock('../../../security/trustedAppRenderer.js', () => ({
   assertTrustedAppRendererEvent: vi.fn(),
@@ -6266,4 +6285,64 @@ describe('Bot capability Skill catalog', () => {
     expect(order).toEqual(['prepare', 'list']);
     expect(result.skill.map((entry) => entry.name)).toContain('release-check');
   });
+});
+
+// PR #13047 review (Greptile P2) / engineering-conventions.md §8:
+// - 生产入口与可观察结果：`local-db:bots:get` 返回伙伴全部活跃独立 chat 会话的预览。
+// - 现有覆盖缺口：既有测试只覆盖 canonical 预览，未验证多条独立 chat 在首次读取与重复刷新时的批量查询与投影回填。
+// - 最小失败输入：同一伙伴挂 3 条活跃独立 chat（2 条有消息、1 条空会话），连续刷新两次并在消息变更后刷新第三次。
+// - tier：db（复用真实 SQLite + observeBotReadConcurrency 计数）。
+it('batches active bot chat previews and reuses backfilled list_preview across refreshes', async () => {
+  await invoke('local-db:bots:create-canonical-session', {
+    botId: 'bot-1', expectedCanonicalSessionId: null, expectedProfileVersion: 1,
+  });
+  const [canonical] = await h.db!.select().from(sessions);
+  const chatIds = ['bot-chat-1', 'bot-chat-2', 'bot-chat-empty'];
+  for (let i = 0; i < chatIds.length; i++) {
+    const id = chatIds[i]!;
+    await h.db!.insert(sessions).values({
+      ...canonical, id, title: `Chat ${i + 1}`, listPreview: null, listPreviewRole: null, listMessageCount: null,
+    });
+    await h.db!.insert(botSessionLinks).values({
+      id: `link-${id}`, botId: 'bot-1', sessionId: id, role: 'chat', profileVersion: 1, createdAt: 100 + i,
+    });
+  }
+  await h.db!.insert(messages).values([
+    { id: 'm-1', clientId: 'c-1', sessionId: 'bot-chat-1', role: 'assistant', content: JSON.stringify('**First** reply'), createdAt: 1000 },
+    { id: 'm-2', clientId: 'c-2', sessionId: 'bot-chat-2', role: 'user', content: JSON.stringify({ text: 'Second question' }), createdAt: 2000 },
+  ]);
+
+  let batchedPreviewQueries = 0;
+  observeBotReadConcurrency((sql) => {
+    if (sql.includes('latest_message_extract')) batchedPreviewQueries++;
+  });
+
+  // First refresh: single batched SQL read across all missing active chat sessions + backfill.
+  const first = await invoke('local-db:bots:get', 'bot-1');
+  expect(batchedPreviewQueries).toBe(1);
+  expect(first.sessions.find((s: { id: string }) => s.id === 'bot-chat-1')?.preview).toBe('First reply');
+  expect(first.sessions.find((s: { id: string }) => s.id === 'bot-chat-2')?.preview).toBe('Second question');
+  expect(first.sessions.find((s: { id: string }) => s.id === 'bot-chat-empty')?.preview).toBeNull();
+
+  // Second refresh: cached list_preview and list_message_count=0 short-circuit all chat preview queries.
+  batchedPreviewQueries = 0;
+  const second = await invoke('local-db:bots:get', 'bot-1');
+  expect(batchedPreviewQueries).toBe(0);
+  expect(second.sessions.find((s: { id: string }) => s.id === 'bot-chat-1')?.preview).toBe('First reply');
+  expect(second.sessions.find((s: { id: string }) => s.id === 'bot-chat-2')?.preview).toBe('Second question');
+  expect(second.sessions.find((s: { id: string }) => s.id === 'bot-chat-empty')?.preview).toBeNull();
+
+  // After a new message invalidates list_preview on one chat (same invalidation as tx.ts), only that chat refreshes.
+  h.sqlite!
+    .prepare('INSERT INTO messages (id, client_id, session_id, role, content, created_at) VALUES (?, ?, ?, ?, ?, ?)')
+    .run('m-3', 'c-3', 'bot-chat-1', 'assistant', JSON.stringify('Updated reply'), 3000);
+  h.sqlite!.prepare('UPDATE sessions SET list_preview = NULL, list_preview_role = NULL, list_message_count = NULL WHERE id = ?').run('bot-chat-1');
+  const third = await invoke('local-db:bots:get', 'bot-1');
+  expect(batchedPreviewQueries).toBe(1);
+  expect(third.sessions.find((s: { id: string }) => s.id === 'bot-chat-1')?.preview).toBe('Updated reply');
+  // Fourth refresh: the updated chat preview was backfilled, so refreshes return to 0 preview queries.
+  batchedPreviewQueries = 0;
+  const fourth = await invoke('local-db:bots:get', 'bot-1');
+  expect(batchedPreviewQueries).toBe(0);
+  expect(fourth.sessions.find((s: { id: string }) => s.id === 'bot-chat-1')?.preview).toBe('Updated reply');
 });
