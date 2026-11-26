@@ -1721,7 +1721,7 @@ import {
 } from '../cindy-brain/pluginTaskPrefsStore.js';
 import { isGhostPickedDir } from '../cindy-brain/pickGrantsStore.js';
 import { createSessionExecutionResolver, resolveSessionExecutionSelection } from './sessionExecutionSelection.js';
-import { createGhostAgentTurnRunner } from './ghostAgentTurnRunner.js';
+import { createGhostAgentTurnRunner, createLocalGhostSessionAdmission } from './ghostAgentTurnRunner.js';
 import { createGhostErrandRunner } from './ghostErrandRunner.js';
 import {
   createPluginTaskSession,
@@ -14603,7 +14603,26 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   };
   setGhostAgentTurnRunner(createGhostAgentTurnRunner({
     readSessionMeta: sessionId => maker.getSessionMeta(sessionId),
-    admitLocalSession: sessionId => resolveSessionExecution({}, sessionId),
+    admitLocalSession: createLocalGhostSessionAdmission({
+      captureOwner: captureSessionOwner,
+      readSessionMeta: sessionId => maker.getSessionMeta(sessionId),
+      hasPendingAgentSwitch: sessionId => Boolean(agentSwitchPending.get(sessionId)),
+      admitBuiltinSession: sessionId => resolveSessionExecution({}, sessionId),
+      admitPluginEngineSession: source => admitPluginEngineSession(
+        {
+          agentKind: source.agentKind as Parameters<typeof admitPluginEngineSession>[0]['agentKind'],
+          model: source.model,
+          providerId: source.providerId,
+          effort: source.effort ?? '',
+          fastMode: false,
+          remoteHostId: source.remoteHostId,
+          agentDeviceId: source.agentDeviceId,
+        },
+        getPluginHarnessRegistry().list(),
+        pluginEngineModelsOf,
+        pluginEngineSettingsOf,
+      ),
+    }),
     readPluginName: getInstalledGhostName,
     send: sendToSessionInternal,
     readLatestAssistant: async sessionId => {
