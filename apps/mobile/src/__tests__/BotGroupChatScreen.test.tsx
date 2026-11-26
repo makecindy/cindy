@@ -1604,6 +1604,10 @@ describe('group composer', () => {
     await act(async () => h.row.onContentSizeChange({ nativeEvent: { contentSize: { height: 84 } } }));
     await act(async () => h.row.onFocus());
     expect(h.row.collapsedOverflowText).toBeUndefined();
+    // Text that starts with a blank line shows its first words, not an empty pill.
+    await act(async () => h.row.onChangeText(`\n${long}`));
+    await act(async () => h.row.onBlur());
+    expect(h.row.collapsedOverflowText).toBe(long);
   });
 
   // Both Chat Server entry paths must carry the selected original through the real composer.

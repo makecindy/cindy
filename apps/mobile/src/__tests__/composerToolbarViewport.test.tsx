@@ -189,7 +189,7 @@ it('shows collapsed overflow text from its start on one line and restores the na
   const flatColor = () => Object.assign({}, ...[textInputProps.current.style].flat(Infinity).filter(Boolean)).color;
   const render = (cardActive: boolean) => act(() => root.render(<MobileComposerInputRow
     accessibilityLabel="Message" inputTestID="input" placeholder="Message" placeholderTextColor="inherit" value={text}
-    onChangeText={() => {}} cardActive={cardActive} collapsedOverflowText={cardActive ? undefined : text} testID="composer"
+    onChangeText={() => {}} cardActive={cardActive} collapsedOverflowText={text} testID="composer"
   />));
   try {
     render(false);
