@@ -3,11 +3,10 @@ import { BUNDLED_CATALOG } from '@cindy/model-providers';
 import { mountPage, forbid, subscription } from '../../ui-page/harness';
 import { ProviderConnectionDialog } from '../../../src/renderer/components/settings/ProviderConnectionDialog';
 import { AddProviderWizard } from '../../../src/renderer/components/settings/AddProviderWizard';
-import { getToastSnapshot } from '../../../src/renderer/lib/toast';
 import type { DetectedProviderDraft } from '../../../src/shared/providerDetection';
 import { cases, presets, deployments, retainedPreset } from './cases';
-const evidence: { saved?: unknown; tested?: unknown; resolveProbe?: () => void; handoff?: DetectedProviderDraft; fetches: unknown[] } = { fetches: [] };
-Object.assign(window, { templateEvidence: evidence, templateIds: presets.map(p => p.id), templateToasts: getToastSnapshot });
+const evidence: { saved?: unknown; handoff?: DetectedProviderDraft; fetches: unknown[] } = { fetches: [] };
+Object.assign(window, { templateEvidence: evidence, templateIds: presets.map(p => p.id) });
 function Page({ scenario }: { scenario: string }) {
   const item = cases.find(c => c.id === scenario) ?? cases[0];
   const [detected, setDetected] = useState<DetectedProviderDraft>();
@@ -39,11 +38,7 @@ mountPage({
       scanLocalCli: async () => ({ detections: [] }),
       onProviderOAuthProgress: subscription('providerOAuthProgress'),
       createCustomProvider: async (config: unknown) => { evidence.saved = config; return { ok: true }; },
-      testProviderConnection: item.providerId === 'command-code' ? async (input: unknown) => {
-        evidence.tested = input;
-        await new Promise<void>(resolve => { evidence.resolveProbe = resolve; });
-        return { ok: false, code: 'AUTH_INVALID' };
-      } : forbid('testProviderConnection'),
+      testProviderConnection: forbid('testProviderConnection'),
     } };
   },
   render: ctx => <Page scenario={ctx.case} />,

@@ -20,7 +20,7 @@ import { bindProviderPresetRuntime, providerEndpointBindings, bindProviderEndpoi
  * 上探测式灰态)。
  */
 
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import * as Dialog from '@radix-ui/react-dialog';
 import { useDialogExit } from '@/hooks/useDialogExit';
@@ -366,8 +366,6 @@ export function AddProviderWizard({
   const [presetBaseUrls, setPresetBaseUrls] = useState<PresetBaseUrls>({});
   const [saving, setSaving] = useState(false);
   const savingRef = useRef(false);
-  const [testingConnection, setTestingConnection] = useState(false);
-  const pendingProbeRef = useRef<{ stale: boolean } | null>(null);
   const oauthDraftRef = useRef<CustomProviderConfig | null>(null);
   const oauthAttemptRef = useRef(0);
   const [ollamaCanInstall, setOllamaCanInstall] = useState(() =>
@@ -445,10 +443,6 @@ export function AddProviderWizard({
       }
     >
   >(new Map());
-
-  useLayoutEffect(() => () => {
-    if (pendingProbeRef.current) pendingProbeRef.current.stale = true;
-  }, [picks, sel, step]);
 
   const [modelRegistry, setModelRegistry] = useState<ModelRegistry>();
 
@@ -991,7 +985,6 @@ export function AddProviderWizard({
   /** 关闭向导:授权等待中先取消再关,不留挂起的 login runner。保存中不能关，避免删掉正在落盘的 OAuth 连接。 */
   const handleClose = useCallback(() => {
     if (savingRef.current) return;
-    if (pendingProbeRef.current) pendingProbeRef.current.stale = true;
     if (loggingIn) cancelAuthorize();
     onClose();
   }, [loggingIn, cancelAuthorize, onClose]);
@@ -1406,8 +1399,8 @@ export function AddProviderWizard({
   }, [sel, apiKey, onDone, t]);
 
   const bindGeminiImages = sel?.kind === 'preset' && sel.preset.id === GEMINI_API_PRESET_ID && !detected && !(entry?.kind === 'preset' && entry.speechOnly);
-  const handleFinish = useCallback(async (testOnly = false) => {
-    if (savingRef.current || pendingProbeRef.current || !sel || sel.kind !== 'preset') return;
+  const handleFinish = useCallback(async () => {
+    if (savingRef.current || !sel || sel.kind !== 'preset') return;
     const preset = sel.preset;
     const selected = [...picks.entries()]
       .filter(([, value]) => !value.speechReference || value.checked)
@@ -1432,15 +1425,9 @@ export function AddProviderWizard({
       return;
     }
     const oauthDraft = oauthDraftRef.current;
-    const probe = testOnly ? { stale: false } : null;
-    if (probe) {
-      pendingProbeRef.current = probe;
-      setTestingConnection(true);
-    } else {
-      oauthDraftRef.current = null;
-      savingRef.current = true;
-      setSaving(true);
-    }
+    oauthDraftRef.current = null;
+    savingRef.current = true;
+    setSaving(true);
     try {
       const existing = new Set(providers.map((p) => p.id));
       const id = bindGeminiImages ? newGeminiConnectionId() : oauthDraft?.id ?? (
@@ -1531,34 +1518,6 @@ export function AddProviderWizard({
         ...(preset.authMethod === 'none' ? { auth: { method: 'none' as const } } : {}),
         runtimes,
       };
-      if (probe) {
-        const chosen = selected.find(model => model.checked);
-        const agent = chosen?.agents.find(candidate => runtimes[candidate]?.models.some(model => model.id === chosen.id));
-        const runtime = agent ? runtimes[agent] : undefined;
-        const model = runtime?.models.find(candidate => candidate.id === chosen?.id);
-        if (!agent || !runtime || !model || !keys[agent]) {
-          toast.error(t('settings.providers.custom.test.needFields'));
-          return;
-        }
-        const result = await api.testProviderConnection({
-          kind: 'adhoc',
-          spec: {
-            agent,
-            modelId: model.id,
-            authMethod: 'apiKey',
-            apiKey: keys[agent],
-            catalogPresetId: preset.id,
-            baseUrl: model.route?.baseUrl ?? runtime.baseUrl,
-            wireProtocol: model.route?.wireProtocol ?? runtime.wireProtocol,
-            api: model.api ?? model.piApi,
-            requestPath: model.route?.requestPath ?? runtime.requestPath,
-          },
-        });
-        if (probe.stale) return;
-        if (result.ok) toast.success(t('settings.providers.custom.test.ok', { ms: result.latencyMs ?? 0 }));
-        else toast.error(t(`providerError.${result.code ?? 'UNKNOWN'}`));
-        return;
-      }
       if (bindGeminiImages) {
         const result = await api.createCustomProvider(config, keys, { bindGeminiImages: true });
         if (!result.ok) throw new Error('Gemini connection was not saved');
@@ -1572,16 +1531,11 @@ export function AddProviderWizard({
       );
       onDone(id);
     } catch {
-      if (!probe && oauthDraft) oauthDraftRef.current = oauthDraft;
-      if (!probe?.stale) toast.error(t(probe ? 'providerError.UNKNOWN' : 'settings.providers.wizard.createFailed'));
+      if (oauthDraft) oauthDraftRef.current = oauthDraft;
+      toast.error(t('settings.providers.wizard.createFailed'));
     } finally {
-      if (probe) {
-        pendingProbeRef.current = null;
-        setTestingConnection(false);
-      } else {
-        savingRef.current = false;
-        setSaving(false);
-      }
+      savingRef.current = false;
+      setSaving(false);
     }
   }, [sel, picks, name, apiKey, presetBaseUrls, providers, onDone, t, i18n.language, detected, bindGeminiImages]);
 
@@ -2516,19 +2470,6 @@ export function AddProviderWizard({
                 {t('settings.providers.wizard.next')}
               </Button>
             )}
-            {sel?.kind === 'preset' && sel.preset.id === 'command-code' && step === 3 && (
-              <Button
-                data-settings-search-action="Test the selected Command Code model before saving the connection"
-                type="button"
-                size="lg"
-                loading={testingConnection}
-                title={t('settings.providers.custom.test.costHint')}
-                onClick={() => void handleFinish(true)}
-                disabled={saving || fetchState.status === 'fetching' || checkedCount === 0}
-              >
-                {t('settings.providers.custom.test.button')}
-              </Button>
-            )}
             {sel?.kind === 'preset' && step === 3 && (
               <Button
                 variant="cta"
@@ -2537,7 +2478,7 @@ export function AddProviderWizard({
                 type="button"
                 data-settings-search-action="Save the provider connection configured in this wizard"
                 onClick={() => void handleFinish()}
-                disabled={saving || testingConnection || fetchState.status === 'fetching' || (!bindGeminiImages && checkedCount === 0)}
+                disabled={saving || fetchState.status === 'fetching' || (!bindGeminiImages && checkedCount === 0)}
               >
                 {t('settings.providers.wizard.finish')}
               </Button>
