@@ -69,6 +69,37 @@ describe('PluginModelsSection', () => {
     expect(official.container.querySelector('[data-plugin-model-favorite]')).toBeNull();
     official.unmount();
   });
+
+  // 生产入口与可观察结果：PluginModelsSection + pluginModelFavorites 在 localStorage.setItem 抛错（如配额满）后，
+  // 连续收藏 A、收藏 B、取消 A 与重开面板均基于内存副本演进，不回退覆盖；写入恢复后能正常落盘。
+  // 最小失败输入与 tier：unit(jsdom)，setItem 抛错时第二次收藏导致第一次收藏丢失。
+  it('preserves sequential in-memory favorite toggles when localStorage writes fail and recovers once writable', () => {
+    const picker = { models: [auto, cheap, other], active: null, onSelect: vi.fn() };
+    const setItemSpy = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new DOMException('QuotaExceededError', 'QuotaExceededError');
+    });
+
+    const first = render(<PluginModelsSection picker={picker} query="" onPicked={vi.fn()} />);
+    fireEvent.click(first.container.querySelector('[data-plugin-model-favorite="gate:auto"]')!);
+    fireEvent.click(first.container.querySelector('[data-plugin-model-favorite="gate:cheap"]')!);
+    expect(first.container.querySelector('[data-plugin-model-favorite="gate:auto"]')?.getAttribute('aria-pressed')).toBe('true');
+    expect(first.container.querySelector('[data-plugin-model-favorite="gate:cheap"]')?.getAttribute('aria-pressed')).toBe('true');
+
+    fireEvent.click(first.container.querySelector('[data-plugin-model-favorite="gate:auto"]')!);
+    expect(first.container.querySelector('[data-plugin-model-favorite="gate:auto"]')?.getAttribute('aria-pressed')).toBe('false');
+    expect(first.container.querySelector('[data-plugin-model-favorite="gate:cheap"]')?.getAttribute('aria-pressed')).toBe('true');
+    first.unmount();
+
+    const reopened = render(<PluginModelsSection picker={picker} query="" onPicked={vi.fn()} variant="favorites" />);
+    expect(screen.getByRole('option', { name: /Cheap/ })).toBeTruthy();
+    expect(screen.queryByRole('option', { name: /Auto/ })).toBeNull();
+
+    setItemSpy.mockRestore();
+    fireEvent.click(reopened.container.querySelector('[data-plugin-model-favorite="gate:cheap"]')!);
+    expect(screen.queryByRole('option', { name: /Cheap/ })).toBeNull();
+    expect(localStorage.getItem('cindy:pluginModelFavorites:v1:owner-a')).toBe('[]');
+    reopened.unmount();
+  });
 });
 
 describe('usePluginModels', () => {

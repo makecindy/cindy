@@ -12,7 +12,7 @@ const STORAGE_KEY = 'cindy:pluginModelFavorites:v1';
 const MAX_FAVORITES = 64;
 
 const listeners = new Set<() => void>();
-let cache: { key: string; keys: readonly string[] } | null = null;
+let cache: { key: string; keys: readonly string[]; dirty?: boolean } | null = null;
 
 function storageKey(): string {
   const owner = getDataOwnerGeneration().dataOwnerId;
@@ -46,7 +46,7 @@ function emit(): void {
 }
 
 function subscribe(listener: () => void): () => void {
-  if (listeners.size === 0) cache = null;
+  if (listeners.size === 0 && !cache?.dirty) cache = null;
   listeners.add(listener);
   const onStorage = (event: StorageEvent) => {
     if (event.key !== storageKey()) return;
@@ -64,16 +64,18 @@ function subscribe(listener: () => void): () => void {
 export function togglePluginModelFavorite(model: Pick<GhostPickerModel, 'pluginId' | 'id'>): void {
   const key = storageKey();
   const itemKey = pluginModelFavoriteKey(model);
-  const current = read(key);
+  const current = cache && cache.key === key && cache.dirty ? cache.keys : read(key);
   const next = current.includes(itemKey)
     ? current.filter((item) => item !== itemKey)
     : [...current, itemKey].slice(-MAX_FAVORITES);
-  cache = { key, keys: next };
+  let dirty = false;
   try {
     localStorage.setItem(key, JSON.stringify(next));
   } catch {
-    // 写不进去时这次收藏只在本窗口生效。
+    // 写不进去时这次收藏只在本窗口内存生效，后续操作继续基于该内存列表。
+    dirty = true;
   }
+  cache = { key, keys: next, dirty };
   emit();
 }
 

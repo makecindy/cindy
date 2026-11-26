@@ -394,6 +394,10 @@ export function UnifiedModelPickerSheet(
     uid?: string;
     effort?: PluginEngineEffort | null;
   } | null>(null);
+  // 未选中的插件引擎模型在详情页调整思考深度后，在本次选择器打开期间保留，返回列表与点击选择继续生效。
+  const [pluginEfforts, setPluginEfforts] = useState<
+    ReadonlyMap<string, PluginEngineEffort>
+  >(new Map());
   const [pluginFavoriteEdit, setPluginFavoriteEdit] = useState<{
     original: MobileModelFavorite;
     effort: PluginEngineEffort | null;
@@ -427,6 +431,7 @@ export function UnifiedModelPickerSheet(
     filterTouched.current = false;
     setTarget(null);
     setPluginTarget(null);
+    setPluginEfforts(new Map());
     setRemoteConfigs(new Map());
     setFavoriteEdit(null);
     setPluginFavoriteEdit(null);
@@ -1033,6 +1038,7 @@ export function UnifiedModelPickerSheet(
         });
     }
   // 插件引擎(「全部」或搜索命中时)：每个引擎一段，列在内置模型之前(与 Desktop 面板顺序一致)。
+  const pluginEffortKey = (providerId: string, modelId: string) => `${providerId}#${modelId}`;
   const pluginEngineGroups = pluginEngineOptions && all
     ? buildPluginEngineGroups(pluginEngineOptions, query, {
         defaultModel: t("models.pluginEngines.defaultModel"),
@@ -1041,13 +1047,21 @@ export function UnifiedModelPickerSheet(
           ? t("models.pluginEngines.unavailableWithHint", { engine: name, hint })
           : t("models.pluginEngines.unavailable", { engine: name }),
       }).map((group) => {
+        const rowsWithOverrides = pluginEfforts.size
+          ? group.rows.map((pluginRow) => {
+              if (pluginRow.selected) return pluginRow;
+              const override = pluginEfforts.get(pluginEffortKey(pluginRow.providerId, pluginRow.modelId));
+              if (!override || !pluginRow.efforts.includes(override)) return pluginRow;
+              return { ...pluginRow, effort: override, effortLabel: pluginEngineLabels.effort(override) };
+            })
+          : group.rows;
         const quota = formatPluginEnginePickerQuota(
           pluginEngineQuotas?.[group.providerId],
           now,
           i18n?.language ?? "en",
           (resetsAtSeconds, currentNow) => formatQuotaResetCountdown(resetsAtSeconds, currentNow, t, null),
         );
-        return quota ? { ...group, quota } : group;
+        return { ...group, rows: rowsWithOverrides, ...(quota ? { quota } : {}) };
       })
     : [];
   // Recommended/favorites can contain the only rows for a source. Keep its
@@ -1207,6 +1221,10 @@ export function UnifiedModelPickerSheet(
     const selected =
       pluginEngineOptions?.active?.providerId === activePluginEngine.providerId &&
       pluginEngineOptions?.active?.modelId === pluginTarget.modelId;
+    const rememberedEffort =
+      !originPluginFavorite && !selected
+        ? pluginEfforts.get(pluginEffortKey(activePluginEngine.providerId, pluginTarget.modelId))
+        : undefined;
     const effort = pluginFavoriteEdit
       ? pluginFavoriteEdit.effort
       : pluginTarget.effort !== undefined
@@ -1216,7 +1234,7 @@ export function UnifiedModelPickerSheet(
           : resolvePluginEngineEffort(
               activePluginEngine,
               pluginTarget.modelId,
-              selected ? pluginEngineOptions?.active?.effort : undefined,
+              selected ? pluginEngineOptions?.active?.effort : rememberedEffort,
             );
     return {
       key: pluginTarget.uid ?? `${activePluginEngine.providerId}#${pluginTarget.modelId}`,
@@ -1335,7 +1353,16 @@ export function UnifiedModelPickerSheet(
         modelId: row.modelId,
         ...(nextEffort ? { effort: nextEffort } : {}),
       });
-      if (applied !== false && effort === undefined && isCurrent()) p.onClose();
+      if (applied !== false && isCurrent()) {
+        setPluginEfforts((current) => {
+          const key = pluginEffortKey(row.providerId, row.modelId);
+          if (!current.has(key)) return current;
+          const next = new Map(current);
+          next.delete(key);
+          return next;
+        });
+        if (effort === undefined) p.onClose();
+      }
     });
   };
   const openPluginEngineOptions = (pluginRow: UnifiedMobilePluginEngineRow) => {
@@ -1353,14 +1380,26 @@ export function UnifiedModelPickerSheet(
     });
   };
   const changePluginEngineEffort = (nextEffort: PluginEngineEffort) => {
-    if (!activePluginRow || !pluginEngineOptions) return;
+    if (!activePluginRow || !activePluginEngine || !pluginEngineOptions) return;
     if (pluginFavoriteEdit) {
       if (!lock.current && !p.disabled) {
         setPluginFavoriteEdit({ ...pluginFavoriteEdit, effort: nextEffort });
       }
       return;
     }
-    if (activePluginRow.selected) {
+    const key = pluginEffortKey(activePluginRow.providerId, activePluginRow.modelId);
+    const liveFavorite =
+      !!originPluginFavorite &&
+      pluginEngineOptions.active?.providerId === activePluginRow.providerId &&
+      pluginEngineOptions.active?.modelId === activePluginRow.modelId &&
+      resolvePluginEngineEffort(activePluginEngine, activePluginRow.modelId, pluginEngineOptions.active?.effort) ===
+        activePluginRow.effort;
+    const savedNotice = t(
+      pluginTarget?.uid && pluginFavoriteToRemove
+        ? "models.unified.originalFavoriteKept"
+        : "models.unified.parametersSaved",
+    );
+    if (activePluginRow.selected || liveFavorite) {
       void transact(async (isCurrent) => {
         const applied = await pluginEngineOptions.onSelect({
           providerId: activePluginRow.providerId,
@@ -1368,16 +1407,25 @@ export function UnifiedModelPickerSheet(
           effort: nextEffort,
         });
         if (applied !== false && isCurrent()) {
+          setPluginEfforts((current) => {
+            if (!current.has(key)) return current;
+            const next = new Map(current);
+            next.delete(key);
+            return next;
+          });
           setPluginTarget((current) => (current ? { ...current, effort: nextEffort } : current));
-          setNotice(t("models.unified.parametersSaved"));
+          setNotice(savedNotice);
         }
       });
       return;
     }
+    setPluginEfforts((current) => {
+      const next = new Map(current);
+      next.set(key, nextEffort);
+      return next;
+    });
     setPluginTarget((current) => (current ? { ...current, effort: nextEffort } : current));
-    if (pluginTarget?.uid && pluginFavoriteToRemove) {
-      setNotice(t("models.unified.originalFavoriteKept"));
-    }
+    setNotice(savedNotice);
   };
   const change = (config: MobileModelConfiguration, reset = false) => {
     if (!row) return;

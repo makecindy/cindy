@@ -1308,3 +1308,81 @@ it('favorites, edits, selects, and removes plugin engine models in UnifiedModelP
   });
   expect(onClose).toHaveBeenCalledOnce();
 });
+
+// 生产入口与可观察结果：UnifiedModelPickerSheet 未选中的插件引擎模型在详情页调整思考深度后，
+// 返回列表保留该档位展示、再次打开详情保持该档位、点击列表行以新档位调用 onSelect；
+// 从匹配当前活跃配置的收藏进入详情改档时立即应用到当前会话且保留原收藏不变。
+// 最小失败输入与 tier：unit(jsdom)，返回列表后点击模型仍传入旧默认档位 'high' 而非 'max'。
+it('retains adjusted effort for unselected plugin engine rows after returning to list and applies live favorite edits', async () => {
+  const selectPlugin = vi.fn(async () => true);
+  const pluginEngine = {
+    key: 'dsh-plugin:dsh',
+    providerId: 'acp-plugin:dsh-plugin:dsh',
+    name: 'DeepSeek Harness',
+    availability: { state: 'available' as const },
+    models: [
+      { id: 'pro', displayName: 'Pro', efforts: ['low', 'high', 'max'] as ('low' | 'high' | 'max')[], defaultEffort: 'high' as const },
+    ],
+    permissionModes: [{ id: 'ask', displayName: 'Ask' }],
+    defaultPermissionMode: 'ask',
+  };
+  await mount(undefined, {
+    unified: {
+      scope: 'user-device',
+      agents: ['codex', 'claude-code'],
+      loadCapabilities: async () => ({ hasFastMode: true }),
+      onSelect: vi.fn(async () => true),
+      pluginEngines: { engines: [pluginEngine], active: null, onSelect: selectPlugin },
+    },
+  });
+
+  const initialRow = test.view.pluginEngines.groups[0].rows[0];
+  expect(initialRow.effort).toBe('high');
+  await act(async () => test.view.pluginEngines.onOptions(initialRow));
+  await act(async () => test.view.pluginEngineOptions.onChangeEffort('max'));
+  expect(test.view.pluginEngineOptions.notice).toBe('models.unified.parametersSaved');
+  await act(async () => test.view.onBack());
+
+  // Returning to list preserves the adjusted effort on the row, on reopening options, and on row selection.
+  const updatedRow = test.view.pluginEngines.groups[0].rows[0];
+  expect(updatedRow.effort).toBe('max');
+  await act(async () => test.view.pluginEngines.onOptions(updatedRow));
+  expect(test.view.pluginEngineOptions.effort).toBe('max');
+  await act(async () => test.view.onBack());
+
+  await act(async () => test.view.pluginEngines.onSelect(test.view.pluginEngines.groups[0].rows[0]));
+  expect(selectPlugin).toHaveBeenCalledWith({
+    providerId: pluginEngine.providerId,
+    modelId: 'pro',
+    effort: 'max',
+  });
+
+  // Adjusting effort on an opened favorite that matches the live active selection applies live and keeps the favorite intact.
+  selectPlugin.mockClear();
+  test.prefs.favorites = [
+    { uid: 'fav-live', providerId: pluginEngine.providerId, modelId: 'pro', agent: 'claude-code', effort: 'max', fast: false },
+  ];
+  await mount(undefined, {
+    unified: {
+      scope: 'user-device',
+      agents: ['codex', 'claude-code'],
+      loadCapabilities: async () => ({ hasFastMode: true }),
+      onSelect: vi.fn(async () => true),
+      pluginEngines: {
+        engines: [pluginEngine],
+        active: { providerId: pluginEngine.providerId, modelId: 'pro', effort: 'max' },
+        onSelect: selectPlugin,
+      },
+    },
+  });
+  const favRow = test.view.groups.find((g: any) => g.key === 'favorites').items[0].row;
+  await act(async () => test.view.pluginEngines.onOptions(favRow));
+  await act(async () => test.view.pluginEngineOptions.onChangeEffort('low'));
+  expect(selectPlugin).toHaveBeenCalledWith({
+    providerId: pluginEngine.providerId,
+    modelId: 'pro',
+    effort: 'low',
+  });
+  expect(test.view.pluginEngineOptions.notice).toBe('models.unified.originalFavoriteKept');
+  expect(test.prefs.favorites[0].effort).toBe('max');
+});
