@@ -1027,9 +1027,90 @@ it('keeps the acknowledged subscription across refresh and connection checks', a
     await remote.githubStatus();
     await remote.refresh();
     expect(server.githubSubscriptionBodies).toHaveLength(count);
+    const requestsAfterExplicitRefresh = server.requests.length;
+    // Schedule run completions that only advance timing fields must not re-query /api/v1/github.
+    await remote.sync([{ ...follow(1), lastFiredAt: 100, lastFinishedAt: 120, nextFireAt: 420 } as Schedule]);
+    expect(server.requests).toHaveLength(requestsAfterExplicitRefresh);
     await remote.sync([follow(2)]);
     expect(server.githubSubscriptionBodies).toHaveLength(count + 1);
   } finally { remote.stop(); await server.close(); }
+});
+
+// 测试价值
+// - 生产入口与可观察结果：ScheduleWebhookRemote.sync 在远端请求尚未完成时本地订阅发生变化（含 A->B 与已同步 A 下的 B->A 回退），未落地的指纹绝不会被标为已同步，最终服务器订阅与最新本地集合一致。
+// - 规则依据：docs/dev-rules/server-channel-review.md —— 单飞对账必须绑定发起时的不可变快照，禁止把在途期间新产生的本地订阅变更静默吞掉。
+// - 现有覆盖缺口：既有测试仅串行 await remote.sync(...)，未覆盖 PUT /api/v1/github/repositories 在途期间并发修改 followed PRs。
+// - 最小失败输入：卡住在途 PUT /api/v1/github/repositories 时连续调用 remote.sync([follow(1), follow(2)]) 及回退到 [follow(1)]。
+// - tier：unit（回环 HTTP/WS 假服务器）。
+it('never marks an unsynced subscription fingerprint as synced when local PRs change mid-flight', async () => {
+  const server = new FakeServer();
+  server.github = { available: true, login: 'example-user', endpointId: 'whk-github', repositories: [], prSubscriptions: true };
+  const baseUrl = await server.listen();
+  let holdPut = false;
+  let putEntered = false;
+  let releasePut!: () => void;
+  const resetGate = () => {
+    putEntered = false;
+    return new Promise<void>((resolve) => {
+      releasePut = resolve;
+    });
+  };
+  let putGate = resetGate();
+  const remote = new ScheduleWebhookRemote({
+    baseUrl: () => baseUrl,
+    getAccessToken: async () => 'token-1',
+    refreshAccessToken: async () => false,
+    fetch: async (input, init) => {
+      if (holdPut && String(input).endsWith('/api/v1/github/repositories') && init?.method === 'PUT') {
+        putEntered = true;
+        holdPut = false;
+        await putGate;
+      }
+      return fetch(input, init);
+    },
+    socketOptions: async () => ({}),
+    logger: {},
+    onBatch: async () => {},
+    onGithubPrs: async () => {},
+  });
+  const follow = (number: number) => ({
+    id: `follow-${number}`,
+    name: `Follow #${number}`,
+    status: 'active',
+    recurring: true,
+    preRunHook: { command: `node gate.mjs https://github.com/example/project/pull/${number}` },
+  }) as Schedule;
+  try {
+    // Case 1: [1] is in flight when local state expands to [1, 2] -> server MUST converge to [1, 2].
+    holdPut = true;
+    const firstSync = remote.sync([follow(1)]);
+    await vi.waitFor(() => expect(putEntered).toBe(true));
+    const secondSync = remote.sync([follow(1), follow(2)]);
+    releasePut();
+    await Promise.all([firstSync, secondSync]);
+    expect(server.githubSubscriptionBodies.at(-1)?.pullRequests).toEqual([
+      { repository: 'example/project', number: 1 },
+      { repository: 'example/project', number: 2 },
+    ]);
+
+    // Case 2 (ABA): [1, 2] is already synced; [1] starts in flight, then local state reverts to [1, 2]
+    // before [1] finishes -> pendingReconciles prevents short-circuiting on stale localSyncKey=[1, 2].
+    putGate = resetGate();
+    holdPut = true;
+    const shrinkSync = remote.sync([follow(1)]);
+    await vi.waitFor(() => expect(putEntered).toBe(true));
+    const revertSync = remote.sync([follow(1), follow(2)]);
+    releasePut();
+    await Promise.all([shrinkSync, revertSync]);
+    expect(server.githubSubscriptionBodies.at(-1)?.pullRequests).toEqual([
+      { repository: 'example/project', number: 1 },
+      { repository: 'example/project', number: 2 },
+    ]);
+  } finally {
+    releasePut?.();
+    remote.stop();
+    await server.close();
+  }
 });
 
 // Installing the App changes permissions without changing the followed PRs.

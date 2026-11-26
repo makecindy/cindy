@@ -17,11 +17,15 @@ export interface PluginEngineSkillPorts {
   readDisabledSkillPaths(): readonly string[];
 }
 
+/**
+ * Also the list a plugin-engine task's `/` menu shows (`AcpAgent.listAgentSkills`), so the menu offers what
+ * the engine expands. Without a folder (a new task with no project yet) only the shared Skills are listed.
+ */
 export function createPluginEngineSkillLister(ports: PluginEngineSkillPorts) {
-  return async ({ workingDir }: { workingDir: string }): Promise<PluginEngineBriefingSkill[]> => {
+  return async ({ workingDir }: { workingDir?: string }): Promise<PluginEngineBriefingSkill[]> => {
     const [managed, scanned] = await Promise.all([
       ports.listManagedSkills(),
-      ports.scanCustomizations('pi', { workingDirs: [workingDir], kinds: ['skill'] }),
+      ports.scanCustomizations('pi', { workingDirs: workingDir ? [workingDir] : [], kinds: ['skill'] }),
     ]);
     // Each disabled path and each Skill is resolved once (not once per pair); with nothing turned off,
     // nothing is resolved.
@@ -29,9 +33,19 @@ export function createPluginEngineSkillLister(ports: PluginEngineSkillPorts) {
     const disabled = disabledPaths.length ? new Set(snapshotDisabledSkillPaths(disabledPaths)) : null;
     const discovered = scanned.items
       .filter((item) => item.kind === 'skill' && item.enabled !== false)
-      .map((item) => ({ name: item.name, description: item.description, path: item.mdPath ?? path.join(item.absolutePath, 'SKILL.md') }));
-    return [...managed, ...discovered]
+      .map((item) => ({
+        name: item.name,
+        description: item.description,
+        path: item.mdPath ?? path.join(item.absolutePath, 'SKILL.md'),
+        scope: item.scope === 'repo' ? 'repo' as const : 'user' as const,
+      }));
+    return [...managed.map((skill) => ({ ...skill, scope: 'user' as const })), ...discovered]
       .filter((skill) => !disabled || !skill.path || !disabled.has(canonicalSkillPath(skill.path)))
-      .map((skill) => ({ name: skill.name, ...(skill.description ? { description: skill.description } : {}), ...(skill.path ? { path: skill.path } : {}) }));
+      .map((skill) => ({
+        name: skill.name,
+        ...(skill.description ? { description: skill.description } : {}),
+        ...(skill.path ? { path: skill.path } : {}),
+        scope: skill.scope,
+      }));
   };
 }

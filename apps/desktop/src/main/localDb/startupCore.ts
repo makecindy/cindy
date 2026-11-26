@@ -10,6 +10,8 @@
  */
 
 import fs from 'node:fs';
+import { ownerScopedPath } from '../dataOwnerPath.js';
+import { recoverWorkspaceMovesAtStartup } from '../workspace-migration/service.js';
 
 import { drizzle, type BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
 import type Database from 'better-sqlite3';
@@ -94,6 +96,7 @@ export async function openOwnerDatabase(
   let writerLease: SchemaMigrationLease | null = lease.kind === 'writer' ? lease.lease : null;
   let db: Database.Database | null = null;
   try {
+    await recoverWorkspaceMovesAtStartup(ownerScopedPath(userDataDir, ownerId), lease.kind === 'writer');
     if (writerLease) prepareModelDefaultsProfile(dbPath);
     db = createBetterSqliteDatabase(dbPath);
     applyPragmas(db);
@@ -132,6 +135,7 @@ export async function openOwnerDatabase(
     lease.lease.release();
     if (error instanceof OwnerDatabaseError) throw error;
     const message = error instanceof Error ? error.message : String(error);
-    throw new OwnerDatabaseError('MIGRATE_FAILED', message);
+    const migrationBusy = ['MIGRATION_BUSY', 'WORKSPACE_MOVE_IN_PROGRESS', 'WORKSPACE_MOVE_REQUIRES_EXCLUSIVE_STARTUP'].includes(message);
+    throw new OwnerDatabaseError(migrationBusy ? 'DB_SCHEMA_LOCKED' : 'MIGRATE_FAILED', message);
   }
 }

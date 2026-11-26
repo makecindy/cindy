@@ -26,7 +26,7 @@ export function createPluginTaskStore(db: DbClient): PluginTaskStore {
           .where(
             and(
               eq(table.pluginId, pluginId),
-              eq(table.operation, operation as 'create' | 'send' | 'imPermission'),
+              eq(table.operation, operation as 'create' | 'send' | 'imPermission' | 'followUp'),
               eq(table.targetId, targetId),
               eq(table.requestKey, requestKey),
             ),
@@ -67,6 +67,12 @@ export function createPluginTaskStore(db: DbClient): PluginTaskStore {
         .select()
         .from(table)
         .where(and(eq(table.operation, 'send'), eq(table.targetId, taskId))),
+    followUpLinks: (openedTaskId) =>
+      db.drizzle
+        .select()
+        .from(table)
+        .where(and(eq(table.operation, 'followUp'), eq(table.targetId, openedTaskId)))
+        .orderBy(asc(table.createdAt), asc(table.id)),
     insert: async (row) => {
       await db.drizzle.insert(table).values(row);
     },

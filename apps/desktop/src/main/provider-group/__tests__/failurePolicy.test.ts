@@ -72,6 +72,7 @@ describe('decideProviderGroupFailure — the account on that computer', () => {
   it.each<[string, InterruptedTurnErrorSignals, ReturnType<typeof switchTo>]>([
     ['usage limit (Claude tag)', { sdkError: 'rate_limit' }, switchTo('usage-limit')],
     ['usage limit (Codex tag)', { codexErrorInfo: 'usageLimitExceeded' }, switchTo('usage-limit')],
+    ['rate limit (Codex 0.156 tag)', { codexErrorInfo: 'rateLimitExceeded' }, switchTo('usage-limit')],
     ['billing depleted', { sdkError: 'billing_error' }, switchTo('usage-limit')],
     ['xAI billing rejection', { errorStatus: 403, message: 'You have run out of credits or need a Grok subscription.' }, switchTo('usage-limit')],
     ['HTTP 429', { errorStatus: 429, message: 'rate limited' }, switchTo('usage-limit')],
@@ -208,6 +209,13 @@ describe('decideProviderGroupFailure — any computer would fail the same way (s
     ['HTTP 413', { errorStatus: 413, message: 'too large' }, 'invalid-request'],
     ['Codex bad request', { codexErrorInfo: 'badRequest', message: 'x' }, 'invalid-request'],
     ['content policy', { codexErrorInfo: 'cyberPolicy', message: 'x' }, 'policy'],
+    // 测试价值：依据供应商安全拦截不换号换电脑绕过（provider-groups.md §6.1 及本次审计要求）；此前缺少 Codex 0.156
+    // misalignmentPolicyViolation、provider-safety-refusal reason 及 403 安全拦截文本的覆盖，403/无状态拦截会落入 switchTo('failed') 换号重试；
+    // 生产入口 decideProviderGroupFailure；最小失败输入为带 403 的安全拦截信号；tier: unit。
+    ['Codex misalignment policy', { codexErrorInfo: 'misalignmentPolicyViolation', errorStatus: 403, message: 'Policy violation' }, 'policy'],
+    ['translator safety refusal reason', { reason: 'provider-safety-refusal', errorStatus: 403, message: 'Blocked' }, 'policy'],
+    ['Anthropic content filtering policy text', { errorStatus: 403, message: 'Output blocked by content filtering policy' }, 'policy'],
+    ['OpenAI safety_violation JSON', { message: '{"error":{"code":"safety_violation","message":"Blocked"}}' }, 'policy'],
     // Unit, provider-groups §6.1: relocating cannot repair the shared proxy's
     // explicit scope refusal. Existing stay inputs did not cover this message.
     ['shared provider scope', { message: 'unexpected status 403 Forbidden: [SHARED_PROVIDER_SCOPE_DENIED] This request is outside the provider shared with you.' }, 'policy'],

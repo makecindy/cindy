@@ -26,7 +26,6 @@ import { hasEmbeddedImPrompt } from './userMessageDisplayText';
 import { ChatBubble, CHAT_BUBBLE_COLUMN_CLASS } from './ChatBubble';
 import { type ReactNode, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Bot,
   ChevronDown,
   ChevronRight,
   ChevronUp,
@@ -86,6 +85,7 @@ import {
 } from '@/lib/chatQuotes';
 import { quoteSegmentsToComposerDocument } from '@/lib/composerQuoteDocument';
 import { ChatImageView } from './ChatImageView';
+import { repeatIndexes, structuredImageOccurrence } from './ImageGalleryContext';
 import { TextLightbox } from './lazyPreviewLightboxes';
 import { ToolPayloadLightbox } from './ToolPayloadLightbox';
 import { MessageActionBar } from './MessageActionBar';
@@ -126,6 +126,7 @@ import {
 } from './GhostSummonCard';
 import { MessageSourceLabels } from './MessageSourceLabels';
 import { BotTaskLetterOpen, BotTaskLetterPill } from './BotStartedTasks';
+import { OrcaMessageHeading } from './OrcaMessageHeading';
 import { UserMessageUrlLink } from './UserMessageUrlLink';
 import { InlineReferenceChip } from './InlineReferenceChip';
 import { QuoteChip } from './QuoteChip';
@@ -1285,21 +1286,9 @@ export function UserMessage({
     if (editing && !isLastUserMessage) setEditing(false);
   }, [editing, isLastUserMessage]);
 
-  const orcaWorkerRole =
-    automationOrigin?.kind === 'session' ? automationOrigin.orcaSenderLabel : undefined;
+  // 宿主派发 claim 提示：Orca 卡片标题统一在 OrcaMessageHeading 里拼（含这条）
   const orcaHostNotice =
     automationOrigin?.kind === 'session' ? automationOrigin.orcaHostNotice : undefined;
-  const orcaBatchCount = automationOrigin?.kind === 'session' ? automationOrigin.orcaAutoBridgeBatchCount : undefined;
-  const orcaCardTitle = orcaHostNotice
-    ? t('chat.userMessage.orcaFromHost')
-    : orcaBatchCount
-      ? t('chat.userMessage.orcaFromWorkerBatch', { count: orcaBatchCount })
-      : orcaCommunication?.orcaSource === 'lead'
-        ? t('chat.userMessage.orcaFromLead')
-        : orcaWorkerRole
-          ? t('chat.userMessage.orcaFromWorkerNamed', { role: orcaWorkerRole })
-          : t('chat.userMessage.orcaFromWorker');
-
   // 伙伴对话：其他任务转来的消息不占主人在右侧的位置，收成左侧一行来信，点开看全文
   // （2026-11-10 主人裁决；普通任务页不变）。
   const botLetter =
@@ -1349,11 +1338,17 @@ export function UserMessage({
 
   // Define each renderer once, then place it inside the hook / ordinary branch
   // so the ordinary message keeps its established badge-before-attachment order.
+  const imageSrcs = hasImages
+    ? images.map((img) => ('url' in img ? img.url : `data:${img.mimeType};base64,${img.base64}`))
+    : [];
+  // Same count the task gallery uses for this message's uploads, so a repeated
+  // upload opens the gallery at the copy that was clicked.
+  const imageRepeats = repeatIndexes(imageSrcs);
   const imageAttachmentNodes =
     !orcaCommunication && hasImages
       ? images.map((img, idx) => {
           const isUrlMode = 'url' in img;
-          const src = isUrlMode ? img.url : `data:${img.mimeType};base64,${img.base64}`;
+          const src = imageSrcs[idx]!;
           const filename = isUrlMode ? img.originalName : (img.originalName ?? `image-${idx + 1}`);
           return (
             <ChatImageView
@@ -1364,6 +1359,7 @@ export function UserMessage({
               sessionId={sessionId}
               annotationSourceUrl={isUrlMode ? img.annotationSourceUrl : undefined}
               annotationStrokes={isUrlMode ? img.annotationStrokes : undefined}
+              galleryOccurrence={structuredImageOccurrence(imageRepeats[idx]!)}
             />
           );
         })
@@ -1476,8 +1472,7 @@ export function UserMessage({
                 aria-expanded={orcaExpanded}
                 onClick={() => setOrcaExpanded((value) => !value)}
               >
-                <Bot size={14} className="shrink-0 text-[var(--msg-tool-card-chevron)]" />
-                <span className="min-w-0 flex-1 truncate">{orcaCardTitle}</span>
+                <OrcaMessageHeading source={orcaCommunication.orcaSource} origin={automationOrigin} />
                 {orcaExpanded ? (
                   <ChevronDown size={14} className="shrink-0 text-[var(--msg-tool-card-chevron)]" />
                 ) : (
