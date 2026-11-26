@@ -1806,7 +1806,7 @@ describe("pinned high-risk permission", () => {
     const who = { name: "Demo", deviceId: "mac", deviceName: "Mac", pluginId: "market/demo", ghostId: "demo" };
     const lines = Array.from({ length: 6 }, (_, index) => ({ key: `line-${index}`, entry: "market-install" as const, who }));
     mount(PluginPendingChecksSheet, { visible: true, lines, conclusions: [], isOnline: () => true, canOpen: () => true,
-      onDecide: () => true, onClose() {}, onOpenInstalled() {}, onShowInstalled() {} });
+      onDecide: () => true, onClose() {}, onOpenChecked() {}, onShowInstalled() {} });
     expect(flatStyle(bridge.props.get("plugins.checks.list").contentContainerStyle).paddingRight).toBeUndefined();
     act(() => bridge.props.get("plugins.checks.list").onLayout({ nativeEvent: { layout: { height: 200 } } }));
     act(() => bridge.props.get("plugins.checks.list").onContentSizeChange(390, 900));

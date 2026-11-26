@@ -2488,8 +2488,15 @@ describe('whether a finished operation opens an instance', () => {
     const custom = (name: string) => ({ sourceType: 'git-market' as const, sourceMarketName: name, scope: 'public' as const });
     expect([pluginMarketFactsComplete(customDown, server), pluginMarketFactsComplete(customDown, custom('Acme')), pluginMarketFactsComplete(customDown, custom('Other'))])
       .toEqual([true, false, true]);
-    const catalog = { unavailableReason: 'fetch failed', unavailableCustomSourceNames: [] };
+    // The catalog could not be read but the custom markets were (the computer names the ones it read): a custom
+    // market's plugin is unaffected. When its whole market part was unavailable (no items at all, no market named:
+    // the computer's session is switching or it is not signed in), nothing was read for it either.
+    const catalog = { unavailableReason: 'fetch failed', unavailableCustomSourceNames: [], customSourceNames: ['Acme'] };
     expect([pluginMarketFactsComplete(catalog, server), pluginMarketFactsComplete(catalog, custom('Acme'))]).toEqual([false, true]);
+    const nothingRead = { unavailableReason: 'session-switching', unavailableCustomSourceNames: [], customSourceNames: [] };
+    expect([pluginMarketFactsComplete(nothingRead, server), pluginMarketFactsComplete(nothingRead, custom('Acme'))]).toEqual([false, false]);
+    expect(pluginOperationOpens({ ...finished('market-install'), detail: { ...detail, ...custom('Acme') } }, { ghosts: [updated], market: [], marketState: nothingRead }))
+      .toEqual({ open: false, reason: 'unread' });
     const organization = { unavailableReason: null, unavailableCustomSourceNames: [], organizationAccessError: 'FORBIDDEN' };
     expect([pluginMarketFactsComplete(organization, server), pluginMarketFactsComplete(organization, { ...server, scope: 'organization' as const })]).toEqual([true, false]);
   });

@@ -493,6 +493,7 @@
     "waitingOne": "「{{name}}」在「{{device}}」上的結果待核實",
     "settledOne": "「{{name}}」在「{{device}}」上的操作有結果了",
     "settledMany": "{{count}} 項插件操作有結果了",
+    "attentionMany": "{{count}} 項插件操作待查看",
     "kind": {
       "marketInstall": "安裝",
       "update": "更新",

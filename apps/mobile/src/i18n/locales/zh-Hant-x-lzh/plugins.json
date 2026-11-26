@@ -493,6 +493,7 @@
     "waitingOne": "「{{name}}」於「{{device}}」之果待核",
     "settledOne": "「{{name}}」於「{{device}}」之事已有果",
     "settledMany": "法器之事已有果者 {{count}}",
+    "attentionMany": "法器之事待觀者 {{count}}",
     "kind": {
       "marketInstall": "納之",
       "update": "更之",

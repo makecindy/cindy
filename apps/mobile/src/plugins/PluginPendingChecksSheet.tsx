@@ -6,7 +6,7 @@ import { Text } from "@/components/AppText";
 import { fontWeight, lineHeight, radius, spacing, typeScale, useTheme, useThemedStyles, type ThemeColors } from "@/theme";
 import { ScrollFade, ScrollThumb, useScrollOverflow } from "@/components/ScrollOverflow";
 import { CONSENT_FADE_HEIGHT } from "./pluginConsentPresentation";
-import type { PluginSlotEntry, PluginSlotHolder } from "./pluginManagementSlot";
+import { samePluginSlotHolder, type PluginSlotEntry, type PluginSlotHolder } from "./pluginManagementSlot";
 import { PLUGIN_NOT_OPENED_TEXT } from "./pluginOperationOpens";
 import { pluginConclusionSettled, retryPluginCheckReadback, stopPluginConclusion, tellPluginConclusion, type PluginCheckConclusion, type PluginPendingCheck } from "./usePluginManagement";
 
@@ -67,6 +67,11 @@ export function PluginPendingChecksSheet({ visible, lines, conclusions, isOnline
     return () => { for (const operationId of settledSeen.current) tellPluginConclusion(operationId); settledSeen.current.clear(); };
   }, [visible]);
   for (const line of lines) seen.current.set(line.key, line);
+  // An operation listed while it was getting ready (before its begin) and that then began is one line, its check's:
+  // the earlier line is not kept beside it as "ended".
+  for (const [key, line] of [...seen.current]) {
+    if (key.startsWith("slot:") && !lines.includes(line) && lines.some((other) => other.check && samePluginSlotHolder(other.who, line.who))) seen.current.delete(key);
+  }
   const shown = [...seen.current.values()];
   const live = new Set(lines.filter((line) => !line.concluded).map((line) => line.key));
   const status = (line: PluginOperationLine) => {

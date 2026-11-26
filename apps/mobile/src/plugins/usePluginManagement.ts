@@ -44,8 +44,6 @@ interface ManagementEntry {
   lastCheck?: ReturnType<PluginManagementController["pendingCheck"]>;
   /** The operation whose final result this entry already told the list (told once). */
   concluded?: string;
-  /** Who asked for the lookup under way ("Check result"): a view that shows the result itself; none for the list. */
-  askedBy?: symbol;
   /** The installed read this entry's view uses (the market's light read, or the full snapshot): the readback uses it too. */
   snapshotRead?: "installed";
   /** Views of the list of pending checks showing this entry's consent ("View and decide"): it counts as shown then. */
@@ -63,7 +61,6 @@ export interface PluginCheckConclusion {
   operationId: string;
   entry: PluginSlotEntry;
   who: PluginSlotHolder;
-  /** Final receipt, or (installs and updates whose receipt is gone) the verdict from the computer's facts. */
   /**
    * Final receipt, or (installs and updates whose receipt is gone, contract V2.10) the verdict from the computer's
    * facts: `installed` (①), `mismatch` (② not attributable to this operation), `legacy` (③ an older computer without
@@ -89,8 +86,6 @@ export interface PluginCheckConclusion {
    * failed, or settled with nobody there to show it.
    */
   told?: boolean;
-  /** The view whose "Check result" led to it (that view shows it; a later lookup from elsewhere replaces it). */
-  askedBy?: symbol;
 }
 /** Its read of the computer gave an answer (proven, or why not): there is something to show. */
 export function pluginConclusionSettled(conclusion: Pick<PluginCheckConclusion, "readback">): boolean {
@@ -132,11 +127,8 @@ export interface PluginPendingCheck {
    * says so; "Check result" looks it up and reads the facts again.
    */
   marketUnread?: boolean;
-  /**
-   * Look up the original operation once (never a second begin, answer or cancel). `by`: the view asking, when it shows
-   * the result itself (the market row); the list of checks asks with none.
-   */
-  verify(by?: symbol): Promise<void>;
+  /** Look up the original operation once (never a second begin, answer or cancel). */
+  verify(): Promise<void>;
   /**
    * Open the consent: takes the computer's slot first (false, and nothing opens, while someone else holds it); while
    * `view` is held the entry counts as shown, so nothing cancels it behind the open sheet.
@@ -172,7 +164,7 @@ function pendingChecksOf(ownerKey: string): PluginPendingCheck[] {
       ...(marketUnread ? { marketUnread } : {}),
       awaitingYou: controller.consentUnseen() && !entry.listener,
       canStop: controller.idle(),
-      verify: async (by?: symbol) => { entry.settling = undefined; entry.askedBy = by; await controller.reconcile(); },
+      verify: async () => { entry.settling = undefined; await controller.reconcile(); },
       decide: () => controller.ensureHold(),
       view: () => {
         entry.viewers += 1;
@@ -213,7 +205,7 @@ type Finished = NonNullable<ManagementEntry["lastCheck"]>;
  * - "Open" only for the instance that one response proves (`pluginOperationOpens`, controller rule ④). A response that
  *   says its market part is incomplete and has no record of the plugin settles nothing: the same as a failed read.
  * - A failed read leaves it listed, to be read again: by "Read again", and by itself once each time its computer becomes
- *   reachable again for the page (`setPluginReadbackAvailable`), including when that happened while the read was out.
+ *   reachable again for the page (`setReadbackAvailable`), including when that happened while the read was out.
  *   Never on a timer.
  * - Nothing is opened by this read: a view the person is waiting in (the row that started the install, the installed
  *   detail of that instance) shows its conclusion; otherwise it stays listed until the person looks at it.
@@ -222,37 +214,43 @@ type Finished = NonNullable<ManagementEntry["lastCheck"]>;
 interface Readback { owner: ReturnType<typeof getMobileAuthOwner>; ownerKey: string; invoke: PluginManagementInvoke; snapshotRead?: "installed"; check: Finished; reads: number }
 const readbacks = new Map<string, Readback>();
 /**
- * Per computer: who says they can reach it now (each mounted page instance speaks for itself; it is reachable while any
- * does), and how many times it became reachable. The count only grows, also across a page going away and coming back,
- * so a read can tell whether its computer came back while it was out.
+ * Per computer: which mounted page instances can reach it now (each speaks for itself and for every computer of the
+ * account it lists; it is reachable while any can), and how many times it became reachable. The count only grows, also
+ * across a page going away and coming back, so a read can tell whether its computer came back while it was out.
  */
 const reachable = new Map<string, { by: Set<symbol>; edges: number }>();
-async function readBack(operationId: string): Promise<void> {
+const reachableNow = (deviceId: string) => (reachable.get(deviceId)?.by.size ?? 0) > 0;
+/** Resolves true when this very read settled it (not a newer one, and not dropped). */
+async function readBack(operationId: string): Promise<boolean> {
   const job = readbacks.get(operationId);
   const before = conclusions.find((item) => item.operationId === operationId);
-  if (!job || !before) return;
+  if (!job || !before) return false;
   const read = ++job.reads;
-  const edges = reachable.get(job.check.who.deviceId)?.edges ?? 0;
+  const deviceId = job.check.who.deviceId;
+  // Where its computer stood when the read was issued: whether any page could reach it, and its count of comebacks.
+  const issued = { reachable: reachableNow(deviceId), edges: reachable.get(deviceId)?.edges ?? 0 };
   const current = () => isMobileAuthOwnerCurrent(job.owner) && readbacks.get(operationId) === job && job.reads === read;
   const latest = () => conclusions.find((item) => item.operationId === operationId) ?? before;
   conclude(job, { ...before, readback: "pending", instanceKey: undefined });
   let opens: ReturnType<typeof pluginOperationOpens> | undefined;
   try {
-    const snapshot = await createPluginManagementClient({ invoke: job.invoke, deviceId: job.check.who.deviceId, isCurrent: current })
+    const snapshot = await createPluginManagementClient({ invoke: job.invoke, deviceId, isCurrent: current })
       .snapshot(job.snapshotRead);
-    if (!current()) return;
+    if (!current()) return false;
     // The final receipt is a past result: only what the computer has now (its instance, package and evidence) opens it.
     opens = pluginOperationOpens(job.check, { ghosts: snapshot.ghosts, market: snapshot.market.items,
       marketState: snapshot.market });
   } catch {
-    if (!current()) return;
+    if (!current()) return false;
   }
-  if (opens?.open) { conclude(job, { ...latest(), readback: "verified", instanceKey: opens.instanceKey }); return; }
-  if (opens && opens.reason !== "unread") { conclude(job, { ...latest(), readback: opens.reason, instanceKey: undefined }); return; }
-  // Not read. Its computer became reachable again while this read was out: that edge's one read is this one, now.
-  const now = reachable.get(job.check.who.deviceId);
-  if (!opens && now && now.by.size > 0 && now.edges !== edges) { void readBack(operationId); return; }
+  if (opens?.open) { conclude(job, { ...latest(), readback: "verified", instanceKey: opens.instanceKey }); return true; }
+  if (opens && opens.reason !== "unread") { conclude(job, { ...latest(), readback: opens.reason, instanceKey: undefined }); return true; }
+  // Not read, and its computer became reachable while this read was out (it was not when the read was issued, or it
+  // went away and came back since): that comeback's one read is this one, now. A read issued while it was reachable
+  // and that simply failed is not read again by itself.
+  if (!opens && reachableNow(deviceId) && (!issued.reachable || (reachable.get(deviceId)?.edges ?? 0) !== issued.edges)) { void readBack(operationId); return false; }
   conclude(job, { ...latest(), readback: "failed", instanceKey: undefined });
+  return true;
 }
 function startReadback(entry: ManagementEntry, check: Finished) {
   readbacks.set(check.operationId, { owner: entry.owner, ownerKey: entry.ownerKey, invoke: entry.invoke, snapshotRead: entry.snapshotRead, check, reads: 0 });
@@ -260,35 +258,35 @@ function startReadback(entry: ManagementEntry, check: Finished) {
 }
 /**
  * Whether a page instance (`reporter`) can reach a computer now (it is online, and that page is focused and in the
- * foreground). Each time a computer becomes reachable (nobody could, now somebody can), the successes on it whose read
- * failed are read again, once.
+ * foreground). The page says so for every computer it lists, whether or not anything waits there, so a read knows where
+ * its computer stood when it was issued. Each time a computer becomes reachable (nobody could, now somebody can), the
+ * successes on it whose read failed are read again, once.
  */
-export function setPluginReadbackAvailable(reporter: symbol, deviceId: string, up: boolean) {
+function setReadbackAvailable(reporter: symbol, deviceId: string, up: boolean) {
   let entry = reachable.get(deviceId);
-  // The first word about a computer is not a change of it: a read issued just before counts from the same zero (its
-  // failure is not a reason to read again), but successes already waiting unread are read now.
-  const first = !entry;
-  if (!entry) { if (!up) return; entry = { by: new Set(), edges: 0 }; reachable.set(deviceId, entry); }
+  if (!entry) { entry = { by: new Set(), edges: 0 }; reachable.set(deviceId, entry); }
   if (entry.by.has(reporter) === up) return;
   if (!up) { entry.by.delete(reporter); return; }
   entry.by.add(reporter);
   if (entry.by.size !== 1) return;
-  if (!first) entry.edges += 1;
+  entry.edges += 1;
   for (const [operationId, job] of [...readbacks]) {
     if (job.check.who.deviceId !== deviceId || !isMobileAuthOwnerCurrent(job.owner)) continue;
     if (conclusions.find((item) => item.operationId === operationId)?.readback === "failed") void readBack(operationId);
   }
 }
 /** A page instance went away: it reaches nothing any more (the counts stay). */
-export function clearPluginReadbackAvailability(reporter: symbol) { for (const entry of reachable.values()) entry.by.delete(reporter); }
+function clearReadbackAvailability(reporter: symbol) { for (const entry of reachable.values()) entry.by.delete(reporter); }
 /**
  * Read the target computer again for a success ("Read again", and before "Open": the newest read decides). Resolves
  * with what that read concluded; with nothing when no read of it is kept any more (it cannot be read again, so nothing
- * may be opened on what an earlier read said).
+ * may be opened on what an earlier read said) or when a newer read overtook this one.
  */
 export function retryPluginCheckReadback(operationId: string): Promise<PluginCheckConclusion | undefined> {
   if (!readbacks.has(operationId)) return Promise.resolve(undefined);
-  return readBack(operationId).then(() => conclusions.find((item) => item.operationId === operationId));
+  // Only the caller whose read settled it gets the conclusion: one whose read was overtaken by a newer read gets
+  // nothing (that newer read's caller acts on it).
+  return readBack(operationId).then((settled) => settled ? conclusions.find((item) => item.operationId === operationId) : undefined);
 }
 function markTold(operationId: string, change: Partial<PluginCheckConclusion> = {}) {
   readbacks.delete(operationId);
@@ -316,10 +314,6 @@ export function stopPluginConclusion(operationId: string) {
   const conclusion = conclusions.find((item) => item.operationId === operationId);
   if (!conclusion || conclusion.told || pluginConclusionSettled(conclusion)) return;
   markTold(operationId, { readback: "failed" });
-}
-/** Read live (an effect earlier in the same commit may have told it). */
-export function pluginConclusionTold(operationId: string): boolean {
-  return conclusions.find((item) => item.operationId === operationId)?.told === true;
 }
 /**
  * What settles a pending check once the computer no longer has its receipt (NOT_FOUND), per entry (dispatcher O-1; the
@@ -360,7 +354,7 @@ function settleFromFacts(entry: ManagementEntry, facts: NonNullable<PluginManage
   const settle = (result: "installed" | "notInstalled" | "mismatch" | "legacy", instanceKey?: string) => {
     if (!valid() || !controller.untrack()) return;
     // The instance and the market's record of this operation come from the same response read after NOT_FOUND: verified.
-    conclude(entry, { operationId: check.operationId, entry: check.entry, who: check.who, result, askedBy: entry.askedBy,
+    conclude(entry, { operationId: check.operationId, entry: check.entry, who: check.who, result,
       readback: result === "installed" && instanceKey ? "verified" : "none", instanceKey: result === "installed" ? instanceKey : undefined });
     // Proven by the facts read after NOT_FOUND; "Open" reads the computer once more through the same read as any success.
     if (result === "installed" && instanceKey)
@@ -398,7 +392,7 @@ function watch(entry: ManagementEntry) {
     entry.concluded = last.operationId;
     const succeeded = state.outcome === "succeeded", opens = succeeded && last.entry !== "uninstall" && last.entry !== "enable" && last.entry !== "task-settings";
     conclude(entry, { operationId: last.operationId, entry: last.entry, who: last.who,
-      result: state.outcome as "succeeded" | "failed" | "cancelled", errorCode: state.errorCode, shown: !!entry.listener, askedBy: entry.askedBy,
+      result: state.outcome as "succeeded" | "failed" | "cancelled", errorCode: state.errorCode, shown: !!entry.listener,
       readback: opens ? "pending" : "none" });
     if (opens) startReadback(entry, last);
   }
@@ -455,7 +449,7 @@ export const __retainedForTests = {
  * foreground: the original operation is looked up again, with the controller's one pacing rule). Kept in memory only:
  * the app process ending ends them (docs/dev-rules/plugin-mobile-implementation.md, known limits).
  */
-export function usePluginPendingChecks(isOnline?: (deviceId: string) => boolean, active = true): PluginPendingCheck[] {
+export function usePluginPendingChecks(isOnline?: (deviceId: string) => boolean, active = true, deviceIds: readonly string[] = []): PluginPendingCheck[] {
   const ownerKey = pluginSlotOwnerKey(getMobileAuthOwner());
   const subscribe = (listener: () => void) => { checkListeners.add(listener); return () => { checkListeners.delete(listener); }; };
   const checks = useSyncExternalStore(subscribe, () => pendingChecksOf(ownerKey), () => pendingChecksOf(ownerKey));
@@ -475,22 +469,22 @@ export function usePluginPendingChecks(isOnline?: (deviceId: string) => boolean,
       }
     }
   }, [drivenKey, ownerKey]);
-  // The successes whose read is still open follow the same reachability (their computer online, this page focused and in
-  // the foreground): each time one becomes reachable its failed reads are read again, once. Told every render (a no-op
-  // while nothing changed); the page going away makes nothing reachable.
-  const all = useSyncExternalStore(subscribe, () => conclusions, () => conclusions);
+  // Whether this page can reach each computer it lists (the computer online, this page focused and in the foreground),
+  // told every render (a no-op while nothing changed): a success whose read failed is read again, once, each time its
+  // computer becomes reachable. A computer no longer listed, and this page going away, reach nothing.
   const reporter = useRef<symbol | undefined>(undefined);
   reporter.current ??= Symbol("plugins page");
+  const reported = useRef(new Set<string>());
   useEffect(() => {
     if (!isOnline) return;
-    const devices = new Set(all.filter((item) => item.ownerKey === ownerKey && pluginConclusionListed(item)).map((item) => item.who.deviceId));
-    for (const deviceId of devices) setPluginReadbackAvailable(reporter.current!, deviceId, active && foreground && isOnline(deviceId));
+    for (const deviceId of reported.current) if (!deviceIds.includes(deviceId)) { reported.current.delete(deviceId); setReadbackAvailable(reporter.current!, deviceId, false); }
+    for (const deviceId of deviceIds) { reported.current.add(deviceId); setReadbackAvailable(reporter.current!, deviceId, active && foreground && isOnline(deviceId)); }
   });
-  useEffect(() => isOnline ? () => clearPluginReadbackAvailability(reporter.current!) : undefined, [!!isOnline]);
+  useEffect(() => isOnline ? () => clearReadbackAvailability(reporter.current!) : undefined, [!!isOnline]);
   return checks;
 }
 
-/** Results of pending checks that ended without their view, oldest first (`after`: only later ones). */
+/** How this account's operations ended (the newest change last): final receipts and verdicts from the computer's facts. */
 export function usePluginCheckConclusions(): PluginCheckConclusion[] {
   const ownerKey = pluginSlotOwnerKey(getMobileAuthOwner());
   const subscribe = (listener: () => void) => { checkListeners.add(listener); return () => { checkListeners.delete(listener); }; };

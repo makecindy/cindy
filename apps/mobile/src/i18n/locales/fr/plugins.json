@@ -495,6 +495,7 @@
     "waitingOne": "Le résultat pour « {{name}} » sur « {{device}} » doit être vérifié",
     "settledOne": "L’opération pour « {{name}} » sur « {{device}} » a un résultat",
     "settledMany": "{{count}} opérations de plugins ont un résultat",
+    "attentionMany": "{{count}} opérations de plugins sont à consulter",
     "kind": {
       "marketInstall": "Installer",
       "update": "Mettre à jour",

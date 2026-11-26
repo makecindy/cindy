@@ -493,6 +493,7 @@
     "waitingOne": "“{{device}}”의 “{{name}}” 결과를 확인해야 합니다",
     "settledOne": "“{{device}}”의 “{{name}}” 작업 결과가 나왔습니다",
     "settledMany": "플러그인 작업 {{count}}개의 결과가 나왔습니다",
+    "attentionMany": "플러그인 작업 {{count}}개를 확인해야 합니다",
     "kind": {
       "marketInstall": "설치",
       "update": "업데이트",

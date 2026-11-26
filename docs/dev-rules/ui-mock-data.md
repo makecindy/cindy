@@ -168,6 +168,10 @@ pnpm mobile:sim:whoami -- --mock --json
   | 失败 | `cindy://plugins?checks=failed` |
   | 已不再跟踪 | `cindy://plugins?checks=untracked` |
   | 多条记录（「2 项插件操作还没结束」） | `cindy://plugins?checks=many` |
+  | 回执过期且电脑读不到插件所在的市场（待核实的一行写「电脑现在读不到这个插件所在的市场，还不能确认结果」，「核实结果」可点） | `cindy://plugins?checks=marketUnread`（模拟电脑的已装快照只剩自定义市场条目并报市场不可用） |
+  | 两条都已读出结果（关上面板前，面板后面的顶部提示写「2 项插件操作有结果了」；两行都是「已完成」与「打开插件」） | `cindy://plugins?checks=results` |
+  | 一条有结果、一条待核实（顶部提示写「2 项插件操作待查看」） | `cindy://plugins?checks=attention` |
+  | 单条有结果的顶部提示（「…的操作有结果了」，不带面板） | 没有单独入口：`cindy://plugins?market=readbackFailed` 安装一个插件后退出并重新打开插件页（重开时自动重读，读出后只列在顶部、页面不跳转） |
   | 成功，正在确认电脑上的插件（「已完成，正在确认电脑上的插件…」） | `cindy://plugins?checks=readingBack`（之后的已装读取一直不回） |
   | 成功，但插件之后又有变化（未能证实，没有「打开」） | `cindy://plugins?checks=changed`（提交后模拟电脑换成同一插件的旧版本，记录 `unattributed`；形状不完全贴合真实 Host：真实电脑上从本地文件装旧版本可能落到 `conflict`，结论同样是不打开） |
   | 已卸载 | `cindy://plugins?checks=uninstalled`（Demo Weather Board 的卸载） |

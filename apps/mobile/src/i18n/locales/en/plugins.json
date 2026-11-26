@@ -493,6 +493,7 @@
     "waitingOne": "The result for “{{name}}” on “{{device}}” needs checking",
     "settledOne": "The operation for “{{name}}” on “{{device}}” has a result",
     "settledMany": "{{count}} plugin operations have a result",
+    "attentionMany": "{{count}} plugin operations need a look",
     "kind": {
       "marketInstall": "Install",
       "update": "Update",

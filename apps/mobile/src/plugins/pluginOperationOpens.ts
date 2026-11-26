@@ -30,18 +30,23 @@ export const PLUGIN_NOT_OPENED_TEXT: Record<PluginOperationNotOpened, string> = 
   unread: "plugins.checks.result.succeededUnread",
 };
 /** What a snapshot says about its own market part (which of its sources the computer could not read then). */
-export type PluginMarketReadState = { unavailableReason: string | null; unavailableCustomSourceNames: readonly string[]; organizationAccessError?: string | null };
+export type PluginMarketReadState = { unavailableReason: string | null; unavailableCustomSourceNames: readonly string[];
+  customSourceNames?: readonly string[]; organizationAccessError?: string | null };
 /**
  * Whether a snapshot's market part would hold this plugin's record if the computer had one: the source the plugin comes
  * from was read. A plugin of the plugin market needs the catalog read (and, for an organization's plugin, the
- * organization's part); one of a custom market needs that market read. Another source being unreadable does not matter:
- * otherwise a market that stays down would keep an unrelated plugin from ever being settled.
+ * organization's part); one of a custom market needs that market read: not named as unreadable, and, when the computer
+ * says its market part as a whole was unavailable (it answers with no items at all while its session switches or it is
+ * not signed in), named among the custom markets it did read. Another source being unreadable does not matter: otherwise
+ * a market that stays down would keep an unrelated plugin from ever being settled.
  */
 export function pluginMarketFactsComplete(market: PluginMarketReadState,
   item: Partial<Pick<ManagedMarketItem, "sourceType" | "sourceMarketName" | "scope">> = {}): boolean {
   if (item.sourceType === undefined || item.sourceType === "server")
     return !market.unavailableReason && (item.scope === "organization" || item.scope === undefined ? !market.organizationAccessError : true);
-  return item.sourceMarketName ? !market.unavailableCustomSourceNames.includes(item.sourceMarketName) : market.unavailableCustomSourceNames.length === 0;
+  if (!item.sourceMarketName) return market.unavailableCustomSourceNames.length === 0 && !market.unavailableReason;
+  if (market.unavailableCustomSourceNames.includes(item.sourceMarketName)) return false;
+  return !market.unavailableReason || (market.customSourceNames ?? []).includes(item.sourceMarketName);
 }
 type MarketRecord = Pick<ManagedMarketItem, "pluginId" | "ghostId" | "namespace" | "installState" | "installedOperationId" | "installedOperationAttribution">;
 

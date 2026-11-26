@@ -155,6 +155,9 @@ describe("more pending-check states from cindy://plugins?checks=<state>", () => 
     ["legacyHost", () => expect(ended()).toEqual([["market-install", "succeeded", "legacy"]])],
     ["goneSince", () => expect(ended()).toEqual([["market-install", "succeeded", "gone"]])],
     ["catalogAhead", () => expect(ended()).toEqual([["market-install", "succeeded", "verified"]])],
+    // Pre-push review 2026-11-26: the receipt is gone and the computer cannot read the plugin's market: nothing is
+    // concluded, the check says why and stays; two successes both read; one read beside one still waiting.
+    ["marketUnread", () => expect({ ended: ended(), checks: __retainedForTests.checks().map((c) => [c.entry, c.marketUnread]) }).toEqual({ ended: [], checks: [["market-install", true]] })],
   ] as const)("%s, after the list opened", async (state, assert) => {
     const after = await seedPluginChecksForVisualMock(state);
     await flush();
@@ -162,6 +165,19 @@ describe("more pending-check states from cindy://plugins?checks=<state>", () => 
     after!();
     await flush();
     assert();
+  });
+  // Two operations at once, for the notice at the top: both proven ("2 … have a result"), or one proven beside one still
+  // waiting to be checked ("2 … need a look").
+  it.each([
+    ["results", [["market-install", "succeeded", "verified"], ["market-install", "succeeded", "verified"]], 0],
+    ["attention", [["market-install", "succeeded", "verified"]], 1],
+  ] as const)("%s: two records, after the list opened", async (state, concluded, waiting) => {
+    const after = await seedPluginChecksForVisualMock(state);
+    await flush();
+    expect(__retainedForTests.checks()).toHaveLength(2);
+    after!();
+    await flush();
+    expect({ ended: ended(), waiting: __retainedForTests.checks().length }).toEqual({ ended: concluded, waiting });
   });
   // Dispatcher S-2 (Android seventh reshoot): on a device only the Demo Agenda consent appeared and "View and decide"
   // opened it. The page looks a record up as soon as it appears; that lookup found the consent before the second

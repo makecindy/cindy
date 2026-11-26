@@ -493,6 +493,7 @@
     "waitingOne": "Das Ergebnis für „{{name}}“ auf „{{device}}“ muss geprüft werden",
     "settledOne": "Der Vorgang für „{{name}}“ auf „{{device}}“ hat ein Ergebnis",
     "settledMany": "{{count}} Plugin-Vorgänge haben ein Ergebnis",
+    "attentionMany": "{{count}} Plugin-Vorgänge müssen angesehen werden",
     "kind": {
       "marketInstall": "Installieren",
       "update": "Aktualisieren",

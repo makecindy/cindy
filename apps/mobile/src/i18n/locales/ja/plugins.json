@@ -493,6 +493,7 @@
     "waitingOne": "「{{device}}」の「{{name}}」の結果を確認してください",
     "settledOne": "「{{device}}」の「{{name}}」の操作の結果が出ました",
     "settledMany": "{{count}} 件のプラグイン操作の結果が出ました",
+    "attentionMany": "{{count}} 件のプラグイン操作を確認してください",
     "kind": {
       "marketInstall": "インストール",
       "update": "アップデート",

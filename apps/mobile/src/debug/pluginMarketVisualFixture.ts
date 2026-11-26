@@ -28,7 +28,7 @@ const SCENARIOS: PluginMarketVisualScenario[] = ["normal", "outdated", "unavaila
  * answers from then on as an older one (no attribution fields, V2.10 ③).
  */
 export type VisualCheckBehavior = "running" | "waiting" | "consent" | "succeeded" | "unread" | "failed" | "readingBack" | "changed" | "gone"
-  | "reinstalled" | "uninstalledAfter" | "catalogAhead" | "legacyHost";
+  | "goneUnread" | "reinstalled" | "uninstalledAfter" | "catalogAhead" | "legacyHost";
 const scripted = new Map<string, { behavior: VisualCheckBehavior; lookups: number }>();
 export function scriptVisualCheckOperation(operationId: string, behavior: VisualCheckBehavior) {
   scripted.set(operationId, { behavior, lookups: 0 });
@@ -257,13 +257,18 @@ const installed = new Map<string, { demo: DemoPlugin; enabled: boolean; version:
 let holdInstalledReads = false;
 /** `legacyHost` checks: the mock computer answers as an older one (no attribution fields at all). */
 let legacyHost = false;
+/**
+ * `goneUnread` checks: the receipt is gone and the mock computer cannot read its plugin market (its installed snapshot
+ * has the instances, only the custom markets' records, and says the market is unavailable), so the facts settle nothing.
+ */
+let catalogUnreadable = false;
 /** Demo plugins whose catalog moved on to its next release (`catalogAhead`). */
 const catalogAhead = new Set<string>();
 const NEXT_RELEASE = "1.5.0";
 export function pluginMarketVisualHoldsInstalledReads(): boolean { return holdInstalledReads; }
 /** DEV: the mock computer back to its first state (each `checks=` seed starts from it). */
 export function resetPluginMarketVisualComputer() {
-  installed.clear(); operations.clear(); scripted.clear(); catalogAhead.clear(); holdInstalledReads = false; legacyHost = false; failInstalledRead = false;
+  installed.clear(); operations.clear(); scripted.clear(); catalogAhead.clear(); holdInstalledReads = false; legacyHost = false; catalogUnreadable = false; failInstalledRead = false;
   failInstalledReadOnCommit = false; failReadsAfterCommit = 0; seedInstalled();
 }
 const operations = new Map<string, { kind: "install" | "update" | "uninstall"; ghostId: string; answered: boolean; polls: number; done?: "succeeded" | "failed" | "cancelled" }>();
@@ -348,7 +353,8 @@ function ghost(key: string, entry: { demo: DemoPlugin; enabled: boolean; version
 }
 function snapshot() {
   return { version: 1, ghosts: [...installed].map(([key, entry]) => ghost(key, entry)),
-    market: { items: DEMOS.map(marketItem), unavailableReason: null, customSourceNames: CUSTOM_SOURCE_NAMES,
+    market: { items: DEMOS.filter((demo) => !catalogUnreadable || demo.publisher === "custom").map(marketItem),
+      unavailableReason: catalogUnreadable ? "Demo plugin market unreachable" : null, customSourceNames: CUSTOM_SOURCE_NAMES,
       unavailableCustomSourceNames: [] } };
 }
 function receipt(operationId: string) {
@@ -361,7 +367,8 @@ function receipt(operationId: string) {
     script.lookups += 1;
     if (script.behavior === "running") return { operationId, phase: "running" };
     if (script.behavior === "waiting" || script.lookups === 1) throw failure("INVALID_RESPONSE");
-    if (script.behavior === "gone") {
+    if (script.behavior === "gone" || script.behavior === "goneUnread") {
+      if (script.behavior === "goneUnread") catalogUnreadable = true;
       if (op.kind !== "uninstall") installed.set(instanceKey(demo.ghostId), { demo, enabled: true, version: RELEASE, operationId });
       operations.delete(operationId);
       throw failure("NOT_FOUND");
