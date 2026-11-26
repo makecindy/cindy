@@ -945,7 +945,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       // A malformed request repeats until its caller changes; name the caller and the non-ID slot
       // so the template alone (`/conversations/:id/messages/:id`) is not all there is to go on.
       const malformed = error instanceof ChatResponseError && error.status === 400;
-      const nonIds = malformed ? chatRouteNonIds(route, CHAT_ROUTE_WORDS) : [];
+      const nonIds = malformed ? chatRouteNonIds(route) : [];
       const caller = malformed ? chatRequestCaller(callSite.stack) : undefined;
       deps.log?.warn('Chat request failed', { route: routeTemplate, method, durationMs: Date.now() - started,
         ...(typeof operation === 'string' ? { trace: createHash('sha256').update(operation).digest('hex').slice(0, 16) } : {}), ...chatErrorDiagnostic(error),

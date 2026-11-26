@@ -1,17 +1,23 @@
 import { describe, expect, it } from 'vitest';
 import { chatErrorDiagnostic, chatGroupFailure, chatRouteNonIds, missingGroupCode } from '../chatServerErrors.js';
 
-// The 400 diagnostic names which ID slot was not an ID, never the slot's value.
+// #13122 review: the production 400 diagnostic must name only real ID slots, never their values.
+// Unit tier: the old coverage missed fixed subroutes like /executions/claim, which falsely logged
+// an invalid execution ID, and malformed IDs that happen to equal fixed route words.
 describe('chatRouteNonIds', () => {
-  const words = ['conversations', 'messages', 'readers', 'me'];
   const room = '2768ca52-c901-4718-84c8-c617a967c594';
   it.each([
     [`/conversations/${room}/messages/${room}`, []],
     [`/conversations/${room}/messages/execution-failure:abc:0`, ['messages']],
     [`/conversations/local-group/messages/${room}/readers?x=1`, ['conversations']],
-    ['/conversations/me', []],
+    [`/conversations/${room}/messages/members`, ['messages']],
+    [`/conversations/${room}/import/plan-source?sourceId=not-a-guid`, []],
+    ['/executions/claim', []],
+    ['/executions/availability', []],
+    ['/mask/executions/claim', []],
+    [`/conversations/${room}/mask/executions/local-execution`, ['executions']],
   ])('%s', (route, expected) => {
-    expect(chatRouteNonIds(route, words)).toEqual(expected);
+    expect(chatRouteNonIds(route)).toEqual(expected);
   });
 });
 

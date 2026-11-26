@@ -99,16 +99,25 @@ export function chatRequestCaller(stack: string | undefined): string | undefined
 }
 
 const CHAT_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const ROOM_ID_COLLECTIONS = new Set(['messages', 'media', 'plans', 'executions']);
 
 /**
- * The collection words of a Chat route whose following segment is not an ID (the server's
- * `invalid_format`), e.g. `['messages']` for a local placeholder message ID. Only the fixed
- * collection words leave; the segment itself is never logged.
+ * Inspect ID positions in Desktop's Chat routes, independently of the words kept in log templates.
+ * For example, /executions/claim and /conversations/:roomId/import/plan-source have no execution
+ * or import ID. Only fixed slot labels leave this helper, never the segment values.
  */
-export function chatRouteNonIds(route: string, collections: readonly string[]): string[] {
-  const parts = route.split('?')[0]!.split('/');
-  return parts.flatMap((part, index) => index > 0 && part && collections.includes(parts[index - 1]!)
-    && !collections.includes(part) && !CHAT_ID.test(part) ? [parts[index - 1]!] : []);
+export function chatRouteNonIds(route: string): string[] {
+  const [, root, rootId, collection, itemId, maskExecutionId] = route.split('?')[0]!.split('/');
+  const nonIds: string[] = [];
+  const inspect = (slot: string, value: string | undefined) => {
+    if (value && !CHAT_ID.test(value)) nonIds.push(slot);
+  };
+  if (root === 'actors' || root === 'conversations') inspect(root, rootId);
+  if (root === 'conversations') {
+    if (collection && ROOM_ID_COLLECTIONS.has(collection)) inspect(collection, itemId);
+    if (collection === 'mask' && itemId === 'executions') inspect('executions', maskExecutionId);
+  }
+  return nonIds;
 }
 
 /** Stable localized categories for desktop and remote controllers; raw errors stay private. */
