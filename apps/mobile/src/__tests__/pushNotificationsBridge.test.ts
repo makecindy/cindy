@@ -13,6 +13,7 @@ const state = vi.hoisted(() => ({
   uploads: [] as string[],
   reads: 0,
   failNextSync: false,
+  failSyncAlways: false,
   confirmed: false,
   nativeToken: 'initial-token',
   unregisterAttempts: 0,
@@ -49,7 +50,7 @@ vi.mock('@/notifications/pushNotifications', () => ({
   },
   syncPushRegistration: async (opts: { skipConfirmed?: boolean; deviceToken?: { type: 'ios'; data: string } }) => {
     if (opts.skipConfirmed && state.confirmed) return 'registered';
-    if (state.failNextSync) {
+    if (state.failSyncAlways || state.failNextSync) {
       state.confirmed = false;
       state.failNextSync = false;
       throw new Error('temporarily offline');
@@ -69,7 +70,7 @@ vi.mock('@/notifications/pushNotifications', () => ({
 const roots: ReturnType<typeof createRoot>[] = [];
 afterEach(async () => {
   await act(async () => { for (const root of roots) root.unmount(); });
-  roots.length = 0; state.uploads = []; state.reads = 0; state.failNextSync = false; state.enabled = true; state.confirmed = false;
+  roots.length = 0; state.uploads = []; state.reads = 0; state.failNextSync = false; state.failSyncAlways = false; state.enabled = true; state.confirmed = false;
   state.nativeToken = 'initial-token'; state.unregisterAttempts = 0; state.pendingUnregister = false;
   vi.unstubAllGlobals();
 });
@@ -92,6 +93,21 @@ it('settles native callbacks and uploads only changed event tokens without anoth
   state.enabled = false;
   await act(async () => { state.listener?.({ type: 'ios', data: 'disabled-token' }); });
   expect(state.uploads).not.toContain('disabled-token');
+});
+
+it('does not retry the same failed native token event', async () => {
+  vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
+  const root = createRoot(document.createElement('div')); roots.push(root);
+  state.failSyncAlways = true;
+  await act(async () => { root.render(createElement(PushNotificationsBridge)); });
+  const readsAfterMount = state.reads;
+  await act(async () => {
+    state.listener?.({ type: 'ios', data: 'same-token' });
+    state.listener?.({ type: 'ios', data: 'same-token' });
+    state.listener?.({ type: 'ios', data: 'same-token' });
+  });
+  expect(state.reads).toBe(readsAfterMount);
+  expect(state.uploads).toEqual([]);
 });
 
 // Unit regression: refreshing the same signed-in profile must not re-upload
