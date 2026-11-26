@@ -193,6 +193,7 @@ pnpm mobile:sim:whoami -- --mock --json
   | 市场详情读取失败（「重试」） | `cindy://plugins?market=detailReadFailed`，打开任一未装插件的市场详情（每个插件第一次读取失败，「重试」后正常；同一深链再发一次不重新造失败，要再截失败先发 `market=normal` 再发这个） |
   | 在电脑上完成配置 | 没有界面入口：已装详情的状态行只提供「连接电脑」「重试」（主干现状），`settings` 分支的这句提示点不到；`preview=1`（Missing API key）只显示状态 |
   | 进行中停住（其它入口不可用） | `cindy://plugins?market=hold`，安装或更新并允许后停在「进行中」 |
+  | 同一操作连续两个确认（换确认时主列表与固定摘要回到顶部、「允许」重新等这一张的尺寸） | `cindy://plugins?market=secondConsent`，安装或更新并允许后，模拟电脑再给同一操作的第二个确认（另一个 requestId）；矮屏下先滚动第一张的固定摘要再允许。发 `market=normal` 退出 |
   | 资料值折两行 | 市场里 Demo Long Repository Tools 详情的「作者」 |
 
   `checks=` 用真实 controller 在模拟电脑上发起操作（按操作号预设回答），交给待核实记录后打开记录面板；每次都从模拟电脑的初始

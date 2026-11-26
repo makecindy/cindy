@@ -18,7 +18,9 @@ import {
 } from "./usePluginConsent";
 import { useEffect, useRef, useState } from "react";
 import { ScrollFade, ScrollThumb, useScrollOverflow } from "@/components/ScrollOverflow";
-import { CONSENT_FADE_HEIGHT, CONSENT_SIDE_BY_SIDE_MIN_WIDTH, consentIdentityShown, consentSummaryFadeAllowed, planConsentSheet,
+import { useConsentSheetSizes } from "./useConsentSheetSizes";
+import { CONSENT_FADE_HEIGHT, CONSENT_SIDE_BY_SIDE_MIN_WIDTH, consentIdentityShown, consentRegularConfirmed, consentSheetMeasured,
+  consentSummaryFadeAllowed, planConsentSheet,
   pluginConsentPresentation } from "./pluginConsentPresentation";
 export function PluginManagementConfirmation(
   props: PluginManagementConfirmationProps,
@@ -33,26 +35,22 @@ export function PluginManagementConfirmation(
   // the summary's heading with two items fit; compact otherwise, with everything in one scroll area above fixed buttons.
   // A scroll area with more below shows a text-free fade over its lower edge, with the scrollbar always visible
   // (dispatcher J-1, K-2): neither takes room, so neither can change the plan.
-  const [measured, setMeasured] = useState({ identity: 0, heading: 0, actions: 0 });
-  const [lineHeights, setLineHeights] = useState<number[]>([]);
-  // The newest layout, as it arrives (read when Allow is pressed; the state above can be a render behind).
-  const laidOut = useRef({ identity: 0, visible: 0, content: 0 });
-  const measure = (key: keyof typeof measured) => (event: { nativeEvent: { layout: { height: number } } }) => {
-    const height = Math.ceil(event.nativeEvent.layout.height);
-    if (key === "identity") laidOut.current.identity = height;
-    setMeasured((current) => current[key] === height ? current : { ...current, [key]: height });
-  };
-  const measureLine = (index: number) => (event: { nativeEvent: { layout: { height: number } } }) => {
-    const height = Math.ceil(event.nativeEvent.layout.height);
-    setLineHeights((current) => current[index] === height ? current : Object.assign([...current], { [index]: height }));
-  };
+  // Every size comes from this consent's own sheet (maintainer review 18:13): another consent starts from nothing (its
+  // sheet is drawn anew, see `key` below), and a late report of the previous one is dropped.
+  const requestId = consent?.requestId ?? null;
+  const layout = useConsentSheetSizes(requestId);
+  const sizes = layout.sizes;
+  const measure = (key: "identity" | "heading" | "actions") => (event: { nativeEvent: { layout: { height: number } } }) =>
+    layout.report(key, event.nativeEvent.layout.height);
+  const measureLine = (index: number) => (event: { nativeEvent: { layout: { height: number } } }) =>
+    layout.reportLine(index, event.nativeEvent.layout.height);
   const sheetPadding = spacing.lg + spacing.xs;
   const lineCount = info?.highRisk?.lines.length ?? 0;
+  const available = (actions: number) => Math.floor(windowHeight * 0.85) - sheetPadding * 2 - spacing.md /* list bottom padding */
+    - (info?.highRisk ? spacing.md * 2 + spacing.xs : 0) /* summary padding, gap under its heading */ - actions;
   const plan = planConsentSheet({
-    available: Math.floor(windowHeight * 0.85) - sheetPadding * 2 - spacing.md /* list bottom padding */
-      - (info?.highRisk ? spacing.md * 2 + spacing.xs : 0) /* summary padding, gap under its heading */ - measured.actions,
-    identity: measured.identity, heading: measured.heading,
-    lines: Array.from({ length: lineCount }, (_, index) => lineHeights[index] ?? 0) /* 0 = not measured yet */, gap: spacing.xs,
+    available: available(sizes.actions), identity: sizes.identity, heading: sizes.heading,
+    lines: Array.from({ length: lineCount }, (_, index) => sizes.lines[index] ?? 0) /* 0 = not measured yet */, gap: spacing.xs,
   });
   // Compact (maintainer review 16:35 #2, the same as iOS): Allow comes after an explicit "Review source and permissions"
   // step, which shows the source and this consent's high-risk summary first (the list starts again at its top); the
@@ -61,24 +59,25 @@ export function PluginManagementConfirmation(
   const reviewed = !!consent && reviewedFor === consent.requestId;
   // Checked on the real layout (Android reshoot 2026-11-26, 1080×1600 at text size 2.0: the estimate above said the
   // identity block fits, while the native bottom sheet caps its content at 85% of the window and this sheet takes 85% of
-  // that, so the list got far less than planned): when the regular list shows
-  // less than the whole identity block (where it installs, where it comes from) without scrolling, this consent goes
-  // compact. Kept for this consent at this window and text size, so the compact layout cannot flip it back.
+  // that, so the list got far less than planned): when the regular list shows less than the whole identity block (where
+  // it installs, where it comes from) without scrolling, this consent goes compact. Kept for this consent at this window
+  // and text size, so the compact layout cannot flip it back.
   const fitKey = consent ? JSON.stringify([consent.requestId, windowWidth, windowHeight, fontScale]) : null;
   const [crampedFor, setCrampedFor] = useState<string | null>(null);
   const cramped = fitKey !== null && crampedFor === fitKey;
   const compact = plan.mode === "compact" || reviewed || cramped;
   const needsReview = compact && !reviewed && info?.allowBlocked !== true;
   const list = useScrollOverflow(), summary = useScrollOverflow();
-  const shown = consentIdentityShown({ identity: measured.identity, visible: list.area.visible, content: list.area.content });
+  const measuredAll = consentSheetMeasured(sizes, lineCount);
   useEffect(() => {
-    if (!fitKey || compact || measured.identity <= 0 || list.area.visible <= 0) return;
-    if (!shown) setCrampedFor(fitKey);
-  }, [fitKey, compact, measured.identity, list.area.visible, shown]);
-  // Allow in the regular layout answers only when the newest layout shows the whole identity block (dispatcher
-  // 2026-11-26: the frame before the check lands must not let it through). Pressed before that, or when it does not show,
-  // the sheet goes compact (review first) instead of answering; nothing is drawn differently before then.
-  const allowNow = () => compact || consentIdentityShown(laidOut.current);
+    if (fitKey && !compact && measuredAll && !consentIdentityShown(sizes)) setCrampedFor(fitKey);
+  }, [fitKey, compact, measuredAll, sizes]);
+  // Allow answers in the regular layout only once this consent's sizes have all arrived and confirm it (maintainer review
+  // 18:13: on first mount, or with only some sizes, the plan can say regular before it knows). Until then Allow looks the
+  // same but does not answer: pressed, the sheet goes compact (review first) instead. Read from the newest reports when
+  // pressed (a report lands there before the render it schedules); screen readers hear it unavailable until then.
+  const confirmedNow = () => consentRegularConfirmed(layout.latest(), { lineCount, available, gap: spacing.xs });
+  const allowReady = compact || consentRegularConfirmed(sizes, { lineCount, available, gap: spacing.xs });
   const listRef = useRef<ScrollViewInstance>(null);
   // Back to the list's top after "Review", and for each new consent (another requestId), so a second consent does not
   // open where the previous one was scrolled to (iOS: its new view id does the same).
@@ -103,12 +102,14 @@ export function PluginManagementConfirmation(
       onRequestClose={() => answer(false)}
       onBackdropPress={() => answer(false)}
     >
-      <View style={styles.sheet} testID="plugins.managementConfirmation">
+      {/* Drawn anew for each consent (maintainer review 18:20): both scroll areas start at their top and every size is
+          reported again; redrawing the same consent keeps where the person was reading. */}
+      <View key={requestId ?? "none"} style={styles.sheet} testID="plugins.managementConfirmation">
         <View style={styles.listArea}>
           <ScrollView ref={listRef} contentContainerStyle={[styles.content, list.thumbGutter]} testID="plugins.management.list" showsVerticalScrollIndicator={false}
             accessibilityHint={t("plugins.management.scrollHint")}
-            onLayout={(event) => { laidOut.current.visible = Math.ceil(event.nativeEvent.layout.height); list.onLayout(event); }}
-            onContentSizeChange={(width, height) => { laidOut.current.content = Math.ceil(height); list.onContentSizeChange(width, height); }}
+            onLayout={(event) => { layout.report("visible", event.nativeEvent.layout.height); list.onLayout(event); }}
+            onContentSizeChange={(width, height) => { layout.report("content", height); list.onContentSizeChange(width, height); }}
             onScroll={list.onScroll}
             scrollEventThrottle={64}>
             {/* The identity block: where it goes and where it comes from first, in primary text; the first thing shown
@@ -202,10 +203,10 @@ export function PluginManagementConfirmation(
               }
               // Screen readers hear it unavailable until the check shows the identity block (no visual change).
               accessibilityState={{ disabled: !props.active || props.state.busy || !!props.state.answerHeld || !props.state.online
-                || (accept && (info?.allowBlocked === true || (!compact && !shown))) }}
+                || (accept && (info?.allowBlocked === true || !allowReady)) }}
               onPress={() => {
                 if (accept && needsReview) { setReviewedFor(consent!.requestId); return; }
-                if (accept && !allowNow()) { if (fitKey) setCrampedFor(fitKey); return; }
+                if (accept && !compact && !confirmedNow()) { if (fitKey) setCrampedFor(fitKey); return; }
                 answer(accept);
               }}
               style={[styles.button, stacked && styles.stackedButton, accept && styles.primary, accept && info?.allowBlocked && styles.unavailable]}

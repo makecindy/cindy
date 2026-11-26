@@ -10,10 +10,10 @@ import type { ManagedMarketItem, ManagedPlugin } from "@/plugins/pluginManagemen
 export type PluginMarketVisualScenario =
   | "normal" | "outdated" | "unavailable" | "organization" | "customPartial" | "empty" | "readFailed"
   | "twoComputers" | "offline" | "hold" | "lateConsent" | "lateResult" | "unreadResult"
-  | "updateReleaseChanged" | "updateSourceChanged" | "updateReadFailed" | "detailReadFailed" | "readbackFailed";
+  | "updateReleaseChanged" | "updateSourceChanged" | "updateReadFailed" | "detailReadFailed" | "readbackFailed" | "secondConsent";
 const SCENARIOS: PluginMarketVisualScenario[] = ["normal", "outdated", "unavailable", "organization", "customPartial", "empty",
   "readFailed", "twoComputers", "offline", "hold", "lateConsent", "lateResult", "unreadResult",
-  "updateReleaseChanged", "updateSourceChanged", "updateReadFailed", "detailReadFailed", "readbackFailed"];
+  "updateReleaseChanged", "updateSourceChanged", "updateReadFailed", "detailReadFailed", "readbackFailed", "secondConsent"];
 /**
  * Scripted operations for the list of pending checks (`cindy://plugins?checks=<state>`, see pluginChecksVisualFixture):
  * how the mock computer answers lookups of one operation id. `waiting`: a protocol error every time (lookups stop);
@@ -281,7 +281,8 @@ export function resetPluginMarketVisualComputer() {
   installed.clear(); operations.clear(); scripted.clear(); catalogAhead.clear(); holdInstalledReads = false; legacyHost = false; catalogUnreadable = false; failInstalledRead = false;
   failInstalledReadOnCommit = false; failReadsAfterCommit = 0; seedInstalled();
 }
-const operations = new Map<string, { kind: "install" | "update" | "uninstall"; ghostId: string; answered: boolean; polls: number; done?: "succeeded" | "failed" | "cancelled" }>();
+/** `second`: under `secondConsent`, the first consent was allowed and the computer asks again (another requestId). */
+const operations = new Map<string, { kind: "install" | "update" | "uninstall"; ghostId: string; answered: boolean; polls: number; done?: "succeeded" | "failed" | "cancelled"; second?: boolean }>();
 const instanceKey = (ghostId: string) => `_root__${ghostId}`;
 const seedInstalled = () => {
   for (const demo of DEMOS) if (demo.installedVersion && !installed.has(instanceKey(demo.ghostId)))
@@ -395,7 +396,7 @@ function receipt(operationId: string) {
   if (demo.outcome === "downloadFailed") { op.done = "failed"; return receipt(operationId); }
   const entry = installed.get(instanceKey(demo.ghostId));
   if (!op.answered) return { operationId, phase: "confirmation", consent: {
-    requestId: `demo-consent-${operationId}`, initiator: "user", origin: demo.publisher === "custom" ? "custom-market" : "market",
+    requestId: `demo-consent-${operationId}${op.second ? "-2" : ""}`, initiator: "user", origin: demo.publisher === "custom" ? "custom-market" : "market",
     ...(demo.publisher === "custom" ? { originLabel: marketName(demo), ...(demo.legacySource ? {} : { originSource: marketSource(demo) }) } : {}),
     // Host: an update from another (verifiable) source than the installed instance's carries originSourceChanged and is
     // confirmed like a first install (full permissions of the new source).
@@ -492,7 +493,11 @@ export function pluginMarketVisualManagement(actionId: string | undefined, input
     case "management:answer": {
       const op = operations.get(String(input.operationId));
       if (!op) throw failure("NOT_FOUND");
-      if (input.confirmed !== true) op.done = "cancelled"; else { op.answered = true; op.polls = 0; }
+      if (input.confirmed !== true) op.done = "cancelled";
+      // `secondConsent` (maintainer review 18:20): the first Allow of an install or update is followed by a second consent
+      // of the same operation (another requestId), so the sheet shows two consents in a row; the second Allow goes on.
+      else if (scenario === "secondConsent" && op.kind !== "uninstall" && !op.second) { op.second = true; op.polls = 0; }
+      else { op.answered = true; op.polls = 0; }
       return result({ operationId: String(input.operationId), phase: op.done ?? "running" });
     }
     case "management:cancel": {

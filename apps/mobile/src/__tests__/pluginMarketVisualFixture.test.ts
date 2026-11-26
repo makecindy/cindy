@@ -47,6 +47,30 @@ const snapshot = () => pluginMarketVisualManagement("management:snapshot", { rea
 afterEach(() => { setPluginMarketVisualScenario("normal", true); });
 
 describe("mock market pending-check scenarios", () => {
+  // Maintainer review 18:20: market=secondConsent gives one install two consents in a row (another requestId after the
+  // first Allow), so a device can show the sheet switching from one consent to the next. Tier: unit.
+  it("secondConsent: the first Allow is followed by a second consent of the same operation; the second Allow goes on", () => {
+    expect(setPluginMarketVisualScenario("secondConsent", true)).toBe(true);
+    const operationId = "op-second";
+    pluginMarketVisualManagement("management:begin", { operationId, kind: "install",
+      pluginId: "demo-market/demo-vault-bridge", expectedReleaseId: "demo-vault-bridge@1.4.2" });
+    const consentId = () => {
+      for (let i = 0; i < 4; i++) {
+        const receipt = (pluginMarketVisualManagement("management:operation", { operationId }) as { result: any }).result;
+        if (receipt.phase === "confirmation") return receipt.consent.requestId;
+      }
+      return undefined;
+    };
+    const answer = (requestId: string) => pluginMarketVisualManagement("management:answer", { operationId, requestId, confirmed: true });
+    const first = consentId()!;
+    answer(first);
+    const second = consentId();
+    expect(second).toBe(`${first}-2`);
+    answer(second!);
+    let phase = "";
+    for (let i = 0; i < 6 && phase !== "succeeded"; i++) phase = lookup(operationId).result.phase;
+    expect(phase).toBe("succeeded");
+  });
   // Maintainer review 03:52: market=readbackFailed puts a market install into "done, but could not read" (its row ends,
   // the success waits in the list of checks with "Read again"): the installed reads right after the commit fail, the next
   // one reads the plugin. Tier: unit.

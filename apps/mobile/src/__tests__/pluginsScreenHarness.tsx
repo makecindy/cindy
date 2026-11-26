@@ -132,9 +132,10 @@ vi.mock("react-native", async () => {
   const React = await import("react");
   const view = ({ children, testID }: any) =>
     React.createElement("div", { "data-testid": testID }, children);
-  // The confirmation sheet's list and identity block report one layout when they mount, as on a device: a list tall
-  // enough for the whole identity block (its Allow answers only after that check; pluginNativeViews covers the rest).
-  const LAID_OUT: Record<string, number> = { "plugins.management.list": 2000, "plugins.management.identity": 100 };
+  // The confirmation sheet's measured views report one layout when they mount, as on a device: a list tall enough for
+  // the whole identity block, the buttons, and (AppText below) the summary's heading and items. Its Allow answers only
+  // once every size has arrived (pluginNativeViews covers the cases before that).
+  const LAID_OUT: Record<string, number> = { "plugins.management.list": 2000, "plugins.management.identity": 100, "plugins.management.actions": 44 };
   const laidOutView = (p: any) => {
     React.useEffect(() => {
       if (p.testID in LAID_OUT) p.onLayout?.({ nativeEvent: { layout: { height: LAID_OUT[p.testID] } } });
@@ -204,7 +205,11 @@ vi.mock("lucide-react-native", () =>
   ),
 );
 vi.mock("@/components/AppText", () => ({
-  Text: ({ children }: any) => createElement("span", null, children),
+  // Measured text (the confirmation sheet's summary heading and items) reports one layout when it mounts.
+  Text: ({ children, onLayout }: any) => {
+    useEffect(() => { onLayout?.({ nativeEvent: { layout: { height: 20 } } }); }, []);
+    return createElement("span", null, children);
+  },
   TextInput: () => null,
   MAX_FONT_SIZE_MULTIPLIER: 1.2,
 }));

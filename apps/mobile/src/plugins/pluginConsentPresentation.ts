@@ -77,6 +77,37 @@ export function consentIdentityShown(list: { identity: number; visible: number; 
   const scrolls = list.content > list.visible + 1;
   return (list.top ?? 0) + list.identity + (scrolls ? CONSENT_FADE_HEIGHT : 0) <= list.visible;
 }
+/**
+ * One consent's sheet as laid out (maintainer review 18:13): every size the decision reads, all reported by that
+ * consent's own sheet (`for`: its requestId); 0 = not reported yet. Another consent starts from nothing.
+ */
+export interface ConsentSheetSizes {
+  for: string | null;
+  identity: number; heading: number; actions: number;
+  /** Each summary item's height, in order. */
+  lines: number[];
+  /** The list's visible height and its content height. */
+  visible: number; content: number;
+}
+export const emptyConsentSheetSizes = (requestId: string | null): ConsentSheetSizes =>
+  ({ for: requestId, identity: 0, heading: 0, actions: 0, lines: [], visible: 0, content: 0 });
+/** Every size the regular layout's decision needs has been reported for this consent. */
+export function consentSheetMeasured(sizes: ConsentSheetSizes, lineCount: number): boolean {
+  if (sizes.identity <= 0 || sizes.actions <= 0 || sizes.visible <= 0) return false;
+  if (lineCount === 0) return true;
+  return sizes.heading > 0 && Array.from({ length: lineCount }, (_, index) => sizes.lines[index] ?? 0).every((line) => line > 0);
+}
+/**
+ * Whether Allow may answer in the regular layout (maintainer review 18:13): this consent's sizes have all arrived, the
+ * plan from them is regular, and the list as laid out shows the whole identity block. Anything short of that (first
+ * mount, only some sizes, another consent's sizes) is not regular yet.
+ */
+export function consentRegularConfirmed(sizes: ConsentSheetSizes, sheet: { lineCount: number; available: (actions: number) => number; gap: number; top?: number }): boolean {
+  if (!consentSheetMeasured(sizes, sheet.lineCount)) return false;
+  const plan = planConsentSheet({ available: sheet.available(sizes.actions), identity: sizes.identity, heading: sizes.heading,
+    lines: Array.from({ length: sheet.lineCount }, (_, index) => sizes.lines[index] ?? 0), gap: sheet.gap });
+  return plan.mode === "regular" && consentIdentityShown({ ...sizes, top: sheet.top });
+}
 export function planConsentSheet(sheet: ConsentSheetMeasures): ConsentSheetPlan {
   if (sheet.lines.length === 0) return { mode: "regular", summaryLines: 0, clipped: false, guaranteed: 0 };
   const available = Math.max(0, Math.floor(sheet.available));

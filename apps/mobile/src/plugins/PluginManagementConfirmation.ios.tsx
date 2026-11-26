@@ -23,10 +23,12 @@ import {
   usePluginConsent,
   type PluginManagementConfirmationProps,
 } from "./usePluginConsent";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
+import { useConsentSheetSizes } from "./useConsentSheetSizes";
 import { useWindowDimensions } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { CONSENT_FADE_HEIGHT, CONSENT_SIDE_BY_SIDE_MIN_WIDTH, consentIdentityShown, consentSummaryFadeAllowed, planConsentSheet,
+import { CONSENT_FADE_HEIGHT, CONSENT_SIDE_BY_SIDE_MIN_WIDTH, consentIdentityShown, consentRegularConfirmed, consentSheetMeasured,
+  consentSummaryFadeAllowed, planConsentSheet,
   pluginConsentPresentation } from "./pluginConsentPresentation";
 export function PluginManagementConfirmation(
   props: PluginManagementConfirmationProps,
@@ -46,19 +48,19 @@ export function PluginManagementConfirmation(
   // it takes no room. SwiftUI shows scroll indicators only while scrolling, so the fade is what says there is more.
   // A SwiftUI ScrollView takes all the height it is offered, so the pinned summary gets an explicit height: its
   // measured content height, capped by the plan.
-  const [measured, setMeasured] = useState({ identity: 0, heading: 0, actions: 0 });
-  const [lineHeights, setLineHeights] = useState<number[]>([]);
-  // The newest layout, as it arrives (read when Allow is pressed; the state above can be a render behind).
-  const laidOut = useRef({ identity: 0, visible: 0, content: 0 });
-  const measure = (key: keyof typeof measured) => (size: { height: number }) => {
-    const height = Math.ceil(size.height);
-    if (key === "identity" && height > 0) laidOut.current.identity = height;
-    if (height > 0) setMeasured((current) => current[key] === height ? current : { ...current, [key]: height });
+  // Every size comes from this consent's own sheet (maintainer review 18:13): another consent starts from nothing (its
+  // views get new identities, see `viewId` below, and report again), and a late report of the previous one is dropped.
+  const requestId = consent?.requestId ?? null;
+  const layout = useConsentSheetSizes(requestId);
+  const sizes = layout.sizes;
+  const measure = (key: "identity" | "heading" | "actions" | "visible" | "content") => (size: { height: number }) => {
+    if (size.height > 0) layout.report(key, size.height);
   };
   const measureLine = (index: number) => (size: { height: number }) => {
-    const height = Math.ceil(size.height);
-    if (height > 0) setLineHeights((current) => current[index] === height ? current : Object.assign([...current], { [index]: height }));
+    if (size.height > 0) layout.reportLine(index, size.height);
   };
+  /** A view identity for this consent: another consent's views are new views (scrolled to their top, measured again). */
+  const forRequest = (name: string) => viewId(name + ":" + (requestId ?? ""));
   const sheetHeader = Math.ceil(64 * Math.min(Math.max(fontScale, 1), 2)) + 10;
   // Which scroll area has more below what it shows (from its own scroll geometry; display only).
   const [more, setMore] = useState({ list: false, summary: false });
@@ -66,14 +68,7 @@ export function PluginManagementConfirmation(
     const next = geometry.contentHeight > geometry.containerHeight + 1 && geometry.contentOffsetY + geometry.containerHeight < geometry.contentHeight - 2;
     setMore((current) => current[key] === next ? current : { ...current, [key]: next });
   };
-  // The list's visible height and whether it scrolls, from its own geometry (the real-layout check below).
-  const [listArea, setListArea] = useState({ visible: 0, content: 0 });
-  const listGeometry = useScrollGeometryChange((geometry: { contentOffsetY: number; containerHeight: number; contentHeight: number }) => {
-    watchMore("list")(geometry);
-    const visible = Math.floor(geometry.containerHeight), content = Math.ceil(geometry.contentHeight);
-    laidOut.current.visible = visible; laidOut.current.content = content;
-    setListArea((current) => current.visible === visible && current.content === content ? current : { visible, content });
-  });
+  const listGeometry = useScrollGeometryChange(watchMore("list"));
   const summaryGeometry = useScrollGeometryChange(watchMore("summary"));
   const fade = (testID: string, shown: boolean) => (
     <Rectangle testID={testID} modifiers={[
@@ -82,11 +77,11 @@ export function PluginManagementConfirmation(
     ]} />
   );
   const lineCount = info?.highRisk?.lines.length ?? 0;
+  const available = (actions: number) => Math.floor(windowHeight - insets.top - sheetHeader) - spacing.sm * 2 /* list padding */
+    - spacing.sm * 3 /* footer spacing */ - spacing.xs - 12 /* footer bottom */ - insets.bottom - actions;
   const plan = planConsentSheet({
-    available: Math.floor(windowHeight - insets.top - sheetHeader) - spacing.sm * 2 /* list padding */
-      - spacing.sm * 3 /* footer spacing */ - spacing.xs - 12 /* footer bottom */ - insets.bottom - measured.actions,
-    identity: measured.identity, heading: measured.heading,
-    lines: Array.from({ length: lineCount }, (_, index) => lineHeights[index] ?? 0) /* 0 = not measured yet */, gap: spacing.xs,
+    available: available(sizes.actions), identity: sizes.identity, heading: sizes.heading,
+    lines: Array.from({ length: lineCount }, (_, index) => sizes.lines[index] ?? 0) /* 0 = not measured yet */, gap: spacing.xs,
   });
   // Compact (maintainer review 16:35 #2): Allow comes after an explicit "Review source and permissions" step, which shows
   // the source and this consent's high-risk summary first; the sheet stays compact once reviewed (the reordered list
@@ -101,19 +96,20 @@ export function PluginManagementConfirmation(
   const [crampedFor, setCrampedFor] = useState<string | null>(null);
   const cramped = fitKey !== null && crampedFor === fitKey;
   const compact = plan.mode === "compact" || reviewed || cramped;
-  // The list's top padding comes before the identity block.
-  const shown = consentIdentityShown({ identity: measured.identity, visible: listArea.visible, content: listArea.content, top: spacing.sm });
+  const measuredAll = consentSheetMeasured(sizes, lineCount);
   useEffect(() => {
-    if (!fitKey || compact || measured.identity <= 0 || listArea.visible <= 0) return;
-    if (!shown) setCrampedFor(fitKey);
-  }, [fitKey, compact, measured.identity, listArea.visible, shown]);
-  // Allow in the regular layout answers only when the newest layout shows the whole identity block (dispatcher
-  // 2026-11-26: the frame before the check lands must not let it through). Pressed before that, or when it does not show,
-  // the sheet goes compact (review first) instead of answering. Nothing is drawn differently before then: SwiftUI's
-  // disabled state would dim the button for that frame.
-  const allowNow = () => compact || consentIdentityShown({ ...laidOut.current, top: spacing.sm });
+    // The list's top padding comes before the identity block.
+    if (fitKey && !compact && measuredAll && !consentIdentityShown({ ...sizes, top: spacing.sm })) setCrampedFor(fitKey);
+  }, [fitKey, compact, measuredAll, sizes]);
+  // Allow answers in the regular layout only once this consent's sizes have all arrived and confirm it (maintainer review
+  // 18:13: on first mount, or with only some sizes, the plan can say regular before it knows). Until then Allow looks the
+  // same but does not answer: pressed, the sheet goes compact (review first) instead. Read from the newest reports when
+  // pressed. Not marked unavailable: SwiftUI's disabled state would dim the button for that frame.
+  const confirmedNow = () => consentRegularConfirmed(layout.latest(), { lineCount, available, gap: spacing.xs, top: spacing.sm });
   const needsReview = compact && !reviewed && info?.allowBlocked !== true;
-  const [summaryHeight, setSummaryHeight] = useState(0);
+  // The pinned summary's content height, for this consent only.
+  const [summaryContent, setSummaryContent] = useState<{ for: string | null; height: number }>({ for: null, height: 0 });
+  const summaryHeight = summaryContent.for === requestId ? summaryContent.height : 0;
   // Large text on a narrow screen: the buttons stack so each label shows in full; wide enough (landscape, iPad) they stay
   // side by side, labels wrapping inside them (K-3).
   const stacked = fontScale > 1.2 && windowWidth < CONSENT_SIDE_BY_SIDE_MIN_WIDTH;
@@ -135,7 +131,7 @@ export function PluginManagementConfirmation(
       testID={"plugins.management." + (accept && needsReview ? "review" : accept ? "allow" : "reject")}
       onPress={() => {
         if (accept && needsReview) { setReviewedFor(consent!.requestId); return; }
-        if (accept && !allowNow()) { if (fitKey) setCrampedFor(fitKey); return; }
+        if (accept && !compact && !confirmedNow()) { if (fitKey) setCrampedFor(fitKey); return; }
         answer(accept);
       }}
       modifiers={[
@@ -198,7 +194,9 @@ export function PluginManagementConfirmation(
       nativeContent
       // A new identity for the reviewed list, so it opens at its top (the source) rather than where the first list was.
       nativeContentModifiers={[...(listGeometry ? [listGeometry] : []), accessibilityHint(t("plugins.management.scrollHint")),
-        viewId(reviewed ? "plugins.management.reviewed" : "plugins.management.list")]}
+        // The list's visible height (its own frame), for the real-layout check.
+        onGeometryChange(measure("visible")),
+        forRequest(reviewed ? "plugins.management.reviewed" : "plugins.management.list")]}
       nativeContentOverlay={fade("plugins.management.listFade", more.list)}
       // Open large when the summary, a source-change notice or an accessibility text size needs the room (at the medium
       // detent an upward swipe expands the sheet instead of scrolling the list).
@@ -217,12 +215,14 @@ export function PluginManagementConfirmation(
               {summaryHeading}
               <Overlay alignment="bottom">
                 <ScrollView testID="plugins.management.highRiskScroll"
-                  modifiers={[frame({ height: plan.mode === "regular" ? Math.min(plan.summaryLines, summaryHeight || plan.summaryLines) : undefined }),
+                  // Its own identity per consent (maintainer review 18:20): the next consent's summary starts at its top.
+                  modifiers={[forRequest("plugins.management.highRiskScroll"),
+                    frame({ height: plan.mode === "regular" ? Math.min(plan.summaryLines, summaryHeight || plan.summaryLines) : undefined }),
                     scrollIndicators("visible"), accessibilityHint(t("plugins.management.scrollHint")),
                     ...(summaryGeometry ? [summaryGeometry] : [])]}>
                   <VStack alignment="leading" spacing={spacing.xs}
                     modifiers={[frame({ maxWidth: Infinity, alignment: "leading" }),
-                      onGeometryChange((size) => { if (size.height > 0) setSummaryHeight(size.height); })]}>
+                      onGeometryChange((size) => { if (size.height > 0) setSummaryContent({ for: requestId, height: size.height }); })]}>
                     {summaryItems}
                   </VStack>
                 </ScrollView>
@@ -231,11 +231,11 @@ export function PluginManagementConfirmation(
             </VStack>
           ) : null}
           {stacked ? (
-            <VStack testID="plugins.management.actions" spacing={spacing.sm} modifiers={[onGeometryChange(measure("actions"))]}>
+            <VStack testID="plugins.management.actions" spacing={spacing.sm} modifiers={[forRequest("plugins.management.actions"), onGeometryChange(measure("actions"))]}>
               {[true, false].map((accept) => answerButton(accept))}
             </VStack>
           ) : (
-          <HStack testID="plugins.management.actions" spacing={spacing.md} modifiers={[onGeometryChange(measure("actions"))]}>
+          <HStack testID="plugins.management.actions" spacing={spacing.md} modifiers={[forRequest("plugins.management.actions"), onGeometryChange(measure("actions"))]}>
             {[false, true].map((accept) => answerButton(accept))}
           </HStack>
           )}
@@ -245,7 +245,7 @@ export function PluginManagementConfirmation(
       <VStack
         alignment="leading"
         spacing={spacing.md}
-        modifiers={[padding({ vertical: spacing.sm })]}
+        modifiers={[padding({ vertical: spacing.sm }), onGeometryChange(measure("content"))]}
       >
         {/* Reviewed (compact): the source and this consent's high-risk summary come first, then the rest as before. */}
         {reviewed ? (
