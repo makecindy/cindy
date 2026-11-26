@@ -1611,6 +1611,7 @@
       "kimiMonthCode": "Programação mensal",
       "session": "{{hours}} horas",
       "week": "Semanal",
+      "weekShort": "Semanal",
       "scoped": "{{model}} semanal"
     },
     "headline": {
@@ -1681,6 +1682,9 @@
       "full": "Completa.",
       "relaxed": "Há bastante margem neste ritmo.",
       "onPace": "Dentro do ritmo.",
+      "tightest": "O período com menos cota disponível é {{window}}. ",
+      "refillsAt": "A cota é renovada {{at}}.",
+      "tightestRefills": "A cota de {{window}} é renovada {{at}}.",
       "windowRefresh": "O período de {{window}} renova {{at}}",
       "usedUpWithResets_one": "Há {{n}} renovação disponível; usá-la repõe a cota imediatamente.",
       "usedUpWithResets_other": "Há {{n}} renovações disponíveis; usar uma repõe a cota imediatamente.",

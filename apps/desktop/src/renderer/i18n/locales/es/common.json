@@ -1611,6 +1611,7 @@
       "kimiMonthCode": "Programación mensual",
       "session": "{{hours}} horas",
       "week": "Semanal",
+      "weekShort": "Semanal",
       "scoped": "{{model}} semanal"
     },
     "headline": {
@@ -1681,6 +1682,9 @@
       "full": "Completo.",
       "relaxed": "A este ritmo, hay margen de sobra.",
       "onPace": "A buen ritmo.",
+      "tightest": "La ventana con menos saldo es {{window}}. ",
+      "refillsAt": "Se repone {{at}}.",
+      "tightestRefills": "El saldo de {{window}} se repone {{at}}.",
       "windowRefresh": "La ventana {{window}} se actualiza {{at}}",
       "usedUpWithResets_one": "Hay {{n}} restablecimiento disponible; al usarlo, se recarga de inmediato.",
       "usedUpWithResets_other": "Hay {{n}} restablecimientos disponibles; al usar uno, se recarga de inmediato.",

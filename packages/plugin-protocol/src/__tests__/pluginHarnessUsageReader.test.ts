@@ -11,6 +11,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import { createPluginHarnessUsageReader } from '../pluginHarnessUsageReader.js';
+import { parseGhostHarnessUsage } from '../pluginHarnesses.js';
 
 const ENGINE = 'dsh-plugin:dsh';
 const usage = { updatedAt: 1, balances: [{ currency: 'CNY', amount: '1.00' }] };
@@ -32,5 +33,28 @@ describe('plugin engine usage reads', () => {
     reader.retainReportingEngines(owner, null, [{ key: ENGINE }]);
     late(usage);
     expect(await dropped.result).toBeNull();
+  });
+});
+
+// #12709: keep optional pool labels across the worker/IPC boundary, with the same whole-report
+// rejection as other display fields. The reader's cache test only exercises a currency balance.
+describe('plugin usage window pool labels', () => {
+  const window = { label: 'Gemini Models · 5h', remainingPercent: 97 };
+  const report = (fields: Record<string, unknown>) => ({
+    updatedAt: 1,
+    windows: [window, { ...window, ...fields }],
+  });
+
+  it('preserves a valid full name and short name alongside ungrouped windows', () => {
+    const value = report({ group: 'Gemini Models', groupShort: 'Gemini' });
+    expect(parseGhostHarnessUsage(value)).toEqual(value);
+  });
+
+  it.each([
+    { group: 'g'.repeat(61) }, { groupShort: 's'.repeat(25) },
+    { group: 'a\nb' }, { groupShort: 'a\tb' },
+    { group: '' }, { groupShort: ' ' },
+  ])('rejects the entire report when a name is invalid: %o', (fields) => {
+    expect(parseGhostHarnessUsage(report(fields))).toBeUndefined();
   });
 });

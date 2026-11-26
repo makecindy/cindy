@@ -83,6 +83,8 @@ export const PLUGIN_ENGINE_ACCOUNTS_FULL_ERROR =
   '[SUBSCRIPTION_ACCOUNTS_FULL] every available subscription account has reached its concurrency limit';
 const STATUS_FRESH_MS = 60_000;
 const STATUS_FAILURE_FRESH_MS = 5_000;
+const PLAN_WARM_FAILURE_RETRY_MS = 10 * 60_000;
+const planRebuilds = new WeakSet<Promise<StatusSnapshot>>();
 const USAGE_FRESH_MS = 60_000;
 /** New assignment waits this long for every candidate's sign-in read, like the built-in pool. */
 const SELECTION_READ_BUDGET_MS = 2_000;
@@ -236,16 +238,24 @@ export function displayIdentity(status: GhostHarnessAccountStatus | null | undef
   return status?.identity?.email ?? status?.identity?.name ?? status?.identity?.detail;
 }
 
-async function readStatus(
+/** The engine-level usage reader uses the original login (no account directory). */
+export function readCachedPluginEngineDefaultPlan(engineKey: string): string | null {
+  if (!runtime || runtime.owner !== activeOwnerScopeKey() || isAppSessionBoundaryPending()) return null;
+  const status = runtime.status.get(accountKey(engineKey, 'default'))?.status;
+  return status?.state === 'signed-in' ? status.plan ?? null : null;
+}
+
+function readStatus(
   state: RuntimeState,
   ref: { engineKey: string; ghostId: string; harnessId: string },
   accountId: string,
-  force = false,
+  mode: 'cached' | 'force' | 'warm-plan' = 'cached',
 ): Promise<StatusSnapshot> {
+  const force = mode === 'force';
   const key = accountKey(ref.engineKey, accountId);
   const cached = state.status.get(key);
   const fresh = cached && Date.now() - cached.at < (cached.failed ? STATUS_FAILURE_FRESH_MS : STATUS_FRESH_MS);
-  if (!force && fresh) return cached;
+  if (!force && fresh) return Promise.resolve(cached);
   const flight = state.statusFlights.get(key);
   if (flight && !force) return flight;
   const read = (async () => {
@@ -259,7 +269,7 @@ async function readStatus(
     if (runtime !== state) return snapshot;
     const previous = state.status.get(key);
     state.status.set(key, snapshot);
-    if (previous && (previous.status?.state !== snapshot.status?.state || previous.failed !== snapshot.failed))
+    if (mode !== 'warm-plan' && previous && (previous.status?.state !== snapshot.status?.state || previous.failed !== snapshot.failed))
       changed(ref.engineKey);
     const identity = displayIdentity(snapshot.status);
     if (snapshot.status?.state === 'signed-in' && identity) void rememberIdentity(ref.engineKey, accountId, identity);
@@ -268,6 +278,27 @@ async function readStatus(
   state.statusFlights.set(key, read);
   void read.finally(() => { if (state.statusFlights.get(key) === read) state.statusFlights.delete(key); }).catch(() => {});
   return read;
+}
+
+/** Populate the original login's plan without delaying a local or paired computer's usage card. */
+export function warmPluginEngineDefaultPlan(engineKey: string, onPlan?: () => void): void {
+  void warm().catch(() => { /* A missing plan must never hide an available quota. */ });
+
+  async function warm(): Promise<void> {
+    if (isAppSessionBoundaryPending() || !liveEngine(engineKey)?.accounts) return;
+    const ref = parsePluginEngineProviderId(pluginEngineProviderId(engineKey));
+    if (!ref) return;
+    const state = currentRuntime();
+    const key = accountKey(engineKey, 'default');
+    const snapshot = state.status.get(key);
+    if (snapshot && (!snapshot.failed || Date.now() - snapshot.at < PLAN_WARM_FAILURE_RETRY_MS)) return;
+    const read = readStatus(state, ref, 'default', 'warm-plan');
+    // The paired computer doesn't need a callback. A local collector joining the same read does.
+    if (!onPlan || planRebuilds.has(read)) return;
+    planRebuilds.add(read);
+    const result = await read;
+    if (runtime === state && result === state.status.get(key) && readCachedPluginEngineDefaultPlan(engineKey)) onPlan();
+  }
 }
 
 /** Bounded write: only when the confirmed identity actually changed. */
@@ -802,7 +833,7 @@ export async function readPluginEnginePoolView(providerId: string, taskId?: stri
   // Identity-only engines (no methods) report just the original login.
   const accounts = engine.accounts.methods.length ? providerAccounts(pool, ref.suffix) : [DEFAULT_PLUGIN_ENGINE_ACCOUNT];
   await Promise.all(accounts.map(account => Promise.all([
-    readStatus(state, ref, account.id, force),
+    readStatus(state, ref, account.id, force ? 'force' : 'cached'),
     readUsage(state, ref, account.id, force),
   ]).catch(() => {})));
   assertOwner(state);
@@ -857,7 +888,7 @@ async function runLogin(
     const result = await loginPluginHarnessAccount(ref.engineKey, dir, methodId, secret);
     assertOwner(state);
     if (!result.ok) throw new Error(result.error === 'cancelled' ? 'login_cancelled' : 'login_failed');
-    const confirmed = await readStatus(state, ref, accountId, true);
+    const confirmed = await readStatus(state, ref, accountId, 'force');
     assertOwner(state);
     // The plugin could not say whether the sign-in worked: not a failed login, not a success.
     if (confirmed.failed) throw new AccountServiceUnreachableError('plugin-unavailable');

@@ -29,17 +29,20 @@ import {
  *   实测耗时：< 2s。
  */
 const h = vi.hoisted(() => ({
+  ownerScope: 'owner-a:1',
   root: '',
   files: new Map<string, unknown>(),
   cooling: {} as Record<string, Record<string, unknown>>,
-  status: new Map<string, { state: 'signed-in' | 'signed-out'; identity?: { email?: string }; fingerprint?: string; models?: string[] }>(),
+  status: new Map<string, { state: 'signed-in' | 'signed-out'; identity?: { email?: string }; plan?: string; fingerprint?: string; models?: string[] }>(),
+  statusReads: vi.fn(),
+  boundaryPending: false,
   login: vi.fn(),
   harnesses: [] as Array<Record<string, unknown>>,
 }));
 
 vi.mock('../../appSessionState.js', () => ({
-  activeOwnerScopeKey: () => 'owner-a:1',
-  isAppSessionBoundaryPending: () => false,
+  activeOwnerScopeKey: () => h.ownerScope,
+  isAppSessionBoundaryPending: () => h.boundaryPending,
   getActiveAppSession: () => ({ dataOwnerId: 'owner-a' }),
   ownerScopedUserDataPath: (...parts: string[]) => path.join(h.root, ...parts),
 }));
@@ -71,14 +74,16 @@ vi.mock('../../provider-group/coolingStore.js', () => ({
 }));
 vi.mock('../../cindy-brain/pluginHarnesses.js', () => ({
   getPluginHarnessRegistry: () => ({ list: () => h.harnesses }),
-  readPluginHarnessAccountStatus: async (_key: string, dir?: string) => h.status.get(dir ? path.basename(dir) : 'default') ?? null,
+  readPluginHarnessAccountStatus: h.statusReads,
   readPluginHarnessUsage: async () => null,
   loginPluginHarnessAccount: h.login,
   cancelPluginHarnessAccountLogin: async () => undefined,
 }));
 
-const { acquirePluginEngineAccount, runPluginEngineAccountCommand, resetPluginEngineAccountsRuntimeForTests } =
-  await import('../runtime.js');
+const {
+  acquirePluginEngineAccount, readCachedPluginEngineDefaultPlan, warmPluginEngineDefaultPlan, onPluginEngineAccountsChanged,
+  runPluginEngineAccountCommand, resetPluginEngineAccountsRuntimeForTests,
+} = await import('../runtime.js');
 const { withPluginEngineAccounts } = await import('../agent.js');
 const { preparePluginEngineAccountForSend } = await import('../failover.js');
 const { updatePluginEnginePool, readPluginEngineBinding, readPluginEnginePool } = await import('../store.js');
@@ -95,10 +100,13 @@ afterAll(() => {
 });
 
 beforeEach(async () => {
+  h.ownerScope = 'owner-a:1';
   if (!h.root) h.root = mkdtempSync(path.join(tmpdir(), 'plugin-engine-accounts-'));
   h.files.clear();
   h.cooling = {};
   h.status.clear();
+  h.statusReads.mockReset().mockImplementation(async (_key, dir) => h.status.get(dir ? path.basename(dir) : 'default') ?? null);
+  h.boundaryPending = false;
   h.login.mockReset();
   h.harnesses = [{ key: ENGINE, ghostId: 'dsh-plugin', harnessId: 'dsh', name: 'DSH', protocol: 'acp',
     availability: { state: 'available' }, accounts: { methods: [{ id: 'api-key', label: 'API Key', kind: 'secret' }] } }];
@@ -113,6 +121,73 @@ beforeEach(async () => {
 });
 
 describe('plugin engine account pool', () => {
+  // #12709: the menu bar reads the original login's cached plan, without querying an account.
+  // The settings read fills the real cache; another engine or a switch of Cindy owner must miss it.
+  it('only shows a cached plan for the original account and current owner', async () => {
+    h.status.set('default', { state: 'signed-in', plan: 'Original plan' });
+    h.status.set(A, { state: 'signed-in', plan: 'Other account plan' });
+    expect(readCachedPluginEngineDefaultPlan(ENGINE)).toBeNull();
+    await runPluginEngineAccountCommand({ action: 'read', providerId: PROVIDER });
+    h.status.clear();
+    expect(readCachedPluginEngineDefaultPlan(ENGINE)).toBe('Original plan');
+    expect(readCachedPluginEngineDefaultPlan('other:engine')).toBeNull();
+    h.ownerScope = 'owner-b:2';
+    expect(readCachedPluginEngineDefaultPlan(ENGINE)).toBeNull();
+  });
+
+  // #12709: a usage card must learn the original login's plan without opening its settings.
+  // A remote warm may start the read; overlapping local collectors need only one rebuild.
+  it('warms an identity-only engine once and notifies a local collector joining the remote read', async () => {
+    h.harnesses[0]!.accounts = { methods: [] };
+    h.status.set('default', { state: 'signed-in', plan: 'Original plan' });
+    const onPlan = vi.fn();
+    warmPluginEngineDefaultPlan(ENGINE);
+    warmPluginEngineDefaultPlan(ENGINE, onPlan);
+    warmPluginEngineDefaultPlan(ENGINE, onPlan);
+    expect(readCachedPluginEngineDefaultPlan(ENGINE)).toBeNull();
+    await vi.waitFor(() => expect(onPlan).toHaveBeenCalledOnce());
+    expect(readCachedPluginEngineDefaultPlan(ENGINE)).toBe('Original plan');
+    warmPluginEngineDefaultPlan(ENGINE, onPlan);
+    expect(h.statusReads.mock.calls).toEqual([[ENGINE, undefined]]);
+    expect(onPlan).toHaveBeenCalledOnce();
+  });
+
+  it('skips warming during an owner switch and on engines without account status', () => {
+    h.boundaryPending = true;
+    warmPluginEngineDefaultPlan(ENGINE);
+    h.boundaryPending = false;
+    delete h.harnesses[0]!.accounts;
+    warmPluginEngineDefaultPlan(ENGINE);
+    expect(h.statusReads).not.toHaveBeenCalled();
+  });
+
+  it('retries a failed warm after ten minutes and only invalidates the usage card', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    const changed = vi.fn();
+    const unsubscribe = onPluginEngineAccountsChanged(changed);
+    try {
+      h.status.delete('default');
+      const onPlan = vi.fn();
+      warmPluginEngineDefaultPlan(ENGINE, onPlan);
+      await new Promise(resolve => setImmediate(resolve));
+      vi.setSystemTime(Date.now() + 599_999);
+      h.status.set('default', { state: 'signed-in', plan: 'Recovered' });
+      warmPluginEngineDefaultPlan(ENGINE, onPlan);
+      expect(h.statusReads).toHaveBeenCalledTimes(1);
+      expect(onPlan).not.toHaveBeenCalled();
+      vi.setSystemTime(Date.now() + 2);
+      warmPluginEngineDefaultPlan(ENGINE, onPlan);
+      warmPluginEngineDefaultPlan(ENGINE, onPlan);
+      await vi.waitFor(() => expect(onPlan).toHaveBeenCalledOnce());
+      expect(h.statusReads).toHaveBeenCalledTimes(2);
+      expect(readCachedPluginEngineDefaultPlan(ENGINE)).toBe('Recovered');
+      expect(changed).not.toHaveBeenCalled();
+    } finally {
+      unsubscribe();
+      vi.useRealTimers();
+    }
+  });
+
   it('spreads new tasks over signed-in accounts, keeps a bound task on its account and stops at the limit', async () => {
     const first = await acquirePluginEngineAccount(PROVIDER, undefined, ['task:t1']);
     const second = await acquirePluginEngineAccount(PROVIDER, undefined, ['task:t2']);

@@ -1565,6 +1565,7 @@
       "kimiMonthCode": "月間コーディング",
       "session": "{{hours}} 時間",
       "week": "今週",
+      "weekShort": "今週",
       "scoped": "{{model}} 今週"
     },
     "headline": {
@@ -1634,6 +1635,9 @@
       "full": "満タンです。",
       "relaxed": "ペースに余裕があります。",
       "onPace": "ペースは標準です。",
+      "tightest": "{{window}}の残りが最も少なく、",
+      "refillsAt": "{{at}}に全量回復します。",
+      "tightestRefills": "{{window}}は{{at}}に全量回復します。",
       "windowRefresh": "{{window}}の枠は{{at}}に更新",
       "usedUpWithResets_other": "リセットがあと {{n}} 回使えます。使うとすぐ満タンに戻ります。"
     },

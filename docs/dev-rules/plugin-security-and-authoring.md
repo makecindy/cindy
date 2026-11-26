@@ -1549,6 +1549,9 @@ App 双向同步，**不另建存储**：Main 复用 device-link 同一条 owner
   声明列出。字段与旧端降级见 [plugin-harnesses.md](protocol-compatibility/plugin-harnesses.md)。
 - **注册表**：`cindy-brain/pluginHarnesses.ts` 只列已启用、已批准、已声明、receipt 已批准且协议已支持的引擎，名称按
   界面语言选取；花名册广播、语言切换与状态发布后重算，内容不变不通知。`spawn` 现算列表，不在列表或已发布不可用即拒绝。
+- **账号用量窗口**可以提供额度池全名与短名，用于菜单栏展示。Host 在现有用量读取边界校验纯文本及长度，
+  并沿用现有实例、设备和账号权限。每池 1–2 个窗口是双池卡片的展示条件，插件仍可在协议上限内上报全部窗口。
+  完整展示条件、字段限制与旧端行为见[引擎账号用量](protocol-compatibility/plugin-harnesses.md#引擎账号用量)。
 - **引擎账号（2026-11-23，未发布）**：插件在 `PUT /harnesses` 发布 `accounts.methods` 后，Cindy 为每个添加的账号建一个按账号隔离的目录，
   启动时以宿主固定的 `--cindy-account-dir <目录>` 交给入口；注册表核对目录是这个引擎根目录下的一级子目录且引擎声明了登录方式，否则拒绝启动，
   插件仍没有参数面。账号状态、登录、取消与按账号用量只调用主 worker 的固定方法名，参数由注册表拼好，回包按协议白名单校验后才用

@@ -247,7 +247,16 @@ export interface GhostHarnessUsage {
    * window's length, which lets Cindy prefer the account whose quota expires soonest; absent =
    * the window only marks an account as used up.
    */
-  windows?: { label: string; remainingPercent: number; resetsAt?: number; windowMinutes?: number; models?: string[] }[];
+  windows?: {
+    label: string;
+    remainingPercent: number;
+    resetsAt?: number;
+    windowMinutes?: number;
+    models?: string[];
+    /** Display name of the quota pool and its optional legend label. */
+    group?: string;
+    groupShort?: string;
+  }[];
   balances?: { currency: string; amount: string }[];
 }
 
@@ -264,6 +273,8 @@ export function parseGhostHarnessUsage(raw: unknown): GhostHarnessUsage | undefi
     usage.windows = [];
     for (const row of raw.windows) {
       if (!isRecord(row) || !plainText(row.label, 120)
+        || (row.group !== undefined && !plainText(row.group, 60))
+        || (row.groupShort !== undefined && !plainText(row.groupShort, 24))
         || typeof row.remainingPercent !== 'number' || !Number.isFinite(row.remainingPercent)
         || row.remainingPercent < 0 || row.remainingPercent > 100
         || (row.resetsAt !== undefined && !validTimestamp(row.resetsAt))) return undefined;
@@ -273,6 +284,8 @@ export function parseGhostHarnessUsage(raw: unknown): GhostHarnessUsage | undefi
       usage.windows.push({ label: row.label, remainingPercent: row.remainingPercent,
         ...(row.resetsAt !== undefined ? { resetsAt: row.resetsAt as number } : {}),
         ...(row.windowMinutes !== undefined ? { windowMinutes: row.windowMinutes as number } : {}),
+        ...(row.group !== undefined ? { group: row.group as string } : {}),
+        ...(row.groupShort !== undefined ? { groupShort: row.groupShort as string } : {}),
         ...(models ? { models } : {}) });
     }
   }
@@ -350,6 +363,11 @@ export interface GhostHarnessAccountStatus {
   models?: string[];
 }
 
+/** Display text for an account plan from a plugin or its host computer. */
+export function isGhostHarnessAccountPlan(value: unknown): value is string {
+  return plainText(value, ACCOUNT_PLAN_MAX);
+}
+
 const EMAIL_RE = /^[^\s@]{1,64}@[^\s@]{1,253}$/;
 
 /**
@@ -368,7 +386,7 @@ export function parseGhostHarnessAccountStatus(raw: unknown): GhostHarnessAccoun
     };
     if (Object.keys(identity).length) status.identity = identity;
   }
-  if (plainText(raw.plan, ACCOUNT_PLAN_MAX)) status.plan = raw.plan;
+  if (isGhostHarnessAccountPlan(raw.plan)) status.plan = raw.plan;
   if (plainText(raw.fingerprint, ACCOUNT_FINGERPRINT_MAX)) status.fingerprint = raw.fingerprint;
   const models = parseModelIdList(raw.models);
   if (models) status.models = models;

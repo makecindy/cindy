@@ -1565,6 +1565,7 @@
       "kimiMonthCode": "月编程限额",
       "session": "{{hours}} 时",
       "week": "是周",
+      "weekShort": "是周",
       "scoped": "{{model}} 是周"
     },
     "headline": {
@@ -1634,6 +1635,9 @@
       "full": "盈矣。",
       "relaxed": "步调从容。",
       "onPace": "步调如常。",
+      "tightest": "{{window}}所余最少，",
+      "refillsAt": "{{at}} 复满。",
+      "tightestRefills": "{{window}} {{at}} 复满。",
       "windowRefresh": "{{window}}之期，{{at}}更新",
       "usedUpWithResets_other": "尚有 {{n}} 次限额重置可用，用之即刻回满。"
     },

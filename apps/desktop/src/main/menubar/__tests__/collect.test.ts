@@ -1,3 +1,4 @@
+import { parseGhostHarnessUsage } from '@cindy/plugin-protocol';
 import type { ProviderView } from '@cindy/model-providers';
 import { codexAccountDisplayKey } from '../../maker-host/codex-auth-identity';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -220,6 +221,58 @@ describe('collectMenubarInputs', () => {
     expect(detail.rings.map(ring => ring.fraction)).toEqual(fills.length ? fills : [0]);
     expect(detail.facts.filter(fact => fact.label.includes('resets')).map(fact => fact.label).sort()).toEqual(resets);
     expect(view.sources[0]?.resetsAtMs ?? null).toBe(resets.length ? glmQuota.weekly?.resetsAt : null);
+  });
+
+  // #12709: cross the plugin protocol, collector and panel builder together. Interleaving
+  // two pools and reporting short windows first catches lost fields and both sorting mistakes.
+  it('keeps the rings, legends and reset times of both pools on one plugin subscription', async () => {
+    const engine = {
+      key: 'agy-acp:agy', providerId: 'acp-plugin:agy-acp:agy', ghostId: 'agy-acp', harnessId: 'agy',
+      name: 'Antigravity', reportsUsage: true as const, availability: { state: 'available' as const },
+      models: [], permissionModes: [], defaultPermissionMode: 'ask' as const,
+    };
+    const window = (group: string, groupShort: string, period: string, windowMinutes: number, remainingPercent: number, leftMin: number) =>
+      ({ group, groupShort, label: `${group} · ${period}`, windowMinutes, remainingPercent, resetsAt: NOW + leftMin * 60_000 });
+    const usage = parseGhostHarnessUsage({ updatedAt: NOW, windows: [
+      window('Gemini Models', 'Gemini', '5h', 300, 97, 19),
+      window('Claude and GPT models', 'Claude/GPT', '5h', 300, 71, 297),
+      window('Gemini Models', 'Gemini', 'weekly', 10_080, 99, 9_799),
+      window('Claude and GPT models', 'Claude/GPT', 'weekly', 10_080, 88, 10_077),
+    ] });
+    const view = await panel(deps({
+      listProviders: async () => [],
+      listPluginEngines: () => [engine],
+      readPluginEngineUsage: async () => usage ?? null,
+      readCachedPluginEngineDefaultPlan: () => 'Ultra',
+    }));
+    expect(Object.keys(view.details)).toEqual([engine.providerId]);
+    const detail = view.details[engine.providerId]!;
+    const facts = (short: string, week: string) => [
+      { label: '5-hour resets', value: expect.any(String), sub: short },
+      { label: 'Weekly resets', value: expect.any(String), sub: week },
+    ];
+    expect(detail.groups).toEqual([
+      {
+        title: 'Gemini Models', bigValue: '97', bigUnit: '%', bigCaption: '5-hour left',
+        rings: [{ fraction: 0.99, color: 'poolBlue' }, { fraction: 0.97, color: 'poolBlue2' }],
+        legend: [{ label: 'Gemini Weekly 99%', color: 'poolBlue' }, { label: 'Gemini 5-hour 97%', color: 'poolBlue2' }],
+        facts: facts('19 minutes left', '6d 19h left'),
+      },
+      {
+        title: 'Claude and GPT models', bigValue: '71', bigUnit: '%', bigCaption: '5-hour left',
+        rings: [{ fraction: 0.88, color: 'poolRed' }, { fraction: 0.71, color: 'poolRed2' }],
+        legend: [{ label: 'Claude/GPT Weekly 88%', color: 'poolRed' }, { label: 'Claude/GPT 5-hour 71%', color: 'poolRed2' }],
+        facts: facts('4h 57m left', '6d 23h left'),
+      },
+    ]);
+    expect(detail).toMatchObject({ plan: 'Ultra', bigValue: '71', bigUnit: '%', bigCompact: true,
+      sayPrimary: 'Claude/GPT 5-hour is lowest; ', saySecondary: `refills ${detail.groups![1]!.facts[0]!.value}.` });
+    for (const key of ['rings', 'legend'] as const) {
+      expect(detail[key]).toEqual([...detail.groups![0]![key], ...detail.groups![1]![key]]);
+    }
+    const labels = ['Gemini 5-hour resets', 'Gemini Weekly resets', 'Claude/GPT 5-hour resets', 'Claude/GPT Weekly resets'];
+    const groupedFacts = detail.groups!.flatMap(group => group.facts);
+    expect(detail.facts).toEqual(groupedFacts.map((fact, index) => ({ ...fact, label: labels[index] })));
   });
 
   it('falls back to the 5-hour GLM quota if weekly resets during collection', async () => {
@@ -869,19 +922,24 @@ describe('plugin engine quota collection', () => {
   it('collects local reporting plugin engines (windows and balance-only), drops expired windows, and marks running ACP tasks', async () => {
     const dsh = engine();
     const gemini = engine({ key: 'gem:cli', providerId: 'acp-plugin:gem:cli', ghostId: 'gem', harnessId: 'cli', name: 'Gemini CLI' });
+    const unreadable = engine({ key: 'unknown:cli', providerId: 'acp-plugin:unknown:cli' });
+    const warmPlan = vi.fn();
     const silent = engine({ key: 'off:cli', providerId: 'acp-plugin:off:cli', reportsUsage: undefined });
     const suspended = engine({ key: 'sus:cli', providerId: 'acp-plugin:sus:cli', suspended: true as const, availability: { state: 'unavailable' as const } });
 
     const collected = await collectMenubarInputs({
       nowMs: NOW,
       listProviders: async () => [],
-      listPluginEngines: () => [dsh, gemini, silent, suspended],
+      listPluginEngines: () => [dsh, gemini, silent, suspended, unreadable],
+      warmPluginEngineDefaultPlan: warmPlan,
+      readCachedPluginEngineDefaultPlan: (key) => key === dsh.key ? 'Google AI Ultra' : null,
       readPluginEngineUsage: async (key) => {
         if (key === 'dsh:dsh') {
           return {
             updatedAt: NOW - 10_000,
             windows: [
-              { label: 'Weekly', remainingPercent: 72, resetsAt: NOW + 86_400_000 },
+              { label: 'Weekly', remainingPercent: 72, resetsAt: NOW + 86_400_000, windowMinutes: 10_080 },
+              { label: 'Other', remainingPercent: 60 },
               { label: 'Expired', remainingPercent: 0, resetsAt: NOW - 1 },
             ],
             balances: [{ currency: 'CNY', amount: '18.50' }],
@@ -908,18 +966,24 @@ describe('plugin engine quota collection', () => {
       kind: 'subscription',
       family: 'plugin',
       brand: 'DeepSeek Harness',
+      plan: 'Google AI Ultra',
       consuming: true,
-      windows: [{ kind: 'custom', label: 'Weekly', usedPercent: 28, resetsAtMs: NOW + 86_400_000 }],
+      windows: [
+        { kind: 'custom', label: 'Weekly', usedPercent: 28, resetsAtMs: NOW + 86_400_000, windowMinutes: 10_080 },
+        { kind: 'custom', label: 'Other', usedPercent: 40, windowMinutes: 0 },
+      ],
       balances: [{ currency: 'CNY', amount: 18.5 }],
     });
     expect(gemSource).toMatchObject({
       kind: 'subscription',
       family: 'plugin',
       brand: 'Gemini CLI',
+      plan: null,
       windows: [],
       balances: [{ currency: 'USD', amount: 9.25 }],
     });
     expect(collected.sources.map((s) => s.id)).toEqual([dsh.providerId, gemini.providerId]);
+    expect(warmPlan.mock.calls).toEqual([[dsh.key], [gemini.key]]);
   });
 
   // Unit: quota cards must keep the Antigravity silhouette across installed,
@@ -965,7 +1029,7 @@ describe('plugin engine quota collection', () => {
       'remote:desk-2:acp-plugin:c:eng',
     ]);
 
-    const read = await readRemoteSubscriptions({
+    const readPeer = (plan?: string) => readRemoteSubscriptions({
       nowMs: NOW,
       listDevices: async () => ({
         devices: [{
@@ -985,20 +1049,29 @@ describe('plugin engine quota collection', () => {
           };
         }
         if (channel === 'maker:get-plugin-engine-usage' && args[0] === 'dsh:dsh') {
-          return { ok: true, result: { updatedAt: NOW, windows: [{ label: 'Pro', remainingPercent: 60, resetsAt: NOW + 7200_000 }] } };
+          expect(args[1]).toEqual({ includePlan: true });
+          return { ok: true, result: { updatedAt: NOW, ...(plan === undefined ? {} : { plan }), windows: [{ label: 'Pro', remainingPercent: 60, resetsAt: NOW + 7200_000 }] } };
         }
         return { ok: false, error: { code: 'CHANNEL_NOT_ALLOWED', message: 'unsupported' } };
       },
     } as RemoteSubscriptionDeps);
 
+    const read = await readPeer('Work Pro');
     expect(read.sources).toHaveLength(1);
     expect(read.sources[0]).toMatchObject({
       id: 'remote:desk-2:acp-plugin:dsh:dsh',
       family: 'plugin',
       brand: 'DeepSeek Harness',
+      plan: 'Work Pro',
       device: { id: 'desk-2', name: 'Office Mac' },
       windows: [{ kind: 'custom', label: 'Pro', usedPercent: 40 }],
     });
+
+    // Older hosts omit the plan. A malformed remote plan must likewise leave its valid usage intact.
+    for (const plan of [undefined, 'a'.repeat(65)]) {
+      const fallback = await readPeer(plan);
+      expect(fallback.sources[0]).toEqual({ ...read.sources[0], plan: null });
+    }
 
     // Regression (#12247 review): transient plugin-list failure must retain previously seen remote
     // plugin quota and mark the read incomplete instead of treating the error as an empty list.
