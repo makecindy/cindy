@@ -18,7 +18,9 @@ type UnreadPorts = { [K in keyof AgentDeps]?: undefined };
 /** Ports only the Codex agent reads. */
 export const PORTS_ONLY_CODEX_READS = {
   armCodexHttpRecovery: undefined,
+  getObservedCodexUpstreamCapacity: undefined,
   getRejectedCodexDownshiftModel: undefined,
+  subscribeCodexUpstreamCapacity: undefined,
   createCodexAuthTokenReader: undefined,
   disableCodexPluginRuntime: undefined,
   getCodexServerCompactionPreference: undefined,
@@ -27,6 +29,7 @@ export const PORTS_ONLY_CODEX_READS = {
   getRemoteCodexTransport: undefined,
   isCodexAccountProvider: undefined,
   isolateCodexAccountSessions: undefined,
+  needsCodexFastCatalog: undefined,
   onCodexLocalModelsListed: undefined,
   prepareCodexExtraSpawnConfig: undefined,
   prepareCodexHostToolCatalog: undefined,

@@ -34,6 +34,7 @@ import { applyCompanionRoutines } from './routines.js';
 import { applyProjectAutomations, applyProjectCarryover, applyProjectRules, mergeProjectRules, readProjectValues } from './project.js';
 import { backupTeammateProject, companionProjectIo, teammateStoreMemoryDirs, upgradeArrivedTeammate } from './projectHost.js';
 import { readTeammateMemories, readTeammateMemory, teammateMemoryDirs } from '../maker-ipc/botProjectMemory.js';
+import { assertWorkspaceMoveReady } from '../workspace-migration/service.js';
 import { companionHomes, inactiveCompanionCopyIds } from './homes.js';
 import { createMcpServerNamesReader } from './mcpServerNames.js';
 import { companionHasLocalData } from './localData.js';
@@ -88,6 +89,7 @@ export async function readCompanionValues(botId: string, selfDeviceId: string | 
     .leftJoin(botProfileVersions, and(eq(botProfileVersions.botId, botProfiles.id), eq(botProfileVersions.version, botProfiles.currentVersion)))
     .where(eq(botProfiles.id, botId)).limit(1);
   if (!row) return [];
+  await assertWorkspaceMoveReady(userDataDir, botId);
   // Strict: an unreadable SOUL/USER/prompt file aborts the cycle instead of uploading it as empty.
   const folder = await readBotProfileFolder(userDataDir, botId, { strict: true });
   // Which preset it was made from: every computer can then tell the copies of Cindy apart from a
@@ -133,7 +135,16 @@ export async function readCompanionValues(botId: string, selfDeviceId: string | 
     const isProject = projectMode;
     values.push(...await readProjectValues(botId, { ...companionProjectIo(), projectDir: async () => isProject ? workspace : null }, selfDeviceId));
   }
+  // Readers may return empty on ENOENT. A lost volume during the read must not
+  // turn the snapshot into deletion requests for this companion's cloud data.
+  await assertWorkspaceMoveReady(userDataDir, botId);
   return values;
+}
+
+function skillSourceValue(skill: { slug: string; source: string; enabled: boolean }): CompanionPreferenceValue {
+  return { key: `${COMPANION_SKILL_PREFIX}${skill.slug}`, value: {
+    slug: skill.slug, content: skill.source, ...(skill.enabled ? {} : { enabled: false }),
+  } };
 }
 
 async function readMemoriesAndSkills(values: CompanionPreferenceValue[], userDataDir: string, botId: string, projectMode: boolean): Promise<void> {
@@ -144,9 +155,7 @@ async function readMemoriesAndSkills(values: CompanionPreferenceValue[], userDat
   }
   // Strict too: a skill that cannot be read must not look deleted (the uploader would tombstone it).
   for (const skill of await listBotSkillSourcesForBot(botId)) {
-    values.push({ key: `${COMPANION_SKILL_PREFIX}${skill.slug}`, value: {
-      slug: skill.slug, content: skill.source, ...(skill.enabled ? {} : { enabled: false }),
-    } });
+    values.push(skillSourceValue(skill));
     const files = await listBotSkillFilesForBot(botId, skill.slug, skill.enabled);
     if (files.length) values.push({ key: `${COMPANION_SKILL_FILES_PREFIX}${skill.slug}`, value: null, localFiles: files });
   }
@@ -160,7 +169,7 @@ async function readSkillContent(botId: string, slug: string): Promise<string | n
 type MaterializeLocal = Omit<CompanionMaterializeHost, 'latestRows'>;
 
 function createMaterializer(input: {
-  ensureCanonicalSession: (botId: string) => Promise<string>;
+  ensureCanonicalSession: (botId: string, options?: { allowMissingModel?: boolean }) => Promise<string | { sessionId: string; missingModel?: boolean }>;
   /** False when the task's queue could not be read. */
   discardInvitationWelcome?: (sessionId: string) => Promise<boolean>;
   rebuildContext: (sessionId: string) => Promise<'rebuilt' | 'busy'>;
@@ -210,9 +219,9 @@ function createMaterializer(input: {
     },
     findConflictingCindy,
     // Normal creation path: no invitation, no generated persona, the new home's default model.
-    createProfile: async ({ id, name, description, identitySource, userContextSource, avatar, templateId }, fence) => {
+    createProfile: async ({ id, name, description, identitySource, userContextSource, avatar, templateId, fallbackOnTransient }, fence) => {
       await assertCompanionIdentity({ findConflictingCindy }, id, templateId, fence);
-      const restored = await restoreCloudAvatar(avatar, fence.signal);
+      const restored = await restoreCloudAvatar(avatar, fence.signal, { fallbackOnTransient });
       fence.assertCurrent();
       try {
         await createBotProfile({ id, name: name.slice(0, 200), description, identitySource, userContextSource,
@@ -227,9 +236,9 @@ function createMaterializer(input: {
         throw error;
       }
     },
-    updateProfile: async ({ id, name, description, identitySource, userContextSource, avatar, templateId }, fence) => {
+    updateProfile: async ({ id, name, description, identitySource, userContextSource, avatar, templateId, fallbackOnTransient }, fence) => {
       await assertCompanionIdentity({ findConflictingCindy }, id, templateId, fence);
-      const restored = await restoreCloudAvatar(avatar, fence.signal);
+      const restored = await restoreCloudAvatar(avatar, fence.signal, { fallbackOnTransient });
       fence.assertCurrent();
       try {
         await updateBotProfile({ id, name: name.slice(0, 200), enabled: true,
@@ -323,7 +332,7 @@ function createMaterializer(input: {
     removeSkill: async (botId, slug) => { await deleteBotSkillForBot(botId, slug); },
     readSkillFiles: (botId, slug) => readBotSkillFilesForBot(botId, slug),
     applySkillFiles: (botId, slug, files, fetch, options) => applyBotSkillFilesForBot(botId, slug, files, fetch, options),
-    ensureCanonicalSession: botId => input.ensureCanonicalSession(botId),
+    ensureCanonicalSession: (botId, _fence, options) => input.ensureCanonicalSession(botId, options),
     // Rewound and deleted rows are included (`removed`): removed here means never re-imported.
     localMessageTimes: async (sessionId, fromMs) => (await getDbClient().drizzle
       .select({ role: messages.role, createdAt: messages.createdAt, clientId: messages.clientId, rewindAt: messages.rewindAt }).from(messages)
@@ -429,7 +438,7 @@ async function companionSessionIds(botId: string): Promise<string[]> {
 
 export function createCompanionCloudHost(input: {
   deliverToCanonical: CompanionCloudHost['deliverToCanonical'];
-  ensureCanonicalSession: (botId: string) => Promise<string>;
+  ensureCanonicalSession: (botId: string, options?: { allowMissingModel?: boolean }) => Promise<string | { sessionId: string; missingModel?: boolean }>;
   /** Remove the greeting request an unfinished meeting queued in this task (cloud-companions.md §6); false when its queue is unreadable. */
   discardInvitationWelcome?: (sessionId: string) => Promise<boolean>;
   rebuildContext: (sessionId: string) => Promise<'rebuilt' | 'busy'>;
@@ -467,7 +476,14 @@ export function createCompanionCloudHost(input: {
         `${createHash('sha256').update(`${endpoint}\n${humanActorId}`).digest('hex')}.json`),
       current, log: input.log,
     }),
-    readValues: botId => readCompanionValues(botId, input.selfDeviceId?.() ?? null),
+    readValues: async (botId, scope) => {
+      if (scope !== 'skills') return readCompanionValues(botId, input.selfDeviceId?.() ?? null);
+      const userDataDir = ownerScopedUserDataPath();
+      await assertWorkspaceMoveReady(userDataDir, botId);
+      const skills = await listBotSkillSourcesForBot(botId);
+      await assertWorkspaceMoveReady(userDataDir, botId);
+      return skills.map(skillSourceValue);
+    },
     repairProfileSources: async (botId, fields, values, fence) => {
       fence.assertCurrent();
       const userDataDir = ownerScopedUserDataPath();

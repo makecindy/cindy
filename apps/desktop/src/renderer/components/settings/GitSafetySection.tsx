@@ -38,7 +38,37 @@ export function GitSafetySection() {
   }, [reset, saving, t]);
 
   return (
-    <SettingsSection title={t('settings.gitSafety.title')}>
+    <GitSafetySectionView
+      mode={mode}
+      isCustomized={isCustomized}
+      saving={saving}
+      handleModeChange={handleModeChange}
+      handleReset={handleReset}
+    />
+  );
+}
+
+/** Shared native view. Local and cloud controllers provide the same state/actions. */
+export function GitSafetySectionView({
+  mode,
+  isCustomized,
+  saving,
+  handleModeChange,
+  handleReset,
+  headingStatus,
+}: {
+  mode: GitSafetyMode;
+  isCustomized: boolean;
+  saving: boolean;
+  handleModeChange: (next: GitSafetyMode) => void;
+  handleReset: () => void;
+  /** Cloud settings: a group that could not be read says so here, in place of the heading's action. */
+  headingStatus?: React.ReactNode;
+}) {
+  const { t } = useTranslation();
+
+  return (
+    <SettingsSection title={t('settings.gitSafety.title')} action={headingStatus}>
       <SettingsCard>
         <SettingsRow
           className="cindy-segmented-row"

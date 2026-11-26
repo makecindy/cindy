@@ -9,6 +9,7 @@ import { AcpAgent, type AcpLineTransport, type Logger } from '@cindy/maker-core'
 import { createCheckoutService } from '../worktree/checkout';
 import '../worktree/WorktreeManagerPorts.desktop';
 import { awaitBackgroundCheckout, createWorktree, detectCwd } from '../worktree/WorktreeManager';
+import { createWorkerWorktree } from '../maker-ipc/orcaWorkerProject';
 import { app } from 'electron';
 import type { WorktreeMeta } from '../worktree/types';
 
@@ -359,6 +360,76 @@ it.each(['fresh', 'offline', 'other-source', 'legacy', 'checkout-fails'] as cons
   },
   30_000,
 );
+
+// Orca Workers based on the origin default used to skip the refresh, so whole
+// batches started behind main. Tool calls name it as `origin/main`, which the
+// Desktop-only refresh did not recognize. Minimal failure: the remote advances
+// after the local fetch. Real Git + local bare remote, git-integration tier.
+it('creates an Orca Worker from the freshly fetched origin default', async () => {
+  fixture = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-worker-default-'));
+  vi.spyOn(app, 'getPath').mockReturnValue(fixture);
+  const remote = path.join(fixture, 'remote.git');
+  const seed = path.join(fixture, 'seed');
+  const repo = path.join(fixture, 'repo');
+  await fs.mkdir(seed);
+  const git = async (cwd: string, ...args: string[]) =>
+    (await exec('git', args, { cwd, windowsHide: true, timeout: 10_000 })).stdout.trim();
+  await git(seed, 'init', '--initial-branch=main');
+  await git(seed, 'config', 'user.name', 'Test');
+  await git(seed, 'config', 'user.email', 'test@example.invalid');
+  await fs.writeFile(path.join(seed, 'tracked.txt'), 'old');
+  await git(seed, 'add', '.');
+  await git(seed, 'commit', '-m', 'old');
+  await git(fixture, 'clone', '--bare', seed, remote);
+  await git(fixture, 'clone', remote, repo);
+  const old = await git(repo, 'rev-parse', 'HEAD');
+  await git(repo, 'branch', 'origin/main');
+  await fs.writeFile(path.join(seed, 'tracked.txt'), 'new');
+  await git(seed, 'commit', '-am', 'new');
+  await git(seed, 'push', remote, 'main');
+  const latest = await git(seed, 'rev-parse', 'HEAD');
+
+  // #12391 P1: the Desktop source picker supplies a local short name while
+  // the Orca tool uses the same string as a remote default shorthand.
+  const desktop = await createWorktree(
+    { sessionId: 'desktop-local', baseRepo: repo, name: 'desktop-local', sourceBranch: 'origin/main' },
+    { refreshDefaultSource: true, awaitFullCheckout: true },
+  );
+  expect(desktop.ok, JSON.stringify(desktop)).toBe(true);
+  if (!desktop.ok) return;
+  expect(await git(desktop.meta.path, 'rev-parse', 'HEAD')).toBe(old);
+  expect(desktop.meta.sourceBranch).toBe('refs/heads/origin/main');
+  expect(await git(repo, 'rev-parse', 'refs/remotes/origin/main')).toBe(old);
+
+  // #12391 review: a colliding local branch made the short remote name
+  // ambiguous at checkout. A full local ref must still select the local branch.
+  const localWorker = await createWorkerWorktree('orca-local', repo, 'refs/heads/origin/main');
+  await awaitBackgroundCheckout('orca-local');
+  expect(await git(localWorker, 'rev-parse', 'HEAD')).toBe(old);
+  expect(await git(repo, 'rev-parse', 'refs/remotes/origin/main')).toBe(old);
+
+  const workerDir = await createWorkerWorktree('orca-worker', repo, 'origin/main');
+  await awaitBackgroundCheckout('orca-worker');
+  expect(await git(workerDir, 'rev-parse', 'HEAD')).toBe(latest);
+  expect(await fs.readFile(path.join(workerDir, 'tracked.txt'), 'utf8')).toBe('new');
+  expect(metadata.get('orca-worker')?.sourceBranch).toBe('refs/remotes/origin/main');
+
+  // #12391: once origin's default changes, keep the selected tracking ref
+  // and its local commit. The same-named local branch remains at the old commit.
+  await git(repo, 'update-ref', 'refs/remotes/origin/trunk', latest);
+  await git(repo, 'symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/trunk');
+  await git(seed, 'commit', '--allow-empty', '-m', 'after the default changed');
+  await git(seed, 'push', remote, 'main');
+  const nonDefaultWorker = await createWorkerWorktree('orca-non-default', repo, 'origin/main');
+  await awaitBackgroundCheckout('orca-non-default');
+  expect(await git(nonDefaultWorker, 'rev-parse', 'HEAD')).toBe(latest);
+  expect(metadata.get('orca-non-default')?.sourceBranch).toBe('refs/remotes/origin/main');
+
+  await git(repo, 'update-ref', '-d', 'refs/remotes/origin/main');
+  await expect(createWorkerWorktree('orca-missing-remote', repo, 'origin/main'))
+    .rejects.toThrow('Worker worktree creation failed');
+  expect(metadata.has('orca-missing-remote')).toBe(false);
+}, 30_000);
 
 // #6792: createWorktree must populate the linked worktree's full index after
 // background checkout. Existing checks use ordinary repositories. Reproduce

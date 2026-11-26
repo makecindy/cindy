@@ -24,7 +24,7 @@ vi.mock('react-i18next', () => ({
 vi.mock('@/hooks/useReducedMotion', () => ({ useReducedMotion: () => true }));
 vi.mock('@/lib/toast', () => ({ toast: { success: vi.fn(), error: vi.fn(), info: vi.fn() } }));
 const refreshCatalog = vi.hoisted(() => vi.fn(async () => undefined));
-vi.mock('@/lib/remoteCatalogSnapshot', () => ({ refreshRemoteCatalogSnapshot: refreshCatalog }));
+vi.mock('@/lib/remoteCatalogSnapshot', () => ({ retryProviderShareCatalog: refreshCatalog }));
 const confirmSpy = vi.hoisted(() => vi.fn(async () => true));
 vi.mock('@/components/ui/confirm-dialog-provider', () => ({ useConfirmDialog: () => ({ confirm: confirmSpy }) }));
 const joinSpy = vi.hoisted(() => vi.fn());

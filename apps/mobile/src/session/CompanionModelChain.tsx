@@ -67,7 +67,7 @@ export function CompanionModelChain({ deviceId, values, onChange, onPick, disabl
       const engine = !route.agentDeviceId ? findPluginEngine(pluginEngines.engines, route.providerId) : null;
       title = pluginEngineModelName(engine, route.model)
         ?? (route.model === PLUGIN_ENGINE_DEFAULT_MODEL ? t('models.pluginEngines.defaultModel') : route.model);
-      detail = [engine?.name ?? t('models.pluginEngines.sectionTitle'), remote?.name, effort].filter(Boolean).join(' · ');
+      detail = [engine?.name ?? t('models.pluginEngines.genericName'), remote?.name, effort].filter(Boolean).join(' · ');
     } else {
       const agent = route.harness === 'claude' ? 'claude-code' : route.harness;
       const routeProviders = route.agentDeviceId ? remote?.providers ?? [] : providers;

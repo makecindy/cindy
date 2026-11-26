@@ -5,6 +5,7 @@
 
 import { describe, expect, it, vi } from 'vitest';
 
+import { verifyPiResponsesCompletion } from '../responses-completion.js';
 import { rewriteContextModeDoctorPath } from '../context-mode-doctor-path.js';
 import {
   createPiTranslateContext,
@@ -42,6 +43,26 @@ function makeQueue(): { queue: AsyncQueue<AgentEvent>; events: AgentEvent[] } {
 const ev = (e: Record<string, unknown>): PiRpcEvent => e as unknown as PiRpcEvent;
 
 describe('pi translator', () => {
+  // Unit: the actual projected terminal is the one Desktop observes. Attaching
+  // proof to the earlier, unprojected event lost recovery even on a valid reply.
+  it.each([true, false])('only exposes proof on the usable projected terminal (aborted: %s)', aborted => {
+    const ctx = createPiTranslateContext(noopLogger);
+    const { queue, events } = makeQueue();
+    translatePiEvent(ev({ type: 'agent_start' }), queue, ctx);
+    translatePiEvent(ev({ type: 'message_end', message: {
+      role: 'assistant', model: 'model-a', stopReason: 'stop',
+      content: [{ type: 'text', text: 'Completed reply' }],
+    } }), queue, ctx);
+    if (aborted) markPiHostAbortRequested(ctx);
+    translatePiEvent(ev({ type: 'agent_settled' }), queue, ctx, (id, key) => id === 'a' && key === 'key-a');
+    const done = events.find(event => event.type === 'done')!;
+    expect(done.data).toMatchObject({ status: aborted ? 'cancelled' : 'completed' });
+    expect(verifyPiResponsesCompletion(done, 'a', 'key-a')).toBe(!aborted);
+    expect(verifyPiResponsesCompletion(done, 'b', 'key-a')).toBe(false);
+    expect(verifyPiResponsesCompletion(done, 'a', 'different-key')).toBe(false);
+    disposePiTranslateContext(ctx);
+  });
+
   // #8887: prior retry tests omitted the second native agent_start. Each
   // completed request must be observable before settlement (unit, no I/O).
   it.each(['success', 'exhausted', 'stop'] as const)('accounts before settlement and preserves retry usage (%s)', outcome => {
@@ -852,6 +873,26 @@ describe('pi translator', () => {
     ]);
   });
 
+  // Unit: the SDK's 401 envelope needs to survive translation for group failover.
+  it('preserves the HTTP 401 from the OpenAI SDK error at terminal settlement', () => {
+    const ctx = createPiTranslateContext(noopLogger);
+    const { queue, events } = makeQueue();
+    translatePiEvent(ev({ type: 'agent_start' }), queue, ctx);
+    translatePiEvent(ev({
+      type: 'message_end',
+      message: {
+        role: 'assistant',
+        content: [],
+        stopReason: 'error',
+        errorMessage: 'OpenAI API error (401): {"code":"invalid_api_key"}',
+      },
+    }), queue, ctx);
+    translatePiEvent(ev({ type: 'agent_settled' }), queue, ctx);
+    expect(events.filter(event => event.type === 'error')).toEqual([
+      expect.objectContaining({ source: 'pi', data: expect.objectContaining({ errorStatus: 401, isTerminal: true }) }),
+    ]);
+  });
+
   it('classifies LiteLLM Response API in-stream errors without auto-retry markers', () => {
     const ctx = createPiTranslateContext(noopLogger);
     const { queue, events } = makeQueue();
@@ -1153,7 +1194,10 @@ describe('pi translator', () => {
     });
   });
 
-  it('notifies Pi network auto-retries with the shared Reconnecting progress line', () => {
+  it.each([
+    'The operation timed out.',
+    'Stream ended without finish_reason',
+  ])('notifies Pi network auto-retries with the shared Reconnecting progress line: %s', errorMessage => {
     const ctx = createPiTranslateContext(noopLogger);
     const { queue, events } = makeQueue();
 
@@ -1162,7 +1206,7 @@ describe('pi translator', () => {
         type: 'auto_retry_start',
         attempt: 1,
         maxAttempts: 6,
-        errorMessage: 'The operation timed out.',
+        errorMessage,
       }),
       queue,
       ctx,
@@ -1176,10 +1220,45 @@ describe('pi translator', () => {
           message: 'Reconnecting... 1/6',
           isTerminal: false,
           willRetry: true,
+          sdkError: errorMessage,
         }),
       }),
     ]);
   });
+
+  it.each(['no retry', 'exhausted', 'stopped'] as const)(
+    'settles a Chat Completions stream truncation without inventing retry progress: %s',
+    outcome => {
+      const ctx = createPiTranslateContext(noopLogger);
+      const { queue, events } = makeQueue();
+      const errorMessage = 'Stream ended without finish_reason';
+      translatePiEvent(ev({ type: 'agent_start' }), queue, ctx);
+      translatePiEvent(ev({
+        type: 'message_end',
+        message: { role: 'assistant', stopReason: 'error', content: [], errorMessage },
+      }), queue, ctx);
+      if (outcome === 'stopped') {
+        markPiHostAbortRequested(ctx);
+        translatePiEvent(ev({ type: 'auto_retry_start', attempt: 1, maxAttempts: 6, errorMessage }), queue, ctx);
+      }
+      translatePiEvent(outcome === 'no retry'
+        ? ev({ type: 'agent_settled' })
+        : ev({ type: 'auto_retry_end', success: false, finalError: errorMessage }), queue, ctx);
+
+      const errors = events.filter(event => event.type === 'error').map(event => event.data);
+      expect(errors).toEqual(outcome === 'stopped' ? [] : [expect.objectContaining({
+        message: errorMessage,
+        sdkError: errorMessage,
+        isTerminal: true,
+        usage: expect.any(Object),
+      })]);
+      expect(events.filter(event => event.type === 'done')).toEqual([
+        expect.objectContaining({ data: expect.objectContaining({
+          status: outcome === 'stopped' ? 'cancelled' : 'failed',
+        }) }),
+      ]);
+    },
+  );
 
   it('keeps unclassified Pi auto-retries silent instead of reusing the overload marker', () => {
     const ctx = createPiTranslateContext(noopLogger);
@@ -3204,4 +3283,37 @@ describe('#10651 DSML output', () => {
       expect(events.filter(e => e.type === 'text').map(e => (e.data as { text: string }).text).join('')).not.toContain('DSML');
     } finally { disposePiTranslateContext(ctx); }
   });
+
+  // 测试价值：依据供应商安全拦截保留决定、不触发 silentStop 自动续跑或限流标记的契约；此前 Pi assistant 以 stopReason='refusal'/'content_filter'
+  // 零正文结束时会落入 silentStop:true 自动补发继续，errorMessage 安全拦截也缺少稳定 reason；生产入口 translatePiEvent；
+  // 最小失败输入为 stopReason='refusal'/'content_filter' 空正文与安全拦截 errorMessage；tier: unit。
+  it.each(['refusal', 'content_filter'] as const)(
+    'settles an empty %s stopReason as provider-safety-refusal instead of silentStop',
+    (stopReason) => {
+      const ctx = createPiTranslateContext(noopLogger);
+      const { queue, events } = makeQueue();
+      try {
+        translatePiEvent(ev({ type: 'agent_start' }), queue, ctx);
+        translatePiEvent(ev({ type: 'message_start', message: { role: 'assistant' } }), queue, ctx);
+        translatePiEvent(
+          ev({
+            type: 'message_end',
+            message: { role: 'assistant', stopReason, content: [], usage: { input: 20, output: 0 } },
+          }),
+          queue,
+          ctx,
+        );
+        translatePiEvent(ev({ type: 'agent_settled' }), queue, ctx);
+        expect(events.find((e) => e.type === 'error')?.data).toMatchObject({
+          isTerminal: true,
+          reason: 'provider-safety-refusal',
+        });
+        const done = events.find((e) => e.type === 'done')?.data as Record<string, unknown>;
+        expect(done.status).toBe('failed');
+        expect(done.silentStop).toBeUndefined();
+      } finally {
+        disposePiTranslateContext(ctx);
+      }
+    },
+  );
 });

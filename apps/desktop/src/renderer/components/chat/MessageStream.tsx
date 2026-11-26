@@ -8,7 +8,7 @@ import { scrollRangeIntoView } from '@/lib/scrollRangeIntoView';
 import { historyAfter } from './historyAfter';
 import { readGhostCardSupersededBy, readMailCard } from '@cindy/maker-shared/ghost-card-form';
 import { animateFocusScroll } from './animateFocusScroll';
-import { botProcessItems, botTurnContinuations, botUnreadBoundaryItemKey, latestSettledAssistantMs, tailReplyClientIds } from '@/features/bots/botConversationPresentation';
+import { botProcessItems, botTimeGroupRows, botTurnContinuations, botUnreadBoundaryItemKey, latestSettledAssistantMs, tailReplyClientIds } from '@/features/bots/botConversationPresentation';
 import { isVisibleVoiceCallMessage } from '@/features/bots/voice/voiceCallPresentation';
 import { MessageViewport, type MessageViewportApi } from './MessageViewport';
 import { PAGE_TEXT_NAVIGATION_EVENT } from '@/lib/pageTextAccess';
@@ -337,7 +337,7 @@ function hasNestedScrollableAncestorThatCanScrollDown(
 }
 
 import { UserMessage } from './UserMessage';
-import { AssistantMessage } from './AssistantMessage';
+import { AssistantMessage, assistantDisplayContent } from './AssistantMessage';
 import { MessageSourceLabels } from './MessageSourceLabels';
 import { attachBotStartedTasks, BotStartedTasks, collectBotStartedTasks } from './BotStartedTasks';
 import { BotMessageTimelineHeader } from './BotMessageTimelineHeader';
@@ -378,8 +378,16 @@ import {
   collectGhostCardGalleryImages,
   createGhostCardSpawnIndex,
 } from '@/cindy-brain/ghostCardGallery';
-import { ChatImageView } from './ChatImageView';
-import { galleryImagePreviewItem, ImageGalleryContext, type GalleryImage } from './ImageGalleryContext';
+import { ChatImageView, opensModelViewer } from './ChatImageView';
+import {
+  galleryImagePreviewItem,
+  ImageGalleryContext,
+  ImageGalleryScopeContext,
+  repeatIndexes,
+  structuredImageOccurrence,
+  type GalleryImage,
+} from './ImageGalleryContext';
+import { replyGalleryImages, type ReplyGalleryOptions, type ReplyImageCache } from './replyGalleryImages';
 import { GhostFulfillmentContext, type GhostCallSummary } from './GhostSummonCard';
 import { ChatSessionFileProvider, useChatSessionFileValue } from './ChatSessionFileContext';
 import { toRemoteMediaOrigin } from '@/lib/sessionFileOrigin';
@@ -462,6 +470,8 @@ interface MessageStreamProps {
   onAskInSideChat?: (quote: string) => Promise<boolean>;
   /** Active session id — used to reset scroll state on session switch. */
   sessionId?: string;
+  /** Optional draft key when the session composer is still using its preview draft. */
+  quoteDraftKey?: string;
   /** Active session title, forwarded to handoff cards for return navigation. */
   sessionTitle?: string | null;
   /** Owning agent kind — propagated to UserMessage so capability gates
@@ -1089,7 +1099,7 @@ export function restoreClientIdForItem(item: RenderItem): string | undefined {
   if (item.type === 'agent_plan') return item.sourceClientIds[0];
   if (item.type === 'turn_changes') return item.changeSet.anchorClientId ?? undefined;
   if (item.type === 'ghost_card') return item.toolCall.clientId;
-  if (item.type === 'work_group')
+  if (item.type === 'work_group' && !item.teammateJournal)
     return restoreClientIdFromKey(item.key) ?? collectDeleteAnchorClientIds([item])[0];
   return collectDeleteAnchorClientIds([item])[0] ?? restoreClientIdFromKey(item.key);
 }
@@ -1107,15 +1117,14 @@ function recoverLostAnchorIdx(items: RenderItem[], lostKey: string): number {
   const dashIdx = lostKey.indexOf('-');
   if (dashIdx < 0) return -1;
   // Completed groups have a compound prefix; the message id can itself contain dashes.
-  const lostCid = lostKey.startsWith('work-summary-')
-    ? lostKey.slice('work-summary-'.length)
-    : lostKey.slice(dashIdx + 1);
+  const groupPrefix = ['work-summary-', 'work-journal-'].find((prefix) => lostKey.startsWith(prefix));
+  const lostCid = lostKey.slice(groupPrefix?.length ?? dashIdx + 1);
   if (!lostCid) return -1;
 
   for (let i = 0; i < items.length; i++) {
     const it = items[i];
     if (it.type === 'message') {
-      if (it.message.clientId === lostCid) return i;
+      if (renderItemContainsClientId(it, lostCid)) return i;
     } else if (it.type === 'tool_segment') {
       // segment 合并后,老的 toolCall 仍是新段内某条 toolCall
       if (it.toolCalls.some((tc) => tc.clientId === lostCid)) return i;
@@ -1199,16 +1208,23 @@ export function isVisibleDeleteCompensationElement(
  * 渲染顺序下所有可定位 clientId：message、tool_segment、agent_task、嵌套 work_group。
  * 删除补偿与 focus 落点都走这条序列，避免子消息删除时跳过中间的工具行。
  */
-export function collectDeleteAnchorClientIds(items: readonly RenderItem[]): string[] {
+export function collectDeleteAnchorClientIds(
+  items: readonly RenderItem[],
+  includeCollapsed = false,
+): string[] {
   const ids: string[] = [];
   for (const item of items) {
-    if (item.type === 'message') ids.push(item.message.clientId);
-    else if (item.type === 'tool_segment') {
+    if (item.type === 'message') {
+      if (includeCollapsed && item.collapsedClientIds) {
+        for (const id of item.collapsedClientIds) ids.push(id);
+      }
+      ids.push(item.message.clientId);
+    } else if (item.type === 'tool_segment') {
       for (const toolCall of item.toolCalls) ids.push(toolCall.clientId);
     } else if (item.type === 'agent_task' && item.toolCall) {
       ids.push(item.toolCall.clientId);
     } else if (item.type === 'work_group') {
-      ids.push(...collectDeleteAnchorClientIds(item.children));
+      ids.push(...collectDeleteAnchorClientIds(item.children, includeCollapsed));
     }
   }
   return ids;
@@ -1222,10 +1238,45 @@ export function collectDeleteAnchorClientIds(items: readonly RenderItem[]): stri
  */
 export function renderWindowFloorClientId(items: readonly RenderItem[]): string | undefined {
   for (let index = 0; index < items.length; index += 1) {
-    const anchors = collectDeleteAnchorClientIds([items[index]]);
+    const anchors = collectDeleteAnchorClientIds([items[index]], true);
     if (anchors.length > 0) return anchors[0];
   }
   return undefined;
+}
+
+/** Locate the visible representative without treating ordinary hidden children as duplicates. */
+function collapsedMessageRepresentative(item: RenderItem, clientId?: string): string | undefined {
+  if (item.type === 'message' && item.collapsedClientIds?.length
+    && (clientId === undefined || item.collapsedClientIds.includes(clientId))) {
+    return item.message.clientId;
+  }
+  if (item.type === 'work_group') {
+    for (const child of item.children) {
+      const representative = collapsedMessageRepresentative(child, clientId);
+      if (representative !== undefined) return representative;
+    }
+  }
+  return undefined;
+}
+
+export function resolveViewportRestoreMessage(
+  item: RenderItem,
+  snapshot: ViewportTopSnapshot,
+  itemHeight: number,
+) {
+  const representative = snapshot.messageClientId
+    ? collapsedMessageRepresentative(item, snapshot.messageClientId)
+    : undefined;
+  const oldOffsetOutOfBounds = itemHeight > 0 && snapshot.offset >= itemHeight
+    && collapsedMessageRepresentative(item) !== undefined;
+  return {
+    clientId: representative ?? snapshot.messageClientId,
+    // A replacement card may be shorter than the old card's expanded details.
+    messageOffset: representative !== undefined ? 0 : (snapshot.messageOffset ?? 0),
+    // A saved offset into the old journal can point below its replacement,
+    // including snapshots taken between cards without an exact child anchor.
+    itemOffset: representative !== undefined || oldOffsetOutOfBounds ? 0 : snapshot.offset,
+  };
 }
 
 function queryMessageElement(root: ParentNode, clientId: string): HTMLElement | null {
@@ -1389,9 +1440,8 @@ export function resolveRestoredRenderWindow(snapshot: SessionScrollSnapshot | un
  *   - 用户上传图 → user message 的 images(url 或 data:base64,与 UserMessage 同款拼法)
  *   - 插件生成图 → ghost card 及其衍生卡中会打开 ImageLightbox 的图片
  *
- * 不收正文 Markdown 内嵌图:用正则扫文本会误抓代码块里当作文本展示的 ![]() 语法,
- * 虚增计数 / 让翻页跳到无效图(codex review);要准确得复刻 MarkdownRenderer 的
- * AST 渲染规则,成本高且易漂移。Markdown 内嵌图点开仍是单图预览,不进会话画廊。
+ * 回复正文里的 Markdown / 组件图由 `collectReplyGalleryImages` 另行收集(与
+ * MarkdownRenderer 同一套 AST 解析,不用正则扫文本,代码块里的 ![]() 不计入)。
  * 顺序与 DOM 渲染一致(用户消息里上传图在正文之前),便于 lightbox 做位置映射。
  */
 export function collectSessionImageSrcs(
@@ -1411,7 +1461,7 @@ export function collectSessionImageSrcs(
       continue;
     } else if (item.type === 'tool_media') {
       for (const m of item.items) {
-        if (m.kind === 'image' && m.url) push(m.url);
+        if (m.kind === 'image' && m.url && !opensModelViewer(m.modelFile)) push(m.url);
       }
     } else if (item.type === 'ghost_card') {
       if (ghostCards) {
@@ -1426,7 +1476,7 @@ export function collectSessionImageSrcs(
       }
       // 回锚媒体渲染在卡片及其衍生卡之后，画廊顺序必须与 DOM 一致。
       for (const media of item.media ?? []) {
-        if (media.kind === 'image' && media.url) push(media.url);
+        if (media.kind === 'image' && media.url && !opensModelViewer(media.modelFile)) push(media.url);
       }
     } else if (item.type === 'message') {
       const msg = item.message;
@@ -1443,9 +1493,12 @@ export function collectSessionImageSrcs(
                     annotationStrokes: img.annotationStrokes,
                   }
                 : undefined;
-            push(img.url, meta);
+            push(img.url, img.originalName ? { ...meta, name: img.originalName } : meta);
           } else {
-            push(`data:${img.mimeType};base64,${img.base64}`);
+            push(
+              `data:${img.mimeType};base64,${img.base64}`,
+              img.originalName ? { name: img.originalName } : undefined,
+            );
           }
         }
       } else if (msg.role === 'assistant' && ghostCards) {
@@ -1462,6 +1515,79 @@ export function collectSessionImageSrcs(
     }
   }
   return out;
+}
+
+/**
+ * Images embedded in completed assistant replies of one render item, including
+ * replies folded into a finished work timeline. A reply still streaming joins
+ * once it completes; an open viewer keeps the list it opened with. A reply that
+ * a plugin card replaced is hidden, so only the card's images count.
+ */
+export function collectReplyGalleryImages(
+  item: RenderItem | WorkGroupChildItem,
+  scope: string,
+  options: ReplyGalleryOptions,
+  ghostCards?: GhostCardSnapshot,
+): GalleryImage[] {
+  if (item.type === 'work_group')
+    return item.children.flatMap((child) => collectReplyGalleryImages(child, scope, options, ghostCards));
+  if (item.type !== 'message') return [];
+  const message = item.message;
+  if (message.role !== 'assistant' || message.isStreaming || message.systemCardType) return [];
+  if (ghostCards?.byCallId.get(message.clientId)?.status === 'ready') return [];
+  const content = message.content;
+  if (!content.includes('![') && !/<img/i.test(content) && !content.includes('cindy-ui')) return [];
+  // Only what the reply shows: the same text AssistantMessage renders, so stripped
+  // blocks add no images and section offsets match the renderer.
+  return replyGalleryImages(
+    assistantDisplayContent(content, message.botStarterOptions),
+    message.clientId,
+    scope,
+    options,
+  );
+}
+
+/**
+ * The task image gallery: every image in the loaded history, across turns, in
+ * render order. Each entry records the render item showing it, so a URL shown
+ * twice opens where it was clicked. `structuredImages` lists one item's uploads,
+ * tool media and plugin-card images (collectSessionImageSrcs).
+ */
+export function collectTaskImageGallery(
+  items: readonly RenderItem[],
+  structuredImages: (item: RenderItem | WorkGroupChildItem) => readonly GalleryImage[],
+  replyOptions: ReplyGalleryOptions,
+  ghostCards?: GhostCardSnapshot,
+): GalleryImage[] {
+  const gallery: GalleryImage[] = [];
+  for (const item of items) {
+    // A finished work timeline renders its children in order (replies and the
+    // cards replacing them), so the row lists them in that order too.
+    const row: GalleryImage[] = [];
+    const visit = (node: RenderItem | WorkGroupChildItem) => {
+      if (node.type === 'work_group') {
+        for (const child of node.children) visit(child);
+        return;
+      }
+      row.push(...structuredImages(node));
+      row.push(...collectReplyGalleryImages(node, item.key, replyOptions, ghostCards));
+    };
+    visit(item);
+    // Uploads and tool media: repeats of one address in a row are told apart by
+    // order, as their renderers count them (reply images carry their own
+    // occurrence; plugin-card images carry galleryId).
+    const structured = row.filter((image) => !image.galleryId && image.target === undefined);
+    const repeats = repeatIndexes(structured.map((image) => image.src));
+    for (const image of row) {
+      const at = structured.indexOf(image);
+      gallery.push({
+        ...image,
+        scope: item.key,
+        ...(at >= 0 ? { occurrence: structuredImageOccurrence(repeats[at]!) } : {}),
+      });
+    }
+  }
+  return gallery;
 }
 
 // Workflow 工具(Claude Code SDK 多 agent 编排)在父会话事件流里 = 单个 local_workflow
@@ -2763,12 +2889,14 @@ export function reuseGeneratedFilesRenderItems(
 
 /** 工作组容器回退锚点：与删除补偿同一条 clientId 序列。 */
 function collectWorkGroupClientIds(children: readonly RenderItem[]): string[] {
-  return collectDeleteAnchorClientIds(children);
+  return collectDeleteAnchorClientIds(children, true);
 }
 
 export function renderItemContainsClientId(item: RenderItem, clientId: string): boolean {
   if (item.type === 'fork_origin') return false;
-  if (item.type === 'message') return item.message.clientId === clientId;
+  if (item.type === 'message') {
+    return item.message.clientId === clientId || item.collapsedClientIds?.includes(clientId) === true;
+  }
   if (item.type === 'tool_segment')
     return item.toolCalls.some((toolCall) => toolCall.clientId === clientId);
   if (item.type === 'agent_task') return item.toolCall?.clientId === clientId;
@@ -2822,8 +2950,14 @@ function renderItemKeyForClientId(items: readonly RenderItem[], clientId: string
  * 'tool_media' item(工具段外的产物流)与 'ghost_card' item 的回锚媒体
  * (卡正下方)。加新 kind 只需改 extractToolResultMedia + 这里加分支。
  */
-function ToolMediaList({ items, sessionId }: { items: ToolMediaItem[]; sessionId?: string }) {
+export function ToolMediaList({ items, sessionId }: { items: ToolMediaItem[]; sessionId?: string }) {
   const mediaKeyCounts = new Map<string, number>();
+  // Repeats are counted over the images that enter the task gallery only (as
+  // collectSessionImageSrcs lists them), so 3D model posters don't shift the count.
+  const galleryItems = items.filter(
+    (m) => m.kind === 'image' && m.url && !opensModelViewer(m.modelFile),
+  );
+  const galleryRepeats = repeatIndexes(galleryItems.map((m) => m.url));
   return (
     <>
       {items.map((m, i) => {
@@ -2833,6 +2967,7 @@ function ToolMediaList({ items, sessionId }: { items: ToolMediaItem[]; sessionId
         const mediaKey =
           mediaKeyOccurrence === 0 ? mediaKeyBase : `${mediaKeyBase}-${mediaKeyOccurrence}`;
         if (m.kind === 'image') {
+          const galleryAt = galleryItems.indexOf(m);
           return (
             <div key={mediaKey} className="flex flex-col gap-1.5">
               <ChatImageView
@@ -2841,6 +2976,10 @@ function ToolMediaList({ items, sessionId }: { items: ToolMediaItem[]; sessionId
                 variant="tool-output"
                 modelFile={m.modelFile}
                 sessionId={sessionId}
+                // Same count the task gallery uses for this row's media (repeatIndexes).
+                galleryOccurrence={
+                  galleryAt >= 0 ? structuredImageOccurrence(galleryRepeats[galleryAt]!) : undefined
+                }
               />
             </div>
           );
@@ -3024,6 +3163,7 @@ export const WorkGroupRenderItemView = memo(function WorkGroupRenderItemView({
   compact,
   companionAvatar,
   startsUnread = false,
+  groupTimestamp,
 }: {
   item: Extract<RenderItem, { type: 'work_group' }>;
   context: WorkGroupRenderContext;
@@ -3031,6 +3171,7 @@ export const WorkGroupRenderItemView = memo(function WorkGroupRenderItemView({
   /** 伙伴聊天：同一轮开头显示头像，后续行仅保留正文列缩进。 */
   companionAvatar?: ReactNode;
   startsUnread?: boolean;
+  groupTimestamp?: number;
 }) {
   // 完成态外层时间线可包含内层 work_group。递归只负责形状映射,
   // 具体折叠 / 直接详情逻辑全部复用 WorkGroupBlock。
@@ -3097,7 +3238,9 @@ export const WorkGroupRenderItemView = memo(function WorkGroupRenderItemView({
       className="scroll-mt-20"
       data-message-client-ids={collectWorkGroupClientIds(item.children).join(' ')}
     >
-      {startsUnread ? <BotMessageTimelineHeader startsUnread /> : null}
+      {startsUnread || groupTimestamp !== undefined ? (
+        <BotMessageTimelineHeader startsUnread={startsUnread} groupTimestamp={groupTimestamp} />
+      ) : null}
       {companionAvatar ? withAssistantAvatar(companionAvatar, block) : block}
     </div>
   );
@@ -3111,6 +3254,7 @@ export function MessageStream({
   onAskInSideChat,
   historyVisibleAfter,
   sessionId,
+  quoteDraftKey,
   sessionTitle,
   agentKind,
   remoteHostId,
@@ -3662,6 +3806,10 @@ export function MessageStream({
   // Resolve the owner inside the stable render window, not the viewport-mounted
   // subset. A cropped process falls back to its reply instead of losing NEW;
   // scrolling within the same window must not move the boundary.
+  const botTimeGroupsByRow = useMemo(
+    () => botTimeGroupRows(visibleRenderItems, botMessageTimeGroups, botContinuationKeys),
+    [visibleRenderItems, botMessageTimeGroups, botContinuationKeys],
+  );
   const botUnreadBoundaryKey = useMemo(
     () => botUnreadBoundaryItemKey(visibleRenderItems, botUnreadBoundaryClientId, botContinuationKeys),
     [visibleRenderItems, botUnreadBoundaryClientId, botContinuationKeys],
@@ -4255,6 +4403,45 @@ export function MessageStream({
     [renderMetadataItems, galleryMediaOrigin, ghostCardSnapshot, isSessionStreaming],
   );
 
+  // Task image gallery: every image in the loaded history, across turns, in render
+  // order. Reply images use the renderer's own parse and address derivation; the
+  // per-message cache keeps rebuilds to messages whose content changed.
+  const replyGalleryTargetCacheRef = useRef<ReplyImageCache>(new Map());
+  const sessionImageGallery = useMemo(() => {
+    // Desktop tasks only: companion chats keep each message's own collection
+    // (docs/product-rules/attachment-preview.md).
+    if (simplifiedBotConversation) return null;
+    const localConfirmed = sessionFileValue.localConfirmed === true;
+    const replyOptions: ReplyGalleryOptions = {
+      cache: replyGalleryTargetCacheRef.current,
+      workingDir,
+      allowPrivilegedLinks: true,
+      remoteMediaOrigin: sessionId ? galleryMediaOrigin : undefined,
+      ownershipPending: Boolean(sessionId) && !localConfirmed,
+      resolveInWorkspace: Boolean(sessionId) && localConfirmed,
+    };
+    // Rows reuse their memoized list; children of a work timeline are listed here.
+    const rows = new Set<RenderItem | WorkGroupChildItem>(renderMetadataItems);
+    return collectTaskImageGallery(
+      renderMetadataItems,
+      (node) =>
+        (rows.has(node) ? messageImageCollections.get(node.key) : undefined) ??
+        collectSessionImageSrcs([node as RenderItem], galleryMediaOrigin, ghostCardSnapshot, isSessionStreaming),
+      replyOptions,
+      ghostCardSnapshot,
+    );
+  }, [
+    renderMetadataItems,
+    messageImageCollections,
+    isSessionStreaming,
+    sessionFileValue,
+    galleryMediaOrigin,
+    workingDir,
+    sessionId,
+    ghostCardSnapshot,
+    simplifiedBotConversation,
+  ]);
+
   const messageAttachmentCollections = useMemo(
     () =>
       new Map(
@@ -4433,14 +4620,16 @@ export function MessageStream({
     if (!snap || !container || !items) return false;
     const idx = findRestorableViewportItemIdx(visibleRenderItemsRef.current, snap.viewportTopKey);
     if (idx < 0) return false; // 锚点 item 不在当前窗口(消息被删 / clear)→ 放弃还原,停在默认位置
-    const child = findRenderItemElement(items, visibleRenderItemsRef.current[idx]?.key);
+    const item = visibleRenderItemsRef.current[idx];
+    if (!item) return false;
+    const child = findRenderItemElement(items, item.key);
     if (!child) return false;
-    const messageTarget = snap.messageClientId
-      ? queryMessageElement(container, snap.messageClientId)
-      : null;
+    const childRect = child.getBoundingClientRect();
+    const { clientId, itemOffset, messageOffset } = resolveViewportRestoreMessage(item, snap, childRect.height);
+    const messageTarget = clientId ? queryMessageElement(container, clientId) : null;
     const useMessageTarget = messageTarget && messageTarget.getBoundingClientRect().height > 0;
     const target = useMessageTarget ? messageTarget : child;
-    const offset = useMessageTarget ? (snap.messageOffset ?? 0) : snap.offset;
+    const offset = useMessageTarget ? messageOffset : itemOffset;
     const desiredScrollTop =
       container.scrollTop +
       viewportAnchorCorrection(
@@ -4472,8 +4661,8 @@ export function MessageStream({
     // A work group can remount collapsed or settle internally after its outer
     // row was positioned. Prefer the same visible child when it still exists.
     if (
-      snap.messageClientId &&
-      scrollMessageToViewportTop(snap.messageClientId, snap.messageOffset ?? 0)
+      clientId &&
+      scrollMessageToViewportTop(clientId, messageOffset)
     ) {
       restoreLoadRef.current = 'settled';
       refreshViewportAnchor();
@@ -4481,9 +4670,8 @@ export function MessageStream({
       return true;
     }
     const cTop = container.getBoundingClientRect().top;
-    const rect = child.getBoundingClientRect();
-    // 期望 child 顶端落在 (容器顶边 - offset) 处;向下滚 delta 会让 rect.top 上移 delta。
-    const delta = rect.top - (cTop - snap.offset);
+    // 期望 child 顶端落在 (容器顶边 - offset) 处;向下滚 delta 会让 childRect.top 上移 delta。
+    const delta = childRect.top - (cTop - itemOffset);
     if (Math.abs(delta) < 1) {
       restoreLoadRef.current = 'settled';
       refreshViewportAnchor();
@@ -6688,7 +6876,7 @@ export function MessageStream({
             {/* chat-text-quote:选中消息文字 → 浮出"添加到对话"按钮(portal 到 body)。
           绑定本流的滚动容器:协同模式多流并存时,选区归属按各自容器判定。 */}
             {sessionId ? (
-              <SelectionQuoteButton sessionId={sessionId} containerRef={scrollRef} onAskInSideChat={onAskInSideChat} />
+              <SelectionQuoteButton sessionId={sessionId} draftKey={quoteDraftKey} containerRef={scrollRef} onAskInSideChat={onAskInSideChat} />
             ) : null}
             {/*
         原生滚动容器:overflow-y-auto + overflow-x-hidden。
@@ -6703,7 +6891,7 @@ export function MessageStream({
               ref={scrollRef}
               data-scroll-container=""
               onCopy={copyChatSelection}
-              className="h-full w-full overflow-y-auto overflow-x-hidden [scrollbar-gutter:stable]"
+              className="h-full w-full overflow-y-auto overflow-x-hidden [scrollbar-gutter:stable_both-edges]"
               onScroll={handleScroll}
               onPointerDownCapture={() => refreshViewportAnchor()}
               onKeyDownCapture={() => refreshViewportAnchor()}
@@ -6763,9 +6951,8 @@ export function MessageStream({
                           key={item.key}
                           value={messageAttachmentCollections.get(item.key) ?? null}
                         >
-                          <ImageGalleryContext.Provider
-                            value={messageImageCollections.get(item.key) ?? null}
-                          >
+                          <ImageGalleryContext.Provider value={sessionImageGallery}>
+                          <ImageGalleryScopeContext.Provider value={item.key}>
                             {(() => {
                     if (!messageViewport.shouldMount(viewportEntries[itemIndex])) {
                       return (
@@ -6891,6 +7078,7 @@ export function MessageStream({
                           item={item}
                           context={workGroupRenderContext}
                           startsUnread={botUnreadBoundaryKey === item.key}
+                          groupTimestamp={botTimeGroupsByRow.get(item.key)}
                           // 伙伴聊天与普通任务同一套工作过程：运行中露最近 5 条活动与计时，
                           // 组头按内容宽；最终答复后保留折叠过程，按需展开。
                           compact={false}
@@ -7040,7 +7228,7 @@ export function MessageStream({
                       const groupTimestamp =
                         msg.systemCardType === 'voice-call'
                           ? undefined
-                          : botMessageTimeGroups.get(msg.clientId);
+                          : botTimeGroupsByRow.get(item.key);
                       const startsUnread = botUnreadBoundaryKey === item.key;
                       return (
                         <div
@@ -7056,7 +7244,8 @@ export function MessageStream({
                             {shareable && shareSelectionActive ? (
                               <ShareMessageCheckbox clientId={msg.clientId} />
                             ) : null}
-                            {msg.role === 'assistant' && msg.systemCardType === 'mcp-app'
+                            {((msg.role === 'assistant' && msg.systemCardType === 'mcp-app') ||
+                              (msg.role === 'user' && !msg.systemCardType && msg.hookSource))
                               ? withAssistantAvatar(botReplyColumnSpacer, messageNode)
                               : messageNode}
                           </div>
@@ -7083,6 +7272,7 @@ export function MessageStream({
                       </div>
                     );
                   })()}
+                          </ImageGalleryScopeContext.Provider>
                           </ImageGalleryContext.Provider>
                         </AttachmentCollectionContext.Provider>
                       ))}
@@ -7127,6 +7317,7 @@ export function MessageStream({
                 bottomOffset={resolvedBottomPadding}
                 onJump={handleNavRailJump}
                 onNavCoverageChange={setNavRailCoversNav}
+                sessionId={sessionId}
                 resetKey={sessionId}
               />
             )}

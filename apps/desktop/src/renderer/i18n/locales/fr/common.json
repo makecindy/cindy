@@ -1381,6 +1381,7 @@
     "openPermissionInNewWindow": "Ouvrir dans une autre fenêtre"
   },
   "ipcError": {
+    "DEVICE_LINK_STANDBY": "Une autre instance de Cindy sur cet ordinateur utilise la connexion à distance. Fermez-la et cette instance prendra automatiquement le relais.",
     "SUBSCRIPTION_CLAUDE_IDENTITY_UNKNOWN": "$t(subscriptionAccounts.loginIdentityUnknown)",
     "SUBSCRIPTION_CLAUDE_ACCOUNT_MISMATCH": "$t(subscriptionAccounts.loginIdentityMismatch)",
     "SSH_HARNESS_SWITCH_UNSUPPORTED": "Cette tâche SSH ne peut pas changer de Harness. Choisissez un modèle dans son Harness actuel, ou créez une nouvelle tâche SSH avec le Harness souhaité.",
@@ -1446,6 +1447,9 @@
     "ENDPOINT_NOT_FOUND": "Endpoint introuvable (404). Vérifiez l'URL de base",
     "CONTEXT_TOO_LONG": "Le contexte dépasse la longueur maximale du modèle",
     "WIRE_INCOMPATIBLE": "L'endpoint n'est pas entièrement compatible avec ce protocole (champs de requête non reconnus)",
+    "INVALID_PROBE_RESPONSE": "Le service du modèle a renvoyé une réponse vide ou invalide",
+    "PROBE_NO_OUTPUT": "Le test de connexion n’a pas pu confirmer que le modèle avait généré du contenu",
+    "PROBE_REFUSED": "Le service du modèle a refusé ou bloqué la requête de test",
     "UPSTREAM_ERROR": "Erreur du serveur en amont (5xx). Réessayez plus tard",
     "UPSTREAM_UNREACHABLE": "Impossible de joindre l'endpoint. Vérifiez votre réseau et l'URL de base",
     "TIMEOUT": "Délai de connexion dépassé. Vérifiez votre réseau et l'URL de base",
@@ -2256,6 +2260,13 @@
       }
     },
     "appearance": {
+      "chatLayout": {
+        "label": "Disposition du chat",
+        "standard": "Standard",
+        "wide": "Large",
+        "width": "Largeur du contenu",
+        "hint": "Proportion de l’espace entre les marges du chat. Les volets étroits s’ajustent automatiquement."
+      },
       "title": "Apparence",
       "modeLabel": "Mode d'apparence",
       "appIcon": {
@@ -2501,6 +2512,10 @@
       }
     },
     "windowBehavior": {
+      "trayCard": {
+        "label": "Carte de la zone de notification",
+        "hint": "Survolez l’icône Cindy dans la zone de notification pour voir le quota restant et les tâches non lues."
+      },
       "menubar": {
         "label": "Afficher la consommation restante dans la barre des menus",
         "hint": "Ajoute une icône Cindy à la barre des menus de macOS. Cliquez dessus pour voir ce qu'il reste sur vos abonnements, votre solde Cindy et la consommation du jour."
@@ -2749,6 +2764,60 @@
         }
       }
     },
+    "contactChange": {
+      "phone": {
+        "rowTitle": "Numéro de téléphone de connexion",
+        "rowHint": "Sert à vous connecter et à recevoir les codes de vérification",
+        "change": "Changer de numéro",
+        "verifyTitle": "Vérifier le numéro actuel",
+        "introDescription": "Pour protéger votre compte, vérifiez d'abord votre numéro de téléphone actuel.",
+        "newTitle": "Saisir le nouveau numéro",
+        "newDescription": "Après la modification, connectez-vous avec le nouveau numéro. L'ancien numéro ne permettra plus de vous connecter à ce compte.",
+        "inputLabel": "Nouveau numéro de téléphone",
+        "placeholder": "Saisissez votre numéro de téléphone",
+        "success": "Numéro de téléphone remplacé par {{target}}"
+      },
+      "email": {
+        "rowTitle": "Adresse e-mail de connexion",
+        "rowHint": "Sert à vous connecter et à recevoir les codes de vérification",
+        "change": "Changer d'adresse e-mail",
+        "verifyTitle": "Vérifier l'adresse e-mail actuelle",
+        "introDescription": "Pour protéger votre compte, vérifiez d'abord votre adresse e-mail actuelle.",
+        "newTitle": "Saisir la nouvelle adresse e-mail",
+        "newDescription": "Après la modification, connectez-vous avec la nouvelle adresse. L'ancienne adresse ne permettra plus de vous connecter à ce compte.",
+        "inputLabel": "Nouvelle adresse e-mail",
+        "placeholder": "Saisissez votre adresse e-mail",
+        "success": "Adresse e-mail remplacée par {{target}}"
+      },
+      "codeSent": "Un code de vérification a été envoyé à {{target}}",
+      "codeLabel": "Code de vérification",
+      "codePlaceholder": "Code à 6 chiffres",
+      "sendCode": "Envoyer le code",
+      "next": "Suivant",
+      "confirm": "Confirmer la modification",
+      "cancel": "Annuler",
+      "resend": "Renvoyer le code",
+      "resendIn": "Renvoyer dans {{seconds}} s",
+      "errors": {
+        "INVALID_CODE": "Le code de vérification est incorrect ou a expiré.",
+        "CODE_ATTEMPTS_EXCEEDED": "Trop de tentatives incorrectes. Demandez un nouveau code.",
+        "CONTACT_TAKEN": "Ce numéro de téléphone ou cette adresse e-mail est déjà associé à un autre compte.",
+        "CONTACT_UNCHANGED": "C'est déjà votre numéro de téléphone ou votre adresse e-mail actuel.",
+        "CONTACT_CHANGE_TICKET_INVALID": "La vérification a expiré. Vérifiez à nouveau votre numéro de téléphone ou votre adresse e-mail actuel.",
+        "AUTH_FLOW_SUPERSEDED": "Votre connexion a changé. Recommencez.",
+        "CONTACT_CHANGE_UNAVAILABLE": "Ce compte ne peut pas modifier son mode de connexion ici.",
+        "CONTACT_CHANGE_BUSY": "L'étape précédente est encore en cours.",
+        "RATE_LIMITED": "Trop de tentatives. Patientez un instant, puis réessayez.",
+        "RATE_LIMITED_UNTIL": "Trop de tentatives. Réessayez après {{time}} (heure locale).",
+        "INVALID_PARAMS": "Le format n'est pas valide. Vérifiez et réessayez.",
+        "EMAIL_DOMAIN_BLOCKED": "Cette adresse e-mail ne peut pas être utilisée. Essayez-en une autre.",
+        "EMAIL_PATTERN_BLOCKED": "Cette adresse e-mail ne peut pas être utilisée. Essayez-en une autre.",
+        "ACCOUNT_DELETION_PENDING": "Ce compte est en attente de suppression et ne peut pas être modifié.",
+        "NETWORK_ERROR": "Échec de la connexion réseau. Vérifiez votre réseau et réessayez.",
+        "REQUEST_TIMEOUT": "La requête a expiré. Réessayez.",
+        "fallback": "Une erreur s'est produite. Réessayez plus tard."
+      }
+    },
     "help": {
       "title": "Aide",
       "description": "Découvrez comment accomplir votre travail avec {{appName}}.",
@@ -2894,6 +2963,14 @@
         "projectsRootReset": "Rétablir l'emplacement suggéré",
         "projectsRootDescription": "Emplacement des dossiers de projet créés depuis une session. S'il n'est pas défini, un emplacement est suggéré d'après vos projets existants.",
         "projectsRootFailed": "Impossible de mettre à jour l'emplacement des nouveaux projets",
+        "taskExportDirectoryTitle": "Emplacement d'exportation des sessions",
+        "taskExportDirectoryUnset": "Demander à chaque fois",
+        "taskExportDirectoryMissing": "Dossier introuvable",
+        "taskExportDirectoryUnreadable": "Réglage illisible",
+        "taskExportDirectoryChoose": "Choisir un répertoire",
+        "taskExportDirectoryReset": "Toujours demander",
+        "taskExportDirectoryDescription": "Une fois défini, les sessions exportées par l'Agent sont enregistrées ici sans demander d'emplacement, et aucun fichier existant n'est remplacé. S'il n'est pas défini, vous choisissez l'emplacement à chaque exportation.",
+        "taskExportDirectoryFailed": "Impossible de mettre à jour l'emplacement d'exportation des sessions",
         "dialogueDirectoryOpen": "Ouvrir le répertoire",
         "dialogueDirectoryChoose": "Changer de répertoire",
         "dialogueDirectoryReset": "Rétablir l'emplacement par défaut",
@@ -3024,7 +3101,12 @@
         "reconcileButton": "Vérifier",
         "reconcileFailed": "Échec de la vérification",
         "reconcileHealthy": "Le registre et le disque correspondent. Aucun problème détecté.",
-        "reconcileIssues": "Problèmes détectés : {{orphans}} fichiers non suivis ({{orphanSize}}), {{missing}} fichiers manquants, {{stray}} entrées non reconnues. Consultez le journal de l'application pour la liste complète."
+        "reconcileIssues": "Problèmes détectés : {{orphans}} fichiers non suivis ({{orphanSize}}), {{missing}} fichiers manquants, {{stray}} entrées non reconnues. Consultez le journal de l'application pour la liste complète.",
+        "buddyWorkspaceDirectoryTitle": "Espace de travail des amis",
+        "buddyWorkspaceDirectoryDescription": "Dossier où les nouveaux amis créent leur espace de travail. Les amis existants restent à leur emplacement et peuvent être déplacés individuellement dans leur configuration avancée.",
+        "buddyWorkspaceDirectoryDetails": "Cindy crée ici un sous-dossier par compte pour les espaces de travail des nouveaux amis tout en gardant le chemin d'origine lié.",
+        "buddyWorkspaceDirectoryChoose": "Changer de répertoire",
+        "buddyWorkspaceDirectoryFailed": "Impossible de mettre à jour le dossier d'espace de travail des amis."
       },
       "piKernel": {
         "manage": "Gérer la version de Pi",
@@ -6729,6 +6811,20 @@
         "ssh": "Hôtes distants SSH",
         "hook": "Bots de messagerie Cindy"
       },
+      "cloudComputer": {
+        "title": "Ordinateur cloud",
+        "hint": {
+          "addCloud": "Configurez un ordinateur cloud avec Cindy préinstallé. Une fois prêt, il apparaît dans votre liste d’appareils.",
+          "preparingCloud": "Votre ordinateur cloud est en préparation. Il apparaîtra dans votre liste d’appareils une fois prêt.",
+          "manageCloud": "Démarrez, arrêtez, renouvelez, réinstallez ou supprimez-le sur le web."
+        },
+        "actions": {
+          "addCloud": "Ajouter un ordinateur cloud",
+          "preparingCloud": "Voir la progression",
+          "manageCloud": "Gérer l’ordinateur cloud"
+        },
+        "openFailed": "Impossible d’ouvrir la page de l’ordinateur cloud. Vérifiez les paramètres de votre navigateur par défaut."
+      },
       "hook": {
         "description": "Connectez Slack, Telegram, Feishu / Lark et d'autres canaux au même Cindy. Les messages sont transmis à cet appareil et partagent sa liste de projets et son exécuteur de sessions ; le modèle et les autorisations de chaque projet sont partagés par tous les canaux, et chaque canal conserve sa propre liaison de compte.",
         "slackDescription": "Associez des espaces de travail Slack et confiez des tâches à Cindy depuis Slack.",
@@ -6915,6 +7011,7 @@
           "guide": {
             "usageLabel": "Comment l'utiliser",
             "usageBody": "Publiez sur X en mentionnant @askmycindy : la tâche est transmise à cet appareil pour y être exécutée, et le résultat revient sous forme de réponse.",
+            "usageBodyOnDevice": "Publiez sur X en mentionnant @askmycindy : la tâche est transmise à {{device}} pour y être exécutée, et le résultat revient sous forme de réponse.",
             "riskLabel": "Les réponses sont publiques",
             "riskPublicBody": "Les réponses sont publiques et visibles par tous. Utilisez cette fonction pour des questions et problèmes publics, pas pour des sujets privés qui pourraient exposer votre vie privée.",
             "riskWorkdirBody": "Chaque tâche X s'exécute dans le projet par défaut défini dans les paramètres de connexion X. L'Agent peut y lire et écrire des fichiers, et sa conclusion est rendue publique : si ce projet pointe vers un dépôt privé, le contenu des fichiers peut le devenir aussi.",
@@ -8246,6 +8343,11 @@
         "installedExpand": "Afficher les {{count}} plugins installés",
         "installedCollapse": "Masquer les autres plugins installés",
         "recommendedSection": "Recommandés",
+        "allPlugins": "Tous les plugins",
+        "searchResults": "Résultats de recherche",
+        "marketSort": {
+          "label": "Tri"
+        },
         "todayRecommendations": "La sélection du jour",
         "marketSection": "Marketplace de plugins",
         "browseMarket": "Parcourir le marketplace de plugins",
@@ -8283,6 +8385,7 @@
           "official": "Officiel",
           "community": "Communauté"
         },
+        "communityDisclaimer": "Ce plugin est développé et maintenu par des membres de la communauté. Cindy a examiné cette version, mais ne peut pas garantir la sécurité du plugin dans toutes les situations d’utilisation.",
         "publisherDescription": {
           "official": "Publié et maintenu par Cindy",
           "community": "Publié et maintenu par des développeurs de la communauté",
@@ -8398,7 +8501,7 @@
             "authTitle": "Dépôts privés",
             "authBody": "L'authentification repose entièrement sur la configuration Git de votre système : Cindy ne stocke jamais d'identifiants Git. SSH : une clé fonctionnelle doit être configurée sur cette machine ; si l'organisation impose le SSO SAML, autorisez la clé pour cette organisation via Configure SSO dans les paramètres de vos clés SSH GitHub. HTTPS : utilisez un Personal Access Token enregistré par le credential helper du système.",
             "rulesTitle": "Règles d'installation",
-            "rulesBody": "Les ID de plugin sont uniques au niveau global, selon le principe du premier arrivé, premier servi ; les conflits avec des plugins installés sont signalés explicitement. Les plugins dont l'ID utilise les préfixes officiels réservés ({{reservedGhostIdPrefixes}}) ne peuvent pas être installés par glisser-déposer d'un paquet, par sélection d'un fichier ou via un marketplace de plugins personnalisé. Les autorisations déclarées sont affichées sur la page de détails ; cliquer sur Installer termine l'installation et active le plugin sans nouvelle boîte de dialogue de confirmation des autorisations.",
+            "rulesBody": "Les ID de plugin sont uniques au niveau global, selon le principe du premier arrivé, premier servi ; les conflits avec des plugins installés sont signalés explicitement. Les plugins dont l'ID utilise les préfixes officiels réservés ({{reservedGhostIdPrefixes}}) ne peuvent pas être installés par glisser-déposer d'un paquet, par sélection d'un fichier ou via un marketplace de plugins personnalisé. Les autorisations déclarées sont affichées sur la page de détails. Lors de la première installation manuelle d’un plugin, Cindy vous demande de confirmer les autorisations demandées. Le plugin est activé automatiquement après l’installation.",
             "copy": "Copier le guide",
             "copied": "Guide copié dans le presse-papiers.",
             "copyFailed": "Échec de la copie. Veuillez réessayer."
@@ -8515,6 +8618,8 @@
         "installMeta": "Version {{version}} · {{source}}",
         "updateMeta": "Version {{from}} → {{to}} · {{source}}",
         "installDescription": "Rien n'est installé tant que vous n'avez pas confirmé. Le plugin est activé dès son installation, et vous pouvez le désactiver ou le désinstaller à tout moment depuis la page Plugins.",
+        "customMarketSourceNotice": "Assurez-vous de faire confiance à ce marketplace et vérifiez les autorisations demandées par le plugin.",
+        "localFileSourceNotice": "Avant de poursuivre l’installation, assurez-vous que le fichier provient d’une source de confiance.",
         "updateDescription": "La mise à jour ne démarre qu'après votre confirmation. La version actuelle reste disponible d'ici là.",
         "grantsTitle": "Après l'installation, il disposera de :",
         "noPermissions": "Ce plugin ne déclare aucune autorisation supplémentaire.",
@@ -8728,6 +8833,7 @@
         "libraryPersist": "Peut utiliser une bibliothèque persistante (fichiers volumineux et bases de données)",
         "libraryPersistDetail": "Il dispose d'un espace de stockage géré par Cindy pour votre travail (canevas, images, bases de données), sans le quota habituel des données de plugin. Toutes les opérations sur les fichiers et les bases de données sont exécutées par l'hôte ; le plugin n'utilise que des chemins relatifs à l'intérieur de sa propre bibliothèque et ne peut pas toucher à vos autres fichiers. Il peut aussi demander à Cindy d'afficher un fichier de la bibliothèque dans le Finder ou l'Explorateur, ou d'ouvrir la boîte de dialogue Enregistrer sous du système pour que vous choisissiez où placer une copie ; annuler Enregistrer sous ne copie rien. Il peut également écrire une image PNG dans le presse-papiers du système sans boîte de dialogue de confirmation ; cela remplace le contenu actuel du presse-papiers. Désinstaller le plugin ne supprime pas ces données ; leur suppression requiert une confirmation distincte dans les paramètres de Cindy.",
         "networkHost": "Accède à la destination réseau {{host}}",
+        "networkHosts": "Destinations réseau",
         "networkSecret": "Nécessite un identifiant de votre part : « {{name}} »",
         "networkSecretGhostInputDetail": "L'identifiant est saisi dans l'interface de paramètres propre à ce plugin ; la page du plugin voit la valeur au moment de la saisie. Il est ensuite transmis à l'hôte en une seule étape pour un stockage chiffré ; une fois enregistré, le plugin ne peut plus jamais le relire, et l'hôte ne l'injecte que pour les domaines qu'il déclare.",
         "networkSecretIdentity": "Utilisera votre e-mail de connexion comme identifiant « {{name}} »",
@@ -8757,6 +8863,8 @@
         "liveScreenDetail": "Via le bureau à distance, votre téléphone ou vos autres ordinateurs peuvent afficher les écrans d'appareils qu'il fournit (comme des simulateurs) et leur envoyer des touchers, des boutons et du texte. La connexion n'a lieu que lorsque vous l'ouvrez depuis l'un de ces appareils et rien d'autre de cet ordinateur n'est affiché.",
         "preview": "Peut ouvrir des pages d'aperçu des sites ci-dessous dans le navigateur de la barre latérale",
         "previewDetail": "Seuls les sites listés ci-dessous peuvent être ouverts ; chaque page ouverte est attribuée à ce plugin.",
+        "fileOpener": "Peut ouvrir les types de fichiers ci-dessous lorsque vous les ouvrez depuis Cindy",
+        "fileOpenerDetail": "Le plugin reçoit le chemin complet du fichier et l'ouvre à la place de votre application par défaut ; s'il n'y parvient pas, votre application par défaut l'ouvre. Vous pouvez désactiver cette option dans les détails du plugin.",
         "browserExtension": "Permet à son extension de navigateur intégrée de se connecter à Cindy",
         "browserNativeHost": "Peut enregistrer la connexion de navigateur « {{name}} »",
         "browserNativeHostDetail": "Le programme enregistré s’exécute hors du bac à sable et accède à cet ordinateur selon votre compte et les autorisations système.",
@@ -8832,6 +8940,7 @@
             "message_body": "corps du message",
             "tool_body": "résultat de l’outil",
             "sidebar_navigation": "navigation latérale",
+            "workdir_menu": "menu du répertoire de travail",
             "session_menu": "menu de la tâche",
             "settings_section": "page des paramètres",
             "composer_completion": "saisie semi-automatique",
@@ -8931,6 +9040,8 @@
         "dangerTitle": "Désinstaller le plugin",
         "infoContents": "Contenu",
         "infoVersion": "Version",
+        "infoPackageSize": "Taille du paquet",
+        "infoPackageSizeWithVersion": "{{size}} ({{version}})",
         "updateTitle": "Mettre à jour la version",
         "updateDesc": "Choisissez un nouveau fichier .cindy pour remplacer la version installée sur place ; l'état d'activation et la position du panneau sont conservés.",
         "errandPrefs": {
@@ -8953,11 +9064,27 @@
           "restoreModel": "Réinitialiser le modèle"
         },
         "toolsTitle": "Outils",
+        "toolCount_one": "{{count}} outil",
+        "toolCount_other": "{{count}} outils",
+        "toolCount_many": "{{count}} outils",
         "permissionsTitle": "Autorisations",
         "infoDescription": "Description",
         "customSlotAsleep": "Ce plugin est désactivé. Activez-le pour voir ici son interface de paramètres.",
         "descriptionExpand": "Afficher plus",
         "descriptionCollapse": "Afficher moins",
+        "recentUpdates": "Mises à jour récentes",
+        "olderUpdates": "Mises à jour antérieures",
+        "collapseOlderUpdates": "Masquer les mises à jour antérieures",
+        "includesHighRisk": "Risque élevé",
+        "heroDownloads": "Total des téléchargements",
+        "heroUsage": "Total des utilisations",
+        "heroWeeklyUsage": "Utilisations sur 7 jours",
+        "heroWeeklyUsageExplanation": "Appels d’outils des 7 derniers jours, toutes versions confondues, dans le périmètre de partage actuel.",
+        "heroInstalledVersion": "Version installée",
+        "heroListedVersion": "Version publiée",
+        "heroLatestUpdate": "Dernière mise à jour",
+        "morePlugins": "Autres plugins",
+        "morePluginsHint": "Sélection aléatoire. Elle ne reflète aucune préférence de Cindy.",
         "readmeTitle": "À propos",
         "useAction": "Utiliser le plugin",
         "chatAction": "Discuter",
@@ -8996,14 +9123,18 @@
         "portReclaimMessage": "« {{name}} » a besoin du port {{port}}. Fermer le programme suivant ?",
         "portReclaimDetail": "Cela peut interrompre son travail ou entraîner la perte de données non enregistrées. Vous pouvez annuler et fermer ce programme vous-même.",
         "configurationTitle": "Configuration",
+        "recordTitle": "Informations sur le plugin",
         "sidebarEntryTitle": "Entrée de navigation",
         "showInSidebar": "Afficher dans la navigation de gauche",
+        "fileOpenerTitle": "Ouvrir les fichiers avec ce plugin",
+        "fileOpenerDescription": "Lorsque vous ouvrez des fichiers {{extensions}} depuis Cindy, {{name}} les ouvre à la place de votre application par défaut. Les fichiers d'autres ordinateurs s'ouvrent toujours avec votre application par défaut.",
         "sidebarEntryDescription": "Une fois activé, « {{title}} » apparaît dans la navigation de gauche à côté d'Automatisations et de Plugins, soit en haut, soit sous Plus. Choisissez l'emplacement dans Plus → Personnaliser. Le masquer ne désactive pas le plugin.",
         "openTool": "Voir les détails de l'outil {{name}}",
         "noToolDescription": "Aucune description n'est disponible pour cet outil.",
         "viewAllTools": "Tout voir",
         "collapseTools": "Réduire les outils",
         "viewAllPermissions": "Tout voir",
+        "remainingPermissions": "Voir {{count}} de plus",
         "permissionsDialogDescription": "Les {{count}} autorisations demandées par ce plugin",
         "closeDialog": "Fermer la boîte de dialogue",
         "resetPlacement": "Rétablir la position par défaut"
@@ -9271,10 +9402,12 @@
         "taskWorkdirBoundary": "Le répertoire de travail reste sur l'ordinateur cible. Modifiez-le sur celui-ci.",
         "configurationLoading": "Chargement des paramètres…",
         "configurationReadFailed": "Impossible de charger les paramètres.",
+        "settingsWriteUnconfirmed": "L’enregistrement n’a pas pu être confirmé. Actualisez les paramètres pour vérifier avant de réessayer.",
         "refreshConfiguration": "Actualiser les paramètres",
         "enableBeforeConfigure": "Ce plugin est désactivé. Activez-le avec l'interrupteur ci-dessus avant de le configurer.",
         "settingsPageUnavailable": "Ouvrez Cindy sur {{device}} pour utiliser la page de paramètres de ce plugin. La version de l'ordinateur cible ne permet pas de l'afficher à distance.",
         "offlineNotice": "{{device}} est hors ligne. La gestion est indisponible jusqu'au rétablissement de la connexion.",
+        "publishOnTarget": "Publiez les plugins dans Cindy sur {{device}} ou mettez Cindy à jour sur cet ordinateur pour les publier à distance.",
         "managingTarget": "Gestion de {{device}}",
         "managingDescription": "Les modifications sont enregistrées sur cet ordinateur.",
         "viewingTarget": "Installé sur {{device}}",
@@ -9320,6 +9453,7 @@
         "anonymousUnavailable": "Paramètres d'auteur indisponibles",
         "anonymousUpdateFailed": "Impossible de confirmer l'enregistrement du réglage d'anonymat. Actualisez avant de réessayer.",
         "myPlugins": "Publier un plugin",
+        "backToPublish": "Retour à Publier des plugins",
         "publish": "Soumettre pour revue",
         "submitUpdate": "Soumettre une nouvelle version pour revue",
         "publishHint": "Ne publiez que des plugins que vous êtes autorisé à publier. Une approbation humaine est requise pour figurer dans la communauté.",
@@ -9359,6 +9493,7 @@
         "publishedContentUnavailable": "La description et les notes de version de la version publiée actuelle sont temporairement indisponibles.",
         "currentSubmission": "Soumission actuelle",
         "localState": {
+          "installed": "Version locale {{version}}",
           "missing": "Non installé sur cet ordinateur",
           "unavailable": "Version locale temporairement indisponible"
         },
@@ -9371,7 +9506,7 @@
         "publishing": "Publication",
         "latestSubmission": "Dernière soumission",
         "noSubmission": "Aucune soumission",
-        "marketVersion": "Publiée · {{version}}",
+        "marketVersion": "Publiée {{version}}",
         "market": {
           "not_listed": "Non référencé",
           "disabled": "Retiré de la liste",
@@ -9381,7 +9516,7 @@
         "review": {
           "pending": "En attente de revue",
           "approved": "Approuvé",
-          "rejected": "Renvoyé",
+          "rejected": "Refusé",
           "published": "Publié",
           "superseded": "Remplacé par une soumission ultérieure",
           "legacy_unverified": "Révision historique indisponible",
@@ -9389,9 +9524,12 @@
           "cancelled": "Annulé"
         },
         "reason": "Motif",
+        "rejectionReason": "Motif du rejet",
+        "rejectionReasonLine": "<reasonLabel>Motif du rejet :</reasonLabel> <reasonText />",
         "submittedContent": "Contenu soumis",
         "snapshotUnavailable": "Le contenu d'origine n'a pas été conservé ou ne peut plus être vérifié.",
         "history": "Historique des publications",
+        "marketChanges": "Changements de mise en ligne",
         "loadMore": "Charger plus",
         "loadMoreHistory": "Charger plus d'historique",
         "releaseId": "ID de version",
@@ -9406,7 +9544,7 @@
           "submitted": "Soumis",
           "metadata_updated": "Informations d'affichage mises à jour",
           "approved": "Approuvé",
-          "rejected": "Renvoyé",
+          "rejected": "Refusé",
           "enabled": "Publié",
           "disabled": "Retiré de la liste",
           "archived": "Archivé",
@@ -9488,6 +9626,8 @@
         "notApproved": "Pas encore approuvé",
         "timeUnavailable": "Non enregistré",
         "releaseNotes": "Notes de version",
+        "expandReleaseNotes": "Tout afficher",
+        "noReleaseNotes": "Aucune note de version fournie.",
         "versionUpdates": "Versions et mises à jour",
         "versionManagement": "Gérer les versions",
         "versionContent": "Contenu de la version",
@@ -9504,7 +9644,6 @@
         "cancelled": "Annulé",
         "cancelReviewCompleted": "Revue annulée. La version actuellement référencée est inchangée.",
         "cancelReviewAlreadyFinal": "La revue était déjà terminée : elle n'a donc pas été annulée. Le résultat réel est affiché ci-dessous.",
-        "viewPendingVersion": "Voir la version en cours de revue",
         "submitFailed": "Échec de la soumission",
         "viewDetails": "Voir les détails"
       },
@@ -10069,6 +10208,18 @@
       "title": "Échec de la mise à jour automatique",
       "description": "Impossible de lancer le programme de mise à jour, peut-être bloqué par la politique de sécurité du système. Veuillez télécharger manuellement le dernier programme d'installation.",
       "confirm": "Aller au téléchargement"
+    },
+    "workspaceMigration": {
+      "title": "Déplacement de l'espace de travail",
+      "progressLabel": "Progression du déplacement de l'espace de travail",
+      "safetyHint": "Copie et vérification des fichiers avant la bascule. Gardez Cindy ouvert jusqu'à la fin.",
+      "phase": {
+        "preparing": "Préparation",
+        "copying": "Copie des fichiers",
+        "verifying": "Vérification des fichiers",
+        "switching": "Changement d'emplacement",
+        "cleaning": "Nettoyage de la sauvegarde"
+      }
     }
   },
   "welcome": {
@@ -11414,6 +11565,69 @@
           "routines": "Routines à vérifier",
           "upgrade": "Non repris automatiquement"
         }
+      },
+      "workspaceLocation": {
+        "title": "Emplacement de l'espace de travail",
+        "description": "Déplacez l'espace de travail de cet ami vers un autre disque local pour libérer le disque système. Cindy conserve un lien au chemin d'origine pour que tâches, automatisations et scripts continuent de fonctionner.",
+        "movedDescription": "Les tâches et scripts existants utilisent toujours le chemin d’origine.",
+        "chooseDialogTitle": "Choisir le dossier de destination",
+        "fullPath": "Chemin complet",
+        "targetPathLabel": "Dossier cible",
+        "currentPathLabel": "Dossier actuel",
+        "defaultPathLabel": "Dossier cible (par défaut)",
+        "logicalPathLabel": "Chemin d'origine lié",
+        "copyPath": "Copier le chemin",
+        "pathCopied": "Chemin copié",
+        "pathCopyFailed": "Impossible de copier le chemin",
+        "openTarget": "Ouvrir le dossier",
+        "moveAction": "Déplacer l'espace de travail",
+        "moveBackAction": "Revenir au dossier par défaut",
+        "chooseAnother": "Choisir un autre dossier",
+        "restartNow": "Redémarrer maintenant",
+        "restartAndMove": "Redémarrer et déplacer",
+        "scheduleNextRestart": "Déplacer au prochain redémarrage",
+        "cancel": "Annuler",
+        "dismissFailed": "Fermer",
+        "scheduledToast": "Déplacement programmé pour le prochain redémarrage de Cindy",
+        "cancelledToast": "Déplacement annulé",
+        "previewTitle": "Prêt à déplacer l'espace de travail",
+        "previewSummary": "Taille des fichiers : {{size}}",
+        "previewNotice": "Avant de redémarrer, fermez les applications et scripts qui utilisent cet espace de travail.",
+        "previewClaudeSkillsNotice": "Si l’espace de travail n’a pas son propre dépôt Git, Claude Code peut détecter des compétences dans les dossiers parents du nouvel emplacement. Pour éviter cela, choisissez un emplacement sans compétences Claude Code dans ses dossiers parents.",
+        "pendingHint": "Fermez les programmes externes utilisant ce dossier puis redémarrez Cindy pour lancer le déplacement.",
+        "unavailableTitle": "L'espace de travail déplacé est indisponible",
+        "unavailableDescription": "Cindy n'a pas pu accéder à {{target}}. Reconnectez le disque ou restaurez le dossier ; Cindy ne créera pas de dossier vide par-dessus.",
+        "errorTitle": "Impossible de déplacer l'espace de travail",
+        "failedTitle": "Le déplacement précédent a échoué",
+        "interruptedTitle": "Récupération nécessaire",
+        "backupRemainingHint": "Sauvegarde originale conservée pour vérification : {{backup}}",
+        "personalPreviewHint": "Fermez les instances d'aperçu personnel et lancez la version principale de Cindy pour programmer ou exécuter le déplacement.",
+        "status": {
+          "default": "Par défaut",
+          "pending": "En attente de redémarrage",
+          "moved": "Déplacé",
+          "failed": "Échec",
+          "interrupted": "Récupération requise",
+          "unavailable": "Indisponible"
+        },
+        "warnings": {
+          "waitingExclusive": "En attente d'un démarrage exclusif. Fermez les autres instances Cindy partageant ce profil puis redémarrez.",
+          "receiptUpdateFailed": "L'espace de travail est utilisable, mais la mise à jour du journal a échoué et sera retentée au prochain redémarrage."
+        },
+        "errors": {
+          "insufficientSpace": "Espace libre insuffisant sur le disque de destination.",
+          "overlapsCindyData": "Choisissez un dossier en dehors des données Cindy et de l'espace de travail actuel.",
+          "localDiskRequired": "Choisissez un dossier sur un disque local plutôt qu'un partage réseau.",
+          "unsupportedFileOrHardLink": "Cet espace de travail contient des liens physiques ou fichiers spéciaux ne pouvant pas être déplacés en toute sécurité.",
+          "alreadyRedirected": "Cindy ne reconnaît pas le lien de ce dossier de travail. Conservez le lien et les fichiers en l’état.",
+          "botHomeRedirected": "Le dossier principal de cet ami a été redirigé manuellement et ne peut pas être déplacé automatiquement.",
+          "targetExists": "Le dossier cible existe déjà. Choisissez un autre emplacement.",
+          "workspaceChanged": "Des fichiers ont changé pendant la vérification. Fermez les programmes externes et réessayez.",
+          "backupRetained": "Le déplacement a réussi, mais la sauvegarde différait et a été conservée par sécurité.",
+          "backupCleanupIncomplete": "Le déplacement a réussi, mais le nettoyage de la sauvegarde temporaire sera retenté au prochain redémarrage.",
+          "cutoverInterrupted": "La bascule précédente a été interrompue et l'original a été restauré. Choisissez un nouveau dossier vide pour réessayer.",
+          "generic": "Impossible de terminer la demande de déplacement. Réessayez."
+        }
       }
     },
     "profile": {
@@ -12373,7 +12587,8 @@
         "failed": "Impossible d'effectuer cette action. Réessayez.",
         "lastOwner": "Transférez la propriété ou dissolvez ce groupe avant de le quitter."
       },
-      "memberCount_many": "{{count}} membres"
+      "memberCount_many": "{{count}} membres",
+      "externalBadge": "Externe"
     },
     "joined": {
       "today": "Arrivé aujourd'hui",
@@ -12391,8 +12606,8 @@
       "footnote": "Ce texte est intégré au contexte d'identité de l’ami. Les réglages rapides de personnalité sont stockés séparément et sont conservés lorsque ce texte change."
     },
     "welcome": {
-      "generic": "Bonjour, je suis {{name}}. Dites-moi désormais tout ce dont vous avez besoin ; je prends mes repères en attendant.",
-      "withRole": "Bonjour, je suis {{name}} : {{description}}. Dites-moi simplement ce dont vous avez besoin."
+      "generic": "Bonjour, je suis {{name}}. Dites-moi ce dont vous avez besoin.",
+      "withUser": "Bonjour {{userName}}, je suis {{name}}. Dites-moi ce dont vous avez besoin."
     },
     "invitation": {
       "title": "Préparation de la rencontre",
@@ -12623,6 +12838,8 @@
       "transferBusy": "{{name}} est encore en train de rédiger une réponse. Déplacez-le une fois la réponse terminée",
       "targetUnavailable": "« {{device}} » n'est pas disponible. Il doit être en ligne avec le contrôle à distance activé",
       "targetOutdated": "« {{device}} » utilise une ancienne version de Cindy qui ne peut pas encore faire fonctionner {{name}}. Mettez d'abord Cindy à jour sur cet ordinateur",
+      "skillTargetOutdated": "Un skill de {{name}} contient un corps de texte de plus de 64 KB que l’ancienne version de Cindy sur « {{device}} » ne peut pas recevoir. Mettez Cindy à jour sur cet ordinateur avant de déplacer votre ami. Il reste sur l’ordinateur d’origine",
+      "skillTargetOutdated_skill": "La version de Cindy sur « {{device}} » ne peut pas recevoir le skill « {{slug}} ». Son contenu fait {{bodyBytes, number}} octets et dépasse la limite de 64 Ko. {{name}} continue de fonctionner sur l’ordinateur d’origine. Mettez Cindy à jour sur l’ordinateur de destination, puis réessayez.",
       "targetOutdatedItem": "Déplacer vers « {{device}} » · ancienne Cindy",
       "targetOutdatedMeta": "Ancienne Cindy",
       "olderTargetNote": "« {{device}} » utilise une ancienne version de Cindy : {{name}} y fonctionnera comme avant. L'historique de conversation reste synchronisé, mais les règles et automatisations du projet ne s'y appliquent pas.",
@@ -12645,6 +12862,12 @@
       "arrivingLater": "{{name}} a été déplacé vers cet ordinateur et est encore en cours de préparation. Il apparaîtra bientôt dans vos amis",
       "arrivalPermissions": "{{name}} utilise désormais les autorisations par défaut de cet ordinateur.",
       "arrivalModel": "Le modèle enregistré de {{name}} n'est pas disponible sur cet ordinateur ; il utilise donc le modèle par défaut de cet ordinateur.",
+      "arrivalModelSetup": "{{name}} est sur cet ordinateur, mais aucun modèle n’est encore disponible. Connectez un fournisseur de modèles ou choisissez un modèle dans les réglages de cet ami, à la rubrique Modèle.",
+      "arrivalPartialContent": "{{name}} fonctionne désormais sur cet ordinateur, mais certains éléments synchronisés n’ont pas pu être restaurés. Leurs copies dans le cloud restent intactes.",
+      "missingProfileTitle": "Continuer avec {{name}} et un profil par défaut ?",
+      "missingProfileDescription": "L’ordinateur principal d’origine n’a pas encore envoyé le profil de {{name}}. Si cet ordinateur a été réinstallé ou ne peut pas être récupéré, vous pouvez continuer ici avec un profil par défaut tout en conservant les conversations et contenus déjà synchronisés.",
+      "missingProfileConfirm": "Continuer avec le profil par défaut",
+      "missingProfileFailed": "Le profil de {{name}} n’a pas encore été envoyé dans le cloud",
       "busyTitle": "{{name}} est encore en train de répondre",
       "busyDescription": "Déplacez-le vers « {{device}} » une fois cette réponse terminée, ou arrêtez la réponse et déplacez-le maintenant.",
       "busyWait": "Déplacer une fois terminé",
@@ -12917,6 +13140,20 @@
       }
     },
     "voiceMode": {
+      "realtime": {
+        "systemVoices": "Voix système",
+        "myVoices": "Mes voix",
+        "refreshMyVoices": "Actualiser mes voix",
+        "callMode": "Mode d’appel",
+        "messageReadAloud": "Lecture des messages à voix haute",
+        "callVoice": "Voix des appels en temps réel",
+        "readAloudVoice": "Voix de lecture",
+        "readAloudHint": "Cliquez sur le haut-parleur sous une réponse écrite pour l’écouter avec cette voix.",
+        "resetReadAloud": "Réinitialiser les réglages de lecture",
+        "title": "Audio en temps réel",
+        "add": "Ajouter des modèles audio en temps réel",
+        "off": "Utiliser la synthèse vocale"
+      },
       "openConversation": "Ouvrir la conversation",
       "inCallWith": "En appel avec {{name}}",
       "showDetails": "Afficher la transcription de l'appel",
@@ -12938,7 +13175,7 @@
       "settingsTitle": "Voix",
       "openSettings": "Paramètres vocaux",
       "startConversation": "Démarrer une conversation vocale",
-      "settingsHint": "Choisissez le modèle vocal et la voix de cet ami, puis démarrez une conversation vocale depuis la zone de saisie.",
+      "settingsHint": "Quand les appels utilisent la synthèse vocale, le modèle et la voix ci-dessous servent aussi à la lecture des messages.",
       "previewNeedsChat": "Démarrez une conversation avec cet ami pour écouter un aperçu de voix.",
       "voiceId": "ID de voix",
       "manualVoice": "Saisir un ID de voix",
@@ -13567,6 +13804,7 @@
         },
         "slash": {
           "detachFailed": "❌ Impossible de mettre fin à la prise de contrôle : {{error}}",
+          "pluginEngineModelsUnavailable": "Le moteur de plugin de cette tâche n’est pas disponible pour le moment ; ses modèles ne peuvent pas être affichés.",
           "companionManaged": "🧭 Cette connexion a été confiée à un ami : le modèle, les autorisations et le répertoire de travail suivent ses paramètres. Modifiez-les dans les paramètres de l’ami dans Cindy."
         },
         "turn": {
@@ -14743,6 +14981,7 @@
       "missingDir": "Dossier introuvable"
     },
     "pendingQueue": {
+      "waitingForDevice": "Non envoyé · Envoi à la reconnexion de l’autre ordinateur",
       "stopping": "Arrêt en cours",
       "queued": "En file d'attente",
       "editingInComposer": "Modification dans la zone de saisie ci-dessous…",
@@ -15230,6 +15469,7 @@
       "unavailable": "La saisie automatique n'est pas disponible dans l'application actuelle. Copiez la transcription et saisissez-la manuellement.",
       "unconfirmed": "Impossible de confirmer la réussite de la saisie automatique. Copiez la transcription si nécessaire.",
       "permission": "L'autorisation d'accessibilité est requise pour saisir le texte dicté dans l'application actuelle. Accordez l'autorisation, puis réessayez.",
+      "appNotAllowed": "{{app}} n’est pas autorisé à contrôler cette app, le texte n’a donc pas été saisi. Ajoutez cette app pour {{app}} dans « System & App Protection Override », ou copiez le texte et collez-le vous-même.",
       "failed": "Échec de la saisie automatique. Copiez la transcription et saisissez-la manuellement."
     },
     "permissionPrompts": {
@@ -15420,6 +15660,7 @@
       "label_many": "{{count}} nouveaux messages"
     },
     "messageNavRail": {
+      "you": "Vous",
       "aria": "Navigation entre les prompts",
       "jumpAria": "Aller au prompt {{index}} : {{preview}}",
       "attachmentOnly_one": "{{count}} pièce jointe",
@@ -15506,6 +15747,8 @@
       "codexHelperUnavailable": "cindy_helper est activé, mais indisponible pour cette tâche. Le résultat de la tâche risque de ne pas pouvoir être transmis.",
       "codexHelperUnverified": "Impossible de vérifier si cindy_helper est disponible pour cette tâche. Le résultat de la tâche risque de ne pas pouvoir être transmis.",
       "requestFormatError": "L'application a envoyé une requête non valide : cette réponse n'a donc pas pu aboutir.",
+      "piRetryHistoryTooLarge": "Message non envoyé. En lisant l’historique nécessaire au nouvel essai, Pi a rencontré une trame dépassant la limite locale de 16 MiB. Vous pouvez continuer dans une nouvelle tâche.",
+      "messageNotSent": "Message non envoyé.",
       "replyFailed": "Impossible de terminer la réponse",
       "queuedSendRecovery": "Ton message n’a pas été envoyé. Sélectionne « Réessayer » pour le renvoyer tel quel. Si tu envoies un nouveau message, il remplacera le précédent.",
       "retryTitle": "Renvoyer le dernier message",
@@ -15577,6 +15820,7 @@
       "gatewayProxyTokenInvalid": "Les identifiants Cindy AI ne sont plus valides. Cliquez sur Réessayer. Si le problème se reproduit, déconnectez-vous puis reconnectez-vous",
       "gatewayProxyTokenInvalidNoRetry": "Les identifiants Cindy AI ne sont plus valides. Si le problème se reproduit, déconnectez-vous puis reconnectez-vous",
       "modelAccessDenied": "Le compte en amont ne peut pas accéder à ce modèle. Sélectionnez un autre modèle ou vérifiez l'accès auprès du fournisseur",
+      "providerSafetyRefusal": "La politique de sécurité du fournisseur du modèle a bloqué cette réponse. Modifiez votre demande avant de la renvoyer",
       "silentStopContinue": "Continuer",
       "silentStopContinueTitle": "Continuer la tâche en cours",
       "piTransportClosed": "Connexion Pi distante interrompue (canal SSH fermé). La tâche distante est toujours en cours d'exécution : reconnectez-vous pour continuer.",
@@ -15632,13 +15876,14 @@
       "modelCatalogUnconfirmed": "Impossible de confirmer la liste des modèles. Votre modèle sélectionné a été conservé. Actualisez la liste des modèles et réessayez.",
       "actionScheduled": "L’autorisation pour cette action a expiré. La prochaine exécution reste programmée.",
       "actionExpired": "L’autorisation de la session pour cette action a expiré. Consultez la dernière exécution de l’automatisation.",
+      "modelRebuildRetry": "L’instruction n’a pas été envoyée. Ouvrez l’automatisation sur votre ordinateur et sélectionnez « Exécuter maintenant » pour réessayer.",
       "actionRecovered": "L’autorisation pour cette action a expiré. La même automatisation a ensuite réussi.",
       "text": "Une exécution automatique a échoué.",
-      "prCheck_dns": "{{device}} ne peut pas résoudre {{host}}. Si le problème persiste, vérifiez le réseau ou le DNS sur cet appareil. Échecs consécutifs : {{failures}}. Prochaine vérification automatique : {{retry}}.",
-      "prCheck_timeout": "La connexion à GitHub a expiré sur {{device}}. Échecs consécutifs : {{failures}}. Prochaine vérification automatique : {{retry}}.",
-      "prCheck_auth": "Reconnectez-vous à GitHub sur {{device}}. Échecs consécutifs : {{failures}}. Prochaine vérification automatique : {{retry}}.",
-      "prCheck_rate-limit": "GitHub limite les requêtes de {{device}}. Échecs consécutifs : {{failures}}. Prochaine vérification automatique : {{retry}}.",
-      "prCheck_unknown": "La vérification de la PR a échoué sur {{device}}. Consultez les détails de l’exécution. Échecs consécutifs : {{failures}}. Prochaine vérification automatique : {{retry}}.",
+      "prCheck_dns": "{{device}} ne peut pas résoudre {{host}}. Si le problème persiste, vérifiez le réseau ou le DNS sur cet appareil. Échecs consécutifs : {{failures}}. Les vérifications planifiées pourront reprendre à partir de {{retry}}.",
+      "prCheck_timeout": "La connexion à GitHub a expiré sur {{device}}. Échecs consécutifs : {{failures}}. Les vérifications planifiées pourront reprendre à partir de {{retry}}.",
+      "prCheck_auth": "Reconnectez-vous à GitHub sur {{device}}. Échecs consécutifs : {{failures}}. Les vérifications planifiées pourront reprendre à partir de {{retry}}.",
+      "prCheck_rate-limit": "GitHub limite les requêtes de {{device}}. Échecs consécutifs : {{failures}}. Les vérifications planifiées pourront reprendre à partir de {{retry}}.",
+      "prCheck_unknown": "La vérification de la PR a échoué sur {{device}}. Consultez les détails de l’exécution. Échecs consécutifs : {{failures}}. Les vérifications planifiées pourront reprendre à partir de {{retry}}.",
       "precheck": "Les vérifications automatiques sont temporairement bloquées.",
       "preRunBlocked": "La vérification préalable a échoué. Cette exécution n’a pas démarré.",
       "rateLimited": "Les vérifications automatiques sont temporairement bloquées par une limite de débit des requêtes.",
@@ -17873,15 +18118,15 @@
   "scheduler": {
     "prTrigger": {
       "fallback": "Les vérifications planifiées continuent sans les notifications GitHub App.",
-      "label": "PR",
-      "url": "URL de la pull request",
+      "label": "PR / MR",
+      "url": "URL de la PR ou de la MR",
       "condition": "Déclenchement",
-      "any": "Activité sur la PR",
+      "any": "Activité",
       "merged": "Fusion",
       "review": "Activité de revue",
       "ci": "Changement de CI",
       "timed": "Vérifier aussi périodiquement",
-      "invalid": "Saisissez une URL de pull request GitHub."
+      "invalid": "Saisissez une URL de PR GitHub ou de MR GitLab."
     },
     "presentation": {
       "status": {
@@ -18073,6 +18318,7 @@
       "openWorkdirFailed": "Impossible d'ouvrir le dossier"
     },
     "runs": {
+      "boundPluginEngineRecovery": "L’automatisation ne s’est pas exécutée. Une automatisation associée à une tâche sur un moteur de plugin utilise le modèle de la tâche et s’exécute sur cet ordinateur. Si l’automatisation choisit un modèle, retirez-le, puis relancez-la.",
       "queueWaitTimeoutRecovery": "L’attente a expiré avant l’envoi du message. Une fois la session cible libre, choisissez {{action}} pour l’exécuter.",
       "status": {
         "running": "En cours",
@@ -18424,6 +18670,7 @@
       "timingMode": {
         "cron": "Cron",
         "interval": "Intervalle relatif",
+        "label": "Mode de planification",
         "cronHint": "S'exécute à des créneaux horaires du calendrier.",
         "intervalHint": "Attend ce délai après la fin de l'exécution précédente.",
         "intervalUnsupportedHint": "Cet intervalle exact est conservé. Choisir un préréglage en minutes ou en heures le remplacera.",
@@ -19028,7 +19275,7 @@
       "expired": "Transfert de saisie terminé après une attente trop longue."
     },
     "failure": {
-      "permission": "Cindy ne peut pas lire l’interface de ce Mac. Vérifiez l’autorisation de contrôle de la copie de Cindy en cours d’exécution. Sous macOS 27.3 ou ultérieur, l’autorisation de contrôle se trouve dans « System & App Protection Override ». Sur les versions antérieures, ouvrez Accessibilité.",
+      "permission": "Cindy ne peut pas lire l’interface de ce Mac. Vérifiez l’autorisation de contrôle de la copie de Cindy en cours d’exécution. Sous macOS 27.3 ou ultérieur, l’autorisation de contrôle se trouve dans « System & App Protection Override ». Sur les versions antérieures, ouvrez Accessibilité. Si Cindy ne peut contrôler que certaines apps, ajoutez aussi celle-ci.",
       "target_gone": "La fenêtre cible a été fermée.",
       "unreadable": "Cet écran ne peut pas être lu. Vous pouvez terminer sur l'ordinateur hôte, puis rendre la main à l'Agent.",
       "action_failed": "Cette action n'a pas eu d'effet. Vérifiez l'écran et réessayez.",
@@ -22652,6 +22899,19 @@
     "wrap": "Retour à la ligne",
     "lineNumbers": "Numéros de ligne"
   },
+  "openAiAccountGroup": {
+    "strategy": "Stratégie du groupe de comptes",
+    "leastHint": "Privilégier la connexion qui exécute le moins de tâches",
+    "quotaHint": "Lorsque les données d’utilisation des abonnements sont disponibles, Cindy filtre les connexions selon leur utilisation avant d’appliquer la stratégie du groupe.",
+    "removeDescription": "Cette connexion ne recevra plus de nouvelles tâches du groupe. Les tâches en cours resteront sur cette connexion.",
+    "mergeDescription": "Les nouvelles tâches lancées via {{target}} pourront utiliser les deux fournisseurs. Les connexions, les clés et les tâches existantes restent en place. Cindy testera la clé API de {{apiKey}} avant de relier les fournisseurs.",
+    "modelUnavailable": "Cette connexion ne peut pas utiliser le modèle choisi pour le test. Un nouveau test peut essayer un autre modèle.",
+    "noTestModel": "Aucun modèle configuré n’est disponible pour le test. Vérifiez les modèles autorisés dans votre projet OpenAI, puis actualisez ou modifiez la liste de modèles de cette connexion.",
+    "billingPaused": "Attribution suspendue en raison d’un solde insuffisant ou d’une limite de facturation.",
+    "title": "Groupe de comptes",
+    "testPassed": "Test réussi",
+    "refresh": "Actualiser le quota"
+  },
   "subscriptionAccounts": {
     "pluginSignIn": {
       "method": "Méthode de connexion",
@@ -22853,6 +23113,10 @@
       "separator": " ; "
     },
     "settings": {
+      "autoSwitch": {
+        "title": "Changer de source automatiquement en cas de problème",
+        "hint": "Quand la source utilisée par ce mode échoue, passer à la suivante utilisable et le noter sous ce tour. Désactivé, le changement est seulement proposé sur l’erreur."
+      },
       "newRoute": "Nouveau mode",
       "newRouteName": "Nouveau mode",
       "routesEmpty": "Aucun mode pour l'instant. Créez-en un et ajoutez-y plusieurs sources.",
@@ -23085,6 +23349,8 @@
   "macControlPermission": {
     "pane": "System & App Protection Override",
     "selectApp": "Dans « System & App Protection Override », cliquez sur ⓘ à côté de {{app}}. Si l’app ne figure pas dans la liste, ajoutez la copie en cours d’exécution avec +.",
-    "review": "$t(macControlPermission.selectApp)\nSi l’option est proposée, vous pouvez limiter le contrôle aux apps de votre choix. Le contrôle intégral donne accès à toutes les apps et données. Si vous acceptez, lisez et confirmez chaque élément, puis autorisez l’accès en bas de la fenêtre."
+    "review": "$t(macControlPermission.selectApp)\nSi l’option est proposée, vous pouvez limiter le contrôle aux apps de votre choix. Le contrôle intégral donne accès à toutes les apps et données. Si vous acceptez, lisez et confirmez chaque élément, puis autorisez l’accès en bas de la fenêtre.",
+    "reviewWholeMac": "$t(macControlPermission.selectApp)\nLe clavier et la souris à distance agissent sur tout le Mac et nécessitent donc le contrôle du Mac entier : lors de l’ajout avec +, choisissez « Override System Protections » ; si l’app figure déjà dans la liste, activez « Control Your Entire Mac and All Apps » sous ⓘ. Si seules certaines apps sont autorisées, macOS bloque toute saisie clavier et souris à distance. Vérifiez l’accès indiqué par macOS avant d’autoriser.",
+    "chosenAppsOnly": "{{app}} ne peut contrôler que les apps choisies : macOS bloque donc toute saisie clavier et souris à distance. Pour le contrôle à distance, cliquez sur ⓘ à côté de {{app}} dans « System & App Protection Override » et activez « Control Your Entire Mac and All Apps »."
   }
 }

@@ -367,3 +367,59 @@ it.each([
     stopMobileAgentNetRuntime();
   }
 });
+
+/**
+ * 测试价值
+ * - 生产入口与可观察结果：手机 `openMobileAgentNetSocket` 在官方网络下补充对向官方区域 STUN（经 `configureStunServers`），
+ *   保持 `configureUdpServer` 仅指向主中转；不阻塞建链。
+ * - Bug／规则依据：双区官方 STUN 探测在手机端同样生效且不破坏既有自建中转隔离。
+ * - 现有覆盖缺口：已有 mobile 测试仅覆盖 `private.example.test` 自建路由，未验证官方双区 STUN 路径。
+ * - 最小失败输入：官方 `https://agent-net.cindy.com.cn` 建链，双区 `/api/agent-net/info` 均返回 STUN。
+ * - tier：unit（内存桩与 mock fetch，无真实网络或等待）。
+ */
+it('supplements peer official region STUN on mobile official network without changing relayUdpServer', async () => {
+  fake.enabled = true;
+  fake.agentNetOnly = false;
+  const socket = Object.assign(new EventEmitter(), { restrictPeers: vi.fn(), close: vi.fn() });
+  socket.close.mockImplementation(() => socket.emit('close', 1000));
+  const configureUdpServer = vi.fn(async () => undefined);
+  const configureStunServers = vi.fn(async () => undefined);
+  fake.createTransport.mockResolvedValue({ supports: () => true, configureUdpServer, configureStunServers });
+  fake.open.mockImplementation(async options => {
+    await options.bindings.createTransport({});
+    return socket;
+  });
+  fake.rawFetch.mockResolvedValue({ devices: [{ deviceId: 'phone' }] });
+  fake.identity.mockResolvedValue({
+    api: {
+      base: 'https://agent-net.cindy.com.cn',
+      identity: { deviceId: 'phone' },
+      certificate: { networkId: 'account:mobile', expiresAt: Date.now() + 48 * 60 * 60_000 },
+    },
+    signer: {},
+    newTransportEngine: async () => ({ destroy: vi.fn() }),
+  });
+  const fetchMock = vi.fn(async (url: string) => {
+    if (url === 'https://agent-net.cindy.com.cn/api/agent-net/info') {
+      return Response.json({ protocolVersion: 2, mode: 'official', udpPort: 3479, stunHost: 'agent-net-stun.cindy.com.cn', features: [] });
+    }
+    if (url === 'https://agent-net.cindy.app/api/agent-net/info') {
+      return Response.json({ protocolVersion: 2, mode: 'official', udpPort: 3479, stunHost: 'agent-net-stun.cindy.app', features: [] });
+    }
+    return new Response(null, { status: 404 });
+  });
+  vi.stubGlobal('fetch', fetchMock);
+  try {
+    await expect(openMobileAgentNetSocket({ deviceId: 'phone', deviceName: 'Phone', getAccessToken: async () => 'unit-only' })).resolves.toBe(socket);
+    await vi.waitFor(() => {
+      expect(configureUdpServer).toHaveBeenCalledWith('agent-net-stun.cindy.com.cn:3479');
+      expect(configureStunServers).toHaveBeenCalledWith([
+        'agent-net-stun.cindy.com.cn:3479',
+        'agent-net-stun.cindy.app:3479',
+      ]);
+    });
+  } finally {
+    stopMobileAgentNetRuntime();
+    vi.unstubAllGlobals();
+  }
+});

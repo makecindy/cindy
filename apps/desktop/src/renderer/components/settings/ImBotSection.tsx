@@ -1,4 +1,3 @@
-import { imBotSettings } from './ImBotSection.settings-search';
 /**
  * ImBotSection —— 「IM 机器人」设置页(单页 + 官方/个人纵向分区)。
  *
@@ -20,9 +19,7 @@ import { imBotSettings } from './ImBotSection.settings-search';
  * 个人机器人在各构建与账号中都显示。
  */
 
-import { Lightbulb } from 'lucide-react';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { useTranslation } from 'react-i18next';
 import { useSettingsSearchNavigation } from './SettingsSearchNavigation';
 
 import { useAuth } from '@/contexts/AuthContext';
@@ -35,31 +32,11 @@ import { TelegramBotSection } from './TelegramBotSection';
 import { WechatBotSection } from './WechatBotSection';
 import { WecomBotSection } from './WecomBotSection';
 import { showCindyGroup } from './imBotVisibility';
-import { SettingsPageHeader } from '@/components/ui/settings-rows';
+
+import { ImBotSettingsFrame, ImBotGroupSection } from './ImBotSettingsLayout';
 
 /** 「IM 机器人」页面分区 id(与 ?imGroup= 参数共用)。 */
 export type ImBotSettingsGroup = 'cindy' | 'personal';
-
-/** 分区标题的 i18n key。 */
-const IM_BOT_GROUP_LABEL_KEY: Record<ImBotSettingsGroup, string> = {
-  cindy: 'settings.imBot.groups.cindy',
-  personal: 'settings.imBot.groups.personal',
-};
-
-/** 分区 Tips 的 i18n key —— 一句话讲清该分区是什么、与另一区的差异。 */
-const IM_BOT_GROUP_TIP_KEY: Record<ImBotSettingsGroup, string> = {
-  cindy: 'settings.imBot.tips.cindy',
-  personal: 'settings.imBot.tips.personal',
-};
-
-function GroupTip({ message }: { message: string }) {
-  return (
-    <div className="flex items-start gap-2 rounded-xl bg-[var(--surface-chip)] px-3.5 py-2.5">
-      <Lightbulb size={14} className="mt-0.5 shrink-0 text-[var(--text-tertiary)]" />
-      <p className="text-12 leading-[1.6] text-[var(--text-secondary)]">{message}</p>
-    </div>
-  );
-}
 
 export function isImBotSettingsGroup(value: string | null): value is ImBotSettingsGroup {
   return value === 'cindy' || value === 'personal';
@@ -114,7 +91,6 @@ function PersonalGroupContent({
 }
 
 export function ImBotSection({ targetGroup }: { targetGroup: ImBotSettingsGroup | null }) {
-  const { t } = useTranslation();
   const { mode, dataOwnerId } = useAuth();
   const { entry, activation } = useSettingsSearchNavigation();
   const cindyGroupAvailable = showCindyGroup({ mode });
@@ -148,71 +124,25 @@ export function ImBotSection({ targetGroup }: { targetGroup: ImBotSettingsGroup 
   }, [effectiveTargetGroup]);
 
   return (
-    <div className="flex flex-col gap-2">
-      <SettingsPageHeader
-        title={t(imBotSettings.imBot.sectionKey)}
-        adornment={<span className="rounded-full border border-[var(--settings-badge-border)] bg-[var(--settings-badge-bg)] px-2 py-px text-10 font-medium uppercase leading-[1.5] tracking-wide text-[var(--text-secondary)]">
-          {t('settings.imBot.beta')}
-        </span>}
-      />
-
-      <div key={`${mode}:${dataOwnerId ?? 'none'}`} className="mt-4 flex flex-col gap-8">
-        {cindyGroupAvailable && (
-          <section
-            ref={cindySectionRef}
-            id={imBotSettings.cindy.targetId}
-            aria-labelledby="im-bot-group-heading-cindy"
-            className="flex scroll-mt-4 flex-col gap-3"
-          >
-            <h3
-              id="im-bot-group-heading-cindy"
-              className="text-14 font-medium leading-[1.4] text-[var(--settings-section-title)]"
-            >
-              {t(IM_BOT_GROUP_LABEL_KEY.cindy)}
-            </h3>
-            <GroupTip message={t(IM_BOT_GROUP_TIP_KEY.cindy)} />
-            <HookConnectionsSection />
-          </section>
-        )}
-
-        <section
-          ref={personalSectionRef}
-          id="im-bot-group-personal"
-          aria-labelledby="im-bot-group-heading-personal"
-          className="flex scroll-mt-4 flex-col gap-3"
-        >
-          <h3
-            id="im-bot-group-heading-personal"
-            className="text-14 font-medium leading-[1.4] text-[var(--settings-section-title)]"
-          >
-            {t(IM_BOT_GROUP_LABEL_KEY.personal)}
-          </h3>
-          <GroupTip message={t(IM_BOT_GROUP_TIP_KEY.personal)} />
-          <PersonalGroupContent
-            targetChannel={targetChannel}
-            preferredFeishuService={preferredFeishuService}
-            activation={activation}
-          />
-        </section>
-
-        {imPlugins.length > 0 && (
-          <section
-            id="im-bot-group-plugins"
-            aria-labelledby="im-bot-group-heading-plugins"
-            className="flex scroll-mt-4 flex-col gap-3"
-          >
-            <h3
-              id="im-bot-group-heading-plugins"
-              className="text-14 font-medium leading-[1.4] text-[var(--settings-section-title)]"
-            >
-              {t('settings.imBot.groups.plugins')}
-            </h3>
-            <GroupTip message={t('settings.imBot.tips.plugins')} />
-            <ImPluginEntrancesCard plugins={imPlugins} />
-            {!cindyGroupAvailable && <HookConnectionsSection projectsOnly />}
-          </section>
-        )}
-      </div>
-    </div>
+    <ImBotSettingsFrame contentKey={`${mode}:${dataOwnerId ?? 'none'}`}>
+      {cindyGroupAvailable && (
+        <ImBotGroupSection group="cindy" sectionRef={cindySectionRef}>
+          <HookConnectionsSection />
+        </ImBotGroupSection>
+      )}
+      <ImBotGroupSection group="personal" sectionRef={personalSectionRef}>
+        <PersonalGroupContent
+          targetChannel={targetChannel}
+          preferredFeishuService={preferredFeishuService}
+          activation={activation}
+        />
+      </ImBotGroupSection>
+      {imPlugins.length > 0 && (
+        <ImBotGroupSection group="plugins">
+          <ImPluginEntrancesCard plugins={imPlugins} />
+          {!cindyGroupAvailable && <HookConnectionsSection projectsOnly />}
+        </ImBotGroupSection>
+      )}
+    </ImBotSettingsFrame>
   );
 }

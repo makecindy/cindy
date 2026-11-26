@@ -415,6 +415,7 @@ export type SessionSendResult =
   | {
       accepted: false;
       reason: 'cancelled-before-dispatch' | 'provider-rejected-before-dispatch';
+      diagnostic?: TurnDispatchRejectedError['diagnostic'];
     };
 
 export interface SessionTurnControlSnapshot {
@@ -493,6 +494,11 @@ export class Session {
     return this.agentKind === 'acp'
       ? this.handle.negotiatedCapabilities ?? this.initialCapabilities
       : this.initialCapabilities;
+  }
+
+  /** ACP-only command names used when sanitizing host-added wire notes. */
+  getPluginEngineCommandNames(): readonly string[] {
+    return this.handle.getPluginEngineCommandNames?.() ?? [];
   }
   /** 见 SessionOptions.remoteHostId。 */
   readonly remoteHostId: string | null;
@@ -1168,6 +1174,7 @@ export class Session {
           return {
             accepted: false,
             reason: reservation.cancelled ? 'cancelled-before-dispatch' : 'provider-rejected-before-dispatch',
+            ...(!reservation.cancelled && e.diagnostic ? { diagnostic: e.diagnostic } : {}),
           };
         }
         // Cancellation cannot downgrade an explicitly ambiguous provider result
@@ -1589,6 +1596,15 @@ export class Session {
   }
 
   /**
+   * Whether closing this runtime keeps the conversation (see
+   * AgentSessionHandle.canResumeAfterClose). A plugin engine that does not say
+   * so counts as unable: reclamation must never strand a conversation.
+   */
+  canResumeAfterClose(): boolean {
+    return this.handle.canResumeAfterClose?.() ?? this.agentKind !== 'acp';
+  }
+
+  /**
    * Provider work that outlives a turn but is not listed as a background task
    * (see AgentSessionHandle.hasLiveBackgroundWork). Closed runtimes have none.
    * A throwing probe counts as busy: reclamation must never guess "idle".
@@ -1775,7 +1791,8 @@ export class Session {
       // close() fences late provider events before entering here. Settle the
       // owned product turn ourselves before listeners and its claim are lost.
       // Never retry: tools may already have performed external side effects.
-      this.settleUnfinishedTurn(SESSION_CLOSED_MID_TURN_MESSAGE);
+      this.settleUnfinishedTurn(SESSION_CLOSED_MID_TURN_MESSAGE,
+        teardown.reason === 'navigation' && this.handle.isCompactingDeliveredReply?.());
       this.clearTurnStallWatchdog();
       this.clearTerminalErrorDrain();
       this.cancelSendReservation(this.sendReservation);
@@ -1815,10 +1832,10 @@ export class Session {
     }
   }
 
-  private settleUnfinishedTurn(message: string): void {
+  private settleUnfinishedTurn(message: string, interruptedCompaction = false): void {
     if (!this.hasUnsettledTurn()) return;
     const usage = this.handle.getPendingTurnUsage?.();
-    if (this.abortRecoveryScheduledFor === this.turnGeneration) {
+    if (interruptedCompaction || this.abortRecoveryScheduledFor === this.turnGeneration) {
       this.fanOutEvent({ type: 'done', data: { status: 'cancelled', ...(usage ? { usage } : {}) }, source: this.eventSource });
     } else {
       this.fanOutEvent({ type: 'error', data: {
@@ -2425,6 +2442,10 @@ export class Session {
   // ── Rewind (Stage 2 C2) ────────────────────────────────────────────────────
   // Claude 走 SDK checkpoint；Codex 走 thread/rollback 裁剪对话。
   // 业务层 (desktop agentRewind.ts) 通过这个委托对外暴露。
+
+  hasReclaimedSharedRun(): boolean {
+    return this.getStatus() === 'active' && this.handle.hasReclaimedSharedRun?.() === true;
+  }
 
   /**
    * 当前是否有 turn 在跑 (rewind preview/commit 业务前置守卫用)。
