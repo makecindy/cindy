@@ -4,7 +4,7 @@ import { parseGroupContinuityAck } from '../../shared/providerGroupContinuity.js
 import { PROVIDER_GROUP_FULL_ERROR } from './failurePolicy.js';
 import { ProviderGroupLocalCapacityError } from './localCapacity.js';
 import type { ProviderGroupRemoteClient, ProviderGroupRemoteInvoke } from './remoteClient.js';
-import { pickProviderGroupMember, providerGroupMembersFull } from './scheduler.js';
+import { applyRouteWeightStep, pickRouteMember, routeMembersFull } from './scheduler.js';
 
 type Input = Parameters<ProviderGroupRemoteClient['pick']>[1];
 type Pick = Extract<ProviderGroupRemotePick, { kind: 'member' }>;
@@ -26,6 +26,8 @@ export function createGroupContinuityClient(deps: {
   const scopeKey = deps.scopeKey ?? (() => 'default');
   const rows = new Map<string, Row>();
   const cursors = new Map<string, string>();
+  /** 「按权重」的计数，与游标同一个键：不记的话每次都选权重最大的那台(与路由、账号池同一种交错分配)。 */
+  const weightCounters = new Map<string, ReadonlyMap<string, number>>();
   const fallbackQueues = new Map<string, { tail: Promise<void>; pending: number }>();
   const sessionFlights = new Map<string, { promise: Promise<ProviderGroupRemotePick>; current(): boolean;
     scope: string; owner: string; provider: string }>();
@@ -131,8 +133,11 @@ export function createGroupContinuityClient(deps: {
         running: live.find(row => row.row.pick.member.key === member.key)?.running ?? 0,
         limit: effectiveConcurrencyLimit(member),
       }));
-      const key = pickProviderGroupMember(members, first.config.strategy, { exclude: excluded, lastPicked: cursors.get(cursor) });
-      if (!key) throw providerGroupMembersFull(members, { exclude: excluded }) ? new Error(PROVIDER_GROUP_FULL_ERROR) : original;
+      const picked = pickRouteMember(members, first.config.strategy, {
+        exclude: excluded, lastPicked: cursors.get(cursor), weightCounters: weightCounters.get(cursor),
+      });
+      const key = picked.key;
+      if (!key) throw routeMembersFull(members, { exclude: excluded }) ? new Error(PROVIDER_GROUP_FULL_ERROR) : original;
       const selected = live.find(row => row.row.pick.member.key === key)!;
       const row = selected.row, id = row.pick.continuity!.id;
       try {
@@ -158,6 +163,10 @@ export function createGroupContinuityClient(deps: {
         }
         if (!cursors.has(cursor) && cursors.size >= 512) cursors.delete(cursors.keys().next().value!);
         cursors.set(cursor, key);
+        if (picked.weightStep) {
+          if (!weightCounters.has(cursor) && weightCounters.size >= 512) weightCounters.delete(weightCounters.keys().next().value!);
+          weightCounters.set(cursor, applyRouteWeightStep(weightCounters.get(cursor), picked.weightStep));
+        }
         return { kind: 'member', member: { ...row.pick.member }, label: row.pick.label };
       } catch (error) {
         // The local handler reports refusal by rejecting rather than returning
