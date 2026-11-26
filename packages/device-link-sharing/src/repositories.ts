@@ -10,7 +10,8 @@ export interface ResourceBinding { kind: 'shared-task' | 'provider-share'; resou
  * membership authority: this service never stores its members, and the host device decides every lease.
  */
 /** `generation` is every lease's `memberVersion`: a new registration (or a new host device) never revives older leases. */
-export interface LinkedProviderShare { shareId: string; networkId: string; hostDeviceId: string; ownerAccountId: string; linkedAt: number; generation: number; }
+/** `removedAt`: unlinked; kept briefly so a later registration continues from `generation` instead of reusing it. */
+export interface LinkedProviderShare { shareId: string; networkId: string; hostDeviceId: string; ownerAccountId: string; linkedAt: number; generation: number; removedAt?: number; }
 export interface SharingState {
   version: 1;
   tasks: StoredSharedTask[];
