@@ -4688,6 +4688,15 @@
       "menu": {
         "disableProvider": "Disable This Provider",
         "enableProvider": "Enable This Provider",
+        "icon": "Connection icon",
+        "appearance": "Name and icon",
+        "ownImage": "Choose image",
+        "imageError": "Choose a PNG, JPG or WebP image under 10 MB.",
+        "connectionIcon": {
+          "default": "Default",
+          "personal": "Personal",
+          "work": "Work"
+        },
         "hideProvider": "Hide from Model Picker",
         "showProvider": "Show in Model Picker"
       },
@@ -14784,27 +14793,27 @@
         },
         "acp": {
           "ask": {
-            "label": "Ask each time",
+            "label": "Default permissions",
             "description": "You confirm when the Agent asks for permission. Cindy can’t block actions the Agent doesn’t ask about."
           },
           "default": {
-            "label": "Default",
+            "label": "Default permissions",
             "description": "Works the agent’s default way; you confirm its permission requests."
           },
           "acceptEdits": {
-            "label": "Accept edits",
+            "label": "Auto accept edits",
             "description": "The agent edits files directly; you confirm its other permission requests."
           },
           "auto": {
-            "label": "Auto",
+            "label": "Auto-review",
             "description": "The agent decides what needs confirmation; you confirm the requests it makes."
           },
           "plan": {
-            "label": "Plan only",
+            "label": "Plan mode",
             "description": "The agent only analyzes and plans; it does not edit files."
           },
           "bypassPermissions": {
-            "label": "Allow all",
+            "label": "Full access",
             "description": "Every permission the Agent asks for is granted automatically."
           }
         }
@@ -15908,6 +15917,10 @@
       "diffUnchangedLines_one": "{{count}} unchanged line",
       "diffUnchangedLines_other": "{{count}} unchanged lines",
       "diffPreviewLoading": "Preparing diff preview…"
+    },
+    "filePreview": {
+      "changed": "File changed",
+      "refreshHint": "Click to refresh"
     },
     "textLightbox": {
       "unreadable": "Unable to read this file",

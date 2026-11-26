@@ -4744,6 +4744,15 @@
       "menu": {
         "disableProvider": "Desativar este fornecedor",
         "enableProvider": "Ativar este fornecedor",
+        "icon": "Ícone da ligação",
+        "appearance": "Nome e ícone",
+        "ownImage": "Escolher imagem",
+        "imageError": "Escolha uma imagem PNG, JPG ou WebP com menos de 10 MB.",
+        "connectionIcon": {
+          "default": "Predefinido",
+          "personal": "Pessoal",
+          "work": "Trabalho"
+        },
         "hideProvider": "Ocultar do seletor de modelos",
         "showProvider": "Mostrar no seletor de modelos"
       },
@@ -14902,27 +14911,27 @@
         },
         "acp": {
           "ask": {
-            "label": "Confirmar sempre",
+            "label": "Permissões predefinidas",
             "description": "A sua confirmação é pedida quando o Agent pede permissão. O Cindy não consegue bloquear ações para as quais o Agent não pede confirmação."
           },
           "default": {
-            "label": "Predefinido",
+            "label": "Permissões predefinidas",
             "description": "O agente trabalha da forma predefinida; confirma os pedidos de permissão."
           },
           "acceptEdits": {
-            "label": "Aceitar edições",
+            "label": "Aceitar edições automaticamente",
             "description": "O agente edita ficheiros diretamente; confirma os restantes pedidos de permissão."
           },
           "auto": {
-            "label": "Automático",
+            "label": "Revisão automática",
             "description": "O agente decide o que precisa de confirmação; confirma os pedidos que fizer."
           },
           "plan": {
-            "label": "Apenas planear",
+            "label": "Modo de planeamento",
             "description": "O agente apenas analisa e planeia; não edita ficheiros."
           },
           "bypassPermissions": {
-            "label": "Permitir tudo",
+            "label": "Acesso total",
             "description": "Todas as permissões pedidas pelo Agent são concedidas automaticamente."
           }
         }
@@ -16015,6 +16024,10 @@
       "diffUnchangedLines_other": "{{count}} linhas sem alterações",
       "diffUnchangedLines_many": "{{count}} linhas sem alterações",
       "diffPreviewLoading": "A preparar pré-visualização do diff…"
+    },
+    "filePreview": {
+      "changed": "Ficheiro alterado",
+      "refreshHint": "Clique para atualizar"
     },
     "textLightbox": {
       "unreadable": "Não é possível ler este ficheiro",

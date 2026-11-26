@@ -4645,6 +4645,15 @@
       "menu": {
         "disableProvider": "停用此供應商",
         "enableProvider": "啟用此供應商",
+        "icon": "連線圖示",
+        "appearance": "名稱與圖示",
+        "ownImage": "選擇自己的圖片",
+        "imageError": "請選擇 10 MB 以內的 PNG、JPG 或 WebP 圖片。",
+        "connectionIcon": {
+          "default": "預設",
+          "personal": "個人",
+          "work": "工作"
+        },
         "hideProvider": "在模型選擇器中隱藏",
         "showProvider": "在模型選擇器中顯示"
       },
@@ -14729,27 +14738,27 @@
         },
         "acp": {
           "ask": {
-            "label": "逐項確認",
+            "label": "預設權限",
             "description": "Agent 請求權限時由你確認。Agent 沒有請求確認的操作，Cindy 無法攔截。"
           },
           "default": {
-            "label": "預設",
+            "label": "預設權限",
             "description": "依 Agent 自己的預設方式工作；它請求權限時由你確認。"
           },
           "acceptEdits": {
-            "label": "自動接受編輯",
+            "label": "允許編輯",
             "description": "Agent 直接修改檔案；其他請求權限的操作由你確認。"
           },
           "auto": {
-            "label": "自動",
+            "label": "自動審核",
             "description": "由 Agent 自行判斷哪些操作需要確認；它請求權限時由你確認。"
           },
           "plan": {
-            "label": "只規劃",
+            "label": "計畫模式",
             "description": "Agent 只分析並制定計畫，不修改檔案。"
           },
           "bypassPermissions": {
-            "label": "全部允許",
+            "label": "完全訪問",
             "description": "Agent 請求的權限一律自動允許。"
           }
         }
@@ -15841,6 +15850,10 @@
       "diffUnchangedLines_one": "{{count}} 行未變",
       "diffUnchangedLines_other": "{{count}} 行未變",
       "diffPreviewLoading": "正在準備差異預覽…"
+    },
+    "filePreview": {
+      "changed": "檔案已變更",
+      "refreshHint": "點擊重新整理"
     },
     "textLightbox": {
       "unreadable": "無法讀取該檔案",

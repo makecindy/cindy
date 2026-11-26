@@ -4645,6 +4645,15 @@
       "menu": {
         "disableProvider": "이 제공자 비활성화",
         "enableProvider": "이 제공자 활성화",
+        "icon": "연결 아이콘",
+        "appearance": "이름 및 아이콘",
+        "ownImage": "이미지 선택",
+        "imageError": "10 MB 이하의 PNG, JPG 또는 WebP 이미지를 선택하세요.",
+        "connectionIcon": {
+          "default": "기본값",
+          "personal": "개인용",
+          "work": "업무용"
+        },
         "hideProvider": "모델 선택기에서 숨기기",
         "showProvider": "모델 선택기에 표시"
       },
@@ -14729,11 +14738,11 @@
         },
         "acp": {
           "ask": {
-            "label": "매번 확인",
+            "label": "기본 권한",
             "description": "Agent가 권한을 요청하면 직접 확인합니다. Agent가 확인을 요청하지 않는 작업은 Cindy가 막을 수 없습니다."
           },
           "default": {
-            "label": "기본",
+            "label": "기본 권한",
             "description": "Agent의 기본 방식으로 작업합니다. 권한 요청은 직접 확인합니다."
           },
           "acceptEdits": {
@@ -14741,15 +14750,15 @@
             "description": "Agent가 파일을 바로 수정합니다. 그 밖의 권한 요청은 직접 확인합니다."
           },
           "auto": {
-            "label": "자동",
+            "label": "자동 리뷰",
             "description": "확인이 필요한 작업은 Agent가 판단합니다. 요청된 권한은 직접 확인합니다."
           },
           "plan": {
-            "label": "계획만",
+            "label": "계획 모드",
             "description": "Agent가 분석과 계획만 하고 파일은 수정하지 않습니다."
           },
           "bypassPermissions": {
-            "label": "모두 허용",
+            "label": "전체 접근",
             "description": "Agent가 요청하는 권한을 모두 자동으로 허용합니다."
           }
         }
@@ -15842,6 +15851,10 @@
       "diffUnchangedLines_one": "변경 없는 줄 {{count}}개",
       "diffUnchangedLines_other": "변경 없는 줄 {{count}}개",
       "diffPreviewLoading": "diff 미리보기를 준비하는 중입니다…"
+    },
+    "filePreview": {
+      "changed": "파일이 변경되었습니다",
+      "refreshHint": "클릭하여 새로고침"
     },
     "textLightbox": {
       "unreadable": "이 파일을 읽을 수 없습니다",

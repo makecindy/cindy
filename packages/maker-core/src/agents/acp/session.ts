@@ -917,7 +917,10 @@ export class AcpSession {
   /** Switches the agent's own mode when it offers one standing for this Cindy mode. */
   private async applyAgentMode(mode: PermissionMode): Promise<void> {
     const option = findModeOption(this.configOptions);
-    const mapped = mapModeValues(option).find((entry) => entry.mode === mode);
+    const mappedModes = mapModeValues(option);
+    const mapped = mappedModes.find((entry) => entry.mode === mode)
+      ?? (mode === 'ask' ? mappedModes.find((entry) => entry.mode === 'default') : undefined)
+      ?? (mode === 'default' ? mappedModes.find((entry) => entry.mode === 'ask') : undefined);
     if (!option || !mapped || option.currentValue === mapped.value) return;
     if (mode === 'plan') this.rememberNonPlanMode();
     await this.setConfigValue(option.id, mapped.value);

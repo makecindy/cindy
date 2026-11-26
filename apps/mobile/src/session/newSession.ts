@@ -1,4 +1,5 @@
 import { composerSlashInvocationName, leadingSlashInvocation } from '@cindy/maker-shared/composer-palette';
+import { resolvePermissionModeForOptions } from '@cindy/maker-shared/permission-mode';
 import { buildComposerPaletteCacheKey } from './composerPaletteCache';
 import { deviceDisplayName } from '@/device-link/deviceName';
 import { getSessionListActivityAt } from '@cindy/maker-shared/session-activity';
@@ -188,11 +189,34 @@ export interface NewSessionDeviceOption {
   name: string;
 }
 
+export const BUILTIN_AGENT_PERMISSION_MODES: Record<NewSessionAgentKind, readonly string[]> = {
+  'claude-code': ['ask', 'acceptEdits', 'auto', 'bypassPermissions'],
+  codex: ['ask', 'auto', 'bypassPermissions'],
+  pi: ['ask', 'auto', 'bypassPermissions'],
+};
+
+/** 将跨引擎统一的权限选择解析为指定内置 Agent 支持的权限档（ask <-> default，不支持时安全回落）。 */
+export function resolvePermissionModeForNewSessionAgent(
+  agentKind: NewSessionAgentKind,
+  preferred: string | null | undefined,
+  supportedIds?: readonly string[],
+): string {
+  const options = supportedIds && supportedIds.length > 0
+    ? supportedIds
+    : BUILTIN_AGENT_PERMISSION_MODES[agentKind];
+  return resolvePermissionModeForOptions(preferred, options, 'ask');
+}
+
 export interface NewSessionStoredPreferences {
   agentKind: NewSessionAgentKind | null;
   device: NewSessionDeviceOption | null;
   /** 上次显式选择的项目/对话模式；null 表示尚未选择，沿用入口默认。 */
   workspaceKind: NewSessionWorkspaceKind | null;
+  /**
+   * 跨内置 Harness / 插件引擎统一的最近一次新建任务权限选择；
+   * 切换任意内置引擎或插件引擎时优先沿用它，不支持时按目标引擎安全回落。
+   */
+  lastPermissionMode?: string | null;
   /**
    * 每个 agent 上次在新建页显式选过的权限档(对齐桌面 lastByVendor 的权限记忆语义);
    * 没选过 = 缺失,回落该 agent 的安全种子默认。'plan' 不入记忆(计划模式是独立开关)。

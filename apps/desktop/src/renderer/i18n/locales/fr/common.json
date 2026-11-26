@@ -4744,6 +4744,15 @@
       "menu": {
         "disableProvider": "Désactiver ce fournisseur",
         "enableProvider": "Activer ce fournisseur",
+        "icon": "Icône de connexion",
+        "appearance": "Nom et icône",
+        "ownImage": "Choisir une image",
+        "imageError": "Choisissez une image PNG, JPG ou WebP de moins de 10 Mo.",
+        "connectionIcon": {
+          "default": "Par défaut",
+          "personal": "Personnel",
+          "work": "Travail"
+        },
         "hideProvider": "Masquer dans le sélecteur de modèles",
         "showProvider": "Afficher dans le sélecteur de modèles"
       },
@@ -14902,27 +14911,27 @@
         },
         "acp": {
           "ask": {
-            "label": "Confirmer à chaque fois",
+            "label": "Autorisations par défaut",
             "description": "Vous confirmez quand l’Agent demande une autorisation. Cindy ne peut pas bloquer les actions pour lesquelles l’Agent ne demande rien."
           },
           "default": {
-            "label": "Par défaut",
+            "label": "Autorisations par défaut",
             "description": "L’Agent fonctionne à sa manière par défaut ; vous confirmez ses demandes d’autorisation."
           },
           "acceptEdits": {
-            "label": "Accepter les modifications",
+            "label": "Modifications acceptées",
             "description": "L’Agent modifie les fichiers directement ; vous confirmez ses autres demandes d’autorisation."
           },
           "auto": {
-            "label": "Automatique",
+            "label": "Revue auto",
             "description": "L’Agent décide de ce qui nécessite une confirmation ; vous confirmez les demandes qu’il fait."
           },
           "plan": {
-            "label": "Planifier uniquement",
+            "label": "Mode plan",
             "description": "L’Agent analyse et planifie seulement ; il ne modifie aucun fichier."
           },
           "bypassPermissions": {
-            "label": "Tout autoriser",
+            "label": "Accès complet",
             "description": "Toutes les autorisations demandées par l’Agent sont accordées automatiquement."
           }
         }
@@ -16015,6 +16024,10 @@
       "diffUnchangedLines_other": "{{count}} lignes inchangées",
       "diffUnchangedLines_many": "{{count}} lignes inchangées",
       "diffPreviewLoading": "Préparation de l'aperçu du diff…"
+    },
+    "filePreview": {
+      "changed": "Fichier modifié",
+      "refreshHint": "Cliquez pour actualiser"
     },
     "textLightbox": {
       "unreadable": "Impossible de lire ce fichier",

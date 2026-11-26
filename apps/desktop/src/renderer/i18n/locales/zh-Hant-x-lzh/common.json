@@ -4645,6 +4645,15 @@
       "menu": {
         "disableProvider": "停此供方",
         "enableProvider": "啟此供方",
+        "icon": "連接之徽",
+        "appearance": "名與徽",
+        "ownImage": "自擇圖",
+        "imageError": "請擇 PNG、JPG 或 WebP 圖，不逾 10 MB。",
+        "connectionIcon": {
+          "default": "如常",
+          "personal": "私用",
+          "work": "公用"
+        },
         "hideProvider": "隱於模型之選",
         "showProvider": "顯於模型之選"
       },
@@ -14729,11 +14738,11 @@
         },
         "acp": {
           "ask": {
-            "label": "逐項確認",
+            "label": "預設權柄",
             "description": "Agent 求權時由君裁可；Agent 未求確認之舉，Cindy 無從攔阻。"
           },
           "default": {
-            "label": "常法",
+            "label": "預設權柄",
             "description": "依 Agent 之常法行事；其請權限，由君定之。"
           },
           "acceptEdits": {
@@ -14741,15 +14750,15 @@
             "description": "Agent 逕改文件；他事請權限，由君定之。"
           },
           "auto": {
-            "label": "自斷",
+            "label": "自審",
             "description": "Agent 自斷何事須確認；其請權限，由君定之。"
           },
           "plan": {
-            "label": "但謀劃",
+            "label": "謀定模式",
             "description": "Agent 唯析事謀劃，不改文件。"
           },
           "bypassPermissions": {
-            "label": "盡許",
+            "label": "完全存取",
             "description": "Agent 所求之權，一概自許。"
           }
         }
@@ -15833,6 +15842,10 @@
       "diffUnchangedLines_one": "{{count}} 行未易",
       "diffUnchangedLines_other": "{{count}} 行未易",
       "diffPreviewLoading": "方備差異先覽…"
+    },
+    "filePreview": {
+      "changed": "卷已易",
+      "refreshHint": "點之即重載"
     },
     "textLightbox": {
       "unreadable": "此卷不能讀",

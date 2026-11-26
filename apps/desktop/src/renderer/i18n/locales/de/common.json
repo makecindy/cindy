@@ -4688,6 +4688,15 @@
       "menu": {
         "disableProvider": "Diesen Anbieter deaktivieren",
         "enableProvider": "Diesen Anbieter aktivieren",
+        "icon": "Verbindungssymbol",
+        "appearance": "Name und Symbol",
+        "ownImage": "Bild auswählen",
+        "imageError": "Wähle ein PNG-, JPG- oder WebP-Bild unter 10 MB.",
+        "connectionIcon": {
+          "default": "Standard",
+          "personal": "Privat",
+          "work": "Arbeit"
+        },
         "hideProvider": "In der Modellauswahl ausblenden",
         "showProvider": "In der Modellauswahl anzeigen"
       },
@@ -14784,27 +14793,27 @@
         },
         "acp": {
           "ask": {
-            "label": "Jedes Mal bestätigen",
+            "label": "Standardberechtigungen",
             "description": "Du bestätigst, wenn der Agent eine Berechtigung anfragt. Aktionen, für die der Agent nicht nachfragt, kann Cindy nicht blockieren."
           },
           "default": {
-            "label": "Standard",
+            "label": "Standardberechtigungen",
             "description": "Der Agent arbeitet in seinem Standardmodus; seine Berechtigungsanfragen bestätigst du."
           },
           "acceptEdits": {
-            "label": "Änderungen akzeptieren",
+            "label": "Änderungen automatisch akzeptieren",
             "description": "Der Agent bearbeitet Dateien direkt; andere Berechtigungsanfragen bestätigst du."
           },
           "auto": {
-            "label": "Automatisch",
+            "label": "Automatische Prüfung",
             "description": "Der Agent entscheidet, was eine Bestätigung braucht; seine Anfragen bestätigst du."
           },
           "plan": {
-            "label": "Nur planen",
+            "label": "Planmodus",
             "description": "Der Agent analysiert und plant nur; er bearbeitet keine Dateien."
           },
           "bypassPermissions": {
-            "label": "Alles erlauben",
+            "label": "Vollzugriff",
             "description": "Alle Berechtigungen, die der Agent anfragt, werden automatisch erteilt."
           }
         }
@@ -15871,6 +15880,10 @@
       "diffUnchangedLines_one": "{{count}} unveränderte Zeile",
       "diffUnchangedLines_other": "{{count}} unveränderte Zeilen",
       "diffPreviewLoading": "Diff-Vorschau wird vorbereitet…"
+    },
+    "filePreview": {
+      "changed": "Datei geändert",
+      "refreshHint": "Zum Aktualisieren klicken"
     },
     "textLightbox": {
       "unreadable": "Diese Datei kann nicht gelesen werden",
