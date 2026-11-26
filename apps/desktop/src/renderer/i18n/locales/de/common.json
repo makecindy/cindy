@@ -4898,7 +4898,7 @@
       "clearAria": "IM-Bot-Verknüpfung aufheben",
       "clearConfirm": {
         "title": "Verknüpfung mit IM-Bot aufheben?",
-        "description": "Beim Aufheben der Verknüpfung wird die WebSocket-Verbindung geschlossen und die lokal gespeicherte App ID / das App Secret / die openId des Eigentümers werden entfernt. Zum erneuten Aktivieren musst du die Zugangsdaten neu erstellen oder erneut eingeben.",
+        "description": "Beim Trennen werden die Verbindung beendet und die lokal gespeicherten Zugangsdaten sowie die Eigentümerzuordnung gelöscht. Du kannst dich per QR-Code oder Link erneut autorisieren.",
         "confirm": "Verknüpfung aufheben",
         "cancel": "Abbrechen"
       },
@@ -4974,6 +4974,18 @@
           "confirm": "Trotzdem ändern",
           "cancel": "Abbrechen"
         }
+      },
+      "qr": {
+        "description": "Scanne den QR-Code mit Feishu oder Lark oder öffne den Autorisierungslink. Nach deiner Bestätigung wird dein Bot automatisch verbunden.",
+        "qrAlt": "QR-Code zur Autorisierung von Feishu / Lark",
+        "expiresIn": "QR-Code läuft in {{seconds}} Sekunden ab",
+        "openLink": "Autorisierungslink öffnen",
+        "cancel": "Autorisierung abbrechen",
+        "begin": "Bot autorisieren",
+        "retry": "Erneut autorisieren",
+        "connecting": "Bot wird verbunden…",
+        "cardActionHint": "Ein per QR-Code erstellter Bot abonniert nur Nachrichtenereignisse. Für Kartenbuttons musst du das Kartenaktion-Ereignis in der Open Platform ergänzen.",
+        "cardActionHintAction": "Open Platform öffnen ↗"
       }
     },
     "wechatBot": {
@@ -13135,7 +13147,8 @@
           "label": "So verbindest du dich",
           "existing": "Den bereits in Cindy eingerichteten Bot verwenden",
           "manual": "Neue Zugangsdaten eingeben",
-          "moveNote": "Der Bot wird aus Einstellungen → IM-Bots verschoben; dieser Bereich bleibt leer. Seine Chats werden mit {{name}} fortgesetzt."
+          "moveNote": "Der Bot wird aus Einstellungen → IM-Bots verschoben; dieser Bereich bleibt leer. Seine Chats werden mit {{name}} fortgesetzt.",
+          "manualFeishu": "Neuen Bot per QR-Code erstellen"
         },
         "imessage": {
           "serverUrlLabel": "BlueBubbles-Server",
@@ -20161,7 +20174,8 @@
       "toolUseLoopDetectedWithCount": "Das Modell hat wiederholt ungültige Tool-Aufrufe ausgeführt. Cindy hat diese Runde nach {{count}} Fehlern gestoppt, um eine Endlosschleife zu verhindern. Sende eine neue Nachricht, um fortzufahren.",
       "toolUseLoopDetectedConsecutiveWithCount": "Das Modell hat denselben Tool-Aufruf {{count}} Mal wiederholt. Cindy hat diese Runde gestoppt, um eine Endlosschleife zu verhindern. Sende eine neue Nachricht, um fortzufahren.",
       "toolUseLoopDetectedPingPongWithCount": "Das Modell hat wiederholt zwischen Tool-Aufrufen gewechselt. Cindy hat diese Runde nach {{count}} erkannten Aufrufen in der Schleife gestoppt, um eine Endlosschleife zu verhindern. Sende eine neue Nachricht, um fortzufahren.",
-      "toolUseLoopDetectedRotationWithCount": "Das Modell hat Tool-Aufrufe wiederholt im Kreis ausgeführt. Cindy hat diese Runde nach {{count}} erkannten Aufrufen in der Schleife gestoppt, um eine Endlosschleife zu verhindern. Sende eine neue Nachricht, um fortzufahren."
+      "toolUseLoopDetectedRotationWithCount": "Das Modell hat Tool-Aufrufe wiederholt im Kreis ausgeführt. Cindy hat diese Runde nach {{count}} erkannten Aufrufen in der Schleife gestoppt, um eine Endlosschleife zu verhindern. Sende eine neue Nachricht, um fortzufahren.",
+      "credentialSaveFailed": "Bot-Zugangsdaten konnten nicht gespeichert werden. Bitte erneut versuchen."
     },
     "validation": {
       "feishuFieldsRequired": "App ID und App Secret sind beide erforderlich",

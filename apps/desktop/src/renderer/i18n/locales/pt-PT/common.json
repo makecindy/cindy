@@ -4954,7 +4954,7 @@
       "clearAria": "Desassociar bot de mensagens instantâneas",
       "clearConfirm": {
         "title": "Desassociar bot de mensagens instantâneas?",
-        "description": "A desassociação fechará a ligação WebSocket e removerá o App ID / App Secret / openId do proprietário guardados localmente. Para voltar a ativar, terá de recriar ou reintroduzir as credenciais.",
+        "description": "Ao desvincular, a ligação é terminada e as credenciais locais e a associação ao proprietário são eliminadas. Pode voltar a autorizar com um código QR ou uma ligação.",
         "confirm": "Desassociar",
         "cancel": "Cancelar"
       },
@@ -5032,6 +5032,18 @@
           "confirm": "Alterar mesmo assim",
           "cancel": "Cancelar"
         }
+      },
+      "qr": {
+        "description": "Leia o código com o Feishu ou Lark, ou abra a ligação de autorização. Confirme para ligar o bot automaticamente.",
+        "qrAlt": "Código QR de autorização do Feishu / Lark",
+        "expiresIn": "O código QR expira em {{seconds}} segundos",
+        "openLink": "Abrir ligação de autorização",
+        "cancel": "Cancelar autorização",
+        "begin": "Autorizar bot",
+        "retry": "Autorizar novamente",
+        "connecting": "A ligar o bot…",
+        "cardActionHint": "Um bot criado por código QR apenas subscreve eventos de mensagem. Adiciona o evento de ação de cartão na plataforma aberta para usar os botões.",
+        "cardActionHintAction": "Abrir a plataforma aberta ↗"
       }
     },
     "wechatBot": {
@@ -13238,7 +13250,8 @@
           "label": "Como ligar",
           "existing": "Usar o bot já configurado no Cindy",
           "manual": "Introduzir novas credenciais",
-          "moveNote": "O bot sai de Definições → Bots de mensagens instantâneas, que ficará vazio. As conversas continuam com {{name}}."
+          "moveNote": "O bot sai de Definições → Bots de mensagens instantâneas, que ficará vazio. As conversas continuam com {{name}}.",
+          "manualFeishu": "Criar um novo bot por código QR"
         },
         "imessage": {
           "serverUrlLabel": "Servidor BlueBubbles",
@@ -20347,7 +20360,8 @@
       "toolUseLoopDetectedWithCount": "O modelo continuou a repetir chamadas de ferramenta inválidas, pelo que o Cindy interrompeu este turno após {{count}} falhas para evitar um ciclo infinito. Envie uma nova mensagem para continuar.",
       "toolUseLoopDetectedConsecutiveWithCount": "O modelo repetiu a mesma chamada de ferramenta {{count}} vezes, pelo que o Cindy interrompeu este turno para evitar um ciclo infinito. Envie uma nova mensagem para continuar.",
       "toolUseLoopDetectedPingPongWithCount": "O modelo continuou a alternar entre chamadas de ferramenta, pelo que o Cindy interrompeu este turno após detetar {{count}} chamadas no ciclo. Envie uma nova mensagem para continuar.",
-      "toolUseLoopDetectedRotationWithCount": "O modelo continuou a percorrer chamadas de ferramenta em ciclo, pelo que o Cindy interrompeu este turno após detetar {{count}} chamadas no ciclo. Envie uma nova mensagem para continuar."
+      "toolUseLoopDetectedRotationWithCount": "O modelo continuou a percorrer chamadas de ferramenta em ciclo, pelo que o Cindy interrompeu este turno após detetar {{count}} chamadas no ciclo. Envie uma nova mensagem para continuar.",
+      "credentialSaveFailed": "Não foi possível guardar as credenciais do bot. Tente novamente."
     },
     "validation": {
       "feishuFieldsRequired": "App ID e App Secret são ambos obrigatórios",

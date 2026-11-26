@@ -267,3 +267,20 @@ export const BOT_IM_CONNECT_TIMEOUT_REASON = 'timeout';
 /** Local-only settings: passwords are write-only and an empty value retains the saved password. */
 export type BotIMessageConfig = Omit<Extract<BotImConnectionAddInput, { channel: 'imessage' }>, 'botId' | 'channel' | 'password'>;
 export type BotIMessageUpdateInput = BotIMessageConfig & { password?: string };
+
+/** 伙伴自有飞书连接的扫码授权: main 只回验证信息与轮次, 凭证不经过 renderer。 */
+export interface BotImFeishuRegistrationBeginResult {
+  ok: boolean;
+  userCode?: string;
+  verificationUrl?: string;
+  expiresIn?: number;
+  runId?: number;
+  error?: string;
+}
+
+export interface BotImFeishuRegistrationStatus {
+  status: 'pending' | 'success' | 'expired' | 'cancelled' | 'error';
+  /** 产生该结果的授权轮次; renderer 据此丢弃旧轮次。 */
+  runId?: number;
+  error?: string;
+}

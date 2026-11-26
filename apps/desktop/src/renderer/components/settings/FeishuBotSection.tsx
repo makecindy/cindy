@@ -15,6 +15,7 @@ import { ImChannelSettingsCard, useImChannelSettingsSummary } from './ImChannelS
 import { ImDefaultSettingsSection } from './ImDefaultSettingsSection';
 import { FeishuBotNotificationSection } from './FeishuBotNotificationSection';
 import { FeishuGroupSettingsSection } from './FeishuGroupSettingsSection';
+import { FeishuBotQrConfig } from './FeishuBotQrConfig';
 
 const APP_LAUNCHER_URL: Record<FeishuBotService, string> = {
   feishu: 'https://open.feishu.cn/page/launcher?from=backend_oneclick',
@@ -98,6 +99,7 @@ export function FeishuBotSectionView({
   idPrefix = '',
   canDisconnect = true,
   canReconnect = true,
+  credentialEntry = 'qr',
   routeSummary,
   defaultSettings,
   connectionDetails,
@@ -112,6 +114,8 @@ export function FeishuBotSectionView({
   idPrefix?: string;
   canDisconnect?: boolean;
   canReconnect?: boolean;
+  /** 本地设置页用扫码授权; 云端表单没有本机 IPC, 继续用手填凭证。 */
+  credentialEntry?: 'qr' | 'form';
   controller: Omit<
     ReturnType<typeof useFeishuBot>,
     'lifecycleAnnouncement' | 'setLifecycleAnnouncement' | 'saveSuccess'
@@ -229,7 +233,7 @@ export function FeishuBotSectionView({
           onReconnect={reconnect}
           onClear={handleClearClick}
         />
-      ) : (
+      ) : credentialEntry === 'form' ? (
         <ManualConfig
           services={services}
           service={service}
@@ -247,6 +251,8 @@ export function FeishuBotSectionView({
           onSave={save}
           onOpenLauncher={openLauncher}
         />
+      ) : (
+        <FeishuBotQrConfig service={service} setService={setService} />
       )}
       <div className="h-px w-full bg-[var(--border-default)]" />
       {defaultSettings}

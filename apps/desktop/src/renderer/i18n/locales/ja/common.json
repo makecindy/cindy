@@ -4855,7 +4855,7 @@
       "clearAria": "IM ボットの連携を解除",
       "clearConfirm": {
         "title": "IM ボットの連携を解除しますか？",
-        "description": "連携を解除すると WebSocket 接続が切れ、ローカルに保存された App ID / App Secret / オーナー openId が削除されます。再度使うには、再作成または再入力が必要です。",
+        "description": "連携を解除すると接続が切断され、この端末の認証情報とオーナーの紐付けが削除されます。QR コードまたはリンクから再度認証できます。",
         "confirm": "連携解除",
         "cancel": "キャンセル"
       },
@@ -4931,6 +4931,18 @@
           "confirm": "このまま変更",
           "cancel": "キャンセル"
         }
+      },
+      "qr": {
+        "description": "Feishu または Lark で QR コードをスキャンするか、認証リンクを開いてください。承認するとボットが自動で接続されます。",
+        "qrAlt": "Feishu / Lark 認証用 QR コード",
+        "expiresIn": "QR コードはあと {{seconds}} 秒で期限切れになります",
+        "openLink": "認証リンクを開く",
+        "cancel": "認証をキャンセル",
+        "begin": "認証を開始",
+        "retry": "再度認証する",
+        "connecting": "ボットに接続中…",
+        "cardActionHint": "QRコードで作成したボットはメッセージイベントのみ購読します。カードボタンを使うには、オープンプラットフォームでカードアクションのイベントを追加してください。",
+        "cardActionHintAction": "オープンプラットフォームを開く ↗"
       }
     },
     "wechatBot": {
@@ -13088,7 +13100,8 @@
           "label": "接続方法",
           "existing": "Cindy で設定済みのボットを使う",
           "manual": "新しい認証情報を入力",
-          "moveNote": "このボットは 設定 → IM ボット から移され、そちらは空になります。これまでの個人チャットとグループチャットは {{name}} が引き継いで返信します。"
+          "moveNote": "このボットは 設定 → IM ボット から移され、そちらは空になります。これまでの個人チャットとグループチャットは {{name}} が引き継いで返信します。",
+          "manualFeishu": "QR コードで新しいボットを作成"
         },
         "imessage": {
           "serverUrlLabel": "BlueBubbles サーバー",
@@ -20085,7 +20098,8 @@
       "toolUseLoopDetectedWithCount": "モデルが無効なツール呼び出しを繰り返したため、無限ループを防ぐために {{count}} 回の失敗後にこのターンを停止しました。新しいメッセージを送信して続行できます。",
       "toolUseLoopDetectedConsecutiveWithCount": "モデルが同じツール呼び出しを {{count}} 回繰り返したため、無限ループを防ぐためこのターンを停止しました。新しいメッセージを送信して続行できます。",
       "toolUseLoopDetectedPingPongWithCount": "モデルがツール呼び出しの間を行き来するループを続けたため、このターンで {{count}} 回の呼び出しを検出した時点で停止しました。新しいメッセージを送信して続行できます。",
-      "toolUseLoopDetectedRotationWithCount": "モデルが複数のツール呼び出しを順番に繰り返したため、このターンで {{count}} 回の呼び出しを検出した時点で停止しました。新しいメッセージを送信して続行できます。"
+      "toolUseLoopDetectedRotationWithCount": "モデルが複数のツール呼び出しを順番に繰り返したため、このターンで {{count}} 回の呼び出しを検出した時点で停止しました。新しいメッセージを送信して続行できます。",
+      "credentialSaveFailed": "ボットの認証情報を保存できませんでした。もう一度お試しください。"
     },
     "validation": {
       "feishuFieldsRequired": "App ID と App Secret の両方を入力してください",

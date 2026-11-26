@@ -4855,7 +4855,7 @@
       "clearAria": "解系 IM 机器人",
       "clearConfirm": {
         "title": "解系 IM 机器人？",
-        "description": "解系则断 WebSocket 连接，并删此机所存之 App ID / App Secret / 主人 openId。欲再用之，须重立或重填凭证。",
+        "description": "解绑则断连接，删本机凭证与主人绑定。欲再用，可扫码或启链接授权。",
         "confirm": "解系",
         "cancel": "罢"
       },
@@ -4931,6 +4931,18 @@
           "confirm": "仍改之",
           "cancel": "罢"
         }
+      },
+      "qr": {
+        "description": "以飞书或 Lark 扫码，亦可启授权链接，确认即绑定机器人。",
+        "qrAlt": "飞书 / Lark 授权二维码",
+        "expiresIn": "二维码尚余 {{seconds}} 秒",
+        "openLink": "启授权链接",
+        "cancel": "取消授权",
+        "begin": "开始授权",
+        "retry": "重新授权",
+        "connecting": "正连接机器人…",
+        "cardActionHint": "扫码所建之机器人默认只订阅消息事件，卡片按钮须另于开放平台添事件订阅",
+        "cardActionHintAction": "启开放平台 ↗"
       }
     },
     "wechatBot": {
@@ -13088,7 +13100,8 @@
           "label": "连接之法",
           "existing": "用已于 Cindy 设置之机器人",
           "manual": "填新凭证",
-          "moveNote": "此机器人将自 规制 → IM 机器人 移来，彼处将空；原有私讯与群组改由 {{name}} 接续回复。"
+          "moveNote": "此机器人将自 规制 → IM 机器人 移来，彼处将空；原有私讯与群组改由 {{name}} 接续回复。",
+          "manualFeishu": "扫码新立机器人"
         },
         "imessage": {
           "serverUrlLabel": "BlueBubbles 服务端",
@@ -20085,7 +20098,8 @@
       "toolUseLoopDetectedWithCount": "模型连触无效之工具调用，Cindy 于 {{count}} 次未成后已止此轮，以免陷无尽循环。遣新讯即可续之。",
       "toolUseLoopDetectedConsecutiveWithCount": "模型重复调用同一工具 {{count}} 次，Cindy 已止此轮，以免陷无尽循环。遣新讯即可续之。",
       "toolUseLoopDetectedPingPongWithCount": "模型于数工具调用间往复循环，Cindy 察此轮已调用 {{count}} 次，遂止之。遣新讯即可续之。",
-      "toolUseLoopDetectedRotationWithCount": "模型轮转调用数工具不休，Cindy 察此轮已调用 {{count}} 次，遂止之。遣新讯即可续之。"
+      "toolUseLoopDetectedRotationWithCount": "模型轮转调用数工具不休，Cindy 察此轮已调用 {{count}} 次，遂止之。遣新讯即可续之。",
+      "credentialSaveFailed": "憑證未存，請重試"
     },
     "validation": {
       "feishuFieldsRequired": "App ID 与 App Secret 皆须填",

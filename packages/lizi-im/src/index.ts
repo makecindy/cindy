@@ -49,6 +49,15 @@ export { startFeishuTurnCarrier } from './feishu/streamingText.js';
 export type { FeishuStreamingDeps, FeishuTurnCarrier } from './feishu/streamingText.js';
 export type { FeishuIMOptions } from './feishu/index.js';
 export {
+  requestAppRegistration as requestFeishuAppRegistration,
+  pollAppRegistration as pollFeishuAppRegistration,
+} from './feishu/appRegistration.js';
+export type {
+  AppRegistrationBeginResult as FeishuAppRegistrationBegin,
+  AppRegistrationPollResult as FeishuAppRegistrationPoll,
+  AppRegistrationSuccessResult as FeishuAppRegistrationSuccess,
+} from './feishu/appRegistration.js';
+export {
   decodeLaneUserId as decodeFeishuLaneUserId,
   encodeLaneUserId as encodeFeishuLaneUserId,
 } from './feishu/codec.js';

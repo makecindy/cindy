@@ -107,6 +107,7 @@ import {
   configureBotImPersonalAdoption,
   registerBotImPersonalAdoptionIpc,
 } from './shared/botImPersonalAdoption';
+import { registerBotImFeishuRegistrationIpc } from './shared/botImFeishuRegistrationIpc';
 import { readTelegramBehavior } from './telegram/behaviorStore';
 import { readBotImConnection, secretKeyPrefixFor } from './shared/botImConnectionStore';
 import { ownerScopedImSecrets } from './ownerScopedStorage';
@@ -142,6 +143,7 @@ import {
 export function registerBotImConnectionIpc(): void {
   registerBotImConnectionRuntimeIpc();
   registerBotImPersonalAdoptionIpc();
+  registerBotImFeishuRegistrationIpc();
 }
 export {
   registerTelegramBotConfigIpc,
