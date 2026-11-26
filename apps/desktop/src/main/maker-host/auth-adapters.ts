@@ -54,6 +54,7 @@ import {
   copyCodexAuthSnapshotWithRetry,
   inspectCodexAuthLink,
   relinkSharedCodexAuth,
+  removeLegacyCodexAuthAlias,
   resolveWindowsAclPrincipal,
   codexAuthLinkAcceptanceFor,
   codexAuthPathsShareIdentity,
@@ -1085,7 +1086,15 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
     // writer from another live profile or a native logout. Leave any old backup intact.
     if (!existsSync(systemAuth)) return;
 
-    if (markerActive) return;
+    if (markerActive) {
+      // 对账被抑制期间（durable disconnect 或服务端作废锁残留），仍拆掉本实例遗留的存量硬链：
+      // 断开用户后续直接在原生 Codex CLI/App 登录，不会再走 Cindy 内登录；留着 nlink>1
+      // 会让 Codex 0.165+/0.171+ 拒绝原子保存新凭证。unproven 与只读 Dev 一律不碰。
+      if (!this.devOAuthWritesBlocked() && marker && !marker.unprovenCredentialAttribution) {
+        removeLegacyCodexAuthAlias(systemAuth, myAuth);
+      }
+      return;
+    }
     if (this.suppressSystemCodexReconcile) {
       // marker 丢失时保持本进程 fail-closed; 磁盘写失败不能变成下一次调用立刻回灌坏 token。
       // 走到这里说明 marker 已经失效(本机 Codex 换了凭证): 解除抑制, 继续正常对账。
@@ -1520,14 +1529,18 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
     const marker = persistedMarker ?? this.memoryOnlyInvalidatedSystemCredential;
     if (!marker) return;
     const systemAuthPath = getSystemCodexAuthPath();
+    const localAuthPath = path.join(this.codexHome, 'auth.json');
     if (persistedMarker) {
       if (
         getActiveInvalidatedSystemCodexAuthMarker(
           this.codexHome,
           systemAuthPath,
-          path.join(this.codexHome, 'auth.json'),
+          localAuthPath,
         )
       ) {
+        if (!this.devOAuthWritesBlocked() && !persistedMarker.unprovenCredentialAttribution) {
+          removeLegacyCodexAuthAlias(systemAuthPath, localAuthPath);
+        }
         return;
       }
     } else {
@@ -2366,9 +2379,15 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
     if (!this.isCodexDisconnectCurrent(activeIntent)) return;
     this.commitExplicitCodexDisconnectBoundary(activeIntent);
     const authPath = path.join(this.codexHome, 'auth.json');
+    const cliAuthPath = getCodexCliAuthPath();
     try {
-      if (!activeIntent.explicitRequested && !codexAuthPathsShareEntry(authPath, getCodexCliAuthPath())) {
+      if (!activeIntent.explicitRequested && !codexAuthPathsShareEntry(authPath, cliAuthPath)) {
         await fsp.rm(authPath, { force: true });
+      } else if (activeIntent.explicitRequested && !this.devOAuthWritesBlocked()) {
+        // 显式断开保留独立文件与软链，但若本实例仍是升级前尚未迁移的存量硬链，顺手摘掉别名，
+        // 防止写入 durable disconnect 后永久阻塞原生 Codex 保存新登录。
+        removeLegacyCodexAuthAlias(getSystemCodexAuthPath(), authPath);
+        removeLegacyCodexAuthAlias(cliAuthPath, authPath);
       }
     } catch (err) {
       // 显式 logout 已在 durable marker 处完成线性化：即使 Windows 文件锁让旧文件

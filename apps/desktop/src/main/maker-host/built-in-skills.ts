@@ -60,9 +60,11 @@ export interface PrepareBuiltInSkillsResult {
   changed: boolean;
   warnings: string[];
   /**
-   * Stable state facts that stay true until the inputs in the preparation cache key
-   * change. Hosts hold their completion cache past these instead of re-running the
-   * whole projection on every request; retryable failures stay in `warnings`.
+   * Stable state that retrying cannot clear, so hosts hold their completion cache past these
+   * instead of re-running the whole projection on every request and report each distinct set
+   * once. Two kinds: preserving a verified newer installed bundle on an older build (also kept
+   * in `warnings`), and a bundle version reused for different bytes (reported only here, since it
+   * stays true for as long as this build ships these bytes). Retryable failures stay in `warnings`.
    */
   persistentWarnings: string[];
 }
@@ -1227,9 +1229,11 @@ export async function prepareBuiltInSkills(
     }
     const newerBundleIsInstalled = manifest.bundleVersion > bundleVersion;
     if (newerBundleIsInstalled) {
-      warnings.push(
-        `kept built-in Skill bundle ${manifest.bundleVersion}; this build only carries older bundle ${bundleVersion}`,
-      );
+      const warning =
+        `kept built-in Skill bundle ${manifest.bundleVersion}; this build only carries older bundle ${bundleVersion}`;
+      warnings.push(warning);
+      // Only treat the kept newer bundle as stable state when its projections were verified.
+      if (projectionSafe) persistentWarnings.push(warning);
       return true;
     }
 

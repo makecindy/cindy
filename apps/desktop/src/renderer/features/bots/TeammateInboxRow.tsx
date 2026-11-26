@@ -21,7 +21,15 @@ const STATUS_KIND = { awaiting: 'awaiting', error: 'error', running: 'running', 
  * Done only reads the replies; it is offered when that is all the row asks for. A pending request
  * or a failure cannot be dismissed, and a running conversation has nothing to complete.
  */
-export function TeammateInboxRow({ entry, section }: { entry: TeammateInboxEntry; section: TaskInboxSection }) {
+export function TeammateInboxRow({
+  entry,
+  section,
+  sessionVariant = 'text',
+}: {
+  entry: TeammateInboxEntry;
+  section: TaskInboxSection;
+  sessionVariant?: 'text' | 'list';
+}) {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const { pathname } = useLocation();
@@ -58,6 +66,7 @@ export function TeammateInboxRow({ entry, section }: { entry: TeammateInboxEntry
       aria-label={label}
       aria-current={isActive ? 'page' : undefined}
       data-teammate-inbox-row={entry.key}
+      data-teammate-inbox-route={entry.route}
       // The title marquee listens for hover on a row carrying this marker.
       data-sidebar-navigation-row="true"
       {...companionDragProps(entry.route, entry.name)}
@@ -68,7 +77,8 @@ export function TeammateInboxRow({ entry, section }: { entry: TeammateInboxEntry
         navigate(entry.route);
       }}
       className={cn(
-        'group relative flex h-8 w-full cursor-pointer select-none items-center gap-2.5 rounded-full pl-3 pr-2 text-left text-sm font-medium outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring',
+        'group relative flex h-8 w-full cursor-pointer select-none items-center gap-2.5 rounded-full pl-3 text-left text-sm font-medium outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring',
+        sessionVariant === 'list' ? 'pr-2.5' : 'pr-2',
         isActive
           ? 'bg-sidebar-item-active text-sidebar-item-active-foreground border border-[var(--sidebar-item-active-border)]'
           : cn('text-foreground hover:bg-sidebar-item-hover', snoozeOpen && 'bg-sidebar-item-hover'),

@@ -3,10 +3,12 @@
 > 通用规则与 Review 清单见[跨端协议兼容](../protocol-compatibility.md)；本文件只记录这一项能力的协议约定。
 
 新增只读 invoke `maker:usage:device-rows`（Desktop ↔ Desktop，已登记 allowlist）。请求可选
-`{ sinceDay: 'YYYY-MM-DD' }`；被控端回 `{ format: 'usage-device-rows-v1', todayKey, sinceDay,
-rowsGz }`，`rowsGz` 为本机 `daily_spend` / `daily_model_usage` / `daily_session_usage` 原始行
-及全部记过用量任务的当前标题、模型、供应商、上下文与最后活跃时间 JSON 的 gzip + base64
-（任务元数据不分增量区间，每次都是完整集合，控制端整体覆盖；不在集合里的任务连同旧行丢弃）。
+`{ sinceDay: 'YYYY-MM-DD', tasksBase?: string }`；被控端回 `{ format: 'usage-device-rows-v1', todayKey, sinceDay,
+rowsGz, tasksToken?, tasksDelta?: { removedTaskIds: string[] } }`，`rowsGz` 为本机 `daily_spend` / `daily_model_usage` / `daily_session_usage` 原始行
+及可见任务的当前标题、模型、供应商、上下文与最后活跃时间 JSON 的 gzip + base64。
+未带 `tasksBase`（首次全量或旧控制端）或被控端内存基准未命中时，`rows.tasks` 返回全部记过用量的可见任务完整集合（不带 `tasksDelta`），控制端整体覆盖；
+新控制端增量同步携带上次收到的 `tasksBase` 且命中同账号作用域的有界基准缓存（`createUsageTaskDeltaCache`）时，`rows.tasks` 只含新增或字段变更的任务元数据，
+同时经 `tasksDelta.removedTaskIds` 告知已删除或转隐藏的任务 ID，控制端在本地缓存上合并变更并连同移除任务的旧行一起丢弃（旧被控端忽略 `tasksBase` 并省略 `tasksDelta`，新控制端自动按完整集合合并）。
 任务元数据与 `local-db:sessions:list` 走同一远端 Bot 可见性判据，隐藏伙伴的任务及其行不外发；
 压缩后仍超帧预算回 `{ format, oversize: true }`。只含按天 × 模型、按天 × 任务的 token 与金额及任务展示元数据，不含消息内容或凭证；handler 无 sender 依赖、无副作用。控制端按账号缓存每台电脑最近一次读到的行，
 增量从缓存 `todayKey` 前一天起拉；被控端回的 `sinceDay` 与请求不一致时按全量替换。

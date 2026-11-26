@@ -22,13 +22,14 @@ function udpCredentialsAllowed(wsUrl: string): boolean {
   return /^wss:\/\//i.test(wsUrl) || /^ws:\/\/(127\.0\.0\.1|localhost|\[::1\])(:\d+)?(\/|$)/i.test(wsUrl);
 }
 /** A malformed credential only disables UDP for this session; it never fails the handshake. */
-function udpCredentials(value: unknown): { session: Uint8Array; key: Uint8Array } | null {
+function udpCredentials(value: unknown): { session: Uint8Array; key: Uint8Array; probe?: boolean } | null {
   if (!value || typeof value !== 'object') return null;
-  const { session, key } = value as { session?: unknown; key?: unknown };
+  const { session, key, probe } = value as { session?: unknown; key?: unknown; probe?: unknown };
   if (typeof session !== 'string' || typeof key !== 'string') return null;
   try {
-    const credentials = { session: fromBase64Url(session), key: fromBase64Url(key) };
-    return credentials.session.length === 8 && credentials.key.length === 32 ? credentials : null;
+    const sessionBytes = fromBase64Url(session), keyBytes = fromBase64Url(key);
+    if (sessionBytes.length !== 8 || keyBytes.length !== 32) return null;
+    return probe === true ? { session: sessionBytes, key: keyBytes, probe: true } : { session: sessionBytes, key: keyBytes };
   } catch { return null; }
 }
 
@@ -70,6 +71,14 @@ export interface PortableClientOptions {
 const STORAGE_UNREACHABLE = Symbol('storage unreachable');
 /** How long a client whose network could not reach the attachment storage keeps using the relay for media. */
 const DIRECT_STORAGE_RETRY_MS = 10 * 60_000;
+/**
+ * Matches Desktop's `DatagramSendQueue` (1 s) and `AGENT_NET_UPLINK_KEEPALIVE.timeoutMs` (45 s): React Native's WebSocket
+ * exposes `bufferedAmount` without a control-frame `ping`. Once outbound bytes sit undrained past `RELAY_QUEUE_STALL_MS`,
+ * new relayed datagrams are dropped instead of piling up; if the send buffer never drains and nothing arrives for
+ * `RELAY_SEND_DEAD_MS`, the half-open WebSocket is closed so `AgentNetSocket` reconnects it.
+ */
+const RELAY_QUEUE_STALL_MS = 1_000;
+const RELAY_SEND_DEAD_MS = 45_000;
 export class PortableAgentNetClient implements SocketClient {
   readonly base: string;
   readonly identity: AgentNetSigner['identity'];
@@ -332,28 +341,87 @@ export class PortableAgentNetClient implements SocketClient {
   }
 }
 
+function bufferedBytes(ws: BinarySocket): number {
+  return typeof ws.bufferedAmount === 'number' && Number.isFinite(ws.bufferedAmount) && ws.bufferedAmount > 0 ? ws.bufferedAmount : 0;
+}
+
+const RELAY_PROBE_TIMEOUT_MS = 15_000;
+
 class PortableUplink extends SocketEvents implements SocketUplink {
   readonly kind = 'agent-net';
   devices: DeviceView[] = [];
   delegations: Delegation[] = [];
   delegationRequests: DelegationRequest[] = [];
   notifications = false;
+  private supportsRelayProbe = false;
+  private probeTimer: ReturnType<typeof setTimeout> | null = null;
+  private lastProbeAt = -Infinity;
+
+  probeRelay(): void {
+    const now = performance.now();
+    if (!this.supportsRelayProbe || this.closed || this.probeTimer || now - this.lastProbeAt < RELAY_PROBE_TIMEOUT_MS) return;
+    this.lastProbeAt = now;
+    this.probeTimer = setTimeout(() => {
+      this.probeTimer = null;
+      // The app may have been suspended. A delayed JS timer is not a failed round trip.
+      if (performance.now() - now > 2 * RELAY_PROBE_TIMEOUT_MS) return;
+      this.close();
+      this.emitClose(1006);
+    }, RELAY_PROBE_TIMEOUT_MS);
+    try { this.ws.send('{"type":"relay-probe"}'); } catch { this.close(); this.emitClose(1006); }
+  }
+  private clearProbe(): void {
+    if (this.probeTimer !== null) clearTimeout(this.probeTimer);
+    this.probeTimer = null;
+  }
   /** This session's relay UDP credentials when the relay offered them; null keeps every relayed datagram on the WebSocket. */
-  udp: { session: Uint8Array; key: Uint8Array } | null = null;
+  udp: { session: Uint8Array; key: Uint8Array; probe?: boolean } | null = null;
   private receiver: ((deviceId: string, data: Uint8Array) => void) | null = null;
   private pending: [string, Uint8Array][] = [];
   private pendingBytes = 0;
   private queues = new Map<string, Uint8Array[]>();
   private queuedBytes = 0;
   private scheduled: ReturnType<typeof setTimeout> | null = null;
+  private stallSince: number | null = null;
+  private deadTimer: ReturnType<typeof setTimeout> | null = null;
   private closed = false;
+  private closeEmitted = false;
   private constructor(private ws: BinarySocket) { super(); }
+  private emitClose(code: number): void {
+    if (this.closeEmitted) return;
+    this.closeEmitted = true;
+    this.emit('close', code);
+  }
+  private clearStall(): void {
+    this.stallSince = null;
+    if (this.deadTimer) { clearTimeout(this.deadTimer); this.deadTimer = null; }
+  }
+  private armDeadCheck(): void {
+    if (this.deadTimer || this.closed) return;
+    this.deadTimer = setTimeout(() => {
+      this.deadTimer = null;
+      if (this.closed || this.stallSince === null) return;
+      if (bufferedBytes(this.ws) === 0) { this.stallSince = null; return; }
+      const elapsed = performance.now() - this.stallSince;
+      if (elapsed >= RELAY_SEND_DEAD_MS) {
+        this.close();
+        this.emitClose(1006);
+        return;
+      }
+      this.armDeadCheck();
+    }, Math.max(50, RELAY_SEND_DEAD_MS - (this.stallSince === null ? 0 : performance.now() - this.stallSince)));
+  }
   static open(ws: BinarySocket, client: PortableAgentNetClient, askUdp = false): Promise<PortableUplink> {
     const uplink = new PortableUplink(ws);
     return new Promise((resolve, reject) => {
       let established = false, receivedHello = false;
       const timer = setTimeout(() => fail(new Error('AGENT_NET_HANDSHAKE_TIMEOUT')), 10_000);
-      const fail = (error: Error) => { clearTimeout(timer); if (!established) reject(error); uplink.close(); };
+      const fail = (error: Error) => {
+        clearTimeout(timer);
+        if (!established) reject(error);
+        uplink.close();
+        if (established && ws.readyState === 3) queueMicrotask(() => uplink.emitClose(1006));
+      };
       let chain = Promise.resolve(), waiting = 0;
       ws.onerror = event => {
         const status = typeof event.message === 'string' ? /\b(401|403)\b/.exec(event.message)?.[1] : undefined;
@@ -361,18 +429,25 @@ class PortableUplink extends SocketEvents implements SocketUplink {
       };
       ws.onclose = event => {
         clearTimeout(timer); if (!established) reject(new Error('AGENT_NET_CLOSED_' + event.code));
+        uplink.clearProbe();
         uplink.closed = true;
-        uplink.emit('close', event.code);
+        uplink.clearStall();
+        if (established) uplink.emitClose(event.code);
       };
       ws.onmessage = event => {
         if (uplink.closed) return;
+        if (bufferedBytes(ws) === 0) uplink.clearStall();
         if (++waiting > 512) { fail(new Error('AGENT_NET_RECEIVE_BACKPRESSURE')); return; }
         const receive = async () => {
           if (uplink.closed) return;
           client.options.assertCurrent();
           if (typeof event.data === 'string') {
             if (utf8(event.data).length > MAX_CONTROL_BYTES) throw new Error('INVALID_CONTROL');
-            const message = JSON.parse(event.data) as { type: string; deviceId: string; protocolVersion?: number; notifications?: boolean; devices: DeviceView[]; delegations: Delegation[]; delegationRequests?: DelegationRequest[] };
+            const message = JSON.parse(event.data) as { type: string; deviceId: string; protocolVersion?: number; notifications?: boolean; relayProbe?: boolean; devices: DeviceView[]; delegations: Delegation[]; delegationRequests?: DelegationRequest[] };
+            if (message.type === 'relay-pong' && receivedHello && uplink.supportsRelayProbe) {
+              uplink.clearProbe();
+              return;
+            }
             const requests = message.delegationRequests ?? [];
             if (!['hello', 'directory'].includes(message.type) || !Array.isArray(message.devices) || !Array.isArray(message.delegations)
               || !Array.isArray(requests) || !client.trustedDirectory(message.devices, message.delegations, requests)) throw new Error('UNTRUSTED_DIRECTORY');
@@ -382,6 +457,7 @@ class PortableUplink extends SocketEvents implements SocketUplink {
             if (message.type === 'hello') {
               if (receivedHello || message.protocolVersion !== 2
                 || message.deviceId !== (client.delegation ? 'guest:' + client.delegation.id : client.identity.deviceId)) throw new Error('INVALID_HELLO');
+              uplink.supportsRelayProbe = !client.delegation && message.relayProbe === true;
               uplink.notifications = message.notifications === true;
               uplink.udp = askUdp ? udpCredentials((message as { udp?: unknown }).udp) : null;
               receivedHello = true; established = true; clearTimeout(timer); resolve(uplink);
@@ -428,8 +504,25 @@ class PortableUplink extends SocketEvents implements SocketUplink {
       for (const [id, packets] of queues) {
         let batch: Uint8Array[] = [], size = 2 + id.length;
         const flush = () => {
-          if (batch.length && !this.closed && this.ws.readyState === 1 && this.ws.bufferedAmount <= 1024 * 1024) {
-            try { this.ws.send(encodeDatagrams(id, batch)); } catch { /* Core retransmits dropped datagrams. */ }
+          if (batch.length && !this.closed && this.ws.readyState === 1) {
+            const bufferedBefore = bufferedBytes(this.ws);
+            if (bufferedBefore === 0) this.clearStall();
+            else if (this.stallSince === null) { this.stallSince = performance.now(); this.armDeadCheck(); }
+            else if (performance.now() - this.stallSince >= RELAY_SEND_DEAD_MS) {
+              this.close();
+              this.emitClose(1006);
+              return;
+            }
+            const stalled = this.stallSince !== null && performance.now() - this.stallSince >= RELAY_QUEUE_STALL_MS;
+            if (!stalled && bufferedBefore <= 1024 * 1024) {
+              try {
+                this.ws.send(encodeDatagrams(id, batch));
+                if (bufferedBytes(this.ws) > 0 && this.stallSince === null) {
+                  this.stallSince = performance.now();
+                  this.armDeadCheck();
+                }
+              } catch { /* Core retransmits dropped datagrams. */ }
+            }
           }
           batch = []; size = 2 + id.length;
         };
@@ -446,8 +539,10 @@ class PortableUplink extends SocketEvents implements SocketUplink {
       platform: metadata.platform, app: metadata.app, appVersion: metadata.appVersion, busy: metadata.busy, deviceName: metadata.deviceName }));
   }
   close(): void {
+    this.clearProbe();
     if (this.closed) return;
     this.closed = true;
+    this.clearStall();
     if (this.scheduled) clearTimeout(this.scheduled); this.scheduled = null;
     this.pending = []; this.pendingBytes = 0; this.queues.clear(); this.queuedBytes = 0;
     this.ws.close();

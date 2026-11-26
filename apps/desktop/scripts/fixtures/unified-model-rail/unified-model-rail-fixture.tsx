@@ -1,7 +1,11 @@
-import { mountPage, subscription } from '../../ui-page/harness';
+import { ctx, mountPage, subscription } from '../../ui-page/harness';
 import { ModelSelectorContent } from '../../../src/renderer/components/new-chat/ModelSelector';
 import { recordRecentModel } from '../../../src/renderer/state/recentModels';
-import { addModelFavorite } from '../../../src/renderer/state/modelFavorites';
+import { addModelFavorite, setModelFavoritesOwner } from '../../../src/renderer/state/modelFavorites';
+import { providerShareFavoriteSource } from '../../../src/renderer/state/providerShareFavorites';
+import { getDataOwnerGeneration } from '../../../src/renderer/contexts/dataOwnerGeneration';
+import { UnifiedModelPanel } from '../../../src/renderer/components/new-chat/UnifiedModelPanel';
+import type { ProviderShareReceived } from '@cindy/device-link';
 import type { ProviderView, UnifiedModelEntry } from '@cindy/model-providers';
 import { useTranslation } from 'react-i18next';
 import { cindyAiAccountName } from '../../../src/shared/cindyAiPresentation';
@@ -90,6 +94,26 @@ recordRecentModel({ providerId: 'openai', modelId: 'gpt-5.6', agent: 'cc', effor
 recordRecentModel({ providerId: 'anthropic', modelId: 'claude-opus-5', agent: 'cc', effort: 'high' }, Date.now() - 10_000);
 addModelFavorite({ providerId: 'anthropic', modelId: 'claude-opus-5', agent: 'cc', effort: 'high' });
 
+const share: ProviderShareReceived = {
+  shareId: 'fixture-share', memberId: 'fixture-member', providerId: 'anthropic',
+  providerLabel: 'Anthropic', hostDeviceId: 'fixture-host', deviceName: 'Fixture',
+  owner: { displayName: 'Fixture', avatarUrl: null, region: 'cn' },
+  status: 'active', hostOnline: true, hostCapable: true,
+};
+let shareVisible = true;
+let receivedChanged: ((received: ProviderShareReceived[]) => void) | undefined;
+
+function SharedFavoritesFixture() {
+  return <main className="p-4"><UnifiedModelPanel
+    deviceId={`share:${share.shareId}`} providers={[providers[0]!]} scope="draft"
+    query="" sourceVersion="fixture" isVisible={() => true}
+    selected={{ providerId: 'anthropic', modelId: 'claude-opus-5' }}
+    liveAgentKind="claude-code" agentFastModeCapable={() => false} priceOf={() => null}
+    providerLabel={() => 'Anthropic'} effortLabelOf={(_agent, effort) => effort}
+    onSelect={() => {}}
+  /></main>;
+}
+
 function Fixture({ scenario }: { scenario: string }) {
   const { t } = useTranslation();
   const gateway = scenario.startsWith('cindy-');
@@ -97,7 +121,10 @@ function Fixture({ scenario }: { scenario: string }) {
     ? { membershipKind: 'personal', orgSlug: null, orgName: null }
     : { membershipKind: 'org', orgSlug: scenario === 'cindy-xd' ? 'xd' : 'example', orgName: 'Example International Game Studio' }, t);
   const custom = scenario.startsWith('custom-ids');
-  const sourceProviders = custom ? customProviders : gateway ? [...providers, {
+  const uploadedIcon = ctx.data.customIcon;
+  const sourceProviders = typeof uploadedIcon === 'string'
+    ? [{ ...providers[0]!, customIcon: uploadedIcon }, providers[1]!]
+    : custom ? customProviders : gateway ? [...providers, {
     ...providers[1], id: 'xd', name: accountName, auth: { method: 'managed' },
     logoKind: scenario === 'cindy-xd' ? 'xd' : 'cindy',
     models: { codex: [{ id: 'auto', name: 'Auto', group: 'gpt', contextWindow: 272000, efforts: [] }] },
@@ -127,7 +154,17 @@ function Fixture({ scenario }: { scenario: string }) {
 }
 
 void mountPage({
-  host: { maker: {
+  host: (ctx) => {
+    const owner = getDataOwnerGeneration();
+    if (ctx.case === 'share-favorite-recovery') {
+      setModelFavoritesOwner(owner.dataOwnerId);
+      addModelFavorite({ providerId: providerShareFavoriteSource(share), modelId: 'claude-opus-5', agent: 'cc' });
+      Object.assign(window, { setFixtureShareVisible: (visible: boolean) => {
+        shareVisible = visible;
+        receivedChanged?.(visible ? [share] : []);
+      } });
+    }
+    return { maker: {
     getModelContextLimit: async () => ({ limit: 272000, isCustomized: false }),
     onProvidersChanged: subscription('providersChanged'),
     // agent 级 Fast 能力:useAgentCapabilities → electronAPI.maker.getCapabilities;
@@ -142,6 +179,16 @@ void mountPage({
       ],
       permissionModes: [{ id: 'default', displayName: 'Default' }],
     }),
-  } },
-  render: ctx => <Fixture scenario={ctx.case} />,
+    }, ...(ctx.case === 'share-favorite-recovery' ? { providerShare: {
+      command: async () => ({
+        ownerStamp: { dataOwnerId: owner.dataOwnerId, ownerGeneration: owner.generation },
+        confirmedRegions: ['cn'], received: shareVisible ? [share] : [],
+      }),
+      onReceivedChanged: (listener: typeof receivedChanged) => {
+        receivedChanged = listener;
+        return () => { receivedChanged = undefined; };
+      },
+    } } : {}) };
+  },
+  render: ctx => ctx.case === 'share-favorite-recovery' ? <SharedFavoritesFixture /> : <Fixture scenario={ctx.case} />,
 });

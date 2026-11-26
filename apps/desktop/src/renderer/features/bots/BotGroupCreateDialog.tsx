@@ -7,7 +7,6 @@
  */
 import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
-import { Check } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { Button } from '@/components/ui/button';
@@ -20,6 +19,7 @@ import { BotAvatar } from './BotAvatar';
 import { botGroupApi, refreshBotGroups } from './botGroupStore';
 import { BOT_GROUP_MAX_MEMBERS, BOT_GROUP_MIN_MEMBERS, botGroupErrorKey } from './botGroupPresentation';
 import { useBotProfiles, type BotProfile } from './botStore';
+import { Checkbox } from '@/components/ui/checkbox';
 
 function pickableBots(bots: readonly BotProfile[]): BotProfile[] {
   return bots
@@ -87,7 +87,7 @@ export function BotGroupCreateDialog({
   const [busy, setBusy] = useState(false);
   const busyRef = useRef(false);
   const nameInputRef = useRef<HTMLInputElement>(null);
-  const firstMemberRef = useRef<HTMLButtonElement>(null);
+  const firstMemberRef = useRef<HTMLInputElement>(null);
 
   // Speaking order follows the picker's order, not the click order.
   const orderedSelection = privateChatBotId ? [privateChatBotId] : candidates
@@ -163,7 +163,7 @@ export function BotGroupCreateDialog({
   return (
     <Dialog.Root open onOpenChange={(open) => !busyRef.current && onOpenChange(open)}>
       <Dialog.Portal>
-        <Dialog.Overlay className="modal-scrim fixed inset-0 z-[70]" />
+        <Dialog.Overlay className="modal-scrim fixed inset-0 z-modal" />
         <Dialog.Content
           onPointerDownOutside={(event) => event.preventDefault()}
           onEscapeKeyDown={(event) => {
@@ -174,7 +174,7 @@ export function BotGroupCreateDialog({
             event.preventDefault();
             nameInputRef.current?.focus();
           }}
-          className="modal-panel fixed inset-0 z-[71] m-auto flex h-fit max-h-[85vh] w-[min(460px,calc(100vw-32px))] flex-col p-4 outline-none"
+          className="modal-panel fixed inset-0 z-modal-raised m-auto flex h-fit max-h-[85vh] w-[min(460px,calc(100vw-32px))] flex-col p-4 outline-none"
         >
           <form className="flex min-h-0 flex-col" onSubmit={(event) => void submit(event)} noValidate>
             <Dialog.Title className="text-18 font-medium text-[var(--confirm-title)]">
@@ -241,18 +241,11 @@ export function BotGroupCreateDialog({
                       const selectable = isSelectable(bot);
                       const disabled = busy || !selectable || (!checked && atLimit);
                       return (
-                        <button
+                        <label
                           key={bot.id}
-                          ref={index === 0 ? firstMemberRef : undefined}
-                          type="button"
-                          role="checkbox"
-                          aria-checked={checked}
-                          disabled={disabled}
-                          onClick={() => toggle(bot.id)}
                           className={cn(
-                            'flex min-h-10 w-full items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-left text-13 text-[var(--text-primary)] outline-none transition-colors',
-                            'focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--focus-ring)]',
-                            'enabled:hover:bg-[var(--model-item-hover)] disabled:cursor-not-allowed',
+                            'flex min-h-10 w-full items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-left text-13 text-[var(--text-primary)] transition-colors',
+                            disabled ? 'cursor-not-allowed' : 'cursor-pointer hover:bg-[var(--model-item-hover)]',
                             !selectable && 'opacity-60',
                           )}
                         >
@@ -267,18 +260,14 @@ export function BotGroupCreateDialog({
                               )}
                             </span>
                           ) : null}
-                          <span
-                            aria-hidden
-                            className={cn(
-                              'flex h-5 w-5 shrink-0 items-center justify-center rounded-full border',
-                              checked
-                                ? 'border-transparent bg-[var(--accent-cta-bg-pure)] text-[var(--accent-pure-cta-fg)]'
-                                : 'border-[var(--text-tertiary)]',
-                            )}
-                          >
-                            {checked ? <Check size={12} strokeWidth={3} /> : null}
-                          </span>
-                        </button>
+                          {/* Shared Checkbox (DESIGN.md §4, B-10); the row label toggles it. */}
+                          <Checkbox
+                            ref={index === 0 ? firstMemberRef : undefined}
+                            checked={checked}
+                            disabled={disabled}
+                            onChange={() => toggle(bot.id)}
+                          />
+                        </label>
                       );
                     })}
                   </div>

@@ -1,4 +1,6 @@
-import type { ReactNode } from 'react';
+import { useLayoutEffect, useRef, type ReactNode } from 'react';
+import { isDarkBackground } from '../../../shared/theme-import/color';
+import { themeService } from '@/themes/theme-service';
 import { isProviderShareAgentDeviceId } from '../../../shared/providerShare';
 import { useProviderShareWeeklyQuota } from '@/features/provider-share/useProviderShareWeeklyQuota';
 import { History, LayoutGrid, Share2, Star, Waypoints } from 'lucide-react';
@@ -29,6 +31,7 @@ import {
   engineOfAgentKind,
   railItemDeviceId,
   railItemKey,
+  type DeviceModelGroupsRailTab,
   type PluginEngineRailTab,
   type UnifiedRailFilter,
   type UnifiedRailItem,
@@ -55,9 +58,12 @@ export function UnifiedModelRail({
   providerGroupUsage,
   remoteSources,
   pluginEngineTabs,
+  modelGroupDeviceTabs,
 }: {
   /** 插件引擎格的名字与图标，按 providerId (与所在电脑)对应 `plugin-engine` 格。 */
   pluginEngineTabs?: readonly PluginEngineRailTab[];
+  /** 另一台电脑的「模型组」格的名字(悬停与读屏)。 */
+  modelGroupDeviceTabs?: readonly DeviceModelGroupsRailTab[];
   items: readonly UnifiedRailItem[];
   active: UnifiedRailFilter;
   onSelect: (item: UnifiedRailItem) => void;
@@ -162,6 +168,10 @@ export function UnifiedModelRail({
                   })
                 : item.kind === 'all'
                   ? t('newChat.modelSelector.unified.railAll')
+                  : item.kind === 'model-groups' && item.deviceId
+                    ? t('modelGroups.picker.deviceTitle', {
+                        device: modelGroupDeviceTabs?.find((tab) => tab.deviceId === item.deviceId)?.name ?? '',
+                      })
                   : item.kind === 'model-groups'
                     ? t('modelGroups.title')
                   : item.kind === 'plugin-engine'
@@ -187,6 +197,7 @@ export function UnifiedModelRail({
               label={label}
               accountIdentity={accountIdentity}
               {...(groupNote ? { groupNote } : {})}
+              selectedUpload={isActive && !!provider?.customIcon}
               isActive={isActive}
               itemKey={key}
               onClick={() => onSelect(item)}
@@ -212,6 +223,11 @@ export function UnifiedModelRail({
                 <engineOption.Mark size={14} className="shrink-0" />
               ) : item.kind === 'all' ? (
                 <LayoutGrid size={16} />
+              ) : item.kind === 'model-groups' && item.deviceId ? (
+                // 另一台电脑的模式：与远程供应商格同一个信号波纹。
+                <RemoteSourceMark markSize={16}>
+                  <Waypoints size={16} />
+                </RemoteSourceMark>
               ) : item.kind === 'model-groups' ? (
                 <Waypoints size={16} />
               ) : item.kind === 'plugin-engine' && item.deviceId ? (
@@ -248,6 +264,7 @@ interface RailButtonProps {
   accountIdentity?: string;
   /** 供应商组那一格:用量读的是哪台(或还没分到电脑),账号名跟在这一句后面。 */
   groupNote?: string;
+  selectedUpload: boolean;
   isActive: boolean;
   itemKey: string;
   onClick: () => void;
@@ -320,6 +337,7 @@ function RailButtonView({
   onClick,
   disabled,
   children,
+  selectedUpload,
   quota,
   pool,
 }: RailButtonProps & {
@@ -327,6 +345,45 @@ function RailButtonView({
   pool?: ModelPoolQuota | null;
 }) {
   const { t } = useTranslation();
+  const mark = useRef<HTMLSpanElement>(null);
+  useLayoutEffect(() => {
+    const el = mark.current;
+    if (!el || !selectedUpload) return;
+    const applyPalette = () => {
+      // Read the destination token, not an intermediate frame of the button transition.
+      // Chromium resolves CSS color expressions and composites translucent theme colors.
+      const canvas = document.createElement('canvas');
+      canvas.width = canvas.height = 1;
+      const ctx = canvas.getContext('2d', { willReadFrequently: true });
+      if (!ctx) return;
+      canvas.hidden = true;
+      canvas.style.backgroundColor = 'var(--accent-cta-bg)';
+      const button = el.parentElement!;
+      button.append(canvas);
+      const layers = [getComputedStyle(canvas).backgroundColor];
+      // A translucent button shows the rail and panel surfaces underneath.
+      for (let parent = button.parentElement; parent && !layers[0].startsWith('rgb('); parent = parent.parentElement) {
+        layers.unshift(getComputedStyle(parent).backgroundColor);
+      }
+      if (!layers[0].startsWith('rgb(')) {
+        canvas.style.backgroundColor = 'Canvas';
+        layers.unshift(getComputedStyle(canvas).backgroundColor);
+      }
+      canvas.remove();
+      for (const color of layers) {
+        ctx.fillStyle = color;
+        ctx.fillRect(0, 0, 1, 1);
+      }
+      const [r, g, b] = ctx.getImageData(0, 0, 1, 1).data;
+      el.style.colorScheme = isDarkBackground({ r, g, b }) ? 'dark' : 'light';
+    };
+    applyPalette();
+    const unsubscribe = themeService.onDidChangeTheme(applyPalette);
+    return () => {
+      unsubscribe();
+      el.style.removeProperty('color-scheme');
+    };
+  }, [selectedUpload]);
   const remaining = quota ? Math.round(100 - quota.usedPercent) : null;
   const quotaLabel = pool?.hasAccountDetails
     ? pool.label
@@ -384,14 +441,14 @@ function RailButtonView({
         aria-pressed={isActive}
         data-rail-item={itemKey}
         className={cn(
-          'relative flex h-[38px] w-[34px] shrink-0 flex-col items-center justify-center rounded-[9px] transition-colors',
+          'relative flex h-[38px] w-[34px] shrink-0 flex-col items-center justify-center rounded-lg transition-colors',
           isActive
             ? 'bg-[var(--accent-cta-bg)] text-[var(--accent-pure-cta-fg)]'
             : 'text-[var(--text-tertiary)] hover:bg-[var(--model-item-hover)] hover:text-[var(--text-secondary)]',
           disabled && 'cursor-not-allowed opacity-50',
         )}
       >
-        <span className="flex h-[24px] items-center justify-center">{children}</span>
+        <span ref={mark} className="flex h-[24px] items-center justify-center">{children}</span>
         {(pool?.warning || !!pool?.resetSoonCount) && (
           <span
             aria-hidden

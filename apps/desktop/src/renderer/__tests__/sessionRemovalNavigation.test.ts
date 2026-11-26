@@ -3,6 +3,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import {
+  getVisibleInboxTargets,
   getVisibleSidebarSessionIds,
   pickSessionIdAfterRemoval,
 } from '@/features/cc-agent/lib/sessionRemovalNavigation';
@@ -31,6 +32,20 @@ describe('pickSessionIdAfterRemoval', () => {
   it('returns null when the anchor is not in the ordered list', () => {
     expect(pickSessionIdAfterRemoval(['a', 'b'], new Set(['x']), 'x')).toBeNull();
   });
+});
+
+// Unit regression for #11774: a task-only scan lost the teammate between two tasks.
+it('collects pending conversation destinations in their visible mixed order', () => {
+  const section = document.createElement('section');
+  section.innerHTML = `
+    <div data-sidebar-session-row="true" data-session-id="first"></div>
+    <div data-teammate-inbox-route="/bots/remote/studio/partner"></div>
+    <div hidden data-teammate-inbox-route="/bots/hidden"></div>
+    <div data-sidebar-session-row="true" data-session-id="last"></div>`;
+  expect([...getVisibleInboxTargets(section).values()]).toEqual([
+    { sessionId: 'first' }, { route: '/bots/remote/studio/partner' }, { sessionId: 'last' },
+  ]);
+  expect(getVisibleSidebarSessionIds(section)).toEqual(['first', 'last']);
 });
 
 describe('getVisibleSidebarSessionIds', () => {

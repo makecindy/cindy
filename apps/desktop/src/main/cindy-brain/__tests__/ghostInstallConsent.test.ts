@@ -15,6 +15,7 @@ import {
   confirmedAutoTools,
   confirmedCindyModelActions,
   confirmedHarnesses,
+  confirmedFileOpenerExtensions,
   confirmedTaskCapability,
   confirmedUiCapability,
   type GhostInstallConsentPrompt,
@@ -211,6 +212,27 @@ it('asks for task engines as their own permission and records only the engines t
   // An engine whose protocol this Host cannot run is kept as data and asks for nothing.
   const inactive = withNode([{ ...dsh, protocol: 'acp/2' }]);
   expect(confirmedHarnesses(await obtainGhostInstallConsent({ ...policy, prompt: userPrompt(true) }, null, inactive, reviewedDigest), null, inactive)).toEqual([]);
+});
+
+// Unit regression through the install/update consent entry point. An older
+// installation with a declaration but no grant must show the extensions.
+it('requires consent for previously unknown file opener declarations', async () => {
+  const next: GhostManifest = {
+    ...manifest(['example.com']),
+    node: { entry: 'worker.js', protocol: 'json-rpc-stdio' },
+    fileOpener: { extensions: ['.docx', '.xlsx'] },
+  };
+  const prompt = vi.fn<GhostInstallConsentPrompt>(async () => true);
+  const policy = { mode: 'prompt' as const, prompt, initiator: 'user' as const, origin: 'market' as const };
+  const legacy = installed(next);
+  const decision = await obtainGhostInstallConsent(policy, legacy, next, reviewedDigest);
+  expect(prompt.mock.calls[0][0].facts).toMatchObject({ kind: 'update',
+    added: [expect.objectContaining({ key: 'file-opener', detail: '.docx .xlsx' })] });
+  expect(confirmedFileOpenerExtensions(decision, legacy, next)).toEqual(['.docx', '.xlsx']);
+  const approved = { ...legacy, approvedFileOpenerExtensions: ['.docx', '.xlsx'] };
+  const narrowed = { ...next, fileOpener: { extensions: ['.docx'] } };
+  await expect(obtainGhostInstallConsent(policy, approved, narrowed, reviewedDigest))
+    .resolves.toEqual({ mode: 'unprompted' });
 });
 
 const replacedDigest = 'b'.repeat(64);

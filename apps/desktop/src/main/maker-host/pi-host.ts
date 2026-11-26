@@ -84,16 +84,19 @@ import {
 } from './anthropic-compat-proxy-host.js';
 import { hostCredentialEndpointAllowed } from './pi-provider-transport.js';
 import { hasGrokOAuthLogin } from './grok-oauth-login.desktop.js';
-import { isOpenAiSubscriptionProviderId } from './codex-account-auth.desktop.js';
+import { codexAccountState, isOpenAiSubscriptionProviderId } from './codex-account-auth.desktop.js';
+import { hasConnectedSubscriptionPool } from '../subscription-accounts/runtime.js';
 import { withProviderAppAttribution } from './provider-app-attribution.js';
 import { createLogger } from '../logger.js';
 import { registerPiProxySession } from './pi-proxy-session-auth.js';
 import { derivePiProxySessionToken } from './pi-proxy-session-token.js';
 import {
+  getDesktopMcpToolApprovalEvidence,
   getDesktopMcpToolApprovalPolicy,
 } from './mcp-tool-approval-policy.js';
 import { getRipgrepBinaryPath, claudeUpstreamEndpoint } from './runtime-configs.js';
 import { buildPiRuntimeConfig } from './runtimeConfigsCore.js';
+import { withCloudPluginOauthPrompt } from '../plugin-oauth/prompt.js';
 import {
   getActiveCatalog,
 } from './active-catalog.js';
@@ -106,11 +109,13 @@ import {
 import { mutateAuthorizedPiManagedPackage } from './pi-managed-package-mutation.js';
 import {
   createPiNativeProviderResolver,
+  createPiSubscriptionConnectionReader,
   resolvePiCindyGatewayModelApi,
   resolvePiCindyGatewayModelSpec,
 } from './piNativeProvidersCore.js';
 export {
   buildPiSubscriptionNativeProviders,
+  createPiSubscriptionConnectionReader,
   listedPiModelIds,
   mergePiNativeProviderResults,
   parsePiListModels,
@@ -138,6 +143,29 @@ const log = createLogger('pi-host');
 export function resolvePiBinaryPath(): string | null {
   return getReadyBinaryPath('pi') ?? null;
 }
+
+/**
+ * #12298: 订阅来源的连接态(与「设置 → 模型供应商」列表同口径,纯读、无自愈副作用)。
+ * 断开的订阅仍留在会话目录里(重连后父会话可直接切换),但子代理路由不能列它。
+ *
+ * 它接在 AgentDeps.isNativeProviderSourceConnected 上,不进入 provider 清单本身 ——
+ * 清单是桌面与 Node Host 的逐字节契约(host↔desktop parity),连接态是宿主各自的凭证事实。
+ */
+const subscriptionSourceConnected = createPiSubscriptionConnectionReader({
+  // 架构规则 §5:端口在调用时才取值(转调),不在模块加载时把函数本身存下来。
+  getActiveCatalog: () => getActiveCatalog(),
+  hasGrokOAuthLogin: (...args) => hasGrokOAuthLogin(...args),
+  codexAccountState: (...args) => codexAccountState(...args),
+  hasCodexOAuthLoginReadOnly: () => desktopCodexAuthAdapter.hasCodexOAuthLoginReadOnly(),
+  hasConnectedSubscriptionPool: (...args) => hasConnectedSubscriptionPool(...args),
+  onReadFailure: (providerId, error) => log.warn(
+    'pi: subscription connection read failed; keeping the source listed',
+    {
+      providerId,
+      message: error instanceof Error ? error.message : String(error),
+    },
+  ),
+});
 
 // The desktop's ports for the Pi native providers shared with the Node Host (piNativeProvidersCore.ts).
 const piNativeProviderResolver = createPiNativeProviderResolver({
@@ -176,12 +204,12 @@ export const desktopPiAuthAdapter: AuthAdapter = createPiAuthAdapter({ subscript
 export { composePiSystemPrompt } from './runtimeConfigsCore.js';
 
 function buildDesktopPiRuntimeConfig(): AgentRuntimeConfig {
-  return buildPiRuntimeConfig({
+  return withCloudPluginOauthPrompt(buildPiRuntimeConfig({
     ripgrepPath: getRipgrepBinaryPath(),
     userDataPath: app.getPath('userData'),
     endpoint: () => isAnthropicCompatProxyHandleReady() ? getClaudeEndpoint() : undefined,
     remoteEndpoint: () => claudeUpstreamEndpoint(),
-  });
+  }));
 }
 
 // ── 构造入口 ─────────────────────────────────────────────────────────────────
@@ -272,6 +300,7 @@ export function buildPiAgent(opts: BuildPiAgentOpts): PiAgent | null {
     // 与 Claude Code / Codex 同一份第一方 MCP 审批真源。Pi 之前没接,导致 orca 这类
     // 可信 server 的工具落进 Auto-review 灰区被模型静默 block(详见 pi/index.ts 权限门)。
     getMcpToolApprovalPolicy: getDesktopMcpToolApprovalPolicy,
+    getMcpToolApprovalEvidence: getDesktopMcpToolApprovalEvidence,
     resolvePiAgentHome: (remoteHostId) => {
       // 轮 40-w4-t3 CRITICAL:远端 agentHome 承载 session 历史(sessions/*.jsonl,
       // 与 DB sdk_session_id 持久关联)—— 必须落远端持久目录, 不能用本机
@@ -391,6 +420,8 @@ export function buildPiAgent(opts: BuildPiAgentOpts): PiAgent | null {
     },
     registerPiProxySession,
     resolvePiNativeProviders: (ctx) => resolvePiNativeProviders(ctx),
+    // #12298: 子代理路由不列确知断开的订阅来源(连接态是桌面宿主的凭证事实,纯读)。
+    isNativeProviderSourceConnected: subscriptionSourceConnected,
     resolvePiRuntimeModelDescriptor: opts.resolvePiRuntimeModelDescriptor,
     resolvePiRuntimeModels: opts.resolvePiRuntimeModels,
     resolvePiGatewayModelDescriptor: opts.resolvePiGatewayModelDescriptor,

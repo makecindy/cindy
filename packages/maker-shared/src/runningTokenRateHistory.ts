@@ -83,6 +83,9 @@ export function recordRunningTokenRate(
   // Terminal status clears startedAt before the status bar finishes its linger/fade.
   // Keep its identity so a final paired usage report can still be recorded.
   const startedAt = input.startedAt ?? history.startedAt;
+  // A new turn starts an empty chart here too: at a turn's start this path records first,
+  // before the host speed arrives, and must not carry the last turn's points into it.
+  if (history.startedAt !== startedAt) history = emptyRateHistory(history.startedAt);
   const previous = history.lastReport;
   const reset =
     history.startedAt !== startedAt ||
@@ -310,12 +313,14 @@ export function receiveTokenSpeedSnapshot(
 
 /** Record a host speed snapshot into the same chart model as counter samples. */
 export function recordTokenSpeed(
-  history: RateHistory,
+  previous: RateHistory,
   input: { startedAt: number | null; speed: TokenSpeedSnapshot; now?: number },
 ): RateHistory {
   const { speed } = input;
-  const startedAt = input.startedAt ?? history.startedAt;
-  // A new turn restarts the host clock; keep earlier points and continue the axis after them.
+  const startedAt = input.startedAt ?? previous.startedAt;
+  // The chart belongs to one turn, like the average, peak, output and reasoning share
+  // shown beside it: a new turn starts an empty chart instead of continuing the last one.
+  const history = startedAt !== previous.startedAt ? emptyRateHistory(previous.startedAt) : previous;
   // Within the same turn, provisional wait credit can be trimmed down once a real speed settles.
   const sameTurn = startedAt !== null && history.startedAt === startedAt;
   const reset = history.startedAt !== startedAt || history.speedOffsetMs === undefined ||
@@ -383,8 +388,11 @@ export function recordTokenSpeed(
     lastReport: null,
     speedOffsetMs: offset,
     speedElapsedMs: speed.elapsedMs,
-    peak: Math.max(history.startedAt !== startedAt ? 0 : history.peak, speed.peak ?? 0,
-      reading?.rate ?? (measured ? speed.rate : 0)),
+    // The host can replace a provisional request reading, including the peak it set.
+    peak: speed.measurement && speed.peak !== undefined
+      ? speed.peak
+      : Math.max(history.startedAt !== startedAt ? 0 : history.peak, speed.peak ?? 0,
+          reading?.rate ?? (measured ? speed.rate : 0)),
     // Neither a pause nor request warm-up is a measurement. Keep the original expiry.
     hostMeasuredAt: reading?.measuredAt,
     latestKind: reading?.kind,

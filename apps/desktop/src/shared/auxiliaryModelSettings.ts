@@ -7,6 +7,7 @@ import {
 } from './auxiliaryModelChain.js';
 import { decodeCatalogModelPin } from './catalogModelPin.js';
 import { isUtilityModelProviderKind } from './utilityModelProfiles.js';
+import type { AuxiliaryDisplayError } from './auxiliaryModelHealth.js';
 
 /** Main-owned ordered model chain for short, host-generated auxiliary text. */
 export interface AuxiliaryModelSettings {
@@ -52,6 +53,12 @@ export interface AuxiliaryModelSettingsState extends AuxiliaryModelSettings {
   defaults: AuxiliaryModelSettings;
   options: AuxiliaryModelOption[];
 }
+
+export type AuxiliaryModelSettingsTestResult =
+  | { ok: true; tested: string[] }
+  | ({ ok: false; model: string } & AuxiliaryDisplayError);
+
+export type AuxiliaryModelSaveResult = AuxiliaryModelSettingsState | Extract<AuxiliaryModelSettingsTestResult, { ok: false }>;
 
 function containsControlCharacter(value: string): boolean {
   for (let index = 0; index < value.length; index += 1) {

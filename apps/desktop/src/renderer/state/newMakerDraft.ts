@@ -84,6 +84,7 @@ export interface VendorPrefs {
 export interface CollabWorkerConfig {
   role: string;
   model: string;
+  modelGroup?: string;
   effort?: Effort;
   fast?: boolean | 'ultrafast';
   /** 显式选定的模型来源;null/缺省 = 未显式(main 侧按默认路由解析)。 */
@@ -382,12 +383,16 @@ function sanitize(raw: unknown): NewMakerDraft {
     if (!wc || typeof wc !== 'object') return undefined;
     // 按另一台电脑(远程供应商)目录选的配置不跨重启保留，见 CollabWorkerConfig.agentDeviceId。
     if (typeof wc.agentDeviceId === 'string') return undefined;
+    const modelGroup = sanitizeModelGroupSelection({ type: 'route', id: wc.modelGroup })?.id;
+    // 恢复后不会连接原来的被控端，也不会恢复 Worker 的执行设备。
+    if (modelGroup && (r.deviceLinkDeviceId || wc.executionDeviceId)) return undefined;
     const model = typeof wc.model === 'string' && wc.model.trim() ? wc.model : undefined;
     if (!model) return undefined;
     const role = typeof wc.role === 'string' && wc.role.trim() ? wc.role.trim() : 'developer';
     return {
       role,
       model,
+      ...(modelGroup && !remoteHostId ? { modelGroup } : {}),
       effort: typeof wc.effort === 'string' ? (wc.effort as Effort) : undefined,
       fast: (typeof wc.fast === 'boolean' || wc.fast === 'ultrafast') ? wc.fast : undefined,
       // 来源与模型是同一次选择的两个维度,随 model 一起耐久保留;与 role 同样 trim,
@@ -878,6 +883,7 @@ export function setNewMakerDraftOwner(ownerId: string | null): void {
   const normalized = typeof ownerId === 'string' && ownerId.trim().length > 0 ? ownerId : null;
   if (activeDataOwnerId === normalized) return;
   resetRemoteDraftEngineFollow();
+  pendingLocalPluginEngineNavigation = false;
   activeDataOwnerId = normalized;
   currentDraft = loadFromStorage();
   preferenceSyncFallback = null;
@@ -1014,6 +1020,11 @@ export function patchDraft(patch: Partial<NewMakerDraft>): void {
   // 路径」同一思路)。
   if (currentDraft.deviceLinkDeviceId !== next.deviceLinkDeviceId && next.collab.workerConfig) {
     next.collab = { ...next.collab, workerConfig: undefined };
+  } else if (next.remoteHostId && next.collab.workerConfig?.modelGroup) {
+    next.collab = {
+      ...next.collab,
+      workerConfig: { ...next.collab.workerConfig, modelGroup: undefined },
+    };
   }
   // 协同与项目/对话形态正交,切 workingDir 不再改 enabled。device-link 与 SSH 的 Worker
   // 创建和团队读写都在对应执行端完成;Worker 子会话不能嵌套协同,由会话侧入口判定兜住。
@@ -1107,15 +1118,68 @@ export function applyAppDefaultModelSelection(selection: AppDefaultModelSelectio
   return true;
 }
 
+let pendingLocalPluginEngineNavigation = false;
+
+/** Consumes the one-shot local navigation flag set when preselecting a local plugin engine. */
+export function consumePendingLocalPluginEngineNavigation(): boolean {
+  if (!pendingLocalPluginEngineNavigation) return false;
+  pendingLocalPluginEngineNavigation = false;
+  return true;
+}
+
+/**
+ * Preselects a local plugin engine on the new-task draft (for example from the quota panel's
+ * "New task" action), routing the draft onto this computer and clearing mutually exclusive
+ * selections without touching Claude/Codex/Pi prefs.
+ */
+export function applyPluginEngineDraftRoute(route: {
+  providerId: string;
+  modelId: string;
+  effort?: string;
+}): boolean {
+  if (!pluginEngineKeyFromProviderId(route.providerId) || !route.modelId.trim()) return false;
+  const current = getDraft();
+  const previous = current.pluginEngine;
+  const effort = isPluginEngineEffort(route.effort) ? route.effort : previous?.effort;
+  const leavesRemoteTask = !!current.deviceLinkDeviceId || !!current.remoteHostId;
+  patchDraft({
+    ...(current.vendor === 'orca' ? { vendor: 'cc' } : {}),
+    pluginEngine: {
+      providerId: route.providerId,
+      modelId: route.modelId,
+      ...(previous?.permissionMode ? { permissionMode: previous.permissionMode } : {}),
+      ...(effort ? { effort } : {}),
+    },
+    pluginModel: null,
+    modelGroup: null,
+    ...(current.agentDeviceId ? { agentDeviceId: null, agentDeviceName: null } : {}),
+    ...(leavesRemoteTask
+      ? {
+          deviceLinkDeviceId: null,
+          deviceLinkDeviceName: null,
+          remoteHostId: null,
+          workingDir: null,
+          explicitNoProject: false,
+        }
+      : {}),
+  });
+  pendingLocalPluginEngineNavigation = true;
+  return true;
+}
+
 /**
  * 当前草稿 Harness 不可用时按系统顺序回退。
  *
  * 必须在调用瞬间读取模块级 currentDraft:产品默认 effect 可能刚把 cc 改成 Pi,若这里继续
  * 使用 React 上一轮 closure 的 cc/currentPrefs,会把 xAI→Pi 又覆盖成 Codex。系统回退不标记
- * defaultTupleCustomized,因为它不是用户选择。
+ * defaultTupleCustomized,因为它不是用户选择。本机手动选定的引擎在可用列表短暂缺失时继续保留。
  */
-export function fallbackUnavailableVendor(availableVendors: ReadonlySet<MakerVendor>): boolean {
+export function fallbackUnavailableVendor(
+  availableVendors: ReadonlySet<MakerVendor>,
+  options?: { differentCatalog?: boolean },
+): boolean {
   rebaseStoredDefaultTuplePreference();
+  if (currentDraft.defaultTupleSelectionCustomized && !options?.differentCatalog) return false;
   const currentVendor = currentDraft.vendor;
   if (availableVendors.has(currentVendor)) return false;
   const fallback = (['cc', 'codex', 'pi'] as const).find((vendor) =>
@@ -1461,6 +1525,7 @@ export function __resetForTest(): void {
  */
 export function __reloadForTest(): void {
   resetRemoteDraftEngineFollow();
+  pendingLocalPluginEngineNavigation = false;
   activeDataOwnerId = null;
   preferenceSyncFallback = null;
   listeners.clear();

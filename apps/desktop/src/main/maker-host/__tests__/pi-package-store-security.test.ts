@@ -2411,6 +2411,50 @@ describe('Pi package executable-code boundary', () => {
     });
   });
 
+  it('retries a persisted inspection-limit recorded under a previous snapshot budget', async () => {
+    const { source } = await createSkillOnlyPackage('npm:previous-snapshot-budget');
+    const store = await import('../pi-package-store.js');
+    await expect(store.resolveManagedPiPackageResources({
+      snapshotRoot: path.join(runtime.userData, 'previous-budget-limited-snapshot'),
+      snapshotLimits: {
+        maxEntries: 1,
+        maxBytes: 1024 * 1024,
+        maxDurationMs: 10_000,
+      },
+    })).resolves.toMatchObject({ packageRoots: [] });
+
+    const statePath = path.join(
+      runtime.userData,
+      'pi-package-home',
+      'cindy-package-state.json',
+    );
+    const state = JSON.parse(await fs.readFile(statePath, 'utf8')) as {
+      snapshotUnavailablePackages: Array<{ snapshotBudget?: string }>;
+    };
+    expect(state.snapshotUnavailablePackages).toHaveLength(1);
+    // States written before the budget was recorded carry no marker. Raising the
+    // limits must retry the package instead of reusing the old failure for the
+    // rest of its six-hour window, while approvals and disabled sources stay.
+    delete state.snapshotUnavailablePackages[0]!.snapshotBudget;
+    await fs.writeFile(statePath, JSON.stringify(state));
+
+    // reset-modules: simulate the upgrade restart that reads the older state file.
+    vi.resetModules();
+    const nextStore = await import('../pi-package-store.js');
+    const recoveredRoot = path.join(runtime.userData, 'previous-budget-recovered-snapshot');
+    await expect(nextStore.resolveManagedPiPackageResources({
+      snapshotRoot: recoveredRoot,
+    })).resolves.toMatchObject({
+      skills: [expect.objectContaining({
+        path: path.join(recoveredRoot, '0', 'skills', 'managed-skill', 'SKILL.md'),
+      })],
+      packageRoots: [path.join(recoveredRoot, '0')],
+    });
+    await expect(nextStore.listPiPackages()).resolves.toMatchObject({
+      packages: [expect.objectContaining({ source, enabled: true })],
+    });
+  });
+
   it.each(['snapshot', 'metadata'] as const)('persists a deterministic inspection-stage limit for %s requests', async (mode) => {
     const { root, source } = await createPackage({ oversizedManifest: true });
     const store = await import('../pi-package-store.js');
@@ -5025,9 +5069,10 @@ describe('Pi package executable-code boundary', () => {
         // creating 10,000 directory entries. The previous entry-limit fixture
         // timed out on Windows due to filesystem setup rather than the code
         // under test, while this still exercises the same inspection quarantine.
+        // Keep in step with DEFAULT_SNAPSHOT_LIMITS.maxBytes.
         const paddingFile = path.join(root, 'unused-padding.bin');
         await fs.writeFile(paddingFile, '');
-        await fs.truncate(paddingFile, 128 * 1024 * 1024 + 1);
+        await fs.truncate(paddingFile, 256 * 1024 * 1024 + 1);
       }
       return root;
     };

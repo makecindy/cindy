@@ -1135,8 +1135,8 @@ describe('missingRequiredTemplateParamLabel', () => {
 
 // Plugin engines (docs/plans/acp-plugin-bridge.md, 2026-11-19), unit: the form keeps the engine next
 // to the built-in choice (like the new-task draft). Minimal failing inputs: a saved plugin-engine
-// automation reopening as Claude Code with model 'deepseek-v4', or saving with Fast / worktree /
-// another computer still attached.
+// automation reopening as Claude Code with model 'deepseek-v4', saving with Fast / another computer
+// still attached, or dropping the worktree choice (2026-11-25: plugin engines use worktrees like built-ins).
 describe('plugin engine selection', () => {
   const ENGINE = 'acp-plugin:_ns__local__dsh-acp:dsh';
   it('saves the engine as a local new-task-each-run route and reopens it as the engine', () => {
@@ -1146,7 +1146,7 @@ describe('plugin engine selection', () => {
       pluginEngine: { providerId: ENGINE, modelId: 'deepseek-v4', effort: 'max' },
     }));
     expect(input).toMatchObject({ agentKind: 'acp', modelAgentKind: 'acp', providerId: ENGINE, model: 'deepseek-v4',
-      effort: 'max', fastMode: false, useWorktree: false, agentDeviceId: undefined, modelAgentDeviceId: undefined });
+      effort: 'max', fastMode: false, useWorktree: true, agentDeviceId: undefined, modelAgentDeviceId: undefined });
     const fields = scheduleEngineFormFields({ ...input, id: 's', status: 'active', createdAt: 1, updatedAt: 1,
       notify: { desktop: true, feishu: false } } as Schedule);
     expect(fields).toMatchObject({ pluginEngine: { providerId: ENGINE, modelId: 'deepseek-v4', effort: 'max' },

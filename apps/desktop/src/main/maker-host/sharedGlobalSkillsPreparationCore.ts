@@ -85,13 +85,14 @@ export function createSharedGlobalSkillsPreparation(ports: SharedGlobalSkillsPre
         const sharedProjection = await prepareSharedGlobalSkillLinks({
           assertOwnerStable: () => assertGhostSkillProjectionBoundaryStableForOwner(ownerId),
         });
-        const persistent = new Set([
+        const persistentWarnings = [
+          ...(preparedBuiltIns.persistentWarnings ?? []),
           ...sharedProjection.persistentWarnings,
-          ...preparedBuiltIns.persistentWarnings,
-        ]);
+        ];
+        const persistent = new Set(persistentWarnings);
         return {
           warnings: [
-            ...preparedBuiltIns.warnings,
+            ...preparedBuiltIns.warnings.filter((warning) => !persistent.has(warning)),
             ...migrationWarnings,
             ...sharedProjection.warnings.filter((warning) => !persistent.has(warning)),
           ],

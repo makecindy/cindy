@@ -50,6 +50,17 @@ function pickMethod(providers, requested) {
   throw new Error(`choose a login method with --method=: ${social.join(', ')}`);
 }
 
+async function enterpriseLoginMethod(client, organization, requested, discovery) {
+  const { connections } = discovery ?? await client.discoverSsoOrg(organization);
+  const match = requested
+    ? connections.find(({ connectionId }) => connectionId === requested)
+    : connections.length === 1 ? connections[0] : undefined;
+  if (!match) {
+    throw new Error(`Choose an enterprise connection with --method=: ${connections.map(c => c.connectionId).join(', ')}`);
+  }
+  return { type: 'sso', providerOrConnectionId: match.connectionId };
+}
+
 /**
  * The exchange returns a LoginOutcome; only `ok` carries tokens. The other
  * outcomes need an interactive step the CLI does not offer. The message names
@@ -94,6 +105,8 @@ function listenOnLoopback(server) {
  *   hostedCallbackUrl?: string,
  *   openBrowser: (url: string) => Promise<void>,
  *   method?: string,
+ *   organization?: string,
+ *   organizationDiscovery?: import('@cindy/auth-client').SsoOrgDiscovery,
  *   onAuthorizeUrl?: (url: string) => void,
  *   onSignedIn?: (accessToken: string) => Promise<void>,
  *   signal?: AbortSignal,
@@ -103,17 +116,30 @@ function listenOnLoopback(server) {
  * @returns {Promise<{authenticated: true, realm: 'cn' | 'global', method: string}>}
  */
 export async function runHostLogin(deps) {
-  const providers = await deps.client.getProviders();
-  const method = pickMethod(providers, deps.method);
-  const { verifier, challenge } = pkce();
-
-  const authorization = deps.hostedCallbackUrl
-    ? await authorizeViaHostedCallback({ ...deps, method, challenge })
-    : await authorizeViaLoopback({ ...deps, method, challenge });
-  if ('error' in authorization) throw new Error(`browser authorization failed: ${authorization.error}`);
-
-  const pair = await deps.client.exchangeAuthorizationCode(authorization.code, verifier);
+  let method, pair;
+  if (deps.cloudGuest) {
+    const {grant,guest}=deps.cloudGuest;
+    method={type:'cloud-guest'};
+    pair=await deps.client.exchangeAuthorizationCode(grant.code,grant.verifier);
+    if (pair?.status==='ok' && (pair.membership?.kind!=='org' || pair.membership.id!==guest.membershipId || pair.membership.orgId!==guest.organizationId)) {
+      await endRefusedSession(deps,pair.accessToken);throw new Error('Cloud guest owner changed');
+    }
+  } else {
+    method = deps.organization
+      ? await enterpriseLoginMethod(deps.client, deps.organization, deps.method, deps.organizationDiscovery)
+      : pickMethod(await deps.client.getProviders(), deps.method);
+    const {verifier,challenge}=pkce();
+    const authorization=deps.hostedCallbackUrl
+      ? await authorizeViaHostedCallback({...deps,method,challenge})
+      : await authorizeViaLoopback({...deps,method,challenge});
+    if ('error' in authorization) throw new Error(`browser authorization failed: ${authorization.error}`);
+    pair=await deps.client.exchangeAuthorizationCode(authorization.code,verifier);
+  }
   if (pair?.status !== 'ok') throw new Error(unfinishedLoginMessage(pair));
+  if (deps.organization && pair.membership?.kind !== 'org') {
+    await endRefusedSession(deps, pair.accessToken);
+    throw new Error('Enterprise sign-in requires an organization membership.');
+  }
   // H-1, as the Desktop: a personal account of another region is refused before anything is saved.
   try {
     assertHostSessionRegion({ packageRegion: deps.packageRegion ?? hostPackageRegion(), sessionRealm: deps.region,

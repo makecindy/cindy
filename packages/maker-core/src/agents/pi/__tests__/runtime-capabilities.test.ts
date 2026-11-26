@@ -35,6 +35,51 @@ describe('Pi runtime capability parsing', () => {
     expect(parsePiRuntimeCommands({ commands: [] })).toEqual({ ok: true, commands: [] });
   });
 
+  // Regression: Pi 1.5.2 adds changelogPath to package command provenance.
+  // The old parser rejected the entire catalog, so live package Skills never
+  // reached the palette. Minimal input is one extension command carrying the
+  // additive field alongside one Skill command (unit, no external resources).
+  // 实测耗时：该测试文件约 1s。
+  it('accepts Pi package changelog provenance without retaining it', async () => {
+    const packageCommand = {
+      ...command,
+      name: 'websearch',
+      source: 'extension',
+      sourceInfo: {
+        ...command.sourceInfo,
+        source: '/private/cindy/pi-packages/pi-web-access',
+        scope: 'user',
+        origin: 'package',
+        changelogPath: '/private/cindy/pi-packages/pi-web-access/CHANGELOG.md',
+      },
+    };
+    const stableSourceInfo = {
+      ...command.sourceInfo,
+      source: '/private/cindy/pi-packages/pi-web-access',
+      scope: 'user',
+      origin: 'package',
+    };
+
+    expect(parsePiRuntimeCommands({ commands: [packageCommand, command] })).toEqual({
+      ok: true,
+      commands: [{ ...packageCommand, sourceInfo: stableSourceInfo }, command],
+    });
+
+    const manifest = await capturePiRuntimeCapabilityManifest(
+      { request: async () => ({
+        type: 'response', command: 'get_commands', success: true,
+        data: { commands: [packageCommand, command] },
+      }) },
+      { sessionId: 'package-changelog' },
+      1,
+      'ready',
+    );
+    expect(manifest).toMatchObject({
+      status: 'loaded',
+      commands: [{ ...packageCommand, sourceInfo: stableSourceInfo }, command],
+    });
+  });
+
   it('accepts duplicate names because Pi can expose an Extension command and Prompt together', () => {
     const extension = { ...command, name: 'hello', source: 'extension' };
     const prompt = { ...command, name: 'hello', source: 'prompt' };
@@ -254,6 +299,7 @@ describe('Pi runtime capability parsing', () => {
     ['missing commands', {}],
     ['missing sourceInfo', { commands: [{ ...command, sourceInfo: undefined }] }],
     ['invalid known sourceInfo field', { commands: [{ ...command, sourceInfo: { source: 'auto', scope: 1 } }] }],
+    ['invalid changelogPath field', { commands: [{ ...command, sourceInfo: { ...command.sourceInfo, changelogPath: 1 } }] }],
     ['unknown command field', { commands: [{ ...command, extra: 'secret' }] }],
     ['unknown sourceInfo field', { commands: [{ ...command, sourceInfo: { ...command.sourceInfo, extra: 'secret' } }] }],
     ['unknown response field', { commands: [command], extra: 'secret' }],

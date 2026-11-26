@@ -555,11 +555,11 @@ export function buildShareImageFooter({
 }: ShareImageFooterAssets): HTMLElement {
   const footer = document.createElement('div');
   footer.className = 'flex flex-col items-center';
-  footer.style.paddingTop = '48px';
+  footer.style.paddingTop = 'var(--space-12)';
 
   const lockup = document.createElement('div');
   lockup.className = 'flex items-center justify-center';
-  lockup.style.gap = '8px';
+  lockup.style.gap = 'var(--space-2)';
 
   if (characterSrc) {
     const character = document.createElement('img');
@@ -567,7 +567,7 @@ export function buildShareImageFooter({
     character.alt = '';
     character.style.height = `${FOOTER_CHARACTER_PX}px`;
     character.style.width = `${FOOTER_CHARACTER_PX}px`;
-    character.style.borderRadius = '8px';
+    character.style.borderRadius = 'var(--radius)';
     character.style.objectFit = 'cover';
     character.style.flexShrink = '0';
     character.setAttribute('loading', 'eager');
@@ -639,7 +639,7 @@ export async function buildShareImageBlob({
   stage.style.width = `${Math.max(320, Math.round(contentWidth))}px`;
   stage.style.backgroundColor = background;
   // 图片四周留一圈呼吸空间(产物是独立的一张图,不是页面局部截取)。
-  stage.style.padding = '40px';
+  stage.style.padding = 'var(--space-10)';
   // 条间距刻意比流内的 14px 宽:流内紧凑是为了信息密度,而独立的一张图要留白
   // 才读得开(§5「留白即品牌」)。
   stage.className = 'flex flex-col gap-6';

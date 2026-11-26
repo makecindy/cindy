@@ -65,7 +65,7 @@ describe('auth login-flow reset', () => {
     expect(finish).toContain('pendingPersonalLogin = { outcome, realm: personalRealm }');
     expect(finish).toContain('personalLoginAvailable: true');
     expect(finish).not.toContain('pendingAuthRealm = discovery.region');
-    expect(finish).toContain('return completeLogin(outcome, expectedLoginFlowEpoch)');
+    expect(finish).toContain('return completeLogin(outcome, expectedLoginFlowEpoch, { recoverInvalidForExplicitLogin: true })');
     const lookupStart = source.indexOf('async function lookupOrganizationRealm(');
     const lookup = source.slice(
       lookupStart,
@@ -78,7 +78,7 @@ describe('auth login-flow reset', () => {
       source.indexOf('if (!providerConfig)', continueStart),
     );
     expect(continueBody).toContain('pendingAuthRealm = personal.realm');
-    expect(continueBody).toContain('await completeLogin(personal.outcome, actionLoginFlowEpoch)');
+    expect(continueBody).toContain('await completeLogin(personal.outcome, actionLoginFlowEpoch, { recoverInvalidForExplicitLogin: true })');
     expect(continueBody).not.toContain('finishFreshLogin(');
     const confirmStart = source.indexOf("if (action.type === 'confirm-sso-realm')");
     const confirmBody = source.slice(confirmStart, continueStart);
@@ -301,7 +301,7 @@ describe('auth login-flow reset', () => {
     expect(writeBody).toContain('older client can');
     expect(writeBody).toContain('writeAuthAccountLogoutTombstones(vault)');
     expect(writeBody.indexOf('writeAuthAccountLogoutTombstones(vault)')).toBeLessThan(
-      writeBody.indexOf('writeAtomicSafe(AUTH_ACCOUNT_VAULT_KEY'),
+      writeBody.search(/writeAtomicSafe\(\s*AUTH_ACCOUNT_VAULT_KEY/),
     );
 
     const logoutTombstoneReadStart = source.indexOf('function readAuthAccountLogoutTombstones(');
@@ -407,15 +407,16 @@ describe('auth login-flow reset', () => {
     );
   });
 
-  it('recovers invalid Desktop vault content only for a completed explicit login', () => {
+  it('recovers invalid or permanently undecryptable Desktop vault content only for a completed explicit login', () => {
     const readStart = source.indexOf('function readAuthAccountVault(');
     const readEnd = source.indexOf('\n}\n\nfunction writeAuthAccountVault', readStart);
     const readBody = source.slice(readStart, readEnd);
-    const unreadableBranch = readBody.slice(
-      readBody.indexOf('if (raw === null)'),
-      readBody.indexOf('try {'),
+    const rawNullStart = readBody.indexOf('if (raw === null)');
+    const parseTryStart = readBody.indexOf('try {', rawNullStart);
+    const unreadableBranch = readBody.slice(rawNullStart, parseTryStart);
+    expect(unreadableBranch).toContain(
+      'if (options.recoverInvalid && options.allowUndecryptableReplacement)',
     );
-    expect(unreadableBranch).not.toContain('recoverInvalid');
     expect(readBody).toContain('options.allowUnreadable || options.recoverInvalid');
 
     const transactionStart = source.indexOf('async function transactAuthAccountVault');
@@ -426,18 +427,26 @@ describe('auth login-flow reset', () => {
     const transactionBody = source.slice(transactionStart, transactionEnd);
     expect(transactionBody).toContain('recoverInvalidForExplicitLogin?: boolean');
     expect(transactionBody).toContain('recoverInvalid: options.recoverInvalidForExplicitLogin');
+    expect(transactionBody).toContain("previousVaultRead.status === 'decrypt-failed'");
+    expect(transactionBody).toContain('evaluateExplicitLoginVaultRecovery(');
+    expect(transactionBody).toContain(
+      'allowUndecryptableReplacement: undecryptableVaultRecovery?.recover === true',
+    );
+    expect(transactionBody).toContain(
+      'writeAtomicSafeCiphertext(AUTH_ACCOUNT_VAULT_KEY, previousVaultCiphertext)',
+    );
 
     const loginStart = source.indexOf('async function commitDesktopLoginSessions(');
     const loginEnd = source.indexOf('\n}\n\n/** Persist a rotated Passport', loginStart);
     const loginBody = source.slice(loginStart, loginEnd);
-    expect(loginBody).toContain('recoverInvalidForExplicitLogin: true');
+    expect(loginBody).toContain('recoverInvalidForExplicitLogin: input.recoverInvalidForExplicitLogin');
     expect(loginBody).toContain('waitWhileBusyAfterRotation: true');
     const transitionCommit = loginBody.indexOf('await transition.commit();');
     const transitionRollback = loginBody.indexOf('await transition.rollback();');
     expect(transitionCommit).toBeGreaterThan(loginBody.indexOf('await transactAuthAccountVault('));
     expect(transitionRollback).toBeGreaterThan(transitionCommit);
     expect(transitionRollback).toBeLessThan(
-      loginBody.indexOf('recoverInvalidForExplicitLogin: true'),
+      loginBody.indexOf('recoverInvalidForExplicitLogin: input.recoverInvalidForExplicitLogin'),
     );
   });
 
@@ -467,9 +476,9 @@ describe('auth login-flow reset', () => {
     expect(writeBody).toContain('atomicWriteFileSync(');
     expect(writeBody).toContain("safeStorage.encryptString(value).toString('base64')");
 
-    const readStart = source.indexOf('function readAtomicSafe(');
+    const readStart = source.indexOf('function readAtomicSafeDetailed(');
     const readEnd = source.indexOf('\n}\n\nfunction isAtomicPersistedSecretAbsent', readStart);
-    expect(source.slice(readStart, readEnd)).toContain('fs.readFileSync(`${filepath}.bak`');
+    expect(source.slice(readStart, readEnd)).toContain('readAtomicSafeRecord(');
 
     const clearStart = source.indexOf('function removeAtomicSafeOrThrow(');
     const clearEnd = source.indexOf('\n}\n\nfunction removeSafe(', clearStart);

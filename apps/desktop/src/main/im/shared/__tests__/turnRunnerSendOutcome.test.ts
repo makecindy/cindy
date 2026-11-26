@@ -147,8 +147,8 @@ vi.mock('../localMarkdownImages', () => ({
 
 vi.mock('../sessionRepo', () => ({
   touchUserSent: mocks.touchUserSent,
-  toCoreAgentKind: (kind: string) =>
-    kind === 'codex' ? 'codex' : kind === 'pi' ? 'pi' : 'claude-code',
+  toCoreEngineKind: (kind: string) =>
+    kind === 'acp' ? 'acp' : kind === 'codex' ? 'codex' : kind === 'pi' ? 'pi' : 'claude-code',
 }));
 
 vi.mock('../../messagePersistence', () => ({
@@ -3797,7 +3797,7 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
     expect(finalView).not.toContain('自动重试');
   });
 
-  it('still finalizes as failed on a terminal error', async () => {
+  it('localizes the nested overload reason in a personal IM terminal card', async () => {
     const handle = {
       messageId: 'stream-fatal',
       append: vi.fn(),
@@ -3811,12 +3811,21 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
 
     h.emit({ type: 'text', data: { text: 'partial', isFinal: false } });
     await flushMicrotasks(); // 等卡片 handle 建好, 收口才走 finalize 而非另发一条
-    h.emit({ type: 'error', data: { message: 'process exited with code 1', isTerminal: true } });
+    h.emit({
+      type: 'error',
+      data: {
+        message: 'stream disconnected before completion',
+        reason: 'UPSTREAM_OVERLOADED',
+        isTerminal: true,
+      },
+    });
     await waitForAssertion(() => {
       expect(onTurnComplete).toHaveBeenCalledTimes(1);
       expect(handle.finalize).toHaveBeenCalledTimes(1);
     });
-    expect(String(handle.finalize.mock.calls[0][0])).toContain('process exited with code 1');
+    const finalView = String(handle.finalize.mock.calls[0][0]);
+    expect(finalView).toContain('模型服务繁忙');
+    expect(finalView).not.toContain('stream disconnected before completion');
   });
 
   it('shows live tok/s while running but drops it from the frozen failure card', async () => {

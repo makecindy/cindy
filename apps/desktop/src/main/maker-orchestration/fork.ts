@@ -9,6 +9,7 @@
  * 变成"孤儿 jsonl"，可接受（数量极少，留给后续清理脚本）。
  */
 
+import { randomUUID } from 'node:crypto';
 import { eq, and, lt, gt, asc, desc, isNull, or, sql } from 'drizzle-orm';
 import { createId } from '@paralleldrive/cuid2';
 import { CodexResumePreparationBlockedError, isCodexHistoryRecoveryRequired } from '@cindy/maker-core';
@@ -71,7 +72,7 @@ export async function createSideChat(sourceSessionId: string): Promise<Session> 
     // Plugin engines keep their own history; Cindy cannot fork it (docs/plans/acp-plugin-bridge.md).
     throw forkError('UNSUPPORTED_HISTORY', 'Tasks running on a plugin engine cannot be forked');
   }
-  if (source.source === 'side-chat' || source.source === 'review' || source.source === 'bot') {
+  if ((source.source === 'side-chat' && !source.sideChatPromoted) || source.source === 'review' || source.source === 'bot') {
     throw forkError('UNSUPPORTED_HISTORY', 'Open a side chat from the main task');
   }
   const inFlight = (source.activeTurnStartedAt ?? 0) > (source.lastTurnEndedAt ?? 0);
@@ -456,8 +457,54 @@ async function resolveForkNativeSource(
       ))
   ) {
     const parsed = parsedNextSwitch;
-    if (!parsed?.fromSdkSessionId) {
+    if (!parsed) {
       throw forkError('UNSUPPORTED_HISTORY', '目标消息对应的历史引擎会话不可用');
+    }
+    // Harness 切换边界可能没有留下可恢复的原生会话编号，例如旧版本
+    // 创建的边界、会话迁移或引擎从未真正启动的片段。可见消息仍然是完整的，
+    // 这时复制历史并在新任务中重建交接，比直接让用户无法 fork 更可靠。
+    if (!parsed.fromSdkSessionId) {
+      const model = parsed.fromModel ?? source.model;
+      let providerId: string | null;
+      if (Object.hasOwn(parsed, 'fromProviderId')) {
+        providerId = parsed.fromProviderId ?? null;
+      } else {
+        const previousSwitch = await client.queryOne<{ content: string }>(
+          `SELECT content FROM messages
+            WHERE session_id = ?
+              AND role = 'agent_switch'
+              AND rewind_at IS NULL
+              AND (created_at < ? OR (created_at = ? AND rowid < ?))
+            ORDER BY created_at DESC, rowid DESC
+            LIMIT 1`,
+          positionParams,
+        );
+        const previousBoundary = previousSwitch
+          ? parseAgentSwitchBoundary(previousSwitch.content)
+          : null;
+        if (
+          previousBoundary?.toAgentKind === parsed.fromAgentKind &&
+          Object.hasOwn(previousBoundary, 'toProviderId')
+        ) {
+          providerId = previousBoundary.toProviderId ?? null;
+        } else if (parsed.fromAgentKind === normalizeDbAgentKind(source.agentKind)) {
+          providerId = source.providerId;
+        } else if (parsed.fromAgentKind === 'codex') {
+          providerId = inferProviderIdForModel(model, 'codex');
+        } else {
+          providerId = null;
+        }
+      }
+      return {
+        agentKind: parsed.fromAgentKind,
+        agentDeviceId,
+        sdkSessionId: null,
+        model,
+        providerId,
+        nextSwitch: { createdAt: nextSwitch.created_at, rowid: nextSwitch.rowid },
+        reuseVendorSession: false,
+        rebuildReason: 'native-session-recovery',
+      };
     }
     const model = parsed.fromModel ?? source.model;
     let providerId: string | null;
@@ -948,6 +995,11 @@ export async function forkSessionAtMessage(
     )
     .orderBy(asc(messages.createdAt), asc(messageRowid));
 
+  const sourceMessagesDigest = computeForkSourceMessagesDigest(sourceMessages.map(row => ({
+    client_id: row.clientId, role: row.role, content: row.content, tool_use_id: row.toolUseId,
+    agent_meta: row.agentMeta, agent_kind: row.agentKind, created_at: row.createdAt,
+  })));
+
   // 3. 计算 agent 侧截断信息。
   //
   // Claude: 反向找最近一条 assistant 且 agentMeta.uuid 存在 + **不是 subagent**
@@ -1087,6 +1139,14 @@ export async function forkSessionAtMessage(
       });
     ({ newSdkSessionId, uuidMap, initialContextTokens, usedNativeForkAnchor = false } = forkResult);
   }
+  // Native tail clones can include new turns. Keep the original transaction
+  // range unless the native history was anchored or there is no native child.
+  const canCopyFrozenPrefix = !newSdkSessionId || !usesTailTurnFork || usedNativeForkAnchor;
+  const lastSourceMessage = sourceMessages.at(-1);
+  const snapshotBoundary = canCopyFrozenPrefix
+    && copyBoundary.createdAt === Number.MAX_SAFE_INTEGER && lastSourceMessage
+    ? { createdAt: lastSourceMessage.createdAt, rowid: lastSourceMessage.rowid + 1 }
+    : copyBoundary;
   const forkContextTokens = normalizePositiveInt(initialContextTokens);
   const forkContextWindow = needsHistoryRecovery ? 0 : normalizePositiveInt(source.contextWindow);
   const sameContextRoute = forkSource.agentKind === normalizeDbAgentKind(source.agentKind) &&
@@ -1095,7 +1155,9 @@ export async function forkSessionAtMessage(
   // 5. SQLite 事务：insert 新 session + bulk copy messages
   const now = Date.now();
 
-  const newMessageIds = sourceMessages.map(() => ({ id: createId(), clientId: createId() }));
+  // A long prefix needs two fresh opaque IDs per row. Use native UUIDs to
+  // avoid hashing twice per row on the main thread before the DB worker runs.
+  const newMessageIds = sourceMessages.map(() => ({ id: randomUUID(), clientId: randomUUID() }));
   const recoveryMarker = needsHistoryRecovery ? buildCodexForkRecoveryMarker({
     source: forkSource, rows: sourceMessages, newMessageIds, sessionId: newSessionId, now,
     targetContextWindow: await resolveDesktopHandoffWindow(sourceSessionId, {
@@ -1126,8 +1188,9 @@ export async function forkSessionAtMessage(
     await dbClient.tx('fork.session', {
       sourceSessionId,
       sourceClearedAt: source.clearedAt,
-      targetCreatedAt: copyBoundary.createdAt,
-      targetRowid: copyBoundary.rowid,
+      targetCreatedAt: snapshotBoundary.createdAt,
+      targetRowid: snapshotBoundary.rowid,
+      sourceMessagesDigest,
       newSession: {
         id: newSessionId,
         ...(options.sideChat ? { source: 'side-chat' as const } : {}),
