@@ -232,7 +232,7 @@ function coerceCachedSession(item: unknown): RemoteSession | null {
     id,
     userId: typeof item.userId === 'string' ? item.userId : '',
     title: truncateText(typeof item.title === 'string' ? item.title : ''),
-    workingDir: typeof item.workingDir === 'string' ? truncateText(item.workingDir) : null,
+    workingDir: typeof item.workingDir === 'string' ? item.workingDir : null,
     workspaceKind: item.workspaceKind === 'dialogue' ? 'dialogue' : 'project',
     model: typeof item.model === 'string' ? truncateText(item.model) : '',
     effort: typeof item.effort === 'string' ? item.effort : '',
@@ -247,6 +247,8 @@ function coerceCachedSession(item: unknown): RemoteSession | null {
   };
   // Project identity must round-trip exactly; truncating a path changes the project key.
   if (typeof item.projectDir === 'string' || item.projectDir === null) session.projectDir = item.projectDir;
+  // Without projectDir the full workingDir identifies the project for cold alias lookup.
+  if (session.projectDir != null && session.workingDir) session.workingDir = truncateText(session.workingDir);
   if (typeof item.worktreePath === 'string') session.worktreePath = truncateText(item.worktreePath);
   if (typeof item.totalTokenUsage === 'number' && Number.isFinite(item.totalTokenUsage)) {
     session.totalTokenUsage = item.totalTokenUsage;

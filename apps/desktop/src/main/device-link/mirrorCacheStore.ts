@@ -281,8 +281,10 @@ export function coerceCachedSession(input: unknown): Record<string, unknown> | n
   for (const key of SESSION_FIELD_WHITELIST) {
     const value = input[key];
     if (value === undefined) continue;
-    out[key] =
-      typeof value === 'string' && TRUNCATED_TEXT_FIELDS.has(key) ? truncateText(value) : value;
+    // Legacy rows use workingDir as their project identity during offline alias lookup.
+    const identityPath = key === 'workingDir' && input.projectDir == null;
+    out[key] = typeof value === 'string' && !identityPath && TRUNCATED_TEXT_FIELDS.has(key)
+      ? truncateText(value) : value;
   }
   const companion = input.companion;
   if (isRecord(companion) && typeof companion.id === 'string' && typeof companion.role === 'string') {

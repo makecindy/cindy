@@ -66,9 +66,10 @@ describe('mobileHomeListCache', () => {
 
   // Unit regression: a persisted row must display its last synced name before a host responds.
   it('restores the cold list name and persists an authoritative clear', async () => {
-    const row = makeSession('s1', 'mac');
+    const workingDir = '/repo/' + 'long-directory/'.repeat(20) + 'app';
+    const row = makeSession('s1', 'mac', { workingDir });
     const live = { platform: 'darwin', ownerStamp: { dataOwnerId: USER_ID, ownerGeneration: 1 },
-      aliases: [{ projectKey: 'local:/repo/demo', alias: 'My project' }] };
+      aliases: [{ projectKey: `local:${workingDir}`, alias: 'My project' }] };
     setRemoteProjectAliasesAccount(USER_ID, 1);
     await refreshRemoteProjectAliases('mac', async () => live);
     await cacheHomeListSnapshot(USER_ID, [row]);
@@ -271,6 +272,7 @@ describe('mobileHomeListCache', () => {
 
     await cacheHomeListSnapshot(USER_ID, [
       makeSession('s-long', 'dev-a', {
+        projectDir: '/repo/demo',
         title: 'T'.repeat(MAX_CACHED_HOME_TEXT_CHARS * 3),
         preview: 'P'.repeat(MAX_CACHED_HOME_TEXT_CHARS * 3),
         pinnedAt: isoAt(1),
