@@ -1,3 +1,4 @@
+import type { SessionRowSnapshot } from '../localDb/sessionDispatchSnapshot.js';
 import { primaryHostTargetIsRemote, skipPrimaryHostRun } from './pluginAutomationHostGuard.js';
 import { projectForScheduledTask, type ScheduleProjectLookup } from './scheduleProject.js';
 import { throwIpcError } from '../utils/ipcValidate';
@@ -456,6 +457,34 @@ export interface MakerScheduleRunnerDeps {
  * (与 fire 主路径的准入拒绝同语义);其它路由同步失败仍按 non-fatal warn 处理。
  */
 class QueuedRouteDisabledError extends Error {}
+
+function queuedRouteMismatch(reason: string): QueuedRouteDisabledError {
+  return new QueuedRouteDisabledError(`Scheduled model route changed before queued dispatch (${reason})`);
+}
+
+type QueuedRouteFence = {
+  resolvedSelection?: ScheduledModelSelection;
+  explicitRoute?: { agentKind: EngineKind };
+};
+
+function assertQueuedRoute(
+  target: Pick<SessionRowSnapshot, 'agentKind' | 'agentDeviceId' | 'remoteHostId' | 'model'> | null | undefined,
+  { resolvedSelection, explicitRoute }: QueuedRouteFence,
+  providerId: string | null,
+  requireLocalHost: boolean,
+): void {
+  const expected = resolvedSelection ?? explicitRoute;
+  if (!expected) return;
+  if (!target) throw queuedRouteMismatch('session unavailable');
+  if (target.agentKind !== expected.agentKind) throw queuedRouteMismatch('engine');
+  if ((target.agentDeviceId ?? null) !== (resolvedSelection?.agentDeviceId ?? null) ||
+      ((requireLocalHost || explicitRoute) && target.remoteHostId)) {
+    throw queuedRouteMismatch('device');
+  }
+  // Without a lease the queue applies the explicit model and source at acceptance.
+  if (resolvedSelection && target.model !== resolvedSelection.model) throw queuedRouteMismatch('model');
+  if (resolvedSelection && providerId !== resolvedSelection.providerId) throw queuedRouteMismatch('provider');
+}
 
 /** Pi 原生路由热切失败；继续派发会把任务发给旧 provider，必须在 vendor 前站下。 */
 class QueuedPiRouteSyncError extends Error {}
@@ -3128,6 +3157,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
       scheduleName: schedule.name,
       runId: ctx.runId,
     } as const;
+    let preparingLocalCodexRebuild = false;
     let preparedPiRoute: { model: string; providerId: string | null } | null = null;
 
     // "Open session" 尽早可用(sessionId 已知,无需等派发)。
@@ -3250,8 +3280,19 @@ export class MakerScheduleRunner implements ScheduleRunner {
           : schedule.prompt,
       origin,
       onPreparing: async () => {
-        this.assertQueuedModelSelection(this.deps.maker.getSession(sessionId), routingBaseline.resolvedSelection);
-        this.assertQueuedExplicitRoute(this.deps.maker.getSession(sessionId), routingBaseline.explicitRoute);
+        const live = this.deps.maker.getSession(sessionId);
+        const selection = routingBaseline.resolvedSelection;
+        preparingLocalCodexRebuild = !live && schedule.targetSessionId === sessionId &&
+          (selection ?? routingBaseline.explicitRoute)?.agentKind === 'codex' && !selection?.agentDeviceId;
+        if (preparingLocalCodexRebuild) {
+          // A thread relink wakes the queue after closing the handle. The send
+          // transaction recreates it *after* preparation, under this same lock.
+          const row = await this.runtime.getSessionRowSnapshot(sessionId);
+          if (row?.status !== 'active') throw queuedRouteMismatch('saved session unavailable');
+          assertQueuedRoute(row, routingBaseline, row.providerId, true);
+        } else {
+          assertQueuedRoute(live, routingBaseline, selection ? getSessionProvider(sessionId) : null, false);
+        }
         if (schedule.targetSessionId && this.deps.prepareModelPreferences) {
           // A plugin-engine task keeps its own model; it has no scheduled model scope.
           if ((this.deps.maker.getSession(sessionId)?.agentKind ?? routingBaseline.agentKind) !== 'acp') {
@@ -3268,6 +3309,9 @@ export class MakerScheduleRunner implements ScheduleRunner {
             providerId: getSessionProvider(sessionId) ?? null,
           };
         }
+        // This run can only be accepted on Codex. A pending switch settled by
+        // prepareModelPreferences must never prepare a different engine for it.
+        if (preparingLocalCodexRebuild) return;
         const preparingLive = this.deps.maker.getSession(sessionId);
         if ((preparingLive?.agentKind ?? routingBaseline.agentKind ?? schedule.agentKind) !== 'pi') return;
         preparedPiRoute = await this.prepareQueuedPiRouting(
@@ -3353,6 +3397,8 @@ export class MakerScheduleRunner implements ScheduleRunner {
         // (PR #972 review P2)。凭证形态需要切换的场景无法热切；当前路由仍一致时
         // 跳过并留日志，thread/store 已错配时 fail-closed。
         try {
+          assertQueuedRoute(live, routingBaseline,
+            routingBaseline.resolvedSelection ? getSessionProvider(sessionId) : null, preparingLocalCodexRebuild);
           await this.applyQueuedHeartbeatRouting(schedule, live, routingBaseline, preparedPiRoute);
         } catch (err) {
           if (
@@ -3751,39 +3797,6 @@ export class MakerScheduleRunner implements ScheduleRunner {
     return { sessionId, skipped: true, resultText: error.message };
   }
 
-  private assertQueuedModelSelection(
-    live: ReturnType<Maker['getSession']>,
-    selection: ScheduledModelSelection | undefined,
-  ): void {
-    if (!selection) return;
-    // Provider/model IDs are only unique within an Agent location. Check the
-    // actual runtime at both queue boundaries, after pending user switches.
-    if (!live || live.agentKind !== selection.agentKind ||
-      (live.agentDeviceId ?? null) !== (selection.agentDeviceId ?? null) ||
-      live.model !== selection.model || getSessionProvider(live.id) !== selection.providerId) {
-      throw new QueuedRouteDisabledError('Scheduled model route changed before queued dispatch');
-    }
-  }
-
-  /**
-   * 本轮显式选择的「引擎 + 本机位置」围栏(租约没拿到、改走排队窗口时用)。
-   *
-   * 排队窗口最长 30 分钟,期间用户可能把会话迁到另一台电脑或换成别的引擎 ——
-   * 那样排队派发会用新的 live 把提示词发到**本轮没选的位置/引擎**上。围栏在排队
-   * 窗口的两条边界(准备 onPreparing / 受理 onAccepted)各核对一次:不成立就不许派发,
-   * 由排队派发在 vendor dispatch 之前收口成可见失败(与租约路径的 resolvedSelection
-   * 围栏同语义)。
-   */
-  private assertQueuedExplicitRoute(
-    live: ReturnType<Maker['getSession']>,
-    route: { agentKind: EngineKind; model: string; providerId: string | null } | undefined,
-  ): void {
-    if (!route) return;
-    if (!live || live.agentKind !== route.agentKind || live.agentDeviceId || live.remoteHostId) {
-      throw new QueuedRouteDisabledError('Scheduled model route changed before queued dispatch');
-    }
-  }
-
   /**
    * 排队派发时刻的路由热同步:schedule 显式设置的 model / effort / 来源(供应商)
    * 优先于绑定会话当前值(与直发路径 4.4.1/4.4.2 同语义);留空沿用会话当前值。
@@ -3820,10 +3833,9 @@ export class MakerScheduleRunner implements ScheduleRunner {
       }
     }
     const resolved = baseline.resolvedSelection;
-    if (resolved && (resolved.agentKind !== 'pi' || resolved.model !== model ||
-      resolved.providerId !== providerId)) {
-      throw new QueuedRouteDisabledError('Scheduled model route changed before queued dispatch');
-    }
+    if (resolved && resolved.agentKind !== 'pi') throw queuedRouteMismatch('engine');
+    if (resolved && resolved.model !== model) throw queuedRouteMismatch('model');
+    if (resolved && resolved.providerId !== providerId) throw queuedRouteMismatch('provider');
     // The explicit profile already went through the ordinary runtime transaction.
     // Reapplying via the local Pi path would use the automation host's catalog.
     if (resolved) return { model, providerId };
@@ -3892,8 +3904,6 @@ export class MakerScheduleRunner implements ScheduleRunner {
       }
       return;
     }
-    this.assertQueuedModelSelection(live, baseline.resolvedSelection);
-    this.assertQueuedExplicitRoute(live, baseline.explicitRoute);
     const explicitRoute = baseline.explicitRoute;
     const explicitModel = schedule.model?.trim() ? schedule.model : undefined;
     const targetModel =
@@ -3931,18 +3941,13 @@ export class MakerScheduleRunner implements ScheduleRunner {
     const nextProviderId = applyProviderId ?? currentProviderId;
     const resolvedSelection = baseline.resolvedSelection;
     const remoteAgent = Boolean(live.agentDeviceId);
-    if (
-      resolvedSelection &&
-      (live.agentKind !== resolvedSelection.agentKind ||
-        targetModel !== resolvedSelection.model ||
-        nextProviderId !== resolvedSelection.providerId)
-    ) {
-      throw new QueuedRouteDisabledError('Scheduled model route changed before queued dispatch');
-    }
+    if (resolvedSelection && live.agentKind !== resolvedSelection.agentKind) throw queuedRouteMismatch('engine');
+    if (resolvedSelection && targetModel !== resolvedSelection.model) throw queuedRouteMismatch('model');
+    if (resolvedSelection && nextProviderId !== resolvedSelection.providerId) throw queuedRouteMismatch('provider');
     // 本轮显式选了来源时,落地来源必须还是它(被停用改道也不例外 —— 与租约路径的
     // resolvedSelection 围栏同口径):否则本轮会经一个用户没选的来源扣费。
     if (explicitRoute?.providerId && nextProviderId !== explicitRoute.providerId) {
-      throw new QueuedRouteDisabledError('Scheduled model route changed before queued dispatch');
+      throw queuedRouteMismatch('provider');
     }
     if (
       !remoteAgent && crossesCodexAppliedCustomProviderIdentity({
