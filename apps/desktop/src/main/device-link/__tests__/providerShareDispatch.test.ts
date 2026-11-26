@@ -202,6 +202,32 @@ describe('provider share invoke', () => {
       .toMatchObject({ ok: false, error: { code: 'ACCESS_REVOKED' } });
   });
 
+  // 2026-11-26 linked shares (agent-net-linked-provider-shares.md): an Agent-Net key registers only over the share owner's
+  // own authenticated guest link. Unit, real dispatch gate; minimal failing input: a guest without owner catalog access
+  // (a delegated executor's peer) registering a key, or a link error surfacing as a refusal the guest would retire the share on.
+  it('lets only the owner\'s own guest register an Agent-Net key and never turns a link failure into a refusal', async () => {
+    const request = { version: 1, signingKey: 'unit-signing', transportKey: 'unit-transport' };
+    const payload = { channel: 'provider-share:agent-net-link:v1', args: [request] };
+    const route = { route: { server: 'https://agent-net.example.test' } };
+    const agentNetLink = vi.fn(async (): Promise<unknown> => route);
+    let catalog: typeof ACCESS | null = null;
+    state.access = ACCESS;
+    setProviderShareAccess({ guestAccess: () => state.access, catalogGuestAccess: () => catalog, agentNetLink,
+      ensureKnown: async () => undefined, hasShares: () => true });
+    await expect(runInvoke(GUEST, payload)).resolves.toMatchObject({ ok: false, error: { code: 'CHANNEL_NOT_ALLOWED' } });
+    expect(agentNetLink).not.toHaveBeenCalled();
+    catalog = ACCESS;
+    await expect(runInvoke(GUEST, payload)).resolves.toEqual({ ok: true, result: route });
+    expect(agentNetLink).toHaveBeenCalledWith(GUEST, request);
+    agentNetLink.mockRejectedValueOnce(new Error('service down'));
+    await expect(runInvoke(GUEST, payload)).resolves.toEqual({ ok: true, result: { unavailable: 'link-failed' } });
+    // Access ends while this computer is linking: the route never leaves it.
+    agentNetLink.mockImplementationOnce(async () => { state.access = null; return route; });
+    const late = await runInvoke(GUEST, payload);
+    expect(late).toMatchObject({ ok: false });
+    expect(JSON.stringify(late)).not.toContain('agent-net.example.test');
+  });
+
   it('refuses everything once access is gone, including results already computed', async () => {
     state.access = ACCESS;
     const handle = vi.fn(async () => {

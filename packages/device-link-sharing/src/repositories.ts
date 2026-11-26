@@ -4,6 +4,13 @@ import type { ProviderShareRepository, StoredProviderShare, StoredProviderShareL
   StoredProviderShareRequest, StoredGuestCredential } from './providerShares.js';
 
 export interface ResourceBinding { kind: 'shared-task' | 'provider-share'; resourceId: string; networkId: string; }
+/**
+ * A Device Link (V1) provider share whose host lets Agent-Net carry its traffic
+ * (docs/dev-rules/protocol-compatibility/agent-net-linked-provider-shares.md). The V1 share stays the only
+ * membership authority: this service never stores its members, and the host device decides every lease.
+ */
+/** `generation` is every lease's `memberVersion`: a new registration (or a new host device) never revives older leases. */
+export interface LinkedProviderShare { shareId: string; networkId: string; hostDeviceId: string; ownerAccountId: string; linkedAt: number; generation: number; }
 export interface SharingState {
   version: 1;
   tasks: StoredSharedTask[];
@@ -13,6 +20,8 @@ export interface SharingState {
   requests: StoredProviderShareRequest[];
   credentials: StoredGuestCredential[];
   bindings: ResourceBinding[];
+  /** Optional so documents written before linked shares existed read unchanged. */
+  linkedShares?: LinkedProviderShare[];
 }
 export const emptySharingState = (): SharingState => ({ version: 1, tasks: [], invitations: [], shares: [],
   links: [], requests: [], credentials: [], bindings: [] });
