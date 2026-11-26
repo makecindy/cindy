@@ -1062,11 +1062,11 @@ describe('commitRewindAtMessage', () => {
     selectQueue.push([makeSessionRow({ sdkSessionId: null })]); // post-update select
     listMessagesForAgentHandoffMock.mockResolvedValue([
       { clientId: 'stopped-id', role: 'user', content: { text: '先前被停掉的问题' }, createdAt: 2000, agentMeta: null, toolUseId: null },
-      { clientId: 'client-id', role: 'user', content: { text: 'hello' }, createdAt: 3000, agentMeta: null, toolUseId: null },
     ]);
 
     await commitRewindAtMessage('sess-1', 'client-id');
 
+    expect(listMessagesForAgentHandoffMock).toHaveBeenCalledWith('sess-1', 2000, undefined, 'replay', { createdAt: 3000, rowid: 10 });
     expect(commitRewindFilesMock).toHaveBeenCalledTimes(1);
     expect(commitRewindFilesMock).toHaveBeenCalledWith('sdk-msg-uuid-target', '', { rewindsToNativeThreadStart: true });
     expect(closeSessionMock).toHaveBeenCalledWith('sess-1');
@@ -1122,9 +1122,6 @@ describe('commitRewindAtMessage', () => {
     selectQueue.push([]); // agent_switch 边界守卫:无边界
     selectQueue.push([]); // prior assistants — empty
     selectQueue.push([makeSessionRow({ sdkSessionId: null })]);
-    listMessagesForAgentHandoffMock.mockResolvedValue([
-      { clientId: 'client-id', role: 'user', content: { text: 'hello' }, createdAt: 3000, agentMeta: null, toolUseId: null },
-    ]);
 
     await commitRewindAtMessage('sess-1', 'client-id', { allowFileRestore: false });
 

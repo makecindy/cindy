@@ -526,6 +526,7 @@ export function sessionPatchToRow(
   patch: {
     title?: string;
     workingDir?: string;
+    projectDir?: string | null;
     workspaceKind?: WorkspaceKind;
     model?: string;
     effort?: string | null;
@@ -556,8 +557,11 @@ export function sessionPatchToRow(
   if (patch.workspaceKind !== undefined) out.workspaceKind = patch.workspaceKind;
   // Move controls explicitly set workspaceKind; an execution-only cwd update
   // (e.g. attaching a worktree) must preserve the chosen project.
-  if (patch.workspaceKind === 'dialogue'
-    || (patch.workspaceKind === 'project' && patch.workingDir !== undefined)) out.projectDir = null;
+  if (patch.projectDir !== undefined) {
+    out.projectDir = normalizeWorkingDirForStorage(patch.projectDir);
+  } else if (patch.workspaceKind === 'dialogue' || (patch.workspaceKind === 'project' && patch.workingDir !== undefined)) {
+    out.projectDir = null;
+  }
   if (patch.model !== undefined) out.model = patch.model;
   const persistableEffort = opts?.allowEmptyEffort && patch.effort === ''
     ? ('' as SessionInsert['effort'])
