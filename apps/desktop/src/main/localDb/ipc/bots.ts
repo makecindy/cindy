@@ -57,13 +57,7 @@ import {
   writeBotModelChainSettings,
 } from '../../maker-host/bot-model-chain-settings-store.js';
 import { extractMessagePreview, finalizePlainPreview, sessionToCamel } from '../mapper.js';
-import {
-  LATEST_VISIBLE_PREVIEW_FILTER_SQL,
-  LIST_PREVIEW_EXTRACT_SQL,
-  SESSION_LIST_PROJECTION_BACKFILL_SQL,
-  serializeSessionListProjectionBackfill,
-  type SessionListProjectionBackfillItem,
-} from '../sessionListProjection.js';
+import { LIST_PREVIEW_EXTRACT_SQL } from '../sessionListProjection.js';
 import { normalizeBotToolCapabilities } from '../../../shared/botCapabilitySelection.js';
 import {
   botProfileContentChanged,
@@ -1001,6 +995,95 @@ function normalizeBotModelCapabilitiesOrThrow(
 /** How many candidate rows the preview query inspects (see below). */
 const CANONICAL_PREVIEW_SCAN = 100;
 
+/** Companion visibility + non-empty extract filter shared by batched active `chat` previews. */
+const BOT_CHAT_REPLY_COMPLETED_SQL = `(json_valid(m.agent_meta) = 1 AND (
+  json_extract(m.agent_meta, '$.turnCompleted') = 1
+  OR json_extract(m.agent_meta, '$.turnMoney.amount') > 0
+  OR json_extract(m.agent_meta, '$.turnCostUsd') > 0
+  OR json_type(m.agent_meta, '$.turnUsageDetails') IS NOT NULL
+  OR (json_type(m.agent_meta, '$.sourceGroup.groupId') = 'text'
+    AND length(trim(json_extract(m.agent_meta, '$.sourceGroup.groupId'))) > 0)
+))`;
+
+const BOT_CHAT_VISIBLE_PREVIEW_FILTER_SQL = `m.role IN ('user', 'assistant')
+  AND m.rewind_at IS NULL
+  AND (m.agent_meta IS NULL OR json_valid(m.agent_meta) = 0 OR (
+    json_extract(m.agent_meta, '$.autoResume') IS NOT 1
+    AND json_type(m.agent_meta, '$.botDirectMessage') IS NULL
+    AND json_extract(m.agent_meta, '$.botPrivateReply') IS NOT 1
+  ))
+  AND (
+    m.role = 'user'
+    OR (
+      (m.agent_meta IS NULL OR json_valid(m.agent_meta) = 0 OR (
+        json_extract(m.agent_meta, '$.failedSamplingAttempt') IS NULL
+        AND COALESCE(json_extract(m.agent_meta, '$.samplingAttemptPending'), 0) = 0
+        AND json_extract(m.agent_meta, '$.assistantPhase') IS NOT 'commentary'
+        AND json_extract(m.agent_meta, '$.parentToolUseId') IS NULL
+        AND json_extract(m.agent_meta, '$.parent_tool_use_id') IS NULL
+      ))
+      AND (${BOT_CHAT_REPLY_COMPLETED_SQL} OR NOT EXISTS (
+        SELECT 1 FROM (
+          SELECT subsequent_tool.created_at FROM messages AS subsequent_tool
+          WHERE subsequent_tool.session_id = m.session_id
+            AND subsequent_tool.created_at > m.created_at
+            AND subsequent_tool.rewind_at IS NULL
+            AND subsequent_tool.role IN ('tool_use', 'tool_result', 'thinking')
+          ORDER BY subsequent_tool.created_at LIMIT 1
+        ) AS first_tool
+        WHERE NOT EXISTS (
+          SELECT 1 FROM messages AS next_input
+          WHERE next_input.session_id = m.session_id
+            AND next_input.role = 'user' AND next_input.rewind_at IS NULL
+            AND next_input.created_at > m.created_at
+            AND next_input.created_at < first_tool.created_at
+            AND (next_input.agent_meta IS NULL OR json_valid(next_input.agent_meta) = 0 OR json_extract(next_input.agent_meta, '$.autoResume') IS NOT 1)
+            AND (next_input.agent_meta IS NULL OR json_valid(next_input.agent_meta) = 0 OR json_extract(next_input.agent_meta, '$.delivery') IS NOT 'steer')
+        )
+      ))
+    )
+  )
+  AND NULLIF(trim(COALESCE(${LIST_PREVIEW_EXTRACT_SQL}, ''), char(9, 10, 13, 32)), '') IS NOT NULL`;
+
+/**
+ * Atomic batched write-back of companion-filtered `chat` previews.
+ * Writes only when the session's message watermark (`max_rowid`, `count`, `cleared_at`)
+ * has not moved since the read and `list_preview` is still empty.
+ */
+const BOT_CHAT_PREVIEW_BACKFILL_SQL = `UPDATE sessions
+SET
+  list_preview = CASE
+    WHEN payload.has_preview = 1 AND NULLIF(sessions.list_preview, '') IS NULL THEN payload.preview
+    ELSE sessions.list_preview
+  END,
+  list_preview_role = CASE
+    WHEN payload.has_preview = 1 AND NULLIF(sessions.list_preview, '') IS NULL THEN payload.role
+    ELSE sessions.list_preview_role
+  END,
+  list_message_count = CASE
+    WHEN sessions.list_message_count IS NULL THEN payload.count
+    ELSE sessions.list_message_count
+  END
+FROM (
+  SELECT
+    json_extract(value, '$.id') AS id,
+    json_extract(value, '$.preview') AS preview,
+    json_extract(value, '$.role') AS role,
+    json_extract(value, '$.count') AS count,
+    json_extract(value, '$.hasPreview') AS has_preview,
+    json_extract(value, '$.maxRowid') AS max_rowid,
+    json_extract(value, '$.clearedAt') AS cleared_at
+  FROM json_each(?)
+) AS payload
+WHERE sessions.id = payload.id
+  AND sessions.cleared_at IS payload.cleared_at
+  AND NOT EXISTS (
+    SELECT 1 FROM messages m
+    WHERE m.session_id = sessions.id
+      AND m.rowid > COALESCE(payload.max_rowid, 0)
+  )
+  AND (SELECT count(*) FROM messages m WHERE m.session_id = sessions.id) = payload.count`;
+
 /** Explicit group deliveries are complete replies independent of the canonical turn.
  * The transcript also accepts persisted usage/cost as a legacy turn seal. */
 function canonicalReplyCompleted() {
@@ -1247,49 +1330,105 @@ async function readProfile(
     missingChatPreviewIds.push(row.id);
   }
   const uniqueMissingChatIds = [...new Set(missingChatPreviewIds)];
-  const chatPreviewBackfill: SessionListProjectionBackfillItem[] = [];
+  const runningChatIds: string[] = [];
+  const settledChatIds: string[] = [];
+  for (const id of uniqueMissingChatIds) {
+    if (getMakerIfReady()?.getSession(id)?.isTurnRunning?.() === true) runningChatIds.push(id);
+    else settledChatIds.push(id);
+  }
+  for (const id of runningChatIds) {
+    owner.assertCurrent();
+    const row = byId.get(id);
+    const live = await readCanonicalChatPreview(db, id, row?.clearedAt ?? null);
+    chatPreviewBySession.set(id, live.preview);
+  }
+  const chatPreviewBackfill: Array<{
+    id: string;
+    preview: string | null;
+    role: string | null;
+    count: number;
+    hasPreview: 0 | 1;
+    maxRowid: number;
+    clearedAt: number | null;
+  }> = [];
   const outerSessionIdSql = sql`${sql.identifier('sessions')}.${sql.identifier('id')}`;
   const outerSessionClearedAtSql = sql`${sql.identifier('sessions')}.${sql.identifier('cleared_at')}`;
-  for (let offset = 0; offset < uniqueMissingChatIds.length; offset += 200) {
+  for (let offset = 0; offset < settledChatIds.length; offset += 200) {
     owner.assertCurrent();
-    const batch = uniqueMissingChatIds.slice(offset, offset + 200);
+    const batch = settledChatIds.slice(offset, offset + 200);
     const previewRows = await db
       .select({
         id: sessions.id,
+        clearedAt: sessions.clearedAt,
         latestMessageExtract: sql<string | null>`(
           SELECT ${sql.raw(LIST_PREVIEW_EXTRACT_SQL)} FROM messages m
           WHERE m.session_id = ${outerSessionIdSql}
-            AND ${sql.raw(LATEST_VISIBLE_PREVIEW_FILTER_SQL)}
+            AND ${sql.raw(BOT_CHAT_VISIBLE_PREVIEW_FILTER_SQL)}
             AND (${outerSessionClearedAtSql} IS NULL OR m.created_at > ${outerSessionClearedAtSql})
           ORDER BY m.created_at DESC, m.rowid DESC LIMIT 1
         )`.as('latest_message_extract'),
         latestMessageRole: sql<string | null>`(
           SELECT m.role FROM messages m
           WHERE m.session_id = ${outerSessionIdSql}
-            AND ${sql.raw(LATEST_VISIBLE_PREVIEW_FILTER_SQL)}
+            AND ${sql.raw(BOT_CHAT_VISIBLE_PREVIEW_FILTER_SQL)}
             AND (${outerSessionClearedAtSql} IS NULL OR m.created_at > ${outerSessionClearedAtSql})
           ORDER BY m.created_at DESC, m.rowid DESC LIMIT 1
         )`.as('latest_message_role'),
+        latestMessageParentUuid: sql<unknown>`(
+          SELECT CASE WHEN json_valid(m.agent_meta) = 1 THEN json_extract(m.agent_meta, '$.parentUuid') ELSE NULL END
+          FROM messages m
+          WHERE m.session_id = ${outerSessionIdSql}
+            AND ${sql.raw(BOT_CHAT_VISIBLE_PREVIEW_FILTER_SQL)}
+            AND (${outerSessionClearedAtSql} IS NULL OR m.created_at > ${outerSessionClearedAtSql})
+          ORDER BY m.created_at DESC, m.rowid DESC LIMIT 1
+        )`.as('latest_message_parent_uuid'),
         messageCount: sql<number>`(
           SELECT count(*) FROM messages m
           WHERE m.session_id = ${outerSessionIdSql}
         )`.as('message_count'),
+        maxMessageRowid: sql<number>`COALESCE((
+          SELECT max(m.rowid) FROM messages m
+          WHERE m.session_id = ${outerSessionIdSql}
+        ), 0)`.as('max_message_rowid'),
       })
       .from(sessions)
       .where(inArray(sessions.id, batch));
     owner.assertCurrent();
     for (const previewRow of previewRows) {
-      const preview =
-        previewRow.latestMessageExtract != null
+      const subagentRow =
+        typeof previewRow.latestMessageParentUuid === 'string' &&
+        isSubagentParentToolUseId(previewRow.latestMessageParentUuid);
+      let preview =
+        !subagentRow && previewRow.latestMessageExtract != null
           ? finalizePlainPreview(previewRow.latestMessageExtract, previewRow.latestMessageRole)
           : null;
+      let previewRole = previewRow.latestMessageRole;
+      // Rare fallback: subagent parentUuid, markdown-only text that collapsed to empty, or
+      // structured content arrays not covered by LIST_PREVIEW_EXTRACT_SQL.
+      if (
+        subagentRow ||
+        (previewRow.latestMessageExtract != null && preview == null) ||
+        (previewRow.latestMessageExtract == null && previewRow.messageCount > 0)
+      ) {
+        owner.assertCurrent();
+        const fallback = await readCanonicalChatPreview(
+          db,
+          previewRow.id,
+          previewRow.clearedAt ?? null,
+        );
+        preview = fallback.preview;
+        previewRole = fallback.role;
+      }
       chatPreviewBySession.set(previewRow.id, preview);
-      const running = getMakerIfReady()?.getSession(previewRow.id)?.isTurnRunning?.() === true;
-      if (!running && (preview != null || previewRow.messageCount === 0)) {
+      if (preview != null || previewRow.messageCount === 0) {
         chatPreviewBackfill.push({
           id: previewRow.id,
-          ...(preview != null ? { preview, role: previewRow.latestMessageRole } : {}),
+          preview,
+          role: preview != null ? previewRole : null,
           count: previewRow.messageCount,
+          hasPreview: preview != null ? 1 : 0,
+          maxRowid: previewRow.maxMessageRowid,
+          clearedAt: previewRow.clearedAt ?? null,
         });
       }
     }
@@ -1297,9 +1436,7 @@ async function readProfile(
   if (chatPreviewBackfill.length > 0 && typeof client.exec === 'function') {
     owner.assertCurrent();
     try {
-      await client.exec(SESSION_LIST_PROJECTION_BACKFILL_SQL, [
-        serializeSessionListProjectionBackfill(chatPreviewBackfill),
-      ]);
+      await client.exec(BOT_CHAT_PREVIEW_BACKFILL_SQL, [JSON.stringify(chatPreviewBackfill)]);
     } catch (err) {
       log.warn('bot chat preview projection backfill failed', {
         botId,

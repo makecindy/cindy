@@ -6309,7 +6309,11 @@ it('batches active bot chat previews and reuses backfilled list_preview across r
   }
   await h.db!.insert(messages).values([
     { id: 'm-1', clientId: 'c-1', sessionId: 'bot-chat-1', role: 'assistant', content: JSON.stringify('**First** reply'), createdAt: 1000 },
+    // Trailing commentary narration must be excluded from both display and backfilled cache.
+    { id: 'm-1-commentary', clientId: 'c-1-commentary', sessionId: 'bot-chat-1', role: 'assistant', content: JSON.stringify('Checking files...'), agentMeta: JSON.stringify({ assistantPhase: 'commentary' }), createdAt: 1500 },
     { id: 'm-2', clientId: 'c-2', sessionId: 'bot-chat-2', role: 'user', content: JSON.stringify({ text: 'Second question' }), createdAt: 2000 },
+    // Trailing attachment-only user message (empty text) must fall back to the previous visible text preview.
+    { id: 'm-2-attachment', clientId: 'c-2-attachment', sessionId: 'bot-chat-2', role: 'user', content: JSON.stringify({ text: '', attachments: [{ name: 'photo.png' }] }), createdAt: 2500 },
   ]);
 
   let batchedPreviewQueries = 0;
@@ -6317,12 +6321,20 @@ it('batches active bot chat previews and reuses backfilled list_preview across r
     if (sql.includes('latest_message_extract')) batchedPreviewQueries++;
   });
 
-  // First refresh: single batched SQL read across all missing active chat sessions + backfill.
+  // First refresh: single batched SQL read across all missing active chat sessions + companion-filtered backfill.
   const first = await invoke('local-db:bots:get', 'bot-1');
   expect(batchedPreviewQueries).toBe(1);
   expect(first.sessions.find((s: { id: string }) => s.id === 'bot-chat-1')?.preview).toBe('First reply');
   expect(first.sessions.find((s: { id: string }) => s.id === 'bot-chat-2')?.preview).toBe('Second question');
   expect(first.sessions.find((s: { id: string }) => s.id === 'bot-chat-empty')?.preview).toBeNull();
+  // Verify the backfilled DB column never stored commentary narration or blank attachment text.
+  const cachedRows = h.sqlite!
+    .prepare("SELECT id, list_preview FROM sessions WHERE id IN ('bot-chat-1', 'bot-chat-2')")
+    .all() as Array<{ id: string; list_preview: string | null }>;
+  expect(Object.fromEntries(cachedRows.map((r) => [r.id, r.list_preview]))).toEqual({
+    'bot-chat-1': 'First reply',
+    'bot-chat-2': 'Second question',
+  });
 
   // Second refresh: cached list_preview and list_message_count=0 short-circuit all chat preview queries.
   batchedPreviewQueries = 0;
