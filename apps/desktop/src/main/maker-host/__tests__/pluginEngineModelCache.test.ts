@@ -17,8 +17,9 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const h = vi.hoisted(() => ({ root: '', owner: 'owner-a' }));
+const h = vi.hoisted(() => ({ root: '', owner: 'owner-a', lifetime: 0 }));
 vi.mock('../../appSessionState.js', () => ({
+  getDataOwnerLifetime: () => h.lifetime,
   ownerScopedUserDataPath: (...parts: string[]) => path.join(h.root, 'owners', h.owner, ...parts),
 }));
 
@@ -32,11 +33,25 @@ const offered = [
 beforeEach(() => {
   h.root = fs.mkdtempSync(path.join(os.tmpdir(), 'engine-models-'));
   h.owner = 'owner-a';
+  h.lifetime = 0;
   cache.resetPluginHarnessModelCacheForTests();
 });
 afterEach(() => fs.rmSync(h.root, { recursive: true, force: true }));
 
 describe('plugin engine model list', () => {
+  // A session from the previous owner can still deliver a final report.
+  it('does not share live observations across owners or account providers', () => {
+    const provider = `acp-plugin:${KEY}`;
+    const old = cache.observePluginEngineModelDetails(provider);
+    const sample = { modelId: 'v4-pro', contextWindow: 64000, imageInput: false };
+    old(sample);
+    expect(cache.getReportedPluginEngineModelDetails(provider)).toEqual([sample]);
+    expect(cache.getReportedPluginEngineModelDetails(`${provider}~00000001`)).toEqual([]);
+    h.lifetime += 1;
+    old({ ...sample, contextWindow: 128000 });
+    expect(cache.getReportedPluginEngineModelDetails(provider)).toEqual([]);
+  });
+
   it('survives a restart, keeps only display fields and stays per account', () => {
     cache.rememberPluginHarnessModels(KEY, offered);
     const expected = [

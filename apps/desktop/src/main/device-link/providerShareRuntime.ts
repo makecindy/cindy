@@ -129,7 +129,11 @@ import {
   startProviderShareGuest,
   stopProviderShareGuest,
   withdrawProviderShareRequest,
+  getConfirmedReceivedShareIds,
 } from './providerShareGuest.js';
+import { agentNetSharingRoute } from './agentNetSharing.js';
+import { handleProviderShareAgentNetLink, linkReceivedProviderShares, reconcileLinkedProviderShares,
+  revokeLinkedProviderShareGuests } from './agentNetLinkedShares.js';
 import {
   configureProviderShareGuestPrefs,
   invalidateProviderShareGuestPrefsCache,
@@ -251,6 +255,9 @@ function revoke(match: (controller: string) => boolean, purge: boolean): void {
   void revokeProviderShareControllers(match, purge).catch((error) => {
     log.warn('provider share revoke failed', { purge, error: error instanceof Error ? error.message : String(error) });
   });
+  // A paused or removed guest also loses the Agent-Net lease of a share it moved off Device Link.
+  try { revokeLinkedProviderShareGuests(match); }
+  catch (error) { log.warn('linked share revoke failed', { error: error instanceof Error ? error.message : String(error) }); }
 }
 
 /** O's durable deletion queue survives offline M and an O restart. Only an ACK removes a target. */
@@ -532,6 +539,9 @@ export function startProviderShareRuntime(broadcast: Broadcast, options: { invok
       }, true);
       // 转分享记录按账号存放，只会属于这台电脑上的分享：已不在快照里的成员与分享一并删掉。
       pruneReshares((record) => !owned.get(record.shareId)?.has(record.memberId));
+      // 已删除的分享不再登记在 Agent-Net 上（尽力而为，不影响上面的清理）。
+      try { reconcileLinkedProviderShares(owned); }
+      catch (error) { log.warn('linked share cleanup failed', { error: error instanceof Error ? error.message : String(error) }); }
     },
   }, { readWatchedShares: readInvoke ? (hostDeviceId) => readProviderManagementShares(readInvoke, hostDeviceId) : undefined });
   startProviderShareGuest({
@@ -544,6 +554,14 @@ export function startProviderShareRuntime(broadcast: Broadcast, options: { invok
       emit(PROVIDER_SHARE_IPC.RECEIVED_CHANGED, received);
       // Pushed to every controlling computer; they re-read capabilities and rosters.
       if (changed) notifyControlledModelCatalogChanged(providerShareReceivedChangeSequence());
+      // Both computers on Agent-Net: move Device Link shares onto it, one background request per share.
+      // Best effort only: whatever happens here, the share list above has already been published.
+      try {
+        linkReceivedProviderShares({ received, confirmedShareIds: getConfirmedReceivedShareIds(), invoke: shareInvoke,
+          isAgentNetShare: (shareId) => { try { return !!agentNetSharingRoute('provider-share', shareId); } catch { return true; } } });
+      } catch (error) {
+        log.warn('moving received shares to Agent-Net failed', { error: error instanceof Error ? error.message : String(error) });
+      }
     },
     settled(state, preview) {
       emit(PROVIDER_SHARE_IPC.SETTLED, { state, preview });
@@ -1566,6 +1584,7 @@ export function registerProviderShareIpc(): void {
     },
     insights,
     insightsCurrent: insights.isCurrent,
+    agentNetLink: handleProviderShareAgentNetLink,
     guestAccess: providerShareGuestAccess,
     catalogGuestAccess: ownedProviderShareGuestAccess,
     ensureKnown: ensureProviderSharePeerKnown,

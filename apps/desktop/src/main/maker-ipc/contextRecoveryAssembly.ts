@@ -123,7 +123,9 @@ export async function commitContextRecoveryWithPorts(ports: CommitContextRecover
           ? 'codex'
           : sessionKindRow?.agentKind === 'pi'
             ? 'pi'
-            : 'cc';
+            : sessionKindRow?.agentKind === 'acp'
+              ? 'acp'
+              : 'cc';
       ports.broadcastSessionPatched(
         sessionId,
         {
@@ -186,7 +188,7 @@ export interface ReplayContextRecoveryPorts {
   log: Pick<ReturnType<typeof import('../logger.js').createLogger>, 'info' | 'warn'>;
   readSessionWritableDirsFromDb: typeof import('../maker-host/session-storage.js').readSessionWritableDirsFromDb;
   restoreAutoReviewUserIntent: typeof import('./autoReviewUserIntent.js').restoreAutoReviewUserIntent;
-  readAutoReviewHistory: (sessionId: string) => ReturnType<typeof import('../localDb/ipc/messages.js').listMessagesForAgentHandoff>;
+  readAutoReviewHistory: (sessionId: string) => Promise<import('./autoReviewUserIntent.js').AutoReviewHistory>;
   readContextRecoverySession: (sessionId: string) => ReturnType<typeof readContextRecoverySessionWithPorts>;
   canContinueContextRecovery: typeof import('./contextOverflowRollover.js').canContinueContextRecovery;
   isHeadlessGhostSetupTurn: (sessionId: string) => boolean;
@@ -209,17 +211,19 @@ export async function replayContextRecoveryWithPorts(ports: ReplayContextRecover
         .from(ports.sessions)
         .where(ports.eq(ports.sessions.id, sessionId))
         .limit(1);
-      // Plugin engines manage their own context; Cindy does not replay into a new native session.
-      if (!row?.workingDir || row.agentKind === 'acp') return { accepted: false };
+      if (!row?.workingDir) return { accepted: false };
       if (recovery?.signal?.aborted) return { accepted: false };
+      // A plugin engine task replays into a fresh session on its own engine (the recovery above
+      // retired the overflowing one); dbToMakerAgentKind would read it as Claude Code.
+      const pluginEngine = row.agentKind === 'acp';
       const createOpts = ports.buildCreateOptsWithStderr({
         id: sessionId,
-        agentKind: ports.dbToMakerAgentKind(row.agentKind),
+        agentKind: pluginEngine ? 'acp' : ports.dbToMakerAgentKind(row.agentKind),
         workingDir: row.workingDir,
         model: row.model ?? undefined,
         providerId: row.providerId,
         effort: (row.effort ?? undefined) as CreateOpts['effort'],
-        fastMode: (row.fastMode ?? false),
+        fastMode: pluginEngine ? false : (row.fastMode ?? false),
         permissionMode: (row.permissionMode ?? 'ask') as CreateOpts['permissionMode'],
         planMode: !!row.planModeEnabled,
         title: row.title ?? undefined,
