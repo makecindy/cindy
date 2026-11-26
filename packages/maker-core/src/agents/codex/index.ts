@@ -6278,8 +6278,21 @@ assertRouteCurrent();
       }
     };
     let registeredRootCodexThreadId: string | undefined;
-    // Captured here: the handle's own methods rebind `this` to the handle.
     const closeCodexMcpSessionInstance = this.deps.closeCodexMcpSessionInstance;
+    // Remote, hosted and external-client handles don't own local bridge sessions.
+    let localMcpInstanceId = !opts.remoteHostId && !hosted && !opts[LOCAL_AGENT_CLIENT]
+      ? opts.sessionInstanceId : undefined;
+    const endPublishedSessionEvents = (): void => {
+      // EOF auto-closes Session without calling handle.close(). Release this instance
+      // before publishing EOF, whether shutdown was requested or initiated here.
+      const instanceId = localMcpInstanceId;
+      localMcpInstanceId = undefined;
+      if (instanceId) {
+        try { closeCodexMcpSessionInstance?.(instanceId); }
+        catch (e) { log.warn('closeCodexMcpSessionInstance threw', { error: String(e) }); }
+      }
+      eventQueue.end();
+    };
     const unregisterCodexMcpContext = (threadId: string): void => {
       if (registeredRootCodexThreadId === threadId) registeredRootCodexThreadId = undefined;
       textOnlyPolicyCleanups.get(threadId)?.();
@@ -6684,7 +6697,7 @@ assertRouteCurrent();
       try { stopActiveRolloutPlanFallback(); } catch (e) { log.warn('stop rollout plan fallback threw', { error: String(e) }); }
       try { discardOverloadRetry(reason); } catch (e) { log.warn('cancel overload retry threw', { error: String(e) }); }
       subscription = null;
-      try { eventQueue.end(); } catch (e) { log.warn('eventQueue.end threw', { error: String(e) }); }
+      try { endPublishedSessionEvents(); } catch (e) { log.warn('eventQueue.end threw', { error: String(e) }); }
     };
     const retireCapturedHostAfterThreadCleanupFailure = async (
       reason: string,
@@ -13078,7 +13091,7 @@ assertRouteCurrent();
         });
         if (!hadPendingWork) {
           log.info('idle Codex session invalidated by forced host retirement', { threadId });
-          eventQueue.end();
+          endPublishedSessionEvents();
           return;
         }
         discardYieldContinuationClaims('app-server force-retired');
@@ -13130,7 +13143,7 @@ assertRouteCurrent();
         // 该 host 已被永久替换，handle 不可能原地恢复。结束内部事件流，让已启动的
         // Session 走既有 auto-close → Maker lazy create；尚未启动 event loop 的
         // Session 会在下一次 send 明确失败后 drain 到这里并重建。
-        eventQueue.end();
+        endPublishedSessionEvents();
       },
       threadStarted: (params) => {
         const sid = params.thread?.id;
@@ -14295,7 +14308,7 @@ assertRouteCurrent();
         retireHostOnFailure: opts.retireHostOnCleanupFailure ?? true,
         closeHandleOnFailure: false,
       });
-      try { eventQueue.end(); } catch (e) { log.warn('eventQueue.end threw', { error: String(e) }); }
+      try { endPublishedSessionEvents(); } catch (e) { log.warn('eventQueue.end threw', { error: String(e) }); }
       if (!released) throw new Error('Codex task cleanup remains unconfirmed');
     }
     // ── AgentSessionHandle ──────────────────────────────────────────────────
@@ -15472,18 +15485,8 @@ assertRouteCurrent();
       },
 
       async close() {
-        try {
-          await closeSessionHandle();
-          await retireSingleSessionHost();
-        } finally {
-          // This memory instance is over (rebuilds mint a new id), so its bridge
-          // sessions have no future client. Remote, hosted and external-client
-          // sessions do not use the local bridge's instance URL.
-          if (opts.sessionInstanceId && !opts.remoteHostId && !hosted && !opts[LOCAL_AGENT_CLIENT]) {
-            try { closeCodexMcpSessionInstance?.(opts.sessionInstanceId); }
-            catch (e) { log.warn('closeCodexMcpSessionInstance threw', { error: String(e) }); }
-          }
-        }
+        await closeSessionHandle();
+        await retireSingleSessionHost();
       },
 
       events(): AsyncIterable<AgentEvent> {
