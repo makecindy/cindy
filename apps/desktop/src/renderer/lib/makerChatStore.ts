@@ -15175,13 +15175,12 @@ export function buildCreateOptsForCurrentSession(
     fastMode: current.fastMode,
     planMode: current.planModeEnabled,
     displayReasoning: 'summarized',
-    userPrompt: getUserPrompt(),
     // device-link routes to the target desktop, so omit the controller setting.
     // SSH remote follows the controller's global setting like local sessions:
     // memory lives on this machine, scoped per hostId+remote path
     // (maker-core buildMemoryScopeKey), and reaches the remote agent via the
     // host HTTP MCP bridge.
-    ...(deviceLinkRemote ? {} : { makerMemoryEnabled: getMakerMemoryEnabled() }),
+    ...(deviceLinkRemote ? {} : { userPrompt: getUserPrompt(), makerMemoryEnabled: getMakerMemoryEnabled() }),
     ...(current.remoteHostId ? { remoteHostId: current.remoteHostId } : {}),
     ...(opts?.vendorOptions ? { vendorOptions: opts.vendorOptions } : {}),
     ...(current.sdkSessionId ? { resumeSessionId: current.sdkSessionId } : {}),

@@ -4655,12 +4655,11 @@ function CCAgentSessionContent({
             effort: session.effort,
             fastMode,
             permissionMode: session.permissionMode,
-            userPrompt: getUserPrompt(),
             // device-link executes on the target desktop, so let that runtime
             // own the setting. SSH remote follows the controller's global
             // setting like local sessions (memory scoped per hostId+remote
             // path on this machine, see maker-core buildMemoryScopeKey).
-            ...(remoteDeviceId ? {} : { makerMemoryEnabled: getMakerMemoryEnabled() }),
+            ...(remoteDeviceId ? {} : { userPrompt: getUserPrompt(), makerMemoryEnabled: getMakerMemoryEnabled() }),
             extraDirs: session.extraDirs ?? [],
             writableDirs: session.writableDirs ?? [],
             displayReasoning: 'summarized' as const,

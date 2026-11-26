@@ -9,7 +9,7 @@ import { getInstanceConfig } from '../instance-runtime/config.js';
 /**
  * The custom instructions stay in the app window's store, on a cloud
  * instance too. The cloud page and task starts reach them through the preferences section's
- * user-prompt operation. On a cloud instance every task uses the instance's own instructions.
+ * user-prompt operation.
  */
 export function isManagedCloudInstance(): boolean {
   return getInstanceConfig() !== null;
@@ -48,11 +48,16 @@ export async function readPersonalization(): Promise<HostSettingState<Personaliz
  * more tries; one that never answers stops the start rather than using the controller's copy.
  */
 export async function windowUserPrompt(attempts = 3, pause = (ms: number) => new Promise<void>(done => setTimeout(done, ms))): Promise<string> {
+  const owner = currentSettingsOwner();
+  if (!owner) throw new HostSettingsError('OWNER_CHANGED');
   for (let attempt = 1; ; attempt += 1) {
+    assertSettingsOwner(owner);
+    let userPrompt: string | undefined;
     try {
-      const { userPrompt } = await manageAppPreferences('user-prompt');
-      if (typeof userPrompt === 'string') return userPrompt;
+      ({ userPrompt } = await manageAppPreferences('user-prompt'));
     } catch { /* retried below */ }
+    assertSettingsOwner(owner);
+    if (typeof userPrompt === 'string') return userPrompt;
     if (attempt >= attempts) throw new HostSettingsError('UNREADABLE');
     await pause(1000);
   }

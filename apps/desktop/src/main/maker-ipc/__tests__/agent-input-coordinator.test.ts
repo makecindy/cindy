@@ -5038,13 +5038,16 @@ describe('AgentInputCoordinator send transaction', () => {
     expect(h.sendToAgent.mock.calls[1]?.[1]).toEqual({ type: 'user', content: 'next' });
   });
 
-  it('queues silent compact requested during an active turn and dispatches it after that turn', async () => {
+  // A remote compact queued behind a running turn must carry its origin into
+  // the later startup. The immediate path still has the original invoke context.
+  it('queues a remote silent compact during an active turn and preserves its origin at dispatch', async () => {
     const h = createHarness();
     const sid = 'compact-queued-during-active-turn';
     h.setRunning(true);
 
     await h.coordinator.compact(sid, makeItem('q-compact', 'ignored').createOpts, {
       userName: 'Carol',
+      fromDeviceLinkClient: true,
     });
     await flush();
 
@@ -5061,7 +5064,7 @@ describe('AgentInputCoordinator send transaction', () => {
       sid,
       { type: 'user', content: '/compact' },
       expect.anything(),
-      expect.objectContaining({ userName: 'Carol', throwOnStartFailure: true }),
+      expect.objectContaining({ userName: 'Carol', throwOnStartFailure: true, fromDeviceLinkClient: true }),
     );
     expect(h.sendToAgent.mock.calls[0]?.[3].persistUserMessage).toBeUndefined();
     expect(mocks.createMessage).not.toHaveBeenCalled();
