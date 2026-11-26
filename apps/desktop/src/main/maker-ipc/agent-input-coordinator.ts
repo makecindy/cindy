@@ -3836,12 +3836,8 @@ export class AgentInputCoordinator {
     );
     // 正在投递(插话中 / 未跨过 accepted 边界的 active turn)的条目不接受停点:
     // 它已经不属于可编排的队列内容。异步回答不在队列界面上,没有「继续」入口,
-    // 停点落上去就解不开 —— 与 remove() 迁移停点时跳过它们是同一条不变量。
-    const consuming =
-      state.steeringQueueClientIds.includes(clientId) ||
-      state.directSteeringItems.some((item) => item.clientId === clientId) ||
-      (state.activeTurn?.item?.clientId === clientId && !isActiveTurnDispatched(state.activeTurn));
-    if (!target || target.held === true || consuming || isAnsweredAsyncQuestionClientId(clientId)) {
+    // 停点落上去就解不开 —— 与 remove() 迁移停点是同一条不变量,共用同一个判定。
+    if (!target || target.held === true || !this.acceptsQueueHold(state, clientId)) {
       return this.getProjection(sessionId);
     }
     // 只替换真正变化的条目:其余条目保持对象身份,恢复快照的 provenance
@@ -3883,13 +3879,30 @@ export class AgentInputCoordinator {
     return rest;
   }
 
-  /** 从 from 开始的第一条在队列界面可见的条目;异步回答不在界面上,停点不能落在它身上。 */
-  private nextVisibleQueueIndex(queue: readonly AgentInputQueuedMessage[], from: number): number {
-    for (let index = Math.max(0, from); index < queue.length; index += 1) {
-      const item = queue[index];
-      if (item && !isAnsweredAsyncQuestionClientId(item.clientId)) return index;
+  /**
+   * 从 from 开始第一条能承接停点的条目:除了界面可见,还必须仍在队列里等待。
+   * 正在转插话的条目已经离队,停点落上去同样没有可点的「继续」。
+   */
+  private nextHoldableQueueIndex(state: SessionInputState, from: number): number {
+    for (let index = Math.max(0, from); index < state.pendingQueue.length; index += 1) {
+      const item = state.pendingQueue[index];
+      if (item && this.acceptsQueueHold(state, item.clientId)) return index;
     }
     return -1;
+  }
+
+  /**
+   * 这条条目此刻能不能承接停点。挂点与迁移共用这一个判定:两处各写一份,
+   * 迟早会分叉出「停点落在没有恢复入口的条目上」。
+   */
+  private acceptsQueueHold(state: SessionInputState, clientId: string): boolean {
+    if (isAnsweredAsyncQuestionClientId(clientId)) return false;
+    if (state.steeringQueueClientIds.includes(clientId)) return false;
+    if (state.directSteeringItems.some((item) => item.clientId === clientId)) return false;
+    // 刚派发、还没跨过 accepted 边界的条目已经在往模型走,同样回不去队列。
+    return !(
+      state.activeTurn?.item?.clientId === clientId && !isActiveTurnDispatched(state.activeTurn)
+    );
   }
 
   /** 只在真发生替换时新建数组,不改队列顺序。 */
@@ -4408,7 +4421,7 @@ export class AgentInputCoordinator {
     // 跳过不可见的异步回答 —— 它没有队列菜单入口,停点落到它身上用户就再也解不开了。
     // 后面没有可见消息时停点自然消失:队列里只剩系统回答,没有可暂停的对象。
     if (removed?.held === true) {
-      const nextIndex = this.nextVisibleQueueIndex(state.pendingQueue, removedIndex);
+      const nextIndex = this.nextHoldableQueueIndex(state, removedIndex);
       const next = nextIndex >= 0 ? state.pendingQueue[nextIndex] : undefined;
       // 继承停点的条目也是被替换的对象:同样要迁移恢复标记与重试谱系。
       if (next) {
@@ -4731,9 +4744,10 @@ export class AgentInputCoordinator {
     if (this.clearDisplacedAccountWait(state)) {
       this.scheduleDrain(sessionId, 'account-wait-head-moved');
     }
-    if (previousHead !== next[0] && this.botCapabilityRefreshWaits.has(previousHead)) {
-      this.scheduleDrain(sessionId, 'bot-capability-refresh-head-moved');
-    }
+    // 换队首就得重新判一次闸门:旧队首的等待/重试都绑在它身上(能力刷新等待、
+    // 停点被挪走后的空闲队首),而重排本身不会触发任何 drain —— 不在这里补,
+    // 新队首可能一直没人派发。
+    if (previousHead !== next[0]) this.scheduleDrain(sessionId, 'queue-moved');
     // 拖拽重排后等待中的消息不再是队首 → 等待态失效(横幅/自动重发都以队首为目标)。
     // 清掉并重新 drain:新队首仍撞 busy 会带自己的 clientId 重建等待,不撞则直接派发。
     if (

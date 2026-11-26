@@ -20744,4 +20744,48 @@ describe('queue message hold (stop point)', () => {
     expect(heldIds(h, sid)).toEqual(['c']);
     expect(queuedIds(h, sid)).toEqual(['question-reply:answered:q1', 'c']);
   });
+
+  it('never hands the stop point to a row that is being steered', async () => {
+    // 插话回执会把这行从队列里滤掉;停点挂到它身上只会跟着消失,后面的消息
+    // 于是悄悄恢复自动发送。继承候选必须跳过正在投递的行。
+    const h = createHarness();
+    const sid = 'hold-steer-race';
+    h.setRunning(true);
+    await h.coordinator.ensureQueueRestored(sid);
+    h.coordinator.enqueue(sid, makeItem('a', 'first'));
+    h.coordinator.enqueue(sid, makeItem('b', 'second'));
+    h.coordinator.enqueue(sid, makeItem('c', 'third'));
+    await flush();
+    h.coordinator.hold(sid, 'a');
+    h.steerToAgent.mockImplementationOnce(async () => {
+      // 插话回执还在路上时用户删掉停点行。
+      h.coordinator.remove(sid, 'a');
+    });
+
+    await expect(
+      h.coordinator.steerControlInput(sid, { queuedClientId: 'b' }, {
+        session: h.getTurnSessionIdentity(),
+        turnGeneration: 0,
+      }),
+    ).resolves.toBe('steered');
+
+    expect(heldIds(h, sid)).toEqual(['c']);
+  });
+
+  it('retries the freed queue after the stop point itself is moved back', async () => {
+    // 把停点条目移到最后会放出新的队首;重排不会触发 drain,
+    // 不在移动后补一次,队列要等到下次发送才动。
+    const { h, sid } = await withQueued(['a', 'b', 'c']);
+    h.coordinator.hold(sid, 'a');
+    finishTurn(h, sid);
+    await flush();
+    expect(h.sendToAgent).not.toHaveBeenCalled();
+
+    h.coordinator.move(sid, 'a', 3);
+    await flush();
+
+    expect(heldIds(h, sid)).toEqual(['a']);
+    expect(h.sendToAgent).toHaveBeenCalledOnce();
+    expect(h.sendToAgent.mock.calls[0]![3].persistUserMessage?.clientId).toBe('b');
+  });
 });
