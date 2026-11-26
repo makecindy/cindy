@@ -2,7 +2,7 @@ import { useState } from 'react';
 import manifest from '../../../resources/system-skills/cindy-plugin-creator/references/examples/interactive-pages/host-ui/ghost.json';
 import { getApprovedGhostHostUi, type InstalledGhost } from '../../../src/shared/ghost';
 import type { Session } from '../../../src/renderer/lib/ccAgent.types';
-import { PluginUiProvider, PluginUiSlotControls, PluginUiSidebarSections, readPluginUiEntries } from '../../../src/renderer/cindy-brain/PluginUiContributions';
+import { PluginUiProvider, PluginUiSlotControls, PluginUiSidebarSections, readPluginUiEntries, usePluginUiTaskMain } from '../../../src/renderer/cindy-brain/PluginUiContributions';
 import { PluginUiCompletionBridge, type PluginUiCompletionResult } from '../../../src/renderer/cindy-brain/PluginUiCompletionBridge';
 import { AtMentionPanel } from '../../../src/renderer/components/new-chat/AtMentionPanel';
 import { ThumbnailStrip, AttachmentRejectionStrip } from '../../../src/renderer/components/new-chat/ComposerAttachments';
@@ -24,13 +24,16 @@ if (!crypto.randomUUID) {
 }
 const ghost: InstalledGhost = { manifest: manifest as unknown as InstalledGhost['manifest'], enabled: true,
   dir: '/fixture', approval: { state: 'approved', revision: 'fixture' } };
+if (ctx.case === 'task-main') {
+  ghost.manifest.mcpApps!.host!.contributions = [{ id: 'open', title: '当前任务', view: 'task-board', position: 'session.main' }];
+}
 const fields = getApprovedGhostHostUi(ghost)!.settings!;
 const pages = buildPluginSettingsPages([ghost]);
 const documents = buildPluginSettingsSearchDocuments(pages, '插件设置');
 const session = { id: 'fixture-task', title: '示例任务', status: 'active', messagesCount: 3 } as Session;
 const noOp = () => {};
 
-if (ctx.case === 'sidebar-section') {
+if (ctx.case === 'sidebar-section' || ctx.case === 'task-main') {
   // Exercise the real host presenter with a local stand-in for the sandbox document.
   const src = Object.getOwnPropertyDescriptor(HTMLIFrameElement.prototype, 'src')!;
   Object.defineProperty(HTMLIFrameElement.prototype, 'src', {
@@ -58,6 +61,13 @@ if (ctx.case === 'sidebar-section') {
   });
 }
 
+function TaskMainScene() {
+  const { trigger, page } = usePluginUiTaskMain(session.id, '/fixture');
+  return <main className="flex h-screen flex-col bg-content-area text-foreground">
+    <header className="flex items-center gap-2 border-b p-2">{trigger}{session.title}</header>
+    {page ?? <div className="p-4">原生聊天区（验收样本）</div>}
+  </main>;
+}
 function InputScene() {
   const tray = useAttachments(undefined, 'fixture-draft');
   const [completion, setCompletion] = useState<PluginUiCompletionResult | null>(null);
@@ -111,12 +121,13 @@ function Scene() {
 let value: Record<string, unknown> = Object.fromEntries(fields.map(field => [field.id, field.default]));
 const defaults = { ...value };
 void mountPage({ host: {
-  ghosts: { listSync: () => ({ ghosts: [ghost] }), onChanged: () => noOp },
+  ghosts: { listSync: () => ({ ghosts: [ghost] }), onChanged: () => noOp, workdirPrefs: async () => ({ workdirKey: '/fixture', disabled: [] }) },
   getFilePath: (file: File) => `/fixture/${file.name}`,
   getFileThumbnail: async () => null,
   cleanupStagedChatAttachments: async () => {},
   maker: { mcpApps: async (_session, input) => {
-    if (input.op === 'open-resource' && ctx.case === 'sidebar-section') {
+    if (input.op === 'open-resource' && (ctx.case === 'sidebar-section' ||
+      ctx.case === 'task-main' && input.source.taskMainContribution === 'open' && _session === session.id)) {
       return { viewId: 'sidebar-fixture', transport: 'sandbox', prefersBorder: true };
     }
     if (input.op === 'plugin-settings') {
@@ -135,4 +146,4 @@ void mountPage({ host: {
   }, onPluginUiState: () => noOp },
   sharedTask: { host: async () => ({ detail: null }) },
   appPreferenceControl: { onSettingsChanged: () => noOp },
-}, render: () => <FeatureSidebarSlotProvider isCollapsed={false}><PluginUiProvider><Scene /></PluginUiProvider></FeatureSidebarSlotProvider> });
+}, render: () => <FeatureSidebarSlotProvider isCollapsed={false}><PluginUiProvider>{ctx.case === 'task-main' ? <TaskMainScene /> : <Scene />}</PluginUiProvider></FeatureSidebarSlotProvider> });

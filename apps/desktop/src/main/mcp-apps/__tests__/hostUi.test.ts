@@ -11,6 +11,8 @@ vi.mock('../../deepLink.js', () => ({ getDeepLinkMainWindow: () => ({ isDestroye
 vi.mock('../../appSessionState.js', () => ({ activeOwnerScopeKey: () => boundary.owner,
   getActiveDataOwnerPushStamp: () => ({ dataOwnerId: boundary.owner, ownerGeneration: 1 }) }));
 vi.mock('../../device-link/broadcast-tap.js', () => ({ getSafeDataOwnerPushStamp: () => ({ dataOwnerId: 'owner', ownerGeneration: 1 }) }));
+const workdirDenied = vi.hoisted(() => vi.fn(() => false));
+vi.mock('../../cindy-brain/ghostWorkdirPrefs.js', () => ({ isGhostDisabledForWorkdir: workdirDenied }));
 vi.mock('../../mcp-integrations/plugin-app-registry.js', () => ({ readPluginHostUi: () => boundary.entry }));
 vi.mock('../../appearance-settings-store.js', () => ({ readAppearanceSettings: () => ({}) }));
 vi.mock('../../appearance-settings-ipc.js', () => ({ updateAppearanceFromSettings: boundary.setAppearance }));
@@ -76,6 +78,22 @@ it('reads regional visibility without a renderer request and rejects unknown reg
   await expect(binding.callHostTool!('cindy.ui.visibility', { regions: { privateDOM: false } }, new AbortController().signal))
     .rejects.toThrow('MCP_APP_INVALID_REQUEST');
   expect(boundary.send).not.toHaveBeenCalled();
+});
+
+// Unit: the task main resource, unlike a legacy tab, must refuse an unknown or revoked directory.
+it('rechecks the host-bound directory for the exact task main instance', async () => {
+  Object.assign((boundary.entry as { host: object }).host, { contributions: [{ id: 'open', position: 'session.main', view: 'task' }] });
+  const open = (workingDir?: string, contribution = 'open') => bindPluginUiResource('renderer:1', 'task-a', 'local__planner', 'task', () => 'rev', undefined, { workingDir }, contribution);
+  expect(() => open('/project', 'other')).toThrow('MCP_APP_SOURCE_UNAVAILABLE');
+  expect(() => open()).toThrow('MCP_APP_SOURCE_UNAVAILABLE');
+  const binding = open('/project');
+  expect(workdirDenied).toHaveBeenCalledWith('local__planner', '/project');
+  workdirDenied.mockReturnValue(true);
+  try {
+    expect(() => open('/project')).toThrow('MCP_APP_SOURCE_UNAVAILABLE');
+    await expect(binding.callHostTool!('cindy.ui.draft', { mode: 'read' }, new AbortController().signal)).rejects.toThrow('MCP_APP_SOURCE_UNAVAILABLE');
+    expect(boundary.send).not.toHaveBeenCalled();
+  } finally { workdirDenied.mockReturnValue(false); }
 });
 
 it('keeps the declared source scope and omits task-only tools from a global view', () => {

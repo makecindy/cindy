@@ -16,7 +16,8 @@ vi.mock('../PluginUiView', async () => {
   return { PluginUiView: ({ context }: { context?: unknown }) => { useEffect(() => { page.mounted(context); return page.released; }, []); return <div>Local page</div>; } };
 });
 import { memo } from 'react';
-import { EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES, PluginUiBody, PluginUiProvider, PluginUiSlot, PluginUiSlotControls, PluginUiWorkdirButton, PluginUiSidebarSections, readPluginUiEntries, renderPluginUiBody, usePluginUiMessageCandidates, type PluginUiMessageCandidates } from '../PluginUiContributions';
+import { InteractionPromptHost } from '../../components/interaction-portal/InteractionPromptHost';
+import { EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES, PluginUiBody, PluginUiProvider, PluginUiSlot, PluginUiSlotControls, PluginUiWorkdirButton, PluginUiSidebarSections, readPluginUiEntries, renderPluginUiBody, usePluginUiTaskMain, usePluginUiMessageCandidates, type PluginUiMessageCandidates } from '../PluginUiContributions';
 
 // 生产入口：真实 Provider/正文/控件；只替换已装投影与 IPC，Main 订阅适配器不替换。
 // 规则与旧回归：无候选历史行不发请求、不构造数据；原测试只覆盖 App frame。
@@ -91,6 +92,98 @@ it('keeps the native folder action and opens a workdir plugin only after selecti
   view.rerender(scene());
   expect(screen.queryByText('Local page')).toBeNull();
   expect(screen.getByRole('button', { name: 'ccAgent.layout.openWorkingDirAria' })).toBeTruthy();
+});
+
+const mainGhost: InstalledGhost = { enabled: true, dir: '/fixture', approval: { state: 'approved', revision: 'one' },
+  manifest: { schemaVersion: 3, id: 'planner', name: 'Planner', kind: 'chip', entry: 'main.js', version: '1', tools: [],
+    mcpApps: { ui: { resources: [{ uri: 'ui://page', file: 'page.html' }], tools: {} }, host: {
+      views: [{ id: 'page', title: 'Page', resourceUri: 'ui://page', scope: 'task' }],
+      contributions: [{ position: 'session.main', id: 'main', title: 'Open', view: 'page' }],
+    } } } };
+
+// Unit: the main placement stays closed on task/directory changes and releases the presenter on return.
+// Existing sidebar/popover tests do not exercise an unresolved or revoked workdir policy.
+it('opens the approved task main view only on click and releases it on return or scope change', async () => {
+  const prefs = vi.fn(async (workdir: string) => ({ workdirKey: workdir, disabled: workdir === '/off' ? ['planner'] : [] }));
+  const subscribe = vi.fn(() => () => {});
+  Object.assign(window.electronAPI, { ghosts: { workdirPrefs: prefs, onWorkdirPrefsChanged: subscribe } });
+  const Task = ({ task, dir }: { task: string | null; dir: string }) => {
+    const { trigger, page } = usePluginUiTaskMain(task, dir);
+    return <>{trigger}{page ?? 'Native chat'}</>;
+  };
+  const scene = (task: string | null, dir = '/project') => <PluginUiProvider><Task task={task} dir={dir} /></PluginUiProvider>;
+  const view = render(scene('task-a'));
+  expect(screen.getByText('Native chat')).toBeTruthy(); expect(prefs).not.toHaveBeenCalled();
+  expect(subscribe).not.toHaveBeenCalled(); expect(invoke).not.toHaveBeenCalled(); expect(page.mounted).not.toHaveBeenCalled();
+  const ghost = mainGhost;
+  installed.ghosts = [ghost]; view.rerender(scene(null)); expect(prefs).not.toHaveBeenCalled();
+  view.rerender(scene('task-a', '/off')); await waitFor(() => expect(prefs).toHaveBeenCalledWith('/off'));
+  expect(screen.queryByRole('button')).toBeNull();
+  view.rerender(scene('task-a'));
+  const open = async () => fireEvent.click(await screen.findByRole('button', { name: 'Open · Planner' }));
+  expect(page.mounted).not.toHaveBeenCalled(); await open(); expect(await screen.findByText('Local page')).toBeTruthy();
+  fireEvent.click(screen.getByRole('button', { name: 'Open · Planner', pressed: true })); expect(screen.getByText('Native chat')).toBeTruthy();
+  await open(); view.rerender(scene('task-b')); expect(screen.getByText('Native chat')).toBeTruthy();
+  await open(); installed.ghosts = [{ ...ghost, enabled: false }]; view.rerender(scene('task-b'));
+  expect(screen.getByText('Native chat')).toBeTruthy(); expect(screen.queryByRole('button')).toBeNull();
+  installed.ghosts = [{ ...ghost, approval: { state: 'invalid' } }]; view.rerender(scene('task-b'));
+  expect(screen.queryByRole('button')).toBeNull(); expect(page.released).toHaveBeenCalledTimes(3);
+});
+
+function TaskSurface({ request = false }: { request?: boolean }) {
+  const main = usePluginUiTaskMain('task-a', '/project', request);
+  return <>{main.trigger}{main.page ?? <InteractionPromptHost hasInteraction={request}>
+    {request ? 'Pending request' : 'Native chat'}
+  </InteractionPromptHost>}</>;
+}
+
+// Unit: ordinary tasks have no external prompt slot. An arriving native request must
+// release the active presenter immediately and cannot reopen it when the request clears.
+it('yields the main page to an inline native interaction until a fresh click', async () => {
+  installed.ghosts = [mainGhost];
+  Object.assign(window.electronAPI, { ghosts: { workdirPrefs: async () => ({ disabled: [] }) } });
+  const scene = (request: boolean) => <PluginUiProvider><TaskSurface request={request} /></PluginUiProvider>;
+  const view = render(scene(false));
+  fireEvent.click(await screen.findByRole('button', { name: 'Open · Planner' }));
+  await screen.findByText('Local page');
+  view.rerender(scene(true));
+  expect(screen.getByText('Pending request')).toBeTruthy();
+  expect(screen.queryByRole('button')).toBeNull();
+  expect(page.released).toHaveBeenCalledOnce();
+  view.rerender(scene(false));
+  expect(screen.getByText('Native chat')).toBeTruthy();
+  fireEvent.click(await screen.findByRole('button', { name: 'Open · Planner' }));
+  expect(await screen.findByText('Local page')).toBeTruthy();
+});
+
+// Unit: list broadcasts deserialize every entry. A second contributor must not
+// remount the chosen page, but an actual change to its approval must close it.
+it('keeps the same live presenter across unrelated roster updates, not reapproval', async () => {
+  const prefs = vi.fn(async () => ({ workdirKey: '/project', disabled: [] }));
+  let publish!: (policy: { workdirKey: string; disabled: string[] }) => void;
+  Object.assign(window.electronAPI, { ghosts: { workdirPrefs: prefs, onWorkdirPrefsChanged: (listener: typeof publish) => {
+    publish = listener; return () => {};
+  } } });
+  installed.ghosts = [mainGhost];
+  const scene = () => <PluginUiProvider><TaskSurface /></PluginUiProvider>;
+  const view = render(scene());
+  fireEvent.click(await screen.findByRole('button', { name: 'Open · Planner' }));
+  const original = await screen.findByText('Local page');
+  installed.ghosts = [structuredClone(mainGhost), { ...mainGhost, manifest: { ...mainGhost.manifest, id: 'second', name: 'Other' } }];
+  view.rerender(scene());
+  expect(screen.getByText('Local page')).toBe(original);
+  expect(page.released).not.toHaveBeenCalled();
+  expect(prefs).toHaveBeenCalledOnce();
+  installed.ghosts = [{ ...mainGhost, approval: { state: 'approved', revision: 'two' } }];
+  view.rerender(scene());
+  expect(screen.getByText('Native chat')).toBeTruthy();
+  expect(page.released).toHaveBeenCalledOnce();
+  fireEvent.click(screen.getByRole('button', { name: 'Open · Planner' }));
+  await screen.findByText('Local page');
+  act(() => publish({ workdirKey: '/project', disabled: ['planner'] }));
+  expect(screen.getByText('Native chat')).toBeTruthy();
+  expect(screen.queryByRole('button')).toBeNull();
+  expect(page.released).toHaveBeenCalledTimes(2);
 });
 
 // Unit: the new header slot must leave no wrapper or IPC when empty,

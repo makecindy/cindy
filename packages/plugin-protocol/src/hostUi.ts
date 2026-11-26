@@ -3,7 +3,7 @@ import { PLUGIN_APPEARANCE_FIELDS, type PluginAppearanceField } from './appearan
 const EXTENDED_HOST_UI_POSITIONS = [
   'composer.header', 'sidebar.navigation', 'session.menu', 'settings.section', 'composer.completion',
   'composer.attachment', 'sidebar.section',
-  'window.titlebar', 'workdir.menu',
+  'window.titlebar', 'workdir.menu', 'session.main',
 ] as const;
 /** Cindy placement and Host capabilities; page content stays in MCP Apps resources. */
 export const HOST_UI_POSITIONS = [
@@ -137,6 +137,9 @@ export function parseGhostHostUi(
           (item.view === undefined || item.tool !== undefined || item.kind !== undefined && item.kind !== 'button')) return null;
       if (['message.menu', 'session.menu', 'sidebar.navigation', 'settings.section', 'composer.completion', 'composer.attachment', 'sidebar.section', 'window.titlebar', 'workdir.menu'].includes(String(item.position)) &&
           item.kind !== undefined && item.kind !== 'button') return null;
+      if (item.position === 'session.main' && (item.view === undefined ||
+          (raw.views as GhostHostUiView[]).find(view => view.id === item.view)?.scope !== 'task' ||
+          item.kind !== undefined && item.kind !== 'button' || item.presentation !== undefined || item.match !== undefined)) return null;
       if (item.position === 'settings.section' && (item.view === undefined ||
           (raw.views as GhostHostUiView[]).find(view => view.id === item.view)?.scope === 'task')) return null;
       if (item.position === 'composer.completion' && (item.tool === undefined || !['/', '@'].includes(String(item.trigger)))) return null;

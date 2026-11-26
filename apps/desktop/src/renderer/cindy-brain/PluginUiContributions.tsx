@@ -6,6 +6,7 @@ import { getApprovedGhostHostUi, ghostInstallApprovalToken, type InstalledGhost 
 import { installedGhostStoragePart } from '../../shared/pluginIdentity';
 import { useInstalledGhosts, readInstalledGhostsSnapshot } from './useInstalledGhosts';
 import { usePluginUiControl } from './pluginUiControls';
+import { useWorkdirDisabledGhostPolicy } from './ghostWorkdirFilter';
 import { getStickySessionDeviceId } from '@/features/device-link/stickySessionOrigin';
 import { Tip } from '@/components/ui/tooltip';
 import { Button } from '@/components/ui/button';
@@ -397,6 +398,37 @@ export function PluginUiSlotControls({ entries, sessionId = null, clientId, appe
     {entries.map(entry => <EntryControl key={`${entry.instanceId}:${entry.contribution.id}`} entry={entry}
       sessionId={sessionId} clientId={clientId} active={active} appearance={appearance} />)}
   </span>;
+}
+
+/** Only a user's choice in the owning task can replace its chat surface. No persisted route or plugin command. */
+export function usePluginUiTaskMain(sessionId: string | null, workdir: string | null | undefined, hasNativeInteraction = false) {
+  const directory = useContext(DirectoryContext);
+  const entries = sessionId && workdir?.trim() && !hasNativeInteraction ? directory.get('session.main') ?? NO_ENTRIES : NO_ENTRIES;
+  const disabled = useWorkdirDisabledGhostPolicy(workdir, entries.length > 0);
+  const choices = useMemo(() => !disabled ? [] : entries.filter(entry => !disabled.has(entry.instanceId)).map(entry => ({
+    entry, key: JSON.stringify([sessionId, workdir, entry.instanceId, entry.contribution.id,
+      entry.ghost.approval.state === 'approved' && entry.ghost.approval.revision]),
+  })), [disabled, entries, sessionId, workdir]);
+  const [selection, select] = useState<string | null>(null);
+  const chosen = choices.find(choice => choice.key === selection);
+  useEffect(() => { if (selection && !chosen) select(null); }, [selection, chosen]);
+  const close = useCallback(() => select(null), []);
+  const trigger = useMemo(() => choices.length ? <span className="inline-flex shrink-0 [-webkit-app-region:no-drag]">
+    {choices.map(({ entry, key }) => {
+      const title = `${entry.contribution.title} · ${entry.ghost.manifest.name}`;
+      const Icon = MAIN_VIEW_ICONS[entry.contribution.icon as keyof typeof MAIN_VIEW_ICONS] ?? Puzzle;
+      return <ChromeIconButton key={key} aria-label={title} aria-pressed={chosen?.key === key} tooltipSide="bottom"
+        className="aria-pressed:bg-sidebar-item-hover aria-pressed:text-foreground" onClick={() => select(current => current === key ? null : key)}>
+        <Icon size={14} />
+      </ChromeIconButton>;
+    })}
+  </span> : null, [choices, chosen]);
+  const entry = chosen?.entry;
+  return { trigger, page: chosen && entry?.contribution.view && sessionId ?
+    <section key={chosen.key} className="flex h-full min-h-0 flex-col bg-content-area" aria-label={entry.contribution.title}>
+      <Suspense fallback={<Spinner size={16} />}><PluginUiView chrome="panel" sizing="fill" ghost={entry.ghost}
+        viewId={entry.contribution.view} taskMainContribution={entry.contribution.id} sessionId={sessionId} input={entry.contribution.arguments} onUnavailable={close} /></Suspense>
+    </section> : null };
 }
 
 export function PluginUiSidebarSections({ entries, sessionId }: { entries: readonly PluginUiEntry[]; sessionId: string | null }) {

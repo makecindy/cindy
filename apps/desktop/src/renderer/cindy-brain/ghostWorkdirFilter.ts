@@ -51,37 +51,45 @@ export function useWorkdirDisabledGhostIds(
   ghosts: InstalledGhost[],
   enabled = true,
 ): Set<string> | null {
+  return useWorkdirDisabledGhostPolicy(workdir, enabled && ghosts.length > 0, ghosts);
+}
+
+/** Directory policy covers all instances, not just the currently projected roster.
+ * Existing roster consumers can still request a refresh using their projection identity. */
+export function useWorkdirDisabledGhostPolicy(
+  workdir: string | null | undefined, enabled: boolean, projection?: InstalledGhost[],
+): Set<string> | null {
+  const owner = getDataOwnerGeneration();
   const [snapshot, setSnapshot] = useState<{
-    workdir: typeof workdir; ghosts: InstalledGhost[]; disabled: Set<string>;
+    workdir: typeof workdir; owner: typeof owner; projection?: InstalledGhost[]; disabled: Set<string>;
   } | null>(null);
   useEffect(() => {
-    if (!enabled || !workdir?.trim() || ghosts.length === 0) return;
+    if (!enabled || !workdir?.trim()) { setSnapshot(null); return; }
     let current = true;
     let workdirKey: string | undefined;
     let revision = 0;
     const refresh = () => {
-      const owner = getDataOwnerGeneration();
       const requested = ++revision;
       void Promise.resolve().then(() => window.electronAPI.ghosts.workdirPrefs(workdir)).then((policy) => {
         if (!current || requested !== revision || !isDataOwnerGenerationCurrent(owner)) return;
         workdirKey = policy.workdirKey;
-        setSnapshot({ workdir, ghosts, disabled: new Set(policy.disabled) });
+        setSnapshot({ workdir, owner, projection, disabled: new Set(policy.disabled) });
       }).catch(() => {
         // Unknown policy must not expose a previously enabled directory's commands.
         if (current && requested === revision && isDataOwnerGenerationCurrent(owner)) setSnapshot(null);
       });
     };
     const unsubscribe = window.electronAPI.ghosts.onWorkdirPrefsChanged?.((policy, ownerStamp) => {
-      if (!current || !isDataOwnerPushCurrent(ownerStamp)) return;
+      if (!current || !isDataOwnerGenerationCurrent(owner) || !isDataOwnerPushCurrent(ownerStamp)) return;
       // Before the first response, the Host has not supplied the canonical key yet.
       if (workdirKey === undefined) { refresh(); return; }
       if (workdirKey !== policy.workdirKey) return;
       revision++;
-      setSnapshot({ workdir, ghosts, disabled: new Set(policy.disabled) });
+      setSnapshot({ workdir, owner, projection, disabled: new Set(policy.disabled) });
     });
     refresh();
     return () => { current = false; unsubscribe?.(); };
-  }, [workdir, ghosts, enabled]);
-  if (!enabled || !workdir?.trim() || ghosts.length === 0) return NO_DISABLED_GHOSTS;
-  return snapshot?.workdir === workdir && snapshot.ghosts === ghosts ? snapshot.disabled : null;
+  }, [workdir, projection, enabled, owner]);
+  if (!enabled || !workdir?.trim()) return NO_DISABLED_GHOSTS;
+  return snapshot?.workdir === workdir && snapshot.owner === owner && snapshot.projection === projection ? snapshot.disabled : null;
 }

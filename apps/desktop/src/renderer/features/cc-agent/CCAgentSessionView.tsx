@@ -129,7 +129,7 @@ import { isQuotaExhaustedErrorMessage } from '@/utils/quotaError';
 import { isOverloadErrorMessage } from '@/utils/overloadError';
 import type { CollabWorkerKind } from '@/components/new-chat/ExtraDirsButton';
 import { ChatInput, type SessionModelPick } from '@/components/new-chat/ChatInput';
-import { PluginUiSlot, PluginUiWorkdirButton, usePluginUiHas } from '@/cindy-brain/PluginUiContributions';
+import { PluginUiSlot, PluginUiWorkdirButton, usePluginUiHas, usePluginUiTaskMain } from '@/cindy-brain/PluginUiContributions';
 import {
   SessionSubscriptionAccountProvider,
   sessionSubscriptionPoolProvider,
@@ -1104,7 +1104,7 @@ function CCAgentSessionContent({
   // A visible file-browse rail is still the open task, even when it is compact.
   // Split panes stay mounted together; only the route-owning pane may consume
   // hardware commands. The compact files rail is not a split pane.
-  const ownsHardwareTaskActions =
+  const ownsTaskActionRoute =
     paneFocused &&
     (ownsRoute ||
       (Boolean(sessionId) &&
@@ -2090,6 +2090,15 @@ function CCAgentSessionContent({
     updateQueueItemContent,
     chatDisplaySnapshot,
   } = useCCAgentChat(confirmedSessionId, handleTitleUpdate, { chatRealtime });
+  const hasNativeInteraction = Boolean(pendingPlanReview || pendingPermission || pendingAskUser ||
+    pendingPluginSetup || pendingIssueConfirm || pendingRenameSessionsConfirm || pendingGhostGrantConfirm ||
+    pendingRemoteDesktopConfirmation || pendingInputHandoff);
+  const taskMain = usePluginUiTaskMain(
+    ownsRoute && viewVisible && !readOnly && !botChatIdentity && rightSidebarDeviceLinkDeviceId === null &&
+      !session?.remoteHostId && session?.status === 'active' && !session.clearedAt ? session.id : null,
+    session?.workingDir, hasNativeInteraction,
+  );
+  const ownsHardwareTaskActions = ownsTaskActionRoute && !taskMain.page;
   // 待切到插件引擎(docs/plans/acp-plugin-bridge.md)的意图只交给模型选择器呈现；内置引擎的展示、
   // 能力、登录检查与发送只看切到内置引擎的意图，与没有插件引擎时一致。
   const agentSwitchIntent = builtinAgentSwitchIntent(storedAgentSwitchIntent);
@@ -6616,6 +6625,7 @@ function CCAgentSessionContent({
             remoteSessionUnavailable={remoteSessionUnavailable}
             remoteSyncing={remoteLoading === 'syncing'}
             readOnly={readOnly}
+            taskMainTrigger={taskMain.trigger}
           />
         )
       ) : null}
@@ -6670,7 +6680,10 @@ function CCAgentSessionContent({
           declare={setRightSidebarWorkdir}
         />
       )}
+      {taskMain.page}
       <section
+        inert={taskMain.page ? true : undefined}
+        style={taskMain.page ? { display: 'none' } : undefined}
         className="relative flex h-full w-full flex-col bg-content-area"
         data-plugin-ui-task={!session?.remoteHostId && !session?.deviceLinkDeviceId ? sessionId : undefined}
         aria-label={t('ccAgent.layout.chatDropAreaAria')}
@@ -7031,19 +7044,7 @@ function CCAgentSessionContent({
                  时,卡片会被 portal 出去,这里就显占位。 */}
               <div className="contents" data-plugin-ui-keep-visible>
               <InteractionPromptHost
-                hasInteraction={
-                  !!(
-                    pendingPlanReview ||
-                    pendingPermission ||
-                    pendingAskUser ||
-                    pendingPluginSetup ||
-                    pendingIssueConfirm ||
-                    pendingRenameSessionsConfirm ||
-                    pendingGhostGrantConfirm ||
-                    pendingRemoteDesktopConfirmation ||
-                    pendingInputHandoff
-                  )
-                }
+                hasInteraction={hasNativeInteraction}
                 placeholder={
                   <div className="w-full rounded-xl border border-dashed border-[var(--cmd-palette-border)] bg-[hsl(var(--content-area))] px-4 py-3 text-center text-12 text-[var(--cmd-palette-item-meta)]">
                     {t('ccAgent.layout.waitForReply')}
