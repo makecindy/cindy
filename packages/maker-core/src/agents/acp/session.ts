@@ -10,7 +10,7 @@
 
 import { randomUUID } from 'node:crypto';
 import { readFile as fsReadFile } from 'node:fs/promises';
-import { basename, extname } from 'node:path';
+import { basename, extname, resolve as resolvePath } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import type { Logger } from '../../interfaces/logger.js';
 import {
@@ -545,11 +545,11 @@ export class AcpSession {
   private readonly queue = createAsyncQueue<AgentEvent>();
   private readonly translator: AcpUpdateTranslator;
   private readonly pendingPrompts: QueuedPrompt[] = [];
-  private readonly permissionCapturedTools = new Set<string>();
-  private readonly capturedBeforePaths = new Set<string>();
-  private readonly capturedDiffPaths = new Set<string>();
+  private readonly inFlightCaptures = new Map<string, Promise<void>>();
+  private readonly reliablePathsByTool = new Map<string, Set<string>>();
   private readonly capturedOpaqueTools = new Set<string>();
   private readonly pendingOpaqueTools = new Set<string>();
+  private readonly rejectedTools = new Set<string>();
   /** Sent once, ahead of the first prompt of a new session. */
   private pendingBriefing: string | null;
   /** Slash-command names advertised by Skills or `available_commands_update`. */
@@ -1135,12 +1135,15 @@ export class AcpSession {
     if (gate?.policy && !fields) return selected(reject);
     const { events, toolCall } = this.translator.noteToolCall(fields ?? { toolCallId: `acp-permission-${this.permissionSeq + 1}` });
     this.emit(events);
+    const rejectDecision = (): AcpPermissionOutcome => {
+      this.notePermissionRejected(toolCall.toolCallId);
+      return selected(reject);
+    };
     const allowDecision = async (): Promise<AcpPermissionOutcome> => {
-      if (allowOnce) {
-        await this.captureBeforeAllowedToolCall(toolCall);
-        if (signal.aborted || this.closing || this.turn?.cancelTimer) return { outcome: 'cancelled' };
-      }
-      return selected(allowOnce ?? reject);
+      if (!allowOnce) return rejectDecision();
+      await this.captureBeforeAllowedToolCall(toolCall);
+      if (signal.aborted || this.closing || this.turn?.cancelTimer) return { outcome: 'cancelled' };
+      return selected(allowOnce);
     };
     if (this.permissionMode === 'bypassPermissions') {
       return allowDecision();
@@ -1156,7 +1159,7 @@ export class AcpSession {
     // A shell approval without a command would also leave the channel's destructive-command check blind.
     if (gate?.policy && toolCall.kind === 'execute'
       && (typeof requestInput.command !== 'string' || requestInput.command.trim() === '')) {
-      return selected(reject);
+      return rejectDecision();
     }
     // An IM policy can defer authorization to the normal approval chain, including the
     // owner's review of guest writes. Only explicitly read-only kinds can skip that chain.
@@ -1169,7 +1172,7 @@ export class AcpSession {
       return allowDecision();
     }
     const resolver = this.resolver;
-    if (!resolver) return selected(reject);
+    if (!resolver) return rejectDecision();
 
     const controller = new AbortController();
     const forwardAbort = (): void => controller.abort();
@@ -1196,12 +1199,12 @@ export class AcpSession {
       // Stop must answer the agent at once, even while a confirmation card is still open.
       const decision = await untilAborted(resolver(request, controller.signal), controller.signal);
       if (decision === ABORTED || controller.signal.aborted) return { outcome: 'cancelled' };
-      if (decision.kind !== 'permission' || decision.behavior !== 'allow') return selected(reject);
+      if (decision.kind !== 'permission' || decision.behavior !== 'allow') return rejectDecision();
       return await allowDecision();
     } catch (error) {
       if (controller.signal.aborted) return { outcome: 'cancelled' };
       this.logger?.warn('acp: permission resolver failed; rejecting', { error: String(error) });
-      return selected(reject);
+      return rejectDecision();
     } finally {
       signal.removeEventListener('abort', forwardAbort);
       this.permissionControllers.delete(controller);
@@ -1209,166 +1212,200 @@ export class AcpSession {
   }
 
   private resetTurnChangeCaptureState(): void {
-    this.permissionCapturedTools.clear();
-    this.capturedBeforePaths.clear();
-    this.capturedDiffPaths.clear();
+    this.inFlightCaptures.clear();
+    this.reliablePathsByTool.clear();
     this.capturedOpaqueTools.clear();
     this.pendingOpaqueTools.clear();
+    this.rejectedTools.clear();
+  }
+
+  private normalizeCapturePath(targetPath: string): string {
+    const resolved = resolvePath(this.cwd, targetPath);
+    return process.platform === 'win32' ? resolved.toLocaleLowerCase('en-US') : resolved;
+  }
+
+  private captureKey(toolCallId: string, normalizedPath: string): string {
+    return `${toolCallId}\0${normalizedPath}`;
+  }
+
+  private markToolOpaque(toolCallId: string): void {
+    if (!this.turn || !this.turnChangeCapture) return;
+    this.pendingOpaqueTools.delete(toolCallId);
+    if (this.capturedOpaqueTools.has(toolCallId)) return;
+    this.capturedOpaqueTools.add(toolCallId);
+    this.turnChangeCapture.noteOpaqueWrite({
+      sessionId: this.captureSessionId,
+      provider: 'acp',
+      cwd: this.cwd,
+    });
+  }
+
+  private notePermissionRejected(toolCallId: string): void {
+    if (this.reliablePathsByTool.has(toolCallId) || this.capturedOpaqueTools.has(toolCallId)) return;
+    this.rejectedTools.add(toolCallId);
+    this.pendingOpaqueTools.delete(toolCallId);
+  }
+
+  private isToolReliablyCovered(toolCall: AcpToolCallFields): boolean {
+    const reliable = this.reliablePathsByTool.get(toolCall.toolCallId);
+    if (!reliable || reliable.size === 0) return false;
+    const paths = extractAcpToolTargetPaths(toolCall);
+    return paths.every((targetPath) => reliable.has(this.normalizeCapturePath(targetPath)));
+  }
+
+  private startDiffPreimageCapture(toolCallId: string, diff: AcpStructuredDiff): Promise<void> | null {
+    const turn = this.turn;
+    const capture = this.turnChangeCapture;
+    if (!turn || !capture?.recordKnownFilePreimage) return null;
+    const norm = this.normalizeCapturePath(diff.path);
+    const key = this.captureKey(toolCallId, norm);
+    const existing = this.inFlightCaptures.get(key);
+    if (existing) return existing;
+    let reliable = this.reliablePathsByTool.get(toolCallId);
+    if (reliable?.has(norm)) return Promise.resolve();
+    if (!reliable) {
+      reliable = new Set();
+      this.reliablePathsByTool.set(toolCallId, reliable);
+    }
+    reliable.add(norm);
+    const turnToken = turn.token;
+    let raw: Promise<void>;
+    try {
+      raw = capture.recordKnownFilePreimage({
+        sessionId: this.captureSessionId,
+        provider: 'acp',
+        cwd: this.cwd,
+        targetPath: diff.path,
+        beforeExists: diff.beforeExists,
+        beforeText: diff.beforeText,
+      });
+    } catch (error) {
+      raw = Promise.reject(error);
+    }
+    const promise = raw.catch((error: unknown) => {
+      this.logger?.warn('acp: structured diff preimage capture failed', {
+        toolCallId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      if (this.turn?.token === turnToken) {
+        this.reliablePathsByTool.get(toolCallId)?.delete(norm);
+        this.markToolOpaque(toolCallId);
+      }
+    }).finally(() => {
+      if (this.inFlightCaptures.get(key) === promise) {
+        this.inFlightCaptures.delete(key);
+      }
+    });
+    this.inFlightCaptures.set(key, promise);
+    return promise;
+  }
+
+  private startPermissionPathCapture(toolCallId: string, targetPath: string): Promise<void> {
+    const turn = this.turn;
+    const capture = this.turnChangeCapture;
+    if (!turn || !capture) return Promise.resolve();
+    const norm = this.normalizeCapturePath(targetPath);
+    const key = this.captureKey(toolCallId, norm);
+    const existing = this.inFlightCaptures.get(key);
+    if (existing) return existing;
+    let reliable = this.reliablePathsByTool.get(toolCallId);
+    if (reliable?.has(norm)) return Promise.resolve();
+    if (!reliable) {
+      reliable = new Set();
+      this.reliablePathsByTool.set(toolCallId, reliable);
+    }
+    reliable.add(norm);
+    const turnToken = turn.token;
+    let raw: Promise<void>;
+    try {
+      raw = capture.beforeKnownFileWrite({
+        sessionId: this.captureSessionId,
+        provider: 'acp',
+        cwd: this.cwd,
+        targetPath,
+      });
+    } catch (error) {
+      raw = Promise.reject(error);
+    }
+    const promise = raw.catch((error: unknown) => {
+      this.logger?.warn('acp: turn change capture before permission failed', {
+        toolCallId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      if (this.turn?.token === turnToken) {
+        this.reliablePathsByTool.get(toolCallId)?.delete(norm);
+        this.markToolOpaque(toolCallId);
+      }
+    }).finally(() => {
+      if (this.inFlightCaptures.get(key) === promise) {
+        this.inFlightCaptures.delete(key);
+      }
+    });
+    this.inFlightCaptures.set(key, promise);
+    return promise;
   }
 
   private async captureBeforeAllowedToolCall(toolCall: AcpToolCallFields): Promise<void> {
-    if (!this.turn || !this.turnChangeCapture) return;
+    const turn = this.turn;
     const capture = this.turnChangeCapture;
+    if (!turn || !capture) return;
+    const turnToken = turn.token;
+    this.rejectedTools.delete(toolCall.toolCallId);
     const kind = toolCall.kind;
-    try {
-      if (kind === 'execute') {
-        this.permissionCapturedTools.add(toolCall.toolCallId);
-        if (!this.capturedOpaqueTools.has(toolCall.toolCallId)) {
-          this.capturedOpaqueTools.add(toolCall.toolCallId);
-          capture.noteOpaqueWrite({ sessionId: this.captureSessionId, provider: 'acp', cwd: this.cwd });
-        }
-        return;
+    if (kind === 'execute') {
+      this.markToolOpaque(toolCall.toolCallId);
+      return;
+    }
+    const diffs = extractAcpStructuredDiffs(toolCall.content);
+    const isMutation = kind !== undefined && ACP_FILE_MUTATION_KINDS.has(kind);
+    if (!isMutation && diffs.length === 0) return;
+    for (const diff of diffs) {
+      const task = this.startDiffPreimageCapture(toolCall.toolCallId, diff);
+      if (task) {
+        await task;
+      } else {
+        await this.startPermissionPathCapture(toolCall.toolCallId, diff.path);
       }
-      const diffs = extractAcpStructuredDiffs(toolCall.content);
-      const isMutation = kind !== undefined && ACP_FILE_MUTATION_KINDS.has(kind);
-      if (!isMutation && diffs.length === 0) return;
-      this.permissionCapturedTools.add(toolCall.toolCallId);
-      const diffPaths = new Set<string>();
-      for (const diff of diffs) {
-        diffPaths.add(diff.path);
-        const key = `${toolCall.toolCallId}\0${diff.path}`;
-        if (this.capturedDiffPaths.has(key)) continue;
-        this.capturedDiffPaths.add(key);
-        this.pendingOpaqueTools.delete(toolCall.toolCallId);
-        if (capture.recordKnownFilePreimage) {
-          await capture.recordKnownFilePreimage({
-            sessionId: this.captureSessionId,
-            provider: 'acp',
-            cwd: this.cwd,
-            targetPath: diff.path,
-            beforeExists: diff.beforeExists,
-            beforeText: diff.beforeText,
-          });
-        } else if (!this.capturedBeforePaths.has(key)) {
-          this.capturedBeforePaths.add(key);
-          await capture.beforeKnownFileWrite({
-            sessionId: this.captureSessionId,
-            provider: 'acp',
-            cwd: this.cwd,
-            targetPath: diff.path,
-          });
-        }
-      }
-      const paths = isMutation ? extractAcpToolTargetPaths(toolCall) : [];
-      for (const targetPath of paths) {
-        if (diffPaths.has(targetPath)) continue;
-        const key = `${toolCall.toolCallId}\0${targetPath}`;
-        if (this.capturedBeforePaths.has(key)) continue;
-        this.capturedBeforePaths.add(key);
-        this.pendingOpaqueTools.delete(toolCall.toolCallId);
-        await capture.beforeKnownFileWrite({
-          sessionId: this.captureSessionId,
-          provider: 'acp',
-          cwd: this.cwd,
-          targetPath,
-        });
-      }
-      if (isMutation && diffs.length === 0 && paths.length === 0) {
-        this.pendingOpaqueTools.add(toolCall.toolCallId);
-      }
-    } catch (error) {
-      this.logger?.warn('acp: turn change capture before permission failed', {
-        toolCallId: toolCall.toolCallId,
-        error: error instanceof Error ? error.message : String(error),
-      });
+    }
+    const paths = isMutation ? extractAcpToolTargetPaths(toolCall) : [];
+    for (const targetPath of paths) {
+      await this.startPermissionPathCapture(toolCall.toolCallId, targetPath);
+    }
+    if (this.turn?.token !== turnToken) return;
+    if (isMutation && !this.isToolReliablyCovered(toolCall)) {
+      this.pendingOpaqueTools.add(toolCall.toolCallId);
+    } else {
+      this.pendingOpaqueTools.delete(toolCall.toolCallId);
     }
   }
 
   private captureFromToolCallUpdate(toolCall: AcpToolCallFields): void {
     if (!this.turn || !this.turnChangeCapture) return;
-    const capture = this.turnChangeCapture;
+    if (this.rejectedTools.has(toolCall.toolCallId)) return;
     const diffs = extractAcpStructuredDiffs(toolCall.content);
-    const diffPaths = new Set<string>();
     for (const diff of diffs) {
-      diffPaths.add(diff.path);
-      const key = `${toolCall.toolCallId}\0${diff.path}`;
-      if (this.capturedDiffPaths.has(key)) continue;
-      this.capturedDiffPaths.add(key);
-      this.pendingOpaqueTools.delete(toolCall.toolCallId);
-      if (capture.recordKnownFilePreimage) {
-        void capture.recordKnownFilePreimage({
-          sessionId: this.captureSessionId,
-          provider: 'acp',
-          cwd: this.cwd,
-          targetPath: diff.path,
-          beforeExists: diff.beforeExists,
-          beforeText: diff.beforeText,
-          provisionalId: toolCall.toolCallId,
-        }).catch((error: unknown) => {
-          this.logger?.warn('acp: structured diff preimage capture failed', {
-            toolCallId: toolCall.toolCallId,
-            error: error instanceof Error ? error.message : String(error),
-          });
-        });
-      } else if (!this.capturedBeforePaths.has(key)) {
-        this.capturedBeforePaths.add(key);
-        void capture.beforeKnownFileWrite({
-          sessionId: this.captureSessionId,
-          provider: 'acp',
-          cwd: this.cwd,
-          targetPath: diff.path,
-          provisionalId: toolCall.toolCallId,
-        }).catch((error: unknown) => {
-          this.logger?.warn('acp: turn change capture failed', {
-            toolCallId: toolCall.toolCallId,
-            error: error instanceof Error ? error.message : String(error),
-          });
-        });
-      }
+      void this.startDiffPreimageCapture(toolCall.toolCallId, diff);
     }
     const kind = toolCall.kind;
     if (kind === 'execute') {
-      if (!this.capturedOpaqueTools.has(toolCall.toolCallId)) {
-        this.capturedOpaqueTools.add(toolCall.toolCallId);
-        capture.noteOpaqueWrite({ sessionId: this.captureSessionId, provider: 'acp', cwd: this.cwd });
+      if (toolCall.status === 'pending') {
+        this.pendingOpaqueTools.add(toolCall.toolCallId);
+      } else {
+        this.markToolOpaque(toolCall.toolCallId);
       }
       return;
     }
     if (!kind || !ACP_FILE_MUTATION_KINDS.has(kind)) return;
-    const paths = extractAcpToolTargetPaths(toolCall);
-    if (!this.permissionCapturedTools.has(toolCall.toolCallId)) {
-      for (const targetPath of paths) {
-        if (diffPaths.has(targetPath)) continue;
-        const key = `${toolCall.toolCallId}\0${targetPath}`;
-        if (this.capturedBeforePaths.has(key) || this.capturedDiffPaths.has(key)) continue;
-        this.capturedBeforePaths.add(key);
-        this.pendingOpaqueTools.delete(toolCall.toolCallId);
-        void capture.beforeKnownFileWrite({
-          sessionId: this.captureSessionId,
-          provider: 'acp',
-          cwd: this.cwd,
-          targetPath,
-          provisionalId: toolCall.toolCallId,
-        }).catch((error: unknown) => {
-          this.logger?.warn('acp: turn change capture failed', {
-            toolCallId: toolCall.toolCallId,
-            error: error instanceof Error ? error.message : String(error),
-          });
-        });
-      }
-    }
-    if (diffs.length === 0 && paths.length === 0) {
-      if (toolCall.status === 'completed' || toolCall.status === 'failed') {
-        this.pendingOpaqueTools.delete(toolCall.toolCallId);
-        if (!this.capturedOpaqueTools.has(toolCall.toolCallId)) {
-          this.capturedOpaqueTools.add(toolCall.toolCallId);
-          capture.noteOpaqueWrite({ sessionId: this.captureSessionId, provider: 'acp', cwd: this.cwd });
-        }
-      } else {
-        this.pendingOpaqueTools.add(toolCall.toolCallId);
-      }
-    } else {
+    // Never read from disk on un-paused notifications: under bypassPermissions or after
+    // a pathless permission approval, the agent may already have mutated the file before
+    // this notification arrives. Only pre-permission snapshots and exact structured diffs
+    // count as reliable preimages; any remaining path or pathless write stays opaque.
+    if (this.isToolReliablyCovered(toolCall)) {
       this.pendingOpaqueTools.delete(toolCall.toolCallId);
+    } else if (toolCall.status === 'completed' || toolCall.status === 'failed') {
+      this.markToolOpaque(toolCall.toolCallId);
+    } else {
+      this.pendingOpaqueTools.add(toolCall.toolCallId);
     }
   }
 

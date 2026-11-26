@@ -2112,13 +2112,40 @@ describe('sessionShareImport', () => {
     });
   });
 
-  it('migration import accepts ACP lead (db-only) and CC+ACP team (partial) while rejecting missing CC transcripts', async () => {
-    const acpFile = await writeBundleFile(await buildBundle({ agentKind: 'acp' }));
+  it('migration import accepts ACP lead (db-only) and CC+ACP team (partial) while rejecting missing CC transcripts or unavailable ACP plugins', async () => {
+    const acpFile = await writeBundleFile(
+      await buildBundle({
+        agentKind: 'acp',
+        providerId: 'acp-plugin:demo:lead~ab12cd34',
+        session: { providerId: 'acp-plugin:demo:lead~ab12cd34' },
+      }),
+    );
     const acpInspect = await inspectShareFile(acpFile);
     if (acpInspect.encrypted) return;
+    // Target missing required ACP plugin must fail with MIGRATION_TARGET_MODEL_UNAVAILABLE.
+    await expect(
+      commitShareImport(
+        {
+          draftId: acpInspect.draftId,
+          workingDir: newWorkdir,
+          projectsRootOverride: projectsRoot,
+          sharedMediaRootOverride: sharedMediaRoot,
+        },
+        {
+          sessionId: 'migrated-acp-missing',
+          workingDir: newWorkdir,
+          agentPrefs: { acp: { permissionMode: 'ask', planMode: false, fastMode: false } },
+          availableAcpProviders: new Set(['acp-plugin:other:engine']),
+        },
+      ),
+    ).rejects.toMatchObject({ message: 'MIGRATION_TARGET_MODEL_UNAVAILABLE' });
+
+    // Target with the canonical plugin succeeds and strips machine-local ~suffix.
+    const acpInspect2 = await inspectShareFile(acpFile);
+    if (acpInspect2.encrypted) return;
     const acpRes = await commitShareImport(
       {
-        draftId: acpInspect.draftId,
+        draftId: acpInspect2.draftId,
         workingDir: newWorkdir,
         projectsRootOverride: projectsRoot,
         sharedMediaRootOverride: sharedMediaRoot,
@@ -2127,9 +2154,51 @@ describe('sessionShareImport', () => {
         sessionId: 'migrated-acp-1',
         workingDir: newWorkdir,
         agentPrefs: { acp: { permissionMode: 'ask', planMode: false, fastMode: false } },
+        availableAcpProviders: new Set(['acp-plugin:demo:lead']),
       },
     );
     expect(acpRes.fidelity).toBe('db-only');
+    expect((dbMock.txCalls[0].args as { session: Record<string, unknown> }).session.providerId).toBe(
+      'acp-plugin:demo:lead',
+    );
+
+    // Orca team with ACP worker whose plugin is missing on target must be rejected before commit.
+    const missingWorkerPluginFile = await writeBundleFile(
+      await buildBundle({
+        agentKind: 'cc',
+        orcaWorker: {
+          agentKind: 'acp',
+          providerId: 'acp-plugin:demo:worker',
+          snapshot: { migrationSourceId: 'source-acp-w', workspaceKind: 'project' },
+        },
+        manifest: { exportFidelity: 'partial' },
+      }),
+    );
+    const missingWorkerInspect = await inspectShareFile(missingWorkerPluginFile);
+    if (missingWorkerInspect.encrypted) return;
+    expect(missingWorkerInspect.preview.acpWorkerProviderIds).toEqual(['acp-plugin:demo:worker']);
+    await expect(
+      commitShareImport(
+        {
+          draftId: missingWorkerInspect.draftId,
+          workingDir: newWorkdir,
+          projectsRootOverride: projectsRoot,
+          sharedMediaRootOverride: sharedMediaRoot,
+        },
+        {
+          sessionId: 'migrated-missing-worker-plugin',
+          workingDir: newWorkdir,
+          workers: [
+            { sourceSessionId: 'source-acp-w', sessionId: 'target-acp-w', workingDir: newWorkdir },
+          ],
+          agentPrefs: {
+            cc: { model: 'm', providerId: 'p', permissionMode: 'default' },
+            acp: { permissionMode: 'ask', planMode: false, fastMode: false },
+          },
+          availableAcpProviders: new Set(['acp-plugin:demo:lead']),
+        },
+      ),
+    ).rejects.toMatchObject({ message: 'MIGRATION_TARGET_MODEL_UNAVAILABLE' });
 
     const brokenTeamFile = await writeBundleFile(
       await buildBundle({
@@ -2162,6 +2231,7 @@ describe('sessionShareImport', () => {
             cc: { model: 'm', providerId: 'p', permissionMode: 'default' },
             acp: { permissionMode: 'ask', planMode: false, fastMode: false },
           },
+          availableAcpProviders: new Set(['acp-plugin:demo:worker']),
         },
       ),
     ).rejects.toMatchObject({ message: 'MIGRATION_INCOMPLETE_CONTEXT' });

@@ -1694,10 +1694,10 @@ describe('turn change-set sidecar store', () => {
     expect(await fs.readFile(target, 'utf8')).toBe('after\n');
   });
 
-  it('upgrades same-tool provisional preimage via recordKnownFilePreimage without overwriting earlier tool calls', async () => {
+  it('records exact structured diff preimages via recordKnownFilePreimage without overwriting earlier tool calls', async () => {
     const edited = path.join(workdir, 'raced.ts');
     const created = path.join(workdir, 'created.ts');
-    // Simulate bypassPermissions race: file is already rewritten on disk before un-paused notification runs.
+    // Simulate bypassPermissions: disk already has post-edit content when structured diff arrives.
     await fs.writeFile(edited, 'v2\n', 'utf8');
     await fs.writeFile(created, 'brand-new\n', 'utf8');
 
@@ -1707,14 +1707,7 @@ describe('turn change-set sidecar store', () => {
       provider: 'acp',
       cwd: workdir,
     });
-    await captureKnownFileBefore({
-      sessionId: 'session-1',
-      provider: 'acp',
-      cwd: workdir,
-      targetPath: 'raced.ts',
-      provisionalId: 'tc-1',
-    });
-    // Same tool call supplies exact structured diff preimage → replaces raced provisional snapshot.
+    // First tool call supplies exact structured diff preimage (v1 -> v2).
     await recordKnownFilePreimage({
       sessionId: 'session-1',
       provider: 'acp',
@@ -1722,7 +1715,6 @@ describe('turn change-set sidecar store', () => {
       targetPath: 'raced.ts',
       beforeExists: true,
       beforeText: 'v1\n',
-      provisionalId: 'tc-1',
     });
     // A second tool call modifying the same file later in the turn must NEVER overwrite the turn's first preimage.
     await recordKnownFilePreimage({
@@ -1732,7 +1724,6 @@ describe('turn change-set sidecar store', () => {
       targetPath: 'raced.ts',
       beforeExists: true,
       beforeText: 'v2\n',
-      provisionalId: 'tc-2',
     });
     // New file preimage (beforeExists: false)
     await recordKnownFilePreimage({
@@ -1742,7 +1733,6 @@ describe('turn change-set sidecar store', () => {
       targetPath: 'created.ts',
       beforeExists: false,
       beforeText: '',
-      provisionalId: 'tc-3',
     });
     await fs.writeFile(edited, 'v3\n', 'utf8');
     await finalizeTurnChangeSet('session-1', 'acp-turn-2', 'complete');

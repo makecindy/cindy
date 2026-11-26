@@ -66,6 +66,11 @@ const state = vi.hoisted(() => ({
   oldTarget: false,
   /** Target without `'acp'` in `caps.agents` (simulating an older target version). */
   oldTargetNoAcp: false,
+  /** Enabled ACP plugin harnesses registered on each simulated device. */
+  acpHarnesses: new Map<
+    string,
+    Array<{ key: string; availability: { state: 'available' | 'unavailable' | 'unknown' } }>
+  >(),
   importedTranscripts: [] as Array<{ path: string; content: string }>,
   recentProjects: [] as string[],
   archiveDownloadFails: false,
@@ -152,6 +157,7 @@ vi.mock('../../device-link', () => ({
     if (state.oldTarget && args[0].action === 'caps') delete result.externalTranscripts;
     if (state.oldTargetNoAcp && args[0].action === 'caps' && Array.isArray(result.agents)) {
       result.agents = result.agents.filter((a) => a !== 'acp');
+      delete result.acpProviders;
     }
     if (state.loseReply === args[0].action) {
       state.loseReply = '';
@@ -213,6 +219,11 @@ vi.mock('../../maker-host/createDesktopProviderService', () => ({
 vi.mock('../../maker-host/model-route-guard', () => ({
   pickEnabledFallbackModel: () => ({ model: 'target-model', providerId: 'target-provider' }),
 }));
+vi.mock('../../cindy-brain/pluginHarnesses', () => ({
+  getPluginHarnessRegistry: () => ({
+    list: () => state.acpHarnesses.get(device()) ?? [],
+  }),
+}));
 vi.mock('../../worktree/resourceLock', async (original) => ({
   ...(await original<typeof import('../../worktree/resourceLock')>()),
   withWorktreeResourceLock: (_cwd: string, fn: () => unknown) => fn(),
@@ -241,8 +252,19 @@ vi.mock('../../session-share/sessionShareExport', () => ({
     for (const transcript of staged)
       await fs.writeFile(path.join(external!.dir, transcript.file), state.transcript);
     const sourceRow = state.rows.get('A')?.get('fork');
+    const workerRows = state.workers
+      .map((id) => state.rows.get('A')?.get(id))
+      .filter((row): row is Record<string, unknown> => Boolean(row));
     const isAcpLead = sourceRow?.agentKind === 'acp';
-    const fidelity = isAcpLead ? 'db-only' : 'full';
+    const hasAcpWorker = workerRows.some((row) => row.agentKind === 'acp');
+    const hasBuiltinWorker = workerRows.some((row) => row.agentKind !== 'acp');
+    const fidelity = isAcpLead
+      ? hasBuiltinWorker
+        ? 'partial'
+        : 'db-only'
+      : hasAcpWorker
+        ? 'partial'
+        : 'full';
     return {
       status: 'ok',
       fidelity,
@@ -255,14 +277,39 @@ vi.mock('../../session-share/sessionShareExport', () => ({
 vi.mock('../../session-share/sessionShareImport', () => ({
   inspectShareFile: async () => {
     const sourceRow = state.rows.get('A')?.get('fork');
+    const workerRows = state.workers
+      .map((id) => state.rows.get('A')?.get(id))
+      .filter((row): row is Record<string, unknown> => Boolean(row));
     const agentKind = (sourceRow?.agentKind as 'cc' | 'codex' | 'pi' | 'acp') ?? 'cc';
+    const acpWorkers = workerRows.filter((row) => row.agentKind === 'acp');
+    const hasAcpWorker = acpWorkers.length > 0;
+    const hasBuiltinWorker = workerRows.some((row) => row.agentKind !== 'acp');
+    const fidelity =
+      agentKind === 'acp'
+        ? hasBuiltinWorker
+          ? 'partial'
+          : 'db-only'
+        : hasAcpWorker
+          ? 'partial'
+          : 'full';
     return {
       draftId: 'draft',
       encrypted: false,
       preview: {
-        fidelity: agentKind === 'acp' ? 'db-only' : 'full',
+        fidelity,
         orcaWorkerCount: state.workers.length,
         agentKind,
+        ...(agentKind === 'acp'
+          ? { providerId: (sourceRow?.providerId as string | null) ?? null }
+          : {}),
+        ...(hasAcpWorker
+          ? {
+              hasAcpWorker: true,
+              acpWorkerProviderIds: acpWorkers.map(
+                (row) => (row.providerId as string | null) ?? null,
+              ),
+            }
+          : {}),
       },
     };
   },
@@ -285,7 +332,20 @@ vi.mock('../../session-share/sessionShareImport', () => ({
         content: await fs.readFile(file, 'utf8'),
       });
     const sourceRow = state.rows.get('A')?.get('fork');
+    const workerRows = state.workers
+      .map((id) => state.rows.get('A')?.get(id))
+      .filter((row): row is Record<string, unknown> => Boolean(row));
     const agentKind = (sourceRow?.agentKind as 'cc' | 'codex' | 'pi' | 'acp') ?? 'cc';
+    const hasAcpWorker = workerRows.some((row) => row.agentKind === 'acp');
+    const hasBuiltinWorker = workerRows.some((row) => row.agentKind !== 'acp');
+    const fidelity =
+      agentKind === 'acp'
+        ? hasBuiltinWorker
+          ? 'partial'
+          : 'db-only'
+        : hasAcpWorker
+          ? 'partial'
+          : 'full';
     const { sessionId, workingDir } = scope.migration;
     state.rows.get(device())!.set(sessionId, {
       id: sessionId,
@@ -294,16 +354,19 @@ vi.mock('../../session-share/sessionShareImport', () => ({
       status: 'active',
       source: 'shared',
       agentKind,
+      providerId: (sourceRow?.providerId as string | null) ?? null,
       orcaRole: null,
     });
     for (const worker of scope.migration.workers ?? []) {
+      const sourceWorker = state.rows.get('A')?.get(worker.sourceSessionId);
       state.rows.get(device())!.set(worker.sessionId, {
         id: worker.sessionId,
         workingDir: worker.workingDir,
         remoteHostId: null,
         status: 'active',
         source: 'shared',
-        agentKind: 'cc',
+        agentKind: (sourceWorker?.agentKind as string) ?? 'cc',
+        providerId: (sourceWorker?.providerId as string | null) ?? null,
         orcaRole: 'worker',
       });
     }
@@ -311,7 +374,7 @@ vi.mock('../../session-share/sessionShareImport', () => ({
       state.importsFail = false;
       throw new Error('DB committed but acknowledgement lost');
     }
-    return { fidelity: agentKind === 'acp' ? 'db-only' : 'full' };
+    return { fidelity };
   },
 }));
 vi.mock('../workspace', async (original) => ({
@@ -389,6 +452,7 @@ describe('resumable cross-computer copy', () => {
     state.workers = [];
     state.estimateLimits = [];
     state.oldTargetNoAcp = false;
+    state.acpHarnesses.clear();
     state.timeoutAction = '';
     state.offlineError = null;
     state.exclusions = [];
@@ -1377,9 +1441,12 @@ describe('resumable cross-computer copy', () => {
     expect(state.imports).toHaveBeenCalledTimes(1);
   });
 
-  it('migrates an ACP plugin-engine task via DB-only handoff without coercing to a built-in engine', async () => {
-    state.oldTargetNoAcp = false;
+  it('migrates an ACP plugin-engine task via DB-only handoff when target has the required plugin', async () => {
+    state.acpHarnesses.set('B', [
+      { key: 'dsh-acp:dsh', availability: { state: 'available' } },
+    ]);
     state.rows.get('A')!.get('fork')!.agentKind = 'acp';
+    state.rows.get('A')!.get('fork')!.providerId = 'acp-plugin:dsh-acp:dsh~ab12cd34';
     await start();
     const done = await settled();
     expect(done.stage).toBe('complete');
@@ -1387,13 +1454,64 @@ describe('resumable cross-computer copy', () => {
   });
 
   it('rejects migrating an ACP task to an older target whose caps omit acp', async () => {
+    state.acpHarnesses.set('B', [
+      { key: 'dsh-acp:dsh', availability: { state: 'available' } },
+    ]);
     state.oldTargetNoAcp = true;
     state.rows.get('A')!.get('fork')!.agentKind = 'acp';
+    state.rows.get('A')!.get('fork')!.providerId = 'acp-plugin:dsh-acp:dsh';
     try {
       await expect(start()).rejects.toThrow('MIGRATION_TARGET_MODEL_UNAVAILABLE');
       expect(state.imports).not.toHaveBeenCalled();
     } finally {
       state.oldTargetNoAcp = false;
     }
+  });
+
+  // Review (#13294, Greptile P1): target caps must not advertise 'acp' without enabled harnesses,
+  // and migration must verify each ACP member's concrete providerId (lead + Orca Workers) on both
+  // start and receive before reporting success.
+  it('rejects migrating an ACP lead or ACP worker when the target lacks or disables that specific plugin', async () => {
+    // 1. Target has no ACP plugins at all: caps omits 'acp' and start rejects.
+    state.rows.get('A')!.get('fork')!.agentKind = 'acp';
+    state.rows.get('A')!.get('fork')!.providerId = 'acp-plugin:dsh-acp:dsh';
+    const emptyCaps = await state.context.run({ device: 'B' }, () =>
+      requestTaskMigration({ action: 'caps' }),
+    );
+    expect(emptyCaps.agents).not.toContain('acp');
+    expect(emptyCaps.acpProviders).toEqual([]);
+    await expect(start()).rejects.toThrow('MIGRATION_TARGET_MODEL_UNAVAILABLE');
+    expect(state.imports).not.toHaveBeenCalled();
+
+    // 2. Target has a different plugin (and the required plugin is unavailable): start rejects.
+    state.acpHarnesses.set('B', [
+      { key: 'agy:agy', availability: { state: 'available' } },
+      { key: 'dsh-acp:dsh', availability: { state: 'unavailable' } },
+    ]);
+    await expect(start()).rejects.toThrow('MIGRATION_TARGET_MODEL_UNAVAILABLE');
+    expect(state.imports).not.toHaveBeenCalled();
+
+    // 3. Orca team with CC lead + ACP worker whose plugin is missing on target: start rejects.
+    state.rows.get('A')!.get('fork')!.agentKind = 'cc';
+    state.rows.get('A')!.get('fork')!.providerId = null;
+    await team();
+    state.rows.get('A')!.get('shared-worker')!.agentKind = 'acp';
+    state.rows.get('A')!.get('shared-worker')!.providerId = 'acp-plugin:dsh-acp:dsh';
+    await expect(start()).rejects.toThrow('MIGRATION_TARGET_MODEL_UNAVAILABLE');
+    expect(state.imports).not.toHaveBeenCalled();
+
+    // 4. Target plugin disappears after start() caps check before receive() commits: fails cleanly.
+    state.acpHarnesses.set('B', [
+      { key: 'dsh-acp:dsh', availability: { state: 'available' } },
+    ]);
+    state.snapshot.mockImplementationOnce(() => {
+      state.acpHarnesses.set('B', []);
+    });
+    await start();
+    expect(await settled()).toMatchObject({
+      stage: 'transferring',
+      error: 'MIGRATION_TARGET_MODEL_UNAVAILABLE',
+    });
+    expect(state.imports).not.toHaveBeenCalled();
   });
 });

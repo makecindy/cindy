@@ -23,7 +23,12 @@ import type { Readable } from 'node:stream';
 import JSZip from 'jszip';
 import { migrationNativeContext } from './migrationNativeContext';
 import { writeMigratedTranscript } from './migrationTranscriptWriter';
-import { isClaudeProjectKeyExact, sanitizeClaudeProjectKey } from '@cindy/maker-core';
+import {
+  acpHarnessKeyFromProviderId,
+  acpProviderIdForHarness,
+  isClaudeProjectKeyExact,
+  sanitizeClaudeProjectKey,
+} from '@cindy/maker-core';
 import { app } from 'electron';
 
 import type { DbClient } from '../localDb/client/DbClient.js';
@@ -123,6 +128,8 @@ export interface SharePreview {
   orcaWorkerCount: number;
   /** 协同包是否含插件引擎 Worker(供迁移保真度判定)。 */
   hasAcpWorker?: boolean;
+  /** 协同包中插件引擎 Worker 各自声明的 providerId(供迁移目标端校验插件可用性)。 */
+  acpWorkerProviderIds?: Array<string | null>;
 }
 
 export type InspectResult =
@@ -134,7 +141,8 @@ function codedError(code: string, message: string): Error {
 }
 
 function toPreview(manifest: XdtshareManifest): SharePreview {
-  const hasAcpWorker = manifest.orca?.workers.some((w) => w.agentKind === 'acp') === true;
+  const acpWorkers = manifest.orca?.workers.filter((w) => w.agentKind === 'acp') ?? [];
+  const hasAcpWorker = acpWorkers.length > 0;
   return {
     title: manifest.title,
     agentKind: manifest.agentKind,
@@ -147,7 +155,12 @@ function toPreview(manifest: XdtshareManifest): SharePreview {
     messageCount: manifest.counts.messages,
     mediaCount: manifest.counts.media,
     orcaWorkerCount: manifest.orca?.workers.length ?? 0,
-    ...(hasAcpWorker ? { hasAcpWorker: true } : {}),
+    ...(hasAcpWorker
+      ? {
+          hasAcpWorker: true,
+          acpWorkerProviderIds: acpWorkers.map((w) => w.providerId ?? null),
+        }
+      : {}),
   };
 }
 
@@ -301,6 +314,8 @@ export interface CommitShareImportRuntimeScope {
     workingDir: string;
     workers?: Array<{ sourceSessionId: string; sessionId: string; workingDir: string }>;
     agentPrefs?: Partial<Record<XdtshareAgentKind, ShareImportDraftPrefs>>;
+    /** Canonical ACP plugin engine provider ids (`acp-plugin:<ghostId>:<harnessId>`) enabled on this computer. */
+    availableAcpProviders?: ReadonlySet<string>;
     /** Transcript ref path → delivered file, for transcripts the exporter kept out of the zip. */
     externalTranscripts?: ReadonlyMap<string, string>;
   };
@@ -426,6 +441,13 @@ export async function commitShareImport(
   }
 
   if (runtimeScope.migration) {
+    const availableAcpProviders = runtimeScope.migration.availableAcpProviders;
+    if (manifest.agentKind === 'acp') {
+      const requiredProvider = resolveCanonicalAcpProviderId(sessionSnapshot, manifest.providerId);
+      if (!requiredProvider || !availableAcpProviders?.has(requiredProvider)) {
+        throw codedError('SHARE_IMPORT_FAILED', 'MIGRATION_TARGET_MODEL_UNAVAILABLE');
+      }
+    }
     const workers = runtimeScope.migration.workers ?? [];
     if (workers.length !== workerPlans.length || (runtimeScope.migration.workers !== undefined) !== !!manifest.orca)
       throw codedError('SHARE_IMPORT_FAILED', 'MIGRATION_TEAM_CHANGED');
@@ -433,6 +455,12 @@ export async function commitShareImport(
     for (const plan of workerPlans) {
       if (!runtimeScope.migration.agentPrefs?.[plan.manifest.agentKind])
         throw codedError('SHARE_IMPORT_FAILED', 'MIGRATION_TARGET_MODEL_UNAVAILABLE');
+      if (plan.manifest.agentKind === 'acp') {
+        const requiredProvider = resolveCanonicalAcpProviderId(plan.snapshot, plan.manifest.providerId);
+        if (!requiredProvider || !availableAcpProviders?.has(requiredProvider)) {
+          throw codedError('SHARE_IMPORT_FAILED', 'MIGRATION_TARGET_MODEL_UNAVAILABLE');
+        }
+      }
       const member = workers.find(
         (worker) => worker.sourceSessionId === plan.snapshot.migrationSourceId,
       );
@@ -1018,6 +1046,7 @@ export async function commitShareImport(
       newId,
       agentKind: manifest.agentKind,
       manifestProviderId: manifest.providerId ?? null,
+      normalizeMigratedAcpProvider: !!runtimeScope.migration,
       title: manifest.title || 'Shared session',
       workspaceKind: manifest.workspaceKind,
       orcaRole: manifest.orca ? ('lead' as const) : null,
@@ -1061,6 +1090,7 @@ export async function commitShareImport(
               newId: plan.newId,
               agentKind: plan.manifest.agentKind,
               manifestProviderId: plan.manifest.providerId ?? null,
+              normalizeMigratedAcpProvider: !!runtimeScope.migration,
               title:
                 (typeof plan.snapshot.title === 'string' && plan.snapshot.title) ||
                 plan.manifest.title ||
@@ -1564,6 +1594,24 @@ function isAcpProviderId(value: unknown): value is string {
   return typeof value === 'string' && value.startsWith('acp-plugin:');
 }
 
+function canonicalAcpProviderId(value: unknown): string | null {
+  const key = typeof value === 'string' ? acpHarnessKeyFromProviderId(value) : null;
+  return key ? acpProviderIdForHarness(key) : null;
+}
+
+function resolveCanonicalAcpProviderId(
+  snapshot: Record<string, unknown>,
+  manifestProviderId: string | null | undefined,
+): string | null {
+  const raw =
+    typeof snapshot.providerId === 'string' && snapshot.providerId.length > 0
+      ? snapshot.providerId
+      : typeof manifestProviderId === 'string' && manifestProviderId.length > 0
+        ? manifestProviderId
+        : null;
+  return canonicalAcpProviderId(raw);
+}
+
 function parseStoredMessageContent(raw: string): unknown {
   try {
     return JSON.parse(raw) as unknown;
@@ -1659,6 +1707,7 @@ function buildSessionRow(params: {
   newId: string;
   agentKind: XdtshareAgentKind;
   manifestProviderId?: string | null;
+  normalizeMigratedAcpProvider?: boolean;
   title: string;
   workspaceKind: string;
   orcaRole: 'lead' | 'worker' | null;
@@ -1691,12 +1740,16 @@ function buildSessionRow(params: {
     typeof v === 'number' && Number.isFinite(v) ? v : fallback;
   const isAcp = agentKind === 'acp';
   const isAcpDraft = isAcp && isAcpProviderId(draftPrefs?.providerId);
-  const snapshotProviderId =
+  const rawSnapshotProviderId =
     typeof snapshot.providerId === 'string' && snapshot.providerId.length > 0
       ? snapshot.providerId
       : typeof params.manifestProviderId === 'string' && params.manifestProviderId.length > 0
         ? params.manifestProviderId
         : null;
+  const snapshotProviderId =
+    isAcp && params.normalizeMigratedAcpProvider
+      ? (canonicalAcpProviderId(rawSnapshotProviderId) ?? rawSnapshotProviderId)
+      : rawSnapshotProviderId;
   const effort = isAcp
     ? isAcpDraft
       ? str(draftPrefs?.effort, str(snapshot.effort, 'high'))

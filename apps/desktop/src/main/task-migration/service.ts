@@ -60,6 +60,8 @@ import { GitExecError } from '../worktree/gitExec';
 import { getMakerIfReady } from '../maker-host';
 import { getDesktopProviderService } from '../maker-host/createDesktopProviderService';
 import { pickEnabledFallbackModel } from '../maker-host/model-route-guard';
+import { acpHarnessKeyFromProviderId, acpProviderIdForHarness } from '@cindy/maker-core';
+import { getPluginHarnessRegistry } from '../cindy-brain/pluginHarnesses';
 import { advanceHandoff, canCancelHandoff, type MigrationHandoff } from './handoff';
 import { migrationScope, type MigrationRecord, type IncomingMigration } from './journal';
 import {
@@ -237,6 +239,22 @@ function view(scope: Scope, record: MigrationRecord | null): TaskMigrationView {
   };
 }
 
+function canonicalAcpProviderId(providerId: string | null | undefined): string | null {
+  const key = acpHarnessKeyFromProviderId(providerId);
+  return key ? acpProviderIdForHarness(key) : null;
+}
+
+function listAvailableAcpProviders(): string[] {
+  return [
+    ...new Set(
+      getPluginHarnessRegistry()
+        .list()
+        .filter((harness) => harness.availability.state !== 'unavailable')
+        .map((harness) => acpProviderIdForHarness(harness.key)),
+    ),
+  ];
+}
+
 interface SourceSession {
   id: string;
   workingDir: string;
@@ -249,6 +267,7 @@ interface SourceSession {
   source: string;
   orcaRole: string | null;
   agentKind: XdtshareAgentKind;
+  providerId: string | null;
   updatedAt: number;
 }
 async function assertSource(
@@ -257,7 +276,7 @@ async function assertSource(
   worker = false,
 ): Promise<SourceSession> {
   const row = await scope.db.queryOne<SourceSession>(
-    'SELECT id, working_dir AS workingDir, project_dir AS projectDir, workspace_kind AS workspaceKind, remote_host_id AS remoteHostId, agent_device_id AS agentDeviceId, orca_remote_lead AS orcaRemoteLead, status, source, orca_role AS orcaRole, agent_kind AS agentKind, updated_at AS updatedAt FROM sessions WHERE id = ?',
+    'SELECT id, working_dir AS workingDir, project_dir AS projectDir, workspace_kind AS workspaceKind, remote_host_id AS remoteHostId, agent_device_id AS agentDeviceId, orca_remote_lead AS orcaRemoteLead, status, source, orca_role AS orcaRole, agent_kind AS agentKind, provider_id AS providerId, updated_at AS updatedAt FROM sessions WHERE id = ?',
     [sessionId],
   );
   scope.assertCurrent();
@@ -1245,8 +1264,13 @@ async function receive(
             allowSideEffects: true,
           });
           scope.assertCurrent();
+          const availableAcpProviders = new Set(listAvailableAcpProviders());
           let leadDraftPrefs: ShareImportDraftPrefs;
           if (preview.agentKind === 'acp') {
+            const requiredLeadAcpProvider = canonicalAcpProviderId(preview.providerId);
+            if (!requiredLeadAcpProvider || !availableAcpProviders.has(requiredLeadAcpProvider)) {
+              throw new Error('MIGRATION_TARGET_MODEL_UNAVAILABLE');
+            }
             leadDraftPrefs = {
               permissionMode: 'ask',
               planMode: false,
@@ -1268,12 +1292,28 @@ async function receive(
               fastMode: false,
             };
           }
+          if (preview.hasAcpWorker) {
+            const workerProviders = preview.acpWorkerProviderIds ?? [];
+            if (
+              workerProviders.length === 0 ||
+              workerProviders.some((providerId) => {
+                const required = canonicalAcpProviderId(providerId);
+                return !required || !availableAcpProviders.has(required);
+              })
+            ) {
+              throw new Error('MIGRATION_TARGET_MODEL_UNAVAILABLE');
+            }
+          }
           const agentPrefs: Partial<Record<XdtshareAgentKind, ShareImportDraftPrefs>> = {
-            acp: {
-              permissionMode: 'ask',
-              planMode: false,
-              fastMode: false,
-            },
+            ...(availableAcpProviders.size > 0
+              ? {
+                  acp: {
+                    permissionMode: 'ask',
+                    planMode: false,
+                    fastMode: false,
+                  },
+                }
+              : {}),
           };
           for (const agent of ['cc', 'codex', 'pi'] as const) {
             const kind = agent === 'cc' ? 'claude-code' : agent;
@@ -1305,6 +1345,7 @@ async function receive(
                 workingDir,
                 workers: record.workers,
                 agentPrefs,
+                availableAcpProviders,
                 externalTranscripts,
               },
             },
@@ -1400,6 +1441,7 @@ export async function requestTaskMigration(raw: unknown): Promise<TaskMigrationV
   if (request.action === 'caps') {
     const providers = await getDesktopProviderService().listProviders({ allowSideEffects: true });
     scope.assertCurrent();
+    const acpProviders = listAvailableAcpProviders();
     return {
       ...view(scope, null),
       projects: await projects(scope),
@@ -1410,8 +1452,9 @@ export async function requestTaskMigration(raw: unknown): Promise<TaskMigrationV
         ...(['cc', 'codex', 'pi'] as const).filter(
           (agent) => !!pickEnabledFallbackModel(providers, agent === 'cc' ? 'claude-code' : agent),
         ),
-        'acp' as const,
+        ...(acpProviders.length > 0 ? (['acp'] as const) : []),
       ],
+      acpProviders,
     };
   }
   if (request.action === 'receive' || request.action === 'receipt') {
@@ -1494,7 +1537,17 @@ export async function requestTaskMigration(raw: unknown): Promise<TaskMigrationV
             const source = members[0];
             if (source.orcaRole === 'lead' && target.teamMigration !== true)
               throw new Error('MIGRATION_UNSUPPORTED');
-            if (members.some((member) => !target.agents?.includes(member.agentKind)))
+            const targetAcpProviders = new Set(
+              Array.isArray(target.acpProviders) ? target.acpProviders : [],
+            );
+            if (
+              members.some((member) => {
+                if (!target.agents?.includes(member.agentKind)) return true;
+                if (member.agentKind !== 'acp') return false;
+                const required = canonicalAcpProviderId(member.providerId);
+                return !required || !targetAcpProviders.has(required);
+              })
+            )
               throw new Error('MIGRATION_TARGET_MODEL_UNAVAILABLE');
             const id = randomUUID();
             record = {

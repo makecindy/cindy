@@ -563,12 +563,6 @@ export interface TurnChangeCaptureHooks {
     cwd: string;
     targetPath: string;
     remote?: boolean;
-    /**
-     * When set, marks an un-paused notification disk read as provisional for that tool call:
-     * a structured diff preimage from the same tool call may replace it if the disk read raced
-     * with the agent's write, while any earlier tool call's preimage is never overwritten.
-     */
-    provisionalId?: string;
   }): Promise<void>;
   /** Record an exact preimage supplied by a structured diff (e.g. ACP tool_call_update). */
   recordKnownFilePreimage?(input: {
@@ -579,7 +573,6 @@ export interface TurnChangeCaptureHooks {
     beforeExists: boolean;
     beforeText: string;
     remote?: boolean;
-    provisionalId?: string;
   }): Promise<void>;
   /** Record a tool whose filesystem effects cannot be known before execution. */
   noteOpaqueWrite(input: {
