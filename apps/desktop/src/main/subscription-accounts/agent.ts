@@ -234,6 +234,7 @@ function wrapHandle(
       if (property === 'send')
         return async (...args: Parameters<AgentSessionHandle['send']>) => {
           if (cleanupPending) throw new Error('Subscription account runtime is closing');
+          if (lease.verifyLinkedLogin) await lease.verifyLinkedLogin();
           lease.assertDispatchable();
           if (poolTurn) poolTurn.current = { delivered: false };
           if (lease.apiConnectionId && (agent === 'codex' || agent === 'pi'))

@@ -5604,7 +5604,12 @@ export default async function cindyBridge(piApi: any) {
   const servers = Array.isArray(cfg.servers) ? cfg.servers : [];
   // 全部 server 并行启动：每个 remote 有独立短预算，多个黑洞 provider 也只占一份
   // startup window，不会串行叠加到 Pi RPC 的 30s ready 超时。
+  // The gateway and its reconnectors use the configured server name as identity.
+  // Claim it before the first await so the first descriptor owns both connections.
+  const claimedNames = new Set<string>();
   await Promise.all(servers.map(async (server) => {
+    if (claimedNames.has(server.name)) return;
+    claimedNames.add(server.name);
     mcpGateway.setServerDisplayName(server.name, server.displayName);
     mcpGateway.registerReconnect(server.name, () => connectServer(server, token));
     try {
