@@ -7,7 +7,7 @@
  * 机器上没有可用的 python 时整组 skip(不阻塞无 Python 的 CI 环境)。
  */
 import { spawnSync } from 'node:child_process';
-import { cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { appendFileSync, cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -38,15 +38,19 @@ afterAll(() => {
   rmSync(tmp, { recursive: true, force: true });
 });
 
-function detectPython(): string | null {
+function detectPython(): { command: string; executable: string } | null {
   for (const cmd of ['python', 'python3']) {
     try {
-      const probe = spawnSync(cmd, ['-c', 'import sys; sys.stdout.write("cindy-python-probe")'], {
+      const probe = spawnSync(cmd, ['-S', '-c', 'import json, sys; print(json.dumps(sys.executable))'], {
         encoding: 'utf8',
         windowsHide: true,
         timeout: 10_000,
       });
-      if (probe.status === 0 && probe.stdout === 'cindy-python-probe') return cmd;
+      if (probe.status !== 0) continue;
+      const executable: unknown = JSON.parse(probe.stdout);
+      if (typeof executable === 'string' && path.isAbsolute(executable)) {
+        return { command: cmd, executable };
+      }
     } catch {
       // try next candidate
     }
@@ -125,9 +129,12 @@ describe.skipIf(!PYTHON)('script automation Python client', () => {
       context: {},
     })}\n`;
     const runClient = (env: NodeJS.ProcessEnv): Record<string, unknown> => {
+      const startedAt = performance.now();
       const probe = spawnSync(
-        PYTHON!,
+        PYTHON!.executable,
         [
+          // Only the stdlib and the fixture are needed. Skip machine-specific site startup.
+          '-S',
           '-c',
           // This probe checks protocol negotiation, not OS pipe delivery. Use
           // in-memory streams so a Windows spawnSync stdin stall cannot mask
@@ -150,10 +157,24 @@ describe.skipIf(!PYTHON)('script automation Python client', () => {
           timeout: 10_000,
         },
       );
-      expect(
-        probe.status,
-        `stderr=${probe.stderr} error=${String(probe.error ?? '')} signal=${String(probe.signal ?? '')}`,
-      ).toBe(0);
+      const diagnostics = {
+        host: env.CINDY_SCRIPT_PROTOCOL ? 'current' : 'legacy',
+        executable: PYTHON!.executable,
+        elapsedMs: Math.round(performance.now() - startedAt),
+        status: probe.status,
+        signal: probe.signal,
+        error: probe.error?.message,
+        stderr: probe.stderr,
+      };
+      // The workspace reporter suppresses successful Vitest output. Keep Windows CI
+      // measurements in the job summary even when both handshakes finish on time.
+      if (process.platform === 'win32' && process.env.GITHUB_STEP_SUMMARY) {
+        appendFileSync(
+          process.env.GITHUB_STEP_SUMMARY,
+          `Python negotiation (${diagnostics.host}): \`${diagnostics.executable}\`, ${diagnostics.elapsedMs} ms, status ${probe.status}.\n\n`,
+        );
+      }
+      expect(probe.status, JSON.stringify(diagnostics)).toBe(0);
       return JSON.parse(probe.stdout.trim()) as Record<string, unknown>;
     };
 
@@ -175,7 +196,7 @@ describe.skipIf(!PYTHON)('script automation Python client', () => {
       logger: { info: logInfo, warn: vi.fn(), error: vi.fn() },
     });
     const ctx: FireContext = { runId: 'run-1', firedAt: Date.now(), signal: new AbortController().signal };
-    const result = await runner.fire(schedule(`${PYTHON} demo.py`), ctx);
+    const result = await runner.fire(schedule(`${PYTHON!.command} demo.py`), ctx);
 
     // jira.read 已授予且响应含中文 + 转义引号(锁 UTF-8 编码链路)
     expect(result.resultText).toContain('jira ok');
@@ -212,7 +233,7 @@ describe.skipIf(!PYTHON)('script automation Python client', () => {
       logger: { info: logInfo, warn: vi.fn(), error: vi.fn() },
     });
     const ctx: FireContext = { runId: 'run-2', firedAt: Date.now(), signal: new AbortController().signal };
-    const result = await runner.fire(schedule(`${PYTHON} noisy.py`), ctx);
+    const result = await runner.fire(schedule(`${PYTHON!.command} noisy.py`), ctx);
 
     expect(result.resultText).toBe('ok=DING-1');
     const completedLog = logInfo.mock.calls.find((c) => String(c[0]).includes('script completed'));
@@ -249,9 +270,9 @@ describe.skipIf(!PYTHON)('script automation Python client', () => {
       },
     };
     const runner = new ScriptScheduleRunner({ broker, logger: {} });
-    const sched = schedule(`${PYTHON} adf_comment.py`);
+    const sched = schedule(`${PYTHON!.command} adf_comment.py`);
     sched.scriptConfig = {
-      command: `${PYTHON} adf_comment.py`,
+      command: `${PYTHON!.command} adf_comment.py`,
       capabilities: ['jira.read', 'jira.comment'],
       timeoutMs: 30_000,
     };
