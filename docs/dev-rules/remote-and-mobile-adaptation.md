@@ -1152,6 +1152,10 @@ preparing，本机 Session 可正常关闭，下一条显式消息按原生会�
    打开或连回 Agent 前的只读 `caps` 查询复用共享瞬态重试策略（最多 6 次），等待启动建连或拥堵冷却
    结束；授权拒绝、旧端不支持等非瞬态错误立即结束。只重读这台电脑的能力，不重建 link、不重启 relay，
    不重放 `open`、上传或发送。回归见 `remote-agent/__tests__/connectionPool.test.ts`。其余 op 不自动重放。
+   已发送的 `call` 有两条独立的回传路径：请求回执和现有轮询里的 `result(callId)`。请求回执超时时，
+   控制端采用同一 run、同一 callId 已收到的执行结果；结果尚未到达时再等最多 30 秒。到期仍无结果就保留
+   原超时错误。整个核对过程复用现有轮询，其他任务的游标与重试预算照常。回归见
+   [runClientReply.test.ts](../../apps/desktop/src/main/remote-agent/__tests__/runClientReply.test.ts)。
    设备熔断的 `DEVICE_UNRESPONSIVE` 也属于瞬态错误：`poll` 保留原游标与原两分钟窗口，
    等底层既有单飞探测恢复；注销 run 取消后续重试。共享判据同时让 `reply` / `push` 在原有
    交付次数上限内重试，复用原 requestId／载荷或 seq／帧，不重新执行工具或重放 `open` / `call`。

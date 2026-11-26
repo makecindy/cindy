@@ -731,7 +731,7 @@
     "REMOTE_WORKDIR_UNAVAILABLE": "远程工作目录现在不可用。请确认那台电脑上的目录还在，然后重试。",
     "REMOTE_OPTIMISTIC_SESSION_STATE_UNAVAILABLE": "电脑端暂时无法确认这条消息是否已经发出。请稍后再试，不要重复发送同一条。",
     "REMOTE_AGENT_UNAVAILABLE": "未能与运行 Agent 的电脑通信，请查看错误详情。",
-    "REMOTE_AGENT_TIMEOUT": "等待运行 Agent 的电脑响应超时，结果尚未确认。重试前先检查任务进展。",
+    "REMOTE_AGENT_TIMEOUT": "运行 Agent 的电脑还没回复。请先查看任务进展。如果任务还在运行或已有结果，就不用重试。",
     "REMOTE_AGENT_LINK_BUSY": "与运行 Agent 的电脑之间的通信繁忙，请稍后重试。",
     "REMOTE_AGENT_UNRESPONSIVE": "运行 Agent 的电脑多次未响应，调用被暂时暂停。请稍后重试。",
     "REMOTE_AGENT_OFFLINE": "运行 Agent 的电脑当前离线，待重新上线后重试。",

@@ -16248,7 +16248,7 @@
       "REMOTE_WORKDIR_UNAVAILABLE": "Das Remote-Arbeitsverzeichnis ist nicht verfügbar. Prüfe, ob das Verzeichnis auf diesem Computer noch existiert, und versuch es erneut.",
       "REMOTE_OPTIMISTIC_SESSION_STATE_UNAVAILABLE": "Der Computer kann noch nicht bestätigen, ob diese Nachricht gesendet wurde. Warte kurz und versuch es erneut. Sende dieselbe Nachricht nicht zweimal.",
       "REMOTE_AGENT_UNAVAILABLE": "Die Kommunikation mit dem Computer, auf dem der Agent läuft, ist fehlgeschlagen. Prüfe die Fehlerdetails.",
-      "REMOTE_AGENT_TIMEOUT": "Zeitüberschreitung beim Warten auf den Computer, auf dem der Agent läuft. Das Ergebnis ist unklar. Prüfe die Aufgabe, bevor du es erneut versuchst.",
+      "REMOTE_AGENT_TIMEOUT": "Der Computer, auf dem der Agent läuft, hat noch nicht geantwortet. Prüfe den Stand der Aufgabe. Wenn sie noch läuft oder bereits abgeschlossen ist, brauchst du sie nicht erneut zu starten.",
       "REMOTE_AGENT_LINK_BUSY": "Die Kommunikation mit dem Computer, auf dem der Agent läuft, ist ausgelastet. Warte einen Moment, bevor du es erneut versuchst.",
       "REMOTE_AGENT_UNRESPONSIVE": "Der Computer, auf dem der Agent läuft, hat wiederholt nicht geantwortet. Aufrufe wurden deshalb vorübergehend pausiert. Warte einen Moment, bevor du es erneut versuchst.",
       "REMOTE_AGENT_OFFLINE": "Der Computer, auf dem der Agent läuft, ist offline. Versuche es erneut, sobald er wieder verbunden ist.",
