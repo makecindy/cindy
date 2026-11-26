@@ -55,7 +55,6 @@ function harness(resolveMembers: ProviderGroupDirectory['resolveMembers'], persi
       },
     },
     now: () => now,
-    random: () => 0,
   });
 }
 

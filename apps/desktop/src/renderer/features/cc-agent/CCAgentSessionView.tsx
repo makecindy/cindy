@@ -1,4 +1,4 @@
-import { useSplitPaneFocus } from '@/features/cc-agent/splitPaneFocus';
+import { useInCompanionSplitPane, useSplitPaneFocus } from '@/features/cc-agent/splitPaneFocus';
 import { useProjectInfo } from './hooks/useProjectInfo';
 import { SessionProjectSettingsDialog } from './sidebar/SessionProjectMenuButton';
 import { acquireQueueEditLock, releaseQueueEditLock, type QueueEditLockOwner } from '@/components/new-chat/pendingQueueLocks';
@@ -127,6 +127,7 @@ import { setRemoteReceiptDisplayReady } from '@/lib/sessionAttentionStore';
 import { shortSessionId } from '@/lib/sessionId';
 import { isQuotaExhaustedErrorMessage } from '@/utils/quotaError';
 import { isOverloadErrorMessage } from '@/utils/overloadError';
+import type { CollabWorkerKind } from '@/components/new-chat/ExtraDirsButton';
 import { ChatInput, type SessionModelPick } from '@/components/new-chat/ChatInput';
 import { PluginUiSlot, PluginUiWorkdirButton, usePluginUiHas } from '@/cindy-brain/PluginUiContributions';
 import {
@@ -165,7 +166,6 @@ import { CreateWorkerPopover, type CreateWorkerForm } from './CreateWorkerPopove
 import { createWorkerLabel } from './workerLabel';
 import { setModelWithWindowConfirmation } from './lib/modelWindowConfirmation';
 import { TakeoverMask } from '@/components/new-chat/TakeoverMask';
-import { WorktreeCreatingOverlay } from '@/components/new-chat/WorktreeCreatingOverlay';
 import { PermissionPrompt } from '@/components/new-chat/PermissionPrompt';
 import { IssueConfirmCard } from './IssueConfirmCard';
 import { RenameSessionsConfirmCard } from './RenameSessionsConfirmCard';
@@ -978,14 +978,17 @@ function CCAgentSessionContent({
   const { sessionId: paramSessionId } = useParams<{ sessionId: string }>();
   const sessionId = sessionIdProp ?? paramSessionId;
   const botChatIdentity = resolveBotChatIdentity(botIdentity, sessionId);
-  const creationPreview = useSyncExternalStore(remoteProjectsStore.subscribe, () =>
+  const localCreationPreview = useSyncExternalStore(sessionsStore.subscribe, () => sessionsStore.getCreationPreview(sessionId));
+  const remoteCreationPreview = useSyncExternalStore(remoteProjectsStore.subscribe, () =>
     remoteProjectsStore.getCreationPreview(sessionId));
+  const creationPreview = localCreationPreview ?? remoteCreationPreview;
   const awaitingCreation = (!!creationPreview && !creationPreview.handedOff)
     || awaitingSessionCreation
     || creationFailed;
   const confirmedSessionId = awaitingCreation ? undefined : sessionId;
   const navigate = useNavigate();
   const paneFocused = useSplitPaneFocus();
+  const inCompanionSplitPane = useInCompanionSplitPane();
   const ownsWindowRoute = paneFocused && navigationMode === 'route-owner';
   const canNavigateSession = ownsWindowRoute || navigationMode === 'split-pane';
   const sessionNavigationVersionRef = useRef(0);
@@ -1180,7 +1183,7 @@ function CCAgentSessionContent({
   // Prefer server-fetched data; fall back to cached list for instant first paint。初始 GET
   // 尚未到达时，暂存 patch 也覆盖到 list snapshot 上，但不把不完整 list 提升为 serverSession。
   // 远程会话 currentServerSession 恒为 null(下方 effect 跳过本地 get),故走 sessionFromList。
-  const sessionBase = currentServerSession ?? sessionFromList
+  const sessionBase = currentServerSession ?? sessionFromList ?? creationPreview?.row
     ?? (sessionSnapshotProp?.id === sessionId ? sessionSnapshotProp : null);
   const session =
     sessionId && sessionBase
@@ -2014,6 +2017,7 @@ function CCAgentSessionContent({
     retryLastError,
     continueAfterSilentStop,
     errorReason,
+    reconnectHandoff,
     toolLoop,
     outputLimit,
     insertSystemCard,
@@ -2374,8 +2378,10 @@ function CCAgentSessionContent({
     remoteDeviceId,
   );
   const compactChannel = useMemo(
-    () => (pluginEngineTask ? null : resolveManualCompactChannel(realAgentKind, realSessionCaps)),
-    [pluginEngineTask, realAgentKind, realSessionCaps],
+    () => (pluginEngineTask
+      ? (!session?.remoteHostId && !session?.agentDeviceId ? 'compact-session' as const : null)
+      : resolveManualCompactChannel(realAgentKind, realSessionCaps)),
+    [pluginEngineTask, session?.remoteHostId, session?.agentDeviceId, realAgentKind, realSessionCaps],
   );
   // 最新 channel 的可变镜像:useCallback 闭包在创建后固定捕获 compactChannel,确认框
   // await 期间同会话切换 agent(跨窗口/远程,sessionId 不变)会产生新 render 但旧 async
@@ -2841,7 +2847,7 @@ function CCAgentSessionContent({
     ? activeReconnect.groupSwitchPending
       ? t('chat.systemCard.autoResumePending.groupSwitch')
       : activeReconnect.attempt !== undefined && activeReconnect.maxAttempts !== undefined
-      ? t('chat.systemCard.autoResumePending.labelWithProgress', {
+      ? t(activeReconnect.reconnectStalled ? 'chat.systemCard.autoResumePending.continuingWithProgress' : 'chat.systemCard.autoResumePending.labelWithProgress', {
           attempt: activeReconnect.attempt,
           total: activeReconnect.maxAttempts,
         })
@@ -2988,7 +2994,11 @@ function CCAgentSessionContent({
   );
   const modelGroupsConfig = modelGroupsTaskDeviceId ? deviceTaskModelGroups.config : localTaskModelGroups.config;
   // 已挂着「下一条消息换到另一台电脑」时，按那个即将生效的位置挑：换模型时会沿用它，两边必须是同一台。
-  const switchTaskByModelGroup = useCallback(async (selection: ModelGroupSelection) => {
+  const switchTaskByModelGroup = useCallback(async (
+    selection: ModelGroupSelection,
+    /** 在合并条目下点的那一行：用户在那里选的思考深度与 Fast(成员支持时带上)。 */
+    context?: { effort?: string; fastMode?: true | 'ultrafast' },
+  ) => {
     if (!sessionId) return;
     // 和在选择器里点一行同一个顺序保证：已经点了发送就不再换；选路期间占住这个任务的切换门，
     // 这时点发送会等换完，而不是先用旧模型发出去。
@@ -2999,8 +3009,8 @@ function CCAgentSessionContent({
       const navigationVersion = sessionNavigationVersionRef.current;
       // 远程控制的任务：由任务所在那台按它的模式选，位置是那台眼里的位置。
       const result = modelGroupsTaskDeviceId
-        ? await resolveDeviceModelGroup(modelGroupsTaskDeviceId, selection, undefined, { agentDeviceId: taskLocation })
-        : await resolveModelGroup(selection, undefined, { agentDeviceId: taskLocation });
+        ? await resolveDeviceModelGroup(modelGroupsTaskDeviceId, selection, context, { agentDeviceId: taskLocation })
+        : await resolveModelGroup(selection, context, { agentDeviceId: taskLocation });
       if (sessionNavigationVersionRef.current !== navigationVersion) return;
       if (!result || result.outcome !== 'routed') {
         if (result) toast.warning(t('modelGroups.picker.switchUnavailable', { name: result.groupName }));
@@ -3027,6 +3037,11 @@ function CCAgentSessionContent({
         config: modelGroupsConfig,
         active: null,
         onSelect: (selection: ModelGroupSelection) => { void switchTaskByModelGroup(selection); },
+        // 合并整个供应商的路由也像一个供应商列出来：点其中一个模型 = 按这条路由在任务所在的位置挑成员换过去。
+        // 另一台电脑的配置里没有这类路由(发给别的设备时不带)，那边不会出现合并条目。
+        onPickMerged: (selection: ModelGroupSelection, context: { effort?: string; fastMode?: true | 'ultrafast' }) => {
+          void switchTaskByModelGroup(selection, context);
+        },
         // 管理入口只在本机：另一台电脑的模式在那台上改。
         ...(modelGroupsTaskDeviceId ? {} : { onManage: () => navigate('/settings?tab=model-groups') }),
       }
@@ -3290,59 +3305,7 @@ function CCAgentSessionContent({
     void makerChatStore.reconcileRemoteMessages(sessionId).catch(() => undefined);
     return () => setRemoteReceiptDisplayReady(sessionId, false);
   }, [historyLoaded, remoteDeviceId, sessionId, viewVisible]);
-  // worktree 创建过程中禁用 ChatInput,防止用户在 worktree 还没就绪时继续派发消息。
-  // 之前是扫 chat messages 找 SystemCard('worktree') status==='creating',现在直接
-  // 读 worktreeCreationStore(已经在上面订阅 worktreeCreation 时拿到)。
-  //
-  // 用户体验优化 (2026-05): worktree 创建有时只要 ~200ms,store 一进一出导致
-  // WorktreeCreatingOverlay 出现 1 帧就消失,视觉上像是闪了一下。这里把"creating"
-  // 视觉态最少撑 1.6s —— 一旦进入 creating, 即便 store 已被 clear(创建完成),
-  // overlay 也至少存在到首次进入后的第 1600ms。底层 store 仍按真实时间 clear,
-  // 不影响 worktreeCreate 完成后的发送链路 (sendMessage 在 store.clear 同 tick
-  // 触发, 走的是 makerChatStore 自己的队列, 不依赖 worktreePreparing)。
-  const rawWorktreeCreating = worktreeCreation?.status === 'creating';
-  const [smoothedWorktreeCreating, setSmoothedWorktreeCreating] = useState(rawWorktreeCreating);
-  // 缓存 branchName: store clear 之后 worktreeCreation 就变 undefined, 拿不到 name 了,
-  // 但 overlay 还需要继续显示 (min-duration 没到), 所以这里把进入 creating 时的 name
-  // 镜像出来, 给 overlay 用。raw 重新回 true 再覆盖。
-  const [smoothedBranchName, setSmoothedBranchName] = useState<string | null>(
-    rawWorktreeCreating ? (worktreeCreation?.name ?? null) : null,
-  );
-  const creatingStartedAtRef = useRef<number | null>(rawWorktreeCreating ? Date.now() : null);
-  useEffect(() => {
-    if (rawWorktreeCreating) {
-      if (creatingStartedAtRef.current === null) {
-        creatingStartedAtRef.current = Date.now();
-      }
-      setSmoothedWorktreeCreating(true);
-      if (worktreeCreation?.name) setSmoothedBranchName(worktreeCreation.name);
-      return;
-    }
-    // raw 已经回 false; 没记录过 start (本会话从未进过 creating) → 直接同步
-    if (creatingStartedAtRef.current === null) {
-      setSmoothedWorktreeCreating(false);
-      setSmoothedBranchName(null);
-      return;
-    }
-    const elapsed = Date.now() - creatingStartedAtRef.current;
-    const MIN_MS = 1600;
-    if (elapsed >= MIN_MS) {
-      setSmoothedWorktreeCreating(false);
-      setSmoothedBranchName(null);
-      creatingStartedAtRef.current = null;
-      return;
-    }
-    const remaining = MIN_MS - elapsed;
-    const timer = setTimeout(() => {
-      setSmoothedWorktreeCreating(false);
-      setSmoothedBranchName(null);
-      creatingStartedAtRef.current = null;
-    }, remaining);
-    return () => clearTimeout(timer);
-  }, [rawWorktreeCreating, worktreeCreation?.name, sessionId]);
-  // 对外仍叫 worktreePreparing — 整段下游逻辑 (handleSend 拦截 / ChatInput.disabled /
-  // overlay 渲染) 全部统一从这一个值读, 保证语义一致 (overlay 在 = 输入禁用)。
-  const worktreePreparing = smoothedWorktreeCreating;
+  const worktreePreparing = worktreeCreation?.status === 'creating';
 
   // device-link 远程草稿的交接要等隧道往返(见下方 pending 消费):开协同要等被控端起
   // Worker,起目标另有 subscribe 与 setGoal —— 每一段都可能走到 30s 超时。期间会话看起来
@@ -3481,7 +3444,7 @@ function CCAgentSessionContent({
   // F-COLLAB: 协同模式真实状态。enabled 来自 session.orcaRole === 'lead';
   // worker(显示用)从 active workflow 的 Worker session 列表查到 agentKind。
   // 切换协同走 IPC enableOrca / disableOrca,失败时 toast。
-  const [collabWorker, setCollabWorker] = useState<'cc' | 'codex' | 'pi'>('codex');
+  const [collabWorker, setCollabWorker] = useState<CollabWorkerKind>('codex');
   // enableBusy 只盖"开启协同"路径;关闭走 useStopOrcaCollab hook 自己管 busy。
   const [enableBusy, setEnableBusy] = useState(false);
   const [createWorkerOpen, setCreateWorkerOpen] = useState(false);
@@ -4643,14 +4606,44 @@ function CCAgentSessionContent({
         });
         return true;
       }
-      // 插件引擎没有这条上下文查询通道；不拿 Claude Code 的 createOpts 去问。
+      // 插件引擎：实时 usage_update 已带回上下文窗口时直接查 live 会话或用当前快照展示，不拿内置引擎的 createOpts 去冷启动。
       if (isPluginEngineKind(session?.agentKind)) {
-        insertSystemCard('context', {
-          usage: null,
-          error: t('chat.systemCard.context.unsupportedAgent', {
-            agent: pluginEngine?.name ?? t('newChat.pluginEngines.genericName'),
-          }),
-        });
+        const snapshotWindow = agentStatus.contextWindow;
+        const snapshotTokens = agentStatus.contextTokens;
+        const cardClientId = insertSystemCard('context', { usage: undefined });
+        if (!cardClientId) return true;
+        void makerApiFor(sessionId)
+          .getContextUsage(sessionId, undefined)
+          .then((usage) => {
+            updateSystemCardData(cardClientId, { usage });
+          })
+          .catch(() => {
+            if (snapshotWindow > 0) {
+              updateSystemCardData(cardClientId, {
+                usage: {
+                  categories: [],
+                  totalTokens: snapshotTokens,
+                  maxTokens: snapshotWindow,
+                  rawMaxTokens: snapshotWindow,
+                  percentage: Math.min(100, (snapshotTokens / snapshotWindow) * 100),
+                  gridRows: [],
+                  model: session?.model ?? '',
+                  memoryFiles: [],
+                  mcpTools: [],
+                  agents: [],
+                  isAutoCompactEnabled: true,
+                  apiUsage: null,
+                },
+              });
+              return;
+            }
+            updateSystemCardData(cardClientId, {
+              usage: null,
+              error: t('chat.systemCard.context.unsupportedAgent', {
+                agent: pluginEngine?.name ?? t('newChat.pluginEngines.genericName'),
+              }),
+            });
+          });
         return true;
       }
       const createOpts = session?.workingDir
@@ -4691,7 +4684,7 @@ function CCAgentSessionContent({
         });
       return true;
     },
-    [fastMode, insertSystemCard, remoteDeviceId, session, sessionId, t, updateSystemCardData, pluginEngine?.name],
+    [agentStatus.contextTokens, agentStatus.contextWindow, fastMode, insertSystemCard, remoteDeviceId, session, sessionId, t, updateSystemCardData, pluginEngine?.name],
   );
 
   type DeferredCreationSend = {
@@ -4728,7 +4721,7 @@ function CCAgentSessionContent({
 
   // 开始输入（打字、粘贴、开始语音输入）时提前启动 Agent，把冷启动藏进输入时间（本机与远程任务相同）。
   const handleComposerTyping = useCallback(() => {
-    if (readOnly || cindyMakeInputLocked) return;
+    if (readOnly || cindyMakeInputLocked || worktreePreparing) return;
     if (awaitingCreation) {
       typedWhileAwaitingCreationRef.current = true;
       return;
@@ -4741,12 +4734,12 @@ function CCAgentSessionContent({
       session.permissionMode,
       session.workingDir,
     );
-  }, [awaitingCreation, cindyMakeInputLocked, confirmedSessionId, readOnly, session]);
+  }, [awaitingCreation, cindyMakeInputLocked, confirmedSessionId, readOnly, session, worktreePreparing]);
 
   // If the user started typing while an optimistic side-chat fork was still in
   // flight, prewarm the child runtime the moment its real session id arrives.
   useEffect(() => {
-    if (awaitingCreation || !confirmedSessionId || !session?.workingDir || readOnly || cindyMakeInputLocked) return;
+    if (awaitingCreation || worktreePreparing || !confirmedSessionId || !session?.workingDir || readOnly || cindyMakeInputLocked) return;
     if (!typedWhileAwaitingCreationRef.current || deferredCreationSendRef.current) return;
     typedWhileAwaitingCreationRef.current = false;
     makerChatStore.prewarmSession(
@@ -4756,7 +4749,7 @@ function CCAgentSessionContent({
       session.permissionMode,
       session.workingDir,
     );
-  }, [awaitingCreation, cindyMakeInputLocked, confirmedSessionId, readOnly, session]);
+  }, [awaitingCreation, cindyMakeInputLocked, confirmedSessionId, readOnly, session, worktreePreparing]);
 
   const handleSend = useCallback(
     async (
@@ -4785,6 +4778,7 @@ function CCAgentSessionContent({
       },
     ) => {
       if (readOnly) return false;
+      if (sessionHandoffPreparing) return false;
       if (cindyMakeInputLocked) return false;
       if (creationFailed) return false;
       if (awaitingSessionCreation) {
@@ -4852,6 +4846,32 @@ function CCAgentSessionContent({
 
       if (!opts?.literalText && deliveryMode !== 'steer' && (await maybeShowContextUsage(message))) {
         return;
+      }
+
+      const acpCompactMatch =
+        pluginEngineTask && !opts?.literalText && deliveryMode !== 'steer' && compactChannelRef.current === 'compact-session'
+          ? message.trim().match(/^\/compact(?:\s+(.*))?$/s)
+          : null;
+      if (acpCompactMatch) {
+        if (!sessionId || isRunningRef.current) {
+          toast.warning(t('ccAgent.sidebar.sessionMenu.compactFailed'));
+          return false;
+        }
+        const instructions = acpCompactMatch[1]?.trim();
+        try {
+          const result = await makerApiForSticky(sessionId).compactSession(
+            sessionId,
+            instructions || undefined,
+          );
+          if (result?.noop) toast.info(t('ccAgent.sidebar.sessionMenu.compactNothing'));
+          else if (result) toast.success(t('ccAgent.sidebar.sessionMenu.compactSuccess'));
+          else toast.warning(t('ccAgent.sidebar.sessionMenu.compactFailed'));
+          return !!result;
+        } catch (err) {
+          log.warn('ACP /compact failed', err);
+          toast.warning(t('ccAgent.sidebar.sessionMenu.compactFailed'));
+          return false;
+        }
       }
 
       // Hermes-compatible Bot lifecycle: `/new` inside the fixed canonical
@@ -5028,9 +5048,6 @@ function CCAgentSessionContent({
       if (opts?.beforeEnqueue && !(await opts.beforeEnqueue())) return false;
       // Popover open → prevent re-entry
       if (folderPickerOpen) return false;
-      // 会话交接尚未完成(建 worktree / 远程开协同)时不放行:否则新输入会插到
-      // 草稿提交的首条之前,顺序倒置。
-      if (sessionHandoffPreparing) return false;
 
       const orcaLeadVendorOptions =
         sessionId && session !== null && isOrcaLeadSession(session)
@@ -6181,6 +6198,7 @@ function CCAgentSessionContent({
   // MessageStream 提成变量:perf/session-switch 的 <Profiler> 是纯诊断,只在 DEV
   // 包裹(见下方渲染处),生产直接渲染此 el,不引入多余 Profiler fiber。
   const sideChatCreatedAt = session?.source === 'side-chat' || session?.sideChatPromoted ? session.createdAt : undefined;
+  const firstMessagePreview = creationPreview?.message ?? (worktreeCreation?.status === 'creating' ? worktreeCreation.message : undefined);
   const sideChatMessages = useMemo(() => {
     const sideChatBoundaryMs = sideChatCreatedAt ? new Date(sideChatCreatedAt).getTime() : undefined;
     const visible = sideChatBoundaryMs !== undefined
@@ -6194,11 +6212,11 @@ function CCAgentSessionContent({
         : optimistic;
       return [clamped, ...visible];
     }
-    if (!sideChatCreatedAt && creationPreview && !visible.some(m => m.role === 'user') && pendingQueue.length === 0) {
-      return [creationPreview.message, ...visible];
+    if (!sideChatCreatedAt && firstMessagePreview && !visible.some(m => m.role === 'user') && pendingQueue.length === 0) {
+      return [firstMessagePreview, ...visible];
     }
     return visible;
-  }, [creationPreview, deferredCreationSend, messages, pendingQueue.length, sideChatCreatedAt]);
+  }, [firstMessagePreview, deferredCreationSend, messages, pendingQueue.length, sideChatCreatedAt]);
   // Once the first message has landed on the real forked child and the pending
   // draft is empty, hand draft ownership back to the canonical sessionId so
   // quote-to-chat and drag-drop use the child's normal key on Turn 2+.
@@ -6317,6 +6335,7 @@ function CCAgentSessionContent({
                   errorText={errorTailText}
                   dismissOnEscape={viewVisible && ownsHardwareTaskActions}
                   errorReason={errorTailMsg?.errorReason}
+                  reconnectHandoff={errorTailMsg?.reconnectHandoff}
                   toolLoop={errorTailMsg?.toolLoop}
                   outputLimit={errorTailMsg?.outputLimit}
                   onContinue={handleErrorTailContinue}
@@ -6392,6 +6411,7 @@ function CCAgentSessionContent({
                 error={error}
                 dismissOnEscape={viewVisible && ownsHardwareTaskActions}
                 errorReason={errorReason}
+                reconnectHandoff={reconnectHandoff}
                 toolLoop={toolLoop}
                 outputLimit={outputLimit}
                 isRecoverable={errorIsRecoverable}
@@ -6481,7 +6501,7 @@ function CCAgentSessionContent({
         ? (quote) => openSideChatTab(sessionId, { quote }) : undefined}
       cindyMakeSessionId={session?.source === 'cindy-make' ? sessionId : undefined}
       cindyMakeCompletionInComposer={session?.source === 'cindy-make' && (remoteMakeCards.supported || (!remoteDeviceId && !readOnly && typeof window.electronAPI.cindyMakeTest === 'function'))}
-      historyLoaded={historyLoaded || !!creationPreview || awaitingSessionCreation || creationFailed}
+      historyLoaded={historyLoaded || !!firstMessagePreview || awaitingSessionCreation || creationFailed}
       historyCleared={Boolean(session?.clearedAt)}
       taskUpdates={taskUpdates}
       subagentRunStatuses={subagentRunStatuses}
@@ -6728,10 +6748,17 @@ function CCAgentSessionContent({
           <Button variant="secondary" onClick={creationPreview.editAfterFailure}>{t('ccAgent.draft.directoryRecovery.edit')}</Button>
         </div>}
         {remoteLoading === 'loading' && <RemoteSessionLoading />}
-        {sessionId && !remoteDeviceId && !botChatIdentity && !creationPreview && !historyLoaded && !messages.length && !pendingQueue.length && (
+        {sessionId && !remoteDeviceId && !botChatIdentity && !firstMessagePreview && !historyLoaded && !messages.length && !pendingQueue.length && (
           <LocalHistoryLoading key={sessionId} sessionId={sessionId} />
         )}
-        {remoteLoading === 'inline-syncing' && <RemoteSessionLoading compact />}
+        {/* Split panes have their own header row above the chat content, so
+            only the window-level chat has to clear the floating corner actions. */}
+        {remoteLoading === 'inline-syncing' && (
+          <RemoteSessionLoading
+            compact
+            reserveCornerActions={ownsRoute && !compactToolbar && !inCompanionSplitPane}
+          />
+        )}
 
         {/* Full-area drop overlay.
           Keep the event-capture surface for the whole chat area, but leave the
@@ -7082,10 +7109,9 @@ function CCAgentSessionContent({
                  优先级 (高 → 低):
                    1. attached (远程接管中)  → TakeoverMask  (90px)
                    2. Cindy Make 准备 → 完整准备卡；开始修改后恢复普通输入
-                   3. worktreePreparing      → WorktreeCreatingOverlay (90px, 视觉同款)
                    4. 默认                    → ChatInput
                  Cindy Make 沿用输入框的背景与边框，准备详情限高滚动；
-                 接管与 worktree 创建继续使用 90px 状态框。 */}
+                 工作区准备期间仍可编辑草稿。 */}
               {!isSharedTaskPeer(remoteDeviceId ?? '') && (pendingPlanReview ||
               pendingPermission ||
               (pendingAskUser && askUserViewerState !== 'minimized') ||
@@ -7117,11 +7143,6 @@ function CCAgentSessionContent({
                   onContinue={() =>
                     cindyMakeEditing.continueEditing(cindyMakePendingTest.completionId)
                   }
-                />
-              ) : worktreePreparing && smoothedBranchName ? (
-                <WorktreeCreatingOverlay
-                  branchName={smoothedBranchName}
-                  startedAt={worktreeCreation?.status === 'creating' ? worktreeCreation.startedAt : undefined}
                 />
               ) : shareSelectionActive && sessionId ? (
                 <ShareSelectionBar
@@ -7196,8 +7217,12 @@ function CCAgentSessionContent({
                   initialEffort={session?.effort}
                   initialPermissionMode={session?.permissionMode}
                   planModeEnabled={planModeEnabled}
-                  // 插件引擎没有计划模式与 Fast。
-                  onPlanModeChange={pluginEngineTask ? undefined : setPlanMode}
+                  // 插件引擎按其上报的 permissionModes（含 plan）开放计划模式；仍无 Fast。
+                  onPlanModeChange={
+                    pluginEngineTask
+                      ? (pluginEngine?.permissionModes?.some((mode) => mode.id === 'plan') ? setPlanMode : undefined)
+                      : setPlanMode
+                  }
                   pluginSkillSetup={pluginSkillSetup}
                   fastMode={fastMode}
                   onFastModeChange={pluginEngineTask ? undefined : setFastMode}
@@ -7206,10 +7231,10 @@ function CCAgentSessionContent({
                   isAgentBusy={isAgentBusy}
                   onStop={handleStopSession}
                   pendingQueue={pendingQueue}
-                  sendBlocked={!!creationPreview || creationFailed || Boolean(deferredCreationSend)}
+                  sendBlocked={sessionHandoffPreparing || creationFailed || Boolean(deferredCreationSend)}
                   disabled={readOnly || remoteHandoffPreparing || session?.source === 'review'}
                   settingsLocked={
-                    readOnly || !!creationPreview || awaitingSessionCreation || creationFailed || session?.source === 'review' || Boolean(activeQueueComposerEdit)
+                    readOnly || sessionHandoffPreparing || awaitingSessionCreation || creationFailed || session?.source === 'review' || Boolean(activeQueueComposerEdit)
                   }
                   queueEditingClientId={activeQueueComposerEdit?.clientId ?? null}
                   onQueueEditSubmit={submitQueueComposerEdit}
@@ -7240,8 +7265,7 @@ function CCAgentSessionContent({
                   onComposerDropHandled={resetFullAreaDragState}
                   vendorKey={normalizeDbAgentKind(displayAgentKind)}
                   extraDirs={session?.extraDirs ?? []}
-                  // 插件引擎只拿到任务工作目录(docs/plans/acp-plugin-bridge.md)：不给附加目录入口。
-                  onExtraDirsChange={pluginEngineTask ? undefined : handleExtraDirsChange}
+                  onExtraDirsChange={handleExtraDirsChange}
                   writableDirs={session?.writableDirs ?? []}
                   writableGrantScope={sessionId}
                   onWritableDirsChange={
@@ -7263,9 +7287,8 @@ function CCAgentSessionContent({
                   // (worker 自己不能再开协同)。
                   // orcaMode 路由下也保留显示 — ON 态菜单项本身就是
                   // 关闭按钮 (点击触发 onChange({enabled:false}),走 requestStopCollab)。
-                  // 插件引擎任务不支持协同(主进程同样拒绝)：不给入口。
                   collaboration={
-                    !pluginEngineTask && (allowCollabToggle || (orcaMode && collabEnabled))
+                    (allowCollabToggle || (orcaMode && collabEnabled))
                       ? {
                           enabled: collabEnabled,
                           worker: collabWorker,
@@ -7341,7 +7364,7 @@ function CCAgentSessionContent({
                   click 区域宽度与文本一致(不拉伸到整行) */}
                   {creationPreview && !creationPreview.editAfterFailure ? (
                     <span role="status" className="inline-flex items-center gap-1.5 text-12 text-muted-foreground">
-                      <Spinner size={12} />{t('goal.newGoalDialog.starting')}
+                      <Spinner size={12} />{localCreationPreview ? t('ccAgent.layout.worktreeCreating') : t('goal.newGoalDialog.starting')}
                     </span>
                   ) : worktreeCreation?.status === 'creating' ? (
                     <div className="flex min-w-0 items-center gap-1.5">
@@ -7483,7 +7506,7 @@ function CCAgentSessionContent({
                         // (与 SessionContentHeader 的 runningSessionIds 一致,codex P1);
                         // claude-input 保留旧行为(turn 中可走 inputCoordinator)。
                         !readOnly &&
-                        !pluginEngineTask && compactChannel !== null &&
+                        compactChannel !== null &&
                         !(compactChannel === 'compact-session' && !!session?.remoteHostId) &&
                         session != null &&
                         agentStatus.contextTokens > 0 &&

@@ -8,7 +8,7 @@
  */
 import { redactSensitiveText } from '@cindy/maker-shared/error-redaction';
 import { redactLocalPathText } from '../maker-ipc/coldPiRehydrationFailure.js';
-import type { TaskDigestPhase, TaskDigestRoute, TaskDigestWire } from '@cindy/mcps';
+import type { TaskDigestCurrentRoute, TaskDigestPhase, TaskDigestRoute, TaskDigestWire } from '@cindy/mcps';
 import type { WatchedSession } from '../../shared/botAutonomy.js';
 
 type Failure = { ok: false; errorCode: 'NOT_FOUND' | 'REMOTE_UNAVAILABLE' | 'INVALID_ARGS' | 'HOST_NOT_READY' | 'INTERNAL'; message: string };
@@ -17,7 +17,7 @@ export interface TaskDigestSessionFacts {
   pinned?: boolean;
   title: string;
   status: string;
-  route: TaskDigestRoute | null;
+  route: TaskDigestCurrentRoute | null;
   /** 共享给访客的任务(来源 shared):摘要不带对话原文。 */
   shared?: boolean;
   clearedAt?: number | null;
@@ -30,7 +30,7 @@ export interface TaskDigestActivity {
   startedAtMs?: number | null;
   lastActivityAtMs?: number | null;
   runtimeGeneration?: number | null;
-  route?: TaskDigestRoute | null;
+  route?: TaskDigestCurrentRoute | null;
 }
 
 export interface TaskDigestExchange {
@@ -243,7 +243,7 @@ export function createTaskDigestReader(deps: TaskDigestDeps) {
       ? await settle(() => deps.local.readError?.(key, activity, facts) ?? Promise.resolve(null), null)
       : null;
     // 换模型只用来救出错和用量上限(跟进规则也只在这两种相位用它);其余相位不给建议。
-    const suggestedRoute = current && (phase === 'errored' || phase === 'usage-limit')
+    const suggestedRoute = current && current.harness !== 'acp' && (phase === 'errored' || phase === 'usage-limit')
       ? await settle(() => deps.local.suggestRoute({
         callerSessionId: args.callerSessionId,
         targetSessionId: key,
@@ -339,7 +339,9 @@ export function sessionFactsFromRow(row: unknown): TaskDigestSessionFacts | null
   const record = row as Record<string, unknown>;
   const text = (value: unknown) => (typeof value === 'string' && value.trim() ? value.trim() : null);
   const agentKind = text(record.agentKind);
-  const harness = agentKind === 'codex' || agentKind === 'pi' ? agentKind : agentKind ? 'claude-code' : null;
+  const harness = agentKind === 'codex' || agentKind === 'pi' || agentKind === 'acp'
+    ? agentKind
+    : agentKind ? 'claude-code' : null;
   const model = text(record.model);
   // local DB rows use unix ms; the existing remote session mapper returns ISO.
   const clearedAt = typeof record.clearedAt === 'number' ? record.clearedAt
