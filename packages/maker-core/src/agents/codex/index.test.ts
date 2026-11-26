@@ -38227,7 +38227,7 @@ describe('resumed Orca Lead readiness', () => {
         }
         expect(resumeCounts).toEqual(mode === 'persistent' ? [2, 2, 3, 3] : Array(4).fill(['failed', 'orca-probe-error', 'promoted'].includes(mode) ? 2 : 1));
         expect(probes.filter(name => name === 'cindy_orca')).toHaveLength(
-          { ready: 1, failed: 3, absent: 1, persistent: 5, disabled: 0, ordinary: 0, 'orca-probe-error': 5, promoted: 2, timeout: 4 }[mode]);
+          { ready: 1, failed: 3, absent: 1, persistent: 5, disabled: 0, ordinary: 0, 'orca-probe-error': 4, promoted: 2, timeout: 3 }[mode]);
         expect(host.request.mock.calls.filter(([method]) => method === Method.TurnStart).map(([, params]) => params))
           .toMatchObject(inputs.map(text => ({ threadId, input: [{ type: 'text', text }] })));
         await handle.close();

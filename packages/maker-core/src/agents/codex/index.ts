@@ -7486,6 +7486,9 @@ assertRouteCurrent();
       }
       if (closed || threadId !== checkedThreadId || !isCurrentHost()
         || JSON.stringify(expectedRuntimeMcpConfig()) !== JSON.stringify(mcpConfig)) return;
+      if (reports?.has('cindy_orca') && !reports.get('cindy_orca') && Date.now() >= orcaProbeNotBefore) {
+        orcaProbeNotBefore = Date.now() + 30_000;
+      }
       expectedMcpNeedsRecheck = !reports || [...reports.values()].some(report => !report || report.state === 'failed' || report.state === 'pending');
       // A healthy helper does not prove that the plugin gateway initialized.
       // Keep its independently failed client eligible for the same cold resume.
@@ -8311,9 +8314,6 @@ assertRouteCurrent();
           assertRecoveryCurrent();
           await reportExpectedRuntimeMcpAvailability(reports, recoverySignal);
           assertRecoveryCurrent();
-          if (reports.has('cindy_orca') && !reports.get('cindy_orca') && Date.now() >= orcaProbeNotBefore) {
-            orcaProbeNotBefore = Date.now() + 30_000;
-          }
           if (![...reports.values()].some(report => report?.state === 'failed')) {
             const onlyOrcaNeedsRecheck = reports.has('cindy_orca') && !reports.get('cindy_orca')
               && [...reports].every(([name, report]) => name === 'cindy_orca' || (report && report.state !== 'pending'));
