@@ -15,6 +15,7 @@ import { gzip } from 'node:zlib';
 import {
   DeviceLinkError,
   REMOTE_AGENT_CHANNEL,
+  REMOTE_AGENT_INVOKE_TIMEOUT_MS,
   REMOTE_AGENT_MAX_INLINE_PAYLOAD_CHARS,
   REMOTE_AGENT_MAX_PAYLOAD_BYTES,
   REMOTE_AGENT_MAX_UPLOAD_CHUNKS,
@@ -122,6 +123,32 @@ export interface RemoteAgentRunHandlers {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isInvokeResultTimeout(error: unknown): error is Error {
+  if (!(error instanceof Error) || error.name === 'AbortError') return false;
+  const transport = error instanceof DeviceLinkError ? error : error.cause;
+  if (transport instanceof DeviceLinkError && transport.inFlight === false) return false;
+  const code = (error as { code?: unknown }).code;
+  return code === 'INVOKE_TIMEOUT'
+    || ((code === undefined || code === 'IPC_ERROR')
+      && /^(?:\[REMOTE_AGENT_TIMEOUT\] )?\[INVOKE_TIMEOUT\]/.test(error.message));
+}
+
+/** One more poll response may carry the business result independently of the missing receipt. */
+async function waitForStreamResult<T>(result: Promise<T>, timeout: Error, signal?: AbortSignal): Promise<T> {
+  const deadline = Promise.withResolvers<never>();
+  // Cancellation stops waiting. The original timeout retains the unknown delivery outcome.
+  const stopWaiting = () => deadline.reject(timeout);
+  const timer = setTimeout(stopWaiting, REMOTE_AGENT_INVOKE_TIMEOUT_MS);
+  if (signal?.aborted) stopWaiting();
+  else signal?.addEventListener('abort', stopWaiting, { once: true });
+  try {
+    return await Promise.race([result, deadline.promise]);
+  } finally {
+    clearTimeout(timer);
+    signal?.removeEventListener('abort', stopWaiting);
+  }
 }
 
 export class RemoteAgentRunClient implements PolledRun {
@@ -353,12 +380,18 @@ export class RemoteAgentRunClient implements PolledRun {
         },
       });
       if (method === 'send') this.handlers.onSend?.();
-      await delivery;
-    } catch (error) {
+      try {
+        await delivery;
+      } catch (error) {
+        if (!isInvokeResultTimeout(error)) throw error;
+        // The peer may have handled this call already. Keep its callId attached
+        // to the existing poll stream, including a result received before the timeout.
+        return await waitForStreamResult(result, error, signal);
+      }
+      return await result;
+    } finally {
       this.pendingCalls.delete(callId);
-      throw error;
     }
-    return result;
   }
 
   /**
@@ -599,7 +632,9 @@ export function remoteAgentLinkError(error: { code?: string; message?: string } 
   const causeCode = typeof code === 'string' && code !== 'IPC_ERROR' ? code : envelopeCode;
   const displayCode = remoteAgentLinkGuidanceCode(causeCode);
   const diagnostic = displayCode && causeCode && envelopeCode !== causeCode ? `[${causeCode}] ${message}` : message;
-  const keepRemoteError = !displayCode && /^\[REMOTE_[A-Z_]+\]/.test(message);
+  const keepRemoteError = ((code === 'ACCESS_REVOKED' || code === 'REMOTE_DISABLED')
+    && envelopeCode?.startsWith('REMOTE_AGENT_SHARE_') === true)
+    || (!displayCode && /^\[REMOTE_[A-Z_]+\]/.test(message));
   // The requested route may be a share/group rather than a resolved computer.
   // Report only this known reference and channel, not a guessed name or status.
   const context = target ? `\nrequestedTarget=${shortDeviceRef(target)}; channel=${REMOTE_AGENT_CHANNEL}` : '';

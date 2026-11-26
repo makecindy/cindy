@@ -28,6 +28,11 @@ Claude Code、Codex、Pi 共用 Maker 的启动失败清理契约：只有明确
 当作进程退出，也不触发只允许真实退出证明的自动重试。清理未确认时继续保留保护，通过
 `AgentStartupCleanupPendingError.whenStopped` 接收同 owner 的实际清理／移交或进程退出证明。
 
+Codex handle 关闭、终止或未交付的启动清理时，除注销线程身份，还须通过
+`closeCodexMcpSessionInstance` 释放该实例的 MCP HTTP transports；不能依赖客户端发送 DELETE。
+Desktop 与 Node Host 共用此回收入口。线程替换、rewind 或 fork 仍沿用当前实例时只更新
+线程身份，不释放实例连接，也不影响兄弟任务；实例连接回收不代表原生线程已卸载。
+
 本地 SDK 已接收启动调用、已观察到进程创建、或远端启动请求已发出后，普通异常不是
 退出证明。Pi 在 transport 已创建而 RPC 包装器构造失败时，也必须关闭已取得的
 transport；关闭未确认时复用原有隔离清理记录和 `AgentStartupCleanupPendingError`，
@@ -186,6 +191,12 @@ Claude Code 的 `upstream-idle-watchdog.test.ts` 与 desktop 的 `tool-loop-revi
 
 ## 上下文已满时的引擎边界
 
+Claude Code 切换模型／供应商时，当前或目标窗口、占用读数缺失不作为拒绝选择的理由：
+保留原生历史并尝试所选路由，真实超限沿用已有 overflow 恢复。目标窗口与占用已知且达到
+交接阈值时，按目标压力交接，不要求旧模型窗口可查，也不要求目标比旧窗口更小。
+主人从另一设备控制任务电脑不等于 SSH 执行：任务电脑能本地完成交接时直接准备并续接，
+不因控制入口来自远端报“不支持重建”。SSH 执行与 Pi 运行时核验边界保持各自语义。
+
 Claude Code 在同一模型上达到设置页自动压缩阈值且尚未满窗时，由 host 注入 `/compact`；
 Desktop 的压缩比例按供应商与模型统一（默认 90%），所有 Harness 共用，旧全局偏好不再生效。
 Pi 在启动或恢复时将模型比例写成原生 `compaction.reserveTokens` / `modelOverrides`，由 Pi 按
@@ -194,6 +205,10 @@ Pi 在启动或恢复时将模型比例写成原生 `compaction.reserveTokens` /
 UI、usage 与 digest 投影，不再向 Pi 注入 host 自动 compact RPC。
 
 ### 重放预算
+
+容量元数据回查与选模共用已声明的 wire 前缀／桥接名称候选，精确条目优先；来源推断、
+容量上限和任务预算收敛采用同一匹配。匹配仍限于指定供应商与 Harness，不剥 `[1m]`
+合并不同窗口商品；重复或多来源候选保持未知，显示兜底值不因此变成已核实容量。
 
 宿主按实际目标 Harness、模型、供应商和执行电脑核实窗口。目录条目须标记 `contextWindowVerified: true`，
 任务和模型级工作预算只在已核实路由上参与窗口收敛。旧版目录缺字段、供应商未申报窗口、远程目录只剩缓存、
@@ -493,7 +508,13 @@ handle 的只读 `isPreparingUserTurn()`，使用 `bridge_turn_no_event_timeout`
 自动 CONTINUE 保留原请求的 Plan 与权限选项；超时恢复不等于 ExitPlanMode 批准，
 不得强制 planMode=false。若原计划已批准后执行失败，缺少可靠的审批周期记录时仍保守
 保留原 Plan 选项，可能重新进入计划模式；不为避免重入新增审批状态。人工 Retry 沿用
-既有合成 UI 动作策略，本自动恢复修复不调整该策略。
+既有合成 UI 动作策略；Codex 重连超时后的人工继续同样保留原计划选项。
+
+Codex 重连超时后，宿主在发给模型的续跑消息中说明断线原因。收到工具错误时，模型可从
+原有的工具结果继续诊断；工具已开始但尚未收到结果时，先核对实际状态，避免重复执行。
+普通任务自动续跑后，如果没有新的实质产出就再次发生同样的重连超时，交给用户处理。
+有新的可见文本或工具调用时可再次恢复，仍受当前任务的自动恢复总预算约束。已配置的
+模型组沿用自己的重试和切换规则。
 退避窗口内 provider / Session 因 stall abort 复核、terminal-error drain
 或 interrupt ACK 失败而 `unexpected` close 时，必须用实例 + attemptToken 精确保留交棒，
 不得 teardown 已批准的自动续跑——包括 timer 已 fire、CONTINUE 已因 SESSION_RUNNING

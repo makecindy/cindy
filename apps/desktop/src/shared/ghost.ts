@@ -7675,7 +7675,8 @@ export const GHOST_NODE_REQUEST_MAX_TOTAL_MS = 15 * 60_000;
 
 /** Public artifact download; results deliberately exclude host filesystem paths. */
 export type GhostPipeDownloadRequest =
-  | { type: 'download-request'; kind: 'start'; id: string; url: string; sha256: string; bytes: number }
+  /** `bytes` may be omitted when only the SHA-256 is published; the response must then declare the size. */
+  | { type: 'download-request'; kind: 'start'; id: string; url: string; sha256: string; bytes?: number }
   | { type: 'download-request'; kind: 'cancel'; id: string };
 
 export type GhostPipeDownloadResult =
@@ -8047,6 +8048,21 @@ export interface GhostPipeBrowserExtensionRelay {
  */
 export type GhostPipeTaskViewResult =
   | { ok: true; sessionId: string; focusRequested?: true }
+  | {
+      ok: false;
+      errorCode: 'PERMISSION_DENIED' | 'INVALID_REQUEST' | 'HOST_NOT_READY' | 'INTERNAL';
+      message: string;
+    };
+
+export interface GhostPipeSessionStateRequest {
+  type: 'session-state-request';
+  sessionIds: string[];
+}
+
+export type GhostSessionState = 'active' | 'archived' | 'deleted' | 'out_of_scope';
+
+export type GhostPipeSessionStateResult =
+  | { ok: true; sessions: Array<{ sessionId: string; status: GhostSessionState }> }
   | {
       ok: false;
       errorCode: 'PERMISSION_DENIED' | 'INVALID_REQUEST' | 'HOST_NOT_READY' | 'INTERNAL';

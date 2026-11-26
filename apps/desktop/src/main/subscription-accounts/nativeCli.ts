@@ -3,6 +3,7 @@ import { desktopMakerLogger } from '../maker-host/logger-adapter.js';
 import { spawn } from 'node:child_process';
 import { homedir } from 'node:os';
 import path from 'node:path';
+import { codexAccountDisplayKey, codexWorkspaceIdFromTokens } from '../maker-host/codex-auth-identity.js';
 import { open } from 'node:fs/promises';
 import { statSync, type Stats } from 'node:fs';
 import { cleanProcessEnv, type AccountRateLimitsResponse, type AuthState } from '@cindy/maker-core';
@@ -115,6 +116,22 @@ export async function readNativeAccount(
   return parseNativeCodexAccount(await codexAccountRpc(directory, 'account/read', { refreshToken: false }, options?.codexCanDispatch));
 }
 
+/** Verify the current CLI identity without fetching quota or opening a browser. */
+export async function readExistingLogin(provider: SubscriptionProvider, directory: string) {
+  const auth = await readNativeAccount(provider, directory, { force: true });
+  const identity = auth.identity?.trim();
+  if (!auth.authenticated || !identity || identity.length > 320) return null;
+  let accountKey: string | undefined;
+  if (provider === 'openai') {
+    const tokens = await readNativeCodexTokens(directory);
+    if (!tokens.canDispatch()) return null;
+    accountKey = codexAccountDisplayKey(identity, tokens.chatgptAccountId);
+    if (!accountKey) return null;
+  }
+  return { login: { directory, identity, ...(accountKey ? { accountKey } : {}) },
+    plan: auth.planDisplayName ?? auth.planType ?? auth.plan };
+}
+
 function parseNativeCodexAccount(value: unknown): AuthState & { plan?: string; planType?: string } {
   const result = value as {
     account?: { type?: string; email?: string; planType?: string } | null;
@@ -217,6 +234,17 @@ export async function readNativeCodexTokens(directory: string, refresh = false) 
       if (codexRefreshes.get(directory) === pending) codexRefreshes.delete(directory);
     }
   }
+  const tokens = await readCodexTokenFile(directory, false);
+  if (!tokens.accessToken || tokens.chatgptAccountId === null) throw new Error('Codex account authentication bridge is unavailable');
+  return { ...tokens, accessToken: tokens.accessToken, chatgptAccountId: tokens.chatgptAccountId };
+}
+
+/** WHAM can read usage without a workspace header; the external-auth bridge requires one. */
+export function readCodexWebTokens(directory: string) {
+  return readCodexTokenFile(directory, true);
+}
+
+async function readCodexTokenFile(directory: string, webUsage: boolean) {
   const authPath = path.join(directory, 'auth.json');
   const file = await open(authPath, 'r');
   const sameFile = (a: Stats, b: Stats) =>
@@ -238,16 +266,19 @@ export async function readNativeCodexTokens(directory: string, refresh = false) 
         return false;
       }
     };
-    if (
-      !sameFile(before, after) ||
-      !canDispatch() ||
-      typeof raw.tokens?.access_token !== 'string' ||
-      typeof raw.tokens?.account_id !== 'string'
-    )
+    if (!sameFile(before, after) || !canDispatch())
+      throw new Error('Codex account authentication bridge is unavailable');
+    const hasApiKey = typeof raw.OPENAI_API_KEY === 'string' && raw.OPENAI_API_KEY.trim().length > 0;
+    if (webUsage && (raw.auth_mode === 'apikey' || (raw.auth_mode == null && hasApiKey && !raw.tokens?.access_token))) {
+      if (!hasApiKey) throw new Error('Codex account authentication bridge is unavailable');
+      return { accessToken: null, chatgptAccountId: null, canDispatch };
+    }
+    if (typeof raw.tokens?.access_token !== 'string' || !raw.tokens.access_token)
       throw new Error('Codex account authentication bridge is unavailable');
     return {
       accessToken: raw.tokens.access_token as string,
-      chatgptAccountId: raw.tokens.account_id as string,
+      chatgptAccountId: webUsage ? codexWorkspaceIdFromTokens(raw.tokens)
+        : typeof raw.tokens.account_id === 'string' ? raw.tokens.account_id as string : null,
       canDispatch,
     };
   } finally {

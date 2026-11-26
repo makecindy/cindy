@@ -4,7 +4,7 @@ import remarkParse from 'remark-parse';
 import remarkGfm from 'remark-gfm';
 import { visit } from 'unist-util-visit';
 import type { Definition } from 'mdast';
-import { findBareSpaceLocalImages } from '../../shared/bareSpaceLocalImages.js';
+import { recoverBareSpaceLocalImages } from '../../shared/bareSpaceLocalImages.js';
 
 const parser = unified().use(remarkParse).use(remarkGfm);
 
@@ -21,7 +21,7 @@ export interface TaskImageReference {
 /**
  * Parse Markdown, rather than treating examples in code or HTML as deliveries.
  * Local destinations with bare spaces are not CommonMark images; they are
- * recovered from plain text nodes only, with offsets in the original text.
+ * recovered from the inline source, with offsets in the original text.
  */
 export function taskImageReferences(text: string): TaskImageReference[] {
   if (!text.includes('![')) return [];
@@ -47,25 +47,9 @@ export function taskImageReferences(text: string): TaskImageReference[] {
         end,
       });
   });
-  visit(tree, 'text', (node, _index, parent) => {
-    if (parent?.type === 'link' || parent?.type === 'linkReference') return;
-    const start = node.position?.start.offset;
-    const end = node.position?.end.offset;
-    if (start === undefined || end === undefined) return;
-    // Scan the source span, not the decoded value: entities (`&amp;`) elsewhere in
-    // the node must not hide an image, and an escaped `\![` must stay literal.
-    const source = text.slice(start, end);
-    for (const image of findBareSpaceLocalImages(source)) {
-      images.push({
-        raw: source.slice(image.start, image.end),
-        url: image.url,
-        alt: image.alt,
-        title: image.title,
-        start: start + image.start,
-        end: start + image.end,
-      });
-    }
-  });
+  for (const image of recoverBareSpaceLocalImages(tree, text)) {
+    images.push({ ...image, raw: text.slice(image.start, image.end) });
+  }
   return images.sort((a, b) => a.start - b.start);
 }
 

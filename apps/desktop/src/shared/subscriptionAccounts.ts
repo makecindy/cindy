@@ -1,6 +1,7 @@
 import type { GhostHarnessAccountMethod, GhostHarnessUsage } from '@cindy/plugin-protocol';
 import type { ProviderGroupStrategy } from './providerGroup.js';
 import type { ClaudeSubscriptionUsageSnapshot } from './claudeSubscriptionUsage.js';
+import type { OpenAiGroupAccount } from './openAiAccountGroup.js';
 
 export const SUBSCRIPTION_ACCOUNTS_CHANNEL = 'maker:subscription-accounts';
 export const SUBSCRIPTION_ACCOUNTS_CHANGED = 'subscription-accounts:changed';
@@ -39,7 +40,28 @@ export const CODEX_POOL_RESET_PREFIX = 'openai-account:';
 export function codexResetScope(accountId: string): string {
   return accountId === 'default' ? 'openai' : `${CODEX_POOL_RESET_PREFIX}${accountId}`;
 }
+export const EXISTING_LOGIN_REVIEW_TTL_MS = 10 * 60_000;
+export interface ExistingLogin {
+  connected?: boolean;
+  identity: string;
+  directory: string;
+  plan?: string;
+  /** Receipt binds the reviewed identity, directory, provider and current Cindy owner. */
+  receipt: string;
+}
+export interface ExistingLoginResult { computer: string; candidates: ExistingLogin[]; canceled?: boolean }
+export type ExistingLoginRequest =
+  | { action: 'discover-logins' | 'pick-login'; providerId: SubscriptionProvider }
+  | { action: 'attach-login'; providerId: SubscriptionProvider; receipt: string };
+
+export interface LinkedLogin {
+  directory: string;
+  identity: string;
+  /** Codex also pins the ChatGPT workspace. */
+  accountKey?: string;
+}
 export interface SubscriptionAccountConfig {
+  linkedLogin?: LinkedLogin;
   id: string;
   /** Last identity confirmed by the official CLI, retained across logout/restart. No credentials. */
   lastConfirmedIdentity?: string;
@@ -53,6 +75,10 @@ export interface SubscriptionAccountConfig {
   weight: number;
 }
 export interface SubscriptionPoolConfig {
+  /** Directory hashes the owner has removed; manual reconnection is still available. */
+  dismissedLogins?: string[];
+  /** Owner-local Claude transcript locations, retained only for native history lookups. */
+  removedClaudeHistoryDirectories?: Record<string, string>;
   disconnected?: boolean;
   /** Upgrade-only: preserve an already authorized private Cindy Codex home. */
   legacyCodexDefault?: boolean;
@@ -87,7 +113,8 @@ export interface SubscriptionAccountUsage {
     credits: { hasCredits: boolean; unlimited: boolean; balance: string | null } | null;
   };
 }
-export interface SubscriptionAccountView extends Omit<SubscriptionAccountConfig, 'lastConfirmedIdentity' | 'reloginIdentity'> {
+export interface SubscriptionAccountView extends Omit<SubscriptionAccountConfig, 'lastConfirmedIdentity' | 'reloginIdentity' | 'linkedLogin'> {
+  apiKey?: { connectionId: string; checks: NonNullable<OpenAiGroupAccount['checks']> };
   /** Owner-only verified account/workspace digest, for duplicate quota presentation. */
   accountKey?: string;
   legacy?: boolean;
@@ -170,6 +197,7 @@ export type SubscriptionAccountCommand =
   | { action: 'login'; providerId: string; accountId: string; loginKey: string; methodId?: string; secret?: string }
   | { action: 'cancel'; providerId: string; loginKey: string }
   | { action: 'remove'; providerId: string; accountId: string }
+  | { action: 'reorder'; providerId: string; accountIds: string[] }
   | {
       action: 'configure';
       providerId: string;

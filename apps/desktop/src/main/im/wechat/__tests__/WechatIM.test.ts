@@ -1,3 +1,4 @@
+import { getEventListeners } from 'node:events';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
@@ -83,6 +84,31 @@ describe('WechatIM host boundary', () => {
         contextNonce: context.nonce, contextCiphertext: context.ciphertext, contextTag: context.tag });
       expect(await pending).toBeNull();
     } finally { await im.dispose(); }
+  });
+
+  // #12845, unit: an idle connection keeps polling. Completed waits must release
+  // their abort listeners before disconnect, which the reconnect tests do not check.
+  it('keeps abort listeners bounded across idle polling cycles', async () => {
+    vi.useFakeTimers();
+    const { im, transport, db } = restoredConnection(() => 0);
+    try {
+      await im.init();
+      await vi.advanceTimersByTimeAsync(0);
+      const signal = vi.mocked(transport.poll).mock.calls[0]![1];
+      const listenerCount = () => getEventListeners(signal, 'abort').length;
+      const initialCount = listenerCount();
+      const leases = () => vi.mocked(db.tx).mock.calls.filter(([name]) => name === 'wechatLeaseNextTask').length;
+      const initialLeases = leases();
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(leases()).toBeGreaterThan(initialLeases);
+      expect(listenerCount()).toBe(initialCount);
+      await im.dispose();
+      expect(signal.aborted).toBe(true);
+      expect(listenerCount()).toBe(0);
+    } finally {
+      await im.dispose();
+      vi.useRealTimers();
+    }
   });
 
   it('clears reconnecting after an empty successful poll', async () => {

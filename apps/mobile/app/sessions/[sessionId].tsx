@@ -196,6 +196,8 @@ import { createTransientTopicSubscriptionCoordinator } from '@/device-link/trans
 import { useMobileMakerTransport } from '@/device-link/useMobileMakerTransport';
 import { findRemoteHistoryView, useRemoteHistoryView } from '@/session/remoteHistoryView';
 import { HistoryViewHandoff, historyAfter, isHistoryViewUnavailable } from '@cindy/maker-shared/message-window';
+import { ErrorNotice, ErrorNoticeAction } from '@/components/ErrorNotice';
+import { readPendingSideChats, runSideChatCreation, sideChatErrorKey, startSideChatCreation } from '@/session/sideChatCreation';
 import { SideChatsSheet } from '@/session/SideChatsSheet';
 import { useSideChatCount } from '@/session/useSideChatCount';
 import { SessionTaskLayout, type SessionTaskChrome } from '@/session/SessionTaskLayout';
@@ -1275,10 +1277,11 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
   // A failed roster read leaves presence unknown after reconnect. Allow the
   // existing link/subscription path to establish reachability instead of
   // blocking both history and sync until a presence change happens to arrive.
-  const remoteHistoryAvailable = status === 'online' && getPresenceAvailability(deviceId) !== false;
+  const currentSession = useRemoteSessionDetail(deviceId, sessionId);
+  const sideChatPending = currentSession?.source === 'side-chat' && currentSession.pendingLocalCreation === true;
+  const remoteHistoryAvailable = !sideChatPending && status === 'online' && getPresenceAvailability(deviceId) !== false;
   // Unknown presence while connecting is loading, not evidence of a lost computer.
   const showCachedHistoryNotice = shouldShowCachedHistoryNotice(status, getPresenceAvailability(deviceId));
-  const currentSession = useRemoteSessionDetail(deviceId, sessionId);
   const sideChatParent = useRemoteSessionDetail(deviceId, currentSession?.source === 'side-chat' ? (currentSession.parentSessionId ?? '')
       : '');
   const sideChatBoundary = mobileSessionHistoryBoundary(currentSession);
@@ -1286,7 +1289,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     () => messageScreenFocusedRef.current && messageAppActiveRef.current, remoteHistoryAvailable);
   const historyView = useMemo(() => ({ ...unfilteredHistoryView,
     snapshot: historyAfter(unfilteredHistoryView.snapshot, sideChatBoundary)!,
-  }), [unfilteredHistoryView.view, unfilteredHistoryView.snapshot, sideChatBoundary]);
+  }), [unfilteredHistoryView.view, unfilteredHistoryView.snapshot, unfilteredHistoryView.cacheRestoring, sideChatBoundary]);
   useEffect(() => {
     if (messageScreenFocusedRef.current && messageAppActiveRef.current) historyView.view.setActive(true);
   }, [connectionEpoch, messageReloadRevision, historyView.view]);
@@ -2300,6 +2303,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
   const openCollabSession = useCallback((
     targetSessionId: string,
     target?: { deviceId: string; deviceName?: string | null },
+    focusComposer = false,
   ) => {
     if (!deviceId || !targetSessionId) return;
     // 在另一台电脑运行的 Worker 打开那台上的真实任务；其余沿用当前电脑。
@@ -2314,6 +2318,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
           sessionId: target.sessionId,
           deviceId: target.deviceId,
           deviceName: target.deviceName,
+          ...(focusComposer ? { focusComposerRequestKey: target.sessionId } : {}),
         }),
         dismissTo: (target) => router.dismissTo({
           pathname: '/sessions/[sessionId]',
@@ -3527,9 +3532,14 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
   // 开始打字（含粘贴）或开始语音输入时请被控端提前启动 Agent，把冷启动藏进输入时间。同一任务 30 秒最多提醒一次；
   // 任务在跑、在排队编辑或旧被控端不支持时什么都不做。
   const lastAgentPrewarmRef = useRef<{ at: number; settings: string } | null>(null);
+  const pendingSideChatTypingRef = useRef<string | null>(null);
   const prewarmAgentOnTyping = useCallback(() => {
     if (queueEditingRef.current) return;
     const session = remoteSessionStore.getSessions().find((item) => item.id === sessionId) ?? currentSession;
+    if (session?.source === 'side-chat' && session.pendingLocalCreation) {
+      pendingSideChatTypingRef.current = sessionId;
+      return;
+    }
     if (!session?.workingDir || remoteSessionStore.isSessionRunning(sessionId)) return;
     // 插件引擎任务(或待切到插件引擎)不预热：插件引擎由下一条消息启动(与 Desktop 一致)。
     if (isPluginEngineSessionKind(session.agentKind) || session.pluginEngineSwitchIntent) return;
@@ -4358,6 +4368,17 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     () => requestSync({ reason: 'passive-refresh' }),
     [requestSync],
   );
+  const pendingSideChatIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    const wasPending = pendingSideChatIdRef.current === sessionId;
+    pendingSideChatIdRef.current = sideChatPending ? sessionId : null;
+    if (!wasPending || sideChatPending || !messageScreenFocusedRef.current || !messageAppActiveRef.current) return;
+    void load();
+    if (pendingSideChatTypingRef.current === sessionId) {
+      pendingSideChatTypingRef.current = null;
+      if (composerDocumentHasContent(composerDocumentRef.current)) prewarmAgentOnTyping();
+    }
+  }, [sideChatPending, sessionId, load, prewarmAgentOnTyping]);
   useEffect(() => {
     if (messageReloadRevision === 0) return;
     if (handledMessageReloadRevisionRef.current === messageReloadRevision) return;
@@ -5677,11 +5698,15 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     refreshKey: `${connectionEpoch}:${sideChatsOpen}`,
   });
   const openSideChat = useCallback((row: RemoteSession) => {
-    remoteSessionStore.upsertDeviceSession(deviceId, deviceName, row);
+    if (!messageScreenFocusedRef.current || !isMobileAuthOwnerCurrent(outboxOwner)) return;
+    // Native dismissal can finish after the fork. Never put its stale preview
+    // back over the acknowledged child or its retry state.
+    const cached = row.pendingLocalCreation && remoteSessionStore.getSessions().find(s => s.id === row.id && s.deviceLinkDeviceId === deviceId);
+    if (!cached) remoteSessionStore.upsertDeviceSession(deviceId, deviceName, row);
     Keyboard.dismiss();
-    openCollabSession(row.id);
-  }, [deviceId, deviceName, openCollabSession]);
-  const createSideChat = useCallback(async (quoteText?: string, draft?: ComposerDocument): Promise<RemoteSession | null> => {
+    openCollabSession(row.id, undefined, row.pendingLocalCreation);
+  }, [deviceId, deviceName, openCollabSession, outboxOwner]);
+  const createSideChat = useCallback(async (quoteText?: string, draft?: ComposerDocument, pickerParent?: RemoteSession): Promise<RemoteSession | null> => {
     if (!canUseSideChats || !currentSession || sideChatCreatingRef.current) return null;
     const parentId = currentSession.source === 'side-chat' ? currentSession.parentSessionId : sessionId;
     if (!parentId) return null;
@@ -5689,23 +5714,27 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     const authority = messageAuthorityRef.current;
     const isCurrent = () => isMobileAuthOwnerCurrent(owner) && outboxSessionAliveRef.current === sessionId
       && messageScreenFocusedRef.current && messageAuthorityRef.current === authority;
+    if (!isCurrent()) return null;
     sideChatCreatingRef.current = true;
     setError(null);
     try {
-      const child = await maker.createSideChat(parentId);
+      const parent = pickerParent ?? (currentSession.id === parentId ? currentSession : sideChatParent);
+      const optimistic = capabilities?.supportsSideChatChildId && parent?.status === 'active' && !parent.cacheSeeded;
+      const child = optimistic
+        ? startSideChatCreation(parent, { deviceId, deviceName }, maker)
+        : await maker.createSideChat(parentId);
       if (!isCurrent()) return null;
-      remoteSessionStore.upsertDeviceSession(deviceId, deviceName, child);
       if (draft || quoteText) saveComposerDocumentDraft(child.id, draft ?? {
         version: 1, nodes: [{ type: 'quote', quote: { text: truncateQuoteText(quoteText!) } }],
       });
       return child;
     } catch (err) {
-      if (isCurrent()) setError(/CHANNEL_NOT_ALLOWED|UNSUPPORTED_CAPABILITY|No handler/.test(String(err))
-        ? t('session.sideChat.unsupported') : /NO_PRIOR_ASSISTANT/.test(String(err))
-          ? t('session.sideChat.waitForReply') : t('session.sideChat.createFailed'));
+      if (isCurrent()) setError(t(sideChatErrorKey(err)));
       return null;
     } finally { sideChatCreatingRef.current = false; }
-  }, [canUseSideChats, currentSession, deviceId, deviceName, maker, sessionId, t]);
+  }, [canUseSideChats, capabilities?.supportsSideChatChildId, currentSession, deviceId, deviceName, maker, sessionId, sideChatParent, t]);
+  const readSideChatDrafts = useCallback((parent: RemoteSession, hostIds: ReadonlySet<string>) =>
+    readPendingSideChats(parent, deviceId, hostIds), [deviceId]);
   const askInSideChat = useCallback((text?: string) => {
     void createSideChat(text).then((child) => {
       if (child && messageScreenFocusedRef.current) openSideChat(child);
@@ -10915,7 +10944,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
         {currentSession ? (
             <SideChatsSheet key={`${deviceId}:${sessionId}`} visible={sideChatsOpen}
           session={currentSession} maker={maker} onClose={() => setSideChatsOpen(false)}
-          onCreate={() => createSideChat()} onSelect={openSideChat} />
+          onCreate={parent => createSideChat(undefined, undefined, parent)} readPending={readSideChatDrafts} onSelect={openSideChat} />
           ) : null}
         <SessionSearchSheet
           activeIndex={activeSearchIndex}
@@ -11332,7 +11361,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
                 <RecentMessageHistories
                   key={auth.accountGeneration}
                   activeKey={JSON.stringify([deviceId, sessionId])}
-                  ready={topOverlayHeight > 0 && (historyView.snapshot.ready || messageListItems.length > 0 || (!loading && !syncingWhileEmpty))}
+                  ready={topOverlayHeight > 0 && (historyView.snapshot.ready || (!historyView.cacheRestoring && (messageListItems.length > 0 || (!loading && !syncingWhileEmpty))))}
                   // Android 的常驻消息层画在页面之上;顶栏经 SessionChromeLayer 盖在它上面,
                   // 所以消息层从顶部开始绘制,滚动时能透过半透明顶栏看到。
                   topInset={Platform.OS === 'android' ? 0 : topOverlayHeight}
@@ -11752,6 +11781,13 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
             </View>
           )) : (
             <>
+              {sideChatPending && currentSession?.sideChatCreationError && (
+                <ErrorNotice message={t(currentSession.sideChatCreationError)} actions={
+                  <ErrorNoticeAction label={t('session.screen.retry')} onPress={() => {
+                    if (isMobileAuthOwnerCurrent(outboxOwner)) void runSideChatCreation(currentSession, { deviceId, deviceName }, maker);
+                  }} />
+                } />
+              )}
               {/* 消息区还在「正在同步」占位(新建会话第一帧 / 冷开首屏)时不谈运行状态:
                   「正在同步 + 思考中 + 0s · 0 tokens」三件事同时铺开,反倒像出错,而且
                   紧接着消息落屏时这条又要重排一次。等有内容了再显示活动条。

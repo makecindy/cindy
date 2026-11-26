@@ -1,6 +1,7 @@
 /** Real transport -> proxy -> Session regression; only peer IO is in memory. */
 import os from 'node:os';
 import { randomUUID } from 'node:crypto';
+import { REMOTE_AGENT_INVOKE_TIMEOUT_MS } from '@cindy/device-link';
 import { AgentNotAuthenticatedError, Session, type AgentEvent } from '@cindy/maker-core';
 import { describe, expect, it, vi } from 'vitest';
 import { createRemoteAgentHandle, type RemoteAgentHandleController, type RemoteAgentLink } from '../controller/proxyHandle';
@@ -24,7 +25,7 @@ function fixture(agentKind: 'codex' | 'claude-code' = 'codex', startupError?: Er
   } as unknown as RemoteAgentPoller, {
     onEvent: event => controller.onEvent(event), onState: state => controller.onState(state),
     onClosed: (reason, error) => {
-      if (reason === 'provider-restarting') controller.onInterrupted(restartRecovery);
+      if (reason === 'provider-restarting') controller.onInterrupted({ reason, runId: client.runId }, restartRecovery);
       else controller.onClosed(reason, error?.message, client.runId);
     },
     onRequest: async () => ({ type: 'callback' }), onWs() {},
@@ -70,14 +71,20 @@ describe('remote stream close settles the product turn', () => {
   // #11644 unit: unlike a failed caps handshake, a written send may have been
   // accepted. Preserve the original error and one RPC, without replaying input.
   it('keeps an in-flight send timeout ambiguous instead of reporting an undispatched input', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     const f = fixture();
     try {
       const timeout = Object.assign(new Error('[INVOKE_TIMEOUT] send result unknown'),
         { code: 'INVOKE_TIMEOUT', inFlight: true });
       f.invoke.mockRejectedValueOnce(timeout);
-      await expect(f.session.send('possibly accepted')).rejects.toBe(timeout);
+      const outcome = expect(f.session.send('possibly accepted')).rejects.toBe(timeout);
+      await vi.advanceTimersByTimeAsync(REMOTE_AGENT_INVOKE_TIMEOUT_MS);
+      await outcome;
       expect(f.invoke.mock.calls.filter(([args]) => (args[0] as { method?: string }).method === 'send')).toHaveLength(1);
-    } finally { await f.session.close(); }
+    } finally {
+      vi.useRealTimers();
+      await f.session.close();
+    }
   });
 
   it('reuses Session after an explicit remote preflight refusal without a stale tail fence', async () => {
@@ -365,7 +372,7 @@ describe('remote stream close settles the product turn', () => {
     const f = fixture();
     try {
       await f.session.send('work');
-      f.controller.onInterrupted(f.restartRecovery);
+      f.controller.onInterrupted({ reason: 'provider-restarting', runId: f.client.runId }, f.restartRecovery);
       f.controller.onClosed('ended', undefined, f.client.runId);
       await f.finish();
       expect(f.seen.filter(e => e.type === 'error')).toEqual([
