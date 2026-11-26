@@ -1286,7 +1286,7 @@ export function UserMessage({
     if (editing && !isLastUserMessage) setEditing(false);
   }, [editing, isLastUserMessage]);
 
-  // 宿主派发 claim 提示：Orca 卡片标题统一在 OrcaMessageHeading 里拼（含这条）
+  // 卡片标题由 OrcaMessageHeading 统一渲染；这里只留宿主通知标记（用于卡片内那行摘要）。
   const orcaHostNotice =
     automationOrigin?.kind === 'session' ? automationOrigin.orcaHostNotice : undefined;
   // 伙伴对话：其他任务转来的消息不占主人在右侧的位置，收成左侧一行来信，点开看全文
