@@ -214,13 +214,14 @@ export const SYSTEM_SUSPEND_RECONNECT_HOLD_MS = 60_000;
 export const SERVER_RETRY_MAX_WAIT_MS = 10 * 60_000;
 
 /**
- * 读取连接工厂错误携带的服务端重试期限(`retryAt`,Unix 毫秒;如分享传输 429 的 Retry-After)。
- * 没有、无效或已过期时返回 0,调用方沿用普通退避。
+ * 读取连接工厂错误携带的服务端重试期限(`retryAt`,Unix 毫秒;如分享传输 429 的 Retry-After),
+ * 换算成从 now 起还要等多久(封顶 SERVER_RETRY_MAX_WAIT_MS)。没有、无效或已过期时返回 0,
+ * 调用方沿用普通退避。
  */
-function serverRetryDeadline(err: unknown, now: number): number {
+function serverRetryWaitFromError(err: unknown, now: number): number {
   const retryAt = (err as { retryAt?: unknown } | null | undefined)?.retryAt;
   if (typeof retryAt !== 'number' || !Number.isFinite(retryAt) || retryAt <= now) return 0;
-  return Math.min(retryAt, now + SERVER_RETRY_MAX_WAIT_MS);
+  return Math.min(retryAt - now, SERVER_RETRY_MAX_WAIT_MS);
 }
 /** Local transport admission must not consume a remote handler's response budget. */
 const REQUEST_SEND_WAIT_MAX_MS = 10_000;
@@ -1033,10 +1034,12 @@ export class DeviceLinkClient {
   /** 冷却中的重连计时器到点时刻；之前的 connectNow 不提前重连。 */
   private replacedCooldownUntil = 0;
   /**
-   * 连接工厂最近一次失败时服务端给出的重试期限(墙钟毫秒,0 = 无)。期限前所有建连入口都在
-   * connect() 入口被推迟；stop/start 不清除，同一条连接重新启动也不能借此提前重试。
+   * 连接工厂最近一次失败时服务端给出的重试期限，墙钟与单调钟各记一份到期时刻(0 = 无),任一到点
+   * 即解除：墙钟覆盖系统睡眠，单调钟让系统时间回拨也不能把等待拉长到收到时的期限之外。期限前所有
+   * 建连入口都在 connect() 入口被推迟；stop/start 不清除，同一条连接重新启动也不能借此提前重试。
    */
-  private serverRetryUntil = 0;
+  private serverRetryWallUntil = 0;
+  private serverRetryMonotonicUntil = 0;
   private readonly congestionSendBudget = new CongestionSendBudget();
   private relayRestartRecovery: 'waiting' | 'handshake' | number | null = null;
   private localSendPressure = false;
@@ -3148,7 +3151,10 @@ export class DeviceLinkClient {
         return;
       }
       this.log.warn('createWebSocket failed', err);
-      this.serverRetryUntil = serverRetryDeadline(err, Date.now());
+      const wallNow = Date.now();
+      const serverWaitMs = serverRetryWaitFromError(err, wallNow);
+      this.serverRetryWallUntil = serverWaitMs > 0 ? wallNow + serverWaitMs : 0;
+      this.serverRetryMonotonicUntil = serverWaitMs > 0 ? this.monotonicNow() + serverWaitMs : 0;
       this.scheduleReconnect();
       return;
     }
@@ -3362,24 +3368,26 @@ export class DeviceLinkClient {
   /**
    * 服务端重试期限未到时推迟这次建连，返回 true。退避计时器、网络变化／前台恢复的 connectNow、
    * 唤醒的 restartConnection 与重新 start 都汇到 connect(),在这里统一拦住，不逐个入口判断。
-   * 期限只在工厂失败、本条连接没有 socket 时产生，所以推迟不会丢弃在线连接。
+   * 推迟同样交给 scheduleReconnect 排期：等满期限再追加本档抖动，期限前经历换网或恢复的各端
+   * 不会在期限那一刻一起回来。期限只在工厂失败、本条连接没有 socket 时产生，所以推迟不会丢弃在线连接。
    */
   private deferUntilServerRetry(reason: string): boolean {
-    const waitMs = this.serverRetryWaitMs();
-    if (waitMs <= 0) return false;
-    if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
-    this.reconnectTimer = setTimeout(() => {
+    if (this.serverRetryWaitMs() <= 0) return false;
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
-      void this.connect(reason);
-    }, waitMs);
-    this.log.debug(`connect(${reason}) deferred until server retry deadline (waitMs=${waitMs})`);
-    this.setStatus('connecting');
+    }
+    this.log.debug(`connect(${reason}) deferred until server retry deadline`);
+    this.scheduleReconnect();
     return true;
   }
 
-  /** 距服务端重试期限还剩多久；系统时钟回拨时也不超过上限。 */
+  /** 距服务端重试期限还剩多久：墙钟与单调钟取较短者，系统睡眠和时间回拨都不会把等待拉长。 */
   private serverRetryWaitMs(): number {
-    return Math.min(SERVER_RETRY_MAX_WAIT_MS, Math.max(0, this.serverRetryUntil - Date.now()));
+    return Math.max(0, Math.min(
+      this.serverRetryWallUntil - Date.now(),
+      this.serverRetryMonotonicUntil - this.monotonicNow(),
+    ));
   }
 
   private scheduleReconnect(serviceRestart = false): void {
