@@ -10,8 +10,8 @@ export default {
   cases: {
     default: { about: 'Queue bubbles: reorder, edit lock and cancel from the status menu' },
     'hold-none': { about: 'Queue with nothing paused: no standing marker, no dimmed rows', viewport: { width: 880, height: 620 } },
-    'hold-hover': { about: 'Same queue without pausing: hovering a row reveals the pause icon, its menu gains no second entry', viewport: { width: 880, height: 620 } },
-    hold: { about: 'Queue after pausing: mark on the paused row, hover hint, dimmed tail and one 继续 icon back', viewport: { width: 880, height: 620 } },
+    'hold-menu': { about: 'Same queue without pausing: the status menu carries 暂停 and no standing row mark', viewport: { width: 880, height: 620 } },
+    hold: { about: 'Queue after pausing from the menu: mark on the paused row, hover hint, dimmed tail and 继续 back in the menu', viewport: { width: 880, height: 620 } },
   },
   async check(page, ui) {
     const row = (id) => page.locator(`[data-pending-queue-message="${id}"]`);
@@ -29,39 +29,43 @@ export default {
       await menu().waitFor();
     };
     const holdAttr = (id) => row(id).getAttribute('data-queue-hold');
-    const iconButton = async (id, key) =>
-      row(id).getByRole('button', { name: await ui.t(`newChat.pendingQueue.${key}`), exact: true });
-    const opacityOf = (locator) => locator.evaluate((el) => getComputedStyle(el).opacity);
     // Nothing paused: no mark and no dimming, so the queue reads as before this feature.
     if (ui.case === 'hold-none') {
       assert.equal(await holdAttr('before-a'), null);
       assert.equal(await holdAttr('stop'), null);
       assert.equal(await holdAttr('after-a'), null);
-      // The pause icon exists but stays invisible until hovered, so it adds no standing element.
-      assert.equal(await opacityOf(await iconButton('stop', 'holdAction')), '0');
       await ui.capture('none');
       return;
     }
-    // A normal row only reveals the pause icon on hover; the menu keeps its own actions.
-    if (ui.case === 'hold-hover') {
+    // Nothing paused: 暂停 is a menu item, so it adds no standing element to the row.
+    if (ui.case === 'hold-menu') {
       assert.equal(await holdAttr('stop'), null);
-      await row('stop').hover();
-      assert.equal(await opacityOf(await iconButton('stop', 'holdAction')), '1');
       await ui.capture('hover');
       await openMenu('stop');
-      assert.equal(await (await action('holdAction')).count(), 0);
+      assert.equal(await (await action('holdAction')).count(), 1);
       assert.equal(await (await action('steerAction')).count(), 1);
       assert.equal(await (await action('releaseHoldAction')).count(), 0);
+      // 暂停 sits right after 插话, before edit / reorder / cancel.
+      assert.deepEqual(
+        (await menu().getByRole('menuitem').allTextContents())
+          .slice(0, 3)
+          .map((text) => text.trim()),
+        [
+          await ui.t('newChat.pendingQueue.steerAction'),
+          await ui.t('newChat.pendingQueue.holdAction'),
+          await ui.t('newChat.pendingQueue.editAction'),
+        ],
+      );
       await ui.capture('menu');
       return;
     }
     if (ui.case === 'hold') {
-      // 1) Pausing starts from the row icon itself, not from a menu item.
+      // 1) Pausing is a menu item on the row's own status menu.
       assert.equal(await holdAttr('before-a'), null);
       assert.equal(await holdAttr('stop'), null);
       assert.equal(await holdAttr('after-a'), null);
-      await row('stop').hover();
-      await (await iconButton('stop', 'holdAction')).click();
+      await openMenu('stop');
+      await (await action('holdAction')).click();
       assert.equal(await holdAttr('before-a'), null);
       assert.equal(await holdAttr('stop'), 'stop');
       assert.equal(await holdAttr('after-a'), 'after-stop');
@@ -86,14 +90,14 @@ export default {
         await ui.t('newChat.pendingQueue.heldHint'),
       );
       await ui.capture('hold-hint');
-      // 5) The paused row offers exactly one way back: the 继续 icon, revealed on hover.
-      await row('stop').hover();
-      const resume = await iconButton('stop', 'releaseHoldAction');
-      assert.equal(await opacityOf(resume), '1');
-      assert.equal(await (await iconButton('stop', 'holdAction')).count(), 0);
+      // 5) The paused row offers exactly one way back: 继续 in the same menu.
       await ui.capture('hold-resume');
+      await openMenu('stop');
+      assert.equal(await (await action('releaseHoldAction')).count(), 1);
+      assert.equal(await (await action('holdAction')).count(), 0);
+      await ui.capture('hold-resume-menu');
       // 6) Resuming restores the normal row: steering back, no stale 继续.
-      await resume.click();
+      await (await action('releaseHoldAction')).click();
       assert.equal(await holdAttr('before-a'), null);
       assert.equal(await holdAttr('stop'), null);
       assert.equal(await holdAttr('after-a'), null);
@@ -102,8 +106,8 @@ export default {
       assert.equal(await (await action('releaseHoldAction')).count(), 0);
       await page.keyboard.press('Escape');
       // 7) Pause again so this case ends in the paused state its screenshots describe.
-      await row('stop').hover();
-      await (await iconButton('stop', 'holdAction')).click();
+      await openMenu('stop');
+      await (await action('holdAction')).click();
       assert.equal(await holdAttr('stop'), 'stop');
       assert.equal(await holdAttr('after-a'), 'after-stop');
       await ui.capture('hold-final');
