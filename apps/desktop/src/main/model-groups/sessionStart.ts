@@ -33,7 +33,15 @@ export interface ModelGroupSessionStartPorts {
   locationName: ModelGroupLocationName;
   now(): number;
   createToken(): string;
+  /**
+   * 本机来源背后是电脑组或几个账号时，这个任务实际分到的那台电脑或那个账号的名字(2026-11-26，dash 建议)：写在
+   * 说明里来源后面。分享来的只写到「某某的分享」。没有这一层、还没分到或读不到为 null，说明照旧。
+   */
+  innerChoice?(sessionId: string, route: { providerId: string; model: string }): Promise<string | null>;
 }
+
+/** 等内层分到哪台、哪个账号最多这么久；等不到就照旧写说明，不让说明迟迟不出现。 */
+export const MODEL_GROUP_INNER_CHOICE_WAIT_MS = 1_500;
 
 /** 选中的来源，入口当作这次新建任务的具体模型用。agentDeviceId null = 本机。 */
 export interface ModelGroupStartRoute {
@@ -137,10 +145,22 @@ export function createModelGroupSessionStart(ports: ModelGroupSessionStartPorts)
         if (item.result.decisionId) ports.commit(item.result.decisionId);
         const note = buildModelGroupRouteNote(item.result, item.keptModelName, ports.t, ports.locale(), ports.locationName);
         if (note) {
-          ports.writeNote(sessionId, note, {
+          const write = (body: ModelGroupRouteNoteBody) => ports.writeNote(sessionId, body, {
             clientId: `model-group-route:${sessionId}:${item.result.decisionId ?? item.at}`,
             anchorClientId: clientId,
           });
+          const route = item.result.outcome === 'routed' ? item.result.route : null;
+          if (!route || route.agentDeviceId || !ports.innerChoice) write(note);
+          else {
+            let timer: ReturnType<typeof setTimeout> | undefined;
+            void Promise.race([
+              ports.innerChoice(sessionId, { providerId: route.providerId, model: route.model }).catch(() => null),
+              new Promise<null>((resolve) => { timer = setTimeout(() => resolve(null), MODEL_GROUP_INNER_CHOICE_WAIT_MS); }),
+            ]).then((label) => {
+              clearTimeout(timer);
+              write(label ? { ...note, modelName: `${note.modelName} · ${label}` } : note);
+            });
+          }
         }
       } catch {
         // 记录与说明只影响撞配额接替和展示；这一轮照常算数。

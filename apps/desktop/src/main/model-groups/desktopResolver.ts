@@ -175,6 +175,11 @@ function innerQuota(source: { providerId: string; model: string; agentKind: 'cc'
   }, () => null);
 }
 
+/** 本机供应商目录最近一次的快照里的这个连接(当前账号的)；还没读过为 undefined。 */
+export function localProviderView(providerId: string): ProviderView | undefined {
+  return lastLocal?.scope === activeOwnerScopeKey() ? lastLocal.views.find((item) => item.id === providerId) : undefined;
+}
+
 let refreshing: Promise<void> | null = null;
 let refreshedAt = 0;
 
