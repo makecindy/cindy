@@ -10,6 +10,7 @@ import {
   agentDeviceFavoriteSource,
   parseAgentDeviceFavoriteSource,
   parseProviderShareFavoriteSource,
+  PLUGIN_ENGINE_FAVORITE_WIRE_AGENT,
   providerShareFavoriteWireKey,
 } from "@cindy/device-link";
 import { useTranslation } from "react-i18next";
@@ -22,6 +23,12 @@ import {
   buildPluginEngineGroups,
   formatPluginEngineModelQuotaLabel,
   formatPluginEnginePickerQuota,
+  isPluginEngineProviderId,
+  isPluginEngineSelectable,
+  matchesPluginEngineFavoriteQuery,
+  PLUGIN_ENGINE_DEFAULT_MODEL,
+  resolveMobilePluginEngineFavorite,
+  resolvePluginEngineEffort,
   type MobilePluginEngine,
   type MobilePluginEngineSelection,
   type PluginEngineEffort,
@@ -249,10 +256,16 @@ export interface UnifiedMobileQuota {
   resetDescription?: string;
   members?: { remaining?: number; label: string }[];
 }
+export type UnifiedMobileFavoriteItem =
+  | { kind: "model"; row: UnifiedMobileRow }
+  | { kind: "pluginEngine"; row: UnifiedMobilePluginEngineRow };
+
 export interface UnifiedMobileGroup {
   key: string;
   title: string;
   rows: UnifiedMobileRow[];
+  /** 收藏区混排内置模型与插件引擎收藏时保留原始添加顺序。 */
+  items?: UnifiedMobileFavoriteItem[];
   quota?: UnifiedMobileQuota;
 }
 export interface UnifiedMobilePickerViewProps {
@@ -285,10 +298,11 @@ export interface UnifiedMobilePickerViewProps {
     rows: readonly UnifiedMobileModelGroupRow[];
     onSelect(id: string): void;
   };
-  /** 插件引擎分组(列在 groups 之前)；effort 只改思考深度、不关闭选择器。 */
+  /** 插件引擎分组(列在内置模型之前)；effort 只改思考深度、不关闭选择器；onOptions 打开配置/收藏详情页。 */
   pluginEngines?: {
     groups: UnifiedMobilePluginEngineGroup[];
     onSelect(row: UnifiedMobilePluginEngineRow, effort?: PluginEngineEffort): void;
+    onOptions?(row: UnifiedMobilePluginEngineRow): void;
   };
   busy: boolean;
   error: string | null;
@@ -315,8 +329,26 @@ export interface UnifiedMobilePickerViewProps {
     context: string;
     price: string | null;
   };
+  pluginEngineOptions?: {
+    row: UnifiedMobilePluginEngineRow;
+    context: string;
+    effort: PluginEngineEffort | null;
+    efforts: PluginEngineEffort[];
+    onChangeEffort(effort: PluginEngineEffort): void;
+    favoritesDisabled: boolean;
+    isFavorite: boolean;
+    configurationSummary: string;
+    notice?: string | null;
+    editingFavorite: boolean;
+    onEditFavorite?: () => void;
+    onCancelEdit?: () => void;
+    onSaveEdit?: () => void;
+    onFavorite(): void;
+  };
 }
 const ALL_AGENTS: readonly AgentKind[] = ["claude-code", "codex", "pi"];
+const PLUGIN_ENGINE_MOBILE_WIRE_AGENT: AgentKind =
+  PLUGIN_ENGINE_FAVORITE_WIRE_AGENT === "cc" ? "claude-code" : PLUGIN_ENGINE_FAVORITE_WIRE_AGENT;
 export function UnifiedModelPickerSheet(
   p: ModelPickerSheetProps & { unified: UnifiedMobilePickerOptions },
 ) {
@@ -357,6 +389,20 @@ export function UnifiedModelPickerSheet(
     original: MobileModelFavorite;
     config: MobileModelConfiguration;
   } | null>(null);
+  const [pluginTarget, setPluginTarget] = useState<{
+    providerId: string;
+    modelId: string;
+    uid?: string;
+    effort?: PluginEngineEffort | null;
+  } | null>(null);
+  // 未选中的插件引擎模型在详情页调整思考深度后，在本次选择器打开期间保留，返回列表与点击选择继续生效。
+  const [pluginEfforts, setPluginEfforts] = useState<
+    ReadonlyMap<string, PluginEngineEffort>
+  >(new Map());
+  const [pluginFavoriteEdit, setPluginFavoriteEdit] = useState<{
+    original: MobileModelFavorite;
+    effort: PluginEngineEffort | null;
+  } | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [caps, setCaps] = useState<
     Partial<Record<AgentKind, MobileAgentCapabilities>>
@@ -385,8 +431,11 @@ export function UnifiedModelPickerSheet(
     initialRemoteFilter.current = true;
     filterTouched.current = false;
     setTarget(null);
+    setPluginTarget(null);
+    setPluginEfforts(new Map());
     setRemoteConfigs(new Map());
     setFavoriteEdit(null);
+    setPluginFavoriteEdit(null);
     setNotice(null);
     setError(null);
     let cancelled = false;
@@ -841,10 +890,20 @@ export function UnifiedModelPickerSheet(
     catalog,
     rows: deviceRows.filter((row) => listed.has(row.entry)),
   }));
+  const pluginEngineLabels = {
+    defaultModel: t("models.pluginEngines.defaultModel"),
+    effort: (effort: PluginEngineEffort) =>
+      t(`models.options.effortLevels.${effort}`, { defaultValue: effort }),
+  };
   // 收藏和本机收藏排在同一节里:位置编在 providerId 里的,到那台电脑的目录里找模型,
   // 点开即在那台运行。那台电脑离线(包括只因任务的 Agent 在那台、靠缓存留在列表里)或没开放远程调用时
   // 先不显示,收藏本身保留。分享来的模型用同一套规则:键必须对上当前这条分享的成员身份。
-  const favorites = prefs.value.favorites.flatMap((item) => {
+  // 插件引擎收藏按完整引擎列表解析(含已隐藏但可用的引擎)，与普通模型按收藏顺序混排在同一节。
+  const favoriteItemsAll: UnifiedMobileFavoriteItem[] = prefs.value.favorites.flatMap((item): UnifiedMobileFavoriteItem[] => {
+    if (pluginEngineOptions && isPluginEngineProviderId(item.providerId)) {
+      const resolved = resolveMobilePluginEngineFavorite(item, pluginEngineOptions.engines, pluginEngineLabels);
+      return resolved ? [{ kind: "pluginEngine", row: resolved }] : [];
+    }
     const source = parseAgentDeviceFavoriteSource(item.providerId);
     if (source) {
       const directory = remoteDirectories.find(
@@ -854,10 +913,13 @@ export function UnifiedModelPickerSheet(
       const entry = directory && resolveStoredModelEntry(directory.entries, source.providerId, item.modelId);
       return directory && entry
         ? [
-            makeRemoteRow(directory, entry, {
-              ...item,
-              providerId: source.providerId,
-            }),
+            {
+              kind: "model",
+              row: makeRemoteRow(directory, entry, {
+                ...item,
+                providerId: source.providerId,
+              }),
+            },
           ]
         : [];
     }
@@ -871,15 +933,18 @@ export function UnifiedModelPickerSheet(
       const entry = directory && resolveStoredModelEntry(directory.entries, share.providerId, item.modelId);
       return directory && entry
         ? [
-            makeRemoteRow(directory, entry, {
-              ...item,
-              providerId: share.providerId,
-            }),
+            {
+              kind: "model",
+              row: makeRemoteRow(directory, entry, {
+                ...item,
+                providerId: share.providerId,
+              }),
+            },
           ]
         : [];
     }
     const entry = resolveStoredModelEntry(entries, item.providerId, item.modelId);
-    return entry ? [makeRow(entry, item)] : [];
+    return entry ? [{ kind: "model", row: makeRow(entry, item) }] : [];
   });
   const rowProviderName = (row: UnifiedMobileRow) => {
     const device = row.remoteDevice;
@@ -917,12 +982,18 @@ export function UnifiedModelPickerSheet(
     (row) => !hiddenSources.has(row.entry.providerId) && matches(row) && (all || shownFilter === row.entry.providerId),
   );
   const groups: UnifiedMobileGroup[] = [];
-  const favoriteRows = favorites.filter(matches);
-  if ((all || shownFilter === "favorites") && favoriteRows.length)
+  const favoriteItems = favoriteItemsAll.filter((item) =>
+    item.kind === "pluginEngine"
+      ? matchesPluginEngineFavoriteQuery(item.row, query)
+      : matches(item.row),
+  );
+  const hasPluginFavoriteRows = favoriteItems.some((item) => item.kind === "pluginEngine");
+  if ((all || shownFilter === "favorites") && favoriteItems.length)
     groups.push({
       key: "favorites",
       title: t("models.unified.favorites"),
-      rows: favoriteRows,
+      rows: favoriteItems.flatMap((item) => (item.kind === "model" ? [item.row] : [])),
+      ...(hasPluginFavoriteRows ? { items: favoriteItems } : {}),
     });
   const recommended =
     all && p.existingSessionRoute && !otherChoiceActive
@@ -968,6 +1039,7 @@ export function UnifiedModelPickerSheet(
         });
     }
   // 插件引擎(「全部」或搜索命中时)：每个引擎一段，列在内置模型之前(与 Desktop 面板顺序一致)。
+  const pluginEffortKey = (providerId: string, modelId: string) => `${providerId}#${modelId}`;
   const pluginEngineGroups = pluginEngineOptions && all
     ? buildPluginEngineGroups(pluginEngineOptions, query, {
         defaultModel: t("models.pluginEngines.defaultModel"),
@@ -977,14 +1049,22 @@ export function UnifiedModelPickerSheet(
           : t("models.pluginEngines.unavailable", { engine: name }),
       }).map((group) => {
         const usage = pluginEngineQuotas?.[group.providerId];
+        const rowsWithOverrides = pluginEfforts.size
+          ? group.rows.map((pluginRow) => {
+              if (pluginRow.selected) return pluginRow;
+              const override = pluginEfforts.get(pluginEffortKey(pluginRow.providerId, pluginRow.modelId));
+              if (!override || !pluginRow.efforts.includes(override)) return pluginRow;
+              return { ...pluginRow, effort: override, effortLabel: pluginEngineLabels.effort(override) };
+            })
+          : group.rows;
         const quota = formatPluginEnginePickerQuota(
           usage,
           now,
-          i18n.language,
+          i18n?.language ?? "en",
           (resetsAtSeconds, currentNow) => formatQuotaResetCountdown(resetsAtSeconds, currentNow, t, null),
         );
         const rowsWithQuota = usage
-          ? group.rows.map((row) => {
+          ? rowsWithOverrides.map((row) => {
               const quotaLabel = formatPluginEngineModelQuotaLabel(
                 usage,
                 { id: row.modelId, name: row.title },
@@ -994,14 +1074,14 @@ export function UnifiedModelPickerSheet(
               );
               return quotaLabel ? { ...row, quotaLabel } : row;
             })
-          : group.rows;
-        return quota ? { ...group, quota, rows: rowsWithQuota } : { ...group, rows: rowsWithQuota };
+          : rowsWithOverrides;
+        return { ...group, rows: rowsWithQuota, ...(quota ? { quota } : {}) };
       })
     : [];
   // Recommended/favorites can contain the only rows for a source. Keep its
   // overview visible there when no provider section already presents it.
   for (const group of groups) {
-    if (group.quota || !group.rows.length) continue;
+    if (group.quota || !group.rows.length || group.items?.some((item) => item.kind === "pluginEngine")) continue;
     const first = group.rows[0];
     const sameSource = (row: UnifiedMobileRow) => row.entry.providerId === first.entry.providerId
       && row.remoteDevice?.deviceId === first.remoteDevice?.deviceId;
@@ -1137,12 +1217,86 @@ export function UnifiedModelPickerSheet(
         resetAgents,
       )
     : localCanReset;
+  const activePluginEngine =
+    pluginTarget && pluginEngineOptions
+      ? pluginEngineOptions.engines.find((engine) => engine.providerId === pluginTarget.providerId)
+      : undefined;
+  const originPluginFavorite = pluginTarget?.uid
+    ? prefs.value.favorites.find((item) => item.uid === pluginTarget.uid)
+    : undefined;
+  const activePluginRow: UnifiedMobilePluginEngineRow | undefined = (() => {
+    if (!pluginTarget || !activePluginEngine || !isPluginEngineSelectable(activePluginEngine)) return undefined;
+    const isDefault = pluginTarget.modelId === PLUGIN_ENGINE_DEFAULT_MODEL;
+    if (isDefault && activePluginEngine.defaultModelAllowed === false) return undefined;
+    const model = isDefault
+      ? undefined
+      : activePluginEngine.models.find((item) => item.id === pluginTarget.modelId);
+    if (!isDefault && !model) return undefined;
+    const selected =
+      pluginEngineOptions?.active?.providerId === activePluginEngine.providerId &&
+      pluginEngineOptions?.active?.modelId === pluginTarget.modelId;
+    const rememberedEffort =
+      !originPluginFavorite && !selected
+        ? pluginEfforts.get(pluginEffortKey(activePluginEngine.providerId, pluginTarget.modelId))
+        : undefined;
+    const effort = pluginFavoriteEdit
+      ? pluginFavoriteEdit.effort
+      : pluginTarget.effort !== undefined
+        ? pluginTarget.effort
+        : originPluginFavorite
+          ? resolvePluginEngineEffort(activePluginEngine, pluginTarget.modelId, originPluginFavorite.effort)
+          : resolvePluginEngineEffort(
+              activePluginEngine,
+              pluginTarget.modelId,
+              selected ? pluginEngineOptions?.active?.effort : rememberedEffort,
+            );
+    return {
+      key: pluginTarget.uid ?? `${activePluginEngine.providerId}#${pluginTarget.modelId}`,
+      providerId: activePluginEngine.providerId,
+      modelId: pluginTarget.modelId,
+      title: isDefault ? pluginEngineLabels.defaultModel : model!.displayName,
+      subtitle: activePluginEngine.name,
+      engineName: activePluginEngine.name,
+      ...(activePluginEngine.iconDataUrl ? { iconDataUrl: activePluginEngine.iconDataUrl } : {}),
+      effort,
+      efforts: model ? [...model.efforts] : [],
+      ...(model?.defaultEffort ? { defaultEffort: model.defaultEffort } : {}),
+      effortLabel: effort ? pluginEngineLabels.effort(effort) : "",
+      selected: !originPluginFavorite && selected,
+      disabled: false,
+      ...(originPluginFavorite ? { favorite: originPluginFavorite } : {}),
+    };
+  })();
+  const pluginFavoriteMatches = (item: MobileModelFavorite): boolean => {
+    if (!activePluginRow || !activePluginEngine) return false;
+    if (item.providerId !== activePluginRow.providerId || item.modelId !== activePluginRow.modelId) return false;
+    const itemEffort = resolvePluginEngineEffort(activePluginEngine, activePluginRow.modelId, item.effort);
+    return itemEffort === activePluginRow.effort;
+  };
+  const pluginMatchingFavorite = activePluginRow
+    ? prefs.value.favorites.find(pluginFavoriteMatches)
+    : undefined;
+  const pluginFavoriteToRemove =
+    activePluginRow &&
+    activePluginEngine &&
+    originPluginFavorite &&
+    resolvePluginEngineEffort(activePluginEngine, activePluginRow.modelId, originPluginFavorite.effort) ===
+      activePluginRow.effort
+      ? originPluginFavorite
+      : pluginMatchingFavorite;
+
   useEffect(() => {
     if (target && !row) {
       setTarget(null);
       setFavoriteEdit(null);
     }
   }, [target, row]);
+  useEffect(() => {
+    if (pluginTarget && !activePluginRow) {
+      setPluginTarget(null);
+      setPluginFavoriteEdit(null);
+    }
+  }, [pluginTarget, activePluginRow]);
   const transact = async (
     action: (isCurrent: () => boolean) => Promise<void>,
   ) => {
@@ -1213,8 +1367,79 @@ export function UnifiedModelPickerSheet(
         modelId: row.modelId,
         ...(nextEffort ? { effort: nextEffort } : {}),
       });
-      if (applied !== false && effort === undefined && isCurrent()) p.onClose();
+      if (applied !== false && isCurrent()) {
+        setPluginEfforts((current) => {
+          const key = pluginEffortKey(row.providerId, row.modelId);
+          if (!current.has(key)) return current;
+          const next = new Map(current);
+          next.delete(key);
+          return next;
+        });
+        if (effort === undefined) p.onClose();
+      }
     });
+  };
+  const openPluginEngineOptions = (pluginRow: UnifiedMobilePluginEngineRow) => {
+    if (lock.current || pluginRow.disabled) return;
+    setTarget(null);
+    setFavoriteEdit(null);
+    setPluginFavoriteEdit(null);
+    setNotice(null);
+    setError(null);
+    setPluginTarget({
+      providerId: pluginRow.providerId,
+      modelId: pluginRow.modelId,
+      uid: pluginRow.favorite?.uid,
+      ...(pluginRow.favorite ? { effort: pluginRow.effort } : {}),
+    });
+  };
+  const changePluginEngineEffort = (nextEffort: PluginEngineEffort) => {
+    if (!activePluginRow || !activePluginEngine || !pluginEngineOptions) return;
+    if (pluginFavoriteEdit) {
+      if (!lock.current && !p.disabled) {
+        setPluginFavoriteEdit({ ...pluginFavoriteEdit, effort: nextEffort });
+      }
+      return;
+    }
+    const key = pluginEffortKey(activePluginRow.providerId, activePluginRow.modelId);
+    const liveFavorite =
+      !!originPluginFavorite &&
+      pluginEngineOptions.active?.providerId === activePluginRow.providerId &&
+      pluginEngineOptions.active?.modelId === activePluginRow.modelId &&
+      resolvePluginEngineEffort(activePluginEngine, activePluginRow.modelId, pluginEngineOptions.active?.effort) ===
+        activePluginRow.effort;
+    const savedNotice = t(
+      pluginTarget?.uid && pluginFavoriteToRemove
+        ? "models.unified.originalFavoriteKept"
+        : "models.unified.parametersSaved",
+    );
+    if (activePluginRow.selected || liveFavorite) {
+      void transact(async (isCurrent) => {
+        const applied = await pluginEngineOptions.onSelect({
+          providerId: activePluginRow.providerId,
+          modelId: activePluginRow.modelId,
+          effort: nextEffort,
+        });
+        if (applied !== false && isCurrent()) {
+          setPluginEfforts((current) => {
+            if (!current.has(key)) return current;
+            const next = new Map(current);
+            next.delete(key);
+            return next;
+          });
+          setPluginTarget((current) => (current ? { ...current, effort: nextEffort } : current));
+          setNotice(savedNotice);
+        }
+      });
+      return;
+    }
+    setPluginEfforts((current) => {
+      const next = new Map(current);
+      next.set(key, nextEffort);
+      return next;
+    });
+    setPluginTarget((current) => (current ? { ...current, effort: nextEffort } : current));
+    setNotice(savedNotice);
   };
   const change = (config: MobileModelConfiguration, reset = false) => {
     if (!row) return;
@@ -1483,20 +1708,22 @@ export function UnifiedModelPickerSheet(
       onClose={p.onClose}
       onClosed={p.onClosed}
       onBack={
-        row
+        row || activePluginRow
           ? () => {
               if (lock.current) return;
               if (favoriteEdit) setFavoriteEdit(null);
-              else setTarget(null);
+              else if (pluginFavoriteEdit) setPluginFavoriteEdit(null);
+              else if (row) setTarget(null);
+              else setPluginTarget(null);
               setError(null);
               setNotice(null);
             }
           : undefined
       }
       title={
-        favoriteEdit
+        favoriteEdit || pluginFavoriteEdit
           ? t("models.unified.editFavorite")
-          : (row?.entry.displayName ?? p.title ?? t("models.picker.title"))
+          : (row?.entry.displayName ?? activePluginRow?.title ?? p.title ?? t("models.picker.title"))
       }
       testID={p.testID ?? "modelSheet"}
       query={query}
@@ -1535,8 +1762,14 @@ export function UnifiedModelPickerSheet(
       {...(modelGroupRows.length
         ? { modelGroups: { title: t("models.modelGroups.title"), rows: modelGroupRows, onSelect: selectModelGroup } }
         : {})}
-      {...(pluginEngineGroups.length
-        ? { pluginEngines: { groups: pluginEngineGroups, onSelect: selectPluginEngine } }
+      {...(pluginEngineOptions && (pluginEngineGroups.length || hasPluginFavoriteRows)
+        ? {
+            pluginEngines: {
+              groups: pluginEngineGroups,
+              onSelect: selectPluginEngine,
+              onOptions: openPluginEngineOptions,
+            },
+          }
         : {})}
       busy={busy || !!p.disabled || !prefs.ready}
       error={error ?? (selectedDeviceId === null && p.providersReady && modelNeedsReselection(p.modelVisibilityOverrides, p.agentKind, p.activeModelId, p.selectedProviderId)
@@ -1548,6 +1781,8 @@ export function UnifiedModelPickerSheet(
       onSelect={select}
       onOptions={(row) => {
         if (lock.current) return;
+        setPluginTarget(null);
+        setPluginFavoriteEdit(null);
         setFavoriteEdit(null);
         setNotice(null);
         setError(null);
@@ -1690,6 +1925,126 @@ export function UnifiedModelPickerSheet(
                 });
               },
               onReset: () => change(recommendedConfig!, true),
+            }
+          : undefined
+      }
+      pluginEngineOptions={
+        activePluginRow && activePluginEngine
+          ? {
+              row: activePluginRow,
+              context: activePluginEngine.name,
+              effort: activePluginRow.effort,
+              efforts: activePluginRow.efforts,
+              onChangeEffort: changePluginEngineEffort,
+              favoritesDisabled: !prefs.favoritesReady,
+              isFavorite: !!pluginFavoriteToRemove,
+              configurationSummary: [
+                activePluginEngine.name,
+                activePluginRow.effortLabel || null,
+              ]
+                .filter(Boolean)
+                .join(" · "),
+              notice,
+              editingFavorite: !!pluginFavoriteEdit,
+              onEditFavorite:
+                originPluginFavorite && !pluginFavoriteEdit && activePluginRow.efforts.length > 1
+                  ? () => {
+                      if (lock.current || p.disabled) return;
+                      setPluginFavoriteEdit({
+                        original: { ...originPluginFavorite },
+                        effort: resolvePluginEngineEffort(
+                          activePluginEngine,
+                          activePluginRow.modelId,
+                          originPluginFavorite.effort,
+                        ),
+                      });
+                      setNotice(null);
+                      setError(null);
+                    }
+                  : undefined,
+              onCancelEdit: () => {
+                if (lock.current) return;
+                setPluginFavoriteEdit(null);
+                setError(null);
+                setNotice(null);
+              },
+              onSaveEdit: () => {
+                if (!pluginFavoriteEdit) return;
+                void transact(async (isCurrent) => {
+                  const original = prefs.value.favorites.find(
+                    (item) => item.uid === pluginFavoriteEdit.original.uid,
+                  );
+                  if (
+                    !original ||
+                    original.providerId !== pluginFavoriteEdit.original.providerId ||
+                    original.modelId !== pluginFavoriteEdit.original.modelId ||
+                    original.effort !== pluginFavoriteEdit.original.effort
+                  ) {
+                    setError(t("models.unified.favoriteChanged"));
+                    return;
+                  }
+                  if (
+                    prefs.value.favorites.some(
+                      (item) =>
+                        item.uid !== original.uid && pluginFavoriteMatches(item),
+                    )
+                  ) {
+                    setError(t("models.unified.favoriteExists"));
+                    return;
+                  }
+                  const nextEffort = pluginFavoriteEdit.effort;
+                  await prefs.save({
+                    ...prefs.value,
+                    favorites: prefs.value.favorites.map((item) =>
+                      item.uid === original.uid
+                        ? {
+                            ...item,
+                            agent: PLUGIN_ENGINE_MOBILE_WIRE_AGENT,
+                            effort: nextEffort ?? "",
+                            fast: false,
+                          }
+                        : item,
+                    ),
+                  });
+                  if (!isCurrent()) return;
+                  setPluginFavoriteEdit(null);
+                  setPluginTarget((current) => (current ? { ...current, effort: nextEffort } : current));
+                  setNotice(t("models.unified.favoriteUpdated"));
+                });
+              },
+              onFavorite: () => {
+                if (!prefs.favoritesReady || pluginFavoriteEdit) return;
+                void transact(async (isCurrent) => {
+                  if (pluginFavoriteToRemove) {
+                    await prefs.save({
+                      ...prefs.value,
+                      favorites: prefs.value.favorites.filter(
+                        (item) => item.uid !== pluginFavoriteToRemove.uid,
+                      ),
+                    });
+                    if (isCurrent()) setNotice(t("models.unified.favoriteRemoved"));
+                  } else {
+                    if (prefs.value.favorites.some(pluginFavoriteMatches)) {
+                      if (isCurrent()) setNotice(t("models.unified.favoriteSaved"));
+                      return;
+                    }
+                    await prefs.save(
+                      addModelFavorite(
+                        prefs.value,
+                        {
+                          providerId: activePluginRow.providerId,
+                          modelId: activePluginRow.modelId,
+                          agent: PLUGIN_ENGINE_MOBILE_WIRE_AGENT,
+                          effort: activePluginRow.effort ?? "",
+                          fast: false,
+                        },
+                        createFavoriteUid(),
+                      ),
+                    );
+                    if (isCurrent()) setNotice(t("models.unified.favoriteSaved"));
+                  }
+                });
+              },
             }
           : undefined
       }

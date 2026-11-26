@@ -80,7 +80,13 @@ import { useLocation, useNavigate, useOutletContext } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 
 import { useAuth } from '@/contexts/AuthContext';
-import { getLastCreatedTaskWorkspace, rememberCreatedTaskWorkspace } from '@/state/lastCreatedTaskWorkspace';
+import {
+  getLastCreatedTaskWorkspace,
+  getLastDeviceTaskWorkspace,
+  rememberCreatedTaskWorkspace,
+  rememberDeviceTaskWorkspace,
+  resolveDeviceSwitchWorkspace,
+} from '@/state/lastCreatedTaskWorkspace';
 import { getDefaultNewTaskWorkingDir } from '@/state/defaultNewTaskWorkingDir';
 import { themeService } from '@/themes/theme-service';
 import type { Theme as ColorTheme } from '@/themes/types';
@@ -530,9 +536,24 @@ function draftEnableOrcaOptions(
   deferDelegateTask = false,
   /** `providers` 是哪一处的目录(Agent 所在位置)；null = 任务所在电脑。 */
   providersAgentDeviceId: string | null = null,
-) {
-  const preferredAgent: 'claude-code' | 'codex' | 'pi' =
-    collab.worker === 'codex' ? 'codex' : collab.worker === 'pi' ? 'pi' : 'claude-code';
+): Parameters<typeof window.electronAPI.maker.enableOrca>[1] {
+  const cfg = collab.workerConfig;
+  // Plugin engines own their catalog; built-in provider fallback would replace the selection.
+  if (collab.worker === 'acp') {
+    return {
+      workerAgent: 'acp',
+      role: cfg?.role,
+      label: cfg && createWorkerLabel(cfg.role, []),
+      providerId: cfg?.providerId ?? undefined,
+      model: cfg?.model,
+      effort: cfg?.effort as Parameters<typeof window.electronAPI.maker.enableOrca>[1]['effort'],
+      agentDeviceId: null,
+      delegateTask: cfg?.initialTask,
+      workerPermissionMode: cfg?.workerPermissionMode,
+      ...(deferDelegateTask ? { deferDelegateTask: true } : {}),
+    };
+  }
+  const preferredAgent = collab.worker === 'cc' ? 'claude-code' : collab.worker;
   // Worker 类型也是**设备作用域**的(codex review P2):在只连了 Codex 的设备 A 选了 Codex
   // Worker,切到只连 Claude 的设备 B 时,workerConfig 虽然被清了,collab.worker 仍是 codex,
   // 透传过去必撞被控端的 NO_PROVIDER_FOR_AGENT 预检,协同又静默降级成单会话。
@@ -549,7 +570,6 @@ function draftEnableOrcaOptions(
     );
     return fallback ?? preferredAgent;
   })();
-  const cfg = collab.workerConfig;
   if (!cfg) return { workerAgent };
   if (cfg.modelGroup) {
     return {
@@ -3565,17 +3585,24 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
       dialogueTargetRequest.deviceId === null
         ? getDefaultNewTaskWorkingDir(dataOwnerId)
         : null;
+    const explicitDialogue =
+      (location.state as { workspacePrompt?: string } | null)?.workspacePrompt === 'dialogue';
     if (
       !dialogueTargetRequest.preserveWorkspaceIfSameDevice ||
       !sameDevice
     ) {
+      if (explicitDialogue) {
+        rememberDeviceTaskWorkspace(dataOwnerId, dialogueTargetRequest.deviceId, {
+          remoteHostId: null,
+          workingDir: null,
+        });
+      }
       patchCollab({ enabled: false });
       applyDraftTarget({
         deviceId: dialogueTargetRequest.deviceId,
         deviceName: dialogueTargetRequest.deviceName,
         workingDir: defaultDir,
-        explicitNoProject:
-          (location.state as { workspacePrompt?: string } | null)?.workspacePrompt === 'dialogue',
+        explicitNoProject: explicitDialogue,
       });
     } else if (
       defaultDir && shouldPrefillDefaultNewTaskWorkingDir(location.state, currentDraft)
@@ -3654,6 +3681,10 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
         // 所以这一步必须排在下面的 prefetch 之前,否则刚 prefetch 的数据又被 evict 掉)。
         // 设备域的浏览器会预选当前设备,所以这条路径同时承担「换机器」与「同机换项目」两件事,
         // 而两者的差异现在完全由那个动作内部处理,这里不再各自判断。
+        rememberDeviceTaskWorkspace(dataOwnerId, target.deviceId, {
+          remoteHostId: null,
+          workingDir: target.path,
+        });
         applyDraftTarget({
           deviceId: target.deviceId,
           deviceName: target.deviceName,
@@ -3777,7 +3808,7 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
         // createSession 后立刻 enableOrca 拉起 Worker;失败 toast 但保留
         // Lead 会话继续 navigate (用户可继续单 session, 不阻断)。
         let orcaWorkersRevealState: { focusWorkerSessionId: string } | null = null;
-        if (effectiveCollab.enabled) {
+        if (effectiveCollab.enabled && effectiveCollab.worker !== 'acp') {
           try {
             const result = await window.electronAPI.maker.enableOrca(
               newSession.id,
@@ -3816,6 +3847,7 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
       capabilityAgentKind,
       effectivePlanMode,
       attachmentState,
+      dataOwnerId,
       applyDraftTarget,
       createSession,
       carryDraftFavoriteAnchorToSession,
@@ -4407,6 +4439,10 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
   const [projectSettingsMode, setProjectSettingsMode] = useState<'create' | 'edit' | null>(null);
   const handleWorkingDirChange = useCallback(
     (dir: string | null) => {
+      rememberDeviceTaskWorkspace(dataOwnerId, draft.deviceLinkDeviceId ?? null, {
+        remoteHostId: null,
+        workingDir: dir,
+      });
       // 设备维度不动:原样回传当前设备,于是 applyDraftTarget 判出 deviceChanged=false,只处理
       // 「换项目」该连带的部分(剥项目相对的 mention chip、作废 worktree 三态、进「对话」时清
       // extraDirs),不会去动运行配置、附件和设备快照。picker 列的项目本就属于当前设备,语义自洽。
@@ -4417,7 +4453,7 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
         explicitNoProject: dir === null,
       });
     },
-    [applyDraftTarget, draft.deviceLinkDeviceId, draft.deviceLinkDeviceName],
+    [applyDraftTarget, dataOwnerId, draft.deviceLinkDeviceId, draft.deviceLinkDeviceName],
   );
 
   // ─── 新草稿入场:引用目录清零 ──────────────────────────────────────────
@@ -4572,9 +4608,9 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
   ) : null;
 
   /**
-   * 换设备(#807)。**一并清掉 workingDir 与 extraDirs** —— 上一台机器的路径在新机器上
-   * 基本不存在,留着会让用户以为项目跟过来了,发送时才在被控端 path guard 上失败。
-   * 换完停在这台设备的「对话」,与 mobile 切设备后工作区回落的行为一致。
+   * 换设备(#807)。按目标设备恢复上次在该设备选择的项目或对话，避免把上一台机器的路径带到
+   * 新机器，也不必每次切回设备都重新选项目；尚未记住过选择的设备默认停在该设备的「对话」
+   * (切回本机时回落本机默认目录设置)。
    */
   const handleDeviceChange = useCallback(
     (deviceId: string | null, deviceName: string | null) => {
@@ -4583,22 +4619,55 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
       // (它即时可读,不像 state 要等下一次渲染);pill 也会用同步的 sendInFlight 禁用,双保险。
       if (sendInFlightRef.current || directoryRecoveryRef.current?.isSelecting()) return;
       // 点已选中的那一行(包括本机时点「本机」)只是确认当前选择,不该有任何副作用。
-      // 下面会剥 mention chip、丢路径型附件并清 workingDir / extraDirs —— 重选同一设备时执行这些,
+      // 下面会剥 mention chip、丢路径型附件并切换目标工作区 —— 重选同一设备时执行这些,
       // 等于用户点一下就静默丢掉已选的项目、附件和部分已写好的消息。必须先早返回。
       // (Agent 在哪台电脑运行跟着模型走,由模型选择器决定;这里的「本机」只表示任务在本机。)
       if (deviceId === (effectiveDeviceLinkDeviceId ?? null)) return;
-      // 换完停在这台设备的「对话」(workingDir=null):上一台的项目路径在新机器上基本不存在,
-      // 留着会让用户以为项目跟过来了、发送时才在被控端 path guard 上失败。与 mobile 切设备后
-      // 工作区回落的行为一致。其余连带清理全部由 applyDraftTarget 按「设备变了」推导。
+      const previousDeviceId = effectiveDeviceLinkDeviceId ?? null;
+      // 离开当前设备前把已选中的项目或明确的「对话」写入该设备记忆(兼容既有草稿与侧栏入口)。
+      if (effectiveWorkingDir) {
+        rememberDeviceTaskWorkspace(dataOwnerId, previousDeviceId, {
+          remoteHostId: previousDeviceId ? null : effectiveRemoteHostId,
+          workingDir: effectiveWorkingDir,
+        });
+      } else if (
+        draft.explicitNoProject &&
+        getLastDeviceTaskWorkspace(dataOwnerId, previousDeviceId)?.workingDir != null
+      ) {
+        rememberDeviceTaskWorkspace(dataOwnerId, previousDeviceId, {
+          remoteHostId: null,
+          workingDir: null,
+        });
+      }
+      // 恢复目标设备上次选择的项目或对话；没记录过的设备回落本机默认目录或该设备的「对话」。
+      // 其余连带清理全部由 applyDraftTarget 按「设备变了」推导。
       //
       // 与「添加远程项目」那条路径的一点刻意差异:这里**不做**阻塞式 direct invoke 验证 ——
       // pill 只让在线设备可选,而它是同步回调,为验证改成异步会让点击后一段时间毫无反馈。
       // 快照未就绪期间由 send / goal 的 capabilitiesLoading / deviceProvidersLoading /
       // remoteDraftState.status 三重 gate 兜住。也因此不必 prefetch:上面已把「重选同一设备」
       // 早返回掉,deviceId 必然变化 → hook effect 必然重跑 → evict 后必然 cache miss 并自行 fetch。
-      applyDraftTarget({ deviceId, deviceName, workingDir: null, explicitNoProject: true });
+      const nextWorkspace = resolveDeviceSwitchWorkspace(
+        dataOwnerId,
+        deviceId,
+        deviceId === null ? getDefaultNewTaskWorkingDir(dataOwnerId) : null,
+      );
+      applyDraftTarget({
+        deviceId,
+        deviceName,
+        workingDir: nextWorkspace.workingDir,
+        remoteHostId: nextWorkspace.remoteHostId,
+        explicitNoProject: nextWorkspace.explicitNoProject,
+      });
     },
-    [effectiveDeviceLinkDeviceId, applyDraftTarget],
+    [
+      dataOwnerId,
+      draft.explicitNoProject,
+      effectiveDeviceLinkDeviceId,
+      effectiveRemoteHostId,
+      effectiveWorkingDir,
+      applyDraftTarget,
+    ],
   );
   const handleOpenRemoteProject = useCallback((deviceId?: string) => {
     setAddRemoteProjectDeviceId(deviceId ?? null);
@@ -8489,7 +8558,7 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
           onCreate={(form: CreateWorkerForm) => {
             patchCollab({
               enabled: true,
-              worker: form.agent === 'codex' ? 'codex' : form.agent === 'pi' ? 'pi' : 'cc',
+              worker: form.agent === 'claude-code' ? 'cc' : form.agent,
               workerConfig: {
                 role: form.role,
                 model: form.model,
@@ -8515,6 +8584,7 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
           submitLabel={t('orca.createWorker.enableCollabSubmit')}
           requireWorkerPermissionModeSupport
           deviceId={effectiveDeviceLinkDeviceId ?? undefined}
+          pluginEnginesEnabled={!effectiveDeviceLinkDeviceId && !effectiveRemoteHostId}
           // SSH 远程草稿(draft.remoteHostId):worker 在远端 spawn,模型清单按 SSH
           // 口径过滤,与本路由 ChatInput 候选及 main 侧 remote-worker guard 同口径。
           sshRemote={!!effectiveRemoteHostId}

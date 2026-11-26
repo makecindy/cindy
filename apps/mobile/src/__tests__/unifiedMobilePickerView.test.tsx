@@ -645,3 +645,62 @@ it.each([['Android', UnifiedModelPickerView], ['iOS', IosModelPickerView]] as co
     expect(host.textContent).toContain('64% · 2h');
   },
 );
+
+// 生产入口：Android(UnifiedModelPickerView) 与 iOS(UnifiedModelPickerView.ios)；
+// 可观察结果：两端都在「收藏」分组渲染插件引擎收藏行、在插件引擎行上提供配置入口、并渲染 pluginEngineOptions 收藏页。
+// 规则依据：protocol-compatibility/plugin-harnesses.md「插件引擎模型收藏」与双端一致性。
+// 最小失败输入与 tier：unit(jsdom)，任一端漏渲染收藏行或漏接 pluginEngineOptions.onFavorite。
+it.each([['Android', UnifiedModelPickerView], ['iOS', IosModelPickerView]] as const)(
+  'renders plugin engine favorites and pluginEngineOptions page on %s', async (_platform, Component) => {
+    const onSelect = vi.fn();
+    const onOptions = vi.fn();
+    const onFavorite = vi.fn();
+    const favRow = {
+      key: 'fav-1',
+      providerId: 'acp-plugin:dsh:dsh',
+      modelId: 'pro',
+      title: 'Pro',
+      subtitle: 'DeepSeek Harness',
+      engineName: 'DeepSeek Harness',
+      effort: 'max' as const,
+      efforts: ['low', 'high', 'max'] as ('low' | 'high' | 'max')[],
+      effortLabel: 'Max',
+      selected: false,
+      disabled: false,
+      favorite: { uid: 'fav-1', providerId: 'acp-plugin:dsh:dsh', modelId: 'pro', agent: 'claude-code' as const, effort: 'max', fast: false },
+    };
+    await act(async () => root.render(createElement(Component, {
+      visible: true, testID: 'picker', query: '', filter: 'favorites', filters: [],
+      groups: [{ key: 'favorites', title: 'Favorites', rows: [], items: [{ kind: 'pluginEngine', row: favRow }] }],
+      pluginEngines: { groups: [], onSelect, onOptions },
+    } as any)));
+    expect(host.textContent).toContain('Favorites');
+    expect(host.textContent).toContain('Pro');
+    expect(host.textContent).toContain('DeepSeek Harness');
+    const rowEl = host.querySelector('[data-testid="picker.pluginEngine.fav-1"]')
+      ?? [...host.querySelectorAll('button')].find((node) => node.textContent?.includes('Pro'));
+    await act(async () => (rowEl as HTMLElement).click());
+    expect(onSelect).toHaveBeenCalledWith(favRow);
+
+    await act(async () => root.render(createElement(Component, {
+      visible: true, testID: 'picker', query: '', filter: 'all', filters: [], groups: [],
+      pluginEngineOptions: {
+        row: favRow,
+        context: 'DeepSeek Harness',
+        effort: 'max',
+        efforts: ['low', 'high', 'max'],
+        onChangeEffort: vi.fn(),
+        favoritesDisabled: false,
+        isFavorite: false,
+        configurationSummary: 'DeepSeek Harness · Max',
+        editingFavorite: false,
+        onFavorite,
+      },
+    } as any)));
+    const favBtn = host.querySelector('[data-testid="picker.favorite"]')
+      ?? [...host.querySelectorAll('button')].find((node) => node.textContent?.includes('models.unified.favoriteConfiguration'));
+    expect(favBtn).toBeTruthy();
+    await act(async () => (favBtn as HTMLElement).click());
+    expect(onFavorite).toHaveBeenCalledOnce();
+  },
+);

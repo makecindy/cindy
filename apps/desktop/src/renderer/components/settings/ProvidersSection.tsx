@@ -94,6 +94,7 @@ import { WithdrawnModelsDialog, type WithdrawnModelsReview } from './WithdrawnMo
 import { createLogger } from '@/lib/logger';
 import { providerDisplayName } from '@/lib/providerDisplayName';
 import { providerMonogram } from '@/lib/providerModels';
+import { clearGlmFlashDiscovery, hasGlmFlashDiscovery, GLM_REALTIME_FLASH, isGlmApiBase, isGlmPresetRoute } from '../../../shared/glmRealtimeDiscovery';
 import { isBuiltinApiKeyProviderId } from '../../../shared/providerSecrets';
 import type {
   CustomProviderUpdateOptions,
@@ -3268,6 +3269,7 @@ export function ProvidersSection({ routing = false, onRoutingChange }: {
         const config = providerViewToCustomProviderConfig(p);
         let added = 0;
         let failureCode: ProviderErrorCode | undefined;
+        let flashAccessRevoked = false;
         const refreshedAgents = new Set<AgentKind>();
         // Withdrawal is only judged for API key connections when every configured runtime
         // returned a complete catalog; OAuth discovery stays additions-only.
@@ -3277,6 +3279,7 @@ export function ProvidersSection({ routing = false, onRoutingChange }: {
         const absentByAgent = new Map<AgentKind, Set<string>>();
         // Main accepts new listing markers only with a receipt still matching this connection.
         const listingReceipts: Partial<Record<AgentKind, string>> = {};
+        const refreshBatch = crypto.randomUUID();
         const batch = await fetchCustomProviderModelsForRefresh(p, config);
         for (const agent of p.agents) {
           const rt = config.runtimes[agent];
@@ -3294,7 +3297,12 @@ export function ProvidersSection({ routing = false, onRoutingChange }: {
             modelsUrl: rt.modelsUrl ?? null,
             apiKey,
             savedProviderId: p.id,
+            ...((isGlmApiBase(rt.baseUrl) || isGlmPresetRoute(rt.baseUrl, rt.catalogPresetId)) && { refreshBatch }),
           });
+          if (r.glmFlashProbe === 'unavailable' && rt.models.some(hasGlmFlashDiscovery)) {
+            rt.models = rt.models.map(clearGlmFlashDiscovery);
+            flashAccessRevoked = true;
+          }
           if (!r.ok || !r.models) {
             // Prefer actionable authentication recovery when every runtime fails.
             // Partial success still follows the existing merge/save path below.
@@ -3322,7 +3330,10 @@ export function ProvidersSection({ routing = false, onRoutingChange }: {
           if (r.complete !== true) {
             catalogsComplete = false;
           } else {
-            const result = findWithdrawnCustomProviderModels(merged.models, r.models);
+            const result = findWithdrawnCustomProviderModels(
+              r.glmFlashProbe === 'unknown' ? merged.models.filter(model => model.id !== GLM_REALTIME_FLASH) : merged.models,
+              r.models,
+            );
             withdrawnSuspicious ||= result.suspicious;
             absentByAgent.set(agent, new Set(result.withdrawn.map((model) => model.id)));
             for (const model of result.withdrawn) {
@@ -3343,6 +3354,11 @@ export function ProvidersSection({ routing = false, onRoutingChange }: {
             absent?.has(model.id) ? { ...model, missingUpstream: true as const } : model);
         }
         if (!refreshedAgents.size) {
+          if (flashAccessRevoked) {
+            const saved = await confirmProviderChange(options => updateCustomProvider(config, {}, options));
+            if (!saved) return;
+            refetch();
+          }
           toast.error(t(failureCode === 'AUTH_INVALID' && p.auth.method === 'oauth'
             ? 'settings.providers.models.refreshReconnect'
             : failureCode && failureCode !== 'UNKNOWN'

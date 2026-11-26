@@ -938,6 +938,7 @@ function DeviceDetailScreenContent() {
                   filterActions={searchFilterMenu.filterActions}
                   filterActive={indexedSearch.activeFilterCount > 0}
                   searching={indexedSearch.status === 'searching'}
+                  poolCapped={indexedSearch.poolCapped}
                   onChangeQuery={setSearchQuery}
                   onDismiss={() => setSearchOpen(false)}
                   onFilterAction={searchFilterMenu.onFilterAction}
@@ -1157,6 +1158,7 @@ function DeviceDetailScreenContent() {
             filterActions={searchFilterMenu.filterActions}
             filterActive={indexedSearch.activeFilterCount > 0}
             searching={indexedSearch.status === 'searching'}
+            poolCapped={indexedSearch.poolCapped}
             onChangeQuery={setSearchQuery}
             onFilterAction={searchFilterMenu.onFilterAction}
             onOpenFilter={() => setSearchFilterOpen(true)}

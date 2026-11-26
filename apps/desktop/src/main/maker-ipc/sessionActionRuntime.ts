@@ -51,6 +51,9 @@ export function createSessionActionRuntime<Row extends StoredSession, Live>(deps
       if (action !== 'pi-history' && row.agentDeviceId && !row.remoteHostId) {
         throwIpcError('PRECONDITION_FAILED', 'Restore this task on the computer that runs it first');
       }
+      // ACP plugin engines rewind by closing any live runtime and seeding a handoff reset
+      // on the next send, so cold tasks never need to spawn the external CLI just to rewind.
+      if (action === 'rewind' && row.agentKind === 'acp') return null;
       if (!row.sdkSessionId || row.sdkSessionId === '<pending>') {
         // A previous first-turn Claude rewind deliberately detached the native
         // history. Orchestration can still rewind the remaining DB projection.

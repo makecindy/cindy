@@ -6,7 +6,9 @@ import { resolveSubscriptionPoolProvider } from '../subscription-accounts/placem
 import { SUBSCRIPTION_ACCOUNTS_CHANNEL } from '../../shared/subscriptionAccounts.js';
 import { dbToMakerAgentKind } from '../../shared/agentKindConversion.js';
 import { getSessionRuntimeControlSnapshot } from '../maker-ipc/sessionRuntimeControl.js';
-import { readDeviceProviderCatalog } from '../remote-agent/controller/deviceCatalog.js';
+import { pluginEngineDescriptors } from '../maker-ipc/pluginEnginesIpc.js';
+import { isDisallowedPluginEngineDeviceId } from '../maker-ipc/pluginEngineSessionAdmission.js';
+import { readDeviceProviderCatalog, readRemotePluginEngines } from '../remote-agent/controller/deviceCatalog.js';
 import { readSessionQuota } from './sessionQuota.js';
 import { createSessionToolCatalogExecutor } from '../maker-ipc/sessionToolCatalog.js';
 import { updateProjectInfo } from '../localDb/ipc/projectAliases.js';
@@ -24,7 +26,7 @@ import { getGhostFsSlot, getGhostStorageService } from '../cindy-brain/index.js'
 import { createStorageToolExecutor } from '../cindy-brain/storageToolAccess.js';
 import { getDesktopHostTerminalService } from '../terminal/terminalService.desktop.js';
 import { getDefaultShellPref } from '../terminal/terminalPrefsStore.js';
-import { findGhostForInstanceId } from '../cindy-brain/index.js';
+import { findGhostForInstanceId, ghostEventSourceCandidates } from '../cindy-brain/index.js';
 import { searchGhostRuntimeMemories } from '../cindy-brain/index.js';
 import { getPiKernelManager } from '../agent-binaries/index.js';
 import { PiKernelError } from '../agent-binaries/pi-kernel-manager.js';
@@ -159,6 +161,7 @@ import { commitTaskRewind } from '../maker-ipc/rewind.js';
 import { authorizeGroupTool, reportGroupTaskCreated } from '../maker-ipc/botGroupToolAuthorization.js';
 import { createSharedTaskTools, type SharedTaskCallerAccess } from './sharedTaskTools.js';
 import { createSharedTaskProgressReader } from './sharedTaskProgress.js';
+import { createSharedTaskDelivery } from './sharedTaskDelivery.js';
 import { assertTaskActionCurrent, captureTaskActionSyncGuard, taskActionRevocationCode } from '../maker-ipc/taskActionAuthorization.js';
 import {
   getSessionRowSnapshot,
@@ -635,6 +638,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
       // 仅 description 生成模式需要,tool-call 时才解引用。
       webhookStatus: (schedule) => getScheduleWebhookHost()?.status(schedule) ?? null,
       webhookReceiver: scheduleWebhookReceiver,
+      pluginEventSources: async () => ghostEventSourceCandidates(),
       webhookManagement: {
         list: async () => {
           const host = getScheduleWebhookHost();
@@ -698,7 +702,13 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
       // 本机还列出用户的模型组(模式)，定时任务的 modelGroup 传其 id(model-groups.md §6.3)。
       listModels: wrap(async (s, params) => {
         const result = await s.listAvailableModels(params);
-        if (!result.ok || params.agentDeviceId) return result;
+        if (!result.ok) return result;
+        if (params.agentDeviceId) {
+          if (params.agent || isDisallowedPluginEngineDeviceId(params.agentDeviceId)) return result;
+          const remoteEngines = await readRemotePluginEngines(params.agentDeviceId).catch(() => []);
+          const pluginEngines = pluginEngineDescriptors(remoteEngines);
+          return pluginEngines.length > 0 ? { ...result, pluginEngines } : result;
+        }
         const modelGroups = readModelGroupsConfig().routes.map((route) => ({
           id: route.id,
           name: route.name,
@@ -1277,6 +1287,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
             },
           }
         : {}),
+      sendToSharedTask: createSharedTaskDelivery({ ...sharedTaskCallerAccess, invoke: deps.invokeRemote, assertActionCurrent: assertTaskActionCurrent }),
       sendToSession: async ({
         device,
         targetSessionId,
