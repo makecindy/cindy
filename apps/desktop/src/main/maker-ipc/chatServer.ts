@@ -2851,8 +2851,8 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
    */
   function definitiveRefusal(action: string, error: unknown): error is ChatResponseError {
     return action === 'complete' && error instanceof ChatResponseError && !retryableResponse(error)
-      && error.status >= 400 && error.status < 500 && !contentRefusal(action, error)
-      && error.message !== 'STOP_REQUESTED';
+      && error.status >= 400 && error.status < 500 && error.message !== 'STOP_REQUESTED'
+      && !contentRefusal(action, error);
   }
   /** Drops the optional locator block the retry leaves out; `false` when there is nothing to drop. */
   function dropProcessLocator(payload: Record<string, unknown>): boolean {
