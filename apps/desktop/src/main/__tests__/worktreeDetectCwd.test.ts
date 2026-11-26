@@ -38,7 +38,7 @@ beforeEach(() => {
   // Synchronous Git fixtures consume no work budget; fake-timer cases replace this clock.
   vi.spyOn(performance, 'now').mockReturnValue(0);
   // Synthetic paths need no filesystem I/O, including fake-timer timeout tests.
-  realpathMock.mockReset().mockRejectedValue(Object.assign(new Error('missing directory'), { code: 'ENOENT' }));
+  realpathMock.mockReset().mockImplementation(async (cwd) => String(cwd));
 });
 
 afterEach(() => {
@@ -203,8 +203,17 @@ describe('detectCwd → isInsideWorktree (I-1 fix)', () => {
     }
   });
 
-  // #6409: a failed physical-cwd lookup must preserve Git's partial/error result.
-  it.each([true, false])('preserves missing-directory results when gitInstalled=%s', async (gitInstalled) => {
+  // #13175 / #6409, unit tier: when realpath confirms ENOENT/ENOTDIR, preserve
+  // gitInstalled via `git --version` without spawning doomed `git rev-parse` calls
+  // against the missing cwd. Minimal failure: a deleted worktree path with realpath
+  // rejecting ENOENT/ENOTDIR previously triggered 2 failing rev-parse spawns.
+  it.each([
+    { code: 'ENOENT', gitInstalled: true },
+    { code: 'ENOENT', gitInstalled: false },
+    { code: 'ENOTDIR', gitInstalled: true },
+    { code: 'ENOTDIR', gitInstalled: false },
+  ])('skips rev-parse spawns on $code while preserving gitInstalled=$gitInstalled', async ({ code, gitInstalled }) => {
+    realpathMock.mockRejectedValue(Object.assign(new Error(`realpath ${code}`), { code }));
     gitExecMock.mockImplementation(async (args: readonly string[]) => {
       if (gitInstalled && args[0] === '--version') return { stdout: 'git version 2.45.0\n', stderr: '' };
       throw new GitExecError({ args, exitCode: null, stderr: '', stdout: '',
@@ -215,6 +224,8 @@ describe('detectCwd → isInsideWorktree (I-1 fix)', () => {
       isInsideWorktree: false,
       gitInstalled,
     });
+    expect(gitExecMock).toHaveBeenCalledTimes(1);
+    expect(gitExecMock).toHaveBeenCalledWith(['--version'], undefined, expect.any(Object));
   });
 
   it('releases all four hung probes after Git timeout and allows queued work and same-path retries', async () => {

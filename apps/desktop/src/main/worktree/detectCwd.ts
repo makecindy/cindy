@@ -37,37 +37,42 @@ async function detectCwdOnce(cwd: string, opts?: DetectCwdOptions): Promise<Dete
   };
   // Git resolves relative metadata paths from the physical process cwd. A
   // symlink spelling can otherwise make an ordinary repo look like a linked
-  // worktree. Keep Git's existing error handling if the directory is unavailable.
+  // worktree. If the directory itself is missing (ENOENT/ENOTDIR), skip the
+  // doomed rev-parse spawns while still preserving gitInstalled detection.
+  let missingDir = false;
   cwd = await realpathWorkingDirectory(cwd).catch((err) => {
     // Keep timeout/pool exhaustion unknown; falling back to a symlink spelling
     // could recreate the false linked-worktree result we are trying to avoid.
     if (err?.code === 'WORKDIR_PROBE_TIMEOUT' || err?.code === 'WORKDIR_PROBE_UNAVAILABLE') throw err;
+    if (err?.code === 'ENOENT' || err?.code === 'ENOTDIR') missingDir = true;
     return cwd;
   });
   // One Git process returns the same snapshot that previously needed five.
   // Unborn HEADs, older Git versions and newline-containing paths retain the
   // individual-query fallback below rather than changing the IPC contract.
-  try {
-    const { stdout } = await probeGit(
-      ['rev-parse', '--show-toplevel', '--abbrev-ref', 'HEAD', '--git-dir', '--git-common-dir'],
-      cwd,
-    );
-    const lines = gitPathOutput(stdout).split(process.platform === 'win32' ? /\r?\n/ : /\n/);
-    if (lines.length === 4 && lines.every((line) => line.trim().length > 0)) {
-      const [root, branch, gitDir, commonDir] = lines;
-      return {
-        isGitRepo: true,
-        isInsideWorktree: path.resolve(cwd, gitDir) !== path.resolve(cwd, commonDir),
-        gitInstalled: true,
-        supportsRecoveryKeyDiscard: true,
-        supportsCheckout: true,
-        repoRoot: path.resolve(root),
-        ...(branch !== 'HEAD' ? { currentBranch: branch.trim() } : {}),
-      };
+  if (!missingDir) {
+    try {
+      const { stdout } = await probeGit(
+        ['rev-parse', '--show-toplevel', '--abbrev-ref', 'HEAD', '--git-dir', '--git-common-dir'],
+        cwd,
+      );
+      const lines = gitPathOutput(stdout).split(process.platform === 'win32' ? /\r?\n/ : /\n/);
+      if (lines.length === 4 && lines.every((line) => line.trim().length > 0)) {
+        const [root, branch, gitDir, commonDir] = lines;
+        return {
+          isGitRepo: true,
+          isInsideWorktree: path.resolve(cwd, gitDir) !== path.resolve(cwd, commonDir),
+          gitInstalled: true,
+          supportsRecoveryKeyDiscard: true,
+          supportsCheckout: true,
+          repoRoot: path.resolve(root),
+          ...(branch !== 'HEAD' ? { currentBranch: branch.trim() } : {}),
+        };
+      }
+    } catch (err) {
+      if (err instanceof GitExecError && err.timedOut) throw err;
+      // Preserve the existing partial results and error classification.
     }
-  } catch (err) {
-    if (err instanceof GitExecError && err.timedOut) throw err;
-    // Preserve the existing partial results and error classification.
   }
   const out: DetectCwdResp = {
     isGitRepo: false,
@@ -89,6 +94,8 @@ async function detectCwdOnce(cwd: string, opts?: DetectCwdOptions): Promise<Dete
     out.gitInstalled = false;
     return out;
   }
+
+  if (missingDir) return out;
 
   // 2. rev-parse --show-toplevel: 拿 repo 根
   try {
