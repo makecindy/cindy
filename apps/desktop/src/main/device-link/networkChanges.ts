@@ -6,16 +6,30 @@ export interface WatchNetworkChangesOptions {
   readProxy?: () => Promise<string | null | undefined>;
 }
 
-/** Observe interface/address and optional system proxy changes without recording addresses in logs.
+/**
+ * macOS peer-to-peer / Apple-internal virtual interfaces (AirDrop/Handoff/Continuity/USB bridge)
+ * come and go every few seconds during normal desktop use and never carry routable traffic.
+ */
+const IGNORED_INTERFACE = /^(?:awdl|llw|anpi|anri)\d+$/i;
+
+function isLinkLocalAddress(address: string): boolean {
+  const lower = address.toLowerCase();
+  return lower.startsWith('169.254.') || /^fe[89ab][0-9a-f]:/.test(lower);
+}
+
+/** Observe routable interface/address and optional system proxy changes without recording addresses in logs.
+ * Link-local addresses (fe80::/10, 169.254.0.0/16) and ephemeral macOS P2P interfaces (awdl/llw/anpi/anri)
+ * are ignored so AirDrop/Continuity/idle utun churn does not trigger spurious network resets or UDP rebinds.
  * Pure route-only VPN/transparent-proxy changes without interface or proxy updates remain covered by
  * the relay heartbeat and Agent-Net's UDP socket blackhole recovery. */
 export function watchNetworkChanges(onChange: () => void, options?: WatchNetworkChangesOptions): () => void {
   const snapshot = (): string =>
     JSON.stringify(
       Object.entries(networkInterfaces())
+        .filter(([name]) => !IGNORED_INTERFACE.test(name))
         .flatMap(([name, addresses]) =>
           (addresses ?? [])
-            .filter((address) => !address.internal)
+            .filter((address) => !address.internal && !isLinkLocalAddress(address.address))
             .map((address) => `${name}:${address.family}:${address.address}`),
         )
         .sort(),

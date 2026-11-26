@@ -89,3 +89,71 @@ it('detects system proxy changes even when interfaces stay unchanged, deduplicat
   await Promise.resolve();
   expect(changed).toHaveBeenCalledTimes(2);
 });
+
+/**
+ * 测试价值
+ * - 生产入口与可观察结果：`watchNetworkChanges` 在 macOS 出现/消失 `awdl0`/`llw0`/`anpi0`/`anri0`
+ *   以及任意网卡上 `fe80::/10`、`169.254.0.0/16` 链路本地地址抖动时不触发 `onChange`；
+ *   真实可路由 IPv4 或 ULA/公网 IPv6 变化时仍立即触发一次 `onChange`。
+ * - Bug／规则依据：2026-11-26 本机实测 4 小时内触发 99 次 `network-changed` 误重绑，根因是
+ *   `watchNetworkChanges` 把 `awdl0`/`llw0`/`utun*` 的 `fe80::` 抖动当成了换网。
+ * - 现有覆盖缺口：原用例仅使用固定可路由 IPv4，未覆盖链路本地地址与 macOS 虚拟 P2P 网卡抖动。
+ * - 最小失败输入：`en1` 保持 `192.168.68.59`，交替出现/移除 `awdl0`（`fe80::...`）与 `utun4`（`fe80::...`）。
+ * - tier：unit，假计时器。
+ */
+it('ignores link-local addresses and ephemeral macOS P2P interfaces while still detecting routable changes', () => {
+  vi.useFakeTimers();
+  const read = vi.mocked(networkInterfaces);
+  const wifiV4 = {
+    internal: false,
+    family: 'IPv4' as const,
+    address: '192.168.68.59',
+    netmask: '255.255.255.0',
+    mac: '00:00:00:00:00:00',
+    cidr: '192.168.68.59/24',
+  };
+  const linkLocalV6 = {
+    internal: false,
+    family: 'IPv6' as const,
+    address: 'fe80::30d5:c4ff:febc:a718',
+    netmask: 'ffff:ffff:ffff:ffff::',
+    mac: '00:00:00:00:00:00',
+    cidr: 'fe80::30d5:c4ff:febc:a718/64',
+    scopeid: 1,
+  };
+  const linkLocalV4 = {
+    ...wifiV4,
+    address: '169.254.12.34',
+    netmask: '255.255.0.0',
+    cidr: '169.254.12.34/16',
+  };
+  read.mockReturnValue({ en1: [wifiV4, linkLocalV6] });
+  const changed = vi.fn();
+  const stop = watchNetworkChanges(changed);
+
+  // Ephemeral macOS interfaces and link-local churn on utun/en1 must not trigger onChange.
+  read.mockReturnValue({
+    en1: [wifiV4, { ...linkLocalV6, address: 'fe80::1' }, linkLocalV4],
+    awdl0: [linkLocalV6, { ...wifiV4, address: '10.99.0.1', cidr: '10.99.0.1/24' }],
+    llw0: [linkLocalV6],
+    anpi0: [linkLocalV6],
+    anri0: [linkLocalV6],
+    utun4: [{ ...linkLocalV6, address: 'fe90::1234' }],
+  });
+  vi.advanceTimersByTime(2_000);
+  expect(changed).not.toHaveBeenCalled();
+
+  read.mockReturnValue({ en1: [wifiV4] });
+  vi.advanceTimersByTime(2_000);
+  expect(changed).not.toHaveBeenCalled();
+
+  // Routable Tailscale/VPN interface appearing still triggers onChange.
+  read.mockReturnValue({
+    en1: [wifiV4],
+    utun12: [linkLocalV6, { ...wifiV4, address: '100.82.251.65', cidr: '100.82.251.65/32' }],
+  });
+  vi.advanceTimersByTime(2_000);
+  expect(changed).toHaveBeenCalledTimes(1);
+
+  stop();
+});
