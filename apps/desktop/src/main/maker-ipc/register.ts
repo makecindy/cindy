@@ -1,4 +1,5 @@
 import { assertSessionTreeOwner, navigateAndRehydrateSessionTree } from './sessionTreeNavigation.js';
+import { selectMakerBroadcastTargets } from './broadcastTargets.js';
 import { bindSessionUsageAccount } from '../usage/sessionUsageOwner.js';
 import { readContextRecoverySessionWithPorts, classifyCodexHistoryWithPorts, commitContextRecoveryWithPorts, replayContextRecoveryWithPorts, contextRecoveryRebuilt } from './contextRecoveryAssembly.js';
 import { desktopContextRecoveryAbortSignal } from './contextRecoveryAssembly.desktop.js';
@@ -24468,8 +24469,7 @@ function broadcastToAllWindows(
       error: err instanceof Error ? err.message : String(err),
     });
   }
-  for (const win of BrowserWindow.getAllWindows()) {
-    if (win.isDestroyed()) continue;
+  for (const win of selectMakerBroadcastTargets(BrowserWindow.getAllWindows())) {
     try {
       if (ownerStamp === undefined) win.webContents.send(channel, payload);
       else win.webContents.send(channel, payload, ownerStamp);

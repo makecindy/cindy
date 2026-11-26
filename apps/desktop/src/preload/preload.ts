@@ -85,6 +85,7 @@ import { supportsBetaUpdateChannel } from '../shared/updateChannelCapability';
 import { macPermissionAppPath } from '../shared/macControlPermission';
 import {
   isWindowsBackdropMaterial,
+  readGpuFallbackFromArgv,
   readWindowBackdropMaterialFromArgv,
   WINDOW_BACKDROP_MATERIAL_CHANGED_CHANNEL,
 } from '../shared/windowBackdrop';
@@ -1324,6 +1325,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   liveScreenRelay: createLiveScreenRelayBridge(),
   supportsBetaUpdateChannel: supportsBetaUpdateChannel(process.platform, process.arch),
   windowBackdropMaterial: readWindowBackdropMaterialFromArgv(process.argv),
+  gpuFallback: readGpuFallbackFromArgv(process.argv),
   onWindowBackdropMaterialChanged: (
     cb: (material: import('../shared/windowBackdrop').WindowsBackdropMaterial) => void,
   ) =>

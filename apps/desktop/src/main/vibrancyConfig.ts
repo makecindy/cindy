@@ -6,6 +6,7 @@
  * 较早 Windows 11 与 Linux 回退不透明。
  */
 import type { BrowserWindow } from 'electron';
+import { isHardwareAccelerationDisabled } from './gpuRenderingPolicy.js';
 import { createLogger } from './logger.js';
 import {
   CINDY_ACRYLIC_WINDOW_BACKING,
@@ -29,6 +30,7 @@ export interface ResolveVibrancyConfigOptions {
   getSystemVersion?: () => string;
   wallpaperCovered?: boolean;
   desktopBlur?: number | null;
+  gpuFallback?: boolean;
 }
 
 // Coverage belongs to the rendered window, not the shared wallpaper selection:
@@ -156,6 +158,16 @@ export function resolveVibrancyConfig(
   platform: string,
   options?: ResolveVibrancyConfigOptions,
 ): VibrancyConfig {
+  const opaqueBg = isDark ? '#1f1f1e' : '#f8f8f6';
+  const gpuFallback = options?.gpuFallback ?? isHardwareAccelerationDisabled();
+  if (gpuFallback) {
+    // 软件渲染回退模式关闭透明窗、原生 vibrancy 与桌面模糊，规避 GPU 合成花屏/黑块。
+    return {
+      vibrancy: null,
+      backgroundColor: opaqueBg,
+      ...(platform === 'win32' ? { backgroundMaterial: 'none' as const } : {}),
+    };
+  }
   if (!options?.wallpaperCovered && typeof options?.desktopBlur === 'number') {
     return {
       vibrancy: platform === 'darwin' && options.desktopBlur ? 'under-window' : null,
@@ -170,7 +182,6 @@ export function resolveVibrancyConfig(
     };
   }
   const isCindy = familyId === 'cindy' && !options?.wallpaperCovered;
-  const opaqueBg = isDark ? '#1f1f1e' : '#f8f8f6';
   if (platform === 'darwin') {
     // 材质 A/B 旋钮(dev 调参用):XDT_VIBRANCY_MATERIAL=sidebar|hud|under-window|fullscreen-ui|
     // popover|menu|none('none'=无材质纯透明,壁纸不模糊直透)。缺省 'hud'(用户实测定稿,2026-07-19 回写)。

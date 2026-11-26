@@ -39,9 +39,11 @@ import {
   resolveWindowsWindowTransparent,
 } from './vibrancyConfig.js';
 import {
+  createGpuFallbackArgument,
   createWindowBackdropMaterialArgument,
   WINDOW_BACKDROP_MATERIAL_CHANGED_CHANNEL,
 } from '../shared/windowBackdrop.js';
+import { isHardwareAccelerationDisabled } from './gpuRenderingPolicy.js';
 import type { WindowsBackdropMaterial } from './vibrancyConfig.js';
 import { installSelectionContextMenu } from './selection-context-menu.js';
 import { applyAppearanceToWindow, installWindowZoomRestoration } from './appearance-settings-ipc.js';
@@ -139,6 +141,7 @@ export function openSessionInNewWindow(
         persistedTheme?.resolvedIsDark,
       )
     : nativeTheme.shouldUseDarkColors;
+  const gpuFallback = isHardwareAccelerationDisabled();
   const bgColor = isDark ? '#1f1f1e' : '#f8f8f6';
   const winBackdropConfig = resolveVibrancyConfig(
     persistedTheme?.familyId ?? 'cindy',
@@ -146,9 +149,11 @@ export function openSessionInNewWindow(
     process.platform,
   );
   // Windows: a transparent window flickers under a system backdrop (see vibrancyConfig).
+  // Software-rendering GPU fallback also disables window transparency to prevent compositor artifacts.
   const windowTransparent =
-    process.platform !== 'win32' ||
-    resolveWindowsWindowTransparent(winBackdropConfig, persistedTheme?.needsTransparentWindow);
+    !gpuFallback &&
+    (process.platform !== 'win32' ||
+      resolveWindowsWindowTransparent(winBackdropConfig, persistedTheme?.needsTransparentWindow));
 
   const base = mainWindow && !mainWindow.isDestroyed() ? mainWindow.getBounds() : null;
   const requestedSize = base
@@ -193,6 +198,7 @@ export function openSessionInNewWindow(
       preload: path.join(__dirname, 'preload.js'),
       additionalArguments: [
         createWindowBackdropMaterialArgument(winBackdropConfig.backgroundMaterial ?? 'none'),
+        ...(gpuFallback ? [createGpuFallbackArgument()] : []),
       ],
       spellcheck: false,
       // A task drag that misses a renderer drop target must never navigate the
