@@ -99,3 +99,24 @@ describe('classifyVisionCapability', () => {
     expect(isKnownNoVisionModel('anthropic/claude-opus-4-8')).toBe(false);
   });
 });
+
+// #11296: 智谱 v4 端点对 glm-5.3 严格拒绝 content[].type = "image_url"（code 1210），
+// 会话里一旦贴图就每轮 400。目录里同家族还并存视觉变体，所以只能按型号精确判定。
+describe('glm-5.3 text-only family (#11296)', () => {
+  it('classifies glm-5.3 as no-vision across namespace and casing forms', () => {
+    expect(classifyVisionCapability('glm-5.3')).toBe('no-vision');
+    expect(classifyVisionCapability('z-ai/glm-5.3')).toBe('no-vision');
+    expect(classifyVisionCapability('baseten/zai-org/glm-5.3')).toBe('no-vision');
+    expect(classifyVisionCapability('glm-5.3[1m]')).toBe('no-vision');
+    expect(classifyVisionCapability('zai-org/GLM-5.3')).toBe('no-vision');
+  });
+
+  it('does not drag vision-capable siblings of the same family into no-vision', () => {
+    expect(classifyVisionCapability('glm-5.3-flash')).not.toBe('no-vision');
+    expect(classifyVisionCapability('zai-org/GLM-5.3-Flash')).not.toBe('no-vision');
+  });
+
+  it('still lets an explicit vision marker win over the exact model match', () => {
+    expect(classifyVisionCapability('glm-5.3-vision')).toBe('vision');
+  });
+});

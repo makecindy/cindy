@@ -29,13 +29,13 @@ import { canonicalSkillPath, snapshotDisabledSkillLaunch, currentDisabledSkillLa
  */
 
 import { LIBRARY_READ_ROOT, libraryNativeReadContext } from '../shared/library-native-read.js';
-import { completedPiResponsesMessage, type PiResponsesCompletion } from './responses-completion.js';
 import { piCacheRouteKey, type PiCacheCompatibility } from './cache-compatibility.js';
 import os from 'node:os';
 import path from 'node:path';
 import { constants as fsConstants, promises as fs } from 'node:fs';
 import { createHash, createHmac, randomBytes } from 'node:crypto';
 import { piSupportedEfforts } from '@cindy/model-providers/pi-thinking-levels';
+import { piNativeModelInput } from './model-input.js';
 import { readPiGlobalContext } from './global-context.js';
 import { findPiCloudContextFile, piCloudContextDisplayPath } from './startup-context-diagnostic.js';
 import { scanPiSessionJsonl } from './session-jsonl-scan.js';
@@ -84,7 +84,6 @@ import {
   PiManagedPackageMutationFailedError,
   projectPiPackageCommandDiagnostic,
   PiNativeProviderProxyNotReadyError,
-  PiByomRouteAbsentError,
   TurnDispatchRejectedError,
   TurnDispatchUnconfirmedError,
   TurnPermissionPolicyUnsupportedError,
@@ -116,7 +115,6 @@ import {
   CINDY_PI_TEXT_ONLY_READY_PREFIX,
   CINDY_PI_TEXT_ONLY_CLOSED_PREFIX,
   CINDY_PI_REQUEST_DIAGNOSTICS_PREFIX,
-  CINDY_PI_RESPONSES_COMPLETION_PREFIX,
   projectPiRequestDiagnostics,
   CINDY_BRIDGE_EXTENSION_SOURCE } from './cindy-bridge-source.js';
 import { nativeProviderAdapterAliases } from './native-provider-adapter-source.js';
@@ -219,7 +217,6 @@ import {
   buildReviewReadGrants } from '../shared/review-read-scope.js';
 import { resolveAgentCredentialMode } from '../credential-mode.js';
 import { PI_RPC_OVERSIZED_FRAME_ERROR, PiRpcProcess, type PiRpcEvent } from './rpc-client.js';
-import { piUpstreamStatus } from './upstream-status.js';
 import { createPiStdioTransport, type PiTransport } from './transport.js';
 import type { PiRemoteFileOps } from '../base-agent.js';
 import {
@@ -2558,7 +2555,7 @@ export class PiAgent extends BaseAgent {
           ...(m.api ? { api: m.api } : {}),
           reasoning: m.reasoning ?? false,
           ...(m.thinkingLevelMap ? { thinkingLevelMap: { ...m.thinkingLevelMap } } : {}),
-          input: m.input ?? ['text', 'image'],
+          input: piNativeModelInput(m),
           contextWindow,
           maxTokens: m.maxTokens && m.maxTokens > 0 ? m.maxTokens : piMaxTokensFallback(contextWindow),
           // Pi prices every finished turn through `calculateCost`, which reads
@@ -2919,15 +2916,13 @@ export class PiAgent extends BaseAgent {
       return !native || !native.models.some((candidate) => candidate.id === nativeModel);
     };
     if (explicitByomUnresolvable(opts.providerId, opts.model, nativeResolveFailed)) {
-      const message = `pi: BYOM provider '${opts.providerId}' cannot serve model '${opts.model}'` +
-        `${nativeResolveFailed
-          ? ' (native provider resolution failed)'
-          : ' (provider absent, or it no longer offers this model)'}; ` +
-        'refusing to fall back to the Cindy gateway (would send prompts to the wrong endpoint).';
-      if (!nativeResolveFailed && resolvePiNativeProviders && !nativeProviderForSource(opts.providerId)) {
-        throw new PiByomRouteAbsentError(opts.providerId, message);
-      }
-      throw new Error(message);
+      throw new Error(
+        `pi: BYOM provider '${opts.providerId}' cannot serve model '${opts.model}'` +
+          `${nativeResolveFailed
+            ? ' (native provider resolution failed)'
+            : ' (provider absent, or it no longer offers this model)'}; ` +
+          'refusing to fall back to the Cindy gateway (would send prompts to the wrong endpoint).',
+      );
     }
     const initialProvider = resolveProviderForModel(opts.model, opts.providerId);
     // Loopback is interpreted on the execution host. Shared-loopback topologies can reach
@@ -3112,15 +3107,9 @@ export class PiAgent extends BaseAgent {
     };
     for (const provider of nativeProviders) {
       if (provider.id === PI_PROVIDER_ID) continue;
-      const sourceProviderId = provider.sourceProviderId ?? provider.id;
-      // #12298: 宿主已知断开的订阅来源不进子代理路由。账号断开/移除后目录里的模型仍在,
-      // 父会话保留该 provider 块(重连后可直接切换),但子代理按这些名字派发会被接受,
-      // 然后在首次上游请求时必败(空 runId + 噪声失败通知)。路由不列即让调用方在派发前
-      // 撞上现有的「model not available in this session」拒绝,不创建 run、不尝试转发;
-      // 显式选择不被静默替换成父模型。宿主没给判据 / 读不到结论 → 不过滤。
-      if (this.deps.isNativeProviderSourceConnected?.(sourceProviderId) === false) continue;
       for (const model of provider.models) {
         const wireModel = model.wireId ?? model.id;
+        const sourceProviderId = provider.sourceProviderId ?? provider.id;
         const routeProxySessionToken = proxyTokenForSubagentProvider(provider, sourceProviderId);
         addSubagentModelRoute(
           model.id,
@@ -3474,18 +3463,6 @@ export class PiAgent extends BaseAgent {
       },
     );
     const explicitlyRequestedGateway = isExplicitPiGatewayProviderId(opts.providerId);
-    // An inherited Codex model can have no entry in either of Pi's model
-    // catalogs. Pi would treat it as a custom Cindy model and send the first
-    // request without the selected subscription's provider identity.
-    if (
-      !remote && !hosted && !reviewMode && !opts.resumeSessionId &&
-      !explicitlyRequestedGateway && !nativeResolveFailed &&
-      initialProvider === PI_PROVIDER_ID && !gatewayApiByModel.has(opts.model) &&
-      authProviderId === 'openai' &&
-      await opts.isNewMakerTask?.()
-    ) {
-      throw new Error(`Model '${opts.model}' is unavailable in the current Pi catalog. Choose a different model for this task.`);
-    }
     if (
       explicitlyRequestedGateway &&
       initialProvider === PI_PROVIDER_ID &&
@@ -4366,19 +4343,6 @@ export class PiAgent extends BaseAgent {
     }
     const ctx: PiTranslateContext = createPiTranslateContext(this.deps.logger, { model: initialWireModel });
     piToolMarkupProjection(ctx).attachTerminalQueue(queue);
-    let responsesReceipt: string | undefined;
-    let completedResponsesId: string | undefined;
-    function readResponsesCompletion(): PiResponsesCompletion | undefined {
-      const receipt = responsesReceipt;
-      const responseId = completedResponsesId;
-      responsesReceipt = completedResponsesId = undefined;
-      const provider = mutablePiProviderId;
-      const model = mutableWireModel;
-      const source = mutableProviderId;
-      if (!receipt || !responseId || !source || !nativeProviderById.has(provider)) return;
-      return (providerId, fingerprint) => providerId === source && receipt === createHmac('sha256', runtimeInstanceId)
-        .update(JSON.stringify([provider, model, responseId, fingerprint])).digest('hex');
-    }
     ctx.getPriceVariant = opts.getPriceVariant;
     ctx.resolveUsagePriceVariant = opts.resolveUsagePriceVariant;
     ctx.workingContextWindow = startupWorkingContextWindow;
@@ -6014,27 +5978,6 @@ export class PiAgent extends BaseAgent {
           // Retry exhaustion already settled the old run. Its optional native
           // tail must not clear a new prompt's permission policy before start.
           if (ctx.turnSettled && (event.type === 'agent_settled' || event.type === 'auto_retry_end')) return;
-          if (event.type === 'extension_ui_request' && event.method === 'notify'
-            && typeof event.message === 'string' && event.message.startsWith(CINDY_PI_RESPONSES_COMPLETION_PREFIX)) {
-            const prefix = CINDY_PI_RESPONSES_COMPLETION_PREFIX + runtimeInstanceId + ':';
-            const proof = event.message.slice(prefix.length);
-            if (!remote && !hosted && !reviewMode && ctx.isStreaming
-              && event.message.startsWith(prefix) && /^[a-f0-9]{64}$/.test(proof)) {
-              responsesReceipt = proof;
-            }
-            return;
-          }
-          if (!remote && !hosted && !reviewMode) {
-            if (event.type === 'agent_start' || event.type === 'auto_retry_start') {
-              responsesReceipt = completedResponsesId = undefined;
-            } else if (event.type === 'message_end') {
-              const message = event.message as { role?: string; provider?: string; model?: string; responseId?: string } | undefined;
-              if (message?.role === 'assistant') {
-                completedResponsesId = message.provider === mutablePiProviderId && message.model === mutableWireModel
-                  && completedPiResponsesMessage(message) ? message.responseId : undefined;
-              }
-            }
-          }
           if (nativeRecovery) {
             switch (event.type) {
               case 'auto_retry_start':
@@ -6306,8 +6249,7 @@ export class PiAgent extends BaseAgent {
               dismissPending: true,
             });
           }
-          translatePiEvent(event, queue, ctx,
-            event.type === 'agent_settled' ? readResponsesCompletion() : undefined);
+          translatePiEvent(event, queue, ctx);
           if (event.type === 'compaction_end') {
             const nativeAutomaticFailure =
               event.aborted !== true &&
@@ -7159,7 +7101,9 @@ export class PiAgent extends BaseAgent {
       const supportsImageInput =
         mutablePiProviderId === PI_PROVIDER_ID
           ? gatewayImageInputByModel.get(mutableModel) === true
-          : nativeModel !== undefined && (nativeModel.input ?? ['text', 'image']).includes('image');
+          // 用与 models.json 同一套归一化判定: 稀疏/自定义目录里 `nativeModel.input` 常常没声明,
+          // 直接按 `?? ['text','image']` 读会放行已知纯文本型号(别名路由的 glm-5.3 就是这样)。
+          : nativeModel !== undefined && piNativeModelInput(nativeModel).includes('image');
       if (supportsImageInput) return;
       throw new PiImageInputUnsupportedError();
     };
@@ -7319,7 +7263,7 @@ export class PiAgent extends BaseAgent {
         }
         if (!nativeModel) {
           return { action: 'unavailable', targetContextWindow: null, windowVerified: false,
-            modelNotOffered: true, reason: `Pi provider '${sourceId}' does not offer model '${model}'` };
+            reason: `Pi provider '${sourceId}' does not offer model '${model}'` };
         }
         inheritsNativeWindow = native.inheritModels === true && nativeModel.api === undefined
           && nativeModel.catalogAddition !== true && nativeModel.contextWindow === undefined;
@@ -7611,9 +7555,6 @@ export class PiAgent extends BaseAgent {
         for (const spec of nextProviders) {
           if (spec.id === PI_PROVIDER_ID) continue;
           const source = spec.sourceProviderId ?? spec.id;
-          // #12298: 与启动路径同一判据——刷新按 provider 清单整体重建路由,清单本身不带
-          // 连接态,不过滤就会把确知断开的订阅来源重新放回 modelRoutes,首次上游请求必败。
-          if (this.deps.isNativeProviderSourceConnected?.(source) === false) continue;
           const wasRegistered = subagentProxyTokens.has(source);
           const token = proxyTokenForSubagentProvider(spec, source);
           if (token && !wasRegistered && opts.sessionId && this.deps.registerPiProxySession) {
@@ -8309,21 +8250,10 @@ export class PiAgent extends BaseAgent {
             await runExclusivePiRpc(async () => {
               const before = await proc.request({ type: 'get_tree' });
               if (!before.success) {
-                const oversizedFrame = before.error === PI_RPC_OVERSIZED_FRAME_ERROR;
-                // Every failed history read is a definite non-dispatch: the
-                // provider never saw this message. Keep the bounded cause so
-                // the host can say "not sent" and name the reason instead of
-                // showing the generic "reply failed".
                 throw new TurnDispatchRejectedError(
-                  oversizedFrame
+                  before.error === PI_RPC_OVERSIZED_FRAME_ERROR
                     ? `Pi retry history unavailable: ${PI_RPC_OVERSIZED_FRAME_ERROR}`
                     : 'Pi retry history unavailable',
-                  oversizedFrame
-                    ? { diagnostic: 'pi-retry-history-frame-too-large' }
-                    : {
-                      diagnostic: 'pi-retry-history-unavailable',
-                      upstreamStatus: piUpstreamStatus(before.error),
-                    },
                 );
               }
               const branch = piRetryBranch(before.data, sendOpts.retryTranscriptUserEntryId!);
@@ -8338,9 +8268,7 @@ export class PiAgent extends BaseAgent {
               const switched = await proc.request({ type: 'prompt', message: `/cindy-branch-switch ${payload}` });
               const after = await proc.request({ type: 'get_tree' });
               if (!after.success && after.error === PI_RPC_OVERSIZED_FRAME_ERROR) {
-                throw new TurnDispatchRejectedError(`Pi retry history unavailable: ${PI_RPC_OVERSIZED_FRAME_ERROR}`, {
-                  diagnostic: 'pi-retry-history-frame-too-large',
-                });
+                throw new TurnDispatchRejectedError(`Pi retry history unavailable: ${PI_RPC_OVERSIZED_FRAME_ERROR}`);
               }
               if (!switched.success || !after.success || rawPiSessionTreeLeafId(after.data) !== branch.parentId) {
                 throw new TurnDispatchRejectedError('Pi retry branch navigation was not confirmed');
@@ -8868,11 +8796,6 @@ export class PiAgent extends BaseAgent {
 
       getPendingTurnUsage() {
         return ctx.turnGeneration > 0 && ctx.pendingHostTurnStartToken === null ? piTurnUsageOf(ctx) : undefined;
-      },
-      isCompactingDeliveredReply() {
-        return !proc.isClosed && !ctx.turnSettled && ctx.pendingHostTurnStartToken === null
-          && ctx.replyPhase === 'threshold-compaction'
-          && piToolMarkupProjection(ctx).hasDeliveredReply(ctx.finalAssistantText);
       },
 
       setInteractionResolver(resolver: InteractionResolver): void {

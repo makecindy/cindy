@@ -74,6 +74,28 @@ export function normalizeVisionModelId(model: string): string {
  * 前提一致；比逐个登记型号更能覆盖以后新出的变体。段边界（`^` / `-` / `/` 起，`-` / `.`
  * / 结尾止）用来避免误伤把这两个词当普通词素的名字。
  */
+/**
+ * 已知纯文本的**具体型号**（不是家族前缀）。
+ *
+ * GLM 家族里同时存在纯文本型号和带视觉的变体：`glm-5.3` 是纯文本，而 `GLM-5.3-Fast` /
+ * `GLM-5.3-Flash` 在目录里明确声明 `input: ['text', 'image']`。按家族前缀判定会把视觉变体
+ * 一起打成纯文本 —— 与 EXPLICIT_VISION_MARKER 当初要解决的问题同类，只是这次的区分维度是
+ * `-fast` / `-flash` 而不是 `-vision`。
+ *
+ * 因此按**型号尾段完全相等**匹配（大小写不敏感）：`glm-5.3` 命中，`glm-5.3-flash` 不命中。
+ */
+const NO_VISION_EXACT_MODELS: readonly string[] = [
+  // 智谱 v4 端点对 glm-5.3 严格拒绝 content[].type = "image_url"（code 1210，#11296）。
+  'glm-5.3',
+  'z-ai/glm-5.3',
+];
+
+/** 型号尾段精确匹配：`glm-5.3` 命中 `glm-5.3`、`z-ai/glm-5.3`、`baseten/zai-org/glm-5.3`。 */
+function matchesExactModel(id: string, model: string): boolean {
+  const lowered = id.toLowerCase();
+  return lowered === model || lowered.endsWith(`/${model}`);
+}
+
 const EXPLICIT_VISION_MARKER = /(?:^|[-/])(?:vision|vl\d*)(?:[-.]|$)/i;
 
 // DeepSeek V4.1 Flash supports native image input under these exact IDs.
@@ -89,6 +111,8 @@ export function classifyVisionCapability(model: string): VisionCapability {
   const id = normalizeVisionModelId(model);
   // 显式标记优先于家族级结论 —— 家族说「纯文本」，型号名说「我是视觉变体」时，后者更具体。
   if (EXPLICIT_VISION_MARKER.test(id)) return 'vision';
+  // 具体型号优先于家族前缀：`glm-5.3` 是纯文本，但 `glm-5.3-flash` 不是。
+  if (NO_VISION_EXACT_MODELS.some((m) => matchesExactModel(id, m))) return 'no-vision';
   if (VISION_MODEL_IDS.has(id.toLowerCase())) return 'vision';
   if (NO_VISION_ID_PREFIXES.some((p) => id.startsWith(p))) return 'no-vision';
   if (VISION_ID_PREFIXES.some((p) => id.startsWith(p))) return 'vision';
