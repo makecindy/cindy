@@ -406,6 +406,8 @@ export type InteractionDecision =
       inProgress?: boolean;
       /** Stable question id; legacy callers use question/header text. */
       answers: Record<string, string>;
+      /** Host-validated images for an async question's normal user input. */
+      answerImages?: readonly import('@cindy/maker-shared/interaction').QuestionAnswerImage[];
       /**
        * true = 系统性 dismissal(会话 abort/close、turn 失败等自动空答),
        * 不是用户 Skip。Codex detached continuation 据此不发起续跑 turn。

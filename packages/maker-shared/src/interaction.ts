@@ -32,6 +32,21 @@ export interface AskQuestion {
   answerConstraints?: AskAnswerConstraints;
 }
 
+export interface QuestionAnswerImage {
+  url: string;
+  mimeType: string;
+  originalName: string;
+  size: number;
+}
+
+/** Keep old text-only identities and distinguish changes to attached images. */
+export function questionAnswerSubmissionKey(
+  text: string,
+  images?: readonly Pick<QuestionAnswerImage, 'url' | 'originalName'>[],
+): string {
+  return images?.length ? JSON.stringify([text, images.map(({ url, originalName }) => [url, originalName])]) : text;
+}
+
 const NATIVE_REPLY_OPEN = '<send_user_message_question_reply>\n';
 const NATIVE_REPLY_CLOSE = '\n</send_user_message_question_reply>';
 const LATE_ANSWER_CONTEXT = `\n\n<cindy_question_context>\nThis is a delayed answer to an earlier question. Check the current task state and whether the question still applies before acting; do not repeat work already completed. This context is added by Cindy, not part of the user's answer or new authorization.\n</cindy_question_context>`;
@@ -49,25 +64,28 @@ export function isAnsweredAsyncQuestionClientId(clientId: unknown): boolean {
   return typeof clientId === 'string' && clientId.startsWith(ASYNC_QUESTION_ANSWERED_CLIENT_ID_PREFIX);
 }
 
-function asyncQuestionReplies(questions: readonly AskQuestion[], answers: Record<string, string>) {
+function asyncQuestionReplies(questions: readonly AskQuestion[], answers: Record<string, string>, hasImages = false) {
   return questions.flatMap((q) => {
     const answer = answers[answerKey(q)] ?? answers[q.question] ?? (q.header ? answers[q.header] : undefined);
-    return typeof answer === 'string' && answer.trim()
+    return typeof answer === 'string' && (answer.trim() || (hasImages && questions.length === 1))
       ? [{ ...(q.id ? { questionItemId: q.id } : {}), question: q.question, answer: answer.trim() }] : [];
   });
 }
 
 function readableQuestionReplies(replies: readonly { question: string; answer: string }[]): string {
-  return replies.map(({ question, answer }) => `${question.split('\n').map((line) => `> ${line}`).join('\n')}\n\n${answer}`).join('\n\n');
+  return replies.map(({ question, answer }) => {
+    const quoted = question.split('\n').map((line) => `> ${line}`).join('\n');
+    return answer ? `${quoted}\n\n${answer}` : quoted;
+  }).join('\n\n');
 }
 
 /** A late answer is ordinary user input, with the original question attached. This is the text the model receives. */
 export function formatAsyncQuestionSupplement(
   questions: readonly AskQuestion[],
   answers: Record<string, string>,
-  context?: { late?: boolean },
+  context?: { late?: boolean; hasImages?: boolean },
 ): string {
-  const replies = asyncQuestionReplies(questions, answers);
+  const replies = asyncQuestionReplies(questions, answers, context?.hasImages);
   if (!replies.length) return '';
   const message = questions.length && questions.every((q) => q.id?.startsWith('["request_user_input_async",'))
     ? `${NATIVE_REPLY_OPEN}${JSON.stringify(replies)}${NATIVE_REPLY_CLOSE}`
@@ -79,8 +97,9 @@ export function formatAsyncQuestionSupplement(
 export function formatAsyncQuestionReplyDisplay(
   questions: readonly AskQuestion[],
   answers: Record<string, string>,
+  context?: { hasImages?: boolean },
 ): string {
-  return readableQuestionReplies(asyncQuestionReplies(questions, answers));
+  return readableQuestionReplies(asyncQuestionReplies(questions, answers, context?.hasImages));
 }
 
 /** Rows saved before the display text existed hold the model's copy; read them back as question and answer. */

@@ -1,6 +1,7 @@
 import { recordGithubStarPromptSend, recordGithubStarPromptCompletion } from './githubStarPrompt';
 import { parseOutputLimitDetails, type OutputLimitDetails } from '@cindy/maker-shared';
 import { pendingGhostCardFormDelivery } from '@cindy/maker-shared/ghost-card-form';
+import { stageQuestionAnswerImages, type QuestionDraftImage } from './questionAnswerAttachments';
 import { applySessionRebalancePreferencePatch } from '@/features/provider-group/sessionRebalanceCache';
 import { isVoiceCallTaskMessage } from '../../shared/voiceConversation';
 import { remoteAgentLimitErrorKey } from '../../shared/remoteAgentLimits';
@@ -10,7 +11,7 @@ import { readBotTaskResults } from '@cindy/maker-shared/botCollaboration';
 import {
   asyncQuestionNeedsSupplement, asyncQuestionReplyDisplayText, formatAsyncQuestionReplyDisplay,
   formatAsyncQuestionSupplement, isAnsweredAsyncQuestionClientId, isAsyncQuestionReplyClientId,
-  remoteInteractionHandling,
+  questionAnswerSubmissionKey, remoteInteractionHandling,
 } from '@cindy/maker-shared/interaction';
 import { isComposerTypingRecently } from './composerTypingActivity';
 import { findErrorTailMessage } from './errorTailMessage';
@@ -986,10 +987,7 @@ export interface PluginSetupInlineFormValues {
  * requestId) is not contaminated by a stale draft — the component compares
  * `draft.requestId === pending.requestId` before hydrating.
  *
- * Only `currentIndex` + `answers` are persisted; `selectedLabels` /
- * `customInput` / `showCustomInput` are derived (see
- * `computeSelectionForIndex` in AskUserQuestionPrompt) and intentionally
- * recomputed on remount to avoid double-source-of-truth.
+ * Until an answer is sent, the wizard and any selected images stay in memory.
  */
 export interface AskUserDraft {
   requestId: string;
@@ -999,6 +997,7 @@ export interface AskUserDraft {
   customInput?: string;
   selectedLabels?: string[];
   showCustomInput?: boolean;
+  answerImages?: readonly QuestionDraftImage[];
 }
 
 /** FP-3: Pending plan-review data for the Plan Viewer Card. */
@@ -5637,6 +5636,7 @@ function hydratePersistedMessage(
     hydrated.askUserStatus = existing.askUserStatus;
     hydrated.askUserReply = existing.askUserReply;
     hydrated.askUserAnswers = existing.askUserAnswers;
+    hydrated.images = existing.images;
   }
   if (
     existing.role === 'plan_review' &&
@@ -7182,6 +7182,7 @@ export function handleStreamEvent(
         // 卡片据此渲染 ✓ 选项);无答案关闭只将 pending 标 expired，保留已回答记录。
         // 多窗口输家可能已经乐观写成 answered；仍要用赢家决策覆盖，不能只认 pending。
         const answers = resolved?.answers as Record<string, string> | undefined;
+        const answerImages = parseUserContent({ text: '', images: resolved?.answerImages }).images;
         const dismissed = resolved?.dismissed === true;
         const withdrawalReason = data.reason === 'question_withdrawn' ? data.withdrawalReason : undefined;
         const askUserReply = answers && !dismissed ? formatAskUserReply(answers) : '';
@@ -7208,6 +7209,7 @@ export function handleStreamEvent(
                     askUserStatus: 'answered' as const,
                     askUserReply,
                     askUserAnswers: answers,
+                    images: answerImages.length ? answerImages : undefined,
                   }
                 : m.askUserStatus === 'pending'
                   ? { ...m, askUserStatus: 'expired' as const, ...(withdrawalReason ? { askUserWithdrawalReason: withdrawalReason } : {}) }
@@ -17861,7 +17863,7 @@ function submitQuestionDecision(
   onAccepted: () => void,
   targetDevice?: string,
   onSettled?: () => void,
-): void {
+) {
   const key = JSON.stringify([sessionId, requestId]);
   if (questionDecisionsInFlight.has(key)) return;
   questionDecisionsInFlight.add(key);
@@ -17876,7 +17878,7 @@ function submitQuestionDecision(
       : remoteProjectsStore.getSessionDeviceId(sessionId) === origin);
   const isCurrent = () => isSameSession() && (_inputProjectionAuthorityEpoch.get(sessionId) ?? 0) === authority;
   bumpInteractionReconcileEpoch(sessionId);
-  void (async () => {
+  return (async () => {
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
       const receipt = await Promise.race([
@@ -17930,18 +17932,59 @@ function answerUserQuestion(
   sessionId: string,
   requestId: string,
   answers: Record<string, string>,
-): void {
+  images?: readonly QuestionDraftImage[],
+): Promise<void> | void {
+  if (!sessionId) return;
+  return images?.length
+    ? sendQuestionWithImages(sessionId, requestId, answers, images)
+    : submitUserQuestion(sessionId, requestId, answers);
+}
+
+type StagedQuestionImages = NonNullable<Awaited<ReturnType<typeof stageQuestionAnswerImages>>>;
+
+async function sendQuestionWithImages(
+  sessionId: string, requestId: string, answers: Record<string, string>, images: readonly QuestionDraftImage[],
+): Promise<void> {
+  const state = sessions.get(sessionId);
+  const question = state?.protectedAskUser?.pending ?? state?.pendingAskUser;
+  if (!question || question.requestId !== requestId || question.delivery !== 'async' ||
+      question.questions.length !== 1 || question.questions[0].answerConstraints || getStickySessionDeviceId(sessionId)) return;
+  const owner = getDataOwnerGeneration();
+  const epoch = _messagesEpoch.get(sessionId) ?? 0;
+  const isCurrent = () => {
+    const state = sessions.get(sessionId);
+    const now = state?.protectedAskUser?.pending ?? state?.pendingAskUser;
+    return isDataOwnerGenerationCurrent(owner) && (_messagesEpoch.get(sessionId) ?? 0) === epoch &&
+      !getStickySessionDeviceId(sessionId) && now?.requestId === requestId && now.questions === question.questions;
+  };
+  const key = JSON.stringify([sessionId, requestId]);
+  if (questionDecisionsInFlight.has(key)) return;
+  questionDecisionsInFlight.add(key);
+  let files: StagedQuestionImages | null = null;
+  try {
+    files = await stageQuestionAnswerImages(sessionId, images, isCurrent);
+  } catch {
+    if (isCurrent()) toast.warning(i18n.t('newChat.permissionPrompt.submissionFailed'));
+  } finally {
+    questionDecisionsInFlight.delete(key);
+  }
+  if (files && isCurrent()) await submitUserQuestion(sessionId, requestId, answers, files);
+}
+
+function submitUserQuestion(
+  sessionId: string, requestId: string, answers: Record<string, string>, files?: StagedQuestionImages,
+) {
   if (!sessionId) return;
   const state = getOrCreateState(sessionId);
   if (state.protectedAskUser?.pending.requestId === requestId) {
-    void sendProtectedQuestionSupplement(sessionId, requestId, answers);
-    return;
+    return sendProtectedQuestionSupplement(sessionId, requestId, answers, files);
   }
   if (getOrCreateState(sessionId).pendingAskUser?.requestId !== requestId) return;
   const submittedAnswers = { ...answers };
   const replySummary = formatAskUserReply(submittedAnswers);
-  submitQuestionDecision(sessionId, requestId, {
+  return submitQuestionDecision(sessionId, requestId, {
     kind: 'ask_user_question', answers: submittedAnswers,
+    ...(files?.length && { answerImages: files.map(({ url, originalName }) => ({ url, originalName })) }),
   }, () => setState(sessionId, (s) => ({
     ...s,
     protectedAskUser: s.protectedAskUser?.pending.requestId === requestId ? undefined : s.protectedAskUser,
@@ -17951,7 +17994,8 @@ function answerUserQuestion(
     ...removePendingQuestion(s, requestId, true),
     messages: s.messages.map((m) =>
       m.askUserRequestId === requestId && m.askUserStatus === 'pending'
-        ? { ...m, askUserStatus: 'answered' as const, askUserReply: replySummary, askUserAnswers: submittedAnswers }
+        ? { ...m, askUserStatus: 'answered' as const, askUserReply: replySummary, askUserAnswers: submittedAnswers,
+          ...(files?.length && { images: files.map(({ url, mimeType, originalName }) => ({ url, mimeType, originalName })) }) }
         : m,
     ),
   })));
@@ -17960,15 +18004,17 @@ function answerUserQuestion(
 }
 
 /** Expired async questions are submitted through the ordinary, idempotent user-input path. */
-async function sendProtectedQuestionSupplement(sessionId: string, requestId: string, answers: Record<string, string>): Promise<void> {
+async function sendProtectedQuestionSupplement(sessionId: string, requestId: string, answers: Record<string, string>,
+  files?: StagedQuestionImages): Promise<void> {
   const state = getOrCreateState(sessionId);
   const protectedQuestion = state.protectedAskUser;
   if (protectedQuestion?.pending.requestId !== requestId) return;
+  const hasImages = Boolean(files?.length);
   const text = formatAsyncQuestionSupplement(protectedQuestion.pending.questions, answers,
-    { late: !state.agentStatus.isRunning || state.turnStoppedByUser });
+    { late: !state.agentStatus.isRunning || state.turnStoppedByUser, hasImages });
   const clear = () => setState(sessionId, (s) => s.protectedAskUser?.pending.requestId === requestId
     ? { ...s, ...removePendingQuestion(s, requestId, true) } : s);
-  const key = `${sessionId}:${requestId}:supplement`;
+  const key = JSON.stringify([sessionId, requestId]);
   if (questionDecisionsInFlight.has(key)) return;
   questionDecisionsInFlight.add(key);
   const owner = getDataOwnerGeneration();
@@ -17982,7 +18028,8 @@ async function sendProtectedQuestionSupplement(sessionId: string, requestId: str
     sessions.get(sessionId)?.protectedAskUser?.pending.requestId === requestId;
   try {
     const needsSupplement = await asyncQuestionNeedsSupplement(
-      () => makerApiFor(sessionId).resolveInteraction(requestId, { kind: 'ask_user_question', answers }),
+      () => makerApiFor(sessionId).resolveInteraction(requestId, { kind: 'ask_user_question', answers,
+        ...(files?.length && { answerImages: files.map(({ url, originalName }) => ({ url, originalName })) }) }),
       async () => {
         if (!current()) return undefined;
         const persistId = protectedQuestion.pending.persistId;
@@ -18001,15 +18048,16 @@ async function sendProtectedQuestionSupplement(sessionId: string, requestId: str
     if (!text) { clear(); return; }
     const session = await getSessionFor(sessionId);
     // Exact retries share an ID; an edited answer is a new supplemental input.
-    const answerText = formatAsyncQuestionSupplement(protectedQuestion.pending.questions, answers);
-    const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(answerText));
+    const answerText = formatAsyncQuestionSupplement(protectedQuestion.pending.questions, answers, { hasImages });
+    const digestSource = questionAnswerSubmissionKey(answerText, files);
+    const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(digestSource));
     const answerId = Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('');
     if (!current()) return;
     // History and the queue show the question and the answer; only the model's copy
     // carries the native reply format and the delayed-answer note.
     const queued = buildQueuedMessage(sessionId,
-      formatAsyncQuestionReplyDisplay(protectedQuestion.pending.questions, answers), session.model, session.effort,
-      session.permissionMode, session.workingDir ?? '', undefined, undefined, undefined,
+      formatAsyncQuestionReplyDisplay(protectedQuestion.pending.questions, answers, { hasImages }), session.model, session.effort,
+      session.permissionMode, session.workingDir ?? '', files, undefined, undefined,
       { clientId: `question-reply:${requestId}:${answerId}`, createdAt: new Date().toISOString() });
     queued.text = text;
     queued.createOpts = { ...queued.createOpts, planMode: false,
@@ -18721,6 +18769,7 @@ function setAskUserDraft(sessionId: string, next: AskUserDraft | null): void {
       prev.answers === next.answers &&
       prev.started === next.started && prev.customInput === next.customInput &&
       prev.showCustomInput === next.showCustomInput &&
+      prev.answerImages === next.answerImages &&
       JSON.stringify(prev.selectedLabels) === JSON.stringify(next.selectedLabels)
     ) {
       return s;
@@ -20232,6 +20281,7 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
         askUserReply: replySummary,
         askUserQuestions: questions,
         askUserAnswers: answers,
+        images: resolvedStatus === 'answered' ? parseUserContent({ text: '', images: c.images }).images : undefined,
         // Legacy compat fields
         askUserOptions: c.options as Array<{ label: string; description?: string }> | undefined,
         askUserPageIndicator: typeof c.pageIndicator === 'string' ? c.pageIndicator : undefined,

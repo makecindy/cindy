@@ -665,6 +665,10 @@ layout does not flip back and forth while typing (`useAnswerComposerExpanded`). 
 composer's paper-plane glyph, with the actual action retained in localized accessible names and
 Desktop tooltips. Multi-select custom input has one submit control, not a second footer submit.
 Question navigation, close/skip, validation, voice finalization and approval semantics stay unchanged.
+Local Desktop async questions accept pasted, dropped and selected images in their free-text and
+custom-answer fields. Reuse the composer thumbnail tray and move the actions below the field while
+the tray is visible. A screenshot alone can be sent. The answered card shows the image beside any
+answer text and keeps the question in view.
 
 ### Typography roles and control pairing (DS-11)
 

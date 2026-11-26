@@ -4,7 +4,11 @@ import { readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import ts from 'typescript';
 import { expect, it, vi } from 'vitest';
-import { ASYNC_QUESTION_ANSWERED_CLIENT_ID_PREFIX, isAnsweredAsyncQuestionClientId } from '@cindy/maker-shared/interaction';
+import {
+  ASYNC_QUESTION_ANSWERED_CLIENT_ID_PREFIX, isAnsweredAsyncQuestionClientId,
+  questionAnswerSubmissionKey, type QuestionAnswerImage,
+} from '@cindy/maker-shared/interaction';
+import { questionAnswerImageFiles } from '../../../shared/questionAnswerImages';
 
 // Exercise the actual Host dispatcher without booting Electron or a real account.
 const source = readFileSync(new URL('../register.ts', import.meta.url), 'utf8');
@@ -36,14 +40,15 @@ function harness() {
     enqueue: vi.fn(), resume: vi.fn(),
   };
   const build = vi.fn(async (params: unknown) => params);
-  const identityDeps = { hasTelegramQuestionRoute, stampTelegramQuestionAnswer, getDeviceLinkInvokeContext: () => undefined, stampSharedTaskInput: (item: unknown) => item,
+  const identityDeps = { questionAnswerImageFiles, questionAnswerSubmissionKey, hasTelegramQuestionRoute, stampTelegramQuestionAnswer, getDeviceLinkInvokeContext: () => undefined, stampSharedTaskInput: (item: unknown) => item,
     stampTrustedDeviceLinkQueuedOrigin: (item: unknown) => item, stampTrustedDesktopQueuedOrigin: (item: unknown) => item,
     stampMobileClientOrigin: (item: unknown) => item, isMobileControllerInvoke: () => false, isDeviceLinkInvoke: () => false,
     readDeviceLinkInvokeSourceDevice: () => undefined };
   const run = new Function('maker', 'inputCoordinator', 'buildSessionControlInputItem', 'createHash', 'ASYNC_QUESTION_ANSWERED_CLIENT_ID_PREFIX', ...Object.keys(identityDeps), compiled)(
     { getSessionMeta: async () => ({}), getSession: () => session }, coordinator, build, createHash, ASYNC_QUESTION_ANSWERED_CLIENT_ID_PREFIX, ...Object.values(identityDeps),
-  ) as (session: unknown, text: string, signal: AbortSignal, requestId: string, displayText: string, origin?: SendOrigin) => Promise<void>;
-  return { coordinator, build, run: (text = 'Answer', origin?: SendOrigin) => run(session, text, new AbortController().signal, 'q1', '> Q?\n\nAnswer', origin),
+  ) as (session: unknown, text: string, signal: AbortSignal, requestId: string, displayText: string, origin?: SendOrigin, images?: readonly QuestionAnswerImage[]) => Promise<void>;
+  return { coordinator, build, run: (text = 'Answer', origin?: SendOrigin, images?: readonly QuestionAnswerImage[]) =>
+    run(session, text, new AbortController().signal, 'q1', '> Q?\n\nAnswer', origin, images),
     pause: () => { paused = true; }, stop: () => { inputBoundary.abort(); paused = true; }, hold: () => { held = true; }, uncertainPause: () => { paused = true; uncertain = true; } };
 }
 
@@ -65,6 +70,19 @@ it('enqueues an idle answer with stable identity and the task execution settings
   expect(isAnsweredAsyncQuestionClientId(h.coordinator.enqueue.mock.calls[0][1].clientId)).toBe(true);
   expect(h.coordinator.enqueue.mock.calls[0][1].clientId).toBe(h.coordinator.enqueue.mock.calls[1][1].clientId);
   expect(h.coordinator.resume).not.toHaveBeenCalled();
+});
+
+// The host queue transaction must own the actual image, even when the text
+// and question ID match an earlier attempt. Desktop unit tier.
+it('queues question images under the identity of the whole answer', async () => {
+  const h = harness();
+  const image = { url: `cindy-media://blobs/${'f'.repeat(64)}.png`, mimeType: 'image/png', originalName: 'shot.png', size: 68 };
+  await h.run('Answer', undefined, [image]);
+  await h.run();
+  const [first, second] = h.coordinator.enqueue.mock.calls.map(([, item]) => item);
+  expect(first.files).toEqual([expect.objectContaining({ path: image.url, category: 'image', originalName: 'shot.png' })]);
+  expect(isAnsweredAsyncQuestionClientId(first.clientId)).toBe(true);
+  expect(first.clientId).not.toBe(second.clientId);
 });
 
 it('resumes an answer explicitly submitted after Stop', async () => {

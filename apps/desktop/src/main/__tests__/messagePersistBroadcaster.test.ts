@@ -4500,6 +4500,18 @@ describe('媒体 echo 兜底:flushOrphanToolResults 从 fallback 池认领', () 
 });
 
 describe('ask_user persist first-write-wins', () => {
+  // Unit regression: the history writer must keep the accepted image when
+  // the user submits only a screenshot and the queue bubble is hidden.
+  it('persists an accepted image-only answer on its question row', async () => {
+    const request = { kind: 'ask_user_question', requestId: 'image-answer', questions: [{ question: 'What do you see?' }] };
+    const images = [{ url: `cindy-media://blobs/${'f'.repeat(64)}.png`, mimeType: 'image/png', originalName: 'shot.png', size: 68 }];
+    const persistId = onInteractionMessage(SESSION, request);
+    onInteractionResolved(SESSION, persistId, 'ask_user_question', request, { answers: { 'What do you see?': '' }, answerImages: images });
+    await flushWrites();
+    expect(updateMessageContent).toHaveBeenCalledWith(SESSION, persistId,
+      expect.objectContaining({ status: 'answered', images }), expect.any(Object));
+  });
+
   // Regression: withdrawal survives reload without being presented as an answer.
   // Entry: production interaction writer; tier: unit.
   it('persists a withdrawal reason with the existing cancelled status', async () => {

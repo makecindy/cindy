@@ -22,6 +22,8 @@
 import { useTranslation } from 'react-i18next';
 import { cn } from '@/lib/utils';
 import type { ChatMessage } from '@/lib/makerChatStore';
+import { ChatImageView } from './ChatImageView';
+import { useChatSessionFile } from './ChatSessionFileContext';
 
 // ---------------------------------------------------------------------------
 // Props
@@ -98,12 +100,15 @@ function buildQuestionAnswerPairs(message: ChatMessage): QuestionAnswerPair[] {
 
 export function AskUserQuestionBubble({ message }: AskUserQuestionBubbleProps) {
   const { t } = useTranslation();
+  const { sessionId } = useChatSessionFile();
   const { askUserStatus: status } = message;
 
   // Preserve unanswered history as well as answers and explicit withdrawals.
   if (status !== 'answered' && status !== 'expired') return null;
 
   const pairs = buildQuestionAnswerPairs(message);
+  const images = status === 'answered' && pairs.length === 1
+    ? message.images?.filter(image => 'url' in image) : undefined;
 
   if (pairs.length === 0) return null;
 
@@ -145,7 +150,7 @@ export function AskUserQuestionBubble({ message }: AskUserQuestionBubbleProps) {
                   ? `${t('chat.askUserQuestion.withdrawn')} · ${message.askUserWithdrawalReason}`
                   : t('chat.askUserQuestion.unanswered')}
               </span>
-            ) : pair.skipped ? (
+            ) : pair.skipped && !images?.length ? (
               <span className="min-w-0 flex-1 whitespace-pre-wrap text-13 font-medium italic leading-[1.45] text-[var(--text-tertiary)] [overflow-wrap:anywhere]">
                 {t('chat.askUserQuestion.skippedAnswer')}
               </span>
@@ -159,6 +164,14 @@ export function AskUserQuestionBubble({ message }: AskUserQuestionBubbleProps) {
                     {item}
                   </span>
                 ))}
+                {images?.length ? (
+                  <div className="flex flex-wrap gap-1.5">
+                    {images.map((image, imageIndex) => (
+                      <ChatImageView key={imageIndex} src={image.url} filename={image.originalName}
+                        variant="user-attached" sessionId={sessionId} />
+                    ))}
+                  </div>
+                ) : null}
               </div>
             )}
           </div>

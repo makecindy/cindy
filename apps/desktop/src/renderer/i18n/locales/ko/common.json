@@ -15393,6 +15393,7 @@
     "prevMessageJump": "이전 질문으로 이동: {{preview}}",
     "sessionLoading": "세션 불러오는 중",
     "askUserQuestion": {
+      "imageRejected": "‘{{name}}’을(를) 첨부할 수 없습니다. PNG, JPEG, WebP, GIF를 사용할 수 있으며, 최대 {{limit}}장, 총 {{size}}MB까지 첨부할 수 있습니다.",
       "unanswered": "답변 없음",
       "withdrawn": "더 이상 답변이 필요하지 않습니다",
       "withdrawnDraft": "이 질문에 더 이상 답변할 필요가 없습니다.\n{{reason}}\n초안은 보관되며 추가 정보로 보낼 수 있습니다.",

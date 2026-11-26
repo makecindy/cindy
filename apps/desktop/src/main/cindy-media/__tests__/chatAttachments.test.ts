@@ -23,6 +23,7 @@ vi.mock('electron', () => ({
 
 const schema = await import('../../localDb/schema');
 const chatAttachments = await import('../chatAttachments');
+const { readQuestionAnswerImages } = await import('../../maker-ipc/questionAnswerImages');
 
 const MIGRATION_0070 = path.resolve(__dirname, '../../../../drizzle/0070_woozy_harpoon.sql');
 const { default: migration0071 } = (await import('../../../../drizzle/scripts/0071_bright_ultron')) as {
@@ -60,6 +61,19 @@ beforeEach(() => {
 });
 
 describe('ingestChatImageBuffer(粘贴草稿入仓)', () => {
+  // Host admission must distinguish a real image in this owner's ledger from
+  // another owner's identical URL and from bytes named as PNG. Media unit tier.
+  it('admits only owned image bytes for a question answer', async () => {
+    const image = { url: PNG_URL, originalName: 'shot.png' };
+    await chatAttachments.ingestChatImageBuffer({ buffer: PNG_BYTES, mimeType: 'image/png' }, db);
+    await expect(readQuestionAnswerImages([image], db)).resolves.toEqual([
+      { ...image, size: PNG_BYTES.length, mimeType: 'image/png' },
+    ]);
+    await expect(readQuestionAnswerImages([image], freshDb())).resolves.toBeNull();
+    const fake = await chatAttachments.ingestChatImageBuffer({ buffer: Buffer.from('not an image'), mimeType: 'image/png' }, db);
+    await expect(readQuestionAnswerImages([image, { ...image, url: fake.url }], db)).resolves.toBeNull();
+  });
+
   it('写 blob + 账本行,不挂任何引用(无引用 = 回收候选 = 草稿语义)', async () => {
     const result = await chatAttachments.ingestChatImageBuffer(
       { buffer: PNG_BYTES, mimeType: 'image/png' },
@@ -180,6 +194,23 @@ describe('commitChatImageUrls(发送时挂引用)', () => {
     await expect(
       chatAttachments.commitMessageMediaRefs({ sessionId: 'sess-1', role: 'user', content: 'plain' }, db),
     ).resolves.toBeNull();
+  });
+
+  // A queued answer may initially exist only in the question row. Protect its
+  // user media origin without changing the Agent's image reference in the prompt.
+  it('commits question answer images as user media and prompt images as tool media', async () => {
+    await chatAttachments.ingestChatImageBuffer({ buffer: PNG_BYTES, mimeType: 'image/png' }, db);
+    const prompt = await chatAttachments.ingestChatImageBuffer({
+      buffer: Buffer.concat([PNG_BYTES, Buffer.from([0])]), mimeType: 'image/png',
+    }, db);
+    await chatAttachments.commitMessageMediaRefs({
+      sessionId: 'sess-1', role: 'ask_user',
+      content: JSON.stringify({ status: 'answered', questions: [{ question: prompt.url }], images: [{ url: PNG_URL }] }),
+    }, db);
+    expect(db.select().from(schema.mediaRefs).all()).toEqual(expect.arrayContaining([
+      expect.objectContaining({ hash: PNG_HASH, originKind: 'user' }),
+      expect.objectContaining({ hash: path.basename(prompt.url, '.png'), originKind: 'tool' }),
+    ]));
   });
 
   it('非 cache 粘性降级:cache 入仓的 blob 被消息引用后 isCache 归 false(review P1)', async () => {

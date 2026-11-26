@@ -103,7 +103,7 @@ export function ThumbnailStrip({
   attachments: AttachedFile[];
   onRemove: (id: string) => void;
   /** 标注编辑保存后就地替换附件(useAttachments.updateFile)。 */
-  onUpdate: (id: string, patch: Partial<AttachedFile>) => void;
+  onUpdate?: (id: string, patch: Partial<AttachedFile>) => void;
 }) {
   const collection: AttachmentCollectionItem[] = attachments.flatMap((file) => {
     const media = file.category === 'image' && Boolean(file.url || file.base64);
@@ -117,7 +117,7 @@ export function ThumbnailStrip({
             kind: attachmentPreviewKind(file.name, file.mimeType),
             media,
             image: media
-              ? {
+              && onUpdate ? {
                   annotationEdit: {
                     initialStrokes: file.annotationStrokes,
                     onSave: (result: { strokes: ImageAnnotationStroke[] }) =>
@@ -147,7 +147,7 @@ function ThumbnailItem({
 }: {
   file: AttachedFile;
   onRemove: (id: string) => void;
-  onUpdate: (id: string, patch: Partial<AttachedFile>) => void;
+  onUpdate?: (id: string, patch: Partial<AttachedFile>) => void;
 }) {
   const { t } = useTranslation();
   const [isHovered, setIsHovered] = useState(false);
@@ -381,7 +381,7 @@ function ThumbnailItem({
           // 托盘图片的标注编辑:惰性烧录只写回矢量笔迹,不再依赖会话缓存,
           // 缓存附件与草稿 base64 附件统一支持。
           annotationEdit={
-            file.category === 'image' && (file.url || file.base64)
+            file.category === 'image' && (file.url || file.base64) && onUpdate
               ? {
                   initialStrokes: file.annotationStrokes,
                   onSave: (result) => applyAnnotationEdit(file, result, onUpdate),

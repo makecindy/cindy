@@ -4,7 +4,7 @@ export default {
   name: 'ask-user-question',
   entry: './ask-user-question-fixture.tsx',
   viewport: { width: 800, height: 600 },
-  real: 'AskUserQuestionPrompt, voice choice draft/confirmation, CompanionVoiceToolbar, question references, prompt shell and themes',
+  real: 'AskUserQuestionPrompt, answer image paste/picker and thumbnails, voice choice draft/confirmation, CompanionVoiceToolbar, question references, prompt shell and themes',
   notCovered: 'Actual microphone/ASR/TTS, task execution, host file contents, browser navigation and remote connectivity',
   // Keep the real dictation hook/state UI; microphone capture and its worklet
   // are outside this fixture, so only the microphone and host are fake.
@@ -17,6 +17,8 @@ export default {
     }`,
   },
   cases: {
+    'images-free': { about: 'Paste a screenshot and submit it with no text', viewport: { width: 460, height: 620 }, data: { question: 'Can you show what you see?', free: true, images: true } },
+    'images-option': { about: 'Paste on an option, then select and remove a second image', viewport: { width: 320, height: 700 }, data: { question: '这两种效果，你希望保留哪一种？', images: true } },
     'input-free': { about: 'Free answer starts as one line beside voice and send, then wraps to full width', viewport: { width: 320, height: 620 }, data: { question: '请补充你看到的现象。', free: true } },
     'input-custom': { about: 'Custom choice starts as one line, then wraps to full width with inset controls', viewport: { width: 320, height: 620 }, data: { question: '你希望怎样处理？' } },
     'input-multi': { about: 'Multi-select custom answer uses one inset submit', viewport: { width: 320, height: 700 }, data: { question: '你希望保留哪些选项？', multi: true } },
@@ -62,6 +64,55 @@ export default {
       assert.equal((await send.textContent()).trim(), '', 'Send uses an icon, not a long label');
       assert.ok(await send.getAttribute('aria-label'), 'Icon keeps its accessible action name');
     };
+    if (ui.case.startsWith('images-')) {
+      // UI regression: the real textarea/option card previously discarded bitmap
+      // paste. A single clipboard PNG checks the thumbnail and answer callback.
+      const free = ui.case === 'images-free';
+      const questionTarget = free ? page.locator('textarea') : page.getByRole('button', { name: /可以，按这版实现/ });
+      await questionTarget.focus();
+      const png = await questionTarget.evaluate(async (node) => {
+        const canvas = document.createElement('canvas');
+        canvas.width = 160;
+        canvas.height = 100;
+        const ctx = canvas.getContext('2d');
+        ctx.fillStyle = '#5d83a1';
+        ctx.fillRect(0, 0, 160, 100);
+        ctx.fillStyle = '#dceaf0';
+        ctx.fillRect(25, 25, 110, 50);
+        const blob = await new Promise(resolve => canvas.toBlob(resolve));
+        const clipboard = new DataTransfer();
+        clipboard.items.add(new File([blob], 'screenshot.png', { type: 'image/png' }));
+        node.dispatchEvent(new ClipboardEvent('paste', { clipboardData: clipboard, bubbles: true, cancelable: true }));
+        return Array.from(new Uint8Array(await blob.arrayBuffer()));
+      });
+      const frame = page.getByTestId('interaction-answer-composer');
+      const preview = frame.getByRole('img', { name: 'screenshot.png', exact: true });
+      await preview.waitFor();
+      assert.ok(await preview.evaluate(node => node.complete && node.naturalWidth > 0));
+      await checkComposer();
+      const text = free ? '' : '我想保留截图里这版。';
+      if (!free) {
+        const addLabel = await ui.t('settings.shortcuts.workLouderCodex.commands.composer.addPhotos.name');
+        const chooser = page.waitForEvent('filechooser');
+        await frame.getByRole('button', { name: addLabel, exact: true }).click();
+        await (await chooser).setFiles({ name: 'extra.png', mimeType: 'image/png', buffer: Buffer.from(png) });
+        await frame.getByRole('img', { name: 'extra.png', exact: true }).waitFor();
+        await frame.getByRole('button', { name: 'Remove extra.png', exact: true }).click();
+        assert.equal(await frame.getByRole('img', { name: 'extra.png', exact: true }).count(), 0);
+        await frame.locator('textarea').evaluate((node, bytes) => {
+          const dataTransfer = new DataTransfer();
+          dataTransfer.items.add(new File([new Uint8Array(bytes)], 'drop.png', { type: 'image/png' }));
+          node.dispatchEvent(new DragEvent('drop', { dataTransfer, bubbles: true, cancelable: true }));
+        }, png);
+        await frame.getByRole('img', { name: 'drop.png', exact: true }).waitFor();
+        await frame.getByRole('button', { name: 'Remove drop.png', exact: true }).click();
+        await frame.locator('textarea').fill(text);
+      }
+      await frame.locator('textarea').press('Enter');
+      assert.deepEqual(JSON.parse(await page.getByTestId('question-image-receipt').textContent()), ['screenshot.png']);
+      assert.deepEqual(Object.values(JSON.parse(await page.getByTestId('mcp-form-receipt').textContent())), [text]);
+      return;
+    }
     if (ui.case.startsWith('input-')) {
       if (ui.case === 'input-plan') await page.getByRole('button', { name: await ui.t('newChat.planReview.feedbackPlaceholder'), exact: true }).click();
       else if (ui.case !== 'input-free') {

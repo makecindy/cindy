@@ -15384,6 +15384,7 @@
     "jumpToBottom": "至底",
     "prevMessageJump": "至上一问：{{preview}}",
     "askUserQuestion": {
+      "imageRejected": "「{{name}}」未能附上。可附 PNG、JPEG、WebP、GIF，至多 {{limit}} 张，合计不得逾 {{size}} MB。",
       "unanswered": "未答",
       "withdrawn": "无须再答",
       "withdrawnDraft": "此问无须再答。\n{{reason}}\n草稿尚存，可另作补充发送。",

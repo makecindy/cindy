@@ -42,7 +42,7 @@ export function BotGroupPendingInteraction({
   const light = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
   const questionRequestId = light.pendingAskUser?.requestId;
   const [questionFiles, setQuestionFiles] = useState<{
-    sessionId: string; requestId: string; workingDir: string; remoteHostId: string | null;
+    sessionId: string; requestId: string; workingDir: string; remoteHostId: string | null; local: boolean;
   } | null>(null);
   useEffect(() => {
     if (!questionRequestId) return;
@@ -53,7 +53,8 @@ export function BotGroupPendingInteraction({
       try {
         const session = await sessionService.get(sessionId);
         if (!cancelled) setQuestionFiles({ sessionId, requestId: questionRequestId,
-          workingDir: session.workingDir ?? '', remoteHostId: session.remoteHostId ?? null });
+          workingDir: session.workingDir ?? '', remoteHostId: session.remoteHostId ?? null,
+          local: !session.remoteHostId && !session.agentDeviceId && !session.deviceLinkDeviceId });
       } catch {
         // Keep the question answerable when its local lane is unavailable.
       }
@@ -87,10 +88,11 @@ export function BotGroupPendingInteraction({
         sessionId={sessionId}
         workingDir={currentQuestionFiles?.workingDir ?? ''}
         remoteHostId={currentQuestionFiles?.remoteHostId}
+        imageAttachmentsEnabled={currentQuestionFiles?.local}
         pending={light.pendingAskUser}
         pendingQuestions={light.pendingAskUserQueue}
         onSelectQuestion={(requestId) => makerChatStore.selectAskUserQuestion(sessionId, requestId)}
-        onAnswer={(requestId, answers) => makerChatStore.answerUserQuestion(sessionId, requestId, answers)}
+        onAnswer={(requestId, answers, images) => makerChatStore.answerUserQuestion(sessionId, requestId, answers, images)}
         viewerState={light.askUserViewerState}
         onViewerStateChange={(next) => makerChatStore.setAskUserViewerState(sessionId, next)}
         draft={light.askUserDraft}

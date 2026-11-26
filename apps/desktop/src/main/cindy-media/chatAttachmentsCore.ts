@@ -59,6 +59,8 @@ export function createChatAttachments(ports: ChatAttachmentPorts) {
     params: { buffer: Uint8Array; mimeType: string },
     db?: LedgerDb,
   ): Promise<IngestedChatImage> {
+    // Bind the ledger before byte I/O so a late write can't register in another account.
+    const database = db ?? getDbClient().drizzle;
     const written = await blobStore.writeBlob({
       buffer: params.buffer,
       mimeType: params.mimeType,
@@ -71,7 +73,7 @@ export function createChatAttachments(ports: ChatAttachmentPorts) {
         bytes: written.bytes,
         isCache: false,
       },
-      db,
+      database,
     );
     return { url: written.url, filename: `${written.hash}${written.ext}` };
   }
@@ -145,14 +147,31 @@ export function createChatAttachments(ports: ChatAttachmentPorts) {
   ): Promise<{ committed: number; skipped: number; failed: number } | null> {
     const urls = collectCindyMediaUrls(params.content);
     if (urls.length === 0) return null;
+    // An answered question row contains both an Agent-authored prompt and
+    // user-authored attachments. Only the answer's image URLs are user media.
+    const answerImageUrls = params.role === 'ask_user' ? readAnsweredQuestionImageUrls(params.content) : undefined;
     return commitChatImageUrls(
       {
         sessionId: params.sessionId,
         urls,
         originKind: params.role === 'user' ? 'user' : 'tool',
+        ...(answerImageUrls && { userUrls: answerImageUrls }),
       },
       db,
     );
+  }
+
+  function readAnsweredQuestionImageUrls(content: unknown): ReadonlySet<string> | undefined {
+    try {
+      const row = typeof content === 'string' ? JSON.parse(content) : content;
+      if (row?.status === 'answered' && Array.isArray(row.images)) {
+        return new Set(row.images.flatMap((image: { url?: unknown } | null) =>
+          typeof image?.url === 'string' && blobStore.parseBlobUrl(image.url) ? [image.url] : []));
+      }
+    } catch {
+      // Older rows can carry plain text.
+    }
+    return undefined;
   }
 
   async function commitChatImageUrls(
@@ -161,6 +180,7 @@ export function createChatAttachments(ports: ChatAttachmentPorts) {
       urls: string[];
       /** 出生来源:用户消息附件 'user'(默认);assistant/tool 消息里的生成产物 'tool'。 */
       originKind?: 'user' | 'tool';
+      userUrls?: ReadonlySet<string>;
       /** Native delivery must recheck the task after acquiring its media-reference lock. */
       assertStillValid?: () => Promise<void>;
     },
@@ -207,7 +227,7 @@ export function createChatAttachments(ports: ChatAttachmentPorts) {
             refKind: 'session-attachment',
             refId: params.sessionId,
             originSessionId: params.sessionId,
-            originKind: params.originKind ?? 'user',
+            originKind: params.userUrls?.has(url) ? 'user' : (params.originKind ?? 'user'),
           },
           db,
         );

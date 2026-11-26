@@ -299,7 +299,11 @@ import {
 } from '@cindy/model-providers';
 import { createId } from '@paralleldrive/cuid2';
 import { normalizeOrcaWorkerLabel } from '@cindy/maker-shared/orca-team';
-import { ASYNC_QUESTION_ANSWERED_CLIENT_ID_PREFIX } from '@cindy/maker-shared/interaction';
+import {
+  ASYNC_QUESTION_ANSWERED_CLIENT_ID_PREFIX, questionAnswerSubmissionKey, type QuestionAnswerImage,
+} from '@cindy/maker-shared/interaction';
+import { questionAnswerImageFiles } from '../../shared/questionAnswerImages.js';
+import { readQuestionAnswerImages } from './questionAnswerImages.js';
 import { permissionModeOrAsk } from '@cindy/maker-shared/permission-mode';
 import {
   isProductTurnCompletionTailEvent,
@@ -3954,7 +3958,7 @@ type BotCompactRuntimeRefreshHandler = (
  * needs the register-time Maker/bootstrap closure, so keep one narrow holder
  * and let the instance-scoped coordinator own all compact settle signals.
  */
-let asyncQuestionInputDispatcher: ((session: NonNullable<ReturnType<Maker['getSession']>>, text: string, signal: AbortSignal, requestId: string, displayText: string, origin: SendOrigin | null) => Promise<void>) | undefined;
+let asyncQuestionInputDispatcher: ((session: NonNullable<ReturnType<Maker['getSession']>>, text: string, signal: AbortSignal, requestId: string, displayText: string, origin: SendOrigin | null, images?: readonly QuestionAnswerImage[]) => Promise<void>) | undefined;
 let botCompactRuntimeRefreshHandler: BotCompactRuntimeRefreshHandler | null = null;
 /**
  * 逐轮环境说明(界面语言 / 客户端设备 / 个人版制作说明)的去重记忆:同一原生上下文里内容
@@ -20871,7 +20875,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       (await discardQueuedInvitationWelcomes(inputCoordinator, sessionId)) !== null,
   });
   setRemoteInputPeerReadyListener(deviceId => inputCoordinator.onRemoteAccountDeviceReady(deviceId));
-  asyncQuestionInputDispatcher = async (session, text, signal, requestId, displayText, origin) => {
+  asyncQuestionInputDispatcher = async (session, text, signal, requestId, displayText, origin, images) => {
     const sharedTask = getDeviceLinkInvokeContext()?.sharedTask;
     const pausedBeforeAnswer = inputCoordinator.getProjection(session.id).queuePaused;
     const inputGeneration = inputCoordinator.getGeneration(session.id);
@@ -20886,11 +20890,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     const meta = await maker.getSessionMeta(session.id);
     assertCurrent();
     if (!meta) throw new Error('Question session is no longer available');
-    const digest = createHash('sha256').update(text).digest('hex');
+    const digest = createHash('sha256').update(questionAnswerSubmissionKey(text, images)).digest('hex');
     // The question card already shows this answer: history keeps the readable copy for
     // search, previews and older clients, and this identity keeps it out of the conversation.
     let item = await buildSessionControlInputItem({ targetSessionId: session.id, message: text,
-      persistedContent: displayText, clientId: `${ASYNC_QUESTION_ANSWERED_CLIENT_ID_PREFIX}${requestId}:${digest}`, meta, inheritTargetPlanMode: true });
+      persistedContent: displayText, clientId: `${ASYNC_QUESTION_ANSWERED_CLIENT_ID_PREFIX}${requestId}:${digest}`,
+      ...(images?.length ? { files: questionAnswerImageFiles(images) } : {}), meta, inheritTargetPlanMode: true });
     item = stampSharedTaskInput(item, sharedTask, item.createOpts);
     item = stampTrustedDeviceLinkQueuedOrigin(
       stampTrustedDesktopQueuedOrigin(stampMobileClientOrigin(item, isMobileControllerInvoke()), isDeviceLinkInvoke()),
@@ -22701,14 +22706,35 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         }
       }
       const pendingQuestion = pendingInteractionResolvers.get(requestId);
+      let resolution = decision as InteractionDecision;
+      if (decision && typeof decision === 'object' && 'answerImages' in decision) {
+        // Local media URLs are meaningful only from Cindy's own Desktop window.
+        // An older or remote client can still answer through the text-only path.
+        if (isDeviceLinkInvoke() || !isTrustedAppRendererEvent(event) || isAppSessionBoundaryPending() ||
+            resolution.kind !== 'ask_user_question' || resolution.dismissed || resolution.inProgress ||
+            pendingQuestion?.request.kind !== 'ask_user_question' || pendingQuestion.request.delivery !== 'async' ||
+            pendingQuestion.request.questions.length !== 1 || pendingQuestion.request.questions[0].answerConstraints) {
+          return { accepted: false };
+        }
+        const session = maker.getSession(pendingQuestion.sessionId);
+        if (!session || session.remoteHostId || session.agentDeviceId) return { accepted: false };
+        const owner = captureDataOwnerBroadcastScope();
+        const images = await readQuestionAnswerImages(decision.answerImages, getDbClient().drizzle);
+        if (!images || !isDataOwnerBroadcastScopeCurrent(owner) || isAppSessionBoundaryPending() ||
+            maker.getSession(pendingQuestion.sessionId) !== session ||
+            pendingInteractionResolvers.get(requestId) !== pendingQuestion) return { accepted: false };
+        if (!resolution.answers || typeof resolution.answers !== 'object' || Array.isArray(resolution.answers) ||
+            Object.values(resolution.answers).some(answer => typeof answer !== 'string')) return { accepted: false };
+        resolution = { kind: 'ask_user_question', answers: resolution.answers, answerImages: images };
+      }
       if (pendingQuestion?.request.kind === 'ask_user_question' && pendingQuestion.request.delivery === 'async') {
         if (agentInputCoordinatorHolder?.isExecutionPaused(pendingQuestion.sessionId)) return { accepted: false };
         const questionSession = maker.getSession(pendingQuestion.sessionId);
-        if (!questionSession || !await questionSession.submitAsyncQuestionAnswer(requestId, decision as InteractionDecision)) return { accepted: false };
+        if (!questionSession || !await questionSession.submitAsyncQuestionAnswer(requestId, resolution)) return { accepted: false };
         if (pendingInteractionResolvers.get(requestId) !== pendingQuestion) return { accepted: false };
         if (sharedTask) assertSharedTaskInteractionResolveCurrent(sharedTask, [requestId, decision]);
       }
-      if (resolvePendingInteraction(requestId, decision as InteractionDecision)) {
+      if (resolvePendingInteraction(requestId, resolution)) {
         return { accepted: true };
       }
       if (isPermissionInteractionDecision(decision)) {

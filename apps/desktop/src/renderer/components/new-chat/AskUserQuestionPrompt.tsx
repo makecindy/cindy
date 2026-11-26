@@ -19,16 +19,19 @@ import { Spinner } from '@/components/ui/spinner';
 import {
   useCallback,
   useEffect,
+  useId,
   useLayoutEffect,
   useMemo,
   useRef,
   useState,
+  type ClipboardEvent,
+  type DragEvent as ReactDragEvent,
   type RefObject,
   type TextareaHTMLAttributes,
 } from 'react';
 import { useTranslation } from 'react-i18next';
 import { withdrawnQuestionDraftText } from '@cindy/maker-shared/interaction';
-import { ChevronLeft, ChevronRight, Mic, Square } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Mic, Plus, Square } from 'lucide-react';
 
 import { InteractionPromptCardShell } from '@/components/interaction-portal';
 import { ChatSessionFileProvider, useChatSessionFile, useChatSessionFileValue } from '@/components/chat/ChatSessionFileContext';
@@ -42,10 +45,16 @@ import { shouldCardShortcutYield } from '@/lib/editableKeyboardTarget';
 import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
 import type { AskUserDraft, AskUserViewerState, PendingAskUser } from '@/lib/makerChatStore';
+import { questionImageMime, type QuestionDraftImage } from '@/lib/questionAnswerAttachments';
 import { requestRendererMicrophonePermission } from '@/voice-input/startGuards';
 import { formatVoiceInputShortcut, isVoiceInputShortcutMatch } from '@/voice-input/shortcut';
 import { createComposerLongPressVoiceGesture, isComposerLongPressVoiceReady } from '@/voice-input/composerLongPressGesture';
 import { nextAskUserVoiceShortcutOrder, registerAskUserVoiceShortcutCard } from './askUserVoiceShortcutOwner';
+import { AttachmentRejectionStrip } from './ComposerAttachments';
+import { QuestionAnswerImageTray } from './QuestionAnswerImageTray';
+import {
+  MAX_QUESTION_ANSWER_IMAGES, MAX_QUESTION_ANSWER_IMAGE_BYTES, QUESTION_ANSWER_IMAGE_TYPES,
+} from '../../../shared/questionAnswerImages';
 import { CreateAgentSendIcon } from './SendButton';
 import { useAnswerComposerExpanded } from './useAnswerComposerExpanded';
 import { useAskUserDictation } from './useAskUserDictation';
@@ -160,10 +169,11 @@ interface AskUserQuestionPromptProps {
   sessionId?: string;
   workingDir?: string;
   remoteHostId?: string | null;
+  imageAttachmentsEnabled?: boolean;
   pending: PendingAskUser;
   pendingQuestions?: PendingAskUser[];
   onSelectQuestion?: (requestId: string) => void;
-  onAnswer: (requestId: string, answers: Record<string, string>) => void;
+  onAnswer: (requestId: string, answers: Record<string, string>, images?: readonly QuestionDraftImage[]) => Promise<void> | void;
   /**
    * F-AUQ-MIN-1: 'expanded' (default) renders the full Prompt card with the
    * Minimize button in its header. 'minimized' renders the 880×44 collapsed
@@ -219,7 +229,8 @@ export function AskUserQuestionPrompt({
   // Repeated snapshots keep this form mounted. A changed session, request or
   // question starts from its own draft (cleared by the store on content changes).
   return <ChatSessionFileProvider value={fileContext}>
-    <AskUserQuestionForm key={formKey} {...props} />
+    <AskUserQuestionForm key={formKey} {...props}
+      imageAttachmentsEnabled={props.imageAttachmentsEnabled && !!sessionId && fileContext.origin.kind === 'local'} />
   </ChatSessionFileProvider>;
 }
 
@@ -235,6 +246,7 @@ function AskUserQuestionForm({
   voiceBridge,
   voiceShortcutPreferred = false,
   hostVisible = true,
+  imageAttachmentsEnabled = false,
 }: AskUserQuestionPromptProps) {
   const { t } = useTranslation();
   const { requestId, questions } = pending;
@@ -267,11 +279,18 @@ function AskUserQuestionForm({
   // Custom input
   const [customInput, setCustomInput] = useState(draft?.customInput ?? '');
   const [showCustomInput, setShowCustomInput] = useState(draft?.showCustomInput ?? false);
+  const [answerImages, setAnswerImages] = useState(() => draft?.requestId === requestId ? draft.answerImages : undefined);
+  const imageIdPrefix = useId();
+  const nextImageId = useRef(0);
+  const [attachmentRejections, setAttachmentRejections] = useState<Array<{ id: string; message: string }>>([]);
+  const [imageSubmitting, setImageSubmitting] = useState(false);
+  const imageSubmitRef = useRef(false);
+  const imagePickerRef = useRef<HTMLInputElement>(null);
   const [validationError, setValidationError] = useState<string | null>(null);
   const startedRef = useRef(draft?.started === true);
   const draftRef = useRef<AskUserDraft>({ requestId, currentIndex, answers });
   draftRef.current = { requestId, currentIndex, answers, customInput, showCustomInput,
-    selectedLabels: [...selectedLabels], started: startedRef.current };
+    selectedLabels: [...selectedLabels], started: startedRef.current, ...(answerImages && { answerImages }) };
   const markStarted = useCallback(() => {
     startedRef.current = true;
     onDraftChange({ ...draftRef.current, started: true });
@@ -331,7 +350,7 @@ function AskUserQuestionForm({
   dictationRef.current = dictation;
   const [voiceSubmitting, setVoiceSubmitting] = useState(false);
   const voiceSubmitRef = useRef(false);
-  const voiceLocked = dictation.isBusy || voiceSubmitting;
+  const voiceLocked = dictation.isBusy || voiceSubmitting || imageSubmitting;
   const mountedRef = useRef(true);
   useEffect(() => {
     mountedRef.current = true;
@@ -350,7 +369,10 @@ function AskUserQuestionForm({
   // mount order is the order in which cards appeared.
   const [voiceShortcutOrder] = useState(nextAskUserVoiceShortcutOrder);
   const answerValue = dictation.liveText ?? customInput;
-  const composerExpanded = useAnswerComposerExpanded(inputRef, answerValue, askAnswerMaxHeight);
+  const answerExpanded = useAnswerComposerExpanded(inputRef, answerValue, askAnswerMaxHeight);
+  const allowImages = imageAttachmentsEnabled && pending.delivery === 'async' && totalQuestions === 1 && !questions[currentIndex]?.answerConstraints;
+  const hasAnswerImages = allowImages && Boolean(answerImages?.length);
+  const composerExpanded = answerExpanded || hasAnswerImages || attachmentRejections.length > 0;
   const voiceShortcutLabel = formatVoiceInputShortcut(getVoiceInputSettings().shortcut);
   const voiceProcessing = dictation.state === 'submitting' || dictation.state === 'refining';
   const voiceButtonLabel = voiceProcessing ? voiceSubmitLabel : dictation.isBusy
@@ -440,7 +462,58 @@ function AskUserQuestionForm({
   // Save the unfinished field as well as completed answers across unmounts.
   useEffect(() => {
     onDraftChange(draftRef.current);
-  }, [requestId, currentIndex, answers, customInput, selectedLabels, showCustomInput, onDraftChange]);
+  }, [requestId, currentIndex, answers, customInput, selectedLabels, showCustomInput, answerImages, onDraftChange]);
+
+  const addAnswerImages = (files: readonly File[]) => {
+    if (!allowImages || voiceLocked || imageSubmitRef.current) return;
+    const next = [...(draftRef.current.answerImages ?? [])];
+    const previousCount = next.length;
+    let remainingBytes = MAX_QUESTION_ANSWER_IMAGE_BYTES - next.reduce((sum, image) => sum + image.file.size, 0);
+    const rejected = [];
+    for (const file of files) {
+      const mimeType = questionImageMime(file);
+      if (!mimeType || file.size === 0 || next.length >= MAX_QUESTION_ANSWER_IMAGES || file.size > remainingBytes) {
+        if (!rejected.length) rejected.push({
+          id: `${imageIdPrefix}-${nextImageId.current++}`,
+          message: t('chat.askUserQuestion.imageRejected', {
+            name: file.name, limit: MAX_QUESTION_ANSWER_IMAGES, size: MAX_QUESTION_ANSWER_IMAGE_BYTES / (1024 * 1024),
+          }),
+        });
+        continue;
+      }
+      next.push({ id: `${imageIdPrefix}-${nextImageId.current++}`, file, mimeType });
+      remainingBytes -= file.size;
+    }
+    setAttachmentRejections(rejected);
+    // Open the custom field even when the image came from a paste on the option list.
+    if (options.length && !showCustomInput) setShowCustomInput(true);
+    if (next.length === previousCount) return;
+    setAnswerImages(next);
+    draftRef.current = { ...draftRef.current, answerImages: next, showCustomInput: options.length > 0 || showCustomInput };
+    markStarted();
+    requestAnimationFrame(() => inputRef.current?.focus());
+  };
+
+  const onImagePaste = (event: ClipboardEvent<HTMLElement>) => {
+    if (!allowImages || event.defaultPrevented) return;
+    const clipboard = event.clipboardData;
+    const files = clipboard.files?.length ? Array.from(clipboard.files)
+      : Array.from(clipboard.items ?? []).flatMap(item => item.getAsFile() ?? []);
+    const images = files.filter(file => file.type.startsWith('image/') || questionImageMime(file));
+    if (!images.length) return;
+    event.preventDefault();
+    addAnswerImages(images);
+  };
+
+  const onImageDragOver = (event: ReactDragEvent<HTMLElement>) => {
+    if (allowImages && event.dataTransfer.types.includes('Files')) event.preventDefault();
+  };
+
+  const onImageDrop = (event: ReactDragEvent<HTMLElement>) => {
+    if (!allowImages || event.defaultPrevented || !event.dataTransfer.files.length) return;
+    event.preventDefault();
+    addAnswerImages(Array.from(event.dataTransfer.files));
+  };
 
   // ── Snapshot current buttons before animation starts ──
   const snapshotButtons = useCallback(() => {
@@ -485,7 +558,8 @@ function AskUserQuestionForm({
 
   // ── Advance to next question or submit all ──
   const advance = useCallback(
-    (answer: string) => {
+    (answer: string, withImages = true) => {
+      if (imageSubmitRef.current) return;
       const error = askAnswerError(currentQ, answer);
       if (error) {
         setValidationError(t(`chat.askUserQuestion.validation.${error.key}`, { count: error.count }));
@@ -501,7 +575,22 @@ function AskUserQuestionForm({
 
       if (currentIndex === totalQuestions - 1) {
         // Last question — submit all answers
-        onAnswer(requestId, updated);
+        if (withImages && allowImages && answerImages?.length) {
+          imageSubmitRef.current = true;
+          setImageSubmitting(true);
+          void (async () => {
+            try {
+              await onAnswer(requestId, updated, answerImages);
+            } catch {
+              toast.warning(t('newChat.permissionPrompt.submissionFailed'));
+            } finally {
+              imageSubmitRef.current = false;
+              if (mountedRef.current) setImageSubmitting(false);
+            }
+          })();
+        } else {
+          onAnswer(requestId, updated);
+        }
       } else {
         // Freeze buttons before animation
         snapshotButtons();
@@ -528,6 +617,8 @@ function AskUserQuestionForm({
       totalQuestions,
       requestId,
       onAnswer,
+      allowImages,
+      answerImages,
       computeSelectionForIndex,
       snapshotButtons,
       t,
@@ -558,7 +649,7 @@ function AskUserQuestionForm({
 
   // ── Multi-select: Next button → encode as JSON array string ──
   const submitWithDictation = useCallback(async (encode: (text: string) => string | null) => {
-    if (voiceSubmitRef.current || isAnimating) return;
+    if (voiceSubmitRef.current || imageSubmitRef.current || isAnimating) return;
     if (!dictationRef.current.isBusy) {
       const answer = encode(answerTextRef.current);
       if (answer !== null) advance(answer);
@@ -579,13 +670,13 @@ function AskUserQuestionForm({
 
   const handleNext = useCallback(() => {
     void submitWithDictation((text) => {
-      if (selectedLabels.size === 0 && !text.trim()) return null;
+      if (selectedLabels.size === 0 && !text.trim()) return hasAnswerImages ? '' : null;
       // Keep option order, followed by the finalized free-text answer.
       const parts = options.filter((o) => selectedLabels.has(o.label)).map((o) => o.label);
       if (text.trim()) parts.push(text.trim());
       return JSON.stringify(parts);
     });
-  }, [options, selectedLabels, submitWithDictation]);
+  }, [hasAnswerImages, options, selectedLabels, submitWithDictation]);
 
   // ── Back ──
   const handleBack = useCallback(() => {
@@ -613,7 +704,7 @@ function AskUserQuestionForm({
   // ── Skip ──
   const handleSkip = useCallback(() => {
     if (voiceSubmitRef.current) return;
-    advance('');
+    advance('', false);
   }, [advance]);
 
   // ── Custom input toggle ──
@@ -624,7 +715,7 @@ function AskUserQuestionForm({
   }, [currentQ]);
 
   const beginVoiceInput = useCallback(() => {
-    if (voiceBridge || currentQ?.answerConstraints?.choices) return;
+    if (voiceBridge || currentQ?.answerConstraints?.choices || imageSubmitRef.current) return;
     if (voiceSubmitRef.current) return;
     const session = dictationRef.current;
     if (session.isBusy) {
@@ -729,10 +820,10 @@ function AskUserQuestionForm({
       // In multi-select, custom text is part of the selection — click Next to submit
       return;
     }
-    void submitWithDictation((text) => text.trim() || null);
+    void submitWithDictation((text) => text.trim() || (hasAnswerImages ? '' : null));
     // advance restores the next page when navigating. On the final page keep
     // this field retryable until the host confirms and removes the card.
-  }, [isMultiSelect, submitWithDictation]);
+  }, [hasAnswerImages, isMultiSelect, submitWithDictation]);
 
   // ── Direct free-text answer when no option rows render ──
   // Multi-select keeps the documented JSON-array encoding (`["text"]`), otherwise
@@ -740,9 +831,9 @@ function AskUserQuestionForm({
   const submitDirectAnswer = useCallback(() => {
     void submitWithDictation((text) => {
       const trimmed = text.trim();
-      return trimmed ? (isMultiSelect ? JSON.stringify([trimmed]) : trimmed) : null;
+      return trimmed ? (isMultiSelect ? JSON.stringify([trimmed]) : trimmed) : hasAnswerImages ? '' : null;
     });
-  }, [isMultiSelect, submitWithDictation]);
+  }, [hasAnswerImages, isMultiSelect, submitWithDictation]);
 
   const voiceHandler = useRef<(text: string) => void>(() => {});
   const voiceTarget = useMemo<VoiceQuestionTarget>(() => {
@@ -754,7 +845,8 @@ function AskUserQuestionForm({
   }, [voiceBridge, currentIndex, voiceRevision.current, selectedLabels, customInput, showCustomInput, voiceFeedback]);
   useLayoutEffect(() => {
     voiceHandler.current = (text) => {
-      if (isAnimating || referencePreviewOpen || !currentQ || dictationRef.current.isBusy || voiceSubmitRef.current) return;
+      if (isAnimating || referencePreviewOpen || !currentQ || dictationRef.current.isBusy ||
+          voiceSubmitRef.current || imageSubmitRef.current) return;
       onViewerStateChange('expanded');
       const result = parseVoiceQuestionSelection(text, options.map((option) => option.label));
       if (result.kind === 'cancel') {
@@ -830,7 +922,7 @@ function AskUserQuestionForm({
 
       // Dictation owns the answer field until it stops: switching questions
       // would write the rest of the transcript into a different answer.
-      if (dictationRef.current.isBusy || voiceSubmitRef.current) return;
+      if (dictationRef.current.isBusy || voiceSubmitRef.current || imageSubmitRef.current) return;
 
       if (isWithdrawn) {
         if (e.key === 'Escape') { e.preventDefault(); onAnswer(requestId, {}); }
@@ -841,8 +933,10 @@ function AskUserQuestionForm({
       if (showCustomInput && !isMultiSelect) {
         if (e.key === 'Escape') {
           e.preventDefault();
-          setShowCustomInput(false);
-          setCustomInput('');
+          if (!hasAnswerImages) {
+            setShowCustomInput(false);
+            setCustomInput('');
+          }
         }
         return;
       }
@@ -851,8 +945,10 @@ function AskUserQuestionForm({
       if (showCustomInput && isMultiSelect) {
         if (e.key === 'Escape') {
           e.preventDefault();
-          setShowCustomInput(false);
-          setCustomInput('');
+          if (!hasAnswerImages) {
+            setShowCustomInput(false);
+            setCustomInput('');
+          }
         }
         return;
       }
@@ -895,6 +991,7 @@ function AskUserQuestionForm({
     handleToggle,
     handleCustomOptionClick,
     handleSkip,
+    hasAnswerImages,
     isWithdrawn, onAnswer, requestId,
   ]);
 
@@ -908,6 +1005,42 @@ function AskUserQuestionForm({
   const submitLabel = t(isLastQuestion
     ? pending.withdrawalReason ? 'chat.askUserQuestion.sendSupplement' : pending.resumeOnSubmit ? 'chat.askUserQuestion.sendAndContinue' : 'chat.askUserQuestion.submit'
     : 'chat.askUserQuestion.next');
+  const answerSubmitting = voiceSubmitting || imageSubmitting;
+  const attachLabel = t('settings.shortcuts.workLouderCodex.commands.composer.addPhotos.name');
+  const imageDropHandlers = allowImages ? { onPaste: onImagePaste, onDragOver: onImageDragOver, onDrop: onImageDrop } : {};
+  const imagePicker = allowImages && (
+    <>
+      <input ref={imagePickerRef} type="file" accept={QUESTION_ANSWER_IMAGE_TYPES.join(',')} multiple hidden
+        onChange={(event) => {
+          const files = Array.from(event.currentTarget.files ?? []);
+          event.currentTarget.value = '';
+          if (files.length) addAnswerImages(files);
+        }} />
+      <Tip text={attachLabel}>
+        <Button type="button" size="md" className={cn('w-8 px-0', composerExpanded && 'mr-auto')} tone="quiet"
+          aria-label={attachLabel} disabled={voiceLocked}
+          onClick={() => imagePickerRef.current?.click()}>
+          <Plus aria-hidden size={16} />
+        </Button>
+      </Tip>
+    </>
+  );
+  const imageTray = allowImages && (
+    <>
+      <AttachmentRejectionStrip rejections={attachmentRejections}
+        onDismiss={(id) => setAttachmentRejections(items => items.filter(item => item.id !== id))} />
+      {hasAnswerImages && answerImages && (
+        <QuestionAnswerImageTray images={answerImages}
+          onRemove={(id) => {
+            if (imageSubmitRef.current) return;
+            const next = draftRef.current.answerImages?.filter(image => image.id !== id);
+            setAnswerImages(next);
+            draftRef.current = { ...draftRef.current, answerImages: next };
+            onDraftChange(draftRef.current);
+          }} />
+      )}
+    </>
+  );
 
   const footerActions = (
     <div className="flex gap-2.5">
@@ -917,7 +1050,7 @@ function AskUserQuestionForm({
       )}
       {(isWithdrawn || (pending.delivery === 'async' && startedRef.current)) && (
         <Button variant="secondary" palette="confirmation" size="lg" compact
-          type="button" disabled={voiceLocked} onClick={() => { if (!voiceSubmitRef.current) onAnswer(requestId, {}); }}>
+          type="button" disabled={voiceLocked} onClick={() => { if (!voiceSubmitRef.current && !imageSubmitRef.current) onAnswer(requestId, {}); }}>
           {t('chat.askUserQuestion.close')}
         </Button>
       )}
@@ -997,11 +1130,13 @@ function AskUserQuestionForm({
         {showCustomInput ? (
           <div
             data-testid="interaction-answer-composer"
+            {...imageDropHandlers}
             className={cn(
               'flex w-full min-w-0 gap-2',
               composerExpanded ? 'flex-col p-3' : 'items-end px-4 py-2',
             )}
           >
+            {imageTray}
             <AutoGrowingAnswerTextarea
               textareaRef={inputRef}
               voice={voiceBridge ? undefined : dictation}
@@ -1018,10 +1153,12 @@ function AskUserQuestionForm({
                 if (e.key === 'Escape') {
                   // Closing the row mid-dictation would leave the rest of the
                   // transcript writing into a hidden field.
-                  if (voiceSubmitRef.current || dictation.isBusy) return;
+                  if (voiceSubmitRef.current || dictation.isBusy || imageSubmitRef.current) return;
                   e.preventDefault();
-                  setShowCustomInput(false);
-                  setAnswerText('');
+                  if (!hasAnswerImages) {
+                    setShowCustomInput(false);
+                    setAnswerText('');
+                  }
                 }
               }}
               placeholder={t('chat.askUserQuestion.answerPlaceholder')}
@@ -1036,6 +1173,7 @@ function AskUserQuestionForm({
             {/* Voice and submit stay in one cluster: beside a single-line answer,
                 then below the full-width text once it wraps. */}
             <div className={cn('flex items-center justify-end gap-2', composerExpanded ? 'w-full' : 'shrink-0')}>
+              {imagePicker}
               {!voiceBridge && (<AskUserVoiceButton
                 size="md"
                 label={voiceButtonLabel}
@@ -1049,21 +1187,21 @@ function AskUserQuestionForm({
                   <button
                     type="button"
                     onClick={isMultiSelect ? handleNext : handleCustomSubmit}
-                    disabled={voiceSubmitting || (!dictation.isBusy && !customInput.trim() && !(isMultiSelect && selectedLabels.size > 0))}
-                    aria-busy={voiceSubmitting}
+                    disabled={answerSubmitting || (!dictation.isBusy && !customInput.trim() && !hasAnswerImages && !(isMultiSelect && selectedLabels.size > 0))}
+                    aria-busy={answerSubmitting}
                     data-testid={isLastQuestion ? undefined : 'ask-user-custom-next'}
                     aria-label={submitLabel}
                     className={cn(
                       'relative flex h-8 w-8 shrink-0 items-center justify-center rounded-full transition-colors',
-                      customInput.trim() || dictation.isBusy || (isMultiSelect && selectedLabels.size > 0)
+                      customInput.trim() || hasAnswerImages || dictation.isBusy || (isMultiSelect && selectedLabels.size > 0)
                         ? 'bg-[var(--send-btn-bg)] text-[var(--send-btn-icon)] hover:bg-[var(--send-btn-hover-bg)] active:bg-[var(--send-btn-pressed-bg)]'
                         : 'bg-[var(--ask-send-disabled-bg)] text-[var(--ask-send-disabled-text)]',
                     )}
                   >
-                    <span className={cn('inline-flex items-center justify-center', voiceSubmitting && 'opacity-0')}>
+                    <span className={cn('inline-flex items-center justify-center', answerSubmitting && 'opacity-0')}>
                       <CreateAgentSendIcon />
                     </span>
-                    {voiceSubmitting && (
+                    {answerSubmitting && (
                       <span aria-hidden="true" className="absolute inset-0 flex items-center justify-center">
                         <Spinner size={14} />
                       </span>
@@ -1132,7 +1270,7 @@ function AskUserQuestionForm({
       minimizedMeta={totalQuestions > 1 ? `${currentIndex + 1} / ${totalQuestions}` : undefined}
       restoreAriaLabel={t('chat.askUserQuestion.restoreAriaLabel')}
       minimizeAriaLabel={t('chat.askUserQuestion.minimizeAriaLabel')}
-      minimizeDisabled={isAnimating}
+      minimizeDisabled={isAnimating || imageSubmitting}
       pinnedContent={voiceBridge
         ? <div className="flex flex-col gap-3">{voiceNotice}{customAnswerEntry}</div>
         : customAnswerEntry && speakerFilteredNotice
@@ -1172,6 +1310,7 @@ function AskUserQuestionForm({
       )}
       {/* Content area — participates in slide animation */}
       <div
+        {...imageDropHandlers}
         className={cn(
           'flex flex-col gap-4 transition-[opacity,transform] duration-[var(--motion-base)] ease-[var(--motion-ease-move)]',
           slideClass,
@@ -1268,6 +1407,7 @@ function AskUserQuestionForm({
               composerExpanded ? 'flex-col p-3' : 'items-end py-2 pl-3 pr-2',
             )}
           >
+            {imageTray}
             <AutoGrowingAnswerTextarea
               textareaRef={inputRef}
               voice={voiceBridge ? undefined : dictation}
@@ -1281,9 +1421,9 @@ function AskUserQuestionForm({
                   submitDirectAnswer();
                 }
                 if (e.key === 'Escape') {
-                  if (voiceSubmitRef.current || dictation.isBusy) return;
+                  if (voiceSubmitRef.current || dictation.isBusy || imageSubmitRef.current) return;
                   e.preventDefault();
-                  handleSkip();
+                  if (!hasAnswerImages) handleSkip();
                 }
               }}
               placeholder={t('chat.askUserQuestion.answerPlaceholder')}
@@ -1296,6 +1436,7 @@ function AskUserQuestionForm({
               )}
             />
             <div className={cn('flex items-center justify-end gap-2', composerExpanded ? 'w-full' : 'shrink-0')}>
+              {imagePicker}
               {!voiceBridge && (<AskUserVoiceButton
                 size="md"
                 label={voiceButtonLabel}
@@ -1308,21 +1449,21 @@ function AskUserQuestionForm({
                 <button
                   type="button"
                   onClick={submitDirectAnswer}
-                  disabled={voiceSubmitting || (!dictation.isBusy && !customInput.trim() && !(isMultiSelect && selectedLabels.size > 0))}
-                  aria-busy={voiceSubmitting}
+                  disabled={answerSubmitting || (!dictation.isBusy && !customInput.trim() && !hasAnswerImages && !(isMultiSelect && selectedLabels.size > 0))}
+                  aria-busy={answerSubmitting}
                   data-testid={isLastQuestion ? undefined : 'ask-user-custom-next'}
                   aria-label={submitLabel}
                   className={cn(
                     'relative flex h-8 w-8 shrink-0 items-center justify-center rounded-full transition-colors',
-                    customInput.trim() || dictation.isBusy
+                    customInput.trim() || hasAnswerImages || dictation.isBusy
                       ? 'bg-[var(--send-btn-bg)] text-[var(--send-btn-icon)] hover:bg-[var(--send-btn-hover-bg)] active:bg-[var(--send-btn-pressed-bg)]'
                       : 'bg-[var(--ask-send-disabled-bg)] text-[var(--ask-send-disabled-text)]',
                   )}
                 >
-                  <span className={cn('inline-flex items-center justify-center', voiceSubmitting && 'opacity-0')}>
+                  <span className={cn('inline-flex items-center justify-center', answerSubmitting && 'opacity-0')}>
                     <CreateAgentSendIcon />
                   </span>
-                  {voiceSubmitting && (
+                  {answerSubmitting && (
                     <span aria-hidden="true" className="absolute inset-0 flex items-center justify-center">
                       <Spinner size={14} />
                     </span>

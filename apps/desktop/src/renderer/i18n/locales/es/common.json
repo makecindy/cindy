@@ -15543,6 +15543,7 @@
     "prevMessageJump": "Ir al prompt anterior: {{preview}}",
     "sessionLoading": "Cargando tarea",
     "askUserQuestion": {
+      "imageRejected": "No se pudo adjuntar «{{name}}». Usa PNG, JPEG, WebP o GIF. Hasta {{limit}} imágenes y {{size}} MB en total.",
       "unanswered": "Sin respuesta",
       "withdrawn": "Ya no necesita respuesta",
       "withdrawnDraft": "Esta pregunta ya no necesita respuesta.\n{{reason}}\nTu borrador se conserva y puedes enviarlo como información adicional.",

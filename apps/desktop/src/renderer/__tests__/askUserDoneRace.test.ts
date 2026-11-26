@@ -52,8 +52,8 @@ vi.mock('@/lib/logger', () => ({
   }),
 }));
 
-vi.mock('@/lib/imageRef', () => ({
-  parseUserContent: vi.fn((c: string) => ({ text: c, images: [], files: [] })),
+vi.mock('@/lib/imageRef', async (importOriginal) => ({
+  parseUserContent: (await importOriginal<typeof import('@/lib/imageRef')>()).parseUserContent,
   stringifyUserContent: vi.fn((text: string, images = [], files = []) =>
     JSON.stringify({ text, images, files }),
   ),
@@ -101,6 +101,7 @@ function installElectronBridge(): void {
   const w = globalThis as unknown as { window: Record<string, unknown> };
   w.window = {
     electronAPI: {
+      cacheImageFromBuffer: vi.fn(async () => ({ url: `cindy-media://blobs/${'f'.repeat(64)}.png`, filename: 'shot.png' })),
       maker: {
         input: {
           getProjection: vi.fn(async (sessionId: string) => emptyProjection(sessionId)),
@@ -190,6 +191,40 @@ describe('ask_user 与 done 的时序', () => {
     makerChatStore.__teardownGlobalListeners();
     makerChatStore.purgeSession(SESSION_ID);
     vi.restoreAllMocks();
+  });
+
+  // Unit regression: the image draft survives a failed interaction receipt;
+  // only the accepted retry feeds the live question history.
+  it('keeps a screenshot in the question draft until the host accepts the answer', async () => {
+    const questions = [{ question: 'What do you see?' }];
+    const images = [{ id: 'image', mimeType: 'image/png', file: new File(['shot'], 'shot.png', { type: 'image/png' }) }];
+    const answers = { 'What do you see?': '' };
+    const draft = { requestId: 'async-1', currentIndex: 0, answers, started: true, answerImages: images };
+    const url = `cindy-media://blobs/${'f'.repeat(64)}.png`;
+    emitAskUserRequest('async-1', questions, 'async');
+    makerChatStore.setAskUserDraft(SESSION_ID, draft);
+    expect(window.electronAPI.cacheImageFromBuffer).not.toHaveBeenCalled();
+    vi.mocked(window.electronAPI.maker.resolveInteraction).mockResolvedValueOnce({ accepted: false });
+    vi.mocked(aroundClientId).mockResolvedValueOnce([{
+      clientId: 'persist-async-1', role: 'ask_user', content: { requestId: 'async-1', status: 'pending' },
+    }] as Awaited<ReturnType<typeof aroundClientId>>);
+    await makerChatStore.answerUserQuestion(SESSION_ID, 'async-1', answers, images);
+    expect(makerChatStore.getLightSnapshot(SESSION_ID).askUserDraft).toBe(draft);
+    expect(window.electronAPI.maker.input.enqueue).not.toHaveBeenCalled();
+
+    const answerImages = [{ url, originalName: 'shot.png', mimeType: 'image/png', size: 4 }];
+    vi.mocked(window.electronAPI.maker.resolveInteraction).mockImplementationOnce(async () => {
+      onInteractionDismissed?.({ sessionId: SESSION_ID, requestId: 'async-1', reason: 'resolved',
+        decision: { kind: 'ask_user_question', answers, answerImages } });
+      return { accepted: true };
+    });
+    await makerChatStore.answerUserQuestion(SESSION_ID, 'async-1', answers, images);
+    expect(window.electronAPI.maker.resolveInteraction).toHaveBeenLastCalledWith('async-1', {
+      kind: 'ask_user_question', answers, answerImages: [{ url, originalName: 'shot.png' }],
+    });
+    expect(makerChatStore.getLightSnapshot(SESSION_ID).pendingAskUser).toBeNull();
+    expect(makerChatStore.getSnapshot(SESSION_ID).messages.find(message => message.role === 'ask_user'))
+      .toMatchObject({ askUserStatus: 'answered', images: [expect.objectContaining({ url })] });
   });
 
   // Regression: withdrawal must preserve a draft, show its reason, and keep supplemental sending explicit.

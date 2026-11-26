@@ -261,7 +261,11 @@ interface UseCCAgentChatReturn {
   /** F-AUQ-DRAFT: Persist in-progress wizard state for the current question batch. */
   setAskUserDraft: (next: AskUserDraft | null) => void;
   /** F7.4/F7.5: Answer a pending ask-user-question */
-  answerUserQuestion: (requestId: string, answers: Record<string, string>) => void;
+  answerUserQuestion: (
+    requestId: string,
+    answers: Record<string, string>,
+    images?: Parameters<typeof makerChatStore.answerUserQuestion>[3],
+  ) => Promise<void> | void;
   /** FP-3: Currently pending plan review */
   pendingPlanReview: PendingPlanReview | null;
   /** FP-3: Respond to a pending plan review */
@@ -651,9 +655,9 @@ export function useCCAgentChat(
   );
 
   const answerUserQuestion = useCallback(
-    (requestId: string, answers: Record<string, string>) => {
+    (...args: Parameters<UseCCAgentChatReturn['answerUserQuestion']>) => {
       if (!sessionId) return;
-      makerChatStore.answerUserQuestion(sessionId, requestId, answers);
+      return makerChatStore.answerUserQuestion(sessionId, ...args);
     },
     [sessionId],
   );
