@@ -119,6 +119,42 @@ describe('serverApiFetch', () => {
     expect(h.transport).toHaveBeenCalledTimes(3);
   });
 
+  // #13008 review: the production HTTP entry must stop another Credits read
+  // as soon as 429 headers arrive. Existing tests waited for rejection/abort,
+  // missing the interval where the response body was still pending. Unit;
+  // minimal input: a 429 with Retry-After and an unresolved body, then reread.
+  it('blocks another credit read while the rate-limited response body is still pending', async () => {
+    const h = creditHarness();
+    let entered!: () => void, finish!: (body: object) => void;
+    const bodyStarted = new Promise<void>(resolve => { entered = resolve; });
+    const body = new Promise<object>(resolve => { finish = resolve; });
+    h.transport.mockResolvedValueOnce({ status: 429, ok: false, headers: new Headers({ 'Retry-After': '120' }),
+      json: () => { entered(); return body; },
+    });
+    const pending = h.read();
+    try {
+      await bodyStarted;
+      h.transport.mockImplementation(async () => new Response('{}'));
+      await expect(h.read()).rejects.toMatchObject({ statusCode: 429 });
+      expect(h.transport).toHaveBeenCalledOnce();
+      h.state.endpoint = 'https://credit-b.example.test';
+      await expect(h.read()).resolves.toEqual({});
+      expect(h.transport).toHaveBeenCalledTimes(2);
+    } finally {
+      finish({});
+      await expect(pending).rejects.toMatchObject({ statusCode: 429 });
+    }
+  });
+
+  it('preserves the HTTP rejection when a retry deadline observer throws', async () => {
+    const h = creditHarness();
+    h.transport.mockResolvedValueOnce(h.limited());
+    await expect(h.read({ onRetryAfter: () => { throw new Error('private observer details'); } }))
+      .rejects.toMatchObject({ statusCode: 429 });
+    expect(JSON.stringify(mocks.logger.warn.mock.calls)).not.toContain('private observer details');
+    expect(h.transport).toHaveBeenCalledOnce();
+  });
+
   it('rechecks the refreshed physical endpoint before sending a 401 retry', async () => {
     const h = creditHarness();
     h.state.endpoint = 'https://credit-b.example.test';

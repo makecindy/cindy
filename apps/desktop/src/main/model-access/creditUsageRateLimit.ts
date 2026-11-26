@@ -31,6 +31,18 @@ export function createCreditUsageRateLimitFetch(fetch: ServerFetch, scope: () =>
       }
     };
     assertCurrent();
+    const rememberDeadline = (retryAt: unknown, base: unknown) => {
+      const current = scope();
+      if (current?.owner !== captured.owner || current.generation !== captured.generation
+        || typeof retryAt !== 'number' || !Number.isFinite(retryAt) || retryAt <= Date.now()
+        || typeof base !== 'string') return;
+      const key = JSON.stringify([captured.owner, base]);
+      // Deadlines survive same-account generation repairs; generations only
+      // fence late results. Memory is bounded across account/endpoint changes.
+      for (const [id, until] of deadlines) if (until <= Date.now()) deadlines.delete(id);
+      if (!deadlines.has(key) && deadlines.size >= 32) deadlines.delete(deadlines.keys().next().value!);
+      deadlines.set(key, Math.max(deadlines.get(key) ?? 0, retryAt));
+    };
     const resolveBase = () => typeof options.baseUrl === 'function' ? options.baseUrl() : options.baseUrl;
     let lastBase: string | undefined;
     try {
@@ -42,6 +54,9 @@ export function createCreditUsageRateLimitFetch(fetch: ServerFetch, scope: () =>
         if (retryAt !== undefined && retryAt > Date.now()) {
           throw new ServerApiError('RATE_LIMITED', 429, 'Credit usage is temporarily rate limited', retryAt, base);
         }
+      }, onRetryAfter(retryAt, base) {
+        rememberDeadline(retryAt, base);
+        options.onRetryAfter?.(retryAt, base);
       } });
       assertCurrent();
       if (lastBase !== resolveBase()) throw new ServerApiError('PRECONDITION_FAILED', 409, 'Credit usage endpoint changed');
@@ -50,17 +65,7 @@ export function createCreditUsageRateLimitFetch(fetch: ServerFetch, scope: () =>
     } catch (error) {
       assertCurrent();
       const row = error as { retryAt?: unknown; servedBaseUrl?: unknown } | null;
-      if (typeof row?.retryAt === 'number' && Number.isFinite(row.retryAt) && row.retryAt > Date.now()) {
-        const base = typeof row.servedBaseUrl === 'string' ? row.servedBaseUrl : lastBase;
-        if (base !== undefined) {
-          const key = JSON.stringify([captured.owner, base]);
-          // Deadlines survive same-account generation repairs; generations only
-          // fence late results. Memory is bounded across account/endpoint changes.
-          for (const [id, until] of deadlines) if (until <= Date.now()) deadlines.delete(id);
-          if (!deadlines.has(key) && deadlines.size >= 32) deadlines.delete(deadlines.keys().next().value!);
-          deadlines.set(key, Math.max(deadlines.get(key) ?? 0, row.retryAt));
-        }
-      }
+      rememberDeadline(row?.retryAt, typeof row?.servedBaseUrl === 'string' ? row.servedBaseUrl : lastBase);
       throw error;
     }
   };
