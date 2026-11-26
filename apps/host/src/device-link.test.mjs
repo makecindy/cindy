@@ -934,6 +934,7 @@ const PINNED_DISPATCH_PORTS = {
   'service-gate': ['executeTaskTags', 'dispatchLocalInvoke'],
   'refused-at-entry': ['requestPluginOauth'],
   unbound: ['readUsageWidgetSnapshot', 'configureStandbyGuestCleanup', 'prepareShareAvailability',
+    'readZhipuCodingPlanAccountUsage', 'isRemoteProviderInvocationAllowed',
     'readKimiCodingAccountUsage', 'readOpenCodeGoAccountUsage', 'requestFilePeer', 'stopFilePeers', 'requestTaskMigration',
     'delegatedProviderShareGuestAccess', 'locallyProvenProviderShareDelegation',
     'delegatedProviderShareLeases', 'invalidateProviderShareDelegation',

@@ -82,6 +82,8 @@ export const HOST_DISPATCH_PORTS_WHILE_HELD = Object.freeze({
   readUsageWidgetSnapshot: 'unbound',
   configureStandbyGuestCleanup: 'unbound',
   prepareShareAvailability: 'unbound',
+  readZhipuCodingPlanAccountUsage: 'unbound',
+  isRemoteProviderInvocationAllowed: 'unbound',
   readKimiCodingAccountUsage: 'unbound',
   readOpenCodeGoAccountUsage: 'unbound',
   // `/api/task-tags/execute`, refused by the service gate while held.

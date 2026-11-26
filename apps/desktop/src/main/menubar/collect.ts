@@ -906,7 +906,7 @@ export function opencodeGoSource(provider: ProviderView, result: ProviderAccount
   };
 }
 
-function zhipuSource(provider: ProviderView, result: ProviderAccountUsageResult | null): MenubarSubscriptionInput {
+export function zhipuSource(provider: ProviderView, result: ProviderAccountUsageResult | null): MenubarSubscriptionInput {
   const snapshot = result?.status === 'ready' && !result.stale
     && result.snapshot.kind === 'zhipu-coding-plan-quota' && !result.snapshot.noPlan ? result.snapshot : null;
   const windows: MenubarWindowInput[] = [];

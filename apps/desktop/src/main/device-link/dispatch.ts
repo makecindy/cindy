@@ -2,9 +2,10 @@ import { TASK_ACTIVITY_CAPABILITY, TASK_ACTIVITY_SNAPSHOT, type ForegroundHostTa
 import type { readUsageWidgetSnapshot } from '../quota-overview/service.js';
 import type { configureStandbyGuestCleanup } from './providerShareAvailabilityGuests.js';
 import type { prepareShareAvailability } from './providerShareAvailability.js';
+import { isZhipuCodingPlanRoute, parseZhipuAccountUsageResult } from '../../shared/providerAccountUsage.js';
 import { parseKimiUsageRequest, isKimiCodingProvider } from '../../shared/kimiCodingUsage.js';
 import { isOpenCodeGoProvider, parseOpenCodeGoUsageRequest } from '../../shared/opencodeGoUsage.js';
-import type { readKimiCodingAccountUsage, readOpenCodeGoAccountUsage } from '../maker-host/provider-account-usage.js';
+import type { readKimiCodingAccountUsage, readOpenCodeGoAccountUsage, readZhipuCodingPlanAccountUsage } from '../maker-host/provider-account-usage.js';
 import { PROVIDER_SHARE_INSIGHTS_CHANNEL } from '../../shared/providerShareInsights.js';
 import { sharedTaskRecoveryError } from '../../shared/sharedTaskRecovery.js';
 import { hasRichAnswer, compactRichAnswer, richAnswerText } from '@cindy/maker-shared/rich-answer';
@@ -455,6 +456,8 @@ export interface InboundDispatchPorts {
   readUsageWidgetSnapshot?: typeof readUsageWidgetSnapshot;
   configureStandbyGuestCleanup?: typeof configureStandbyGuestCleanup;
   prepareShareAvailability?: typeof prepareShareAvailability;
+  readZhipuCodingPlanAccountUsage?: typeof readZhipuCodingPlanAccountUsage;
+  isRemoteProviderInvocationAllowed?: (providerId: string) => boolean;
   readKimiCodingAccountUsage?: typeof readKimiCodingAccountUsage;
   readOpenCodeGoAccountUsage?: typeof readOpenCodeGoAccountUsage;
   executeTaskTags: typeof executeTaskTags;
@@ -525,6 +528,8 @@ export function createInboundDispatch(ports: InboundDispatchPorts) {
     readUsageWidgetSnapshot = unavailable('readUsageWidgetSnapshot'),
     configureStandbyGuestCleanup,
     prepareShareAvailability = unavailable('prepareShareAvailability'),
+    readZhipuCodingPlanAccountUsage,
+    isRemoteProviderInvocationAllowed,
     readKimiCodingAccountUsage = unavailable('readKimiCodingAccountUsage'),
     readOpenCodeGoAccountUsage = unavailable('readOpenCodeGoAccountUsage'),
     executeTaskTags,
@@ -1248,6 +1253,11 @@ function projectInvokeResultForTunnel(
       if (Array.isArray(p[field])) rest[field] = projectVisibleModelList(p[field], providerId, mediaAgent, visibility);
     }
     // A display-only capability survives route redaction. Never forward a stored hint.
+    delete rest.zhipuCodingPlanUsage;
+    const view = p as unknown as import('@cindy/model-providers').ProviderView;
+    if (sameAccountController && readZhipuCodingPlanAccountUsage && view.remoteInvocationEnabled === true
+      && view.connected && !view.suspended && !view.removed && view.auth?.method === 'apiKey'
+      && Object.values(view.routing ?? {}).some(isZhipuCodingPlanRoute)) rest.zhipuCodingPlanUsage = true;
     delete rest.kimiCodingUsageAgents;
     const kimiAgents = (['claude-code', 'codex', 'pi'] as const)
       .filter(agent => isKimiCodingProvider(p as unknown as import('@cindy/model-providers').Provider, agent));
@@ -5454,6 +5464,14 @@ async function executeRemoteInvoke(src: string, payload: InvokePayload | undefin
   // Subscription IPC validates local senders (Claude for named accounts, xAI always).
   // Keep that check; authorized device-link reads use the same injected data readers.
   // 直读注入的 usage reader(cached-first,只读快照,无副作用)。已过三道 gate。
+  if (payload.channel === 'maker:usage:zhipu-coding-plan') {
+    const request = parseKimiUsageRequest(payload.args?.[0]);
+    if (!request) return { ok: false, error: { code: 'IPC_ERROR', message: '[INVALID_PARAMS] invalid GLM usage query' } };
+    const allowed = () => isSameAccountController(src) && isRemoteProviderInvocationAllowed?.(request.providerId);
+    if (!readZhipuCodingPlanAccountUsage || !allowed()) return { ok: true, result: { status: 'unsupported' } };
+    const result = await readZhipuCodingPlanAccountUsage({ providerId: request.providerId });
+    return { ok: true, result: allowed() ? parseZhipuAccountUsageResult(result) : { status: 'unsupported' } };
+  }
   if (payload.channel === 'maker:usage:kimi-coding') {
     const request = parseKimiUsageRequest((payload.args ?? [])[0]);
     if (!request) return { ok: false, error: { code: 'IPC_ERROR', message: '[INVALID_PARAMS] invalid Kimi usage query' } };
