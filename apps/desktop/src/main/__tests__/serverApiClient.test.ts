@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
   refresh: vi.fn(),
   invalidateSession: vi.fn(),
   ownerScope: 'cloud:account-a:1',
+  authRealm: 'global',
   ownerInvalidations: new Set<() => void>(),
   logger: {
     debug: vi.fn(),
@@ -22,7 +23,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock('electron', () => ({ net: { fetch: mocks.netFetch } }));
 vi.mock('../appSessionState.js', () => ({
   activeOwnerScopeKey: () => mocks.ownerScope,
-  getActiveAppSession: () => ({ mode: 'cloud' }),
+  getActiveAppSession: () => ({ mode: 'cloud', dataOwnerId: mocks.ownerScope.split(':')[1], generation: Number(mocks.ownerScope.split(':')[2]) }),
   isAppSessionBoundaryPending: () => false,
   onAppSessionInvalidated: (listener: () => void) => {
     mocks.ownerInvalidations.add(listener);
@@ -30,6 +31,7 @@ vi.mock('../appSessionState.js', () => ({
   },
 }));
 vi.mock('../authManager', () => ({
+  getActiveAuthRealm: () => mocks.authRealm,
   getAccessToken: mocks.getAccessToken,
   refresh: mocks.refresh,
   invalidateSession: mocks.invalidateSession,
@@ -45,10 +47,164 @@ vi.mock('../logger', () => ({
 }));
 
 import { serverApiFetch, ServerApiError } from '../serverApiClient.desktop';
+import { createServerApiClient } from '../serverApiClient.js';
+import { createCreditUsageRateLimitFetch } from '../model-access/creditUsageRateLimit.js';
+
+function creditHarness() {
+  const state = { owner: 'member-a', generation: 1, enabled: true, endpoint: 'https://credit-a.example.test' };
+  const transport = vi.fn();
+  const refresh = vi.fn(async () => true);
+  const fetch = createCreditUsageRateLimitFetch(createServerApiClient({
+    fetch: transport, locale: () => 'en', log: mocks.logger,
+    auth: { getAccessToken: () => 'fixture-token', refresh, invalidateSession: vi.fn() },
+  }), () => state.enabled ? state : null);
+  const read = (options = {}) => fetch('/api/model-access/credit-usage', { baseUrl: () => state.endpoint, ...options });
+  const limited = () => new Response('{}', { status: 429, headers: { 'Retry-After': '120' } });
+  return { state, transport, refresh, fetch, read, limited };
+}
 
 describe('serverApiFetch', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.authRealm = 'global';
+  });
+
+  // Unit, engineering-conventions §3.2: the shared production HTTP entry must
+  // honor credit-usage Retry-After across callers. Existing tests only checked
+  // header parsing. Minimal regression: 429, then a second read before expiry.
+  it('does not physically reread credit usage before Retry-After expires', async () => {
+    vi.useFakeTimers();
+    const baseUrl = 'https://credit-limit.example.test';
+    const request = () => serverApiFetch('/api/model-access/credit-usage', { baseUrl });
+    try {
+      mocks.netFetch.mockResolvedValueOnce(new Response('{}', { status: 429, headers: { 'Retry-After': '120' } }));
+      await expect(request()).rejects.toMatchObject({ statusCode: 429 });
+      mocks.netFetch.mockResolvedValue(new Response('{"available":"7"}'));
+      await expect(request()).rejects.toMatchObject({ statusCode: 429, retryAt: Date.now() + 120_000 });
+      expect(mocks.netFetch).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(120_000);
+      await expect(request()).resolves.toEqual({ available: '7' });
+      expect(mocks.netFetch).toHaveBeenCalledTimes(2);
+    } finally { vi.useRealTimers(); mocks.netFetch.mockReset(); }
+  });
+
+  it('isolates the same membership and endpoint in different authenticated realms', async () => {
+    const baseUrl = 'https://credit-realms.example.test';
+    const read = () => serverApiFetch('/api/model-access/credit-usage', { baseUrl });
+    mocks.netFetch.mockResolvedValueOnce(new Response('{}', { status: 429, headers: { 'Retry-After': '120' } }));
+    await expect(read()).rejects.toMatchObject({ statusCode: 429 });
+    mocks.authRealm = 'cn';
+    mocks.netFetch.mockResolvedValueOnce(new Response('{"available":"3"}'));
+    await expect(read()).resolves.toEqual({ available: '3' });
+    mocks.authRealm = 'global';
+    await expect(read()).rejects.toMatchObject({ statusCode: 429 });
+    expect(mocks.netFetch).toHaveBeenCalledTimes(2);
+  });
+
+  // Same production client/fake transport, unit: isolate members and endpoints,
+  // but retain the server's deadline when only the window generation is repaired.
+  it('keeps retry deadlines scoped to membership and endpoint across generation repairs', async () => {
+    const h = creditHarness();
+    h.transport.mockResolvedValueOnce(h.limited());
+    await expect(h.read()).rejects.toMatchObject({ statusCode: 429 });
+    h.state.generation++;
+    await expect(h.read()).rejects.toMatchObject({ statusCode: 429 });
+    h.transport.mockImplementation(async () => new Response('{"available":"8"}'));
+    h.state.owner = 'member-b';
+    await expect(h.read()).resolves.toEqual({ available: '8' });
+    h.state.owner = 'member-a'; h.state.endpoint = 'https://credit-b.example.test';
+    await expect(h.read()).resolves.toEqual({ available: '8' });
+    h.state.endpoint = 'https://credit-a.example.test';
+    await expect(h.read()).rejects.toMatchObject({ statusCode: 429 });
+    expect(h.transport).toHaveBeenCalledTimes(3);
+  });
+
+  it('rechecks the refreshed physical endpoint before sending a 401 retry', async () => {
+    const h = creditHarness();
+    h.state.endpoint = 'https://credit-b.example.test';
+    h.transport.mockResolvedValueOnce(h.limited());
+    await expect(h.read()).rejects.toMatchObject({ statusCode: 429 });
+    h.state.endpoint = 'https://credit-a.example.test';
+    h.transport.mockResolvedValueOnce(new Response('{"error":{"code":"TOKEN_EXPIRED"}}', { status: 401 }));
+    h.refresh.mockImplementationOnce(async () => { h.state.endpoint = 'https://credit-b.example.test'; return true; });
+    await expect(h.read()).rejects.toMatchObject({ statusCode: 429, servedBaseUrl: 'https://credit-b.example.test' });
+    expect(h.refresh).toHaveBeenCalledOnce();
+    expect(h.transport).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not clear a concurrent 429 when an earlier success arrives late', async () => {
+    const h = creditHarness();
+    let finish!: (response: Response) => void;
+    h.transport.mockImplementationOnce(() => new Promise<Response>(resolve => { finish = resolve; }));
+    const earlier = h.read();
+    h.transport.mockResolvedValueOnce(h.limited());
+    await expect(h.read()).rejects.toMatchObject({ statusCode: 429 });
+    finish(new Response('{"available":"9"}'));
+    await expect(earlier).resolves.toEqual({ available: '9' });
+    await expect(h.read()).rejects.toMatchObject({ statusCode: 429 });
+    expect(h.transport).toHaveBeenCalledTimes(2);
+  });
+
+  it.each(['account', 'generation', 'endpoint', 'disabled'] as const)('drops a credit result overtaken by %s change', async change => {
+    const h = creditHarness();
+    let finish!: (response: Response) => void;
+    h.transport.mockImplementationOnce(() => new Promise<Response>(resolve => { finish = resolve; }));
+    const pending = h.read();
+    if (change === 'account') h.state.owner = 'member-b';
+    if (change === 'generation') h.state.generation++;
+    if (change === 'endpoint') h.state.endpoint = 'https://credit-b.example.test';
+    if (change === 'disabled') h.state.enabled = false;
+    finish(new Response('{"available":"9"}'));
+    await expect(pending).rejects.toMatchObject({ statusCode: 409 });
+    expect(h.transport).toHaveBeenCalledOnce();
+  });
+
+  it('keeps a Retry-After learned before a caller aborts a stalled 429 body', async () => {
+    const h = creditHarness();
+    const controller = new AbortController();
+    let entered!: () => void;
+    const bodyStarted = new Promise<void>(resolve => { entered = resolve; });
+    h.transport.mockImplementationOnce((_url: string, init: RequestInit) => Promise.resolve({
+      status: 429, ok: false, headers: new Headers({ 'Retry-After': '120' }),
+      json: () => new Promise((_resolve, reject) => {
+        init.signal!.addEventListener('abort', () => reject(init.signal!.reason), { once: true });
+        entered();
+      }),
+    }));
+    const pending = h.read({ signal: controller.signal });
+    await bodyStarted;
+    const reason = new Error('caller stopped waiting');
+    controller.abort(reason);
+    await expect(pending).rejects.toBe(reason);
+    await expect(h.read()).rejects.toMatchObject({ statusCode: 429 });
+    expect(h.transport).toHaveBeenCalledOnce();
+  });
+
+  it('does not let an obsolete generation record a deadline for the new generation', async () => {
+    const h = creditHarness();
+    let finish!: (response: Response) => void;
+    h.transport.mockImplementationOnce(() => new Promise<Response>(resolve => { finish = resolve; }));
+    const pending = h.read();
+    h.state.generation++;
+    finish(h.limited());
+    await expect(pending).rejects.toMatchObject({ statusCode: 409 });
+    h.transport.mockResolvedValueOnce(new Response('{"available":"4"}'));
+    await expect(h.read()).resolves.toEqual({ available: '4' });
+    expect(h.transport).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not throttle other routes, writes, explicit credentials or a 429 without a deadline', async () => {
+    const h = creditHarness();
+    h.transport.mockResolvedValueOnce(new Response('{}', { status: 429 }));
+    await expect(h.read()).rejects.toMatchObject({ statusCode: 429 });
+    h.transport.mockResolvedValueOnce(h.limited());
+    await expect(h.read()).rejects.toMatchObject({ statusCode: 429 });
+    h.transport.mockImplementation(async () => new Response('{}'));
+    await expect(h.fetch('/api/model-access/balance', { baseUrl: h.state.endpoint })).resolves.toEqual({});
+    await expect(h.fetch('/api/model-access/models', { baseUrl: h.state.endpoint })).resolves.toEqual({});
+    await expect(h.read({ method: 'POST', body: {} })).resolves.toEqual({});
+    await expect(h.read({ token: 'explicit-fixture-token' })).resolves.toEqual({});
+    expect(h.transport).toHaveBeenCalledTimes(6);
   });
 
   // Unit: cancellation must cover HTTP and a shared auth refresh. Existing retry
