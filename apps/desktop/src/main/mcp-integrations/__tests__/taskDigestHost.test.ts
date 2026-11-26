@@ -178,7 +178,12 @@ it('reports the pause of a stopped ordinary task in its registered digest', asyn
     console.info('digest evidence', { phase: result.phase, queuedCount: result.queued_count,
       canonicalQueuePaused: projection.queuePaused, digestQueuePaused: result.queue_paused });
     expect(result).toMatchObject({ ok: true, phase, queued_count: queuedCount });
-    expect(coordinator.getProjection(sessionId)).toEqual(projection);
+    // Reading the second snapshot advances its wire sequence once. The digest
+    // between the two reads must leave every queue field and the clock alone.
+    expect(coordinator.getProjection(sessionId)).toEqual({
+      ...projection,
+      queueSnapshot: { ...projection.queueSnapshot, sequence: projection.queueSnapshot!.sequence + 1 },
+    });
     expect([send, save, load].map(fn => fn.mock.calls.length)).toEqual(calls);
     expect(projection.queuePaused).toBe(queuePaused);
     return result.queue_paused;
