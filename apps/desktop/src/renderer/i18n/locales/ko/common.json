@@ -340,7 +340,7 @@
     "tabOwned": "내가 공유한 항목",
     "startIntro": "동료를 초대해 이 세션의 모든 내용을 함께 보고, 같은 Agent로 협업하세요.",
     "runsOnThisDevice": "이 컴퓨터에서 실행 중",
-    "inviteNotice": "초대 링크를 가진 사용자는 로그인 후 참여할 수 있으며, 호스트와 동일한 Agent 권한을 갖습니다.",
+    "inviteNotice": "초대 링크를 가진 사용자는 로그인 후 참여할 수 있으며, 호스트와 동일한 Agent 권한을 갖습니다. 하위 폴더만 공유해도 게스트는 Git 저장소 전체의 현재 변경 사항을 볼 수 있습니다.",
     "offlineAutoClose": "호스트 컴퓨터가 계속 오프라인 상태이면 공유가 자동으로 종료됩니다.",
     "inviteBoxHint": "동료에게 링크를 보내면 클릭하여 참여할 수 있습니다. Cindy의 ‘공유 세션 참여’에 링크를 붙여 넣어 참여할 수도 있습니다.",
     "invitationMessage": "“{{title}}”에 초대합니다\n{{link}}\n링크를 열어 참여하세요. Cindy가 열리지 않으면 Cindy에서 ‘공유 세션 참여’를 선택하고 이 링크를 붙여 넣으세요.",
@@ -401,7 +401,7 @@
       "progress": "현재 {{used}}% · 상한 {{limit}}%",
       "paused": "이 모델이 중지되었습니다. 사용 가능한 다른 모델을 선택하세요.",
       "recommendation": "추천: {{model}}",
-      "unsupported": "이 제공자 그룹은 아직 모델 사용 비율 제한을 지원하지 않습니다.",
+      "unsupported": "이 컴퓨터 그룹은 아직 모델 사용 비율 제한을 지원하지 않습니다.",
       "basis": "최근 7일(오늘 포함) · 캐시 제외 입력＋출력 토큰",
       "maxPercent": "개인 사용량 중 최대 비율",
       "empty": "기록된 사용량 없음",
@@ -496,23 +496,23 @@
         "confirm": "공유 삭제"
       },
       "reshare": {
-        "applying": "{{owner}}님의 제공자 그룹을 통해 사용하려고 합니다",
+        "applying": "{{owner}}님의 컴퓨터 그룹을 통해 사용하려고 합니다",
         "requestedAt": "{{time}}에 요청",
         "usageHint": "동의하면 {{name}}님의 세션이 이 컴퓨터에서 실행될 수 있고, 사용량은 {{owner}}님 몫으로 기록됩니다",
         "approve": "동의",
         "reject": "거절",
-        "summaryUsing_other": "{{count}}명이 {{owner}}님의 제공자 그룹을 통해 사용",
-        "summaryOwner": "{{owner}}님의 제공자 그룹을 통해",
+        "summaryUsing_other": "{{count}}명이 {{owner}}님의 컴퓨터 그룹을 통해 사용",
+        "summaryOwner": "{{owner}}님의 컴퓨터 그룹을 통해",
         "summaryDeclined_other": "{{count}}명 동의하지 않음",
         "stateApproved": "동의함",
         "stateRejected": "동의하지 않음",
         "revoke": "동의 철회",
         "revokeAria": "{{name}}님에 대한 동의 철회",
         "approveAria": "{{name}}님의 사용에 동의",
-        "toastApproved": "{{name}}님이 {{owner}}님의 제공자 그룹을 통해 {{provider}}을(를) 사용할 수 있게 되었습니다",
+        "toastApproved": "{{name}}님이 {{owner}}님의 컴퓨터 그룹을 통해 {{provider}}을(를) 사용할 수 있게 되었습니다",
         "toastRejected": "{{name}}님의 요청을 거절했습니다",
         "toastRevoked": "{{name}}님에 대한 동의를 철회했습니다. 실행 중인 세션은 중지되었습니다",
-        "listTitle": "{{owner}}님의 제공자 그룹을 통해 사용"
+        "listTitle": "{{owner}}님의 컴퓨터 그룹을 통해 사용"
       },
       "memberNote": {
         "add": "메모 설정",
@@ -558,7 +558,7 @@
       "requestedAt": "{{time}} 공유 링크로 요청함",
       "pairingHint": "승인하기 전에 링크를 보낸 곳에서 “보이는 페어링 코드가 뭐예요?”라고 물어볼 수 있습니다. 일치하면 승인하세요.",
       "callout": "승인하면 {{name}}님이 자신의 세션에서 {{provider}} 모델을 사용할 수 있습니다. Agent는 이 컴퓨터에서 실행되고 사용량은 내 {{provider}}에 계산됩니다. ‘{{provider}} · 원격 및 공유’에서 언제든지 일시 중지하거나 삭제할 수 있습니다.",
-      "calloutGroup": "승인하면 {{name}}님이 자신의 세션에서 {{provider}} 모델을 사용할 수 있습니다. Agent는 제공자 그룹이 선택한 컴퓨터에서 실행되고 사용량은 내 {{provider}}에 계산됩니다. ‘{{provider}} · 원격 및 공유’에서 언제든지 일시 중지하거나 삭제할 수 있습니다.",
+      "calloutGroup": "승인하면 {{name}}님이 자신의 세션에서 {{provider}} 모델을 사용할 수 있습니다. Agent는 컴퓨터 그룹이 선택한 컴퓨터에서 실행되고 사용량은 내 {{provider}}에 계산됩니다. ‘{{provider}} · 원격 및 공유’에서 언제든지 일시 중지하거나 삭제할 수 있습니다.",
       "calloutRemote": "승인하면 {{name}}님이 자신의 세션에서 {{provider}} 모델을 사용할 수 있습니다. Agent는 이 제공자가 있는 컴퓨터에서 실행되고 사용량은 내 {{provider}}에 계산됩니다. ‘{{provider}} · 원격 및 공유’에서 언제든지 일시 중지하거나 삭제할 수 있습니다.",
       "calloutClaudeEmail": "{{name}}님이 사용하는 동안 Agent가 Claude 로그인에 쓰는 내 이메일 주소를 볼 수 있습니다.",
       "calloutUnknown": "요청한 사람을 모른다면 거절하세요. 거절하면 이 링크는 더 이상 사용할 수 없습니다.",
@@ -698,7 +698,7 @@
       "rejectedTitle": "공유 요청 거절됨",
       "rejectedBody": "{{name}}님이 {{provider}} 공유를 거절했습니다",
       "reshareTitle": "새 사용 요청",
-      "reshareBody": "{{name}}님이 {{owner}}님의 제공자 그룹을 통해 내가 공유한 {{provider}}을(를) 사용하려고 합니다"
+      "reshareBody": "{{name}}님이 {{owner}}님의 컴퓨터 그룹을 통해 내가 공유한 {{provider}}을(를) 사용하려고 합니다"
     },
     "runLimits": {
       "title": "원격 세션 수 제한",
@@ -754,7 +754,7 @@
   },
   "providerGroup": {
     "management": {
-      "note": "{{device}}의 제공자 그룹을 관리하고 있습니다. 변경 사항은 해당 컴퓨터에 저장되므로 온라인 상태를 유지해 주세요.",
+      "note": "{{device}}의 컴퓨터 그룹을 관리하고 있습니다. 변경 사항은 해당 컴퓨터에 저장되므로 온라인 상태를 유지해 주세요.",
       "unsupported": "그룹이 있는 컴퓨터의 Cindy 버전은 아직 원격 관리를 지원하지 않습니다. 먼저 해당 컴퓨터의 Cindy를 업데이트해 주세요."
     },
     "page": {
@@ -824,27 +824,13 @@
       "emptyRange": "이 기간에는 사용량이 없습니다"
     },
     "section": {
-      "title": "제공자 그룹",
+      "title": "컴퓨터 그룹",
       "addComputer": "컴퓨터 추가",
       "delete": "그룹 삭제",
       "empty": "다른 컴퓨터의 {{provider}}을(를) 추가하면 세션이 자동으로 한 대를 골라 실행합니다",
-      "loading": "제공자 그룹을 불러오는 중…",
-      "loadFailed": "제공자 그룹을 불러오지 못했습니다",
+      "loading": "컴퓨터 그룹을 불러오는 중…",
+      "loadFailed": "컴퓨터 그룹을 불러오지 못했습니다",
       "note": "이 컴퓨터의 세션과 공유받은 사람의 세션은 그룹이 선택한 컴퓨터에서 Agent가 실행됩니다"
-    },
-    "strategy": {
-      "label": "그룹 배정 방식",
-      "least": "여유 우선",
-      "round": "순환",
-      "order": "순서대로",
-      "weight": "가중치",
-      "quotaFirst": "구독 사용량을 확인할 수 있으면 초기화가 가깝고 남은 양이 많은 컴퓨터를 먼저 사용해 각 계정을 시간에 맞춰 고르게 소진합니다. 비슷하면 그룹 배정 방식을 따릅니다",
-      "description": {
-        "least": "가장 여유로운 컴퓨터로",
-        "round": "차례대로 배정",
-        "order": "목록 앞쪽 우선",
-        "weight": "가중치 비율로"
-      }
     },
     "autoSwitch": {
       "label": "컴퓨터 자동 전환",
@@ -901,9 +887,9 @@
         }
       },
       "removeConfirm": {
-        "title": "{{name}}을(를) 제공자 그룹에서 제외할까요?",
+        "title": "{{name}}을(를) 컴퓨터 그룹에서 제외할까요?",
         "description": "새 세션이 더 이상 배정되지 않습니다. 이미 그 컴퓨터에서 실행 중인 세션은 그대로 남습니다.",
-        "lastDescription": "그룹의 마지막 컴퓨터입니다. 제외하면 {{provider}} 제공자 그룹이 삭제됩니다.",
+        "lastDescription": "그룹의 마지막 컴퓨터입니다. 제외하면 {{provider}} 컴퓨터 그룹이 삭제됩니다.",
         "confirm": "그룹에서 제외"
       },
       "sourceGroupOwner": "그룹을 만든 컴퓨터",
@@ -939,12 +925,12 @@
       "send": "메시지 보내기"
     },
     "deleteConfirm": {
-      "title": "{{provider}} 제공자 그룹을 삭제할까요?",
+      "title": "{{provider}} 컴퓨터 그룹을 삭제할까요?",
       "description": "이 컴퓨터의 새 세션은 이 컴퓨터에서 실행됩니다. 다른 컴퓨터에 배정된 세션은 그대로 남습니다.",
       "confirm": "그룹 삭제"
     },
     "add": {
-      "title": "{{provider}} 제공자 그룹에 컴퓨터 추가",
+      "title": "{{provider}} 컴퓨터 그룹에 컴퓨터 추가",
       "sourceAria": "컴퓨터 출처",
       "tabAvailable": "이미 사용 가능",
       "tabLink": "공유 링크",
@@ -960,10 +946,10 @@
       "pasteLink": "공유 링크 붙여넣기"
     },
     "toast": {
-      "added_other": "컴퓨터 {{count}}대를 {{provider}} 제공자 그룹에 추가했습니다",
-      "addedAccounts_other": "계정 {{count}}개를 {{provider}} 제공자 그룹에 추가했습니다",
-      "removed": "{{name}}을(를) 제공자 그룹에서 제외했습니다",
-      "deleted": "{{provider}} 제공자 그룹을 삭제했습니다"
+      "added_other": "컴퓨터 {{count}}대를 {{provider}} 컴퓨터 그룹에 추가했습니다",
+      "addedAccounts_other": "계정 {{count}}개를 {{provider}} 계정 그룹에 추가했습니다",
+      "removed": "{{name}}을(를) 컴퓨터 그룹에서 제외했습니다",
+      "deleted": "{{provider}} 컴퓨터 그룹을 삭제했습니다"
     }
   },
   "regionScreenshot": {
@@ -1360,7 +1346,7 @@
     "DEVICE_LINK_BUSY": "원격 컴퓨터가 사용 중입니다. 잠시 후 다시 시도해 주세요.",
     "INVALID_PARAMS": "입력값이 올바르지 않습니다. 확인 후 다시 시도하세요.",
     "PRECONDITION_FAILED": "현재 상태에서는 이 작업을 수행할 수 없습니다. 잠시 후 다시 시도하세요.",
-    "PROVIDER_GROUP_CHANGED": "다른 곳에서 제공자 그룹이 변경되어 이 작업이 적용되지 않았습니다. 최신 설정을 확인한 후 다시 시도하세요.",
+    "PROVIDER_GROUP_CHANGED": "다른 곳에서 컴퓨터 그룹이 변경되어 이 작업이 적용되지 않았습니다. 최신 설정을 확인한 후 다시 시도하세요.",
     "MODEL_CONTEXT_USAGE_UNKNOWN": "모델이 전환되지 않았습니다. 현재 작업에서 사용한 컨텍스트 양을 확인할 수 없습니다. 현재 모델을 유지하거나 새 작업을 만드세요.",
     "MODEL_WINDOW_CURRENT_CONTEXT_UNKNOWN": "모델이 전환되지 않았습니다. 현재 모델의 컨텍스트 윈도우를 확인할 수 없습니다. 사용자 지정 모델의 윈도우 설정을 확인하세요. 변경할 수 없다면 현재 모델을 유지하거나 새 작업을 만드세요.",
     "MODEL_WINDOW_TARGET_CONTEXT_UNKNOWN": "모델이 전환되지 않았습니다. 대상 모델의 컨텍스트 윈도우를 확인할 수 없습니다. 사용자 지정 모델의 윈도우 설정을 확인하세요. 변경할 수 없다면 다른 모델을 선택하거나 새 작업을 만드세요.",
@@ -1871,7 +1857,7 @@
       "imBot": "IM 봇",
       "ghosts": "플러그인",
       "cindyMake": "Cindy Make",
-      "modelGroups": "모델 그룹"
+      "modelGroups": "스마트 라우팅"
     },
     "sections": {
       "user": "사용자",
@@ -4284,8 +4270,10 @@
           "compaction": {
             "title": "자동 압축",
             "hint": "사용량이 선택한 비율에 도달하면 컨텍스트를 압축합니다. 값이 낮을수록 더 일찍 압축하며 엔진 제한은 계속 적용됩니다.",
-            "default": "{{pct}}% (기본값)",
-            "timing": "이 공급 경로의 모델에서 사용 가능한 모든 엔진에 적용됩니다. 이후 실행부터 반영되며 생성 중인 응답은 중단하지 않습니다."
+            "timing": "이 공급 경로의 모델에서 사용 가능한 모든 엔진에 적용됩니다. 이후 실행부터 반영되며 생성 중인 응답은 중단하지 않습니다.",
+            "defaultBadge": "기본값",
+            "sliderAria": "자동 압축 임계값 조정",
+            "restoreAria": "자동 압축 비율을 기본값으로 복원"
           },
           "contextLimitRoute": "현재 {{tokens}} tokens",
           "contextLimitOverWindow": "제공자가 명시한 한도를 초과하여 요청이 실패할 수 있습니다.",
@@ -4374,9 +4362,9 @@
         "detailNote": "Agent는 {{device}}에서 실행되며 그 컴퓨터의 로그인과 할당량을 씁니다. 새 작업을 만들 때 모델 목록에서 선택하면 사용할 수 있습니다. 이 제공자를 바꾸려면 그 컴퓨터의 「설정 → 모델 제공자」로 가세요.",
         "modelsTitle": "사용 가능한 모델",
         "modelsEmpty": "이 제공자는 그 컴퓨터에서 아직 사용 가능한 모델을 공개하지 않았습니다.",
-        "rowLabelGroup": "{{provider}} · {{device}} · 제공자 그룹",
-        "groupBadge_other": "제공자 그룹 · 컴퓨터 {{count}}대",
-        "groupNote": "{{device}}에서 이 제공자를 제공자 그룹으로 만들었습니다. 모델 목록에서 선택해 새 작업을 만들면 {{device}}가 그룹 배정 방식에 따라 아래 컴퓨터 중 한 대에 작업을 배정하고, 그 컴퓨터에 문제가 생기면 다른 컴퓨터로 바꿔 계속합니다. {{device}}가 온라인이면 여기에서 「원격 및 공유」를 열어 그룹과 공유를 관리할 수 있습니다.",
+        "rowLabelGroup": "{{provider}} · {{device}} · 컴퓨터 그룹",
+        "groupBadge_other": "컴퓨터 그룹 · 컴퓨터 {{count}}대",
+        "groupNote": "{{device}}에서 이 제공자를 컴퓨터 그룹으로 만들었습니다. 모델 목록에서 선택해 새 작업을 만들면 {{device}}가 그룹 배정 방식에 따라 아래 컴퓨터 중 한 대에 작업을 배정하고, 그 컴퓨터에 문제가 생기면 다른 컴퓨터로 바꿔 계속합니다. {{device}}가 온라인이면 여기에서 「원격 및 공유」를 열어 그룹과 공유를 관리할 수 있습니다.",
         "groupMembersTitle": "그룹의 컴퓨터",
         "groupMembersFailed": "지금은 그룹의 컴퓨터 상태를 가져올 수 없습니다.",
         "hiddenBanner": "이 컴퓨터의 모델 선택기에서 숨겨져 있습니다. 즐겨찾기와 사용 중인 세션에는 영향이 없습니다."
@@ -4428,7 +4416,7 @@
         "remoteAccess": {
           "label": "원격 사용 허용",
           "description": "켜면 내 다른 컴퓨터와 공유받은 사람이 이 제공자의 모델을 사용할 수 있습니다. Agent는 이 컴퓨터에서 이 컴퓨터의 로그인과 할당량으로 실행됩니다.",
-          "descriptionGroup": "켜면 내 다른 컴퓨터와 공유받은 사람이 이 제공자의 모델을 사용할 수 있습니다. Agent는 제공자 그룹이 선택한 컴퓨터에서 실행됩니다.",
+          "descriptionGroup": "켜면 내 다른 컴퓨터와 공유받은 사람이 이 제공자의 모델을 사용할 수 있습니다. Agent는 컴퓨터 그룹이 선택한 컴퓨터에서 실행됩니다.",
           "ariaLabel": "내 다른 컴퓨터와 공유받은 사람이 이 제공자를 사용하도록 허용",
           "writeFailed": "원격 사용 설정을 저장하지 못했습니다. 다시 시도해 주세요.",
           "followsPool": "이 연결은 '{{pool}}'에 통합되어 해당 '원격 사용 허용'을 따릅니다. '{{pool}}'에서 변경하세요."
@@ -5631,7 +5619,8 @@
           "runtime": "최근 보조 모델 요청이 계속 실패했습니다. 작업 이름 지정, 요약, 자막 번역 같은 플러그인 작업에 영향을 줄 수 있습니다.",
           "open": "설정 열기"
         }
-      }
+      },
+      "missingRoute": "삭제된 모드"
     },
     "compaction": {
       "codex": {
@@ -7304,8 +7293,7 @@
             "machines": "원격 제공자 기기"
           },
           "usage": {
-            "remoteModel": "원격 모델",
-            "remoteTask": "원격 작업"
+            "remoteModel": "원격 모델"
           },
           "bundle": {
             "mixed": "실행 중 {{running}} · 대기 {{ready}}",
@@ -8743,8 +8731,8 @@
         "hostTools_controlDetail": "Cindy의 작업 도구로 기존 작업과 프로젝트를 수정, 보관, 복원하고 제어하며 이 컴퓨터에 기본 형식의 작업 파일을 가져올 수 있습니다.",
         "hostTools_handoff": "작업에 메시지 보내기",
         "hostTools_handoffDetail": "Cindy의 작업 도구로 기존 작업에 메시지를 보낼 수 있습니다. 현재 작업 정보가 필요한 작업은 대상 작업을 명시해야 합니다.",
-        "hostTools_usage": "사용량 및 제공자 그룹 상태 읽기",
-        "hostTools_usageDetail": "현재 Cindy 계정에 연결된 이 컴퓨터의 Claude/Codex 계정 ID, 요금제, 할당량 기간과 업데이트 시간을 읽습니다. 이 컴퓨터와 같은 계정에서 허용된 다른 컴퓨터에 기록된 일별·모델별 사용량, 예상 비용, 제공자 그룹 설정과 상태, 볼 수 있는 구성원·기기의 ID, 이름과 아바타도 읽습니다. 구독 로그인 이메일, 계정 디렉터리, 내부 지문, 인증 정보나 파일은 읽을 수 없으며 계정이나 설정도 변경할 수 없습니다. 접근할 수 있는 작업의 할당량도 읽습니다. 같은 계정에서 허용된 다른 컴퓨터와 할당량 보기가 허용된 공유 제공자가 포함됩니다.",
+        "hostTools_usage": "사용량 및 컴퓨터 그룹 상태 읽기",
+        "hostTools_usageDetail": "현재 Cindy 계정에 연결된 이 컴퓨터의 Claude/Codex 계정 ID, 요금제, 할당량 기간과 업데이트 시간을 읽습니다. 이 컴퓨터와 같은 계정에서 허용된 다른 컴퓨터에 기록된 일별·모델별 사용량, 예상 비용, 컴퓨터 그룹 설정과 상태, 볼 수 있는 구성원·기기의 ID, 이름과 아바타도 읽습니다. 구독 로그인 이메일, 계정 디렉터리, 내부 지문, 인증 정보나 파일은 읽을 수 없으며 계정이나 설정도 변경할 수 없습니다. 접근할 수 있는 작업의 할당량도 읽습니다. 같은 계정에서 허용된 다른 컴퓨터와 할당량 보기가 허용된 공유 제공자가 포함됩니다.",
         "hostTools_settings": "앱 설정",
         "hostTools_settingsDetail": "Cindy의 설정 도구로 앱 설정을 읽고 변경할 수 있습니다. 비밀 값은 반환되지 않으며 민감한 정보는 직접 입력해야 합니다.",
         "hostTools_scheduler": "자동화 관리",
@@ -11707,18 +11695,14 @@
     "model": {
       "description": "이 동반자가 사용할 모델을 선택합니다.",
       "primary": "기본 모델",
-      "restoreDefault": "기본 모델로 되돌리기"
+      "restoreDefault": "기본 모델로 되돌리기",
+      "followsDefault": "기본 모델 사용",
+      "ownModel": "별도 모델",
+      "managedInSettings": "버디 모델은 「제공자 → 스마트 라우팅」에서 한곳에 설정합니다.",
+      "openSettings": "설정 열기"
     },
     "modelChain": {
-      "primary": "기본 모델",
-      "fallback": "대체 {{index}}",
-      "routeLabel": "모델 후보 {{index}}",
-      "add": "대체 모델 추가",
-      "remove": "이 후보 제거",
-      "moveUp": "위로 이동",
-      "moveDown": "아래로 이동",
-      "description": "모델을 최대 5개까지 설정할 수 있습니다. 현재 후보를 사용할 수 없으면 동반자가 다음 후보로 자동 전환하므로 작업 전환이나 수동 재시도가 필요하지 않습니다.",
-      "options": "예비 모델 ({{count}})"
+      "routeLabel": "모델 후보 {{index}}"
     },
     "actions": {
       "message": "메시지",
@@ -12855,7 +12839,7 @@
       "arrivingLater": "{{name}}이(가) 이 컴퓨터로 옮겨졌고 아직 준비 중입니다. 곧 동반자 목록에 표시됩니다",
       "arrivalPermissions": "{{name}}은(는) 이 컴퓨터의 기본 권한으로 실행됩니다.",
       "arrivalModel": "{{name}}에 저장된 모델을 이 컴퓨터에서 사용할 수 없어 이 컴퓨터의 기본 모델을 사용합니다.",
-      "arrivalModelSetup": "{{name}}이(가) 이 컴퓨터로 옮겨졌지만 아직 사용할 수 있는 모델이 없습니다. 모델 제공자를 연결하거나 이 동반자의 ‘설정 → 모델’에서 모델을 선택하세요.",
+      "arrivalModelSetup": "{{name}}이(가) 이 컴퓨터로 왔지만 아직 사용할 수 있는 모델이 없습니다. 모델 제공자를 연결하거나 「제공자 → 스마트 라우팅」에서 버디 기본 모델을 설정하세요.",
       "arrivalPartialContent": "{{name}}이(가) 이제 이 컴퓨터에서 실행되지만 일부 동기화된 항목은 복원하지 못했습니다. 클라우드의 원본은 그대로 유지됩니다.",
       "missingProfileTitle": "기본 프로필로 {{name}}을(를) 계속할까요?",
       "missingProfileDescription": "기존 주 컴퓨터에서 {{name}}의 프로필이 아직 업로드되지 않았습니다. 기존 컴퓨터를 재설치했거나 복구할 수 없다면 여기서 기본 프로필로 계속할 수 있으며, 클라우드에 동기화된 대화와 내용은 그대로 유지됩니다.",
@@ -14805,7 +14789,7 @@
         "providerGroupLabel": "{{provider}} · {{group}}",
         "providerGroupRunningOn": "현재 {{device}}에서 실행 중",
         "providerGroupRunningHere": "현재 이 컴퓨터에서 실행 중",
-        "providerGroupUnassigned": "시작하면 제공자 그룹이 컴퓨터를 고르고, 사용량은 그 컴퓨터 기준으로 표시됩니다"
+        "providerGroupUnassigned": "시작하면 컴퓨터 그룹이 컴퓨터를 고르고, 사용량은 그 컴퓨터 기준으로 표시됩니다"
       },
       "speed": {
         "label": "속도",
@@ -16590,7 +16574,7 @@
       "REMOTE_AGENT_SHARE_UNAVAILABLE": "공유된 제공자를 일시적으로 사용할 수 없습니다. 공유한 사람의 컴퓨터가 오프라인이거나 공유가 잠시 꺼져 있을 수 있습니다. 나중에 다시 시도하거나 다른 모델로 바꿔 계속할 수 있습니다.",
       "REMOTE_AGENT_SHARE_LEGACY_DISABLED": "기존 방식의 공유라서 'Agent-Net만 사용'이 켜져 있는 동안에는 사용할 수 없습니다. 이 옵션을 끄면 계속할 수 있고, 다른 모델로 바꿀 수도 있습니다.",
       "REMOTE_AGENT_GROUP_USAGE_LIMIT": "이 모델을 사용할 수 있는 계정의 사용량이 한도에 도달했습니다. 다른 모델로 전환하거나 할당량이 초기화된 후 계속하세요.",
-      "REMOTE_AGENT_GROUP_UNAVAILABLE": "제공자 그룹의 컴퓨터가 지금 이 세션을 실행할 수 없습니다. 모두 오프라인이거나, 배정이 일시 중지되었거나, 대기 중이거나, 이 모델이 없을 수 있습니다. 이 제공자의 원격 및 공유 페이지에서 그룹을 확인하세요.",
+      "REMOTE_AGENT_GROUP_UNAVAILABLE": "컴퓨터 그룹의 컴퓨터가 지금 이 세션을 실행할 수 없습니다. 모두 오프라인이거나, 배정이 일시 중지되었거나, 대기 중이거나, 이 모델이 없을 수 있습니다. 이 제공자의 원격 및 공유 페이지에서 그룹을 확인하세요.",
       "REMOTE_AGENT_GROUP_FULL": "이 작업을 실행할 수 있는 계정 또는 컴퓨터가 모두 동시 실행 한도에 도달했습니다. 실행 중인 작업이 끝날 때까지 기다리거나 제공자 설정에서 한도를 올리세요.",
       "SUBSCRIPTION_ACCOUNTS_FULL": "이 작업을 실행할 수 있는 계정 또는 컴퓨터가 모두 동시 실행 한도에 도달했습니다. 실행 중인 작업이 끝날 때까지 기다리거나 제공자 설정에서 한도를 올리세요.",
       "REMOTE_AGENT_DEVICE_LIMIT": "이 기기의 원격 세션 수가 한도에 도달했습니다. 사용하지 않는 세션을 보관하거나 원격 컴퓨터의 소유자에게 원격 및 공유에서 한도를 높여 달라고 요청하세요.",
@@ -18317,7 +18301,7 @@
           "sessions_dispatch": "세션 디스패치",
           "feishu_read": "Feishu 메시지 읽기",
           "settings_read": "공유 멤버 읽기",
-          "usage_read": "사용량 및 제공자 그룹 상태 읽기"
+          "usage_read": "사용량 및 컴퓨터 그룹 상태 읽기"
         },
         "project": "프로젝트 디렉터리",
         "capabilitiesLabel": "허용할 기능",
@@ -18331,7 +18315,7 @@
           "sessions_dispatch": "{{appName}} 세션 생성·재개 및 메시지 전달",
           "feishu_read": "최근 활성 채팅 목록 조회; 지정한 채팅(그룹/DM)의 최근 메시지 가져오기",
           "settings_read": "이 컴퓨터 또는 같은 계정에서 허용된 다른 컴퓨터에서 내가 공유한 멤버와 사용 가능한 모델을 읽습니다. 변경하지 않습니다.",
-          "usage_read": "현재 Cindy 계정에 연결된 이 컴퓨터의 Claude/Codex 계정 ID, 요금제, 할당량 기간과 업데이트 시간을 읽습니다. 이 컴퓨터와 같은 계정에서 허용된 다른 컴퓨터에 기록된 일별·모델별 사용량, 예상 비용, 제공자 그룹 설정과 상태, 볼 수 있는 구성원·기기의 ID, 이름과 아바타도 읽습니다. 구독 로그인 이메일, 계정 디렉터리, 내부 지문, 인증 정보나 파일은 읽을 수 없으며 계정이나 설정도 변경할 수 없습니다."
+          "usage_read": "현재 Cindy 계정에 연결된 이 컴퓨터의 Claude/Codex 계정 ID, 요금제, 할당량 기간과 업데이트 시간을 읽습니다. 이 컴퓨터와 같은 계정에서 허용된 다른 컴퓨터에 기록된 일별·모델별 사용량, 예상 비용, 컴퓨터 그룹 설정과 상태, 볼 수 있는 구성원·기기의 ID, 이름과 아바타도 읽습니다. 구독 로그인 이메일, 계정 디렉터리, 내부 지문, 인증 정보나 파일은 읽을 수 없으며 계정이나 설정도 변경할 수 없습니다."
         },
         "capabilityWarn": {
           "ghostMissing": "\"{{name}}\" 플러그인이 필요하지만 설치되어 있지 않습니다 — 실행 시 이 기능은 실패합니다",
@@ -18632,7 +18616,7 @@
         "categoryListAria": "{{category}} 모델",
         "effortListAria": "추론 강도",
         "boundLocationLocked": "연결된 작업은 원래 컴퓨터에서 실행됩니다. 그 컴퓨터의 모델을 선택하세요.",
-        "modelGroupTitle": "모델 그룹 “{{name}}”: 새 작업을 만들 때 소스를 고릅니다"
+        "modelGroupTitle": "스마트 라우팅 “{{name}}”: 실행이 새 작업을 시작할 때 소스를 고릅니다"
       }
     },
     "toast": {
@@ -22748,9 +22732,6 @@
     "lineNumbers": "줄 번호"
   },
   "openAiAccountGroup": {
-    "strategy": "계정 그룹 전략",
-    "leastHint": "실행 중인 작업이 가장 적은 연결 우선",
-    "quotaHint": "구독 사용량을 확인할 수 있으면 사용량으로 연결을 먼저 선별한 뒤 그룹 전략을 적용합니다.",
     "removeDescription": "이 연결은 그룹의 새 작업을 받지 않습니다. 실행 중인 작업은 이 연결에 그대로 남습니다.",
     "mergeDescription": "{{target}}에서 시작한 새 작업은 두 제공자를 모두 사용할 수 있습니다. 로그인, 키, 기존 작업은 그대로 유지됩니다. 연결하기 전에 Cindy가 {{apiKey}}의 API 키를 테스트합니다.",
     "modelUnavailable": "이 연결에서는 테스트에 선택된 모델을 사용할 수 없습니다. 다시 테스트하면 다른 후보를 시도할 수 있습니다.",
@@ -22822,7 +22803,6 @@
       "useCodex": "Codex로 로그인"
     },
     "title": "구독 계정",
-    "strategy": "부하 분산",
     "add": "계정 추가",
     "defaultTag": "기본",
     "ready": "연결됨",
@@ -22897,14 +22877,15 @@
     "refreshFailed": "테마가 설치되었지만 목록을 새로 고치지 못했습니다. 모양 설정에서 새로 고치세요"
   },
   "modelGroups": {
-    "title": "모델 그룹",
-    "description": "모델 제공자에 이미 연결된 소스 몇 개를 하나의 선택지로 묶습니다. 모델 선택의 '모델 그룹'에서 고르면 이번에 어떤 소스를 쓸지는 Cindy가 정합니다.",
-    "routes": "모드",
-    "routesDescription": "모드 하나에 소스를 여러 개 넣습니다. 새 작업을 시작할 때 선택 방식에 따라 하나를 고릅니다.",
+    "title": "스마트 라우팅",
+    "description": "모델 제공자에 이미 있는 소스 몇 개를 하나의 선택지로 묶습니다. 모델 선택의 '스마트 라우팅'에서 고르면 어떤 소스를 쓸지는 Cindy가 정합니다.",
+    "routes": "라우트",
+    "routesDescription": "여러 소스를 하나의 선택지로 묶습니다. 소스는 제공자 전체(평소처럼 모델을 고르면 어느 쪽이 실행할지는 라우트가 정합니다)일 수도, 특정 모델 하나일 수도 있습니다. 같은 브랜드의 제공자는 자동으로 묶입니다.",
+    "sourceCount_one": "소스 {{count}}개",
     "sourceCount_other": "소스 {{count}}개",
     "strategy": {
       "expiring": {
-        "title": "곧 만료되는 것 먼저",
+        "title": "자동",
         "hint": "많이 남았고 곧 초기화되는 구독 할당량부터 써서 낭비하지 않습니다. 할당량을 읽을 수 없는 소스는 뒤로 갑니다."
       },
       "order": {
@@ -22933,12 +22914,15 @@
       }
     },
     "picker": {
-      "empty": "아직 모델 그룹이 없습니다. 설정에서 소스 몇 개를 모드로 묶으면 여기서 선택할 수 있습니다.",
-      "manage": "모델 그룹 관리",
-      "deviceTitle": "모델 그룹 · {{device}}",
-      "switched": "'{{name}}'에서 이 작업을 {{model}}(으)로 바꿨습니다",
+      "empty": "아직 스마트 라우팅이 없습니다. 설정에서 소스 몇 개를 라우트로 묶으면 여기서 선택할 수 있습니다.",
+      "manage": "스마트 라우팅 관리",
+      "deviceTitle": "스마트 라우팅 · {{device}}",
+      "switched": "'{{name}}'이(가) 이 작업을 {{model}}(으)로 바꿨습니다",
       "switchUnavailable": "'{{name}}'에 지금 이 작업에서 쓸 수 있는 소스가 없습니다. 모델을 바꾸지 않았습니다.",
-      "chooseUnavailable": "'{{name}}'에 지금 쓸 수 있는 소스가 없어 선택하지 않았습니다."
+      "chooseUnavailable": "'{{name}}'에 지금 쓸 수 있는 소스가 없어 선택하지 않았습니다.",
+      "mergedLabel_other": "{{name}} · 라우트(소스 {{count}}개)",
+      "routeDecides": "이 작업에 쓸 소스는 라우트 “{{name}}”이(가) 정합니다",
+      "quotaOf": "한도: {{name}}"
     },
     "why": {
       "expiringQuota": "할당량이 {{left}}% 남았고 {{reset}}에 초기화되어 먼저 사용",
@@ -22948,9 +22932,9 @@
       "only": "지금 쓸 수 있는 유일한 소스",
       "soonest": "모든 소스의 할당량을 다 썼습니다. 이 소스가 가장 먼저 회복됩니다",
       "soonestUntil": "모든 소스의 할당량을 다 썼습니다. 이 소스가 가장 먼저 회복됩니다({{reset}})",
-      "standby": "이번 차례가 아님",
+      "standby": "이번에는 선택되지 않음",
       "standbyQuota": "할당량이 {{left}}% 남았고 {{reset}}에야 초기화되어 남겨 둠",
-      "off": "이 모드에서 꺼짐",
+      "off": "이 라우트에서 꺼짐",
       "unavailable": "연결되지 않았거나 지금 이 모델을 선택할 수 없음",
       "limited": "할당량을 다 씀",
       "limitedUntil": "할당량을 다 씀, {{reset}}에 회복",
@@ -22971,17 +22955,18 @@
     "settings": {
       "autoSwitch": {
         "title": "문제가 생기면 소스 자동 전환",
-        "hint": "이 모드에서 사용 중인 소스에 문제가 생기면 다음 사용 가능한 소스로 자동 전환하고 해당 턴 아래에 기록합니다. 끄면 오류가 났을 때 전환만 제안합니다."
+        "hint": "이 라우트에서 사용 중인 소스에 문제가 생기면 다음 사용 가능한 소스로 자동 전환하고 해당 턴 아래에 기록합니다. 끄면 오류가 났을 때 전환만 제안합니다."
       },
-      "newRoute": "모드 만들기",
-      "newRouteName": "새 모드",
-      "routesEmpty": "아직 모드가 없습니다. 하나 만들고 소스를 넣어 보세요.",
-      "scopeNote": "모델 그룹은 이 컴퓨터의 작업에 쓰입니다. 새 작업은 시작할 때 소스 하나를 정합니다. 진행 중인 작업에서 고르면 그 자리에서 한 번 바꾸고, 이후에는 저절로 바뀌지 않습니다.",
-      "back": "모델 그룹으로 돌아가기",
+      "newRoute": "라우트 만들기",
+      "newRouteName": "새 라우트",
+      "routesEmpty": "아직 라우트가 없습니다. 하나 만들고 소스를 몇 개 넣어 보세요.",
+      "scopeNote": "스마트 라우팅은 이 컴퓨터의 작업에 쓰입니다. 새 작업은 시작할 때 소스 하나를 정합니다. 진행 중인 작업에서 고르면 그 자리에서 한 번 바꾸고, 이후에는 저절로 바뀌지 않습니다.",
+      "back": "스마트 라우팅으로 돌아가기",
       "name": "이름",
       "nameHint": "모델 선택에 표시되는 이름입니다.",
-      "routeShownAs": "모델 선택의 '모델 그룹'에 표시됩니다.",
+      "routeShownAs": "모델 선택의 '스마트 라우팅'에 표시됩니다.",
       "pick": "이번에 쓸 소스",
+      "moreStrategies": "기타 방식",
       "effort": "추론 강도",
       "effortUnset": "지정 안 함",
       "effortHint": "선택된 모델이 이 단계를 지원하지 않으면 해당 모델의 기본값으로 실행합니다.",
@@ -22991,14 +22976,15 @@
       "sources": "쓸 수 있는 소스",
       "sourcesHint": "서로 다른 모델을 함께 넣을 수 있습니다. 실제로 쓴 모델은 작업에 표시됩니다.",
       "sourcesEmpty": "아직 소스가 없습니다. 아래에서 연결된 모델을 추가하세요.",
-      "sourcesFull": "모드 하나에 소스를 최대 {{count}}개까지 넣을 수 있습니다.",
+      "sourcesEmptyMerged": "아직 소스가 없습니다. 아래에서 연결된 제공자를 추가하세요.",
+      "sourcesFull": "라우트 하나에 소스를 최대 {{count}}개까지 넣을 수 있습니다.",
       "addSource": "소스 추가",
       "chooseModel": "모델 선택",
       "notConnected": "연결되지 않음",
       "moveUp": "위로 이동",
       "moveDown": "아래로 이동",
-      "remove": "이 모드에서 제외",
-      "useSource": "이 모드에서 {{name}} 사용",
+      "remove": "이 라우트에서 제외",
+      "useSource": "이 라우트에서 {{name}} 사용",
       "try": {
         "title": "시험해 보기",
         "hint": "지금 새 작업을 시작하면 어떤 소스를 쓸지 확인합니다. 메시지를 보내지 않고 할당량도 쓰지 않습니다.",
@@ -23006,11 +22992,14 @@
         "picked": "이것을 사용",
         "standby": "대기",
         "skipped": "건너뜀",
-        "unavailable": "이 모드에 지금 쓸 수 있는 소스가 없습니다. 새 작업은 원래 선택한 모델을 사용합니다."
+        "unavailable": "이 라우트에 지금 쓸 수 있는 소스가 없습니다. 새 작업은 원래 선택한 모델을 사용합니다.",
+        "failed": "확인하지 못했습니다. 다시 시도하세요.",
+        "model": "시험할 모델"
       },
-      "deleteRoute": "이 모드 삭제",
+      "deleteRoute": "이 라우트 삭제",
       "deleteRouteConfirmTitle": "'{{name}}'을(를) 삭제할까요?",
-      "deleteRouteConfirmDescription": "다른 모드에서 이 모드로 바꾸는 시간대 예외도 함께 삭제됩니다. 이미 시작한 작업에는 영향이 없습니다.",
+      "deleteRouteConfirmDescription": "다른 라우트에서 이 라우트로 바꾸는 시간대 예외도 함께 삭제됩니다. 이미 시작한 작업에는 영향이 없습니다.",
+      "deleteMergedRouteConfirmDescription": "이미 시작한 작업에는 영향이 없습니다.",
       "delete": "삭제",
       "cancel": "취소",
       "saveFailed": "저장하지 못했습니다. 다시 시도해 주세요.",
@@ -23035,23 +23024,70 @@
         "addHours": "추가",
         "sameHour": "시작과 종료는 같은 시각일 수 없습니다.",
         "full": "예외는 최대 {{count}}개입니다.",
-        "needOtherRoute": "시간대별로 바꾸려면 모드를 하나 더 만드세요."
+        "needOtherRoute": "시간대별로 바꾸려면 라우트를 하나 더 만드세요."
       }
     },
     "overview": {
       "mapTitle": "새 작업이 모델을 정하는 방식",
-      "mapDescription": "왼쪽에서 오른쪽으로: 거치는 모드와 마지막에 도달하는 소스. 모드를 클릭하면 변경할 수 있습니다.",
+      "mapDescription": "왼쪽에서 오른쪽으로: 새 작업이 거치는 라우트와 마지막에 도달하는 소스. 라우트를 클릭하면 변경할 수 있습니다.",
       "columnSources": "소스",
       "columnEmpty": "아직 없음",
-      "openRoute": "모드 '{{name}}' 열기",
+      "openRoute": "라우트 '{{name}}' 열기",
       "recentTitle": "최근 선택",
-      "recentEmpty": "아직 모드를 사용한 작업이 없습니다.",
-      "keptOriginal": "지금 쓸 수 있는 모델이 없어 원래 선택한 모델을 사용했습니다.",
+      "recentEmpty": "아직 라우트를 사용한 작업이 없습니다.",
+      "keptOriginal": "라우트 안에 지금 쓸 수 있는 것이 없어 원래 선택한 모델을 그대로 사용했습니다.",
       "keptOriginalShort": "원래 모델 사용",
       "latest": "가장 최근 작업이 지나간 경로"
     },
     "switchOffer": {
       "action": "{{model}}(으)로 바꿔 계속"
+    },
+    "auto": {
+      "accounts_one": "계정 {{count}}개",
+      "accounts_other": "계정 {{count}}개",
+      "computers_one": "컴퓨터 {{count}}대",
+      "computers_other": "컴퓨터 {{count}}대",
+      "pickFor": "{{name}}의 선택 방식",
+      "hiddenTag": "숨김",
+      "show": "모델 선택에 표시",
+      "assignedBy": "새 작업은 “{{strategy}}” 방식으로 배정됩니다",
+      "adjust": "스마트 라우팅에서 조정"
+    },
+    "sources": {
+      "models_one": "모델 {{count}}개",
+      "models_other": "모델 {{count}}개",
+      "autoTag": "자동",
+      "chooseProvider": "제공자 선택",
+      "removeAria": "이 라우트에서 {{name}} 제거",
+      "note": "자동 라우트는 연결된 제공자를 따릅니다. 구성원을 추가하거나 제거할 수는 없지만 순서 변경, 가중치 설정, 개별 끄기, 선택 방식 변경, 라우트 숨기기는 할 수 있습니다.",
+      "providers_one": "제공자 {{count}}개",
+      "providers_other": "제공자 {{count}}개",
+      "addWhole": "제공자 전체 추가",
+      "addWholeHint": "해당 제공자의 모든 모델이 이 라우트에 들어갑니다. 모델 선택에서 라우트는 하나의 제공자처럼 동작해, 평소처럼 모델을 고르면 어느 구성원이 실행할지는 라우트가 정합니다.",
+      "addModelHint": "한 제공자의 모델 하나를 추가합니다. 이 라우트를 고르면 선택 방식에 따라 이 소스 중 하나가 선택됩니다.",
+      "detailHint": "이 라우트는 제공자 전체를 묶습니다. 모델 선택에서는 하나의 제공자처럼 동작해, 평소처럼 모델과 추론 강도를 고르면 어느 구성원이 실행할지는 라우트가 정합니다."
+    },
+    "kinds": {
+      "byModel": "모델별",
+      "byProvider": "제공자별"
+    },
+    "buddies": {
+      "title": "버디 모델",
+      "description": "버디는 하나의 기본 모델을 함께 쓰고, 다른 모델이 필요한 버디만 따로 설정합니다. 문제가 생겼을 때 소스를 자동으로 바꾸려면 스마트 라우팅을 선택하세요.",
+      "saveFailed": "버디 모델을 저장하지 못했습니다. 다시 시도하세요.",
+      "defaultLabel": "기본 모델",
+      "defaultHint": "따로 설정하지 않은 모든 버디가 사용합니다. 새 버디와 다른 컴퓨터에서 가져온 버디도 마찬가지입니다.",
+      "ownTitle": "따로 설정한 버디",
+      "ownTitleWithRest_other": "따로 설정한 버디 · 나머지 {{count}}명은 기본 모델 사용",
+      "addOwn": "버디에게 별도 모델 설정",
+      "allFollow": "모든 버디가 기본 모델을 사용합니다.",
+      "otherComputers": "다른 컴퓨터의 버디",
+      "deviceBuddies_other": "버디 {{count}}명",
+      "devicePageTitle": "{{device}}의 버디",
+      "devicePageHint": "그 컴퓨터에서 쓸 수 있는 모델과 스마트 라우팅 중에서 선택하며, 그 컴퓨터에 저장됩니다.",
+      "deviceDefaultReadOnly": "그 컴퓨터를 업데이트하면 여기서 기본 모델을 바꿀 수 있습니다.",
+      "deviceUnavailable": "지금은 그 컴퓨터의 버디 설정을 읽을 수 없습니다. 온라인인지 확인한 뒤 다시 여세요.",
+      "deviceLoading": "그 컴퓨터의 설정을 읽는 중…"
     }
   },
   "projectSettings": {

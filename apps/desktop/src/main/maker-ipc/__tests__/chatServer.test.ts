@@ -2707,16 +2707,25 @@ describe('Chat Server result delivery and refresh', () => {
       fixture.handle.mockImplementation((route, method, body) => route === '/me'
         ? { body: { actor: { id: selfId }, capabilities: { groupAssistant: 1, groupTeammateMentions: 1 }, groupAssistantActorId: cindyId } }
         : original(route, method, body));
-      if (sender === 'user') await ask(5, 'Please arrange this');
-      else {
-        history.push(message(5, teammateId, 'Please review this', { origin: 'bot' }));
-        queue.push(request(5));
-        await vi.advanceTimersByTimeAsync(12_000);
-      }
+      const words = 'Please review the teammates column';
+      const excerpt = '| name | teammates | | --- | --- | | A | B |';
+      const earlier = message(2, peerId, 'Use the draft');
+      const quote = buildBotGroupQuoteCard({ messageId: earlier.id, authorName: 'Ann', authorKind: 'user',
+        excerpt, attachmentCount: 0, attachmentName: null, sequence: 2 });
+      history.push(earlier, message(5, sender === 'user' ? selfId : teammateId, words, {
+        origin: sender === 'user' ? 'user' : 'bot', content: [{ type: 'text', text: words }, quote],
+      }));
+      queue.push(request(5));
+      await vi.advanceTimersByTimeAsync(12_000);
       const [input] = dispatched();
-      expect(input!.message).toContain('Luna');
+      const quoteLine = t('bots.groupChat.assistant.replyingTo').replace('{{name}}', 'Ann').replace('{{text}}', excerpt);
+      const visible = `${words}\n\n${t('bots.groupChat.assistant.groupRecent')}\n${quoteLine}\nAnn：Use the draft`;
+      expect(input).toMatchObject({ persistedContent: visible, origin: { displayText: visible } });
+      expect(input!.message).toContain(visible);
+      expect(input!.message).toContain('Answer whoever asked.');
       const context = [...input!.message.matchAll(/<untrusted-data>\n(.*?)\n<\/untrusted-data>/g)]
         .map(match => JSON.parse(match[1])).find(block => block.teammates);
+      expect(context.teammates).toContainEqual({ name: 'Luna (Chris)' });
       expect(context.replyToMention).toBe(sender === 'teammate' ? '@Luna (Chris)' : undefined);
       const reply = { ...terminal, sessionId: input!.targetSessionId, resultText: sender === 'user' ? '@Luna please draft the offer' : `${context.replyToMention} review done` };
       expect(await service.settleLaneTurn({ ...reply, activeInputClientId: null })).toBe(false);

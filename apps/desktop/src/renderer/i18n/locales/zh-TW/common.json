@@ -340,7 +340,7 @@
     "tabOwned": "我發起的",
     "startIntro": "邀請夥伴查看這個任務的全部內容，一起與同一個 Agent 協作。",
     "runsOnThisDevice": "在這台電腦上執行",
-    "inviteNotice": "持有邀請連結的使用者登入後即可加入，擁有與房主相同的 Agent 使用權限。",
+    "inviteNotice": "持有邀請連結的使用者登入後即可加入，擁有與房主相同的 Agent 使用權限。 即使只分享子目錄，訪客也能查看整個 Git 儲存庫目前的變更。",
     "offlineAutoClose": "房主電腦持續離線後，共享會自動結束。",
     "inviteBoxHint": "將連結傳送給夥伴，對方點擊即可加入，也可在 Cindy 中點「加入共享任務」貼上連結。",
     "invitationMessage": "邀請你加入「{{title}}」\n{{link}}\n點擊連結加入；如果沒能開啟 Cindy，可在 Cindy 中點「加入共享任務」並貼上這條連結。",
@@ -401,7 +401,7 @@
       "progress": "目前占比 {{used}}% · 上限 {{limit}}%",
       "paused": "此模型已暫停，請選擇其他可用模型。",
       "recommendation": "推薦使用 {{model}}",
-      "unsupported": "此供應商組暫不支援模型占比限制。",
+      "unsupported": "此電腦組暫不支援模型占比限制。",
       "basis": "近 7 個自然日 · 輸入＋輸出 token，不含快取",
       "maxPercent": "占個人用量的上限",
       "empty": "尚無用量資料",
@@ -496,23 +496,23 @@
         "confirm": "刪除分享"
       },
       "reshare": {
-        "applying": "想經 {{owner}} 的供應商組使用",
+        "applying": "想經 {{owner}} 的電腦組使用",
         "requestedAt": "{{time}}請求",
         "usageHint": "同意後，{{name}} 的任務可以在這台電腦上執行，用量算在 {{owner}} 名下",
         "approve": "同意",
         "reject": "拒絕",
-        "summaryUsing_other": "{{count}} 人經 {{owner}} 的供應商組使用",
-        "summaryOwner": "經 {{owner}} 的供應商組",
+        "summaryUsing_other": "{{count}} 人經 {{owner}} 的電腦組使用",
+        "summaryOwner": "經 {{owner}} 的電腦組",
         "summaryDeclined_other": "{{count}} 人未同意",
         "stateApproved": "已同意",
         "stateRejected": "未同意",
         "revoke": "撤回同意",
         "revokeAria": "撤回對 {{name}} 的同意",
         "approveAria": "同意 {{name}} 使用",
-        "toastApproved": "已同意 {{name}} 經 {{owner}} 的供應商組使用 {{provider}}",
+        "toastApproved": "已同意 {{name}} 經 {{owner}} 的電腦組使用 {{provider}}",
         "toastRejected": "已拒絕 {{name}} 的請求",
         "toastRevoked": "已撤回對 {{name}} 的同意，正在執行的任務已停止",
-        "listTitle": "經 {{owner}} 的供應商組使用"
+        "listTitle": "經 {{owner}} 的電腦組使用"
       },
       "memberNote": {
         "add": "設定備註",
@@ -558,7 +558,7 @@
       "requestedAt": "{{time}}透過你的分享連結申請",
       "pairingHint": "同意前可以透過傳連結的管道問對方一句：「你看到的配對碼是多少？」一致再同意。",
       "callout": "同意後，{{name}} 可以在自己的任務裡使用 {{provider}} 的模型。Agent 在這台電腦上執行，用量計入你的 {{provider}}。你可以隨時在「{{provider}} · 遠端與分享」裡暫停或刪除。",
-      "calloutGroup": "同意後，{{name}} 可以在自己的任務裡使用 {{provider}} 的模型。由供應商組選一台電腦執行 Agent，用量計入你的 {{provider}}。你可以隨時在「{{provider}} · 遠端與分享」裡暫停或刪除。",
+      "calloutGroup": "同意後，{{name}} 可以在自己的任務裡使用 {{provider}} 的模型。由電腦組選一台電腦執行 Agent，用量計入你的 {{provider}}。你可以隨時在「{{provider}} · 遠端與分享」裡暫停或刪除。",
       "calloutRemote": "同意後，{{name}} 可以在自己的任務裡使用 {{provider}} 的模型。Agent 在供應商所在的電腦上執行，用量計入你的 {{provider}}。你可以隨時在「{{provider}} · 遠端與分享」裡暫停或刪除。",
       "calloutClaudeEmail": "{{name}} 使用時，Agent 能看到你登入 Claude 用的電子郵件地址。",
       "calloutUnknown": "如果你不認識申請人，請拒絕；拒絕後這條連結作廢。",
@@ -698,7 +698,7 @@
       "rejectedTitle": "分享申請未通過",
       "rejectedBody": "{{name}} 沒有同意分享 {{provider}}",
       "reshareTitle": "新的使用請求",
-      "reshareBody": "{{name}} 想經 {{owner}} 的供應商組使用你分享的 {{provider}}"
+      "reshareBody": "{{name}} 想經 {{owner}} 的電腦組使用你分享的 {{provider}}"
     },
     "runLimits": {
       "title": "遠端任務數量",
@@ -710,7 +710,7 @@
       "idleHint": "任務閒置滿這個時長後，這台電腦會結束它的 Agent，名額隨即釋放；對方再傳訊息時會自動接回原來的對話。正在執行的任務不會被收回。填 0 表示從不收回。",
       "idleInvalid": "請填寫 0～{{max}} 的整數。",
       "usage": "目前佔用 {{used}} / {{total}}，來自 {{devices}} 台裝置；單台裝置最多佔用 {{largest}} 個。",
-      "applyHint": "儲存後立即生效。調低上限不會中斷現有任務，只會限制新增。供應商組轉送按直接連線的裝置計數。",
+      "applyHint": "儲存後立即生效。調低上限不會中斷現有任務，只會限制新增。電腦組轉送按直接連線的裝置計數。",
       "save": "儲存",
       "reset": "恢復預設",
       "saved": "遠端任務數量設定已儲存",
@@ -754,7 +754,7 @@
   },
   "providerGroup": {
     "management": {
-      "note": "正在管理 {{device}} 上的供應商組。修改會儲存到那台電腦，請保持它在線。",
+      "note": "正在管理 {{device}} 上的電腦組。修改會儲存到那台電腦，請保持它在線。",
       "unsupported": "此供應商組所在電腦的 Cindy 版本暫不支援遠端管理。請先更新那台電腦上的 Cindy。"
     },
     "page": {
@@ -824,27 +824,13 @@
       "emptyRange": "這段時間沒有用量"
     },
     "section": {
-      "title": "供應商組",
+      "title": "電腦組",
       "addComputer": "新增電腦",
       "delete": "刪除組",
       "empty": "加入其他電腦上的 {{provider}}，任務會自動選一台執行",
-      "loading": "正在讀取供應商組…",
-      "loadFailed": "未能讀取供應商組",
+      "loading": "正在讀取電腦組…",
+      "loadFailed": "未能讀取電腦組",
       "note": "這台電腦上的任務和你分享的人的任務，都由組選一台電腦執行 Agent"
-    },
-    "strategy": {
-      "label": "組策略",
-      "least": "最少佔用",
-      "round": "輪詢",
-      "order": "依順序",
-      "weight": "依權重",
-      "quotaFirst": "能讀取訂閱用量時，先用快重置、還剩得多的電腦，各帳號會依時間均勻用掉；差不多時依組策略",
-      "description": {
-        "least": "給最閒的那台",
-        "round": "依序輪流",
-        "order": "排前面的優先",
-        "weight": "依權重比例"
-      }
     },
     "autoSwitch": {
       "label": "自動換電腦",
@@ -901,9 +887,9 @@
         }
       },
       "removeConfirm": {
-        "title": "把 {{name}} 移出供應商組？",
+        "title": "把 {{name}} 移出電腦組？",
         "description": "之後不再給它分新任務；已經在它上面執行的任務留在那台電腦上。",
-        "lastDescription": "它是組裡最後一台電腦，移出後會刪除 {{provider}} 的供應商組。",
+        "lastDescription": "它是組裡最後一台電腦，移出後會刪除 {{provider}} 的電腦組。",
         "confirm": "移出組"
       },
       "sourceGroupOwner": "組所在電腦",
@@ -939,12 +925,12 @@
       "send": "繼續傳送"
     },
     "deleteConfirm": {
-      "title": "刪除 {{provider}} 的供應商組？",
+      "title": "刪除 {{provider}} 的電腦組？",
       "description": "之後這台電腦上的新任務都在本機執行；已經分到其他電腦的任務留在那台電腦上。",
-      "confirm": "刪除供應商組"
+      "confirm": "刪除電腦組"
     },
     "add": {
-      "title": "把電腦加入 {{provider}} 的供應商組",
+      "title": "把電腦加入 {{provider}} 的電腦組",
       "sourceAria": "電腦來源",
       "tabAvailable": "已經能用的",
       "tabLink": "分享連結",
@@ -953,17 +939,17 @@
       "loadFailed": "未能讀取可以加入的電腦",
       "empty": "沒有可以加入的電腦。在其他電腦上對 {{provider}} 開啟「允許遠端呼叫」，或用別人的分享連結申請。",
       "alreadyMember": "已在組裡",
-      "confirm": "加入供應商組",
+      "confirm": "加入電腦組",
       "cancel": "取消",
       "linkDescription": "貼上別人分享的 {{provider}} 連結，對方同意後，回到「已經能用的」裡勾選加入。",
       "remoteLinkDescription": "請在供應商組所在電腦的「模型供應商」設定中輸入分享連結。對方同意後，再回到「已經能用的」勾選加入。",
       "pasteLink": "貼上分享連結"
     },
     "toast": {
-      "added_other": "已把 {{count}} 台電腦加入 {{provider}} 的供應商組",
-      "addedAccounts_other": "已把 {{count}} 個帳號加入 {{provider}} 的供應商組",
-      "removed": "已把 {{name}} 移出供應商組",
-      "deleted": "已刪除 {{provider}} 的供應商組"
+      "added_other": "已把 {{count}} 台電腦加入 {{provider}} 的電腦組",
+      "addedAccounts_other": "已把 {{count}} 個帳號加入 {{provider}} 的帳號組",
+      "removed": "已把 {{name}} 移出電腦組",
+      "deleted": "已刪除 {{provider}} 的電腦組"
     }
   },
   "regionScreenshot": {
@@ -1360,7 +1346,7 @@
     "DEVICE_LINK_BUSY": "遠端忙碌中，請稍後再試。",
     "INVALID_PARAMS": "輸入無效，請檢查後重試。",
     "PRECONDITION_FAILED": "目前狀態下無法執行此操作，請稍後再試。",
-    "PROVIDER_GROUP_CHANGED": "供應商組已在別處修改，本次操作未執行。請查看最新設定後重新操作",
+    "PROVIDER_GROUP_CHANGED": "電腦組已在別處修改，本次操作未執行。請查看最新設定後重新操作",
     "MODEL_CONTEXT_USAGE_UNKNOWN": "模型未切換：無法確認目前任務已使用的上下文。請保留目前模型，或新增任務後再選擇",
     "MODEL_WINDOW_CURRENT_CONTEXT_UNKNOWN": "模型未切換：無法確認目前模型的上下文視窗。請檢查自訂模型的視窗設定；若無法修改，請保留目前模型或新增任務",
     "MODEL_WINDOW_TARGET_CONTEXT_UNKNOWN": "模型未切換：無法確認目標模型的上下文視窗。請檢查自訂模型的視窗設定；若無法修改，請選擇其他模型或新增任務",
@@ -1871,7 +1857,7 @@
       "imBot": "IM 機器人",
       "ghosts": "插件",
       "cindyMake": "Cindy Make",
-      "modelGroups": "模型組"
+      "modelGroups": "智慧路由"
     },
     "sections": {
       "user": "使用者",
@@ -4284,7 +4270,9 @@
           "compaction": {
             "title": "自動壓縮",
             "hint": "占用達到所選比例時整理上下文。比例越低，越早壓縮；實際時機仍受引擎限制。",
-            "default": "{{pct}}%（預設）",
+            "defaultBadge": "預設",
+            "sliderAria": "調整自動壓縮觸發閾值",
+            "restoreAria": "恢復自動壓縮比例的預設設定",
             "timing": "套用至此來源下該模型的所有可用引擎。後續執行生效，不中斷正在產生的內容。"
           },
           "contextLimitRoute": "目前 {{tokens}} tokens",
@@ -4374,9 +4362,9 @@
         "detailNote": "Agent 在 {{device}} 上執行，使用的是那台電腦的登入和配額。新建任務時在模型列表裡選擇它就能用；要修改這個供應商，請到那台電腦的「設定 → 模型供應商」。",
         "modelsTitle": "可用的模型",
         "modelsEmpty": "這個供應商在那台電腦上還沒有開放可用的模型。",
-        "rowLabelGroup": "{{provider}} · {{device}} · 供應商組",
-        "groupBadge_other": "供應商組 · {{count}} 台電腦",
-        "groupNote": "{{device}} 把這個供應商建成了供應商組。在模型列表裡選它新建任務時，{{device}} 會依組策略把任務分給下面的一台電腦執行，那台出問題時自動換一台繼續。{{device}} 在線時，你可以從這裡的「遠端與分享」管理這個組和分享。",
+        "rowLabelGroup": "{{provider}} · {{device}} · 電腦組",
+        "groupBadge_other": "電腦組 · {{count}} 台電腦",
+        "groupNote": "{{device}} 把這個供應商建成了電腦組。在模型列表裡選它新建任務時，{{device}} 會依組策略把任務分給下面的一台電腦執行，那台出問題時自動換一台繼續。{{device}} 在線時，你可以從這裡的「遠端與分享」管理這個組和分享。",
         "groupMembersTitle": "組內電腦",
         "groupMembersFailed": "暫時讀不到組內電腦的狀態。",
         "hiddenBanner": "已從這台電腦的模型選擇器中隱藏。收藏和正在使用它的任務不受影響。"
@@ -4428,7 +4416,7 @@
         "remoteAccess": {
           "label": "允許遠端呼叫",
           "description": "開啟後，你的其他電腦和你分享的人可以用這個供應商的模型，Agent 在這台電腦上執行，使用這台電腦的登入和配額。",
-          "descriptionGroup": "開啟後，你的其他電腦和你分享的人可以用這個供應商的模型，由供應商組選一台電腦執行 Agent。",
+          "descriptionGroup": "開啟後，你的其他電腦和你分享的人可以用這個供應商的模型，由電腦組選一台電腦執行 Agent。",
           "ariaLabel": "允許你的其他電腦和你分享的人呼叫此供應商",
           "writeFailed": "遠端呼叫設定未能儲存，請重試",
           "followsPool": "這條連線已併入「{{pool}}」，跟隨它的「允許遠端呼叫」，請在「{{pool}}」裡修改。"
@@ -5631,7 +5619,8 @@
           "runtime": "輔助模型最近多次請求失敗，任務命名、摘要與字幕翻譯等插件任務可能受影響。",
           "open": "前往設定"
         }
-      }
+      },
+      "missingRoute": "已刪除的路由"
     },
     "compaction": {
       "codex": {
@@ -6346,7 +6335,7 @@
     "sessionRuntimeFallback": {
       "cell": {
         "label": "任務模型自動降級",
-        "description": "模型組遇到故障時會嘗試組內其他可用模型。跨引擎時沿用任務交接流程，並儲存新選擇。一般任務連續失敗時會在目前引擎內嘗試其他來源或建議模型。預設關閉。"
+        "description": "智慧路由遇到故障時會嘗試組內其他可用模型。跨引擎時沿用任務交接流程，並儲存新選擇。一般任務連續失敗時會在目前引擎內嘗試其他來源或建議模型。預設關閉。"
       },
       "toggleAria": "切換任務模型自動降級",
       "toast": {
@@ -7304,8 +7293,7 @@
             "machines": "遠端供應商機器"
           },
           "usage": {
-            "remoteModel": "遠端模型",
-            "remoteTask": "遠端任務"
+            "remoteModel": "遠端模型"
           },
           "bundle": {
             "mixed": "{{running}} 個執行中 · {{ready}} 個就緒",
@@ -8743,8 +8731,8 @@
         "hostTools_controlDetail": "透過 Cindy 的任務工具修改、封存、還原及控制現有任務與專案，並在本機匯入原生任務檔案。",
         "hostTools_handoff": "任務投遞",
         "hostTools_handoffDetail": "透過 Cindy 的任務工具向現有任務傳送訊息。需要目前任務情境的操作須明確指定任務。",
-        "hostTools_usage": "讀取用量與供應商組狀態",
-        "hostTools_usageDetail": "讀取目前 Cindy 帳號在本機已連接的 Claude/Codex 帳號識別碼、方案、配額時段及更新時間，以及本機或同帳號已授權其他電腦上已記錄的每日/型號用量、估算費用、供應商組設定與狀態、可見的成員和裝置識別碼、名稱及頭像。無法讀取訂閱登入電子郵件、帳號目錄、內部指紋、憑證或檔案，也無法修改帳號或設定。還可讀取有權存取的任務配額，包括同帳號已授權的電腦及允許查看配額的分享供應商。",
+        "hostTools_usage": "讀取用量與電腦組狀態",
+        "hostTools_usageDetail": "讀取目前 Cindy 帳號在本機已連接的 Claude/Codex 帳號識別碼、方案、配額時段及更新時間，以及本機或同帳號已授權其他電腦上已記錄的每日/型號用量、估算費用、電腦組設定與狀態、可見的成員和裝置識別碼、名稱及頭像。無法讀取訂閱登入電子郵件、帳號目錄、內部指紋、憑證或檔案，也無法修改帳號或設定。還可讀取有權存取的任務配額，包括同帳號已授權的電腦及允許查看配額的分享供應商。",
         "hostTools_settings": "應用程式設定",
         "hostTools_settingsDetail": "透過 Cindy 的設定工具讀取及修改應用程式設定；不傳回金鑰，也不代你完成機密輸入。",
         "hostTools_scheduler": "自動化管理",
@@ -11707,18 +11695,14 @@
     "model": {
       "description": "選擇這位夥伴使用的模型。",
       "primary": "主模型",
-      "restoreDefault": "恢復預設模型"
+      "restoreDefault": "恢復預設模型",
+      "followsDefault": "用預設模型",
+      "ownModel": "單獨設定的模型",
+      "managedInSettings": "夥伴的模型在「模型供應商 → 智慧路由」裡統一設定。",
+      "openSettings": "前往設定"
     },
     "modelChain": {
-      "primary": "首選模型",
-      "fallback": "備用 {{index}}",
-      "routeLabel": "模型候選 {{index}}",
-      "add": "新增備用模型",
-      "remove": "移除這個候選",
-      "moveUp": "上移",
-      "moveDown": "下移",
-      "description": "最多設定 5 個模型。目前候選無法使用時，夥伴會依序自動接替，不需要你切換任務或重試。",
-      "options": "備用模型（{{count}}）"
+      "routeLabel": "模型候選 {{index}}"
     },
     "actions": {
       "message": "傳訊息",
@@ -12855,7 +12839,7 @@
       "arrivingLater": "{{name}} 已換到這台電腦，還在準備中，稍後會出現在夥伴列表裡",
       "arrivalPermissions": "{{name}} 已依這台電腦的預設權限運作。",
       "arrivalModel": "{{name}} 先前選的模型在這台電腦上無法使用，已改用這台電腦的預設模型。",
-      "arrivalModelSetup": "{{name}} 已來到這台電腦，但還沒有可用模型。請連接模型供應商，或在這位夥伴的「設定 → 模型」選擇模型。",
+      "arrivalModelSetup": "{{name}} 已來到這台電腦，但還沒有可用模型。請連接模型供應商，或在「模型供應商 → 智慧路由」裡設定夥伴的預設模型。",
       "arrivalPartialContent": "{{name}} 已來到這台電腦，部分雲端內容未能恢復，原內容仍保留在雲端。",
       "missingProfileTitle": "用初始資料繼續 {{name}}？",
       "missingProfileDescription": "原主力電腦還沒上傳 {{name}} 的人設與簡介。如果原電腦已重裝或無法恢復，可以在這台電腦用初始資料繼續，已同步到雲端的對話和內容仍會保留。",
@@ -14804,7 +14788,7 @@
         "providerGroupLabel": "{{provider}} · {{group}}",
         "providerGroupRunningOn": "目前在 {{device}} 上執行",
         "providerGroupRunningHere": "目前在這台電腦上執行",
-        "providerGroupUnassigned": "開始後由供應商組選一台電腦，用量依那台顯示"
+        "providerGroupUnassigned": "開始後由電腦組選一台電腦，用量依那台顯示"
       },
       "modelListAria": "模型清單",
       "speed": {
@@ -16589,7 +16573,7 @@
       "REMOTE_AGENT_SHARE_UNAVAILABLE": "分享的供應商暫時無法使用：對方電腦可能已離線，或對方暫時關閉了分享。可以稍後再試，或換成其他模型繼續。",
       "REMOTE_AGENT_SHARE_LEGACY_DISABLED": "這是舊版分享，開啟「僅使用 Agent-Net」後暫時無法使用。關閉這個開關就能繼續，也可以換成其他模型。",
       "REMOTE_AGENT_GROUP_USAGE_LIMIT": "此模型的可用帳號已達到用量上限。可改用其他模型，或等配額重置後繼續。",
-      "REMOTE_AGENT_GROUP_UNAVAILABLE": "供應商組裡的電腦現在都不能執行這個任務：可能都離線、已暫停分配、正在冷卻，或沒有這個模型。可以到這個供應商的「遠端與分享」頁查看組內電腦。",
+      "REMOTE_AGENT_GROUP_UNAVAILABLE": "電腦組裡的電腦現在都不能執行這個任務：可能都離線、已暫停分配、正在冷卻，或沒有這個模型。可以到這個供應商的「遠端與分享」頁查看組內電腦。",
       "REMOTE_AGENT_GROUP_FULL": "能執行這個任務的帳號或電腦都已達到並行上限。請等正在執行的任務結束，或在供應商設定中調高上限。",
       "SUBSCRIPTION_ACCOUNTS_FULL": "能執行這個任務的帳號或電腦都已達到並行上限。請等正在執行的任務結束，或在供應商設定中調高上限。",
       "REMOTE_AGENT_DEVICE_LIMIT": "這台裝置保留的遠端任務數已達上限。可封存暫時不用的任務，或請遠端電腦的主人在「遠端與分享」中提高上限。",
@@ -18317,7 +18301,7 @@
           "sessions_dispatch": "派發任務",
           "feishu_read": "讀取飛書訊息",
           "settings_read": "讀取分享成員",
-          "usage_read": "讀取用量與供應商組狀態"
+          "usage_read": "讀取用量與電腦組狀態"
         },
         "project": "專案目錄",
         "capabilitiesLabel": "允許呼叫的能力",
@@ -18331,7 +18315,7 @@
           "sessions_dispatch": "建立或喚醒 {{appName}} 任務並投遞訊息",
           "feishu_read": "列出最近活躍的對話；取得指定對話（群組／私訊）的最近訊息",
           "settings_read": "讀取自己分享的成員及模型範圍，含同帳號已授權電腦；不修改",
-          "usage_read": "讀取目前 Cindy 帳號在本機已連接的 Claude/Codex 帳號識別碼、方案、配額時段及更新時間，以及本機或同帳號已授權其他電腦上已記錄的每日/型號用量、估算費用、供應商組設定與狀態、可見的成員和裝置識別碼、名稱及頭像。無法讀取訂閱登入電子郵件、帳號目錄、內部指紋、憑證或檔案，也無法修改帳號或設定"
+          "usage_read": "讀取目前 Cindy 帳號在本機已連接的 Claude/Codex 帳號識別碼、方案、配額時段及更新時間，以及本機或同帳號已授權其他電腦上已記錄的每日/型號用量、估算費用、電腦組設定與狀態、可見的成員和裝置識別碼、名稱及頭像。無法讀取訂閱登入電子郵件、帳號目錄、內部指紋、憑證或檔案，也無法修改帳號或設定"
         },
         "capabilityWarn": {
           "ghostMissing": "依賴「{{name}}」插件，目前未安裝——執行時該能力會失敗",
@@ -18632,7 +18616,7 @@
         "categoryListAria": "{{category}} 模型",
         "effortListAria": "推理強度",
         "boundLocationLocked": "繫結的任務在原來的電腦上執行，請選擇那台電腦上的模型。",
-        "modelGroupTitle": "模型組「{{name}}」：建立新任務時依模式選來源"
+        "modelGroupTitle": "智慧路由「{{name}}」：建立新任務時依模式選來源"
       }
     },
     "toast": {
@@ -22748,9 +22732,6 @@
     "lineNumbers": "行號"
   },
   "openAiAccountGroup": {
-    "strategy": "帳號組策略",
-    "leastHint": "優先分配給執行任務最少的連線",
-    "quotaHint": "能讀取訂閱用量時，會先按用量篩選連線，再按組策略分配。",
     "removeDescription": "此連線將不再接收組內的新任務。正在執行的任務仍留在原連線。",
     "mergeDescription": "從 {{target}} 新建的任務可以使用這兩個供應商。登入、金鑰和既有任務保留在原處。建立調度關係前，Cindy 會測試 {{apiKey}} 的 API Key。",
     "modelUnavailable": "此連線無法呼叫本次自動選擇的模型。再次測試可嘗試其他候選。",
@@ -22822,7 +22803,6 @@
       "useCodex": "使用 Codex 登入"
     },
     "title": "訂閱帳號",
-    "strategy": "負載平衡",
     "add": "新增帳號",
     "defaultTag": "預設",
     "ready": "已連線",
@@ -22897,14 +22877,14 @@
     "refreshFailed": "主題已載入，但清單無法重新整理，請在外觀設定中重新整理"
   },
   "modelGroups": {
-    "title": "模型組",
-    "description": "把模型供應商裡已有的幾個來源合成一個可選項。選模型時在「模型組」裡選它，由 Cindy 決定這次用哪個來源。",
-    "routes": "模式",
-    "routesDescription": "一個模式裡放幾個來源，開新任務時按選法挑一個。",
+    "title": "智慧路由",
+    "description": "把模型供應商裡已有的幾個來源合成一個可選項。選模型時在「智慧路由」裡選它，由 Cindy 決定這次用哪個來源。",
+    "routes": "路由",
+    "routesDescription": "把幾個來源合成一個選項。來源可以是整個供應商（照常選模型，由路由決定用哪個），也可以是某個指定的模型。同一家的幾個供應商會自動合好。",
     "sourceCount_other": "{{count}} 個來源",
     "strategy": {
       "expiring": {
-        "title": "快作廢的先用",
+        "title": "自動",
         "hint": "剩得多又快重設的訂閱配額先用，不浪費；讀不到配額的來源排在後面。"
       },
       "order": {
@@ -22933,12 +22913,15 @@
       }
     },
     "picker": {
-      "empty": "還沒有模型組。在設定裡把幾個來源合成一個模式，就能在這裡選它。",
-      "manage": "管理模型組",
-      "deviceTitle": "模型組 · {{device}}",
+      "empty": "還沒有智慧路由。在設定裡把幾個來源合成一個路由，就能在這裡選它。",
+      "manage": "管理智慧路由",
+      "deviceTitle": "智慧路由 · {{device}}",
       "switched": "「{{name}}」把這個任務換成了 {{model}}",
       "switchUnavailable": "「{{name}}」裡現在沒有能給這個任務用的來源，模型沒換。",
-      "chooseUnavailable": "「{{name}}」裡現在沒有能用的來源，沒有選它。"
+      "chooseUnavailable": "「{{name}}」裡現在沒有能用的來源，沒有選它。",
+      "mergedLabel_other": "{{name}} · 路由（{{count}} 個來源）",
+      "routeDecides": "這次用哪個來源由路由「{{name}}」決定",
+      "quotaOf": "配額：{{name}}"
     },
     "why": {
       "expiringQuota": "還剩 {{left}}% 配額，{{reset}} 重設，先用它",
@@ -22950,7 +22933,7 @@
       "soonestUntil": "所有來源的配額都用完了，它最早恢復（{{reset}}）",
       "standby": "這次沒輪到",
       "standbyQuota": "還剩 {{left}}% 配額，{{reset}} 才重設，先留著",
-      "off": "已在這個模式裡停用",
+      "off": "已在這個路由裡停用",
       "unavailable": "沒有連線，或這個模型現在不可選",
       "limited": "配額用完了",
       "limitedUntil": "配額用完了，{{reset}} 恢復",
@@ -22971,17 +22954,18 @@
     "settings": {
       "autoSwitch": {
         "title": "出問題時自動換來源",
-        "hint": "這個模式正在用的來源出問題時，自動換到下一個能用的來源，並在那一輪下面寫明。關掉後只在出錯時提議換來源。"
+        "hint": "這條路由正在用的來源出問題時，自動換到下一個能用的來源，並在那一輪下面寫明。關掉後只在出錯時提議換來源。"
       },
-      "newRoute": "新增模式",
-      "newRouteName": "新模式",
-      "routesEmpty": "還沒有模式。新增一個，把幾個來源放進去。",
-      "scopeNote": "模型組用於這台電腦上的任務：開新任務時選定一個來源；在進行中的任務裡選它，會當場換一次，之後不會自己換。",
-      "back": "返回模型組",
+      "newRoute": "新增路由",
+      "newRouteName": "新路由",
+      "routesEmpty": "還沒有路由。新增一個，把幾個來源放進去。",
+      "scopeNote": "智慧路由用於這台電腦上的任務：開新任務時選定一個來源；在進行中的任務裡選它，會當場換一次，之後不會自己換。",
+      "back": "返回智慧路由",
       "name": "名字",
       "nameHint": "選模型時顯示這個名字。",
-      "routeShownAs": "選模型時在「模型組」裡顯示。",
+      "routeShownAs": "選模型時在「智慧路由」裡顯示。",
       "pick": "這次用哪個",
+      "moreStrategies": "更多選法",
       "effort": "推理強度",
       "effortUnset": "不指定",
       "effortHint": "選中的模型不支援這一檔時，按它的預設檔執行。",
@@ -22991,14 +22975,15 @@
       "sources": "可以用的來源",
       "sourcesHint": "可以放不同的模型；實際用了哪個會寫在任務裡。",
       "sourcesEmpty": "還沒有來源。從下面加入已經連線的模型。",
-      "sourcesFull": "一個模式最多 {{count}} 個來源。",
+      "sourcesEmptyMerged": "還沒有來源。從下面加入已經連線的供應商。",
+      "sourcesFull": "一個路由最多 {{count}} 個來源。",
       "addSource": "新增來源",
       "chooseModel": "選一個模型",
       "notConnected": "沒有連線",
       "moveUp": "上移",
       "moveDown": "下移",
-      "remove": "移出這個模式",
-      "useSource": "讓這個模式使用 {{name}}",
+      "remove": "移出這個路由",
+      "useSource": "讓這個路由使用 {{name}}",
       "try": {
         "title": "試一下",
         "hint": "看看現在開新任務會用誰。不傳訊息，不花配額。",
@@ -23006,11 +22991,14 @@
         "picked": "用它",
         "standby": "備用",
         "skipped": "跳過",
-        "unavailable": "這個模式裡現在沒有能用的來源，新任務會用你原來選的模型。"
+        "unavailable": "這個路由裡現在沒有能用的來源，新任務會用你原來選的模型。",
+        "failed": "沒能試出結果，請重試。",
+        "model": "試哪個模型"
       },
-      "deleteRoute": "刪除這個模式",
+      "deleteRoute": "刪除這個路由",
       "deleteRouteConfirmTitle": "刪除「{{name}}」？",
-      "deleteRouteConfirmDescription": "別的模式裡改走它的時段例外會一起刪除。已經開始的任務不受影響。",
+      "deleteRouteConfirmDescription": "別的路由裡改走它的時段例外會一起刪除。已經開始的任務不受影響。",
+      "deleteMergedRouteConfirmDescription": "已經開始的任務不受影響。",
       "delete": "刪除",
       "cancel": "取消",
       "saveFailed": "沒有儲存成功，請重試。",
@@ -23035,23 +23023,66 @@
         "addHours": "新增",
         "sameHour": "開始和結束不能是同一個時刻。",
         "full": "最多 {{count}} 條例外。",
-        "needOtherRoute": "再建一個模式，才能按時段改走它。"
+        "needOtherRoute": "再建一個路由，才能按時段改走它。"
       }
     },
     "overview": {
       "mapTitle": "現在怎麼走",
-      "mapDescription": "從左到右：走哪個模式，最後落到哪個來源。點模式可以修改。",
+      "mapDescription": "從左到右：走哪個路由，最後落到哪個來源。點路由可以修改。",
       "columnSources": "來源",
       "columnEmpty": "還沒有",
-      "openRoute": "開啟模式「{{name}}」",
+      "openRoute": "開啟路由「{{name}}」",
       "recentTitle": "最近的選擇",
-      "recentEmpty": "還沒有任務用過模式。",
+      "recentEmpty": "還沒有任務用過路由。",
       "keptOriginal": "裡面沒有現在能用的模型，沿用了原來選的模型。",
       "keptOriginalShort": "沿用原來的模型",
       "latest": "最近一次任務走的路"
     },
     "switchOffer": {
       "action": "換到 {{model}} 繼續"
+    },
+    "auto": {
+      "accounts_other": "{{count}} 個帳號",
+      "computers_other": "{{count}} 台電腦",
+      "pickFor": "{{name}} 的選法",
+      "hiddenTag": "已隱藏",
+      "show": "選模型時顯示",
+      "assignedBy": "新任務依「{{strategy}}」分配",
+      "adjust": "在智慧路由中調整"
+    },
+    "sources": {
+      "models_other": "{{count}} 個模型",
+      "autoTag": "自動",
+      "chooseProvider": "選擇供應商",
+      "removeAria": "把 {{name}} 從這條路由中移除",
+      "note": "自動合成的路由會跟著供應商的連接增減：不能新增或移出成員，但可以調先後、填權重、停用某個成員，也可以改選法或隱藏。",
+      "providers_other": "{{count}} 個供應商",
+      "addWhole": "新增整個供應商",
+      "addWholeHint": "它的全部模型都進這條路由：選模型時這條路由像一個供應商，照常選模型，由路由決定這次用哪個成員。",
+      "addModelHint": "只加某個供應商的某個模型：選這條路由時依選法在這些來源裡挑一個。",
+      "detailHint": "這條路由合併的是整個供應商：選模型時它像一個供應商，照常選模型、推理強度，由路由決定這次用哪個成員。"
+    },
+    "kinds": {
+      "byModel": "按模型",
+      "byProvider": "按供應商"
+    },
+    "buddies": {
+      "title": "夥伴的模型",
+      "description": "夥伴都用一個預設模型，個別需要不同的再單獨設定。想讓夥伴出問題時自動換來源，就選一條智慧路由。",
+      "saveFailed": "夥伴的模型沒有儲存，請重試",
+      "defaultLabel": "預設模型",
+      "defaultHint": "夥伴預設都用它，新建的和從別台電腦接過來的夥伴也用它。",
+      "ownTitle": "單獨設定的夥伴",
+      "ownTitleWithRest_other": "單獨設定的夥伴 · 其餘 {{count}} 位用預設",
+      "addOwn": "為一位夥伴單獨設定",
+      "allFollow": "現在所有夥伴都用預設模型。",
+      "otherComputers": "其他電腦上的夥伴",
+      "deviceBuddies_other": "{{count}} 位夥伴",
+      "devicePageTitle": "{{device}} 上的夥伴",
+      "devicePageHint": "從那台電腦能用的模型和智慧路由裡選，儲存在那台電腦上。",
+      "deviceDefaultReadOnly": "那台電腦更新到新版本後，才能在這裡改它的預設模型。",
+      "deviceUnavailable": "現在讀不到那台電腦的夥伴設定。確認它在線上後再開啟。",
+      "deviceLoading": "正在讀取那台電腦的設定…"
     }
   },
   "projectSettings": {

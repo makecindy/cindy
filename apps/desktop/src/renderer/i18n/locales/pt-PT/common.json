@@ -345,7 +345,7 @@
     "tabOwned": "Partilhadas por mim",
     "startIntro": "Convide um colega para ler todo o conteúdo desta tarefa e trabalhar com o mesmo Agent.",
     "runsOnThisDevice": "Executada neste dispositivo",
-    "inviteNotice": "Qualquer pessoa com a ligação de convite pode aderir após iniciar sessão, com o mesmo acesso ao Agent que o anfitrião.",
+    "inviteNotice": "Qualquer pessoa com a ligação de convite pode aderir após iniciar sessão, com o mesmo acesso ao Agent que o anfitrião. Os convidados podem rever as alterações atuais em todo o repositório Git, mesmo quando se partilha apenas uma subpasta.",
     "offlineAutoClose": "A partilha termina automaticamente se o computador do anfitrião permanecer offline.",
     "inviteBoxHint": "Envie a ligação ao seu colega. Pode abri-la para aderir ou colá-la em Aderir à tarefa partilhada no Cindy.",
     "invitationMessage": "Tem um convite para aderir a «{{title}}»\n{{link}}\nAbra a ligação para aderir. Se o Cindy não abrir, escolha Aderir à tarefa partilhada no Cindy e cole esta ligação.",
@@ -406,7 +406,7 @@
       "progress": "Proporção atual {{used}}% · limite {{limit}}%",
       "paused": "Este modelo está em pausa. Escolha outro modelo disponível.",
       "recommendation": "Recomendado: {{model}}",
-      "unsupported": "Os limites de proporção por modelo ainda não são suportados neste grupo de fornecedores.",
+      "unsupported": "Os limites de proporção por modelo ainda não são suportados neste grupo de computadores.",
       "basis": "Últimos 7 dias de calendário · tokens de entrada + saída, excluindo a cache",
       "maxPercent": "Proporção máxima da utilização pessoal",
       "empty": "Sem utilização registada",
@@ -505,14 +505,14 @@
         "confirm": "Remover partilha"
       },
       "reshare": {
-        "applying": "quer utilizar através do grupo de fornecedores de {{owner}}",
+        "applying": "quer utilizar através do grupo de computadores de {{owner}}",
         "requestedAt": "Pedido {{time}}",
         "usageHint": "Se concordar, as sessões de {{name}} poderão ser executadas neste computador e a utilização será contabilizada em nome de {{owner}}",
         "approve": "Aceitar",
         "reject": "Recusar",
         "summaryUsing_one": "{{count}} pessoa utiliza através do grupo de fornecedores de {{owner}}",
-        "summaryUsing_other": "{{count}} pessoas utilizam através do grupo de fornecedores de {{owner}}",
-        "summaryOwner": "Através do grupo de fornecedores de {{owner}}",
+        "summaryUsing_other": "{{count}} pessoas utilizam através do grupo de computadores de {{owner}}",
+        "summaryOwner": "Através do grupo de computadores de {{owner}}",
         "summaryDeclined_one": "{{count}} recusou",
         "summaryDeclined_other": "{{count}} recusaram",
         "stateApproved": "Aceite",
@@ -520,10 +520,10 @@
         "revoke": "Retirar",
         "revokeAria": "Retirar consentimento para {{name}}",
         "approveAria": "Consentir a utilização por {{name}}",
-        "toastApproved": "{{name}} já pode utilizar {{provider}} através do grupo de fornecedores de {{owner}}",
+        "toastApproved": "{{name}} já pode utilizar {{provider}} através do grupo de computadores de {{owner}}",
         "toastRejected": "Pedido de {{name}} recusado",
         "toastRevoked": "Consentimento para {{name}} retirado. As sessões em execução foram interrompidas.",
-        "listTitle": "A utilizar através do grupo de fornecedores de {{owner}}",
+        "listTitle": "A utilizar através do grupo de computadores de {{owner}}",
         "summaryUsing_many": "{{count}} pessoas utilizam através do grupo de fornecedores de {{owner}}",
         "summaryDeclined_many": "{{count}} recusaram"
       },
@@ -571,7 +571,7 @@
       "requestedAt": "Pedido feito {{time}} através da sua ligação de partilha",
       "pairingHint": "Antes de aprovar, pode perguntar através do canal pelo qual enviou a ligação: «Que código de emparelhamento aparece?» Aprove se corresponder.",
       "callout": "Após a aprovação, {{name}} poderá utilizar os modelos de {{provider}} nas suas próprias sessões. O Agent é executado neste computador e a utilização é contabilizada no seu {{provider}}. Pode colocar o acesso em pausa ou removê-lo a qualquer momento em «{{provider}} · Acesso remoto e partilha».",
-      "calloutGroup": "Após a aprovação, {{name}} poderá utilizar os modelos de {{provider}} nas suas próprias sessões. O grupo de fornecedores escolhe o computador que executa o Agent e a utilização é contabilizada no seu {{provider}}. Pode colocar o acesso em pausa ou removê-lo a qualquer momento em «{{provider}} · Acesso remoto e partilha».",
+      "calloutGroup": "Após a aprovação, {{name}} poderá utilizar os modelos de {{provider}} nas suas próprias sessões. O grupo de computadores escolhe o computador que executa o Agent e a utilização é contabilizada no seu {{provider}}. Pode colocar o acesso em pausa ou removê-lo a qualquer momento em «{{provider}} · Acesso remoto e partilha».",
       "calloutRemote": "Após a aprovação, {{name}} poderá utilizar os modelos de {{provider}} nas suas próprias sessões. O Agent é executado no computador que aloja este fornecedor e a utilização é contabilizada no seu {{provider}}. Pode colocar o acesso em pausa ou removê-lo a qualquer momento em «{{provider}} · Acesso remoto e partilha».",
       "calloutClaudeEmail": "Enquanto {{name}} o utiliza, o Agent pode ver o endereço de e-mail que utiliza para iniciar sessão no Claude.",
       "calloutUnknown": "Se não reconhecer esta pessoa, recuse; a ligação deixa de funcionar assim que o pedido for recusado.",
@@ -711,7 +711,7 @@
       "rejectedTitle": "Pedido de partilha recusado",
       "rejectedBody": "{{name}} recusou partilhar {{provider}}",
       "reshareTitle": "Novo pedido de utilização",
-      "reshareBody": "{{name}} quer utilizar o seu {{provider}} partilhado através do grupo de fornecedores de {{owner}}"
+      "reshareBody": "{{name}} quer utilizar o seu {{provider}} partilhado através do grupo de computadores de {{owner}}"
     },
     "runLimits": {
       "title": "Limites de sessões remotas",
@@ -767,7 +767,7 @@
   },
   "providerGroup": {
     "management": {
-      "note": "A gerir o grupo de fornecedores em {{device}}. As alterações são guardadas nesse computador; mantenha-o online.",
+      "note": "A gerir o grupo de computadores em {{device}}. As alterações são guardadas nesse computador; mantenha-o online.",
       "unsupported": "A versão do Cindy no computador com este grupo ainda não suporta gestão remota. Atualize primeiro o Cindy nesse computador."
     },
     "page": {
@@ -839,27 +839,13 @@
       "computerCount_many": "{{count}} computadores"
     },
     "section": {
-      "title": "Grupo de fornecedores",
+      "title": "Grupo de computadores",
       "addComputer": "Adicionar computador",
       "delete": "Eliminar grupo",
       "empty": "Adicione {{provider}} dos seus outros computadores e as tarefas escolherão um automaticamente",
-      "loading": "A carregar o grupo de fornecedores…",
-      "loadFailed": "Não foi possível carregar o grupo de fornecedores",
+      "loading": "A carregar o grupo de computadores…",
+      "loadFailed": "Não foi possível carregar o grupo de computadores",
       "note": "Para sessões neste computador e sessões das pessoas com quem partilha, o grupo escolhe o computador que executa o Agent"
-    },
-    "strategy": {
-      "label": "Estratégia do grupo",
-      "least": "Menos ocupado",
-      "round": "Rotação",
-      "order": "Por ordem",
-      "weight": "Por peso",
-      "quotaFirst": "Quando a utilização da subscrição está disponível, os computadores cuja quota é reposta em breve e que ainda têm bastante disponível têm prioridade, para que cada conta seja utilizada de forma equilibrada ao longo do tempo; os semelhantes seguem a estratégia do grupo",
-      "description": {
-        "least": "Encaminha para o menos ocupado",
-        "round": "Alterna entre computadores",
-        "order": "Primeiro os que estão no início da lista",
-        "weight": "Distribui por peso"
-      }
     },
     "autoSwitch": {
       "label": "Mudar de computador automaticamente",
@@ -919,9 +905,9 @@
         }
       },
       "removeConfirm": {
-        "title": "Remover {{name}} do grupo de fornecedores?",
+        "title": "Remover {{name}} do grupo de computadores?",
         "description": "Não receberá novas tarefas. As tarefas já em execução nesse computador permanecem nele.",
-        "lastDescription": "É o último computador do grupo, pelo que removê-lo elimina o grupo de fornecedores de {{provider}}.",
+        "lastDescription": "É o último computador do grupo, pelo que removê-lo elimina o grupo de computadores de {{provider}}.",
         "confirm": "Remover do grupo"
       },
       "sourceGroupOwner": "Aloja o grupo",
@@ -964,12 +950,12 @@
       "send": "Enviar mensagem"
     },
     "deleteConfirm": {
-      "title": "Eliminar o grupo de fornecedores de {{provider}}?",
+      "title": "Eliminar o grupo de computadores de {{provider}}?",
       "description": "As novas tarefas neste computador serão executadas aqui. As tarefas já noutros computadores permanecem onde estão.",
       "confirm": "Eliminar grupo"
     },
     "add": {
-      "title": "Adicionar computadores ao grupo de fornecedores de {{provider}}",
+      "title": "Adicionar computadores ao grupo de computadores de {{provider}}",
       "sourceAria": "Origem do computador",
       "tabAvailable": "Já disponíveis",
       "tabLink": "Ligação de partilha",
@@ -986,11 +972,11 @@
     },
     "toast": {
       "added_one": "{{count}} computador adicionado ao grupo de fornecedores de {{provider}}",
-      "added_other": "{{count}} computadores adicionados ao grupo de fornecedores de {{provider}}",
+      "added_other": "{{count}} computadores adicionados ao grupo de computadores de {{provider}}",
       "addedAccounts_one": "{{count}} conta adicionada ao grupo de fornecedores de {{provider}}",
-      "addedAccounts_other": "{{count}} contas adicionadas ao grupo de fornecedores de {{provider}}",
-      "removed": "{{name}} removido do grupo de fornecedores",
-      "deleted": "Grupo de fornecedores de {{provider}} eliminado",
+      "addedAccounts_other": "{{count}} contas adicionadas ao grupo de contas de {{provider}}",
+      "removed": "{{name}} removido do grupo de computadores",
+      "deleted": "Grupo de computadores de {{provider}} eliminado",
       "added_many": "{{count}} computadores adicionados ao grupo de fornecedores de {{provider}}",
       "addedAccounts_many": "{{count}} contas adicionadas ao grupo de fornecedores de {{provider}}"
     }
@@ -1391,7 +1377,7 @@
     "DEVICE_LINK_BUSY": "O computador remoto está ocupado. Tente novamente dentro de instantes.",
     "INVALID_PARAMS": "Entrada inválida. Verifique e tente novamente.",
     "PRECONDITION_FAILED": "Esta ação está indisponível no estado atual. Tente novamente.",
-    "PROVIDER_GROUP_CHANGED": "O grupo de fornecedores foi alterado noutro local, pelo que esta ação não foi aplicada. Reveja as definições mais recentes e tente novamente.",
+    "PROVIDER_GROUP_CHANGED": "O grupo de computadores foi alterado noutro local, pelo que esta ação não foi aplicada. Reveja as definições mais recentes e tente novamente.",
     "MODEL_CONTEXT_USAGE_UNKNOWN": "Modelo não alterado: Cindy não consegue verificar quanto contexto esta tarefa utiliza. Mantenha o modelo atual ou inicie uma nova tarefa.",
     "MODEL_WINDOW_CURRENT_CONTEXT_UNKNOWN": "Modelo não alterado: Cindy não consegue verificar a janela de contexto do modelo atual. Verifique a definição da janela para um modelo personalizado. Se não puder ser alterada, mantenha o modelo atual ou inicie uma nova tarefa.",
     "MODEL_WINDOW_TARGET_CONTEXT_UNKNOWN": "Modelo não alterado: Cindy não consegue verificar a janela de contexto do modelo de destino. Verifique a definição da janela para um modelo personalizado. Se não puder ser alterada, escolha outro modelo ou inicie uma nova tarefa.",
@@ -1939,7 +1925,7 @@
       "imBot": "Bots de mensagens",
       "ghosts": "Plugins",
       "cindyMake": "Cindy Make",
-      "modelGroups": "Grupos de modelos"
+      "modelGroups": "Roteamento inteligente"
     },
     "sections": {
       "user": "Utilizador",
@@ -4380,8 +4366,10 @@
           "compaction": {
             "title": "Compactação automática",
             "hint": "Compactar o contexto na percentagem de utilização selecionada. Valores mais baixos antecipam a compactação; os limites do motor continuam a aplicar-se.",
-            "default": "{{pct}}% (predefinição)",
-            "timing": "Aplica-se a todos os motores disponíveis para este modelo e fonte nas execuções seguintes, sem interromper uma resposta."
+            "timing": "Aplica-se a todos os motores disponíveis para este modelo e fonte nas execuções seguintes, sem interromper uma resposta.",
+            "defaultBadge": "Predefinido",
+            "sliderAria": "Ajustar o limiar de compactação automática",
+            "restoreAria": "Restaurar a proporção de compactação automática predefinida"
           },
           "contextLimitRoute": "Atual: {{tokens}} tokens",
           "contextLimitOverWindow": "Acima da janela declarada pelo fornecedor; os pedidos podem falhar.",
@@ -4471,10 +4459,10 @@
         "detailNote": "O Agent é executado em {{device}}, usando a sessão e a quota desse computador. Para o usar, selecione-o na lista de modelos ao iniciar uma tarefa. Para alterar este fornecedor, aceda a Definições → Fornecedores nesse computador.",
         "modelsTitle": "Modelos disponíveis",
         "modelsEmpty": "Este fornecedor ainda não tem modelos disponíveis nesse computador.",
-        "rowLabelGroup": "{{provider}} · {{device}} · Grupo de fornecedores",
+        "rowLabelGroup": "{{provider}} · {{device}} · Grupo de computadores",
         "groupBadge_one": "Grupo de fornecedores · {{count}} computador",
-        "groupBadge_other": "Grupo de fornecedores · {{count}} computadores",
-        "groupNote": "{{device}} transformou este fornecedor num grupo de fornecedores. Ao iniciar uma tarefa com este grupo, {{device}} atribui a tarefa a um dos computadores abaixo segundo a estratégia do grupo e transfere-a para outro se esse computador tiver um problema. Enquanto {{device}} estiver online, use Acesso remoto e partilha aqui para gerir o grupo e as respetivas partilhas.",
+        "groupBadge_other": "Grupo de computadores · {{count}} computadores",
+        "groupNote": "{{device}} transformou este fornecedor num grupo de computadores. Ao iniciar uma tarefa com este grupo, {{device}} atribui a tarefa a um dos computadores abaixo segundo a estratégia do grupo e transfere-a para outro se esse computador tiver um problema. Enquanto {{device}} estiver online, use Acesso remoto e partilha aqui para gerir o grupo e as respetivas partilhas.",
         "groupMembersTitle": "Computadores do grupo",
         "groupMembersFailed": "Não foi possível obter o estado dos computadores do grupo neste momento.",
         "groupBadge_many": "Grupo de fornecedores · {{count}} computadores",
@@ -4527,7 +4515,7 @@
         "remoteAccess": {
           "label": "Permitir utilização remota",
           "description": "Quando ativo, os seus outros computadores e as pessoas com quem partilha podem usar os modelos deste fornecedor. O Agent é executado neste computador, usando a sessão e a quota deste computador.",
-          "descriptionGroup": "Quando ativo, os seus outros computadores e as pessoas com quem partilha podem usar os modelos deste fornecedor. O grupo de fornecedores escolhe o computador que executa o Agent.",
+          "descriptionGroup": "Quando ativo, os seus outros computadores e as pessoas com quem partilha podem usar os modelos deste fornecedor. O grupo de computadores escolhe o computador que executa o Agent.",
           "ariaLabel": "Permitir que os seus outros computadores e as pessoas com quem partilha usem este fornecedor",
           "writeFailed": "Não foi possível guardar a definição de acesso remoto. Tente novamente.",
           "followsPool": "Esta ligação foi integrada em “{{pool}}” e segue o “Permitir utilização remota” dele. Altere lá."
@@ -5734,7 +5722,8 @@
           "runtime": "Os últimos pedidos aos modelos auxiliares falharam. A atribuição de nomes às tarefas, os resumos e as tarefas de plugins, como a tradução de legendas, podem ser afetados.",
           "open": "Abrir definições"
         }
-      }
+      },
+      "missingRoute": "Modo eliminado"
     },
     "compaction": {
       "codex": {
@@ -7416,8 +7405,7 @@
             "machines": "Máquinas fornecedoras remotas"
           },
           "usage": {
-            "remoteModel": "Modelo remoto",
-            "remoteTask": "Tarefa remota"
+            "remoteModel": "Modelo remoto"
           },
           "bundle": {
             "mixed": "{{running}} em execução · {{ready}} prontas",
@@ -8860,8 +8848,8 @@
         "hostTools_controlDetail": "Usar as ferramentas da Cindy para editar, arquivar, restaurar e controlar tarefas e projetos existentes, e importar ficheiros de tarefas em formato nativo neste computador.",
         "hostTools_handoff": "Mensagens para tarefas",
         "hostTools_handoffDetail": "Usar as ferramentas da Cindy para enviar mensagens para tarefas existentes. As operações que precisam da tarefa atual exigem um destino explícito.",
-        "hostTools_usage": "Ler a utilização e o estado dos grupos de fornecedores",
-        "hostTools_usageDetail": "Lê os identificadores, planos, períodos de quota e horas de atualização das contas locais de Claude/Codex ligadas à tua conta Cindy. Lê a utilização registada por dia e modelo, os custos estimados, a configuração e o estado dos grupos de fornecedores e os identificadores, nomes e avatares visíveis de membros e dispositivos neste computador ou noutros computadores autorizados da mesma conta. Não permite ler e-mails de início de sessão das subscrições, diretórios de contas, impressões de identidade internas, credenciais ou ficheiros, nem alterar contas ou definições. Também lê a quota de tarefas acessíveis, incluindo noutro computador autorizado da mesma conta ou num fornecedor partilhado que permita ver a quota.",
+        "hostTools_usage": "Ler a utilização e o estado dos grupos de computadores",
+        "hostTools_usageDetail": "Lê os identificadores, planos, períodos de quota e horas de atualização das contas locais de Claude/Codex ligadas à tua conta Cindy. Lê a utilização registada por dia e modelo, os custos estimados, a configuração e o estado dos grupos de computadores e os identificadores, nomes e avatares visíveis de membros e dispositivos neste computador ou noutros computadores autorizados da mesma conta. Não permite ler e-mails de início de sessão das subscrições, diretórios de contas, impressões de identidade internas, credenciais ou ficheiros, nem alterar contas ou definições. Também lê a quota de tarefas acessíveis, incluindo noutro computador autorizado da mesma conta ou num fornecedor partilhado que permita ver a quota.",
         "hostTools_settings": "Definições da aplicação",
         "hostTools_settingsDetail": "Usar as ferramentas da Cindy para ler e alterar a configuração. Os segredos não são devolvidos e os dados confidenciais são introduzidos por si.",
         "hostTools_scheduler": "Gestão de automatizações",
@@ -11840,18 +11828,14 @@
     "model": {
       "description": "Escolha os modelos que este amigo utiliza.",
       "primary": "Modelo principal",
-      "restoreDefault": "Restaurar modelo predefinido"
+      "restoreDefault": "Restaurar modelo predefinido",
+      "followsDefault": "Usa o modelo predefinido",
+      "ownModel": "Modelo próprio",
+      "managedInSettings": "Os modelos dos parceiros são definidos em Fornecedores → Roteamento inteligente.",
+      "openSettings": "Abrir definições"
     },
     "modelChain": {
-      "primary": "Modelo principal",
-      "fallback": "Alternativa {{index}}",
-      "routeLabel": "Modelo candidato {{index}}",
-      "add": "Adicionar modelo alternativo",
-      "remove": "Remover este candidato",
-      "moveUp": "Mover para cima",
-      "moveDown": "Mover para baixo",
-      "description": "Configure até 5 modelos. Se um estiver indisponível, o amigo continua automaticamente com o seguinte, sem mudar de tarefa nem tentar novamente manualmente.",
-      "options": "Modelos de reserva ({{count}})"
+      "routeLabel": "Modelo candidato {{index}}"
     },
     "actions": {
       "message": "Mensagem",
@@ -13003,7 +12987,7 @@
       "arrivingLater": "{{name}} foi transferido para este computador e ainda está a ser preparado. Aparecerá em breve nos teus amigos",
       "arrivalPermissions": "{{name}} utiliza agora as permissões predefinidas deste computador.",
       "arrivalModel": "O modelo guardado de {{name}} não está disponível neste computador, pelo que segue o modelo predefinido deste computador.",
-      "arrivalModelSetup": "{{name}} está neste computador, mas ainda não tem um modelo disponível. Ligue um fornecedor de modelos ou escolha um modelo nas definições deste amigo, em Modelo.",
+      "arrivalModelSetup": "{{name}} chegou a este computador, mas ainda não tem um modelo utilizável. Ligue um fornecedor de modelos ou defina o modelo predefinido dos parceiros em Fornecedores → Roteamento inteligente.",
       "arrivalPartialContent": "{{name}} funciona agora neste computador, mas alguns itens sincronizados não puderam ser restaurados. As cópias na nuvem mantêm-se intactas.",
       "missingProfileTitle": "Continuar {{name}} com o perfil predefinido?",
       "missingProfileDescription": "O computador principal original ainda não enviou o perfil de {{name}}. Se esse computador foi reinstalado ou não pode ser recuperado, pode continuar aqui com o perfil predefinido mantendo as conversas e os conteúdos já sincronizados.",
@@ -18561,7 +18545,7 @@
           "sessions_dispatch": "Encaminhar sessões",
           "feishu_read": "Ler mensagens do Feishu",
           "settings_read": "Ler membros das partilhas",
-          "usage_read": "Ler a utilização e o estado dos grupos de fornecedores"
+          "usage_read": "Ler a utilização e o estado dos grupos de computadores"
         },
         "project": "Diretório do projeto",
         "capabilitiesLabel": "Capacidades permitidas",
@@ -18575,7 +18559,7 @@
           "sessions_dispatch": "Criar ou reativar sessões de {{appName}} e entregar mensagens",
           "feishu_read": "Listar conversas com atividade recente; obter mensagens recentes de uma conversa (grupo ou mensagem direta)",
           "settings_read": "Lê os membros das tuas partilhas e os modelos permitidos neste computador ou noutros computadores autorizados da mesma conta; não faz alterações",
-          "usage_read": "Lê os identificadores, planos, períodos de quota e horas de atualização das contas locais de Claude/Codex ligadas à tua conta Cindy. Lê a utilização registada por dia e modelo, os custos estimados, a configuração e o estado dos grupos de fornecedores e os identificadores, nomes e avatares visíveis de membros e dispositivos neste computador ou noutros computadores autorizados da mesma conta. Não permite ler e-mails de início de sessão das subscrições, diretórios de contas, impressões de identidade internas, credenciais ou ficheiros, nem alterar contas ou definições."
+          "usage_read": "Lê os identificadores, planos, períodos de quota e horas de atualização das contas locais de Claude/Codex ligadas à tua conta Cindy. Lê a utilização registada por dia e modelo, os custos estimados, a configuração e o estado dos grupos de computadores e os identificadores, nomes e avatares visíveis de membros e dispositivos neste computador ou noutros computadores autorizados da mesma conta. Não permite ler e-mails de início de sessão das subscrições, diretórios de contas, impressões de identidade internas, credenciais ou ficheiros, nem alterar contas ou definições."
         },
         "capabilityWarn": {
           "ghostMissing": "Requer o plugin \"{{name}}\", que não está instalado — esta capacidade irá falhar durante a execução",
@@ -18876,7 +18860,7 @@
         "categoryListAria": "Modelos de {{category}}",
         "effortListAria": "Esforço de raciocínio",
         "boundLocationLocked": "As tarefas associadas continuam a ser executadas onde estão. Escolha um modelo desse computador.",
-        "modelGroupTitle": "Grupo de modelos «{{name}}»: escolhe uma fonte ao criar uma nova tarefa"
+        "modelGroupTitle": "Roteamento inteligente «{{name}}»: escolhe uma fonte quando uma execução inicia uma nova tarefa"
       }
     },
     "toast": {
@@ -23052,9 +23036,6 @@
     "lineNumbers": "Números de linha"
   },
   "openAiAccountGroup": {
-    "strategy": "Estratégia do grupo de contas",
-    "leastHint": "Dar prioridade à ligação com menos tarefas em execução",
-    "quotaHint": "Quando há dados de utilização das subscrições, a Cindy filtra as ligações pela utilização antes de aplicar a estratégia do grupo.",
     "removeDescription": "Esta ligação deixará de receber novas tarefas do grupo. As tarefas em execução permanecerão nesta ligação.",
     "mergeDescription": "As novas tarefas iniciadas em {{target}} podem usar os dois fornecedores. As sessões iniciadas, chaves e tarefas existentes mantêm-se. A Cindy testará a chave de API de {{apiKey}} antes de ligar os fornecedores.",
     "modelUnavailable": "Esta ligação não pode usar o modelo escolhido para o teste. Um novo teste pode experimentar outro modelo.",
@@ -23126,7 +23107,6 @@
       "useCodex": "Iniciar sessão com o Codex"
     },
     "title": "Contas de subscrição",
-    "strategy": "Distribuição de carga",
     "add": "Adicionar conta",
     "defaultTag": "Predefinida",
     "ready": "Ligada",
@@ -23201,37 +23181,37 @@
     "refreshFailed": "O tema foi instalado, mas não foi possível atualizar a lista. Atualiza-a nas definições de aparência."
   },
   "modelGroups": {
-    "title": "Grupos de modelos",
-    "description": "Combine várias fontes que já tem em Fornecedores numa única opção. Escolha-a em «Grupos de modelos» no seletor de modelos e a Cindy decide que fonte usar.",
-    "routes": "Modos",
-    "routesDescription": "Um modo contém várias fontes. Cada nova tarefa escolhe uma segundo a regra do modo.",
+    "title": "Roteamento inteligente",
+    "description": "Combine fontes que já tem em Fornecedores numa única opção. Escolha-a em Roteamento inteligente no seletor de modelos e a Cindy decide que fonte usar.",
+    "routes": "Rotas",
+    "routesDescription": "Combine várias fontes numa única opção. Uma fonte pode ser um fornecedor inteiro (escolha um modelo como habitualmente e a rota decide qual o executa) ou um modelo específico. Os fornecedores da mesma marca são combinados automaticamente.",
     "sourceCount_one": "{{count}} fonte",
     "sourceCount_many": "{{count}} fontes",
     "sourceCount_other": "{{count}} fontes",
     "strategy": {
       "expiring": {
-        "title": "Primeiro o que expira",
-        "hint": "Usa primeiro a quota de subscrição que mais sobra e que está prestes a ser reposta, para não a desperdiçar. As fontes sem quota legível ficam para depois."
+        "title": "Automático",
+        "hint": "Usa primeiro a quota de subscrição que sobra e que está prestes a ser reposta, para que nada seja desperdiçado. As fontes sem quota legível ficam para depois."
       },
       "order": {
         "title": "Por ordem",
-        "hint": "Só passa à fonte seguinte quando a anterior não pode ser usada."
+        "hint": "Só passa à fonte seguinte quando a de cima não pode ser usada."
       },
       "rotate": {
         "title": "À vez",
-        "hint": "Cada nova tarefa passa à fonte seguinte e reparte a carga."
+        "hint": "Cada nova tarefa vai para a fonte seguinte, repartindo a carga de forma equilibrada."
       },
       "cheapest": {
         "title": "O mais barato",
         "hint": "Usa primeiro as subscrições com quota disponível, sem custo adicional; o resto segue do preço de tabela mais baixo ao mais alto, e as fontes sem preço ficam para o fim."
       },
       "drain": {
-        "title": "Esgotar e passar",
+        "title": "Usar até esgotar",
         "hint": "Continua a usar a última fonte até ficar sem quota ou indisponível e só então passa à seguinte; não volta atrás quando as anteriores recuperam."
       },
       "headroom": {
         "title": "Mais quota restante",
-        "hint": "Usa primeiro a fonte com a maior proporção de quota restante (a semanal, se existir); as fontes sem quota legível ficam para o fim."
+        "hint": "Usa a fonte com a maior proporção de quota restante (a quota semanal, se existir); as fontes sem quota legível ficam para o fim."
       },
       "weighted": {
         "title": "Por peso",
@@ -23239,72 +23219,79 @@
       }
     },
     "picker": {
-      "empty": "Ainda não há grupos de modelos. Combine várias fontes num modo nas Definições para o escolher aqui.",
-      "manage": "Gerir grupos de modelos",
-      "deviceTitle": "Grupos de modelos · {{device}}",
+      "empty": "Ainda não há roteamento inteligente. Combine algumas fontes numa rota nas Definições para a escolher aqui.",
+      "manage": "Gerir roteamento inteligente",
+      "deviceTitle": "Roteamento inteligente · {{device}}",
       "switched": "«{{name}}» mudou esta tarefa para {{model}}",
       "switchUnavailable": "«{{name}}» não tem agora nenhuma fonte que esta tarefa possa usar. O modelo não foi alterado.",
-      "chooseUnavailable": "«{{name}}» não tem agora nenhuma fonte utilizável, por isso não foi selecionado."
+      "chooseUnavailable": "«{{name}}» não tem agora nenhuma fonte utilizável, por isso não foi selecionada.",
+      "mergedLabel_many": "{{name}} · rota ({{count}} fontes)",
+      "mergedLabel_one": "{{name}} · rota ({{count}} fonte)",
+      "mergedLabel_other": "{{name}} · rota ({{count}} fontes)",
+      "routeDecides": "A rota «{{name}}» decide que fonte esta tarefa usa",
+      "quotaOf": "Quota: {{name}}"
     },
     "why": {
-      "expiringQuota": "Restam {{left}}% da quota, reposta a {{reset}}, por isso vai primeiro",
+      "expiringQuota": "Restam {{left}}% da quota, que é reposta {{reset}}, por isso vai primeiro",
       "expiring": "Primeira pela quota",
       "order": "A primeira fonte disponível",
-      "rotate": "Desta vez é a vez dela",
+      "rotate": "Escolhida à vez",
       "only": "A única disponível agora",
-      "soonest": "Todas as fontes esgotaram a quota; esta recupera primeiro",
-      "soonestUntil": "Todas as fontes esgotaram a quota; esta recupera primeiro ({{reset}})",
-      "standby": "Desta vez não é a vez dela",
-      "standbyQuota": "Restam {{left}}% da quota, reposta só a {{reset}}, por isso fica guardada",
-      "off": "Desativada neste modo",
+      "soonest": "Todas as fontes estão sem quota; esta recupera primeiro",
+      "soonestUntil": "Todas as fontes estão sem quota; esta recupera primeiro ({{reset}})",
+      "standby": "Não foi escolhida desta vez",
+      "standbyQuota": "Restam {{left}}% da quota, que só é reposta {{reset}}, por isso fica guardada para depois",
+      "off": "Desativada nesta rota",
       "unavailable": "Sem ligação, ou este modelo não pode ser escolhido agora",
-      "limited": "Quota esgotada",
-      "limitedUntil": "Quota esgotada até {{reset}}",
+      "limited": "Sem quota",
+      "limitedUntil": "Sem quota até {{reset}}",
       "tight": "A quota de 5 horas está quase cheia, por isso é ignorada por agora",
       "cheapest": "Preço de tabela mais baixo",
       "cheapestFree": "Ainda há quota de subscrição, sem custo adicional",
       "drain": "Continua a ser usada até se esgotar a quota",
       "drainNext": "A fonte anterior esgotou-se ou ficou indisponível, por isso passou para esta",
-      "headroom": "Tem mais quota restante",
-      "headroomQuota": "Restam {{left}} % de quota, mais do que em qualquer outra fonte",
+      "headroom": "Mais quota restante",
+      "headroomQuota": "Restam {{left}}% da quota, mais do que em qualquer outra fonte",
       "weighted": "É a vez dela segundo o peso",
       "noVision": "A mensagem tem imagens e esta fonte não as consegue ver",
       "exceptionImage": "A mensagem tem imagens, por isso só foram consideradas as fontes que as conseguem ver",
       "exceptionImageFallback": "A mensagem tem imagens, mas nenhuma fonte as consegue ver, por isso escolheu como habitualmente",
-      "exceptionHours": "Neste horário usa «{{name}}»",
+      "exceptionHours": "Neste horário, usa «{{name}}» em vez disso",
       "separator": "; "
     },
     "settings": {
       "autoSwitch": {
-        "title": "Mudar de fonte automaticamente quando houver problema",
-        "hint": "Quando a fonte usada por este modo falhar, mudar para a seguinte disponível e anotar por baixo dessa ronda. Desligado, a mudança só é sugerida no erro."
+        "title": "Mudar de fonte automaticamente quando uma falhar",
+        "hint": "Quando a fonte que esta rota está a usar falhar, mudar para a seguinte utilizável e anotá-lo por baixo dessa ronda. Desligado, a mudança só é sugerida no erro."
       },
-      "newRoute": "Novo modo",
-      "newRouteName": "Novo modo",
-      "routesEmpty": "Ainda não há modos. Crie um e adicione várias fontes.",
-      "scopeNote": "Os grupos de modelos aplicam-se às tarefas deste computador. Uma nova tarefa escolhe uma fonte ao começar. Escolher um numa tarefa em curso troca uma vez, de imediato; depois não troca sozinha.",
-      "back": "Voltar aos grupos de modelos",
+      "newRoute": "Nova rota",
+      "newRouteName": "Nova rota",
+      "routesEmpty": "Ainda não há rotas. Crie uma e adicione algumas fontes.",
+      "scopeNote": "O roteamento inteligente aplica-se às tarefas deste computador. Uma nova tarefa escolhe uma fonte ao começar. Escolher uma rota numa tarefa já em curso muda uma vez, de imediato; depois não muda sozinha.",
+      "back": "Voltar ao roteamento inteligente",
       "name": "Nome",
       "nameHint": "Aparece no seletor de modelos.",
-      "routeShownAs": "Aparece em «Grupos de modelos» no seletor de modelos.",
+      "routeShownAs": "Aparece em Roteamento inteligente no seletor de modelos.",
       "pick": "Qual usar",
+      "moreStrategies": "Mais opções",
       "effort": "Esforço de raciocínio",
       "effortUnset": "Não definido",
-      "effortHint": "Se o modelo escolhido não suportar este nível, corre com a sua predefinição.",
+      "effortHint": "Se o modelo escolhido não suportar este nível, corre com a sua própria predefinição.",
       "weight": "Peso",
       "weightAria": "Peso de «{{name}}»",
       "weightHint": "Com «Por peso», um peso maior recebe mais tarefas novas. 1–1000.",
       "sources": "Fontes que pode usar",
       "sourcesHint": "Podem coexistir modelos diferentes. A tarefa indica qual foi usado.",
       "sourcesEmpty": "Ainda não há fontes. Adicione abaixo um modelo ligado.",
-      "sourcesFull": "Um modo aceita até {{count}} fontes.",
+      "sourcesEmptyMerged": "Ainda não há fontes. Adicione abaixo um fornecedor ligado.",
+      "sourcesFull": "Uma rota aceita até {{count}} fontes.",
       "addSource": "Adicionar fonte",
       "chooseModel": "Escolher um modelo",
       "notConnected": "Sem ligação",
       "moveUp": "Mover para cima",
       "moveDown": "Mover para baixo",
-      "remove": "Remover deste modo",
-      "useSource": "Permitir que este modo use {{name}}",
+      "remove": "Remover desta rota",
+      "useSource": "Permitir que esta rota use {{name}}",
       "try": {
         "title": "Experimentar",
         "hint": "Veja que fonte uma nova tarefa usaria agora. Nada é enviado e não se gasta quota.",
@@ -23312,11 +23299,14 @@
         "picked": "Usar esta",
         "standby": "De reserva",
         "skipped": "Ignorada",
-        "unavailable": "Nenhuma fonte deste modo pode ser usada agora. Uma nova tarefa usará o modelo que tinha selecionado."
+        "unavailable": "Nenhuma fonte desta rota pode ser usada agora. Uma nova tarefa usará o modelo que tinha selecionado.",
+        "failed": "Não foi possível fazer o teste. Tente novamente.",
+        "model": "Modelo a testar"
       },
-      "deleteRoute": "Eliminar este modo",
+      "deleteRoute": "Eliminar esta rota",
       "deleteRouteConfirmTitle": "Eliminar «{{name}}»?",
-      "deleteRouteConfirmDescription": "As exceções por horário de outros modos que mudam para ele também são eliminadas. As tarefas já iniciadas não são afetadas.",
+      "deleteRouteConfirmDescription": "As exceções por horário de outras rotas que mudam para ela também são removidas. As tarefas já iniciadas não são afetadas.",
+      "deleteMergedRouteConfirmDescription": "As tarefas já iniciadas não são afetadas.",
       "delete": "Eliminar",
       "cancel": "Cancelar",
       "saveFailed": "Não foi possível guardar. Tente novamente.",
@@ -23325,8 +23315,8 @@
         "hint": "Verificadas antes da regra de escolha, de cima para baixo.",
         "empty": "Ainda não há exceções. Cada nova tarefa segue a regra de escolha acima.",
         "imageRule": "Quando a mensagem tiver imagens, usar apenas fontes que as consigam ver",
-        "hoursRule": "{{from}}–{{to}}: usar «{{name}}»",
-        "hoursRuleDays": "{{days}} {{from}}–{{to}}: usar «{{name}}»",
+        "hoursRule": "{{from}}–{{to}}: usar «{{name}}» em vez disso",
+        "hoursRuleDays": "{{days}} {{from}}–{{to}}: usar «{{name}}» em vez disso",
         "remove": "Remover esta exceção",
         "add": "Adicionar uma exceção",
         "choose": "Escolher uma situação",
@@ -23341,23 +23331,78 @@
         "addHours": "Adicionar",
         "sameHour": "O início e o fim não podem ser a mesma hora.",
         "full": "Até {{count}} exceções.",
-        "needOtherRoute": "Crie outro modo para poder mudar para ele por horário."
+        "needOtherRoute": "Crie outra rota para poder mudar para ela por horário."
       }
     },
     "overview": {
       "mapTitle": "Como as novas tarefas escolhem um modelo",
-      "mapDescription": "Da esquerda para a direita: o modo que segue e a fonte onde termina. Clique num modo para o alterar.",
+      "mapDescription": "Da esquerda para a direita: a rota que uma nova tarefa segue e a fonte onde termina. Clique numa rota para a alterar.",
       "columnSources": "Fontes",
-      "columnEmpty": "Ainda nenhum",
-      "openRoute": "Abrir o modo «{{name}}»",
+      "columnEmpty": "Ainda nenhuma",
+      "openRoute": "Abrir a rota «{{name}}»",
       "recentTitle": "Escolhas recentes",
-      "recentEmpty": "Ainda nenhuma tarefa usou um modo.",
-      "keptOriginal": "Não havia nenhum modelo disponível, por isso a tarefa manteve o modelo que tinha escolhido.",
+      "recentEmpty": "Ainda nenhuma tarefa usou uma rota.",
+      "keptOriginal": "Nada nela estava disponível, por isso a tarefa manteve o modelo que tinha escolhido.",
       "keptOriginalShort": "O seu modelo foi mantido",
       "latest": "O caminho que a última tarefa seguiu"
     },
     "switchOffer": {
       "action": "Continuar com {{model}}"
+    },
+    "auto": {
+      "accounts_one": "{{count}} conta",
+      "accounts_many": "{{count}} contas",
+      "accounts_other": "{{count}} contas",
+      "computers_one": "{{count}} computador",
+      "computers_many": "{{count}} computadores",
+      "computers_other": "{{count}} computadores",
+      "pickFor": "Estratégia de {{name}}",
+      "hiddenTag": "Oculta",
+      "show": "Mostrar no seletor de modelos",
+      "assignedBy": "As novas tarefas são atribuídas por «{{strategy}}»",
+      "adjust": "Ajustar em Roteamento inteligente"
+    },
+    "sources": {
+      "models_one": "{{count}} modelo",
+      "models_many": "{{count}} modelos",
+      "models_other": "{{count}} modelos",
+      "autoTag": "Automática",
+      "chooseProvider": "Escolher um fornecedor",
+      "removeAria": "Remover {{name}} desta rota",
+      "note": "As rotas automáticas acompanham os seus fornecedores ligados. Não é possível adicionar nem remover membros, mas pode reordená-los, definir pesos, desativar um deles, mudar a estratégia ou ocultar a rota.",
+      "providers_one": "{{count}} fornecedor",
+      "providers_many": "{{count}} fornecedores",
+      "providers_other": "{{count}} fornecedores",
+      "addWhole": "Adicionar um fornecedor inteiro",
+      "addWholeHint": "Todos os modelos dele entram nesta rota. No seletor de modelos, a rota funciona como um fornecedor: escolha um modelo como habitualmente e a rota decide que membro o executa.",
+      "addModelHint": "Adicione um modelo de um fornecedor. Ao escolher esta rota, uma destas fontes é escolhida pela estratégia.",
+      "detailHint": "Esta rota combina fornecedores inteiros. No seletor de modelos, funciona como um fornecedor: escolha modelo e esforço como habitualmente e a rota decide que membro o executa."
+    },
+    "kinds": {
+      "byModel": "Por modelo",
+      "byProvider": "Por fornecedor"
+    },
+    "buddies": {
+      "title": "Modelos dos parceiros",
+      "description": "Os parceiros partilham um modelo predefinido; dê um modelo próprio só a quem precisa de algo diferente. Para que um parceiro mude de fonte quando algo falhar, escolha um roteamento inteligente.",
+      "saveFailed": "O modelo do parceiro não foi guardado. Tente novamente.",
+      "defaultLabel": "Modelo predefinido",
+      "defaultHint": "Todos os parceiros usam este, salvo configuração diferente, incluindo os novos e os trazidos de outro computador.",
+      "ownTitle": "Parceiros com modelo próprio",
+      "ownTitleWithRest_many": "Parceiros com modelo próprio · {{count}} outros usam o predefinido",
+      "ownTitleWithRest_one": "Parceiros com modelo próprio · {{count}} outro usa o predefinido",
+      "ownTitleWithRest_other": "Parceiros com modelo próprio · {{count}} outros usam o predefinido",
+      "addOwn": "Dar a um parceiro um modelo próprio",
+      "allFollow": "Todos os parceiros usam o modelo predefinido.",
+      "otherComputers": "Parceiros noutros computadores",
+      "deviceBuddies_many": "{{count}} parceiros",
+      "deviceBuddies_one": "{{count}} parceiro",
+      "deviceBuddies_other": "{{count}} parceiros",
+      "devicePageTitle": "Parceiros em {{device}}",
+      "devicePageHint": "Escolha entre os modelos e roteamentos inteligentes que esse computador pode usar. Guardado nele.",
+      "deviceDefaultReadOnly": "Atualize esse computador para alterar aqui o modelo predefinido dele.",
+      "deviceUnavailable": "Não é possível ler agora as definições de parceiros desse computador. Verifique se está online e abra de novo.",
+      "deviceLoading": "A ler as definições desse computador…"
     }
   },
   "projectSettings": {

@@ -13,7 +13,6 @@ import {
   ProviderRunLocationSubtitle,
 } from './ProviderRunLocationRow';
 import { useProviderBorrow } from '@/hooks/useProviderBorrow';
-import { AddSpeechModelsDialog } from './AddSpeechModelsDialog';
 import { providerSpeechSetup, providerRealtimeSetup } from '../../../shared/speechProviderSetup';
 import { useCodexRateLimits } from '@/hooks/useCodexRateLimits';
 import { SubscriptionFastSetting } from '@/features/provider-share/SubscriptionFastSetting';
@@ -39,7 +38,7 @@ import { providerUsageReaderSource } from '../new-chat/useProviderWeeklyQuota';
  *     fetchProviderModels,additions-only 合并进配置(与 OAuth 动态发现同语义)。
  */
 
-import { Activity, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { Activity, lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { useRemoteControlEnabled } from '@/hooks/useRemoteControlEnabled';
@@ -55,6 +54,7 @@ import {
   Plus,
   RefreshCw,
   Trash2,
+  Waypoints,
 } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
@@ -115,6 +115,7 @@ import { BILLING_CURRENCY, formatBillingAmount } from '@/features/billing/money'
 import { canAccessBillingSettings } from './billingVisibility';
 import { resolveXdAssetModuleState } from './providerAssetModule';
 import { useProviderSubscriptionCard } from './useProviderSubscriptionCard';
+import { OpenSmartRoutingContext } from './RouteStrategyNote';
 import { SubscriptionAccountsSection, SubscriptionPoolViewCache } from './SubscriptionAccountsSection';
 import { OpenAiAccountGroupSection, useOpenAiAccountGroup } from './OpenAiAccountGroupSection';
 import { MergeProviderButton } from './SubscriptionPlacement';
@@ -125,8 +126,7 @@ import { isSubscriptionProvider, type SubscriptionPoolView } from '../../../shar
 import type { SubscriptionProvider } from '../../../shared/subscriptionAccounts';
 import { ProviderAccountUsageModule } from './ProviderAccountUsageModule';
 import { QuotaHoverCard } from '../status/QuotaHoverCard';
-import { ProviderConnectionDialog } from './ProviderConnectionDialog';
-import { AddProviderWizard, type WizardEntry } from './AddProviderWizard';
+import type { WizardEntry } from './AddProviderWizard';
 import type { DetectedProviderDraft } from '../../../shared/providerDetection';
 import { OllamaProviderDetail } from './OllamaProviderDetail';
 import {
@@ -170,7 +170,6 @@ import { pluginEngineKeyFromProviderId, type PluginEngineView } from '../../../s
 import { SortableList } from '@/components/sidebar/SortableList';
 import { ProviderShareEntryButton } from '@/features/provider-share/ProviderShareEntryButton';
 import { useLocalProviderGroupsState } from '@/features/provider-group/useLocalProviderGroups';
-import { ProviderShareManagePage } from '@/features/provider-share/ProviderShareManagePage';
 import { ProviderSharePasteButton } from '@/features/provider-share/ProviderSharePasteDialog';
 import {
   ProviderShareReceivedCatalogRetry,
@@ -199,6 +198,32 @@ import { providerGroupDeviceCount } from '../../../shared/providerGroup';
 import { applyProviderOrder } from '../../../shared/providerOrder';
 import type { AgentKind, CustomProviderConfig, ProviderView } from '@cindy/model-providers';
 import { isCustomRoutedProvider, isOrganizationManagedProvider, storedCustomProviderId } from '@cindy/model-providers';
+
+// 「智能路由」那一页点开才加载(与它还是单独一个设置页时一样)：它带着关系图、路由编辑和选模型面板一大串代码，
+// 跟着模型供应商页一起加载的话，打开模型供应商页要先等这些代码，「加载中」会多停一两秒。
+const loadModelGroupsSection = () => import('./ModelGroupsSection');
+const ModelGroupsSection = lazy(() => loadModelGroupsSection().then(module => ({ default: module.ModelGroupsSection })));
+// 智能路由页下方的 Subagent、辅助模型、伙伴几块(ModelGroupsAutoRoutes 里按需加载的同一个模块)。
+const loadOtherModelSettings = () => import('./OtherModelSettings');
+
+// 点了按钮才出现的几块(添加供应商向导、连接弹窗、语音模型弹窗、分享管理页)用到时再加载：它们和各自依赖的代码加起来
+// 比页面本身还大，跟着页面一起加载时，第一次打开要先等它们(2026-11-25 实测占第一次打开耗时的大头)。
+// 页面画出来之后趁空闲把它们预先取回(preloadProviderDialogs)，所以点按钮时通常已经在了。
+const loadAddProviderWizard = () => import('./AddProviderWizard');
+const loadProviderConnectionDialog = () => import('./ProviderConnectionDialog');
+const loadAddSpeechModelsDialog = () => import('./AddSpeechModelsDialog');
+const loadProviderShareManagePage = () => import('@/features/provider-share/ProviderShareManagePage');
+const AddProviderWizard = lazy(() => loadAddProviderWizard().then(module => ({ default: module.AddProviderWizard })));
+const ProviderConnectionDialog = lazy(() => loadProviderConnectionDialog().then(module => ({ default: module.ProviderConnectionDialog })));
+const AddSpeechModelsDialog = lazy(() => loadAddSpeechModelsDialog().then(module => ({ default: module.AddSpeechModelsDialog })));
+const ProviderShareManagePage = lazy(() => loadProviderShareManagePage().then(module => ({ default: module.ProviderShareManagePage })));
+function preloadProviderDialogs(): void {
+  // 智能路由页也一起预取：第一次点开时右栏不再先闪一下「加载中」、下面几块不再一块块冒出来(2026-11-26 排查)。
+  for (const load of [loadModelGroupsSection, loadOtherModelSettings, loadAddProviderWizard, loadProviderConnectionDialog, loadAddSpeechModelsDialog, loadProviderShareManagePage]) {
+    // 取不回来不要紧：真要用时 lazy 会再取一次并走它自己的错误处理。
+    void load().catch(() => undefined);
+  }
+}
 
 // ---------------------------------------------------------------------------
 // 工具
@@ -2574,7 +2599,7 @@ function SuggestionRow({
   const cliName = localCliDisplayName(detection.cli);
   const title = providerDisplayName(provider, t);
   return (
-    <button data-settings-search-action="Open the labeled provider setup or account action"
+    <button data-provider-suggestion data-settings-search-action="Open the labeled provider setup or account action"
       type="button"
       onClick={onClick}
       title={t(
@@ -2615,8 +2640,30 @@ function SuggestionRow({
 // Section
 // ---------------------------------------------------------------------------
 
-export function ProvidersSection() {
+export function ProvidersSection({ routing = false, onRoutingChange }: {
+  /** 右栏显示「智能路由」（原模型组设置）而不是某个供应商；地址是 `?tab=model-groups`。 */
+  routing?: boolean;
+  onRoutingChange?: (routing: boolean) => void;
+} = {}) {
   const { t } = useTranslation();
+  // 从供应商页的「调整」过来：带着是哪个供应商，智能路由页落到它的账号或电脑那一行。
+  const [routingFocus, setRoutingFocus] = useState<{ providerId: string; at: number } | null>(null);
+  const openSmartRouting = useCallback((providerId?: string) => {
+    if (providerId) setRoutingFocus({ providerId, at: Date.now() });
+    onRoutingChange?.(true);
+  }, [onRoutingChange]);
+  const routingPaneRef = useRef<HTMLDivElement | null>(null);
+  // 进过一次智能路由就一直留着那一格(见右栏)；没进过时不加载它。
+  const [routingVisited, setRoutingVisited] = useState(routing);
+  if (routing && !routingVisited) setRoutingVisited(true);
+  useEffect(() => {
+    if (typeof requestIdleCallback === 'function') {
+      const id = requestIdleCallback(preloadProviderDialogs, { timeout: 4_000 });
+      return () => cancelIdleCallback(id);
+    }
+    const timer = setTimeout(preloadProviderDialogs, 1_500);
+    return () => clearTimeout(timer);
+  }, []);
   const reducedMotion = useReducedMotion();
   const signInToCindy = useSignInToCindy();
   const { dataOwnerId } = useAuth();
@@ -3557,6 +3604,7 @@ export function ProvidersSection() {
   };
   useSettingsSubpageBack(shareManageProviderId ? backFromSharing : null);
   const shareManagePage = shareManageProviderId ? (
+    <Suspense fallback={<div role="status" className="px-4 py-6 text-13 leading-[1.5] text-[var(--text-secondary)]">{t('ccAgent.common.loading')}</div>}>
     <ProviderShareManagePage
       key={`${shareManageRemote?.deviceId ?? 'local'}:${shareManageProviderId}`}
       providerId={shareManageProviderId}
@@ -3583,6 +3631,7 @@ export function ProvidersSection() {
       })}
       onBack={backFromSharing}
     />
+    </Suspense>
   ) : null;
 
   // ── 左栏分组:已隐藏 / 已停用各自收进一个默认折叠的分组 ─────────────────────
@@ -3639,7 +3688,7 @@ export function ProvidersSection() {
       renderItem={(provider, index) => (
         <ListRow
           provider={provider}
-          selected={!otherDeviceSelected && !cindySigninActive && (effectiveSelected?.id === provider.id || localDuplicates.get(effectiveSelected?.id ?? '') === provider.id)}
+          selected={!routing && !otherDeviceSelected && !cindySigninActive && (effectiveSelected?.id === provider.id || localDuplicates.get(effectiveSelected?.id ?? '') === provider.id)}
           reconnectRequired={
             (provider.id === 'openai' && openaiReconnectRequired) ||
             provider.openAiAccount?.reconnectRequired === true
@@ -3666,7 +3715,7 @@ export function ProvidersSection() {
   const renderRemoteProviderRows = (entries: readonly OwnRemoteProvider[]) => (
     <OwnRemoteProviderRows
       entries={entries}
-      selectedKey={selectedRemote?.key ?? null}
+      selectedKey={routing ? null : selectedRemote?.key ?? null}
       onSelect={key => {
         setFocusedModel(null);
         selectRemote(key);
@@ -3677,7 +3726,7 @@ export function ProvidersSection() {
   const renderEngineRows = (engines: readonly PluginEngineView[]) => (
     <PluginEngineProviderRows
       engines={engines}
-      selectedKey={selectedEngine?.key ?? null}
+      selectedKey={routing ? null : selectedEngine?.key ?? null}
       onSelect={key => {
         setFocusedModel(null);
         selectEngine(key);
@@ -3751,10 +3800,47 @@ export function ProvidersSection() {
             className="flex w-[224px] shrink-0 flex-col border-r"
             style={{ borderColor: 'var(--settings-theme-card-border)' }}
           >
-            <div data-testid="provider-list-scroll" className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto p-2">
+            <div
+              data-testid="provider-list-scroll"
+              className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto p-2"
+              // 点左栏里的一个供应商时，右栏从智能路由回到供应商。展开/收起分组、行上的菜单、检测到的本机 CLI
+              // (它打开添加向导)不算选中供应商，留在智能路由。
+              onClickCapture={(event) => {
+                if (routing && !(event.target as HTMLElement).closest(
+                  '[data-provider-routing-entry],[aria-expanded],[aria-haspopup],[data-provider-suggestion]',
+                )) onRoutingChange?.(false);
+              }}
+            >
+              <button
+                data-provider-routing-entry
+                data-settings-search-action="Open smart routing inside the model providers page"
+                type="button"
+                // 只在选中时标 current：没选中时它不是「供应商列表里的一行」，不带这个属性。
+                aria-current={routing ? 'true' : undefined}
+                onClick={() => onRoutingChange?.(true)}
+                className={cn(
+                  'flex w-full shrink-0 items-center gap-2.5 rounded-lg py-2 pl-3 pr-2.5 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--focus-ring-soft)]',
+                  routing ? 'bg-[var(--settings-menu-bg-selected)]' : 'hover:bg-[var(--settings-menu-bg-hover)]',
+                )}
+              >
+                <span
+                  className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg"
+                  style={{
+                    backgroundColor: 'var(--settings-integration-avatar-bg)',
+                    border: '1px solid var(--settings-integration-avatar-border)',
+                    color: 'var(--settings-integration-avatar-icon)',
+                  }}
+                >
+                  <Waypoints size={14} aria-hidden />
+                </span>
+                <span className="min-w-0 flex-1 truncate text-13 font-medium" style={{ color: 'var(--settings-section-title)' }}>
+                  {t('modelGroups.title')}
+                </span>
+              </button>
+              <div aria-hidden className="mx-2.5 my-1.5 h-px shrink-0 bg-[var(--settings-theme-card-border)]" />
               {showCindySignin && (
                 <CindySigninRow
-                  selected={cindySigninActive && !otherDeviceSelected}
+                  selected={!routing && cindySigninActive && !otherDeviceSelected}
                   onSelect={() => {
                     selectProvider(CINDY_SIGNIN_ID);
                   }}
@@ -3778,7 +3864,7 @@ export function ProvidersSection() {
               {/* 自己其他电脑开放的插件引擎：接在远程供应商后面，图标带远程角标、名字后带「插件」标识。 */}
               <OwnRemotePluginEngineRows
                 entries={remotePluginEngines}
-                selectedKey={selectedRemoteEngine?.key ?? null}
+                selectedKey={routing ? null : selectedRemoteEngine?.key ?? null}
                 onSelect={key => {
                   setFocusedModel(null);
                   selectEngine(key);
@@ -3801,7 +3887,7 @@ export function ProvidersSection() {
               )}
               {/* 分享给我的供应商(受邀者)：单独成组，没有分享时不显示。 */}
               <ProviderShareReceivedRailGroup
-                selectedShareId={selectedShare?.shareId ?? null}
+                selectedShareId={routing ? null : selectedShare?.shareId ?? null}
                 hiddenShareIds={groupedShareIds}
                 onSelect={(shareId) => {
                   setFocusedModel(null);
@@ -3856,6 +3942,20 @@ export function ProvidersSection() {
           </div>
 
           {/* 右栏身份固定；说明、资产和模型共用 DetailHeader 的滚动区。 */}
+          <OpenSmartRoutingContext.Provider value={onRoutingChange ? openSmartRouting : null}>
+          {/* 智能路由与供应商详情各自一格，进过一次就留着(隐藏时不显示、效果暂停)：来回切换不重建，
+              路由页里打开的详情、草稿、试一下的结果、展开的「最近的选择」都还在(2026-11-26 用户反馈)。 */}
+          {routingVisited && (
+            <Activity mode={routing ? 'visible' : 'hidden'}>
+              <div ref={routingPaneRef} id="settings-panel-model-groups" data-testid="provider-routing-pane" className="min-h-0 min-w-0 flex-1 overflow-y-auto px-5 py-5">
+                <Suspense fallback={<div role="status" className="py-1 text-13 leading-[1.5] text-[var(--text-secondary)]">{t('ccAgent.common.loading')}</div>}>
+                  {/* 滚动的是这一格：进出某条路由的详情时，回到列表要落在原来的位置。 */}
+                  <ModelGroupsSection scrollRef={routingPaneRef} focusProvider={routingFocus} />
+                </Suspense>
+              </div>
+            </Activity>
+          )}
+          <Activity mode={routing ? 'hidden' : 'visible'}>
           <div
             key={
               selectedShare || retryCatalogShareId
@@ -4234,6 +4334,8 @@ export function ProvidersSection() {
               </div>
             )}
           </div>
+          </Activity>
+          </OpenSmartRoutingContext.Provider>
         </div>
       )}
 
@@ -4247,12 +4349,15 @@ export function ProvidersSection() {
         onRemove={(modelIds) => void removeWithdrawnModels(modelIds)}
       />
       {speechProvider && speechProvider.owner === dataOwnerId && speechProvider.generation === ownerGeneration && (
+        <Suspense fallback={null}>
         <AddSpeechModelsDialog key={`${dataOwnerId}:${ownerGeneration}:${speechProvider.provider.id}`}
           mode={speechProvider.mode}
           provider={speechProvider.provider} onClose={() => setSpeechProvider(null)}
           onSaved={() => { setSpeechProvider(null); void refetch(); }} />
+        </Suspense>
       )}
       {wizard && (
+        <Suspense fallback={null}>
         <AddProviderWizard
           providers={providers}
           entry={wizard.entry}
@@ -4277,9 +4382,11 @@ export function ProvidersSection() {
             await refetch();
           }}
         />
+        </Suspense>
       )}
 
       {dialog && (
+        <Suspense fallback={null}>
         <ProviderConnectionDialog
           draft={dialog.mode === 'create' ? dialog.draft : undefined}
           onDetected={(detected) => { setDialog(null); setWizard({ detected }); }}
@@ -4298,6 +4405,7 @@ export function ProvidersSection() {
             refetch();
           }}
         />
+        </Suspense>
       )}
 
       {Array.isArray(providerImportId) ? (

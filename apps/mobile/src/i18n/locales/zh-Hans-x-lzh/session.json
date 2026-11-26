@@ -695,7 +695,7 @@
     "SNAPSHOT_DISPATCH_INTENT_TIMEOUT": "未发送消息，Cindy 未能及时确认安全记录",
     "HARNESS_SWITCH_NOT_READY": "Harness 尚未切换毕。请察谬误详情，待 Harness 就绪后再试。",
     "REMOTE_AGENT_GROUP_USAGE_LIMIT": "此模型可用之名籍已达耗用上限。可改用他模型，或待限额重置后再续。",
-    "REMOTE_AGENT_GROUP_UNAVAILABLE": "供方组中诸机今皆不能行此差事：或皆脱机、已暂停分配、方冷却，或无此模型。可于机上此供方之「远程与分享」页察组内诸机。",
+    "REMOTE_AGENT_GROUP_UNAVAILABLE": "机组中诸机今皆不能行此差事：或皆脱机、已暂停分配、方冷却，或无此模型。可于机上此供方之「远程与分享」页察组内诸机。",
     "REMOTE_DAEMON_CLOSED": "远程连接中断，或方更新。此轮已毕，请重遣。",
     "REMOTE_LOCAL_ATTACHMENT_UNSUPPORTED": "远程差事不能访问本地之卷或图附件。请径贴其内容。",
     "AUTO_REVIEW_UNAVAILABLE_QUOTA": "自动审模型之额度已尽。请于运行 Agent 之电脑查用量或计费，或于设置自定辅助模型。需审之操作，仍待君确认。",

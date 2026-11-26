@@ -229,6 +229,7 @@ import { currentRelayFrameAuth } from './selfHostedRelayFrameAuth.js';
 import { installAgentNetMediaRouting } from './agentNetMedia.js';
 import { bindAgentNetSharing, stopAgentNetSharing, agentNetSharingRoute, agentNetProviderShareRoutes } from './agentNetSharing.js';
 import { installAgentNetSharingPolicy } from './agentNetSharingPolicy.js';
+import { linkedProviderShareAdmission, setLinkedShareControlTransport } from './agentNetLinkedShares.js';
 import { isAgentNetActive, agentNetAllowsLegacy, agentNetRequiresEncryption, createAgentNetOrLegacySocket, noteAgentNetIdentityRefused, rejoinOfficialAgentNet, agentNetSelectionKey, agentNetShouldUseLegacyPeer, agentNetShouldProbeLegacyPeer, agentNetPeerSnapshot, agentNetPeerRoutes,
   agentNetTransportAttestation, verifyAgentNetTransportAttestation, agentNetPrefersPrimary, useAgentNetSessions, agentNetSession,
   agentNetPeerRoute, agentNetRelayStalled, agentNetPeerConnectedAt, connectAgentNetSessionPeer, agentNetPeerState, agentNetNotifyCoverage, agentNetListedPhones, agentNetNetworkChanged, agentNetRelayConnected, onAgentNetRelayChange, onAgentNetPathChange, agentNetRelayRoute, setAgentNetDuplicateIdentityCooldown } from './agentNetRuntime.js';
@@ -1170,6 +1171,9 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
   // 文件直传：两台都开着 Agent-Net 的同账号电脑之间，文件字节走会话，不再起 WebRTC（filePeer.ts streamTransport）。
   // 按这次调用实际走的路判断：Device Link 上还留着这个对端的链路时调用照旧走 Device Link，字节也照旧走 WebRTC。
   setFilePeerStreamTransport((peer) => !isScopedPeer(peer) && outboundOnSession(routedClient, sessionLinks, peer));
+  // 换到 Agent-Net 的 Device Link 分享：附件跟着这次控制链路实际走的路（受邀者看本机发起的链路，分享者看对方建来的链路）。
+  setLinkedShareControlTransport((peer) => parseProviderSharePeer(peer)?.role === 'host'
+    ? outboundOnSession(routedClient, sessionLinks, peer) : sessionLinks.ownsInbound(peer));
   // 另一台电脑在用本机设备身份(同一系统镜像装机、MachineGuid 相同)：确认后提示用户给这台电脑
   // 换身份，并放慢被顶替后的重连。没被反复顶替时什么都不做。
   identityConflictMonitor = createDeviceIdentityConflictMonitor({
@@ -1754,7 +1758,12 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
       linkTornDown = false;
       stopSharingPolicy?.();
       stopSharingPolicy = installAgentNetSharingPolicy(async request => {
-        if (!arbiter?.isOwner() || linkTornDown || !agentNetSharingRoute(request.kind, request.resourceId)) return false;
+        if (!arbiter?.isOwner() || linkTornDown) return false;
+        // A Device Link share moved to Agent-Net: only the key its guest registered over the share's
+        // authenticated Device Link connection, and only while this computer's V1 member book still admits it.
+        const linked = linkedProviderShareAdmission(request);
+        if (linked === false) return false;
+        if (linked === null && !agentNetSharingRoute(request.kind, request.resourceId)) return false;
         if (request.kind === 'provider-share') {
           await refreshProviderShareHost('agent-net-transport');
           return !!ownedProviderShareGuestAccess(providerShareGuestPeer(request.resourceId, request.scope.memberId, request.guestDeviceId));
@@ -2073,7 +2082,9 @@ export function getDeviceLinkPeerLinks(includeTraffic = false): DeviceLinkPeerLi
   const agentNetRoute = primaryUsesEncryptedTransport ? agentNetRelayRoute() : null;
   const relayTransport = !relayProtocol ? undefined : primaryUsesEncryptedTransport ? agentNetRoute?.via : 'websocket';
   const allPeerLinks = client.getPeerLinkSnapshots();
-  const providerShareRoutes = primaryUsesEncryptedTransport ? agentNetProviderShareRoutes(allPeerLinks) : [];
+  const providerShareRoutes = primaryUsesEncryptedTransport
+    ? agentNetProviderShareRoutes(allPeerLinks, (peer) => client!.connectionFor(peer) === client)
+    : [];
   return {
     ...traffic,
     // 拓扑只画同账号设备;跨账号 peer(共享任务 / 供应商分享)不在这页。
