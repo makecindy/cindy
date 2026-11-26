@@ -3037,13 +3037,14 @@ describe('Chat Server result delivery and refresh', () => {
     // never read until that turn ended, so the server could settle it as an unclaimed timeout. Real
     // entry: the account stream's work.available into withChatServer's claim loop. Existing cases only
     // claim while idle. Minimal input: group A's request stays open, then a notice names group B.
-    // Another member's request in B, or one the server keeps for this member's other computer (every
-    // computer of the account hears the notice), is read once and then left alone.
+    // Another member's request in B is read once and left alone. One the server keeps for this
+    // member's other computer (every computer of the account hears the notice) is asked again on the
+    // 2 s doubling ladder, not dropped: an empty claim may also mean "not yet" (#13328 review).
     it.each([
-      ['takes own request', selfId, true, 1],
-      ['leaves another member\'s request', peerId, false, 0],
-      ['leaves own request bound to another computer', selfId, false, 1],
-    ] as const)('%s in another group while busy there', async (_label, requester, granted, claims) => {
+      ['takes own request', selfId, true, 1, 1],
+      ['leaves another member\'s request', peerId, false, 0, 1],
+      ['backs off for own request kept for another computer', selfId, false, 4, 4],
+    ] as const)('%s in another group while busy there', async (_label, requester, granted, claims, reads) => {
       await vi.advanceTimersByTimeAsync(2000);
       const socket = fixture.sockets.at(-1)!;
       Object.defineProperty(socket, 'readyState', { value: 1 });
@@ -3066,7 +3067,57 @@ describe('Chat Server result delivery and refresh', () => {
       expect(dispatched().map(input => input.message.split('\n')[0])).toEqual(granted
         ? ['Long work in group A', 'Quick question in group B'] : ['Long work in group A']);
       expect(fixture.handle.mock.calls.filter(([route, , body]) => route === '/executions/claim' && body?.executionId === other.id)).toHaveLength(claims);
-      if (!granted) expect(fixture.handle.mock.calls.filter(([route]) => route === `/conversations/${otherRoom}/executions`)).toHaveLength(1);
+      if (!granted) expect(fixture.handle.mock.calls.filter(([route]) => route === `/conversations/${otherRoom}/executions`)).toHaveLength(reads);
+    });
+
+    // #13328 review: B group's request found by the busy scan first got an empty claim, then became
+    // claimable (the member chose this computer) with no new notice while A kept running. Dropping
+    // the notice on an empty claim left B unread until A ended; the backoff keeps it and asks again.
+    // Also: with B's own Thread running, B is swept every 10 s, and the same empty main-group
+    // execution follows the ladder instead of being claimed on every sweep.
+    it.each(['recovers after one empty claim', 'keeps backing off'] as const)('busy in another group, B %s', async variant => {
+      await vi.advanceTimersByTimeAsync(2000);
+      const socket = fixture.sockets.at(-1)!;
+      Object.defineProperty(socket, 'readyState', { value: 1 });
+      socket.emit('message', JSON.stringify({ type: 'ready' }));
+      const otherRoom = '10000000-0000-4000-8000-000000000002';
+      const recovers = variant === 'recovers after one empty claim';
+      const exec = (n: number, threadRootId: string | null = null) => ({ ...request(n), conversation_id: otherRoom,
+        source_message_id: `50000000-0000-4000-8000-00000000077${n}`, threadRootId });
+      const queuedB = recovers ? [exec(7)] : [exec(7, message(1, peerId, '').id)];
+      let empty = 0;
+      const base = fixture.handle.getMockImplementation()!;
+      fixture.handle.mockImplementation((route, method, body) => {
+        if (route === `/conversations/${otherRoom}/executions`) return { body: queuedB.map(e => ({ ...e, status: 'queued' })) };
+        if (route === '/executions/claim' && body?.executionId) {
+          const e = queuedB.find(row => row.id === body.executionId);
+          if (!e) return { body: { execution: null } };
+          // B's next request: empty once, then claimable (recovers), or always empty.
+          if (e.id === exec(8).id && (!recovers || empty++ === 0)) return { body: { execution: null } };
+          queuedB.splice(queuedB.indexOf(e), 1); return { body: { execution: e } };
+        }
+        const m = /\/conversations\/10000000-0000-4000-8000-000000000002\/messages\/(50000000-0000-4000-8000-00000000077(\d))$/.exec(route);
+        if (m) {
+          const row = [exec(7, recovers ? null : message(1, peerId, '').id), exec(8)].find(e => e.source_message_id === m[1])!;
+          return { body: { ...message(Number(m[2]), selfId, `B request ${m[2]}`, { threadRootId: row.threadRootId }), id: m[1] } };
+        }
+        if (route === `/conversations/${otherRoom}/snapshot`) return { body: { room: { ...room(otherRoom), project: null }, members, messages: [], cursor: '1' } };
+        return base(route, method, body);
+      });
+      await ask(5, 'Long work in group A');
+      socket.emit('message', JSON.stringify({ type: 'changes', scope: `actor:${selfId}`, cursor: String(Date.now()),
+        changes: [{ type: 'work.available', data: { work: [{ botId: cindyId, conversationId: otherRoom }] } }] }));
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(dispatched().map(input => input.message.split('\n')[0])).toEqual(['Long work in group A', 'B request 7']);
+      // B's first turn ends while A runs (recovers), or keeps running in B's Thread (keeps backing off).
+      if (recovers) await service.settleLaneTurn({ ...terminal, sessionId: dispatched()[1]!.targetSessionId, activeInputClientId: dispatched()[1]!.clientId, resultText: 'B done' });
+      queuedB.push(exec(8));
+      const claims8 = () => fixture.handle.mock.calls.filter(([route, , body]) => route === '/executions/claim' && body?.executionId === exec(8).id).length;
+      await vi.advanceTimersByTimeAsync(recovers ? 30_000 : 300_000);
+      if (recovers) expect(dispatched().map(input => input.message.split('\n')[0]).at(-1)).toBe('B request 8');
+      // B's request is found only by the 10 s sweep of B, so the 2, 4, 8 … 60 s ladder rounds up to
+      // sweeps: 9 claims in 5 min (claiming on every sweep was 30).
+      expect(claims8()).toBe(recovers ? 2 : 9);
     });
 
     // 2026-11-14 owner report: «已连接到某台电脑» said nothing about which computer took the request.
