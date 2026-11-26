@@ -19133,6 +19133,7 @@
     }
   },
   "commandPalette": {
+    "buddyNewHint": "在伙伴设置中选择「{{restart}}」，可重建工作上下文并保留历史消息。想单独讨论一件事，可以在消息操作中选择「{{startTopic}}」。",
     "viewSkillDetails": "查看技能详情",
     "projectSkillNotLoaded": "当前 Pi 任务尚未加载此项目 Skill，新任务会自动尝试加载",
     "pluginSkillSetup": {

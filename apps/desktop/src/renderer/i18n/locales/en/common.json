@@ -19209,6 +19209,7 @@
     }
   },
   "commandPalette": {
+    "buddyNewHint": "In buddy settings, use “{{restart}}” to rebuild the working context and keep your message history. For a separate discussion, choose “{{startTopic}}” from a message’s actions.",
     "viewSkillDetails": "View skill details",
     "projectSkillNotLoaded": "This Pi task hasn't loaded this project Skill. New tasks will automatically try to load it.",
     "pluginSkillSetup": {

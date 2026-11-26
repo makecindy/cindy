@@ -19383,6 +19383,7 @@
     }
   },
   "commandPalette": {
+    "buddyNewHint": "En los ajustes del amigo, elige «{{restart}}» para reconstruir el contexto de trabajo y conservar el historial de mensajes. Para hablar de algo por separado, elige «{{startTopic}}» en las acciones de un mensaje.",
     "viewSkillDetails": "Ver detalles de la habilidad",
     "projectSkillNotLoaded": "Esta tarea de Pi no ha cargado esta habilidad del proyecto. Las tareas nuevas intentarán cargarla automáticamente.",
     "pluginSkillSetup": {

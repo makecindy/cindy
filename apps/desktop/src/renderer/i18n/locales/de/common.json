@@ -19209,6 +19209,7 @@
     }
   },
   "commandPalette": {
+    "buddyNewHint": "Wähle in den Einstellungen des Freunds „{{restart}}“, um den Arbeitskontext neu aufzubauen und den Nachrichtenverlauf zu behalten. Für eine separate Diskussion wähle „{{startTopic}}“ in den Aktionen einer Nachricht.",
     "viewSkillDetails": "Skill-Details anzeigen",
     "projectSkillNotLoaded": "Diese Pi-Aufgabe hat diesen Projekt-Skill noch nicht geladen. Neue Aufgaben versuchen automatisch, ihn zu laden.",
     "pluginSkillSetup": {

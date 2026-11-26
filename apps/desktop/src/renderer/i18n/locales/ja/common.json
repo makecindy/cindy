@@ -19133,6 +19133,7 @@
     }
   },
   "commandPalette": {
+    "buddyNewHint": "仲間の設定で「{{restart}}」を選ぶと、作業コンテキストを再構築し、メッセージ履歴を保持できます。別の話題を話し合うには、メッセージの操作から「{{startTopic}}」を選んでください。",
     "viewSkillDetails": "スキルの詳細を見る",
     "projectSkillNotLoaded": "現在の Pi タスクでは、このプロジェクト Skill はまだ読み込まれていません。新しいタスクでは自動的に読み込みを試みます。",
     "pluginSkillSetup": {
