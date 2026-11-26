@@ -16576,6 +16576,8 @@
       "orcaFromWorker": "Mensagem do Worker",
       "orcaFromWorkerBatch": "Relatório do sistema: {{count}} resultados de Worker",
       "orcaFromWorkerNamed": "Mensagem do Worker \"{{role}}\"",
+      "orcaFromHost": "Mensagem do host (Orca host)",
+      "orcaHostNoticeDispatchClaim": "Esta resposta cita um envio que o Cindy não registou; o Lead foi solicitado a corrigir.",
       "hookChannelFrom": "De {{channel}}",
       "deviceSentMobileNamed": "Enviado do telemóvel \"{{name}}\"",
       "deviceSentMobile": "Enviado do telemóvel",

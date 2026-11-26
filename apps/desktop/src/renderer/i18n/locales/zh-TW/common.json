@@ -16402,6 +16402,8 @@
       "orcaFromWorker": "來自 Worker 的訊息",
       "orcaFromWorkerBatch": "系統回傳的 {{count}} 條 Worker 結果",
       "orcaFromWorkerNamed": "來自 Worker「{{role}}」的訊息",
+      "orcaFromHost": "來自宿主（Orca host）的訊息",
+      "orcaHostNoticeDispatchClaim": "這則回覆引用了一個 Cindy 沒有記錄的派發憑證，已提醒 Lead 改正。",
       "hookChannelFrom": "來自 {{channel}}",
       "deviceSentMobileNamed": "從手機「{{name}}」傳送",
       "deviceSentMobile": "從手機傳送",

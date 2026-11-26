@@ -30,7 +30,7 @@ describe('renderOrcaLeadSystemPrompt', () => {
   const interruptDispatchSignals =
     'Treat interrupt_worker as dispatched only when its payload has ok=true and queued_message_id; stop_outcome reports the graceful-stop result and never means the replacement was dropped.';
   const batchResultRule =
-    'After a multi-role tool-call batch returns, always relay create_workers.user_report verbatim when present, summarize every create_workers per-item result or error, and report every other failed/no-dispatch tool result.';
+    'After a multi-role tool-call batch returns, always relay create_workers.user_report verbatim when present, summarize every create_workers per-item result or error, and report every other failed/no-dispatch tool result';
 
   it('routes explicit Worker assignments through Orca before considering native subagents', () => {
     const prompt = renderOrcaLeadSystemPrompt(null);
@@ -90,7 +90,7 @@ describe('renderOrcaLeadSystemPrompt', () => {
       'You will be automatically woken up when the worker responds — you do NOT need to check on it.',
     );
     expect(prompt).toContain(
-      'For a single-role request, after create_worker, send_to_worker, or interrupt_worker returns with the concrete dispatch signals above, your turn is OVER. Produce ZERO output',
+      'For a single-role request, after create_worker, send_to_worker, or interrupt_worker returns with the concrete dispatch signals above, end the turn. Produce ZERO output',
     );
     expect(prompt).toContain(
       'The one exception: a send_to_worker reply with steer_fallback_reason still needs the queue promotion above before you end.',
@@ -123,9 +123,6 @@ describe('renderOrcaLeadSystemPrompt', () => {
       'send_to_worker for existing targets, create_worker for exactly one authorized new target, and one create_workers call for 2+ authorized new targets.',
     );
     expect(prompt).toContain(
-      'If any task has the concrete dispatch signals above, end the turn immediately after that single combined result report.',
-    );
-    expect(prompt).toContain(
       'If every task dispatched and no create_workers report is required, produce ZERO output.',
     );
     expect(prompt).not.toContain(
@@ -145,6 +142,16 @@ describe('renderOrcaLeadSystemPrompt', () => {
     expect(prompt).toContain(sendDispatchSignals);
     expect(prompt).toContain(multiRoleBatchBoundary);
     expect(prompt).not.toContain('when the tool result says a task was accepted or queued');
+  });
+
+  it('names no turn-declaration tool, so dispatch is only ever what the host accepted', () => {
+    const prompt = renderOrcaLeadSystemPrompt(null);
+
+    // 声明工具已删：派发事实只来自宿主回执，模型不必也不能另交一本账。
+    expect(prompt).not.toContain('report_turn');
+    expect(prompt).toContain('Never tell the user a task was dispatched unless this turn returned one of those concrete dispatch signals.');
+    // 不再按散文主张判账：老口径「宿主检查 Lead 的派发主张」已删。
+    expect(prompt).not.toContain('The host checks every dispatch claim');
   });
 
   it('distinguishes reuse from explicit worker creation and forbids silent fallback', () => {

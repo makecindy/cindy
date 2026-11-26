@@ -6,6 +6,7 @@ import { collaborationSettings } from './CollaborationSection.settings-search';
 import { useState, useEffect, useId } from 'react';
 import { useTranslation } from 'react-i18next';
 import { toast } from '@/lib/toast';
+import { Switch } from '@/components/ui/switch';
 import { SettingsCard, SettingsRow, SettingsSection } from '@/components/ui/settings-rows';
 import { DefaultOverrideControls } from './DefaultOverrideControls';
 import { SettingsTextInput } from './SettingsTextInput';
@@ -183,6 +184,7 @@ export function CollaborationSectionView({
             />
           }
         />
+
       </SettingsCard>
     </SettingsSection>
   );

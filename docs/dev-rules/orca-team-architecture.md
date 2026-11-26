@@ -454,6 +454,44 @@ Git worktree，不改变供应商、模型与 Worker 创建权限偏好。
    `renderOrcaLeadSystemPrompt`，以及 `packages/lizi-mcps/src/xdt-helper/create_workers.ts`
    的批量结果契约。
 
+3a. **回复引用宿主凭据必须命中账本，不读 Lead 的散文（状态：不变量）**<br>
+   宿主自己记派发账：`send_to_worker` 被接受那一刻写下凭据（Worker、派发号、投递方式、
+   轮次、会话实例、可选的排队消息号），只来自真实动作，不来自模型输出。收口时只做两件事，
+   都不需要理解语义，也不调用模型：`wake_kind=<值>` 断言了一次派发结果，而账本里一条凭据都
+   没有，即无中生有；`queued_message_id`／`message_id`／`dispatch_id` 标签后的编号必须命中
+   账本里某个派发号或排队号，查不到就是引用了不存在的凭据。命中一处即判不一致：向该 Lead
+   注入一条纠正消息（点名是哪一处、是什么形状），同一轮至多一次；模型可以当场补派或改口，
+   第二次收口仍不一致只记日志，不再唤醒。账本非空时不判 `wake_kind`——那时分不清它复述的
+   是哪一次派发，误判代价高。零派发且不含凭据形状的普通问答轮不判（没有可比对的对象）。
+   Lead 收口不再需要额外工具调用，也不再存在声明入口、升级卡或能力开关；检查对正常派单
+   完全无感，只在回复引用了宿主没有的凭据时才说话。计划、分析、读文件都不构成派发，只有
+   工具返回的具体派发信号才算。实现指针：
+   `apps/desktop/src/main/maker-ipc/orcaDispatchClaims.ts`（凭据账 + 令牌核对 +
+   每轮一次提醒）、`orcaTeamService.ts` 的 `noteLeadDispatchFact`／`handleLeadTurnSettled`、
+   `sessionEventTerminal.ts` 的 lead 收口钩子，以及宿主提示行
+   `chat.userMessage.orcaHostNoticeDispatchClaim`。与不变量 3 的分工：3 管「什么时候可以
+   静默结束 turn」，本条只核对「收口时回复里出现的凭据是否有记录」。
+
+3b. **收口闸门分三层，各自用可机判的输入（状态：不变量）**<br>
+   三层共享一个原则：**只用宿主状态或宿主铸造的标识判，不读语义**。任一命中都在收口处拦一次
+   （同一回合至多一次），注入纠正后不收口，让模型在同一 generation 内当场补做或改口。
+
+   - **L0 凭据**：不变量 3a，零模型、零延迟。
+   - **L1 判定**：只对本回合**零工具调用 + 零派发 + 有 Worker** 的 Lead 回合生效，避免正常
+     干活轮付代价。把本回合末段文本与宿主事实（工具调用数、派发数、Worker 名）交给辅助模型，
+     只要求回答「是否声称已经派活」。判定失败、超时（10 秒）、非布尔一律放行——闸门只减少
+     误导，不能卡住会话。每回合最多判一次、最多拦一次。
+   - **L2 欠账**：Worker 回报 `waiting` 且带问题时记账；同一问题跨两个 Lead 回合未被处理即
+     唤醒一次，文案是「某 Worker 在等你的决定」并引用问题原文，不指控撒谎。`blocked` 不计入
+     欠账（它等的可能不是 Lead）。Worker 再次回报或收到派发即清账。
+
+   **L2 的输入依赖结构化回报**：`waiting` 与问题原文来自 `send_to_lead` 的 `report`
+   入参（六态回报），该字段由结构化回报改动引入，尚未合并的上游分支里取不到；缺失时 L2
+   静默不生效，不影响 L0／L1。L1 依赖辅助模型链，未配置即降级为不判定。
+   实现指针：`apps/desktop/src/main/maker-ipc/orcaTurnGate.ts`（回合记录、判定、欠账）、
+   `orcaRemoteWorkerBridge.ts`（记录 waiting 欠账、清账）、`orcaTeamService.ts` 的
+   `handleLeadTurnSettled`／`clearRuntimeState`、`sessionEventTerminal.ts` 的每次事件计数。
+
 #### 消息派发与 auto-bridge
 
 1. **忙碌目标不丢消息（状态：不变量）**<br>

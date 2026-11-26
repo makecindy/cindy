@@ -16576,6 +16576,8 @@
       "orcaFromWorker": "Message du Worker",
       "orcaFromWorkerBatch": "Rapport système : {{count}} résultats de Worker",
       "orcaFromWorkerNamed": "Message du Worker « {{role}} »",
+      "orcaFromHost": "Message de l’hôte (Orca host)",
+      "orcaHostNoticeDispatchClaim": "Cette réponse cite un envoi dont Cindy n'a pas la trace ; le Lead a été prié de la corriger.",
       "hookChannelFrom": "Depuis {{channel}}",
       "deviceSentMobileNamed": "Envoyé depuis le téléphone « {{name}} »",
       "deviceSentMobile": "Envoyé depuis un téléphone",

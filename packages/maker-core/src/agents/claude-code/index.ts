@@ -27,6 +27,7 @@ import { NATIVE_SUBSCRIPTION_ACCOUNT, type NativeSubscriptionAccount } from '../
 import { claudeProfileSessionStore } from './profile-session-store.js';
 import { claudeToolLifecycleHooks } from './tool-lifecycle-hooks.js';
 import { claudeNativeRecoveryHooks } from './native-recovery-hooks.js';
+import { buildClaudeOrcaTurnGateHooks } from './orca-turn-gate-hooks.js';
 import { promises as fs } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import os from 'node:os';
@@ -2344,6 +2345,10 @@ export class ClaudeCodeAgent extends BaseAgent {
           buildClaudeAskUserQuestionCallerProvenanceHooks(),
           nativeCliAuth ? workspaceSettingsConfigChangeHooks : undefined,
           this.deps.claudeHooks,
+          // 收口闸门放在引擎自己的 Stop 评估里：和用户自己的 Stop hook 同场，
+          // 一次续跑解决。会话 id 必须用 Cindy 的 this.sessionId，
+          // SDK 的 input.session_id 是另一套 id，拿它查 worker 永远空。
+          buildClaudeOrcaTurnGateHooks(sid, this.deps.evaluateOrcaTurnGate),
           // Last: earlier guards may deny; this only routes what remains.
           { PreToolUse: [{ hooks: [nativeAutoPolicyHook] }] },
         );

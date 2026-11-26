@@ -16,6 +16,13 @@ describe('toMessageAutomationOrigin', () => {
     });
   });
 
+  // 宿主通知不是某个 Worker 的回报：没有 senderSessionId 也要投影出宿主身份。
+  it('projects host notices as a host origin, not a worker report', () => {
+    expect(
+      toMessageAutomationOrigin({ kind: 'orca', senderLabel: 'Orca host', hostNotice: 'dispatch-claim' }),
+    ).toEqual({ kind: 'session', orca: true, orcaSenderLabel: 'Orca host', orcaHostNotice: 'dispatch-claim' });
+  });
+
   it('keeps scheduler origins unchanged', () => {
     const origin = { kind: 'scheduler', scheduleId: 's1', scheduleName: 'Nightly', runId: 'r1' };
     expect(toMessageAutomationOrigin(origin)).toBe(origin);

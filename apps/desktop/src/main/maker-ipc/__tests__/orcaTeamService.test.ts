@@ -3,6 +3,8 @@ import { describe, expect, it, vi } from 'vitest';
 import {readFileSync} from 'node:fs';
 import ts from 'typescript';
 import { AcceptedCallbackDispatchCancelled, runAcceptedCallback } from '../acceptedCallbackRunner';
+import { dispatchFactsForTurn, resetDispatchClaimState } from '../orcaDispatchClaims';
+import { evaluateTurnGate, forgetTurnGate } from '../orcaTurnGate';
 
 import type { AgentInputQueuedMessage } from '../../../shared/agentInputQueue';
 import {
@@ -447,6 +449,116 @@ describe('OrcaTeamService updateWorker', () => {
 
 });
 
+describe('dispatch claim reminder on lead turn settle', () => {
+  it('reminds the lead once when the closing text cites a dispatch result value the protocol never issues', async () => {
+    resetDispatchClaimState();
+    const { deps, service } = createDeps();
+
+    await service.handleLeadTurnSettled({
+      leadSessionId: 'lead-1',
+      turnGeneration: 3,
+      finalText: '已派修（wake_kind=already-dispatched），等它交回。',
+    });
+
+    expect(deps.sendAutoBridgeToLead).toHaveBeenCalledTimes(1);
+    const call = vi.mocked(deps.sendAutoBridgeToLead).mock.calls[0];
+    expect(call?.[0]).toBe('lead-1');
+    expect(call?.[1]).toContain('wake_kind=already-dispatched');
+  });
+
+  it('stays silent for an id the host dispatched in an earlier turn', async () => {
+    resetDispatchClaimState();
+    const { deps, service } = createDeps();
+    await service.sendToWorker({
+      callerLeadSessionId: 'lead-1',
+      targetSessionId: 'worker-session-1',
+      message: 'Please also check the desktop build.',
+    });
+    const fact = dispatchFactsForTurn('lead-1', 0)[0];
+    const cited = fact?.queuedMessageId ?? fact?.dispatchId;
+    expect(cited).toBeTruthy();
+
+    await service.handleLeadTurnSettled({
+      leadSessionId: 'lead-1',
+      turnGeneration: 5,
+      finalText: `上一条 queued_message_id: ${cited} 已被消费。`,
+    });
+
+    expect(deps.sendAutoBridgeToLead).not.toHaveBeenCalled();
+  });
+
+  it('allows only one reminder per turn', async () => {
+    resetDispatchClaimState();
+    const { deps, service } = createDeps();
+
+    await service.handleLeadTurnSettled({
+      leadSessionId: 'lead-1',
+      turnGeneration: 2,
+      finalText: 'wake_kind=dispatched',
+    });
+    await service.handleLeadTurnSettled({
+      leadSessionId: 'lead-1',
+      turnGeneration: 2,
+      finalText: 'wake_kind=dispatched',
+    });
+
+    expect(deps.sendAutoBridgeToLead).toHaveBeenCalledTimes(1);
+  });
+
+  // 定时任务/唤醒重试会把一模一样的话连发多个回合,文本无法区分它们。
+  it('judges identical text again in a later turn', async () => {
+    resetDispatchClaimState();
+    forgetTurnGate();
+    const { deps, service } = createDeps();
+
+    for (const turnGeneration of [2, 3]) {
+      await service.handleLeadTurnSettled({
+        leadSessionId: 'lead-1',
+        turnGeneration,
+        finalText: 'wake_kind=dispatched',
+      });
+    }
+
+    expect(deps.sendAutoBridgeToLead).toHaveBeenCalledTimes(2);
+  });
+
+  it('ignores a session that leads no workers', async () => {
+    resetDispatchClaimState();
+    const { deps, service } = createDeps();
+
+    await service.handleLeadTurnSettled({
+      leadSessionId: 'solo-1',
+      turnGeneration: 1,
+      finalText: 'wake_kind=already-active',
+    });
+
+    expect(deps.sendAutoBridgeToLead).not.toHaveBeenCalled();
+  });
+
+  it('does nothing when the turn produced no closing text', async () => {
+    resetDispatchClaimState();
+    const { deps, service } = createDeps();
+
+    await service.handleLeadTurnSettled({ leadSessionId: 'lead-1', turnGeneration: 1 });
+
+    expect(deps.sendAutoBridgeToLead).not.toHaveBeenCalled();
+  });
+
+  // 宿主还没见过任何回合时没有可信的回合号,宁可不判也不拿 0 当本回合。
+  it('fails open when the session has no turn recorded yet', async () => {
+    resetDispatchClaimState();
+
+    expect(
+      await evaluateTurnGate({
+        leadSessionId: 'lead-1',
+        turnSeq: 0,
+        finalText: 'wake_kind=dispatched',
+        workers: [{ label: 'developer2', status: 'running' }],
+      }),
+    ).toBeUndefined();
+  });
+});
+
 function createDeps(overrides: Partial<OrcaTeamServiceDeps> = {}) {
   const calls: string[] = [];
   let workers = [createWorker()];
@@ -481,6 +593,7 @@ function createDeps(overrides: Partial<OrcaTeamServiceDeps> = {}) {
     listWorkersByLead: vi.fn(async (leadSessionId: string) =>
       workers.filter((worker) => worker.leadSessionId === leadSessionId),
     ),
+
     getLiveSession: vi.fn(() => null),
     resumeWorkerSession: vi.fn(async () => {}),
     updateWorkerStatus: vi.fn(async (workerId, status) => {

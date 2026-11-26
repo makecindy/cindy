@@ -93,6 +93,8 @@ export const PORTS_ONLY_PI_READS = {
 export const PORTS_ONLY_CLAUDE_READS = {
   claudeAllowedTools: undefined,
   claudeHooks: undefined,
+  // Orca 收口闸门由桌面绑定（maker-host/index.ts），Host 不实现。
+  evaluateOrcaTurnGate: undefined,
   getClaudeSubagentTaskUsage: undefined,
   registerClaudeSubagentTask: undefined,
   remoteCcQueryFactory: undefined,

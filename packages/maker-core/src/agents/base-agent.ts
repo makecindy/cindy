@@ -1544,6 +1544,15 @@ export interface AgentDeps {
    */
   claudeHooks?: Partial<Record<HookEvent, HookCallbackMatcher[]>>;
 
+  /**
+   * Orca 收口闸门的判定入口。由宿主提供，参数是 **Cindy 的 session id**，
+   * 不是引擎自己生成的 SDK session id（两者不同，用错会导致判定永远找不到 worker）。
+   */
+  evaluateOrcaTurnGate?: (
+    sessionId: string,
+    finalText: string | undefined,
+  ) => Promise<string | undefined>;
+
   /** Optional native tool hooks; the host owns live task selection and plugin lifecycle. */
   toolLifecycleControl?: import('./shared/tool-lifecycle.js').ToolLifecycleControl;
   nativeRecoveryObserver?: import('./shared/native-recovery-observer.js').NativeRecoveryObserver;

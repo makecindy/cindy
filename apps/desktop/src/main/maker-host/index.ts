@@ -1,4 +1,5 @@
 import { applyProjectDirectoriesForTurn } from '../projectDirectoryRuntime.js';
+import { evaluateOrcaTurnGate } from './claude-hooks/orca-turn-gate-hook.js';
 import { createOneShotUsageRecorder } from '../usage/auxiliaryUsage.js';
 import { attachmentPreservation, attachmentStorageRoots } from './oversized-attachment-recovery.js';
 import { createCodexLocalModelSink } from './codexLocalModelSink.js';
@@ -1528,6 +1529,9 @@ export function getMaker(): Maker {
       //   - desktop-input-shell-guard-hook: Bash 里模拟桌面键鼠(osascript keystroke /
       //     cliclick / CGEvent / cua-driver CLI)在 Computer Use 开启时一律拒绝,理由指向
       //     cindy_computer;完全访问档同样生效(与能力路由守卫同一机制)。
+      // Orca 收口闸门：判定入口（Cindy session id），交给引擎自己的 Stop hook 调用，
+      // 与用户自己的 Stop hook 同场评估，一次续跑解决。
+      evaluateOrcaTurnGate: (sessionId, finalText) => evaluateOrcaTurnGate(sessionId, finalText),
       claudeHooks: mergeClaudeHooks(
         {
           PreToolUse: [

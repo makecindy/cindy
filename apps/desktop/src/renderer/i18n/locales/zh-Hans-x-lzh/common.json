@@ -16394,6 +16394,8 @@
       "orcaFromWorker": "Worker 之讯",
       "orcaFromWorkerBatch": "系统所报 Worker 结果凡 {{count}}",
       "orcaFromWorkerNamed": "Worker「{{role}}」之讯",
+      "orcaFromHost": "宿主（Orca host）来讯",
+      "orcaHostNoticeDispatchClaim": "此覆引一凭据，Cindy 无其记，已请 Lead 正之。",
       "hookChannelFrom": "自 {{channel}} 来",
       "deviceSentMobileNamed": "自手机「{{name}}」所遣",
       "deviceSentMobile": "自手机所遣",

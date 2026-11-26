@@ -16469,6 +16469,8 @@
       "orcaFromWorker": "Message from Worker",
       "orcaFromWorkerBatch": "System report: {{count}} Worker results",
       "orcaFromWorkerNamed": "Message from Worker “{{role}}”",
+      "orcaFromHost": "Message from the host (Orca host)",
+      "orcaHostNoticeDispatchClaim": "This reply cited a dispatch the host has no record of; the Lead was asked to correct it.",
       "hookChannelFrom": "From {{channel}}",
       "deviceSentMobileNamed": "Sent from phone “{{name}}”",
       "deviceSentMobile": "Sent from phone",

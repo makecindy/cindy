@@ -9,9 +9,12 @@ export function OrcaMessageHeading({ source, origin }: {
   const { t } = useTranslation();
   const orcaWorkerRole =
     origin?.kind === 'session' ? origin.orcaSenderLabel : undefined;
+  const orcaHostNotice = origin?.kind === 'session' ? origin.orcaHostNotice : undefined;
   const orcaBatchCount = origin?.kind === 'session' ? origin.orcaAutoBridgeBatchCount : undefined;
   const orcaCardTitle =
-    orcaBatchCount
+    orcaHostNotice
+      ? t('chat.userMessage.orcaFromHost')
+      : orcaBatchCount
       ? t('chat.userMessage.orcaFromWorkerBatch', { count: orcaBatchCount })
       : source === 'lead'
         ? t('chat.userMessage.orcaFromLead')

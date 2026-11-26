@@ -3,12 +3,26 @@ import { normalizeOrcaWorkerLabel, normalizeOrcaWorkerRole } from '@cindy/maker-
 
 import type { AgentInputQueuedMessage } from '../../shared/agentInputQueue.js';
 import { createHostSendFailure } from '../maker-host/send-outcome.js';
+import type { OrcaHostNoticeKind } from '../../shared/orcaHostNotice.js';
 import type {
   CollabDispatchFailureOutcome,
   CollabDispatchQueuedOutcome,
   CollabDispatchSuccessOutcome,
 } from './collabSendOutcome.js';
 import { AcceptedCallbackDispatchCancelled } from './acceptedCallbackRunner.js';
+import {
+  dropLeadDispatchFact,
+  noteLeadDispatchFact,
+  resetDispatchClaimState,
+  sessionInstanceToken,
+} from './orcaDispatchClaims.js';
+import {
+  currentTurnSeq,
+  evaluateTurnGate,
+  forgetTurnGate,
+  noteTurnEvent,
+} from './orcaTurnGate.js';
+import { setOrcaTurnGateEvaluator } from '../maker-host/claude-hooks/orca-turn-gate-hook.js';
 import { rebuildQueuedOrcaLeadMessage } from './orcaInterAgentDispatcher.js';
 import { isOrcaCollaborationMessage } from './orcaQueueNote.js';
 import {
@@ -504,13 +518,20 @@ export interface OrcaTeamServiceDeps {
   }>;
   /** Synchronous coordinator projection used when the stop adapter cannot return a result. */
   getWorkerQueuePaused(sessionId: string): boolean;
+  /**
+   * 宿主 -> Lead 队列的唯一入口：Worker 回报与派单主张纠正文都走这里。
+   * 纠正消息没有具体 Worker，`workerId` 省略时按宿主来源呈现。
+   */
   sendAutoBridgeToLead(
     leadSessionId: string,
     message: string,
     workerId: string,
     report?: WorkerTerminalTurnParams['remoteReport'],
     reportClientId?: string,
+    hostNotice?: OrcaHostNoticeKind,
   ): Promise<{ accepted: boolean; reportRejected?: true }>;
+  /** 补派一轮仍无凭据时的升级：落一张会话内纠正卡（不进模型）+ 红点 + 既有通知通道。 */
+  /** 能力开关，缺省开启；关闭后完全不判定也不修改结果。 */
   /**
    * 读取目标 session 输入队列的当前快照(pendingQueue + steering 中的 clientId)。
    * 实现方(register.ts)须先 ensureQueueRestored 再读,保证崩溃恢复条目可见。
@@ -662,6 +683,18 @@ export interface OrcaTeamService {
   /** Synchronous product boundary; never call for a suppressed vendor terminal. */
   noteWorkerProductTerminal(capture: WorkerTerminalTurnCapture | undefined): void;
   handleWorkerTerminalTurn(params: WorkerTerminalTurnParams): Promise<void>;
+  /** 收口闸门判定：引擎 Stop hook 与宿主 settle 共用这一份。 */
+  evaluateLeadTurnGate(params: {
+    leadSessionId: string;
+    turnGeneration: number;
+    finalText?: string;
+  }): Promise<string | undefined>;
+  /** Lead 收口核对：回复引用了宿主没有的派发凭据时提醒一次。 */
+  handleLeadTurnSettled(params: {
+    leadSessionId: string;
+    turnGeneration: number;
+    finalText?: string;
+  }): Promise<void>;
 }
 
 /** ready/inFlight 与对象身份共同保证极速 terminal 与重派活不会重复 bridge 或删错状态。 */
@@ -707,6 +740,35 @@ export function findFocusTargetWorker<
     workers.find((w) => w.label?.toLowerCase() === canonicalLabel) ??
     null
   );
+}
+
+/**
+ * 收口闸门的共享判定：宿主 settle 与引擎 Stop hook 都调它。
+ * 返回非空字符串表示「这一轮需要纠正」，由各自的出口决定怎么送达。
+ */
+async function evaluateLeadTurnGateFor(
+  deps: OrcaTeamServiceDeps,
+  params: { leadSessionId: string; finalText?: string; turnGeneration?: number },
+): Promise<string | undefined> {
+  const text = params.finalText?.trim();
+  if (!text) return undefined;
+  // 没有 worker 的会话不是协同 Lead：普通对话不参与核对。
+  const workers = await deps.listWorkersByLead(params.leadSessionId);
+  if (workers.length === 0) return undefined;
+
+  // 回合归属只认引擎代次:同一段文字在连续回合里出现时,文本无法区分它们。
+  if (typeof params.turnGeneration === 'number') {
+    noteTurnEvent(params.leadSessionId, params.turnGeneration);
+  }
+
+  return evaluateTurnGate({
+    leadSessionId: params.leadSessionId,
+    turnSeq: currentTurnSeq(params.leadSessionId),
+    finalText: text,
+    workers: workers
+      .filter((worker): worker is typeof worker & { label: string } => Boolean(worker.label))
+      .map((worker) => ({ label: worker.label, status: worker.status })),
+  });
 }
 
 export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamService {
@@ -867,6 +929,7 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
 
   function clearRuntimeState(sessionId: string): void {
     deletePendingReport(sessionId);
+    forgetTurnGate(sessionId);
     deps.clearManualInterrupt(sessionId);
     const provisional = provisionalDispatches.get(sessionId);
     if (provisional) {
@@ -1398,6 +1461,9 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
       };
 
       const wasLiveBeforeDispatch = deps.getLiveSession(target.sessionId) !== null;
+      // 轮次在**请求时**取：排队投递可能晚于本轮收口才落地，落地时才读会把它记到下一轮头上。
+      const leadRuntime = deps.getLiveSession(link.leadSessionId);
+      const dispatchTurnGeneration = leadRuntime?.getTurnGeneration?.() ?? 0;
       let result: DispatchWorkerMessageResult;
       try {
         await params.assertCurrent?.();
@@ -1463,6 +1529,19 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
         await rollbackAccepted();
         return { result, wasLiveBeforeDispatch };
       }
+      // 派发凭据只认宿主这次成功落地的投递，供 Lead 收口时的主张对账使用。
+      const workerLabel = target.label ?? target.role ?? target.id;
+      const delivery = result.mode === 'queued' ? 'queued' : 'direct';
+      noteLeadDispatchFact(link.leadSessionId, {
+        dispatchId: result.clientId,
+        turnSeq: currentTurnSeq(link.leadSessionId),
+        workerId: target.id,
+        workerLabel,
+        delivery,
+        ...(delivery === 'queued' ? { queuedMessageId: result.clientId } : {}),
+        ...(leadRuntime ? { instanceToken: sessionInstanceToken(leadRuntime) } : {}),
+        at: Date.now(),
+      });
       if (result.mode === 'dispatched') {
         // The dependency result is the direct vendor-dispatch settlement. Keep this idempotent
         // fallback even though the dispatcher also reports commit through the callback.
@@ -2104,6 +2183,7 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
             },
     });
     if (!controlled.ok) return mapWorkerQueueControlFailure(controlled);
+    dropLeadDispatchFact(params.callerLeadSessionId, params.queuedMessageId);
     deps.log.info('orca lead cancelled queued worker message', {
       workerId: found.worker.id,
       workerSessionId: found.worker.sessionId,
@@ -2284,7 +2364,7 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
     }
   }
 
-  return {
+  const service: OrcaTeamService = {
     dispatchWorkerTask,
     sendToWorker,
     interruptWorker,
@@ -2392,7 +2472,45 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
     },
     captureWorkerTerminalTurn,
     noteWorkerProductTerminal,
-    async handleWorkerTurnStarted(sessionId) {
+
+  /**
+   * 收口闸门的唯一判定入口。引擎侧（Claude Code 的 Stop hook）与宿主 settle
+   * 共用这一份：判定要么在 hook 里做、要么在这里做，同一轮只做一次。
+   */
+  evaluateLeadTurnGate(params: {
+    leadSessionId: string;
+    finalText?: string;
+  }): Promise<string | undefined> {
+    return evaluateLeadTurnGateFor(deps, params);
+  },
+
+  /**
+   * Lead 收口核对：回复引用了宿主没有的派发凭据、或声称派活却零派发时，纠正一次。
+   * 引擎已经判过的轮次在这里跳过——一个会话只能有一个否决点。
+   */
+  async handleLeadTurnSettled(params: {
+    leadSessionId: string;
+    turnGeneration: number;
+    finalText?: string;
+  }): Promise<void> {
+    const reason = await evaluateLeadTurnGateFor(deps, params);
+    if (!reason) return;
+    const delivered = await deps
+      .sendAutoBridgeToLead(
+        params.leadSessionId,
+        reason,
+        '',
+        undefined,
+        undefined,
+        'dispatch-claim',
+      )
+      .catch(() => ({ accepted: false }));
+    deps.log.info('orca turn gate reminder', {
+      leadSessionId: params.leadSessionId,
+      accepted: delivered.accepted,
+    });
+  },
+  async handleWorkerTurnStarted(sessionId) {
       const link = await deps.getWorkerLinkBySessionId(sessionId);
       if (!link) return;
 
@@ -2590,4 +2708,11 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
       }
     },
   };
+  // 闸门判定入口交给引擎侧 Stop hook 的转发层；hook 绑的是 Cindy session id，
+  // 与宿主 settle 共用同一份判定，一个会话一个否决点。
+  setOrcaTurnGateEvaluator((sessionId, finalText) =>
+    // 回合号由宿主发；拿不到就是宿主还没见过这一回合，闸门据此静默放行。
+    evaluateLeadTurnGateFor(deps, { leadSessionId: sessionId, finalText }),
+  );
+  return service;
 }

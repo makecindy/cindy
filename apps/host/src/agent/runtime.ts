@@ -704,6 +704,8 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
     ...PORTS_ONLY_PI_READS,
     resolveLocalMcpDuplicateChoices: options.resolveLocalMcpDuplicateChoices,
     claudeHooks,
+    // Orca 收口闸门由桌面绑定（maker-host/index.ts），Host 不实现。
+    evaluateOrcaTurnGate: undefined,
     auth: withClaudeSkillPreparation(
       createClaudeGatewayAuth(options.gateway, options.resolveProviderRoute, config.claudeNative, options.claudeProxy, config.grok,
         options.isProfileHeld),

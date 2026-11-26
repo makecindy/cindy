@@ -112,6 +112,8 @@ vi.mock('../../usage/modelPricing.js', () => ({
 // The recorders read the reference pricing core the wrapper below re-exports (3c): the same mock.
 vi.mock('../../usage/referenceModelPricingCore.js', async () => await import('../../usage/referenceModelPricing.js'));
 vi.mock('../../usage/referenceModelPricing.js', () => ({
+  broadcastReferenceModelPricing: effects.fn('broadcastReferenceModelPricing'),
+  setReferencePricingDisplayProviders: effects.fn('setReferencePricingDisplayProviders'),
   readModelPriceOverridesSnapshot: effects.fn('readModelPriceOverridesSnapshot'),
   getClaudeSubscriptionValuePrice: effects.fn('getClaudeSubscriptionValuePrice'),
   getCodexSubscriptionValuePrice: effects.fn('getCodexSubscriptionValuePrice'),
