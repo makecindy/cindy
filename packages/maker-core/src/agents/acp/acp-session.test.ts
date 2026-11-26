@@ -2215,11 +2215,11 @@ describe('AcpAgent (the acp engine)', () => {
 
 // 测试价值
 // - 生产入口与可观察结果：AcpAgent.startSession / openAcpSession / AcpSession.setExtraDirs / setWritableDirs /
-//   decidePermission；断言能力声明、目录说明与撤销注入、以及 realpath 校验下的写目录边界。
-// - 规则依据：docs/dev-rules/protocol-compatibility/plugin-harnesses.md「附加目录、只读 /review 与共享任务」；
-//   对标内置 Pi/Claude Code 的 extraDirs/writableDirs 与 libraryRoot 只读隔离语义。
-// - 现有覆盖缺口：此前 ACP 的 extraDirs/writableDirs 标为 not-implemented 且无目录边界测试。
-// - 最小失败输入与 tier：unit；越界写、符号链接逃逸、悬空链接、凭据路径、Library 根写入及即时撤权。
+//   decidePermission；断言能力声明、目录说明与撤销注入、非完全访问下 routine 写目录边界校验，以及完全访问（bypassPermissions）放行。
+// - 规则依据：docs/dev-rules/protocol-compatibility/plugin-harnesses.md「附加目录、只读 /review 与共享任务」与
+//   docs/dev-rules/pi-full-access-native-parity.md（完全访问与内置引擎一致放行，非完全访问校验可写边界）。
+// - 现有覆盖缺口：此前 ACP 的 extraDirs/writableDirs 标为 not-implemented 且缺少目录边界与完全访问放行回归覆盖。
+// - 最小失败输入与 tier：unit；非完全访问下越界写/大小写路径键/软链逃逸/悬空链接/凭据路径/Library 根写入/并发撤权，以及完全访问下工作目录外写。
 describe('AcpSession extraDirs and writableDirs', () => {
   const gateInit = () => ({
     protocolVersion: 1,
@@ -2230,6 +2230,11 @@ describe('AcpSession extraDirs and writableDirs', () => {
     const { turnId } = asRecord(asRecord(agent.prompts[index]!.params._meta).permissionGate);
     return { _meta: { permissionGate: { turnId, routine } } };
   };
+  const routineDesktopPolicy = (): TurnPermissionPolicy => ({
+    origin: { kind: 'desktop' },
+    confirmationSurface: 'desktop',
+    forceConfirmToolCall: () => false,
+  });
 
   it('advertises directory grant capabilities, includes briefing sections, excludes libraryRoot from general list, and emits mid-session updates', async () => {
     const root = mkdtempSync(join(tmpdir(), 'acp-dirs-briefing-'));
@@ -2298,7 +2303,7 @@ describe('AcpSession extraDirs and writableDirs', () => {
     }
   });
 
-  it('enforces realpath-verified write directory boundaries and immediate revocation in decidePermission', async () => {
+  it('enforces realpath-verified write directory boundaries and immediate revocation for routine policy auto-approval', async () => {
     const root = mkdtempSync(join(tmpdir(), 'acp-write-bounds-'));
     try {
       const workDir = join(root, 'workspace');
@@ -2327,7 +2332,7 @@ describe('AcpSession extraDirs and writableDirs', () => {
       const agent = createFakeAgent({ handlers: { initialize: gateInit } });
       const { session } = await open(agent, {
         cwd: workDir,
-        permissionMode: 'bypassPermissions',
+        permissionMode: 'ask',
         extraDirs: [libraryDir],
         libraryRoot: libraryDir,
       });
@@ -2337,10 +2342,10 @@ describe('AcpSession extraDirs and writableDirs', () => {
         return { kind: 'permission', behavior: 'deny' };
       });
 
-      await session.send({ type: 'user', content: 'Edit files' });
+      await session.send({ type: 'user', content: 'Edit files' }, { turnPermissionPolicy: routineDesktopPolicy() });
       await vi.waitFor(() => expect(agent.prompts).toHaveLength(1));
 
-      // Inside cwd -> auto-approved in bypassPermissions.
+      // Inside cwd -> auto-approved for routine policy calls.
       const inside = await agent.requestPermission({
         toolCall: { toolCallId: 'w-in', kind: 'edit', rawInput: { path: 'app.ts' } },
         options: PERMISSION_OPTIONS,
@@ -2349,24 +2354,40 @@ describe('AcpSession extraDirs and writableDirs', () => {
       expect(inside).toEqual({ outcome: { outcome: 'selected', optionId: 'yes' } });
       expect(asked).toHaveLength(0);
 
-      // Outside cwd before grant -> never auto-approved, escalated to resolver.
+      // Outside cwd before grant (including PascalCase `Path` key without locations) -> escalated to resolver.
       const outsideBefore = await agent.requestPermission({
         toolCall: { toolCallId: 'w-out-1', kind: 'edit', rawInput: { path: outsideFile } },
         options: PERMISSION_OPTIONS,
         ...requestMeta(agent, 0),
       });
-      expect(outsideBefore).toEqual({ outcome: { outcome: 'selected', optionId: 'no' } });
-      expect(asked).toHaveLength(1);
+      const outsidePascalCase = await agent.requestPermission({
+        toolCall: { toolCallId: 'w-out-pascal', kind: 'edit', rawInput: { Path: outsideFile } },
+        options: PERMISSION_OPTIONS,
+        ...requestMeta(agent, 0),
+      });
+      expect([outsideBefore, outsidePascalCase]).toEqual([
+        { outcome: { outcome: 'selected', optionId: 'no' } },
+        { outcome: { outcome: 'selected', optionId: 'no' } },
+      ]);
+      expect(asked).toHaveLength(2);
 
-      // Grant writableDir -> existing or non-existent nested file inside writableDir is auto-approved.
+      // Grant writableDir -> existing or non-existent nested file inside writableDir is auto-approved (case-insensitive keys).
       await session.setWritableDirs([writableDir]);
       const grantedNested = await agent.requestPermission({
         toolCall: { toolCallId: 'w-grant', kind: 'edit', rawInput: { file_path: join(writableDir, 'nested', 'new.ts') } },
         options: PERMISSION_OPTIONS,
         ...requestMeta(agent, 0),
       });
-      expect(grantedNested).toEqual({ outcome: { outcome: 'selected', optionId: 'yes' } });
-      expect(asked).toHaveLength(1);
+      const grantedPascalCase = await agent.requestPermission({
+        toolCall: { toolCallId: 'w-grant-pascal', kind: 'edit', rawInput: { Path: join(writableDir, 'nested', 'other.ts') } },
+        options: PERMISSION_OPTIONS,
+        ...requestMeta(agent, 0),
+      });
+      expect([grantedNested, grantedPascalCase]).toEqual([
+        { outcome: { outcome: 'selected', optionId: 'yes' } },
+        { outcome: { outcome: 'selected', optionId: 'yes' } },
+      ]);
+      expect(asked).toHaveLength(2);
 
       // Symlink escape and dangling symlink inside writableDir -> fail closed (escalated, not auto-approved).
       if (symlinksReady) {
@@ -2437,7 +2458,83 @@ describe('AcpSession extraDirs and writableDirs', () => {
     }
   });
 
-  it('never auto-approves writes when writableDirs is revoked during a second async directory recheck', async () => {
+  it('auto-approves writes outside cwd and writableDirs under bypassPermissions (Full access)', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'acp-full-access-writes-'));
+    try {
+      const workDir = join(root, 'workspace');
+      const outsideDir = join(root, 'outside');
+      const libraryDir = join(root, 'library');
+      mkdirSync(workDir, { recursive: true });
+      mkdirSync(outsideDir, { recursive: true });
+      mkdirSync(libraryDir, { recursive: true });
+      const outsideFile = join(outsideDir, 'worktree-file.ts');
+      writeFileSync(outsideFile, 'export const a = 1;\n');
+
+      for (const withGate of [false, true]) {
+        const agent = createFakeAgent(withGate ? { handlers: { initialize: gateInit } } : undefined);
+        const { session } = await open(agent, {
+          cwd: workDir,
+          permissionMode: 'bypassPermissions',
+          extraDirs: [libraryDir],
+          libraryRoot: libraryDir,
+        });
+        const asked: InteractionRequest[] = [];
+        session.setInteractionResolver(async (request) => {
+          asked.push(request);
+          return { kind: 'permission', behavior: 'deny' };
+        });
+
+        await session.send({ type: 'user', content: 'Edit files across directories' });
+        await vi.waitFor(() => expect(agent.prompts).toHaveLength(1));
+        const meta = withGate ? requestMeta(agent, 0) : {};
+
+        const outsideEdit = await agent.requestPermission({
+          toolCall: {
+            toolCallId: 'fa-out',
+            kind: 'edit',
+            locations: [{ path: outsideFile }],
+            rawInput: { Path: outsideFile, Target: 'a = 1', Replacement: 'a = 2' },
+          },
+          options: PERMISSION_OPTIONS,
+          ...meta,
+        });
+        const envEdit = await agent.requestPermission({
+          toolCall: { toolCallId: 'fa-env', kind: 'edit', rawInput: { path: join(workDir, '.env') } },
+          options: PERMISSION_OPTIONS,
+          ...meta,
+        });
+        const libDelete = await agent.requestPermission({
+          toolCall: { toolCallId: 'fa-lib', kind: 'delete', rawInput: { path: join(libraryDir, 'blob.png') } },
+          options: PERMISSION_OPTIONS,
+          ...meta,
+        });
+        const crossMove = await agent.requestPermission({
+          toolCall: {
+            toolCallId: 'fa-move',
+            kind: 'move',
+            rawInput: { from: join(workDir, 'a.ts'), to: join(outsideDir, 'b.ts') },
+          },
+          options: PERMISSION_OPTIONS,
+          ...meta,
+        });
+
+        expect([outsideEdit, envEdit, libDelete, crossMove]).toEqual([
+          { outcome: { outcome: 'selected', optionId: 'yes' } },
+          { outcome: { outcome: 'selected', optionId: 'yes' } },
+          { outcome: { outcome: 'selected', optionId: 'yes' } },
+          { outcome: { outcome: 'selected', optionId: 'yes' } },
+        ]);
+        expect(asked).toHaveLength(0);
+
+        agent.prompts[0]!.settle.resolve({ stopReason: 'end_turn' });
+        await session.close();
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('never auto-approves routine policy writes when writableDirs is revoked during a second async directory recheck', async () => {
     const root = mkdtempSync(join(tmpdir(), 'acp-write-race-'));
     try {
       const workDir = join(root, 'workspace');
@@ -2452,7 +2549,7 @@ describe('AcpSession extraDirs and writableDirs', () => {
       const agent = createFakeAgent({ handlers: { initialize: gateInit } });
       const { session } = await open(agent, {
         cwd: workDir,
-        permissionMode: 'bypassPermissions',
+        permissionMode: 'ask',
         writableDirs: [writableDir],
       });
       const asked: InteractionRequest[] = [];
@@ -2461,7 +2558,10 @@ describe('AcpSession extraDirs and writableDirs', () => {
         return { kind: 'permission', behavior: 'deny' };
       });
 
-      await session.send({ type: 'user', content: 'Edit file under concurrent revoke' });
+      await session.send(
+        { type: 'user', content: 'Edit file under concurrent revoke' },
+        { turnPermissionPolicy: routineDesktopPolicy() },
+      );
       await vi.waitFor(() => expect(agent.prompts).toHaveLength(1));
 
       const fsPromises = (await import('node:fs')).promises;

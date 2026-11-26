@@ -49,7 +49,6 @@ import {
   isLeadingSlashCommand,
 } from './briefing.js';
 import {
-  extractAcpToolCallPaths,
   isAcpReviewToolCallAllowed,
   isAcpWriteToolKind,
   isAcpWriteWithinAllowedDirs,
@@ -1355,37 +1354,7 @@ export class AcpSession {
       if (signal.aborted || this.closing || this.turn?.cancelTimer) return { outcome: 'cancelled' };
       return selected(allowed ? (allowOnce ?? reject) : reject);
     }
-    let writeOutsideAllowedDirs = false;
-    if (
-      isAcpWriteToolKind(toolCall.kind) &&
-      (this.initializeResult.permissionGate || extractAcpToolCallPaths(toolCall).paths.length > 0)
-    ) {
-      let verifiedWithin = false;
-      // Bind every async realpath check to the directoryGeneration snapshot it verified.
-      // If writableDirs changes while an async check is in flight, re-verify against the
-      // new snapshot; fail closed (never auto-approve) if generations keep changing.
-      for (let attempt = 0; attempt < 3; attempt += 1) {
-        const checkedGeneration = this.directoryGeneration;
-        const writableSnapshot = [...this.writableDirs];
-        const within = await isAcpWriteWithinAllowedDirs(
-          toolCall,
-          this.cwd,
-          writableSnapshot,
-          this.libraryRoot,
-        );
-        if (signal.aborted || this.closing || this.turn?.cancelTimer) return { outcome: 'cancelled' };
-        if (!within) {
-          verifiedWithin = false;
-          break;
-        }
-        if (this.directoryGeneration === checkedGeneration) {
-          verifiedWithin = true;
-          break;
-        }
-      }
-      writeOutsideAllowedDirs = !verifiedWithin;
-    }
-    if (this.permissionMode === 'bypassPermissions' && !writeOutsideAllowedDirs) {
+    if (this.permissionMode === 'bypassPermissions') {
       return selected(allowOnce ?? reject);
     }
     const input = toolCall.rawInput;
@@ -1405,11 +1374,40 @@ export class AcpSession {
     // owner's review of guest writes. Only explicitly read-only kinds can skip that chain.
     const canRunRoutine = gate?.policy?.origin.kind !== 'im'
       || toolCall.kind === 'read' || toolCall.kind === 'search';
-    if (gate?.policy && canRunRoutine && !writeOutsideAllowedDirs && policyToolName && hasInputRecord && requestGate.routine === true
+    if (gate?.policy && canRunRoutine && policyToolName && hasInputRecord && requestGate.routine === true
       && !this.policyForcesConfirmation(gate.policy, policyToolName, requestInput)
       && (!toolCall.name || toolCall.name === policyToolName
         || !this.policyForcesConfirmation(gate.policy, toolCall.name, requestInput))) {
-      return selected(allowOnce ?? reject);
+      let writeOutsideAllowedDirs = false;
+      if (isAcpWriteToolKind(toolCall.kind)) {
+        let verifiedWithin = false;
+        // Bind every async realpath check to the directoryGeneration snapshot it verified.
+        // If writableDirs changes while an async check is in flight, re-verify against the
+        // new snapshot; fail closed (never auto-approve) if generations keep changing.
+        for (let attempt = 0; attempt < 3; attempt += 1) {
+          const checkedGeneration = this.directoryGeneration;
+          const writableSnapshot = [...this.writableDirs];
+          const within = await isAcpWriteWithinAllowedDirs(
+            toolCall,
+            this.cwd,
+            writableSnapshot,
+            this.libraryRoot,
+          );
+          if (signal.aborted || this.closing || this.turn?.cancelTimer) return { outcome: 'cancelled' };
+          if (!within) {
+            verifiedWithin = false;
+            break;
+          }
+          if (this.directoryGeneration === checkedGeneration) {
+            verifiedWithin = true;
+            break;
+          }
+        }
+        writeOutsideAllowedDirs = !verifiedWithin;
+      }
+      if (!writeOutsideAllowedDirs) {
+        return selected(allowOnce ?? reject);
+      }
     }
     const resolver = this.resolver;
     if (!resolver) return selected(reject);

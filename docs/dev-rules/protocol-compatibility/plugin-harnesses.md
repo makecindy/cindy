@@ -331,9 +331,10 @@ IM 轮次只有已知的读和搜索操作可以经上述条件直接放行，�
 - **附加参考目录与可写目录（`extraDirs` / `writableDirs`）**：`buildAcpCapabilities` 对 `extraDirs` 与 `writableDirs` 均声明支持。
   新会话首轮说明附 `<cindy-extra-reference-directories>` / `<cindy-extra-writable-directories>`（对齐内置 Pi，插件 Library 根不进通用参考清单，
   由 `<cindy-library-native-read>` 单独下发）；会话中调用 `setExtraDirs` / `setWritableDirs` 立即刷新实时快照并在下一条普通消息附上更新与撤销说明。
-  对启用每轮权限闸（`permissionGate`）或上报路径的 `edit` / `delete` / `move` 权限请求，宿主按 `realpath`（含不存在子路径祖先校验与悬空符号链接拒绝、
-  凭据路径与只读 Library 根拒绝，以及并发撤权复核）校验全部目标路径：落在任务工作目录与当前 `writableDirs` 之外的写操作绝不自动放行（「全部允许」与
-  `routine` 放行均升级到人工确认或无解析器时直接拒绝），撤销目录即时生效。桌面新建页与任务页对本机插件引擎任务开放附加目录入口（远程与 SSH 仍由既有能力门关闭）。
+  完全访问（`bypassPermissions`）遵循与内置引擎（Claude Code / Codex / Pi）一致的口径，普通写操作直接放行、不因工作目录或附加目录边界弹窗拦截；
+  非完全访问档下启用每轮权限闸（`permissionGate`）的 `routine` 自动放行路径中，宿主对 `edit` / `delete` / `move` 权限请求按 `realpath`
+  （含大小写不敏感路径键提取、不存在子路径祖先校验与悬空符号链接拒绝、凭据路径与只读 Library 根拒绝，以及并发撤权复核）校验全部目标路径：
+  落在任务工作目录与当前 `writableDirs` 之外的写操作绝不自动放行，升级到人工确认或无解析器时直接拒绝，撤销目录即时生效。桌面新建页与任务页对本机插件引擎任务开放附加目录入口（远程与 SSH 仍由既有能力门关闭）。
 - **只读 `/review` 沙盒（`reviewMode` + `reviewReadPaths`）**：`maker:review:start` 保留来源任务的 `agentKind = acp`、`providerId`、`model`、`effort`
   并先做插件引擎准入；`AcpAgent` 启动时剥离全部 MCP 服务、记忆、插件花名册、Skill 清单与展开、伙伴画像、附加目录与宿主说明，并将权限模式固定为 `ask`。
   握手后强要求对端声明 `initialize._meta.permissionGate.supported === true`：未声明时立即关闭进程并 fail-closed 抛出

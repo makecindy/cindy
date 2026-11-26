@@ -554,9 +554,9 @@ Cindy 不能复制或截断，所以这三项都只用 Cindy 自己的记录。
   `TurnPermissionPolicyUnsupportedError`，渠道按「所选 Agent 无法提供逐条确认」提示）。不带策略的私聊与已关闭群强确认的轮次照常运行。
 - **附加参考目录与可写目录（2026-11-27）**：`extraDirs` 与 `writableDirs` 在能力快照中标为支持；新会话首轮与会话中变更通过目录说明
   （`<cindy-extra-reference-directories>` / `<cindy-extra-writable-directories>`，以及独立下发的 `<cindy-library-native-read>`）
-  同步给引擎，`setExtraDirs` / `setWritableDirs` 立即更新实时边界。启用每轮权限闸或上报路径的写/删/移动请求在 `decidePermission` 按
-  `realpath` 校验目标路径，位于工作目录与当前 `writableDirs` 之外（或命中凭据路径、只读 Library 根、悬空符号链接）的写操作绝不自动放行，
-  撤销目录即时生效。
+  同步给引擎，`setExtraDirs` / `setWritableDirs` 立即更新实时边界。完全访问（`bypassPermissions`）与内置引擎一致直接放行普通写入；
+  非完全访问档下启用每轮权限闸的 `routine` 自动放行路径中，写/删/移动请求在 `decidePermission` 按 `realpath` 校验目标路径，
+  位于工作目录与当前 `writableDirs` 之外（或命中凭据路径、只读 Library 根、悬空符号链接）的写操作绝不自动放行，撤销目录即时生效。
 - **只读 `/review`（2026-11-27）**：来源任务为插件引擎时，审查任务沿用其引擎、来源、模型与思考深度，启动前剥离全部 MCP 服务、记忆、
   花名册、Skill、伙伴画像与附加目录，并强制要求对端声明每轮权限闸（`_meta.permissionGate.supported === true`）；未声明时关闭进程并
   fail-closed 拒绝。声明支持时每轮开启 `scope: 'all-tool-calls'`，仅允许工作目录与 `reviewReadPaths` 内且通过 `resolveReviewReadPath`

@@ -2,9 +2,10 @@
  * Filesystem boundary verification for ACP tool permission requests.
  *
  * Keeps external ACP harnesses aligned with Cindy's built-in engine boundaries:
- * - Write/delete/move requests outside the task working directory and current
+ * - Outside `bypassPermissions` (Full access), routine auto-approval of
+ *   write/delete/move requests outside the task working directory and current
  *   `writableDirs` (or targeting sensitive credential paths / read-only library
- *   roots / dangling symlinks) are never auto-approved.
+ *   roots / dangling symlinks) is never granted automatically.
  * - Read-only `/review` mode permits only `read` / `search` tool calls whose
  *   targets resolve inside the granted review read scope and do not touch
  *   sensitive credential paths or escape via globs/symlinks/hard links.
@@ -26,23 +27,29 @@ import type { AcpToolCallFields } from './protocol.js';
 const WRITE_TOOL_KINDS: ReadonlySet<string> = new Set(['edit', 'delete', 'move']);
 const REVIEW_READ_TOOL_KINDS: ReadonlySet<string> = new Set(['read', 'search']);
 
-const SINGLE_PATH_KEYS: readonly string[] = [
+const SINGLE_PATH_KEYS: ReadonlySet<string> = new Set([
   'path',
   'file_path',
-  'filePath',
+  'filepath',
   'target_path',
-  'targetPath',
+  'targetpath',
+  'target_file',
+  'targetfile',
   'destination',
+  'destination_path',
+  'destinationpath',
   'dest',
   'dst',
   'new_path',
-  'newPath',
+  'newpath',
   'old_path',
-  'oldPath',
+  'oldpath',
   'source',
+  'source_path',
+  'sourcepath',
   'src',
   'notebook_path',
-  'notebookPath',
+  'notebookpath',
   'directory',
   'dir',
   'filename',
@@ -51,30 +58,30 @@ const SINGLE_PATH_KEYS: readonly string[] = [
   'workdir',
   'root',
   'folder',
-];
+]);
 
-const ARRAY_PATH_KEYS: readonly string[] = [
+const ARRAY_PATH_KEYS: ReadonlySet<string> = new Set([
   'paths',
   'files',
   'targets',
   'file_paths',
-  'filePaths',
+  'filepaths',
   'directories',
   'dirs',
-];
+]);
 
-const MOVE_EXTRA_PATH_KEYS: readonly string[] = ['from', 'to'];
-const NESTED_EDIT_LIST_KEYS: readonly string[] = ['edits', 'changes', 'operations'];
-const SEARCH_SELECTOR_KEYS: readonly string[] = [
+const MOVE_EXTRA_PATH_KEYS: ReadonlySet<string> = new Set(['from', 'to']);
+const NESTED_EDIT_LIST_KEYS: ReadonlySet<string> = new Set(['edits', 'changes', 'operations']);
+const SEARCH_SELECTOR_KEYS: ReadonlySet<string> = new Set([
   'glob',
   'include',
   'file_pattern',
-  'filePattern',
+  'filepattern',
   'file_glob',
-  'fileGlob',
+  'fileglob',
   'filter',
-];
-const SEARCH_SELECTOR_ARRAY_KEYS: readonly string[] = ['globs', 'includes'];
+]);
+const SEARCH_SELECTOR_ARRAY_KEYS: ReadonlySet<string> = new Set(['globs', 'includes']);
 
 const MAX_ANCESTOR_STEPS = 64;
 
@@ -160,46 +167,43 @@ function collectPathsFromRecord(
   paths: string[],
 ): boolean {
   let unverifiable = false;
-  const singleKeys = includeMoveKeys
-    ? [...SINGLE_PATH_KEYS, ...MOVE_EXTRA_PATH_KEYS]
-    : SINGLE_PATH_KEYS;
-  for (const key of singleKeys) {
-    if (!Object.hasOwn(record, key)) continue;
-    const value = record[key];
-    if (value === undefined || value === null) continue;
-    if (typeof value === 'string') {
-      const trimmed = value.trim();
-      if (trimmed) paths.push(trimmed);
-      else unverifiable = true;
-    } else if (Array.isArray(value)) {
+  for (const [rawKey, value] of Object.entries(record)) {
+    const key = rawKey.toLowerCase();
+    const isMoveExtraKey = includeMoveKeys && MOVE_EXTRA_PATH_KEYS.has(key);
+    if (SINGLE_PATH_KEYS.has(key) || isMoveExtraKey) {
+      if (value === undefined || value === null) continue;
+      if (typeof value === 'string') {
+        const trimmed = value.trim();
+        if (trimmed) paths.push(trimmed);
+        else unverifiable = true;
+      } else if (Array.isArray(value)) {
+        for (const item of value) {
+          if (typeof item === 'string' && item.trim()) paths.push(item.trim());
+          else unverifiable = true;
+        }
+      } else if (!isMoveExtraKey) {
+        unverifiable = true;
+      }
+      continue;
+    }
+    if (ARRAY_PATH_KEYS.has(key)) {
+      if (value === undefined || value === null) continue;
+      if (!Array.isArray(value)) {
+        unverifiable = true;
+        continue;
+      }
       for (const item of value) {
         if (typeof item === 'string' && item.trim()) paths.push(item.trim());
         else unverifiable = true;
       }
-    } else if (!MOVE_EXTRA_PATH_KEYS.includes(key)) {
-      unverifiable = true;
-    }
-  }
-  for (const key of ARRAY_PATH_KEYS) {
-    if (!Object.hasOwn(record, key)) continue;
-    const value = record[key];
-    if (value === undefined || value === null) continue;
-    if (!Array.isArray(value)) {
-      unverifiable = true;
       continue;
     }
-    for (const item of value) {
-      if (typeof item === 'string' && item.trim()) paths.push(item.trim());
-      else unverifiable = true;
-    }
-  }
-  for (const key of NESTED_EDIT_LIST_KEYS) {
-    if (!Object.hasOwn(record, key)) continue;
-    const value = record[key];
-    if (!Array.isArray(value)) continue;
-    for (const entry of value) {
-      if (isPlainObject(entry)) {
-        if (collectPathsFromRecord(entry, includeMoveKeys, paths)) unverifiable = true;
+    if (NESTED_EDIT_LIST_KEYS.has(key)) {
+      if (!Array.isArray(value)) continue;
+      for (const entry of value) {
+        if (isPlainObject(entry)) {
+          if (collectPathsFromRecord(entry, includeMoveKeys, paths)) unverifiable = true;
+        }
       }
     }
   }
@@ -317,29 +321,19 @@ export async function isAcpReviewToolCallAllowed(
   if (unverifiable || paths.length === 0) return false;
 
   if (toolCall.kind === 'search' && isPlainObject(toolCall.rawInput)) {
-    for (const key of SEARCH_SELECTOR_KEYS) {
-      if (!Object.hasOwn(toolCall.rawInput, key)) continue;
-      const value = toolCall.rawInput[key];
-      if (value !== undefined && value !== null && !reviewFileSelectorIsAllowed(value)) {
-        return false;
-      }
-    }
-    for (const key of SEARCH_SELECTOR_ARRAY_KEYS) {
-      if (!Object.hasOwn(toolCall.rawInput, key)) continue;
-      const value = toolCall.rawInput[key];
+    const fileFinder = isFileFinderSearchTool(toolCall);
+    for (const [rawKey, value] of Object.entries(toolCall.rawInput)) {
       if (value === undefined || value === null) continue;
-      if (!Array.isArray(value) || !value.every((entry) => reviewFileSelectorIsAllowed(entry))) {
-        return false;
+      const key = rawKey.toLowerCase();
+      if (SEARCH_SELECTOR_KEYS.has(key)) {
+        if (!reviewFileSelectorIsAllowed(value)) return false;
+      } else if (SEARCH_SELECTOR_ARRAY_KEYS.has(key)) {
+        if (!Array.isArray(value) || !value.every((entry) => reviewFileSelectorIsAllowed(entry))) {
+          return false;
+        }
+      } else if (fileFinder && key === 'pattern') {
+        if (!reviewFileSelectorIsAllowed(value)) return false;
       }
-    }
-    if (
-      isFileFinderSearchTool(toolCall) &&
-      Object.hasOwn(toolCall.rawInput, 'pattern') &&
-      toolCall.rawInput.pattern !== undefined &&
-      toolCall.rawInput.pattern !== null &&
-      !reviewFileSelectorIsAllowed(toolCall.rawInput.pattern)
-    ) {
-      return false;
     }
   }
 
