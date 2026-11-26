@@ -4907,7 +4907,7 @@ export function getGhostScheduleSlot(): GhostScheduleSlot {
   if (!scheduleSlotSingleton) {
     scheduleSlotSingleton = new GhostScheduleSlot({
       getGhost: findGhostForInstanceId,
-      sendToMobile: (pageId, payload) => mobilePluginPages?.present(pageId, payload.ghostId, {
+      sendToMobile: (pageId, payload, instanceId) => mobilePluginPages?.present(pageId, instanceId, {
         kind: 'schedule', name: payload.name, prompt: payload.prompt, intervalMs: payload.intervalMs,
         ...(payload.preRunPlugin ? { preRunPlugin: payload.preRunPlugin } : {}),
       }) ?? false,

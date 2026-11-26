@@ -217,6 +217,14 @@ describe('GhostScheduleSlot 骚扰钳制', () => {
 });
 
 describe('GhostScheduleSlot 推送内容', () => {
+  it('binds a mobile draft to its installed instance rather than a same-named root plugin', () => {
+    const ghost = scheduleGhost({ namespace: 'acme', namespaceState: 'confirmed' });
+    ghost.instanceKey = '_ns__acme__sched-ghost';
+    const sendToMobile = vi.fn(() => true);
+    const { slot } = makeSlot({ getGhost: () => ghost, sendToMobile });
+    expect(slot.handleRequest('sched-ghost', { ...validReq, mobilePageId: 'phone' })).toEqual({ ok: true });
+    expect(sendToMobile).toHaveBeenCalledWith('phone', expect.objectContaining({ ghostId: 'sched-ghost' }), '_ns__acme__sched-ghost');
+  });
   it('企业实例的预填提示带上 namespace', () => {
     const { slot, pushes } = makeSlot({
       getGhost: () => scheduleGhost({ namespace: 'acme', namespaceState: 'confirmed' }),

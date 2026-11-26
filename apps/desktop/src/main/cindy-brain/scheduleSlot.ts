@@ -59,7 +59,7 @@ export interface ScheduleSlotDeps {
    * 保存成多条自动化。装配处负责选窗(focused ?? 第一个),本槽只管投一次。
    */
   sendToWindow(payload: GhostScheduleDraftPush): boolean;
-  sendToMobile?(pageId: string, payload: GhostScheduleDraftPush): boolean;
+  sendToMobile?(pageId: string, payload: GhostScheduleDraftPush, instanceId: string): boolean;
   now?(): number;
   /** 仅测试注入;生产用 randomUUID。 */
   newRequestId?(): string;
@@ -248,7 +248,7 @@ export class GhostScheduleSlot {
     // Older controllers save only the edited name and prompt. The bound draft belongs to the
     // execution computer, whose native editor round-trips its immutable binding.
     const delivered = !primaryHostKey && typeof request.mobilePageId === 'string'
-      ? this.deps.sendToMobile?.(request.mobilePageId, draft) : this.deps.sendToWindow(draft);
+      ? this.deps.sendToMobile?.(request.mobilePageId, draft, installedGhostStoragePart(ghost)) : this.deps.sendToWindow(draft);
     if (!delivered) {
       return fail('HOST_NOT_READY', '当前没有可用的宿主窗口');
     }
