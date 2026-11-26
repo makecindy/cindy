@@ -40,6 +40,9 @@ export type SessionWorktreeBindingLookup = (sessionId: string) => string | null;
 
 /** From updateSessionInDb: a workspaceKind in the patch is project or dialogue. */
 export function assertSessionWorkspaceKindPatch(p: Record<string, unknown>): void {
+  if (p.projectDir !== undefined) {
+    throwIpcError('INVALID_PARAMS', 'projectDir is derived by the project move');
+  }
   if (p.workspaceKind !== undefined) {
     const value = p.workspaceKind;
     if (value !== 'project' && value !== 'dialogue') {
@@ -158,6 +161,12 @@ export async function prepareSessionWorkingDirMove({
       ownedWorktreeRoot = liveWorktreePath ? managedWorktreeRoot(liveWorktreePath) : null;
     } else if (beforeMove.workingDir) {
       ownedWorktreeRoot = managedWorktreeRoot(beforeMove.workingDir);
+    }
+    if (ownedWorktreeRoot && requestedWorkingDir && p.workspaceKind === 'project') {
+      // The project picker changes membership. Keep the bound cwd for execution and resume.
+      p.projectDir = requestedWorkingDir;
+      delete p.workingDir;
+      return beforeMove;
     }
     const targetWorktreeRoot = requestedWorkingDir
       ? managedWorktreeRoot(requestedWorkingDir)

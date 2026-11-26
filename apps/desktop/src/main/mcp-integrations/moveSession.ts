@@ -1,6 +1,5 @@
 import { and, eq } from 'drizzle-orm';
 import type { XdtHelperMcpDeps } from '@cindy/mcps';
-import { managedWorktreeBaseRepo } from '@cindy/maker-shared/worktree-paths';
 import { sessions, orcaTeams, orcaWorkers, botSessionLinks } from '../localDb/schema.js';
 import { updateSessionInDb } from '../localDb/ipc/sessions.js';
 import { bindingStore } from '../im/binding.js';
@@ -55,7 +54,6 @@ export async function assertSessionMovable(
   sessionId: string,
   isSessionRunning: (sessionId: string) => boolean,
   assertCurrent: () => void,
-  onTarget?: (target: typeof sessions.$inferSelect) => void,
 ): Promise<void> {
   assertCurrent();
   const [target] = await client.drizzle
@@ -65,7 +63,6 @@ export async function assertSessionMovable(
     .limit(1);
   assertCurrent();
   if (!target) throwIpcError('NOT_FOUND', 'Task does not exist in this account.');
-  onTarget?.(target);
   if (target.remoteHostId)
     throwIpcError('UNSUPPORTED_CAPABILITY', 'Remote tasks cannot be moved.');
   // A task whose agent runs on another computer may move: that computer keys the agent's
@@ -125,21 +122,8 @@ async function moveSessionProject(
       assertAuthority();
     };
     assertCurrent();
-    let preserveWorktreeExecution = false;
-    const patch: Record<string, unknown> = targetDir === null
-      ? { workspaceKind: 'dialogue' }
-      : { workspaceKind: 'project', workingDir: targetDir };
     const assertMoveAllowed = async () => {
-      await assertSessionMovable(context.client, sessionId, isSessionRunning, assertCurrent, (target) => {
-        preserveWorktreeExecution = Boolean(target.workingDir && managedWorktreeBaseRepo(target.workingDir));
-        if (targetDir && preserveWorktreeExecution) {
-          patch.projectDir = targetDir;
-          delete patch.workingDir;
-        } else if (targetDir) {
-          delete patch.projectDir;
-          patch.workingDir = targetDir;
-        }
-      });
+      await assertSessionMovable(context.client, sessionId, isSessionRunning, assertCurrent);
       if (targetDir) {
         const physicalDirectory = await validateTaskProject(context, targetDir);
         if (!physicalDirectory.ok) throwIpcError('INVALID_PARAMS', physicalDirectory.message);
@@ -147,6 +131,10 @@ async function moveSessionProject(
       await beforeMutation?.();
       assertCurrent();
     };
+    const patch =
+      targetDir === null
+        ? { workspaceKind: 'dialogue' }
+        : { workspaceKind: 'project', workingDir: targetDir };
     const updated = await updateSessionInDb(sessionId, patch, undefined, {
       assertCurrent,
       beforeUpdate: assertMoveAllowed,
@@ -155,6 +143,7 @@ async function moveSessionProject(
     return {
       ok: true,
       sessionId: updated.id,
+      projectDir: updated.projectDir ?? null,
       workingDir: updated.workingDir ?? null,
       workspaceKind: updated.workspaceKind ?? 'project',
     };

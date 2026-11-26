@@ -1,5 +1,4 @@
 import { projectKeyForDeepLink } from '../../../shared/projectKeys';
-import { managedWorktreeBaseRepo } from '@cindy/maker-shared/worktree-paths';
 import { useOptionalAuthDeviceId } from '@/contexts/AuthContext';
 import { useHeaderProjectMenu, useProjectSettings, setProjectSettings } from '@/state/headerProjectMenu';
 import { HeaderProjectDropdown } from './sidebar/HeaderProjectDropdown';
@@ -3048,7 +3047,7 @@ function ExpandedView({
   }, []);
   const handleProjectCreated = useCallback(
     (sessionId: string, result: CreateProjectFromTaskResult) => {
-      patchLocal(sessionId, { workingDir: result.workingDir, workspaceKind: 'project' });
+      patchLocal(sessionId, { ...result.session, workspaceKind: 'project' });
       const normalized = normalizeWorkingDir(result.workingDir);
       if (normalized) collapse.expand(projectIdentityKey('local', normalized, null));
       void recentWorkdirsStore.forceRefresh().catch(() => undefined);
@@ -3096,25 +3095,16 @@ function ExpandedView({
         }
       }
 
-      // worktree 会话的工作区就是它绑定的 worktree：只改 workingDir 会造成半移动
-      // （侧栏按新项目归组，聊天框底部路径仍指旧 worktree）。判定不在这里做：归属只有
-      // 共享写路径一处权威，renderer 的缓存/复核都是异步镜像，任何「先查询再决定」都
-      // 会有一条「查询通过后、写入前恰好回收」的窗口，把主进程本会放行的移动挡在请求
-      // 之前。这里照常发请求，被守卫拒绝时在下面映射成同一条 toast；「移到对话」不改
-      // 目录，不受影响。
       const oldPatch = {
         workingDir: session.workingDir,
         projectDir: session.projectDir,
         workspaceKind: session.workspaceKind,
       };
       if (target.kind !== 'dialogue' && !targetWorkingDir) return;
-      const nextPatch =
-        target.kind === 'dialogue'
-          ? { workspaceKind: 'dialogue' as const }
-          : managedWorktreeBaseRepo(session.workingDir ?? '')
-            ? { projectDir: targetWorkingDir, workspaceKind: 'project' as const }
-            : { workingDir: targetWorkingDir, workspaceKind: 'project' as const };
-      patchLocal(sessionId, nextPatch);
+      const request = target.kind === 'dialogue'
+        ? { workspaceKind: 'dialogue' as const }
+        : { workspaceKind: 'project' as const, workingDir: targetWorkingDir };
+      patchLocal(sessionId, { workspaceKind: request.workspaceKind, projectDir: targetWorkingDir ?? null });
       let expandedProjectKey: string | null = null;
       let wasExpandedProjectCollapsed = false;
       if (targetWorkingDir) {
@@ -3126,7 +3116,8 @@ function ExpandedView({
         }
       }
       try {
-        await sessionService.update(sessionId, nextPatch);
+        const moved = await sessionService.update(sessionId, request);
+        patchLocal(sessionId, { workingDir: moved.workingDir, projectDir: moved.projectDir, workspaceKind: moved.workspaceKind });
         if (target.kind !== 'dialogue') {
           void recentWorkdirsStore.forceRefresh().catch(() => undefined);
         }
