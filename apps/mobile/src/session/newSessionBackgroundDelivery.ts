@@ -4,7 +4,7 @@ import {
   type MobileAuthOwnerGeneration,
 } from '@/auth/authOwnerGeneration';
 import { beginBackgroundWork } from '@/notifications/backgroundWork';
-import type { DurableOutboxRecord } from './durableOutbox';
+import { isDurableOutboxHandedOff, type DurableOutboxRecord } from './durableOutbox';
 
 const MAX_BUDGET_MS = 20_000;
 const INITIAL_BUDGET_MS = 8_000;
@@ -77,5 +77,6 @@ export function canDeliverNewSessionInBackground(record: DurableOutboxRecord): b
 }
 
 export function endNewSessionBackgroundDelivery(record: DurableOutboxRecord): void {
+  if (!isDurableOutboxHandedOff(record)) return;
   windowFor(record)?.end();
 }

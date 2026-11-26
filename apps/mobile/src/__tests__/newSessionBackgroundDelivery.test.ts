@@ -1,4 +1,4 @@
-import { afterEach, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { getMobileAuthOwner, setMobileAuthOwner } from '@/auth/authOwnerGeneration';
 import {
   beginNewSessionBackgroundDelivery,
@@ -7,10 +7,23 @@ import {
 } from '@/session/newSessionBackgroundDelivery';
 import type { DurableOutboxRecord } from '@/session/durableOutbox';
 
-vi.mock('@/notifications/backgroundWork', () => ({
-  beginBackgroundWork: async () => ({ budgetMs: 8_000, end: () => {} }),
+const native = vi.hoisted(() => ({
+  begin: vi.fn(async () => ({ id: 0, remainingMs: 0 })),
+  end: vi.fn(async (_id: number) => {}),
+  waitUntilEnded: vi.fn(async (_id: number) => {}),
+  task: undefined as undefined | (() => (data: { id: number }) => Promise<void>),
+}));
+vi.mock('expo-modules-core', () => ({ requireOptionalNativeModule: () => native }));
+vi.mock('react-native', () => ({
+  Platform: { OS: 'android' },
+  AppRegistry: { registerHeadlessTask: (_key: string, task: typeof native.task) => { native.task = task; } },
 }));
 
+beforeEach(() => {
+  native.begin.mockReset().mockResolvedValue({ id: 0, remainingMs: 0 });
+  native.end.mockReset().mockResolvedValue(undefined);
+  native.waitUntilEnded.mockReset().mockResolvedValue(undefined);
+});
 afterEach(() => {
   setMobileAuthOwner(null);
   vi.useRealTimers();
@@ -38,9 +51,60 @@ it.each(['deadline', 'account switch', 'receipt'] as const)(
       ...record, item: { ...record.item, clientId: 'second' },
     })).toBe(false);
     if (endReason === 'account switch') setMobileAuthOwner('bob', 'cn');
-    else if (endReason === 'receipt') endNewSessionBackgroundDelivery(record);
+    else if (endReason === 'receipt') endNewSessionBackgroundDelivery({ ...record, state: 'host-owned', retrySafe: true });
     else await vi.advanceTimersByTimeAsync(8_000);
     expect(release).toHaveBeenCalledOnce();
     expect(canDeliverNewSessionInBackground(record)).toBe(false);
   },
 );
+
+// #11841, unit: use the real native adapter and first-send owner fence. The
+// previous mocked beginBackgroundWork could not detect Android ignoring its
+// native grant. A native task must end on receipt/account change/deadline, and
+// a late grant must not revive a completed handoff. Native timer liveness is
+// separately exercised on the Xiaomi device; this test does not simulate RN.
+it.each(['receipt', 'account switch', 'deadline', 'late grant'] as const)(
+  'returns Android execution time after %s', async reason => {
+    vi.useFakeTimers();
+    setMobileAuthOwner('alice', 'cn');
+    const owner = getMobileAuthOwner();
+    let grant!: (value: { id: number; remainingMs: number }) => void;
+    native.begin.mockReturnValueOnce(new Promise(resolve => { grant = resolve; }));
+    const released = vi.fn();
+    const record = { accountId: owner.accountKey, deviceId: 'desktop',
+      item: { sessionId: 'native-task', clientId: 'first' } } as DurableOutboxRecord;
+    beginNewSessionBackgroundDelivery(owner, 'desktop', 'native-task', 'first', () => released);
+    if (reason === 'late grant') endNewSessionBackgroundDelivery({ ...record, state: 'host-owned', retrySafe: true });
+    grant({ id: 7, remainingMs: 20_000 });
+    await vi.advanceTimersByTimeAsync(0);
+    if (reason === 'receipt') {
+      // Receiving enqueue's reply alone is not a durable phone-side receipt.
+      endNewSessionBackgroundDelivery({ ...record, state: 'sending' });
+      expect(native.end).not.toHaveBeenCalled();
+      endNewSessionBackgroundDelivery({ ...record, state: 'host-owned', retrySafe: true });
+      endNewSessionBackgroundDelivery({ ...record, state: 'host-owned', retrySafe: true });
+    }
+    if (reason === 'account switch') setMobileAuthOwner('bob', 'cn');
+    if (reason === 'deadline') {
+      await vi.advanceTimersByTimeAsync(19_999);
+      expect(canDeliverNewSessionInBackground(record)).toBe(true);
+      await vi.advanceTimersByTimeAsync(1);
+    }
+    expect(native.end).toHaveBeenCalledExactlyOnceWith(7);
+    expect(released).toHaveBeenCalledOnce();
+    expect(canDeliverNewSessionInBackground(record)).toBe(false);
+  },
+);
+
+it('keeps the Android headless task pending until native release', async () => {
+  let finish!: () => void;
+  native.waitUntilEnded.mockReturnValueOnce(new Promise(resolve => { finish = resolve; }));
+  const settled = vi.fn();
+  const task = native.task!()({ id: 8 }).then(settled);
+  await Promise.resolve();
+  expect(settled).not.toHaveBeenCalled();
+  expect(native.waitUntilEnded).toHaveBeenCalledExactlyOnceWith(8);
+  finish();
+  await task;
+  expect(settled).toHaveBeenCalledOnce();
+});

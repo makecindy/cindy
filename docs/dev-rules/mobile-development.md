@@ -749,8 +749,12 @@ Swift 源码和打包头像显式进入 fingerprint。首次发布需要原生�
 宽限后已断开、多次重叠与回到前台四种情况，`notificationActions.test.ts` 覆盖连接未就绪时的有界等待。
 未做真机断网与弱网演练。
 
-`modules/cindy-background-work` 只包了 `UIApplication` 的后台任务：`begin` 返回系统剩余时间，到期回调
-自行归还。旧原生包没有这个模块时按 8 秒短预算执行，不申请后台时间。新原生模块、通知类别与凭证档位都要
+`modules/cindy-background-work` 在 iOS 包装 `UIApplication` 后台任务：`begin` 返回系统剩余时间，到期回调
+自行归还。Android 通过已运行的 React 实例上的 Headless JS task 保留普通定时器执行，原生层最长
+20 秒截止；同一窗口在前台发起时启动非黏性短时服务，避免系统按缓存进程关闭在途 socket。
+完成、账号变化或 JS 安全预算到期时归还并停止服务，不新增权限、前台通知或唤醒锁，也不保证
+系统杀进程后继续运行。该能力用于用户明确发起的短暂交接，不能用于常驻轮询或延长模型推理。
+旧原生包没有这个模块时按 8 秒短预算执行，不申请后台时间。新原生模块、通知类别与凭证档位都要
 新 iOS 包；共享的指纹输入也会改变 Android 指纹，需随计划内双端原生发版交付。
 
 提问的选项按钮在展开通知时按 `action.options` 生成，类别名见 `notificationActionIds.ts`：

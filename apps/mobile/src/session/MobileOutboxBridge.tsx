@@ -319,7 +319,6 @@ export function MobileOutboxBridge() {
               : {}),
           },
         );
-        endNewSessionBackgroundDelivery(r);
         // 电脑已接收这条消息(离线时是重连后才送达):在已归档任务里发消息即取消归档。
         // 绑账号归属而不绑这条待发记录:消息对账后记录会被清走,取消归档不能随之失效。
         void unarchiveSessionAfterSend(
@@ -388,6 +387,11 @@ export function MobileOutboxBridge() {
     runnerRef.current = delivery;
     const run = () => {
       messageLeases.refresh();
+      // The grant must cover saving the host receipt, not just receiving it.
+      // Ending it inside enqueue can suspend the following durable store write.
+      for (const record of mobileDurableOutbox.getSnapshot()) {
+        endNewSessionBackgroundDelivery(record);
+      }
       // Scavenging failure blocks new copies, not already-owned messages' delivery.
       void initializeOutboxFiles()
         .catch(() => undefined)

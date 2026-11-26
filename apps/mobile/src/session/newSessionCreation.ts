@@ -26,6 +26,7 @@
  *    会被 dedup 静默吞掉,丢消息比双发更糟)。
  */
 import { useSyncExternalStore } from 'react';
+import { mobileDebugLog } from '@/debug/mobileDebugLog';
 import { getMobileAuthOwner, isMobileAuthOwnerCurrent, subscribeMobileAuthOwner, type MobileAuthOwnerGeneration } from '@/auth/authOwnerGeneration';
 import type { SlowSendPhase } from '@/session/SlowSendNotice';
 import * as ExpoCrypto from 'expo-crypto';
@@ -1257,6 +1258,10 @@ function cancelStaleOwnerTask(task: InternalTask): void {
 async function runPipeline(task: InternalTask): Promise<void> {
   const phase = (value: SlowSendPhase) => {
     task.phase = value;
+    mobileDebugLog('debug', 'new-session', 'creation phase', {
+      client: task.firstMessageClientId.slice(-8), phase: value,
+      elapsedMs: Date.now() - task.startedAt,
+    });
     emit();
   };
   const { params } = task;
@@ -1287,6 +1292,7 @@ async function runPipeline(task: InternalTask): Promise<void> {
         assertTaskOwnerCurrent(task);
       }
     }
+    mobileDebugLog('debug', 'new-session', 'creation linking', { client: task.firstMessageClientId.slice(-8) });
     await withTransientRemoteRetry(async () => {
       assertTaskOwnerCurrent(task);
       await openLink(params.deviceId);
@@ -1454,7 +1460,9 @@ async function runPipeline(task: InternalTask): Promise<void> {
           && params.attachments.length === 0
           ? { session: freshSession, connectionEpoch: createEpoch, createdAt, inputDelivery: createOutcome.inputDelivery }
           : undefined;
+        mobileDebugLog('debug', 'new-session', 'first input handoff started', { client: task.firstMessageClientId.slice(-8) });
         await params.transport.handoffFirstMessage(queuedDraft, snapshot);
+        mobileDebugLog('debug', 'new-session', 'first input handoff persisted', { client: task.firstMessageClientId.slice(-8) });
         assertTaskOwnerCurrent(task);
         remoteSessionStore.applySessionPatch(params.deviceId, sessionId, { pendingLocalCreation: false });
         finishTask(task);

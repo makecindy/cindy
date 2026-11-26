@@ -1,0 +1,11 @@
+plugins {
+  id 'com.android.library'
+  id 'expo-module-gradle-plugin'
+}
+group = 'app.cindy.backgroundwork'
+version = '0.1.0'
+dependencies { implementation 'com.facebook.react:react-android' }
+android {
+  namespace 'app.cindy.backgroundwork'
+  defaultConfig { minSdkVersion 24 }
+}
