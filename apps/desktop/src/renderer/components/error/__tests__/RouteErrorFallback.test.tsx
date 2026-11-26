@@ -74,19 +74,24 @@ describe('RouteErrorFallback', () => {
 
   // 2026-11-26:任务页渲染死循环(React #185)只给了「重新加载」,用户无法像任务错误那样一键诊断。
   // 诊断必须把错误与出错任务带进新建任务草稿,并在路由内离开崩溃页(草稿不跨 reload)。
-  it('诊断把崩溃详情和出错任务链接预填进新建任务并离开崩溃页', () => {
+  // 伙伴任务页同样挂载任务视图;远程伙伴的链接要保留所属电脑。
+  it.each([
+    { path: '/cc-agent/crashed-session', link: 'session/crashed-session' },
+    { path: '/bots/remote/device-1/bot-1/session/bot-session', link: 'session/bot-session?device=device-1' },
+  ])('诊断把崩溃详情和出错任务链接预填进新建任务并离开崩溃页: $path', ({ path, link }) => {
     const silence = vi.spyOn(console, 'error').mockImplementation(() => {});
     try {
       const router = createMemoryRouter([
         {
-          path: '/cc-agent',
+          path: '/',
           errorElement: <RouteErrorFallback variant="section" />,
           children: [
-            { path: 'new', element: <div>new-task-page</div> },
-            { path: ':sessionId', element: <Bomb /> },
+            { path: 'cc-agent/new', element: <div>new-task-page</div> },
+            { path: 'cc-agent/:sessionId', element: <Bomb /> },
+            { path: 'bots/remote/:deviceId/:botId/session/:sessionId', element: <Bomb /> },
           ],
         },
-      ], { initialEntries: ['/cc-agent/crashed-session'] });
+      ], { initialEntries: [path] });
       render(<RouterProvider router={router} />);
       fireEvent.click(screen.getByRole('button', { name: 'chat.errorBanner.networkShowRaw' }));
       fireEvent.click(screen.getByRole('button', { name: /chat\.errorBanner\.diagnose/ }));
@@ -95,9 +100,9 @@ describe('RouteErrorFallback', () => {
       expect(screen.queryByText('appError.title')).toBeNull();
       const prompt = JSON.stringify(getDraft(NEW_MAKER_DRAFT_KEY)?.text);
       expect(prompt).toContain('chat.errorBanner.diagnosePrompt');
-      expect(prompt).toContain('session/crashed-session');
+      expect(prompt).toContain(link);
       expect(prompt).toContain('boom: element type is invalid');
-      expect(prompt).toContain('page: /cc-agent/crashed-session');
+      expect(prompt).toContain(`page: ${path}`);
     } finally {
       silence.mockRestore();
     }

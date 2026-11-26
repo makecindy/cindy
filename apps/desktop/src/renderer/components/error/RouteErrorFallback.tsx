@@ -55,14 +55,26 @@ function normalizeRouteError(error: unknown): NormalizedError {
 }
 
 const NON_SESSION_SEGMENTS = new Set(['new', 'new-dialogue', 'boot', 'scheduled']);
+// 任务页与伙伴任务页;远程伙伴的所属电脑在路径里,其余按任务来源登记查。
+const SESSION_ROUTES = [
+  '/cc-agent/orca/:sessionId',
+  '/cc-agent/files/:sessionId',
+  '/cc-agent/:sessionId',
+  '/bots/remote/:deviceId/:botId/session/:sessionId',
+  '/bots/remote/:deviceId/:botId/history/:sessionId',
+  '/bots/:botId/session/:sessionId',
+  '/bots/:botId/history/:sessionId',
+];
 
-/** 崩溃发生在某个任务页时返回该任务 id,供诊断附上任务链接。 */
-function crashedSessionId(pathname: string): string | null {
-  const match = matchPath('/cc-agent/orca/:sessionId', pathname)
-    ?? matchPath('/cc-agent/files/:sessionId', pathname)
-    ?? matchPath('/cc-agent/:sessionId', pathname);
-  const sessionId = match?.params.sessionId;
-  return sessionId && !NON_SESSION_SEGMENTS.has(sessionId) ? sessionId : null;
+/** 崩溃发生在某个任务页时返回该任务及所属电脑,供诊断附上任务链接。 */
+function crashedSession(pathname: string): { sessionId: string; deviceId?: string } | null {
+  for (const pattern of SESSION_ROUTES) {
+    const params = matchPath(pattern, pathname)?.params;
+    const sessionId = params?.sessionId;
+    if (!sessionId || NON_SESSION_SEGMENTS.has(sessionId)) continue;
+    return { sessionId, deviceId: params.deviceId ?? getStickySessionDeviceId(sessionId) };
+  }
+  return null;
 }
 
 export function RouteErrorFallback({
@@ -83,9 +95,9 @@ export function RouteErrorFallback({
   }, [variant, message, stack]);
 
   const handleDiagnose = () => {
-    const sessionId = crashedSessionId(pathname);
-    const sessionUrl = sessionId
-      ? buildSessionDeepLink(sessionId, { deviceId: getStickySessionDeviceId(sessionId) })
+    const session = crashedSession(pathname);
+    const sessionUrl = session
+      ? buildSessionDeepLink(session.sessionId, { deviceId: session.deviceId })
       : null;
     prefillErrorDiagnosisDraft(buildErrorDiagnosisPrompt(t, sessionUrl, {
       message: t('appError.title'),
