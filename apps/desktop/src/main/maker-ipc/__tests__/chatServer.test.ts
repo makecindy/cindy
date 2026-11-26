@@ -2612,6 +2612,9 @@ describe('Chat Server result delivery and refresh', () => {
         await service.settleLaneTurn({ ...terminal, sessionId: 'group-task-1', activeInputClientId: dispatched()[0]!.clientId, resultText: 'Hi' });
         const input = await sendQuoted();
         expect(input.attachments).toEqual([downloaded(1), downloaded(2)]);
+        const note = t('bots.groupChat.assistant.replyingTo').replace('{{name}}', 'Ann').replace('{{text}}', 'lesson-1.docx');
+        expect(input.persistedContent).toContain(note);
+        expect(input.origin).toMatchObject({ displayText: input.persistedContent });
         expect(fixture.download.mock.calls).toEqual([[roomId, file(1).mediaId], [roomId, file(2).mediaId]]);
         expect(fixture.handle.mock.calls.filter(([route]) => route === `/conversations/${roomId}/messages/${message(1, peerId, '').id}`)).toHaveLength(1);
         expect(fixture.handle.mock.calls.some(([route]) => route === `/conversations/${roomId}/messages/${message(2, peerId, '').id}`)).toBe(false);
