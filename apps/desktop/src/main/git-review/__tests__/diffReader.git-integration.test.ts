@@ -71,14 +71,18 @@ afterAll(async () => {
 });
 
 describe('git-review diffReader', () => {
-  it('returns the same staged and unstaged sibling edits for the guest and owner of a shared subdirectory', async () => {
-    const workdir = path.join(repoPath, 'shared');
-    await fs.mkdir(workdir);
+  it('returns the same staged and unstaged sibling edits for the guest and owner of an aliased shared subdirectory', async (ctx) => {
+    const alias = repoPath + '-alias';
+    await fs.symlink(repoPath, alias, process.platform === 'win32' ? 'junction' : 'dir');
+    ctx.onTestFinished(() => fs.unlink(alias));
+    await fs.mkdir(path.join(repoPath, 'shared'));
+    const workdir = path.join(alias, 'shared');
+    const physicalRoot = await fs.realpath(repoPath);
     // Recycled checkouts leave this historical path in the session row.
     const row = { id: 's1', workingDir: workdir, remoteHostId: null, worktreePath: path.join(repoPath, 'removed-worktree') };
     const read = () => withSessionReviewRowSnapshot(row, async () => {
       const resolved = await resolveReviewScope('s1');
-      expect(resolved.repoRoot).toBe(path.resolve(repoPath));
+      expect(await fs.realpath(resolved.repoRoot!)).toBe(physicalRoot);
       return readDiffs(resolved, await readStatus(resolved));
     });
     const guest = () => runDeviceLinkInvokeContext({

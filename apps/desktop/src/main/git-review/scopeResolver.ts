@@ -7,6 +7,7 @@
  */
 
 import { AsyncLocalStorage } from 'node:async_hooks';
+import { realpath } from 'node:fs/promises';
 import path from 'node:path';
 
 import { eq } from 'drizzle-orm';
@@ -307,7 +308,11 @@ export async function resolveReviewScope(
     const anchor = resolved.source === 'worktree' ? resolved.workdir : row.workingDir!;
     const anchorRoot = path.resolve(anchor) === path.resolve(resolved.workdir)
       ? repoRoot : (await readRepoRoot(anchor, deps.git)).repoRoot;
-    if (!anchorRoot || path.relative(anchorRoot, repoRoot) !== '' || !containsWorkspace(path, repoRoot, anchor)) {
+    const physicalRoot = await realpath(repoRoot).catch(() => null);
+    const physicalAnchor = await realpath(anchor).catch(() => null);
+    const physicalAnchorRoot = anchorRoot === repoRoot ? physicalRoot : anchorRoot && await realpath(anchorRoot).catch(() => null);
+    if (!physicalRoot || !physicalAnchor || !physicalAnchorRoot ||
+        path.relative(physicalAnchorRoot, physicalRoot) !== '' || !containsWorkspace(path, physicalRoot, physicalAnchor)) {
       throw new Error('[PERMISSION_DENIED] Shared review workspace unavailable');
     }
   }
