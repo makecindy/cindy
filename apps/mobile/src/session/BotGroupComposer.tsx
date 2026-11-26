@@ -256,6 +256,7 @@ export function BotGroupComposer({
       if (!online) return;
       const member = mentionCandidates.find(candidate => candidate.botId === botId && candidate.actorKind !== 'human');
       if (!member?.name.trim()) return;
+      onParticipate?.();
       const current = textRef.current;
       // A timeline gesture keeps the whole draft, including any selected text.
       const draft = current && !/\s$/.test(current) ? `${current} ` : current;

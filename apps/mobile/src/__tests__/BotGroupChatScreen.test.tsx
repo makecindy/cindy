@@ -2,7 +2,7 @@
 import { act, createContext, createElement as el, useContext, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { buildBotGroupCapabilityNotice, BOT_GROUP_RUNTIME_FAILURE_CODES, type BotGroupRemoteChatData } from '@cindy/maker-shared/botGroupChat';
+import { buildBotGroupCapabilityNotice, BOT_GROUP_RUNTIME_FAILURE_CODES, type BotGroupRemoteChatData, type ChatMaskState } from '@cindy/maker-shared/botGroupChat';
 import { chatGroupView, chatRoomRow, createChatServerClient, type ChatMessage, type ChatPage } from '@/chat/chatServerClient';
 import { shareSelectionStore } from '@/session/shareSelectionStore';
 import { i18n, SUPPORTED_LOCALES } from '@/i18n';
@@ -464,6 +464,12 @@ async function click(id: string) {
   const target = byId(id);
   if (!target) throw new Error(`missing ${id}`);
   await act(async () => { target.click(); });
+}
+
+function holdAvatar(botId: string) {
+  const target = byId(`botGroup.avatarMention.${botId}`);
+  if (!target) throw new Error(`Missing mention avatar for ${botId}`);
+  target.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true }));
 }
 async function openTopicMenu(messageId: string) {
   const menu = byId(`botGroup.thread.context.${messageId}`);
@@ -1676,12 +1682,7 @@ describe('group composer', () => {
     await click('botGroup.avatarMention.mimi');
     expect(h.row.value).toBe('A draft');
 
-    const hold = (botId: string) => {
-      const target = byId(`botGroup.avatarMention.${botId}`);
-      expect(target).not.toBeNull();
-      target!.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true }));
-    };
-    await act(async () => hold('abu'));
+    await act(async () => holdAvatar('abu'));
     expect(h.row.value).toBe('A draft @Ann ');
     expect(h.chat.act).not.toHaveBeenCalled();
     await click('botGroup.composer.send');
@@ -1689,13 +1690,55 @@ describe('group composer', () => {
       text: 'A draft @Ann', mentions: { all: false, botIds: ['abu'] },
     }));
 
-    await act(async () => { hold('mimi'); hold('abu'); });
+    await act(async () => { holdAvatar('mimi'); holdAvatar('abu'); });
     expect(h.row.value).toBe('@Ann @Ann ');
     expect(h.chat.act).toHaveBeenCalledTimes(1);
     await click('botGroup.composer.send');
     expect(h.chat.act).toHaveBeenLastCalledWith('send', expect.objectContaining({
       text: '@Ann @Ann', mentions: { all: false, botIds: ['mimi', 'abu'] },
     }));
+  });
+
+  it.each([
+    { draft: '', other: 'Ann Lee', typedAfter: 'Lee, can you check?', recipients: ['mimi'] },
+    { draft: '@Team', other: 'Team @Ann', typedAfter: '', recipients: ['xiaoman', 'mimi'] },
+  ])('sends the avatar pick despite the longer name $other', async ({ draft, other, typedAfter, recipients }) => {
+    const data = group();
+    const names = ['Ann', other, 'Team'];
+    await render(group({
+      openPlan: null,
+      members: data.members.map((member, index) => ({ ...member, name: names[index]! })),
+      messages: [message('m1', 1, { authorBotId: 'mimi', authorName: 'Ann', content: 'Earlier reply' })],
+    }));
+    if (draft) await type(draft);
+    await act(async () => holdAvatar('mimi'));
+    if (typedAfter) await type(h.row.value + typedAfter);
+    await click('botGroup.composer.send');
+    expect(h.chat.act).toHaveBeenLastCalledWith('send', expect.objectContaining({
+      mentions: { all: false, botIds: recipients },
+    }));
+  });
+
+  it.each(['scheduled', 'manual', 'always'] as const)('honors %s delegation when a long press starts an empty draft', async trigger => {
+    let state: ChatMaskState = {
+      revision: 1, status: 'enabled', manualRunning: trigger === 'manual',
+      self: { id: 'owner', name: 'Me', avatarUrl: null }, companions: [{ id: 'mask-bot', name: 'Proxy', avatarUrl: null }],
+      settings: { companionId: 'mask-bot', enabled: true, trigger, start: '09:00', end: '18:00', timeZone: 'UTC',
+        resumeMinutes: 15, collectTodos: false, digest: 'manual' },
+    };
+    h.chat.act.mockImplementation(async (action: string, input?: { action?: { type: string } }) => {
+      if (action === 'mask-mentions') return { result: { mentions: [], hasMore: false } };
+      if (input?.action?.type === 'participate') state = { ...state, status: 'paused', manualRunning: false };
+      return { result: { state } };
+    });
+    await render(group({ openPlan: null, serverBacked: true, supportsPersonalMask: true }));
+    expect(h.row.value).toBe('');
+    await act(async () => holdAvatar('mimi'));
+    expect(h.row.value).toBe('@咪咪 ');
+    const mutations = h.chat.act.mock.calls.filter(([action, input]: [string, { action?: unknown } | undefined]) => action !== 'mask-mentions' && (action !== 'mask' || input?.action));
+    expect(mutations).toEqual(trigger === 'always' ? [] : [
+      ['mask', { action: { type: 'participate' }, operationId: expect.any(String) }],
+    ]);
   });
 
   it.each(['[INVALID_PARAMS] MENTION_UNAVAILABLE', 'MENTION_UNAVAILABLE'])('keeps a stale selected target through a refused send (%s) and lets a new pick replace it', async message => {
