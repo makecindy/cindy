@@ -58,7 +58,7 @@ function ConfirmationCopy({ title, message, styles, surface }: { title: string; 
   const copy = useScrollOverflow();
   return (
     <View style={styles.content}>
-      <ScrollView style={styles.content} contentContainerStyle={styles.copy} bounces={false} showsVerticalScrollIndicator={false} testID="sharedTask.confirmCopy"
+      <ScrollView style={styles.content} contentContainerStyle={[styles.copy, copy.thumbGutter]} bounces={false} showsVerticalScrollIndicator={false} testID="sharedTask.confirmCopy"
         onLayout={copy.onLayout} onContentSizeChange={copy.onContentSizeChange} onScroll={copy.onScroll} scrollEventThrottle={64}>
         <Text style={styles.title} accessibilityRole="header">{title}</Text>
         {!!message && <Text style={styles.body}>{message}</Text>}

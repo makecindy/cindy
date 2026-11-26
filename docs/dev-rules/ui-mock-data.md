@@ -148,7 +148,7 @@ pnpm mobile:sim:whoami -- --mock --json
   市场详情与电脑一致：Demo Shift Calendar（公开的社区作者插件）显示社区声明、不显示作者；官方插件的「来源」为「公开市场」，团队共享插件为「组织」，
   版本带 v。
   整页状态用 `cindy://plugins?market=<场景>`：`outdated`（电脑版本太旧）、`unavailable`、
-  `organization`、`customPartial`、`empty`、`readFailed`（首次读取失败，重试恢复）、`twoComputers`（多一台在线的
+  `organization`、`customPartial`、`empty`、`readFailed`（首次读取失败，重试恢复；同一深链重发不重新造失败）、`twoComputers`（多一台在线的
   CINDY Second Mock Mac，可在「安装到」里切换）、`offline`（离线模拟电脑变成可选且不应答，选中后显示离线状态）、
   `hold`（确认后的安装、更新一直停在「进行中」，不自动完成：用于截「进行中时其它入口不可用、顶部提示可见」，例如 iPad 宽屏
   打开 Demo Weather Board 详情点「更新到 v版本」并允许，再在旁边切到市场；换回 `normal` 后下一次查询即完成），
@@ -171,7 +171,7 @@ pnpm mobile:sim:whoami -- --mock --json
   | 成功，正在确认电脑上的插件（「已完成，正在确认电脑上的插件…」） | `cindy://plugins?checks=readingBack`（之后的已装读取一直不回） |
   | 成功，但插件之后又有变化（未能证实，没有「打开」） | `cindy://plugins?checks=changed`（提交后模拟电脑换成同一插件的旧版本，记录 `unattributed`；形状不完全贴合真实 Host：真实电脑上从本地文件装旧版本可能落到 `conflict`，结论同样是不打开） |
   | 已卸载 | `cindy://plugins?checks=uninstalled`（Demo Weather Board 的卸载） |
-  | 「查看并决定」被占用挡住（说明要等另一项结束） | `cindy://plugins?checks=decideBlocked`，点 Demo Agenda 的「查看并决定」（Demo Device Simulator 正在同一台电脑上安装） |
+  | 「查看并决定」被占用挡住（说明要等另一项结束） | `cindy://plugins?checks=decideBlocked`，列表里两条：点 Demo Agenda 的「查看并决定」（Demo Device Simulator 正在同一台电脑上安装；电脑在 Simulator 拿到位置之后才回答 Agenda 的确认，页面中途的查询不会让 Agenda 先拿回位置） |
   | 卸载回执过期，无法确认（显示还装着、只有「不再跟踪」） | `cindy://plugins?checks=unprovableUninstall`（面板打开后自动核实一次即出现） |
   | 更新完成且回执过期后核实（「已安装」+ 打开） | `cindy://plugins?checks=updateGone`（Demo Reading List 的更新） |
   | 成功，但未能证实（本机换装同版本，`unattributed`，没有「打开」） | `cindy://plugins?checks=reinstalled` |
@@ -182,7 +182,7 @@ pnpm mobile:sim:whoami -- --mock --json
   | 来源变化（更新预检） | `cindy://plugins?market=updateSourceChanged`，已安装里 Demo Moved Source 详情「管理插件 → 更新到 v版本」 |
   | 版本变化（更新预检） | `cindy://plugins?market=updateReleaseChanged`，已安装里 Demo Weather Board 详情「更新到 v版本」 |
   | 读取失败（更新预检） | `cindy://plugins?market=updateReadFailed`，同上 |
-  | 市场详情读取失败（「重试」） | `cindy://plugins?market=detailReadFailed`，打开任一未装插件的市场详情（第一次读取失败，「重试」后正常） |
+  | 市场详情读取失败（「重试」） | `cindy://plugins?market=detailReadFailed`，打开任一未装插件的市场详情（每个插件第一次读取失败，「重试」后正常；同一深链再发一次不重新造失败，要再截失败先发 `market=normal` 再发这个） |
   | 在电脑上完成配置 | 没有界面入口：已装详情的状态行只提供「连接电脑」「重试」（主干现状），`settings` 分支的这句提示点不到；`preview=1`（Missing API key）只显示状态 |
   | 进行中停住（其它入口不可用） | `cindy://plugins?market=hold`，安装或更新并允许后停在「进行中」 |
   | 资料值折两行 | 市场里 Demo Long Repository Tools 详情的「作者」 |

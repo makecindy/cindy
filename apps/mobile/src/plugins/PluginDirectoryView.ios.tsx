@@ -34,7 +34,7 @@ import {
   shapes,
   tag,
 } from "@expo/ui/swift-ui/modifiers";
-import { Image as RNImage, StyleSheet, View, useWindowDimensions } from "react-native";
+import { Image as RNImage, StyleSheet, View } from "react-native";
 import { Puzzle } from "lucide-react-native";
 import { useTranslation } from "react-i18next";
 import { resolveRemoteText } from "@cindy/device-link";
@@ -47,7 +47,6 @@ import { PluginNativeNotice } from "./PluginNotice.ios";
 export function PluginDirectoryView(p: PluginDirectoryViewProps) {
   const { t, i18n } = useTranslation();
   const { mode, colors } = useTheme();
-  const { fontScale } = useWindowDimensions();
   const listFailed = p.error;
   const text = (value: Parameters<typeof resolveRemoteText>[0]) =>
     resolveRemoteText(value, i18n.language);
@@ -284,9 +283,6 @@ export function PluginDirectoryView(p: PluginDirectoryViewProps) {
   );
   return (
     <Host
-      // A new text size lays the list out again from the top inset it has now (dispatcher P-2), not the one measured at
-      // the old size (the search bar above it grows with the text).
-      key={`text-${Math.round(fontScale * 100)}`}
       colorScheme={mode}
       style={styles.root}
       seedColor={colors.textPrimary}

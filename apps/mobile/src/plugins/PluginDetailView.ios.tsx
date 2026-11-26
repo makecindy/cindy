@@ -79,9 +79,6 @@ export function PluginDetailView(p: PluginDetailViewProps) {
     });
   }
   const [factHeights, setFactHeights] = useState<Record<string, number>>({});
-  // Height of the task buttons floating over the list's bottom edge (dispatcher P-2): the list ends with that much room,
-  // so every row (the notice at the largest text sizes too) can scroll above them and be tapped.
-  const [actionsHeight, setActionsHeight] = useState(0);
   useEffect(() => setFactHeights({}), [p.row.key]);
   const [expandedFacts, setExpandedFacts] = useState<Record<string, boolean>>(
     {},
@@ -653,10 +650,6 @@ export function PluginDetailView(p: PluginDetailViewProps) {
               />
             ) : null}
           </Section>
-          {showActions && actionsHeight > 0 ? (
-            <VStack testID="plugins.detail.actionsInset" modifiers={[frame({ height: actionsHeight }), listRowBackground(colors.surface),
-              listRowSeparator("hidden"), listRowInsets({ leading: 0, trailing: 0, top: 0, bottom: 0 })]}>{null}</VStack>
-          ) : null}
         </List>
         {showActions ? (
           <Background>
@@ -669,7 +662,6 @@ export function PluginDetailView(p: PluginDetailViewProps) {
                   top: spacing.xl,
                   bottom: spacing.md,
                 }),
-                onGeometryChange(({ height }) => setActionsHeight((current) => Math.abs(current - height) < 1 ? current : Math.ceil(height))),
               ]}
               testID="plugins.use"
             >

@@ -5,6 +5,22 @@ vi.mock("react-native", () => ({ AppState: { currentState: "active", addEventLis
 vi.mock("@/auth/AuthContext", () => ({ useAuth: () => ({ accountGeneration: 1 }) }));
 vi.mock("@/device-link/DeviceLinkContext", () => ({ useDeviceLink: () => ({}) }));
 vi.mock("@/device-link/revokedDevicesStore", () => ({ useRevokedDevices: () => null }));
+/** `raceLookups`: a record is looked up as soon as it is adopted (the page's pending-check driver on a device, S-2). */
+const driver = vi.hoisted(() => ({ raceLookups: false }));
+vi.mock("@/plugins/usePluginManagement", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/plugins/usePluginManagement")>();
+  return { ...actual, __adoptPendingCheckForVisualMock: (...args: Parameters<typeof actual.__adoptPendingCheckForVisualMock>) => {
+    actual.__adoptPendingCheckForVisualMock(...args);
+    if (!driver.raceLookups) return;
+    // Once its first lookup has left it unknown (it let go of the computer), it is looked up again right away.
+    const controller = args[0];
+    let again = true;
+    controller.subscribe(() => {
+      const state = controller.getState();
+      if (again && state.outcome === "unknown" && !state.busy) { again = false; void controller.reconcile(); }
+    });
+  } };
+});
 import { PLUGIN_MARKET_VISUAL_SCENARIOS, pluginMarketVisualDemoIds, pluginMarketVisualManagement, resetPluginMarketVisualComputer,
   setPluginMarketVisualScenario } from "@/debug/pluginMarketVisualFixture";
 import { isPluginMarketSourceIdentity, parsePluginManagementDetail, parsePluginManagementReceipt, parsePluginManagementSnapshot } from "@/plugins/pluginManagementTypes";
@@ -129,8 +145,13 @@ describe("more pending-check states from cindy://plugins?checks=<state>", () => 
     await flush();
     assert();
   });
-  it("decideBlocked: the consent waits for this phone while another operation holds the computer", async () => {
-    await seedPluginChecksForVisualMock("decideBlocked");
+  // Dispatcher S-2 (Android seventh reshoot): on a device only the Demo Agenda consent appeared and "View and decide"
+  // opened it. The page looks a record up as soon as it appears; that lookup found the consent before the second
+  // operation took the computer, so the consent took it back and the second one could not begin. With `raceLookups`
+  // this failed before the S-2 seed change (one record); the plain run covers the existing order.
+  it.each([false, true])("decideBlocked: the consent waits for this phone while another operation holds the computer (immediate lookups: %s)", async (race) => {
+    driver.raceLookups = race;
+    try { await seedPluginChecksForVisualMock("decideBlocked"); } finally { driver.raceLookups = false; }
     await flush();
     const checks = __retainedForTests.checks();
     expect(checks.map((c) => [c.who.name, c.awaitingYou])).toEqual([["Demo Agenda", true], ["Demo Device Simulator", false]]);

@@ -140,3 +140,19 @@ it.each([false, true])('says the text scrolls with a fade and a visible thumb (d
   await act(async () => copy.onScroll({ nativeEvent: { contentOffset: { y: 400 }, contentSize: { height: 600 }, layoutMeasurement: { height: 200 } } }));
   expect(host.querySelector('[data-testid="sharedTask.confirmFade"]')).toBeNull();
 });
+
+// Dispatcher S-3 (Android seventh reshoot): the same thumb lay over content in the plugin record panel; this card uses it
+// too. While the text scrolls its right side keeps the thumb's width and a gap free; otherwise it keeps its full
+// width. Failed on 5983ba71dd (no right padding). Tier: unit/jsdom.
+it('keeps the scroll thumb off the text', async () => {
+  await act(async () => root.render(<Harness />));
+  await click('open');
+  const flat = (style: any) => Object.assign({}, ...[style].flat(3).filter(Boolean));
+  const copy = () => h.props.get('sharedTask.confirmCopy');
+  expect(flat(copy().contentContainerStyle).paddingRight).toBeUndefined();
+  await act(async () => copy().onLayout({ nativeEvent: { layout: { height: 200 } } }));
+  await act(async () => copy().onContentSizeChange(300, 600));
+  const thumb = host.querySelector('[data-testid="sharedTask.confirmThumb"]') as HTMLElement;
+  const right = parseFloat(thumb.style.right), width = parseFloat(thumb.style.width);
+  expect(right + width).toBeLessThan(flat(copy().contentContainerStyle).paddingRight);
+});

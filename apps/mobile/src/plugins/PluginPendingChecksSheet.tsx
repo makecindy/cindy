@@ -103,7 +103,7 @@ export function PluginPendingChecksSheet({ visible, lines, conclusions, isOnline
         <Text style={styles.title} accessibilityRole="header">{t(live.size ? "plugins.checks.title" : "plugins.checks.titleEnded")}</Text>
         {/* More lines than fit: a fade over the lower edge and a scroll thumb that stays visible (dispatcher Q-1). */}
         <View style={styles.listArea}>
-        <ScrollView contentContainerStyle={styles.list} showsVerticalScrollIndicator={false} testID="plugins.checks.list"
+        <ScrollView contentContainerStyle={[styles.list, listArea.thumbGutter]} showsVerticalScrollIndicator={false} testID="plugins.checks.list"
           onLayout={listArea.onLayout} onContentSizeChange={listArea.onContentSizeChange} onScroll={listArea.onScroll} scrollEventThrottle={64}>
           {shown.map((line) => {
             const check = live.has(line.key) ? line.check : undefined;

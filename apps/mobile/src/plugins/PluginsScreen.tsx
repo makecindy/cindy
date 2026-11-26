@@ -122,7 +122,7 @@ function PluginDirectory() {
   const { invoke, connectionEpoch } = useDeviceLink();
   const { colors } = useTheme(),
     styles = useThemedStyles(makeStyles);
-  const { width, fontScale } = useWindowDimensions();
+  const { width } = useWindowDimensions();
   const wide = width >= 768;
   const devices = useDeviceManagement(auth.apiFetch, focused);
   const targets = useMemo(
@@ -326,10 +326,7 @@ function PluginDirectory() {
           }
         : undefined,
     }),
-    // `fontScale` (dispatcher P-2): when the text size changes while the page is open, the stacked search bar grows with
-    // it but the page below kept the header height it was laid out with, so the bar covered the list's first rows.
-    // Handing the header its options again lays the header and the page out again for the new size.
-    [searchVisible, searchBar, t, colors.inputCaret, colors.textPrimary, fontScale],
+    [searchVisible, searchBar, t, colors.inputCaret, colors.textPrimary],
   );
   useEffect(() => {
     setPageTitle("");

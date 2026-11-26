@@ -4,7 +4,7 @@ import { pluginManagementSlotFor, pluginOperationHold } from "@/plugins/pluginMa
 import { __adoptPendingCheckForVisualMock } from "@/plugins/usePluginManagement";
 import { REMOTE_RESOURCE_INVOKE_CHANNEL, REMOTE_RESOURCE_MANIFEST_CHANNEL } from "@cindy/device-link";
 import { pluginMarketVisualHoldsInstalledReads, pluginMarketVisualManagement, resetPluginMarketVisualComputer,
-  scriptVisualCheckOperation, withPluginManagementManifest, type VisualCheckBehavior } from "@/debug/pluginMarketVisualFixture";
+  rescriptVisualCheckOperation, scriptVisualCheckOperation, withPluginManagementManifest, type VisualCheckBehavior } from "@/debug/pluginMarketVisualFixture";
 import type { PluginSlotEntry } from "@/plugins/pluginManagementSlot";
 
 /**
@@ -84,10 +84,14 @@ export async function seedPluginChecksForVisualMock(state: string): Promise<(() 
     case "updateGone": { const c = await seedOne(READING, "gone", MAC, "update"); return () => { void c?.reconcile(); }; }
     // A consent waiting for this phone while another operation holds the computer: "View and decide" says it must wait.
     case "decideBlocked": {
-      // The consent's check waits first (it lets go of the computer's slot), the other operation then takes the slot, and
-      // only then does the check find the consent: it cannot take the slot back.
-      const c = await one("consent");
+      // The check's result is unknown first (it lets go of the computer's slot), the other operation then takes the
+      // slot, and only then does the computer answer the check with the consent: it cannot take the slot back. Until
+      // the slot is taken the computer answers it as `waiting` (no consent yet), so the page looking it up meanwhile
+      // (it does as soon as the record appears) cannot find the consent early and take the slot back (dispatcher S-2).
+      const c = await one("waiting");
       await seedOne(SIMULATOR, "running");
+      const operationId = c?.getState().operationId;
+      if (operationId) rescriptVisualCheckOperation(operationId, "consent");
       await c?.reconcile();
       return () => {};
     }

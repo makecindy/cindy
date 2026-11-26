@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { StyleSheet, View } from "react-native";
 import { useTheme } from "@/theme";
-import { radius } from "@/theme/tokens";
+import { radius, spacing } from "@/theme/tokens";
 
 /**
  * What a scroll area shows of its content (its own scroll metrics; display only). Used by scroll areas that say there is
@@ -16,6 +16,12 @@ export function useScrollOverflow() {
     more: overflow && area.offset + area.visible < area.content - 2,
     /** The area scrolls at all (more above or below). */
     overflow,
+    /**
+     * For the area's `contentContainerStyle`: room on the right for the thumb while the area scrolls, so the thumb never
+     * covers the content (dispatcher S-3: it lay over the right end of a button). Only while it scrolls: the gutter can
+     * only make the content taller, so it cannot turn the overflow off again.
+     */
+    thumbGutter: overflow ? THUMB_GUTTER : undefined,
     onLayout: (event: { nativeEvent: { layout: { height: number } } }) => {
       const visible = Math.ceil(event.nativeEvent.layout.height);
       setArea((current) => current.visible === visible ? current : { ...current, visible });
@@ -36,11 +42,14 @@ export function useScrollOverflow() {
 export type ScrollOverflow = ReturnType<typeof useScrollOverflow>;
 
 const THUMB_MIN = 24;
+const THUMB_RIGHT = 1, THUMB_WIDTH = 3;
+/** The thumb's own width and inset plus a gap: the content ends left of it. */
+const THUMB_GUTTER = { paddingRight: THUMB_RIGHT + THUMB_WIDTH + spacing.xs } as const;
 /**
  * A scroll thumb that stays visible while the area scrolls (dispatcher Q-1): Android's own bar takes its color from the
  * native theme, which does not follow the app's light / dark choice (in dark mode it was #151515 on #1E1E1E). This one
  * uses the `borderStrong` token, so it stands out from the surface in both modes. Pair it with
- * `showsVerticalScrollIndicator={false}` on the area. It takes no room and no touches.
+ * `showsVerticalScrollIndicator={false}` on the area, and `thumbGutter` in its content style. It takes no touches.
  */
 export function ScrollThumb({ overflow, testID }: { overflow: ScrollOverflow; testID?: string }) {
   const { colors } = useTheme();
@@ -70,7 +79,7 @@ export function ScrollFade({ color, height, testID }: { color: string; height: n
 }
 
 const styles = StyleSheet.create({
-  thumb: { position: "absolute", right: 1, width: 3, borderRadius: radius.pill },
+  thumb: { position: "absolute", right: THUMB_RIGHT, width: THUMB_WIDTH, borderRadius: radius.pill },
   fade: { position: "absolute", left: 0, right: 0, bottom: 0 },
   fadeBand: { flex: 1 },
 });

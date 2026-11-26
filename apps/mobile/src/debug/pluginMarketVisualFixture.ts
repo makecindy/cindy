@@ -33,6 +33,11 @@ const scripted = new Map<string, { behavior: VisualCheckBehavior; lookups: numbe
 export function scriptVisualCheckOperation(operationId: string, behavior: VisualCheckBehavior) {
   scripted.set(operationId, { behavior, lookups: 0 });
 }
+/** The computer answers an already scripted operation's later lookups with `behavior` (its first lookup is past). */
+export function rescriptVisualCheckOperation(operationId: string, behavior: VisualCheckBehavior) {
+  const script = scripted.get(operationId);
+  if (script) script.behavior = behavior;
+}
 /**
  * Demo Uncertain Sync in the pending-check scenarios (begin's reply is lost; the first lookup hits a protocol error, so
  * the attempt becomes a pending check): `lateConsent` then shows a consent this phone never showed ("The computer is
@@ -49,8 +54,12 @@ export function pluginMarketVisualDeviceScenario(): "twoComputers" | "offline" |
 }
 let scenario: PluginMarketVisualScenario = "normal";
 let failedReads = 0;
-/** `detailReadFailed`: the first market detail read of a plugin that is not being updated fails (its "Retry"). */
-let failedDetailReads = 0;
+/**
+ * `detailReadFailed`: the first market detail read of each plugin that is not being updated fails once, then reads
+ * succeed ("Retry" recovers). Kept per plugin and not reset when the same scenario is applied again (a repeated deep
+ * link), so a retry always finds the plugin's read working (dispatcher S-1).
+ */
+const failedDetailReads = new Set<string>();
 
 /** Every `market=` scenario, and every demo plugin's market id (the protocol check in pluginMarketVisualFixture.test.ts). */
 export const PLUGIN_MARKET_VISUAL_SCENARIOS: readonly string[] = SCENARIOS;
@@ -58,9 +67,12 @@ export function pluginMarketVisualDemoIds(): string[] { return DEMOS.map((demo) 
 /** Applies a deep-link scenario; returns true when the market tab should open. */
 export function setPluginMarketVisualScenario(value: unknown, enabled: boolean): boolean {
   if (!enabled || typeof value !== "string" || !SCENARIOS.includes(value as PluginMarketVisualScenario)) return false;
+  // The same scenario again (a repeated deep link) keeps what already failed once, so `readFailed`'s and
+  // `detailReadFailed`'s Retry read successfully (dispatcher S-1). Another scenario first arms them again.
+  if (scenario === value) return true;
   scenario = value as PluginMarketVisualScenario;
   failedReads = 0;
-  failedDetailReads = 0;
+  failedDetailReads.clear();
   return true;
 }
 
@@ -413,7 +425,10 @@ export function pluginMarketVisualManagement(actionId: string | undefined, input
       const entry = installed.get(instanceKey(demo.ghostId));
       const updating = !!entry && entry.version !== RELEASE;
       if (updating && scenario === "updateReadFailed") throw failure("TIMEOUT");
-      if (!updating && scenario === "detailReadFailed" && failedDetailReads++ < 1) throw failure("TIMEOUT");
+      if (!updating && scenario === "detailReadFailed" && !failedDetailReads.has(demo.ghostId)) {
+        failedDetailReads.add(demo.ghostId);
+        throw failure("TIMEOUT");
+      }
       const item = marketItem(demo);
       if (updating && scenario === "updateReleaseChanged") return result({ ...item, releaseId: `${demo.ghostId}@9.9.9`, version: "9.9.9", manifest: manifest(demo, "9.9.9") });
       if (updating && scenario === "updateSourceChanged" && item.sourceIdentity)

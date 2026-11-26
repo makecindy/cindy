@@ -181,12 +181,16 @@ vi.mock("lucide-react-native", () =>
       "Check",
       "Search",
       "Plus",
+      "Wrench",
+      "CircleAlert",
+      "WifiOff",
     ].map((key) => [key, () => null]),
   ),
 );
 vi.mock("@/components/AppText", () => ({
   Text: ({ children }: any) => createElement("span", null, children),
   TextInput: () => null,
+  MAX_FONT_SIZE_MULTIPLIER: 1.2,
 }));
 vi.mock("@/auth/AuthContext", () => ({
   useAuth: () => ({ accountGeneration: fixture.accountGeneration, apiFetch: vi.fn() }),
@@ -5149,4 +5153,57 @@ describe("market computer choice", () => {
     await settle();
     expect(shownMarket()).toMatchObject({ status: "offline", target: { deviceId: "pc" } });
   });
+});
+
+// Dispatcher S-1 (Android seventh reshoot): with market=detailReadFailed the detail's "Retry" seemed to leave the banner.
+// Through the real screen and the mock computer itself: the first detail read fails, the notice's own Retry reads it
+// again, and the banner goes with the freshly read detail. The product path recovers (this passes on 5983ba71dd too:
+// existing behaviour); the mock reset its fail-once counter whenever the same scenario was applied again, and counted
+// any plugin's read, so a repeated deep link made the next read fail again. It now fails once per plugin and keeps that
+// when the same scenario is applied again. Tier: unit/jsdom.
+it("recovers the market detail with its Retry after the first read failed (mock market=detailReadFailed)", async () => {
+  const { pluginMarketVisualManagement, setPluginMarketVisualScenario, resetPluginMarketVisualComputer } = await import("@/debug/pluginMarketVisualFixture");
+  resetPluginMarketVisualComputer();
+  setPluginMarketVisualScenario("normal", true);
+  setPluginMarketVisualScenario("detailReadFailed", true);
+  try {
+    const requests = marketWire((request) => (pluginMarketVisualManagement(request.actionId, request.input, request.resourceRef?.id) as any).result);
+    await openMarket();
+    const agenda = shownMarket().items.find((entry: any) => entry.name === "Demo Agenda");
+    await act(async () => shownMarket().openDetail(agenda));
+    await settle(14);
+    const banner = () => element.querySelector('[data-testid="plugins.market.detailFailed"]');
+    expect(banner()).not.toBeNull();
+    // While failed the page shows what the market list already said; the manifest's tools come only from a detail read.
+    expect(element.textContent).not.toContain("demo_list_events");
+    // The same deep link again (as a capture run may send it) does not make the next read fail.
+    setPluginMarketVisualScenario("detailReadFailed", true);
+    await act(async () => fixture.props.get("plugins.market.detailFailed").actions[0].onPress());
+    await settle(14);
+    expect(banner()).toBeNull();
+    expect(requests.filter((request) => request.actionId === "management:market-detail").map((request) => request.input?.pluginId))
+      .toEqual([agenda.pluginId, agenda.pluginId]);
+    // The detail shown is the one read now (its manifest's tools), not only the list's item.
+    expect(element.textContent).toContain("demo_list_events");
+  } finally { setPluginMarketVisualScenario("normal", true); }
+});
+// Dispatcher S-1, the same check for the market list (mock market=readFailed): the list's Retry (it calls the market's
+// refresh) reads again and the failure goes, even when the deep link was applied again before it. Without the S-1 mock
+// change the repeated link re-armed the failure and the Retry failed again. Tier: unit/jsdom.
+it("recovers the market list with its Retry after the first read failed (mock market=readFailed)", async () => {
+  const { pluginMarketVisualManagement, setPluginMarketVisualScenario, resetPluginMarketVisualComputer } = await import("@/debug/pluginMarketVisualFixture");
+  resetPluginMarketVisualComputer();
+  setPluginMarketVisualScenario("normal", true);
+  setPluginMarketVisualScenario("readFailed", true);
+  try {
+    marketWire((request) => (pluginMarketVisualManagement(request.actionId, request.input, request.resourceRef?.id) as any).result);
+    await openMarket();
+    await settle(14);
+    expect(shownMarket().status).toBe("failed");
+    setPluginMarketVisualScenario("readFailed", true);
+    await act(async () => { await shownMarket().refresh(); });
+    await settle(14);
+    expect(shownMarket().status).toBe("ready");
+    expect(shownMarket().items.map((entry: any) => entry.name)).toContain("Demo Agenda");
+  } finally { setPluginMarketVisualScenario("normal", true); }
 });

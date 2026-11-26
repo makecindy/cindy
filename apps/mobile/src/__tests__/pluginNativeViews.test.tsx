@@ -19,6 +19,7 @@ import { PluginManagementConfirmation } from "@/plugins/PluginManagementConfirma
 import { PluginManagementConfirmation as AndroidManagementConfirmation } from "@/plugins/PluginManagementConfirmation";
 import { PluginModelPicker } from '@/plugins/PluginModelPicker';
 import { usePluginPrompt } from "@/plugins/usePluginPrompt.ios";
+import { PluginPendingChecksSheet } from "@/plugins/PluginPendingChecksSheet";
 
 const bridge = vi.hoisted(() => ({
   maker: { getCapabilities: async () => ({ availableModels: [], effortLevels: [], permissionModes: [] }) },
@@ -32,6 +33,8 @@ const bridge = vi.hoisted(() => ({
 vi.mock("@/hooks/useReduceMotion", () => ({ useReduceMotionEnabled: () => false }));
 // Metro resolves the iOS market rows inside the iOS directory; vitest needs the platform file named.
 vi.mock("@/plugins/PluginMarketRows", () => import("@/plugins/PluginMarketRows.ios"));
+// The record panel only calls this on "Read again" (not pressed here); the real module needs the device link.
+vi.mock("@/plugins/usePluginManagement", () => ({ retryPluginCheckReadback: () => {} }));
 vi.mock("@/session/useMobileKeyboardState", () => ({ useMobileKeyboardState: () => ({ visible: bridge.keyboardVisible }) }));
 vi.mock("@expo/ui/swift-ui", async () => {
   const React = await import("react");
@@ -1743,6 +1746,34 @@ describe("pinned high-risk permission", () => {
     expect((Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05)).toBeGreaterThanOrEqual(3);
     act(() => list().onScroll({ nativeEvent: { contentOffset: { y: 900 }, contentSize: { height: 1200 }, layoutMeasurement: { height: 300 } } }));
     expect(thumb().top).toBe(225);
+  });
+  // Dispatcher S-3 (Android seventh reshoot): the record panel's thumb (x 1018-1025) lay over the right end of the
+  // "Stop tracking" button. The scrolling content keeps the thumb's width and a gap free on its right; without
+  // overflow it keeps its full width. The confirmation sheet's two areas use the same thumb. Failed on 5983ba71dd (no
+  // right padding). Tier: unit/jsdom.
+  const flatStyle = (style: any) => Object.assign({}, ...[style].flat(3).filter(Boolean));
+  const thumbClear = (area: string, thumb: string) => {
+    const content = flatStyle(bridge.props.get(area).contentContainerStyle), bar = flatStyle(bridge.props.get(thumb).style);
+    expect(bar.right + bar.width).toBeLessThan(content.paddingRight ?? 0);
+  };
+  it.each([["plugins.management.list", "plugins.management.listThumb"], ["plugins.management.highRiskScroll", "plugins.management.highRiskThumb"]])(
+    "Android keeps the scroll thumb off the content of %s", (area, thumb) => {
+      bridge.fontScale = 2;
+      mount(AndroidManagementConfirmation, props(allFive));
+      expect(flatStyle(bridge.props.get(area).contentContainerStyle).paddingRight).toBeUndefined();
+      act(() => bridge.props.get(area).onLayout({ nativeEvent: { layout: { height: 100 } } }));
+      act(() => bridge.props.get(area).onContentSizeChange(390, 1200));
+      thumbClear(area, thumb);
+    });
+  it("keeps the record panel's scroll thumb off its buttons", () => {
+    const who = { name: "Demo", deviceId: "mac", deviceName: "Mac", pluginId: "market/demo", ghostId: "demo" };
+    const lines = Array.from({ length: 6 }, (_, index) => ({ key: `line-${index}`, entry: "market-install" as const, who }));
+    mount(PluginPendingChecksSheet, { visible: true, lines, conclusions: [], isOnline: () => true, canOpen: () => true,
+      onDecide: () => true, onClose() {}, onOpenInstalled() {}, onShowInstalled() {} });
+    expect(flatStyle(bridge.props.get("plugins.checks.list").contentContainerStyle).paddingRight).toBeUndefined();
+    act(() => bridge.props.get("plugins.checks.list").onLayout({ nativeEvent: { layout: { height: 200 } } }));
+    act(() => bridge.props.get("plugins.checks.list").onContentSizeChange(390, 900));
+    thumbClear("plugins.checks.list", "plugins.checks.listThumb");
   });
   it("Android gives the buttons their own height below the scroll area, which flexes into the rest (K-1)", () => {
     bridge.fontScale = 3;

@@ -75,7 +75,7 @@ export function PluginManagementConfirmation(
     >
       <View style={styles.sheet} testID="plugins.managementConfirmation">
         <View style={styles.listArea}>
-          <ScrollView contentContainerStyle={styles.content} testID="plugins.management.list" showsVerticalScrollIndicator={false}
+          <ScrollView contentContainerStyle={[styles.content, list.thumbGutter]} testID="plugins.management.list" showsVerticalScrollIndicator={false}
             accessibilityHint={t("plugins.management.scrollHint")}
             onLayout={list.onLayout} onContentSizeChange={list.onContentSizeChange} onScroll={list.onScroll}
             scrollEventThrottle={64}>
@@ -136,7 +136,7 @@ export function PluginManagementConfirmation(
                 style={{ maxHeight: plan.mode === "regular" ? plan.summaryLines : undefined }}
                 onLayout={summary.onLayout} onContentSizeChange={summary.onContentSizeChange} onScroll={summary.onScroll}
                 scrollEventThrottle={64}
-                contentContainerStyle={styles.highRiskLines}>
+                contentContainerStyle={[styles.highRiskLines, summary.thumbGutter]}>
                 {summaryLines}
               </ScrollView>
               {summary.more && consentSummaryFadeAllowed(plan) ? fade("plugins.management.highRiskFade") : null}
