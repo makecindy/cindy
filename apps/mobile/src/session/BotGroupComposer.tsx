@@ -423,6 +423,8 @@ export function BotGroupComposer({
       pullThrough={pullThrough}
       grabberTestID="botGroup.composerResizeGrabber"
       collapsedHeight={composerGeometry.pillHeight}
+      // A restored or folded draft longer than the pill reads from its start, as the same overflow rule the resize uses.
+      collapsedOverflowText={!cardActive && contentHeight > resize.visibleContentHeight + 1 ? text : undefined}
       onCollapsedPress={pill.onCollapsedPress}
       expandToken={pill.expandToken}
       bodyScrollEnabled={shellScrolls && !resize.dragging}

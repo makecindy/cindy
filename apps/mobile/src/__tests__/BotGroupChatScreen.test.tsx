@@ -1636,6 +1636,25 @@ describe('group composer', () => {
     expect(h.row.value).toBe('');
   });
 
+  // Unit regression: a restored multi-line draft sat in the one-line pill scrolled to its end. The
+  // composer must hand the row its text to show from the start, only while folded and overflowing.
+  it('shows a restored draft longer than the pill from its start until the composer opens', async () => {
+    const data = group({ openPlan: null });
+    const long = 'please check this draft keeps the mention and wraps over several lines';
+    await render(data);
+    await type(long);
+    await render(data, 'ready', undefined, 'mac', 'g2');
+    await render(data);
+    expect(h.row.value).toBe(long);
+    expect(h.row.cardActive).toBe(false);
+    await act(async () => h.row.onContentSizeChange({ nativeEvent: { contentSize: { height: 28 } } }));
+    expect(h.row.collapsedOverflowText).toBeUndefined();
+    await act(async () => h.row.onContentSizeChange({ nativeEvent: { contentSize: { height: 84 } } }));
+    expect(h.row.collapsedOverflowText).toBe(long);
+    await act(async () => h.row.onFocus());
+    expect(h.row.collapsedOverflowText).toBeUndefined();
+  });
+
   // Unit regression: a send that fails after the chat was left and reopened puts its text back
   // only when nothing newer was typed there; it must not overwrite the newer draft.
   it('keeps text typed after reopening when an earlier send fails later', async () => {

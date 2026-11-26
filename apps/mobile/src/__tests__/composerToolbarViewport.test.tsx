@@ -24,7 +24,15 @@ vi.mock('react-native', async () => {
   return { View, ScrollView, Pressable: View, Platform: { OS: 'ios' },
     StyleSheet: { hairlineWidth: 1, absoluteFill: {} }, Animated: {}, Easing: {} };
 });
-vi.mock('@/components/AppText', () => ({ TextInput: () => null }));
+const textInputProps = vi.hoisted(() => ({ current: {} as Record<string, unknown> }));
+vi.mock('@/components/AppText', async () => {
+  const React = await import('react');
+  return {
+    TextInput: (props: Record<string, unknown>) => { textInputProps.current = props; return null; },
+    Text: ({ children, testID, numberOfLines }: { children?: ReactNode; testID?: string; numberOfLines?: number }) =>
+      React.createElement('span', { 'data-testid': testID, 'data-lines': numberOfLines }, children),
+  };
+});
 vi.mock('@/platform/gestureHandler', () => ({ GestureDetector: ({ children }: { children: ReactNode }) => children }));
 vi.mock('expo-paste-input', () => ({ TextInputWrapper: ({ children }: { children: ReactNode }) => children }));
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (value: string) => value }) }));
@@ -168,5 +176,29 @@ it('keeps typed text visible when the card body overflows and reports a hidden t
     (scrollViewProps.current as typeof props).onContentSizeChange();
     expect(scrollToEnd).toHaveBeenCalledTimes(2);
     expect(onTrayHeight).toHaveBeenLastCalledWith(0);
+  } finally { act(() => root.unmount()); }
+});
+
+// Unit regression: a restored group draft longer than the collapsed pill showed its last line with the
+// line above cut in half. Render the real row: collapsed, it reads from the start on one line; opened,
+// the native text is shown again.
+it('shows collapsed overflow text from its start on one line and restores the native text when opened', () => {
+  const container = document.createElement('div');
+  const root = createRoot(container);
+  const text = 'please check this draft keeps the mention and wraps over several lines';
+  const flatColor = () => Object.assign({}, ...[textInputProps.current.style].flat(Infinity).filter(Boolean)).color;
+  const render = (cardActive: boolean) => act(() => root.render(<MobileComposerInputRow
+    accessibilityLabel="Message" inputTestID="input" placeholder="Message" placeholderTextColor="inherit" value={text}
+    onChangeText={() => {}} cardActive={cardActive} collapsedOverflowText={cardActive ? undefined : text} testID="composer"
+  />));
+  try {
+    render(false);
+    const preview = container.querySelector('[data-testid="input.collapsedPreview"]');
+    expect(preview?.textContent).toBe(text);
+    expect(preview?.getAttribute('data-lines')).toBe('1');
+    expect(flatColor()).toBe('transparent');
+    render(true);
+    expect(container.querySelector('[data-testid="input.collapsedPreview"]')).toBeNull();
+    expect(flatColor()).not.toBe('transparent');
   } finally { act(() => root.unmount()); }
 });
