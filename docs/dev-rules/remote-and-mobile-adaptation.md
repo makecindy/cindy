@@ -7,7 +7,189 @@
 > `apps/desktop/src/main/{remote-agent,remote-ssh}/**`、`apps/desktop/src/main/remote-desktop*/**`、
 > `apps/mobile/src/remote-desktop/**`、`apps/desktop/src/preload/preload.ts`
 
+## 建连限流的服务端重试期限（2026-11-26，#13041）
+
+分享传输建连（`agentNetSharing.ts` 的 scoped 连接工厂申请租约）收到 429 时，`AgentNetSharingError`
+已把有效 `Retry-After` 解析为 `retryAt`，但 `DeviceLinkClient` 工厂失败后只走普通退避（1 秒起、30 秒封顶），
+期限内照样反复请求被限流的接口。现在工厂抛出的错误带 `retryAt`（Unix 毫秒）时，client 记下期限：
+退避等满期限再追加本档抖动；期限前的网络变化／前台恢复（含 `overrideCongestionCooldown`）、唤醒重建与
+stop/start 都在 `connect()` 入口统一推迟，不调用工厂，并同样交给 `scheduleReconnect` 排期、期限后追加本档抖动，
+同一期限的各端不会在期限那一刻齐步回来。期限按 `SERVER_RETRY_MAX_WAIT_MS`（10 分钟）封顶，防止异常的远期日期
+把连接永久挂起；收到时换算成墙钟与单调钟两个到期时刻，任一到点即解除，系统睡眠不会多等，系统时间回拨也不能把
+等待拉长到收到时的期限之外。没有 `retryAt` 的失败（含现场那次空 `retryAt` 的 429）保持原退避不变。
+
+故障半径三问：① 证据是这一条连接的工厂被服务端明确限流并给出期限，不涉及其它连接或对端；② 只推迟这一个
+`DeviceLinkClient` 的建连，主连接、其它 scoped 连接、已建立的会话与可靠层状态都不动，不新增重试或重放；期限只在
+没有 socket 时产生，推迟不会丢弃在线连接；③ `client.test.ts`「does not call the socket factory before a server
+retry deadline」按无期限／60 秒／超过上限／60 秒后系统时间回拨一小时四格驱动真实 client，期限内触发
+connectNow、restartConnection 与 stop/start 均不建连，期限刚过仍先等抖动，回拨后按收到时的期限建连；修复前
+三格有期限的用例失败。只改客户端，不改 wire、中继或服务端契约。
+
+## 可靠窗口防积压：列表读单飞、增量基准保留与过期只读回包退役（2026-11-25）
+
+慢网或对端暂停确认时，单条对端的 64 帧可靠发送窗口不再被高频自动化推送与重复大列表回包联手堵死：
+
+- **控制端列表读单飞与每位调用者剩余预算续读**：`DeviceLinkClient` 与 `AgentNetSessionLinks` 共用
+  `RemoteListingReadCoalescer`（`packages/device-link/src/listingReadCoalescer.ts`），对同连接代次、
+  同对端、规范化参数相同的 `local-db:sessions:list` 与 `maker:schedule:list-sidebar-index-runs`
+  合并单飞；在途期间涌入的多笔 `fresh: true` 刷新折叠为最多一笔紧随其后的串行读取（直接复用前序读取刚落库的
+  `ifNoneMatch` 标签换 `notModified` 或小增量）。每位调用者始终持有自身 `callDeadlineAt = enqueuedAt + timeoutMs`：
+  若前序较短预算读取先超时，仍有剩余预算的同乘调用者按精确剩余时长（`callDeadlineAt - now`，无加入时差启发式、
+  无延长调用期限的下限）自动续读；不同 `limit`、`status`、`includePinned`、跨账号 scoped 对端与各调用方的
+  `preSend`／`beforeDispatch` 严格隔离。排队期间无法共享已有准入期限的调用方独立排队；备用会话可用与无备用会话的调用分槽隔离，底层传输在零分片写出前让路（`DeviceLinkUnsentInvokeError`，`inFlight=false`）时按每位调用者克隆保留该类型以切到备用 Agent-Net 会话，无备用会话的发送前拥塞与已写出（`inFlight=true`）失败则保留原 `DeviceLinkError` 与错误实例隔离、不重放已发请求。Agent-Net 的共享预算调用者由会话层按正文流
+  进展决定超时；需要更早截止的调用者单独结算。合并层放弃最后一位调用者时，通过会话层已有的取消帧停止底层请求。
+- **弱网滞后期的列表增量基准保留**：`InvokeDeltaBases` 按 `(src, requestKey)` 同时保留控制端已确认持有的
+  基准（`confirmed`）与最新发出的快照（`latest`），且 `local-db:sessions:list` 的缓存键与基准键忽略布尔型
+  `fresh` 标记（保留 `tagCatalog` 等改变 wire 形状的标志），避免中间回包仍在慢队列排队时后续读取退回连续发送
+  200+ KiB 全量快照。
+- **已放弃或协商到期只读大回包原位退役**：控制端因超时或 `PEER_RESET` 放弃幂等只读请求后，随下一笔同对端请求捎带
+  `transfer.retired`（最多 8 个请求 ID）；双方均声明 `read-deadline-v1` 且本次调用超时预算在 wire 可表示范围内
+  （`1..3_600_000ms`）时，控制端在可靠请求帧元数据上附带真实剩余等待期限（`ReliableTransportMeta.deadlineMs`；超出 wire
+  上限的超长自定义调用自动省略 `deadlineMs`，仅凭明确 `transfer.retired` 退役）。被控端在收到携带 `meta.deadlineMs`
+  的帧（单帧或分片第 0 片）时按**该帧自身到达本机的单调时刻**立即折算为单调不减的绝对截止上界（重复重传第 0 片或后片先到、
+  第 0 片后到的乱序重组绝不叠加到更早分片的接收时刻），且**仅**在请求被 `transfer.retired` 明确放弃或超过该可信协商上界时
+  退役只读回包——旧控制端、未携带 `deadlineMs` 的请求与一切写操作永不按默认猜测上限提前退役。
+  明确 `transfer.retired` 的请求在入队前直接跳过编码并清理同对端 `remoteInvokeResultOutbox` 中的对应只读条目；已在可靠队列
+  `peer.pending` 中积压的只读大回包在命中 `transfer.retired` 或超过协商 `deadlineMs` 时原位替换为同 `seq` 的 `transport-skip`
+  占位，释放数百 KiB 缓冲而不制造可靠序号空洞；写操作与其它对端条目永不退役。
+- **调度事件拥塞期有界保序、权威状态补读与停滞退避**：远程端不消费的 `silenced`／`notified` 提醒事件归入 `LatestStatePushStage`
+  按 `scheduleId` 覆盖；驱动刷新的 `maker:schedule:event` 在对端窗口健康（`< SESSION_ACTIVITY_WINDOW_SOFT_CAP`）
+  时保持 0ms 直发，越过软上限时进入有界的 `ScheduleEventPushStage`（上限 64 条／16 KiB）：未超限时按到达因果顺序折叠投影等价
+  中间运行态，超限时绝不静默删终态，而是以 `O(1)` 汇总折叠为 `{ type: 'resync' }` 权威全量补读事件 + 最新会话绑定／已读槽位，
+  让控制端重拉权威调度列表、运行索引和未读汇总。新版手机首页收到 `resync` 时直接请求补齐会话列表，
+  旧版首页仍可借保留的会话绑定或后续全量同步补齐。两个暂存队列（`ScheduleEventPushStage` 与 `LatestStatePushStage`）的
+  可写唤醒（`nudge()`）只提前、绝不延后已排期的 drain，避免持续 ACK 令已可写队列饥饿；`routeSessionPeers` 合并转发
+  `DeviceLinkClient` 与 `AgentNetSessionLinks` 的 `onPeerSendProgress`：对确定性 ACK 通知的 Device Link 对端在无进展达上限后
+  0 定时器挂起，对队列深度来自 `bufferedAmount`（静默排空未必触发 `onDrain`）的 Agent-Net 会话对端保留 5s 低频兜底并在清空后停表，
+  保证最后一项必达且退订 `sessions` 或断链离线时同步清空。
+
+故障半径三问：① 证据是单个控制端对端的可靠窗口积压或单笔幂等只读请求已明确超时，不代表共享中转连接或其它对端失效；
+② 仅折叠该拥塞对端尚未发出的调度推送（超限转权威全量补读）、合并同参数列表读并将该对端明确已放弃或协商期限已到的只读回包
+原位换成同 `seq` 的 `transport-skip`，不重置共享连接、不跳过可靠流序号、不提前退役旧端或超长自定义超时请求、不丢弃或重放任何
+写操作结果；③ 健康的其它控制端仍保持 0ms 即时推送与独立缓冲，不同过滤参数、跨账号分享对端与写请求互不影响。
+
+自建中转兼容：全部改动复用既有 `invoke`／`invoke-result`／`push` 信封与 `transport-skip` 占位帧；`transfer.retired`
+与能力门控的 `read-deadline-v1`（`meta.deadlineMs`）均位于端到端载荷内，新旧控制端与被控端混合连接时自动降级互通，
+`packages/device-link-relay` 透传无感知，已部署自建中转无需修改或升级。
+
+## 桌面后台只读通道的缺失回执
+
+桌面控制端按窗口、对端和通道记住只读接口的明确缺失，不记业务结果，不用版本号猜能力。
+资源列表、历史查询、调度列表及侧栏运行索引在正常桌面上必须注册；调度服务未就绪要等已有
+readiness，不能因为尚未过启动画面而向控制端报“没有 handler”。只认解开 Electron 包装后
+与本次通道完全匹配的 `[NOT_FOUND] no local IPC handler for channel '<channel>'`（仅限线性注册通道），
+以及对端 `REMOTE_INVOKE_ALLOWLIST` 明确拒绝本次通道的 `[DEVICE_LINK_CHANNEL_NOT_ALLOWED] channel '<channel>' not allowed remotely`。
+对象不存在、本机加密／信任传输策略拦截、非 owner 或共享任务作用域拒绝、Host 模式不支持、权限拒绝、背压及超时均原样返回，下次读取仍发送。
+延迟在启动画面后注册的插件引擎列表与 `maker:model-context-limit:get` 不记缺 handler，以便同一连接在启动完成后读取。对端重连、版本或已协商能力变化后可再次探测，
+不增加定时器、不重开其它设备连接。旧端无需升级；手机版不走 Electron 后台刷新入口。
+回归：Desktop preload 的 `remoteReadBridge.test.ts`、renderer 的 `useCodexContextWindow.test.tsx` 与 `remoteModelGroups.test.tsx`。
+
+## 远程模型目录统一读取口径（2026-11-23）
+
+同一台电脑、同一份分享的模型目录在各入口给出一致结论，不再因各自的缓存与等待时长而一处有、一处无：
+
+- **一次读取供所有读者**：Main 的目录读取器（`packages/device-link/src/metadataContinuity.ts`）对
+  `maker:provider:list`、`maker:get-capabilities`、`maker:list-available-agents` 设 15 秒新鲜窗口
+  （`REMOTE_CATALOG_FRESH_MS`）：窗口内选择器、机器人、Orca、名单轮询等读者共用上一次实际读取，不再各自
+  发起。来源推送的变化通知与权限变化改变缓存键，立即失效；实时读取（发送前探测、执行）不经过它；
+  `maker:agent:status` 与供应商组视图保持实时。供应商组目录自带 15 秒缓存，且撤下路由需要对方当下的答复，
+  它的读取以 `ownFreshness` 跳过共享窗口（仍有既有的有界回退）。
+- **嵌套读取期限分层**：远控任务经任务电脑代读来源时，代读最多 20 秒，短于控制端默认 30 秒；来源的临时失败
+  保持临时错误码（见协议记录 `remote-agent.md`），控制端保留有界显示并可重试。
+- **分享在线状态一条规则**：`providerSharePickerState`（`packages/device-link/src/providerShareCatalog.ts`）
+  供 Desktop 选择器、收藏与 Mobile 选择器共用。分享者电脑暂时离线时照常列出并标「暂时离线」，不随在线状态
+  来回出现、消失；已暂停的分享仍只在任务正用着时保留。
+- **信任期到期后补读**：Desktop 供应商目录与 Agent 能力的有界快照到期时，若仍有界面在用，补读一次（同一来源
+  5 秒内最多一次），与 Mobile 一致；能力读取遇临时失败保留上一份有界快照，与供应商目录一致。
+- **临时失败不报红**：任务电脑的目录或能力读取遇到临时失败（超时、断链、繁忙、无响应）时，只要上一份有界快照
+  还在界面上，模型药丸与选择器不再显示「读取失败」红色提示（此前一次抖动就亮红，要打开选择器重读才消失）。
+  快照到期、拒绝、不支持等非临时错误照常提示。同一判断（`renderer/lib/temporaryCatalogFailure.ts`）也用于：
+  选择器左侧其他电脑的条目（刷新期间与临时失败时保留，不再整段消失、收藏不再变灰），以及远控任务里被控电脑上
+  的分享名单（临时失败保留上一次确认的名单；断链、在线状态与控制开关变化仍立即清空）。恢复仍按既有设计在回到
+  前台、连接恢复或来源推送变化时重读，不增加定时重试（避免多窗口放大请求与后台轮询）。
+- **手机恢复重试有界**：目录读取失败后的后台恢复最多 8 轮（约 2 分钟退避），之后等回到前台、打开选择器、
+  重连或目录变化再读，不在电脑长期离线时每 30 秒一直读下去。
+- **手机来源页保留分享行**：分享者电脑离线、或刚上线还在连接供应商时，分享来的供应商读成未连接、没有模型。
+  Mobile 来源页仍在原位置列出这条分享（`RemoteAgentCatalog.shareSource`），离线时打开后显示「对方电脑不在线」
+  说明，与 Desktop 选择器保留分享条目一致。
+- **清单变化推送不清空显示**：分享者上线/离线时被控电脑推一次分享清单变化。Mobile 仍立即作废缓存并重读，但屏幕
+  上已有的分享行留到这次重读有结果（最多 12 秒，`SHARE_CHANGE_DISPLAY_HOLD_MS`）；重读失败或超时退回作废后的
+  状态，不留无界旧清单。此前这一来回（Android 实测约 2 秒）会让分享消失再出现。
+
+故障半径三问：① 证据是单个来源目录读取的慢、超时或在线状态变化，只影响这一来源的显示新鲜度，不等于链路或账号
+失效；② 只复用、补读或保留这一来源的目录快照，不重建链路、不重放创建或发送，不延长任何信任期（补读拿到的仍是
+主机转发的剩余预算）；③ 其他电脑、其他分享与同一电脑的其他目录各自按自己的缓存键与预算处理，互不失效。
+不改 wire 形状、channel 或字段，旧端行为不变，自建中转无需修改。
+
+实现与回归：`metadataContinuity.ts`、`providerMetadataContinuity.ts`、`controlledModelCatalog.ts`、
+`useDeviceProviders.ts`、`useAgentCapabilities.ts`、`useProviderShareAgentDevices.ts`、`providerShareFavorites.ts`，
+Mobile `remoteAgentCatalogs.ts`、`useRemoteAgentCatalogs.ts`、`UnifiedModelPickerSheet.tsx`、`useDeviceProviders.ts`；
+`metadataContinuity.test.ts`、`providerMetadataContinuity.test.ts`（「shared catalog fresh window」）、
+`controlledModelCatalog.test.ts`，Mobile `remoteAgentCatalogs.test.ts`、`remoteAgentCatalogsProviderShare.test.tsx`、
+`unifiedMobilePicker.test.tsx`。
+
+## 手机 Agent-Net 冷启动并行与前台直连快恢复（2026-11-22）
+
+手机 `openMobileAgentNetSocket` 在官方网络下将 `/api/device-link/devices` 准入列表预取（3 秒上限）
+与本机 IP 读取提前到与 Keystore 身份准备并行启动，仍在 `AgentNetSocket.openWithBindings` 接收或
+拨出任何连接前收口 `peerRule`，不放宽已移除设备的拒绝边界。后台挂起再回前台时，仅在本进程内存保留
+上一条已通过加密握手验证的对端 UDP 直连地址；当本机局域网 IP 未变且存在缓存目录时，先以
+`deferRelay: true` 和 350 毫秒短预算直拨该候选，中转 WebSocket 与中转 UDP 注册在后台并行完成。
+私网记忆地址不落盘，物理切网（`routeChanged`）、本机 IP 变化、退出账号、切换自建中转或修改偏好时立即清空。
+
+`AgentNetSocket` 在对端首拨或初始 `openingRelay` 尚未结算前，不再提前投递 `presence-changed { online: false }`
+污染 `peerOfflineGate`；确认目录离线或首拨失败后才发出离线事件。`canConnectSession` 供手机会话层识别
+正在首拨／等待初始中转握手的 V2 对端，既有 `supports()` 语义保持不变。`PortableUplink` 对齐桌面端发送队列：
+仅在运行时提供数值型 `ws.bufferedAmount` 时启用排空监测（React Native 自带 `WebSocket` 该字段为 `undefined`，按 `0` 处理避免误拦截发包），
+持续 1 秒未排空时丢弃新中转封装包，持续 45 秒未排空且无入站排空时主动关闭半开连接交由 `AgentNetSocket` 重连，
+不向旧版中转发送非 `presence` 文本心跳帧（旧中转会以 `1008 invalid control` 断开）。手机初始中转握手失败且未开「仅使用加密连接」时，
+通过一次 `/directory` 校验是否属 401/403 身份撤销（`mobileAgentNetIdentityRefused`），被拒时关闭缓存虚活连接回退到 Device Link，
+纯网络离线（`status: 0`）仍保留缓存直连模式。
+
+故障半径：① 失效记忆候选（对端重启换端口）或单条半开中转 WebSocket 属于单路径传输层陈旧状态，不等于账号或对端离线；
+② 失效记忆候选仅在 350 毫秒后退役该对端候选并回退当前中转重拨，半开 WebSocket 仅替换中转上行连接，不关闭已建立的直连加密通道、不重放业务写操作；
+③ 多对端拓扑下 `c-stale` 回退中转与 `e-fail` 首拨失败互不波及已直连的 `b-live`，未启用 Agent-Net、旧版 Device Link 与未升级自建中转行为完全不变。
+
+实现与回归：`packages/agent-net/src/{portableSocket,portableClient,nativeTransport}.ts`、
+`apps/mobile/src/device-link/agentNetRuntime.ts`，以及 `portableSocket.test.ts`、`portableClient.test.ts`、
+`nativeTransport.test.ts`、`agentNetRuntime.test.ts`。
+
+## 手机首次建链失败与中继累计确认滞后（2026-11-21）
+
+Agent-Net 名册报告同账号设备在线时，负责先拨号的一端如果首次握手失败，复用该对端已有的退避重拨。
+计时到期再检查在线与授权状态；收到新的在线名册时仍立即尝试连接。测试从首次失败和已连接后断开两种入口验证。
+Device Link 的网络提示在防抖期间收到有效帧，就已取得该提示之后的中继可达证据，后台读取可以继续。
+中继可靠流队头尚未确认时，后面的已发送推送最多提前重传一次；累计确认推进后，新的队头恢复正常重传。
+积压只影响这一个目标流，业务结果仍按原期限和预算发送；不重置共享连接，不引入应用操作重放，不改 wire。
+
+自建中转兼容：本次仅调整客户端拨号、发送侧重传调度与后台请求准入，沿用已有帧、累计确认、
+设备签名和能力协商；`packages/device-link-relay` 的通用转发无需识别这些本地时序，
+已部署中转可继续使用，无需服务端同步修改或版本升级。
+2026-11-22 在本 PR 分支实测：共享客户端 `pnpm --filter @cindy/device-link test` 1347 项、
+自建中转 `pnpm --filter @cindy/device-link-relay test` 61 项及
+`pnpm --filter @cindy/device-link-relay run interop` 2 项均通过；
+互通覆盖真实自建中转的加入、设备签名通信、自动重连与 SDK 版本矩阵。
+
 ## 远程 Agent 控制请求与发送取消（2026-11-18）
+
+正文派发与连接准备分别判定：`proxyHandle.sendLike` 的普通 `send` 分支在 `link.ensure()`（能力握手、原生重开、
+设置恢复）遇到既有 `isRetryableLinkError` 判定的链路失败时，当前输入尚未进入 `callWithId`，
+即使该准备 RPC 带 `inFlight=true`，也返回
+既有的未派发结果，保留 Session 供显式重试，不因它启动正文的未知尾部排空。已确认的启动错误
+保留原错误对象，继续由原有 stopped-open offer 交接判定；没有 offer 不授予换机或重放权限。
+正文调用发出后的超时仍保留原始错误和接受未知语义。能力读取沿用原来最多六次的有界重试，
+没有新增重试、后台恢复器或正文重放。回归见 `connectionPool.test.ts` 的六次 caps 超时与
+显式原线程重试，以及 `proxyHandleClose.test.ts` 的已发出正文超时。Goal 来源保留原始准备错误，
+继续由既有 Goal 失败路径置为 blocked，避免被当成供应商拒绝后自动重试整轮握手；
+`connectionPool.test.ts` 经真实 GoalController → Session → 远程 starter 验证六次超时后没有下一轮 caps。
+非链路准备失败保持原错误合同：组配额的 `ProviderGroupUsageLimitError.limit.resetAtMs`、
+授权拒绝、版本不兼容等交给原有处理者；不把这些业务拒绝吞成无结构的未派发结果。
+同文件经真实重连 open 验证已知／未知配额重置时间仍保留类型和元数据，正文没有派发。
+
+Device Link 的请求与执行诊断使用固定的远程 Agent 操作类别（如 `caps`、`open`、`call:send`），
+未知操作／方法不记录原值，不解码载荷或采集正文、凭证。超时日志与 INFO 诊断共用短请求号，
+分享目标先解析出物理设备引用再截短，避免统一显示成分享前缀。诊断不参与权限、重试或路由判定。
+无 wire 变化，旧端及自建中转继续透明传输既有请求。
 
 `maker:remote-agent:v1` 按请求内容区分优先级：发送、插话、停止、关闭以及内联交互／回调／错误回复
 复用已有交互名额；上传、执行环境帧、HTTP 回复与长轮询仍走普通名额。不扩大并发、排队、字节或
@@ -17,6 +199,14 @@ Agent-Net 会话入口同样按载荷做准入分类，并把这些请求放进�
 模型目录、Agent 能力、可用 Agent 与安装状态读取使用已有后台配额（活动 4、等待 96），避免预读
 占满普通请求名额；两种传输使用同一判据。实际目录响应与权限检查不变，前台模型／上下文操作和
 导航读取仍走原有普通名额，不因目录预读借用交互预留容量。
+
+供应商组的显式 `view.display` 设置展示、`manage-share/quota-account` 和分享专用
+`provider-share:insights:v1` 同样使用上述后台配额；实时选机视图、`pick`、租约与授权写入保持原优先级。
+同一物理电脑的同账号、共享任务和供应商分享 peer 共用既有调度容量；任务仍按真实 run 生命周期计数，
+RPC 准入不计模型任务席位。调度中保留完整 peer 身份，取消只移除该作用域的未派发请求，在途请求结算前不释放容量，
+不跨分享合并结果或权限。传统 Device Link 和 Agent-Net 共用此判据，无 wire 或 relay 行为变化。
+分享展示收到背压、无响应、断连和超时时分别保留对应错误，不将这些故障改报权限拒绝；明确拒绝仍按原授权边界处理。
+回归见 `client.test.ts`、`invokeScheduler.test.ts` 与 `providerShareManagement.test.ts`。
 
 远程发送在 Device Link 真正派发前复核任务生命周期、取消信号和 Stop 代次，取消后不迟到投递旧消息。
 此检查使用本地 `beforeDispatch` 回调，两种传输均在出队后、创建请求前执行；同区和跨区分享都透传。
@@ -50,6 +240,20 @@ Agent-Net 会话入口同样按载荷做准入分类，并把这些请求放进�
 故障半径：① 只追加 debug／info 日志，不改变结果发送、丢弃、重试或断链恢复；② 日志只含
 截短的请求 id 与设备引用，不含参数或结果内容；③ 慢阈值沿用既有 `slow execution`，不新增高频
 日志。自建中转只转发原消息，不需升级。验证入口：Device Link `invokePolicy.test.ts`。
+
+### 手机新建任务首条消息的分段计时（2026-11-26）
+
+用户反馈手机新任务点发送后二三十秒才发出去，现有日志只有 `maker:create-session` 的总时长，
+分不清卡在建链、查模型、电脑建会话还是交出首条消息。两端各补一条分段计时，只记录、不改行为：
+
+- 手机：`new-session` 的 `creation timing`（`session/newSessionCreationTiming.ts`），
+  每次管线收口写一条，含点发送到管线开始的 `prepareMs`、各阶段 `stagesMs`、失败那一步的
+  `restMs` 与首条消息 clientId 末 8 位。发件箱路径交出后，送达电脑的耗时看同一 clientId 的
+  `send accepted`。只进用户开启的本机诊断录制。
+- 电脑：`session-start-timing` 的 `session start timing`（`maker-ipc/sessionStartTiming.ts`），
+  `bootstrapSession` 每次结束写一条，分供应商组选电脑、等账号模型目录、目录授权、Agent 启动等
+  阶段。该 scope 已精确加入上传白名单，只有固定阶段名、Agent 种类枚举与毫秒数。Codex 内部
+  app-server 启动与 `thread/start` 的拆分仍看本机任务日志的 `startSession` 与 `thread/start ok`。
 
 ## 弱网下的备用截图与视频恢复（2026-11-15）
 
@@ -248,6 +452,24 @@ Mobile `useSessionListActions`、`SessionMenuSheet`、`orphanSessionActions.test
 
 ## 恢复动作先回答故障半径（device-link 共享链路）
 
+### 远程与分享任务恢复的测试矩阵（2026-11-21）
+
+改远程 Agent、分享供应商或供应商组的恢复路径（换号、换电脑、续跑、交接）时，测试矩阵按**控制端本地会话的状态**
+列，不能只按执行端看到的失败类型（冷启动失败、运行中撞限）列。至少覆盖四格，每格断言执行端是否发出切换凭证、
+控制端是否接管、原输入是否只落库一次且只执行一次、新会话是否收到交接上下文：
+
+1. 本地会话已关闭：下一次发送走 fresh open；
+2. 本地会话开着，执行端的 run 还在且空闲；
+3. 本地会话开着，执行端的 run 已被闲置回收或断开：下一次发送先 reconnect；
+4. 本地会话开着，正在运行一轮。
+
+第 3 格最容易漏：控制端的任务常常开着几个小时，执行端闲置一阵就会回收 run。测试如果先关掉控制端会话再重开，
+跑的是第 1 格，覆盖不到第 3 格。#11081 只覆盖了第 1、4 格，第 3 格的凭证到了控制端却没有被接管，
+直到 #11751 才修复。手动发送之外的入口（定时、IM、Orca、自动续跑）要逐个说明是否适用；不适用的，写明
+原行为保持不变。
+
+断链恢复的边界参照正常流程，例如交接里的路径和附件与正常发送用同一套换算规则，不另起一套更严或更松的规则。
+
 ### 供应商组的跨区分享恢复
 
 2026-10-26：① 故障是任务所在电脑没有加载同账号组已能用的跨区分享；② 仅恢复当前账号在另一
@@ -318,8 +540,40 @@ WebSocket ping，45 秒收不到 pong 就关闭这条连接，交给 worker 既�
 加密连接）保留，device-link 链路不复位、不重放；在持续丢包的线路上最坏约每分钟重连一次，不会
 形成紧循环；③ `packages/agent-net/src/__tests__/workerSocket.test.ts` 用本机真实 WebSocket
 中继验证：不回 pong 时断开，正常回 pong 时超过时限也不断开。用的是标准控制帧，官方中继和自建
-中继（同一 V2 内核，默认自动回 pong）都无需改动。手机端（React Native 的 WebSocket 没有 ping
-接口）仍是同一盲区，尚未处理。
+中继的 WebSocket 都默认自动回复标准 pong。手机端的 React Native WebSocket 没有标准 ping
+接口，改用中继通过 hello 声明支持的 `relay-probe`，在拨号或业务失败后按需验证本机与中继的往返。
+见本文件「同一台电脑的旧可靠连接与新会话同时存在」及
+[Agent-Net 会话兼容说明](protocol-compatibility/agent-net-session.md#手机按需验证中继上行)。
+
+### Agent-Net 中继连接断开后必须重连
+
+2026-11-25 04:26：一台 Mac 的 Agent-Net 中继连接断开后再没有重连，只经中继能到的电脑和手机全部离线，
+直到 08:53 重启 App；同一台电脑另一条中继连接照常每 29 分钟断开重连。原因是 worker 里代替 WebSocket 的对象：
+上传连接拒收中继发来的一帧、自己关掉连接时，它 `terminate()` 后不发 `close`，Main 随后报的关闭又因为它已被删掉而被丢弃，
+`AgentNetSocket` 一直把这条死连接当成中继连接，网络变化时也因此跳过重连。日志特征：`relay connection closed` 前后都没有
+`duplicate hello-ack`，此后没有任何 `opened` / `failed`。
+
+现在三层都要保证重连：
+
+- **worker**：代替对象 `terminate()` 后和 `ws` 一样在下一轮发 `close`（1006），上传连接自己关掉的连接也走正常的断开重连
+  （`packages/agent-net/src/worker.ts`）。
+- **原因进日志**：上传连接自己关掉已建立的连接时带上原因码，Main 记
+  `agent-net relay connection was ended by this device (<CODE>); reconnecting`，原因码只收大写字母、数字与下划线。
+- **Main 兜底**：没有打开的中继连接、worker 又 `AGENT_NET_RELAY_STUCK_MS`（90 秒，从中继断开或 worker 最后一次请求连接算起，取较晚的）
+  没请求过连接时，Main 让 worker
+  `restartRelay`：丢掉它仍当作中继连接的那条、不再等一直没结果的连接尝试，按当前退避重连，并记一条警告。90 秒高于正常重连
+  两次尝试之间最长的间隔（退避最长 15 秒加握手 10 秒，身份冲突冷却最长 60 秒），不打断正常重连；之后仍不通则每 90 秒最多再催一次。
+  计时器迟到超过一个周期（系统睡眠、Main 卡住）时只重新计时，不算证据。
+- **退避**：中继连接撑过 10 秒才把重连间隔重置为 0.5 秒；连上就断的继续翻倍到 15 秒。原来每次连上都重置，若中继每次连上都发来
+  同一帧被拒收，修好以后会变成每半秒重连一次。
+
+故障半径三问：① 证据只是本机到中继这一条连接已断（Main 手里没有打开的中继 WebSocket）且 worker 长时间没有重连，与对端是否在线
+无关；② 只重建本机这一条中继连接，直连与经中继的加密对端连接、device-link 链路和会话都保留，不复位、不重放；兜底最多每 90 秒
+一次，连上即断的连接按退避最长 15 秒一次，不形成紧循环；③ `socket.integration.test.ts`「reconnects its relay after ending that
+relay connection itself over a frame it refused」用真实 worker、真实中继和本机回环转发注入一帧拒收消息，验证重新连上并记下原因；
+`workerSocket.test.ts`「tells a worker whose relay reconnect is stuck to start over」验证 Main 兜底；`portableSocket.test.ts`
+「backs off a relay connection that keeps ending as it opens …」验证退避与 `restartRelay`；三条去掉对应修复时都失败。
+只改客户端，不改 wire、中继与协议；手机用的 `PortableUplink` 原本就会在自己关掉连接后报关闭，只多了退避这一条变化。
 
 ### Agent-Net 中继发送排队上限
 
@@ -409,13 +663,15 @@ Device Link 按原 seq 重放，重放沿用原有预算；③ `packages/device-
 [协议记录](protocol-compatibility/agent-net-udp-relay.md)。设备侧 `packages/agent-net/src/relayUdp.ts`，中继侧
 `packages/agent-net-relay/src/server.ts`。
 
-故障半径三问：① 证据是这条中继会话自己的 UDP 登记有没有被确认：一次登记 4 秒没确认就算不通，与其它会话、其它对端
-无关；② 只切换这条会话上数据报走哪条路：设备不再经 UDP 发，下一次登记告诉中继「收不到」，中继对这台设备退回
-WebSocket；不关 WebSocket、不复位对端、不清队列，切换期间丢的数据报由传输核心重发；登记一直不通时每秒一次、
-10 秒后每 5 秒一次，每次几十字节；设备的 UDP 上行也断了、发不出「收不到」时，中继 30 秒没收到登记自行退回；
-③ `packages/agent-net/src/__tests__/relayUdp.test.ts` 验证确认中断 4 秒内退回 WebSocket 并告诉中继、恢复后切回，
-`packages/agent-net-relay/src/__tests__/relay.integration.test.ts` 用真实中继套接字验证报「收不到」后改走 WebSocket；
-两条用例去掉修复时都失败。
+故障半径三问：① 证据是这条中继会话自己的 UDP 登记与满尺寸第 1 跳探针（`0xE5`/`0xE6`，支持 `udp-relay-probe-v1` 时直测本机 ↔ 中转
+1350B 双向可达；无探针的旧中继下仅当所有经中转对端均无健康确认推进时才触发），与其它会话、以及单个抖动或离线对端无关；
+② 只切换这条会话上数据报走哪条路：设备不再经 UDP 发，下一次登记告诉中继「收不到」，中继对这台设备退回 WebSocket；
+不关 WebSocket、不复位对端、不清队列，切换期间丢的数据报由传输核心重发；登记一直不通时每秒一次、10 秒后每 5 秒一次，每次几十字节；
+探针停用期间按 15s → 30s → 60s → 120s 在 WebSocket 保护下主动发单包探针（换网时立即清冷却重探），通了才切回 UDP；
+设备的 UDP 上行也断了、发不出「收不到」时，中继 30 秒没收到登记自行退回；
+③ `packages/agent-net/src/__tests__/relayUdp.test.ts` 验证确认中断 4 秒内退回 WebSocket、满尺寸探针准入/复核/换网恢复、以及旧中继下的
+单对端隔离与间歇流量退避清零，`packages/agent-net-relay/src/__tests__/relay.integration.test.ts` 用真实中继套接字验证报「收不到」退回
+WebSocket 及满尺寸探针防放大/防重放，`packages/agent-net-native/src/udp_paths.rs` 验证手机原生同一探针状态机；去掉修复时对应回归均失败。
 
 ### Agent-Net 关闭时告诉直连的对端
 
@@ -447,6 +703,11 @@ WebSocket；不关 WebSocket、不复位对端、不清队列，切换期间丢�
   每轮事件循环看一次时间（Windows 的计时器要 15.6 毫秒，见 `TIMER_GRANULARITY_US`）。数据稳定在传时，对端每两个包回一个确认，
   每个到达的包本来就带着核心走一轮、把到点的包发出去；现在最近 2 毫秒收到过包就不看时间，只设 1 毫秒的计时器兜底
   （`wakePlan`、`INBOUND_CLOCK_US`）。每一阵开头、第一个确认回来之前的那一个往返没有到达可依靠，照旧看时间。
+  2026-11-22 又查到计时器准的系统上仍然空转：Linux、macOS 的计时器精度是 1 毫秒，`needsFineTimer` 原来不问核心，把这些系统上所有
+  短于一毫秒的等待都当成等不起，确认包成批到达、两批之间超过 2 毫秒时就一轮一轮看时间。现在和 Windows 一样由核心的 `fine_timer`
+  判断（每毫秒要发 64 KB 以上才看时间）。容器弱网（Linux、Electron 42）：每 MiB 的 CPU 4G 线路 224–460 → 145–228 毫秒，跨国线路
+  410–580 → 140–250 毫秒，速度不变。回归：`socket.integration.test.ts`「leaves the driver thread mostly idle…」（改前 Linux 上事件循环
+  利用率 0.43–0.47，改后 0.11）。
 - **日志看不出对端走直连还是中转。** 连接都是先经中转建立、再换到直连，而 `agent-net peer … connected via …` 只在建立和断开时记。
   现在已连上的对端换路径时再记一行 `agent-net peer … moved from relay to direct`（或反过来），来回跳动时每台对端 30 秒最多一行，
   之后记下最后停在哪条路（`workerSocket.ts` 的 `logPath`）。只写缩短的设备号和路径，不写地址。
@@ -467,7 +728,64 @@ WebSocket；不关 WebSocket、不复位对端、不清队列，切换期间丢�
 
 还没解决的：限速线路上每 MiB 的 CPU 仍是 Device Link 的约 3 倍。一半是每一阵开头那一个往返里看时间，另一半是每个包都要在 JS 里
 走一轮（加密、发包、核心的十几次调用）。前者在 Windows 上要有比系统节拍细的计时器，后者要把收发包放到原生线程里，JS 只读写流，
-和手机的原生循环（[会话层方案](../agent-net-session-plan.md) 10.2 节 v2-4）是同一件事。
+和手机的原生循环（[会话层方案](../agent-net-session-plan.md) 10.2 节 v2-4）是同一件事。2026-11-23 起两者都由下一节的原生引擎解决。
+
+### 电脑端 Agent-Net 跑在原生引擎上（2026-11-23）
+
+Desktop 的 Agent-Net worker 有原生模块时，传输跑在手机同一个 Rust 引擎上（`packages/agent-net-native/node`，Node-API 模块）：
+收包、回确认、重传、按节奏发包都在引擎自己的线程里，不经 Main，也不经 worker 的 JS；引擎有东西给 JS 读时往 worker 监听的本机回环
+UDP 端口发一个字节叫醒它（最多一个在路上），数据连续进来时 JS 读完后 1 毫秒内到的合成一次读，空闲后的第一个包照旧马上叫醒。
+`NativeTransport`（手机在用的同一个传输层）在 worker 里驱动它（`socket.ts` 的 `native`），会话层、Device Link 帧和 Main 侧都不变。
+模块由打包时按目标平台从源码构建、放在 worker 包旁边（`forge.config.ts` 的 `stageAgentNetNative`；Windows 打包本来就要 Cargo，
+构建失败即打包失败，其它平台没有 Rust 时不带它）；开发时用 `node packages/agent-net-native/node/build.mjs` 生成。
+没有模块、加载失败、或引擎给出的传输公钥和这台设备的不一致（`AGENT_NET_NATIVE_IDENTITY_MISMATCH`）时照旧用 WASM，
+日志记 `agent-net native engine unavailable (<原因>); the transport runs on WASM`，正常时记 `agent-net transport runs on the native engine`。
+线上协议、中转与对端都不变：新旧版本、原生与 WASM 两端任意组合互通（`nodeNative.integration.test.ts` 直连与只经中转各一遍）。
+Node Host 仍用 WASM。
+
+切换前补上了原生路径比 WASM 路径少的几项，否则电脑端会退步：
+- **中转 UDP「只通登记、不通数据」时退回 WebSocket**、走 UDP 时的往返与停用原因（[协议记录](protocol-compatibility/agent-net-udp-relay.md)末段，
+  引擎能力位 `relay-udp-health`）；UDP 收发字节照旧进 UDP 流量表（`udpTraffic`）。
+- 名册上限 512 → 4096：超过时原生传输整个关掉，WASM 没有这个上限。
+- 引擎收走排队字节就告诉 socket（`onDrain`），和 WASM 一样；原来只在单条连接从 128 KB 以上落下时才报，几条连接加起来超过
+  128 KB 时 Main 要等每秒一次的状态才发下一大帧。
+- **Windows 上的短等待。** `WSAPoll` 的超时跟系统节拍走，1 毫秒的等待实际 15.5 毫秒，按节奏发包的引擎在 12.5 MB/s、往返 32 毫秒的
+  线路上比 WASM 慢 15–20%。现在套接字到包时置一个事件，再配一个高精度计时器，两个一起等（`packages/agent-net-native/src/wait.rs`），
+  1 毫秒的等待 1.57 毫秒，不改整个进程的计时器精度。只影响 Windows，手机不受影响。
+- 身份：电脑端有的身份是存下来的私钥、不是从种子派生的，引擎可以直接收这两把私钥（`create` 的 `keys`），worker 本来就持有它们。
+- **直连与中转的选路**（#12175：自动／直连／中转、双路往返）。选路的判断从 `transport.ts` 搬进不依赖 Node 的 `pathRouter.ts`，
+  WASM 与原生两种传输共用；引擎加了只测速不换路的 `measure`、`preferRelay` 和 `poll` 里的 `probeRtts`（能力位 `path-routing`）。
+  两端的偏好照旧经控制流同步（`{"pathPreference":…,"autoRelay":…}`），原生与 WASM 两端互相跟随（`nodeNative.integration.test.ts`
+  「switches a live peer between direct and relay from either side …」）。手机随新安装包同样跟随电脑端设的偏好、自动模式同样生效；
+  旧安装包不报 `path-routing`，照旧每 10 秒探测候选地址，不读这条消息，和以前一样。
+- **透明代理的 Fake-IP 避让**（#12175）：引擎自己用系统 DNS 解析 STUN 与中转 UDP 的主机名，开着 Clash／Surge 这类代理时会拿到
+  198.18.0.0/15。电脑端先用 `resolveUdpHost` 解析好再把地址交给引擎（`TransportOptions.resolveUdpServer`），每 5 分钟和每次换网
+  重新解析，变了就让引擎改到新地址；解析不出来时把主机名照旧交给引擎。手机不传它，行为不变。
+
+查到并修掉的两个崩溃：Node 在最后一个加载原生模块的 worker 结束时卸载模块，而模块起的线程（收发线程最多再等 250 毫秒、中转与 STUN
+的域名解析要等 DNS）还会回到已卸载的代码，整个进程崩溃（Electron 42，退出码 139，压测两轮之间必现）；模块现在把自己钉在进程里
+（`pin_module`）。原来用 Node-API 的 thread-safe function 叫醒 JS，Electron 结束 worker 时它被释放、收发线程再调用就崩，
+所以改成上面的回环 UDP：收发线程从不调用 Node。
+
+故障半径三问（中转 UDP 退回）：① 证据是这条中转会话上本机自己的收发——经 UDP 发出数据后 4 秒没有任何经中转的数据报进来且一直在重发、
+发往走中转对端的请求 60 秒内超时两次、中转连接上 5 秒里重传占发出的四分之一以上——与其它会话、其它对端无关；② 只切换这条会话的
+数据报走哪条路，不关 WebSocket、不复位对端、不清队列，冷却 30 秒、5 分钟、30 分钟后再试，停用期间登记每 15 秒一次；③ `udp_paths.rs`
+的 `tests` 逐条覆盖（含单个纯确认不触发、两次超时隔一分钟不算、连接关闭计数变小时从头算），`nativeTransport.test.ts` 覆盖 JS 怎么读、
+怎么报，`nodeNative.integration.test.ts` 用真实中转确认路由报 UDP 与往返；这些用例去掉对应实现时都失败。
+引擎启动失败只影响这一次打开：退回 WASM，账号、名册与重连节奏不变。
+
+实测（Windows，Electron 42 跑 `bulk-transfer.ts --modes worker-session --runs 2`，20 MiB、512 KiB 一块、4 块在途、边传边发小请求；
+每 MiB 的 CPU 是两台设备、Main 与两个 worker 合计；`--native <模块>` 跑原生引擎）：
+
+| 线路 | WASM | 原生引擎 |
+|---|---|---|
+| 不限速 | 40–46 MB/s，37–49 毫秒，小请求 6–14 毫秒 | 54–58 MB/s，12–26 毫秒，2–5 毫秒 |
+| 家宽 12.5 MB/s、往返 32 毫秒 | 11.9–12.4 MB/s，70–82 毫秒 | 13.9 MB/s，45–50 毫秒 |
+| 跨地区 6.25 MB/s、往返 200 毫秒 | 3.2–4.1 MB/s，89–134 毫秒 | 3.3–4.3 MB/s，51–61 毫秒 |
+
+只看引擎（两端各一个线程、回环 UDP、不经 JS）：每 MiB 7.5 毫秒对 WASM 的 15–21 毫秒，回环 260 MB/s 对 70–88 MB/s。
+每到一个包都把所有连接的状态拼成 JSON 一度吃掉了这些节省：引擎现在先用核心的 `has_unread` / `has_accepted` 和状态摘要判断有没有
+东西给 JS，没有就不拼（家宽 43–49 → 27–43 毫秒，跨地区 47–54 → 29–34 毫秒，只看引擎）。
 
 ### Agent-Net 会话层上的控制链路（跟着「Agent-Net (Beta)」开关）
 
@@ -483,8 +801,11 @@ Device Link 上有活着的链路时照旧走 Device Link，那上面已确认�
 对端把结果放进本机已经没有的旧可靠链路，59 秒后超时、再引发重开。包这一层后，原客户端返回它自己的方法（`connectionFor`、
 `crossAccountConnection`）改为返回这一层，入口里「`connectionFor(peer) === client`」这类身份比较仍然成立。
 和对端的连接刚建好（或换了一条）时，双方的会话宣告还要一来一回：这段时间里 Device Link 上又没有这个对端的链路状态，
-建链和调用先等会话，最多到连接建好后 250 毫秒 + 4 个往返（往返未知时 1.5 秒，上限也是 1.5 秒），会话一到就放行；
-到时还没有（对端没启用会话）就走 Device Link，之后不再等。不等的话这一次会落到 Device Link 并一直用到那条链路断开。
+建链和调用先等会话，直连最多到连接建好后 250 毫秒 + 4 个往返（往返未知时 1.5 秒，上限 1.5 秒），经 Agent-Net 中转的路径上限放宽到 4 秒
+（2026-11-24 实测中转路径从连接建好到会话宣告就绪常需 2.8～3.4 秒，1.5 秒上限会导致提前回落 Device Link），会话一到就放行；
+到时还没有（对端没启用会话）就走 Device Link，之后不再等。即使首轮建链早于会话到达落在了 Device Link 上：若控制端发包小但被控端回程大包堵住导致
+`INVOKE_TIMEOUT`，后续同账号幂等只读请求（含 `maker:remote-agent:v1` 的 `poll` / `caps` 与列表探测）立即改走已就绪的会话，写操作仍保序留在原流；
+一旦旧 Device Link 流无待发帧与在途请求，下一次 `openLink` 重开即把控制链路平滑切到会话（用户显式断开时同步关闭两条出站状态）。
 连接建好的时刻取自 Agent-Net 主连接的路径通知（`agentNetRuntime.ts`）。
 还没有连接时（2026-11-17 真机发现，同账号所有开着 Agent-Net 的设备都有）：
 - 对方此刻在 Agent-Net 目录里在线（本机刚启动，或连接刚断）：先拨它（`PortableSocket.connectSession`），会话一到就放行，最多 1.5 秒，不等拨号结束；
@@ -536,6 +857,33 @@ Device Link 上有活着的链路时照旧走 Device Link，那上面已确认�
   - 换网：Desktop 的网络监听同时告诉 Agent-Net（`agentNetNetworkChanged`）；原来只有 Device Link 的探测，它在 Agent-Net 连接里由本机回答、到不了中转。
   - 唤醒、换网后取不到中转信息时沿用这个服务上次的 UDP 地址；服务明确回答没有 UDP 时清掉。
   - 连接断了、目录里对方还在线：拨号一端自己按退避重拨（`portableSocket.ts` 的 `REDIAL_FIRST_MS`）；原来只等下一次调用或目录更新，这期间对方显示离线。
+  - 刚打开的一方不等对方先拨：socket 打开后第一份实时目录里在线的设备，不论设备号大小立刻拨（`portableSocket.ts` 的 `arriving`），
+    这一轮之后才是「设备号小的先拨、大的等 `LATE_DIAL_MS`」（2026-11-21）。刚打开的一方（进程启动、手机回前台重建连接）是唯一确定自己
+    没有连接的一方，已经在线的对方多半还抱着上一个进程的连接而不拨。真机（Redmi K40，设备号比账号下七台电脑都大）：冷启动、
+    后台超过 10 秒回前台，每次都等满 0.8–1.2 秒才自己拨，期间七台电脑没有一台拨进来；改后从点开到拿到第一份数据，冷启动 5.8–6.2 秒降到
+    5.1–5.6 秒，后台 20／90 秒回来 1.4–1.65 秒降到 0.60–0.71 秒（同机 Device Link 分别是 4.7–5.0 秒、0.35–0.65 秒）。
+    同时把传输层建好之前中转送来的包留到建好再交给它（`receive`，最多 `EARLY_DATAGRAMS` 个）：中转在本机连上那一刻就向其它设备
+    通告本机上线，按通告拨过来的第一个握手包这时已经到了（手机上传输层晚约 50 毫秒建好），原来被丢掉，对方要等核心 200 毫秒后重发；
+    本机现在也立刻拨，留下这个包两边才在第一个来回落到同一条连接上。两边同时拨时照旧由 `adopt` 留一条。
+    故障半径：① 触发条件是本机 socket 刚打开、目录里某台已准入的设备在线而没有连上；② 每台只多拨一次（失败后按原有退避），
+    不动中转连接与其它对端，对方的旧连接不足 `REDIAL_TAKEOVER_MS` 时这次拨号被它丢掉、按退避再拨；③ `portableSocket.test.ts`
+    「dials every online device at once after opening …」与「hands the transport the datagrams that arrived before it existed」。
+  - 该对方拨、对方的拨号却迟迟不来：不拨号的一方（设备号大的）等 `LATE_DIAL_MS` 后自己拨过去，之后按同样的退避（2026-11-21）。
+    对方不拨是因为它还抱着一条本机已经没有的连接：本机被强杀或重建时关闭通知没送到，而当时的核心不判空闲的连接死
+    （只在有数据发不出去满 `dead_after_us` 时判）。它收到这次拨号后，旧连接超过 `REDIAL_TAKEOVER_MS` 就换用新的，
+    没超过就丢掉，本机按退避再拨。同日核心补上了空闲判死（`secure.rs` 的 `silent_past_deadline`）：探测满 `dead_after_us`
+    没有回音就断，对方 30 秒内自己发现、照常重拨；自己停了很久刚醒来的一端先接连探测几次再下结论。
+    对方是旧版本时仍然靠这次后拨。真机：手机被强杀后重启，设备号比手机小、只能经中转的电脑原来在手机上离线 20 秒到 15 分钟，
+    改后约 1.2 秒；设备号比手机大的电脑由手机拨，一直不受影响。
+  - 目录里同账号两张证书带同一把传输密钥（同一台设备换了设备号重新登记，密钥没换，旧证书还在）：一把传输密钥只认一台设备，
+    只留签发晚的那张（`portableSocket.ts` 的 `supersedes`；带本机自己密钥的别的设备号一律不算对端），其余当作不在目录里：
+    不准入、不拨号、显示离线，但仍记作见过的 Agent-Net 设备，不因此改走 Device Link（2026-11-21）。Desktop 与 Node Host 的
+    worker 外层另有一份「见过的设备」，只从收到的目录和路径事件里填，所以 worker 每次报状态时把里层的那份一并带上（`knownPeers`）。原来用这把密钥建的连接记在排在前面的设备号名下；手机的原生引擎按密钥准入，
+    遇到重复就拒收整份名单（`DUPLICATE_PEER`），一对重复让这个账号下的手机全都打不开 Agent-Net。真机：一台 iPhone 换了设备号
+    重新登记后，另一台安卓手机每次打开都失败，改后照常连上其余电脑。故障半径：① 证据是两张都由本账号根密钥签发、传输密钥相同的证书；
+    ② 只是不认被顶替的那一张，别的设备的准入、连接、重试与时限都不变；③ `portableSocket.test.ts`
+    「keeps only the latest certificate of a transport key …」，`socket.integration.test.ts`
+    「keeps a device id superseded for sharing a transport key known through the worker …」。
   - Node Host 回复「支持后台链路」、连接前等读本机身份（最多 2 秒）改成只在开着 Agent-Net 时生效，关着时和主干一样。
   - 主干的部分目录（只读到一条腿时并回上次完整目录）也按 Device Link 设备列表过滤；Agent-Net 后台读设备列表走主干的共享限流账（`officialDeviceListFetch`）。
 - **第三轮（2026-11-17 补齐兼容与恢复能力）**：断线续传（在途的写在重开的链路上用原请求号找结果；代次改变或双端未协商结果恢复则不发，记录已淘汰则报告可能已执行）；
@@ -832,6 +1180,21 @@ mDNS 名，解析要靠双方都能收发组播；跨网段、组播被过滤或
   缺 `NSLocalNetworkUsageDescription` 时系统不弹授权、直接拒绝；正式包由 `forge.config.ts`
   声明，个人版由 `scripts/personal-build/native-capabilities.mjs` 写入运行时，改动后要用
   更新过的构建工具重新生成运行时才生效。
+- **应用内检测与提醒（2026-11-22）。** Apple 没有本地网络许可的查询接口，也区分不了「未询问」
+  与「已拒绝」。Main 的 [`local-network/access.ts`](../../apps/desktop/src/main/local-network/access.ts)
+  向物理网卡的默认网关（默认路由在 VPN 上时取 `route -n get -ifscope <en*> default`）发一次
+  TCP/53 连接：立即 `EHOSTUNREACH` 判为 `denied`，连通、拒绝或超时判为 `granted`，没有局域网网关
+  判为 `unknown`，界面在 `unknown` 时什么都不显示。这次探测本身也是未决定的 App 触发系统询问的
+  方式；系统已有决定（含缺 `NSLocalNetworkUsageDescription` 时被静默拒绝的旧安装）就不会再询问，
+  所以「去授权」在约 1.2 秒后仍被拒时打开「系统设置 › 隐私与安全性 › 本地网络」，并在 3 分钟内
+  每 2 秒复查一次。由拒绝变为允许时，Device Link 调用与网卡变化相同的 `notifyNetworkChanged()` /
+  `agentNetNetworkChanged()`，立即重试直连，不需要重启。缺许可时 LAN 信标收发都被拦住，「对端是否
+  在同一局域网」无从观察，所以侧边栏只在两种可观察的代价出现时提醒
+  （[`local-network/reminder.ts`](../../apps/desktop/src/main/local-network/reminder.ts)）：用户刚打开
+  「允许同账号设备控制本机」（10 分钟内），或 Agent-Net 显示同账号设备已连上却只走中转。关闭提醒
+  后，只有再次打开被控开关或出现新的只走中转的设备才会重新出现。设置页「本机」卡片常驻显示该
+  许可的状态。IPC `local-network:*` 只给本机窗口，不在远程调用白名单里。Host 客户端模式下 Device
+  Link 跑在 Host 进程，本次只接了桌面 Main 的提醒与重试，设置页状态仍可用。
 - **故障记录。** 2026-11 两台同一局域网的电脑，控制通道直连，文件却走 TURN（往返 430–580 ms，
   每秒 5–8 KB）。文件连接的统计里本端有 4 个 host 候选，对端一个也没有；其中一台的 App 没有
   本地网络许可，既发不出组播，也不能主动连对端。两处都要修：文件窗口公布真实地址，该 App
@@ -935,6 +1298,14 @@ Session 准备期柔性停止的 `SendOptions.signal` 由本机代理传到同�
 权限、Plan 和自动动作来源沿用原轮次；Stop、新输入、归档／删除使恢复失效。持续不可达、撤权或
 接不回原生会话保留原错误与人工恢复入口。伙伴、目标模式与共享任务沿用既有自动恢复归属检查。
 
+`remote_agent_restarted` 是以上三类关闭的恢复分类，不证明操作系统进程退出。未完成轮次的合成
+错误保留收到的 `remoteCloseReason` 与原 `remoteRunId`，并经现有持久化字段 `sdkError` 保存同一关联；
+合成错误只说明远端运行不可用，不把关闭详情放进参与恢复判定的 `message` / `sdkError`，避免上下文
+重建、工具或账号错误判定抢占原线程恢复。此前已收到的真实业务错误仍由原终态归属保留，不从这些
+关闭信号推断崩溃、OOM 或退出时刻。
+仅修改当前 run 的本地错误投影，不增加请求、恢复次数或副作用重放，不影响其他 peer；沿用已有
+wire 字段，旧执行端和官方／自建中转无需升级。回归见 `connectionPool.test.ts` 的 first-turn restart 场景。
+
 托管 Claude Code 的工具连接（2026-11-04）：设备托管时 Cindy 工具都是经隧道回到任务所在电脑的
 HTTP MCP，每次握手都要跨机往返。Claude Code 默认 `MCP_TIMEOUT` 只等 30s，到点即判连接失败，
 这一轮没有任何工具（实测中转变慢时 91 个工具全部被判断开，Agent 只能回复连不上）。托管会话启动时
@@ -954,11 +1325,18 @@ HTTP MCP，每次握手都要跨机往返。Claude Code 默认 `MCP_TIMEOUT` 只
 既有 `user-revoked`，不自动续跑或让供应商组换电脑；中转也不发换电脑凭证。旧版 `aborted` 无法
 区分退出和主动断开：兼容旧版退出意味着旧版一键断开可能连回一次，关闭远程控制则被权限门拒绝。
 
-分享在已经发生链路不可达后临时报 `ACCESS_REVOKED` / `REMOTE_AGENT_SHARE_UNAVAILABLE`，
-只保留原两分钟窗口，不重置截止时间；首次即撤权仍立即失败。恢复只作用于当前 run 的连接与
+分享名单未确认等临时故障可能首先报 `REMOTE_AGENT_SHARE_UNAVAILABLE`，此时也进入已有两分钟
+拉取恢复窗口，沿原游标重拉，不重发正文；错误仍携带明确撤权或关闭远控的底层 code 时，不按
+临时不可用启动恢复。已经发生链路不可达后临时报 `ACCESS_REVOKED` / `REMOTE_AGENT_SHARE_UNAVAILABLE`，
+只保留原窗口，不重置截止时间；首次即撤权、明确暂停／移除与远端撤权终态仍立即失败。恢复只作用于当前 run 的连接与
 当前电脑的拉取器，不重连共享 relay、不绕过授权。两控制端共用一个 host 的回归中，一个 run 消失并
 重新打开，另一控制端仍能发送、原生会话不变。实现及回归：`remote-agent/controller/`、
 `remote-agent/__tests__/connectionPool.test.ts`、`poll.test.ts` 与 `provider-group/service.ts`。
+
+远程 Agent 分享调用层保留拒绝的原始底层 code，供应商策略拒绝保留固定的
+`REMOTE_AGENT_PROVIDER_NOT_ALLOWED` 标记；分享专属展示前缀不替代拒绝证据。
+首次明确撤权、关闭远控或供应商策略拒绝不会被 `IPC_ERROR + SHARE_UNAVAILABLE` 翻译成临时重试。
+回归经 `remoteInvokeSendGuard.test.ts` 的真实分享调用适配器、invoker 与 poller 串联验证。
 
 直连分享任务持久位置仍为 `share:<id>`，该位置代表 O，不等于实际执行电脑 M。重启恢复通过
 现有直连句柄向 O 为原 M 申请新许可并探测 M，空闲 run 重开也先完成相同授权，不改选电脑。
@@ -976,7 +1354,10 @@ preparing，本机 Session 可正常关闭，下一条显式消息按原生会�
 
 1. **故障层级**：只处理同一台被控端的事件拉取。`poll` 遇到 peer reset、超时、背压或链路暂断时，
    用同样的游标重拉(0.5s 起指数退避，上限 5s；另一个在途 poll 成功即提前恢复)；连续 2 分钟拉不到
-   才结束这台被控端上的任务并提示对方不可达。本机「目标设备无响应」熔断打开后的快速失败
+   才结束这台被控端上的任务并提示对方不可达。若该被控端此刻仍在持续向本机送达业务分片或推送（`DeviceLinkClient`
+   分片重组期同步更新 `lastBusinessReceivedAt`，慢中转上单个数百 KB 回包堵住队头时对端并非失联），`responsivenessTracker`
+   在 90 秒耐心上限内不把并发超时计入 `DEVICE_UNRESPONSIVE` 熔断，`RemoteAgentPoller` 也暂缓推进 2 分钟失联计时（总上限
+   `REMOTE_AGENT_CONGESTED_GIVE_UP_MS = 5 分钟`，防止单向刷推送而 `poll` 永久卡死时无限挂起）。本机「目标设备无响应」熔断打开后的快速失败
    (`DEVICE_UNRESPONSIVE`)同样按链路暂断重拉：它不发网络请求，熔断按自己的单飞探测恢复，
    不能绕过两分钟窗口直接结束任务（2026-11-04：一次 1–2 分钟的出口抖动让后台 PR 跟进轮次
    当场失败）。单个任务的流数据与游标对不上时只结束那一个任务。
@@ -1299,6 +1680,96 @@ at once when the network changes during its backoff」。
 改为按密钥建索引（`portableSocket.ts` 的 `keys`），空闲时放慢轮询（`nativeTransport.ts`）。三处一起后真机换网
 1.5–1.9 秒恢复。
 
+2026-11-21 又查到手机每个请求比 Device Link 慢 30–60 毫秒的两处原因，都在 `nativeTransport.ts` 的轮询里，都是 JS：
+
+- 每次轮询都把准入名册重算一遍再和上次比。账号里 28 台设备时这一步约占 JS 线程 8 毫秒，比过桥向原生引擎取状态
+  （约 2 毫秒）还多；每 8 毫秒轮询一次时 JS 线程接近占满。现在 socket 的准入版本（`admissionVersion`）变了才重算，
+  另外每秒重算一次，覆盖证书、授权这类随时间到期的情况。名册或准入规则一变，`portableSocket.ts` 当场告诉传输层
+  （`Transport.admissionChanged`），撤销一台设备不再等到下一次轮询才镜像给引擎。
+- 要发数据时用零延时计时器触发轮询。React Native 的计时器按屏幕帧走，真机上零延时计时器晚 7–20 毫秒才到，
+  请求在 JS 里白等这么久。现在当场轮询；8 毫秒内连续的写入仍合并到原来的节奏里，不会每写一次轮询一次。
+
+真机（Android，办公室 Wi-Fi，同一个安装包同一时段，各 20 次的中位数；括号里是 Device Link）：读任务列表到两台直连电脑
+80 / 130 → 54 / 75 毫秒（53 / 80），到经中转的电脑 146 → 80 毫秒（74）；打开任务 121 / 128 → 56 / 92 毫秒（75 / 76）；
+空闲时 JS 线程 12% → 4.9%（1.5%）。不改 wire，也不动原生层，旧安装包热更新后生效。剩下的差距是收包这一侧：
+引擎收到应答后要等 JS 下一次轮询才交出来。
+
+同日做了收包这一侧（[会话层方案](../agent-net-session-plan.md) 10.2 节 v2-4 的原生循环，要新安装包）。原生库报告 `native-wait`
+的安装包上，每个引擎有一条自己的原生线程（`CindyAgentNetModule` 的 `Pump`，Android、iOS 各一份）：等套接字上来包或核心的
+下一个计时器，让引擎走一轮（`cindy_agent_net_pump`：收包、回确认、重传、保活），引擎有东西要给 JS 时才叫醒 JS 去 `poll`。
+JS 不再用计时器轮询（`nativeTransport.ts` 的 `rest`）：要发数据时当场 `poll`，引擎写完立刻发出去（`send_now`）；
+其余时间等原生线程叫。引擎空手回来时 JS 只看它镜像给引擎的东西（准入版本、中转的 UDP 凭据）变没变，每秒完整 `poll` 一次。
+
+- 这条线程不依赖 JS 线程：JS 忙或卡住时确认、重传和保活照常，连接不会因为 JS 卡住而被对端判断断开。
+- 引擎替 JS 收下的数据先放着（`stash`），`poll` 一次交出、不重不漏；JS 没来取之前引擎不再从核心读新的流数据，
+  核心的接收窗口照常顶住对端。经中转 WebSocket 发的包攒在引擎里等 JS 取（最多 1024 个，超出丢最早的，由传输层重发）。
+- `poll` 交出的连接列表永远是当下的，先收下的数据和事件接在前面（`engine.rs` 的 `merge`）。JS 把列表里没有的连接当成
+  已经没了：只交出先前收下的那份列表时，之后才拨出的连接不在里面，会被当场判成拨号失败。
+- 每次 `wait` 开始前引擎先走一轮（`waitForWork`）：JS 刚写进去的数据如果要经中转 WebSocket 发，包在引擎里等 JS 来取，
+  套接字上不会有包来提醒；不先走这一轮，要等原生线程下一个计时器（最长 250 毫秒）才交给 JS。
+- 旧安装包（原生库没有 `native-wait`）照旧用计时器；等待失败一次也退回计时器。新安装包配旧 JS 时没人调用 `wait`，
+  原生线程不启动，行为和原来一样。不改 wire。
+
+同日换了一台手机（Redmi K40，连着 7 台电脑）量每个请求在手机 JS 里的开销。页面打开后头一秒（系统给大核提速）请求只要 15–25 毫秒，
+之后稳定在 40–55 毫秒，Device Link 整批平稳：CPU 采样显示约 1 秒后大核回到最低频，App 的线程落在小核上，Agent-Net 每个请求在
+JS 线程上要做的事比 Device Link 多，CPU 一慢就显出来。沿一个请求打时间点量到两处，都在 `nativeTransport.ts`，都是 JS：
+
+- **写入排在一次轮询之后。** 引擎收到写入就发包（`send_now`），但 JS 是先 `poll`、把每条连接过一遍、最后才 `write`：
+  一次过桥往返 2.6–4 毫秒，加上过一遍 7 条连接约 6 毫秒（空闲的连接也各走一遍 `flush`，十几次 promise 往返；每条连接每次都重算
+  对端密钥的十六进制）。现在有字节要交时先写再轮询（`writeFirst`），空闲的连接不再走 `flush`，对端密钥的十六进制按连接记住（`remoteKey`）。
+- **写入等每秒一次的准入复查。** 按时间复查准入（`ADMISSION_RECHECK_MS`）到期时，下一次写入要等名册重算完，账号里 26 台设备时
+  8–17 毫秒。现在这次复查不拦写入：`admit` 每次都按当下的时间判断，写之前照旧问它。
+
+「准入变化先于任何写入交给引擎」没有变：socket 报告准入版本或中转凭据变了（`mirrorChanged`），仍然先轮询、把新名单交给引擎再写；
+此刻不被准入的对端一个字节也不写，随后的轮询把连接关掉。
+
+真机同一次运行里用开关交替切换新旧顺序（各 40 次，取后三分之二的中位数，三轮；毫秒）：打开任务（直连）32.5 / 37.3 / 39.6 →
+31.3 / 29.6 / 29.3；读任务列表（直连）50.3 / 52.3 / 50.8 → 42.1 / 37.9 / 42.4；打开任务（经中转）97.9 / 100.3 / 102.2 →
+94.1 / 90.4 / 93.6。从 JS 交出请求到引擎写完 8.3–10.5 → 3.8–4.5。对端应答时间本身在 8–24 毫秒之间波动，单看总数的中位数会被它搅乱，
+要看同一次运行里交替的结果。不改 wire，不动原生层，热更新后生效。
+
+量到、还没做的（都在手机 JS 与原生层之间，CPU 低频时）：过桥本身，写入和轮询各 3–4 毫秒（异步调用来回各切一次线程）；应答到了以后
+还要再过一次桥去取；字节以 base64 文本过桥，2 KB 的回包在 JS 里解码 3.8 毫秒，随大小线性增长（会话层方案 v2-4 的二进制桥）。
+三项都要改原生模块。
+
+2026-11-22 做了这三项（要新安装包）。原生库报告 `binary-io` 时，JS 和引擎之间多一个 `io` 调用（`cindy_agent_net_io`；Android、iOS 的
+`CindyAgentNetModule.io` 各一份），`nativeTransport.ts` 的 `exchange` 与 `restBinary` 用它：
+
+- 字节不转 base64、不进 JSON。一帧是「4 字节头长＋小 JSON 头＋原始字节」，头里只写每段多长；读回的结果也一样，流数据和要经中转
+  WebSocket 发的包原样跟在头后面（`engine.rs` 的 `io`、`take_blobs`）。
+- 一轮的写入、中转转来的包和读取合成一次调用：要发数据时过一次桥写完并读回。
+- 等待的那次调用把引擎随后读到的东西一并带回：应答到了只过一次桥，原来是等待返回、再 `poll` 一来一回，共三次。
+- 同一时刻只有一次调用在读。等待的调用在外时，写入走另一次不读的 `io`；写完引擎若有东西要给 JS（比如要经中转 WebSocket 发的包），
+  叫醒等待的那次（`kick`）。JS 还有没写完的字节或拨号在等时，同步的 `kick` 让等待的调用立刻回来，不等它的 250 毫秒。
+  等待的调用回来时若正有一轮在跑，它读到的东西先放着，那一轮在自己的调用之后、处理自己读到的东西之前先交出，顺序不乱。
+- 引擎只收下一部分时，剩下的从断点接着发；这条流之后每轮只给一块，收下一整块才恢复，满了的流不会每轮带半兆字节过桥再被拒。
+- 等待的调用失败时，引擎可能已经交出了读到的东西而 JS 没拿到：传输层直接关掉、由 socket 重连，不带着缺口继续。
+- 旧安装包（原生库没有 `binary-io`）、新安装包配旧 JS、原生库报告了 `binary-io` 而 App 模块没有 `io`，都照旧走 `command`。不改 wire。
+
+真机（Redmi K40，办公室 Wi-Fi，同一安装包同一进程里交替用新旧两种桥，4 轮，每轮每档 20 次的中位数；毫秒）：
+直连电脑 1 KB 18.7 / 21.9 / 17.6 / 18.8 → 14.6 / 15.5 / 16.7 / 16.6，16 KB 44.5 / 45.1 / 29.1 / 36.9 → 17.0 / 17.5 / 17.1 / 15.6，
+128 KB 60.5 / 69.3 / 69.6 / 65.7 → 29.2 / 33.5 / 42.9 / 31.2；经中转 1 KB 20.2 / 16.1 / 17.5 / 19.6 → 13.1 / 12.8 / 20.2 / 17.9，
+16 KB 43.1 / 32.4 / 27.7 / 36.0 → 19.1 / 17.6 / 17.2 / 18.6，128 KB 67.1 / 60.0 / 66.2 / 64.3 → 56.5 / 52.4 / 51.2 / 34.1。
+回包越大差得越多：16 KB 以上直连快一倍多，经中转的 128 KB 受中转本身限制。
+
+手机每次建立 Agent-Net 连接（冷启动、在后台超过 10 秒后回到前台）的两处等待（2026-11-21，带计时日志的真机时间线）：
+
+- **名册缓存不再逐张验签。** `readMobileAgentNetDirectory` 先核对整条记录的 MAC，再接受其中的证书。MAC 的密钥是本机身份的种子，
+  覆盖全部证书，而写入前每张证书都验过签名（`writeMobileAgentNetDirectory`）：记录完好就说明里面正是本机当时验过的那批证书，
+  只把它们记成「验过」（`relayAuthCrypto.ts` 的 `rememberVerifiedSignature`），形状、有效期、网络与账号的核对照旧。
+  原来每次冷启动把 24 张证书用纯 JS 的 Ed25519 重验一遍，每张约 28 毫秒，共约 0.7 秒；改后读缓存约 20 毫秒。
+  这条捷径只用于本机自己写入、又用本机密钥证明完好的记录，从对端或服务器收到的任何东西都照常验签。
+- **经中转拨号等中转的 UDP 通道就绪。** 中转发了 UDP 凭据、通道还没就绪时，`NativeTransport.connect` 先等它，最多
+  `RELAY_UDP_DIAL_WAIT_MS`（从通道最近一次建立算起）。这段时间里经 WebSocket 发出的握手收不到回应，要等核心 200 毫秒后重发：
+  第一批拨号原来每次 230–240 毫秒，改后 30–45 毫秒。中转没发凭据、安装包不支持中转 UDP 时不等；UDP 不通的网络等满时限后照旧走 WebSocket。
+  `configureUdpServer` 拿到中转地址后立刻轮询一次，把凭据交给引擎，不等引擎下一次叫醒。
+
+同一台手机、同一个 Wi-Fi，从开始建连接到拿到第一份数据：冷启动 2.0–2.3 秒 → 1.4 秒（其中读本机身份 0.5–0.7 秒是系统安全存储的耗时，
+登录令牌刷新完才能读设备列表）；在后台超过 10 秒后回来 0.5 秒 → 0.35–0.4 秒；10 秒以内回来连接还在，约 15 毫秒。
+
+真机同一安装包切换两种方式（各 20 次的中位数，括号里是 Device Link）：读任务列表 54 / 75 / 80 → 32–36 / 35–40 / 61–73 毫秒
+（53 / 80 / 74），打开任务 56 / 92 → 36–44 / 63–76 毫秒（75 / 76），空闲时 JS 线程 4.9% → 1.2–2.2%（1.5%）、整个进程 13.6% → 8–10%（8.0%）。
+
 无响应设备的列表、PR 状态和模型目录后台读取应让位给连接层探测。目录失效在暂不可读时
 保留待刷新意图，复用已有调度退避，只检查可读性、不发送请求；取消和销毁仍清除待办。
 前台、重连和单设备恢复通过同一入口唤醒尚未完成的目录读取，不等待旧退避到期，
@@ -1583,8 +2054,11 @@ userData 的 `logs/`。按 `sessionRef`（任务 ID 前 8 位）与 `runRef`（r
 每阶段先输出 `status=started`，结束输出 `ok` / `failed`、`durationMs` 和 `elapsedMs`；
 `stage=total` 汇总本端总耗时与 `stagesMs`。使用各端自己的单调时钟，不相减不同电脑的
 墙钟；`remote-open` 包含 transport 与 host 的等待，不能把三侧耗时相加。配置收集仍为
-best-effort，因此某项失败而总启动成功是合法结果。只记录固定阶段名、关联标识、结果和
-耗时，不记录配置正文、路径、消息、凭证或错误正文，不改变日志上报白名单。
+best-effort，因此某项失败而总启动成功是合法结果。只记录固定阶段名、关联标识、结果、
+耗时及下列固定诊断计数，不记录配置正文、路径、消息、凭证或错误正文，不改变日志上报白名单。
+控制端 `side=transport` 的 `stage=total` 可带 `payload`。其中 `uploadBytes` 和 `chunks` 是
+计划上传的 gzip 字节数与分段数，分段准备完成后，即使上传失败也会记录。内联载荷两项均为
+零，分段准备失败时省略未知的值。`fieldBytes` 记录固定载荷字段各自序列化后的 UTF-8 字节数。
 运行端 `stage=total` 另带 `execServer`：`shortcutEnabled`、`ancestorLevels`（收到的祖先快照层数）、
 `connections`（识别到的执行环境连接数）、`answered`（本地回答数）、`forwarded`（转发消息数）。
 计数仅覆盖创建至 started/失败，不含首轮消息及后续工具调用；只含布尔值和计数，无路径与 RPC 内容。
@@ -1734,3 +2208,13 @@ review 按此检查：功能类 PR 缺这段说明 = P1。
 4. PR Description 是否给出了三选一结论，而不是留空或只写「不涉及」？
 5. 触及重试／超时／断链恢复路径的改动：恢复动作是否与故障同半径？扩大半径是否给出
    明确理由？是否有多 peer 拓扑用例证明其它 peer 零感知？
+
+### 同一台电脑的旧可靠连接与新会话同时存在
+
+同账号 Device Link 等待恢复时，新的任务列表、单条及批量会话读取、待恢复会话和运行中任务查询可以在已认证的 Agent-Net 会话上发出，回包按请求来路交付。旧连接上尚待确认的写入和回执继续在原处恢复。等旧连接没有待发帧、也没有业务请求等结果时，下次控制握手可以交给新会话，再按原订阅流程建订阅。跨账号连接仍按分享资源绑定。对同一台电脑的同一轮拨号共用等待；同会话、相同握手内容和超时预算的并发建链共享一次握手。
+
+即使 Device Link 显示就绪，同账号设备的可靠窗口、发送缓冲或发送配额也可能阻塞。只在发送端确认本次调用一片都没写出时，任务快照、资源目录（manifest、list、get）与新远程桌面连接的能力、认证协商和启动请求可以交给同一设备当前已认证的 Agent-Net 会话。能在入队前判断就不占序号；已占序号的先撤下原业务帧，同序号保留 skip。只切这一次调用，已发出的分片、结果未知的请求、旧订阅和其他设备继续走原路。新桌面连接在备用会话上取得的租约，其信令、输入和停止跟随同一会话；等待发送时复核取消、显式断开和会话身份。故障证据与动作限于这台设备的一个请求，沿用现有协议和被控端权限检查。
+
+单台电脑的业务超时或拨号失败只触发路径验证。手机对目录中在线的设备首次拨号失败时，也验证当时使用的中继连接。桌面和 Host 对 WebSocket 中继发协议 ping；手机在同账号中继 hello 声明 `relayProbe: true` 时才发送 `relay-probe`，中继在当前已认证连接上回答 `relay-pong`。手机每 15 秒最多一次探测，有应答就保留连接；正常调度下探测满 15 秒仍无应答才触发这条上行的重连。中继不向访客声明这个能力。旧客户端忽略新增 hello 字段，新客户端连旧中继时不发新帧；官方和自建中继共用实现。中继连接恢复不重建其它设备的直连，也不重发已经送达的业务操作。
+
+回归入口为 `agentNetSessionLinks.test.ts`（64 帧积压、读写分流、订阅接手、并发建链，以及真实回环 WebSocket 上单向阻塞 27 帧时的资源查询和远程桌面建连）、`portableClient.test.ts`（应答、静默、旧版握手）、`workerSocket.test.ts` 和中继 `relay.integration.test.ts`（真实 WebSocket 往返）。

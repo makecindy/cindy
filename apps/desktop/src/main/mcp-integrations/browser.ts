@@ -398,6 +398,11 @@ async function managedPortHeldByAnotherCindy(): Promise<boolean> {
   return commandLine !== null && !commandLine.includes(`--user-data-dir=${runtimeDir}${nodePath.sep}`);
 }
 
+/** Internal settings transaction: keep CAS persistence inside the native switch queue. */
+function commitHostBrowserBackendKind(kind: BackendKind, persist: () => Promise<void>): Promise<boolean> {
+  return backendController.setKind(kind, persist);
+}
+
 async function stopExternalRuntimeIfUsed(): Promise<void> {
   const useRealProfile = readBrowserBackendSettings().useRealProfile;
   const patch = managedConfigPatchBeforeStop({
@@ -744,5 +749,5 @@ function disposeBrowserRuntime(): Promise<void> {
   externalChromeBackend.beginQuiescence();
   return backendController.dispose().finally(() => externalBackend.dispose());
 }
-return { setBrowserSessionUploadRootResolver, setUserBrowserPageControlProvider, clearUserBrowserMarksForSession, setActiveBrowserBackendKind, setBrowserUseRealProfile, getBrowserMcpDeps, getBrowserAvailability, getActiveBrowserBackendKind, recoverActiveBrowserBackend, getBrowserBackendHealth, createBrowserSettingsHandlers, openBrowserForLogin, disposeBrowserRuntime };
+return { setBrowserSessionUploadRootResolver, setUserBrowserPageControlProvider, clearUserBrowserMarksForSession, setActiveBrowserBackendKind, setBrowserUseRealProfile, getBrowserMcpDeps, getBrowserAvailability, getActiveBrowserBackendKind, recoverActiveBrowserBackend, getBrowserBackendHealth, createBrowserSettingsHandlers, openBrowserForLogin, disposeBrowserRuntime, commitHostBrowserBackendKind };
 }

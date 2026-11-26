@@ -16,6 +16,7 @@ const mocks = vi.hoisted(() => ({
   } as TestAuthState,
   authListener: null as AuthListener | null,
   authRealm: 'cn' as 'cn' | 'global',
+  heartbeatEndpoint: undefined as string | undefined,
   createHeartbeatClient: vi.fn(),
   heartbeatStop: vi.fn(),
   unsubscribeAuth: vi.fn(),
@@ -49,7 +50,8 @@ vi.mock('../authManager', () => ({
 }));
 
 vi.mock('../clientEndpointsService', () => ({
-  getClientEndpoint: () => `https://heartbeat.${mocks.authRealm}.example.test`,
+  getClientEndpoint: () =>
+    mocks.heartbeatEndpoint ?? `https://heartbeat.${mocks.authRealm}.example.test`,
 }));
 
 vi.mock('../lifecycle', () => ({
@@ -90,6 +92,7 @@ describe('heartbeat service app-mode isolation', () => {
     vi.resetModules();
     mocks.authState = authState('signed-out');
     mocks.authRealm = 'cn';
+    mocks.heartbeatEndpoint = undefined;
     mocks.authListener = null;
     mocks.onQuitDisposer = null;
     mocks.createHeartbeatClient.mockReset().mockReturnValue({
@@ -125,6 +128,15 @@ describe('heartbeat service app-mode isolation', () => {
     pushAuthState(authState('local'));
     expect(mocks.heartbeatStop).toHaveBeenCalledTimes(1);
     expect(options.host.getUid()).toBeNull();
+  });
+
+  it('does not start when the endpoint manifest leaves the heartbeat empty', async () => {
+    mocks.heartbeatEndpoint = '';
+    mocks.authState = authState('cloud', 'cloud-user-1');
+    const { initHeartbeatService } = await loadService();
+    initHeartbeatService();
+    pushAuthState(authState('cloud', 'cloud-user-2'));
+    expect(mocks.createHeartbeatClient).not.toHaveBeenCalled();
   });
 
   it('restarts Cindy heartbeat when the verified cloud owner changes', async () => {

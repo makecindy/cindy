@@ -33,6 +33,7 @@ import type { CompanionImportSource } from '@cindy/maker-shared/companion-import
 import { ThemeBrandLockup } from '@/components/branding/ThemeBrandLockup';
 import { at, GuideCover } from '@/components/feature-intro/GuideCover';
 import { ImportSourceMark } from '@/components/icons/ImportSourceMark';
+import { CustomProviderIcon } from '@/components/icons/CustomProviderIcon';
 import { hasProviderLogo, ProviderLogoMark, type ProviderLogoRouting } from '@/components/icons/ProviderLogoMark';
 import { WINDOW_DRAG_STYLE, WINDOW_NO_DRAG_STYLE } from '@/components/layout/windowDrag';
 import { canAccessBillingSettings } from '@/components/settings/billingVisibility';
@@ -275,7 +276,7 @@ function FirstRunGuideBody({ context, parked }: { context: FirstRunGuideContext;
     // The Migration Assistant is a modal of its own; the bar would only sit behind it.
     if (migrationDialogOpen || !step) return null;
     return (
-      <div className="pointer-events-none fixed inset-x-0 bottom-4 z-[60] flex justify-center px-4">
+      <div className="pointer-events-none fixed inset-x-0 bottom-4 z-float-top flex justify-center px-4">
         <div
           role="status"
           className="pointer-events-auto flex w-full max-w-[520px] items-center gap-3 rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-4 py-2.5 text-[var(--text-primary)] shadow-[shadow:var(--shadow-menu)]"
@@ -605,12 +606,12 @@ function FirstRunGuideBody({ context, parked }: { context: FirstRunGuideContext;
   return (
     <Dialog.Root open onOpenChange={(next) => { if (!next) closeFirstRunGuide(); }}>
       <Dialog.Portal>
-        <Dialog.Overlay className="modal-scrim fixed inset-0 z-[10000]" style={WINDOW_DRAG_STYLE} />
+        <Dialog.Overlay className="modal-scrim fixed inset-0 z-modal" style={WINDOW_DRAG_STYLE} />
         <Dialog.Content
           aria-describedby={undefined}
           onPointerDownOutside={(event) => event.preventDefault()}
           style={WINDOW_NO_DRAG_STYLE}
-          className="modal-panel fixed inset-0 z-[10000] m-auto flex h-[min(640px,88vh)] w-[min(640px,calc(100vw-32px))] flex-col overflow-hidden outline-none"
+          className="modal-panel fixed inset-0 z-modal m-auto flex h-[min(640px,88vh)] w-[min(640px,calc(100vw-32px))] flex-col overflow-hidden outline-none"
         >
           {step === 'intro' ? (
             // Cover: the one page that carries the brand block and no step chrome.
@@ -778,6 +779,7 @@ function ModelsVignette({ start }: { start: number }) {
 
 /** Cover scene: a task on the computer travels to the phone and continues there. */
 function DevicesVignette({ start }: { start: number }) {
+  // 迷你屏幕：插画内部的形状，不是控件框（DESIGN.md §5 插画登记）
   const screen = 'flex flex-col justify-center gap-1 rounded border border-[var(--text-tertiary)] bg-[var(--confirm-bg)]';
   // The first line is the same task on both screens; the rest is whatever else is there.
   const lines = (widths: string[], from: number) => widths.map((width, position) => (
@@ -896,7 +898,11 @@ function ConnectedProviderRow({ provider, onClick }: { provider: ProviderView; o
   const detail = [account?.identity, account?.planLabel].filter(Boolean).join(' · ');
   return (
     <OptionRow
-      icon={providerIcon(provider.id, provider.name, provider.routing)}
+      icon={(
+        <CustomProviderIcon svg={provider.customIcon} size={16}>
+          {providerIcon(provider.id, provider.name, provider.routing)}
+        </CustomProviderIcon>
+      )}
       label={provider.name}
       badge={t('firstRunGuide.models.own.connected')}
       sub={detail || undefined}

@@ -21,7 +21,6 @@ const sessionRenameInputSource = readFileSync(
   'utf8',
 );
 const sessionStatusIconSource = readFileSync(resolve(sidebarDir, 'SessionStatusIcon.tsx'), 'utf8');
-const sidebarRightStatusSource = readFileSync(resolve(sidebarDir, 'sidebarRightStatus.ts'), 'utf8');
 const automationGroupSource = readFileSync(
   resolve(sidebarDir, 'AutomationSessionGroupItem.tsx'),
   'utf8',
@@ -153,9 +152,6 @@ describe('SessionCard review regressions', () => {
     expect(sessionCardSource).toContain(
       'resolveSessionRowRightStatus(sessionActivity, hasQueuedInput)',
     );
-    // 排队那一档只是桌面端本地的第五档,共享的五档判定仍由共享模型给出 ——
-    // 入口不许自己另算一套(error / awaiting / running / done 的优先级)。
-    expect(sidebarRightStatusSource).toContain('resolveSessionRightStatus(activity)');
     expect(sessionCardSource).toContain('isRunning={leftIconRunning}');
     expect(sessionCardSource).not.toContain('isRemoteSessionActivityActive');
     expect(sessionItemSource).not.toContain('isRemoteSessionActivityActive');
@@ -163,7 +159,7 @@ describe('SessionCard review regressions', () => {
 
   // 置顶卡片等高(2026-11-08 用户定稿):正文区不论有无内容都占 2 行;失效后两列卡片底边错开。
   it('keeps card preview at a fixed two-line height across content sources', () => {
-    expect(sessionCardSource).toContain("'mt-[4px] h-[2.8em] text-11 leading-[1.4]'");
+    expect(sessionCardSource).toContain("'mt-1 h-[2.8em] text-11 leading-[1.4]'");
     expect(sessionCardSource).toContain(
       "'[display:-webkit-box] [-webkit-box-orient:vertical] [-webkit-line-clamp:2] overflow-hidden'",
     );
@@ -484,8 +480,8 @@ describe('SessionCard review regressions', () => {
 
   it('shows the project source label inline in both list and text modes', () => {
     // The inbox leaves the project name to the row's project icon (2026-11-18 user decision).
-    expect(sessionCardSource).toContain('{sourceLabel && !inboxMode ? (');
-    expect(sessionItemSource).toContain('{sourceLabel && !inboxMode ? (');
+    expect(sessionCardSource).toContain('{showProject && sourceLabel && !inboxMode ? (');
+    expect(sessionItemSource).toContain('{showProject && sourceLabel && !inboxMode ? (');
     expect(sessionItemSource).toContain('title={sourceLabel}');
     expect(sessionCardSource).toContain('title={sourceLabel}');
     expect(sessionItemSource).toContain("'inline-flex min-w-0 items-center gap-1 text-xs font-normal'");

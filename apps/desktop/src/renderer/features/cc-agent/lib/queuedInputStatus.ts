@@ -30,18 +30,23 @@ export function hasUnpausedQueuedInput(input: {
  * 消息。会话在等，状态栏要说明在等什么，不能按空闲收起(#11299)。
  * 计划审阅有自己的接管界面，这时状态栏整体让位。
  */
-export function shouldShowComposerRuntimeStatus(input: {
+type ComposerRuntimeInput = {
   pendingPlanReview: boolean;
   isRunning: boolean;
   waitingRemoteStart: boolean;
   backgroundTasksActive: boolean;
   hasRunningWorkflow: boolean;
-  waitingForQueuedInput: boolean;
-}): boolean {
-  if (input.pendingPlanReview) return false;
-  return input.isRunning
+  hasQueuedInput: boolean;
+};
+
+export function resolveComposerRuntimeStatus(input: ComposerRuntimeInput) {
+  const runtimeActive = input.isRunning
     || input.waitingRemoteStart
     || input.backgroundTasksActive
-    || input.hasRunningWorkflow
-    || input.waitingForQueuedInput;
+    || input.hasRunningWorkflow;
+  const queuedWaiting = !runtimeActive && !input.pendingPlanReview && input.hasQueuedInput;
+  return {
+    queuedWaiting,
+    visible: !input.pendingPlanReview && (runtimeActive || queuedWaiting),
+  };
 }

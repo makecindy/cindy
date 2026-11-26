@@ -308,8 +308,8 @@ export function CindyMakeSection() {
             : 'settings.cindyMake.description',
         )}
       />
-      {/* 页面标题以下的内容保持原来 18px 的节奏。 */}
-      <div className="flex flex-col gap-[18px]">
+      {/* 页面标题以下的内容间距 16px（gap-4）；原 18px 按 2026-11-22 写死值裁决收到刻度。 */}
+      <div className="flex flex-col gap-4">
         {createOpen && <CindyMakeCreateDialog onOpenChange={setCreateOpen} />}
         <div
           role="tablist"
@@ -370,7 +370,7 @@ export function CindyMakeSection() {
           aria-labelledby={tabId + '-environment-tab'}
           hidden={activeTab !== 'environment'}
         >
-          <div className="flex flex-col gap-[18px]">
+          <div className="flex flex-col gap-4">
             {import.meta.env.DEV && (
               <SettingsCard>
                 <SettingsRow
@@ -445,7 +445,7 @@ export function CindyMakeSection() {
           aria-labelledby={tabId + '-versions-tab'}
           hidden={activeTab !== 'versions'}
         >
-          <div className="flex flex-col gap-[18px]">
+          <div className="flex flex-col gap-4">
             <Button className="self-start" onClick={() => setCreateOpen(true)}>
               {t('settings.cindyMake.create.title')}
             </Button>
@@ -733,12 +733,19 @@ function CindyMakeSourceStatusCard({
                     )}
                     {onClear && status && !preparing && status.status !== 'missing' && (
                       <Tip text={t('settings.cindyMake.source.reset')}>
+                        {/* Clearing deletes the managed checkout, its worktrees and unpackaged
+                            changes (main/cindy-make/sourcePreparation.ts clearOnly), so it is
+                            destructive (DESIGN.md §4 Destructive actions, C-07).
+                            The shared danger tone has no outline; keep the secondary outline
+                            here so it pairs with the folder button beside it. */}
                         <Button
+                          data-settings-search-action="Deletes the managed Cindy Make source checkout after confirmation"
                           variant="secondary"
+                          tone="danger"
                           onClick={() => void onClear()}
                           disabled={mergeBlocked}
                           aria-label={t('settings.cindyMake.source.reset')}
-                          className="w-8 border-transparent bg-transparent px-0 text-[var(--text-tertiary)]"
+                          className="w-8 px-0 [--button-face-border:var(--border-default)]"
                         >
                           <Trash2 size={14} aria-hidden />
                         </Button>

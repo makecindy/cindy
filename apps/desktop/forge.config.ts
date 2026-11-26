@@ -1056,6 +1056,9 @@ function buildSwiftHelperForForgeArch(
 function buildRemoteDesktopInput(platform: ForgePlatform, arch: ForgeArch): void {
   const destDir = path.join(__dirname, 'resources', 'tools', 'remote-desktop');
   fs.mkdirSync(destDir, { recursive: true });
+  if (platform === 'linux') {
+    fs.copyFileSync(path.join(__dirname, 'native', 'remote-desktop', 'linux-input-guard.py'), path.join(destDir, 'linux-input-guard.py'));
+  }
   if (process.platform === 'linux' && platform === 'linux') {
     if (arch !== process.arch)
       throw new Error('Linux desktop input requires a native architecture build');
@@ -1363,6 +1366,46 @@ function buildWindowsTaskbarAddon(platform: ForgePlatform, arch: ForgeArch): voi
   } finally {
     fs.rmSync(build, { recursive: true, force: true });
   }
+}
+
+/** Rust targets of the Agent-Net native engine's Node module, by the platform and architecture being packaged. */
+const AGENT_NET_NATIVE_TARGETS: Record<string, string> = {
+  'win32-x64': 'x86_64-pc-windows-msvc',
+  'win32-arm64': 'aarch64-pc-windows-msvc',
+  'darwin-x64': 'x86_64-apple-darwin',
+  'darwin-arm64': 'aarch64-apple-darwin',
+  'linux-x64': 'x86_64-unknown-linux-gnu',
+  'linux-arm64': 'aarch64-unknown-linux-gnu',
+};
+
+/**
+ * The Agent-Net worker's native engine (packages/agent-net-native/node), built from source for the target being packaged and
+ * staged beside the worker bundle; the worker runs its transport on it, and on WASM without it (agentNetRuntime.ts
+ * `agentNetNative`). A module left from another target or older sources is removed first, so none is ever shipped stale.
+ * Windows packaging already needs Cargo (updater, taskbar), so there a failed build fails the package; elsewhere a machine
+ * without Rust packages without it, as ordinary builds do not depend on Rust (docs/agent-net-plan.md), unless
+ * CINDY_REQUIRE_AGENT_NET_NATIVE=1.
+ */
+function stageAgentNetNative(platform: ForgePlatform, arch: ForgeArch): void {
+  const dest = path.join(__dirname, 'resources', 'agent-net', 'cindy-agent-net.node');
+  fs.rmSync(dest, { force: true });
+  const required = platform === 'win32' || process.env.CINDY_REQUIRE_AGENT_NET_NATIVE === '1';
+  const target = AGENT_NET_NATIVE_TARGETS[`${platform}-${arch}`];
+  if (!target) {
+    if (required) throw new Error(`[forge] No Agent-Net native engine target for ${platform}-${arch}`);
+    console.warn(`[forge:prePackage] Agent-Net native engine: no target for ${platform}-${arch}; the worker uses WASM`);
+    return;
+  }
+  const result = spawnSync(
+    process.execPath,
+    [path.join(__dirname, '..', '..', 'packages', 'agent-net-native', 'node', 'build.mjs'), '--target', target, '--out', dest],
+    { stdio: 'inherit', windowsHide: true },
+  );
+  if (!result.error && result.status === 0) return;
+  fs.rmSync(dest, { force: true });
+  const reason = result.error?.message ?? `exited ${result.status}`;
+  if (required) throw new Error(`[forge] Agent-Net native engine build failed (${target}): ${reason}`);
+  console.warn(`[forge:prePackage] Agent-Net native engine not built for ${target} (${reason}); the worker uses WASM`);
 }
 
 function buildWindowsAtomicRenameHelper(platform: ForgePlatform, arch: ForgeArch): void {
@@ -2134,6 +2177,7 @@ const config: ForgeConfig = {
       buildWindowsGamepadHelper(platform, arch);
       buildWindowsAtomicRenameHelper(platform, arch);
       buildWindowsTaskbarAddon(platform, arch);
+      stageAgentNetNative(platform, arch);
       if (platform === 'darwin') {
         const desktopBlurBuild = spawnSync(
           process.execPath,
@@ -2394,6 +2438,11 @@ const config: ForgeConfig = {
         },
         {
           entry: 'src/preload/quotaTrayPreload.ts',
+          config: 'vite.preload.config.ts',
+          target: 'preload',
+        },
+        {
+          entry: 'src/preload/cloudLoginWindowPreload.ts',
           config: 'vite.preload.config.ts',
           target: 'preload',
         },

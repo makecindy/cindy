@@ -122,6 +122,7 @@ vi.mock('@/lib/makerChatStore', () => {
       getRunningSnapshot: () => statuses,
       subscribeAll: () => () => {},
       hasQueuedInput: () => false,
+      hasPendingIssueConfirm: () => false,
     },
   };
 });

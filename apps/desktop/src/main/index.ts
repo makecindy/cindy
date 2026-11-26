@@ -21,9 +21,24 @@ import { configureProjectionBoundaryPassive } from './authBoundaryQuarantine.js'
 import { beginDesktopDevInstance, type DesktopDevMode } from './devStartupStatus.js';
 import { desktopRuntimeKind } from './hostDelegationEnv.js';
 import { ensureSystemBinPathForMachineId } from './deviceId.js';
+import { initializeInstanceConfig } from './instance-runtime/config.js';
+
+const instanceConfig = initializeInstanceConfig();
+if (instanceConfig) {
+  // Container /dev/shm is only 64 MiB. Software-composited windows and plugins
+  // share it; a failed 256 KiB image allocation terminates the renderer. Use
+  // Chromium's private, unlinked files in the existing ephemeral /tmp instead.
+  // Ordinary Desktop profiles and all sandbox/storage controls stay unchanged.
+  app.commandLine.appendSwitch('disable-dev-shm-usage');
+  app.setPath('userData', instanceConfig.userDataDir);
+  process.env.XDT_DEVICE_ID_OVERRIDE = instanceConfig.deviceId;
+  app.commandLine.appendSwitch('password-store', 'gnome-libsecret');
+}
 import { configureLinuxPasswordStore } from './linuxPasswordStore.js';
 import { recognizeLinuxUserInstallation, linuxUserDesktopName } from './linuxInstallation.js';
 import { prepareCindyVersionStartup, dispatchCindyVersionStartup } from './cindy-make/versionStartup.js';
+import { mainBundleBuildId, startMainCompileCache } from './mainCompileCache.js';
+import { markStartupMilestone } from './startupTimeline.js';
 
 if (process.platform === 'linux' && app.isPackaged) {
   const installation = recognizeLinuxUserInstallation(app.getPath('exe'), os.homedir(), process.getuid?.() ?? -1);
@@ -48,7 +63,7 @@ const regionUserDataDirName = resolveRegionUserDataDirName({
   argv: process.argv,
   envUserDataDir: process.env.XDT_USER_DATA_DIR,
 });
-if (regionUserDataDirName) {
+if (regionUserDataDirName && !instanceConfig) {
   app.setPath('userData', path.join(app.getPath('appData'), regionUserDataDirName));
 }
 // A verified version handoff retains the launching original's profile and keychain identity.
@@ -78,7 +93,7 @@ configureGhostSnapshotProcess((parentDir) => utilityProcess.fork(
 
 const log = createLogger('fix-path');
 log.debug(`[fix-path] before PATH=${process.env.PATH ?? ''}`);
-fixPath();
+if (!instanceConfig) fixPath();
 ensureMacPackageManagerPath();
 log.debug(`[fix-path] after PATH=${process.env.PATH ?? ''}`);
 
@@ -289,6 +304,7 @@ const desktopDevInstanceOptions = (() => {
     try {
       commit = execFileSync('git', ['rev-parse', 'HEAD'], {
         cwd: rootDir,
+        windowsHide: true,
         encoding: 'utf8',
         stdio: ['ignore', 'pipe', 'ignore'],
       }).trim() || null;
@@ -338,6 +354,16 @@ if (!process.env.XDT_BROWSER_RUNTIME_DIR) {
 }
 refreshBrowserRuntimeConfigDir();
 
+// After the final userData and before the bootstrap chunk, which is most of the main bundle.
+const mainCompileCache = startMainCompileCache({
+  userDataDir: app.getPath('userData'),
+  buildId: mainBundleBuildId(app.getVersion(), __dirname),
+  isPackaged: app.isPackaged,
+  platform: process.platform,
+  resourcesPath: process.resourcesPath,
+  homeDir: app.getPath('home'),
+});
+
 async function dispatch(): Promise<void> {
   if (await dispatchCindyVersionStartup()) return;
   const cleanupDevInstance = await beginDesktopDevInstance(desktopDevInstanceOptions);
@@ -349,6 +375,10 @@ async function dispatch(): Promise<void> {
     startFreshProfileInLocalMode();
   }
   const mod = await import('./bootstrap-electron.js');
+  markStartupMilestone('main-code-loaded');
+  mainCompileCache.flush();
+  // A passive instance shares another instance's userData; that instance cleans up.
+  if (process.env.XDT_PASSIVE_SHARED_USER_DATA !== '1') void mainCompileCache.pruneUnused();
   await mod.bootstrapElectron();
 }
 

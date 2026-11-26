@@ -42,7 +42,12 @@ export function peerLinksStructureKey(snapshot: DeviceLinkPeerLinksSnapshot): st
     .sort()
     .join('\n');
   const routes = (snapshot.agentNetRoutes ?? [])
-    .map((route) => `${route.deviceId}|${route.path}`)
+    .map((route) => {
+      const extras = route.pathPreference !== undefined || route.directRttMs !== undefined || route.relayRttMs !== undefined
+        ? `|${route.pathPreference ?? 'auto'}|${route.directRttMs != null ? 1 : 0}|${route.relayRttMs != null ? 1 : 0}`
+        : '';
+      return `${route.deviceId}|${route.path}${extras}`;
+    })
     .sort()
     .join('\n');
   return `${relayProtocol}\n${links}\n\n${routes}`;

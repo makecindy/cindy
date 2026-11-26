@@ -249,16 +249,16 @@ export function UpgradeBanner({ hostId, agent, sessionId, className, style }: Up
   return (
     <div
       className={cn(
-        'mx-auto flex select-none items-start gap-2 rounded-md px-3 py-2',
+        'mx-auto flex select-none items-start gap-2 rounded-xl px-3 py-2',
         'border bg-[var(--upgrade-banner-bg)] border-[var(--upgrade-banner-border)]',
         className,
       )}
       style={style}
     >
       {upgrading ? (
-        <Spinner size={14} className="mt-[2px] text-[var(--upgrade-banner-fg)]" />
+        <Spinner size={14} className="mt-0.5 text-[var(--upgrade-banner-fg)]" />
       ) : (
-        <ArrowUpCircle size={14} className="shrink-0 mt-[2px] text-[var(--upgrade-banner-fg)]" />
+        <ArrowUpCircle size={14} className="shrink-0 mt-0.5 text-[var(--upgrade-banner-fg)]" />
       )}
       <span className="text-xs text-[var(--upgrade-banner-fg)] flex-1 break-all">
         {upgrading

@@ -15,7 +15,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   hasUnpausedQueuedInput,
-  shouldShowComposerRuntimeStatus,
+  resolveComposerRuntimeStatus,
 } from '@/features/cc-agent/lib/queuedInputStatus';
 
 describe('hasUnpausedQueuedInput', () => {
@@ -29,24 +29,24 @@ describe('hasUnpausedQueuedInput', () => {
   });
 });
 
-describe('shouldShowComposerRuntimeStatus', () => {
+describe('resolveComposerRuntimeStatus', () => {
   const idle = {
     pendingPlanReview: false,
     isRunning: false,
     waitingRemoteStart: false,
     backgroundTasksActive: false,
     hasRunningWorkflow: false,
-    waitingForQueuedInput: false,
+    hasQueuedInput: false,
   };
 
   it('keeps the status bar visible while a queued message waits, and hides it when idle', () => {
-    expect(shouldShowComposerRuntimeStatus(idle)).toBe(false);
-    expect(shouldShowComposerRuntimeStatus({ ...idle, waitingForQueuedInput: true })).toBe(true);
-    expect(shouldShowComposerRuntimeStatus({ ...idle, isRunning: true })).toBe(true);
-    expect(shouldShowComposerRuntimeStatus({ ...idle, waitingRemoteStart: true })).toBe(true);
-    expect(shouldShowComposerRuntimeStatus({ ...idle, backgroundTasksActive: true })).toBe(true);
-    expect(shouldShowComposerRuntimeStatus({ ...idle, hasRunningWorkflow: true })).toBe(true);
+    expect(resolveComposerRuntimeStatus(idle).visible).toBe(false);
+    expect(resolveComposerRuntimeStatus({ ...idle, hasQueuedInput: true }).visible).toBe(true);
+    expect(resolveComposerRuntimeStatus({ ...idle, isRunning: true }).visible).toBe(true);
+    expect(resolveComposerRuntimeStatus({ ...idle, waitingRemoteStart: true }).visible).toBe(true);
+    expect(resolveComposerRuntimeStatus({ ...idle, backgroundTasksActive: true }).visible).toBe(true);
+    expect(resolveComposerRuntimeStatus({ ...idle, hasRunningWorkflow: true }).visible).toBe(true);
     // 计划审阅有自己的接管界面，状态栏整体让位。
-    expect(shouldShowComposerRuntimeStatus({ ...idle, pendingPlanReview: true, waitingForQueuedInput: true })).toBe(false);
+    expect(resolveComposerRuntimeStatus({ ...idle, pendingPlanReview: true, hasQueuedInput: true }).visible).toBe(false);
   });
 });

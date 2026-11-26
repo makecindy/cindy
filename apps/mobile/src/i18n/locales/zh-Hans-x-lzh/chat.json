@@ -197,6 +197,10 @@
     "retryIn": "{{seconds}} 秒后自试"
   },
   "subscriptionAccountError": {
+    "poolModelLimited": "此模型订阅之额已尽，可先易模型。",
+    "poolRetryUntil": "俟 {{resetAt}} 后可再试。",
+    "poolOtherSignedOut": "另有订阅账号已退出，可于行此任务之机重新登录而试。",
+    "poolUnavailable": "此模型无可用订阅账号。可易模型，或于行此任务之机查账号。",
     "limited": "此差事所用订阅账号，用量已尽。可待用量重设后再试，或另选模型来源。",
     "limitedUntil": "此差事所用订阅账号，用量已尽，预计 {{resetAt}} 重设。可待重设后再试，或另选模型来源。",
     "loginRequired": "此差事所用订阅账号需要重新登录。请在执行差事的电脑上重新登录该账号，再重试。",

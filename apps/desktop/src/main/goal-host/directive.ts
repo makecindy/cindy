@@ -90,20 +90,22 @@ function buildClarifyContract(maxTurns: number | null): string {
  * 首轮指令:用户的目标条件 + 首轮质量自检约定 + 裁决约定。
  * objective 原样透传(用户写什么就是什么),约定附在后面。
  * opts.maxTurns 让模型据当前轮次预算判断上限是否合理(null = 未设上限,不提预算)。
+ * opts.clarify = false:引擎没有 AskUserQuestion(插件引擎,docs/plans/acp-plugin-bridge.md,
+ * 2026-11-25 用户决定跳过澄清),目标按原文执行,裁决约定不带 refined_objective。
  */
 export function buildFirstTurnDirective(
   objective: string,
-  opts?: { maxTurns?: number | null },
+  opts?: { maxTurns?: number | null; clarify?: boolean },
 ): string {
+  const clarify = opts?.clarify !== false;
   return [
     `[Goal] Work autonomously toward this goal across multiple turns until it is met:`,
     '',
     objective.trim(),
-    SEPARATOR.trimStart(),
-    buildClarifyContract(opts?.maxTurns ?? null),
+    ...(clarify ? [SEPARATOR.trimStart(), buildClarifyContract(opts?.maxTurns ?? null)] : []),
     SEPARATOR.trimStart(),
     // 首轮带 refined_objective 字段(澄清含糊目标后回报具体目标)。
-    buildVerdictContract(true),
+    buildVerdictContract(clarify),
   ].join('\n');
 }
 

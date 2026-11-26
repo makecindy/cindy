@@ -23,6 +23,10 @@ Desktop 与 Mobile 共用端点清单。源码、随包文件和线上 CDN 是�
 
 地址非空只开放客户端入口。开关打开后，服务仍按当前账号与组织配置协商可用能力，组织接入和个人关联分别完成。
 
+## 官方 Discord
+
+`discordHookWsUrl` 开放官方 Discord 入口（与个人 Discord bot 无关）。服务寄宿在 telegram-hook-server 的 `/discord` 路径，只在海外部署一套，cn 与 global 两个正式清单都填 `wss://telegram-hook.cindy.app/discord`。地址缺省或为空时不显示入口；已开启的用户保留卡片并显示地址未配置，以便关闭。服务端开关 `DISCORD_ENABLED` 关闭时 `/discord` 返回 404，客户端只显示连接失败，不影响其它渠道。dev 默认留空（Discord 在中国大陆不可达，联调在可访问 Discord 的本地环境进行）。按服务端文档的顺序，确认服务端 `/healthz` 的 `discordGateway` 为 `ready` 后再发布填好该字段的线上清单。
+
 ## 更新与核验
 
 1. 核对目标服务已经部署，更新所属环境的源文件；dev 同时更新发布仓的正本。

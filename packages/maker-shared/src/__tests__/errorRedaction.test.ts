@@ -2,7 +2,18 @@ import { describe, expect, it } from 'vitest';
 import {
   redactSensitiveText,
   redactSensitiveTextDeep,
+  parseAgentErrorCode,
 } from '../errorRedaction';
+
+// #8706 unit: the shared allowlist feeds Desktop and Mobile error presentation.
+// An unregistered code otherwise collapses the safe quota handoff to an unknown failure.
+it('recognizes only the registered quota handoff code, including host error wrappers', () => {
+  for (const prefix of ['', '[IPC_ERROR] LAZY_CREATE_FAILED: ']) {
+    expect(parseAgentErrorCode(`${prefix}[AUTO_REVIEW_UNAVAILABLE_QUOTA] safe fallback`))
+      .toEqual({ code: 'AUTO_REVIEW_UNAVAILABLE_QUOTA', fallback: 'safe fallback' });
+  }
+  expect(parseAgentErrorCode('[AUTO_REVIEW_UNAVAILABLE_UNKNOWN] diagnostic')).toBeNull();
+});
 
 /**
  * Error rows reach other processes and devices as `content` of an `error`

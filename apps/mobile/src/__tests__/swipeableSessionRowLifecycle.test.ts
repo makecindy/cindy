@@ -28,7 +28,7 @@ interface BoundaryProps {
 
 const runtime = vi.hoisted(() => ({
   // The native-boundary mock assigns both values before any render/assertion.
-  props: null as unknown as BoundaryProps, release: 0, width: 400, freezeAnimations: false,
+  props: null as unknown as BoundaryProps, release: 0, width: 400, rowWidth: 400, freezeAnimations: false,
   translation: null as unknown as BoundaryTranslation,
   listeners: new Map<string, (event: { value: number }) => void>(),
   removed: vi.fn(), stopped: vi.fn(), close: vi.fn(), reset: vi.fn(),
@@ -36,7 +36,7 @@ const runtime = vi.hoisted(() => ({
 // Keep the UI-to-JS bridge at the native boundary, like the other row fixtures.
 vi.mock('react-native-reanimated', () => ({ runOnJS: (fn: unknown) => fn }));
 vi.mock('react-native', async () => {
-  const { createElement: el } = await import('react');
+  const { createElement: el, useLayoutEffect } = await import('react');
   type Node = { __getValue(): number; interpolate(config: Config): Node };
   type Config = { inputRange: number[]; outputRange: number[] };
   const value = (n: number | Node) => typeof n === 'number' ? n : n.__getValue();
@@ -45,7 +45,9 @@ vi.mock('react-native', async () => {
     interpolate: ({ inputRange: [a, b], outputRange: [x, y] }) => node(() =>
       x + Math.max(0, Math.min(1, (read() - a) / (b - a))) * (y - x)),
   });
-  const View = ({ children, style }: { children?: ReactNode; style?: object[] }) => {
+  const View = ({ children, style, onLayout }: { children?: ReactNode; style?: object[]; onLayout?: (event: { nativeEvent: { layout: { width: number } } }) => void }) => {
+    const width = runtime.rowWidth;
+    useLayoutEffect(() => onLayout?.({ nativeEvent: { layout: { width } } }), [onLayout, width]);
     const flat = Object.assign({}, ...[style].flat().filter(Boolean));
     return el('div', { 'data-opacity': flat.opacity == null ? undefined : value(flat.opacity) }, children);
   };
@@ -92,12 +94,14 @@ vi.mock('@/platform/gestureHandler', async () => {
   return { ClassicSwipeable: forwardRef((props: BoundaryProps, ref) => {
     runtime.props = props;
     useImperativeHandle(ref, () => ({ close: runtime.close, reset: runtime.reset }));
-    return el(Fragment, null, props.renderLeftActions({}, runtime.translation),
-      props.renderRightActions({}, runtime.translation), props.children);
+    return el(Fragment, null,
+      el('div', { 'data-side': 'left' }, props.renderLeftActions({}, runtime.translation)),
+      el('div', { 'data-side': 'right' }, props.renderRightActions({}, runtime.translation)),
+      props.children);
   }) };
 });
 vi.mock('lucide-react-native', () => Object.fromEntries(
-  ['Check', 'CircleDashed', 'Archive', 'ArchiveRestore', 'Ellipsis', 'Pin', 'PinOff', 'List', 'Search', 'SquarePen'].map((name) => [name, () => null]),
+  ['Check', 'CircleDashed', 'Archive', 'ArchiveRestore', 'Ellipsis', 'Pin', 'PinOff', 'List', 'Search', 'Settings', 'SquarePen'].map((name) => [name, () => null]),
 ));
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
 // Registry ownership is real; locale startup is outside this native-boundary fixture.
@@ -131,7 +135,7 @@ function render(id = 'row') {
   })));
 }
 beforeEach(() => {
-  vi.clearAllMocks(); runtime.release = 0; runtime.width = 400; runtime.freezeAnimations = false; runtime.listeners.clear();
+  vi.clearAllMocks(); runtime.release = 0; runtime.width = 400; runtime.rowWidth = 400; runtime.freezeAnimations = false; runtime.listeners.clear();
   host = document.createElement('div'); root = createRoot(host);
 });
 afterEach(() => act(() => root.unmount()));
@@ -140,6 +144,20 @@ afterEach(() => act(() => root.unmount()));
 // regressions protect release-position archiving, lazy native trees and disposal;
 // the old import/substring/layout checks never invoked a gesture or React cleanup.
 describe('classic swipe row lifecycle', () => {
+  // Unit regression: the floating task list can be narrower than the app window.
+  it.each([[320, 176], [240, 160]])('archives a %i-point row at %i points', (width, threshold) => {
+    runtime.width = 900;
+    runtime.rowWidth = width;
+    render();
+    act(() => runtime.props.onSwipeableOpenStartDrag());
+    runtime.release = -(threshold - 1);
+    act(() => runtime.props.onSwipeableWillOpen('right'));
+    expect(controls.onArchive).not.toHaveBeenCalled();
+    runtime.release = -threshold;
+    act(() => runtime.props.onSwipeableWillOpen('right'));
+    expect(controls.onArchive).toHaveBeenCalledOnce();
+  });
+
   it.each([
     ['right', -260, -100, false, 'onArchive'],
     ['right', -260, -260, true, 'onArchive'],
@@ -207,14 +225,29 @@ describe('classic swipe row lifecycle', () => {
 describe('Android project swipe actions', () => {
   let registry: SwipeRowRegistry;
   beforeEach(() => { registry = createSwipeRowRegistry(); });
-  function renderProject(projectKey = 'project', edgeInset = 0) {
+  function renderProject(projectKey = 'project', edgeInset = 0, onSettings?: () => void) {
     const actions = { onNewTask: vi.fn(), onOpenTasks: vi.fn(), onSearch: vi.fn() };
     act(() => root.render(createElement(PaneEdgeInsetProvider, { value: edgeInset },
       createElement(SwipeableProjectHeader, {
-        ...actions, projectKey, registry, children: 'header',
+        ...actions, projectKey, registry, onSettings, children: 'header',
       }))));
     return actions;
   }
+
+  it('closes the left-swiped project row before opening settings on Android', () => {
+    const onSettings = vi.fn(() => {
+      expect(runtime.close).toHaveBeenCalledOnce();
+      expect(registry.closeOpenRow()).toBe(false);
+    });
+    renderProject('project', 0, onSettings);
+    act(() => runtime.props.onSwipeableOpenStartDrag());
+    const selector = '[aria-label="settings.projectInfo.title"]';
+    expect(host.querySelectorAll(selector)).toHaveLength(1);
+    const button = host.querySelector<HTMLButtonElement>(`[data-side="right"] ${selector}`);
+    expect(button).not.toBeNull();
+    act(() => button!.click());
+    expect(onSettings).toHaveBeenCalledOnce();
+  });
 
   it('closes through the registry and ref for each explicit action', () => {
     const actions = renderProject();

@@ -112,7 +112,7 @@
     "runtimeFailureReason": {
       "unclaimed_timeout": {
         "summary": "{{name}} não começou a processar dentro do prazo de espera. Este pedido terminou.",
-        "advice": "Peça ao proprietário do colega para verificar se a Cindy está a funcionar e se o respetivo computador está ligado à rede.",
+        "advice": "Peça ao proprietário do amigo para verificar se a Cindy está a funcionar e se o respetivo computador está ligado à rede.",
         "details": "Quando a Cindy e a rede voltarem a funcionar, envie a mensagem novamente."
       }
     },
@@ -507,7 +507,7 @@
       "tools": "Ferramentas e informações autorizadas pelo proprietário",
       "authorizeTitle": "Permitir que este grupo utilize as ferramentas e informações de {{name}}?",
       "toolsHint": "Os membros podem utilizar as ferramentas existentes e as informações privadas deste amigo. Os resultados são visíveis para todos. As regras de aprovação existentes continuam a aplicar-se. A revogação interrompe os pedidos ativos, mas não pode anular ações concluídas.",
-      "confirm": "Confirmar"
+      "confirm": "Permitir ferramentas"
     }
   },
   "groupSettings": {
@@ -596,7 +596,7 @@
     "removeOwnHint": "{{name}} deixará de receber mensagens de «{{group}}». O histórico é mantido; os outros grupos e conversas privadas não são afetados.",
     "removeOwnActiveHint": "Os pedidos ativos neste grupo serão interrompidos. As tarefas iniciadas de forma independente continuarão em execução.",
     "stopAndRemove": "Parar e remover",
-    "confirm": "Confirmar",
+    "confirm": "Permitir ferramentas",
     "inviteTitle": "Convidar para o grupo",
     "reusableLink": "Sem expiração · Reutilizável por várias pessoas",
     "singleUseUntil": "Utilização única · Expira em {{date}}",
@@ -655,5 +655,6 @@
     "externalFormatError": "Volte a abrir a ligação completa a partir da mensagem original."
   },
   "memberCount_many": "{{count}} membros",
-  "waitingForOwner": "A aguardar confirmação"
+  "waitingForOwner": "A aguardar confirmação",
+  "externalBadge": "Externo"
 }

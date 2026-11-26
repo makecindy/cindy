@@ -56,19 +56,25 @@ vi.mock('@/lib/composerDraftStore', () => ({
   }),
 }));
 
+import { hasUnpausedQueuedInput, resolveComposerRuntimeStatus } from '@/features/cc-agent/lib/queuedInputStatus';
+import { projectSidebarSessionActivity, resolveSessionRowRightStatus } from '@/features/cc-agent/sidebar/sidebarRightStatus';
 import { EMPTY_SESSION_STATE, handleStreamEvent, makerChatStore } from '@/lib/makerChatStore';
 import { findActiveReconnect } from '@/lib/autoResumePresentation';
 import * as messageService from '@/lib/messageService';
 import type { Message } from '@/lib/ccAgent.types';
 import type { ChatMessage } from '@/lib/makerChatStore';
+import { getSessionAttentionKind } from '@/lib/sessionAttentionStore';
+import { startHostEventBridge } from '../../main/host-delegation';
 import { CONTINUE_AFTER_ERROR_PROMPT } from '../../shared/interruptedTurn.js';
 
 const inputStop = vi.fn(async () => projection({ queuePaused: false }));
 const inputGetProjection = vi.fn<() => Promise<unknown>>(async () =>
   Promise.reject(new Error('n/a in test')),
 );
+const markAttention = vi.fn(async () => {});
 
 let inputProjectionCb: ((projection: unknown) => void) | null = null;
+let messageCreatedCb: ((payload: unknown) => void) | null = null;
 let makerEventCb: ((payload: unknown) => void) | null = null;
 let makerStatusCb: ((payload: unknown) => void) | null = null;
 
@@ -101,8 +107,12 @@ function makeElectronApiStub() {
         stop: inputStop,
       },
     },
-    localDb: { messages: { onCreated: fanOut() } },
+    localDb: { messages: { onCreated: (cb: (payload: unknown) => void) => {
+      messageCreatedCb = cb;
+      return () => { messageCreatedCb = null; };
+    } } },
     deviceLink: { onRemotePush: fanOut() },
+    notificationMarkSessionAttention: markAttention,
     onUsageMessageTurnCost: fanOut(),
   };
 }
@@ -246,6 +256,62 @@ describe('mapServerMessages auto-resume 分隔线', () => {
     expect(row('question-reply:q1:digest')?.isSyntheticTrigger).toBeUndefined();
   });
 
+  // L343 / unit. Reopened history reads the notice. Both an attached window
+  // and local IPC can refresh the same older row without adding a message.
+  it.each(['reopened', 'attached window', 'local window'] as const)('projects the context-full notice in %s history', async (entry) => {
+    const original = serverMessage({ sessionId: SID, clientId: 'old', role: 'user', content: '继续',
+      createdAt: '2026-06-12T00:00:00.000Z' });
+    const saved = { ...original, agentMeta: { inputNotice: 'oversized-input-skipped' } as const };
+    const next = serverMessage({ sessionId: SID, clientId: 'next', role: 'user', content: 'second',
+      createdAt: '2026-06-12T00:00:01.000Z' });
+    vi.mocked(messageService.list).mockResolvedValueOnce([
+      entry === 'reopened' ? saved : original,
+      next,
+    ]);
+    makerChatStore.ensureInitialMessages(SID);
+    await flush();
+    await flush();
+    if (entry !== 'reopened') {
+      expect(makerChatStore.getSnapshot(SID).messages.find(message => message.clientId === 'old')?.inputNotice).toBeUndefined();
+      expect(messageCreatedCb).not.toBeNull();
+      const attention = getSessionAttentionKind(SID);
+      if (entry === 'local window') {
+        for (const message of [saved, saved, original]) messageCreatedCb?.({ sessionId: SID, message });
+      } else {
+        // Exercise the real attached-window SSE bridge, with the fetch body and IPC as fixture IO.
+        const events = [saved, saved, original].map((message, index) => ({
+          seq: index + 1, type: 'message_created', sessionId: SID, messageId: original.id, message,
+        }));
+        const fetch = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response(
+          events.map(event => `data: ${JSON.stringify(event)}\n\n`).join(''),
+          { headers: { 'content-type': 'text/event-stream' } },
+        ));
+        const relayToWindow = vi.fn((payload: unknown) => messageCreatedCb?.(payload));
+        const ordinaryEvents = vi.fn();
+        const stop = startHostEventBridge({
+          baseUrl: 'http://127.0.0.1:1', token: 'fixture', broadcast: ordinaryEvents,
+          onMessageCreated: relayToWindow,
+        });
+        try {
+          await vi.waitFor(() => expect(relayToWindow).toHaveBeenCalledTimes(3));
+          expect(ordinaryEvents).not.toHaveBeenCalled();
+        } finally {
+          stop();
+          fetch.mockRestore();
+        }
+      }
+      expect(getSessionAttentionKind(SID)).toBe(attention);
+      expect(markAttention).not.toHaveBeenCalled();
+    }
+    const users = makerChatStore.getSnapshot(SID).messages.filter(message => message.role === 'user');
+    expect(users.map(({ clientId, createdAt }) => [clientId, createdAt]))
+      .toEqual([[original.clientId, original.createdAt], [next.clientId, next.createdAt]]);
+    expect(users.filter(message => message.inputNotice !== undefined)).toEqual([
+      expect.objectContaining({ clientId: 'old', content: '继续', inputNotice: 'oversized-input-skipped' }),
+    ]);
+    expect(users.find(message => message.clientId === 'next')?.inputNotice).toBeUndefined();
+  });
+
   // Unit / PR #6611: the first queued input resumes without a hidden clone.
   // Previously only autoResume=true rows carried an activity, losing this record on reload.
   it('keeps a quota-resumed first input visible with its activity metadata', async () => {
@@ -379,25 +445,56 @@ describe('applyInputProjection 自愈进行中提示', () => {
     expect(makerChatStore.getRunningSnapshot().get(SID)?.isRunning).toBe(true);
   });
 
-  // #11299:气泡上标了「排队中」,会话级状态不能同时按空闲渲染 —— 两边矛盾时
-  // 用户无法判断这条排队消息还会不会执行。修复前侧栏与状态栏只读「回合在不在跑」,
-  // 队列里还有没派发的消息时两边都显示成空闲。
-  it('reports an undispatched queue as pending input instead of an idle session', () => {
+  // #11299, unit: feed real store projections to the two Desktop status
+  // presenters. The former store-only assertion missed visibility and priority.
+  it('keeps the sidebar and composer consistent with the projected queue', () => {
+    const pendingQueue = [{ clientId: 'queued-1' }];
+    const present = (attentionKind?: 'error' | 'done' | 'awaiting') => {
+      const state = makerChatStore.getSnapshot(SID);
+      const isRunning = state.agentStatus.isRunning;
+      return {
+        sidebar: resolveSessionRowRightStatus(projectSidebarSessionActivity({
+          sessionId: SID,
+          isRunning,
+          attentionKind,
+          hasAttentionNotification: Boolean(attentionKind),
+          isUrgentFromContext: false,
+        }), makerChatStore.hasQueuedInput(SID)),
+        composer: resolveComposerRuntimeStatus({
+          pendingPlanReview: Boolean(state.pendingPlanReview),
+          isRunning,
+          waitingRemoteStart: false,
+          backgroundTasksActive: false,
+          hasRunningWorkflow: false,
+          hasQueuedInput: hasUnpausedQueuedInput({
+            queuedCount: state.pendingQueue.length,
+            queuePaused: state.queuePaused,
+            queueInteractionLocks: state.queueInteractionLocks,
+          }),
+        }),
+      };
+    };
+    const idle = { sidebar: 'time', composer: { visible: false, queuedWaiting: false } };
     inputProjectionCb!(projection());
-    expect(makerChatStore.hasQueuedInput(SID)).toBe(false);
+    expect(present()).toEqual(idle);
 
-    inputProjectionCb!(projection({ pendingQueue: [{ clientId: 'queued-1' }] }));
-    expect(makerChatStore.hasQueuedInput(SID)).toBe(true);
+    inputProjectionCb!(projection({ pendingQueue }));
+    expect(present()).toEqual({
+      sidebar: 'queued', composer: { visible: true, queuedWaiting: true },
+    });
+    expect(present('error').sidebar).toBe('error');
+    expect(present('done').sidebar).toBe('done');
+    expect(present('awaiting').sidebar).toBe('awaiting');
 
-    // 用户 Stop 暂停的队列是有意搁置,不算「还在等」。
-    inputProjectionCb!(projection({ pendingQueue: [{ clientId: 'queued-1' }], queuePaused: true }));
-    expect(makerChatStore.hasQueuedInput(SID)).toBe(false);
-
-    // PR #11813 review: control_session pause is projected as an interaction lock (unit).
-    inputProjectionCb!(projection({ pendingQueue: [{ clientId: 'queued-1' }], queueInteractionLocks: ['execution-pause'] }));
-    expect(makerChatStore.hasQueuedInput(SID)).toBe(false);
-    inputProjectionCb!(projection({ pendingQueue: [{ clientId: 'queued-1' }] }));
-    expect(makerChatStore.hasQueuedInput(SID)).toBe(true);
+    inputProjectionCb!(projection({ pendingQueue, queuePaused: true }));
+    expect(present()).toEqual(idle);
+    inputProjectionCb!(projection({ pendingQueue, queueInteractionLocks: ['execution-pause'] }));
+    expect(present()).toEqual(idle);
+    inputProjectionCb!(projection({ pendingQueue }));
+    makerEventCb!({ sessionId: SID, event: { type: 'status', data: { isRunning: true } } });
+    expect(present()).toEqual({
+      sidebar: 'running', composer: { visible: true, queuedWaiting: false },
+    });
   });
 
   it('进度更新时同一张卡的 systemCardData 必须跟着变(1/5 → 2/5)', () => {

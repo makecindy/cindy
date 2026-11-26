@@ -72,7 +72,7 @@ import { startThreadControlFlow } from './controlFlow';
 import { bindingStore, executeDetach, type BindingAttachResult } from '../binding';
 import { generateTakeoverSummary } from './sessionSummary';
 import { broadcastSessionCreated } from './sessionBroadcast';
-import { readImDefaultSettings } from '../defaultSettingsStore';
+import { feishuGroupPermissionMode } from '../feishu/groupOverrides';
 import { decodeFeishuLaneUserId, type IdentityKey } from '@cindy/im';
 import {
   readModelRouteSnapshot,
@@ -357,11 +357,14 @@ export function createCardActionHandler(
       const liveBeforePick = turnRunner.getMakerSessionById(sessionId);
       const sessionAgentKind = liveBeforePick?.agentKind ??
         (await getMaker().getSessionMeta?.(sessionId))?.agentKind;
-      // 插件引擎任务不接 IM 渠道(docs/plans/acp-plugin-bridge.md):切模型卡明确失败,
-      // 不按内置引擎的路由去改。
-      if (sessionAgentKind === 'acp') return new PluginEngineUnsupportedError(IM_CHANNEL_FEATURE).message;
+      // 插件引擎任务(docs/plans/acp-plugin-bridge.md)：只在同一个引擎内换模型(卡片按钮带它自己的 providerId)，
+      // 与应用内选择器同一条路径；换到别的引擎要交接，只在应用里做。
+      if (sessionAgentKind === 'acp' && (providerId ?? previousProviderId) !== previousProviderId) {
+        return new PluginEngineUnsupportedError(IM_CHANNEL_FEATURE).message;
+      }
       const isPiSession = sessionAgentKind === 'pi';
-      if (previousRoute?.agentDeviceId && sessionAgentKind) {
+      // A plugin engine on another computer is checked by that computer when the model changes.
+      if (previousRoute?.agentDeviceId && sessionAgentKind && sessionAgentKind !== 'acp') {
         try {
           await readImRemoteProviderRoute({
             agentDeviceId: previousRoute.agentDeviceId,
@@ -413,7 +416,9 @@ export function createCardActionHandler(
       // 持久化与运行态切换必须和 send / agent switch 共用 session 锁，保证后选覆盖先选。
       if (!isPiSession) {
         try {
-          await updateModelEffort(sessionId, modelId, effort ?? 'high', providerId);
+          // Plugin engines keep their own level when the model lists none ('' = the engine decides).
+          await updateModelEffort(sessionId, modelId,
+            effort ?? (sessionAgentKind === 'acp' ? '' as Effort : 'high'), providerId);
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
           log.error(`model:pick DB update failed: ${msg}`);
@@ -531,8 +536,17 @@ export function createCardActionHandler(
     const sessionId = String(event.payload.sessionId ?? '');
     const mode = String(event.payload.mode ?? '') as PermissionMode;
     const modeLabel = String(event.payload.modeLabel ?? mode);
-    const agentKind: AgentKind =
-      event.payload.agentKind === 'codex' ? 'codex' : adapter.config.agentKind;
+    // A plugin-engine task validates against its own engine's modes (docs/plans/acp-plugin-bridge.md);
+    // the task row, not the card payload, decides which engine that is.
+    const task = await getMaker().getSessionMeta?.(sessionId).catch(() => null);
+    const agentKind = task?.agentKind === 'acp' || event.payload.agentKind === 'acp'
+      ? 'acp'
+      : event.payload.agentKind === 'codex' ? 'codex' : adapter.config.agentKind;
+    const permissionModes = task?.agentKind === 'acp'
+      ? await turnRunner.getPermissionModes('acp', {
+        sessionId, providerId: task.providerId, agentDeviceId: task.agentDeviceId,
+      })
+      : agentKind === 'acp' ? [] : getMaker().getCapabilities(agentKind).permissionModes;
 
     if (event.buttonId === 'permmode:confirm-full-access' && mode !== 'bypassPermissions') {
       log.warn(`permmode:confirm-full-access received non-full mode=${mode} — ignoring`);
@@ -544,7 +558,7 @@ export function createCardActionHandler(
     const result = await changeSessionPermissionMode({
       sessionId,
       mode,
-      modes: getMaker().getCapabilities(agentKind).permissionModes,
+      modes: permissionModes,
       confirmedFullAccess: event.buttonId === 'permmode:confirm-full-access',
       readPreviousMode: () => readPermissionMode(sessionId),
       getLiveSession: () => turnRunner.getMakerSessionById(sessionId),
@@ -1010,11 +1024,15 @@ export function createCardActionHandler(
     // (群 oc_ / p2p 是对方 open_id)保留作兜底判据: 上面的 fail-closed 已经把
     // 「群卡 + 非 lane senderId」拦在建绑定之前, 这条兜底如今够不着, 留着是为了
     // 万一那道门被放宽时权限档不会静默退回私聊那档(宁可按群算)。
+    // 这个群在设置页「群聊」里单独设置过权限档时以它为准(同 permissionModeFor)。
+    const feishuControlLane = channel === 'feishu' ? decodeFeishuLaneUserId(event.senderId) : null;
     const isFeishuGroupControl =
-      channel === 'feishu' &&
-      (decodeFeishuLaneUserId(event.senderId) !== null || event.chatId.startsWith('oc_'));
+      channel === 'feishu' && (feishuControlLane !== null || event.chatId.startsWith('oc_'));
     const controlNewPermissionMode = isFeishuGroupControl
-      ? readImDefaultSettings('feishu').groupPermissionMode
+      ? feishuGroupPermissionMode(
+          botContextId,
+          feishuControlLane?.chatId ?? (event.chatId.startsWith('oc_') ? event.chatId : null),
+        )
       : desktopPrefs.permissionMode;
     log.info(
       `control:new permission mode=${controlNewPermissionMode} group=${isFeishuGroupControl} ` +

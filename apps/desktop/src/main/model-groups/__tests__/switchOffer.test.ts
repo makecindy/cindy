@@ -24,7 +24,7 @@ import {
   type ModelGroupTraceQuota,
 } from '../../../shared/modelGroups.js';
 import type { ModelGroupCandidateFacts } from '../pick.js';
-import { computeModelGroupSwitchOffer, type ModelGroupSwitchOfferSessionRow } from '../switchOffer.js';
+import { computeModelGroupSwitchOffer, isModelGroupRecoverySource, type ModelGroupSwitchOfferSessionRow } from '../switchOffer.js';
 
 const paths = vi.hoisted(() => ({ file: '', owner: 'owner-1' as string | null }));
 
@@ -91,6 +91,16 @@ function deps(overrides: {
 }
 
 describe('computeModelGroupSwitchOffer', () => {
+  // §4.5 / #12440, unit: a mode can be switched off after dispatch; the automatic
+  // candidate lookup must decline while a manual banner can still offer the same source.
+  it('honors a disabled group during recovery and keeps the manual switch offer', async () => {
+    const d = deps({ config: { routes: [{ ...route('order'), autoSwitch: false }] } });
+    expect(await computeModelGroupSwitchOffer(d, 's1', {
+      current: CANDIDATES[0], visited: new Set(), accountUnavailable: true, recordUnavailable: vi.fn(),
+    })).toBeNull();
+    expect(await computeModelGroupSwitchOffer(d, 's1')).toMatchObject({ providerId: 'anthropic' });
+  });
+
   it.each(['high', undefined])('keeps the route effort only when the fallback supports it: %s', async effort => {
     const d = deps({
       config: { routes: [{ ...route('order'), effort: 'high' }] },
@@ -122,8 +132,9 @@ describe('computeModelGroupSwitchOffer', () => {
       current: CANDIDATES[index], accountUnavailable, visited,
       recordUnavailable: candidate => visited.add(modelGroupCandidateKey(candidate)),
     });
-    expect(await recover(0, true)).toMatchObject({ providerId: 'anthropic' });
-    expect(await recover(2, false)).toMatchObject({ providerId: 'acct-b' });
+    // The activity line names the source it moved away from (model-groups.md §4.6).
+    expect(await recover(0, true)).toMatchObject({ providerId: 'anthropic', fromLabel: 'M · A' });
+    expect(await recover(2, false)).toMatchObject({ providerId: 'acct-b', fromLabel: 'M · Claude' });
     expect(await recover(3, false)).toBeNull();
     visited.clear();
     expect(await recover(0, false)).toMatchObject({ providerId: 'acct-a', model: 'gpt-mini' });
@@ -167,7 +178,7 @@ describe('computeModelGroupSwitchOffer', () => {
     ['the route was deleted', { config: { routes: [] } }],
     ['a goal task', { goal: true }],
     ['a shared task', { shared: true }],
-    ['a scheduled run', { row: { source: 'scheduler' } }],
+    ['an IM task', { row: { source: 'feishu' } }],
     ['a companion', { row: { source: 'bot' } }],
     ['an SSH task', { row: { remoteHostId: 'host-1' } }],
     ['an Agent running on another computer', { row: { agentDeviceId: 'dev-2' } }],
@@ -175,6 +186,17 @@ describe('computeModelGroupSwitchOffer', () => {
   ] as const)('offers nothing for %s', async (_name, input) => {
     const d = deps(input as Parameters<typeof deps>[0]);
     expect(await computeModelGroupSwitchOffer(d, 's1')).toBeNull();
+  });
+
+  // 2026-11-22 user decision (model-groups.md §6.1): a mode belongs to the task, and recovery is common to all of them,
+  // so a task an automation opened through a mode gets the same offer (and, with automatic fallback on, the same
+  // takeover). PR #11881 review r4661455498: automation tasks were excluded. Minimal input: the recorded task, from
+  // the scheduler. Failure: no offer.
+  it('offers the next source for a task an automation opened through a mode', async () => {
+    const offer = await computeModelGroupSwitchOffer(deps({ row: { source: 'scheduler' } }), 's1');
+    expect(offer).not.toBeNull();
+    expect(isModelGroupRecoverySource('scheduler')).toBe(true);
+    expect(isModelGroupRecoverySource('bot')).toBe(false);
   });
 
   it('offers nothing without a record and does not read the task', async () => {

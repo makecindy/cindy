@@ -6,6 +6,11 @@ import { loginPreparingErrorState, parseDesktopLoginAction } from '../../shared/
 
 // Exercise production flow functions without initializing Electron or credentials.
 const source = readFileSync(new URL('../authManager.ts', import.meta.url), 'utf8');
+const instanceHostSource = readFileSync(new URL('../instance-runtime/host.ts', import.meta.url), 'utf8');
+const identityGuardSource = instanceHostSource.slice(
+  instanceHostSource.indexOf('export function assertInstanceAuthMutationAllowed('),
+  instanceHostSource.indexOf('export function instanceLoginRequired('),
+).replace('export function', 'function');
 function functionSource(start: string, end: string): string {
   const offset = source.indexOf(start);
   return source
@@ -39,6 +44,8 @@ function setup({ cached = false, sealed = false, credentialStoreUnavailable = fa
     reduceAuthFlow,
     parseDesktopLoginAction,
     loginPreparingErrorState,
+    // These Back cases exercise a local client, while retaining the real cloud-identity guard.
+    getInstanceConfig: () => null,
     createAuthClient: () => ({ getProviders }),
     awaitLoginProvidersWithPreparingGate: (promise: Promise<ProviderConfig>) => promise,
     browserAuthorizationSlot: { cancelActive },
@@ -58,6 +65,8 @@ function setup({ cached = false, sealed = false, credentialStoreUnavailable = fa
     let loginFlowEpoch = 1, loginFlowState = { step: 'error', code: 'REQUEST_TIMEOUT', recoverTo: 'identifier' };
     let providerConfig = cachedProviders, sessionInvalidationPromise = null;
     let loginActionPromise = null, loginActionPromiseEpoch = null, accessToken = null;
+    const session = null;
+    ${identityGuardSource}
     const AUTH_REGION = 'global', activeAuthRealm = 'global';
     const credentialStoreHealth = { unavailable: credentialStoreUnavailable };
     let handledLoginEmail = null, pendingPersonalLogin = null, discoveredMethods = [];

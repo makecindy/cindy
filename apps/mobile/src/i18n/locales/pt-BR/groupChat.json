@@ -112,7 +112,7 @@
     "runtimeFailureReason": {
       "unclaimed_timeout": {
         "summary": "{{name}} não começou a processar dentro do prazo de espera. Esta solicitação foi encerrada.",
-        "advice": "Peça ao proprietário do colega para verificar se a Cindy está funcionando e se o computador está conectado à rede.",
+        "advice": "Peça ao proprietário do amigo para verificar se a Cindy está funcionando e se o computador está conectado à rede.",
         "details": "Quando a Cindy e a rede voltarem a funcionar, envie a mensagem novamente."
       }
     },
@@ -507,7 +507,7 @@
       "tools": "Ferramentas e informações autorizadas pelo proprietário",
       "authorizeTitle": "Permitir que este grupo use as ferramentas e informações de {{name}}?",
       "toolsHint": "Os membros poderão usar as ferramentas existentes e as informações privadas deste amigo. Os resultados ficam visíveis para todos. As regras de aprovação existentes continuam em vigor. A revogação interrompe solicitações ativas, mas não pode desfazer ações concluídas.",
-      "confirm": "Confirmar"
+      "confirm": "Permitir ferramentas"
     }
   },
   "groupSettings": {
@@ -596,7 +596,7 @@
     "removeOwnHint": "{{name}} deixará de receber mensagens de “{{group}}”. O histórico será mantido; outros grupos e conversas privadas não serão afetados.",
     "removeOwnActiveHint": "As solicitações ativas neste grupo serão interrompidas. Tarefas iniciadas de forma independente continuarão em execução.",
     "stopAndRemove": "Parar e remover",
-    "confirm": "Confirmar",
+    "confirm": "Permitir ferramentas",
     "inviteTitle": "Convidar para o grupo",
     "reusableLink": "Sem expiração · Reutilizável por várias pessoas",
     "singleUseUntil": "Uso único · Expira em {{date}}",
@@ -655,5 +655,6 @@
     "externalFormatError": "Abra novamente o link completo da mensagem original."
   },
   "memberCount_many": "{{count}} membros",
-  "waitingForOwner": "Aguardando confirmação"
+  "waitingForOwner": "Aguardando confirmação",
+  "externalBadge": "Externo"
 }

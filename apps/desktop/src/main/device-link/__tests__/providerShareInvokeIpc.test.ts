@@ -47,6 +47,10 @@ describe('provider share renderer reads', () => {
     await expect(handleProviderShareInvoke(deps, 'share:s1', 'maker:get-capabilities', ['claude-code']))
       .resolves.toEqual({ availableModels: [] });
     expect(invoke).toHaveBeenLastCalledWith('host-peer', 'maker:get-capabilities', ['claude-code']);
+    invoke.mockResolvedValue({ ok: true, result: [] });
+    await expect(handleProviderShareInvoke(deps, 'share:s1', 'maker:list-plugin-engines', [])).resolves.toEqual([]);
+    invoke.mockResolvedValue({ ok: true, result: null });
+    await expect(handleProviderShareInvoke(deps, 'share:s1', 'maker:refresh-plugin-engines', [])).resolves.toBeNull();
     for (const channel of ['local-db:sessions:list', 'maker:model-favorites:get', undefined]) {
       await expect(handleProviderShareInvoke(deps, 'share:s1', channel, [])).rejects.toThrow(/DEVICE_LINK_CHANNEL_NOT_ALLOWED/);
     }
