@@ -482,7 +482,14 @@
         "nextWeek": "La semaine prochaine",
         "indefinite": "Indéfiniment",
         "custom": "Personnaliser…",
-        "invalidTime": "Choisissez une date et une heure futures dans l’année à venir."
+        "invalidTime": "Choisissez une date et une heure futures dans l’année à venir.",
+        "pendingSync": "En attente de synchronisation",
+        "pendingArchiveSync": "Archivage automatique dès le retour en ligne de l'ordinateur",
+        "offlineCompleteRejectedDirty": "« {{title}} » est revenu dans En attente : des modifications non validées dans le worktree doivent être confirmées avant l'archivage.",
+        "offlineCompleteRejectedNewActivity": "« {{title}} » est revenu dans En attente : une nouvelle activité a eu lieu sur son ordinateur hors ligne.",
+        "offlineCompleteRejectedRunning": "« {{title}} » est revenu dans En attente : la tâche est en cours d'exécution.",
+        "offlineCompleteRejectedAttached": "« {{title}} » est revenu dans En attente : la tâche est connectée ou partagée et n'a pas été archivée automatiquement.",
+        "offlineCompleteRejectedPreflight": "« {{title}} » est revenu dans En attente : impossible de vérifier le worktree avant l'archivage."
       },
       "taskListMode": {
         "enterInbox": "Boîte de réception",
@@ -838,9 +845,6 @@
     "connectionsEmpty": "Aucune skill ni connexion sélectionnée.",
     "largeProfileRecovery": "Ce profil est trop long pour être modifié ici. Modifiez le profil complet sur {{deviceName}}.",
     "addModel": "Ajouter un modèle de secours",
-    "removeModel": "Retirer le modèle",
-    "moveModelUp": "Monter le modèle",
-    "backupModels": "Modèles de secours ({{count}})",
     "settingsTitle": "Paramètres de l’ami",
     "name": "Nom",
     "portraitNumber": "Portrait {{number}}",

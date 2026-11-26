@@ -13,6 +13,10 @@ import {
   getRemoteSessionActivity,
   useRemoteSessionActivityRevision,
 } from '@/features/device-link/remoteSessionActivityStore';
+import {
+  getOfflineInboxIntent,
+  useOfflineInboxIntentsRevision,
+} from '@/features/device-link/offlineInboxIntentsStore';
 import { useActiveFollowUpSessions } from '@/features/scheduler/lib/scheduleSessionBinding';
 import type { Session } from '@/lib/ccAgent.types';
 import { TeammateInboxRow } from '@/features/bots/TeammateInboxRow';
@@ -48,6 +52,15 @@ const itemSnoozeUntil = (item: InboxItem) =>
   taskSnoozeUntil(item.kind === 'session' ? item.session : item.entry.snooze ?? {});
 const itemSnoozedUntil = (item: InboxItem) =>
   (item.kind === 'session' ? item.session.snoozedUntil : item.entry.snooze?.snoozedUntil);
+const itemOfflineIntent = (item: InboxItem) => {
+  if (item.kind === 'session') {
+    return getOfflineInboxIntent(item.session.deviceLinkDeviceId, item.session.id);
+  }
+  const bot = item.entry.bot;
+  return bot && 'deviceId' in bot
+    ? getOfflineInboxIntent(bot.deviceId, item.entry.sessionId)
+    : undefined;
+};
 
 type InboxRowAction = Parameters<TaskInboxProps['onAction']>[1];
 
@@ -70,6 +83,8 @@ export function TaskInbox({ sessions, now = Date.now(), contentFiltered, priorit
   // The inbox spans more tasks than the regular list (e.g. outside its status filter), so remote
   // running / unread / waiting phases are read for every inbox task, not only the list's scope.
   const remoteActivityRevision = useRemoteSessionActivityRevision();
+  const offlineInboxRevision = useOfflineInboxIntentsRevision();
+  void offlineInboxRevision;
   const inboxContext = useMemo(
     () => sidebarPriorityContext(priorityContext, sessions,
       (session) => getRemoteSessionActivity(session.id, session.deviceLinkDeviceId)?.phase),
@@ -255,6 +270,14 @@ export function TaskInbox({ sessions, now = Date.now(), contentFiltered, priorit
                         {itemSnoozedUntil(item) === INDEFINITE_SNOOZE_UNTIL
                           ? t('ccAgent.sidebar.inbox.indefinite')
                           : new Date(itemSnoozeUntil(item)).toLocaleString(i18n.language)}
+                        {itemOfflineIntent(item)?.kind === 'snooze' && (
+                          <span>{` · ${t('ccAgent.sidebar.inbox.pendingSync')}`}</span>
+                        )}
+                      </div>
+                    )}
+                    {section === 'archived' && itemOfflineIntent(item)?.kind === 'complete' && (
+                      <div className="px-3 pb-1 text-11 text-[var(--sidebar-list-muted)]">
+                        {t('ccAgent.sidebar.inbox.pendingArchiveSync')}
                       </div>
                     )}
                   </div>

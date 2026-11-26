@@ -902,8 +902,8 @@ export function UserMessage({
   const forkSupported =
     !isRemote && (pluginEngineTask || !agentKind || (capabilities?.fork?.supported ?? true));
   const rewindSupported =
-    !isRemote && !pluginEngineTask &&
-    (!agentKind || (capabilities?.rewind?.supported ?? true));
+    !isRemote &&
+    (!agentKind || pluginEngineTask || (capabilities?.rewind?.supported ?? true));
 
   const hasImages = images && images.length > 0;
   const hasFiles = files && files.length > 0;

@@ -26,7 +26,7 @@ const RADIUS = {
 };
 const MOTION = {
   instant: '80ms', fast: '150ms', base: '200ms', enter: '250ms', exit: '150ms',
-  'spinner-cycle': '1000ms', 'sidebar-title-marquee-per-viewport': '2400ms',
+  'spinner-cycle': '1000ms', 'stream-word': '500ms', 'sidebar-title-marquee-per-viewport': '2400ms',
   'ease-out': 'cubic-bezier(0.16, 1, 0.3, 1)',
   'ease-in': 'cubic-bezier(0.4, 0, 1, 1)',
   'ease-move': 'cubic-bezier(0.4, 0, 0.2, 1)',

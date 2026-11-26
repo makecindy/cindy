@@ -478,7 +478,14 @@
         "nextWeek": "Nächste Woche",
         "indefinite": "Unbefristet",
         "custom": "Benutzerdefiniert…",
-        "invalidTime": "Wähle einen zukünftigen Zeitpunkt innerhalb eines Jahres."
+        "invalidTime": "Wähle einen zukünftigen Zeitpunkt innerhalb eines Jahres.",
+        "pendingSync": "Synchronisierung ausstehend",
+        "pendingArchiveSync": "Wird archiviert, sobald der Computer wieder online ist",
+        "offlineCompleteRejectedDirty": "„{{title}}“ wurde nach Ausstehend zurückgestellt: nicht übertragene Änderungen im Worktree erfordern eine Bestätigung vor dem Archivieren.",
+        "offlineCompleteRejectedNewActivity": "„{{title}}“ wurde nach Ausstehend zurückgestellt: Während der Offline-Zeit gab es neue Aktivitäten auf dem Computer.",
+        "offlineCompleteRejectedRunning": "„{{title}}“ wurde nach Ausstehend zurückgestellt: Die Aufgabe wird derzeit ausgeführt.",
+        "offlineCompleteRejectedAttached": "„{{title}}“ wurde nach Ausstehend zurückgestellt: Die Aufgabe ist verbunden oder geteilt und wurde nicht automatisch archiviert.",
+        "offlineCompleteRejectedPreflight": "„{{title}}“ wurde nach Ausstehend zurückgestellt: Der Worktree-Status konnte vor dem Archivieren nicht geprüft werden."
       },
       "taskListMode": {
         "enterInbox": "Zum Posteingang",
@@ -830,9 +837,6 @@
     "connectionsEmpty": "Keine Skills oder Verbindungen ausgewählt.",
     "largeProfileRecovery": "Dieses Profil ist zu lang, um es hier zu bearbeiten. Bearbeite das vollständige Profil auf {{deviceName}}.",
     "addModel": "Ersatzmodell hinzufügen",
-    "removeModel": "Modell entfernen",
-    "moveModelUp": "Modell nach oben verschieben",
-    "backupModels": "Ersatzmodelle ({{count}})",
     "settingsTitle": "Freund-Einstellungen",
     "name": "Name",
     "portraitNumber": "Porträt {{number}}",

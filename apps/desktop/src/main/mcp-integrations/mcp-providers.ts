@@ -6,7 +6,9 @@ import { resolveSubscriptionPoolProvider } from '../subscription-accounts/placem
 import { SUBSCRIPTION_ACCOUNTS_CHANNEL } from '../../shared/subscriptionAccounts.js';
 import { dbToMakerAgentKind, isPluginEngineKind } from '../../shared/agentKindConversion.js';
 import { getSessionRuntimeControlSnapshot } from '../maker-ipc/sessionRuntimeControl.js';
-import { readDeviceProviderCatalog } from '../remote-agent/controller/deviceCatalog.js';
+import { pluginEngineDescriptors } from '../maker-ipc/pluginEnginesIpc.js';
+import { isDisallowedPluginEngineDeviceId } from '../maker-ipc/pluginEngineSessionAdmission.js';
+import { readDeviceProviderCatalog, readRemotePluginEngines } from '../remote-agent/controller/deviceCatalog.js';
 import { readSessionQuota } from './sessionQuota.js';
 import { createSessionToolCatalogExecutor } from '../maker-ipc/sessionToolCatalog.js';
 import { updateProjectInfo } from '../localDb/ipc/projectAliases.js';
@@ -698,7 +700,13 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
       // 本机还列出用户的模型组(模式)，定时任务的 modelGroup 传其 id(model-groups.md §6.3)。
       listModels: wrap(async (s, params) => {
         const result = await s.listAvailableModels(params);
-        if (!result.ok || params.agentDeviceId) return result;
+        if (!result.ok) return result;
+        if (params.agentDeviceId) {
+          if (params.agent || isDisallowedPluginEngineDeviceId(params.agentDeviceId)) return result;
+          const remoteEngines = await readRemotePluginEngines(params.agentDeviceId).catch(() => []);
+          const pluginEngines = pluginEngineDescriptors(remoteEngines);
+          return pluginEngines.length > 0 ? { ...result, pluginEngines } : result;
+        }
         const modelGroups = readModelGroupsConfig().routes.map((route) => ({
           id: route.id,
           name: route.name,

@@ -478,7 +478,14 @@
         "nextWeek": "来週",
         "indefinite": "無期限",
         "custom": "カスタム…",
-        "invalidTime": "1年以内の未来の日時を選択してください。"
+        "invalidTime": "1年以内の未来の日時を選択してください。",
+        "pendingSync": "同期待ち",
+        "pendingArchiveSync": "コンピューターがオンラインになり次第アーカイブ",
+        "offlineCompleteRejectedDirty": "「{{title}}」を保留中に戻しました：worktree に未コミットの変更があるため、確認後にアーカイブしてください。",
+        "offlineCompleteRejectedNewActivity": "「{{title}}」を保留中に戻しました：オフライン中にこのタスクに新しい動きがありました。",
+        "offlineCompleteRejectedRunning": "「{{title}}」を保留中に戻しました：タスクは現在実行中です。",
+        "offlineCompleteRejectedAttached": "「{{title}}」を保留中に戻しました：接続中または共有中のため自動アーカイブできませんでした。",
+        "offlineCompleteRejectedPreflight": "「{{title}}」を保留中に戻しました：アーカイブ前に worktree の状態を確認できませんでした。"
       },
       "taskListMode": {
         "enterInbox": "受信トレイへ",
@@ -830,9 +837,6 @@
     "connectionsEmpty": "スキルや接続は選択されていません",
     "largeProfileRecovery": "このプロフィールは長すぎるため、ここでは編集できません。{{deviceName}} で全文を編集してください。",
     "addModel": "予備モデルを追加",
-    "removeModel": "モデルを削除",
-    "moveModelUp": "モデルを上へ",
-    "backupModels": "予備のモデル（{{count}}）",
     "settingsTitle": "仲間の設定",
     "name": "名前",
     "portraitNumber": "アバター {{number}}",

@@ -435,6 +435,9 @@ export function createHandleSetModel(bindPorts: () => SessionRuntimeSelectionPor
           assertSharedTaskCurrent.admit();
         }
         await persistSessionFields(sessionId, { model: target.model, effort: effort ?? '' }, { allowEmptyEffort: true });
+        if (internalOptions.source === 'user' && internalOptions.configStaged !== true) {
+          await updateScheduledPreference(sessionId, null);
+        }
         assertRuntimeOwnerCurrent();
         const generation = internalOptions.source === 'fallback'
           ? acceptSessionRuntimeMutation({

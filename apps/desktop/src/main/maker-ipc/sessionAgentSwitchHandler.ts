@@ -917,6 +917,10 @@ export async function performSessionAgentSwitch(
      * (provider-groups.md §6.2「任务进行中换号」)。只在真正换了电脑时写。
      */
     providerGroupSwitchReason?: 'quota-rebalance';
+    /** 仅限 main 内部(不接受 IPC 传入)：定时任务恢复原引擎时一并还原被临时插件引擎收窄的权限模式。 */
+    permissionMode?: string;
+    /** 仅限 main 内部(不接受 IPC 传入)：绑定自动化经 scheduledModelScope 临时切换或恢复原引擎。 */
+    scheduledModelSwitch?: boolean;
   },
 ): Promise<SessionAgentSwitchResult> {
   const ownerGeneration = deps.readOwnerGeneration?.();
@@ -981,21 +985,31 @@ export async function performSessionAgentSwitch(
       throwIpcError('UNSUPPORTED_CAPABILITY', 'this task cannot switch to or from a plugin engine yet');
     }
     if (row.source === 'scheduler') {
-      // Only the local window can choose this route. A same-account send can
-      // still apply that trusted choice, just like an ordinary task's choice.
-      const admittedCaller = params.localWindowRequest === true
-        && readDeviceLinkModelSelectionOrigin() !== 'scoped';
-      const localManualSwitch = admittedCaller && row.status === 'active' && !row.agentDeviceId
-        && !requestedAgentDeviceId && !params.runtimeSource && !params.configStaged;
-      // Historical runs may be deleted with their rule. Keep the local route
-      // back to a builtin available for tasks that already use a plugin.
-      const returningToBuiltin = sourceIsPluginEngine && !!builtinTarget;
-      if (!localManualSwitch || !await deps.canSwitchCompletedAutomationSession?.(sessionId, returningToBuiltin)) {
-        throwIpcError('UNSUPPORTED_CAPABILITY', 'this automation task cannot switch to or from a plugin engine');
-      }
-      throwIfAgentSwitchAborted(signal);
-      if (deps.readOwnerGeneration?.() !== ownerGeneration) {
-        throwIpcError('PRECONDITION_FAILED', 'the signed-in account changed while choosing a plugin engine');
+      if (params.scheduledModelSwitch === true) {
+        // Bound automations may temporarily switch a standalone automation task
+        // (and restore its baseline) via scheduledModelScope. Only active applyNow
+        // switches from main are admitted; persistent/bot schedules remain blocked
+        // in validateTargetSession and arbitrated atomically in agentSwitchRows.ts.
+        if (row.status !== 'active' || params.applyNow !== true || params.configStaged !== true || params.runtimeSource) {
+          throwIpcError('UNSUPPORTED_CAPABILITY', 'this automation task cannot switch to or from a plugin engine');
+        }
+      } else {
+        // Only the local window can choose this route. A same-account send can
+        // still apply that trusted choice, just like an ordinary task's choice.
+        const admittedCaller = params.localWindowRequest === true
+          && readDeviceLinkModelSelectionOrigin() !== 'scoped';
+        const localManualSwitch = admittedCaller && row.status === 'active' && !row.agentDeviceId
+          && !requestedAgentDeviceId && !params.runtimeSource && !params.configStaged;
+        // Historical runs may be deleted with their rule. Keep the local route
+        // back to a builtin available for tasks that already use a plugin.
+        const returningToBuiltin = sourceIsPluginEngine && !!builtinTarget;
+        if (!localManualSwitch || !await deps.canSwitchCompletedAutomationSession?.(sessionId, returningToBuiltin)) {
+          throwIpcError('UNSUPPORTED_CAPABILITY', 'this automation task cannot switch to or from a plugin engine');
+        }
+        throwIfAgentSwitchAborted(signal);
+        if (deps.readOwnerGeneration?.() !== ownerGeneration) {
+          throwIpcError('PRECONDITION_FAILED', 'the signed-in account changed while choosing a plugin engine');
+        }
       }
     } else if (row.source && row.source !== 'desktop' && row.source !== 'bot' && row.source !== 'plugin') {
       throwIpcError('UNSUPPORTED_CAPABILITY', 'this task cannot switch to or from a plugin engine yet');
@@ -1016,7 +1030,8 @@ export async function performSessionAgentSwitch(
       providerId: normalizedProviderId as string,
       model,
       effort: params.effort,
-      permissionMode: row.permissionMode ?? null,
+      permissionMode: (typeof params.permissionMode === 'string' && params.permissionMode ? params.permissionMode : null)
+        ?? row.permissionMode ?? null,
     };
     if (!pluginTargetDeviceId) {
       if (!deps.admitPluginEngineTarget) {
@@ -1509,6 +1524,7 @@ export async function performSessionAgentSwitch(
             sdkSessionId: relocatedNativeId ?? parked?.sdkSessionId ?? null,
             ...(typeof params.effort === 'string' && params.effort ? { effort: params.effort } : {}),
             ...((typeof params.fastMode === 'boolean' || params.fastMode === 'ultrafast') ? { fastMode: params.fastMode } : {}),
+            ...(typeof params.permissionMode === 'string' && params.permissionMode ? { permissionMode: params.permissionMode } : {}),
             // 同机换连接／组选回的当前位置在另一台电脑时也带上位置：提交按它判断窗口该查哪台的目录，不能拿本机目录。
             ...(agentDeviceChanges || ((orcaGroupReturnRebuild || providerConnectionChanges) && targetAgentDeviceId)
               ? { agentDeviceId: targetAgentDeviceId }
