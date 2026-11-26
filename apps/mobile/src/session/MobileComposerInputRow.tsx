@@ -406,9 +406,9 @@ export function MobileComposerInputRow({
             // 收起单行与 34pt + 并排：输入盒在行内居中。
             geometricSingleLine && inputFrameMinHeight == null && styles.inputFrameSingleLine,
             inputFrameMinHeight != null && { minHeight: inputFrameMinHeight },
-            // Under a preview the frame clips to a capsule: the opaque preview and the native input both stay clear
-            // of the pill's rounded ends and border, even with no leading control beside them.
-            collapsedPreview && styles.inputFramePreviewClip,
+            // Under an opaque preview the frame clips to a capsule, so the cover stays clear of the pill's rounded
+            // ends and border even with no leading control beside it. A glass frame has no cover and is left as is.
+            rowSurface != null && styles.inputFramePreviewClip,
             resolvedInputFrameHeight != null && { height: resolvedInputFrameHeight },
             inputFrameAnimatedStyle,
           ]}

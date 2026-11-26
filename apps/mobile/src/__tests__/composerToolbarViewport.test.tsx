@@ -219,9 +219,11 @@ it.each([
     const preview = container.querySelector('[data-testid="input.collapsedPreview"]');
     expect(preview?.textContent).toBe(text);
     expect(preview?.getAttribute('data-lines')).toBe('1');
-    // The frame holding the preview and the native input clips to a capsule, clear of the pill's ends and border.
-    expect((preview?.parentElement as HTMLElement | null)?.style.overflow).toBe('hidden');
-    expect((preview?.parentElement as HTMLElement | null)?.style.borderRadius).not.toBe('');
+    // Under the opaque cover the frame clips to a capsule, clear of the pill's ends and border; a glass frame
+    // (no cover) is left unclipped.
+    const frameStyle = (preview?.parentElement as HTMLElement | null)?.style;
+    expect(frameStyle?.overflow).toBe(withGlass ? '' : 'hidden');
+    expect(frameStyle?.borderRadius === '').toBe(withGlass);
     if (withGlass) {
       expect(previewStyle()).toBe('transparent');
       expect(inputStyle().color).toBe('transparent');
