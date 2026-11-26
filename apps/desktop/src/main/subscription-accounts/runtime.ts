@@ -769,11 +769,15 @@ export function observeSubscriptionAccountUsage(
       };
   // The event updates usage, not the last account/endpoint read. Renewing `at`
   // here lets a stream of SDK events postpone authoritative polling indefinitely.
+  // Model discovery uses the auth object to fence outstanding reads. A usage
+  // update on the same plan is not a new login or a change of entitlement.
+  const plan = usage.codexPlan;
+  const planChanged = plan && (plan !== cached.auth.plan || plan !== cached.auth.planType);
   const next = { ...cached, usage,
     // A pending read owns the auth object used by model discovery and applies the final
     // plan. The event's quota is still merged into the pending read.
-    ...(usage.codexPlan && !cached.quotaPending
-      ? { auth: { ...cached.auth, plan: usage.codexPlan, planType: usage.codexPlan } } : {}),
+    ...(planChanged && !cached.quotaPending
+      ? { auth: { ...cached.auth, plan, planType: plan } } : {}),
   };
   state.cache.set(key, next);
   void persistUsage(state, provider, key.slice(provider.length + 1), next);

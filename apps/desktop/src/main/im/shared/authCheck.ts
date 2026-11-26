@@ -6,15 +6,21 @@ import {
   nativeDefaultSourceId,
   type ProviderView,
 } from '@cindy/model-providers';
-import type { AgentKind, EngineKind } from '@cindy/maker-core';
+import type { AgentKind } from '@cindy/maker-core';
 
 import { pluginEngineKeyFromProviderId } from '../../../shared/pluginEngines.js';
 import type { ImSessionRow } from './sessionRepo';
 
-type AuthRow = Pick<ImSessionRow, 'agentKind' | 'model' | 'providerId' | 'agentDeviceId'>;
-type BuiltinAuthRow = Omit<AuthRow, 'agentKind'> & { agentKind: AgentKind };
+type AnyAuthRow = Pick<ImSessionRow, 'agentKind' | 'model' | 'providerId' | 'agentDeviceId'>;
+/** A route on a built-in engine; plugin-engine routes return before provider checks. */
+type AuthRow = Omit<AnyAuthRow, 'agentKind'> & { agentKind: AgentKind };
 
-function isBuiltinAuthRow(row: AuthRow): row is BuiltinAuthRow {
+/**
+ * Plugin engines (docs/plans/acp-plugin-bridge.md) sign in with their own CLI: Cindy has no provider
+ * credential to check. Whether the engine is offered is decided when the task starts, which reports a
+ * clear error instead of falling back to a built-in engine.
+ */
+function isBuiltinAuthRow(row: AnyAuthRow): row is AuthRow {
   return row.agentKind !== 'acp';
 }
 
@@ -39,7 +45,7 @@ export interface ImAuthCheckDeps {
 }
 
 export async function hasAuthForImRoute(
-  row: AuthRow,
+  row: AnyAuthRow,
   providerSnapshot: ProviderView[] | null | undefined,
   deps: ImAuthCheckDeps,
 ): Promise<boolean> {
@@ -47,16 +53,17 @@ export async function hasAuthForImRoute(
 }
 
 export async function checkImRouteAuth(
-  row: AuthRow,
+  anyRow: AnyAuthRow,
   providerSnapshot: ProviderView[] | null | undefined,
   deps: ImAuthCheckDeps,
 ): Promise<ImAuthCheckResult> {
-  // 插件引擎(acp)不走内置供应商凭证/OAuth 链路，可用性与账号在准入和启动阶段由引擎侧核验。
-  if (!isBuiltinAuthRow(row)) {
-    return pluginEngineKeyFromProviderId(row.providerId)
+  // 插件引擎(acp)不走内置供应商凭证/OAuth 链路，但仍要求 providerId 指向有效插件引擎身份。
+  if (!isBuiltinAuthRow(anyRow)) {
+    return pluginEngineKeyFromProviderId(anyRow.providerId)
       ? { ok: true, missing: null }
       : { ok: false, missing: 'provider-disconnected' };
   }
+  const row = anyRow;
   if (row.agentDeviceId) return checkRemoteAuth(row, deps);
   const resolution = resolveEffectiveProvider(
     row,
@@ -66,7 +73,7 @@ export async function checkImRouteAuth(
 }
 
 async function checkImRouteAuthWithResolution(
-  row: BuiltinAuthRow,
+  row: AuthRow,
   resolution: ProviderResolution,
   deps: ImAuthCheckDeps,
 ): Promise<ImAuthCheckResult> {
@@ -119,19 +126,20 @@ async function checkImRouteAuthWithResolution(
  * 使用本函数即可避免把存量会话的供应商误报成 Cindy AI。
  */
 export async function checkImRouteAuthDetailed(
-  row: AuthRow,
+  anyRow: AnyAuthRow,
   providerSnapshot: ProviderView[] | null | undefined,
   deps: ImAuthCheckDeps,
 ): Promise<ImAuthRouteStatus> {
-  if (!isBuiltinAuthRow(row)) {
-    const valid = Boolean(pluginEngineKeyFromProviderId(row.providerId));
+  if (!isBuiltinAuthRow(anyRow)) {
+    const valid = Boolean(pluginEngineKeyFromProviderId(anyRow.providerId));
     return {
       ok: valid,
       missing: valid ? null : 'provider-disconnected',
-      providerId: row.providerId ?? null,
+      providerId: anyRow.providerId ?? null,
       providerLabel: null,
     };
   }
+  const row = anyRow;
   if (row.agentDeviceId) return checkRemoteAuth(row, deps);
   const providers =
     providerSnapshot === undefined ? await listProvidersForAuth(deps) : providerSnapshot;
@@ -149,7 +157,7 @@ export async function checkImRouteAuthDetailed(
   };
 }
 
-async function checkRemoteAuth(row: BuiltinAuthRow, deps: ImAuthCheckDeps): Promise<ImAuthRouteStatus> {
+async function checkRemoteAuth(row: AuthRow, deps: ImAuthCheckDeps): Promise<ImAuthRouteStatus> {
   try {
     if (!row.agentDeviceId || !deps.checkRemoteRoute) throw new Error('Remote route checker unavailable');
     const { provider } = await deps.checkRemoteRoute({ ...row, agentDeviceId: row.agentDeviceId });
@@ -194,10 +202,12 @@ export async function listProvidersForAuth(deps: ImAuthCheckDeps): Promise<Provi
 }
 
 export function resolveEffectiveProvider(
-  row: AuthRow,
+  anyRow: AnyAuthRow,
   providers: ProviderView[] | null,
 ): ProviderResolution {
-  if (!isBuiltinAuthRow(row)) return { kind: 'none' };
+  // Plugin engines have no Cindy provider source.
+  if (!isBuiltinAuthRow(anyRow)) return { kind: 'none' };
+  const row = anyRow;
   if (!providers) return row.providerId ? { kind: 'explicit-invalid' } : { kind: 'none' };
   if (row.providerId) {
     // 显式 providerId 命中的这个具体来源上,当前 model id 必须真的是聊天模型才接受
@@ -222,15 +232,15 @@ export function resolveEffectiveProvider(
 }
 
 export async function fallbackAuthForImRoute(
-  row: AuthRow,
+  anyRow: AnyAuthRow,
   deps: ImAuthCheckDeps,
 ): Promise<boolean> {
-  if (!isBuiltinAuthRow(row)) return Boolean(pluginEngineKeyFromProviderId(row.providerId));
-  return (await fallbackAuthCheckForImRoute(row, deps)).ok;
+  if (!isBuiltinAuthRow(anyRow)) return Boolean(pluginEngineKeyFromProviderId(anyRow.providerId));
+  return (await fallbackAuthCheckForImRoute(anyRow, deps)).ok;
 }
 
 async function fallbackAuthCheckForImRoute(
-  row: BuiltinAuthRow,
+  row: AuthRow,
   deps: ImAuthCheckDeps,
 ): Promise<ImAuthCheckResult> {
   const hasGatewayKey = Boolean(deps.readXdGatewayApiKey());

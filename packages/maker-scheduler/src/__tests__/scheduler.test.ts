@@ -3582,10 +3582,12 @@ describe('Scheduler', () => {
       model: 'deepseek-v4' } as const;
     const saved = await h.scheduler.create({ ...baseInput, ...engine });
     expect(saved).toMatchObject(engine);
+    // 2026-11-25: like built-in engines, each run may check out its own worktree.
+    await expect(h.scheduler.create({ ...baseInput, ...engine, useWorktree: true, workspaceKind: 'project', workingDir: '/repo' }))
+      .resolves.toMatchObject({ ...engine, useWorktree: true });
     for (const extra of [
       { targetSessionId: 'task-1' },
       { persistentSession: true },
-      { useWorktree: true, workspaceKind: 'project' as const, workingDir: '/repo' },
       { agentDeviceId: 'studio-mac' },
       { providerId: 'anthropic' },
       { modelAgentKind: 'claude-code' as const },

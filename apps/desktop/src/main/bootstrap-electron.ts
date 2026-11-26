@@ -1388,6 +1388,8 @@ import {
   getGoalTeardownGeneration,
 } from './goal-host/index.js';
 import { startLearnHost, getLearnController, resetLearnController } from './learn-host/index.js';
+import { admitPluginEngineSwitchTarget } from './maker-ipc/pluginEngineSessionAdmission.js';
+import { listPluginEngineViews } from './maker-ipc/pluginEnginesIpc.js';
 import { fetchHubSkillReference } from './learn-host/hubReference.js';
 import { registerLearnIpc, broadcastLearnEvent } from './learn-host/registerIpc.js';
 import { registerGoalHandlers, broadcastGoalStatus } from './maker-ipc/goal.js';
@@ -1879,6 +1881,8 @@ async function attemptStartSchedulerOnce(): Promise<void> {
     startLearnHost({
       maker,
       broadcast: broadcastLearnEvent,
+      admitPluginEngine: (target) => admitPluginEngineSwitchTarget(target as Parameters<typeof admitPluginEngineSwitchTarget>[0],
+        listPluginEngineViews()),
       fetchHubSkill: (slug, catalogScope) =>
         fetchHubSkillReference(learnMarketService, slug, catalogScope),
       ...automationGitBaselineHooks,

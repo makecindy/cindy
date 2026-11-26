@@ -24,6 +24,7 @@ import { openSession, type SessionOpenBody } from '../../localDb/sessionOpening'
 /** 渠道为新任务选定的路由(准入前)。 */
 export interface ChannelSessionRoute {
   agentDeviceId?: string | null;
+  /** 'acp' = 插件引擎(按在它上面新建任务的准入，providerId 指出是哪一个)。 */
   agentKind: EngineKind;
   model: string;
   providerId: string | null;

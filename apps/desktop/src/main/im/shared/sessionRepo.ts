@@ -22,7 +22,7 @@ import type { ProviderView } from '@cindy/model-providers';
 import { permissionModeOrAsk } from '@cindy/maker-shared/permission-mode';
 
 import { getDbClient } from '../../localDb/client/current';
-import { dbToMakerEngineKind, makerToDbEngineKind } from '../../../shared/agentKindConversion';
+import { makerToDbEngineKind } from '../../../shared/agentKindConversion';
 import { sessions } from '../../localDb/schema';
 import { withSessionRouteLock } from '../../localDb/sessionRouteLock';
 import { retireDeletedPiSubagentState } from '../../localDb/ipc/piSubagentDeletion';
@@ -40,11 +40,20 @@ import type { ImOrchestratorConfig, ImSessionNamespace } from './types';
 
 const log = createLogger('im:repo');
 
-export function toCoreAgentKind(kind: string): EngineKind {
-  return dbToMakerEngineKind(kind);
+export function toCoreAgentKind(kind: string): AgentKind {
+  return kind === 'codex' || kind === 'pi' ? kind : 'claude-code';
 }
 
-/** core EngineKind → sessions.agentKind 列的存储值。 */
+/**
+ * Task row engine → Maker engine kind for every IM read of a task row. Plugin engines
+ * (docs/plans/acp-plugin-bridge.md) stay 'acp': mapping them to a built-in kind would send a
+ * plugin-engine task through built-in auth checks and restart it on Claude Code.
+ */
+export function toCoreEngineKind(kind: string): EngineKind {
+  return kind === 'acp' ? 'acp' : toCoreAgentKind(kind);
+}
+
+/** core engine kind → sessions.agentKind 列的存储值(插件引擎保持 'acp')。 */
 function toDbAgentKind(kind: EngineKind): string {
   return makerToDbEngineKind(kind);
 }
@@ -54,6 +63,7 @@ export interface ImSessionRow {
   initialTitle?: string;
   agentDeviceId?: string | null;
   id: string;
+  /** 'acp' = the task runs on a plugin engine (providerId names it, docs/plans/acp-plugin-bridge.md). */
   agentKind: EngineKind;
   workingDir: string;
   model: string;
@@ -282,7 +292,7 @@ export function createImSessionRepo(
       if (!row) return null;
       return {
         id: row.id,
-        agentKind: toCoreAgentKind(row.agentKind),
+        agentKind: toCoreEngineKind(row.agentKind),
         workingDir: row.workingDir ?? ns.ensureWorkingDir(botContextId, userId),
         model: row.model,
         effort: row.effort,
@@ -361,7 +371,7 @@ export function createImSessionRepo(
       }
       return {
         id: row.id,
-        agentKind: toCoreAgentKind(row.agentKind),
+        agentKind: toCoreEngineKind(row.agentKind),
         workingDir: row.workingDir ?? ns.ensureWorkingDir(botContextId, userId),
         model: row.model,
         effort: row.effort,
@@ -384,7 +394,7 @@ export function createImSessionRepo(
       if (!row?.workingDir) return null;
       return {
         id: row.id,
-        agentKind: toCoreAgentKind(row.agentKind),
+        agentKind: toCoreEngineKind(row.agentKind),
         workingDir: row.workingDir,
         model: row.model,
         effort: row.effort,
@@ -530,7 +540,7 @@ export function createImSessionRepo(
       const result: ImSessionRow = persistedRow
         ? {
             id: persistedRow.id,
-            agentKind: toCoreAgentKind(persistedRow.agentKind),
+            agentKind: toCoreEngineKind(persistedRow.agentKind),
             workingDir: persistedRow.workingDir ?? row.workingDir,
             model: persistedRow.model,
             effort: persistedRow.effort,

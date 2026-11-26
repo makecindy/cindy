@@ -13694,6 +13694,7 @@
         },
         "slash": {
           "detachFailed": "❌ Übernahme konnte nicht beendet werden: {{error}}",
+          "pluginEngineModelsUnavailable": "Die Plugin-Engine dieser Aufgabe ist gerade nicht verfügbar, daher können ihre Modelle nicht angezeigt werden.",
           "companionManaged": "🧭 Diese Verbindung wurde an einen Freund übergeben. Modell, Berechtigungen und Arbeitsverzeichnis folgen dessen Einstellungen. Ändere sie in Cindy in den Einstellungen des Freundes."
         },
         "turn": {
@@ -15610,6 +15611,8 @@
       "codexHelperUnavailable": "cindy_helper ist für diese Aufgabe aktiviert, aber nicht verfügbar. Das Aufgabenergebnis kann möglicherweise nicht übermittelt werden.",
       "codexHelperUnverified": "Es konnte nicht geprüft werden, ob cindy_helper für diese Aufgabe verfügbar ist. Das Aufgabenergebnis kann möglicherweise nicht übermittelt werden.",
       "requestFormatError": "Die App hat eine ungültige Anfrage gesendet. Daher konnte diese Antwort nicht abgeschlossen werden.",
+      "piRetryHistoryTooLarge": "Deine Nachricht wurde nicht gesendet. Beim Lesen des Verlaufs für den erneuten Versuch wurde das lokale Limit von 16 MiB für einen Datenrahmen überschritten. Du kannst in einer neuen Aufgabe fortfahren.",
+      "messageNotSent": "Deine Nachricht wurde nicht gesendet.",
       "replyFailed": "Antwort konnte nicht abgeschlossen werden",
       "queuedSendRecovery": "Deine Nachricht wurde nicht gesendet. Wähle „Erneut versuchen“, um sie unverändert zu senden. Eine neue Nachricht ersetzt sie.",
       "retryTitle": "Letzte Nachricht erneut senden",

@@ -918,6 +918,7 @@ export function createMakerHookSessionRunner(deps: {
           workingDir = meta.workDir;
           model = meta.model;
           resumeSessionId = meta.sdkSessionId;
+          // 插件引擎任务(docs/plans/acp-plugin-bridge.md)同样接官方渠道：按它自己的引擎与 providerId 恢复。
           effectiveAgentKind = meta.agentKind;
         }
         effort = req.companionBotId || effectiveAgentKind === 'acp' ? meta?.effort : undefined;
@@ -1860,6 +1861,7 @@ export function createMakerHookSessionRunner(deps: {
                   : {}),
               },
             });
+            // Turn change capture relies on built-in engine hooks (same rule as desktop sends).
             if (hasBuiltinAgentKind(session)) {
               await beginTurnChangeSetAtDispatch(session, turnChangeAnchorClientId);
               turnChangeSetStarted = true;

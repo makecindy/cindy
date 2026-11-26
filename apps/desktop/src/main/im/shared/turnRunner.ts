@@ -1,6 +1,4 @@
 import { refineCreatedTaskTitle } from '../../maker-ipc/createdTaskTitles.js';
-import { listPluginEngineViews } from '../../maker-ipc/pluginEnginesIpc';
-import { pluginEngineKeyFromProviderId } from '../../../shared/pluginEngines';
 import { captureChannelAccount } from './openChannelSession';
 import { beginTemporaryImPermission } from './temporaryTurnPermission';
 import { imText } from './imText';
@@ -123,6 +121,7 @@ import { transformXdtRefs } from '@cindy/im';
 import type { AutoReviewUserReferences } from '@cindy/maker-shared/auto-review-intent';
 
 import { hasBuiltinAgentKind } from '../../maker-host/engineKind';
+import { readImPluginEngine } from './pluginEngineCatalog';
 import { persistUserMessage } from '../messagePersistence';
 import { imAutoReviewReferences } from './autoReviewReferences';
 import { bindingStore } from '../binding';
@@ -197,7 +196,7 @@ import { isQuotaExhaustionFailure, terminalErrorText, turnRetryNotice } from './
 import { resolveSessionErrorContext } from './sessionProviderLabel';
 import { createTurnPresenter, DEFAULT_PRESENTER_POLICY, type TurnPresenter } from './turnPresenter';
 import {
-  toCoreAgentKind,
+  toCoreEngineKind,
   readPermissionMode,
   touchUserSent as repoTouchUserSent,
   updatePermissionMode,
@@ -383,10 +382,11 @@ interface QueuedSend {
 
 type DetachDrainOutcome = 'rewire' | 'cancelled';
 
-const ACP_FALLBACK_PERMISSION_MODES: readonly PermissionModeDescriptor[] = [
-  { id: 'ask', displayName: 'Ask', description: '' },
-  { id: 'bypassPermissions', displayName: 'Allow all', description: '' },
-];
+/**
+ * 插件引擎任务(docs/plans/acp-plugin-bridge.md)与内置引擎任务一样接 IM 渠道(2026-11-25)：读行时保留 'acp'
+ * 与它的 providerId，按它自己的引擎恢复，绝不落成 Claude 去跑。
+ */
+type BuiltinMakerSession = MakerSession;
 
 interface SessionState {
   /** Keep the original session configuration even when no persistent takeover exists. */
@@ -704,11 +704,16 @@ export interface ImTurnRunner {
    * 未接线 / 接管 / 通知回复任务返回 undefined。
    */
   vendorOptionsForSession(sessionId: string): Record<string, unknown> | undefined;
-  /** Permission choices exposed by the session's concrete Agent implementation. */
-  getPermissionModes(
-    agentKind: EngineKind,
-    sessionContext?: { sessionId?: string; providerId?: string | null },
-  ): PermissionModeDescriptor[];
+  /**
+   * The task's permission menu. A plugin-engine task (agentKind 'acp') offers its engine's own modes: the
+   * live session's negotiated modes, then its execution computer's catalog. Only local tasks use
+   * Cindy's generic modes when the engine's modes are unavailable.
+   */
+  getPermissionModes(agentKind: EngineKind, task: {
+    sessionId: string;
+    providerId?: string | null;
+    agentDeviceId?: string | null;
+  }): Promise<PermissionModeDescriptor[]>;
   changePermissionMode(args: {
     sessionId: string;
     mode: PermissionMode;
@@ -858,7 +863,7 @@ export function createTurnRunner(
       throw new Error('Notification target session is unavailable');
     }
     return {
-      row: { id: row.id, agentKind: toCoreAgentKind(row.agentKind), workingDir: row.workingDir,
+      row: { id: row.id, agentKind: toCoreEngineKind(row.agentKind), workingDir: row.workingDir,
         model: row.model, effort: row.effort, permissionMode: row.permissionMode, fastMode: row.fastMode,
         sdkSessionId: row.sdkSessionId, remoteHostId: row.remoteHostId ?? null, providerId: row.providerId ?? null,
         agentDeviceId: row.agentDeviceId ?? null },
@@ -889,7 +894,8 @@ export function createTurnRunner(
     if (!auth.ok) {
       return {
         target: null,
-        missingAuth: { ...auth, agentKind: prepared.agentKind, model: prepared.model },
+        // Only built-in routes can miss auth (plugin engines sign in with their own CLI).
+        missingAuth: { ...auth, agentKind: prepared.agentKind as AgentKind, model: prepared.model },
       };
     }
     const row = await repo.createSession(botContextId, userId, scopeKey, prepared);
@@ -1024,10 +1030,11 @@ export function createTurnRunner(
         .limit(1);
       const row = rows[0];
       if (row?.workingDir) {
+        // 接管到插件引擎任务：保留它自己的引擎(不按 toCoreAgentKind 落成 Claude)。
         return {
           row: {
             id: row.id,
-            agentKind: toCoreAgentKind(row.agentKind),
+            agentKind: toCoreEngineKind(row.agentKind),
             workingDir: row.workingDir,
             model: row.model,
             effort: row.effort,
@@ -1248,7 +1255,7 @@ export function createTurnRunner(
       const auth = await checkImRouteAuthDetailed(authRow, undefined, authCheckDeps());
       if (!auth.ok) {
         if (args.queueMode === 'internal') {
-          const authStatus = { ...auth, agentKind: authRow.agentKind, model: authRow.model };
+          const authStatus = { ...auth, agentKind: authRow.agentKind as AgentKind, model: authRow.model };
           const text =
             ui.agent.authMissing?.({ ...authStatus, attached: authNoticeAttached }) ??
             ui.agent.apiKeyMissing;
@@ -1375,7 +1382,7 @@ export function createTurnRunner(
         if (!sameImDefaultRoute(routeOfRow(refreshed), followTarget)) {
           const auth = await checkImRouteAuthDetailed(effectiveRuntimeAuthRow(refreshed), undefined, authCheckDeps());
           if (!auth.ok) {
-            const authStatus = { ...auth, agentKind: refreshed.agentKind, model: refreshed.model };
+            const authStatus = { ...auth, agentKind: refreshed.agentKind as AgentKind, model: refreshed.model };
             if (args.queueMode === 'internal') {
               const text =
                 ui.agent.authMissing?.({ ...authStatus, attached: target.attached }) ??
@@ -1853,7 +1860,7 @@ export function createTurnRunner(
           const auth = await checkImRouteAuthDetailed(effectiveRuntimeAuthRow(landed), undefined, authCheckDeps());
           if (!auth.ok) {
             const attached = state.attached || !!state.botLane;
-            const authStatus = { ...auth, agentKind: landed.agentKind, model: landed.model };
+            const authStatus = { ...auth, agentKind: landed.agentKind as AgentKind, model: landed.model };
             if (item.turn.queueMode === 'internal') {
               const text =
                 ui.agent.authMissing?.({ ...authStatus, attached }) ??
@@ -2149,6 +2156,7 @@ export function createTurnRunner(
           if (persisted) {
             item.prePersistedUserMessage = { sessionId: rowId, clientId: persisted.clientId };
             if (item.channelToolScope) item.channelToolScope.inputClientId = persisted.clientId;
+            // Turn change capture relies on built-in engine hooks (same rule as desktop sends).
             if (hasBuiltinAgentKind(state.makerSession)) {
               await beginTurnChangeSetAtDispatch(state.makerSession, persisted.clientId);
               turnChangeSetStarted = true;
@@ -2353,15 +2361,11 @@ export function createTurnRunner(
       if (!row.workingDir) {
         throw createSessionUnavailableError('SESSION_CLOSED', `session ${sessionId} missing after deferred agent switch`);
       }
-      const agentKind = toCoreAgentKind(row.agentKind);
-      const startOverride = agentKind === 'acp'
-        ? {}
-        : getSessionRuntimeStartOverride(sessionId, agentKind, row.agentDeviceId);
-      if (agentKind !== 'acp') {
-        hydrateSessionProvider(sessionId, startOverride.providerId === undefined ? row.providerId ?? null : startOverride.providerId);
-        setSessionEffort(sessionId, startOverride.model ? startOverride.effort : row.effort);
-        setSessionFastMode(sessionId, startOverride.fastMode ?? row.fastMode ?? false);
-      }
+      const agentKind = toCoreEngineKind(row.agentKind);
+      const startOverride = getSessionRuntimeStartOverride(sessionId, agentKind, row.agentDeviceId);
+      hydrateSessionProvider(sessionId, startOverride.providerId === undefined ? row.providerId ?? null : startOverride.providerId);
+      setSessionEffort(sessionId, startOverride.model ? startOverride.effort : row.effort);
+      setSessionFastMode(sessionId, startOverride.fastMode ?? row.fastMode ?? false);
       // Maker retries the retired instance's close before publishing its replacement.
       // Keep this turn's observer alive across that exact instance's close event.
       rebuildingRuntimeCloses.add(current ?? previous);
@@ -3991,8 +3995,12 @@ export function createTurnRunner(
         // 私聊发一张一键修复卡(切回 auto)。只对提供 permissionModeFix 文案
         // 的渠道(飞书)与群 lane 生效 — 私聊不挂群策略, 防御性跳过; 卡片
         // 发送失败不阻塞收口(用户仍可 /permission 手动切)。
+        // The one-tap fix switches to the built-in engines' auto mode; a plugin engine offers its own
+        // modes, so its owner switches with /permission (the error text above still explains why).
+        const fixAgentKind = state.makerSession.agentKind;
         if (
           policyUnsupported &&
+          fixAgentKind !== 'acp' &&
           adapter.ui.cards.permissionModeFix &&
           output.kind === 'rich-card' &&
           userId.startsWith('g/')
@@ -4009,7 +4017,7 @@ export function createTurnRunner(
             }
             const fixSpec = cards.buildPermissionModeFixCard({
               sessionId: state.makerSession.id,
-              agentKind: state.makerSession.agentKind,
+              agentKind: fixAgentKind,
               sessionTitle: sessionTitle || state.makerSession.id.slice(-8),
             });
             await output.im.sendInteractiveCard(userId, fixSpec, { deliverToOwnerDm: true });
@@ -5128,25 +5136,22 @@ export function createTurnRunner(
     companionBotIdFor,
     rotateCompanionLane,
     peekCompanionRouteTarget,
-    getPermissionModes: (agentKind, sessionContext) => {
-      if (agentKind === 'acp') {
-        const live = sessionContext?.sessionId ? getMakerSessionById(sessionContext.sessionId) : undefined;
-        const liveModes = live?.capabilities?.permissionModes;
-        if (liveModes && liveModes.length > 0) return [...liveModes];
-        const key = pluginEngineKeyFromProviderId(sessionContext?.providerId ?? null);
-        if (key) {
-          const view = listPluginEngineViews().find((item) => item.key === key);
-          if (view?.permissionModes?.length) {
-            return view.permissionModes.map((mode) => ({
-              id: mode.id,
-              displayName: mode.displayName,
-              description: mode.description,
-            }));
-          }
-        }
-        return [...ACP_FALLBACK_PERMISSION_MODES];
+    getPermissionModes: async (agentKind, task) => {
+      if (agentKind !== 'acp') return getMaker().getCapabilities(agentKind).permissionModes;
+      const live = getMakerSessionById(task.sessionId);
+      if (live?.agentKind === 'acp' && live.agentDeviceId === (task.agentDeviceId ?? null)
+        && live.capabilities.permissionModes.length) {
+        return live.capabilities.permissionModes;
       }
-      return getMaker().getCapabilities(agentKind).permissionModes;
+      const engine = await readImPluginEngine(task);
+      if (engine?.permissionModes.length) {
+        return engine.permissionModes.map((mode) => ({
+          id: mode.id as PermissionMode,
+          displayName: mode.displayName,
+          ...(mode.description ? { description: mode.description } : {}),
+        }));
+      }
+      return task.agentDeviceId ? [] : getMaker().getCapabilities('acp').permissionModes;
     },
     changePermissionMode: (args) =>
       changeSessionPermissionMode({

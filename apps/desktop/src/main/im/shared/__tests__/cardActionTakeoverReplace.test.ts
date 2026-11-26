@@ -176,8 +176,12 @@ const cards = {
 
 const turnRunner = {
   getMakerSessionById: vi.fn(() => null),
+  getPermissionModes: vi.fn<ImTurnRunner['getPermissionModes']>(),
   prewireAttachedSession: vi.fn(async () => {}),
-} as unknown as ImTurnRunner & { prewireAttachedSession: ReturnType<typeof vi.fn> };
+} as unknown as ImTurnRunner & {
+  prewireAttachedSession: ReturnType<typeof vi.fn>;
+  getPermissionModes: ReturnType<typeof vi.fn<ImTurnRunner['getPermissionModes']>>;
+};
 
 const adapter = {
   channel: 'slack',
@@ -521,6 +525,7 @@ describe('/permission Full access 确认', () => {
   async function pressPermission(
     im: ChannelIM,
     buttonId: 'permmode:pick' | 'permmode:confirm-full-access' | 'permmode:cancel-full-access',
+    overrides: Record<string, string> = {},
   ): Promise<void> {
     const attach = createCardActionHandler(adapter, cards, turnRunner);
     let handler: ((e: IMCardActionEvent) => Promise<void>) | null = null;
@@ -538,9 +543,28 @@ describe('/permission Full access 确认', () => {
         mode: 'bypassPermissions',
         modeLabel: 'Full access',
         agentKind: 'codex',
+        ...overrides,
       },
     } as unknown as IMCardActionEvent);
   }
+
+  // Unit, #12820: existing confirmation cases use built-in engines. A cold remote ACP
+  // task's card must validate and persist a mode offered by the stored route.
+  it('applies a mode offered by the cold plugin task’s execution computer', async () => {
+    const providerId = 'acp-plugin:test:engine';
+    const agentDeviceId = 'other-computer';
+    mocks.getMaker.mockReturnValue({
+      getSessionMeta: vi.fn(async () => ({ agentKind: 'acp', providerId, agentDeviceId })),
+    });
+    turnRunner.getPermissionModes.mockImplementationOnce(async (_kind, route) =>
+      route.agentDeviceId === agentDeviceId ? [{ id: 'plan', displayName: 'Plan' }] : [],
+    );
+
+    await pressPermission(makeIm(), 'permmode:pick', { agentKind: 'acp', mode: 'plan', modeLabel: 'Plan' });
+
+    expect(turnRunner.getPermissionModes).toHaveBeenCalledWith('acp', { sessionId: 'sess-target', providerId, agentDeviceId });
+    expect(mocks.updatePermissionMode).toHaveBeenCalledWith('sess-target', 'plan');
+  });
 
   it('first replaces the picker with a confirmation card without changing state', async () => {
     const im = makeIm();
@@ -1366,14 +1390,16 @@ describe('ACP 插件引擎 IM 卡片模型准入与权限模式 (PR #12927 P2 �
   // 回归：ACP 会话 /permission 卡片点击需使用引擎实际声明的权限模式(如 acceptEdits)，
   // 而非硬编码的 ask / bypassPermissions。最小失败输入与 tier：unit，ACP 卡片选 acceptEdits。
   it('accepts engine-declared ACP permission modes such as acceptEdits via session-scoped getPermissionModes', async () => {
-    mocks.readModelRouteSnapshot.mockResolvedValue({
-      model: 'gemini-4-neon',
-      effort: 'high',
-      providerId: PLUGIN_PROVIDER,
+    mocks.getMaker.mockReturnValue({
+      getSessionMeta: vi.fn(async () => ({
+        agentKind: 'acp',
+        providerId: PLUGIN_PROVIDER,
+        agentDeviceId: null,
+      })),
     });
     const live = { setPermissionMode: vi.fn(async () => {}) };
     (turnRunner.getMakerSessionById as ReturnType<typeof vi.fn>).mockReturnValue(live);
-    const getPermissionModes = vi.fn(() => [
+    const getPermissionModes = vi.fn(async () => [
       { id: 'default' as const, displayName: 'Default', description: '' },
       { id: 'acceptEdits' as const, displayName: 'Accept edits', description: '' },
       { id: 'bypassPermissions' as const, displayName: 'Full access', description: '' },
@@ -1403,6 +1429,7 @@ describe('ACP 插件引擎 IM 卡片模型准入与权限模式 (PR #12927 P2 �
     expect(getPermissionModes).toHaveBeenCalledWith('acp', {
       sessionId: 'sess-acp',
       providerId: PLUGIN_PROVIDER,
+      agentDeviceId: null,
     });
     expect(live.setPermissionMode).toHaveBeenCalledWith('acceptEdits');
     expect(mocks.updatePermissionMode).toHaveBeenCalledWith('sess-acp', 'acceptEdits');

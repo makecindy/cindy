@@ -13640,6 +13640,7 @@
         },
         "slash": {
           "detachFailed": "❌ 引き継ぎを終了できませんでした: {{error}}",
+          "pluginEngineModelsUnavailable": "このタスクのプラグインエンジンは現在利用できないため、モデルを一覧表示できません。",
           "companionManaged": "🧭 この接続は仲間に任されているため、モデル・権限・作業ディレクトリは仲間の設定に従います。Cindy の仲間の設定で変更してください。"
         },
         "turn": {
@@ -15581,6 +15582,8 @@
       "codexHelperUnavailable": "このタスクでは cindy_helper が有効ですが、利用できません。タスクの結果を報告できない可能性があります。",
       "codexHelperUnverified": "このタスクの cindy_helper が利用可能か確認できませんでした。タスクの結果を報告できない可能性があります。",
       "requestFormatError": "アプリが送信したリクエストの形式に問題があり、返信を完了できませんでした。",
+      "piRetryHistoryTooLarge": "メッセージは送信されませんでした。Pi が再試行に必要な履歴を読み込む際に、データフレームがローカルの上限（16 MiB）を超えました。新しいタスクで続けられます。",
+      "messageNotSent": "メッセージは送信されませんでした。",
       "replyFailed": "返信を完了できませんでした",
       "queuedSendRecovery": "直前のメッセージは送信されていません。「再試行」でそのまま送信できます。新しいメッセージを送ると、直前のメッセージは置き換わります。",
       "retryTitle": "最後のメッセージを再送信",

@@ -13804,6 +13804,7 @@
         },
         "slash": {
           "detachFailed": "❌ Não foi possível terminar a tomada de controlo: {{error}}",
+          "pluginEngineModelsUnavailable": "O motor de plugin desta tarefa não está disponível de momento, pelo que não é possível listar os modelos.",
           "companionManaged": "🧭 Esta ligação foi entregue a um amigo, pelo que o modelo, as permissões e o diretório de trabalho seguem as definições do amigo. Altere-os nas definições do amigo no Cindy."
         },
         "turn": {
@@ -15746,6 +15747,8 @@
       "codexHelperUnavailable": "cindy_helper está ativado, mas não está disponível nesta tarefa. Pode não ser possível comunicar o resultado da tarefa.",
       "codexHelperUnverified": "Não foi possível verificar se cindy_helper está disponível nesta tarefa. Pode não ser possível comunicar o resultado da tarefa.",
       "requestFormatError": "A aplicação enviou um pedido inválido, pelo que não foi possível concluir esta resposta.",
+      "piRetryHistoryTooLarge": "A mensagem não foi enviada. Ao ler o histórico para tentar novamente, o Pi encontrou uma trama que excedia o limite local de 16 MiB. Pode continuar numa nova tarefa.",
+      "messageNotSent": "A mensagem não foi enviada.",
       "replyFailed": "Não foi possível concluir a resposta",
       "queuedSendRecovery": "A tua mensagem não foi enviada. Seleciona «Tentar novamente» para a enviar sem alterações. Se enviares uma nova mensagem, esta substitui a anterior.",
       "retryTitle": "Reenviar a última mensagem",

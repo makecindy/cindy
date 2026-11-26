@@ -89,6 +89,7 @@ export interface ImCardBuilders {
   }): InteractiveCardSpec;
   buildPermissionModePickerCard(args: {
     sessionId: string;
+    /** 'acp' = plugin-engine task: the pick validates against that engine's own modes. */
     agentKind: EngineKind;
     modes: PermissionModeDescriptor[];
     currentMode: string;

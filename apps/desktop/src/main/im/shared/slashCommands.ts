@@ -22,14 +22,10 @@ import {
   getModel,
   isModelVisible,
   type ProviderSection,
+  type SectionModel,
 } from '@cindy/model-providers';
-import {
-  PLUGIN_ENGINES_INVOKE,
-  isPluginEngineModelDisabled,
-  parseOfferedPluginEngines,
-  pluginEngineKeyFromProviderId,
-} from '../../../shared/pluginEngines';
-import { listPluginEngineViews } from '../../maker-ipc/pluginEnginesIpc';
+import { readImPluginEngine } from './pluginEngineCatalog';
+import type { PluginEngineView } from '../../../shared/pluginEngines';
 import { createLogger } from '../../logger';
 
 import { resetImSessionToChannelDefaults } from './channelDefaultRouteSync';
@@ -383,69 +379,51 @@ export function createSlashHandlers(
           return true;
         }
         const { row } = target;
+        if (row.agentKind === 'acp') {
+          // 插件引擎任务(docs/plans/acp-plugin-bridge.md)：列它自己的引擎提供的模型，同一引擎内切换(与应用内
+          // 选择器同一规则)。卡片按钮带引擎的 providerId；换到别的引擎只在应用里做(那要交接)。
+          const engine = await readImPluginEngine(row);
+          const section = engine ? pluginEngineModelSection(engine) : null;
+          if (!section) {
+            await safeSendText(ctx, imText('imBot.text.shared.slash.pluginEngineModelsUnavailable'));
+            return true;
+          }
+          await safeSendCard(ctx, cards.buildModelPickerCard({
+            sessionId: row.id,
+            agentKind: 'pi',
+            sections: [section],
+            currentModelId: row.model,
+            currentProviderId: row.providerId,
+            currentEffort: row.effort || null,
+            defaultEffortByModel: Object.fromEntries(section.models.map((m) => [m.id, m.defaultEffort ?? ''])),
+          })).catch((err: unknown) => log.error(`/model card send failed: ${err instanceof Error ? err.message : String(err)}`));
+          return true;
+        }
         // 模型清单与应用内模型选择器**走同一个方法**:live providers(含自定义供应商 + 实时连接态)
         // → 仅已连接供应商 → buildProviderSections(每供应商各列其模型、每行 = (供应商, 模型))。
         // 可见性过滤复用 renderer 镜像到 main 的 override(modelVisibilityMirror)+ 目录 defaultEnabled,
         // 保证 IM 列表与应用内逐模型一致。currentProviderId 优先取会话持久化的 providerId。
         const agentKind = row.agentKind;
-        const currentProviderId = agentKind === 'acp' ? row.providerId : (getSessionProvider(row.id) ?? row.providerId);
-        let sections: ProviderSection[];
-        if (agentKind === 'acp') {
-          const engines = row.agentDeviceId
-            ? await (async () => {
-                const { remoteBackgroundInvoke } = await import('../../device-link');
-                const reply = await remoteBackgroundInvoke(row.agentDeviceId!, PLUGIN_ENGINES_INVOKE.LIST, []);
-                return reply.ok ? parseOfferedPluginEngines(reply.result) : [];
-              })().catch(() => [])
-            : listPluginEngineViews();
-          const key = pluginEngineKeyFromProviderId(currentProviderId);
-          const engine = key ? engines.find((item) => item.key === key) : undefined;
-          sections = engine
-            ? [
-                {
-                  provider: {
-                    id: engine.providerId,
-                    name: engine.name,
-                    source: 'user',
-                    connected: true,
-                    auth: { method: 'none' },
-                    agents: [],
-                    models: {},
-                    routing: {},
-                  },
-                  models: engine.models
-                    .filter((m) => !isPluginEngineModelDisabled(m.id, engine.disabledModels?.map((d) => d.id)))
-                    .map((m) => ({
-                      id: m.id,
-                      displayName: m.displayName,
-                      efforts: m.efforts ?? [],
-                      defaultEffort: m.defaultEffort ?? null,
-                      contextWindow: 0,
-                    })),
-                },
-              ]
-            : [];
-        } else {
-          const providers = row.agentDeviceId
-            ? await readDeviceProviderViews((await import('../../device-link')).remoteBackgroundInvoke, row.agentDeviceId)
-            : await getDesktopProviderService().listProviders({ allowSideEffects: true });
-          if (!row.agentDeviceId) await waitForModelVisibilityMirror();
-          const connected = connectedProvidersForAgent(providers, agentKind);
-          sections = buildProviderSections({
-            providers: connected,
-            agent: agentKind,
-            selectedModelId: row.model,
-            selectedProviderId: currentProviderId,
-            isVisible: (pid, mid) => {
-              const provider = connected.find((p) => p.id === pid);
-              const model = provider ? getModel(provider, mid, agentKind) : undefined;
-              return isModelVisible(
-                row.agentDeviceId ? undefined : getModelVisibilityOverride(agentKind, pid, mid),
-                model?.defaultEnabled,
-              );
-            },
-          });
-        }
+        const currentProviderId = getSessionProvider(row.id) ?? row.providerId;
+        const providers = row.agentDeviceId
+          ? await readDeviceProviderViews((await import('../../device-link')).remoteBackgroundInvoke, row.agentDeviceId)
+          : await getDesktopProviderService().listProviders({ allowSideEffects: true });
+        if (!row.agentDeviceId) await waitForModelVisibilityMirror();
+        const connected = connectedProvidersForAgent(providers, agentKind);
+        const sections = buildProviderSections({
+          providers: connected,
+          agent: agentKind,
+          selectedModelId: row.model,
+          selectedProviderId: currentProviderId,
+          isVisible: (pid, mid) => {
+            const provider = connected.find((p) => p.id === pid);
+            const model = provider ? getModel(provider, mid, agentKind) : undefined;
+            return isModelVisible(
+              row.agentDeviceId ? undefined : getModelVisibilityOverride(agentKind, pid, mid),
+              model?.defaultEnabled,
+            );
+          },
+        });
         const spec = cards.buildModelPickerCard({
           sessionId: row.id,
           agentKind,
@@ -453,9 +431,9 @@ export function createSlashHandlers(
           currentModelId: row.model,
           currentProviderId,
           currentEffort: row.effort || null,
-          defaultEffortByModel: target.attached || agentKind === 'acp'
+          defaultEffortByModel: target.attached
             ? Object.fromEntries(
-                sections.flatMap((s) => s.models.map((m) => [m.id, m.defaultEffort ?? (agentKind === 'acp' ? '' : row.effort)])),
+                sections.flatMap((s) => s.models.map((m) => [m.id, m.defaultEffort ?? row.effort])),
               )
             : undefined,
         });
@@ -705,30 +683,12 @@ export function createSlashHandlers(
           return true;
         }
         const { row } = target;
-        let permissionModes = turnRunner.getPermissionModes(row.agentKind, {
-          sessionId: row.id,
-          providerId: row.providerId,
-        });
-        if (row.agentKind === 'acp' && row.agentDeviceId && !turnRunner.getMakerSessionById(row.id)) {
-          const remoteEngines = await (async () => {
-            const { remoteBackgroundInvoke } = await import('../../device-link');
-            const reply = await remoteBackgroundInvoke(row.agentDeviceId!, PLUGIN_ENGINES_INVOKE.LIST, []);
-            return reply.ok ? parseOfferedPluginEngines(reply.result) : [];
-          })().catch(() => []);
-          const key = pluginEngineKeyFromProviderId(row.providerId);
-          const remoteEngine = key ? remoteEngines.find((item) => item.key === key) : undefined;
-          if (remoteEngine?.permissionModes?.length) {
-            permissionModes = remoteEngine.permissionModes.map((mode) => ({
-              id: mode.id,
-              displayName: mode.displayName,
-              description: mode.description,
-            }));
-          }
-        }
         const context = permissionModeCommandContext(
           row.id,
           row.permissionMode,
-          permissionModes,
+          await turnRunner.getPermissionModes(row.agentKind, {
+            sessionId: row.id, providerId: row.providerId, agentDeviceId: row.agentDeviceId,
+          }),
         );
         if (!richIm) {
           const requested = commandArgs[0];
@@ -774,3 +734,23 @@ export function createSlashHandlers(
 
   return { handleSlashCommand };
 }
+
+/**
+ * A plugin engine's models as one picker section. The card reads only the section's id and name, so the
+ * engine is presented under its own task providerId (`acp-plugin:…`) rather than a built-in provider.
+ */
+function pluginEngineModelSection(engine: PluginEngineView): ProviderSection | null {
+  const models = engine.models.filter((model) => !engine.disabledModels?.some((off) => off.id === model.id));
+  if (models.length === 0) return null;
+  return {
+    provider: { id: engine.providerId, name: engine.name } as ProviderSection['provider'],
+    models: models.map((model) => ({
+      id: model.id,
+      displayName: model.displayName || model.id,
+      efforts: (model.efforts ?? []) as SectionModel['efforts'],
+      defaultEffort: (model.defaultEffort ?? null) as SectionModel['defaultEffort'],
+      contextWindow: 0,
+    })),
+  };
+}
+
