@@ -10,7 +10,7 @@ import { useNavigate } from 'react-router-dom';
 
 import { useDeviceProviderSubscriptionCard } from '@/components/settings/useProviderSubscriptionCard';
 import { QuotaHoverCard } from '@/components/status/QuotaHoverCard';
-import { providerWeeklyQuotaSource } from '@/components/new-chat/useProviderWeeklyQuota';
+import { providerUsageReaderSource } from '@/components/new-chat/useProviderWeeklyQuota';
 import { useDeviceProviders } from '@/hooks/useDeviceProviders';
 import { useProviders } from '@/hooks/useProviders';
 import { useDeviceLinkDeviceList, useDeviceLinkDeviceListRequestState } from '@/features/device-link/useDeviceLinkDeviceList';
@@ -325,7 +325,7 @@ function GroupMemberDeviceQuota({
   if (quotaOffline) note = t('providerGroup.member.quota.offline');
   else if (accounts?.length === 0) note = t('providerGroup.member.quota.unavailable');
   else if (!visibleCard && !listedAccounts) {
-    if (!accountsLoading && provider && !providerWeeklyQuotaSource({ ...provider, suspended: false })) {
+    if (!accountsLoading && provider && !providerUsageReaderSource({ ...provider, suspended: false })) {
       note = t('providerGroup.member.quota.none');
     } else if (waitedOut || (target.kind === 'device' && deviceCatalog.error)) {
       note = t('providerGroup.member.quota.unavailable');

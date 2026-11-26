@@ -18,7 +18,7 @@ const provider = (id: string, name?: string) => ({
 });
 const providers: ProviderView[] = [provider('anthropic'), provider('openai')];
 const group = {
-  strategy: 'least', autoSwitch: true,
+  strategy: 'expiring', autoSwitch: true,
   members: [{ kind: 'local', label: 'Studio' }, { kind: 'device', label: 'Notebook', agentDeviceId: 'fixture-executor', providerId: 'anthropic' }],
 };
 const entries = [provider('anthropic', 'Team Anthropic'), provider('openai', 'Private OpenAI')];
@@ -117,7 +117,7 @@ mountPage({
             identity: typeof ctx.data.identity === 'string' ? ctx.data.identity : 'alex@example.com',
             plan: command.providerId === 'anthropic' ? 'Max' : 'Plus', status: 'ready', directory,
             running: 0, paused: false, limit: 4, weight: 1 };
-          return { providerId: command.providerId, configured, strategy: 'least',
+          return { providerId: command.providerId, configured, strategy: 'expiring',
             ...(command.action === 'preview' && ctx.case.endsWith('-added') ? { defaultAdded: true } : {}),
             accounts: configured ? [
             { ...defaultAccount, usage: accountUsage(command.providerId, [2, 86, 16]) },

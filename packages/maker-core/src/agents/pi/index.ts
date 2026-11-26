@@ -219,6 +219,7 @@ import {
   buildReviewReadGrants } from '../shared/review-read-scope.js';
 import { resolveAgentCredentialMode } from '../credential-mode.js';
 import { PI_RPC_OVERSIZED_FRAME_ERROR, PiRpcProcess, type PiRpcEvent } from './rpc-client.js';
+import { piUpstreamStatus } from './upstream-status.js';
 import { createPiStdioTransport, type PiTransport } from './transport.js';
 import type { PiRemoteFileOps } from '../base-agent.js';
 import {
@@ -3473,6 +3474,18 @@ export class PiAgent extends BaseAgent {
       },
     );
     const explicitlyRequestedGateway = isExplicitPiGatewayProviderId(opts.providerId);
+    // An inherited Codex model can have no entry in either of Pi's model
+    // catalogs. Pi would treat it as a custom Cindy model and send the first
+    // request without the selected subscription's provider identity.
+    if (
+      !remote && !hosted && !reviewMode && !opts.resumeSessionId &&
+      !explicitlyRequestedGateway && !nativeResolveFailed &&
+      initialProvider === PI_PROVIDER_ID && !gatewayApiByModel.has(opts.model) &&
+      authProviderId === 'openai' &&
+      await opts.isNewMakerTask?.()
+    ) {
+      throw new Error(`Model '${opts.model}' is unavailable in the current Pi catalog. Choose a different model for this task.`);
+    }
     if (
       explicitlyRequestedGateway &&
       initialProvider === PI_PROVIDER_ID &&
@@ -8296,10 +8309,21 @@ export class PiAgent extends BaseAgent {
             await runExclusivePiRpc(async () => {
               const before = await proc.request({ type: 'get_tree' });
               if (!before.success) {
+                const oversizedFrame = before.error === PI_RPC_OVERSIZED_FRAME_ERROR;
+                // Every failed history read is a definite non-dispatch: the
+                // provider never saw this message. Keep the bounded cause so
+                // the host can say "not sent" and name the reason instead of
+                // showing the generic "reply failed".
                 throw new TurnDispatchRejectedError(
-                  before.error === PI_RPC_OVERSIZED_FRAME_ERROR
+                  oversizedFrame
                     ? `Pi retry history unavailable: ${PI_RPC_OVERSIZED_FRAME_ERROR}`
                     : 'Pi retry history unavailable',
+                  oversizedFrame
+                    ? { diagnostic: 'pi-retry-history-frame-too-large' }
+                    : {
+                      diagnostic: 'pi-retry-history-unavailable',
+                      upstreamStatus: piUpstreamStatus(before.error),
+                    },
                 );
               }
               const branch = piRetryBranch(before.data, sendOpts.retryTranscriptUserEntryId!);
@@ -8314,7 +8338,9 @@ export class PiAgent extends BaseAgent {
               const switched = await proc.request({ type: 'prompt', message: `/cindy-branch-switch ${payload}` });
               const after = await proc.request({ type: 'get_tree' });
               if (!after.success && after.error === PI_RPC_OVERSIZED_FRAME_ERROR) {
-                throw new TurnDispatchRejectedError(`Pi retry history unavailable: ${PI_RPC_OVERSIZED_FRAME_ERROR}`);
+                throw new TurnDispatchRejectedError(`Pi retry history unavailable: ${PI_RPC_OVERSIZED_FRAME_ERROR}`, {
+                  diagnostic: 'pi-retry-history-frame-too-large',
+                });
               }
               if (!switched.success || !after.success || rawPiSessionTreeLeafId(after.data) !== branch.parentId) {
                 throw new TurnDispatchRejectedError('Pi retry branch navigation was not confirmed');

@@ -765,6 +765,35 @@ describe('Chat Server result delivery and refresh', () => {
       expect(writes).toEqual([]);
     }
   });
+  // Unit regression from Android through a desktop: a personal device write has no room delta.
+  it('reads the new execution computer after a switch with a warm group history', async () => {
+    let saved: ChatHistoryState | undefined;
+    deps.chatHistoryStore = () => ({ read: async () => saved, write: async (_room, state) => { saved = state ?? undefined; } });
+    const computers = [{ id: 'mac', name: 'Mac' }, { id: 'win', name: 'Windows' }];
+    let selected = 'mac';
+    fixture.handle.mockImplementation((route, method, body) => {
+      if (route === '/me') return { body: { actor: { id: selfId }, capabilities: { groupAssistantDevice: 1 } } };
+      if (route.startsWith('/changes?')) return { body: { cursor: '8', changes: [] } };
+      if (route.endsWith('/snapshot')) return { body: { room: { ...room(roomId), assistant_device_id: selected },
+        assistantComputers: computers, members: [], messages: [], cursor: '8' } };
+      if (route.endsWith('/assistant-device') && method === 'POST') {
+        selected = body.deviceId;
+        return { body: { deviceId: selected } };
+      }
+      return response(route);
+    });
+    expect(await service.getGroup(roomId)).toMatchObject({ ok: true, group: { assistantDeviceId: 'mac' } });
+    expect(await service.chatServer!.manage({ groupId: roomId, action: { type: 'assistantDevice', deviceId: 'win' } })).toMatchObject({ ok: true });
+    expect(await service.getGroup(roomId)).toMatchObject({ ok: true, group: { assistantDeviceId: 'win' } });
+    // Another installation edits the same membership; the room cursor is still 8.
+    await vi.advanceTimersByTimeAsync(2000);
+    selected = 'mac';
+    const socket = fixture.sockets.at(-1)!;
+    socket.emit('message', JSON.stringify({ type: 'changes', scope: `actor:${selfId}`, cursor: '9',
+      changes: [{ type: 'membership.changed', entityId: roomId, data: { state: 'joined' } }] }));
+    await vi.advanceTimersByTimeAsync(150);
+    expect(await service.getGroup(roomId)).toMatchObject({ ok: true, group: { assistantDeviceId: 'mac' } });
+  });
   // Notification preferences use the same save/refresh path as existing personal settings.
   it.each([['mentions', true], ['none', true], ['all', true], ['mentions', false]] as const)(
     'saves %s as the human member through the existing preference flow with capability=%s', async (mode, supported) => {
@@ -1352,6 +1381,25 @@ describe('Chat Server result delivery and refresh', () => {
       .toMatchObject({ ok: false, errorCode: 'SERVICE_ERROR' });
     expect(deps.log.warn).toHaveBeenCalledWith('Chat request failed', expect.objectContaining({ route: '/conversations/:id/messages', status: 500, code: 'UPSTREAM_FAILED' }));
     expect(JSON.stringify(vi.mocked(deps.log.warn).mock.calls)).not.toMatch(/private body|secret text/);
+    expect(vi.mocked(deps.log.warn).mock.calls[0]![1]).not.toHaveProperty('caller');
+  });
+
+  // 2026-11-26: a GET /conversations/:id/messages/:id answered 400 every ~4 s for 13 minutes and the
+  // template alone could not say who asked. A 400 now names the calling functions (code identifiers
+  // only, no IDs or text), past Node's scheduler frames. Unit tier, faked Chat Server.
+  it('names the caller of a request the server refuses as malformed, without IDs', async () => {
+    deps.log = { warn: vi.fn() };
+    fixture.handle.mockImplementation((route, method) => {
+      if (route.endsWith('/members')) return { body: [] };
+      if (route.endsWith('/messages') && method === 'POST') return { status: 400, body: { error: { code: 'INVALID_INPUT', message: 'secret text', details: [{ path: [], code: 'invalid_format' }] } } };
+      return response(route);
+    });
+    await service.sendMessage({ groupId: roomId, text: 'private body', clientId: 'send-400-test', mentions: { all: false, botIds: [] } });
+    const fields = vi.mocked(deps.log.warn).mock.calls.find(([name]) => name === 'Chat request failed')![1] as Record<string, unknown>;
+    expect(fields).toMatchObject({ route: '/conversations/:id/messages', status: 400, code: 'INVALID_INPUT' });
+    // Code locations of this build only: a base file name and line, no directory.
+    expect(fields.caller).toMatch(/^[\w$<>]*@chatServer\.ts:\d+( < [\w$<>]*@[\w.$-]+:\d+)?$/);
+    expect(JSON.stringify(fields)).not.toContain(roomId);
   });
 
   it.each([
@@ -1431,6 +1479,18 @@ describe('Chat Server result delivery and refresh', () => {
         : await service.sendMessage({ ...input, quote: { messageId: quotedId } });
       expect(result).toMatchObject({ ok: true });
       expect(posts()[0]![2].mentions).toEqual([botId]);
+    });
+
+    // A directed thread reply under public Cindy used to wake both same-named bots.
+    it('sends a directed thread reply only to the selected companion', async () => {
+      const personalId = '70000000-0000-4000-8000-000000000003';
+      const respond = quoteResponse(quoted());
+      fixture.handle.mockImplementation((route, method) => route.endsWith('/members')
+        ? { body: [{ ...botMember, name: 'Cindy', assistant: true }, { ...botMember, id: personalId, name: 'Cindy' }] }
+        : respond(route, method));
+      expect(await service.chatServer!.reply({ groupId: roomId, rootId: quotedId, text: '@Cindy (Owner) go',
+        clientId: 'thread-selected-companion', mentions: { all: false, botIds: [personalId] } })).toMatchObject({ ok: true });
+      expect(posts()[0]![2].mentions).toEqual([personalId]);
     });
 
     it.each(['quote', 'thread'] as const)('does not infer a bot recipient from a human-authored %s', async entry => {
@@ -2523,7 +2583,7 @@ describe('Chat Server result delivery and refresh', () => {
       queue = []; history = []; project = null; tasks = 0; fixture.requests = []; members = cindyMembers;
       deps.ensureGroupAssistantSession = vi.fn(async ({ sessionId }: { sessionId?: string }) => ({ ok: true as const, sessionId: sessionId ?? `group-task-${++tasks}`, created: !sessionId }));
       fixture.handle.mockImplementation((route: string, method: string, body: Record<string, unknown>) => {
-        if (route === '/me') return { body: { actor: { id: selfId }, capabilities: { groupAssistant: 1, groupProject: 1 }, groupAssistantActorId: cindyId } };
+        if (route === '/me') return { body: { actor: { id: selfId }, capabilities: { groupAssistant: 1, groupAssistantDevice: 1, groupProject: 1 }, groupAssistantActorId: cindyId } };
         if (route === '/executions/claim') return { body: { execution: queue.shift() ?? null } };
         if (route.endsWith('/snapshot')) return { body: { room: { ...room(roomId), project }, members, messages: [], cursor: '1' } };
         if (route.endsWith('/members')) return { body: cindyMembers };
@@ -2691,7 +2751,7 @@ describe('Chat Server result delivery and refresh', () => {
         expect(dispatched().at(-1)!.attachments).toEqual([downloaded(1), downloaded(2)]);
       });
     });
-    // These requests come from another device: the head start this computer leaves it has passed.
+    // The server offers this device requests in either lane.
     async function ask(n: number, text: string, requester = selfId) {
       history.push(message(n, requester, text));
       queue.push(request(n, requester));
@@ -2705,18 +2765,27 @@ describe('Chat Server result delivery and refresh', () => {
       members = [...cindyMembers, luna];
       const original = fixture.handle.getMockImplementation()!;
       fixture.handle.mockImplementation((route, method, body) => route === '/me'
-        ? { body: { actor: { id: selfId }, capabilities: { groupAssistant: 1, groupTeammateMentions: 1 }, groupAssistantActorId: cindyId } }
+        ? { body: { actor: { id: selfId }, capabilities: { groupAssistant: 1, groupAssistantDevice: 1, groupTeammateMentions: 1 }, groupAssistantActorId: cindyId } }
         : original(route, method, body));
-      if (sender === 'user') await ask(5, 'Please arrange this');
-      else {
-        history.push(message(5, teammateId, 'Please review this', { origin: 'bot' }));
-        queue.push(request(5));
-        await vi.advanceTimersByTimeAsync(12_000);
-      }
+      const words = 'Please review the teammates column';
+      const excerpt = '| name | teammates | | --- | --- | | A | B |';
+      const earlier = message(2, peerId, 'Use the draft');
+      const quote = buildBotGroupQuoteCard({ messageId: earlier.id, authorName: 'Ann', authorKind: 'user',
+        excerpt, attachmentCount: 0, attachmentName: null, sequence: 2 });
+      history.push(earlier, message(5, sender === 'user' ? selfId : teammateId, words, {
+        origin: sender === 'user' ? 'user' : 'bot', content: [{ type: 'text', text: words }, quote],
+      }));
+      queue.push(request(5));
+      await vi.advanceTimersByTimeAsync(12_000);
       const [input] = dispatched();
-      expect(input!.message).toContain('Luna');
+      const quoteLine = t('bots.groupChat.assistant.replyingTo').replace('{{name}}', 'Ann').replace('{{text}}', excerpt);
+      const visible = `${words}\n\n${t('bots.groupChat.assistant.groupRecent')}\n${quoteLine}\nAnn：Use the draft`;
+      expect(input).toMatchObject({ persistedContent: visible, origin: { displayText: visible } });
+      expect(input!.message).toContain(visible);
+      expect(input!.message).toContain('Answer whoever asked.');
       const context = [...input!.message.matchAll(/<untrusted-data>\n(.*?)\n<\/untrusted-data>/g)]
         .map(match => JSON.parse(match[1])).find(block => block.teammates);
+      expect(context.teammates).toContainEqual({ name: 'Luna (Chris)' });
       expect(context.replyToMention).toBe(sender === 'teammate' ? '@Luna (Chris)' : undefined);
       const reply = { ...terminal, sessionId: input!.targetSessionId, resultText: sender === 'user' ? '@Luna please draft the offer' : `${context.replyToMention} review done` };
       expect(await service.settleLaneTurn({ ...reply, activeInputClientId: null })).toBe(false);
@@ -2923,10 +2992,7 @@ describe('Chat Server result delivery and refresh', () => {
       expect(dispatched()[0]!.message.startsWith('slow start')).toBe(true);
     });
 
-    // 2026-11-14 owner report: «我现在连哪个设备会回复都搞不清了». Every computer of the account
-    // may take a request to the group's Cindy; the one it was sent from takes it at once, the others
-    // only after a short head start, so the answer comes from the computer in front of the user.
-    it('lets the computer the request was sent from take it first', async () => {
+    it.each(['timeline', 'thread'] as const)('accepts server-assigned work immediately regardless of the sender (%s)', async entry => {
       await vi.advanceTimersByTimeAsync(2000);
       const socket = fixture.sockets.at(-1)!;
       Object.defineProperty(socket, 'readyState', { value: 1 });
@@ -2934,22 +3000,22 @@ describe('Chat Server result delivery and refresh', () => {
       // The server's notice that the group's Cindy has work, as every computer of the account gets it.
       const notice = () => socket.emit('message', JSON.stringify({ type: 'changes', scope: `actor:${selfId}`, cursor: String(Date.now()),
         changes: [{ type: 'work.available', data: { work: [{ botId: cindyId, conversationId: roomId }] } }] }));
-      const sent = await service.sendMessage({ groupId: roomId, text: '@Cindy look', clientId: 'studio-send-1', mentions: { all: false, botIds: [cindyId] } });
-      expect(sent).toMatchObject({ ok: true });
-      history.push(message(5, selfId, '@Cindy look'));
-      queue.push(request(5));
+      const input = { groupId: roomId, text: '@Cindy look', clientId: 'studio-send-1', mentions: { all: false, botIds: [cindyId] } };
+      const root = message(1, peerId, 'Topic');
+      history.push(root);
+      const sent = entry === 'thread' ? await service.chatServer!.reply({ ...input, rootId: root.id }) : await service.sendMessage(input);
+      if (!sent.ok) throw new Error(sent.errorCode);
+      history.push(message(5, selfId, '@Cindy look', { id: sent.messageId, threadRootId: entry === 'thread' ? root.id : null }));
+      queue.push({ ...request(5), source_message_id: sent.messageId });
       notice();
       await vi.advanceTimersByTimeAsync(1000);
       expect(dispatched()).toHaveLength(1);
       await service.settleLaneTurn({ ...terminal, sessionId: 'group-task-1', activeInputClientId: dispatched()[0]!.clientId, resultText: 'Here' });
-      // A request sent elsewhere (another computer, a phone): this computer leaves it a head start.
-      await vi.advanceTimersByTimeAsync(61_000);
+      // A phone can request work from this bound computer too.
       history.push(message(6, selfId, '@Cindy from the phone'));
       queue.push(request(6));
       notice();
-      await vi.advanceTimersByTimeAsync(5000);
-      expect(dispatched()).toHaveLength(1);
-      await vi.advanceTimersByTimeAsync(4000);
+      await vi.advanceTimersByTimeAsync(1000);
       expect(dispatched()).toHaveLength(2);
       expect(dispatched()[1]!.message.startsWith('@Cindy from the phone')).toBe(true);
     });
@@ -2960,7 +3026,7 @@ describe('Chat Server result delivery and refresh', () => {
     it('reports which computer and model run the request, where the server keeps it', async () => {
       const previous = fixture.handle.getMockImplementation()!;
       fixture.handle.mockImplementation((route, method, body) => route === '/me'
-        ? { body: { actor: { id: selfId }, deviceId: 'studio-device', capabilities: { groupAssistant: 1, groupProject: 1, executionExecutor: 1 }, groupAssistantActorId: cindyId } }
+        ? { body: { actor: { id: selfId }, deviceId: 'studio-device', capabilities: { groupAssistant: 1, groupAssistantDevice: 1, groupProject: 1, executionExecutor: 1 }, groupAssistantActorId: cindyId } }
         : previous(route, method, body));
       deps.readGroupTaskStatus = vi.fn(async () => ({ title: 'Room', state: 'running' as const, model: 'GPT-6.1 Sol' }));
       await ask(5, 'Where do you run?');
@@ -2968,7 +3034,7 @@ describe('Chat Server result delivery and refresh', () => {
       expect(beats.at(-1)![2]).toMatchObject({ executor: { deviceId: 'studio-device', sessionId: 'group-task-1', model: 'GPT-6.1 Sol' } });
       fixture.handle.mockImplementation((route, method, body) => route === `/conversations/${roomId}/executions`
         ? { body: [{ ...request(5), status: 'running' }] } : route === '/me'
-        ? { body: { actor: { id: selfId }, deviceId: 'studio-device', capabilities: { groupAssistant: 1, groupProject: 1, executionExecutor: 1 }, groupAssistantActorId: cindyId } }
+        ? { body: { actor: { id: selfId }, deviceId: 'studio-device', capabilities: { groupAssistant: 1, groupAssistantDevice: 1, groupProject: 1, executionExecutor: 1 }, groupAssistantActorId: cindyId } }
         : previous(route, method, body));
       const shown = await service.getGroup(roomId);
       if (!shown.ok) throw new Error(shown.errorCode);
@@ -2981,7 +3047,7 @@ describe('Chat Server result delivery and refresh', () => {
     it('renews without the location when an older server refuses it', async () => {
       const previous = fixture.handle.getMockImplementation()!;
       fixture.handle.mockImplementation((route, method, body) => route === '/me'
-        ? { body: { actor: { id: selfId }, deviceId: 'studio-device', capabilities: { groupAssistant: 1, groupProject: 1, executionExecutor: 1 }, groupAssistantActorId: cindyId } }
+        ? { body: { actor: { id: selfId }, deviceId: 'studio-device', capabilities: { groupAssistant: 1, groupAssistantDevice: 1, groupProject: 1, executionExecutor: 1 }, groupAssistantActorId: cindyId } }
         : method === 'POST' && route.includes('/executions/') && body?.action === 'heartbeat' && body.executor
           ? { status: 400, body: { error: { code: 'VALIDATION_FAILED' } } }
           : previous(route, method, body));
@@ -3042,7 +3108,7 @@ describe('Chat Server result delivery and refresh', () => {
       members = cindyMembers.map(m => ({ ...m, role: 'member' }));
       const previous = fixture.handle.getMockImplementation()!;
       fixture.handle.mockImplementation((route, method, body) => {
-        if (route === '/me') return { body: { actor: { id: selfId }, capabilities: { groupAssistant: 1, groupSingleSpeaker: 1 }, groupAssistantActorId: cindyId } };
+        if (route === '/me') return { body: { actor: { id: selfId }, capabilities: { groupAssistant: 1, groupAssistantDevice: 1, groupSingleSpeaker: 1 }, groupAssistantActorId: cindyId } };
         if (route === `/conversations/${roomId}/executions`) return { body: [{ ...request(50, requester), status }, { ...request(51, peerId), status: 'running' }] };
         return previous(route, method, body);
       });
@@ -3594,6 +3660,12 @@ describe('Chat Server result delivery and refresh', () => {
     ['authentication_failed private credential', 'AUTH_REQUIRED'],
     ['[REMOTE_AGENT_BUSY] [DEVICE_LIMIT] private credential', 'REMOTE_DEVICE_LIMIT'],
     ['[REMOTE_AGENT_BUSY] [TOTAL_LIMIT] private credential', 'REMOTE_TOTAL_LIMIT'],
+    // #10821: device-link IPC and remote Agent wrappers reach group settlement as local messages.
+    ['[DEVICE_LINK_TIMEOUT] private endpoint', 'RUNTIME_TIMEOUT'],
+    ['[REMOTE_AGENT_TIMEOUT] [INVOKE_TIMEOUT] private endpoint', 'RUNTIME_TIMEOUT'],
+    ['[REMOTE_AGENT_UNAVAILABLE] [DEVICE_LINK_NOT_CONNECTED] private endpoint', 'NETWORK_ERROR'],
+    ['[REMOTE_AGENT_OFFLINE] [DEVICE_OFFLINE] private endpoint', 'NETWORK_ERROR'],
+    ['[REMOTE_AGENT_UNAVAILABLE] private endpoint', 'RUNTIME_ERROR'],
     ['ECONNRESET private endpoint', 'NETWORK_ERROR'],
     ['pi rpc timeout after 30000ms: prompt /private/path', 'RUNTIME_TIMEOUT'],
   ])('classifies an unqueued dispatch rejection from its local message: %s', async (message, code) => {
@@ -3603,6 +3675,7 @@ describe('Chat Server result delivery and refresh', () => {
     expect(failures).toHaveLength(1);
     expect(failures[0][2]).toMatchObject({ detail: `cindy-runtime-error:${code}` });
     expect(JSON.stringify(failures)).not.toContain(message);
+    expect(JSON.stringify(failures)).not.toContain('private endpoint');
     expect(deps.abortLane).toHaveBeenCalledExactlyOnceWith('lane');
   });
 
@@ -6862,10 +6935,11 @@ describe('Chat Server directed sends', () => {
   let responseMode: 'all' | 'mentioned';
   let nextSendId: number;
   let mentionAudiences = false, allowAllBots = false;
+  let roomKind: 'group' | 'direct';
   let members: Array<{ id: string; kind: string; state: string }>;
   beforeEach(() => {
     vi.useFakeTimers();
-    fixture.packaged = true; responseMode = 'all'; nextSendId = 0; mentionAudiences = false; allowAllBots = false;
+    fixture.packaged = true; roomKind = 'group'; responseMode = 'all'; nextSendId = 0; mentionAudiences = false; allowAllBots = false;
     fixture.profiles = [{ id: 'local-bot', displayName: 'Bot', status: 'active' }];
     members = [{ id: selfId, kind: 'human', state: 'joined' },
       { id: botId, kind: 'bot', state: 'joined' }, { id: humanId, kind: 'human', state: 'joined' }];
@@ -6873,7 +6947,7 @@ describe('Chat Server directed sends', () => {
       if (route === '/me') return { body: { actor: { id: selfId }, capabilities: mentionAudiences ? { groupMentionAudiences: 1 } : {} } };
       if (route === '/actors') return { body: [{ id: botId, kind: 'bot', externalId: 'local-bot', name: 'Bot' }] };
       if (route.endsWith('/members')) return { body: members };
-      if (route.endsWith('/snapshot')) return { body: { room: { id: roomId, kind: 'group', response_mode: responseMode, allow_mention_all_bots: allowAllBots }, members, messages: [], cursor: '0' } };
+      if (route.endsWith('/snapshot')) return { body: { room: { id: roomId, kind: roomKind, response_mode: responseMode, allow_mention_all_bots: allowAllBots }, members, messages: [], cursor: '0' } };
       if (route.endsWith('/messages') && method === 'POST') return { body: { id: 'posted-message' } };
       return { body: [] };
     });
@@ -6886,6 +6960,13 @@ describe('Chat Server directed sends', () => {
     const input = { groupId: roomId, text: '@Bot hello', clientId: `directed-send-${++nextSendId}`, mentions };
     return entry === 'thread' ? service.chatServer!.reply({ ...input, rootId }) : service.sendMessage(input);
   };
+
+  it('keeps the sender out of explicit private-message recipients', async () => {
+    roomKind = 'direct';
+    expect(await service.sendMessage({ groupId: roomId, conversationKind: 'direct', clientId: 'direct-self', text: 'hello',
+      mentions: { all: false, botIds: [selfId, humanId] } })).toMatchObject({ ok: true });
+    expect(posts().at(-1)![2].mentions).toEqual([humanId]);
+  });
 
   // User rule: human and teammate broadcasts must remain distinct on both send routes.
   it.each(['main', 'thread'])('uses the owner-enabled teammate audience independently in %s', async entry => {
@@ -6957,11 +7038,11 @@ describe('Chat Server directed sends', () => {
     expect(posts()).toEqual([]);
   });
 
-  it.each(['main', 'thread'])('preserves actor/local-bot/human targets and excludes self in %s wire payloads', async entry => {
+  it.each(['main', 'thread'])('preserves explicitly selected self and other targets in %s wire payloads', async entry => {
     for (const all of [false, true]) {
       for (const targets of [[botId], ['local-bot'], [humanId], [selfId], [selfId, humanId, 'local-bot', botId]]) {
         expect(await send(entry, { all, botIds: targets })).toMatchObject({ ok: true });
-        const ids = [...new Set([...targets.map(target => target === 'local-bot' ? botId : target), ...(all ? [humanId] : [])])].filter(target => target !== selfId);
+        const ids = [...new Set([...targets.map(target => target === 'local-bot' ? botId : target), ...(all ? [humanId] : [])])];
         expect(posts().at(-1)![2]).toMatchObject({ mentions: ids,
           ...(entry === 'thread' ? { threadRootId: rootId } : {}) });
       }

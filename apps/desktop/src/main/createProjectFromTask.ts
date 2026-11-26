@@ -4,7 +4,7 @@ import { eq } from 'drizzle-orm';
 import type { ControlResult } from '@cindy/mcps';
 import { isIpcErrorCode } from '../shared/ipc-errors.js';
 import { workingDirEquals } from '../shared/workingDir.js';
-import type { PreparedProjectFromTask, ProjectsRootState } from '../shared/projectsRoot.js';
+import type { CreateProjectFromTaskResult, PreparedProjectFromTask, ProjectsRootState } from '../shared/projectsRoot.js';
 import { createLogger } from './logger.js';
 import { throwIpcError } from './utils/ipcValidate.js';
 
@@ -99,6 +99,7 @@ function unwrap<T extends object>(result: ControlResult<T, string>): T {
 
 export interface TaskForProjectCreation {
   title: string | null;
+  projectDir?: string | null;
   workingDir: string | null;
   workspaceKind: string | null;
 }
@@ -112,7 +113,7 @@ export interface CreateProjectFromTaskDeps {
   validateProjectDirectory(directory: string): Promise<ControlResult<{ workingDir: string }, string>>;
   registerProject(sessionId: string, directory: string): Promise<ControlResult<{ workingDir: string }, string>>;
   hideProject(directory: string): Promise<void>;
-  moveTask(sessionId: string, directory: string): Promise<ControlResult<object, string>>;
+  moveTask(sessionId: string, directory: string): Promise<ControlResult<CreateProjectFromTaskResult['session'], string>>;
 }
 
 /**
@@ -123,7 +124,7 @@ export interface CreateProjectFromTaskDeps {
 export async function createProjectFromTask(
   deps: CreateProjectFromTaskDeps,
   input: { sessionId: string; name: string; parentDir: string; createParent: boolean },
-): Promise<{ workingDir: string; movedEntries: number }> {
+): Promise<CreateProjectFromTaskResult> {
   const name = validateProjectFolderName(input.name);
   return deps.withTaskLock(input.sessionId, async () => {
     await deps.assertMovable(input.sessionId);
@@ -150,18 +151,20 @@ export async function createProjectFromTask(
       if (source) moved = await moveEntries(source, target);
       registered = unwrap(await deps.registerProject(input.sessionId, workingDir)).workingDir;
       movingTask = true;
-      unwrap(await deps.moveTask(input.sessionId, registered));
-      return { workingDir: registered, movedEntries: moved.length };
+      const { workingDir: cwd, projectDir } = unwrap(await deps.moveTask(input.sessionId, registered));
+      return { workingDir: registered, session: { workingDir: cwd, projectDir }, movedEntries: moved.length };
     } catch (error) {
       if (movingTask && registered) {
         // A failed move may already be committed (e.g. the account changed right after the
         // write). Only roll back when the task is known to still point at its old directory.
         const directory = registered;
         const committed = await deps.readTask(input.sessionId).then(
-          (task) => workingDirEquals(task.workingDir, directory),
+          (task) => task.workspaceKind === 'project' && workingDirEquals(task.projectDir ?? task.workingDir, directory)
+            ? { workingDir: task.workingDir, projectDir: task.projectDir ?? null }
+            : false,
           () => null,
         );
-        if (committed === true) return { workingDir: directory, movedEntries: moved.length };
+        if (committed) return { workingDir: directory, session: committed, movedEntries: moved.length };
         if (committed === null) {
           log.warn('task move outcome unknown; keeping files in the new project folder');
           throw error;

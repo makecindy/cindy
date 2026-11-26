@@ -96,6 +96,7 @@ export function InlineQueueSection({
     projection.toolLoop ?? null,
     projection.error ?? '',
     projection.outputLimit,
+    projection.reconnectHandoff,
   );
   const projectionErrorKey = projection.error
     ? inputProjectionErrorI18nKey(projection.error)
@@ -145,7 +146,7 @@ export function InlineQueueSection({
               disabled={!!retryDisabledReason}
               busy={busy}
               hint={retryDisabledReason ?? undefined}
-              label={t('message.queue.retrySend')}
+              label={t(projection.errorReason === 'codex_reconnect_stalled' ? 'session.tail.continueTask' : 'message.queue.retrySend')}
               onPress={projection.errorRetryText ? onRetryError : (onContinueAfterError ?? onRetryError)}
               testID="queue.inline.retryButton"
             /> : null}
