@@ -68,7 +68,18 @@ export function LocalNetworkBanner({ isCollapsed }: LocalNetworkBannerProps) {
   const { dismissed: updateDismissed } = useUpdateBannerDismiss();
   const visible = useRef(false);
   // Only a card on screen may probe on focus: a probe is what lets macOS prompt.
-  const { state, requesting, request } = useLocalNetworkAccess({
+  const {
+    state,
+    requesting,
+    prompted,
+    openedSettings,
+    separateWindowRetry,
+    appBundlePath,
+    failed,
+    request,
+    openSettings,
+    revealApp,
+  } = useLocalNetworkAccess({
     probe: false,
     probeOnFocus: () => visible.current,
   });
@@ -90,6 +101,24 @@ export function LocalNetworkBanner({ isCollapsed }: LocalNetworkBannerProps) {
       // Storage full or unavailable: the reminder stays hidden for this run.
     }
   };
+
+  const bodyText = openedSettings
+    ? t('settings.devices.localNetwork.settingsHint')
+    : prompted
+      ? t('settings.devices.localNetwork.promptedHint')
+      : t(
+          reminder.reason === 'controlEnabled'
+            ? 'sidebar.localNetwork.controlEnabled'
+            : 'sidebar.localNetwork.relayOnly',
+        );
+
+  const actionLabel = separateWindowRetry
+    ? t('remoteDesktop.openPermissionInNewWindow')
+    : openedSettings || prompted
+      ? t('remoteDesktop.openPermissionSettings')
+      : t('sidebar.localNetwork.allow');
+
+  const appName = appBundlePath?.split('/').pop();
 
   return (
     <div
@@ -123,17 +152,37 @@ export function LocalNetworkBanner({ isCollapsed }: LocalNetworkBannerProps) {
         <div className="min-w-0 flex-1">
           <p className="text-12 font-medium leading-[1.35]">{t('sidebar.localNetwork.title')}</p>
           <p className="mt-0.5 text-12 leading-[1.35] text-[var(--text-secondary)]">
-            {t(
-              reminder.reason === 'controlEnabled'
-                ? 'sidebar.localNetwork.controlEnabled'
-                : 'sidebar.localNetwork.relayOnly',
-            )}
+            {bodyText}
           </p>
         </div>
       </div>
+      {openedSettings && appBundlePath && appName && (
+        <Button
+          variant="secondary"
+          size="sm"
+          compact
+          tone="quiet"
+          className="max-w-full self-start"
+          title={appBundlePath}
+          onClick={() => void revealApp()}
+        >
+          <span className="truncate">{t('remoteDesktop.revealCurrentApp', { app: appName })}</span>
+        </Button>
+      )}
+      {failed && (
+        <p role="alert" className="text-12 leading-[1.35] text-[var(--text-secondary)]">
+          {t('remoteDesktop.permissionActionFailed')}
+        </p>
+      )}
       <div className="flex items-center justify-end">
-        <Button variant="cta" size="md" disabled={requesting} onClick={() => void request()}>
-          {t('sidebar.localNetwork.allow')}
+        <Button
+          variant={openedSettings ? 'secondary' : 'cta'}
+          size={openedSettings ? 'sm' : 'md'}
+          compact={openedSettings}
+          disabled={requesting}
+          onClick={() => void (openedSettings || prompted ? openSettings() : request())}
+        >
+          {actionLabel}
         </Button>
       </div>
     </div>

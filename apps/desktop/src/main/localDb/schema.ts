@@ -1873,6 +1873,12 @@ export const embeddingJobs = sqliteTable(
   }),
 );
 
+// Row IDs only. Writers without sqlite-vec can unlink chat content immediately;
+// the next vector-capable connection finishes deleting the physical index rows.
+export const deletedChatVectorRows = sqliteTable('deleted_chat_vector_rows', {
+  rowid: integer('rowid').primaryKey(),
+});
+
 /**
  * embedding-host (Phase 1.1): vec 虚表元信息登记。
  *

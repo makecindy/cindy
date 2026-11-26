@@ -28,6 +28,11 @@ Claude Code、Codex、Pi 共用 Maker 的启动失败清理契约：只有明确
 当作进程退出，也不触发只允许真实退出证明的自动重试。清理未确认时继续保留保护，通过
 `AgentStartupCleanupPendingError.whenStopped` 接收同 owner 的实际清理／移交或进程退出证明。
 
+Codex handle 关闭、终止或未交付的启动清理时，除注销线程身份，还须通过
+`closeCodexMcpSessionInstance` 释放该实例的 MCP HTTP transports；不能依赖客户端发送 DELETE。
+Desktop 与 Node Host 共用此回收入口。线程替换、rewind 或 fork 仍沿用当前实例时只更新
+线程身份，不释放实例连接，也不影响兄弟任务；实例连接回收不代表原生线程已卸载。
+
 本地 SDK 已接收启动调用、已观察到进程创建、或远端启动请求已发出后，普通异常不是
 退出证明。Pi 在 transport 已创建而 RPC 包装器构造失败时，也必须关闭已取得的
 transport；关闭未确认时复用原有隔离清理记录和 `AgentStartupCleanupPendingError`，
@@ -471,7 +476,9 @@ Codex 0.153 的 unsubscribe 会延迟卸载 30 分钟，不能靠立即 resume �
 冻结输入。本地摘要再失败即正常报错，不循环切换。尚未结算的原生 exec continuation 无法跨
 线程迁移，不得重建后声称它仍可恢复。普通生成 502 与 stderr 文案不得触发此路径。
 
-Codex 的 120 秒 reconnect watchdog 只是 fallback 收口，不是根因诊断。stderr 仍只作诊断日志
+Codex 的 120 秒 reconnect watchdog 只确认模型连接未在时限内恢复。诊断记录本次重连最后收到的尝试序号与上限、
+中断时仍登记为未完成的工具调用数，以及已知的上游网关状态码。工具仍在等待不能证明工具引起了断线。
+stderr 仍只作诊断日志
 （唯一例外：每次响应的计时 trace 行只读来显示 tok/s，不驱动任何行为，见
 [实时生成速度](protocol-compatibility/live-generation-speed.md)），
 不得用 `remote compaction v2` 文案驱动恢复动作，也不得根据图片历史大小把重连超时
@@ -503,7 +510,13 @@ handle 的只读 `isPreparingUserTurn()`，使用 `bridge_turn_no_event_timeout`
 自动 CONTINUE 保留原请求的 Plan 与权限选项；超时恢复不等于 ExitPlanMode 批准，
 不得强制 planMode=false。若原计划已批准后执行失败，缺少可靠的审批周期记录时仍保守
 保留原 Plan 选项，可能重新进入计划模式；不为避免重入新增审批状态。人工 Retry 沿用
-既有合成 UI 动作策略，本自动恢复修复不调整该策略。
+既有合成 UI 动作策略。Codex 重连超时后的人工继续即使尚无助手消息也只发 CONTINUE，并保留原 Plan 与权限选项。
+
+Codex 重连超时后，宿主在发给模型的续跑消息中说明断线原因。收到工具错误时，模型可从
+原有的工具结果继续诊断；工具已开始但尚未收到结果时，先核对实际状态，避免重复执行。
+普通任务自动续跑后，如果没有新的实质产出就再次发生同样的重连超时，交给用户处理。
+有新的可见文本或工具调用时可再次恢复，仍受当前任务的自动恢复总预算约束。已配置的
+模型组沿用自己的重试和切换规则。
 退避窗口内 provider / Session 因 stall abort 复核、terminal-error drain
 或 interrupt ACK 失败而 `unexpected` close 时，必须用实例 + attemptToken 精确保留交棒，
 不得 teardown 已批准的自动续跑——包括 timer 已 fire、CONTINUE 已因 SESSION_RUNNING

@@ -97,7 +97,7 @@ const catalogs = vi.hoisted(() => {
         provider('anthropic', 'Anthropic', models, {
           remoteInvocationEnabled: true,
           group: {
-            strategy: 'least',
+            strategy: 'expiring',
             autoSwitch: true,
             members: [
               member('local', 'local', null, 'anthropic'),

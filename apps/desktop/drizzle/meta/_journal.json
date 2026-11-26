@@ -1146,8 +1146,15 @@
     {
       "idx": 163,
       "version": "6",
-      "when": 1795671931705,
-      "tag": "0163_schedule_revision",
+      "when": 1795673064479,
+      "tag": "0163_purge_deleted_task_history",
+      "breakpoints": true
+    },
+    {
+      "idx": 164,
+      "version": "6",
+      "when": 1795721617205,
+      "tag": "0164_schedule_revision",
       "breakpoints": true
     }
   ]

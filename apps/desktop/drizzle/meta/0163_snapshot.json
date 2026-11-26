@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "8f25eb56-f1ff-4c8b-9535-0803528c560e",
+  "id": "18b32762-8d1a-4730-a1b3-2c984846780b",
   "prevId": "cb417ef8-6561-4771-a291-5d37e762f26a",
   "tables": {
     "account_usage_snapshots": {
@@ -2504,6 +2504,23 @@
           "name": "daily_token_attribution_day_provider_billing_source_model_pk"
         }
       },
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "deleted_chat_vector_rows": {
+      "name": "deleted_chat_vector_rows",
+      "columns": {
+        "rowid": {
+          "name": "rowid",
+          "type": "integer",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
       "uniqueConstraints": {},
       "checkConstraints": {}
     },
@@ -5435,14 +5452,6 @@
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false
-        },
-        "schedule_revision": {
-          "name": "schedule_revision",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false,
-          "default": 0
         },
         "last_fired_at": {
           "name": "last_fired_at",
