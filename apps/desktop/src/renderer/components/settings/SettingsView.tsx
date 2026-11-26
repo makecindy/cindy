@@ -445,7 +445,9 @@ function SettingsViewContent() {
           {/* Keep the boundary outside the keyed panel: replacing it on each tab
               forces a fresh fallback and React delays revealing even cached-fast loads. */}
           <div
-            key={`${activeTab}:${selectedPluginPage?.id ?? 'root'}`}
+            // 「智能路由」是模型供应商页里的一栏(tab=model-groups)：两者之间切换不换面板，否则整页重新挂载——
+            // 供应商列表重新加载闪一下，刚点的那一项也丢了，落回第一个供应商(2026-11-26 用户反馈)。
+            key={`${activeTab === 'model-groups' ? 'providers' : activeTab}:${selectedPluginPage?.id ?? 'root'}`}
             className={cn(
               settingsPanelClass,
               // 模型供应商页的内容比别的设置页多（供应商、账号用量、模型列表），放宽到 1200px（2026-11-24 用户裁决）。
