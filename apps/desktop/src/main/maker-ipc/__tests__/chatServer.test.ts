@@ -2707,7 +2707,15 @@ describe('Chat Server result delivery and refresh', () => {
       fixture.handle.mockImplementation((route, method, body) => route === '/me'
         ? { body: { actor: { id: selfId }, capabilities: { groupAssistant: 1, groupTeammateMentions: 1 }, groupAssistantActorId: cindyId } }
         : original(route, method, body));
-      if (sender === 'user') await ask(5, 'Please arrange this');
+      if (sender === 'user') {
+        const table = '| Item | Date |\n| --- | --- |\n| Review | Friday |';
+        history.push(message(1, peerId, table));
+        const quote = buildBotGroupQuoteCard({ messageId: history[0]!.id, authorName: 'Ann',
+          authorKind: 'user', excerpt: table.replaceAll('\n', ' '), sequence: 1, attachmentCount: 0, attachmentName: null });
+        history.push(message(5, selfId, '', { content: [quote, { type: 'text', text: '@Cindy When is the review?' }] }));
+        queue.push(request(5));
+        await vi.advanceTimersByTimeAsync(12_000);
+      }
       else {
         history.push(message(5, teammateId, 'Please review this', { origin: 'bot' }));
         queue.push(request(5));
@@ -2715,6 +2723,11 @@ describe('Chat Server result delivery and refresh', () => {
       }
       const [input] = dispatched();
       expect(input!.message).toContain('Luna');
+      const expected = sender === 'user'
+        ? '@Cindy When is the review?\n\n' + t('bots.groupChat.assistant.replyingTo').replace('{{name}}', 'Ann').replace('{{text}}', 'Item Date Review Friday')
+        : 'Please review this';
+      expect(input!.persistedContent).toBe(expected);
+      expect(input!.origin).toMatchObject({ displayText: expected });
       const context = [...input!.message.matchAll(/<untrusted-data>\n(.*?)\n<\/untrusted-data>/g)]
         .map(match => JSON.parse(match[1])).find(block => block.teammates);
       expect(context.replyToMention).toBe(sender === 'teammate' ? '@Luna (Chris)' : undefined);

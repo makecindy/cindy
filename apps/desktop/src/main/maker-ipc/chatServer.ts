@@ -34,6 +34,7 @@ import { onProjectCatalogChanged } from '../projectCatalogEvents.js';
 import { createGroupProjectFolders, requestRepository } from './groupProjectFolder.js';
 import { createGroupTaskCards } from './groupTaskCards.js';
 import { GROUP_TEAMMATE_HANDOFF_GUIDANCE } from './groupCollaborationSkillContent.js';
+import { markdownPreviewText } from '../../shared/markdownPreviewText.js';
 import { createGroupAssistantTasks, formatGroupRequest } from './groupAssistantTask.js';
 import { buildPlanStepBrief, draftPlanSteps, type PlanStepDraft } from './botGroupDivision.js';
 import { botGroupMentionAudience, resolveBotGroupMentions, splitBotGroupRelaySteps, type BotGroupMentionMember } from '@cindy/maker-shared/botGroupMentions';
@@ -3080,14 +3081,18 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     const replies = contextLines(s, messages, TASK_CONTEXT_MESSAGES - rootContext.lines.length);
     const quote = readBotGroupQuote(source.content);
     const first = delivered === undefined;
+    const recentLines = [...rootContext.lines, ...replies.lines];
+    const recentMessages = [...rootContext.included, ...replies.included];
+    const omitted = replies.omitted ? [t('bots.groupChat.assistant.earlierOmitted')] : [];
     return {
       // Keep the root, then the newest visible messages, when the shared attachment budget fills up.
       rootTitleText: titleWords(root),
       attachmentSources: [...rootContext.included, ...replies.included.reverse()].filter(m => m.id !== quote?.messageId),
+      visibleBackground: [...omitted, ...recentLines.filter((_, i) => recentMessages[i].id !== quote?.messageId)],
       heading: t(`bots.groupChat.assistant.${threadRootId ? first ? 'threadRecent' : 'threadNew' : first ? 'groupRecent' : 'groupNew'}`),
       background: [
         ...(quote?.excerpt ? [t('bots.groupChat.assistant.replyingTo').replaceAll('{{name}}', () => quote.authorName).replaceAll('{{text}}', () => quote.excerpt)] : []),
-        ...(replies.omitted ? [t('bots.groupChat.assistant.earlierOmitted')] : []), ...rootContext.lines, ...replies.lines],
+        ...omitted, ...recentLines],
     };
   }
   function mentionableTeammates(snapshot: Snapshot, speakerId: string) {
@@ -3145,7 +3150,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       const sessionId = task.sessionId;
       const threadRootId = source.threadRootId ?? undefined;
       const scope = threadRootId ?? 'main';
-      const { heading, background, attachmentSources, rootTitleText } = await assistantRequestBackground(s, source, sessionId, task.delivered[scope]);
+      const { heading, background, visibleBackground, attachmentSources, rootTitleText } = await assistantRequestBackground(s, source, sessionId, task.delivered[scope]);
       // Read only the directly quoted original through the room's authorized endpoint. Never
       // take media IDs from the quote snapshot, scan history or follow another quote from it.
       const quote = readBotGroupQuote(source.content);
@@ -3174,13 +3179,17 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       }
       const words = bodyText(source).trim();
       const message = formatGroupRequest({ words, heading, background });
+      const excerpt = quotedMessage ? botGroupQuoteExcerpt(markdownPreviewText(quotedText(quotedMessage))) : quote?.excerpt;
+      const note = quote && excerpt ? t('bots.groupChat.assistant.replyingTo')
+        .replace(/{{name}}|{{text}}/g, token => token === '{{name}}' ? quote.authorName : excerpt) : undefined;
+      const visible = formatGroupRequest({ words, note, heading, background: visibleBackground });
       // Only the owner's own message speaks for the owner; a teammate that named Cindy in its reply is labeled as itself.
       const ownWords = source.origin === 'user' && source.author?.kind === 'human' && source.authorId === selfId && !source.maskAttribution;
       const speaker = s.members.find(m => m.id === source.authorId);
-      const dispatched = await deps.dispatch({ groupAssistantTask: true, targetSessionId: sessionId, clientId: run.clientId, message, persistedContent: message,
+      const dispatched = await deps.dispatch({ groupAssistantTask: true, targetSessionId: sessionId, clientId: run.clientId, message, persistedContent: visible,
         // The requester's own words are the request this turn speaks for; the group's messages are background.
         ...(ownWords ? { autoReviewUserText: { kind: 'agent-request' as const, request: { sessionId, clientId: run.clientId, plainBody: true, delegatedText: words } } } : {}),
-        origin: { kind: 'session', senderSessionId: '', displayText: message,
+        origin: { kind: 'session', senderSessionId: '', displayText: visible,
           groupRequest: { groupId: s.room.id, groupName: s.room.name, speakerId: source.authorId,
             speakerName: speaker ? memberName(speaker, s.members) : source.author.name } },
         ...(attachments.length ? { attachments } : {}),
