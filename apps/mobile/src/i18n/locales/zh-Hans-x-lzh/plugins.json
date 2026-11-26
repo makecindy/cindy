@@ -143,6 +143,7 @@
       "loading": "方读法器…",
       "loadFailed": "法器之资未能读，请再试。",
       "retired": "此功能已退，请于机上察替代之法器。",
+      "replaced": "彼机之法器已易为他番所纳，非此录所载者。可于「已纳」中复启之。",
       "approvalRequired": "安装之录须复原，请于机上法器详情中理之。",
       "builtinRecovery": "内置法器须复原，请重启机上之 Cindy。",
       "disabled": "启此法器即可用之。",
@@ -337,6 +338,7 @@
     "title": {
       "offline": "机已离线",
       "loadFailed": "法器加载未成",
+      "replaced": "此法器已易",
       "retired": "此功已停",
       "approvalRequired": "安装须复原",
       "builtinRecovery": "内置法器须复原",

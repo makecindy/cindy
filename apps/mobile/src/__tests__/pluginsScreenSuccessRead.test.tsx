@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { fixture, root, element, row, openDetail, transportSend, marketWire, type MarketWireRequest, marketItem, demoConsent, demoGhost, approveOnPhone, marketPage, settle, openMarket, shownMarket, hostError, attributed, managementSnapshot } from "./pluginsScreenHarness";
+import { fixture, root, element, row, openDetail, transportSend, marketWire, type MarketWireRequest, marketItem, demoConsent, demoGhost, approveOnPhone, marketPage, settle, openMarket, shownMarket, hostError, attributed, managementSnapshot, INSTALLED_REVISION } from "./pluginsScreenHarness";
 import { pluginApprovalToken } from "@/plugins/pluginManagementTypes";
 import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
@@ -900,7 +900,7 @@ describe("market read fences and lost-receipt facts", () => {
         wire(world);
         await installUnread(world);
         const installed = { key: JSON.stringify(["mac", "plugins", "plugin", "_root__demo"]), host: { deviceId: "mac", deviceName: "Mac" },
-          item: { ref: { collectionId: "plugins", kind: "plugin", id: "_root__demo" }, revision: "1", display: { title: "Demo" }, actions: [{ id: "disable", label: "Enabled" }] } };
+          item: { ref: { collectionId: "plugins", kind: "plugin", id: "_root__demo" }, revision: INSTALLED_REVISION, display: { title: "Demo" }, actions: [{ id: "disable", label: "Enabled" }] } };
         fixture.read.mockImplementation(async (_invoke: any, _host: any, ref: any) => ({ ...installed.item, ref, blocks: [] }));
         fixture.extraRows = [installed];
         fixture.platform = "ios";
@@ -1156,7 +1156,7 @@ describe("market read fences and lost-receipt facts", () => {
           wire(world);
           await installUnread(world);
           const installed = { key: JSON.stringify(["mac", "plugins", "plugin", "_root__demo"]), host: { deviceId: "mac", deviceName: "Mac" },
-            item: { ref: { collectionId: "plugins", kind: "plugin", id: "_root__demo" }, revision: "1", display: { title: "Demo" }, actions: [{ id: "disable", label: "Enabled" }] } };
+            item: { ref: { collectionId: "plugins", kind: "plugin", id: "_root__demo" }, revision: INSTALLED_REVISION, display: { title: "Demo" }, actions: [{ id: "disable", label: "Enabled" }] } };
           fixture.read.mockImplementation(async (_invoke: any, _host: any, ref: any) => ({ ...installed.item, ref, blocks: [] }));
           fixture.extraRows = [installed];
           fixture.platform = "ios";
@@ -1239,53 +1239,71 @@ describe("market read fences and lost-receipt facts", () => {
           .toEqual({ record: [{ readback: "unconfirmed", told: false }], offered: false, says: true, opened: [], resultReads: 1 });
         expect(writes(requests)).toEqual(ONCE);
       });
-      // Maintainer review 14:25 #1: "Open plugin" checks the install identity the installed list gives now (the row's
-      // approval token) against the one the proving read saw. Replaced under the same key before any notification
-      // reached the record: the press opens nothing, the record reads it again, and its late reply moves no page.
-      it("proven, the list is open; the installed list already shows another install under the same key: pressing \"Open plugin\" opens nothing, and the record reads it again", async () => {
+      /* 测试价值（维护者 15:22 复审第 1 条；调度要求先复盘、按不变式写）
+       * - 不变式：从记录打开的已装详情，只有「实际要展示的那次详情回包」的批准令牌等于记录证实时记下的令牌才展示、才记为
+       *   看过；否则不展示（详情区写「这个插件已更换」）、不记看过、记录用原操作号重读。与通知到没到、页面重没重绘、已装
+       *   列表缓存新旧无关。用户自己从已安装列表打开的详情照常展示当前实例，但同样不会把身份不符的记录记为看过。
+       * - 入口 × 换装时机：记录面板「打开插件」（证实后、点击前换装且通知没到；点击后、回包前换装）；从已安装列表打开
+       *   （证实后换装）。证实前就换装的见上面的通知用例与「proven … replaced; opened again」。对照：没换装照常打开。
+       * - 最小失败输入：前两条在 af50d3d92d 上失败（详情展示了替换包，记录记为看过）。tier: unit（jsdom，内存 Host）。
+       */
+      const B_REVISION = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+      /** The computer now has another install under the same key (its approval revision is new), as its replies say. */
+      function replaceOnComputer(world: World) {
+        world.reply = (snapshot: any) => ({ ...snapshot,
+          ghosts: snapshot.ghosts.map((ghost: any) => ghost.instanceKey === "_root__demo" ? { ...ghost, approval: { state: "approved", revision: B_REVISION } } : ghost),
+          market: { ...snapshot.market, items: snapshot.market.items.map(({ installedOperationId: _id, ...entry }: any) => ({ ...entry, installedOperationAttribution: "unattributed" })) } });
+        fixture.read.mockImplementation(async (_invoke: any, _host: any, ref: any) => ({ ...row().item, ref, revision: JSON.stringify(["1", `approved:${B_REVISION}`]), blocks: [] }));
+      }
+      const detailStatus = () => fixture.props.get("detail")?.model?.status;
+      it("proven, the list is open; replaced under the same key and no notification came: \"Open plugin\" shows nothing of the other install, does not count as seen, and the record reads it again", async () => {
         const world = fresh();
         const requests = wire(world);
         await provenWhileAway(world);
-        world.reply = (snapshot: any) => ({ ...snapshot, market: { ...snapshot.market,
-          items: snapshot.market.items.map(({ installedOperationId: _id, ...entry }: any) => ({ ...entry, installedOperationAttribution: "unattributed" })) } });
-        fixture.extraRows = [{ key: "mac:_root__demo", host: { deviceId: "mac", deviceName: "Mac" },
-          item: { ref: { collectionId: "plugins", kind: "plugin", id: "_root__demo" }, revision: JSON.stringify(["2", "approved:aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"]), display: { title: "Demo" }, actions: [] } }];
-        await rerender();
+        replaceOnComputer(world);                                   // the installed list still shows the proven install
         const reads = lightReads(requests);
         await click("plugins.checks.open");
         await settle(30);
-        expect({ opened: openedIds(), sheet: byId("plugins.checks") !== null, record: told(), reread: lightReads(requests) - reads })
-          .toEqual({ opened: [], sheet: true, record: [{ readback: "unconfirmed", told: false }], reread: 1 });
+        expect({ status: detailStatus(), record: told(), reread: lightReads(requests) - reads, banner: banner() })
+          .toEqual({ status: "replaced", record: [{ readback: "unconfirmed", told: false }], reread: 1, banner: expect.stringContaining("plugins.checks.settledOne") });
         expect(writes(requests)).toEqual(ONCE);
       });
-      // Pre-push review (2026-11-26): the installed list is older than the proving read (a row restored from cache, or its
-      // refresh not back yet). The first press reads again; that read proves the same install, so the next press opens
-      // (before: never, each press only read again). Minimal failing input on 8553b48754: this test.
-      it("proven, the list is open; the installed list row is older than the proving read: the first press reads again, the read proves the same install, the next press opens", async () => {
-        const world = fresh();
-        const requests = wire(world);
-        await provenWhileAway(world);
-        fixture.extraRows = [{ key: "mac:_root__demo", host: { deviceId: "mac", deviceName: "Mac" },
-          item: { ref: { collectionId: "plugins", kind: "plugin", id: "_root__demo" }, revision: JSON.stringify(["1", "approved:aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"]), display: { title: "Demo" }, actions: [] } }];
-        await rerender();
-        const reads = lightReads(requests);
-        await click("plugins.checks.open");
-        await settle(30);
-        expect({ opened: openedDemo(), reread: lightReads(requests) - reads, record: told() })
-          .toEqual({ opened: false, reread: 1, record: [{ readback: "verified", told: false }] });
-        await click("plugins.checks.open");
-        expect({ opened: openedDemo(), reread: lightReads(requests) - reads }).toEqual({ opened: true, reread: 1 });
-      });
-      // Control: the same row with the token the proving read saw opens at once (passes before and after the change).
-      it("control: the installed list shows the same install: \"Open plugin\" opens it", async () => {
+      it("proven, the list is open; \"Open plugin\" is pressed and the plugin is replaced before the detail's reply: nothing of the other install is shown or counted as seen", async () => {
         const world = fresh();
         wire(world);
         await provenWhileAway(world);
-        fixture.extraRows = [{ key: "mac:_root__demo", host: { deviceId: "mac", deviceName: "Mac" },
-          item: { ref: { collectionId: "plugins", kind: "plugin", id: "_root__demo" }, revision: JSON.stringify([demoGhost.manifest.version, pluginApprovalToken(demoGhost as any)]), display: { title: "Demo" }, actions: [] } }];
-        await rerender();
+        const hold = holds();
+        fixture.read.mockImplementation(async (_invoke: any, _host: any, ref: any) => { await hold.wait("detail"); return { ...row().item, ref, revision: JSON.stringify(["1", `approved:${B_REVISION}`]), blocks: [] }; });
         await click("plugins.checks.open");
-        expect(openedDemo()).toBe(true);
+        expect(detailStatus()).toBe("loading");
+        replaceOnComputer(world);
+        fixture.read.mockImplementation(async (_invoke: any, _host: any, ref: any) => ({ ...row().item, ref, revision: JSON.stringify(["1", `approved:${B_REVISION}`]), blocks: [] }));
+        hold.release("detail");
+        await settle(30);
+        expect({ status: detailStatus(), record: told() }).toEqual({ status: "replaced", record: [{ readback: "unconfirmed", told: false }] });
+      });
+      it("proven; replaced under the same key; the person opens that plugin from the installed list: its current install is shown, and the record is not counted as seen", async () => {
+        const world = fresh();
+        wire(world);
+        await provenWhileAway(world, false);
+        replaceOnComputer(world);
+        fixture.extraRows = [{ key: JSON.stringify(["mac", "plugins", "plugin", "_root__demo"]), host: { deviceId: "mac", deviceName: "Mac" },
+          item: { ref: { collectionId: "plugins", kind: "plugin", id: "_root__demo" }, revision: JSON.stringify(["1", `approved:${B_REVISION}`]), display: { title: "Demo" }, actions: [{ id: "disable", label: "Enabled" }] } }];
+        // The installed list's details control for that instance (the iOS directory hands the row to `onDetail`).
+        fixture.platform = "ios";
+        await rerender();
+        await act(async () => fixture.props.get("directory").onDetail(fixture.extraRows[0]));
+        await settle(20);
+        expect({ shown: detailStatus() !== "replaced" && detailStatus() !== "loading", record: told() })
+          .toEqual({ shown: true, record: [{ readback: "verified", told: false }] });
+      });
+      it("control: proven and not replaced: \"Open plugin\" shows the detail and counts the record as seen", async () => {
+        const world = fresh();
+        wire(world);
+        await provenWhileAway(world);
+        await click("plugins.checks.open");
+        await settle(20);
+        expect({ opened: openedDemo(), status: detailStatus() === "replaced", record: told() }).toEqual({ opened: true, status: false, record: [{ readback: "verified", told: true }] });
       });
       it("proven, the list opened and closed without a look at the line being possible (its read was still out); the plugin is replaced; opened again: read as it opens, no \"Open plugin\", the sentence says why", async () => {
         const world = fresh();
@@ -1820,7 +1838,7 @@ describe("market read fences and lost-receipt facts", () => {
           cancels: writes(requests).filter((write) => write.startsWith("cancel")).length }).toEqual({ checks: 0, results: ["cancelled"], cancels: 1 });
       });
       const installedRow = () => ({ key: JSON.stringify(["mac", "plugins", "plugin", "_root__demo"]), host: { deviceId: "mac", deviceName: "Mac" },
-        item: { ref: { collectionId: "plugins", kind: "plugin", id: "_root__demo" }, revision: "1", display: { title: "Demo" }, actions: [{ id: "disable", label: "Enabled" }] } });
+        item: { ref: { collectionId: "plugins", kind: "plugin", id: "_root__demo" }, revision: INSTALLED_REVISION, display: { title: "Demo" }, actions: [{ id: "disable", label: "Enabled" }] } });
       it("an install's read is still out; the person opens that plugin's installed detail and flips its switch; the read proves the install while the switch is written; the detail is read again after the write: seen", async () => {
         const hold = holds();
         const world: World = { ...fresh(), hold: (label: string) => label === "installed-1" ? hold.wait(label) : undefined };

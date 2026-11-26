@@ -145,6 +145,7 @@
       "loading": "Chargement du plugin…",
       "loadFailed": "Impossible de charger les détails du plugin. Réessayez.",
       "retired": "Cette fonctionnalité a été retirée. Consultez son remplacement sur l'ordinateur.",
+      "replaced": "Le plugin sur l’ordinateur est maintenant une autre installation, pas celle de cet historique. Vous pouvez le rouvrir depuis Installés.",
       "approvalRequired": "L'installation requiert votre attention. Restaurez-la dans les détails du plugin sur l'ordinateur.",
       "builtinRecovery": "Ce plugin intégré requiert votre attention. Redémarrez Cindy sur l'ordinateur.",
       "disabled": "Activez ce plugin pour l'utiliser.",
@@ -339,6 +340,7 @@
     "title": {
       "offline": "Ordinateur hors ligne",
       "loadFailed": "Impossible de charger le plugin",
+      "replaced": "Ce plugin a été remplacé",
       "retired": "Fonctionnalité retirée",
       "approvalRequired": "L'installation requiert votre attention",
       "builtinRecovery": "Le plugin intégré requiert votre attention",

@@ -10,6 +10,8 @@ export type PluginDetailStatus =
   | "offline"
   | "loading"
   | "loadFailed"
+  /** Opened from an operation's record, and the computer has another install under that key now (nothing of it shown). */
+  | "replaced"
   | "retired"
   | "approvalRequired"
   | "disabled"
@@ -51,7 +53,7 @@ export function pluginDetailModel(
   resource: RemoteResource | undefined,
   online: boolean,
   loading: boolean,
-  loadFailed: boolean,
+  loadFailed: boolean | "replaced",
 ): PluginDetailModel {
   const capabilities = resource?.blocks?.find(
     (block) => block.id === "capabilities",
@@ -78,7 +80,9 @@ export function pluginDetailModel(
   const taskPreferences = capabilities?.tasks === true;
   const status: PluginDetailStatus | undefined = !online
     ? "offline"
-    : loadFailed
+    : loadFailed === "replaced"
+      ? "replaced"
+      : loadFailed
       ? "loadFailed"
       : loading
         ? "loading"

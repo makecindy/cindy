@@ -143,6 +143,7 @@
       "loading": "正在读取插件…",
       "loadFailed": "插件信息未能读取，请重试。",
       "retired": "此功能已下线，请在电脑上查看替代插件。",
+      "replaced": "电脑上这个插件已经换成另一次安装，不是这条记录对应的那一个。可以在「已安装」里重新打开。",
       "approvalRequired": "安装记录需要恢复，请在电脑上的插件详情中处理。",
       "builtinRecovery": "内置插件需要恢复，请重启电脑上的 Cindy。",
       "disabled": "启用插件后即可使用。",
@@ -337,6 +338,7 @@
     "title": {
       "offline": "电脑已离线",
       "loadFailed": "插件加载失败",
+      "replaced": "这个插件已更换",
       "retired": "功能已停用",
       "approvalRequired": "安装需要处理",
       "builtinRecovery": "内置插件需要恢复",

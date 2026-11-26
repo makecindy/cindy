@@ -143,6 +143,7 @@
       "loading": "Loading plugin…",
       "loadFailed": "Plugin details could not be loaded. Try again.",
       "retired": "This feature has been retired. See its replacement on the computer.",
+      "replaced": "The plugin on the computer is now another installation, not the one this record is about. You can open it again from Installed.",
       "approvalRequired": "The installation needs attention. Restore it in plugin details on the computer.",
       "builtinRecovery": "This built-in plugin needs attention. Restart Cindy on the computer.",
       "disabled": "Enable this plugin to use it.",
@@ -337,6 +338,7 @@
     "title": {
       "offline": "Computer offline",
       "loadFailed": "Could not load plugin",
+      "replaced": "This plugin was replaced",
       "retired": "Feature retired",
       "approvalRequired": "Installation needs attention",
       "builtinRecovery": "Built-in plugin needs attention",

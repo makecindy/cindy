@@ -16,8 +16,9 @@ import { CONTRACT_OFFICIAL_SAMPLE_TEXT, CONTRACT_OFFICIAL_SAMPLES, CONTRACT_SAMP
 import { declaredPluginConsent, declaredTaskCardConsent, pluginConsentAllowance } from '@/plugins/pluginConsentAllowance';
 import { isBoundedPluginResponse, parsePluginManagementDetail, parsePluginManagementReceipt,
   parsePluginManagementSnapshot, marketItemMatchesPlugin, pluginNeedsUiApproval, type ManagedPlugin,
-  parsePluginUiConsent, samePluginMarketSourceIdentity, isPluginMarketSourceIdentity, type ManagedMarketDetail, type PluginManagementReceipt, type PluginManagementSnapshot } from '@/plugins/pluginManagementTypes';
+  parsePluginUiConsent, pluginApprovalToken, samePluginMarketSourceIdentity, isPluginMarketSourceIdentity, type ManagedMarketDetail, type PluginManagementReceipt, type PluginManagementSnapshot } from '@/plugins/pluginManagementTypes';
 import { createPluginManagementSlot, pluginManagementSlotFor, pluginOperationHold } from '@/plugins/pluginManagementSlot';
+import { pluginConclusionShownBy } from '@/plugins/usePluginManagement';
 import { parsePluginMarketPage, pluginMarketFacts, pluginMarketIconUri, pluginMarketShowsCommunityNotice, pluginMarketSourceUnverified,
   pluginMarketSubtitle } from '@/plugins/pluginMarketCatalog';
 import { readdirSync, readFileSync } from 'node:fs';
@@ -990,6 +991,16 @@ describe('interactive page capability approval', () => {
     expect(h.requests.filter((r) => r.actionId === 'management:answer')).toHaveLength(1);
     expect(h.requests.filter((r) => r.actionId === 'management:begin')).toHaveLength(1);
     expect(c.getState().outcome).toBe('succeeded');
+  });
+  // Maintainer review 15:22 #2: the page approval's record keeps the install it was started for. Tier: unit (in-memory Host).
+  it('a page approval keeps the approval token of the install it was started for', async () => {
+    const h = host((r) => r.actionId === 'management:begin' ? uiConfirmation() : receipt('succeeded'));
+    h.setFacts({ ...snapshot(), uiCapabilityApproval: true });
+    const c = controller(h.client); await c.refresh();
+    const slot = createPluginManagementSlot();
+    const token = slot.tryAcquire('page-approval', { ...SLOT_WHO, instanceKey: '_root__demo' })!;
+    await c.approveUi(plugin, pluginOperationHold(slot, token)); await c.answer(true);
+    expect({ outcome: c.getState().outcome, target: c.finishedOperation()?.target }).toEqual({ outcome: 'succeeded', target: pluginApprovalToken(plugin) });
   });
   it.each(['revision', 'owner', 'disconnect'] as const)('does not send a stale UI confirmation after %s changes', async (change) => {
     const h = host(() => uiConfirmation());
@@ -2014,6 +2025,23 @@ describe('whether a finished operation opens an instance', () => {
     expect(pluginOperationOpens(finished('page-approval', '_root__demo'), { ghosts: [approved] })).toEqual({ open: true, instanceKey: '_root__demo' });
     expect(pluginOperationOpens(finished('page-approval', '_root__demo'), { ghosts: [plugin] })).toEqual({ open: false, reason: 'unconfirmed' });
     expect(pluginOperationOpens(finished('page-approval', 'demo-copy'), { ghosts: [approved] })).toEqual({ open: false, reason: 'gone' });
+  });
+  // Maintainer review 15:22 #2: a page approval keeps the install it was started for (that instance's approval token;
+  // approving pages keeps it, Host `approveUiCapability`). Another install under the same key, its pages approved too,
+  // is not this approval's result. Minimal failing input on af50d3d92d: the replaced, approved instance. Tier: unit.
+  it('page approval: another install under the same key, its pages approved too, is not this approval', () => {
+    const target = pluginApprovalToken(plugin);
+    const approvedA = { ...plugin, uiCapabilityApproved: true as const };
+    const approvedB = { ...approvedA, approval: { state: 'approved' as const, revision: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb' } };
+    const approval = { ...finished('page-approval', '_root__demo'), target };
+    expect(pluginOperationOpens(approval, { ghosts: [approvedA] })).toEqual({ open: true, instanceKey: '_root__demo' });
+    expect(pluginOperationOpens(approval, { ghosts: [approvedB] })).toEqual({ open: false, reason: 'unconfirmed' });
+    // And a record proven for A is never shown by a detail of B (the one rule for showing and for "seen").
+    const proven = { operationId: 'operation-1', entry: 'page-approval' as const, who: { name: 'Demo', deviceId: 'host-1', deviceName: 'Host', instanceKey: '_root__demo' },
+      result: 'succeeded' as const, readback: 'verified' as const, instanceKey: '_root__demo', approvalToken: target };
+    expect(pluginConclusionShownBy(proven, { deviceId: 'host-1', instanceKey: '_root__demo', approvalToken: target })).toBe(true);
+    expect(pluginConclusionShownBy(proven, { deviceId: 'host-1', instanceKey: '_root__demo', approvalToken: pluginApprovalToken(approvedB) })).toBe(false);
+    expect(pluginConclusionShownBy(proven, { deviceId: 'host-1', instanceKey: '_root__demo' })).toBe(false);
   });
   it.each(['uninstall', 'enable', 'task-settings'] as const)('%s never opens one', (entry) => {
     expect(pluginOperationOpens(finished(entry, '_root__demo'), { ghosts: [updated] })).toMatchObject({ open: false });

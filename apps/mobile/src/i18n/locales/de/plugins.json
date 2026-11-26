@@ -143,6 +143,7 @@
       "loading": "Plugin wird geladen…",
       "loadFailed": "Plugin-Details konnten nicht geladen werden. Versuche es erneut.",
       "retired": "Diese Funktion wurde eingestellt. Den Ersatz findest du auf dem Computer.",
+      "replaced": "Das Plugin auf dem Computer ist jetzt eine andere Installation, nicht die dieses Eintrags. Du kannst es unter „Installiert“ erneut öffnen.",
       "approvalRequired": "Die Installation muss repariert werden. Stelle sie in den Plugin-Details auf dem Computer wieder her.",
       "builtinRecovery": "Dieses integrierte Plugin benötigt Aufmerksamkeit. Starte Cindy auf dem Computer neu.",
       "disabled": "Aktiviere dieses Plugin, um es zu verwenden.",
@@ -337,6 +338,7 @@
     "title": {
       "offline": "Computer offline",
       "loadFailed": "Plugin konnte nicht geladen werden",
+      "replaced": "Dieses Plugin wurde ersetzt",
       "retired": "Funktion eingestellt",
       "approvalRequired": "Installation erfordert Aufmerksamkeit",
       "builtinRecovery": "Integriertes Plugin erfordert Aufmerksamkeit",

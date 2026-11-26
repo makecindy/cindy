@@ -362,6 +362,23 @@ export function retryPluginCheckReadback(operationId: string): Promise<PluginChe
   // nothing (that newer read's caller acts on it).
   return readBack(operationId).then((settled) => settled ? conclusions.find((item) => item.operationId === operationId) : undefined);
 }
+/**
+ * The install an installed detail shows: its computer, instance and approval token (the token from the detail reply's
+ * revision `[version, approval token]`, the same projection as the installed list; `installedApprovalToken`).
+ */
+export interface PluginDetailIdentity { deviceId: string; instanceKey: string; approvalToken?: string }
+/**
+ * The one rule for showing a detail from a record and for counting a record as seen on a detail (maintainer review 15:22
+ * #1, #2): the detail reply that is about to be shown is the install this record proved. Same computer, same instance,
+ * and the approval token in that reply equals the token the proving read saw (each install mints a new one; approving
+ * pages keeps it). Checked on the reply itself, after it came back and before it is shown, so whether a change
+ * notification has arrived, the page has rendered again or the installed list is current does not matter.
+ */
+export function pluginConclusionShownBy(conclusion: PluginCheckConclusion, shown: PluginDetailIdentity): boolean {
+  return conclusion.readback === "verified" && (conclusion.result === "succeeded" || conclusion.result === "installed")
+    && conclusion.entry !== "uninstall" && conclusion.who.deviceId === shown.deviceId && conclusion.instanceKey === shown.instanceKey
+    && conclusion.approvalToken !== undefined && conclusion.approvalToken === shown.approvalToken;
+}
 /** The newest conclusion of an operation (a view's props can be a render behind). */
 export function pluginCheckConclusion(operationId: string): PluginCheckConclusion | undefined {
   return conclusions.find((item) => item.operationId === operationId);

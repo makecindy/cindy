@@ -233,12 +233,14 @@ vi.mock("@/device-link/useDeviceManagement", () => ({
     refresh: () => fixture.devicesRefresh(),
   }),
 }));
+/** The revision the computer gives an installed row and its detail: `[version, approval token]` (desktop mobilePageService). */
+export const INSTALLED_REVISION = JSON.stringify(["1", "approved:12345678-1234-4123-8123-123456789abc"]);
 export const row = () => ({
   key: "mac:plugin",
   host: { deviceId: "mac", deviceName: "Mac" },
   item: {
     ref: { collectionId: "plugins", kind: "plugin", id: "demo" },
-    revision: "1",
+    revision: INSTALLED_REVISION,
     display: { title: "Demo" },
     actions: [{ id: fixture.enabled ? "disable" : "enable", label: "Enabled" }],
   },
@@ -376,6 +378,8 @@ beforeEach(() => {
     .mockImplementation(async (_invoke, _device, _plugin, action) => {
       fixture.enabled = action === "enable";
     });
+  // As the computer's installed detail answers: the row with its revision `[version, approval token]` (desktop
+  // mobilePageService); the token is the one of every installed instance in these fixtures.
   fixture.read.mockReset().mockImplementation(async () => ({
     ...row().item,
     blocks: fixture.blocks,

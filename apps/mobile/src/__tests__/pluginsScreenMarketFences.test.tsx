@@ -1512,6 +1512,29 @@ describe("market read fences and lost-receipt facts", () => {
         expect({ results: results(), banner: banner(), prompts: prompts() })
           .toEqual({ results: [{ entry: "update", result: "succeeded", readback: "verified", told: true }], banner: "", prompts: [] });
       });
+      // Maintainer review 15:22 #2: a page approval of install A, proven; the plugin is then replaced under the same key by
+      // install B whose pages are approved too, and the computer says its plugins changed. The record reads it again:
+      // before, that read took B as this approval's result (same key, pages approved) and recorded B's token. Now only
+      // A's past success stays, without "Open plugin". Minimal failing input on af50d3d92d: this test.
+      it("page approval of one install, proven; replaced under the same key by another install with its pages approved too: only the past success stays, no \"Open plugin\"", async () => {
+        const world = host({ ui: true });
+        await open(390);
+        // The detail's own read after the result fails, so the result is not seen there: it stays listed, proven.
+        fixture.read.mockImplementation(async () => { throw new Error("[TIMEOUT] remote invoke timed out"); });
+        await act(async () => { fixture.props.get("detail").uiApprovalNotice.actions[0].onPress(); });
+        await settle(30);
+        expect(results()).toEqual([{ entry: "page-approval", result: "succeeded", readback: "verified", told: false }]);
+        world.plugin.approval = { state: "approved", revision: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb" };   // B, pages approved
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+        try {
+          await act(async () => { fixture.resourceListeners.forEach((listener) => listener("mac", { collectionId: "plugins" })); });
+          await act(async () => { await vi.advanceTimersByTimeAsync(600); });
+        } finally { vi.useRealTimers(); }
+        await settle(30);
+        expect(results()).toEqual([{ entry: "page-approval", result: "succeeded", readback: "unconfirmed", told: false }]);
+        await click("plugins.slotHolder.show");
+        expect(byId("plugins.checks.open")).toBeNull();
+      });
       it("page approval; the reads after it time out; the computer comes back: approved on screen and nothing stays listed", async () => {
         const world = host({ ui: true });
         world.hold = timesOut;

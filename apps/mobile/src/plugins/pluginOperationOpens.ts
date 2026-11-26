@@ -1,4 +1,4 @@
-import { marketItemMatchesPlugin, type ManagedMarketItem, type ManagedPlugin } from "./pluginManagementTypes";
+import { marketItemMatchesPlugin, pluginApprovalToken, type ManagedMarketItem, type ManagedPlugin } from "./pluginManagementTypes";
 import { pluginInstallEvidence } from "./pluginInstallEvidence";
 import type { PluginSlotEntry, PluginSlotHolder } from "./pluginManagementSlot";
 
@@ -10,6 +10,11 @@ export interface FinishedPluginOperation {
   who: Pick<PluginSlotHolder, "instanceKey">;
   /** Install and update: the market release it was for (its version is the target). */
   detail?: Pick<ManagedMarketItem, "pluginId" | "ghostId" | "namespace" | "releaseId" | "version">;
+  /**
+   * Page approval: the install it was started for (that instance's approval token then). Approving pages keeps the
+   * install's approval revision (Host `approveUiCapability`), so another install under the same key is not it.
+   */
+  target?: string;
 }
 
 /**
@@ -58,6 +63,8 @@ export function pluginOperationOpens(operation: FinishedPluginOperation, facts: 
   if (operation.entry === "page-approval") {
     const instance = facts.ghosts.find((ghost) => ghost.instanceKey === operation.who.instanceKey);
     if (!instance) return { open: false, reason: "gone" };
+    // Replaced under the same key since (maintainer review 15:22 #2): the success stays a past result of the other one.
+    if (operation.target !== undefined && pluginApprovalToken(instance) !== operation.target) return { open: false, reason: "unconfirmed" };
     return instance.uiCapabilityApproved === true ? { open: true, instanceKey: instance.instanceKey } : { open: false, reason: "unconfirmed" };
   }
   const item = operation.detail;

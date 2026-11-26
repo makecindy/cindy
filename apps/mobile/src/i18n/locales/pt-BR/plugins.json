@@ -145,6 +145,7 @@
       "loading": "Carregando plugin…",
       "loadFailed": "Não foi possível carregar os detalhes do plugin. Tente novamente.",
       "retired": "Este recurso foi descontinuado. Veja seu substituto no computador.",
+      "replaced": "O plugin no computador agora é outra instalação, não a deste registro. Você pode abri-lo de novo em Instalados.",
       "approvalRequired": "A instalação precisa de atenção. Restaure-a nos detalhes do plugin no computador.",
       "builtinRecovery": "Este plugin integrado precisa de atenção. Reinicie Cindy no computador.",
       "disabled": "Ative este plugin para usá-lo.",
@@ -339,6 +340,7 @@
     "title": {
       "offline": "Computador offline",
       "loadFailed": "Não foi possível carregar o plugin",
+      "replaced": "Este plugin foi substituído",
       "retired": "Recurso descontinuado",
       "approvalRequired": "A instalação precisa de atenção",
       "builtinRecovery": "O plugin integrado precisa de atenção",

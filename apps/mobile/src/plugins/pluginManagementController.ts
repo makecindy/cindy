@@ -133,6 +133,8 @@ export function createPluginManagementController(client: PluginManagementClient,
    * (see `pendingCheck`) is listed by them after the slot went.
    */
   let opEntry: PluginSlotEntry | undefined, opWho: PluginSlotHolder | undefined;
+  /** A page approval's target install (its approval token when it was started; maintainer review 15:22 #2). */
+  let opTarget: string | undefined;
   /**
    * The hold released while the operation waits for the person to check it (maintainer review 18:45; see `waitsForCheck`):
    * other plugins on the computer may start meanwhile. Before this operation writes again, or once it moves on by
@@ -518,6 +520,7 @@ export function createPluginManagementController(client: PluginManagementClient,
     receiver = installed && 'manifest' in installed ? installed : undefined;
     uiConsentOperation = intent.kind === 'approve-ui' || intent.kind === 'defer-ui';
     installDetail = intent.kind === 'install' ? intent.detail : undefined;
+    opTarget = intent.kind === 'approve-ui' ? ('manifest' in intent.installed ? pluginApprovalToken(intent.installed) : intent.installed.approvalToken) : undefined;
     try {
       let request: BeginIntent = intent as BeginIntent;
       if (intent.kind === 'install') {
@@ -803,9 +806,9 @@ export function createPluginManagementController(client: PluginManagementClient,
      * the pending-check list shows, by the entry and plugin it was started for. Null otherwise, or when no entry of the
      * plugins page started it. `waiting`: the result waits for the person to check it (the computer's slot went).
      */
-    pendingCheck(): { operationId: string; entry: PluginSlotEntry; who: PluginSlotHolder; detail?: ManagedMarketDetail; waiting: boolean } | null {
+    pendingCheck(): { operationId: string; entry: PluginSlotEntry; who: PluginSlotHolder; detail?: ManagedMarketDetail; target?: string; waiting: boolean } | null {
       if (disposed || !opEntry || !opWho || !state.operationId || final(state.outcome)) return null;
-      return { operationId: state.operationId, entry: opEntry, who: opWho, detail: installDetail,
+      return { operationId: state.operationId, entry: opEntry, who: opWho, detail: installDetail, ...(opTarget ? { target: opTarget } : {}),
         waiting: !state.busy && writesInFlight === 0 && waitsForCheck() };
     },
     /**
@@ -819,9 +822,9 @@ export function createPluginManagementController(client: PluginManagementClient,
      */
     /** Whether the consent on screen can be allowed here (`pluginConsentAllowance`; null without one). */
     consentAllowance,
-    finishedOperation(): { operationId: string; entry: PluginSlotEntry; who: PluginSlotHolder; detail?: ManagedMarketDetail } | null {
+    finishedOperation(): { operationId: string; entry: PluginSlotEntry; who: PluginSlotHolder; detail?: ManagedMarketDetail; target?: string } | null {
       if (disposed || !opEntry || !opWho || !state.operationId || !final(state.outcome)) return null;
-      return { operationId: state.operationId, entry: opEntry, who: opWho, detail: installDetail };
+      return { operationId: state.operationId, entry: opEntry, who: opWho, detail: installDetail, ...(opTarget ? { target: opTarget } : {}) };
     },
     untrack(): boolean {
       if (disposed || writesInFlight > 0) return false;

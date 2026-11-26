@@ -213,10 +213,12 @@ export function PluginPendingChecksSheet({ visible, lines, conclusions, isOnline
                   </View>
                 ) : over?.open || over?.readAgain || over?.stop ? (
                   <View style={styles.actions}>
+                    {/* The line opened from here is not counted as seen by closing the list: the detail's own reply decides
+                        (`pluginConclusionShownBy`; maintainer review 15:22 #1). */}
                     {over.open ? (
                       <Pressable testID="plugins.checks.open" accessibilityRole="button" disabled={!online}
                         accessibilityState={{ disabled: !online }}
-                        onPress={() => onOpenChecked(over.open!)} style={[styles.button, styles.primary, !online && styles.unavailable]}>
+                        onPress={() => { const operationId = over.open!; settledSeen.current.delete(operationId); onOpenChecked(operationId); }} style={[styles.button, styles.primary, !online && styles.unavailable]}>
                         <Text style={[styles.label, styles.primaryText]}>{t("plugins.checks.open")}</Text>
                       </Pressable>
                     ) : (
