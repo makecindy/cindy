@@ -3972,6 +3972,7 @@ describe('AgentInputCoordinator send transaction', () => {
     h.coordinator.remove(sid, 'q-2');
     await flush();
     projection = latestProjection(h.projections);
+    expect(projection.withdrawnQueueClientIds).toContain('q-2');
     expect(projection.credentialSwitchWait?.clientId).toBe('q-1');
     expect(projection.pendingQueue.map((q) => q.clientId)).toEqual(['q-1']);
 
@@ -3983,6 +3984,7 @@ describe('AgentInputCoordinator send transaction', () => {
     await flush();
     projection = latestProjection(h.projections);
     expect(projection.pendingQueue.map((q) => q.clientId)).toEqual(['q-2', 'q-1']);
+    expect(projection.withdrawnQueueClientIds ?? []).not.toContain('q-2');
     expect(projection.credentialSwitchWait?.clientId).toBe('q-2');
 
     // 删除等待中的 q-2:该轮等待随消息一起取消;drain 随后为 q-1 重建自己的等待。
@@ -10018,6 +10020,7 @@ describe('AgentInputCoordinator steer transaction', () => {
     await flush();
 
     let projection = latestProjection(h.projections);
+    expect(h.coordinator.getProjection(sid).queueSnapshot?.pendingSteerClientIds).toContain(second.clientId);
     expect(projection.error).toBe('agent failed before persist');
     expect(projection.recovery).toBeNull();
     expect(projection.errorRetryText).toBeNull();
