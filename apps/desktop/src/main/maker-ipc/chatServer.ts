@@ -2971,8 +2971,12 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
                 if (body) body.text = t('bots.groupChat.assistant.replyingTo').replace(/{{(name|text)}}/g,
                   (_, field: string) => field === 'name' ? quote.authorName : body.text).slice(0, 16000);
               }
-              pending.autoQuote = buildBotGroupQuoteCard(quote);
-              blocks.unshift(pending.autoQuote);
+              const card = buildBotGroupQuoteCard(quote);
+              // Chat Server limits serialized content (including card fallback) to 64 KiB.
+              if (Buffer.byteLength(JSON.stringify([card, ...blocks])) <= 64 * 1024) {
+                pending.autoQuote = card;
+                blocks.unshift(card);
+              }
             }
           }
         }

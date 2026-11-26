@@ -557,6 +557,19 @@ describe('Chat Server Thread context reaches the Agent input', () => {
     }
   });
 
+  // #13022 / unit: a serialized reply can fit on its own but exceed Chat Server's
+  // 64 KiB content limit with a quote. Check the first completion, before any fallback.
+  it('keeps a deliverable reply within the content limit when its quote would overflow', async () => {
+    trigger(post('问'.repeat(280), { mentions: [bots[0].id] }));
+    await vi.advanceTimersByTimeAsync(2000);
+    const answer = 'output:' + '\u001b'.repeat(10800);
+    await settle('nova', answer);
+    const sent = completed[0].body.content as FakeMessage['content'];
+    expect(Buffer.byteLength(JSON.stringify(sent))).toBeLessThanOrEqual(65536);
+    expect(sent.find(block => block.type === 'text')?.text).toBe(answer);
+    expect(sent.some(block => block.namespace === 'cindy.work-record')).toBe(true);
+  });
+
   // #13022 / unit: two request inputs arrive out of order in the talk plan, interleaved
   // with group history. Assert target and visible addressee at the completion endpoint.
   it('quotes the newest delivered discussion input and names its author in the reply', async () => {
