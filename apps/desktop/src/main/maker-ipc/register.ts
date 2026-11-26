@@ -40,7 +40,6 @@ import { getCindyGhostsMcpDeps } from '../mcp-integrations/ghost.desktop.js';
 import { pluginAppResult } from '../mcp-apps/pluginCards.js';
 import { restorePluginPageSession } from '../mcp-apps/pluginPageCall.js';
 import { getSchedulerIfInitialized, getScheduleStorageIfInitialized, resumeInterruptedScheduleRun } from '../scheduler-host/index.desktop.js';
-import { isSilencedSchedulerTurn } from '../scheduler-host/silent-output.js';
 import { setVoiceTaskDispatch, setVoiceCallMemoryReader } from '../voice-conversation/taskBridge.js';
 import { buildBotMemoryScopeKey, SessionCreationCleanupPendingError } from '@cindy/maker-core';
 import { createOrcaWorkerProjectHandlers } from './orcaWorkerProjectHandlers';
@@ -20524,7 +20523,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     // 插话并入正在运行的 turn,不开启新 turn:排队时登记的「新 turn 接管」回调不再适用,
     // 只释放登记(不运行),否则会给已在跑的 worker 另建一份 running/auto-bridge 身份。
     onSteerAccepted: async (sessionId, item) => {
-      if (!item.autoResume && !isSilencedSchedulerTurn(item.origin)) void touchSessionActivityInDb(sessionId);
+      if (!item.autoResume && item.origin?.kind !== 'scheduler') void touchSessionActivityInDb(sessionId);
       void settleTaskActionInput(item).catch(() => undefined);
       orcaInterAgentDispatcher.discardQueuedOrcaInterAgentAcceptedCallback(item.clientId);
     },
@@ -20572,7 +20571,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       settleQueuedAttachmentPersistenceFailure(sessionId, item.clientId, opts.retainForRetry);
     },
     onDispatchedUserTurn: async (sessionId, item, preVendorDispatchAt): Promise<void> => {
-      if (!item.autoResume && !isSilencedSchedulerTurn(item.origin)) {
+      if (!item.autoResume && item.origin?.kind !== 'scheduler') {
         void touchSessionActivityInDb(sessionId, preVendorDispatchAt);
       }
       void settleTaskActionInput(item).catch(() => undefined);

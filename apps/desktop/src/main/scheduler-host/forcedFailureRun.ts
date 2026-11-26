@@ -1,4 +1,4 @@
-import type { ScheduleRun } from '@cindy/maker-scheduler';
+import type { Logger, Notifier, Schedule, ScheduleRun } from '@cindy/maker-scheduler';
 
 /**
  * 把「卡死守卫强制收口」这件事翻译成一条**终态** run,供通知渠道渲染。
@@ -27,4 +27,43 @@ export function buildForcedFailureRun(input: {
     finishedAt: run?.finishedAt ?? now,
     errorMsg,
   };
+}
+
+/**
+ * 卡死守卫强制收口绕过 runner，但与 finalizeRun 共享「非静默/失败才推进任务时间」的不变量：
+ * 派发阶段不再提前写 userSendAt，因此这里在发失败通知前补记活动时间，确保稍后处理中的任务被唤回。
+ */
+export async function deliverForcedFailureNotification(input: {
+  schedule: Schedule;
+  runId: string;
+  errorMsg: string;
+  run: ScheduleRun | undefined;
+  now: number;
+  notifier: Notifier;
+  touchUserSendInDb?: (sessionId: string, atMs?: number) => Promise<void>;
+  logger?: Logger;
+}): Promise<ScheduleRun> {
+  const forcedRun = buildForcedFailureRun({
+    scheduleId: input.schedule.id,
+    runId: input.runId,
+    errorMsg: input.errorMsg,
+    run: input.run,
+    now: input.now,
+  });
+  const targetSessionId = forcedRun.sessionId ?? input.schedule.targetSessionId;
+  if (targetSessionId && input.touchUserSendInDb) {
+    const activityAt = Math.max(forcedRun.firedAt, forcedRun.finishedAt ?? input.now);
+    try {
+      await input.touchUserSendInDb(targetSessionId, activityAt);
+    } catch (err) {
+      input.logger?.warn?.('[scheduler-host] touchUserSend on forced failure failed', {
+        scheduleId: input.schedule.id,
+        runId: input.runId,
+        sessionId: targetSessionId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+  await input.notifier.notify(input.schedule, forcedRun);
+  return forcedRun;
 }

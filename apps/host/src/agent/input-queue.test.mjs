@@ -8759,7 +8759,25 @@ test('list activity: a silenced scheduler turn leaves last_activity_at unchanged
   session.emit({ type: 'done', data: { result: 'ok' }, turnOrigin: silentOrigin });
   await waitFor(() => !h.queue.isTurnRunning('silent-sch'));
   await new Promise(resolve => setImmediate(resolve));
-  assert.equal(activity('silent-sch'), 1000, 'silenced scheduler turn must not advance last_activity_at');
+  assert.equal(activity('silent-sch'), 1000, 'pre-silenced scheduler turn must not advance last_activity_at');
+
+  // Mid-turn schedule_silence_current_run (not silenced at dispatch) must also keep last_activity_at unchanged.
+  const midSilentOrigin = { kind: 'scheduler', scheduleId: 'sch-1', scheduleName: 'PR #1', runId: 'run-mid-silent' };
+  await sq.enqueuePrompt({
+    sessionId: 'silent-sch',
+    text: 'check-mid',
+    persistedContent: 'check-mid',
+    origin: midSilentOrigin,
+    onAccepted: () => {},
+  });
+  await waitFor(() => session.sent.length === 2);
+  session.emit({ type: 'status', data: { isRunning: true }, turnOrigin: midSilentOrigin });
+  silencedRuns.add('run-mid-silent');
+  session.emit({ type: 'status', data: { isRunning: false }, turnOrigin: midSilentOrigin });
+  session.emit({ type: 'done', data: { result: 'quiet' }, turnOrigin: midSilentOrigin });
+  await waitFor(() => !h.queue.isTurnRunning('silent-sch'));
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(activity('silent-sch'), 1000, 'mid-turn silenced scheduler turn must not advance last_activity_at');
 
   const notifyOrigin = { kind: 'scheduler', scheduleId: 'sch-1', scheduleName: 'PR #1', runId: 'run-notify' };
   await sq.enqueuePrompt({
@@ -8769,10 +8787,11 @@ test('list activity: a silenced scheduler turn leaves last_activity_at unchanged
     origin: notifyOrigin,
     onAccepted: () => {},
   });
-  await waitFor(() => session.sent.length === 2);
-  await waitFor(() => activity('silent-sch') > 1000);
+  await waitFor(() => session.sent.length === 3);
+  session.emit({ type: 'status', data: { isRunning: true }, turnOrigin: notifyOrigin });
   session.emit({ type: 'done', data: { result: 'needs user' }, turnOrigin: notifyOrigin });
   await waitFor(() => !h.queue.isTurnRunning('silent-sch'));
+  await waitFor(() => activity('silent-sch') > 1000);
 
   db.db.prepare('UPDATE sessions SET last_activity_at = 2000, updated_at = 2000 WHERE id = ?').run('silent-sch');
   await sq.enqueuePrompt({
@@ -8782,7 +8801,7 @@ test('list activity: a silenced scheduler turn leaves last_activity_at unchanged
     origin: silentOrigin,
     onAccepted: () => {},
   });
-  await waitFor(() => session.sent.length === 3);
+  await waitFor(() => session.sent.length === 4);
   session.emit({ type: 'status', data: { isRunning: true }, turnOrigin: silentOrigin });
   session.emit({ type: 'error', data: { message: 'boom', isTerminal: true }, turnOrigin: silentOrigin });
   await waitFor(() => activity('silent-sch') > 2000);

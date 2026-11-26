@@ -1,8 +1,8 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
-import type { ScheduleRun } from '@cindy/maker-scheduler';
+import type { Schedule, ScheduleRun } from '@cindy/maker-scheduler';
 
-import { buildForcedFailureRun } from '../forcedFailureRun';
+import { buildForcedFailureRun, deliverForcedFailureNotification } from '../forcedFailureRun';
 
 const BASE = {
   scheduleId: 'schedule-1',
@@ -73,5 +73,83 @@ describe('buildForcedFailureRun', () => {
     });
 
     expect(out.finishedAt).toBe(1_700_000_040_000);
+  });
+});
+
+// 回归: 取消调度派发阶段提前写 userSendAt 后, 卡死守卫强制收口绕过 runner.finalizeRun,
+// 必须在强制失败通知出口同步补记 touchUserSendInDb 以唤回「稍后处理」并推进排序时间。
+describe('deliverForcedFailureNotification', () => {
+  const baseSchedule = (overrides: Partial<Schedule> = {}): Schedule => ({
+    id: BASE.scheduleId,
+    name: 'PR #13016',
+    prompt: 'follow PR',
+    jobType: 'prompt',
+    source: 'user',
+    kind: 'cron',
+    cronExpr: '*/5 * * * *',
+    timezone: 'UTC',
+    recurring: true,
+    manual: false,
+    agentKind: 'codex',
+    workspaceKind: 'project',
+    workingDir: '/repo',
+    useWorktree: false,
+    silentWhenIdle: true,
+    notify: { desktop: true, feishu: false },
+    status: 'active',
+    createdAt: 1_700_000_000_000,
+    updatedAt: 1_700_000_000_000,
+    ...overrides,
+  });
+
+  it('stamps touchUserSendInDb from run.sessionId (or targetSessionId fallback) before notifying', async () => {
+    const touchUserSendInDb = vi.fn(async () => undefined);
+    const notify = vi.fn(async () => undefined);
+
+    await deliverForcedFailureNotification({
+      schedule: baseSchedule({ targetSessionId: 'target-fallback' }),
+      runId: BASE.runId,
+      errorMsg: BASE.errorMsg,
+      run: runRow({ sessionId: 'bound-sess' }),
+      now: BASE.now,
+      notifier: { notify },
+      touchUserSendInDb,
+    });
+    expect(touchUserSendInDb).toHaveBeenCalledWith('bound-sess', BASE.now);
+    expect(notify).toHaveBeenCalledTimes(1);
+
+    touchUserSendInDb.mockClear();
+    notify.mockClear();
+    await deliverForcedFailureNotification({
+      schedule: baseSchedule({ targetSessionId: 'target-fallback' }),
+      runId: BASE.runId,
+      errorMsg: BASE.errorMsg,
+      run: undefined,
+      now: BASE.now,
+      notifier: { notify },
+      touchUserSendInDb,
+    });
+    expect(touchUserSendInDb).toHaveBeenCalledWith('target-fallback', BASE.now);
+    expect(notify).toHaveBeenCalledTimes(1);
+  });
+
+  it('still delivers the forced failure notification if touchUserSendInDb fails', async () => {
+    const touchUserSendInDb = vi.fn(async () => { throw new Error('db busy'); });
+    const notify = vi.fn(async () => undefined);
+    const warn = vi.fn();
+
+    await deliverForcedFailureNotification({
+      schedule: baseSchedule({ targetSessionId: 'target-sess' }),
+      runId: BASE.runId,
+      errorMsg: BASE.errorMsg,
+      run: runRow({ sessionId: 'target-sess' }),
+      now: BASE.now,
+      notifier: { notify },
+      touchUserSendInDb,
+      logger: { info: vi.fn(), warn, error: vi.fn(), debug: vi.fn() },
+    });
+
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(notify).toHaveBeenCalledTimes(1);
   });
 });

@@ -1042,19 +1042,21 @@ describe('MakerScheduleRunner silent-run notification skip', () => {
     expect(notifier.notify).toHaveBeenCalledTimes(1);
   });
 
-  // 回归: silentWhenIdle 调度在静默完成时曾于派发阶段无条件 touchUserSendInDb,
-  // 导致任务在收件箱/侧栏被刷成「刚刚」顶到最前并误解除「稍后处理」;
-  // 仅当本轮主动提醒(schedule_notify_current_run)或失败时才应推进活动时间。
+  // 回归: 静默调度(无论是 silentWhenIdle=true 还是 silentWhenIdle=false 但轮内调用
+  // schedule_silence_current_run)在静默完成时都不应调用 touchUserSendInDb, 避免把任务顶到
+  // 收件箱/侧栏最前并误解除「稍后处理」; 仅当本轮确认非静默(正常提醒 / schedule_notify_current_run / 失败)时才在收尾写入。
   it.each([
-    { name: 'silenced success skips touchUserSendInDb', silenced: true, outcome: 'done' as const, expectTouch: false },
-    { name: 'notified success touches userSendAt on finalize', silenced: false, outcome: 'done' as const, expectTouch: true },
-    { name: 'failed silentWhenIdle run touches userSendAt on finalize', silenced: true, outcome: 'error' as const, expectTouch: true },
-  ])('silentWhenIdle activity timestamp: $name', async ({ silenced, outcome, expectTouch }) => {
+    { name: 'silentWhenIdle=true silenced success skips touchUserSendInDb', silentWhenIdle: true, silenced: true, outcome: 'done' as const, expectTouch: false },
+    { name: 'silentWhenIdle=false mid-turn silenced success skips touchUserSendInDb', silentWhenIdle: false, silenced: true, outcome: 'done' as const, expectTouch: false },
+    { name: 'silentWhenIdle=true notified success touches userSendAt on finalize', silentWhenIdle: true, silenced: false, outcome: 'done' as const, expectTouch: true },
+    { name: 'silentWhenIdle=false normal success touches userSendAt on finalize', silentWhenIdle: false, silenced: false, outcome: 'done' as const, expectTouch: true },
+    { name: 'failed silentWhenIdle run touches userSendAt on finalize', silentWhenIdle: true, silenced: true, outcome: 'error' as const, expectTouch: true },
+  ])('scheduled activity timestamp: $name', async ({ silentWhenIdle, silenced, outcome, expectTouch }) => {
     const h = createSessionHarness(acceptingSend());
     const { runner } = createRunnerHarness(h.session, { silenced });
-    const firePromise = runner.fire(baseSchedule({ silentWhenIdle: true }), createFireContext());
+    const firePromise = runner.fire(baseSchedule({ silentWhenIdle }), createFireContext());
     await vi.waitFor(() => expect(mocks.createMessage).toHaveBeenCalled());
-    // Dispatch must never bump userSendAt / lastActivityAt for a silentWhenIdle run.
+    // Dispatch must never speculatively bump userSendAt / lastActivityAt before silence is settled.
     expect(mocks.touchUserSendInDb).not.toHaveBeenCalled();
 
     if (outcome === 'done') {

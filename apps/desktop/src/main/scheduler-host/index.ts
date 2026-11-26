@@ -18,7 +18,7 @@ import type { TeammateProjectState } from './ownTeammateProject';
 import type { MakerScheduleRunner, SchedulerQueueDeps } from './runner';
 import type { ScriptScheduleRunner } from './script-runner';
 import { setSilencedRunProbe } from './silent-output';
-import { buildForcedFailureRun } from './forcedFailureRun';
+import { deliverForcedFailureNotification } from './forcedFailureRun';
 import { screenScheduleRun } from '../cindy-brain/scheduleControlPointGate.js';
 import { withScheduleLock } from './scheduleLock';
 import { runSchedulerStartup } from './scheduler-startup-lifecycle';
@@ -59,6 +59,8 @@ export interface SchedulerHostRuntime<Deps extends SchedulerHostStartDeps> {
   captureFireContext?: () => () => void;
   /** Existing teammate projects sync directly; deleted ones cannot be recreated by late writes. */
   getTeammateProjectState?(workingDir: string): Promise<TeammateProjectState | null>;
+  /** Advances task activity & wakes snooze on out-of-band stall-guard forced failures. */
+  touchUserSendInDb?: (sessionId: string, atMs?: number) => Promise<void>;
   beforeReset(): Promise<void>;
 }
 
@@ -197,11 +199,17 @@ export function createSchedulerHost<Deps extends SchedulerHostStartDeps>(runtime
         if (!schedule) return;
         const run = (await storage.listRuns(scheduleId, 20)).find((r) => r.id === runId);
         // 读回的行**不一定是终态**(落库失败时它还停在 'running'),判据与理由见
-        // buildForcedFailureRun。
-        await notifier.notify(
+        // buildForcedFailureRun。强制失败绕过 runner，这里同步补记任务活动时间。
+        await deliverForcedFailureNotification({
           schedule,
-          buildForcedFailureRun({ scheduleId, runId, errorMsg, run, now: Date.now() }),
-        );
+          runId,
+          errorMsg,
+          run,
+          now: Date.now(),
+          notifier,
+          touchUserSendInDb: runtime.touchUserSendInDb,
+          logger: deps.logger,
+        });
       },
     });
     const loader = new ProjectAutomationLoader({

@@ -6,7 +6,6 @@ import type { createQueuedAcceptedCallbacks } from '../../../desktop/src/main/ma
 import type { QueuedAttachmentOwnershipRegistry } from '../../../desktop/src/main/maker-ipc/queuedAttachmentOwnership.ts';
 import { prepareQueuedPromptSnapshot, type createSchedulerQueueBridge, type SchedulerQueuedPromptObserver } from '../../../desktop/src/main/maker-ipc/schedulerQueueBridge.ts';
 import { settleTaskActionInput } from '../../../desktop/src/main/maker-ipc/taskActionAuthorization.ts';
-import { isSilencedSchedulerTurn } from '../../../desktop/src/main/scheduler-host/silent-output.ts';
 import type { HostAutoResume } from './auto-resume.ts';
 import { explicitPorts } from './explicit-ports.ts';
 
@@ -245,14 +244,14 @@ export function hostCoordinatorDeps(ctx: HostCoordinatorContext): AgentInputCoor
     // here; the Host has none of them.
     onRejectedUserTurn: ctx.autoResume.onRejectedUserTurn,
     onDispatchedUserTurn: (id, item, preVendorDispatchAt) => {
-      if (!item.autoResume && !isSilencedSchedulerTurn(item.origin)) void deps.touchSessionActivity?.(id, preVendorDispatchAt);
+      if (!item.autoResume && item.origin?.kind !== 'scheduler') void deps.touchSessionActivity?.(id, preVendorDispatchAt);
       void settleTaskActionInput(item).catch(() => undefined);
       const attemptToken = ctx.autoResume.autoResumeAttemptToken(item);
       // The vendor accepted the resume: the held error is dropped, unless a newer attempt owns it.
       if (attemptToken !== null) ctx.autoResume.autoResumeBookkeeping.discardSuppressedError(id, attemptToken);
     },
     onSteerAccepted: (id, item) => {
-      if (!item.autoResume && !isSilencedSchedulerTurn(item.origin)) void deps.touchSessionActivity?.(id);
+      if (!item.autoResume && item.origin?.kind !== 'scheduler') void deps.touchSessionActivity?.(id);
       void settleTaskActionInput(item).catch(() => undefined);
       // The desktop also releases the Orca accepted callback; Orca tasks are refused at Host admission.
     },
