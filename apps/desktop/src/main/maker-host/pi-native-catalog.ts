@@ -224,6 +224,8 @@ export function buildPiNativeProvidersFromConfigs(
         models: Array<{
           id: string;
           name?: string;
+          /** 用户显式命名过该行；缺省（预设名）允许活动目录覆盖。 */
+          nameExplicit?: boolean;
           contextWindow?: number;
           supportsImageInput?: boolean;
           reasoning?: boolean;
