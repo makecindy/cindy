@@ -12,6 +12,7 @@ import { sessions } from '../localDb/schema.js';
 import { isReviewSessionSource } from '../../shared/sessionSource.js';
 import { dbToMakerEngineKind, isPluginEngineKind } from '../../shared/agentKindConversion.js';
 import { assertScheduledHarnessSupported } from '../maker-ipc/scheduledModelSelection';
+import { isDisallowedPluginEngineDeviceId } from '../maker-ipc/pluginEngineSessionAdmission';
 import type { DrizzleScheduleStorage, SchedulerDrizzleDb } from './storage';
 import { ProjectAutomationLoader } from './project-automation-loader';
 import type { TeammateProjectState } from './ownTeammateProject';
@@ -176,7 +177,7 @@ export function createSchedulerHost<Deps extends SchedulerHostStartDeps>(runtime
         if (isReviewSessionSource(row?.source)) {
           throw new Error('Review tasks cannot be targets of scheduled automations');
         }
-        // 绑定普通本机桌面任务允许在内置与插件引擎之间临时切换(scheduledModelScope)，其余形态明确拒绝。
+        // 绑定普通桌面任务允许在内置与插件引擎(含另一台电脑)之间临时切换(scheduledModelScope)，其余形态明确拒绝。
         if (selection.modelAgentKind === 'acp') {
           if (selection.persistentSession) {
             throw new Error('A plugin engine schedule cannot use a persistent session');
@@ -193,16 +194,19 @@ export function createSchedulerHost<Deps extends SchedulerHostStartDeps>(runtime
           if (row?.source && row.source !== 'desktop') {
             throw new Error('This task cannot switch to or from a plugin engine');
           }
-          if (selection.modelAgentDeviceId) {
-            throw new Error('Plugin engines run on the automation host only');
+          if (isDisallowedPluginEngineDeviceId(selection.modelAgentDeviceId)) {
+            throw new Error('This plugin engine location cannot be used for scheduled tasks');
           }
         }
         if (isPluginEngineKind(row?.agentKind)) {
           if (selection.source === 'bot' || row?.source === 'bot') {
             throw new Error('Teammate routines cannot run on a plugin engine yet');
           }
-          if (row?.remoteHostId || row?.agentDeviceId) {
-            throw new Error('The linked plugin engine task must run on this computer');
+          if (row?.remoteHostId) {
+            throw new Error('SSH automation targets must keep their current Harness');
+          }
+          if (isDisallowedPluginEngineDeviceId(row?.agentDeviceId)) {
+            throw new Error('This plugin engine task location cannot be used for scheduled tasks');
           }
           if (selection.modelAgentKind && selection.model?.trim()) {
             if (row?.orcaRole || row?.orcaRemoteLead) {

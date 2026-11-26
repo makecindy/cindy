@@ -353,6 +353,7 @@ export interface RememberedBinding {
   agentKind: ScheduleFormState['agentKind'];
   modelAgentKind?: ScheduleFormState['modelAgentKind'];
   modelAgentDeviceId?: string;
+  pluginEngine?: PluginEngineSelection | null;
   boundAgent?: ScheduleFormState['boundAgent'];
 }
 
@@ -369,6 +370,7 @@ export function captureBinding(form: ScheduleFormState): RememberedBinding | nul
     agentKind: form.agentKind,
     modelAgentKind: form.modelAgentKind,
     modelAgentDeviceId: form.modelAgentDeviceId,
+    pluginEngine: form.pluginEngine ?? null,
     boundAgent: form.boundAgent,
   };
 }
@@ -406,6 +408,7 @@ export function applyRunMode(
           agentKind: remembered.agentKind,
           modelAgentKind: remembered.modelAgentKind,
           modelAgentDeviceId: remembered.modelAgentDeviceId,
+          ...(remembered.pluginEngine !== undefined ? { pluginEngine: remembered.pluginEngine } : {}),
           boundAgent: remembered.boundAgent,
         }
       : f;
@@ -624,6 +627,7 @@ export function scheduleEngineFormFields(
   s: Schedule,
 ): Pick<ScheduleFormState, 'agentKind' | 'modelAgentKind' | 'boundAgent' | 'model' | 'providerId' | 'pluginEngine'> {
   if (s.modelAgentKind === 'acp' || (!s.targetSessionId && s.agentKind === 'acp')) {
+    const deviceId = (s.modelAgentDeviceId ?? (!s.targetSessionId ? s.agentDeviceId : undefined))?.trim() || undefined;
     return {
       agentKind: 'claude-code',
       modelAgentKind: undefined,
@@ -635,6 +639,7 @@ export function scheduleEngineFormFields(
       pluginEngine: {
         providerId: s.providerId ?? '',
         modelId: s.model?.trim() || PLUGIN_ENGINE_DEFAULT_MODEL,
+        ...(deviceId ? { deviceId } : {}),
         ...(isPluginEngineEffort(s.effort) ? { effort: s.effort } : {}),
       },
     };
@@ -788,6 +793,7 @@ export function buildScheduleInput(form: ScheduleFormState): CreateScheduleInput
   if (isHeartbeat) {
     base.useWorktree = false;
     if (form.pluginEngine && !form.persistentSession) {
+      const pluginDeviceId = form.pluginEngine.deviceId?.trim() || '';
       return {
         ...base,
         agentKind: 'acp',
@@ -797,7 +803,8 @@ export function buildScheduleInput(form: ScheduleFormState): CreateScheduleInput
         effort: form.pluginEngine.effort,
         fastMode: false,
         agentDeviceId: undefined,
-        modelAgentDeviceId: undefined,
+        // 绑定任务显式保存插件引擎的位置：'' = 本机(使绑定的远程任务能切回本机)，或远程 deviceId。
+        modelAgentDeviceId: pluginDeviceId,
       };
     }
     // Keep the key when following so an update clears a previously saved Fast override.
@@ -822,7 +829,8 @@ export function buildScheduleInput(form: ScheduleFormState): CreateScheduleInput
   // capability × 模型 supportsFastMode 门控,Pi 只有真支持时才可能为 true。
   if (form.agentKind === 'codex' || form.agentKind === 'pi') base.fastMode = form.fastMode;
   if (form.pluginEngine && !form.persistentSession) {
-    // 插件引擎：每次新建任务、在本机运行；没有 Fast 与运行位置，worktree 与内置引擎相同。
+    // 插件引擎：每次新建任务(本机或另一台电脑)；没有 Fast，worktree 与内置引擎相同。
+    const pluginDeviceId = form.pluginEngine.deviceId?.trim() || undefined;
     return {
       ...base,
       agentKind: 'acp',
@@ -831,8 +839,8 @@ export function buildScheduleInput(form: ScheduleFormState): CreateScheduleInput
       providerId: form.pluginEngine.providerId,
       effort: form.pluginEngine.effort,
       fastMode: false,
-      agentDeviceId: undefined,
-      modelAgentDeviceId: undefined,
+      agentDeviceId: pluginDeviceId,
+      modelAgentDeviceId: pluginDeviceId,
     };
   }
   return base;

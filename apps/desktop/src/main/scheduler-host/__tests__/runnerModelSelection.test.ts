@@ -16,6 +16,7 @@
  *     + backfillSessionMeta 落库；schedule.model 留空才沿用 meta.model，且不触发 setModel。
  */
 import { describe, expect, it, vi, beforeEach } from 'vitest';
+import { providerShareGuestPeer, sharedTaskGuestPeer } from '@cindy/device-link';
 
 vi.mock('electron', () => ({ app: { getPath: () => '/tmp/cindy-scheduler-test' } }));
 vi.mock('electron-store', () => ({ default: class {
@@ -634,6 +635,40 @@ describe('MakerScheduleRunner model selection', () => {
       expect(applyModel).toHaveBeenCalledTimes(1);
     });
 
+    // 2026-11-26: fresh schedules on a remote plugin engine admit against that computer's catalog
+    // and forward agentDeviceId to createSession (both entry and pre-dispatch re-admission).
+    it('starts a fresh remote plugin-engine schedule and passes agentDeviceId to admission and createSession', async () => {
+      const h = createSessionHarness();
+      const admitPluginEngine = vi.fn(async (route: { model: string; effort?: string | null; agentDeviceId?: string | null }) => ({
+        model: route.model,
+        effort: route.effort ?? '',
+      }));
+      const harness = createRunnerHarness(h, null, { admitPluginEngine });
+      const remoteSchedule = {
+        ...pluginSchedule(),
+        agentDeviceId: 'studio',
+        modelAgentDeviceId: 'studio',
+      };
+      await harness.runner.validateModelSelection(remoteSchedule);
+      expect(admitPluginEngine).toHaveBeenCalledWith(expect.objectContaining({
+        providerId: ENGINE,
+        model: 'deepseek-v4',
+        agentDeviceId: 'studio',
+      }));
+      admitPluginEngine.mockClear();
+      const opts = await fireToCompletion(harness, h, remoteSchedule);
+      expect(opts).toMatchObject({
+        agentKind: 'acp',
+        agentDeviceId: 'studio',
+        providerId: ENGINE,
+        model: 'deepseek-v4',
+        effort: 'max',
+      });
+      expect(admitPluginEngine).toHaveBeenCalledTimes(2);
+      expect(admitPluginEngine).toHaveBeenNthCalledWith(1, expect.objectContaining({ agentDeviceId: 'studio' }));
+      expect(admitPluginEngine).toHaveBeenNthCalledWith(2, expect.objectContaining({ agentDeviceId: 'studio' }));
+    });
+
     it('switches same-plugin-engine models in place and rejects unsupported plugin-engine bound targets', async () => {
       const switchHarness = vi.fn(async () => ({ engineReady: true }));
       const applyModel = vi.fn(async () => undefined);
@@ -641,7 +676,7 @@ describe('MakerScheduleRunner model selection', () => {
         readRemoteProviders: async () => [],
         readSshCodexProviders: async () => [],
         resolveLocalSelection: async (route) => route,
-        resolvePluginEngineSelection: async (route) => ({ ...route, agentKind: 'acp', agentDeviceId: null, fastMode: false }),
+        resolvePluginEngineSelection: async (route) => ({ ...route, agentKind: 'acp', fastMode: false }),
       });
       await applyScheduledModelSelection({
         agentKind: 'acp', providerId: ENGINE, model: 'deepseek-v5', effort: 'low', fastMode: false, agentDeviceId: null,
@@ -655,6 +690,14 @@ describe('MakerScheduleRunner model selection', () => {
       expect(switchHarness).not.toHaveBeenCalled();
       expect(applyModel).toHaveBeenCalledOnce();
 
+      // Same-account remote plugin engines are allowed for bound switches (both from and to remote).
+      expect(() => assertScheduledHarnessSupported(
+        { agentKind: 'acp', status: 'active', source: 'desktop', agentDeviceId: 'other-mac' }, 'codex', null,
+      )).not.toThrow();
+      expect(() => assertScheduledHarnessSupported(
+        { agentKind: 'codex', status: 'active', source: 'desktop' }, 'acp', 'other-mac',
+      )).not.toThrow();
+
       const cases: Array<[Parameters<typeof assertScheduledHarnessSupported>[0], Parameters<typeof assertScheduledHarnessSupported>[1], string | null]> = [
         [{ agentKind: 'acp', status: 'active', source: 'bot' }, 'codex', null],
         [{ agentKind: 'codex', status: 'active', source: 'bot' }, 'acp', null],
@@ -662,8 +705,8 @@ describe('MakerScheduleRunner model selection', () => {
         [{ agentKind: 'acp', status: 'active', source: 'desktop', orcaRole: 'worker' }, 'codex', null],
         [{ agentKind: 'codex', status: 'active', source: 'desktop', orcaRole: 'lead' }, 'acp', null],
         [{ agentKind: 'codex', status: 'active', source: 'im' }, 'acp', null],
-        [{ agentKind: 'acp', status: 'active', source: 'desktop', agentDeviceId: 'other-mac' }, 'codex', null],
-        [{ agentKind: 'codex', status: 'active', source: 'desktop' }, 'acp', 'other-mac'],
+        [{ agentKind: 'acp', status: 'active', source: 'desktop', agentDeviceId: sharedTaskGuestPeer('task-1', 'member-1', 'peer-1') }, 'codex', null],
+        [{ agentKind: 'codex', status: 'active', source: 'desktop' }, 'acp', providerShareGuestPeer('share-1', 'member-1', 'peer-2')],
       ];
       for (const [target, nextKind, nextDevice] of cases) {
         expect(() => assertScheduledHarnessSupported(target, nextKind, nextDevice)).toThrow();

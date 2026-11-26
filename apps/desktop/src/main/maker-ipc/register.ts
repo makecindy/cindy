@@ -1044,7 +1044,7 @@ import {
   interruptUpstreamMergeTurn,
   prepareUpstreamMergeTurn,
 } from '../cindy-make/upstreamMergeRuntime.js';
-import { type IpcErrorCode } from '../../shared/ipc-errors.js';
+import { isIpcError, type IpcErrorCode } from '../../shared/ipc-errors.js';
 import { piPackageCommandDiagnostic } from '../maker-host/pi-package-diagnostic.js';
 import {
   runPiPackageListIpcBoundary,
@@ -12073,16 +12073,20 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         });
       },
       resolvePluginEngineSelection: async (route) => {
+        const deviceId = route.agentDeviceId ?? null;
         try {
-          const admitted = admitPluginEngineSwitchTarget({
-            providerId: route.providerId,
+          const target = {
+            providerId: route.providerId ?? '',
             model: route.model,
             effort: route.effort,
             permissionMode: route.permissionMode,
-          }, listPluginEngineViews());
+          };
+          const admitted = deviceId
+            ? await agentSwitchDeps.admitRemotePluginEngineTarget!(deviceId, target)
+            : admitPluginEngineSwitchTarget(target, listPluginEngineViews());
           return {
             agentKind: 'acp',
-            agentDeviceId: null,
+            agentDeviceId: deviceId,
             providerId: route.providerId,
             model: admitted.model,
             effort: (admitted.effort || null) as ScheduledModelSelection['effort'],
@@ -12092,6 +12096,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
               : {}),
           };
         } catch (error) {
+          if (isIpcError(error)) throw error;
           throwIpcError('MODEL_SELECTION_UNAVAILABLE', error instanceof Error ? error.message : String(error));
         }
       },
@@ -12204,6 +12209,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           ...(saved ? {
             agentKind: makerToDbEngineKind(saved.agentKind), model: saved.model,
             providerId: saved.providerId,
+            ...(saved.agentDeviceId !== undefined ? { agentDeviceId: saved.agentDeviceId } : {}),
             effort: isPluginEngineKind(saved.agentKind) && saved.effort === null
               ? ('' as typeof sessions.$inferInsert['effort'])
               : (saved.effort ?? undefined),
@@ -12228,6 +12234,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   const updateSavedScheduledAxis = createUpdateSavedScheduledAxis({
     readUsableAgentDeviceProviders, updateScheduledPreference, getDesktopProviderService,
     admitPluginEngineTarget: (target) => admitPluginEngineSwitchTarget(target, listPluginEngineViews()),
+    admitRemotePluginEngineTarget: (deviceId, target) =>
+      agentSwitchDeps.admitRemotePluginEngineTarget!(deviceId, { ...target, providerId: target.providerId ?? '' }),
   });
   prepareScheduledModelPreferencesHolder = async (sessionId, override) => {
     if (override) await scheduledModelScope.begin(sessionId);

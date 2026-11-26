@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { providerShareGuestPeer, sharedTaskGuestPeer } from '@cindy/device-link';
 import type { CatalogModel, ProviderView } from '@cindy/model-providers';
 import {
   applyScheduledModelSelection,
@@ -906,5 +907,117 @@ describe('scheduled baseline permissionMode preservation', () => {
       permissionMode: 'acceptEdits',
     }));
     expect(profile.permissionMode).toBe('acceptEdits');
+  });
+
+  // 2026-11-26: a bound task on a remote plugin engine (e.g. Antigravity on Mac Studio) must be
+  // able to switch temporarily to a local built-in model (PR auto-follow) and restore back to the
+  // remote plugin engine with its agentDeviceId and permissionMode intact; temporary remote
+  // unreachability must preserve the baseline for retry, while raw wire peers stay refused.
+  it('switches a remote plugin-engine task to local built-in and restores remote ACP with device and permissionMode', async () => {
+    const REMOTE_ENGINE = 'acp-plugin:antigravity:agy';
+    let profile: ScheduledModelSelection = {
+      agentKind: 'acp',
+      agentDeviceId: 'studio',
+      model: 'gemini-3-pro',
+      providerId: REMOTE_ENGINE,
+      effort: 'high',
+      fastMode: false,
+      permissionMode: 'bypassPermissions',
+    };
+    let baseline: string | null = null;
+    let studioOnline = true;
+    const resolveSelection = createScheduledModelSelectionResolver({
+      readRemoteProviders: async () => [],
+      readSshCodexProviders: async () => [],
+      resolveLocalSelection: async (route) => route,
+      resolvePluginEngineSelection: async (route) => {
+        if (route.agentDeviceId === 'studio' && !studioOnline) {
+          throw new Error('[REMOTE_AGENT_DEVICE_UNREACHABLE] studio offline');
+        }
+        return route;
+      },
+    });
+    const switchHarness = vi.fn(async (route: ScheduledModelSelection) => {
+      profile = {
+        ...route,
+        agentDeviceId: route.agentDeviceId ?? null,
+        permissionMode: route.permissionMode ?? 'default',
+      };
+      return { engineReady: true };
+    });
+    const applyModel = vi.fn(async (route: ScheduledModelSelection) => {
+      profile = { ...profile, ...route };
+    });
+    const apply = (route: ScheduledModelSelection) => applyScheduledModelSelection(route, {
+      getTarget: async () => ({
+        agentKind: profile.agentKind,
+        providerId: profile.providerId,
+        agentDeviceId: profile.agentDeviceId,
+        status: 'active',
+        source: 'desktop',
+      }),
+      isBusy: () => false,
+      resolveSelection,
+      switchHarness,
+      applyModel,
+    });
+    const recoverUnavailableBaseline = vi.fn(async () => true);
+    const scope = createScheduledModelScope({
+      createId: () => 'remote-acp-scope',
+      read: async () => ({ profile, baseline }),
+      write: async (_id, value) => { baseline = value ? JSON.stringify(value) : null; },
+      isBusy: () => false,
+      apply: async (_id, route) => apply(route),
+      recoverUnavailableBaseline,
+    });
+
+    await scope.begin('task');
+    expect(JSON.parse(baseline!)).toMatchObject({
+      agentKind: 'acp',
+      agentDeviceId: 'studio',
+      providerId: REMOTE_ENGINE,
+      permissionMode: 'bypassPermissions',
+    });
+
+    // Temporary switch to local Codex override succeeds.
+    await apply({
+      agentKind: 'codex',
+      agentDeviceId: null,
+      model: 'gpt-5.4',
+      providerId: 'openai',
+      effort: 'medium',
+      fastMode: false,
+    });
+    expect(profile).toMatchObject({ agentKind: 'codex', agentDeviceId: null, model: 'gpt-5.4' });
+
+    // If the remote computer is temporarily unreachable on restore, retain the saved baseline.
+    studioOnline = false;
+    await expect(scope.restore('task')).rejects.toThrow('REMOTE_AGENT_DEVICE_UNREACHABLE');
+    expect(baseline).not.toBeNull();
+    expect(recoverUnavailableBaseline).not.toHaveBeenCalled();
+
+    // Once reachable again, restore switches back to the remote plugin engine with its device and mode.
+    studioOnline = true;
+    await scope.restore('task');
+    expect(baseline).toBeNull();
+    expect(profile).toMatchObject({
+      agentKind: 'acp',
+      agentDeviceId: 'studio',
+      providerId: REMOTE_ENGINE,
+      model: 'gemini-3-pro',
+      permissionMode: 'bypassPermissions',
+    });
+
+    // Raw wire peers remain refused for both target and destination plugin-engine locations.
+    expect(() => assertScheduledHarnessSupported(
+      { agentKind: 'acp', status: 'active', source: 'desktop', agentDeviceId: sharedTaskGuestPeer('task-1', 'member-1', 'peer-1') },
+      'codex',
+      null,
+    )).toThrow('cannot be used for scheduled tasks');
+    expect(() => assertScheduledHarnessSupported(
+      { agentKind: 'codex', status: 'active', source: 'desktop' },
+      'acp',
+      providerShareGuestPeer('share-1', 'member-1', 'peer-2'),
+    )).toThrow('cannot be used for scheduled tasks');
   });
 });

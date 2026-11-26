@@ -440,12 +440,13 @@ export function useScheduleForm(initial: Schedule | null = null): UseScheduleFor
   }, []);
 
   const selectPluginEngine = useCallback((selection: PluginEngineSelection) => {
+    const deviceId = selection.deviceId?.trim() || '';
     setForm((f) => ({
       ...f,
       modelGroup: undefined,
       pluginEngine: selection,
-      agentDeviceId: '',
-      modelAgentDeviceId: undefined,
+      agentDeviceId: deviceId,
+      modelAgentDeviceId: deviceId,
       fastMode: false,
     }));
   }, []);

@@ -1,5 +1,6 @@
 import type { AgentKind, Effort, EngineKind } from '@cindy/maker-core';
 import { actualSourceIdForModel, connectedProvidersForAgent, effectiveSourceIdForModel, findCatalogModel, isModelSelectableForNewRoute, type ProviderView } from '@cindy/model-providers';
+import { isDisallowedPluginEngineDeviceId } from './pluginEngineSessionAdmission';
 import { resolveCompatibleSessionRuntimeEffort } from './sessionRuntimeControl';
 import { parseScheduledModelBaseline, type ScheduledModelBaseline } from '../../shared/scheduledModelBaseline';
 import { throwIpcError } from '../utils/ipcValidate';
@@ -213,11 +214,11 @@ export function assertScheduledHarnessSupported(
     if (target.source && target.source !== 'desktop') {
       throwIpcError('UNSUPPORTED_CAPABILITY', 'This task cannot switch to or from a plugin engine');
     }
-    if (target.agentKind === 'acp' && target.agentDeviceId) {
-      throwIpcError('UNSUPPORTED_CAPABILITY', 'The linked plugin engine task must run on this computer');
+    if (target.agentKind === 'acp' && isDisallowedPluginEngineDeviceId(target.agentDeviceId)) {
+      throwIpcError('UNSUPPORTED_CAPABILITY', 'This plugin engine task location cannot be used for scheduled tasks');
     }
-    if (agentKind === 'acp' && agentDeviceId) {
-      throwIpcError('UNSUPPORTED_CAPABILITY', 'Plugin engines run on the automation host only');
+    if (agentKind === 'acp' && isDisallowedPluginEngineDeviceId(agentDeviceId)) {
+      throwIpcError('UNSUPPORTED_CAPABILITY', 'This plugin engine location cannot be used for scheduled tasks');
     }
   }
 }
@@ -313,13 +314,16 @@ export function createScheduledModelSelectionResolver(deps: {
 }) {
   return async (selection: ScheduledModelSelection, target?: ScheduledModelTarget | null): Promise<ScheduledModelSelection> => {
     if (selection.agentKind === 'acp') {
-      if (selection.agentDeviceId) {
-        throwIpcError('UNSUPPORTED_CAPABILITY', 'Plugin engines run on the automation host only');
+      const agentDeviceId = selection.agentDeviceId === undefined
+        ? (target?.agentDeviceId ?? null)
+        : (selection.agentDeviceId || null);
+      if (isDisallowedPluginEngineDeviceId(agentDeviceId)) {
+        throwIpcError('UNSUPPORTED_CAPABILITY', 'This plugin engine location cannot be used for scheduled tasks');
       }
       if (!deps.resolvePluginEngineSelection) {
         throwIpcError('UNSUPPORTED_CAPABILITY', 'Plugin engines are not available here');
       }
-      return deps.resolvePluginEngineSelection({ ...selection, agentDeviceId: null, fastMode: false });
+      return deps.resolvePluginEngineSelection({ ...selection, agentDeviceId, fastMode: false });
     }
     const builtinSelection: BuiltinScheduledModelSelection = { ...selection, agentKind: selection.agentKind };
     // SSH Codex discovers native models on its host. A controller's catalog
@@ -361,10 +365,9 @@ export async function applyScheduledModelSelection(
   if (deps.isBusy()) throw new ScheduledModelSelectionBusyError('Scheduled model selection waits for the current turn');
   assertScheduledHarnessSupported(target, selection.agentKind, selection.agentDeviceId, selection.providerId);
   const resolved = await deps.resolveSelection({ ...selection,
-    ...(selection.agentKind === 'acp'
-      ? { agentDeviceId: null, fastMode: false }
-      : selection.agentDeviceId === undefined && target.agentDeviceId !== undefined
-        ? { agentDeviceId: target.agentDeviceId } : {}),
+    ...(selection.agentKind === 'acp' ? { fastMode: false } : {}),
+    ...(selection.agentDeviceId === undefined && target.agentDeviceId !== undefined
+      ? { agentDeviceId: target.agentDeviceId } : {}),
   }, target);
   const changesDevice = (target.agentDeviceId ?? null) !== (resolved.agentDeviceId ?? null);
   const changesPluginEngine = target.agentKind === 'acp' && resolved.agentKind === 'acp'

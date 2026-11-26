@@ -734,6 +734,7 @@ export function createHostRuntimeSelection(deps: HostRuntimeSelectionDeps) {
   const updateSavedScheduledAxis = createUpdateSavedScheduledAxis(explicitPorts<Parameters<typeof createUpdateSavedScheduledAxis>[0]>({
     readUsableAgentDeviceProviders, updateScheduledPreference, getDesktopProviderService: providerService,
     admitPluginEngineTarget: undefined,
+    admitRemotePluginEngineTarget: undefined,
   }));
   const recoverRemoteRuntimeAxisPersistence = createRecoverRemoteRuntimeAxisPersistence(explicitPorts<Parameters<typeof createRecoverRemoteRuntimeAxisPersistence>[0]>({
     maker: axisMaker, broadcastSessionRuntimeProjection, log: deps.log,

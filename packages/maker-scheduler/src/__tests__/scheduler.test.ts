@@ -3573,11 +3573,11 @@ describe('Scheduler', () => {
     await expect(h.scheduler.update(saved.id, { modelAgentDeviceId: 'other' })).rejects.toThrow('host');
   });
 
-  // Plugin engines (docs/plans/acp-plugin-bridge.md, 2026-11-19; bound switch 2026-11-26):
-  // unit through Scheduler.create / update. A plugin engine runs on the automation host as a fresh
-  // task (with optional worktree) or bound to an ordinary task; persistent/remote/script shapes and
-  // half switches on unbound tasks must still be refused.
-  it('saves a plugin engine as a local fresh or bound automation and rejects unsupported shapes', async () => {
+  // Plugin engines (docs/plans/acp-plugin-bridge.md, 2026-11-19; bound switch & remote 2026-11-26):
+  // unit through Scheduler.create / update. A plugin engine runs as a fresh task (with optional
+  // worktree and/or another computer) or bound to an ordinary task; persistent/script shapes,
+  // invalid device ids, primaryHostKey+remote, and half switches on unbound tasks must be refused.
+  it('saves a plugin engine as a local or remote fresh/bound automation and rejects unsupported shapes', async () => {
     const engine = { agentKind: 'acp', modelAgentKind: 'acp', providerId: 'acp-plugin:_ns__local__dsh-acp:dsh',
       model: 'deepseek-v4' } as const;
     const saved = await h.scheduler.create({ ...baseInput, ...engine });
@@ -3585,9 +3585,13 @@ describe('Scheduler', () => {
     // 2026-11-25: like built-in engines, each run may check out its own worktree.
     await expect(h.scheduler.create({ ...baseInput, ...engine, useWorktree: true, workspaceKind: 'project', workingDir: '/repo' }))
       .resolves.toMatchObject({ ...engine, useWorktree: true });
-    // 2026-11-26: bound ordinary tasks can temporarily switch to a local plugin engine or built-in override.
+    // 2026-11-26: fresh and bound plugin-engine automations support remote computers too.
+    await expect(h.scheduler.create({ ...baseInput, ...engine, agentDeviceId: 'studio-mac', modelAgentDeviceId: 'studio-mac' }))
+      .resolves.toMatchObject({ ...engine, agentDeviceId: 'studio-mac', modelAgentDeviceId: 'studio-mac' });
     await expect(h.scheduler.create({ ...baseInput, ...engine, targetSessionId: 'task-1', modelAgentDeviceId: '' }))
       .resolves.toMatchObject({ ...engine, targetSessionId: 'task-1', modelAgentDeviceId: '' });
+    await expect(h.scheduler.create({ ...baseInput, ...engine, targetSessionId: 'task-1', modelAgentDeviceId: 'studio-mac' }))
+      .resolves.toMatchObject({ ...engine, targetSessionId: 'task-1', modelAgentDeviceId: 'studio-mac' });
     await expect(h.scheduler.create({ ...baseInput, agentKind: 'acp', targetSessionId: 'task-acp', model: undefined, providerId: undefined }))
       .resolves.toMatchObject({ agentKind: 'acp', targetSessionId: 'task-acp' });
     await expect(h.scheduler.create({ ...baseInput, agentKind: 'acp', modelAgentKind: 'codex', model: 'gpt-5', providerId: 'openai', targetSessionId: 'task-acp' }))
@@ -3595,8 +3599,9 @@ describe('Scheduler', () => {
     for (const extra of [
       { persistentSession: true },
       { targetSessionId: 'task-1', persistentSession: true },
-      { agentDeviceId: 'studio-mac' },
-      { targetSessionId: 'task-1', modelAgentDeviceId: 'studio-mac' },
+      { agentDeviceId: 'invalid/device id' },
+      { targetSessionId: 'task-1', modelAgentDeviceId: 'invalid/device id' },
+      { primaryHostKey: 'tidy-host', agentDeviceId: 'studio-mac' },
       { providerId: 'anthropic' },
       { modelAgentKind: 'claude-code' as const },
       { executionMode: 'script' as const, scriptConfig: { command: 'echo hi', capabilities: [] } },

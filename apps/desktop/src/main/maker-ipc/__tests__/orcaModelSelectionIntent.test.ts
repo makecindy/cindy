@@ -173,6 +173,60 @@ describe('owner settings during an automatic turn', () => {
     expect(updateScheduledPreference).toHaveBeenCalledExactlyOnceWith('s1', { effort: 'high' });
     await expect(update('s1', { fastMode: true }, assertCurrent)).rejects.toThrow(/Fast is unavailable for plugin engines/);
   });
+
+  // 2026-11-26: editing effort on a saved remote plugin-engine baseline or pending remote plugin-engine
+  // switch must admit against the remote computer rather than requiring the plugin locally.
+  it('admits effort updates against a remote plugin-engine baseline and pending switch via remote admission', async () => {
+    const baseline = { scopeId: 'run', agentKind: 'acp', agentDeviceId: 'studio', model: 'gemini-4',
+      providerId: 'acp-plugin:agy:agy', effort: 'low', fastMode: false };
+    const updateScheduledPreference = vi.fn(async () => {});
+    const admitPluginEngineTarget = vi.fn(() => { throw new Error('local plugin missing'); });
+    const admitRemotePluginEngineTarget = vi.fn(async (_deviceId: string, target: { effort?: unknown }) => ({
+      effort: target.effort === 'high' ? 'high' : '',
+    }));
+    const query = { from: () => query, where: () => query, limit: async () => [{ baseline: JSON.stringify(baseline) }] };
+    const update = compile(scheduledAxisAdapter, {
+      ...axisCatalogBindings(), parseScheduledModelBaseline,
+      getDbClient: () => ({ drizzle: { select: () => query } }),
+      sessions: {}, eq: vi.fn(), updateScheduledPreference,
+      admitPluginEngineTarget, admitRemotePluginEngineTarget,
+    });
+    expect(await update('s1', { effort: 'high' }, vi.fn())).toBe(true);
+    expect(admitRemotePluginEngineTarget).toHaveBeenCalledWith('studio', expect.objectContaining({
+      providerId: 'acp-plugin:agy:agy', model: 'gemini-4', effort: 'high',
+    }));
+    expect(admitPluginEngineTarget).not.toHaveBeenCalled();
+    expect(updateScheduledPreference).toHaveBeenCalledExactlyOnceWith('s1', { effort: 'high' });
+
+    const pending = createPendingAgentSwitchRegistry();
+    const intent = {
+      targetAgentKind: 'acp',
+      targetAgentDeviceId: 'studio',
+      model: 'gemini-4',
+      providerId: 'acp-plugin:agy:agy',
+      effort: 'low',
+      fastMode: false,
+    } as PendingAgentSwitchIntent;
+    pending.set('s1', intent);
+    const bindings = axisCatalogBindings({ agentDeviceId: null });
+    const stage = compile(stageAxisAdapter, {
+      ...bindings,
+      agentSwitchPending: pending,
+      agentSwitchDeps: {
+        ...bindings.agentSwitchDeps,
+        admitPluginEngineTarget,
+        admitRemotePluginEngineTarget,
+        onPendingSwitchChanged: vi.fn(),
+      },
+      persistSessionFields: vi.fn(),
+      projectPendingAgentSwitchIntent: (value: unknown) => value,
+      wakeSessionInputAfterCredentialSwitch: vi.fn(),
+    });
+    await expect(stage('s1', intent, { effort: 'high' }, vi.fn())).resolves.toMatchObject({ pendingUntilSend: true });
+    expect(admitRemotePluginEngineTarget).toHaveBeenCalledTimes(2);
+    expect(admitPluginEngineTarget).not.toHaveBeenCalled();
+    expect(pending.get('s1')).toMatchObject({ effort: 'high', targetAgentDeviceId: 'studio' });
+  });
 });
 
 // Unit: stale UI axes must be admitted against the pending execution route,

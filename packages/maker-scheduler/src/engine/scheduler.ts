@@ -179,7 +179,7 @@ function validateScheduleExecutionShape(
   }
   if (schedule.modelAgentDeviceId !== undefined && (
     typeof schedule.modelAgentDeviceId !== 'string' ||
-    (schedule.modelAgentDeviceId !== '' && (!schedule.modelAgentDeviceId.trim() ||
+    (schedule.modelAgentDeviceId !== '' && (!/^[A-Za-z0-9_.:-]{1,128}$/.test(schedule.modelAgentDeviceId) ||
       !schedule.modelAgentKind || !schedule.model?.trim() || !schedule.providerId?.trim()))
   )) throw new Error('Scheduled remote model selection requires a device, Harness, model and provider');
   if (schedule.modelAgentKind != null) {
@@ -187,8 +187,8 @@ function validateScheduleExecutionShape(
       throw new Error('Explicit scheduled model Harness requires a supported Harness and model');
     }
   }
-  // 插件引擎(docs/plans/acp-plugin-bridge.md)只在自动任务所在电脑上运行：支持每次新建任务(含 worktree)
-  // 或绑定本机普通桌面任务临时切换执行；不支持持续会话(scheduler 任务)、换电脑、脚本执行。
+  // 插件引擎(docs/plans/acp-plugin-bridge.md)支持每次新建任务(含 worktree 与另一台电脑)
+  // 或绑定普通桌面任务临时切换执行；不支持持续会话(scheduler 任务)与脚本执行。
   // 独立任务只改了其中一半(例如旧端把 agentKind 写回内置引擎)时整份拒绝，不悄悄换引擎。
   if (schedule.agentKind === 'acp' || schedule.modelAgentKind === 'acp') {
     const boundOrdinaryTask = Boolean(schedule.targetSessionId) && !schedule.persistentSession;
@@ -207,9 +207,6 @@ function validateScheduleExecutionShape(
       }
       if (schedule.persistentSession) {
         throw new Error('A plugin engine schedule cannot use a persistent session');
-      }
-      if (schedule.agentDeviceId || schedule.modelAgentDeviceId) {
-        throw new Error('Plugin engines run on the automation host only');
       }
     }
   }

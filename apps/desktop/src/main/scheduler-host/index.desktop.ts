@@ -11,7 +11,7 @@ import { dialogueWorkspaceRoots } from '../localDb/dialogueWorkspace';
 import { sessions } from '../localDb/schema.js';
 import { getDbClient } from '../localDb/client/current';
 import { startRewoundSchedulerPromptCleanup, stopRewoundSchedulerPromptCleanup } from './rewoundSchedulerPromptCleanup.js';
-import { readRemoteProviderRoute } from '../remote-agent/controller/deviceCatalog.js';
+import { readRemotePluginEngines, readRemoteProviderRoute } from '../remote-agent/controller/deviceCatalog.js';
 import {
   resolveDefaultScheduleRoute,
   resolveRouteCopyCapabilities,
@@ -141,11 +141,15 @@ const desktop = createSchedulerHost<StartSchedulerDeps>({
       // 隐式改道后按落地拷贝 reconcile effort/Fast(见 runner deps 注释,R27)。
       resolveRouteCopyCapabilities,
       resolveDefaultModelRoute: resolveDefaultScheduleRoute,
-      // 插件引擎(docs/plans/acp-plugin-bridge.md)：按本机此刻提供的引擎准入，规则与新建任务相同。
-      admitPluginEngine: (route) => admitPluginEngineSwitchTarget(
-        { providerId: route.providerId, model: route.model, effort: route.effort },
-        listPluginEngineViews(),
-      ),
+      // 插件引擎(docs/plans/acp-plugin-bridge.md)：按本机或目标电脑此刻提供的引擎准入，规则与新建/切换任务相同。
+      admitPluginEngine: async (route) => {
+        const target = { providerId: route.providerId, model: route.model, effort: route.effort };
+        const deviceId = route.agentDeviceId?.trim() || null;
+        if (deviceId) {
+          return admitPluginEngineSwitchTarget(target, await readRemotePluginEngines(deviceId));
+        }
+        return admitPluginEngineSwitchTarget(target, listPluginEngineViews());
+      },
       // 心跳撞忙排队桥:实现挂在 maker-ipc/register.ts 的 coordinator 装配处
       // 先恢复快照再判忙闲；holder 未就绪时恢复返回 false，由 runner 顺延。
       schedulerQueue: {

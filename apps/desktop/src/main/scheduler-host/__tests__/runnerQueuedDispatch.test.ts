@@ -1304,6 +1304,7 @@ describe('MakerScheduleRunner queued dispatch (busy bound session)', () => {
       const fire = runner.fire(heartbeatSchedule({
         agentKind: 'acp',
         modelAgentKind: 'acp',
+        modelAgentDeviceId: '',
         providerId: 'acp-plugin:agy:agy',
         model: 'gemini-4',
         effort: 'high',
@@ -1420,6 +1421,126 @@ describe('MakerScheduleRunner queued dispatch (busy bound session)', () => {
     await vi.waitFor(() => expect(h.listenerCount()).toBe(1));
     h.emit({ type: 'done', data: {}, source: 'codex' });
     expect(await fire).toMatchObject({ sessionId: SESSION_ID });
+  });
+
+  // 2026-11-26: follow-task queued runs on a remote plugin-engine task admit against that computer's
+  // catalog before enqueue and again onAccepted, and fail closed if the task moved to another computer.
+  it('queues and dispatches a follow-task run on a remote plugin-engine task and rejects device drift', async () => {
+    const h = createSessionHarness(async () => ({ accepted: true }));
+    Object.assign(h.session, { agentKind: 'acp', model: 'gemini-3-pro', agentDeviceId: 'studio' });
+    mocks.getSessionRowSnapshot.mockResolvedValue({
+      status: 'active',
+      source: 'desktop',
+      agentKind: 'acp',
+      providerId: 'acp-plugin:agy:agy',
+      model: 'gemini-3-pro',
+      userSendAt: null,
+      agentDeviceId: 'studio',
+      remoteHostId: null,
+    });
+    mocks.getSessionProvider.mockReturnValue('acp-plugin:agy:agy');
+    const admitPluginEngine = vi.fn(async (route: { model: string; agentDeviceId?: string | null }) => ({
+      model: route.model,
+      effort: '',
+    }));
+    const queue = createQueueHarness({ busy: false });
+    const { runner, maker } = createRunnerHarness(h.session, queue.deps, { admitPluginEngine });
+    vi.mocked(maker.getSessionMeta).mockResolvedValue({
+      agentKind: 'acp',
+      model: 'gemini-3-pro',
+      effort: 'high',
+    } as never);
+
+    const fire = runner.fire(heartbeatSchedule({ model: undefined, modelAgentKind: undefined }), createFireContext());
+    await vi.waitFor(() => expect(queue.enqueueCalls).toHaveLength(1));
+    await queue.accept();
+    await vi.waitFor(() => expect(h.listenerCount()).toBe(1));
+    h.emit({ type: 'done', data: {} });
+    expect(await fire).toMatchObject({ sessionId: SESSION_ID });
+    expect(admitPluginEngine).toHaveBeenCalledTimes(2);
+    expect(admitPluginEngine).toHaveBeenNthCalledWith(1, expect.objectContaining({
+      providerId: 'acp-plugin:agy:agy',
+      agentDeviceId: 'studio',
+    }));
+    expect(admitPluginEngine).toHaveBeenNthCalledWith(2, expect.objectContaining({
+      providerId: 'acp-plugin:agy:agy',
+      agentDeviceId: 'studio',
+    }));
+
+    // Device drift while queued must fail closed before vendor dispatch.
+    const queue2 = createQueueHarness({ busy: true });
+    const { runner: runner2 } = createRunnerHarness(h.session, queue2.deps, { admitPluginEngine });
+    const drifted = runner2.fire(heartbeatSchedule({ model: undefined, modelAgentKind: undefined }), createFireContext())
+      .catch((error: unknown) => error);
+    await vi.waitFor(() => expect(queue2.enqueueCalls).toHaveLength(1));
+    Object.assign(h.session, { agentDeviceId: 'other-mac' });
+    await queue2.accept();
+    expect(String(await drifted)).toContain('Scheduled model route changed');
+  });
+
+  // 2026-11-26: a bound automation switching an ordinary task onto a remote plugin engine passes
+  // modelAgentDeviceId through selection, onPreparing, onAccepted, and admission.
+  it('dispatches a bound switch onto a remote plugin engine with its agentDeviceId intact', async () => {
+    const h = createSessionHarness(async () => ({ accepted: true }));
+    let currentKind: 'codex' | 'acp' = 'codex';
+    let currentProviderId: string | null = 'openai';
+    let currentModel = 'gpt-5.4';
+    let currentDeviceId: string | null = null;
+    mocks.getSessionRowSnapshot.mockImplementation(async () => ({
+      status: 'active',
+      source: 'desktop',
+      agentKind: currentKind,
+      providerId: currentProviderId,
+      model: currentModel,
+      userSendAt: null,
+      agentDeviceId: currentDeviceId,
+      remoteHostId: null,
+    }));
+    mocks.getSessionProvider.mockImplementation(() => currentProviderId);
+    const queue = createQueueHarness({ busy: false });
+    const admitPluginEngine = vi.fn(async () => ({ model: 'gemini-4', effort: 'high' }));
+    let liveSession: Session | undefined = h.session;
+    const { runner, maker } = createRunnerHarness(h.session, queue.deps, {
+      admitPluginEngine,
+      acquirePendingAgentSwitch: async (_id, _signal, selection) => {
+        expect(selection).toMatchObject({
+          agentKind: 'acp',
+          agentDeviceId: 'studio',
+          providerId: 'acp-plugin:agy:agy',
+          model: 'gemini-4',
+        });
+        liveSession = undefined;
+        currentKind = 'acp';
+        currentProviderId = 'acp-plugin:agy:agy';
+        currentModel = 'gemini-4';
+        currentDeviceId = 'studio';
+        return { release: () => {}, selection: selection! };
+      },
+    });
+    vi.mocked(maker.getSession).mockImplementation((id) => (id === SESSION_ID ? liveSession : undefined));
+    vi.mocked(maker.getSessionMeta).mockImplementation(async () => (
+      liveSession ? { agentKind: liveSession.agentKind, model: liveSession.model } as never : null
+    ));
+    const fire = runner.fire(heartbeatSchedule({
+      agentKind: 'acp',
+      modelAgentKind: 'acp',
+      modelAgentDeviceId: 'studio',
+      providerId: 'acp-plugin:agy:agy',
+      model: 'gemini-4',
+      effort: 'high',
+      fastMode: false,
+    }), createFireContext());
+    await vi.waitFor(() => expect(queue.enqueueCalls).toHaveLength(1));
+    const req = enqueueLast(queue);
+    await req.onPreparing?.();
+    Object.assign(h.session, { agentKind: 'acp', model: 'gemini-4', agentDeviceId: 'studio' });
+    liveSession = h.session;
+    await req.onAccepted({ permissionMode: 'ask', planMode: false });
+    await vi.waitFor(() => expect(h.listenerCount()).toBe(1));
+    h.emit({ type: 'done', data: {} });
+    expect(await fire).toMatchObject({ sessionId: SESSION_ID });
+    expect(admitPluginEngine).toHaveBeenNthCalledWith(1, expect.objectContaining({ agentDeviceId: 'studio' }));
+    expect(admitPluginEngine).toHaveBeenNthCalledWith(2, expect.objectContaining({ agentDeviceId: 'studio' }));
   });
 
   it('dispatches a fresh implicit provider route using the resolved fire-local schedule', async () => {
