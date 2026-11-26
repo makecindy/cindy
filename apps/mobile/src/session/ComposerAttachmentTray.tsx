@@ -13,7 +13,7 @@ import { FileTypeIcon } from '@/components/FileTypeIcon';
 import { Pen, RefreshCw, X } from 'lucide-react-native';
 import { Image } from 'expo-image';
 import { useTranslation } from 'react-i18next';
-import { ActivityIndicator, Pressable, StyleSheet, View } from 'react-native';
+import { ActivityIndicator, PixelRatio, Pressable, StyleSheet, View } from 'react-native';
 import { Text } from '@/components/AppText';
 import type { RemoteSerializedAttachment } from '@/session/types';
 import type { PendingLocalAttachmentUpload } from '@/session/mobileLocalAttachmentUpload';
@@ -113,18 +113,12 @@ export function ComposerAttachmentTray({
               accessibilityRole="button"
               accessibilityLabel={attachmentDisplayLabel(attachment)}
               onPress={() => onPreview(attachment.id)}
-              style={{
-                flex: 1,
-                flexDirection: "row",
-                alignItems: "center",
-                minHeight: 48,
-                gap: 8,
-              }}
+              style={styles.chipPreview}
             >
               <FileTypeIcon name={attachment.name} mimeType={attachment.mimeType} />
-            <Text numberOfLines={1} style={styles.chipText}>
-              {attachmentDisplayLabel(attachment)}
-            </Text>
+              <Text numberOfLines={1} style={styles.chipText}>
+                {attachmentDisplayLabel(attachment)}
+              </Text>
             </Pressable>
             <Pressable
               accessibilityHint={removeDisabledReason}
@@ -306,6 +300,7 @@ export function ComposerAttachmentCollapsedBadge({
 function makeTrayStyles(colors: ThemeColors) {
   return {
     tray: {
+      alignItems: 'flex-start' as const,
       flexDirection: 'row' as const,
       flexWrap: 'wrap' as const,
       gap: spacing.sm,
@@ -385,18 +380,31 @@ function makeTrayStyles(colors: ThemeColors) {
       borderRadius: radius.pill,
       flexDirection: 'row' as const,
       gap: spacing.sm,
+      maxWidth: '100%' as const,
       paddingLeft: spacing.lg,
       paddingRight: spacing.md,
-      paddingVertical: 8,
+      // One outer touch height for pending, failed and uploaded file chips.
+      minHeight: PixelRatio.roundToNearestPixel(44),
+    },
+    // Keep the preview's intrinsic width; flex: 1 gives it a zero basis in the wrapping tray.
+    chipPreview: {
+      alignItems: 'center' as const,
+      alignSelf: 'stretch' as const,
+      flexDirection: 'row' as const,
+      flexShrink: 1,
+      gap: spacing.sm,
+      minWidth: 0,
     },
     chipText: {
       color: colors.textPrimary,
+      flexShrink: 1,
       fontSize: typeScale.footnote,
       lineHeight: lineHeight.caption,
       maxWidth: 220,
     },
     chipRemove: {
       alignItems: 'center' as const,
+      flexShrink: 0,
       justifyContent: 'center' as const,
     },
     pressed: {

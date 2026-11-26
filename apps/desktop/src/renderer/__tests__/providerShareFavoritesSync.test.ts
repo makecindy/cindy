@@ -13,6 +13,7 @@ import {
 } from '@/features/provider-share/providerShareStore';
 
 vi.mock('@/hooks/useDeviceProviders', () => ({
+  hasDeviceProvidersInterest: () => false,
   getCachedDeviceProviders: () => null,
   // This favorites fixture has no cached subscription catalog to refresh.
   isSubscriptionShareCatalogStale: () => false,
@@ -51,7 +52,7 @@ beforeEach(() => {
 afterEach(() => { resetProviderShareStoreForTests(); vi.restoreAllMocks(); vi.useRealTimers(); });
 
 it('retries failed cleanup with backoff without another share push and stops after success', async () => {
-  snapshot = { ...snapshot, confirmedRegions: ['global'], received: [] };
+  snapshot = { ...snapshot, confirmedRegions: ['global'], leftMemberIds: [share.memberId], received: [] };
   const writes = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => { throw new Error('quota'); });
   ensureProviderShareReceivedStarted();
   await tick();
@@ -70,7 +71,7 @@ it('retries failed cleanup with backoff without another share push and stops aft
 });
 
 it('uses persisted favorite regions after restart even when the main discovery marker was removed', async () => {
-  snapshot = { ...snapshot, confirmedRegions: ['global'], received: [] };
+  snapshot = { ...snapshot, confirmedRegions: ['global'], leftMemberIds: [share.memberId], received: [] };
   const writes = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => { throw new Error('quota'); });
   ensureProviderShareReceivedStarted();
   await tick();
@@ -79,7 +80,7 @@ it('uses persisted favorite regions after restart even when the main discovery m
   resetProviderShareStoreForTests();
   setModelFavoritesOwner(null);
   setModelFavoritesOwner('recipient');
-  snapshot = { ...snapshot, confirmedRegions: [], received: [] };
+  snapshot = { ...snapshot, confirmedRegions: [], received: [], leftMemberIds: [] };
   commands = [];
   ensureProviderShareReceivedStarted();
   await tick();
@@ -87,18 +88,18 @@ it('uses persisted favorite regions after restart even when the main discovery m
     ownerStamp: { dataOwnerId: 'recipient', ownerGeneration: 1 }, regions: ['global'],
   } });
   expect(listModelFavorites()).toHaveLength(1);
-  snapshot = { ...snapshot, confirmedRegions: ['global'] };
+  snapshot = { ...snapshot, confirmedRegions: ['global'], leftMemberIds: [share.memberId] };
   await vi.advanceTimersByTimeAsync(5_000);
   expect(listModelFavorites()).toEqual([]);
 });
 
 it('rereads the latest membership instead of retrying a stale deletion', async () => {
-  snapshot = { ...snapshot, confirmedRegions: ['global'] };
+  snapshot = { ...snapshot, confirmedRegions: ['global'], leftMemberIds: [share.memberId] };
   const writes = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => { throw new Error('quota'); });
   ensureProviderShareReceivedStarted();
   await tick();
   writes.mockRestore();
-  snapshot = { ...snapshot, received: [share] };
+  snapshot = { ...snapshot, received: [share], leftMemberIds: [] };
   await vi.advanceTimersByTimeAsync(5_000);
   expect(listModelFavorites()).toHaveLength(1);
   expect(vi.getTimerCount()).toBe(0);
@@ -119,7 +120,7 @@ it('does not run an earlier account retry after switching owners', async () => {
 });
 
 it('retries when temporarily unreadable storage prevents discovering favorite regions', async () => {
-  snapshot = { ...snapshot, confirmedRegions: ['global'] };
+  snapshot = { ...snapshot, confirmedRegions: ['global'], leftMemberIds: [share.memberId] };
   const read = vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => { throw new Error('storage unavailable'); });
   ensureProviderShareReceivedStarted();
   await tick();
@@ -131,7 +132,7 @@ it('retries when temporarily unreadable storage prevents discovering favorite re
   expect(listModelFavorites()).toEqual([]);
 });
 
-it('cleans favorites without opening a picker, only after Main confirms the last share was removed', async () => {
+it('cleans favorites without opening a picker, only after Main reports a successful leave', async () => {
   ensureProviderShareReceivedStarted();
   await tick();
   expect(listModelFavorites()).toHaveLength(1);
@@ -142,7 +143,7 @@ it('cleans favorites without opening a picker, only after Main confirms the last
   push([...snapshot.received]);
   await tick();
   expect(listModelFavorites()).toHaveLength(1);
-  snapshot = { ...snapshot, received: [] };
+  snapshot = { ...snapshot, received: [], leftMemberIds: [share.memberId] };
   push([]);
   await tick();
   expect(listModelFavorites()).toEqual([]);

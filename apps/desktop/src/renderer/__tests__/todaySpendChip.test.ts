@@ -143,6 +143,8 @@ describe('TodaySpendChip dashboard routing', () => {
     );
     expect(compact(source)).toContain(compact('const codexApiHasTokenFallback = isCodexApi'));
     expect(compact(source)).toContain(compact('const codexApiEmptyState = isCodexApi'));
+    // 单一调用点契约：订阅分支与 codex-api 分支共用 codexEmptyState（#12149），
+    // 任一处内联第二份 getCodexApiEmptyState 调用都会在此打红（失效后果：空态判定分叉）。
     expect(source.match(/getCodexApiEmptyState\(latestTurnUsage\)/g)).toHaveLength(1);
     expect(compact(source)).toContain(compact('todaySpend.codex.sessionTokensLine'));
     expect(compact(source)).toContain(compact('todaySpend.codex.noUsageLabel'));
@@ -302,6 +304,16 @@ describe('shared usage-card provider projections', () => {
       now,
     );
     expect(card.planLabel).toBeNull();
+    expect(card.windows[0].window.utilization).toBe(25);
+  });
+
+  // Unit: the rendered card previously ignored the native display name when its machine code was pro.
+  it('shows the official Claude plan name without changing quota windows', () => {
+    const card = buildClaudeUsageCard({
+      subscriptionType: 'pro', planTier: 'pro', planDisplayName: 'Ultra', updatedAt: now,
+      fiveHour: { utilization: 25 },
+    }, t);
+    expect(card.planLabel).toBe('Ultra');
     expect(card.windows[0].window.utilization).toBe(25);
   });
 

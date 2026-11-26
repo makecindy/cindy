@@ -8,7 +8,12 @@ import Database from 'better-sqlite3';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { getTableConfig, type SQLiteTable } from 'drizzle-orm/sqlite-core';
-import { eq } from 'drizzle-orm';
+import { eq, isNull } from 'drizzle-orm';
+import type { NavigateSessionTreeResult } from '@cindy/maker-core';
+import type { CurrentDbClientSnapshot } from '../client/current';
+import type { DbClient } from '../client/DbClient';
+import { tx as runTx } from '../worker/opHandlers/tx';
+import { navigateAndRehydrateSessionTree, assertSessionTreeOwner } from '../../maker-ipc/sessionTreeNavigation';
 import { UI_ACTION_TRIGGER_PREFIX } from '../../../shared/interruptedTurn';
 import { manageSessionPrs } from '../../git-context/manageSessionPrs';
 import { messages, migrationMeta, sessionPrRefs, sessions } from '../schema';
@@ -20,11 +25,13 @@ import {
   recordPrRefsForImportedMessages,
   recomputePrRefsForSession,
   ensurePrRefsBackfill,
+  setPrRefsChangedListener,
 } from '../../git-context/prRefsStore';
 
-const h = vi.hoisted(() => ({ client: null as unknown, changed: vi.fn() }));
+const h = vi.hoisted(() => ({ client: null as unknown, owner: null as CurrentDbClientSnapshot | null, changed: vi.fn() }));
 vi.mock('../client/current', () => ({
   getDbClient: () => h.client,
+  getCurrentDbClientSnapshot: () => h.owner,
   getCurrentDbClientUserId: () => 'test',
 }));
 vi.mock('../../logger.js', () => ({ createLogger: () => ({ warn: vi.fn(), info: vi.fn() }) }));
@@ -40,6 +47,7 @@ for (const table of [sessions, messages, sessionPrRefs, migrationMeta] as SQLite
 sqlite.exec(
   'CREATE UNIQUE INDEX pr_identity ON session_pr_refs(session_id,provider,host,owner,repo,pr_number)',
 );
+sqlite.exec('CREATE UNIQUE INDEX message_identity ON messages(session_id,client_id)');
 const verify = vi.fn(async () => undefined);
 const add = (number: number) =>
   managePrRefs(
@@ -48,7 +56,8 @@ const add = (number: number) =>
     verify,
   );
 beforeEach(() => {
-  h.client = { drizzle: db };
+  h.client = { drizzle: db, tx: async (name: string, args: unknown) => runTx(sqlite, { name, args }) };
+  h.owner = { client: h.client as DbClient, userId: 'test', clientEpoch: 1 };
   sqlite.exec('DELETE FROM sessions; DELETE FROM messages; DELETE FROM session_pr_refs; DELETE FROM migration_meta;');
   db.insert(sessions)
     .values({
@@ -61,10 +70,48 @@ beforeEach(() => {
     })
     .run();
   verify.mockClear();
+  h.changed.mockClear();
+  setPrRefsChangedListener(h.changed);
 });
 afterAll(() => sqlite.close());
 
 describe('manual PR management', () => {
+  // DB regression: notifications caused redundant window reads/status queries.
+  // Existing persistence tests miss no-op imports and intermediate timestamp
+  // changes during full recomputation; use the public store with real SQLite.
+  it('notifies only for final association changes, including mention ordering', async () => {
+    const url = 'https://github.com/example/repo/pull/1';
+    const first = { id: 'first', clientId: 'first', sessionId: 's',
+      role: 'assistant' as const, content: JSON.stringify(url), createdAt: 10 };
+    await recordPrRefsForImportedMessages('s');
+    expect(h.changed).not.toHaveBeenCalled();
+    db.insert(messages).values(first).run();
+    await recordPrRefsForMessage({ ...first, content: url });
+    expect(h.changed).toHaveBeenCalledTimes(1);
+    await recordPrRefsForImportedMessages('s');
+    expect(h.changed).toHaveBeenCalledTimes(1);
+
+    const later = { ...first, id: 'later', clientId: 'later', createdAt: 20 };
+    db.insert(messages).values(later).run();
+    await recordPrRefsForMessage({ ...later, content: url });
+    expect(h.changed).toHaveBeenCalledTimes(2);
+    expect(await listPrRefs('s')).toMatchObject([{ firstSeenAt: 10, lastSeenAt: 20 }]);
+    // Full recomputation temporarily sets lastSeenAt to 10, then back to 20.
+    await recomputePrRefsForSession('s');
+    expect(h.changed).toHaveBeenCalledTimes(2);
+    db.update(messages).set({ content: JSON.stringify('Edited text without a link') })
+      .where(eq(messages.id, 'later')).run();
+    await recomputePrRefsForSession('s');
+    expect(h.changed).toHaveBeenCalledTimes(3);
+    expect(await listPrRefs('s')).toMatchObject([{ lastSeenAt: 10 }]);
+    db.delete(messages).run();
+    await recomputePrRefsForSession('s');
+    expect(h.changed).toHaveBeenCalledTimes(4);
+    expect(await listPrRefs('s')).toEqual([]);
+    await recomputePrRefsForSession('s');
+    expect(h.changed).toHaveBeenCalledTimes(4);
+  });
+
   // DB: MR imports and manual adds share identity across namespace/host/provider.
   // Prior GitHub fixtures cannot detect cross-host collisions or dropped MR messages.
   it('imports multi-group MRs and adds the same number on another host without collision', async () => {
@@ -174,10 +221,10 @@ describe('manual PR management', () => {
     expect(await listPrRefs('s')).toMatchObject([{ id: ref.id, associationSource: 'explicit' }]);
   });
 
-  // Regression: explicit-only mode dropped fresh PRs and missed messages after v1 backfill.
+  // Regression: explicit-only mode dropped fresh PRs and missed messages after v3 backfill.
   // Exercise production scan/import/backfill with real SQLite; metadata-only tests missed visibility.
   it('recovers missed visible messages even after the old backfill completed, once per database', async () => {
-    db.insert(migrationMeta).values({ key: 'git_context_pr_refs_backfill_v1', value: 'done' }).run();
+    db.insert(migrationMeta).values({ key: 'git_context_pr_refs_backfill_v3', value: 'done' }).run();
     db.update(sessions).set({ clearedAt: 10 }).where(eq(sessions.id, 's')).run();
     for (const [id, role, createdAt, rewindAt] of [
       ['1', 'assistant', 20, null], ['2', 'user', 30, null],
@@ -430,4 +477,115 @@ describe('manual PR management', () => {
     await expect(add(1)).rejects.toMatchObject({ code: 'PERMISSION_DENIED' });
     expect(verify).not.toHaveBeenCalled();
   });
+});
+
+// #8529: the navigation production path, real treeRehydrate and public PR store.
+// Existing tests call recompute directly and miss this missing navigation hook.
+// Minimal failure: A mentions /pull/111, native navigation projects B /pull/222.
+// DB tier reuses the file's one in-memory fixture; no RPC, account or disk access.
+describe('native tree navigation PR projection', () => {
+  const branch = (name: string, pr: number): NavigateSessionTreeResult => ({
+    tree: { roots: [], leafId: name, activePathIds: [name] },
+    messages: [{ clientId: name, role: 'assistant', createdAt: pr,
+      content: { text: `https://github.com/example/repo/pull/${pr}` } }],
+    contextTokens: 10, contextWindow: 200000, draftText: 'preserved draft',
+  });
+  const navigate = (result: NavigateSessionTreeResult) =>
+    navigateAndRehydrateSessionTree('s', h.owner!, async () => result);
+  async function seedA() {
+    const result = branch('a', 111);
+    const message = result.messages[0];
+    db.insert(messages).values({ ...message, id: 'a', sessionId: 's',
+      content: JSON.stringify(message.content), agentMeta: null }).run();
+    await recordPrRefsForImportedMessages('s');
+    db.insert(migrationMeta).values({ key: 'git_context_pr_refs_backfill_v2', value: 'done' }).run();
+    return result;
+  }
+
+  it('follows A→B→A and empty history without reviving removals or losing manual order', async () => {
+    const a = await seedA();
+    const [manual] = await add(333);
+    await managePrRefs('s', { action: 'pin', id: manual.id }, verify);
+    await managePrRefs('s', { action: 'reorder', ids: [manual.id] }, verify);
+    await add(444);
+    const removed = (await listPrRefs('s')).find(ref => ref.prNumber === 444)!;
+    await managePrRefs('s', { action: 'remove', id: removed.id }, verify);
+    const before = db.select().from(sessionPrRefs).where(eq(sessionPrRefs.id, manual.id)).get();
+    const b = branch('b', 222);
+    b.messages.push(
+      { clientId: 'removed', role: 'user', createdAt: 223, content: 'https://github.com/example/repo/pull/444' },
+      { clientId: 'tool', role: 'tool_result', createdAt: 224, content: 'https://github.com/example/repo/pull/555' },
+      { clientId: 'private', role: 'assistant', createdAt: 225,
+        agentMeta: { mcpApp: true },
+        content: { mcpApp: { version: 1, serverId: 'fixture', serverRevision: '1',
+          resourceUri: 'ui://fixture/app', tool: { name: 'save', inputSchema: { type: 'object' } },
+          arguments: { privateUrl: 'https://github.com/example/repo/pull/666' },
+          result: { content: [{ type: 'text', text: 'public result' }] } } } },
+    );
+    const projected = await navigate(b);
+    expect(projected.result.draftText).toBe('preserved draft');
+    expect(projected.hiddenClientIds).toEqual(['a']);
+    expect(db.select().from(messages).where(isNull(messages.rewindAt)).all().map(row => row.clientId))
+      .toEqual(['b', 'removed', 'tool', 'private']);
+    expect((await listPrRefs('s')).map(ref => ref.prNumber)).toEqual([333, 222]);
+    expect(db.select().from(sessionPrRefs).where(eq(sessionPrRefs.id, manual.id)).get()).toEqual(before);
+    expect(db.select().from(sessionPrRefs).where(eq(sessionPrRefs.id, removed.id)).get()).toMatchObject({ removedAt: expect.any(Number) });
+    await navigate(a);
+    expect((await listPrRefs('s')).map(ref => ref.prNumber)).toEqual([333, 111]);
+    await navigate({ ...a, messages: [] });
+    expect((await listPrRefs('s')).map(ref => ref.prNumber)).toEqual([333]);
+  });
+
+  it.each(['native failure', 'transaction failure', 'cancelled'] as const)(
+    'preserves persisted history and refs on %s', async mode => {
+      await seedA();
+      h.changed.mockClear();
+      const b = branch('b', 222);
+      if (mode === 'native failure') {
+        await expect(navigateAndRehydrateSessionTree('s', h.owner!, async () => {
+          throw new Error('native failure');
+        })).rejects.toThrow('native failure');
+      } else if (mode === 'transaction failure') {
+        sqlite.exec("CREATE TEMP TRIGGER reject_projection BEFORE INSERT ON messages WHEN NEW.client_id = 'b' BEGIN SELECT RAISE(ABORT, 'projection rejected'); END");
+        try {
+          await expect(navigate(b)).rejects.toThrow('projection rejected');
+        } finally { sqlite.exec('DROP TRIGGER reject_projection'); }
+      } else {
+        expect((await navigate({ ...b, cancelled: true })).result.cancelled).toBe(true);
+      }
+      expect(db.select().from(messages).where(isNull(messages.rewindAt)).all().map(row => row.clientId)).toEqual(['a']);
+      expect((await listPrRefs('s')).map(ref => ref.prNumber)).toEqual([111]);
+      expect(h.changed).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(['before navigation', 'native result', 'committed projection'] as const)(
+    'rejects stale account generation at %s without PR writes/publication', async stage => {
+      await seedA();
+      h.changed.mockClear();
+      const owner = h.owner!;
+      const native = vi.fn(async () => {
+        if (stage === 'native result') h.owner = { ...owner, clientEpoch: 2 };
+        return branch('b', 222);
+      });
+      if (stage === 'before navigation') {
+        h.owner = null;
+        expect(() => assertSessionTreeOwner(null)).toThrow('DbClient not ready');
+      }
+      if (stage === 'committed projection') {
+        const client = h.client as { tx(name: string, args: unknown): Promise<unknown> };
+        const tx = client.tx.bind(client);
+        client.tx = async (name, args) => {
+          const result = await tx(name, args);
+          h.owner = { ...owner, clientEpoch: 2 };
+          return result;
+        };
+      }
+      await expect(navigateAndRehydrateSessionTree('s', owner, native)).rejects.toMatchObject({ code: 'PERMISSION_DENIED' });
+      if (stage === 'before navigation') expect(native).not.toHaveBeenCalled();
+      expect((await listPrRefs('s')).map(ref => ref.prNumber)).toEqual([111]);
+      expect(h.changed).not.toHaveBeenCalled();
+      expect(() => assertSessionTreeOwner(owner)).toThrow('account changed');
+    },
+  );
 });

@@ -96,3 +96,96 @@ it('hides unconfigured service but makes a connection failure visible', async ()
   fireEvent(window, new Event('focus'));
   expect(await screen.findByText(prefix + 'error')).toBeTruthy();
 });
+
+// Automation setup must not offer account-wide disconnect or imply that an
+// account login confirms this task's subscription. Existing card tests only
+// exercise plugin settings. Minimal input: connected login, unrelated denied repo.
+// Tier: unit/jsdom, production GithubAppCard automation entry.
+it('limits automation setup to account connection and relevant repository authorization', async () => {
+  window.electronAPI = { gitContext: { githubAppStatus: async () => ({ available: true,
+    login: 'example-user', repositories: ['example/project'], unavailable: ['other/private'] }) } } as unknown as typeof window.electronAPI;
+  render(<GithubAppCard automation repositories={['example/project']} />);
+  await screen.findByText('ccAgent.gitContext.pr.setup.account.connected');
+  expect(screen.getByRole('button', { name: 'scheduler.editor.webhook.authorizeRepositories' })).toBeTruthy();
+  expect(screen.queryByRole('button', { name: prefix + 'disconnect' })).toBeNull();
+  expect(screen.queryByText(prefix + 'connected')).toBeNull();
+  expect(screen.queryByText(prefix + 'missing')).toBeNull();
+});
+
+// Settings-only installation reads must not run for a scheduler or sign-in dialog,
+// or repeat on ordinary focus; returning from installation settings must refresh.
+it('loads installation access only on the plugin settings page and on return from GitHub', async () => {
+  const githubAppAccess = vi.fn(async () => ({ status: 'ready', installations: [] }));
+  const githubAppStatus = vi.fn(async () => ({ available: true, login: 'person', repositories: [] }));
+  window.electronAPI = { gitContext: { githubAppAccess, githubAppStatus, installGithubApp: vi.fn() } } as unknown as typeof window.electronAPI;
+  const card = render(<GithubAppCard automation />);
+  await screen.findByText('ccAgent.gitContext.pr.setup.account.connected');
+  card.rerender(<GithubAppCard />);
+  expect(githubAppAccess).not.toHaveBeenCalled();
+  card.rerender(<GithubAppCard pluginSettings />);
+  await screen.findByText('ccAgent.gitContext.pr.setup.access.empty');
+  await act(async () => { fireEvent(window, new Event('focus')); });
+  expect(githubAppAccess).toHaveBeenCalledOnce();
+  fireEvent.click(screen.getByText('ccAgent.gitContext.pr.setup.access.manage'));
+  await screen.findByText(prefix + 'finishInBrowser');
+  await act(async () => { fireEvent(window, new Event('focus')); });
+  expect(githubAppAccess).toHaveBeenCalledTimes(2);
+});
+
+// Unit/jsdom: the production settings card must preserve installation details
+// and avoid a new installation request after a transient event-status failure.
+// The existing focus test only covers successful refreshes.
+it('preserves installation access across a failed focus refresh and recovery', async () => {
+  const githubAppAccess = vi.fn(async () => ({ status: 'ready', installations: [] }));
+  const githubAppStatus = vi.fn(async () => ({ available: true, login: 'person', repositories: [] }));
+  window.electronAPI = { gitContext: { githubAppAccess, githubAppStatus } } as unknown as typeof window.electronAPI;
+  render(<GithubAppCard pluginSettings />);
+  const accessDetails = 'ccAgent.gitContext.pr.setup.access.empty';
+  await screen.findByText(accessDetails);
+
+  githubAppStatus.mockRejectedValueOnce(new Error('network'));
+  fireEvent(window, new Event('focus'));
+  await screen.findByRole('alert');
+  expect(screen.getByText(accessDetails)).toBeTruthy();
+
+  await act(async () => { fireEvent(window, new Event('focus')); });
+  expect(screen.queryByRole('alert')).toBeNull();
+  expect(screen.getByText(accessDetails)).toBeTruthy();
+  expect(githubAppAccess).toHaveBeenCalledOnce();
+});
+
+// Unit/jsdom, production settings card. The previous return test did not
+// simulate the OAuth notification that precedes repository installation.
+// An empty pre-install response would otherwise persist after browser return.
+it('waits for browser return when OAuth completes before repository installation', async () => {
+  let onConnected!: () => void;
+  let installed = false;
+  const githubAppAccess = vi.fn(async () => ({
+    status: 'ready',
+    installations: installed ? [{
+      id: 7, app: 'example-app', owner: 'example-org', selection: 'all',
+      visibleRepositories: 12, permissions: { contents: 'read' },
+    }] : [],
+  }));
+  const githubAppStatus = vi.fn<() => Promise<GithubAppConnectionState>>()
+    .mockResolvedValueOnce({ available: true })
+    .mockResolvedValue({ available: true, login: 'person', repositories: [] });
+  window.electronAPI = { gitContext: {
+    githubAppAccess, githubAppStatus, connectGithubApp: vi.fn(async () => {}),
+    onGithubConnected: (listener: () => void) => { onConnected = listener; return () => {}; },
+  } } as unknown as typeof window.electronAPI;
+  render(<GithubAppCard pluginSettings />);
+  fireEvent.click(await screen.findByText(prefix + 'connect'));
+  await screen.findByText(prefix + 'finishInBrowser');
+
+  await act(async () => { onConnected(); });
+  expect(screen.getByText(prefix + 'finishInBrowser')).toBeTruthy();
+  expect(githubAppStatus).toHaveBeenCalledOnce();
+  expect(githubAppAccess).not.toHaveBeenCalled();
+
+  installed = true;
+  await act(async () => { fireEvent(window, new Event('focus')); });
+  expect(screen.getByText(/example-org/)).toBeTruthy();
+  await act(async () => { fireEvent(window, new Event('focus')); });
+  expect(githubAppAccess).toHaveBeenCalledOnce();
+});

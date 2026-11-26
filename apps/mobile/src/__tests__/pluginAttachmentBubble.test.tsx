@@ -6,6 +6,11 @@ import { describe, expect, it, vi } from 'vitest';
 const viewportHarness = vi.hoisted(() => ({ list: null as any, finishReveal: null as any, renders: 0, expanded: false }));
 
 // Keep site-video's native surface out of this Node message-rendering test.
+// Window geometry is a native boundary; preview placement has its own production-hook suite.
+vi.mock('@/session/usePreviewChromeFrame', () => ({ usePreviewChromeFrame: () => ({
+  top: 0, bottom: 0, left: 12, right: 12, contentTop: 48,
+  documentContentTop: 64, documentHeaderHeight: 64, sharedStatusRow: false,
+}) }));
 vi.mock('@/platform/gestureHandler', () => {
   const chain = (): any => new Proxy({}, { get: (_target, key) => key === 'then' ? undefined : () => chain() });
   return { GestureDetector: ({ children }: { children: unknown }) => children, Gesture: { LongPress: chain } };
@@ -13,6 +18,8 @@ vi.mock('@/platform/gestureHandler', () => {
 vi.mock('react-native-webview', () => ({ WebView: () => null }));
 // Card previews are covered separately; retain this suite's attachment/message rendering assertions.
 vi.mock('@/plugins/PluginNativeIntent', () => ({ PluginNativeIntent: () => null }));
+// Model selection has its own card regression; keep native catalogs out of this message test.
+vi.mock('@/plugins/PluginModelPicker', () => ({ PluginModelPicker: () => null }));
 vi.mock('expo-modules-core', () => ({
   requireOptionalNativeModule: () => null,
   requireNativeViewManager: () => () => null,
@@ -92,7 +99,7 @@ vi.mock('@/session/messageActions', async (original) => ({ ...await original<obj
 
 import { MessageRenderer } from '@/session/MessageRenderer';
 import { buildMobileMessageRenderItems } from '@/session/messageRenderModel';
-import { companionConversationItems } from '@/session/companionConversationPresentation';
+import { companionConversationItems, companionProcessItems } from '@/session/companionConversationPresentation';
 import type { RemoteMessage } from '@/session/types';
 const msg = (id: string, role: RemoteMessage['role'], content: unknown, extra: Partial<RemoteMessage> = {}): RemoteMessage => ({ id, clientId: id, sessionId: 's', role, content, toolUseId: null, agentMeta: null, createdAt: '2026-01-01T00:00:00Z', ...extra });
 
@@ -361,6 +368,30 @@ describe('partner conversation presentation', () => {
     } finally {
       viewportHarness.expanded = false;
     }
+  });
+
+  it.each([true, false])('places the five-minute reply stamp before its process (streaming=%s)', streaming => {
+    const items = companionProcessItems(buildMobileMessageRenderItems([
+      msg('ask', 'user', 'Check it', { createdAt: '2026-01-01T09:00:00Z' }),
+      msg('work', 'tool_use', { toolName: 'Read', toolUseId: 'work', input: {} }, {
+        toolUseId: 'work', createdAt: '2026-01-01T09:04:59Z',
+      }),
+      msg('answer', 'assistant', 'Here is the result', {
+        createdAt: '2026-01-01T09:05:00Z', agentMeta: { assistantPhase: 'final_answer', turnCompleted: !streaming, isStreaming: streaming },
+      }),
+    ], { isSessionStreaming: streaming }), streaming);
+    const html = renderClient(<MessageRenderer items={items} companion isSessionStreaming={streaming} companionAvatar={<i />} />);
+    const host = document.createElement('div');
+    host.innerHTML = html;
+    const stamps = host.querySelectorAll('[data-testid="companion.timeGroup"]');
+    const process = host.querySelector('[data-testid="companion.processRow"]')!;
+    const reply = host.querySelector('[data-testid="companion.replyRow"]')!;
+    expect(stamps).toHaveLength(2);
+    expect(stamps[1]?.textContent).toMatch(/:05/);
+    expect(process).toBeTruthy();
+    expect(reply).toBeTruthy();
+    expect(stamps[1]!.compareDocumentPosition(process) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(process.compareDocumentPosition(reply) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
   it('hangs replies from the partner portrait and stamps five-minute groups like Desktop', () => {

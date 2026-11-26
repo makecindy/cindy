@@ -9,6 +9,7 @@ import { TelegramApiError } from '@cindy/im';
 
 import {
   beginChannelToolScope,
+  beginTelegramReplyMediaScope,
   resetChannelToolScopeForTests,
   type TelegramToolScope,
   type TelegramToolTransport,
@@ -200,7 +201,8 @@ describe('cindy_telegram_bot sends into the current lane', () => {
     });
   });
 
-  it('send_media goes through the transport; guests may only upload files inside the task directory', async () => {
+  // Unit regression: late question replies retain the same realpath boundary as guest turns.
+  it.each(['turn', 'late-answer'])('send_media enforces guest file limits for %s', async (mode) => {
     const t = fakeTransport();
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'tg-mcp-'));
     try {
@@ -217,8 +219,12 @@ describe('cindy_telegram_bot sends into the current lane', () => {
       // Windows junctions keep this regression runnable without symlink privileges.
       fs.symlinkSync(outsideDir, escapeDir, process.platform === 'win32' ? 'junction' : 'dir');
       const escapeLink = path.join(escapeDir, 'private.txt');
+      const releaseReply = mode === 'late-answer' ? beginTelegramReplyMediaScope({
+        sessionId: 's-1', sessionInstanceId: 'i-1',
+        scope: { im: t, laneUserId: 'g/-100/7', requesterIsOwner: false }, isActive: () => true,
+      }) : () => {};
       await withServer(
-        groupScope(t),
+        mode === 'turn' ? groupScope(t) : null,
         async (call) => {
           expect(await call('send_media', { kind: 'photo', path: inside, caption: 'c' })).toMatchObject({
             ok: true,
@@ -242,6 +248,7 @@ describe('cindy_telegram_bot sends into the current lane', () => {
         },
         { workingDir },
       );
+      releaseReply();
       // The owner may send any absolute path (same as the Feishu send_file_to_user tool).
       await withServer(ownerDmScope(t), async (call) => {
         expect(await call('send_media', { kind: 'document', path: outside })).toMatchObject({ ok: true });
@@ -389,5 +396,46 @@ describe('cindy_telegram_bot owner-only and call_api boundaries', () => {
       // Cross-chat sends are not echoed into the DM lane window (nothing to echo for a DM anyway).
       expect(t.echoes).toEqual([]);
     });
+  });
+});
+
+// Regression: task-result turns had no Telegram scope, so screenshots could not be delivered.
+// Unit, real MCP handlers: distinguish media-only authority from full inbound authority and expiry.
+describe('background reply media', () => {
+  it('sends all media sources only to the admitted topic without granting other tools', async () => {
+    const t = fakeTransport();
+    let active = true;
+    const release = beginTelegramReplyMediaScope({
+      sessionId: 's-1', sessionInstanceId: 'i-1', scope: { im: t, laneUserId: 'g/-100/7' },
+      isActive: () => active,
+    });
+    try {
+      await withServer(null, async call => {
+        // Background delivery has no extra kind/source/root restrictions; transport validates payloads.
+        for (const kind of ['photo', 'document', 'video', 'audio', 'voice', 'animation', 'sticker', 'video_note']) {
+          for (const [source, value, transportField] of [
+            ['path', '/outside-task/result.bin', 'absPath'],
+            ['url', 'https://example.com/result', 'url'],
+            ['file_id', 'telegram-file-id', 'fileId'],
+          ]) {
+            expect(await call('send_media', { kind, [source]: value, caption: 'result', reply_to_message_id: '81' })).toMatchObject({ ok: true });
+            expect(t.sendMedia).toHaveBeenLastCalledWith('g/-100/7', {
+              kind, [transportField]: value, caption: 'result', replyToMessageId: '81',
+            });
+          }
+        }
+        expect(await call('send_text', { text: 'hi' })).toMatchObject({ errorCode: 'NO_ACTIVE_TELEGRAM_SCOPE' });
+        expect(await call('call_api', { method: 'sendMessage', params: { chat_id: '-200', text: 'hi' } })).toMatchObject({ errorCode: 'NO_ACTIVE_TELEGRAM_SCOPE' });
+        expect(await call('send_media', { kind: 'document', path: 'relative.txt' })).toMatchObject({ errorCode: 'PATH_NOT_ABSOLUTE' });
+        expect(await call('send_media', { kind: 'document', path: '/result.txt', reply_to_message_id: 'invalid' })).toMatchObject({ errorCode: 'INVALID_MESSAGE_ID' });
+        active = false;
+        expect(await call('send_media', { kind: 'document', path: '/result.txt' })).toMatchObject({ errorCode: 'NO_ACTIVE_TELEGRAM_SCOPE' });
+        expect(t.sendMedia).toHaveBeenCalledTimes(24);
+      });
+      active = true;
+      await withServer(null, async call => {
+        expect(await call('send_media', { kind: 'document', path: '/result.txt' })).toMatchObject({ errorCode: 'NO_ACTIVE_TELEGRAM_SCOPE' });
+      }, { contextInstanceId: 'replacement' });
+    } finally { release(); }
   });
 });

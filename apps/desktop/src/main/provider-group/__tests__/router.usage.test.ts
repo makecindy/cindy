@@ -1,11 +1,12 @@
 /** Real directory → quota eligibility → scheduler → status projection, using only in-memory accounts. */
+import type { ProviderShareReceived } from '@cindy/device-link';
 import type { ProviderView } from '@cindy/model-providers';
 import { describe, expect, it, vi } from 'vitest';
 import type { ClaudeSubscriptionUsageSnapshot } from '../../../shared/claudeSubscriptionUsage';
 import { normalizeProviderGroupConfig, PROVIDER_GROUP_STRATEGIES, type ProviderGroupMember } from '../../../shared/providerGroup';
 import { createProviderGroupDirectory } from '../directory';
 import { createProviderGroupRouter, type ProviderGroupRouterDeps } from '../router';
-import { providerGroupCodexUsageSnapshot } from '../usage';
+import { providerGroupCodexUsageSnapshot, providerGroupShareQuotaFromInsights } from '../usage';
 
 const NOW = 1_000_000;
 const OPUS = 'claude-opus-5-5';
@@ -202,19 +203,24 @@ describe('provider-group quota routing', () => {
     expect(h.router.coolingUntil('anthropic', 'local', SONNET)).toBe(NOW + 200_000);
   });
 
-  it('bounds a pool read and ignores a late positive result after the pick has returned', async () => {
+  // Unit regression: repeated 1.5s waits discarded healthy late evidence. The returned
+  // pick stays unchanged, but the next one must use it without a new probe.
+  it('bounds a pool read and applies a late healthy result to subsequent picks', async () => {
     vi.useFakeTimers();
     try {
       let finish!: (available: boolean) => void;
-      const h = harness(() => new Promise<boolean>((resolve) => { finish = resolve; }));
+      const read = vi.fn(() => new Promise<boolean>((resolve) => { finish = resolve; }));
+      const h = harness(read);
       h.config.members[1].paused = true;
       h.router.markCooling('anthropic', 'local', NOW + 100_000, OPUS);
       const pick = h.pick(OPUS);
       await vi.advanceTimersByTimeAsync(1500);
       expect((await pick).kind).toBe('unavailable');
       finish(true);
-      await Promise.resolve();
-      expect(h.router.coolingUntil('anthropic', 'local', OPUS)).toBe(NOW + 100_000);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(h.router.coolingUntil('anthropic', 'local', OPUS)).toBeNull();
+      expect(await h.pick(OPUS)).toMatchObject({ member: { key: 'local' } });
+      expect(read).toHaveBeenCalledTimes(1);
     } finally {
       vi.useRealTimers();
     }
@@ -455,5 +461,80 @@ describe('provider-group quota routing', () => {
     expect(await h.pick()).toMatchObject({ kind: 'member', member: { key: 'local' } });
     h.readUsage.mockRejectedValue(new Error('unreachable'));
     expect(await h.pick()).toMatchObject({ kind: 'member', member: { key: 'local' } });
+  });
+});
+
+// Unit, provider-groups.md §5「分享边界」(2026-11-19 用户裁决)。生产入口：真实 directory → router.pick/view/rebalanceCandidates，
+// 额度经 providerGroupShareQuotaFromInsights 换算。回归：组里自己的两台读得到额度时，空闲的分享电脑(额度未知)从来分不到；
+// 分享者开放额度后也一直按未知处理。此前的用例没有分享成员，也没有覆盖「读得到 + 读不到」混合的组。
+describe('received share computers in a provider group', () => {
+  const HOUR = 3_600_000;
+  const WEEK = 7 * 24 * HOUR;
+  const insights = (weekRemaining: number, weekResetAt: number) => ({
+    version: 1,
+    capabilities: { quota: true, usage: false },
+    status: { quota: 'ready', usage: 'disabled' },
+    quota: { group: false, partial: false, accounts: [{ state: 'ready', updatedAt: NOW, balance: null, windows: [
+      { kind: 'session', label: null, remainingPercent: 90, resetsAt: NOW + 2 * HOUR, windowMinutes: 300 },
+      { kind: 'week', label: null, remainingPercent: weekRemaining, resetsAt: weekResetAt, windowMinutes: 10_080 },
+    ] }] },
+    usage: null,
+  });
+  function shareHarness(strategy: 'least' | 'order') {
+    const config = normalizeProviderGroupConfig({ strategy, members: [
+      { kind: 'local' },
+      { kind: 'device', agentDeviceId: 'mini', providerId: 'anthropic' },
+      { kind: 'share', agentDeviceId: 'share:s1', providerId: 'anthropic' },
+    ] }, 'anthropic')!;
+    const [local, mini, shared] = config.members.map((member) => member.key);
+    const usage = new Map<string, ClaudeSubscriptionUsageSnapshot>([[local, snapshot(10, 50)], [mini, snapshot(10, 50)]]);
+    let shareInsights: unknown = null;
+    const readShareQuota = vi.fn(async () => providerGroupShareQuotaFromInsights(shareInsights, NOW));
+    const directory = createProviderGroupDirectory({
+      listLocalProviders: async () => [view('anthropic')], localDeviceName: () => 'local',
+      listDevices: async () => [{ deviceId: 'mini', name: 'mini', online: true, remoteControlEnabled: true, controlEnabled: true,
+        isSelf: false, platform: 'darwin', appVersion: null, lastSeenAt: null, busy: false }],
+      readDeviceProviders: async () => [view('anthropic')],
+      listReceivedShares: () => [{ shareId: 's1', memberId: 'm-s1', providerId: 'anthropic', providerLabel: 'Anthropic',
+        hostDeviceId: 'host-s1', deviceName: 'David PC', owner: { displayName: 'David', avatarUrl: null, region: 'cn' },
+        status: 'active', hostOnline: true, hostCapable: true } as ProviderShareReceived],
+      isMobilePlatform: () => false, now: () => NOW,
+      readClaudeUsage: async (member) => usage.get(member.key) ?? null,
+      readShareQuota,
+    });
+    // DP 3 个、DHL 2 个正在运行，分享来的 David 空闲。
+    const bindings = Object.fromEntries([...Array(3)].map((_, i) => [`dp${i}`, { providerId: 'anthropic', memberKey: local }])
+      .concat([...Array(2)].map((_, i) => [`dhl${i}`, { providerId: 'anthropic', memberKey: mini }])));
+    const router = createProviderGroupRouter({ directory, readGroup: () => config,
+      listBindings: () => bindings as unknown as ReturnType<ProviderGroupRouterDeps['listBindings']>,
+      isTurnRunning: () => true, now: () => NOW, random: () => 0,
+      coolingStore: { read: () => ({}), write: vi.fn() } });
+    const pick = () => router.pick({ providerId: 'anthropic', agentKind: 'claude-code', model: OPUS });
+    return { router, pick, local, shared, readShareQuota, setShare: (raw: unknown) => { shareInsights = raw; } };
+  }
+
+  it('assigns an idle share computer whose quota is not shared even when the group’s own computers report quota', async () => {
+    const h = shareHarness('least');
+    expect(await h.pick()).toMatchObject({ kind: 'member', member: { key: h.shared } });
+    expect(h.readShareQuota).toHaveBeenCalled();
+  });
+
+  it('ranks a share computer by the quota its sharer opened, without exhausting it or exposing it', async () => {
+    const h = shareHarness('order');
+    // 快重置还剩一半：比组所在电脑更急，按顺序也先分给它。
+    h.setShare(insights(50, NOW + HOUR));
+    expect(await h.pick()).toMatchObject({ member: { key: h.shared } });
+    // 刚重置、几乎用完：明显不急，回到组里读得到额度的电脑。
+    h.setShare(insights(5, NOW + WEEK - HOUR));
+    expect(await h.pick()).toMatchObject({ member: { key: h.local } });
+    // 周额度显示用完也不据此判冷却(只代表分享者的一个账号)；额度不随组状态外传，也不作为任务进行中换号的目标。
+    h.setShare(insights(0, NOW + 2 * HOUR));
+    const shareRow = (await h.router.view('anthropic', OPUS)).members.find((member) => member.key === h.shared);
+    expect(shareRow).toMatchObject({ state: 'available' });
+    expect(shareRow).not.toHaveProperty('quota');
+    h.setShare(insights(50, NOW + HOUR));
+    const resolved = (await h.pick() as { resolved: Parameters<typeof h.router.rebalanceCandidates>[1] }).resolved;
+    expect(h.router.rebalanceCandidates({ providerId: 'anthropic', agentKind: 'claude-code', model: OPUS, exclude: new Set() }, resolved)
+      .map((candidate) => candidate.key)).not.toContain(h.shared);
   });
 });

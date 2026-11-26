@@ -294,22 +294,33 @@ export function lookupSubagentRunStatus(
 
 }
 
+const COLLAB_SPAWN_TOOL_RE = /^collab:spawn/i;
+
 /**
  * Tool names that spawn a sub-agent task: Claude `Task`/`Agent`, Codex collab agents,
- * PI `subagent`(Cindy 自有扩展注册的工具名,与 pi 社区惯例一致)。
+ * PI `subagent` (stable presentation identity; native dispatch is namespaced).
  *
- * MCP 工具一律带 `mcp__` 前缀,不会与裸 `subagent` 撞名。
+ * Runtime names are projected by parseMessageToolUse before card classification.
  */
 export function isSubagentSpawnToolName(toolName: string): boolean {
   return toolName === 'Agent'
     || toolName === 'Task'
     || toolName === PI_SUBAGENT_TOOL_NAME
-    || toolName === 'collab:spawn'
-    || toolName === 'collab:spawnAgent';
+    // Codex collab 的 spawn 工具名按版本变化(`collab:spawn` / `collab:spawnAgent`),
+    // 与 translator 的 spawn 判据同口径(前缀),升级后新名字不会静默退化成普通工具行。
+    || COLLAB_SPAWN_TOOL_RE.test(toolName);
 }
 
+/**
+ * Tool names that render as a sub-agent task card: only the calls that actually
+ * launch a child. Codex collab also ships control calls (`collab:wait` /
+ * `collab:sendInput` / `collab:resumeAgent` / `collab:closeAgent`) that address
+ * agents someone else spawned; turning them into task cards showed a phantom
+ * "Subagent wait" card (and a phantom row in the background-task panel) for
+ * every poll. They stay ordinary tool steps (see `describeToolUse` collab kind).
+ */
 export function isAgentTaskToolName(toolName: string): boolean {
-  return isSubagentSpawnToolName(toolName) || toolName.startsWith('collab:');
+  return isSubagentSpawnToolName(toolName);
 }
 
 /**
@@ -324,8 +335,10 @@ export function isClaudeSubagentToolName(toolName: string | undefined): boolean 
   return toolName === 'Agent' || toolName === 'Task';
 }
 
-/** PI 子代理工具名 —— maker-core 的 pi 扩展注册端与本文件的卡片判据共用,不各写字面量。 */
+/** Stable card identity, including persisted calls from before runtime namespacing. */
 export const PI_SUBAGENT_TOOL_NAME = 'subagent';
+/** Pi registration identity: do not claim the generic name used by native user extensions. */
+export const PI_SUBAGENT_RUNTIME_TOOL_NAME = 'cindy_subagent';
 
 /**
  * Validate + shape a raw `agent_task_update` event payload into an `AgentTaskUpdate`.

@@ -15,6 +15,7 @@
 import { useEffect, useRef, useState } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
 import { Button } from '@/components/ui/button';
+import { DownloadMeter } from '@/components/ui/download-meter';
 import { useTranslation } from 'react-i18next';
 import { Check, ChevronRight, FolderOpen, Globe } from 'lucide-react';
 
@@ -29,6 +30,7 @@ import {
   normalizeInstallPathKey,
 } from '../lib/installTargetPaths';
 import type { SkillhubCatalogScope } from '../../../../shared/skillhubCatalog';
+import type { DownloadProgress } from '../../../../shared/downloadProgress';
 import { useSkillhubTarget } from '../SkillhubTargetContext';
 
 /** Minimal skill identity for the picker (market Clone or local import). */
@@ -101,6 +103,7 @@ export function InstallTargetPicker({
 }: InstallTargetPickerProps) {
   const { t } = useTranslation();
   const target = useSkillhubTarget();
+  const windowsPaths = !!target || window.electronAPI?.platform === 'win32';
   const { projects, loading: projectsLoading } = useProjectsForPicker();
   const { confirm } = useConfirmDialog();
   const [installing, setInstalling] = useState(false);
@@ -109,6 +112,31 @@ export function InstallTargetPicker({
   const returnFocusRef = useRef<HTMLElement | null>(null);
   const [bannerError, setBannerError] = useState<string | null>(null);
   const [installedPaths, setInstalledPaths] = useState<Map<string, string>>(new Map());
+  const [installProgress, setInstallProgress] = useState<DownloadProgress | null>(null);
+
+  // Local installs report download progress; remote targets send none and show no meter.
+  useEffect(() => {
+    setInstallProgress(null);
+    if (!installing || !skill) return;
+    return window.electronAPI.skillhub?.onInstallProgress?.((event) => {
+      if (event.name !== skill.name) return;
+      if (event.download) setInstallProgress(event.download);
+      else if (
+        event.phase === 'verifying' ||
+        event.phase === 'extracting' ||
+        event.phase === 'registering'
+      )
+        setInstallProgress(
+          (prev) =>
+            prev && {
+              ...prev,
+              phase: event.phase === 'verifying' ? 'verifying' : 'installing',
+              speedBps: 0,
+              etaSeconds: null,
+            },
+        );
+    });
+  }, [installing, skill?.name]);
 
   useEffect(() => {
     if (open && target) void target.refresh();
@@ -122,7 +150,7 @@ export function InstallTargetPicker({
       for (const local of target.state.skills) {
         if (local.registrySkillName !== skill.name || !local.registryEntry
           || (local.registryEntry.catalogScope ?? 'market') !== (skill.catalogScope ?? 'market')) continue;
-        paths.set(normalizeInstallPathKey(joinSkillInstallPath(local.projectRoot ?? 'remote-global', skill.name)), local.registryEntry.version);
+        paths.set(normalizeInstallPathKey(joinSkillInstallPath(local.projectRoot ?? 'remote-global', skill.name), { windows: windowsPaths }), local.registryEntry.version);
       }
       setInstalledPaths(paths);
       return;
@@ -134,7 +162,7 @@ export function InstallTargetPicker({
         if (cancelled || !res.success || !res.manifest) return;
         const paths = new Map<string, string>();
         for (const [p, entry] of Object.entries(res.manifest.installs)) {
-          paths.set(normalizeInstallPathKey(p), entry.version);
+          paths.set(normalizeInstallPathKey(p, { windows: windowsPaths }), entry.version);
         }
         setInstalledPaths(paths);
       })
@@ -142,7 +170,7 @@ export function InstallTargetPicker({
     return () => {
       cancelled = true;
     };
-  }, [open, skill?.name, skill?.catalogScope, target?.state.skills]);
+  }, [open, skill?.name, skill?.catalogScope, target?.state.skills, windowsPaths]);
 
   useEffect(() => {
     if (!open) {
@@ -154,14 +182,14 @@ export function InstallTargetPicker({
   if (!open || !skill) return null;
 
   const getInstalledVersion = (targetPath: string): string | null => {
-    return installedPaths.get(normalizeInstallPathKey(targetPath)) ?? null;
+    return installedPaths.get(normalizeInstallPathKey(targetPath, { windows: windowsPaths })) ?? null;
   };
 
   // Global 行：找 registry 中不属于任何 projectRoot 的条目
   const globalInstalledVersion = (() => {
     for (const [p, v] of installedPaths) {
-      if (!isInstallPathForSkill(p, skill.name)) continue;
-      const isProjectPath = projects.some((proj) => isInstallPathUnderProject(p, proj.projectRoot));
+      if (!isInstallPathForSkill(p, skill.name, { windows: windowsPaths })) continue;
+      const isProjectPath = projects.some((proj) => isInstallPathUnderProject(p, proj.projectRoot, { windows: windowsPaths }));
       if (!isProjectPath) return v;
     }
     return null;
@@ -262,11 +290,11 @@ export function InstallTargetPicker({
   return (
     <Dialog.Root open={open} onOpenChange={(next) => { if (!next && !installingRef.current) onClose(); }}>
       <Dialog.Portal>
-        <Dialog.Overlay className="modal-scrim fixed inset-0 z-[9000]" />
+        <Dialog.Overlay className="modal-scrim fixed inset-0 z-modal" />
         <Dialog.Content
           aria-labelledby={INSTALL_PICKER_TITLE_ID}
           className={cn(
-            'modal-panel fixed inset-0 z-[9000] m-auto flex h-fit max-h-[88vh] w-[min(480px,calc(100vw-32px))] flex-col overflow-y-auto outline-none',
+            'modal-panel fixed inset-0 z-modal m-auto flex h-fit max-h-[88vh] w-[min(480px,calc(100vw-32px))] flex-col overflow-y-auto outline-none',
             '[&_button:focus-visible]:outline-none [&_button:focus-visible]:ring-2 [&_button:focus-visible]:ring-inset [&_button:focus-visible]:ring-[var(--focus-ring-soft)]',
           )}
           onOpenAutoFocus={(event) => {
@@ -292,9 +320,9 @@ export function InstallTargetPicker({
         >
         <div
           className="flex items-start justify-between gap-3"
-          style={{ padding: '20px 18px 12px 18px' }}
+          style={{ padding: 'var(--space-5) var(--space-4) var(--space-3) var(--space-4)' }}
         >
-          <div className="flex min-w-0 flex-col" style={{ gap: '6px' }}>
+          <div className="flex min-w-0 flex-col" style={{ gap: 'var(--space-1_5)' }}>
             <Dialog.Title
               id={INSTALL_PICKER_TITLE_ID}
               className="text-[var(--msg-assistant-text)]"
@@ -331,7 +359,7 @@ export function InstallTargetPicker({
           </div>
         )}
 
-        <div className="flex flex-col" style={{ padding: '4px 12px 12px 12px' }}>
+        <div className="flex flex-col" style={{ padding: 'var(--space-1) var(--space-3) var(--space-3) var(--space-3)' }}>
           <button
             type="button"
             disabled={installing || !!globalInstalledVersion || (!!target && !target.writable)}
@@ -345,7 +373,7 @@ export function InstallTargetPicker({
                 ? 'opacity-50 cursor-default'
                 : 'enabled:hover:bg-[var(--settings-menu-bg-hover)] disabled:opacity-60 disabled:cursor-default',
             )}
-            style={{ height: `${PROJECT_ROW_H}px`, padding: '0 12px' }}
+            style={{ height: `${PROJECT_ROW_H}px`, padding: '0 var(--space-3)' }}
           >
             <div
               className="flex shrink-0 items-center justify-center rounded-full bg-[var(--chat-input-chip-bg)]"
@@ -353,7 +381,7 @@ export function InstallTargetPicker({
             >
               <Globe size={14} className="shrink-0 text-[var(--settings-section-desc)]" />
             </div>
-            <div className="flex min-w-0 flex-1 flex-col" style={{ gap: '2px' }}>
+            <div className="flex min-w-0 flex-1 flex-col" style={{ gap: 'var(--space-0_5)' }}>
               <span className="text-[var(--msg-assistant-text)]" style={{ fontSize: 'var(--text-13)', fontWeight: 500 }}>
                 {t('skillhub.installPicker.global')}{target ? ` · ${target.name}` : ''}
               </span>
@@ -373,7 +401,7 @@ export function InstallTargetPicker({
             )}
           </button>
 
-          <div className="flex items-center gap-[10px]" style={{ padding: '10px 8px 6px 8px' }}>
+          <div className="flex items-center gap-2.5" style={{ padding: 'var(--space-2_5) var(--space-2) var(--space-1_5) var(--space-2)' }}>
             <span
               className="shrink-0 text-[var(--settings-theme-icon)]"
               style={{ fontSize: 'var(--text-10)', fontWeight: 500, letterSpacing: '0.5px' }}
@@ -402,7 +430,7 @@ export function InstallTargetPicker({
               className="flex flex-col overflow-y-auto"
               style={{
                 maxHeight: `${MAX_VISIBLE_PROJECTS * PROJECT_ROW_H + (MAX_VISIBLE_PROJECTS - 1) * 2}px`,
-                gap: '2px',
+                gap: 'var(--space-0_5)',
               }}
             >
               {projects.map((p) => {
@@ -424,7 +452,7 @@ export function InstallTargetPicker({
                         ? 'opacity-50 cursor-default'
                         : 'enabled:hover:bg-[var(--settings-menu-bg-hover)] disabled:opacity-60 disabled:cursor-default',
                     )}
-                    style={{ height: `${PROJECT_ROW_H}px`, padding: '0 12px' }}
+                    style={{ height: `${PROJECT_ROW_H}px`, padding: '0 var(--space-3)' }}
                   >
                     <div
                       className="flex shrink-0 items-center justify-center rounded-full bg-[var(--chat-input-chip-bg)]"
@@ -432,7 +460,7 @@ export function InstallTargetPicker({
                     >
                       <FolderOpen size={14} className="shrink-0 text-[var(--settings-section-desc)]" />
                     </div>
-                    <div className="flex min-w-0 flex-1 flex-col" style={{ gap: '2px' }}>
+                    <div className="flex min-w-0 flex-1 flex-col" style={{ gap: 'var(--space-0_5)' }}>
                       <span
                         className="truncate text-[var(--msg-assistant-text)]"
                         style={{ fontSize: 'var(--text-13)', fontWeight: 500 }}
@@ -459,6 +487,11 @@ export function InstallTargetPicker({
             </div>
           )}
         </div>
+          {installing && installProgress && (
+            <div className="px-4 pb-3">
+              <DownloadMeter label={skill.name} progress={installProgress} />
+            </div>
+          )}
           <div className="flex justify-end px-4 pb-4">
             <Button ref={cancelRef} variant="secondary" disabled={installing} onClick={onClose}>
               {t('skillhub.detail.cancel')}

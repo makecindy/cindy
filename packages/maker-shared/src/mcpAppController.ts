@@ -8,6 +8,8 @@ export type AppRpc = {
   [key: string]: unknown;
 };
 export type AppInvoker = (sessionId: string | null, input: Record<string, unknown>) => Promise<unknown>;
+export { McpAppViewSlots, McpAppWindowLimitError, confirmsMcpAppViewGone, isMcpAppOpenRejectedBeforeAllocation } from './mcpAppViewSlots.js';
+
 let nextOpenId = 0;
 const closeSafeMethods = new Set(['cindy/view-state/set', 'ui/set-view-state']);
 
@@ -15,6 +17,7 @@ const closeSafeMethods = new Set(['cindy/view-state/set', 'ui/set-view-state']);
 export class McpAppController {
   document?: McpAppOpenResult;
   private after = 0;
+  private pendingOpenContext?: Record<string, unknown>;
   private stopped = false;
   private closing = false;
   private teardownId?: string;
@@ -40,15 +43,32 @@ export class McpAppController {
     private readonly resourceSource?: { instanceId: string; viewId: string },
   ) {}
 
-  async open(context: Record<string, unknown>): Promise<McpAppOpenResult | undefined> {
-    const document = (await this.invoke(this.sessionId, {
+  async open(context: Record<string, unknown>, onViewLimit?: (waiting: boolean) => boolean | Promise<boolean>): Promise<McpAppOpenResult | undefined> {
+    const request = {
       op: this.resourceSource ? 'open-resource' : 'open',
       ...(this.resourceSource ? { source: this.resourceSource } : {}),
       openId: this.openId,
       clientId: this.clientId,
-      context,
-    })) as McpAppOpenResult;
+    };
+    let document: McpAppOpenResult;
+    while (true) {
+      try {
+        document = await this.invoke(this.sessionId, {
+          ...request, context: this.pendingOpenContext ?? context,
+        }) as McpAppOpenResult;
+        break;
+      } catch (error) {
+        if (this.closing || !onViewLimit || !/\bMCP_APP_VIEW_LIMIT\b/.test(String(error))) throw error;
+        if (!await onViewLimit(true) || this.closing) { await this.close(); return; }
+        // Handled by the local viewer. Never forward this wait to the executing computer.
+        const granted = await this.invoke(this.sessionId, { op: 'wait-for-view-slot', openId: this.openId });
+        if (this.closing) return;
+        if (granted !== true) throw new Error('MCP_APP_LINK_CLOSED');
+        if (!await onViewLimit(false) || this.closing) { await this.close(); return; }
+      }
+    }
     this.document = document;
+    this.pendingOpenContext = undefined;
     if (this.closing) {
       await this.invoke(this.sessionId, { op: 'teardown', viewId: document.viewId });
       return;
@@ -85,8 +105,10 @@ export class McpAppController {
   receive(message: AppRpc): void {
     if (this.stopped || !this.document || !message || message.jsonrpc !== '2.0') return;
     if (this.document.transport === 'sandbox') {
-      if (message.method === 'ui/notifications/sandbox-failed')
-        this.fail(new Error('MCP_APP_SANDBOX_FAILED'));
+      if (message.method === 'ui/notifications/sandbox-failed') {
+        const code = message.params?.code;
+        this.fail(new Error(code === 'MCP_PLUGIN_UNAVAILABLE' || code === 'MCP_APP_SERVER_CHANGED' ? code : 'MCP_APP_SANDBOX_FAILED'));
+      }
       if (this.closing) return;
       if (message.method === 'ui/notifications/sandbox-escape')
         void this.displayMode('inline').catch((error) => this.fail(error));
@@ -95,7 +117,8 @@ export class McpAppController {
         this.startupTimer = undefined;
       }
       if (['ui/notifications/initialized', 'ui/notifications/size-changed', 'ui/notifications/host-context-changed',
-        'ui/notifications/sandbox-handshake-started', 'ui/notifications/sandbox-result-delivered'].includes(message.method ?? ''))
+        'ui/notifications/sandbox-handshake-started', 'ui/notifications/sandbox-result-delivered',
+        'ui/notifications/sandbox-escape'].includes(message.method ?? ''))
         this.onState(message);
       return;
     }
@@ -106,6 +129,7 @@ export class McpAppController {
     }
     if (message.method === 'ui/notifications/sandbox-escape') {
       void this.displayMode('inline').catch((error) => this.fail(error));
+      this.onState(message);
       return;
     }
     if (message.method?.startsWith('ui/notifications/sandbox-')) return;
@@ -146,12 +170,32 @@ export class McpAppController {
   }
 
   async context(context: Record<string, unknown>): Promise<void> {
-    if (this.document && !this.closing)
+    if (!this.document && !this.closing) this.pendingOpenContext = context;
+    if (this.document && !this.closing && !this.suspended)
       await this.invoke(this.sessionId, { op: 'context', viewId: this.document.viewId, context });
   }
   async displayMode(mode: 'inline' | 'fullscreen' | 'pip'): Promise<void> {
     if (this.document && !this.closing)
       await this.invoke(this.sessionId, { op: 'display-mode', viewId: this.document.viewId, mode });
+  }
+  private suspended = false;
+  private visibilityDelivery: Promise<void> = Promise.resolve();
+  /** Same-computer Renderer control; never issue this operation over device-link. */
+  suspend(): Promise<void> {
+    if (this.document?.transport !== 'sandbox' || this.closing || this.suspended) return this.visibilityDelivery;
+    this.suspended = true;
+    const viewId = this.document.viewId;
+    return this.visibilityDelivery = this.visibilityDelivery.then(async () => {
+      if (!this.closing) await this.invoke(this.sessionId, { op: 'suspend', viewId });
+    });
+  }
+  resume(): Promise<void> {
+    if (!this.suspended || this.closing) return this.visibilityDelivery;
+    this.suspended = false;
+    const viewId = this.document!.viewId;
+    return this.visibilityDelivery = this.visibilityDelivery.then(async () => {
+      if (!this.closing) await this.invoke(this.sessionId, { op: 'resume', viewId });
+    });
   }
   private fail(error: unknown): void {
     if (this.closing) return;
@@ -285,12 +329,14 @@ export class McpAppController {
         alreadyNotified: !!this.teardownId,
       });
     } finally {
+      this.suspended = false;
       this.stopped = true;
       this.outbound = [];
     }
   }
 }
-export function mcpAppFailureKey(error: unknown): 'mcpApps.updateRequired' | 'mcpApps.loadFailed' {
+export function mcpAppFailureKey(error: unknown): 'mcpApps.updateRequired' | 'mcpApps.loadFailed' | 'mcpApps.viewLimit' {
+  if (/\bMCP_APP_VIEW_LIMIT\b/.test(String(error))) return 'mcpApps.viewLimit';
   return /CHANNEL_NOT_ALLOWED|UNKNOWN_CHANNEL|CHANNEL_NOT_FOUND/.test(String(error))
     ? 'mcpApps.updateRequired'
     : 'mcpApps.loadFailed';
@@ -308,6 +354,9 @@ export class McpAppHeightGuard {
   resize(width: number): void {
     if (this.width === width) return;
     this.width = width;
+    this.reset();
+  }
+  reset(): void {
     this.samples = [];
     this.locked = undefined;
   }
@@ -330,3 +379,5 @@ export class McpAppHeightGuard {
     return height;
   }
 }
+
+export { McpAppMeasuredHeights, parseMcpAppMeasurements } from './mcpAppMeasuredHeights.js';

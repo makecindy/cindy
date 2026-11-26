@@ -182,7 +182,8 @@ export async function readReplyFile(source: string, root: string, assertCurrent:
 }
 
 /** Files stay outside the media store; the existing group uploader receives authorized bytes. */
-export async function prepareChatReplyFiles(text: string, sessionId: string, assertExecution: () => void, fallbackMessageClientId?: string | null) {
+export async function prepareChatReplyFiles(text: string, sessionId: string, assertExecution: () => void,
+  fallbackMessageClientId?: string | null, omitOutsideWorkingDir = false) {
   const snapshot = getCurrentDbClientSnapshot();
   let markdown = text;
   if (fallbackMessageClientId) {
@@ -228,6 +229,7 @@ export async function prepareChatReplyFiles(text: string, sessionId: string, ass
     }
   }
   let fileCount = 0;
+  let omittedFiles = 0;
   for (const link of parsed.links) {
     const source = localPath(link.url, scope.workingDir!);
     // /tmp can alias /private/tmp; normalize the trusted workdir prefix without following the file.
@@ -237,7 +239,14 @@ export async function prepareChatReplyFiles(text: string, sessionId: string, ass
       // Case aliases depend on the actual volume. Only an existing canonical
       // target within this task can override the lexical precheck.
       if (!isPathWithin(lexicalRoot.toLowerCase(), source.toLowerCase())
-        && !isPathWithin(root.toLowerCase(), source.toLowerCase())) throw unavailable();
+        && !isPathWithin(root.toLowerCase(), source.toLowerCase())) {
+        if (!omitOutsideWorkingDir) throw unavailable();
+        // An explicit outside reference is not a deliverable file. Keep its
+        // label in parsed.text, but never inspect or read this path.
+        assertCurrent();
+        omittedFiles++;
+        continue;
+      }
       canonicalSource = await fs.realpath(source).catch(() => { throw unavailable(); });
       assertCurrent();
       if (!isPathWithin(root, canonicalSource)) throw unavailable();
@@ -296,5 +305,5 @@ export async function prepareChatReplyFiles(text: string, sessionId: string, ass
         return bytes;
       } });
   }
-  return { text: parsed.text, attachments };
+  return { text: parsed.text, attachments, ...(omittedFiles ? { omittedFiles } : {}) };
 }

@@ -59,12 +59,15 @@ export async function learnFixture(t, { publish = true } = {}) {
   const home = path.join(root, 'home');
   fs.mkdirSync(path.join(home, '.claude'), { recursive: true });
   process.env.HOME = process.env.USERPROFILE = home;
+  t.mock.method(os, 'homedir', () => home);
   process.env.CLAUDE_CONFIG_DIR = path.join(home, '.claude');
   const profile = path.join(root, 'profile');
   const appData = path.join(root, 'app-data');
   const project = path.join(root, 'project');
   fs.mkdirSync(profile, { recursive: true });
   fs.mkdirSync(project);
+  // Native Skill discovery walks ancestors to a Git root; keep it inside the fixture.
+  fs.mkdirSync(path.join(project, '.git'));
   configureHostOwner({ userDataDir: profile, ownerId: 'learn-capture-owner' });
   t.after(() => configureHostOwner({ userDataDir: profile, ownerId: null }));
   configureAppDataDir(appData);

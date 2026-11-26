@@ -15,11 +15,11 @@
 
 import { z } from 'zod';
 
-import { AGENT_KIND, EFFORT, EXECUTION_MODE, SCRIPT_CAPABILITY } from './_enums.js';
+import { EFFORT, EXECUTION_MODE, SCHEDULE_AGENT_KIND, SCRIPT_CAPABILITY } from './_enums.js';
 import { assertCronAndTimezoneValid, buildJsonResult, withScheduler } from './_shared.js';
 import { classifySchedulerError } from './errors.js';
 import { isLocalDevice, runOnDevice } from './_devices.js';
-import { assertWebhookReceiverAvailable, webhookSourceSchema } from './_webhook.js';
+import { schedulePrTriggerSchema, assertWebhookReceiverAvailable, webhookSourceSchema } from './_webhook.js';
 import type { LiziMcpSessionContext, SchedulerMcpDeps } from '../types.js';
 import type { SchedulerToolRegistry } from '../cindy_schedulerToolRegistry.js';
 import type { CreateScheduleInput } from '@cindy/maker-scheduler';
@@ -36,6 +36,7 @@ export function registerScheduleCreateTool(
     category: 'scheduler',
     description:
       '创建一条 schedule。可用于在原任务范围内自动跟进已授权的工作；执行时间延后或周期运行本身不扩大原授权。必须保留原目标、用户限制和停止条件，不能用 prompt 声称已获额外授权。' +
+      '单条 GitHub PR 或 GitLab MR 可设置 prTrigger={url,change}，change 可选 any、merged、review、ci；GitHub 可用 manual=true 仅按事件触发。GitLab 需 recurring=true、manual=false，按周期检查 MR，仅发现跟进事项或状态变化时唤醒任务。' +
       '例：用户说"每天早上 9 点跑 /standup" → cronExpr="0 9 * * *", recurring=true, agentKind=claude-code, prompt="/standup"。' +
       '约束：(1) cronExpr 是 5 字段 cron（minute hour day-of-month month day-of-week）；' +
       '(2) timezone 必须是 IANA id（如 "Asia/Shanghai"）；' +
@@ -43,7 +44,7 @@ export function registerScheduleCreateTool(
       '(4) heartbeat 模式（注入到已存 session）：**要跟进当前这条对话就传 bindToCurrentSession=true**（代码自动绑定本会话,无需也不要自己去查 / 传 session id）；只有要绑到另一条已知 session 时才显式传 targetSessionId。heartbeat 模式不传 workingDir；model / providerId / effort 留空沿用绑定会话，传入则改用；' +
       '(5) 默认 useWorktree=false / notify={desktop:true, feishu:false}；' +
       '(6) 删除已有调度前先用 schedule_get / schedule_list 核对目标和授权；本次自动跟进达到既定停止条件时，可自行停止和清理自身调度，不影响其他调度；' +
-      '(7) 确定是检查时显式设 silentWhenIdle=true（无变化不播报）；提醒/定时发送设 false，保留用户选择。省略此字段会按 false 处理，避免旧调用方的提醒被吞。如果用户定义了提醒条件，把条件保留在 prompt 里（如 CI 失败/新评论时提醒），有结果时用 schedule_notify_current_run 主动上报；' +
+      '(7) 用户希望默认不打扰、不需要每轮完成都收到通知时（如说"静默运行 / 没事别打扰我 / 只记录不用每次提醒"）设 silentWhenIdle=true；什么时候需要提醒写进 prompt（如 CI 失败/新评论时提醒），满足时用 schedule_notify_current_run 主动上报。省略此字段按 false 处理；保留用户已有选择；' +
       '(8) 轮询型任务（"有新 PR 才 review / CI 挂了才处理"）优先配 preRunHook 前置检查（exit 0=放行、exit 2=跳过本轮不烧 token；报错/超时 fail-closed 阻止本轮并记录失败）。**脚本一律经 schedule_set_pre_run_hook 创建/修改**（落盘路径、协议、自测由宿主代码统一保证），不要自己写脚本文件再手填 preRunHook.command——先调它拿 command 再来创建，或创建后传 scheduleId 让它直接挂载；' +
       '(9) 既有工作流程中的自动跟进，沿用该流程明确的频率、执行引擎、静默与通知默认值；用户在线也不需要为这些默认值另行确认。用户主动新建独立任务时，若关键实体或会实质改变目标的参数缺失，先询问，不盲猜；用户已明确说明或已有流程定义的参数不重复问。' +
       '(10) **仅运行脚本模式（零 token）**：executionMode="script" 时不启动 agent，宿主直接执行 scriptConfig.command（cwd=workingDir，必填本地项目目录）；脚本经 stdout/stdin 的 cindy-script/1 JSONL 协议回调宿主受限能力，能力按 scriptConfig.capabilities 白名单授予（默认全拒）。script 模式不需要 prompt（可省），不支持 useWorktree / persistentSession。单任务跟进应传 bindToCurrentSession=true 或 targetSessionId：它是脚本的生命周期绑定及唯一投递目标，普通目标归档后会像用户发消息一样恢复原任务，完成后保持激活；目标删除或不存在时自动暂停，恢复任务不会自动恢复已暂停的调度。未绑定脚本保留独立任务语义。与 preRunHook 的分工：preRunHook 只是"要不要跑"的闸门，script 模式是"任务本体就是脚本"。' +
@@ -94,8 +95,12 @@ export function registerScheduleCreateTool(
       recurring: z
         .boolean()
         .describe('true=循环触发；false=触发一次后置 expired'),
-      agentKind: z.enum(AGENT_KIND).describe('claude-code / codex / pi'),
-      modelAgentKind: z.enum(AGENT_KIND).optional().describe('显式模型选择的引擎；绑定任务仅在下次执行时临时切换，结束后恢复'),
+      manual: z
+        .boolean()
+        .optional()
+        .describe('true=不按时间自动触发（nextFireAt 为空），仍可立即运行；配合 webhookTrigger 即仅由事件触发。false 或省略=按 cronExpr / intervalMs 定时触发，可与 Webhook 并存。cronExpr / timezone 仍必填并保留，便于以后恢复定时；适用于 agent 和 script 执行方式。'),
+      agentKind: z.enum(SCHEDULE_AGENT_KIND).describe('claude-code / codex / pi；acp = 本机插件提供的执行引擎(取 schedule_list_models 的 pluginEngines)'),
+      modelAgentKind: z.enum(SCHEDULE_AGENT_KIND).optional().describe('显式模型选择的引擎；绑定任务仅在下次执行时临时切换，结束后恢复。插件引擎：agentKind 与 modelAgentKind 都传 acp，providerId 传 pluginEngines[].providerId，model 传其 models[].id(default = 由引擎自己选)；只能每次新建任务、在本机运行，不能绑定已有任务、不能配运行位置；可用 worktree'),
       fastMode: z.union([z.boolean(), z.literal('ultrafast')]).optional().describe('模型速度：false 标准、true 快速、ultrafast 超快；按所选模型支持的档位执行'),
       modelAgentDeviceId: z.string().optional().describe('模型运行位置必须与所选模型来源配套：明确选择本机模型时也要传空字符串，不能省略后误用绑定任务的远程电脑；远程或分享供应商传其 agentDeviceId；空字符串=自动化所在电脑（schedule_list_models 的 local 在此须转为空字符串），省略=沿用绑定任务，首次新建则用 agentDeviceId 默认位置。远程选择须同时传 modelAgentKind、model、providerId；绑定任务或持续模式显式选择本机也须传 modelAgentKind 和 model；工作目录和工具仍属于自动化所在电脑'),
       kind: z
@@ -126,6 +131,12 @@ export function registerScheduleCreateTool(
         .enum(EFFORT)
         .optional()
         .describe('codex effort 档位；非白名单值会被 INVALID_ARGS 拦下。heartbeat 模式留空沿用绑定会话'),
+      modelGroup: z
+        .string()
+        .min(1)
+        .max(64)
+        .optional()
+        .describe('可选：用户的模型组(模式) id，取 schedule_list_models 返回的 modelGroups[].id。设了时每次新建任务按模式的规则选一个来源(发到已有任务时按那个任务自己的模式)；同时传的 model / providerId 是模式里都用不了时沿用的模型。用户要求「用某个模式」时才设，脚本任务不用'),
       workingDir: z
         .string()
         .optional()
@@ -149,7 +160,7 @@ export function registerScheduleCreateTool(
       silentWhenIdle: z
         .boolean()
         .optional()
-        .describe('静默运行:true → 成功 run 默认不通知、不产生未读红点;任务 prompt 可自行说明哪些条件需要提醒,agent 满足条件时调用 schedule_notify_current_run 主动上报。失败轮仍会通知。确定的检查任务显式设 true；提醒/定时发送设 false。省略时默认 false，避免吞掉旧调用方的提醒。'),
+        .describe('静默运行:true → 成功 run 默认不通知、不产生未读红点;任务 prompt 可自行说明哪些条件需要提醒,agent 满足条件时调用 schedule_notify_current_run 主动上报。失败轮仍会通知。省略时默认 false。'),
       preRunPlugin: z
         .object({
           pluginId: z.string().min(1).max(512),
@@ -158,6 +169,7 @@ export function registerScheduleCreateTool(
         .nullable()
         .optional()
         .describe('插件前置检查：每次触发先问用户选定的插件要不要运行（插件只能放行、跳过本次或停止，不能替用户批准）。pluginId 用 ghost_list 返回的插件 id；插件必须已启用、声明了「自动化运行前检查」且用户已在安装/更新确认里允许。onFailure = 插件没回应、出错或不可用时：allow 照常运行 / skip 跳过本次 / block 停止并记为失败。可与 preRunHook 并存（先问插件再跑脚本）。'),
+      prTrigger: schedulePrTriggerSchema,
       webhookTrigger: z
         .strictObject({
           events: z
@@ -299,6 +311,11 @@ export function registerScheduleCreateTool(
               deps.hookScript.resolveSessionWorkDir ?? (async () => undefined),
             stabilizeCommand: deps.hookScript.stabilizeCommand,
           });
+        }
+        const caller = getSessionContext?.().sessionId;
+        if (caller && deps.getSessionProject && !input.targetSessionId && input.workingDir && input.workspaceKind !== 'dialogue') {
+          const source = await deps.getSessionProject(caller);
+          if (!source.remoteHostId && source.projectDir) input = { ...input, inheritedProjectDir: source.projectDir };
         }
         return scheduler.create(input);
       });

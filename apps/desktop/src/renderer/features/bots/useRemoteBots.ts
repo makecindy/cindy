@@ -12,8 +12,9 @@ import { acknowledgeRemoteBotRead, getBotReadStateSyncStatus, getRemoteBotReadAt
 import { isDeviceLinkRemotePushCurrent } from '@/lib/remoteDataOwnerPushFence';
 import { useDeviceLinkDeviceList } from '@/features/device-link/useDeviceLinkDeviceList';
 import { revokedDevicesStore } from '@/features/device-link/revokedDevicesStore';
+import { startDeviceLinkFirstConnectionWatch } from '@/features/device-link/deviceLinkFirstConnection';
 import { useCompanionCloud, companionCloudApi } from './companionCloudStore';
-import { parseRemoteBots, remoteBotCreatedTaskIds, type RemoteBot } from './remoteBotRoster';
+import { parseRemoteBots, parseTeammateInboxSnooze, remoteBotCreatedTaskIds, type RemoteBot } from './remoteBotRoster';
 
 const CACHE_PREFIX = 'cindy.remoteBots.v1.';
 let owner: string | null = null;
@@ -72,6 +73,8 @@ export function useRemoteBotSync(): void {
   const cloud = useCompanionCloud();
   const dataOwner = getDataOwnerGeneration();
   const actorsKey = cloud.actors.map(actor => `${actor.externalId}:${actor.homeDeviceId ?? ''}`).join(',');
+  // Watch relay drops app-wide, so a chat opened right after waking still sees its window.
+  useEffect(startDeviceLinkFirstConnectionWatch, []);
   useEffect(() => subscribeBotReadState(() => {
     if (owner === dataOwnerId && isDataOwnerGenerationCurrent(dataOwner)) publish(snapshot);
   }), [dataOwnerId, dataOwner]);
@@ -102,6 +105,8 @@ export function useRemoteBotSync(): void {
               delegatedSessionIds: Array.isArray(bot.delegatedSessionIds) ? bot.delegatedSessionIds.filter((id: unknown) => typeof id === 'string') : [],
               activityAt: bot.activityAt, sessionId: typeof bot.sessionId === 'string' ? bot.sessionId : null,
               lastReplyAt: Number.isFinite(bot.lastReplyAt) ? bot.lastReplyAt : undefined,
+              // A snoozed teammate stays snoozed while its computer is offline.
+              ...(parseTeammateInboxSnooze(bot.inboxSnooze) ? { inboxSnooze: parseTeammateInboxSnooze(bot.inboxSnooze) } : {}),
               online: false, connectionKnown: false,
             }));
           }

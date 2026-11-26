@@ -29,6 +29,8 @@ let toolScenario = null;
 // When set, the fixture first answers with an `exec` tool call that writes a memory through the
 // Host's cindy_memory MCP server, then captures the tool result.
 let memoryScenario = null;
+// When positive, that many next /responses requests are refused as exceeding the context window.
+let overflowNext = 0;
 const responsesStream = events => events.map(event => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`).join('');
 const upstream = createServer(async (req, res) => {
   let raw = '';
@@ -77,6 +79,14 @@ const upstream = createServer(async (req, res) => {
   }
   if (!req.url?.endsWith('/responses')) {
     res.writeHead(404, { 'content-type': 'application/json' }).end('{"error":{"message":"No optional endpoint in fixture"}}');
+    return;
+  }
+  if (overflowNext > 0) {
+    overflowNext -= 1;
+    requests.push({ url: req.url, authorization: req.headers.authorization, body: JSON.parse(raw), overflow: true });
+    res.writeHead(400, { 'content-type': 'application/json' }).end(JSON.stringify({ error: {
+      type: 'invalid_request_error', code: 'context_length_exceeded',
+      message: 'Your input exceeds the context window of this model. Please adjust your input and try again.' } }));
     return;
   }
   requests.push({ url: req.url, authorization: req.headers.authorization, body: JSON.parse(raw) });
@@ -134,6 +144,8 @@ const { createHostMessageStore } = await import('../src/message-store.ts');
 const { createChatHandler } = await import('../src/chat.mjs');
 const { attachAgentsToMakerMemory, createHostMemoryManager, createHostMemoryMcpProviders } = await import('../src/agent/memory.mjs');
 const { createHostReviewContextResolver } = await import('../src/agent/review-context.ts');
+const { createHostContextRecoveryWiring } = await import('../src/agent/context-recovery-wiring.ts');
+const { createHostAgentHandoffPending } = await import('../src/agent/handoff-pending.ts');
 initLogger({ logDir: path.join(root, 'logs'), isDev: true, level: 'debug' });
 const profile = path.join(root, 'profile');
 const ownerId = 'native-runtime-fixture';
@@ -200,7 +212,9 @@ try {
   };
   graph = createHostAgentGraph({ userDataDir: profile, providerConfig: config, gateway: modelAccess.gateway,
     codexBinaryPath: binary, codexRuntime: runtime, mcpRuntime: mcp, makerMemory: memory,
-    mcpProviders: createHostMemoryMcpProviders(memory),
+    // main.ts passes the helper's history decision (hostTools.readsAccountHistory); this run has no
+    // helper and never calls session_search, so every task reads as its own history only.
+    mcpProviders: createHostMemoryMcpProviders(memory, { readsAccountHistory: async () => false, deviceId: () => '' }),
     storage: new OwnerSessionStorage({ db: () => database }),
   });
   attachAgentsToMakerMemory(memory, graph.instances);
@@ -240,6 +254,44 @@ try {
     runtime.closeSession(sessionId);
     clearSessionProvider(sessionId);
     graph.gatewayRestart.onSessionSettled();
+  }
+  // A gateway key change while a live Codex session is idle: the next send to that same session
+  // carries the new key. The pending restart of the shared runtime runs as soon as no Codex session
+  // is busy (gatewayCodexRestart.ts schedule → onSessionSettled), not at the next send.
+  {
+    const sessionId = 'native-idle-rotation';
+    setSessionProvider(sessionId, 'xd');
+    const handle = await graph.codex.startSession({ sessionId, providerId: 'xd', model: 'fixture-model', workingDir: root });
+    handles.push(handle);
+    const idleTurn = async () => {
+      const completed = (async () => {
+        for await (const event of handle.events()) {
+          if (event.type === 'error') throw new Error(`Idle rotation turn failed: ${JSON.stringify(event.data)}`);
+          if (event.type === 'done') return;
+        }
+        throw new Error('Idle rotation turn ended without done');
+      })();
+      void completed.catch(() => {});
+      let timer;
+      try {
+        await Promise.race([(async () => {
+          await handle.send({ type: 'user', content: 'return synthetic complete' }, { throwOnStartFailure: true });
+          await completed;
+        })(), new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('Idle rotation turn timed out')), 45_000); })]);
+      } finally { clearTimeout(timer); }
+    };
+    await idleTurn();
+    assert.equal(requests.at(-1).authorization, `Bearer ${gatewayKey}`);
+    gatewayKey = 'synthetic-idle-rotated-gateway-key';
+    await modelAccess.sync.sync();
+    await idleTurn();
+    assert.equal(requests.at(-1).authorization, 'Bearer synthetic-idle-rotated-gateway-key',
+      'the next send to the idle live session carries the new key');
+    await handle.close();
+    runtime.closeSession(sessionId);
+    clearSessionProvider(sessionId);
+    graph.gatewayRestart.onSessionSettled();
+    console.log('PASS a gateway key change while a live Codex session is idle: its next send carries the new key');
   }
   // Native storage capability fixture, as minted by the executing host after
   // owner checks. It selects two synthetic account homes, never a real login.
@@ -461,10 +513,141 @@ try {
   assert.equal(await graph.maker.lifecycleHooks.getCodexHistoryHasProductPrompt(sessionId), true);
   console.log('PASS Codex product prompt delivery persists on the Host task row');
   console.log('PASS shared Host HTTP + queue + native Codex: send, persisted UUID/reply, steer, runtime reopen and stop (synthetic local upstream)');
+
+  // ---- Context recovery of an overflow, through the queue as main.ts wires it ----
+  // A third-party provider's task: one ordinary turn, then the upstream refuses the next request
+  // as too long. Recovery rebuilds the task and replays the message on a new native thread with
+  // the summary of the first turn; the client sees no error.
+  {
+    const recoveryTask = 'recovery-native-fixture';
+    await new OwnerSessionStorage({ db: () => database }).create({ id: recoveryTask,
+      title: 'Recovery fixture', agentKind: 'codex', model: 'fixture-model', workDir: root });
+    await database.drizzle.update(sessions).set({ providerId: 'cprov-fixture' }).where(eq(sessions.id, recoveryTask));
+    const store = createHostMessageStore({ getOwner: getCurrentDbClientSnapshot, publish: event => hub.publish(event) });
+    const pendingHandoff = createHostAgentHandoffPending({ getOwner: getCurrentDbClientSnapshot,
+      publish: event => hub.publish(event), log: console });
+    const recoveryQueue = createInputQueue({ getMaker: () => graph.maker, hub, readSession,
+      getOwner: getCurrentDbClientSnapshot, persistMessage: store, pendingHandoff,
+      markStarted: async id => { markSessionTurnStarted(id); await drainSessionActiveTurnWrites(id); },
+      markEnded: async (id, at) => { markSessionTurnEnded(id, at); await drainSessionActiveTurnWrites(id); },
+      ...createHostContextRecoveryWiring({ openKinds: new Set(['context-overflow']), getGraph: () => graph,
+        persistMessage: store, publish: event => hub.publish(event), pendingHandoff, log: console }),
+    });
+    const seen = [];
+    const unsubscribeRecovery = hub.subscribe(event => { if (event.sessionId === recoveryTask) seen.push(event); });
+    const doneCount = () => seen.filter(event => event.event?.type === 'done').length;
+    const until = async (predicate, what) => {
+      const deadline = Date.now() + 60_000;
+      // real-wait: the native process answers on its own schedule.
+      while (!predicate()) {
+        if (Date.now() > deadline) throw new Error(`Timed out waiting for ${what}`);
+        await new Promise(resolve => setTimeout(resolve, 50));
+      }
+    };
+    const rowsOf = async role => (await database.drizzle.select().from(messages).where(eq(messages.sessionId, recoveryTask)))
+      .filter(row => row.role === role);
+    const inputText = request => JSON.stringify(request.body.input ?? []);
+    try {
+      await recoveryQueue.enqueue(recoveryTask, { clientId: 'recovery-first', text: 'remember the word heliotrope' });
+      await until(() => doneCount() === 1, 'the first turn');
+      const beforeOverflow = requests.length;
+      overflowNext = 1;
+      await recoveryQueue.enqueue(recoveryTask, { clientId: 'recovery-second', text: 'now return synthetic complete' });
+      await until(() => doneCount() === 2, 'the replayed turn');
+      const turnRequests = requests.slice(beforeOverflow);
+      assert.equal(turnRequests[0].overflow, true, 'the upstream refused the request as too long');
+      const replayed = turnRequests.filter(request => !request.overflow);
+      assert.equal(replayed.length, 1, 'one replay reaches the upstream');
+      const [marker] = await rowsOf('context_rebuild');
+      const { handoff } = JSON.parse(marker.content);
+      const firstLine = handoff.split('\n').find(line => line.trim().length > 20);
+      assert.ok(firstLine, 'the summary has content');
+      const count = (text, needle) => text.split(JSON.stringify(needle).slice(1, -1)).length - 1;
+      assert.equal(count(inputText(replayed[0]), firstLine), 1, 'the replay carries the summary once');
+      assert.match(inputText(replayed[0]), /now return synthetic complete/);
+      assert.match(inputText(replayed[0]), /heliotrope/, 'the summary carries the first turn');
+      assert.equal(replayed[0].authorization, 'Bearer synthetic-custom-key', 'the replay uses the provider\'s credential');
+      assert.equal(seen.filter(event => event.event?.type === 'error' || event.type === 'error').length, 0, 'the client sees no error');
+      assert.equal((await rowsOf('user')).length, 2, 'the replay writes no second user row');
+      assert.equal((await rowsOf('error')).length, 0, 'no error row');
+      // The summary was consumed: the next message goes without it.
+      const beforeNext = requests.length;
+      await recoveryQueue.enqueue(recoveryTask, { clientId: 'recovery-third', text: 'one more' });
+      await until(() => doneCount() === 3, 'the next turn');
+      const next = requests.slice(beforeNext);
+      assert.equal(next.length, 1);
+      // The new user message has no summary; the history still holds the replay's one copy.
+      const userItems = (next[0].body.input ?? []).filter(item => item?.role === 'user');
+      const lastUser = JSON.stringify(userItems.at(-1) ?? null);
+      assert.match(lastUser, /one more/);
+      assert.equal(count(lastUser, firstLine), 0, 'the next message carries no summary');
+      assert.equal(count(inputText(next[0]), firstLine), 1, 'the summary is not added again to the history');
+      assert.equal(JSON.parse((await rowsOf('context_rebuild'))[0].content).consumed, true);
+    } finally {
+      unsubscribeRecovery();
+      overflowNext = 0;
+      await recoveryQueue.dispose();
+    }
+    console.log('PASS native Codex context overflow recovery through the production wiring: rebuilt, replayed once with the summary and the provider credential, no client error; the next message carries no summary');
+  }
   assert.ok(requests.length >= 3);
   // The desktop product system prompt reaches the real Codex request (runtimeConfigsCore.ts).
   assert.ok(requests.some(request => JSON.stringify(request.body).includes('You are Cindy, an open-source AI assistant.')),
     'Codex upstream request carries the Cindy product prompt');
+
+  // ---- Idle runtime release, through the queue as main.ts wires it (idle-release.ts) ----
+  // An ordinary task idle for 30 minutes (a test clock, no real wait) releases its native Codex
+  // runtime; the next message resumes the same native thread, whose history reaches the upstream.
+  {
+    const idleTask = 'idle-release-native-fixture';
+    await new OwnerSessionStorage({ db: () => database }).create({ id: idleTask,
+      title: 'Idle release fixture', agentKind: 'codex', model: 'fixture-model', workDir: root });
+    await database.drizzle.update(sessions).set({ providerId: 'cprov-fixture' }).where(eq(sessions.id, idleTask));
+    const clock = { monotonic: 0, wall: Date.now() };
+    const idleQueue = createInputQueue({ getMaker: () => graph.maker, hub, readSession,
+      getOwner: getCurrentDbClientSnapshot,
+      persistMessage: createHostMessageStore({ getOwner: getCurrentDbClientSnapshot, publish: event => hub.publish(event) }),
+      markStarted: async id => { markSessionTurnStarted(id); await drainSessionActiveTurnWrites(id); },
+      markEnded: async (id, at) => { markSessionTurnEnded(id, at); await drainSessionActiveTurnWrites(id); },
+      readClaudeIdleMinutes: () => 30,
+      idleReleaseClock: { monotonic: () => clock.monotonic, wall: () => clock.wall },
+    });
+    const turnDone = () => {
+      let timer, unsubscribe;
+      return new Promise((resolve, reject) => {
+        timer = setTimeout(() => reject(new Error('Idle release turn timed out')), 45_000);
+        unsubscribe = hub.subscribe(event => {
+          if (event.sessionId !== idleTask) return;
+          if (event.event?.type === 'done') resolve();
+          if (event.event?.type === 'error') reject(new Error(`Idle release turn failed: ${JSON.stringify(event.event.data)}`));
+        });
+      }).finally(() => { clearTimeout(timer); unsubscribe?.(); });
+    };
+    try {
+      let done = turnDone();
+      await idleQueue.enqueue(idleTask, { clientId: 'idle-first', text: 'remember the word heron' });
+      await done;
+      const live = graph.maker.getSession(idleTask);
+      assert.ok(live?.sdkSessionId, 'the first turn has a native thread');
+      const thread = live.sdkSessionId;
+      await idleQueue.scanIdleRelease();
+      assert.equal(graph.maker.getSession(idleTask), live, 'not released before 30 idle minutes');
+      clock.monotonic += 31 * 60_000;
+      clock.wall = Date.now() + 31 * 60_000;
+      await idleQueue.scanIdleRelease();
+      assert.equal(graph.maker.getSession(idleTask), undefined, 'released after 30 idle minutes');
+      const [row] = await database.drizzle.select().from(sessions).where(eq(sessions.id, idleTask)).limit(1);
+      assert.equal(row.sdkSessionId, thread, 'the task keeps its native thread');
+      const before = requests.length;
+      done = turnDone();
+      await idleQueue.enqueue(idleTask, { clientId: 'idle-second', text: 'return synthetic complete' });
+      await done;
+      assert.equal(graph.maker.getSession(idleTask)?.sdkSessionId, thread, 'the next message resumes the same native thread');
+      const resumed = JSON.stringify(requests.slice(before).map(request => request.body.input));
+      assert.match(resumed, /remember the word heron/, 'the resumed request carries the first turn');
+    } finally { await idleQueue.dispose(); }
+    console.log('PASS native Codex idle release through the production wiring: released after 30 idle minutes (test clock); the next message resumes the same native thread with its history');
+  }
   console.log('PASS the Codex upstream request carries the Cindy product system prompt');
   console.log('PASS native Codex + production Host: gateway and custom provider turns; key rotation during a live turn preserves completion and the next gateway task uses the new key');
 

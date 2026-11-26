@@ -15,9 +15,9 @@ vi.mock('../../imageCacheStore.desktop.js', () => ({ resolveSafe: imageResolve }
 vi.mock('../../videoCacheStore.js', () => ({ resolveSafe: videoResolve }));
 
 const uploadLocalFile = vi.hoisted(() => vi.fn());
-vi.mock('../mediaTransfer.desktop.js', () => ({
+vi.mock('../mediaTransfer.desktop.js', async () => ({
   uploadLocalFile,
-  mimeOf: () => 'application/octet-stream',
+  mimeOf: (await import('../mediaMime.js')).mimeOf,
 }));
 
 const materializeSshRemoteMedia = vi.hoisted(() => vi.fn());
@@ -133,6 +133,33 @@ it.each(['metadata', 'content'])('does not cache an OSS upload when source %s ch
 });
 
 describe('fetchLocalMediaToOss — scheme 路由', () => {
+  // #8805, unit: prepare must report Web resource types before either inline or
+  // peer transfer. Existing coverage only prepared resolver-typed images.
+  it.each([
+    ['index.html', 'text/html', 4096],
+    ['index.HTML', 'text/html', 509137],
+    ['index.htm', 'text/html', 42],
+    ['style.css', 'text/css', 42],
+    ['script.js', 'text/javascript', 42],
+    ['module.mjs', 'text/javascript', 42],
+    ['unknown.bin', 'application/octet-stream', 42],
+  ])('prepares %s with its MIME and preserves the inline budget', async (name, mimeType, size) => {
+    statMock.mockResolvedValue({ isFile: () => true, size, mtimeMs: 1000 });
+    const result = await fetchLocalMediaToOss({
+      url: 'xdt-file://local?path=' + encodeURIComponent(path.resolve('site', name)),
+      prepareOnly: true,
+    });
+    expect(result).toMatchObject({ mimeType, size });
+    if (size <= 65_536) {
+      expect(Buffer.from(result.inlineBase64!, 'base64')).toEqual(Buffer.alloc(size, 7));
+      expect(result.transferRequired).toBeUndefined();
+    } else {
+      expect(result.transferRequired).toBe(true);
+      expect(result.inlineBase64).toBeUndefined();
+    }
+    expect(uploadLocalFile).not.toHaveBeenCalled();
+  });
+
   const sharedTask: SharedTaskPeerCapture = {
     author: { sharedTaskId: 'shared', sessionId: 'task', memberId: 'guest', accountId: 'user', displayName: 'Guest' },
     isCurrent: () => true,

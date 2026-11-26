@@ -186,6 +186,7 @@ type StopCompletionWaiter = {
 };
 
 export type UseVoiceInputOptions = {
+  onSamples?: (pcm: ArrayBuffer) => void;
   /** Plain-text composers use string offsets instead of ProseMirror positions. */
   textTarget?: VoiceInputTextTarget;
   onMicrophonePermissionRequired?: (error: string) => void | Promise<void>;
@@ -1435,6 +1436,7 @@ export function useVoiceInput(
         if (!isActiveStartAttempt(attemptId) || stateRef.current !== 'listening') return;
         setCaptureReady(true);
       },
+      onSamples: optionsRef.current?.onSamples,
       onSoundDetected: () => { hasRecordingContentRef.current = true; },
       appendAudioChunk,
       onInterrupted: (message) => {

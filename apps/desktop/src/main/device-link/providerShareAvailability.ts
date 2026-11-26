@@ -3,7 +3,7 @@ export { disableShareAvailability } from './providerShareAvailabilityTransport.j
 import { isCrossRegionShare, crossRegionAvailabilityRequest } from './providerShareCrossRegion.js';
 import { getDesktopProviderService } from '../maker-host/createDesktopProviderService.js';
 import { getProviderGroupDirectory } from '../provider-group/runtime.js';
-import { findReceivedShare } from './providerShareGuest.js';
+import { findReceivedShare, providerShareAccessEpoch } from './providerShareGuest.js';
 import { knownStandbyGuests, reconcileStandbyGuest } from './providerShareAvailabilityGuests.js';
 import { withAvailabilityPolicyLock, rememberAvailabilityShare } from './providerShareAvailabilityPolicy.js';
 import { consistentShareAvailabilityModels, type ShareAvailabilityModel as Model } from './providerShareAvailabilityModels.js';
@@ -16,6 +16,7 @@ import { captureProviderManagementScope } from '../provider-group/managementScop
 import { readProviderGroup } from '../provider-group/store.js';
 import { groupFastPolicyStore } from '../provider-group/fastPolicyStore.js';
 import { isRemoteProviderInvocationAllowed } from '../maker-host/remote-provider-access-store.js';
+import { pluginEngineKeyFromProviderId } from '../../shared/pluginEngines.js';
 import { getProviderShareUsageStore } from './providerShareUsageStore.js';
 import { remoteModelAccess } from './remoteModelAccess.js';
 import { readDeviceLinkSettings } from './settings-store.desktop.js';
@@ -42,7 +43,7 @@ export function publishShareAvailability(shares: readonly ProviderShareOwned[]):
 async function publishUnlocked(shares: readonly ProviderShareOwned[]): Promise<void> {
   const assertCurrent = captureProviderManagementScope();
   for (const share of shares) {
-    if (share.hostDeviceId !== getDeviceId()) continue;
+    if (share.hostDeviceId !== getDeviceId() || pluginEngineKeyFromProviderId(share.providerId)) continue;
     const current = await shareAvailabilityRequest<{ revision: number; executors: Executor[] }>(share.shareId, 'policy');
     assertCurrent();
     const group = readProviderGroup(share.providerId);
@@ -110,7 +111,40 @@ export async function allocateShareAvailability(shareId: string, sessionId: stri
   return { deviceId: row.executorDeviceId, generation: row.generation, leaseDurationMs: Math.min(30 * 60_000, row.expiresAt - Date.now()) };
 }
 
-export async function readShareAvailabilityCatalog(shareId: string): Promise<{ providers: ProviderView[]; providerOrder: string[]; modelVisibilityOverrides: Record<string, never> }> {
+type AvailabilityCatalog = { providers: ProviderView[]; providerOrder: string[]; modelVisibilityOverrides: Record<string, never> };
+const catalogReads = new Map<string, Promise<AvailabilityCatalog>>();
+
+/** Provider and capability reads in one refresh share only the in-flight download, never a cached grant. */
+export async function readShareAvailabilityCatalog(shareId: string): Promise<AvailabilityCatalog> {
+  const assertCurrent = captureProviderManagementScope();
+  const owner = providerShareOwnerKey();
+  const endpoint = getClientEndpoint('deviceLinkApiBaseUrl');
+  const epoch = providerShareAccessEpoch(shareId);
+  const verify = () => {
+    assertCurrent();
+    if (providerShareOwnerKey() !== owner || getClientEndpoint('deviceLinkApiBaseUrl') !== endpoint
+      || providerShareAccessEpoch(shareId) !== epoch) throw new ProviderShareScopeChangedError();
+  };
+  verify();
+  const key = JSON.stringify([owner, endpoint, shareId, epoch]);
+  let pending = catalogReads.get(key);
+  if (!pending) {
+    pending = readCatalog(shareId).finally(() => {
+      if (catalogReads.get(key) === pending) catalogReads.delete(key);
+    });
+    catalogReads.set(key, pending);
+  }
+  try {
+    const result = await pending;
+    verify();
+    return result;
+  } catch (error) {
+    verify();
+    throw error;
+  }
+}
+
+async function readCatalog(shareId: string): Promise<AvailabilityCatalog> {
   const value = await shareAvailabilityRequest<{ providerId: string; providerLabel: string; models: Model[] }>(shareId, 'catalog', {}, true);
   const models: ProviderView['models'] = {};
   for (const row of value.models) {
@@ -146,7 +180,9 @@ export async function prepareShareAvailability(controller: string): Promise<void
         for (const item of delegatedProviderShareLeases()) if (item.peer === controller && item.lease.availability) {
           invalidateProviderShareDelegation(item.peer, item.sessionId, item.lease.nonce);
         }
-        await reconcileStandbyGuest(controller, null);
+        // An absent standby policy/endpoint does not prove that the share member
+        // was removed. Direct owner grants use the same guest history: retain it
+        // until verified membership reapproval or an authenticated owner forget.
       }
       throw error;
     }

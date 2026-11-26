@@ -36,6 +36,7 @@ interface NewGoalDialogProps {
    * (目标的默认文字来自 composer,创建成功后原文该清掉)。
    */
   onCreated?: () => void;
+  creationProgress?: ReactNode;
   creationRecovery?: ReactNode;
   creationRecoveryBusy?: boolean;
 }
@@ -45,7 +46,7 @@ interface GoalCreationError {
   pickerAuthorization: boolean;
 }
 
-export function NewGoalDialog({ sessionId, open, onOpenChange, onCreate, initialObjective, onCreated, creationRecovery, creationRecoveryBusy = false }: NewGoalDialogProps): React.ReactElement {
+export function NewGoalDialog({ sessionId, open, onOpenChange, onCreate, initialObjective, onCreated, creationProgress, creationRecovery, creationRecoveryBusy = false }: NewGoalDialogProps): React.ReactElement {
   const { t } = useTranslation();
   const [objective, setObjective] = useState('');
   const [limits, setLimits] = useState<GoalLimitValues>(DEFAULT_GOAL_LIMITS);
@@ -104,9 +105,9 @@ export function NewGoalDialog({ sessionId, open, onOpenChange, onCreate, initial
   return (
     <AlertDialog.Root open={open} onOpenChange={onOpenChange}>
       <AlertDialog.Portal>
-        <AlertDialog.Overlay className="modal-scrim fixed inset-0 z-[10000]" />
+        <AlertDialog.Overlay className="modal-scrim fixed inset-0 z-modal" />
         <AlertDialog.Content
-          className="modal-panel fixed left-1/2 top-1/2 z-[10001] flex w-[min(460px,calc(100vw-32px))] -translate-x-1/2 -translate-y-1/2 flex-col gap-4 p-4"
+          className="modal-panel fixed left-1/2 top-1/2 z-modal-raised flex w-[min(460px,calc(100vw-32px))] -translate-x-1/2 -translate-y-1/2 flex-col gap-4 p-4"
           onOpenAutoFocus={(event) => {
             // 打开时焦点直接落在目标输入框(否则 radix 默认聚焦取消按钮)。
             event.preventDefault();
@@ -146,6 +147,7 @@ export function NewGoalDialog({ sessionId, open, onOpenChange, onCreate, initial
             }}
           />
           <GoalAdvancedLimits value={limits} onChange={setLimits} />
+          {creationProgress}
           {creationRecovery}
           {error && !(error.pickerAuthorization && creationRecovery) && (
             <div className="text-12" style={{ color: 'var(--error-fg)' }}>

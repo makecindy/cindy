@@ -178,3 +178,21 @@ it('round trips remote forms without exposing a same-named local source to older
   delete wire[0].agentDeviceId; // old editors keep providerId but strip unknown fields
   expect(normalizeBotModelChain(wire)).toEqual([route]);
 });
+
+// Companion settings round-trip local, remote and shared plugin routes without losing location; damaged sources are dropped.
+it('round-trips host, remote and shared plugin models and rejects damaged sources', () => {
+  const plugin = { harness: 'acp' as const, model: 'sample-model', providerId: 'acp-plugin:sample:engine', effort: 'high', fastMode: false };
+  const remotePlugin = { ...plugin, agentDeviceId: 'other-device' };
+  const sharedPlugin = { ...plugin, agentDeviceId: 'share:friend' };
+  const fallback = { harness: 'pi' as const, model: 'other', providerId: 'source', effort: '', fastMode: false };
+  const wire = JSON.parse(serializeModelRoutes([plugin, remotePlugin, sharedPlugin, fallback]));
+  expect(wire[1].providerId).not.toBe(plugin.providerId);
+  expect(wire[2].providerId).not.toBe(plugin.providerId);
+  expect(normalizeBotModelChain(wire)).toEqual([plugin, remotePlugin, sharedPlugin, fallback]);
+  expect(nextBotModelRoute(wire, plugin)).toEqual(remotePlugin);
+  expect(nextBotModelRoute(wire, remotePlugin)).toEqual(sharedPlugin);
+  expect(nextBotModelRoute(wire, sharedPlugin)).toEqual(fallback);
+  expect(normalizeBotModelChain([
+    { ...plugin, harness: 'claude' }, { ...plugin, providerId: 'source' },
+  ])).toEqual([]);
+});

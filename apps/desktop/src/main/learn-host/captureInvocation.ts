@@ -1,6 +1,6 @@
 import { promises as fs } from 'node:fs';
 
-import type { AgentKind, ListAgentSkillsResult } from '@cindy/maker-core';
+import type { EngineKind, ListAgentSkillsResult } from '@cindy/maker-core';
 
 import { visibleMessageTextForConversationSearch } from '../localDb/conversationSearch.pure.js';
 import {
@@ -12,14 +12,19 @@ import { parseDirectLearnInvocation, type CindyLearnInvocationGrant } from './in
 interface LearnInvocationSession {
   id: string;
   instanceId: string;
-  agentKind: AgentKind;
+  /** 'acp' = plugin engine: its Skill list is the one its `/<skill>` messages expand from. */
+  agentKind: EngineKind;
   workDir: string;
   remoteHostId: string | null;
   getStatus?(): 'active' | 'aborting' | 'closed' | 'error';
 }
 
+/** A live session of any engine. */
+type AnyEngineLearnSession = LearnInvocationSession;
+
 interface LearnInvocationCaptureDeps {
-  getSession(id: string): LearnInvocationSession | null | undefined;
+  // Compared by identity only.
+  getSession(id: string): AnyEngineLearnSession | null | undefined;
   builtInSkillDescriptors(): readonly BuiltInSkillDescriptor[];
   isSkillEnabled(source: string): boolean;
   canGrantUnqualifiedClaudeInvocation(id: string): Promise<boolean>;
@@ -29,10 +34,12 @@ interface LearnInvocationCaptureDeps {
 /** Capture the trusted Skill file for this exact persisted and dispatched user turn. */
 export function createCindyLearnInvocationCapture(deps: LearnInvocationCaptureDeps) {
   return async (
-    session: LearnInvocationSession,
+    session: AnyEngineLearnSession,
     persistedContent: unknown,
     dispatchedText: string,
   ): Promise<CindyLearnInvocationGrant | null> => {
+    // Plugin engines (docs/plans/acp-plugin-bridge.md, 2026-11-25) read the same Skill list their
+    // `/<skill>` messages are expanded from (AcpAgent.listAgentSkills), so the attested file is checked alike.
     const invocationText = visibleMessageTextForConversationSearch(
       'user',
       typeof persistedContent === 'string' ? persistedContent : JSON.stringify(persistedContent),
@@ -63,13 +70,17 @@ export function createCindyLearnInvocationCapture(deps: LearnInvocationCaptureDe
     // The explicit Cindy alias still selects the attested built-in file;
     // Pi exposes that file under its native skill:learn runtime command.
     const namespacedRuntimeName = session.agentKind === 'pi' ? 'skill:learn' : 'cindy:learn';
+    // A plugin engine expands `/cindy:learn` by dropping the `cindy:` prefix and reading the attested
+    // built-in file; its Skill list carries no runtime command names, so the prefixed form selects the
+    // built-in entry itself (still checked below to be Cindy's own file).
+    const prefixedSelectsBuiltIn = (skill: { builtIn?: boolean; runtimeCommandName?: string }) =>
+      skill.builtIn === true && (session.agentKind === 'acp' || skill.runtimeCommandName === namespacedRuntimeName);
     const learnCandidates = activeCindyBuiltInAgentSkills(
       result.skills,
       descriptors,
       deps.isSkillEnabled,
     ).filter((skill) => (skill.name.toLowerCase() === 'learn' || skill.runtimeCommandName === 'cindy:learn')
-      && (!/^\/cindy:learn(?:\s|$)/i.test(dispatchedText.trim())
-        || (skill.builtIn === true && skill.runtimeCommandName === namespacedRuntimeName)));
+      && (!/^\/cindy:learn(?:\s|$)/i.test(dispatchedText.trim()) || prefixedSelectsBuiltIn(skill)));
     if (
       learnCandidates.length !== 1
       || learnCandidates.some((skill) => skill.builtIn !== true || !skill.path)

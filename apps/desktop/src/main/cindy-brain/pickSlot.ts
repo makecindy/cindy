@@ -47,7 +47,6 @@ export interface PickSlotDeps {
    * 找不到可挂靠的 Cindy 窗口时应 reject(失败关闭,不弹无主对话框)。
    */
   showDirectoryDialog(params: { ghostName: string; purpose: string | null; ghostId: string; mobilePageId?: string; fileAccess?: true }): Promise<string | null>;
-  approveFiles?(ghostId: string, current: () => boolean): Promise<boolean>;
   issueDirectory?(ghostId: string, dirAbs: string, assertCurrent: () => void): Promise<string>;
   showFileDialog?(params: { ghostName: string; purpose: string | null; accept: string[]; multiple: boolean }): Promise<string[] | null>;
   importFiles?(ghostId: string, paths: string[], input: {
@@ -165,10 +164,7 @@ export class GhostPickSlot {
       (!callId || this.deps.getPendingCallSignal?.(ghostId, callId) === signal);
     if (!remainsActive()) return fail('CANCELLED', '原页面或调用已结束');
     const stillInstalled = () => remainsActive() && this.deps.getMutationTarget(ghostId) === target;
-    if (fileAccess && !hasPluginHostToolGroupApproval(ghost, 'files')) {
-      if (!await this.deps.approveFiles?.(ghostId, stillInstalled) || !stillInstalled() ||
-          !hasPluginHostToolGroupApproval(this.deps.getGhost(ghostId), 'files')) return fail('PERMISSION_DENIED', '目录操作权限未获批准');
-    }
+    if (fileAccess && !hasPluginHostToolGroupApproval(ghost, 'files')) return fail('PERMISSION_DENIED', '插件安装批准无效或未声明 files');
     if (callId) this.deps.holdCall?.(ghostId, callId, GHOST_PIPE_CALL_MAX_TOTAL_MS);
     // A cancelled logical request does not close Electron's native panel. Keep
     // BUSY owned by the dialog promise, not by the cancellation race below.

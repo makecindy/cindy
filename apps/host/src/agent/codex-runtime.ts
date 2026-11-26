@@ -1,6 +1,7 @@
 import { createCodexLocalModelSink } from '../../../desktop/src/main/maker-host/codexLocalModelSink.js';
 import { hostBlobStore, hostMediaIngest, hostMediaJournal } from '../media-store.js';
 import { MAKER_PUSH } from '../../../desktop/src/main/maker-ipc/channels.js';
+import fs from 'node:fs';
 import path from 'node:path';
 import type { AgentDeps } from '@cindy/maker-core';
 import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../../../desktop/src/main/appSessionState.js';
@@ -29,6 +30,8 @@ import { createHostCodexCredentials } from './codex-credentials.js';
 import { createHostCodexThreadStorage } from './codex-thread-storage.js';
 import { invalidateHostCodexLogin } from './codex-invalidation.js';
 import { createHostCodexSystemLogin, resolveHostSystemCodexAuthPath } from './codex-system-login.js';
+import { HOST_PROFILE_IN_USE_BY_DESKTOP } from './profile-coexistence.js';
+import { heldCredentialError } from './held-credentials.js';
 import { createCodexAuthBoundary } from './codex-auth-boundary.js';
 import { createCodexProxyInbound } from './codex-proxy-inbound.js';
 import { createLogger } from '../../../desktop/src/main/logger.js';
@@ -56,12 +59,159 @@ export function createBridgeTokenReader(options: {
   check(): void;
   systemLogin: { reconcile(): Promise<void> };
   readAccessToken(providerId?: string): Promise<string | null> | string | null;
+  /** Coexistence plan A: whether a Cindy desktop app running on its own uses this profile. */
+  isProfileHeld?: () => boolean;
+  /** Logins upstream rejected while held (createHeldLoginRefusals). */
+  refusals?: ReturnType<typeof createHeldLoginRefusals>;
 }) {
   return async (providerId?: string): Promise<string | null> => {
     options.check();
-    if (!providerId || providerId === 'openai') await options.systemLogin.reconcile();
+    const nativeLogin = !providerId || providerId === 'openai';
+    // While a desktop uses this profile, the reconciliation is skipped: it can relink and rewrite
+    // codex-home/auth.json, the login that desktop uses too (reviewer, 2026-11-17).
+    const held = options.isProfileHeld?.() === true;
+    if (nativeLogin && !held) await options.systemLogin.reconcile();
     options.check();
-    return options.readAccessToken(providerId);
+    const token = await options.readAccessToken(providerId);
+    // Released, this read forgets what was remembered while held.
+    if (nativeLogin && token) options.refusals?.assertUsable('openai', token);
+    // The bridge renews a token that expires within its margin and writes the result back to
+    // auth.json (anthropicResponsesBridgeHostCore.ts refreshIfNeeded). Two processes renewing one
+    // login rotate each other's refresh token out, so while held the request fails instead, saying why.
+    if (held && nativeLogin && token && expiresWithinBridgeMargin(token)) throw heldLoginExpired();
+    return token;
+  };
+}
+
+/** The bridge's own renewal margin (anthropicResponsesBridgeHostCore.ts REFRESH_MARGIN_SEC); a guard
+ * test keeps the two equal. */
+export const BRIDGE_REFRESH_MARGIN_SEC = 120;
+/** As the bridge's isExpired: a token whose `exp` cannot be read is not renewed early. */
+function expiresWithinBridgeMargin(token: string): boolean {
+  const part = token.split('.')[1];
+  if (!part) return false;
+  try {
+    const exp = (JSON.parse(Buffer.from(part.replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf-8')) as { exp?: unknown }).exp;
+    return typeof exp === 'number' && Date.now() / 1000 >= exp - BRIDGE_REFRESH_MARGIN_SEC;
+  } catch { return false; }
+}
+const heldLoginExpired = () => heldCredentialError('the ChatGPT sign-in has expired, and it is not renewed');
+
+/**
+ * Coexistence plan A (reviewer, 2026-11-17): a ChatGPT login the upstream rejected while a desktop
+ * uses this profile. Nothing is marked, unbound or removed (that login is the desktop's too); the
+ * rejection is remembered in this process, so later requests with the same token fail with the same
+ * reason instead of reaching the upstream again. Once the profile is released everything is
+ * forgotten: the next read reconciles, and a login that is really invalid takes the normal path.
+ */
+export function createHeldLoginRefusals(isProfileHeld: () => boolean) {
+  const rejected = new Map<string, { token: string; reason: string }>();
+  return {
+    note(providerId: string, token: string | null, reason: string): void {
+      if (token) rejected.set(providerId, { token, reason });
+    },
+    /** The first read after the profile is released forgets every remembered rejection. */
+    forgetIfReleased(): void { if (!isProfileHeld()) rejected.clear(); },
+    /** Throws the remembered refusal for this token while held; forgets a replaced login. */
+    assertUsable(providerId: string, token: string): void {
+      if (!isProfileHeld()) { rejected.clear(); return; }
+      const entry = rejected.get(providerId);
+      if (!entry) return;
+      if (entry.token !== token) { rejected.delete(providerId); return; }
+      throw new Error(`${HOST_PROFILE_IN_USE_BY_DESKTOP}: OpenAI rejected this ChatGPT sign-in (${entry.reason}). It is not marked `
+        + 'invalid while a Cindy desktop app running on its own uses this data. Quit that app, then try again.');
+    },
+  };
+}
+
+/**
+ * The login ports the Host gives the shared subscription bridge (anthropicResponsesBridgeHostCore.ts),
+ * the default ChatGPT login and independently added Codex accounts alike. Released, they are the
+ * runtime's own reads and invalidations. While a desktop uses this profile (its codex-home and
+ * codex-accounts are that desktop's too): no reconciliation, no renewal of a token about to expire
+ * (the bridge renews only after reading the account home, :322–330), and an upstream rejection
+ * writes nothing (createHeldLoginRefusals).
+ */
+export function createHostBridgeLoginPorts(options: {
+  check(): void;
+  systemLogin: { reconcile(): Promise<void> };
+  native: Pick<ReturnType<typeof createHostCodexCredentials>, 'readAccessToken' | 'captureDispatchProof'>;
+  accounts: Pick<ReturnType<typeof createHostProviderConfig>['codexAccounts'], 'codexAccountHome' | 'codexAccountState' | 'invalidateCodexAccount'>;
+  invalidateNative(reason: string): Promise<void>;
+  isProfileHeld?: () => boolean;
+  /** The rejections remembered while held, shared with the engine's ports (createHostEngineLoginPorts). */
+  refusals?: ReturnType<typeof createHeldLoginRefusals>;
+}) {
+  const held = () => options.isProfileHeld?.() === true;
+  const refusals = options.refusals ?? createHeldLoginRefusals(held);
+  const accountToken = (home: string): string | null => {
+    try {
+      const token = JSON.parse(fs.readFileSync(path.join(home, 'auth.json'), 'utf8')).tokens?.access_token;
+      return typeof token === 'string' && token ? token : null;
+    } catch { return null; }
+  };
+  return {
+    desktopCodexAuthAdapter: {
+      getAccessToken: createBridgeTokenReader({ check: options.check, systemLogin: options.systemLogin,
+        readAccessToken: providerId => options.native.readAccessToken(providerId), isProfileHeld: options.isProfileHeld, refusals }),
+      // The bridge has just matched the rejected token against getAccessToken above.
+      invalidate: async (reason: string) => {
+        if (held()) { refusals.note('openai', options.native.readAccessToken('openai'), reason); return; }
+        await options.invalidateNative(reason);
+      },
+      captureOAuthDispatchProof: (accessToken: string, accountId: string | null, providerId?: string) =>
+        options.native.captureDispatchProof(accessToken, accountId, providerId),
+    },
+    codexAccountHome: (providerId: string) => {
+      const home = options.accounts.codexAccountHome(providerId);
+      refusals.forgetIfReleased();
+      if (held()) {
+        const token = accountToken(home);
+        if (token) {
+          refusals.assertUsable(providerId, token);
+          if (expiresWithinBridgeMargin(token)) throw heldLoginExpired();
+        }
+      }
+      return home;
+    },
+    codexAccountState: (providerId: string) => options.accounts.codexAccountState(providerId),
+    invalidateCodexAccount: async (providerId: string, reason: string, failedAccessToken: string) => {
+      if (held()) { refusals.note(providerId, failedAccessToken, reason); return; }
+      await options.accounts.invalidateCodexAccount(providerId, reason, failedAccessToken);
+    },
+  };
+}
+
+/**
+ * The login ports the Host gives the Codex engine (runtime.ts createCodexLocalCliAuth): its
+ * report that the server rejected the default login mid-turn (maker-core codex/index.ts
+ * onAuthInvalidated → auth.invalidate), and a check before a task spawns on that login. Released,
+ * the report is the runtime's invalidateNative. While a desktop uses this profile it writes nothing
+ * (no suppression or invalidation marker, no unbinding, no removed auth.json) and is remembered in
+ * the same refusals as the subscription bridge's: after either side saw a rejection, both the
+ * bridge's requests and a native spawn fail with that reason until the token changes or the profile
+ * is released.
+ */
+export function createHostEngineLoginPorts(options: {
+  native: Pick<ReturnType<typeof createHostCodexCredentials>, 'readAccessToken'>;
+  accounts: Pick<ReturnType<typeof createHostProviderConfig>['codexAccounts'], 'isCodexAccountProvider'>;
+  invalidateNative(reason: string, context?: { providerId?: string; credentialGeneration?: string | null; credentialAttribution?: 'unproven' }): Promise<unknown>;
+  isProfileHeld?: () => boolean;
+  refusals: ReturnType<typeof createHeldLoginRefusals>;
+}) {
+  const held = () => options.isProfileHeld?.() === true;
+  return {
+    async invalidate(reason: string, context?: { providerId?: string; credentialGeneration?: string | null; credentialAttribution?: 'unproven' }): Promise<void> {
+      if (!held()) { await options.invalidateNative(reason, context); return; }
+      // An independent account is never invalidated here (invalidateHostCodexLogin 'not-native').
+      if (context?.providerId && context.providerId !== 'openai' && options.accounts.isCodexAccountProvider(context.providerId)) return;
+      options.refusals.note('openai', options.native.readAccessToken('openai'), reason);
+    },
+    /** Before a task spawns on the default login: the remembered refusal, if any (forgotten once released). */
+    assertNativeLoginUsable(): void {
+      const token = options.native.readAccessToken('openai');
+      if (token) options.refusals.assertUsable('openai', token);
+    },
   };
 }
 
@@ -73,6 +223,8 @@ export function createHostCodexRuntime(options: {
   availabilityPolicy: ReturnType<typeof createAvailabilityPolicy>;
   mcp: ReturnType<typeof createHostMcpRuntime>;
   publish(channel: string, payload: unknown): void;
+  /** Coexistence plan A: whether a Cindy desktop app running on its own uses this profile. */
+  isProfileHeld?: () => boolean;
 }) {
   const owner = activeOwnerScopeKey();
   let closed = false;
@@ -96,6 +248,7 @@ export function createHostCodexRuntime(options: {
   const systemLogin = createHostCodexSystemLogin({
     codexHome: path.join(options.profileDir, 'codex-home'), systemAuthPath,
     loginActive: () => options.config.codexAccounts.isCodexAccountLoginActive('openai'),
+    isProfileHeld: options.isProfileHeld,
     // The desktop's onOAuthBindingClaimed: a claimed credential is an auth boundary for Pi.
     onBindingClaimed: () => { if (current()) options.mcp.invalidatePiEnvironment(); },
   });
@@ -121,6 +274,8 @@ export function createHostCodexRuntime(options: {
   // (desktop: anthropic-responses-bridge-host.ts, pi-subscription-websocket.ts), with this
   // profile's credentials. Ports resolve at call time.
   const accounts = options.config.codexAccounts;
+  // One memory of the rejections seen while held, for the bridge and the engine alike.
+  const heldLogins = createHeldLoginRefusals(() => options.isProfileHeld?.() === true);
   const bridge = createAnthropicResponsesBridgeHost({
     subscriptionRequestAllowsFast: (...args) => requestPolicy.subscriptionRequestAllowsFast(...args),
     isXaiSubscriptionProviderId: (...args) => isXaiSubscriptionProviderId(...args),
@@ -130,15 +285,9 @@ export function createHostCodexRuntime(options: {
     peekGrokAccessToken: (...args) => options.config.grok.peekGrokAccessToken(...args),
     invalidateXaiBridgeAuth: (...args) => xai.invalidateXaiBridgeAuth(...args),
     chatgptAccountIdFromTokens: (...args) => chatgptAccountIdFromTokens(...args),
-    desktopCodexAuthAdapter: {
-      getAccessToken: createBridgeTokenReader({ check, systemLogin, readAccessToken: providerId => native.readAccessToken(providerId) }),
-      // The bridge has just matched the rejected token against getAccessToken above.
-      invalidate: reason => invalidateNative(reason),
-      captureOAuthDispatchProof: (accessToken, accountId, providerId) => native.captureDispatchProof(accessToken, accountId, providerId),
-    },
-    codexAccountHome: (...args) => accounts.codexAccountHome(...args),
-    codexAccountState: (...args) => accounts.codexAccountState(...args),
-    invalidateCodexAccount: (...args) => accounts.invalidateCodexAccount(...args),
+    // The default login and independently added Codex accounts, with the coexistence hold.
+    ...createHostBridgeLoginPorts({ check, systemLogin, native, accounts, invalidateNative: reason => invalidateNative(reason),
+      isProfileHeld: options.isProfileHeld, refusals: heldLogins }),
     isOpenAiSubscriptionProviderId: (...args) => accounts.isOpenAiSubscriptionProviderId(...args),
     recordXaiRateLimitSnapshot: (...args) => usage.recordXaiRateLimitSnapshot(...args),
   });
@@ -173,6 +322,10 @@ export function createHostCodexRuntime(options: {
       disposeLocalHost: () => authBoundary.afterLogout(),
       onInvalidated: credentialScope => authBoundary.afterInvalidation(reason, credentialScope) });
   };
+  const engineLogins = () => {
+    const ports = createHostEngineLoginPorts({ native, accounts, invalidateNative, isProfileHeld: options.isProfileHeld, refusals: heldLogins });
+    return { invalidateNative: ports.invalidate, assertNativeLoginUsable: ports.assertNativeLoginUsable };
+  };
   const readRoute = () => {
     check();
     return { authInjection: proxy.getCodexProxyAuthInjectionState() ?? (native.hasLogin() ? 'oauth-bearer' : 'env-key') };
@@ -204,7 +357,8 @@ export function createHostCodexRuntime(options: {
     prepareRemote: async () => { throw new Error('SSH Codex transport is not configured in this Host'); },
   });
   const threadStorage = createHostCodexThreadStorage({ profileDir: options.profileDir, accounts, check });
-  const deps: Partial<AgentDeps> = {
+  // Typed by its literal (checked against AgentDeps) so the Codex bag in runtime.ts sees exactly these ports.
+  const deps = {
     ...threadStorage.deps,
     prepareCodexExtraSpawnConfig: async (...args) => { check(); const value = inbound.withToken(await prepare(...args)); check(); return value; },
     disableCodexPluginRuntime: true,
@@ -245,13 +399,22 @@ export function createHostCodexRuntime(options: {
         });
     },
     getCodexSubagentIdentity: ({ childThreadId }) => proxy.getObservedCodexSubagentIdentity(childThreadId),
+    getRejectedCodexDownshiftModel: proxy.getRejectedCodexDownshiftModel,
+    getObservedCodexUpstreamCapacity: proxy.getObservedCodexUpstreamCapacity,
+    subscribeCodexUpstreamCapacity: proxy.subscribeCodexUpstreamCapacity,
     armCodexHttpRecovery: proxy.armCodexHttpRecovery,
     registerCodexChildThreadForParent: ({ parentThreadId, childThreadId }) => { check(); proxy.registerChildThread(parentThreadId, childThreadId); },
-  };
+  } satisfies Partial<AgentDeps>;
   return { deps, proxy, native, readRoute, modelContext,
+    /** This runtime's native Codex history, read only (context recovery's history classification). */
+    codexHistory: {
+      readCodexThreadStorageReadOnly: threadStorage.readCodexThreadStorageReadOnly,
+      classifyCodexHistoryOversized: threadStorage.classifyCodexHistoryOversized,
+    },
     /** Whether this runtime still belongs to the current owner (the agent graph's Codex token reader). */
     isCurrent: current, fastPolicies: policies, fastRequestPolicy: requestPolicy, closeSession: proxy.unregister,
-    invalidateNative, authBoundary, systemAuthPath, systemLogin,
+    // The engine's ports (createHostEngineLoginPorts): its rejection report and the spawn check.
+    ...engineLogins(), authBoundary, systemAuthPath, systemLogin,
     /** What this runtime's Codex processes carry to its proxies (tests; never logged). */
     inboundToken: () => inbound.token(),
     /** How this runtime retires the local Codex hosts (the agent graph's CodexAgent). */

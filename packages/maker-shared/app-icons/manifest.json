@@ -1,0 +1,8 @@
+{
+  "icons": [
+    { "id": "default" },
+    { "id": "cat", "artwork": { "light": "cat.png" } },
+    { "id": "wordmark", "artwork": { "light": "wordmark-light.png", "dark": "wordmark-dark.png" } },
+    { "id": "mark", "artwork": { "light": "mark-light.png", "dark": "mark-dark.png" } }
+  ]
+}

@@ -240,3 +240,43 @@ export function isPrHost(host: unknown): host is string {
     return false;
   }
 }
+
+/** Parse a complete PR/MR page link into its canonical association identity. */
+export function parseSessionPrUrl(value: string): (PrIdentity & { url: string }) | null {
+  if (value.length > 2048 || !value.startsWith('https://')) return null;
+  try {
+    const url = new URL(value);
+    if (url.protocol !== 'https:' || url.username || url.password || url.port || !isPrHost(url.hostname)) return null;
+    const github = url.hostname === 'github.com'
+      ? /^\/([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)\/pull\/([1-9]\d*)(?:\/(?:files|commits|checks))?\/?$/.exec(url.pathname)
+      : null;
+    const gitlab = /^\/((?:[A-Za-z0-9_.-]+\/)+)([A-Za-z0-9_.-]+)\/-\/merge_requests\/([1-9]\d*)(?:\/(?:diffs|commits|pipelines))?\/?$/.exec(url.pathname);
+    if (!github && !gitlab) return null;
+    const match = (github ?? gitlab)!;
+    const prNumber = Number(match[3]);
+    if (!Number.isSafeInteger(prNumber)) return null;
+    const owner = (github ? match[1] : match[1].slice(0, -1)).toLowerCase();
+    const repo = match[2].toLowerCase();
+    if (`${owner}/${repo}`.split('/').some(part => part === '.' || part === '..')) return null;
+    const ref: PrIdentity = { provider: github ? 'github' : 'gitlab', host: url.hostname, owner, repo, prNumber };
+    return { ...ref, url: sessionPrUrl(ref) };
+  } catch { return null; }
+}
+
+/** Older GitHub cards store a short slot key. GitLab cards use the complete MR URL to distinguish instances. */
+export function cardPrSlotKey(value: string): string | null {
+  const short = /^([a-z\d_.-]{1,100}\/[a-z\d_.-]{1,100})#([1-9]\d{0,8})$/i.exec(value.trim());
+  if (short) return short[0].toLowerCase();
+  const ref = parseSessionPrUrl(value);
+  return ref?.provider === 'gitlab' && value.toLowerCase() === ref.url ? prStatusKey(ref) : null;
+}
+
+export function cardPrLinkKey(url: string): string | undefined {
+  const ref = parseSessionPrUrl(url.replace(/^https:\/\/www\.github\.com\//i, 'https://github.com/'));
+  if (!ref) return undefined;
+  return ref.provider === 'gitlab' ? prStatusKey(ref) : `${ref.owner}/${ref.repo}#${ref.prNumber}`;
+}
+
+export function qualifiedCardPrKey(key: string | null): string | null {
+  return key && (key.startsWith('gitlab:') ? key : `github:github.com/${key}`);
+}

@@ -2,6 +2,11 @@
 
 > **读取时机**：要在 Desktop 或 Mobile 上检查界面、截图、做 UI 回归，又不想登录真实
 > 账号或碰真实数据时；新增或修改模拟任务、`--mock` 启动参数时。
+> **适用路径**：`packages/maker-shared/src/uiMock*.ts`、
+> `apps/desktop/src/main/localDb/uiMockSeed.ts`、
+> `apps/desktop/src/main/companion-cloud/uiMock.ts`、
+> `apps/desktop/src/main/maker-ipc/botGroupUiMock.ts`、
+> `apps/mobile/src/debug/visualMock.ts`、`apps/mobile/src/debug/*VisualFixture.ts`
 
 Desktop 与 Mobile 共用一套模拟数据：展示项目、不同状态的回归任务和它们的消息。开发版
 加 `--mock` 启动后直接进入主界面：不登录 Cindy 账号，任务与消息来自模拟数据，不读写正式
@@ -47,6 +52,11 @@ Mobile 另外保留双端一致性测试用的 `session-primary` 与 Orca 两条
 
 ## Desktop
 
+登录服务的非 JSON 网络错误用 `XDT_LOGIN_SCENARIO=providers:non-json-418` 验证：
+它只在开发构建将登录方式 GET 替换为合成的 418 HTML 响应（`server` / `via` 为
+`scenario-proxy`），经过真实 auth client、诊断脱敏与登录页；不代表复现了报告人的网络。
+此场景属于登录流程测试，不加会跳过登录页的 `--mock`。正式构建仍由同一 fixture stub 排除。
+
 ```bash
 pnpm restart:desktop:remote -- --mock
 pnpm restart:desktop:remote -- --mock --isolated=<名字>   # 另开一份模拟沙箱，可与别的 worktree 并行
@@ -83,7 +93,21 @@ pnpm restart:desktop:remote -- --mock --isolated=<名字>   # 另开一份模拟
   `SOUL.md` 临时设为只读，验证真实文件写入失败时表单保留草稿；解除只读后直接保存应成功。
   只对该合成文件施加故障，验收后恢复文件属性并关闭沙箱。
 
+Desktop 群告警：隔离沙箱 `ui-mock/group-alert.json` 写入 `{"status":"waiting"}`，
+重启后从群列表打开「群告警验收」。使用真实「结束分工」入口后，合成计划变为 stopped，
+失败步骤仍保留，群行告警消失。将文件中的 `newFailure` 或 `pending` 设为 true，重新打开
+主界面可分别检查另一执行失败和待决定状态；不发送消息、不运行模型。该场景只替换合成群的
+服务输入，没有原执行 Session，真实服务器停止动作由生产服务入口回归测试覆盖。
+
+同一文件加 `"composer":true` 可验收群聊发送快捷键：真实输入框、发送队列与话题面板照常运行，
+该合成群的文字发送和话题回复由内存服务响应，不访问服务器或运行模型。消息只保留到本次
+测试进程结束；不用于验证真实投递、附件或伙伴执行。
+
 ## Mobile 模拟器
+
+自动化模拟记录包含发送前保存点超时和原始额度错误，分别打开任务
+`ui-mock-rich-answer` / `visual-automation-unread`，在历史失败提示中展开错误详情，
+检查原因传递后的文本与 Light / Dark 可读性；均为合成数据，不运行模型。
 
 ```bash
 pnpm mobile:sim:start -- --mock
@@ -96,16 +120,21 @@ pnpm mobile:sim:whoami -- --mock --json
   环境，加 `--takeover` 重启；`whoami` 不带相同的 `--mock` 会判定环境不一致。
 - App 里是一台在线的模拟电脑和一台离线电脑，任务、消息、插件演示、文件浏览都由
   `apps/mobile/src/debug/visualMock.ts` 在内存里提供，写操作只在本次进程内生效，重启即还原。
+- 项目设置：手机首页项目行右侧设置按钮使用真实设置页；名称、线性图标、Emoji、字母及上传图片保存在 mock 进程内存中（支持 profile 组合保存和按项目读取图片），返回列表即时显示，重启还原，不连接真实电脑。
 - 模拟电脑支持协同：任务或新建任务的「+」面板 →「协同模式」可以直接打开开启协同的表单，角色清单
   （含添加、长按移除）读写的是模拟电脑上的那一份，只在本次进程内生效。
 - 生效条件是开发构建（`__DEV__`）；正式包不包含这条路径。
+- 复古皮肤：`cindy://retro-skin-preview`，可加 `?skin=thinkpad` 等已有外观标识以直接比较各款键盘；在折叠屏竖向半折叠姿态下，使用正式的外壳、键盘及窗口几何显示原生预览；按键事件仅显示在屏幕内，不连接远程电脑。用于检查屏幕边界、素材拼接及真实触摸反馈，不代表远程连接已验证。
 - 设备画面连接页：`cindy://devices/desktop/cindy-visual-mock-mac?liveScreen=cindy-simulator%7Cpreview`。
   mock provider 保持远程桌面请求等待，真实页面展示连接中、等待较久及原有超时状态，供返回按钮与明暗主题截图；不连接真实电脑。
 - 邮件阅读页：`cindy://mail-preview?deviceId=cindy-visual-mock-mac&sessionId=visual-running&url=<编码后的地址>`，
   地址取 `apps/mobile/src/debug/mailVisualFixture.ts` 的 `VISUAL_MAIL_URLS`（宽版营销邮件、三封往来邮件），均为合成数据。
 - 写邮件卡片：`cindy://sessions/visual-mail-draft?deviceId=cindy-visual-mock-mac`（仅手机端的模拟任务，含一张回复草稿卡）。
 - 反馈确认：`cindy://sessions/visual-issue-confirm?deviceId=cindy-visual-mock-mac`，合成反馈草稿、署名与环境，覆盖预览、编辑和展开详情；不提交。Desktop 对应 `pnpm ui:check --page issue-confirm --case all --theme all`，两端均加载实际组件。
+- 代输入：`cindy://sessions/visual-input-handoff?deviceId=cindy-visual-mock-mac`，一条英文的电脑 App 登录请求（长目的、Agent 补充、邮箱与密码），点「填写」打开实际的 iOS 原生面板；用于在 iPhone Duo 折叠／展开、短屏与常规机型上检查对齐和高度。合成数据，「继续」不会提交到任何电脑。
 - 群聊点名：`cindy://companions/groups/mention-qa?deviceId=cindy-visual-mock-mac`，合成成员覆盖显式身份、唯一名称回退、重名、未知及群体提及。沿用实际群聊组件与成员身份 sheet，只用于界面验收；话题入口另由直连 Chat Server 的组件回归覆盖。
+- 群列表告警：模拟电脑的伙伴群列表包含「已结束分工」「另一执行失败」「仍需回复」三行，
+  由真实共享状态判据生成无提醒、错误、待回复状态，验证失败历史不等于仍需处理。只用于列表目检。
 
 - 群内执行：`cindy://companions/groups/execution-qa?deviceId=cindy-visual-mock-mac`；后缀 `-work`／`-talk` 查看长分工与讨论队列，`-member`／`-legacy` 查看普通成员与旧宿主的默认停止，`-peer` 查看无操作权限的群友仍可见的公共 Cindy 消息与两条独立执行。仅合成内存回执，不访问真实权限或模型。
 - 窄屏正文：`cindy://group-execution-preview?width=320&groupId=execution-qa`（`width` 可选 `393`）。复用真实群聊页，把正文容器限宽；设备窗口、系统安全区和原生导航栏仍取当前模拟器，不将它当作另一机型的整屏验收。
@@ -156,3 +185,5 @@ Mobile 只对 `UI_MOCK_SHOWCASE_PROJECTS` 中的展示项目启用这套文件�
   `apps/mobile/scripts/export-realdata-visual-snapshot.mjs`，它导出的是敏感数据，按脚本
   里的限制使用。
 - PR 截图来自模拟数据时要写明，不能当作真实账号、真实 Agent 行为已验证的证据。
+
+空响应暂停回归场景 `ui-mock-silent-stop`（「空响应续跑暂停」）由两端共用，包含预算、频控、任务保护及两种派发失败的历史错误和尾部错误。主提示应保持中性，展开详情可见实际原因；点击诊断仅检查预填内容，不发送消息。

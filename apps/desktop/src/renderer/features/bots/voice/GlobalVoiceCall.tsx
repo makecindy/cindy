@@ -11,7 +11,7 @@ import { useSessionBinding } from '@/hooks/useSessionBinding';
 import { makerChatStore } from '@/lib/makerChatStore';
 import { requestChatTaskFocus } from '@/features/right-sidebar/plugins/background-tasks/chatTaskFocusIntent';
 import {
-  SECTION_COLLAPSE_DURATION_MS,
+  sectionCollapseDurationMs,
   SectionCollapse,
 } from '../../cc-agent/sidebar/SectionCollapse';
 import {
@@ -235,7 +235,7 @@ export function GlobalVoiceCallHost() {
       setHosted(null);
       publishVoiceCallStatus(null);
       publishRemote(null);
-    }, SECTION_COLLAPSE_DURATION_MS + 50);
+    }, sectionCollapseDurationMs() + 50);
     return () => clearTimeout(timer);
   }, [phase, publishRemote]);
   const onStatus = useCallback(

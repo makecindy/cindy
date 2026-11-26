@@ -6,7 +6,7 @@ import type { ProviderView } from '@cindy/model-providers';
 import type { RemoteAgentCaps } from '@cindy/device-link';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { ProviderGroupConfig, ProviderGroupMember } from '../../../shared/providerGroup';
+import { normalizeProviderGroupConfig, type ProviderGroupConfig, type ProviderGroupMember } from '../../../shared/providerGroup';
 import type { ProviderGroupBinding } from '../bindings.desktop';
 import type { DeviceLinkDeviceView } from '../../../shared/deviceLinkIpc';
 import { createProviderGroupDirectory, type ProviderGroupDirectory, type ResolvedProviderGroupMember } from '../directory';
@@ -50,6 +50,64 @@ const LOCAL = member('local', 'local', null);
 const SHARE_A = member('share:a:anthropic', 'share', 'share:a', 2);
 const SHARE_B = member('share:b:anthropic', 'share', 'share:b');
 
+// Unit regression, 2026-11-16: a pool's total load hid a healthy idle account.
+// Existing group cases model one account per machine, so neither least nor round
+// could distinguish two accounts on A from one on B under equal hardware budgets.
+describe('subscription pools within a group', () => {
+  const remote = member('b:anthropic', 'device', 'b');
+  const config: ProviderGroupConfig = { strategy: 'least', autoSwitch: true, members: [LOCAL, remote] };
+  const summary = (accounts: number, running: number, totalRunning = running) => ({
+    version: 1 as const, accounts, running, totalRunning, full: false, urgency: null, fiveHourTight: false,
+  });
+
+  it('compares the next assignable account while keeping the physical member cap', async () => {
+    const router = harness({ local: 4, [remote.key]: 3 }, {}, [], config, {
+      readPoolScheduling: async m => m.kind === 'local' ? summary(2, 0, 4) : summary(1, 3),
+    });
+    expect(await router.pick({ providerId: 'anthropic', agentKind: 'claude-code', model: MODEL, localTask: true }))
+      .toMatchObject({ kind: 'member', member: { key: 'local' } });
+    const capped = harness({ local: 4, [remote.key]: 3 }, {}, [], {
+      ...config, members: [{ ...LOCAL, limit: 4, limitSet: true }, remote],
+    }, { readPoolScheduling: async m => m.kind === 'local' ? summary(2, 0, 4) : summary(1, 3) });
+    expect(await capped.pick({ providerId: 'anthropic', agentKind: 'claude-code', model: MODEL, localTask: true }))
+      .toMatchObject({ kind: 'member', member: { key: remote.key } });
+  });
+
+  it('gives two ready accounts two round-robin turns without changing machine weights', async () => {
+    const router = harness({}, {}, [], { ...config, strategy: 'round' }, {
+      readPoolScheduling: async m => summary(m.kind === 'local' ? 2 : 1, 0),
+    });
+    const counts = { local: 0, remote: 0 };
+    for (let i = 0; i < 60; i++) {
+      const pick = await router.pick({ providerId: 'anthropic', agentKind: 'claude-code', model: MODEL, localTask: true });
+      if (pick.kind === 'member') counts[pick.member.kind === 'local' ? 'local' : 'remote']++;
+    }
+    expect(counts).toEqual({ local: 40, remote: 20 });
+  });
+
+  it('counts concurrent provisional picks even when a busy sibling hides them in the pool total', async () => {
+    const router = harness({ local: 4, [remote.key]: 3 }, {}, [], config, {
+      readPoolScheduling: async m => m.kind === 'local' ? summary(2, 0, 4) : summary(1, 3),
+    });
+    const picks = await Promise.all(Array.from({ length: 5 }, (_, i) => router.pick({ providerId: 'anthropic',
+      agentKind: 'claude-code', model: MODEL, localTask: true, reserveFor: `pending-${i}` })));
+    expect(picks.map(pick => pick.kind === 'member' ? pick.member.key : null))
+      .toEqual(['local', 'local', 'local', 'local', remote.key]);
+  });
+
+  // PR #10910 review: localTask selects a remote executor with owner privileges,
+  // while a shared guest must retain stricter account grants. Prior local pool
+  // cases never depended on own-computer-only legacy account authorization.
+  it.each(['local', 'own-computer', 'guest'] as const)('matches remote account admission for a %s caller', async caller => {
+    const router = harness({}, {}, [], { ...config, members: [remote] }, {
+      readPoolScheduling: async (_member, _model, options) => ({ ...summary(options.ownComputer ? 1 : 0, 0) }),
+    });
+    const pick = await router.pick({ providerId: 'anthropic', agentKind: 'claude-code', model: MODEL,
+      ...(caller === 'local' ? { localTask: true } : caller === 'own-computer' ? { ownComputer: true } : {}) });
+    expect(pick.kind).toBe(caller === 'guest' ? 'unavailable' : 'member');
+  });
+});
+
 function harness(
   reported: Record<string, number>,
   bindings: Record<string, ProviderGroupBinding> = {},
@@ -89,6 +147,73 @@ function harness(
     ...overrides,
   });
 }
+
+// Unit through router.pick: before migration neither caller may dispatch the
+// former private list. A migrated physical group is picked normally again.
+it('waits for migration before routing the same group for local and remote callers', async () => {
+  const providerId = 'anthropic';
+  let config = normalizeProviderGroupConfig({ members: [{ kind: 'local' }], localAccountIds: ['work-key'] }, providerId)!;
+  const prepareGroup = vi.fn(async () => {});
+  const resolveMembers = vi.fn(async (_id: string, current: ProviderGroupConfig) => current.members.map(member => ({
+    member, label: member.providerId, state: 'ok' as const, view: view(member.providerId),
+  })));
+  const router = harness({}, {}, [], config, {
+    prepareGroup, readGroup: () => config,
+    directory: {
+      resolveMembers, listCandidates: async () => [], readDeviceCatalog: async () => [],
+      probe: async () => 'ok', memberLabel: member => member.providerId, invalidate() {},
+    },
+  });
+  const input = { providerId, agentKind: 'claude-code' as const, model: MODEL };
+  await expect(router.pick({ ...input, localTask: true })).resolves.toMatchObject({ kind: 'unavailable' });
+  await expect(router.pick(input)).resolves.toMatchObject({ kind: 'unavailable' });
+  expect(resolveMembers).not.toHaveBeenCalled();
+  prepareGroup.mockImplementation(async () => {
+    config = normalizeProviderGroupConfig({ members: [{ kind: 'local' }] }, providerId)!;
+  });
+  await expect(router.pick(input)).resolves.toMatchObject({ kind: 'member', member: { key: 'local' } });
+  expect(prepareGroup).toHaveBeenCalledTimes(3);
+});
+
+it('routes a shared image model only to a group member that offers it', async () => {
+  const model = 'openai/gpt-image-2';
+  const remote = { ...member('remote', 'device', 'remote'), providerId: 'openai-independent' };
+  const localOnly = { ...member('pool', 'device', 'pool'), providerId: 'openai-sub-12345678' };
+  const local = { ...LOCAL, providerId: 'openai' };
+  const directory: ProviderGroupDirectory = {
+    async resolveMembers(_providerId, config) {
+      return config.members.map((member) => ({
+        member,
+        label: member.key,
+        state: 'ok',
+        view: {
+          ...view(member.providerId),
+          ...(member.key === localOnly.key ? { subscriptionPool: 'openai' as const } : {}),
+          imageModels: [{ id: `${member.providerId}/gpt-image-2`, name: model, disabled: member.kind === 'local' }],
+        },
+      }));
+    },
+    async listCandidates() { return []; },
+    async readDeviceCatalog() { return []; },
+    async probe() { return 'ok'; },
+    memberLabel: (member) => member.key,
+    invalidate: () => undefined,
+  };
+  const router = harness({}, {}, [], undefined, {
+    directory,
+    readPoolScheduling: async (_member, modelId) => ({
+      version: 1, accounts: modelId === model ? 0 : 1,
+      running: 0, totalRunning: 0, full: false, urgency: null, fiveHourTight: false,
+    }),
+    readGroup: () => ({ strategy: 'least', autoSwitch: true, members: [local, localOnly, remote] }),
+  });
+  expect(await router.pick({
+    providerId: 'openai', agentKind: 'codex', model, capability: 'image.generate',
+  })).toMatchObject({ kind: 'member', member: remote });
+  expect(await router.pick({
+    providerId: 'openai', agentKind: 'codex', model, capability: 'image.generate', exclude: new Set([remote.key]),
+  })).not.toMatchObject({ kind: 'member', member: localOnly });
+});
 
 // 2026-11-11 用户裁决：达到并发上限就不再分；没设置过上限的电脑不限制。
 describe('provider group hard concurrency limits', () => {
@@ -352,6 +477,18 @@ describe('provider group running count', () => {
 });
 
 describe('provider group picks for this computer’s own tasks', () => {
+  // #11114 review, unit: excluding the last remote must retain its round cursor
+  // position. Earlier exclusion coverage used order, not a prior round pick.
+  // Minimal sequence: A, B, then exclude B; the next executor must be C, not A.
+  it('continues round selection after an excluded remote without resetting to the first member', async () => {
+    const router = harness({}, {}, [], { strategy: 'round', autoSwitch: true, members: [LOCAL, SHARE_A, SHARE_B] });
+    const input = { providerId: 'anthropic', agentKind: 'claude-code' as const, model: MODEL, localTask: true as const };
+    expect(await router.pick(input)).toMatchObject({ kind: 'member', member: { key: LOCAL.key } });
+    expect(await router.pick(input)).toMatchObject({ kind: 'member', member: { key: SHARE_A.key } });
+    expect(await router.pick({ ...input, fresh: true, exclude: new Set([SHARE_A.key]) }))
+      .toMatchObject({ kind: 'member', member: { key: SHARE_B.key } });
+  });
+
   it('reserves the chosen computer until the task starts, so tasks opened together spread out', async () => {
     const bindings: Record<string, ProviderGroupBinding> = {};
     const running: string[] = [];
@@ -401,6 +538,18 @@ describe('provider group quick picks with busy usable computers', () => {
     });
     return { router, config, localRunning, readDeviceProviders };
   }
+
+  // #11114 review, unit: pick must not refresh a failed/excluded executor.
+  // Earlier quick-pick cases had no exclusions and allowed slow reads to start.
+  // One excluded stalled remote plus a ready backup must settle without the quick timer.
+  it('selects a ready backup without reading excluded remote members again', async () => {
+    const { router, localRunning, readDeviceProviders } = quickRouter(0, 0);
+    const pick = await router.pick({ providerId: 'anthropic', agentKind: 'claude-code', model: MODEL,
+      localTask: true, fresh: true, exclude: new Set([LOCAL.key, SLOW.key]) });
+    expect(pick).toMatchObject({ kind: 'member', member: { key: FAST.key } });
+    expect(readDeviceProviders).toHaveBeenCalledExactlyOnceWith('fast', undefined);
+    expect(localRunning).toHaveBeenCalledOnce();
+  });
 
   it.each([
     { fastLoad: null, expected: LOCAL.key },

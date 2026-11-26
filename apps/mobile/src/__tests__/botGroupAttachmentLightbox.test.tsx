@@ -6,9 +6,16 @@ import type { BotGroupAttachment } from '@cindy/maker-shared/botGroupChat';
 import type { ResolveRemoteMediaFn } from '@/session/remoteMedia';
 
 // This suite exercises attachments; MCP App's native WebView is covered by mcpAppCard.test.tsx.
+// Window geometry is a native boundary; preview placement has its own production-hook suite.
+vi.mock('@/session/usePreviewChromeFrame', () => ({ usePreviewChromeFrame: () => ({
+  top: 0, bottom: 0, left: 12, right: 12, contentTop: 48,
+  documentContentTop: 64, documentHeaderHeight: 64, sharedStatusRow: false,
+}) }));
 vi.mock('@/session/McpAppCard', () => ({ McpAppCard: () => null }));
 // Card previews have their own regression suite; do not load Expo's native viewer in this attachment suite.
 vi.mock('@/plugins/PluginNativeIntent', () => ({ PluginNativeIntent: () => null }));
+// Model selection has its own card regression; keep native catalogs out of this attachment test.
+vi.mock('@/plugins/PluginModelPicker', () => ({ PluginModelPicker: () => null }));
 // The shared message renderer also imports the site-video native surface.
 vi.mock('react-native-webview', () => ({ WebView: () => null }));
 vi.mock('expo-modules-core', () => ({
@@ -65,7 +72,7 @@ vi.mock('lucide-react-native', () => Object.fromEntries([
   'Mail', 'CalendarDays', 'Folder', 'ChartColumn', 'Info', 'Clock', 'MapPin', 'Coffee', 'Image', 'Users', 'Star',
   'Database', 'FileArchive', 'FileAudio', 'FileChartColumn', 'FileCode', 'FileImage', 'FileSpreadsheet', 'FileText', 'FileVideo',
   'ArrowLeftRight', 'ArrowUp', 'Bot', 'Check', 'ChevronDown', 'ChevronRight', 'ChevronUp', 'Circle', 'CircleAlert', 'CircleCheck',
-  'CircleDashed', 'CircleMinus', 'CircleStop', 'CircleX', 'Copy', 'Ellipsis', 'ExternalLink', 'File', 'Ghost', 'Layers', 'ListTodo', 'LoaderCircle',
+  'CircleDashed', 'CircleMinus', 'CircleStop', 'CircleX', 'Copy', 'Download', 'Ellipsis', 'ExternalLink', 'File', 'Ghost', 'Layers', 'ListTodo', 'LoaderCircle',
   'MessageSquarePlus', 'Pen', 'PencilLine', 'RefreshCw', 'Send', 'Share', 'Sparkles', 'Split', 'Timer', 'Trash2', 'TriangleAlert',
   'Undo2',
       "Redo2",

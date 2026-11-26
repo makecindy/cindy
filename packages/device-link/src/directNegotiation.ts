@@ -9,6 +9,10 @@ export const DIRECT_LINK_CAPABILITY = 'direct-link-v1';
 export const PROVIDER_SHARE_DIRECT_CAPABILITY = 'provider-share-direct-v1';
 export const DIRECT_LINK_SIGNAL = 'device-link:direct-signal';
 export const DIRECT_LINK_TIMEOUT_MS = 15_000;
+/** Keep the one-minute ceiling: a receiver network change cannot wake an older
+ * initiator through the existing signal protocol. Local changes still reset backoff. */
+export const DIRECT_LINK_RETRY_BASE_MS = 5_000;
+export const DIRECT_LINK_RETRY_MAX_MS = 60_000;
 export const DIRECT_LINK_MAX_SDP = 128 * 1024;
 
 export type DirectRuntimeCloseReason = 'channel-closed' | 'network-failed' | 'runtime-timeout' | 'runtime-failed' | 'runtime-unavailable';
@@ -196,6 +200,17 @@ export class DirectLinkNegotiator {
   }
   clear(): void { for (const id of this.peers.keys()) this.forget(id); }
 
+  /** The local network changed, so a path that kept failing may work now: retry from the first step. */
+  networkChanged(): void {
+    for (const [peerId, peer] of this.peers) {
+      if (!peer.retry) continue;
+      clearTimeout(peer.retry);
+      peer.retry = undefined;
+      peer.failures = 0;
+      this.retry(peerId, peer);
+    }
+  }
+
   private get capacity(): DirectCapacityPool { return this.deps.runtime.capacity ?? this.localCapacity; }
   private kind(peer: string): DirectPeerKind { return this.deps.kind?.(peer) ?? 'device'; }
   private diagnose(peerId: string, peer: Peer, reason: DirectDiagnosticReason): void {
@@ -344,7 +359,7 @@ export class DirectLinkNegotiator {
       || this.deps.identity()! >= (this.deps.peerDeviceId ? this.deps.peerDeviceId(peerId) ?? '' : peerId)) {
       this.forget(peerId); return;
     }
-    const backoff = Math.min(60_000, 5_000 * 2 ** Math.min(peer.failures++, 4));
+    const backoff = Math.min(DIRECT_LINK_RETRY_MAX_MS, DIRECT_LINK_RETRY_BASE_MS * 2 ** Math.min(peer.failures++, 4));
     // Spread simultaneous peer failures even at the cap, without exceeding the retry ceiling.
     const delay = Math.floor(backoff * (0.8 + Math.random() * 0.2));
     peer.retry = setTimeout(() => {

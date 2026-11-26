@@ -38,7 +38,7 @@ function patchShareExtension(source) {
   );
   replace(
     "      userDefaults.set(encoded, forKey: SHARE_INTO_DEFAULTS_KEY)\n      userDefaults.synchronize()",
-    '      do {\n        try IncomingShareSlot.write(encoded, group: appGroupId)\n        return true\n      } catch {\n        print("Error: incoming share could not be saved")\n        return false\n      }',
+    '      do {\n        try IncomingShareSlot.write(encoded, group: appGroupId)\n        return true\n      } catch {\n        NSLog("[CindyShare] snapshot write failed (%ld)", (error as NSError).code)\n        return false\n      }',
     1,
   );
   replace(

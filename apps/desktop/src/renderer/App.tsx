@@ -15,8 +15,9 @@ import { useDisableContextMenu } from '@/hooks/useDisableContextMenu';
 import { ThemeProvider } from '@/hooks/useTheme';
 import { WallpaperSettingsProvider } from '@/hooks/useWallpaperSettings';
 import { FontSettingsProvider } from '@/hooks/useFontSettings';
-import { LocaleProvider } from '@/hooks/useLocale';
+import { LocaleProvider, useLocale } from '@/hooks/useLocale';
 import { AuthProvider, useAuth } from '@/contexts/AuthContext';
+import { CloudInstanceAccessProvider } from '@/features/cloud-settings/CloudInstanceAccess';
 import { PluginReviewUpdatesProvider } from '@/contexts/PluginReviewUpdatesContext';
 import { AppShellCoverProvider, useAppShellCover } from '@/contexts/AppShellCoverContext';
 import { LoginHandoffProvider } from '@/contexts/LoginHandoffContext';
@@ -30,6 +31,7 @@ import { LoginBrandStage } from '@/components/login/LoginBrandStage';
 import { StartupLogSupport } from '@/components/log-support/StartupLogSupport';
 import { isSecondaryWindow } from '@/lib/secondaryWindow';
 import { isSidebarWindow } from '@/lib/sidebarWindow';
+import { schedulePluginCatalogPrewarm } from '@/features/plugin/lib/prewarmPluginCatalog';
 import { installGithubStarPrompt } from '@/lib/githubStarPrompt';
 import { createGithubStarPromptEnvironment } from '@/lib/githubStarPromptHost';
 import { ToastContainer } from '@/components/ui/toast';
@@ -39,6 +41,7 @@ import { ConfirmDialogProvider } from '@/components/ui/confirm-dialog-provider';
 import { FindInPageBar } from '@/components/find-in-page/FindInPageBar';
 import { ProjectAutomationNotifyBridge } from '@/features/scheduler/components/ProjectAutomationNotifyBridge';
 import { GhostConfirmDialogHost } from '@/cindy-brain/GhostConfirmDialogHost';
+import { GhostFormDialogHost } from '@/cindy-brain/GhostFormDialogHost';
 import { PluginModelPickerHost } from '@/cindy-brain/PluginModelPickerHost';
 import { LocalAgentConfirmationHost } from '@/components/LocalAgentConfirmationHost';
 import { ForgeOidcInstallConfirmHost } from '@/cindy-brain/ForgeOidcInstallConfirmHost';
@@ -70,6 +73,7 @@ import {
   getDraft,
   getDraftForOwnerPreferenceSync,
   applyAppDefaultModelSelection,
+  applyPluginEngineDraftRoute,
   subscribeDraft,
   setEffortForModel,
   setFastModeForModel,
@@ -172,6 +176,7 @@ function syncNewMakerPrefs(appDefaultModelRequestId?: string) {
   window.electronAPI.syncNewMakerDraft({
     ...(appDefaultModelRequestId ? { appDefaultModelRequestId } : {}),
     ownerStamp: { dataOwnerId: owner.dataOwnerId, ownerGeneration: owner.generation },
+    selectedPluginEngine: draft.pluginEngine ?? undefined,
     selectedRoute: {
       ...(draft.agentDeviceId ? { agentDeviceId: draft.agentDeviceId } : {}),
       harness: draft.vendor === 'cc' || draft.vendor === 'orca' ? 'claude' : draft.vendor,
@@ -214,7 +219,8 @@ function syncNewMakerPrefs(appDefaultModelRequestId?: string) {
 }
 
 function MakerBootstrap() {
-  const { isAuthenticated, dataOwnerId, dataOwnerRecoveryEpoch } = useAuth();
+  const { isAuthenticated, dataOwnerId, dataOwnerRecoveryEpoch, canEnterApp, mode, dataOwnerGeneration } = useAuth();
+  const { effectiveLocale } = useLocale();
 
   useResyncAgentIslandSettingsAfterLogin(isAuthenticated);
 
@@ -254,6 +260,11 @@ function MakerBootstrap() {
   useEffect(() => {
     void preloadLocalCatalogSnapshot();
   }, [dataOwnerId, dataOwnerRecoveryEpoch]);
+  useEffect(() => {
+    if (!canEnterApp || isSecondaryWindow() || isSidebarWindow()) return;
+    return schedulePluginCatalogPrewarm({ mode, ownerId: dataOwnerId, generation: dataOwnerGeneration,
+      locale: effectiveLocale });
+  }, [canEnterApp, mode, dataOwnerId, dataOwnerGeneration, dataOwnerRecoveryEpoch, effectiveLocale]);
   // Early fire-and-forget sends can precede maker IPC registration. Repeat after
   // the ready/owner boundary and after every owner generation change (same-owner
   // repairs included, #4469), using the same persisted preference snapshot.
@@ -267,13 +278,21 @@ function OwnerScopedRouter() {
   return (
     <PluginUiProvider enabled={canEnterApp} host={<Suspense fallback={null}><PluginUiHost /></Suspense>}>
     <MainViewHistoryProvider ownerKey={ownerKey} locationKey={router.state.location.key}>
-      <RouterProvider key={ownerKey} router={router} />
+      <CloudInstanceAccessProvider>
+        <RouterProvider key={ownerKey} router={router} />
+      </CloudInstanceAccessProvider>
     </MainViewHistoryProvider>
     </PluginUiProvider>
   );
 }
 
 export function App() {
+  useEffect(() => {
+    const root = document.getElementById('root');
+    if (!root) return;
+    root.dataset.cindyMounted = '1';
+    return () => { delete root.dataset.cindyMounted; };
+  }, []);
   useDisableContextMenu();
   // mac ⌘W 根级兜底: splash / env check / 登录 / 迁移等壳外阶段关(隐藏)本窗口;
   // MainLayout / SidebarWindowLayout 挂载期间声明所有权, 本兜底让路给壳层的
@@ -347,9 +366,14 @@ export function App() {
         fast,
         thinking,
         markModelChoice,
+        selectDraftAgent,
         taskProviderId,
         appDefaultSelection,
       }) => {
+        if (agent === 'acp') {
+          if (active) applyPluginEngineDraftRoute({ providerId, modelId, effort });
+          return;
+        }
         if (appDefaultSelection) {
           if (applyAppDefaultModelSelection(appDefaultSelection)) {
             const route = appDefaultSelection.route;
@@ -398,7 +422,7 @@ export function App() {
               model: modelId,
               providerId: providerId || null,
               ...(effort !== undefined ? { effort: effort as Effort } : {}),
-            });
+            }, { selectVendor: selectDraftAgent });
           }
         }
         if (effort !== undefined) {
@@ -476,7 +500,7 @@ export function App() {
     <ThemeProvider>
       <FontSettingsProvider>
         <WallpaperSettingsProvider>
-          <LocaleProvider>
+          <LocaleProvider syncHostOnMount={!isSecondaryWindow()}>
             <AppPreferenceControl />
             <ConfirmDialogProvider>
               <EnvCheckProvider>
@@ -507,6 +531,7 @@ export function App() {
                               内(要 useConfirmDialog);main 只投单个窗口,所以每个窗口
                               都挂、谁收到谁弹,不按窗口类型 gate。 */}
                               <GhostConfirmDialogHost />
+                              <GhostFormDialogHost />
                               <PluginModelPickerHost />
                               <LocalAgentConfirmationHost />
                               <ForgeOidcInstallConfirmHost />

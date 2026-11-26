@@ -2,6 +2,7 @@ import { seedBotReadPositions, markBotReadPositions, pruneBotReadState as pruneH
 import { listBotDelegationHistory } from '../../../maker-ipc/botDelegationHistory';
 import { readBotResponsibilityScope } from '../../../maker-ipc/botTaskCreation';
 import { emitSessionCreated } from '../sessionCreatedBroadcast.js';
+import { createSessionExecutionResolver } from '../../../maker-ipc/sessionExecutionSelection';
 import { setSessionOpeningModelAdmission } from '../../sessionOpening';
 import { createDrizzleProxy } from '../../client/drizzleProxy';
 import type { DbTransport } from '../../client/DbTransport';
@@ -10,6 +11,7 @@ import { setModelVisibilityMirror } from '../../../maker-host/model-visibility-m
 import { setMainLocale } from '../../../i18n.desktop';
 import Database from 'better-sqlite3';
 import { createMessage } from '../messages';
+import { setSessionRestoreObserver } from '../../sessionRestoreRetention';
 import type { ProviderView } from '@cindy/model-providers';
 import { createHash } from 'node:crypto';
 import { createCompanionCloudHost } from '../../../companion-cloud/host';
@@ -17,6 +19,9 @@ import { materializeCompanion } from '../../../companion-cloud/materialize';
 import { companionHomes, companionSnapshot } from '../../../companion-cloud/homes';
 import { startCompanionCloud } from '../../../companion-cloud/runtime';
 import { fakeApi, memoryState } from '../../../companion-cloud/__tests__/fakes';
+import { COMPANION_MEMORY_PREFIX, createCompanionUploader } from '../../../companion-cloud/uploader';
+import { directoryIdentity } from '../../../workspace-migration/tree';
+import { requestWorkspaceMove, workspaceMoveStatus } from '../../../workspace-migration/service';
 import { clearSessionPersistState, noteSessionAgentKind, getAssistantSamplingRuntimeId } from '../../../messagePersistBroadcaster.desktop';
 import { join, resolve } from 'node:path';
 import { existsSync, mkdirSync, promises as fsPromises, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -24,13 +29,17 @@ import { existsSync, mkdirSync, promises as fsPromises, readFileSync, rmSync, wr
 import { drizzle } from 'drizzle-orm/better-sqlite3';
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { BOT_TEMPLATE_PRESET_IDENTITIES } from '../../../../shared/botTemplatePreset';
+import { buildDefaultBotIdentity } from '../../../../shared/botProfileDefaults';
 import { createBotModelRouteReconciler } from '../../../maker-ipc/botModelRouteReconciler';
 import { configureBotModelSelectionCoordinator, createBotModelSelectionCoordinator } from '../../../maker-ipc/botModelSelectionCoordinator';
+import { createBotSettingsAutosave, normalizeBotSettingsPayload, type BotAutosaveStatus } from '../../../../renderer/features/bots/botSettingsAutosave';
 import { createScheduledModelScope, writeScheduledModelBaselineIfProfileCurrent, ScheduledModelSelectionBusyError, type ScheduledModelSelection } from '../../../maker-ipc/scheduledModelSelection';
 import { acquireSendToSessionLock, withSendToSessionLock } from '../../../maker-ipc/sendToSessionLock';
 import type { BotModelRoute } from '../../../../shared/botModelChain';
-import type { AgentKind } from '@cindy/maker-core';
+import type { AgentKind, EngineKind } from '@cindy/maker-core';
+import { requireBuiltinAgentKind } from '../../../maker-host/engineKind';
 import { createBotCapabilityService, type BotCapabilityUpdate } from '../../../maker-ipc/botCapabilityService';
+import * as botProjectMode from '../../../maker-ipc/botProjectMode';
 import { GroupToolAuthorizationError, registerGroupToolAuthority } from '../../../maker-ipc/botGroupToolAuthorization';
 import { buildBotMcpCatalog } from '../../../maker-host/botMcpCatalog';
 import { CustomMcpProvider } from '../../../mcp-integrations/custom-mcp-provider';
@@ -65,6 +74,11 @@ vi.mock('electron-store', () => ({ default: class {
   }
   delete(key: string) { this.values.delete(key); }
 } }));
+const pluginEngineViews = vi.hoisted(() => ({ list: null as null | (() => unknown[]) }));
+vi.mock('../../../maker-ipc/pluginEnginesIpc.js', async importOriginal => {
+  const real = await importOriginal<typeof import('../../../maker-ipc/pluginEnginesIpc.js')>();
+  return { ...real, listPluginEngineViews: () => (pluginEngineViews.list ? pluginEngineViews.list() : real.listPluginEngineViews()) };
+});
 vi.mock('../../../maker-ipc/appDefaultModelControl.js', async importOriginal => ({
   ...await importOriginal<typeof import('../../../maker-ipc/appDefaultModelControl.js')>(),
   validateTaskModel: vi.fn(async () => true),
@@ -77,6 +91,7 @@ const h = await vi.hoisted(async () => {
   const userDataDir = mkdtempSync(join(tmpdir(), 'cindy-bot-test-'));
   return ({
   userDataDir,
+  dbReady: true,
   db: null as ReturnType<typeof drizzle> | null,
   sqlite: null as Database.Database | null,
   tx: null as null | ((name: string, args: unknown) => Promise<unknown>),
@@ -153,6 +168,7 @@ vi.mock('electron', () => ({
 vi.mock('../../client/current', () => ({
   getCurrentDbClientSnapshot: (() => {
     let current: { key: string; client: {
+      readonly drizzle: typeof h.db;
       tx: (name: string, args: unknown) => Promise<unknown>;
       query: (sql: string, params: unknown[]) => Promise<unknown[]>;
     } } | null = null;
@@ -160,6 +176,7 @@ vi.mock('../../client/current', () => ({
       if (!current || current.key !== h.ownerScopeKey) current = {
         key: h.ownerScopeKey,
         client: {
+          get drizzle() { return h.db; },
           tx: (name, args) => h.tx!(name, args),
           query: async (sql, params) => h.sqlite!.prepare(sql).all(...params),
         },
@@ -168,7 +185,7 @@ vi.mock('../../client/current', () => ({
     };
   })(),
   getDbClient: () => ({ drizzle: h.db, tx: h.tx }),
-  tryGetDbClient: () => ({ drizzle: h.db, tx: h.tx }),
+  tryGetDbClient: () => h.dbReady ? ({ drizzle: h.db, tx: h.tx }) : null,
 }));
 vi.mock('../../../security/trustedAppRenderer.js', () => ({
   assertTrustedAppRendererEvent: vi.fn(),
@@ -262,9 +279,12 @@ import {
   getBotRemoteResourceSource,
   listBotRemoteResourceSources,
   prepareImportedBotInvitation,
+  reconcileBotProfileFolder,
 } from '../bots';
 import { tx as runWorkerTx } from '../../worker/opHandlers/tx.js';
 import * as modelSettings from '../../../maker-host/bot-model-chain-settings-store.js';
+import * as teammateProjects from '../../../scheduler-host/ownTeammateProject.js';
+import * as appSessionState from '../../../appSessionState.js';
 import { assertTrustedAppRendererEvent } from '../../../security/trustedAppRenderer.js';
 import { runDeviceLinkInvokeContext } from '../../../device-link/invoke-context.js';
 import {
@@ -272,6 +292,7 @@ import {
   markBotProfileRuntimeApplied,
   markBotProfileRuntimeFailed,
 } from '../../../maker-ipc/botProfileRuntime';
+import { botRuntimeRefreshNeedsReplacement } from '../../../maker-ipc/botCompactRuntimeRefresh';
 import { createBotDirectMessageService } from '../../../maker-ipc/botDirectMessageService';
 import { configureBotCanonicalReplacementCoordinator } from '../../../maker-ipc/botCanonicalReplacementCoordinator';
 import type { MakerSessionCreateOpts } from '../../../maker-ipc/sessionRequest';
@@ -304,6 +325,7 @@ function createDb(filename = ':memory:'): void {
       sdk_session_id TEXT,
       total_token_usage INTEGER NOT NULL DEFAULT 0,
       total_cost_usd REAL NOT NULL DEFAULT 0,
+      total_cost_usd_is_approximate INTEGER DEFAULT 0,
       total_cost_amount REAL NOT NULL DEFAULT 0,
       total_cost_currency TEXT,
       total_cost_is_approximate INTEGER NOT NULL DEFAULT 0,
@@ -313,7 +335,7 @@ function createDb(filename = ':memory:'): void {
       fast_mode INTEGER NOT NULL DEFAULT 0,
       plan_mode_enabled INTEGER NOT NULL DEFAULT 0,
       cleared_at INTEGER,
-      pinned_at INTEGER,
+      pinned_at INTEGER, snoozed_until INTEGER, snoozed_at INTEGER,
       hidden_at INTEGER,
       notifications_muted INTEGER NOT NULL DEFAULT 0,
       summary TEXT,
@@ -331,6 +353,8 @@ function createDb(filename = ':memory:'): void {
       agent_device_id TEXT,
       orca_remote_lead TEXT,
       source TEXT NOT NULL DEFAULT 'desktop',
+      side_chat_promoted INTEGER NOT NULL DEFAULT 0,
+      side_chat_close_pending INTEGER NOT NULL DEFAULT 0,
       created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL,
       feishu_open_id TEXT,
@@ -516,14 +540,19 @@ async function invoke(channel: string, body: unknown): Promise<any> {
 const capabilityDeps = {
   getMaker, getPluginRegistry, isBotToolsetAvailable,
   resolveBotAgentKind: async (): Promise<AgentKind | null> => 'pi',
-  listMcpServers: async ({ agentKind, remoteHostId }: { agentKind: AgentKind; remoteHostId?: string }) => buildBotMcpCatalog({
-    agentKind, remoteHostId, providers: h.mcpProviders, builtinNames: getBuiltinMcpServerNames(),
+  // Same narrowing as the production wiring (maker-host/index.ts): Bot catalogs are built-in only.
+  listMcpServers: async ({ agentKind, remoteHostId }: { agentKind: EngineKind; remoteHostId?: string }) => buildBotMcpCatalog({
+    agentKind: requireBuiltinAgentKind(agentKind, 'teammate tools'), remoteHostId, providers: h.mcpProviders, builtinNames: getBuiltinMcpServerNames(),
     customServers: h.customMcpConfigs.map((config) => ({ ...config, updatedAt: 1 })),
   }),
 };
 const { list: findBotCapabilities, select: selectBotCapability } = createBotCapabilityService(capabilityDeps);
 
 beforeEach(async () => {
+  // 任务管理服务随本文件的导入链在加载时装上全局恢复钩子，它要求账号状态已就绪；本文件不测归档保留，
+  // 与 sessionsUpdate / sessionsRestoreIfArchived 一样先清空，免得 CI 并行负载下账号未就绪时恢复失败。
+  setSessionRestoreObserver(null);
+  h.dbReady = true;
   setSessionOpeningModelAdmission(async body => body);
   setModelVisibilityMirror({}, { fallback: true });
   h.toolsetsAvailable = false;
@@ -584,6 +613,52 @@ beforeEach(async () => {
   });
 });
 
+// #10847 / unit: the registered editor metadata query must check actual account ownership
+// without provisioning or hydrating any profiles. Existing list tests exercise those side effects.
+// Minimal input: an owned workspace whose profile-version JSON cannot be read.
+describe('Bot project ownership IPC', () => {
+  const workspace = () => join(h.userDataDir, 'owners', testSha256(h.ownerScopeKey), 'bots', 'bot-1', 'workspace');
+
+  it('returns only ownership, including stopped profiles, without loading routes or provisioning', async () => {
+    const root = vi.spyOn(appSessionState, 'ownerScopedUserDataPath').mockImplementation((...parts: string[]) =>
+      join(h.userDataDir, 'owners', testSha256(h.ownerScopeKey), ...parts));
+    try {
+      h.sqlite!.prepare("UPDATE bot_profile_versions SET capabilities_json = '{' WHERE bot_id = ?").run('bot-1');
+      vi.mocked(provisionDefaultBot).mockClear();
+      await expect(invoke('local-db:bots:owns-project', workspace())).resolves.toBe(true);
+      h.sqlite!.prepare("UPDATE bot_profiles SET status = 'paused' WHERE id = ?").run('bot-1');
+      await expect(invoke('local-db:bots:owns-project', workspace())).resolves.toBe(true);
+      await expect(invoke('local-db:bots:owns-project', '/ordinary/project')).resolves.toBe(false);
+      await expect(invoke('local-db:bots:owns-project', join(h.userDataDir, 'owners', 'other-owner', 'bots', 'bot-1', 'workspace'))).resolves.toBe(false);
+      h.sqlite!.prepare('DELETE FROM bot_profiles WHERE id = ?').run('bot-1');
+      await expect(invoke('local-db:bots:owns-project', workspace())).resolves.toBe(false);
+      expect(provisionDefaultBot).not.toHaveBeenCalled();
+    } finally { root.mockRestore(); }
+  });
+
+  it('rejects untrusted senders, invalid input and account transitions', async () => {
+    vi.mocked(assertTrustedAppRendererEvent).mockImplementationOnce(() => { throw new Error('untrusted'); });
+    await expect(invoke('local-db:bots:owns-project', workspace())).rejects.toThrow('untrusted');
+    await expect(invoke('local-db:bots:owns-project', null)).rejects.toThrow('INVALID_PARAMS');
+    h.ownerBoundaryPending = true;
+    await expect(invoke('local-db:bots:owns-project', workspace())).rejects.toThrow('PRECONDITION_FAILED');
+    h.ownerBoundaryPending = false;
+    const read = vi.spyOn(teammateProjects, 'ownTeammateProjectState');
+    try {
+      read.mockImplementationOnce(async () => { h.ownerScopeKey = 'owner-b:2'; return 'active'; });
+      await expect(invoke('local-db:bots:owns-project', workspace())).rejects.toThrow('PRECONDITION_FAILED');
+    } finally { read.mockRestore(); }
+  });
+
+  it('reports a read failure without exposing local paths or pretending the project is unowned', async () => {
+    const read = vi.spyOn(teammateProjects, 'ownTeammateProjectState');
+    try {
+      read.mockRejectedValueOnce(new Error('/private/account/db.sqlite: unavailable'));
+      await expect(invoke('local-db:bots:owns-project', workspace())).rejects.toThrow('Could not check Bot project ownership');
+    } finally { read.mockRestore(); }
+  });
+});
+
 describe('Bot global model restore IPC', () => {
   it('checks the sender before clearing settings', async () => {
     const reset = vi.spyOn(modelSettings, 'resetBotModelChainSettings');
@@ -615,6 +690,68 @@ describe('Bot global model restore IPC', () => {
 });
 
 describe('Bot canonical Session lifecycle', () => {
+  // DB regression: an unanswered host write is not cancelled by the UI timeout.
+  // Prior persistence tests always awaited its receipt; unit form tests use a
+  // memory fake. Exercise real IPC + SQLite and read back the last chosen route.
+  it('persists the latest model after an unconfirmed settings save finally completes', async () => {
+    const original = await invoke('local-db:bots:get', 'bot-1');
+    let baseline = normalizeBotSettingsPayload(original, original.name);
+    const route = { ...baseline.capabilities.modelChain[0]!, model: 'first-choice' };
+    const selection = (model: string) => ({ ...baseline, capabilities: { ...baseline.capabilities,
+      ...route, model, modelChain: [{ ...route, model }], modelChainOverride: [{ ...route, model }],
+      modelOverride: { model, providerId: route.providerId, effort: route.effort, fastMode: route.fastMode } } });
+    let draft = selection(route.model);
+    let version = original.currentVersion;
+    let entered!: () => void;
+    const hostEntered = new Promise<void>(resolve => { entered = resolve; });
+    let release!: () => void;
+    const hostGate = new Promise<void>(resolve => { release = resolve; });
+    configureBotModelSelectionCoordinator(async (_ids, operation) => {
+      entered();
+      await hostGate;
+      return operation();
+    });
+    let confirmed!: () => void;
+    const latestConfirmed = new Promise<void>(resolve => { confirmed = resolve; });
+    const statuses: BotAutosaveStatus[] = [];
+    const save = createBotSettingsAutosave({ readBaseline: () => baseline, readPayload: () => draft,
+      commit: async payload => {
+        const saved = await invoke('local-db:bots:update', {
+          id: 'bot-1', capabilities: payload.capabilities, acceptSavedModelSelectionVersion: version,
+        });
+        version = saved.currentVersion;
+        baseline = normalizeBotSettingsPayload(saved, saved.name);
+        if (saved.capabilities.model === 'latest-choice') confirmed();
+      },
+      onStatusChange: status => statuses.push(status),
+    });
+    vi.useFakeTimers();
+    try {
+      const firstWait = save.flush();
+      await hostEntered;
+      await vi.advanceTimersByTimeAsync(30_000);
+      await firstWait;
+      expect(statuses).toEqual(['saving', 'error']);
+      expect((await invoke('local-db:bots:get', 'bot-1')).currentVersion).toBe(original.currentVersion);
+      draft = selection('latest-choice');
+      save.schedule('model');
+      await vi.advanceTimersByTimeAsync(0);
+      release();
+      await latestConfirmed;
+      await vi.advanceTimersByTimeAsync(0);
+      expect(statuses.filter(status => status === 'saved')).toHaveLength(1);
+      expect(save.isDirty()).toBe(false);
+      const reread = await invoke('local-db:bots:get', 'bot-1');
+      expect(reread.capabilities.modelChain).toEqual([{ ...route, model: 'latest-choice' }]);
+      expect(reread.currentVersion).toBe(original.currentVersion + 2);
+    } finally {
+      release();
+      save.cancel();
+      configureBotModelSelectionCoordinator(async (_ids, operation) => operation());
+      vi.useRealTimers();
+    }
+  });
+
   it('reads the stored 代输入 and follow-by-scheduler choices back into the settings profile', async () => {
     expect((await invoke('local-db:bots:get', 'bot-1')).capabilities).not.toHaveProperty('inputHandoff');
     await invoke('local-db:bots:update', { id: 'bot-1', capabilities: { inputHandoff: false, allowSchedulerFollow: true } });
@@ -706,21 +843,45 @@ describe('Bot canonical Session lifecycle', () => {
     expect(source).not.toHaveProperty('capabilities');
     expect(source).not.toHaveProperty('sessions');
     expect((await listBotRemoteResourceSources()).map((row) => row.id)).toContain(created.id);
+    // Inbox (2026-11-20): the snooze lives on the conversation's Session; both the roster source
+    // and the local profile must mirror it, and it is absent while there is no conversation.
+    const unset = { snoozedUntil: null, snoozedAt: null, userSendAt: null };
+    expect(source?.inboxSnooze).toEqual(unset);
+    h.sqlite!.prepare('UPDATE sessions SET snoozed_until = 3000, snoozed_at = 1000, user_send_at = 2000 WHERE id = ?').run(canonical.session.id);
+    const snoozed = { snoozedUntil: new Date(3000).toISOString(), snoozedAt: new Date(1000).toISOString(), userSendAt: new Date(2000).toISOString() };
+    expect((await getBotRemoteResourceSource(created.id))?.inboxSnooze).toEqual(snoozed);
+    expect((await invoke('local-db:bots:get', created.id)).inboxSnooze).toEqual(snoozed);
+    // A message another task sends with a tool does not move the Session's userSendAt; the
+    // newest message still counts as input, so the snoozed teammate comes back for it.
+    await createMessage(canonical.session.id, { clientId: 'from-a-task', role: 'user', content: 'Please get a decision', createdAt: 5000 });
+    expect((await getBotRemoteResourceSource(created.id))?.inboxSnooze).toEqual({ ...snoozed, userSendAt: new Date(5000).toISOString() });
+    expect((await invoke('local-db:bots:get', created.id)).inboxSnooze.userSendAt).toBe(new Date(5000).toISOString());
+    // Regression #11623: a reply starts before snoozing and seals afterwards. Its
+    // createdAt stays fixed, but the completed turn must wake both local and remote inboxes.
+    await createMessage(canonical.session.id, { clientId: 'streamed-reply', role: 'assistant', content: 'Decision ready', createdAt: 6000 });
+    h.sqlite!.prepare('UPDATE sessions SET snoozed_at = 7000, snoozed_until = 12000, active_turn_started_at = 5500, last_turn_ended_at = 8000 WHERE id = ?').run(canonical.session.id);
+    expect((await getBotRemoteResourceSource(created.id))?.inboxSnooze?.userSendAt).toBe(new Date(8000).toISOString());
+    expect((await invoke('local-db:bots:get', created.id)).inboxSnooze.userSendAt).toBe(new Date(8000).toISOString());
+    // Starting another turn without a new visible reply cannot lend its end time to old text.
+    h.sqlite!.prepare('UPDATE sessions SET active_turn_started_at = 9000, last_turn_ended_at = 10000 WHERE id = ?').run(canonical.session.id);
+    expect((await getBotRemoteResourceSource(created.id))?.inboxSnooze?.userSendAt).toBe(new Date(6000).toISOString());
+    const bare = await invoke('local-db:bots:create', { id: 'no-chat-yet', name: 'Quiet', identitySource: '', capabilities: { permissions: 'auto' } });
+    expect(await getBotRemoteResourceSource(bare.id)).not.toHaveProperty('inboxSnooze');
     h.sqlite!.prepare('UPDATE bot_profiles SET hidden_at = 1 WHERE id = ?').run(created.id);
     expect((await listBotRemoteResourceSources()).map((row) => row.id)).not.toContain(created.id);
   });
 
-  it('persists a shared model location when creating the canonical session', async () => {
+  it.each(['high', ''])('persists a shared model location and saved effort %j in the canonical session', async effort => {
     const route = { harness: 'codex', model: 'gpt-6-astra', providerId: 'openai',
-      agentDeviceId: 'share:test-account', effort: 'high', fastMode: false };
+      agentDeviceId: 'share:test-account', effort, fastMode: false };
     h.sqlite!.prepare('UPDATE bot_profile_versions SET capabilities_json = ? WHERE bot_id = ? AND version = 1')
       .run(JSON.stringify({ modelChainOverride: [route] }), 'bot-1');
     const canonical = await invoke('local-db:bots:create-canonical-session', {
       botId: 'bot-1', expectedCanonicalSessionId: null, expectedProfileVersion: 1,
     });
-    expect(h.sqlite!.prepare('SELECT agent_device_id, model, provider_id FROM sessions WHERE id = ?')
+    expect(h.sqlite!.prepare('SELECT agent_device_id, model, provider_id, effort FROM sessions WHERE id = ?')
       .get(canonical.session.id)).toEqual({ agent_device_id: route.agentDeviceId,
-        model: route.model, provider_id: route.providerId });
+        model: route.model, provider_id: route.providerId, effort });
   });
 
   it('creates the first canonical task on Codex when only its subscription is connected', async () => {
@@ -1050,9 +1211,24 @@ describe('Bot canonical Session lifecycle', () => {
       try {
         await expect(createMain()).rejects.toThrow('请先连接模型供应商或选择伙伴模型');
         await expect(createMain()).rejects.toThrow('请先连接模型供应商或选择伙伴模型');
+        // Host-only explicit take-over path creates the canonical session with missingModel so cloud history
+        // can be imported and demotion lifted even before the owner picks a default model; IPC stays strict.
+        const { ensureBotCanonicalSession } = await import('../../../maker-ipc/botCanonicalSessionEnsure');
+        const ensured = await ensureBotCanonicalSession('bot-follow', { allowMissingModel: true });
+        expect(ensured).toMatchObject({ ok: true, missingModel: true });
+        // #12777 integration: retry after history import failed after creating the task.
+        // Reusing the same task must still guide the owner until their model becomes usable.
+        const retry = () => ensureBotCanonicalSession('bot-follow', { allowMissingModel: true });
+        await expect(retry()).resolves.toEqual(ensured);
+        // Creating a second bot confirms the IPC path still rejects until the owner picks a default model.
+        await invoke('local-db:bots:create', { id: 'bot-follow-ipc', name: 'Cindy 2', capabilities: {} });
+        const createIpcMain = () => invoke('local-db:bots:create-canonical-session', {
+          botId: 'bot-follow-ipc', expectedCanonicalSessionId: null, expectedProfileVersion: 1 });
+        await expect(createIpcMain()).rejects.toThrow('请先连接模型供应商或选择伙伴模型');
         await invoke('local-db:bots:model-chain-settings-set', { modelChain: [
           { harness: 'pi', providerId: 'custom-gateway', model: 'custom-model', effort: '', fastMode: false }] });
-        await expect(createMain()).resolves.toMatchObject({ created: true, session: { model: 'custom-model' } });
+        await expect(createIpcMain()).resolves.toMatchObject({ created: true, session: { model: 'custom-model' } });
+        await expect(retry()).resolves.toEqual({ ok: true, sessionId: ensured.ok ? ensured.sessionId : undefined });
       } finally { await modelSettings.resetBotModelChainSettings(); }
     });
 
@@ -1101,6 +1277,53 @@ describe('Bot canonical Session lifecycle', () => {
   // name with a different companion already here; the two stay independent.
   describe('cloud take-over next to a same-named local companion', () => {
     const names = () => h.sqlite!.prepare("SELECT id FROM bot_profiles WHERE display_name = 'Release Bot' ORDER BY id").pluck().all();
+
+    // #12587 (DB tier): a broken migration link makes ENOENT look like an empty
+    // project. Exercise the real host snapshot and uploader, with no network.
+    it('preserves uploaded memories while a migrated workspace is unavailable', async () => {
+      const botId = 'bot-1';
+      h.ownerScopeKey = 'workspace-migration-cloud-fixture:1';
+      const owner = join(h.userDataDir, createHash('sha256').update(h.ownerScopeKey).digest('hex'));
+      const source = join(owner, 'bots', botId, 'workspace');
+      const target = join(h.userDataDir, 'migrated-cloud-workspace');
+      const filename = 'notes.md';
+      const key = `${COMPANION_MEMORY_PREFIX}${filename}`;
+      h.sqlite!.prepare('UPDATE bot_profile_versions SET capabilities_json = ? WHERE bot_id = ?')
+        .run(JSON.stringify({ projectMode: true }), botId);
+      await fsPromises.mkdir(join(source, '.cindy', 'memory'), { recursive: true });
+      await fsPromises.writeFile(join(source, '.cindy', 'memory', filename), 'keep this in the cloud');
+      await requestWorkspaceMove(owner, botId, target, () => {});
+      const { backup } = await workspaceMoveStatus(owner, botId);
+      const receipts = join(owner, 'workspace-migrations');
+      const journal = join(receipts, (await fsPromises.readdir(receipts)).find(name => name.endsWith('.json'))!);
+      const registered = JSON.parse(await fsPromises.readFile(journal, 'utf8'));
+      await fsPromises.rename(source, backup!);
+      await fsPromises.cp(backup!, target, { recursive: true });
+      await fsPromises.symlink(target, source, process.platform === 'win32' ? 'junction' : 'dir');
+      await fsPromises.writeFile(journal, JSON.stringify({ ...registered, phase: 'completed', targetIdentity: await directoryIdentity(target) }));
+      const host = createCompanionCloudHost({
+        deliverToCanonical: async () => ({ ok: true }), ensureCanonicalSession: async () => 'unused',
+        rebuildContext: async () => 'rebuilt', listDevices: async () => [],
+      });
+      const { state } = memoryState();
+      const { api, calls } = fakeApi((_route, method) => method === 'POST' ? { revision: 1 } : []);
+      const uploader = createCompanionUploader({ api, state, readValues: id => host.readValues(id) });
+      try {
+        await uploader.syncBot(botId, 'cloud-actor');
+        expect(calls).toContainEqual(expect.objectContaining({ method: 'POST', data: expect.objectContaining({ key, value: { filename, content: 'keep this in the cloud' } }) }));
+        const uploaded = state.bot(botId)?.prefs[key];
+        calls.length = 0;
+        await fsPromises.rename(target, `${target}-offline`);
+        await expect(uploader.syncBot(botId, 'cloud-actor')).rejects.toThrow('MOVED_WORKSPACE_UNAVAILABLE');
+        await expect(host.readValues(botId, 'skills')).rejects.toThrow('MOVED_WORKSPACE_UNAVAILABLE');
+        expect(calls).toEqual([]);
+        expect(state.bot(botId)?.prefs[key]).toEqual(uploaded);
+        await fsPromises.rename(`${target}-offline`, target);
+        await expect(uploader.syncBot(botId, 'cloud-actor')).resolves.toBe(0);
+      } finally {
+        companionHomes.reset();
+      }
+    });
 
     // #10205 review, DB tier: the real host must use a source-only versioned update on
     // the current home. Runtime fakes cannot prove local-file conflict detection or preservation.
@@ -1190,6 +1413,7 @@ describe('Bot canonical Session lifecycle', () => {
       await expect(host.materializer!.createProfile(draft(), { assertCurrent() {} }))
         .rejects.toMatchObject({ code: 'INVALID_PARAMS', failure });
       const { api, calls } = fakeApi((route, method) => {
+        if (route === '/actors') return [actor];
         if (route === '/preferences') return method === 'GET' ? [{ key: 'companion.profile.v1', revision: 1, value: {
           name: actor.name, description: '', soul: field === 'identitySource' ? source : '',
           systemPrompt: '', user: field === 'userContextSource' ? source : '',
@@ -1249,6 +1473,7 @@ describe('Bot canonical Session lifecycle', () => {
       const publish = () => host.homes.update(companionSnapshot({ enabled: true, selfDeviceId: 'self', humanActorId: 'human', actors,
         demotedBotIds: state.demotedBotIds() }));
       const { api, calls } = fakeApi((route, method) => {
+        if (route === '/actors') return actors;
         if (route === '/preferences') return method === 'GET' ? [{ key: 'companion.profile.v1', revision: 1, value: {
           name: 'Cloud Cindy', description: '', soul: 'Cloud identity', systemPrompt: '', user: '', templateId: 'cindy',
         } }] : { revision: 1 };
@@ -2187,33 +2412,21 @@ describe('Bot canonical Session lifecycle', () => {
     expect(await remoteList()).toEqual([expect.objectContaining({ id: discovered.id })]);
   });
 
-  it('freezes provider, model, effort, and Fast Mode into the canonical Session', async () => {
-    await invoke('local-db:bots:create', {
-      id: 'bot-model-profile',
-      name: 'Model Profile Bot',
-      capabilities: {
-        harness: 'codex',
-        providerId: 'openai',
-        model: 'gpt-5.6-sol',
-        effort: 'xhigh',
-        fastMode: true,
-        permissions: 'ask',
-      },
+  // The profile and SQLite-backed chat must reopen on the selected harness even without built-in credentials.
+  it.each([
+    { harness: 'codex', model: 'gpt-5.6-sol', providerId: 'openai', effort: 'xhigh', fastMode: true },
+    { harness: 'acp', model: 'chosen', providerId: 'acp-plugin:sample:engine', effort: 'high', fastMode: false },
+  ])('saves and reopens the $harness model in the canonical companion chat', async route => {
+    const bot = await invoke('local-db:bots:create', {
+      id: 'bot-model-profile', name: 'Model Profile Bot',
+      capabilities: { ...(route.harness === 'acp' ? { modelChainOverride: [route] } : route), permissions: 'ask' },
     });
-
-    const created = await invoke('local-db:bots:create-canonical-session', {
-      botId: 'bot-model-profile',
-      expectedCanonicalSessionId: null,
-      expectedProfileVersion: 1,
-    });
-
-    expect(created.session).toMatchObject({
-      agentKind: 'codex',
-      providerId: 'openai',
-      model: 'gpt-5.6-sol',
-      effort: 'xhigh',
-      fastMode: true,
-    });
+    const request = { botId: bot.id, expectedProfileVersion: 1 };
+    const created = await invoke('local-db:bots:create-canonical-session', { ...request, expectedCanonicalSessionId: null });
+    const reopened = await invoke('local-db:bots:create-canonical-session', { ...request, expectedCanonicalSessionId: created.session.id });
+    const { harness, ...model } = route;
+    expect(reopened.session).toMatchObject({ id: created.session.id, agentKind: harness, ...model });
+    expect((await invoke('local-db:bots:get', bot.id)).capabilities.modelChain).toEqual([route]);
   });
 
   it.each([
@@ -2387,6 +2600,66 @@ describe('Bot canonical Session lifecycle', () => {
     });
   });
 
+  it.each([
+    { providerId: 'hermes', saved: '', efforts: [], modelDefault: null, expected: '' },
+    { providerId: 'hermes', saved: '', efforts: ['low', 'medium'], modelDefault: 'medium', expected: 'medium' },
+    { providerId: 'hermes', saved: 'low', efforts: ['low', 'medium'], modelDefault: 'medium', expected: 'low' },
+    { providerId: null, saved: '', efforts: ['medium', 'high'], modelDefault: 'medium', expected: 'medium' },
+  ])('opens the first custom Pi group task with provider "$providerId", saved effort "$saved" and model default $modelDefault', async ({
+    providerId, saved, efforts, modelDefault, expected,
+  }) => {
+    const botId = 'custom-pi';
+    const model = 'hermes-agent';
+    await invoke('local-db:bots:create', {
+      id: botId, name: 'Hermes', capabilities: { harness: 'pi', model, providerId, effort: saved },
+    });
+    const readDefault = vi.fn(() => ({ agentKind: 'pi' as const, model, providerId: 'hermes', effort: 'xhigh' as const, fastMode: false }));
+    const resolve = createSessionExecutionResolver({
+      captureOwner: () => () => {},
+      readCaller: vi.fn(),
+      readDefault,
+      availableAgents: () => ['pi'],
+      availableModels: () => [{ id: model, efforts, defaultEffort: modelDefault }],
+      readProviderRouting: async () => ({
+        availability: { pi: [{ id: 'hermes', name: 'Hermes', models: [model] }], codex: [], 'claude-code': [] },
+        resolveDefaultProviderIdForModel: () => 'hermes',
+      }),
+      hasCindyAiApiKey: () => false,
+    });
+    setSessionOpeningModelAdmission(async (body, sourceSessionId) => {
+      const selected = await resolve(body, sourceSessionId);
+      return { ...body, providerId: selected.providerId, effort: selected.effort ?? '' };
+    });
+    h.sqlite!.exec('CREATE TABLE bot_group_members(group_id TEXT, bot_id TEXT)');
+    h.sqlite!.prepare('INSERT INTO bot_group_members VALUES (?, ?)').run('room', botId);
+    const lane = await ensureBotGroupLaneSession({
+      botId, groupId: 'room', title: 'Group', chatAccess: { mode: 'owner', revision: 1 },
+    });
+    if (!lane.ok) throw new Error(lane.message);
+    expect(lane.created).toBe(true);
+    expect(h.sqlite!.prepare('SELECT model, provider_id, effort FROM sessions WHERE id = ?').get(lane.sessionId))
+      .toEqual({ model, provider_id: 'hermes', effort: expected });
+    expect(readDefault).not.toHaveBeenCalled();
+  });
+
+  it('continues a group task in its project, rebinds a missing project and isolates a chat grant', async () => {
+    h.sqlite!.exec("CREATE TABLE bot_group_members(group_id TEXT, bot_id TEXT); INSERT INTO bot_group_members VALUES ('room','bot-1')");
+    const lane = { botId: 'bot-1', groupId: 'room', title: 'Group', chatAccess: { mode: 'owner' as const, revision: 1 } };
+    const read = (id: string) => h.sqlite!.prepare('SELECT project_dir, working_dir, workspace_kind, status FROM sessions WHERE id = ?').get(id);
+    const first = await ensureBotGroupLaneSession({ ...lane, projectDir: '/development' });
+    if (!first.ok) throw new Error(first.message);
+    const followup = await ensureBotGroupLaneSession({ ...lane, projectDir: '/buddy', continueConversation: true }, async dir => dir);
+    expect(followup).toMatchObject({ sessionId: first.sessionId, created: false });
+    const next = await ensureBotGroupLaneSession({ ...lane, continueConversation: true }, async () => null);
+    if (!next.ok) throw new Error(next.message);
+    expect(read(first.sessionId)).toMatchObject({ status: 'archived' });
+    expect(read(next.sessionId)).toMatchObject({ workspace_kind: 'dialogue', project_dir: null });
+    const chat = await ensureBotGroupLaneSession({ ...lane, chatAccess: { mode: 'chat', revision: 2 }, projectDir: '/development' });
+    if (!chat.ok) throw new Error(chat.message);
+    expect(read(chat.sessionId)).toMatchObject({ workspace_kind: 'dialogue', project_dir: '/development',
+      working_dir: expect.stringContaining('chat-workspaces') });
+  });
+
   it('resolves Bot history ids in main and never accepts a renderer-owned search scope', async () => {
     const created = await invoke('local-db:bots:create-canonical-session', {
       botId: 'bot-1',
@@ -2431,6 +2704,38 @@ describe('Bot canonical Session lifecycle', () => {
       { sessionSources: null },
     );
     expect(h.searchConversations.mock.lastCall?.[0].filters.sessionIds).toHaveLength(4);
+  });
+
+  // DB tier, review r4657940362. Verify the actual session chosen by the iMessage adapter and
+  // turn runner for two groups sharing one transport, beyond the HTTP receiver's dedup receipt.
+  it('routes only the delegated iMessage group to its new teammate session', async () => {
+    const { BlueBubblesIM } = await import('@cindy/im');
+    // The application-wide maker IPC registers native windows at import. This test only needs its
+    // disposable vendor-options subscription; the adapter, turn runner and lane database are real.
+    vi.doMock('../../../maker-ipc/register', () => ({ registerSwitchedSessionVendorOptionsResolver: () => () => {} }));
+    const { wireIMessageOrchestrator } = await import('../../../im/imessage/adapter')
+      .finally(() => vi.doUnmock('../../../maker-ipc/register'));
+    const store = await import('../../../im/shared/botImConnectionStore');
+    await invoke('local-db:bots:create', { id: 'bot-2', name: 'Group recipient' });
+    const selected = 'any;+;selected', other = 'any;+;control';
+    const authorization = 'ab'.repeat(32);
+    const connectionId = 'abcd12345678';
+    const contextId = `imessage-${connectionId}`;
+    const im = new BlueBubblesIM({} as never, { contextId: () => contextId } as never);
+    vi.spyOn(im, 'groupAuthorization').mockReturnValue(authorization);
+    const read = vi.spyOn(store, 'readBotImConnection').mockReturnValue({
+      id: connectionId, botId: 'bot-1', channel: 'imessage', createdAt: 1, botContextId: contextId,
+      iMessageGroupRoutes: { [selected]: { botId: 'bot-2', authorization, revision: 'abcdef123456', replyMode: 'always' } },
+    });
+    const router = wireIMessageOrchestrator(im, {} as never, { instanceKey: connectionId, companionBotId: 'bot-1', connectionId });
+    try {
+      for (const [group, botId] of [[selected, 'bot-2'], [other, 'bot-1']]) {
+        const target = await router.turnRunner.resolveRouteTarget(contextId, group);
+        expect(target?.botOwned).toEqual({ botId, lane: 'channel' });
+        const saved = h.sqlite!.prepare('SELECT bot_id,route_key FROM bot_session_links WHERE session_id=?').get(target!.row.id);
+        expect(saved).toMatchObject({ bot_id: botId, route_key: `im:imessage:${contextId}:g:${group}` });
+      }
+    } finally { router.unregister(); read.mockRestore(); await im.dispose(); }
   });
 
   it('creates one IM channel lane per route key, notifies the task list and keeps it out of private history search', async () => {
@@ -2519,6 +2824,8 @@ describe('Bot canonical Session lifecycle', () => {
       .resolves.toMatchObject({ ok: false, errorCode: 'ROOT_UNAVAILABLE' });
     const first = await topicInvoke('local-db:bots:dm-thread:ensure', { ...root, title: 'Plan the launch post' });
     expect(first).toMatchObject({ ok: true, created: true });
+    expect(h.sqlite!.prepare('SELECT title FROM sessions WHERE id = ?').get(first.sessionId))
+      .toEqual({ title: 'Plan the launch post' });
     await expect(topicInvoke('local-db:bots:dm-thread:ensure', root))
       .resolves.toEqual({ ok: true, sessionId: first.sessionId, created: false });
     const canonical = h.sqlite!.prepare('SELECT working_dir AS workingDir, permission_mode AS permissionMode FROM sessions WHERE id = ?')
@@ -2548,12 +2855,19 @@ describe('Bot canonical Session lifecycle', () => {
 
     // The topic's model context names its root; a rewound root is reported as unavailable, not guessed.
     const { readBotDmThreadContextNote } = await import('../../../maker-ipc/botDmThreadContext');
-    await expect(readBotDmThreadContextNote(first.sessionId)).resolves.toContain('Plan the launch post');
+    expect((await readBotDmThreadContextNote(first.sessionId))?.text).toContain('Plan the launch post');
     await expect(readBotDmThreadContextNote(chatId)).resolves.toBeNull();
+    const rootImage = `xdt-image://${chatId}/plan.png`;
+    h.sqlite!.prepare("UPDATE messages SET content = ? WHERE id = 'm-root'")
+      .run(JSON.stringify({ images: [{ url: rootImage, originalName: 'plan.png' }] }));
+    expect(await readBotDmThreadContextNote(first.sessionId)).toMatchObject({
+      sourceSessionId: chatId, imageUrls: [rootImage], text: expect.stringContaining('plan.png'),
+    });
     h.sqlite!.prepare("UPDATE messages SET rewind_at = 5000 WHERE id = 'm-root'").run();
     const note = await readBotDmThreadContextNote(first.sessionId);
-    expect(note).toContain('不可用');
-    expect(note).not.toContain('Plan the launch post');
+    expect(note?.text).toContain('不可用');
+    expect(note?.imageUrls).toEqual([]);
+    expect(note?.text).not.toContain('Plan the launch post');
   });
 
   it('gives the companion the quoted message of a quote reply, re-read from its own chat', async () => {
@@ -2567,23 +2881,56 @@ describe('Bot canonical Session lifecycle', () => {
     const sent = (replyQuote: unknown) => JSON.stringify({ text: 'Why Friday?', images: [], files: [], replyQuote });
     // The original comes from the chat itself; the excerpt the renderer sent is display only.
     const note = await readReplyQuoteNote(chatId, sent({ clientId: 'quoted-1', role: 'assistant', excerpt: 'forged' }));
-    expect(note).toContain('Ship the launch post on Friday.');
-    expect(note).not.toContain('forged');
+    expect(note?.text).toContain('Ship the launch post on Friday.');
+    expect(note?.text).not.toContain('forged');
     await expect(readReplyQuoteNote(chatId, sent({ clientId: 'quoted-1', role: 'system', excerpt: '' }))).resolves.toBeNull();
     await expect(readReplyQuoteNote(chatId, JSON.stringify({ text: 'no quote', images: [], files: [] }))).resolves.toBeNull();
     // A quote that points elsewhere or at a rewound row says the original is unavailable.
-    await expect(readReplyQuoteNote('other-session', sent({ clientId: 'quoted-1', role: 'assistant', excerpt: '' })))
-      .resolves.toContain('不可用');
+    expect((await readReplyQuoteNote('other-session', sent({ clientId: 'quoted-1', role: 'assistant', excerpt: '' })))?.text)
+      .toContain('不可用');
     h.sqlite!.prepare("UPDATE messages SET rewind_at = 5000 WHERE id = 'm-quoted'").run();
     const rewound = await readReplyQuoteNote(chatId, sent({ clientId: 'quoted-1', role: 'assistant', excerpt: '' }));
-    expect(rewound).toContain('不可用');
-    expect(rewound).not.toContain('Ship the launch post');
+    expect(rewound?.text).toContain('不可用');
+    expect(rewound?.text).not.toContain('Ship the launch post');
     // An owner message with only an attachment is still there, not "unavailable".
     h.sqlite!.prepare('INSERT INTO messages (id, client_id, session_id, role, content, created_at) VALUES (?, ?, ?, ?, ?, ?)')
-      .run('m-image', 'image-1', chatId, 'user', JSON.stringify({ text: '', images: [{ url: 'x', originalName: 'chart.png' }], files: [] }), 2_000);
+      .run('m-image', 'image-1', chatId, 'user', JSON.stringify({ text: '', images: [{ url: `xdt-image://${chatId}/chart.png`, originalName: 'chart.png' }], files: [] }), 2_000);
     const imageOnly = await readReplyQuoteNote(chatId, sent({ clientId: 'image-1', role: 'user', excerpt: 'chart.png' }));
-    expect(imageOnly).toContain('chart.png');
-    expect(imageOnly).not.toContain('不可用');
+    expect(imageOnly?.text).toContain('chart.png');
+    expect(imageOnly?.text).not.toContain('不可用');
+    const { prependPrivateChatContext } = await import('../../../maker-ipc/privateChatContext');
+    const path = join(h.userDataDir, 'chart.png');
+    writeFileSync(path, Buffer.from('image fixture'));
+    const url = `xdt-image://${chatId}/chart.png`;
+    const image = { type: 'image', path, mimeType: 'image/png', managedUrl: url };
+    const prepare = vi.fn(async () => ({ type: 'user' as const, content: [image] }));
+    const wire = await prependPrivateChatContext('Explain the chart', imageOnly!, chatId, prepare);
+    expect(prepare).toHaveBeenCalledWith(chatId, { type: 'user', content: [{ type: 'image', path: url }] });
+    expect(wire).toMatchObject({ content: [expect.objectContaining({ type: 'text' }), { type: 'text', text: 'Explain the chart' }, image] });
+    prepare.mockClear();
+    const denied = await prependPrivateChatContext('why?', {
+      ...imageOnly!, imageUrls: ['xdt-image://another-session/chart.png', '/tmp/chart.png'],
+    }, chatId, prepare);
+    expect(denied).toContain('部分背景图片未随本轮送达');
+    expect(prepare).not.toHaveBeenCalled();
+    expect(await prependPrivateChatContext({ type: 'user', content: [image] }, imageOnly!, chatId, prepare))
+      .toMatchObject({ content: [expect.objectContaining({ type: 'text' }), image] });
+    expect(prepare).not.toHaveBeenCalled();
+    // A blob visible to this account needs a grant from the selected original session.
+    const { recordBlob } = await import('../../../cindy-media/ledger');
+    const hash = 'f'.repeat(64);
+    const managedUrl = `cindy-media://blobs/${hash}.png`;
+    const context = { ...imageOnly!, imageUrls: [managedUrl] };
+    expect(await prependPrivateChatContext('why?', context, chatId, prepare)).toContain('部分背景图片未随本轮送达');
+    expect(prepare).not.toHaveBeenCalled();
+    await recordBlob({ hash, ext: 'png', mimeType: 'image/png', bytes: 13 }, context.owner.client.drizzle);
+    h.sqlite!.prepare('INSERT INTO media_refs (id, hash, ref_kind, ref_id, created_at) VALUES (?, ?, ?, ?, ?)')
+      .run('quoted-chart', hash, 'session-attachment', chatId, Date.now());
+    prepare.mockResolvedValue({ type: 'user', content: [{ ...image, managedUrl }] });
+    expect(await prependPrivateChatContext('why?', context, chatId, prepare))
+      .toMatchObject({ content: [expect.anything(), expect.anything(), { type: 'image', managedUrl }] });
+    h.ownerScopeKey = 'other';
+    await expect(prependPrivateChatContext('why?', context, chatId, prepare)).rejects.toThrow('OWNER_CHANGED');
   });
 
   it('records runtime preparation separately from successful Agent startup', async () => {
@@ -2841,7 +3188,9 @@ describe('Bot canonical Session lifecycle', () => {
         inputs.push({ kind: 'toolsets', remoteHostId: input.remoteHostId });
         return [{
           id: 'xdt_helper', name: 'Helper', essential: true,
-          available: helperEnabled && isBotToolsetAvailableOnTarget({ ...input, toolsetId: 'xdt_helper' }),
+          available: helperEnabled && isBotToolsetAvailableOnTarget({
+            ...input, agentKind: requireBuiltinAgentKind(input.agentKind, 'teammate tools'), toolsetId: 'xdt_helper',
+          }),
         }];
       },
     });
@@ -3013,6 +3362,35 @@ describe('Bot canonical Session lifecycle', () => {
       expect((await hydrateBotProfileRuntime(makeOpts(), deps))?.runtimeEpochChanged).toBe(false);
       updatedAt = 'v2';
       expect((await hydrateBotProfileRuntime(makeOpts(), deps))?.runtimeEpochChanged).toBe(true);
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  // PR #11992 review (P1): a refresh signal may skip the rebuild only after a
+  // real comparison. If the first runtime-applied write failed (Maker still
+  // publishes the runtime), there is no baseline: a later Profile change must
+  // still rebuild instead of being read as "unchanged".
+  it('keeps rebuilding on refresh signals until an applied baseline exists', async () => {
+    let now = Date.now();
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => ++now);
+    try {
+      const created = await invoke('local-db:bots:create-canonical-session', {
+        botId: 'bot-1', expectedCanonicalSessionId: null, expectedProfileVersion: 1,
+      });
+      const makeOpts = (): MakerSessionCreateOpts => ({
+        id: created.session.id, agentKind: 'codex', workingDir: created.session.workingDir,
+        workspaceKind: 'dialogue', model: 'gpt-5', permissionMode: 'bypassPermissions',
+      });
+      await hydrateBotProfileRuntime(makeOpts()); // started, but never marked applied
+      await invoke('local-db:bots:update', { id: 'bot-1', capabilities: { inputHandoff: false } });
+      const noBaseline = await hydrateBotProfileRuntime(makeOpts(), {}, { persistSnapshot: false });
+      expect(noBaseline?.runtimeEpochChanged).toBe(false);
+      expect(botRuntimeRefreshNeedsReplacement(noBaseline)).toBe(true);
+
+      await markBotProfileRuntimeApplied((await hydrateBotProfileRuntime(makeOpts()))!);
+      const unchanged = await hydrateBotProfileRuntime(makeOpts(), {}, { persistSnapshot: false });
+      expect(botRuntimeRefreshNeedsReplacement(unchanged)).toBe(false);
     } finally {
       clock.mockRestore();
     }
@@ -3310,8 +3688,8 @@ describe('Bot canonical Session lifecycle', () => {
       },
     }, { persistSnapshot: false });
 
-    // 读不出自己的技能架子不是「用户配的 Skill 有一条不可用」,不该稀释降级信号。
-    expect(snapshot?.resolutionStatus).toBe('applied');
+    // The session starts with a degraded snapshot. No individual skill was identified as missing.
+    expect(snapshot?.resolutionStatus).toBe('degraded');
     expect(snapshot?.unavailableSkills).toEqual([]);
     expect(opts.botRuntimeProfile?.skillPolicy.ownSkills).toBeUndefined();
   });
@@ -3675,7 +4053,7 @@ describe('Bot canonical Session lifecycle', () => {
       const snapshot = await hydrateBotProfileRuntime(opts, {
         listMcpServers: async ({ agentKind: actualRoute, remoteHostId }) => {
           const catalog = buildBotMcpCatalog({
-            agentKind: actualRoute, remoteHostId, providers, builtinNames: [], customServers: configs,
+            agentKind: requireBuiltinAgentKind(actualRoute, 'teammate tools'), remoteHostId, providers, builtinNames: [], customServers: configs,
           });
           expect(JSON.stringify(catalog)).not.toMatch(/FAKE_SECRET|FAKE_TOKEN|example.invalid|Authorization/);
           return catalog;
@@ -4170,6 +4548,213 @@ describe('Bot canonical Session lifecycle', () => {
       .get('bot-1') as { version: number; identitySource: string };
     expect(row.version).toBe(2);
     expect(row.identitySource).toContain('You are Renamed Bot');
+  });
+
+  describe('Buddy rename default SOUL', () => {
+    /*
+     * 测试价值
+     * - 生产入口与可观察结果：`local-db:bots:update` 改名后，版本行、SOUL.md、
+     *   `reconcileBotProfileFolder` 回写路径与运行时稳定层提示词都跟随当前名。
+     * - Bug／规则依据：F1 默认身份旧名残留；`docs/product-rules/cindy-bots-runtime.md` §1
+     *   要求伙伴名字以当前 Profile 为准，历史快照另属 F2。
+     * - 现有覆盖缺口：相邻用例只验证显式清空 identity 时重建默认身份，未覆盖普通改名、
+     *   文件夹回写、连续改名、用户手写 SOUL、旧版 Home 迁移、保存暂停期间的手改，
+     *   以及失败保存前预检查 Home 的已提交配置播种。
+     * - 不变量：只有在实际写入边界仍与冻结快照逐字节一致的 Home 文件，才可被这次保存改写；
+     *   旧版 Home 必须先迁移，读取失败或手改一律 fail-closed，由后续对账收进版本行；
+     *   事务提交前的 Home 播种只能用已提交配置，不能让被拒绝的保存部分生效。
+     * - 最小失败输入：以 OldName 创建、未显式提供 identitySource 的伙伴，只提交 `name: NewName`。
+     * - tier：db/integration；沿用本文件既有真实 SQLite 与 Bot Home 夹具，不新增模块重载或真实等待。
+     * - 实测耗时：新增用例单独运行 135.35s（收集 119.82s，用例 888ms）；本机负载导致收集耗时远超单文件预算，沿用既有重型集成文件。
+     */
+    const home = (botId: string) =>
+      join(h.userDataDir, createHash('sha256').update(h.ownerScopeKey).digest('hex'), 'bots', botId);
+    const soul = (botId: string) => readFileSync(join(home(botId), 'SOUL.md'), 'utf8');
+    const latestIdentity = (botId: string) =>
+      (
+        h.sqlite!.prepare(
+          'SELECT identity_source AS identitySource FROM bot_profile_versions WHERE bot_id = ? ORDER BY version DESC LIMIT 1',
+        ).get(botId) as { identitySource: string }
+      ).identitySource;
+    const createDefaultBuddy = async (botId: string, extra: Record<string, unknown> = {}) =>
+      invoke('local-db:bots:create', {
+        id: botId,
+        name: 'OldName',
+        avatar: '🤖',
+        capabilities: { harness: 'pi', model: 'grok-4.5', permissions: 'trusted' },
+        ...extra,
+      });
+    const runtimeIdentity = async (botId: string, expectedProfileVersion: number) => {
+      const canonical = await invoke('local-db:bots:create-canonical-session', {
+        botId,
+        expectedCanonicalSessionId: null,
+        expectedProfileVersion,
+      });
+      const opts: MakerSessionCreateOpts = {
+        id: canonical.session.id,
+        agentKind: 'pi',
+        workingDir: canonical.session.workingDir,
+        workspaceKind: 'dialogue',
+        model: canonical.session.model,
+        permissionMode: 'ask',
+      };
+      await hydrateBotProfileRuntime(opts, {}, { persistSnapshot: false });
+      return opts;
+    };
+
+    it('rebuilds a generated default SOUL on a plain rename across the version, file, and runtime', async () => {
+      const created = await createDefaultBuddy('rename-only');
+      const expected = buildDefaultBotIdentity('NewName');
+      expect(latestIdentity(created.id)).toBe(buildDefaultBotIdentity('OldName'));
+
+      const updated = await invoke('local-db:bots:update', { id: created.id, name: 'NewName' });
+
+      expect(updated.identitySource).toBe(expected);
+      expect(latestIdentity(created.id)).toBe(expected);
+      expect(soul(created.id)).toBe(expected);
+      const opts = await runtimeIdentity(created.id, updated.currentVersion);
+      expect(opts.botProfilePrompt).toBe(expected);
+      expect(opts.botProfilePrompt).not.toContain('OldName');
+      expect(opts.botProfileContextPrompt).toContain('Active Cindy Bot profile: NewName.');
+      expect(opts.botProfileContextPrompt).not.toContain('Active Cindy Bot profile: OldName.');
+    });
+
+    it('uses the new description when a generated default SOUL is renamed and described', async () => {
+      const created = await createDefaultBuddy('rename-description');
+      const description = 'Supports Buddy A with concise summaries.';
+
+      const updated = await invoke('local-db:bots:update', {
+        id: created.id,
+        name: 'NewName',
+        description,
+      });
+
+      expect(updated.identitySource).toBe(description);
+      expect(latestIdentity(created.id)).toBe(description);
+      expect(soul(created.id)).toBe(description);
+    });
+
+    it('does not rebuild a user-authored identity on rename', async () => {
+      const custom = 'User-authored SOUL for Buddy A.';
+      const created = await createDefaultBuddy('custom-identity', { identitySource: custom });
+
+      await invoke('local-db:bots:update', { id: created.id, name: 'NewName' });
+
+      expect(latestIdentity(created.id)).toBe(custom);
+      expect(soul(created.id)).toBe(custom);
+    });
+
+    it('does not overwrite a hand-edited SOUL.md on rename', async () => {
+      const created = await createDefaultBuddy('hand-edited-soul');
+      const handEdited = 'User-authored SOUL for Buddy A.\n';
+      writeFileSync(join(home(created.id), 'SOUL.md'), handEdited);
+
+      await invoke('local-db:bots:update', { id: created.id, name: 'NewName' });
+
+      expect(soul(created.id)).toBe(handEdited);
+      expect(latestIdentity(created.id)).toBe(buildDefaultBotIdentity('OldName'));
+    });
+
+    it('keeps folder reconciliation from writing the old name back', async () => {
+      const created = await createDefaultBuddy('folder-sync');
+      const expected = buildDefaultBotIdentity('NewName');
+      const updated = await invoke('local-db:bots:update', { id: created.id, name: 'NewName' });
+
+      expect(await reconcileBotProfileFolder(created.id)).toBeNull();
+      expect(
+        h.sqlite!.prepare('SELECT current_version FROM bot_profiles WHERE id = ?').pluck().get(created.id),
+      ).toBe(updated.currentVersion);
+      expect(latestIdentity(created.id)).toBe(expected);
+      expect(soul(created.id)).toBe(expected);
+    });
+
+    it('rebuilds the generated default SOUL on consecutive renames', async () => {
+      const created = await createDefaultBuddy('multiple-renames');
+      await invoke('local-db:bots:update', { id: created.id, name: 'NewName' });
+
+      const updated = await invoke('local-db:bots:update', { id: created.id, name: 'Buddy A' });
+      const expected = buildDefaultBotIdentity('Buddy A');
+
+      expect(updated.identitySource).toBe(expected);
+      expect(latestIdentity(created.id)).toBe(expected);
+      expect(soul(created.id)).toBe(expected);
+      expect(updated.identitySource).not.toContain('OldName');
+      expect(updated.identitySource).not.toContain('NewName');
+    });
+
+    it('migrates a hand-edited legacy Home before deciding to rebuild the default SOUL', async () => {
+      const created = await createDefaultBuddy('legacy-home-hand-edit');
+      const handEdited = 'User-authored SOUL for Buddy A.\n';
+      rmSync(home(created.id), { recursive: true, force: true });
+      const legacyHome = join(h.userDataDir, 'bots', created.id);
+      mkdirSync(legacyHome, { recursive: true });
+      writeFileSync(join(legacyHome, 'SOUL.md'), handEdited);
+
+      const updated = await invoke('local-db:bots:update', { id: created.id, name: 'NewName' });
+
+      expect(soul(created.id)).toBe(handEdited);
+      expect(updated.identitySource).toBe(buildDefaultBotIdentity('OldName'));
+      expect(latestIdentity(created.id)).toBe(buildDefaultBotIdentity('OldName'));
+      expect(await reconcileBotProfileFolder(created.id)).not.toBeNull();
+      expect(latestIdentity(created.id)).toBe(handEdited);
+    });
+
+    it('keeps a SOUL.md hand edit made while the rename save is paused', async () => {
+      const created = await createDefaultBuddy('paused-save-hand-edit');
+      const handEdited = 'User-authored SOUL for Buddy A.\n';
+      let reachedTx!: () => void;
+      let releaseTx!: () => void;
+      const atTx = new Promise<void>(resolve => { reachedTx = resolve; });
+      const resumeTx = new Promise<void>(resolve => { releaseTx = resolve; });
+      const originalTx = h.tx!;
+      let paused = false;
+      h.tx = async (name, args) => {
+        if (name === 'bots.updateProfile' && !paused) {
+          paused = true;
+          reachedTx();
+          await resumeTx;
+        }
+        return originalTx(name, args);
+      };
+      try {
+        const pending = invoke('local-db:bots:update', { id: created.id, name: 'NewName' });
+        await atTx;
+        writeFileSync(join(home(created.id), 'SOUL.md'), handEdited);
+        releaseTx();
+        const updated = await pending;
+        expect(updated.identitySource).toBe(buildDefaultBotIdentity('NewName'));
+      } finally {
+        h.tx = originalTx;
+      }
+
+      expect(soul(created.id)).toBe(handEdited);
+      expect(await reconcileBotProfileFolder(created.id)).not.toBeNull();
+      expect(latestIdentity(created.id)).toBe(handEdited);
+    });
+
+    it('seeds a pre-check Home with committed config when the rename save is rejected', async () => {
+      await createDefaultBuddy('taken-name', { name: 'Taken Name' });
+      const created = await createDefaultBuddy('rejected-pre-check-home', {
+        userContextSource: 'Old context',
+      });
+      rmSync(home(created.id), { recursive: true, force: true });
+
+      await expect(invoke('local-db:bots:update', {
+        id: created.id,
+        name: 'Taken Name',
+        userContextSource: 'New context',
+      })).rejects.toMatchObject({ code: 'ALREADY_EXISTS' });
+
+      expect(readFileSync(join(home(created.id), 'memories', 'USER.md'), 'utf8')).toBe('Old context');
+      expect(soul(created.id)).toBe(buildDefaultBotIdentity('OldName'));
+      expect(await reconcileBotProfileFolder(created.id)).toBeNull();
+      const row = h
+        .sqlite!.prepare(
+          'SELECT capabilities_json AS capabilitiesJson FROM bot_profile_versions WHERE bot_id = ? ORDER BY version DESC LIMIT 1',
+        )
+        .get(created.id) as { capabilitiesJson: string };
+      expect(JSON.parse(row.capabilitiesJson).userContextSource).toBe('Old context');
+    });
   });
 
   it('returns the winner without removing the permanent workspace when a stale create loses the CAS', async () => {
@@ -5155,7 +5740,35 @@ afterAll(() => {
 
 
 describe('Bot self control uses the same profile authority as settings', () => {
-  it('reads only its own state and patches requested fields without replacing independent configuration', async () => {
+  // DB tier: a versioned project file must use the same save and readback as the settings page.
+  it('applies only supported fields from the bound project and rejects stale files', async () => {
+    const canonical = await invoke('local-db:bots:create-canonical-session', { botId: 'bot-1', expectedCanonicalSessionId: null, expectedProfileVersion: 1 });
+    const sessionId = canonical.session.id;
+    const profile = await invoke('local-db:bots:get', 'bot-1');
+    // Provision the real project without loading the automation host for its nightly review.
+    const provisionAutomations = vi.spyOn(botProjectMode, 'ensureBotProjectAutomations').mockResolvedValue(false);
+    try {
+      await invoke('local-db:bots:update', { id: 'bot-1', capabilities: { projectMode: true } });
+    } finally {
+      provisionAutomations.mockRestore();
+    }
+    const service = createBotCapabilityService(capabilityDeps);
+    const current = await service.inspect({ callerSessionId: sessionId });
+    if (!current.ok) throw new Error(current.message);
+    const expectedVersion = current.state.profile.version;
+    const folder = join(profile.homeDir, 'workspace', '.cindy', 'settings');
+    mkdirSync(folder, { recursive: true });
+    const file = join(folder, 'profile.json');
+    const request = { callerSessionId: sessionId, expectedVersion, fromProject: true as const };
+    writeFileSync(file, JSON.stringify({ expectedVersion, permissions: 'trusted' }));
+    expect(await service.updateProfile(request)).toMatchObject({ ok: false });
+    writeFileSync(file, JSON.stringify({ expectedVersion, description: 'Family assistant', userContextSource: '' }));
+    expect(await service.updateProfile(request)).toMatchObject({ ok: true });
+    expect(await service.inspect({ callerSessionId: sessionId })).toMatchObject({ state: { profile: { description: 'Family assistant' } } });
+    expect(await service.updateProfile(request)).toMatchObject({ ok: false });
+  });
+
+  it('patches requested fields while regenerating only the default identity', async () => {
     const canonical = await invoke('local-db:bots:create-canonical-session', { botId: 'bot-1', expectedCanonicalSessionId: null, expectedProfileVersion: 1 });
     const sessionId = canonical.session.id;
     const service = createBotCapabilityService(capabilityDeps);
@@ -5168,7 +5781,9 @@ describe('Bot self control uses the same profile authority as settings', () => {
     const after = await invoke('local-db:bots:get', 'bot-1');
     expect(after.name).toBe('Renamed');
     expect(after.capabilities).toEqual(before.capabilities);
-    expect(after.identitySource).toBe(before.identitySource);
+    // A Cindy-generated default SOUL follows the current name; user-authored
+    // identities are protected by the rename regression cases above.
+    expect(after.identitySource).toBe(buildDefaultBotIdentity('Renamed', before.description));
     expect(after.canonicalSessionId).toBe(before.canonicalSessionId);
     expect(await service.updateProfile({ callerSessionId: sessionId,
       expectedVersion: initial.state.profile.version, name: 'Stale' })).toMatchObject({ ok: false });
@@ -5461,6 +6076,32 @@ describe('Teammate model selection shares profile persistence and route reconcil
     expect(after.currentVersion).toBe(renamed.currentVersion + 1);
   });
 
+  // 用户反馈：伙伴用 update_teammate_profile 改自己的模型时选不到插件引擎（设置页可以）。DB tier：经真实
+  // 伙伴工具服务读到本机插件引擎、保存进伙伴自己的模型链，并由同一读取入口解析出插件引擎路由；应用默认不变。
+  it('saves a plugin engine of this computer into its own chain through the teammate tool', async () => {
+    const { service, sessionId } = await setupModelControl();
+    pluginEngineViews.list = () => [{ key: 'agy:agy', providerId: 'acp-plugin:agy:agy', ghostId: 'agy', harnessId: 'agy', name: 'Antigravity',
+      availability: { state: 'available' }, models: [{ id: 'gemini-3-pro', displayName: 'Gemini 3 Pro', efforts: ['high'] }],
+      permissionModes: [], defaultPermissionMode: 'ask' }];
+    try {
+      const appDefault = getSelectedNewMakerRoute(h.ownerScopeKey);
+      const listed = await service.models({ callerSessionId: sessionId });
+      if (!listed.ok) throw new Error(listed.message);
+      const choice = listed.available.find(item => item.route.harness === 'acp' && item.route.model === 'gemini-3-pro');
+      expect(choice).toMatchObject({ teammateOnly: true, route: { providerId: 'acp-plugin:agy:agy', model: 'gemini-3-pro' } });
+      expect(await service.updateProfile({ callerSessionId: sessionId, expectedVersion: 1,
+        modelChain: [{ id: choice!.id, effort: 'high', fastMode: false }] })).toMatchObject({ ok: true, effective: 'next-turn' });
+      const after = await invoke('local-db:bots:get', 'bot-1');
+      expect(await modelSettings.readEffectiveBotModelChain(after.capabilities)).toEqual([
+        { harness: 'acp', providerId: 'acp-plugin:agy:agy', model: 'gemini-3-pro', effort: 'high', fastMode: false },
+      ]);
+      expect(getSelectedNewMakerRoute(h.ownerScopeKey)).toEqual(appDefault);
+      // Fast is not offered for plugin engines.
+      expect(await service.updateProfile({ callerSessionId: sessionId, expectedVersion: after.currentVersion,
+        modelChain: [{ id: choice!.id, fastMode: true }] })).toMatchObject({ ok: false });
+    } finally { pluginEngineViews.list = null; }
+  });
+
   // DB regression: a per-teammate reset follows the teammate default even if
   // the new-task composer changes later; previously the two were coupled.
   it('saves its own model chain, applies it through the send resolver, and resets independently of new tasks', async () => {
@@ -5520,7 +6161,7 @@ describe('Teammate model selection shares profile persistence and route reconcil
 
 
 /** Delay real SQL replies to expose fan-out hidden by the synchronous fixture. */
-function observeBotReadConcurrency() {
+function observeBotReadConcurrency(onRead?: (sql: string, rows: unknown[][]) => void) {
   let active = 0;
   let peak = 0;
   const transport: DbTransport = {
@@ -5529,7 +6170,8 @@ function observeBotReadConcurrency() {
       const { sql, params } = args as { sql: string; params: unknown[] };
       peak = Math.max(peak, ++active);
       try {
-        const rows = h.sqlite!.prepare(sql).raw().all(...params);
+        const rows = h.sqlite!.prepare(sql).raw().all(...params) as unknown[][];
+        onRead?.(sql, rows);
         await new Promise<void>((resolve) => setImmediate(resolve));
         return rows as R;
       } finally { active--; }
@@ -5578,4 +6220,100 @@ it('reads long companion history snapshots sequentially and keeps every latest s
   expect(profile.sessions.filter((row: { runtimeSnapshot?: unknown }) => row.runtimeSnapshot)).toHaveLength(40);
   expect(profile.sessions.some((row: { id: string }) => row.id === created.session.id)).toBe(true);
   expect(peak()).toBe(1);
+});
+
+// DB-tier regression (P04): the real bots:get projection used one Worker RPC per
+// linked session. Existing concurrency coverage only bounded simultaneous reads,
+// not round trips or latest-row semantics. At 10+ links the old path fails.
+it.each([10, 100, 250])('batches latest runtime snapshots for %i linked tasks without returning old JSON', async (count) => {
+  await invoke('local-db:bots:create-canonical-session', {
+    botId: 'bot-1', expectedCanonicalSessionId: null, expectedProfileVersion: 1,
+  });
+  const [session] = await h.db!.select().from(sessions);
+  const insert = h.sqlite!.prepare(`INSERT INTO bot_runtime_snapshots
+    (id, bot_id, session_id, profile_version, agent_kind, working_dir, status, prepared_at, applied_at, configured_json)
+    VALUES (?, 'bot-1', ?, 1, 'pi', '/workspace', 'prepared', ?, ?, ?)`);
+  for (let i = 0; i < count; i++) {
+    const id = `batched-${i}`;
+    await h.db!.insert(sessions).values({ ...session, id });
+    await h.db!.insert(botSessionLinks).values({ id, botId: 'bot-1', sessionId: id, role: 'history', profileVersion: 1, createdAt: i });
+    insert.run(`${id}-old`, id, 100, 999, JSON.stringify({ marker: 'old' }));
+    insert.run(`${id}-pending`, id, 200, null, JSON.stringify({ marker: 'pending' }));
+    insert.run(`${id}-a`, id, 200, 201, JSON.stringify({ marker: 'tie-a' }));
+    insert.run(`${id}-z`, id, 200, 201, JSON.stringify({ marker: 'winner' }));
+  }
+  let queries = 0;
+  let returnedSnapshots = 0;
+  const peak = observeBotReadConcurrency((sql, rows) => {
+    if (sql.includes('bot_runtime_snapshots')) { queries++; returnedSnapshots += rows.length; }
+  });
+  const profile = await invoke('local-db:bots:get', 'bot-1');
+  expect(queries).toBe(Math.ceil((count + 1) / 100));
+  expect(profile.sessions).toHaveLength(count + 1);
+  expect(profile.sessions.find((row: { id: string }) => row.id === session.id).runtimeSnapshot).toBeUndefined();
+  expect(profile.sessions.filter((row: { runtimeSnapshot?: unknown }) => row.runtimeSnapshot)).toHaveLength(count);
+  expect(profile.sessions.filter((row: { id: string }) => row.id !== session.id)
+    .every((row: { runtimeSnapshot: { configured: { marker: string } } }) => row.runtimeSnapshot.configured.marker === 'winner')).toBe(true);
+  expect(returnedSnapshots).toBe(count);
+  expect(peak()).toBe(1);
+});
+
+// DB tier: account switches while the first batch is in flight must stop later
+// batches and reject the old projection, not publish another owner's results.
+it('rejects an owner switch during batched runtime snapshot reads', async () => {
+  await invoke('local-db:bots:create-canonical-session', {
+    botId: 'bot-1', expectedCanonicalSessionId: null, expectedProfileVersion: 1,
+  });
+  const [session] = await h.db!.select().from(sessions);
+  for (let i = 0; i < 101; i++) {
+    const id = `owner-switch-${i}`;
+    await h.db!.insert(sessions).values({ ...session, id });
+    await h.db!.insert(botSessionLinks).values({ id, botId: 'bot-1', sessionId: id, role: 'history', profileVersion: 1, createdAt: i });
+  }
+  let queries = 0;
+  observeBotReadConcurrency((sql) => {
+    if (sql.includes('bot_runtime_snapshots')) { queries++; h.ownerScopeKey = 'owner-b:2'; }
+  });
+  await expect(invoke('local-db:bots:get', 'bot-1')).rejects.toThrow('PRECONDITION_FAILED');
+  expect(queries).toBe(1);
+});
+
+// #9706 / db: invoke the production registered handler against the existing real
+// SQLite fixture. CRUD coverage never withheld publication of the DbClient.
+// The same stored buddy must appear once ready; no synthetic empty success.
+it('rejects a roster read before DbClient publication instead of reporting no buddies', async () => {
+  h.dbReady = false;
+  try {
+    await expect(invoke('local-db:bots:list', undefined)).rejects.toThrow('not ready');
+  } finally {
+    h.dbReady = true;
+  }
+  await expect(invoke('local-db:bots:list', undefined)).resolves.toEqual(
+    expect.arrayContaining([expect.objectContaining({ id: 'bot-1' })]),
+  );
+});
+
+// PR #12070 review: Bot creation and settings read the Skill catalog before any Agent launches;
+// startup only warms the shared Skill preparation, so the catalog must join it first.
+describe('Bot capability Skill catalog', () => {
+  it('joins shared Skill preparation before listing Skills for creation', async () => {
+    const order: string[] = [];
+    const service = createBotCapabilityService({
+      ...capabilityDeps,
+      prepareSharedSkills: async () => { order.push('prepare'); },
+      getMaker: () => ({
+        listAgentSkills: async () => {
+          order.push('list');
+          return { skills: [{ name: 'release-check', description: 'Release checklist', enabled: true }] };
+        },
+      }) as never,
+    });
+
+    const result = await service.forCreation({
+      botId: 'bot-new', workingDir: '/bots/bot-new/workspace', agentKind: 'pi', assertOwner: () => undefined,
+    });
+
+    expect(order).toEqual(['prepare', 'list']);
+    expect(result.skill.map((entry) => entry.name)).toContain('release-check');
+  });
 });

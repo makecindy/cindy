@@ -296,9 +296,6 @@ export const MAKER_INVOKE = {
   /** 本机供应商是否允许同账号另一台电脑的远程 Agent 调用；仅本机可信 renderer 可写。 */
   PROVIDER_REMOTE_ACCESS_SET: 'maker:provider:remote-access:set',
   PROVIDER_RUN_LOCATION_SET: 'maker:provider:run-location:set',
-  /** 「远程连接」里的「让我的其他电脑用本机模型」。设置类：仅本机主页面可调，不进 device-link allowlist。 */
-  OWN_COMPUTER_MODEL_USE_GET: 'maker:own-computer-model-use:get',
-  OWN_COMPUTER_MODEL_USE_SET: 'maker:own-computer-model-use:set',
   /**
    * Owner-scoped provider display-order override.
    * Input = { dataOwnerId: string | null; ownerGeneration: number; providerIds: string[] }.
@@ -435,17 +432,20 @@ export const MAKER_INVOKE = {
   IM_DEFAULT_SETTINGS_GET: 'maker:im-default-settings:get',
   IM_DEFAULT_SETTINGS_SET: 'maker:im-default-settings:set',
   IM_DEFAULT_SETTINGS_RESET: 'maker:im-default-settings:reset',
+  /** 个人飞书 / Lark 机器人的按群设置（项目、模型、权限）。仅本机设置页，不进远程白名单。 */
+  FEISHU_GROUP_SETTINGS_LIST: 'maker:feishu-group-settings:list',
+  FEISHU_GROUP_SETTINGS_SET: 'maker:feishu-group-settings:set',
   /** Claude / Codex 子代理模型覆盖；null 表示沿用 agent 原生逻辑。 */
   SUBAGENT_MODEL_SETTINGS_GET: 'maker:subagent-model-settings:get',
   SUBAGENT_MODEL_SETTINGS_SET: 'maker:subagent-model-settings:set',
   SUBAGENT_MODEL_SETTINGS_RESET: 'maker:subagent-model-settings:reset',
   /** Global exact-model choices for short host-generated text tasks. */
   AUXILIARY_MODEL_SETTINGS_GET: 'maker:auxiliary-model-settings:get',
+  AUXILIARY_MODEL_ROUTE_HEALTH_GET: 'maker:auxiliary-model-route-health:get',
   AUXILIARY_MODEL_SETTINGS_SET: 'maker:auxiliary-model-settings:set',
-  /** 视觉桥设置（两个清单：目标模型 + 视觉后端）。 */
-  VISION_BRIDGE_SETTINGS_GET: 'maker:vision-bridge-settings:get',
-  VISION_BRIDGE_SETTINGS_SET: 'maker:vision-bridge-settings:set',
-  VISION_BRIDGE_SETTINGS_RESET: 'maker:vision-bridge-settings:reset',
+  AUXILIARY_MODEL_SETTINGS_TEST: 'maker:auxiliary-model-settings:test',
+  AUXILIARY_MODEL_HEALTH_DISMISS: 'maker:auxiliary-model-health:dismiss',
+  AUXILIARY_MODEL_HEALTH_GET: 'maker:auxiliary-model-health:get',
   SILENT_ENCRYPTED_RETRY_GET: 'maker:silent-encrypted-retry:get',
   SILENT_ENCRYPTED_RETRY_SET: 'maker:silent-encrypted-retry:set',
   SILENT_ENCRYPTED_RETRY_RESET: 'maker:silent-encrypted-retry:reset',
@@ -460,6 +460,9 @@ export const MAKER_INVOKE = {
   COMPACTION_GET_STATE: 'maker:compaction:get-state',
   COMPACTION_SET_PCT: 'maker:compaction:set-pct',
   COMPACTION_RESET_PCT: 'maker:compaction:reset-pct',
+  // Codex 原生压缩方式（本机 owner 设置）。
+  CODEX_COMPACTION_GET: 'maker:codex-compaction:get',
+  CODEX_COMPACTION_SET: 'maker:codex-compaction:set',
   /** Pi 原生自动上下文压缩触发阈值。下次 startSession / 恢复任务时读取。 */
   PI_COMPACTION_GET_PCT: 'maker:pi-compaction:get-pct',
   PI_COMPACTION_GET_STATE: 'maker:pi-compaction:get-state',
@@ -940,6 +943,7 @@ export const MAKER_PUSH = {
   AGENTS_CHANGED: 'maker:agents:changed',
   TURN_CHANGE_SET_UPDATED: 'maker:turn-change-set:updated',
   STATUS_CHANGED: 'maker:status-changed',
+  AUXILIARY_MODEL_HEALTH_CHANGED: 'maker:auxiliary-model-health',
   /** 用户从独立 Computer Use 授权引导浮窗主动取消。 */
   COMPUTER_PERMISSION_GUIDE_CANCELLED: 'maker:computer:permission-guide-cancelled',
   /** Native Computer Use onboarding status changed while System Settings is open. */

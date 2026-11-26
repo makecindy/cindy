@@ -1,5 +1,10 @@
+import { RemoteKeyboardLayout, useRemoteKeyboardMotion } from "./RemoteKeyboardLayout";
 import { deviceDisplayName } from "@/device-link/deviceName";
-import { foldDesktopLayout, foldDesktopRegion } from "./foldDesktopLayout";
+import {
+  foldDesktopHardware,
+  foldDesktopLayout,
+  foldDesktopRegion,
+} from "./foldDesktopLayout";
 import { useAdaptiveWindow } from "@/platform/AdaptiveWindowContext";
 import { controlRegion } from "@/platform/windowGeometry";
 import { FoldDesktopKeyboard } from "./FoldDesktopKeyboard";
@@ -38,7 +43,6 @@ import {
   Dimensions,
   StatusBar,
   Keyboard,
-  KeyboardAvoidingView,
   type KeyboardEvent,
   Platform,
   Pressable,
@@ -98,7 +102,7 @@ import {
   type RemoteDesktopDisplayMode,
   isRemoteDesktopChannelRequest,
   parseRemoteDesktopChannelReply,
-  REMOTE_DESKTOP_CHANNEL_TIMEOUT_MS,
+  remoteDesktopChannelTimeoutMs,
 } from "@cindy/device-link";
 import { useDeviceLink } from "@/device-link/DeviceLinkContext";
 import { BACKGROUND_TRANSITION_TIMEOUT_MS } from "@/device-link/backgroundConnection";
@@ -524,8 +528,10 @@ export function RemoteDesktopSession({
     return () => clearTimeout(timer);
   }, [frameReady, showConnectionStatus, deviceId]);
   const connectionLabel = t(
-    showExitLockStatus
+    showExitLockStatus && caps?.exitProtection !== "privacy-screen"
       ? "remoteDesktop.lockingOnExit"
+      : showExitLockStatus
+        ? "remoteDesktop.protectingOnExit"
       : recovery.current.at || status === "reconnecting"
         ? screenPlugin
           ? "remoteDesktop.liveScreenReconnecting"
@@ -587,6 +593,9 @@ export function RemoteDesktopSession({
   const [keyboard, setKeyboard] = useState(false);
   const [fullKeys, setFullKeys] = useState(false);
   const [keyboardFocusRequest, setKeyboardFocusRequest] = useState(0);
+  const [fieldTap, setFieldTap] = useState<{ lease: string; sequence: number } | null>(null);
+  const fullKeysRef = useRef(fullKeys);
+  fullKeysRef.current = fullKeys;
   const [nativeKeyboard, setNativeKeyboard] = useState(false);
   const [nativeKeyboardHeight, setNativeKeyboardHeight] = useState(0);
   const [keyboardPanelHeight, setKeyboardPanelHeight] = useState(0);
@@ -657,17 +666,8 @@ export function RemoteDesktopSession({
   const viewerColors = retroDesktop ? darkColors : colors;
   // Artwork covers both physical halves, including the division and system
   // reservations. Only interactive content is constrained to the safe regions.
-  const foldSeam = tableRegion
-    ? (tableRegion.first.y + tableRegion.first.height + tableRegion.second.y) /
-      2
-    : 0;
-  const hardwareMedia = { x: 0, y: 0, width: geometry.width, height: foldSeam };
-  const hardwareControls = {
-    x: 0,
-    y: foldSeam,
-    width: geometry.width,
-    height: geometry.height - foldSeam,
-  };
+  const { media: hardwareMedia, controls: hardwareControls } =
+    foldDesktopHardware(geometry);
   const retroViewport =
     retroDesktop && foldLayout
       ? retroDesktopViewport(
@@ -776,6 +776,16 @@ export function RemoteDesktopSession({
     >(),
   );
   const channelRequestId = useRef(0);
+  const canRetainMedia = useCallback(
+    () => Boolean(
+      active.current &&
+      streaming.current &&
+      capsRef.current?.deviceId === deviceId &&
+      capsRef.current.value.channelRequests === true &&
+      capsRef.current.value.signalingContinuity === true
+    ),
+    [deviceId],
+  );
   // Requests ride the media peer. Once it is gone their outcome is unknown, so
   // settle them now instead of waiting out the timeout or replaying on the relay.
   const abandonChannelRequests = useCallback(() => {
@@ -786,10 +796,12 @@ export function RemoteDesktopSession({
     (message: RemoteDesktopRequest & { lease: string }, preSend?: () => void) =>
       new Promise<ChannelOutcome>((resolve) => {
         preSend?.();
+        const owner = active.current;
+        const attempt = mediaAttempt.current;
         const id = `${Date.now().toString(36)}-${++channelRequestId.current}`;
         const timer = setTimeout(
           () => settle({ kind: "error", code: "INVOKE_TIMEOUT" }),
-          REMOTE_DESKTOP_CHANNEL_TIMEOUT_MS,
+          remoteDesktopChannelTimeoutMs(message),
         );
         const settle = (outcome: ChannelOutcome) => {
           if (channelRequests.current.get(id)?.settle !== settle) return;
@@ -799,6 +811,10 @@ export function RemoteDesktopSession({
         };
         channelRequests.current.set(id, { op: message.op, settle });
         const viaWebView = () => {
+          if (active.current !== owner || mediaAttempt.current !== attempt) {
+            settle({ kind: "error", code: "INVOKE_TIMEOUT" });
+            return;
+          }
           // The viewer answers with channelRequestState / channelReply.
           send({ type: "channelRequest", id, request: message });
         };
@@ -839,6 +855,7 @@ export function RemoteDesktopSession({
         !streaming.current ||
         hostCaps?.deviceId !== deviceId ||
         hostCaps.value.channelRequests !== true ||
+        (message.op === "heartbeat" && hostCaps.value.signalingContinuity !== true) ||
         !("lease" in message) ||
         message.lease !== lease.lease ||
         !isRemoteDesktopChannelRequest(message)
@@ -851,6 +868,32 @@ export function RemoteDesktopSession({
     },
     [deviceId, sendOverChannel],
   );
+  useEffect(() => {
+    if (!fieldTap) return;
+    const current = active.current;
+    if (!current || fieldTap.lease !== current.lease || !caps?.editableClick || !canInput ||
+        !focused || appState !== "active" || operations || keyboard || handoff || screenPlugin) {
+      setFieldTap(null);
+      return;
+    }
+    let valid = true;
+    // Let the click take focus and coalesce a double tap before consulting AX.
+    const timer = setTimeout(() => {
+      void request<{ editable: boolean }>({ op: "editableClick", ...fieldTap })
+        .then((result) => {
+          if (valid && result?.editable === true && active.current === current &&
+              current.controlling && !viewOnlyRef.current && focusedRef.current &&
+              AppState.currentState === "active") {
+            setFullKeys(false);
+            setKeyboard(true);
+          }
+        })
+        .catch(() => {}) // Optional hint. A failed read must never interrupt control.
+        .finally(() => { if (valid) setFieldTap(null); });
+    }, 90);
+    return () => { valid = false; clearTimeout(timer); };
+  }, [fieldTap, caps?.editableClick, canInput, focused, appState, operations, keyboard,
+      handoff, screenPlugin, request, lease?.lease]);
   const viewerSession = useMemo(
     () => ({ current: new RemoteDesktopViewerSession(request) }),
     [request],
@@ -927,6 +970,7 @@ export function RemoteDesktopSession({
             : null;
         },
         onAttempt: (attempt) => {
+          if (mediaAttempt.current !== attempt) abandonChannelRequests();
           mediaAttempt.current = attempt;
         },
         onOfferStart: (lease) =>
@@ -946,7 +990,7 @@ export function RemoteDesktopSession({
           setSettingNotice(t("remoteDesktop.videoSettingsFailed"));
         },
       }),
-    [request, send, t],
+    [request, send, t, abandonChannelRequests],
   );
   const safety = useRemoteDesktopSafety(
     deviceId,
@@ -1010,13 +1054,16 @@ export function RemoteDesktopSession({
     }
   };
   useEffect(() => {
+    let wasVisible = false;
     const updateFrame = (event: KeyboardEvent) => {
       const height = Math.max(
         0,
         Dimensions.get("window").height - event.endCoordinates.screenY,
       );
+      const visible = height > 0 || (Platform.OS === "android" && event.endCoordinates.height > 0);
+      if (visible) wasVisible = true;
       setNativeKeyboardHeight(height);
-      setNativeKeyboard(height > 0);
+      setNativeKeyboard(visible);
       // Android resizes the window for the keyboard, leaving only this field reliable.
       const measured = event.endCoordinates.height;
       if (measured > 0) {
@@ -1040,6 +1087,8 @@ export function RemoteDesktopSession({
     const hide = Keyboard.addListener("keyboardDidHide", () => {
       setNativeKeyboard(false);
       setNativeKeyboardHeight(0);
+      if (wasVisible && !fullKeysRef.current) setKeyboard(false);
+      wasVisible = false;
     });
     return () => {
       show.remove();
@@ -1781,7 +1830,8 @@ export function RemoteDesktopSession({
         heartbeatBusy === current.lease ||
         (NativeRemoteDesktopView &&
           pipPrepared.current &&
-          linkRef.current.status !== "online") ||
+          linkRef.current.status !== "online" &&
+          !canRetainMedia()) ||
         (presentation.current && AppState.currentState !== "active")
       )
         return;
@@ -1885,6 +1935,16 @@ export function RemoteDesktopSession({
           }
         })
         .catch((cause) => {
+          // A relay screenshot may time out after video has already recovered.
+          // Its missing reply does not revoke that healthy media connection.
+          // Explicit host/permission errors still use the normal failure path.
+          if (
+            streaming.current &&
+            cause &&
+            typeof cause === "object" &&
+            cause.code === "INVOKE_TIMEOUT"
+          )
+            return;
           if (active.current === current) fail(cause);
         })
         .finally(() => {
@@ -1924,7 +1984,7 @@ export function RemoteDesktopSession({
       clearInterval(metrics);
       stop();
     };
-  }, [request, fail, send, stop, pause, releaseControl]);
+  }, [request, fail, send, stop, pause, releaseControl, canRetainMedia]);
   useEffect(() => {
     // Route blur means leaving this desktop (including a native back swipe).
     mobileDebugLog("info", "lifecycle", "remote desktop focus effect", {
@@ -2082,11 +2142,12 @@ export function RemoteDesktopSession({
   ]);
   useEffect(() => {
     if (link.status !== "online") {
-      // Only a prepared background presentation can survive host signaling loss.
-      // The host stops foreground leases, so discard ours before reconnecting.
+      // A compatible host retains independently live media with the same
+      // bounded lease. Keep renewing it over that channel while relay recovers.
       if (
         presentation.current ||
-        (NativeRemoteDesktopView && pipPrepared.current)
+        (NativeRemoteDesktopView && pipPrepared.current) ||
+        canRetainMedia()
       )
         return;
       pause();
@@ -2094,7 +2155,7 @@ export function RemoteDesktopSession({
     }
     if (!active.current) void connectRef.current();
     else restoreInlinePresentationRef.current();
-  }, [link.status, pause]);
+  }, [link.status, pause, canRetainMedia]);
 
   const onMessage = (
     event:
@@ -2513,6 +2574,7 @@ export function RemoteDesktopSession({
         };
         setNetwork(null);
         setStatus("compatibility");
+        if (linkRef.current.status !== "online" && !presentation.current) pause();
         break;
       case "network": {
         if (
@@ -2530,6 +2592,11 @@ export function RemoteDesktopSession({
           latencyMs: metric(message.latencyMs),
           at: Date.now(),
         });
+        break;
+      }
+      case "fieldTap": {
+        if (caps?.editableClick && canInput && !keyboard && Number.isSafeInteger(message.sequence))
+          setFieldTap({ lease: current.lease, sequence: message.sequence as number });
         break;
       }
       case "inputOverflow": {
@@ -2595,6 +2662,10 @@ export function RemoteDesktopSession({
             events,
           });
         })()
+          .then(() => {
+            if (ownsBatch() && message.fieldTap === true && caps?.editableClick && !keyboard)
+              setFieldTap({ lease: current.lease, sequence: message.sequence as number });
+          })
           .catch((cause) => {
             if (!ownsBatch()) return;
             resolveControlFailure(cause, true);
@@ -3896,6 +3967,19 @@ export function RemoteDesktopSession({
     caps?.backgroundViewing &&
     (NativeRemoteDesktopView || canPip),
   );
+  const dismissKeyboard = useCallback(() => {
+    setKeyboard(false);
+    setAwaitingSystemKeyboard(false);
+    send({ type: "events", events: [{ kind: "release" }] });
+  }, [send]);
+  const keyboardMotion = useRemoteKeyboardMotion({
+    active: keyboard && fullKeys,
+    overlay: landscapeKeyboardOverlay || !!foldLayout,
+    height: keyboardPanelHeight,
+    dismiss: dismissKeyboard,
+    systemDock: !keyboard || panelKeys || foldLayout ? "none"
+      : landscapeKeyboardOverlay ? "overlay" : "spacer",
+  });
   const latency = network?.latencyMs;
   const deckClipboard = (
     <RemoteDesktopClipboardButton
@@ -3906,10 +3990,11 @@ export function RemoteDesktopSession({
     />
   );
   return (
-    <KeyboardAvoidingView
-      testID="remoteDesktop.layout"
-      enabled={!landscapeKeyboardOverlay && !foldLayout && !panelKeys}
-      behavior={Platform.OS === "ios" ? "padding" : undefined}
+    <RemoteKeyboardLayout
+      spacerStyle={keyboardMotion.spacerStyle}
+      phoneKeyboard={keyboard && nativeKeyboard && !panelKeys}
+      deckGesture={keyboardMotion.gesture}
+      onDismiss={dismissKeyboard}
       style={styles.root}
     >
       {Platform.OS === "android" && focused && <StatusBar hidden />}
@@ -4347,6 +4432,8 @@ export function RemoteDesktopSession({
                             idleTimeoutAvailable:
                               idleTimeoutLoaded && caps?.idleLock === true,
                             onIdleTimeout: updateIdleTimeout,
+                            hostIdle: caps?.hostIdle === true,
+                            exitProtection: caps?.exitProtection,
                           }
                     }
                     connected={Boolean(lease) && !connectionPending}
@@ -4622,16 +4709,17 @@ export function RemoteDesktopSession({
         </View>
       )}
       {keyboard && (
-        <View
+        <Animated.View
           testID="remoteDesktop.keyboardPanel"
           onLayout={({ nativeEvent: { layout } }) =>
             setKeyboardPanelHeight(layout.height)
           }
           style={[
             styles.keyboard,
+            keyboardMotion.panelStyle,
             landscapeKeyboardOverlay && [
               styles.keyboardOverlay,
-              { bottom: keyboardBottom },
+              { bottom: 0 },
             ],
             {
               paddingLeft: Math.max(spacing.xs, edgePadding.paddingLeft),
@@ -4702,11 +4790,7 @@ export function RemoteDesktopSession({
                 <Pressable
                   accessibilityRole="button"
                   accessibilityLabel={t("remoteDesktop.close")}
-                  onPress={() => {
-                    setKeyboard(false);
-                    setAwaitingSystemKeyboard(false);
-                    send({ type: "events", events: [{ kind: "release" }] });
-                  }}
+                  onPress={dismissKeyboard}
                   style={({ pressed }) => [
                     styles.keyboardBarButton,
                     pressed && mobileInteractionStyles.pressed,
@@ -4721,7 +4805,7 @@ export function RemoteDesktopSession({
               </View>
             </View>
           </View>
-        </View>
+        </Animated.View>
       )}
       {screenPlugin && (
         <LiveScreenControls
@@ -4798,7 +4882,7 @@ export function RemoteDesktopSession({
           }}
         />
       )}
-    </KeyboardAvoidingView>
+    </RemoteKeyboardLayout>
   );
 }
 

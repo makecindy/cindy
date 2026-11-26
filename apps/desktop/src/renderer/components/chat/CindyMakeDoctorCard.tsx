@@ -15,6 +15,7 @@ import { Collapse } from '@/components/ui/collapse';
 import { Spinner } from '@/components/ui/spinner';
 import { CindyMakeTaskCard } from '@/components/cindy-make/CindyMakeTaskCard';
 import { CindyMakeDependencyProgress } from '@/components/cindy-make/CindyMakeDependencyProgress';
+import { DownloadMeter } from '@/components/ui/download-meter';
 import { useCindyMakeState } from '@/lib/cindyMakeState';
 import { getStickySessionDeviceId } from '@/features/device-link/stickySessionOrigin';
 import {
@@ -404,7 +405,7 @@ export function MakeDoctorReportCard({
   }
   return (
     <section
-      className="min-w-0 w-full rounded-[12px] border border-[var(--border-default)] bg-[var(--surface-elevated)] text-14 text-[var(--text-primary)]"
+      className="min-w-0 w-full rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] text-14 text-[var(--text-primary)]"
       aria-label={t(title)}
     >
       <div className="flex items-center gap-2 px-4 py-3">
@@ -485,7 +486,17 @@ export function MakeDoctorReportCard({
                           ` · ${t(`cindyMake.prepare.source.${check.source}`)}`}
                       </span>
                     </div>
-                    {check.status === 'downloading' && check.progress && (
+                    {check.download &&
+                      (check.status === 'downloading' || check.status === 'installing') && (
+                        <div className="ml-5 mt-1">
+                          <DownloadMeter
+                            label={t(`cindyMakeDoctor.checks.${check.id}`)}
+                            progress={check.download}
+                          />
+                        </div>
+                      )}
+                    {/* Reports stored before the shared download progress only carry `progress`. */}
+                    {!check.download && check.status === 'downloading' && check.progress && (
                       <div className="ml-5 mt-1 space-y-1 text-12 text-[var(--text-secondary)]">
                         <p>
                           {t('cindyMake.prepare.downloadProgress', {
@@ -830,7 +841,7 @@ function CompactMakePreparationCard({
   const source = report.source;
   return (
     <section
-      className="w-full rounded-[12px] border border-[var(--border-default)] bg-[var(--surface-elevated)] text-14 text-[var(--text-primary)]"
+      className="w-full rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] text-14 text-[var(--text-primary)]"
       aria-label={t('cindyMake.code.taskName')}
     >
       <div className="flex items-center gap-2 px-4 py-3">

@@ -43,6 +43,7 @@ import {
 	darwinTerminalSourceCommand,
 	prepareDarwinTerminalLaunch,
 	currentDarwinTerminal,
+	resolveDesktopLaunchPolicy,
 	waitForDesktopStartup,
 	shouldRefuseHostedRestart,
 	commandContainsPath,
@@ -967,6 +968,52 @@ test("local restart keeps --local on both process-control stages", () => {
 	]);
 });
 
+// Exercise the flags and redirected output of the supervisor, which differ from an interactive smoke.
+const supervisedEnv = { CINDY_PERSONAL_FIXED_APP: '/fixture/Cindy.app',
+	CINDY_PERSONAL_GENERATION: 'test', CINDY_PERSONAL_MONITOR_DIR: '/fixture/launch' };
+const sharedArgs = ['--shared', '--wait-ready', '--reuse-terminal'];
+const sharedPolicy = resolveDesktopLaunchPolicy(sharedArgs, { env: supervisedEnv, platform: 'darwin', stdoutIsTTY: false });
+
+test('only a supervised fixed app with redirected output gives Forge a separate Terminal', () => {
+	assert.deepEqual(sharedPolicy, { reuseTerminal: false, coldBuildTimeoutMs: 600_000 });
+	const resolve = (args, env, stdoutIsTTY = false) =>
+		resolveDesktopLaunchPolicy(args, { env, platform: 'darwin', stdoutIsTTY });
+	assert.equal(resolve(sharedArgs, supervisedEnv, true).reuseTerminal, true);
+	assert.deepEqual(resolve(sharedArgs, {}), { reuseTerminal: true, coldBuildTimeoutMs: null });
+	assert.deepEqual(resolve(['--isolated=smoke', '--mock', '--reuse-terminal'], supervisedEnv),
+		{ reuseTerminal: true, coldBuildTimeoutMs: 600_000 });
+	assert.deepEqual(resolve(['--shared'], supervisedEnv), { reuseTerminal: false, coldBuildTimeoutMs: null });
+});
+
+test('cold start waits for Forge, then bounds auth/database from the first window', async t => {
+	const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-cold-start-'));
+	t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+	const file = path.join(dir, 'status.json');
+	// Use real status files with a virtual clock; polling must neither repeat the window
+	// extension nor discard a concrete failure reported during a slow build.
+	async function simulate(events, policy = sharedPolicy) {
+		let time = 0;
+		const write = status => fs.writeFileSync(file, JSON.stringify(status));
+		write({ state: 'pending' });
+		return waitForDesktopStartup(file, 180_000, { ...policy, now: () => time, wait: async () => {
+			const next = events.shift();
+			assert.ok(next, 'waiter outlived its deadline');
+			time = next.at;
+			if (next.state) write(next);
+		} });
+	}
+	const window = { at: 570_000, state: 'window-ready' };
+	const ready = { at: 720_000, state: 'ready', pid: 123 };
+	assert.deepEqual(await simulate([{ at: 200_000 }, window, ready]), ready);
+	await assert.rejects(simulate([window, { at: 700_000 }, { at: 750_000 }]), /after window-ready within 180s/);
+	assert.deepEqual(readDesktopStartupStatus(file), { state: 'abandoned', at: 750_000 });
+	await assert.rejects(simulate([{ at: 600_000 }]), /cold build and first window within 600s/);
+	await assert.rejects(simulate([{ at: 200_000, state: 'failed', code: 'MIGRATE_FAILED', message: 'fixture' }]),
+		error => error.startupStatus?.code === 'MIGRATE_FAILED');
+	assert.equal(fs.existsSync(file), false);
+	await assert.rejects(simulate([{ at: 180_000 }], { coldBuildTimeoutMs: null }), /window\/auth\/database startup within 180s/);
+});
+
 test("desktop readiness status is parsed only after an atomic status file appears", () => {
 	const statusPath = new URL(`./startup-${process.pid}.json`, import.meta.url);
 	try {
@@ -1887,7 +1934,7 @@ test("reusing a terminal refuses headless input instead of opening a window", ()
 	}
 });
 
-test("personal coordinator reuses its input terminal with redirected output and drains after ready", {
+test("explicit terminal reuse drains redirected output after ready", {
 	skip: process.platform !== "darwin", timeout: 30_000,
 }, (t) => {
 	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cindy-one-terminal-"));
@@ -2011,4 +2058,14 @@ test('isolated preview refuses a shared instance in its checkout before stopping
  assert.equal(dev.length,1);
  assert.throws(()=>assertNoRestartTargets(dev,root,[root]),/occupied checkout/);
  assert.doesNotThrow(()=>assertNoRestartTargets(processes,'/tmp/another-candidate',[root,'/tmp/another-candidate']));
+});
+
+// An ambiguous endpoint source must not stop the currently running dev client.
+test("desktop restart rejects conflicting private endpoint flags before process control", () => {
+  const steps = [];
+  assert.throws(() => runDesktopRestart(
+    ["--region=cn", "--endpoints-file=/private/cloud test/endpoint.json", "--endpoints-cdn"],
+    "/repo/cindy", (step) => steps.push(step), () => {},
+  ), /cannot be combined/);
+  assert.deepEqual(steps, []);
 });

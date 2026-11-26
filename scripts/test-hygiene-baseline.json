@@ -34,17 +34,11 @@
     "apps/desktop/src/main/__tests__/chatAttachmentIpcOwnerBoundary.test.ts": {
       "sourceReads": 1
     },
-    "apps/desktop/src/main/__tests__/claudeAccountUsageSource.test.ts": {
-      "sourceReads": 1
-    },
     "apps/desktop/src/main/__tests__/claudeOrphanReaper.test.ts": {
       "resetModules": 1
     },
-    "apps/desktop/src/main/__tests__/codexToolTreeReaper.test.ts": {
-      "resetModules": 1
-    },
     "apps/desktop/src/main/__tests__/computerUsePluginIpc.test.ts": {
-      "sourceReads": 10
+      "sourceReads": 9
     },
     "apps/desktop/src/main/__tests__/deviceLinkSettingsStore.test.ts": {
       "resetModules": 1
@@ -110,9 +104,6 @@
     "apps/desktop/src/main/__tests__/sessionDragReleaseNativeHost.test.ts": {
       "resetModules": 1
     },
-    "apps/desktop/src/main/__tests__/sessionRuntimeFallbackIntent.test.ts": {
-      "sourceReads": 1
-    },
     "apps/desktop/src/main/__tests__/sessionTaskSummary.test.ts": {
       "sourceReads": 2
     },
@@ -130,12 +121,6 @@
     },
     "apps/desktop/src/main/__tests__/updateService.test.ts": {
       "resetModules": 1
-    },
-    "apps/desktop/src/main/__tests__/usageBroadcasterClaudeSubscription.test.ts": {
-      "resetModules": 2
-    },
-    "apps/desktop/src/main/__tests__/usageBroadcasterCodexAccount.test.ts": {
-      "resetModules": 9
     },
     "apps/desktop/src/main/__tests__/usageBroadcasterXaiSubscription.test.ts": {
       "resetModules": 1
@@ -304,9 +289,6 @@
     "apps/desktop/src/main/maker-ipc/__tests__/bootstrapDirectoryGrants.test.ts": {
       "sourceReads": 1
     },
-    "apps/desktop/src/main/maker-ipc/__tests__/botInvitation.test.ts": {
-      "resetModules": 1
-    },
     "apps/desktop/src/main/maker-ipc/__tests__/deferredRestartQueueDrain.test.ts": {
       "sourceReads": 1
     },
@@ -317,9 +299,6 @@
       "sourceReads": 1
     },
     "apps/desktop/src/main/maker-ipc/__tests__/orcaLifecycleService.test.ts": {
-      "sourceReads": 1
-    },
-    "apps/desktop/src/main/maker-ipc/__tests__/orcaModelSelectionIntent.test.ts": {
       "sourceReads": 1
     },
     "apps/desktop/src/main/maker-ipc/__tests__/orcaProviderRoutingSnapshotWiring.test.ts": {
@@ -335,9 +314,6 @@
       "sourceReads": 2
     },
     "apps/desktop/src/main/maker-ipc/__tests__/schedulerQueuedPreparation.test.ts": {
-      "sourceReads": 1
-    },
-    "apps/desktop/src/main/maker-ipc/__tests__/silentStopContinuationBinding.test.ts": {
       "sourceReads": 1
     },
     "apps/desktop/src/main/mcp-integrations/__tests__/forgeIconConversionPackaging.test.ts": {
@@ -422,9 +398,6 @@
       "resetModules": 1
     },
     "apps/desktop/src/main/skillhub/registry/__tests__/registryService.test.ts": {
-      "resetModules": 1
-    },
-    "apps/desktop/src/main/vision-bridge/__tests__/vision-bridge-settings-store.test.ts": {
       "resetModules": 1
     },
     "apps/desktop/src/main/voice-input/__tests__/dictionarySyncStore.test.ts": {
@@ -728,9 +701,6 @@
     "apps/desktop/src/renderer/__tests__/sidebarSessionTime.test.ts": {
       "sourceReads": 2
     },
-    "apps/desktop/src/renderer/__tests__/sidebarUpgradeDefaults.test.ts": {
-      "sourceReads": 1
-    },
     "apps/desktop/src/renderer/__tests__/sidebarUpperSingleButton.test.ts": {
       "sourceReads": 2
     },
@@ -1010,9 +980,6 @@
     },
     "packages/maker-core/src/session.origin.test.ts": {
       "realWaits": 3
-    },
-    "packages/maker-core/src/session.vision-bridge.test.ts": {
-      "realWaits": 2
     },
     "packages/maker-pi-manager/src/__tests__/concurrency.test.ts": {
       "realWaits": 2

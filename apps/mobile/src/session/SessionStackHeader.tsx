@@ -54,14 +54,15 @@ export function SessionStackActions({ available, detailsOnly, screen, filesDisab
 
 type HeaderProps = ActionsProps & SessionHeaderNativeTitleProps & {
   titleMaxWidth: number;
+  listOnly: boolean;
   onBack(): void;
   onOpenSessionList?: () => void;
 };
 
 /** Horizontal system header keeps the existing custom title and native actions. */
-export function SessionStackHeader({ titleMaxWidth, onBack, onOpenSessionList,
+export function SessionStackHeader({ titleMaxWidth, listOnly, onBack, onOpenSessionList,
   available, detailsOnly, screen, filesDisabled, filesDisabledReason, onFiles, onDetails, onDesktop,
-  title, tags, pinned, syncing, syncingImmediately, notice, onTagsPress, onTitleDoubleTap }: HeaderProps) {
+  title, projectIcon, tags, pinned, syncing, syncingImmediately, notice, onTagsPress, onTitleDoubleTap }: HeaderProps) {
   const { t } = useTranslation();
   const { colors } = useTheme();
   const backLabel = t('shared.back');
@@ -91,12 +92,15 @@ export function SessionStackHeader({ titleMaxWidth, onBack, onOpenSessionList,
       // Route-owned title options survive its unmount during a pop transition.
       headerTitle: () => <View style={{ width: titleMaxWidth, height: navigationChrome.target,
         minWidth: 0, flexShrink: 1, overflow: 'hidden', justifyContent: 'center' }}>
-        <SessionHeaderNativeTitle title={title} pinned={pinned} tags={stableTags} onTagsPress={canPressTags ? pressTags : undefined}
+        <SessionHeaderNativeTitle projectIcon={projectIcon} title={title} pinned={pinned} tags={stableTags} onTagsPress={canPressTags ? pressTags : undefined}
           onTitleDoubleTap={canRename ? rename : undefined} syncing={syncing} syncingImmediately={syncingImmediately} notice={notice} />
       </View>,
-    }), [colors.textPrimary, titleMaxWidth, title, pinned, stableTags, canPressTags, canRename,
+    }), [colors.textPrimary, titleMaxWidth, title, projectIcon, pinned, stableTags, canPressTags, canRename,
       pressTags, rename, syncing, syncingImmediately, notice]);
-  const leftItems = useMemo(() => [
+  const leftItems = useMemo(() => listOnly ? (
+    <Stack.Toolbar.Button icon="sidebar.left" accessibilityLabel={listLabel}
+      onPress={pressList} />
+  ) : [
       <Stack.Toolbar.View key="back" hidesSharedBackground>
         <SessionHeaderNativeBack label={backLabel} onPress={pressBack} />
       </Stack.Toolbar.View>,
@@ -106,7 +110,7 @@ export function SessionStackHeader({ titleMaxWidth, onBack, onOpenSessionList,
           <Menu color={colors.textPrimary} size={iconSize.action} strokeWidth={iconStroke.regular} />
         </HomeHeaderGlassButton>
       </Stack.Toolbar.View> : null,
-    ], [backLabel, pressBack, hasList, listLabel, pressList, colors.textPrimary]);
+    ], [listOnly, backLabel, pressBack, hasList, listLabel, pressList, colors.textPrimary]);
   const rightItems = useMemo(() => (
       <Stack.Toolbar.View hidesSharedBackground>
         <SessionHeaderNativeActions available={available} detailsOnly={detailsOnly}

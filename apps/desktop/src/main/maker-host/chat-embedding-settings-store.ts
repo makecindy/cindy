@@ -31,7 +31,47 @@ import {
   type OverrideSettingsState,
 } from './override-settings-file.js';
 
+import { inspectSettingsJson } from './inspect-settings-json.js';
+import { inspectSettingsFile, isSettingBoolean, validateOptionalSettingsFields, type SettingsFileInspection } from './settings-inspection.js';
+
 const log = desktopMakerLogger.child('chat-embedding-settings-store');
+
+/** 原样观察现有归属，不认领旧数据，也不探测独占权限或进程。 */
+export function inspectChatEmbeddingSettings(options: {
+  ownerRoot: string;
+  userDataPath: string;
+  context: ChatEmbeddingDefaultContext;
+}): SettingsFileInspection<ChatEmbeddingSettings> {
+  const defaults = { enabled: resolveChatEmbeddingDefault(options.context) };
+  const result = inspectSettingsFile({
+    filePath: () => path.join(options.ownerRoot, SETTINGS_FILE), defaults, normalize,
+    maxBytes: MAX_SETTINGS_BYTES,
+    validate: (raw) => {
+      validateOptionalSettingsFields(raw, { enabled: isSettingBoolean });
+      // 本 writer 会删除空 override；文件存在却没有开关字段时，不能冒充已知默认态。
+      if (!Object.hasOwn(raw, 'enabled')) throw new Error('Invalid setting');
+    },
+  });
+  if (result.status !== 'ready' || result.sources.enabled === 'override') return result;
+  if (options.context.mode !== 'cloud' || !options.context.isAuthenticated || !options.context.userId) return result;
+  const claim = inspectSettingsJson(path.join(options.userDataPath, LEGACY_CLAIM_FILE), (raw) => raw, MAX_SETTINGS_BYTES);
+  if (claim.status !== 'ready') return claim;
+  if (!claim.missing) {
+    if (claim.raw.version !== 1 || typeof claim.raw.ownerKey !== 'string' || typeof claim.raw.complete !== 'boolean') {
+      return { status: 'unreadable' };
+    }
+    if (claim.raw.ownerKey !== dataOwnerStorageKey(options.context.userId) || claim.raw.complete) return result;
+  }
+  const legacy = inspectSettingsJson(path.join(options.userDataPath, SETTINGS_FILE), (raw) => {
+    validateOptionalSettingsFields(raw, { enabled: isSettingBoolean });
+    return raw;
+  }, MAX_SETTINGS_BYTES);
+  if (legacy.status !== 'ready') return legacy;
+  if (legacy.missing || legacy.raw.enabled !== false) return result;
+  // 尚未认领的 opt-out 没有当前 owner；只读观察不得替当前账号认领它。
+  if (claim.missing) return { status: 'migrationPending' };
+  return { status: 'ready', value: { enabled: false }, sources: { enabled: 'override' } };
+}
 const SETTINGS_FILE = 'chat-embedding-settings.json';
 const LEGACY_CLAIM_FILE = '.chat-embedding-settings-owner-claim-v1.json';
 const MAX_SETTINGS_BYTES = 1_024;
@@ -89,6 +129,7 @@ const store = createOverrideSettingsFile<ChatEmbeddingSettings>({
   filePath: settingsFilePath,
   defaults: STORAGE_DEFAULTS,
   normalize,
+  validateOverrides: raw => validateOptionalSettingsFields(raw, { enabled: isSettingBoolean }),
   log,
   label: 'chat embedding',
   scopeKey: activeOwnerScopeKey,
@@ -350,3 +391,24 @@ export const __testing = {
   readLegacyChoice,
   resolveChatEmbeddingDefault,
 };
+
+function projectHostState(state: ReturnType<typeof store.inspect>, context: ChatEmbeddingDefaultContext) {
+  if (state.status !== 'ready') return state;
+  const defaults = { enabled: resolveChatEmbeddingDefault(context) };
+  return { ...state, defaults, value: state.customizedKeys.includes('enabled') ? state.value : defaults };
+}
+export function inspectHostChatEmbeddingSettings(context: ChatEmbeddingDefaultContext) {
+  const passive = inspectChatEmbeddingSettings({ ownerRoot: ownerScopedUserDataPath(), userDataPath: app.getPath('userData'), context });
+  const current = store.inspect();
+  if (passive.status !== 'ready') return { status: 'unavailable' as const, revision: null };
+  if (passive.sources.enabled === 'override' && current.status === 'ready' && !current.customizedKeys.includes('enabled')) {
+    return { status: 'unavailable' as const, revision: null }; // Pending native legacy migration.
+  }
+  return projectHostState(current, context);
+}
+export async function commitHostChatEmbeddingSettings(change: import('./override-settings-file.js').OverrideSettingsMutation<ChatEmbeddingSettings>, context: ChatEmbeddingDefaultContext, options: import('./override-settings-file.js').OverrideSettingsCommitOptions) {
+  assertActiveOwner(context);
+  if (inspectHostChatEmbeddingSettings(context).status !== 'ready') throw new Error('UNREADABLE');
+  const result = await store.commitAtomic(change, options);
+  return projectHostState(result, context);
+}

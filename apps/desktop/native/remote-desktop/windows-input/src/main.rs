@@ -10,6 +10,7 @@ use windows_sys::Win32::UI::{HiDpi::*, Input::KeyboardAndMouse::*, WindowsAndMes
 mod desktop;
 mod selection;
 mod privacy;
+mod verify;
 
 static FAILED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 fn send(input: INPUT) -> bool {
@@ -174,12 +175,39 @@ fn counter_session() {
     }
 }
 fn main() {
+    match std::env::args().nth(1).as_deref() {
+        Some("--lock-screen") => {
+            if !desktop::lock() { std::process::exit(2); }
+            println!("locked");
+            return;
+        }
+        Some("--lock-state") => {
+            println!("{}", match desktop::locked() {
+                Some(true) => "locked", Some(false) => "unlocked", None => "unavailable",
+            });
+            return;
+        }
+        Some("--away-guard") => { privacy::run(true); return; }
+        // `--verify-owner <window handle> <reason>`: fixed words only on stdout.
+        Some("--verify-owner") => {
+            let window = std::env::args().nth(2).and_then(|value| value.parse::<isize>().ok());
+            let reason: String = std::env::args().nth(3).unwrap_or_default().chars().take(200).collect();
+            println!("{}", match window.map(|window| verify::verify(window, &reason)) {
+                Some(Some(true)) => "verified",
+                Some(Some(false)) => "denied",
+                _ => "unavailable",
+            });
+            return;
+        }
+        _ => (),
+    }
+
     if std::env::args().nth(1).as_deref() == Some("--clipboard-counter") {
         counter_session();
         return;
     }
     if std::env::args().nth(1).as_deref() == Some("--privacy-input") {
-        privacy::run();
+        privacy::run(false);
         return;
     }
     if matches!(std::env::args().nth(1).as_deref(), Some("--clipboard-selection" | "--clipboard-content-selection")) {

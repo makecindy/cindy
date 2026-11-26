@@ -18,6 +18,7 @@ import { projectAutomationConsentToRow } from '../localDb/mapper';
 import { PROJECT_AUTOMATION_REL_SEGMENTS } from '../../shared/projectAutomationPaths';
 import { migrateLegacyXdmakerDir } from '../utils/legacyXdmakerMigration';
 import type { DrizzleScheduleStorage, SchedulerDrizzleDb } from './storage.desktop';
+import type { TeammateProjectState } from './ownTeammateProject';
 
 /**
  * ProjectAutomationLoader reads .cindy/automations/schedules.json and syncs it
@@ -52,12 +53,19 @@ export interface ProjectScheduleConfig {
   /** 显式模型选择的 Harness；省略时保留旧配置的跟随绑定任务语义。 */
   modelAgentKind?: 'claude-code' | 'codex' | 'pi';
   modelAgentDeviceId?: string;
+  /** Bot project model inheritance; new supplied tasks opt in, explicit models take precedence. Stored in the project file only. */
+  followTeammateModel?: boolean;
   model?: string;
   /** 可选：显式来源(供应商)id。省略 → 走原生默认来源（与旧配置字节级一致）。详见 Schedule.providerId。 */
   providerId?: string;
   /** Agent 运行位置，相对项目自动化所在电脑；省略 = 本机。 */
   agentDeviceId?: string;
   effort?: string;
+  /**
+   * 模型组(模式)id，每台电脑按自己的 model-groups.json 解析；这台电脑没有这个模式时按上面的具体模型运行。
+   * 详见 Schedule.modelGroup。
+   */
+  modelGroup?: string;
   /** Codex Fast 模式开关，仅 Codex 有意义。详见 Schedule.fastMode。 */
   fastMode?: boolean | 'ultrafast';
   useWorktree?: boolean;
@@ -109,6 +117,7 @@ export class ProjectAutomationLoader {
   private readonly cache = new Map<string, { value: CachedRead; ts: number }>();
   private readonly inflight = new Map<string, Promise<CachedRead>>();
   private readonly listeners = new Set<Listener>();
+  private readonly mutationTails = new Map<string, Promise<void>>();
 
   constructor(
     private readonly deps: {
@@ -116,8 +125,8 @@ export class ProjectAutomationLoader {
       storage: DrizzleScheduleStorage;
       getDb: () => SchedulerDrizzleDb;
       logger: Logger;
-      /** A project of one of this account's teammates: Cindy's own folder, synced without asking. */
-      isOwnTeammateProject?: (workingDir: string) => Promise<boolean>;
+      /** null for ordinary projects; deleted teammate folders must never be imported again. */
+      getTeammateProjectState?: (workingDir: string) => Promise<TeammateProjectState | null>;
     },
   ) {}
 
@@ -131,6 +140,15 @@ export class ProjectAutomationLoader {
   async loadProjectSchedules(workingDir: string): Promise<ProjectScheduleConfig[] | null> {
     const result = await this.readProjectAutomations(workingDir);
     return result.kind === 'loaded' ? result.schedules : null;
+  }
+
+  /** Read the opt-in fresh at dispatch; stale/unreadable data must not pick another model. */
+  async followsTeammateModel(workingDir: string, id: string): Promise<boolean> {
+    const read = await this.readProjectAutomationsFromDisk(workingDir);
+    if (read.kind !== 'loaded') throw new Error('schedule route unavailable: project automation config unreadable');
+    const config = read.schedules.find(item => item.id === id);
+    if (!config) throw new Error('schedule route unavailable: project automation was removed');
+    return config.followTeammateModel === true && !config.model?.trim();
   }
 
   computeHash(content: string): string {
@@ -167,6 +185,16 @@ export class ProjectAutomationLoader {
   }
 
   async reconcile(workingDir: string, approvedHash?: string): Promise<ReconcileResult> {
+    return this.serializeProjectMutation(workingDir, () => this.reconcileUnlocked(workingDir, approvedHash));
+  }
+
+  private async reconcileUnlocked(workingDir: string, approvedHash?: string): Promise<ReconcileResult> {
+    const teammateState = await this.deps.getTeammateProjectState?.(workingDirKey(workingDir));
+    // The profile is removed before its directory. A queued discovery must not
+    // recreate schedules from a file that cleanup has not removed yet.
+    if (teammateState === 'deleted') {
+      return { workingDir, inserted: 0, updated: 0, deleted: 0, skipped: null };
+    }
     // Never accept a cached snapshot for an approval: the file may have changed
     // while its confirmation was visible.
     const read = await this.readProjectAutomations(workingDir, { force: true });
@@ -204,7 +232,7 @@ export class ProjectAutomationLoader {
     // A teammate's project is Cindy's own folder, not something brought in from elsewhere: sync it
     // directly. Only a real teammate project of this account: a folder that merely looks like one asks.
     if (changed && approvedHash !== read.configHash
-      && !(await this.deps.isOwnTeammateProject?.(workingDir).catch(() => false))) {
+      && !teammateState) {
       const pendingImport = {
         workingDir, configHash: read.configHash, schedules: read.schedules,
         removedNames: removed.map((s) => s.name),
@@ -268,6 +296,19 @@ export class ProjectAutomationLoader {
     /** Host writers (a teammate's own automations) must not replace a file they cannot read whole. */
     options: { keepUnreadable?: boolean } = {},
   ): Promise<ReconcileResult> {
+    return this.serializeProjectMutation(workingDir, () => this.upsertScheduleUnlocked(workingDir, config, options));
+  }
+
+  private async upsertScheduleUnlocked(
+    workingDir: string,
+    config: ProjectScheduleConfig,
+    options: { keepUnreadable?: boolean },
+  ): Promise<ReconcileResult> {
+    if (await this.deps.getTeammateProjectState?.(workingDirKey(workingDir)) === 'deleted') {
+      const err = new Error('project automations belong to a deleted teammate');
+      (err as { code?: string }).code = 'PRECONDITION_FAILED';
+      throw err;
+    }
     if (!isProjectScheduleConfig(config)) {
       throwInvalidParams('invalid project schedule config');
     }
@@ -281,6 +322,10 @@ export class ProjectAutomationLoader {
       throw err;
     }
     const schedules = read.kind === 'loaded' ? read.schedules : [];
+    const previous = schedules.find(item => item.id === config.id);
+    // Editors rebuild the config. Ordinary edits retain the opt-in; selecting a model ends it.
+    config = { ...config, followTeammateModel: config.model?.trim() ? undefined
+      : config.followTeammateModel ?? previous?.followTeammateModel };
     const next: ProjectAutomationsFile = {
       version: 1,
       schedules: [
@@ -309,6 +354,10 @@ export class ProjectAutomationLoader {
   }
 
   async removeSchedule(workingDir: string, id: string): Promise<ReconcileResult> {
+    return this.serializeProjectMutation(workingDir, () => this.removeScheduleUnlocked(workingDir, id));
+  }
+
+  private async removeScheduleUnlocked(workingDir: string, id: string): Promise<ReconcileResult> {
     if (!id.trim()) {
       throwInvalidParams('project schedule id is required');
     }
@@ -338,6 +387,10 @@ export class ProjectAutomationLoader {
   }
 
   async deleteProjectSchedules(workingDir: string): Promise<number> {
+    return this.serializeProjectMutation(workingDir, () => this.deleteProjectSchedulesUnlocked(workingDir));
+  }
+
+  private async deleteProjectSchedulesUnlocked(workingDir: string): Promise<number> {
     const existing = (await this.deps.storage.list()).filter(
       (schedule) => schedule.source === 'project' && sameWorkingDir(schedule.workingDir, workingDir),
     );
@@ -345,6 +398,23 @@ export class ProjectAutomationLoader {
       await this.deps.scheduler.delete(schedule.id);
     }
     return existing.length;
+  }
+
+  /** Keep file snapshots, validation, DB writes and deletion in the same project order. */
+  private async serializeProjectMutation<T>(workingDir: string, mutation: () => Promise<T>): Promise<T> {
+    const key = workingDirKey(workingDir);
+    const previous = this.mutationTails.get(key) ?? Promise.resolve();
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const tail = previous.then(() => gate);
+    this.mutationTails.set(key, tail);
+    await previous;
+    try {
+      return await mutation();
+    } finally {
+      release();
+      if (this.mutationTails.get(key) === tail) this.mutationTails.delete(key);
+    }
   }
 
   private async readProjectAutomations(
@@ -543,6 +613,8 @@ function scheduleConfigToCreateInput(
     // 恒带 key：配置删掉运行位置时清除已保存的位置。
     agentDeviceId: config.agentDeviceId,
     effort: config.effort,
+    // 恒带 key：配置删掉模式时清除已保存的模式。
+    modelGroup: config.modelGroup?.trim() || undefined,
     fastMode: config.fastMode,
     workspaceKind: 'project',
     workingDir,
@@ -562,7 +634,11 @@ function scheduleConfigToUpdateInput(
   config: ProjectScheduleConfig,
   workingDir: string,
 ): ProjectUpdateScheduleInput {
-  return scheduleConfigToCreateInput(config, workingDir);
+  const input = scheduleConfigToCreateInput(config, workingDir);
+  // Project declarations cannot explicitly bind an existing task. Turning off
+  // persistence must clear the runner's saved binding; keeping it enabled must
+  // leave that binding intact so subsequent runs reuse the same task.
+  return input.persistentSession ? input : { ...input, targetSessionId: undefined };
 }
 
 export function schedulesDiffer(
@@ -587,11 +663,13 @@ export function schedulesDiffer(
     (schedule.providerId ?? undefined) !== (expected.providerId ?? undefined) ||
     (schedule.agentDeviceId ?? undefined) !== (expected.agentDeviceId ?? undefined) ||
     schedule.effort !== expected.effort ||
+    (schedule.modelGroup ?? undefined) !== (expected.modelGroup ?? undefined) ||
     (schedule.fastMode ?? false) !== (expected.fastMode ?? false) ||
     schedule.workspaceKind !== expected.workspaceKind ||
     !sameWorkingDir(schedule.workingDir, workingDir) ||
     schedule.useWorktree !== expected.useWorktree ||
     schedule.persistentSession !== expected.persistentSession ||
+    (!expected.persistentSession && !!schedule.targetSessionId) ||
     schedule.silentWhenIdle !== expected.silentWhenIdle ||
     (schedule.preRunHook?.command ?? '') !== (expected.preRunHook?.command ?? '') ||
     (schedule.preRunHook?.timeoutMs ?? undefined) !== (expected.preRunHook?.timeoutMs ?? undefined) ||
@@ -616,12 +694,12 @@ export const __testing = {
 };
 
 function sameWorkingDir(a: string | undefined, b: string): boolean {
-  if (!a) return false;
-  const left = path.resolve(a);
-  const right = path.resolve(b);
-  return process.platform === 'win32'
-    ? left.toLowerCase() === right.toLowerCase()
-    : left === right;
+  return !!a && workingDirKey(a) === workingDirKey(b);
+}
+
+function workingDirKey(workingDir: string): string {
+  const resolved = path.resolve(workingDir);
+  return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
 }
 
 function isProjectAutomationsFile(value: unknown): value is ProjectAutomationsFile {
@@ -647,6 +725,7 @@ function isProjectScheduleConfig(value: unknown): value is ProjectScheduleConfig
     typeof config.prompt === 'string' &&
     typeof config.cronExpr === 'string' &&
     config.cronExpr.trim() !== '' &&
+    optionalBoolean(config.followTeammateModel) &&
     optionalString(config.timezone) &&
     optionalBoolean(config.recurring) &&
     optionalBoolean(config.manual) &&
@@ -665,6 +744,7 @@ function isProjectScheduleConfig(value: unknown): value is ProjectScheduleConfig
       typeof config.model === 'string' && config.model.trim() !== ''
     )) &&
     optionalString(config.effort) &&
+    (config.modelGroup === undefined || (typeof config.modelGroup === 'string' && config.modelGroup.trim().length <= 64)) &&
     (optionalBoolean(config.fastMode) || config.fastMode === 'ultrafast') &&
     optionalBoolean(config.useWorktree) &&
     optionalBoolean(config.persistentSession) &&

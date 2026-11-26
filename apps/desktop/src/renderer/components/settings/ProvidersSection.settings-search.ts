@@ -28,7 +28,12 @@ export const providersSettings = defineSettings({
     fallbackTargetId: 'settings-panel-providers',
     titleKey: 'subscriptionAccounts.title',
     sectionKey: 'settings.tabs.providers',
-    keywordKeys: ['subscriptionAccounts.add', 'subscriptionAccounts.strategy'],
+    keywordKeys: [
+      'subscriptionAccounts.add',
+      'subscriptionAccounts.strategy',
+      'settings.providers.detail.sameAccountConnections',
+      'settings.providers.detail.sameAccountConnectionsHint',
+    ],
     aliases: [
       '多账号',
       '订阅账号',
@@ -93,6 +98,24 @@ export const providersSettings = defineSettings({
     sectionKey: 'settings.sections.providers',
     keywordKeys: ['settings.providers.remote.modelsTitle'],
   },
+  pluginProviders: {
+    id: 'providers.pluginProviders',
+    tab: 'providers',
+    targetId: 'settings-panel-providers',
+    titleKey: 'settings.providers.plugin.title',
+    descriptionKey: 'settings.providers.plugin.note',
+    sectionKey: 'settings.tabs.providers',
+    // 其他电脑开放的插件引擎也列在这一页(OwnRemotePluginEngines)，行的悬停提示是「引擎 · 电脑名」。
+    keywordKeys: [
+      'settings.providers.remote.rowLabel',
+      'settings.providers.models.advanced.defaultEffort',
+      'settings.providers.models.advanced.defaultEffortHint',
+      'settings.providers.models.advanced.providerLabel',
+    ],
+    aliases: [
+      '插件供应商', '插件引擎', '其他电脑的插件引擎', 'plugin provider', 'plugin engine', 'plugin engine on another computer',
+    ],
+  },
   videoApi: {
     id: 'providers.videoApi',
     tab: 'providers',
@@ -118,6 +141,8 @@ export const providersSettings = defineSettings({
       'settings.providers.local.title',
       'settings.providers.llamacpp.title',
       'settings.providers.custom.nameSearchHint',
+      'settings.providers.wizard.officialModelPlugins',
+      'settings.ghosts.detail.settingsTitle',
     ],
     sectionKey: 'settings.tabs.providers',
   },

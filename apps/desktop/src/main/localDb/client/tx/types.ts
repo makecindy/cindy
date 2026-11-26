@@ -1,9 +1,11 @@
+import type { ProjectArchiveGuard } from '../../projectArchiveGuard.js';
 import type { PluginUsageTransaction, PluginUsageHandle } from '../../../../shared/pluginUsage.js';
 import type { TaskTagRequest, TaskTagResult } from '@cindy/maker-shared';
 import type { ChatCacheTransaction, ChatCacheResult } from '../../worker/opHandlers/chatCacheTx.js';
 
 export type DbTxName =
   | 'mcpApps.viewState.save'
+  | 'usage.recordModelUsage'
   | 'usage.recordPiUsage'
   | 'chatCache.execute'
   | 'usage.recordMediaSpend'
@@ -54,6 +56,7 @@ export type DbTxName =
   | 'bots.pauseLifecycle'
   | 'bots.resumeLifecycle'
   | 'bots.archiveLifecycle'
+  | 'bots.retireCloudCopy'
   | 'bots.deleteProfile'
   | 'bots.prepareProfileDeletion'
   | 'bots.reconcileLanePermission'
@@ -62,6 +65,7 @@ export type DbTxName =
   | 'bots.createChannelLane'
   | 'bots.createThreadLane'
   | 'bots.archiveChannelLanes'
+  | 'bots.pruneEmptyLegacyRoutineHistory'
   | 'botGroups.create'
   | 'botGroups.setMembers'
   | 'botGroups.delete'
@@ -145,6 +149,8 @@ export interface SessionTreeRehydrateArgs {
 }
 
 export interface ForkSessionArgs {
+  /** Reject edits to the ordered history selected before the native fork awaited. */
+  sourceMessagesDigest?: string;
   sourceSessionId: string;
   /** /clear 之前的行不属于当前可见/原生上下文，fork 时不得重新带回。 */
   sourceClearedAt?: number | null;
@@ -362,14 +368,22 @@ export interface SessionsRenameTitleResult {
 }
 
 export interface SessionsSetStatusArgs {
+  projectGuard?: ProjectArchiveGuard;
   sessionIds: string[];
   status: 'active' | 'archived';
   closeSharedTasks?: boolean;
 }
 
 export interface SessionsSetTerminalStatusArgs {
+  projectGuard?: ProjectArchiveGuard;
   sessionId: string;
   status: 'archived' | 'deleted';
+  deleteTarget?: 'side-chat' | 'task';
+  /** Trusted host request only, recorded in the same transaction as the archive. */
+  sideChatCloseParentId?: string;
+  /** Internal automatic housekeeping only; never accepted as renderer metadata. */
+  idleArchiveCutoff?: number;
+  unusedOnly?: boolean;
 }
 
 export interface SessionsSetTerminalStatusResult extends Omit<SessionsSetStatusResultItem, 'status'> {
@@ -786,11 +800,8 @@ export interface BotGroupsCreateLaneArgs {
   groupId: string;
   routeKey: string;
   session: BotsReplaceCanonicalSessionArgs['session'];
-  /**
-   * The lane must work in `session.workingDir` (the group's project folder, or back in the
-   * Home workspace): an active lane elsewhere is archived and replaced by this one.
-   */
-  replaceOtherWorkingDir?: boolean;
+  /** Only archive the lane the caller inspected, even when requests arrive concurrently. */
+  replaceSessionId?: string;
 }
 
 export interface BotGroupsCreateLaneResult {
@@ -826,6 +837,7 @@ export interface BotsCreateThreadLaneArgs {
  * exceptBotId 非空时保留该伙伴的专线(改绑时只收旧伙伴的)。
  */
 export interface BotsArchiveChannelLanesArgs {
+  botId?: string;
   routeKey: string | null;
   routeKeyPrefix: string | null;
   exceptBotId: string | null;
@@ -1315,6 +1327,7 @@ export type SkillUsageApplyMutationArgs =
   | { kind: 'promote'; analyzerVersion: string };
 
 export interface MediaSpendArgs {
+  approximate?: boolean;
   providerName?: string;
   day: string;
   model: string;
@@ -1328,6 +1341,7 @@ export interface MediaSpendArgs {
 export type DbTxArgsByName = {
   'mcpApps.viewState.save': { binding: import('../../worker/opHandlers/mcpAppViewState.js').ViewStateBinding; json: string | null; bytes: number };
   'usage.recordMediaSpend': MediaSpendArgs;
+  'usage.recordModelUsage': import('../../worker/opHandlers/modelUsageTx.js').ModelUsageWrite;
   'usage.recordPiUsage': import('../../worker/opHandlers/piUsageTx.js').PiUsageWrite[];
   'authorization.readProjection': { sessionId: string; leadId: string };
   'rewind.commit': RewindCommitArgs;
@@ -1377,6 +1391,7 @@ export type DbTxArgsByName = {
   'bots.pauseLifecycle': BotsLifecycleTransitionArgs;
   'bots.resumeLifecycle': BotsLifecycleTransitionArgs;
   'bots.archiveLifecycle': BotsArchiveLifecycleArgs;
+  'bots.retireCloudCopy': { botId: string; at: number };
   'bots.deleteProfile': BotsDeleteProfileArgs;
   'bots.prepareProfileDeletion': { botId: string };
   'bots.reconcileLanePermission': { sessionId: string };
@@ -1385,6 +1400,7 @@ export type DbTxArgsByName = {
   'bots.createChannelLane': BotsCreateChannelLaneArgs;
   'bots.createThreadLane': BotsCreateThreadLaneArgs;
   'bots.archiveChannelLanes': BotsArchiveChannelLanesArgs;
+  'bots.pruneEmptyLegacyRoutineHistory': { neverDispatchedSessionIds: string[] };
   'botGroups.create': BotGroupsCreateArgs;
   'botGroups.setMembers': BotGroupsSetMembersArgs;
   'botGroups.delete': BotGroupsDeleteArgs;
@@ -1417,9 +1433,11 @@ export type DbTxArgsByName = {
 
 export type DbTxResultByName = {
   'mcpApps.viewState.save': void;
+  'usage.recordModelUsage': void;
   'usage.recordPiUsage': { changed: boolean };
   'usage.recordMediaSpend': {
     legacyUsd: number;
+    usdApproximate: number;
     amount: number;
     currency: 'USD' | 'CNY';
     approximate: number;
@@ -1476,6 +1494,7 @@ export type DbTxResultByName = {
   'bots.pauseLifecycle': undefined;
   'bots.resumeLifecycle': undefined;
   'bots.archiveLifecycle': { sessions: number };
+  'bots.retireCloudCopy': { changed: boolean };
   'bots.deleteProfile': { sessionIds: string[]; status: 'archived' | 'deleted' };
   'bots.prepareProfileDeletion': undefined;
   'bots.reconcileLanePermission': { mode: string | null; changed: boolean; canonicalSessionId?: string };
@@ -1484,6 +1503,7 @@ export type DbTxResultByName = {
   'bots.createChannelLane': BotGroupsCreateLaneResult;
   'bots.createThreadLane': BotGroupsCreateLaneResult;
   'bots.archiveChannelLanes': { archivedSessionIds: string[] };
+  'bots.pruneEmptyLegacyRoutineHistory': { removed: number; botIds: string[] };
   'botGroups.create': undefined;
   'botGroups.setMembers': BotGroupsSetMembersResult;
   'botGroups.delete': { archivedSessionIds: string[] };

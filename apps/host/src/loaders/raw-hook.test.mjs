@@ -29,3 +29,23 @@ test('raw asset imports preserve spaces, Unicode and URL delimiters through the 
     assert.equal(stdout, text);
   } finally { await rm(root, { recursive: true, force: true }); }
 });
+
+// Unit: the production tsx + Host loader chain must return text for a non-Markdown asset.
+// Markdown alone also matches the extension fallback and misses the HTML import that stops serve.
+test('the Host loader chain imports HTML with ?raw and plain Markdown as text', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'host raw-'));
+  try {
+    const html = path.join(root, 'page.html');
+    const markdown = path.join(root, 'prompt.md');
+    await writeFile(html, '<p>example</p>\n');
+    await writeFile(markdown, '# Example\n');
+    const loader = new URL('./register-raw.mjs', import.meta.url).href;
+    const htmlUrl = pathToFileURL(html);
+    htmlUrl.search = 'raw';
+    const script = `import html from ${JSON.stringify(htmlUrl.href)};
+      import md from ${JSON.stringify(pathToFileURL(markdown).href)};
+      process.stdout.write(JSON.stringify([html, md]));`;
+    const { stdout } = await exec(process.execPath, ['--import', 'tsx', '--import', loader, '--input-type=module', '-e', script]);
+    assert.deepEqual(JSON.parse(stdout), ['<p>example</p>\n', '# Example\n']);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});

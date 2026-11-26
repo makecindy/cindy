@@ -1,6 +1,10 @@
 import { PI_CACHE_RECOVERY_SOURCE } from './cache-recovery-source.js';
+import { completedPiResponsesMessage } from './responses-completion.js';
 import { PI_NATIVE_PROVIDER_ADAPTER_SOURCE } from './native-provider-adapter-source.js';
+import { PI_NATIVE_TOOL_CATALOG_SOURCE } from './native-tool-catalog-source.js';
 import { MAX_JSONL_BUFFER_CHARS } from './rpc-limits.js';
+import { assertToolLifecycleBudget } from '../shared/tool-lifecycle.js';
+import { PERMISSION_CONFIRMATION_TIMEOUT_GUIDANCE } from '../shared/auto-review-decision.js';
 /**
  * cindy-bridge —— 写进 pi agentHome/extensions/ 的扩展源码(字符串常量)。
  *
@@ -36,7 +40,9 @@ import {
 } from "../shared/sensitive-credential-paths.js";
 import { projectPiPackageCommandDiagnostic, projectPiManagedCommandFailure } from "../base-agent.js";
 import { shellInputRedirectionParserSource } from "../shared/shell-input-redirections.js";
+import { PI_SUBAGENT_TOOL_NAME } from "@cindy/maker-shared/agent-task";
 import { CINDY_SUBAGENT_TOOL_NAME } from "./cindy-subagent-source.js";
+import { PI_NATIVE_SUBAGENT_CALL_ENTRY } from "./session-tree.js";
 
 const SHELL_INPUT_REDIRECTION_PARSER_SOURCE = shellInputRedirectionParserSource();
 const CREDENTIAL_WORD_BOUNDARY = '\u0001';
@@ -60,6 +66,7 @@ export const CINDY_PI_MODEL_REQUEST_INPUT_PREFIX = '[CINDY_MODEL_REQUEST]:';
 export const CINDY_PI_TEXT_ONLY_READY_PREFIX = 'cindy:text-only-ready:';
 export const CINDY_PI_TEXT_ONLY_CLOSED_PREFIX = 'cindy:text-only-unavailable:';
 export const CINDY_PI_REQUEST_DIAGNOSTICS_PREFIX = 'cindy:provider-request:';
+export const CINDY_PI_RESPONSES_COMPLETION_PREFIX = 'cindy:responses-completed:';
 
 /** Shared with the generated bridge: only bounded counts and known effort names may enter logs. */
 export function projectPiRequestDiagnostics(value: unknown): Record<string, number | string | null> {
@@ -89,7 +96,7 @@ import {
   closeSync, constants, fstatSync, globSync, lstatSync, openSync, opendirSync, readFileSync, readSync, realpathSync,
   renameSync, rmSync, statSync, writeFileSync, mkdirSync, readdirSync, rmdirSync, linkSync,
 } from 'node:fs';
-import { createHash, randomUUID } from 'node:crypto';
+import { createHash, createHmac, randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
 import { stat } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
@@ -157,6 +164,7 @@ const TURN_CHANGE_CAPTURE_TITLE = 'cindy:turn-change-capture';
 const PERMISSION_ALLOW = 'allow';
 const PERMISSION_USER_DENY = 'user-deny';
 const PERMISSION_AUTO_REVIEW_DENY = 'auto-review-deny';
+const PERMISSION_CONFIRMATION_TIMEOUT_GUIDANCE = ${JSON.stringify(PERMISSION_CONFIRMATION_TIMEOUT_GUIDANCE)};
 function permissionDenialReason(decision: string | undefined): string {
   const source = decision?.split(':', 1)[0];
   const label = source === PERMISSION_AUTO_REVIEW_DENY ? 'Cindy Auto-review denied this tool call'
@@ -164,6 +172,10 @@ function permissionDenialReason(decision: string | undefined): string {
       : 'Cindy could not approve this tool call';
   const known = source === PERMISSION_AUTO_REVIEW_DENY || source === PERMISSION_USER_DENY || source === 'system-deny';
   const detail = known && decision?.includes(':') ? decision.slice(decision.indexOf(':') + 1).trim().slice(0, 240) : '';
+  // Same wording as formatPermissionDenial: a confirmation nobody answered is not the user saying no.
+  if (source === 'system-deny' && (detail === 'timeout' || detail.endsWith('_timeout'))) {
+    return label + ' (' + detail + '). ' + PERMISSION_CONFIRMATION_TIMEOUT_GUIDANCE;
+  }
   return detail ? label + ': ' + detail : label + '.';
 }
 const READONLY_BUILTINS = new Set(['read', 'grep', 'find', 'ls']);
@@ -192,6 +204,7 @@ const SECRET_ENV_NAMES = new Set<string>([
   'CINDY_PI_TASK_SYSTEM_PROMPT_FILE',
   'CINDY_PI_FAST_MODELS',
   'CINDY_PI_TURN_TOOL_POLICY',
+  'CINDY_PI_TOOL_LIFECYCLE',
   PI_PACKAGE_MANAGEMENT_ENV,
   PI_BASH_PACKAGE_HOME_ENV,
   MANAGED_RG_PATH_ENV,
@@ -2669,6 +2682,7 @@ function filterReviewGrepResult(result: any, input: unknown, allowedPaths: strin
 
 interface McpServerRef {
   name: string;
+  displayName?: string;
   url: string;
   remote?: {
     headerEnvVars: Record<string, string>;
@@ -2693,8 +2707,19 @@ const CINDY_DIRECT_BOT_TOOLS = new Set([
   'get_task_digest',
 ]);
 
+function mcpServerDisplayName(serverName: string, configuredName?: string, protocolName?: string): string {
+  const name = configuredName?.trim() || protocolName?.trim();
+  if (name) return name;
+  // Custom MCP IDs are UUIDs. Keep readable legacy/built-in server names intact,
+  // and use the opaque ID only for routing, disclosure and approval identity.
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(serverName)
+    ? '未命名 MCP (' + serverName.slice(0, 8) + ')'
+    : serverName;
+}
+
 interface ConnectedMcpTool {
   serverName: string;
+  displayName: string;
   name: string;
   description: string;
   inputSchema: Record<string, unknown>;
@@ -2731,7 +2756,13 @@ function isAllowedMcpUrl(url: URL): boolean {
 }
 
 /** Authenticated loopback MCP must use a socket, not Bun fetch's environment proxy. */
-async function fetchDirectLoopbackMcp(url: string, headers: Headers, body: string, signal: AbortSignal): Promise<Response> {
+async function fetchDirectLoopbackMcp(
+  url: string,
+  headers: Headers,
+  body: string | undefined,
+  signal: AbortSignal,
+  method = 'POST',
+): Promise<Response> {
   const parsed = new URL(url);
   if (!isLoopbackMcpHostname(parsed.hostname)) throw new McpBridgeError('URL outside security boundary');
   const host = parsed.hostname.replace(/^\[|\]$/g, '');
@@ -2755,16 +2786,16 @@ async function fetchDirectLoopbackMcp(url: string, headers: Headers, body: strin
     }
     const requestHeaders = new Headers(headers);
     requestHeaders.set('host', parsed.host);
-    requestHeaders.set('content-length', String(Buffer.byteLength(body)));
+    requestHeaders.set('content-length', String(body ? Buffer.byteLength(body) : 0));
     requestHeaders.set('connection', 'close');
     requestHeaders.set('accept-encoding', 'identity');
     requestHeaders.delete('transfer-encoding');
     const requestPath = (parsed.pathname || '/') + parsed.search;
-    const head = 'POST ' + requestPath + ' HTTP/1.1\r\n'
+    const head = method + ' ' + requestPath + ' HTTP/1.1\r\n'
       + Array.from(requestHeaders, ([name, value]) => name + ': ' + value + '\r\n').join('')
       + '\r\n';
     const iterator = socket[Symbol.asyncIterator]();
-    socket.write(head + body);
+    socket.write(head + (body ?? ''));
 
     let pending = Buffer.alloc(0);
     const readMore = async (): Promise<boolean> => {
@@ -2884,11 +2915,14 @@ async function fetchDirectLoopbackMcp(url: string, headers: Headers, body: strin
 class McpHttpClient {
   private nextId = 1;
   private sessionId: string | null = null;
+  private inFlight = 0;
+  private readonly idleWaiters: Array<() => void> = [];
   needsReconnect = false;
   private readonly requestUrl: string;
   private readonly directLoopback: boolean;
   private readonly requestTimeoutMs: number;
   private startupDeadlineAt: number | null;
+  serverInfoName: string | undefined;
 
   constructor(
     private readonly server: McpServerRef,
@@ -2964,6 +2998,7 @@ class McpHttpClient {
 
   private async post<T>(body: unknown, consume: (response: Response) => Promise<T>, signal?: AbortSignal, notificationTimeoutMs?: number): Promise<T> {
     const requestTimeoutMs = notificationTimeoutMs ?? this.nextRequestTimeoutMs();
+    this.inFlight += 1;
     const controller = new AbortController();
     const cancel = () => controller.abort();
     signal?.addEventListener('abort', cancel, { once: true });
@@ -3015,7 +3050,16 @@ class McpHttpClient {
     } finally {
       clearTimeout(timeout);
       signal?.removeEventListener('abort', cancel);
+      this.inFlight -= 1;
+      if (this.inFlight === 0) {
+        for (const resolve of this.idleWaiters.splice(0)) resolve();
+      }
     }
+  }
+
+  private async waitForIdle(): Promise<void> {
+    if (this.inFlight === 0) return;
+    await new Promise<void>((resolve) => this.idleWaiters.push(resolve));
   }
 
   /** 按 SSE event 增量取当前 JSON-RPC response；server 保持流打开也不阻塞。 */
@@ -3113,12 +3157,39 @@ class McpHttpClient {
     ).catch(() => {});
   }
 
+  /** Best-effort bounded DELETE for a transport whose owning Pi client is gone. */
+  async close(timeoutMs = 1_000): Promise<void> {
+    if (!this.sessionId) return;
+    await this.waitForIdle();
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const headers = this.headers();
+      const response = this.directLoopback
+        ? await fetchDirectLoopbackMcp(this.requestUrl, headers, undefined, controller.signal, 'DELETE')
+        : await fetch(this.requestUrl, {
+          method: 'DELETE', headers, redirect: 'error', signal: controller.signal,
+          timeout: false,
+        });
+      await response.body?.cancel();
+    } catch {
+      // Session teardown is best-effort. The process is already replacing or
+      // abandoning this client, so a failed DELETE must not block its successor.
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
   async initialize(): Promise<void> {
-    await this.request('initialize', {
+    const result = await this.request('initialize', {
       protocolVersion: '2025-03-26',
       capabilities: {},
       clientInfo: { name: 'cindy-pi-bridge', version: '1.0.0' },
     });
+    const serverInfo = result && typeof result === 'object' ? (result as Record<string, unknown>).serverInfo : undefined;
+    const name = serverInfo && typeof serverInfo === 'object'
+      ? (serverInfo as Record<string, unknown>).name : undefined;
+    if (typeof name === 'string' && name.trim().length > 0) this.serverInfoName = name.trim();
     await this.notify('notifications/initialized');
   }
 }
@@ -3261,6 +3332,7 @@ class CindyMcpGateway {
   // Weak identities keep the status private without retaining completed calls.
   private readonly failedResults = new WeakMap<object, { content: object; details: unknown }>();
   private readonly tools = new Map<string, ConnectedMcpTool>();
+  private readonly serverDisplayNames = new Map<string, string>();
   // 内层 registry 代拉结果, 按 server 缓存(服务端工具表刷新时失效) — 同一 server 不重复代拉。
   private readonly innerListingCache = new Map<
     string,
@@ -3363,12 +3435,16 @@ class CindyMcpGateway {
     }
   }
 
-  add(serverName: string, client: McpHttpClient, tools: any[]): void {
+  add(serverName: string, client: McpHttpClient, tools: any[], displayName?: string): void {
+    const previous = this.clients.get(serverName);
+    const resolvedDisplayName = mcpServerDisplayName(serverName, displayName, client.serverInfoName);
+    this.serverDisplayNames.set(serverName, resolvedDisplayName);
     for (const [key, tool] of this.tools) {
       if (tool.serverName === serverName) this.tools.delete(key);
     }
     this.innerListingCache.delete(serverName); // 工具表刷新 → 内层代拉缓存一并失效
     this.clients.set(serverName, client);
+    if (previous && previous !== client) void previous.close();
     this.unavailableServers.delete(serverName);
     for (const rawTool of tools) {
       if (!rawTool || typeof rawTool !== 'object' || typeof rawTool.name !== 'string' || !rawTool.name) {
@@ -3379,6 +3455,7 @@ class CindyMcpGateway {
         : { type: 'object', properties: {}, additionalProperties: true };
       this.tools.set(mcpGatewayKey(serverName, rawTool.name), {
         serverName,
+        displayName: resolvedDisplayName,
         name: rawTool.name,
         description: typeof rawTool.description === 'string' && rawTool.description.length > 0
           ? rawTool.description
@@ -3393,11 +3470,16 @@ class CindyMcpGateway {
     return this.tools.size;
   }
 
+  setServerDisplayName(serverName: string, displayName?: string): void {
+    const normalized = displayName?.trim();
+    if (normalized) this.serverDisplayNames.set(serverName, normalized);
+  }
+
   markUnavailable(serverName: string, reason: string): void {
     this.unavailableServers.set(serverName, reason);
   }
 
-  registerReconnect(serverName: string, connect: () => Promise<{ client: McpHttpClient; tools: any[] }>): void {
+  registerReconnect(serverName: string, connect: () => Promise<{ client: McpHttpClient; tools: any[]; displayName?: string }>): void {
     this.reconnectors.set(serverName, connect);
   }
 
@@ -3411,8 +3493,8 @@ class CindyMcpGateway {
     if (!this.needsRecovery(serverName)) return;
     let pending = this.reconnecting.get(serverName);
     if (!pending) {
-      pending = this.reconnectors.get(serverName)!().then(({ client, tools }) => {
-        this.add(serverName, client, tools);
+      pending = this.reconnectors.get(serverName)!().then(({ client, tools, displayName }) => {
+        this.add(serverName, client, tools, displayName);
       }).catch((error) => {
         this.markUnavailable(serverName, safeMcpFailure(error));
         throw new McpBridgeError('reconnect failed: ' + safeMcpFailure(error));
@@ -3429,12 +3511,36 @@ class CindyMcpGateway {
     });
   }
 
-  resolveCall(input: unknown): ResolvedMcpGatewayCall | null {
+  // Share deterministic input errors with the approval hook. Never unwrap or
+  // guess parameters: ghost_call and third-party tools legitimately accept args.
+  private callInputError(input: unknown): string | null {
     const record = recordInput(input);
-    const serverName = typeof record.server === 'string' ? record.server : '';
+    const server = typeof record.server === 'string' ? this.resolveServerName(record.server) : null;
+    const tool = server && typeof record.tool === 'string'
+      ? this.tools.get(mcpGatewayKey(server, record.tool)) : undefined;
+    // Only the host plugin gateway is in scope. Other MCP tools retain their
+    // server-owned validation and the generic call_tool envelope diagnostics.
+    if (!tool || tool.serverName !== 'cindy' || !tool.name.startsWith('ghost_')) return null;
+    const schema = tool.inputSchema;
+    const required = Array.isArray(schema.required)
+      ? schema.required.filter((key): key is string => typeof key === 'string') : [];
+    const args = recordInput(record.args);
+    const missing = required.filter(key => !Object.prototype.hasOwnProperty.call(args, key));
+    if (missing.length === 0) return null;
+    return 'Invalid ' + tool.serverName + '/' + tool.name + ' parameters: missing '
+      + missing.map(key => 'args.' + key).join(', ')
+      + '. Put the selected tool parameters directly in gateway args, without an extra wrapping args.'
+      + ' Expected args schema: ' + schemaHint(schema);
+  }
+
+  resolveCall(input: unknown): ResolvedMcpGatewayCall | null {
+    if (this.callInputError(input)) return null;
+    const record = recordInput(input);
+    const requestedServerName = typeof record.server === 'string' ? record.server : '';
     const toolName = typeof record.tool === 'string' ? record.tool : '';
-    if (!serverName || !toolName) return null;
-    if (this.botMemoryFacadeEnabled && serverName === 'cindy_memory') return null;
+    if (!requestedServerName || !toolName) return null;
+    const serverName = this.resolveServerName(requestedServerName);
+    if (!serverName || (this.botMemoryFacadeEnabled && serverName === 'cindy_memory')) return null;
     const tool = this.tools.get(mcpGatewayKey(serverName, toolName));
     if (!tool) return null;
     return {
@@ -3442,6 +3548,28 @@ class CindyMcpGateway {
       args: recordInput(record.args),
       tool,
     };
+  }
+
+  private resolveServerName(requested: string): string | null {
+    if (this.clients.has(requested) || this.unavailableServers.has(requested)
+      || this.serverDisplayNames.has(requested)) {
+      return requested;
+    }
+    const matches = [...this.serverDisplayNames.entries()]
+      .filter(([, displayName]) => displayName === requested)
+      .map(([serverName]) => serverName);
+    return matches.length === 1 ? matches[0]! : null;
+  }
+
+  private ambiguousServerNames(requested: string): string[] {
+    return [...this.serverDisplayNames.entries()]
+      .filter(([, displayName]) => displayName === requested)
+      .map(([serverName]) => serverName);
+  }
+
+  private isStableServerId(requested: string): boolean {
+    return this.clients.has(requested) || this.unavailableServers.has(requested)
+      || this.serverDisplayNames.has(requested);
   }
 
   resolveDirectHelperTool(name: string, input: unknown): ResolvedMcpGatewayCall | null {
@@ -3550,12 +3678,18 @@ class CindyMcpGateway {
   }
 
   /**
-   * 未披露时的回执（路标）：指名该查哪个 server/tool，并说明重发即可放行。
-   * tool_call hook 与 executeCall 共用同一段文本，避免两处漂移。
+   * 首次直调仍不执行。小工具在这次回执里给出完整定义，大工具继续按名称定向查阅。
    */
   private disclosureSignpost(call: ResolvedMcpGatewayCall): string {
+    const target = JSON.stringify({ server: call.tool.serverName, tool: call.tool.name });
+    const definition = JSON.stringify({ description: call.tool.description, inputSchema: call.tool.inputSchema });
+    // Bound the unsolicited tool result; an explicit lookup can return a definition of any size.
+    if (definition.length <= 2048) {
+      return 'Tool call did not run. Check the arguments against the definition for ' + target
+        + ' below, then retry the call with matching arguments.\n' + definition;
+    }
     return 'Inspect this tool before execution by calling cindy_mcp_list_tools with '
-      + JSON.stringify({ server: call.tool.serverName, tool: call.tool.name })
+      + target
       + '. The current schema has already been recorded; re-send the same call to proceed.';
   }
 
@@ -3707,12 +3841,14 @@ class CindyMcpGateway {
   }
 
   list(serverName?: string): Array<{ server: string; name: string; description: string }> {
+    const canonicalServerName = serverName ? this.resolveServerName(serverName) : undefined;
     return [...this.tools.values()]
       .filter((tool) => !this.botMemoryFacadeEnabled || tool.serverName !== 'cindy_memory')
-      .filter((tool) => !serverName || tool.serverName === serverName)
+      .filter((tool) => !serverName || (canonicalServerName && tool.serverName === canonicalServerName))
       .sort((a, b) => a.serverName.localeCompare(b.serverName) || a.name.localeCompare(b.name))
       .map((tool) => ({
-        server: tool.serverName,
+        server: tool.displayName,
+        ...(tool.displayName !== tool.serverName ? { serverId: tool.serverName } : {}),
         name: tool.name,
         description: tool.description,
       }));
@@ -3736,9 +3872,12 @@ class CindyMcpGateway {
     const toolName = typeof input.tool === 'string' && input.tool.length > 0
       ? input.tool
       : undefined;
+    const canonicalServerName = serverName ? this.resolveServerName(serverName) : undefined;
+    const ambiguousServerNames = serverName && !this.isStableServerId(serverName)
+      ? this.ambiguousServerNames(serverName) : [];
     const tools = this.list(serverName);
-    const unavailableReason = serverName
-      ? this.unavailableServers.get(serverName)
+    const unavailableReason = canonicalServerName
+      ? this.unavailableServers.get(canonicalServerName)
       : undefined;
     const unavailableServers = this.unavailable();
     let payload: unknown;
@@ -3749,6 +3888,14 @@ class CindyMcpGateway {
         reason: 'Pass both server and tool to inspect one input schema.',
         availableServers: this.availableServers(),
       };
+    } else if (serverName && ambiguousServerNames.length > 1) {
+      payload = {
+        ok: false,
+        errorCode: 'AMBIGUOUS_SERVER',
+        requested: serverName,
+        reason: 'Multiple MCP servers use this display name; pass serverId from the discovery result.',
+        matchingServerIds: ambiguousServerNames,
+      };
     } else if (serverName && unavailableReason) {
       payload = {
         ok: false,
@@ -3757,10 +3904,10 @@ class CindyMcpGateway {
         reason: unavailableReason,
         availableServers: this.availableServers(),
       };
-    } else if (serverName && toolName) {
-      const selected = this.botMemoryFacadeEnabled && serverName === 'cindy_memory'
+    } else if (canonicalServerName && toolName) {
+      const selected = this.botMemoryFacadeEnabled && canonicalServerName === 'cindy_memory'
         ? undefined
-        : this.tools.get(mcpGatewayKey(serverName, toolName));
+        : this.tools.get(mcpGatewayKey(canonicalServerName, toolName));
       if (!selected) {
         payload = {
           ok: false,
@@ -3773,7 +3920,8 @@ class CindyMcpGateway {
         payload = {
           ok: true,
           tools: [{
-            server: selected.serverName,
+            server: selected.displayName,
+            ...(selected.displayName !== selected.serverName ? { serverId: selected.serverName } : {}),
             name: selected.name,
             description: selected.description,
             inputSchema: selected.inputSchema,
@@ -3803,7 +3951,9 @@ class CindyMcpGateway {
         offset,
         ...(offset + page.length < matches.length ? { nextOffset: offset + page.length } : {}),
         availableServers: this.availableServers(),
-        hint: 'Use query or server to narrow results; follow nextOffset for more. Inspect an exact server and tool for the complete description and input schema.',
+        hint: query && matches.length === 0 && tools.length > 0
+          ? 'No tools matched the query. Omit query or try a shorter keyword and start at offset 0. Browse by a known server, or pass exact server and tool to inspect its schema.'
+          : 'Use query or server to narrow results; follow nextOffset for more. Inspect an exact server and tool for the complete description and input schema.',
         ...(unavailableServers.length > 0 ? { unavailableServers } : {}),
       };
     }
@@ -3816,6 +3966,12 @@ class CindyMcpGateway {
   private unknownCallMessage(params: unknown): string {
     const input = recordInput(params);
     const serverName = typeof input.server === 'string' ? input.server : '';
+    const ambiguous = serverName && !this.isStableServerId(serverName)
+      ? this.ambiguousServerNames(serverName) : [];
+    if (ambiguous.length > 1) {
+      return 'Ambiguous Cindy MCP server display name. Pass one of these stable server ids: ' +
+        JSON.stringify(ambiguous);
+    }
     const scoped = this.list(serverName || undefined);
     const available = (scoped.length > 0 ? scoped : this.list()).map((tool) => ({
       server: tool.server,
@@ -3876,7 +4032,7 @@ class CindyMcpGateway {
     const approvedDefinition = toolCallId ? this.approvedDefinitions.get(toolCallId) : undefined;
     if (toolCallId) this.approvedDefinitions.delete(toolCallId);
     const resolved = this.resolveCall(params);
-    if (!resolved) throw new Error(this.unknownCallMessage(params));
+    if (!resolved) throw new Error(this.callInputError(params) ?? this.unknownCallMessage(params));
     if (approvedDefinition !== undefined && this.approvalDefinition(resolved) !== approvedDefinition) {
       throw new McpBridgeError('tool definition changed; inspect it with cindy_mcp_list_tools and call again');
     }
@@ -3952,7 +4108,7 @@ class CindyMcpGateway {
       // 拦这一次的理由是零拦截实测出来的代价（2026-10-15）：模型没有任何信号知道
       // 该去查 schema，参数名和信封层级只能靠服务端报错反推——实测把 target_session_id
       // 猜成 worker_id、把 args 里的字段平铺到调用根，连续撞 -32602 后才放弃。回执里
-      // 指名 server/tool，模型才会去 list_tools。
+      // 把真实参数形状交给模型，或指名能查到完整形状的 server/tool，避免靠试错反推。
       //
       // 拦时即记账，模型照路标重发即放行。放行的语义是「这个工具的 schema 我见过了」，
       // 不是「这组参数是对的」：参数仍由工具自身 inputSchema 校验。
@@ -4195,7 +4351,9 @@ class CindyMcpGateway {
         additionalProperties: false,
       },
       execute: async (_toolCallId: string, params: unknown, signal?: AbortSignal) => {
-        const server = recordInput(params).server;
+        const requestedServer = recordInput(params).server;
+        const server = typeof requestedServer === 'string'
+          ? (this.resolveServerName(requestedServer) ?? requestedServer) : requestedServer;
         if (typeof server === 'string' && this.needsRecovery(server)) {
           try { await this.recover(server, signal); } catch (error) {
             if (signal?.aborted) throw error;
@@ -4246,25 +4404,35 @@ class CindyMcpGateway {
 async function connectServer(server: McpServerRef, token: string): Promise<{
   client: McpHttpClient;
   tools: any[];
+  displayName: string;
 }> {
   const client = new McpHttpClient(server, token);
-  await client.initialize();
-  const tools: any[] = [];
-  const seenCursors = new Set<string>();
-  let cursor: string | undefined;
-  for (;;) {
-    const listed = await client.request('tools/list', cursor === undefined ? {} : { cursor });
-    if (Array.isArray(listed?.tools)) tools.push(...listed.tools);
-    if (!listed || typeof listed !== 'object' || !('nextCursor' in listed)) break;
-    const nextCursor = listed.nextCursor;
-    if (typeof nextCursor !== 'string' || seenCursors.has(nextCursor)) {
-      throw new McpBridgeError('invalid tools pagination');
+  try {
+    await client.initialize();
+    const tools: any[] = [];
+    const seenCursors = new Set<string>();
+    let cursor: string | undefined;
+    for (;;) {
+      const listed = await client.request('tools/list', cursor === undefined ? {} : { cursor });
+      if (Array.isArray(listed?.tools)) tools.push(...listed.tools);
+      if (!listed || typeof listed !== 'object' || !('nextCursor' in listed)) break;
+      const nextCursor = listed.nextCursor;
+      if (typeof nextCursor !== 'string' || seenCursors.has(nextCursor)) {
+        throw new McpBridgeError('invalid tools pagination');
+      }
+      seenCursors.add(nextCursor);
+      cursor = nextCursor;
     }
-    seenCursors.add(nextCursor);
-    cursor = nextCursor;
+    client.finishStartup();
+    return {
+      client,
+      tools,
+      displayName: mcpServerDisplayName(server.name, server.displayName, client.serverInfoName),
+    };
+  } catch (error) {
+    await client.close();
+    throw error;
   }
-  client.finishStartup();
-  return { client, tools };
 }
 
 // Pi 内置 find 依赖 fd；PI_OFFLINE=1 时缺失后不会下载。Cindy 已随 Desktop 校验并
@@ -4409,6 +4577,71 @@ function astraResponsesPayload(payload, model) {
   return out;
 }
 
+// A gateway can count more input tokens than Pi, even with its native margin.
+function reserveLargeCompletionHeadroom(payload, model, ctx) {
+  if (model?.api !== 'openai-completions' || !payload
+      || typeof payload !== 'object' || Array.isArray(payload)) return undefined;
+  const field = Number.isSafeInteger(payload.max_tokens) ? 'max_tokens' : 'max_completion_tokens';
+  const requested = payload[field];
+  if (!Number.isSafeInteger(requested) || requested <= 65_536 || requested >= model.maxTokens
+      || !Number.isSafeInteger(model.maxTokens) || !Number.isSafeInteger(model.contextWindow)
+      || model.contextWindow <= 0) return undefined;
+
+  // Use an independent estimate. Subtracting the requested ceiling from the
+  // window mistakes a caller-selected ceiling for a measurement of the input.
+  const usage = ctx?.getContextUsage?.();
+  if (usage?.contextWindow !== model.contextWindow || !Number.isSafeInteger(usage.tokens)
+      || usage.tokens <= 0) return undefined;
+  // Pi 1.5.2 already reserves 15% on large inputs. Raise only the fixed
+  // minimum for tokenizer skew seen on moderate inputs in #9252.
+  const margin = Math.max(16_384, Math.ceil(usage.tokens * 0.15));
+  const ceiling = Math.max(16_384, model.contextWindow - usage.tokens - margin);
+  if (requested <= ceiling) return undefined;
+  return { ...payload, [field]: ceiling };
+}
+
+// Chat gateways can carry Gemini thought signatures inside tool IDs, then route
+// the same history to a backend with a 64-character limit. Change only the wire
+// projection: Gemini still needs those signatures, and Responses has its own
+// native serializer. Reserve short IDs so hashing cannot alias an existing call.
+// This Cindy compat opt-in declares a wire constraint, not a model family.
+// Deployment names cannot identify Gemini; unknown routes keep their native IDs.
+function boundedChatToolIds(payload, model) {
+  if (model?.api !== 'openai-completions' || model.compat?.maxToolCallIdLength !== 64
+      || !Array.isArray(payload?.messages)) return payload;
+  const ids = new Set<string>();
+  for (const message of payload.messages) {
+    if (typeof message?.tool_call_id === 'string') ids.add(message.tool_call_id);
+    if (Array.isArray(message?.tool_calls)) for (const call of message.tool_calls) {
+      if (typeof call?.id === 'string') ids.add(call.id);
+    }
+  }
+  const mapped = new Map<string, string>();
+  const reserved = new Set([...ids].filter(id => id.length <= 64));
+  for (const id of ids) {
+    if (id.length <= 64) continue;
+    let salt = 0;
+    let candidate;
+    do {
+      candidate = 'call_' + createHash('sha256').update(salt ? id + ':' + salt : id).digest('hex').slice(0, 48);
+      salt++;
+    } while (reserved.has(candidate));
+    reserved.add(candidate);
+    mapped.set(id, candidate);
+  }
+  if (!mapped.size) return payload;
+  return { ...payload, messages: payload.messages.map(message => {
+    if (!message || typeof message !== 'object') return message;
+    let next = message;
+    if (mapped.has(message.tool_call_id)) next = { ...next, tool_call_id: mapped.get(message.tool_call_id) };
+    if (Array.isArray(message.tool_calls) && message.tool_calls.some(call => mapped.has(call?.id))) {
+      next = { ...next, tool_calls: message.tool_calls.map(call => mapped.has(call?.id)
+        ? { ...call, id: mapped.get(call.id) } : call) };
+    }
+    return next;
+  }) };
+}
+
 async function nativeFastPayload(payload, model, ctx, requestFast?: boolean) {
   if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return undefined;
   if (!model || !['openai-responses', 'azure-openai-responses', 'openai-completions', 'openai-codex-responses'].includes(model.api)) return undefined;
@@ -4437,7 +4670,11 @@ async function nativeFastPayload(payload, model, ctx, requestFast?: boolean) {
 
 ${PI_CACHE_RECOVERY_SOURCE}
 
+const CINDY_PI_RESPONSES_COMPLETION_PREFIX = ${JSON.stringify(CINDY_PI_RESPONSES_COMPLETION_PREFIX)};
+const completedPiResponsesMessage = ${completedPiResponsesMessage.toString()};
 ${PI_NATIVE_PROVIDER_ADAPTER_SOURCE}
+
+${PI_NATIVE_TOOL_CATALOG_SOURCE}
 
 // ─── 设备托管：执行器操作 ───────────────────────────────────────────
 async function cindyHostedCall(op: string, body: unknown, signal?: AbortSignal): Promise<any> {
@@ -4641,8 +4878,9 @@ export default async function cindyBridge(piApi: any) {
   const runtimeRequestModel = runtimeModelRouting.requestModel;
   const cacheRecovery = installCindyCacheRecovery(pi);
   const nativeProviderAdapters = await registerCindyNativeProviderAdapters(pi, cacheRecovery);
-  const initialNativeSettings = typeof pi.getSettings === 'function' ? undefined
-    : (() => {
+  // Pi action APIs are unavailable while loading extensions. Reuse the launch
+  // file snapshot for bash configuration and the legacy inspection fallback.
+  const initialNativeSettings = (() => {
       try {
         return JSON.parse(readFileSync(path.join(process.env.PI_CODING_AGENT_DIR, 'settings.json'), 'utf8'));
       } catch (error) {
@@ -4657,29 +4895,33 @@ export default async function cindyBridge(piApi: any) {
     handler: async (args: string, ctx: any) => {
       const nonce = args.trim();
       if (!/^[A-Za-z0-9_-]{16,128}$/.test(nonce)) return;
-      let code: 'INVALID_PAYLOAD' | 'APPLY_FAILED' | undefined;
+      let code: 'INVALID_PAYLOAD' | 'APPLY_FAILED' | 'UNSUPPORTED_CAPABILITY' | undefined;
       let mutationStarted = false;
       let runtimeSettings;
       try {
         const raw = await ctx.ui.input('cindy:provider-refresh', JSON.stringify({ nonce }));
         let inspect = false;
-        try { const request = JSON.parse(raw); inspect = request?.nonce === nonce && request?.operation === 'inspect'; }
+        let toolRequest;
+        try { const request = JSON.parse(raw); inspect = request?.nonce === nonce && request?.operation === 'inspect';
+          if (request?.nonce === nonce && request?.operation === 'tool-catalog') toolRequest = request.toolRequest; }
         catch { /* The normal snapshot parser rejects invalid JSON. */ }
-        const snapshot = inspect ? undefined : parseCindyProviderRefreshSnapshot(raw, nonce);
-        if (!inspect && !snapshot) {
+        const snapshot = inspect || toolRequest ? undefined : parseCindyProviderRefreshSnapshot(raw, nonce);
+        if (toolRequest && typeof toolRequest.method === 'string' && Array.isArray(toolRequest.args)) {
+          runtimeSettings = await callCindyNativeToolCatalog(pi, toolRequest.method, toolRequest.args);
+        } else if (!inspect && !snapshot) {
           code = 'INVALID_PAYLOAD';
         } else if (snapshot) {
           mutationStarted = true;
           await nativeProviderAdapters.refresh(snapshot, ctx, SECRET_ENV_NAMES);
         }
-        if (!code) {
+        if (!code && !toolRequest) {
           // getSettings returns a copy. Never reach into Pi's private session or
           // pretend a settings.json rewrite changed the live SettingsManager.
           const settings = typeof pi.getSettings === 'function' ? pi.getSettings() : initialNativeSettings;
           runtimeSettings = { version: piCodingAgent.VERSION, compaction: settings.compaction ?? {} };
         }
-      } catch {
-        code = mutationStarted ? 'APPLY_FAILED' : 'INVALID_PAYLOAD';
+      } catch (error) {
+        code = error?.message === 'UNSUPPORTED_CAPABILITY' ? 'UNSUPPORTED_CAPABILITY' : mutationStarted ? 'APPLY_FAILED' : 'INVALID_PAYLOAD';
       }
       // RPC prompt swallows extension command exceptions. The host must see an
       // explicit, nonce-bound receipt before accepting a refreshed catalog.
@@ -4697,11 +4939,13 @@ export default async function cindyBridge(piApi: any) {
     const model = runtimeRequest?.model ?? ctx.model;
     const payload = astraResponsesPayload(event.payload, model) ?? event.payload;
     let next = (await nativeFastPayload(payload, model, ctx, runtimeRequest?.fast)) ?? payload;
+    next = reserveLargeCompletionHeadroom(next, model, ctx) ?? next;
     if (modelRequestControlActive) {
       const response = await runtimeModelControl(ctx, { phase: 'payload', provider: model.provider,
         model: model.id, request: next });
       next = response.request ?? next;
     }
+    next = boundedChatToolIds(next, model);
     // A one-way native notification adds no host round trip. This is the payload
     // preparation hook, not proof that HTTP was sent or accepted upstream.
     const token = process.env.CINDY_PI_TURN_TOOL_POLICY;
@@ -4817,6 +5061,11 @@ export default async function cindyBridge(piApi: any) {
     // PI_SESSION_FILE 会暴露 agentHome，继而让一次获批的 shell 定位并篡改
     // permission file；其余 PI_SESSION_* 元数据对完成编码任务也不是必需能力。
     exposeSessionEnvironment: false,
+    // Keep valid user values byte-for-byte, as the host settings passthrough does.
+    shellPath: typeof initialNativeSettings?.shellPath === 'string' && initialNativeSettings.shellPath.trim()
+      ? initialNativeSettings.shellPath : undefined,
+    commandPrefix: typeof initialNativeSettings?.shellCommandPrefix === 'string' && initialNativeSettings.shellCommandPrefix.trim()
+      ? initialNativeSettings.shellCommandPrefix : undefined,
     spawnHook: ({ command, cwd, env }) => ({
       command,
       cwd,
@@ -5041,6 +5290,41 @@ export default async function cindyBridge(piApi: any) {
   // 设备托管：文件、命令与搜索工具改用任务所在电脑上的执行器(替换上面的本机注册)。
   registerCindyHostedTools(pi, bashTool, applyCindyBashTimeoutParams);
 
+  // Native plugin hooks run before Cindy permissions, so transformed parameters
+  // enter the same permission/capture path. With no selected plugin no RPC runs.
+  const toolLifecyclePoints = (process.env.CINDY_PI_TOOL_LIFECYCLE ?? '').split(',');
+  const assertToolHookBudget = ${assertToolLifecycleBudget.toString()};
+  const pluginToolLifecycle = async (event: any, ctx: any, phase: 'call' | 'result') => {
+    const data = { phase, toolName: event.toolName, toolCallId: event.toolCallId,
+      input: event.input ?? {}, ...(phase === 'result' ? { result: { content: event.content, details: event.details, isError: event.isError }, isError: event.isError } : {}) };
+    assertToolHookBudget(data);
+    const serialized = JSON.stringify(data);
+    const frameBudget = ${MAX_JSONL_BUFFER_CHARS - 4096};
+    if (serialized.length > frameBudget / 2 && JSON.stringify(serialized).length > frameBudget) throw new Error('Tool hook exceeds the transport frame budget');
+    const raw = await ctx.ui.input('cindy:tool-lifecycle', serialized, { timeout: 2_000 });
+    const result = typeof raw === 'string' ? JSON.parse(raw) : null;
+    if (!result || result.error) throw new Error('Tool hook failed');
+    return result;
+  };
+  if ((toolLifecyclePoints.includes('call') || toolLifecyclePoints.includes('result')) && !guestToolGate && !currentPermissionState().reviewOnly) {
+    const pluginToolCall = async (event: any, ctx: any) => {
+      const result = await pluginToolLifecycle(event, ctx, 'call');
+      if (result.decision === 'deny') return { block: true, reason: result.reason ?? 'Plugin denied tool call' };
+      if (result.input) {
+        for (const key of Object.keys(event.input)) delete event.input[key];
+        Object.defineProperties(event.input, Object.getOwnPropertyDescriptors(result.input));
+      }
+    };
+    if (toolLifecyclePoints.includes('call')) pi.on('tool_call', pluginToolCall);
+    if (toolLifecyclePoints.includes('result')) pi.on('tool_result', async (event: any, ctx: any) => {
+      const result = await pluginToolLifecycle(event, ctx, 'result');
+      if (result.decision === 'deny') {
+        ctx.abort();
+        throw new Error(result.reason ?? 'Plugin blocked tool result');
+      }
+      return result.result;
+    });
+  }
   // ── 权限门 ────────────────────────────────────────────────────────────────
   pi.on('tool_call', async (event: any, ctx: any) => {
     if (guestToolGate && guestToolGate.blocks(event.toolName)) {
@@ -5177,9 +5461,9 @@ export default async function cindyBridge(piApi: any) {
     // 分类只认「解析成功」：披露状态不参与权限命名与采集分类，否则被门拦下的那次
     // 会被当成非 gateway 调用，权限命名与采集都会漏掉这一条。
     const gatewayCall = resolvedGatewayCall;
-    // Invalid or unknown gateway input cannot execute a capability. Let execute()
-    // return its deterministic discovery/schema error without showing a misleading
-    // permission prompt for the wrapper itself.
+    // Invalid or unknown input gets a deterministic error, not a permission prompt.
+    // Bind the skipped approval to this invocation: same-batch recovery/discovery
+    // may replace its schema before execute(), but cannot authorize the old call.
     if (
       (event.toolName === CINDY_MCP_CALL_TOOL
         || CINDY_DIRECT_BOT_TOOLS.has(event.toolName)
@@ -5189,7 +5473,10 @@ export default async function cindyBridge(piApi: any) {
         || event.toolName === CINDY_INPUT_HANDOFF_TOOL
         || event.toolName === CINDY_BOT_MEMORY_TOOL)
       && !gatewayCall
-    ) return;
+    ) {
+      if (event.toolName === CINDY_MCP_CALL_TOOL) mcpGateway.markPermissionSkipped(event.toolCallId);
+      return;
+    }
     // 披露门必须判在**发起权限询问之前**：pi 的权限询问由本 hook 发起，若等到工具实现
     // 里才拦，这次弹框已经发生了 —— 被门拦下的一次也打扰用户，与 pi-harness 记载的
     // 「未检查 schema 的调用在 bridge 内 fail closed，不会触达 MCP 或弹权限框」相悖。
@@ -5252,6 +5539,17 @@ export default async function cindyBridge(piApi: any) {
     }
   });
 
+  // Store the provenance alongside the native call. Its name and result remain
+  // owned by the extension, and the custom entry stays out of model context.
+  pi.on('tool_result', (event: any) => {
+    if (event.toolName !== ${JSON.stringify(PI_SUBAGENT_TOOL_NAME)} || typeof event.toolCallId !== 'string') return;
+    try {
+      pi.appendEntry(${JSON.stringify(PI_NATIVE_SUBAGENT_CALL_ENTRY)}, { toolCallId: event.toolCallId });
+    } catch {
+      // History presentation must not fail a tool result.
+    }
+  });
+
   // Tool results reach the model after a library grant can change within this turn.
   // Project only the persisted task grant; never return it to the plugin itself.
   pi.on('tool_result', async (event: any) => {
@@ -5292,351 +5590,6 @@ export default async function cindyBridge(piApi: any) {
     }
   });
 
-  // ── 视觉桥工具（层 C）─────────────────────────────────────────────────────
-  // 从 host 注入的 CINDY_PI_VISION_BRIDGE env 读主/fallback 视觉后端，提供
-  // vision（glance 式描述）与 vision-locate（ground 式坐标定位）两个工具。
-  // 自包含：只依赖 fetch / node:fs / process.env，不 import 任何 Cindy 模块。
-  const VISION_DEFAULT_PROMPT =
-    'Describe this image accurately and factually. Do NOT guess or fabricate details. ' +
-    'Report visible text verbatim. If the image contains UI elements, list their labels and state.';
-  // /v1/messages 强制要求 max_tokens。思考模型先写 thinking 块，1024 常被吃光，
-  // 正文为空，视觉桥误判图片不可用（#4580）。4096 留给思考加一段描述，同时保持有界。
-  // 对齐 host 侧 VISION_ANTHROPIC_MAX_TOKENS。
-  const VISION_ANTHROPIC_MAX_TOKENS = 4096;
-  const VISION_LOCATE_PROMPT_PREFIX =
-    'Locate the target below and return its bounding box as "x1,y1,x2,y2" ' +
-    '(pixel coordinates, top-left origin). If the target is not present, return NOT_FOUND. Target: ';
-
-  interface PiVisionBackendSpec {
-    baseUrl: string;
-    requestPath: string;
-    model: string;
-    authorization: string | null;
-    /** 路由指定额外头（host 侧已滤客户端凭证头），请求时合并，勿丢。 */
-    headers: Record<string, string>;
-    wireProtocol: 'anthropic-messages' | 'openai-responses' | 'openai-chat';
-  }
-  interface PiVisionBridgeEnvPayload {
-    enabled: boolean;
-    primary: PiVisionBackendSpec | null;
-    fallback: PiVisionBackendSpec | null;
-  }
-
-  function readPiVisionBridge(): PiVisionBridgeEnvPayload | null {
-    const rawEnv = process.env.CINDY_PI_VISION_BRIDGE;
-    if (!rawEnv) return null;
-    try {
-      const parsed = JSON.parse(rawEnv);
-      return parsed && typeof parsed === 'object' ? (parsed as PiVisionBridgeEnvPayload) : null;
-    } catch {
-      return null;
-    }
-  }
-
-  /** 图片魔数识别：非真实图片字节直接拒绝，阻断把任意本地文件当图外传。 */
-  /** 手动超时 signal（AbortSignal.timeout 缺失时的降级）。timer 不 hold 事件循环。 */
-  function createVisionTimeoutSignal(ms: number): AbortSignal {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), ms);
-    timer.unref?.();
-    return controller.signal;
-  }
-
-  function sniffImageMime(buf: Buffer): string | null {
-    if (buf.length < 12) return null;
-    // PNG: 89 50 4E 47
-    if (buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47) return 'image/png';
-    // JPEG: FF D8 FF
-    if (buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) return 'image/jpeg';
-    // GIF: 47 49 46 38
-    if (buf[0] === 0x47 && buf[1] === 0x49 && buf[2] === 0x46 && buf[3] === 0x38) return 'image/gif';
-    // WebP: RIFF .... WEBP
-    if (
-      buf[0] === 0x52 && buf[1] === 0x49 && buf[2] === 0x46 && buf[3] === 0x46 &&
-      buf[8] === 0x57 && buf[9] === 0x45 && buf[10] === 0x42 && buf[11] === 0x50
-    ) return 'image/webp';
-    return null;
-  }
-
-  // Anthropic 视觉响应的正文。thinking / redacted_thinking 不是图片描述；
-  // 只有思考、没有 text 时返回空串，调用方按空描述失败（#4580）。
-  function anthropicVisionText(blocks: unknown): string {
-    if (!Array.isArray(blocks)) return '';
-    return blocks
-      .map((block) => {
-        if (!block || typeof block !== 'object') return '';
-        const b = block as { type?: unknown; text?: unknown };
-        if (b.type === 'thinking' || b.type === 'redacted_thinking') return '';
-        return typeof b.text === 'string' ? b.text : '';
-      })
-      .join('');
-  }
-
-  async function callPiVision(
-    spec: PiVisionBackendSpec,
-    imagePath: string,
-    prompt: string,
-  ): Promise<string> {
-    // 读文件失败 / 超大 / 非图片：包成泛化错误，不把路径/URL 泄漏给模型侧。
-    // 先 stat 前置拒超大文件，避免 readFileSync 整文件进内存（阻塞 Pi bridge 事件循环）。
-    const MAX_IMAGE_BYTES = 15 * 1024 * 1024;
-    try {
-      const st = statSync(imagePath);
-      if (st.size > MAX_IMAGE_BYTES) {
-        throw new Error('vision: image file too large');
-      }
-    } catch (err) {
-      if (err instanceof Error && err.message === 'vision: image file too large') throw err;
-      throw new Error('vision: unable to read the image file');
-    }
-    let raw: Buffer;
-    try {
-      raw = readFileSync(imagePath);
-    } catch {
-      throw new Error('vision: unable to read the image file');
-    }
-    // TOCTOU 复查：stat 后文件可能被替换/增大。
-    if (raw.length > MAX_IMAGE_BYTES) {
-      throw new Error('vision: image file too large');
-    }
-    // 安全：只允许真实图片字节（魔数校验），防止模型把任意本地文件（.env / 密钥 /
-    // 文档）base64 后外发到第三方视觉端点。非图片直接拒绝。
-    const mime = sniffImageMime(raw);
-    if (!mime) {
-      throw new Error('vision: not a supported image file (magic-byte check failed)');
-    }
-    const base64 = raw.toString('base64');
-    const url = spec.baseUrl + (spec.requestPath.startsWith('/') ? spec.requestPath : '/' + spec.requestPath);
-    // 合并路由指定额外头（anthropic-version / x-api-key / 自定义 provider 头），
-    // 缺失会被后端拒（P1）。authorization 后置覆盖,保证显式凭证头优先。
-    const headers: Record<string, string> = { 'content-type': 'application/json', ...spec.headers };
-    if (spec.authorization) headers.authorization = spec.authorization;
-    const dataUrl = 'data:' + mime + ';base64,' + base64;
-    // 按 wire 协议构造请求体（对齐 host 侧 vision-channel 的 buildVisionRequestBody）。
-    const wire = spec.wireProtocol;
-    if (wire !== 'anthropic-messages' && wire !== 'openai-responses' && wire !== 'openai-chat') {
-      throw new Error('vision: wire protocol is not configured');
-    }
-    const body = wire === 'openai-responses'
-      ? {
-          model: spec.model,
-          input: [
-            {
-              role: 'user',
-              content: [
-                { type: 'input_text', text: prompt },
-                { type: 'input_image', image_url: dataUrl },
-              ],
-            },
-          ],
-        }
-      : wire === 'anthropic-messages'
-        ? {
-            model: spec.model,
-            // /v1/messages 强制要求 max_tokens。过小会被 thinking 块吃光（#4580）。
-            max_tokens: VISION_ANTHROPIC_MAX_TOKENS,
-            messages: [
-              {
-                role: 'user',
-                content: [
-                  { type: 'text', text: prompt },
-                  { type: 'image', source: { type: 'base64', media_type: mime, data: base64 } },
-                ],
-              },
-            ],
-          }
-        : {
-            model: spec.model,
-            messages: [
-              {
-                role: 'user',
-                content: [
-                  { type: 'text', text: prompt },
-                  { type: 'image_url', image_url: { url: dataUrl } },
-                ],
-              },
-            ],
-          };
-    // 安全：视觉请求携带 authorization 头与图片内容，禁止跟随 30x 重定向
-    // （重定向会把凭证/图片发往非预期端点；30x 按 !res.ok 处理）。
-    let res: Response;
-    try {
-      res = await fetch(url, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify(body),
-        redirect: 'error',
-        // 超时中止：后端 hang 不一直占用工具调用。AbortSignal.timeout 需 bun 支持；
-        // 老版本缺失时降级为手动 AbortController（不崩工具）。
-        signal: typeof AbortSignal.timeout === 'function'
-          ? AbortSignal.timeout(30000)
-          : createVisionTimeoutSignal(30000),
-      });
-    } catch {
-      // 网络失败包成泛化错误，不带 URL/网络细节。
-      throw new Error('vision: vision backend request failed');
-    }
-    if (!res.ok) throw new Error('vision HTTP ' + res.status);
-    let json: unknown;
-    try {
-      json = await res.json();
-    } catch {
-      throw new Error('vision: vision backend returned an invalid response');
-    }
-    const MAX_DESC = 32 * 1024;
-    const trimDesc = (s: string): string =>
-      s.length > MAX_DESC ? s.slice(0, MAX_DESC) + '…[truncated]' : s;
-    // 按 wire 协议抽描述文本（对齐 host 侧 extractVisionContent）。
-    let content: unknown = null;
-    if (wire === 'anthropic-messages') {
-      const blocks = (json as { content?: unknown })?.content;
-      content = anthropicVisionText(blocks);
-    } else if (wire === 'openai-responses') {
-      const output = (json as { output?: unknown })?.output;
-      if (Array.isArray(output)) {
-        content = output
-          .map((item) => {
-            if (!item || typeof item !== 'object') return '';
-            const it = item as { type?: unknown; content?: unknown; text?: unknown };
-            if (it.type === 'output_text' && typeof it.text === 'string') return it.text;
-            if (Array.isArray(it.content)) {
-              return it.content
-                .map((b) => (b && typeof b === 'object' ? (b as { text?: unknown }).text : ''))
-                .filter((t): t is string => typeof t === 'string')
-                .join('');
-            }
-            return '';
-          })
-          .join('');
-      }
-    } else {
-      const choices = (json as { choices?: unknown })?.choices;
-      if (Array.isArray(choices) && choices.length > 0) {
-        const first = choices[0] as { message?: { content?: unknown } };
-        content = first?.message?.content ?? null;
-      }
-    }
-    if (typeof content === 'string' && content.trim().length > 0) return trimDesc(content.trim());
-    if (Array.isArray(content)) {
-      const parts = content
-        .map((part) => {
-          const t = (part as { text?: unknown })?.text;
-          return typeof t === 'string' ? t : '';
-        })
-        .join('');
-      if (parts.trim().length > 0) return trimDesc(parts.trim());
-    }
-    throw new Error('vision empty description');
-  }
-
-  async function describePiVisionWithFallback(imagePath: string, prompt: string): Promise<string> {
-    const cfg = readPiVisionBridge();
-    if (!cfg || !cfg.enabled || !cfg.primary) throw new Error('vision bridge not configured');
-    // host 可关联日志：仅含 backendRole/model/errorClass（脱敏），不含 image path、base64、
-    // Authorization 或请求体。走 stderr，host 侧 Pi 子进程日志收集可消费。
-    const errClass = (e: unknown): string => (e instanceof Error ? e.name : typeof e);
-    try {
-      return await callPiVision(cfg.primary, imagePath, prompt);
-    } catch (primaryErr) {
-      console.error('[cindy-bridge] vision bridge pi primary backend failed', {
-        backendRole: 'primary',
-        model: cfg.primary.model,
-        errorClass: errClass(primaryErr),
-      });
-      // fallback 与 primary 的 (baseUrl, requestPath, model, authorization, headers)
-      // 完全相同才算重复；同 baseUrl/model 但不同 requestPath、不同凭证（网关 key）或
-      // 不同路由头（如不同 anthropic-beta 的 anthropic 兼容路由）是独立后端，应允许
-      // （防止误杀）。headers 是 Record，按 JSON 序列化比较——两个 spec 都由 host 侧
-      // 同源序列化而来，键序一致，可直接 stringify 比较。
-      const sameBackend =
-        cfg.fallback &&
-        cfg.fallback.baseUrl === cfg.primary.baseUrl &&
-        cfg.fallback.requestPath === cfg.primary.requestPath &&
-        cfg.fallback.model === cfg.primary.model &&
-        cfg.fallback.authorization === cfg.primary.authorization &&
-        JSON.stringify(cfg.fallback.headers ?? {}) === JSON.stringify(cfg.primary.headers ?? {});
-      if (cfg.fallback && !sameBackend) {
-        try {
-          const text = await callPiVision(cfg.fallback, imagePath, prompt);
-          console.error('[cindy-bridge] vision bridge pi used fallback backend', {
-            backendRole: 'fallback',
-            model: cfg.fallback.model,
-          });
-          return text;
-        } catch (fallbackErr) {
-          console.error('[cindy-bridge] vision bridge pi fallback backend failed', {
-            backendRole: 'fallback',
-            model: cfg.fallback.model,
-            errorClass: errClass(fallbackErr),
-          });
-          throw fallbackErr;
-        }
-      }
-      throw primaryErr;
-    }
-  }
-
-  // 视觉桥工具只在「已启用且可解析 primary 后端」时注册：未启用时完全不暴露给 Pi 模型
-  // （零干扰契约），而不是注册了执行时报 "vision bridge not configured"。
-  const piVisionCfg = readPiVisionBridge();
-  if (piVisionCfg && piVisionCfg.enabled && piVisionCfg.primary) {
-  pi.registerTool({
-    name: 'vision',
-    label: 'vision',
-    description:
-      'Describe an image at a local path using an external multimodal model. ' +
-      'Use this to read screenshots, UI mockups, diagrams, or any image referenced by the user ' +
-      'or produced by tools. Pass an optional query (-q) to focus on a specific aspect.',
-    parameters: {
-      type: 'object',
-      properties: {
-        path: { type: 'string', description: 'Absolute path to the image file.' },
-        query: { type: 'string', description: 'Optional focus question about the image.' },
-      },
-      required: ['path'],
-    },
-    async execute(_toolCallId: string, params: unknown) {
-      const input = params as { path?: string; query?: string };
-      if (typeof input.path !== 'string' || input.path.length === 0) {
-        throw new Error('vision: path is required');
-      }
-      const prompt = typeof input.query === 'string' && input.query.trim().length > 0
-        ? input.query.trim()
-        : VISION_DEFAULT_PROMPT;
-      const text = await describePiVisionWithFallback(input.path, prompt);
-      return { content: [{ type: 'text', text }] };
-    },
-  });
-
-  pi.registerTool({
-    name: 'vision-locate',
-    label: 'vision-locate',
-    description:
-      'Locate a target element in an image and return its pixel bounding box as "x1,y1,x2,y2" ' +
-      '(top-left origin). Use this before cropping or acting on a specific UI element.',
-    parameters: {
-      type: 'object',
-      properties: {
-        path: { type: 'string', description: 'Absolute path to the image file.' },
-        target: { type: 'string', description: 'What to locate (e.g. "the send button").' },
-      },
-      required: ['path', 'target'],
-    },
-    async execute(_toolCallId: string, params: unknown) {
-      const input = params as { path?: string; target?: string };
-      if (typeof input.path !== 'string' || input.path.length === 0) {
-        throw new Error('vision-locate: path is required');
-      }
-      if (typeof input.target !== 'string' || input.target.trim().length === 0) {
-        throw new Error('vision-locate: target is required');
-      }
-      const prompt = VISION_LOCATE_PROMPT_PREFIX + input.target.trim();
-      const text = await describePiVisionWithFallback(input.path, prompt);
-      return { content: [{ type: 'text', text }] };
-    },
-  });
-  }
-
   // ── MCP 桥 ────────────────────────────────────────────────────────────────
   const raw = process.env.CINDY_PI_MCP_BRIDGE;
   if (!raw) return;
@@ -5652,10 +5605,11 @@ export default async function cindyBridge(piApi: any) {
   // 全部 server 并行启动：每个 remote 有独立短预算，多个黑洞 provider 也只占一份
   // startup window，不会串行叠加到 Pi RPC 的 30s ready 超时。
   await Promise.all(servers.map(async (server) => {
+    mcpGateway.setServerDisplayName(server.name, server.displayName);
     mcpGateway.registerReconnect(server.name, () => connectServer(server, token));
     try {
       const connected = await connectServer(server, token);
-      mcpGateway.add(server.name, connected.client, connected.tools);
+      mcpGateway.add(server.name, connected.client, connected.tools, connected.displayName);
       console.error('[cindy-bridge] connected ' + server.name + ' (' + connected.tools.length + ' tools)');
     } catch (err) {
       mcpGateway.markUnavailable(server.name, safeMcpFailure(err));

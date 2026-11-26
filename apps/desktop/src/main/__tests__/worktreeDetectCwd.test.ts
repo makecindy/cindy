@@ -283,6 +283,7 @@ describe('detectCwd → isInsideWorktree (I-1 fix)', () => {
         isInsideWorktree: linked,
         gitInstalled: true,
         supportsRecoveryKeyDiscard: true,
+        supportsCheckout: true,
         repoRoot: path.resolve('/repo'),
         ...(branch !== 'HEAD' ? { currentBranch: branch } : {}),
       });

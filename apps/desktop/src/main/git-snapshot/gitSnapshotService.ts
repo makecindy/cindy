@@ -13,6 +13,8 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { createLogger } from '../logger';
+import { isTeammateProjectPath } from '@cindy/maker-shared/teammate-project';
+import { ensureTeammateProjectIgnored } from '../maker-ipc/botProjectGitignore';
 import { gitExec, GitExecError } from '../worktree/gitExec';
 import { isolatedGitExec, snapshotGitIsolationArgs } from './isolatedGitExec';
 import { gitPathOutput } from '../worktree/gitPathOutput';
@@ -450,6 +452,19 @@ export interface ShadowSavepointResult {
 }
 
 /**
+ * A savepoint takes every file the project's `.gitignore` lets through. A teammate project gets none
+ * before its `.gitignore` keeps credentials out: the entries are completed here first if they can be,
+ * otherwise this throws, so the caller records its usual rewind gap (a content-free marker) or stops
+ * the rollback (maintainer and Codex review, 2026-11-24). Other projects are not affected.
+ */
+async function assertTeammateProjectIgnoreReady(repoPath: string): Promise<void> {
+  if (!isTeammateProjectPath(repoPath)) return;
+  if (await ensureTeammateProjectIgnored({ workspace: repoPath }) !== 'ready') {
+    throw new Error('Teammate project .gitignore is not complete yet; savepoint deferred');
+  }
+}
+
+/**
  * Creates a shadow savepoint on refs/cindy/savepoints/<sessionId>.
  *
  * Uses plumbing only (temporary index + write-tree + commit-tree + update-ref),
@@ -464,6 +479,7 @@ export async function createShadowSavepoint(
     ? performance.now() + input.captureBudget.timeoutMs
     : undefined;
   checkSnapshotCaptureDeadline(deadlineAtMs);
+  await assertTeammateProjectIgnoreReady(repoPath);
   const blockedState = await detectBlockedGitState(repoPath, deadlineAtMs);
   if (blockedState) {
     throw new SnapshotBlockedByGitStateError(blockedState);
@@ -1001,9 +1017,30 @@ function renameOldPathsToRemove(files: readonly SnapshotCommitFile[]): string[] 
 }
 
 async function detectBlockedGitState(repoPath: string, deadlineAtMs?: number): Promise<SnapshotBlockedGitState | null> {
-  for (const { reason, marker } of BLOCKED_GIT_STATE_MARKERS) {
-    const markerPath = await resolveGitInternalPath(repoPath, marker, deadlineAtMs);
-    if (markerPath && (await pathExists(markerPath))) {
+  // Git resolves linked-worktree paths; one invocation avoids five serial
+  // process starts on the normal, unblocked path. Never cache across captures.
+  const { stdout } = await gitExec([
+    'rev-parse', ...BLOCKED_GIT_STATE_MARKERS.flatMap(({ marker }) => ['--git-path', marker]),
+  ], repoPath, { deadlineAtMs });
+  operationCheckpoint();
+  checkSnapshotCaptureDeadline(deadlineAtMs);
+  const paths = gitPathOutput(stdout).split(process.platform === 'win32' ? /\r?\n/ : /\n/);
+  // rev-parse has no NUL framing: a POSIX path may itself contain a newline.
+  // Ambiguous output uses the original single-path reader with the same budget.
+  // Command errors are deliberately not caught or retried here.
+  const usable = stdout.endsWith('\n') && paths.length === BLOCKED_GIT_STATE_MARKERS.length
+    && paths.every((value, index) => !value.includes('\0')
+      && path.basename(value) === BLOCKED_GIT_STATE_MARKERS[index].marker);
+  for (const [index, { reason, marker }] of BLOCKED_GIT_STATE_MARKERS.entries()) {
+    operationCheckpoint();
+    checkSnapshotCaptureDeadline(deadlineAtMs);
+    const markerPath = usable
+      ? path.resolve(repoPath, paths[index])
+      : await resolveGitInternalPath(repoPath, marker, deadlineAtMs);
+    const exists = markerPath && await pathExists(markerPath);
+    operationCheckpoint();
+    checkSnapshotCaptureDeadline(deadlineAtMs);
+    if (markerPath && exists) {
       return { reason, marker, markerPath };
     }
   }

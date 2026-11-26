@@ -65,6 +65,7 @@ vi.mock('@cindy/device-link', async () => {
     MetadataContinuityReader: metadata.MetadataContinuityReader,
     PROVIDER_GROUP_REMOTE_CHANNEL: group.PROVIDER_GROUP_REMOTE_CHANNEL,
     PROVIDER_METADATA_TRUST_MS: metadata.PROVIDER_METADATA_TRUST_MS,
+    REMOTE_CATALOG_FRESH_MS: metadata.REMOTE_CATALOG_FRESH_MS,
     PROVIDER_RUNNING_TURNS_FIELD: group.PROVIDER_RUNNING_TURNS_FIELD,
     encodeReliableFrames: transport.encodeReliableFrames,
     isProviderAccessDeniedError: metadata.isProviderAccessDeniedError,
@@ -102,6 +103,7 @@ function deps(overrides: Partial<ProviderGroupRemoteHandlerDeps> = {}) {
       return { kind: 'member' as const, member: MINI, label: 'Mini', resolved: [] };
     }),
     view: vi.fn(async () => ({ providerId: 'anthropic', config: CONFIG, members: [] })),
+    memberViews: vi.fn<ProviderGroupRouter['memberViews']>(() => new Map()),
     running: vi.fn(() => 0),
     markCooling: vi.fn(),
     coolingUntil: vi.fn(() => null),
@@ -131,6 +133,42 @@ function deps(overrides: Partial<ProviderGroupRemoteHandlerDeps> = {}) {
 const PICK = { action: 'pick', sessionId: 's1', providerId: 'anthropic', agentKind: 'claude-code', model: 'opus', exclude: ['local'] };
 
 describe('provider-group:remote', () => {
+  // PR #10910 / unit: real same-account handler → router → external load. Earlier
+  // provisional coverage used local reserveFor only; busy unrelated accounts hid
+  // the first four remote picks. Two controllers must share the pending count.
+  it('balances concurrent external picks independently of busy sibling accounts', async () => {
+    let clock = 1_000;
+    const second = { ...MINI, key: 'device:second:anthropic-2', agentDeviceId: 'second', providerId: 'anthropic-2' };
+    const config = { ...CONFIG, members: [MINI, second] };
+    const externalLoad = createProviderGroupExternalLoad({ now: () => clock });
+    const directory = createProviderGroupDirectory({
+      listLocalProviders: async () => [], localDeviceName: () => 'O',
+      listDevices: async () => config.members.map(m => ({ deviceId: m.agentDeviceId!, name: m.key, platform: 'darwin',
+        online: true, remoteControlEnabled: true, controlEnabled: true, isSelf: false, busy: false, appVersion: null, lastSeenAt: null })),
+      readDeviceProviders: async id => [{ id: id === 'mini' ? MINI.providerId : second.providerId, connected: true,
+        agents: ['claude-code'], models: { 'claude-code': [{ id: 'opus' }] }, routing: { 'claude-code': {} },
+        runningTurns: id === 'mini' ? 4 : 3 } as unknown as ProviderView],
+      listReceivedShares: () => [], isMobilePlatform: () => false, now: () => clock,
+    });
+    const router = createProviderGroupRouter({ directory, readGroup: () => config, listBindings: () => ({}),
+      isTurnRunning: () => false, now: () => clock, random: () => 0,
+      externalRunning: (p, m) => externalLoad.running(p, m), externalPending: (p, m) => externalLoad.pending(p, m),
+      readPoolScheduling: async m => ({ version: 1, accounts: m.key === MINI.key ? 2 : 1,
+        running: m.key === MINI.key ? 0 : 3, totalRunning: m.key === MINI.key ? 4 : 3,
+        full: false, urgency: null, fiveHourTight: false }),
+    });
+    const d = deps({ scope: () => ({ router, externalLoad, isCurrent: () => true }), readGroup: () => config });
+    const picks = await Promise.all(Array.from({ length: 5 }, (_, i) => handleProviderGroupRemote(d,
+      i % 2 ? 'phone' : 'laptop', { ...PICK, sessionId: `parallel-${i}`, exclude: [] })));
+    expect(picks.map(pick => pick && 'member' in pick ? pick.member.key : null)).toEqual([MINI.key, MINI.key, MINI.key, MINI.key, second.key]);
+    expect(externalLoad.pending('anthropic', MINI.key)).toBe(4);
+    await handleProviderGroupRemote(d, 'laptop', { action: 'leases', seq: 1,
+      entries: [{ sessionId: 'parallel-0', providerId: 'anthropic', memberKey: MINI.key }] });
+    expect(externalLoad.pending('anthropic', MINI.key)).toBe(3);
+    clock += PROVIDER_GROUP_PROVISIONAL_MS;
+    expect(externalLoad.pending('anthropic', MINI.key)).toBe(0);
+    expect(externalLoad.running('anthropic', MINI.key)).toBe(1);
+  });
   // Unit/protocol, §6.2：手机/远控写任务所在电脑；未装配与坏请求不可伪报成功。
   it('saves a task balancing preference on its host and rejects invalid requests', async () => {
     const rebalancePreference = vi.fn(async () => true);
@@ -229,18 +267,18 @@ describe('provider-group:remote', () => {
       deviceId: target, name: 'Mini', platform: 'darwin', appVersion: '1.0.0', lastSeenAt: null,
       online: true, busy: false, remoteControlEnabled: true, controlEnabled: true, isSelf: false,
     };
-    const invoke = async (deviceId: string, channel: string, args: unknown[]) => {
+    const invoke = async (deviceId: string, channel: string, args: unknown[], options?: { ownFreshness?: true }) => {
       if (deviceId !== target || channel !== 'maker:provider:list') throw new Error('unexpected invoke');
       return invokeProviderMetadataContinuity(deviceId, channel, args, async () => ({
         ok: true, result: { providers: [provider], providerContinuity: source },
-      }));
+      }), undefined, options?.ownFreshness ? { ownFreshness: true } : undefined);
     };
     const now = 1_000;
     const directory = createProviderGroupDirectory({
       listLocalProviders: async () => [], localDeviceName: () => 'O', listDevices: async () => [device],
       readDeviceProviders: async () => { throw new Error('array reader should not be used'); },
       readDeviceProviderCatalog: (id, options) => readDeviceProviderCatalog(
-        invoke as Parameters<typeof readDeviceProviderCatalog>[0], id, { groupMember: true, ...options }),
+        invoke as Parameters<typeof readDeviceProviderCatalog>[0], id, { groupMember: true, ownFreshness: true, ...options }),
       listReceivedShares: () => [], isMobilePlatform: () => false, now: () => now, mono: () => 0,
     });
     const router = createProviderGroupRouter({ directory, readGroup: () => config, listBindings: () => ({}),

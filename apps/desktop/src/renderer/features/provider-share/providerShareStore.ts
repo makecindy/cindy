@@ -14,13 +14,26 @@
  */
 import { useSyncExternalStore } from 'react';
 
-import { PROVIDER_METADATA_TRUST_MS, readProviderMetadataContinuity, type ProviderShareReceived } from '@cindy/device-link';
+import {
+  PROVIDER_METADATA_TRUST_MS,
+  providerSharePickerState,
+  readProviderMetadataContinuity,
+  type ProviderShareReceived,
+} from '@cindy/device-link';
 
-import { hasSubscriptionShareCatalog, isSubscriptionShareCatalogStale } from '@/hooks/useDeviceProviders';
-import { refreshRemoteCatalogSnapshot } from '@/lib/remoteCatalogSnapshot';
+import { hasDeviceProvidersInterest, hasSubscriptionShareCatalog, isSubscriptionShareCatalogStale } from '@/hooks/useDeviceProviders';
+import { hasDeviceCapabilitiesInterest } from '@/hooks/useAgentCapabilities';
+import {
+  evictRemotePluginEngines,
+  hasRemotePluginEngineInterest,
+  markRemotePluginEnginesStale,
+  prefetchRemotePluginEngines,
+} from '@/hooks/usePluginEngines';
+import { refreshRemoteCatalogSnapshot, wasShareCatalogRecovered } from '@/lib/remoteCatalogSnapshot';
 import { createLogger } from '@/lib/logger';
 import { getDataOwnerGeneration, isDataOwnerGenerationCurrent, isDataOwnerPushStampCurrent } from '@/contexts/dataOwnerGeneration';
 import { getProviderShareFavoriteRegions, reconcileProviderShareFavorites } from '@/state/providerShareFavorites';
+import { pluginEngineKeyFromProviderId } from '../../../shared/pluginEngines';
 
 import type {
   ProviderShareOwnerState,
@@ -48,6 +61,8 @@ function providerShareApi(): ProviderShareApi | null {
 
 export interface ReceivedSnapshot {
   received: readonly ProviderShareReceived[];
+  /** Unavailable ordinary shares that settings may offer to retry. */
+  retryCatalogShareIds?: ReadonlySet<string>;
   /** 已拿到过一次权威列表(命令返回或推送)。 */
   loaded: boolean;
 }
@@ -243,10 +258,17 @@ function expireRegionRetention(): void {
   armRegionRetentionTimer();
 }
 
+interface ReceivedCatalogUpdate {
+  clearEmpty?: boolean;
+  skipCatalogs?: boolean;
+  refreshShareIds?: ReadonlySet<string>;
+  receivedChangeSequence?: number;
+}
+
 function invalidateShareCatalogs(
   previous: readonly ProviderShareReceived[],
   next: readonly ProviderShareReceived[],
-  options?: { clearEmpty?: boolean; skipCatalogs?: boolean; retireShareIds?: ReadonlySet<string> },
+  options?: ReceivedCatalogUpdate & { retireShareIds?: ReadonlySet<string> },
 ): void {
   // 旧 Main 把临时不可达也投影成空列表；调用方只有在确认区域完整时
   // 才允许用空列表撤权，否则必须保留上一份有界显示。
@@ -255,28 +277,74 @@ function invalidateShareCatalogs(
   // per-target refresh against the new owner.
   if (options?.skipCatalogs) return;
   const revokedCatalog = { providerContinuity: { stale: true, remainingMs: 0 } };
+  const previousById = new Map(previous.map((share) => [share.shareId, share]));
   const nextById = new Map(next.map((share) => [share.shareId, share]));
   const { changed, removed, revoked } = diffReceivedShares(previous, next);
   const revokedById = new Set(revoked);
+  const sequence = options?.receivedChangeSequence;
+  const recovered = (deviceId: string) => sequence !== undefined && wasShareCatalogRecovered(deviceId, sequence);
   for (const shareId of changed) {
     const deviceId = providerShareAgentDeviceId(shareId);
     const after = nextById.get(shareId);
+    const before = previousById.get(shareId);
     // 暂停、成员/供应商/区域/主机身份变化是明确换了一代许可：
     // 即使刷新失败或卡住，也不能继续显示旧目录。
     const mustClear = revokedById.has(shareId) || after?.status !== 'active';
+    if (pluginEngineKeyFromProviderId(after?.providerId ?? before?.providerId)) {
+      if (mustClear || options?.retireShareIds?.has(shareId)) evictRemotePluginEngines(deviceId);
+      else {
+        markRemotePluginEnginesStale(deviceId);
+        if (
+          after
+          && providerSharePickerState(after) === 'available'
+          && after.hostCapable
+          && hasRemotePluginEngineInterest(deviceId)
+        ) {
+          void prefetchRemotePluginEngines(deviceId);
+        }
+      }
+      continue;
+    }
     if (options?.retireShareIds?.has(shareId)) void refreshRemoteCatalogSnapshot(deviceId, revokedCatalog, { retireOnly: true }).catch(() => undefined);
-    else void refreshRemoteCatalogSnapshot(deviceId, mustClear ? revokedCatalog : undefined)
+    else if (mustClear || !recovered(deviceId)) void refreshRemoteCatalogSnapshot(deviceId, mustClear ? revokedCatalog : undefined)
       .catch(() => undefined);
   }
   for (const shareId of removed) {
     // 已移出名单的分享没有可再读的目录；清掉界面上可能仍挂着的旧行。
     const deviceId = providerShareAgentDeviceId(shareId);
+    if (pluginEngineKeyFromProviderId(previousById.get(shareId)?.providerId)) {
+      evictRemotePluginEngines(deviceId);
+      continue;
+    }
     // A share no longer in the authoritative list has no target to read; do
     // not repopulate its mounted catalog after removing the row.
     void refreshRemoteCatalogSnapshot(deviceId, revokedCatalog, { retireOnly: true }).catch(() => undefined);
   }
   for (const share of next) {
     const deviceId = providerShareAgentDeviceId(share.shareId);
+    if (pluginEngineKeyFromProviderId(share.providerId)) {
+      if (providerSharePickerState(share) === 'available' && share.hostCapable
+        && options?.refreshShareIds?.has(share.shareId) && !changed.includes(share.shareId)) {
+        markRemotePluginEnginesStale(deviceId);
+        if (hasRemotePluginEngineInterest(deviceId)) void prefetchRemotePluginEngines(deviceId);
+      }
+      continue;
+    }
+    if (recovered(deviceId)) continue;
+    // A received-list push is also a catalog invalidation even when membership
+    // is unchanged. Refresh live consumers, including successful empty results;
+    // retire an unused cached copy so reopening reads once without background polling.
+    if (share.status === 'active' && share.hostOnline && share.hostCapable
+      && options?.refreshShareIds?.has(share.shareId) && !changed.includes(share.shareId)) {
+      if (hasDeviceProvidersInterest(deviceId) || hasDeviceCapabilitiesInterest(deviceId)) {
+        void refreshRemoteCatalogSnapshot(deviceId).catch(() => undefined);
+      } else {
+        // Cached copies may exist only under task-host route keys. Retirement
+        // is read-free even when this source has never been opened directly.
+        void refreshRemoteCatalogSnapshot(deviceId, undefined, { retireOnly: true }).catch(() => undefined);
+      }
+      continue;
+    }
     if (share.status === 'active' && isSubscriptionShareCatalogStale(deviceId)) {
       void refreshRemoteCatalogSnapshot(deviceId).catch(() => undefined);
     }
@@ -285,7 +353,12 @@ function invalidateShareCatalogs(
 
 function setReceived(
   next: readonly ProviderShareReceived[],
-  options?: { clearEmpty?: boolean; skipCatalogs?: boolean; ownerId?: string | null; ownerGeneration?: number; loaded?: boolean },
+  options?: ReceivedCatalogUpdate & {
+    ownerId?: string | null;
+    ownerGeneration?: number;
+    loaded?: boolean;
+    retryCatalogShareIds?: ReadonlySet<string>;
+  },
 ): void {
   const previous = receivedSnapshot.received;
   const expiredShareIds = new Set<string>();
@@ -303,7 +376,11 @@ function setReceived(
   }
   receivedOwnerId = options?.ownerId !== undefined ? options.ownerId : getDataOwnerGeneration().dataOwnerId;
   receivedOwnerGeneration = options?.ownerGeneration ?? getDataOwnerGeneration().generation;
-  receivedSnapshot = { received: filtered, loaded: options?.loaded ?? true };
+  receivedSnapshot = {
+    received: filtered,
+    loaded: options?.loaded ?? true,
+    ...(options?.retryCatalogShareIds?.size ? { retryCatalogShareIds: options.retryCatalogShareIds } : {}),
+  };
   expiredReadSource = null;
   expiredReadSnapshot = null;
   expiredReadKey = '';
@@ -356,6 +433,8 @@ function readReceivedSnapshot(value: unknown): ProviderShareReceivedSnapshot | n
   return {
     ownerStamp: row.ownerStamp,
     confirmedRegions: row.confirmedRegions,
+    ...(typeof row.receivedChangeSequence === 'number' && Number.isSafeInteger(row.receivedChangeSequence)
+      ? { receivedChangeSequence: row.receivedChangeSequence } : {}),
     received: row.received,
     ...(Array.isArray(row.unavailableShareIds) ? { unavailableShareIds: row.unavailableShareIds.filter((id): id is string => typeof id === 'string') } : {}),
     ...(typeof row.active === 'boolean' ? { active: row.active } : {}),
@@ -366,7 +445,7 @@ function readReceivedSnapshot(value: unknown): ProviderShareReceivedSnapshot | n
 /** A snapshot with confirmed regions can tell an authoritative empty result from a
  * temporarily incomplete cross-region projection. An inactive runtime with no
  * shares is an explicit boundary and must retire all mounted catalogs. */
-function applyReceivedSnapshot(snapshot: ProviderShareReceivedSnapshot, requestStart?: BudgetRequestStart): void {
+function applyReceivedSnapshot(snapshot: ProviderShareReceivedSnapshot, requestStart?: BudgetRequestStart, refreshCatalogs = false): void {
   const ownerId = snapshot.ownerStamp.dataOwnerId;
   const previous = receivedSnapshot.received;
   const ownerChanged = receivedOwnerId === null ? previous.length > 0 : receivedOwnerId !== ownerId;
@@ -382,6 +461,22 @@ function applyReceivedSnapshot(snapshot: ProviderShareReceivedSnapshot, requestS
     regionSourceCurrent(region, budget?.[region]?.id));
   const confirmed = new Set(acceptedConfirmed);
   const unavailable = new Set(snapshot.unavailableShareIds);
+  const retryCatalogShareIds = new Set<string>();
+  if (unavailable.size > 0) {
+    if (!ownerChanged && receivedOwnerGeneration === snapshot.ownerStamp.ownerGeneration) {
+      for (const id of receivedSnapshot.retryCatalogShareIds ?? []) {
+        if (unavailable.has(id)) retryCatalogShareIds.add(id);
+      }
+    }
+    const known = new Map((ownerChanged ? [] : previous).map(share => [share.shareId, share]));
+    for (const share of snapshot.received) known.set(share.shareId, share);
+    for (const id of unavailable) {
+      const share = known.get(id);
+      if (!share) continue;
+      if (share.status === 'active' && !pluginEngineKeyFromProviderId(share.providerId)) retryCatalogShareIds.add(id);
+      else retryCatalogShareIds.delete(id);
+    }
+  }
   const incoming = snapshot.received.filter(share => !unavailable.has(share.shareId) &&
     retentionLive(share.owner.region) && regionSourceCurrent(share.owner.region, budget?.[share.owner.region]?.id));
   const currentIds = new Set(incoming.map(share => share.shareId));
@@ -396,7 +491,9 @@ function applyReceivedSnapshot(snapshot: ProviderShareReceivedSnapshot, requestS
     || (!ownerChanged && previous.length > 0);
   const next = [...incoming, ...retained];
   setReceived(next, { clearEmpty: true, skipCatalogs: ownerChanged, ownerId,
-    ownerGeneration: snapshot.ownerStamp.ownerGeneration, loaded });
+    ownerGeneration: snapshot.ownerStamp.ownerGeneration, loaded,
+    receivedChangeSequence: snapshot.receivedChangeSequence, retryCatalogShareIds,
+    ...(refreshCatalogs ? { refreshShareIds: new Set(incoming.map(share => share.shareId)) } : {}) });
   armRegionRetentionTimer();
 }
 
@@ -469,6 +566,14 @@ function refreshFavoriteMembership(api: ProviderShareApi): void {
         applyReceivedSnapshotBudget(snapshot, requestStart);
       }
       const cleaned = reconcileProviderShareFavorites(snapshot);
+      if (cleaned && !retired && snapshot.leftMemberRevision !== undefined) {
+        const updated = await api.command({
+          action: 'received-snapshot',
+          favoriteRecovery: { ownerStamp: snapshot.ownerStamp, regions: [], cleanedLeftMemberRevision: snapshot.leftMemberRevision },
+        });
+        if (!current()) return;
+        if (!isDataOwnerPushStampCurrent(updated.ownerStamp) || !reconcileProviderShareFavorites(updated)) { retry(); return; }
+      }
       if (!cleaned || regions.some((region) => !snapshot.confirmedRegions.includes(region))) retry();
       else membershipFailures = 0;
     } catch { retry(); } // 读失败不是撤权，重取最新名单而不是重放旧删除。
@@ -485,8 +590,17 @@ export function ensureProviderShareReceivedStarted(): void {
   receivedStarted = true;
   unsubscribeCatalogPush = window.electronAPI?.deviceLink?.onRemotePush?.(push => {
     if (push.channel !== 'maker:provider:changed' || !push.deviceId.startsWith('share:')) return;
-    if (!getReceivedSnapshot().received.some(share => providerShareAgentDeviceId(share.shareId) === push.deviceId && share.status === 'active')) return;
+    const matched = getReceivedSnapshot().received.find(share => providerShareAgentDeviceId(share.shareId) === push.deviceId && share.status === 'active');
+    if (!matched) return;
     const continuity = readProviderMetadataContinuity(push.payload);
+    if (pluginEngineKeyFromProviderId(matched.providerId)) {
+      if (continuity?.remainingMs === 0) evictRemotePluginEngines(push.deviceId);
+      else {
+        markRemotePluginEnginesStale(push.deviceId);
+        if (hasRemotePluginEngineInterest(push.deviceId)) void prefetchRemotePluginEngines(push.deviceId);
+      }
+      return;
+    }
     if (continuity?.remainingMs === 0) {
       // Explicit denial / expired budget: retire the display without reopening
       // the denied target (a prefetch would revive it and can feed a 403 loop).
@@ -508,12 +622,12 @@ export function ensureProviderShareReceivedStarted(): void {
     void api.command({ action: 'received-snapshot' }).then((value) => {
       if (seq !== receivedPushSeq || !isDataOwnerGenerationCurrent(owner)) return;
       const snapshot = readReceivedSnapshot(value);
-      if (snapshot) applyReceivedSnapshot(snapshot, requestStart);
-      else setReceived(pushed, { ownerId: owner.dataOwnerId }); // Older Main / old preload fallback.
+      if (snapshot) applyReceivedSnapshot(snapshot, requestStart, true);
+      else setReceived(pushed, { ownerId: owner.dataOwnerId, refreshShareIds: new Set(pushed.map(share => share.shareId)) }); // Older Main / old preload fallback.
       refreshFavoriteMembership(api);
     }).catch(() => {
       if (seq !== receivedPushSeq || !isDataOwnerGenerationCurrent(owner)) return;
-      setReceived(pushed, { ownerId: owner.dataOwnerId });
+      setReceived(pushed, { ownerId: owner.dataOwnerId, refreshShareIds: new Set(pushed.map(share => share.shareId)) });
       refreshFavoriteMembership(api);
     });
   });
@@ -625,7 +739,7 @@ function getReceivedSnapshot(): ReceivedSnapshot {
   if (expiredReadSource !== receivedSnapshot || expiredReadKey !== liveKey) {
     expiredReadSource = receivedSnapshot;
     expiredReadKey = liveKey;
-    expiredReadSnapshot = { received: live, loaded: receivedSnapshot.loaded };
+    expiredReadSnapshot = { ...receivedSnapshot, received: live };
   }
   return expiredReadSnapshot!;
 }

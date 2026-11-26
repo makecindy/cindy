@@ -8,6 +8,21 @@ let owner = getMobileAuthOwner();
 const memory = new Map<string, CachedChatPage>();
 const revisions = new Map<string, number>();
 const invalidated = new Set<(roomId: string) => void>();
+/** Serializing a whole page belongs after the screen has drawn it, and once per burst: a read
+ * and the thread summaries that follow it replace the same page within a moment. */
+const DISK_WRITE_DELAY_MS = 400;
+type Authority = ReturnType<typeof historyDiskAuthority>;
+const queued = new Map<string, { value: CachedChatPage; authority: Authority; settle: Array<(saved: boolean) => void>; timer: ReturnType<typeof setTimeout> }>();
+function writeQueued(key: string) {
+  const entry = queued.get(key);
+  if (!entry) return;
+  queued.delete(key); clearTimeout(entry.timer);
+  // The newest page speaks for every page it replaced while waiting.
+  void writeConversationDisk(entry.authority, entry.value).catch(() => false)
+    .then(saved => { for (const settle of entry.settle) settle(saved); });
+}
+/** Commit pages still waiting for their turn; the screen calls this when it stops being shown. */
+export function flushChatMessageCache(): void { for (const key of [...queued.keys()]) writeQueued(key); }
 export function subscribeChatInvalidation(listener: (roomId: string) => void) {
   invalidated.add(listener); return () => { invalidated.delete(listener); };
 }
@@ -43,14 +58,21 @@ export async function readChatMessages(roomId: string, threadRootId?: string): P
   if (value && value.page.snapshot.room.id === roomId && value.page.threadRootId === threadRootId) memory.set(key, value);
   return peekChatMessages(roomId, threadRootId);
 }
-export async function cacheChatMessages(roomId: string, value: CachedChatPage): Promise<boolean> {
+/** `afterPaint` is for a screen refreshing what it shows: memory is updated now, the disk a
+ * moment later and once per burst. Callers that act on the saved copy (the outbox) write now. */
+export async function cacheChatMessages(roomId: string, value: CachedChatPage, afterPaint = false): Promise<boolean> {
   own();
   const key = keyFor(roomId, value.page.threadRootId);
   const authority = historyDiskAuthority(device, key);
   if (!authority.current()) return false;
   revisions.set(key, (revisions.get(key) ?? 0) + 1);
   memory.set(key, value);
-  return writeConversationDisk(authority, value);
+  return new Promise<boolean>(resolve => {
+    const waiting = queued.get(key);
+    if (waiting) { waiting.value = value; waiting.authority = authority; waiting.settle.push(resolve); }
+    else queued.set(key, { value, authority, settle: [resolve], timer: setTimeout(() => writeQueued(key), DISK_WRITE_DELAY_MS) });
+    if (!afterPaint) writeQueued(key);
+  });
 }
 /** Membership loss clears every opened thread too, and invalidates delayed hydration. */
 export async function forgetChatMessages(roomId: string): Promise<void> {
@@ -59,6 +81,9 @@ export async function forgetChatMessages(roomId: string): Promise<void> {
   for (const key of keys) {
     if (JSON.parse(key)[0] !== roomId) continue;
     revisions.set(key, (revisions.get(key) ?? 0) + 1); memory.delete(key);
+    // A page waiting for its write must not land after the room was forgotten.
+    const waiting = queued.get(key);
+    if (waiting) { queued.delete(key); clearTimeout(waiting.timer); for (const settle of waiting.settle) settle(false); }
   }
   invalidated.forEach(listener => listener(roomId));
   await clearConversationDisk(roomId);

@@ -11,4 +11,4 @@
 import { app } from 'electron';
 import { createSilentEncryptedRetryStore } from './silentEncryptedRetryCore.js';
 export type { SilentEncryptedRetrySettings } from './silentEncryptedRetryCore.js';
-export const { readSilentEncryptedRetrySettings, readSilentEncryptedRetrySettingsState, writeSilentEncryptedRetryEnabled, resetSilentEncryptedRetrySettings, silentEncryptedRetryPortableSettings } = createSilentEncryptedRetryStore({ getUserDataDir: () => app.getPath('userData') });
+export const { readSilentEncryptedRetrySettings, readSilentEncryptedRetrySettingsState, writeSilentEncryptedRetryEnabled, resetSilentEncryptedRetrySettings, silentEncryptedRetryPortableSettings, inspectSilentEncryptedRetrySettings, getSilentEncryptedRetrySettingsStore } = createSilentEncryptedRetryStore({ getUserDataDir: () => app.getPath('userData') });

@@ -4,16 +4,66 @@ import {
   canOfferCodexHistoryRecovery,
   extractNonSecretErrorSignals,
   GATEWAY_PROXY_TOKEN_INVALID_REASON,
+  isAccountUsageLimitReachedText,
   isCindyGatewayProxyTokenInvalidError,
   isGatewayProxyTokenInvalidError,
+  isProviderSafetyRefusalError,
   isResponsesLiteParallelToolCallsError,
   matchesDeterministicUsageExhaustionText,
+  PROVIDER_SAFETY_REFUSAL_REASON,
   redactSensitiveText,
   redactSensitiveTextDeep,
   parseAgentErrorCode,
   requiresAgentErrorConfigurationChange,
+  parseGeminiInputRateLimit,
   localizeSubscriptionAccountError,
 } from './errorRedaction.js';
+
+// #7356 follow-up, unit: fixed Host causes must survive presentation without
+// promoting arbitrary reviewer text (or a known sentence embedded in it).
+describe('MCP automatic review cause presentation', () => {
+  const prefix = '[MCP_APPROVAL_AUTO_BLOCKED] Automatic approval review blocked this tool call. No user rejection was received. ';
+  it.each([
+    ['File-write review needs a concrete destination path.', 'MISSING_EVIDENCE'],
+    ['Command review needs concrete command text.', 'MISSING_EVIDENCE'],
+    ['Network review needs a concrete destination or query.', 'MISSING_EVIDENCE'],
+    ['Unknown actions cannot be reviewed without concrete action details.', 'MISSING_EVIDENCE'],
+    ['File-change review needs concrete paths.', 'MISSING_EVIDENCE'],
+    ['User instructions changed; retry against the current request.', 'INSTRUCTIONS_CHANGED'],
+    ['User instructions changed; retry against the latest authorization.', 'INSTRUCTIONS_CHANGED'],
+    ['Current user instructions are not synchronized with task history; automatic authorization is blocked.', 'INSTRUCTIONS_CHANGED'],
+    ['Directory permissions changed; retry with the current scope.', 'PERMISSIONS_CHANGED'],
+    ['Delegated authorization changed; retry against the current scope.', 'AUTHORIZATION_CHANGED'],
+    ['Plugin or task Auto authorization is no longer active.', 'AUTHORIZATION_INACTIVE'],
+    ['No user request authorizes this action; only reads may run without one.', 'NO_USER_AUTHORIZATION'],
+    ['Team plan exceeds the supported size; automatic authorization is blocked.', 'PLAN_TOO_LARGE'],
+    ['Coordinator does not match its registered route.', 'PLAN_MISMATCH'],
+    ['Worker does not match the active registered plan.', 'PLAN_MISMATCH'],
+    ['Task working directory changed.', 'WORKING_DIRECTORY_CHANGED'],
+    ['Host-registered delegated task scope is missing or invalid.', 'DELEGATION_MISSING'],
+  ])('retains the fixed cause: %s', (cause, suffix) => {
+    for (const wrapper of ['', "Error invoking remote method 'maker:send': Error: [IPC_ERROR] LAZY_CREATE_FAILED: "]) {
+      const message = `${wrapper}${prefix}${cause}`;
+      expect(parseAgentErrorCode(message)).toEqual({
+        code: `MCP_APPROVAL_AUTO_BLOCKED_${suffix}`,
+        fallback: message.slice(message.indexOf('Automatic approval')),
+      });
+    }
+  });
+  it.each([
+    '',
+    'Reviewer text containing /private/path and api_key=private-value',
+    'User instructions changed; retry against the current request. api_key=private-value',
+    'Reviewer says: User instructions changed; retry against the current request.',
+  ])('keeps unknown or extended causes on generic guidance: %s', cause => {
+    expect(parseAgentErrorCode(prefix + cause)?.code).toBe('MCP_APPROVAL_AUTO_BLOCKED');
+  });
+  it('does not infer a cause from text outside the fixed runtime envelope', () => {
+    expect(parseAgentErrorCode('[MCP_APPROVAL_AUTO_BLOCKED] User instructions changed; retry against the current request.')?.code)
+      .toBe('MCP_APPROVAL_AUTO_BLOCKED');
+    expect(parseAgentErrorCode('[REMOTE_AGENT_INVALID] ' + prefix)?.code).toBe('REMOTE_AGENT_INVALID');
+  });
+});
 
 // #10187: unit coverage for the host's explicit guest resume refusal. Existing
 // code-only cases cannot distinguish it from other REMOTE_AGENT_INVALID errors.
@@ -102,6 +152,40 @@ describe('matchesDeterministicUsageExhaustionText', () => {
     'exceeded retry limit, last status: 429 Too Many Requests',
   ])('does not treat transient or retry exhaustion as usage exhaustion: %s', (message) => {
     expect(matchesDeterministicUsageExhaustionText(message)).toBe(false);
+  });
+});
+
+// Desktop and Mobile showed only "reply failed" for a subscription usage limit, so the cause
+// was hidden behind the details toggle. Entry: the shared predicate both summaries call.
+// Balance, budget and transient rate limits have a different next step and must stay out.
+describe('isAccountUsageLimitReachedText', () => {
+  it.each([
+    "You've hit your session limit · resets 1:20am (Asia/Shanghai)",
+    "You've hit your Claude session limit",
+    "You've hit your weekly limit",
+    "You've hit your 5-hour limit",
+    "You've hit your limit · resets 11pm (UTC)",
+    'You’ve hit your usage limit. Try again at 11:30 PM.',
+    'You have hit your ChatGPT usage limit (plus plan). Try again in ~12 min.',
+    'Usage limit reached. Try again in 1h.',
+    '{"error":{"type":"usage_limit_reached","resets_at":1790000000}}',
+    'usageLimitExceeded',
+  ])('recognizes an account usage limit: %s', (message) => {
+    expect(isAccountUsageLimitReachedText(message)).toBe(true);
+  });
+
+  it.each([
+    '',
+    'HTTP 429 Too Many Requests',
+    'Rate limit reached for gpt-5.5',
+    // PR #11526: the "hit your" form used the same branch as periodic limits.
+    "You've hit your rate limit",
+    "You've hit your session limit: budget_exceeded",
+    'insufficient_quota: usage limit reached',
+    'You hit your spend cap set by the owner of your workspace.',
+    'Shared task limit reached',
+  ])('leaves other failures to their own guidance: %s', (message) => {
+    expect(isAccountUsageLimitReachedText(message)).toBe(false);
   });
 });
 
@@ -399,7 +483,12 @@ describe('isGatewayProxyTokenInvalidError', () => {
 
 
 describe('agent error envelopes shared by desktop and mobile', () => {
-  it.each(['REMOTE_LOCAL_ONLY_PROVIDER', 'DEVICE_LINK_MEDIA_TRANSFER_FAILED', 'DEVICE_LINK_MEDIA_ACCESS_DENIED', 'DEVICE_LINK_BUSY', 'MCP_APPROVAL_CONFIRMATION_TIMEOUT', 'AUTO_REVIEW_UNAVAILABLE', 'SSH_HARNESS_SWITCH_UNSUPPORTED', 'MODEL_SELECTION_UNAVAILABLE', 'HARNESS_SWITCH_NOT_READY', 'SUBSCRIPTION_ACCOUNTS_FULL'])(
+  it('does not offer retry for an unsupported SSH Codex source', () => {
+    expect(requiresAgentErrorConfigurationChange(
+      'LAZY_CREATE_FAILED: [REMOTE_CODEX_SOURCE_UNSUPPORTED] select the native connection',
+    )).toBe(true);
+  });
+  it.each(['REMOTE_LOCAL_ONLY_PROVIDER', 'DEVICE_LINK_MEDIA_TRANSFER_FAILED', 'DEVICE_LINK_MEDIA_ACCESS_DENIED', 'DEVICE_LINK_BUSY', 'MCP_APPROVAL_CONFIRMATION_TIMEOUT', 'AUTO_REVIEW_UNAVAILABLE', 'SSH_HARNESS_SWITCH_UNSUPPORTED', 'MODEL_SELECTION_UNAVAILABLE', 'MODEL_CATALOG_UNCONFIRMED', 'HARNESS_SWITCH_NOT_READY', 'SUBSCRIPTION_ACCOUNTS_FULL'])(
     'parses %s directly and inside an IPC error', code => {
       for (const prefix of ['', '[IPC_ERROR] ', "Error invoking remote method 'maker:send': Error: ", 'LAZY_CREATE_FAILED: ']) {
         expect(parseAgentErrorCode(`${prefix}[${code}] first line\nsecond line`)).toEqual({ code, fallback: 'first line\nsecond line' });
@@ -438,6 +527,11 @@ describe('subscription account startup guidance', () => {
     });
   it('keeps old ambiguous failures cause-neutral and rejects unrelated messages', () => {
     expect(localizeSubscriptionAccountError('LAZY_CREATE_FAILED: The task subscription account requires login or quota reset', t)).toBe('chat.subscriptionAccountError.legacy');
+    expect(localizeSubscriptionAccountError('LAZY_CREATE_FAILED: No subscription account is available', t)).toBe('chat.subscriptionAccountError.poolUnavailable');
+    expect(localizeSubscriptionAccountError('LAZY_CREATE_FAILED: [SUBSCRIPTION_POOL_MODEL_LIMITED] diagnostic\nresetAtMs=1900000000000\notherAccountSignedOut=true', t, 'zh-CN'))
+      .toBe(['chat.subscriptionAccountError.poolModelLimited', 'chat.subscriptionAccountError.poolRetryUntil',
+        new Intl.DateTimeFormat('zh-CN', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(1900000000000)),
+        'chat.subscriptionAccountError.poolOtherSignedOut'].join(' '));
     expect(localizeSubscriptionAccountError('An upstream diagnostic mentions quota reset', t)).toBeNull();
     expect(localizeSubscriptionAccountError('[REMOTE_FUTURE] quota reset', t)).toBeNull();
   });
@@ -464,5 +558,79 @@ describe('remote native resume rejection', () => {
   ])('does not reinterpret a different rejection: %s', message => {
     expect(parseAgentErrorCode(message)?.code).not.toBe('REMOTE_AGENT_RESUME_UNAVAILABLE');
     expect(requiresAgentErrorConfigurationChange(message)).toBe(false);
+  });
+});
+
+describe('Gemini minute-limit retry advice', () => {
+  const metric = 'generativelanguage.googleapis.com/generate_content_paid_tier_input_token_count';
+  const error = { code: 429, status: 'RESOURCE_EXHAUSTED',
+    message: `Quota exceeded for metric: ${metric}. Generate content input tokens per minute limit exceeded on Tier 1.`,
+    details: [{ '@type': 'type.googleapis.com/google.rpc.RetryInfo', retryDelay: '56s' }] };
+  it('accepts the structured Google delay and excludes undated, billing and mixed quota responses', () => {
+    const parse = (fields: object) => parseGeminiInputRateLimit(JSON.stringify({ error: { ...error, ...fields } }));
+    expect(parse({})).toEqual({ retryDelayMs: 56_000 });
+    expect(parse({ details: [] })).toEqual({ retryDelayMs: null });
+    expect(parse({ message: 'Quota exceeded.', details: [...error.details, {
+      '@type': 'type.googleapis.com/google.rpc.QuotaFailure', violations: [{
+        quotaMetric: metric, quotaId: 'GenerateContentPaidTierInputTokensPerModelPerMinute',
+      }],
+    }] })).toEqual({ retryDelayMs: 56_000 });
+    expect(parse({ code: 402 })).toBeNull();
+    expect(parse({ message: 'Prepaid balance exhausted' })).toBeNull();
+    expect(parse({ details: [...error.details, { '@type': 'type.googleapis.com/google.rpc.QuotaFailure',
+      violations: [{ quotaMetric: metric, quotaId: 'InputTokensPerDay' }] }] })).toBeNull();
+  });
+});
+
+// 测试价值：依据供应商安全拦截准确解释且不换号换模型绕过的产品要求；此前缺少跨引擎共享的精确安全拦截识别器，
+// 既漏识 JSON/流式拦截又可能误把本地插件或权限文本当成上游安全拦截；失效后果是把安全拦截当普通故障切号重发或把插件报错说成安全违规；
+// 生产入口 isProviderSafetyRefusalError / extractNonSecretErrorSignals；最小失败输入为 OpenAI/Anthropic/Gemini 安全拦截负载与本地插件伪例；tier: unit。
+describe('isProviderSafetyRefusalError', () => {
+  it.each([
+    ['stable reason', 'opaque error', PROVIDER_SAFETY_REFUSAL_REASON],
+    ['Claude cybersecurity flag (exact log original)', 'This request was flagged for possible cybersecurity risk.', undefined],
+    ['Claude API Error JSON cybersecurity flag', 'API Error: 400 {"type":"error","error":{"type":"invalid_request_error","message":"This request was flagged for possible cybersecurity risk."}}', undefined],
+    ['Claude SDK retry wrapper cybersecurity flag', 'SDK API request failed: This request was flagged for possible cybersecurity risk. (HTTP 400, retry 1/2)', undefined],
+    [
+      'Pi nested gateway JSON cybersecurity flag',
+      `400: ${JSON.stringify({
+        message: JSON.stringify({
+          error: {
+            type: 'invalid_request_error',
+            message: 'This request was flagged for possible cybersecurity risk.',
+          },
+        }),
+      })}`,
+      undefined,
+    ],
+    ['OpenAI JSON code', '{"error":{"type":"invalid_request_error","code":"content_policy_violation","message":"Blocked"}}', undefined],
+    ['Codex stream safety_violation JSON with status suffix', '{"type":"error","error":{"code":"safety_violation","message":"Output blocked"}} (HTTP 400)', undefined],
+    ['Codex flattened output stream block', "OpenAI's safety system blocked the output stream (safety_violation).", undefined],
+    ['OpenAI usage policy refusal', 'Invalid prompt: your prompt was flagged as potentially violating our usage policy.', undefined],
+    ['Anthropic content filtering policy', 'API Error: 400 {"type":"error","error":{"type":"invalid_request_error","message":"Output blocked by content filtering policy"}}', undefined],
+    ['Gemini safety finish reason', '{"candidates":[{"finishReason":"PROHIBITED_CONTENT"}]}', undefined],
+  ] as const)('matches upstream provider safety block: %s', (_label, message, reason) => {
+    expect(isProviderSafetyRefusalError(message, reason)).toBe(true);
+    expect(extractNonSecretErrorSignals(message).usageLimit).toBe(false);
+  });
+
+  it.each([
+    'Synthetic local plugin startup failed: safety_violation label in plugin metadata.',
+    'Local plugin hook failed while scanning log: "This request was flagged for possible cybersecurity risk."',
+    'Tool execution failed: grep matched {"error":{"code":"safety_violation"}} in fixture.json',
+    'User note: why did someone say This request was flagged for possible cybersecurity risk.?',
+    JSON.stringify({
+      error: {
+        type: 'invalid_request_error',
+        code: 'invalid_argument',
+        message: 'Synthetic plugin blocked the output stream.',
+      },
+    }),
+    'Permission denied by user',
+    '[MCP_APPROVAL_AUTO_BLOCKED] Automatic approval review blocked this tool call.',
+    "You've hit your usage limit. Try again at 3:05 PM.",
+    'HTTP 429 Too Many Requests: rate_limit_exceeded',
+  ])('does not misclassify ordinary chat quotes, plugin/tool errors, or quota errors: %s', (message) => {
+    expect(isProviderSafetyRefusalError(message)).toBe(false);
   });
 });

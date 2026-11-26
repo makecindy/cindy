@@ -1,3 +1,6 @@
+import { withSessionRouteLock } from '../localDb/sessionRouteLock';
+import { formatTaskTopicTitle } from '@cindy/maker-shared/session-title';
+import { imChannelDisplayName } from '../../shared/imMessageSource.js';
 import { createHookQuestionPublisher } from './questionPublisher';
 /**
  * hook-control/dispatcher.ts
@@ -94,7 +97,7 @@ import { HOOK_CHAT_WORKSPACE_ALIAS } from '../../shared/hookControlIpc.js';
 import { captureImContext, type ImContextSnapshot } from '../../shared/imMessageSource.js';
 import type { GroupHistoryAccessScope } from '../im/shared/groupHistoryAccess.js';
 import { hookReplyTarget } from '../im/shared/autoReviewReferences.js';
-import { quotaFailureNoticePrefix } from '../im/shared/turnRetryNotice.js';
+import { overloadFailureNotice, quotaFailureNoticePrefix } from '../im/shared/turnRetryNotice.js';
 import { imText } from '../im/shared/imText.js';
 import { groupHistoryAccessForExternalKey } from './groupHistoryScope.js';
 import { isPathWithin } from './paths.js';
@@ -133,7 +136,12 @@ export interface HookSessionRunner {
    * workingDir 用于接管/复用时的白名单校验。检查失败会 reject, 上层必须
    * fail closed 并保留既有 binding, 不能把暂时读不到当成失效任务。
    */
-  inspect(sessionId: string): Promise<{ workingDir: string | null; usable: boolean } | null>;
+  inspect(sessionId: string, checkArchivedDir?: (dir: string) => boolean): Promise<{
+    workingDir: string | null;
+    usable: boolean;
+    resumableArchive?: boolean;
+    companionOwned?: boolean;
+  } | null>;
   /** 跑一个完整 turn, 收口(done / terminal error)后返回。 */
   run(req: HookRunRequest): Promise<HookRunOutcome>;
   /**
@@ -201,6 +209,8 @@ export interface HookContinuationWatchRequest {
 export interface HookRunRequest {
   /** Host-resolved companion channel lane; never accepted from the wire. */
   companionBotId?: string;
+  /** Only the execution host can prove that this input created the title it may replace. */
+  topicNaming?: { initialTitle: string; channel: string; context?: string | null };
   /**
    * 取消探针(dispatcher 侧 task.cancel 账本):runner 在回收/重建等长窗口后、
    * 发送前查询 —— 喊停若落在窗口内, 中止信号对旧实例无目标、对新实例未登记,
@@ -320,6 +330,8 @@ export interface HookRunOutcome {
   status: 'ok' | 'error';
   finalText: string;
   errorMessage: string | null;
+  /** Structured maker-core error reason (internal logging/diagnostics only; never sent over wire). */
+  errorReason?: string | null;
   durationMs: number;
   /** 出站附件(agent 产图/产文件, runner 收集编码; 无则省略), 随 turn.end 回传。 */
   attachments?: TaskAttachment[];
@@ -338,9 +350,10 @@ export type PrepareWorktreeResult =
   | { ok: false; message: string };
 
 export interface HookDispatcherDeps {
-  resolveCompanionTarget?: (botId: string, externalKey: string) => Promise<{
+  resolveCompanionTarget?: (botId: string, externalKey: string, subject?: string) => Promise<{
     sessionId: string;
     workingDir: string;
+    initialTopicTitle?: string;
   }>;
   getConnection: (id: string) => HookConnectionConfig | null;
   bindings: HookBindingStore;
@@ -395,6 +408,7 @@ export interface HookDispatcherDeps {
    * patchSessionMetaInDb, 自带 sidebar 广播)。未注入时 archive 只清绑定。
    */
   archiveSessionRow?: (sessionId: string) => Promise<void>;
+  restoreArchivedSession?: (sessionId: string, options: { routeLockHeld: true }) => Promise<void>;
   /**
    * 可选: 按钮决策回流的配对出口(interaction.decision 用; 生产为
    * interactions.ts 的 resolveHookInteraction)。未注入时决策帧被忽略,
@@ -532,10 +546,54 @@ export interface HookDispatcher {
  */
 export const HOOK_ROUTE_UNAVAILABLE_PREFIX = 'hook session route unavailable:';
 
-function hookFailureReasonForLog(errorMessage: string | null | undefined): string {
+/**
+ * 白名单化的结构化失败 reason，允许原样进主日志（不含用户内容、路径或上游原文）。
+ * 少量别名在此归一，避免同一故障拆成多个日志标签。
+ */
+const HOOK_LOGGABLE_ERROR_REASONS: ReadonlyMap<string, string> = new Map([
+  ['upstream-overload', 'upstream-overload'],
+  ['UPSTREAM_OVERLOADED', 'upstream-overload'],
+  ['codex_reconnect_stalled', 'codex_reconnect_stalled'],
+  ['upstream_response_idle_timeout', 'upstream_response_idle_timeout'],
+  ['bridge_upstream_response_idle_timeout', 'upstream_response_idle_timeout'],
+  ['turn_no_event_timeout', 'turn_no_event_timeout'],
+  ['bridge_turn_no_event_timeout', 'turn_no_event_timeout'],
+  ['provider_quota_limit', 'provider-quota-exhausted'],
+  ['output-limit', 'output-limit'],
+  ['context-overflow', 'context-overflow'],
+  ['codex_history_oversized', 'codex_history_oversized'],
+  ['tool_use_loop_detected', 'tool_use_loop_detected'],
+  ['empty-response', 'empty-response'],
+  ['turn-failed', 'turn-failed'],
+  ['silent-stop-exhausted', 'silent-stop-exhausted'],
+  ['user_model_access_denied', 'user_model_access_denied'],
+  ['provider_safety_refusal', 'provider_safety_refusal'],
+  ['remote_agent_lost', 'remote_agent_lost'],
+  ['remote_agent_closed', 'remote_agent_closed'],
+  ['app-server-force-retired', 'app-server-force-retired'],
+]);
+
+const CODEX_RECONNECT_STALLED_MESSAGE_RE =
+  /\bcodex_reconnect_stalled\b|model connection has been retrying for \d+s without making progress/i;
+const UPSTREAM_IDLE_TIMEOUT_MESSAGE_RE =
+  /upstream response has been silent for \d+s/i;
+
+function hookFailureReasonForLog(
+  errorMessage: string | null | undefined,
+  errorReason?: string | null,
+): string {
+  const mappedReason = typeof errorReason === 'string'
+    ? HOOK_LOGGABLE_ERROR_REASONS.get(errorReason)
+    : undefined;
+  if (mappedReason) return mappedReason;
   const message = errorMessage ?? '';
   // 额度说明里带供应商名与上游原文, 日志只记类别。
   if (message.startsWith(quotaFailureNoticePrefix())) return 'provider-quota-exhausted';
+  if (message === imText('imBot.text.shared.retry.overloadFailed') || overloadFailureNotice(message) !== null) {
+    return 'upstream-overload';
+  }
+  if (CODEX_RECONNECT_STALLED_MESSAGE_RE.test(message)) return 'codex_reconnect_stalled';
+  if (UPSTREAM_IDLE_TIMEOUT_MESSAGE_RE.test(message)) return 'upstream_response_idle_timeout';
   if (!message.startsWith(HOOK_ROUTE_UNAVAILABLE_PREFIX)) return 'unclassified';
   return message.replace(/\s+/g, ' ').slice(0, 300);
 }
@@ -560,8 +618,6 @@ const TURN_DELIVERY_ACK_MAX_DELAY_MS = 60_000;
 const REOPEN_TTL_MS = 24 * 60 * 60_000;
 /** 续跑记账条数上限(FIFO 淘汰最老), 同 ackHistory 语义: 防长驻进程无界增长。 */
 const MAX_PENDING_REOPENS = 200;
-/** 标题里消息摘要的最大长度(字符), 超出截断加省略号。 */
-const TITLE_SNIPPET_MAX = 24;
 /** Server-controlled source metadata is persisted and rendered, so keep it bounded locally too. */
 const SOURCE_USER_TEXT_MAX = 20_000;
 const SOURCE_TRIGGER_MESSAGE_ID_MAX = 64;
@@ -630,42 +686,9 @@ export function normalizeTaskSource(source: TaskSource): TaskSource {
   };
 }
 
-/**
- * 新建 hook 会话的标题: `[<Provider>] <首条消息摘要>`(如 `[Slack] 修登录页`)。
- * 前缀保留 provider 名标明"谁驱动的"(首字母大写, 不再带 `Hook·` 实现细节);
- * 后半段用消息内容(压平空白后截断), 比"频道 ID + 时间戳"可读。消息为空
- * (如纯图片派发)时回退渠道内标识 bareKey。
- * 渠道内标识约定 `dm:` 前缀 = 私聊(见 slack-hook-server externalKeyFor),
- * 私聊会话前缀额外标 `·DM`(`[Slack·DM]`), 与频道驱动的会话在列表里一眼区分。
- * contextName: Slack workspace 或 Telegram group/topic 显示名，非空时并入方括号**首段**
- * (`[XD Inc.·Slack·DM] ...`)—— 多绑定设备上区分「哪个 workspace 派来的」,
- * team 名在前便于列表扫读; 放括号内保持标题统一以 `[` 开头对齐
- * (老 server / 单绑定不下发, 无 teamName 分支格式不变)。
- *
- * **摘要取 `source.userText`, 而不是 `prompt`。** 二者通常一致, 但 server 会在
- * prompt 前面挂 thread 上下文块(Slack 的 `injectThreadContext` 一直如此, X 也
- * 刚接上): 那时 `prompt` 开头是 `<thread_context>` 加一串别人的发言, 截前 24
- * 字得到的标题既看不出是什么任务, 同一 thread 里还条条雷同。`userText` 正是
- * server 为 UI 单独下发的干净原文(协议 `TaskSource.userText`)。
- * 老 server 不下发时回退 prompt, 行为与此前一致。
- */
-export function buildHookSessionTitle(
-  providerName: string,
-  prompt: string,
-  bareKey: string,
-  contextName?: string | null,
-): string {
-  const flat = prompt.replace(/\s+/g, ' ').trim();
-  const snippet =
-    flat.length === 0
-      ? bareKey
-      : flat.length > TITLE_SNIPPET_MAX
-        ? `${flat.slice(0, TITLE_SNIPPET_MAX)}…`
-        : flat;
-  const dmTag = bareKey.startsWith('dm:') ? '·DM' : '';
-  const displayProvider = providerName.charAt(0).toUpperCase() + providerName.slice(1);
-  const contextTag = contextName && contextName.trim().length > 0 ? `${contextName.trim()}·` : '';
-  return `[${contextTag}${displayProvider}${dmTag}] ${snippet}`;
+/** Assemble visible channel metadata locally, using the same character budget for the preview and the final title. */
+export function buildHookSessionTitle(channel: string, subject: string, context?: string | null): string {
+  return formatTaskTopicTitle(subject, channel, context ? { context } : undefined);
 }
 
 type ContextCursorReceipt = { rollback(): void | Promise<void> };
@@ -724,10 +747,11 @@ interface PendingTurnEnd {
  * 放进来与它共享 session 事件流 / origin / 交互路由(codex review #1490)。
  * 与权限档**无关** —— 群轮次不再改用户配的权限模式(见 session-runner)。
  * execute() 与续跑观察共用同一判据, 分叉会让续跑轮丢掉这层独占。
- * 官方飞书 / Lark 的群消息一律在话题里回复(`feishu:topic:…`), 同样是多人可见的群轮次。
+ * 官方飞书 / Lark 的群消息一律在话题里回复(`feishu:topic:…`), 同样是多人可见的群轮次;
+ * 官方 Discord 的服务器频道 / 子区(`discord:ch:…`)同理。
  */
 function deriveLaneKind(externalKey: string): 'dm' | 'group' {
-  return /^(?:telegram|feishu):(?:group|topic):/.test(externalKey) ? 'group' : 'dm';
+  return /^(?:(?:telegram|feishu):(?:group|topic)|discord:ch):/.test(externalKey) ? 'group' : 'dm';
 }
 
 interface PendingReopen {
@@ -1555,7 +1579,9 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
       connectionId: task.connectionId,
       requestId: task.requestId,
       externalKey: task.externalKey,
-      triggerMessageId: task.run.source?.triggerMessageId ?? null,
+      // 只有官方 Telegram 服务端执行桌面端的表情操作。飞书服务端也宣告 msg-op-v1, 但只接进度与
+      // 终稿, 表情由它自己打; 发过去只会每轮被拒三次(UNSUPPORTED_PARAMETERS)。
+      triggerMessageId: task.run.source?.im === 'telegram' ? task.run.source.triggerMessageId ?? null : null,
     };
   }
 
@@ -2024,6 +2050,9 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
       : (['slack', 'feishu', 'lark'].includes(task.run.source?.im ?? '')
         && serverFeatures.get(task.connectionId)?.includes(HOOK_FEATURE_IM_QUESTIONS))
         ? createHookQuestionPublisher({ requestId: task.requestId,
+            // 飞书 / Lark 一题一张卡：答完一题再出下一题（Slack 仍是多题合卡）。
+            sequential: task.run.source?.im === 'feishu' || task.run.source?.im === 'lark',
+            log,
             register: (id, click) => {
               questionActions.set(id, { connectionId: task.connectionId, requestId: task.requestId,
                 generation: task.accountGeneration, click });
@@ -2146,7 +2175,7 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
     if (isError) {
       // 失败原因原先只进 request ledger, 主日志里只有 dispatch / delivered 两行(issue #5912)。
       log.warn(
-        `hook task ${task.requestId} failed: im=${task.run.source?.im ?? 'none'} via=${runnerThrew ? 'throw' : 'outcome'} reason=${hookFailureReasonForLog(outcome.errorMessage)}`,
+        `hook task ${task.requestId} failed: im=${task.run.source?.im ?? 'none'} via=${runnerThrew ? 'throw' : 'outcome'} reason=${hookFailureReasonForLog(outcome.errorMessage, outcome.errorReason)}`,
       );
     }
     let turnEnd: TurnEndPayload = {
@@ -2401,7 +2430,7 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
       if (!connectionId.endsWith(':x') || payload.source?.im !== 'x' || !deps.resolveCompanionTarget) {
         return { reject: 'disabled' };
       }
-      const target = await deps.resolveCompanionTarget(config.companionBotId, payload.externalKey);
+      const target = await deps.resolveCompanionTarget(config.companionBotId, payload.externalKey, payload.source.userText);
       if (!isCurrentGeneration(generation)
         || getConnection(connectionId)?.companionBotId !== config.companionBotId) {
         return { reject: 'disabled' };
@@ -2409,7 +2438,8 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
       companionTargets.set(target.sessionId, { connectionId, botId: config.companionBotId, workingDir: target.workingDir });
       bindings.set(connectionId, payload.externalKey, target.sessionId);
       return { run: {
-        ...target, companionBotId: config.companionBotId, isNew: false,
+        sessionId: target.sessionId, workingDir: target.workingDir, companionBotId: config.companionBotId, isNew: false,
+        ...(target.initialTopicTitle ? { topicNaming: { initialTitle: target.initialTopicTitle, channel: 'X' } } : {}),
         agentKind: null, model: null, effort: null, permissionMode: null,
         title: null, prompt: payload.prompt, attachments: payload.attachments, origin,
       } };
@@ -2454,6 +2484,24 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
     const laneKind = deriveLaneKind(payload.externalKey);
     const laneKey = bindingKey(connectionId, payload.externalKey);
     const namespacedBound = bindings.get(connectionId, payload.externalKey);
+    // Only the current connection's own conversation can reopen its archived task.
+    // Unbound takeovers and legacy account bindings still require an active target.
+    const inspectForMessage = async (
+      sessionId: string,
+      dirAllowed: (dir: string | null) => boolean,
+    ) => {
+      if (sessionId !== namespacedBound || !deps.restoreArchivedSession) return runner.inspect(sessionId);
+      const canRestoreIn = (dir: string | null) =>
+        isCurrentGeneration(generation) && getConnection(connectionId)?.enabled === true && dirAllowed(dir);
+      // Done cleanup holds this same lock until its directory reclamation finishes.
+      // Inspect and restore together so a pre-cleanup stat cannot revive a removed worktree.
+      return withSessionRouteLock(sessionId, async () => {
+        const info = await runner.inspect(sessionId, canRestoreIn);
+        if (info?.companionOwned || !info?.resumableArchive || !canRestoreIn(info.workingDir)) return info;
+        await deps.restoreArchivedSession!(sessionId, { routeLockHeld: true });
+        return isCurrentGeneration(generation) ? runner.inspect(sessionId) : null;
+      });
+    };
     const trackedReplacement = staleTakeoverReplacements.get(laneKey);
     // v1 stored every mapping under the literal "slack" namespace.  A new
     // account/provider namespace may read it only as a candidate; it is moved
@@ -2462,8 +2510,9 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
 
     // 接管路径: server 显式指定已有 session(对话会话同样可接管)
     if (payload.sessionId !== null) {
-      const info = await runner.inspect(payload.sessionId);
+      const info = await inspectForMessage(payload.sessionId, (dir) => inWhitelistNow(dir) || inDialogueRoot(dir));
       if (!isCurrentGeneration(generation)) return { reject: 'disabled' };
+      if (info?.companionOwned) return { reject: 'workspace_not_allowed' };
       if (info !== null) awaitingPersist.delete(payload.sessionId);
       /**
        * 首次失效接管的 ACK 会把 replacement sessionId 回给 server。若 server 在
@@ -2640,9 +2689,10 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
       bindings.remove(legacyNamespace, payload.externalKey);
     };
     if ((!forceNew || reusesTrackedReplacement) && bound) {
-      const info = await runner.inspect(bound);
+      const info = await inspectForMessage(bound, inRequestedProject);
       if (!isCurrentGeneration(generation)) return { reject: 'disabled' };
       // 查得到 = 已落库, 此后一律走映射校验
+      if (info?.companionOwned) return { reject: 'workspace_not_allowed' };
       if (info !== null) awaitingPersist.delete(bound);
       /**
        * 免检窗口里那个会话建在哪 —— 必须拿它跟**当前**映射再比一次: 会话还没
@@ -2817,12 +2867,16 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
     const colon = payload.externalKey.indexOf(':');
     const providerName =
       payload.source?.im?.trim() || (colon > 0 ? payload.externalKey.slice(0, colon) : config.name);
-    const bareKey = colon > 0 ? payload.externalKey.slice(colon + 1) : payload.externalKey;
-    // 标题摘要用 server 单独下发的干净原文, 而不是 prompt —— prompt 可能带
-    // thread 上下文块(见 buildHookSessionTitle 注释)。空串按"没有"处理:
-    // 纯 @ 无正文时 server 的 userText 为空, 而 prompt 仍是原文, 回退它更有信息。
-    const sourceUserText = payload.source?.userText ?? '';
-    const titleText = sourceUserText.trim().length > 0 ? sourceUserText : payload.prompt;
+    const channel = imChannelDisplayName(providerName) ?? providerName.charAt(0).toUpperCase() + providerName.slice(1);
+    // Older relays sometimes supplied only a plain prompt. An enriched prompt is never title material.
+    const plainPrompt = payload.prompt.trim();
+    const legacyText = payload.source?.userText == null && !/^[<\[]|[\r\n]/.test(plainPrompt) ? plainPrompt : '';
+    const titleText = payload.source?.userText?.trim() || legacyText;
+    const context = payload.source?.teamName ||
+      (payload.source?.im === 'telegram' || payload.source?.im === 'x' || payload.source?.im === 'feishu' ||
+        payload.source?.im === 'discord'
+        ? payload.source.channelName : null);
+    const title = buildHookSessionTitle(channel, titleText, context);
     return {
       run: {
         sessionId,
@@ -2843,17 +2897,8 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
             ? { workspaceAlias: effectiveWorkspace }
             : {}
           : { workspaceAlias: workspaceAliasFor(dir).workspaceAlias ?? (effectiveWorkspace as string) }),
-        title: buildHookSessionTitle(
-          providerName,
-          titleText,
-          bareKey,
-          payload.source?.teamName ??
-            (payload.source?.im === 'telegram' ||
-            payload.source?.im === 'x' ||
-            payload.source?.im === 'feishu'
-              ? payload.source.channelName
-              : null),
-        ),
+        title,
+        topicNaming: { initialTitle: title, channel, context },
         prompt: payload.prompt,
         attachments: payload.attachments,
         origin,
@@ -3243,6 +3288,7 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
           }
           return (
             info.usable === true &&
+            (!info.companionOwned || companionTargets.has(sessionId)) &&
             info.workingDir !== null &&
             dirStillAllowed(connectionId, info.workingDir, sessionId)
           );
@@ -3352,6 +3398,7 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
             if (
               isCurrentGeneration(admittedGeneration) &&
               info?.usable === true &&
+              (!info.companionOwned || companionTargets.has(previous)) &&
               info.workingDir !== null &&
               dirStillAllowed(connectionId, info.workingDir, previous)
             ) {
@@ -3372,9 +3419,18 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
       if (!accountActive) return;
       const question = questionActions.get(payload.interactionId);
       if (question) {
-        if (question.connectionId === connectionId && question.requestId === payload.requestId
-          && isCurrentGeneration(question.generation)) {
-          void question.click(payload.buttonId, payload.answerText).catch(() => log.warn('Telegram question update failed'));
+        // 问题卡按钮回流: 归属不符或按钮已过时只记原因, 不报错 —— 用户看到「已收到」却没有反应时靠它排查。
+        if (question.connectionId !== connectionId || question.requestId !== payload.requestId) {
+          log.info(`question answer for ${payload.interactionId} ignored: other connection or request`);
+        } else if (!isCurrentGeneration(question.generation)) {
+          log.info(`question answer for ${payload.interactionId} ignored: account changed`);
+        } else {
+          void question.click(payload.buttonId, payload.answerText).then(
+            (accepted) => {
+              if (!accepted) log.info(`question answer for ${payload.interactionId} not applied: stale button or incomplete answers`);
+            },
+            () => log.warn(`question card update failed for ${payload.interactionId}`),
+          );
         }
         return;
       }
