@@ -56,7 +56,7 @@ function setup(options: {
   states?: Record<string, 'pending' | 'approved' | 'rejected'>;
 } = {}) {
   let now = 1_000;
-  let groups = options.groups ?? { anthropic: { strategy: 'least', autoSwitch: true, members: [LOCAL, FRIEND, MINI] } };
+  let groups = options.groups ?? { anthropic: { strategy: 'expiring', autoSwitch: true, members: [LOCAL, FRIEND, MINI] } };
   let shares: ProviderShareOwned[] | null = options.shares === undefined
     ? [owned([{ memberId: 'carol', displayName: 'Carol' }, { memberId: 'dave', displayName: 'Dave' }])]
     : options.shares;
@@ -199,7 +199,7 @@ describe('provider group reshare (group computer side)', () => {
 
   it.each(['offline', 'paused'] as const)('wakes only the recovered peer after %s and retains cleanup across restart', async (status) => {
     vi.useFakeTimers();
-    const env = setup({ groups: { anthropic: { strategy: 'least', autoSwitch: true,
+    const env = setup({ groups: { anthropic: { strategy: 'expiring', autoSwitch: true,
       members: [FRIEND, member('share:a2:anthropic', 'share', 'share:a2')] } } });
     env.availability.set('share:a1', status);
     env.availability.set('share:a2', 'offline');
@@ -254,7 +254,7 @@ describe('provider group reshare (group computer side)', () => {
 
   it('rechecks a denied peer and stale healthy views without waking another failing peer', async () => {
     const env = setup({ states: { [CAROL]: 'approved' },
-      groups: { anthropic: { strategy: 'least', autoSwitch: true,
+      groups: { anthropic: { strategy: 'expiring', autoSwitch: true,
         members: [FRIEND, member('share:a2:anthropic', 'share', 'share:a2')] } } });
     env.readCaps.mockImplementation(async (device) => {
       if (device === 'share:a2') throw new Error('offline');
@@ -368,7 +368,7 @@ describe('provider group reshare (group computer side)', () => {
   it('tells a computer that left every group to drop the people it was told about', async () => {
     const env = setup({ states: { [CAROL]: 'approved' } });
     await env.reshare.sync('test');
-    env.setGroups({ anthropic: { strategy: 'least', autoSwitch: true, members: [LOCAL, MINI] } });
+    env.setGroups({ anthropic: { strategy: 'expiring', autoSwitch: true, members: [LOCAL, MINI] } });
     await env.reshare.sync('group');
     expect(env.invoke).toHaveBeenLastCalledWith('share:a1', { op: 'reshare', entries: [] });
     expect(env.reshare.allows('share:a1', CAROL)).toBe(false);
@@ -412,7 +412,7 @@ describe('provider group reshare (group computer side)', () => {
     env.setGroups({});
     env.invoke.mockRejectedValueOnce(new Error('offline'));
     await env.reshare.sync('removed');
-    env.setGroups({ anthropic: { strategy: 'least', autoSwitch: true, members: [LOCAL, FRIEND] } });
+    env.setGroups({ anthropic: { strategy: 'expiring', autoSwitch: true, members: [LOCAL, FRIEND] } });
     env.restart();
     await env.reshare.sync('rejoined');
     expect(env.invoke.mock.calls.slice(2).map(([, request]) => request)).toEqual([

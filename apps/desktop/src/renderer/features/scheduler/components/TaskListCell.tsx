@@ -39,6 +39,7 @@ import {
 } from '@/components/ui/dropdown-menu';
 
 import { formatLastRun, formatNextRun } from '../lib/formatters';
+import { Badge } from '@/components/ui/badge';
 
 interface Props {
   schedule: Schedule;
@@ -164,7 +165,8 @@ export function TaskListCell({
   } else if (s.status === 'paused') {
     subtitle = t('scheduler.cell.subtitlePaused');
   } else if (s.manual) {
-    subtitle = lastText ?? (prRule ? t(`scheduler.prTrigger.${prRule.change}`) : s.webhookTrigger ? t('scheduler.webhook.title') : t('scheduler.cell.subtitleManual'));
+    subtitle = lastText ?? (prRule ? t(`scheduler.prTrigger.${prRule.change}`) : s.webhookTrigger
+      ? t(s.webhookTrigger.source?.preset === 'plugin' ? 'scheduler.webhook.pluginTitle' : 'scheduler.webhook.title') : t('scheduler.cell.subtitleManual'));
   } else if (!s.recurring) {
     subtitle = lastText ?? t('scheduler.cell.subtitleOnce');
   } else if (lastText && nextText) {
@@ -365,26 +367,18 @@ export function TaskListCell({
             视觉规格：椭圆描边 + 11px 灰字。
             编辑态下隐藏 chip 给输入框留满宽度。 */}
         {!isEditing && isProjectSchedule && (
-          <span
-            className={cn(
-              'shrink-0 inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-11 font-medium leading-none',
-              'border-[var(--cmd-palette-border)] text-[var(--cmd-palette-item-meta)]',
-            )}
+          <Badge
+            tone="outline"
+            icon={<FolderGit2 size={10} strokeWidth={1.8} />}
             title={t('scheduler.projectAutomation.cell.tooltip')}
           >
-            <FolderGit2 size={10} strokeWidth={1.8} />
             {t('scheduler.projectAutomation.cell.tag')}
-          </span>
+          </Badge>
         )}
         {!isEditing && (prRule || s.webhookTrigger || s.manual || !s.recurring) && (
-          <span
-            className={cn(
-              'shrink-0 translate-x-[2px] rounded-full border px-2 py-0.5 text-11 font-medium leading-none',
-              'border-[var(--cmd-palette-border)] text-[var(--cmd-palette-item-meta)]',
-            )}
-          >
-            {prRule ? (prRule.url.includes('/-/merge_requests/') ? 'MR' : 'PR') : s.webhookTrigger ? t('scheduler.cell.tagWebhook') : s.manual ? t('scheduler.cell.tagManual') : t('scheduler.cell.tagOnce')}
-          </span>
+          <Badge tone="outline" className="translate-x-[2px]">
+            {prRule ? (prRule.url.includes('/-/merge_requests/') ? 'MR' : 'PR') : s.webhookTrigger ? t(s.webhookTrigger.source?.preset === 'plugin' ? 'scheduler.cell.tagPluginEvent' : 'scheduler.cell.tagWebhook') : s.manual ? t('scheduler.cell.tagManual') : t('scheduler.cell.tagOnce')}
+          </Badge>
         )}
       </div>
       {hasMetaRow && (

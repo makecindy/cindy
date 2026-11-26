@@ -10,7 +10,7 @@
  * tier:unit(jsdom 组件)。实测耗时：<1s。
  */
 
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('react-i18next', async (importOriginal) => {
@@ -82,7 +82,7 @@ function makeSession(partial: Partial<Session> & { id: string }): Session {
   } as Session;
 }
 
-function buildFixtureModel() {
+function buildFixtureModel({ mixed = false, shareUsesAgentNet = false } = {}) {
   const sessions: Session[] = [
     makeSession({ id: 'sess-1', title: '重构支付结算核心状态机', agentDeviceId: 'dev-mac', model: 'Claude Opus 4.6' }),
     makeSession({ id: 'sess-2', title: 'Orca 多 Worker 并发调度', agentDeviceId: 'dev-mac', model: 'Claude Sonnet 4.6' }),
@@ -122,7 +122,7 @@ function buildFixtureModel() {
 
   const peerLinks: DeviceLinkPeerLinksSnapshot = {
     links: [
-      { deviceId: 'dev-mac', open: true, path: 'direct', rttMs: 4, sentAgoMs: 500, receivedAgoMs: 200 },
+      { deviceId: 'dev-mac', encrypted: true, open: true, path: mixed ? 'relay' : 'direct', rttMs: 4, sentAgoMs: 500, receivedAgoMs: 200 },
     ],
     agentNetRoutes: [
       { deviceId: 'dev-mac', path: 'direct', rttMs: 4, directRttMs: 4, relayRttMs: 18, pathPreference: 'auto' },
@@ -131,14 +131,15 @@ function buildFixtureModel() {
       {
         shareId: 'sh-1',
         path: 'relay',
+        protocol: shareUsesAgentNet ? 'agent-net' : 'device-link',
         rttMs: 28,
         sentAgoMs: null,
         receivedAgoMs: null,
         relayKind: 'official',
         relayHost: null,
-        relayTransport: 'udp',
-        relayRttMs: 16,
-        region: 'cn-east',
+        relayTransport: shareUsesAgentNet ? 'udp' : 'websocket',
+        relayRttMs: shareUsesAgentNet ? 16 : null,
+        region: mixed ? undefined : 'cn-east',
       },
     ],
     relayRttMs: 16,
@@ -164,6 +165,31 @@ function buildFixtureModel() {
 }
 
 describe('RemoteProviderTopology', () => {
+  it('keeps both protocols visible on machine cards when the mixed relay branches are too short', () => {
+    const width = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({ width: 600 } as DOMRect);
+    try {
+      const model = buildFixtureModel({ mixed: true });
+      const { container } = render(<RemoteProviderTopology model={model} onOpenTask={vi.fn()} />);
+      const cards = [...container.querySelectorAll('.rcv2-prov-card')].map((card) => card.textContent);
+      expect(cards.some((card) => card?.includes('Mac Studio') && card.includes('Agent-Net'))).toBe(true);
+      expect(cards.some((card) => card?.includes('Device Link'))).toBe(true);
+    } finally {
+      width.mockRestore();
+    }
+  });
+
+  it('shows end-to-end relay latency in the share card and keeps the hop latency on the relay', async () => {
+    const model = buildFixtureModel({ shareUsesAgentNet: true });
+    const { container } = render(<RemoteProviderTopology model={model} onOpenTask={vi.fn()} />);
+    expect(container.querySelector('.rcv2-prov-relay')?.textContent).toContain('16 ms');
+    const shareCard = container.querySelector('.rcv2-prov-host-badge')?.closest('button');
+    expect(shareCard).not.toBeNull();
+    fireEvent.click(shareCard!);
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByText('28 ms')).toBeTruthy();
+    expect(within(dialog).queryByText('16 ms')).toBeNull();
+  });
+
   it('reuses .rcv2-tile + PlatformGlyph on own hosts and opens jumpable task list without redundant jump text', () => {
     const model = buildFixtureModel();
     const onOpenTask = vi.fn();
@@ -186,6 +212,18 @@ describe('RemoteProviderTopology', () => {
     const shareBadge = container.querySelector('.rcv2-prov-host-badge');
     expect(shareBadge).not.toBeNull();
     expect(shareBadge?.parentElement?.textContent?.trim()).toBe('C');
+
+    // 2026-11-26 用户要求：不点开卡片也能看出数据走 Agent-Net 还是 Device Link——
+    // 直连写在中间线路标签下面；经中转的写在中转站下面一次就够（中转只转发，前后两段是同一种协议），分支上不再重复。
+    const directPill = container.querySelector('.rcv2-prov-direct-pill');
+    expect(directPill?.textContent).toBe('直连 · UDP 4 ms');
+    expect(directPill?.nextElementSibling?.textContent).toBe('Agent-Net');
+    const relayNode = container.querySelector('.rcv2-prov-relay');
+    expect(relayNode?.textContent).toContain('WS');
+    expect(relayNode?.previousElementSibling?.textContent).toBe('Device Link');
+    const relayRtt = container.querySelector('.rcv2-prov-rtt-pill');
+    expect(relayRtt?.textContent).toBe('28 ms');
+    expect(container.querySelectorAll('.rcv2-prov-protocol-tag')).toHaveLength(2);
 
     // Click the Task Bundle card (>= 3 running tasks on Mac Studio) to expand task popover
     const bundleButton = screen.getByRole('button', { name: /3 个运行中/ });
@@ -212,6 +250,7 @@ describe('RemoteProviderTopology', () => {
     render(
       <RemoteProviderTopology
         model={model}
+        primaryRelayName="Cindy 中转"
         onOpenTask={onOpenTask}
         onPathPreferenceChange={onPathPreferenceChange}
       />,
@@ -226,6 +265,18 @@ describe('RemoteProviderTopology', () => {
     // Open Mac Studio machine popover, check auto-route rule info button, and switch path preference to relay
     const macCard = screen.getByRole('button', { name: /Mac Studio/ });
     fireEvent.click(macCard);
+    // 2026-11-26 用户要求：路径与延迟改成设备卡片的「线路选择」写法——直连、经「中转」中转各一行写最近测得的延迟，
+    // 传输协议单列在「连接方式」，不再有把两条延迟挤在一起的「延迟」行。
+    expect(screen.getByText('经「Cindy 中转」中转')).not.toBeNull();
+    expect(screen.getByText('4 ms')).not.toBeNull();
+    expect(screen.getByText('18 ms')).not.toBeNull();
+    expect(screen.getByText('最近测得')).not.toBeNull();
+    expect(screen.queryByText('延迟')).toBeNull();
+    expect(screen.getByText('连接方式')).not.toBeNull();
+    // 「连接方式」写出数据实际走的协议与底层传输（同账号机器经加密控制链路直连 → Agent-Net · UDP）。
+    const machineCard = within(screen.getByRole('dialog'));
+    expect(machineCard.getByText('Agent-Net')).not.toBeNull();
+    expect(machineCard.getByText('· UDP')).not.toBeNull();
     const infoBtn = screen.getByRole('button', { name: '自动选路规则' });
     fireEvent.click(infoBtn);
     expect(screen.getByText(/25–50 ms/)).not.toBeNull();

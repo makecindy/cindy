@@ -42,6 +42,7 @@ import {
   BOT_GROUP_MEMBER_LINK_REL,
   BOT_GROUP_REMOTE_COLLECTION_ID,
   BOT_GROUP_REMOTE_RESOURCE_KIND,
+  isOwnBotGroupSpeaker,
   type ChatMaskAction,
   type BotGroupDetail,
   type BotGroupFailure,
@@ -53,7 +54,7 @@ import {
   type BotGroupThreadShareView,
 } from '../../shared/botGroupChat.js';
 import type { BotGroupChatService } from './botGroupChatService.js';
-import { botGroupActivityAt, projectBotGroupExecutionFailures } from '@cindy/maker-shared/botGroupPresentation';
+import { botGroupActivityAt, chatGroupMembership, projectBotGroupExecutionFailures } from '@cindy/maker-shared/botGroupPresentation';
 
 const FALLBACK_MESSAGES = 20;
 const FALLBACK_MESSAGE_CHARS = 280;
@@ -244,7 +245,11 @@ export function botGroupRemotePreview(group: BotGroupSummary): RemoteLocalizedTe
   if (group.planningBotId) return localized(COPY.planning, { name: name(group.planningBotId) });
   const plan = group.openPlan;
   if (plan?.status === 'proposed') return localized(COPY.proposed, { name: name(group.organizerBotId) });
-  if (plan?.status === 'running' && plan.currentStep !== null) {
+  const ownPlanRunning = !group.serverBacked
+    || (group.round
+      ? group.round.speakers.some((speaker) => speaker.activity === 'step' && isOwnBotGroupSpeaker(group, speaker))
+      : teammateGroupActivity(group).phase === 'running');
+  if (plan?.status === 'running' && plan.currentStep !== null && ownPlanRunning) {
     return localized(COPY.running, { step: plan.currentStep + 1, total: plan.stepCount, name: plan.currentBotName ?? '' });
   }
   if (plan?.status === 'waiting' && plan.currentBotName) {
@@ -265,13 +270,16 @@ export function botGroupRemotePreview(group: BotGroupSummary): RemoteLocalizedTe
 }
 
 export function botGroupRemoteItem(group: BotGroupSummary): RemoteCollectionItem {
-  const busy = group.speakingBotIds.length > 0 || group.planningBotId !== null;
+  const activity = teammateGroupActivity(group);
+  const busy = group.serverBacked
+    ? activity.phase === 'running'
+    : group.speakingBotIds.length > 0 || group.planningBotId !== null;
   const preview = botGroupRemotePreview(group);
   return {
     ref: groupRef(group.id),
     display: {
       title: group.name,
-      teammateActivity: teammateGroupActivity(group),
+      teammateActivity: activity,
       subtitle: group.members.map((member) => member.name).join('、'),
       ...(preview ? { preview } : {}),
       timestamp: botGroupActivityAt(group),
@@ -290,7 +298,7 @@ export function botGroupRemoteItem(group: BotGroupSummary): RemoteCollectionItem
       label: member.name,
     })),
     revision: JSON.stringify([
-      teammateGroupActivity(group).phase,
+      activity.phase,
       group.updatedAt,
       group.name,
       group.external === true,
@@ -347,6 +355,7 @@ export function botGroupRemoteChatData(detail: BotGroupDetail): BotGroupRemoteCh
     supportsMemberRemoval: detail.serverBacked === true,
     supportsOwnBotRemoval: detail.serverBacked === true,
     supportsSettingsManagement: detail.serverBacked === true,
+    ...(detail.serverBacked && detail.supportsGroupAssistant ? { supportsAssistantManagement: true } : {}),
   };
 }
 
@@ -578,6 +587,27 @@ export function registerBotGroupRemoteResourceProvider(service: () => BotGroupCh
           if (!receipt.ok) throw new RemoteResourceRegistryError('INVALID_PARAMS', receipt.errorCode);
           ownerService();
           return { result: receipt, effects: [] };
+        }
+        case 'assistantDevice': {
+          const deviceId = input.deviceId;
+          if (!current.chatServer || typeof deviceId !== 'string' || !visibleGroup.assistantComputers?.some(device => device.id === deviceId))
+            throw new RemoteResourceRegistryError('INVALID_PARAMS', 'DEVICE_UNAVAILABLE');
+          const receipt = await current.chatServer.manage({ groupId, action: { type: 'assistantDevice', deviceId } });
+          if (!receipt.ok) refuse(chatGroupFailure(new Error(receipt.errorCode)));
+          return { effects: [{ kind: 'refresh-collection', collectionId: BOT_GROUP_REMOTE_COLLECTION_ID }] };
+        }
+        case 'set-assistant': {
+          if (!visibleGroup.serverBacked || !visibleGroup.supportsGroupAssistant || !current.chatServer)
+            throw new RemoteResourceRegistryError('INVALID_PARAMS', 'UNSUPPORTED_OPERATION');
+          if (visibleGroup.archived || visibleGroup.dissolvedAt || !chatGroupMembership(visibleGroup).manager)
+            throw new RemoteResourceRegistryError('INVALID_PARAMS', 'ROLE_REQUIRED');
+          if (typeof input.assistant !== 'boolean' || typeof input.expectedRevision !== 'number')
+            throw new RemoteResourceRegistryError('INVALID_PARAMS', 'INVALID_PARAMS');
+          const receipt = await current.chatServer.manage({ groupId, action: { type: 'update', assistant: input.assistant,
+            expectedRevision: input.expectedRevision, name: visibleGroup.name, topic: visibleGroup.topic ?? '', description: visibleGroup.description ?? '' } });
+          if (!receipt.ok) refuse(chatGroupFailure(new Error(receipt.errorCode)));
+          result = { ok: true };
+          break;
         }
         case 'notifications': {
           if (!visibleGroup.supportsNotificationSettings || !current.chatServer || !['all', 'mentions', 'none'].includes(String(input.mode)))

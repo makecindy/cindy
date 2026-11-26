@@ -269,6 +269,7 @@ import {
   compensatePrecreatedWorktree,
   resolveStartedDowngradeOrCommit,
   resolveSubmitGuardCatalog,
+  resolveWorkspaceForDeviceSwitch,
   validateNewSessionDraft,
   type SubmitGuardCatalog,
   type NewSessionAgentKind,
@@ -276,6 +277,7 @@ import {
   type NewSessionDeviceOption,
   type NewSessionRemoteAgentPick,
   type NewSessionStoredPreferences,
+  type NewSessionWorkspaceKind,
 } from '@/session/newSession';
 import { isDefaultDraftSessionTitle } from '@cindy/maker-shared/session-title';
 import { newSessionText } from '@/session/newSessionMessages';
@@ -610,7 +612,10 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
   const [selectedDeviceId, setSelectedDeviceId] = useState(routeDeviceId);
   const [selectedDeviceName, setSelectedDeviceName] = useState(routeDeviceName);
   const [newSessionPreferences, setNewSessionPreferences] = useState<NewSessionStoredPreferences | null>(null);
+  const newSessionPreferencesRef = useRef(newSessionPreferences);
+  newSessionPreferencesRef.current = newSessionPreferences;
   const workingDirPreferenceOverridesRef = useRef<Record<string, string>>({});
+  const workspaceKindPreferenceOverridesRef = useRef<Record<string, NewSessionWorkspaceKind>>({});
   const [newSessionPreferencesLoaded, setNewSessionPreferencesLoaded] = useState(false);
   const [devicePickerOpen, setDevicePickerOpen] = useState(false);
   const preferredDefaultDevice = useMemo(
@@ -1326,11 +1331,13 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
       hasFastModeCap: capabilities?.hasFastMode === true,
     });
   useNewSessionWorkspacePreferences({
+    selectedDeviceId,
     newSessionPreferences,
     setNewSessionPreferences,
     newSessionPreferencesLoaded,
     setNewSessionPreferencesLoaded,
     workingDirPreferenceOverridesRef,
+    workspaceKindPreferenceOverridesRef,
     initialWorkingDir,
     userTouchedWorkspaceRef,
     setDraft,
@@ -1991,12 +1998,26 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
       setAttachments, setMediaAssetAttachments, setAttachmentPreviews, setAttachmentError,
       forgetAllAnnotations: () => composerAnnotationsRef.current?.forgetAllAttachments(),
     });
-    initialWorkspaceKeyRef.current = null;
-    setDraft((current) => ({
-      ...current,
-      ...(current.workspaceKind === 'project' ? { workingDir: '' } : {}),
-      ...(clearAutoRuntime ? { model: '', providerId: null, fastMode: false } : {}),
-    }));
+    const deviceChanged = option.deviceId !== previousDeviceId;
+    if (deviceChanged) {
+      initialWorkspaceKeyRef.current = null;
+    }
+    setDraft((current) => {
+      const nextWorkspace = deviceChanged
+        ? resolveWorkspaceForDeviceSwitch({
+            currentWorkspaceKind: current.workspaceKind,
+            targetDeviceId: option.deviceId,
+            preferences: newSessionPreferencesRef.current,
+            workingDirOverrides: workingDirPreferenceOverridesRef.current,
+            workspaceKindOverrides: workspaceKindPreferenceOverridesRef.current,
+          })
+        : null;
+      return {
+        ...current,
+        ...(nextWorkspace ?? {}),
+        ...(clearAutoRuntime ? { model: '', providerId: null, fastMode: false } : {}),
+      };
+    });
   }, [attachments, auth, cancelVoiceForDeviceSwitch, creating, discardAllPendingUploads, voiceIsProcessing, voiceState]);
 
   const handleBack = useCallback(() => {
@@ -2440,6 +2461,7 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
     setBrowseError,
     setShowHiddenDirectories,
     workingDirPreferenceOverridesRef,
+    workspaceKindPreferenceOverridesRef,
     setNewSessionPreferences,
     userTouchedWorkspaceRef,
     setWorkspacePickerOpen,
@@ -4264,6 +4286,13 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
       void saveNewSessionPreferences({
         agentKind: effectiveDraft.agentKind,
         workspaceKind: effectiveDraft.workspaceKind,
+        workspaceKindForDevice: {
+          deviceId: selectedDeviceId,
+          workspaceKind: effectiveDraft.workspaceKind,
+        },
+        ...(effectiveDraft.workspaceKind === 'project' && effectiveDraft.workingDir.trim()
+          ? { workingDirForDevice: { deviceId: selectedDeviceId, workingDir: effectiveDraft.workingDir } }
+          : {}),
         device: {
           deviceId: selectedDeviceId,
           name: deviceDisplayName(selectedDeviceId, selectedDeviceName),
@@ -4876,6 +4905,13 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
       void saveNewSessionPreferences({
         agentKind: draft.agentKind,
         workspaceKind: draft.workspaceKind,
+        workspaceKindForDevice: {
+          deviceId: selectedDeviceId,
+          workspaceKind: draft.workspaceKind,
+        },
+        ...(draft.workspaceKind === 'project' && draft.workingDir.trim()
+          ? { workingDirForDevice: { deviceId: selectedDeviceId, workingDir: draft.workingDir } }
+          : {}),
         device: {
           deviceId: selectedDeviceId,
           name: deviceDisplayName(selectedDeviceId, selectedDeviceName),

@@ -29,7 +29,7 @@ export default {
     };
     await pick('none');
     await page.waitForFunction(() => JSON.parse(localStorage.getItem('notifications.agentIslandSoundSettings') ?? '{}').sounds?.complete?.id === 'none');
-    await ui.capture('follow-system', { locator: card });
+    await ui.capture('sound-none', { locator: card });
     await pick('gem-collect');
     await page.waitForFunction(() => JSON.parse(localStorage.getItem('notifications.agentIslandSoundSettings') ?? '{}').sounds?.complete?.id === 'gem-collect');
     await ui.capture('event-sounds', { locator: card });

@@ -6,15 +6,16 @@ import { getDeviceLinkInvokeContext } from './invoke-context.js';
 import { agentNetClientForMediaSlot, agentNetMediaTarget, agentNetRequiresEncryption, agentNetSelectionKey, agentNetAllowsLegacy } from './agentNetRuntime.js';
 import { agentNetMediaDestination, installAgentNetMediaBackend } from './agentNetMediaRouting.js';
 import { agentNetSharingMediaTarget, agentNetSharingMediaClient } from './agentNetSharing.js';
+import { linkedProviderShareMediaClient, linkedProviderShareMediaTarget } from './agentNetLinkedShares.js';
 
 export function agentNetMediaScope(): string {
   const target = agentNetMediaDestination() ?? getDeviceLinkInvokeContext()?.controllerDeviceId;
-  const route = target ? agentNetSharingMediaTarget(target) ?? agentNetMediaTarget(target) : null;
+  const route = target ? agentNetSharingMediaTarget(target) ?? linkedProviderShareMediaTarget(target) ?? agentNetMediaTarget(target) : null;
   return route ? JSON.stringify([route.slot, route.api.certificate.networkId, route.recipient]) : '';
 }
 export function encryptedMediaUploadTarget() {
   const peer = agentNetMediaDestination() ?? getDeviceLinkInvokeContext()?.controllerDeviceId;
-  const target = peer ? agentNetSharingMediaTarget(peer) ?? agentNetMediaTarget(peer) : null;
+  const target = peer ? agentNetSharingMediaTarget(peer) ?? linkedProviderShareMediaTarget(peer) ?? agentNetMediaTarget(peer) : null;
   if (!target && agentNetRequiresEncryption()) throw new Error('AGENT_NET_ENCRYPTED_MEDIA_TARGET_REQUIRED');
   return target;
 }
@@ -45,7 +46,8 @@ export async function uploadAgentNetMedia(size: number, contentType: string, rea
 }
 function apiFor(key: AgentNetMediaKey) {
   const caller = agentNetMediaDestination() ?? getDeviceLinkInvokeContext()?.controllerDeviceId;
-  const scoped = agentNetSharingMediaClient(key.slot, key.networkId, caller, key.sharedTask?.sharedTaskId);
+  const scoped = agentNetSharingMediaClient(key.slot, key.networkId, caller, key.sharedTask?.sharedTaskId)
+    ?? (key.sharedTask ? null : linkedProviderShareMediaClient(key.slot, key.networkId, caller));
   if (!scoped && (key.sharedTask || isScopedPeer(caller))) throw new Error('AGENT_NET_MEDIA_SCOPE_MISMATCH');
   const api = scoped ?? agentNetClientForMediaSlot(key.slot, key.networkId);
   if (!api || (api.delegation && api.delegation.id !== key.grantId)) throw new Error('AGENT_NET_MEDIA_SOURCE_UNAVAILABLE');

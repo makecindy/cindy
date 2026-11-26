@@ -5,7 +5,7 @@
 import { LoaderCircle, Search, SlidersHorizontal, X } from "lucide-react-native";
 import { ActivityIndicator, Pressable, StyleSheet, View } from "react-native";
 import { useTranslation } from "react-i18next";
-import { TextInput } from "@/components/AppText";
+import { Text, TextInput } from "@/components/AppText";
 import { FilterReminderDot } from "@/components/FilterReminderDot";
 import { mobileInteractionStyles } from "@/components/mobileInteractionStyles";
 import { useReduceMotionEnabled } from "@/hooks/useReduceMotion";
@@ -15,8 +15,10 @@ import {
 } from "@/platform/chrome";
 import { useTheme, useThemedStyles, type ThemeColors } from "@/theme";
 import {
+  fontWeight,
   iconSize,
   iconStroke,
+  lineHeight,
   radius,
   spacing,
   typeScale,
@@ -34,6 +36,7 @@ export function HomeSearchBar({
   padded = true,
   query,
   searching = false,
+  poolCapped = false,
   testIDs,
 }: {
   autoFocus: boolean;
@@ -47,6 +50,7 @@ export function HomeSearchBar({
   padded?: boolean;
   query: string;
   searching?: boolean;
+  poolCapped?: boolean;
   testIDs?: {
     clear?: string;
     filter?: string;
@@ -154,12 +158,20 @@ export function HomeSearchBar({
           filterButton
         )}
       </View>
+      {poolCapped && !searching ? <Text style={styles.partial}>{t("devices.list.search.partial")}</Text> : null}
     </View>
   );
 }
 
 const makeStyles = (colors: ThemeColors) =>
   StyleSheet.create({
+    partial: {
+      color: colors.textSecondary,
+      fontSize: typeScale.footnote,
+      lineHeight: lineHeight.caption,
+      fontWeight: fontWeight.regular,
+      marginTop: spacing.xs,
+    },
     row: {
       paddingBottom: spacing.sm,
       paddingHorizontal: spacing.lg,
