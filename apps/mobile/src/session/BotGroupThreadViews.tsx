@@ -23,14 +23,12 @@ type BotGroupThreadSummary = Pick<BotGroupMessageView, 'replyCount' | 'threadPre
 export function BotGroupThreadEntry({ message, summary, identityFor, onPress }: {
   message: BotGroupMessageView; summary?: BotGroupThreadSummary; identityFor: BotGroupIdentityLookup; onPress(): void;
 }) {
-  const { t } = useTranslation();
   const replyCount = summary?.replyCount ?? message.replyCount ?? (message.threadShare ? 1 : 0);
   const threadPreview = summary?.threadPreview ?? message.threadPreview ?? message.threadShare?.threadPreview;
   const threadUnread = summary?.threadUnread ?? message.threadUnread ?? message.threadShare?.threadUnread;
   const responders = threadPreview?.responders ?? threadPreview?.replies ?? [];
-  return <ChatThreadSummary compact replyCount={replyCount} lastReplyAt={threadPreview?.replies.at(-1)?.createdAt}
+  return <ChatThreadSummary compact replyCount={replyCount} lastReplyAt={threadUnread?.count ? undefined : threadPreview?.replies.at(-1)?.createdAt}
     avatars={responders.slice(0, 3).map(reply => <BotGroupAvatar key={reply.id} deviceId="" online identity={identityFor(reply.authorBotId ?? '', reply.authorName)} size={iconSize.lg} />)}
-    unread={threadUnread?.count ? t('groupChat.thread.newReplies', { count: threadUnread.count }) + (threadUnread.mentioned ? ` · ${t('groupChat.thread.mentioned')}` : '') : undefined}
     onPress={onPress} testID={`botGroup.thread.${message.id}`}
     accessibilityHint={threadPreview?.replies.map(reply => `${reply.authorName}: ${reply.text}`).join(' · ')} />;
 }

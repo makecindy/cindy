@@ -10,8 +10,19 @@ export class BonjourDiscovery {
   private timer: ReturnType<typeof setInterval> | null = null;
   private closed = false;
   private refreshing = false;
+  private republishQueued = false;
   private readonly name = 'cindy-' + randomBytes(12).toString('hex');
-  constructor(private readonly lan: LanDiscovery, private readonly port: number) {}
+  constructor(private readonly lan: LanDiscovery, private port: number) {}
+  /** 底层 UDP 套接字重建换端口后同步重新发布 DNS-SD 服务（须在 `lan.updatePort` 之后调用，使 TXT beacon 与 SRV 端口一致）。 */
+  updatePort(port: number): void {
+    if (this.closed || !Number.isInteger(port) || port < 1 || port > 65535 || this.port === port) return;
+    this.port = port;
+    if (this.refreshing) {
+      this.republishQueued = true;
+      return;
+    }
+    this.publish();
+  }
   start(): void {
     if (this.bonjour || this.closed) return;
     try {
@@ -48,6 +59,10 @@ export class BonjourDiscovery {
       const service = this.service = this.bonjour.publish({ name: this.name, host: this.name + '.local',
         type: 'cindy-agentnet', protocol: 'udp', port: this.port, txt, probe: false, disableIPv6: true });
       service.on('error', () => this.close());
+      if (this.republishQueued) {
+        this.republishQueued = false;
+        this.publish();
+      }
     };
     if (previous) { previous.stop(() => { previous.destroyed = true; publish(); }); } else publish();
   }
