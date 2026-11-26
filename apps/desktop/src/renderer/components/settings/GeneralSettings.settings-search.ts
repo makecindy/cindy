@@ -40,7 +40,7 @@ export const generalSettings = defineSettings({
     tab: 'general',
     targetId: 'settings-first-run-guide',
     titleKey: 'firstRunGuide.settings.title',
-    sectionKey: 'firstRunGuide.settings.title',
+    sectionKey: 'settings.contentGroups.getStarted',
     aliases: ['guide', 'onboarding', 'get started', 'welcome', '引导', '新手', '开始使用'],
   },
   setupMigration: {
@@ -48,7 +48,7 @@ export const generalSettings = defineSettings({
     tab: 'general',
     targetId: 'settings-setup-migration',
     titleKey: 'setupMigration.settings.title',
-    sectionKey: 'setupMigration.settings.title',
+    sectionKey: 'settings.contentGroups.getStarted',
     aliases: ['migrate', 'migration assistant', 'new computer', '迁移', '迁移助理', '新电脑'],
   },
   language: {

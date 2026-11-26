@@ -1845,6 +1845,23 @@
       "restored": "已恢复默认设置",
       "restoreFailed": "未能恢复默认设置"
     },
+    "contentGroups": {
+      "getStarted": "开始使用",
+      "versions": "版本与更新",
+      "diagnostics": "诊断与日志",
+      "privacy": "隐私与条款",
+      "advanced": "高级设置",
+      "jump": "跳到分区",
+      "work": "任务与消息"
+    },
+    "navGroups": {
+      "preferences": "常用设置",
+      "models": "模型",
+      "interaction": "桌面交互",
+      "connections": "连接与共享",
+      "extensions": "工具与插件",
+      "data": "任务与存储"
+    },
     "tabs": {
       "storage": "存储空间",
       "general": "通用",

@@ -1563,7 +1563,7 @@ export function ComputerUseSection({ workingDir }: ComputerUseSectionProps) {
               </span>
             }
             title={
-              <span id={computerUseSettings.browserTitle.targetId}>
+              <span id={computerUseSettings.browserTitle.targetId} role="heading" aria-level={3} tabIndex={-1} data-settings-section-heading>
                 {t(computerUseSettings.browserTitle.titleKey)}
               </span>
             }
@@ -1693,7 +1693,7 @@ export function ComputerUseSection({ workingDir }: ComputerUseSectionProps) {
               </span>
             }
             title={
-              <span id={computerUseSettings.directControlTitle.targetId}>
+              <span id={computerUseSettings.directControlTitle.targetId} role="heading" aria-level={3} tabIndex={-1} data-settings-section-heading>
                 {t(computerUseSettings.directControlTitle.titleKey)}
               </span>
             }
@@ -2010,7 +2010,7 @@ export function ComputerUseSection({ workingDir }: ComputerUseSectionProps) {
               </span>
             }
             title={
-              <span id={computerUseSettings.androidTitle.targetId}>
+              <span id={computerUseSettings.androidTitle.targetId} role="heading" aria-level={3} tabIndex={-1} data-settings-section-heading>
                 {t(computerUseSettings.androidTitle.titleKey)}
               </span>
             }

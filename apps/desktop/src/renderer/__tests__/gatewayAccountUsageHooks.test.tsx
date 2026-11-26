@@ -1,6 +1,8 @@
 // @vitest-environment jsdom
-import { act, cleanup, renderHook, waitFor } from '@testing-library/react';
+import { act, cleanup, render, renderHook, waitFor } from '@testing-library/react';
+import type { ReactNode } from 'react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
+import { SidebarAccountUsage } from '../components/sidebar/SidebarAccountUsage';
 import { useModelAccessCreditUsageResult } from '../hooks/useModelAccessCreditUsage';
 import { useClaudeAccountUsageResult } from '../hooks/useClaudeAccountUsage';
 
@@ -9,6 +11,7 @@ const state = vi.hoisted(() => ({
   generation: 1,
   membership: 'personal',
   credit: vi.fn(),
+  balance: vi.fn(),
   quota: vi.fn(),
 }));
 vi.mock('../contexts/AuthContext', () => ({
@@ -18,8 +21,14 @@ vi.mock('../contexts/AuthContext', () => ({
     mode: 'cloud',
     user: { membershipKind: state.membership },
   }),
+  useOptionalDataOwnerGeneration: () => state.generation,
 }));
-vi.mock('../features/billing/api', () => ({ billingApi: { getCreditUsage: state.credit } }));
+vi.mock('../features/billing/api', () => ({ billingApi: { getCreditUsage: state.credit, getBalance: state.balance } }));
+vi.mock('../hooks/useUsageHistory', () => ({ useUsageHistory: () => ({ history: null }) }));
+vi.mock('../components/ui/dropdown-menu', () => ({
+  DropdownMenuItem: ({ children }: { children: ReactNode }) => <div>{children}</div>,
+}));
+vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key, i18n: { language: 'en' } }) }));
 const credit = (available: string) => ({
   available,
   plan: { remaining: '0', used: '0', total: '0' },
@@ -31,6 +40,7 @@ beforeEach(() => {
   state.generation = 1;
   state.membership = 'personal';
   state.credit.mockReset();
+  state.balance.mockReset();
   state.quota.mockReset();
   Object.defineProperty(window, 'electronAPI', {
     configurable: true,
@@ -40,6 +50,60 @@ beforeEach(() => {
   });
 });
 afterEach(cleanup);
+
+// Unit, PR #11473: reopening the real sidebar rows while the legacy balance
+// is pending must show the original response without another IPC read.
+// The menu's immediate-response fixture cannot reproduce this overlap.
+it('shares a pending basic-balance fallback on reopen and clears it on a new login', async () => {
+  state.owner = 'legacy-shared';
+  state.credit.mockRejectedValue(new Error('Credit usage unavailable'));
+  const first = Promise.withResolvers<{ available: string }>();
+  const next = Promise.withResolvers<{ available: string }>();
+  state.balance.mockReturnValueOnce(first.promise).mockReturnValueOnce(next.promise);
+  const menu = <SidebarAccountUsage ownerId={state.owner} showBilling onSelect={vi.fn()} />;
+  const initial = render(menu);
+  await waitFor(() => expect(state.balance).toHaveBeenCalledTimes(1));
+  initial.unmount();
+  const reopened = render(menu);
+  await act(async () => {
+    await expect(state.credit.mock.results[1]?.value).rejects.toThrow('Credit usage unavailable');
+  });
+  expect(state.balance).toHaveBeenCalledTimes(1);
+  await act(async () => first.resolve({ available: '18.42' }));
+  expect(reopened.getByText(/18\.42/)).toBeTruthy();
+
+  state.generation++;
+  reopened.rerender(<SidebarAccountUsage {...menu.props} />);
+  expect(reopened.queryByText(/18\.42/)).toBeNull();
+  await waitFor(() => expect(state.balance).toHaveBeenCalledTimes(2));
+  await act(async () => next.resolve({ available: '7.25' }));
+  expect(reopened.getByText(/7\.25/)).toBeTruthy();
+});
+
+// Unit, PR #11473: the status chip and a rapidly reopened menu must share
+// one IPC read while a cold account's ledger is pending. Warm-cache tests
+// cannot reproduce the overlap before the first response arrives.
+it('shares a pending credit read across active consumers and a reopened menu', async () => {
+  state.owner = 'credit-shared';
+  let complete!: (value: ReturnType<typeof credit>) => void;
+  state.credit.mockImplementation(() => new Promise(resolve => { complete = resolve; }));
+  const status = renderHook(() => useModelAccessCreditUsageResult(true));
+  const menu = renderHook(() => useModelAccessCreditUsageResult(true, { poll: false }));
+  menu.unmount();
+  const reopened = renderHook(() => useModelAccessCreditUsageResult(true, { poll: false }));
+  expect(state.credit).toHaveBeenCalledTimes(1);
+  await act(async () => complete(credit('18')));
+  expect(status.result.current.usage?.available).toBe('18');
+  expect(reopened.result.current.usage?.available).toBe('18');
+
+  // A sign-out/sign-in of the same owner advances the auth scope.
+  state.generation++;
+  reopened.rerender();
+  expect(reopened.result.current.usage).toBeNull();
+  expect(state.credit).toHaveBeenCalledTimes(2);
+  await act(async () => complete(credit('7')));
+  expect(reopened.result.current.usage?.available).toBe('7');
+});
 
 it('settles failed credit loading, retries, and ignores the previous account’s late response', async () => {
   state.credit.mockRejectedValueOnce(new Error('offline')).mockResolvedValueOnce(credit('18'));

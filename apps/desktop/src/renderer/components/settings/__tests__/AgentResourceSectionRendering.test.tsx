@@ -97,6 +97,28 @@ describe('AgentResourceSection', () => {
     cleanup();
   });
 
+  /*
+   * 测试价值
+   * - 生产入口与可观察结果：通用设置页高级区的 AgentResourceSection；收起时不发起设置 IPC，展开后才读取并显示设置。
+   * - Bug／规则依据：Codex review 4651152318；engineering-conventions.md §8.3 对保持挂载的隐藏面板读取边界。
+   * - 现有覆盖缺口：既有用例只验证组件默认挂载后的读取，没有覆盖 keepMounted 收起状态。
+   * - 最小失败输入：enabled=false 初始挂载，再切换为 true。
+   * - tier：unit；组件公开入口和 IPC 调用可观察结果均在 jsdom 中验证。
+   * - 实测耗时：单独运行本文件由提交前验证记录。
+   */
+  it('defers settings reads until the advanced section is enabled', async () => {
+    const api = installElectronApi(DEFAULT_WIRE);
+    const { rerender } = render(<AgentResourceSection enabled={false} />);
+
+    expect(api.settingsGet).not.toHaveBeenCalled();
+
+    rerender(<AgentResourceSection enabled />);
+    await waitFor(() => {
+      expect(api.settingsGet).toHaveBeenCalledTimes(1);
+      expect(screen.getByText('settings.agentResource.title')).toBeTruthy();
+    });
+  });
+
   it('renders defaults with the full-speed preset highlighted', async () => {
     installElectronApi(DEFAULT_WIRE);
     render(<AgentResourceSection />);

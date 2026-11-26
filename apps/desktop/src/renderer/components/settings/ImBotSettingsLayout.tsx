@@ -2,7 +2,7 @@ import { Lightbulb } from 'lucide-react';
 import type { ReactNode, Ref } from 'react';
 import { useTranslation } from 'react-i18next';
 
-import { SettingsPageHeader } from '@/components/ui/settings-rows';
+import { SettingsPageHeader, SETTINGS_SECTION_TITLE_CLASS } from '@/components/ui/settings-rows';
 
 import type { ImBotSettingsGroup } from './ImBotSection';
 import { imBotSettings } from './ImBotSection.settings-search';
@@ -19,7 +19,7 @@ export function ImBotSettingsFrame({
 }) {
   const { t } = useTranslation();
   return (
-    <div className="flex flex-col gap-2">
+    <div className="flex flex-col gap-6">
       <SettingsPageHeader
         title={t(imBotSettings.imBot.sectionKey)}
         adornment={<span className="rounded-full border border-[var(--settings-badge-border)] bg-[var(--settings-badge-bg)] px-2 py-px text-10 font-medium uppercase leading-[1.5] tracking-wide text-[var(--text-secondary)]">
@@ -27,7 +27,7 @@ export function ImBotSettingsFrame({
         </span>}
       />
       {context}
-      <div key={contentKey} className="mt-4 flex flex-col gap-8">
+      <div key={contentKey} className="flex flex-col gap-9">
         {children}
       </div>
     </div>
@@ -57,7 +57,9 @@ export function ImBotGroupSection({
     >
       <h3
         id={headingId}
-        className="text-14 font-medium leading-[1.4] text-[var(--settings-section-title)]"
+        className={SETTINGS_SECTION_TITLE_CLASS}
+        data-settings-section-heading
+        tabIndex={-1}
       >
         {t(`settings.imBot.groups.${group}`)}
       </h3>

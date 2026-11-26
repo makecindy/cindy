@@ -13,7 +13,7 @@ import {
 import { generalSettings } from './GeneralSettings.settings-search';
 import { useSettingDefinition } from './useSettingDefinition';
 
-export function DefaultNewTaskWorkingDirSection({ ownerId }: { ownerId: string | null }) {
+export function DefaultNewTaskWorkingDirSection({ ownerId, embedded = false }: { ownerId: string | null; embedded?: boolean }) {
   const { t } = useTranslation();
   const setting = useSettingDefinition(generalSettings.defaultNewTaskWorkingDir);
   const path = useDefaultNewTaskWorkingDir(ownerId);
@@ -42,10 +42,8 @@ export function DefaultNewTaskWorkingDirSection({ ownerId }: { ownerId: string |
     }
   };
 
-  return (
-    <SettingsSection title={setting.title}>
-      <SettingsCard>
-        <SettingsRow
+  const row = (
+    <SettingsRow
           wrap
           title={t('settings.defaultNewTaskWorkingDir.label')}
           hint={<>
@@ -80,8 +78,9 @@ export function DefaultNewTaskWorkingDirSection({ ownerId }: { ownerId: string |
               {t('settings.defaultNewTaskWorkingDir.choose')}
             </Button>
           </div>}
-        />
-      </SettingsCard>
-    </SettingsSection>
+    />
+  );
+  return embedded ? row : (
+    <SettingsSection title={setting.title}><SettingsCard>{row}</SettingsCard></SettingsSection>
   );
 }

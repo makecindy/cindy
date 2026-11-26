@@ -21,11 +21,11 @@ import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { useBetaChannelSettings } from '@/hooks/useBetaChannelSettings';
 import { mapIpcErrorToI18nKey } from '@/utils/ipcError';
 
-export function BetaChannelCell() {
+export function BetaChannelCell({ enabled = true }: { enabled?: boolean }) {
   const setting = useSettingDefinition(additionalSettings.betaChannel);
   const { t } = useTranslation();
   const { confirm } = useConfirmDialog();
-  const { state, setEnableBeta } = useBetaChannelSettings();
+  const { state, setEnableBeta } = useBetaChannelSettings({ enabled });
   const [pending, setPending] = useState(false);
 
   const handleToggle = useCallback(

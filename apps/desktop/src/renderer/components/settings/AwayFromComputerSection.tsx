@@ -24,7 +24,7 @@ import { isAwayGuardDelaySeconds } from '../../../shared/awayGuard';
 import { awayFromComputerSettings } from './AwayFromComputerSection.settings-search';
 import { BehaviorRow } from './BehaviorRow';
 
-export function AwayFromComputerSection() {
+export function AwayFromComputerSection({ embedded = false }: { embedded?: boolean }) {
   const { t } = useTranslation();
   const { keepAwake, setKeepAwake } = useKeepAwakeSetting();
   const awayGuard = useAwayGuardSetting();
@@ -193,13 +193,10 @@ export function AwayFromComputerSection() {
     });
   }
 
-  return (
+  const content = rows.map((row) => <Fragment key={row.key}>{row.node}</Fragment>);
+  return embedded ? <>{content}</> : (
     <SettingsSection title={t('settings.awayFromComputer.title')}>
-      <SettingsCard>
-        {rows.map((row) => (
-          <Fragment key={row.key}>{row.node}</Fragment>
-        ))}
-      </SettingsCard>
+      <SettingsCard>{content}</SettingsCard>
     </SettingsSection>
   );
 }

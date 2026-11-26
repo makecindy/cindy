@@ -75,7 +75,7 @@ function matchPreset(s: Pick<Wire, SettingKey>): PresetId | null {
   return null;
 }
 
-export function AgentResourceSection() {
+export function AgentResourceSection({ enabled = true }: { enabled?: boolean }) {
   const settingsRevision = useAppSettingsRevision('agent-resources');
   const { t } = useTranslation();
   const [settings, setSettings] = useState<Wire | null>(null);
@@ -97,6 +97,7 @@ export function AgentResourceSection() {
   };
 
   useEffect(() => {
+    if (!enabled) return;
     void window.electronAPI.maker
       .agentResourceSettingsGet()
       .then((s) => {
@@ -117,7 +118,7 @@ export function AgentResourceSection() {
           },
         });
       });
-  }, [settingsRevision]);
+  }, [enabled, settingsRevision]);
 
   const activePreset = useMemo(() => (settings ? matchPreset(settings) : null), [settings]);
 

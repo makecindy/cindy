@@ -627,6 +627,7 @@ export function CloudSettingsPanel({
             disabled={writing}
           >
             <SettingsSidebarNav
+              grouped={false}
               tabIds={tabs}
               // A moved setting is found under its original category, then opens where it is.
               searchTabIds={visibility.tabs.includes('general') ? tabs : [...tabs, 'general']}

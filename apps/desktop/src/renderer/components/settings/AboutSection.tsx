@@ -356,31 +356,40 @@ export function AboutSection() {
   const { t } = useTranslation();
 
   return (
-    <AboutSectionView
-      card={
-        <>
-        {CURRENT_CINDY_REGION === 'cn' && (
-          <InfoRow
-            label={t(aboutSettings.appVersionLabel.titleKey)}
-            value={window.electronAPI.appDisplayVersion}
-            title={window.electronAPI.appDisplayVersionDetail}
-          />
-        )}
-        <AutoUpdateToggleRow />
-        <AnalyticsToggleRow />
-        <AgentVersionsRows />
-        <DebugLogToggleRow />
-        <SettingsBlock id={aboutSettings.logsDirLabel.targetId} className="p-0">
-          <OpenLogsRow />
-        </SettingsBlock>
-        <CrashAutoUploadToggleRow />
-        <SettingsBlock id={aboutSettings.logUploadUploadLabel.targetId} className="p-0">
-          <UploadLogsRow />
-        </SettingsBlock>
-        <LegalLinksRows />
-        </>
-      }
-    >
+    <AboutSectionView>
+      <SettingsSection title={t(aboutSettings.autoUpdateLabel.sectionKey)}>
+        <SettingsCard id={aboutSettings.appVersionLabel.targetId}>
+          {CURRENT_CINDY_REGION === 'cn' && (
+            <InfoRow
+              label={t(aboutSettings.appVersionLabel.titleKey)}
+              value={window.electronAPI.appDisplayVersion}
+              title={window.electronAPI.appDisplayVersionDetail}
+            />
+          )}
+          <AutoUpdateToggleRow />
+          <AgentVersionsRows />
+        </SettingsCard>
+      </SettingsSection>
+
+      <SettingsSection title={t(aboutSettings.debugLogLabel.sectionKey)}>
+        <SettingsCard>
+          <DebugLogToggleRow />
+          <SettingsBlock id={aboutSettings.logsDirLabel.targetId} className="p-0">
+            <OpenLogsRow />
+          </SettingsBlock>
+          <CrashAutoUploadToggleRow />
+          <SettingsBlock id={aboutSettings.logUploadUploadLabel.targetId} className="p-0">
+            <UploadLogsRow />
+          </SettingsBlock>
+        </SettingsCard>
+      </SettingsSection>
+
+      <SettingsSection title={t(aboutSettings.analyticsLabel.sectionKey)}>
+        <SettingsCard>
+          <AnalyticsToggleRow />
+          <LegalLinksRows />
+        </SettingsCard>
+      </SettingsSection>
       <SocialLinksPanel />
     </AboutSectionView>
   );
@@ -392,7 +401,7 @@ export function AboutSectionView({
   children,
   headingStatus,
 }: {
-  card: ReactNode;
+  card?: ReactNode;
   children?: ReactNode;
   /** Cloud settings: rows of the card that could not be read say so here, in the page heading. */
   headingStatus?: ReactNode;
@@ -402,7 +411,7 @@ export function AboutSectionView({
   return (
     <SettingsSection variant="page" title={t('settings.about.title')} description={t('settings.about.description')} action={headingStatus}>
       {/* Info Card */}
-      <SettingsCard id={aboutSettings.appVersionLabel.targetId}>{card}</SettingsCard>
+      {card !== undefined && <SettingsCard id={aboutSettings.appVersionLabel.targetId}>{card}</SettingsCard>}
 
       {children}
     </SettingsSection>

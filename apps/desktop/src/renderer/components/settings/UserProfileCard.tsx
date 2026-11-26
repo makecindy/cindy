@@ -155,7 +155,7 @@ export function UserProfileCard() {
   return (
     <div
       className={cn(
-        'flex w-full items-center gap-3.5 rounded-xl p-5',
+        'flex w-full flex-wrap items-center gap-3.5 rounded-xl p-5',
         'bg-[var(--settings-profile-card-bg)]',
         'border border-[var(--settings-profile-card-border)]',
       )}
@@ -197,7 +197,7 @@ export function UserProfileCard() {
         )}
       </button>
 
-      <div className="min-w-0 flex-1">
+      <div className="min-w-0 flex-[1_1_9rem]">
         <div className="flex min-w-0 items-center gap-1">
           <p className="min-w-0 truncate text-18 font-medium leading-[1.2] text-[var(--settings-profile-name)]">
             {displayName}
@@ -275,16 +275,18 @@ export function UserProfileCard() {
       </div>
 
       {mode === 'cloud' && (
-        <div className="flex shrink-0 flex-col items-stretch gap-2">
+        <div className="ml-auto flex max-w-full shrink-0 flex-col items-stretch gap-2">
           <Button
+            data-settings-search-action="Sign out of the current account"
             variant="secondary"
             size="md"
             compact
             type="button"
             onClick={() => void handleLogout()}
             aria-label={t('settings.logout.aria')}
+            className="h-auto min-h-8 py-1 leading-tight [overflow-wrap:anywhere]"
           >
-            <LogOut size={14} aria-hidden="true" />
+            <LogOut size={14} className="shrink-0" aria-hidden="true" />
             {t('settings.logout.button')}
           </Button>
           <Button
@@ -294,8 +296,10 @@ export function UserProfileCard() {
             type="button"
             onClick={() => void openAddAccount()}
             aria-label={t('sidebar.user.menuAddAccount')}
+            data-settings-search-action="Open sign-in for another account"
+            className="h-auto min-h-8 py-1 leading-tight [overflow-wrap:anywhere]"
           >
-            <UserPlus size={14} aria-hidden="true" />
+            <UserPlus size={14} className="shrink-0" aria-hidden="true" />
             {t('sidebar.user.menuAddAccount')}
           </Button>
         </div>

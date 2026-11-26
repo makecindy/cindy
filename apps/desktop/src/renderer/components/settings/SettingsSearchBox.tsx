@@ -71,7 +71,7 @@ export function SettingsSearchBox({ requestedQuery = '', visibleTabIds, searchCo
   };
 
   return (
-    <div className="mb-3 px-1">
+    <div className="mb-3 px-px">
       <div className="relative">
         <Search
           aria-hidden="true"

@@ -104,6 +104,34 @@ describe('Git safety settings wiring', () => {
     expect(getGitSafetyAutoSnapshotEnabled()).toBe(true);
   });
 
+  /*
+   * 测试价值
+   * - 生产入口与可观察结果：通用设置页高级区的 useGitSafetySettings；收起时不读取，展开后读取一次。
+   * - Bug／规则依据：Codex review 4651152318；engineering-conventions.md §8.3 对保持挂载的隐藏面板读取边界。
+   * - 现有覆盖缺口：既有 hook 用例默认 enabled，只覆盖打开状态的刷新。
+   * - 最小失败输入：enabled=false 初始渲染，再切换为 true。
+   * - tier：unit；通过 hook 的公开状态和 gitSafetyGet IPC 调用验证。
+   * - 实测耗时：单独运行本文件由提交前验证记录。
+   */
+  it('defers Git safety reads until the advanced section is enabled', async () => {
+    const api = installGitSafetyApi({
+      gitSafetyGet: async () => ({
+        mode: 'existing-git',
+        autoSnapshotEnabled: true,
+        isCustomized: true,
+        defaultAutoSnapshotEnabled: false,
+      }),
+    });
+
+    const { rerender } = renderHook(({ enabled }: { enabled: boolean }) => useGitSafetySettings({ enabled }), {
+      initialProps: { enabled: false },
+    });
+    expect(api.gitSafetyGet).not.toHaveBeenCalled();
+
+    rerender({ enabled: true });
+    await waitFor(() => expect(api.gitSafetyGet).toHaveBeenCalledTimes(1));
+  });
+
   it('lets render-time consumers follow the synchronous Git safety mirror', () => {
     setGitSafetyAutoSnapshotEnabled(false);
     const { result } = renderHook(() => useGitSafetyAutoSnapshotEnabled());

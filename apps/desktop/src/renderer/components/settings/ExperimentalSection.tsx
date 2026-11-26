@@ -25,14 +25,14 @@ import { LspBetaCell } from './LspBetaCell';
 import { BetaChannelCell } from './BetaChannelCell';
 import { additionalSettings } from './AdditionalSettings.settings-search';
 
-export function ExperimentalSection() {
+export function ExperimentalSection({ enabled = true }: { enabled?: boolean }) {
   const betaChannelSupported = additionalSettings.betaChannel.isVisible({
     platform: window.electronAPI?.platform ?? '',
     supportsBetaUpdateChannel: window.electronAPI?.supportsBetaUpdateChannel,
   });
   const rows: { key: string; node: ReactNode }[] = [
     { key: 'lsp', node: <LspBetaCell /> },
-    ...(betaChannelSupported ? [{ key: 'beta-channel', node: <BetaChannelCell /> }] : []),
+    ...(betaChannelSupported ? [{ key: 'beta-channel', node: <BetaChannelCell enabled={enabled} /> }] : []),
     ...EXPERIMENTAL_FEATURES.map((feature) => ({
       key: feature.key,
       node: <ExperimentalFeatureRow feature={feature} />,

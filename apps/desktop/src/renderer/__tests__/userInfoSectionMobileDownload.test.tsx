@@ -41,6 +41,7 @@ vi.mock('react-router-dom', () => ({
 }));
 
 vi.mock('@/contexts/AuthContext', () => ({
+  useOptionalDataOwnerGeneration: () => 0,
   useAuth: () => ({
     ...authState,
     listAccounts,
@@ -173,6 +174,7 @@ beforeEach(() => {
     value: {
       appDisplayVersion: '1.0.0',
       appDisplayVersionDetail: '1.0.0-test',
+      maker: { usage: { getHistory: async () => null } },
     },
   });
 });
@@ -407,8 +409,8 @@ describe('UserInfoSection mobile download entry', () => {
 
     authState.dataOwnerId = 'owner-b';
     view.rerender(<UserInfoSection isCollapsed={false} />);
-
     expect(screen.queryByRole('menuitem', { name: /Other user/ })).toBeNull();
+    await act(() => Promise.resolve());
   });
 
   it('does not show an account section when only one account is saved', async () => {

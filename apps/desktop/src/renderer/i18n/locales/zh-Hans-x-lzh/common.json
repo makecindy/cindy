@@ -1845,6 +1845,23 @@
       "restored": "已复预设规制",
       "restoreFailed": "无法复预设规制"
     },
+    "contentGroups": {
+      "getStarted": "初用",
+      "versions": "版本与更新",
+      "diagnostics": "诊查与日志",
+      "privacy": "隐私与条款",
+      "advanced": "进阶规制",
+      "jump": "往此节",
+      "work": "差事与讯"
+    },
+    "navGroups": {
+      "preferences": "常用",
+      "models": "模型",
+      "interaction": "桌面互动",
+      "connections": "互联与共享",
+      "extensions": "器用与法器",
+      "data": "差事与储藏"
+    },
     "tabs": {
       "storage": "储藏",
       "general": "通则",

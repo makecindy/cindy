@@ -87,6 +87,7 @@ export function LanguageSectionView({
     <SettingsSection title={t(languageSettings.language.sectionKey)} action={headingStatus}>
       <SettingsCard>
         <SettingsRow
+          wrap
           id={languageSettings.language.targetId}
           className="cindy-segmented-row"
           title={t(languageSettings.language.titleKey)}
@@ -110,6 +111,7 @@ export function LanguageSectionView({
 
         {classical ? (
           <SettingsRow
+            wrap
             id={languageSettings.classical.targetId}
             className="cindy-segmented-row"
             title={t(languageSettings.classical.titleKey)}
