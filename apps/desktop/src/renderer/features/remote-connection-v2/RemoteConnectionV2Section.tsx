@@ -22,6 +22,7 @@ import { deviceLabel } from '@/components/settings/deviceLabels';
 
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import { SegmentedControl } from '@/components/ui/segmented-control';
 import { SettingsCard } from '@/components/ui/settings-rows';
 import type { SelfHostedRelayController } from '@/components/settings/RelayServicePanel';
 import { resolveActiveConnectionIssue } from '@/components/settings/myDevicesModel';
@@ -34,6 +35,7 @@ import { createLogger } from '@/lib/logger';
 import { remoteSwitchStore, startRemoteSwitch, type RemoteSwitchTarget } from './agentNetRemoteSwitch';
 import { startPeerUpdate, type PeerUpdateConfirmTarget } from './peerAppUpdate';
 import { RemoteConnectionTopology } from './RemoteConnectionTopology';
+import { RemoteProviderTopologyPanel } from './RemoteProviderTopology';
 import { ConnectionTraffic } from './ConnectionTraffic';
 import { RemoteSwitchBatch } from './RemoteSwitchBatch';
 import { buildTopology, type TopologyModel, type TopologyNode } from './topologyModel';
@@ -109,9 +111,12 @@ export function RemoteConnectionV2Section({
   const recent = useRecentPresence(true);
   const unresponsive = useSyncExternalStore(unresponsiveDevicesStore.subscribe, unresponsiveDevicesStore.getSnapshot);
   const [showOffline, setShowOffline] = useState(false);
+  const [activeTab, setActiveTab] = useState<'devices' | 'providers'>('devices');
   const [updateTarget, setUpdateTarget] = useState<PeerUpdateConfirmTarget | null>(null);
   const [updateSubmitting, setUpdateSubmitting] = useState(false);
   const remoteSwitch = useSyncExternalStore(remoteSwitchStore.subscribe, remoteSwitchStore.getSnapshot);
+  const providerTabEnabled = peerLinks.relayProtocol !== 'device-link';
+  const effectiveTab = providerTabEnabled ? activeTab : 'devices';
 
   const relayName =
     relay.state?.mode === 'self-hosted' && relay.state.relay?.name
@@ -139,20 +144,25 @@ export function RemoteConnectionV2Section({
   const self = (s.devices ?? []).find((d) => d.isSelf) ?? null;
   const activeIssue = resolveActiveConnectionIssue(s.linkStatus, s.connectionIssue);
 
-  // 深链指向其它设备:打开它在拓扑里的卡片;离线折叠着就先展开。本机由上面的本机卡片接住。
+  // 深链指向其它设备:切回设备连接视图并打开它在拓扑里的卡片;离线折叠着就先展开。本机由上面的本机卡片接住。
   const focusDeviceId =
     deepLink.focusDeviceId && deepLink.focusDeviceId !== self?.deviceId ? deepLink.focusDeviceId : null;
   const focusOffline = focusDeviceId ? model.byId.get(focusDeviceId)?.status === 'offline' : false;
   useEffect(() => {
+    if (focusDeviceId) setActiveTab('devices');
     if (focusOffline) setShowOffline(true);
-  }, [focusOffline, deepLink.focusRequestKey]);
+  }, [focusDeviceId, focusOffline, deepLink.focusRequestKey]);
 
-  const onRemoteDesktop = useCallback((node: TopologyNode) => {
-    window.electronAPI.openRemoteDesktop({ deviceId: node.id, name: node.name }).catch((err: unknown) => {
+  const handleRemoteDesktopById = useCallback((deviceId: string, name: string) => {
+    window.electronAPI.openRemoteDesktop({ deviceId, name }).catch((err: unknown) => {
       log.warn('openRemoteDesktop failed', err);
       toast.error(t('settings.remoteControl.v2.popover.remoteDesktopFailed'));
     });
   }, [t]);
+
+  const onRemoteDesktop = useCallback((node: TopologyNode) => {
+    handleRemoteDesktopById(node.id, node.name);
+  }, [handleRemoteDesktopById]);
 
   const onSwitch = useCallback((node: TopologyNode, target: RemoteSwitchTarget) => {
     void startRemoteSwitch(node.id, target).then((result) => {
@@ -165,11 +175,11 @@ export function RemoteConnectionV2Section({
     });
   }, [t]);
 
-  const onPathPreferenceChange = useCallback(async (node: TopologyNode, preference: 'auto' | 'direct' | 'relay') => {
+  const handlePathPreferenceById = useCallback(async (deviceId: string, preference: 'auto' | 'direct' | 'relay') => {
     const setPref = window.electronAPI?.deviceLink?.setPeerPathPreference;
     if (!setPref) return false;
     try {
-      await setPref(node.id, preference);
+      await setPref(deviceId, preference);
       return true;
     } catch (err) {
       log.warn('setPeerPathPreference failed', err);
@@ -177,6 +187,11 @@ export function RemoteConnectionV2Section({
       return false;
     }
   }, [t]);
+
+  const onPathPreferenceChange = useCallback(
+    (node: TopologyNode, preference: 'auto' | 'direct' | 'relay') => handlePathPreferenceById(node.id, preference),
+    [handlePathPreferenceById],
+  );
 
   const onConfirmUpdate = useCallback(async () => {
     if (!updateTarget || updateSubmitting) return;
@@ -231,69 +246,105 @@ export function RemoteConnectionV2Section({
   const linkStatusText = t(`settings.devices.linkStatus.${s.linkStatus}`);
   const offlineToggleVisible = model.stats.offline >= 2;
 
+  const tabControl = providerTabEnabled ? (
+    <SegmentedControl<'devices' | 'providers'>
+      role="tablist"
+      value={effectiveTab}
+      onValueChange={setActiveTab}
+      aria-label={t('settings.remoteControl.v2.tabs.aria')}
+      height={28}
+      optionHeight={24}
+      options={[
+        { value: 'devices', label: t('settings.remoteControl.v2.tabs.devices') },
+        { value: 'providers', label: t('settings.remoteControl.v2.tabs.providers') },
+      ]}
+    />
+  ) : null;
+
+  const statusRight = (
+    <span className="flex items-center gap-1.5">
+      {/* 与中转的连接:连着绿、出问题红、其它(连接中 / 已停)灰,和拓扑同一套颜色 */}
+      <span
+        className={
+          s.connectionIssue
+            ? 'text-[var(--error-fg)]'
+            : s.linkStatus === 'online'
+              ? 'text-[var(--status-success)]'
+              : 'text-[var(--text-tertiary)]'
+        }
+      >
+        {linkStatusText}
+      </span>
+      <RecentActivity events={recent} />
+    </span>
+  );
+
   return (
     <>
       <section className="flex flex-col gap-3">
-        <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 text-12">
-          <span className="flex flex-wrap items-center gap-x-3 gap-y-1">
-            <span className="text-[var(--text-secondary)]">{statsLine(model, t)}</span>
-            <RemoteSwitchBatch nodes={model.nodes} entries={remoteSwitch.entries} />
-          </span>
-          <span className="flex items-center gap-1.5">
-            {/* 与中转的连接:连着绿、出问题红、其它(连接中 / 已停)灰,和拓扑同一套颜色 */}
-            <span
-              className={
-                s.connectionIssue
-                  ? 'text-[var(--error-fg)]'
-                  : s.linkStatus === 'online'
-                    ? 'text-[var(--status-success)]'
-                    : 'text-[var(--text-tertiary)]'
-              }
-            >
-              {linkStatusText}
-            </span>
-            <RecentActivity events={recent} />
-          </span>
-        </div>
-        <SettingsCard>
-          <div className="px-2 py-3">
-            {model.nodes.length === 0 ? (
-              <p className="px-2 py-6 text-center text-13 text-[var(--text-secondary)]">
-                {t('settings.remoteControl.v2.empty')}
-              </p>
-            ) : null}
-            <RemoteConnectionTopology
-              model={model}
-              linkStatus={s.linkStatus}
-              issue={activeIssue ? t(`settings.devices.connectionIssue.${activeIssue.kind}`) : null}
-              standby={s.standby}
-              onToggleOffline={() => setShowOffline((v) => !v)}
-              onRemoteDesktop={onRemoteDesktop}
-              onDelete={(node, restoreFocus) => requestDelete({ deviceId: node.id, name: deviceLabel(node, t) }, restoreFocus)}
-              focusDeviceId={focusDeviceId}
-              focusRequestKey={deepLink.focusRequestKey}
-              ready={s.devices !== null && peerLinks.takenAt > 0}
-              switches={remoteSwitch.entries}
-              onSwitch={onSwitch}
-              onPathPreferenceChange={onPathPreferenceChange}
-              onUpdate={setUpdateTarget}
-            />
-          </div>
-          {offlineToggleVisible ? (
-            <div className="flex justify-end border-t border-[var(--settings-theme-card-border)] px-3 py-1.5">
-              <button
-                type="button"
-                className="text-12 text-[var(--text-tertiary)] hover:text-[var(--text-primary)]"
-                onClick={() => setShowOffline((v) => !v)}
-              >
-                {showOffline
-                  ? t('settings.remoteControl.v2.offlineHide')
-                  : t('settings.remoteControl.v2.offlineShow')}
-              </button>
+        {effectiveTab === 'providers' ? (
+          <RemoteProviderTopologyPanel
+            devices={s.devices ?? []}
+            peerLinks={peerLinks}
+            primaryRelayName={relayName}
+            primarySelfHosted={relay.state?.mode === 'self-hosted'}
+            unresponsiveIds={unresponsive}
+            tabControl={tabControl}
+            statusRight={statusRight}
+            onPathPreferenceChange={handlePathPreferenceById}
+            onRemoteDesktop={handleRemoteDesktopById}
+          />
+        ) : (
+          <>
+            <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 text-12">
+              <span className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
+                {tabControl}
+                <span className="text-[var(--text-secondary)]">{statsLine(model, t)}</span>
+                <RemoteSwitchBatch nodes={model.nodes} entries={remoteSwitch.entries} />
+              </span>
+              {statusRight}
             </div>
-          ) : null}
-          <ConnectionTraffic traffic={peerLinks.traffic} />
-        </SettingsCard>
+            <SettingsCard>
+              <div className="px-2 py-3">
+                {model.nodes.length === 0 ? (
+                  <p className="px-2 py-6 text-center text-13 text-[var(--text-secondary)]">
+                    {t('settings.remoteControl.v2.empty')}
+                  </p>
+                ) : null}
+                <RemoteConnectionTopology
+                  model={model}
+                  linkStatus={s.linkStatus}
+                  issue={activeIssue ? t(`settings.devices.connectionIssue.${activeIssue.kind}`) : null}
+                  standby={s.standby}
+                  onToggleOffline={() => setShowOffline((v) => !v)}
+                  onRemoteDesktop={onRemoteDesktop}
+                  onDelete={(node, restoreFocus) => requestDelete({ deviceId: node.id, name: deviceLabel(node, t) }, restoreFocus)}
+                  focusDeviceId={focusDeviceId}
+                  focusRequestKey={deepLink.focusRequestKey}
+                  ready={s.devices !== null && peerLinks.takenAt > 0}
+                  switches={remoteSwitch.entries}
+                  onSwitch={onSwitch}
+                  onPathPreferenceChange={onPathPreferenceChange}
+                  onUpdate={setUpdateTarget}
+                />
+              </div>
+              {offlineToggleVisible ? (
+                <div className="flex justify-end border-t border-[var(--settings-theme-card-border)] px-3 py-1.5">
+                  <button
+                    type="button"
+                    className="text-12 text-[var(--text-tertiary)] hover:text-[var(--text-primary)]"
+                    onClick={() => setShowOffline((v) => !v)}
+                  >
+                    {showOffline
+                      ? t('settings.remoteControl.v2.offlineHide')
+                      : t('settings.remoteControl.v2.offlineShow')}
+                  </button>
+                </div>
+              ) : null}
+              <ConnectionTraffic traffic={peerLinks.traffic} />
+            </SettingsCard>
+          </>
+        )}
       </section>
       {dialog}
       <ConfirmDialog
