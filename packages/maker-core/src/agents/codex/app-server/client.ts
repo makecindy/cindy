@@ -1086,11 +1086,15 @@ export class AppServerClient {
       controller: new AbortController(), messages: [], size: 0, ownedThreads, reconnected: false, interrupts: new Map(),
     };
     this.recovery = recovery;
-    void this.recoverTransport(transport, init, recovery).catch(() => {
+    void this.recoverTransport(transport, init, recovery).catch((error: unknown) => {
       if (this.closed) return;
       this.handleTransportFailure(recovery.reconnected
         ? failure
-        : new Error('Codex SSH did not reconnect; the remote turn status could not be confirmed'));
+        : new Error(
+          'Codex SSH did not reconnect; the remote turn status could not be confirmed' +
+            (error instanceof Error ? `: ${error.message}` : ''),
+          { cause: error },
+        ));
     });
   }
 
@@ -1160,6 +1164,7 @@ export class AppServerClient {
     await request(Method.Initialize, init);
     const snapshots: Array<{ threadId: string; turn: RecoveredTurn; observed: ObservedTurn }> = [];
     let outstandingInteraction = false;
+    let unconfirmedTurn = false;
     for (const threadId of recovery.ownedThreads) {
       const { thread } = await request<{
         thread: { id: string; status: { type: string; activeFlags?: string[] } };
@@ -1181,13 +1186,14 @@ export class AppServerClient {
           !['inProgress', 'completed', 'interrupted', 'failed'].includes(turn.status) ||
           !Array.isArray(turn.items) ||
           turn.items.some((item) => typeof item?.id !== 'string' || typeof item.type !== 'string')) {
-        throw new Error('SSH recovery could not find the original Codex turn');
+        unconfirmedTurn = true;
+        continue;
       }
       snapshots.push({ threadId, turn, observed });
     }
     // Map iteration includes intents received while another interrupt is in
     // flight; the same thread/turn shares one acknowledgement.
-    for (const { params, result } of recovery.interrupts.values()) {
+    for (const { params, result } of unconfirmedTurn ? [] : recovery.interrupts.values()) {
       const snapshot = snapshots.find(({ threadId }) => threadId === params.threadId);
       if (snapshot?.turn.id !== params.turnId) {
         throw new Error('SSH recovery could not confirm the turn to stop');
@@ -1219,36 +1225,39 @@ export class AppServerClient {
     })) {
       throw new Error('SSH recovery received an interactive server request');
     }
-    const liveItems = new Set<string>();
     const liveTurns = new Set<string>();
-    for (const { message } of recovery.messages) {
-      const params = message.params as { threadId?: string; turnId?: string; turn?: { id: string }; item?: { id: string } } | undefined;
-      if (message.method === 'item/completed' && params?.item) {
-        liveItems.add(JSON.stringify([params.threadId, params.turnId, params.item.id]));
-      } else if (message.method === 'turn/completed' && params?.turn) {
+    for (const { message } of unconfirmedTurn ? [] : recovery.messages) {
+      const params = message.params as { threadId?: string; turn?: { id: string } } | undefined;
+      if (message.method === 'turn/completed' && params?.turn) {
         liveTurns.add(JSON.stringify([params.threadId, params.turn.id]));
       }
     }
-    const restoredStarts = recovery.acknowledgedStarts.map(({ request, threadId, turnId }) => {
-      const snapshot = snapshots.find(({ threadId: id, turn }) => id === threadId && turn.id === turnId);
-      if (!snapshot) throw new Error('SSH recovery could not confirm the acknowledged turn start');
-      return { request, turn: snapshot.turn };
+    // A verified terminal snapshot needs no further use of the shared transport.
+    const deliverable = unconfirmedTurn ? snapshots.filter(({ turn }) => turn.status !== 'inProgress') : snapshots;
+    const restoredStarts = recovery.acknowledgedStarts.flatMap(({ request, threadId, turnId }) => {
+      const snapshot = deliverable.find(({ threadId: id, turn }) => id === threadId && turn.id === turnId);
+      if (snapshot) return [{ request, turn: snapshot.turn }];
+      if (unconfirmedTurn) return [];
+      throw new Error('SSH recovery could not confirm the acknowledged turn start');
     });
     // Synchronous notification handlers can start work too. Keep the startup
     // gate closed while delivering the recovered items and terminal events.
     recovery.replaying = true;
-    for (const { threadId, turn, observed } of snapshots) {
+    for (const { threadId, turn, observed } of deliverable) {
+      // Persisted order includes items also seen live. Restoring them here
+      // suppresses their buffered copies without moving earlier items to the end.
       for (const item of turn.items) {
-        if (item.type === 'userMessage' || item.status === 'inProgress' ||
-            observed.completedItems.has(item.id) ||
-            liveItems.has(JSON.stringify([threadId, turn.id, item.id]))) continue;
-        // The full turn view returns persisted items, not uncommitted deltas.
-        this.handleLine(JSON.stringify({ method: 'item/completed', params: { threadId, turnId: turn.id, item } }), true);
+        if (item.type === 'userMessage' || item.status === 'inProgress') continue;
+        if (!observed.completedItems.has(item.id)) {
+          this.handleLine(JSON.stringify({ method: 'item/completed', params: { threadId, turnId: turn.id, item } }), true);
+        }
         observed.restoredItems.add(item.id);
       }
     }
-    for (const { line } of recovery.messages) this.handleLine(line, true);
-    for (const { threadId, turn } of snapshots) {
+    if (!unconfirmedTurn) {
+      for (const { line } of recovery.messages) this.handleLine(line, true);
+    }
+    for (const { threadId, turn } of deliverable) {
       if (turn.status !== 'inProgress' && !liveTurns.has(JSON.stringify([threadId, turn.id]))) {
         this.handleLine(JSON.stringify({ method: 'turn/completed', params: { threadId, turn } }), true);
         if (this.restoredTerminals.size >= MAX_RECOVERY_THREADS) {
@@ -1259,8 +1268,9 @@ export class AppServerClient {
       }
     }
     signal.throwIfAborted();
-    this.recovery = undefined;
     for (const { request, turn } of restoredStarts) request.resolve({ turn });
+    if (unconfirmedTurn) throw new Error('SSH recovery could not find the original Codex turn');
+    this.recovery = undefined;
     recovery.ready.resolve(undefined);
     this.logger.info('Codex SSH transport recovered', { threadCount: snapshots.length });
   }

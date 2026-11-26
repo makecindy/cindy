@@ -288,7 +288,8 @@ describe('RemoteHost arm/disconnect race', () => {
       await failEachAttempt();
       await waiting;
       expect(onExhausted).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
-        message: 'SSH automatic reconnect attempts exhausted',
+        message: 'connect EHOSTUNREACH 10.0.0.1:22',
+        cause: expect.objectContaining({ code: 'EHOSTUNREACH' }),
       }));
       expect(onRecovered).not.toHaveBeenCalled();
       expect(host.getStatus()).toBe('failed');
@@ -388,7 +389,7 @@ describe('RemoteHost arm/disconnect race', () => {
           await vi.advanceTimersByTimeAsync(0);
         }
         await Promise.all([originalWait, newTask, lateJoiner]);
-        const expected = outcome === 'success' ? 'ready' : 'SSH automatic reconnect attempts exhausted';
+        const expected = outcome === 'success' ? 'ready' : 'connect ECONNREFUSED';
         expect(originalResult).toHaveBeenCalledExactlyOnceWith(expected);
         expect(newTaskResult).toHaveBeenCalledExactlyOnceWith(expected);
         expect(duringFailureResult).toHaveBeenCalledExactlyOnceWith(expected);

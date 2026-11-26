@@ -394,6 +394,12 @@ it.skipIf(!codexBinary).each([
       turn: expect.objectContaining({ id: rawTurnId, status: stopWhileDisconnected ? 'interrupted' : 'completed' }),
     }];
     if (secondTask) {
+      // A separate SSH channel can still access files on the same host.
+      const probe = join(root, 'ssh-reconnect-probe');
+      await writeFile(probe, 'file available after reconnect');
+      expect(await host.exec(`cat ${shellQuote(probe)}`)).toMatchObject({
+        exitCode: 0, stdout: 'file available after reconnect',
+      });
       const second = await secondTask;
       if (second instanceof Error) throw second;
       const secondResponse = await waitFor('second model request', () => modelRequests[1]);

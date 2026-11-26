@@ -1672,7 +1672,7 @@ export class RemoteHost {
         this.log.warn('ssh reconnect exhausted', {
           id: this.id, error: (err as Error).message, ...connectFailureHint(err),
         });
-        this.finishReconnectFailure(new Error('SSH automatic reconnect attempts exhausted'));
+        this.finishReconnectFailure(err instanceof Error ? err : new Error(String(err)));
       });
     }, delay);
     this.setStatus('reconnecting');
