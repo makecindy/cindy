@@ -2672,6 +2672,9 @@ describe('Chat Server result delivery and refresh', () => {
         await service.settleLaneTurn({ ...terminal, sessionId: 'group-task-1', activeInputClientId: dispatched()[0]!.clientId, resultText: 'Hi' });
         const input = await sendQuoted();
         expect(input.attachments).toEqual([downloaded(1), downloaded(2)]);
+        const note = t('bots.groupChat.assistant.replyingTo').replace('{{name}}', 'Ann').replace('{{text}}', 'lesson-1.docx');
+        expect(input.persistedContent).toContain(note);
+        expect(input.origin).toMatchObject({ displayText: input.persistedContent });
         expect(fixture.download.mock.calls).toEqual([[roomId, file(1).mediaId], [roomId, file(2).mediaId]]);
         expect(fixture.handle.mock.calls.filter(([route]) => route === `/conversations/${roomId}/messages/${message(1, peerId, '').id}`)).toHaveLength(1);
         expect(fixture.handle.mock.calls.some(([route]) => route === `/conversations/${roomId}/messages/${message(2, peerId, '').id}`)).toBe(false);
@@ -2767,21 +2770,31 @@ describe('Chat Server result delivery and refresh', () => {
       fixture.handle.mockImplementation((route, method, body) => route === '/me'
         ? { body: { actor: { id: selfId }, capabilities: { groupAssistant: 1, groupAssistantDevice: 1, groupTeammateMentions: 1 }, groupAssistantActorId: cindyId } }
         : original(route, method, body));
-      const words = 'Please review the teammates column';
-      const excerpt = '| name | teammates | | --- | --- | | A | B |';
-      const earlier = message(2, peerId, 'Use the draft');
-      const quote = buildBotGroupQuoteCard({ messageId: earlier.id, authorName: 'Ann', authorKind: 'user',
-        excerpt, attachmentCount: 0, attachmentName: null, sequence: 2 });
-      history.push(earlier, message(5, sender === 'user' ? selfId : teammateId, words, {
-        origin: sender === 'user' ? 'user' : 'bot', content: [{ type: 'text', text: words }, quote],
-      }));
-      queue.push(request(5));
-      await vi.advanceTimersByTimeAsync(12_000);
+      if (sender === 'user') {
+        const table = '| Item | Date |\n| --- | --- |\n| Review | Friday |';
+        history.push(message(1, peerId, table));
+        const quote = buildBotGroupQuoteCard({ messageId: history[0]!.id, authorName: 'Ann',
+          authorKind: 'user', excerpt: table.replaceAll('\n', ' '), sequence: 1, attachmentCount: 0, attachmentName: null });
+        history.push(message(5, selfId, '', { content: [quote, { type: 'text', text: '@Cindy When is the review?' }] }));
+        queue.push(request(5));
+        await vi.advanceTimersByTimeAsync(12_000);
+      }
+      else {
+        const original = message(1, peerId, '<Widget />');
+        history.push(original);
+        const quote = buildBotGroupQuoteCard({ messageId: original.id, authorName: 'Ann',
+          authorKind: 'user', excerpt: '<Widget />', sequence: 1, attachmentCount: 0, attachmentName: null });
+        history.push(message(5, teammateId, '', { origin: 'bot', content: [quote, { type: 'text', text: 'Please review the teammates column' }] }));
+        queue.push(request(5));
+        await vi.advanceTimersByTimeAsync(12_000);
+      }
       const [input] = dispatched();
-      const quoteLine = t('bots.groupChat.assistant.replyingTo').replace('{{name}}', 'Ann').replace('{{text}}', excerpt);
-      const visible = `${words}\n\n${t('bots.groupChat.assistant.groupRecent')}\n${quoteLine}\nAnn：Use the draft`;
-      expect(input).toMatchObject({ persistedContent: visible, origin: { displayText: visible } });
-      expect(input!.message).toContain(visible);
+      expect(input!.message).toContain('Luna');
+      const expected = sender === 'user'
+        ? '@Cindy When is the review?\n\n' + t('bots.groupChat.assistant.replyingTo').replace('{{name}}', 'Ann').replace('{{text}}', 'Item Date Review Friday')
+        : 'Please review the teammates column\n\n' + t('bots.groupChat.assistant.replyingTo').replace('{{name}}', 'Ann').replace('{{text}}', '<Widget />');
+      expect(input!.persistedContent).toBe(expected);
+      expect(input!.origin).toMatchObject({ displayText: expected });
       expect(input!.message).toContain('Answer whoever asked.');
       const context = [...input!.message.matchAll(/<untrusted-data>\n(.*?)\n<\/untrusted-data>/g)]
         .map(match => JSON.parse(match[1])).find(block => block.teammates);

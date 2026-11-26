@@ -256,7 +256,7 @@ export function registerScheduleCreateTool(
       }
       return withScheduler(deps, async (scheduler) => {
         let input = rest as CreateScheduleInput;
-        if (input.webhookTrigger) assertWebhookReceiverAvailable(deps);
+        if (input.webhookTrigger) assertWebhookReceiverAvailable(deps, input.webhookTrigger);
         if (input.agentDeviceId === LOCAL_SCHEDULE_AGENT_DEVICE) {
           const { agentDeviceId: _local, ...localInput } = input;
           input = localInput;
