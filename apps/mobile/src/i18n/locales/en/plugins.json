@@ -187,6 +187,7 @@
     "uninstallBody": "This removes the plugin, its credentials and private settings from {{device}}. Library items and existing task content are kept.",
     "reject": "Cancel",
     "allow": "Allow and continue",
+    "review": "Review source and permissions",
     "versionChange": "{{previous}} → {{next}}",
     "switchVersion": "Version to install: {{version}}",
     "oauthChanged": "The account sign-in configuration has changed.",

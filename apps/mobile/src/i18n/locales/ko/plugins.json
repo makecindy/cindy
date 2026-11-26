@@ -187,6 +187,7 @@
     "uninstallBody": "{{device}}에서 플러그인, 인증 정보 및 전용 설정을 제거합니다. 라이브러리와 기존 작업 내용은 유지됩니다.",
     "reject": "취소",
     "allow": "허용하고 계속",
+    "review": "출처와 권한 확인",
     "versionChange": "{{previous}} → {{next}}",
     "switchVersion": "설치할 버전: {{version}}",
     "oauthChanged": "계정 로그인 설정이 변경되었습니다.",

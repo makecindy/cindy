@@ -189,6 +189,7 @@
     "uninstallBody": "Esto elimina el complemento, sus credenciales y configuraciones privadas de {{device}}. Se conservan los elementos de la biblioteca y el contenido de las tareas existentes.",
     "reject": "Cancelar",
     "allow": "Permitir y continuar",
+    "review": "Revisar origen y permisos",
     "versionChange": "{{previous}} → {{next}}",
     "switchVersion": "Versión que se instalará: {{version}}",
     "oauthChanged": "La configuración de inicio de sesión de la cuenta ha cambiado.",

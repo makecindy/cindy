@@ -187,6 +187,7 @@
     "uninstallBody": "將從 {{device}} 移除此插件、憑證和私有設定。作品庫及既有任務內容會保留。",
     "reject": "取消",
     "allow": "允許並繼續",
+    "review": "查看來源和權限",
     "versionChange": "{{previous}} → {{next}}",
     "switchVersion": "將安裝的版本：{{version}}",
     "oauthChanged": "帳號登入設定已變更。",

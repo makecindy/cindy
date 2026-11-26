@@ -8,6 +8,7 @@ import {
   font,
   foregroundStyle,
   frame,
+  id as viewId,
   onGeometryChange,
   opacity,
   padding,
@@ -77,7 +78,13 @@ export function PluginManagementConfirmation(
     identity: measured.identity, heading: measured.heading,
     lines: Array.from({ length: lineCount }, (_, index) => lineHeights[index] ?? 0) /* 0 = not measured yet */, gap: spacing.xs,
   });
-  const compact = plan.mode === "compact";
+  // Compact (maintainer review 16:35 #2): Allow comes after an explicit "Review source and permissions" step, which shows
+  // the source and this consent's high-risk summary first; the sheet stays compact once reviewed (the reordered list
+  // would measure differently). Regular is unchanged: there the summary is pinned above the buttons.
+  const [reviewedFor, setReviewedFor] = useState<string | null>(null);
+  const reviewed = !!consent && reviewedFor === consent.requestId;
+  const compact = plan.mode === "compact" || reviewed;
+  const needsReview = compact && !reviewed && info?.allowBlocked !== true;
   const [summaryHeight, setSummaryHeight] = useState(0);
   // Large text on a narrow screen: the buttons stack so each label shows in full; wide enough (landscape, iPad) they stay
   // side by side, labels wrapping inside them (K-3).
@@ -97,8 +104,8 @@ export function PluginManagementConfirmation(
   const answerButton = (accept: boolean) => (
     <Button
       key={String(accept)}
-      testID={"plugins.management." + (accept ? "allow" : "reject")}
-      onPress={() => answer(accept)}
+      testID={"plugins.management." + (accept && needsReview ? "review" : accept ? "allow" : "reject")}
+      onPress={() => accept && needsReview ? setReviewedFor(consent!.requestId) : answer(accept)}
       modifiers={[
         buttonStyle(accept ? "borderedProminent" : "bordered"),
         ...(accept ? [tint(colors.cta), foregroundStyle(colors.ctaText)] : []),
@@ -117,7 +124,7 @@ export function PluginManagementConfirmation(
           fixedSize({ horizontal: false, vertical: true }),
         ]}
       >
-        {t("plugins.management." + (accept ? "allow" : "reject"))}
+        {t("plugins.management." + (accept && needsReview ? "review" : accept ? "allow" : "reject"))}
       </Text>
     </Button>
   );
@@ -157,7 +164,9 @@ export function PluginManagementConfirmation(
       // are fixed and the first screen shows the title and the plugin in full.
       title={compact ? "" : t("plugins.notice.title.confirmation")}
       nativeContent
-      nativeContentModifiers={[...(listGeometry ? [listGeometry] : []), accessibilityHint(t("plugins.management.scrollHint"))]}
+      // A new identity for the reviewed list, so it opens at its top (the source) rather than where the first list was.
+      nativeContentModifiers={[...(listGeometry ? [listGeometry] : []), accessibilityHint(t("plugins.management.scrollHint")),
+        viewId(reviewed ? "plugins.management.reviewed" : "plugins.management.list")]}
       nativeContentOverlay={fade("plugins.management.listFade", more.list)}
       // Open large when the summary, a source-change notice or an accessibility text size needs the room (at the medium
       // detent an upward swipe expands the sheet instead of scrolling the list).
@@ -206,6 +215,24 @@ export function PluginManagementConfirmation(
         spacing={spacing.md}
         modifiers={[padding({ vertical: spacing.sm })]}
       >
+        {/* Reviewed (compact): the source and this consent's high-risk summary come first, then the rest as before. */}
+        {reviewed ? (
+          <VStack testID="plugins.management.reviewLead" alignment="leading" spacing={spacing.md}>
+            {body(info?.origin, true)}
+            {body(info?.repository, true)}
+            {body(info?.originSourceChanged, true)}
+            {body(info?.sourceChanged, true)}
+            {body(info?.trust, true)}
+          </VStack>
+        ) : null}
+        {reviewed && info?.highRisk ? <Divider /> : null}
+        {reviewed && info?.highRisk ? (
+          <VStack testID="plugins.management.highRisk" alignment="leading" spacing={spacing.xs}>
+            {summaryHeading}
+            {summaryItems}
+          </VStack>
+        ) : null}
+        {reviewed ? <Divider /> : null}
         {/* The identity block: where it goes and where it comes from first, in primary text, kept in view with the
             pinned summary (measured for its bound); the explanations follow in secondary text. */}
         <VStack testID="plugins.management.identity" alignment="leading" spacing={spacing.md}
@@ -225,15 +252,15 @@ export function PluginManagementConfirmation(
             {info?.title ?? ""}
           </Text>
           {body(info?.device, true)}
-          {body(info?.origin, true)}
-          {body(info?.repository, true)}
-          {body(info?.originSourceChanged, true)}
-          {body(info?.sourceChanged, true)}
-          {body(info?.trust, true)}
+          {reviewed ? null : body(info?.origin, true)}
+          {reviewed ? null : body(info?.repository, true)}
+          {reviewed ? null : body(info?.originSourceChanged, true)}
+          {reviewed ? null : body(info?.sourceChanged, true)}
+          {reviewed ? null : body(info?.trust, true)}
         </VStack>
         {/* Compact: the whole summary right after the identity block, in the same scrolled list. */}
-        {compact && info?.highRisk ? <Divider /> : null}
-        {compact && info?.highRisk ? (
+        {compact && !reviewed && info?.highRisk ? <Divider /> : null}
+        {compact && !reviewed && info?.highRisk ? (
           <VStack testID="plugins.management.highRisk" alignment="leading" spacing={spacing.xs}>
             {summaryHeading}
             {summaryItems}

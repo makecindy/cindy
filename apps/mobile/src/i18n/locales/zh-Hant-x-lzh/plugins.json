@@ -187,6 +187,7 @@
     "uninstallBody": "將自 {{device}} 除此法器、其憑證與私有設定。作品庫及舊有差事之內容皆存。",
     "reject": "罷",
     "allow": "許而續之",
+    "review": "觀其源與權",
     "versionChange": "{{previous}} → {{next}}",
     "switchVersion": "將納之版：{{version}}",
     "oauthChanged": "名籍登入之設定已變。",

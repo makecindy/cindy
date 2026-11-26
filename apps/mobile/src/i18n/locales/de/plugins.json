@@ -187,6 +187,7 @@
     "uninstallBody": "Dadurch werden das Plugin, seine Zugangsdaten und privaten Einstellungen von {{device}} entfernt. Bibliothekselemente und bestehende Aufgabeninhalte bleiben erhalten.",
     "reject": "Abbrechen",
     "allow": "Erlauben und fortfahren",
+    "review": "Quelle und Berechtigungen prüfen",
     "versionChange": "{{previous}} → {{next}}",
     "switchVersion": "Zu installierende Version: {{version}}",
     "oauthChanged": "Die Anmeldekonfiguration des Kontos hat sich geändert.",

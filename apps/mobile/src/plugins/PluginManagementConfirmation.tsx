@@ -1,4 +1,4 @@
-import { Pressable, ScrollView, StyleSheet, View, useWindowDimensions } from "react-native";
+import { Pressable, ScrollView, StyleSheet, View, useWindowDimensions, type ScrollViewInstance } from "react-native";
 import { useTranslation } from "react-i18next";
 import { SheetModal } from "@/session/SheetModal";
 import { Text } from "@/components/AppText";
@@ -16,7 +16,7 @@ import {
   usePluginConsent,
   type PluginManagementConfirmationProps,
 } from "./usePluginConsent";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ScrollFade, ScrollThumb, useScrollOverflow } from "@/components/ScrollOverflow";
 import { CONSENT_FADE_HEIGHT, CONSENT_SIDE_BY_SIDE_MIN_WIDTH, consentSummaryFadeAllowed, planConsentSheet,
   pluginConsentPresentation } from "./pluginConsentPresentation";
@@ -51,7 +51,15 @@ export function PluginManagementConfirmation(
     identity: measured.identity, heading: measured.heading,
     lines: Array.from({ length: lineCount }, (_, index) => lineHeights[index] ?? 0) /* 0 = not measured yet */, gap: spacing.xs,
   });
-  const compact = plan.mode === "compact";
+  // Compact (maintainer review 16:35 #2, the same as iOS): Allow comes after an explicit "Review source and permissions"
+  // step, which shows the source and this consent's high-risk summary first (the list starts again at its top); the
+  // sheet stays compact once reviewed. Regular is unchanged.
+  const [reviewedFor, setReviewedFor] = useState<string | null>(null);
+  const reviewed = !!consent && reviewedFor === consent.requestId;
+  const compact = plan.mode === "compact" || reviewed;
+  const needsReview = compact && !reviewed && info?.allowBlocked !== true;
+  const listRef = useRef<ScrollViewInstance>(null);
+  useEffect(() => { if (reviewed) listRef.current?.scrollTo({ y: 0, animated: false }); }, [reviewed]);
   const list = useScrollOverflow(), summary = useScrollOverflow();
   // Large text on a narrow screen: the buttons stack so each label shows in full (as the plugin notices do). Wide enough
   // (landscape, tablets) they stay side by side, labels wrapping inside them, so the text keeps more room (K-3).
@@ -75,18 +83,32 @@ export function PluginManagementConfirmation(
     >
       <View style={styles.sheet} testID="plugins.managementConfirmation">
         <View style={styles.listArea}>
-          <ScrollView contentContainerStyle={[styles.content, list.thumbGutter]} testID="plugins.management.list" showsVerticalScrollIndicator={false}
+          <ScrollView ref={listRef} contentContainerStyle={[styles.content, list.thumbGutter]} testID="plugins.management.list" showsVerticalScrollIndicator={false}
             accessibilityHint={t("plugins.management.scrollHint")}
             onLayout={list.onLayout} onContentSizeChange={list.onContentSizeChange} onScroll={list.onScroll}
             scrollEventThrottle={64}>
             {/* The identity block: where it goes and where it comes from first, in primary text; the first thing shown
                 in either layout. The explanations follow in secondary text. */}
-            <View testID="plugins.management.identity" style={styles.identity} onLayout={measure("identity")}>
+            {/* Reviewed (compact): the source and this consent's high-risk summary come first, then the rest as before. */}
+            {reviewed ? (
+              <View testID="plugins.management.reviewLead" style={styles.identity}>
+                {[info?.origin, info?.repository, info?.originSourceChanged, info?.sourceChanged, info?.trust].filter(Boolean).map((text, index) => (
+                  <Text key={"review" + index} style={styles.lead}>{text}</Text>
+                ))}
+              </View>
+            ) : null}
+            {reviewed && info?.highRisk ? (
+              <View testID="plugins.management.highRisk" style={[styles.highRisk, styles.highRiskInline]}>
+                {heading}
+                <View style={styles.highRiskLines}>{summaryLines}</View>
+              </View>
+            ) : null}
+            <View testID="plugins.management.identity" style={[styles.identity, reviewed && styles.reviewedIdentity]} onLayout={measure("identity")}>
               <Text style={styles.title}>
                 {t("plugins.notice.title.confirmation")}
               </Text>
               <Text style={styles.title}>{info?.title}</Text>
-              {[info?.device, info?.origin, info?.repository, info?.originSourceChanged, info?.sourceChanged, info?.trust]
+              {[info?.device, ...(reviewed ? [] : [info?.origin, info?.repository, info?.originSourceChanged, info?.sourceChanged, info?.trust])]
                 .filter(Boolean)
                 .map((text, index) => (
                   <Text key={"lead" + index} style={styles.lead}>
@@ -95,7 +117,7 @@ export function PluginManagementConfirmation(
                 ))}
             </View>
             {/* Compact: the whole summary right after the identity block, in the same scroll area. */}
-            {compact && info?.highRisk ? (
+            {compact && !reviewed && info?.highRisk ? (
               <View testID="plugins.management.highRisk" style={[styles.highRisk, styles.highRiskInline]}>
                 {heading}
                 <View style={styles.highRiskLines}>{summaryLines}</View>
@@ -148,17 +170,17 @@ export function PluginManagementConfirmation(
           {[false, true].map((accept) => (
             <Pressable
               key={String(accept)}
-              testID={"plugins.management." + (accept ? "allow" : "reject")}
+              testID={"plugins.management." + (accept && needsReview ? "review" : accept ? "allow" : "reject")}
               accessibilityRole="button"
               disabled={
                 !props.active || props.state.busy || !!props.state.answerHeld || !props.state.online
                 || (accept && info?.allowBlocked === true)
               }
-              onPress={() => answer(accept)}
+              onPress={() => accept && needsReview ? setReviewedFor(consent!.requestId) : answer(accept)}
               style={[styles.button, stacked && styles.stackedButton, accept && styles.primary, accept && info?.allowBlocked && styles.unavailable]}
             >
               <Text style={[styles.label, styles.buttonLabel, accept && styles.primaryText]}>
-                {t("plugins.management." + (accept ? "allow" : "reject"))}
+                {t("plugins.management." + (accept && needsReview ? "review" : accept ? "allow" : "reject"))}
               </Text>
             </Pressable>
           ))}
@@ -233,6 +255,8 @@ const makeStyles = (c: ThemeColors) =>
     listArea: { flexShrink: 1 },
     // Compact: the summary inside the scroll area, separated by the same hairline.
     highRiskInline: { paddingBottom: 0 },
+    // Reviewed: the plugin and its computer follow the summary, under the same hairline.
+    reviewedIdentity: { paddingTop: spacing.md, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: c.border },
     unavailable: { opacity: 0.5 },
     button: {
       flex: 1,

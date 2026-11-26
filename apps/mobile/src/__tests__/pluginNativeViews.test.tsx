@@ -177,6 +177,7 @@ vi.mock("@expo/ui/swift-ui/modifiers", () => ({
       "scrollDismissesKeyboard",
       "tag",
       "tint",
+      "id",
     ].map((name) => [name, (value: any) => ({ [name]: value })]),
   ),
 }));
@@ -1686,6 +1687,77 @@ describe("pinned high-risk permission", () => {
     for (const line of fiveLines) expect(container.textContent).toContain(line);
     expect(findIn(sheet.children, "plugins.management.identity")).toBe(true);
   });
+  /* 测试价值（维护者 16:35 第 2 条：iOS 紧凑档可以在关键授权信息出现前允许）
+   * - 生产入口与可观察结果：两端真实确认面板组件；观察按钮（「查看来源和权限」/「允许」）、点下后滚动区内容的先后、
+   *   回答是否发出。
+   * - 依据：紧凑档的「允许」放在明确的查看步骤之后；查看后的列表从来源与本次高风险摘要开始，并回到顶部
+   *   （iOS 换一个视图 id，Android scrollTo 0）；常规档不变。读屏用户按按钮顺序即可完成，不靠滚动位置。
+   * - 最小失败输入：维护者的数字（可分配 100、身份块 384、标题 40、五项）下改前「允许」直接可点。tier: unit。
+   */
+  const customProps = (facts: any) => { const state = { outcome: "confirmation", online: true, busy: false, receipt: { consent: {
+      requestId: "request", origin: "custom-market", originLabel: "Acme", initiator: "user",
+      originSource: { kind: "git", repository: "github.com/acme/plugins" }, facts } } } as any;
+    return { state, controller: { getState: () => state, answer: vi.fn() } as any, active: true, deviceName: "Mac" }; };
+  const order = (root: HTMLElement) => [...root.querySelectorAll("[data-testid]")].map((node) => node.getAttribute("data-testid"));
+  it.each([["the Cindy market", props], ["a custom market", customProps]] as const)(
+    "iOS compact: Allow only after \"Review source and permissions\"; the reviewed list opens with the source and the summary (%s)", (_name, build) => {
+      bridge.fontScale = 2.4;
+      const sheetProps = build(allFive);
+      const { container } = mount(PluginManagementConfirmation, sheetProps);
+      const header = Math.ceil(64 * 2) + 10, chrome = 8 * 2 + 8 * 3 + 4 + 12;
+      geometry("plugins.management.actions", 844 - header - chrome - 100);
+      geometry("plugins.management.identity", 384);
+      geometry("plugins.management.highRiskTitle", 40);
+      const items = () => [...bridge.props.values()].filter((p: any) => fiveLines.includes(p.children));
+      items().forEach((item: any, index: number) => act(() => item.modifiers.find((m: any) => m.onGeometryChange).onGeometryChange({ width: 300, height: reviewLines[index] })));
+      const shown = (id: string) => container.querySelector(`[data-testid="${id}"]`) !== null;
+      expect({ allow: shown("plugins.management.allow"), review: shown("plugins.management.review") }).toEqual({ allow: false, review: true });
+      act(() => bridge.props.get("plugins.management.review").onPress());
+      expect(sheetProps.controller.answer).not.toHaveBeenCalled();
+      const ids = order(container);
+      expect(ids.indexOf("plugins.management.reviewLead")).toBeGreaterThanOrEqual(0);
+      expect(ids.indexOf("plugins.management.reviewLead")).toBeLessThan(ids.indexOf("plugins.management.highRisk"));
+      expect(ids.indexOf("plugins.management.highRisk")).toBeLessThan(ids.indexOf("plugins.management.identity"));
+      const lead = container.querySelector('[data-testid="plugins.management.reviewLead"]')!.textContent!;
+      expect(lead).toContain(build === customProps ? "plugins.notice.consentSource.repository" : "plugins.notice.consentSource.market");
+      // The reviewed list is a new view, so it opens at its top.
+      expect(bridge.props.get("plugins.managementConfirmation").nativeContentModifiers).toContainEqual({ id: "plugins.management.reviewed" });
+      act(() => bridge.props.get("plugins.management.allow").onPress());
+      expect(sheetProps.controller.answer).toHaveBeenCalledWith(true);
+    });
+  it.each([["the Cindy market", props], ["a custom market", customProps]] as const)(
+    "Android compact: Allow only after \"Review source and permissions\"; the reviewed list opens with the source and the summary (%s)", (_name, build) => {
+      bridge.fontScale = 2;
+      const sheetProps = build(allFive);
+      const { container } = mount(AndroidManagementConfirmation, sheetProps);
+      const chrome = 20 * 2 + 12 + 12 * 2 + 4;
+      const layout = (id: string, height: number) => act(() => bridge.props.get(id).onLayout({ nativeEvent: { layout: { height } } }));
+      layout("plugins.management.actions", Math.floor(844 * 0.85) - chrome - 100);
+      layout("plugins.management.identity", 384);
+      const parts = () => (bridge.props.get("plugins.management.highRisk").children as any[]).flat(3).filter(Boolean);
+      act(() => parts().find((child: any) => child?.props?.testID === "plugins.management.highRiskTitle").props.onLayout({ nativeEvent: { layout: { height: 40 } } }));
+      const lines = () => parts().flatMap((child: any) => child?.props?.children ? [child.props.children].flat() : [child]).filter((child: any) => fiveLines.includes(child?.props?.children));
+      lines().forEach((line: any, index: number) => act(() => line.props.onLayout({ nativeEvent: { layout: { height: reviewLines[index] } } })));
+      const shown = (id: string) => container.querySelector(`[data-testid="${id}"]`) !== null;
+      expect({ allow: shown("plugins.management.allow"), review: shown("plugins.management.review") }).toEqual({ allow: false, review: true });
+      act(() => bridge.props.get("plugins.management.review").onPress());
+      expect(sheetProps.controller.answer).not.toHaveBeenCalled();
+      const ids = order(container);
+      expect(ids.indexOf("plugins.management.reviewLead")).toBeGreaterThanOrEqual(0);
+      expect(ids.indexOf("plugins.management.reviewLead")).toBeLessThan(ids.indexOf("plugins.management.highRisk"));
+      expect(ids.indexOf("plugins.management.highRisk")).toBeLessThan(ids.indexOf("plugins.management.identity"));
+      const lead = container.querySelector('[data-testid="plugins.management.reviewLead"]')!.textContent!;
+      expect(lead).toContain(build === customProps ? "plugins.notice.consentSource.repository" : "plugins.notice.consentSource.market");
+      act(() => bridge.props.get("plugins.management.allow").onPress());
+      expect(sheetProps.controller.answer).toHaveBeenCalledWith(true);
+    });
+  it.each([["iOS", PluginManagementConfirmation], ["Android", AndroidManagementConfirmation]] as const)(
+    "%s regular layout: Allow at once, no review step (unchanged)", (_platform, Sheet) => {
+      bridge.fontScale = 1;
+      const { container } = mount(Sheet, props(allFive));
+      const shown = (id: string) => container.querySelector(`[data-testid="${id}"]`) !== null;
+      expect({ allow: shown("plugins.management.allow"), review: shown("plugins.management.review") }).toEqual({ allow: true, review: false });
+    });
   it("Android pins the summary above the buttons when the identity block and two items fit", () => {
     bridge.fontScale = 2;
     const { container } = mount(AndroidManagementConfirmation, props(allFive));

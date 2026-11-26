@@ -187,6 +187,7 @@
     "uninstallBody": "{{device}} からプラグイン、認証情報、専用設定を削除します。ライブラリと既存のセッション内容は保持されます。",
     "reject": "キャンセル",
     "allow": "許可して続行",
+    "review": "提供元と権限を確認",
     "versionChange": "{{previous}} → {{next}}",
     "switchVersion": "インストールするバージョン：{{version}}",
     "oauthChanged": "アカウントのログイン設定が変更されています。",

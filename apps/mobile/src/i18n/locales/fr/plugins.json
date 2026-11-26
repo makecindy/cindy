@@ -189,6 +189,7 @@
     "uninstallBody": "Cette action supprime le plugin, ses identifiants et ses paramètres privés de {{device}}. Les éléments de la bibliothèque et le contenu des tâches existantes sont conservés.",
     "reject": "Annuler",
     "allow": "Autoriser et continuer",
+    "review": "Vérifier la source et les autorisations",
     "versionChange": "{{previous}} → {{next}}",
     "switchVersion": "Version qui sera installée : {{version}}",
     "oauthChanged": "La configuration de connexion au compte a changé.",
