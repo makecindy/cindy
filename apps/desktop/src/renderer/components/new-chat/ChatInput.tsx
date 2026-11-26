@@ -321,6 +321,7 @@ import {
   isComposerSuggestionEntryDisabled,
   nextEnabledSuggestionIndex,
   resolveComposerAtActivation,
+  resolveComposerSuggestionKey,
   type ComposerPluginSuggestion,
   type ComposerSuggestionAction,
   type ComposerSuggestionEntry,
@@ -930,6 +931,7 @@ interface ChatInputProps {
    * 权限仍使用标准 chip，允许用户随时调整当前任务的执行权限。
    */
   hideRuntimeControls?: boolean;
+  showBuddyNewHint?: boolean;
   /**
    * 工具行采用更紧凑的视觉密度 (字号 -1px)。
    * 用于 doc rail 这种宽度受限的容器,与 compactToolbar (wrap 兜底) 正交:
@@ -1315,6 +1317,7 @@ export function ChatInput({
   compactToolbar = false,
   narrowToolbar = false,
   hideRuntimeControls = false,
+  showBuddyNewHint = false,
   denseToolbar = false,
   visualVariant = 'default',
   middleToolbarSlot,
@@ -5366,9 +5369,8 @@ export function ChatInput({
   useEffect(() => {
     panelBridgeRef.current = {
       captureKey: (e) => {
-        if (e.isComposing) return false;
         if (!slashOpen && !atOpen) return false;
-        switch (e.key) {
+        switch (resolveComposerSuggestionKey(e)) {
           case 'ArrowDown':
             if (slashOpen && filteredCommands.length > 0) {
               setSlashFocus((i) => nextAvailableSlashCommandIndex(filteredCommands, i, 1));
@@ -9365,7 +9367,8 @@ export function ChatInput({
       // 素材仍由 Main 从 DB 读取；远程任务经 sticky 路由交给被控电脑。
       const result = await predictPromptUntilDisabled(makerApiForSticky(sessionId), {
         sessionId,
-        agentKind: runtimeAgentKind,
+        // 插件引擎任务按 'acp' 请求：推荐只用辅助模型链，主进程据此核对任务没有换引擎。
+        agentKind: pluginEngineSession ? 'acp' : runtimeAgentKind,
         messages: (messages ?? []).slice(-20).map(({ role, content }) => ({ role, content })),
         workingDir: workingDirRef.current ?? undefined,
         turnGen: turnGenRef.current,
@@ -9869,7 +9872,7 @@ export function ChatInput({
                         <img
                           src={item.screenshot.url}
                           alt=""
-                          className="h-9 w-14 shrink-0 rounded-md border object-cover"
+                          className="h-9 w-14 shrink-0 rounded-lg border object-cover"
                           style={{ borderColor: 'var(--border-default)' }}
                           draggable={false}
                         />
@@ -9885,7 +9888,8 @@ export function ChatInput({
                               {item.markerNumber}
                             </span>
                             <span
-                              className="inline-flex items-center rounded px-1 py-px font-mono text-10"
+                              // design: intrinsic-geometry — 行内代码，与 Markdown 行内代码同为 6px（DESIGN.md §5 内容排版）
+                              className="inline-flex items-center rounded-[6px] px-1 py-px font-mono text-10"
                               style={{
                                 backgroundColor: 'var(--surface-chip)',
                                 color: 'var(--text-tertiary)',
@@ -10633,6 +10637,7 @@ export function ChatInput({
               query={trigger.query}
               commands={paletteCommands}
               additionalCommands={pluginSlashCommands}
+              showBuddyNewHint={showBuddyNewHint && trigger.sigil === '/' && trigger.query === 'new'}
               focusedIndex={slashFocus}
               onFocusedIndexChange={setSlashFocus}
               onSelect={(cmd) => insertSlashCommand(cmd)}

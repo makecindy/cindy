@@ -10,6 +10,12 @@ import { localizedModelDescription, modelDescriptionKey } from '../modelDescript
 import { matchesModelName } from '../modelDisplayNames';
 
 const locales = { en, 'zh-CN': cn, 'zh-TW': tw, ja, ko };
+// These exact Ark routes add tariffs without an editorial description family.
+const arkPriceOnlyIds = new Set([
+  'volcengine-api/doubao-seed-evolving',
+  'volcengine-api/doubao-seed-character-260628',
+  'volcengine-api/doubao-seed-character-251128',
+]);
 const i18n = createInstance();
 beforeAll(async () => {
   await i18n.init({ lng: 'zh-CN', fallbackLng: false, resources: Object.fromEntries(
@@ -18,10 +24,16 @@ beforeAll(async () => {
 });
 
 describe('local model descriptions', () => {
-  it('covers every bundled model and wire route in all five languages', () => {
+  it('covers bundled descriptions and leaves unclassified Ark price routes without copy', () => {
     for (const model of registry.models) {
       for (const id of [model.id, ...model.routes.map((route) => route.modelId)]) {
         const key = modelDescriptionKey({ id });
+        if (!key && arkPriceOnlyIds.has(model.id)) {
+          for (const lng of Object.keys(locales)) {
+            expect(localizedModelDescription({ id }, i18n.getFixedT(lng)), `${id}: ${lng}`).toBeUndefined();
+          }
+          continue;
+        }
         expect(key, id).toBeTruthy();
         for (const [lng, resource] of Object.entries(locales)) {
           expect(resource.modelDescriptions, `${id}: ${lng}`).toHaveProperty(key!);

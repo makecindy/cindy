@@ -3047,7 +3047,7 @@ function ExpandedView({
   }, []);
   const handleProjectCreated = useCallback(
     (sessionId: string, result: CreateProjectFromTaskResult) => {
-      patchLocal(sessionId, { workingDir: result.workingDir, workspaceKind: 'project' });
+      patchLocal(sessionId, { ...result.session, workspaceKind: 'project' });
       const normalized = normalizeWorkingDir(result.workingDir);
       if (normalized) collapse.expand(projectIdentityKey('local', normalized, null));
       void recentWorkdirsStore.forceRefresh().catch(() => undefined);
@@ -3095,22 +3095,16 @@ function ExpandedView({
         }
       }
 
-      // worktree 会话的工作区就是它绑定的 worktree：只改 workingDir 会造成半移动
-      // （侧栏按新项目归组，聊天框底部路径仍指旧 worktree）。判定不在这里做：归属只有
-      // 共享写路径一处权威，renderer 的缓存/复核都是异步镜像，任何「先查询再决定」都
-      // 会有一条「查询通过后、写入前恰好回收」的窗口，把主进程本会放行的移动挡在请求
-      // 之前。这里照常发请求，被守卫拒绝时在下面映射成同一条 toast；「移到对话」不改
-      // 目录，不受影响。
       const oldPatch = {
         workingDir: session.workingDir,
+        projectDir: session.projectDir,
         workspaceKind: session.workspaceKind,
       };
       if (target.kind !== 'dialogue' && !targetWorkingDir) return;
-      const nextPatch =
-        target.kind === 'dialogue'
-          ? { workspaceKind: 'dialogue' as const }
-          : { workingDir: targetWorkingDir, workspaceKind: 'project' as const };
-      patchLocal(sessionId, nextPatch);
+      const request = target.kind === 'dialogue'
+        ? { workspaceKind: 'dialogue' as const }
+        : { workspaceKind: 'project' as const, workingDir: targetWorkingDir };
+      patchLocal(sessionId, { workspaceKind: request.workspaceKind, projectDir: targetWorkingDir ?? null });
       let expandedProjectKey: string | null = null;
       let wasExpandedProjectCollapsed = false;
       if (targetWorkingDir) {
@@ -3122,7 +3116,8 @@ function ExpandedView({
         }
       }
       try {
-        await sessionService.update(sessionId, nextPatch);
+        const moved = await sessionService.update(sessionId, request);
+        patchLocal(sessionId, { workingDir: moved.workingDir, projectDir: moved.projectDir, workspaceKind: moved.workspaceKind });
         if (target.kind !== 'dialogue') {
           void recentWorkdirsStore.forceRefresh().catch(() => undefined);
         }
@@ -3246,14 +3241,12 @@ function ExpandedView({
         else if (next) void handleSessionClick(next.sessionId);
         else navigate('/cc-agent/new', { state: { workspacePrompt: 'generic' } });
       };
-      // 收件箱「完成」遇到绑着启用中自动化的任务，只把这轮结果标为已读、任务回到进行中，
-      // 不归档：归档会回收 worktree，下一轮又从快照重建，安静的一轮放回已归档再删一次
-      // （2026-11-18 用户决定，task-inbox.md）。读不到绑定时按无绑定处理，照常归档。
+      // For a pinned task or an active automation, Done settles this round without archiving.
       if (action === 'complete') {
-        const boundNames = await loadActiveBoundScheduleNames([
+        const keepActive = session?.pinnedAt || await loadActiveBoundScheduleNames([
           { id: sessionId, deviceLinkDeviceId: session?.deviceLinkDeviceId },
-        ]).then((names) => names.get(sessionId) ?? [], () => []);
-        if (boundNames.length > 0) {
+        ]).then(names => !!names.get(sessionId)?.length, () => false);
+        if (keepActive) {
           if (await blockedByAttachment()) return;
           const read = await markSessionsRead([sessionId], session?.deviceLinkDeviceId ?? undefined, { announce: false });
           if (!read) return;
@@ -4679,7 +4672,7 @@ function RailPanels({
           aria-disabled={disabled ? true : undefined}
           aria-label={disabled ? label : undefined}
           tabIndex={disabled ? 0 : undefined}
-          className="inline-flex self-center rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
+          className="inline-flex self-center rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
         >
           <button
             type="button"
@@ -4691,7 +4684,7 @@ function RailPanels({
               onCreate();
             }}
             className={cn(
-              'flex h-6 w-6 shrink-0 items-center justify-center rounded-md -my-1',
+              'flex h-6 w-6 shrink-0 items-center justify-center rounded-lg -my-1',
               'text-[var(--text-tertiary)] transition-colors hover:text-[var(--text-secondary)]',
               // globals.css 移除了 Chromium 默认 outline,键盘可达按钮必须自带
               // token 化 focus 环(DESIGN.md §10;codex review)。

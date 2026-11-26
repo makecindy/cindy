@@ -85,6 +85,7 @@ import {
 } from '@/lib/chatQuotes';
 import { quoteSegmentsToComposerDocument } from '@/lib/composerQuoteDocument';
 import { ChatImageView } from './ChatImageView';
+import { repeatIndexes, structuredImageOccurrence } from './ImageGalleryContext';
 import { TextLightbox } from './lazyPreviewLightboxes';
 import { ToolPayloadLightbox } from './ToolPayloadLightbox';
 import { MessageActionBar } from './MessageActionBar';
@@ -879,8 +880,8 @@ export function UserMessage({
   // renderer 'cc' ↔ maker 'claude-code' 别名映射 (DB / Session 用 'cc', maker IPC 用 'claude-code')
   const makerKind: MakerAgentKind =
     agentKind === 'codex' || agentKind === 'pi' ? agentKind : 'claude-code';
-  // 插件引擎任务(agent_kind = 'acp')不支持分叉与回退，也不读任何内置 Harness 的能力
-  // (docs/plans/acp-plugin-bridge.md)。
+  // 插件引擎任务(agent_kind = 'acp')不读任何内置 Harness 的能力。分叉由主进程从 Cindy 的记录交接；
+  // 回退要改动插件 Agent 自己的历史，仍不支持(docs/plans/acp-plugin-bridge.md)。
   const pluginEngineTask = isPluginEngineKind(agentKind);
   // device-link 远程会话:fork/rewind 能力按被控端读(本机会话 deviceId undefined,行为不变)。
   // 媒体来源(device/ssh)用于把附件/文件预览 URL 改写到 cindy-remote-media://(入方向媒体)。
@@ -898,7 +899,7 @@ export function UserMessage({
   // remoteHostId 非空时直接关掉这两个能力, 避免点了落到后端错误。
   const isRemote = Boolean(remoteHostId);
   const forkSupported =
-    !isRemote && !pluginEngineTask && (!agentKind || (capabilities?.fork?.supported ?? true));
+    !isRemote && (pluginEngineTask || !agentKind || (capabilities?.fork?.supported ?? true));
   const rewindSupported =
     !isRemote && !pluginEngineTask &&
     (!agentKind || (capabilities?.rewind?.supported ?? true));
@@ -1334,11 +1335,17 @@ export function UserMessage({
 
   // Define each renderer once, then place it inside the hook / ordinary branch
   // so the ordinary message keeps its established badge-before-attachment order.
+  const imageSrcs = hasImages
+    ? images.map((img) => ('url' in img ? img.url : `data:${img.mimeType};base64,${img.base64}`))
+    : [];
+  // Same count the task gallery uses for this message's uploads, so a repeated
+  // upload opens the gallery at the copy that was clicked.
+  const imageRepeats = repeatIndexes(imageSrcs);
   const imageAttachmentNodes =
     !orcaCommunication && hasImages
       ? images.map((img, idx) => {
           const isUrlMode = 'url' in img;
-          const src = isUrlMode ? img.url : `data:${img.mimeType};base64,${img.base64}`;
+          const src = imageSrcs[idx]!;
           const filename = isUrlMode ? img.originalName : (img.originalName ?? `image-${idx + 1}`);
           return (
             <ChatImageView
@@ -1349,6 +1356,7 @@ export function UserMessage({
               sessionId={sessionId}
               annotationSourceUrl={isUrlMode ? img.annotationSourceUrl : undefined}
               annotationStrokes={isUrlMode ? img.annotationStrokes : undefined}
+              galleryOccurrence={structuredImageOccurrence(imageRepeats[idx]!)}
             />
           );
         })

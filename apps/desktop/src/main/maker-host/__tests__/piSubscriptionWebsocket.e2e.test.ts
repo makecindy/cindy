@@ -16,7 +16,6 @@ import { CINDY_BRIDGE_EXTENSION_SOURCE } from '../../../../../../packages/maker-
 
 vi.mock('../../appSessionState.js', () => ({ activeOwnerScopeKey: () => 'fixture-owner', isAppSessionBoundaryPending: () => false }));
 vi.mock('../codex-account-auth.desktop.js', () => ({ isOpenAiSubscriptionProviderId: (id: string) => id === 'openai' || id === 'account-b' }));
-vi.mock('../session-provider-store.js', () => ({ getSessionProvider: () => null, hasHostedSessionModelAccess: () => false }));
 vi.mock('../guest-provider-route-store.js', () => ({ guestProviderRouteForSession: () => null }));
 vi.mock('../anthropic-responses-bridge-host.js', () => ({ getChatgptBridgeAuthForDispatch: vi.fn(), invalidateChatgptBridgeAuth: vi.fn(async () => false) }));
 const fastPolicy = vi.hoisted(() => ({ allowed: true }));

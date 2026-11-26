@@ -2,7 +2,7 @@ import type { ProviderErrorCode } from '../../../shared/providerErrors';
 import { useRemoteProviderDisable } from '@/lib/remoteProviderDisable';
 import { Select } from '@/components/ui/select';
 import { duplicateSubscriptionProviders, listedSourceFolds } from '@cindy/model-providers';
-import { isProviderLogoKind } from '@cindy/model-providers/branding';
+import { isProviderConnectionIcon, isProviderLogoKind } from '@cindy/model-providers/branding';
 import { useSettingsSubpageBack } from './useSettingsEscape';
 import { useSettingsSearchNavigation } from './SettingsSearchNavigation';
 import { providersSettings } from './ProvidersSection.settings-search';
@@ -19,7 +19,7 @@ import { useCodexRateLimits } from '@/hooks/useCodexRateLimits';
 import { SubscriptionFastSetting } from '@/features/provider-share/SubscriptionFastSetting';
 import { useCodexRateLimitReset } from '@/hooks/useCodexRateLimitReset';
 import { CodexResetCredits } from '../status/CodexResetCredits';
-import { providerWeeklyQuotaSource } from '../new-chat/useProviderWeeklyQuota';
+import { providerUsageReaderSource } from '../new-chat/useProviderWeeklyQuota';
 /**
  * ProvidersSection —— 设置 → 模型供应商页(2026-07 重构:双栏管理)。
  *
@@ -115,6 +115,9 @@ import { canAccessBillingSettings } from './billingVisibility';
 import { resolveXdAssetModuleState } from './providerAssetModule';
 import { useProviderSubscriptionCard } from './useProviderSubscriptionCard';
 import { SubscriptionAccountsSection, SubscriptionPoolViewCache } from './SubscriptionAccountsSection';
+import { OpenAiAccountGroupSection, useOpenAiAccountGroup } from './OpenAiAccountGroupSection';
+import { MergeProviderButton } from './SubscriptionPlacement';
+import { openAiAccountGroupKind } from '../../../shared/openAiAccountGroup';
 import { subscriptionAccountErrorKey } from './subscriptionAccountErrors';
 import { placementErrorKey } from './SubscriptionPlacement';
 import { isSubscriptionProvider, type SubscriptionPoolView } from '../../../shared/subscriptionAccounts';
@@ -152,6 +155,7 @@ import { ProviderListEntry } from './ProviderListEntry';
 import { ProviderAccountHeader, ConnectedPill } from './ProviderAccountHeader';
 import { OAuthBrowserLink, OAuthDeviceCodeCard } from './OAuthDeviceCodeCard';
 import { ProviderImportDialog, ProviderImportBatchDialog, ProviderImportFileButton } from './ProviderImportDialog';
+import { ProviderAppearanceDialog } from './ProviderAppearanceDialog';
 import { SettingsTextInput } from './SettingsTextInput';
 import { buildUnionRows, UnifiedModelList } from './UnifiedModelList';
 import { AnthropicMark } from '@/components/icons/AnthropicMark';
@@ -510,10 +514,19 @@ function useProviderManagement(provider?: ProviderView) {
   const { t } = useTranslation();
   const { confirm } = useConfirmDialog();
   const confirmProviderChange = useProviderChangeConfirmation();
-  const { refetch } = useProviders();
+  const { refetch, ownerGeneration } = useProviders();
+  const { dataOwnerId } = getDataOwnerGeneration();
   const [busy, setBusy] = useState(false);
+  const [editing, setEditing] = useState<(ProviderOwnerScope & { providerId: string }) | null>(null);
+  const editor = editing && provider && editing.providerId === provider.id && editing.dataOwnerId === dataOwnerId && editing.ownerGeneration === ownerGeneration
+    ? <ProviderAppearanceDialog key={provider.id} provider={provider} scope={editing} onClose={() => setEditing(null)} />
+    : null;
   const rename = async () => {
     if (!provider || busy) return;
+    if (provider.source === 'user') {
+      if (ownerGeneration !== null) setEditing({ dataOwnerId, ownerGeneration, providerId: provider.id });
+      return;
+    }
     try {
       const scope = await window.electronAPI.maker.listProviders();
       let name = provider.name;
@@ -585,7 +598,7 @@ function useProviderManagement(provider?: ProviderView) {
       refetch();
     }
   };
-  return { busy, rename, removeBuiltin };
+  return { busy, rename, removeBuiltin, editor };
 }
 
 function ManagedProviderHeader({
@@ -720,8 +733,7 @@ function DetailHeader({
       : undefined);
   const subscription = useProviderSubscriptionCard(provider);
   // A created subscription provider reads usage per account in its account list instead.
-  const resetEnabled = Boolean(provider && !provider.subscriptionPool
-    && providerWeeklyQuotaSource({ ...provider, suspended: false }) === 'codex');
+  const resetEnabled = Boolean(provider && providerUsageReaderSource({ ...provider, suspended: false }) === 'codex');
   const { snapshot: resetSnapshot, refresh: refreshResets } = useCodexRateLimits(resetEnabled, provider?.id ?? 'openai');
   const manualReset = useCodexRateLimitReset(resetSnapshot, refreshResets, provider?.id ?? 'openai');
   const detailScrollRef = useRef<HTMLDivElement>(null);
@@ -753,6 +765,8 @@ function DetailHeader({
     : isSubscriptionProvider(provider.id) ? provider.id
       : provider.subscriptionAccountPool ?? provider.subscriptionPool ?? null;
   const subscriptionPool = subscriptionKind && provider ? provider.id : null;
+  const openAiGroupKind = provider && !provider.subscriptionPoolAlias ? openAiAccountGroupKind(provider) : undefined;
+  const openAiGroup = useOpenAiAccountGroup(openAiGroupKind ? provider?.id : undefined);
   const dashboard =
     subscriptionKind === 'anthropic' || provider?.auth.native === 'claude'
       ? {
@@ -792,7 +806,7 @@ function DetailHeader({
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <ProviderAccountHeader
-        icon={icon}
+        icon={provider && (isProviderConnectionIcon(provider.logoKind) || provider.customIcon) ? providerIcon(provider, 18) : icon}
         title={provider ? providerDisplayName(provider, t) : title}
         subtitle={provider ? (
           <ProviderRunLocationSubtitle
@@ -866,7 +880,7 @@ function DetailHeader({
                       disabled={management.busy}
                     >
                       <Pencil size={18} className="mr-2.5" />
-                      {t('settings.providers.pill.rename')}
+                      {t(provider.source === 'user' ? 'settings.providers.menu.appearance' : 'settings.providers.pill.rename')}
                     </DropdownMenuItem>
                   )}
                   {editAction && !provider?.auth.native && (
@@ -923,6 +937,7 @@ function DetailHeader({
             )}
         </>}
       />
+      {management.editor}
       <div
         data-testid="provider-detail-scroll"
         ref={detailScrollRef}
@@ -941,7 +956,13 @@ function DetailHeader({
             defaultUsage={usageCard}
             dashboard={dashboard ?? undefined}
             expectAccounts={provider?.connected === true}
+            openAiAccounts={openAiGroup.accounts}
           />
+        )}
+        {provider && openAiGroupKind && (openAiGroup.allocation || (!subscriptionPool && openAiGroupKind === 'apiKey')) && (
+          <OpenAiAccountGroupSection key={`openai-account-group:${provider.id}`} providerId={provider.id} group={openAiGroup}
+            settingsAnchor={!subscriptionPool} mergeAction={openAiGroupKind === 'apiKey' ? <MergeProviderButton kind={null} providerId={provider.id}
+              providerName={provider.name} openAiAccounts={openAiGroup.accounts} onDone={openAiGroup.refresh} /> : undefined} />
         )}
         {assetModule ??
           (subscriptionPool ? null : usageCard ? (
@@ -2481,10 +2502,11 @@ function ListRow({
           : 'hover:bg-[var(--settings-menu-bg-hover)]',
       )}
     >
+      {management.editor}
       {sortable && (
         <button data-setting-id={providersSettings.providers.id}
           type="button"
-          className="provider-order-handle absolute inset-y-0 left-0 z-[1] my-auto flex h-9 w-3 cursor-grab items-center justify-center rounded-md outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--focus-ring-soft)]"
+          className="provider-order-handle absolute inset-y-0 left-0 z-[1] my-auto flex h-9 w-3 cursor-grab items-center justify-center rounded-full outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--focus-ring-soft)]"
           aria-label={t('settings.providers.order.handle', {
             provider: title,
             position,

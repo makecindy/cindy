@@ -466,8 +466,7 @@ export function ProviderUsageSection({
               id: `${breakdownId}-${option.value}`,
               'aria-controls': `${breakdownId}-panel`,
             }))}
-            height={28}
-            optionHeight={24}
+            density="sm"
           />
         )}
         subtitle={breakdownSubtitle}
@@ -529,8 +528,7 @@ export function ProviderUsageSection({
                 onValueChange={setStack}
                 aria-label={t('providerGroup.usage.stack.aria')}
                 options={stackOptions}
-                height={28}
-                optionHeight={24}
+                density="sm"
               />
             )}
           >
@@ -596,6 +594,7 @@ function ShareStrip({ items }: { items: Array<{ key: string; tokens: number; col
 }
 
 const ROW_CLASS = 'cursor-pointer transition-colors motion-reduce:transition-none hover:bg-[var(--surface-hover)]';
+// NAME_BUTTON_CLASS：无框文字按钮：圆角只塑形键盘焦点环（DESIGN.md §5 登记）
 const NAME_BUTTON_CLASS =
   'min-w-0 truncate rounded-sm text-left font-medium text-[var(--text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]';
 
@@ -941,7 +940,7 @@ function ModelTable({
                   <span className="flex min-w-0 items-center gap-2">
                     <Swatch color={color} />
                     <span className="truncate font-medium" title={model}>{formatModelShort(model)}</span>
-                    <span className="shrink-0 rounded border border-[var(--border-default)] px-1 py-px text-11 leading-[1.4] text-[var(--text-tertiary)]">
+                    <span className="shrink-0 rounded-full border border-[var(--border-default)] px-1 py-px text-11 leading-[1.4] text-[var(--text-tertiary)]">
                       {kind}
                     </span>
                   </span>

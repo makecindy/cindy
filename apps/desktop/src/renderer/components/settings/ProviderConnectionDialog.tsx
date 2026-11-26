@@ -42,6 +42,7 @@ import {
 } from 'lucide-react';
 
 import { SegmentedControl } from '@/components/ui/segmented-control';
+import { SearchInput } from '@/components/ui/search-input';
 import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
 import { Button } from '@/components/ui/button';
@@ -2411,10 +2412,12 @@ export function ProviderConnectionDialog({
             {t('settings.providers.custom.fields.runtimeSupportsImageGenerationEndpoints')}
           </p>
           <div className="flex flex-col items-start gap-1.5">
-            <code className="max-w-full break-all rounded-md bg-[var(--surface-chip)] px-2 py-1 font-mono text-11 leading-4 text-[var(--text-primary)]">
+            {/* design: intrinsic-geometry — 行内代码，与 Markdown 行内代码同为 6px（DESIGN.md §5 内容排版） */}
+            <code className="max-w-full break-all rounded-[6px] bg-[var(--surface-chip)] px-2 py-1 font-mono text-11 leading-4 text-[var(--text-primary)]">
               /images/generations
             </code>
-            <code className="max-w-full break-all rounded-md bg-[var(--surface-chip)] px-2 py-1 font-mono text-11 leading-4 text-[var(--text-primary)]">
+            {/* design: intrinsic-geometry — 行内代码，与 Markdown 行内代码同为 6px（DESIGN.md §5 内容排版） */}
+            <code className="max-w-full break-all rounded-[6px] bg-[var(--surface-chip)] px-2 py-1 font-mono text-11 leading-4 text-[var(--text-primary)]">
               /images/edits
             </code>
           </div>
@@ -2572,10 +2575,10 @@ export function ProviderConnectionDialog({
           {!simpleAdding && <div className="flex flex-col gap-2">
             <FieldLabel>{t('settings.providers.custom.authMode.label')}</FieldLabel>
             <SegmentedControl
+              data-settings-search-action="Choose how the custom provider authenticates"
               aria-label={t('settings.providers.custom.authMode.label')}
               value={authMode}
-              height={38}
-              optionHeight={32}
+              density="lg"
               onValueChange={(mode) => {
                 changeAuthMode(mode);
                 setTest({ 'claude-code': IDLE_TEST, codex: IDLE_TEST, pi: IDLE_TEST });
@@ -2593,11 +2596,11 @@ export function ProviderConnectionDialog({
                 <div className="flex flex-col gap-1.5">
                   <FieldLabel>{t('settings.providers.custom.authMode.flowLabel')}</FieldLabel>
                   <SegmentedControl
+                    data-settings-search-action="Choose the OAuth sign-in flow for the custom provider"
                     aria-label={t('settings.providers.custom.authMode.flowLabel')}
                     value={oauthFlow}
                     onValueChange={setOauthFlow}
-                    height={38}
-                    optionHeight={32}
+                    density="lg"
                     options={(['authorization-code', 'device-code'] as const).map((flow) => ({
                       value: flow,
                       label: t(`settings.providers.custom.authMode.flow.${flow}`),
@@ -3613,19 +3616,13 @@ export function ModelPickerOverlay({
           {/* 搜索（项目多才显示）+ 全选/清空（作用于当前过滤结果） */}
           <div className="flex flex-col gap-2 px-5 pt-2">
             {picker.models.length > 8 && (
-              <input
+              <SearchInput
                 data-settings-search-action="Filter the fetched model list in the custom provider dialog"
-                ref={searchInputRef}
+                inputRef={searchInputRef}
                 value={picker.query}
-                onChange={(e) => onChange({ ...picker, query: e.target.value })}
+                onChange={(query) => onChange({ ...picker, query })}
                 placeholder={t('settings.providers.custom.fetch.searchPlaceholder')}
-                className={cn(
-                  'h-[34px] w-full rounded-full px-3.5 text-13 outline-none transition-colors',
-                  'text-[var(--settings-input-text)] placeholder:text-[var(--settings-input-placeholder)]',
-                  'border border-[var(--settings-input-border)] bg-[var(--settings-input-bg)] focus:border-[var(--settings-input-border-focus)]',
-                  'focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
-                )}
-                style={{ userSelect: 'text', WebkitUserSelect: 'text' }}
+                aria-label={t('settings.providers.custom.fetch.searchPlaceholder')}
               />
             )}
             <div className="flex items-center gap-3">

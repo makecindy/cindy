@@ -5,6 +5,7 @@
 
 import { describe, expect, it, vi } from 'vitest';
 
+import { verifyPiResponsesCompletion } from '../responses-completion.js';
 import { rewriteContextModeDoctorPath } from '../context-mode-doctor-path.js';
 import {
   createPiTranslateContext,
@@ -42,6 +43,26 @@ function makeQueue(): { queue: AsyncQueue<AgentEvent>; events: AgentEvent[] } {
 const ev = (e: Record<string, unknown>): PiRpcEvent => e as unknown as PiRpcEvent;
 
 describe('pi translator', () => {
+  // Unit: the actual projected terminal is the one Desktop observes. Attaching
+  // proof to the earlier, unprojected event lost recovery even on a valid reply.
+  it.each([true, false])('only exposes proof on the usable projected terminal (aborted: %s)', aborted => {
+    const ctx = createPiTranslateContext(noopLogger);
+    const { queue, events } = makeQueue();
+    translatePiEvent(ev({ type: 'agent_start' }), queue, ctx);
+    translatePiEvent(ev({ type: 'message_end', message: {
+      role: 'assistant', model: 'model-a', stopReason: 'stop',
+      content: [{ type: 'text', text: 'Completed reply' }],
+    } }), queue, ctx);
+    if (aborted) markPiHostAbortRequested(ctx);
+    translatePiEvent(ev({ type: 'agent_settled' }), queue, ctx, (id, key) => id === 'a' && key === 'key-a');
+    const done = events.find(event => event.type === 'done')!;
+    expect(done.data).toMatchObject({ status: aborted ? 'cancelled' : 'completed' });
+    expect(verifyPiResponsesCompletion(done, 'a', 'key-a')).toBe(!aborted);
+    expect(verifyPiResponsesCompletion(done, 'b', 'key-a')).toBe(false);
+    expect(verifyPiResponsesCompletion(done, 'a', 'different-key')).toBe(false);
+    disposePiTranslateContext(ctx);
+  });
+
   // #8887: prior retry tests omitted the second native agent_start. Each
   // completed request must be observable before settlement (unit, no I/O).
   it.each(['success', 'exhausted', 'stop'] as const)('accounts before settlement and preserves retry usage (%s)', outcome => {
@@ -852,6 +873,26 @@ describe('pi translator', () => {
     ]);
   });
 
+  // Unit: the SDK's 401 envelope needs to survive translation for group failover.
+  it('preserves the HTTP 401 from the OpenAI SDK error at terminal settlement', () => {
+    const ctx = createPiTranslateContext(noopLogger);
+    const { queue, events } = makeQueue();
+    translatePiEvent(ev({ type: 'agent_start' }), queue, ctx);
+    translatePiEvent(ev({
+      type: 'message_end',
+      message: {
+        role: 'assistant',
+        content: [],
+        stopReason: 'error',
+        errorMessage: 'OpenAI API error (401): {"code":"invalid_api_key"}',
+      },
+    }), queue, ctx);
+    translatePiEvent(ev({ type: 'agent_settled' }), queue, ctx);
+    expect(events.filter(event => event.type === 'error')).toEqual([
+      expect.objectContaining({ source: 'pi', data: expect.objectContaining({ errorStatus: 401, isTerminal: true }) }),
+    ]);
+  });
+
   it('classifies LiteLLM Response API in-stream errors without auto-retry markers', () => {
     const ctx = createPiTranslateContext(noopLogger);
     const { queue, events } = makeQueue();
@@ -1183,6 +1224,36 @@ describe('pi translator', () => {
         }),
       }),
     ]);
+  });
+
+  it('shows the first native retry of a concurrency-limited Responses request', () => {
+    const ctx = createPiTranslateContext(noopLogger);
+    const { queue, events } = makeQueue();
+    const errorMessage = 'mock API error (429): {"code":"1302","message":"并发超限，请稍后重试"}';
+    translatePiEvent(ev({ type: 'auto_retry_start', attempt: 1, maxAttempts: 6, errorMessage }), queue, ctx);
+    expect(events.find(event => event.type === 'error')?.data).toMatchObject({
+      reason: 'terminal-rate-limit-retry', isTerminal: false, willRetry: true,
+      message: errorMessage + ' (rate-limit-retry 1/6)',
+    });
+  });
+
+  // #10948, unit: replay the terminal sequences from Pi's Responses endpoint.
+  it.each([
+    ['1302: 并发超限，请稍后重试', 'agent_settled', 'upstream-overload'],
+    ['1302: 并发超限，请稍后重试', 'auto_retry_end', undefined],
+    ['insufficient_quota: Monthly quota exceeded', 'agent_settled', undefined],
+  ] as const)('classifies Responses failure %s at %s', (errorMessage, terminal, reason) => {
+    const ctx = createPiTranslateContext(noopLogger);
+    const { queue, events } = makeQueue();
+    translatePiEvent(ev({ type: 'agent_start' }), queue, ctx);
+    translatePiEvent(ev({
+      type: 'message_end',
+      message: { role: 'assistant', api: 'openai-responses', stopReason: 'error', content: [], errorMessage },
+    }), queue, ctx);
+    translatePiEvent(ev({ type: terminal, success: false }), queue, ctx);
+    const errors = events.filter(event => event.type === 'error');
+    expect(errors).toHaveLength(1);
+    expect((errors[0].data as { reason?: string }).reason).toBe(reason);
   });
 
   it.each(['no retry', 'exhausted', 'stopped'] as const)(

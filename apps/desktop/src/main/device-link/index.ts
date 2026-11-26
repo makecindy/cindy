@@ -27,6 +27,7 @@ import { tryPeerInvoke, stopFilePeers, stopFilePeerStreams, setFilePeerStreamTra
 import { desktopDirectRuntime } from './directLink';
 import { assertBackgroundLinkAccepted, linkOpenCapabilities } from './backgroundLink';
 import { deviceName, initializeDeviceName, localDeviceNameCandidates } from './deviceName';
+import { buildDeviceInfo } from './deviceInfoCore';
 import {
   createDeviceIdentityConflictMonitor,
   type DeviceIdentityConflict,
@@ -68,7 +69,6 @@ import {
   DL_UNSUBSCRIBE_CHANNEL,
   type DeviceLinkConnectionIssue,
   type DeviceLinkStatus,
-  type DeviceInfo,
   type DeviceView,
   type HelloPayload,
   type PresenceSnapshot,
@@ -227,7 +227,7 @@ import { rejoinRemovedDevice, type AgentNetRejoinOutcome } from './deviceRejoin.
 import { activeSelfHostedRelay } from './selfHostedRelayRouting.js';
 import { currentRelayFrameAuth } from './selfHostedRelayFrameAuth.js';
 import { installAgentNetMediaRouting } from './agentNetMedia.js';
-import { bindAgentNetSharing, stopAgentNetSharing, agentNetSharingRoute } from './agentNetSharing.js';
+import { bindAgentNetSharing, stopAgentNetSharing, agentNetSharingRoute, agentNetProviderShareRoutes } from './agentNetSharing.js';
 import { installAgentNetSharingPolicy } from './agentNetSharingPolicy.js';
 import { isAgentNetActive, agentNetAllowsLegacy, agentNetRequiresEncryption, createAgentNetOrLegacySocket, noteAgentNetIdentityRefused, rejoinOfficialAgentNet, agentNetSelectionKey, agentNetShouldUseLegacyPeer, agentNetShouldProbeLegacyPeer, agentNetPeerSnapshot, agentNetPeerRoutes,
   agentNetTransportAttestation, verifyAgentNetTransportAttestation, agentNetPrefersPrimary, useAgentNetSessions, agentNetSession,
@@ -914,29 +914,9 @@ function reconnectAfterAccessTokenRefresh(): void {
   }
 }
 
-function buildDeviceInfo(): DeviceInfo {
-  const info: DeviceInfo = {};
-  const cpuLabel = normalizeDeviceInfoText(os.cpus()[0]?.model);
-  if (cpuLabel) info.cpuLabel = cpuLabel;
-
-  const memoryGb = Math.round(os.totalmem() / 1024 ** 3);
-  if (Number.isFinite(memoryGb) && memoryGb > 0) info.memoryGb = memoryGb;
-
-  const osVersion = normalizeDeviceInfoText(systemVersion());
-  if (osVersion) info.osVersion = osVersion;
-
-  return info;
-}
-
 function systemVersion(): string {
   const electronProcess = process as NodeJS.Process & { getSystemVersion?: () => string };
   return electronProcess.getSystemVersion?.() || os.release();
-}
-
-function normalizeDeviceInfoText(value: string | undefined): string | null {
-  const trimmed = value?.trim();
-  if (!trimmed) return null;
-  return trimmed.length > 128 ? trimmed.slice(0, 128) : trimmed;
 }
 
 function wsUrl(): string {
@@ -948,6 +928,8 @@ function wsUrl(): string {
 export interface DeviceLinkServiceOptions {
   taskActivity?: {
     getLocalTaskActivitySnapshots(): AgentIslandSessionSnapshot[];
+    /** Same candidates as this computer's island counts; feeds the phone Live Activity. */
+    getLocalTaskOverview(): AgentIslandSessionSnapshot[];
     getNotificationRequestIds?(sessionId: string): string[];
     subscribeTaskOverview(listener: () => void): () => void;
   };
@@ -1009,7 +991,7 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
     // Capture both the endpoint and credential: a later account/realm switch
     // must never re-label an old host snapshot with the new account's token.
     const baseUrl = officialDeviceLinkApiBase();
-    const body = projectHostTaskActivity(island.getLocalTaskActivitySnapshots());
+    const body = projectHostTaskActivity(island.getLocalTaskOverview());
     const key = JSON.stringify([baseUrl, authManager.getCurrentUserId(), body]);
     if (lastActivityUpload?.key === key && Date.now() - lastActivityUpload.at < 55_000) return;
     try {
@@ -1041,7 +1023,7 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
     app: 'cindy',
     appVersion: app.getVersion(),
     remoteControlEnabled: readDeviceLinkSettings().remoteControlEnabled,
-    deviceInfo: buildDeviceInfo(),
+    deviceInfo: buildDeviceInfo(systemVersion()),
     busy,
   });
   const connectionOptions: Omit<DeviceLinkClientOptions, 'getWsUrl' | 'getToken'> = {
@@ -2090,15 +2072,18 @@ export function getDeviceLinkPeerLinks(includeTraffic = false): DeviceLinkPeerLi
   // Device Link 的中转只有 WebSocket。Agent-Net 主连接还没报上来时不写，不猜。
   const agentNetRoute = primaryUsesEncryptedTransport ? agentNetRelayRoute() : null;
   const relayTransport = !relayProtocol ? undefined : primaryUsesEncryptedTransport ? agentNetRoute?.via : 'websocket';
+  const allPeerLinks = client.getPeerLinkSnapshots();
+  const providerShareRoutes = primaryUsesEncryptedTransport ? agentNetProviderShareRoutes(allPeerLinks) : [];
   return {
     ...traffic,
     // 拓扑只画同账号设备;跨账号 peer(共享任务 / 供应商分享)不在这页。
-    links: client.getPeerLinkSnapshots().filter((link) => !isScopedPeer(link.deviceId)).map((link) => {
+    links: allPeerLinks.filter((link) => !isScopedPeer(link.deviceId)).map((link) => {
       const core = client!.connectionFor(link.deviceId) === client ? agentNetPeerSnapshot(link.deviceId) : null;
       const encrypted = primaryUsesEncryptedTransport && client!.connectionFor(link.deviceId) === client;
       return core ? { ...link, ...core, encrypted } : { ...link, encrypted };
     }),
     ...(primaryUsesEncryptedTransport ? { agentNetRoutes: agentNetPeerRoutes() } : {}),
+    ...(providerShareRoutes.length > 0 ? { providerShareRoutes } : {}),
     relayProtocol,
     ...(relayTransport ? { relayTransport } : {}),
     relayRttMs: primaryUsesEncryptedTransport ? agentNetRoute?.rttMs ?? null : client.getRelayRttMs(),

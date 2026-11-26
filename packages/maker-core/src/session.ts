@@ -415,6 +415,9 @@ export type SessionSendResult =
   | {
       accepted: false;
       reason: 'cancelled-before-dispatch' | 'provider-rejected-before-dispatch';
+      diagnostic?: TurnDispatchRejectedError['diagnostic'];
+      /** 上游拒绝这次派发时的 HTTP 状态（400–599），有界数值。 */
+      upstreamStatus?: number;
     };
 
 export interface SessionTurnControlSnapshot {
@@ -493,6 +496,11 @@ export class Session {
     return this.agentKind === 'acp'
       ? this.handle.negotiatedCapabilities ?? this.initialCapabilities
       : this.initialCapabilities;
+  }
+
+  /** ACP-only command names used when sanitizing host-added wire notes. */
+  getPluginEngineCommandNames(): readonly string[] {
+    return this.handle.getPluginEngineCommandNames?.() ?? [];
   }
   /** 见 SessionOptions.remoteHostId。 */
   readonly remoteHostId: string | null;
@@ -1168,6 +1176,10 @@ export class Session {
           return {
             accepted: false,
             reason: reservation.cancelled ? 'cancelled-before-dispatch' : 'provider-rejected-before-dispatch',
+            ...(!reservation.cancelled && e.diagnostic ? { diagnostic: e.diagnostic } : {}),
+            ...(!reservation.cancelled && e.upstreamStatus !== undefined
+              ? { upstreamStatus: e.upstreamStatus }
+              : {}),
           };
         }
         // Cancellation cannot downgrade an explicitly ambiguous provider result
@@ -1586,6 +1598,15 @@ export class Session {
   hasPendingHostOperation(): boolean {
     if (this.status === 'closed' || this.status === 'error') return false;
     return this.handle.hasPendingHostOperation?.() ?? false;
+  }
+
+  /**
+   * Whether closing this runtime keeps the conversation (see
+   * AgentSessionHandle.canResumeAfterClose). A plugin engine that does not say
+   * so counts as unable: reclamation must never strand a conversation.
+   */
+  canResumeAfterClose(): boolean {
+    return this.handle.canResumeAfterClose?.() ?? this.agentKind !== 'acp';
   }
 
   /**

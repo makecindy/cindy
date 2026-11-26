@@ -353,6 +353,7 @@ export interface CatalogModel {
   userModelConfig?: ProviderRuntimeModelConfig;
   /** Local Pi Chat compatibility override; not inherited public model metadata. */
   supportsStore?: boolean;
+  supportsLongCacheRetention?: false;
   /** Connection-scoped Pi Chat ID constraint; null explicitly preserves native IDs. */
   maxToolCallIdLength?: 64 | null;
   catalogPresetId?: string;
@@ -588,7 +589,7 @@ export interface Provider {
   name: string;
   /** 内置 / 用户自定义 / 企业下发。企业连接走自定义路由，但不能当个人连接编辑。 */
   source: ProviderSource;
-  /** Server-sanitized BYOK artwork, exposed by ProviderView to the owner. */
+  /** Owner-only display artwork: sanitized organization SVG or a small user connection PNG data URL. */
   customIcon?: string;
   /** ★这家能用在哪些 agent；决定它出现在哪个 agent 的来源列表里 + 路由按哪个 agent 取。 */
   agents: AgentKind[];
