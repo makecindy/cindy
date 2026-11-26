@@ -17,11 +17,10 @@ import { readDeviceProviderCatalog } from '../remote-agent/controller/deviceCata
 import { recordModelGroupDecision } from './decisionLog.js';
 import { createModelGroupResolver, modelGroupQuotaKey, MODEL_GROUP_REMOTE_WAIT_MS } from './resolver.js';
 import { readModelGroupSessionBinding } from './sessionBindings.js';
-import { readModelGroupsConfig, setModelGroupSourceCatalog } from './store.js';
+import { readModelGroupsConfigForSelected, setModelGroupSourceCatalog } from './store.js';
 import type { ModelGroupInnerQuota } from './pick.js';
-import { pickRouteMember, type SchedulableMember } from '../provider-group/scheduler.js';
+import { fiveHourTightFor } from '../provider-group/scheduler.js';
 import { readProviderGroup } from '../provider-group/store.js';
-import { quotaWindowsScheduleState } from '../provider-group/usage.js';
 import { computeModelGroupSwitchOffer } from './switchOffer.js';
 
 const pickLog = createLogger('model-groups:pick');
@@ -124,7 +123,7 @@ async function localViews() {
   return views;
 }
 
-/** 电脑组的「下一台」要读组里各台的状态(含别的电脑)：同一组、同一模型一分钟内只读一次，同时来的共用一次。 */
+/** 电脑组的「下一台」要读组里各台的状态(含别的电脑)：同一组、同一模型在组的轮流进度不变时一分钟内只读一次，同时来的共用一次。 */
 const INNER_GROUP_TTL_MS = 60_000;
 const innerGroups = new Map<string, { at: number; value: Promise<ModelGroupInnerQuota | null> }>();
 
@@ -137,34 +136,34 @@ function innerQuota(source: { providerId: string; model: string; agentKind: 'cc'
   const agent = source.agentKind === 'cc' ? 'claude-code' as const : source.agentKind;
   const config = readProviderGroup(source.providerId);
   if (config) {
-    const key = `${activeOwnerScopeKey()}\u0000${source.providerId}\u0000${source.model}\u0000${agent}`;
-    const cached = innerGroups.get(key);
-    if (cached && Date.now() - cached.at < INNER_GROUP_TTL_MS) return cached.value;
-    const value = (async (): Promise<ModelGroupInnerQuota | null> => {
+    return (async (): Promise<ModelGroupInnerQuota | null> => {
       // 用到时才加载组与账号池的运行时，不把它们拉进启动时就加载的模块。
       const { getProviderGroupRouter } = await import('../provider-group/runtime.js');
       const router = getProviderGroupRouter();
-      const view = await router.view(source.providerId, { model: source.model, agentKind: agent });
-      const now = Date.now();
-      // 组所在电脑给的每台状态：能接新任务的才参与；满载只是忙，不算额度用完。
-      const members: SchedulableMember[] = view.members.map((member) => {
-        const state = member.quota ? quotaWindowsScheduleState([member.quota], now) : null;
-        return {
-          key: member.key, usable: member.state === 'available', paused: member.paused, running: member.running,
-          limit: Number.POSITIVE_INFINITY, weight: member.weight,
-          urgency: state?.urgency ?? null, fiveHourTight: member.fiveHourTight === true, headroom: state?.headroom ?? null,
-        };
-      });
-      const next = members.find((member) => member.key === pickRouteMember(members, config.strategy, {
-        // 「轮流」「按比例」接着组里真实的进度预判，不然总报第一台(只读，不推进)。
-        ...router.pickProgress?.(source.providerId), keepUnknownQuota: true,
-      }).key);
-      if (!next) return { limited: !view.members.some((member) => member.state === 'full'), urgency: null, fiveHourTight: false, headroom: null };
-      return { limited: false, urgency: next.urgency ?? null, fiveHourTight: next.fiveHourTight === true, headroom: next.headroom ?? null };
-    })().catch(() => null);
-    innerGroups.set(key, { at: Date.now(), value });
-    for (const [entry, item] of innerGroups) if (Date.now() - item.at >= INNER_GROUP_TTL_MS) innerGroups.delete(entry);
-    return value;
+      // 组里真正派发过一次(轮流、比例推进了)就不再用缓存的预判。
+      const progress = router.pickProgress?.(source.providerId);
+      const prefix = [activeOwnerScopeKey(), source.providerId, source.model, agent].join('\u0000');
+      const key = `${prefix}\u0000${progress?.lastPicked ?? ''}\u0000${progress?.roundPicks ?? 0}\u0000${JSON.stringify([...(progress?.weightCounters ?? [])])}`;
+      const cached = innerGroups.get(key);
+      if (cached && Date.now() - cached.at < INNER_GROUP_TTL_MS) return cached.value;
+      // 与正式派发同一次选路(只预判)：账号池摘要、轮流槽位、模型准入、套餐用完后置都与真正接任务时一致。
+      const value = router.pick({ providerId: source.providerId, agentKind: agent, model: source.model, localTask: true, preview: true })
+        .then((picked): ModelGroupInnerQuota | null => {
+          if (picked.kind === 'none') return null;
+          // 一台都不能接、又不是因为都满载：额度用完或都用不了。满载只是忙，不算额度用完。
+          if (picked.kind === 'unavailable') return { limited: !picked.full, urgency: null, fiveHourTight: false, headroom: null };
+          const facts = picked.facts;
+          if (!facts) return null;
+          return { limited: false, urgency: facts.urgency ?? null, fiveHourTight: fiveHourTightFor(facts), headroom: facts.headroom ?? null };
+        })
+        .catch(() => null);
+      innerGroups.set(key, { at: Date.now(), value });
+      // 过期的、以及同一来源进度已变的旧预判一并清掉。
+      for (const [entry, item] of innerGroups) {
+        if (Date.now() - item.at >= INNER_GROUP_TTL_MS || (entry !== key && entry.startsWith(`${prefix}\u0000`))) innerGroups.delete(entry);
+      }
+      return value;
+    })();
   }
   // 几个账号的连接：只有确实有两个以上已核实的账号才问账号池(与智能路由页列「N 个账号」同一判断)。
   const view = lastLocal?.scope === activeOwnerScopeKey() ? lastLocal.views.find((item) => item.id === source.providerId) : undefined;
@@ -200,7 +199,7 @@ export function refreshAutoModelGroupRoutes(options: { waitRemote?: boolean } = 
 }
 
 export const resolver = createModelGroupResolver({
-  config: readModelGroupsConfig,
+  config: readModelGroupsConfigForSelected,
   recordDecision: recordModelGroupDecision,
   views: localViews,
   // 另一台电脑借这台跑 Agent 时只用开了「允许被远程调用」的连接(与设置里那个开关同一份)。
@@ -232,7 +231,7 @@ const switchOfferDeps = {
     const goals = getGoalController();
     return !goals || (await goals.getStatus(sessionId).catch(() => null)) !== null;
   },
-  config: readModelGroupsConfig,
+  config: readModelGroupsConfigForSelected,
   candidateFacts: resolver.candidateFacts,
   now: Date.now,
 };

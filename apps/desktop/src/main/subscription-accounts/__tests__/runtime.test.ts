@@ -1243,7 +1243,7 @@ it('dispatches to the idle sibling through the real remote host rather than the 
     isMobilePlatform: () => false, now: () => Date.now(),
   });
   const router = createProviderGroupRouter({ directory, readGroup: () => config,
-    listBindings: () => ({}), isTurnRunning: () => false, now: () => Date.now(), 
+    listBindings: () => ({}), isTurnRunning: () => false, now: () => Date.now(),
     readPoolScheduling: (m, model, options) => readSubscriptionPoolScheduling(m.providerId, model, options),
   });
   let selected: string | undefined;
@@ -5874,7 +5874,7 @@ describe('native account assignment on the executing computer', () => {
     });
     const bindings = new Map<string, ProviderGroupBinding>();
     const router = createProviderGroupRouter({ directory, readGroup: () => config,
-      listBindings: () => Object.fromEntries(bindings), isTurnRunning: () => false, now: () => now, 
+      listBindings: () => Object.fromEntries(bindings), isTurnRunning: () => false, now: () => now,
       readPoolModelAvailability: async () => readSubscriptionPoolModelAvailability('anthropic', model),
       coolingStore: { read: (): ProviderGroupPersistedCooling => failure === 'persisted'
         ? { anthropic: { local: { 'claude:sonnet': now + 1_800_000 } } } : {}, write: vi.fn() },
@@ -5941,7 +5941,7 @@ describe('native account assignment on the executing computer', () => {
     });
     const bindings = new Map<string, ProviderGroupBinding>([['old', { providerId: 'anthropic', memberKey: 'local', at: now }]]);
     const router = createProviderGroupRouter({ directory, readGroup: () => config,
-      listBindings: () => Object.fromEntries(bindings), isTurnRunning: () => false, now: () => now, 
+      listBindings: () => Object.fromEntries(bindings), isTurnRunning: () => false, now: () => now,
       readPoolModelAvailability: async () => readSubscriptionPoolModelAvailability('anthropic', model),
       coolingStore: { read: (): ProviderGroupPersistedCooling => ({}), write: vi.fn() },
     });

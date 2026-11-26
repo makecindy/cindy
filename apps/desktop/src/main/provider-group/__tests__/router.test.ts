@@ -12,7 +12,6 @@ import type { ProviderGroupBinding } from '../bindings.desktop';
 import type { DeviceLinkDeviceView } from '../../../shared/deviceLinkIpc';
 import { createProviderGroupDirectory, type ProviderGroupDirectory, type ResolvedProviderGroupMember } from '../directory';
 import { createProviderGroupRouter, PROVIDER_GROUP_PICK_QUICK_MS, type ProviderGroupRouterDeps } from '../router';
-import { pickRouteMember } from '../scheduler';
 import { SHARED_GROUP_STATUS_CAPS_CACHE_MS, SHARED_GROUP_STATUS_TIMEOUT_MS } from '../sharedStatus';
 // The full @cindy/device-link barrel is not under test here. The reachable
 // router/directory modules use only these three real helpers; re-export the
@@ -108,20 +107,24 @@ describe('subscription pools within a group', () => {
     expect(counts).toEqual({ local: 40, remote: 20 });
   });
 
-  // 2026-11-26 Greptile：外层智能路由预判电脑组下一台时要接着组里真实的轮流进度，不然「轮流」总报第一台。
-  it('exposes its rotation progress so a read-only preview predicts the next real pick', async () => {
+  // 2026-11-26 review(Greptile、MagicLizi P1)：外层智能路由预判电脑组下一台时与正式派发同一次选路(只预判)：
+  // A 有两个账号、B 一个，轮流时 A 刚接了一单，正式派发还会给 A；按展示数据推算会报 B。预判也不能推进轮流。
+  it('previews the member the next real dispatch takes, without advancing the rotation', async () => {
     const router = harness({}, {}, [], { ...config, strategy: 'rotate' }, {
-      readPoolScheduling: async () => summary(1, 0),
+      readPoolScheduling: async m => summary(m.kind === 'local' ? 2 : 1, 0),
     });
-    const first = await router.pick({ providerId: 'anthropic', agentKind: 'claude-code', model: MODEL, localTask: true });
-    const progress = router.pickProgress?.('anthropic');
-    expect(progress?.lastPicked).toBe(first.kind === 'member' ? first.member.key : 'none');
-    const members = [LOCAL, remote].map(m => ({ key: m.key, usable: true, paused: false, running: 0,
-      limit: Number.POSITIVE_INFINITY, weight: 1, urgency: null, fiveHourTight: false, headroom: null }));
-    const predicted = pickRouteMember(members, 'rotate', { ...progress, keepUnknownQuota: true }).key;
-    const second = await router.pick({ providerId: 'anthropic', agentKind: 'claude-code', model: MODEL, localTask: true });
-    expect(second.kind === 'member' ? second.member.key : null).toBe(predicted);
-    expect(predicted).not.toBe(progress?.lastPicked);
+    const pick = (preview?: true) => router.pick({ providerId: 'anthropic', agentKind: 'claude-code', model: MODEL, localTask: true, ...(preview ? { preview } : {}) });
+    const keyOf = (result: Awaited<ReturnType<typeof pick>>) => (result.kind === 'member' ? result.member.key : null);
+    expect(keyOf(await pick())).toBe('local');
+    const preview = await pick(true);
+    expect(keyOf(preview)).toBe('local');
+    expect(preview.kind === 'member' && preview.facts).toMatchObject({ key: 'local', roundSlots: 2 });
+    // 再预判一次也一样：预判不占 A 的第二个槽位。
+    expect(keyOf(await pick(true))).toBe('local');
+    expect(router.pickProgress?.('anthropic')).toMatchObject({ lastPicked: 'local', roundPicks: 1 });
+    expect(keyOf(await pick())).toBe('local');
+    expect(keyOf(await pick(true))).toBe(remote.key);
+    expect(keyOf(await pick())).toBe(remote.key);
   });
 
   it('counts concurrent provisional picks even when a busy sibling hides them in the pool total', async () => {

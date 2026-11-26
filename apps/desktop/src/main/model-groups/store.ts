@@ -42,6 +42,7 @@ const ownerScope = () => ownerScopedPath('model-groups.json');
 /** 最近一次读到的供应商目录，按账号记：换账号后不沿用上一个账号的。供应商路由按它合成和展开。 */
 let catalog: { scope: string; value: SourceCatalog } | null = null;
 let effective: { stored: ModelGroupsConfig; catalog: SourceCatalog | null; config: ModelGroupsConfig } | null = null;
+let forSelected: { stored: ModelGroupsConfig; catalog: SourceCatalog | null; config: ModelGroupsConfig } | null = null;
 
 
 /** 供应商目录读出来后由读取方(设置页／选择器取配置、解析路由)交进来。 */
@@ -62,6 +63,19 @@ export function readModelGroupsConfig(): ModelGroupsConfig {
     effective = { stored, catalog: current, config: effectiveModelGroupsConfig(stored, current) };
   }
   return effective.config;
+}
+
+/**
+ * 按已选的路由解析时读这一份(新任务与伙伴的选路、任务里换来源、是否自动换来源)：比 readModelGroupsConfig 多出
+ * 只剩一个能用连接的自动路由的隐藏展开，已选了它们的任务与设置照样能解析、接替。列表与设置页不用它。
+ */
+export function readModelGroupsConfigForSelected(): ModelGroupsConfig {
+  const stored = readStored();
+  const current = catalog?.scope === ownerScope() ? catalog.value : null;
+  if (forSelected?.stored !== stored || forSelected.catalog !== current) {
+    forSelected = { stored, catalog: current, config: effectiveModelGroupsConfig(stored, current, { forSelected: true }) };
+  }
+  return forSelected.config;
 }
 
 /**

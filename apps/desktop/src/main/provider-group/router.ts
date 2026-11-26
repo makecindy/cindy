@@ -122,6 +122,11 @@ export interface ProviderGroupPickInput {
    * (之后按运行中的绑定计)。本机同时开的几个任务不会读到同一份负载、全落到同一台。
    */
   reserveFor?: string;
+  /**
+   * 只预判下一台(外层智能路由按内层会用的那台看额度)：读取与正式派发完全相同，选法、轮流槽位、账号池摘要、模型准入、
+   * 套餐用完后置都一样；但不探测冷却恢复、不推进轮流与比例、不记占用、不回调 onPicked。选中时带回这台此刻的选路依据。
+   */
+  preview?: true;
 }
 
 /** 本机任务选中后、开始运行一轮之前的临时占用时长(与同账号电脑选中后的临时占用相同)。 */
@@ -129,7 +134,7 @@ export const PROVIDER_GROUP_LOCAL_PROVISIONAL_MS = 30_000;
 
 export type ProviderGroupPickResult =
   | { kind: 'none' }
-  | { kind: 'member'; member: ProviderGroupMember; label: string; resolved: ResolvedProviderGroupMember[] }
+  | { kind: 'member'; member: ProviderGroupMember; label: string; resolved: ResolvedProviderGroupMember[]; facts?: SchedulableMember }
   /** full：有能接的电脑但全部达到并发上限(2026-11-11 起满了不再分)，提示「已满载」而不是配额或不可用。 */
   | { kind: 'unavailable'; resolved: ResolvedProviderGroupMember[]; usageLimit?: ProviderGroupUsageLimit; full?: true };
 
@@ -148,7 +153,7 @@ export interface ProviderGroupRouter {
   memberViews(providerId: string): ReadonlyMap<string, () => Promise<ProviderGroupView>>;
   /** 经本组分到这台、正在运行的任务数。 */
   running(providerId: string, memberKey: string): number;
-  /** 本组「轮流」「按比例」此刻的进度(只读副本)：外层智能路由预判下一台时与真正分配用同一份。 */
+  /** 本组「轮流」「按比例」此刻的进度(只读副本)：派发推进了它，外层智能路由缓存的预判就作废。 */
   pickProgress?(providerId: string): { lastPicked: string | null; roundPicks?: number; weightCounters?: ReadonlyMap<string, number> };
   markCooling(providerId: string, memberKey: string, until: number, model?: string): void;
   coolingUntil(providerId: string, memberKey: string, model?: string): number | null;
@@ -369,7 +374,7 @@ export function createProviderGroupRouter(deps: ProviderGroupRouterDeps): Provid
           && memberRunning(input.providerId, r) < effectiveConcurrencyLimit(r.member),
         ...(input.fresh ? { fresh: true } : {}),
       });
-      await Promise.all(resolved.filter((r) => !r.pending && !r.providerContinuity?.stale
+      if (!input.preview) await Promise.all(resolved.filter((r) => !r.pending && !r.providerContinuity?.stale
         && offersModel(r, input) && !paused(r) && !input.exclude?.has(r.member.key))
         .map((r) => {
           const options = poolReadOptions(input, r.member);
@@ -479,6 +484,10 @@ export function createProviderGroupRouter(deps: ProviderGroupRouterDeps): Provid
         if (!currentQuota || !targetQuota || providerGroupRebalanceTarget(currentQuota, [{ key, quota: targetQuota }], now) !== key) {
           return { kind: 'unavailable', resolved };
         }
+      }
+      if (input.preview) {
+        const chosen = resolved.find((r) => r.member.key === key)!;
+        return { kind: 'member', member: chosen.member, label: chosen.label, resolved, facts: schedulable.find((row) => row.key === key) };
       }
       roundPicks.set(input.providerId, lastPicked.get(input.providerId) === key ? (roundPicks.get(input.providerId) ?? 0) + 1 : 1);
       lastPicked.set(input.providerId, key);

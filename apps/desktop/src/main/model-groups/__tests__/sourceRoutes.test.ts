@@ -9,7 +9,7 @@
  *   展开出来的路由能不能被接替认出来也没有。
  * - 最小失败输入：同一家只连了一个供应商却合成了路由；转接多家的付费入口被自动合进去；组织下发的连接把模型写成
  *   「byok-连接名/模型」、转接入口写成「厂商/模型」时与订阅里的同一个模型对不上；隐藏、改选法、关掉自动换来源没有落到展开出来的路由上；
- *   接替时把思考深度退回默认档。
+ *   接替时把思考深度退回默认档；一家只剩一个连接后，已绑定这条路由的任务找不到路由、接不上剩下的那个。
  * - tier：unit，纯函数与注入依赖，不读文件、不启动 Electron。
  * - 实测耗时：单独运行约 1 秒（pnpm exec vitest run src/main/model-groups/__tests__/sourceRoutes.test.ts）。
  */
@@ -175,5 +175,39 @@ describe('provider routes', () => {
     });
     // 用户关掉了这条供应商路由的「出问题时自动换来源」：不接替。
     await expect(offerFor(effective({ routes: [], autoSwitchOff: ['auto:openai'] }, [SUBSCRIPTION, ORGANIZATION]))).resolves.toBeNull();
+  });
+
+  // 2026-11-26 review(MagicLizi P1)：任务经自动合成的路由落到订阅 A，A 断开后这一家只剩 B，路由不再列出；
+  // 已经绑定了这条路由的任务要照样解析到 B、由 B 接替，关掉「出问题时自动换来源」时仍不接替。
+  // 失效后果：B 明明能用却接不上(按已存的 id 找不到路由)。最小输入：两个连接，绑定后其中一个断开。
+  it('keeps a selected automatic route resolvable to the remaining member after the other connection drops', async () => {
+    const both = effective({ routes: [] }, [SUBSCRIPTION, ORGANIZATION]);
+    const bound = childrenOf(both, 'auto:openai').find((route) => route.candidates.length === 2)!;
+    const first = bound.candidates[0];
+    const dropped = [{ ...SUBSCRIPTION, connected: false } as ProviderView, ORGANIZATION];
+    const catalog = { views: dropped, agents: AGENTS, available: () => true };
+    // 列表与设置页读的那份不再列出这条路由。
+    const listed = effectiveModelGroupsConfig({ routes: [] }, catalog);
+    expect(listed.sourceRoutes).toBeUndefined();
+    expect(listed.routes.some((route) => route.id === bound.id)).toBe(false);
+    // 按已选的路由解析的那份：同一个 id 找得到，只剩 B，隐藏、不进 sourceRoutes。
+    const forSelected = (stored: ModelGroupsConfig) => effectiveModelGroupsConfig(stored, catalog, { forSelected: true });
+    const kept = forSelected({ routes: [] });
+    expect(kept.sourceRoutes).toBeUndefined();
+    expect(kept.routes.find((route) => route.id === bound.id)).toMatchObject({ hidden: true, parent: { id: 'auto:openai' } });
+    const offerFor = (stored: ModelGroupsConfig) => computeModelGroupSwitchOffer({
+      readBinding: () => ({ selection: { type: 'route', id: bound.id }, pickedKey: modelGroupCandidateKey(first) }) as never,
+      readSession: async () => ({ source: 'desktop', agentKind: first.agentKind, providerId: first.providerId, model: first.model }),
+      isShared: () => false,
+      hasGoal: async () => false,
+      config: () => forSelected(stored),
+      candidateFacts: async (route) => route.candidates.map(() => ({ available: true, modelName: 'GPT-6-LUNA', sourceName: 'x', windows: null })),
+      now: () => 0,
+    }, 'session-1', {
+      visited: new Set(), accountUnavailable: true, recordUnavailable: () => undefined,
+      current: { agentKind: first.agentKind, providerId: first.providerId, model: first.model },
+    });
+    await expect(offerFor({ routes: [] })).resolves.toMatchObject({ providerId: 'byok-1', model: 'byok-codex/gpt-6-luna' });
+    await expect(offerFor({ routes: [], autoSwitchOff: ['auto:openai'] })).resolves.toBeNull();
   });
 });

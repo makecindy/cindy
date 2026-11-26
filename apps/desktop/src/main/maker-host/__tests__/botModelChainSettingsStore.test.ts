@@ -18,7 +18,7 @@ import {
 } from '../bot-model-chain-settings-store';
 
 const modelGroups = vi.hoisted(() => ({ config: { routes: [] as Array<Record<string, unknown>> } }));
-vi.mock('../../model-groups/store.js', () => ({ readModelGroupsConfig: () => modelGroups.config }));
+vi.mock('../../model-groups/store.js', () => ({ readModelGroupsConfig: () => modelGroups.config, readModelGroupsConfigForSelected: () => modelGroups.config }));
 
 const providerService = vi.hoisted(() => ({
   listProviders: vi.fn<() => Promise<ProviderView[]>>(),

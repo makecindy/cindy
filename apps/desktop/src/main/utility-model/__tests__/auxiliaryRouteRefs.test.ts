@@ -24,7 +24,7 @@ vi.mock('../auxiliary-model-settings-store.js', () => ({
   readAuxiliaryModelSettings: () => ({ models: h.models }),
   isAuxiliaryModelCustomized: () => h.models.length > 0,
 }));
-vi.mock('../../model-groups/store.js', () => ({ readModelGroupsConfig: () => h.config }));
+vi.mock('../../model-groups/store.js', () => ({ readModelGroupsConfig: () => h.config, readModelGroupsConfigForSelected: () => h.config }));
 vi.mock('../../appSessionState.js', () => ({ activeOwnerScopeKey: () => 'owner' }));
 vi.mock('../../model-groups/desktopResolver.js', () => ({ resolver: { resolve: h.resolve } }));
 

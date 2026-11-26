@@ -13,7 +13,7 @@ import { encodeAuxiliaryRouteRef } from '../../shared/auxiliaryModelChain.js';
 import { OWN_ROUTES_PROVIDER_ID, type AuxiliaryModelOption } from '../../shared/auxiliaryModelSettings.js';
 import type { ModelGroupCandidate, ModelGroupRoute } from '../../shared/modelGroups.js';
 import { activeOwnerScopeKey } from '../appSessionState.js';
-import { readModelGroupsConfig } from '../model-groups/store.js';
+import { readModelGroupsConfig, readModelGroupsConfigForSelected } from '../model-groups/store.js';
 import { modelGroupRouteFor } from '../model-groups/routeFor.js';
 
 const PREFERRED_TTL_MS = 30_000;
@@ -68,9 +68,10 @@ function refreshPreferred(routeId: string): void {
  * 辅助模型与 Subagent 共用：它们都只能用本机的来源，也都不能等一次选路。
  */
 export function localRouteCandidatesInPickOrder(routeId: string): ModelGroupCandidate[] {
-  let config: ReturnType<typeof readModelGroupsConfig>;
+  let config: ReturnType<typeof readModelGroupsConfigForSelected>;
   try {
-    config = readModelGroupsConfig();
+    // 按已选的路由解析：合并路由只剩一个能用连接时照样展开到它。
+    config = readModelGroupsConfigForSelected();
   } catch {
     return [];
   }

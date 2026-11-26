@@ -91,7 +91,7 @@ it('keeps local application and ordinary leases in one snapshot through heartbea
       readGroup: () => ({ strategy: 'expiring', autoSwitch: true, members }),
       listBindings: () => ({}), isTurnRunning: () => false,
       externalRunning: (provider, member) => external.running(provider, member),
-      now: () => Date.now(), 
+      now: () => Date.now(),
     });
     const next = await router.pick({ providerId: 'group', agentKind: 'codex', model: 'model' });
     expect(next.kind).toBe('member');

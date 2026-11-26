@@ -69,6 +69,8 @@ const locationAgents = (catalog: SourceCatalog, agentDeviceId: string | undefine
 export function buildAutoSourceRoutes(
   catalog: Pick<SourceCatalog, 'views' | 'remote'>,
   config: Pick<ModelGroupsConfig, 'hiddenAuto' | 'autoStrategy' | 'autoSwitchOff' | 'autoSources' | 'autoExceptions'>,
+  /** 只要只剩一个能用成员的那几家(见 effectiveModelGroupsConfig 的 forSelected)。 */
+  single = false,
 ): ModelGroupSourceRoute[] {
   const others = [...(catalog.remote ?? [])].map(([deviceId, providers]) => ({ deviceId, providers }));
   // 去重只在自己的电脑之间做(同一个登录在两台电脑上算一个)。别人分享来的各是各的账号，即使供应商同名也都算成员，
@@ -87,7 +89,7 @@ export function buildAutoSourceRoutes(
   const switchOff = new Set(config.autoSwitchOff ?? []);
   const routes: ModelGroupSourceRoute[] = [];
   for (const [family, members] of families) {
-    if (members.length < 2) continue;
+    if (single ? members.length !== 1 : members.length < 2) continue;
     const id = `${MODEL_GROUP_AUTO_PREFIX}${family}`.slice(0, MODEL_GROUP_LIMITS.id);
     // 成员是谁仍按连接自动定；用户排过先后、填过权重、暂停过的，按他存的来(没排到的新成员排在后面)。
     const saved = config.autoSources?.[id] ?? [];
@@ -184,14 +186,25 @@ export function expandSourceRoute(route: ModelGroupSourceRoute, catalog: SourceC
   }));
 }
 
-/** 存盘的配置 + 此刻的目录 = 读取方看到的配置：用户排的路由、供应商路由(用户建的与自动合成的)及其展开。 */
-export function effectiveModelGroupsConfig(stored: ModelGroupsConfig, catalog: SourceCatalog | null): ModelGroupsConfig {
+/**
+ * 存盘的配置 + 此刻的目录 = 读取方看到的配置：用户排的路由、供应商路由(用户建的与自动合成的)及其展开。
+ *
+ * `forSelected`：给「按已选的路由解析」的读取方(新任务与伙伴的选路、任务里撞配额或出问题时换来源)。自动合成的路由在
+ * 一家只剩一个能用的连接时不再列出，但已经选了它的任务与设置要照样解析到剩下的那个来源、由它接替(2026-11-26 review)：
+ * 这几家的展开也带上，标为隐藏、不进 sourceRoutes，任何列表都不显示，只能按已存的 id 找到；展开 id 与两个连接时相同，
+ * 用户在它上面关掉的「出问题时自动换来源」照样生效。
+ */
+export function effectiveModelGroupsConfig(stored: ModelGroupsConfig, catalog: SourceCatalog | null, options?: { forSelected?: boolean }): ModelGroupsConfig {
   if (!catalog) return stored;
   const sourceRoutes = [...(stored.sourceRoutes ?? []), ...buildAutoSourceRoutes(catalog, stored)];
   const expanded = sourceRoutes.flatMap((route) => expandSourceRoute(route, catalog)).slice(0, MODEL_GROUP_EXPANDED_LIMIT);
+  const kept = options?.forSelected
+    ? buildAutoSourceRoutes(catalog, stored, true).flatMap((route) => expandSourceRoute(route, catalog))
+      .slice(0, MODEL_GROUP_EXPANDED_LIMIT).map((route): ModelGroupRoute => ({ ...route, hidden: true }))
+    : [];
   return {
     ...stored,
-    routes: [...stored.routes, ...expanded],
+    routes: [...stored.routes, ...expanded, ...kept],
     ...(sourceRoutes.length > 0 ? { sourceRoutes } : {}),
   };
 }
