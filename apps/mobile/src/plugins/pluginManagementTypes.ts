@@ -291,7 +291,14 @@ export function parsePluginManagementReceipt(value: unknown, operationId: string
       : f.kind !== 'update' || !str(f.previousVersion) || !permissions(f.added) || !permissions(f.removed)
       || !Number.isSafeInteger(f.unchangedCount) || (f.unchangedCount as number) < 0 || typeof f.builtinOauthClientChanged !== 'boolean')) return invalid();
   }
-  if (value.phase === 'confirmation' && !value.consent) return invalid();
+  // A consent the computer has withdrawn (this phone's cancel aborted it, or the connection it was asked on went away)
+  // while its operation is still winding down: the Host leaves the phase at "confirmation" and drops the consent
+  // (`remotePluginManagement.ts`, the prompt's abort listener). Nothing waits for an answer any more; the operation runs
+  // on to its final result, which a later lookup brings. Read as running, never as a malformed reply.
+  if (value.phase === 'confirmation' && !value.consent) {
+    const { consent: _withdrawn, ...rest } = value as Record<string, unknown>;
+    return { ...rest, phase: 'running' } as unknown as PluginManagementReceipt;
+  }
   return value as unknown as PluginManagementReceipt;
 }
 export function pluginApprovalToken(plugin: ManagedPlugin): string {

@@ -2496,6 +2496,48 @@ describe("market read fences and lost-receipt facts", () => {
           lookups: writes(requests).filter((write) => write.startsWith("operation")).length >= (viaCheck ? 1 : 0) })
           .toEqual({ results: [["failed", "none"]], checks: 0, readAfter: 0, open: false, opened: [], lookups: true });
       });
+      // Self-review, path 3 (Host shapes): when this phone cancels a consent it left, the computer replies with the phase
+      // still "confirmation" and no consent (the prompt's abort listener drops it; the phase moves on when the install
+      // flow winds down), and lookups say the same until then. Read as malformed, the cancel became "result unknown"
+      // with lookups stopped: a pending check after almost every leave. Minimal failing input on fd37378e31: that
+      // reply. Tier: unit/jsdom.
+      it("Notes' consent is on screen; the page is left; the computer answers the cancel with its withdrawn consent, then cancelled: not a malformed reply, lookups go on, the install ends cancelled", async () => {
+        const world = fresh();
+        const requests = wire(world);
+        let lookups = 0;
+        const original = fixture.wire.getMockImplementation()!;
+        fixture.wire.mockImplementation(async (device: string, channel: string, args?: any[], options?: any) => {
+          const id = args?.[0]?.actionId;
+          if (id === "management:cancel" || id === "management:operation") {
+            return transportSend(options, async () => {
+              requests.push({ device, actionId: id, input: args![0].input });
+              const operationId = args![0].input.operationId;
+              // The cancel's reply: withdrawn, winding down. Lookups after it: cancelled (the flow ends right after the abort).
+              if (id === "management:operation") lookups += 1;
+              const withdrawn = id === "management:cancel";
+              return { effects: [], result: withdrawn ? { operationId, phase: "confirmation" } : { operationId, phase: "cancelled" } };
+            });
+          }
+          return original(device, channel, args, options);
+        });
+        fixture.platform = "android"; fixture.realConfirmation = true;
+        await act(async () => root.render(createElement(PluginsScreen)));
+        await act(async () => fixture.props.get("segment").onChange("market"));
+        await settle(14);
+        await click(`plugins.market.install.${notes.pluginId}`);
+        expect(!!byId("plugins.management.allow")).toBe(true);
+        await leavePage();                                                    // leaving the consent on screen cancels it
+        await settle(30);
+        expect(writes(requests).filter((write) => write.startsWith("cancel"))).toHaveLength(1);
+        // Not a malformed reply: no protocol error, and automatic lookups go on (nothing waits for a press).
+        expect(__retainedForTests.checks().map((check: any) => [check.state.errorCode ?? null, check.waiting])).toEqual([[null, false]]);
+        await rerender();
+        fixture.online = false; await rerender();
+        fixture.online = true; await rerender();                              // a lookup: cancelled
+        await settle(40);
+        expect({ checks: __retainedForTests.checks().length, results: __retainedForTests.conclusions().map((item: any) => item.result),
+          cancels: writes(requests).filter((write) => write.startsWith("cancel")).length }).toEqual({ checks: 0, results: ["cancelled"], cancels: 1 });
+      });
       const installedRow = () => ({ key: JSON.stringify(["mac", "plugins", "plugin", "_root__demo"]), host: { deviceId: "mac", deviceName: "Mac" },
         item: { ref: { collectionId: "plugins", kind: "plugin", id: "_root__demo" }, revision: "1", display: { title: "Demo" }, actions: [{ id: "disable", label: "Enabled" }] } });
       it("an install's read is still out; the person opens that plugin's installed detail and flips its switch; the read proves the install while the switch is written; the detail is read again after the write: seen", async () => {

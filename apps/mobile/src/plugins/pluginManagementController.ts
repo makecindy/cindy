@@ -71,10 +71,12 @@ function expectationOf(intent: BeginIntent | ConsentIntent, deviceId: string): P
     return { kind: intent.installed ? 'update' : 'install', deviceId, pluginId: detail.pluginId, ghostId: detail.ghostId,
       version: detail.version, releaseId: detail.releaseId, sourceType: detail.sourceType, source: detail.sourceIdentity ?? null };
   }
-  // A page approval started from the installed detail names the instance's plugin and version; one started from a chat
-  // prompt knows only the instance (nothing chosen to compare: the declaration rules apply).
+  // A page approval started from the installed detail names the instance and its version: the computer's consent for it
+  // carries the instance key as `facts.ghostId` (`requestPluginUiApproval` on the Host, main included), not the plugin id
+  // (they differ for `_root__<id>` and namespaced instances). One started from a chat prompt knows only the instance
+  // (nothing chosen to compare: the declaration rules apply).
   if (intent.kind === 'approve-ui' && 'manifest' in intent.installed)
-    return { kind: 'ui-capability', deviceId, ghostId: intent.installed.manifest.id, version: intent.installed.manifest.version };
+    return { kind: 'ui-capability', deviceId, ghostId: intent.installed.instanceKey, version: intent.installed.manifest.version };
   return null;
 }
 const AUTO_LOOKUP_FAILURES = 4;

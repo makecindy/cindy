@@ -81,9 +81,12 @@ const receipt = (phase: PluginManagementReceipt['phase'] = 'running'): PluginMan
 const confirmation = (): PluginManagementReceipt => ({ ...receipt('confirmation'), consent: { requestId: 'consent-1',
   initiator: 'user', origin: 'market', facts: { kind: 'update', ghostId: 'demo', name: 'Demo', version: '2', previousVersion: '1',
     added: [], removed: [], unchangedCount: 0, builtinOauthClientChanged: false } } });
-/** A page approval's consent for `plugin` as the computer asks it (its installed version, purpose ui-capability). */
+/**
+ * A page approval's consent for `plugin` as the computer asks it (its installed version, purpose ui-capability): the Host
+ * names the instance key as `facts.ghostId` (`requestPluginUiApproval`; its test `remotePluginManagement.test.ts`).
+ */
 const uiConfirmation = (): PluginManagementReceipt => ({ ...receipt('confirmation'), consent: { requestId: 'consent-1',
-  initiator: 'user', origin: 'local-file', purpose: 'ui-capability', facts: { kind: 'update', ghostId: 'demo', name: 'Demo',
+  initiator: 'user', origin: 'local-file', purpose: 'ui-capability', facts: { kind: 'update', ghostId: '_root__demo', name: 'Demo',
     version: '1', previousVersion: '1', added: [], removed: [], unchangedCount: 0, builtinOauthClientChanged: false } } });
 const capability = { protocolVersion: 1, collections: [{ id: 'plugins', actions: [{ id: 'management:snapshot', label: 'Manage' }] }] };
 /** Like vi.waitFor, without its 50 ms polling: retries the assertion while promises settle (file performance budget). */
@@ -1547,6 +1550,25 @@ describe('interactive page capability approval', () => {
     const consent = { ...confirmation().consent, purpose: 'ui-capability', trust: 'unverified' };
     expect(parsePluginManagementReceipt({ ...confirmation(), consent }, 'operation-1').consent).toMatchObject(consent);
     expect(() => parsePluginManagementSnapshot({ ...snapshot(), uiCapabilityApproval: 'true' })).toThrow('INVALID_RESPONSE');
+  });
+  // Self-review, path 3 (Host shapes): the computer's page-approval consent names the instance key as `facts.ghostId`
+  // (`requestPluginUiApproval`, main and #12731 alike), not the plugin id. For `_root__<id>` and namespaced instances they
+  // differ; comparing against the plugin id left Allow unavailable on every such page approval from the installed
+  // detail. Minimal failing input on fd37378e31: this plugin (`_root__demo`, manifest `demo`). Tier: unit.
+  it('a page approval from the installed detail of a `_root__` instance can be allowed (the consent names the instance key)', async () => {
+    const h = host(() => uiConfirmation());
+    h.setFacts({ ...snapshot(), uiCapabilityApproval: true });
+    const c = controller(h.client); await c.refresh(); await c.approveUi(plugin);
+    expect(c.getState().receipt?.consent?.facts.ghostId).toBe('_root__demo');
+    expect(c.consentAllowance()).toMatchObject({ allow: true });
+    await c.answer(true);
+    expect(h.requests.filter((r) => r.actionId === 'management:answer')).toHaveLength(1);
+  });
+  // Self-review, path 3: a consent the computer withdrew (this phone's cancel aborted it, or its connection went away)
+  // comes back as "confirmation" with no consent while the operation winds down (`remotePluginManagement.ts`, the prompt's
+  // abort listener). Read as running, not as a malformed reply. Minimal failing input on fd37378e31: that reply.
+  it('a receipt in "confirmation" with no consent (withdrawn by the computer) reads as running', () => {
+    expect(parsePluginManagementReceipt({ operationId: 'operation-1', phase: 'confirmation' }, 'operation-1')).toEqual({ operationId: 'operation-1', phase: 'running' });
   });
   it('queries a lost UI approval receipt without replaying the answer', async () => {
     const h = host((r) => r.actionId === 'management:begin' ? uiConfirmation() : r.actionId === 'management:answer' ? Promise.reject(new Error('TIMEOUT')) : receipt('succeeded'));
