@@ -39,7 +39,10 @@ import { once } from 'node:events';
 import type { AddressInfo } from 'node:net';
 
 const cleanup: Array<() => Promise<unknown> | void> = [];
-afterEach(async () => { for (const dispose of cleanup.splice(0).reverse()) await dispose(); });
+/** The host's lease decision; a case may replace it with its own business rule (reset after each case). */
+const defaultHostAuthorizes = (request: import('@cindy/agent-net-protocol').DelegationRequest) => request.scope.guestSubject === 'guest-account';
+let hostAuthorizes: (request: import('@cindy/agent-net-protocol').DelegationRequest) => boolean = defaultHostAuthorizes;
+afterEach(async () => { hostAuthorizes = defaultHostAuthorizes; for (const dispose of cleanup.splice(0).reverse()) await dispose(); });
 async function network(udp: boolean, ingress?: 'gateway', isolated = false, scoped = false,
   sharing?: import('@cindy/agent-net-relay').RelayOptions['sharing']) {
   const directory = await mkdtemp(path.join(tmpdir(), 'cindy-agent-net-socket-'));
@@ -100,7 +103,7 @@ async function network(udp: boolean, ingress?: 'gateway', isolated = false, scop
   const udpTraffic = new Map<string, () => { sent: number; received: number }>();
   const make = (api: AgentNetClient, remoteControlEnabled: boolean) => {
     const approvals = sharing && !api.delegation ? createDelegationApprover(api, () => undefined,
-      async request => request.scope.guestSubject === 'guest-account') : undefined;
+      async request => hostAuthorizes(request)) : undefined;
     if (approvals) cleanup.push(() => approvals.close());
     const client = new DeviceLinkClient({
       getWsUrl: () => 'ws://local-node.invalid',
@@ -478,6 +481,108 @@ it.each([
   await f.controller.openLink('a-host', openPayload);
   expect(await f.controller.invoke('a-host', { channel: 'test:echo', args: ['unrelated member stays connected'] }))
     .toMatchObject({ ok: true, result: 'unrelated member stays connected' });
+});
+// 2026-11-26 Device Link（V1）供应商分享改走 Agent-Net（docs/dev-rules/protocol-compatibility/agent-net-linked-provider-shares.md）：
+// Agent-Net 服务没有这个分享的成员，只有分享者登记过它；分享者电脑只给它记下的那把受邀者钥匙签放行证。真实服务、内核、
+// worker 与会话：登记过的钥匙拿到放行证后，会话与附件都走 Agent-Net、中转看不到明文；同账号的另一把钥匙一直等不到签名；
+// 分享者取消登记后受邀者马上断开、附件读不到、再申请回 404，同账号设备不受影响。
+// 最小失败输入：改动前服务端不认识这个分享，/transport 回 404；登记不参与 check 时取消登记后旧放行证仍能连。
+it('carries a linked Device Link provider share only for the key its host registered, until the host unlinks it', async () => {
+  const pair = generateKeyPairSync('rsa', { modulusLength: 2048 });
+  const issuer = 'https://auth.example.test';
+  const keys = createLocalJWKSet({ keys: [{ ...pair.publicKey.export({ format: 'jwk' }), kid: 'unit-auth', alg: 'RS256' }] });
+  const sharing = createAgentNetSharingAuth({ issuer }, keys);
+  sharing.providers.identityCards = { async verify() { return { displayName: 'Unit identity', avatarUrl: null, region: 'global' }; },
+    async inspect() { throw new Error('No cross-region fixture'); } };
+  const shareId = 'v1-share-0001', memberId = 'v1-member-0001';
+  const guest = generateIdentity('external-guest'), other = generateIdentity('other-guest-device');
+  // The host's own rule (Desktop agentNetLinkedShares.ts): only the key registered over the share's Device Link connection.
+  const asked: string[] = [];
+  hostAuthorizes = request => {
+    asked.push(request.guestDeviceId);
+    return request.kind === 'provider-share' && request.resourceId === shareId && request.scope.memberId === memberId
+      && request.guestDeviceId === guest.deviceId && request.guestSigningKey === guest.signingKey && request.guestTransportKey === guest.transportKey;
+  };
+  const f = await network(false, undefined, true, true, sharing); serve(f.host);
+  const info = await (await fetch(f.a.base + '/api/agent-net/info')).json() as { features: string[] };
+  expect(info.features).toContain('linked-provider-shares-v1');
+  const signer = (identity: typeof guest) => ({ identity, sign: async (value: string) => signature(identity.signingPrivateKey, value),
+    random: async () => randomBytes(18).toString('base64url') });
+  const business = (identity: typeof guest, subject: string, member?: AgentNetClient) => {
+    const api = new AgentNetSharingClient({ base: f.a.base, networkId: f.bootstrap.networkId, rootPublicKey: f.bootstrap.rootPublicKey,
+      signer: signer(identity), assertCurrent() {}, hash: bytes => createHash('sha256').update(bytes).digest(),
+      memberAuthorization: member ? (method, resource, body) => member.header(method, resource, body) : undefined,
+      async getIdentityCard(nonce) {
+        const at = Math.floor(Date.now() / 1000), expiresAt = at + 300;
+        return { card: await new SignJWT({ typ: 'identity-card', purpose: 'network-session', nonce, device: identity.deviceId, region: 'global' })
+          .setProtectedHeader({ alg: 'RS256', kid: 'unit-auth' }).setIssuer(issuer).setAudience('cindy-agent-net-sharing')
+          .setSubject(subject).setIssuedAt(at).setExpirationTime(expiresAt).sign(pair.privateKey), expiresAt: new Date(expiresAt * 1000).toISOString() };
+      } });
+    cleanup.push(() => api.close()); return api;
+  };
+  const ownerBusiness = business(f.a.identity, 'owner-account', f.a), guestBusiness = business(guest, 'guest-account');
+  const csr = (identity: typeof guest) => ({ kind: 'provider-share', resourceId: shareId, memberId,
+    signingKey: identity.signingKey, transportKey: identity.transportKey });
+  // Before the host links it the service does not know the share, exactly like an old service.
+  await expect(guestBusiness.request('/api/agent-net/sharing/transport', { method: 'POST', applicant: signer(guest), body: csr(guest) }))
+    .rejects.toMatchObject({ status: 404 });
+  // Only a certified device of the network links a share; a guest's account card alone is not enough.
+  await expect(guestBusiness.request('/api/device-link/provider-shares/linked', { method: 'POST', body: { shareId } }))
+    .rejects.toMatchObject({ status: 401 });
+  await expect(ownerBusiness.request('/api/device-link/provider-shares/linked', { method: 'POST', body: { shareId } }))
+    .resolves.toEqual({ shareId, linked: true });
+  const lease = new AgentNetSharingTransport({ client: guestBusiness, applicant: signer(guest), assertCurrent() {},
+    verifyCertificate, verifyDelegation, scope: { kind: 'provider-share', resourceId: shareId, memberId, guestSubject: 'guest-account',
+      networkId: f.bootstrap.networkId, rootPublicKey: f.bootstrap.rootPublicKey, hostDeviceId: 'a-host' } });
+  cleanup.push(() => lease.close());
+  const delegation = await lease.acquire();
+  expect(delegation.scope).toEqual({ memberId, guestSubject: 'guest-account', memberVersion: expect.any(Number) });
+  // Same account, a key the host never registered: the request reaches the host, which leaves it unsigned.
+  const otherBusiness = business(other, 'guest-account');
+  const waiting = await otherBusiness.request<{ id: string; status: string }>('/api/agent-net/sharing/transport',
+    { method: 'POST', applicant: signer(other), body: csr(other) });
+  expect(waiting.status).toBe('pending');
+  await vi.waitFor(() => expect(asked).toContain(other.deviceId));
+  await expect(otherBusiness.request('/api/agent-net/sharing/transport/status', { method: 'POST', applicant: signer(other),
+    body: { id: waiting.id, signingKey: other.signingKey, transportKey: other.transportKey } })).resolves.toMatchObject({ status: 'pending' });
+
+  const api = new AgentNetClient(f.a.base, guest, f.a.certificate, f.a.rootPublicKey, delegation);
+  const visitor = f.make(api, false);
+  await visitor.waitUntilOnline(3000);
+  const peer = providerShareHostPeer(shareId, 'a-host'), guestPeer = providerShareGuestPeer(shareId, memberId, guest.deviceId);
+  const hostSocket = f.sockets.find(socket => socket.deviceId === 'a-host')!;
+  const visitorSocket = f.sockets.filter(socket => socket.deviceId === guest.deviceId).at(-1)!;
+  // The session keys are the Device Link share's own peer names, so the host's business sees the same V1 guest.
+  hostSocket.useSessions!({ laneFor: () => 'normal', delegatedOnly: true, handlers: (key) => ({
+    onOpen: (id) => { hostSocket.session!(key)!.accept(id, { appVersion: 'host' }); },
+    onRequest: (request) => { hostSocket.session!(key)!.respond(request.id, { ok: true, result: [key, request.args[0]] }); },
+  }) });
+  visitorSocket.useSessions!({ laneFor: () => 'normal', handlers: () => ({}) });
+  await expect(visitorSocket.connectSession!(peer)).resolves.toBe(true);
+  const visiting = await vi.waitFor(() => { const value = visitorSocket.session!(peer); expect(value).toBeTruthy(); return value!; });
+  await expect(visiting.open(openPayload, 5000)).resolves.toEqual({ appVersion: 'host' });
+  await expect(visiting.request('test:echo', ['linked share secret'], { timeoutMs: 5000 }))
+    .resolves.toEqual({ ok: true, result: [guestPeer, 'linked share secret'] });
+  expect(f.captured.some((packet) => packet.includes(Buffer.from('linked share secret')))).toBe(false);
+  // Attachments both ways ride the same lease.
+  const target = await vi.waitFor(() => { const value = hostSocket.scopedPeerTarget(guestPeer); expect(value).toBeTruthy(); return value!; });
+  const plain = randomBytes(1024), binding = 'cindy-agent-net/media-scope/3/provider-share/' + shareId;
+  const read = async (offset: number, length: number) => plain.subarray(offset, offset + length);
+  const outgoing = await uploadEncryptedMedia(f.a, target.relayId, target.transportKey, plain.length, read, { binding });
+  expect(Buffer.from(await (await openEncryptedMedia(api, outgoing.id, outgoing.headerSha256, undefined, 'image/png', { binding })).arrayBuffer())).toEqual(plain);
+  const incoming = await uploadEncryptedMedia(api, f.a.identity.deviceId, f.a.identity.transportKey, plain.length, read, { binding });
+  expect(Buffer.from(await (await openEncryptedMedia(f.a, incoming.id, incoming.headerSha256, undefined, 'image/png', { binding })).arrayBuffer())).toEqual(plain);
+
+  await expect(ownerBusiness.request(`/api/device-link/provider-shares/linked/${shareId}/remove`, { method: 'POST', body: {} }))
+    .resolves.toEqual({ removed: true });
+  await vi.waitFor(() => expect(visitor.getStatus()).not.toBe('online'));
+  await vi.waitFor(() => { expect(hostSocket.session!(guestPeer)).toBeNull(); expect(visitorSocket.session!(peer)).toBeNull(); });
+  await expect(api.mediaResponse(outgoing.id)).rejects.toMatchObject({ status: 401 });
+  await expect(guestBusiness.request('/api/agent-net/sharing/transport', { method: 'POST', applicant: signer(guest), body: csr(guest) }))
+    .rejects.toMatchObject({ status: 404 });
+  await f.controller.openLink('a-host', openPayload);
+  expect(await f.controller.invoke('a-host', { channel: 'test:echo', args: ['same-account device unaffected'] }))
+    .toMatchObject({ ok: true, result: 'same-account device unaffected' });
 });
 // A real handshake can beat a newly verified directory/grant announcement.
 // Remembered refusal must not keep the now-approved peer offline for 30 seconds.
