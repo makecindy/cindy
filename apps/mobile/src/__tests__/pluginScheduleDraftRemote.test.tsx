@@ -8,6 +8,8 @@ const h = vi.hoisted(() => ({
   catalogs: [] as any[],
   pluginEngines: [] as any[],
   remotePluginEngines: [] as any[],
+  refreshLocal: vi.fn(),
+  refreshRemote: vi.fn(),
   invoke: vi.fn(async () => ({ id: "schedule-1" })),
   picker: null as any,
   capabilities: { supportsScheduleAgentDeviceSelection: true } as any,
@@ -62,8 +64,8 @@ vi.mock("@/session/pluginEngines", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/session/pluginEngines")>();
   return {
     ...actual,
-    usePluginEngines: () => ({ engines: h.pluginEngines, refresh: vi.fn() }),
-    useControlledRemotePluginEngines: () => ({ engines: h.remotePluginEngines, settled: true, refresh: vi.fn() }),
+    usePluginEngines: () => ({ engines: h.pluginEngines, refresh: h.refreshLocal }),
+    useControlledRemotePluginEngines: () => ({ engines: h.remotePluginEngines, settled: true, refresh: h.refreshRemote }),
   };
 });
 vi.mock("@/session/SheetModal", () => ({ SheetModal: (p: any) => p.children }));
@@ -206,6 +208,9 @@ it("selects local and remote plugin engines and submits acp schedule inputs", as
   }];
   await renderDraft();
   expect(h.picker.unified.pluginEngines.engines).toHaveLength(2);
+  const firstOnOpen = h.picker.unified.pluginEngines.onOpen;
+  await renderDraft();
+  expect(h.picker.unified.pluginEngines.onOpen).toBe(firstOnOpen);
   await act(async () => {
     await h.picker.unified.pluginEngines.onSelect({
       providerId: "acp-plugin:dsh:dsh",

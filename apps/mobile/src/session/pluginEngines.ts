@@ -809,13 +809,51 @@ export function getCachedControlledPluginEngines(
   return controlledCache.get(controlledPluginEngineCacheKey(controlledDeviceId, agentDeviceId))?.engines ?? EMPTY_ENGINES;
 }
 
-function isUnsupportedControlledCatalogError(error: unknown): boolean {
+const EVICT_CONTROLLED_CATALOG_ERROR_CODES = new Set([
+  'CHANNEL_NOT_ALLOWED',
+  'DEVICE_LINK_CHANNEL_NOT_ALLOWED',
+  'INVALID_PARAMS',
+  'PRECONDITION_FAILED',
+  'PERMISSION_DENIED',
+  'NOT_FOUND',
+]);
+
+function shouldEvictControlledCatalogError(error: unknown): boolean {
   const code = error && typeof error === 'object' ? (error as { code?: unknown }).code : undefined;
-  if (code === 'CHANNEL_NOT_ALLOWED' || code === 'DEVICE_LINK_CHANNEL_NOT_ALLOWED' || code === 'INVALID_PARAMS') {
+  if (typeof code === 'string' && EVICT_CONTROLLED_CATALOG_ERROR_CODES.has(code)) {
     return true;
   }
   const message = error instanceof Error ? error.message : String(error ?? '');
-  return message.includes('CHANNEL_NOT_ALLOWED') || message.includes('INVALID_PARAMS');
+  const bracketCode = /^\[([A-Z_]+)\]/.exec(message)?.[1];
+  if (bracketCode && EVICT_CONTROLLED_CATALOG_ERROR_CODES.has(bracketCode)) {
+    return true;
+  }
+  for (const candidate of EVICT_CONTROLLED_CATALOG_ERROR_CODES) {
+    if (message.includes(candidate)) return true;
+  }
+  return false;
+}
+
+function evictMissingControlledCatalogs(
+  controlledDeviceId: string,
+  allowedAgentDeviceIds: ReadonlySet<string>,
+): boolean {
+  let evicted = false;
+  for (const [key, entry] of [...controlledCache.entries()]) {
+    let pair: unknown;
+    try {
+      pair = JSON.parse(key);
+    } catch {
+      continue;
+    }
+    if (!Array.isArray(pair) || pair.length !== 2 || pair[0] !== controlledDeviceId) continue;
+    const agentDeviceId = typeof pair[1] === 'string' ? pair[1] : '';
+    if (allowedAgentDeviceIds.has(agentDeviceId)) continue;
+    controlledCache.delete(key);
+    controlledLastReadAt.delete(key);
+    if (entry.engines.length > 0 || entry.supported) evicted = true;
+  }
+  return evicted;
 }
 
 /** Read one remote/shared source's plugin engines through the task computer (`maker:model-catalog:read`). */
@@ -857,7 +895,7 @@ export function loadControlledPluginEngines(
     .catch((error: unknown) => {
       if (!isMobileAuthOwnerCurrent(owner)) return;
       controlledLastReadAt.set(key, Date.now());
-      if (isUnsupportedControlledCatalogError(error) || !controlledCache.has(key)) {
+      if (shouldEvictControlledCatalogError(error) || !controlledCache.has(key)) {
         setCachedControlledPluginEngines(controlledDeviceId, agentDeviceId, [], false);
       }
     })
@@ -900,14 +938,31 @@ function loadControlledPluginEngineLocations(
     .then((raw) => {
       if (!isMobileAuthOwnerCurrent(owner)) return [];
       const parsed = parseControlledModelLocations(controlledDeviceId, raw);
+      const complete = !(
+        raw && typeof raw === 'object' && !Array.isArray(raw)
+        && (raw as { status?: unknown }).status === 'degraded'
+      );
       controlledLocationsReadAt.set(controlledDeviceId, Date.now());
-      controlledLocationsCache.set(controlledDeviceId, parsed);
-      publish();
+      const previous = controlledLocationsCache.get(controlledDeviceId);
+      const changed = !previous || JSON.stringify(previous) !== JSON.stringify(parsed);
+      if (changed) controlledLocationsCache.set(controlledDeviceId, parsed);
+      const evicted = complete
+        ? evictMissingControlledCatalogs(controlledDeviceId, new Set(parsed.map((loc) => loc.agentDeviceId)))
+        : false;
+      if (changed || evicted) publish();
       return parsed;
     })
-    .catch(() => {
+    .catch((error: unknown) => {
       if (!isMobileAuthOwnerCurrent(owner)) return [];
       controlledLocationsReadAt.set(controlledDeviceId, Date.now());
+      if (shouldEvictControlledCatalogError(error)) {
+        const previous = controlledLocationsCache.get(controlledDeviceId);
+        const changed = !previous || previous.length > 0;
+        controlledLocationsCache.set(controlledDeviceId, []);
+        const evicted = evictMissingControlledCatalogs(controlledDeviceId, new Set());
+        if (changed || evicted) publish();
+        return [];
+      }
       if (!controlledLocationsCache.has(controlledDeviceId)) {
         controlledLocationsCache.set(controlledDeviceId, []);
       }
@@ -944,6 +999,25 @@ export function setCachedPluginEngines(deviceId: string, engines: MobilePluginEn
 
 export function getCachedPluginEngines(deviceId: string | null | undefined): readonly MobilePluginEngine[] {
   return (deviceId ? cache.get(deviceId)?.engines : undefined) ?? EMPTY_ENGINES;
+}
+
+export function hasCachedPluginEngineCatalogue(deviceId: string | null | undefined): boolean {
+  return !!deviceId && cache.has(deviceId);
+}
+
+/** Whether a local or same-account remote plugin engine declares `reportsUsage: true`. */
+export function pluginEngineReportsUsage(
+  engine: Pick<MobilePluginEngine, 'providerId' | 'reportsUsage' | 'deviceId'>,
+): boolean {
+  if (engine.reportsUsage === true) return true;
+  if (!engine.deviceId || isProviderShareAgentDeviceId(engine.deviceId) || isSharedTaskPeer(engine.deviceId)) {
+    return false;
+  }
+  return findPluginEngine(getCachedPluginEngines(engine.deviceId), engine.providerId)?.reportsUsage === true;
+}
+
+export function usePluginEngineCacheVersion(): number {
+  return useSyncExternalStore(subscribe, getVersion, getVersion);
 }
 
 /** 退出账号 / 切换账号时清掉，不把上一个账号的电脑引擎带过去。 */

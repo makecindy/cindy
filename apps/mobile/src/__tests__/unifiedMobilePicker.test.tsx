@@ -1467,3 +1467,39 @@ it('lists local and remote plugin engines in Sources, supports shared plugin eng
   expect(onSelectPlugin).not.toHaveBeenCalled();
   expect(onClose).not.toHaveBeenCalled();
 });
+
+it('calls pluginEngines.onOpen once per open even when re-rendered with a fresh callback reference', async () => {
+  const firstOpen = vi.fn();
+  const secondOpen = vi.fn();
+  const engine = {
+    key: 'dsh:dsh',
+    providerId: 'acp-plugin:dsh:dsh',
+    name: 'DeepSeek Harness',
+    availability: { state: 'available' as const },
+    models: [{ id: 'deepseek-v4', displayName: 'DeepSeek V4', efforts: [] }],
+    permissionModes: [{ id: 'default', displayName: 'Default' }],
+    defaultPermissionMode: 'default',
+  };
+  await mount(undefined, {
+    unified: {
+      scope: 'user-device',
+      agents: ['codex'],
+      loadCapabilities: async () => ({ hasFastMode: true }),
+      onSelect: vi.fn(async () => true),
+      pluginEngines: { engines: [engine], active: null, onSelect: vi.fn(async () => true), onOpen: firstOpen },
+    },
+  });
+  expect(firstOpen).toHaveBeenCalledTimes(1);
+
+  await mount(undefined, {
+    unified: {
+      scope: 'user-device',
+      agents: ['codex'],
+      loadCapabilities: async () => ({ hasFastMode: true }),
+      onSelect: vi.fn(async () => true),
+      pluginEngines: { engines: [engine], active: null, onSelect: vi.fn(async () => true), onOpen: secondOpen },
+    },
+  });
+  expect(firstOpen).toHaveBeenCalledTimes(1);
+  expect(secondOpen).not.toHaveBeenCalled();
+});

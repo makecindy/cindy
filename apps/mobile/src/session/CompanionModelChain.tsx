@@ -1,3 +1,4 @@
+import { useCallback } from 'react';
 import { normalizeCompanionModelRoute, type CompanionModelRoute } from '@cindy/maker-shared/model-route';
 import { findCatalogModel } from '@cindy/model-providers';
 import { buildMobileModelSections } from './providerModelSections';
@@ -150,13 +151,21 @@ export function CompanionModelPicker({ visible, deviceId, route, onClose, onClos
     fastMode: false,
   });
   const select = async (config: MobileModelConfiguration, source?: { deviceId: string | null }) => onSelect({ agentDeviceId: source?.deviceId ?? null, harness: config.agent === 'claude-code' ? 'claude' : config.agent, model: config.modelId, providerId: config.providerId, effort: config.effort, fastMode: config.fast });
-  // 选组只记下组；这一项暂以原来的模型(新加的一项用组里第一个来源)作存下的具体模型，保存时伙伴所在的电脑换成组此刻会选的来源。
+  const onPluginEnginesOpen = useCallback(() => {
+    pluginEngines.refresh();
+    remotePluginEngines.refresh();
+  }, [pluginEngines.refresh, remotePluginEngines.refresh]);
+  // 选组只记下组；这一项暂以原来的内置模型(原本是插件引擎或新加的一项用组里第一个来源)作存下的具体模型，保存时伙伴所在的电脑换成组此刻会选的来源。
   const selectGroup = (id: string) => {
     const group = modelGroups?.find(item => item.id === id);
-    const base = route?.model ? route : group?.fallback ? { ...group.fallback, effort: group.effort ?? '', fastMode: false as const } : undefined;
+    const base = route?.model && route.harness !== 'acp'
+      ? route
+      : group?.fallback
+        ? { ...group.fallback, effort: group.effort ?? '', fastMode: false as const }
+        : undefined;
     return !!group && !!base && onSelect({ ...base, modelGroup: group.id });
   };
-  const groupRows = (modelGroups ?? []).filter(group => route?.model || group.fallback)
+  const groupRows = (modelGroups ?? []).filter(group => (route?.model && route.harness !== 'acp') || group.fallback)
     .map(group => ({ id: group.id, title: group.name, subtitle: modelGroupHint(group, t), selected: route?.modelGroup === group.id }));
   return <ModelPickerSheet visible={visible} onClose={onClose} onClosed={onClosed} providers={catalog.ready ? catalog.providers : []}
     modelVisibilityOverrides={catalog.modelVisibilityOverrides} providersReady={catalog.ready}
@@ -176,10 +185,7 @@ export function CompanionModelPicker({ visible, deviceId, route, onClose, onClos
               engines: allPluginEngines,
               active: activePluginEngine,
               onSelect: selectPluginEngine,
-              onOpen: () => {
-                pluginEngines.refresh();
-                remotePluginEngines.refresh();
-              },
+              onOpen: onPluginEnginesOpen,
             },
           }
         : {}),

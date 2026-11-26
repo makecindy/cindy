@@ -484,6 +484,21 @@ describe('a task running on a plugin engine', () => {
         deviceId: 'studio',
         deviceName: 'Studio Mac',
       });
+
+      // Transient timeout keeps the last known catalog; PRECONDITION_FAILED (revoked source) evicts it.
+      const timeoutInvoke = vi.fn(async () => {
+        throw Object.assign(new Error('[DEVICE_LINK_TIMEOUT] slow'), { code: 'DEVICE_LINK_TIMEOUT' });
+      }) as unknown as RemoteInvoke;
+      await loadControlledPluginEngines('host-a', 'studio', timeoutInvoke, { force: true });
+      expect(getCachedControlledPluginEngines('host-a', 'studio')).toHaveLength(1);
+
+      const revokedInvoke = vi.fn(async () => {
+        throw Object.assign(new Error('[PRECONDITION_FAILED] Model source is no longer available'), {
+          code: 'PRECONDITION_FAILED',
+        });
+      }) as unknown as RemoteInvoke;
+      await loadControlledPluginEngines('host-a', 'studio', revokedInvoke, { force: true });
+      expect(getCachedControlledPluginEngines('host-a', 'studio')).toEqual([]);
     } finally {
       setMobileAuthOwner(null);
     }

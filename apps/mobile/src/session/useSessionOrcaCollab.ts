@@ -939,7 +939,19 @@ export function useOrcaWorkerForm(params: {
     const group = hostGroups?.find((item) => item.id === id);
     if (!group) return false;
     touchedRef.current = true;
-    setForm((current) => ({ ...current, modelGroup: { id, name: group.name } }));
+    convergeGenRef.current += 1;
+    setForm((current) => ({
+      ...current,
+      // 插件引擎不支持模型组：先选插件引擎再切到模型组时回到内置 Agent 并清除插件模型，避免被控端拒绝创建。
+      ...(current.agent === 'acp'
+        ? {
+            agent: agentsRef.current[0] ?? 'claude-code',
+            model: null,
+            modelSelectionExplicit: false,
+          }
+        : {}),
+      modelGroup: { id, name: group.name },
+    }));
     return true;
   }, [hostGroups]);
   const modelGroups = useHostModelGroupPickerOptions(hostGroups, form.modelGroup?.id ?? null, selectGroup, t);
@@ -1044,8 +1056,8 @@ export function useOrcaWorkerForm(params: {
     agents,
     pickerAgents,
     valid: canSubmitOrcaWorkerForm(submission)
-      && (form.agent !== 'acp' || (pluginEnginesAllowed && !!form.model?.providerId))
-      && (!form.modelGroup || modelGroupsAllowed)
+      && (form.agent !== 'acp' || (pluginEnginesAllowed && !!form.model?.providerId && !form.modelGroup))
+      && (!form.modelGroup || (modelGroupsAllowed && form.agent !== 'acp'))
       && (!form.modelSelectionExplicit || workerAgentLocationSelectable
         || form.agentDeviceId === undefined || form.agentDeviceId === (form.executionDeviceId ? null : params.leadAgentDeviceId ?? null))
       && (!form.executionDeviceId || executionDevices.some((device) => device.deviceId === form.executionDeviceId && device.supported)),

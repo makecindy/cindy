@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
   AppState,
@@ -142,6 +142,10 @@ export function PluginScheduleDraft({
     ...pluginEngines.engines,
     ...(remoteSupported ? remotePluginEngines.engines : []),
   ];
+  const onPluginEnginesOpen = useCallback(() => {
+    pluginEngines.refresh();
+    if (remoteSupported) remotePluginEngines.refresh();
+  }, [pluginEngines.refresh, remotePluginEngines.refresh, remoteSupported]);
   useEffect(
     () => () => {
       alive.current = false;
@@ -454,10 +458,7 @@ export function PluginScheduleDraft({
                 pluginEngines: {
                   engines: allPluginEngines,
                   active: activePluginEngine,
-                  onOpen: () => {
-                    pluginEngines.refresh();
-                    if (remoteSupported) remotePluginEngines.refresh();
-                  },
+                  onOpen: onPluginEnginesOpen,
                   onSelect: async (selection) => {
                     assertCurrent();
                     setDraft((d) => ({

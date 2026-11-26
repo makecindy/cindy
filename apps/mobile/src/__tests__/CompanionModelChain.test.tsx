@@ -7,6 +7,8 @@ const h = vi.hoisted(() => ({
   catalog: { providers: [] as any[], ready: true },
   pluginEngines: [] as any[],
   remotePluginEngines: [] as any[],
+  refreshLocal: vi.fn(),
+  refreshRemote: vi.fn(),
   device: vi.fn(),
   change: vi.fn(),
   picker: null as any,
@@ -73,8 +75,8 @@ vi.mock("@/session/pluginEngines", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/session/pluginEngines")>();
   return {
     ...actual,
-    usePluginEngines: () => ({ engines: h.pluginEngines, loading: false, refresh: vi.fn() }),
-    useControlledRemotePluginEngines: () => ({ engines: h.remotePluginEngines, settled: true, refresh: vi.fn() }),
+    usePluginEngines: () => ({ engines: h.pluginEngines, loading: false, refresh: h.refreshLocal }),
+    useControlledRemotePluginEngines: () => ({ engines: h.remotePluginEngines, settled: true, refresh: h.refreshRemote }),
   };
 });
 import {
@@ -340,5 +342,37 @@ it('renders and selects remote/shared plugin engine companion routes', async () 
     providerId: 'acp-plugin:dsh-acp:dsh',
     effort: 'high',
     fastMode: false,
+  });
+
+  // onOpen remains referentially stable across re-renders so UnifiedModelPickerSheet does not loop refreshes.
+  const firstOnOpen = h.picker.unified.pluginEngines.onOpen;
+  await act(async () => root.render(createElement(CompanionModelPicker, {
+    visible: true,
+    deviceId: 'remote-mac',
+    route: remoteAcpRoute as any,
+    modelGroups: [{
+      id: 'smart',
+      name: 'Smart Route',
+      sources: 2,
+      strategy: 'order',
+      effort: 'high',
+      fallback: { harness: 'codex', model: 'gpt-6', providerId: 'openai' },
+    }],
+    onClose() {},
+    onClosed() {},
+    onSelect: select,
+  })));
+  expect(h.picker.unified.pluginEngines.onOpen).toBe(firstOnOpen);
+
+  // Switching from a plugin engine companion route to a model group uses the group's built-in fallback.
+  select.mockClear();
+  h.picker.unified.modelGroups.onSelect('smart');
+  expect(select).toHaveBeenCalledWith({
+    harness: 'codex',
+    model: 'gpt-6',
+    providerId: 'openai',
+    effort: 'high',
+    fastMode: false,
+    modelGroup: 'smart',
   });
 });

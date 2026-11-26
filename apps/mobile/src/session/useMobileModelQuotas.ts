@@ -9,12 +9,18 @@ import {
   subscriptionQuotaAccounts,
   subscriptionQuotaOverview,
 } from "@cindy/maker-shared/subscription-selection";
+import { isSharedTaskPeer } from "@cindy/device-link";
 import { getMobileAuthOwner, isMobileAuthOwnerCurrent } from "@/auth/authOwnerGeneration";
 import { isProviderShareAgentDeviceId } from "./providerShareAgentDevice";
 import {
+  hasCachedPluginEngineCatalogue,
   isPluginEngineSelectable,
+  loadPluginEngines,
+  normalizePluginEngines,
   pluginEngineChoiceKey,
+  pluginEngineReportsUsage,
   pluginUsageReader,
+  usePluginEngineCacheVersion,
   type MobilePluginEngine,
 } from "./pluginEngines";
 import {
@@ -439,12 +445,48 @@ function useMobilePluginEngineQuotas(
   engines: readonly MobilePluginEngine[] | undefined,
 ): Readonly<Record<string, GhostHarnessUsage>> {
   const { invoke, status, connectionEpoch } = useDeviceLink();
+  usePluginEngineCacheVersion();
   const deviceId = (JSON.parse(scope) as [string, string])[1];
+  // `maker:model-catalog:read` strips `reportsUsage` from remote engines so account usage is
+  // always read directly from the owning computer. Read each same-account computer's direct
+  // catalogue once (reusing the shared plugin-engine cache) to learn which engines report usage;
+  // shares never expose account usage.
+  const unknownRemoteDevices = JSON.stringify(
+    [
+      ...new Set(
+        (engines ?? []).flatMap((engine) =>
+          engine.deviceId
+          && engine.reportsUsage !== true
+          && isPluginEngineSelectable(engine)
+          && !isProviderShareAgentDeviceId(engine.deviceId)
+          && !isSharedTaskPeer(engine.deviceId)
+          && !hasCachedPluginEngineCatalogue(engine.deviceId)
+            ? [engine.deviceId]
+            : [],
+        ),
+      ),
+    ],
+  );
+  useEffect(() => {
+    if (!visible || status !== "online" || unknownRemoteDevices === "[]") return;
+    const owner = getMobileAuthOwner();
+    if (!owner.accountId) return;
+    const remoteDeviceIds = JSON.parse(unknownRemoteDevices) as string[];
+    for (const targetDeviceId of remoteDeviceIds) {
+      void loadPluginEngines(targetDeviceId, {
+        listPluginEngines: async () =>
+          normalizePluginEngines(await invoke<unknown>(targetDeviceId, "maker:list-plugin-engines", [])),
+        refreshPluginEngines: async () => undefined,
+      });
+    }
+  }, [visible, status, connectionEpoch, unknownRemoteDevices, invoke]);
+
   const reporting = (engines ?? []).filter(
     (engine) =>
-      engine.reportsUsage === true
+      pluginEngineReportsUsage(engine)
       && isPluginEngineSelectable(engine)
-      && !isProviderShareAgentDeviceId(engine.deviceId || deviceId),
+      && !isProviderShareAgentDeviceId(engine.deviceId || deviceId)
+      && !isSharedTaskPeer(engine.deviceId || deviceId),
   );
   const targets = JSON.stringify(
     reporting.map((engine) => [

@@ -420,12 +420,22 @@ export function UnifiedModelPickerSheet(
   const lock = useRef(false);
   const opening = useRef(0);
   const [error, setError] = useState<string | null>(null);
-  // 选择器打开：读一次插件引擎列表，并请那台电脑的插件重新上报模型(不轮询)。
+  // 选择器打开：读一次插件引擎列表，并请那台电脑的插件重新上报模型(不轮询；每次打开同 scope 最多触发一次)。
   const pluginEngineOptions = p.unified.pluginEngines;
   const onPluginEnginesOpen = pluginEngineOptions?.onOpen;
+  const onPluginEnginesOpenRef = useRef(onPluginEnginesOpen);
+  onPluginEnginesOpenRef.current = onPluginEnginesOpen;
+  const pluginEnginesOpenedScopeRef = useRef<string | null>(null);
+  const hasOnPluginEnginesOpen = !!onPluginEnginesOpen;
   useEffect(() => {
-    if (p.visible) onPluginEnginesOpen?.();
-  }, [p.visible, onPluginEnginesOpen]);
+    if (!p.visible) {
+      pluginEnginesOpenedScopeRef.current = null;
+      return;
+    }
+    if (!hasOnPluginEnginesOpen || pluginEnginesOpenedScopeRef.current === p.unified.scope) return;
+    pluginEnginesOpenedScopeRef.current = p.unified.scope;
+    onPluginEnginesOpenRef.current?.();
+  }, [p.visible, p.unified.scope, hasOnPluginEnginesOpen]);
   // 选中的是插件引擎时，内置模型行都不显示选中态(也不列「推荐」)。
   const pluginEngineActive = !!pluginEngineOptions?.active;
   // 选中的是模型组时同理：只有组那一行打勾，具体模型行不打勾、不列「推荐」，打开时停在顶部(和桌面一致)。
