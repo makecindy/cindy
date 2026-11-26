@@ -22,17 +22,22 @@ export const runCommand: RunCommand = (file, args, options) =>
       file,
       args,
       { timeout: 20_000, maxBuffer: 16 * 1024 * 1024, windowsHide: true },
-      (error, stdout) => {
+      (error, stdout, stderr) => {
         if (!error) {
-          resolve({ stdout, failed: false });
+          resolve({ stdout, stderr, failed: false });
           return;
         }
         // ENOENT 等启动失败：命令本身不存在（例如没有 systemctl），交给调用方降级。
         if (error.code === 'ENOENT') {
-          resolve({ stdout: '', failed: true });
+          resolve({ stdout: '', stderr: '', failed: true });
           return;
         }
-        resolve({ stdout: typeof stdout === 'string' ? stdout : '', failed: true });
+        resolve({
+          stdout: typeof stdout === 'string' ? stdout : '',
+          stderr: typeof stderr === 'string' ? stderr : '',
+          code: typeof error.code === 'number' ? error.code : undefined,
+          failed: true,
+        });
       },
     ).stdin?.end(options?.input ?? undefined);
   });

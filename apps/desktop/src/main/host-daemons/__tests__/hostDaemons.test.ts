@@ -45,10 +45,10 @@ function memoryLedger(): HostDaemonLedger & { owners: Map<string, HostDaemonOwne
     setMissMtime: (id, mtimeMs) => void misses.set(id, mtimeMs),
     getFirstSeen: (id) => firstSeen.get(id) ?? null,
     setFirstSeen: (id, mtimeMs) => void firstSeen.set(id, mtimeMs),
-    save: () => {},
+    ready: async () => {},
+    save: async () => {},
   };
 }
-
 
 /**
  * 测试专用包装：把「Windows 扫描 + 三个动作」包成平台适配器，避免 16 个用例都手写

@@ -5,6 +5,10 @@
  * 解析；Linux 侧在 WSL2 Ubuntu 上做过真实的 systemd / crontab 建、跑、停、删验证。
  */
 
+import { mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -19,7 +23,12 @@ import {
   parseLaunchctlList,
   toHostDaemonTrigger,
 } from '../launchAgents.js';
-import { parseSystemdListUnits, parseSystemdUnitFile, stateOf } from '../systemdUser.js';
+import {
+  createSystemdUserAdapter,
+  parseSystemdListUnits,
+  parseSystemdUnitFile,
+  stateOf,
+} from '../systemdUser.js';
 
 describe('launchd', () => {
   it('按 plutil 真实输出取 Label、命令与触发', () => {
@@ -112,6 +121,14 @@ describe('systemd 用户单元', () => {
     runtime.set('cindy-probe.service', { active: 'inactive', sub: 'dead' });
     expect(stateOf('cindy-probe.timer', runtime)).toBe('ready');
     expect(stateOf('cindy-probe.timer', new Map())).toBe('ready');
+    // systemctl 读不到运行时状态时不能说它在跑，也不能说它没跑。
+    expect(stateOf('cindy-probe.timer', null)).toBe('unknown');
+  });
+
+  it('timer 显式指名别的 service 时，不把那个 service 当成自己的另一半', () => {
+    // 删 timer 时跟着删 `Unit=` 指向的文件，会删掉别的 timer 也在用的 service。
+    const runtime = new Map([['other.service', { active: 'active', sub: 'running' }]]);
+    expect(stateOf('cron-a.timer', runtime, 'other.service')).toBe('running');
   });
 });
 
@@ -166,5 +183,105 @@ describe('crontab', () => {
     expect(items.map((item) => item.name)).toEqual(['sync', 'sync']);
     // `@reboot` 是开机跑一次，不是定时：同一条 cron 行要按开机归类。
     expect(items.map((item) => item.trigger)).toEqual(['startup', 'startup']);
+  });
+
+  it('两个删除并发时按表排队，不会把刚删掉的行写回来', async () => {
+    // 整表读改写的固有风险：两个请求同时拿到同一份旧快照，后写的就会覆盖先写的。
+    const table = { text: '0 4 * * * /bin/a\n0 5 * * * /bin/b\n' };
+    const adapter = createCrontabAdapter({
+      exec: async (file, args, options) => {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        if (args[0] === '-l') return { stdout: table.text, stderr: '', failed: false };
+        table.text = options?.input ?? '';
+        return { stdout: '', stderr: '', failed: false };
+      },
+    });
+    await Promise.all([
+      adapter.remove(cronEntryId('0 4 * * * /bin/a')),
+      adapter.remove(cronEntryId('0 5 * * * /bin/b')),
+    ]);
+    expect(parseCrontab(table.text)).toHaveLength(0);
+  });
+
+  it('「立即运行」起不来时如实报错，不谎报已运行', async () => {
+    // 旧实现 fire-and-forget：spawn 失败（命令不存在）时界面照样说已运行。
+    const adapter = createCrontabAdapter({
+      exec: async () => ({ stdout: '0 4 * * * /bin/absent\n', failed: false }),
+      launch: async () => {
+        throw new Error('spawn /bin/absent ENOENT');
+      },
+    });
+    await expect(adapter.run(cronEntryId('0 4 * * * /bin/absent'))).rejects.toThrow('ENOENT');
+  });
+});
+
+describe('systemd 动作契约（真目录 + 假 systemctl）', () => {
+  /**
+   * 这两个用例锁的是「删除」的两条根因类别：
+   * - 删定义前必须先停执行面，否则 disable 之后进程还活着（页面说删了，进程还在）。
+   * - 只删能确认属于这个 timer 的文件；显式指名别的 service 时不得连带删它。
+   */
+  async function withUnits(
+    units: Record<string, string>,
+    overrides: { reload?: () => Promise<void> } = {},
+  ) {
+    const dir = await mkdtemp(join(tmpdir(), 'host-daemons-'));
+    for (const [name, body] of Object.entries(units)) {
+      await writeFile(join(dir, name), body, 'utf8');
+    }
+    const commands: string[][] = [];
+    const adapter = createSystemdUserAdapter({
+      dir,
+      exec: async (command, args) => {
+        commands.push([command, ...args]);
+        return { stdout: '', failed: false };
+      },
+      reload: overrides.reload ?? (async () => {}),
+    });
+    const cleanup = () => rm(dir, { recursive: true, force: true });
+    return { adapter, commands, dir, cleanup };
+  }
+
+  it('删 timer 先停执行面；执行面被别的 timer 指名时留在盘上', async () => {
+    const { adapter, commands, dir, cleanup } = await withUnits({
+      'cron-a.timer': '[Timer]\nUnit=shared.service\nOnCalendar=hourly\n',
+      'cron-b.timer': '[Timer]\nUnit=shared.service\nOnCalendar=daily\n',
+      'shared.service': '[Service]\nExecStart=/bin/true\n',
+    });
+    try {
+      await adapter.scan();
+      await adapter.remove('systemd-user:cron-a.timer');
+      // 停执行面必须在 disable 之前，否则 disable 只停 timer、进程仍在。
+      const acts = commands.filter((c) => c.includes('stop') || c.includes('disable'));
+      expect(acts).toEqual([
+        ['systemctl', '--user', 'stop', 'shared.service'],
+        ['systemctl', '--user', 'disable', '--now', 'cron-a.timer'],
+      ]);
+      // 共享的执行面不是这一个 timer 的东西，删它等于删另一个 timer 的定义。
+      await expect(stat(join(dir, 'shared.service'))).resolves.toBeTruthy();
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it('daemon-reload 失败时在 unlink 之前报错，不留半删状态', async () => {
+    const { adapter, dir, cleanup } = await withUnits(
+      { 'cron-a.timer': '[Timer]\nOnCalendar=hourly\n' },
+      {
+        reload: async () => {
+          throw new Error('systemd could not reload units');
+        },
+      },
+    );
+    try {
+      await adapter.scan();
+      await expect(adapter.remove('systemd-user:cron-a.timer')).rejects.toThrow(
+        'could not reload',
+      );
+      // 文件还在，下次扫描能把它找回来。
+      await expect(stat(join(dir, 'cron-a.timer'))).resolves.toBeTruthy();
+    } finally {
+      await cleanup();
+    }
   });
 });

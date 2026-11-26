@@ -100,6 +100,11 @@ async function scanJobs(): Promise<Map<string, { running: boolean }>> {
   return failed ? new Map() : parseLaunchctlList(stdout);
 }
 
+/** launchctl 对「job 没加载」的报错措辞：bootout 在这种情况下返回非 0，可以忽略。 */
+export function hasNoSuchJob(stderr: string): boolean {
+  return /no such process|not found|service not found|\b3:\s/i.test(stderr);
+}
+
 export interface LaunchAgentsAdapterDeps {
   dir?: string;
   exec?: RunCommand;
@@ -173,20 +178,28 @@ export function createLaunchAgentsAdapter(deps: LaunchAgentsAdapterDeps = {}): H
     },
 
     // kickstart 要求 job 已加载；没加载就先 bootstrap 进当前 gui 域（bootstrap 本身也会启动它）。
+    // 两条路径都要真的成功才算跑起来：bootstrap 成功但 kickstart 再失败时不能报成功。
     async run(id) {
       const label = id.slice('launch-agent:'.length);
-      const kicked = await exec('launchctl', ['kickstart', '-k', `${guiDomain()}/${label}`]);
-      if (!kicked.failed) return;
+      const domain = guiDomain();
+      if (!(await exec('launchctl', ['kickstart', '-k', `${domain}/${label}`])).failed) return;
       const path = await plistPathFor(label);
-      const booted = await exec('launchctl', ['bootstrap', guiDomain(), path]);
-      if (booted.failed) throw new Error('launch agent could not be started');
+      if ((await exec('launchctl', ['bootstrap', domain, path])).failed) {
+        throw new Error('launch agent could not be started');
+      }
+      if ((await exec('launchctl', ['kickstart', `${domain}/${label}`])).failed) {
+        throw new Error('launch agent could not be started');
+      }
     },
 
     async remove(id) {
       const label = id.slice('launch-agent:'.length);
       const path = await plistPathFor(label);
       // 先 bootout 再删文件：删掉文件后 launchd 仍持有已加载的 job，直到注销。
-      await exec('launchctl', ['bootout', `${guiDomain()}/${label}`]);
+      // 卸载真失败时不能继续删：那会留下一个还活着、却从清单里消失的 job。
+      // `bootout` 对未加载的 label 也返回非 0，这是唯一可以忽略的失败。
+      const { failed, stderr } = await exec('launchctl', ['bootout', `${guiDomain()}/${label}`]);
+      if (failed && !hasNoSuchJob(stderr ?? '')) throw new Error('launch agent could not be unloaded');
       await removeFile(path);
       seen.delete(label);
     },

@@ -103,6 +103,24 @@ function toEntry(
 export function createHostDaemonsService(deps: HostDaemonsServiceDeps): HostDaemonsService {
   const now = deps.now ?? Date.now;
 
+  /**
+   * 所有改动本机常驻项的动作串行执行。
+   *
+   * 适配器的写侧是「读当前整表 → 算新表 → 写回」：crontab 只有一份共享表格，
+   * systemd 要先落文件再 daemon-reload。两个动作交错时，后者的写回会覆盖掉前者
+   * （删掉 A 的同时停止 B，A 会被复活或 B 的停止丢失）。串行化放在这一处，
+   * 而不是让每个适配器各自记锁。
+   */
+  let mutationQueue: Promise<unknown> = Promise.resolve();
+  function serialize<T>(task: () => Promise<T>): Promise<T> {
+    const result = mutationQueue.then(task, task);
+    mutationQueue = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    return result;
+  }
+
   /** 账号边界是否正在进行。未接线（纯逻辑 / 单测）时永远为 false。 */
   function boundaryPending(): boolean {
     return deps.ownerScopeKey ? (deps.isOwnerBoundaryPending?.() ?? false) : false;
@@ -190,6 +208,7 @@ export function createHostDaemonsService(deps: HostDaemonsServiceDeps): HostDaem
       throw new HostDaemonActionError('NOT_OWNED', 'account boundary in progress');
     }
     const scopeBefore = scopeStamp();
+    await deps.ledger.ready();
     const daemons = await deps.target.scan();
     // 扫描期间切号：这条授权可能来自上一个账号的台账，不能拿来操作本机条目。
     if (scopeBefore !== scopeStamp()) {
@@ -218,6 +237,11 @@ export function createHostDaemonsService(deps: HostDaemonsServiceDeps): HostDaem
       // 清单里的条目带归属会话标题：账号切换后本次结果作废，不能把旧账号的标题
       // 交给新账号的界面（下次扫描会按新账号重新归属）。
       const scopeBefore = scopeStamp();
+      // 台账读盘是异步的（列表 IPC 上不能同步 I/O），必须在读 getter 之前完成。
+      await deps.ledger.ready();
+      if (scopeBefore !== scopeStamp()) {
+        return { capturedAtMs, supported: true, entries: [], unrelatedCount: 0 };
+      }
       const daemons = await deps.target.scan();
       const entries: HostDaemonEntry[] = [];
       // 扫描期间的归属结论先攒在这里，整轮结束后一次性提交：只要中途切号（或边界
@@ -306,7 +330,7 @@ export function createHostDaemonsService(deps: HostDaemonsServiceDeps): HostDaem
       for (const entry of pendingMisses) deps.ledger.setMissMtime(entry.id, entry.stampMs);
       try {
         // save() 自身只在有改动时落盘。
-        deps.ledger.save();
+        await deps.ledger.save();
       } catch {
         // 台账写失败只影响下次是否重算，不影响本次清单。
       }
@@ -316,32 +340,41 @@ export function createHostDaemonsService(deps: HostDaemonsServiceDeps): HostDaem
     },
 
     async stop(id) {
-      const daemon = await requireOwnedTask(id);
-      // crontab 这类没有单条运行态的常驻项只能整条删除，不能单独停止。
-      if (daemon.stoppable === false) {
-        throw new HostDaemonActionError('NOT_STOPPABLE', 'host daemon cannot be stopped on its own');
-      }
-      await deps.target!.stop(id);
+      return serialize(async () => {
+        const daemon = await requireOwnedTask(id);
+        // crontab 这类没有单条运行态的常驻项只能整条删除，不能单独停止。
+        if (daemon.stoppable === false) {
+          throw new HostDaemonActionError(
+            'NOT_STOPPABLE',
+            'host daemon cannot be stopped on its own',
+          );
+        }
+        await deps.target!.stop(id);
+      });
     },
 
     async run(id) {
-      await requireOwnedTask(id);
-      await deps.target!.run(id);
+      return serialize(async () => {
+        await requireOwnedTask(id);
+        await deps.target!.run(id);
+      });
     },
 
     async remove(id) {
-      await requireOwnedTask(id);
-      const scopeBefore = scopeStamp();
-      await deps.target!.remove(id);
-      // 删除期间切号：新账号的台账不是这次授权的来源，不能顺手动它。
-      if (scopeBefore !== scopeStamp()) return;
-      // 条目已不在：顺手撤掉授权，避免同名条目重建后继承。
-      deps.ledger.clearOwner(id);
-      try {
-        deps.ledger.save();
-      } catch {
-        // 写失败只影响下次扫描，不影响这次删除结果。
-      }
+      return serialize(async () => {
+        await requireOwnedTask(id);
+        const scopeBefore = scopeStamp();
+        await deps.target!.remove(id);
+        // 删除期间切号：新账号的台账不是这次授权的来源，不能顺手动它。
+        if (scopeBefore !== scopeStamp()) return;
+        // 条目已不在：顺手撤掉授权，避免同名条目重建后继承。
+        deps.ledger.clearOwner(id);
+        try {
+          await deps.ledger.save();
+        } catch {
+          // 写失败只影响下次扫描，不影响这次删除结果。
+        }
+      });
     },
   };
 }

@@ -91,21 +91,27 @@ export function removeCronLine(text: string, line: string): { text: string; remo
 
 export interface CrontabAdapterDeps {
   exec?: RunCommand;
-  /** 「立即运行」的本地复现；默认 detached spawn 后立刻脱离。 */
-  launch?: (command: string) => void;
+  /** 「立即运行」的本地复现；resolve 表示进程已真正被拉起。 */
+  launch?: (command: string) => Promise<void>;
 }
 
-function defaultLaunch(command: string): void {
+function defaultLaunch(command: string): Promise<void> {
   // crond 以用户 HOME 为工作目录起任务，本地复现也用它，才不会在应用目录里跑。
   const child = spawn(command, { shell: true, detached: true, stdio: 'ignore', cwd: homedir() });
-  child.unref();
+  return new Promise((resolve, reject) => {
+    // `spawn` 事件才是「内核真的接手了这个进程」；不能 spawn 就直接报错，
+    // 否则界面会说「已运行」而实际什么都没起。
+    child.once('error', (error) => reject(error));
+    child.once('spawn', () => {
+      child.unref();
+      resolve();
+    });
+  });
 }
 
 export function createCrontabAdapter(deps: CrontabAdapterDeps = {}): HostDaemonAdapter {
   const exec = deps.exec ?? runCommand;
   const launch = deps.launch ?? defaultLaunch;
-  /** 扫描时见到的 id → 条目本身，动作侧靠它定位原始行与命令。 */
-  let entries = new Map<string, CronEntry>();
 
   async function readCrontab(): Promise<string> {
     const { stdout, failed } = await exec('crontab', ['-l']);
@@ -113,22 +119,46 @@ export function createCrontabAdapter(deps: CrontabAdapterDeps = {}): HostDaemonA
     return failed ? '' : stdout;
   }
 
+  /**
+   * 从一份表格文本解析出 id → 条目。
+   * 扫描和每个动作都走这一处：动作侧绝不能拿「上次扫描的快照」定位条目 ——
+   * 条目可能在两次扫描之间被改掉，快照会让停止/删除/立即运行作用到已经不存在
+   * 或是别人重建过的行。
+   */
+  function entriesOf(text: string): Map<string, CronEntry> {
+    const parsed = parseCrontab(text);
+    const map = new Map<string, CronEntry>();
+    // 同一行写两遍在 crontab 里合法（会跑两次），但两条要能被分别列出：
+    // 行内容相同 → id 撞车，所以按出现序号补后缀。删哪一条都是一样的行。
+    const occurrences = new Map<string, number>();
+    for (const entry of parsed) {
+      const base = cronEntryId(entry.line);
+      const seen = occurrences.get(base) ?? 0;
+      occurrences.set(base, seen + 1);
+      map.set(seen > 0 ? `${base}-${seen}` : base, entry);
+    }
+    return map;
+  }
+
+  /**
+   * crontab 只有一张整表，凡是「读全表 → 改 → 写回」的改动都在这里排队：
+   * 同一进程里两个删除请求重叠时，不排队就会后写的把先删的条目写回来。
+   * 跨进程的并发靠写前复读那一段兜住。
+   */
+  let mutationQueue: Promise<unknown> = Promise.resolve();
+  function serialize<T>(task: () => Promise<T>): Promise<T> {
+    const next = mutationQueue.then(task, task);
+    mutationQueue = next.catch(() => undefined);
+    return next;
+  }
+
   return {
     idPrefix: 'cron-entry:',
 
     async scan() {
-      const parsed = parseCrontab(await readCrontab());
-      const next = new Map<string, CronEntry>();
-      // 同一行写两遍在 crontab 里合法（会跑两次），但两条要能被分别列出：
-      // 行内容相同 → id 撞车，所以按出现序号补后缀。删哪一条都是一样的行。
-      const occurrences = new Map<string, number>();
+      const current = await readCrontab();
       const out: RawHostDaemon[] = [];
-      for (const entry of parsed) {
-        const base = cronEntryId(entry.line);
-        const seen = occurrences.get(base) ?? 0;
-        occurrences.set(base, seen + 1);
-        const id = seen > 0 ? `${base}-${seen}` : base;
-        next.set(id, entry);
+      for (const [id, entry] of entriesOf(current)) {
         out.push({
           id,
           name: entry.name || entry.command,
@@ -144,7 +174,6 @@ export function createCrontabAdapter(deps: CrontabAdapterDeps = {}): HostDaemonA
           stoppable: false,
         });
       }
-      entries = next;
       return out;
     },
 
@@ -153,20 +182,28 @@ export function createCrontabAdapter(deps: CrontabAdapterDeps = {}): HostDaemonA
     },
 
     async run(id) {
-      const entry = entries.get(id);
+      const entry = entriesOf(await readCrontab()).get(id);
       if (!entry) throw new Error('cron entry is no longer present');
-      launch(entry.command);
+      await launch(entry.command);
     },
 
     async remove(id) {
-      const entry = entries.get(id);
-      if (!entry) throw new Error('cron entry is no longer present');
-      const current = await readCrontab();
-      const result = removeCronLine(current, entry.line);
-      if (!result.removed) throw new Error('cron entry is no longer present');
-      const { failed } = await exec('crontab', ['-'], { input: result.text });
-      if (failed) throw new Error('crontab could not be updated');
-      entries.delete(id);
+      return serialize(async () => {
+        const current = await readCrontab();
+        const entry = entriesOf(current).get(id);
+        if (!entry) throw new Error('cron entry is no longer present');
+        const result = removeCronLine(current, entry.line);
+        if (!result.removed) throw new Error('cron entry is no longer present');
+        // crontab 只有一份共享表格：整表写回会覆盖掉别人在这期间的改动。
+        // 写前复读一次，表格变了就拒绝，宁可不删也不吞掉别人的条目。
+        // shortcut: 复读与写回之间仍有毫秒级窗口，crontab 没有可用的锁；
+        // 更严的保证要等出现真正需要时再做文件级加锁。
+        if ((await readCrontab()) !== current) {
+          throw new Error('crontab changed while updating; nothing was removed');
+        }
+        const { failed } = await exec('crontab', ['-'], { input: result.text });
+        if (failed) throw new Error('crontab could not be updated');
+      });
     },
   };
 }
