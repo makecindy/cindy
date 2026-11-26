@@ -336,6 +336,27 @@ it.each([['ios', 'light'], ['ios', 'dark'], ['android', 'light'], ['android', 'd
     });
     expect(links().map(span => span.textContent)).toEqual(['@Ann']);
     expect(node.textContent).toBe('@Ann 你好 @Team @Ann');
+    await renderBody('@Ann @Bob 你好', {
+      members: [ann, member('bob', 'Robert')], labels: ['Ann', 'Robert'],
+      mentions: { all: false, botIds: ['ann-1', 'bob'] },
+    });
+    expect(links()).toHaveLength(0);
+    expect(node.textContent).toBe('@Ann @Bob 你好');
+    await renderBody('@Ann @Bob 你好', {
+      members: [ann], labels: ['Ann'], mentions: { all: false, botIds: ['ann-1', 'bob'] },
+    });
+    expect(links()).toHaveLength(0);
+    expect(node.textContent).toBe('@Ann @Bob 你好');
+    for (const second of ['@所有人', '@all']) {
+      await renderBody(`@Ann @所有人 再说 ${second}`, {
+        members: [ann], labels: ['Ann', '所有人', 'all'], allLabels: ['所有人', 'all'],
+        mentions: { all: true, botIds: ['ann-1'] },
+      });
+      const painted = [...node.querySelectorAll('span[data-style]')].filter(span =>
+        JSON.parse(span.getAttribute('data-style')!).color === palettes[theme.mode].groupMentionText);
+      expect(painted.map(span => span.textContent)).toEqual(['@Ann', '@所有人', second]);
+      expect(links().map(span => span.textContent)).toEqual(['@Ann']);
+    }
     await renderBody('@Ann', { mentions: { all: false, botIds: ['ann-1', 'ann-2'] } });
     expect(links()).toHaveLength(0);
     await renderBody('@Ann', { serverBacked: true, mentions: { all: false, botIds: [] } });

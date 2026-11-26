@@ -44,7 +44,11 @@ function confirmedMobileMentionRanges(text: string, context: BotGroupMentionCont
   const rangesFor = (labels: readonly string[]) => [...new Set(labels.map(label => label.trim()))]
     .flatMap(label => botGroupMentionRanges(text, label));
   const broadcasts = [mentions.all ? rangesFor(allLabels) : [], mentions.allBots ? rangesFor(allBotsLabels) : []];
-  const fixedBroadcasts = broadcasts.flatMap(ranges => ranges.length === 1 ? ranges : []);
+  const memberRanges = broadcasts.some(ranges => ranges.length > 1)
+    ? rangesFor(members.flatMap(memberMentionLabels)) : [];
+  const fixedBroadcasts = broadcasts.flatMap(ranges => ranges.length === 1 ? ranges : ranges.filter(range =>
+    !memberRanges.some(other => overlaps(other, range))
+    && !broadcasts.some(group => group.some(other => other !== range && overlaps(other, range)))));
   const groups = mentions.botIds.map(id => {
     const member = members.find(candidate => candidate.botId === id);
     return member ? rangesFor(memberMentionLabels(member)).filter(range => !fixedBroadcasts.some(broadcast => overlaps(range, broadcast))) : [];
