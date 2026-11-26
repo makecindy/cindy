@@ -1,12 +1,14 @@
 import { useMemo, useState } from 'react';
-import { Pressable, StyleSheet, View } from 'react-native';
-import { BellRing, MessagesSquare, Search, X } from 'lucide-react-native';
+import { ActivityIndicator, Linking, Pressable, StyleSheet, View } from 'react-native';
+import { BellRing, CircleDot, GitPullRequest, MessagesSquare, Search, X } from 'lucide-react-native';
 import { useTranslation } from 'react-i18next';
 import type { BotGroupThreadSummary } from '@cindy/maker-shared/botGroupChat';
 import {
+  botGroupCodeRefLabel,
   botGroupThreadActivityAt,
   filterBotGroupThreads,
   isBotGroupThreadActionable,
+  pickBotGroupThreadDisplayRefs,
   type BotGroupThreadFilter,
 } from '@cindy/maker-shared/botGroupPresentation';
 import { Text, TextInput } from '@/components/AppText';
@@ -30,12 +32,10 @@ function formatCompactTime(at: number, t: (k: string, o?: Record<string, unknown
 
 function ThreadRow({
   thread,
-  filter,
   identityFor,
   onPress,
 }: {
   thread: BotGroupThreadSummary;
-  filter: BotGroupThreadFilter;
   identityFor: BotGroupIdentityLookup;
   onPress(): void;
 }) {
@@ -43,80 +43,106 @@ function ThreadRow({
   const { colors } = useTheme();
   const styles = useThemedStyles(makeStyles);
   const actionable = isBotGroupThreadActionable(thread);
-  const preview = (filter === 'mentions' && thread.lastMention ? thread.lastMention : null) ?? thread.lastReply;
   const activityAt = botGroupThreadActivityAt(thread);
   const timeText = formatCompactTime(activityAt, t);
   const responders = thread.responders ?? [];
+  const { issue, pr } = pickBotGroupThreadDisplayRefs(thread.refs);
 
   return (
-    <Pressable
-      accessibilityRole="button"
-      testID={`botGroup.threadIndex.row.${thread.rootId}`}
-      onPress={onPress}
-      style={({ pressed }) => [styles.row, pressed && styles.rowPressed]}
-    >
-      <View style={styles.rowHeader}>
-        <BotGroupAvatar
-          deviceId=""
-          online
-          identity={identityFor(thread.rootAuthorBotId ?? '', thread.rootAuthorName || '?')}
-          size={iconSize.lg}
-        />
-        <Text numberOfLines={1} style={[styles.rootText, actionable && styles.rootTextUnread]}>
-          {thread.rootText || t(key('emptyReply'))}
-        </Text>
-        {timeText ? <Text style={styles.timeText}>{timeText}</Text> : null}
-      </View>
-
-      {preview ? (
-        <Text numberOfLines={1} style={styles.previewText}>
-          <Text style={styles.previewAuthor}>{preview.authorName}</Text>
-          {': '}
-          {preview.text || t(key('emptyReply'))}
-        </Text>
-      ) : null}
+    <View style={styles.row}>
+      <Pressable
+        accessibilityRole="button"
+        testID={`botGroup.threadIndex.row.${thread.rootId}`}
+        onPress={onPress}
+        style={({ pressed }) => [styles.rowBody, pressed && styles.rowPressed]}
+      >
+        <View style={styles.rowHeader}>
+          <BotGroupAvatar
+            deviceId=""
+            online
+            identity={identityFor(thread.rootAuthorBotId ?? '', thread.rootAuthorName || '?')}
+            size={iconSize.lg}
+          />
+          <Text numberOfLines={1} style={[styles.rootText, actionable && styles.rootTextUnread]}>
+            {thread.rootText || t(key('emptyReply'))}
+          </Text>
+          {timeText ? <Text style={styles.timeText}>{timeText}</Text> : null}
+        </View>
+      </Pressable>
 
       <View style={styles.metaRow}>
-        {responders.length > 0 ? (
-          <View style={styles.responders}>
-            {responders.slice(0, 3).map((responder, index) => (
-              <View
-                key={responder.id}
-                style={[styles.responderAvatar, index > 0 && styles.responderOverlap, { zIndex: responders.length - index }]}
+        <Pressable accessibilityRole="button" onPress={onPress} style={styles.metaMain}>
+          {responders.length > 0 ? (
+            <View style={styles.responders}>
+              {responders.slice(0, 3).map((responder, index) => (
+                <View
+                  key={responder.id}
+                  style={[styles.responderAvatar, index > 0 && styles.responderOverlap, { zIndex: responders.length - index }]}
+                >
+                  <BotGroupAvatar
+                    deviceId=""
+                    online
+                    identity={identityFor(responder.authorBotId ?? '', responder.authorName)}
+                    size={iconSize.md}
+                  />
+                </View>
+              ))}
+            </View>
+          ) : null}
+          <Text style={styles.metaText}>{t(key('replyCount'), { count: thread.replyCount })}</Text>
+          {thread.unread.mentioned && actionable ? (
+            <View style={styles.tagPill}>
+              <Text style={[styles.tagText, styles.tagTextStrong]}>{t(key('mentioned'))}</Text>
+            </View>
+          ) : thread.mentionedMe ? (
+            <View style={styles.tagPill}>
+              <Text style={styles.tagText}>{t(key('indexMentionedTag'))}</Text>
+            </View>
+          ) : thread.participated ? (
+            <Text style={styles.metaText}>· {t(key('indexParticipatedTag'))}</Text>
+          ) : null}
+          {thread.following ? (
+            <BellRing size={iconSize.xs} color={colors.textTertiary} />
+          ) : null}
+        </Pressable>
+        {(issue || pr || actionable) ? (
+          <View style={styles.trailingMeta}>
+            {issue ? (
+              <Pressable
+                accessibilityRole="link"
+                accessibilityLabel={`${issue.owner}/${issue.repo}${botGroupCodeRefLabel(issue)}`}
+                testID={`botGroup.threadIndex.ref.issue.${thread.rootId}`}
+                onPress={() => { void Linking.openURL(issue.url); }}
+                hitSlop={6}
+                style={({ pressed }) => [styles.codeRef, pressed && styles.codeRefPressed]}
               >
-                <BotGroupAvatar
-                  deviceId=""
-                  online
-                  identity={identityFor(responder.authorBotId ?? '', responder.authorName)}
-                  size={iconSize.md}
-                />
+                <CircleDot size={iconSize.xs} color={colors.textTertiary} />
+                <Text style={styles.codeRefText}>{botGroupCodeRefLabel(issue)}</Text>
+              </Pressable>
+            ) : null}
+            {pr ? (
+              <Pressable
+                accessibilityRole="link"
+                accessibilityLabel={`${pr.owner}/${pr.repo}${botGroupCodeRefLabel(pr)}`}
+                testID={`botGroup.threadIndex.ref.pr.${thread.rootId}`}
+                onPress={() => { void Linking.openURL(pr.url); }}
+                hitSlop={6}
+                style={({ pressed }) => [styles.codeRef, pressed && styles.codeRefPressed]}
+              >
+                <GitPullRequest size={iconSize.xs} color={colors.textTertiary} />
+                <Text style={styles.codeRefText}>{botGroupCodeRefLabel(pr)}</Text>
+              </Pressable>
+            ) : null}
+            {actionable ? (
+              <View style={styles.unreadWrap}>
+                <View style={styles.unreadDot} />
+                <Text style={styles.unreadText}>{t(key('newReplies'), { count: thread.unread.count })}</Text>
               </View>
-            ))}
-          </View>
-        ) : null}
-        <Text style={styles.metaText}>{t(key('replyCount'), { count: thread.replyCount })}</Text>
-        {thread.unread.mentioned && actionable ? (
-          <View style={styles.tagPill}>
-            <Text style={[styles.tagText, styles.tagTextStrong]}>{t(key('mentioned'))}</Text>
-          </View>
-        ) : thread.mentionedMe ? (
-          <View style={styles.tagPill}>
-            <Text style={styles.tagText}>{t(key('indexMentionedTag'))}</Text>
-          </View>
-        ) : thread.participated ? (
-          <Text style={styles.metaText}>· {t(key('indexParticipatedTag'))}</Text>
-        ) : null}
-        {thread.following ? (
-          <BellRing size={iconSize.xs} color={colors.textTertiary} />
-        ) : null}
-        {actionable ? (
-          <View style={styles.unreadWrap}>
-            <View style={styles.unreadDot} />
-            <Text style={styles.unreadText}>{t(key('newReplies'), { count: thread.unread.count })}</Text>
+            ) : null}
           </View>
         ) : null}
       </View>
-    </Pressable>
+    </View>
   );
 }
 
@@ -126,6 +152,7 @@ export function BotGroupThreadListSheet({
   threads,
   filter,
   onFilterChange,
+  syncing = false,
   identityFor,
   onSelect,
   onClose,
@@ -135,6 +162,7 @@ export function BotGroupThreadListSheet({
   threads: readonly BotGroupThreadSummary[];
   filter: BotGroupThreadFilter;
   onFilterChange(next: BotGroupThreadFilter): void;
+  syncing?: boolean;
   identityFor: BotGroupIdentityLookup;
   onSelect(rootId: string, focusMessageId?: string): void;
   onClose(): void;
@@ -147,7 +175,6 @@ export function BotGroupThreadListSheet({
 
   const options = useMemo<readonly FileBrowserSegmentOption<BotGroupThreadFilter>[]>(() => [
     { value: 'mine', label: t(key('filterMine')), testID: 'botGroup.threadIndex.filter.mine' },
-    { value: 'mentions', label: t(key('filterMentions')), testID: 'botGroup.threadIndex.filter.mentions' },
     { value: 'all', label: t(key('filterAll')), testID: 'botGroup.threadIndex.filter.all' },
   ], [t]);
 
@@ -160,12 +187,12 @@ export function BotGroupThreadListSheet({
     ? 'indexEmptySearch'
     : filter === 'mine'
       ? 'indexEmptyMine'
-      : filter === 'mentions'
-        ? 'indexEmptyMentions'
-        : 'indexEmptyAll';
+      : 'indexEmptyAll';
 
   const openThread = (thread: BotGroupThreadSummary) => {
-    const focusId = filter === 'mentions' ? thread.lastMention?.messageId : undefined;
+    const focusId = filter === 'mine' && (thread.unread.mentioned || thread.mentionedMe)
+      ? thread.lastMention?.messageId
+      : undefined;
     onSelect(thread.rootId, focusId);
   };
 
@@ -212,7 +239,12 @@ export function BotGroupThreadListSheet({
           ) : null}
         </View>
 
-        {totalShown === 0 ? (
+        {totalShown === 0 && syncing ? (
+          <View style={styles.empty} testID="botGroup.threadIndex.syncing">
+            <ActivityIndicator size="small" color={colors.textTertiary} />
+            <Text style={styles.emptyText}>{t(key('syncingHistory'))}</Text>
+          </View>
+        ) : totalShown === 0 ? (
           <View style={styles.empty}>
             <MessagesSquare size={iconSize.xl} color={colors.textTertiary} />
             <Text style={styles.emptyText}>{t(key(emptyKey))}</Text>
@@ -236,7 +268,6 @@ export function BotGroupThreadListSheet({
                   <ThreadRow
                     key={thread.rootId}
                     thread={thread}
-                    filter={filter}
                     identityFor={identityFor}
                     onPress={() => openThread(thread)}
                   />
@@ -250,12 +281,17 @@ export function BotGroupThreadListSheet({
                   <ThreadRow
                     key={thread.rootId}
                     thread={thread}
-                    filter={filter}
                     identityFor={identityFor}
                     onPress={() => openThread(thread)}
                   />
                 ))}
               </>
+            ) : null}
+            {syncing ? (
+              <View style={styles.syncingFooter} testID="botGroup.threadIndex.syncing">
+                <ActivityIndicator size="small" color={colors.textTertiary} />
+                <Text style={styles.metaText}>{t(key('syncingHistory'))}</Text>
+              </View>
             ) : null}
           </View>
         )}
@@ -302,7 +338,18 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     paddingVertical: spacing.sm,
     gap: spacing.xs,
   },
+  rowBody: {
+    borderRadius: radius.control,
+    gap: spacing.xs,
+  },
   rowPressed: { backgroundColor: colors.surfaceChip },
+  metaMain: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: spacing.xs + 2,
+    flexShrink: 1,
+  },
   rowHeader: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
   rootText: {
     flex: 1,
@@ -319,13 +366,6 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     color: colors.textTertiary,
     flexShrink: 0,
   },
-  previewText: {
-    paddingLeft: 26,
-    fontSize: typeScale.caption,
-    lineHeight: lineHeight.caption,
-    color: colors.textSecondary,
-  },
-  previewAuthor: { fontWeight: fontWeight.medium, color: colors.textPrimary },
   metaRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -361,8 +401,30 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     fontWeight: fontWeight.medium,
     color: colors.textPrimary,
   },
-  unreadWrap: {
+  trailingMeta: {
     marginLeft: 'auto',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+  },
+  codeRef: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 2,
+    borderRadius: radius.micro,
+    paddingHorizontal: spacing.xs,
+    paddingVertical: 1,
+  },
+  codeRefPressed: {
+    backgroundColor: colors.surfaceChip,
+  },
+  codeRefText: {
+    fontSize: typeScale.caption,
+    lineHeight: lineHeight.caption,
+    fontVariant: ['tabular-nums'],
+    color: colors.textTertiary,
+  },
+  unreadWrap: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing.xs,
@@ -391,5 +453,12 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     lineHeight: lineHeight.bodySmall,
     color: colors.textSecondary,
     textAlign: 'center',
+  },
+  syncingFooter: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing.xs,
+    paddingVertical: spacing.md,
   },
 });

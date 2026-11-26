@@ -709,6 +709,48 @@ export function useChatServerGroup(groupId: string, enabled: boolean, threadRoot
     await api.client.react(groupId, messageId, emoji, present, operationId);
     if (valid()) reload();
   }, [valid, enabled, api, groupId, reload]);
+  const [threadsSyncing, setThreadsSyncing] = useState(false);
+  const backfilledIdentity = useRef<string | null>(null);
+  const backfillRetryAt = useRef<{ identity: string; at: number } | null>(null);
+  const backfillInFlight = useRef<AbortController | null>(null);
+  useEffect(() => () => { backfillInFlight.current?.abort(); backfillInFlight.current = null; }, [identity]);
+  const backfillThreads = useCallback(() => {
+    if (!valid() || !enabled || threadRootId) return;
+    if (backfilledIdentity.current === identity || backfillInFlight.current) return;
+    if (backfillRetryAt.current?.identity === identity && Date.now() < backfillRetryAt.current.at) return;
+    const current = page.current;
+    if (!current || current.identity !== identity || current.page.snapshot.room.kind === 'direct') return;
+    const controller = new AbortController();
+    backfillInFlight.current = controller;
+    setThreadsSyncing(true);
+    void api.client.backfillThreads(groupId, current.page.snapshot, current.page.messages, controller.signal)
+      .then(result => {
+        if (controller.signal.aborted || !valid()) return;
+        backfilledIdentity.current = identity;
+        backfillRetryAt.current = null;
+        const latestNow = page.current;
+        if (!latestNow || latestNow.identity !== identity) return;
+        const mergedMap = new Map<string, (typeof latestNow.page.messages)[number]>();
+        for (const m of [...(latestNow.page.cachedMessages ?? []), ...result.messages]) {
+          const prev = mergedMap.get(m.id);
+          if (!prev || (m.revision ?? 0) >= (prev.revision ?? 0)) mergedMap.set(m.id, m);
+        }
+        const next: ChatPage = {
+          ...latestNow.page,
+          cachedMessages: [...mergedMap.values()],
+          threadRoots: { ...(latestNow.page.threadRoots ?? {}), ...result.roots },
+        };
+        page.current = { ...latestNow, page: next };
+        setState(old => old.identity === identity ? { ...old, value: { kind: 'ready', group: view(next, latestNow.self, latestNow.actors) } } : old);
+      })
+      .catch(() => {
+        if (!controller.signal.aborted) backfillRetryAt.current = { identity, at: Date.now() + 60_000 };
+      })
+      .finally(() => {
+        if (backfillInFlight.current === controller) backfillInFlight.current = null;
+        if (valid()) setThreadsSyncing(false);
+      });
+  }, [valid, enabled, threadRootId, identity, api, groupId, view]);
   const latest = page.current?.identity === identity ? page.current : null;
   const retryAt = latest?.page.threadRetryAt;
   useEffect(() => {
@@ -720,6 +762,7 @@ export function useChatServerGroup(groupId: string, enabled: boolean, threadRoot
   return { state: state.identity === identity ? state.value : { kind: 'loading' } as BotGroupChatState,
     listHidden: api.current() && api.client.personalList.hidden(groupId),
     online: state.identity === identity && state.online, reload, act, pending, pendingAction, threadMeta, followThread, shareToMain, react,
+    backfillThreads, threadsSyncing: state.identity === identity && threadsSyncing,
     canQueue: enabled && api.enabled && state.identity === identity && state.value.kind === 'ready' && !api.client.personalList.hidden(groupId),
     acceptListState, isListHidden: () => api.client.personalList.hidden(groupId), loadOlder, loadingOlder: state.loadingOlder, media, markRead, uploadAttachment };
 }

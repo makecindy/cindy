@@ -69,7 +69,7 @@ import type { BotGroupChatService, BotGroupChatServiceDeps, BotGroupLaneTerminal
 import { groupTaskName } from './groupTaskNaming.js';
 import { readPersistedInputSenderTask, readPersistedReplyText } from './botGroupChatService.js';
 import { botGroupRuntimeFailureCode, botGroupRuntimeFailureDetail } from './botGroupRuntimeFailure.js';
-import { chatGroupMemberName, chatGroupOwnerName, botGroupExecutionFailureBatches, latestBotGroupMessage } from '@cindy/maker-shared/botGroupPresentation';
+import { chatGroupMemberName, chatGroupOwnerName, botGroupExecutionFailureBatches, latestBotGroupMessage, extractBotGroupThreadCodeRefsFromMessages } from '@cindy/maker-shared/botGroupPresentation';
 import { createThreadProjection, isShareableThreadReply, threadPreviewAttachments, threadPreviewText } from './chatServerThreads.js';
 import { companionSnapshot, registerCompanionHomes } from '../companion-cloud/homes.js';
 import { startCompanionCloud, type CompanionCloudRuntime } from '../companion-cloud/runtime.js';
@@ -259,7 +259,14 @@ const MESSAGE_READERS_TTL_MS = 60_000;
 const MESSAGE_READERS_CACHE_LIMIT = 200;
 const ATTACHMENT_REFRESH_COALESCE_MS = 200;
 /** Threads listed in a group's 话题 list. */
-const THREAD_LIST_LIMIT = 50;
+const THREAD_LIST_LIMIT = 100;
+const THREAD_RELEVANT_LIMIT = 200;
+const THREAD_BACKFILL_PAGE_SIZE = 100;
+const THREAD_BACKFILL_MAX_PAGES = 10;
+const THREAD_HYDRATE_MAX_THREADS = 40;
+const THREAD_BACKFILL_MAX_ROOMS = 6;
+const THREAD_BACKFILL_MAX_MESSAGES_PER_ROOM = 400;
+const THREAD_BACKFILL_RETRY_COOLDOWN_MS = 60_000;
 /**
  * One push per change: notices for the same group inside this window (a local write and its
  * WebSocket echo, an execution and its message, several change batches) leave one broadcast at
@@ -953,6 +960,90 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     message: async (roomId, messageId) => await readMessage(roomId, messageId) ?? null,
     filled: roomId => changed(roomId),
   });
+  const mentionThreadMessages = new Map<string, Map<string, Message>>();
+  const backfilledThreadMessages = new Map<string, Map<string, Message>>();
+  const threadBackfillState = new Map<string, { status: 'running' | 'done' | 'failed'; retryAt?: number }>();
+  function rememberThreadMessages(store: Map<string, Map<string, Message>>, roomId: string, messages: readonly Message[]): number {
+    let added = 0;
+    let bucket = store.get(roomId);
+    for (const m of messages) {
+      const relevant = !!m.threadRootId || (!m.deleted && (m.replyCount ?? 0) > 0);
+      if (!relevant) continue;
+      if (!bucket) { bucket = new Map<string, Message>(); store.set(roomId, bucket); }
+      const existing = bucket.get(m.id);
+      if (!existing || (m.revision ?? 0) > (existing.revision ?? 0)) {
+        bucket.delete(m.id);
+        bucket.set(m.id, m);
+        added += 1;
+      }
+    }
+    if (bucket) {
+      store.delete(roomId);
+      store.set(roomId, bucket);
+      while (bucket.size > THREAD_BACKFILL_MAX_MESSAGES_PER_ROOM) {
+        const oldestMsg = bucket.keys().next().value;
+        if (oldestMsg === undefined) break;
+        bucket.delete(oldestMsg);
+      }
+      while (store.size > THREAD_BACKFILL_MAX_ROOMS) {
+        const oldestRoom = store.keys().next().value;
+        if (oldestRoom === undefined) break;
+        store.delete(oldestRoom);
+        if (store === backfilledThreadMessages) threadBackfillState.delete(oldestRoom);
+      }
+    }
+    return added;
+  }
+  function startThreadHistoryBackfill(roomId: string, s: Snapshot, page: Message[]) {
+    const existingState = threadBackfillState.get(roomId);
+    if (existingState?.status === 'running' || existingState?.status === 'done') return;
+    if (existingState?.status === 'failed' && Date.now() < (existingState.retryAt ?? 0)) return;
+    if (page.length < THREAD_BACKFILL_PAGE_SIZE && s.messages.length < THREAD_BACKFILL_PAGE_SIZE) {
+      threadBackfillState.set(roomId, { status: 'done' });
+      return;
+    }
+    threadBackfillState.set(roomId, { status: 'running' });
+    void (async () => {
+      try {
+        const seed = [...page, ...s.messages, ...(history()?.cachedMessages<Message>(roomId) ?? [])]
+          .filter(m => !m.threadRootId);
+        const initialMinSeq = seed.reduce<bigint | null>((min, m) => {
+          const seq = BigInt(m.seq);
+          return min === null || seq < min ? seq : min;
+        }, null);
+        if (initialMinSeq === null || initialMinSeq <= 1n) {
+          threadBackfillState.set(roomId, { status: 'done' });
+          if (current()) changed(roomId);
+          return;
+        }
+        // Call the server directly rather than ChatHistory.page so background thread discovery
+        // never persists unrelated main-chat chatter to local disk or blocks room mutations.
+        let minSeq: bigint = initialMinSeq;
+        for (let step = 0; step < THREAD_BACKFILL_MAX_PAGES && minSeq > 1n; step += 1) {
+          if (!current()) return;
+          const query = new URLSearchParams({ limit: String(THREAD_BACKFILL_PAGE_SIZE), before: String(minSeq) });
+          const batch = await api<Message[]>(`/conversations/${roomId}/messages?${query}`);
+          if (!current()) return;
+          if (!batch.length) break;
+          const added = rememberThreadMessages(backfilledThreadMessages, roomId, batch);
+          if (added > 0) changed(roomId);
+          let nextMin: bigint = minSeq;
+          for (const m of batch) {
+            const seq = BigInt(m.seq);
+            if (seq < nextMin) nextMin = seq;
+          }
+          if (batch.length < THREAD_BACKFILL_PAGE_SIZE || nextMin >= minSeq) break;
+          minSeq = nextMin;
+        }
+        threadBackfillState.set(roomId, { status: 'done' });
+        if (current()) changed(roomId);
+      } catch (error) {
+        threadBackfillState.set(roomId, { status: 'failed', retryAt: Date.now() + THREAD_BACKFILL_RETRY_COOLDOWN_MS });
+        deps.log?.warn('Thread history backfill failed', chatErrorDiagnostic(error));
+        if (current()) changed(roomId);
+      }
+    })();
+  }
   let upgrade: Promise<Map<string, string>> | undefined;
   let upgradeRetryAt = 0;
   const upgradeErrors = new Map<string, string>();
@@ -1454,7 +1545,13 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
             for (const change of event.changes ?? []) {
               if (change.type === 'message.created' && typeof change.entityId === 'string' && id.safeParse(change.entityId).success)
                 chatNotifications?.enqueue(roomId, change.entityId);
-              if (change.type === 'message.updated' || change.type === 'message.deleted') threads.invalidate(roomId, change.entityId);
+              if (change.type === 'message.updated' || change.type === 'message.deleted') {
+                threads.invalidate(roomId, change.entityId);
+                if (typeof change.entityId === 'string') {
+                  backfilledThreadMessages.get(roomId)?.delete(change.entityId);
+                  mentionThreadMessages.get(roomId)?.delete(change.entityId);
+                }
+              }
               if (change.type === 'reaction.changed' && typeof change.entityId === 'string') bumpMessageReactions(roomId, change.entityId);
             }
             const createdIds = new Set((event.changes ?? []).flatMap((change: { type?: string; entityId?: string }) =>
@@ -1811,30 +1908,84 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     }
     return count ? { count, mentioned, latest } : { count, mentioned };
   }
-  /** The group's Threads with replies across the snapshot and retained room cache, unread first, newest reply next. */
-  function threadSummaries(roomId: string, s: Snapshot, page: Message[], reads: Map<string, bigint>): BotGroupThreadSummary[] {
+  /** The group's Threads with replies across the snapshot, read history and retained room cache, unread first, newest reply next. */
+  function threadSummaries(roomId: string, s: Snapshot, page: Message[], reads: Map<string, bigint>, hydrateHistorical = false): BotGroupThreadSummary[] {
     const knownById = new Map<string, Message>();
-    for (const m of [...(history()?.cachedMessages<Message>(roomId) ?? []), ...page, ...s.messages]) {
+    const sourcesPool = hydrateHistorical
+      ? [
+          ...(history()?.cachedMessages<Message>(roomId) ?? []),
+          ...(backfilledThreadMessages.get(roomId)?.values() ?? []),
+          ...(mentionThreadMessages.get(roomId)?.values() ?? []),
+          ...page,
+          ...s.messages,
+        ]
+      : [...page, ...s.messages];
+    for (const m of sourcesPool) {
       const existing = knownById.get(m.id);
       if (!existing || (m.revision ?? 0) >= (existing.revision ?? 0)) knownById.set(m.id, m);
     }
     const known = [...knownById.values()];
     const rootIds = new Set<string>();
-    const repliesByRoot = new Map<string, Message[]>();
+    const priorityRootIds = new Set<string>();
+    const repliesByRoot = new Map<string, Map<string, Message>>();
+    const addReply = (m: Message) => {
+      if (!m.threadRootId || m.deleted || m.origin === 'system') return;
+      let map = repliesByRoot.get(m.threadRootId);
+      if (!map) { map = new Map<string, Message>(); repliesByRoot.set(m.threadRootId, map); }
+      const existing = map.get(m.id);
+      if (!existing || (m.revision ?? 0) >= (existing.revision ?? 0)) map.set(m.id, m);
+    };
     for (const m of known) {
       if (m.threadRootId) {
         rootIds.add(m.threadRootId);
-        if (!m.deleted && m.origin !== 'system') {
-          const list = repliesByRoot.get(m.threadRootId) ?? [];
-          list.push(m);
-          repliesByRoot.set(m.threadRootId, list);
-        }
+        addReply(m);
       } else if (!m.deleted && (m.replyCount ?? 0) > 0) {
         rootIds.add(m.id);
       }
     }
+    for (const m of mentionThreadMessages.get(roomId)?.values() ?? []) {
+      if (m.threadRootId) priorityRootIds.add(m.threadRootId);
+    }
+    if (s.reads) {
+      for (const read of s.reads) {
+        if (read.thread_key !== 'main' && (hydrateHistorical || knownById.has(read.thread_key))) {
+          rootIds.add(read.thread_key);
+          priorityRootIds.add(read.thread_key);
+        }
+      }
+    }
+    const latestSeqForRoot = (rootId: string): bigint => {
+      let max = knownById.has(rootId) ? BigInt(knownById.get(rootId)!.seq) : 0n;
+      for (const reply of repliesByRoot.get(rootId)?.values() ?? []) {
+        const seq = BigInt(reply.seq);
+        if (seq > max) max = seq;
+      }
+      return max;
+    };
+    const orderedRootIds = [...rootIds].sort((a, b) => {
+      const prioDiff = Number(priorityRootIds.has(b)) - Number(priorityRootIds.has(a));
+      if (prioDiff !== 0) return prioDiff;
+      const seqDiff = latestSeqForRoot(b) - latestSeqForRoot(a);
+      return seqDiff > 0n ? 1 : seqDiff < 0n ? -1 : 0;
+    });
+    const hydrateRootIds = hydrateHistorical ? orderedRootIds.slice(0, THREAD_HYDRATE_MAX_THREADS) : orderedRootIds;
     // A root outside the window is read in the background; its summary fills in on the next refresh.
-    const roots = threads.sources(roomId, [...rootIds], known);
+    const roots = threads.sources(roomId, hydrateRootIds, known);
+    if (hydrateHistorical) {
+      const entries = hydrateRootIds.flatMap(rootId => {
+        const root = roots.get(rootId);
+        if (root === null || root?.deleted) return [];
+        if (root && (root.replyCount ?? 0) === 0 && (repliesByRoot.get(rootId)?.size ?? 0) === 0) return [];
+        return [{ rootId, expectedReplyCount: root?.replyCount, knownReplies: [...(repliesByRoot.get(rootId)?.values() ?? [])] }];
+      });
+      const hydrated = threads.summaryReplies(roomId, entries, s.messages.length < THREAD_BACKFILL_PAGE_SIZE);
+      for (const [rootId, list] of hydrated) {
+        for (const reply of list) addReply(reply);
+        if (list.length) rememberThreadMessages(backfilledThreadMessages, roomId, list);
+        const root = roots.get(rootId);
+        if (root && !root.deleted && (root.replyCount ?? 0) > 0) rememberThreadMessages(backfilledThreadMessages, roomId, [root]);
+      }
+    }
     const followed = new Set(s.reads?.filter(read => read.following).map(read => read.thread_key));
     const isSelfActivity = (m: Message) => !m.deleted && m.origin !== 'system'
       && (m.authorId === selfId || m.maskAttribution?.self.id === selfId);
@@ -1842,17 +1993,25 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       const diff = BigInt(b.seq) - BigInt(a.seq);
       return diff > 0n ? 1 : diff < 0n ? -1 : 0;
     };
-    return [...rootIds].map((rootId): BotGroupThreadSummary => {
-      const root = roots.get(rootId) ?? undefined;
+    const summaries: BotGroupThreadSummary[] = [];
+    for (const rootId of rootIds) {
+      const resolvedRoot = roots.get(rootId);
+      if (resolvedRoot === null) continue;
+      const root = resolvedRoot ?? undefined;
+      if (root?.deleted) continue;
+      const replies = [...(repliesByRoot.get(rootId)?.values() ?? [])].sort(compareSeqDesc);
+      if (root && (root.replyCount ?? 0) === 0 && replies.length === 0) continue;
       const rootView = root ? messageView(root, s.members) : null;
-      const replies = (repliesByRoot.get(rootId) ?? []).sort(compareSeqDesc);
       const last = replies[0];
       const lastView = last ? messageView(last, s.members) : null;
       const participated = (root ? isSelfActivity(root) : false) || replies.some(isSelfActivity);
       const mentionCandidates = [
         ...(root && !root.deleted && root.origin !== 'system' ? [root] : []),
         ...replies,
-      ].filter(m => m.authorId !== selfId && m.mentions?.includes(selfId)).sort(compareSeqDesc);
+      ].filter(m => m.authorId !== selfId
+        && m.mentions?.includes(selfId)
+        && m.mentionAudience !== 'humans'
+        && m.mentionAudience !== 'everyone').sort(compareSeqDesc);
       const latestMention = mentionCandidates[0];
       const latestMentionView = latestMention ? messageView(latestMention, s.members) : null;
       const seenResponders = new Set<string>();
@@ -1864,8 +2023,12 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
         const view = messageView(reply, s.members);
         return { id: reply.id, authorBotId: view.authorBotId, authorName: view.authorName };
       });
+      const refs = extractBotGroupThreadCodeRefsFromMessages([
+        ...replies,
+        ...(root && !root.deleted && root.origin !== 'system' ? [root] : []),
+      ]);
       const rootCreatedAt = root ? Date.parse(root.createdAt) : undefined;
-      return {
+      summaries.push({
         rootId,
         rootAuthorName: rootView?.authorName ?? '',
         rootAuthorBotId: rootView?.authorBotId ?? null,
@@ -1885,10 +2048,21 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
           },
         } : {}),
         ...(responders.length > 0 ? { responders } : {}),
+        ...(refs.length > 0 ? { refs } : {}),
         lastReply: last && lastView ? { authorName: lastView.authorName, text: threadPreviewText(last) || mediaNames(last), createdAt: lastView.createdAt } : null,
-      };
-    }).sort((a, b) => Number(b.unread.count > 0) - Number(a.unread.count > 0) || (b.lastReply?.createdAt ?? b.rootCreatedAt ?? 0) - (a.lastReply?.createdAt ?? a.rootCreatedAt ?? 0))
-      .slice(0, THREAD_LIST_LIMIT);
+      });
+    }
+    const sortSummaries = (a: BotGroupThreadSummary, b: BotGroupThreadSummary) =>
+      Number(b.unread.count > 0) - Number(a.unread.count > 0)
+      || (b.lastReply?.createdAt ?? b.rootCreatedAt ?? 0) - (a.lastReply?.createdAt ?? a.rootCreatedAt ?? 0);
+    summaries.sort(sortSummaries);
+    if (summaries.length <= THREAD_LIST_LIMIT) return summaries;
+    const isRelevant = (t: BotGroupThreadSummary) => !!(t.participated || t.mentionedMe || t.following || t.unread.mentioned);
+    const relevant = summaries.filter(isRelevant).slice(0, THREAD_RELEVANT_LIMIT);
+    const relevantIds = new Set(relevant.map(t => t.rootId));
+    const remainingBudget = Math.max(0, THREAD_LIST_LIMIT - relevant.length);
+    const others = remainingBudget > 0 ? summaries.filter(t => !relevantIds.has(t.rootId)).slice(0, remainingBudget) : [];
+    return [...relevant, ...others].sort(sortSummaries);
   }
   /**
    * The quoted message as this member reads it from the server: the room scopes the read,
@@ -2158,7 +2332,8 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     const attentionConnection = snapshotConnection;
     const o = z.object({ conversationKind: z.literal('direct').optional(), beforeSequence: z.number().int().positive().optional(), limit: z.number().int().min(1).max(100).optional(),
       sourceMessageIds: z.array(id).optional(),
-      shownShares: z.array(z.object({ id, messageId: id, threadRootId: id, sharerId: z.string().min(1).max(200).optional() })).optional() }).parse(options ?? {});
+      shownShares: z.array(z.object({ id, messageId: id, threadRootId: id, sharerId: z.string().min(1).max(200).optional() })).optional(),
+      includeHistoricalThreads: z.boolean().optional() }).parse(options ?? {});
     const query = new URLSearchParams({ limit: String(o.limit ?? 100) });
     if (o.beforeSequence) query.set('before', String(o.beforeSequence));
     // Independent reads share a round trip. Each is awaited in the former serial order, so the
@@ -2292,7 +2467,10 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       && (!m.threadRootId || m.mentions?.includes(selfId) || s.reads?.some(read => read.thread_key === m.threadRootId && read.following))
       && BigInt(m.seq) > (reads.get(m.threadRootId ?? 'main') ?? 0n)) : null;
     if (reads) for (const view of [...messages, ...(messageUpdates ?? [])]) if (!view.threadRootId && (view.replyCount ?? 0) > 0) view.threadUnread = threadUnread(view.id, s.messages, reads, s.mentionReadIds);
-    const threadList = reads && !direct ? threadSummaries(roomId, s, page, reads) : undefined;
+    const hydrateHistorical = !direct && !summaryOnly && o.includeHistoricalThreads === true;
+    if (hydrateHistorical) startThreadHistoryBackfill(roomId, s, page);
+    const threadList = reads && !direct ? threadSummaries(roomId, s, page, reads, hydrateHistorical) : undefined;
+    const threadsSyncing = hydrateHistorical && (threadBackfillState.get(roomId)?.status === 'running' || threads.hasPending(roomId));
     messages.sort((a, b) => a.sequence - b.sequence);
     const last = latestBotGroupMessage(s.messages);
     const lastView = last ? messageView(last, s.members, ownerMembers) : null;
@@ -2338,7 +2516,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       createdAt: Date.parse(s.room.created_at), updatedAt: Date.parse(s.room.updated_at ?? s.room.created_at),
       ...(metadataRetryAt ? { metadataRetryAt } : {}),
       messages, ...(projection ? { historyRevision: projection.generation, messageUpdates } : {}), executionFailures, ...(threadShareUpdates && Object.keys(threadShareUpdates).length ? { threadShareUpdates } : {}),
-      ...(shares ? { threadShareVersion: shares.version } : {}), ...(threadList ? { threads: threadList } : {}), hasMoreBefore: page.length === (o.limit ?? 100), plans,
+      ...(shares ? { threadShareVersion: shares.version } : {}), ...(threadList ? { threads: threadList } : {}), ...(threadsSyncing ? { threadsSyncing: true } : {}), hasMoreBefore: page.length === (o.limit ?? 100), plans,
       round: { canStop: !!deciding || serverPlans.some(p => canStopBotGroupPlan(p, selfId, (bot, requester) => mayStopWork(s.members, bot, requester)) && ['proposed', 'running', 'waiting'].includes(p.status)) || executions.some(e => ['queued', 'running', 'needs_input'].includes(e.status)
           && mayStopWork(s.members, e.bot_id, e.requester_id)),
         status: deciding || executions.some(e => ['queued', 'running', 'needs_input', 'stopping'].includes(e.status)) ? 'running' : 'idle', speakers,
@@ -4180,6 +4358,8 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
         operationId:operationId.parse(input.operationId),messageIds:z.array(id).min(1).max(100).parse(input.readIds)});
       if (input.readIds) changed(groupId);
       const page=await api<{messages:Array<Message & {reply?:{content:Message['content'];maskAttribution:NonNullable<Message['maskAttribution']>} | null}>;hasMore:boolean}>(`/conversations/${groupId}/mentions?limit=100${before ? `&before=${before}` : ''}`);
+      const threadMentions = page.messages.filter(m => !!m.threadRootId);
+      if (threadMentions.length && rememberThreadMessages(mentionThreadMessages, groupId, threadMentions) > 0) changed(groupId);
       const mentions:ChatMaskMention[]=page.messages.map(m=>({messageId:m.id,sequence:m.seq,threadRootId:m.threadRootId ?? undefined,
         authorName:m.author.name,text:bodyText(m),...(m.reply ? {reply:{companion:m.reply.maskAttribution.companion,
           text:m.reply.content.map(block=>block.text ?? block.fallback ?? block.caption ?? '').join('\n')}} : {})}));
@@ -4934,7 +5114,8 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       incompleteDetails.clear();
       for (const [timer, finish] of capabilityNoticeRetries) { clearTimeout(timer); finish(); }
       capabilityNoticeRetries.clear();
-      threads.dispose(); clearInterval(timer); clearInterval(heartbeat); clearTimeout(reconnect); workPolling.dispose(); socket?.close();
+      threads.dispose(); mentionThreadMessages.clear(); backfilledThreadMessages.clear(); threadBackfillState.clear();
+      clearInterval(timer); clearInterval(heartbeat); clearTimeout(reconnect); workPolling.dispose(); socket?.close();
       textProgress.clear();
       companion?.dispose(); companion = undefined; deps.companionCloud?.homes.reset();
       for (const refresh of attachmentRefreshes.values()) clearTimeout(refresh);

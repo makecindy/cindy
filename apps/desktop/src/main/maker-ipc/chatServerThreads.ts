@@ -9,7 +9,15 @@
  * Shares: a share card only names a reply. Its author, text and files always come from
  * the server's copy of that reply, which the server checks against this reader's access.
  */
-import { BOT_GROUP_THREAD_PREVIEW_REPLIES, BOT_GROUP_THREAD_PREVIEW_RESPONDERS, readBotGroupThreadShareCard } from '../../shared/botGroupChat.js';
+import {
+  BOT_GROUP_THREAD_PREVIEW_REPLIES,
+  BOT_GROUP_THREAD_PREVIEW_RESPONDERS,
+  readBotGroupLiveTaskCard,
+  readBotGroupProcessCard,
+  readBotGroupQuoteCard,
+  readBotGroupTaskCard,
+  readBotGroupThreadShareCard,
+} from '../../shared/botGroupChat.js';
 
 export interface ThreadMessage {
   id: string; seq: string; authorId: string; deleted: boolean; threadRootId: string | null;
@@ -31,6 +39,8 @@ const FALLBACK_PAGE = 6;
 /** A thread whose newest replies are mostly deleted reads back at most this far. */
 const FALLBACK_PAGES = 4;
 const SNAPSHOT_WINDOW = 100;
+const SUMMARY_PAGE_LIMIT = 100;
+const SUMMARY_PAGE_CACHE_LIMIT = 120;
 
 async function eachLimited<T>(items: readonly T[], run: (item: T) => Promise<void>) {
   let next = 0;
@@ -52,6 +62,7 @@ export function createThreadProjection<M extends ThreadMessage>(io: {
   filled(roomId: string): void;
 }) {
   const previews = new Map<string, { replyCount: number; replies: M[] }>();
+  const summaryPages = new Map<string, { replyCount: number; replies: M[] }>();
   const sources = new Map<string, M | null>();
   const retryAt = new Map<string, number>();
   const inFlight = new Set<string>();
@@ -209,18 +220,70 @@ export function createThreadProjection<M extends ThreadMessage>(io: {
       });
       return result;
     },
+    /**
+     * Replies for historical or partially windowed Threads in the in-group 话题 index.
+     * Missing threads hydrate in the background (up to 100 replies each) and notify via `filled(roomId)`.
+     */
+    summaryReplies(
+      roomId: string,
+      entries: ReadonlyArray<{ rootId: string; expectedReplyCount?: number; knownReplies: readonly M[] }>,
+      completeSnapshot: boolean,
+    ): Map<string, M[]> {
+      const summaryKey = (id: string) => `${roomId}:summary:${id}`;
+      const result = new Map<string, M[]>();
+      const missing: Array<{ cacheKey: string; item: { rootId: string; target: number } }> = [];
+      for (const { rootId, expectedReplyCount, knownReplies } of entries) {
+        const target = expectedReplyCount ?? 0;
+        if (completeSnapshot || (target > 0 && knownReplies.length >= Math.min(target, SUMMARY_PAGE_LIMIT))) {
+          result.set(rootId, [...knownReplies]);
+          continue;
+        }
+        const cacheKey = summaryKey(rootId);
+        const cached = summaryPages.get(cacheKey);
+        if (cached && (target === 0 || cached.replyCount >= Math.min(target, SUMMARY_PAGE_LIMIT))) {
+          summaryPages.delete(cacheKey);
+          summaryPages.set(cacheKey, cached);
+          result.set(rootId, cached.replies);
+        } else if (!waiting(cacheKey)) {
+          missing.push({ cacheKey, item: { rootId, target } });
+        }
+      }
+      fill(roomId, missing, async ({ rootId, target }) => {
+        const batch = await io.threadPage(roomId, rootId, SUMMARY_PAGE_LIMIT);
+        const visible = batch.filter(message => !message.deleted);
+        return () => {
+          const cacheKey = summaryKey(rootId);
+          summaryPages.delete(cacheKey);
+          summaryPages.set(cacheKey, { replyCount: Math.max(target, visible.length), replies: visible });
+          while (summaryPages.size > SUMMARY_PAGE_CACHE_LIMIT) {
+            const oldest = summaryPages.keys().next().value;
+            if (oldest === undefined) break;
+            summaryPages.delete(oldest);
+          }
+        };
+      });
+      return result;
+    },
+    /** True while any background source/reply hydration for this room is still in flight. */
+    hasPending(roomId: string): boolean {
+      for (const cacheKey of inFlight) if (cacheKey.startsWith(`${roomId}:`)) return true;
+      return false;
+    },
     /** An edited or deleted message may be a cached reply or share source. */
     invalidate(roomId: string, messageId: string) {
       roomGenerations.set(roomId, (roomGenerations.get(roomId) ?? 0) + 1);
       sources.delete(key(roomId, messageId));
+      summaryPages.delete(`${roomId}:summary:${messageId}`);
       // Failed preview pages have no cached replies to identify their root. Invalidate
       // their backoff with this room generation too; other rooms keep their deadlines.
       for (const cacheKey of failures.keys()) if (cacheKey.startsWith(`${roomId}:`)) settledRetry(roomId, cacheKey);
       for (const [cacheKey, entry] of previews)
         if (cacheKey.startsWith(`${roomId}:`) && entry.replies.some(reply => reply.id === messageId)) previews.delete(cacheKey);
+      for (const [cacheKey, entry] of summaryPages)
+        if (cacheKey.startsWith(`${roomId}:summary:`) && entry.replies.some(reply => reply.id === messageId)) summaryPages.delete(cacheKey);
     },
     /** Pushes may have been missed while disconnected. */
-    reset() { epoch += 1; previews.clear(); sources.clear(); retryAt.clear(); cancelRetries(); },
+    reset() { epoch += 1; previews.clear(); summaryPages.clear(); sources.clear(); retryAt.clear(); cancelRetries(); },
     /** The adapter is gone (account switch or quit): no wake-up may outlive it. */
     dispose() { epoch += 1; cancelRetries(); },
     /** Raised by every reset and by invalidations in this room; views checked at an older one may be stale. */
@@ -238,10 +301,18 @@ export function isShareableThreadReply(message: ThreadMessage): boolean {
 
 const THREAD_PREVIEW_TEXT_MAX = 280;
 
-/** Reply text for a one-line preview; files are listed separately. */
+/** Reply text for a one-line preview; quote/process/task cards and media are excluded and Markdown links become plain labels. */
 export function threadPreviewText(message: ThreadMessage): string {
-  const text = message.content.flatMap(block => block.type === 'media' ? [] : [block.text ?? block.fallback ?? '']).join(' ')
-    .replace(/\s+/g, ' ').trim();
+  const text = message.content
+    .flatMap(block => {
+      if (block.type === 'media') return [];
+      if (readBotGroupQuoteCard(block) || readBotGroupProcessCard(block) || readBotGroupTaskCard(block) || readBotGroupLiveTaskCard(block)) return [];
+      return [block.text ?? block.fallback ?? ''];
+    })
+    .join(' ')
+    .replace(/\[([^\]]+)\]\((?:https?:\/\/|mailto:)[^)\s]+(?:\s+"[^"]*")?\)/g, '$1')
+    .replace(/\s+/g, ' ')
+    .trim();
   if (text.length <= THREAD_PREVIEW_TEXT_MAX) return text;
   // Never split a surrogate pair (emoji and other astral characters are two UTF-16 units).
   const high = text.charCodeAt(THREAD_PREVIEW_TEXT_MAX - 1);

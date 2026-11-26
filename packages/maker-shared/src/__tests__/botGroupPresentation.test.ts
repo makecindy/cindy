@@ -20,11 +20,16 @@ import {
   botGroupNewMessageCount,
   botGroupActivityAt,
   latestBotGroupMessage,
+  botGroupCodeRefLabel,
+  extractBotGroupThreadCodeRefsFromMessages,
   filterBotGroupThreads,
   hasActionableGroupThreads,
   isBotGroupThreadActionable,
   isBotGroupThreadMine,
+  pickBotGroupThreadDisplayRefs,
 } from '../botGroupPresentation.js';
+import { buildBotGroupQuoteCard } from '../botGroupQuote.js';
+import { buildBotGroupLiveTaskCard } from '../botGroupTask.js';
 import { chatGroupTalkRouteKey, groupLaneOfRouteKey, isChatOnlyGroupLane, BOT_GROUP_RUNTIME_FAILURE_CODES, readBotGroupExecutionFailure, type BotGroupErrorCode, type BotGroupExecutionFailureView, type BotGroupMemberView, type BotGroupMessageView, type BotGroupNoticeCode, type BotGroupOpenPlanSummary, type BotGroupPlanStepStatus, type BotGroupPlanView, type BotGroupSummary, type BotGroupThreadSummary } from '../botGroupChat.js';
 
 describe('group list activity', () => {
@@ -533,10 +538,6 @@ describe('in-group thread index filtering and quiet unread projection', () => {
     expect(mine.unread.map(t => t.rootId)).toEqual(['followed-unread', 'unread-mention']);
     expect(mine.recent.map(t => t.rootId)).toEqual(['participated-quiet', 'read-mention']);
 
-    const mentions = filterBotGroupThreads(threads, 'mentions', '');
-    expect(mentions.unread.map(t => t.rootId)).toEqual(['unread-mention']);
-    expect(mentions.recent.map(t => t.rootId)).toEqual(['read-mention']);
-
     const all = filterBotGroupThreads(threads, 'all', '');
     expect(all.unread.map(t => t.rootId)).toEqual(['followed-unread', 'unread-mention']);
     expect(all.recent.map(t => t.rootId)).toEqual(['unrelated', 'participated-quiet', 'read-mention']);
@@ -552,5 +553,54 @@ describe('in-group thread index filtering and quiet unread projection', () => {
     expect(hasActionableGroupThreads([threads[0]!, threads[1]!, threads[4]!])).toBe(false);
     expect(hasActionableGroupThreads([threads[2]!], null)).toBe(true);
     expect(hasActionableGroupThreads([threads[2]!], 'unread-mention')).toBe(false);
+  });
+
+  it('extracts newest PR/MR and Issue links from thread messages, skips quote cards, and matches ref numbers in search', () => {
+    const refs = extractBotGroupThreadCodeRefsFromMessages([
+      // Newest reply: newer PR supersedes older PR; live task card also carries a PR URL.
+      {
+        content: [
+          { type: 'text', text: 'Updated in [PR #13080](https://github.com/makecindy/cindy/pull/13080/files) and https://git.internal.example/team/cindy/-/merge_requests/42' },
+          buildBotGroupLiveTaskCard({
+            taskId: 'task-1',
+            deviceId: 'dev-1',
+            title: 'Ship fix',
+            state: 'done',
+            requesterName: 'Alice',
+            botName: 'Cindy',
+            prUrl: 'https://github.com/makecindy/cindy/pull/13097',
+          }, { task: 'Task', untitled: 'Task', states: { running: 'Running', waiting: 'Waiting', done: 'Done', failed: 'Failed', stopped: 'Stopped' } }),
+        ],
+      },
+      // Older reply: quoted link is ignored, real older PR & issue are collected.
+      {
+        content: [
+          buildBotGroupQuoteCard({
+            messageId: '20000000-0000-4000-8000-000000000001',
+            authorName: 'Alice',
+            authorKind: 'user',
+            excerpt: 'https://github.com/makecindy/cindy/issues/9999',
+            attachmentCount: 0,
+            attachmentName: null,
+            sequence: 1,
+          }),
+          { type: 'text', text: 'Follows https://github.com/makecindy/cindy/issues/13022#issuecomment-1 and https://github.com/makecindy/cindy/pull/13031' },
+        ],
+      },
+    ]);
+    expect(refs.map(ref => `${ref.kind}:${botGroupCodeRefLabel(ref)}`)).toEqual([
+      'pr:#13080',
+      'pr:!42',
+      'pr:#13097',
+      'issue:#13022',
+      'pr:#13031',
+    ]);
+    const display = pickBotGroupThreadDisplayRefs(refs);
+    expect(display.pr?.number).toBe(13080);
+    expect(display.issue?.number).toBe(13022);
+
+    const withRefs = thread({ rootId: 'has-refs', participated: true, refs });
+    expect(filterBotGroupThreads([withRefs, threads[4]!], 'mine', '#13080').recent.map(t => t.rootId)).toEqual(['has-refs']);
+    expect(filterBotGroupThreads([withRefs, threads[4]!], 'mine', '13022').recent.map(t => t.rootId)).toEqual(['has-refs']);
   });
 });

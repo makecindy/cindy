@@ -757,6 +757,7 @@ function BotGroupChatContent({ deviceId, deviceName, groupId, messageId, notific
     Keyboard.dismiss();
     if (filter) setThreadListFilter(filter);
     setThreadsOpen(true);
+    chat.backfillThreads?.();
   };
   const threadsButton = canBrowseThreads ? (
     <HomeHeaderGlassButton
@@ -950,7 +951,7 @@ function BotGroupChatContent({ deviceId, deviceName, groupId, messageId, notific
               const single = actionableThreads[0]!;
               openTopic(single.rootId, single.unread.mentioned ? single.lastMention?.messageId : undefined);
             } else {
-              openThreadsIndex(actionableThreads.some(thread => thread.unread.mentioned) ? 'mentions' : 'mine');
+              openThreadsIndex('mine');
             }
           },
         }} /> : null}
@@ -1036,6 +1037,7 @@ function BotGroupChatContent({ deviceId, deviceName, groupId, messageId, notific
         threads={group?.threads ?? []}
         filter={threadListFilter}
         onFilterChange={setThreadListFilter}
+        syncing={chat.threadsSyncing}
         identityFor={identityFor}
         onSelect={(rootId, focusMessageId) => {
           openThreadAfterIndex.current = { rootId, messageId: focusMessageId };

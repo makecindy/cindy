@@ -4,6 +4,10 @@
  * 该用哪一句文案（各端按自己的 i18n 命名空间拼 key）。只依赖群聊契约，不碰 React 与 IPC。
  */
 import { RichAnswerStream, splitRichAnswer, richMarkdown, richString, richLabel, richResolvedValues, richChart, richOptions, richCalculationUnavailable } from './richAnswer.js';
+import { readBotGroupProcessCard } from './botGroupProcess.js';
+import { readBotGroupQuoteCard } from './botGroupQuote.js';
+import { readBotGroupLiveTaskCard, readBotGroupTaskCard } from './botGroupTask.js';
+import { isPrHost } from './sessionPrRefs.js';
 import {
   isBotGroupPlanOpen,
   isBotGroupCapabilityNoticeCode,
@@ -18,6 +22,7 @@ import {
   type BotGroupPlanView,
   type BotGroupReplyMode,
   type BotGroupSummary,
+  type BotGroupThreadCodeRef,
   type BotGroupThreadSummary,
 } from './botGroupChat.js';
 
@@ -569,7 +574,7 @@ export function botGroupQueueWindow(plan: BotGroupPlanView): { start: number; en
 
 // ---- In-group 话题 index (Desktop + Mobile) ---------------------------------------------
 
-export type BotGroupThreadFilter = 'mine' | 'mentions' | 'all';
+export type BotGroupThreadFilter = 'mine' | 'all';
 
 /** Threads the reader participated in, was mentioned in (read or unread), or explicitly follows. */
 export function isBotGroupThreadMine(thread: BotGroupThreadSummary): boolean {
@@ -600,6 +605,135 @@ export function botGroupThreadActivityAt(thread: BotGroupThreadSummary): number 
   return candidates.reduce<number>((latest, value) => (typeof value === 'number' && Number.isFinite(value) ? Math.max(latest, value) : latest), 0);
 }
 
+const THREAD_GH_CODE_REF_RE =
+  /https?:\/\/(?:www\.)?github\.com\/([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)\/(pull|issues)\/([1-9]\d*)\b/gi;
+const THREAD_GL_CODE_REF_RE =
+  /https:\/\/([^/\s<>"'`]+)\/((?:[A-Za-z0-9_.-]+\/)+)([A-Za-z0-9_.-]+)\/-\/(merge_requests|issues)\/([1-9]\d*)\b/gi;
+
+/**
+ * Deterministically extracts GitHub PR/Issue and GitLab MR/Issue URLs from thread texts.
+ * Callers pass texts newest-first (latest replies -> older replies -> root) so the first item
+ * of each kind is the thread's most recent PR or Issue. Bare `#123` mentions are never guessed.
+ */
+export function extractBotGroupThreadCodeRefs(
+  texts: readonly string[],
+  limit = 8,
+): BotGroupThreadCodeRef[] {
+  const seen = new Set<string>();
+  const refs: BotGroupThreadCodeRef[] = [];
+  for (const text of texts) {
+    if (!text) continue;
+    const candidates: Array<{ index: number; ref: BotGroupThreadCodeRef }> = [];
+    for (const match of text.matchAll(THREAD_GH_CODE_REF_RE)) {
+      const owner = match[1]!.toLowerCase();
+      const repo = match[2]!.replace(/\.git$/i, '').toLowerCase();
+      const kind: 'issue' | 'pr' = match[3]!.toLowerCase() === 'pull' ? 'pr' : 'issue';
+      const number = Number(match[4]);
+      if (!Number.isSafeInteger(number) || number <= 0) continue;
+      if (`${owner}/${repo}`.split('/').some(part => part === '.' || part === '..')) continue;
+      candidates.push({
+        index: match.index ?? 0,
+        ref: {
+          kind,
+          provider: 'github',
+          host: 'github.com',
+          owner,
+          repo,
+          number,
+          url: `https://github.com/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/${kind === 'pr' ? 'pull' : 'issues'}/${number}`,
+        },
+      });
+    }
+    for (const match of text.matchAll(THREAD_GL_CODE_REF_RE)) {
+      const host = match[1]!.toLowerCase();
+      const owner = match[2]!.slice(0, -1).toLowerCase();
+      const repo = match[3]!.toLowerCase();
+      const kind: 'issue' | 'pr' = match[4]!.toLowerCase() === 'merge_requests' ? 'pr' : 'issue';
+      const number = Number(match[5]);
+      if (!isPrHost(host) || !Number.isSafeInteger(number) || number <= 0) continue;
+      if (`${owner}/${repo}`.split('/').some(part => part === '.' || part === '..')) continue;
+      const project = `${owner}/${repo}`.split('/').map(encodeURIComponent).join('/');
+      candidates.push({
+        index: match.index ?? 0,
+        ref: {
+          kind,
+          provider: 'gitlab',
+          host,
+          owner,
+          repo,
+          number,
+          url: `https://${host}/${project}/-/${kind === 'pr' ? 'merge_requests' : 'issues'}/${number}`,
+        },
+      });
+    }
+    for (const { ref } of candidates.sort((a, b) => a.index - b.index)) {
+      const key = `${ref.kind}:${ref.provider ?? 'github'}:${(ref.host ?? 'github.com').toLowerCase()}/${ref.owner}/${ref.repo}#${ref.number}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      refs.push(ref);
+      if (refs.length >= limit) return refs;
+    }
+  }
+  return refs;
+}
+
+/** Extracts PR/Issue links from structured chat messages (newest-first), skipping quote/process cards and including task-card PR URLs. */
+export function extractBotGroupThreadCodeRefsFromMessages(
+  messages: readonly {
+    content: readonly {
+      type?: unknown;
+      text?: unknown;
+      fallback?: unknown;
+      namespace?: unknown;
+      schemaRevision?: unknown;
+      data?: unknown;
+    }[];
+  }[],
+  limit = 8,
+): BotGroupThreadCodeRef[] {
+  const texts: string[] = [];
+  for (const message of messages) {
+    for (const block of message.content) {
+      if (block.type === 'media') continue;
+      if (readBotGroupQuoteCard(block) || readBotGroupProcessCard(block) || readBotGroupTaskCard(block)) continue;
+      const liveTask = readBotGroupLiveTaskCard(block);
+      if (liveTask) {
+        if (liveTask.prUrl) texts.push(liveTask.prUrl);
+        continue;
+      }
+      const value = typeof block.text === 'string'
+        ? block.text
+        : typeof block.fallback === 'string'
+          ? block.fallback
+          : '';
+      if (value) texts.push(value);
+    }
+  }
+  return extractBotGroupThreadCodeRefs(texts, limit);
+}
+
+/** Picks at most 1 latest Issue and 1 latest PR for compact sidebar-style row display. */
+export function pickBotGroupThreadDisplayRefs(
+  refs: readonly BotGroupThreadCodeRef[] | undefined,
+): { issue: BotGroupThreadCodeRef | null; pr: BotGroupThreadCodeRef | null } {
+  if (!refs?.length) return { issue: null, pr: null };
+  let issue: BotGroupThreadCodeRef | null = null;
+  let pr: BotGroupThreadCodeRef | null = null;
+  for (const ref of refs) {
+    if (ref.kind === 'issue' && !issue) issue = ref;
+    else if (ref.kind === 'pr' && !pr) pr = ref;
+    if (issue && pr) break;
+  }
+  return { issue, pr };
+}
+
+/** Compact number label matching sidebar PR chips (`#13107` / `!42`). */
+export function botGroupCodeRefLabel(
+  ref: Pick<BotGroupThreadCodeRef, 'kind' | 'provider' | 'number'>,
+): string {
+  return `${ref.kind === 'pr' && ref.provider === 'gitlab' ? '!' : '#'}${ref.number}`;
+}
+
 function matchesBotGroupThreadQuery(thread: BotGroupThreadSummary, needle: string): boolean {
   if (!needle) return true;
   const fields = [
@@ -610,6 +744,7 @@ function matchesBotGroupThreadQuery(thread: BotGroupThreadSummary, needle: strin
     thread.lastMention?.text,
     thread.lastMention?.authorName,
     ...(thread.responders?.map(responder => responder.authorName) ?? []),
+    ...(thread.refs?.flatMap(ref => [botGroupCodeRefLabel(ref), `${ref.owner}/${ref.repo}`]) ?? []),
   ];
   return fields.some(field => typeof field === 'string' && field.toLocaleLowerCase().includes(needle));
 }
@@ -620,7 +755,7 @@ function compareBotGroupThreadsByActivity(a: BotGroupThreadSummary, b: BotGroupT
 
 /**
  * Projects a group's threads for the quiet in-group 话题 index:
- * - Filters by scope (`mine` / `mentions` / `all`) and search query.
+ * - Filters by scope (`mine` / `all`) and search query.
  * - Keeps actionable unread threads in a compact leading section without letting old unreads
  *   corrupt chronological order in the main list.
  */
@@ -633,7 +768,6 @@ export function filterBotGroupThreads(
   const needle = query.trim().toLocaleLowerCase();
   const matched = threads.filter((thread) => {
     if (filter === 'mine' && !isBotGroupThreadMine(thread)) return false;
-    if (filter === 'mentions' && !(thread.mentionedMe === true || thread.unread.mentioned === true)) return false;
     return matchesBotGroupThreadQuery(thread, needle);
   });
   const unread: BotGroupThreadSummary[] = [];

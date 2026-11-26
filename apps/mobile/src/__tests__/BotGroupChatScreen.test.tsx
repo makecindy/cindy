@@ -181,7 +181,7 @@ vi.mock('react-i18next', async (importOriginal) => {
 });
 vi.mock('expo-crypto', () => ({ randomUUID: () => `uuid-${++h.uuid}` }));
 vi.mock('lucide-react-native', () => Object.fromEntries(
-  ['Copy', 'Share', 'ArrowUpRight', 'CornerDownRight', 'Circle', 'Bell', 'BellRing', 'ChevronLeft', 'MessagesSquare', 'Search', 'Settings2', 'Plus', 'Square', 'Users', 'X', 'Check', 'CircleAlert', 'CircleCheck', 'CircleDashed', 'FileText', 'Sparkles', 'Folder', 'Camera', 'Image',
+  ['Copy', 'Share', 'ArrowUpRight', 'CornerDownRight', 'Circle', 'CircleDot', 'GitPullRequest', 'Bell', 'BellRing', 'ChevronLeft', 'MessagesSquare', 'Search', 'Settings2', 'Plus', 'Square', 'Users', 'X', 'Check', 'CircleAlert', 'CircleCheck', 'CircleDashed', 'FileText', 'Sparkles', 'Folder', 'Camera', 'Image',
     'Minus', 'ChevronUp', 'CircleMinus', 'Layers', 'ListChecks', 'ListTodo', 'Ellipsis', 'ChevronRight', 'ChevronDown', 'Reply', 'SlidersHorizontal', 'UserPlus']
     .map((name) => [name, () => null]),
 ));
@@ -3706,7 +3706,7 @@ it.each([undefined, 'topic-a'])('keeps group stopping when only topic work exist
 });
 
 // Unit: in-group thread index sheet must show quiet header entry + actionable dot,
-// filter by mine/mentions/all + search, and route to lastMention in the mentions tab.
+// filter by mine/all + search, keep rows compact without a latest-reply preview line, and route to lastMention.
 it('opens the in-group thread index sheet, filters tabs and search, and jumps to the mention message', async () => {
   h.chat.server = true;
   const threads = [
@@ -3737,6 +3737,10 @@ it('opens the in-group thread index sheet, filters tabs and search, and jumps to
       mentionedMe: false,
       lastReply: { messageId: 'o-1', authorName: 'Bob', text: 'Unrelated', createdAt: 1_500 },
       responders: [{ id: 'bob', authorName: 'Bob', authorBotId: 'bob' }],
+      refs: [
+        { kind: 'issue' as const, provider: 'github' as const, host: 'github.com', owner: 'makecindy', repo: 'cindy', number: 13022, url: 'https://github.com/makecindy/cindy/issues/13022' },
+        { kind: 'pr' as const, provider: 'github' as const, host: 'github.com', owner: 'makecindy', repo: 'cindy', number: 13080, url: 'https://github.com/makecindy/cindy/pull/13080' },
+      ],
       unread: { count: 0, mentioned: false },
     },
   ];
@@ -3751,16 +3755,21 @@ it('opens the in-group thread index sheet, filters tabs and search, and jumps to
   expect(byId('botGroup.threadIndex.row.root-mention')).not.toBeNull();
   expect(byId('botGroup.threadIndex.row.root-other')).toBeNull();
 
-  // Switch to 'all': both threads appear; search narrows them.
+  // Switch to 'all': both threads appear (including Issue/PR chips); search narrows them.
   await click('botGroup.threadIndex.filter.all');
   expect(byId('botGroup.threadIndex.row.root-other')).not.toBeNull();
+  expect(byId('botGroup.threadIndex.ref.issue.root-other')).not.toBeNull();
+  expect(byId('botGroup.threadIndex.ref.pr.root-other')).not.toBeNull();
   await act(async () => h.inputs['botGroup.threadIndex.search'].onChangeText('chatter'));
   expect(byId('botGroup.threadIndex.row.root-other')).not.toBeNull();
   expect(byId('botGroup.threadIndex.row.root-mention')).toBeNull();
   await act(async () => h.inputs['botGroup.threadIndex.search'].onChangeText(''));
 
-  // Switch to 'mentions' and tap the mentioned thread: navigates with lastMention.messageId.
-  await click('botGroup.threadIndex.filter.mentions');
+  // Simplified 2-tab filter: For me | All (no separate @me tab).
+  expect(byId('botGroup.threadIndex.filter.mentions')).toBeNull();
+
+  // Switch back to 'mine' and tap the mentioned thread: navigates with lastMention.messageId.
+  await click('botGroup.threadIndex.filter.mine');
   expect(byId('botGroup.threadIndex.row.root-mention')).not.toBeNull();
   expect(byId('botGroup.threadIndex.row.root-other')).toBeNull();
   await click('botGroup.threadIndex.row.root-mention');

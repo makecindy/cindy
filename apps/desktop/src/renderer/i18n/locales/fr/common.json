@@ -12369,7 +12369,6 @@
           "unfollowTip": "Ne plus suivre : vous ne serez averti que si quelqu'un vous mentionne",
           "listLabel": "Fils de cette conversation de groupe",
           "listNews": "Nouvelles réponses",
-          "listOthers": "Autres fils",
           "newSeparator": "Nouvelles réponses",
           "open_many": "Ouvrir le fil, {{count}} réponses",
           "alsoSendFailed_many": "{{count}} réponses figurent dans le fil, mais elles n'ont pas pu être envoyées dans la conversation principale.",
@@ -12380,7 +12379,6 @@
           "backToList": "Retour aux fils",
           "filterAria": "Filtrer les fils",
           "filterMine": "Pour moi",
-          "filterMentions": "@moi",
           "filterAll": "Tous",
           "searchPlaceholder": "Rechercher des fils, réponses ou membres",
           "clearSearch": "Effacer la recherche",
@@ -12389,10 +12387,10 @@
           "indexMentionedTag": "Mentionné",
           "locateInGroup": "Afficher dans le groupe",
           "indexEmptyMine": "Aucun fil auquel vous avez participé ou où vous avez été mentionné",
-          "indexEmptyMentions": "Aucun fil vous mentionnant pour le moment",
           "indexEmptyAll": "Aucun fil dans ce groupe pour le moment",
           "indexEmptySearch": "Aucun fil correspondant",
-          "viewAllThreads": "Voir tous les fils"
+          "viewAllThreads": "Voir tous les fils",
+          "syncingHistory": "Chargement des fils précédents…"
         },
         "replyPlaceholder": "Répondre à ce message ; utilisez @ pour mentionner un ami…",
         "sendReply": "Envoyer la réponse",

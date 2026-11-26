@@ -1388,21 +1388,57 @@ it.each([10, 11].flatMap(requester => ['running', 'stopping'].map(status => ({ r
 // Unit: bot-group-chat.md §10 in-group 话题 index on mobile direct groups.
 // Verifies participated, mentionedMe, lastMention, responders and unread projection survive read.
 it('projects group thread summaries with participation and persistent @mention targets', () => {
-  const root = { ...message(20), authorId: id(11), author: { kind: 'human', name: 'Peer' }, replyCount: 2, content: [{ type: 'text', text: 'Release checklist' }] };
-  const myReply = { ...message(21), authorId: id(10), author: { kind: 'human', name: 'Me' }, threadRootId: root.id, content: [{ type: 'text', text: 'I will check iOS' }] };
+  const root = { ...message(20), authorId: id(11), author: { kind: 'human', name: 'Peer' }, replyCount: 2, content: [{ type: 'text', text: 'Release checklist https://github.com/makecindy/cindy/issues/13022' }] };
+  const myReply = { ...message(21), authorId: id(10), author: { kind: 'human', name: 'Me' }, threadRootId: root.id, content: [{ type: 'text', text: 'I will check iOS https://github.com/makecindy/cindy/pull/13080' }] };
   const mentionReply = { ...message(22), authorId: id(11), author: { kind: 'human', name: 'Peer' }, threadRootId: root.id, mentions: [id(10)], content: [{ type: 'text', text: '@Me ready to ship?' }] };
   const snap = { ...snapshot(), messages: [mentionReply, myReply, root], reads: [{ thread_key: root.id, read_seq: mentionReply.seq, following: false }] };
   const view = chatGroupView({ snapshot: snap, messages: [root], before: null }, id(10));
   expect(view.threads).toEqual([expect.objectContaining({
     rootId: root.id,
-    rootText: 'Release checklist',
+    rootText: 'Release checklist https://github.com/makecindy/cindy/issues/13022',
     replyCount: 2,
     participated: true,
     mentionedMe: true,
     following: false,
     unread: { count: 0, mentioned: false },
+    refs: [
+      expect.objectContaining({ kind: 'pr', number: 13080, url: 'https://github.com/makecindy/cindy/pull/13080' }),
+      expect.objectContaining({ kind: 'issue', number: 13022, url: 'https://github.com/makecindy/cindy/issues/13022' }),
+    ],
     lastMention: expect.objectContaining({ messageId: mentionReply.id, text: '@Me ready to ship?' }),
     lastReply: expect.objectContaining({ text: '@Me ready to ship?' }),
   })]);
   expect(view.threads?.[0]?.responders?.map(r => r.authorBotId)).toEqual([id(10), id(11)]);
+
+  // Broadcast @everyone / @humans replies do not mark mentionedMe in the thread index.
+  const broadcastReply = { ...message(23), authorId: id(11), author: { kind: 'human', name: 'Peer' }, threadRootId: root.id, mentions: [id(10)], mentionAudience: 'humans' as const, content: [{ type: 'text', text: '@所有人 check update' }] };
+  const broadcastSnap = { ...snapshot(), messages: [broadcastReply, root], reads: [{ thread_key: root.id, read_seq: broadcastReply.seq, following: false }] };
+  const broadcastView = chatGroupView({ snapshot: broadcastSnap, messages: [root], before: null }, id(10));
+  expect(broadcastView.threads?.[0]?.mentionedMe).toBeUndefined();
+  expect(broadcastView.threads?.[0]?.lastMention).toBeUndefined();
+});
+
+it('backfills historical threads from older pages and snapshot reads on mobile', async () => {
+  const oldRoot = { ...message(5), id: id(50), seq: '5', authorId: id(11), author: { kind: 'human', name: 'Peer' }, replyCount: 2, content: [{ type: 'text', text: 'Historical topic' }] };
+  const oldMyReply = { ...message(6), id: id(51), seq: '6', authorId: id(10), author: { kind: 'human', name: 'Me' }, threadRootId: oldRoot.id, content: [{ type: 'text', text: 'Joined earlier' }] };
+  const oldMention = { ...message(7), id: id(52), seq: '7', authorId: id(11), author: { kind: 'human', name: 'Peer' }, threadRootId: oldRoot.id, mentions: [id(10)], content: [{ type: 'text', text: '@Me confirm?' }] };
+  const filler = Array.from({ length: 100 }, (_, i) => ({ ...message(200 + i), id: id(300 + i), seq: String(200 + i), authorId: id(11) })).reverse();
+  const snap = { ...snapshot(), messages: filler, reads: [{ thread_key: 'main', read_seq: '300' }, { thread_key: oldRoot.id, read_seq: '7', following: true }] };
+  const client = createChatServerClient((async (route: string) => {
+    if (route === '/actors') return [{ id: id(10), kind: 'human', name: 'Me' }];
+    if (route.includes('before=200')) return [oldRoot];
+    if (route.includes(`threadRootId=${oldRoot.id}`)) return [oldMention, oldMyReply];
+    if (route.endsWith(`/messages/${oldRoot.id}`)) return oldRoot;
+    return [];
+  }) as unknown as Parameters<typeof createChatServerClient>[0]);
+  const backfilled = await client.backfillThreads(id(1), snap, filler);
+  const view = chatGroupView({ snapshot: snap, messages: filler, cachedMessages: backfilled.messages, threadRoots: backfilled.roots, before: null }, id(10));
+  expect(view.threads).toEqual([expect.objectContaining({
+    rootId: oldRoot.id,
+    rootText: 'Historical topic',
+    participated: true,
+    mentionedMe: true,
+    following: true,
+    lastMention: expect.objectContaining({ messageId: oldMention.id }),
+  })]);
 });

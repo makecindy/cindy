@@ -12369,7 +12369,6 @@
           "unfollowTip": "Deixar de seguir: você só receberá avisos quando alguém mencionar você",
           "listLabel": "Tópicos nesta conversa em grupo",
           "listNews": "Novas respostas",
-          "listOthers": "Outros tópicos",
           "newSeparator": "Novas respostas",
           "open_many": "Abrir discussão, {{count}} respostas",
           "alsoSendFailed_many": "{{count}} respostas estão no tópico, mas não foi possível enviá-las à conversa principal.",
@@ -12380,7 +12379,6 @@
           "backToList": "Voltar aos tópicos",
           "filterAria": "Filtrar tópicos",
           "filterMine": "Para mim",
-          "filterMentions": "@eu",
           "filterAll": "Todos",
           "searchPlaceholder": "Buscar tópicos, respostas ou membros",
           "clearSearch": "Limpar busca",
@@ -12389,10 +12387,10 @@
           "indexMentionedTag": "Mencionado",
           "locateInGroup": "Mostrar no grupo",
           "indexEmptyMine": "Ainda não há tópicos em que você participou ou foi mencionado",
-          "indexEmptyMentions": "Ainda não há tópicos mencionando você",
           "indexEmptyAll": "Ainda não há tópicos neste grupo",
           "indexEmptySearch": "Nenhum tópico correspondente",
-          "viewAllThreads": "Ver todos os tópicos"
+          "viewAllThreads": "Ver todos os tópicos",
+          "syncingHistory": "Carregando tópicos anteriores…"
         },
         "replyPlaceholder": "Responda a esta mensagem; use @ para mencionar um amigo…",
         "sendReply": "Enviar resposta",

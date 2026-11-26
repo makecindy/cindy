@@ -9,7 +9,7 @@ import type { ChatInviteShares } from './chatInviteShare';
 import { createConversationListState } from '@cindy/maker-shared/chatConversationList';
 import type { ChatHistory } from '@cindy/maker-shared/chat-history';
 import { readBotGroupCapabilityNotice, botGroupMessageSummaryText, botGroupQuoteFromMessage, buildBotGroupQuoteCard, readBotGroupExecutionFailure, readBotGroupQuote, readBotGroupQuoteCard, readBotGroupTaskCard, readImportedBotGroupRuntimeFailureCode, type BotGroupAttachment, type BotGroupMemberView, type BotGroupMessageView, type BotGroupRemoteChatData } from '@cindy/maker-shared/botGroupChat';
-import { chatGroupMemberName as memberName, chatGroupOwnerName, botGroupActivityAt, latestBotGroupMessage, botGroupExecutionFailureBatches, projectBotGroupExecutionFailures } from '@cindy/maker-shared/botGroupPresentation';
+import { chatGroupMemberName as memberName, chatGroupOwnerName, botGroupActivityAt, latestBotGroupMessage, botGroupExecutionFailureBatches, projectBotGroupExecutionFailures, extractBotGroupThreadCodeRefsFromMessages } from '@cindy/maker-shared/botGroupPresentation';
 import type { HostedRemoteCollectionItem } from '@/device-link/remoteResources';
 // The app's `@/i18n` sets up this default instance; importing it here would pull React bindings into a plain client.
 import i18next from 'i18next';
@@ -456,6 +456,9 @@ export function chatGroupView(page: ChatPage, selfId: string, actors: readonly C
         rootIds.add(message.id);
       }
     }
+    for (const read of page.snapshot.reads) {
+      if (read.thread_key !== 'main' && poolById.has(read.thread_key)) rootIds.add(read.thread_key);
+    }
     const followed = new Set(page.snapshot.reads.filter(read => read.following).map(read => read.thread_key));
     const isSelfActivity = (message: ChatMessage) => !message.deleted && message.origin !== 'system'
       && (message.authorId === selfId || message.maskAttribution?.self.id === selfId);
@@ -469,15 +472,22 @@ export function chatGroupView(page: ChatPage, selfId: string, actors: readonly C
       const media = chatMessageAttachments(message)[0];
       return media ? media.name : '';
     };
-    return [...rootIds].map((rootId): BotGroupThreadSummary => {
+    const summaries: BotGroupThreadSummary[] = [];
+    for (const rootId of rootIds) {
+      if (page.threadRoots?.[rootId] === null) continue;
       const root = poolById.get(rootId);
+      if (root?.deleted) continue;
       const replies = (repliesByRoot.get(rootId) ?? []).sort(compareSeqDesc);
+      if (root && (root.replyCount ?? 0) === 0 && replies.length === 0) continue;
       const latest = replies[0];
       const participated = (root ? isSelfActivity(root) : false) || replies.some(isSelfActivity);
       const mentions = [
         ...(root && !root.deleted && root.origin !== 'system' ? [root] : []),
         ...replies,
-      ].filter(message => message.authorId !== selfId && message.mentions?.includes(selfId)).sort(compareSeqDesc);
+      ].filter(message => message.authorId !== selfId
+        && message.mentions?.includes(selfId)
+        && message.mentionAudience !== 'humans'
+        && message.mentionAudience !== 'everyone').sort(compareSeqDesc);
       const latestMention = mentions[0];
       const seenResponders = new Set<string>();
       const responders = replies.filter(reply => {
@@ -489,8 +499,12 @@ export function chatGroupView(page: ChatPage, selfId: string, actors: readonly C
         authorBotId: reply.authorId,
         authorName: authorName(reply),
       }));
+      const refs = extractBotGroupThreadCodeRefsFromMessages([
+        ...replies,
+        ...(root && !root.deleted && root.origin !== 'system' ? [root] : []),
+      ]);
       const rootCreatedAt = root ? Date.parse(root.createdAt) : undefined;
-      return {
+      summaries.push({
         rootId,
         rootAuthorName: root ? authorName(root) : '',
         rootAuthorBotId: root ? root.authorId : null,
@@ -510,11 +524,21 @@ export function chatGroupView(page: ChatPage, selfId: string, actors: readonly C
           },
         } : {}),
         ...(responders.length > 0 ? { responders } : {}),
+        ...(refs.length > 0 ? { refs } : {}),
         lastReply: latest ? { authorName: authorName(latest), text: snippetFor(latest), createdAt: Date.parse(latest.createdAt) } : null,
-      };
-    }).sort((a, b) => Number(b.unread.count > 0) - Number(a.unread.count > 0)
-      || (b.lastReply?.createdAt ?? b.rootCreatedAt ?? 0) - (a.lastReply?.createdAt ?? a.rootCreatedAt ?? 0))
-      .slice(0, 50);
+      });
+    }
+    const sortSummaries = (a: BotGroupThreadSummary, b: BotGroupThreadSummary) =>
+      Number(b.unread.count > 0) - Number(a.unread.count > 0)
+      || (b.lastReply?.createdAt ?? b.rootCreatedAt ?? 0) - (a.lastReply?.createdAt ?? a.rootCreatedAt ?? 0);
+    summaries.sort(sortSummaries);
+    if (summaries.length <= 100) return summaries;
+    const isRelevant = (item: BotGroupThreadSummary) => !!(item.participated || item.mentionedMe || item.following || item.unread.mentioned);
+    const relevant = summaries.filter(isRelevant).slice(0, 200);
+    const relevantIds = new Set(relevant.map(item => item.rootId));
+    const remainingBudget = Math.max(0, 100 - relevant.length);
+    const others = remainingBudget > 0 ? summaries.filter(item => !relevantIds.has(item.rootId)).slice(0, remainingBudget) : [];
+    return [...relevant, ...others].sort(sortSummaries);
   })();
   for (const view of messages) {
     const message = known.get(view.id)!;
@@ -600,6 +624,12 @@ export interface ChatAccountIdentity {
   known?: { id: string; at: number; capabilities: ChatMe['capabilities'] };
   reading?: Promise<{ id: string; capabilities: ChatMe['capabilities'] }>;
 }
+
+const THREAD_BACKFILL_PAGE_SIZE = 100;
+const THREAD_BACKFILL_MAX_PAGES = 10;
+const THREAD_HYDRATE_MAX_THREADS = 40;
+const THREAD_HYDRATE_CONCURRENCY = 4;
+const THREAD_BACKFILL_MAX_MESSAGES = 400;
 
 export function createChatServerClient(request: ChatRequest, personalList = createConversationListState(),
   openHistory?: (human: string) => Promise<ChatHistory>, inviteShares?: ChatInviteShares, account: ChatAccountIdentity = {}) {
@@ -1049,6 +1079,111 @@ export function createChatServerClient(request: ChatRequest, personalList = crea
         ...(cachedMessages?.length ? { cachedMessages } : {}),
         ...(threadRootId ? { threadRootId } : {}), failures: executionFailures,
         ...(Array.isArray(executions) ? { executions } : {}) };
+    },
+    /** Bounded historical backfill for the in-group 话题 index without bloating durable room history. */
+    async backfillThreads(roomId: string, snapshot: ChatSnapshot, seedMessages: readonly ChatMessage[], signal?: AbortSignal) {
+      const room = chatId(roomId);
+      const stored = await cache();
+      const byId = new Map<string, ChatMessage>();
+      const put = (m: ChatMessage) => {
+        const existing = byId.get(m.id);
+        if (!existing || (m.revision ?? 0) >= (existing.revision ?? 0)) byId.set(m.id, m);
+      };
+      for (const m of [...(stored?.cachedMessages?.<ChatMessage>(room) ?? []), ...seedMessages, ...snapshot.messages]) put(m);
+      if (seedMessages.length >= THREAD_BACKFILL_PAGE_SIZE || snapshot.messages.length >= THREAD_BACKFILL_PAGE_SIZE) {
+        let minSeq = [...byId.values()].filter(m => !m.threadRootId).reduce<bigint | null>((min, m) => {
+          const seq = BigInt(chatCursor(m.seq));
+          return min === null || seq < min ? seq : min;
+        }, null);
+        for (let step = 0; step < THREAD_BACKFILL_MAX_PAGES && minSeq !== null && minSeq > 1n; step += 1) {
+          if (signal?.aborted) break;
+          const query = new URLSearchParams({ limit: String(THREAD_BACKFILL_PAGE_SIZE), before: String(minSeq) });
+          const batch = await request<ChatMessage[]>(`/conversations/${room}/messages?${query}`, 'GET', undefined, undefined, signal);
+          if (!Array.isArray(batch) || !batch.length) break;
+          for (const m of batch) {
+            if (m.threadRootId || (!m.deleted && (m.replyCount ?? 0) > 0)) put(m);
+          }
+          let nextMin = minSeq;
+          for (const m of batch) {
+            const seq = BigInt(chatCursor(m.seq));
+            if (seq < nextMin) nextMin = seq;
+          }
+          if (batch.length < THREAD_BACKFILL_PAGE_SIZE || nextMin >= minSeq) break;
+          minSeq = nextMin;
+        }
+      }
+      const rootIds = new Set<string>();
+      const priorityRootIds = new Set<string>();
+      const latestSeqByRoot = new Map<string, bigint>();
+      const noteSeq = (rootId: string, seqStr: string) => {
+        const seq = BigInt(chatCursor(seqStr));
+        const prev = latestSeqByRoot.get(rootId);
+        if (prev === undefined || seq > prev) latestSeqByRoot.set(rootId, seq);
+      };
+      for (const m of byId.values()) {
+        if (m.threadRootId) {
+          rootIds.add(m.threadRootId);
+          noteSeq(m.threadRootId, m.seq);
+        } else if (!m.deleted && (m.replyCount ?? 0) > 0) {
+          rootIds.add(m.id);
+          noteSeq(m.id, m.seq);
+        }
+      }
+      for (const read of snapshot.reads ?? []) {
+        if (read.thread_key !== 'main') {
+          rootIds.add(read.thread_key);
+          priorityRootIds.add(read.thread_key);
+        }
+      }
+      const hydrateRootIds = [...rootIds].sort((a, b) => {
+        const prioDiff = Number(priorityRootIds.has(b)) - Number(priorityRootIds.has(a));
+        if (prioDiff !== 0) return prioDiff;
+        const diff = (latestSeqByRoot.get(b) ?? 0n) - (latestSeqByRoot.get(a) ?? 0n);
+        return diff > 0n ? 1 : diff < 0n ? -1 : 0;
+      }).slice(0, THREAD_HYDRATE_MAX_THREADS);
+      const roots: Record<string, ChatMessage | null> = {};
+      const missingRoots = hydrateRootIds.filter(id => !byId.has(id));
+      if (missingRoots.length && !signal?.aborted) {
+        for (const [id, result] of await lookup(room, missingRoots.map(chatId))) {
+          if ('message' in result) { put(result.message); roots[id] = result.message; }
+          else if (denied(result.error)) roots[id] = null;
+        }
+      }
+      const replyCounts = new Map<string, number>();
+      for (const m of byId.values()) {
+        if (m.threadRootId && !m.deleted && m.origin !== 'system') {
+          replyCounts.set(m.threadRootId, (replyCounts.get(m.threadRootId) ?? 0) + 1);
+        }
+      }
+      const needReplies = hydrateRootIds.filter(id => {
+        if (roots[id] === null) return false;
+        const root = byId.get(id);
+        if (root?.deleted) return false;
+        const expected = Math.min(root?.replyCount ?? 1, THREAD_BACKFILL_PAGE_SIZE);
+        return (replyCounts.get(id) ?? 0) < expected;
+      });
+      if (needReplies.length && !signal?.aborted && snapshot.messages.length >= THREAD_BACKFILL_PAGE_SIZE) {
+        let cursor = 0;
+        const workers = Math.min(THREAD_HYDRATE_CONCURRENCY, needReplies.length);
+        await Promise.all(Array.from({ length: workers }, async () => {
+          while (cursor < needReplies.length && !signal?.aborted) {
+            const rootId = needReplies[cursor++]!;
+            try {
+              const query = new URLSearchParams({ threadRootId: rootId, limit: String(THREAD_BACKFILL_PAGE_SIZE) });
+              const batch = await request<ChatMessage[]>(`/conversations/${room}/messages?${query}`, 'GET', undefined, undefined, signal);
+              if (Array.isArray(batch)) for (const m of batch) put(m);
+            } catch { /* best-effort hydration per thread */ }
+          }
+        }));
+      }
+      const messages = [...byId.values()]
+        .filter(m => !!m.threadRootId || (!m.deleted && (m.replyCount ?? 0) > 0))
+        .sort((a, b) => {
+          const diff = BigInt(chatCursor(b.seq)) - BigInt(chatCursor(a.seq));
+          return diff > 0n ? 1 : diff < 0n ? -1 : 0;
+        })
+        .slice(0, THREAD_BACKFILL_MAX_MESSAGES);
+      return { messages, roots };
     },
     async actPlan(roomId: string, plan: ChatPlan, input: ChatPlanAction, operationId: string, current = () => true, signal?: AbortSignal) {
       const room = chatId(roomId);

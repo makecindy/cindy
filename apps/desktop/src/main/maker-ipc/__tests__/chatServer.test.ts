@@ -6358,6 +6358,60 @@ describe('Chat Server result delivery and refresh', () => {
       expect(older.group.threads).toBeUndefined();
     });
 
+    it('excludes @everyone / @humans broadcast mentions from thread mentionedMe summaries', async () => {
+      const broadcastReply = { ...replies[2], mentions: [selfId], mentionAudience: 'humans' as const };
+      fixture.handle.mockImplementation((route, method, body) =>
+        route.endsWith('/snapshot')
+          ? { body: { room: room(roomId), members, messages: [...shares, broadcastReply, replies[1], replies[0], root].sort((a, b) => Number(b.seq) - Number(a.seq)), cursor: '8', reads: [{ thread_key: rootId, read_seq: '8' }] } }
+          : threadResponse(route, method, body));
+      const result = await service.getGroup(roomId);
+      if (!result.ok) throw new Error('Expected group');
+      expect(result.group.threads).toEqual([expect.objectContaining({ rootId })]);
+      expect(result.group.threads?.[0]?.mentionedMe).toBeUndefined();
+      expect(result.group.threads?.[0]?.lastMention).toBeUndefined();
+    });
+
+    it('traces historical Threads from reads and older pages when includeHistoricalThreads is requested', async () => {
+      const oldRootId = '70000000-0000-4000-8000-000000000070';
+      const oldRoot = { ...msg(oldRootId, 10, aliceId), replyCount: 2, content: [{ type: 'text', text: 'Earlier architecture thread' }] };
+      const oldMyReply = msg('70000000-0000-4000-8000-000000000071', 11, selfId, { threadRootId: oldRootId });
+      const oldMention = { ...msg('70000000-0000-4000-8000-000000000072', 12, aliceId, { threadRootId: oldRootId }), mentions: [selfId] };
+      const filler = Array.from({ length: 100 }, (_, i) => msg(`70000000-0000-4000-8000-000000001${String(i).padStart(3, '0')}`, 200 + i, aliceId)).reverse();
+      fixture.handle.mockImplementation((route, method, body) => {
+        if (route.endsWith('/snapshot')) {
+          return { body: { room: room(roomId), members, messages: filler, cursor: '300', reads: [{ thread_key: 'main', read_seq: '300' }, { thread_key: oldRootId, read_seq: '12', following: true }] } };
+        }
+        if (route === `/conversations/${roomId}/messages/${oldRootId}`) return { body: oldRoot };
+        if (route.includes(`threadRootId=${oldRootId}`)) return { body: [oldMention, oldMyReply] };
+        if (route.includes('before=200')) return { body: [oldRoot] };
+        if (route.includes('/messages?limit=100')) return { body: filler };
+        return threadResponse(route, method, body);
+      });
+      const initial = await service.getGroup(roomId);
+      if (!initial.ok) throw new Error('Expected group');
+      expect(initial.group.threads).toEqual([]);
+
+      await service.getGroup(roomId, { includeHistoricalThreads: true });
+      await vi.waitFor(async () => {
+        const hydrated = await service.getGroup(roomId, { includeHistoricalThreads: true });
+        if (!hydrated.ok) throw new Error('Expected group');
+        expect(hydrated.group.threadsSyncing).toBeUndefined();
+        expect(hydrated.group.threads).toEqual([expect.objectContaining({
+          rootId: oldRootId,
+          rootText: 'Earlier architecture thread',
+          participated: true,
+          mentionedMe: true,
+          following: true,
+          lastMention: expect.objectContaining({ messageId: oldMention.id }),
+        })]);
+      });
+      // Closing the panel stops historical thread projection so normal group loads stay lightweight.
+      const closed = await service.getGroup(roomId);
+      if (!closed.ok) throw new Error('Expected group');
+      expect(closed.group.threads).toEqual([]);
+      expect(closed.group.threadsSyncing).toBeUndefined();
+    });
+
     it('records a Thread read once when its latest page is read, and never moves it back', async () => {
       let readSeq = '2';
       fixture.handle.mockImplementation((route, method, body) => {

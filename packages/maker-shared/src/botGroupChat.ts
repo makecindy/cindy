@@ -329,6 +329,16 @@ export interface BotGroupThreadMentionSummary {
  * One Thread of the group for the in-chat 话题 list (bot-group-chat.md §10「话题未读与提示」).
  * Root text and author come from the server's copy; empty while that copy is still being read.
  */
+export interface BotGroupThreadCodeRef {
+  kind: 'issue' | 'pr';
+  provider?: 'github' | 'gitlab';
+  host?: string;
+  owner: string;
+  repo: string;
+  number: number;
+  url: string;
+}
+
 export interface BotGroupThreadSummary {
   rootId: string;
   rootAuthorName: string;
@@ -347,6 +357,8 @@ export interface BotGroupThreadSummary {
   lastMention?: BotGroupThreadMentionSummary | null;
   /** Up to 3 distinct recent responders for the compact avatar stack. */
   responders?: BotGroupThreadResponder[];
+  /** GitHub/GitLab PR/MR and Issue references found in this thread, newest-first. */
+  refs?: BotGroupThreadCodeRef[];
   lastReply: { authorName: string; text: string; createdAt: number } | null;
 }
 
@@ -767,10 +779,12 @@ export interface BotGroupDetail extends BotGroupSummary {
   /** Plans referenced by the loaded messages, plus the open plan. */
   plans: BotGroupPlanView[];
   /**
-   * Threads with replies in the newest window, unread ones first. Omitted by local groups,
-   * older hosts and servers without read state.
+   * Threads with replies across the snapshot, read history and retained room cache,
+   * unread ones first. Omitted by local groups, older hosts and servers without read state.
    */
   threads?: BotGroupThreadSummary[];
+  /** True while the client is tracing earlier group history or hydrating historical threads. */
+  threadsSyncing?: boolean;
 }
 
 export type BotGroupErrorCode =
@@ -902,6 +916,8 @@ export interface BotGroupGetOptions {
   sourceMessageIds?: string[];
   /** Shares already shown from older pages, so edits and deletions reach them without a reload. */
   shownShares?: Array<{ id: string; messageId: string; threadRootId: string; sharerId?: string }>;
+  /** Trace earlier group history in the background for the in-group Threads index. */
+  includeHistoricalThreads?: boolean;
 }
 
 export type BotGroupChange = 'created' | 'updated' | 'deleted' | 'messages' | 'round' | 'plan' | 'list';
