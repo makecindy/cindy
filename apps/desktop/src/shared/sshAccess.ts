@@ -133,6 +133,22 @@ export interface SshDeviceHostsApi {
   onChanged(callback: () => void): () => void;
 }
 
+/**
+ * The ASCII slug in a device's terminal alias `cindy-<slug>` (decision 6): lower-case letters and digits joined by
+ * single hyphens; accents are dropped and other scripts removed, so it may be empty (the controller then uses a
+ * device id prefix). Shared so this computer's settings can show the alias its other devices will usually use.
+ */
+export function deviceAliasSlug(name: string): string {
+  return name
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 40)
+    .replace(/-+$/, '');
+}
+
 /** Added to an SSH host snapshot when the host belongs to one of the person's own devices. */
 export interface SshHostDeviceLabel {
   deviceId: string;

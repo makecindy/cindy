@@ -7353,6 +7353,71 @@
             "agent-net-only-relay": "Esta conexión usa una red que solo admite Agent-Net. Elige una ruta compatible con Device Link antes de volver."
           }
         }
+      },
+      "sshAccess": {
+        "title": "Permitir que mis otros dispositivos se conecten a esta computadora por SSH",
+        "description": "Tus otros dispositivos obtienen acceso automáticamente. Si revocas el acceso de un dispositivo, también se revoca su SSH.",
+        "defaultOn": "Activado de forma predeterminada en un equipo en la nube.",
+        "defaultOff": "Desactivado de forma predeterminada.",
+        "descriptionWithDefault": "{{description}} {{defaultNote}}",
+        "aliasIntro": "Desde una terminal en tus otros dispositivos: <command>{{command}}</command>",
+        "recordUnreadable": "Cindy no puede leer el registro de acceso SSH de esta computadora, así que por ahora no cambiará nada.",
+        "blocked": {
+          "REMOTE_LOGIN_OFF": "La sesión remota de macOS está desactivada, así que tus otros dispositivos aún no pueden conectarse. Activa «Sesión remota» en Ajustes del Sistema → General → Compartir.",
+          "SSHD_UNREACHABLE": "El servidor SSH no se está ejecutando en esta computadora, así que tus otros dispositivos aún no pueden conectarse. Para instalarlo e iniciarlo, ejecuta este comando en una terminal:",
+          "AUTHORIZED_KEYS_UNSUPPORTED": "Cindy no puede actualizar el archivo de claves autorizadas SSH de esta computadora. Comprueba si ~/.ssh/authorized_keys es un enlace, es demasiado grande o está dañado."
+        },
+        "otherDistributions": "En otras distribuciones de Linux, instala openssh-server e inicia el servicio sshd.",
+        "copyCommand": "Copiar comando",
+        "copied": "Copiado",
+        "copyFailed": "No se pudo copiar",
+        "listHeading": "Dispositivos que pueden usar SSH ({{count}})",
+        "listEmpty": "Aún no hay dispositivos. Tus otros dispositivos aparecerán aquí cuando se conecten.",
+        "deviceMeta": "Mi dispositivo · Permitido automáticamente · {{time}}",
+        "manualMeta": "Clave pública añadida · {{fingerprint}}",
+        "todayAt": "Hoy {{time}}",
+        "inactive": "Sin efecto",
+        "unknownDevice": "Dispositivo desconocido",
+        "unnamedKey": "Clave pública sin nombre",
+        "remove": "Quitar",
+        "removedKey": "Clave pública quitada",
+        "removeKeyFailed": "No se pudo quitar la clave pública",
+        "removeDeviceConfirm": {
+          "heading": "¿Quitar el acceso SSH de {{name}}?",
+          "body": "Esto revoca el acceso de {{name}} a esta computadora. También se revoca el control remoto y se cierran sus sesiones SSH. Más adelante puedes volver a permitir «Controlar este dispositivo» en su tarjeta.",
+          "bodyKeepsSessions": "Esto revoca el acceso de {{name}} a esta computadora. También se revoca el control remoto. Las sesiones SSH que ya tenga abiertas siguen abiertas hasta que las cierres con «Cerrar todas las sesiones SSH». Más adelante puedes volver a permitir «Controlar este dispositivo» en su tarjeta."
+        },
+        "deviceRemoved": "Se revocó el acceso de {{name}}",
+        "deviceRemovedSessionsEnded": "Se revocó el acceso de {{name}}. Sesiones SSH cerradas: {{count}}.",
+        "deviceRemovedSessionsLeft": "Se revocó el acceso de {{name}}. Sesiones SSH cerradas: {{count}}. Sesiones que siguen abiertas porque no se pudo identificar su clave: {{unmapped}}. Para cerrarlas también, usa «Cerrar todas las sesiones SSH».",
+        "deviceRemovedSessionsKept": "Se revocó el acceso de {{name}}. Las sesiones SSH que ya tenga abiertas siguen abiertas.",
+        "removeDeviceFailed": "No se pudo terminar de quitar el acceso SSH de {{name}}",
+        "addKey": "Añadir clave pública",
+        "addKeyDialog": {
+          "heading": "Añadir una clave pública",
+          "body": "Pega una línea de clave pública ssh-ed25519, por ejemplo el contenido de ~/.ssh/id_ed25519.pub. Solo se admiten claves ed25519 sin opciones.",
+          "keyField": "Clave pública",
+          "noteField": "Nota (opcional)",
+          "notePlaceholder": "Por ejemplo: servidor de la oficina",
+          "submit": "Añadir clave"
+        },
+        "addKeyErrors": {
+          "INVALID_PARAMS": "No es una clave pública ssh-ed25519 válida. Pega una sola línea de clave ed25519 sin opciones.",
+          "ALREADY_EXISTS": "Esta clave pública ya puede conectarse a esta computadora.",
+          "PRECONDITION_FAILED": "No se puede añadir la clave pública ahora. Inténtalo más tarde.",
+          "INTERNAL": "No se añadió la clave pública."
+        },
+        "addedKey": "Clave pública añadida",
+        "endSessions": "Cerrar todas las sesiones SSH",
+        "endSessionsConfirm": {
+          "heading": "¿Cerrar todas las sesiones SSH?",
+          "body": "Esto cierra todas las sesiones SSH del usuario actual en esta computadora, incluidas las que no se permitieron a través de Cindy. Los comandos en ejecución se interrumpen.",
+          "action": "Cerrar todas las sesiones"
+        },
+        "sessionsEnded": "Sesiones SSH cerradas: {{count}}",
+        "sessionsUnsupported": "Esta computadora todavía no puede cerrar sesiones SSH",
+        "endSessionsFailed": "No se pudieron cerrar las sesiones SSH",
+        "toggleFailed": "No se pudo cambiar el acceso SSH"
       }
     },
     "tina": {

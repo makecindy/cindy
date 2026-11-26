@@ -7284,6 +7284,71 @@
             "agent-net-only-relay": "This connection uses a network that only supports Agent-Net. Choose a route that supports Device Link before switching back."
           }
         }
+      },
+      "sshAccess": {
+        "title": "Allow my other devices to connect to this computer over SSH",
+        "description": "Your other devices get access automatically. Revoking a device’s access also removes its SSH access.",
+        "defaultOn": "On by default on a cloud computer.",
+        "defaultOff": "Off by default.",
+        "descriptionWithDefault": "{{description}} {{defaultNote}}",
+        "aliasIntro": "From a terminal on your other devices: <command>{{command}}</command>",
+        "recordUnreadable": "Cindy can’t read the SSH access record on this computer, so it won’t change anything for now.",
+        "blocked": {
+          "REMOTE_LOGIN_OFF": "Remote Login is off in macOS, so your other devices can’t connect yet. Turn on Remote Login in System Settings → General → Sharing.",
+          "SSHD_UNREACHABLE": "The SSH server isn’t running on this computer, so your other devices can’t connect yet. To install and start it, run this command in a terminal:",
+          "AUTHORIZED_KEYS_UNSUPPORTED": "Cindy can’t update this computer’s SSH authorized keys file. Check whether ~/.ssh/authorized_keys is a link, too large, or damaged."
+        },
+        "otherDistributions": "On other Linux distributions, install openssh-server and start the sshd service.",
+        "copyCommand": "Copy command",
+        "copied": "Copied",
+        "copyFailed": "Couldn’t copy",
+        "listHeading": "Devices that can use SSH ({{count}})",
+        "listEmpty": "No devices yet. Your other devices appear here once they come online.",
+        "deviceMeta": "My device · Allowed automatically · {{time}}",
+        "manualMeta": "Added public key · {{fingerprint}}",
+        "todayAt": "Today {{time}}",
+        "inactive": "Not in effect",
+        "unknownDevice": "Unknown device",
+        "unnamedKey": "Unnamed public key",
+        "remove": "Remove",
+        "removedKey": "Public key removed",
+        "removeKeyFailed": "Couldn’t remove the public key",
+        "removeDeviceConfirm": {
+          "heading": "Remove SSH access for {{name}}?",
+          "body": "This revokes {{name}}’s access to this computer. Remote control is revoked too, and its SSH sessions are ended. You can allow “Control this device” again on its device card later.",
+          "bodyKeepsSessions": "This revokes {{name}}’s access to this computer. Remote control is revoked too. SSH sessions it already has open stay open until you end them with “End all SSH sessions”. You can allow “Control this device” again on its device card later."
+        },
+        "deviceRemoved": "Revoked access for {{name}}",
+        "deviceRemovedSessionsEnded": "Revoked access for {{name}}. SSH sessions ended: {{count}}.",
+        "deviceRemovedSessionsLeft": "Revoked access for {{name}}. SSH sessions ended: {{count}}. Left running because their key couldn’t be identified: {{unmapped}}. To end those too, use “End all SSH sessions”.",
+        "deviceRemovedSessionsKept": "Revoked access for {{name}}. SSH sessions it already has open stay open.",
+        "removeDeviceFailed": "Couldn’t finish removing SSH access for {{name}}",
+        "addKey": "Add public key",
+        "addKeyDialog": {
+          "heading": "Add a public key",
+          "body": "Paste one ssh-ed25519 public key line, such as the contents of ~/.ssh/id_ed25519.pub. Only ed25519 keys without options are supported.",
+          "keyField": "Public key",
+          "noteField": "Note (optional)",
+          "notePlaceholder": "For example: office server",
+          "submit": "Add key"
+        },
+        "addKeyErrors": {
+          "INVALID_PARAMS": "This isn’t a valid ssh-ed25519 public key. Paste a single ed25519 key line without options.",
+          "ALREADY_EXISTS": "This public key can already connect to this computer.",
+          "PRECONDITION_FAILED": "The public key can’t be added right now. Try again later.",
+          "INTERNAL": "The public key wasn’t added."
+        },
+        "addedKey": "Public key added",
+        "endSessions": "End all SSH sessions",
+        "endSessionsConfirm": {
+          "heading": "End all SSH sessions?",
+          "body": "This ends every SSH session of the current user on this computer, including sessions not allowed through Cindy. Running commands are interrupted.",
+          "action": "End all sessions"
+        },
+        "sessionsEnded": "SSH sessions ended: {{count}}",
+        "sessionsUnsupported": "This computer can’t end SSH sessions yet",
+        "endSessionsFailed": "Couldn’t end SSH sessions",
+        "toggleFailed": "Couldn’t change SSH access"
       }
     },
     "tina": {

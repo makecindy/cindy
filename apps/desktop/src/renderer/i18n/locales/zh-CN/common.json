@@ -7241,6 +7241,71 @@
             "agent-net-only-relay": "此连接使用仅支持 Agent-Net 的网络，无法切回 Device Link。请先改用支持 Device Link 的连接线路。"
           }
         }
+      },
+      "sshAccess": {
+        "title": "允许我的其他设备通过 SSH 连接这台电脑",
+        "description": "你的其他设备会自动拿到权限。撤销某台设备的访问权限时，它的 SSH 一起收回。",
+        "defaultOn": "云主机默认打开。",
+        "defaultOff": "默认关闭。",
+        "descriptionWithDefault": "{{description}}{{defaultNote}}",
+        "aliasIntro": "在其他设备的终端里连接：<command>{{command}}</command>",
+        "recordUnreadable": "读不了这台电脑保存的 SSH 访问记录，Cindy 暂时不会做任何改动。",
+        "blocked": {
+          "REMOTE_LOGIN_OFF": "macOS 的「远程登录」没有打开，其他设备暂时连不上。请在「系统设置 → 通用 → 共享」中打开「远程登录」。",
+          "SSHD_UNREACHABLE": "这台电脑上的 SSH 服务没有运行，其他设备暂时连不上。可以在终端里运行下面的命令安装并启动它：",
+          "AUTHORIZED_KEYS_UNSUPPORTED": "Cindy 无法改写这台电脑的 SSH 授权公钥文件。请检查 ~/.ssh/authorized_keys 是不是链接、是否过大或内容损坏。"
+        },
+        "otherDistributions": "其他 Linux 发行版请安装 openssh-server 并启动 sshd 服务。",
+        "copyCommand": "复制命令",
+        "copied": "已复制",
+        "copyFailed": "复制失败",
+        "listHeading": "可以 SSH 的设备（{{count}}）",
+        "listEmpty": "还没有设备。你的其他设备上线后会自动出现在这里。",
+        "deviceMeta": "我的设备 · 自动授权 · {{time}}",
+        "manualMeta": "手动添加的公钥 · {{fingerprint}}",
+        "todayAt": "今天 {{time}}",
+        "inactive": "未生效",
+        "unknownDevice": "未知设备",
+        "unnamedKey": "未命名公钥",
+        "remove": "移除",
+        "removedKey": "已移除公钥",
+        "removeKeyFailed": "未能移除公钥",
+        "removeDeviceConfirm": {
+          "heading": "移除 {{name}} 的 SSH 访问？",
+          "body": "这会撤销 {{name}} 对这台电脑的访问权限，远程控制也会一起收回，它的 SSH 会话会被断开。之后可以在它的设备卡片上重新允许「控制本机」。",
+          "bodyKeepsSessions": "这会撤销 {{name}} 对这台电脑的访问权限，远程控制也会一起收回。它已经打开的 SSH 会话不会自动断开，需要时用「断开全部 SSH 会话」断开。之后可以在它的设备卡片上重新允许「控制本机」。"
+        },
+        "deviceRemoved": "已撤销 {{name}} 的访问权限",
+        "deviceRemovedSessionsEnded": "已撤销 {{name}} 的访问权限，并断开了它的 {{count}} 个 SSH 会话",
+        "deviceRemovedSessionsLeft": "已撤销 {{name}} 的访问权限，断开了它的 {{count}} 个 SSH 会话。另有 {{unmapped}} 个会话无法确认是哪把公钥登录的，仍在运行，需要时用「断开全部 SSH 会话」断开。",
+        "deviceRemovedSessionsKept": "已撤销 {{name}} 的访问权限，它已经打开的 SSH 会话不会自动断开",
+        "removeDeviceFailed": "未能完成移除 {{name}} 的 SSH 访问",
+        "addKey": "添加公钥",
+        "addKeyDialog": {
+          "heading": "添加公钥",
+          "body": "粘贴一行 ssh-ed25519 公钥，例如 ~/.ssh/id_ed25519.pub 的内容。只支持不带选项的 ed25519 公钥。",
+          "keyField": "公钥",
+          "noteField": "备注（可选）",
+          "notePlaceholder": "例如：办公室服务器",
+          "submit": "添加公钥"
+        },
+        "addKeyErrors": {
+          "INVALID_PARAMS": "这不是一行有效的 ssh-ed25519 公钥。只支持单行、不带选项的 ed25519 公钥。",
+          "ALREADY_EXISTS": "这把公钥已经可以连接这台电脑了。",
+          "PRECONDITION_FAILED": "暂时无法添加公钥，请稍后重试。",
+          "INTERNAL": "未能添加公钥。"
+        },
+        "addedKey": "已添加公钥",
+        "endSessions": "断开全部 SSH 会话",
+        "endSessionsConfirm": {
+          "heading": "断开全部 SSH 会话？",
+          "body": "这会断开这台电脑上当前用户的全部 SSH 会话，包括不是通过 Cindy 授权的会话，正在运行的命令会被中断。",
+          "action": "断开全部会话"
+        },
+        "sessionsEnded": "已断开 {{count}} 个 SSH 会话",
+        "sessionsUnsupported": "这台电脑暂不支持断开 SSH 会话",
+        "endSessionsFailed": "未能断开 SSH 会话",
+        "toggleFailed": "未能更改 SSH 访问设置"
       }
     },
     "tina": {

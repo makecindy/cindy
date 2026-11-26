@@ -10,26 +10,15 @@
  *   keeps the pin and no other host's address-based entry is ever touched.
  */
 import { createHash } from 'node:crypto';
+import { deviceAliasSlug } from '../../shared/sshAccess.js';
 
+export { deviceAliasSlug };
 export const DEVICE_HOST_ALIAS_PREFIX = 'cindy-';
 export const DEVICE_HOST_KEY_ALIAS_PREFIX = 'cindy-device-';
 /** Written as the OpenSSH `UserKnownHostsFile` of every device alias (knownHostsFile.ts maintains the file). */
 export const DEVICE_KNOWN_HOSTS_SETTING = '~/.ssh/cindy_known_hosts';
-const MAX_SLUG_CHARS = 40;
 const SAFE_DEVICE_ID = /^[A-Za-z0-9_-]{1,64}$/;
 const HOST_KEY_ALIAS = /^cindy-device-[A-Za-z0-9_-]{1,64}$/;
-
-/** Lower-case ASCII letters and digits joined by single hyphens; accents are dropped, other scripts removed. */
-export function deviceAliasSlug(name: string): string {
-  return name
-    .normalize('NFKD')
-    .replace(/[̀-ͯ]/g, '')
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, MAX_SLUG_CHARS)
-    .replace(/-+$/, '');
-}
 
 function deviceIdToken(deviceId: string): string {
   const token = deviceId.toLowerCase().replace(/[^a-z0-9]/g, '');

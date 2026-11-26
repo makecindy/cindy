@@ -7241,6 +7241,71 @@
             "agent-net-only-relay": "이 연결의 네트워크는 Agent-Net만 지원합니다. 되돌리려면 먼저 Device Link를 지원하는 연결 경로로 바꿔 주세요."
           }
         }
+      },
+      "sshAccess": {
+        "title": "내 다른 기기에서 SSH로 이 컴퓨터에 연결하도록 허용",
+        "description": "다른 기기에는 자동으로 권한이 부여됩니다. 기기의 액세스 권한을 철회하면 그 기기의 SSH도 함께 회수됩니다.",
+        "defaultOn": "클라우드 컴퓨터에서는 기본적으로 켜져 있습니다.",
+        "defaultOff": "기본적으로 꺼져 있습니다.",
+        "descriptionWithDefault": "{{description}} {{defaultNote}}",
+        "aliasIntro": "다른 기기의 터미널에서 연결: <command>{{command}}</command>",
+        "recordUnreadable": "이 컴퓨터에 저장된 SSH 접근 기록을 읽을 수 없어 Cindy가 당분간 아무것도 변경하지 않습니다.",
+        "blocked": {
+          "REMOTE_LOGIN_OFF": "macOS의 ‘원격 로그인’이 꺼져 있어 다른 기기에서 아직 연결할 수 없습니다. ‘시스템 설정 → 일반 → 공유’에서 ‘원격 로그인’을 켜세요.",
+          "SSHD_UNREACHABLE": "이 컴퓨터에서 SSH 서버가 실행 중이 아니어서 다른 기기에서 아직 연결할 수 없습니다. 터미널에서 다음 명령을 실행하면 설치하고 시작할 수 있습니다:",
+          "AUTHORIZED_KEYS_UNSUPPORTED": "Cindy가 이 컴퓨터의 SSH 인증 키 파일을 수정할 수 없습니다. ~/.ssh/authorized_keys가 링크이거나 너무 크거나 손상되지 않았는지 확인하세요."
+        },
+        "otherDistributions": "다른 Linux 배포판에서는 openssh-server를 설치하고 sshd 서비스를 시작하세요.",
+        "copyCommand": "명령 복사",
+        "copied": "복사됨",
+        "copyFailed": "복사하지 못했습니다",
+        "listHeading": "SSH로 연결할 수 있는 기기({{count}})",
+        "listEmpty": "아직 기기가 없습니다. 다른 기기가 온라인이 되면 여기에 자동으로 표시됩니다.",
+        "deviceMeta": "내 기기 · 자동 허용 · {{time}}",
+        "manualMeta": "직접 추가한 공개 키 · {{fingerprint}}",
+        "todayAt": "오늘 {{time}}",
+        "inactive": "적용되지 않음",
+        "unknownDevice": "알 수 없는 기기",
+        "unnamedKey": "이름 없는 공개 키",
+        "remove": "제거",
+        "removedKey": "공개 키를 제거했습니다",
+        "removeKeyFailed": "공개 키를 제거하지 못했습니다",
+        "removeDeviceConfirm": {
+          "heading": "{{name}}의 SSH 접근을 제거할까요?",
+          "body": "{{name}}의 이 컴퓨터 액세스 권한이 철회됩니다. 원격 제어도 함께 회수되고 그 기기의 SSH 세션이 종료됩니다. 나중에 그 기기 카드에서 ‘본 기기 제어’를 다시 허용할 수 있습니다.",
+          "bodyKeepsSessions": "{{name}}의 이 컴퓨터 액세스 권한이 철회됩니다. 원격 제어도 함께 회수됩니다. 이미 열려 있는 SSH 세션은 자동으로 종료되지 않으니 필요하면 ‘모든 SSH 세션 종료’로 종료하세요. 나중에 그 기기 카드에서 ‘본 기기 제어’를 다시 허용할 수 있습니다."
+        },
+        "deviceRemoved": "{{name}}의 액세스 권한을 철회했습니다",
+        "deviceRemovedSessionsEnded": "{{name}}의 액세스 권한을 철회하고 그 기기의 SSH 세션 {{count}}개를 종료했습니다",
+        "deviceRemovedSessionsLeft": "{{name}}의 액세스 권한을 철회하고 그 기기의 SSH 세션 {{count}}개를 종료했습니다. 어떤 키로 로그인했는지 확인할 수 없는 세션 {{unmapped}}개는 아직 연결되어 있습니다. 필요하면 ‘모든 SSH 세션 종료’로 종료하세요.",
+        "deviceRemovedSessionsKept": "{{name}}의 액세스 권한을 철회했습니다. 이미 열려 있는 SSH 세션은 자동으로 종료되지 않습니다.",
+        "removeDeviceFailed": "{{name}}의 SSH 접근 제거를 완료하지 못했습니다",
+        "addKey": "공개 키 추가",
+        "addKeyDialog": {
+          "heading": "공개 키 추가",
+          "body": "ssh-ed25519 공개 키 한 줄을 붙여 넣으세요. 예: ~/.ssh/id_ed25519.pub의 내용. 옵션이 없는 ed25519 공개 키만 지원합니다.",
+          "keyField": "공개 키",
+          "noteField": "메모(선택)",
+          "notePlaceholder": "예: 사무실 서버",
+          "submit": "공개 키 추가"
+        },
+        "addKeyErrors": {
+          "INVALID_PARAMS": "올바른 ssh-ed25519 공개 키가 아닙니다. 옵션이 없는 한 줄짜리 ed25519 공개 키만 지원합니다.",
+          "ALREADY_EXISTS": "이 공개 키는 이미 이 컴퓨터에 연결할 수 있습니다.",
+          "PRECONDITION_FAILED": "지금은 공개 키를 추가할 수 없습니다. 잠시 후 다시 시도하세요.",
+          "INTERNAL": "공개 키를 추가하지 못했습니다."
+        },
+        "addedKey": "공개 키를 추가했습니다",
+        "endSessions": "모든 SSH 세션 종료",
+        "endSessionsConfirm": {
+          "heading": "모든 SSH 세션을 종료할까요?",
+          "body": "이 컴퓨터에서 현재 사용자의 모든 SSH 세션을 종료합니다. Cindy를 통해 허용되지 않은 세션도 포함되며 실행 중인 명령은 중단됩니다.",
+          "action": "모든 세션 종료"
+        },
+        "sessionsEnded": "SSH 세션 {{count}}개를 종료했습니다",
+        "sessionsUnsupported": "이 컴퓨터에서는 아직 SSH 세션을 종료할 수 없습니다",
+        "endSessionsFailed": "SSH 세션을 종료하지 못했습니다",
+        "toggleFailed": "SSH 접근 설정을 변경하지 못했습니다"
       }
     },
     "tina": {

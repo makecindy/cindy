@@ -48,6 +48,23 @@ export const remoteControlSettings = defineSettings({
     ],
     aliases: ['cloud computer', 'cloud desktop', 'cloud host', '云主机', '云电脑'],
   },
+  // 「这台电脑」卡片里的 SSH 访问(只在 macOS / Linux、非托管云实例上有;主开关关着时落到「我的设备」)。
+  sshAccess: {
+    id: 'remoteControl.sshAccess',
+    isVisible: ({ mode, platform, managedCloudInstance }) =>
+      mode === 'cloud' && (platform === 'darwin' || platform === 'linux') && managedCloudInstance !== true,
+    tab: 'remote-control',
+    targetId: 'settings-search-target-remote-ssh-access',
+    fallbackTargetId: 'settings-search-target-remote-devices',
+    titleKey: 'settings.remoteControl.sshAccess.title',
+    descriptionKey: 'settings.remoteControl.sshAccess.description',
+    sectionKey: 'settings.remoteControl.sections.myDevices',
+    keywordKeys: [
+      'settings.remoteControl.sshAccess.addKey',
+      'settings.remoteControl.sshAccess.endSessions',
+    ],
+    aliases: ['SSH', 'SSH access', 'authorized_keys', 'public key', 'remote login', 'SSH 访问', '公钥', '远程登录'],
+  },
   localNetwork: {
     id: 'remoteControl.localNetwork',
     isVisible: ({ mode }) => mode === 'cloud',

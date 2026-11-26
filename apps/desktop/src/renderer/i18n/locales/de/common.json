@@ -7284,6 +7284,71 @@
             "agent-net-only-relay": "Diese Verbindung nutzt ein Netzwerk, das nur Agent-Net unterstützt. Wähle zuerst einen Verbindungsweg, der Device Link unterstützt."
           }
         }
+      },
+      "sshAccess": {
+        "title": "Meinen anderen Geräten erlauben, sich per SSH mit diesem Computer zu verbinden",
+        "description": "Deine anderen Geräte erhalten den Zugriff automatisch. Wenn du den Zugriff eines Geräts widerrufst, verliert es auch seinen SSH-Zugriff.",
+        "defaultOn": "Auf einem Cloud-Computer standardmäßig an.",
+        "defaultOff": "Standardmäßig aus.",
+        "descriptionWithDefault": "{{description}} {{defaultNote}}",
+        "aliasIntro": "Im Terminal auf deinen anderen Geräten: <command>{{command}}</command>",
+        "recordUnreadable": "Cindy kann den SSH-Zugriffsdatensatz dieses Computers nicht lesen und ändert deshalb vorerst nichts.",
+        "blocked": {
+          "REMOTE_LOGIN_OFF": "Die entfernte Anmeldung von macOS ist ausgeschaltet, deshalb können sich deine anderen Geräte noch nicht verbinden. Schalte „Entfernte Anmeldung“ unter Systemeinstellungen → Allgemein → Teilen ein.",
+          "SSHD_UNREACHABLE": "Auf diesem Computer läuft kein SSH-Server, deshalb können sich deine anderen Geräte noch nicht verbinden. Zum Installieren und Starten führe diesen Befehl im Terminal aus:",
+          "AUTHORIZED_KEYS_UNSUPPORTED": "Cindy kann die Datei mit den autorisierten SSH-Schlüsseln dieses Computers nicht ändern. Prüfe, ob ~/.ssh/authorized_keys ein Link, zu groß oder beschädigt ist."
+        },
+        "otherDistributions": "Installiere auf anderen Linux-Distributionen openssh-server und starte den Dienst sshd.",
+        "copyCommand": "Befehl kopieren",
+        "copied": "Kopiert",
+        "copyFailed": "Kopieren fehlgeschlagen",
+        "listHeading": "Geräte mit SSH-Zugriff ({{count}})",
+        "listEmpty": "Noch keine Geräte. Deine anderen Geräte erscheinen hier, sobald sie online sind.",
+        "deviceMeta": "Mein Gerät · Automatisch erlaubt · {{time}}",
+        "manualMeta": "Hinzugefügter öffentlicher Schlüssel · {{fingerprint}}",
+        "todayAt": "Heute {{time}}",
+        "inactive": "Nicht wirksam",
+        "unknownDevice": "Unbekanntes Gerät",
+        "unnamedKey": "Unbenannter öffentlicher Schlüssel",
+        "remove": "Entfernen",
+        "removedKey": "Öffentlicher Schlüssel entfernt",
+        "removeKeyFailed": "Der öffentliche Schlüssel konnte nicht entfernt werden",
+        "removeDeviceConfirm": {
+          "heading": "SSH-Zugriff für {{name}} entfernen?",
+          "body": "Damit widerrufst du den Zugriff von {{name}} auf diesen Computer. Auch die Fernsteuerung wird widerrufen, und seine SSH-Sitzungen werden beendet. Auf seiner Gerätekarte kannst du „Dieses Gerät steuern“ später wieder erlauben.",
+          "bodyKeepsSessions": "Damit widerrufst du den Zugriff von {{name}} auf diesen Computer. Auch die Fernsteuerung wird widerrufen. Seine bereits offenen SSH-Sitzungen bleiben bestehen, bis du sie mit „Alle SSH-Sitzungen beenden“ beendest. Auf seiner Gerätekarte kannst du „Dieses Gerät steuern“ später wieder erlauben."
+        },
+        "deviceRemoved": "Zugriff von {{name}} widerrufen",
+        "deviceRemovedSessionsEnded": "Zugriff von {{name}} widerrufen. Beendete SSH-Sitzungen: {{count}}.",
+        "deviceRemovedSessionsLeft": "Zugriff von {{name}} widerrufen. Beendete SSH-Sitzungen: {{count}}. Weiterlaufende Sitzungen, deren Schlüssel nicht ermittelt werden konnte: {{unmapped}}. Um auch diese zu beenden, nutze „Alle SSH-Sitzungen beenden“.",
+        "deviceRemovedSessionsKept": "Zugriff von {{name}} widerrufen. Seine bereits offenen SSH-Sitzungen bleiben bestehen.",
+        "removeDeviceFailed": "Der SSH-Zugriff für {{name}} konnte nicht vollständig entfernt werden",
+        "addKey": "Öffentlichen Schlüssel hinzufügen",
+        "addKeyDialog": {
+          "heading": "Öffentlichen Schlüssel hinzufügen",
+          "body": "Füge eine Zeile mit einem öffentlichen ssh-ed25519-Schlüssel ein, zum Beispiel den Inhalt von ~/.ssh/id_ed25519.pub. Nur ed25519-Schlüssel ohne Optionen werden unterstützt.",
+          "keyField": "Öffentlicher Schlüssel",
+          "noteField": "Notiz (optional)",
+          "notePlaceholder": "Zum Beispiel: Büroserver",
+          "submit": "Schlüssel hinzufügen"
+        },
+        "addKeyErrors": {
+          "INVALID_PARAMS": "Das ist kein gültiger öffentlicher ssh-ed25519-Schlüssel. Füge eine einzelne ed25519-Schlüsselzeile ohne Optionen ein.",
+          "ALREADY_EXISTS": "Dieser öffentliche Schlüssel kann sich bereits mit diesem Computer verbinden.",
+          "PRECONDITION_FAILED": "Der öffentliche Schlüssel kann gerade nicht hinzugefügt werden. Versuche es später erneut.",
+          "INTERNAL": "Der öffentliche Schlüssel wurde nicht hinzugefügt."
+        },
+        "addedKey": "Öffentlicher Schlüssel hinzugefügt",
+        "endSessions": "Alle SSH-Sitzungen beenden",
+        "endSessionsConfirm": {
+          "heading": "Alle SSH-Sitzungen beenden?",
+          "body": "Damit werden alle SSH-Sitzungen des aktuellen Benutzers auf diesem Computer beendet, auch solche, die nicht über Cindy erlaubt wurden. Laufende Befehle werden unterbrochen.",
+          "action": "Alle Sitzungen beenden"
+        },
+        "sessionsEnded": "Beendete SSH-Sitzungen: {{count}}",
+        "sessionsUnsupported": "Dieser Computer kann SSH-Sitzungen noch nicht beenden",
+        "endSessionsFailed": "SSH-Sitzungen konnten nicht beendet werden",
+        "toggleFailed": "SSH-Zugriff konnte nicht geändert werden"
       }
     },
     "tina": {
