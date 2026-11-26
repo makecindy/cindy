@@ -15781,6 +15781,8 @@
       "codexHelperUnverified": "No se pudo comprobar si cindy_helper está disponible en esta tarea. Es posible que no se pueda comunicar el resultado de la tarea.",
       "requestFormatError": "La aplicación envió una solicitud no válida, por lo que no se pudo completar esta respuesta.",
       "piRetryHistoryTooLarge": "Tu mensaje no se envió. Al leer el historial para reintentar, Pi encontró una trama que superaba el límite local de 16 MiB. Puedes continuar en una tarea nueva.",
+      "piRetryHistoryUnavailable": "Tu mensaje no se envió. Pi no pudo leer el historial necesario para enviarlo. Puedes volver a intentarlo o continuar en una tarea nueva.",
+      "upstreamStatusError": "El proveedor devolvió {{status}}, por lo que la respuesta no pudo completarse.",
       "messageNotSent": "Tu mensaje no se envió.",
       "upstreamEmpty550": "El servicio del modelo devolvió HTTP 550 con una respuesta vacía",
       "replyFailed": "No se pudo completar la respuesta",

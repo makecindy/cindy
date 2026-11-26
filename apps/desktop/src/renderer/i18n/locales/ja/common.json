@@ -15616,6 +15616,8 @@
       "codexHelperUnverified": "このタスクの cindy_helper が利用可能か確認できませんでした。タスクの結果を報告できない可能性があります。",
       "requestFormatError": "アプリが送信したリクエストの形式に問題があり、返信を完了できませんでした。",
       "piRetryHistoryTooLarge": "メッセージは送信されませんでした。Pi が再試行に必要な履歴を読み込む際に、データフレームがローカルの上限（16 MiB）を超えました。新しいタスクで続けられます。",
+      "piRetryHistoryUnavailable": "メッセージは送信されませんでした。Pi が送信に必要な履歴を読み込めませんでした。再試行するか、新しいタスクで続けてください。",
+      "upstreamStatusError": "上流が {{status}} を返したため、この返信は完了しませんでした。",
       "messageNotSent": "メッセージは送信されませんでした。",
       "upstreamEmpty550": "モデルサービスが空の応答で HTTP 550 を返しました",
       "replyFailed": "返信を完了できませんでした",

@@ -15607,6 +15607,8 @@
       "codexHelperUnverified": "未能核實此差事之 cindy_helper 是否可用；差事結果或無法回傳。",
       "requestFormatError": "應用程式所發請求格式有謬，此答未能竟。",
       "piRetryHistoryTooLarge": "此信未發。Pi 讀取舊錄以重試時，一幀逾本機 16 MiB 之限。可另啟任務。",
+      "piRetryHistoryUnavailable": "此信未發。Pi 讀舊錄以發信時失誤。可再試，或另啟任務。",
+      "upstreamStatusError": "上游返 {{status}}，此答未竟。",
       "messageNotSent": "此信未發。",
       "upstreamEmpty550": "模型之服返 HTTP 550，答文空",
       "replyFailed": "答未竟",

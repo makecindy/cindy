@@ -15781,6 +15781,8 @@
       "codexHelperUnverified": "Impossible de vérifier si cindy_helper est disponible pour cette tâche. Le résultat de la tâche risque de ne pas pouvoir être transmis.",
       "requestFormatError": "L'application a envoyé une requête non valide : cette réponse n'a donc pas pu aboutir.",
       "piRetryHistoryTooLarge": "Message non envoyé. En lisant l’historique nécessaire au nouvel essai, Pi a rencontré une trame dépassant la limite locale de 16 MiB. Vous pouvez continuer dans une nouvelle tâche.",
+      "piRetryHistoryUnavailable": "Message non envoyé. Pi n’a pas pu lire l’historique nécessaire à l’envoi. Vous pouvez réessayer ou continuer dans une nouvelle tâche.",
+      "upstreamStatusError": "Le service en amont a renvoyé {{status}} ; la réponse n’a pas pu aboutir.",
       "messageNotSent": "Message non envoyé.",
       "upstreamEmpty550": "Le service du modèle a renvoyé HTTP 550 avec une réponse vide",
       "replyFailed": "Impossible de terminer la réponse",
