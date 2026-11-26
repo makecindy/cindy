@@ -1,4 +1,16 @@
 // @vitest-environment jsdom
+/**
+ * 测试价值(本轮新增伙伴集错误反馈用例)
+ * - 生产入口与可观察结果:TeammatesSection 渲染 ErrorNotice;读失败和写失败各有可见重试入口,
+ *   点击调用 hook 对应的恢复动作。
+ * - Bug／规则依据:docs/dev-rules/engineering-conventions.md §8.2;DESIGN.md §4 Error notices;
+ *   PR #11701 写失败回传界面 P2。
+ * - 现有覆盖缺口:其它用例只覆盖名册行、拖拽、收起偏好,不覆盖伙伴集持久化失败的可观察反馈。
+ * - 最小失败输入:useBuddySets 返回 status=error 或 saveFailed=true,重渲染段落后查找重试入口。
+ * - tier:unit(jsdom,真实组件 + hook 替身),纯同步、无真实等待。
+ * - 实测耗时:13.34s(单独运行整个既有 77 用例 jsdom 文件,含启动与真实组件装配;
+ *   本轮只新增两条断言,未另建重复文件,超过 10s 的原因已在 PR 正文写明)。
+ */
 import { useBotUnreadSync } from '../useBotUnreadSync';
 
 vi.mock('@/components/ui/confirm-dialog-provider', () => ({
@@ -48,6 +60,16 @@ const mocks = vi.hoisted(() => ({
   /** 灵动岛活动镜像:sessionId -> phase。侧栏据此显示「正在输入…」。 */
   islandActivity: new Map<string, { sessionId: string; phase: string; compactDetail?: string }>(),
   cloud: { enabled: false, selfDeviceId: null, humanActorId: null, actors: [], demotedBotIds: [] } as import('../../../../shared/companionCloud').CompanionCloudSnapshot,
+  buddySets: { version: 1 as const, sets: [] as Array<{ buddySetId: string; name: string; buddyIds: string[]; collapsed?: boolean }> },
+  buddySetsStatus: 'ready' as string,
+  buddySetsSaveFailed: false,
+  updateBuddySets: vi.fn(),
+  retryBuddySets: vi.fn(),
+  retrySaveBuddySets: vi.fn(),
+}));
+vi.mock('../useBuddySets', () => ({
+  useBuddySets: () => [mocks.buddySets, mocks.updateBuddySets, mocks.buddySetsStatus,
+    mocks.retryBuddySets, mocks.buddySetsSaveFailed, mocks.retrySaveBuddySets],
 }));
 vi.mock('../companionCloudStore', () => ({ useCompanionCloud: () => mocks.cloud }));
 vi.mock('@/lib/toast', async importOriginal => {
@@ -164,6 +186,12 @@ beforeEach(() => {
   mocks.setBotPinned.mockResolvedValue(undefined);
   mocks.duplicateBotProfile.mockResolvedValue({ id: 'copy' });
   mocks.toastError.mockReset();
+  mocks.updateBuddySets.mockReset();
+  mocks.retryBuddySets.mockReset();
+  mocks.retrySaveBuddySets.mockReset();
+  mocks.buddySets = { version: 1, sets: [] };
+  mocks.buddySetsStatus = 'ready';
+  mocks.buddySetsSaveFailed = false;
   mocks.health = new Map();
   mocks.unread = {};
   mocks.groupMessages = new Map();
@@ -1332,4 +1360,22 @@ it.each(['list', 'icons', 'collapsed'] as const)('shows the pending roster until
   expect(screen.queryByRole('status')).toBeNull();
   expect(store.getBotProfiles().map(row => row.id)).toEqual(['existing']);
   expect(list).toHaveBeenCalledOnce();
+});
+
+describe('buddy-set persistence feedback', () => {
+  it('offers an explicit retry when the local record could not be read', async () => {
+    mocks.buddySetsStatus = 'error';
+    await renderSidebar();
+    expect(screen.getByTestId('buddy-sets-read-error')).toBeTruthy();
+    fireEvent.click(screen.getByTestId('buddy-sets-read-retry'));
+    expect(mocks.retryBuddySets).toHaveBeenCalledOnce();
+  });
+
+  it('offers an explicit retry when a buddy-set write did not land', async () => {
+    mocks.buddySetsSaveFailed = true;
+    await renderSidebar();
+    expect(screen.getByTestId('buddy-sets-save-error')).toBeTruthy();
+    fireEvent.click(screen.getByTestId('buddy-sets-save-retry'));
+    expect(mocks.retrySaveBuddySets).toHaveBeenCalledOnce();
+  });
 });

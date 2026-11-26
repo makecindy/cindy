@@ -147,6 +147,15 @@ function SectionContent({ shared, active, refreshKey, visible, query, showCollap
   // Search results are always rows; the stored fold returns with the search cleared.
   const collapsed = stored && !search;
   const headerOnly = collapsed && !showCollapsedAvatars;
+  // Local buddy-set failures must stay actionable even when the body is folded:
+  // the row retries below are hidden by the headerOnly branch.
+  const hasBuddySets = buddySets.sets.length > 0;
+  const buddySetsFailed = buddySetsStatus === 'error';
+  const buddySetsFailure = buddySetsSaveFailed
+    ? { label: buddySetCopy.saveFailed, retry: retrySaveBuddySets }
+    : buddySetsFailed
+      ? { label: t('devices.resources.loadFailed'), retry: retryBuddySets }
+      : null;
   const { unread, attention } = useHeaderAttention(entries, headerOnly, roster.isOnline);
   const [showAll, setShowAll] = useRetainedHomeState(getHomeViewSession(), 'teammatesShowAll', false);
   const setTeammatesCollapsed = navigation.setTeammatesCollapsed;
@@ -184,8 +193,6 @@ function SectionContent({ shared, active, refreshKey, visible, query, showCollap
     if (cloud.error) void refreshCloud();
   };
   // Sets are visible even with an empty roster; a failed local read offers a retry.
-  const hasBuddySets = buddySets.sets.length > 0;
-  const buddySetsFailed = buddySetsStatus === 'error';
   const shown = visible && (search ? entries.length > 0
     : hasBuddySets || buddySetsFailed || buddySetsSaveFailed || canInvite || !!error || !(!entries.length && (!canCreate || roster.loading)));
   const title = t('devices.companions.title');
@@ -198,7 +205,7 @@ function SectionContent({ shared, active, refreshKey, visible, query, showCollap
     <View style={styles.header}>
       <Pressable accessibilityRole="button" accessibilityState={{ expanded: !collapsed, disabled: !!search }} disabled={!!search}
         accessibilityLabel={[t(collapsed ? 'devices.list.a11y.expand' : 'devices.list.a11y.collapse', { title }),
-          unread ? t('devices.companions.unread') : '', attention].filter(Boolean).join(', ')}
+          unread ? t('devices.companions.unread') : '', attention, buddySetsFailure?.label].filter(Boolean).join(', ')}
         onPress={toggleCollapsed} onPressIn={prepareDisclosure}
         style={({ pressed }) => [list.projectRow, styles.headerToggle, pressed && mobileInteractionStyles.pressed]} testID="home.teammatesHeader">
         {collapsed
@@ -209,6 +216,13 @@ function SectionContent({ shared, active, refreshKey, visible, query, showCollap
         {(collapsed && !headerOnly) || !entries.length ? null : <Text style={[list.projectCount, styles.count]} numberOfLines={1}>{entries.length}</Text>}
         {headerOnly && (unread || attention) ? <View style={[styles.unreadDot, !!attention && styles.attentionDot]} testID="home.teammatesAttention" /> : null}
       </Pressable>
+      {headerOnly && buddySetsFailure ? <Pressable accessibilityRole="button"
+        accessibilityLabel={`${buddySetsFailure.label} ${t('devices.resources.retry')}`}
+        onPress={buddySetsFailure.retry} hitSlop={spacing.xs}
+        style={({ pressed }) => [styles.headerAdd, pressed && mobileInteractionStyles.pressed]}
+        testID="home.buddySetsHeaderRetry">
+        <RefreshCw size={iconSize.sm} color={colors.textTertiary} strokeWidth={iconStroke.regular} />
+      </Pressable> : null}
       {showError ? <Pressable accessibilityRole="button" accessibilityLabel={`${t(errorKey)} ${t('devices.resources.retry')}`}
         disabled={retrying} onPress={retry} hitSlop={spacing.xs}
         style={({ pressed }) => [styles.headerAdd, pressed && mobileInteractionStyles.pressed]} testID="home.teammatesRetry">

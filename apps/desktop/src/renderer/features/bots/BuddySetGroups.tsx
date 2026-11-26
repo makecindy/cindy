@@ -83,6 +83,10 @@ export function buddySetCopy(t: TFunction) {
     createAction: t('bots.buddySets.createAction', { defaultValue: 'Create buddy set' }),
     saveAction: t('bots.buddySets.saveAction', { defaultValue: 'Save name' }),
     cancel: t('bots.buddySets.cancel', { defaultValue: 'Cancel' }),
+    loadFailed: t('bots.buddySets.loadFailed', { defaultValue: 'Buddy sets could not be loaded' }),
+    saveFailed: t('bots.buddySets.saveFailed', { defaultValue: 'Buddy set changes were not saved' }),
+    retry: t('bots.buddySets.retry', { defaultValue: 'Retry' }),
+    retrySave: t('bots.buddySets.retrySave', { defaultValue: 'Retry save' }),
     collapse: t('bots.buddySets.collapse', { defaultValue: 'Collapse buddy set' }),
     expand: t('bots.buddySets.expand', { defaultValue: 'Expand buddy set' }),
     actions: t('bots.buddySets.actions', { defaultValue: 'Buddy set actions' }),
@@ -97,7 +101,7 @@ export function BuddySetGroups<T extends BuddySetChatEntry>({
   candidates: readonly BuddySetRosterItem<T>[];
   buddySets: BuddySetsState;
   renderEntry: (entry: T) => React.ReactNode;
-  onChange: (next: BuddySetsState | ((current: BuddySetsState) => BuddySetsState)) => void;
+  onChange: (change: (current: BuddySetsState) => BuddySetsState) => void;
   onNewSet: () => void;
   onRename: (buddySetId: string, name: string) => void;
 }) {

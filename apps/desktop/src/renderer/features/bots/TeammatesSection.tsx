@@ -28,6 +28,8 @@ import { useTranslation } from 'react-i18next';
 import { cn } from '@/lib/utils';
 import { useAuth } from '@/contexts/AuthContext';
 import { Tip } from '@/components/ui/tooltip';
+import { Button } from '@/components/ui/button';
+import { ErrorNotice } from '@/components/ui/error-notice';
 import { Spinner } from '@/components/ui/spinner';
 import { SectionCollapse } from '@/features/cc-agent/sidebar/SectionCollapse';
 import { SIDEBAR_LIST_ROW_ACTIVE_CLASS, SIDEBAR_LIST_ROW_HEIGHT_CLASS } from '@/features/cc-agent/sidebar/listRowStyle';
@@ -156,7 +158,8 @@ export function TeammatesSection() {
   };
   const [showAllChats, setShowAllChats] = useState(false);
   // 「伙伴集」是纯本机展示偏好:用户命名的可折叠容器,只收伙伴私聊行。
-  const [buddySets, updateBuddySets] = useBuddySets();
+  const [buddySets, updateBuddySets, buddySetsStatus, retryBuddySets, buddySetsSaveFailed, retrySaveBuddySets] = useBuddySets();
+  const buddySetText = buddySetCopy(t);
   const [buddySetNameRequest, setBuddySetNameRequest] = useState<
     { kind: 'new' } | { kind: 'rename'; buddySetId: string; name: string } | null
   >(null);
@@ -834,7 +837,7 @@ export function TeammatesSection() {
               ))}
               <DropdownMenuItem onSelect={() => setBuddySetNameRequest({ kind: 'new' })}
                 disabled={buddySets.sets.length >= BUDDY_SET_LIMIT}>
-                {buddySetCopy(t).new}
+                {buddySetText.new}
               </DropdownMenuItem>
               <DropdownMenuSeparator />
               <DropdownMenuCheckboxItem checked={showCollapsedAvatars} onCheckedChange={changeCollapsedAvatars}>
@@ -941,6 +944,35 @@ export function TeammatesSection() {
 
       {profileLoadState === 'error' ? (
         <div className="pt-1 pr-0 pl-3"><BotRosterLoadError /></div>
+      ) : null}
+
+      {buddySetsStatus === 'error' ? (
+        <div className="pt-1 pr-0 pl-3">
+          <ErrorNotice
+            role="alert"
+            data-testid="buddy-sets-read-error"
+            message={buddySetText.loadFailed}
+            actions={
+              <Button size="sm" compact variant="secondary" data-testid="buddy-sets-read-retry" onClick={retryBuddySets}>
+                {buddySetText.retry}
+              </Button>
+            }
+          />
+        </div>
+      ) : null}
+      {buddySetsSaveFailed ? (
+        <div className="pt-1 pr-0 pl-3">
+          <ErrorNotice
+            role="alert"
+            data-testid="buddy-sets-save-error"
+            message={buddySetText.saveFailed}
+            actions={
+              <Button size="sm" compact variant="secondary" data-testid="buddy-sets-save-retry" onClick={retrySaveBuddySets}>
+                {buddySetText.retrySave}
+              </Button>
+            }
+          />
+        </div>
       ) : null}
 
       <SectionCollapse collapsed={showIconStrip || (collapsed && attentionChats.length === 0)}>

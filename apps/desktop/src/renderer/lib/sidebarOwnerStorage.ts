@@ -324,6 +324,34 @@ function getLegacyEnvelope(
   return initializeLegacyEnvelope(storage, ownerId, state, authority);
 }
 
+export type SidebarOwnerStorageReadStatus = 'ready' | 'error' | 'unavailable';
+export interface SidebarOwnerStorageReadResult {
+  status: SidebarOwnerStorageReadStatus;
+  value: string | null;
+}
+
+/**
+ * Read one owner-scoped key without the legacy fallback. Unlike the string-or-null
+ * helper below, a missing owner, unavailable storage or missing authority is never
+ * collapsed into "no record": callers that replace the whole record need that
+ * distinction before they are allowed to write (engineering-conventions.md §8.2).
+ * This is a pure read; envelope initialization belongs to the write path.
+ */
+export function readScopedSidebarOwnerStorage(
+  baseKey: string,
+  ownerId: string | null,
+): SidebarOwnerStorageReadResult {
+  if (!ownerId) return { status: 'unavailable', value: null };
+  const storage = safeStorage();
+  const authority = readOwnerAuthority(ownerId);
+  if (!storage || !authority) return { status: 'error', value: null };
+  try {
+    return { status: 'ready', value: storage.getItem(sidebarOwnerStorageKey(baseKey, ownerId)) };
+  } catch {
+    return { status: 'error', value: null };
+  }
+}
+
 /** Read scoped state first, then the immutable first-upgrade fallback. */
 export function readSidebarOwnerStorage(baseKey: string, ownerId: string | null): string | null {
   if (!ownerId) return null;

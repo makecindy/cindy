@@ -6,7 +6,14 @@ const h = vi.hoisted(() => ({ cloudRefresh: vi.fn(async () => {}), cloudError: n
   openTeammate: vi.fn(async (_row: unknown) => {}),
   cloudActor: null as null | { id: string }, createOptions: null as any, collapsed: false, showAvatars: true, unread: false,
   cacheRevision: 0, cacheListeners: new Set<() => void>(), unreadIds: new Set<string>(),
-  stripRenders: [] as string[], avatarRenders: [] as string[], identityReads: 0 }));
+  stripRenders: [] as string[], avatarRenders: [] as string[], identityReads: 0,
+  buddySets: { version: 1 as const, sets: [] as Array<{ buddySetId: string; name: string; buddyIds: string[]; collapsed?: boolean }> },
+  buddySetsStatus: 'ready' as string, buddySetsSaveFailed: false,
+  updateBuddySets: vi.fn(), retryBuddySets: vi.fn(), retrySaveBuddySets: vi.fn() }));
+vi.mock('@/session/useBuddySets', () => ({
+  useBuddySets: () => [h.buddySets, h.updateBuddySets, h.buddySetsStatus,
+    h.retryBuddySets, h.buddySetsSaveFailed, h.retrySaveBuddySets],
+}));
 vi.mock('@/session/remoteSessionStore', () => ({ remoteSessionStore: { subscribe: () => () => {}, getPendingInteractions: () => [], getSessionLiveActivity: () => null } }));
 vi.mock('react-native', () => ({
   View: ({ children, testID }: any) => el('div', { 'data-testid': testID }, children),
@@ -83,6 +90,8 @@ let root: Root; let node: HTMLDivElement;
 beforeEach(() => { Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true }); node = document.createElement('div'); root = createRoot(node); vi.clearAllMocks(); h.cloudActor = null; vi.useFakeTimers(); roster.error = 'LIST_FAILED'; h.collapsed = false; h.showAvatars = true; h.unread = false; groups.items = [];
   h.cacheRevision = 0; h.unreadIds.clear(); h.stripRenders = []; h.avatarRenders = []; h.identityReads = 0;
   h.cloudError = null; getHomeViewSession().write('teammatesShowAll', false);
+  h.buddySets = { version: 1, sets: [] }; h.buddySetsStatus = 'ready'; h.buddySetsSaveFailed = false;
+  h.updateBuddySets.mockReset(); h.retryBuddySets.mockReset(); h.retrySaveBuddySets.mockReset();
 });
 afterEach(async () => { await act(async () => root.unmount()); vi.useRealTimers(); });
 const render = (refreshKey: number, overrides: Partial<Parameters<typeof HomeTeammatesSection>[0]> = {}) => act(async () => root.render(el(HomeTeammatesSection, {
@@ -359,4 +368,32 @@ it('defers a buddy set fold into the home disclosure window', async () => {
   await act(async () => { pendingApply!(); });
   expect(byId('buddy.row')).toBeNull();
   expect(header()?.getAttribute('aria-label')).toContain('expand');
+});
+
+/**
+ * 测试价值(本轮新增段头失败反馈用例)
+ * - 生产入口与可观察结果:HomeTeammatesSection 在仅显示段头时仍给出伙伴集读/写失败的
+ *   可点击重试点,且不渲染被折叠门隐藏的列表内重试行。
+ * - Bug／规则依据:PR #11701 的 headerOnly 保存失败反馈 P2;DESIGN.md §4「折叠态保留可发现状态」。
+ * - 现有覆盖缺口:已有折叠态用例只覆盖名册未读/待关注点,不覆盖本地伙伴集持久化失败。
+ * - 最小失败输入:collapsed=true、showCollapsedAvatars=false,并令 hook 返回 error 或 saveFailed。
+ * - tier:unit(jsdom,真实首页段落 + hook 替身),纯同步、无真实等待。
+ * - 实测耗时:3.46s(单独运行整个既有 19 用例文件,含启动;用例本身 158ms)。
+ */
+it('keeps buddy-set read and save retries visible when only the header is shown', async () => {
+  h.collapsed = true; h.showAvatars = false; h.buddySetsStatus = 'error';
+  await render(0);
+  expect(byId('home.buddySetsRetry')).toBeNull();
+  const readRetry = byId('home.buddySetsHeaderRetry');
+  expect(readRetry).not.toBeNull();
+  await act(async () => readRetry!.click());
+  expect(h.retryBuddySets).toHaveBeenCalledOnce();
+
+  h.buddySetsStatus = 'ready'; h.buddySetsSaveFailed = true;
+  await render(1);
+  expect(byId('home.buddySetsSaveRetry')).toBeNull();
+  const saveRetry = byId('home.buddySetsHeaderRetry');
+  expect(saveRetry).not.toBeNull();
+  await act(async () => saveRetry!.click());
+  expect(h.retrySaveBuddySets).toHaveBeenCalledOnce();
 });
