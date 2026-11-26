@@ -16,6 +16,11 @@ export interface PluginOperationLine {
   entry: PluginSlotEntry;
   who: PluginSlotHolder;
   check?: PluginPendingCheck;
+  /**
+   * A success still waiting for its read of the computer (`key` is its operation id; maintainer review 03:52): shown
+   * as it ended so far ("could not read" with "Read again", reading, or the result once read).
+   */
+  awaitingRead?: boolean;
 }
 const KIND: Record<PluginSlotEntry, string> = {
   "market-install": "marketInstall", update: "update", uninstall: "uninstall", "page-approval": "pageApproval",
@@ -42,8 +47,8 @@ export function PluginPendingChecksSheet({ visible, lines, conclusions, isOnline
   onDecide(operationId: string): boolean;
   onClose(): void;
   onOpenInstalled(who: PluginSlotHolder, instanceKey: string): void;
-  /** "Go to Installed": closes the list and shows the installed segment (an older computer's result, V2.10 ③). */
-  onShowInstalled(): void;
+  /** "Go to Installed": closes the list and shows the installed segment of the record's computer (V2.10 ③). */
+  onShowInstalled(who: PluginSlotHolder): void;
 }) {
   const { t } = useTranslation(), styles = useThemedStyles(makeStyles), { colors } = useTheme();
   const listArea = useScrollOverflow();
@@ -55,7 +60,7 @@ export function PluginPendingChecksSheet({ visible, lines, conclusions, isOnline
   useEffect(() => { if (!visible) setBlocked([]); }, [visible]);
   for (const line of lines) seen.current.set(line.key, line);
   const shown = [...seen.current.values()];
-  const live = new Set(lines.map((line) => line.key));
+  const live = new Set(lines.filter((line) => !line.awaitingRead).map((line) => line.key));
   const status = (line: PluginOperationLine) => {
     const check = line.check;
     if (!check) return t("plugins.checks.status.preparing");
@@ -75,7 +80,8 @@ export function PluginPendingChecksSheet({ visible, lines, conclusions, isOnline
    * it, or failed to read ("Read again"); an uninstall has nothing to open.
    */
   const ended = (line: PluginOperationLine): { text: string; open?: string; readAgain?: string; openUnavailable?: boolean; showInstalled?: boolean } => {
-    const conclusion = line.check ? conclusions.find((item) => item.operationId === line.check!.operationId) : undefined;
+    const operationId = line.check?.operationId ?? (line.awaitingRead ? line.key : undefined);
+    const conclusion = operationId ? conclusions.find((item) => item.operationId === operationId) : undefined;
     if (!conclusion) return { text: t(line.check ? "plugins.checks.result.untracked" : "plugins.checks.result.ended") };
     if (conclusion.result === "notInstalled") return { text: t("plugins.market.unconfirmedNotInstalled") };
     if (conclusion.result === "mismatch") return { text: t("plugins.market.unconfirmedMismatch") };
@@ -148,7 +154,7 @@ export function PluginPendingChecksSheet({ visible, lines, conclusions, isOnline
                 ) : over?.showInstalled ? (
                   // Only the installed list (its segment), never a particular instance: nothing proves which one it is.
                   <View style={styles.actions}>
-                    <Pressable testID="plugins.checks.showInstalled" accessibilityRole="button" onPress={onShowInstalled}
+                    <Pressable testID="plugins.checks.showInstalled" accessibilityRole="button" onPress={() => onShowInstalled(line.who)}
                       style={styles.button}>
                       <Text style={styles.label}>{t("plugins.checks.showInstalled")}</Text>
                     </Pressable>

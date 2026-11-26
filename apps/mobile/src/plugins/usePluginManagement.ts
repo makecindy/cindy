@@ -78,6 +78,12 @@ export interface PluginCheckConclusion {
   instanceKey?: string;
   /** Its own view was showing it and handled the result already (only the list of checks still tells it). */
   shown?: boolean;
+  /**
+   * The success still needs its read of the computer (maintainer review 03:52): its read failed, or it is being read
+   * again after a failure. Listed with the unfinished operations (the notice at the top, the list of checks) until the
+   * read settles it.
+   */
+  awaitingRead?: boolean;
 }
 const CONCLUSIONS_KEPT = 20;
 let conclusions: Array<PluginCheckConclusion & { ownerKey: string; seq: number }> = [];
@@ -169,14 +175,17 @@ type Finished = NonNullable<ManagementEntry["lastCheck"]>;
  * for the instance that read found: the market plugin an install or update put there, or the instance an approval was
  * for. Read again on request after a failed read; dropped when the account changed.
  */
-interface Readback { owner: ReturnType<typeof getMobileAuthOwner>; ownerKey: string; invoke: PluginManagementInvoke; snapshotRead?: "installed"; check: Finished }
+interface Readback { owner: ReturnType<typeof getMobileAuthOwner>; ownerKey: string; invoke: PluginManagementInvoke; snapshotRead?: "installed"; check: Finished; reads: number }
 const readbacks = new Map<string, Readback>();
 async function readBack(operationId: string) {
   const job = readbacks.get(operationId);
   const before = conclusions.find((item) => item.operationId === operationId);
   if (!job || !before) return;
-  const current = () => isMobileAuthOwnerCurrent(job.owner) && readbacks.get(operationId) === job;
-  conclude(job, { ...before, readback: "pending", instanceKey: undefined });
+  // Every read of it is issued after the result; when it is read again before an earlier read came back, only the
+  // newest read issued settles it (an earlier reply landing last is older).
+  const read = ++job.reads;
+  const current = () => isMobileAuthOwnerCurrent(job.owner) && readbacks.get(operationId) === job && job.reads === read;
+  conclude(job, { ...before, readback: "pending", instanceKey: undefined, awaitingRead: before.readback === "failed" || before.awaitingRead });
   try {
     const snapshot = await createPluginManagementClient({ invoke: job.invoke, deviceId: job.check.who.deviceId, isCurrent: current })
       .snapshot(job.snapshotRead);
@@ -184,13 +193,38 @@ async function readBack(operationId: string) {
     // The final receipt is a past result: only what the computer has now (its instance, package and evidence) opens it.
     const opens = pluginOperationOpens(job.check, { ghosts: snapshot.ghosts, market: snapshot.market.items });
     const latest = conclusions.find((item) => item.operationId === operationId) ?? before;
-    conclude(job, opens.open ? { ...latest, readback: "verified", instanceKey: opens.instanceKey } : { ...latest, readback: opens.reason, instanceKey: undefined });
+    conclude(job, opens.open ? { ...latest, readback: "verified", instanceKey: opens.instanceKey, awaitingRead: false }
+      : { ...latest, readback: opens.reason, instanceKey: undefined, awaitingRead: false });
     readbacks.delete(operationId);
   } catch {
     if (!current()) return;
     const latest = conclusions.find((item) => item.operationId === operationId) ?? before;
-    conclude(job, { ...latest, readback: "failed", instanceKey: undefined });
+    conclude(job, { ...latest, readback: "failed", instanceKey: undefined, awaitingRead: true });
   }
+}
+/**
+ * A market install whose result arrived but whose read of the computer failed (its view ends it and lets the market start
+ * another install; maintainer review 03:52): the success goes to the list of checks with a read of its own, by its own
+ * operation id, so no later operation of the same controller can change it. Listed until that read settles it; read
+ * again on "Read again" or when its computer comes back (the page). Nothing is written.
+ */
+export function handOverUnreadSuccess(controller: PluginManagementController) {
+  const entry = [...entries].find((candidate) => candidate.controller === controller && !candidate.dead);
+  const finished = controller.finishedOperation();
+  if (!entry || !finished || controller.getState().outcome !== "succeeded") return;
+  if (finished.entry !== "market-install" && finished.entry !== "update" && finished.entry !== "page-approval") return;
+  // Already listed (its pending check ended here and the list started its own read): its view did not handle it after
+  // all; it waits for that read like one handed over.
+  const listed = conclusions.find((item) => item.operationId === finished.operationId);
+  if (listed && readbacks.has(finished.operationId)) {
+    conclude(entry, { ...listed, shown: false, awaitingRead: listed.readback === "failed" || listed.readback === "pending" || listed.awaitingRead });
+    return;
+  }
+  const check = { ...finished, waiting: false } as Finished;
+  conclude(entry, { operationId: finished.operationId, entry: finished.entry, who: finished.who, result: "succeeded",
+    errorCode: null, shown: false, readback: "failed", awaitingRead: true });
+  readbacks.set(finished.operationId, { owner: entry.owner, ownerKey: entry.ownerKey, invoke: entry.invoke,
+    snapshotRead: entry.snapshotRead, check, reads: 0 });
 }
 /** Read the target computer again for a success whose read failed ("Read again" in the list of checks). */
 export function retryPluginCheckReadback(operationId: string) { void readBack(operationId); }
@@ -267,7 +301,7 @@ function watch(entry: ManagementEntry) {
       result: state.outcome as "succeeded" | "failed" | "cancelled", errorCode: state.errorCode, shown: !!entry.listener,
       readback: opens ? "pending" : "none" });
     if (opens) {
-      readbacks.set(last.operationId, { owner: entry.owner, ownerKey: entry.ownerKey, invoke: entry.invoke, snapshotRead: entry.snapshotRead, check: last });
+      readbacks.set(last.operationId, { owner: entry.owner, ownerKey: entry.ownerKey, invoke: entry.invoke, snapshotRead: entry.snapshotRead, check: last, reads: 0 });
       void readBack(last.operationId);
     }
   } else if (!check) entry.lastCheck = undefined;

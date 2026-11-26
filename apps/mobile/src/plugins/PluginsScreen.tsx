@@ -91,7 +91,7 @@ import {
 } from "./PluginDirectoryView";
 import { usePluginMarket } from "./usePluginMarket";
 import { pluginOperationHold, samePluginSlotHolder, usePluginManagementSlot, type PluginSlotHolder, type PluginSlotToken } from "./pluginManagementSlot";
-import { usePluginCheckConclusions, usePluginPendingChecks } from "./usePluginManagement";
+import { retryPluginCheckReadback, usePluginCheckConclusions, usePluginPendingChecks } from "./usePluginManagement";
 import { PLUGIN_NOT_OPENED_TEXT, pluginOperationOpens } from "./pluginOperationOpens";
 import { PluginPendingChecksSheet, type PluginOperationLine } from "./PluginPendingChecksSheet";
 import { usePluginPrompt } from "./usePluginPrompt";
@@ -683,11 +683,14 @@ function PluginDirectory() {
     ...checks.map((check) => ({ key: check.operationId, entry: check.entry, who: check.who, check })),
     ...holders.filter((token) => !checks.some((check) => samePluginSlotHolder(check.who, token.who)))
       .map((token) => ({ key: "slot:" + token.id, entry: token.entry, who: token.who })),
+    // A success still waiting for its read (maintainer review 03:52): listed until a read settles it.
+    ...conclusions.filter((item) => item.awaitingRead && !checks.some((check) => check.operationId === item.operationId))
+      .map((item) => ({ key: item.operationId, entry: item.entry, who: item.who, awaitingRead: true })),
   ];
   // Every line, also the one of the plugin on screen (dispatcher N-2: the page went unavailable with nothing saying why).
   const noticeLines = operationLines;
   const lone = noticeLines.length === 1 ? noticeLines[0] : undefined;
-  const loneWaits = !!lone?.check && (lone.check.waiting || lone.check.state.outcome === "unknown");
+  const loneWaits = !!lone?.awaitingRead || (!!lone?.check && (lone.check.waiting || lone.check.state.outcome === "unknown"));
   const holderNoticeProps: PluginNoticeProps | undefined = noticeLines.length ? {
     testID: "plugins.slotHolder", icon: "info", compact: true,
     title: !lone ? t("plugins.checks.many", { count: noticeLines.length })
@@ -956,14 +959,29 @@ function PluginDirectory() {
   useEffect(() => {
     const known = knownConclusions.current!;
     for (const conclusion of conclusions) {
-      if (conclusion.shown) { known.refreshed.add(conclusion.operationId); known.opened.add(conclusion.operationId); continue; }
+      // Handled by its own view; not remembered as opened, since a view that could not read it hands it over later
+      // (`shown` false, maintainer review 03:52).
+      if (conclusion.shown) { known.refreshed.add(conclusion.operationId); continue; }
       if (!known.refreshed.has(conclusion.operationId)) { known.refreshed.add(conclusion.operationId); void list.refresh(); }
-      if (known.opened.has(conclusion.operationId) || conclusion.readback === "pending") continue;
+      // Not read yet (out, or failed and waiting to be read again): decided once its read settles it.
+      if (known.opened.has(conclusion.operationId) || conclusion.readback === "pending" || conclusion.readback === "failed") continue;
       known.opened.add(conclusion.operationId);
       if (conclusion.entry === "market-install" && (conclusion.result === "installed" || conclusion.result === "succeeded")
         && conclusion.readback === "verified" && conclusion.instanceKey && focused && !checksOpen) openInstalled(conclusion.who, conclusion.instanceKey);
     }
   }, [conclusions]);
+  // A success whose read failed while its computer was offline is read again when the computer is back (maintainer
+  // review 03:52: the reconnect read takes over). Only reads; "Read again" does the same by hand.
+  const readOnline = useRef(new Map<string, boolean>());
+  const awaitingOnline = conclusions.filter((item) => item.awaitingRead && item.readback === "failed")
+    .map((item) => [item.operationId, targetOnline(item.who.deviceId)] as const);
+  useEffect(() => {
+    for (const [operationId, online] of awaitingOnline) {
+      const before = readOnline.current.get(operationId);
+      readOnline.current.set(operationId, online);
+      if (online && before === false && focused) retryPluginCheckReadback(operationId);
+    }
+  }, [JSON.stringify(awaitingOnline), focused]);
   // "View and decide" (dispatcher L-2): a consent a lookup found that this phone never showed opens in the same
   // confirmation sheet, after its operation took its computer's slot; while it is open the check counts as shown.
   const [deciding, setDeciding] = useState<string | null>(null);
@@ -1108,68 +1126,62 @@ function PluginDirectory() {
         ]
       : []),
   ];
-  const completedOperation = useRef<string | undefined>(undefined);
+  const completedOperation = useRef<{ operationId: string; row?: HostedRemoteCollectionItem; generation: number;
+    owner: ReturnType<typeof getMobileAuthOwner>; settled: boolean } | undefined>(undefined);
   useEffect(() => {
-    const state = management.state;
-    if (
-      !state ||
-      state.outcome !== "succeeded" ||
-      !state.operationId ||
-      completedOperation.current === state.operationId
-    )
-      return;
-    completedOperation.current = state.operationId;
-    const row = selected?.row,
-      generation = detailGeneration.current,
-      owner = getMobileAuthOwner();
-    void list.refresh();
-    // The market beside it (wide screen) or on the next visit must not keep that computer's old pages and counts.
-    if (row) market.invalidate(row.host.deviceId);
-    const controller = management.controller;
-    void controller?.refresh().then(() => {
-      if (
-        !row ||
-        liveManagement.current !== controller ||
-        generation !== detailGeneration.current ||
-        !isMobileAuthOwnerCurrent(owner)
-      )
-        return;
-      const refreshed = controller.getState();
-      if (!refreshed || refreshed.errorCode || !refreshed.online) return;
-      const snapshot = refreshed.snapshot;
-      const viewed = snapshot?.ghosts.find(
-        (item) => item.instanceKey === row.item.ref.id,
-      );
-      // An update or a page approval opens only the instance the one decision finds (dispatcher O-2); when the plugin
-      // changed on the computer since, the detail stays on the instance shown and says so (nothing else is opened).
-      const finished = controller.finishedOperation();
-      let plugin = viewed;
-      if (snapshot && finished && (finished.entry === "update" || finished.entry === "page-approval")) {
-        const opens = pluginOperationOpens(finished, { ghosts: snapshot.ghosts, market: snapshot.market.items });
-        plugin = opens.open ? snapshot.ghosts.find((item) => item.instanceKey === opens.instanceKey) : viewed;
-        if (!opens.open && viewed) tell("plugins.checks.result.succeeded", PLUGIN_NOT_OPENED_TEXT[opens.reason]);
-      }
-      if (plugin)
-        void showDetail({
-          ...row,
-          key: JSON.stringify([
-            row.host.deviceId,
-            "plugins",
-            "plugin",
-            plugin.instanceKey,
-          ]),
-          item: {
-            ...row.item,
-            ref: { ...row.item.ref, id: plugin.instanceKey },
-          },
-        });
-      else if (snapshot) {
-        detailGeneration.current += 1;
-        setSelected(undefined);
-        setDetail(undefined);
-      }
-    });
-  }, [management.state?.outcome, management.state?.operationId]);
+    const state = management.state, controller = management.controller;
+    if (!state || state.outcome !== "succeeded" || !state.operationId || !controller) return;
+    if (completedOperation.current?.operationId !== state.operationId) {
+      const row = selected?.row;
+      completedOperation.current = { operationId: state.operationId, row, generation: detailGeneration.current,
+        owner: getMobileAuthOwner(), settled: false };
+      void list.refresh();
+      // The market beside it (wide screen) or on the next visit must not keep that computer's old pages and counts.
+      if (row) market.invalidate(row.host.deviceId);
+    }
+    // Decided once, on a snapshot read after the result (the controller's `finalReadback`, settled where a snapshot is
+    // published; maintainer review 03:52): never on one read before it, whichever read came back first. While it is
+    // out nothing happens; a failed read leaves the detail as it is (reading again later settles it the same way).
+    const done = completedOperation.current!;
+    if (done.settled || state.finalReadback !== "read") return;
+    done.settled = true;
+    const { row, generation, owner } = done;
+    if (!row || liveManagement.current !== controller || generation !== detailGeneration.current || !isMobileAuthOwnerCurrent(owner)) return;
+    const refreshed = controller.getState();
+    if (!refreshed.online) return;
+    const snapshot = refreshed.snapshot;
+    const viewed = snapshot?.ghosts.find(
+      (item) => item.instanceKey === row.item.ref.id,
+    );
+    // An update or a page approval opens only the instance the one decision finds (dispatcher O-2); when the plugin
+    // changed on the computer since, the detail stays on the instance shown and says so (nothing else is opened).
+    const finished = controller.finishedOperation();
+    let plugin = viewed;
+    if (snapshot && finished && (finished.entry === "update" || finished.entry === "page-approval")) {
+      const opens = pluginOperationOpens(finished, { ghosts: snapshot.ghosts, market: snapshot.market.items });
+      plugin = opens.open ? snapshot.ghosts.find((item) => item.instanceKey === opens.instanceKey) : viewed;
+      if (!opens.open && viewed) tell("plugins.checks.result.succeeded", PLUGIN_NOT_OPENED_TEXT[opens.reason]);
+    }
+    if (plugin)
+      void showDetail({
+        ...row,
+        key: JSON.stringify([
+          row.host.deviceId,
+          "plugins",
+          "plugin",
+          plugin.instanceKey,
+        ]),
+        item: {
+          ...row.item,
+          ref: { ...row.item.ref, id: plugin.instanceKey },
+        },
+      });
+    else if (snapshot) {
+      detailGeneration.current += 1;
+      setSelected(undefined);
+      setDetail(undefined);
+    }
+  }, [management.state?.outcome, management.state?.operationId, management.state?.finalReadback]);
   const failedOperationNotice = useRef<string | undefined>(undefined);
   useEffect(() => {
     const state = management.state;
@@ -1179,6 +1191,24 @@ function PluginDirectory() {
     failedOperationNotice.current = key;
     tell("plugins.notice.title.managementFailed");
   }, [management.state?.outcome, management.state?.operationId, selected?.row.key, focused, auth.accountGeneration, connectionEpoch]);
+  /**
+   * "Go to Installed" (an older computer's result, V2.10 ③; maintainer review 03:52): back to the directory the way its
+   * back step goes (the readme, settings, the installed detail and the market detail close; an installed detail's late
+   * reads are fenced), on the record's computer, in the installed segment. Nothing particular opens.
+   */
+  const showInstalledOf = (who: { deviceId: string }) => {
+    setChecksOpen(false);
+    setReadmeOpen(false);
+    setSettingsOpen(false);
+    if (selected) {
+      detailGeneration.current += 1;
+      setSelected(undefined);
+      setDetail(undefined);
+    }
+    if (market.detail) market.closeDetail();
+    if (targets.some((host) => host.deviceId === who.deviceId)) setDeviceId(who.deviceId);
+    setSegment("installed");
+  };
   const newTask = () => {
     if (!selected || !model || busy || !online || !detail || !enabled) return;
     if (!model.canUseTasks) return;
@@ -1418,7 +1448,7 @@ function PluginDirectory() {
         canOpen={knownTarget} onDecide={decide}
         onClose={() => setChecksOpen(false)} onOpenInstalled={openInstalled}
         // An older computer's result (V2.10 ③): the installed list, where the person opens the plugin themselves.
-        onShowInstalled={() => { setChecksOpen(false); if (market.detail) market.closeDetail(); setSegment("installed"); }} />
+        onShowInstalled={showInstalledOf} />
       <View style={styles.layout}>
         {wide || (!selected && !marketDetail) ? directory : null}
         {wide || selected || marketDetail ? (

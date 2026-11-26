@@ -852,6 +852,97 @@ describe("market read fences and lost-receipt facts", () => {
       expect(sent.filter((request) => request.actionId === "management:begin")).toHaveLength(1);
     });
 
+    // Maintainer review 03:52 of c6efda5691: after a success, the market row settles only on a snapshot read after the
+    // result and published. Two orders the maintainer reproduced, through the page: (1) the computer goes offline while
+    // the row waits for its read, which times out, and comes back (the row must end, and the reconnect read take over:
+    // the record's read opens the instance it proves); (2) a plugin-change refresh is sent while the row's read is out
+    // and its reply is held: the row's read lands without being published, and must not settle on the snapshot from
+    // before the install. Only reads go out after Allow; begin and Allow once each. Both failed on c6efda5691 (stuck
+    // "installing"; "not on this computer now"). Tier: unit/jsdom.
+    describe("a success read again around a disconnect or a plugin-change refresh (maintainer review 03:52)", () => {
+      /**
+       * `hold` / `fail` see each installed read written after Allow, labelled in the order written; a held read is
+       * written (it left this phone) and only its reply waits, as when the computer answers late.
+       */
+      function successWire(hold: (label: string) => Promise<void> | undefined, fail: (label: string) => boolean) {
+        let present = false, installedReads = 0;
+        const sent = queuedWire(async (request) => {
+          switch (request.actionId) {
+            case "management:snapshot": {
+              if (request.input?.read === "capabilities") return { catalogPaging: true };
+              if (request.input?.read === "catalog") return marketPage([item]);
+              if (!present) return managementSnapshot(false);
+              const label = `installed-${++installedReads}`;
+              const reply = managementSnapshot(true);
+              await hold(label);
+              if (fail(label)) throw new Error("[TIMEOUT] remote invoke timed out");
+              return reply;
+            }
+            case "management:market-detail": return { ...item, installState: present ? "installed" : "not-installed",
+              ...attributed(present, present ? "screen-operation" : undefined), manifest: demoManifest };
+            case "management:begin": return demoConsent(request);
+            case "management:answer": present = true; return { operationId: request.input.operationId, phase: "succeeded" };
+            default: throw new Error("unexpected " + request.actionId);
+          }
+        }, () => undefined);
+        return Object.assign(sent, { written: () => installedReads });
+      }
+      const writes = (sent: Array<{ actionId?: string }>) => sent.filter((request) => ["management:begin", "management:answer", "management:cancel"].includes(request.actionId ?? ""))
+        .map((request) => request.actionId);
+      it("offline while the row's reads are out, they time out, then back online", async () => {
+        const g = gates();
+        let offline = true;
+        const held: string[] = [];
+        const sent = successWire((label) => { if (!offline) return undefined; held.push(label); return g.hold("reads"); }, (label) => held.includes(label));
+        await openMarket();
+        await act(async () => shownMarket().install(shownMarket().items[0]));
+        await settle(14);
+        await act(async () => { void fixture.props.get("confirmation").controller.answer(true); });
+        await settle(14);
+        expect(shownMarket().installBusy).toBe(true);
+        fixture.online = false;
+        await act(async () => root.render(createElement(PluginsScreen)));
+        g.release("reads");
+        await settle(14);
+        // The row ended (another market install may start); nothing was opened on facts it did not read.
+        expect(held.length).toBeGreaterThan(0);
+        expect(shownMarket().installBusy).toBe(false);
+        expect(opened()).toBe(false);
+        offline = false;
+        fixture.online = true;
+        await act(async () => root.render(createElement(PluginsScreen)));
+        await settle(20);
+        // A read after the reconnect proves this install (V2.10 ①): its instance opens.
+        expect(opened()).toBe(true);
+        expect(writes(sent)).toEqual(["management:begin", "management:answer"]);
+      });
+      it("a plugin-change refresh is sent while the row's read is out, and only that refresh's reply is held", async () => {
+        const g = gates();
+        const sent = successWire((label) => g.hold(label), () => false);
+        await openMarket();
+        await act(async () => shownMarket().install(shownMarket().items[0]));
+        await settle(14);
+        await act(async () => { void fixture.props.get("confirmation").controller.answer(true); });
+        await settle(14);
+        await act(async () => { fixture.resourceListeners.forEach((listener) => listener("mac", { collectionId: "plugins" })); });
+        await settle(14);
+        // Every read written so far answers (the row's own read among them, with the installed plugin) except the newest:
+        // the plugin-change refresh, written last.
+        const newest = sent.written();
+        for (let read = 1; read < newest; read++) g.release(`installed-${read}`);
+        await settle(40);
+        // Nothing settles on the snapshot from before the install while the newer read is out.
+        expect(shownMarket().installBusy).toBe(true);
+        expect(opened()).toBe(false);
+        expect(fixture.alert).not.toHaveBeenCalled();
+        g.release(`installed-${newest}`);
+        await settle(20);
+        expect(opened()).toBe(true);
+        expect(fixture.alert).not.toHaveBeenCalled();
+        expect(writes(sent)).toEqual(["management:begin", "management:answer"]);
+      });
+    });
+
     // Group 3 (03:54 #3): a next page N is queued by scrolling, then a new search is typed and settles; its first
     // page S and count C are held too. Every request that leaves must match the list and search on screen then.
     it.each(orderings(["N", "S", "C"]).map((order) => [order.join(" → "), order] as const))("scroll queued, then a new search: %s", async (_label, order) => {

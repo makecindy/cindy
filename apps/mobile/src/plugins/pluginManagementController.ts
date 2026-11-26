@@ -25,9 +25,13 @@ export interface PluginManagementState {
    */
   missingReceiptFacts?: PluginManagementSnapshot | null;
   /**
-   * After a final receipt, where the controller's own read of the computer stands (the facts "Open" is decided from):
-   * `pending` while it is out, `read` once it landed (the snapshot is then from after the result), `failed` when it did
-   * not come back. Views decide on `read` at once and wait only while `pending` (dispatcher R, point 2).
+   * After a final receipt, whether `snapshot` is from after the result (the facts "Open" is decided from; maintainer
+   * review 03:52 of c6efda5691). Settled only where a snapshot is published: `read` is set in the same publish as the
+   * first snapshot whose read was issued after the result arrived (by issue order, not by reply order: the controller's
+   * own read, a reconnect refresh, a plugin-change refresh or a manual one); a read issued before the result never
+   * counts, and nothing that is not published counts. `pending` while such a read is still out; `failed` once none is
+   * (every one failed, was superseded or dropped) or the computer went offline: recoverable, the next such snapshot
+   * published makes it `read`. Views decide on `read` and wait only while `pending`.
    */
   finalReadback?: 'pending' | 'read' | 'failed';
   /**
@@ -89,6 +93,12 @@ export function createPluginManagementController(client: PluginManagementClient,
   let disposed = false, epoch = 0, refreshSequence = 0, snapshotSequence = 0;
   // Display reads cannot erase the full Host facts used for queued write guards.
   let facts: PluginManagementSnapshot | null = null, factsSequence = 0;
+  /**
+   * `finalReadback`: the snapshot sequence when the final receipt arrived (a read counts when issued after it), and the
+   * sequences of the reads still out (installed snapshots and display reads alike), to know whether one can still land.
+   */
+  let resultReadAfter: number | null = null;
+  const readsOut = new Set<number>();
   let pendingDisplay: { token: number; sequence: number; promise: Promise<PluginPromptDisplay> } | undefined;
   let timer: unknown;
   const scheduler = options.scheduler ?? { set: (run: () => void, delayMs: number) => setTimeout(run, delayMs),
@@ -335,17 +345,37 @@ export function createPluginManagementController(client: PluginManagementClient,
     publishedSnapshotSequence = sequence;
     const asFacts = !!missingReceipt && missingReceipt.token === token && sequence > missingReceipt.after && state.outcome === 'unknown';
     if (asFacts) missingFactsSequence = sequence;
-    publish({ ...patch, snapshot, ...(asFacts ? { missingReceiptFacts: snapshot } : {}) });
+    // The one place a final result's read is settled: this snapshot was read after the result arrived.
+    const settles = resultReadAfter !== null && sequence > resultReadAfter
+      && (state.finalReadback === 'pending' || state.finalReadback === 'failed');
+    publish({ ...patch, snapshot, ...(asFacts ? { missingReceiptFacts: snapshot } : {}),
+      // A read error from before no longer stands; the operation's own error (a failed receipt's) does.
+      ...(settles ? { finalReadback: 'read' as const, errorCode: state.receipt?.errorCode ?? null } : {}) });
+  }
+  /** A read went out (`sequence`); `readDone` when it is over, however it ended. */
+  function readOut(sequence: number) { readsOut.add(sequence); }
+  /**
+   * A read is over (landed, failed, superseded or dropped): if the result still waits for a read issued after it and
+   * none is out anymore, nothing can settle it by itself: `failed` (recoverable).
+   */
+  function readDone(sequence: number) {
+    readsOut.delete(sequence);
+    if (state.finalReadback !== 'pending' || resultReadAfter === null) return;
+    for (const out of readsOut) if (out > resultReadAfter) return;
+    publish({ finalReadback: 'failed' });
   }
   async function readSnapshot(token: number) {
     const sequence = issueSnapshotRead();
     const factsToken = ++factsSequence;
-    const snapshot = await client.snapshot(options.snapshotRead);
-    if (current(token) && factsToken === factsSequence) facts = snapshot;
-    // Both display reads and full snapshots share this sequence. A current full
-    // read replaces the older hint; a later lightweight read can replace it again.
-    if (current(token) && sequence === snapshotSequence) publishSnapshot(sequence, token, snapshot, { uiConsent: null });
-    return snapshot;
+    readOut(sequence);
+    try {
+      const snapshot = await client.snapshot(options.snapshotRead);
+      if (current(token) && factsToken === factsSequence) facts = snapshot;
+      // Both display reads and full snapshots share this sequence. A current full
+      // read replaces the older hint; a later lightweight read can replace it again.
+      if (current(token) && sequence === snapshotSequence) publishSnapshot(sequence, token, snapshot, { uiConsent: null });
+      return snapshot;
+    } finally { readDone(sequence); }
   }
   /**
    * `holder`: the request that got this receipt; `issuedAt`: when it was sent (see `rankOf`). A receipt is the Host's
@@ -381,17 +411,19 @@ export function createPluginManagementController(client: PluginManagementClient,
       if (options.readDisplay && state.snapshot) prompt.snapshot = { ...state.snapshot,
         ghosts: state.snapshot.ghosts.map(ghost => matchesReceiver(ghost) ? { ...ghost, uiPromptSuppressed: true } : ghost) };
     }
+    // The result is known from here on: only reads issued after this sequence can settle its read.
+    if (terminal(receipt) && !answered) resultReadAfter = snapshotSequence;
     conclude(holder, { ...prompt, receipt, outcome: answered ? 'unknown' : receipt.phase, errorCode: receipt.errorCode ?? null,
       ...(terminal(receipt) && !answered ? { finalReadback: 'pending' as const } : {}) });
     if (terminal(receipt)) {
       // A cancel racing commit must still show succeeded. Refresh facts, without changing the receipt on read failure.
+      // The read settles `finalReadback` only where its snapshot is published (publishSnapshot / readDone).
       stopPolling();
       const readback = readSnapshot(token), readbackSequence = snapshotSequence;
       try {
         await readback;
-        if (current(token) && state.finalReadback === 'pending') publish({ finalReadback: 'read' });
       } catch (error) {
-        if (current(token)) publish({ errorCode: pluginManagementErrorCode(error), ...(state.finalReadback === 'pending' ? { finalReadback: 'failed' as const } : {}) });
+        if (current(token) && state.finalReadback !== 'read') publish({ errorCode: pluginManagementErrorCode(error) });
         if (displacedDisplay && consumed) {
           try {
             const display = await displacedDisplay;
@@ -413,6 +445,7 @@ export function createPluginManagementController(client: PluginManagementClient,
     try {
       if (options.readDisplay) {
         const snapshotToken = issueSnapshotRead();
+        readOut(snapshotToken);
         const reading = { token, sequence: snapshotToken, promise: options.readDisplay() };
         pendingDisplay = reading;
         try {
@@ -421,7 +454,7 @@ export function createPluginManagementController(client: PluginManagementClient,
             publishedSnapshotSequence = snapshotToken;
             publish({ ...display, uiConsent: display.uiConsent ?? null, errorCode: null });
           }
-        } finally { if (pendingDisplay === reading) pendingDisplay = undefined; }
+        } finally { if (pendingDisplay === reading) pendingDisplay = undefined; readDone(snapshotToken); }
         return;
       }
       const capability = await client.capability();
@@ -430,10 +463,13 @@ export function createPluginManagementController(client: PluginManagementClient,
       if (capability === 'supported') {
         const snapshotToken = issueSnapshotRead();
         const factsToken = ++factsSequence;
-        const snapshot = await client.snapshot(options.snapshotRead);
-        if (current(token) && factsToken === factsSequence) facts = snapshot;
-        if (current(token) && sequence === refreshSequence && snapshotToken === snapshotSequence)
-          publishSnapshot(snapshotToken, token, snapshot, {});
+        readOut(snapshotToken);
+        try {
+          const snapshot = await client.snapshot(options.snapshotRead);
+          if (current(token) && factsToken === factsSequence) facts = snapshot;
+          if (current(token) && sequence === refreshSequence && snapshotToken === snapshotSequence)
+            publishSnapshot(snapshotToken, token, snapshot, {});
+        } finally { readDone(snapshotToken); }
       }
     } catch (error) {
       if (current(token) && sequence === refreshSequence) publish({ errorCode: pluginManagementErrorCode(error) });
@@ -454,6 +490,7 @@ export function createPluginManagementController(client: PluginManagementClient,
     const holder = hold();
     answers.clear(); cancelling = null; consentOrder.length = 0; answerSentAt.clear(); shownRank = -1;
     lookupFailures = 0; autoLookupStopped = false; resetPace(); answerWrittenEver = false; cancelAttempted = false; shownConsent = null;
+    resultReadAfter = null;
     publish({ busy: true, errorCode: null, operationId: null, receipt: null, outcome: 'idle', finalReadback: undefined,
       expectedSource: intent.kind === 'install' && intent.detail.sourceType !== 'server' ? intent.detail.sourceIdentity ?? null : null,
       expectedConsent: expectationOf(intent, slotHold?.who.deviceId ?? client.deviceId) });
@@ -675,7 +712,9 @@ export function createPluginManagementController(client: PluginManagementClient,
   const unsubscribeOwner = subscribeMobileAuthOwner(() => {
     if (client.isCurrent()) return;
     ++epoch; stopPolling(); busyHolder = 0; answers.clear(); cancelling = null; consentOrder.length = 0; answerSentAt.clear(); shownRank = -1;
+    resultReadAfter = null;
     publish({ capability: 'unknown', snapshot: null, uiConsent: null, receipt: null, operationId: null, busy: false, outcome: 'idle', errorCode: null,
+      finalReadback: undefined,
     });
   });
   return {
@@ -748,7 +787,8 @@ export function createPluginManagementController(client: PluginManagementClient,
     untrack(): boolean {
       if (disposed || writesInFlight > 0) return false;
       ++epoch; stopPolling(); busyHolder = 0; answers.clear(); cancelling = null;
-      publish({ operationId: null, receipt: null, outcome: 'idle', busy: false, errorCode: null });
+      resultReadAfter = null;
+      publish({ operationId: null, receipt: null, outcome: 'idle', busy: false, errorCode: null, finalReadback: undefined });
       settleHold();
       return true;
     },
@@ -758,7 +798,10 @@ export function createPluginManagementController(client: PluginManagementClient,
       // Back online or in the foreground: automatic lookups start over.
       if (online) { lookupFailures = 0; autoLookupStopped = false; resetPace(); }
       const active = state.operationId && !['succeeded', 'cancelled', 'failed'].includes(state.outcome);
-      publish({ online, busy: false, ...(active ? { outcome: 'unknown' as const } : {}) });
+      // Offline: a result still waiting for its read cannot be read now; it is `failed` (recoverable: the snapshot the
+      // reconnect refresh publishes settles it), so no view waits on it.
+      publish({ online, busy: false, ...(active ? { outcome: 'unknown' as const } : {}),
+        ...(!online && state.finalReadback === 'pending' ? { finalReadback: 'failed' as const } : {}) });
       if (online) void reconcile();
     },
     dispose() {

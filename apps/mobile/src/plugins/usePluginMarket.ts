@@ -1,4 +1,4 @@
-import { pluginOperationOpens, type PluginOperationNotOpened } from "./pluginOperationOpens";
+import { PLUGIN_NOT_OPENED_TEXT, pluginOperationOpens, type PluginOperationNotOpened } from "./pluginOperationOpens";
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { AppState } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
@@ -14,7 +14,7 @@ import {
   PLUGIN_MARKET_QUERY_MAX, pluginMarketErrorKey, pluginMarketMatchesFilter, pluginMarketOrganizationErrorKey,
   pluginMarketRequest, pluginMarketSourceUnverified, type PluginMarketCounts, type PluginMarketFilter, type PluginMarketPage,
 } from "./pluginMarketCatalog";
-import { usePluginCheckConclusions, usePluginManagement, usePluginPendingChecks } from "./usePluginManagement";
+import { handOverUnreadSuccess, usePluginCheckConclusions, usePluginManagement, usePluginPendingChecks } from "./usePluginManagement";
 import { pluginManagementSlotFor, pluginOperationHold, usePluginManagementSlot, type PluginSlotToken } from "./pluginManagementSlot";
 
 /** Same freshness window as the computer's market browser; pull-to-refresh always re-reads. */
@@ -635,7 +635,10 @@ export function usePluginMarket(options: UsePluginMarketOptions) {
       // decision (pluginOperationOpens, contract V2.10) settles it at once: open the proven instance, or end with why not
       // (② not attributable, ③ an older computer, no instance); a failed read ends it as "could not read".
       if (state.finalReadback === "pending") return;
-      if (state.finalReadback === "failed" || state.errorCode) { complete(attempt, undefined, "unread"); return; }
+      // Not read (offline, or every read after the result failed): the row ends, so another install may start, and the
+      // success goes to the list of checks with a read of its own (read again when the computer is back).
+      if (state.finalReadback === "failed") { handOverUnreadSuccess(controller); complete(attempt, undefined, "unread"); return; }
+      if (state.errorCode) { complete(attempt, undefined, "unread"); return; }
       const opens = state.operationId && state.snapshot ? pluginOperationOpens(
         { operationId: state.operationId, entry: "market-install", who: {}, detail: attempt.detail ?? attempt.item },
         { ghosts: state.snapshot.ghosts, market: state.snapshot.market.items }) : null;
@@ -648,10 +651,18 @@ export function usePluginMarket(options: UsePluginMarketOptions) {
   const applied = useRef(new Set<string>());
   useEffect(() => {
     for (const conclusion of conclusions) {
-      if (conclusion.entry !== "market-install" || conclusion.shown || applied.current.has(conclusion.operationId) || !conclusion.who.pluginId) continue;
-      applied.current.add(conclusion.operationId);
+      // Applied once it is settled; a success still waiting for its read (handed over) is applied when that read ends,
+      // so the row says what the list of checks says (maintainer review 03:52).
+      const key = conclusion.operationId + ":" + conclusion.readback;
+      if (conclusion.entry !== "market-install" || conclusion.shown || applied.current.has(key) || !conclusion.who.pluginId
+        || conclusion.readback === "pending" || conclusion.readback === "failed") continue;
+      applied.current.add(key);
       const { deviceId: on, pluginId } = conclusion.who;
-      const note = conclusion.result === "notInstalled" ? "plugins.market.unconfirmedNotInstalled"
+      // A success whose read does not prove it says what the list of checks says ("done, but …"), never "not confirmed".
+      const succeeded = conclusion.result === "succeeded" || conclusion.result === "installed";
+      const read = conclusion.readback;
+      const note = succeeded && (read === "gone" || read === "unconfirmed" || read === "legacy") ? PLUGIN_NOT_OPENED_TEXT[read]
+        : conclusion.result === "notInstalled" ? "plugins.market.unconfirmedNotInstalled"
         : conclusion.result === "mismatch" ? "plugins.market.unconfirmedMismatch"
         : conclusion.result === "legacy" ? "plugins.market.unconfirmedLegacy"
           : conclusion.result === "failed" ? pluginMarketErrorKey(conclusion.errorCode) : undefined;

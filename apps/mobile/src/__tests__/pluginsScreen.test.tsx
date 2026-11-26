@@ -2888,6 +2888,45 @@ describe("market install recovery", () => {
       if (said) expect(status()).toContain(said); else expect(status()).toContain("plugins.checks.result.succeeded");
       expect(!!byId("plugins.checks.open")).toBe(said === null);
     });
+    // Maintainer review 03:52 of c6efda5691: "Go to Installed" (an older computer, V2.10 ③) left a narrow screen on the
+    // detail it was opened from (it only closed the list and switched the segment; a narrow screen with a detail selected
+    // draws no directory). It now goes back to the directory the way its back step does, on the record's computer, in the
+    // installed segment. Where it is pressed from: an installed detail or a market detail, the directory on the record's
+    // computer or on another one; narrow and wide. The narrow installed-detail rows failed on c6efda5691. Tier: unit/jsdom.
+    it.each([
+      ["narrow, from an installed detail", 390, "installed", "mac"],
+      ["narrow, from an installed detail, the directory on another computer", 390, "installed", "pc"],
+      ["narrow, from a market detail", 390, "market", "mac"],
+      ["wide, from an installed detail", 1024, "installed", "mac"],
+    ] as const)("Go to Installed (an older computer) ends on the record's computer's installed list: %s", async (_name, width, from, onComputer) => {
+      fixture.extraDevices = [{ deviceId: "pc", name: "PC", platform: "win32", remoteControlEnabled: true }];
+      const world: World = { operation: () => receipt("running"), installed: false };
+      const requests = await toPanel(world);
+      await click("plugins.checks.close");
+      // iOS: the directory is its own view here (Android draws it inline), so where the page ends up is observable.
+      fixture.platform = "ios";
+      fixture.width = width;
+      await act(async () => root.render(createElement(PluginsScreen)));
+      if (onComputer !== "mac") await act(async () => fixture.props.get("directory").onDeviceChange(onComputer));
+      if (from === "installed") await act(async () => fixture.props.get("directory").onDetail(row()));
+      else await act(async () => fixture.props.get("directory").market.openDetail(fixture.props.get("directory").market.items[0] ?? item));
+      await settle(14);
+      // The notice opens the list (the market detail stand-in here draws no notice row of its own).
+      await act(async () => fixture.props.get("plugins.slotHolder").onPress());
+      await settle(14);
+      world.operation = () => receipt("succeeded");
+      world.facts = { ghosts: [demoGhost], record: { ...item, ...evidenceOf(CONTRACT_SAMPLES.olderHost) } };
+      await verifyFrom(requests);
+      expect(status()).toContain("plugins.checks.result.legacyHost");
+      fixture.props.delete("directory");
+      await click("plugins.checks.showInstalled");
+      await settle(6);
+      expect(byId("plugins.checks")).toBeNull();
+      // The directory is drawn again, on the record's computer, in the installed segment; no detail stays selected.
+      expect(fixture.props.has("directory")).toBe(true);
+      expect(fixture.props.get("directory")).toMatchObject({ deviceId: "mac", segment: "installed" });
+      expect(fixture.props.get("directory").market.detail ?? null).toBeNull();
+    });
     // As the computer answers (dispatcher R-3): an older package of the same plugin installed over it rewrites the record
     // (no evidence for this phone, the record an older release on this route); the root instance gone with one of the same
     // name in another namespace leaves the root record not installed.
