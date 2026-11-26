@@ -4154,6 +4154,59 @@ describe('Chat Server result delivery and refresh', () => {
     expect(deps.dispatch).toHaveBeenCalledOnce();
   });
 
+  // #7394 review (Greptile): a stop is not a refusal of the result. When the owner stops the turn
+  // from another device the completion comes back `409 STOP_REQUESTED`, and that keeps its own path:
+  // stop the input and retire the lease with `cancel` — never a failure notice for a turn nobody
+  // asked to fail.
+  it('keeps a stopped turn on its cancel path when the completion is refused', async () => {
+    deps.log = { warn: vi.fn() };
+    fixture.handle.mockImplementation((route, _method, body) => body?.action === 'complete'
+      ? { status: 409, body: { error: { code: 'STOP_REQUESTED' } } }
+      : response(route));
+    await start();
+    expect(await service.settleLaneTurn(terminal)).toBe(true);
+    // The refused completion is the only attempt, and it is never turned into a failure.
+    expect(deliveries()).toHaveLength(1);
+    expect(fixture.handle.mock.calls.filter(([, , body]) => body?.action === 'fail')).toHaveLength(0);
+    await vi.advanceTimersByTimeAsync(2000);
+    // The stopped input is stopped, and the lease retires with a cancel receipt.
+    expect(deps.abortLane).toHaveBeenCalled();
+    expect(fixture.handle.mock.calls.filter(([, , body]) => body?.action === 'cancel')).toHaveLength(1);
+    expect(fixture.handle.mock.calls.filter(([, , body]) => body?.action === 'fail')).toHaveLength(0);
+    expect(deps.dispatch).toHaveBeenCalledOnce();
+  });
+
+  // #7394 review (Greptile): the degraded attempt can be refused for the lease instead of the
+  // content. There is nothing left to drop, so the turn retires as a failure exactly like the first
+  // attempt — instead of being dropped with a log line while the group waits for a lease nobody
+  // releases.
+  it('retires a completion whose degraded attempt is refused for the lease', async () => {
+    deps.log = { warn: vi.fn() };
+    const hasLocator = (body: { content?: unknown } | undefined) => Array.isArray(body?.content)
+      && (body.content as Array<{ namespace?: string }>).some(block => block.namespace === 'cindy.work-record');
+    fixture.handle.mockImplementation((route, _method, body) => {
+      if (body?.action !== 'complete') return response(route);
+      return hasLocator(body)
+        ? { status: 400, body: { error: { code: 'INVALID_INPUT', details: { field: 'content[1].fallback' } } } }
+        : { status: 409, body: { error: { code: 'STALE_EXECUTOR' } } };
+    });
+    await start();
+    expect(await service.settleLaneTurn(terminal)).toBe(true);
+    // The first attempt is refused for its content, the degraded one for the lease.
+    expect(deliveries()).toHaveLength(2);
+    await vi.advanceTimersByTimeAsync(2000);
+    const failures = () => fixture.handle.mock.calls.filter(([, , body]) => body?.action === 'fail');
+    expect(failures()).toHaveLength(1);
+    expect(failures()[0]![2]).toMatchObject({ action: 'fail', epoch: execution.epoch, detail: 'cindy-runtime-error:RUNTIME_ERROR' });
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(deliveries()).toHaveLength(2);
+    expect(failures()).toHaveLength(1);
+    const logged = JSON.stringify(vi.mocked(deps.log!.warn).mock.calls);
+    expect(logged).toContain('Group settlement refused again');
+    expect(logged).toContain('STALE_EXECUTOR');
+    expect(deps.dispatch).toHaveBeenCalledOnce();
+  });
+
   // #8598 review: only the settlement request decides a refusal. A read that fails after the reply
   // was published must not turn the answer into a failure or post a second terminal result.
   it('does not retire a published reply when a later read is refused', async () => {

@@ -1116,8 +1116,11 @@ Desktop 群聊只对 `TOKEN_EXPIRED`、`INVALID_TOKEN`、`AUTH_REQUIRED` 的 401
 **内容之外的确定性 4xx 拒绝（#7394：`409 STALE_EXECUTOR`/`STALE_EXECUTION`/`EXECUTION_EXPIRED`、
 撤权、会话消失等）不去做掉卡片重试，直接按同一 `fail` 收尾**——这类拒绝不是校验正文，去掉
 `cindy.work-record` 再发只会原样再拒，而让回合静默消失就是本节的 「AI 不回话」 漏洞。
+去掉卡片后的降级重发若被同一类拒绝（授权撤回、租约变化），同样按 `fail` 收尾，不静默丢弃。
 `fail`/`cancel` 自身被租约拒绝意味着已有其他执行者接管这一轮：按既有口径遗忘本轮、不再回执，
 群里只留下新执行者自己的结果，不并存一真一假两个终态。
+**停止不是拒绝结果**：`409 STOP_REQUESTED` 表示主人从另一台设备停掉了这一轮，走既有停止路径
+（停掉该输入、以 `cancel` 收尾租约），不按失败收尾，群里不显示失败提示。
 两种拒绝都把 action、content 各块的 type／namespace／schemaRevision 与服务端 `error.details`
 写进日志；聊天正文、附件地址与凭证一律不记（details 只保留字段路径与错误码，其它值只记长度）。
 回归见 `main/maker-ipc/__tests__/chatServer.test.ts`。
