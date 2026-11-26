@@ -2,20 +2,23 @@
  * usePickerPluginEngines — shared plugin engine source collector for model pickers outside the
  * composer (IM defaults, Feishu groups, Hook workspace prefs, Model Groups, Orca worker creation).
  *
- * Mirrors BotModelChainEditor / NewMakerDraftRoute:
+ * Mirrors CCAgentSessionView / NewMakerDraftRoute:
  *  - On this computer (`hostDeviceId` omitted): combines local plugin engines, online same-account
  *    peer computers, received plugin-engine provider shares, and any remembered offline/selected
  *    device IDs so saved plugin engine routes always resolve their name/icon/modes.
- *  - On a remote host (`hostDeviceId` set): reads that host's own plugin engines (via Device Link)
- *    plus any remembered device catalogues for display.
+ *  - On a remote host (`hostDeviceId` set): reads that host's own plugin engines (via Device Link),
+ *    discovers its peer computers and received plugin-engine shares via `useControlledModelLocations`
+ *    + `controlledPluginEngineSources`, and routes all non-host catalogue reads through
+ *    `modelCatalogKey(id, hostDeviceId)` so the controlled computer resolves them with its own grants.
  *
- * Remote catalogues are loaded lazily when the picker opens (`readCatalogue`), except remembered
- * device IDs which load once on mount so trigger buttons display the real engine name immediately.
+ * When `enabled` is false, all remote location/share/catalogue reads are gated off so mounted
+ * closed popovers emit zero Device Link traffic.
  */
 import { useCallback, useEffect, useMemo, useRef } from 'react';
 import { isSharedTaskPeer } from '@cindy/device-link';
 
 import { useDeviceLinkDeviceList } from '@/features/device-link/useDeviceLinkDeviceList';
+import { useControlledModelLocations } from '@/hooks/useControlledModelLocations';
 import { useSelectableDevices } from '@/hooks/useControllableDevices';
 import {
   findPluginEngine,
@@ -26,15 +29,18 @@ import {
 } from '@/hooks/usePluginEngines';
 import { deviceDisplayName } from '@/lib/deviceName';
 import {
+  controlledPluginEngineSources,
   isSamePluginEngineChoice,
   remotePluginEngineChoices,
   type PluginEngineChoice,
+  type PluginEngineSource,
 } from '@/lib/pluginEngineSelection';
 import { useProviderShareAgentDevices } from '@/features/provider-share/useProviderShareAgentDevices';
+import { modelCatalogKey } from '../../shared/controlledModelCatalog';
 import { isProviderShareAgentDeviceId } from '../../shared/providerShare';
 
 export interface UsePickerPluginEnginesOptions {
-  /** Whether plugin engines can be selected in this picker (e.g. false for SSH). */
+  /** Whether plugin engines can be selected in this picker (e.g. false for SSH or closed modal). */
   enabled?: boolean;
   /**
    * When set, list plugin engines offered by that remote host computer rather than this computer
@@ -60,6 +66,7 @@ export function usePickerPluginEngines(
 ): PickerPluginEnginesResult {
   const enabled = options.enabled !== false;
   const hostDeviceId = options.hostDeviceId?.trim() || undefined;
+  const activeHostDeviceId = enabled ? hostDeviceId : undefined;
   const allDevices = useDeviceLinkDeviceList();
   const selfDeviceId = useMemo(
     () => allDevices?.find((device) => device.isSelf)?.deviceId ?? null,
@@ -81,22 +88,24 @@ export function usePickerPluginEngines(
     [rememberedKey],
   );
 
+  // Gate both share and controlled-location hooks on `enabled` so closed popovers issue zero
+  // Device Link requests (provider-sharing.md §5.1).
   const {
     pluginEngineDevices: sharedPluginEngineDevices = [],
     nameFor: providerShareDeviceName,
-  } = useProviderShareAgentDevices(rememberedIds, hostDeviceId);
+    isReceived: isReceivedProviderShare,
+  } = useProviderShareAgentDevices(enabled ? rememberedIds : [], activeHostDeviceId);
+  const hostLocations = useControlledModelLocations(activeHostDeviceId, selfDeviceId);
 
-  const localNeeded =
-    enabled &&
-    (!hostDeviceId || (!!selfDeviceId && rememberedIds.includes(selfDeviceId)));
+  const localNeeded = enabled && !hostDeviceId;
   const localEngines = usePluginEngines(localNeeded);
 
   const {
     engines: remoteHostEngines,
     refresh: refreshRemoteHostEngines,
   } = useRemotePluginEngines(
-    enabled && hostDeviceId ? hostDeviceId : undefined,
-    enabled && hostDeviceId ? 'once' : false,
+    activeHostDeviceId,
+    activeHostDeviceId ? 'once' : false,
   );
 
   const deviceEntriesKey = enabled
@@ -110,9 +119,9 @@ export function usePickerPluginEngines(
                     !isSharedTaskPeer(device.deviceId) &&
                     (device.online || rememberedIds.includes(device.deviceId)),
                 )
-                .map(({ deviceId, name }): [string, string | null] => [deviceId, name ?? null]),
+                .map(({ deviceId, name }): [string, string | null, string?] => [deviceId, name ?? null]),
               ...sharedPluginEngineDevices.map(
-                ({ deviceId, name }): [string, string | null] => [deviceId, name || null],
+                ({ deviceId, name }): [string, string | null, string?] => [deviceId, name || null],
               ),
               ...rememberedIds
                 .filter(
@@ -120,83 +129,95 @@ export function usePickerPluginEngines(
                     isProviderShareAgentDeviceId(id) &&
                     !sharedPluginEngineDevices.some((item) => item.deviceId === id),
                 )
-                .map((id): [string, string | null] => [id, providerShareDeviceName?.(id) ?? null]),
+                .map((id): [string, string | null, string?] => [id, providerShareDeviceName?.(id) ?? null]),
             ]
-          : rememberedIds
-              .filter((id) => id !== hostDeviceId && id !== selfDeviceId && !isSharedTaskPeer(id))
-              .map((id): [string, string | null] => [
-                id,
-                selectableDevices.find((item) => item.deviceId === id)?.name ??
-                  providerShareDeviceName?.(id) ??
-                  null,
-              ]),
+          : (() => {
+              const controlledSources = controlledPluginEngineSources(
+                hostDeviceId,
+                hostLocations?.map((location) => ({
+                  deviceId: location.agentDeviceId,
+                  name: location.name,
+                  ...(location.favoriteSource ? { favoriteSource: location.favoriteSource } : {}),
+                })),
+                (id) => (isReceivedProviderShare?.(id) ? providerShareDeviceName?.(id) : null),
+              );
+              const existingIds = new Set(controlledSources.map((source) => source.deviceId));
+              const rememberedSources: PluginEngineSource[] = [];
+              for (const id of rememberedIds) {
+                if (id === hostDeviceId || isSharedTaskPeer(id) || existingIds.has(id)) continue;
+                const catalogueKey = modelCatalogKey(id, hostDeviceId);
+                if (!catalogueKey) continue;
+                const shareName = isProviderShareAgentDeviceId(id) && isReceivedProviderShare?.(id)
+                  ? providerShareDeviceName?.(id)
+                  : null;
+                const fallbackName =
+                  shareName ??
+                  selectableDevices.find((item) => item.deviceId === id)?.name ??
+                  allDevices?.find((item) => item.deviceId === id)?.name ??
+                  null;
+                rememberedSources.push({ deviceId: id, name: fallbackName, catalogueKey });
+              }
+              return [...controlledSources, ...rememberedSources].map(
+                ({ deviceId, name, catalogueKey }): [string, string | null, string?] => [
+                  deviceId,
+                  name ?? null,
+                  catalogueKey,
+                ],
+              );
+            })(),
       )
     : '[]';
 
-  const remoteSources = useMemo(
+  const remoteSources = useMemo<readonly PluginEngineSource[]>(
     () =>
-      (JSON.parse(deviceEntriesKey) as Array<[string, string | null]>).map(([deviceId, name]) => ({
-        deviceId,
-        name,
-      })),
+      (JSON.parse(deviceEntriesKey) as Array<[string, string | null, string?]>).map(
+        ([deviceId, name, catalogueKey]) => ({
+          deviceId,
+          name,
+          ...(catalogueKey ? { catalogueKey } : {}),
+        }),
+      ),
     [deviceEntriesKey],
   );
-  const remoteSourceIds = useMemo(
-    () => remoteSources.map((source) => source.deviceId),
+  const remoteSourceCatalogueKeys = useMemo(
+    () => remoteSources.map((source) => source.catalogueKey ?? source.deviceId),
     [remoteSources],
   );
   const { catalogues: remoteCatalogues, read: readRemoteCatalogues } =
-    useDevicesPluginEngines(remoteSourceIds);
+    useDevicesPluginEngines(remoteSourceCatalogueKeys);
 
-  const rememberedRemoteKey = useMemo(
-    () => rememberedIds.filter((id) => remoteSourceIds.includes(id)).join('\n'),
-    [rememberedIds, remoteSourceIds],
+  const rememberedRemoteCatalogueKey = useMemo(
+    () =>
+      remoteSources
+        .filter((source) => rememberedIds.includes(source.deviceId))
+        .map((source) => source.catalogueKey ?? source.deviceId)
+        .join('\n'),
+    [rememberedIds, remoteSources],
   );
   useEffect(() => {
-    if (!rememberedRemoteKey) return;
-    for (const id of rememberedRemoteKey.split('\n')) readRemoteCatalogues(id);
-  }, [rememberedRemoteKey, readRemoteCatalogues]);
+    if (!enabled || !rememberedRemoteCatalogueKey) return;
+    for (const key of rememberedRemoteCatalogueKey.split('\n')) readRemoteCatalogues(key);
+  }, [enabled, rememberedRemoteCatalogueKey, readRemoteCatalogues]);
 
   const engines = useMemo<readonly PluginEngineChoice[]>(() => {
     if (!enabled) return [];
-    if (hostDeviceId) {
-      const base: PluginEngineChoice[] = [...(remoteHostEngines ?? [])];
-      for (const id of rememberedIds) {
-        if (id === hostDeviceId) continue;
-        const source =
-          id === selfDeviceId ? localEngines : (remoteCatalogues.get(id) ?? []);
-        const displayName = deviceDisplayName(
-          id,
-          selectableDevices.find((item) => item.deviceId === id)?.name ??
-            providerShareDeviceName?.(id) ??
-            undefined,
-        );
-        for (const engine of source) {
-          if (base.some((item) => item.providerId === engine.providerId && item.deviceId === id)) {
-            continue;
-          }
-          base.push({ ...engine, deviceId: id, deviceName: displayName });
-        }
-      }
-      return base;
-    }
     const remoteChoices = remotePluginEngineChoices(
       remoteSources,
       remoteCatalogues,
       deviceDisplayName,
       localEngines,
     );
+    if (hostDeviceId) {
+      const hostList = remoteHostEngines ?? [];
+      return remoteChoices.length ? [...hostList, ...remoteChoices] : hostList;
+    }
     return remoteChoices.length ? [...localEngines, ...remoteChoices] : localEngines;
   }, [
     enabled,
     hostDeviceId,
     remoteHostEngines,
-    rememberedIds,
-    selfDeviceId,
     localEngines,
     remoteCatalogues,
-    selectableDevices,
-    providerShareDeviceName,
     remoteSources,
   ]);
 

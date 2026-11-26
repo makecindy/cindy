@@ -16637,7 +16637,7 @@ describe('AgentInputCoordinator 中断自动续跑', () => {
           }, id, { ...recovery, current, visited, recordUnavailable: c => visited.add(modelGroupCandidateKey(c)) });
           return {
             candidate:
-              offer && offer.agentKind !== 'acp'
+              offer
                 ? { ...offer, agentKind: offer.agentKind === 'cc' ? 'claude-code' : offer.agentKind, effort: null, fastMode: false }
                 : null,
           };

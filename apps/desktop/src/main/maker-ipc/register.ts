@@ -18149,7 +18149,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     await refreshAutoModelGroupRoutes();
     const binding = await readModelGroupBindingForDispatch(sessionId);
     if (!binding || !row.providerId || !row.model ||
-        (row.agentKind !== 'cc' && row.agentKind !== 'codex' && row.agentKind !== 'pi')) return null;
+        (row.agentKind !== 'cc' && row.agentKind !== 'codex' && row.agentKind !== 'pi' && row.agentKind !== 'acp')) return null;
     if (binding.pickedKey !== modelGroupCandidateKey({ agentKind: row.agentKind, model: row.model, providerId: row.providerId })) return null;
     return binding;
   }
@@ -18168,19 +18168,19 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
 
       const offer = await readModelGroupRecoveryOffer(sessionId, { visited: excluded, ...recovery,
         recordUnavailable: (candidate) => recordFailedSessionRuntimeFallbackCandidate(sessionId, generation, {
-          ...current, agentKind: dbToMakerAgentKind(candidate.agentKind), providerId: candidate.providerId, model: candidate.model,
+          ...current, agentKind: dbToMakerEngineKind(candidate.agentKind), providerId: candidate.providerId, model: candidate.model,
         }),
-        current: { agentKind: makerToDbAgentKind(current.agentKind), providerId: current.providerId, model: current.model,
+        current: { agentKind: makerToDbEngineKind(current.agentKind), providerId: current.providerId, model: current.model,
           effort: current.effort, fastMode: current.fastMode },
       });
-      if (!offer || (dbToMakerAgentKind(offer.agentKind) === current.agentKind &&
+      if (!offer || (dbToMakerEngineKind(offer.agentKind) === current.agentKind &&
         offer.providerId === current.providerId && offer.model === current.model)) return { candidate: null };
-      return { candidate: { agentKind: dbToMakerAgentKind(offer.agentKind), model: offer.model,
+      return { candidate: { agentKind: dbToMakerEngineKind(offer.agentKind), model: offer.model,
         providerId: offer.providerId, agentDeviceId: null, effort: (offer.effort as SessionRuntimeProfile['effort']) ?? null, fastMode: offer.fastMode ?? false },
         labels: { from: offer.fromLabel ?? current.model, to: `${offer.modelName} · ${offer.sourceName}` },
         bindCommittedRoute: profile => {
           if (profile.providerId) bindModelGroupSession(sessionId, binding.selection, modelGroupCandidateKey({
-            agentKind: makerToDbAgentKind(profile.agentKind), model: profile.model, providerId: profile.providerId,
+            agentKind: makerToDbEngineKind(profile.agentKind), model: profile.model, providerId: profile.providerId,
           }));
         } };
     },

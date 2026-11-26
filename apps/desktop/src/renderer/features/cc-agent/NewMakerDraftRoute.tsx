@@ -6829,12 +6829,12 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
               await prepareModelGroup(newSession.id);
               if (!isCurrentDataOwner()) return;
             }
-            const slashMatch = isRoutedPluginEngine ? null : message.match(/^\/(\S+)(?:\s+(.*))?$/s);
+            const slashMatch = message.match(/^\/(\S+)(?:\s+(.*))?$/s);
             const leading =
               !slashMatch && !isRoutedPluginEngine && capabilityAgentKind === 'pi'
                 ? leadingSlashInvocation(message)
                 : undefined;
-            if (slashMatch || leading) {
+            if (!isRoutedPluginEngine && (slashMatch || leading)) {
               setPending(newSession.id, {
                 text: message,
                 builtInSkillIntent: currentBuiltInSkillIntent(),

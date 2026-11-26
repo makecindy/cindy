@@ -15,9 +15,8 @@ import { supplementalConversationEstimates } from '@cindy/maker-shared/usage-cos
  *   - snake↔camel 全部走 `localDb/mapper.ts`，本文件不写字段转换代码。
  */
 
-import { eq, gte, desc, and, isNull, isNotNull, inArray, notInArray, or, sql, getTableColumns, is, SQL } from 'drizzle-orm';
+import { eq, gte, desc, and, isNull, isNotNull, inArray, notInArray, or, sql } from 'drizzle-orm';
 import { runAsBackgroundDbRpc } from '../localDb/client/rpcAdmission.js';
-import { throwIpcError } from '../utils/ipcValidate.js';
 import type { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
 import type { broadcastSessionPatched as BroadcastSessionPatched } from '../localDb/ipc/sessions.js';
 
@@ -407,34 +406,6 @@ function canSwitchRunPluginEngine() {
   )`.mapWith(Boolean);
 }
 
-// Check as part of the write so another desktop instance cannot switch the
-// target to a plugin engine between validation and persistence of a persistent
-// or teammate-routine binding. Ordinary non-persistent bound automations (e.g.
-// PR auto-follow) are supported on plugin-engine tasks regardless of source.
-function targetAcceptsPersistentOrRoutineBinding(targetSessionId: string) {
-  return sql`NOT EXISTS (
-    SELECT 1 FROM sessions WHERE id = ${targetSessionId} AND agent_kind = 'acp'
-  )`;
-}
-
-function targetAcceptsScheduleBinding(next: {
-  targetSessionId: SQL;
-  persistentSession: SQL;
-  source: SQL;
-}) {
-  return sql`NOT (
-    ${next.targetSessionId} IS NOT NULL
-    AND (${next.persistentSession} = 1 OR COALESCE(${next.source}, 'user') = 'bot')
-    AND EXISTS (
-      SELECT 1 FROM sessions WHERE id = ${next.targetSessionId} AND agent_kind = 'acp'
-    )
-  )`;
-}
-
-function rejectPluginAutomationTarget(): never {
-  throwIpcError('UNSUPPORTED_CAPABILITY', 'this plugin engine task cannot be bound to an automation');
-}
-
 export class DrizzleScheduleStorage implements ScheduleStorage {
   constructor(
     private readonly getDb: () => SchedulerDrizzleDb,
@@ -525,21 +496,7 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
   async insert(s: Schedule): Promise<Schedule> {
     const db = this.getDb();
     const row = scheduleCreateToRow(s);
-    if (row.targetSessionId && (row.persistentSession === true || row.source === 'bot')) {
-      // Drizzle inserts SELECT values in table column order. Reuse its
-      // encoders and schema defaults, including columns omitted by the mapper.
-      const values = Object.entries(getTableColumns(schedules)).map(([key, column]) => {
-        const mapped = row[key as keyof typeof row];
-        const value = mapped === undefined ? column.default ?? null : mapped;
-        return is(value, SQL) ? value : sql.param(value, column);
-      });
-      const [inserted] = await db.insert(schedules)
-        .select(sql`SELECT ${sql.join(values, sql`, `)} WHERE ${targetAcceptsPersistentOrRoutineBinding(row.targetSessionId)}`)
-        .returning({ id: schedules.id });
-      if (!inserted) rejectPluginAutomationTarget();
-    } else {
-      await db.insert(schedules).values(row);
-    }
+    await db.insert(schedules).values(row);
     // 返回 round-tripped 版本（确保 timezone/booleans/默认值都按 DB 实际形态回流）
     const inserted = await this.get(s.id);
     if (!inserted) {
@@ -578,31 +535,8 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
       const [current] = await db.select().from(schedules).where(where).limit(1);
       return current ? scheduleToCamel(current) : null;
     }
-    const checksPluginBinding = Boolean(setObj.targetSessionId)
-      || setObj.persistentSession === true
-      || setObj.source === 'bot';
-    const targetCondition = checksPluginBinding
-      ? targetAcceptsScheduleBinding({
-          targetSessionId: setObj.targetSessionId !== undefined
-            ? sql`${setObj.targetSessionId}`
-            : sql`${schedules.targetSessionId}`,
-          persistentSession: setObj.persistentSession !== undefined
-            ? sql`${setObj.persistentSession ? 1 : 0}`
-            : sql`${schedules.persistentSession}`,
-          source: setObj.source !== undefined
-            ? sql`${setObj.source}`
-            : sql`${schedules.source}`,
-        })
-      : undefined;
-    const [updated] = await db.update(schedules).set(setObj).where(and(where, targetCondition)).returning();
-    if (!updated) {
-      if (targetCondition) {
-        const [rejected] = await db.select({ id: schedules.id }).from(schedules)
-          .where(and(where, sql`NOT (${targetCondition})`)).limit(1);
-        if (rejected) rejectPluginAutomationTarget();
-      }
-      return null;
-    }
+    const [updated] = await db.update(schedules).set(setObj).where(where).returning();
+    if (!updated) return null;
     this.bumpSidebarIndexCache();
     return scheduleToCamel(updated);
   }

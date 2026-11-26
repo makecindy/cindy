@@ -9546,14 +9546,21 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
   // 选中插件引擎的一行(Desktop docs/plans/acp-plugin-bridge.md)：同一个引擎内换模型 / 思考深度立即
   // 生效(set-model 带 selection；插件引擎没有 Fast)；换到另一个引擎——从内置引擎或别的插件引擎——
   // 与内置引擎之间一样登记意图，下一条消息交接。
-  const selectComposerPluginEngine = useCallback(async (selection: MobilePluginEngineSelection): Promise<boolean> => {
+  const selectComposerPluginEngine = useCallback(async (
+    selection: MobilePluginEngineSelection & { deviceId?: string | null },
+  ): Promise<boolean> => {
     if (!canUseRemoteSessionControls || !currentSession || controlBusy || !deviceId) return false;
-    if (pluginEngineTask && !currentPluginEngineIsRemote && selection.providerId === currentSession.providerId) {
+    const targetAgentDeviceId = selection.deviceId ?? null;
+    const currentAgentDeviceId = currentSession.agentDeviceId ?? null;
+    if (pluginEngineTask && selection.providerId === currentSession.providerId && targetAgentDeviceId === currentAgentDeviceId) {
       const effort = selection.effort ?? null;
       return runControlAction(async () => {
-        // 选回当前引擎 = 撤销挂着的切换(desktop 按同引擎处理，只清意图)。
+        // 选回当前引擎与运行位置 = 撤销挂着的切换(desktop 按同引擎处理，只清意图)。
         if (currentSession.agentSwitchIntent || currentSession.pluginEngineSwitchIntent) {
-          await maker.switchSessionAgent(sessionId, 'acp', selection.modelId, selection.providerId, effort ?? '', false);
+          await maker.switchSessionAgent(
+            sessionId, 'acp', selection.modelId, selection.providerId, effort ?? '', false,
+            targetAgentDeviceId !== null ? { agentDeviceId: targetAgentDeviceId } : undefined,
+          );
         }
         await maker.setModel(sessionId, selection.modelId, undefined, { effort, fastMode: false });
         return true;
@@ -9576,14 +9583,16 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       pluginEngineSwitchIntent: {
         providerId: selection.providerId,
         model: selection.modelId,
-        agentDeviceId: null,
+        agentDeviceId: targetAgentDeviceId,
         ...(selection.effort ? { effort: selection.effort } : {}),
       },
     });
     try {
       await maker.switchSessionAgent(
         sessionId, 'acp', selection.modelId, selection.providerId, selection.effort ?? '', false,
-        currentPluginEngineIsRemote ? { agentDeviceId: null } : undefined);
+        targetAgentDeviceId !== null || currentAgentDeviceId !== null || currentPluginEngineIsRemote
+          ? { agentDeviceId: targetAgentDeviceId }
+          : undefined);
       return true;
     } catch (err) {
       if (agentSwitchWriteSeqRef.current === seq) {
@@ -9653,6 +9662,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       ? await selectComposerPluginEngine({
           providerId: route.providerId,
           modelId: route.model,
+          ...(route.agentDeviceId ? { deviceId: route.agentDeviceId } : {}),
           ...(isPluginEngineEffort(route.effort) ? { effort: route.effort } : {}),
         })
       : await selectUnifiedComposerModel(
