@@ -191,6 +191,7 @@ export function createInputEnqueueHarness(coordinator: AgentInputCoordinator, op
     getResolvedMainLocale: () => 'zh-CN',
     getMainClassicalStyle: () => 'prose',
     getInputSessionRow: options.getInputSessionRow ?? (async () => ({ clearedAt: null })),
+    withSendToSessionLock: (_id: string, run: () => Promise<unknown>) => run(),
     getMakerIfReady: () => null,
     beginRemoteSendTrace: noop,
     remoteInputClientIdWasPersisted: () => false,

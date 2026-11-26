@@ -97,6 +97,7 @@ export interface OrcaRemoteWorkerModelsResult {
   codex?: OrcaRemoteWorkerModel[];
   claude_code?: OrcaRemoteWorkerModel[];
   pi?: OrcaRemoteWorkerModel[];
+  pluginEngineCatalogUnavailable?: true;
   pluginEngines?: Array<{ providerId: string; name: string; available: boolean; message?: string; models: Array<{ id: string; label: string; efforts?: readonly string[] }> }>;
 }
 

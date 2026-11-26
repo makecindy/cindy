@@ -3,7 +3,7 @@
 > 通用规则与 Review 清单见[跨端协议兼容](../protocol-compatibility.md)；本文件只记录这一项能力的协议约定。
 
 同账号插件引擎派活（#13225）：`…:caps` 可选返回 `pluginEngines: true`，仅在目标声明支持时送 `…:open.agentKind = acp`。
-`providerId`、`model` 指明插件提供的引擎与模型，`agentDeviceId` 仍相对工作电脑解释；`…:models` 可选附 `pluginEngines`，不改变内置引擎目录。
+`providerId`、`model` 指明插件提供的引擎与模型，`agentDeviceId` 仍相对工作电脑解释；`…:models` 可选附 `pluginEngines`，不改变内置引擎目录；插件目录暂不可读时回 `pluginEngineCatalogUnavailable: true`，与无可用插件的成功结果区分。
 工作电脑复用创建与权限校验，模型来源电脑仍按现有远控和引擎开放状态放行。首条派活沿既有输入通道，仅实际关联的 Lead 电脑可带 ACP 入队，
 完成回复走原有自动回报。旧端不声明能力时停止创建，不切换引擎或工作电脑；Node Host 仍只支持内置引擎。
 不新增 channel 或中转帧，自建中转无需升级。回归见 `orcaRemoteWorkers.test.ts`、`orcaRemoteWorkerHost.test.ts` 和 `orcaRemoteWorkerRuntime.test.ts`。

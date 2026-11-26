@@ -1078,7 +1078,8 @@ describe("cindy_helper MCP server", () => {
 
   // Unit/runtime surface: ordinary tasks need the model catalog even when Orca is disabled.
   it.each(['codex', 'pi', 'claude-code'] as const)('exposes the shared model catalog to ordinary %s tasks without worker tools', async agentKind => {
-    const listAvailableModels = vi.fn(async () => ({ ok: true as const, codex: [{ id: 'gpt-model', label: 'Test' }] }));
+    const listAvailableModels = vi.fn(async () => ({ ok: true as const, codex: [{ id: 'gpt-model', label: 'Test' }],
+      ...(agentKind === 'codex' ? { pluginEngineCatalogUnavailable: true as const } : {}) }));
     const server = createXdtHelperMcpServer({ listAvailableModels, resolveSurface: async () => 'default' },
       { agentKind, workingDir: '/repo', sessionId: 'ordinary' });
     const [a, b] = InMemoryTransport.createLinkedPair();
@@ -1089,7 +1090,9 @@ describe("cindy_helper MCP server", () => {
       expect(catalog.tools).toEqual(expect.arrayContaining([expect.objectContaining({ name: 'list_available_models' })]));
       expect(catalog.tools).not.toEqual(expect.arrayContaining([expect.objectContaining({ name: 'create_worker' })]));
       expect(parsePayload(await client.callTool({ name: 'call_tool', arguments: { name: 'list_available_models',
-        args: { device: 'destination', provider_device_id: 'local' } } }))).toMatchObject({ ok: true, device: 'destination' });
+        args: { device: 'destination', provider_device_id: 'local' } } }))).toMatchObject({ ok: true, device: 'destination',
+        codex: [expect.objectContaining({ id: 'gpt-model' })],
+        ...(agentKind === 'codex' ? { plugin_engine_catalog_unavailable: true } : {}) });
       expect(listAvailableModels).toHaveBeenCalledWith({ agent: undefined, callerSessionId: 'ordinary', executionDeviceId: 'destination', agentDeviceId: null });
     } finally { await client.close(); await server.close(); }
   });

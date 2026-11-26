@@ -617,14 +617,16 @@ describe('MCP App queued message grants', () => {
 
 describe('INPUT_ENQUEUE crash-restored remote Worker pause', () => {
   // #13225, unit: exercise the production handler against a wrong peer and a temporary state read failure.
-  it.each(['lead-computer', 'other-computer', 'database-unavailable'])('authorizes ACP input from the linked Lead (%s)', async controllerDeviceId => {
+  it.each(['lead-computer', 'other-computer', 'database-unavailable', 'released-before-enqueue'])('authorizes ACP input from the linked Lead (%s)', async controllerDeviceId => {
     const h = createHarness();
+    let reads = 0;
     const enqueue = createInputEnqueueHarness(h.coordinator, {
-      controllerDeviceId,
+      controllerDeviceId: controllerDeviceId === 'released-before-enqueue' ? 'lead-computer' : controllerDeviceId,
       getInputSessionRow: async () => {
         if (controllerDeviceId === 'database-unavailable') throw Object.assign(new Error('Temporary state read failure'), { code: 'INTERNAL' });
         return { clearedAt: null, agentKind: 'acp', orcaRemoteLead: JSON.stringify({
           leadDeviceId: 'lead-computer', leadSessionId: 'lead-task', workerLabel: 'reviewer',
+          ...(controllerDeviceId === 'released-before-enqueue' && ++reads >= 4 ? { releasedAt: 1 } : {}),
         }) };
       },
     }).enqueue;
@@ -636,7 +638,7 @@ describe('INPUT_ENQUEUE crash-restored remote Worker pause', () => {
       expect(h.sendToAgent).toHaveBeenCalledOnce();
     } else {
       await expect(enqueue({}, 'remote-worker', item)).rejects.toMatchObject({
-        code: controllerDeviceId === 'other-computer' ? 'PERMISSION_DENIED' : 'INTERNAL',
+        code: controllerDeviceId === 'database-unavailable' ? 'INTERNAL' : 'PERMISSION_DENIED',
       });
       expect(h.sendToAgent).not.toHaveBeenCalled();
     }

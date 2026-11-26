@@ -18642,12 +18642,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         const locations = sshLead ? undefined : await listWorkerAgentLocations();
         if (agentDeviceId) {
           let views: ProviderView[];
-          let pluginEngines: ReturnType<typeof pluginEngineDescriptors> = [];
+          let pluginEngines: ReturnType<typeof pluginEngineDescriptors> | null = [];
           try {
             [views, pluginEngines] = await Promise.all([
               readDeviceProviderViews(remoteBackgroundInvoke, agentDeviceId),
               !agent && !sshLead && !isProviderShareAgentDeviceId(agentDeviceId)
-                ? readDispatchedPluginEngines(agentDeviceId).then(pluginEngineDescriptors).catch(() => [])
+                ? readDispatchedPluginEngines(agentDeviceId).then(pluginEngineDescriptors).catch(() => null)
                 : Promise.resolve([]),
             ]);
           } catch (err) {
@@ -18657,7 +18657,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             ok: true,
             agentDeviceId,
             ...(locations ? { locations } : {}),
-            ...(pluginEngines.length ? { pluginEngines } : {}),
+            ...(pluginEngines === null ? { pluginEngineCatalogUnavailable: true as const } :
+              pluginEngines.length ? { pluginEngines } : {}),
             ...Object.fromEntries(agents.map((a) => [
               a === 'codex' ? 'codex' : a === 'pi' ? 'pi' : 'claude_code',
               deviceAvailableModels(views, a),
@@ -21677,7 +21678,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       await withSessionPermissionChange(sid, async () => undefined);
       if (!inputOwner || inputOwner !== getCurrentDbClientSnapshot()) throwIpcError('PRECONDITION_FAILED', 'Account changed before input');
       const isPluginInput = (item as Partial<AgentInputQueuedMessage> | null)?.createOpts?.agentKind === 'acp';
-      if (isPluginInput) {
+      const assertPluginEngineInput = async () => {
         const link = getDeviceLinkInvokeContext();
         if (!link || link.sharedTask) throwIpcError('PERMISSION_DENIED', 'Plugin engine input requires the Worker Lead computer');
         const row = await getInputSessionRow(sid);
@@ -21685,7 +21686,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         const origin = parseOrcaRemoteLead(row.orcaRemoteLead);
         if (row.agentKind !== 'acp' || !origin || origin.releasedAt !== undefined || origin.leadDeviceId !== link.controllerDeviceId)
           throwIpcError('PERMISSION_DENIED', 'Plugin engine input requires the Worker Lead computer');
-      }
+      };
+      if (isPluginInput) await assertPluginEngineInput();
       const parsed = await prepareSharedTaskInput(sid, requireQueuedMessage(item, { allowPluginEngine: isPluginInput }));
       // debug 日志：远程发送在被控端各阶段的耗时，不影响任何判定。
       const sendTrace = deviceLinkInvoke ? beginRemoteSendTrace(sid, parsed.clientId) : undefined;
@@ -21833,7 +21835,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           });
         };
         let projection: ReturnType<typeof enqueueInput> | undefined;
-        if (queued.text === CONTINUE_AFTER_APP_EXIT_PROMPT
+        if (!isPluginInput && queued.text === CONTINUE_AFTER_APP_EXIT_PROMPT
           && !(deviceLinkInvoke && isAutomaticInputOriginKind(parsed.origin?.kind))) {
           assertCurrentInputGeneration();
           if (inputOwner !== getCurrentDbClientSnapshot()) throwIpcError('PRECONDITION_FAILED', 'Account changed before input');
@@ -21889,7 +21891,15 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             await Promise.race([enqueued, completion]);
           }
         }
-        projection ??= enqueueInput(queued);
+        if (isPluginInput) {
+          // Share the release path’s lock, and recheck after all async preparation.
+          projection = await withSendToSessionLock(sid, async () => {
+            await assertPluginEngineInput();
+            return enqueueInput(queued);
+          });
+        } else {
+          projection ??= enqueueInput(queued);
+        }
         if (duplicate) {
           if (attachmentOwnerId) {
             await materialized.cleanupBeforeAcceptance?.();
