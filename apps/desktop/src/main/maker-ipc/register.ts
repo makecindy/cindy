@@ -6773,8 +6773,7 @@ export function registerModelVisibilitySyncIpc(): void {
 }
 
 export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions): void {
-  // Live session for features that serve built-in engines only (Orca, learn capture, turn
-  // model attribution). Plugin-engine tasks read as absent there (docs/plans/acp-plugin-bridge.md).
+  // Live session for features that serve built-in engines only (Orca, learn capture). Plugin-engine tasks read as absent there (docs/plans/acp-plugin-bridge.md).
   const builtinLiveSession = (sessionId: string) => {
     const live = maker.getSession(sessionId);
     return live && hasBuiltinAgentKind(live) ? live : undefined;
@@ -18912,7 +18911,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     beforeDispatchDirectUserTurn: (sessionId, signal) => gitSnapshotCoordinator?.onTurnStart(sessionId, signal),
     onModelDispatched: recordDispatchedModelHolder = withModelGroupStartSettlement(createTurnModelAttribution({
       captureModelChoice,
-      maker: { getSession: (sessionId) => builtinLiveSession(sessionId) }, getSessionProvider, captureDataOwnerBroadcastScope, isDataOwnerBroadcastScopeCurrent,
+      maker, getSessionProvider, captureDataOwnerBroadcastScope, isDataOwnerBroadcastScopeCurrent,
       enqueueDurableWrite, patchMessageAgentMeta, createDbMessage, log,
     })),
     assertBeforeVendorDispatch: (sessionId, sendOpts) => {
