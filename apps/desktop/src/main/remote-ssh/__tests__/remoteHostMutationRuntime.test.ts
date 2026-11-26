@@ -134,14 +134,20 @@ vi.mock('../../maker-host/index.js', () => ({
 }));
 
 import {
+  getRemoteSshHostKeyStore,
   getRemoteSshPool,
+  onRemoteSshHostRemoved,
+  setRemoteSshDeviceHostResolver,
   updateRemoteSshHost,
+  upsertPinnedDeviceHost,
   removeRemoteSshHost,
   REMOTE_SSH_PUSH,
   probeRemoteWorkingDirectory,
   registerRemoteSshIpc,
   REMOTE_SSH_INVOKE,
+  type PinnedDeviceHostSpec,
 } from '../index.js';
+import { listSetupSshHosts } from '../setupMigrationSsh.js';
 
 function host(id: string, overrides: Partial<HostConfig> = {}): HostConfig {
   return {
@@ -818,5 +824,108 @@ describe('remote SSH mutation runtime semantics', () => {
 
     expect(mocks.removeManagedHost).not.toHaveBeenCalled();
     expect(mocks.removePref).not.toHaveBeenCalled();
+  });
+});
+
+/*
+ * SSH access to the person's own devices (decisions 6 and 8, 2026-11-26). Entry points: the main-only
+ * upsertPinnedDeviceHost, the Settings UPDATE/REMOVE/LIST handlers and new-computer setup's host list, with the
+ * managed writers mocked as above and the real host-key store. Observable: the pinned key in known-hosts.json under
+ * the HostKeyAlias, the block written with strict checking, a deleted host reported missing instead of re-added, an
+ * alias that is someone else's left alone, connection fields of a device host refused in Settings, the
+ * 「来自我的设备」 label on LIST and the removal reaching the controller. Unit tier.
+ */
+describe('hosts for the person\'s own devices', () => {
+  const spec = (overrides: Partial<PinnedDeviceHostSpec> = {}): PinnedDeviceHostSpec => ({
+    alias: 'cindy-studio',
+    displayName: 'Studio',
+    previousDisplayName: null,
+    hostname: '203.0.113.7',
+    port: 22,
+    user: 'ubuntu',
+    identityFile: '/profile/owners/abc/ssh-access/id_ed25519',
+    hostKeyAlias: 'cindy-device-abc123',
+    userKnownHostsFile: '~/.ssh/cindy_known_hosts',
+    hostKeyFingerprint: 'SHA256:pinned-first',
+    ...overrides,
+  });
+  const onDisk = (value: PinnedDeviceHostSpec) => host(value.alias, {
+    hostname: value.hostname, port: value.port, user: value.user, authMethod: 'key', identityFile: value.identityFile,
+    hostKeyAlias: value.hostKeyAlias, strictHostKeyChecking: true,
+  });
+
+  it('pins the key under its alias, adds and updates the block, and never writes a deleted or foreign alias', async () => {
+    const first = spec();
+    mocks.readSshConfigDetailed
+      .mockResolvedValueOnce(successfulRead([]))
+      .mockResolvedValueOnce(successfulRead([onDisk(first)]));
+    await expect(upsertPinnedDeviceHost(first, { expectPresent: false })).resolves.toBe('created');
+    expect(mocks.addManagedHostWithInclude).toHaveBeenCalledWith(expect.objectContaining({
+      id: 'cindy-studio', authMethod: 'key', identityFile: first.identityFile, hostKeyAlias: 'cindy-device-abc123',
+      userKnownHostsFile: '~/.ssh/cindy_known_hosts', strictHostKeyChecking: true, managedByCindy: true,
+    }), expect.any(String), expect.any(String));
+    expect(await getRemoteSshHostKeyStore().get('cindy-device-abc123')).toBe('SHA256:pinned-first');
+    expect(mocks.patchPref).toHaveBeenCalledWith('cindy-studio', { displayName: 'Studio' });
+
+    // The device moved and re-keyed: the pin and the block follow it.
+    const moved = spec({ hostname: '203.0.113.9', hostKeyFingerprint: 'SHA256:pinned-second' });
+    mocks.readSshConfigDetailed
+      .mockResolvedValueOnce(successfulRead([onDisk(first)]))
+      .mockResolvedValueOnce(successfulRead([onDisk(moved)]));
+    await expect(upsertPinnedDeviceHost(moved, { expectPresent: true })).resolves.toBe('updated');
+    expect(mocks.updateManagedHostFields).toHaveBeenCalledWith(
+      expect.objectContaining({ hostname: '203.0.113.9', hostKeyAlias: 'cindy-device-abc123', strictHostKeyChecking: true }),
+      expect.any(String), 'a'.repeat(64),
+    );
+    expect(await getRemoteSshHostKeyStore().get('cindy-device-abc123')).toBe('SHA256:pinned-second');
+
+    mocks.addManagedHostWithInclude.mockClear();
+    mocks.updateManagedHostFields.mockClear();
+    // Deleted by the person: reported, not written back. Someone else's alias: left alone, nothing pinned.
+    mocks.readSshConfigDetailed.mockResolvedValueOnce(successfulRead([]));
+    await expect(upsertPinnedDeviceHost(spec({ hostKeyFingerprint: 'SHA256:after-delete' }), { expectPresent: true })).resolves.toBe('missing');
+    for (const foreign of [host('cindy-studio', { managedByCindy: false }), host('cindy-studio')]) {
+      mocks.readSshConfigDetailed.mockResolvedValueOnce(successfulRead([foreign]));
+      await expect(upsertPinnedDeviceHost(spec({ hostKeyFingerprint: 'SHA256:foreign' }), { expectPresent: false })).resolves.toBe('alias-taken');
+    }
+    expect(mocks.addManagedHostWithInclude).not.toHaveBeenCalled();
+    expect(mocks.updateManagedHostFields).not.toHaveBeenCalled();
+    expect(await getRemoteSshHostKeyStore().get('cindy-device-abc123')).toBe('SHA256:pinned-second');
+  });
+
+  it('refuses Settings edits of a device host\'s connection, labels it on LIST, tells the controller of its removal and keeps it out of setup', async () => {
+    const device = onDisk(spec());
+    const ordinary = host('dev-server');
+    await getRemoteSshPool().hydrate([device, ordinary]);
+    mocks.readSshConfigDetailed.mockImplementation(async () => successfulRead([device, ordinary]));
+    await expect(handler(REMOTE_SSH_INVOKE.UPDATE)({}, {
+      id: device.id, displayName: 'Studio', hostname: '198.51.100.1', port: 22, user: 'ubuntu', authMethod: 'key', identityFileUnchanged: true,
+    })).rejects.toMatchObject({ code: 'PRECONDITION_FAILED' });
+    expect(mocks.updateManagedHostFields).not.toHaveBeenCalled();
+    await updateRemoteSshHost({ id: device.id, displayName: '我的云主机' }, { patch: true });
+    expect(mocks.patchPref).toHaveBeenCalledWith(device.id, expect.objectContaining({ displayName: '我的云主机' }));
+
+    setRemoteSshDeviceHostResolver((hostId) => (hostId === device.id ? { deviceId: 'abc123', available: false } : null));
+    try {
+      const listed = await handler(REMOTE_SSH_INVOKE.LIST)({});
+      const byId = new Map(listed.hosts.map((entry: { config: { id: string } }) => [entry.config.id, entry]));
+      expect(byId.get(device.id)).toMatchObject({ device: { deviceId: 'abc123', available: false } });
+      expect(byId.get(ordinary.id)).not.toHaveProperty('device');
+      expect((await listSetupSshHosts()).map((entry) => entry.id)).toEqual([ordinary.id]);
+    } finally {
+      setRemoteSshDeviceHostResolver(null);
+    }
+
+    const removed = vi.fn();
+    const stop = onRemoteSshHostRemoved(removed);
+    try {
+      mocks.readSshConfigDetailed
+        .mockResolvedValueOnce(successfulRead([device, ordinary]))
+        .mockResolvedValueOnce(successfulRead([ordinary]));
+      await removeRemoteSshHost({ id: device.id });
+      expect(removed).toHaveBeenCalledExactlyOnceWith(device.id);
+    } finally {
+      stop();
+    }
   });
 });

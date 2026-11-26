@@ -92,3 +92,50 @@ export interface SshAccessApi {
   endAllSessions(): Promise<SshAccessEndSessionsResult>;
   onChanged(callback: () => void): () => void;
 }
+
+// ─── This computer as CONTROLLER: hosts for the person's other devices (ssh-access/sshAccessController.ts) ───
+
+export const SSH_DEVICE_HOSTS_IPC_CHANNEL = 'ssh-device-hosts:request';
+/** Main → renderer: the device hosts changed; read them again. */
+export const SSH_DEVICE_HOSTS_CHANGED_CHANNEL = 'ssh-device-hosts:changed';
+
+/**
+ * - `ready`: listed in SSH 远程主机 and usable; `alias` works in a terminal.
+ * - `pending`: being set up, or waiting for the device (offline, or still writing this computer's key).
+ * - `unavailable`: the host stays listed but cannot be used now (see `reason`).
+ * - `user-deleted`: the person deleted the host; 「添加到 SSH 远程主机」 brings it back.
+ * - `needs-update`: that device's Cindy is too old for SSH access.
+ * - `control-off`: this computer's own 「控制它」 for that device is off, so nothing is set up.
+ * - `error`: the device refused this computer's key or answered something unusable.
+ */
+export type SshDeviceHostState = 'ready' | 'pending' | 'unavailable' | 'user-deleted' | 'needs-update' | 'control-off' | 'error';
+/** Why a listed device host is unavailable: access off there, blocked there, this computer revoked, device removed. */
+export type SshDeviceHostUnavailableReason = 'off' | 'blocked' | 'revoked' | 'removed';
+
+export interface SshDeviceHostView {
+  deviceId: string;
+  /** `ssh <alias>` in a terminal (also the host id in SSH 远程主机); null before the host was first added. */
+  alias: string | null;
+  /** The host id in SSH 远程主机 while the host is listed there, else null. */
+  hostId: string | null;
+  state: SshDeviceHostState;
+  reason: SshDeviceHostUnavailableReason | null;
+  /** For `reason: 'blocked'`: what the device reported. */
+  blocked: SshAccessBlock | 'UNKNOWN' | null;
+}
+
+export type SshDeviceHostsRequest = { operation: 'read' } | { operation: 'restore'; deviceId: string };
+
+export interface SshDeviceHostsApi {
+  read(): Promise<SshDeviceHostView[]>;
+  /** 「添加到 SSH 远程主机」 for a device whose host the person deleted. */
+  restore(deviceId: string): Promise<SshDeviceHostView[]>;
+  onChanged(callback: () => void): () => void;
+}
+
+/** Added to an SSH host snapshot when the host belongs to one of the person's own devices. */
+export interface SshHostDeviceLabel {
+  deviceId: string;
+  /** False while the device has SSH access off, blocked, revoked this computer or left the account. */
+  available: boolean;
+}
