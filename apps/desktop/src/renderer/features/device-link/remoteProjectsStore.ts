@@ -73,11 +73,33 @@ type CreationPreview = {
 };
 const creationPreviews = new Map<string, CreationPreview>();
 const shards = new Map<string, DeviceShard>();
+// A read only needs timing pushes that arrive before it settles.
+const pendingScheduleIndexTimings = new Map<string, Map<string, number>>();
 let mergedScheduleIndex: ReadonlyMap<string, AutomationScheduleSessionInfo> = new Map();
 function recomputeScheduleIndex(): void {
   const next = new Map([...shards.values()].flatMap((shard) => [...(shard.scheduleIndex ?? [])]));
   if (JSON.stringify([...next]) !== JSON.stringify([...mergedScheduleIndex]))
     mergedScheduleIndex = next;
+}
+function applyScheduleTimings(
+  index: ReadonlyMap<string, AutomationScheduleSessionInfo>,
+  timings: ReadonlyMap<string, number>,
+): ReadonlyMap<string, AutomationScheduleSessionInfo> {
+  if (timings.size === 0) return index;
+  let next: Map<string, AutomationScheduleSessionInfo> | undefined;
+  for (const [sessionId, info] of index) {
+    const nextFireAt = timings.get(info.scheduleId);
+    if (nextFireAt === undefined || nextFireAt === info.nextFireAt) continue;
+    next ??= new Map(index);
+    next.set(sessionId, {
+      ...info,
+      nextFireAt,
+      ...(info.latestFailedRun && info.scheduleStatus === 'active'
+        ? { latestFailedRun: { ...info.latestFailedRun, nextFireAt } }
+        : {}),
+    });
+  }
+  return next ?? index;
 }
 const subs = new Set<() => void>();
 // A cold renderer has not read its cache or discovered devices yet. An empty
@@ -160,6 +182,7 @@ function snapshotEpochKey(deviceId: string, status: RemoteSessionStatus): string
 }
 
 function invalidateDeviceSnapshotEpochs(deviceId: string): void {
+  pendingScheduleIndexTimings.delete(deviceId);
   if (detailDeviceEpoch.has(deviceId)) {
     detailDeviceEpoch.set(deviceId, detailDeviceEpoch.get(deviceId)! + 1);
   }
@@ -690,6 +713,7 @@ function markAllUnreachable(target: UnreachableStatus, matchesDevice?: (deviceId
     }
     return;
   }
+  pendingScheduleIndexTimings.clear();
   for (const [k, v] of snapshotEpoch) snapshotEpoch.set(k, v + 1);
   for (const [k, v] of detailDeviceEpoch) detailDeviceEpoch.set(k, v + 1);
   const bootstrapStateChanged =
@@ -764,16 +788,51 @@ const actions = {
   getSessionScheduleBindings(deviceId: string, sessionId: string): readonly ScheduleBinding[] {
     return shards.get(deviceId)?.scheduleBindings?.get(sessionId) ?? EMPTY_SCHEDULE_BINDINGS;
   },
-  setDeviceScheduleIndex(
+  beginDeviceScheduleIndexRead(deviceId: string) {
+    const timings = new Map<string, number>();
+    pendingScheduleIndexTimings.set(deviceId, timings);
+    return {
+      commit(index: ReadonlyMap<string, AutomationScheduleSessionInfo>) {
+        if (pendingScheduleIndexTimings.get(deviceId) !== timings) return false;
+        const shard = shards.get(deviceId);
+        const next = applyScheduleTimings(index, timings);
+        if (shard && JSON.stringify([...(shard.scheduleIndex ?? [])]) !== JSON.stringify([...next])) {
+          shard.scheduleIndex = next;
+          recomputeScheduleIndex();
+          subs.forEach((fn) => fn());
+        }
+        return true;
+      },
+      release() {
+        if (pendingScheduleIndexTimings.get(deviceId) === timings)
+          pendingScheduleIndexTimings.delete(deviceId);
+      },
+    };
+  },
+  clearPendingDeviceScheduleTiming(deviceId: string, scheduleId?: string): void {
+    const timings = pendingScheduleIndexTimings.get(deviceId);
+    if (scheduleId === undefined) timings?.clear();
+    else timings?.delete(scheduleId);
+  },
+  patchDeviceScheduleTiming(
     deviceId: string,
-    index: ReadonlyMap<string, AutomationScheduleSessionInfo>,
-  ): void {
+    patch: { scheduleId: string; nextFireAt: number; preRunCheckSucceeded?: boolean },
+  ): boolean {
     const shard = shards.get(deviceId);
-    if (!shard || JSON.stringify([...(shard.scheduleIndex ?? [])]) === JSON.stringify([...index]))
-      return;
-    shard.scheduleIndex = index;
-    recomputeScheduleIndex();
-    subs.forEach((fn) => fn());
+    if (!shard?.scheduleIndex) return false;
+    for (const info of shard.scheduleIndex.values()) {
+      if (info.scheduleId === patch.scheduleId && patch.preRunCheckSucceeded && info.hasFailedRun) {
+        return false;
+      }
+    }
+    pendingScheduleIndexTimings.get(deviceId)?.set(patch.scheduleId, patch.nextFireAt);
+    const next = applyScheduleTimings(shard.scheduleIndex, new Map([[patch.scheduleId, patch.nextFireAt]]));
+    if (next !== shard.scheduleIndex) {
+      shard.scheduleIndex = next;
+      recomputeScheduleIndex();
+      subs.forEach((fn) => fn());
+    }
+    return true;
   },
   getSessionScheduleInfo(sessionId: string): AutomationScheduleSessionInfo | undefined {
     const deviceId = sessionDeviceIndex.get(sessionId);
@@ -1180,6 +1239,7 @@ const actions = {
     }
     // 所有设备 epoch 无条件**自增**(不 clear-to-0,见 snapshotEpoch 注释的 ABA):清空时在途
     // 首拉立即失效;下一轮 bootstrap 拿到更高 epoch,不会与清空前的 epoch 撞值把陈旧 snapshot 盖回。
+    pendingScheduleIndexTimings.clear();
     for (const [k, v] of snapshotEpoch) snapshotEpoch.set(k, v + 1);
     for (const [k, v] of detailDeviceEpoch) detailDeviceEpoch.set(k, v + 1);
     // 登出 / device-link stopped 是明确的生命周期边界:叠加层是本次会话期的临时

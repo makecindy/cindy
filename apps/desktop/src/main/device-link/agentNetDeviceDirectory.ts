@@ -1,8 +1,18 @@
-import type { DeviceView } from '@cindy/device-link';
+import {
+  mergeAgentNetDeviceRow,
+  normalizeAgentNetBackfillName,
+  preservedLegacyCustomName,
+  PROVIDER_METADATA_TRUST_MS,
+  type DeviceView,
+} from '@cindy/device-link';
 import type { DeviceView as AgentNetDeviceView } from '@cindy/agent-net-protocol';
 import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../appSessionState.js';
-import { PROVIDER_METADATA_TRUST_MS } from '@cindy/device-link';
 import { isTemporaryProviderMetadataFailure, providerDirectoryGeneration } from './providerMetadataContinuity.js';
+import {
+  deviceDirectoryMutationGeneration,
+  hasActiveDeviceDirectoryMutation,
+  trackDeviceDirectoryBackfill,
+} from './deviceDirectoryMutationFence.js';
 import * as runtime from './agentNetRuntime.js';
 
 /** V2 名册里的一台设备,写成旧版设备目录的样子(界面与设备列表共用一套)。 */
@@ -48,9 +58,82 @@ function knownRejectionStatus(error: unknown): number | null {
   return typeof status === 'number' && Number.isFinite(status) && status >= 400 ? status : null;
 }
 
-/** 仅测试:清掉记住的完整目录,避免上一个用例的并集漏进下一个用例。 */
+interface LegacyCustomNameBackfill {
+  deviceId: string;
+  name: string;
+  selfName: string | null;
+  isSelf: boolean;
+}
+
+let backfillScopeKey: string | null = null;
+const attemptedBackfills = new Map<string, string>();
+const inflightBackfills = new Set<string>();
+
+/** 仅测试:清掉记住的完整目录与自定义名回填去重状态,避免上一个用例泄漏进下一个用例。 */
 export function __resetDeviceDirectoryUnionForTests(): void {
   lastCompleteDirectory = null;
+  backfillScopeKey = null;
+  attemptedBackfills.clear();
+  inflightBackfills.clear();
+}
+
+/**
+ * 存量用户在开启 Agent-Net 前已在传统远程连接(V1)里改过设备名,而首次注册到 V2 时
+ * 只上报了主机名(customName 为 null)。发现这种漂移时,在当前目录合并立即可见的同时,
+ * 后台按「同 scope + 设备 + 目标名最多一次、串行逐个」回填给 V2,让对端实时 presence、
+ * 其它设备与纯加密模式也一并恢复自定义名。
+ */
+function scheduleLegacyCustomNameBackfill(options: {
+  scopeKey: string;
+  api: { request(method: 'PATCH', path: string, body: unknown): Promise<unknown> };
+  items: LegacyCustomNameBackfill[];
+  readDirectoryGen: number;
+  readMutationGen: number;
+  assertCurrent: () => void;
+}): void {
+  const { scopeKey, api, readDirectoryGen, readMutationGen, assertCurrent } = options;
+  if (backfillScopeKey !== scopeKey) {
+    backfillScopeKey = scopeKey;
+    attemptedBackfills.clear();
+    inflightBackfills.clear();
+  }
+  const ordered = [...options.items].sort((a, b) => Number(b.isSelf) - Number(a.isSelf));
+  const pending = ordered.filter((item) => {
+    const signature = `${item.name}\0${item.selfName ?? ''}`;
+    return attemptedBackfills.get(item.deviceId) !== signature && !inflightBackfills.has(item.deviceId);
+  });
+  if (pending.length === 0) return;
+
+  void (async () => {
+    for (const item of pending) {
+      try {
+        assertCurrent();
+      } catch {
+        return;
+      }
+      if (
+        backfillScopeKey !== scopeKey ||
+        readDirectoryGen !== providerDirectoryGeneration() ||
+        readMutationGen !== deviceDirectoryMutationGeneration()
+      ) {
+        return;
+      }
+      if (hasActiveDeviceDirectoryMutation(item.deviceId)) continue;
+      const signature = `${item.name}\0${item.selfName ?? ''}`;
+      if (attemptedBackfills.get(item.deviceId) === signature || inflightBackfills.has(item.deviceId)) continue;
+      attemptedBackfills.set(item.deviceId, signature);
+      inflightBackfills.add(item.deviceId);
+      try {
+        const request = api.request('PATCH', '/devices/' + encodeURIComponent(item.deviceId), { name: item.name });
+        trackDeviceDirectoryBackfill(item.deviceId, request);
+        await request;
+      } catch {
+        // Best-effort sync; merged hybrid directory already preserves the V1 custom name.
+      } finally {
+        if (backfillScopeKey === scopeKey) inflightBackfills.delete(item.deviceId);
+      }
+    }
+  })();
 }
 
 /**
@@ -108,6 +191,7 @@ function partialDirectory(
   scope: string,
   selection: string,
   devices: DeviceView[],
+  source: 'legacy' | 'encrypted',
 ): { devices: DeviceView[]; partial: true; rememberedUntilMs?: number } {
   const remembered = rememberedUnion(scope, selection);
   if (!remembered || remembered.devices.length === 0) return { devices, partial: true };
@@ -117,8 +201,20 @@ function partialDirectory(
     // 活下来的那条腿说不了另一条路的账:它可能只是因为对端关掉了 V2 才把对方列成离线。
     // 没有当前数据通路的权威证据时,不要用「离线」覆盖「活着」(与完整合并同一道护栏)。
     if (!device.online && old?.online) continue;
+    // 仅在本次只有 V2 腿成功时保留上次完整目录记住的自定义名;
+    // 若本次 V1 腿成功(source === 'legacy'),新鲜 V1 名称(含远端清空恢复默认)应直接生效。
+    const preserved = source === 'encrypted' ? preservedLegacyCustomName(old, device) : null;
+    const mergedSelfName = device.selfName ?? old?.selfName ?? null;
     merged.set(device.deviceId, old
-      ? { ...old, ...device, deviceInfo: old.deviceInfo ?? device.deviceInfo }
+      ? {
+          ...old,
+          ...device,
+          ...(preserved ? { name: preserved } : {}),
+          ...(mergedSelfName !== null || device.selfName !== undefined || old.selfName !== undefined
+            ? { selfName: mergedSelfName }
+            : {}),
+          deviceInfo: old.deviceInfo ?? device.deviceInfo,
+        }
       : device);
   }
   return { devices: [...merged.values()], partial: true, rememberedUntilMs: remembered.until };
@@ -166,6 +262,8 @@ export async function readCurrentDeviceDirectory(
   const withoutRefused = <T extends { devices: DeviceView[] }>(value: T): T =>
     ({ ...value, devices: value.devices.filter(device => device.isSelf || runtime.agentNetDeviceAccepted(device.deviceId)) });
   if (onlyEncrypted) return withoutRefused(await readEncrypted());
+  const readDirectoryGen = providerDirectoryGeneration();
+  const readMutationGen = deviceDirectoryMutationGeneration();
   const startedAt = Date.now();
   const [legacy, encrypted] = await Promise.allSettled([readLegacy(), readEncrypted()]);
   assertCurrent();
@@ -188,20 +286,26 @@ export async function readCurrentDeviceDirectory(
   if (legacy.status === 'rejected' && !legIsTemporary(legacy.reason)) throw legacy.reason;
   if (encrypted.status === 'rejected') {
     if (legacy.status === 'rejected') throw encrypted.reason;
-    return withoutRefused(partialDirectory(scope, selection, legacy.value.devices));
+    return withoutRefused(partialDirectory(scope, selection, legacy.value.devices, 'legacy'));
   }
-  if (legacy.status === 'rejected') return withoutRefused(partialDirectory(scope, selection, encrypted.value.devices));
+  if (legacy.status === 'rejected') return withoutRefused(partialDirectory(scope, selection, encrypted.value.devices, 'encrypted'));
   const devices = new Map(legacy.value.devices.map(device => [device.deviceId, device]));
+  const backfills: LegacyCustomNameBackfill[] = [];
   for (const device of encrypted.value.devices) {
     const old = devices.get(device.deviceId);
-    // A paired device can turn V2 off and remain online through V1. An online V2
-    // row, including an explicit control-off, is authoritative for its V2 path.
-    if (!device.online && old?.online) {
-      // Liveness can come from V1 while App identity remains durable V2 metadata.
-      if (device.app !== undefined) devices.set(device.deviceId, { ...old, app: device.app });
-      continue;
+    const { device: merged, backfilledCustomName } = mergeAgentNetDeviceRow(old, device);
+    devices.set(device.deviceId, merged);
+    if (backfilledCustomName) {
+      const normalized = normalizeAgentNetBackfillName(backfilledCustomName);
+      if (normalized) {
+        backfills.push({
+          deviceId: device.deviceId,
+          name: normalized,
+          selfName: device.selfName ?? null,
+          isSelf: device.isSelf,
+        });
+      }
     }
-    devices.set(device.deviceId, { ...old, ...device, deviceInfo: old?.deviceInfo ?? device.deviceInfo });
   }
   const complete = { ...legacy.value, devices: [...devices.values()] };
   // 只有两条腿都读到才是**完整**目录:它是下一次部分目录的并集来源。
@@ -211,5 +315,20 @@ export async function readCurrentDeviceDirectory(
     at: Date.now(),
     devices: complete.devices,
   };
+  if (
+    backfills.length > 0 &&
+    typeof api.request === 'function' &&
+    readDirectoryGen === providerDirectoryGeneration() &&
+    readMutationGen === deviceDirectoryMutationGeneration()
+  ) {
+    scheduleLegacyCustomNameBackfill({
+      scopeKey: unionKey(scope, selection),
+      api,
+      items: backfills,
+      readDirectoryGen,
+      readMutationGen,
+      assertCurrent,
+    });
+  }
   return complete;
 }

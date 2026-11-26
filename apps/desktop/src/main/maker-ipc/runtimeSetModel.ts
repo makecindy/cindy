@@ -1,4 +1,5 @@
 import { withRehydrateCloseSuppressed } from '../maker-host/rehydrateCloseSuppression.js';
+import { throwIpcError } from '../utils/ipcValidate.js';
 import type { AgentKind, Effort, EngineKind } from '@cindy/maker-core';
 import { hasBuiltinAgentKind } from '../maker-host/engineKind.js';
 
@@ -42,6 +43,7 @@ interface RuntimeSetModelSession {
     targetContextWindow: number | null;
     windowVerified: boolean;
     reason?: string;
+    modelNotOffered?: true;
   } | undefined>;
 }
 
@@ -262,6 +264,7 @@ export async function applyRuntimeSetModelChange(
     throw new Error('Pi model switch preview is unavailable; runtime selection was not changed');
   }
   if (piPreview?.action === 'unavailable') {
+    if (piPreview.modelNotOffered) throwIpcError('MODEL_SELECTION_UNAVAILABLE', piPreview.reason ?? 'Select an available model');
     throw new Error(piPreview.reason ?? 'Pi target model is unavailable; runtime selection was not changed');
   }
   let requiresCodexThreadRelink = typeof input.requiresCodexThreadRelink === 'function'

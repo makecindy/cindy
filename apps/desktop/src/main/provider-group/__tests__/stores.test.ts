@@ -6,6 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
+import { publicProviderGroupConfig, withLocalProviderGroupAccounts } from '../../../shared/providerGroup';
 
 const scope = vi.hoisted(() => ({ boundaryPending: false }));
 
@@ -31,6 +32,34 @@ afterEach(() => { scope.boundaryPending = false; activeOwner = 'owner-test'; vi.
 afterAll(async () => { await fs.promises.rm(tmpDir, { recursive: true, force: true }); });
 
 describe('provider group store', () => {
+  // File-backed unit: older files have only IDs. Private weights must survive
+  // reopening and a concurrent CAS conflict, without following a removed member.
+  it('persists mixed allocation across reload, keeps remote slots and prunes removed overrides', async () => {
+    const id = 'mixed-settings';
+    const initial = (await store.writeProviderGroup(id, {
+      members: [{ kind: 'local' }, { kind: 'device', agentDeviceId: 'mini', providerId: id, weight: 5 }],
+      localAccountIds: ['work-key', 'lab-key'],
+    }))!;
+    expect(withLocalProviderGroupAccounts(initial, id).members.map(member => member.weight)).toEqual([1, 5, 1, 1]);
+    const written = await store.writeProviderGroup(id, { ...initial, strategy: 'weight', localAccountSettings: {
+      order: ['work-key', id, 'lab-key'], weights: { [id]: 2, 'work-key': 3 },
+      limits: { [id]: 2, 'work-key': 1 }, paused: ['work-key'],
+    } }, initial);
+    await expect(store.writeProviderGroup(id, { ...initial, strategy: 'round' }, initial)).rejects.toThrow('PROVIDER_GROUP_CHANGED');
+    const disk = JSON.parse(fs.readFileSync(path.join(tmpDir, 'provider-group-prefs.json'), 'utf8'));
+    const reopened = store.__testing.normalize(disk).groups[id]!;
+    expect(reopened).toEqual(written);
+    expect(withLocalProviderGroupAccounts(reopened, id).members.map(member => [member.key, member.weight]))
+      .toEqual([['local:work-key', 3], [`device:mini:${id}`, 5], ['local', 2], ['local:lab-key', 1]]);
+    expect(withLocalProviderGroupAccounts(reopened, id).members
+      .filter(member => member.kind === 'local').map(({ paused, limit, limitSet }) => [paused, limit, limitSet]))
+      .toEqual([[true, 1, true], [false, 2, true], [false, 4, undefined]]);
+    expect(publicProviderGroupConfig(reopened)).toEqual({ ...publicProviderGroupConfig(initial), strategy: 'weight' });
+    const removed = (await store.writeProviderGroup(id, { ...reopened, localAccountIds: ['lab-key'] }, reopened))!;
+    expect(removed.localAccountSettings).toEqual({ order: [id, 'lab-key'], weights: { [id]: 2 }, limits: { [id]: 2 } });
+    const rejoined = (await store.writeProviderGroup(id, { ...removed, localAccountIds: ['lab-key', 'work-key'] }, removed))!;
+    expect(withLocalProviderGroupAccounts(rejoined, id).members.at(-1)).toMatchObject({ providerId: 'work-key', weight: 1 });
+  });
   // Unit persistence regression (provider-groups.md §3): the prior fixture only had
   // one connection per device. Save both independent IDs and reload the actual file.
   it('persists two independent subscription members on one device without merging their identities', async () => {

@@ -11,7 +11,8 @@ import * as activeCatalogForHostParity from '../active-catalog.js';
 import { calibrateDraftModel } from '../../../shared/draftModelCalibration.js';
 import { resolveAutomaticImSettings } from '../../../shared/imAutomaticModel.js';
 import { IM_DEFAULT_SETTINGS } from '../../../shared/imDefaultSettings.js';
-import { readCreatedSubscriptionProviders } from '../../subscription-accounts/placement.js';
+import { accountProviderId, readCreatedSubscriptionProviders } from '../../subscription-accounts/placement.js';
+import { remoteAccessProviderId } from '../mergedProviderPool.js';
 import { createHostProviderConfig } from '../../../../../host/src/agent/provider-config.js';
 import { projectSubscriptionPoolCatalog } from '../subscriptionPoolCatalog.js';
 import { createHostModelContext } from '../../../../../host/src/agent/model-context.js';
@@ -58,6 +59,8 @@ const h = vi.hoisted(() => ({
   /** Providers Cindy created for subscription accounts, and the providers whose accounts were read. */
   created: {} as Record<string, { kind: 'openai' | 'anthropic'; name: string; account: string }>,
   refreshed: new Set<string>(),
+  /** Error that subscription pool reads reject with after recording the read. */
+  poolRefreshError: null as Error | null,
   openAiSiblingHealthy: false,
   retainedOpenAiModels: null as import('@cindy/model-providers').CatalogModel[] | null,
   poolModels: null as import('@cindy/model-providers').CatalogModel[] | null,
@@ -88,9 +91,11 @@ vi.mock('../../subscription-accounts/placement.js', async (importOriginal) => {
   };
   return {
     ...actual,
-    accountProviderId: owner,
+    accountProviderId: (kind: Parameters<typeof actual.accountProviderId>[0], id: string) =>
+      h.actualPlacement ? actual.accountProviderId(kind, id) : owner(kind, id),
     readMergedLegacyCodexAccountId: merged,
-    readMergedProviderAccount: merged,
+    readMergedProviderAccount: (id: string) =>
+      h.actualPlacement ? actual.readMergedProviderAccount(id) : merged(id),
     restoreAutoMergedLegacyCodexAccounts: h.restoreLegacy,
     readCreatedSubscriptionProviders: () => {
       if (h.placementError) throw h.placementError;
@@ -117,6 +122,7 @@ vi.mock('../../subscription-accounts/runtime.js', async (importOriginal) => {
     // No real CLI homes here: a read only records which provider was read.
     refreshSubscriptionPool: async (id: string) => {
       h.refreshed.add(id);
+      if (h.poolRefreshError) throw h.poolRefreshError;
       return { providerId: id, configured: true, strategy: 'least' as const, accounts: [] };
     },
     refreshSubscriptionPoolCodexModels: async () => undefined,
@@ -926,6 +932,40 @@ describe('provider catalog realm reload', () => {
     } finally {
       publish.mockRestore(); await config.close(); setCustomProviders([]);
       h.profileRoot = null; h.owner = previousOwner; h.actualPlacement = false; h.customProviderRead.mockReset();
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  // Unit: production remote-use resolver over the real placement file. External edits may
+  // lag by one minute, but repeated checks must not slide that window; two images suffice.
+  it('bounds cached remote account membership to one minute after an external replacement', async () => {
+    let at = 1_000_000;
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => at);
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'cindy-placement-auth-'));
+    const previousOwner = h.owner;
+    const previousPool = h.pool;
+    h.profileRoot = root; h.owner = randomUUID(); h.actualPlacement = true;
+    h.pool = { strategy: 'least', accounts: [{ id: 'default', paused: false, limit: 4, weight: 1 }] };
+    const provider = 'openai-sub-1234abcd';
+    const file = path.join(root, h.owner, 'subscription-account-placement.json');
+    const image = (target: string) => JSON.stringify({ accounts: { 'openai:default': target },
+      providers: { [provider]: { kind: 'openai', name: 'Fixture', account: 'default' } } });
+    try {
+      await fsp.mkdir(path.dirname(file), { recursive: true });
+      await fsp.writeFile(file, image('openai'));
+      expect(remoteAccessProviderId(provider)).toBe('openai');
+      await fsp.writeFile(`${file}.replacement`, image(provider));
+      await fsp.rename(`${file}.replacement`, file);
+      expect(accountProviderId('openai', 'default')).toBe('openai'); // Ordinary cached view.
+      expect(remoteAccessProviderId(provider)).toBe('openai');
+      at += 59_999;
+      expect(remoteAccessProviderId(provider)).toBe('openai');
+      at++;
+      expect(remoteAccessProviderId(provider)).toBe(provider);
+      expect(accountProviderId('openai', 'default')).toBe(provider);
+    } finally {
+      h.pool = previousPool; h.profileRoot = null; h.owner = previousOwner; h.actualPlacement = false;
+      clock.mockRestore();
       await fsp.rm(root, { recursive: true, force: true });
     }
   });
@@ -2259,6 +2299,34 @@ describe('provider catalog realm reload', () => {
     h.request.mockReturnValueOnce(request);
     await expect(h.catalogIo!.fetchText!('https://catalog.example.test', 100)).rejects.toThrow('HTTP 404');
     expect(request.abort).toHaveBeenCalledTimes(1);
+  });
+
+  // Unit regression (v0.1.147 Windows log, 2026-11-26): splash check-environment awaits
+  // ensureActiveCatalogLoaded. With a Claude subscription pool, its startup warm-up read
+  // ran while the signed-out → cloud owner boundary committed and threw
+  // `Subscription account owner changed`, so splash showed 环境初始化失败 until Retry.
+  // Earlier cases never let the pool read fail during the first load.
+  // Minimal input: pool present + pool read rejects with the owner-boundary error.
+  // Last in this describe because it restarts the process-wide first load.
+  it('finishes the startup catalog load when the Claude pool read hits an owner boundary', async () => {
+    __testing.resetStartupCatalogLoad();
+    h.claudePool = { strategy: 'least', accounts: [{ id: 'second', paused: false, limit: 4, weight: 1 }] };
+    h.poolRefreshError = new Error('Subscription account owner changed');
+    const loadsBefore = h.loads.length;
+    try {
+      const startup = ensureActiveCatalogLoaded();
+      expect(h.loads).toHaveLength(loadsBefore + 1);
+      h.loads.at(-1)!.resolve(BUNDLED_CATALOG);
+      await expect(startup).resolves.toBeDefined();
+      expect(h.refreshed.has('anthropic')).toBe(true);
+      // Startup is complete: no Retry-driven second load is needed.
+      await ensureActiveCatalogLoaded();
+      expect(h.loads).toHaveLength(loadsBefore + 1);
+    } finally {
+      h.claudePool = null;
+      h.poolRefreshError = null;
+      h.refreshed.clear();
+    }
   });
 });
 

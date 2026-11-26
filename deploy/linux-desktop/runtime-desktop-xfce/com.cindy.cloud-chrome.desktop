@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Terminal=false
+StartupNotify=true
+Name=Google Chrome
+Exec=/usr/local/bin/cindy-dock-chrome %U
+Icon=/opt/google/chrome/product_logo_128.png
+StartupWMClass=Google-chrome-personal
+Categories=Network;WebBrowser;

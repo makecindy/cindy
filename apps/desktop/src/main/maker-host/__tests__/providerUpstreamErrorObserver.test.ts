@@ -17,11 +17,15 @@ import {
   createProviderUpstreamErrorObserver,
   reportProviderUpstreamError,
   setProviderUpstreamErrorBroadcaster,
+  setProviderUpstreamHealthCapture,
+  setProviderUpstreamSuccessObserver,
   type ProviderUpstreamErrorEvent,
 } from '../provider-upstream-error-observer.js';
 
 afterEach(() => {
   setProviderUpstreamErrorBroadcaster(() => {});
+  setProviderUpstreamHealthCapture(() => undefined);
+  setProviderUpstreamSuccessObserver(() => undefined);
 });
 
 function ctx(over: Partial<ResponseObserverCtx> = {}): ResponseObserverCtx {
@@ -48,6 +52,61 @@ function drive(observer: ReturnType<typeof createProviderUpstreamErrorObserver>,
 }
 
 describe('createProviderUpstreamErrorObserver', () => {
+  // Real response observer, fake upstream frames. HTTP/header-only, empty,
+  // interrupted and failed streams cannot prove direct recovery.
+  it('observes completed text only for a verified direct Responses request', () => {
+    let completed = 0;
+    setProviderUpstreamSuccessObserver((session, id, agent, response) =>
+      session === 'direct' && id === 'key' && agent === 'codex' && response.outboundHeaders?.authorization === 'Bearer FAKE'
+        ? () => { completed++; } : undefined);
+    const observer = createProviderUpstreamErrorObserver({
+      agent: 'codex', resolveUserProviderId: () => 'key', resolveUserSessionId: headers => headers.session ?? null,
+    });
+    const response = ctx({ status: 200, url: '/v1/responses', requestHeaders: { session: 'direct' },
+      outboundHeaders: { authorization: 'Bearer FAKE' }, responseHeaders: { 'content-type': 'text/event-stream' } });
+    const text = 'data: {"type":"response.output_text.delta","delta":"Hello"}\n\n';
+    const done = 'data: {"type":"response.completed","response":{"status":"completed"}}\n\n';
+    const sink = observer(response);
+    expect(completed).toBe(0);
+    sink?.onEnd?.();
+    drive(observer, response, Buffer.from(done));
+    drive(observer, response, Buffer.from(text));
+    drive(observer, { ...response, requestHeaders: { session: 'group' } }, Buffer.from(text + done));
+    expect(completed).toBe(0);
+    const stream = observer(response);
+    stream?.onData?.(Buffer.from(text + done.slice(0, 20)));
+    expect(completed).toBe(0);
+    stream?.onData?.(Buffer.from(done.slice(20)));
+    expect(completed).toBe(1);
+  });
+
+  // Unit through the response observer. Billing and rate failures on the same
+  // connection must be delivered independently of UI notification throttling.
+  it('records Pi account health from authenticated upstream error responses', () => {
+    const observed: unknown[] = [];
+    const events: ProviderUpstreamErrorEvent[] = [];
+    setProviderUpstreamErrorBroadcaster(event => events.push(event));
+    setProviderUpstreamHealthCapture((id, agent, upstream, authorization) =>
+      id === 'test-key' && agent === 'pi' && upstream === 'https://api.openai.com/v1'
+        && authorization === 'Bearer fixture'
+        ? async (result, retryAt) => { observed.push({ ...result, retryAt }); } : undefined);
+    const observer = createProviderUpstreamErrorObserver({
+      agent: 'pi', healthOnly: true, resolveUserProviderId: () => 'test-key', now: () => 1000,
+    });
+    const input = { status: 429, upstreamBase: 'https://api.openai.com/v1',
+      outboundHeaders: { authorization: 'Bearer fixture' } };
+    expect(drive(observer, ctx({ ...input, outboundHeaders: {} }), Buffer.from('{}'))).toBe(false);
+    drive(observer, ctx(input), Buffer.from('{"error":{"code":"credit_balance_exhausted"}}'));
+    drive(observer, ctx({ ...input, responseHeaders: { 'retry-after': '7' } }), Buffer.from('{"error":{"code":"rate_limit_exceeded"}}'));
+    drive(observer, ctx({ ...input, status: 529 }), Buffer.from('{"error":{"code":"overloaded"}}'));
+    expect(observed).toEqual([
+      { ok: false, code: 'QUOTA_EXCEEDED', billingCode: 'credit_balance_exhausted', retryAt: undefined },
+      { ok: false, code: 'RATE_LIMITED', retryAt: 8000 },
+      { ok: false, code: 'RATE_LIMITED', retryAt: 121_000 },
+    ]);
+    expect(events).toEqual([]);
+  });
+
   // #9470: unit, production observer and broadcaster. Existing 4xx coverage did
   // not exercise JSON-escaped Unknown name messages; no socket or account used.
   it('broadcasts Unknown name field rejections as WIRE_INCOMPATIBLE', () => {

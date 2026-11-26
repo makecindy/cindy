@@ -35,6 +35,7 @@ const fixture = vi.hoisted(() => ({
   extraDevices: [] as any[],
   devicesFailed: false,
   devicesAbsent: false,
+  listHasRows: true,
   platform: "ios",
   width: 390,
   storage: new Map<string, string>(),
@@ -203,7 +204,7 @@ vi.mock("@/device-link/remoteResources", () => ({
 vi.mock("@/session/useRemoteResourceList", () => ({
   useRemoteResourceList: () => ({
     items:
-      fixture.devicesFailed || fixture.devicesAbsent
+      fixture.devicesFailed || fixture.devicesAbsent || !fixture.listHasRows
         ? []
         : [...fixture.extraRows, row()],
     error: fixture.devicesFailed || fixture.devicesAbsent ? "noHosts" : null,
@@ -304,6 +305,7 @@ beforeEach(() => {
   fixture.extraDevices = [];
   fixture.devicesFailed = false;
   fixture.devicesAbsent = false;
+  fixture.listHasRows = true;
   fixture.push.mockClear();
   fixture.enabled = true;
   fixture.online = true;
@@ -1183,6 +1185,27 @@ it.each(["ios", "android"])("removes only the %s plugin-list plus while retainin
   const header = fixture.props.get("header");
   const menu = platform === "ios" ? header.rightToolbar : header.right;
   expect(menu.props.actions.some((action: any) => action.id === "uninstall")).toBe(true);
+});
+
+// #12575: the roster can include a computer that yielded no list and no error.
+it("only shows the Android empty directory after the selected computer replies", async () => {
+  fixture.platform = "android";
+  fixture.online = false;
+  fixture.listHasRows = false;
+  await act(async () => root.render(createElement(PluginsScreen)));
+  const selectComputer = [...element.querySelectorAll("button")].find(
+    (button) => button.textContent === "plugins.allComputers",
+  );
+  await act(async () => selectComputer!.click());
+  await act(async () => fixture.alert.mock.lastCall![2][1].onPress());
+  expect(element.textContent).toContain("Mac");
+  expect(element.textContent).toContain("plugins.listLoadFailed");
+  expect(element.textContent).not.toContain("plugins.noPlugins");
+
+  fixture.online = true;
+  await act(async () => root.render(createElement(PluginsScreen)));
+  expect(element.textContent).toContain("plugins.noPlugins");
+  expect(element.textContent).not.toContain("plugins.listLoadFailed");
 });
 
 it("refreshes an unknown management result using its original operation without replaying the write", async () => {

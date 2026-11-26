@@ -300,6 +300,28 @@ await cindy.tasks.send({ taskId, requestKey, expectedRevision, text, context, re
   不带 `relay` 的请求与旧版完全一样，已有 requestKey 照常重放。
 - 旧 Host 没有 `messageRelay` 时不要传 `relay`（会被当作未知字段拒绝）；照旧只发 `text` 和 `context`，消息显示为普通插件消息。
 
+### 后续轮次：它开出的任务发回结果（可选）
+
+IM 里的一个提问，Agent 常常用 `send_to_session` 开一件任务去做，自己先简短回一句；那件任务做完把结果发回来时，
+任务里会再起一轮，但这一轮不是插件发的，插件原本读不到它，结果就停在 Cindy 里。
+`tasks.capabilities().followUps === true` 时，`tasks.send` 可以另传 `followUps: true`（只接受 `true`）：
+
+- 这一轮里用 `send_to_session` **新开**的任务会被记下。它之后发回本任务的每条消息，宿主都排成单独的一轮，
+  并为本插件记一条**后续轮次**：`getRun` / `listRuns` 照常能读到，带 `followUpOf`（开出那件任务的 runId），
+  进展（`progressForRun`）和最终回答（`outputMessageId`）的读法与普通 run 相同。
+- 只认那件任务的来信：用户在 Cindy 里对本任务说的话、别的任务发来的消息、这一轮之外开的任务都不会变成后续轮次。
+  记录 7 天有效（从开出那件任务算起）；插件卸载、停用或不再拥有本任务时不再产生。
+- 开出了任务的 run 在 `getRun` 里带 `followUps: { tasks, until }`：`tasks` 是这一轮开出的任务数，`until` 之后不会再有
+  新的后续轮次。插件据此用 `listRuns({taskId, after})` 低频查看新的 run（例如 10 秒一次），`followUpOf` 有值的才是后续轮次；
+  后续轮次自己也带 `followUps`，它再开的任务同样会回来。
+- Agent 在这一轮开始时就从 `[消息来源]` 得知：这一轮最后的回答会由本插件发回原提问所在的地方；不需要发的话，
+  整条回答只写 `NO_REPLY`。插件读到 `NO_REPLY` 时什么都不发。
+- 后续轮次的输入是别的任务的话，不由插件决定：插件不能 `cancel` 它（返回 `INVALID_REQUEST`），插件自己的派发检查
+  （权限上限、配置变化）也不会拦下这条消息。它跑在任务当时的设置下，插件要不要为某类提问开启，按提问者的权限自己判断
+  （例如只为主人本人的提问开启）。
+- `followUps` 只在为 `true` 时参与幂等摘要，不带它的请求与旧版一样。旧 Host 没有该能力时不要传（会被当作未知字段拒绝），
+  这时结果仍只留在 Cindy。
+
 ### 新建任务的权限选择（可选）
 
 先检查 `tasks.capabilities().createPermissionMode === true`。`tasks.create` 和 project 的
