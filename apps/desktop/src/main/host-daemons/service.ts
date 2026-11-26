@@ -133,6 +133,8 @@ interface SweepLane {
   cursor: ToolUseCursor | null;
   /** 历史已读到最新的一行。 */
   exhausted: boolean;
+  /** 本轮推进里读到过头；结论只认本轮的读取，见 sweepPass。 */
+  readToEndThisPass: boolean;
 }
 
 /** 时间窗还没过去：条目可能是刚由会话创建的，工具调用行或许还没落库，不能判「无关」。 */
@@ -255,7 +257,8 @@ export function createHostDaemonsService(deps: HostDaemonsServiceDeps): HostDaem
    * 一次只推进一段（冷盘时单页可达 1 秒），进度留在通道里，下一次 list 接着读。
    * 新条目没看过游标之前的历史，所以它一出现就单开一条从最早读起的通道，已有条目
    * 的进度不动。读到头仍无证据的条目只等时间窗关闭：期间通道停在最后一行上，晚落库
-   * 的行从那里接上，不必重读整段历史。
+   * 的行从那里接上，不必重读整段历史。所以每一轮都从停下的位置再读一页：「无关」
+   * 只认本轮读到头的那次读取。
    *
    * 读失败、切号都返回 false = 这一轮没有正常走完，不下结论。预算用完算正常走完，
    * 剩下的留给下一次。预算从回看开始那一刻算：list 前面的扫描和时间窗追溯已经
@@ -265,8 +268,9 @@ export function createHostDaemonsService(deps: HostDaemonsServiceDeps): HostDaem
     const deadline = now() + SWEEP_CALL_BUDGET_MS;
     let pages = 0;
     for (const lane of lanes) {
-      // 读完的通道只在还有条目等着晚落库的行时才再看一眼。
-      while (!lane.exhausted || lane.items.some((item) => windowOpen(item.stampMs, now()))) {
+      // 「读到头」只是上一次读取时的事实：之后落库的证据只有再读一次才看得见。读完的
+      // 通道若因为时间窗刚好关闭而不再读，上一轮之后落库的行会被漏掉，却被记成「无关」。
+      do {
         if (boundaryPending() || scope !== scopeStamp()) return false;
         if (pages >= SWEEP_PAGES_PER_PASS || now() >= deadline) return true;
         const page = await deps
@@ -281,9 +285,9 @@ export function createHostDaemonsService(deps: HostDaemonsServiceDeps): HostDaem
         // 空页没有「最后一行」：位置保持不动，否则下次会从最早一页重读、命中翻倍。
         if (page.next) lane.cursor = page.next;
         lane.exhausted = page.exhausted;
+        lane.readToEndThisPass = lane.exhausted;
         pages += 1;
-        if (lane.exhausted) break;
-      }
+      } while (!lane.exhausted);
     }
     return true;
   }
@@ -318,11 +322,15 @@ export function createHostDaemonsService(deps: HostDaemonsServiceDeps): HostDaem
       );
       // 已有结论的条目离开通道；新条目单开一条从最早读起的通道，不动已有进度。
       const lanes: SweepLane[] = (sweep?.lanes ?? [])
-        .map((lane) => ({ ...lane, items: lane.items.filter((item) => items.includes(item)) }))
+        .map((lane) => ({
+          ...lane,
+          items: lane.items.filter((item) => items.includes(item)),
+          readToEndThisPass: false,
+        }))
         .filter((lane) => lane.items.length > 0);
       const newcomers = items.filter((item) => !lanes.some((lane) => lane.items.includes(item)));
       if (newcomers.length > 0) {
-        lanes.push({ items: newcomers, cursor: null, exhausted: false });
+        lanes.push({ items: newcomers, cursor: null, exhausted: false, readToEndThisPass: false });
       }
       sweep = { scope, lanes };
       return { lanes, passed: await sweepPass(scope, lanes) };
@@ -434,12 +442,9 @@ export function createHostDaemonsService(deps: HostDaemonsServiceDeps): HostDaem
         const owner = definitionChanged ? null : existing;
 
         if (!owner) {
-          // 时间窗还没过去时必须重算：条目可能是刚由会话创建的，工具调用行可能比
-          // 这次扫描晚落库（用户先打开面板、再回到会话），此时记下的 miss 会让它
-          // 永远停在「无关」里。窗口过去之后才相信 miss。
-          const alreadyMissed =
-            deps.ledger.getMissMtime(daemon.id) === stampMs &&
-            !windowOpen(stampMs, capturedAtMs);
+          // miss 只在时间窗关闭之后才落盘（见下），台账里记着就说明它来自窗口关闭后的
+          // 一次读取，可以直接相信。
+          const alreadyMissed = deps.ledger.getMissMtime(daemon.id) === stampMs;
           if (alreadyMissed) {
             unrelatedCount += 1;
             continue;
@@ -471,7 +476,10 @@ export function createHostDaemonsService(deps: HostDaemonsServiceDeps): HostDaem
             entries.push(toEntry(daemon, record));
             continue;
           }
-          pendingMisses.push({ id: daemon.id, stampMs });
+          // 窗口还开着时没命中，可能只是工具调用行还没落库（条目刚由会话创建，用户
+          // 先打开面板、再回到会话）。记下来就成了永久的「无关」：所以不落盘，窗口内
+          // 每次扫描都重查（一次索引读），窗口关闭后的第一次扫描读到「没有」才记下。
+          if (!windowOpen(stampMs, capturedAtMs)) pendingMisses.push({ id: daemon.id, stampMs });
           unrelatedCount += 1;
           continue;
         }
@@ -528,7 +536,8 @@ export function createHostDaemonsService(deps: HostDaemonsServiceDeps): HostDaem
       const waiting: SweepItem[] = [];
       for (const lane of lanes) {
         // 读到头才下结论：命中最多的会话要读完全部历史才知道，半路记下的归属之后不会再改。
-        if (!lane.exhausted) {
+        // 而且必须是本轮读到头的：这一轮没轮到读的通道，停下的位置之后可能已有新证据。
+        if (!lane.exhausted || !lane.readToEndThisPass) {
           waiting.push(...lane.items);
           continue;
         }
@@ -563,7 +572,7 @@ export function createHostDaemonsService(deps: HostDaemonsServiceDeps): HostDaem
       // 没结论的条目既不算「无关」也不进清单：还在读历史，或读完了在等时间窗关闭
       // （等晚落库的行）。两种情况都告诉界面隔多久再来，条目不至于凭空消失。
       const pendingCount = waiting.length;
-      const reading = lanes.some((lane) => !lane.exhausted);
+      const reading = lanes.some((lane) => !lane.exhausted || !lane.readToEndThisPass);
       const nextWindow = Math.min(
         ...waiting.map((item) => item.stampMs + ATTRIBUTION_WINDOW_MS),
       );

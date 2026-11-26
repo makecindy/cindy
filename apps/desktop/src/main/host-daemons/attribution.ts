@@ -18,6 +18,7 @@
 export interface ToolMessageRow {
   sessionId: string;
   title: string | null;
+  /** 实际交给工具的文本（已从库里的转义存储解码），匹配直接在它上面做。 */
   content: string;
 }
 

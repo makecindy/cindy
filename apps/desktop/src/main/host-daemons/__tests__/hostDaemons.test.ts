@@ -460,6 +460,38 @@ describe('hostDaemons service', () => {
     expect(queries).toBe(1);
   });
 
+  it('reads the window once more after it closed, before recording the miss', async () => {
+    // 窗口开着时的「没命中」只是暂时的（证据可能还没落库）。窗口关闭后要先重读一次，
+    // 读到的才算数：两次轮询之间落库的证据，不能被上一轮的没命中盖过去。
+    const createdMs = 1_800_000_000_000;
+    let clockMs = createdMs + 60_000;
+    let rows: ToolMessageRow[] = [];
+    let queries = 0;
+    const ledger = memoryLedger();
+    const service = createTestService({
+      scanTasks: async () => [task({ id: '\\fresh', name: 'fresh', definitionMtimeMs: createdMs })],
+      readToolUses: async () => {
+        queries += 1;
+        return windowOf(rows);
+      },
+      ledger,
+      stopTask: async () => {},
+      runTask: async () => {},
+      deleteTask: async () => {},
+      platform: 'win32',
+      now: () => clockMs,
+    });
+
+    expect((await service.list()).entries).toEqual([]);
+    expect(ledger.getMissMtime('\\fresh')).toBeNull();
+    expect(queries).toBe(1);
+
+    clockMs = createdMs + ATTRIBUTION_WINDOW_MS + 1;
+    rows = [{ sessionId: 's1', title: '建任务', content: 'schtasks /create /tn fresh' }];
+    expect((await service.list()).entries.map((entry) => entry.name)).toEqual(['fresh']);
+    expect(queries).toBe(2);
+  });
+
   // 同名同路径的任务被删掉、由别的程序重建时，台账里的旧记录不能继续授权。
   it('revokes ownership when the task definition changed', async () => {
     const ledger = memoryLedger();
@@ -924,6 +956,64 @@ describe('没有定义时刻的条目：读完工具调用历史才下结论', (
     expect(calls[readsBefore + 1]).toEqual({ createdAt: 0, id: '0' });
   });
 
+  it('reads once more before recording a miss, even when the wait has already run out', async () => {
+    // 读到头之后、等待期结束之前落库的证据：下一次轮询恰好过了等待期时，不能拿上一轮的
+    // 「没命中」直接记成无关 —— 那是长期结论，刷新也不会再查，条目从此被藏起来。
+    const pages: ToolMessageRow[][] = [[toolUse('session-x', 'ls')]];
+    const { read, calls } = history(pages);
+    let nowMs = T0;
+    const { service, ledger } = sweepService({ readToolUsesFrom: read, now: () => nowMs });
+    expect((await service.list()).pendingCount).toBe(1);
+
+    pages.push([EVIDENCE]);
+    nowMs = T0 + ATTRIBUTION_WINDOW_MS + 1;
+    const list = await service.list();
+
+    expect(calls).toHaveLength(2);
+    expect(calls[1]).toEqual({ createdAt: 0, id: '0' });
+    expect(list).toMatchObject({ unrelatedCount: 0, pendingCount: 0, retryAfterMs: null });
+    expect(list.entries.map((entry) => entry.ownerSessionId)).toEqual(['session-a']);
+    expect(ledger.getMissMtime('cron-entry:4f2a')).toBeNull();
+  });
+
+  it('a lane that was not read this pass draws no conclusion', async () => {
+    // 两条条目先后出现，各占一条通道。时间窗关闭后的那一轮，前一条通道读到一大段新行、
+    // 用完了预算，后一条通道这一轮根本没读：它上一轮的「读到头」不能拿来下结论。
+    const other = cronEntry({
+      id: 'cron-entry:9c1d',
+      name: 'sync.sh',
+      command: '/usr/local/bin/sync.sh',
+      attributionNeedles: ['/usr/local/bin/sync.sh'],
+    });
+    let scans = 0;
+    const pages: ToolMessageRow[][] = [filler, filler.slice(0, -1)];
+    const { read } = history(pages);
+    let nowMs = T0;
+    const { service, ledger } = sweepService({
+      daemons: () => (scans++ === 0 ? [cronEntry()] : [cronEntry(), other]),
+      readToolUsesFrom: async (after) => {
+        // 冷盘：每页都读得很慢，一次 list 最多读两页。
+        nowMs += 1_001;
+        return read(after);
+      },
+      now: () => nowMs,
+    });
+
+    expect((await service.list()).pendingCount).toBe(1);
+    expect((await service.list()).pendingCount).toBe(2);
+    // 第 3 轮结束时两条通道都读到了头，只是时间窗还开着，所以都没有结论。
+    expect((await service.list()).pendingCount).toBe(2);
+
+    // 等待期过后，历史里多出一大段谁都没读过的行。
+    pages.push(filler, filler);
+    nowMs = T0 + ATTRIBUTION_WINDOW_MS + 10_000;
+    const list = await service.list();
+
+    expect(list).toMatchObject({ entries: [], unrelatedCount: 0, pendingCount: 2 });
+    expect(ledger.getMissMtime('cron-entry:4f2a')).toBeNull();
+    expect(ledger.getMissMtime('cron-entry:9c1d')).toBeNull();
+  });
+
   it('still reads history when the scan itself took longer than the read budget', async () => {
     // 一次扫描要一秒多、冷盘时更久：预算若从 list 一开始算，轮到回看时早已用完，一页
     // 都读不了，界面却被告知「有进展、马上再来」，待核对的条目永远挂着。
@@ -1214,6 +1304,84 @@ describe('归属证据读取（内存库，走生产查询入口）', () => {
   }
 
   const contents = (rows: ToolMessageRow[]) => rows.map((row) => row.content);
+  /** crontab 里的原始行：带引号，存进消息库的 JSON 后引号会变成转义形态。 */
+  const QUOTED_LINE = '*/5 * * * * /usr/bin/python3 -c "print(\\"ok\\")"';
+
+  /** 会话当时交给 bash 的命令：整行原样写在 `input.command` 里（真实存储形态）。 */
+  function storedToolUse(id: string, command: string) {
+    return JSON.stringify({ toolUseId: `call_${id}`, toolName: 'bash', input: { command } });
+  }
+
+  it('比对的是解码后实际交给工具的命令：带引号、反斜杠的条目不会被判成「无关」', async () => {
+    const db = installDb();
+    try {
+      db.session('s1');
+      db.message({
+        id: 't1',
+        sessionId: 's1', role: 'tool_use', createdAt: 1000,
+        content: storedToolUse('t1', `(crontab -l; echo '${QUOTED_LINE}') | crontab -`),
+      });
+
+      const page = await readToolUsesFrom(null);
+
+      expect(contents(page.rows)).toEqual([`(crontab -l; echo '${QUOTED_LINE}') | crontab -`]);
+      expect(pickOwnerSession(page.rows, [QUOTED_LINE])?.sessionId).toBe('s1');
+      // 存储原文里引号是转义形态：拿原始行直接去比对，永远对不上。
+      expect(storedToolUse('t1', QUOTED_LINE).includes(QUOTED_LINE)).toBe(false);
+    } finally {
+      clearCurrentDbClient();
+      db.raw.close();
+    }
+  });
+
+  it('从库里的转义存储一直到清单：带引号的 crontab 条目能归属，不会被记成无关', async () => {
+    const db = installDb();
+    try {
+      db.session('s1');
+      db.message({
+        id: 't1',
+        sessionId: 's1', role: 'tool_use', createdAt: 1000,
+        content: storedToolUse('t1', `(crontab -l; echo '${QUOTED_LINE}') | crontab -`),
+      });
+      const daemon: RawHostDaemon = {
+        id: 'cron-entry:quoted',
+        name: 'python3 -c',
+        kind: 'cron-entry',
+        state: 'unknown',
+        command: '/usr/bin/python3 -c "print(\\"ok\\")"',
+        trigger: 'schedule',
+        attributionNeedles: [QUOTED_LINE],
+        definitionMtimeMs: null,
+        lastRunAtMs: null,
+        stoppable: false,
+      };
+      const ledger = memoryLedger();
+      const service = createHostDaemonsService({
+        target: {
+          scan: async () => [daemon],
+          stop: async () => {},
+          run: async () => {},
+          remove: async () => {},
+        },
+        readToolUses,
+        readToolUsesFrom,
+        ledger,
+        now: () => 2000,
+      });
+
+      const list = await service.list();
+
+      expect(list).toMatchObject({
+        entries: [{ id: 'cron-entry:quoted', ownerSessionId: 's1' }],
+        unrelatedCount: 0,
+        pendingCount: 0,
+      });
+      expect(ledger.getMissMtime('cron-entry:quoted')).toBeNull();
+    } finally {
+      clearCurrentDbClient();
+      db.raw.close();
+    }
+  });
 
   it('同一时刻落库的多行按游标逐页读完，不漏不重；读到头后晚落库的行从游标接着读到', async () => {
     const db = installDb();
@@ -1254,10 +1422,10 @@ describe('归属证据读取（内存库，走生产查询入口）', () => {
       db.message({ id: 'r1', sessionId: 's1', role: 'tool_result', content: `* * * * * ${NAME} run`, createdAt: 1002 });
 
       const window = await readToolUses(0, 2000);
-      expect(contents(window.rows)).toEqual(['{"command":"crontab -l"}']);
+      expect(contents(window.rows)).toEqual(['crontab -l']);
       expect(window.truncated).toBe(false);
       const page = await readToolUsesFrom(null);
-      expect(contents(page.rows)).toEqual(['{"command":"crontab -l"}']);
+      expect(contents(page.rows)).toEqual(['crontab -l']);
       expect(page.exhausted).toBe(true);
     } finally {
       clearCurrentDbClient();

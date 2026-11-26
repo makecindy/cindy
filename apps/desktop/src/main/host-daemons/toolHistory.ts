@@ -54,6 +54,37 @@ export interface ToolMessagePage {
   exhausted: boolean;
 }
 
+/**
+ * 工具调用行里实际交给工具的文本。
+ *
+ * 库里存的是 JSON（`{ toolUseId, toolName, input }`），命令里的引号、反斜杠、换行
+ * 在其中都是转义形态（`\"`、`\\`、`\n`）。拿追溯词去比对转义后的文本，带引号的
+ * crontab 命令永远对不上，条目会被判成「无关」。这里取出 `input`，把它里面的字符串
+ * 值拼成一段（数组展开、对象递归）；解不出 JSON 的行原样返回。
+ */
+function toolUseInputText(content: string): string {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(content);
+  } catch {
+    return content;
+  }
+  if (typeof parsed === 'string') return parsed;
+  // 只认 input：toolUseId、toolName 是标识，不是交给工具的内容。
+  const input =
+    parsed !== null && typeof parsed === 'object' && 'input' in parsed
+      ? (parsed as { input: unknown }).input
+      : parsed;
+  const parts: string[] = [];
+  const collect = (node: unknown): void => {
+    if (typeof node === 'string') parts.push(node);
+    else if (Array.isArray(node)) node.forEach(collect);
+    else if (node !== null && typeof node === 'object') Object.values(node).forEach(collect);
+  };
+  collect(input);
+  return parts.join('\n');
+}
+
 const trustedColumns = {
   sessionId: messages.sessionId,
   title: sessions.title,
@@ -111,7 +142,7 @@ export async function readToolUses(
       rows: rows.slice(0, limit).map((row) => ({
         sessionId: row.sessionId,
         title: row.title ?? null,
-        content: row.content,
+        content: toolUseInputText(row.content),
       })),
       truncated: rows.length > limit,
     };
@@ -149,7 +180,7 @@ export async function readToolUsesFrom(
       rows: page.map((row) => ({
         sessionId: row.sessionId,
         title: row.title ?? null,
-        content: row.content,
+        content: toolUseInputText(row.content),
       })),
       next: last ? { createdAt: last.createdAt, id: last.id } : null,
       exhausted: rows.length <= limit,
