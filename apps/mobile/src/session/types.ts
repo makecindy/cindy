@@ -246,6 +246,7 @@ export interface RemoteSerializedAttachment {
 }
 
 export interface QueuedRemoteMessage {
+  waitingForRemoteAccount?: true;
   durableDelivery?: true;
   clientId: string;
   text: string;

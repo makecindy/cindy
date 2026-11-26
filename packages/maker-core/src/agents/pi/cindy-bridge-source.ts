@@ -1,4 +1,5 @@
 import { PI_CACHE_RECOVERY_SOURCE } from './cache-recovery-source.js';
+import { completedPiResponsesMessage } from './responses-completion.js';
 import { PI_NATIVE_PROVIDER_ADAPTER_SOURCE } from './native-provider-adapter-source.js';
 import { PI_NATIVE_TOOL_CATALOG_SOURCE } from './native-tool-catalog-source.js';
 import { MAX_JSONL_BUFFER_CHARS } from './rpc-limits.js';
@@ -39,7 +40,9 @@ import {
 } from "../shared/sensitive-credential-paths.js";
 import { projectPiPackageCommandDiagnostic, projectPiManagedCommandFailure } from "../base-agent.js";
 import { shellInputRedirectionParserSource } from "../shared/shell-input-redirections.js";
+import { PI_SUBAGENT_TOOL_NAME } from "@cindy/maker-shared/agent-task";
 import { CINDY_SUBAGENT_TOOL_NAME } from "./cindy-subagent-source.js";
+import { PI_NATIVE_SUBAGENT_CALL_ENTRY } from "./session-tree.js";
 
 const SHELL_INPUT_REDIRECTION_PARSER_SOURCE = shellInputRedirectionParserSource();
 const CREDENTIAL_WORD_BOUNDARY = '\u0001';
@@ -63,6 +66,7 @@ export const CINDY_PI_MODEL_REQUEST_INPUT_PREFIX = '[CINDY_MODEL_REQUEST]:';
 export const CINDY_PI_TEXT_ONLY_READY_PREFIX = 'cindy:text-only-ready:';
 export const CINDY_PI_TEXT_ONLY_CLOSED_PREFIX = 'cindy:text-only-unavailable:';
 export const CINDY_PI_REQUEST_DIAGNOSTICS_PREFIX = 'cindy:provider-request:';
+export const CINDY_PI_RESPONSES_COMPLETION_PREFIX = 'cindy:responses-completed:';
 
 /** Shared with the generated bridge: only bounded counts and known effort names may enter logs. */
 export function projectPiRequestDiagnostics(value: unknown): Record<string, number | string | null> {
@@ -92,7 +96,7 @@ import {
   closeSync, constants, fstatSync, globSync, lstatSync, openSync, opendirSync, readFileSync, readSync, realpathSync,
   renameSync, rmSync, statSync, writeFileSync, mkdirSync, readdirSync, rmdirSync, linkSync,
 } from 'node:fs';
-import { createHash, randomUUID } from 'node:crypto';
+import { createHash, createHmac, randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
 import { stat } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
@@ -3900,10 +3904,10 @@ class CindyMcpGateway {
         reason: unavailableReason,
         availableServers: this.availableServers(),
       };
-    } else if (serverName && toolName) {
-      const selected = canonicalServerName && this.botMemoryFacadeEnabled && canonicalServerName === 'cindy_memory'
+    } else if (canonicalServerName && toolName) {
+      const selected = this.botMemoryFacadeEnabled && canonicalServerName === 'cindy_memory'
         ? undefined
-        : canonicalServerName ? this.tools.get(mcpGatewayKey(canonicalServerName, toolName)) : undefined;
+        : this.tools.get(mcpGatewayKey(canonicalServerName, toolName));
       if (!selected) {
         payload = {
           ok: false,
@@ -3947,7 +3951,9 @@ class CindyMcpGateway {
         offset,
         ...(offset + page.length < matches.length ? { nextOffset: offset + page.length } : {}),
         availableServers: this.availableServers(),
-        hint: 'Use query or server to narrow results; follow nextOffset for more. Inspect an exact server and tool for the complete description and input schema.',
+        hint: query && matches.length === 0 && tools.length > 0
+          ? 'No tools matched the query. Omit query or try a shorter keyword and start at offset 0. Browse by a known server, or pass exact server and tool to inspect its schema.'
+          : 'Use query or server to narrow results; follow nextOffset for more. Inspect an exact server and tool for the complete description and input schema.',
         ...(unavailableServers.length > 0 ? { unavailableServers } : {}),
       };
     }
@@ -4664,6 +4670,8 @@ async function nativeFastPayload(payload, model, ctx, requestFast?: boolean) {
 
 ${PI_CACHE_RECOVERY_SOURCE}
 
+const CINDY_PI_RESPONSES_COMPLETION_PREFIX = ${JSON.stringify(CINDY_PI_RESPONSES_COMPLETION_PREFIX)};
+const completedPiResponsesMessage = ${completedPiResponsesMessage.toString()};
 ${PI_NATIVE_PROVIDER_ADAPTER_SOURCE}
 
 ${PI_NATIVE_TOOL_CATALOG_SOURCE}
@@ -5528,6 +5536,17 @@ export default async function cindyBridge(piApi: any) {
       // 缩小等待确认期间替换原始 link 的竞态面。这不是 descriptor / inode 绑定；
       // 同 UID 并发替换 canonical 路径仍需未来由 OS 级 no-follow 写入能力解决。
       event.input.path = writeTargetResolved;
+    }
+  });
+
+  // Store the provenance alongside the native call. Its name and result remain
+  // owned by the extension, and the custom entry stays out of model context.
+  pi.on('tool_result', (event: any) => {
+    if (event.toolName !== ${JSON.stringify(PI_SUBAGENT_TOOL_NAME)} || typeof event.toolCallId !== 'string') return;
+    try {
+      pi.appendEntry(${JSON.stringify(PI_NATIVE_SUBAGENT_CALL_ENTRY)}, { toolCallId: event.toolCallId });
+    } catch {
+      // History presentation must not fail a tool result.
     }
   });
 

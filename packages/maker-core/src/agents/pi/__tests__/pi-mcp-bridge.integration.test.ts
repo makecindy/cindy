@@ -193,8 +193,11 @@ function scriptedAnthropicTurn(requestBody: string): string {
   }
   if (requestBody.includes('discover Cindy controls')) {
     const call = (tool: string, args: Record<string, unknown>) => ({ name: 'cindy_mcp_call_tool', input: { server: 'cindy_helper', tool, args } });
+    const missingQuery = 'qzv10721xkfj982none';
     const calls = [
+      { name: 'cindy_mcp_list_tools', input: { query: missingQuery } },
       { name: 'cindy_mcp_list_tools', input: { server: 'cindy_helper', tool: 'list_tools' } },
+      call('list_tools', { query: missingQuery }),
       call('list_tools', { query: '壁纸' }),
       call('list_tools', { key: 'appearance.wallpaper' }),
       { name: 'cindy_mcp_list_tools', input: { server: 'cindy_helper', tool: 'call_tool' } },
@@ -203,7 +206,7 @@ function scriptedAnthropicTurn(requestBody: string): string {
       call('call_tool', { name: 'get_app_settings', args: { section: 'appearance' } }),
     ];
     const step = calls[toolResultCount];
-    return step ? anthropicToolTurn(toolResultCount + 1, step.name, step.input) : anthropicTextTurn(8, 'Controls verified');
+    return step ? anthropicToolTurn(toolResultCount + 1, step.name, step.input) : anthropicTextTurn(toolResultCount + 1, 'Controls verified');
   }
   // #10691: malformed plugin calls -> actionable feedback -> corrected calls.
   // This scripts model output; it tests real Pi routing, not model decision quality.
@@ -1203,6 +1206,8 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
 
   // Integration: the real Pi binary must traverse both discovery layers with
   // the production helper schemas. Scripted model only; no claim of model choice quality.
+  // #10721: an unmatched query at either layer must explain which existing filter to try.
+  // The adjacent successful search only exercises matching, not recovery.
   it('discovers and calls Cindy controls through the real Pi gateway', { timeout: 90_000 }, async () => {
     controlCalls.length = 0; controlSize = 16;
     const approvals: string[] = [];
@@ -1210,10 +1215,16 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
       if (request.kind === 'permission') approvals.push(request.toolName);
       return { kind: 'permission', behavior: 'allow' };
     }, 'controls', 'discover Cindy controls', false, 'controls-first-use');
-    const firstSchema = JSON.parse(latestToolResultContent(requests[1]));
+    const gatewayMiss = JSON.parse(latestToolResultContent(requests[1]));
+    expect.soft(gatewayMiss).toMatchObject({ ok: true, tools: [], total: 0, hint: expect.stringMatching(/Omit query.*server/) });
+    const firstSchema = JSON.parse(latestToolResultContent(requests[2]));
     expect(firstSchema.tools[0].inputSchema.properties).toHaveProperty('query');
-    const search = JSON.parse(latestToolResultContent(requests[2]));
+    const helperMiss = JSON.parse(latestToolResultContent(requests[3]));
+    expect.soft(helperMiss).toMatchObject({ ok: true, items: [], total: 0, complete: true, nextCursor: null,
+      hint: expect.stringMatching(/list_tools\(\{category\}\).*list_tools\(\{name\}\)/) });
+    const search = JSON.parse(latestToolResultContent(requests[4]));
     expect(search.items).toContainEqual(expect.objectContaining({ key: 'appearance.wallpaper', availability: 'available' }));
+    expect(search).not.toHaveProperty('hint');
     expect(controlCalls).toEqual([
       { callerSessionId: 'control-owner', operation: 'update', section: 'appearance', patch: { uiSize: 17 } },
       { callerSessionId: 'control-owner', operation: 'get', section: 'appearance' },

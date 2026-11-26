@@ -102,14 +102,18 @@ describe("mobile i18n catalog parity", () => {
 
   // #8142: CLDR requires language-specific plural categories (e.g. fr/es/pt many).
   // Compare the same semantic keys and require every category, rather than rejecting valid forms.
+  // 手机运行时(Hermes)没有 Intl.PluralRules，i18next 对所有语言都按「count 为 1 取 _one、其余取 _other」，
+  // 所以每个语言还要有 _one 和 _other；只按 Node 的规则时中日韩与文言只要求 _other，缺 _one 会在手机上显示英文。
+  const phoneRuntimeCategories = ["one", "other"];
   const pluralSuffix = /_(zero|one|two|few|many|other)$/;
   const families = new Set(enKeys.filter((key) => key.endsWith("_one") && flat.get("en")!.has(key.replace(/_one$/, "_other"))).map((key) => key.replace(/_one$/, "")));
   const canonicalKey = (key: string) => families.has(key.replace(pluralSuffix, "")) ? key.replace(pluralSuffix, "") : key;
-  it.each(locales)("%s 与 en 的 key 全集及本语言复数类别一致", (locale) => {
+  it.each(locales)("%s 与 en 的 key 全集一致，复数类别覆盖本语言与手机运行时", (locale) => {
     const keys = flat.get(locale)!;
     expect([...new Set([...keys.keys()].map(canonicalKey))].sort()).toEqual([...new Set(enKeys.map(canonicalKey))].sort());
+    const categories = new Set([...new Intl.PluralRules(locale).resolvedOptions().pluralCategories, ...phoneRuntimeCategories]);
     for (const family of families) {
-      for (const category of new Intl.PluralRules(locale).resolvedOptions().pluralCategories) {
+      for (const category of categories) {
         expect(keys.has(`${family}_${category}`), `${locale}:${family}_${category}`).toBe(true);
       }
     }

@@ -40,6 +40,7 @@ export function modelGroupWhyText(
       ? t(`modelGroups.why.${entry.why}Until`, { reset: formatReset(entry.limitedUntilMs, locale) })
       : t(`modelGroups.why.${entry.why}`);
   }
+  if (entry.why === 'headroom' && left !== null) return t('modelGroups.why.headroomQuota', { left });
   if (entry.why === 'standby' && left !== null && reset) return t('modelGroups.why.standbyQuota', { left, reset });
   return t(`modelGroups.why.${entry.why}`);
 }

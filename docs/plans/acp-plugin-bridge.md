@@ -91,15 +91,16 @@ Cindy 主进程**从不执行插件写的命令**，只启动插件包里声明�
 | 文本 / 思考 | `agent_message_chunk` / `agent_thought_chunk` → `text` / `thinking` |
 | 工具 | `tool_call` / `tool_call_update` → `tool_use` / `tool_result`（同一 `toolCallId` 合并） |
 | 计划 | `plan` → 折叠为任务内的待办展示（第一期可只记录为文本） |
-| 用量 | `usage_update` → 上下文用量 |
+| 用量 | `usage_update` → 上下文用量；`session/prompt` 结果里的 `usage`（本轮 token）→ `done.data.usage`，供「远程与分享」页按使用方的用量与插件的 did-turn-end 使用。`inputTokens` 按不含缓存记：对端的 `totalTokens` 等于输入 + 输出时，说明它的输入含缓存，先扣掉缓存。对端不报时只记轮数（2026-11-23） |
 | 权限 | `session/request_permission` → `interaction_request`（kind = permission） |
 | 模型 / 推理强度 | 类别为 `model` 的配置项 / `reasoning_effort` 配置项 → `setModel` / `setEffort` |
 
-本机 Desktop 的普通新建任务（[#11956](https://github.com/makecindy/cindy/issues/11956)）：
-项目和插件引擎均在本机时，可选择源分支并启用 Git worktree。宿主等受管 worktree 完整检出，
-才用新目录创建任务；第一条消息启动时，`session/new.cwd` 使用同一目录。检出失败时保留原草稿和附件，
-不在基础仓库创建任务或发送。未启用 worktree 或直接选择已有 worktree 时，仍在所选目录运行。
-此行为不改变 Orca、远程建任务、SSH 或远程引擎的 worktree 约束。
+Worktree（[#11956](https://github.com/makecindy/cindy/issues/11956)；2026-11-25 用户要求所有入口与内置引擎一致）：
+worktree 跟着项目所在的电脑建，规则与内置引擎相同。项目在本机时（引擎在本机或同账号另一台电脑），宿主等受管
+worktree 完整检出，才用新目录创建任务；远程控制另一台电脑的项目（桌面或手机）时，由被控端两步预创建（先
+`worktree:create`，再以检出路径与同一预生成 id 建任务，清理账本与内置引擎共用）。第一条消息启动时，`session/new.cwd`
+使用同一目录。检出失败时保留原草稿和附件，不在基础仓库创建任务或发送。未启用 worktree 或直接选择已有 worktree 时，
+仍在所选目录运行。协同 Worker 与每次新建任务的定时任务同样可用 worktree。SSH 工作区不提供插件引擎。
 
 不支持的能力（分叉、回退、会话树、手动压缩、记忆、计划模式、Fast）在 `Capabilities` 中
 如实标为不支持，界面按现有能力开关隐藏，不伪装成功。
@@ -164,6 +165,18 @@ Cindy 主进程**从不执行插件写的命令**，只启动插件包里声明�
   它 Cindy 的本地 HTTP MCP 桥（复用 Codex / Pi 已有实现），令牌按任务签发、随任务失效。
   交出的工具范围与内置 Pi 相同（2026-11-18 用户决定），复用 Pi 的允许清单而不另立一份；
   安装确认文案需写明这一范围。直接连接的第三方 MCP 与其凭证留在宿主。
+- **Antigravity 的工具预算（2026-11-25）**：agy 把 ACP 传入的所有 MCP 工具放进一份约 16 KB、
+  所有服务共用的声明预算（按它在 `~/.gemini/antigravity-cli/mcp/<服务>/` 写下的单个工具 JSON 计），
+  超出时从最大的工具开始整个删掉，模型看不到、也没有别的调用途径
+  （[上游 #1530](https://github.com/google-antigravity/antigravity-cli/issues/1530)）。Cindy 的完整目录约
+  160 KB，`ghost_call`、`cindy_scheduler.call_tool` 等因此不可用，PR Skill 挂不了卡片、建不了跟进。
+  HTTP MCP 桥对 `antigravity-client` 按服务数加权分配 12 KB 总量（`antigravityToolCatalog.ts`）：放得下就原样下发；
+  否则压成一句话摘要加参数类型，完整说明经 `describe_tool` 读取；仍放不下时只保留首选入口与
+  `list_tools` / `call_tool`，其余经 `run_tool` 调用。`run_tool` 在传输层还原成原来的 `tools/call`，
+  注册、参数校验与授权不变；其他客户端的目录不受影响。两个辅助入口只由传输层应答、不在 `McpServer` 上注册：
+  MCP App 代理（`mcp-apps/serverProxy.ts`）与伙伴连接（`bot-import/connectionProvider.ts`）自己安装
+  `tools/list` / `tools/call` 处理器，再调 `registerTool` 会与之冲突，使服务初始化失败。新增工具或加长说明不需要改这里，
+  预算由测试 `keeps every agy catalog within the shared budget` 守住。
 - **排除范围**：远程 / SSH / 设备互联被控端、定时任务、伙伴、多 Agent 协同、插件模型路由、
   标题生成的 oneShot 均不接入 `acp`，遇到即返回明确的「不支持」。
 
@@ -268,9 +281,9 @@ export interface PluginHarnessRegistry {
 
 ## 第一期明确不支持（遇到即明确拒绝，不回落到内置引擎）
 
-（换引擎、定时任务与协同 Worker 已在第二期支持，见下面几节。）分叉、回退、移到另一台电脑或 SSH、插件引擎当协同 Lead、IM 渠道、共享任务、
-其他任务经 send_to_session 向插件引擎任务发消息、/learn 捕获、上下文溢出后的重放、Cindy 生成标题、
-Node Host（`apps/host`）。插件引擎任务的消息按 `agent_kind = 'acp'` 落库，不带供应商元信息。
+（换引擎、定时任务与协同 Worker 已在第二期支持，见下面几节；标题、send_to_session、/learn、目标与 IM 渠道
+见「与内置引擎一致（2026-11-25）」。）分叉、回退、移到另一台电脑或 SSH、插件引擎当协同 Lead、共享任务、
+上下文溢出后的重放、Node Host（`apps/host`）。插件引擎任务的消息按 `agent_kind = 'acp'` 落库，不带供应商元信息。
 
 伙伴的后续支持范围见[模型候选链](../product-rules/cindy-bots-runtime.md#5-模型候选链)。伙伴可以在设置中选择所在电脑的插件模型，主聊天按所选模型运行。
 
@@ -306,9 +319,16 @@ Node Host（`apps/host`）。插件引擎任务的消息按 `agent_kind = 'acp'`
   选插件引擎，插件引擎任务显示正确的引擎与模型，也能在任务里切换引擎；规则与电脑相同，只限被控电脑本机的普通任务。
   手机端改动只走 JS 热更新。
 - **定时任务**：自动任务的模型选择里列出本机插件引擎，`cindy_scheduler` 工具同样能选。只用于每次新建任务、在本机运行的
-  Agent 自动任务；绑定任务、持续会话、worktree、另一台电脑、脚本执行与项目自动化不提供。保存与每次运行前都按本机此刻
+  Agent 自动任务（可用 worktree，2026-11-25）；绑定任务、持续会话、另一台电脑、脚本执行与项目自动化不提供。保存与每次运行前都按本机此刻
   提供的引擎准入，插件停用或不可用时保存或本次运行明确失败，不回落内置模型。权限与内置引擎的自动任务一样默认「全部允许」；
   插件 Agent 自己不请求确认的操作，Cindy 拦不住。
+- **绑定插件引擎任务的自动化（2026-11-25）**：用户反馈 Antigravity 任务里 GitHub 插件的 PR 自动跟进每轮都报
+  「Scheduled tasks is not available for tasks running on a plugin engine」——跟进是绑定当前任务的定时检查，而绑定任务此前一律拒绝。
+  现在绑定到本机插件引擎任务的自动化（`bindToCurrentSession` / `targetSessionId`）按用户续发消息运行：不论任务忙闲都进该任务的
+  消息队列，由任务自己的发送路径启动引擎，沿用任务当前的引擎、模型与权限档，运行历史与通知照常。每次运行都是新的付费调用：
+  入队前与派发前各按任务当前的来源与模型做一次与新建任务相同的准入（插件停用、引擎不可用、模型已关闭时本次运行明确失败），只检查不改任务的模型。以下仍明确拒绝，不换引擎、不回落内置模型：
+  自动化指定了模型、来源或思考深度（保存时指定引擎也拒绝；Fast 不是插件引擎的设置，不算指定）、任务在另一台电脑、伙伴例行任务。
+  入口见 `scheduler-host/runner.ts` 的 `boundPluginEngineRefusal`。
 
 ## 第二期：多 Agent 协同（2026-11-19）
 
@@ -316,8 +336,8 @@ Node Host（`apps/host`）。插件引擎任务的消息按 `agent_kind = 'acp'`
   用 `create_worker` / `create_workers`（`agent = acp` + `provider_id`，引擎从 `list_available_models` 的
   `plugin_engines` 取）。插件引擎 Worker 能收 Lead 的派活与插话（不支持同轮插话的按排队处理），能用 `send_to_lead`
   回报、改写或撤回排队的回报。Worker 页签与手机上的团队列表显示插件引擎，不显示成 Claude Code。
-- **范围**：Worker 只在 Lead 所在的这台电脑运行；SSH Lead、另一台工作电脑、Agent 在另一台电脑、worktree 都明确拒绝
-  （创建面板选了 worktree 时直接提示，不能提交）。插件引擎任务暂不能当 Lead：开启协同、`start_team`、新建 Worker 的
+- **范围**：Worker 只在 Lead 所在的这台电脑运行；SSH Lead、另一台工作电脑、Agent 在另一台电脑都明确拒绝。
+  worktree 与内置 Worker 相同（2026-11-25）。插件引擎任务暂不能当 Lead：开启协同、`start_team`、新建 Worker 的
   所有入口统一拒绝（`PLUGIN_ENGINE_CANNOT_LEAD`）。Lead 不能用 `set_worker_runtime` 改插件引擎 Worker 的模型，需在它
   自己的任务窗口里改。
 - **准入与唤醒**：创建时与在插件引擎上新建任务同一准入（停用、卸载或不可用时创建失败，不回落内置引擎）；休眠后再唤醒
@@ -391,11 +411,55 @@ Node Host（`apps/host`）。插件引擎任务的消息按 `agent_kind = 'acp'`
 - **不变**：回合边界、回合结束时的完成提醒、发送与排队。
 - **停止**：「全部停止」先发 `session/cancel` 再关闭插件进程，任务下次发送时恢复会话。
 - **空闲回收**：`AcpSession.hasLiveBackgroundWork()` 在有未完成调用或 30 秒内有回合外输出时为真，
-  定时任务与协同 Worker 的空闲回收因此不会结束仍在工作的插件进程。
+  定时任务与协同 Worker 的空闲回收因此不会结束仍在工作的插件进程。普通插件引擎任务（2026-11-25）
+  与 Claude、Codex 同一回收器、同一范围与判据，空闲 30 分钟结束插件进程，下次发送恢复会话；
+  只回收 Agent 声明了 `session/resume` 或 `session/load` 的任务（`AcpSession.canResumeAfterClose`），
+  见 [普通任务空闲回收](../claude-idle-release.md)。起因：每个任务占一个进程（每个几百 MB），空闲也不退出；
+  当时每个插件还有固定 8 个进程的上限，空闲任务占满后新任务启动失败。#12798 已去掉该上限，
+  回收用来避免空闲进程越积越多。
 - **未覆盖**：引擎在另一台电脑上运行时，那台电脑判断名额能否收回只看回合、后台任务与待唤醒续跑，
   Agent 长时间静默等待（如一次等很久的定时检查）期间，名额紧张时可能被收回。只发进度、界面上没有
   变化的调用不会传到 Desktop：这类调用超过 31 分钟没有可见输出时，任务内「正在后台继续工作」先熄灭，
   结果到达时再亮起（maker-core 不会因此提前收尾该调用）。
+
+## 插件与 Skill 告知（2026-11-24）
+
+用户发现 Antigravity 任务不知道装了哪些插件和 Skill：发 PR 时直接用 `gh`，没走 GitHub 插件的 `pr` Skill，也开不了自动跟进。
+内置引擎从 system prompt 读到插件花名册，从原生 Skill 加载拿到 Skill；插件引擎两样都没有。用户决定只补这两样，
+不把 Cindy 的其他 system prompt 交给插件引擎。
+
+- **内容**：新会话首条消息前的说明里加两段——已装插件花名册（与内置引擎同一份文本，`getGhostRosterPrompt`），
+  以及 Skill 清单（名称、说明、`SKILL.md` 路径，Agent 需要时用自己的文件工具读）。Skill 范围与内置 Pi 相同
+  （Cindy 内置与已批准插件的 Skill、Pi 的共享与项目目录，按用户的启用开关过滤；目录在隔离、限时的扫描进程里发现，不在 Main 上同步扫描，见 `maker-host/pluginEngineSkills.ts`），
+  与 Cindy 工具范围同一口径。恢复的会话已有，不重复。
+- **只写真实可用的**：花名册只在 Agent 实际接收了插件网关（`cindy` MCP）时附上；对端不收 HTTP MCP 或工具桥不可用时
+  只留 Skill 清单。花名册或 Skill 读取失败只少这一段，不挡任务启动。
+- **另一台电脑的任务与伙伴**：另一台电脑托管的任务与内置引擎一致，附任务所在电脑带来的花名册快照（`deviceHostedGhostRoster`，隧道提供 `cindy` 时），不读本机花名册；Skill 清单不附（没有跨电脑的来源）。隔离伙伴（按伙伴自己冻结的能力集）两样都不附；按普通任务装配的 V2 项目伙伴（`projectContext`）照常附上。恢复的会话不读取。
+- **顺序**：远程工作区说明 → 伙伴说明 → 花名册 → Skill 清单 → 协同角色说明。
+- **缓存**：说明在首条用户消息里，内置引擎的 system prompt 与缓存前缀不变。
+- **防斜杠指令误触**：部分 ACP 对端（如 Antigravity `agy acp`）会扫描整段 `session/prompt` 文本中的 `/命令` 并自动激活对应工作流。宿主拼入的非用户文本（首轮说明、跨引擎交接与各类环境说明）会去掉独立斜杠指令前的 `/`，不动文件路径、URL 与用户原话；用户消息本身以斜杠指令开头时，环境说明与首轮说明不抢占句首（首轮说明顺延到下一条普通消息）。
+
+## 斜杠调用 Skill（2026-11-25）
+
+用户要求插件引擎任务也能像内置引擎一样在输入框打 `/` 选 Skill。此前输入框只列 Cindy 的桌面命令，手打的 `/pr`
+原样送到引擎，引擎不认识 Cindy 的 Skill，只当作一行字。
+
+- **列出**：桌面输入框的 `/` 菜单在插件引擎任务与新任务草稿里列出引擎展开 `/<名字>` 用的同一份清单（上节的首轮
+  Skill 清单，内置 Pi 范围），经 `maker:list-agent-skills` 按 `acp` 向插件引擎读取（`AcpAgent.listAgentSkills`），
+  不借内置 Pi 的清单：本机 Pi 不可用时 Pi 那份读取失败，菜单会是空的。清单不含只在 Pi 里加载的 Pi 包 Skill，也没有
+  Pi 专用的 `/skill:` 别名和「项目 Skill 尚未加载」状态。内置 Harness 的命令仍不列。
+  Agent 在另一台电脑上运行的任务不列，与首轮清单一致；远控另一台电脑时从那台电脑读（旧版电脑不认 `acp`，菜单不列
+  Skill，它的引擎也不展开）；SSH 任务不变。
+- **展开**：消息开头是 `/<名字>` 且对上执行电脑上的 Skill 时，maker-core（`acp/skill-invocation.ts`）在发给引擎前
+  把它换成与 Pi `/skill:` 相同的 `<skill name location>` 块（`SKILL.md` 去掉 frontmatter 的正文），后面接用户其余的文字。
+  也认其他引擎的发送路径留下的 `skill:`、`cindy:`、`cindy-plugin-<id>:` 前缀；同名 Skill 按清单顺序取第一个，与 Pi 相同。
+  界面与历史里的用户消息仍是用户输入的 `/名字`。恢复的会话同样展开；隔离伙伴与另一台电脑托管的任务不展开，原因同上节。
+  没有对应 Skill、文件读不到或超过 512 KB 时原样发送，不挡发送。
+- **开头的文字**：消息的第一段文字（带图片时也是第一段文字）。宿主给消息加的说明（设备、来源、切换引擎的交接、
+  插话说明等）同 Pi 一样不加在以 `/` 开头的消息上（`shouldPrependMobileClientPromptNote`），否则 `/` 被挤到后面、
+  不会展开；可重复的说明留给下一条消息，切换引擎的交接同样顺延。
+- **代价**：只有以 `/` 开头的消息才在发送前读一次 Skill 清单（隔离、限时的扫描进程）；其他消息的发送路径不变。
+  展开内容在当轮用户消息里，不进 system prompt。手机与自动化发来的 `/名字` 走同一发送路径，同样展开；手机输入框的列表本次未改。
 
 ## 已知限制
 
@@ -404,3 +468,27 @@ Node Host（`apps/host`）。插件引擎任务的消息按 `agent_kind = 'acp'`
 - 模型列表在该引擎第一次跑任务后才有；之前只显示「默认模型」。
 - 手机端在第二期适配后认识插件引擎；更早版本的手机仍按 Claude 显示插件引擎任务，可查看与继续发送。
 - 降级到旧版 Cindy 后，旧版会把 `acp` 任务当作 Claude 任务打开。
+
+## 与内置引擎一致（2026-11-25）
+
+用户要求插件引擎在所有地方与内置引擎一样可用（「所有的地方都需要支持」）。无法靠 ACP 协议直接实现的分叉、压缩、
+回退等由 Cindy 模拟（交接到新的原生会话、Cindy 自己的逐轮文件记录）；SSH 工作区按「自己的其他电脑使用」同一机制开放，
+跨账号分享、供应商组与中转仍不开放（无法按人限权、计量）。已完成：
+
+- **worktree**：见上文「Worktree」，所有入口（本机、引擎在另一台电脑、远程控制的项目、手机、协同 Worker、定时任务）。
+- **标题与输入推荐**：与其他任务一样只用辅助模型链；辅助模型不可用时不回落到任何引擎（标题请求的 `agentKind = null`，
+  推荐请求带 `acp`）。AI 重新起名同样可用。
+- **send_to_session**：其他任务可以向插件引擎任务发消息（与用户亲手发送同一路径）；从插件引擎任务新建任务时默认沿用同一个
+  插件引擎、模型与位置，指定位置或模型时必须同时点名内置 agent。
+- **/learn**：蒸馏任务跑在来源任务的同一个插件引擎与模型上，权限用逐项确认（插件引擎没有「工作区内自动接受」），
+  永不自动给「全部允许」；任务里经 `/learn` 调起的内置 Skill 同样核对来源文件后授权。
+- **目标**：插件引擎任务可以设目标；休眠任务按它自己的引擎恢复（另一台电脑上的引擎留在那台）。用量限额只按回合报错停止
+  （Cindy 读不到插件 CLI 的账号窗口）。
+- **自动化绑定插件引擎任务**：见上文「第二期：手机与定时任务」的「绑定插件引擎任务的自动化」。
+- **IM 渠道与官方机器人渠道**：能接管、能对话，冷启动按任务行的 `acp` 与 `providerId` 恢复（IM 读行一律保留 `acp`）；
+  `/model` 和 `/permission` 都以任务的执行电脑与插件引擎为准。模型只在同一引擎内切换；权限档优先采用该电脑上的运行态
+  能力，休眠时由执行电脑的目录提供，菜单与按钮校验共用此规则。远程目录不可用时，保留当前权限档并暂停提供切换选项。
+  **带本轮权限策略的轮次（群聊要求主人确认）一律拒绝**：插件的 Agent 可以不经 Cindy 询问就执行操作，任何权限档都
+  无法兑现「须经主人确认」，所以与内置引擎在绕过审批钩子的档位下同样 fail-closed（`AcpSession.validateSendOptions` 抛
+  `TurnPermissionPolicyUnsupportedError`，渠道按「所选 Agent 无法提供逐条确认」提示）。不带策略的私聊与已关闭群强确认的轮次照常运行。
+

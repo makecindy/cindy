@@ -38,6 +38,8 @@ import { reconcileKnownEquivalentMigrationHashes } from '../schemaDriftCompatibi
 import { repairSchemaDriftWithBackup } from '../schemaDriftRepair';
 import { configureMigrationRuntime } from '../migrationRuntime';
 import * as runtime from '../index';
+import { createOwnerEnsureCoordinator } from '../ipc/ownerEnsureCoordinator';
+import { replyToEnsureReady } from '../ensureReadyReply';
 import { createLifecycleDbClientManager } from '../client/lifecycleDbClient';
 import { createBetterSqliteDatabase } from '../betterSqliteFactory';
 import { runSchemaStartupPolicy } from '../schemaStartupPolicy';
@@ -74,6 +76,41 @@ describe('main native connection quarantine', () => {
     runtime.closeDb();
     expect(pragma).toHaveBeenCalledTimes(corrupt ? 0 : 2);
     expect(db.open).toBe(false);
+  });
+  // #11721 / unit: previous tests signalled corruption from a worker. Exercise
+  // the IPC reply when the native startup optimize itself reports a failure.
+  it.each(['SQLITE_CORRUPT', 'SQLITE_BUSY'])('handles %s from optimize during explicit reopen', async code => {
+    const owner = 'synthetic-owner';
+    await runtime.ensureReady(owner);
+    runtime.markRuntimeDbCorrupt(owner);
+    const recover = () => runtime.closeDb({ skipOptimize: true, recoverRuntimeCorruptionForUserId: owner });
+    const onReady = vi.fn();
+    const run = createOwnerEnsureCoordinator({
+      isOwnerCurrent: () => true, ensureReady: runtime.ensureReady, onReady, discardReadyOwner: vi.fn(),
+    });
+    const reply = () => replyToEnsureReady(owner, { run, record: vi.fn(), log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() } });
+    let db!: Database.Database;
+    vi.mocked(runSchemaStartupPolicy).mockImplementationOnce(async () => {
+      db = runtime.getRawDb();
+      vi.spyOn(db, 'pragma').mockImplementationOnce(statement => {
+        expect(statement).toBe('optimize=65538');
+        throw Object.assign(new Error('synthetic optimize failure'), { code });
+      });
+      return { ready: true, compatibility: null };
+    });
+    recover();
+    if (code === 'SQLITE_CORRUPT') {
+      const failure = { ready: false, error: { code: 'DB_RUNTIME_CORRUPT', message: 'synthetic optimize failure' } };
+      await expect(reply()).resolves.toEqual(failure);
+      expect(db.open).toBe(false);
+      await expect(reply()).resolves.toEqual(failure);
+      expect(onReady).not.toHaveBeenCalled();
+      expect(vi.getTimerCount()).toBe(0);
+      // The next native open sees healthy data, as after external restoration.
+      recover();
+    }
+    await expect(reply()).resolves.toEqual({ ready: true });
+    expect(onReady).toHaveBeenCalledOnce();
   });
   // The original late-handle test spied only after startup SQL had run. Observe
   // the actual native factory before the passive open, including lease waits.

@@ -12,6 +12,14 @@
     agentKind / 供应商连接 id / 模型 id / 运行位置)，只有同账号可读的目录级标识，不含凭证。控制端按不可信数据解析：
     Desktop 复用 `normalizeModelGroupsConfig`，Mobile 复用 `parseCompanionModelGroups`(32 组 × 16 来源，只留显示字段)。
     归入后台读取(`invokePolicy.ts`)，选择器打开时每台电脑读一次，15 秒内复用。
+    2026-11-23 起选法多了 `drain`、`headroom`、`weighted`，2026-11-23 之前的手机会整条不列认不出选法的模式、电脑会当成
+    「快作废的先用」。所以发给别的设备时(本接口与伙伴设置里的模型组，`modelGroupsConfigForRemote`)，`strategy` 换成最接近的
+    旧选法(`order` / `expiring` / `rotate`)，真实选法放在新字段 `pick`；新版两端都先读 `pick`。选路始终由模式所在的那台
+    电脑做，旧设备只是选法的标签不准，模式照样能选。手机今后认不出的选法只是不写标签，不再丢掉整条模式。
+    时段例外多了可选的 `days`(0–6，与 `Date#getDay` 相同)，来源多了可选的 `weight`；旧版忽略这两个字段，只影响显示。
+    `model-groups:resolve` 的结果同理：`why` 与 trace 里每项的 `why` 遇到 `drain`/`drainNext`/`headroom`/`weighted` 时换成
+    `order`/`order`/`expiring`/`rotate`，真实原因放在 `pickWhy`(`modelGroupResolveResultForRemote`)；新版先读 `pickWhy`，
+    旧版把旧原因写进任务说明，不会出现原样的文案键。
   - `model-groups:resolve`：请那台按自己的模式选。选择只带 `{ type: 'route', id }`(控制端去掉位置字段，被控端也会去掉)；
     `context.hasImages` 与 `location.agentDeviceId`(进行中的任务只在它所在的位置里选)沿用本机接口的语义。
     可选 `remoteInvocableOnly: true`：Agent 将在这台为另一台电脑运行，只用这台开了「允许被远程调用」的连接，
@@ -33,6 +41,7 @@
 - **旧被控端**：没有这些准入 → `CHANNEL_NOT_ALLOWED` → 控制端记为「那台不支持模型组」，不列模式，按普通模型照常工作。
   这个答案不永久保留：Desktop 控制端在那台离线或链路重置后清掉，Mobile 5 分钟后再问一次，那台升级后不必重开控制端。
   新被控端 + 旧控制端：旧控制端不调用这些接口，行为不变。
+  独立后台服务对白名单内缺少普通 IPC 处理器的请求复用同一 `CHANNEL_NOT_ALLOWED` 回执。桌面被控端分派及两类中转帧沿用原契约。
 - **建任务的时机**：会话在那台建成(远程创建的提交点)后才提交选路、记绑定、写说明；手机经新建任务后台管线的
   `onSessionCreated` 回调做一次，重跑管线不重复。全部尽力而为，失败只影响撞配额提议与那行说明。
 - **自建中转**：只是既有 `invoke` 隧道里多了几个 channel 名，帧格式、握手、能力协商、签名都不变，自建中转按原样转发，

@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { isSharedTaskPeer, readProviderMetadataContinuity } from '@cindy/device-link';
 import { withTransientRemoteRetry } from '@cindy/maker-shared/device-link-contract';
-import { CONTROLLED_MODEL_CATALOG_CHANNEL, CONTROLLED_MODEL_CATALOG_CHANGED, modelCatalogKey, readControlledFavoriteSource, type ControlledModelLocation } from '../../shared/controlledModelCatalog';
+import { CONTROLLED_MODEL_CATALOG_CHANNEL, CONTROLLED_MODEL_CATALOG_CHANGED, modelCatalogKey, readControlledFavoriteSource, readReceivedCatalogChangeSequence, type ControlledModelLocation } from '../../shared/controlledModelCatalog';
 import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
 import { extractIpcError } from '@/utils/ipcError';
 import { evictDeviceProviders } from './useDeviceProviders';
@@ -32,9 +32,10 @@ export function useControlledModelLocations(deviceId: string | null | undefined,
     let completeLocations: ControlledModelLocation[] = [];
     let sourceIds = new Set<string>();
     const presenceStates = new Map<string, string>();
-    const invalidate = (catalogChanged: boolean) => {
+    let recoveredCatalogs: ReadonlySet<string> | undefined;
+    const invalidate = (catalogChanged: boolean, receivedChangeSequence?: number) => {
       revision++;
-      invalidateControlledCatalogRoutes(deviceId, catalogChanged);
+      recoveredCatalogs = invalidateControlledCatalogRoutes(deviceId, catalogChanged, receivedChangeSequence);
       evictControlledPluginEngines(deviceId);
       refreshControlledAvailableAgents(deviceId);
       setSnapshot(current => current?.deviceId === deviceId && current.owner === owner
@@ -78,7 +79,7 @@ export function useControlledModelLocations(deviceId: string | null | undefined,
         supported = true;
         sourceIds = new Set(locations.map(location => location.agentDeviceId));
         setSnapshot({ deviceId, owner, locations });
-        refreshDiscoveredCatalogRoutes(deviceId);
+        refreshDiscoveredCatalogRoutes(deviceId, recoveredCatalogs);
         refreshControlledPluginEngines(deviceId, sourceIds);
       } catch (error) {
         if (!current()) return;
@@ -95,8 +96,8 @@ export function useControlledModelLocations(deviceId: string | null | undefined,
         if (queued && active) { queued = false; void refresh(); }
       }
     };
-    const reload = (catalogChanged = false) => {
-      invalidate(catalogChanged);
+    const reload = (catalogChanged = false, receivedChangeSequence?: number) => {
+      invalidate(catalogChanged, receivedChangeSequence);
       if (pending) queued = true;
       else void refresh();
     };
@@ -140,9 +141,10 @@ export function useControlledModelLocations(deviceId: string | null | undefined,
         }
         return;
       }
-      if (((event.channel === 'maker:provider:changed' || event.channel === 'maker:agents:changed')
-        && (event.deviceId === deviceId || sourceIds.has(event.deviceId)))
-        || (event.deviceId === deviceId && event.channel === CONTROLLED_MODEL_CATALOG_CHANGED)) reload(true);
+      if (event.deviceId === deviceId && event.channel === CONTROLLED_MODEL_CATALOG_CHANGED) {
+        reload(true, readReceivedCatalogChangeSequence(event.payload));
+      } else if ((event.channel === 'maker:provider:changed' || event.channel === 'maker:agents:changed')
+        && (event.deviceId === deviceId || sourceIds.has(event.deviceId))) reload(true);
     });
     // A does not receive its own broadcasts through B. Its local notifications
     // must also refresh catalogs routed through B, without using A's local grants.

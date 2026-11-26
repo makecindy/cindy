@@ -12,7 +12,7 @@ import { readFile as fsReadFile } from 'node:fs/promises';
 import { basename, extname } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import type { Logger } from '../../interfaces/logger.js';
-import type { AgentSessionHandle } from '../base-agent.js';
+import { TurnPermissionPolicyUnsupportedError, type AgentSessionHandle, type SendOptions } from '../base-agent.js';
 import { NotSupportedError, type Capabilities } from '../../types/capabilities.js';
 import type { Effort, PermissionMode, UserContentBlock, UserMessage } from '../../types/common.js';
 import type { AgentEvent, InteractionRequest, InteractionResolver, UsageSnapshot } from '../../types/events.js';
@@ -28,6 +28,7 @@ import {
   mapEffortValues,
 } from './capabilities.js';
 import { AcpConnection, AcpConnectionClosedError, AcpRpcError, methodNotFound } from './connection.js';
+import { defusePluginEngineSlashMentions, isLeadingSlashCommand } from './briefing.js';
 import type { AcpLineTransport, AcpTransportClosed } from './line-transport.js';
 import {
   ACP_ERROR_AUTH_REQUIRED,
@@ -39,11 +40,13 @@ import {
   readAcpCindyError,
   type AcpCindyError,
   asRecord,
+  normalizeAvailableCommandNames,
   normalizeConfigOptions,
   normalizeInitializeResult,
   normalizePermissionOptions,
   normalizeStopReason,
   normalizeToolCallFields,
+  normalizeTurnUsage,
   type AcpAuthMethod,
   type AcpConfigOption,
   type AcpContentBlock,
@@ -129,11 +132,19 @@ export interface OpenAcpSessionOptions {
   /**
    * Host text sent ahead of the first message of a newly created agent session (for example
    * collaboration role instructions; plugin engines get no Cindy system prompt). A resumed or
-   * loaded session already has it in its own history, so it is not repeated.
+   * loaded session already has it in its own history, so it is not repeated. A function receives
+   * the names of the MCP servers the agent accepted, so the text only names tools it really has.
    */
-  briefing?: string;
+  briefing?: string | ((acceptedMcpServers: readonly string[]) => string);
   /** Current companion settings for the first prompt after restoring the native conversation. */
   resumedCompanionBriefing?: string;
+  /** Lowercase Skill names discovered for this session, so host briefings defuse `/skill` mentions. */
+  skillCommandNames?: readonly string[];
+  /**
+   * Rewrites a message whose text starts with `/<name>` (see skill-invocation.ts); null keeps the
+   * text. Called only for such messages, so ordinary messages are sent without waiting on it.
+   */
+  expandSlashInvocation?: (text: string) => Promise<string | null>;
   /** Called once when the session's event stream ends (closed, or the endpoint exited). */
   onEnded?: () => void;
   /** Overrides ACP_OPEN_TOOL_QUIET_CAP_MS (tests). */
@@ -327,6 +338,9 @@ export async function openAcpSession(opts: OpenAcpSessionOptions): Promise<AcpSe
       configOptions: normalizeConfigOptions(result.configOptions),
       resumeOutcome: outcome,
       droppedMcpServers: dropped,
+      briefing: outcome === 'new'
+        ? typeof opts.briefing === 'function' ? opts.briefing(accepted.map((server) => server.name)) : opts.briefing ?? ''
+        : '',
       options: opts,
     });
     router.attach(session, Array.isArray(result.configOptions));
@@ -351,6 +365,8 @@ interface AcpSessionInit {
   configOptions: AcpConfigOption[];
   resumeOutcome: AcpResumeOutcome;
   droppedMcpServers: string[];
+  /** Briefing for a new session, resolved against the accepted MCP servers. */
+  briefing: string;
   options: OpenAcpSessionOptions;
 }
 
@@ -392,6 +408,7 @@ export class AcpSession {
   private readonly connection: AcpConnection;
   private readonly logger: Logger | undefined;
   private readonly readImage: (path: string) => Promise<Uint8Array>;
+  private readonly expandSlashInvocation: ((text: string) => Promise<string | null>) | undefined;
   private readonly cancelGraceMs: number;
   private readonly onEnded: (() => void) | undefined;
   private readonly queue = createAsyncQueue<AgentEvent>();
@@ -399,6 +416,8 @@ export class AcpSession {
   private readonly pendingPrompts: AcpContentBlock[][] = [];
   /** Sent once, ahead of the first prompt of a new session. */
   private pendingBriefing: string | null;
+  /** Slash-command names advertised by Skills or `available_commands_update`. */
+  private readonly commandNames = new Set<string>();
   private sendChain: Promise<void> = Promise.resolve();
   private stopGeneration = 0;
   private readonly permissionControllers = new Set<AbortController>();
@@ -439,12 +458,17 @@ export class AcpSession {
     this.capabilitiesSnapshot = this.buildCapabilities();
     this.logger = init.options.logger;
     this.readImage = init.options.readFile ?? ((path) => fsReadFile(path));
+    this.expandSlashInvocation = init.options.expandSlashInvocation;
     this.cancelGraceMs = init.options.cancelGraceMs ?? DEFAULT_CANCEL_GRACE_MS;
     this.onEnded = init.options.onEnded;
     this.now = init.options.now ?? Date.now;
     this.openToolQuietCapMs = init.options.openToolQuietCapMs ?? ACP_OPEN_TOOL_QUIET_CAP_MS;
-    const briefing = init.resumeOutcome === 'new' ? init.options.briefing : init.options.resumedCompanionBriefing;
+    const briefing = init.resumeOutcome === 'new' ? init.briefing : init.options.resumedCompanionBriefing;
     this.pendingBriefing = briefing?.trim() ? briefing : null;
+    for (const name of init.options.skillCommandNames ?? []) {
+      const trimmed = name.trim().replace(/^\/+/, '').toLowerCase();
+      if (trimmed) this.commandNames.add(trimmed);
+    }
     this.translator = new AcpUpdateTranslator({ blockIdPrefix: `acp-${init.sessionId}` });
     if (init.options.permissionMode) this.applyPermissionMode(init.options.permissionMode);
     this.connection.onClose((info) => this.handleConnectionClosed(info));
@@ -459,6 +483,11 @@ export class AcpSession {
   get model(): string {
     const option = findModelOption(this.configOptions);
     return typeof option?.currentValue === 'string' ? option.currentValue : '';
+  }
+
+  /** Names the ACP endpoint advertised after session creation. */
+  getPluginEngineCommandNames(): readonly string[] {
+    return [...this.commandNames];
   }
 
   get capabilities(): Capabilities {
@@ -505,6 +534,12 @@ export class AcpSession {
     return this.hasBackgroundWork();
   }
 
+  /** The next send reopens this session with `session/resume` or `session/load`; without either a resume fails. */
+  canResumeAfterClose(): boolean {
+    const { loadSession, sessionCapabilities } = this.initializeResult.agentCapabilities;
+    return sessionCapabilities.resume || loadSession;
+  }
+
   private hasBackgroundWork(): boolean {
     if (this.ended || this.turn) return false;
     if (this.translator.openToolCount() > 0) return true;
@@ -515,8 +550,21 @@ export class AcpSession {
     this.resolver = resolver;
   }
 
+  /**
+   * AgentSessionHandle: refuses a turn that carries a per-turn permission policy (IM group turns that
+   * require the owner's confirmation). A plugin's agent can run tools without asking Cindy first, so
+   * no permission mode can enforce such a policy; fail closed like built-in engines do in the modes
+   * that bypass their approval hook, rather than presenting a confirmation promise Cindy cannot keep.
+   */
+  validateSendOptions(opts: SendOptions): void {
+    if (opts.turnPermissionPolicy) {
+      throw new TurnPermissionPolicyUnsupportedError('acp', this.permissionMode);
+    }
+  }
+
   /** Starts a turn, or queues it behind the running one (ACP allows one prompt per session). */
-  async send(message: UserMessage): Promise<void> {
+  async send(message: UserMessage, opts?: SendOptions): Promise<void> {
+    if (opts) this.validateSendOptions(opts);
     if (this.ended || this.closing) throw new Error('ACP session is closed');
     // Attachments are read asynchronously; chain conversions so turns keep the order they were sent in.
     const generation = this.stopGeneration;
@@ -526,8 +574,9 @@ export class AcpSession {
       if (this.ended || this.closing) throw new Error('ACP session is closed');
       // Stop also discards messages that were still being prepared, like queued ones.
       if (generation !== this.stopGeneration) return;
-      if (this.pendingBriefing) {
-        prompt.unshift({ type: 'text', text: this.pendingBriefing });
+      const firstText = prompt.find((block): block is Extract<AcpContentBlock, { type: 'text' }> => block.type === 'text')?.text ?? '';
+      if (this.pendingBriefing && !isLeadingSlashCommand(firstText)) {
+        prompt.unshift({ type: 'text', text: defusePluginEngineSlashMentions(this.pendingBriefing, this.commandNames) });
         this.pendingBriefing = null;
       }
       this.pendingPrompts.push(prompt);
@@ -715,6 +764,11 @@ export class AcpSession {
         if (modeId) this.applyCurrentModeUpdate(modeId);
         return;
       }
+      case 'available_commands_update':
+        for (const name of normalizeAvailableCommandNames(update.availableCommands)) {
+          this.commandNames.add(name.toLowerCase());
+        }
+        return;
       default:
         if (STATE_UPDATES.has(update.sessionUpdate)) return;
         this.emit(this.translator.handleUpdate(update));
@@ -764,8 +818,13 @@ export class AcpSession {
     this.turn = turn;
     this.usage = { ...this.usage, tokenUsage: 0 };
     this.emit([{ type: 'status', data: { status: 'running', ...this.usage, isRunning: true } }]);
+    const usageModel = this.model;
     this.connection.request('session/prompt', { sessionId: this.id, prompt }, { timeoutMs: null }).then(
-      (result) => this.finishTurn(turn.token, { stopReason: normalizeStopReason(result) }),
+      (result) => {
+        // The prompt result is the only per-turn token report; `usage_update` only carries the context size.
+        const usage = normalizeTurnUsage(result);
+        this.finishTurn(turn.token, { stopReason: normalizeStopReason(result), ...(usage ? { usage, usageModel } : {}) });
+      },
       (error: unknown) => this.finishTurn(turn.token, this.errorOutcome(error)),
     );
   }
@@ -959,11 +1018,23 @@ export class AcpSession {
 
   private async toPrompt(message: UserMessage): Promise<AcpContentBlock[]> {
     if (typeof message.content === 'string') {
-      return message.content.length > 0 ? [{ type: 'text', text: message.content }] : [];
+      return message.content.length > 0 ? [{ type: 'text', text: await this.expandText(message.content) }] : [];
     }
     const blocks: AcpContentBlock[] = [];
-    for (const block of message.content) blocks.push(await this.toContentBlock(block));
+    // Only the message's opening text can be a slash invocation: its first text block, the same text
+    // the host keeps its notes off (desktop `shouldPrependMobileClientPromptNote`).
+    const opening = message.content.findIndex((block) => block.type === 'text');
+    for (const [index, block] of message.content.entries()) {
+      blocks.push(index === opening && block.type === 'text'
+        ? { type: 'text', text: await this.expandText(block.text) }
+        : await this.toContentBlock(block));
+    }
     return blocks;
+  }
+
+  private async expandText(text: string): Promise<string> {
+    if (!this.expandSlashInvocation || !text.trimStart().startsWith('/')) return text;
+    return (await this.expandSlashInvocation(text)) ?? text;
   }
 
   private async toContentBlock(block: UserContentBlock): Promise<AcpContentBlock> {

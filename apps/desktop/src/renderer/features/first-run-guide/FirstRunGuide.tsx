@@ -779,6 +779,7 @@ function ModelsVignette({ start }: { start: number }) {
 
 /** Cover scene: a task on the computer travels to the phone and continues there. */
 function DevicesVignette({ start }: { start: number }) {
+  // 迷你屏幕：插画内部的形状，不是控件框（DESIGN.md §5 插画登记）
   const screen = 'flex flex-col justify-center gap-1 rounded border border-[var(--text-tertiary)] bg-[var(--confirm-bg)]';
   // The first line is the same task on both screens; the rest is whatever else is there.
   const lines = (widths: string[], from: number) => widths.map((width, position) => (

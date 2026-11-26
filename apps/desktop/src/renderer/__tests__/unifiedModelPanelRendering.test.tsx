@@ -14,7 +14,7 @@
  *   7. recordRecentUsage 开启时选择成功才写 recentModels(「最近」区当场出现)。
  */
 
-import { act, fireEvent, render, renderHook, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, renderHook, screen, waitFor, within } from '@testing-library/react';
 import React from 'react';
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import type { FastMode } from '@cindy/maker-shared';
@@ -46,6 +46,7 @@ vi.mock('react-i18next', async (importOriginal) => ({
         'settings.providers.xd.title': 'Cindy AI',
         'newChat.modelSelector.modelListAria': '模型列表',
         'newChat.modelSelector.meta.context': `上下文 ${options?.value}`,
+        'settings.providers.models.advanced.codexContextUnknown': '未读取到 CLI 配置',
         'newChat.modelSelector.search.noResults': '无匹配模型',
         'newChat.modelSelector.search.placeholderAll': '搜索模型…',
         'newChat.modelSelector.unified.favoritesGroup': '收藏',
@@ -223,6 +224,7 @@ vi.mock('@/hooks/useProviders', () => ({
 const remoteProvidersRef = vi.hoisted(() => ({ providers: [] as unknown[] }));
 vi.mock('@/hooks/useDeviceProviders', () => ({
   getCachedDeviceProviders: () => ({ providers: remoteProvidersRef.providers }),
+  getDeviceProvidersGeneration: () => 0,
   subscribeDeviceProviders: () => () => {},
   evictDeviceProviders: vi.fn(),
   prefetchDeviceProviders: vi.fn(async () => {}),
@@ -340,6 +342,22 @@ function renderPanel(
     }),
   );
 }
+
+// #12816, unit: an empty snapshot followed by 80 models in the same opening
+// must leave a frame for the search box before mounting the incoming rows.
+it('defers a large catalog arriving before the open picker has painted', async () => {
+  const provider = providersRef.providers[0] as ProviderView;
+  const model = provider.models['claude-code']![0]!;
+  const models = Array.from({ length: 80 }, (_, i) => ({ ...model, id: 'late-' + i, name: 'Late ' + i }));
+  const props = { remoteAgent: undefined, modelId: model.id, currentProviderId: provider.id, effort: 'medium' as const,
+    onModelChange: vi.fn(), onEffortChange: vi.fn(), onProviderChange: vi.fn() };
+  const view = render(<ModelSelectorContent {...props} providersOverride={[]} />);
+  const search = screen.getByRole('textbox');
+  view.rerender(<ModelSelectorContent {...props} providersOverride={[{ ...provider, models: { 'claude-code': models } }]} />);
+  expect(screen.getByRole('textbox')).toBe(search);
+  expect(screen.queryByText('Late 79')).toBeNull();
+  await waitFor(() => expect(rowFor('Late 79')).toBeTruthy());
+});
 
 // 浮层里也会出现同一个模型名,故只在列表内定位行。
 function rowFor(name: string): HTMLElement {
@@ -1118,10 +1136,13 @@ describe('统一模型选择器面板', () => {
 // #9501 review P2: the real selector/flyout read the controller's same-key window.
 // Existing rendering tests had no context-limit IPC response. Unit: remote 1M +
 // local 123K, including native Codex readback, source reset and controlled catalogs.
+// #11716/#4477 unit: the remote Codex preview must use native 700K, not this
+// catalog's 600K; a shared source without the owner-only read remains unknown.
 describe('模型浮层上下文按目录来源隔离', () => {
   const localProviders = providersRef.providers;
   const getModelContextLimit = vi.fn();
   beforeEach(() => {
+    setDataOwnerGeneration('test-owner');
     getModelContextLimit.mockReset().mockResolvedValue({
       limit: 123_000, isCustomized: true,
       codexContext: { contextWindow: 256_000, usableContextWindow: 243_200,
@@ -1131,6 +1152,20 @@ describe('模型浮层上下文按目录来源隔离', () => {
     vi.stubGlobal('electronAPI', {
       ...window.electronAPI,
       maker: { ...window.electronAPI?.maker, getModelContextLimit },
+      deviceLink: {
+        onRemotePush: () => () => {},
+        onStatusChanged: () => () => {},
+        invoke: vi.fn(async (deviceId: string, channel: string) => {
+          if (deviceId !== 'other' || channel !== 'maker:model-context-limit:get') {
+            throw new Error('CHANNEL_NOT_ALLOWED');
+          }
+          return { limit: null, isCustomized: false, codexContext: {
+            contextWindow: 700_000, usableContextWindow: 665_000,
+            autoCompactTokenLimit: 630_000, modelMaxContextWindow: null,
+            source: 'config', fallbackModel: false,
+          } };
+        }),
+      },
     });
     remoteProvidersRef.providers = (localProviders as ProviderView[]).map((provider) => ({
       ...provider, remoteInvocationEnabled: true,
@@ -1143,6 +1178,8 @@ describe('模型浮层上下文按目录来源隔离', () => {
     }));
   });
   afterEach(() => {
+    cleanup();
+    setDataOwnerGeneration(null);
     remoteProvidersRef.providers = [];
     vi.unstubAllGlobals();
   });
@@ -1155,7 +1192,7 @@ describe('模型浮层上下文按目录来源隔离', () => {
       devices: [{ deviceId: 'share:context', name: 'Shared' }], selectedDeviceId: 'share:context',
     } } },
     { name: '被控电脑', props: { deviceId: 'other' } },
-  ])('$name 的窗口与引擎切换只使用来源目录', async ({ props }) => {
+  ])('$name 的窗口与引擎切换不读取控制端配置', async ({ props }) => {
     // 同账号的另一台电脑：本机也有同名供应商时左栏只列一处，这里是用户把它们改成「运行于」那台。
     if (props.remoteAgent?.selectedDeviceId === 'other') {
       providersRef.providers = (localProviders as ProviderView[]).map((provider) => ({ ...provider, runLocation: 'other' }));
@@ -1170,7 +1207,8 @@ describe('模型浮层上下文按目录来源隔离', () => {
       )!));
     }
     const codex = await openRowFlyout('GPT-5.6');
-    expect(within(codex).getByText(/上下文 600K/)).toBeTruthy();
+    expect(await within(codex).findByText(props.remoteAgent?.selectedDeviceId === 'share:context'
+      ? /未读取到 CLI 配置/ : /上下文 700K/)).toBeTruthy();
     await act(async () => fireEvent.click(codex.querySelector('[data-engine-capsule="cc"]') as HTMLElement));
     expect(within(codex).getByText(/上下文 800K/)).toBeTruthy();
     expect(getModelContextLimit).not.toHaveBeenCalled();

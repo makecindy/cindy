@@ -419,7 +419,7 @@ export function PendingSendBubble({
     ? { left: badgeAnchor.left } : { right: 0 };
   const statusLabel = failed
     ? t('message.queue.sendFailedMessage', { text: bubbleLabel })
-    : waiting
+    : waiting || item.waitingForRemoteAccount
       ? t('message.queue.waitingMessage', { text: bubbleLabel })
     : spinning
       ? t('message.queue.sendingMessage', { text: bubbleLabel })
@@ -710,7 +710,7 @@ function QueuedSendMenu({ item, actions, accessibilityLabel }: {
       testID={`pendingSend.queueStatus.${item.clientId}`}
     >
       <ListEnd color={colors.textTertiary} size={iconSize.sm} strokeWidth={iconStroke.regular} />
-      <Text style={styles.queueStatusText}>{t('message.queue.queued')}</Text>
+      <Text style={styles.queueStatusText}>{t(item.waitingForRemoteAccount ? 'message.queue.waitingForComputer' : 'message.queue.queued')}</Text>
       {!disabled && <ChevronDown color={colors.textTertiary} size={iconSize.xs} strokeWidth={iconStroke.regular} />}
     </Pressable>
   );

@@ -1115,6 +1115,15 @@
       "checkCase": false
     },
     {
+      "id": "cloud-cindy",
+      "status": "proposed",
+      "en": "Cloud Cindy",
+      "translations": {
+        "zh-CN": "云端 Cindy"
+      },
+      "note": "指账号下运行在云上的那台 Cindy（领取、休眠、唤醒、更新，在「远程连接 → 我的设备」里管理）。它和「云端伙伴」「云端对话」不是一回事：后两者指伙伴的跨设备身份和对话存储。界面上不再用「云实例」「云端实例」。中文与 Cindy 之间留一个空格，后面紧跟汉字时也加空格，例如「云端 Cindy 上」。其他语言的译法待定。"
+    },
+    {
       "id": "collaboration",
       "status": "decided",
       "en": "Collaboration",
