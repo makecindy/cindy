@@ -7,7 +7,7 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { resumableCompose } from './composition.mjs';
 import { readJournal } from './recovery.mjs';
-import {registeredApps} from './app-registry.mjs';
+import {appExtensions,registeredApps,registeredExtensions} from './app-registry.mjs';
 import { configFrom, discover, copyPlugin, localPluginSource, packageHash, auditPlugins, run, verifyReport, verifyUpgradeSnapshot } from '../personal-build.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -130,12 +130,19 @@ export function doctor(c, exec = run) {
   if (fs.existsSync(r.personalApp + '.personal-transition.json')) result.issues.push('Unfinished fixed app installation; retain the transition and inspect it before switching');
   const appParent=path.dirname(r.personalApp), legacyPrefix='.'+path.basename(r.personalApp)+'.previous-';
   result.legacyAppBackups=fs.existsSync(appParent) ? fs.readdirSync(appParent).filter(name=>name.startsWith(legacyPrefix)).map(name=>path.join(appParent,name)) : [];
+  if(result.legacyAppBackups.length)result.issues.push('Legacy personal app backups remain beside the fixed installation; move them into install-backups and run registry-clean');
   if(process.platform==='darwin' && fs.existsSync(r.personalApp+'.personal-install.json')) {
     try {
       const installed=read(r.personalApp+'.personal-install.json'), id=installed.inputs.bundleId;
-      if(installed.registrationPending)result.issues.push('LaunchServices registration needs repair; run registry-clean after inspecting retired paths');
+      if(installed.registrationPending)result.issues.push('LaunchServices/PlugInKit registration needs repair; run registry-clean after inspecting retired paths');
       result.registeredApps=registeredApps(id);
       if(result.registeredApps.length!==1 || result.registeredApps[0]!==r.personalApp)result.issues.push('Personal Bundle ID has stale or missing LaunchServices registrations; inspect paths before unregistering retired copies');
+      const expectedExtensions=appExtensions(r.personalApp);
+      result.registeredExtensions=registeredExtensions(`${id}.agent-activity`);
+      const extensionsOk=expectedExtensions.length===0
+        ? result.registeredExtensions.length===0
+        : result.registeredExtensions.length===expectedExtensions.length && expectedExtensions.every(ext=>result.registeredExtensions.includes(ext));
+      if(!extensionsOk)result.issues.push('Personal Live Activity extension has stale or missing PlugInKit registrations; inspect paths and run registry-clean');
     } catch(e) { result.issues.push(`Cannot inspect personal app registrations: ${e.message}`); }
   }
   result.recoveryAdvice = result.supervised?.phase === 'blocked'
