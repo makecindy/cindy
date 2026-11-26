@@ -9585,6 +9585,7 @@
         "createTitle": "增 MCP 伺服器",
         "editTitle": "修 MCP 伺服器",
         "desc": "僅支援遠端 http / sse 型 MCP。存後新開或重啟之 Agent 會話即可呼叫，方行之 Agent 會話不受影響。",
+        "embeddedGuide": "助手為此差事啟 MCP 設定表。依供方所示，核已填之項，補其闕，乃存之。",
         "teammateDesc": "僅支援遠端 http / sse 型 MCP。存後同伴自納為己用，於此言談下一則訊息起即可用之，毋須新開差事。"
       },
       "fields": {
@@ -16451,7 +16452,7 @@
       "REMOTE_WORKDIR_UNAVAILABLE": "遠端工作目錄今不可用。請確認彼機上之目錄猶在，然後再試。",
       "REMOTE_OPTIMISTIC_SESSION_STATE_UNAVAILABLE": "機端暫不能確知此訊已遣否。請稍後再試，勿重遣同一訊。",
       "REMOTE_AGENT_UNAVAILABLE": "未能與行 Agent 之機通信，請閱錯誤詳情。",
-      "REMOTE_AGENT_TIMEOUT": "候行 Agent 之機回應逾時，結果未明。再試前請先察差事進展。",
+      "REMOTE_AGENT_TIMEOUT": "行 Agent 之機尚未應。請先察差事進展。若尚在行，或已有果，則無須再試。",
       "REMOTE_AGENT_LINK_BUSY": "與行 Agent 之機通信繁忙，請稍候再試。",
       "REMOTE_AGENT_UNRESPONSIVE": "行 Agent 之機屢未回應，已暫停呼叫。請稍候再試。",
       "REMOTE_AGENT_OFFLINE": "行 Agent 之機已離線，待其重連再試。",

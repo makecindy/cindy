@@ -9585,6 +9585,7 @@
         "createTitle": "添加 MCP 服务器",
         "editTitle": "编辑 MCP 服务器",
         "desc": "仅支持远程 http / sse 型 MCP。保存后新建或重启的 Agent 会话即可调用，正在运行的 Agent 会话不受影响。",
+        "embeddedGuide": "助手为当前任务打开了 MCP 配置表单。请按服务供应商的说明核对已填信息，补全缺项，再保存配置。",
         "teammateDesc": "仅支持远程 http / sse 型 MCP。保存后伙伴会把它加入自己的工具，在本对话的下一条消息起即可使用，无需新建任务。"
       },
       "fields": {
@@ -16460,7 +16461,7 @@
       "REMOTE_WORKDIR_UNAVAILABLE": "远端工作目录现在不可用。请确认那台电脑上的目录还在，然后重试。",
       "REMOTE_OPTIMISTIC_SESSION_STATE_UNAVAILABLE": "电脑端暂时无法确认这条消息是否已经发出。请稍后再试，不要重复发送同一条。",
       "REMOTE_AGENT_UNAVAILABLE": "未能与运行 Agent 的电脑通信，请查看错误详情。",
-      "REMOTE_AGENT_TIMEOUT": "等待运行 Agent 的电脑响应超时，结果尚未确认。重试前先检查任务进展。",
+      "REMOTE_AGENT_TIMEOUT": "运行 Agent 的电脑还没回复。请先查看任务进展。如果任务还在运行或已有结果，就不用重试。",
       "REMOTE_AGENT_LINK_BUSY": "与运行 Agent 的电脑之间的通信繁忙，请稍后重试。",
       "REMOTE_AGENT_UNRESPONSIVE": "运行 Agent 的电脑多次未响应，调用被暂时暂停。请稍后重试。",
       "REMOTE_AGENT_OFFLINE": "运行 Agent 的电脑当前离线，待重新上线后重试。",

@@ -344,7 +344,7 @@ import { createContextOverflowRollover } from '../../maker-ipc/contextOverflowRo
 import { acceptSessionRuntimeMutation, applySessionRuntimeOverrideForStart, clearAllSessionRuntimeControlStates } from '../../maker-ipc/sessionRuntimeControl.js';
 import { AgentInputCoordinator, type AgentInputCoordinatorDeps } from '../../maker-ipc/agent-input-coordinator.js';
 import { providerGroupSwitchCause } from '../../provider-group/failurePolicy.js';
-import { DEVICE_LINK_CAPABILITY_RELIABLE_TRANSPORT, DeviceLinkClient, PROTOCOL_VERSION, providerShareGuestPeer, providerShareHostPeer, type InvokePayload, type Envelope } from '@cindy/device-link';
+import { DEVICE_LINK_CAPABILITY_RELIABLE_TRANSPORT, DeviceLinkClient, PROTOCOL_VERSION, REMOTE_AGENT_INVOKE_TIMEOUT_MS, providerShareGuestPeer, providerShareHostPeer, type InvokePayload, type Envelope } from '@cindy/device-link';
 import { createServer } from 'node:http';
 import { once } from 'node:events';
 import { createRelayFixture } from '../../../../../../scripts/device-link/relayFixture.js';
@@ -7578,7 +7578,9 @@ describe('shared subscription recovery through controller and account allocation
             throw new TurnDispatchRejectedError('Fixture provider rejected before dispatch');
           }
           received.push(message);
-          if (closesAwaitingAck && received.length === 2) {
+          if ((closesAwaitingAck || (realSendTransport && unknownDispatch)) && received.length === 2) {
+            // Keep the call result pending as well as the wire ACK. The
+            // controller can confirm delivery if either result reaches it.
             receivedBeforeClose.resolve();
             await settleNativeSend.promise;
             return;
@@ -8404,6 +8406,9 @@ describe('shared subscription recovery through controller and account allocation
           await enteredTransport.promise;
           await vi.advanceTimersByTimeAsync(100);
           expect(writtenRequestIds.size).toBe(notWritten ? 0 : 1);
+          if (originalAckTimeout && !timeoutReturned) {
+            await vi.advanceTimersByTimeAsync(REMOTE_AGENT_INVOKE_TIMEOUT_MS);
+          }
         }
         if (boundary === 'original-accepted') {
           await expect(send.mock.results[0].value).resolves.toMatchObject({ dispatched: true });
@@ -8891,6 +8896,7 @@ describe('shared subscription recovery through controller and account allocation
       expect(guestSwitch.takeForOpen(task)).toBeUndefined();
     } finally {
       failOfflineOpen.resolve();
+      settleNativeSend.resolve();
       confirmStopped();
       resolveProbe?.();
       await guestSession?.close();

@@ -9585,6 +9585,7 @@
         "createTitle": "新增 MCP 伺服器",
         "editTitle": "編輯 MCP 伺服器",
         "desc": "僅支援遠端 http / sse 型 MCP。儲存後新建或重啟的 Agent 會話即可呼叫，正在執行的 Agent 會話不受影響。",
+        "embeddedGuide": "助手為目前的任務開啟了 MCP 設定表單。請依照服務供應商的說明核對已填資訊，補齊缺少的欄位，再儲存設定。",
         "teammateDesc": "僅支援遠端 http / sse 型 MCP。儲存後夥伴會把它加入自己的工具，在本對話的下一則訊息起即可使用，無需新建任務。"
       },
       "fields": {
@@ -16459,7 +16460,7 @@
       "REMOTE_WORKDIR_UNAVAILABLE": "遠端工作目錄現在無法使用。請確認那台電腦上的目錄還在，然後重試。",
       "REMOTE_OPTIMISTIC_SESSION_STATE_UNAVAILABLE": "電腦端暫時無法確認這則訊息是否已經送出。請稍後再試，不要重複傳送同一則。",
       "REMOTE_AGENT_UNAVAILABLE": "未能與執行 Agent 的電腦通訊，請查看錯誤詳情。",
-      "REMOTE_AGENT_TIMEOUT": "等待執行 Agent 的電腦回應逾時，結果尚未確認。重試前請先檢查任務進度。",
+      "REMOTE_AGENT_TIMEOUT": "執行 Agent 的電腦還沒回覆。請先查看任務進度。如果任務還在執行或已有結果，就不必重試。",
       "REMOTE_AGENT_LINK_BUSY": "與執行 Agent 的電腦之間的通訊忙碌，請稍後重試。",
       "REMOTE_AGENT_UNRESPONSIVE": "執行 Agent 的電腦多次未回應，呼叫已暫時暫停。請稍後重試。",
       "REMOTE_AGENT_OFFLINE": "執行 Agent 的電腦目前離線，待重新上線後重試。",

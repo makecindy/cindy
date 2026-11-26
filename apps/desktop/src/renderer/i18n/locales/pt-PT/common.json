@@ -9704,6 +9704,7 @@
         "createTitle": "Adicionar servidor MCP",
         "editTitle": "Editar servidor MCP",
         "desc": "Apenas MCP remoto http / sse. As novas sessões do Agent podem utilizá-lo após guardar; as sessões do Agent em curso não são afetadas.",
+        "embeddedGuide": "O teu assistente abriu este formulário para configurar o MCP para a tarefa atual. Segue as instruções do fornecedor do serviço para verificar os dados já preenchidos, completar o que falta e guardar a configuração.",
         "teammateDesc": "Apenas MCP remoto http / sse. Depois de guardar, o seu amigo adiciona-o às ferramentas dele e pode utilizá-lo a partir da próxima mensagem desta conversa, sem precisar de uma nova sessão."
       },
       "fields": {
@@ -16633,7 +16634,7 @@
       "REMOTE_WORKDIR_UNAVAILABLE": "O diretório de trabalho remoto está indisponível. Verifique se a pasta ainda existe nesse computador e tente novamente.",
       "REMOTE_OPTIMISTIC_SESSION_STATE_UNAVAILABLE": "O computador ainda não consegue confirmar se esta mensagem foi enviada. Aguarde um momento e tente novamente. Não envie a mesma mensagem duas vezes.",
       "REMOTE_AGENT_UNAVAILABLE": "Não foi possível comunicar com o computador que executa o Agent. Consulte os detalhes do erro.",
-      "REMOTE_AGENT_TIMEOUT": "O tempo de espera pelo computador que executa o Agent expirou. O resultado é desconhecido. Verifique a tarefa antes de tentar novamente.",
+      "REMOTE_AGENT_TIMEOUT": "O computador que executa o Agent ainda não respondeu. Verifique o progresso da tarefa. Se ainda estiver em curso ou já tiver terminado, não precisa de tentar novamente.",
       "REMOTE_AGENT_LINK_BUSY": "A comunicação com o computador que executa o Agent está congestionada. Aguarde um momento antes de tentar novamente.",
       "REMOTE_AGENT_UNRESPONSIVE": "O computador que executa o Agent não respondeu repetidamente, pelo que as chamadas foram suspensas temporariamente. Aguarde um momento antes de tentar novamente.",
       "REMOTE_AGENT_OFFLINE": "O computador que executa o Agent está offline. Tente novamente quando voltar a ligar-se.",
