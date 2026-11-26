@@ -7,6 +7,7 @@ import { Pressable, StyleSheet, View } from 'react-native';
 import { ChevronRight, Plus } from 'lucide-react-native';
 import { useTranslation } from 'react-i18next';
 import { Text } from '@/components/AppText';
+import { useDeviceLink } from '@/device-link/DeviceLinkContext';
 import { useDeviceProviders } from '@/device-link/useDeviceProviders';
 import { useMobileMakerTransport } from '@/device-link/useMobileMakerTransport';
 import { useAuth } from '@/auth/AuthContext';
@@ -20,6 +21,7 @@ import {
   findPluginEngine,
   isPluginEngineEffort,
   pluginEngineModelName,
+  useControlledRemotePluginEngines,
   usePluginEngines,
   type MobilePluginEngineSelection,
 } from './pluginEngines';
@@ -46,13 +48,24 @@ export function readCompanionModelChain(value: unknown): CompanionModelRoute[] {
 export function CompanionModelChain({ deviceId, values, onChange, onPick, disabled, modelGroups }: { deviceId: string; values: ProfileValues; onChange(values: ProfileValues): void; onPick(index: number): void; disabled: boolean; modelGroups?: CompanionModelGroup[] }) {
   const { t } = useTranslation(); const { colors } = useTheme();
   const catalog = useDeviceProviders(deviceId);
+  const link = useDeviceLink();
   const maker = useMobileMakerTransport(deviceId);
   // Only a ready catalog for this device may name a route. Never borrow a cached other-device account.
   const providers = catalog.ready ? catalog.providers : [];
   const chain = readCompanionModelChain(values.modelChain);
-  const pluginEngines = usePluginEngines(maker, deviceId, chain.some(route => route.harness === 'acp' && !route.agentDeviceId));
+  const remotePluginEngineDeviceIds = chain.flatMap(route => route.harness === 'acp' && route.agentDeviceId ? [route.agentDeviceId] : []);
   const routeCatalogs = useRemoteAgentCatalogs({ enabled: chain.some(route => !!route.agentDeviceId),
     controlledDeviceId: deviceId, keepDeviceIds: chain.flatMap(route => route.agentDeviceId ? [route.agentDeviceId] : []), keepOnly: true });
+  const pluginEngines = usePluginEngines(maker, deviceId, chain.some(route => route.harness === 'acp' && !route.agentDeviceId));
+  const remotePluginEngines = useControlledRemotePluginEngines({
+    controlledDeviceId: deviceId,
+    enabled: remotePluginEngineDeviceIds.length > 0,
+    invoke: link.invoke,
+    remoteCatalogs: routeCatalogs,
+    keepDeviceIds: remotePluginEngineDeviceIds,
+    connectionEpoch: link.connectionEpoch,
+  });
+  const allPluginEngines = [...pluginEngines.engines, ...remotePluginEngines.engines];
   const following = values.followsDefault === true;
   const routeRow = (route: CompanionModelRoute) => {
     const remote = route.agentDeviceId ? routeCatalogs.find(item => item.deviceId === route.agentDeviceId) : undefined;
@@ -64,10 +77,10 @@ export function CompanionModelChain({ deviceId, values, onChange, onPick, disabl
       title = group.name;
       detail = modelGroupHint(group, t);
     } else if (route.harness === 'acp') {
-      const engine = !route.agentDeviceId ? findPluginEngine(pluginEngines.engines, route.providerId) : null;
+      const engine = findPluginEngine(allPluginEngines, route.providerId, route.agentDeviceId ?? null);
       title = pluginEngineModelName(engine, route.model)
         ?? (route.model === PLUGIN_ENGINE_DEFAULT_MODEL ? t('models.pluginEngines.defaultModel') : route.model);
-      detail = [engine?.name ?? t('models.pluginEngines.genericName'), remote?.name, effort].filter(Boolean).join(' · ');
+      detail = [engine?.name ?? t('models.pluginEngines.genericName'), remote?.name ?? engine?.deviceName, effort].filter(Boolean).join(' · ');
     } else {
       const agent = route.harness === 'claude' ? 'claude-code' : route.harness;
       const routeProviders = route.agentDeviceId ? remote?.providers ?? [] : providers;
@@ -104,20 +117,32 @@ export function CompanionModelPicker({ visible, deviceId, route, onClose, onClos
 }) {
   const { user } = useAuth(); const { t } = useTranslation();
   const catalog = useDeviceProviders(visible ? deviceId : undefined, visible);
+  const link = useDeviceLink();
   const maker = useMobileMakerTransport(deviceId);
-  const pluginEngines = usePluginEngines(maker, deviceId, visible);
   const remoteCatalogs = useRemoteAgentCatalogs({ enabled: visible, controlledDeviceId: deviceId,
     keepDeviceIds: route?.agentDeviceId ? [route.agentDeviceId] : [] });
+  const pluginEngines = usePluginEngines(maker, deviceId, visible);
+  const remotePluginEngines = useControlledRemotePluginEngines({
+    controlledDeviceId: deviceId,
+    enabled: visible,
+    discoverAll: visible,
+    invoke: link.invoke,
+    remoteCatalogs,
+    keepDeviceIds: route?.harness === 'acp' && route.agentDeviceId ? [route.agentDeviceId] : [],
+    connectionEpoch: link.connectionEpoch,
+  });
+  const allPluginEngines = [...pluginEngines.engines, ...remotePluginEngines.engines];
   const agent = route?.harness === 'claude' ? 'claude-code' : route?.harness === 'codex' || route?.harness === 'pi' ? route.harness : 'pi';
-  const activePluginEngine = route?.harness === 'acp' && route.providerId && !route.agentDeviceId
+  const activePluginEngine = route?.harness === 'acp' && route.providerId
     ? {
         providerId: route.providerId,
+        ...(route.agentDeviceId ? { deviceId: route.agentDeviceId } : {}),
         modelId: route.model || PLUGIN_ENGINE_DEFAULT_MODEL,
         ...(isPluginEngineEffort(route.effort) ? { effort: route.effort } : {}),
       }
     : null;
   const selectPluginEngine = (selection: MobilePluginEngineSelection) => onSelect({
-    agentDeviceId: null,
+    agentDeviceId: selection.deviceId ?? null,
     harness: 'acp',
     model: selection.modelId || PLUGIN_ENGINE_DEFAULT_MODEL,
     providerId: selection.providerId,
@@ -137,21 +162,24 @@ export function CompanionModelPicker({ visible, deviceId, route, onClose, onClos
     modelVisibilityOverrides={catalog.modelVisibilityOverrides} providersReady={catalog.ready}
     flatOptions={[]} agentKind={agent} capabilities={null} activeModelId={route?.harness === 'acp' ? '' : (route?.model ?? '')} selectedProviderId={route?.harness === 'acp' ? null : (route?.providerId ?? null)}
     selectedEffort={route?.harness === 'acp' ? '' : (route?.effort ?? '')} selectedFastMode={route?.harness === 'acp' ? false : (route?.fastMode ?? false)} existingSessionRoute
-    disabled={!catalog.ready && pluginEngines.engines.length === 0} loading={catalog.loading && pluginEngines.engines.length === 0} emptyHint={catalog.error ?? t('devices.companionProfile.modelsUnavailable')}
+    disabled={!catalog.ready && allPluginEngines.length === 0} loading={catalog.loading && allPluginEngines.length === 0} emptyHint={catalog.error ?? t('devices.companionProfile.modelsUnavailable')}
     unified={{
-      remote: { catalogs: remoteCatalogs, selectedDeviceId: route?.harness === 'acp' ? null : (route?.agentDeviceId ?? null), hostDeviceId: deviceId },
+      remote: { catalogs: remoteCatalogs, selectedDeviceId: route?.agentDeviceId ?? null, hostDeviceId: deviceId },
       scope: JSON.stringify([user?.id, deviceId]),
       agents: ['claude-code', 'codex', 'pi'],
       loadCapabilities: async agent => { const value = normalizeMobileAgentCapabilities(await maker.getCapabilities(agent)); if (!value) throw new Error('Capabilities unavailable'); return value; },
       onSelect: select,
       ...(groupRows.length ? { modelGroups: { rows: groupRows, onSelect: selectGroup } } : {}),
-      ...(pluginEngines.engines.length || activePluginEngine
+      ...(allPluginEngines.length || activePluginEngine
         ? {
             pluginEngines: {
-              engines: pluginEngines.engines,
+              engines: allPluginEngines,
               active: activePluginEngine,
               onSelect: selectPluginEngine,
-              onOpen: pluginEngines.refresh,
+              onOpen: () => {
+                pluginEngines.refresh();
+                remotePluginEngines.refresh();
+              },
             },
           }
         : {}),

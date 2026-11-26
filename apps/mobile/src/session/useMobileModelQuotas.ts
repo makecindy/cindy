@@ -13,6 +13,7 @@ import { getMobileAuthOwner, isMobileAuthOwnerCurrent } from "@/auth/authOwnerGe
 import { isProviderShareAgentDeviceId } from "./providerShareAgentDevice";
 import {
   isPluginEngineSelectable,
+  pluginEngineChoiceKey,
   pluginUsageReader,
   type MobilePluginEngine,
 } from "./pluginEngines";
@@ -440,9 +441,18 @@ function useMobilePluginEngineQuotas(
   const { invoke, status, connectionEpoch } = useDeviceLink();
   const deviceId = (JSON.parse(scope) as [string, string])[1];
   const reporting = (engines ?? []).filter(
-    (engine) => engine.reportsUsage === true && isPluginEngineSelectable(engine),
+    (engine) =>
+      engine.reportsUsage === true
+      && isPluginEngineSelectable(engine)
+      && !isProviderShareAgentDeviceId(engine.deviceId || deviceId),
   );
-  const targets = JSON.stringify(reporting.map((engine) => [engine.providerId, engine.key]));
+  const targets = JSON.stringify(
+    reporting.map((engine) => [
+      pluginEngineChoiceKey(engine),
+      engine.deviceId || deviceId,
+      engine.key,
+    ]),
+  );
   const binding = JSON.stringify([scope, visible, status, connectionEpoch, targets]);
   const [state, setState] = useState<{
     binding: string;
@@ -450,32 +460,32 @@ function useMobilePluginEngineQuotas(
   }>();
 
   useEffect(() => {
-    if (!visible || status !== "online" || targets === "[]" || isProviderShareAgentDeviceId(deviceId)) return;
+    if (!visible || status !== "online" || targets === "[]") return;
     const owner = getMobileAuthOwner();
     if (!owner.accountId) return;
     let active = true;
-    const items = JSON.parse(targets) as [string, string][];
+    const items = JSON.parse(targets) as [string, string, string][];
     void Promise.all(
-      items.map(async ([providerId, key]) => {
-        const usage = await pluginUsageReader.read(owner, deviceId, key, () =>
+      items.map(async ([choiceKey, targetDeviceId, key]) => {
+        const usage = await pluginUsageReader.read(owner, targetDeviceId, key, () =>
           isMobileAuthOwnerCurrent(owner)
-            ? invoke<unknown>(deviceId, "maker:get-plugin-engine-usage", [key])
+            ? invoke<unknown>(targetDeviceId, "maker:get-plugin-engine-usage", [key])
             : undefined,
         ).result;
-        return [providerId, usage] as const;
+        return [choiceKey, usage] as const;
       }),
     ).then((entries) => {
       if (!active || !isMobileAuthOwnerCurrent(owner)) return;
       const values: Record<string, GhostHarnessUsage> = {};
-      for (const [providerId, usage] of entries) {
-        if (usage) values[providerId] = usage;
+      for (const [choiceKey, usage] of entries) {
+        if (usage) values[choiceKey] = usage;
       }
       setState({ binding, values });
     });
     return () => {
       active = false;
     };
-  }, [binding, deviceId, invoke]);
+  }, [binding, invoke]);
 
   return state?.binding === binding ? state.values : EMPTY_PLUGIN_QUOTAS;
 }

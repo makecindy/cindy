@@ -1386,3 +1386,84 @@ it('retains adjusted effort for unselected plugin engine rows after returning to
   expect(test.view.pluginEngineOptions.notice).toBe('models.unified.originalFavoriteKept');
   expect(test.prefs.favorites[0].effort).toBe('max');
 });
+
+it('lists local and remote plugin engines in Sources, supports shared plugin engine favorites, and uses onConfigure without closing', async () => {
+  const onSelectPlugin = vi.fn(async () => true);
+  const onConfigurePlugin = vi.fn(async () => true);
+  const localEngine = {
+    key: 'dsh:dsh',
+    providerId: 'acp-plugin:dsh:dsh',
+    ghostId: 'dsh',
+    harnessId: 'dsh',
+    name: 'DeepSeek Harness',
+    availability: { state: 'available' as const },
+    models: [{ id: 'deepseek-v4', displayName: 'DeepSeek V4', efforts: ['low', 'high'] as ('low' | 'high')[], defaultEffort: 'high' as const }],
+    permissionModes: [{ id: 'default', displayName: 'Default' }],
+    defaultPermissionMode: 'default',
+  };
+  const sharedEngine = {
+    ...localEngine,
+    deviceId: 'share:plugin-1',
+    deviceName: 'Alice Share',
+    favoriteSource: { shareId: 'plugin-1', memberId: 'alice', providerId: 'acp-plugin:dsh:dsh', owner: { region: 'global' as const } },
+  };
+  const { onClose } = await mount(undefined, {
+    unified: {
+      scope: 'user-device',
+      agents: ['codex'],
+      loadCapabilities: async () => ({ hasFastMode: true }),
+      onSelect: vi.fn(async () => true),
+      pluginEngines: {
+        engines: [localEngine, sharedEngine],
+        active: { providerId: 'acp-plugin:dsh:dsh', deviceId: 'share:plugin-1', modelId: 'deepseek-v4', effort: 'high' },
+        onSelect: onSelectPlugin,
+        onConfigure: onConfigurePlugin,
+      },
+    },
+  });
+
+  const pluginFilters = test.view.filters.filter((f: any) => f.pluginEngineMark);
+  expect(pluginFilters).toHaveLength(2);
+  expect(pluginFilters[1].remote).toMatchObject({ deviceId: 'share:plugin-1', deviceName: 'Alice Share' });
+
+  // Filtering by the shared plugin engine keeps only that remote plugin group and hides built-in groups.
+  await act(async () => test.view.onFilter(pluginFilters[1].id));
+  expect(test.view.groups).toEqual([]);
+  expect(test.view.pluginEngines.groups).toHaveLength(1);
+  expect(test.view.pluginEngines.groups[0].deviceId).toBe('share:plugin-1');
+  expect(test.view.pluginEngines.groups[0].rows[0].remoteDevice).toEqual({ deviceId: 'share:plugin-1', name: 'Alice Share' });
+
+  // Open options on the shared plugin engine row and favorite it; favorite persists with share wire key and cc wire agent.
+  const sharedRow = test.view.pluginEngines.groups[0].rows[0];
+  await act(async () => test.view.pluginEngines.onOptions(sharedRow));
+  await act(async () => test.view.pluginEngineOptions.onFavorite());
+  expect(test.prefs.favorites).toEqual([expect.objectContaining({
+    agent: 'claude-code',
+    providerId: 'provider-share-favorite:["plugin-1","alice","acp-plugin:dsh:dsh","global"]',
+    modelId: 'deepseek-v4',
+    effort: 'high',
+    fast: false,
+  })]);
+  await act(async () => test.view.onFilter('all'));
+  const favGroup = test.view.groups.find((g: any) => g.key === 'favorites');
+  expect(favGroup.items).toEqual([expect.objectContaining({
+    kind: 'pluginEngine',
+    row: expect.objectContaining({
+      providerId: 'acp-plugin:dsh:dsh',
+      deviceId: 'share:plugin-1',
+      modelId: 'deepseek-v4',
+      effort: 'high',
+    }),
+  })]);
+
+  // Changing effort on the active plugin engine row uses onConfigure without closing the sheet.
+  await act(async () => test.view.pluginEngineOptions.onChangeEffort('low'));
+  expect(onConfigurePlugin).toHaveBeenCalledWith({
+    providerId: 'acp-plugin:dsh:dsh',
+    deviceId: 'share:plugin-1',
+    modelId: 'deepseek-v4',
+    effort: 'low',
+  });
+  expect(onSelectPlugin).not.toHaveBeenCalled();
+  expect(onClose).not.toHaveBeenCalled();
+});

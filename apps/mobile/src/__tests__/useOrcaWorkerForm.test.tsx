@@ -184,7 +184,9 @@ it.each(['agent-pc', 'share:s1', null])('remembers the submitted model route ind
   // PR #6453：Android 已选 Agent pill 也触发 onChange；原用例漏了同值重复选择。
   // unit 最小输入：恢复完整路线后重复选当前 Agent，不能清模型/来源/位置/档位/Fast/显式标记。
   const restored = latest!.form;
-  await act(async () => { latest!.changeAgent(restored.agent); await flush(); });
+  const restoredAgent = restored.agent;
+  if (restoredAgent === 'acp') throw new Error('expected built-in agent');
+  await act(async () => { latest!.changeAgent(restoredAgent); await flush(); });
   expect(latest!.form).toEqual(restored);
   await act(async () => { latest!.remember(latest!.form); await flush(); });
   await act(async () => root.render(null));
