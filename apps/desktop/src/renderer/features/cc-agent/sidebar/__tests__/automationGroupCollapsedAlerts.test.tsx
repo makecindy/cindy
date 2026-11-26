@@ -431,6 +431,12 @@ describe('AutomationSessionGroupItem — 收起态的未处理告警', () => {
     fireEvent.click(screen.getByText('产品决策巡检'));
     expect(onSessionClick).toHaveBeenCalledWith('run-3');
     expect(onSessionClick).not.toHaveBeenCalledWith('run-0');
+
+    fireEvent.click(screen.getByText('产品决策巡检'), { metaKey: true });
+    expect(onSessionClick).toHaveBeenLastCalledWith(
+      'run-3',
+      expect.objectContaining({ metaKey: true }),
+    );
   });
 
   // 用户规则（unit）：只在折叠时排除组头任务；展开后无论已读未读都保留子行。

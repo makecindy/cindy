@@ -84,6 +84,11 @@ import { RemoteProjectIcon } from './RemoteProjectIcon';
 import { BotFollowMark, useSessionFollowers } from '@/features/bots/BotFollowMark';
 import { SessionShareExportDialog } from './SessionShareExportDialog';
 import { isRemoteSessionWriteBlocked } from '../lib/remoteSessionWriteGuard';
+import {
+  getSidebarNewWindowShortcutKey,
+  isSidebarNewWindowActivation,
+  preventMiddleClickAutoscroll,
+} from '@/lib/sidebarNewWindowActivation';
 import { Tip } from '@/components/ui/tooltip';
 import { prefetchDirtyWorktreeForRemoval } from '@/lib/worktreeRemovalWarning';
 import { useSessionAttentionKind } from '@/lib/sessionAttentionStore';
@@ -128,7 +133,7 @@ function loadScheduleSidebarIndexRunsCached(): Promise<ScheduleSidebarIndexRun[]
 
 const SESSION_ROW_INTERACTIVE_SELECTOR = 'button, a, input, select, textarea, [role="button"]';
 
-function isNestedSessionRowAction(target: EventTarget | null, row: Element): boolean {
+export function isNestedSessionRowAction(target: EventTarget | null, row: Element): boolean {
   if (!(target instanceof Element)) return false;
   const interactive = target.closest(SESSION_ROW_INTERACTIVE_SELECTOR);
   return interactive !== null && interactive !== row;
@@ -305,6 +310,8 @@ export interface SessionClickModifiers {
   shiftKey: boolean;
   metaKey: boolean;
   ctrlKey: boolean;
+  altKey?: boolean;
+  button?: number;
 }
 
 export type SessionClickHandler = (id: string, modifiers?: SessionClickModifiers) => void;
@@ -624,6 +631,24 @@ export const SessionItem = withSidebarNavigation<SessionItemProps>(function Sess
         shiftKey: e.shiftKey,
         metaKey: e.metaKey,
         ctrlKey: e.ctrlKey,
+        altKey: e.altKey,
+        button: e.button,
+      });
+    },
+    [isEditing, onClick, session.id],
+  );
+
+  const handleAuxClick = useCallback(
+    (e: ReactMouseEvent<HTMLDivElement>) => {
+      if (isEditing || e.button !== 1 || isNestedSessionRowAction(e.target, e.currentTarget)) return;
+      e.preventDefault();
+      e.stopPropagation();
+      onClick(session.id, {
+        shiftKey: e.shiftKey,
+        metaKey: e.metaKey,
+        ctrlKey: e.ctrlKey,
+        altKey: e.altKey,
+        button: e.button,
       });
     },
     [isEditing, onClick, session.id],
@@ -633,7 +658,7 @@ export const SessionItem = withSidebarNavigation<SessionItemProps>(function Sess
     (e: React.MouseEvent) => {
       // 已在编辑态时不重复进入:编辑器内部元素漏拦的 dblclick 冒泡到这里会
       // setEditValue 重置草稿(与 handleClick 的 isEditing 守卫对称)。
-      if (isEditing || navigationOnly) return;
+      if (isEditing || navigationOnly || e.shiftKey || isSidebarNewWindowActivation(e)) return;
       e.stopPropagation();
       e.preventDefault();
       if (remoteWritesBlocked) {
@@ -978,7 +1003,13 @@ export const SessionItem = withSidebarNavigation<SessionItemProps>(function Sess
           makerChatStore.ensureInitialMessages(session.id);
         }
       }}
+      onMouseDown={(e) => {
+        if (!isEditing && !isNestedSessionRowAction(e.target, e.currentTarget)) {
+          preventMiddleClickAutoscroll(e);
+        }
+      }}
       onClick={handleClick}
+      onAuxClick={handleAuxClick}
       onDoubleClick={handleDoubleClick}
       onKeyDown={(e) => {
         // target 守卫:内部按钮(More/Archive/Undo/Edit/Run 等)的 Enter/Space
@@ -989,7 +1020,12 @@ export const SessionItem = withSidebarNavigation<SessionItemProps>(function Sess
         if (e.target !== e.currentTarget) return;
         if (!isEditing && (e.key === 'Enter' || e.key === ' ')) {
           e.preventDefault();
-          onClick(session.id);
+          onClick(session.id, {
+            shiftKey: e.shiftKey,
+            metaKey: e.metaKey,
+            ctrlKey: e.ctrlKey,
+            altKey: e.altKey,
+          });
         }
       }}
       onContextMenu={(e) => {
@@ -1336,6 +1372,7 @@ export const SessionItem = withSidebarNavigation<SessionItemProps>(function Sess
             onRename={handleRenameSelect} onPin={handlePinSelect}
             onArchive={handleArchiveSelect} onUnarchive={handleUnarchiveSelect} onDelete={handleDeleteSelect}
             onOpenInNewWindow={handleOpenInNewWindowSelect}
+            openInNewWindowShortcut={t(getSidebarNewWindowShortcutKey())}
             move={moveToProjectSubmenu} tags={tagMenu} copy={copySessionIdSubmenu} exportShare={exportShareMenuItem}
           />
         </DropdownMenu>

@@ -17324,6 +17324,8 @@
         "moveToProjectRemoteUnsupported": "暂不支持移动远程任务",
         "moveToProjectWorktreeBlocked": "该任务的工作目录是 worktree，暂不支持移动到其他项目",
         "openInNewWindow": "在新窗口打开",
+        "openInNewWindowShortcutMac": "⌘+点击",
+        "openInNewWindowShortcutOther": "Ctrl+点击",
         "exportShare": "导出任务…",
         "exportHtml": "导出为 HTML…",
         "exportHtmlSuccess": "任务已导出为 HTML",

@@ -1,4 +1,4 @@
-import { isCompanionChatTarget } from '../bots/companionChatTarget';
+import { companionWindowBootRoute } from '../bots/companionChatTarget';
 /**
  * SecondaryWindowBootGate — 「在新窗口打开」副窗的启动路由网关。
  * ---------------------------------------------------------------------------
@@ -50,8 +50,9 @@ export function SecondaryWindowBootGate() {
     const active = () => !cancelled && isDataOwnerGenerationCurrent(owner);
     const bootDeviceId = getBootDeviceId();
     const messageClientId = getBootMessageClientId();
+    const companionRoute = companionWindowBootRoute(bootSessionId);
     void (async () => {
-      if (isCompanionChatTarget(bootSessionId)) return bootSessionId;
+      if (companionRoute) return companionRoute;
       if (!bootDeviceId) return resolveSessionRoute(bootSessionId);
 
       const remoteSession = await confirmSessionOrigin(bootSessionId, bootDeviceId, active);
@@ -61,7 +62,7 @@ export function SecondaryWindowBootGate() {
         if (!active()) return;
         navigate(target, {
           replace: true,
-          ...(messageClientId
+          ...(!companionRoute && messageClientId
             ? {
                 state: {
                   searchJump: {

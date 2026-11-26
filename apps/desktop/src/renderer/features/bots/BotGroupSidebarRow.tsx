@@ -1,4 +1,8 @@
 import { companionDragProps } from './companionDragProps';
+import {
+  preventMiddleClickAutoscroll,
+  type SidebarClickModifiers,
+} from '@/lib/sidebarNewWindowActivation';
 import { SIDEBAR_LIST_ROW_ACTIVE_CLASS, SIDEBAR_LIST_ROW_HEIGHT_CLASS } from '@/features/cc-agent/sidebar/listRowStyle';
 import { TeammateRowStatus } from './TeammateStatusDot';
 import { groupTeammateStatus } from './teammateRosterStatus';
@@ -73,7 +77,11 @@ export function BotGroupSidebarRow({
   islandActivity: ReadonlyMap<string, AgentIslandSessionActivity>;
   now: number;
   selected: boolean;
-  onOpenGroup: (groupId: string, reply?: { messageId: string; threadRootId: string }) => void;
+  onOpenGroup: (
+    groupId: string,
+    reply?: { messageId: string; threadRootId: string },
+    event?: SidebarClickModifiers,
+  ) => void;
   onContextMenu?: MouseEventHandler<HTMLButtonElement>;
   onKeyDown?: KeyboardEventHandler<HTMLButtonElement>;
   children?: ReactNode;
@@ -128,9 +136,19 @@ export function BotGroupSidebarRow({
       if (last.messageId) return <button type="button" title={label}
         aria-label={`${t('bots.groupChat.server.thread.viewThread')}: ${label}`}
         onContextMenu={onContextMenu} onKeyDown={onKeyDown}
+        onMouseDown={event => {
+          event.stopPropagation();
+          preventMiddleClickAutoscroll(event);
+        }}
         onClick={event => {
           event.stopPropagation();
-          onOpenGroup(group.id, { messageId: last.messageId!, threadRootId: last.threadRootId! });
+          onOpenGroup(group.id, { messageId: last.messageId!, threadRootId: last.threadRootId! }, event);
+        }}
+        onAuxClick={event => {
+          if (event.button !== 1) return;
+          event.preventDefault();
+          event.stopPropagation();
+          onOpenGroup(group.id, { messageId: last.messageId!, threadRootId: last.threadRootId! }, event);
         }}
         className={cn('pointer-events-auto relative -mb-2 flex min-h-6 min-w-0 flex-1 items-start gap-1 text-left text-12 leading-[1.3334] outline-none hover:underline underline-offset-2 focus-visible:ring-2 focus-visible:ring-ring', mutedClass)}>
         {content}
@@ -224,7 +242,14 @@ export function BotGroupSidebarRow({
     <div className="relative">
     <div
       data-bot-group-id={group.id}
-      onClick={() => onOpenGroup(group.id)}
+      onMouseDown={preventMiddleClickAutoscroll}
+      onClick={(event) => onOpenGroup(group.id, undefined, event)}
+      onAuxClick={(event) => {
+        if (event.button !== 1) return;
+        event.preventDefault();
+        event.stopPropagation();
+        onOpenGroup(group.id, undefined, event);
+      }}
       className={cn(
         'group relative flex w-full min-w-0 items-center gap-2.5 rounded-lg px-2.5 py-2 text-left transition-colors',
         SIDEBAR_LIST_ROW_HEIGHT_CLASS,

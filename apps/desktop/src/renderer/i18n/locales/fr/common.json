@@ -17564,6 +17564,8 @@
         "moveToProjectRemoteUnsupported": "Le déplacement des sessions distantes n'est pas encore pris en charge",
         "moveToProjectWorktreeBlocked": "Le répertoire de travail de cette session est un worktree : elle ne peut pas encore être déplacée vers un autre projet",
         "openInNewWindow": "Ouvrir dans une nouvelle fenêtre",
+        "openInNewWindowShortcutMac": "⌘+clic",
+        "openInNewWindowShortcutOther": "Ctrl+clic",
         "exportShare": "Exporter la session…",
         "exportHtml": "Exporter en HTML…",
         "exportHtmlSuccess": "Session exportée en HTML",

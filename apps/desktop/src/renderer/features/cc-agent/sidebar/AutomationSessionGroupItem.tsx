@@ -30,7 +30,11 @@ import { formatSidebarFutureTime, formatSidebarTime } from '../lib/formatSidebar
 import { scheduleFocusPath } from '@/features/scheduler/lib/scheduleSessionBinding';
 import { BotFollowMark, useSessionFollowers } from '@/features/bots/BotFollowMark';
 import { hasSessionSelectionModifier, SessionItem } from './SessionItem';
-import type { SessionClickHandler } from './SessionItem';
+import type { SessionClickHandler, SessionClickModifiers } from './SessionItem';
+import {
+  isSidebarNewWindowActivation,
+  preventMiddleClickAutoscroll,
+} from '@/lib/sidebarNewWindowActivation';
 import { MENU_ITEM_CLASS } from './menuStyles';
 import {
   useSessionAttentionUrgency,
@@ -362,7 +366,8 @@ export const AutomationSessionGroupItem = withSidebarNavigation<AutomationSessio
         if (
           !collapsedRef.current &&
           !showAllRef.current &&
-          !hasSessionSelectionModifier(modifiers)
+          !hasSessionSelectionModifier(modifiers) &&
+          !(modifiers && isSidebarNewWindowActivation(modifiers))
         ) {
           freezeCurrentLayoutRef.current(id);
         }
@@ -474,9 +479,24 @@ export const AutomationSessionGroupItem = withSidebarNavigation<AutomationSessio
 
     // 点击空白行区域 = 点击标题。展开态打开最新一条;收起且整组是红时打开
     // 贡献红点的那条。行内控件各自 stopPropagation,不会误触发。
-    const openLatestSession = () => {
+    const openLatestSession = (
+      event?: Pick<MouseEvent, 'shiftKey' | 'metaKey' | 'ctrlKey' | 'altKey' | 'button'>,
+    ) => {
       const targetId = headerSessionId;
       if (!targetId) return;
+      const hasClickModifier =
+        event != null &&
+        (event.shiftKey || event.metaKey || event.ctrlKey || event.altKey || event.button === 1);
+      if (hasClickModifier) {
+        onSessionClick(targetId, {
+          shiftKey: event.shiftKey,
+          metaKey: event.metaKey,
+          ctrlKey: event.ctrlKey,
+          altKey: event.altKey,
+          button: event.button,
+        });
+        return;
+      }
       // 仅在展开 + 前 5 条态下冻结当前布局;收起态未读子行随已读状态收回。
       if (!collapsed && !showAll) freezeCurrentLayout(targetId);
       onSessionClick(targetId);
@@ -504,7 +524,18 @@ export const AutomationSessionGroupItem = withSidebarNavigation<AutomationSessio
             会冒泡穿过内部按钮的 stopPropagation(click 语义)造成双触发。键盘可达性由内部
             标题 <button>(Tab focus + Enter/Space)天然提供。 */}
           <div
+            onMouseDown={(event) => {
+              if (!isAutomationGroupInlineAction(event.target)) {
+                preventMiddleClickAutoscroll(event);
+              }
+            }}
             onClick={openLatestSession}
+            onAuxClick={(event) => {
+              if (event.button !== 1 || isAutomationGroupInlineAction(event.target)) return;
+              event.preventDefault();
+              event.stopPropagation();
+              openLatestSession(event);
+            }}
             onContextMenu={(event) => {
               // 整行右键 = 打开「更多操作」同一份菜单(不再另做一份隐形锚点菜单)。
               event.preventDefault();
@@ -613,7 +644,7 @@ export const AutomationSessionGroupItem = withSidebarNavigation<AutomationSessio
                 type="button"
                 onClick={(event) => {
                   event.stopPropagation();
-                  openLatestSession();
+                  openLatestSession(event);
                 }}
                 disabled={!latestSession}
                 className="min-w-0 truncate text-left disabled:cursor-default"

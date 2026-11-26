@@ -11,6 +11,7 @@ import {
   LayoutGrid,
   LayoutList,
   AlertTriangle,
+  AppWindow,
   Archive,
   ArchiveRestore,
   ChevronDown,
@@ -41,8 +42,15 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuSeparator,
+  DropdownMenuShortcut,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
+import {
+  getSidebarNewWindowShortcutKey,
+  isSidebarNewWindowActivation,
+  openTargetInNewWindow,
+  preventMiddleClickAutoscroll,
+} from '@/lib/sidebarNewWindowActivation';
 import { useAgentIslandActivityMap } from '@/state/agentIslandActivity';
 import { useRemoteBots } from './useRemoteBots';
 import { useCompanionCloud } from './companionCloudStore';
@@ -485,10 +493,17 @@ export function TeammatesSection() {
     </DropdownMenu>
   );
 
+  const newWindowShortcut = t(getSidebarNewWindowShortcutKey());
+
   const renderBotContextMenu = (bot: BotProfile, selected: boolean) => renderContextMenu('bot', bot.id, <>
         <DropdownMenuItem onSelect={() => rosterAction(setBotPinned(bot.id, !bot.pinnedAt), 'bots.list.pinFailed')}>
           <Pin size={14} className="mr-2" />
           {t(bot.pinnedAt ? 'bots.list.unpin' : 'bots.list.pin')}
+        </DropdownMenuItem>
+        <DropdownMenuItem onSelect={() => void openTargetInNewWindow(`/bots/${encodeURIComponent(bot.id)}`)}>
+          <AppWindow size={14} className="mr-2" />
+          {t('ccAgent.sidebar.sessionMenu.openInNewWindow')}
+          <DropdownMenuShortcut aria-hidden>{newWindowShortcut}</DropdownMenuShortcut>
         </DropdownMenuItem>
         <DropdownMenuItem
           onSelect={() => {
@@ -527,9 +542,14 @@ export function TeammatesSection() {
   const renderGroupRow = (group: BotGroupSummary) => (
     <BotGroupSidebarRow key={'group:' + group.id} group={group} bots={bots}
       islandActivity={islandActivity} now={now} selected={group.id === selectedGroupId}
-      onOpenGroup={(id, reply) => {
+      onOpenGroup={(id, reply, event) => {
         const query = reply ? '?' + new URLSearchParams(reply).toString() : '';
-        navigate('/bots/groups/' + encodeURIComponent(id) + query);
+        const route = '/bots/groups/' + encodeURIComponent(id) + query;
+        if (event && isSidebarNewWindowActivation(event)) {
+          void openTargetInNewWindow(route);
+          return;
+        }
+        navigate(route);
       }}
       onContextMenu={event => {
         event.preventDefault(); event.stopPropagation();
@@ -542,6 +562,11 @@ export function TeammatesSection() {
         openContextMenu('group', group.id, event.currentTarget, rect.left + 10, rect.bottom);
       }}>
       {renderContextMenu('group', group.id, <>
+        <DropdownMenuItem onSelect={() => void openTargetInNewWindow('/bots/groups/' + encodeURIComponent(group.id))}>
+          <AppWindow size={14} className="mr-2" />
+          {t('ccAgent.sidebar.sessionMenu.openInNewWindow')}
+          <DropdownMenuShortcut aria-hidden>{newWindowShortcut}</DropdownMenuShortcut>
+        </DropdownMenuItem>
         <DropdownMenuItem onSelect={() => navigate('/bots/groups/' + encodeURIComponent(group.id) + '?' + BOT_GROUP_SETTINGS_PARAM + '=1')}>
           <Settings size={14} className="mr-2" />{t('bots.groupChat.settings.title')}
         </DropdownMenuItem>
@@ -675,7 +700,24 @@ export function TeammatesSection() {
                     <button
                       type="button"
                       {...companionDragProps(chatRoute(entry), label)}
-                      onClick={() => { const route = chatRoute(entry); if (route) navigate(route); }}
+                      onMouseDown={preventMiddleClickAutoscroll}
+                      onClick={(event) => {
+                        const route = chatRoute(entry);
+                        if (!route) return;
+                        if (isSidebarNewWindowActivation(event)) {
+                          event.preventDefault();
+                          void openTargetInNewWindow(route);
+                          return;
+                        }
+                        navigate(route);
+                      }}
+                      onAuxClick={(event) => {
+                        if (event.button !== 1) return;
+                        event.preventDefault();
+                        event.stopPropagation();
+                        const route = chatRoute(entry);
+                        if (route) void openTargetInNewWindow(route);
+                      }}
                       aria-label={label}
                       aria-current={selected ? 'page' : undefined}
                       className="relative isolate flex h-10 w-10 shrink-0 items-center justify-center rounded-full outline-none focus-visible:ring-2 focus-visible:ring-ring"
@@ -771,7 +813,13 @@ export function TeammatesSection() {
                   timestamp={formatBotListTimestamp(local
                     ? botListTimestampAt({ lastMessageAt: local.lastMessageAt, working: Boolean(activity) }, now)
                     : 'activityAt' in bot ? bot.activityAt : 0, now, t)}
-                  onOpen={() => navigate(currentCindy.route)}
+                  onOpen={(event) => {
+                    if (event && isSidebarNewWindowActivation(event)) {
+                      void openTargetInNewWindow(currentCindy.route);
+                      return;
+                    }
+                    navigate(currentCindy.route);
+                  }}
                   onSelect={option => navigate(option.route)}
                   onContextMenu={local ? event => {
                     event.preventDefault(); event.stopPropagation();
@@ -796,7 +844,24 @@ export function TeammatesSection() {
                 return (
                   <button key={remoteBotKey(bot)} type="button" aria-current={selected ? 'page' : undefined}
                     {...companionDragProps(chatRoute(entry), bot.name)}
-                    onClick={() => navigate(chatRoute(entry)!)}
+                    onMouseDown={preventMiddleClickAutoscroll}
+                    onClick={(event) => {
+                      const route = chatRoute(entry);
+                      if (!route) return;
+                      if (isSidebarNewWindowActivation(event)) {
+                        event.preventDefault();
+                        void openTargetInNewWindow(route);
+                        return;
+                      }
+                      navigate(route);
+                    }}
+                    onAuxClick={(event) => {
+                      if (event.button !== 1) return;
+                      event.preventDefault();
+                      event.stopPropagation();
+                      const route = chatRoute(entry);
+                      if (route) void openTargetInNewWindow(route);
+                    }}
                     className={cn('relative flex w-full min-w-0 items-center gap-2.5 rounded-lg px-2.5 py-2 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring', SIDEBAR_LIST_ROW_HEIGHT_CLASS, selected ? SIDEBAR_LIST_ROW_ACTIVE_CLASS : 'text-[var(--sidebar-nav-text)] hover:bg-sidebar-item-hover')}>
                     <span className="relative flex shrink-0"><BotAvatar bot={bot} size="row" /></span>
                     <span className="flex min-w-0 flex-1 flex-col gap-0.5">
@@ -860,7 +925,23 @@ export function TeammatesSection() {
                   <button
                     type="button"
                     {...companionDragProps(`/bots/${encodeURIComponent(bot.id)}`, bot.name)}
-                    onClick={() => { const { to, state } = botOpenRoute(bot); if (state) navigate(to, { state }); else navigate(to); }}
+                    onMouseDown={preventMiddleClickAutoscroll}
+                    onClick={(event) => {
+                      if (isSidebarNewWindowActivation(event)) {
+                        event.preventDefault();
+                        void openTargetInNewWindow(`/bots/${encodeURIComponent(bot.id)}`);
+                        return;
+                      }
+                      const { to, state } = botOpenRoute(bot);
+                      if (state) navigate(to, { state });
+                      else navigate(to);
+                    }}
+                    onAuxClick={(event) => {
+                      if (event.button !== 1) return;
+                      event.preventDefault();
+                      event.stopPropagation();
+                      void openTargetInNewWindow(`/bots/${encodeURIComponent(bot.id)}`);
+                    }}
                     aria-current={selected ? 'page' : undefined}
                     onContextMenu={(event) => {
                       event.preventDefault();
@@ -959,7 +1040,22 @@ export function TeammatesSection() {
                         <button
                           type="button"
                           {...companionDragProps(`/bots/${encodeURIComponent(bot.id)}`, bot.name)}
-                          onClick={() => navigate(`/bots/${encodeURIComponent(bot.id)}`)}
+                          onMouseDown={preventMiddleClickAutoscroll}
+                          onClick={(event) => {
+                            const route = `/bots/${encodeURIComponent(bot.id)}`;
+                            if (isSidebarNewWindowActivation(event)) {
+                              event.preventDefault();
+                              void openTargetInNewWindow(route);
+                              return;
+                            }
+                            navigate(route);
+                          }}
+                          onAuxClick={(event) => {
+                            if (event.button !== 1) return;
+                            event.preventDefault();
+                            event.stopPropagation();
+                            void openTargetInNewWindow(`/bots/${encodeURIComponent(bot.id)}`);
+                          }}
                           className="flex min-w-0 flex-1 items-center gap-2.5 rounded-lg px-2.5 py-2 text-left opacity-60"
                         >
                           <BotAvatar bot={bot} size="sm" />

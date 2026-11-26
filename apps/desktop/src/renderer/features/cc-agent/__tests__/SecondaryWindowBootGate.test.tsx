@@ -75,8 +75,13 @@ describe('SecondaryWindowBootGate', () => {
   });
 
   // Unit regression: these sidebar targets have no local task row at window boot.
-  it.each(['/bots/mate', '/bots/groups/group-1', '/bots/remote/mac/mate'])(
-    'opens the dragged conversation %s directly in the secondary window',
+  it.each([
+    '/bots/mate',
+    '/bots/groups/group-1',
+    '/bots/groups/group-1?messageId=40000000-0000-4000-8000-000000000002&threadRootId=40000000-0000-4000-8000-000000000001',
+    '/bots/remote/mac/mate',
+  ])(
+    'opens the sidebar companion or group conversation %s directly in the secondary window',
     async target => {
       mocks.getBootSessionId.mockReturnValue(target);
       mocks.getBootDeviceId.mockReturnValue(null);

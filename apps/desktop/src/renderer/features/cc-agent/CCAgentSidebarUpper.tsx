@@ -276,7 +276,12 @@ import {
   getProjectSessionCollapseLimit,
 } from './lib/sidebarCollapseConfig';
 import { getSessionListCollapseView } from './lib/sessionListCollapse';
-import { hasSessionSelectionModifier, type SessionClickModifiers } from './sidebar/SessionItem';
+import { type SessionClickModifiers } from './sidebar/SessionItem';
+import { isEditableKeyboardTarget } from '@/lib/editableKeyboardTarget';
+import {
+  openTargetInNewWindow,
+  resolveSidebarSessionClickAction,
+} from '@/lib/sidebarNewWindowActivation';
 import { sessionMoveFailureFeedback } from '../../../shared/worktreeMoveGuardError';
 import type { CreateProjectFromTaskResult } from '../../../shared/projectsRoot';
 import { NewProjectFromTaskDialog } from './sidebar/NewProjectFromTaskDialog';
@@ -2546,6 +2551,39 @@ function ExpandedView({
     if (onScheduleMatch || onNewMakerMatch) handleClearSelection();
   }, [onScheduleMatch, onNewMakerMatch, handleClearSelection]);
 
+  useEffect(() => {
+    if (!hasSidebarSelection) return undefined;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (
+        event.key !== 'Escape' ||
+        event.repeat ||
+        event.keyCode === 229 ||
+        event.isComposing ||
+        event.altKey ||
+        event.ctrlKey ||
+        event.metaKey ||
+        event.shiftKey ||
+        event.defaultPrevented
+      ) {
+        return;
+      }
+      if (isEditableKeyboardTarget(event.target)) return;
+      if (
+        event.target instanceof Element &&
+        event.target.closest(
+          '[role="menu"], [role="listbox"], [role="dialog"], [role="alertdialog"], [data-radix-popper-content-wrapper]',
+        )
+      ) {
+        return;
+      }
+      if (document.querySelector('[data-morph-side]')) return;
+      event.preventDefault();
+      handleClearSelection();
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [hasSidebarSelection, handleClearSelection]);
+
 
   // 远程会话的已读回执有两类首发即失的场景,都靠本 memo 的 key 变化驱动重跑补发:
   //  1. 恢复 / 深链直开:effect 先于 remoteProjectsStore 完成 sessionId→deviceId 起源
@@ -2610,57 +2648,37 @@ function ExpandedView({
 
   const handleSessionClick = useCallback(
     async (id: string, modifiers?: SessionClickModifiers) => {
-      if (hasSessionSelectionModifier(modifiers)) {
-        if (modifiers?.shiftKey) {
-          const visibleIds = getVisibleSidebarSessionIds(sidebarScrollRef.current);
-          const visibleIdSet = new Set(visibleIds);
-          const anchorSessionId = selectionAnchorSessionIdRef.current;
-          const anchor =
-            anchorSessionId && visibleIds.includes(anchorSessionId) ? anchorSessionId : id;
-          const anchorIndex = visibleIds.indexOf(anchor);
-          const targetIndex = visibleIds.indexOf(id);
-          const rangeIds =
-            anchorIndex >= 0 && targetIndex >= 0
-              ? visibleIds.slice(
-                  Math.min(anchorIndex, targetIndex),
-                  Math.max(anchorIndex, targetIndex) + 1,
-                )
-              : [id];
-          setSelectedSessionIds((prev) => {
-            const next = modifiers.metaKey || modifiers.ctrlKey ? new Set(prev) : new Set<string>();
-            for (const rangeId of rangeIds) {
-              if (visibleIdSet.has(rangeId)) next.add(rangeId);
-            }
-            return next;
-          });
-          setSelectionAnchorSessionId((prev) => prev ?? id);
-          return;
-        }
-
-        setSelectedSessionIds((prev) => {
-          const next = new Set(prev);
-          if (next.has(id)) {
-            next.delete(id);
-          } else {
-            next.add(id);
-          }
-          return next;
-        });
-        setSelectionAnchorSessionId(id);
+      const action = resolveSidebarSessionClickAction({
+        id,
+        modifiers,
+        selectedIds: selectedSessionIdsRef.current,
+        anchorId: selectionAnchorSessionIdRef.current,
+        getVisibleIds: () => getVisibleSidebarSessionIds(sidebarScrollRef.current),
+      });
+      if (action.kind === 'update-selection') {
+        setSelectedSessionIds(action.selectedIds);
+        setSelectionAnchorSessionId(action.anchorId);
         return;
       }
-
-      if (selectedSessionIdsRef.current.size > 0) {
+      const target = sessionsByIdRef.current.get(id);
+      if (action.kind === 'open-new-window') {
+        if (target && isRemoteSessionWriteBlocked(target)) {
+          toast.warning(t('ccAgent.remoteSession.actionsUnavailable'));
+          return;
+        }
+        void openTargetInNewWindow(id, target?.deviceLinkDeviceId);
+        return;
+      }
+      if (action.clearSelection) {
         setSelectedSessionIds(new Set());
       }
-      setSelectionAnchorSessionId(id);
+      setSelectionAnchorSessionId(action.anchorId);
       // 清点会先于路由更新抹掉 attention。必须先按当前档位钉住,否则
       // ProjectsSection 首次 hold 只能读到 rest,刚打开的完成未读仍会立刻沉底。
       const waiting = new Set(urgentSetRef.current);
       for (const [sessionId, kind] of attentionKindsRef.current) {
         if (kind === 'awaiting' || kind === 'error') waiting.add(sessionId);
       }
-      const target = sessionsByIdRef.current.get(id);
       holdSidebarViewedPriority(
         id,
         sidebarPriorityContext(
@@ -2693,7 +2711,7 @@ function ExpandedView({
       if (import.meta.env.DEV) perfLog.debug(`sidebar:click sid=${id}`); // 纯诊断,生产剔除
       navigate(await resolveSessionRoute(id, target));
     },
-    [navigate, clearNotification, markAutomationSessionRunsRead],
+    [navigate, clearNotification, markAutomationSessionRunsRead, t],
   );
 
   /* ---- mod+1..9 快速切换对话 + 按住修饰键浮现序号徽标(复刻 Codex 桌面版) ----

@@ -779,4 +779,41 @@ describe('topic reply sidebar entry', () => {
     expect(screen.getByTestId('bot-group-running')).toBeTruthy();
     expect(screen.queryByRole('button', { name: /bots.groupChat.server.thread.viewThread/ })).toBeNull();
   });
+
+  it('opens a group chat or thread reply in a new window on primary-mod click, middle click, and context menu', async () => {
+    const openSessionInNewWindow = vi.fn(async () => undefined);
+    const prevApi = window.electronAPI;
+    (window as unknown as { electronAPI: unknown }).electronAPI = {
+      ...(prevApi as unknown as Record<string, unknown>),
+      platform: 'darwin',
+      maker: {
+        ...((prevApi as { maker?: Record<string, unknown> } | undefined)?.maker ?? {}),
+        openSessionInNewWindow,
+      },
+    };
+    try {
+      mocks.groups = [group({ lastMessage: { ...group().lastMessage!, messageId, threadRootId } })];
+      await renderSidebar();
+      const row = screen.getByRole('button', { name: '周末出游' });
+      const topic = screen.getByRole('button', { name: /bots.groupChat.server.thread.viewThread/ });
+
+      fireEvent.click(row, { metaKey: true });
+      fireEvent(topic, new MouseEvent('auxclick', { bubbles: true, button: 1 }));
+      expect(openSessionInNewWindow).toHaveBeenNthCalledWith(1, '/bots/groups/g1', undefined, undefined);
+      expect(openSessionInNewWindow).toHaveBeenNthCalledWith(
+        2,
+        `/bots/groups/g1?messageId=${messageId}&threadRootId=${threadRootId}`,
+        undefined,
+        undefined,
+      );
+      expect(mocks.navigate).not.toHaveBeenCalled();
+
+      fireEvent.contextMenu(row);
+      const menuItem = await screen.findByRole('menuitem', { name: 'ccAgent.sidebar.sessionMenu.openInNewWindow' });
+      fireEvent.click(menuItem);
+      expect(openSessionInNewWindow).toHaveBeenNthCalledWith(3, '/bots/groups/g1', undefined, undefined);
+    } finally {
+      (window as unknown as { electronAPI: unknown }).electronAPI = prevApi;
+    }
+  });
 });
