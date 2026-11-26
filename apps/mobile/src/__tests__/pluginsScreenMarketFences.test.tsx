@@ -5,7 +5,7 @@ import { createRoot } from "react-dom/client";
 import { describe, expect, it, vi } from "vitest";
 import * as expoCrypto from "expo-crypto";
 import PluginsScreen from "@/plugins/PluginsScreen";
-import { __retainedForTests, usePluginCheckConclusions, usePluginManagement, usePluginPendingChecks } from "@/plugins/usePluginManagement";
+import { __retainedForTests, retryPluginCheckReadback, usePluginCheckConclusions, usePluginManagement, usePluginPendingChecks } from "@/plugins/usePluginManagement";
 import { PluginPendingChecksSheet } from "@/plugins/PluginPendingChecksSheet";
 import { pluginManagementSlotFor, pluginOperationHold } from "@/plugins/pluginManagementSlot";
 /**
@@ -2327,17 +2327,21 @@ describe("market read fences and lost-receipt facts", () => {
       it.each([
         ["the computer drops and comes back", async () => { fixture.online = false; await rerender(); fixture.online = true; await rerender(); }],
         ["the app goes to the background and comes back", async () => { await appState("background"); await appState("active"); }],
-      ] as const)("a consent opened with \"View and decide\" is on screen; %s: nothing is written for it, and it is shown again", async (_name, happens) => {
+      ] as const)("a consent opened with \"View and decide\" is on screen; %s: nothing is written for it; found again, it waits in the list for \"View and decide\"", async (_name, happens) => {
         const world: World = { ...fresh(), loseBegin: true, operation: () => { throw hostError("INVALID_RESPONSE"); } };
         const requests = wire(world);
         await consentFromViewAndDecide(world);
         const before = writes(requests).length;
+        const written = () => writes(requests).slice(before).filter((write) => !write.startsWith("operation"));
         await happens();
         await settle(40);
-        expect({ written: writes(requests).slice(before).filter((write) => !write.startsWith("operation")), consent: !!byId("plugins.management.allow") }).toEqual({ written: [], consent: true });
-        // Still the person's to answer: Allow writes the one answer.
-        await click("plugins.management.allow");
-        expect(writes(requests).slice(before).filter((write) => !write.startsWith("operation"))).toEqual(["answer:screen-operation"]);
+        // Not cancelled, and not put on screen by itself: read-only in the list until the person opens it.
+        expect({ written: written(), consent: !!byId("plugins.management.allow"), waits: __retainedForTests.checks().map((check: any) => [check.state.outcome, check.awaitingYou]) })
+          .toEqual({ written: [], consent: false, waits: [["confirmation", true]] });
+        if (!byId("plugins.checks")) await click("plugins.slotHolder.show");
+        await click("plugins.checks.decide");
+        await click("plugins.management.allow");                         // still the person's to answer: one answer
+        expect(written()).toEqual(["answer:screen-operation"]);
       });
       it("control: the market row's own consent is on screen; the computer drops and comes back: nothing is written, the consent is shown again", async () => {
         const world = fresh();
@@ -2354,6 +2358,88 @@ describe("market read fences and lost-receipt facts", () => {
         fixture.online = true; await rerender();
         await settle(40);
         expect({ written: writes(requests).slice(before).filter((write) => !write.startsWith("operation")), consent: !!byId("plugins.management.allow") }).toEqual({ written: [], consent: true });
+      });
+      // Pre-push review, round 9 (each failed on 30ef70ed32). The rule behind them: a consent counts as shown only while
+      // it stays on screen. Once its result is unknown for now (the computer dropped, the app was in the background,
+      // lookups stopped) no sheet shows it; a view that goes away after that (the row ending by itself, the person going
+      // back, another consent opened) did not leave a consent, so the same consent found again is not cancelled.
+      it.each([
+        ["the list's \"Check result\"", async () => { await click("plugins.slotHolder.show"); await click("plugins.checks.verify"); }],
+        ["the computer drops and comes back", async () => { fixture.online = false; await rerender(); fixture.online = true; await rerender(); }],
+      ] as const)("the market row's own consent is on screen; the app goes to the background and back, and the lookup on return is a protocol error (lookups stop, the row ends); then %s finds the consent again: nothing is written for it", async (_name, found) => {
+        const world: World = fresh();
+        const requests = wire(world);
+        fixture.platform = "android";
+        fixture.realConfirmation = true;
+        await act(async () => root.render(createElement(PluginsScreen)));
+        await act(async () => fixture.props.get("segment").onChange("market"));
+        await settle(14);
+        await click(`plugins.market.install.${demo.pluginId}`);
+        expect(!!byId("plugins.management.allow")).toBe(true);              // the row's own consent, on screen, unanswered
+        world.operation = () => { throw hostError("INVALID_RESPONSE"); };
+        await appState("background"); await appState("active");
+        await settle(40);
+        expect({ consent: !!byId("plugins.management.allow"), checks: __retainedForTests.checks().map((check: any) => [check.state.outcome, check.waiting]), banner: banner() })
+          .toEqual({ consent: false, checks: [["unknown", true]], banner: expect.stringContaining("plugins.checks.waitingOne") });
+        world.operation = undefined;                                        // the computer still shows the same consent
+        const before = writes(requests).length;
+        await found();
+        await settle(40);
+        expect({ written: writes(requests).slice(before).filter((write) => !write.startsWith("operation")), waits: __retainedForTests.checks().map((check: any) => [check.state.outcome, check.awaitingYou]) })
+          .toEqual({ written: [], waits: [["confirmation", true]] });
+      });
+      it("two computers; Demo's consent on Mac is open from \"View and decide\"; Mac drops; the person opens Notes' consent on PC with \"View and decide\"; Mac comes back: nothing is written for Demo's consent", async () => {
+        let n = 0;
+        const spy = vi.spyOn(expoCrypto, "randomUUID").mockImplementation(() => `operation-000${++n}` as any);
+        try {
+          const world: World = { ...fresh(), loseBegin: true, operation: () => { throw hostError("INVALID_RESPONSE"); } };
+          const requests = wire(world);
+          fixture.platform = "android";
+          fixture.realConfirmation = true;
+          fixture.extraDevices = [{ deviceId: "pc", name: "PC", platform: "win32", remoteControlEnabled: true }];
+          await act(async () => root.render(createElement(PluginsScreen)));
+          await act(async () => fixture.props.get("segment").onChange("market"));
+          await settle(14);
+          await click(`plugins.market.install.${demo.pluginId}`);           // Mac: begin's reply is lost
+          await click(`plugins.market.install.${demo.pluginId}`);           // "Check result": a protocol error, lookups stop
+          await click("plugins.market.computer");
+          await click("plugins.market.computer.pc");
+          await click(`plugins.market.install.${notes.pluginId}`);          // PC: the same for Notes
+          await click(`plugins.market.install.${notes.pluginId}`);
+          expect(__retainedForTests.checks().map((check: any) => [check.operationId, check.who.deviceId, check.waiting]))
+            .toEqual([["operation-0001", "mac", true], ["operation-0002", "pc", true]]);
+          world.operation = undefined;                                      // both computers show their consent
+          const inLine = (operationId: string, id: string) => element.querySelector(`[data-testid="plugins.checks.item.${operationId}"] [data-testid="${id}"]`) as HTMLButtonElement;
+          const press = async (operationId: string, id: string) => { expect(inLine(operationId, id), `${id} of ${operationId}`).not.toBeNull(); expect(inLine(operationId, id).disabled).toBe(false);
+            await act(async () => inLine(operationId, id).click()); await settle(20); };
+          await click("plugins.slotHolder.show");
+          await press("operation-0001", "plugins.checks.verify");
+          await press("operation-0002", "plugins.checks.verify");
+          await press("operation-0001", "plugins.checks.decide");           // Demo's consent (Mac) is on screen
+          fixture.offlineDevices.add("mac"); await rerender();              // Mac drops: unknown for now
+          if (!byId("plugins.checks")) await click("plugins.slotHolder.show");
+          await press("operation-0002", "plugins.checks.decide");           // the person opens Notes' consent (PC)
+          const before = writes(requests).length;
+          fixture.offlineDevices.delete("mac"); await rerender();           // Mac is back: its consent is found again
+          await settle(40);
+          expect(writes(requests).slice(before).filter((write) => !write.startsWith("operation"))).toEqual([]);
+        } finally { spy.mockRestore(); }
+      });
+      it("a consent opened with \"View and decide\" is on screen; Allow is pressed and its reply is lost; a later lookup finds a new consent (another request id): it waits for \"View and decide\", it is not put on screen by itself", async () => {
+        const world: World = { ...fresh(), loseBegin: true, operation: () => { throw hostError("INVALID_RESPONSE"); } };
+        const requests = wire(world);
+        await consentFromViewAndDecide(world);
+        world.loseAnswer = true; world.answerInstallsNothing = true;
+        world.operation = (operationId: string) => ({ ...consentFor(operationId, demo), consent: { ...consentFor(operationId, demo).consent, requestId: "consent-2" } });
+        const before = writes(requests).length;
+        await click("plugins.management.allow");                             // the answer is written; its reply is lost
+        expect(__retainedForTests.checks().map((check: any) => check.state.outcome)).toEqual(["unknown"]);
+        fixture.online = false; await rerender(); fixture.online = true; await rerender();   // looked up again: a second consent
+        await settle(40);
+        const check: any = __retainedForTests.checks()[0];
+        expect({ request: check.state.receipt?.consent?.requestId, written: writes(requests).slice(before).filter((write) => !write.startsWith("operation")),
+          onScreenByItself: !!byId("plugins.management.allow"), waitsForViewAndDecide: check.controller.consentUnseen() })
+          .toEqual({ request: "consent-2", written: ["answer:screen-operation"], onScreenByItself: false, waitsForViewAndDecide: true });
       });
       const installedRow = () => ({ key: JSON.stringify(["mac", "plugins", "plugin", "_root__demo"]), host: { deviceId: "mac", deviceName: "Mac" },
         item: { ref: { collectionId: "plugins", kind: "plugin", id: "_root__demo" }, revision: "1", display: { title: "Demo" }, actions: [{ id: "disable", label: "Enabled" }] } });
@@ -2772,6 +2858,23 @@ describe("market read fences and lost-receipt facts", () => {
         expect({ detail: detailText() !== null, installed: (detailText() ?? "").includes("plugins.market.alreadyInstalled"), install: allById("plugins.market.detailInstall").length })
           .toEqual({ detail: true, installed: true, install: 0 });
       }));
+      // Pre-push review, round 9 (the first row failed on 30ef70ed32: the consent was cancelled once the computer was
+      // back, though no consent was on screen when the person went back).
+      it.each([["goes back to the list", true], ["control: stays on the detail", false]] as const)("Demo's update shows its consent from the installed detail; the computer drops (no consent on screen now); the person %s; the computer comes back: nothing is written for it", async (_name, leaves) => numbered(async () => {
+        const world = computer();
+        fixture.platform = "android"; fixture.width = 390; fixture.realConfirmation = true;
+        await act(async () => root.render(createElement(PluginsScreen)));
+        await settle(14);
+        await act(async () => fixture.props.get("pressable.plugins.detailsFor").onPress());
+        await settle(20);
+        await act(async () => { void menu().props.onAction("update"); });
+        await settle(30);
+        expect({ writes: writes(world.requests), update: world.ops.get("operation-0001")!.phase }).toEqual({ writes: ["begin:operation-0001"], update: "confirmation" });
+        fixture.online = false; await act(async () => root.render(createElement(PluginsScreen))); await settle(20);
+        if (leaves) { await act(async () => fixture.props.get("header").onBack()); await settle(14); }
+        fixture.online = true; await act(async () => root.render(createElement(PluginsScreen))); await settle(40);
+        expect({ writes: writes(world.requests), update: world.ops.get("operation-0001")!.phase }).toEqual({ writes: ["begin:operation-0001"], update: "confirmation" });
+      }));
     });
 
     /* 测试价值（推送前自查第二轮，2026-11-26：已装详情里的更新与页面批准也只看那一次读取的结论）
@@ -2807,6 +2910,7 @@ describe("market read fences and lost-receipt facts", () => {
         const commit = (request: any) => {
           world.committed = true;
           if (/approve/.test(request.input?.kind ?? "")) { plugin.uiCapabilityApproved = true; return; }
+          if (request.input?.kind === "uninstall") { snapshot.ghosts.splice(0); Object.assign(market, { installState: "not-installed" }); return; }
           plugin.manifest.version = "2";
           Object.assign(market, { installState: "installed" }, world.attribution === "self" ? { installedOperationId: world.operationId, installedOperationAttribution: "self" }
             : world.attribution === "unattributed" ? { installedOperationAttribution: "unattributed" } : {});
@@ -3114,6 +3218,57 @@ describe("market read fences and lost-receipt facts", () => {
         expect({ detailReads: detailReads(), snapshots: snapshots(world) - before, results: results() })
           .toEqual({ detailReads: ["mac:demo"], snapshots: 0, results: [{ entry: "update", result: "succeeded", readback: "verified", told: true }] });
       });
+      // Pre-push review, round 9 (the rows after each control failed from 8a456c9f59 on, and pass on c6efda5691): the
+      // result comes with the write's own reply after the connection moved on meanwhile (the app left the foreground
+      // for a moment while the computer worked). The read after the result answered, but was issued with the request's
+      // old token and thrown away: the detail kept the old version and its Update; an uninstalled plugin's detail stayed.
+      const whileTheComputerWorks = () => {
+        let release!: () => void;
+        const working = new Promise<void>((resolve) => { release = resolve; });
+        const original = fixture.wire.getMockImplementation()!;
+        fixture.wire.mockImplementation(async (device: string, channel: string, args: any[], options: any) => {
+          const reply = await original(device, channel, args, options);                   // begin is written and reaches the computer
+          if (args?.[0]?.actionId === "management:begin") await working;                  // its reply comes when the computer is done
+          return reply;
+        });
+        return release;
+      };
+      const blipInBackground = async () => {
+        await act(async () => { fixture.appStateListeners.forEach((listener) => listener("background")); }); await settle(14);
+        await act(async () => { fixture.appStateListeners.forEach((listener) => listener("active")); }); await settle(14);
+      };
+      it.each([["control: no blip", false], ["the app leaves the foreground for a moment while the computer updates", true]] as const)(
+        "update from the installed detail; %s; begin's reply says succeeded and every read answers: the detail is brought up to date and nothing stays listed", async (_name, blip) => {
+          const world = host();
+          fixture.read.mockImplementation(async () => ({ ...row().item, blocks: [{ id: "version", fallbackMarkdown: world.plugin.manifest.version }] }));
+          world.operation = () => ({ operationId: world.operationId, phase: "running" });
+          await open();
+          const release = whileTheComputerWorks();
+          await update();
+          if (blip) await blipInBackground();
+          fixture.read.mockClear();
+          await act(async () => { release(); });
+          await settle(40);
+          expect({ actions: menuActions(), detailReadAgain: detailReads().length > 0, version: fixture.props.get("detail").model.version, results: results(), banner: banner() })
+            .toEqual({ actions: ["uninstall"], detailReadAgain: true, version: "2", results: [{ entry: "update", result: "succeeded", readback: "verified", told: true }], banner: "" });
+        });
+      it.each([["control: no blip", false], ["the app leaves the foreground for a moment while the computer uninstalls", true]] as const)(
+        "uninstall from the installed detail; %s; begin's reply says succeeded and every read answers: the detail of the plugin that is gone closes", async (_name, blip) => {
+          const world = host();
+          world.operation = () => ({ operationId: world.operationId, phase: "running" });
+          await open();
+          const release = whileTheComputerWorks();
+          fixture.alert.mockClear();
+          await act(async () => { void menu().props.onAction("uninstall"); });
+          await act(async () => fixture.alert.mock.calls.at(-1)![2][1].onPress());
+          await settle(20);
+          if (blip) await blipInBackground();
+          await act(async () => { release(); });
+          await settle(40);
+          fixture.props.delete("detail");
+          await rerender();
+          expect({ results: results().map((item: any) => item.result), detailStillOpen: fixture.props.has("detail") }).toEqual({ results: ["succeeded"], detailStillOpen: false });
+        });
       // Pre-push review, round 8 (failed on 251f7dd5fc: opening the plugin's own page moved the selection on without
       // reading the detail, and was taken for a detail read).
       it.each([["wide", 900], ["narrow", 390]] as const)("%s: update; the result is in and the reads after it are out; the person opens the plugin's own page; the reads land: no detail was read, so the result is not seen yet", async (_name, width) => {
@@ -3193,5 +3348,83 @@ describe("market read fences and lost-receipt facts", () => {
         expect(shownMarket().items.map((row: any) => row.name)).toEqual(["Found"]);
       } finally { vi.useRealTimers(); }
     });
+  });
+});
+
+/* 测试价值（推送前自查第九轮，2026-11-26：补上两条没有用例守着的规则）
+ * - 生产入口与可观察结果：生产的 usePluginManagement / usePluginPendingChecks / 记录存储 + client / controller，只替换传输；
+ *   观察这笔成功的结论。
+ * - 依据：plugin-mobile-implementation.md「成功之后只有一个读取方 · 读取」：同一操作再读时只认最新发出的那次；电脑在读取
+ *   还没回来时离线，这次读取当场按失败结束，它自己的回包后到也不算。
+ * - 现有覆盖缺口：去掉 `readBack` 里「只认最新一次」的判断，全部插件用例仍然通过。
+ * - 最小失败输入：见各用例名（现行实现通过；去掉上述判断后失败）。tier: unit（jsdom，内存 Host）。
+ */
+describe("the store's read of a success: only the newest read issued settles it", () => {
+  const detail: any = { pluginId: "market/demo", ghostId: "demo", namespace: null, name: "Demo", releaseId: "r1", version: "1",
+    sourceType: "server", installState: "not-installed", manifest: { schemaVersion: 3, id: "demo", name: "Demo", version: "1" },
+    description: null, author: null, scope: "public", organizationId: null, defaultInstall: false, publishedAt: "", icon: null,
+    enabled: null, sourceMarketName: null };
+  const ghost: any = { instanceKey: "_root__demo", namespace: null, enabled: true, manifest: detail.manifest,
+    approval: { state: "approved", revision: "12345678-1234-4123-8123-123456789abc" } };
+  let management: any;
+  function View() { management = usePluginManagement("mac", true, true, "probe", false, "installed"); return null; }
+  function Page({ online, view }: { online: boolean; view: boolean }) {
+    usePluginPendingChecks(() => online, true, ["mac"]);
+    usePluginCheckConclusions();
+    return view ? createElement(View) : null;
+  }
+  /** A computer that installs on begin; every installed read after it is held until the test answers it. */
+  async function installed() {
+    const host = { there: false };
+    const reads: Array<(ok: boolean) => void> = [];
+    let held = false;
+    const facts = () => ({ version: 1, ghosts: host.there ? [ghost] : [],
+      market: { items: host.there ? [{ ...detail, installState: "installed", installedOperationId: "screen-operation", installedOperationAttribution: "self" }] : [],
+        unavailableReason: null, customSourceNames: [], unavailableCustomSourceNames: [] } });
+    fixture.realManagement = true;
+    fixture.wire.mockImplementation(async (_device: string, channel: string, args?: any[], options?: any) => transportSend(options, async () => {
+      if (channel.endsWith(":manifest")) return { protocolVersion: 1, collections: [{ id: "plugins", actions: [{ id: "management:snapshot", label: "Manage" }] }] };
+      const request = args?.[0] ?? {};
+      if (request.actionId === "management:snapshot") {
+        if (!held) return { effects: [], result: facts() };
+        return new Promise((resolve, reject) => { reads.push((ok) => ok ? resolve({ effects: [], result: facts() }) : reject(new Error("[TIMEOUT] remote invoke timed out"))); });
+      }
+      if (request.actionId === "management:market-detail") return { effects: [], result: detail };
+      if (request.actionId === "management:begin") { held = true; host.there = true; return { effects: [], result: { operationId: request.input.operationId, phase: "succeeded" } }; }
+      throw new Error("unexpected " + request.actionId);
+    }));
+    const page = { online: true, view: true };
+    const render = async () => { await act(async () => root.render(createElement(Page, { ...page }))); await settle(10); };
+    await render();
+    const slot = pluginManagementSlotFor();
+    const token = slot.tryAcquire("market-install", { name: "Demo", deviceId: "mac", deviceName: "Mac", pluginId: detail.pluginId, ghostId: "demo" })!;
+    await act(async () => { void management.controller.install(detail, undefined, pluginOperationHold(slot, token)); });
+    await settle(12);
+    // reads[0] is the store's own read of the success, reads[1] the controller's; the view (and its controller) goes.
+    expect(reads).toHaveLength(2);
+    reads[1](true);
+    page.view = false; await render();
+    const answer = async (index: number, ok = true) => { await act(async () => { reads[index](ok); }); await settle(10); };
+    const conclusion = () => { const [item]: any[] = __retainedForTests.conclusions(); return { result: item.result, readback: item.readback, instanceKey: item.instanceKey }; };
+    return { host, reads, page, render, answer, conclusion };
+  }
+  it("\"Read again\" while the first read is out; the newer read says the plugin is gone; the first read's reply (still proving it) lands last: gone", async () => {
+    const w = await installed();
+    await act(async () => { void retryPluginCheckReadback("screen-operation"); });
+    await settle(10);
+    expect(w.reads).toHaveLength(3);
+    w.host.there = false;
+    await w.answer(2);                       // the newest read: uninstalled since
+    expect(w.conclusion()).toEqual({ result: "succeeded", readback: "gone", instanceKey: undefined });
+    w.host.there = true;
+    await w.answer(0);                       // the first read's reply lands last
+    expect(w.conclusion()).toEqual({ result: "succeeded", readback: "gone", instanceKey: undefined });
+  });
+  it("the computer goes offline while the read is out (it ends as not read); that read's own reply lands after all: still not read", async () => {
+    const w = await installed();
+    w.page.online = false; await w.render();
+    expect(w.conclusion()).toEqual({ result: "succeeded", readback: "failed", instanceKey: undefined });
+    await w.answer(0);
+    expect(w.conclusion()).toEqual({ result: "succeeded", readback: "failed", instanceKey: undefined });
   });
 });

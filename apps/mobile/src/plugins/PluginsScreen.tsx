@@ -994,11 +994,11 @@ function PluginDirectory() {
     return decidingCheck.view();
   }, [decidingCheck?.operationId]);
   useEffect(() => {
-    // The sheet goes once the operation moved on (answered, a final result). Not while its result is only unknown for
-    // now (the computer dropped, the app was in the background): closing the sheet here would be the page leaving a
-    // consent the person has on screen, which cancels it once it is found again; it shows again when it is.
-    if (decidingCheck && decidingCheck.state.outcome !== "confirmation" && decidingCheck.state.outcome !== "unknown"
-      && !decidingCheck.state.busy) setDeciding(null);
+    // The sheet goes once the consent is no longer what the computer shows (answered, a final result, or unknown for
+    // now: the computer dropped, the app was in the background). That is not the person leaving a consent: the
+    // controller no longer counts it as shown then, so the same consent found again is read-only in the list
+    // ("View and decide") and nothing cancels it.
+    if (decidingCheck && decidingCheck.state.outcome !== "confirmation" && !decidingCheck.state.busy) setDeciding(null);
   }, [decidingCheck?.state.outcome, decidingCheck?.state.busy]);
   // DEV visual mock only: cindy://plugins?checks=<state> opens the list of pending checks in that state.
   useEffect(() => {

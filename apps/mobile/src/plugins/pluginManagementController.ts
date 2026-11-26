@@ -274,6 +274,11 @@ export function createPluginManagementController(client: PluginManagementClient,
     state = { ...state, ...patch };
     const requestId = state.receipt?.consent?.requestId;
     state.answerHeld = requestId && (answers.has(requestId) || cancelling) ? requestId : null;
+    // A consent counts as shown only while it stays on screen. Once the result is something else (also only unknown
+    // for now: the computer dropped, the app was in the background, lookups stopped), no sheet shows it any more; a
+    // view that goes away after that did not leave a consent, so the same consent found again later is not cancelled
+    // for it. The sheet that puts it on screen again marks it again (`markConsentShown`).
+    if (state.outcome !== 'confirmation') shownConsent = null;
     // Facts about a missing receipt belong to that unknown result only.
     if ((patch.outcome !== undefined && patch.outcome !== 'unknown') || patch.operationId !== undefined) {
       state.missingReceiptFacts = null;
@@ -421,7 +426,11 @@ export function createPluginManagementController(client: PluginManagementClient,
       // A cancel racing commit must still show succeeded. Refresh facts, without changing the receipt on read failure.
       // The read settles `finalReadback` only where its snapshot is published (publishSnapshot / readDone).
       stopPolling();
-      const readback = readSnapshot(token), readbackSequence = snapshotSequence;
+      // Read as of now, not as of the request that brought the result: a receipt lands by its operation id whatever the
+      // connection did since (the app was in the background for a moment, the computer dropped and came back), and so
+      // must the read that follows it. With the request's own token that read was thrown away and the result's read
+      // counted as failed, though every read had answered.
+      const readback = readSnapshot(epoch), readbackSequence = snapshotSequence;
       try {
         await readback;
       } catch (error) {
