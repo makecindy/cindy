@@ -16631,7 +16631,7 @@
       "REMOTE_WORKDIR_UNAVAILABLE": "El directorio de trabajo remoto no está disponible. Verifica que la carpeta aún exista en esa computadora y vuelve a intentarlo.",
       "REMOTE_OPTIMISTIC_SESSION_STATE_UNAVAILABLE": "La computadora aún no puede confirmar si se envió este mensaje. Espera un momento y vuelve a intentarlo. No envíes el mismo mensaje dos veces.",
       "REMOTE_AGENT_UNAVAILABLE": "No se pudo comunicar con la computadora que ejecuta el Agent. Revisa los detalles del error.",
-      "REMOTE_AGENT_TIMEOUT": "Se agotó el tiempo de espera de la computadora que ejecuta el Agent. El resultado es desconocido. Revisa la tarea antes de volver a intentarlo.",
+      "REMOTE_AGENT_TIMEOUT": "El equipo que ejecuta el Agent aún no ha respondido. Revisa el progreso de la tarea. Si sigue en curso o ya ha terminado, no hace falta volver a intentarlo.",
       "REMOTE_AGENT_LINK_BUSY": "La comunicación con la computadora que ejecuta el Agent está saturada. Espera un momento antes de volver a intentarlo.",
       "REMOTE_AGENT_UNRESPONSIVE": "La computadora que ejecuta el Agent no respondió en varios intentos, por lo que las llamadas se pausaron temporalmente. Espera un momento antes de volver a intentarlo.",
       "REMOTE_AGENT_OFFLINE": "La computadora que ejecuta el Agent está sin conexión. Vuelve a intentarlo cuando se conecte de nuevo.",
