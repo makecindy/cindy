@@ -11971,6 +11971,8 @@
       },
       "notice": {
         "memberJoined": "{{name}}入群议",
+        "memberJoinedList": "{{names}}入群议",
+        "memberJoinedSummary": "{{names}}及余{{others}}人入群议",
         "memberFailed": "{{name}}此番未能回复",
         "memberTimeout": "{{name}}久未回复，此番暂略之",
         "memberUnavailable": "{{name}}今不可用，此番未发言",

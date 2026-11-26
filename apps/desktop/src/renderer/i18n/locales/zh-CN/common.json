@@ -11971,6 +11971,8 @@
       },
       "notice": {
         "memberJoined": "{{name}}加入了群聊",
+        "memberJoinedList": "{{names}}加入了群聊",
+        "memberJoinedSummary": "{{names}} 及另外 {{others}} 人加入了群聊",
         "memberFailed": "{{name}}这次没能回复",
         "memberTimeout": "{{name}}太久没有回复，这次先跳过",
         "memberUnavailable": "{{name}}现在不可用，这次没有发言",

@@ -12017,6 +12017,8 @@
       },
       "notice": {
         "memberJoined": "{{name}} ist der Gruppe beigetreten",
+        "memberJoinedList": "{{names}} sind der Gruppe beigetreten",
+        "memberJoinedSummary": "{{names}} und {{others}} weitere sind der Gruppe beigetreten",
         "memberFailed": "{{name}} konnte diesmal nicht antworten",
         "memberTimeout": "{{name}} hat zu lange für die Antwort gebraucht und wurde diesmal übersprungen",
         "memberUnavailable": "{{name}} ist nicht verfügbar und hat diesmal nicht gesprochen",

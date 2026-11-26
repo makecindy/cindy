@@ -1109,6 +1109,36 @@ describe('group timeline', () => {
     expect(all('botGroup.message.bot')).toHaveLength(0);
   });
 
+  it('collapses consecutive joined notices into one line and expands inline for 3+ members', async () => {
+    const joined = (id: string, sequence: number, authorName: string) => message(id, sequence, {
+      kind: 'notice', authorKind: 'system', authorName, authorBotId: null, noticeCode: 'member-joined', content: 'Fallback text',
+    });
+    await render(group({
+      messages: [
+        joined('j1', 1, 'Alice'),
+        joined('j2', 2, 'Bob'),
+        message('m1', 3, { content: 'Welcome' }),
+        joined('j3', 4, 'Carol'),
+        joined('j4', 5, 'Dave'),
+        joined('j5', 6, 'Carol'),
+        joined('j6', 7, 'Eve'),
+      ],
+    }));
+    expect(all('botGroup.notice').map(entry => entry.textContent)).toEqual([
+      'groupChat.notice.memberJoinedList(names=AlicegroupChat.memberSeparatorBob)',
+      'groupChat.notice.memberJoinedSummary(names=CarolgroupChat.memberSeparatorDave,others=1)',
+    ]);
+    expect(all('botGroup.notice.joinedSummary')).toHaveLength(1);
+    await click('botGroup.notice.joinedSummary');
+    expect(all('botGroup.notice')[1]?.textContent).toBe(
+      'groupChat.notice.memberJoinedList(names=CarolgroupChat.memberSeparatorDavegroupChat.memberSeparatorEve)',
+    );
+    await click('botGroup.notice.joinedSummary');
+    expect(all('botGroup.notice')[1]?.textContent).toBe(
+      'groupChat.notice.memberJoinedSummary(names=CarolgroupChat.memberSeparatorDave,others=1)',
+    );
+  });
+
   // #6835: unit screen entry must prioritize the limit over the lane-unavailable fallback.
   it.each(['REMOTE_DEVICE_LIMIT', 'REMOTE_TOTAL_LIMIT'] as const)('renders lane failure %s on mobile', async runtimeFailureCode => {
     await render(group({ messages: [message('failure', 1, { kind: 'notice', authorKind: 'system',

@@ -46,6 +46,8 @@ const mocks = vi.hoisted(() => ({
   // Keep translation identity stable so attachment effects do not reload on every render.
   t: (key: string, options?: Record<string, unknown>) =>
     key === 'bots.groupChat.assistant.actingFor' ? `${options?.name} · for ${options?.person}`
+      : key === 'bots.groupChat.notice.memberJoinedSummary' ? `${key}:${String(options?.names)}:${String(options?.others)}`
+      : key === 'bots.groupChat.notice.memberJoinedList' ? `${key}:${String(options?.names)}`
       : options && 'name' in options ? `${key}:${String(options.name)}`
       : key === 'bots.groupChat.memberCount' ? `${key}:${String(options?.count)}` : key,
   groupId: 'g1',
@@ -1718,6 +1720,40 @@ describe('BotGroupChatView', () => {
     expect(notice.closest('article')).toBeNull();
     expect(screen.queryByText('Fallback text')).toBeNull();
     expect(mocks.sendBotGroupMessage).not.toHaveBeenCalled();
+  });
+
+  it('collapses consecutive joined notices into one line and expands inline for 3+ members', async () => {
+    const joined = (id: string, sequence: number, authorName: string) => msg({
+      id, sequence, kind: 'notice', authorKind: 'system', authorName, authorBotId: null,
+      noticeCode: 'member-joined', content: 'Fallback text', createdAt: 1_700_000_000_000 + sequence * 1000,
+    });
+    mocks.getBotGroup.mockResolvedValue({
+      ok: true,
+      group: detail({
+        messages: [
+          joined('j1', 1, 'Alice'),
+          joined('j2', 2, 'Bob'),
+          msg({ id: 'm1', sequence: 3, kind: 'message', authorKind: 'user', authorName: 'Me', content: 'Welcome' }),
+          joined('j3', 4, 'Carol'),
+          joined('j4', 5, 'Dave'),
+          joined('j5', 6, 'Carol'),
+          joined('j6', 7, 'Eve'),
+        ],
+      }),
+    });
+    renderView();
+    const pair = await screen.findByText('bots.groupChat.notice.memberJoinedList:Alicebots.groupChat.memberSeparatorBob');
+    expect(pair.tagName).toBe('P');
+    const summaryButton = screen.getByTestId('bot-group-joined-summary');
+    expect(summaryButton.getAttribute('aria-expanded')).toBe('false');
+    expect(summaryButton.textContent).toBe('bots.groupChat.notice.memberJoinedSummary:Carolbots.groupChat.memberSeparatorDave:1');
+    fireEvent.click(summaryButton);
+    expect(summaryButton.getAttribute('aria-expanded')).toBe('true');
+    expect(summaryButton.textContent).toBe(
+      'bots.groupChat.notice.memberJoinedList:Carolbots.groupChat.memberSeparatorDavebots.groupChat.memberSeparatorEve',
+    );
+    fireEvent.click(summaryButton);
+    expect(summaryButton.getAttribute('aria-expanded')).toBe('false');
   });
 
   it('renders user, teammate, notice and round-end rows with the header lockup', async () => {
