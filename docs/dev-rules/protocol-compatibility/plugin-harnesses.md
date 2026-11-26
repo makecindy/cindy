@@ -302,3 +302,12 @@ IM 轮次只有已知的读和搜索操作可以经上述条件直接放行，�
 时 fail-closed，不会无闸运行。不新增 channel、中转帧或 IPC。实现见 maker-core `agents/acp/{protocol,capabilities,session}.ts`
 与 Desktop `im/shared/turnRunner.ts`；回归见 `acp-session.test.ts`「AcpSession per-turn permission gate」与
 `channelToolPolicy.test.ts`。
+
+## 插件引擎模型收藏（2026-11-26）
+
+插件引擎模型（Desktop 与 Mobile 统一模型选择器）复用既有收藏存储（`xdt:modelFavorites:v1`）与既有 Device Link 收藏通道（`maker:model-favorites:get` / `apply` / `changed`），不新增 wire 字段、channel、allowlist 或中转帧，官方与自建中转无需修改：
+
+- **编码与兼容**：`providerId` 为本机引擎的 `acp-plugin:<插件实例>:<引擎 id>`，或按既有复合键包一层 `agent-device-favorite:`（同账号另一台电脑的引擎）/ `provider-share-favorite:`（收到的插件引擎分享）；`modelId` 为引擎模型 id 或 `default`；`effort` 为可选规范档位键；`agent` 固定写 `PLUGIN_ENGINE_FAVORITE_WIRE_AGENT`（`'cc'`，定义在 `packages/device-link/src/modelFavorites.ts`）。不发 `agent: 'acp'`——旧 Desktop 与旧 Mobile 的 `parseModelFavorites` 只接受 `cc | codex | pi`，否则会整表拒绝。旧端读到该条目后整表解析通过，因 `acp-plugin:` / 复合前缀不在内置供应商目录中而静默隐藏，不会报错也不会误派到内置引擎，单条增删改不会误删该条目；新端解析时以 `acp-plugin:` 识别插件引擎收藏并忽略 `agent`。
+- **解析与准入**：桌面与手机按完整插件引擎目录（含 `hidden: true` 的引擎，与内置隐藏供应商同口径）解析收藏；引擎不可用（未登录 / 已停用）、模型被关闭或 `defaultModelAllowed: false` 时不展示但不删除原收藏。写入远控通道（被控电脑 / 手机）时遵守 512 字符通道上限。
+- **插件路由模型（`GhostPickerModel`）**：仅在本机桌面新任务草稿提供，收藏按账号存在本机 `localStorage`（`cindy:pluginModelFavorites:v1`），与模型组收藏（`cindy:modelGroupFavorites:v1`）同口径，不跨设备同步、不进收藏同步协议。
+- **实现与回归**：`packages/device-link/src/modelFavorites.ts`（`PLUGIN_ENGINE_FAVORITE_WIRE_AGENT`）、desktop `renderer/lib/pluginEngineFavorites.ts`、`PluginEnginesSection.tsx`、`UnifiedModelPanel.tsx`、`pluginModelFavorites.ts`、`PluginModelsSection.tsx` 与 mobile `session/pluginEngines.ts`、`UnifiedModelPickerSheet.tsx`、`UnifiedModelPickerView(.ios).tsx`；回归见 `packages/device-link/src/__tests__/modelFavorites.test.ts`、desktop `PluginEnginesSection.test.tsx`、`PluginModelsSection.test.tsx` 与 mobile `pluginEngines.test.ts`、`unifiedMobilePicker.test.tsx`、`unifiedMobilePickerView.test.tsx`。

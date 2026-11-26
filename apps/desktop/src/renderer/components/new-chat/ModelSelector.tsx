@@ -81,14 +81,12 @@ import {
   type UnifiedSelectedRow,
 } from './UnifiedModelPanel';
 import { matchPluginModels, PluginModelIcon, PluginModelsSection, type PluginModelsPickerProps } from './PluginModelsSection';
+import { useFavoritePluginModelCount } from '@/features/cc-agent/pluginModelFavorites';
 import { MODEL_GROUPS_DEFAULTS } from '../../../shared/modelGroups';
 import { buildModelGroupPickerRows, isModelGroupSelected, matchModelGroupRows, ModelGroupIcon, ModelGroupsPickerSection, useFavoriteModelGroupCount, useModelGroupPickerRows, type ModelGroupsPickerProps } from './ModelGroupsPickerSection';
 import { PluginEngineIcon } from '@/components/icons/PluginEngineIcon';
 import {
-  activePluginEngineModelId,
-  matchPluginEngineRows,
   PluginEngineSessionPanel,
-  PluginEnginesSection,
   usePluginEngineChoiceLabel,
   type PluginEnginePendingSelection,
   type PluginEngineSessionPickerProps,
@@ -99,7 +97,6 @@ import {
   isSamePluginEngineChoice,
   pluginEngineModelName,
   resolvePluginEngineEffort,
-  visiblePluginEngineChoices,
   type PluginEngineChoice,
 } from '@/lib/pluginEngineSelection';
 import type { PluginEngineEffort } from '../../../shared/pluginEngines';
@@ -1406,20 +1403,12 @@ function ModelSelectorContentView({
   useEffect(() => {
     readModelGroupDevices?.();
   }, [readModelGroupDevices]);
-  // 已装但未登录 / 未就绪的插件引擎不在选择器里占位；仅当前任务正选着该引擎时保留以便识别状态。
-  const visiblePluginEngines = useMemo(
-    () => pluginEngines
-      ? { ...pluginEngines, engines: visiblePluginEngineChoices(pluginEngines.engines, pluginEngines.active) }
-      : undefined,
-    [pluginEngines],
-  );
   // 当前来源解析器:已建会话 = 实际路由口径(含停用拷贝),其余 = 准入口径。
   const resolveCurrentSourceId = actualRoute ? actualSourceIdForModel : effectiveSourceIdForModel;
   const { t, i18n } = useTranslation();
-  // 插件引擎的显示名：在自己另一台电脑上的带电脑名。
-  const pluginEngineChoiceLabel = usePluginEngineChoiceLabel();
   const modelGroupRows = useModelGroupPickerRows(modelGroups?.config ?? MODEL_GROUPS_DEFAULTS);
   const favoriteModelGroupCount = useFavoriteModelGroupCount(modelGroups?.config ?? MODEL_GROUPS_DEFAULTS);
+  const favoritePluginModelCount = useFavoritePluginModelCount(pluginModels?.models ?? []);
   const { received: receivedShares } = useProviderShareReceived();
   // ── 远程 Agent:面板在本机目录与其他电脑的目录之间切换浏览 ─────────────────────
   // 打开时停在草稿当前的落点(Agent 在哪台电脑就先列哪台);左侧栏点到另一台电脑的供应商时,
@@ -3884,12 +3873,18 @@ function ModelSelectorContentView({
                   ),
                 }
               : {})}
-            {...(pluginModels || modelGroups || (visiblePluginEngines && visiblePluginEngines.engines.length > 0) ? {
-              // 模型组在「全部」最上方：不搜索时整段列出(用户建好就天天要用)，搜索时只列命中的。
-              // 插件引擎是独立的一组(不混进供应商目录)，排在它们之后、内置模型之前。
+            {...(pluginModels || modelGroups ? {
+              // 模型组与插件路由模型排在「全部」收藏区之后、插件引擎与内置模型之前。
               pinnedTop: (
                 <>
-                  {pluginModels && <PluginModelsSection picker={pluginModels} query={query} onPicked={() => onDismiss?.()} />}
+                  {pluginModels && (
+                    <PluginModelsSection
+                      picker={pluginModels}
+                      query={query}
+                      onPicked={() => onDismiss?.()}
+                      allowFavorites={unifiedSelectionPolicy === 'personalized'}
+                    />
+                  )}
                   {modelGroups && (
                     <ModelGroupsPickerSection picker={modelGroups} query={query} onPicked={() => onDismiss?.()}
                       variant={query.trim() ? 'search' : 'all'} />
@@ -3899,26 +3894,30 @@ function ModelSelectorContentView({
                     <ModelGroupsPickerSection key={`model-groups:${device.deviceId}`} picker={modelGroups} query={query}
                       deviceId={device.deviceId} onPicked={() => onDismiss?.()} variant="search" />
                   ))}
-                  {visiblePluginEngines && visiblePluginEngines.engines.length > 0 && (
-                    <PluginEnginesSection picker={visiblePluginEngines} query={query} onPicked={() => onDismiss?.()} />
-                  )}
                 </>
               ),
               pinnedTopHasRows: (pluginModels ? matchPluginModels(pluginModels.models, query).length > 0 : false)
                 || (!!modelGroups && matchModelGroupRows(modelGroupRows, query) > 0)
                 || (!!modelGroups && !!query.trim() && deviceModelGroupChoices.some((device) =>
-                  matchModelGroupRows(buildModelGroupPickerRows(device.config, t, device.deviceId), query) > 0))
-                || (!!visiblePluginEngines && matchPluginEngineRows(
-                  visiblePluginEngines.engines,
-                  query,
-                  (engine) => activePluginEngineModelId(visiblePluginEngines.active, engine),
-                  t('newChat.pluginEngines.defaultModel').toLowerCase(),
-                ) > 0),
+                  matchModelGroupRows(buildModelGroupPickerRows(device.config, t, device.deviceId), query) > 0)),
             } : {})}
             {...(modelGroups && modelGroupRows.length > 0 ? {
               modelGroupsView: <ModelGroupsPickerSection picker={modelGroups} query="" onPicked={() => onDismiss?.()} />,
-              favoritesPinned: <ModelGroupsPickerSection picker={modelGroups} query="" onPicked={() => onDismiss?.()} variant="favorites" />,
-              favoritesPinnedHasRows: favoriteModelGroupCount > 0,
+            } : {})}
+            {...((modelGroups && modelGroupRows.length > 0) || (pluginModels && unifiedSelectionPolicy === 'personalized') ? {
+              favoritesPinned: (
+                <>
+                  {pluginModels && unifiedSelectionPolicy === 'personalized' && (
+                    <PluginModelsSection picker={pluginModels} query="" onPicked={() => onDismiss?.()} variant="favorites" />
+                  )}
+                  {modelGroups && modelGroupRows.length > 0 && (
+                    <ModelGroupsPickerSection picker={modelGroups} query="" onPicked={() => onDismiss?.()} variant="favorites" />
+                  )}
+                </>
+              ),
+              favoritesPinnedHasRows:
+                (modelGroups && modelGroupRows.length > 0 ? favoriteModelGroupCount > 0 : false)
+                || (pluginModels && unifiedSelectionPolicy === 'personalized' ? favoritePluginModelCount > 0 : false),
             } : {})}
             {...(modelGroups && deviceModelGroupChoices.length ? {
               // 其他电脑自己的模式：每台一格，排进那台电脑那一段；由那台选来源(model-groups.md §6.3)。
@@ -3927,27 +3926,9 @@ function ModelSelectorContentView({
                 <ModelGroupsPickerSection picker={modelGroups} query="" deviceId={deviceId} onPicked={() => onDismiss?.()} />
               ),
             } : {})}
-            {...(visiblePluginEngines && visiblePluginEngines.engines.length > 0 ? {
-              // 和供应商一样每个引擎在左侧栏单独一格(插件自己的图标)，点开只列这个引擎的模型；
-              // 「全部」最上方照旧列出全部引擎。
-              // 自己另一台电脑上的引擎带着电脑名，格位排进那台电脑那一段(见 UnifiedModelPanel)。
-              pluginEngineTabs: visiblePluginEngines.engines.map((engine) => ({
-                providerId: engine.providerId,
-                ...(engine.deviceId ? { deviceId: engine.deviceId } : {}),
-                name: pluginEngineChoiceLabel(engine),
-                ...(engine.iconDataUrl ? { iconDataUrl: engine.iconDataUrl } : {}),
-              })),
-              renderPluginEngine: (providerId: string, engineDeviceId?: string) => (
-                <PluginEnginesSection
-                  picker={{
-                    ...visiblePluginEngines,
-                    engines: visiblePluginEngines.engines.filter((engine) =>
-                      isSamePluginEngineChoice(engine, { providerId, deviceId: engineDeviceId })),
-                  }}
-                  query=""
-                  onPicked={() => onDismiss?.()}
-                />
-              ),
+            {...(pluginEngines && pluginEngines.engines.length > 0 ? {
+              pluginEngines,
+              onPluginEnginePicked: () => onDismiss?.(),
             } : {})}
             {...(!remoteAgentBrowsing && deviceId && (remoteModelListStatus === 'loading' || remoteModelListStatus === 'error')
               ? {
@@ -5591,6 +5572,8 @@ export function ModelSelector({
     <PluginEngineSessionPanel
       picker={pluginEngineSession}
       disabled={switching || disabled}
+      deviceId={deviceId}
+      selectionPolicy={unifiedSelectionPolicy}
       onPicked={() => setOpenWithoutAutoRefresh(false)}
     />
   ) : (

@@ -5,7 +5,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { usePluginModels } from '@/features/cc-agent/pluginModelRoute';
 import { PluginModelsSection } from '../PluginModelsSection';
 
-vi.mock('react-i18next', () => ({ useTranslation: () => ({ i18n: { language: 'en' } }) }));
+vi.mock('react-i18next', () => ({ useTranslation: () => ({ i18n: { language: 'en' }, t: (key: string) => key }) }));
+vi.mock('@/contexts/dataOwnerGeneration', () => ({ getDataOwnerGeneration: () => ({ dataOwnerId: 'owner-a' }) }));
 
 const auto = { pluginId: 'gate', pluginName: 'Decision Gate', id: 'auto', name: 'Auto', description: 'Picks by your rules' };
 const cheap = { ...auto, id: 'cheap', name: 'Cheap', description: undefined };
@@ -13,6 +14,7 @@ const other = { pluginId: 'other', pluginName: 'Other', id: 'x', name: 'X' };
 
 afterEach(() => {
   cleanup();
+  localStorage.clear();
   vi.unstubAllGlobals();
 });
 
@@ -39,6 +41,33 @@ describe('PluginModelsSection', () => {
     expect(screen.queryByRole('option', { name: /^X/ })).toBeNull();
     rerender(<PluginModelsSection picker={picker} query="nothing" onPicked={vi.fn()} />);
     expect(container.firstChild).toBeNull();
+  });
+
+  // 生产入口与可观察结果：PluginModelsSection + pluginModelFavorites(localStorage)；点行尾 ☆ 收藏不选中模型、
+  // 在 variant="favorites" 下仅展示已收藏模型、allowFavorites=false 隐藏星标且受账号分区隔离。
+  // 规则依据：与 ModelGroupsPickerSection 收藏行为保持一致。
+  // 覆盖缺口：此前插件路由模型没有收藏能力。最小失败输入与 tier：unit(jsdom)，点击 ☆ 触发 onSelect 或收藏视图为空。
+  it('stars and unstars plugin models without selecting them, and lists only starred ones in favorites view', () => {
+    const onSelect = vi.fn();
+    const picker = { models: [auto, cheap, other], active: null, onSelect };
+    const all = render(<PluginModelsSection picker={picker} query="" onPicked={vi.fn()} />);
+    const starBtn = all.container.querySelector('[data-plugin-model-favorite="gate:auto"]')!;
+    expect(starBtn.getAttribute('aria-pressed')).toBe('false');
+    fireEvent.click(starBtn);
+    expect(onSelect).not.toHaveBeenCalled();
+    expect(starBtn.getAttribute('aria-pressed')).toBe('true');
+    all.unmount();
+
+    const favView = render(<PluginModelsSection picker={picker} query="" onPicked={vi.fn()} variant="favorites" />);
+    expect(screen.getByRole('option', { name: /Auto/ })).toBeTruthy();
+    expect(screen.queryByRole('option', { name: /Cheap/ })).toBeNull();
+    fireEvent.click(screen.getByRole('option', { name: /Auto/ }));
+    expect(onSelect).toHaveBeenCalledWith(auto);
+    favView.unmount();
+
+    const official = render(<PluginModelsSection picker={picker} query="" onPicked={vi.fn()} allowFavorites={false} />);
+    expect(official.container.querySelector('[data-plugin-model-favorite]')).toBeNull();
+    official.unmount();
   });
 });
 
