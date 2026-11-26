@@ -5,6 +5,7 @@ import type { Message } from '@/lib/ccAgent.types';
 vi.mock('@/lib/messageService', () => ({
   list: vi.fn(async () => []),
   around: vi.fn(async () => []),
+  aroundClientId: vi.fn(async () => []),
   create: vi.fn(async () => ({}) as unknown),
   updateContent: vi.fn(async () => ({}) as unknown),
 }));
@@ -1702,5 +1703,151 @@ describe('makerChatStore active view tracking', () => {
     expect(makerChatStore.getSnapshot(sessionId).isLoadingMore).toBe(false);
   });
 
+  // Regression (P0-3.2): during a long single autonomous turn, turnStart pins _trimSessionMessages
+  // at index 0; older persisted completed tool payloads must be slimmed in memory while recent
+  // rows, in-flight tools, and plan tools stay intact, and clicking/expanding rehydrates from SQLite.
+  it('slims heavy historical tool payloads during a long single turn and rehydrates them on demand', async () => {
+    const sessionId = sid('long-single-turn-compact');
+    enter(sessionId);
+    const bigFileBody = 'line\n'.repeat(3000);
+    const bigStdout = 'out\n'.repeat(3000);
 
+    const userRow: Message = {
+      id: 'u-0',
+      clientId: 'client-u-0',
+      sessionId,
+      role: 'user',
+      content: 'Run a long autonomous refactor',
+      toolUseId: null,
+      agentMeta: null,
+      createdAt: BASE_TIME.toISOString(),
+    };
+    const oldWrite = dbToolUseMessage(
+      sessionId,
+      'old-write',
+      'Write',
+      { file_path: '/repo/src/large.ts', content: bigFileBody },
+      new Date(BASE_TIME.getTime() + 1000).toISOString(),
+    );
+    const oldWriteResult = dbToolResultMessage(
+      sessionId,
+      'old-write-res',
+      'tool-old-write',
+      bigStdout,
+      new Date(BASE_TIME.getTime() + 1500).toISOString(),
+    );
+    const oldPlan = dbToolUseMessage(
+      sessionId,
+      'old-plan',
+      'update_plan',
+      { plan: [{ step: 'step '.repeat(1200), status: 'in_progress' }] },
+      new Date(BASE_TIME.getTime() + 2000).toISOString(),
+    );
+    const oldPlanResult = dbToolResultMessage(
+      sessionId,
+      'old-plan-res',
+      'tool-old-plan',
+      'ok',
+      new Date(BASE_TIME.getTime() + 2100).toISOString(),
+    );
+    const inflightWrite = dbToolUseMessage(
+      sessionId,
+      'inflight-write',
+      'Write',
+      { file_path: '/repo/src/inflight.ts', content: bigFileBody },
+      new Date(BASE_TIME.getTime() + 2500).toISOString(),
+    );
+    const filler: Message[] = [];
+    for (let i = 0; i < 310; i += 1) {
+      filler.push(
+        dbMessage(
+          sessionId,
+          `step-${i}`,
+          `step ${i}`,
+          new Date(BASE_TIME.getTime() + (3000 + i * 10)).toISOString(),
+        ),
+      );
+    }
+    const recentWrite = dbToolUseMessage(
+      sessionId,
+      'recent-write',
+      'Write',
+      { file_path: '/repo/src/recent.ts', content: bigFileBody },
+      new Date(BASE_TIME.getTime() + 10_000).toISOString(),
+    );
+    const recentWriteResult = dbToolResultMessage(
+      sessionId,
+      'recent-write-res',
+      'tool-recent-write',
+      bigStdout,
+      new Date(BASE_TIME.getTime() + 10_500).toISOString(),
+    );
+
+    vi.mocked(messageService.list).mockResolvedValueOnce([
+      userRow,
+      oldWrite,
+      oldWriteResult,
+      oldPlan,
+      oldPlanResult,
+      inflightWrite,
+      ...filler,
+      recentWrite,
+      recentWriteResult,
+    ]);
+    vi.mocked(messageService.aroundClientId).mockResolvedValueOnce([oldWrite, oldWriteResult]);
+
+    const leave = enter(sessionId);
+    makerChatStore.ensureInitialMessages(sessionId);
+    await flushPromises(10);
+
+    // Put session into active running state so turnStart pins _trimSessionMessages at index 0.
+    saveSessionScroll(sessionId, {
+      windowAnchorKey: null,
+      viewportTopKey: 'msg-client-0',
+      messageClientId: 'client-0',
+      offset: 0,
+      isNearBottom: true,
+    });
+    makerChatStore.__activeViewTest.setStreamingForTest(sessionId, true);
+    // Trigger the periodic 30s trim/maintenance pass.
+    vi.advanceTimersByTime(31_000);
+    leave();
+
+    const afterCompact = makerChatStore.getSnapshot(sessionId).messages;
+    const compactedWrite = afterCompact.find((m) => m.clientId === 'client-old-write');
+    const compactedRes = afterCompact.find((m) => m.clientId === 'client-old-write-res');
+    const keptPlan = afterCompact.find((m) => m.clientId === 'client-old-plan');
+    const keptInflight = afterCompact.find((m) => m.clientId === 'client-inflight-write');
+    const keptRecent = afterCompact.find((m) => m.clientId === 'client-recent-write');
+
+    // Older completed persisted Write + result were slimmed while preserving file_path metadata.
+    expect(compactedWrite?.payloadCompacted).toBe(true);
+    expect(compactedWrite?.toolInput).toEqual({ file_path: '/repo/src/large.ts' });
+    expect(compactedRes?.payloadCompacted).toBe(true);
+    expect(compactedRes?.content.length).toBeLessThan(bigStdout.length);
+
+    // Exempt plan tool, in-flight tool (no result), and recent-window tool stay untouched.
+    expect(keptPlan?.payloadCompacted).toBeUndefined();
+    expect(keptInflight?.payloadCompacted).toBeUndefined();
+    expect((keptInflight?.toolInput as { content?: string })?.content).toBe(bigFileBody);
+    expect(keptRecent?.payloadCompacted).toBeUndefined();
+    expect((keptRecent?.toolInput as { content?: string })?.content).toBe(bigFileBody);
+
+    // Expanding/clicking rehydrates full payload on demand from SQLite via aroundClientId.
+    expect(
+      makerChatStore.hasCompactedToolPayload(sessionId, 'client-old-write', 'tool-old-write'),
+    ).toBe(true);
+    const hydrated = await makerChatStore.hydrateCompactedMessage(
+      sessionId,
+      'client-old-write',
+      'tool-old-write',
+    );
+    expect(hydrated.toolUse?.payloadCompacted).toBeUndefined();
+    expect((hydrated.toolUse?.toolInput as { content?: string })?.content).toBe(bigFileBody);
+    expect(hydrated.toolResult?.payloadCompacted).toBeUndefined();
+    expect(hydrated.toolResult?.content).toBe(bigStdout);
+    expect(
+      makerChatStore.hasCompactedToolPayload(sessionId, 'client-old-write', 'tool-old-write'),
+    ).toBe(false);
+  });
 });
