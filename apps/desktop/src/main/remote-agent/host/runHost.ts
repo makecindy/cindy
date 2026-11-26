@@ -703,6 +703,7 @@ export function snapshotHandleState(handle: AgentSessionHandle): Record<string, 
     disabledSkillPaths: handle.disabledSkillPaths,
     // 插件引擎：模型、思考深度与权限档是它握手时给的，控制端没有这个插件，只能从这里得知(内置引擎没有这一项)。
     negotiatedCapabilities: handle.negotiatedCapabilities,
+    requiresRuntimeRecycleForExtraDirs: safeCall(handle.requiresRuntimeRecycleForExtraDirs?.bind(handle)),
   };
   for (const key of Object.keys(state)) if (state[key] === undefined) delete state[key];
   return JSON.parse(JSON.stringify(state)) as Record<string, unknown>;

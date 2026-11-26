@@ -733,6 +733,59 @@ describe('exec-server relay gate', () => {
     expect(show).toHaveBeenCalledWith(expect.objectContaining({ input: { command, cwd } }));
     expect(recordApproval).toHaveBeenCalledExactlyOnceWith({ kind: 'exec', command, cwd });
   });
+
+  // 回归测试：远程句柄需透传宿主机上报的 requiresRuntimeRecycleForExtraDirs，并在旧版宿主机省略该字段时
+  // 对 ACP 句柄按 negotiatedCapabilities.extraDirs 安全降级（缺省 true），且 onReconnected 不残留旧值。tier: unit。
+  it('forwards requiresRuntimeRecycleForExtraDirs and falls back cleanly for older remote hosts', () => {
+    const workspace = new ExecutorWorkspace({ workingDir: root });
+    const makeController = (agentKind: 'acp' | 'claude-code', state: Record<string, unknown>) =>
+      createRemoteAgentHandle({
+        client: {} as RemoteAgentRunClient,
+        started: { id: 's1', agentKind, model: 'm', shadowDir: '', methods: [], state },
+        workspace,
+        recordApproval: vi.fn(),
+        newId: () => 'req',
+        dispose: async () => undefined,
+      });
+
+    // Explicit host flag wins over negotiatedCapabilities.
+    expect(makeController('acp', {
+      requiresRuntimeRecycleForExtraDirs: false,
+      negotiatedCapabilities: { extraDirs: { supported: true } },
+    }).handle.requiresRuntimeRecycleForExtraDirs?.()).toBe(false);
+    expect(makeController('acp', {
+      requiresRuntimeRecycleForExtraDirs: true,
+      negotiatedCapabilities: { extraDirs: { supported: false } },
+    }).handle.requiresRuntimeRecycleForExtraDirs?.()).toBe(true);
+
+    // Older remote host omitting the flag: ACP falls back to negotiatedCapabilities.extraDirs (defaulting true).
+    expect(makeController('acp', {
+      negotiatedCapabilities: { extraDirs: { supported: true } },
+    }).handle.requiresRuntimeRecycleForExtraDirs?.()).toBe(true);
+    expect(makeController('acp', {
+      negotiatedCapabilities: { extraDirs: { supported: false } },
+    }).handle.requiresRuntimeRecycleForExtraDirs?.()).toBe(false);
+    expect(makeController('acp', {}).handle.requiresRuntimeRecycleForExtraDirs?.()).toBe(true);
+
+    // Non-ACP remote engines never trigger ACP handshake recycling.
+    expect(makeController('claude-code', {}).handle.requiresRuntimeRecycleForExtraDirs?.()).toBe(false);
+
+    // Reconnecting clears a stale flag when the new remote state omits it.
+    const reconnecting = makeController('acp', {
+      requiresRuntimeRecycleForExtraDirs: true,
+      negotiatedCapabilities: { extraDirs: { supported: true } },
+    });
+    expect(reconnecting.handle.requiresRuntimeRecycleForExtraDirs?.()).toBe(true);
+    reconnecting.onReconnected({
+      id: 's1',
+      agentKind: 'acp',
+      model: 'm',
+      shadowDir: '',
+      methods: [],
+      state: { negotiatedCapabilities: { extraDirs: { supported: false } } },
+    });
+    expect(reconnecting.handle.requiresRuntimeRecycleForExtraDirs?.()).toBe(false);
+  });
 });
 
 describe('wire payloads', () => {
