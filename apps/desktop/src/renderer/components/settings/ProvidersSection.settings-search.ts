@@ -141,6 +141,7 @@ export const providersSettings = defineSettings({
       'settings.providers.local.title',
       'settings.providers.llamacpp.title',
       'settings.providers.custom.nameSearchHint',
+      'settings.providers.custom.test.costHint',
       'settings.providers.wizard.officialModelPlugins',
       'settings.ghosts.detail.settingsTitle',
     ],

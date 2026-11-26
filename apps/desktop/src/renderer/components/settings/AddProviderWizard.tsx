@@ -2518,6 +2518,7 @@ export function AddProviderWizard({
             )}
             {sel?.kind === 'preset' && sel.preset.id === 'command-code' && step === 3 && (
               <Button
+                data-settings-search-action="Test the selected Command Code model before saving the connection"
                 type="button"
                 size="lg"
                 loading={testingConnection}
