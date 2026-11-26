@@ -138,7 +138,7 @@ Claude.ai 登录，也不得收集、存储或中转订阅凭证。Cindy 因此�
   （dev 多实例的默认账号也一样），确保仍能看到终端已有登录。
   2026-11-07 起，用户显式添加的[供应商内订阅账号](../product-rules/subscription-account-pools.md)
   使用官方多账号方式：只在该账号的 CLI 子进程设置 `CLAUDE_CONFIG_DIR=~/.claude-cindy-<owner摘要>-<随机id>`，
-  登录、状态、用量、任务及分叉始终使用同一目录。目录不含邮箱，不接受外部传入路径。
+  登录、状态、用量、任务及分叉始终使用同一目录。生成的目录不含邮箱。用户在「添加账号」里连接已有登录时，可复用执行电脑经官方 CLI 核实的既有目录。连接请求只接受执行电脑为当前 owner 签发的短期选择回执，提交时重新核实登录。自定义目录及身份随 owner 的账号池保存，移除后保留目录与 CLI 登录。
   2026-11-13 裁决的 Claude 单独供应商同样如此（账号放在哪个供应商记在 `subscription-account-placement.json`，不含凭证）：账号并入、移动或拿出只改它属于哪个供应商，目录与官方登录不动；
   不复用 09-24 已停用的旧 Claude 连接及其 Cindy 自存凭证。
   Cindy 从不设置 `CLAUDE_SECURESTORAGE_CONFIG_DIR`，并在启动与每次调起 CLI 时剥掉继承值：

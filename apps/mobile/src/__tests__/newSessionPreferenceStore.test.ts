@@ -166,7 +166,7 @@ describe('newSessionPreferenceStore', () => {
     });
   });
 
-  it('remembers per-agent permission modes and drops plan / stale entries', async () => {
+  it('remembers unified lastPermissionMode alongside per-agent entries and drops plan / stale entries', async () => {
     const {
       __testing,
       readNewSessionPreferences,
@@ -179,7 +179,7 @@ describe('newSessionPreferenceStore', () => {
     await saveNewSessionPreferences({
       permissionModeForAgent: { agentKind: 'codex', mode: 'ask' },
     });
-    // plan 是计划模式实现细节,不入记忆(忽略而非报错)。
+    // plan 是计划模式实现细节,不入 built-in per-agent 记忆(忽略而非报错)。
     await saveNewSessionPreferences({
       permissionModeForAgent: { agentKind: 'claude-code', mode: 'plan' },
     });
@@ -188,9 +188,17 @@ describe('newSessionPreferenceStore', () => {
       agentKind: null,
       device: null,
       workspaceKind: null,
-      permissionModeByAgent: { 'claude-code': 'bypassPermissions', codex: 'ask' },
+      lastPermissionMode: 'ask',
+      permissionModeByAgent: { 'claude-code': 'ask', codex: 'ask' },
       workingDirByDevice: {},
       remoteAgentByDevice: {},
+    });
+
+    // 插件引擎写入 lastPermissionMode 时同步保留给内置与插件引擎沿用（default -> ask）。
+    await saveNewSessionPreferences({ lastPermissionMode: 'bypassPermissions' });
+    await expect(readNewSessionPreferences()).resolves.toMatchObject({
+      lastPermissionMode: 'bypassPermissions',
+      permissionModeByAgent: { 'claude-code': 'bypassPermissions', codex: 'bypassPermissions', pi: 'bypassPermissions' },
     });
 
     // 落盘的 plan / 非法 agent 键在读取时被清洗。

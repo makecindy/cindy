@@ -2778,7 +2778,7 @@
         "description": "Ubuntu 用系统 .deb 安装套件。Arch Linux 与 Omarchy 用受管之用户目录安装程序，采同一份已验之 .deb 内容，无须 Debian 套件管理器。",
         "item1": "Ubuntu：用 sudo apt install ./cindy-<version>-<arch>.deb。Arch/Omarchy：请依 docs/linux.md 中之用户目录安装指南行之。",
         "item2": "点击更新后，系统 .deb 安装须授权；用户目录安装无须系统密码即可易版。他套件管理器所装之版，请经对应之套件管理器更新。",
-        "item3": "Linux x64 与 arm64 支持 Beta 渠道。Linux 唯于君择重新启动时施更新，闲置时不自动安装。"
+        "item3": "Linux x64 与 arm64 支持 Beta 渠道。用户目录所装者，闲时可自行安装更新；已设免密授权的系统 .deb 所装者，闲时亦可自行安装更新，其余系统 .deb 所装者，唯于君择重新启动时施更新。"
       },
       "qnaTitle": "径问",
       "qnaDescription": "未得其解？径问君所欲为",
@@ -2853,7 +2853,7 @@
       "openLogsDirError": "日志目录未能启",
       "autoUpdateLabel": "闲时自装更新",
       "autoUpdateDescription": "更新取下既毕，若此机 10 分钟无操作且无差事方行，则自重启应用以成安装。",
-      "linuxUpdateDescription": "更新于君择重启时生效。系统 .deb 安装须系统密码，用户目录安装则否。他法所装者，请以相应套件管理器更新。",
+      "linuxUpdateDescription": "系统 .deb 安装须系统密码，更新于君择重启时生效；用户目录安装则无须密码，可于闲时自行安装。他法所装者，请以相应套件管理器更新。",
       "autoUpdateEnabledToast": "已启闲时自装更新",
       "autoUpdateDisabledToast": "已阖闲时自装更新",
       "autoUpdateSaveFailed": "自更新之设未能存",
@@ -4645,6 +4645,15 @@
       "menu": {
         "disableProvider": "停此供方",
         "enableProvider": "启此供方",
+        "icon": "连接之徽",
+        "appearance": "名与徽",
+        "ownImage": "自择图",
+        "imageError": "请择 PNG、JPG 或 WebP 图，不逾 10 MB。",
+        "connectionIcon": {
+          "default": "如常",
+          "personal": "私用",
+          "work": "公用"
+        },
         "hideProvider": "隐于模型之选",
         "showProvider": "显于模型之选"
       },
@@ -7113,7 +7122,14 @@
           "routeUnavailable": "不可达",
           "routeMeasuring": "测速中…",
           "routeDirectUnavailableHint": "今网路未能直达此器",
-          "routePreferenceFailed": "易道未成，请复试之"
+          "routePreferenceFailed": "易道未成，请复试之",
+          "autoRule": {
+            "title": "自动择路之规",
+            "faster": "择延迟更低之途，微差则尚直连。",
+            "thresholds": "中转快于直连 25–50 ms 以上则转中转；直连复至差 15 ms 以内则归直连。",
+            "cooldown": "常易隔三十息以防抖；若今途骤劣（慢二倍且逾 100 ms）则立易。",
+            "peerOverride": "若彼端自定直连或中转，或版本尚旧，则从彼端之设与能。"
+          }
         },
         "protocol": {
           "agentNet": "Agent-Net",
@@ -7236,6 +7252,123 @@
           "disableBlocked": {
             "controller-encryption-required": "本机已选「唯用 Agent-Net」。须先于本机解此限，乃可使彼机返 Device Link。",
             "agent-net-only-relay": "此连线之网络唯通 Agent-Net，不可返 Device Link。须先改用支持 Device Link 之线路。"
+          }
+        },
+        "peerUpdate": {
+          "availableTip": "有新版 {{version}}，点之即更",
+          "downloading": "方取 {{version}}…",
+          "relaunching": "方重启以更 {{version}}…",
+          "confirm": {
+            "title": "更「{{name}}」之 Cindy 乎？",
+            "selfTitle": "更此机之 Cindy 乎？",
+            "description": "将自 {{from}} 更至 {{to}}。既成，彼机 Cindy 将重启，远连暂断。",
+            "selfDescription": "将自 {{from}} 更至 {{to}}。既成，此机 Cindy 将重启。",
+            "busyWarning": "彼机方有行役或幕后之务，重启则中辍。",
+            "selfBusyWarning": "此机方有行役或幕后之务，重启则中辍。",
+            "linuxPermissionHint": "Linux 所管之装，或须于彼机入系统密匙。",
+            "windowsPermissionHint": "若装于护目录，或须于彼机允系统之权。",
+            "action": "即刻更新"
+          },
+          "toast": {
+            "started": "已启「{{name}}」更至 {{version}}",
+            "relaunching": "「{{name}}」方重启以更 {{version}}",
+            "versionChanged": "「{{name}}」新版已易，请复启卡片核之",
+            "noUpdate": "「{{name}}」今无可装之新版",
+            "busy": "「{{name}}」方行他更，少顷再试",
+            "failed": "未能更「{{name}}」之 Cindy"
+          }
+        },
+        "tabs": {
+          "aria": "拓扑图观",
+          "devices": "器联",
+          "providers": "远供"
+        },
+        "providers": {
+          "empty": "今无方行之远供务。择他机或所享之供以启务，行间即见其径与驿。",
+          "noMatch": "无合此筛之务、机或驿。",
+          "searchPlaceholder": "索务、机或驿…",
+          "clearFilter": "清筛",
+          "expand": "展",
+          "collapse": "敛",
+          "groupTitle": "{{provider}} 供群",
+          "groupCount": "凡 {{count}} 机",
+          "groupIdleSummary": "余 {{count}} 机：在席 {{online}} · 离席 {{offline}}",
+          "filter": {
+            "aria": "依务态筛之",
+            "all": "诸系之务 ({{count}})",
+            "running": "唯行中 ({{count}})"
+          },
+          "columns": {
+            "tasks": "吾务",
+            "path": "通途",
+            "machines": "远供之机"
+          },
+          "usage": {
+            "remoteModel": "远模",
+            "remoteTask": "远务"
+          },
+          "bundle": {
+            "mixed": "{{running}} 行中 · {{ready}} 待命",
+            "runningOnly": "{{running}} 行中",
+            "readyOnly": "{{ready}} 待命",
+            "countBadge": "凡 {{count}}",
+            "popoverTitle": "系于 {{name}} 之务 ({{count}})"
+          },
+          "badge": {
+            "own": "吾机",
+            "groupMember": "群员",
+            "share": "他户所享",
+            "shareShort": "所享",
+            "shareGroup": "所享供群 · {{count}} 机",
+            "shareGroupShort": "享群 · {{count}} 机"
+          },
+          "relayRole": {
+            "officialShort": "官驿",
+            "selfHostedShort": "自驿",
+            "sharerRelayShort": "享主之驿",
+            "officialFull": "Cindy 官驿",
+            "selfHostedFull": "吾之自驿",
+            "sharerRelayFull": "享主自建之驿"
+          },
+          "status": {
+            "ready": "已备",
+            "busy": "方忙",
+            "paused": "已辍",
+            "idle": "闲置",
+            "standby": "候命"
+          },
+          "machineLine": {
+            "live": "{{flow}} · 承 {{count}} 务",
+            "ready": "已备 · 承 {{count}} 务"
+          },
+          "popover": {
+            "models": "所用之模",
+            "tasksCount": "所承之务 ({{count}})",
+            "clickToOpenHint": "点之即赴",
+            "relayHost": "驿址",
+            "relayRegion": "域",
+            "relayHop": "本机至驿",
+            "relayLoad": "经此驿者",
+            "relayLoadValue": "{{machines}} 机 · {{tasks}} 务"
+          },
+          "idleStrip": {
+            "summary": "另有 {{count}} 远供在席候命，今无务召之",
+            "show": "展闲供",
+            "hide": "敛闲供"
+          },
+          "stats": {
+            "empty": "今无方行之远供务",
+            "tasks": "{{total}} 务",
+            "tasksWithRunning": "{{total}} 务（{{running}} 行中）",
+            "machines": "{{active}} 供机",
+            "machinesWithTotal": "活 {{active}} / 凡 {{total}} 供机",
+            "relays": "{{count}} 驿"
+          },
+          "legend": {
+            "live": "青虚流线：方通讯息",
+            "ready": "绿实线：Agent-Net 脉通",
+            "busy": "橙点：务行中 / 机方忙",
+            "error": "朱点线：不应或已辍"
           }
         }
       }
@@ -7365,7 +7498,8 @@
       "localNetwork": {
         "label": "本地网络",
         "deniedHint": "无此权，同网之电脑与手机不得直连此机，唯经中继，其速迟矣。",
-        "settingsHint": "请于「系统设置 › 隐私与安全性 › 本地网络」启 Cindy，归此即自生效。"
+        "promptedHint": "请于系统弹框中点「允许」；若无弹框，可往系统设置手启之。",
+        "settingsHint": "于「隐私与安全性」觅「本地网络」而启 Cindy；若列中无之，点「+」添此应用，归即自效。"
       }
     },
     "imBot": {
@@ -7836,6 +7970,10 @@
         "toggle-sidebar": {
           "label": "显隐侧栏",
           "description": "收或展左侧差事录"
+        },
+        "copy-session-link": {
+          "label": "录差事链接",
+          "description": "录当前差事之链接"
         },
         "session-history-back": {
           "label": "前一差事",
@@ -9558,6 +9696,7 @@
         "createTitle": "增 MCP 服务器",
         "editTitle": "修 MCP 服务器",
         "desc": "仅支持远程 http / sse 型 MCP。存后新开或重启之 Agent 会话即可调用，方行之 Agent 会话不受影响。",
+        "embeddedGuide": "助手为此差事启 MCP 设定表。依供方所示，核已填之项，补其阙，乃存之。",
         "teammateDesc": "仅支持远程 http / sse 型 MCP。存后同伴自纳为己用，于此言谈下一则讯息起即可用之，毋须新开差事。"
       },
       "fields": {
@@ -11958,6 +12097,8 @@
         "loadEarlierFailed": "更早之讯未能载，请再试",
         "emptyTitle": "群议寂寂，尚无一言",
         "emptyDescription": "君先开言，群贤毕至，自当接续。@ 某同伴则仅令其答。",
+        "emptyDescriptionWithAssistant": "可 @Cindy，或自右上邀友与同伴。",
+        "emptyDescriptionInvite": "可自右上邀友与同伴。",
         "roundEnded": "同伴言毕",
         "stepTag": "第 {{count}} 步",
         "sending": "方遣",
@@ -12289,7 +12430,7 @@
         "loginRequired": "请先登录当前名籍，再试。",
         "requestFailed": "暂不能连群议服务，请稍后再试。",
         "copyFailed": "录之未成，请选取链接手录之。",
-        "createDescription": "可择同伴，亦可先立群议，再邀友入之。",
+        "createDescription": "群既立，可邀友与同伴。",
         "settings": {
           "name": "群名",
           "topic": "群之主题",
@@ -13576,6 +13717,7 @@
           "overloadRetryingNoCount": "模型服务繁忙，方自动再试…",
           "overloadFailed": "⚠️ 模型服务繁忙：上游暂无余力。可于此重发此讯再试，或于 Cindy 易一模型。（于桌面端点「再试」亦可续其差事，然其果不返此讯。）"
         },
+        "openAiReconnect": "请在 Cindy 设置 → 模型供应商 → OpenAI 中重新连接 ChatGPT，然后在这里发一条消息继续。",
         "audioInputUnavailable": "今所接模型未能直辨其声。可请 Cindy 先录为文字，再续其事。",
         "toolLoop": {
           "generic": "模型屡呼工具过甚，Cindy 已止此轮，以免无穷循环。可遣新讯以续。",
@@ -14735,11 +14877,11 @@
         },
         "acp": {
           "ask": {
-            "label": "逐项确认",
+            "label": "预设权柄",
             "description": "Agent 求权时由君裁可；Agent 未求确认之举，Cindy 无从拦阻。"
           },
           "default": {
-            "label": "常法",
+            "label": "预设权柄",
             "description": "依 Agent 之常法行事；其请权限，由君定之。"
           },
           "acceptEdits": {
@@ -14747,15 +14889,15 @@
             "description": "Agent 径改文件；他事请权限，由君定之。"
           },
           "auto": {
-            "label": "自断",
+            "label": "自审",
             "description": "Agent 自断何事须确认；其请权限，由君定之。"
           },
           "plan": {
-            "label": "但谋划",
+            "label": "谋定模式",
             "description": "Agent 唯析事谋划，不改文件。"
           },
           "bypassPermissions": {
-            "label": "尽许",
+            "label": "完全访问",
             "description": "Agent 所求之权，一概自许。"
           }
         }
@@ -15580,6 +15722,8 @@
       "codexHelperUnverified": "未能核实此差事之 cindy_helper 是否可用；差事结果或无法回传。",
       "requestFormatError": "应用程序所发请求格式有谬，此答未能竟。",
       "piRetryHistoryTooLarge": "此信未发。Pi 读取旧录以重试时，一帧逾本机 16 MiB 之限。可另启任务。",
+      "piRetryHistoryUnavailable": "此信未发。Pi 读旧录以发信时失误。可再试，或另启任务。",
+      "upstreamStatusError": "上游返 {{status}}，此答未竟。",
       "messageNotSent": "此信未发。",
       "replyFailed": "答未竟",
       "queuedSendRecovery": "前讯未遣。点「再试」可依原样遣发。若遣新讯，则取代前讯。",
@@ -15839,6 +15983,10 @@
       "diffUnchangedLines_one": "{{count}} 行未易",
       "diffUnchangedLines_other": "{{count}} 行未易",
       "diffPreviewLoading": "方备差异先览…"
+    },
+    "filePreview": {
+      "changed": "卷已易",
+      "refreshHint": "点之即重载"
     },
     "textLightbox": {
       "unreadable": "此卷不能读",
@@ -16415,7 +16563,7 @@
       "REMOTE_WORKDIR_UNAVAILABLE": "远程工作目录今不可用。请确认彼机上之目录犹在，然后再试。",
       "REMOTE_OPTIMISTIC_SESSION_STATE_UNAVAILABLE": "机端暂不能确知此讯已遣否。请稍后再试，勿重遣同一讯。",
       "REMOTE_AGENT_UNAVAILABLE": "未能与行 Agent 之机通信，请阅错误详情。",
-      "REMOTE_AGENT_TIMEOUT": "候行 Agent 之机回应逾时，结果未明。再试前请先察差事进展。",
+      "REMOTE_AGENT_TIMEOUT": "行 Agent 之机尚未应。请先察差事进展。若尚在行，或已有果，则无须再试。",
       "REMOTE_AGENT_LINK_BUSY": "与行 Agent 之机通信繁忙，请稍候再试。",
       "REMOTE_AGENT_UNRESPONSIVE": "行 Agent 之机屡未回应，已暂停呼叫。请稍候再试。",
       "REMOTE_AGENT_OFFLINE": "行 Agent 之机已离线，待其重连再试。",
@@ -16662,6 +16810,8 @@
       "retryIn": "{{seconds}} 秒后自试"
     },
     "subscriptionAccountError": {
+      "unreachable": "Codex 账号服务暂不可达。",
+      "rechecking": "Codex 账号服务暂不可达，至 {{resetAt}} 将复试。",
       "poolModelLimited": "此模型订阅之额已尽，可先易模型。",
       "poolRetryUntil": "俟 {{resetAt}} 后可再试。",
       "poolOtherSignedOut": "另有订阅账号已退出，可于行此任务之机重新登录而试。",
@@ -18442,6 +18592,7 @@
         "intervalChip": "毕后计时 · {{schedule}}"
       },
       "scheduleMenu": {
+        "custom": "自定 Cron",
         "intervalMinutes": "分（每 N 分）",
         "interval": "Hourly（每 N 时）",
         "daily": "Daily（每日）",
@@ -19139,6 +19290,7 @@
     }
   },
   "commandPalette": {
+    "buddyNewHint": "于同伴设置中选「{{restart}}」，可重建当前语境，旧讯仍存。欲另议一事，可在消息操作中选「{{startTopic}}」。",
     "viewSkillDetails": "观技艺之详",
     "projectSkillNotLoaded": "今之 Pi 差事尚未载此案之 Skill，新差事将自试载之",
     "pluginSkillSetup": {
@@ -22615,6 +22767,16 @@
     "refresh": "更新额度"
   },
   "subscriptionAccounts": {
+    "existing": {
+      "menu": "更多添加方式",
+      "connect": "连接已有登录…",
+      "found": "发现 {{count}} 个可连接的登录",
+      "title": "{{device}} 上的已有登录",
+      "note": "Cindy 将与终端共用所选账号的配置。",
+      "attach": "连接",
+      "choose": "选择其他目录…",
+      "unverified": "未能核实该目录中的订阅登录。"
+    },
     "pluginSignIn": {
       "method": "登录之法",
       "secretHint": "Key 唯付法器，藏于此账号之箧；Cindy 不存，亦不传他机。",

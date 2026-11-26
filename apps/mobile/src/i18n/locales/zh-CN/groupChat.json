@@ -499,7 +499,7 @@
       "tools": "主人已授权工具与资料",
       "authorizeTitle": "授权本群使用 {{name}} 的工具与资料？",
       "toolsHint": "本群成员可以使用伙伴已有的工具与私人资料，结果对全群可见。原有操作审批仍有效；撤回会停止进行中的请求，已执行的操作无法撤销。",
-      "confirm": "确认"
+      "confirm": "允许使用工具"
     }
   },
   "groupSettings": {
@@ -544,6 +544,8 @@
     "accessChat": "仅群内交流",
     "accessTools": "可用工具与资料",
     "replies": "伙伴怎么接话",
+    "assistant": "群里的 Cindy",
+    "assistantHint": "谁 @ 它，就在谁自己的电脑上做。",
     "replyModeMentionedNote": "不 @ 人时，伙伴不会接话。",
     "work": "分工",
     "organizerHint": "安排谁做哪一步；默认是第一位伙伴。",
@@ -588,7 +590,7 @@
     "removeOwnHint": "{{name}} 将不再接收「{{group}}」的消息。历史消息会保留，其他群和私聊不受影响。",
     "removeOwnActiveHint": "移出会停止它在本群的活跃请求。已独立开启的任务继续运行。",
     "stopAndRemove": "停止并移出",
-    "confirm": "确认",
+    "confirm": "允许使用工具",
     "inviteTitle": "邀请加入群聊",
     "reusableLink": "长期有效 · 多人可重复使用",
     "singleUseUntil": "只能使用一次 · {{date}} 到期",

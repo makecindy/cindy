@@ -2778,7 +2778,7 @@
         "description": "Ubuntu はシステムの .deb パッケージを使用します。Arch Linux と Omarchy は、同じ検証済み .deb の内容をユーザーディレクトリにインストールします。Debian のパッケージマネージャーは不要です。",
         "item1": "Ubuntu：sudo apt install ./cindy-<version>-<arch>.deb を実行します。Arch/Omarchy：docs/linux.md のユーザーインストール手順に従ってください。",
         "item2": "更新時、システムの .deb インストールは認証を要求します。ユーザーインストールはシステムパスワードなしでバージョンを切り替えます。それ以外は対応するパッケージマネージャーで更新してください。",
-        "item3": "Linux x64 と arm64 は Beta チャネルに対応しています。更新は再起動を選択したときのみ適用され、アイドル時には自動適用されません。"
+        "item3": "Linux x64 と arm64 は Beta チャネルに対応しています。ユーザーインストールはアイドル時に更新を自動でインストールできます。パスワードなしの認証を設定したシステム .deb インストールもアイドル時に更新を自動でインストールできます。それ以外のシステム .deb インストールでは、再起動を選択したときのみ更新が適用されます。"
       },
       "qnaTitle": "そのまま質問する",
       "qnaDescription": "答えが見つからなければ、やりたいことを質問してください。",
@@ -2853,7 +2853,7 @@
       "openLogsDirError": "ログディレクトリを開けませんでした",
       "autoUpdateLabel": "アイドル時に更新をインストール",
       "autoUpdateDescription": "更新のダウンロード完了後、このコンピューターが 10 分間操作されず、実行中のタスクがない場合に、アプリを自動的に再起動してインストールします。",
-      "linuxUpdateDescription": "更新は再起動を選択したときに適用されます。システムの .deb インストールにはシステムパスワードが必要ですが、ユーザーインストールには不要です。それ以外はパッケージマネージャーで更新してください。",
+      "linuxUpdateDescription": "システムの .deb インストールにはシステムパスワードが必要なため、更新は再起動を選択したときに適用されます。ユーザーインストールはパスワード不要で、アイドル時に自動でインストールできます。それ以外はパッケージマネージャーで更新してください。",
       "autoUpdateEnabledToast": "アイドル時の更新インストールを有効にしました",
       "autoUpdateDisabledToast": "アイドル時の更新インストールを無効にしました",
       "autoUpdateSaveFailed": "自動更新設定を保存できませんでした",
@@ -4645,6 +4645,15 @@
       "menu": {
         "disableProvider": "このプロバイダーを無効にする",
         "enableProvider": "このプロバイダーを有効にする",
+        "icon": "接続アイコン",
+        "appearance": "名前とアイコン",
+        "ownImage": "画像を選ぶ",
+        "imageError": "10 MB 以下の PNG、JPG、WebP 画像を選んでください。",
+        "connectionIcon": {
+          "default": "デフォルト",
+          "personal": "個人用",
+          "work": "仕事用"
+        },
         "hideProvider": "モデル選択で非表示にする",
         "showProvider": "モデル選択に表示する"
       },
@@ -5653,7 +5662,7 @@
       "title": "パーソナライズ",
       "subtitle": "カスタムプロンプト",
       "description": "アシスタントに追加の指示やコンテキストを与えます。",
-      "placeholder": "ここにカスタム指示を入力してください。Claude / Codex のシステムプロンプト末尾に追加されます。\n\n· {{appName}} の内蔵セッションのみに適用されます。既存のセッションは起動時スナップショットを保持し、変更は次回の新規セッションから有効になります。\n· すべての Claude Code セッション(ターミナルや他の IDE を含む)で強制的に有効にするには、~/.claude/settings.json に SessionStart フックを設定してください(harness レベルの強制)。\n· Codex CLI は ~/.codex/hooks.json に SessionStart フックを設定すると harness レベルで強制注入できます（CC と同等）。または ~/.codex/AGENTS.md による自動読み込み（ソフト制約、モデルが無視する場合あり）も利用できます。",
+      "placeholder": "ここにカスタム指示を入力してください。Claude / Codex のシステムプロンプト末尾に追加されます。\n\n· {{appName}} の内蔵セッションのみに適用されます。既存のセッションは起動時スナップショットを保持し、変更は次回の新規セッションから有効になります。\n· すべての Claude Code セッション(ターミナルや他の IDE を含む)で強制的に有効にするには、~/.claude/settings.json に SessionStart フックを設定してください(Harness レベルの強制)。\n· Codex CLI は ~/.codex/hooks.json に SessionStart フックを設定すると Harness レベルで強制注入できます（CC と同等）。または ~/.codex/AGENTS.md による自動読み込み（ソフト制約、モデルが無視する場合あり）も利用できます。",
       "ariaLabel": "カスタム指示",
       "save": "保存",
       "overLimit": " — 文字数制限を超過",
@@ -5854,7 +5863,7 @@
       "uninstallTitle": "Pi 拡張機能をアンインストールしますか？",
       "uninstallDescription": "{{name}} をこのデバイスから削除します。すでに開いている Pi タスクは、閉じるまで古い拡張機能を保持します。",
       "confirmUninstall": "アンインストール",
-      "extensionDialogConfirm": "確認",
+      "extensionDialogConfirm": "続行",
       "cancel": "キャンセル",
       "relativePathUnsupported": "設定からローカル拡張機能を入れる場合は絶対パスを使ってください。./extension のような相対パスは Pi タスクからインストールできます。",
       "resources": {
@@ -7113,7 +7122,14 @@
           "routeUnavailable": "利用不可",
           "routeMeasuring": "計測中…",
           "routeDirectUnavailableHint": "現在のネットワークではこのデバイスに直接接続できません",
-          "routePreferenceFailed": "ルートの切り替えに失敗しました。もう一度お試しください。"
+          "routePreferenceFailed": "ルートの切り替えに失敗しました。もう一度お試しください。",
+          "autoRule": {
+            "title": "自動ルーティング規則",
+            "faster": "より低遅延な経路を優先し、差がわずかな場合は直接接続を選びます。",
+            "thresholds": "リレーが直接接続より 25–50 ms 以上速い場合にリレーへ切替；直接接続が差 15 ms 以内に回復すると戻ります。",
+            "cooldown": "通常切替は 30 秒のクールダウンあり；現在の経路が大幅に悪化（2 倍以上かつ 100 ms 以上の遅延差）すると即座に切り替えます。",
+            "peerOverride": "相手側が直接接続/リレーを固定している場合や旧バージョンの場合は、相手側の設定や機能が優先されます。"
+          }
         },
         "protocol": {
           "agentNet": "Agent-Net",
@@ -7236,6 +7252,123 @@
           "disableBlocked": {
             "controller-encryption-required": "この端末では「Agent-Net のみ使用」が有効です。相手を Device Link に戻す前に、この端末で無効にしてください。",
             "agent-net-only-relay": "この接続のネットワークは Agent-Net のみに対応しています。Device Link に対応する接続経路に変更してから戻してください。"
+          }
+        },
+        "peerUpdate": {
+          "availableTip": "新バージョン {{version}} があります（クリックして更新）",
+          "downloading": "{{version}} をダウンロード中…",
+          "relaunching": "{{version}} に更新するため再起動中…",
+          "confirm": {
+            "title": "「{{name}}」の Cindy を更新しますか？",
+            "selfTitle": "このコンピュータの Cindy を更新しますか？",
+            "description": "Cindy を {{from}} から {{to}} に更新して再起動します。リモート接続は一時的に切断されます。",
+            "selfDescription": "Cindy を {{from}} から {{to}} に更新し、このコンピュータで再起動します。",
+            "busyWarning": "実行中のタスクやバックグラウンド処理は再起動によって中断されます。",
+            "selfBusyWarning": "このコンピュータで実行中のタスクやバックグラウンド処理は再起動によって中断されます。",
+            "linuxPermissionHint": "Linux の管理パッケージでは、対象デバイスでシステムパスワードの入力が必要になる場合があります。",
+            "windowsPermissionHint": "保護されたフォルダにインストールされている場合、対象デバイスでシステム権限の確認が必要になることがあります。",
+            "action": "今すぐ更新"
+          },
+          "toast": {
+            "started": "「{{name}}」の {{version}} への更新を開始しました",
+            "relaunching": "「{{name}}」は {{version}} を適用するため再起動中です",
+            "versionChanged": "「{{name}}」の利用可能なバージョンが変わりました。カードを開き直して確認してください。",
+            "noUpdate": "「{{name}}」にインストール可能な更新はありません。",
+            "busy": "「{{name}}」では別の更新が進行中です。しばらくしてから再試行してください。",
+            "failed": "「{{name}}」の Cindy を更新できませんでした。"
+          }
+        },
+        "tabs": {
+          "aria": "トポロジー表示",
+          "devices": "デバイス接続",
+          "providers": "リモートプロバイダー"
+        },
+        "providers": {
+          "empty": "現在実行中のリモートプロバイダータスクはありません。他のコンピュータや共有プロバイダーでタスクを実行すると、実行中の経路とリレーがここに表示されます。",
+          "noMatch": "条件に一致するタスク、マシン、またはリレーはありません。",
+          "searchPlaceholder": "タスク、マシン、リレーを検索…",
+          "clearFilter": "フィルターをクリア",
+          "expand": "展開",
+          "collapse": "折りたたむ",
+          "groupTitle": "{{provider}} プロバイダーグループ",
+          "groupCount": "計 {{count}} 台",
+          "groupIdleSummary": "他のメンバー {{count}} 台：オンライン {{online}} · オフライン {{offline}}",
+          "filter": {
+            "aria": "タスク状態で絞り込む",
+            "all": "関連タスク ({{count}})",
+            "running": "実行中のみ ({{count}})"
+          },
+          "columns": {
+            "tasks": "マイタスク",
+            "path": "経路",
+            "machines": "リモートプロバイダーマシン"
+          },
+          "usage": {
+            "remoteModel": "リモートモデル",
+            "remoteTask": "リモートタスク"
+          },
+          "bundle": {
+            "mixed": "実行中 {{running}} · 待機 {{ready}}",
+            "runningOnly": "実行中 {{running}}",
+            "readyOnly": "待機 {{ready}}",
+            "countBadge": "計 {{count}}",
+            "popoverTitle": "{{name}} のタスク ({{count}})"
+          },
+          "badge": {
+            "own": "自分のPC",
+            "groupMember": "グループ",
+            "share": "共有プロバイダー",
+            "shareShort": "共有",
+            "shareGroup": "共有グループ · {{count}} 台",
+            "shareGroupShort": "共有組 · {{count}} 台"
+          },
+          "relayRole": {
+            "officialShort": "公式",
+            "selfHostedShort": "自前",
+            "sharerRelayShort": "共有元リレー",
+            "officialFull": "Cindy 公式リレー",
+            "selfHostedFull": "自前リレー",
+            "sharerRelayFull": "共有元の自前リレー"
+          },
+          "status": {
+            "ready": "オンライン",
+            "busy": "ビジー",
+            "paused": "一時停止",
+            "idle": "待機中",
+            "standby": "待機中"
+          },
+          "machineLine": {
+            "live": "{{flow}} · {{count}} タスク",
+            "ready": "準備完了 · {{count}} タスク"
+          },
+          "popover": {
+            "models": "使用中のモデル",
+            "tasksCount": "紐づくタスク ({{count}})",
+            "clickToOpenHint": "クリックで開く",
+            "relayHost": "リレーホスト",
+            "relayRegion": "リージョン",
+            "relayHop": "リレーまで",
+            "relayLoad": "経由中",
+            "relayLoadValue": "{{machines}} 台 · {{tasks}} タスク"
+          },
+          "idleStrip": {
+            "summary": "他に {{count}} 台のオンラインリモートプロバイダーが待機中です",
+            "show": "待機プロバイダーを表示",
+            "hide": "待機プロバイダーを隠す"
+          },
+          "stats": {
+            "empty": "実行中のリモートプロバイダータスクはありません",
+            "tasks": "{{total}} タスク",
+            "tasksWithRunning": "{{total}} タスク（実行中 {{running}}）",
+            "machines": "{{active}} 台のプロバイダー",
+            "machinesWithTotal": "稼働 {{active}} / 計 {{total}} 台のプロバイダー",
+            "relays": "{{count}} リレー"
+          },
+          "legend": {
+            "live": "青い破線：通信中",
+            "ready": "緑の実線：Agent-Net 接続済み",
+            "busy": "オレンジ点：タスク実行中 / ビジー",
+            "error": "赤い点線：無応答または一時停止"
           }
         }
       }
@@ -7365,7 +7498,8 @@
       "localNetwork": {
         "label": "ローカルネットワーク",
         "deniedHint": "この権限がないと、同じネットワーク上のコンピュータやスマートフォンはこのコンピュータに直接接続できず、リレー経由になるため遅くなります。",
-        "settingsHint": "「システム設定 › プライバシーとセキュリティ › ローカルネットワーク」で Cindy をオンにしてください。戻るとすぐに反映されます。"
+        "promptedHint": "macOS の確認ダイアログで「許可」をクリックしてください。表示されない場合はシステム設定から手動でオンにします。",
+        "settingsHint": "「プライバシーとセキュリティ」で「ローカルネットワーク」を開き、Cindy をオンにしてください。一覧にない場合は「+」からこのアプリを追加すると戻ってすぐ反映されます。"
       }
     },
     "imBot": {
@@ -7836,6 +7970,10 @@
         "toggle-sidebar": {
           "label": "サイドバーを切り替え",
           "description": "左側のセッションリストを折りたたみ・展開します"
+        },
+        "copy-session-link": {
+          "label": "セッションリンクをコピー",
+          "description": "開いているセッションのリンクをコピー"
         },
         "session-history-back": {
           "label": "前のセッション",
@@ -9558,6 +9696,7 @@
         "createTitle": "MCP サーバーを追加",
         "editTitle": "MCP サーバーを編集",
         "desc": "リモート http / sse 型の MCP のみ対応。保存後、新しい Agent セッションから呼び出せます。実行中の Agent セッションには影響しません。",
+        "embeddedGuide": "アシスタントがこのタスクで使う MCP の設定フォームを開きました。サービスプロバイダーの案内に従って入力済みの内容を確認し、不足している項目を入力してから設定を保存してください。",
         "teammateDesc": "リモート http / sse 型の MCP のみ対応。保存すると仲間が自分のツールに追加し、このチャットの次のメッセージから使えます。新しいセッションは不要です。"
       },
       "fields": {
@@ -9769,7 +9908,7 @@
       "allow": "許可",
       "deny": "拒否",
       "questionTitle": "回答が必要です",
-      "submit": "送信",
+      "submit": "回答を送信",
       "planTitle": "プランの確認",
       "approve": "承認",
       "requestChanges": "修正を依頼",
@@ -10329,10 +10468,10 @@
       }
     },
     "byAgent": {
-      "title": "Agent / harness 別",
+      "title": "Agent / Harness 別",
       "subtitle": "直近 30 日",
       "col": {
-        "agent": "Agent / harness",
+        "agent": "Agent / Harness",
         "total": "直近 30 日のトークン",
         "totalInRange": "{{range}}のトークン",
         "share": "割合",
@@ -11958,6 +12097,8 @@
         "loadEarlierFailed": "以前のメッセージを読み込めませんでした。もう一度お試しください",
         "emptyTitle": "このグループにはまだメッセージがありません",
         "emptyDescription": "話しかけると仲間たちが会話を続けます。@ で仲間を指名すると、その仲間だけが返信します。",
+        "emptyDescriptionWithAssistant": "@Cindy に話しかけたり、右上の招待メニューから友だちを招待したり、仲間を追加したりできます。",
+        "emptyDescriptionInvite": "右上の招待メニューから友だちを招待したり、仲間を追加したりできます。",
         "roundEnded": "仲間たちの発言が終わりました",
         "stepTag": "ステップ {{count}}",
         "sending": "送信中",
@@ -12289,7 +12430,7 @@
         "loginRequired": "ログインしてから再試行してください。",
         "requestFailed": "チャットサービスに接続できません。しばらくしてから再試行してください。",
         "copyFailed": "コピーできませんでした。リンクを選択して手動でコピーしてください。",
-        "createDescription": "仲間を選ぶか、先にグループを作成してから友達を招待できます。",
+        "createDescription": "グループの作成後に、友だちを招待したり、仲間を追加したりできます。",
         "settings": {
           "notifications": {
             "title": "メッセージ通知",
@@ -12338,7 +12479,7 @@
           "soleOwnerHint": "メンバーはあなただけです。グループをアーカイブすると履歴が残り、後で再開できます。",
           "archive": "グループをアーカイブ",
           "archiveHint": "アーカイブすると、すべてのメンバーに対して新しいメッセージと仲間の実行が停止します。履歴は保持されます。グループを検索して履歴を閲覧したり、アーカイブを解除したりできます。",
-          "confirm": "確認",
+          "confirm": "続行",
           "lastOwner": "退出またはオーナーを削除する前に、別のメンバーに所有権を譲渡してください。",
           "conflict": "設定が更新されました。再読み込みしてお試しください。",
           "unarchive": "アーカイブを解除",
@@ -13194,7 +13335,7 @@
       }
     },
     "confirmDialog": {
-      "confirm": "確認",
+      "confirm": "続行",
       "cancel": "キャンセル",
       "dontShowAgain": "次回から表示しない"
     },
@@ -13576,6 +13717,7 @@
           "overloadRetryingNoCount": "モデルサービスが混雑しています。自動で再試行しています…",
           "overloadFailed": "⚠️ モデルサービスが混雑しています。上流に空き容量がありません。ここでこのメッセージを再送して再試行するか、Cindy で別のモデルに切り替えてください。（デスクトップ版で「再試行」を押してもタスクは続行できますが、結果はこのメッセージには戻りません。）"
         },
+        "openAiReconnect": "Cindy の設定 → プロバイダー → OpenAI で ChatGPT に再接続し、このチャットにメッセージを送信してください。",
         "audioInputUnavailable": "現在のモデル接続では音声を直接読み取れません。先に音声を文字に起こしてから続けるよう Cindy に依頼してください。",
         "toolLoop": {
           "generic": "モデルがツールを繰り返し呼び出した回数が多すぎるため、無限ループを避けるために Cindy はこのターンを停止しました。新しいメッセージを送ると続行できます。",
@@ -14735,11 +14877,11 @@
         },
         "acp": {
           "ask": {
-            "label": "その都度確認",
+            "label": "デフォルト権限",
             "description": "Agent が権限を求めたときにあなたが確認します。Agent が確認を求めない操作は Cindy では止められません。"
           },
           "default": {
-            "label": "デフォルト",
+            "label": "デフォルト権限",
             "description": "Agent の既定の動作で進めます。権限の要求はあなたが確認します。"
           },
           "acceptEdits": {
@@ -14747,15 +14889,15 @@
             "description": "Agent はファイルを直接編集します。その他の権限の要求はあなたが確認します。"
           },
           "auto": {
-            "label": "自動",
+            "label": "自動レビュー",
             "description": "確認が必要な操作は Agent が判断します。要求された権限はあなたが確認します。"
           },
           "plan": {
-            "label": "計画のみ",
+            "label": "計画モード",
             "description": "Agent は分析と計画だけを行い、ファイルは編集しません。"
           },
           "bypassPermissions": {
-            "label": "すべて許可",
+            "label": "フルアクセス",
             "description": "Agent が求める権限はすべて自動で許可されます。"
           }
         }
@@ -15418,7 +15560,7 @@
       "back": "戻る",
       "skip": "スキップ",
       "next": "次へ",
-      "submit": "送信",
+      "submit": "回答を送信",
       "sendAndContinue": "送信して続行",
       "close": "閉じる",
       "customAnswer": "別の回答を入力…",
@@ -15589,6 +15731,8 @@
       "codexHelperUnverified": "このタスクの cindy_helper が利用可能か確認できませんでした。タスクの結果を報告できない可能性があります。",
       "requestFormatError": "アプリが送信したリクエストの形式に問題があり、返信を完了できませんでした。",
       "piRetryHistoryTooLarge": "メッセージは送信されませんでした。Pi が再試行に必要な履歴を読み込む際に、データフレームがローカルの上限（16 MiB）を超えました。新しいタスクで続けられます。",
+      "piRetryHistoryUnavailable": "メッセージは送信されませんでした。Pi が送信に必要な履歴を読み込めませんでした。再試行するか、新しいタスクで続けてください。",
+      "upstreamStatusError": "上流が {{status}} を返したため、この返信は完了しませんでした。",
       "messageNotSent": "メッセージは送信されませんでした。",
       "replyFailed": "返信を完了できませんでした",
       "queuedSendRecovery": "直前のメッセージは送信されていません。「再試行」でそのまま送信できます。新しいメッセージを送ると、直前のメッセージは置き換わります。",
@@ -15848,6 +15992,10 @@
       "diffUnchangedLines_one": "変更なし {{count}} 行",
       "diffUnchangedLines_other": "変更なし {{count}} 行",
       "diffPreviewLoading": "差分プレビューを準備しています…"
+    },
+    "filePreview": {
+      "changed": "ファイルが変更されました",
+      "refreshHint": "クリックして更新"
     },
     "textLightbox": {
       "unreadable": "このファイルを読み取れません",
@@ -16424,7 +16572,7 @@
       "REMOTE_WORKDIR_UNAVAILABLE": "リモートの作業ディレクトリを今は使えません。そのパソコンにフォルダがまだあるか確認してから、再試行してください。",
       "REMOTE_OPTIMISTIC_SESSION_STATE_UNAVAILABLE": "パソコン側で、このメッセージが送信済みかまだ確認できません。少し待ってから再試行し、同じメッセージを重ねて送らないでください。",
       "REMOTE_AGENT_UNAVAILABLE": "Agent を実行しているパソコンと通信できませんでした。エラーの詳細を確認してください。",
-      "REMOTE_AGENT_TIMEOUT": "Agent を実行しているパソコンからの応答がタイムアウトしました。結果は未確認です。再試行する前にセッションの進行状況を確認してください。",
+      "REMOTE_AGENT_TIMEOUT": "Agent を実行するパソコンからまだ応答がありません。セッションの進行状況を確認してください。実行中または完了していれば、再試行は不要です。",
       "REMOTE_AGENT_LINK_BUSY": "Agent を実行しているパソコンとの通信が混雑しています。しばらく待ってから再試行してください。",
       "REMOTE_AGENT_UNRESPONSIVE": "Agent を実行しているパソコンが繰り返し応答しなかったため、呼び出しを一時停止しました。しばらく待ってから再試行してください。",
       "REMOTE_AGENT_OFFLINE": "Agent を実行しているパソコンはオフラインです。再接続後に再試行してください。",
@@ -16662,6 +16810,8 @@
       "retryIn": "{{seconds}} 秒後に自動で再試行"
     },
     "subscriptionAccountError": {
+      "unreachable": "一時的に Codex アカウントサービスに接続できません。",
+      "rechecking": "一時的に Codex アカウントサービスに接続できません。{{resetAt}} に再試行します。",
       "poolModelLimited": "このモデルのサブスクリプション利用枠が上限に達しました。別のモデルに切り替えられます。",
       "poolRetryUntil": "{{resetAt}} 以降に再試行できます。",
       "poolOtherSignedOut": "別のサブスクリプションアカウントはログアウトしています。タスクを実行するコンピューターでログインして再試行できます。",
@@ -18442,6 +18592,7 @@
         "intervalChip": "完了後に計時 · {{schedule}}"
       },
       "scheduleMenu": {
+        "custom": "カスタム Cron",
         "intervalMinutes": "分（N 分ごと）",
         "interval": "Hourly（N 時間ごと）",
         "daily": "Daily（毎日）",
@@ -19139,6 +19290,7 @@
     }
   },
   "commandPalette": {
+    "buddyNewHint": "仲間の設定で「{{restart}}」を選ぶと、作業コンテキストを再構築し、メッセージ履歴を保持できます。別の話題を話し合うには、メッセージの操作から「{{startTopic}}」を選んでください。",
     "viewSkillDetails": "スキルの詳細を見る",
     "projectSkillNotLoaded": "現在の Pi タスクでは、このプロジェクト Skill はまだ読み込まれていません。新しいタスクでは自動的に読み込みを試みます。",
     "pluginSkillSetup": {
@@ -22615,6 +22767,16 @@
     "refresh": "利用枠を更新"
   },
   "subscriptionAccounts": {
+    "existing": {
+      "menu": "アカウントの追加方法",
+      "connect": "既存のログインを接続…",
+      "found": "接続可能 {{count}} 件",
+      "title": "{{device}} のログイン",
+      "note": "Cindy は選択したアカウントの設定を CLI と共有します。",
+      "attach": "接続",
+      "choose": "別のフォルダを選択…",
+      "unverified": "このフォルダのサブスクリプションを確認できませんでした。"
+    },
     "pluginSignIn": {
       "method": "ログイン方法",
       "secretHint": "キーはプラグインにだけ渡され、このアカウント専用のフォルダーに保存されます。Cindy は保存せず、ほかのコンピューターにも送信しません。",

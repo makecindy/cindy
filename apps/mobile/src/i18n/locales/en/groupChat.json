@@ -499,7 +499,7 @@
       "tools": "Owner-authorized tools and information",
       "authorizeTitle": "Allow this group to use {{name}}’s tools and information?",
       "toolsHint": "Members may use this companion’s existing tools and private information. Results are visible to everyone. Existing approval rules still apply. Revoking stops active requests, but cannot undo completed actions.",
-      "confirm": "Confirm"
+      "confirm": "Allow tools"
     }
   },
   "groupSettings": {
@@ -544,6 +544,8 @@
     "accessChat": "Group chat only",
     "accessTools": "Can use tools and info",
     "replies": "How buddies reply",
+    "assistant": "Group Cindy",
+    "assistantHint": "Works on the computer of whoever @mentions it.",
     "replyModeMentionedNote": "Buddies stay quiet unless someone @mentions them.",
     "work": "Work splits",
     "organizerHint": "Decides who does each step. Defaults to the first buddy.",
@@ -588,7 +590,7 @@
     "removeOwnHint": "{{name}} will no longer receive messages from “{{group}}”. Message history stays; other groups and private chats are unaffected.",
     "removeOwnActiveHint": "Removing this companion stops its active requests in this group. Tasks opened independently keep running.",
     "stopAndRemove": "Stop and remove",
-    "confirm": "Confirm",
+    "confirm": "Allow tools",
     "inviteTitle": "Invite to group",
     "reusableLink": "No expiration · Reusable by multiple people",
     "singleUseUntil": "Single use · Expires {{date}}",

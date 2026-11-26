@@ -73,7 +73,11 @@ vi.mock('../linuxDesktop', () => ({
   linuxMonitor: vi.fn(),
   linuxDisplay: () => ({ id: 'hyprland:eDP-2', name: 'eDP-2', width: 1600, height: 1000 }),
 }));
-vi.mock('../linuxCapture', () => ({ readLinuxCursorSupport: async () => false }));
+vi.mock('../linuxCapture', () => ({
+  readLinuxCursorSupport: async () => false,
+  readLinuxX11CaptureSupport: async () => false,
+  resolveLinuxCaptureBinary: async () => '/missing/capture',
+}));
 vi.mock('../linuxSessionLock', () => ({ isLinuxDesktopUnlocked: h.unlocked }));
 vi.mock('../linuxAudio', () => ({
   supportsLinuxAudio: () => h.linuxAudio,

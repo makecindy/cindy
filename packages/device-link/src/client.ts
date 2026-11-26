@@ -207,6 +207,22 @@ const SLOW_REQUEST_WARN_MS = 1_000;
  * 正常由唤醒事件解除；睡眠被取消或平台没发唤醒事件时由它兜底恢复连接。
  */
 export const SYSTEM_SUSPEND_RECONNECT_HOLD_MS = 60_000;
+/**
+ * 连接工厂报告的服务端重试期限最多遵守多久。期限照常生效；只防异常的 Retry-After
+ * (远期日期、超长秒数)把连接永久挂起 —— 封顶后到点仍受限的话，服务端会再给一次期限。
+ */
+export const SERVER_RETRY_MAX_WAIT_MS = 10 * 60_000;
+
+/**
+ * 读取连接工厂错误携带的服务端重试期限(`retryAt`,Unix 毫秒;如分享传输 429 的 Retry-After),
+ * 换算成从 now 起还要等多久(封顶 SERVER_RETRY_MAX_WAIT_MS)。没有、无效或已过期时返回 0,
+ * 调用方沿用普通退避。
+ */
+function serverRetryWaitFromError(err: unknown, now: number): number {
+  const retryAt = (err as { retryAt?: unknown } | null | undefined)?.retryAt;
+  if (typeof retryAt !== 'number' || !Number.isFinite(retryAt) || retryAt <= now) return 0;
+  return Math.min(retryAt - now, SERVER_RETRY_MAX_WAIT_MS);
+}
 /** Local transport admission must not consume a remote handler's response budget. */
 const REQUEST_SEND_WAIT_MAX_MS = 10_000;
 // Stop bulk writes well before the native socket's hard limit. Control envelopes
@@ -215,6 +231,11 @@ const SOCKET_DATA_HIGH_WATER_BYTES = 512 * 1024;
 const SOCKET_DATA_LOW_WATER_BYTES = 128 * 1024;
 const SOCKET_CONTROL_RESERVE_BYTES = 64 * 1024;
 const SOCKET_SEND_CREDIT_BYTES = 64 * 1024;
+// Normal relay traffic gets short, socket-wide bursts, independently of 1013
+// recovery and byte pressure. 64 frames fit every atomic message (<=64 segments)
+// without borrowing future credit; 25ms permits 2,560 frames/s on a healthy path.
+// Network buffering can still coalesce separate bursts; this is not relay credit.
+const RELAY_BURST_INTERVAL_MS = 25;
 /**
  * 接收端累计 ACK 的推进粒度。整批 drain 完成前完全不 ACK 会让发送端把
  * 已成功处理的前缀也等在慢 handler 后面。小批量 ACK 让发送端及时释放
@@ -297,6 +318,8 @@ export interface WsLike {
 /**
  * 创建一条带鉴权 header 的 ws 连接。允许返回 Promise —— host 建连前可能要先做异步
  * 准备(如 desktop 现取系统代理拿 http agent)。
+ * 失败时抛出的错误若带 `retryAt`(Unix 毫秒，服务端限流给出的重试期限),client 在期限前
+ * 不再调用工厂(见 SERVER_RETRY_MAX_WAIT_MS);不带时按普通退避重试。
  */
 export type WsFactory = (
   url: string,
@@ -773,8 +796,8 @@ interface PendingReliableMessage {
    * 发送(link 未就绪时排队),判断「对端有过 ACK 机会却没回」必须从首发算起。
    */
   firstSentAt?: number;
-  /** Last observed gate, diagnostics only; never controls transport scheduling. */
-  lastBlockedBy?: 'link' | 'receive-window' | 'recovery-ack' | 'relay-budget' | 'socket' | 'socket-budget' | 'pass-budget'
+  /** Last observed gate; unsent relay-burst waits also select the short drain cadence. */
+  lastBlockedBy?: 'link' | 'receive-window' | 'recovery-ack' | 'relay-budget' | 'relay-burst' | 'socket' | 'socket-budget' | 'pass-budget'
     | 'direct-buffer';
   /** 最近一次物理写出走的路径；直连失效时据此把仍未确认的帧改走 relay。 */
   path?: DeviceLinkPeerPath;
@@ -878,6 +901,7 @@ interface PeerTransportState {
   pending: Map<number, PendingReliableMessage>;
   pendingBytes: number;
   retryTimer: ReturnType<typeof setInterval> | null;
+  retryIntervalMs?: number;
   receive: Map<string, ReceiveStreamState>;
   highestAckSeq: number;
   lastReplayEpoch: number;
@@ -1015,10 +1039,20 @@ export class DeviceLinkClient {
   private replacedReconnectFloorMs = 0;
   /** 冷却中的重连计时器到点时刻；之前的 connectNow 不提前重连。 */
   private replacedCooldownUntil = 0;
+  /**
+   * 连接工厂最近一次失败时服务端给出的重试期限，墙钟与单调钟各记一份到期时刻(0 = 无),任一到点
+   * 即解除：墙钟覆盖系统睡眠，单调钟让系统时间回拨也不能把等待拉长到收到时的期限之外。期限前所有
+   * 建连入口都在 connect() 入口被推迟；stop/start 不清除，同一条连接重新启动也不能借此提前重试。
+   */
+  private serverRetryWallUntil = 0;
+  private serverRetryMonotonicUntil = 0;
   private readonly congestionSendBudget = new CongestionSendBudget();
   private relayRestartRecovery: 'waiting' | 'handshake' | number | null = null;
   private localSendPressure = false;
   private readonly localSendBudget = new CongestionSendBudget();
+  private readonly relayBurstBudget = new CongestionSendBudget(
+    64, RELAY_BURST_INTERVAL_MS, false, () => this.maxRelayBurstHeadFrames(),
+  );
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   /** 系统睡眠保持期：存在时不排重连(见 suspendForSystemSleep)。 */
   private systemSuspendHoldTimer: ReturnType<typeof setTimeout> | null = null;
@@ -1574,6 +1608,7 @@ export class DeviceLinkClient {
     this.relayRestartRecovery = null;
     this.localSendPressure = false;
     this.localSendBudget.reset();
+    this.relayBurstBudget.reset();
     this.pendingInboundLinkOffers.clear();
     this.staleLinkNotifiedAt.clear();
     this.resetLegacyInboundQueue();
@@ -3064,6 +3099,7 @@ export class DeviceLinkClient {
 
   private async connect(reason: string): Promise<void> {
     if (this.stopped) return;
+    if (this.deferUntilServerRetry(reason)) return;
     this.clearNetworkProbe();
     this.resetLegacyInboundQueue();
     this.connectionStartedAt = this.monotonicNow();
@@ -3141,6 +3177,10 @@ export class DeviceLinkClient {
         return;
       }
       this.log.warn('createWebSocket failed', err);
+      const wallNow = Date.now();
+      const serverWaitMs = serverRetryWaitFromError(err, wallNow);
+      this.serverRetryWallUntil = serverWaitMs > 0 ? wallNow + serverWaitMs : 0;
+      this.serverRetryMonotonicUntil = serverWaitMs > 0 ? this.monotonicNow() + serverWaitMs : 0;
       this.scheduleReconnect();
       return;
     }
@@ -3162,6 +3202,7 @@ export class DeviceLinkClient {
     this.ws = ws;
     this.localSendPressure = false;
     this.localSendBudget.reset();
+    this.relayBurstBudget.reset();
     this.armHandshakeTimeout(epoch);
 
     ws.on('open', () => {
@@ -3351,6 +3392,31 @@ export class DeviceLinkClient {
       : this.timing.handshakeTimeoutMs;
   }
 
+  /**
+   * 服务端重试期限未到时推迟这次建连，返回 true。退避计时器、网络变化／前台恢复的 connectNow、
+   * 唤醒的 restartConnection 与重新 start 都汇到 connect(),在这里统一拦住，不逐个入口判断。
+   * 推迟同样交给 scheduleReconnect 排期：等满期限再追加本档抖动，期限前经历换网或恢复的各端
+   * 不会在期限那一刻一起回来。期限只在工厂失败、本条连接没有 socket 时产生，所以推迟不会丢弃在线连接。
+   */
+  private deferUntilServerRetry(reason: string): boolean {
+    if (this.serverRetryWaitMs() <= 0) return false;
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+    this.log.debug(`connect(${reason}) deferred until server retry deadline`);
+    this.scheduleReconnect();
+    return true;
+  }
+
+  /** 距服务端重试期限还剩多久：墙钟与单调钟取较短者，系统睡眠和时间回拨都不会把等待拉长。 */
+  private serverRetryWaitMs(): number {
+    return Math.max(0, Math.min(
+      this.serverRetryWallUntil - Date.now(),
+      this.serverRetryMonotonicUntil - this.monotonicNow(),
+    ));
+  }
+
   private scheduleReconnect(serviceRestart = false): void {
     // 被顶替的下限只属于紧接着的这一次重连，不能留给之后普通断线的重连。
     const replacedFloorMs = this.replacedReconnectFloorMs;
@@ -3378,9 +3444,12 @@ export class DeviceLinkClient {
     // across 1–5 seconds and keep any larger ordinary/congestion backoff.
     const paced = serviceRestart ? Math.max(backoff, Math.round(1_000 + random * 4_000)) : backoff;
     // 身份冲突冷却同样向下抖动，两台电脑不会在同一时刻回来再互踢。
-    const delay = replacedFloorMs > 0
+    const cooled = replacedFloorMs > 0
       ? Math.max(paced, Math.round(replacedFloorMs * (0.7 + random * 0.3)))
       : paced;
+    // 服务端给了重试期限：先等满期限，再追加本档(已抖动的)退避，受限的各端不在同一刻一起回来。
+    const serverWaitMs = this.serverRetryWaitMs();
+    const delay = serverWaitMs > 0 ? Math.max(cooled, serverWaitMs + paced) : cooled;
     this.replacedCooldownUntil = replacedFloorMs > 0 ? Date.now() + delay : 0;
     this.reconnectAttempt++;
     this.reconnectTimer = setTimeout(() => {
@@ -3388,7 +3457,7 @@ export class DeviceLinkClient {
       void this.connect('backoff-reconnect');
     }, delay);
     this.log.debug(
-      `scheduling device-link reconnect in ${delay}ms (attempt=${this.reconnectAttempt}, congestionStreak=${this.congestionCloseStreak})`,
+      `scheduling device-link reconnect in ${delay}ms (attempt=${this.reconnectAttempt}, congestionStreak=${this.congestionCloseStreak}, serverWaitMs=${serverWaitMs})`,
     );
     this.setStatus('connecting');
   }
@@ -4748,11 +4817,16 @@ export class DeviceLinkClient {
     const previousBaseSeq = this.getTransportBaseSeq(peer);
     // 走直连的帧不占 relay 的拥塞预算与 socket 缓冲。
     const viaDirect = this.directChannelForSend(env.dst, peer) !== null;
+    const burstBudget = this.relayBurstBudgetForSend();
+    const burstAllowed = viaDirect || !burstBudget || burstBudget.canTake(
+      env.dst, additionalFrames, this.getRelayBurstPeers(env.dst), this.monotonicNow(),
+    );
     const willSendNow = this.isPeerSendReady(peer)
       // Admission may evict a discardable prefix and move this message into
       // the window. Preserve the socket preflight before that mutation.
       && (!this.isOutsideReceiveWindow(peer, seq) || !hasPendingCapacity())
       && !this.shouldHoldRecoverySend(peer, additionalFrames)
+      && burstAllowed
       && (viaDirect || !this.isRelaySendPaced() || this.congestionSendBudget.canTake(
         env.dst, additionalFrames, this.getReadyReliablePeers(env.dst), this.monotonicNow(),
       ));
@@ -4826,6 +4900,10 @@ export class DeviceLinkClient {
     this.warnSendBacklog(env.dst, peer, 'high');
     if (reservedBytes >= 256 * 1024) this.stallDiagnostics.record('send', { outcome: 'queued', request: diagnosticRef(routedEnv.id),
       dst: diagnosticRef(env.dst), channel: pending.diagChannel, seq, bytes: reservedBytes, transport: this.transportDiagnostic(env.dst) });
+    if (!burstAllowed && pending.lastBlockedBy === 'relay-budget') {
+      pending.lastBlockedBy = 'relay-burst';
+      this.accelerateRelayBurstDrain(env.dst, peer);
+    }
     if (willSendNow) {
       try {
         const sentFrames = this.sendReliableFrames(peer, pending);
@@ -4870,6 +4948,8 @@ export class DeviceLinkClient {
     const congestionBudget = this.isRelaySendPaced() ? this.congestionSendBudget : null;
     const localBudget = this.localSendPressure ? this.localSendBudget : null;
     const credits = Math.ceil(bytes / SOCKET_SEND_CREDIT_BYTES);
+    const burstBudget = this.relayBurstBudgetForSend();
+    if (burstBudget && !burstBudget.canTake(dst, 1, this.getRelayBurstPeers(dst), now)) return false;
     if (congestionBudget && !congestionBudget.canTake(dst, 1, peers, now)) return false;
     if (localBudget && !localBudget.canTake(dst, credits, peers, now)) return false;
     if (congestionBudget && !congestionBudget.take(dst, 1, peers, now)) return false;
@@ -4878,6 +4958,11 @@ export class DeviceLinkClient {
       return false;
     }
     let written = false;
+    if (burstBudget && !burstBudget.take(dst, 1, this.getRelayBurstPeers(dst), now)) {
+      congestionBudget?.refund(dst, 1);
+      localBudget?.refund(dst, credits);
+      return false;
+    }
     try {
       // No reliable slot is retained here, so authentication queuing must not
       // count as delivery. Keep signing, scoped routing and socket hard caps.
@@ -4892,6 +4977,7 @@ export class DeviceLinkClient {
       throw error;
     } finally {
       if (!written) {
+        burstBudget?.refund(dst, 1);
         congestionBudget?.refund(dst, 1);
         localBudget?.refund(dst, credits);
       }
@@ -4973,6 +5059,13 @@ export class DeviceLinkClient {
     const peers = this.getReadyReliablePeers(pending.envelope.dst!);
     const budgetNow = this.monotonicNow();
     const congestionBudget = this.isRelaySendPaced() ? this.congestionSendBudget : null;
+    const burstBudget = this.relayBurstBudgetForSend();
+    const burstPeers = burstBudget ? this.getRelayBurstPeers(pending.envelope.dst!) : [];
+    if (burstBudget && !burstBudget.canTake(pending.envelope.dst!, frames.length, burstPeers, budgetNow)) {
+      pending.lastBlockedBy = 'relay-burst';
+      if (!pending.sent) this.accelerateRelayBurstDrain(pending.envelope.dst!, peer);
+      return 0;
+    }
     if (congestionBudget && !congestionBudget.canTake(
       pending.envelope.dst!, frames.length, peers, budgetNow,
     )) { pending.lastBlockedBy = 'relay-budget'; return 0; }
@@ -4995,6 +5088,13 @@ export class DeviceLinkClient {
       pending.lastBlockedBy = 'socket-budget';
       return 0;
     }
+    if (burstBudget && !burstBudget.take(pending.envelope.dst!, frames.length, burstPeers, budgetNow)) {
+      congestionBudget?.refund(pending.envelope.dst!, frames.length);
+      localBudget?.refund(pending.envelope.dst!, byteCredits);
+      pending.lastBlockedBy = 'relay-burst';
+      if (!pending.sent) this.accelerateRelayBurstDrain(pending.envelope.dst!, peer);
+      return 0;
+    }
     let sent = 0;
     let writtenBytes = 0;
     try {
@@ -5014,6 +5114,7 @@ export class DeviceLinkClient {
         err,
       );
     } finally {
+      burstBudget?.refund(pending.envelope.dst!, frames.length - sent);
       congestionBudget?.refund(pending.envelope.dst!, frames.length - sent);
       localBudget?.refund(pending.envelope.dst!, byteCredits - Math.ceil(writtenBytes / SOCKET_SEND_CREDIT_BYTES));
       this.noteReliableWrite(peer, pending, sent, 'relay');
@@ -5310,6 +5411,53 @@ export class DeviceLinkClient {
       .map(([id]) => id);
   }
 
+  private relayBurstBudgetForSend(): CongestionSendBudget | null {
+    // Agent-Net's virtual socket is a set of independently paced reliable peer
+    // streams, not the single physical WebSocket governed by this meter.
+    return this.opts.reliablePeerTransport?.() === true ? null : this.relayBurstBudget;
+  }
+
+  private getRelayBurstPeers(target: string): string[] {
+    const peers = this.getReadyReliablePeers(target).filter(id =>
+      id === target || !this.directChannelForSend(id, this.peerTransport.get(id)!));
+    if (!peers.includes(target)) peers.push(target);
+    const challenge = this.opts.frameAuth?.()?.peerChallenge;
+    for (const [dst, queue] of this.relayChallenges) {
+      if (queue.frames.size > 0 && challenge?.state(dst) === 'ready' && !peers.includes(dst)) peers.push(dst);
+    }
+    return peers;
+  }
+
+  private maxRelayBurstHeadFrames(): number {
+    let largest = 1;
+    for (const [dst, peer] of this.peerTransport) {
+      if (!peer.reliable || !this.isPeerSendReady(peer) || this.directChannelForSend(dst, peer)) continue;
+      const head = peer.pending.values().next().value;
+      for (const pending of peer.pending.values()) {
+        const frames = this.estimateReliableFrameCount(pending);
+        if (pending.sent) {
+          // A retry already admitted by its original deadline/interval also
+          // needs room after an earlier burst denial; no new retry is created.
+          if (pending.lastBlockedBy === 'relay-burst') largest = Math.max(largest, frames);
+          continue;
+        }
+        if (!this.isOutsideReceiveWindow(peer, pending.seq)
+          && (pending === head || !this.shouldHoldRecoverySend(peer, frames))) {
+          largest = Math.max(largest, frames);
+        }
+        break;
+      }
+    }
+    return largest;
+  }
+
+  private accelerateRelayBurstDrain(dst: string, peer: PeerTransportState): void {
+    if (peer.retryTimer && peer.retryIntervalMs !== undefined && peer.retryIntervalMs <= RELAY_BURST_INTERVAL_MS) return;
+    if (peer.retryTimer) clearInterval(peer.retryTimer);
+    peer.retryTimer = null;
+    this.ensureRetryTimer(dst);
+  }
+
   private measureReliableFrames(frames: readonly Envelope[]): number {
     // Budget the physical wire envelope, not the local scoped connection handle.
     return frames.reduce((sum, frame) => sum + byteLength(JSON.stringify(encodeScopedEnvelope(frame, ALL_SCOPES))), 0);
@@ -5410,9 +5558,15 @@ export class DeviceLinkClient {
         this.clearRelayChallenge(dst, new DeviceLinkError('BACKPRESSURE', 'relay authentication timed out before socket write'));
         return;
       }
-      try { this.probeRelayChallenge(dst, queue!); } catch { /* 有界预算内再试。 */ }
+      try {
+        if (current.peerChallenge?.state(dst) === 'ready') this.flushRelayChallenge(dst, current);
+        else this.probeRelayChallenge(dst, queue!);
+      } catch { /* 有界预算内再试。 */ }
       if (this.relayChallenges.get(dst) !== queue) return;
-      queue!.timer = setTimeout(retry, Math.min(1_000, Math.max(100, this.timing.transportRetryIntervalMs)));
+      const delay = current.peerChallenge?.state(dst) === 'ready'
+        ? Math.min(RELAY_BURST_INTERVAL_MS, this.timing.transportRetryIntervalMs)
+        : Math.min(1_000, Math.max(100, this.timing.transportRetryIntervalMs));
+      queue!.timer = setTimeout(retry, delay);
     };
     queue.timer = setTimeout(retry, Math.min(1_000, Math.max(100, this.timing.transportRetryIntervalMs)));
     return queue;
@@ -5466,13 +5620,32 @@ export class DeviceLinkClient {
       this.clearRelayChallenge(dst, new DeviceLinkError('NOT_CONNECTED', 'relay signing identity changed'));
       return;
     }
-    this.clearRelayChallenge(dst);
-    for (const { env, pending } of queue.frames.values()) {
+    const remove = (key: string, bytes: number) => {
+      if (!queue.frames.delete(key)) return;
+      this.relayChallengeBytes -= bytes;
+      this.relayChallengeFrames--;
+    };
+    for (const [key, { env, bytes, pending }] of queue.frames) {
+      if (this.relayChallenges.get(dst) !== queue) return;
+      if (this.opts.frameAuth?.()?.peerChallenge?.session !== queue.session) {
+        this.clearRelayChallenge(dst, new DeviceLinkError('NOT_CONNECTED', 'relay signing identity changed'));
+        return;
+      }
       // 超时的写请求绝不能因迟到的认证响应在后台继续发送。
-      if (pending && (this.pending.get(env.id!) !== pending || pending.expireIfOverdue?.())) continue;
+      if (pending && (this.pending.get(env.id!) !== pending || pending.expireIfOverdue?.())) {
+        remove(key, bytes);
+        continue;
+      }
       try {
-        if (this.sendEnvelope(env)) pending?.noteFirstWrite?.();
+        if (this.sendEnvelope(env)) {
+          remove(key, bytes);
+          pending?.noteFirstWrite?.();
+        }
       } catch (error) {
+        // Keep unsent data in this existing bounded authentication queue. Its
+        // existing timer resumes draining; controls later in the queue may pass.
+        if (error instanceof DeviceLinkError && error.code === 'BACKPRESSURE') continue;
+        remove(key, bytes);
         if (pending && this.pending.get(env.id!) === pending) {
           this.pending.delete(env.id!);
           this.settleOutboundRouteAttemptsForId(dst, env.id!);
@@ -5481,6 +5654,7 @@ export class DeviceLinkClient {
         }
       }
     }
+    if (queue.frames.size === 0) this.clearRelayChallenge(dst);
     this.retryPending(dst, { ignoreInterval: false, onlyUnsent: true });
   }
 
@@ -5533,7 +5707,22 @@ export class DeviceLinkClient {
     // 时提前拒绝，避免弱网下 native socket 持续吃内存。
     this.assertWebSocketCapacity(frameBytes);
     this.assertTransportAllowed();
-    ws.send(text);
+    // Reliable sends and the stalled-window escape already reserve their whole
+    // atomic message. Legacy data has no pending queue: preserve BACKPRESSURE so
+    // its existing caller/outbox can retry. ACK/auth and link controls stay live.
+    const data = isBusinessTraffic(env) && !parseTransportAck(env) && !relayAuthHandshake(env);
+    const burstBudget = data ? this.relayBurstBudgetForSend() : null;
+    const legacyData = allowAuthenticationQueue && data;
+    const peerId = env.dst ?? '';
+    if (legacyData && burstBudget && !burstBudget.take(peerId, 1, this.getRelayBurstPeers(peerId), this.monotonicNow())) {
+      throw new DeviceLinkError('BACKPRESSURE', 'relay frame burst budget is full');
+    }
+    try { ws.send(text); }
+    catch (error) {
+      if (legacyData) burstBudget?.refund(peerId, 1);
+      throw error;
+    }
+    if (data) burstBudget?.noteWrite(peerId, this.monotonicNow());
     return true;
   }
 
@@ -6549,18 +6738,27 @@ export class DeviceLinkClient {
     const peer = this.getPeerTransport(dst);
     if (peer.retryTimer) return;
     const fasterForRestart = this.congestionCloseStreak === 0 && this.isRelaySendPaced();
+    const burstDrain = [...peer.pending.values()].some(p => !p.sent && p.lastBlockedBy === 'relay-burst');
+    peer.retryIntervalMs = burstDrain ? Math.min(RELAY_BURST_INTERVAL_MS, this.timing.transportRetryIntervalMs)
+      : this.isRelaySendPaced() || this.localSendPressure
+        ? Math.min(250, this.timing.transportRetryIntervalMs)
+        : this.timing.transportRetryIntervalMs;
     peer.retryTimer = setInterval(
       () => {
         this.retryPending(dst, { ignoreInterval: false });
-        if (fasterForRestart && !this.isRelaySendPaced() && peer.retryTimer) {
+        // A short pass can send a small item, then leave an atomic result for
+        // the next pass. It still needs a first write, rather than an ACK or
+        // the normal retransmission timer, even though its last gate changed.
+        const burstDrainPending = burstDrain && [...peer.pending.values()].some(p => !p.sent
+          && (p.lastBlockedBy === 'relay-burst' || p.lastBlockedBy === 'pass-budget'));
+        if (((fasterForRestart && !this.isRelaySendPaced())
+          || (burstDrain && !burstDrainPending)) && peer.retryTimer) {
           clearInterval(peer.retryTimer);
           peer.retryTimer = null;
           this.ensureRetryTimer(dst);
         }
       },
-      this.isRelaySendPaced() || this.localSendPressure
-        ? Math.min(250, this.timing.transportRetryIntervalMs)
-        : this.timing.transportRetryIntervalMs,
+      peer.retryIntervalMs,
     );
   }
 
