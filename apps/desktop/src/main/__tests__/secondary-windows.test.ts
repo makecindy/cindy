@@ -5,8 +5,8 @@ interface MockSecondaryWindowInstance {
   focused: boolean;
   minimized: boolean;
   currentUrl: string;
-  listeners: Map<string, Array<() => void>>;
-  webContentsListeners: Map<string, Array<() => void>>;
+  listeners: Map<string, Array<(...args: unknown[]) => void>>;
+  webContentsListeners: Map<string, Array<(...args: unknown[]) => void>>;
   webContents: {
     on: ReturnType<typeof vi.fn>;
     once: ReturnType<typeof vi.fn>;
@@ -18,8 +18,8 @@ interface MockSecondaryWindowInstance {
   isDestroyed: () => boolean;
   isFocused: () => boolean;
   isMinimized: () => boolean;
-  emit: (event: string) => void;
-  emitWebContents: (event: string) => void;
+  emit: (event: string, ...args: unknown[]) => void;
+  emitWebContents: (event: string, ...args: unknown[]) => void;
 }
 
 const mocks = vi.hoisted(() => ({
@@ -34,10 +34,10 @@ vi.mock('electron', () => ({
     focused = false;
     minimized = false;
     currentUrl = '';
-    listeners = new Map<string, Array<() => void>>();
-    webContentsListeners = new Map<string, Array<() => void>>();
+    listeners = new Map<string, Array<(...args: unknown[]) => void>>();
+    webContentsListeners = new Map<string, Array<(...args: unknown[]) => void>>();
     webContents = {
-      on: vi.fn((event: string, listener: () => void) => {
+      on: vi.fn((event: string, listener: (...args: unknown[]) => void) => {
         const list = this.webContentsListeners.get(event) ?? [];
         list.push(listener);
         this.webContentsListeners.set(event, list);
@@ -46,12 +46,12 @@ vi.mock('electron', () => ({
       setWindowOpenHandler: vi.fn(),
       getURL: () => this.currentUrl,
     };
-    on = vi.fn((event: string, listener: () => void) => {
+    on = vi.fn((event: string, listener: (...args: unknown[]) => void) => {
       const list = this.listeners.get(event) ?? [];
       list.push(listener);
       this.listeners.set(event, list);
     });
-    once = vi.fn((event: string, listener: () => void) => {
+    once = vi.fn((event: string, listener: (...args: unknown[]) => void) => {
       const list = this.listeners.get(event) ?? [];
       list.push(listener);
       this.listeners.set(event, list);
@@ -59,12 +59,12 @@ vi.mock('electron', () => ({
     isDestroyed = () => this.destroyed;
     isFocused = () => this.focused;
     isMinimized = () => this.minimized;
-    emit = (event: string) => {
+    emit = (event: string, ...args: unknown[]) => {
       if (event === 'closed') this.destroyed = true;
-      for (const listener of [...(this.listeners.get(event) ?? [])]) listener();
+      for (const listener of [...(this.listeners.get(event) ?? [])]) listener(...args);
     };
-    emitWebContents = (event: string) => {
-      for (const listener of [...(this.webContentsListeners.get(event) ?? [])]) listener();
+    emitWebContents = (event: string, ...args: unknown[]) => {
+      for (const listener of [...(this.webContentsListeners.get(event) ?? [])]) listener(...args);
     };
     hookWindowMessage = vi.fn();
     loadURL = mocks.loadURL;
@@ -285,5 +285,146 @@ describe('secondary window target matching', () => {
     first.minimized = false;
     first.focused = true;
     expect(findSecondaryWindowForSession({ sessionId: 'shared-task' })?.window).toBe(first);
+  });
+
+  it('rejects stale reported sessions after route change, companion mismatches, and cross-device collisions while forcing companion settings back to chat', () => {
+    vi.stubGlobal('MAIN_WINDOW_VITE_DEV_SERVER_URL', 'http://localhost:5173/');
+
+    // 1. Orca 协同副窗切去群聊/设置/新建页/其它任务后，即使卸载 cleanup 补报旧 leadSessionId，
+    //    也不得误命中该副窗；同路由仅切文件 tab 或 subframe 导航则保留已上报状态。
+    openSessionInNewWindow('lead-1', null);
+    const orcaWin = mocks.createdWindows.at(-1)!;
+    orcaWin.currentUrl = 'http://localhost:5173/?secondaryWindow=1&bootSession=lead-1#/cc-agent/lead-1';
+    updateSecondaryWindowVisibleSessions(orcaWin as unknown as BrowserWindow, ['lead-1', 'worker-1']);
+    expect(findSecondaryWindowForSession({ sessionId: 'worker-1' })).toEqual({
+      window: orcaWin,
+      matchKind: 'navigate',
+    });
+
+    // subframe did-navigate-in-page (isMainFrame=false) 不得误清主帧上报
+    orcaWin.emitWebContents('did-navigate-in-page', {}, 'about:blank', false);
+    expect(findSecondaryWindowForSession({ sessionId: 'worker-1' })).toEqual({
+      window: orcaWin,
+      matchKind: 'navigate',
+    });
+
+    // 切去群聊后 OrcaWorkerPanel 卸载补发单字符串 lead-1，必须被拒绝
+    orcaWin.currentUrl = 'http://localhost:5173/?secondaryWindow=1&bootSession=lead-1#/bots/groups/g1';
+    orcaWin.emitWebContents('did-navigate-in-page', {}, orcaWin.currentUrl, true);
+    updateSecondaryWindowVisibleSessions(orcaWin as unknown as BrowserWindow, 'lead-1');
+    expect(findSecondaryWindowForSession({ sessionId: 'lead-1' })).toBeNull();
+    expect(findSecondaryWindowForSession({ sessionId: 'worker-1' })).toBeNull();
+
+    // 真正处于群聊+普通任务分屏时（数组上报）仍可命中分屏任务；切到 /settings 或 /cc-agent/new 后立即失效
+    updateSecondaryWindowVisibleSessions(orcaWin as unknown as BrowserWindow, ['split-task']);
+    expect(findSecondaryWindowForSession({ sessionId: 'split-task' })).toEqual({
+      window: orcaWin,
+      matchKind: 'navigate',
+    });
+    orcaWin.currentUrl = 'http://localhost:5173/?secondaryWindow=1&bootSession=lead-1#/settings?tab=providers';
+    expect(findSecondaryWindowForSession({ sessionId: 'split-task' })).toBeNull();
+    orcaWin.currentUrl = 'http://localhost:5173/?secondaryWindow=1&bootSession=lead-1#/cc-agent/new';
+    expect(findSecondaryWindowForSession({ sessionId: 'split-task' })).toBeNull();
+
+    // 文件页切 tab 仅改变 query，不清空聊天栏展开态
+    orcaWin.currentUrl = 'http://localhost:5173/?secondaryWindow=1&bootSession=lead-1#/cc-agent/files/lead-1?file=a.ts';
+    orcaWin.emitWebContents('did-navigate-in-page', {}, orcaWin.currentUrl, true);
+    updateSecondaryWindowVisibleSessions(orcaWin as unknown as BrowserWindow, 'lead-1');
+    orcaWin.currentUrl = 'http://localhost:5173/?secondaryWindow=1&bootSession=lead-1#/cc-agent/files/lead-1?file=b.ts';
+    orcaWin.emitWebContents('did-navigate-in-page', {}, orcaWin.currentUrl, true);
+    expect(findSecondaryWindowForSession({ sessionId: 'lead-1' })).toEqual({
+      window: orcaWin,
+      matchKind: 'direct',
+    });
+
+    // 2. 伙伴设置页 (?settings=1) 必须以 navigate 命中（唤起并切回对话）；
+    //    明确停在其它会话/历史会话路由时不得误匹配当前主会话。
+    openSessionInNewWindow('/bots/bot-1', null);
+    const botWin = mocks.createdWindows.at(-1)!;
+    botWin.currentUrl = 'http://localhost:5173/?secondaryWindow=1&bootSession=%2Fbots%2Fbot-1#/bots/bot-1?settings=1';
+    expect(
+      findSecondaryWindowForSession({
+        sessionId: 'bot-current',
+        companion: { botId: 'bot-1', deviceId: null },
+      }),
+    ).toEqual({ window: botWin, matchKind: 'navigate' });
+
+    botWin.currentUrl =
+      'http://localhost:5173/?secondaryWindow=1&bootSession=%2Fbots%2Fbot-1#/bots/bot-1/session/bot-current?settings=1&settingsPage=model';
+    expect(
+      findSecondaryWindowForSession({
+        sessionId: 'bot-current',
+        companion: { botId: 'bot-1', deviceId: null },
+      }),
+    ).toEqual({ window: botWin, matchKind: 'navigate' });
+
+    botWin.currentUrl =
+      'http://localhost:5173/?secondaryWindow=1&bootSession=%2Fbots%2Fbot-1#/bots/bot-1/session/bot-old';
+    expect(
+      findSecondaryWindowForSession({
+        sessionId: 'bot-current',
+        companion: { botId: 'bot-1', deviceId: null },
+      }),
+    ).toBeNull();
+    expect(findSecondaryWindowForSession({ sessionId: 'bot-old' })).toEqual({
+      window: botWin,
+      matchKind: 'direct',
+    });
+    // 本地伙伴会话不得被远程同 ID 任务误命中
+    expect(findSecondaryWindowForSession({ sessionId: 'bot-old', deviceId: 'remote-mac' })).toBeNull();
+
+    botWin.currentUrl =
+      'http://localhost:5173/?secondaryWindow=1&bootSession=%2Fbots%2Fbot-1#/bots/bot-1/history/bot-old';
+    expect(
+      findSecondaryWindowForSession({
+        sessionId: 'bot-current',
+        companion: { botId: 'bot-1', deviceId: null },
+      }),
+    ).toBeNull();
+
+    // 远程伙伴设置页同样以 navigate 命中；显式停在旧会话时不匹配新会话
+    openSessionInNewWindow('/bots/remote/studio/bot-r', null);
+    const remoteBotWin = mocks.createdWindows.at(-1)!;
+    remoteBotWin.currentUrl =
+      'http://localhost:5173/?secondaryWindow=1&bootSession=%2Fbots%2Fremote%2Fstudio%2Fbot-r#/bots/remote/studio/bot-r?settings=1';
+    expect(
+      findSecondaryWindowForSession({
+        sessionId: 'remote-current',
+        deviceId: 'studio',
+        companion: { botId: 'bot-r', deviceId: 'studio' },
+      }),
+    ).toEqual({ window: remoteBotWin, matchKind: 'navigate' });
+    remoteBotWin.currentUrl =
+      'http://localhost:5173/?secondaryWindow=1&bootSession=%2Fbots%2Fremote%2Fstudio%2Fbot-r#/bots/remote/studio/bot-r/session/remote-old';
+    expect(
+      findSecondaryWindowForSession({
+        sessionId: 'remote-current',
+        deviceId: 'studio',
+        companion: { botId: 'bot-r', deviceId: 'studio' },
+      }),
+    ).toBeNull();
+
+    // 3. 本地副窗不得被远程同 ID 任务误命中；远程 Orca Worker 落到 Lead+?worker= 后仍保留设备隔离
+    openSessionInNewWindow('same-id', null);
+    const localWin = mocks.createdWindows.at(-1)!;
+    expect(findSecondaryWindowForSession({ sessionId: 'same-id', deviceId: 'remote-mac' })).toBeNull();
+    localWin.currentUrl = 'http://localhost:5173/?secondaryWindow=1&bootSession=same-id#/cc-agent/same-id';
+    expect(findSecondaryWindowForSession({ sessionId: 'same-id' })).toEqual({
+      window: localWin,
+      matchKind: 'direct',
+    });
+    expect(findSecondaryWindowForSession({ sessionId: 'same-id', deviceId: 'remote-mac' })).toBeNull();
+
+    openSessionInNewWindow('worker-remote', null, 'remote-mac');
+    const remoteWorkerWin = mocks.createdWindows.at(-1)!;
+    remoteWorkerWin.currentUrl =
+      'http://localhost:5173/?secondaryWindow=1&bootSession=worker-remote&bootDevice=remote-mac#/cc-agent/lead-remote?worker=worker-remote';
+    expect(
+      findSecondaryWindowForSession({ sessionId: 'worker-remote', deviceId: 'remote-mac' }),
+    ).toEqual({ window: remoteWorkerWin, matchKind: 'direct' });
+    expect(findSecondaryWindowForSession({ sessionId: 'worker-remote' })).toBeNull();
+    expect(
+      findSecondaryWindowForSession({ sessionId: 'worker-remote', deviceId: 'other-mac' }),
+    ).toBeNull();
   });
 });

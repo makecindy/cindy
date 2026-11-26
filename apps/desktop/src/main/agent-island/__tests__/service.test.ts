@@ -8290,4 +8290,122 @@ describe('灵动岛点击优先唤起已拖出的副窗口', () => {
       setDeepLinkMainWindow(null);
     }
   });
+
+  it('raises a companion secondary window on settings (?settings=1) and forces navigation back to the conversation', async () => {
+    const { AgentIslandService } = await import('../service.js');
+    const publish = vi.fn(() => true);
+    const main = createMockWindow({ url: 'http://localhost:5173/#/cc-agent/other', focused: false });
+    const secondary = createMockWindow({
+      url: 'http://localhost:5173/?secondaryWindow=1&bootSession=%2Fbots%2Fbot-1#/bots/bot-1?settings=1',
+      focused: false,
+    });
+    setDeepLinkMainWindow(main.win);
+    registerSecondaryAppWindow(secondary.win, { bootSession: '/bots/bot-1', bootDeviceId: null });
+    try {
+      const service = new AgentIslandService({
+        getMainWindow: () => main.win,
+        nativeHost: { failed: false, publish },
+      });
+      syncEnabledForTest(service, publish);
+      service.setCompanionChats([{
+        sessionId: 'bot-chat-1',
+        botId: 'bot-1',
+        deviceId: null,
+        companion: { name: 'Ada', avatar: 'sparkles', avatarColor: '#6366f1' },
+        visible: true,
+        unread: true,
+        lastMessageAt: Date.now(),
+        preview: 'Hi',
+      }]);
+
+      (service as unknown as { focusSession(id: string): void }).focusSession('bot-chat-1');
+
+      expect(secondary.focus).toHaveBeenCalledOnce();
+      expect(secondary.send).toHaveBeenCalledWith('deep-link:navigate', {
+        type: 'session',
+        id: 'bot-chat-1',
+      });
+      expect(main.focus).not.toHaveBeenCalled();
+      expect(main.send).not.toHaveBeenCalled();
+    } finally {
+      secondary.destroy();
+      setDeepLinkMainWindow(null);
+    }
+  });
+
+  it('falls back to the main window instead of hijacking a secondary window that navigated away to another page or old companion session', async () => {
+    const { AgentIslandService } = await import('../service.js');
+    const publish = vi.fn(() => true);
+    const main = createMockWindow({ url: 'http://localhost:5173/#/cc-agent/other', focused: false });
+    const orcaSecondary = createMockWindow({
+      url: 'http://localhost:5173/?secondaryWindow=1&bootSession=lead-1#/cc-agent/lead-1',
+      focused: false,
+    });
+    const oldBotSecondary = createMockWindow({
+      url: 'http://localhost:5173/?secondaryWindow=1&bootSession=%2Fbots%2Fbot-1#/bots/bot-1/session/bot-old',
+      focused: false,
+    });
+    setDeepLinkMainWindow(main.win);
+    registerSecondaryAppWindow(orcaSecondary.win, { bootSession: 'lead-1', bootDeviceId: null });
+    registerSecondaryAppWindow(oldBotSecondary.win, { bootSession: '/bots/bot-1', bootDeviceId: null });
+    try {
+      const service = new AgentIslandService({
+        getMainWindow: () => main.win,
+        nativeHost: { failed: false, publish },
+      });
+      syncEnabledForTest(service, publish);
+      service.registerIpc();
+      mocks.browserWindowFromWebContents.mockImplementation((sender: unknown) => {
+        if (sender === orcaSecondary.win.webContents) return orcaSecondary.win;
+        if (sender === oldBotSecondary.win.webContents) return oldBotSecondary.win;
+        if (sender === main.win.webContents) return main.win;
+        return null;
+      });
+
+      // Orca 副窗先上报协同可见，再切去群聊，同时模拟 OrcaWorkerPanel 卸载补报 lead-1
+      await registeredIpcHandler(AGENT_ISLAND_SET_VISIBLE_SESSION_CHANNEL)(
+        { sender: orcaSecondary.win.webContents },
+        ['lead-1', 'worker-1'],
+      );
+      orcaSecondary.setUrl('http://localhost:5173/?secondaryWindow=1&bootSession=lead-1#/bots/groups/g1');
+      orcaSecondary.emitWebContents('did-navigate-in-page');
+      await registeredIpcHandler(AGENT_ISLAND_SET_VISIBLE_SESSION_CHANNEL)(
+        { sender: orcaSecondary.win.webContents },
+        'lead-1',
+      );
+      service.handleUserPrompt({ sessionId: 'lead-1', agentKind: 'codex' }, 'plan');
+
+      (service as unknown as { focusSession(id: string): void }).focusSession('lead-1');
+
+      expect(orcaSecondary.focus).not.toHaveBeenCalled();
+      expect(orcaSecondary.send).not.toHaveBeenCalled();
+      expect(main.focus).toHaveBeenCalledTimes(1);
+      expect(main.send).toHaveBeenCalledWith('deep-link:navigate', { type: 'session', id: 'lead-1' });
+
+      // 伙伴副窗停在旧会话时，点击伙伴新主会话必须回落主窗，不得误唤旧会话副窗
+      main.focus.mockClear();
+      main.send.mockClear();
+      service.setCompanionChats([{
+        sessionId: 'bot-current',
+        botId: 'bot-1',
+        deviceId: null,
+        companion: { name: 'Ada', avatar: 'sparkles', avatarColor: '#6366f1' },
+        visible: true,
+        unread: true,
+        lastMessageAt: Date.now(),
+        preview: 'New',
+      }]);
+
+      (service as unknown as { focusSession(id: string): void }).focusSession('bot-current');
+
+      expect(oldBotSecondary.focus).not.toHaveBeenCalled();
+      expect(oldBotSecondary.send).not.toHaveBeenCalled();
+      expect(main.focus).toHaveBeenCalledTimes(1);
+      expect(main.send).toHaveBeenCalledWith('deep-link:navigate', { type: 'session', id: 'bot-current' });
+    } finally {
+      orcaSecondary.destroy();
+      oldBotSecondary.destroy();
+      setDeepLinkMainWindow(null);
+    }
+  });
 });
