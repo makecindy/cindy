@@ -1255,7 +1255,7 @@ export function LayoutRoot({
             data-layout-root-child-id={entry.node.id}
             className={
               elastic
-                ? 'flex h-full min-h-0 min-w-[400px] flex-1 overflow-hidden'
+                ? 'flex h-full min-h-0 min-w-[min(400px,100%)] flex-1 overflow-hidden'
                 : 'flex h-full min-h-0 min-w-0 flex-none overflow-hidden'
             }
             style={elastic ? undefined : { width: rootWidths.splitWidths[entry.node.id] }}
