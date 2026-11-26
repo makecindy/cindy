@@ -13734,6 +13734,7 @@
           "overloadRetryingNoCount": "O serviço do modelo está ocupado. A tentar novamente de forma automática…",
           "overloadFailed": "⚠️ O serviço do modelo está ocupado — o serviço a montante não tem capacidade neste momento. Reenvie esta mensagem aqui para tentar novamente ou mude para outro modelo no Cindy. (Clicar em «Tentar novamente» na aplicação de computador também continua a tarefa, mas o resultado não volta a esta mensagem.)"
         },
+        "openAiReconnect": "Volte a ligar o ChatGPT no Cindy em Definições → Fornecedores → OpenAI e envie uma mensagem aqui.",
         "audioInputUnavailable": "Esta ligação ao modelo não permite processar áudio diretamente. Peça à Cindy que transcreva o áudio antes de continuar.",
         "toolLoop": {
           "generic": "O modelo chamou ferramentas repetidamente demasiadas vezes, pelo que o Cindy parou este turno para evitar um ciclo infinito. Envie uma nova mensagem para continuar.",
