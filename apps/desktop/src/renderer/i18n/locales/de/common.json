@@ -16778,6 +16778,8 @@
       "retryIn": "Automatischer Versuch in {{seconds}} s"
     },
     "subscriptionAccountError": {
+      "unreachable": "Der Codex-Kontodienst ist vorübergehend nicht erreichbar.",
+      "rechecking": "Der Codex-Kontodienst ist vorübergehend nicht erreichbar. Neuer Versuch um {{resetAt}}.",
       "poolModelLimited": "Das Nutzungslimit des Abos für dieses Modell ist erreicht. Sie können das Modell wechseln.",
       "poolRetryUntil": "Versuchen Sie es nach {{resetAt}} erneut.",
       "poolOtherSignedOut": "Ein weiteres Abo-Konto ist abgemeldet. Melden Sie es auf dem Computer an, der die Aufgabe ausführt, und versuchen Sie es erneut.",

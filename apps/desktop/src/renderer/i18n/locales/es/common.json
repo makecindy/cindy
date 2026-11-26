@@ -16932,6 +16932,8 @@
       "retryIn": "Reintento automático en {{seconds}} s"
     },
     "subscriptionAccountError": {
+      "unreachable": "El servicio de cuentas de Codex no responde.",
+      "rechecking": "El servicio de cuentas de Codex no responde. Se reintentará a las {{resetAt}}.",
       "poolModelLimited": "Se ha alcanzado el límite de uso de la suscripción para este modelo. Puedes cambiar de modelo.",
       "poolRetryUntil": "Vuelve a intentarlo después de {{resetAt}}.",
       "poolOtherSignedOut": "Otra cuenta de suscripción tiene la sesión cerrada. Inicia sesión en el equipo que ejecuta la tarea y vuelve a intentarlo.",

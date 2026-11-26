@@ -16703,6 +16703,8 @@
       "retryIn": "{{seconds}} 秒後に自動で再試行"
     },
     "subscriptionAccountError": {
+      "unreachable": "一時的に Codex アカウントサービスに接続できません。",
+      "rechecking": "一時的に Codex アカウントサービスに接続できません。{{resetAt}} に再試行します。",
       "poolModelLimited": "このモデルのサブスクリプション利用枠が上限に達しました。別のモデルに切り替えられます。",
       "poolRetryUntil": "{{resetAt}} 以降に再試行できます。",
       "poolOtherSignedOut": "別のサブスクリプションアカウントはログアウトしています。タスクを実行するコンピューターでログインして再試行できます。",
