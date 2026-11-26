@@ -187,6 +187,7 @@ interface DeviceLinkPeerLinksSnapshot {
   traffic?: import('../shared/deviceLinkIpc').LinkTrafficSnapshot;
   links: DeviceLinkPeerLinkView[];
   agentNetRoutes?: import('../shared/deviceLinkIpc').DeviceLinkAgentNetPeerRouteView[];
+  providerShareRoutes?: import('../shared/deviceLinkIpc').DeviceLinkProviderShareRouteView[];
   relayProtocol?: 'agent-net' | 'device-link';
   /** 经中转的数据走中转的 UDP 端口还是 WebSocket(见 shared/deviceLinkIpc.ts) */
   relayTransport?: 'udp' | 'websocket';
@@ -923,6 +924,7 @@ interface CCAgentUserMessagePersistedPayload {
 interface CCAgentAskUserQuestionOption {
   label: string;
   description?: string;
+  preview?: string;
 }
 
 interface CCAgentAskUserQuestionItem {
@@ -1027,6 +1029,8 @@ interface AutoUpdateSettingsPayload {
   autoRelaunchOnIdle: boolean;
   isCustomized?: boolean;
   defaultAutoRelaunchOnIdle?: boolean;
+  /** False when this installation cannot install unattended (Linux system .deb). */
+  unattendedInstallSupported?: boolean;
 }
 
 /* ── 跨 Agent 工作区互转 wire 类型（同 main/cross-agent-convert/types.ts） ── */
@@ -4423,6 +4427,7 @@ interface ElectronAPI {
     onReshareRequested(cb: () => void): () => void;
   };
   subscriptionAccounts: {
+    existingLogins?(request: import('../shared/subscriptionAccounts').ExistingLoginRequest): Promise<import('../shared/subscriptionAccounts').ExistingLoginResult>;
     onChanged(cb: (event: { providerId: import('../shared/subscriptionAccounts').SubscriptionProvider; resetAccountId?: string }) => void): () => void;
     command(command: import('../shared/subscriptionAccounts').SubscriptionAccountCommand): Promise<import('../shared/subscriptionAccounts').SubscriptionPoolView>;
     /** Validate the reply with parseSubscriptionSessionAccountView. */
@@ -4596,6 +4601,24 @@ interface ElectronAPI {
       ) => Promise<{ ok: true }>;
       /** 清掉一台设备的缓存;deviceId 必填(登出的整体清理由 main 在账号边界自己做) */
       clear: (deviceId: string) => Promise<{ ok: true }>;
+    };
+    offlineInboxIntents: {
+      list: () => Promise<import('@cindy/maker-shared/offline-inbox-intent').OfflineInboxIntent[]>;
+      upsert: (
+        intent: import('@cindy/maker-shared/offline-inbox-intent').OfflineInboxIntent,
+      ) => Promise<import('@cindy/maker-shared/offline-inbox-intent').OfflineInboxIntent[]>;
+      remove: (
+        deviceId: string,
+        sessionId: string,
+      ) => Promise<import('@cindy/maker-shared/offline-inbox-intent').OfflineInboxIntent[]>;
+      clearDevice: (
+        deviceId: string,
+      ) => Promise<import('@cindy/maker-shared/offline-inbox-intent').OfflineInboxIntent[]>;
+      onChanged: (
+        callback: (payload: {
+          intents: import('@cindy/maker-shared/offline-inbox-intent').OfflineInboxIntent[];
+        }) => void,
+      ) => () => void;
     };
   };
 
@@ -6041,7 +6064,8 @@ interface ElectronAPI {
     // 模型供应商目录（只读）—— 内置目录元数据 + 各供应商实时连接状态。
     setProviderPresentation: (input: {
       providerId?: string;
-      action: 'rename' | 'remove' | 'restore';
+      action: 'rename' | 'remove' | 'restore' | 'appearance';
+      icon?: import('@cindy/model-providers/branding').ConnectionArtwork | null;
       name?: string;
       dataOwnerId: string | null;
       ownerGeneration: number;
@@ -6169,11 +6193,14 @@ interface ElectronAPI {
       apiKey?: string | null;
       headers?: Record<string, string>;
       /** 已保存供应商 id:main 侧据此并入 main-only 鉴权请求头(renderer 不回读明文头)。 */
+      refreshBatch?: string;
+      catalogPresetId?: string;
       savedProviderId?: string;
     }) => Promise<{
       ok: boolean;
       models?: import('@cindy/model-providers').DiscoveredModel[];
       /** true only when every catalog page was read; absent = unknown. */
+      glmFlashProbe?: 'unknown' | 'unavailable';
       complete?: boolean;
       /** Saved-provider fetches only: receipt to pass back as `listingReceipts` when saving. */
       listingReceipt?: string;

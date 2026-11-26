@@ -176,7 +176,9 @@
       "GROUP_AUTHORIZATION_REQUIRED": "{{name}} could not run this tool: group authorization has expired or does not allow this action. The buddy’s owner can make the request again in this group.",
       "GROUP_AUTHORIZATION_UNAVAILABLE": "Group authorization for {{name}} could not be verified, so this tool did not run. Try again after the connection recovers.",
       "ATTACHMENTS_UNAVAILABLE": "Some attachments were not delivered to {{name}} because of a download failure or attachment limit. Resend the attachments needed for this request.",
-      "GROUP_ASSISTANT_UNAVAILABLE": "{{name}}, connect your Cindy so Cindy can work for you (none of your computers has Cindy online right now)."
+      "GROUP_ASSISTANT_UNAVAILABLE": "{{name}}, connect your Cindy so Cindy can work for you (none of your computers has Cindy online right now).",
+      "GROUP_ASSISTANT_DEVICE_REQUIRED": "Choose the computer that should handle this request for {{name}}.",
+      "GROUP_ASSISTANT_DEVICE_OFFLINE": "The computer {{name}} selected for this group is offline."
     }
   },
   "plan": {
@@ -500,10 +502,12 @@
       "tools": "Owner-authorized tools and information",
       "authorizeTitle": "Allow this group to use {{name}}’s tools and information?",
       "toolsHint": "Members may use this companion’s existing tools and private information. Results are visible to everyone. Existing approval rules still apply. Revoking stops active requests, but cannot undo completed actions.",
-      "confirm": "Confirm"
+      "confirm": "Allow tools"
     }
   },
   "groupSettings": {
+    "assistantComputer": "Execution computer",
+    "chooseComputer": "Choose a computer",
     "tabSettings": "Settings",
     "youAreOwner": "You’re the owner",
     "youAreAdmin": "You’re an admin",
@@ -545,6 +549,8 @@
     "accessChat": "Group chat only",
     "accessTools": "Can use tools and info",
     "replies": "How buddies reply",
+    "assistant": "Group Cindy",
+    "assistantHint": "Works on the computer of whoever @mentions it.",
     "replyModeMentionedNote": "Buddies stay quiet unless someone @mentions them.",
     "work": "Work splits",
     "organizerHint": "Decides who does each step. Defaults to the first buddy.",
@@ -589,7 +595,7 @@
     "removeOwnHint": "{{name}} will no longer receive messages from “{{group}}”. Message history stays; other groups and private chats are unaffected.",
     "removeOwnActiveHint": "Removing this companion stops its active requests in this group. Tasks opened independently keep running.",
     "stopAndRemove": "Stop and remove",
-    "confirm": "Confirm",
+    "confirm": "Allow tools",
     "inviteTitle": "Invite to group",
     "reusableLink": "No expiration · Reusable by multiple people",
     "singleUseUntil": "Single use · Expires {{date}}",

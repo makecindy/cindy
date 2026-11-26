@@ -481,7 +481,14 @@
         "nextWeek": "Na próxima semana",
         "indefinite": "Indefinidamente",
         "custom": "Personalizar…",
-        "invalidTime": "Escolha uma data e hora futuras dentro de um ano."
+        "invalidTime": "Escolha uma data e hora futuras dentro de um ano.",
+        "pendingSync": "Sincronização pendente",
+        "pendingArchiveSync": "Será arquivada quando o computador ficar online",
+        "offlineCompleteRejectedDirty": "“{{title}}” voltou para Pendentes: há alterações não confirmadas no Worktree que exigem confirmação antes de arquivar.",
+        "offlineCompleteRejectedNewActivity": "“{{title}}” voltou para Pendentes: houve nova atividade no computador enquanto estava offline.",
+        "offlineCompleteRejectedRunning": "“{{title}}” voltou para Pendentes: a tarefa está em execução.",
+        "offlineCompleteRejectedAttached": "“{{title}}” voltou para Pendentes: a tarefa está vinculada ou compartilhada e não foi arquivada automaticamente.",
+        "offlineCompleteRejectedPreflight": "“{{title}}” voltou para Pendentes: não foi possível verificar o Worktree antes de arquivar."
       },
       "taskListMode": {
         "enterInbox": "Caixa de entrada",
@@ -836,9 +843,6 @@
     "connectionsEmpty": "Nenhuma Skill ou conexão selecionada.",
     "largeProfileRecovery": "Este perfil é longo demais para editar aqui. Edite o perfil completo em {{deviceName}}.",
     "addModel": "Adicionar modelo alternativo",
-    "removeModel": "Remover modelo",
-    "moveModelUp": "Mover modelo para cima",
-    "backupModels": "Modelos de reserva ({{count}})",
     "settingsTitle": "Configurações do amigo",
     "name": "Nome",
     "portraitNumber": "Retrato {{number}}",

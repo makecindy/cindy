@@ -11,7 +11,7 @@ import { dialogueWorkspaceRoots } from '../localDb/dialogueWorkspace';
 import { sessions } from '../localDb/schema.js';
 import { getDbClient } from '../localDb/client/current';
 import { startRewoundSchedulerPromptCleanup, stopRewoundSchedulerPromptCleanup } from './rewoundSchedulerPromptCleanup.js';
-import { readRemoteProviderRoute } from '../remote-agent/controller/deviceCatalog.js';
+import { readRemotePluginEngines, readRemoteProviderRoute } from '../remote-agent/controller/deviceCatalog.js';
 import {
   resolveDefaultScheduleRoute,
   resolveRouteCopyCapabilities,
@@ -47,7 +47,7 @@ import { listPluginEngineViews } from '../maker-ipc/pluginEnginesIpc.js';
 import { admitPluginEngineSwitchTarget } from '../maker-ipc/pluginEngineSessionAdmission.js';
 import { MakerScheduleRunner } from './runner.desktop';
 import { captureScheduledOwnerGuard } from '../maker-ipc/scheduledSessionBootstrap.js';
-import { listMessagesForAgentHandoff } from '../localDb/ipc/messages.js';
+import { readAutoReviewHistoryPage } from '../localDb/ipc/messages.js';
 import { drainPersistQueue } from '../messagePersistBroadcaster.desktop.js';
 import { ScriptScheduleRunner } from './script-runner.desktop';
 import { SchedulerScriptCapabilityBroker } from './script-capability-broker.desktop';
@@ -104,7 +104,7 @@ const desktop = createSchedulerHost<StartSchedulerDeps>({
       beforeDispatchUserTurn: deps.beforeDispatchUserTurn,
       readAutoReviewHistory: async (sessionId) => {
         await drainPersistQueue();
-        return listMessagesForAgentHandoff(sessionId, null, undefined, 'authorization');
+        return readAutoReviewHistoryPage(sessionId);
       },
       onUndispatchedUserTurn: deps.onUndispatchedUserTurn,
       resolveInheritedModel: schedule => resolveTeammateScheduleModel(schedule, {
@@ -118,7 +118,10 @@ const desktop = createSchedulerHost<StartSchedulerDeps>({
       onModelDispatched: recordDispatchedModel,
       applyPiModelSelectionUnderLock: applyPiImModelSelectionUnderLock,
       resolveModelSelection: (selection, location) => {
-        const route = { ...selection, agentDeviceId: selection.agentDeviceId === undefined ? location?.agentDeviceId : selection.agentDeviceId };
+        if (selection.agentKind === 'acp') {
+          throw new Error('Plugin engines are not resolved through the built-in catalog');
+        }
+        const route = { ...selection, agentKind: selection.agentKind, agentDeviceId: selection.agentDeviceId === undefined ? location?.agentDeviceId : selection.agentDeviceId };
         return resolveScheduledModelSelectionLive(route, async (agentDeviceId) => [
           (await readRemoteProviderRoute({ ...route, agentDeviceId })).provider,
         ]);
@@ -138,11 +141,15 @@ const desktop = createSchedulerHost<StartSchedulerDeps>({
       // 隐式改道后按落地拷贝 reconcile effort/Fast(见 runner deps 注释,R27)。
       resolveRouteCopyCapabilities,
       resolveDefaultModelRoute: resolveDefaultScheduleRoute,
-      // 插件引擎(docs/plans/acp-plugin-bridge.md)：按本机此刻提供的引擎准入，规则与新建任务相同。
-      admitPluginEngine: (route) => admitPluginEngineSwitchTarget(
-        { providerId: route.providerId, model: route.model, effort: route.effort },
-        listPluginEngineViews(),
-      ),
+      // 插件引擎(docs/plans/acp-plugin-bridge.md)：按本机或目标电脑此刻提供的引擎准入，规则与新建/切换任务相同。
+      admitPluginEngine: async (route) => {
+        const target = { providerId: route.providerId, model: route.model, effort: route.effort };
+        const deviceId = route.agentDeviceId?.trim() || null;
+        if (deviceId) {
+          return admitPluginEngineSwitchTarget(target, await readRemotePluginEngines(deviceId));
+        }
+        return admitPluginEngineSwitchTarget(target, listPluginEngineViews());
+      },
       // 心跳撞忙排队桥:实现挂在 maker-ipc/register.ts 的 coordinator 装配处
       // 先恢复快照再判忙闲；holder 未就绪时恢复返回 false，由 runner 顺延。
       schedulerQueue: {

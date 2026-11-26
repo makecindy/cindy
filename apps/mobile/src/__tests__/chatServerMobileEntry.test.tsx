@@ -220,13 +220,13 @@ describe('opening a group the account already knows', () => {
       if (path.endsWith('/read')) return { readSeq: options.body.readSeq, following: false, muted: false, markedUnread: false, notificationScope: null };
       if (path.includes('/messages?')) return messages;
       const value = await original(path, options);
-      return path.endsWith('/snapshot') ? { ...value, messages, cursor: '7', reads: [{ thread_key: 'main', read_seq: '6' }] } : value;
+      return path.endsWith('/snapshot') ? { ...value, room: { ...value.room, default_notification_scope: 'mentions' }, messages, cursor: '7', reads: [{ thread_key: 'main', read_seq: '6' }] } : value;
     });
     showChat = true; await render();
     await socket.frame({ type: 'ready', actorId: self });
     const shown = () => chat.state.kind === 'ready' ? chat.state.group : undefined;
     const mainRead = () => peekChatMessages(id)?.page.snapshot.reads?.find(read => read.thread_key === 'main');
-    expect(shown()?.notificationMode).toBe('all');
+    expect(shown()?.notificationMode).toBe('mentions');
     h.auth.apiFetch.mockClear();
     await act(async () => { await chat.markRead!(messages.map(message => message.id)); });
     const event = (cursor: string, data: unknown) => socket.frame({ type: 'changes', scope: `actor:${self}`, cursor, changes: [{ type: 'read.changed', entityId: id, data }] });
@@ -568,6 +568,30 @@ it('keeps the account owner label when quoting from a direct phone entry', async
     mentions: [botId], content: [expect.objectContaining({ data: expect.objectContaining({ authorName: 'Companion X (Account B)' }) }), { type: 'text', text: 'Agreed' }],
   }) }));
 });
+// Direct mobile thread replies use the real outbox and HTTP serializer. A named
+// companion must be the sole recipient even when public Cindy wrote the root.
+it.each([false, true])('addresses a bot-authored thread with an explicit target=%s', async explicit => {
+  const author = '00000000-0000-4000-8000-000000000003';
+  const personal = '00000000-0000-4000-8000-000000000004';
+  const member = { id: author, kind: 'bot', state: 'joined', name: 'Cindy', role: 'member', ownerActorId: null };
+  const root = { id: self, seq: '1', authorId: author, author: { kind: 'bot', name: 'Cindy' },
+    content: [{ type: 'text', text: 'Topic' }], createdAt: '2026-10-09', deleted: false, threadRootId: null };
+  const original = h.auth.apiFetch.getMockImplementation()!;
+  h.auth.apiFetch.mockImplementation(async (path, options) => {
+    const members = [member, { ...member, id: personal, ownerActorId: self }];
+    if (path.endsWith('/snapshot')) return { room, members, messages: [root], cursor: '1' };
+    if (path.endsWith('/members')) return members;
+    if (path.includes('/messages?')) return [];
+    if (path.endsWith('/messages/' + self)) return root;
+    return original(path, options);
+  });
+  showChat = true; threadRootId = self; await render();
+  await act(async () => { await send({ clientId: 'thread-recipient', text: 'Please reply', mentions: { all: false, botIds: explicit ? [personal] : [] } }); });
+  expect(h.auth.apiFetch).toHaveBeenCalledWith('/v1/conversations/' + id + '/messages', expect.objectContaining({
+    method: 'POST', body: expect.objectContaining({ threadRootId: self, mentions: [explicit ? personal : author] }),
+  }));
+});
+
 // Integration: useBotGroupChat -> upload -> durable outbox -> real HTTP serializer.
 // Topic attachment parity: existing media cases only covered the main timeline;
 // an attachment-only topic reply must retain its root in the eventual POST.
@@ -624,19 +648,21 @@ it('refuses a late PUT result after account changes before media completion', as
   expect(h.auth.apiFetch.mock.calls.some(([path]) => path.endsWith('/messages'))).toBe(false);
 });
 
-it('never includes the current human actor in explicit or everyone server mentions', async () => {
+it.each(['group', 'direct'])('preserves explicit self only in groups and excludes the sender from broadcasts (%s)', async kind => {
   const other = '00000000-0000-4000-8000-000000000003';
   const original = h.auth.apiFetch.getMockImplementation()!;
   h.auth.apiFetch.mockImplementation(async (path, options) => {
     const value = await original(path, options);
     if (path.endsWith('/members')) return [...value, { ...value[0], id: other, name: 'Other', ownerActorId: other }];
-    return path.endsWith('/snapshot') ? { ...value, members: [...value.members, { ...value.members[0], id: other, name: 'Other', ownerActorId: other }] } : value;
+    return path.endsWith('/snapshot') ? { ...value, room: { ...value.room, kind }, members: [...value.members, { ...value.members[0], id: other, name: 'Other', ownerActorId: other }] } : value;
   });
   showChat = true; await render();
   for (const all of [false, true]) {
     await act(async () => { await send({ text: 'hello', clientId: `fixture-${all}`, mentions: { all, botIds: [self, other] } }); });
-    expect(h.auth.apiFetch).toHaveBeenCalledWith(`/v1/conversations/${id}/messages`, expect.objectContaining({ method: 'POST', body: { operationId: `fixture-${all}`, content: [{ type: 'text', text: 'hello' }], mentions: [other] } }));
+    expect(h.auth.apiFetch).toHaveBeenCalledWith(`/v1/conversations/${id}/messages`, expect.objectContaining({ method: 'POST', body: { operationId: `fixture-${all}`, content: [{ type: 'text', text: 'hello' }], mentions: kind === 'direct' ? [other] : [self, other] } }));
   }
+  await act(async () => { await send({ text: 'hello', clientId: 'broadcast-only', mentions: { all: true, botIds: [] } }); });
+  expect(h.auth.apiFetch).toHaveBeenCalledWith(`/v1/conversations/${id}/messages`, expect.objectContaining({ method: 'POST', body: { operationId: 'broadcast-only', content: [{ type: 'text', text: 'hello' }], mentions: [other] } }));
 });
 it('imports read_seq and acknowledges only displayed incoming messages with their exact sequences', async () => {
   await clearRemoteResourceCache();

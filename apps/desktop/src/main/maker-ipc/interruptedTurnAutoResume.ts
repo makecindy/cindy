@@ -26,7 +26,7 @@ import { type OutputLimitDetails } from '@cindy/maker-shared';
  */
 
 import { hasUserVisibleText } from '../../shared/visibleText.js';
-import type { AgentInputToolLoopDetails } from '../../shared/agentInputQueue.js';
+import type { AgentInputToolLoopDetails, ReconnectHandoff } from '../../shared/agentInputQueue.js';
 import type { ProviderGroupUsageLimit } from '../../shared/providerGroup.js';
 
 import {
@@ -46,6 +46,10 @@ export interface InterruptedTurnErrorSignals {
   reason?: string;
   /** 从错误里抽出的 HTTP 状态码。 */
   errorStatus?: number;
+  /** Tool items whose completion had not been observed at reconnect timeout. */
+  pendingToolCount?: number;
+  /** Main-only sink for the guard decision on this exact terminal event. */
+  recordReconnectHandoff?: (reason: ReconnectHandoff) => void;
   /** Bounded details for the live error projection; never contains raw provider data. */
   toolLoop?: AgentInputToolLoopDetails;
   outputLimit?: OutputLimitDetails;
@@ -57,6 +61,18 @@ export interface InterruptedTurnErrorSignals {
   providerGroupUsageLimit?: ProviderGroupUsageLimit;
   /** Codex app-server 的结构化错误 tag(如 `usageLimitExceeded`)。 */
   codexErrorInfo?: string;
+}
+
+/** Only bounded host facts enter the hidden continuation. Provider error text stays in history. */
+export function codexReconnectRecoveryNote(signals: Pick<InterruptedTurnErrorSignals, 'pendingToolCount' | 'errorStatus'>): string {
+  const status = signals.errorStatus;
+  const http = status !== undefined && Number.isInteger(status) && status >= 100 && status <= 599
+    ? ` (HTTP ${status})` : '';
+  return `The model connection stalled during reconnection${http}.`
+    + (signals.pendingToolCount && signals.pendingToolCount > 0
+      ? ' Cindy had unconfirmed tool results at the time of interruption.' : '')
+    + ' Review the recorded tool results and diagnose any reported failure. If a call has no result,'
+    + ' verify its effects before attempting it again. Continue the unfinished work.';
 }
 
 /**
@@ -663,7 +679,7 @@ export class InterruptedTurnAutoResumeGuard {
   onInterruptedTurn(
     sessionId: string,
     erroredAt: number,
-    options?: { enabled?: boolean; maxEpisodeAttempts?: number },
+    options?: { enabled?: boolean; maxConsecutiveAttempts?: number; maxEpisodeAttempts?: number },
   ): InterruptedTurnResumeDecision {
     const s = this.state(sessionId);
     if (!(options?.enabled ?? this.deps.isEnabled(sessionId))) {
@@ -684,10 +700,11 @@ export class InterruptedTurnAutoResumeGuard {
       return { action: 'skip', why: 'superseded' };
     }
     const maxEpisodeAttempts = options?.maxEpisodeAttempts ?? INTERRUPTED_TURN_MAX_EPISODE_ATTEMPTS;
+    const maxConsecutiveAttempts = options?.maxConsecutiveAttempts ?? INTERRUPTED_TURN_MAX_CONSECUTIVE_ATTEMPTS;
     const exhaustedReason =
       s.episodeAttempts >= maxEpisodeAttempts
         ? 'episode'
-        : s.consecutiveAttempts >= INTERRUPTED_TURN_MAX_CONSECUTIVE_ATTEMPTS
+        : s.consecutiveAttempts >= maxConsecutiveAttempts
           ? 'consecutive'
           : null;
     if (exhaustedReason) {
@@ -721,7 +738,7 @@ export class InterruptedTurnAutoResumeGuard {
     this.deps.log.debug('interrupted-turn auto-resume granted', {
       sessionId,
       attempt,
-      maxAttempts: INTERRUPTED_TURN_MAX_CONSECUTIVE_ATTEMPTS,
+      maxAttempts: maxConsecutiveAttempts,
       episodeAttempt: s.episodeAttempts,
       maxEpisodeAttempts,
       sessionTotal: s.sessionTotalResumes,
@@ -731,7 +748,7 @@ export class InterruptedTurnAutoResumeGuard {
     return {
       action: 'resume',
       attempt,
-      maxAttempts: INTERRUPTED_TURN_MAX_CONSECUTIVE_ATTEMPTS,
+      maxAttempts: maxConsecutiveAttempts,
       episodeAttempt: s.episodeAttempts,
       maxEpisodeAttempts,
       sessionTotal: s.sessionTotalResumes,
