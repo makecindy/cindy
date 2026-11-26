@@ -1266,6 +1266,8 @@ export interface AgentDeps {
     threadId: string,
     expectedSessionInstanceId?: string,
   ) => void;
+  /** Release instance-owned MCP transports on handle termination, not on thread replacement. */
+  closeCodexMcpSessionInstance?: (sessionInstanceId: string) => void;
 
   /**
    * Codex 专用:为远端机器构造一个 codex app-server transport。
@@ -2484,7 +2486,7 @@ export class TurnPermissionPolicyUnsupportedError extends Error {
   readonly code = 'TURN_PERMISSION_POLICY_UNSUPPORTED';
 
   constructor(
-    /** 'acp' = a plugin engine, which cannot enforce a per-turn policy in any mode. */
+    /** 'acp' = a plugin engine (enforces per-turn policies only when it advertises permissionGate outside bypassPermissions). */
     readonly agentKind: EngineKind,
     readonly permissionMode: PermissionMode,
   ) {

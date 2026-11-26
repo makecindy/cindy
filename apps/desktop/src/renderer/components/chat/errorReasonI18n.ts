@@ -74,5 +74,8 @@ export function errorReasonI18nKey(reason: string | null | undefined, message: s
   if (isProviderSafetyRefusalError(message, reason)) {
     return 'chat.errorBanner.providerSafetyRefusal';
   }
+  if (!reason && /^550 status code \(no body\)$/i.test(message.trim())) {
+    return 'chat.errorBanner.upstreamEmpty550';
+  }
   return reason ? ERROR_REASON_I18N_KEYS[reason] : undefined;
 }
