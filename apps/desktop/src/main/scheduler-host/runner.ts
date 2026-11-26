@@ -14,6 +14,7 @@ import {
   type ScheduledModelSelectionLease,
 } from '../maker-ipc/scheduledModelSelection';
 import { CONTINUE_AFTER_APP_EXIT_PROMPT, UI_ACTION_TRIGGER_PREFIX } from '../../shared/interruptedTurn.js';
+import { workingDirEquals } from '../../shared/workingDir.js';
 import { withScheduleLock } from './scheduleLock';
 import {
   routinePermissionSnapshot,
@@ -2044,6 +2045,56 @@ export class MakerScheduleRunner implements ScheduleRunner {
           nextProviderId,
         });
       }
+      if (
+        !this.deps.schedulerQueue &&
+        isHeartbeat &&
+        reusedLiveSession &&
+        liveSession &&
+        !liveSession.remoteHostId &&
+        !agentDeviceId &&
+        liveSession.workDir
+      ) {
+        const liveRecoveredDir =
+          this.runtime.resolveRecoveredWorkingDir?.(sessionId, liveSession.workDir) ??
+          liveSession.workDir;
+        const liveDirNeedsRecovery =
+          !workingDirEquals(liveRecoveredDir, liveSession.workDir) ||
+          (heartbeatWorkingDir !== undefined &&
+            !workingDirEquals(workingDir, heartbeatWorkingDir) &&
+            !workingDirEquals(liveSession.workDir, workingDir)) ||
+          ((liveSession.agentKind === 'claude-code' || liveSession.agentKind === 'pi') &&
+            heartbeatWorkingDir !== undefined &&
+            workingDirEquals(liveSession.workDir, heartbeatWorkingDir) &&
+            !!this.runtime.peekWorkingDirectoryRecoveryNote?.(sessionId, liveSession.workDir));
+        if (liveDirNeedsRecovery) {
+          // 无 schedulerQueue 直发路径不经 makerSendTransaction：活会话仍绑在失效目录
+          // （或 Claude/Pi 原地重建目录后 cwd 仍指已删除 inode）时，Maker.createSession 会
+          // 复用旧实例并忽略新 workingDir。空闲时按 runtime-refresh 安全关闭再由下方重建；
+          // 会话正忙时顺延/失败，绝不中断在途 turn 或提前消费恢复说明。
+          try {
+            await prepareLocalSessionCredentialModeSwitch({
+              maker: this.deps.maker,
+              sessionId,
+              isSessionInTurn: this.runtime.isSessionInTurn,
+              signal: ctx.signal,
+            });
+          } catch (err) {
+            if (err instanceof CredentialModeSwitchBusyError) {
+              return this.failOrDeferSessionRunning(schedule, ctx, sessionId, isHeartbeat);
+            }
+            throw err;
+          }
+          throwIfFireAborted(ctx.signal, 'session creation');
+          reusedLiveSession = false;
+          this.deps.logger.info?.('[runner] closed live session for working directory recovery', {
+            scheduleId: schedule.id,
+            sessionId,
+            agentKind: liveSession.agentKind,
+            fromWorkingDir: liveSession.workDir,
+            toWorkingDir: workingDir,
+          });
+        }
+      }
     }
     if (!agentDeviceId && isHeartbeat && effectiveAgentKind === 'pi' && !reusedLiveSession && resumeSessionId) {
       if (!this.deps.applyPiModelSelectionUnderLock) {
@@ -2503,6 +2554,21 @@ export class MakerScheduleRunner implements ScheduleRunner {
         }
         setSessionProvider(session.id, verdict.providerId);
       }
+    }
+
+    // 直发降级路径兜底围栏：若并发竞态令 createSession 仍返回旧目录上的活会话，绝不向
+    // 失效目录发送或注入/消费“已切换至备用目录”的恢复说明。
+    const workingDirRecovered =
+      isHeartbeat &&
+      !session.remoteHostId &&
+      !agentDeviceId &&
+      !!workingDir &&
+      ((heartbeatWorkingDir !== undefined && !workingDirEquals(workingDir, heartbeatWorkingDir)) ||
+        !!this.runtime.peekWorkingDirectoryRecoveryNote?.(session.id, workingDir));
+    if (workingDirRecovered && session.workDir && !workingDirEquals(session.workDir, workingDir)) {
+      throw new Error(
+        `Scheduled task session ${session.id} is still running in stale working directory; refusing dispatch`,
+      );
     }
 
     // 4.5.4 只有直发降级路径需要把取消映射到 session.abort()。生产队列路径由

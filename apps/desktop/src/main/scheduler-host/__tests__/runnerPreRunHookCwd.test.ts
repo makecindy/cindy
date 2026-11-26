@@ -525,6 +525,129 @@ describe('MakerScheduleRunner pre-run hook cwd 解析', () => {
       expect(sentContents[1]).not.toContain('[Working directory recovery]');
     });
 
+    it('closes and rebuilds an idle live session on the gone worktree in direct-send mode, and defers while busy', async () => {
+      const { tempRoot, ownerRoot } = await setupOwnerRoot();
+      const sessionId = 'gone-live-owner';
+      const missingWorktree = path.join(tempRoot, 'repo', '.cindy-worktrees', 'gone-live');
+      const expectedFallback = worktreeConversationFallbackDir(
+        path.join(ownerRoot, 'dialogues'),
+        sessionId,
+        missingWorktree,
+      );
+      mocks.getSessionRowSnapshot.mockImplementation(async () => ({
+        status: 'active',
+        workingDir: missingWorktree,
+      }));
+      mocks.getManagedWorktreeReadinessForSession.mockResolvedValue('gone');
+      mocks.executePreRunHook.mockResolvedValue({
+        status: 'passed',
+        decision: 'run',
+        exitCode: 0,
+        timedOut: false,
+        aborted: false,
+        durationMs: 4,
+        stdout: 'changed',
+        stderr: '',
+        stdoutTruncated: false,
+        stderrTruncated: false,
+      });
+
+      let staleTurnRunning = true;
+      const sentByDir: Array<{ workDir: string; content: string }> = [];
+      const makeSession = (workDir: string, isTurnRunning = () => false): Session => {
+        const listeners: Array<(event: AgentEvent) => void> = [];
+        return {
+          id: sessionId,
+          agentKind: 'codex',
+          model: 'gpt-6-astra',
+          workDir,
+          remoteHostId: null,
+          isTurnRunning,
+          send: vi.fn(async (msg: { content: string }, opts?: { onAccepted?: () => Promise<void> }): Promise<SessionSendResult> => {
+            sentByDir.push({ workDir, content: msg.content });
+            await opts?.onAccepted?.();
+            queueMicrotask(() => {
+              for (const listener of [...listeners]) listener({ type: 'done', data: {} });
+            });
+            return { accepted: true };
+          }),
+          onEvent(listener: (event: AgentEvent) => void) {
+            listeners.push(listener);
+            return () => {
+              const idx = listeners.indexOf(listener);
+              if (idx >= 0) listeners.splice(idx, 1);
+            };
+          },
+          abort: vi.fn(async () => undefined),
+          close: vi.fn(async () => undefined),
+        } as unknown as Session;
+      };
+
+      const activeSessions = new Map<string, Session>([
+        [sessionId, makeSession(missingWorktree, () => staleTurnRunning)],
+      ]);
+      const notifier: Notifier = { notify: vi.fn(async () => undefined) };
+      const logger: Logger = { warn: vi.fn(), info: vi.fn(), debug: vi.fn(), error: vi.fn() };
+      const closeSession = vi.fn(async (id: string) => {
+        activeSessions.delete(id);
+      });
+      const createSession = vi.fn(async (opts: { id: string; workingDir: string }) => {
+        // Mirror real Maker.createSession: return an existing active instance unchanged.
+        const existing = activeSessions.get(opts.id);
+        if (existing) return existing;
+        const created = makeSession(opts.workingDir);
+        activeSessions.set(opts.id, created);
+        return created;
+      });
+      const maker = {
+        createSession,
+        getSessionMeta: vi.fn(async () => ({
+          workDir: missingWorktree,
+          agentKind: 'codex',
+          model: 'gpt-6-astra',
+        })),
+        getSession: vi.fn((id: string) => activeSessions.get(id)),
+        isSessionAlive: vi.fn((id: string) => activeSessions.has(id)),
+        listActiveSessions: vi.fn(() => [...activeSessions.values()]),
+        closeSession,
+        recyclePiRuntimeIfResourcesDrifted: vi.fn(async () => false),
+      } as unknown as Maker;
+      const runner = new MakerScheduleRunner({
+        maker,
+        getDb: () => ({}) as never,
+        notifier,
+        logger,
+      });
+
+      const schedule = baseSchedule({ targetSessionId: sessionId, model: 'gpt-6-astra' });
+
+      // While the stale live session is still mid-turn, defer instead of killing the turn or consuming the note.
+      const busyResult = await runner.fire(schedule, createFireContext());
+      expect(busyResult).toMatchObject({ deferred: true });
+      expect(closeSession).not.toHaveBeenCalled();
+      expect(sentByDir).toHaveLength(0);
+      expect(workingDirectoryRecovery.peek(sessionId, missingWorktree)).toContain('[Working directory recovery]');
+
+      // Once idle, close the stale live session and rebuild in the fallback directory before sending.
+      staleTurnRunning = false;
+      await runner.fire(schedule, createFireContext());
+      expect(closeSession).toHaveBeenCalledTimes(1);
+      expect(closeSession).toHaveBeenCalledWith(sessionId, 'runtime-refresh');
+      expect(createSession).toHaveBeenCalledWith(
+        expect.objectContaining({ id: sessionId, workingDir: expectedFallback }),
+      );
+      expect(sentByDir).toHaveLength(1);
+      expect(sentByDir[0]!.workDir).toBe(expectedFallback);
+      expect(sentByDir[0]!.content).toContain('[Working directory recovery]');
+
+      // Subsequent fire reuses the already-rebuilt fallback live session without closing it or repeating the note.
+      await runner.fire(schedule, createFireContext());
+      expect(closeSession).toHaveBeenCalledTimes(1);
+      expect(sentByDir).toHaveLength(2);
+      expect(sentByDir[1]!.workDir).toBe(expectedFallback);
+      expect(sentByDir[1]!.content).not.toContain('[Working directory recovery]');
+    });
+
     it('fails closed when fallback allocation fails, and checks expectedPreRunWorkingDir against the persisted path', async () => {
       const { tempRoot, ownerRoot } = await setupOwnerRoot();
       const missingWorktree = path.join(tempRoot, 'repo', '.cindy-worktrees', 'gone-fail');
