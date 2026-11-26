@@ -4275,6 +4275,7 @@
             "sliderAria": "자동 압축 임계값 조정",
             "restoreAria": "자동 압축 비율을 기본값으로 복원"
           },
+          "antigravityHydrogenDescription": "일상적인 코딩과 빠른 실행에 적합합니다.",
           "contextLimitRoute": "현재 {{tokens}} tokens",
           "contextLimitOverWindow": "제공자가 명시한 한도를 초과하여 요청이 실패할 수 있습니다.",
           "restoreDefault": "기본값 복원",

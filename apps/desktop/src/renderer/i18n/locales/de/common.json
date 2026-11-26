@@ -4317,6 +4317,7 @@
             "sliderAria": "Schwelle für die automatische Komprimierung anpassen",
             "restoreAria": "Standardmäßiges Verhältnis der automatischen Komprimierung wiederherstellen"
           },
+          "antigravityHydrogenDescription": "Für alltägliche Programmieraufgaben und schnelle Ausführung.",
           "contextLimitRoute": "Aktuell {{tokens}} Tokens",
           "contextLimitOverWindow": "Über dem vom Anbieter angegebenen Kontextfenster; Anfragen können fehlschlagen.",
           "restoreDefault": "Standard wiederherstellen",

@@ -129,6 +129,13 @@ export interface AcpClientInfo {
   version: string;
 }
 
+/** Display-only facts from the local ACP connection, never a model catalogue or budget. */
+export interface AcpReportedModelDetails {
+  modelId: string;
+  imageInput?: boolean;
+  contextWindow?: number;
+}
+
 export interface OpenAcpSessionOptions {
   /** Connected to a freshly started endpoint; the session owns and closes it. */
   transport: AcpLineTransport;
@@ -419,6 +426,7 @@ interface QueuedPrompt {
 interface ActiveTurn {
   token: number;
   permissionTurnId: string | null;
+  contextSelection: string;
   settled: boolean;
   cancelTimer: ReturnType<typeof setTimeout> | null;
   gate: TurnGate | null;
@@ -521,6 +529,10 @@ export class AcpSession {
   private readonly permissionControllers = new Set<AbortController>();
   private readonly capabilityListeners = new Set<(capabilities: Capabilities) => void>();
   private configOptions: AcpConfigOption[];
+  private reportedContextWindow: number | undefined;
+  private reportedSelection = '';
+  private contextSelectionPending = 0;
+  private modelDetailsListener?: (details: AcpReportedModelDetails | undefined) => void;
   private readonly requireSelectedModel: boolean;
   private readonly initialModel: string;
   private capabilitiesSnapshot: Capabilities;
@@ -563,6 +575,7 @@ export class AcpSession {
     this.configOptions = init.configOptions;
     this.requireSelectedModel = init.options.requireSelectedModel === true;
     this.initialModel = this.model;
+    this.reportedSelection = this.contextSelection();
     this.steeringOffered = init.init.steering;
     this.capabilitiesSnapshot = this.buildCapabilities();
     this.logger = init.options.logger;
@@ -623,6 +636,37 @@ export class AcpSession {
   onCapabilitiesChange(listener: (capabilities: Capabilities) => void): () => void {
     this.capabilityListeners.add(listener);
     return () => this.capabilityListeners.delete(listener);
+  }
+
+  observeReportedModelDetails(listener: (details: AcpReportedModelDetails | undefined) => void): void {
+    if (this.ended) return;
+    this.modelDetailsListener = listener;
+    this.publishReportedModelDetails();
+  }
+
+  private publishReportedModelDetails(): void {
+    const imageInput = this.initializeResult.reportedImageInput;
+    const contextWindow = this.reportedContextWindow;
+    const modelId = this.model;
+    this.notifyReportedModelDetails(modelId && (imageInput !== undefined || contextWindow !== undefined) ? {
+      modelId,
+      ...(imageInput !== undefined ? { imageInput } : {}),
+      ...(contextWindow !== undefined ? { contextWindow } : {}),
+    } : undefined);
+  }
+
+  private notifyReportedModelDetails(details: AcpReportedModelDetails | undefined): void {
+    try {
+      this.modelDetailsListener?.(details);
+    } catch (error) {
+      this.logger?.error('acp: model details listener failed', { error: String(error) });
+    }
+  }
+
+  private contextSelection(): string {
+    return JSON.stringify([this.model, findEffortOption(this.configOptions)?.currentValue, ...this.configOptions
+      .filter(option => option.category === 'model_config')
+      .map(option => [option.id, option.currentValue])]);
   }
 
   events(): AsyncIterable<AgentEvent> {
@@ -1005,6 +1049,7 @@ export class AcpSession {
     const turn: ActiveTurn = {
       token: ++this.turnSeq,
       permissionTurnId: this.initializeResult.permissionGate ? randomUUID() : null,
+      contextSelection: this.reportedSelection,
       settled: false,
       cancelTimer: null,
       gate: next.gate,
@@ -1103,6 +1148,13 @@ export class AcpSession {
     const used = typeof update.used === 'number' && update.used >= 0 ? update.used : null;
     const size = typeof update.size === 'number' && update.size >= 0 ? update.size : null;
     if (used === null || size === null) return;
+    const window = Number.isSafeInteger(size) && size > 0 ? size : undefined;
+    if (this.contextSelectionPending === 0
+      && (!this.turn || this.turn.contextSelection === this.reportedSelection)
+      && this.reportedContextWindow !== window) {
+      this.reportedContextWindow = window;
+      this.publishReportedModelDetails();
+    }
     const cost = asRecord(update.cost);
     this.usage = {
       ...this.usage,
@@ -1260,21 +1312,35 @@ export class AcpSession {
   }
 
   private async setConfigValue(configId: string, value: string): Promise<void> {
-    await this.connection.request(
-      'session/set_config_option',
-      { sessionId: this.id, configId, value },
-      {
-        onResult: (result) => {
-          if (Array.isArray(result.configOptions)) {
-            this.replaceConfigOptions(result.configOptions);
-            return;
-          }
-          // Agents that omit the response state still applied the change.
-          this.configOptions = this.configOptions.map((option) => option.id === configId ? { ...option, currentValue: value } : option);
-          this.refreshCapabilities();
+    // A usage update carries no model id. Don't attribute it while a selection RPC is in flight.
+    let pending = configId === findModelOption(this.configOptions)?.id
+      || configId === findEffortOption(this.configOptions)?.id;
+    if (pending) this.contextSelectionPending++;
+    const finish = () => {
+      if (!pending) return;
+      pending = false;
+      this.contextSelectionPending--;
+    };
+    try {
+      await this.connection.request(
+        'session/set_config_option',
+        { sessionId: this.id, configId, value },
+        {
+          onResult: (result) => {
+            finish();
+            if (Array.isArray(result.configOptions)) {
+              this.replaceConfigOptions(result.configOptions);
+              return;
+            }
+            // Agents that omit the response state still applied the change.
+            this.configOptions = this.configOptions.map((option) => option.id === configId ? { ...option, currentValue: value } : option);
+            this.refreshCapabilities();
+          },
         },
-      },
-    );
+      );
+    } finally {
+      finish();
+    }
   }
 
   private replaceConfigOptions(raw: unknown[]): void {
@@ -1294,6 +1360,12 @@ export class AcpSession {
   }
 
   private refreshCapabilities(): void {
+    const selection = this.contextSelection();
+    if (selection !== this.reportedSelection) {
+      this.reportedSelection = selection;
+      this.reportedContextWindow = undefined;
+      this.publishReportedModelDetails();
+    }
     this.capabilitiesSnapshot = this.buildCapabilities();
     for (const listener of this.capabilityListeners) {
       try {
@@ -1401,6 +1473,8 @@ export class AcpSession {
   private endEvents(): void {
     if (this.ended) return;
     this.ended = true;
+    this.notifyReportedModelDetails(undefined);
+    this.modelDetailsListener = undefined;
     this.clearBackgroundSegmentClose();
     this.clearOpenToolCap();
     this.detachTransportClose?.();
