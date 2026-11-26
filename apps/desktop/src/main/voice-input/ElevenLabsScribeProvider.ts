@@ -1,12 +1,14 @@
 import WebSocket from 'ws';
 import type { ClientRequest, IncomingMessage } from 'node:http';
 import type { AsrEvent, AsrProvider, AudioTrace } from '@cindy/voice-input-core';
+import { SCRIBE_REALTIME_MODEL } from '../../shared/voiceInputAsrProfiles.js';
 import { createLogger } from '../logger.js';
 import { createOutboundHttpAgent } from '../maker-host/outbound-fetch.desktop.js';
 import { elevenLabsLanguageCode } from './language.js';
 import { mergeRecoveredTranscript } from './transcriptMerge.js';
 
 type ElevenLabsScribeProviderOptions = {
+  model?: string;
   apiKey?: string;
   proxyApiKey?: string;
   baseUrl?: string;
@@ -16,7 +18,6 @@ type ElevenLabsScribeProviderOptions = {
 };
 
 const ELEVENLABS_REALTIME_BASE_URL = 'https://api.elevenlabs.io';
-const SCRIBE_REALTIME_MODEL = 'scribe_v2_realtime';
 const FLUSH_SEND_TIMEOUT_MS = 1_500;
 const FLUSH_STABLE_TIMEOUT_MS = 2_000;
 const STOP_DRAIN_TIMEOUT_MS = 1_000;
@@ -45,6 +46,7 @@ type ReplayAudioChunk = {
 export class ElevenLabsScribeProvider implements AsrProvider {
   private readonly apiKey?: string;
   private readonly proxyApiKey?: string;
+  private readonly model: string;
   private readonly baseUrl: string;
   private readonly sourceLanguage: string;
   private readonly vadSilenceThresholdSecs: number;
@@ -69,6 +71,7 @@ export class ElevenLabsScribeProvider implements AsrProvider {
   constructor(options: ElevenLabsScribeProviderOptions) {
     this.apiKey = options.apiKey;
     this.proxyApiKey = options.proxyApiKey;
+    this.model = options.model ?? SCRIBE_REALTIME_MODEL;
     this.baseUrl = options.baseUrl ?? ELEVENLABS_REALTIME_BASE_URL;
     this.sourceLanguage = options.sourceLanguage ?? 'auto';
     this.vadSilenceThresholdSecs = options.vadSilenceThresholdSecs ?? 1.5;
@@ -333,6 +336,7 @@ export class ElevenLabsScribeProvider implements AsrProvider {
 
   private buildUrl(): string {
     return buildElevenLabsScribeRealtimeUrl({
+      model: this.model,
       baseUrl: this.baseUrl,
       sourceLanguage: this.sourceLanguage,
       vadSilenceThresholdSecs: this.vadSilenceThresholdSecs,
@@ -522,12 +526,13 @@ export class ElevenLabsScribeProvider implements AsrProvider {
 
 export function buildElevenLabsScribeRealtimeUrl(input: {
   baseUrl: string;
+  model?: string;
   sourceLanguage?: string;
   vadSilenceThresholdSecs?: number;
 }): string {
   const url = new URL(joinProxyPath(input.baseUrl, '/v1/speech-to-text/realtime'));
   url.protocol = url.protocol === 'http:' ? 'ws:' : 'wss:';
-  url.searchParams.set('model_id', SCRIBE_REALTIME_MODEL);
+  url.searchParams.set('model_id', input.model ?? SCRIBE_REALTIME_MODEL);
   url.searchParams.set('audio_format', 'pcm_16000');
   url.searchParams.set('commit_strategy', 'vad');
   url.searchParams.set('include_timestamps', 'false');

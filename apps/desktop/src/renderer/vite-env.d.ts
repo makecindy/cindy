@@ -1927,14 +1927,7 @@ interface ElectronAPI {
     getReadiness: () => Promise<{
       ok: boolean;
       serviceMode: VoiceInputServiceModeData;
-      provider:
-        | 'custom-realtime-asr'
-        | 'elevenlabs-scribe-realtime'
-        | 'openai-realtime-whisper'
-        | 'litellm-gpt-realtime-whisper'
-        | 'litellm-qwen3-asr-flash-realtime'
-        | 'litellm-volcengine-sauc-asr'
-        | 'litellm-batch';
+      provider: VoiceInputProviderKindData;
       providerModel: string;
       auth: 'api-key' | 'codex';
       settingsTab: 'api-keys' | 'connections' | 'providers';
@@ -1946,14 +1939,7 @@ interface ElectronAPI {
     getReadinessCached: () => {
       ok: boolean;
       serviceMode: VoiceInputServiceModeData;
-      provider:
-        | 'custom-realtime-asr'
-        | 'elevenlabs-scribe-realtime'
-        | 'openai-realtime-whisper'
-        | 'litellm-gpt-realtime-whisper'
-        | 'litellm-qwen3-asr-flash-realtime'
-        | 'litellm-volcengine-sauc-asr'
-        | 'litellm-batch';
+      provider: VoiceInputProviderKindData;
       providerModel: string;
       auth: 'api-key' | 'codex';
       settingsTab: 'api-keys' | 'connections' | 'providers';
