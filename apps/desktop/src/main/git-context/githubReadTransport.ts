@@ -1,3 +1,25 @@
+const DEFAULT_RATE_LIMIT_BACKOFF_MS = 60_000;
+const DEFAULT_MAX_CONCURRENT_REQUESTS = 6;
+
+function rateLimitBucket(path: string): 'graphql' | 'rest' {
+  return path === '/graphql' || path.startsWith('/graphql?') ? 'graphql' : 'rest';
+}
+
+function parseRetryAfterMs(raw: string | null, now: number): number | null {
+  if (!raw) return null;
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+  const seconds = Number(trimmed);
+  if (Number.isFinite(seconds) && seconds > 0) return now + seconds * 1000;
+  const dateMs = Date.parse(trimmed);
+  if (Number.isFinite(dateMs) && dateMs > now) return dateMs;
+  return null;
+}
+
+function rateLimitedError(): Error {
+  return Object.assign(new Error('GITHUB_RATE_LIMITED'), { code: 'GITHUB_RATE_LIMITED' });
+}
+
 /** Account-scoped conditional reads and backoff shared by badges, tools and scripts. */
 export class GithubReadTransport {
   private cache = new Map<string, { data: unknown; etag: string | null; observedAt: number }>();
@@ -10,16 +32,46 @@ export class GithubReadTransport {
       : this.now();
   }
   private retryAt = new Map<string, number>();
+  private activeRequests = 0;
+  private waitQueue: Array<(acquired: boolean) => void> = [];
+  private readonly maxConcurrent: number;
   constructor(
     private readonly fetchImpl: typeof fetch,
     private readonly now = Date.now,
-  ) {}
+    maxConcurrent = DEFAULT_MAX_CONCURRENT_REQUESTS,
+  ) {
+    this.maxConcurrent = Math.max(1, Math.floor(maxConcurrent));
+  }
 
   invalidate(): void {
     this.generation++;
     this.cache.clear();
     this.pending.clear();
     this.retryAt.clear();
+    const waiters = this.waitQueue.splice(0);
+    for (const wake of waiters) wake(false);
+  }
+
+  private isRateLimited(scope: string, bucket: 'graphql' | 'rest'): boolean {
+    const now = this.now();
+    return (
+      (this.retryAt.get(scope) ?? 0) > now || (this.retryAt.get(`${scope}:${bucket}`) ?? 0) > now
+    );
+  }
+
+  private waitForSlot(): Promise<boolean> {
+    return new Promise<boolean>((resolve) => {
+      this.waitQueue.push(resolve);
+    });
+  }
+
+  private releaseSlot(): void {
+    const next = this.waitQueue.shift();
+    if (next) {
+      next(true);
+      return;
+    }
+    this.activeRequests = Math.max(0, this.activeRequests - 1);
   }
 
   async read(
@@ -35,52 +87,79 @@ export class GithubReadTransport {
     const existing = this.pending.get(key);
     if (existing) return existing;
     const generation = this.generation;
+    const bucket = rateLimitBucket(path);
     const operation = (async () => {
-      if ((this.retryAt.get(scope) ?? 0) > this.now()) throw new Error('GITHUB_RATE_LIMITED');
-      const response = await this.fetchImpl(`https://api.github.com${path}`, {
-        method: options.body ? 'POST' : 'GET',
-        redirect: 'error',
-        signal: AbortSignal.timeout(30_000),
-        headers: {
-          Authorization: `Bearer ${token}`,
-          Accept: 'application/vnd.github+json',
-          'X-GitHub-Api-Version': '2022-11-28',
-          ...(options.body ? { 'Content-Type': 'application/json' } : {}),
-          ...(!options.body && cached?.etag ? { 'If-None-Match': cached.etag } : {}),
-        },
-        ...(options.body ? { body: JSON.stringify(options.body) } : {}),
-      });
-      if (generation !== this.generation) throw new Error('GITHUB_AUTH_CHANGED');
-      if (
-        response.status === 429 ||
-        (response.status === 403 &&
-          (response.headers.has('retry-after') ||
-            response.headers.get('x-ratelimit-remaining') === '0'))
-      ) {
-        const retry = Number(response.headers.get('retry-after'));
-        const reset = Number(response.headers.get('x-ratelimit-reset')) * 1000;
-        this.retryAt.set(
-          scope,
-          Math.max(this.now() + (retry > 0 ? retry * 1000 : 60_000), reset || 0),
-        );
+      if (this.isRateLimited(scope, bucket)) throw rateLimitedError();
+      if (this.activeRequests < this.maxConcurrent) {
+        this.activeRequests += 1;
+      } else {
+        const acquired = await this.waitForSlot();
+        if (!acquired) throw new Error('GITHUB_AUTH_CHANGED');
       }
-      if (response.status === 304 && cached) {
-        cached.observedAt = this.now();
-        if (cached.data && typeof cached.data === 'object')
-          this.observations.set(cached.data, cached.observedAt);
-        return cached.data;
-      }
-      if (!response.ok)
-        throw Object.assign(new Error(`GITHUB_HTTP_${response.status}`), {
-          status: response.status,
+      try {
+        if (generation !== this.generation) throw new Error('GITHUB_AUTH_CHANGED');
+        if (this.isRateLimited(scope, bucket)) throw rateLimitedError();
+        const response = await this.fetchImpl(`https://api.github.com${path}`, {
+          method: options.body ? 'POST' : 'GET',
+          redirect: 'error',
+          signal: AbortSignal.timeout(30_000),
+          headers: {
+            Authorization: `Bearer ${token}`,
+            Accept: 'application/vnd.github+json',
+            'X-GitHub-Api-Version': '2022-11-28',
+            ...(options.body ? { 'Content-Type': 'application/json' } : {}),
+            ...(!options.body && cached?.etag ? { 'If-None-Match': cached.etag } : {}),
+          },
+          ...(options.body ? { body: JSON.stringify(options.body) } : {}),
         });
-      const data: unknown = await response.json();
-      if (generation !== this.generation) throw new Error('GITHUB_AUTH_CHANGED');
-      if (data && typeof data === 'object') this.observations.set(data, this.now());
-      if (JSON.stringify(data).length > 2_000_000) return data;
-      if (this.cache.size >= 100) this.cache.delete(this.cache.keys().next().value!);
-      this.cache.set(key, { data, etag: response.headers.get('etag'), observedAt: this.now() });
-      return data;
+        if (generation !== this.generation) throw new Error('GITHUB_AUTH_CHANGED');
+        const primaryExhausted = response.headers.get('x-ratelimit-remaining')?.trim() === '0';
+        const hasRetryAfter = response.headers.has('retry-after');
+        if (
+          response.status === 429 ||
+          (response.status === 403 && (primaryExhausted || hasRetryAfter))
+        ) {
+          const now = this.now();
+          const retryAfterMs = parseRetryAfterMs(response.headers.get('retry-after'), now);
+          if (primaryExhausted) {
+            const resetSec = Number(response.headers.get('x-ratelimit-reset'));
+            const resetMs = Number.isFinite(resetSec) && resetSec > 0 ? resetSec * 1000 : 0;
+            const until = Math.max(resetMs, retryAfterMs ?? 0);
+            const bucketKey = `${scope}:${bucket}`;
+            this.retryAt.set(
+              bucketKey,
+              Math.max(
+                this.retryAt.get(bucketKey) ?? 0,
+                until > now ? until : now + DEFAULT_RATE_LIMIT_BACKOFF_MS,
+              ),
+            );
+          } else {
+            // Secondary rate limits still carry the hourly primary x-ratelimit-reset header
+            // even with remaining quota; back off only by retry-after (or the short default).
+            const until = retryAfterMs ?? now + DEFAULT_RATE_LIMIT_BACKOFF_MS;
+            this.retryAt.set(scope, Math.max(this.retryAt.get(scope) ?? 0, until));
+          }
+        }
+        if (response.status === 304 && cached) {
+          cached.observedAt = this.now();
+          if (cached.data && typeof cached.data === 'object')
+            this.observations.set(cached.data, cached.observedAt);
+          return cached.data;
+        }
+        if (!response.ok)
+          throw Object.assign(new Error(`GITHUB_HTTP_${response.status}`), {
+            status: response.status,
+          });
+        const data: unknown = await response.json();
+        if (generation !== this.generation) throw new Error('GITHUB_AUTH_CHANGED');
+        if (data && typeof data === 'object') this.observations.set(data, this.now());
+        if (JSON.stringify(data).length > 2_000_000) return data;
+        if (this.cache.size >= 100) this.cache.delete(this.cache.keys().next().value!);
+        this.cache.set(key, { data, etag: response.headers.get('etag'), observedAt: this.now() });
+        return data;
+      } finally {
+        this.releaseSlot();
+      }
     })();
     this.pending.set(key, operation);
     try {
