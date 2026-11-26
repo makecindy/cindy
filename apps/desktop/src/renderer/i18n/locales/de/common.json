@@ -12037,6 +12037,8 @@
         "loadEarlierFailed": "Frühere Nachrichten konnten nicht geladen werden. Versuch es erneut.",
         "emptyTitle": "Noch keine Nachrichten in dieser Gruppe",
         "emptyDescription": "Sag etwas zum Einstieg, dann beteiligen sich deine Freunde. Erwähne einen Freund mit @, damit nur dieser antwortet.",
+        "emptyDescriptionWithAssistant": "Du kannst Cindy mit @ erwähnen oder über das Menü oben rechts Personen einladen und Freunde hinzufügen.",
+        "emptyDescriptionInvite": "Über das Einladungsmenü oben rechts kannst du Personen einladen und Freunde hinzufügen.",
         "roundEnded": "Freunde sind fertig",
         "stepTag": "Schritt {{count}}",
         "sending": "Wird gesendet",
@@ -12368,7 +12370,7 @@
         "loginRequired": "Melde dich bei deinem Konto an und versuche es erneut.",
         "requestFailed": "Der Chatdienst ist nicht verfügbar. Versuche es gleich noch einmal.",
         "copyFailed": "Kopieren fehlgeschlagen. Wähle den Link aus und kopiere ihn manuell.",
-        "createDescription": "Wähle Freunde aus oder erstelle zuerst die Gruppe und lade dann Personen ein.",
+        "createDescription": "Nach dem Erstellen kannst du Personen einladen und Freunde hinzufügen.",
         "settings": {
           "name": "Gruppenname",
           "topic": "Thema",

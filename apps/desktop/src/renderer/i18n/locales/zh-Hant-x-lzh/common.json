@@ -11991,6 +11991,8 @@
         "loadEarlierFailed": "更早之訊未能載，請再試",
         "emptyTitle": "群議寂寂，尚無一言",
         "emptyDescription": "君先開言，群賢畢至，自當接續。@ 某同伴則僅令其答。",
+        "emptyDescriptionWithAssistant": "可 @Cindy，或自右上邀友與同伴。",
+        "emptyDescriptionInvite": "可自右上邀友與同伴。",
         "roundEnded": "同伴言畢",
         "stepTag": "第 {{count}} 步",
         "sending": "方遣",
@@ -12322,7 +12324,7 @@
         "loginRequired": "請先登入當前名籍，再試。",
         "requestFailed": "暫不能連群議服務，請稍後再試。",
         "copyFailed": "錄之未成，請選取連結手錄之。",
-        "createDescription": "可擇同伴，亦可先立群議，再邀友入之。",
+        "createDescription": "群既立，可邀友與同伴。",
         "settings": {
           "name": "群名",
           "topic": "群之主題",

@@ -12128,6 +12128,8 @@
         "loadEarlierFailed": "No se pudieron cargar los mensajes anteriores. Inténtalo de nuevo.",
         "emptyTitle": "Aún no hay mensajes en este grupo",
         "emptyDescription": "Di algo para comenzar y tus amigos se unirán. @ un amigo para que solo ellos respondan.",
+        "emptyDescriptionWithAssistant": "Menciona a @Cindy o usa el menú de invitación de la esquina superior derecha para invitar a personas o agregar amigos.",
+        "emptyDescriptionInvite": "Desde el menú de invitación de la esquina superior derecha puedes invitar a personas o agregar amigos.",
         "roundEnded": "Los amigos terminaron",
         "stepTag": "Paso {{count}}",
         "sending": "Enviando",
@@ -12466,7 +12468,7 @@
         "loginRequired": "Inicia sesión en tu cuenta y vuelve a intentarlo.",
         "requestFailed": "El servicio de chat no está disponible. Vuelve a intentarlo en unos momentos.",
         "copyFailed": "No se pudo copiar. Selecciona el enlace y cópialo manualmente.",
-        "createDescription": "Elige amigos o crea primero el grupo e invita a otras personas a unirse.",
+        "createDescription": "Después de crear el grupo, puedes invitar a personas y agregar amigos.",
         "settings": {
           "name": "Nombre del grupo",
           "topic": "Tema",

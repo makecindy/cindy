@@ -38,10 +38,12 @@ const ROW_HEIGHT = 32;
 type OwnedBot = { actorId: string; botId?: string; name: string };
 type OwnedBots = { status: 'loading' } | { status: 'failed' } | { status: 'ready'; bots: OwnedBot[] };
 
-export function ChatGroupInviteMenu({ group, variant }: {
+export function ChatGroupInviteMenu({ group, variant, consumeAutoOpen }: {
   group: Pick<BotGroupSummary, 'id' | 'members' | 'canInvite'>;
   /** `pill` in the settings hero, `icon` in the group header. */
   variant: 'pill' | 'icon';
+  /** Consume the new-group entry request once this header menu is mounted. */
+  consumeAutoOpen?: () => boolean;
 }) {
   const { t } = useTranslation();
   const profiles = useBotProfiles();
@@ -53,6 +55,12 @@ export function ChatGroupInviteMenu({ group, variant }: {
   const adding = useRef(false);
   const trigger = useRef<HTMLButtonElement>(null);
   const list = useRef<HTMLDivElement>(null);
+  const didAutoOpen = useRef(false);
+  useEffect(() => {
+    if (didAutoOpen.current || !consumeAutoOpen?.()) return;
+    didAutoOpen.current = true;
+    setOpen(true);
+  }, [consumeAutoOpen]);
 
   // Read the account's teammates each time the menu opens; they change outside this group.
   useEffect(() => {

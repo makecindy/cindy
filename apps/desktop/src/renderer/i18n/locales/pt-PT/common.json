@@ -12128,6 +12128,8 @@
         "loadEarlierFailed": "Não foi possível carregar as mensagens anteriores. Tente novamente.",
         "emptyTitle": "Ainda não há mensagens neste grupo",
         "emptyDescription": "Diga algo para começar e os seus amigos participarão. Mencione um amigo com @ para que só ele responda.",
+        "emptyDescriptionWithAssistant": "Mencione @Cindy ou use o menu de convite no canto superior direito para convidar pessoas ou adicionar amigos.",
+        "emptyDescriptionInvite": "Use o menu de convite no canto superior direito para convidar pessoas ou adicionar amigos.",
         "roundEnded": "Os amigos terminaram",
         "stepTag": "Passo {{count}}",
         "sending": "A enviar",
@@ -12466,7 +12468,7 @@
         "loginRequired": "Inicie sessão na sua conta e tente novamente.",
         "requestFailed": "O serviço de conversa está indisponível. Tente novamente dentro de momentos.",
         "copyFailed": "Não foi possível copiar. Selecione a ligação e copie-a manualmente.",
-        "createDescription": "Escolha amigos ou crie primeiro o grupo e convide pessoas para aderirem.",
+        "createDescription": "Depois de criar o grupo, pode convidar pessoas e adicionar amigos.",
         "settings": {
           "name": "Nome do grupo",
           "topic": "Tema",

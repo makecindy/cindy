@@ -11991,6 +11991,8 @@
         "loadEarlierFailed": "이전 메시지를 불러오지 못했습니다. 다시 시도하세요",
         "emptyTitle": "이 그룹에는 아직 메시지가 없습니다",
         "emptyDescription": "한마디 하면 동반자들이 이어서 대화합니다. @로 동반자를 지정하면 그 동반자만 답합니다.",
+        "emptyDescriptionWithAssistant": "@Cindy를 멘션하거나 오른쪽 위 초대 메뉴에서 사람을 초대하고 동반자를 추가할 수 있어요.",
+        "emptyDescriptionInvite": "오른쪽 위 초대 메뉴에서 사람을 초대하거나 동반자를 추가할 수 있어요.",
         "roundEnded": "동반자들이 말을 마쳤습니다",
         "stepTag": "{{count}}단계",
         "sending": "보내는 중",
@@ -12322,7 +12324,7 @@
         "loginRequired": "현재 계정에 로그인한 후 다시 시도하세요.",
         "requestFailed": "채팅 서비스에 연결할 수 없습니다. 잠시 후 다시 시도하세요.",
         "copyFailed": "복사하지 못했습니다. 링크를 선택하여 직접 복사하세요.",
-        "createDescription": "동반자를 선택하거나 먼저 그룹을 만들고 친구를 초대할 수 있어요.",
+        "createDescription": "그룹을 만든 후 사람을 초대하거나 동반자를 추가할 수 있어요.",
         "settings": {
           "notifications": {
             "title": "메시지 알림",
