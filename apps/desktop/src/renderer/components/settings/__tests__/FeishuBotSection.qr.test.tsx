@@ -133,7 +133,7 @@ describe('Feishu bot authorization', () => {
     expect(api.registrationCancel).toHaveBeenCalledWith(7);
   });
 
-  it('does not cancel globally when the panel closes before begin returns a run ID', async () => {
+  it('cancels only the late round after the panel closed before begin returned a run ID', async () => {
     const { api } = installApi();
     let resolveBegin: (value: Awaited<ReturnType<typeof api.registrationBegin>>) => void = () => {};
     api.registrationBegin.mockImplementationOnce(
@@ -161,7 +161,9 @@ describe('Feishu bot authorization', () => {
         runId: 9,
       });
     });
-    expect(api.registrationCancel).not.toHaveBeenCalled();
+    // 迟到的响应带回了轮次: 定向取消这一轮, 不让 main 空转到过期。
+    expect(api.registrationCancel).toHaveBeenCalledOnce();
+    expect(api.registrationCancel).toHaveBeenCalledWith(9);
   });
 
   it('ignores a previous begin response after cancellation and a new attempt', async () => {

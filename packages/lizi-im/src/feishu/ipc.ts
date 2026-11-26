@@ -389,9 +389,13 @@ async function pollRegistrationInBackground(
         return;
       }
       // saveAndConnect 是 await 的: 期间用户可能已取消或重新发起。这一轮
-      // 已经不是当前轮时不能再广播 success —— 否则旧授权的完成会把界面
-      // 切到已绑定卡片，连带卸载正在进行的新一轮授权。
-      if (runId !== S().registrationRunId) return;
+      // 已经不是当前轮时, 界面显示的是"已取消" / 新一轮的二维码; 但凭证已经
+      // 写盘、连接可能已经起来, 不能只拦 success 广播就完事 —— 还要把这一轮
+      // 自己写下的绑定撤回, 否则用户以为取消了, 机器人实际仍然生效。
+      if (runId !== S().registrationRunId) {
+        await rollbackCancelledRegistration(accountScope, success.clientId);
+        return;
+      }
       if (verdict === 'error') {
         // 'error' 可能来自凭证没落盘, 也可能来自凭证已保存但连接失败。前者
         // 这轮授权等于作废, 必须让用户看到失败并可重试; 后者设置卡会显示
@@ -438,6 +442,29 @@ async function pollRegistrationInBackground(
   if (runId === S().registrationRunId && isAccountScopeCurrent(accountScope)) {
     log.info('[feishu/ipc] registration expired');
     broadcast('feishuBot:registration-status', { status: 'expired', runId });
+  }
+}
+
+/** 撤回一轮在保存 / 握手期间被取消或取代的授权: 只清掉这一轮自己写下的凭证与连接。 */
+async function rollbackCancelledRegistration(
+  accountScope: CapturedAccountScope,
+  appId: string,
+): Promise<void> {
+  if (!isAccountScopeCurrent(accountScope)) return;
+  // 新一轮可能已经写入了自己的凭证; 只撤回仍然是这一轮的绑定。
+  if (storage.readCredentials()?.appId !== appId) return;
+  try {
+    await wsClient.stop({
+      reason: 'registration-cancelled',
+      clearOwnerBeforeIdle: true,
+      discardPendingTopicLeases: true,
+    });
+    outbound.forgetBoundAccount();
+    storage.clearAll();
+  } catch (err) {
+    getLog().warn(
+      `[feishu/ipc] registration rollback failed: ${err instanceof Error ? err.message : String(err)}`,
+    );
   }
 }
 

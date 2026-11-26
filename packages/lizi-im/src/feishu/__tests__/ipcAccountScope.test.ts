@@ -502,6 +502,58 @@ describe('Feishu IPC account scope', () => {
   });
 });
 
+  it('does not leave a bot bound when the round is cancelled during the handshake', async () => {
+    vi.useFakeTimers();
+    const connecting = deferred<'connected'>();
+    mocks.start.mockReturnValueOnce(connecting.promise as never);
+    mocks.writeCredentials.mockImplementation((((creds: {
+      appId: string;
+      appSecret: string;
+      service: 'feishu' | 'lark';
+    }) => {
+      mocks.readCredentials.mockReturnValue(creds as never);
+      return true;
+    }) as never));
+    mocks.requestRegistration.mockResolvedValue({
+      deviceCode: 'device-code',
+      userCode: 'user-code',
+      verificationUrl: 'https://example.test',
+      interval: 1,
+      expiresIn: 600,
+    });
+    mocks.pollRegistration.mockResolvedValueOnce({
+      status: 'success',
+      result: {
+        clientId: 'cli_cancelled',
+        clientSecret: 'cancelled-secret',
+        tenantBrand: 'feishu',
+        ownerOpenId: 'ou_cancelled',
+      },
+    });
+
+    const begin = handlers.get('feishuBot:registration-begin');
+    await expect(Promise.resolve(begin?.({ service: 'feishu' }))).resolves.toMatchObject({
+      ok: true,
+    });
+    await vi.advanceTimersByTimeAsync(1000);
+    await vi.waitFor(() => expect(mocks.start).toHaveBeenCalledOnce());
+
+    // 凭证已经写盘、连接还在握手: 用户这时取消授权。
+    cancelAppRegistration();
+    connecting.resolve('connected');
+    await vi.runAllTimersAsync();
+
+    // 界面显示"已取消"时不能留下实际生效的机器人: 这一轮写下的凭证与连接要撤回。
+    expect(mocks.stop).toHaveBeenCalledWith(
+      expect.objectContaining({ reason: 'registration-cancelled' }),
+    );
+    expect(mocks.clearAll).toHaveBeenCalled();
+    const statuses = broadcasts.mock.calls
+      .filter(([channel]) => channel === 'feishuBot:registration-status')
+      .map(([, payload]) => (payload as { status: string }).status);
+    expect(statuses).not.toContain('success');
+  });
+
 describe('Feishu credential connection semantics', () => {
   const credentials = {
     appId: 'cli_test',

@@ -231,7 +231,17 @@ export function useFeishuBotRegistration(
 
       try {
         const result = await resolvedTransport.begin(service);
-        if (generationRef.current !== runId) return;
+        if (generationRef.current !== runId) {
+          // 面板已关闭 / 切换服务 / 已重新发起, 但 main 已经为这一轮开始了轮询:
+          // 用响应里的 runId 定向取消, 别让它空转到过期。不带 runId 的取消会
+          // 误杀另一个窗口刚拿到的新授权, 所以只取消自己这一轮。
+          if (result.runId !== undefined) {
+            void resolvedTransport.cancel(result.runId).catch((err: unknown) => {
+              log.warn('registration cancel failed:', err);
+            });
+          }
+          return;
+        }
         if (!result.ok || !result.verificationUrl || !result.expiresIn) {
           // begin 失败时 main 没留下轮次, 只清本地状态; 这里发 cancel 会误杀
           // 另一窗口已经开始的新授权。
