@@ -157,7 +157,6 @@
     "genericName": "插件引擎",
     "defaultModel": "默认模型",
     "unavailable": "{{engine}} 暂不可用",
-    "unavailableWithHint": "{{engine}} 暂不可用：{{hint}}",
-    "worktreeUnsupported": "插件引擎暂不支持在 worktree 中新建任务，请取消勾选 worktree 后再发送"
+    "unavailableWithHint": "{{engine}} 暂不可用：{{hint}}"
   }
 }

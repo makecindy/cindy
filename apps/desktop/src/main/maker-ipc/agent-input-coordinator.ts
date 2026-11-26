@@ -333,6 +333,7 @@ export interface AgentInputSendOpts {
      * 落库 agentMeta.autoResume:renderer 据此隐藏气泡,充值判据据此排除自动消息。
      */
     autoResume?: boolean;
+    automaticReplaySourceClientId?: string;
     autoResumeInfo?: AutoResumeInfo;
     recoveryCheckpoint?: RecoveryCheckpoint;
     /**
@@ -6286,6 +6287,8 @@ export class AgentInputCoordinator {
           // 自动续跑标记必须一路透到落库:renderer 靠 agentMeta.autoResume 隐藏气泡,
           // host 靠它跳过额度充值(见 AgentInputQueuedMessage.autoResume)。
           ...(head.autoResume ? { autoResume: true } : {}),
+          ...(head.autoResume && head.retrySourceClientId && head.originalSyntheticTrigger !== 'continue'
+            ? { automaticReplaySourceClientId: head.retrySourceClientId } : {}),
           ...(head.autoResumeInfo ? { autoResumeInfo: head.autoResumeInfo } : {}),
           ...(head.recoveryCheckpoint ? { recoveryCheckpoint: head.recoveryCheckpoint } : {}),
           ...(head.origin ? { origin: head.origin } : {}),

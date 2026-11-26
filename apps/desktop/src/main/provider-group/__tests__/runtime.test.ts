@@ -48,7 +48,11 @@ vi.mock('../../subscription-accounts/legacyAccountAccess.js', () => ({
   openAiRouteAllowsModel: () => false,
   setLegacyCodexAccountPaused: vi.fn(),
 }));
-vi.mock('../../appSessionState.js', () => ({ activeOwnerScopeKey: () => owner, isAppSessionBoundaryPending: () => false }));
+vi.mock('../../appSessionState.js', async importOriginal => ({
+  ...await importOriginal<Record<string, unknown>>(),
+  activeOwnerScopeKey: () => owner,
+  isAppSessionBoundaryPending: () => false,
+}));
 vi.mock('../../device-link/providerShareGuest.js', () => ({ getReceivedShares: io.shares,
   captureProviderShareGroupRecovery: () => async () => undefined }));
 vi.mock('../../device-link/ipc.js', () => ({ handleListDevices: io.devices, defaultDeps: vi.fn() }));
@@ -63,7 +67,7 @@ vi.mock('../../maker-host/createDesktopProviderService.js', () => ({
 vi.mock('../../remote-agent/controller/deviceCatalog.js', () => ({ readDeviceProviderViews: io.catalog,
   readDeviceProviderCatalog: io.catalogState }));
 vi.mock('../bindings.desktop.js', () => ({ listProviderGroupBindings: () => ({}) }));
-vi.mock('../store.js', () => ({ readProviderGroup: io.group }));
+vi.mock('../store.js', () => ({ readProviderGroup: io.group, readStoredProviderGroup: io.group }));
 vi.mock('../coolingStore.js', () => ({ readProviderGroupCooling: () => ({}), writeProviderGroupCooling: vi.fn() }));
 // Heavy leaves used only by service's failover/auto-resume paths, which these runtime
 // cases never execute. The real service/runtime/client/executor/reader stay in place.

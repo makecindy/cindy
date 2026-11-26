@@ -13345,7 +13345,9 @@ describe('CodexAgent MCP thread context hooks', () => {
       }
     });
 
-    it('retries a zero-output terminal 429 after the daemon exhausts its own retry budget', async () => {
+    // Unit: a native user-message receipt means retrying with the original input
+    // would add another copy to the same thread and the next upstream payload.
+    it.each([false, true])('retries a terminal 429 after native retries (input recorded: %s)', async (inputRecorded) => {
       vi.useFakeTimers();
       try {
         const agent = new CodexAgent(createDeps());
@@ -13364,6 +13366,10 @@ describe('CodexAgent MCP thread context hooks', () => {
           for await (const event of handle.events()) events.push(event);
         })();
 
+        if (inputRecorded) handlers.itemCompleted?.({
+          threadId: 'start-thread-id', turnId: 'turn-1',
+          item: { id: 'user-input', type: 'userMessage', text: 'hello' },
+        });
         handlers.error({
           threadId: 'start-thread-id',
           turnId: 'turn-1',
@@ -13400,6 +13406,8 @@ describe('CodexAgent MCP thread context hooks', () => {
 
         await vi.advanceTimersByTimeAsync(20_000);
         expect(turnStartCount(host)).toBe(2);
+        expect(host.request.mock.calls.filter(([method]) => method === Method.TurnStart).at(-1)?.[1])
+          .toMatchObject({ input: inputRecorded ? [] : [{ type: 'text', text: 'hello' }] });
 
         await handle.close();
       } finally {
@@ -13516,11 +13524,20 @@ describe('CodexAgent MCP thread context hooks', () => {
       },
     );
 
-    it('does not outer-retry a terminal 429 after the turn produced output', async () => {
+    it.each(['reasoning', 'tool'])('does not outer-retry a terminal 429 after %s', async (progress) => {
       vi.useFakeTimers();
       try {
         const agent = new CodexAgent(createDeps());
-        const host = installCapacityHost(agent);
+        let starts = 0;
+        let counter = 0;
+        const runCounterTool = () => { counter += 1; };
+        const host = installFakeHost(agent, (method) => {
+          if (method !== Method.TurnStart) return undefined;
+          starts += 1;
+          // The controlled native engine runs the side effect if input is sent again.
+          if (starts > 1 && progress === 'tool') runCounterTool();
+          return { turn: { id: `turn-${starts}` } };
+        });
         const handle = await agent.startSession({
           sessionId: 'session-terminal-rate-limit-output',
           model: 'gpt-5.4',
@@ -13529,14 +13546,16 @@ describe('CodexAgent MCP thread context hooks', () => {
         await handle.send({ type: 'user', content: 'hello' });
 
         const handlers = host.getThreadHandlers();
-        if (!handlers?.error || !handlers.reasoningTextDelta) {
+        if (!handlers?.error || !handlers.reasoningTextDelta || !handlers.itemCompleted) {
           throw new Error('expected handlers');
         }
-        handlers.reasoningTextDelta({
-          threadId: 'start-thread-id',
-          turnId: 'turn-1',
-          delta: 'already working',
-        } as never);
+        if (progress === 'tool') {
+          runCounterTool();
+          handlers.itemCompleted({ threadId: 'start-thread-id', turnId: 'turn-1',
+            item: { id: 'counter-tool', type: 'commandExecution', command: 'increment fixture counter', status: 'completed' } });
+        } else {
+          handlers.reasoningTextDelta({ threadId: 'start-thread-id', turnId: 'turn-1', delta: 'already working' } as never);
+        }
         handlers.error({
           threadId: 'start-thread-id',
           turnId: 'turn-1',
@@ -13551,6 +13570,7 @@ describe('CodexAgent MCP thread context hooks', () => {
         await vi.advanceTimersByTimeAsync(40_000);
 
         expect(turnStartCount(host)).toBe(1);
+        if (progress === 'tool') expect(counter).toBe(1);
         expect(handle.isTurnRunning?.()).toBe(false);
 
         await handle.close();
