@@ -42,7 +42,7 @@ import { randomUUID } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import { structuredPatch } from 'diff';
 import { syncCodexArchiveState } from './archive-state.js';
-import { readCodexThreadMcpServerTools, readCodexThreadMcpServersTools } from './mcp-server-tools.js';
+import { readCodexThreadMcpServerTools } from './mcp-server-tools.js';
 import { CODEX_ACCOUNT_RATE_LIMITS_TIMEOUT_MS, readAccountRateLimitsWithRefresh } from './app-server/account-rate-limits.js';
 
 import {
@@ -7459,10 +7459,16 @@ assertRouteCurrent();
       if (!expected.length) return null;
       return Object.fromEntries(Object.entries(config).filter(([key]) => expected.some(name => key.startsWith(`mcp_servers.${name}.`))));
     };
-    const readExpectedMcpTools = (config: Record<string, unknown>) => readCodexThreadMcpServersTools(
-      (method, params, requestOpts) => host.request(method, params, requestOpts), threadId,
-      expectedGatewayNames.filter(name => Object.keys(config).some(key => key.startsWith(`mcp_servers.${name}.`))),
-    );
+    const readExpectedMcpTools = async (config: Record<string, unknown>) => {
+      const expected = expectedGatewayNames.filter(name => Object.keys(config).some(key => key.startsWith(`mcp_servers.${name}.`)));
+      const deadline = Date.now() + 5_000;
+      const reports = await Promise.all(expected.map(async name => [name,
+        await readCodexThreadMcpServerTools(
+          (method, params, requestOpts) => host.request(method, params, requestOpts), threadId, name, deadline - Date.now(),
+        ).catch(() => undefined),
+      ] as const));
+      return new Map(reports);
+    };
     const reportExpectedRuntimeMcpAvailability = async (
       knownReports?: Awaited<ReturnType<typeof readExpectedMcpTools>>, signal?: AbortSignal,
     ): Promise<void> => {
@@ -7479,7 +7485,7 @@ assertRouteCurrent();
       }
       if (closed || threadId !== checkedThreadId || !isCurrentHost()
         || JSON.stringify(expectedRuntimeMcpConfig()) !== JSON.stringify(mcpConfig)) return;
-      expectedMcpNeedsRecheck = !reports || [...reports.values()].some(report => report.state === 'failed' || report.state === 'pending');
+      expectedMcpNeedsRecheck = !reports || [...reports.values()].some(report => !report || report.state === 'failed' || report.state === 'pending');
       // A healthy helper does not prove that the plugin gateway initialized.
       // Keep its independently failed client eligible for the same cold resume.
       const helperExpected = Object.keys(mcpConfig).some(key => key.startsWith('mcp_servers.cindy_helper.'));
@@ -8304,7 +8310,7 @@ assertRouteCurrent();
           assertRecoveryCurrent();
           await reportExpectedRuntimeMcpAvailability(reports, recoverySignal);
           assertRecoveryCurrent();
-          if (![...reports.values()].some(report => report.state === 'failed')) return;
+          if (![...reports.values()].some(report => report?.state === 'failed')) return;
           // Unloading a thread also stops native children/terminals. Leave those
           // intact, and unknown background state is busy, just as idle cleanup.
           if (await awaitCodexRouteSelection(handle.hasLiveBackgroundWork!().catch(() => true), recoverySignal)) return;
@@ -8313,7 +8319,7 @@ assertRouteCurrent();
           mcpRecoveryNotBefore = Date.now() + 30_000 * mcpRecoveryAttempts;
           log.info('recovering failed Codex task MCP', {
             threadId, attempt: mcpRecoveryAttempts,
-            servers: [...reports].filter(([, report]) => report.state === 'failed').map(([name]) => name),
+            servers: [...reports].filter(([, report]) => report?.state === 'failed').map(([name]) => name),
           });
           await withMcpDiscoveryContext(async () => {
             assertRecoveryCurrent();
