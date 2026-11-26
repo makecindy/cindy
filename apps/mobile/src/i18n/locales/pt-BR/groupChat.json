@@ -582,6 +582,8 @@
     "accessChat": "Somente a conversa do grupo",
     "accessTools": "Pode usar ferramentas e informações",
     "replies": "Como os amigos respondem",
+    "assistant": "Cindy do grupo",
+    "assistantHint": "Trabalha no computador de quem a @menciona.",
     "replyModeMentionedNote": "Os amigos ficam em silêncio, a menos que alguém os @mencione.",
     "work": "Divisão do trabalho",
     "organizerHint": "Decide quem executa cada etapa. Por padrão, essa função fica com o primeiro amigo.",

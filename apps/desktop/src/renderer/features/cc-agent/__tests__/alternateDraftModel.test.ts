@@ -1,6 +1,8 @@
 import { beforeEach, describe, expect, it } from 'vitest';
+import type { NewMakerDraft } from '@/state/newMakerDraft';
 import {
   alternateDraftModelFor,
+  applyAlternateDraftModel,
   forgetRemoteAlternateDraftModel,
   setAlternateDraftModel,
   type AlternateDraftModel,
@@ -65,5 +67,51 @@ describe('alternate draft selection lifetime', () => {
     forgetRemoteAlternateDraftModel(otherKey, isLocalDraft);
     setAlternateDraftModel(otherKey, null, isLocalDraft);
     expect(alternateDraftModelFor(NEW_MAKER_DRAFT_KEY, 12, true)).toEqual(remote);
+  });
+
+  // Unit regression: applying a one-task built-in alternate model must mask saved
+  // pluginEngine / pluginModel / modelGroup without mutating savedDraft, otherwise
+  // a stale remote plugin engine blocks send with newChat.pluginEngines.unavailable.
+  it('masks saved plugin and model-group modes when applying a one-task alternate model', () => {
+    const savedDraft = {
+      vendor: 'cc',
+      agentDeviceId: null,
+      agentDeviceName: null,
+      pluginModel: { pluginId: 'router', modelId: 'auto' },
+      modelGroup: { type: 'route', id: 'group-1' },
+      pluginEngine: { providerId: 'acp:remote', deviceId: 'offline-mac', modelId: 'engine-model' },
+      lastByVendor: {
+        cc: { model: 'claude-sonnet', effort: 'high', permissionMode: 'default', planMode: false, providerId: 'anthropic' },
+        codex: { model: 'gpt-5', effort: 'medium', permissionMode: 'default', planMode: false, providerId: 'openai' },
+        pi: { model: 'auto', effort: 'medium', permissionMode: 'default', planMode: false, providerId: 'xd' },
+        orca: { model: 'auto', effort: 'medium', permissionMode: 'default', planMode: false, providerId: null },
+      },
+    } as unknown as NewMakerDraft;
+    const alternate: AlternateDraftModel = {
+      ownerGeneration: 12,
+      pageKey: 'draft-page',
+      vendor: 'cc',
+      prefs: { model: 'claude-opus', providerId: 'anthropic', effort: 'xhigh' },
+      fast: false,
+      favoriteUid: null,
+      agentDevice: { deviceId: 'agent-computer', name: 'Agent Computer' },
+    };
+
+    expect(applyAlternateDraftModel(savedDraft, null)).toBe(savedDraft);
+
+    const effective = applyAlternateDraftModel(savedDraft, alternate);
+    expect(effective.vendor).toBe('cc');
+    expect(effective.agentDeviceId).toBe('agent-computer');
+    expect(effective.agentDeviceName).toBe('Agent Computer');
+    expect(effective.lastByVendor.cc).toMatchObject({
+      model: 'claude-opus',
+      providerId: 'anthropic',
+      effort: 'xhigh',
+      permissionMode: 'default',
+    });
+    expect(effective.pluginEngine).toBeNull();
+    expect(effective.pluginModel).toBeNull();
+    expect(effective.modelGroup).toBeNull();
+    expect(savedDraft.pluginEngine).toEqual({ providerId: 'acp:remote', deviceId: 'offline-mac', modelId: 'engine-model' });
   });
 });

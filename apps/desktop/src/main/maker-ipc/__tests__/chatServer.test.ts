@@ -6950,10 +6950,11 @@ describe('Chat Server directed sends', () => {
   let responseMode: 'all' | 'mentioned';
   let nextSendId: number;
   let mentionAudiences = false, allowAllBots = false;
+  let roomKind: 'group' | 'direct';
   let members: Array<{ id: string; kind: string; state: string }>;
   beforeEach(() => {
     vi.useFakeTimers();
-    fixture.packaged = true; responseMode = 'all'; nextSendId = 0; mentionAudiences = false; allowAllBots = false;
+    fixture.packaged = true; roomKind = 'group'; responseMode = 'all'; nextSendId = 0; mentionAudiences = false; allowAllBots = false;
     fixture.profiles = [{ id: 'local-bot', displayName: 'Bot', status: 'active' }];
     members = [{ id: selfId, kind: 'human', state: 'joined' },
       { id: botId, kind: 'bot', state: 'joined' }, { id: humanId, kind: 'human', state: 'joined' }];
@@ -6961,7 +6962,7 @@ describe('Chat Server directed sends', () => {
       if (route === '/me') return { body: { actor: { id: selfId }, capabilities: mentionAudiences ? { groupMentionAudiences: 1 } : {} } };
       if (route === '/actors') return { body: [{ id: botId, kind: 'bot', externalId: 'local-bot', name: 'Bot' }] };
       if (route.endsWith('/members')) return { body: members };
-      if (route.endsWith('/snapshot')) return { body: { room: { id: roomId, kind: 'group', response_mode: responseMode, allow_mention_all_bots: allowAllBots }, members, messages: [], cursor: '0' } };
+      if (route.endsWith('/snapshot')) return { body: { room: { id: roomId, kind: roomKind, response_mode: responseMode, allow_mention_all_bots: allowAllBots }, members, messages: [], cursor: '0' } };
       if (route.endsWith('/messages') && method === 'POST') return { body: { id: 'posted-message' } };
       return { body: [] };
     });
@@ -6974,6 +6975,13 @@ describe('Chat Server directed sends', () => {
     const input = { groupId: roomId, text: '@Bot hello', clientId: `directed-send-${++nextSendId}`, mentions };
     return entry === 'thread' ? service.chatServer!.reply({ ...input, rootId }) : service.sendMessage(input);
   };
+
+  it('keeps the sender out of explicit private-message recipients', async () => {
+    roomKind = 'direct';
+    expect(await service.sendMessage({ groupId: roomId, conversationKind: 'direct', clientId: 'direct-self', text: 'hello',
+      mentions: { all: false, botIds: [selfId, humanId] } })).toMatchObject({ ok: true });
+    expect(posts().at(-1)![2].mentions).toEqual([humanId]);
+  });
 
   // User rule: human and teammate broadcasts must remain distinct on both send routes.
   it.each(['main', 'thread'])('uses the owner-enabled teammate audience independently in %s', async entry => {
@@ -7045,11 +7053,11 @@ describe('Chat Server directed sends', () => {
     expect(posts()).toEqual([]);
   });
 
-  it.each(['main', 'thread'])('preserves actor/local-bot/human targets and excludes self in %s wire payloads', async entry => {
+  it.each(['main', 'thread'])('preserves explicitly selected self and other targets in %s wire payloads', async entry => {
     for (const all of [false, true]) {
       for (const targets of [[botId], ['local-bot'], [humanId], [selfId], [selfId, humanId, 'local-bot', botId]]) {
         expect(await send(entry, { all, botIds: targets })).toMatchObject({ ok: true });
-        const ids = [...new Set([...targets.map(target => target === 'local-bot' ? botId : target), ...(all ? [humanId] : [])])].filter(target => target !== selfId);
+        const ids = [...new Set([...targets.map(target => target === 'local-bot' ? botId : target), ...(all ? [humanId] : [])])];
         expect(posts().at(-1)![2]).toMatchObject({ mentions: ids,
           ...(entry === 'thread' ? { threadRootId: rootId } : {}) });
       }

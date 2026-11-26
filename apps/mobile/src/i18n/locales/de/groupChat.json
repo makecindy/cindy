@@ -573,6 +573,8 @@
     "accessChat": "Nur Gruppenchat",
     "accessTools": "Kann Tools und Informationen nutzen",
     "replies": "Antwortverhalten der Freunde",
+    "assistant": "Gruppen-Cindy",
+    "assistantHint": "Arbeitet auf dem Computer der Person, die sie mit @ erwähnt.",
     "replyModeMentionedNote": "Freunde bleiben still, solange sie niemand mit @ erwähnt.",
     "work": "Arbeitsaufteilung",
     "organizerHint": "Legt fest, wer die einzelnen Schritte übernimmt. Standardmäßig der erste Freund.",

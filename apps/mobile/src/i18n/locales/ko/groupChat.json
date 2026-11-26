@@ -573,6 +573,8 @@
     "accessChat": "그룹 내 대화만",
     "accessTools": "도구와 정보 사용 가능",
     "replies": "동반자 답변 방식",
+    "assistant": "그룹의 Cindy",
+    "assistantHint": "@한 사람의 컴퓨터에서 실행돼요.",
     "replyModeMentionedNote": "@하지 않으면 동반자가 답하지 않아요.",
     "work": "역할 분담",
     "organizerHint": "누가 어느 단계를 맡을지 정해요. 기본은 첫 번째 동반자예요.",

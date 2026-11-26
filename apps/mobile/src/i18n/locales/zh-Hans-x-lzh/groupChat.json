@@ -573,6 +573,8 @@
     "accessChat": "唯群内交流",
     "accessTools": "可用工具与数据",
     "replies": "同伴如何接话",
+    "assistant": "群中 Cindy",
+    "assistantHint": "谁 @ 之，即于其人之电脑行事。",
     "replyModeMentionedNote": "无人被 @ 时，同伴不接话。",
     "work": "分职",
     "organizerHint": "排定谁为何步；预设为首位同伴。",

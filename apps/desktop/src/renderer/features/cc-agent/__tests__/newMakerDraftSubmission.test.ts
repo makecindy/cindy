@@ -40,6 +40,7 @@ import {
   type PluginEngineSelection,
 } from '@/lib/pluginEngineSelection';
 import { checkDraftBranchBeforeStart } from '../newMakerDraftBranchCheck';
+import { applyAlternateDraftModel } from '../alternateDraftModel';
 import { modelGroupOwnerDevice } from '../../model-groups/draftModelGroupRouting';
 
 vi.mock('@/lib/makerTransport', () => ({ makerApiFor: vi.fn() }));
@@ -73,7 +74,7 @@ function visit(node: ts.Node) {
     routeDeclarations.push(`const ${node.getText(source)};`);
   }
   if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer
-    && ['pluginEnginesAllowed', 'rememberedPluginEngineDeviceId'].includes(node.name.text)) {
+    && ['draft', 'pluginEnginesAllowed', 'rememberedPluginEngineDeviceId'].includes(node.name.text)) {
     pluginEngineDeclarations.push(`const ${node.getText(source)};`);
   }
   if (ts.isVariableDeclaration(node) && node.initializer && ts.isCallExpression(node.initializer)) {
@@ -164,6 +165,7 @@ async function submit(options: {
   /** 草稿那台电脑的模型目录读到哪一步；默认 ready。 */
   remoteModelListStatus?: 'ready' | 'loading' | 'error';
   rememberedPluginEngineDeviceId?: string;
+  localAlternate?: boolean;
   effort?: Effort;
   submittedEffort?: Effort;
   model?: string;
@@ -366,11 +368,27 @@ async function submit(options: {
     setAlternateModel: vi.fn(),
     localModelIssueText: options.localModelIssueText ?? null,
     rememberedPluginEngineDeviceId: runInNewContext(pluginEngineSelectionCode, {
+      applyAlternateDraftModel,
       isDeviceLinkDraft: !!options.deviceId,
       effectiveRemoteHostId: options.remoteHostId,
-      draft: { vendor: agentKind, pluginEngine: options.rememberedPluginEngineDeviceId
-        ? { deviceId: options.rememberedPluginEngineDeviceId }
-        : null },
+      savedDraft: {
+        vendor: agentKind,
+        lastByVendor: { [agentKind]: { model: selectedModel, providerId: selectedProviderId, effort: options.effort ?? 'medium' } },
+        pluginEngine: options.rememberedPluginEngineDeviceId
+          ? { deviceId: options.rememberedPluginEngineDeviceId }
+          : null,
+      },
+      localAlternate: options.localAlternate
+        ? {
+            ownerGeneration: 1,
+            pageKey: 'draft',
+            vendor: agentKind,
+            prefs: { model: selectedModel, providerId: selectedProviderId, effort: options.effort ?? 'medium' },
+            fast: false,
+            favoriteUid: null,
+            agentDevice: options.agentDeviceId ? { deviceId: options.agentDeviceId, name: options.agentDeviceId } : null,
+          }
+        : null,
     }),
     ...draftEffort, getModel, reconcileInvocationEffort, recallAgentDeviceSelection, window,
     localProviders: providers, draftLocalProviders: providers, localProvidersLoading: false, providers,
@@ -559,6 +577,23 @@ describe('homepage submission to Main admission and first-message handoff', () =
   it.each(['send', 'goal'] as const)('allows %s after switching the task computer with a remembered plugin engine', async (entry) => {
     const result = await submit({ entry, deviceId: 'task-computer', rememberedPluginEngineDeviceId: 'engine-computer' });
     expect(result.invokeRemote).toHaveBeenCalledWith('task-computer', 'maker:create-session', [expect.objectContaining({ agentKind: 'pi' })]);
+  });
+  // Choosing a one-task alternate model (for example a built-in model on another
+  // agent computer) must mask any stale remote plugin engine stored on savedDraft,
+  // instead of blocking submission with newChat.pluginEngines.unavailable.
+  it.each(['send', 'goal'] as const)('allows %s when a one-task alternate model overrides a remembered remote plugin engine', async (entry) => {
+    const result = await submit({
+      entry,
+      agentDeviceId: 'agent-computer',
+      providers: [provider(providerId, ['medium'])],
+      rememberedPluginEngineDeviceId: 'engine-computer',
+      localAlternate: true,
+    });
+    expect(result.toastWarning).not.toHaveBeenCalled();
+    expect(result.errors).toEqual([]);
+    expect(result.createSession).toHaveBeenCalledTimes(1);
+    if (entry === 'send') expect(result.sendMessage).toHaveBeenCalledTimes(1);
+    else expect(result.setGoal).toHaveBeenCalledTimes(1);
   });
   // Unit regression: hold both real submission boundaries open. The previous
   // route only opened after both resolved and navigated even after the user left.

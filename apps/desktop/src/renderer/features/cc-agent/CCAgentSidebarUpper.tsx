@@ -89,7 +89,7 @@ import { TeammatesSection } from '@/features/bots/TeammatesSection';
 import { TeammateSearchResults, useTeammateSearchMatches } from '@/features/bots/TeammateSearchResults';
 import { useNavigationAttention } from '@/lib/navigationAttentionStore';
 import { useActiveMainView } from '@/hooks/useActiveMainView';
-import { NavigationCountBadge } from '@/components/sidebar/NavigationCountBadge';
+import { CountBadge } from '@/components/ui/badge';
 import { useViewedBotSessionId } from '@/features/bots/useViewedBotSessionId';
 import { useCompanionCloud } from '@/features/bots/companionCloudStore';
 import { sharedTaskErrorKey } from '@/features/device-link/sharedTaskCompatibility';
@@ -4184,7 +4184,7 @@ function CollapsedView({
         active={onBotsRoute}
         aria-description={teammateUnread > 0 ? t('sidebar.teammateUnreadCount', { count: teammateUnread }) : undefined}
         badge={teammateUnread > 0 ? (
-          <NavigationCountBadge count={teammateUnread} label={t('sidebar.teammateUnreadCount', { count: teammateUnread })} />
+          <CountBadge count={teammateUnread} label={t('sidebar.teammateUnreadCount', { count: teammateUnread })} />
         ) : undefined}
         onClick={() => navigateToView('bots')}
       />

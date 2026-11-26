@@ -58,8 +58,9 @@ export function chatGroupHumanDisplayName(member: {
   return name.endsWith(suffix) ? name : `${name}${suffix}`;
 }
 
-export function chatGroupMentionRoster(members: readonly BotGroupMemberView[]): BotGroupMemberView[] {
-  return members.filter(member => !member.isSelf).map(member => {
+export function chatGroupMentionRoster(members: readonly BotGroupMemberView[], conversationKind?: 'direct'): BotGroupMemberView[] {
+  const roster = conversationKind === 'direct' ? members.filter(member => !member.isSelf) : members;
+  return roster.map(member => {
     const name = chatGroupHumanDisplayName(member);
     return name === member.name ? member : { ...member, name, displayName: member.name };
   });
