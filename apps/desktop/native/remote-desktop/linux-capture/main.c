@@ -310,6 +310,10 @@ static int x11_main(struct capture *c) {
   int status = 1;
   if (x11_open(c->requested_output + 4) || jpeg_open())
     goto done;
+#ifdef CINDY_XCOMPOSITE
+  if (xc.excluded_count && x11_redirect())
+    goto done;
+#endif
   xc.scale = cc.scale;
   c->x11 = 1;
   c->transform = WL_OUTPUT_TRANSFORM_NORMAL;
@@ -325,8 +329,13 @@ static int x11_main(struct capture *c) {
     if (n != 1 || command != 'f')
       break;
     alarm(3);
+#ifdef CINDY_XCOMPOSITE
+    if (x11_frame_local())
+      break;
+#else
     if (x11_frame())
       break;
+#endif
     if (c->overlay)
       x11_cursor();
     c->pixels = xc.image->data;
@@ -346,7 +355,7 @@ done:
 }
 #endif
 int main(int argc, char **argv) {
-  if (argc != 1 && argc != 4 && argc != 5 && argc != 2)
+  if (argc != 1 && argc != 4 && argc != 5 && argc != 6 && argc != 2)
     return 2;
   struct capture c = {0};
   if (argc == 2 && !strcmp(argv[1], "--x11-check")) {
@@ -363,10 +372,24 @@ int main(int argc, char **argv) {
     return 1; /* Built without X11 development headers. */
 #endif
   }
+  if (argc == 2 && !strcmp(argv[1], "--x11-local-check")) {
+#if defined(CINDY_X11) && defined(CINDY_XCOMPOSITE)
+    /* Probe only: whether X11 capture can keep local-only windows out. */
+    alarm(3);
+    int ready = !x11_open(NULL) && x11_composite_ready() && !jpeg_open();
+    x11_close();
+    jpeg_close();
+    if (ready)
+      puts("ready");
+    return ready ? 0 : 1;
+#else
+    return 1; /* Built without X11 Composite development headers. */
+#endif
+  }
   int probe = argc == 2 && !strcmp(argv[1], "--cursor-check");
   if (argc == 2 && !probe)
     return 2;
-  if (argc == 4 || argc == 5) {
+  if (argc == 4 || argc == 5 || argc == 6) {
     c.overlay = !strcmp(argv[1], "cursor-overlay");
     if (!c.overlay && strcmp(argv[1], "video"))
       return 2;
@@ -375,11 +398,22 @@ int main(int argc, char **argv) {
     if (!isfinite(cc.scale) || cc.scale < 0.25 || cc.scale > 8 ||
         c.quality < 25 || c.quality > 95)
       return 2;
-    if (argc == 5)
+    if (argc >= 5)
       c.requested_output = argv[4];
   }
+  /* Only X11 capture takes a sixth, local-only window argument. */
+  if (argc == 6 && strncmp(c.requested_output, "x11:", 4))
+    return 2;
   if (c.requested_output && !strncmp(c.requested_output, "x11:", 4)) {
 #ifdef CINDY_X11
+    if (argc == 6) {
+#ifdef CINDY_XCOMPOSITE
+      if (x11_parse_excluded(argv[5]))
+        return 2;
+#else
+      return 1; /* Cannot keep the local-only windows out: never capture them. */
+#endif
+    }
     alarm(3);
     return x11_main(&c);
 #else

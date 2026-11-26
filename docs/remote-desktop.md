@@ -694,6 +694,40 @@ checked against current authorization. Local stop, revocation, relay loss, peer
 offline, display changes, and capture-host loss stop the lease. Stale operations
 cannot resurrect a stopped lease. Input sequence numbers prevent replay.
 
+### Controlled-desktop notice (2026-11-26)
+
+While a viewer is connected, the controlled computer shows "Desktop is being
+remotely controlled/viewed" with Disconnect only as the on-screen overlay
+(`controlledOverlay.ts`), never inside Cindy's main window: the main window is
+part of what the viewer receives, and the notice is for the person at the
+computer (product decision 2026-11-26). The overlay is shown only where capture
+keeps it, and its disconnect confirmation, out of the viewer's picture:
+
+- macOS 14+ (explicit capture filter) and Windows 10 2004+ (content protection).
+- X11, while the offer's video is the native root capture
+  (`readLinuxX11LocalOnlySupport`): the helper receives the overlay's window IDs
+  (`exclude:`) and rebuilds their area from the desktop background and every
+  other viewable top-level window, bottom to top, so a window above the notice
+  stays and the notice and its window-manager frame are gone. Reading obscured
+  windows uses an automatic Composite redirect of the root's children for the
+  helper's lifetime; a compositing manager's own redirect is unaffected. The
+  area is the bounding box of the window's position before and after the
+  capture and in the two previous frames, covering a compositor still showing
+  a dragged notice at its old place. Anything unreadable stays black, never the
+  notice. A helper built without `xcomposite`, a server without Composite, an
+  older viewer (Chromium capture), mixed monitor scaling or a relay screenshot
+  fallback keeps the overlay off; the screenshot fallback removes a visible
+  overlay and skips that frame first.
+- Elsewhere there is no Cindy notice: GNOME and portal desktops show the
+  system's own screen-sharing/remote-control indicators; Hyprland, older macOS
+  and Windows, privacy masks, plugin screens and an overlay that failed to open
+  show none.
+
+Verification: `linux-capture/x11-local-test.py <capture>` (private Xvfb; add
+`--wm` to run under xfwm4's compositor). Checked on Ubuntu 24.04 in a container,
+both modes pass. Electron's real overlay window on an X11 desktop, dragging it
+while connected, and a phone/Mac viewer remain for manual validation.
+
 ### Local UI authority versus compromised application code
 
 Local control switches, controller restoration and revocation require a
@@ -1639,7 +1673,8 @@ names map to shape keywords in `linux-capture/cursor_shape.h` (CSS names from
 GTK/Chromium and legacy cursor-font names from Qt/Xt). A fully transparent raster
 reports a hidden pointer. Chromium's desktop source is still enumerated for audio
 and as the fallback when the helper is unavailable. Monitor layout changes
-restart the helper.
+restart the helper. The same helper keeps the controlled-desktop overlay out
+of the picture (see [Controlled-desktop notice](#controlled-desktop-notice-2026-11-26)).
 
 **GNOME Wayland** (Ubuntu's default session). When `XDG_CURRENT_DESKTOP` names
 GNOME and `cindy-linux-gnome-capture --check` succeeds, Cindy uses Mutter's own
@@ -1686,7 +1721,8 @@ forms are accepted.
 **Build and packaging.** JPEG encoding is resolved at runtime (`jpeg.h`):
 `libturbojpeg.so.0` when installed, otherwise gdk-pixbuf, which every GTK desktop
 running Electron has; stock Ubuntu does not ship libturbojpeg. The X11 backend
-needs `x11` and `xfixes` headers (`xext` optional); the GNOME capture binary needs
+needs `x11` and `xfixes` headers (`xext` optional; `xcomposite` for the
+controlled-desktop overlay); the GNOME capture binary needs
 `gio-2.0`, `libpipewire-0.3` and `xcursor`; the GNOME input backend needs `gio-2.0`.
 Missing headers skip only that backend, and the probe then reports it
 unavailable. The GNOME capture is a separate binary so a missing PipeWire

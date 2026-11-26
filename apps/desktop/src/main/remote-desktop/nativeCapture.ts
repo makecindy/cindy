@@ -348,6 +348,8 @@ export class NativeDesktopCapture {
             : [display];
         if (!linux && this.onlyWindow) args.push(this.onlyWindow);
         else if (!linux && this.excludedWindows) args.push(this.excludedWindows);
+        // X11 rebuilds local-only windows from what lies beneath them (x11.h).
+        else if (x11Display && this.excludedWindows) args.push(`exclude:${this.excludedWindows}`);
         const child = spawn(executable, args, { stdio: 'pipe' });
         this.child = child;
         this.display = display;

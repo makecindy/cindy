@@ -158,6 +158,43 @@ it('captures an X11 monitor by its root pixel rectangle and refuses ambiguous or
     displays.mockRestore();
   }
 });
+// X11 local-only notice (docs/remote-desktop.md, controlled notice on X11): the
+// overlay is shown only while capture rebuilds its area, so the helper must be
+// restarted with the overlay's window IDs before any frame and without them after.
+// Minimal failure: the IDs never reach the helper, and the viewer sees the notice.
+it('restarts X11 capture with the local-only windows it must keep out', async () => {
+  vi.stubGlobal('process', {
+    ...process,
+    platform: 'linux',
+    env: { ...process.env, DISPLAY: ':0', XDG_SESSION_TYPE: 'x11', WAYLAND_DISPLAY: '' },
+  });
+  const main = { id: 2, scaleFactor: 1, bounds: { x: 0, y: 0, width: 1280, height: 800 } };
+  const displays = vi.spyOn(screen, 'getAllDisplays').mockReturnValue([main] as never);
+  try {
+    const { child, owner } = setup();
+    owner.setExcludedWindows([41943041, 41943050]);
+    const pending = owner.frame('2', true);
+    await vi.waitFor(() => expect(h.spawn).toHaveBeenCalledOnce());
+    expect(h.spawn).toHaveBeenLastCalledWith(
+      '/capture',
+      ['cursor-overlay', '1', '80', 'x11:0,0,1280,800', 'exclude:41943041,41943050'],
+      { stdio: 'pipe' },
+    );
+    child.stdout.write(JSON.stringify({ jpeg: 'anBlZw==', cursor: null }) + '\n');
+    await pending;
+    owner.setExcludedWindows([]);
+    expect(child.kill).toHaveBeenCalledOnce();
+    void owner.frame('2', true);
+    await vi.waitFor(() => expect(h.spawn).toHaveBeenCalledTimes(2));
+    expect(h.spawn).toHaveBeenLastCalledWith(
+      '/capture',
+      ['cursor-overlay', '1', '80', 'x11:0,0,1280,800'],
+      { stdio: 'pipe' },
+    );
+  } finally {
+    displays.mockRestore();
+  }
+});
 // GNOME Wayland: the separate Mutter helper records one connector, and cursor
 // sizes use that monitor's stream scale. An unknown monitor spawns nothing.
 it('records a GNOME monitor through its own helper with the monitor scale', async () => {

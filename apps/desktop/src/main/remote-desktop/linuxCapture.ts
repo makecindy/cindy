@@ -43,6 +43,29 @@ export function readLinuxX11CaptureSupport(): Promise<boolean> {
   });
   return x11Ready;
 }
+let x11LocalReady: Promise<boolean> | null = null;
+/** X11 capture that rebuilds named local-only windows (Cindy's controlled
+ * notice) from what lies beneath them, so the viewer never receives them.
+ * Needs the helper's Composite build and the X server's Composite extension;
+ * cached like the capture probe above. */
+export function readLinuxX11LocalOnlySupport(): Promise<boolean> {
+  if (!isX11Desktop()) return Promise.resolve(false);
+  x11LocalReady ??= (async () => {
+    try {
+      const { stdout } = await exec(await resolveLinuxCaptureBinary(), ['--x11-local-check'], {
+        timeout: 3000,
+        maxBuffer: 1024,
+      });
+      return stdout.trim() === 'ready';
+    } catch {
+      return false;
+    }
+  })().then((ready) => {
+    if (!ready) x11LocalReady = null;
+    return ready;
+  });
+  return x11LocalReady;
+}
 export function resolveLinuxCaptureBinary(): Promise<string> {
   if (app.isPackaged)
     return Promise.resolve(path.join(process.resourcesPath, 'tools', 'remote-desktop', binaryName));

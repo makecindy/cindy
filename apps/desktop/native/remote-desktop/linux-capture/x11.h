@@ -5,14 +5,24 @@
 #include "cursor_shape.h"
 #include "encode.h"
 #include <X11/Xlib.h>
+#include <errno.h>
 #include <X11/Xutil.h>
 #include <X11/extensions/Xfixes.h>
+#ifdef CINDY_XCOMPOSITE
+#include <X11/Xatom.h>
+#include <X11/extensions/Xcomposite.h>
+#endif
 #ifdef CINDY_XSHM
 #include <X11/extensions/XShm.h>
 #include <sys/ipc.h>
 #include <sys/shm.h>
 #endif
 
+#define X11_EXCLUDED_MAX 4
+#define X11_HISTORY 2
+struct x11_rect {
+  int x, y, width, height;
+};
 struct x11_capture {
   Display *display;
   Window root;
@@ -29,6 +39,10 @@ struct x11_capture {
       cursor_height, hot_x, hot_y;
   char *cursor_png;
   const char *cursor_shape;
+  /* Local-only windows (Cindy's on-screen notice) never reach the picture. */
+  Window excluded[X11_EXCLUDED_MAX];
+  int excluded_count;
+  struct x11_rect history[X11_HISTORY][X11_EXCLUDED_MAX];
 };
 static struct x11_capture xc;
 static int x11_error(Display *display, XErrorEvent *event) {
@@ -260,3 +274,228 @@ static void x11_cursor_json(void) {
     printf(",\"shape\":\"%s\"", xc.cursor_shape);
   fputc('}', stdout);
 }
+
+/* Local-only windows: `exclude:<id>[,<id>...]` names X window IDs (Electron
+ * media-source IDs) whose on-screen area is rebuilt from the windows beneath
+ * them, so Cindy's controlled notice stays visible locally but never reaches
+ * the viewer. Reading obscured window contents needs Composite redirection:
+ * an automatic redirect of the root's children is requested for the life of
+ * this connection (a compositing manager's manual redirect takes precedence
+ * and is left alone); the X server drops it when the helper exits. */
+#ifdef CINDY_XCOMPOSITE
+static int x11_parse_excluded(const char *text) {
+  if (strncmp(text, "exclude:", 8))
+    return -1;
+  text += 8;
+  for (;;) {
+    char *end = NULL;
+    errno = 0;
+    unsigned long id = strtoul(text, &end, 10);
+    if (errno || end == text || *text < '1' || *text > '9' || id > 0xffffffffUL ||
+        xc.excluded_count >= X11_EXCLUDED_MAX)
+      return -1;
+    xc.excluded[xc.excluded_count++] = (Window)id;
+    if (!*end)
+      return 0;
+    if (*end != ',')
+      return -1;
+    text = end + 1;
+  }
+}
+static int x11_composite_ready(void) {
+  int event, error, major = 0, minor = 2;
+  return XCompositeQueryExtension(xc.display, &event, &error) &&
+         XCompositeQueryVersion(xc.display, &major, &minor) &&
+         (major > 0 || minor >= 2);
+}
+static int x11_redirect(void) {
+  if (!x11_composite_ready())
+    return -1;
+  xc.error = 0;
+  XCompositeRedirectSubwindows(xc.display, xc.root, CompositeRedirectAutomatic);
+  XSync(xc.display, False);
+  return xc.error ? -1 : 0;
+}
+/* The root child holding `window` (its window-manager frame, or itself). */
+static Window x11_toplevel(Window window) {
+  for (int depth = 0; depth < 32; depth++) {
+    Window root, parent, *children = NULL;
+    unsigned count = 0;
+    if (!XQueryTree(xc.display, window, &root, &parent, &children, &count))
+      return None;
+    if (children)
+      XFree(children);
+    if (parent == xc.root)
+      return window;
+    if (parent == None)
+      return None;
+    window = parent;
+  }
+  return None;
+}
+static struct x11_rect x11_clip(struct x11_rect r) {
+  int x0 = r.x > xc.x ? r.x : xc.x, y0 = r.y > xc.y ? r.y : xc.y;
+  int x1 = r.x + r.width < xc.x + xc.width ? r.x + r.width : xc.x + xc.width;
+  int y1 = r.y + r.height < xc.y + xc.height ? r.y + r.height : xc.y + xc.height;
+  struct x11_rect clipped = {x0, y0, x1 - x0, y1 - y0};
+  if (clipped.width <= 0 || clipped.height <= 0)
+    memset(&clipped, 0, sizeof(clipped));
+  return clipped;
+}
+/* Outer root-relative rectangle of a viewable root child; empty otherwise. */
+static struct x11_rect x11_outer(Window window) {
+  struct x11_rect r = {0, 0, 0, 0};
+  XWindowAttributes a;
+  if (window == None || !XGetWindowAttributes(xc.display, window, &a) ||
+      a.map_state != IsViewable)
+    return r;
+  r.x = a.x;
+  r.y = a.y;
+  r.width = a.width + 2 * a.border_width;
+  r.height = a.height + 2 * a.border_width;
+  return r;
+}
+static void x11_locate(Window *top, struct x11_rect *rects) {
+  for (int i = 0; i < xc.excluded_count; i++) {
+    top[i] = x11_toplevel(xc.excluded[i]);
+    rects[i] = x11_clip(x11_outer(top[i]));
+  }
+}
+static int x11_same_format(const Visual *visual) {
+  return visual->red_mask == xc.visual->red_mask &&
+         visual->green_mask == xc.visual->green_mask &&
+         visual->blue_mask == xc.visual->blue_mask;
+}
+/* Copies (depth 24) or blends premultiplied ARGB (depth 32) over `canvas`. */
+static void x11_compose(uint32_t *canvas, struct x11_rect r, XImage *image,
+                        int dx, int dy, int alpha) {
+  for (int y = 0; y < image->height; y++) {
+    const uint32_t *src =
+        (const uint32_t *)(image->data + (size_t)y * image->bytes_per_line);
+    uint32_t *dst = canvas + (size_t)(dy + y) * r.width + dx;
+    for (int x = 0; x < image->width; x++) {
+      uint32_t s = src[x], a = s >> 24;
+      if (!alpha || a == 255) {
+        dst[x] = s & 0xffffff;
+        continue;
+      }
+      if (!a)
+        continue;
+      uint32_t d = dst[x], out = 0;
+      for (int shift = 0; shift <= 16; shift += 8) {
+        uint32_t value = ((s >> shift) & 255) + ((d >> shift) & 255) * (255 - a) / 255;
+        out |= (value > 255 ? 255 : value) << shift;
+      }
+      dst[x] = out;
+    }
+  }
+}
+/* Repaints `r` (root coordinates, inside the capture) from the desktop
+ * background and every viewable root child except `skip`, bottom to top.
+ * Anything that cannot be read stays black: never the local-only window. */
+static void x11_rebuild(struct x11_rect r, const Window *skip, int skip_count) {
+  uint32_t *canvas = calloc((size_t)r.width * (size_t)r.height, 4);
+  if (canvas) {
+    Atom atom = XInternAtom(xc.display, "_XROOTPMAP_ID", True);
+    Atom type;
+    int format;
+    unsigned long count, after;
+    unsigned char *data = NULL;
+    if (atom != None &&
+        XGetWindowProperty(xc.display, xc.root, atom, 0, 1, False, XA_PIXMAP,
+                           &type, &format, &count, &after, &data) == Success &&
+        data && type == XA_PIXMAP && format == 32 && count == 1) {
+      XImage *image = XGetImage(xc.display, (Pixmap)((unsigned long *)data)[0],
+                                r.x, r.y, (unsigned)r.width, (unsigned)r.height,
+                                AllPlanes, ZPixmap);
+      if (image && image->bits_per_pixel == 32 && image->width == r.width &&
+          image->height == r.height)
+        x11_compose(canvas, r, image, 0, 0, 0);
+      if (image)
+        XDestroyImage(image);
+    }
+    if (data)
+      XFree(data);
+    Window root, parent, *children = NULL;
+    unsigned n = 0;
+    if (XQueryTree(xc.display, xc.root, &root, &parent, &children, &n)) {
+      for (unsigned i = 0; i < n; i++) {
+        int skipped = 0;
+        for (int j = 0; j < skip_count; j++)
+          skipped |= children[i] == skip[j];
+        XWindowAttributes a;
+        if (skipped || !XGetWindowAttributes(xc.display, children[i], &a) ||
+            a.map_state != IsViewable || a.class != InputOutput ||
+            (a.depth != 24 && a.depth != 32) || !x11_same_format(a.visual))
+          continue;
+        struct x11_rect inner = {a.x + a.border_width, a.y + a.border_width,
+                                 a.width, a.height};
+        int x0 = inner.x > r.x ? inner.x : r.x, y0 = inner.y > r.y ? inner.y : r.y;
+        int x1 = inner.x + inner.width < r.x + r.width ? inner.x + inner.width
+                                                        : r.x + r.width;
+        int y1 = inner.y + inner.height < r.y + r.height ? inner.y + inner.height
+                                                          : r.y + r.height;
+        if (x1 <= x0 || y1 <= y0)
+          continue;
+        /* Redirected windows answer from their own storage, obscured or not. */
+        XImage *image = XGetImage(xc.display, children[i], x0 - inner.x,
+                                  y0 - inner.y, (unsigned)(x1 - x0),
+                                  (unsigned)(y1 - y0), AllPlanes, ZPixmap);
+        if (image && image->bits_per_pixel == 32 && image->width == x1 - x0 &&
+            image->height == y1 - y0)
+          x11_compose(canvas, r, image, x0 - r.x, y0 - r.y, a.depth == 32);
+        if (image)
+          XDestroyImage(image);
+      }
+      if (children)
+        XFree(children);
+    }
+  }
+  for (int y = 0; y < r.height; y++) {
+    uint32_t *dst = (uint32_t *)(xc.image->data +
+                                 (size_t)(r.y - xc.y + y) * xc.image->bytes_per_line) +
+                    (r.x - xc.x);
+    if (canvas)
+      memcpy(dst, canvas + (size_t)y * r.width, (size_t)r.width * 4);
+    else
+      memset(dst, 0, (size_t)r.width * 4);
+  }
+  free(canvas);
+  xc.error = 0;
+}
+static struct x11_rect x11_bounds(struct x11_rect a, struct x11_rect b) {
+  if (!a.width)
+    return b;
+  if (!b.width)
+    return a;
+  int x0 = a.x < b.x ? a.x : b.x, y0 = a.y < b.y ? a.y : b.y;
+  int x1 = a.x + a.width > b.x + b.width ? a.x + a.width : b.x + b.width;
+  int y1 = a.y + a.height > b.y + b.height ? a.y + a.height : b.y + b.height;
+  struct x11_rect r = {x0, y0, x1 - x0, y1 - y0};
+  return r;
+}
+/* One frame with local-only windows removed. The compositor may show a moved
+ * window where it was a moment ago, so each window's area is the bounding box
+ * of where it was before and after this capture and in the previous frames. */
+static int x11_frame_local(void) {
+  if (!xc.excluded_count)
+    return x11_frame();
+  Window top[X11_EXCLUDED_MAX];
+  struct x11_rect before[X11_EXCLUDED_MAX], after[X11_EXCLUDED_MAX];
+  x11_locate(top, before);
+  if (x11_frame())
+    return -1;
+  x11_locate(top, after);
+  for (int i = 0; i < xc.excluded_count; i++) {
+    struct x11_rect area = x11_bounds(before[i], after[i]);
+    for (int h = 0; h < X11_HISTORY; h++)
+      area = x11_bounds(area, xc.history[h][i]);
+    if (area.width)
+      x11_rebuild(area, top, xc.excluded_count);
+  }
+  memmove(xc.history[1], xc.history[0], sizeof(xc.history[0]) * (X11_HISTORY - 1));
+  for (int i = 0; i < xc.excluded_count; i++)
+    xc.history[0][i] = after[i];
+  return 0;
+}
+#endif

@@ -44,6 +44,9 @@ const flags = run('pkg-config', ['--cflags', '--libs', 'wayland-client', 'libpng
 // report X11 capture unavailable at runtime.
 const x11 = optional('x11', 'xfixes');
 const shm = x11 && optional('xext');
+// Composite lets X11 capture keep Cindy's local-only notice out of the picture
+// (x11.h). Without it the helper refuses such captures, and the notice stays off.
+const composite = x11 && optional('xcomposite');
 const binary = path.join(output, 'cindy-linux-desktop-capture');
 run('cc', [
   '-std=c11',
@@ -53,6 +56,7 @@ run('cc', [
   '-O2',
   ...(x11 ? ['-DCINDY_X11'] : []),
   ...(shm ? ['-DCINDY_XSHM'] : []),
+  ...(composite ? ['-DCINDY_XCOMPOSITE'] : []),
   path.join(source, 'main.c'),
   ...protocols.map((name) => path.join(output, name + '.c')),
   '-I',
@@ -60,6 +64,7 @@ run('cc', [
   ...flags,
   ...(x11 ?? []),
   ...(shm ?? []),
+  ...(composite ?? []),
   '-lm',
   // JPEG backends are loaded at runtime (jpeg.h); none is a link dependency.
   '-ldl',

@@ -82,7 +82,11 @@ import {
   linuxDisplay,
   linuxMonitor,
 } from './linuxDesktop';
-import { readLinuxCursorSupport, readLinuxX11CaptureSupport } from './linuxCapture';
+import {
+  readLinuxCursorSupport,
+  readLinuxX11CaptureSupport,
+  readLinuxX11LocalOnlySupport,
+} from './linuxCapture';
 import {
   gnomeDesktopReady,
   gnomeDisplay,
@@ -322,10 +326,16 @@ const supportsPrivacyScreen =
     Number(process.getSystemVersion().split('.')[0]) >= 14) ||
   (process.platform === 'win32' && Number(osRelease().split('.')[2]) >= 19041);
 // Windows honours content protection in capture; modern macOS capture needs the
-// explicit filter. Same platform floor as the privacy masks.
+// explicit filter. Same platform floor as the privacy masks. X11 shows it only
+// while the native helper rebuilds its area from the windows beneath (x11.h).
+/** The current offer's video is X11 native capture that keeps local-only
+ * windows out. Every other Linux capture contains whatever is on screen, so
+ * the overlay stays off there; GNOME and portal desktops show their own
+ * screen-sharing indicators. */
+let x11LocalCapture = false;
 const controlledOverlay = new ControlledOverlay(
   (ids) => {
-    if (process.platform !== 'darwin') return;
+    if (process.platform === 'win32') return;
     overlayExcluded = ids;
     applyExcludedWindows();
   },
@@ -349,9 +359,15 @@ let privacyRequested = false;
 function syncControlledOverlay(): void {
   const state = remoteDesktop.state;
   const displayId = remoteDesktop.displayId;
+  // A new lease decides again in its own offer.
+  if (!state) x11LocalCapture = false;
   // A phone using a plugin screen controls nothing on this desktop.
   controlledOverlay.update(
-    supportsPrivacyScreen && state && displayId && !liveSession && !privacyRequested
+    (supportsPrivacyScreen || x11LocalCapture) &&
+      state &&
+      displayId &&
+      !liveSession &&
+      !privacyRequested
       ? {
           displayId,
           controlling: state.controlling,
@@ -574,6 +590,7 @@ async function offer(
     // viewers keep the embedded pointer and their existing timing.
     const x11Native =
       !hyprland && !handoff && cursorOverlay === true && (await x11CursorCapture(lease.display.id));
+    const x11Local = x11Native && (await readLinuxX11LocalOnlySupport());
     let nativeAvailable = process.platform === 'darwin' || hyprland || gnome || x11Native;
     if (!hyprland && !gnome && !handoff) {
       nativeAvailable ||=
@@ -624,6 +641,11 @@ async function offer(
           (hyprland && (await readLinuxCursorSupport()))));
     if (!current() || host !== currentHost || currentHost.isDestroyed())
       throw new Error('DESKTOP_LEASE_EXPIRED');
+    if (process.platform === 'linux') {
+      // Before capture starts: a Chromium-captured offer removes the overlay first.
+      x11LocalCapture = x11Local;
+      syncControlledOverlay();
+    }
     nativeSettings = settings;
     setVideoLease(lease.lease);
     if (hyprland && settings?.audio) {
@@ -1108,6 +1130,12 @@ export const remoteDesktop: RemoteDesktopController = new RemoteDesktopControlle
       // A failed helper falls back to the screenshot below, pointer included.
       if (frame) return encodeNativeRelayFrame(frame, (jpeg) => nativeImage.createFromBuffer(jpeg));
     }
+    if (process.platform === 'linux' && overlayExcluded.length) {
+      // The screenshot would contain the local-only overlay: remove it first.
+      x11LocalCapture = false;
+      syncControlledOverlay();
+      return null;
+    }
     const available = await sources(true).catch((error) => {
       if (error instanceof Error && error.message === 'DESKTOP_VIDEO_TIMEOUT') return [];
       throw error;
@@ -1538,12 +1566,8 @@ export function registerRemoteDesktopIpc(
     if (checkWindowsSupport !== undefined && typeof checkWindowsSupport !== 'boolean')
       throwIpcError('INVALID_PARAMS', 'Invalid Windows support status request');
     const enabled = readDeviceLinkSettings().remoteDesktopEnabled;
-    const active = remoteDesktop.state;
     return {
       enabled,
-      // Like the desktop overlay, the fallback notice excludes plugin-only screens.
-      active: liveSession ? null : active,
-      overlay: controlledOverlay.visible,
       permissionGuide: permissions.guideOpen,
       ...(enabled && checkWindowsSupport === true
         ? { windowsSupport: await readWindowsDesktopSupport() }
