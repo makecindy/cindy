@@ -94,10 +94,20 @@ export function pluginOperationOpens(operation: FinishedPluginOperation, facts: 
 }
 
 /**
- * Whether a management snapshot says its market part is incomplete (contract V2.10): the server catalog could not be
- * read (`unavailableReason`, also while switching accounts or not configured), the organization catalog had an access
- * error, or a custom source could not be discovered. Without any of them, an item that is absent is absent now.
+ * Whether a management snapshot says the part of its market an item comes from is incomplete (contract V2.10; maintainer
+ * review 15:22 #3: only the item's own source counts). A server item: the server catalog could not be read
+ * (`unavailableReason`) or the organization catalog had an access error. A custom market's item: that market could not
+ * be discovered (`unavailableCustomSourceNames`). While the computer switches accounts it reads nothing at all. Without
+ * an item (or a source it names), any marker counts. Without any, an item that is absent is absent now.
  */
-export function pluginMarketIncomplete(market: { unavailableReason: string | null; unavailableCustomSourceNames: readonly string[]; organizationAccessError?: string | null }): boolean {
-  return market.unavailableReason !== null || market.unavailableCustomSourceNames.length > 0 || !!market.organizationAccessError;
+export function pluginMarketIncomplete(
+  market: { unavailableReason: string | null; unavailableCustomSourceNames: readonly string[]; organizationAccessError?: string | null },
+  item?: { sourceType?: string; sourceMarketName?: string | null },
+): boolean {
+  if (market.unavailableReason === "session-switching") return true;
+  const server = market.unavailableReason !== null || !!market.organizationAccessError;
+  if (item?.sourceType === "server") return server;
+  if ((item?.sourceType === "git-market" || item?.sourceType === "local-market") && item.sourceMarketName)
+    return market.unavailableCustomSourceNames.includes(item.sourceMarketName);
+  return server || market.unavailableCustomSourceNames.length > 0;
 }

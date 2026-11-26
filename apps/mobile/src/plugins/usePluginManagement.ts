@@ -170,7 +170,7 @@ function pendingChecksOf(ownerKey: string): PluginPendingCheck[] {
     const gone = AFTER_RECEIPT_GONE[check.entry] === "unprovable" ? controller.currentMissingReceiptFacts() : null;
     const now = gone && check.who.instanceKey ? gone.ghosts.find((ghost) => ghost.instanceKey === check.who.instanceKey) : undefined;
     const facts = AFTER_RECEIPT_GONE[check.entry] === "facts" ? controller.currentMissingReceiptFacts() : null;
-    const recordMissing = !!facts && (() => { const opens = pluginOperationOpens(check, { ghosts: facts.ghosts, market: facts.market.items, incomplete: pluginMarketIncomplete(facts.market) });
+    const recordMissing = !!facts && (() => { const opens = pluginOperationOpens(check, { ghosts: facts.ghosts, market: facts.market.items, incomplete: pluginMarketIncomplete(facts.market, check.detail) });
       return !opens.open && opens.reason === "unread"; })();
     list.push({ ...check, state: controller.getState(), shown: !!entry.listener, controller,
       ...(gone ? { unprovable: { present: !!now, ...(check.entry === "page-approval" && now ? { pagesApproved: now.uiCapabilityApproved === true } : {}) } } : {}),
@@ -256,7 +256,7 @@ async function readBack(operationId: string): Promise<boolean> {
       .snapshot(job.snapshotRead);
     if (!current()) return false;
     // The final receipt is a past result: only what the computer has now (its instance, package and evidence) opens it.
-    opens = pluginOperationOpens(job.check, { ghosts: snapshot.ghosts, market: snapshot.market.items, incomplete: pluginMarketIncomplete(snapshot.market) });
+    opens = pluginOperationOpens(job.check, { ghosts: snapshot.ghosts, market: snapshot.market.items, incomplete: pluginMarketIncomplete(snapshot.market, job.check.detail) });
     const proven = opens.open ? snapshot.ghosts.find((ghost) => ghost.instanceKey === (opens as { instanceKey: string }).instanceKey) : undefined;
     approvalToken = proven ? pluginApprovalToken(proven) : undefined;
   } catch {
@@ -447,7 +447,7 @@ function settleFromFacts(entry: ManagementEntry, facts: NonNullable<PluginManage
   };
   // The same decision as after a final receipt (V2.10): only ① makes it this operation's result; ②, ③ and no
   // instance leave it unconfirmed (without a receipt, ② does not even show the operation succeeded).
-  const opens = pluginOperationOpens(check, { ghosts: facts.ghosts, market: facts.market.items, incomplete: pluginMarketIncomplete(facts.market) });
+  const opens = pluginOperationOpens(check, { ghosts: facts.ghosts, market: facts.market.items, incomplete: pluginMarketIncomplete(facts.market, check.detail) });
   if (opens.open) { settle("installed", opens.instanceKey); return; }
   // An instance is there, but this response has no market record of the plugin (the computer cannot reach its catalog
   // or a custom market, the market was removed, or the row is simply not in this response): nothing proves or

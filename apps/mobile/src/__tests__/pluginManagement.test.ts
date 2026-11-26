@@ -11,7 +11,7 @@ import { pluginUiApprovalNotice } from '@/plugins/pluginUiApprovalNotice';
 import { PluginPromptReadsProvider, usePluginPromptReads } from '@/plugins/PluginPromptReadsContext';
 import { createPluginManagementController, nextDetachedStep } from '@/plugins/pluginManagementController';
 import { invokeSendEvidence } from '@/device-link/invokeSendEvidence';
-import { pluginOperationOpens } from '@/plugins/pluginOperationOpens';
+import { pluginMarketIncomplete, pluginOperationOpens } from '@/plugins/pluginOperationOpens';
 import { CONTRACT_OFFICIAL_SAMPLE_TEXT, CONTRACT_OFFICIAL_SAMPLES, CONTRACT_SAMPLE_OPERATION_ID, CONTRACT_SAMPLES, HOST_INSTALL_SITUATIONS, hostInstallFacts, secondShapes, type HostInstallSituation } from './hostPluginInstallFacts';
 import { declaredPluginConsent, declaredTaskCardConsent, pluginConsentAllowance } from '@/plugins/pluginConsentAllowance';
 import { isBoundedPluginResponse, parsePluginManagementDetail, parsePluginManagementReceipt,
@@ -1882,6 +1882,21 @@ describe('whether a finished operation opens an instance', () => {
     const operation = { operationId: CONTRACT_SAMPLE_OPERATION_ID, entry: 'market-install' as const, who: {}, detail: target };
     const parsed = parsePluginManagementDetail({ ...detail, ...sample, manifest: { ...manifest, id: 'weather-chip', version: sample.version } });
     expect(pluginOperationOpens(operation, { ghosts: [ghost], market: parsed })).toEqual(opens);
+  });
+  // Maintainer review 15:22 #3: whether the response is incomplete for an item depends on that item's own source.
+  // Minimal failing input on af50d3d92d: a server item with only an unrelated custom market unread. Tier: unit (pure).
+  it.each([
+    ['server item, server catalog unread', { unavailableReason: 'fetch failed' }, 'server', null, true],
+    ['server item, organization access error', { organizationAccessError: 'forbidden' }, 'server', null, true],
+    ['server item, an unrelated custom market unread', { unavailableCustomSourceNames: ['Team'] }, 'server', null, false],
+    ['custom item, its own market unread', { unavailableCustomSourceNames: ['Team'] }, 'git-market', 'Team', true],
+    ['custom item, another custom market unread', { unavailableCustomSourceNames: ['Other'] }, 'git-market', 'Team', false],
+    ['custom item, server catalog unread', { unavailableReason: 'fetch failed' }, 'local-market', 'Team', false],
+    ['any item while the computer switches accounts', { unavailableReason: 'session-switching' }, 'git-market', 'Team', true],
+    ['no item: any marker', { unavailableCustomSourceNames: ['Team'] }, undefined, undefined, true],
+  ] as const)('the market part read for an item is incomplete only by its own source: %s', (_name, marker, sourceType, sourceMarketName, incomplete) => {
+    const market = { unavailableReason: null, unavailableCustomSourceNames: [], ...marker };
+    expect(pluginMarketIncomplete(market, sourceType ? { sourceType, sourceMarketName } : undefined)).toBe(incomplete);
   });
   // Contract V2.10, the official-market sample (byte for byte as the Host's real projection gives it): the item read
   // before the install has no namespace; after it, the root instance and `namespace: null`. Through the phone's parser

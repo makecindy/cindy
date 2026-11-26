@@ -355,7 +355,6 @@ describe("market read fences and lost-receipt facts", () => {
         // The response says its market part is incomplete (contract V2.10: one of three markers): the instance is there
         // and its record is not, which settles nothing.
         ["says its server catalog is unavailable", { unavailableReason: "fetch failed" }],
-        ["says a custom source could not be read", { unavailableCustomSourceNames: ["Team"] }],
         ["says its organization catalog had an access error", { organizationAccessError: "forbidden" }],
       ] as const)("the instance is there but the response has no installed record of it and %s: nothing is concluded (never \"not on the computer now\"), and it can be read again", async (_name, marker) => {
         const world: World = { ...fresh(), reply: (snapshot) => ({ ...snapshot, market: { ...snapshot.market, items: [], ...marker } }) };
@@ -375,8 +374,11 @@ describe("market read fences and lost-receipt facts", () => {
       // such market item now (withdrawn, not visible, its market removed). Before: "could not read" for ever, only
       // "Stop tracking" ended it. Now ② (contract V2.10): done, cannot be confirmed as this install, no Open, nothing to
       // read again. Minimal failing input on 34a262c919: this test.
-      it("the instance is there and a complete response has no item of it: done, cannot be confirmed as this install (②), no Open and nothing to read again", async () => {
-        const world: World = { ...fresh(), reply: (snapshot) => ({ ...snapshot, market: { ...snapshot.market, items: [] } }) };
+      // Maintainer review 15:22 #3: only the item's own source counts. Demo is a server item, so a custom market that could
+      // not be read says nothing about it: as complete (failed on af50d3d92d: "could not read").
+      it.each([["a complete response", {}], ["a response where only an unrelated custom market could not be read", { unavailableCustomSourceNames: ["Team"] }]] as const)(
+        "the instance is there and %s has no item of it: done, cannot be confirmed as this install (②), no Open and nothing to read again", async (_name, marker) => {
+        const world: World = { ...fresh(), reply: (snapshot) => ({ ...snapshot, market: { ...snapshot.market, items: [], ...marker } }) };
         const requests = wire(world);
         await installAndAllow();
         expect({ prompts: prompts(), opened: openedIds(), told: told() }).toEqual({ prompts: [], opened: [], told: [{ readback: "unconfirmed", told: false }] });
@@ -740,11 +742,17 @@ describe("market read fences and lost-receipt facts", () => {
         await settle(20);
         expect(__retainedForTests.conclusions()).toEqual([expect.objectContaining({ result: "installed", readback: "verified", instanceKey: "_root__demo" })]);
         expect(requests.filter((request) => request.actionId === "management:begin")).toHaveLength(1);
+        // Only the original operation was ever looked up (maintainer review 15:22 #3).
+        const begun = requests.find((request) => request.actionId === "management:begin")!.input?.operationId;
+        expect([...new Set(requests.filter((request) => request.actionId === "management:operation").map((request) => request.input?.operationId))]).toEqual([begun]);
       });
       // Maintainer review 14:25 #2: receipt gone, the instance is there, and a complete response (no marker) has no
       // item of it (its market was removed). Before: "could not read its install record" for ever, "Check result" came
       // back to it each time. Now it settles as not confirmed (②), and only the original operation was looked up.
-      it("receipt gone and a complete response has no item of the plugin: settled as not confirmed, only the original operation looked up, begin once", async () => {
+      // Maintainer review 15:22 #3: an unrelated custom market that could not be read leaves the official item's absence
+      // as it is (failed on af50d3d92d).
+      it.each([["a complete response", {}], ["a response where only an unrelated custom market could not be read", { unavailableCustomSourceNames: ["Team"] }]] as const)(
+        "receipt gone and %s has no item of the plugin: settled as not confirmed, only the original operation looked up, begin once", async (_name, marker) => {
         const requests = marketWire((request) => {
           const began = requests.some((entry) => entry.actionId === "management:begin");
           switch (request.actionId) {
@@ -752,7 +760,7 @@ describe("market read fences and lost-receipt facts", () => {
               if (request.input?.read === "capabilities") return { catalogPaging: true };
               if (request.input?.read === "catalog") return marketPage([demo]);
               if (!began) return managementSnapshot(false);
-              return { ...managementSnapshot(true), market: { ...managementSnapshot(false).market, items: [] } };
+              return { ...managementSnapshot(true), market: { ...managementSnapshot(false).market, items: [], ...marker } };
             case "management:market-detail": return { ...demo, installState: "not-installed", manifest: manifestOf("demo", "Demo") };
             case "management:begin": throw timeout();
             case "management:operation": throw hostError("NOT_FOUND");
