@@ -70,6 +70,7 @@ import { useModelAccessCreditUsageResult } from '@/hooks/useModelAccessCreditUsa
 import { useClaudeAccountUsageResult } from '@/hooks/useClaudeAccountUsage';
 import { useXdAssetPrimaryAction } from '@/hooks/useXdAssetPrimaryAction';
 import { useReducedMotion } from '@/hooks/useReducedMotion';
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Switch } from '@/components/ui/switch';
 import { Tip } from '@/components/ui/tooltip';
@@ -410,25 +411,11 @@ function CtaPillButton({
 }
 
 function CustomTag({ label }: { label: string }) {
-  return (
-    <span
-      className="flex h-[18px] shrink-0 items-center rounded-full px-2 text-11 font-medium"
-      style={{
-        border: '1px solid var(--settings-integration-avatar-border)',
-        color: 'var(--text-tertiary)',
-      }}
-    >
-      {label}
-    </span>
-  );
+  return <Badge tone="outline">{label}</Badge>;
 }
 
 function BetaTag({ label }: { label: string }) {
-  return (
-    <span className="shrink-0 rounded-full border border-[var(--settings-badge-border)] bg-[var(--settings-badge-bg)] px-2 py-px text-10 font-medium uppercase leading-[1.5] tracking-wide text-[var(--text-secondary)]">
-      {label}
-    </span>
-  );
+  return <Badge tone="outline" size="xs" className="bg-[var(--settings-badge-bg)]">{label}</Badge>;
 }
 
 // ---------------------------------------------------------------------------
@@ -2227,12 +2214,9 @@ function XdGatewayHeader({
       title={provider ? providerDisplayName(provider, t) : t('settings.providers.xd.title')}
       identityBadge={
         syncStatus.accountTier === 'free' ? (
-          <span
-            data-testid="cindy-ai-free-tier-badge"
-            className="inline-flex shrink-0 items-center rounded-full bg-[var(--surface-chip)] px-2 py-px text-11 font-medium leading-[1.45] text-[var(--text-secondary)]"
-          >
+          <Badge data-testid="cindy-ai-free-tier-badge">
             {t('settings.providers.xd.accountTier.free')}
-          </span>
+          </Badge>
         ) : undefined
       }
       subtitle={t('settings.providers.xd.simpleSubtitle')}
@@ -2446,12 +2430,9 @@ function CindySigninRow({ selected, onSelect }: { selected: boolean; onSelect: (
         {t('settings.providers.xd.title')}
       </span>
       {/* 徽标不大写不加字距:224px 窄栏里 en「RECOMMENDED」会把行名挤成「Cin…」。 */}
-      <span
-        className="shrink-0 rounded-full border px-1.5 py-px text-10 font-medium"
-        style={{ borderColor: 'var(--border-default)', color: 'var(--text-tertiary)' }}
-      >
+      <Badge size="xs" tone="outline">
         {t('settings.providers.xdSignin.badge')}
-      </span>
+      </Badge>
     </button>
   );
 }

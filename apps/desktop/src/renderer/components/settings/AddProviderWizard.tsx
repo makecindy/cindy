@@ -27,6 +27,7 @@ import { useDialogExit } from '@/hooks/useDialogExit';
 import { WINDOW_DRAG_STYLE, WINDOW_NO_DRAG_STYLE } from '@/components/layout/windowDrag';
 import { Check, Info } from 'lucide-react';
 
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { SearchInput } from '@/components/ui/search-input';
 import { Checkbox } from '@/components/ui/checkbox';
@@ -2276,15 +2277,9 @@ export function AddProviderWizard({
                             </span>
                           )}
                           {v.recommended && (
-                            <span
-                              className="flex h-[18px] shrink-0 items-center rounded-full px-2 text-11 font-medium"
-                              style={{
-                                backgroundColor: 'var(--surface-chip)',
-                                color: 'var(--text-secondary)',
-                              }}
-                            >
+                            <Badge>
                               {t('settings.providers.wizard.recommended')}
-                            </span>
+                            </Badge>
                           )}
                         </label>
                       ))}

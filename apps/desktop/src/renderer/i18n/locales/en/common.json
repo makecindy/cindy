@@ -16341,7 +16341,7 @@
         "groupSwitch": "Continued on another computer automatically"
       },
       "autoResumeSeparator": {
-        "label": "Connection interrupted — resumed automatically"
+        "label": "Empty response — resumed automatically"
       },
       "autoResumePending": {
         "label": "Reconnecting",

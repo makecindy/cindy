@@ -16275,7 +16275,7 @@
         "groupSwitch": "已自动换一台电脑继续"
       },
       "autoResumeSeparator": {
-        "label": "连接中断，已自动继续"
+        "label": "回复为空，已自动继续"
       },
       "autoResumePending": {
         "label": "重新连接中",

@@ -16448,7 +16448,7 @@
         "groupSwitch": "Continuado en otra computadora automáticamente"
       },
       "autoResumeSeparator": {
-        "label": "Conexión interrumpida: se reanuda automáticamente"
+        "label": "Respuesta vacía. Se ha continuado automáticamente"
       },
       "autoResumePending": {
         "label": "Reconectando",

@@ -16304,7 +16304,7 @@
         "groupSwitch": "Automatisch auf einem anderen Computer fortgesetzt"
       },
       "autoResumeSeparator": {
-        "label": "Verbindung unterbrochen — automatisch fortgesetzt"
+        "label": "Leere Antwort – automatisch fortgesetzt"
       },
       "autoResumePending": {
         "label": "Verbindung wird wiederhergestellt",

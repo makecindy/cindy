@@ -16275,7 +16275,7 @@
         "groupSwitch": "別のパソコンに自動で切り替えて続行しました"
       },
       "autoResumeSeparator": {
-        "label": "接続が中断されたため、自動的に再開しました"
+        "label": "応答が空だったため、自動で再開しました"
       },
       "autoResumePending": {
         "label": "再接続中",

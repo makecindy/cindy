@@ -16448,7 +16448,7 @@
         "groupSwitch": "Poursuite automatique sur un autre ordinateur"
       },
       "autoResumeSeparator": {
-        "label": "Connexion interrompue : reprise automatique"
+        "label": "Réponse vide — reprise automatique"
       },
       "autoResumePending": {
         "label": "Reconnexion",
