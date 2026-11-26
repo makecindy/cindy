@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { readTeammatesViewMode } from '../teammatesSectionPrefs';
+import { readTeammatesViewMode, writeTeammatesViewMode } from '../teammatesSectionPrefs';
 
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -27,6 +27,7 @@ vi.mock('react-i18next', () => ({
 
 const mocks = vi.hoisted(() => ({
   navigate: vi.fn(),
+  openWindow: vi.fn(async () => undefined),
   profiles: [] as unknown[],
   groups: [] as BotGroupSummary[],
   params: {} as { botId?: string; groupId?: string },
@@ -152,6 +153,7 @@ async function renderSidebar() {
 
 beforeEach(() => {
   mocks.navigate.mockReset();
+  mocks.openWindow.mockClear();
   mocks.confirm.mockReset().mockResolvedValue(true);
   mocks.manage.mockReset().mockResolvedValue({ ok: true });
   mocks.refreshGroups.mockReset();
@@ -167,7 +169,7 @@ beforeEach(() => {
   Object.defineProperty(window, 'electronAPI', {
     configurable: true,
     writable: true,
-    value: { localDb: { messages: { onCreated: () => () => undefined } }, maker: { chatServer: {
+    value: { localDb: { messages: { onCreated: () => () => undefined } }, maker: { openSessionInNewWindow: mocks.openWindow, chatServer: {
       manage: mocks.manage, status: async () => ({ enabled: false }),
     } } },
   });
@@ -353,6 +355,20 @@ describe('TeammatesSection group chats', () => {
     expect(mocks.confirm).toHaveBeenCalledOnce();
     await act(async () => { accept(true); });
     await waitFor(() => expect(mocks.manage).toHaveBeenCalledOnce());
+  });
+
+  it.each(['list', 'icons'] as const)('opens the targeted group in a separate window from the %s view', async mode => {
+    writeTeammatesViewMode('owner', mode);
+    try {
+      mocks.groups = [group({ id: 'week/end' })];
+      await renderSidebar();
+      fireEvent.contextMenu(screen.getByRole('button', { name: '周末出游' }));
+      fireEvent.click(await screen.findByRole('menuitem', { name: 'rightSidebar.tabs.contextMenu.openInWindow' }));
+      expect(mocks.openWindow).toHaveBeenCalledExactlyOnceWith('/bots/groups/week%2Fend');
+      expect(mocks.navigate).not.toHaveBeenCalled();
+    } finally {
+      writeTeammatesViewMode('owner', 'list');
+    }
   });
 
   it('offers settings but no archive for ordinary members, with keyboard access', async () => {

@@ -5,12 +5,13 @@ import { aggregateTeammateStatus } from '@cindy/maker-shared/teammate-status';
 import { localTeammateStatus, remoteTeammateStatus, groupTeammateStatus } from './teammateRosterStatus';
 import { BotGenerationLabel } from './BotGenerationLabel';
 import { botRosterLabel } from '../../../shared/botCreation';
-import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode, type KeyboardEvent, type MouseEvent } from 'react';
 import {
   Check,
   LayoutGrid,
   LayoutList,
   AlertTriangle,
+  AppWindow,
   Archive,
   ArchiveRestore,
   ChevronDown,
@@ -524,6 +525,22 @@ export function TeammatesSection() {
         </DropdownMenuItem>
   </>);
 
+  const groupMenuProps = (id: string) => ({
+    'aria-haspopup': 'menu' as const,
+    onContextMenu: (event: MouseEvent<HTMLButtonElement>) => {
+      event.preventDefault();
+      event.stopPropagation();
+      openContextMenu('group', id, event.currentTarget, event.clientX, event.clientY);
+    },
+    onKeyDown: (event: KeyboardEvent<HTMLButtonElement>) => {
+      if (event.key !== 'ContextMenu' && !(event.key === 'F10' && event.shiftKey)) return;
+      event.preventDefault();
+      const rect = event.currentTarget.getBoundingClientRect();
+      openContextMenu('group', id, event.currentTarget, rect.left + 10, rect.bottom);
+    },
+  });
+
+  const menuGroup = contextMenu?.kind === 'group' ? groups.find(item => item.id === contextMenu.id) : undefined;
   const renderGroupRow = (group: BotGroupSummary) => (
     <BotGroupSidebarRow key={'group:' + group.id} group={group} bots={bots}
       islandActivity={islandActivity} now={now} selected={group.id === selectedGroupId}
@@ -531,29 +548,7 @@ export function TeammatesSection() {
         const query = reply ? '?' + new URLSearchParams(reply).toString() : '';
         navigate('/bots/groups/' + encodeURIComponent(id) + query);
       }}
-      onContextMenu={event => {
-        event.preventDefault(); event.stopPropagation();
-        openContextMenu('group', group.id, event.currentTarget, event.clientX, event.clientY);
-      }}
-      onKeyDown={event => {
-        if (event.key !== 'ContextMenu' && !(event.key === 'F10' && event.shiftKey)) return;
-        event.preventDefault();
-        const rect = event.currentTarget.getBoundingClientRect();
-        openContextMenu('group', group.id, event.currentTarget, rect.left + 10, rect.bottom);
-      }}>
-      {renderContextMenu('group', group.id, <>
-        <DropdownMenuItem onSelect={() => navigate('/bots/groups/' + encodeURIComponent(group.id) + '?' + BOT_GROUP_SETTINGS_PARAM + '=1')}>
-          <Settings size={14} className="mr-2" />{t('bots.groupChat.settings.title')}
-        </DropdownMenuItem>
-        {group.serverBacked && !group.dissolvedAt && group.members.some(member => member.isOwned && (member.role === 'owner' || member.role === 'admin')) && <>
-          <DropdownMenuSeparator />
-          <DropdownMenuItem disabled={archiveBusy} onSelect={() => void changeGroupArchive(group)}>
-            {group.archived ? <ArchiveRestore size={14} className="mr-2" /> : <Archive size={14} className="mr-2" />}
-            {t('bots.groupChat.server.settings.' + (group.archived ? 'unarchive' : 'archive'))}
-          </DropdownMenuItem>
-        </>}
-      </>)}
-    </BotGroupSidebarRow>
+      {...groupMenuProps(group.id)} />
   );
 
   const ToggleIcon = collapsed ? ChevronRight : ChevronDown;
@@ -567,6 +562,24 @@ export function TeammatesSection() {
 
   return (
     <div ref={sidebarRef} className="flex w-full flex-col gap-0.5" data-sidebar-section="teammates">
+      {renderContextMenu('group', menuGroup?.id ?? '', menuGroup && <>
+        <DropdownMenuItem onSelect={() => {
+          void window.electronAPI.maker.openSessionInNewWindow('/bots/groups/' + encodeURIComponent(menuGroup.id))
+            .catch(() => toast.error(t('ccAgent.common.openFailed')));
+        }}>
+          <AppWindow size={14} className="mr-2" />{t('rightSidebar.tabs.contextMenu.openInWindow')}
+        </DropdownMenuItem>
+        <DropdownMenuItem onSelect={() => navigate('/bots/groups/' + encodeURIComponent(menuGroup.id) + '?' + BOT_GROUP_SETTINGS_PARAM + '=1')}>
+          <Settings size={14} className="mr-2" />{t('bots.groupChat.settings.title')}
+        </DropdownMenuItem>
+        {menuGroup.serverBacked && !menuGroup.dissolvedAt && menuGroup.members.some(member => member.isOwned && (member.role === 'owner' || member.role === 'admin')) && <>
+          <DropdownMenuSeparator />
+          <DropdownMenuItem disabled={archiveBusy} onSelect={() => void changeGroupArchive(menuGroup)}>
+            {menuGroup.archived ? <ArchiveRestore size={14} className="mr-2" /> : <Archive size={14} className="mr-2" />}
+            {t('bots.groupChat.server.settings.' + (menuGroup.archived ? 'unarchive' : 'archive'))}
+          </DropdownMenuItem>
+        </>}
+      </>)}
       {/* 段头与置顶 / 全部任务段头同款:高 24,左 24 / 右 12;动作悬停浮现。 */}
       <div className="group/sidebar-header flex h-6 items-center justify-between pr-3 pl-6">
         <div className="flex min-w-0 items-center gap-1">
@@ -675,6 +688,7 @@ export function TeammatesSection() {
                     <button
                       type="button"
                       {...companionDragProps(chatRoute(entry), label)}
+                      {...(entry.kind === 'group' ? groupMenuProps(entry.group.id) : {})}
                       onClick={() => { const route = chatRoute(entry); if (route) navigate(route); }}
                       aria-label={label}
                       aria-current={selected ? 'page' : undefined}
