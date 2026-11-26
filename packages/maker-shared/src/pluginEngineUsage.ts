@@ -87,10 +87,29 @@ export function splitPluginUsageWindowLabel(label: string): { group: string | nu
  * `"Gemini Models"` → `"Gemini"`, `"Claude and GPT models"` → `"Claude & GPT"`.
  */
 export function compactPluginUsageGroupLabel(rawGroup: string): string {
-  const trimmed = rawGroup.trim();
-  const withoutModels = trimmed.replace(/\s+models?$/i, '').trim();
-  const base = withoutModels || trimmed;
-  return base.replace(/\s+and\s+/gi, ' & ');
+  const words: string[] = [];
+  let start = -1;
+  for (let index = 0; index <= rawGroup.length; index += 1) {
+    const ch = index < rawGroup.length ? rawGroup[index]! : ' ';
+    if (ch.trim() !== '') {
+      if (start === -1) start = index;
+    } else if (start !== -1) {
+      words.push(rawGroup.slice(start, index));
+      start = -1;
+    }
+  }
+  if (words.length === 0) return '';
+  if (words.length > 1) {
+    const tail = words[words.length - 1]!.toLowerCase();
+    if (tail === 'model' || tail === 'models') {
+      words.pop();
+    }
+  }
+  return words
+    .map((word, index) =>
+      index > 0 && index < words.length - 1 && word.toLowerCase() === 'and' ? '&' : word,
+    )
+    .join(' ');
 }
 
 function groupIdentityOf(window: PluginEngineUsageWindowInput): { id: string; rawName: string | null } {

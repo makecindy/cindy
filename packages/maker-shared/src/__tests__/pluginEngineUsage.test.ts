@@ -117,11 +117,19 @@ describe('pluginEngineUsage', () => {
   it.each([
     ['Gemini Models', 'Gemini'],
     ['Claude and GPT models', 'Claude & GPT'],
+    ['Claude\t\tand\t\tGPT\tmodels', 'Claude & GPT'],
     ['Claude/GPT', 'Claude/GPT'],
     ['Other Models', 'Other'],
     ['Models', 'Models'],
+    ['   \t  ', ''],
   ])('compacts group label %s -> %s', (input, expected) => {
     expect(compactPluginUsageGroupLabel(input)).toBe(expected);
+  });
+
+  // Regression (CodeQL alerts #550/#551): linear-time compaction must not backtrack on repeated whitespace.
+  it('compacts labels with long whitespace runs in linear time', () => {
+    expect(compactPluginUsageGroupLabel(`Gemini${'\t'.repeat(20_000)}!`)).toBe('Gemini !');
+    expect(compactPluginUsageGroupLabel(`Claude${'\t'.repeat(20_000)}and${'\t'.repeat(20_000)}GPT`)).toBe('Claude & GPT');
   });
 
   it('changes clock key only when a live window expires or its formatted countdown changes', () => {
