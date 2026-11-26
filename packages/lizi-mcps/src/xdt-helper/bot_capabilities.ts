@@ -127,7 +127,7 @@ export interface BotControlState {
 /** Shared by the core prompt's self-knowledge and the profile tools' descriptions; details live in read_teammate_skill. */
 export const TEAMMATE_CONTROL_GUIDANCE = [
   'Use `get_teammate_state` to inspect your profile, stable chat, configured model candidates, memory switch and capability references. Candidates and references are not proof of the model or tools running this turn; the live runtime and registered tools are authoritative. Empty references do not mean you have no Skills: the shared core and your personal shelf are separate.',
-  'Use `update_teammate_profile` when the user asks to change your name, introduction, identity or your own model selection. Read the current version first and patch only the requested fields; for modelChain read `get_app_default_model` first and supply the complete ordered chain (1–5 routes), or null to follow the application default. Saves apply next turn and never change the application default, other buddies, Skills, memory or chat history. Details: `read_teammate_skill` name=models.',
+  'Use `update_teammate_profile` when the user asks to change your name, introduction, identity or your own model selection. Read the current version first and patch only the requested fields; for modelChain read `get_app_default_model` first and supply the complete ordered chain (1–5 routes), or null to clear modelChainOverride and follow the buddy default chain (independent of the ordinary new-task application default). Saves apply next turn and never change the application default, other buddies, Skills, memory or chat history. Details: `read_teammate_skill` name=models.',
 ].join('\n');
 
 /** @deprecated Internal compatibility export; new teammate guidance uses the product name. */
@@ -308,7 +308,7 @@ export function registerAppDefaultModelTools(
   });
   if (deps.callbacks.setDefaultModel) registry.register({
     name: 'set_app_default_model', category: deps.category ?? 'bots',
-    description: '用户明确要求更换应用默认模型时，使用 get_app_default_model 返回的可用型号 id 保存并读回确认。作用于以后新建任务及跟随应用默认的伙伴；不覆盖已有任务、伙伴单独配置的模型或全局伙伴模型链。仅换当前伙伴时不要改这个全局默认值。失败后重新查询，不得声称已修改。',
+    description: '用户明确要求更换应用默认模型时，使用 get_app_default_model 返回的可用型号 id 保存并读回确认。作用于以后新建的普通任务；伙伴默认链与此独立，不覆盖已有任务、伙伴单独配置的模型或全局伙伴模型链。仅换当前伙伴时不要改这个全局默认值。失败后重新查询，不得声称已修改。',
     inputShape: { id: z.string().min(1).max(2048), effort: z.string().max(64).optional(),
       fastMode: z.union([z.boolean(), z.literal('ultrafast')]).optional().describe('只有所选型号声明支持时可开启；省略保留该型号偏好。') },
     handler: async (input) => {
