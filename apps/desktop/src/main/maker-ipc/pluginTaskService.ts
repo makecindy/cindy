@@ -214,6 +214,7 @@ export interface PluginTaskServiceDeps {
     taskId: string,
     inputClientIds: readonly string[],
     execution?: SessionExecutionIdentity,
+    mode?: 'withdraw-failed',
   ): Promise<'cancelled' | 'stopping' | 'stale'>;
   now?: () => number;
   id?: () => string;
@@ -962,7 +963,12 @@ export function createPluginTaskService(deps: PluginTaskServiceDeps) {
         await save(row, run);
         return run;
       });
-      if (terminal(prepared)) return prepared;
+      if (terminal(prepared)) {
+        if (prepared.status === 'failed' && !prepared.execution && !prepared.followUpOf) {
+          await deps.cancel(pluginId, prepared.taskId, [prepared.inputMessageId], undefined, 'withdraw-failed');
+        }
+        return prepared;
+      }
       deps.assertAuthorized(pluginId);
       const outcome = await deps.cancel(
         pluginId,
