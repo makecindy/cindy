@@ -345,7 +345,7 @@
     "tabOwned": "Compartilhadas por mim",
     "startIntro": "Convide um colega para ler tudo nesta tarefa e trabalhar com o mesmo Agent.",
     "runsOnThisDevice": "Executado neste dispositivo",
-    "inviteNotice": "Qualquer pessoa com o link de convite pode participar após entrar, com o mesmo acesso ao Agent que o anfitrião.",
+    "inviteNotice": "Qualquer pessoa com o link de convite pode participar após entrar, com o mesmo acesso ao Agent que o anfitrião. Os convidados podem revisar as alterações atuais de todo o repositório Git, mesmo quando apenas uma subpasta é compartilhada.",
     "offlineAutoClose": "O compartilhamento termina automaticamente se o computador do anfitrião permanecer offline.",
     "inviteBoxHint": "Envie o link ao seu colega. Ele pode abri-lo para participar ou colá-lo em Entrar na tarefa compartilhada no Cindy.",
     "invitationMessage": "Você recebeu um convite para participar de “{{title}}”\n{{link}}\nAbra o link para participar. Se o Cindy não abrir, escolha Entrar na tarefa compartilhada no Cindy e cole este link.",
@@ -406,7 +406,7 @@
       "progress": "Participação atual {{used}}% · limite {{limit}}%",
       "paused": "Este modelo está pausado. Escolha outro modelo disponível.",
       "recommendation": "Recomendado: {{model}}",
-      "unsupported": "Os limites de participação por modelo ainda não são compatíveis com este grupo de provedores.",
+      "unsupported": "Os limites de participação por modelo ainda não são compatíveis com este grupo de computadores.",
       "basis": "Últimos 7 dias corridos · tokens de entrada + saída, excluindo cache",
       "maxPercent": "Participação máxima no uso pessoal",
       "empty": "Nenhum uso registrado",
@@ -505,14 +505,14 @@
         "confirm": "Remover compartilhamento"
       },
       "reshare": {
-        "applying": "quer usar pelo grupo de provedores de {{owner}}",
+        "applying": "quer usar pelo grupo de computadores de {{owner}}",
         "requestedAt": "Solicitado {{time}}",
         "usageHint": "Se você concordar, as sessões de {{name}} poderão ser executadas neste computador, e o uso será contabilizado em nome de {{owner}}",
         "approve": "Aceitar",
         "reject": "Recusar",
         "summaryUsing_one": "{{count}} pessoa usa pelo grupo de provedores de {{owner}}",
-        "summaryUsing_other": "{{count}} pessoas usam pelo grupo de provedores de {{owner}}",
-        "summaryOwner": "Pelo grupo de provedores de {{owner}}",
+        "summaryUsing_other": "{{count}} pessoas usam pelo grupo de computadores de {{owner}}",
+        "summaryOwner": "Pelo grupo de computadores de {{owner}}",
         "summaryDeclined_one": "{{count}} recusou",
         "summaryDeclined_other": "{{count}} recusaram",
         "stateApproved": "Autorizado",
@@ -520,10 +520,10 @@
         "revoke": "Revogar",
         "revokeAria": "Revogar autorização de {{name}}",
         "approveAria": "Autorizar o uso por {{name}}",
-        "toastApproved": "{{name}} agora pode usar {{provider}} pelo grupo de provedores de {{owner}}",
+        "toastApproved": "{{name}} agora pode usar {{provider}} pelo grupo de computadores de {{owner}}",
         "toastRejected": "Solicitação de {{name}} recusada",
         "toastRevoked": "Autorização de {{name}} revogada. As sessões em execução foram interrompidas.",
-        "listTitle": "Em uso pelo grupo de provedores de {{owner}}",
+        "listTitle": "Em uso pelo grupo de computadores de {{owner}}",
         "summaryUsing_many": "{{count}} pessoas usam pelo grupo de provedores de {{owner}}",
         "summaryDeclined_many": "{{count}} recusaram"
       },
@@ -571,7 +571,7 @@
       "requestedAt": "Solicitado {{time}} com seu link de compartilhamento",
       "pairingHint": "Antes de aprovar, você pode perguntar pelo canal em que enviou o link: “Qual código de pareamento aparece para você?” Aprove se o código for igual.",
       "callout": "Após a aprovação, {{name}} poderá usar os modelos de {{provider}} nas próprias sessões. O Agent é executado neste computador e o uso é contabilizado no seu {{provider}}. Você pode pausar ou remover o acesso a qualquer momento em “{{provider}} · Acesso remoto e compartilhamento”.",
-      "calloutGroup": "Após a aprovação, {{name}} poderá usar os modelos de {{provider}} nas próprias sessões. O grupo de provedores escolhe o computador que executa o Agent, e o uso é contabilizado no seu {{provider}}. Você pode pausar ou remover o acesso a qualquer momento em “{{provider}} · Acesso remoto e compartilhamento”.",
+      "calloutGroup": "Após a aprovação, {{name}} poderá usar os modelos de {{provider}} nas próprias sessões. O grupo de computadores escolhe o computador que executa o Agent, e o uso é contabilizado no seu {{provider}}. Você pode pausar ou remover o acesso a qualquer momento em “{{provider}} · Acesso remoto e compartilhamento”.",
       "calloutRemote": "Após a aprovação, {{name}} poderá usar os modelos de {{provider}} nas próprias sessões. O Agent é executado no computador que hospeda este provedor e o uso é contabilizado no seu {{provider}}. Você pode pausar ou remover o acesso a qualquer momento em “{{provider}} · Acesso remoto e compartilhamento”.",
       "calloutClaudeEmail": "Enquanto {{name}} usa o provedor, o Agent pode ver o endereço de e-mail que você usa para entrar no Claude.",
       "calloutUnknown": "Se você não reconhece esta pessoa, recuse; o link para de funcionar após a recusa.",
@@ -711,7 +711,7 @@
       "rejectedTitle": "Solicitação de compartilhamento recusada",
       "rejectedBody": "{{name}} recusou compartilhar {{provider}}",
       "reshareTitle": "Nova solicitação de uso",
-      "reshareBody": "{{name}} quer usar seu {{provider}} compartilhado pelo grupo de provedores de {{owner}}"
+      "reshareBody": "{{name}} quer usar seu {{provider}} compartilhado pelo grupo de computadores de {{owner}}"
     },
     "runLimits": {
       "title": "Limites de sessões remotas",
@@ -767,7 +767,7 @@
   },
   "providerGroup": {
     "management": {
-      "note": "Gerenciando o grupo de provedores em {{device}}. As alterações são salvas nesse computador; mantenha-o online.",
+      "note": "Gerenciando o grupo de computadores em {{device}}. As alterações são salvas nesse computador; mantenha-o online.",
       "unsupported": "A versão do Cindy no computador com este grupo ainda não oferece gerenciamento remoto. Atualize o Cindy nesse computador primeiro."
     },
     "page": {
@@ -839,27 +839,13 @@
       "computerCount_many": "{{count}} computadores"
     },
     "section": {
-      "title": "Grupo de provedores",
+      "title": "Grupo de computadores",
       "addComputer": "Adicionar computador",
       "delete": "Excluir grupo",
       "empty": "Adicione {{provider}} dos seus outros computadores e as tarefas escolherão um automaticamente",
-      "loading": "Carregando grupo de provedores…",
-      "loadFailed": "Não foi possível carregar o grupo de provedores",
+      "loading": "Carregando grupo de computadores…",
+      "loadFailed": "Não foi possível carregar o grupo de computadores",
       "note": "Nas sessões deste computador e nas sessões das pessoas com quem você compartilha, o grupo escolhe o computador que executa o Agent"
-    },
-    "strategy": {
-      "label": "Estratégia do grupo",
-      "least": "Menos ocupado",
-      "round": "Rodízio",
-      "order": "Em ordem",
-      "weight": "Por peso",
-      "quotaFirst": "Quando o uso da assinatura está disponível, computadores com bastante cota restante e renovação próxima têm prioridade, para que cada conta seja usada de forma equilibrada ao longo do tempo; os semelhantes seguem a estratégia do grupo",
-      "description": {
-        "least": "Encaminha para o menos ocupado",
-        "round": "Alterna entre computadores",
-        "order": "Primeiro os que estão no início da lista",
-        "weight": "Distribui por peso"
-      }
     },
     "autoSwitch": {
       "label": "Alternar computadores automaticamente",
@@ -919,9 +905,9 @@
         }
       },
       "removeConfirm": {
-        "title": "Remover {{name}} do grupo de provedores?",
+        "title": "Remover {{name}} do grupo de computadores?",
         "description": "Ele não receberá novas tarefas. As tarefas já em execução nele permanecerão nesse computador.",
-        "lastDescription": "Este é o último computador do grupo, então removê-lo exclui o grupo de provedores {{provider}}.",
+        "lastDescription": "Este é o último computador do grupo, então removê-lo exclui o grupo de computadores {{provider}}.",
         "confirm": "Remover do grupo"
       },
       "sourceGroupOwner": "Hospeda o grupo",
@@ -964,12 +950,12 @@
       "send": "Enviar mensagem"
     },
     "deleteConfirm": {
-      "title": "Excluir o grupo de provedores {{provider}}?",
+      "title": "Excluir o grupo de computadores {{provider}}?",
       "description": "Novas tarefas neste computador serão executadas aqui. As tarefas que já estão em outros computadores permanecerão onde estão.",
       "confirm": "Excluir grupo"
     },
     "add": {
-      "title": "Adicionar computadores ao grupo de provedores {{provider}}",
+      "title": "Adicionar computadores ao grupo de computadores {{provider}}",
       "sourceAria": "Origem do computador",
       "tabAvailable": "Já disponíveis",
       "tabLink": "Link de compartilhamento",
@@ -986,11 +972,11 @@
     },
     "toast": {
       "added_one": "{{count}} computador adicionado ao grupo de provedores {{provider}}",
-      "added_other": "{{count}} computadores adicionados ao grupo de provedores {{provider}}",
+      "added_other": "{{count}} computadores adicionados ao grupo de computadores {{provider}}",
       "addedAccounts_one": "{{count}} conta adicionada ao grupo de provedores {{provider}}",
-      "addedAccounts_other": "{{count}} contas adicionadas ao grupo de provedores {{provider}}",
-      "removed": "{{name}} removido do grupo de provedores",
-      "deleted": "Grupo de provedores {{provider}} excluído",
+      "addedAccounts_other": "{{count}} contas adicionadas ao grupo de contas {{provider}}",
+      "removed": "{{name}} removido do grupo de computadores",
+      "deleted": "Grupo de computadores {{provider}} excluído",
       "added_many": "{{count}} computadores adicionados ao grupo de provedores {{provider}}",
       "addedAccounts_many": "{{count}} contas adicionadas ao grupo de provedores {{provider}}"
     }
@@ -1391,7 +1377,7 @@
     "DEVICE_LINK_BUSY": "O computador remoto está ocupado. Tente novamente em breve.",
     "INVALID_PARAMS": "Entrada inválida. Verifique e tente novamente.",
     "PRECONDITION_FAILED": "Esta ação está indisponível no estado atual. Tente novamente.",
-    "PROVIDER_GROUP_CHANGED": "O grupo de provedores foi alterado em outro lugar, então esta ação não foi aplicada. Revise as configurações mais recentes e tente novamente.",
+    "PROVIDER_GROUP_CHANGED": "O grupo de computadores foi alterado em outro lugar, então esta ação não foi aplicada. Revise as configurações mais recentes e tente novamente.",
     "MODEL_CONTEXT_USAGE_UNKNOWN": "Modelo não alterado: Cindy não consegue verificar quanto contexto esta tarefa usa. Mantenha o modelo atual ou inicie uma nova tarefa.",
     "MODEL_WINDOW_CURRENT_CONTEXT_UNKNOWN": "Modelo não alterado: Cindy não consegue verificar a janela de contexto do modelo atual. Verifique a configuração da janela de um modelo personalizado. Se não for possível alterá-la, mantenha o modelo atual ou inicie uma nova tarefa.",
     "MODEL_WINDOW_TARGET_CONTEXT_UNKNOWN": "Modelo não alterado: Cindy não consegue verificar a janela de contexto do modelo de destino. Verifique a configuração da janela de um modelo personalizado. Se não for possível alterá-la, escolha outro modelo ou inicie uma nova tarefa.",
@@ -1939,7 +1925,7 @@
       "imBot": "Bots de mensagens",
       "ghosts": "Plugins",
       "cindyMake": "Cindy Make",
-      "modelGroups": "Grupos de modelos"
+      "modelGroups": "Roteamento inteligente"
     },
     "sections": {
       "user": "Usuário",
@@ -2603,7 +2589,7 @@
       "skinLabel": "Personagem",
       "skinHint": "O personagem exibido no Agent Notch e na Dynamic Island.",
       "soundLabel": "Sons de eventos",
-      "soundHint": "Quando um som de evento é definido, apenas esse som é reproduzido. Sons não definidos ou desativados seguem as configurações de notificação do sistema.",
+      "soundHint": "Escolha um som de 8 bits para cada aviso, compartilhado pelo Agent Notch e pela Dynamic Island. O som de toque só toca quando você toca no Agent Notch.",
       "soundAria": "Ativar ou desativar sons do Agent Notch",
       "soundSelectAria": "Som de {{event}}",
       "soundPreviewAria": "Ouvir prévia do som de {{event}}",
@@ -2658,7 +2644,7 @@
         "select": "Ação de clique"
       },
       "soundOptions": {
-        "none": "Seguir o sistema",
+        "none": "Nenhum",
         "startup-chime": "Toque de inicialização",
         "ring-chime": "Toque de sino",
         "item-found": "Item encontrado",
@@ -4380,9 +4366,12 @@
           "compaction": {
             "title": "Compactação automática",
             "hint": "Compacta o contexto no percentual de uso selecionado. Valores menores compactam mais cedo; os limites do mecanismo continuam valendo.",
-            "default": "{{pct}}% (padrão)",
-            "timing": "Aplica-se a todos os mecanismos disponíveis para este modelo e fonte nas próximas execuções, sem interromper uma resposta."
+            "timing": "Aplica-se a todos os mecanismos disponíveis para este modelo e fonte nas próximas execuções, sem interromper uma resposta.",
+            "defaultBadge": "Padrão",
+            "sliderAria": "Ajustar o limite de compactação automática",
+            "restoreAria": "Restaurar a proporção padrão de compactação automática"
           },
+          "antigravityHydrogenDescription": "Projetado para programação diária e execução rápida.",
           "contextLimitRoute": "Atual: {{tokens}} tokens",
           "contextLimitOverWindow": "Acima da janela declarada pelo provedor; as requisições podem falhar.",
           "restoreDefault": "Restaurar padrão",
@@ -4471,10 +4460,10 @@
         "detailNote": "O Agent é executado em {{device}}, usando o login e a cota desse computador. Para usá-lo, selecione-o na lista de modelos ao iniciar uma tarefa. Para alterar este provedor, acesse Configurações → Provedores nesse computador.",
         "modelsTitle": "Modelos disponíveis",
         "modelsEmpty": "Este provedor ainda não tem modelos disponíveis nesse computador.",
-        "rowLabelGroup": "{{provider}} · {{device}} · Grupo de provedores",
+        "rowLabelGroup": "{{provider}} · {{device}} · Grupo de computadores",
         "groupBadge_one": "Grupo de provedores · {{count}} computador",
-        "groupBadge_other": "Grupo de provedores · {{count}} computadores",
-        "groupNote": "{{device}} transformou este provedor em um grupo de provedores. Ao iniciar uma tarefa com ele, {{device}} atribui a tarefa a um dos computadores abaixo conforme a estratégia do grupo e a transfere para outro se esse computador tiver algum problema. Enquanto {{device}} estiver online, use Acesso remoto e compartilhamento aqui para gerenciar o grupo e seus compartilhamentos.",
+        "groupBadge_other": "Grupo de computadores · {{count}} computadores",
+        "groupNote": "{{device}} transformou este provedor em um grupo de computadores. Ao iniciar uma tarefa com ele, {{device}} atribui a tarefa a um dos computadores abaixo conforme a estratégia do grupo e a transfere para outro se esse computador tiver algum problema. Enquanto {{device}} estiver online, use Acesso remoto e compartilhamento aqui para gerenciar o grupo e seus compartilhamentos.",
         "groupMembersTitle": "Computadores do grupo",
         "groupMembersFailed": "Não foi possível obter o status dos computadores do grupo agora.",
         "groupBadge_many": "Grupo de provedores · {{count}} computadores",
@@ -4527,7 +4516,7 @@
         "remoteAccess": {
           "label": "Permitir uso remoto",
           "description": "Quando ativado, seus outros computadores e as pessoas com quem você compartilha podem usar os modelos deste provedor. O Agent é executado neste computador, usando o login e a cota dele.",
-          "descriptionGroup": "Quando ativado, seus outros computadores e as pessoas com quem você compartilha podem usar os modelos deste provedor. O grupo de provedores escolhe o computador que executa o Agent.",
+          "descriptionGroup": "Quando ativado, seus outros computadores e as pessoas com quem você compartilha podem usar os modelos deste provedor. O grupo de computadores escolhe o computador que executa o Agent.",
           "ariaLabel": "Permitir que seus outros computadores e as pessoas com quem você compartilha usem este provedor",
           "writeFailed": "Não foi possível salvar a configuração de acesso remoto. Tente novamente.",
           "followsPool": "Esta conexão foi mesclada a “{{pool}}” e segue o “Permitir uso remoto” dele. Altere lá."
@@ -4832,6 +4821,7 @@
         "discoveryHint": "Estes modelos foram retornados pelo catálogo do provedor. A execução de fala não foi testada.",
         "saved": "Adicionado",
         "reference": "Referência",
+        "realtimeConfirmed": "Endpoint em tempo real confirmado",
         "discovered": "Descoberto",
         "more": "Mais modelos de fala ({{count}})",
         "manual": "Insira um ID de modelo de fala",
@@ -5734,7 +5724,8 @@
           "runtime": "As últimas solicitações aos modelos auxiliares falharam. A nomeação de tarefas, os resumos e as tarefas de plugins, como a tradução de legendas, podem ser afetados.",
           "open": "Abrir configurações"
         }
-      }
+      },
+      "missingRoute": "Modo excluído"
     },
     "compaction": {
       "codex": {
@@ -7416,8 +7407,7 @@
             "machines": "Máquinas provedoras remotas"
           },
           "usage": {
-            "remoteModel": "Modelo remoto",
-            "remoteTask": "Tarefa remota"
+            "remoteModel": "Modelo remoto"
           },
           "bundle": {
             "mixed": "{{running}} em execução · {{ready}} prontas",
@@ -8984,6 +8974,8 @@
         "networkSecretOauthDetail": "O Cindy gerencia o login e os tokens. Você pode autorizar uma nova conta ou escolher uma conta conectada compatível. Confira os escopos abaixo; as contas conectadas mantêm suas permissões existentes.",
         "networkConnections": "Pode se conectar aos endereços de {{label}} que você adicionar",
         "networkConnectionsDetail": "Os endereços são adicionados na interface de configurações deste plugin; cada novo endereço exige sua confirmação, e a credencial fornecida é injetada apenas para o respectivo endereço.",
+        "networkConnectionsGlabCli": "Pode conectar-se aos endereços de {{label}} que você adicionar e usar instâncias autenticadas no glab local",
+        "networkConnectionsGlabCliDetail": "As credenciais adicionadas nas configurações do plugin têm prioridade; nas demais instâncias, o host lê o token do glab local sob demanda e o injeta apenas em requisições HTTPS para essa instância. O código do plugin não pode ler nem armazenar o token.",
         "codeDetailNetwork": "É executado em uma sandbox isolada, sem acesso aos seus arquivos; o acesso à rede é limitado aos domínios listados acima, intermediado pelo host.",
         "codeDetailWithNode": "A interface do painel é executada em uma sandbox isolada; o processamento local é fornecido pelo ambiente de execução Node declarado acima.",
         "added": "Novo",
@@ -9012,7 +9004,7 @@
         "nodeChildSpawnDetail": "Somente arquivos JS declarados dentro do próprio pacote podem ser iniciados (com as mesmas permissões locais do programa principal); comandos arbitrários não podem ser executados. Os subprocessos são encerrados juntos quando o plugin é desativado ou encerrado.",
         "skill": "Adiciona a Skill \"{{name}}\" aos seus assistentes de IA",
         "skillDetail": "Uma Skill é um arquivo de instruções que a IA carrega e segue como suas próprias instruções, com todas as suas permissões, no Claude Code e no Codex, em todos os projetos — ela não fica restrita à sandbox deste plugin. Permanece disponível enquanto o plugin está ativado e é removida quando ele é desativado ou desinstalado; desativar o plugin para uma única pasta não a oculta. O texto completo da Skill não pode ser visualizado aqui — instale apenas plugins em que você confia.",
-        "routineEvents": "Eventos de rotina",
+        "routineEvents": "Eventos de automação",
         "mcpUi": "Exibir páginas interativas na conversa",
         "mcpUiDomains": "Domínios de rede da página: {{domains}}",
         "mcpAppOnly": "Somente página",
@@ -11840,18 +11832,14 @@
     "model": {
       "description": "Escolha os modelos que este amigo usa.",
       "primary": "Modelo principal",
-      "restoreDefault": "Restaurar modelo padrão"
+      "restoreDefault": "Restaurar modelo padrão",
+      "followsDefault": "Usa o modelo padrão",
+      "ownModel": "Modelo próprio",
+      "managedInSettings": "Os modelos dos parceiros são definidos em Provedores → Roteamento inteligente.",
+      "openSettings": "Abrir configurações"
     },
     "modelChain": {
-      "primary": "Modelo principal",
-      "fallback": "Alternativa {{index}}",
-      "routeLabel": "Modelo candidato {{index}}",
-      "add": "Adicionar modelo alternativo",
-      "remove": "Remover este candidato",
-      "moveUp": "Mover para cima",
-      "moveDown": "Mover para baixo",
-      "description": "Configure até 5 modelos. Se um estiver indisponível, o amigo continuará automaticamente com o próximo — sem trocar de tarefa nem tentar novamente manualmente.",
-      "options": "Modelos de reserva ({{count}})"
+      "routeLabel": "Modelo candidato {{index}}"
     },
     "actions": {
       "message": "Mensagem",
@@ -12279,7 +12267,9 @@
           "GROUP_AUTHORIZATION_REQUIRED": "{{name}} não pôde executar a ferramenta: a autorização do grupo expirou ou não permite esta ação. O proprietário do amigo pode repetir o pedido neste grupo.",
           "GROUP_AUTHORIZATION_UNAVAILABLE": "Não foi possível verificar a autorização de grupo de {{name}}, por isso a ferramenta não foi executada. Tente novamente quando a conexão for restabelecida.",
           "ATTACHMENTS_UNAVAILABLE": "Alguns anexos não foram entregues a {{name}} devido a uma falha no download ou ao limite de anexos. Reenvie os anexos necessários para este pedido.",
-          "GROUP_ASSISTANT_UNAVAILABLE": "{{name}}, conecte seu Cindy para que o Cindy possa trabalhar por você (nenhum Cindy seu está online agora)."
+          "GROUP_ASSISTANT_UNAVAILABLE": "{{name}}, conecte seu Cindy para que o Cindy possa trabalhar por você (nenhum Cindy seu está online agora).",
+          "GROUP_ASSISTANT_DEVICE_REQUIRED": "{{name}}, escolha um computador para este grupo para continuar a solicitação.",
+          "GROUP_ASSISTANT_DEVICE_OFFLINE": "O computador que {{name}} escolheu para este grupo está offline."
         }
       },
       "settings": {
@@ -12700,6 +12690,8 @@
           "accessToolsHint": "Pode usar as ferramentas existentes de {{name}} e suas informações privadas. Os resultados ficam visíveis para todos os membros. As aprovações continuam sendo exigidas; revogar o acesso não desfaz ações já concluídas.",
           "capabilitiesRow": "Ferramentas e acesso de {{name}}",
           "accessMenu": "Permissões neste grupo",
+          "assistantComputer": "Computador de execução",
+          "chooseComputer": "Selecionar computador",
           "notifications": {
             "title": "Notificações de mensagens",
             "all": "Todas as mensagens",
@@ -13003,7 +12995,7 @@
       "arrivingLater": "{{name}} foi transferido para este computador e ainda está sendo preparado. Em breve aparecerá entre seus amigos",
       "arrivalPermissions": "{{name}} agora usa as permissões padrão deste computador.",
       "arrivalModel": "O modelo salvo de {{name}} não está disponível neste computador, por isso ele segue o modelo padrão deste computador.",
-      "arrivalModelSetup": "{{name}} está neste computador, mas ainda não há um modelo disponível. Conecte um provedor de modelos ou escolha um modelo nas configurações deste amigo, em Modelo.",
+      "arrivalModelSetup": "{{name}} chegou a este computador, mas ainda não tem um modelo utilizável. Conecte um provedor de modelos ou defina o modelo padrão dos parceiros em Provedores → Roteamento inteligente.",
       "arrivalPartialContent": "{{name}} agora roda neste computador, mas alguns itens sincronizados não puderam ser restaurados. As cópias na nuvem continuam intactas.",
       "missingProfileTitle": "Continuar {{name}} com o perfil padrão?",
       "missingProfileDescription": "O computador principal original ainda não enviou o perfil de {{name}}. Se esse computador foi reinstalado ou não pode ser recuperado, você pode continuar aqui com o perfil padrão mantendo as conversas e os conteúdos já sincronizados.",
@@ -14978,7 +14970,7 @@
         "providerGroupLabel": "{{provider}} · {{group}}",
         "providerGroupRunningOn": "Em execução em {{device}}",
         "providerGroupRunningHere": "Em execução neste computador",
-        "providerGroupUnassigned": "O Grupo de provedores escolhe um computador quando a tarefa começa; o uso passa a ser exibido para esse computador"
+        "providerGroupUnassigned": "O Grupo de computadores escolhe um computador quando a tarefa começa; o uso passa a ser exibido para esse computador"
       },
       "speed": {
         "label": "Velocidade",
@@ -16445,10 +16437,11 @@
         "groupSwitch": "Continuou em outro computador automaticamente"
       },
       "autoResumeSeparator": {
-        "label": "Conexão interrompida — retomada automaticamente"
+        "label": "Resposta vazia — retomada automaticamente"
       },
       "autoResumePending": {
         "label": "Reconectando",
+        "continuingWithProgress": "Continuando automaticamente ({{attempt}}/{{total}})…",
         "labelWithProgress": "Reconectando {{attempt}}/{{total}}",
         "groupSwitch": "Alternando para outro computador"
       },
@@ -16763,7 +16756,7 @@
       "REMOTE_AGENT_SHARE_UNAVAILABLE": "O provedor compartilhado está temporariamente indisponível. O computador do proprietário pode estar offline ou o compartilhamento está desativado no momento. Tente novamente mais tarde ou troque para outro modelo para continuar.",
       "REMOTE_AGENT_SHARE_LEGACY_DISABLED": "Este é um compartilhamento antigo e não pode ser usado enquanto \"Usar apenas Agent-Net\" estiver ativado. Desative essa opção para continuar ou troque para outro modelo.",
       "REMOTE_AGENT_GROUP_USAGE_LIMIT": "As contas disponíveis para este modelo atingiram o limite de uso. Troque de modelo ou continue quando a cota for renovada.",
-      "REMOTE_AGENT_GROUP_UNAVAILABLE": "Nenhum computador no grupo de provedores pode executar esta tarefa agora. Eles podem estar offline, pausados, em intervalo de espera ou sem este modelo. Verifique o grupo na página Acesso remoto e compartilhamento deste provedor.",
+      "REMOTE_AGENT_GROUP_UNAVAILABLE": "Nenhum computador no grupo de computadores pode executar esta tarefa agora. Eles podem estar offline, pausados, em intervalo de espera ou sem este modelo. Verifique o grupo na página Acesso remoto e compartilhamento deste provedor.",
       "REMOTE_AGENT_GROUP_FULL": "Todas as contas ou computadores que podem executar esta tarefa atingiram o limite de tarefas simultâneas. Aguarde uma tarefa em andamento terminar ou aumente o limite nas configurações do provedor.",
       "SUBSCRIPTION_ACCOUNTS_FULL": "Todas as contas ou computadores que podem executar esta tarefa atingiram o limite de tarefas simultâneas. Aguarde uma tarefa em andamento terminar ou aumente o limite nas configurações do provedor.",
       "REMOTE_AGENT_DEVICE_LIMIT": "Este dispositivo atingiu o limite de sessões remotas. Arquive sessões não utilizadas ou peça ao proprietário do provedor para aumentar o limite em Acesso remoto e compartilhamento.",
@@ -17790,7 +17783,14 @@
         "hours": "Em {{count}} horas",
         "hours_one": "Em {{count}} hora",
         "hours_many": "Em {{count}} horas",
-        "hours_other": "Em {{count}} horas"
+        "hours_other": "Em {{count}} horas",
+        "pendingSync": "Sincronização pendente",
+        "pendingArchiveSync": "Será arquivada quando o computador ficar online",
+        "offlineCompleteRejectedDirty": "“{{title}}” voltou para Pendentes: há alterações não confirmadas no Worktree que exigem confirmação antes de arquivar.",
+        "offlineCompleteRejectedNewActivity": "“{{title}}” voltou para Pendentes: houve nova atividade no computador enquanto estava offline.",
+        "offlineCompleteRejectedRunning": "“{{title}}” voltou para Pendentes: a tarefa está em execução.",
+        "offlineCompleteRejectedAttached": "“{{title}}” voltou para Pendentes: a tarefa está vinculada ou compartilhada e não foi arquivada automaticamente.",
+        "offlineCompleteRejectedPreflight": "“{{title}}” voltou para Pendentes: não foi possível verificar o Worktree antes de arquivar."
       },
       "taskListMode": {
         "heading": "Modo de tarefas",
@@ -18022,8 +18022,8 @@
           }
         },
         "gitlab": {
-          "missing": "GitLab CLI (glab) não foi encontrado. Instale o glab e entre na conta para ver o status dos MRs.",
-          "notLoggedIn": "O glab local não está conectado a {{host}}. Execute glab auth login no terminal para ver o status dos MRs.",
+          "missing": "GitLab CLI (glab) não foi encontrado e o plugin do GitLab não tem conexão com esta instância. Instale o glab e entre na conta, ou adicione a instância no plugin do GitLab, para ver o status dos MRs.",
+          "notLoggedIn": "O glab local não está conectado a {{host}} e o plugin do GitLab não tem conexão com ela. Execute glab auth login no terminal, ou adicione a instância no plugin do GitLab, para ver o status dos MRs.",
           "unsupported": "Este computador ainda não oferece suporte ao status dos MRs do GitLab",
           "openAria": "Abrir MR !{{number}} no navegador",
           "summaryAria": "Resumo do MR !{{number}}",
@@ -18252,6 +18252,13 @@
         "active": "{{count}} filtros",
         "reset": "Redefinir",
         "allProjects": "Todos os projetos"
+      },
+      "match": {
+        "label": "Palavras-chave",
+        "any": "Qualquer palavra",
+        "all": "Todas as palavras",
+        "help": "Escolha todas as palavras-chave e separe-as com espaços para exigi-las na mesma mensagem. Use “frase exata” para texto consecutivo. Os títulos são comparados separadamente.",
+        "partial": "Os resultados podem estar incompletos. Use palavras mais específicas ou limite a busca a um projeto."
       }
     }
   },
@@ -18452,7 +18459,8 @@
         "pause": "Pausar",
         "deleteAutomation": "Excluir automação"
       },
-      "tagWebhook": "Webhook"
+      "tagWebhook": "Webhook",
+      "tagPluginEvent": "Evento de plugin"
     },
     "detail": {
       "manualTrigger": "Acionamento manual",
@@ -18793,11 +18801,123 @@
         "cindyConnectionTitle": "GitHub · Conexão pela Cindy",
         "manualConnectionTitle": "GitHub · Webhook manual",
         "githubAppHint": "Conecte a GitHub App no computador que executa esta tarefa e autorize esses repositórios. Não é necessário um URL de Webhook ou segredo separado.",
-        "githubAppPaused": "Esta tarefa está pausada. Os eventos não a iniciarão."
+        "githubAppPaused": "Esta tarefa está pausada. Os eventos não a iniciarão.",
+        "plugin": {
+          "source": "Eventos de plugins",
+          "label": "Plugins e eventos",
+          "empty": "Nenhum plugin neste computador fornece eventos ainda. Instale e ative um plugin que declare eventos para escolhê-lo aqui.",
+          "unavailable": "Plugin indisponível",
+          "remove": "Remover",
+          "hint": "Os plugins não filtram nenhum evento por você, nem as mensagens enviadas por esta automação. Diga o que tratar no prompt ou em uma verificação prévia. Eventos são perdidos enquanto o computador está em repouso ou desligado, ou o plugin está desativado.",
+          "offlineHint": "Eventos são perdidos enquanto o computador está em repouso ou desligado, ou o plugin está desativado. Se nenhum puder ser perdido, adicione também uma verificação agendada.",
+          "required": "Escolha pelo menos um evento de plugin",
+          "state": {
+            "listening": "Escutando",
+            "disconnected": "Desconectado",
+            "error": "Erro de conexão",
+            "stopped": "Parado",
+            "unknown": "Aguardando o status do plugin"
+          },
+          "filterOnly": "Somente",
+          "filterField": "Campo",
+          "filterOperator": "Condição",
+          "filterValue": "Valor",
+          "filterRemove": "Remover condição",
+          "filterAdd": "Adicionar condição \"somente\"",
+          "operators": {
+            "equals": "é igual a",
+            "contains": "contém",
+            "not-equals": "é diferente de"
+          }
+        },
+        "scopeLabel": "Escopo",
+        "scope": {
+          "repository": "Repositório inteiro",
+          "repositoryHint": "Executa com novos eventos do repositório, como pull requests, comentários ou CI concluída.",
+          "repositoryNeedsAccount": "Entre em uma conta Cindy para receber eventos do repositório.",
+          "item": "Pull request ou issue específico",
+          "itemHint": "Acompanha um pull request ou issue: o pull request executa quando o estado muda de verdade; o issue, com nova atividade.",
+          "project": "Projeto inteiro",
+          "projectHint": "Executa com novos eventos do projeto, como merge requests, issues ou pipelines concluídos.",
+          "gitlabItem": "Merge request ou issue específico",
+          "gitlabItemHint": "Acompanha um merge request ou issue: o merge request executa quando o estado muda de verdade; o issue, quando muda."
+        },
+        "item": {
+          "label": "Pull request ou issue",
+          "placeholder": "42, #42, owner/repo#42 ou um link",
+          "hint": "Digite um número, owner/repo#número ou cole um link. O Cindy identifica qual é.",
+          "resolving": "Identificando…",
+          "pr": "Pull request #{{number}}",
+          "issue": "Issue #{{number}}",
+          "closed": "Fechado",
+          "required": "Digite o pull request ou issue e aguarde a identificação.",
+          "issueHint": "Um issue específico recebe eventos pela GitHub App conectada pelo Cindy, o que exige uma conta Cindy.",
+          "errors": {
+            "invalid": "Digite um número, #número, owner/repo#número ou um link do GitHub para pull request ou issue.",
+            "no-repository": "Só o número precisa do repositório. Escreva owner/repo#42 ou cole um link.",
+            "not-connected": "Conecte o GitHub para saber se é pull request ou issue.",
+            "not-found": "Esse número não foi encontrado no repositório, ou você não tem acesso.",
+            "unavailable": "Não foi possível conectar ao GitHub agora. Tente mais tarde.",
+            "needs-account": "É um issue. Um issue específico exige uma conta Cindy e o GitHub conectado pelo Cindy."
+          },
+          "issueChange": {
+            "any": "Atividade no issue",
+            "comment": "Novo comentário",
+            "closed": "Issue fechado",
+            "reopened": "Issue reaberto"
+          },
+          "mr": "Merge request !{{number}}"
+        },
+        "gitlabSignedConnection": "Token de assinatura (GitLab 19+)",
+        "gitlabSignedConnectionHint": "Use um token de assinatura nas configurações de webhook do projeto GitLab para mais segurança.",
+        "gitlabTokenConnection": "Secret token",
+        "gitlabTokenConnectionHint": "Para versões antigas do GitLab: informe um secret token nas configurações do webhook.",
+        "gitlabPluginConnection": "Pelo plugin do GitLab",
+        "gitlabPluginConnectionHint": "Verifica a cada minuto com a conta conectada no plugin do GitLab. Não precisa de webhook do GitLab nem de conta Cindy. Mudanças enquanto este computador está em repouso ou desligado não são entregues depois.",
+        "gitlabMrPollConnection": "Verificar estado em horário programado",
+        "gitlabMrPollConnectionHint": "Lê o estado do merge request conforme “Verificar também em horário programado” (sem executar a tarefa), priorizando a conta do plugin do GitLab e usando o glab local como alternativa.",
+        "gitlabSetupHint": "Depois de salvar, copie o endereço e o segredo dos detalhes da tarefa para o projeto GitLab em Configurações › Webhooks.",
+        "gitlabItem": {
+          "label": "Merge request ou issue",
+          "placeholder": "!12, #12, group/project!12 ou um link",
+          "hint": "Escreva !número para merge request, #número para issue, ou cole um link.",
+          "required": "Informe o merge request ou issue a acompanhar.",
+          "mrHint": "O GitLab não envia notificações. O Cindy lê o estado no ritmo de \"Também verificar em um agendamento\" (sem executar a tarefa), usando o glab deste computador ou a conta conectada no plugin do GitLab.",
+          "mrPluginHint": "O plugin do GitLab verifica este merge request a cada minuto, incluindo novos commits, comentários, aprovações e resultados de pipeline.",
+          "issueHint": "As mudanças deste issue chegam por um webhook do GitLab. Eventos de comentário não distinguem merge requests de issues, então só contam criar, editar, fechar e reabrir o issue.",
+          "issuePluginHint": "O plugin do GitLab verifica este issue a cada minuto, incluindo novos comentários.",
+          "errors": {
+            "invalid": "Informe !número, #número, group/project!número ou um link do GitLab.",
+            "ambiguous": "O GitLab numera merge requests e issues separadamente. Escreva !12 (merge request) ou #12 (issue), ou cole um link.",
+            "needs-link": "Um merge request específico precisa da instância do GitLab. Cole o link.",
+            "needs-account": "Isto é um issue. Um issue específico do GitLab precisa do plugin do GitLab ou de uma conta Cindy para receber webhooks do GitLab."
+          },
+          "mrChange": {
+            "any": "Atividade no merge request",
+            "merged": "Mesclado",
+            "review": "Atividade de revisão",
+            "ci": "Status do pipeline muda"
+          },
+          "issueChange": {
+            "any": "O issue muda",
+            "comment": "Novo comentário no issue",
+            "closed": "Issue fechado",
+            "reopened": "Issue reaberto"
+          }
+        },
+        "gitlabPlugin": {
+          "projectLabel": "Projeto",
+          "projectHint": "Digite group/project ou um link do projeto. Cole um link se o plugin do GitLab estiver conectado a mais de uma instância.",
+          "projectInvalid": "Digite group/project ou um link https do projeto.",
+          "eventsLabel": "Eventos",
+          "eventsHint": "Sem nenhuma seleção, responde a todos os eventos deste projeto.",
+          "unavailable": "O plugin do GitLab não está instalado ou está desativado. Ative-o em Plugins e salve de novo."
+        }
       },
       "trigger": {
         "label": "Modo de acionamento",
-        "timed": "Agendado"
+        "timed": "Agendado",
+        "event": "Evento"
       },
       "runSettings": "Configurações de execução"
     },
@@ -18876,7 +18996,7 @@
         "categoryListAria": "Modelos de {{category}}",
         "effortListAria": "Esforço de raciocínio",
         "boundLocationLocked": "As tarefas vinculadas continuam sendo executadas onde estão. Escolha um modelo desse computador.",
-        "modelGroupTitle": "Grupo de modelos “{{name}}”: escolhe uma fonte ao criar uma nova tarefa"
+        "modelGroupTitle": "Roteamento inteligente “{{name}}”: escolhe uma fonte quando uma execução inicia uma nova tarefa"
       }
     },
     "toast": {
@@ -19088,7 +19208,8 @@
         "reconnectConfirm": "Reconectar o Webhook?",
         "reconnectConfirmHint": "Isso usa uma vaga e cria um novo endereço de recebimento. Atualize o endereço e o segredo no remetente.",
         "reconnectFailed": "Não foi possível reconectar. Verifique as vagas disponíveis antes de tentar novamente."
-      }
+      },
+      "pluginTitle": "Acionado por evento de plugin"
     }
   },
   "issueTracker": {
@@ -19534,6 +19655,7 @@
     }
   },
   "commandPalette": {
+    "buddyNewHint": "Nas configurações do amigo, escolha “{{restart}}” para reconstruir o contexto de trabalho e manter o histórico de mensagens. Para conversar sobre algo separadamente, escolha “{{startTopic}}” nas ações de uma mensagem.",
     "viewSkillDetails": "Ver detalhes da Skill",
     "projectSkillNotLoaded": "Esta tarefa do Pi não carregou esta Skill do projeto. Novas tarefas tentarão carregá-la automaticamente.",
     "pluginSkillSetup": {
@@ -20336,6 +20458,9 @@
       "permissionTightenInterruptFailed": "Falha ao interromper a tarefa em execução ao restringir as permissões; ela pode continuar sem solicitar aprovação até terminar. Interrompa-a manualmente se necessário.",
       "codexAutoReviewUnavailable": "A revisão automática está temporariamente indisponível. A ação atual foi bloqueada e as permissões foram alteradas para Padrão. Tente a solicitação novamente; o Cindy pedirá aprovação quando necessário.",
       "hostShellCommandBlocked": "O Cindy bloqueou este comando de shell. Verifique o comando e use uma ferramenta ou comando disponível para continuar.",
+      "reconnectAutoResumeExhausted": "O limite de tentativas de continuação automática foi atingido.",
+      "reconnectAutoResumeDisabled": "A continuação automática está desativada.",
+      "codexReconnectStalled": "Não foi possível restabelecer a conexão com o modelo em 2 minutos.",
       "upstreamResponseIdleTimeout": "O modelo ficou sem responder por muito tempo, então este turno foi interrompido para evitar uma espera indefinida. As chamadas de ferramentas concluídas foram preservadas — envie a próxima mensagem para continuar.",
       "codexHistoryOversized": "O histórico de imagens é grande demais para retomar automaticamente. Envie “Continuar”, e o Cindy retomará a tarefa atual.",
       "codexHistoryOversizedRemote": "O histórico desta tarefa inclui imagens grandes demais, então a compactação remota não pode ser concluída. Abra a tarefa na máquina que executa o Codex e envie novamente; o Cindy omitirá essas imagens lá.",
@@ -21398,7 +21523,7 @@
   "routines": {
     "hourly": "A cada hora",
     "everyMinutes": "A cada {{count}} minutos",
-    "pluginCapability": "Publica eventos declarados nas suas rotinas. Somente as rotinas que você configurar podem ser executadas.",
+    "pluginCapability": "Publica os eventos declarados para automações. Só podem ser executadas as automações que escolheram este plugin.",
     "advancedSettings": "Configurações avançadas"
   },
   "cindyMakeDoctor": {
@@ -23052,9 +23177,6 @@
     "lineNumbers": "Números de linha"
   },
   "openAiAccountGroup": {
-    "strategy": "Estratégia do grupo de contas",
-    "leastHint": "Priorizar a conexão com menos tarefas em execução",
-    "quotaHint": "Quando há dados de uso das assinaturas, Cindy filtra as conexões pelo uso antes de aplicar a estratégia do grupo.",
     "removeDescription": "Esta conexão deixará de receber novas tarefas do grupo. As tarefas em execução continuarão nesta conexão.",
     "mergeDescription": "Novas tarefas iniciadas em {{target}} podem usar os dois fornecedores. Logins, chaves e tarefas existentes permanecem como estão. Cindy testará a chave de API de {{apiKey}} antes de vincular os fornecedores.",
     "modelUnavailable": "Esta conexão não pode usar o modelo escolhido para o teste. Teste novamente para tentar outro candidato.",
@@ -23126,7 +23248,6 @@
       "useCodex": "Entrar com o Codex"
     },
     "title": "Contas de assinatura",
-    "strategy": "Balanceamento de carga",
     "add": "Adicionar conta",
     "defaultTag": "Padrão",
     "ready": "Conectada",
@@ -23201,37 +23322,37 @@
     "refreshFailed": "O tema foi instalado, mas não foi possível atualizar a lista. Atualize-a nas configurações de aparência."
   },
   "modelGroups": {
-    "title": "Grupos de modelos",
-    "description": "Combine várias fontes que já tem em Provedores em uma única opção. Escolha-a em “Grupos de modelos” no seletor de modelos e a Cindy decide qual fonte usar.",
-    "routes": "Modos",
-    "routesDescription": "Um modo contém várias fontes. Cada nova tarefa escolhe uma segundo a regra do modo.",
+    "title": "Roteamento inteligente",
+    "description": "Combine fontes que você já tem em Provedores em uma única opção. Escolha-a em Roteamento inteligente no seletor de modelos e a Cindy decide qual fonte usar.",
+    "routes": "Rotas",
+    "routesDescription": "Combine várias fontes em uma única opção. Uma fonte pode ser um provedor inteiro (escolha um modelo como sempre e a rota decide qual deles o executa) ou um modelo específico. Provedores da mesma marca são combinados automaticamente.",
     "sourceCount_one": "{{count}} fonte",
     "sourceCount_many": "{{count}} fontes",
     "sourceCount_other": "{{count}} fontes",
     "strategy": {
       "expiring": {
-        "title": "Primeiro o que expira",
-        "hint": "Usa primeiro a cota de assinatura que mais sobra e que está prestes a ser redefinida, para não a desperdiçar. As fontes sem cota legível ficam para depois."
+        "title": "Automático",
+        "hint": "Usa primeiro a cota de assinatura que está sobrando e prestes a ser redefinida, para que nada seja desperdiçado. As fontes sem cota legível vêm depois."
       },
       "order": {
-        "title": "Por ordem",
-        "hint": "Só passa à fonte seguinte quando a anterior não pode ser usada."
+        "title": "Em ordem",
+        "hint": "Só passa para a próxima fonte quando a de cima não pode ser usada."
       },
       "rotate": {
         "title": "Em rodízio",
-        "hint": "Cada nova tarefa passa à fonte seguinte e reparte a carga."
+        "hint": "Cada nova tarefa vai para a próxima fonte, distribuindo a carga por igual."
       },
       "cheapest": {
         "title": "O mais barato",
         "hint": "Usa primeiro as assinaturas com cota disponível, sem custo adicional; o restante segue do menor para o maior preço de tabela, e as fontes sem preço ficam por último."
       },
       "drain": {
-        "title": "Esgotar e passar",
+        "title": "Usar até esgotar",
         "hint": "Continua usando a última fonte até ela ficar sem cota ou indisponível e só então passa para a próxima; não volta quando as anteriores se recuperam."
       },
       "headroom": {
         "title": "Mais cota restante",
-        "hint": "Usa primeiro a fonte com a maior proporção de cota restante (a semanal, se houver); fontes sem cota legível ficam por último."
+        "hint": "Usa a fonte com a maior proporção de cota restante (a cota semanal, se houver); fontes sem cota legível ficam por último."
       },
       "weighted": {
         "title": "Por peso",
@@ -23239,84 +23360,94 @@
       }
     },
     "picker": {
-      "empty": "Ainda não há grupos de modelos. Combine várias fontes em um modo nas Configurações para escolhê-lo aqui.",
-      "manage": "Gerenciar grupos de modelos",
-      "deviceTitle": "Grupos de modelos · {{device}}",
+      "empty": "Ainda não há roteamento inteligente. Combine algumas fontes em uma rota nas Configurações para escolhê-la aqui.",
+      "manage": "Gerenciar roteamento inteligente",
+      "deviceTitle": "Roteamento inteligente · {{device}}",
       "switched": "“{{name}}” trocou esta tarefa para {{model}}",
       "switchUnavailable": "“{{name}}” não tem agora nenhuma fonte que esta tarefa possa usar. O modelo não foi alterado.",
-      "chooseUnavailable": "“{{name}}” não tem agora nenhuma fonte utilizável, então não foi selecionado."
+      "chooseUnavailable": "“{{name}}” não tem agora nenhuma fonte utilizável, então não foi selecionada.",
+      "mergedLabel_many": "{{name}} · rota ({{count}} fontes)",
+      "mergedLabel_one": "{{name}} · rota ({{count}} fonte)",
+      "mergedLabel_other": "{{name}} · rota ({{count}} fontes)",
+      "routeDecides": "A rota “{{name}}” decide qual fonte esta tarefa usa",
+      "quotaOf": "Cota: {{name}}"
     },
     "why": {
-      "expiringQuota": "Restam {{left}}% da cota, redefinida a {{reset}}, por isso vai primeiro",
+      "expiringQuota": "Restam {{left}}% da cota, que é redefinida {{reset}}, por isso vai primeiro",
       "expiring": "Primeira pela cota",
       "order": "A primeira fonte disponível",
-      "rotate": "Desta vez é a vez dela",
+      "rotate": "Escolhida por rodízio",
       "only": "A única disponível agora",
-      "soonest": "Todas as fontes esgotaram a cota; esta recupera primeiro",
-      "soonestUntil": "Todas as fontes esgotaram a cota; esta recupera primeiro ({{reset}})",
-      "standby": "Desta vez não é a vez dela",
-      "standbyQuota": "Restam {{left}}% da cota, redefinida só a {{reset}}, por isso fica reservada",
-      "off": "Desativada neste modo",
+      "soonest": "Todas as fontes estão sem cota; esta se recupera primeiro",
+      "soonestUntil": "Todas as fontes estão sem cota; esta se recupera primeiro ({{reset}})",
+      "standby": "Não foi escolhida desta vez",
+      "standbyQuota": "Restam {{left}}% da cota, que só é redefinida {{reset}}, por isso fica reservada para depois",
+      "off": "Desativada nesta rota",
       "unavailable": "Sem conexão, ou este modelo não pode ser escolhido agora",
-      "limited": "Cota esgotada",
-      "limitedUntil": "Cota esgotada até {{reset}}",
+      "limited": "Sem cota",
+      "limitedUntil": "Sem cota até {{reset}}",
       "tight": "A cota de 5 horas está quase cheia, por isso é ignorada por agora",
       "cheapest": "Menor preço de tabela",
       "cheapestFree": "Ainda há cota de assinatura, sem custo adicional",
       "drain": "Continua em uso até a cota acabar",
       "drainNext": "A fonte anterior se esgotou ou ficou indisponível, então passou para esta",
-      "headroom": "Tem mais cota restante",
+      "headroom": "Mais cota restante",
       "headroomQuota": "Restam {{left}}% da cota, mais do que em qualquer outra fonte",
       "weighted": "É a vez dela pelo peso",
       "noVision": "A mensagem tem imagens e esta fonte não consegue vê-las",
       "exceptionImage": "A mensagem tem imagens, então só foram consideradas as fontes que conseguem vê-las",
       "exceptionImageFallback": "A mensagem tem imagens, mas nenhuma fonte consegue vê-las, então escolheu como de costume",
-      "exceptionHours": "Neste horário usa “{{name}}”",
+      "exceptionHours": "Neste horário, usa “{{name}}” no lugar",
       "separator": "; "
     },
     "settings": {
       "autoSwitch": {
-        "title": "Trocar de fonte automaticamente quando houver problema",
-        "hint": "Quando a fonte usada por este modo falhar, trocar para a próxima disponível e anotar abaixo daquela rodada. Desligado, a troca só é sugerida no erro."
+        "title": "Trocar de fonte automaticamente quando uma falhar",
+        "hint": "Quando a fonte que esta rota está usando falhar, trocar para a próxima utilizável e anotar isso abaixo daquela rodada. Desligado, a troca só é oferecida no erro."
       },
-      "newRoute": "Novo modo",
-      "newRouteName": "Novo modo",
-      "routesEmpty": "Ainda não há modos. Crie um e adicione várias fontes.",
-      "scopeNote": "Os grupos de modelos aplicam-se às tarefas deste computador. Uma nova tarefa escolhe uma fonte ao começar. Escolher um numa tarefa em andamento troca uma vez, na hora; depois ela não troca sozinha.",
-      "back": "Voltar aos grupos de modelos",
+      "newRoute": "Nova rota",
+      "newRouteName": "Nova rota",
+      "routesEmpty": "Ainda não há rotas. Crie uma e adicione algumas fontes.",
+      "scopeNote": "O roteamento inteligente se aplica às tarefas deste computador. Uma nova tarefa escolhe uma fonte ao começar. Escolher uma rota em uma tarefa já em andamento troca uma vez, na hora; depois ela não troca sozinha.",
+      "back": "Voltar ao roteamento inteligente",
       "name": "Nome",
       "nameHint": "Aparece no seletor de modelos.",
-      "routeShownAs": "Aparece em “Grupos de modelos” no seletor de modelos.",
+      "routeShownAs": "Aparece em Roteamento inteligente no seletor de modelos.",
       "pick": "Qual usar",
+      "moreStrategies": "Mais opções",
       "effort": "Esforço de raciocínio",
       "effortUnset": "Não definido",
-      "effortHint": "Se o modelo escolhido não oferecer suporte a este nível, roda com o seu padrão.",
+      "effortHint": "Se o modelo escolhido não oferecer suporte a este nível, ele roda com o próprio padrão.",
       "weight": "Peso",
       "weightAria": "Peso de “{{name}}”",
       "weightHint": "Com “Por peso”, um peso maior recebe mais tarefas novas. 1–1000.",
-      "sources": "Fontes que pode usar",
-      "sourcesHint": "Podem coexistir modelos diferentes. A tarefa indica qual foi usado.",
+      "sources": "Fontes que ela pode usar",
+      "sourcesHint": "Modelos diferentes podem ficar juntos. A tarefa mostra qual foi usado.",
       "sourcesEmpty": "Ainda não há fontes. Adicione abaixo um modelo conectado.",
-      "sourcesFull": "Um modo aceita até {{count}} fontes.",
+      "sourcesEmptyMerged": "Ainda não há fontes. Adicione abaixo um provedor conectado.",
+      "sourcesFull": "Uma rota aceita até {{count}} fontes.",
       "addSource": "Adicionar fonte",
       "chooseModel": "Escolher um modelo",
       "notConnected": "Sem conexão",
       "moveUp": "Mover para cima",
       "moveDown": "Mover para baixo",
-      "remove": "Remover deste modo",
-      "useSource": "Permitir que este modo use {{name}}",
+      "remove": "Remover desta rota",
+      "useSource": "Permitir que esta rota use {{name}}",
       "try": {
         "title": "Experimentar",
-        "hint": "Veja qual fonte uma nova tarefa usaria agora. Nada é enviado e não se gasta cota.",
+        "hint": "Veja qual fonte uma nova tarefa usaria agora. Nada é enviado e nenhuma cota é gasta.",
         "run": "Ver a escolha",
         "picked": "Usar esta",
         "standby": "De reserva",
         "skipped": "Ignorada",
-        "unavailable": "Nenhuma fonte deste modo pode ser usada agora. Uma nova tarefa usará o modelo que tinha selecionado."
+        "unavailable": "Nenhuma fonte desta rota pode ser usada agora. Uma nova tarefa usará o modelo que você tinha selecionado.",
+        "failed": "Não foi possível fazer o teste. Tente novamente.",
+        "model": "Modelo para testar"
       },
-      "deleteRoute": "Excluir este modo",
+      "deleteRoute": "Excluir esta rota",
       "deleteRouteConfirmTitle": "Excluir “{{name}}”?",
-      "deleteRouteConfirmDescription": "As exceções por horário de outros modos que mudam para ele também são excluídas. As tarefas já iniciadas não são afetadas.",
+      "deleteRouteConfirmDescription": "As exceções por horário de outras rotas que trocam para ela também são removidas. As tarefas já iniciadas não são afetadas.",
+      "deleteMergedRouteConfirmDescription": "As tarefas já iniciadas não são afetadas.",
       "delete": "Excluir",
       "cancel": "Cancelar",
       "saveFailed": "Não foi possível salvar. Tente novamente.",
@@ -23325,8 +23456,8 @@
         "hint": "Verificadas antes da regra de escolha, de cima para baixo.",
         "empty": "Ainda não há exceções. Cada nova tarefa segue a regra de escolha acima.",
         "imageRule": "Quando a mensagem tiver imagens, usar apenas fontes que consigam vê-las",
-        "hoursRule": "{{from}}–{{to}}: usar “{{name}}”",
-        "hoursRuleDays": "{{days}} {{from}}–{{to}}: usar “{{name}}”",
+        "hoursRule": "{{from}}–{{to}}: usar “{{name}}” no lugar",
+        "hoursRuleDays": "{{days}} {{from}}–{{to}}: usar “{{name}}” no lugar",
         "remove": "Remover esta exceção",
         "add": "Adicionar uma exceção",
         "choose": "Escolher uma situação",
@@ -23339,25 +23470,80 @@
         "daysHint": "Sem dias selecionados, vale para todos os dias. Um intervalo que passa da meia-noite conta para o dia em que começa.",
         "dayRange": "{{from}}–{{to}}",
         "addHours": "Adicionar",
-        "sameHour": "O início e o fim não podem ser a mesma hora.",
+        "sameHour": "O início e o fim não podem ser o mesmo horário.",
         "full": "Até {{count}} exceções.",
-        "needOtherRoute": "Crie outro modo para poder mudar para ele por horário."
+        "needOtherRoute": "Crie outra rota para poder trocar para ela por horário."
       }
     },
     "overview": {
       "mapTitle": "Como as novas tarefas escolhem um modelo",
-      "mapDescription": "Da esquerda para a direita: o modo que segue e a fonte em que termina. Clique em um modo para alterá-lo.",
+      "mapDescription": "Da esquerda para a direita: a rota que uma nova tarefa segue e a fonte em que ela termina. Clique em uma rota para alterá-la.",
       "columnSources": "Fontes",
-      "columnEmpty": "Nenhum ainda",
-      "openRoute": "Abrir o modo “{{name}}”",
+      "columnEmpty": "Nenhuma ainda",
+      "openRoute": "Abrir a rota “{{name}}”",
       "recentTitle": "Escolhas recentes",
-      "recentEmpty": "Nenhuma tarefa usou um modo ainda.",
-      "keptOriginal": "Não havia nenhum modelo disponível, então a tarefa manteve o modelo que você tinha escolhido.",
+      "recentEmpty": "Nenhuma tarefa usou uma rota ainda.",
+      "keptOriginal": "Nada nela estava disponível, então a tarefa manteve o modelo que você tinha escolhido.",
       "keptOriginalShort": "Seu modelo foi mantido",
       "latest": "O caminho que a última tarefa seguiu"
     },
     "switchOffer": {
       "action": "Continuar com {{model}}"
+    },
+    "auto": {
+      "accounts_one": "{{count}} conta",
+      "accounts_many": "{{count}} contas",
+      "accounts_other": "{{count}} contas",
+      "computers_one": "{{count}} computador",
+      "computers_many": "{{count}} computadores",
+      "computers_other": "{{count}} computadores",
+      "pickFor": "Estratégia de {{name}}",
+      "hiddenTag": "Oculta",
+      "show": "Mostrar no seletor de modelos",
+      "assignedBy": "Novas tarefas são atribuídas por “{{strategy}}”",
+      "adjust": "Ajustar em Roteamento inteligente"
+    },
+    "sources": {
+      "models_one": "{{count}} modelo",
+      "models_many": "{{count}} modelos",
+      "models_other": "{{count}} modelos",
+      "autoTag": "Automática",
+      "chooseProvider": "Escolher um provedor",
+      "removeAria": "Remover {{name}} desta rota",
+      "note": "As rotas automáticas acompanham seus provedores conectados. Não é possível adicionar nem remover membros, mas você pode reordená-los, definir pesos, desativar um deles, mudar a estratégia ou ocultar a rota.",
+      "providers_one": "{{count}} provedor",
+      "providers_many": "{{count}} provedores",
+      "providers_other": "{{count}} provedores",
+      "addWhole": "Adicionar um provedor inteiro",
+      "addWholeHint": "Todos os modelos dele entram nesta rota. No seletor de modelos, a rota funciona como um provedor: escolha um modelo como sempre e a rota decide qual membro o executa.",
+      "addModelHint": "Adicione um modelo de um provedor. Ao escolher esta rota, uma dessas fontes é escolhida pela estratégia.",
+      "detailHint": "Esta rota combina provedores inteiros. No seletor de modelos, ela funciona como um provedor: escolha modelo e esforço como sempre e a rota decide qual membro o executa."
+    },
+    "kinds": {
+      "byModel": "Por modelo",
+      "byProvider": "Por provedor"
+    },
+    "buddies": {
+      "title": "Modelos dos parceiros",
+      "description": "Os parceiros compartilham um modelo padrão; dê um modelo próprio só a quem precisa de algo diferente. Para que um parceiro troque de fonte quando algo falhar, escolha um roteamento inteligente.",
+      "saveFailed": "O modelo do parceiro não foi salvo. Tente novamente.",
+      "defaultLabel": "Modelo padrão",
+      "defaultHint": "Todos os parceiros usam este, salvo configuração diferente, inclusive os novos e os trazidos de outro computador.",
+      "ownTitle": "Parceiros com modelo próprio",
+      "ownTitleWithRest_many": "Parceiros com modelo próprio · {{count}} outros usam o padrão",
+      "ownTitleWithRest_one": "Parceiros com modelo próprio · {{count}} outro usa o padrão",
+      "ownTitleWithRest_other": "Parceiros com modelo próprio · {{count}} outros usam o padrão",
+      "addOwn": "Dar a um parceiro um modelo próprio",
+      "allFollow": "Todos os parceiros usam o modelo padrão.",
+      "otherComputers": "Parceiros em outros computadores",
+      "deviceBuddies_many": "{{count}} parceiros",
+      "deviceBuddies_one": "{{count}} parceiro",
+      "deviceBuddies_other": "{{count}} parceiros",
+      "devicePageTitle": "Parceiros em {{device}}",
+      "devicePageHint": "Escolha entre os modelos e roteamentos inteligentes que esse computador pode usar. Salvo nele.",
+      "deviceDefaultReadOnly": "Atualize esse computador para mudar aqui o modelo padrão dele.",
+      "deviceUnavailable": "Não é possível ler agora as configurações de parceiros desse computador. Verifique se ele está online e abra de novo.",
+      "deviceLoading": "Lendo as configurações desse computador…"
     }
   },
   "projectSettings": {
