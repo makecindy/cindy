@@ -72,7 +72,7 @@ describe('Mixed main list (sidebar-redesign D 期)', () => {
   });
 
   it('keeps custom project order scoped to project rows', () => {
-    // 自定义项目顺序只重排项目行;散排对话 / 对话组不进 manualProjectOrder。
+    // 项目账本只存真实项目；「对话」组单独保存显示位置。
     expect(mainListModelSource).toContain("projectOrder === 'custom'");
     expect(mainListModelSource).toContain('normalizeManualProjectOrder');
     expect(projectsSectionSource).toContain('customProjectOrder && !deviceGroupingActive');

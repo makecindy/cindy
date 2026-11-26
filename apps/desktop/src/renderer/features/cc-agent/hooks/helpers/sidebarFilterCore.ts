@@ -5,6 +5,7 @@ import {
   clearClaimedLegacySidebarStorage,
   readClaimedLegacySidebarStorage,
   readSidebarOwnerStorage,
+  sidebarOwnerStorageKey,
   writeSidebarOwnerStorage,
 } from '@/lib/sidebarOwnerStorage';
 import type { DataOwnerPushStamp } from '../../../../../shared/dataOwnerPush';
@@ -52,6 +53,17 @@ export const PROJECT_ORDER_KEY = 'cc-agent.sidebar.filter.projectOrder';
 export const TASK_INFO_KEY = 'cc-agent.sidebar.filter.taskInfo';
 export const MANUAL_PROJECT_ORDER_KEY = 'cc-agent.sidebar.filter.manualProjectOrder';
 export const MANUAL_PINNED_ORDER_KEY = 'cc-agent.sidebar.pinnedSessionOrder';
+
+export const DIALOGUE_GROUP_ORDER_KEY = 'cc-agent.sidebar.dialogueGroupOrder';
+
+// A single drop can update both the project sequence and the dialogue neighbours.
+// Other windows must reload both preferences when either storage event arrives.
+export function affectsSidebarProjectOrder(key: string | null, ownerId: string | null): boolean {
+  return key === null || key === PROJECT_ORDER_KEY || (ownerId !== null && (
+    key === sidebarOwnerStorageKey(MANUAL_PROJECT_ORDER_KEY, ownerId) ||
+    key === sidebarOwnerStorageKey(DIALOGUE_GROUP_ORDER_KEY, ownerId)
+  ));
+}
 
 export type FilterStatus = 'active' | 'archived' | 'all';
 /**

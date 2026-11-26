@@ -1,3 +1,4 @@
+import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
 import { deviceDisplayName } from '@/lib/deviceName';
 import { isCindyMakeFamilySource } from '../../../../../shared/cindyMakeMerge';
 /**
@@ -104,6 +105,7 @@ import {
   type MainListPriorityContext,
   type ViewedPriorityHoldState,
 } from '../../lib/mainListModel';
+import { DIALOGUE_SORT_ID, entrySortId, isSortableEntry, placeDialogueGroup, useDialogueGroupOrder } from '../../hooks/useDialogueGroupOrder';
 import { useMainListEntries } from '../../hooks/useMainListEntries';
 import { sidebarPriorityContext } from '../../lib/sidebarPriorityContext';
 import { useViewedPriorityHold } from '../../hooks/useViewedPriorityHold';
@@ -149,7 +151,7 @@ const CindyMakeCreateDialog = lazy(() =>
 
 /** 手动排序只从项目标题行起手。点击折叠仍走标题行；SortableJS 的
  *  fallbackTolerance + ignoreNextClick 把点击和拖拽分开。 */
-const MANUAL_PROJECT_SORT_HANDLE = '[data-project-header]';
+const MANUAL_PROJECT_SORT_HANDLE = '[data-project-header], [data-dialogue-sort-handle]';
 
 /** 标题行里的按钮、以及子任务区,都不能当成"拖整个项目"的起点。 */
 const MANUAL_PROJECT_SORT_FILTER = 'button, input, textarea, select, a, [data-no-drag]';
@@ -357,23 +359,16 @@ export function ProjectsSection({
   const mainSessionVariant: 'text' | 'list' = mainViewMode === 'list' ? 'list' : 'text';
   // SortableList 只在自定义项目顺序且按项目分组时挂载。
   // 折叠溢出且未点「显示全部」时禁用，避免只重排可见前缀。
-  const projectOrderScope = projectOrderWriteScopeForSelection(selectedMachineForOrder);
-  const hostSnapshotForDisplay =
-    projectOrderScope.kind === 'host' && projectOrderScope.deviceId === null
-      ? localHostProjectOrder.snapshot
-      : projectOrderScope.kind === 'host' && projectOrderScope.deviceId
-        ? remoteHostProjectOrders.orders.get(projectOrderScope.deviceId)
-        : undefined;
-  const displayedProjectOrder = resolveDisplayedProjectOrder(
-    projectOrderScope,
-    hostSnapshotForDisplay,
-    filter,
-    projectOrderScope.kind === 'host' && projectOrderScope.deviceId === null
-      ? localHostProjectOrder.snapshot.manualProjectOrder
-      : projectOrderScope.kind === 'host' && projectOrderScope.deviceId
-        ? (controllerManualOrderForDevice(projectOrderScope.deviceId, hostSnapshotForDisplay) ?? [])
-        : [],
-  );
+  const { projectOrder, manualProjectOrder } = filter;
+  const displayedProjectOrder = useMemo(() => {
+    const scope = projectOrderWriteScopeForSelection(selectedMachineForOrder);
+    const viewer = { projectOrder, manualProjectOrder };
+    if (scope.kind === 'viewer') return resolveDisplayedProjectOrder(scope, undefined, viewer, []);
+    const deviceId = scope.deviceId;
+    const snapshot = deviceId === null ? localHostProjectOrder.snapshot : remoteHostProjectOrders.orders.get(deviceId);
+    const hostOrder = deviceId === null ? snapshot?.manualProjectOrder : controllerManualOrderForDevice(deviceId, snapshot);
+    return resolveDisplayedProjectOrder(scope, snapshot, viewer, hostOrder ?? []);
+  }, [selectedMachineForOrder, projectOrder, manualProjectOrder, localHostProjectOrder.snapshot, remoteHostProjectOrders.orders]);
   const customProjectOrder =
     filter.groupBy === 'project' && displayedProjectOrder.projectOrder === 'custom';
   const projectDragEnabled = customProjectOrder;
@@ -388,10 +383,11 @@ export function ProjectsSection({
     new Set(),
   );
 
-  const getProjectId = useCallback((p: ProjectNodeData) => p.projectKey, []);
+  const dialogueOrder = useDialogueGroupOrder(customProjectOrder && filter.groupDialogue);
+  const orderScope = (section: string) => JSON.stringify([Array.isArray(selectedMachineForOrder) ? [...selectedMachineForOrder].sort() : selectedMachineForOrder, section]);
 
   const handleReorder = useCallback(
-    (visibleNewOrder: string[]) => {
+    (visibleNewOrder: string[], onApplied?: () => void) => {
       // SortableList 给我们的是当前 **可见** projects 的新顺序。机器 / vendor / 项目过滤态下,
       // 不可见的 project(其它机器 / 被过滤掉的)必须**保持原位** —— 与置顶拖拽同一套「原位 merge」
       // 语义(mergeVisibleReorder),而不是把它们甩到末尾(否则切回「所有」时其它机器项目的相对
@@ -413,53 +409,32 @@ export function ProjectsSection({
         filter.setManualProjectOrder(merged, projectKeysForOrderBaseline);
         if (filter.projectOrder !== 'custom') filter.setProjectOrder('custom');
       };
-      if (
-        projectOrderWriteLedger(scope, hostSnapshot) === 'host' &&
-        scope.kind === 'host' &&
-        scope.deviceId === null
-      ) {
-        const localKeys = projectKeysForOrderBaseline.filter((key) => key.startsWith('local:'));
-        const fullOrder = normalizeManualProjectOrder(
-          localHostProjectOrder.snapshot.manualProjectOrder,
-          localKeys,
-          localPlatform,
-        );
-        const next = mergeVisibleReorder(fullOrder, visibleNewOrder, projectComparisonKey);
-        void localHostProjectOrder
-          .apply({
-            manualProjectOrder: next,
-            projectOrder: 'custom',
-          })
-          .then((result) => {
-            if (result.kind === 'unavailable') persistViewer(visibleNewOrder);
-          });
+      if (scope.kind === 'viewer' || projectOrderWriteLedger(scope, hostSnapshot) === 'viewer') {
+        persistViewer(visibleNewOrder);
+        onApplied?.();
         return;
       }
-      if (
-        projectOrderWriteLedger(scope, hostSnapshot) === 'host' &&
-        scope.kind === 'host' &&
-        scope.deviceId
-      ) {
-        const deviceId = scope.deviceId;
-        const remoteKeys = projectKeysForOrderBaseline.filter((key) =>
-          key.startsWith(`device:${encodeURIComponent(deviceId)}:`),
-        );
-        const current =
-          controllerManualOrderForDevice(deviceId, remoteHostProjectOrders.orders.get(deviceId)) ??
-          [];
-        const fullOrder = normalizeManualProjectOrder(current, remoteKeys, localPlatform);
-        const next = mergeVisibleReorder(fullOrder, visibleNewOrder, projectComparisonKey);
-        void remoteHostProjectOrders
-          .apply(deviceId, {
-            manualProjectOrder: next,
-            projectOrder: 'custom',
-          })
-          .then((result) => {
-            if (result.kind === 'unavailable') persistViewer(visibleNewOrder);
-          });
-        return;
-      }
-      persistViewer(visibleNewOrder);
+
+      const owner = getDataOwnerGeneration();
+      const deviceId = scope.deviceId;
+      const prefix = deviceId === null ? 'local:' : `device:${encodeURIComponent(deviceId)}:`;
+      const hostKeys = projectKeysForOrderBaseline.filter(key => key.startsWith(prefix));
+      const current = deviceId === null
+        ? localHostProjectOrder.snapshot.manualProjectOrder
+        : controllerManualOrderForDevice(deviceId, hostSnapshot) ?? [];
+      const fullOrder = normalizeManualProjectOrder(current, hostKeys, localPlatform);
+      const request = {
+        manualProjectOrder: mergeVisibleReorder(fullOrder, visibleNewOrder, projectComparisonKey),
+        projectOrder: 'custom' as const,
+      };
+      const applied = deviceId === null
+        ? localHostProjectOrder.apply(request)
+        : remoteHostProjectOrders.apply(deviceId, request);
+      void applied.then(result => {
+        if (!isDataOwnerGenerationCurrent(owner) || result.kind === 'transient') return;
+        if (result.kind === 'unavailable') persistViewer(visibleNewOrder);
+        onApplied?.();
+      });
     },
     [
       filter,
@@ -699,15 +674,12 @@ export function ProjectsSection({
     visibleEntries: visibleMixedEntries,
     isOverflowing: projectsOverflow,
     totalCount: projectsTotal,
-  } = collapseEntries(mixedEntries, showAllProjects);
-  // SortableList 拖拽仍只作用于项目行(手动排序收窄裁决,设计文档 §9.3):
-  // 混排下把可见条目切成「连续的项目行 run + 其间的散排条目」,项目 run 内可拖。
-  const visibleProjectNodes = visibleMixedEntries
-    .filter(
-      (entry): entry is Extract<MainListEntry, { kind: 'project' }> => entry.kind === 'project',
-    )
-    .map((entry) => entry.project);
-
+  } = collapseEntries(
+    customProjectOrder && !deviceGroupingActive
+      ? placeDialogueGroup(mixedEntries, dialogueOrder.positions.get(orderScope(DIALOGUE_GROUP_ALL_KEY)), projectComparisonKey)
+      : mixedEntries,
+    showAllProjects,
+  );
   // 第一次切到手动时,必须用切换前的视觉序(recency / priority 混排结果),
   // 不能在 custom+空序重算后再采集——那时项目行已按上游入参序排好,优先级视觉会丢。
   // 可见子集还要 merge 回全量 baseline,避免隐藏项目被甩到末尾。
@@ -747,8 +719,7 @@ export function ProjectsSection({
     return splitEntriesByDevice(mixedEntries, [...(remoteDeviceIndex?.keys() ?? [])], {
       onlineDeviceIds: onlineDeviceSectionIds(remoteDeviceIndex, selectedMachineId),
       sortBy: filter.sortBy,
-      projectOrder: filter.projectOrder,
-      manualProjectOrder: filter.manualProjectOrder,
+      ...displayedProjectOrder,
       priorityContext,
     });
   }, [
@@ -758,8 +729,7 @@ export function ProjectsSection({
     remoteDeviceIndex,
     selectedMachineId,
     filter.sortBy,
-    filter.projectOrder,
-    filter.manualProjectOrder,
+    displayedProjectOrder,
     priorityContext,
   ]);
   const deviceNameSources = useMemo(() => deviceSections.flatMap((section) => section.deviceId ? [{
@@ -997,9 +967,10 @@ export function ProjectsSection({
     dialogueDeviceTarget?: DialogueDeviceTarget | null,
   ): ReactNode => {
     if (entry.kind === 'session' || entry.kind === 'automation-group') {
-      return (
+      const key = entry.kind === 'session' ? sessionRowKey(entry.session) : `automation-group:${entry.group.id}`;
+      const rows = (
         <SessionEntryRows
-          key={entry.kind === 'session' ? sessionRowKey(entry.session) : `automation-group:${entry.group.id}`}
+          key={key}
           entries={[entry]}
           activeSessionId={activeSessionId}
           runningSessionIds={runningSessionIds}
@@ -1025,6 +996,8 @@ export function ProjectsSection({
           showFirstDivider={false}
         />
       );
+      // Inside the manual project sorter these tasks still own their whole-row native drag.
+      return customProjectOrder ? <div key={key} data-no-drag>{rows}</div> : rows;
     }
     if (entry.kind === 'automations-group') {
       const groupKey = `${AUTOMATIONS_GROUP_KEY}:${dialogueGroupKey}`;
@@ -1090,6 +1063,7 @@ export function ProjectsSection({
           sessions={entry.sessions}
           lamp={lampAgg(entry.sessions)}
           foldExemptSessionIds={lampFoldExemptIds}
+          sortableHeader={!isMake && customProjectOrder}
           groupTitle={isMake ? t('settings.cindyMake.title') : undefined}
           headerMenu={
             isMake ? undefined : (
@@ -1141,6 +1115,41 @@ export function ProjectsSection({
     }
     return null;
   };
+
+  function sortableGroups(entries: readonly MainListEntry[], groupKey: string, overflow: boolean,
+    target?: DialogueDeviceTarget | null) {
+    // Keep fixed rows in their original visual slots until the user moves the group.
+    // Only project and dialogue headers match the handle.
+    const items = entries.filter(entry => entry.kind !== 'cindy-make-group');
+    const sortableIds = items.filter(isSortableEntry).map(entrySortId);
+    const eligible = new Set(sortableIds);
+    return <SortableList
+      items={items}
+      getId={entry => {
+        if (isSortableEntry(entry)) return entrySortId(entry);
+        if (entry.kind === 'session') return 'session:' + sessionRowKey(entry.session);
+        if (entry.kind === 'automation-group') return 'automation:' + entry.group.id;
+        return entry.kind;
+      }}
+      onReorder={ids => {
+        const ordered = ids.filter(id => eligible.has(id));
+        if (ordered.every((id, i) => id === sortableIds[i])) return;
+        const projectIds = ordered.filter(id => id !== DIALOGUE_SORT_ID);
+        const priorProjectIds = sortableIds.filter(id => id !== DIALOGUE_SORT_ID);
+        const projectsChanged = projectIds.some((id, i) => id !== priorProjectIds[i]);
+        const savePlacement = dialogueOrder.preparePlacement(orderScope(groupKey), sortableIds, ordered, projectComparisonKey, !projectsChanged);
+        if (projectsChanged) handleReorder(projectIds, savePlacement);
+        else savePlacement?.();
+      }}
+      disabled={!projectDragEnabled || overflow}
+      reducedMotion={reducedMotion}
+      handle={MANUAL_PROJECT_SORT_HANDLE}
+      filter={MANUAL_PROJECT_SORT_FILTER}
+      className="flex flex-col gap-1"
+      renderItem={entry => entry.kind === 'project'
+        ? renderProjectNode(entry.project) : renderNonProjectEntry(entry, groupKey, target)}
+    />;
+  }
 
   return (
     <div className="flex flex-col gap-0.5 w-full">
@@ -1194,27 +1203,12 @@ export function ProjectsSection({
           ) : null}
           {/* 混排渲染(D / E 期):
               - 自定义项目顺序:Cindy Make 固定在前,项目段走 SortableList,
-                其后是散排对话 / 对话组。折叠+溢出时禁用拖拽,点「显示全部」后再拖。
+                「对话」组可与项目一起拖动，散排对话保持原排序。折叠+溢出时禁用拖拽,点「显示全部」后再拖。
                 可与设备分组叠加:每段各自拖本段项目。
               - 按最近活动:按 deviceSections 切段(设备分组开启时),段内项目行与
                 散排对话按任务排序口径交错,项目行不可拖。 */}
           {customProjectOrder && !deviceGroupingActive ? (
-            <>
-              <SortableList
-                items={visibleProjectNodes}
-                getId={getProjectId}
-                onReorder={handleReorder}
-                disabled={!projectDragEnabled || (projectsOverflow && !showAllProjects)}
-                reducedMotion={reducedMotion}
-                handle={MANUAL_PROJECT_SORT_HANDLE}
-                filter={MANUAL_PROJECT_SORT_FILTER}
-                className="flex flex-col gap-1"
-                renderItem={(project) => renderProjectNode(project)}
-              />
-              {visibleMixedEntries
-                .filter((entry) => entry.kind !== 'project' && entry.kind !== 'cindy-make-group')
-                .map((entry) => renderNonProjectEntry(entry, DIALOGUE_GROUP_ALL_KEY))}
-            </>
+            sortableGroups(visibleMixedEntries, DIALOGUE_GROUP_ALL_KEY, projectsOverflow && !showAllProjects)
           ) : deviceGroupingActive ? (
             <div className="flex flex-col gap-1">
               {deviceSections.map((section) => {
@@ -1331,18 +1325,14 @@ export function ProjectsSection({
                             「显示全部」的作用域同样是段内(expandedDeviceSections)。 */}
                         {(() => {
                           const sectionView = collapseEntries(
-                            section.entries,
+                            customProjectOrder
+                              ? placeDialogueGroup(section.entries, dialogueOrder.positions.get(orderScope(key)), projectComparisonKey)
+                              : section.entries,
                             expandedDeviceSections.has(key),
                           );
                           const sectionDialogueTarget = section.deviceId
                             ? { deviceId: section.deviceId, deviceName: name }
                             : null;
-                          const sectionProjects = sectionView.visibleEntries
-                            .filter(
-                              (entry): entry is Extract<MainListEntry, { kind: 'project' }> =>
-                                entry.kind === 'project',
-                            )
-                            .map((entry) => entry.project);
                           return (
                             <>
                               {customProjectOrder ? (
@@ -1352,30 +1342,8 @@ export function ProjectsSection({
                                     .map((entry) =>
                                       renderNonProjectEntry(entry, key, sectionDialogueTarget),
                                     )}
-                                  <SortableList
-                                    items={sectionProjects}
-                                    getId={getProjectId}
-                                    onReorder={handleReorder}
-                                    disabled={
-                                      !projectDragEnabled ||
-                                      (sectionView.isOverflowing &&
-                                        !expandedDeviceSections.has(key))
-                                    }
-                                    reducedMotion={reducedMotion}
-                                    handle={MANUAL_PROJECT_SORT_HANDLE}
-                                    filter={MANUAL_PROJECT_SORT_FILTER}
-                                    className="flex flex-col gap-1"
-                                    renderItem={(project) => renderProjectNode(project)}
-                                  />
-                                  {sectionView.visibleEntries
-                                    .filter(
-                                      (entry) =>
-                                        entry.kind !== 'project' &&
-                                        entry.kind !== 'cindy-make-group',
-                                    )
-                                    .map((entry) =>
-                                      renderNonProjectEntry(entry, key, sectionDialogueTarget),
-                                    )}
+                                  {sortableGroups(sectionView.visibleEntries, key,
+                                    sectionView.isOverflowing && !expandedDeviceSections.has(key), sectionDialogueTarget)}
                                 </>
                               ) : (
                                 sectionView.visibleEntries.map((entry) =>
@@ -1469,6 +1437,7 @@ export function SessionGroupNode({
   onCreateDialogue,
   groupIcon,
   groupTitle,
+  sortableHeader = false,
   createLabel,
   isCreateDisabled,
   createDisabledReason,
@@ -1505,6 +1474,7 @@ export function SessionGroupNode({
    */
   groupIcon?: ReactNode;
   groupTitle?: string;
+  sortableHeader?: boolean;
   /** 新建按钮的 tooltip / aria 文案。省略 = 「新任务」。 */
   createLabel?: string;
   /**
@@ -1540,12 +1510,13 @@ export function SessionGroupNode({
   const Chevron = collapsed ? ChevronRight : ChevronDown;
   const showRunning = collapsed && lamp?.running;
   return (
-    <div className="relative flex w-full select-none flex-col" data-no-drag>
+    <div className="relative flex w-full select-none flex-col" data-no-drag={sortableHeader ? undefined : true}>
       {/* 段头:与 ProjectNode Header 同款规格(h-8 药丸 hover / pl-3 pr-2 /
           gap-2.5 / 15px 图标 / meta 灰 font-normal),仅图标换 MessagesSquare、
           菜单内容由调用方提供，固定分类不继承项目专属操作。 */}
       <div
         ref={headerRef}
+        data-dialogue-sort-handle={sortableHeader || undefined}
         role="button"
         tabIndex={0}
         aria-expanded={!collapsed}

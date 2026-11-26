@@ -75,6 +75,7 @@ import {
   loadLastActivity,
   loadSortBy,
   loadPinnedSortBy,
+  affectsSidebarProjectOrder,
   persistPinnedSortBy,
   PINNED_SORT_BY_KEY,
   type PinnedSortBy,
@@ -326,6 +327,9 @@ export function useSidebarFilter(
   const [projectOrder, setProjectOrderState] = useState<FilterProjectOrder>(() =>
     loadProjectOrder(),
   );
+  const [manualProjectOrder, setManualProjectOrderState] = useState<string[]>(() =>
+    loadManualProjectOrder(ownerId),
+  );
   const [pinnedSortBy, setPinnedSortByState] = useState(loadPinnedSortBy);
   const pinnedSortByRef = useRef(pinnedSortBy);
   const applyPinnedSortBy = useCallback((next: PinnedSortBy) => {
@@ -341,17 +345,21 @@ export function useSidebarFilter(
     persistPinnedSortBy(next);
   }, [applyPinnedSortBy]);
   useEffect(() => {
+    const refreshProjectOrder = () => {
+      setProjectOrderState(loadProjectOrder());
+      const next = loadManualProjectOrder(ownerId);
+      setManualProjectOrderState(prev => sameStringArray(prev, next) ? prev : next);
+    };
     const onStorage = (event: StorageEvent) => {
+      if (affectsSidebarProjectOrder(event.key, ownerId)) refreshProjectOrder();
       if (event.key === PINNED_SORT_BY_KEY || event.key === null) {
         applyPinnedSortBy(loadPinnedSortBy());
       }
     };
     window.addEventListener('storage', onStorage);
+    refreshProjectOrder();
     return () => window.removeEventListener('storage', onStorage);
-  }, [applyPinnedSortBy]);
-  const [manualProjectOrder, setManualProjectOrderState] = useState<string[]>(() =>
-    loadManualProjectOrder(ownerId),
-  );
+  }, [applyPinnedSortBy, ownerId]);
   const [manualPinnedOrder, setManualPinnedOrderState] = useState<string[]>(
     () => loadedPinned.order,
   );
