@@ -7122,7 +7122,14 @@
           "routeUnavailable": "利用不可",
           "routeMeasuring": "計測中…",
           "routeDirectUnavailableHint": "現在のネットワークではこのデバイスに直接接続できません",
-          "routePreferenceFailed": "ルートの切り替えに失敗しました。もう一度お試しください。"
+          "routePreferenceFailed": "ルートの切り替えに失敗しました。もう一度お試しください。",
+          "autoRule": {
+            "title": "自動ルーティング規則",
+            "faster": "より低遅延な経路を優先し、差がわずかな場合は直接接続を選びます。",
+            "thresholds": "リレーが直接接続より 25–50 ms 以上速い場合にリレーへ切替；直接接続が差 15 ms 以内に回復すると戻ります。",
+            "cooldown": "通常切替は 30 秒のクールダウンあり；現在の経路が大幅に悪化（2 倍以上かつ 100 ms 以上の遅延差）すると即座に切り替えます。",
+            "peerOverride": "相手側が直接接続/リレーを固定している場合や旧バージョンの場合は、相手側の設定や機能が優先されます。"
+          }
         },
         "protocol": {
           "agentNet": "Agent-Net",
@@ -7269,6 +7276,99 @@
             "noUpdate": "「{{name}}」にインストール可能な更新はありません。",
             "busy": "「{{name}}」では別の更新が進行中です。しばらくしてから再試行してください。",
             "failed": "「{{name}}」の Cindy を更新できませんでした。"
+          }
+        },
+        "tabs": {
+          "aria": "トポロジー表示",
+          "devices": "デバイス接続",
+          "providers": "リモートプロバイダー"
+        },
+        "providers": {
+          "empty": "現在実行中のリモートプロバイダータスクはありません。他のコンピュータや共有プロバイダーでタスクを実行すると、実行中の経路とリレーがここに表示されます。",
+          "noMatch": "条件に一致するタスク、マシン、またはリレーはありません。",
+          "searchPlaceholder": "タスク、マシン、リレーを検索…",
+          "clearFilter": "フィルターをクリア",
+          "expand": "展開",
+          "collapse": "折りたたむ",
+          "groupTitle": "{{provider}} プロバイダーグループ",
+          "groupCount": "計 {{count}} 台",
+          "groupIdleSummary": "他のメンバー {{count}} 台：オンライン {{online}} · オフライン {{offline}}",
+          "filter": {
+            "aria": "タスク状態で絞り込む",
+            "all": "関連タスク ({{count}})",
+            "running": "実行中のみ ({{count}})"
+          },
+          "columns": {
+            "tasks": "マイタスク",
+            "path": "経路",
+            "machines": "リモートプロバイダーマシン"
+          },
+          "usage": {
+            "remoteModel": "リモートモデル",
+            "remoteTask": "リモートタスク"
+          },
+          "bundle": {
+            "mixed": "実行中 {{running}} · 待機 {{ready}}",
+            "runningOnly": "実行中 {{running}}",
+            "readyOnly": "待機 {{ready}}",
+            "countBadge": "計 {{count}}",
+            "popoverTitle": "{{name}} のタスク ({{count}})"
+          },
+          "badge": {
+            "own": "自分のPC",
+            "groupMember": "グループ",
+            "share": "共有プロバイダー",
+            "shareShort": "共有",
+            "shareGroup": "共有グループ · {{count}} 台",
+            "shareGroupShort": "共有組 · {{count}} 台"
+          },
+          "relayRole": {
+            "officialShort": "公式",
+            "selfHostedShort": "自前",
+            "sharerRelayShort": "共有元リレー",
+            "officialFull": "Cindy 公式リレー",
+            "selfHostedFull": "自前リレー",
+            "sharerRelayFull": "共有元の自前リレー"
+          },
+          "status": {
+            "ready": "オンライン",
+            "busy": "ビジー",
+            "paused": "一時停止",
+            "idle": "待機中",
+            "standby": "待機中"
+          },
+          "machineLine": {
+            "live": "{{flow}} · {{count}} タスク",
+            "ready": "準備完了 · {{count}} タスク"
+          },
+          "popover": {
+            "models": "使用中のモデル",
+            "tasksCount": "紐づくタスク ({{count}})",
+            "clickToOpenHint": "クリックで開く",
+            "relayHost": "リレーホスト",
+            "relayRegion": "リージョン",
+            "relayHop": "リレーまで",
+            "relayLoad": "経由中",
+            "relayLoadValue": "{{machines}} 台 · {{tasks}} タスク"
+          },
+          "idleStrip": {
+            "summary": "他に {{count}} 台のオンラインリモートプロバイダーが待機中です",
+            "show": "待機プロバイダーを表示",
+            "hide": "待機プロバイダーを隠す"
+          },
+          "stats": {
+            "empty": "実行中のリモートプロバイダータスクはありません",
+            "tasks": "{{total}} タスク",
+            "tasksWithRunning": "{{total}} タスク（実行中 {{running}}）",
+            "machines": "{{active}} 台のプロバイダー",
+            "machinesWithTotal": "稼働 {{active}} / 計 {{total}} 台のプロバイダー",
+            "relays": "{{count}} リレー"
+          },
+          "legend": {
+            "live": "青い破線：通信中",
+            "ready": "緑の実線：Agent-Net 接続済み",
+            "busy": "オレンジ点：タスク実行中 / ビジー",
+            "error": "赤い点線：無応答または一時停止"
           }
         }
       }
@@ -11992,6 +12092,8 @@
         "loadEarlierFailed": "以前のメッセージを読み込めませんでした。もう一度お試しください",
         "emptyTitle": "このグループにはまだメッセージがありません",
         "emptyDescription": "話しかけると仲間たちが会話を続けます。@ で仲間を指名すると、その仲間だけが返信します。",
+        "emptyDescriptionWithAssistant": "@Cindy に話しかけたり、右上の招待メニューから友だちを招待したり、仲間を追加したりできます。",
+        "emptyDescriptionInvite": "右上の招待メニューから友だちを招待したり、仲間を追加したりできます。",
         "roundEnded": "仲間たちの発言が終わりました",
         "stepTag": "ステップ {{count}}",
         "sending": "送信中",
@@ -12323,7 +12425,7 @@
         "loginRequired": "ログインしてから再試行してください。",
         "requestFailed": "チャットサービスに接続できません。しばらくしてから再試行してください。",
         "copyFailed": "コピーできませんでした。リンクを選択して手動でコピーしてください。",
-        "createDescription": "仲間を選ぶか、先にグループを作成してから友達を招待できます。",
+        "createDescription": "グループの作成後に、友だちを招待したり、仲間を追加したりできます。",
         "settings": {
           "notifications": {
             "title": "メッセージ通知",
@@ -16171,7 +16273,7 @@
         "groupSwitch": "別のパソコンに自動で切り替えて続行しました"
       },
       "autoResumeSeparator": {
-        "label": "接続が中断されたため、自動的に再開しました"
+        "label": "応答が空だったため、自動で再開しました"
       },
       "autoResumePending": {
         "label": "再接続中",
@@ -19183,6 +19285,7 @@
     }
   },
   "commandPalette": {
+    "buddyNewHint": "仲間の設定で「{{restart}}」を選ぶと、作業コンテキストを再構築し、メッセージ履歴を保持できます。別の話題を話し合うには、メッセージの操作から「{{startTopic}}」を選んでください。",
     "viewSkillDetails": "スキルの詳細を見る",
     "projectSkillNotLoaded": "現在の Pi タスクでは、このプロジェクト Skill はまだ読み込まれていません。新しいタスクでは自動的に読み込みを試みます。",
     "pluginSkillSetup": {

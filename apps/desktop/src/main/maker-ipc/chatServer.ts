@@ -160,9 +160,10 @@ interface Running {
   /** The conversation this turn answers in (see executionLane); unknown until its source is read. */
   lane?: string;
   laneLookup?: Promise<void>;
+  replyQuote?: { messageId: string; members: Member[]; multiple: boolean };
   attachmentAfter?: string;
   textProgress?: { scope: string; after: string; seen: Map<string, string> };
-  settlement?: { terminal: BotGroupLaneTerminal; cancelled?: boolean; payload?: Record<string, unknown>; reply?: { sourceText: string; text: string; attachments: ChatUploadAttachment[] }; fileReply?: Awaited<ReturnType<typeof prepareChatReplyFiles>>; retryAt: number; keepLease?: boolean; refused?: boolean };
+  settlement?: { terminal: BotGroupLaneTerminal; cancelled?: boolean; payload?: Record<string, unknown>; autoQuote?: ReturnType<typeof buildBotGroupQuoteCard>; reply?: { sourceText: string; text: string; attachments: ChatUploadAttachment[] }; fileReply?: Awaited<ReturnType<typeof prepareChatReplyFiles>>; retryAt: number; keepLease?: boolean; refused?: boolean };
   delivery?: Promise<void>;
   plan?: ServerPlan;
   workspace?: { projectDir?: string | null; workDir: string; branch: string | null; ownerSessionId: string | null };
@@ -2790,7 +2791,10 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
    * Only the settlement request is judged here: a later `plans`/`snapshot` read that fails must not
    * be mistaken for a refused reply and turn a published answer into a failure.
    *
-   * Before that, a server without teammate mentions (a replica not yet updated during a deploy, or
+   * An automatic quote is optional. Try without it before interpreting INVALID_INPUT as a
+   * mentions refusal, so a rejected quote does not interrupt a teammate hand-off.
+   *
+   * A server without teammate mentions (a replica not yet updated during a deploy, or
    * a rollback) refuses the unknown `mentions` field at validation, where nothing is stored: the
    * same operation is sent once more without it, so the reply is posted and wakes nobody. Once the
    * server accepts a body without `mentions`, replies stop naming teammates until `/me` is read again.
@@ -2799,6 +2803,12 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     const payload = pending.payload!;
     const attempt = () => updateExecution(run, action, payload).then(() => null, (error: unknown) => error);
     let refusal = await attempt();
+    if (contentRefusal(action, refusal) && pending.autoQuote && Array.isArray(payload.content)
+      && payload.content.includes(pending.autoQuote)) {
+      reportRefusal(run, action, refusal, payload.content, 1);
+      payload.content = payload.content.filter(block => block !== pending.autoQuote);
+      refusal = await attempt();
+    }
     if (action === 'complete' && 'mentions' in payload && invalidInput(refusal)) {
       deps.log?.warn('Group reply mentions refused', { groupId: run.execution.conversation_id,
         ...chatErrorDiagnostic(refusal), ...refusalDetails(refusal) });
@@ -2954,6 +2964,24 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
               content: [{ type: 'text', text: contentText.slice(0, 16000) || '已完成' }, ...files, botGroupProcessCard({ groupId: run.execution.conversation_id, executionId: run.execution.id, sessionId: run.sessionId, clientId: run.clientId, durationMs: run.durationMs, ...(selfDeviceId ? { deviceId: selfDeviceId } : {}) })] }),
               // A single-speaker server never chains rounds, so there is nothing to continue.
               ...(singleSpeaker || run.execution.mask_owner_id ? {} : { continueDiscussion: !run.plan && !isBotGroupNoReplyText(text) }) };
+          const blocks = pending.payload.content;
+          if (!pending.cancelled && run.replyQuote && Array.isArray(blocks) && !readBotGroupQuote(blocks)) {
+            const { messageId, members, multiple } = run.replyQuote;
+            const quote = await quoteSnapshot(run.execution.conversation_id, messageId, Promise.resolve(members), false).catch(() => undefined);
+            if (quote) {
+              if (multiple) {
+                const body = blocks.find(block => block.type === 'text');
+                if (body) body.text = t('bots.groupChat.assistant.replyingTo').replace(/{{(name|text)}}/g,
+                  (_, field: string) => field === 'name' ? quote.authorName : body.text).slice(0, 16000);
+              }
+              const card = buildBotGroupQuoteCard(quote);
+              // Chat Server limits serialized content (including card fallback) to 64 KiB.
+              if (Buffer.byteLength(JSON.stringify([card, ...blocks])) <= 64 * 1024) {
+                pending.autoQuote = card;
+                blocks.unshift(card);
+              }
+            }
+          }
         }
         if (!current() || running.get(run.execution.id) !== run || run.settlement !== pending) return;
         const action = pending.cancelled ? 'cancel' : pending.terminal.outcome === 'error' ? 'fail' : 'complete';
@@ -3101,6 +3129,31 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       displayName: member.displayName, nickname: member.nickname }));
   }
 
+  /** Only inputs actually handed to this speaker can identify what their public reply answers. */
+  function selectReplyQuote(run: Running, members: Member[], source: Message, original: Message | undefined, history: Message[]) {
+    const e = run.execution;
+    if (source.deleted || source.threadRootId !== null || source.id !== e.source_message_id || e.mask_kind === 'digest'
+      || (e.plan_id && run.plan?.kind !== 'talk')) return;
+    const recipient = e.mask_owner_id ?? e.bot_id;
+    const quote = readBotGroupQuote(source.content);
+    const notes = new Set(run.plan?.note_message_ids);
+    const inputs = notes.size ? [source, ...history.filter(m => notes.has(m.id) && m.id !== source.id && !m.deleted
+      && m.threadRootId === null && m.origin === 'user' && BigInt(m.seq) <= BigInt(e.context_seq))] : [source];
+    const latest = inputs.reduce((a, b) => BigInt(a.seq) > BigInt(b.seq) ? a : b);
+    const multiple = inputs.length > 1;
+    let target = latest;
+    if (!multiple) {
+      // A quote may have supplied the mention implicitly. If its target is gone, the
+      // stored mention alone cannot tell us the speaker explicitly addressed this actor.
+      if (quote && (!original || original.deleted || original.id !== quote.messageId
+        || original.threadRootId !== null || BigInt(original.seq) >= BigInt(source.seq))) return;
+      if (quote && original?.authorId === recipient) target = original;
+      // For personal AI, this path resolves requests with a competing quote.
+      else if (!source.mentions?.includes(recipient) || (e.mask_owner_id && !quote)) return;
+    }
+    run.replyQuote = { messageId: target.id, members, multiple };
+  }
+
   function replyMention(source: Message, run: Running) {
     if (!run.mentionable || source.authorId === run.execution.bot_id) return undefined;
     const sender = run.mentionable.find(member => member.botId === source.authorId);
@@ -3154,6 +3207,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       const quote = readBotGroupQuote(source.content);
       const quotedMessage = quote ? await readQuotedOriginal(roomId, quote.messageId, source) : undefined;
       if (!live() || run.settlement) throw new Error('STALE_EXECUTOR');
+      selectReplyQuote(run, s.members, source, quotedMessage, []);
       // Files on the request and its direct quote take priority over its displayed background.
       const { attachments, incomplete } = await downloadTaskAttachments(roomId,
         [source, ...(quotedMessage ? [quotedMessage] : []), ...attachmentSources]);
@@ -3461,6 +3515,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       const { history, source, threadRootId, thread, focusMessages, quotedMessage, attachments, missingAttachments, mediaDelivery } = await contextRead;
       if (!current()) throw new Error('OWNER_CHANGED');
       if (missingAttachments.length) void postCapabilityNotice(run, 'ATTACHMENTS_UNAVAILABLE', threadRootId ?? undefined);
+      if (source) selectReplyQuote(run, s.members, source, quotedMessage, history);
       const runtime = laneContext(lane.sessionId);
       const contextScope = JSON.stringify([s.room.id, threadRootId, run.plan?.id, execution.access_mode, execution.access_revision, execution.mask_owner_id]);
       const savedProgress = !digest && (!run.plan || run.plan.kind === 'talk') ? textProgress.get(lane.sessionId) : undefined;
@@ -4045,7 +4100,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     return !mentions.all && !mentions.allBots && target && members.some(member => member.id === target && member.state === 'joined')
       ? { ...mentions, botIds: [...new Set([...mentions.botIds, target])] } : mentions;
   }
-  function resolveMentions(members: Member[], mentions: BotGroupMention) {
+  function resolveMentions(members: Member[], mentions: BotGroupMention, conversationKind?: 'direct') {
     const joined = members.filter(m => m.state === 'joined');
     // A stale explicit target must never become an unaddressed message. Check
     // every pick, including mixed valid/stale picks, before expanding Everyone.
@@ -4054,8 +4109,9 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       if (!member) throw new Error('MENTION_UNAVAILABLE');
       return member.id;
     });
-    const recipients = [...named, ...joined.filter(m => (mentions.all && m.kind === 'human') || (mentions.allBots && m.kind === 'bot')).map(m => m.id)];
-    const resolved = [...new Set(recipients.filter(target => target !== selfId))];
+    const explicit = conversationKind === 'direct' ? named.filter(id => id !== selfId) : named;
+    const recipients = [...explicit, ...joined.filter(m => m.id !== selfId && ((mentions.all && m.kind === 'human') || (mentions.allBots && m.kind === 'bot'))).map(m => m.id)];
+    const resolved = [...new Set(recipients)];
     // Old servers have no broadcast marker: keep an empty human broadcast directed.
     return mentions.all && !resolved.length && !supportsMentionAudiences ? [selfId] : resolved;
   }
@@ -4539,7 +4595,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     let result: { id: string };
     let posting = false;
     try {
-      const mentions = recovered ? [] : knownQuote?.recipients ?? (membersRead ? resolveMentions(members, i.mentions) : []);
+      const mentions = recovered ? [] : knownQuote?.recipients ?? (membersRead ? resolveMentions(members, i.mentions, i.conversationKind) : []);
       const uploaded = recovered ? [] : await media.upload(i.groupId, i.clientId, prepared?.ok ? prepared.attachments : [], selfId);
       // Cached only once the message may reach the server; a failure before this stored nothing.
       if (quote) {

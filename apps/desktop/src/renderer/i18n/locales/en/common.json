@@ -7165,7 +7165,14 @@
           "routeUnavailable": "Unavailable",
           "routeMeasuring": "Measuring…",
           "routeDirectUnavailableHint": "Direct connection is currently unavailable on this network",
-          "routePreferenceFailed": "Could not switch route. Try again."
+          "routePreferenceFailed": "Could not switch route. Try again.",
+          "autoRule": {
+            "title": "Auto-routing rules",
+            "faster": "Picks the lower-latency path, preferring direct when both are nearly as fast.",
+            "thresholds": "Switches to relay when relay is faster by 25–50 ms+; returns to direct once direct is within 15 ms of relay.",
+            "cooldown": "Uses a 30s cooldown to prevent flapping; bypasses cooldown immediately on severe degradation (≥ 2× slower and ≥ 100 ms worse).",
+            "peerOverride": "If the peer manually pinned direct/relay or runs an older version, the peer’s setting or capability takes precedence."
+          }
         },
         "protocol": {
           "agentNet": "Agent-Net",
@@ -7312,6 +7319,99 @@
             "noUpdate": "No installable update is available on “{{name}}”.",
             "busy": "“{{name}}” is already running an update. Try again shortly.",
             "failed": "Could not update Cindy on “{{name}}”."
+          }
+        },
+        "tabs": {
+          "aria": "Topology view",
+          "devices": "Device connections",
+          "providers": "Remote providers"
+        },
+        "providers": {
+          "empty": "No remote provider tasks are running right now. When a task runs on another computer or shared provider, its live path and relay will appear here.",
+          "noMatch": "No tasks, machines, or relays match the current filter.",
+          "searchPlaceholder": "Search tasks, machines, or relays…",
+          "clearFilter": "Clear filter",
+          "expand": "Expand",
+          "collapse": "Collapse",
+          "groupTitle": "{{provider}} provider group",
+          "groupCount": "{{count}} total",
+          "groupIdleSummary": "{{count}} other members: {{online}} online · {{offline}} offline",
+          "filter": {
+            "aria": "Filter by task state",
+            "all": "All linked tasks ({{count}})",
+            "running": "Running only ({{count}})"
+          },
+          "columns": {
+            "tasks": "My tasks",
+            "path": "Route",
+            "machines": "Remote provider machines"
+          },
+          "usage": {
+            "remoteModel": "Remote model",
+            "remoteTask": "Remote task"
+          },
+          "bundle": {
+            "mixed": "{{running}} running · {{ready}} ready",
+            "runningOnly": "{{running}} running",
+            "readyOnly": "{{ready}} ready",
+            "countBadge": "{{count}} total",
+            "popoverTitle": "Tasks on {{name}} ({{count}})"
+          },
+          "badge": {
+            "own": "My computer",
+            "groupMember": "Group node",
+            "share": "Shared provider",
+            "shareShort": "Shared",
+            "shareGroup": "Shared group · {{count}}",
+            "shareGroupShort": "Group · {{count}}"
+          },
+          "relayRole": {
+            "officialShort": "Official",
+            "selfHostedShort": "Self-hosted",
+            "sharerRelayShort": "Sharer's relay",
+            "officialFull": "Cindy official relay",
+            "selfHostedFull": "Self-hosted relay",
+            "sharerRelayFull": "Sharer's self-hosted relay"
+          },
+          "status": {
+            "ready": "Online",
+            "busy": "Busy",
+            "paused": "Paused",
+            "idle": "Idle",
+            "standby": "Standby"
+          },
+          "machineLine": {
+            "live": "{{flow}} · {{count}} tasks",
+            "ready": "Ready · {{count}} tasks"
+          },
+          "popover": {
+            "models": "Active models",
+            "tasksCount": "Linked tasks ({{count}})",
+            "clickToOpenHint": "Click to open",
+            "relayHost": "Relay host",
+            "relayRegion": "Region",
+            "relayHop": "Local to relay",
+            "relayLoad": "Via this relay",
+            "relayLoadValue": "{{machines}} machines · {{tasks}} tasks"
+          },
+          "idleStrip": {
+            "summary": "{{count}} other online remote providers are currently idle",
+            "show": "Show idle providers",
+            "hide": "Hide idle providers"
+          },
+          "stats": {
+            "empty": "No running remote provider tasks",
+            "tasks": "{{total}} tasks",
+            "tasksWithRunning": "{{total}} tasks ({{running}} running)",
+            "machines": "{{active}} provider machines",
+            "machinesWithTotal": "{{active}} active / {{total}} provider machines",
+            "relays": "{{count}} relays"
+          },
+          "legend": {
+            "live": "Flowing blue dashes: exchanging messages",
+            "ready": "Solid green: Agent-Net link ready",
+            "busy": "Orange dot: task running / machine busy",
+            "error": "Red dotted: unresponsive or paused"
           }
         }
       }
@@ -12038,6 +12138,8 @@
         "loadEarlierFailed": "Couldn’t load earlier messages. Try again.",
         "emptyTitle": "No messages in this group yet",
         "emptyDescription": "Say something to get started and your buddies will join in. @ a buddy to have only them reply.",
+        "emptyDescriptionWithAssistant": "Mention @Cindy or use the Invite menu in the top right to invite people or add buddies.",
+        "emptyDescriptionInvite": "Use the Invite menu in the top right to invite people or add buddies.",
         "roundEnded": "Buddies are done",
         "stepTag": "Step {{count}}",
         "sending": "Sending",
@@ -12369,7 +12471,7 @@
         "loginRequired": "Sign in to your account and try again.",
         "requestFailed": "The chat service is unavailable. Try again shortly.",
         "copyFailed": "Could not copy. Select the link and copy it manually.",
-        "createDescription": "Choose companions, or create the group first and invite people to join.",
+        "createDescription": "After creating the group, you can invite people and add buddies.",
         "settings": {
           "notifications": {
             "title": "Message notifications",
@@ -16237,7 +16339,7 @@
         "groupSwitch": "Continued on another computer automatically"
       },
       "autoResumeSeparator": {
-        "label": "Connection interrupted — resumed automatically"
+        "label": "Empty response — resumed automatically"
       },
       "autoResumePending": {
         "label": "Reconnecting",
@@ -19259,6 +19361,7 @@
     }
   },
   "commandPalette": {
+    "buddyNewHint": "In buddy settings, use “{{restart}}” to rebuild the working context and keep your message history. For a separate discussion, choose “{{startTopic}}” from a message’s actions.",
     "viewSkillDetails": "View skill details",
     "projectSkillNotLoaded": "This Pi task hasn't loaded this project Skill. New tasks will automatically try to load it.",
     "pluginSkillSetup": {
