@@ -8,7 +8,9 @@
 import { createReadStream, createWriteStream, promises as fsp } from 'node:fs';
 import readline from 'node:readline';
 import { createZstdDecompress } from 'node:zlib';
-import type { Readable } from 'node:stream';
+import { Readable } from 'node:stream';
+
+import { readZstdFrames } from './zstdFrames.js';
 import { pipeline } from 'node:stream/promises';
 
 export function isZstdPath(file: string): boolean {
@@ -17,6 +19,8 @@ export function isZstdPath(file: string): boolean {
 
 export interface LineReadOptions {
   signal?: AbortSignal;
+  /** DSH may append multiple independent frames. */
+  concatenatedZstd?: boolean;
   /** 每读到一块原始（压缩前）字节回调一次。 */
   onBytes?: (bytes: number) => void;
   /** 只读文件头部的原始字节上限（扫描摘要用）；压缩文件按解压后的字节计。 */
@@ -24,6 +28,15 @@ export interface LineReadOptions {
 }
 
 function openText(file: string, opts: LineReadOptions): { stream: Readable; close: () => void } {
+  if (isZstdPath(file) && opts.concatenatedZstd) {
+    // Destroying the wrapper alone leaves a prefetched frame read running until
+    // the whole frame decodes, so closing must abort the reader as well.
+    const closing = new AbortController();
+    const signal = opts.signal ? AbortSignal.any([opts.signal, closing.signal]) : closing.signal;
+    const stream = Readable.from(readZstdFrames(file, opts.onBytes, signal));
+    stream.setEncoding('utf-8');
+    return { stream, close: () => { closing.abort(); stream.destroy(); } };
+  }
   const raw = createReadStream(file, isZstdPath(file) || opts.maxBytes === undefined ? {} : { end: opts.maxBytes - 1 });
   if (opts.onBytes) raw.on('data', (chunk: Buffer | string) => opts.onBytes?.(chunk.length));
   if (!isZstdPath(file)) {
@@ -62,8 +75,8 @@ export async function* readLines(file: string, opts: LineReadOptions = {}): Asyn
 }
 
 /** 读取第一行（session 头），读不到返回 null。 */
-export async function readFirstLine(file: string, maxBytes = 2 * 1024 * 1024): Promise<string | null> {
-  for await (const line of readLines(file, { maxBytes })) {
+export async function readFirstLine(file: string, maxBytes = 2 * 1024 * 1024, opts: Pick<LineReadOptions, 'concatenatedZstd'> = {}): Promise<string | null> {
+  for await (const line of readLines(file, { maxBytes, ...opts })) {
     if (line.trim()) return line;
   }
   return null;

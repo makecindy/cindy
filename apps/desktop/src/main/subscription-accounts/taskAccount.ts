@@ -15,6 +15,7 @@ import type { SubscriptionProvider } from '../../shared/subscriptionAccounts.js'
 import { subscriptionRouteAllowsModel } from './legacyAccountAccess.js';
 import { readAccountBinding } from './store.js';
 import { accountProviderId, pinnedOwnAccount, resolveSubscriptionPoolProvider } from './placement.js';
+import { legacyApiKeyPoolBinding } from './apiKeyMembers.js';
 
 export interface TaskAccountSession {
   status: string;
@@ -53,6 +54,7 @@ export function readTaskPoolAccount(sessionId: string, row: TaskAccountSession, 
   if (binding && ref.providerId !== (binding.via ?? provider)
     && accountProviderId(provider, binding.accountId) !== ref.providerId) return null;
   const accountId = binding?.accountId
+    ?? (provider === 'openai' ? legacyApiKeyPoolBinding(sessionId, ref.providerId) : undefined)
     // Only the host-owned history lookup may supply this fallback; never infer pool order.
     ?? (ref.providerId === 'openai' && row.agentKind === 'codex' && row.sdkSessionId ? codexHistoryAccountId : undefined)
     // A merged connection that has not run since the merge still runs on its own account.

@@ -8,7 +8,7 @@ import { scrollRangeIntoView } from '@/lib/scrollRangeIntoView';
 import { historyAfter } from './historyAfter';
 import { readGhostCardSupersededBy, readMailCard } from '@cindy/maker-shared/ghost-card-form';
 import { animateFocusScroll } from './animateFocusScroll';
-import { botProcessItems, botTurnContinuations, botUnreadBoundaryItemKey, latestSettledAssistantMs, tailReplyClientIds } from '@/features/bots/botConversationPresentation';
+import { botProcessItems, botTimeGroupRows, botTurnContinuations, botUnreadBoundaryItemKey, latestSettledAssistantMs, tailReplyClientIds } from '@/features/bots/botConversationPresentation';
 import { isVisibleVoiceCallMessage } from '@/features/bots/voice/voiceCallPresentation';
 import { MessageViewport, type MessageViewportApi } from './MessageViewport';
 import { PAGE_TEXT_NAVIGATION_EVENT } from '@/lib/pageTextAccess';
@@ -337,7 +337,7 @@ function hasNestedScrollableAncestorThatCanScrollDown(
 }
 
 import { UserMessage } from './UserMessage';
-import { AssistantMessage } from './AssistantMessage';
+import { AssistantMessage, assistantDisplayContent } from './AssistantMessage';
 import { MessageSourceLabels } from './MessageSourceLabels';
 import { attachBotStartedTasks, BotStartedTasks, collectBotStartedTasks } from './BotStartedTasks';
 import { BotMessageTimelineHeader } from './BotMessageTimelineHeader';
@@ -378,10 +378,19 @@ import {
   collectGhostCardGalleryImages,
   createGhostCardSpawnIndex,
 } from '@/cindy-brain/ghostCardGallery';
-import { ChatImageView } from './ChatImageView';
-import { galleryImagePreviewItem, ImageGalleryContext, type GalleryImage } from './ImageGalleryContext';
+import { ChatImageView, opensModelViewer } from './ChatImageView';
+import {
+  galleryImagePreviewItem,
+  ImageGalleryContext,
+  ImageGalleryScopeContext,
+  repeatIndexes,
+  structuredImageOccurrence,
+  type GalleryImage,
+} from './ImageGalleryContext';
+import { replyGalleryImages, type ReplyGalleryOptions, type ReplyImageCache } from './replyGalleryImages';
 import { GhostFulfillmentContext, type GhostCallSummary } from './GhostSummonCard';
 import { ChatSessionFileProvider, useChatSessionFileValue } from './ChatSessionFileContext';
+import { FilePreviewLightboxProvider } from './FilePreviewLightboxHost';
 import { toRemoteMediaOrigin } from '@/lib/sessionFileOrigin';
 import { rewriteToRemoteMediaOrigin, type RemoteMediaOrigin } from '@/../shared/remoteMediaUrl';
 import { isGhostCallToolName, isGhostStartupToolCallName, isTurnEndGhostCardHtml } from '@/../shared/ghost';
@@ -462,6 +471,8 @@ interface MessageStreamProps {
   onAskInSideChat?: (quote: string) => Promise<boolean>;
   /** Active session id — used to reset scroll state on session switch. */
   sessionId?: string;
+  /** Optional draft key when the session composer is still using its preview draft. */
+  quoteDraftKey?: string;
   /** Active session title, forwarded to handoff cards for return navigation. */
   sessionTitle?: string | null;
   /** Owning agent kind — propagated to UserMessage so capability gates
@@ -1430,9 +1441,8 @@ export function resolveRestoredRenderWindow(snapshot: SessionScrollSnapshot | un
  *   - 用户上传图 → user message 的 images(url 或 data:base64,与 UserMessage 同款拼法)
  *   - 插件生成图 → ghost card 及其衍生卡中会打开 ImageLightbox 的图片
  *
- * 不收正文 Markdown 内嵌图:用正则扫文本会误抓代码块里当作文本展示的 ![]() 语法,
- * 虚增计数 / 让翻页跳到无效图(codex review);要准确得复刻 MarkdownRenderer 的
- * AST 渲染规则,成本高且易漂移。Markdown 内嵌图点开仍是单图预览,不进会话画廊。
+ * 回复正文里的 Markdown / 组件图由 `collectReplyGalleryImages` 另行收集(与
+ * MarkdownRenderer 同一套 AST 解析,不用正则扫文本,代码块里的 ![]() 不计入)。
  * 顺序与 DOM 渲染一致(用户消息里上传图在正文之前),便于 lightbox 做位置映射。
  */
 export function collectSessionImageSrcs(
@@ -1452,7 +1462,7 @@ export function collectSessionImageSrcs(
       continue;
     } else if (item.type === 'tool_media') {
       for (const m of item.items) {
-        if (m.kind === 'image' && m.url) push(m.url);
+        if (m.kind === 'image' && m.url && !opensModelViewer(m.modelFile)) push(m.url);
       }
     } else if (item.type === 'ghost_card') {
       if (ghostCards) {
@@ -1467,7 +1477,7 @@ export function collectSessionImageSrcs(
       }
       // 回锚媒体渲染在卡片及其衍生卡之后，画廊顺序必须与 DOM 一致。
       for (const media of item.media ?? []) {
-        if (media.kind === 'image' && media.url) push(media.url);
+        if (media.kind === 'image' && media.url && !opensModelViewer(media.modelFile)) push(media.url);
       }
     } else if (item.type === 'message') {
       const msg = item.message;
@@ -1484,9 +1494,12 @@ export function collectSessionImageSrcs(
                     annotationStrokes: img.annotationStrokes,
                   }
                 : undefined;
-            push(img.url, meta);
+            push(img.url, img.originalName ? { ...meta, name: img.originalName } : meta);
           } else {
-            push(`data:${img.mimeType};base64,${img.base64}`);
+            push(
+              `data:${img.mimeType};base64,${img.base64}`,
+              img.originalName ? { name: img.originalName } : undefined,
+            );
           }
         }
       } else if (msg.role === 'assistant' && ghostCards) {
@@ -1503,6 +1516,79 @@ export function collectSessionImageSrcs(
     }
   }
   return out;
+}
+
+/**
+ * Images embedded in completed assistant replies of one render item, including
+ * replies folded into a finished work timeline. A reply still streaming joins
+ * once it completes; an open viewer keeps the list it opened with. A reply that
+ * a plugin card replaced is hidden, so only the card's images count.
+ */
+export function collectReplyGalleryImages(
+  item: RenderItem | WorkGroupChildItem,
+  scope: string,
+  options: ReplyGalleryOptions,
+  ghostCards?: GhostCardSnapshot,
+): GalleryImage[] {
+  if (item.type === 'work_group')
+    return item.children.flatMap((child) => collectReplyGalleryImages(child, scope, options, ghostCards));
+  if (item.type !== 'message') return [];
+  const message = item.message;
+  if (message.role !== 'assistant' || message.isStreaming || message.systemCardType) return [];
+  if (ghostCards?.byCallId.get(message.clientId)?.status === 'ready') return [];
+  const content = message.content;
+  if (!content.includes('![') && !/<img/i.test(content) && !content.includes('cindy-ui')) return [];
+  // Only what the reply shows: the same text AssistantMessage renders, so stripped
+  // blocks add no images and section offsets match the renderer.
+  return replyGalleryImages(
+    assistantDisplayContent(content, message.botStarterOptions),
+    message.clientId,
+    scope,
+    options,
+  );
+}
+
+/**
+ * The task image gallery: every image in the loaded history, across turns, in
+ * render order. Each entry records the render item showing it, so a URL shown
+ * twice opens where it was clicked. `structuredImages` lists one item's uploads,
+ * tool media and plugin-card images (collectSessionImageSrcs).
+ */
+export function collectTaskImageGallery(
+  items: readonly RenderItem[],
+  structuredImages: (item: RenderItem | WorkGroupChildItem) => readonly GalleryImage[],
+  replyOptions: ReplyGalleryOptions,
+  ghostCards?: GhostCardSnapshot,
+): GalleryImage[] {
+  const gallery: GalleryImage[] = [];
+  for (const item of items) {
+    // A finished work timeline renders its children in order (replies and the
+    // cards replacing them), so the row lists them in that order too.
+    const row: GalleryImage[] = [];
+    const visit = (node: RenderItem | WorkGroupChildItem) => {
+      if (node.type === 'work_group') {
+        for (const child of node.children) visit(child);
+        return;
+      }
+      row.push(...structuredImages(node));
+      row.push(...collectReplyGalleryImages(node, item.key, replyOptions, ghostCards));
+    };
+    visit(item);
+    // Uploads and tool media: repeats of one address in a row are told apart by
+    // order, as their renderers count them (reply images carry their own
+    // occurrence; plugin-card images carry galleryId).
+    const structured = row.filter((image) => !image.galleryId && image.target === undefined);
+    const repeats = repeatIndexes(structured.map((image) => image.src));
+    for (const image of row) {
+      const at = structured.indexOf(image);
+      gallery.push({
+        ...image,
+        scope: item.key,
+        ...(at >= 0 ? { occurrence: structuredImageOccurrence(repeats[at]!) } : {}),
+      });
+    }
+  }
+  return gallery;
 }
 
 // Workflow 工具(Claude Code SDK 多 agent 编排)在父会话事件流里 = 单个 local_workflow
@@ -2865,8 +2951,14 @@ function renderItemKeyForClientId(items: readonly RenderItem[], clientId: string
  * 'tool_media' item(工具段外的产物流)与 'ghost_card' item 的回锚媒体
  * (卡正下方)。加新 kind 只需改 extractToolResultMedia + 这里加分支。
  */
-function ToolMediaList({ items, sessionId }: { items: ToolMediaItem[]; sessionId?: string }) {
+export function ToolMediaList({ items, sessionId }: { items: ToolMediaItem[]; sessionId?: string }) {
   const mediaKeyCounts = new Map<string, number>();
+  // Repeats are counted over the images that enter the task gallery only (as
+  // collectSessionImageSrcs lists them), so 3D model posters don't shift the count.
+  const galleryItems = items.filter(
+    (m) => m.kind === 'image' && m.url && !opensModelViewer(m.modelFile),
+  );
+  const galleryRepeats = repeatIndexes(galleryItems.map((m) => m.url));
   return (
     <>
       {items.map((m, i) => {
@@ -2876,6 +2968,7 @@ function ToolMediaList({ items, sessionId }: { items: ToolMediaItem[]; sessionId
         const mediaKey =
           mediaKeyOccurrence === 0 ? mediaKeyBase : `${mediaKeyBase}-${mediaKeyOccurrence}`;
         if (m.kind === 'image') {
+          const galleryAt = galleryItems.indexOf(m);
           return (
             <div key={mediaKey} className="flex flex-col gap-1.5">
               <ChatImageView
@@ -2884,6 +2977,10 @@ function ToolMediaList({ items, sessionId }: { items: ToolMediaItem[]; sessionId
                 variant="tool-output"
                 modelFile={m.modelFile}
                 sessionId={sessionId}
+                // Same count the task gallery uses for this row's media (repeatIndexes).
+                galleryOccurrence={
+                  galleryAt >= 0 ? structuredImageOccurrence(galleryRepeats[galleryAt]!) : undefined
+                }
               />
             </div>
           );
@@ -3067,6 +3164,7 @@ export const WorkGroupRenderItemView = memo(function WorkGroupRenderItemView({
   compact,
   companionAvatar,
   startsUnread = false,
+  groupTimestamp,
 }: {
   item: Extract<RenderItem, { type: 'work_group' }>;
   context: WorkGroupRenderContext;
@@ -3074,6 +3172,7 @@ export const WorkGroupRenderItemView = memo(function WorkGroupRenderItemView({
   /** 伙伴聊天：同一轮开头显示头像，后续行仅保留正文列缩进。 */
   companionAvatar?: ReactNode;
   startsUnread?: boolean;
+  groupTimestamp?: number;
 }) {
   // 完成态外层时间线可包含内层 work_group。递归只负责形状映射,
   // 具体折叠 / 直接详情逻辑全部复用 WorkGroupBlock。
@@ -3140,7 +3239,9 @@ export const WorkGroupRenderItemView = memo(function WorkGroupRenderItemView({
       className="scroll-mt-20"
       data-message-client-ids={collectWorkGroupClientIds(item.children).join(' ')}
     >
-      {startsUnread ? <BotMessageTimelineHeader startsUnread /> : null}
+      {startsUnread || groupTimestamp !== undefined ? (
+        <BotMessageTimelineHeader startsUnread={startsUnread} groupTimestamp={groupTimestamp} />
+      ) : null}
       {companionAvatar ? withAssistantAvatar(companionAvatar, block) : block}
     </div>
   );
@@ -3154,6 +3255,7 @@ export function MessageStream({
   onAskInSideChat,
   historyVisibleAfter,
   sessionId,
+  quoteDraftKey,
   sessionTitle,
   agentKind,
   remoteHostId,
@@ -3705,6 +3807,10 @@ export function MessageStream({
   // Resolve the owner inside the stable render window, not the viewport-mounted
   // subset. A cropped process falls back to its reply instead of losing NEW;
   // scrolling within the same window must not move the boundary.
+  const botTimeGroupsByRow = useMemo(
+    () => botTimeGroupRows(visibleRenderItems, botMessageTimeGroups, botContinuationKeys),
+    [visibleRenderItems, botMessageTimeGroups, botContinuationKeys],
+  );
   const botUnreadBoundaryKey = useMemo(
     () => botUnreadBoundaryItemKey(visibleRenderItems, botUnreadBoundaryClientId, botContinuationKeys),
     [visibleRenderItems, botUnreadBoundaryClientId, botContinuationKeys],
@@ -4297,6 +4403,45 @@ export function MessageStream({
       ),
     [renderMetadataItems, galleryMediaOrigin, ghostCardSnapshot, isSessionStreaming],
   );
+
+  // Task image gallery: every image in the loaded history, across turns, in render
+  // order. Reply images use the renderer's own parse and address derivation; the
+  // per-message cache keeps rebuilds to messages whose content changed.
+  const replyGalleryTargetCacheRef = useRef<ReplyImageCache>(new Map());
+  const sessionImageGallery = useMemo(() => {
+    // Desktop tasks only: companion chats keep each message's own collection
+    // (docs/product-rules/attachment-preview.md).
+    if (simplifiedBotConversation) return null;
+    const localConfirmed = sessionFileValue.localConfirmed === true;
+    const replyOptions: ReplyGalleryOptions = {
+      cache: replyGalleryTargetCacheRef.current,
+      workingDir,
+      allowPrivilegedLinks: true,
+      remoteMediaOrigin: sessionId ? galleryMediaOrigin : undefined,
+      ownershipPending: Boolean(sessionId) && !localConfirmed,
+      resolveInWorkspace: Boolean(sessionId) && localConfirmed,
+    };
+    // Rows reuse their memoized list; children of a work timeline are listed here.
+    const rows = new Set<RenderItem | WorkGroupChildItem>(renderMetadataItems);
+    return collectTaskImageGallery(
+      renderMetadataItems,
+      (node) =>
+        (rows.has(node) ? messageImageCollections.get(node.key) : undefined) ??
+        collectSessionImageSrcs([node as RenderItem], galleryMediaOrigin, ghostCardSnapshot, isSessionStreaming),
+      replyOptions,
+      ghostCardSnapshot,
+    );
+  }, [
+    renderMetadataItems,
+    messageImageCollections,
+    isSessionStreaming,
+    sessionFileValue,
+    galleryMediaOrigin,
+    workingDir,
+    sessionId,
+    ghostCardSnapshot,
+    simplifiedBotConversation,
+  ]);
 
   const messageAttachmentCollections = useMemo(
     () =>
@@ -6726,13 +6871,16 @@ export function MessageStream({
 
   return (
     <ChatSessionFileProvider value={sessionFileValue}>
+      {/* 文件预览浮层的会话级宿主(issue #12851):预览属于「用户正在看这个文件」,
+        不属于任何一行工具 —— 工具行被重建时浮层必须留着。 */}
+      <FilePreviewLightboxProvider>
       <GhostFulfillmentContext.Provider value={ghostCallsByUserTurn}>
         <>
           <div className="relative h-full w-full">
             {/* chat-text-quote:选中消息文字 → 浮出"添加到对话"按钮(portal 到 body)。
           绑定本流的滚动容器:协同模式多流并存时,选区归属按各自容器判定。 */}
             {sessionId ? (
-              <SelectionQuoteButton sessionId={sessionId} containerRef={scrollRef} onAskInSideChat={onAskInSideChat} />
+              <SelectionQuoteButton sessionId={sessionId} draftKey={quoteDraftKey} containerRef={scrollRef} onAskInSideChat={onAskInSideChat} />
             ) : null}
             {/*
         原生滚动容器:overflow-y-auto + overflow-x-hidden。
@@ -6807,9 +6955,8 @@ export function MessageStream({
                           key={item.key}
                           value={messageAttachmentCollections.get(item.key) ?? null}
                         >
-                          <ImageGalleryContext.Provider
-                            value={messageImageCollections.get(item.key) ?? null}
-                          >
+                          <ImageGalleryContext.Provider value={sessionImageGallery}>
+                          <ImageGalleryScopeContext.Provider value={item.key}>
                             {(() => {
                     if (!messageViewport.shouldMount(viewportEntries[itemIndex])) {
                       return (
@@ -6935,6 +7082,7 @@ export function MessageStream({
                           item={item}
                           context={workGroupRenderContext}
                           startsUnread={botUnreadBoundaryKey === item.key}
+                          groupTimestamp={botTimeGroupsByRow.get(item.key)}
                           // 伙伴聊天与普通任务同一套工作过程：运行中露最近 5 条活动与计时，
                           // 组头按内容宽；最终答复后保留折叠过程，按需展开。
                           compact={false}
@@ -7084,7 +7232,7 @@ export function MessageStream({
                       const groupTimestamp =
                         msg.systemCardType === 'voice-call'
                           ? undefined
-                          : botMessageTimeGroups.get(msg.clientId);
+                          : botTimeGroupsByRow.get(item.key);
                       const startsUnread = botUnreadBoundaryKey === item.key;
                       return (
                         <div
@@ -7128,6 +7276,7 @@ export function MessageStream({
                       </div>
                     );
                   })()}
+                          </ImageGalleryScopeContext.Provider>
                           </ImageGalleryContext.Provider>
                         </AttachmentCollectionContext.Provider>
                       ))}
@@ -7172,6 +7321,7 @@ export function MessageStream({
                 bottomOffset={resolvedBottomPadding}
                 onJump={handleNavRailJump}
                 onNavCoverageChange={setNavRailCoversNav}
+                sessionId={sessionId}
                 resetKey={sessionId}
               />
             )}
@@ -7193,6 +7343,7 @@ export function MessageStream({
           </div>
         </>
       </GhostFulfillmentContext.Provider>
+      </FilePreviewLightboxProvider>
     </ChatSessionFileProvider>
   );
 }

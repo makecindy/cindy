@@ -147,8 +147,8 @@ vi.mock('../localMarkdownImages', () => ({
 
 vi.mock('../sessionRepo', () => ({
   touchUserSent: mocks.touchUserSent,
-  toCoreAgentKind: (kind: string) =>
-    kind === 'codex' ? 'codex' : kind === 'pi' ? 'pi' : 'claude-code',
+  toCoreEngineKind: (kind: string) =>
+    kind === 'acp' ? 'acp' : kind === 'codex' ? 'codex' : kind === 'pi' ? 'pi' : 'claude-code',
 }));
 
 vi.mock('../../messagePersistence', () => ({
@@ -5476,7 +5476,7 @@ describe('初始流式输出面创建失败的收口降级(#2164)', () => {
       },
     );
 
-    function createLivenessSetup(options: { onRebuild?: (previous: Session) => void | Promise<void> } = {}) {
+    function createLivenessSetup(options: { channel?: ImChannelAdapter['channel']; onRebuild?: (previous: Session) => void | Promise<void> } = {}) {
       const previous = createSessionHarness(async () => ({ accepted: true }), SESSION_ID);
       const replacement = createSessionHarness(async () => ({ accepted: true }), SESSION_ID);
       let live: Session | undefined = previous.session;
@@ -5508,7 +5508,7 @@ describe('初始流式输出面创建失败的收口降级(#2164)', () => {
         }),
       };
       mocks.getMaker.mockReturnValue(maker);
-      const localRunner = createTurnRunner(fakeAdapter, fakeRepo, fakeCards, {
+      const localRunner = createTurnRunner({ ...fakeAdapter, channel: options.channel ?? fakeAdapter.channel }, fakeRepo, fakeCards, {
         acquirePendingAgentSwitch: vi.fn(async () => () => {}),
       });
       const onTurnComplete = vi.fn();
@@ -5547,6 +5547,43 @@ describe('初始流式输出面创建失败的收口降级(#2164)', () => {
         '❌ 启动 Agent 失败：SESSION_CLOSING',
       ]);
       expect(h.send).toHaveBeenCalledTimes(1);
+    });
+
+    it('recovers a Telegram DM on the next message after subscription reauthorization', async () => {
+      let credential = 'fake-expired';
+      let replacementCredential = '';
+      const h = createLivenessSetup({ channel: 'telegram', onRebuild: () => { replacementCredential = credential; } });
+      const row = { ...(await mocks.findActiveSession()), providerId: 'openai', model: 'chatgpt/gpt-6-astra', agentKind: 'codex' };
+      const { setSessionProvider, clearSessionProvider } = await import('../../../maker-host/session-provider-store');
+      setSessionProvider(SESSION_ID, 'openai');
+      mocks.findActiveSession.mockResolvedValue(row);
+      mocks.desktopSessionRows.mockResolvedValue([{ ...row, status: 'active' }]);
+      mocks.listProviders.mockResolvedValue([{ id: 'openai', name: 'OpenAI', connected: true, source: 'builtin',
+        agents: ['codex'], models: { codex: [{ id: row.model }] }, routing: { codex: { authStrategy: 'oauth-passthrough' } } }]);
+      const send = (text: string) => h.localRunner.runAgentTurn({ botContextId: 'bot', userId: '1234',
+        userMessageId: text, text, attachments: [] });
+      try {
+        await send('first');
+        await send('queued');
+        h.previous.emit({ type: 'error', data: { message: 'HTTP 401 unauthorized_unknown: Could not parse your authentication token.', isTerminal: true } });
+        await waitForAssertion(() => expect(JSON.stringify(mocks.feishuIm.sendText.mock.calls)).toContain('OpenAI'));
+        expect(h.maker.closeSessionIfCurrent).toHaveBeenCalledWith(h.previous.session, 'runtime-refresh', { afterCurrentTurn: true });
+        expect(h.previous.send).toHaveBeenCalledTimes(1);
+        expect(h.replacement.send).not.toHaveBeenCalled();
+        credential = 'fake-reconnected';
+        await send('next');
+        await waitForAssertion(() => expect(h.replacement.send).toHaveBeenCalledTimes(1));
+        expect(replacementCredential).toBe(credential);
+        h.replacement.emit({ type: 'done', data: {} });
+        await waitForAssertion(() => expect(h.replacement.send).toHaveBeenCalledTimes(2));
+        expect(h.replacement.send.mock.calls.map(([message]) => message)).toEqual([
+          { type: 'user', content: 'queued' }, { type: 'user', content: 'next' },
+        ]);
+        expect(h.previous.send).toHaveBeenCalledTimes(1);
+      } finally {
+        await h.localRunner.disposeAllSessions();
+        clearSessionProvider(SESSION_ID);
+      }
     });
 
     it('rebuilds a runtime that already started closing instead of failing the message', async () => {

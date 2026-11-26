@@ -259,7 +259,7 @@ function event(
 
 const actualSnapshotWriter = await vi.importActual<typeof import('../../sessionSpendBroadcaster.js')>('../../sessionSpendBroadcaster.js');
 
-function harness(remoteHandle?: AgentSessionHandle) {
+function harness(remoteHandle?: AgentSessionHandle, agentKind: Session['agentKind'] = 'codex') {
   const log = {
     trace: vi.fn(),
     debug: vi.fn(),
@@ -286,7 +286,7 @@ function harness(remoteHandle?: AgentSessionHandle) {
   } as unknown as AgentSessionHandle;
   const session = new Session({
     id: 'task',
-    agentKind: 'codex',
+    agentKind,
     workDir: '/unused',
     handle,
     capabilities: {} as never,
@@ -489,18 +489,18 @@ describe('production Session event pipeline', () => {
     } finally { await current.dispose(); }
   });
 
-  // #11032: safe diagnostics must reach live delivery, continuation classification
-  // and the existing persistence writer. No schema/UI/continuation policy changes.
-  it('retains gateway diagnostics for live and persisted watchdog consumers', async () => {
+  // Unit: exercise the event pipeline with one unconfirmed command. A reconnect
+  // used to preserve HTTP status but drop tool state before the coordinator saw it.
+  it('retains gateway and pending-tool diagnostics for watchdog consumers', async () => {
     const h = harness();
     h.deps.redactEventForRenderer.mockImplementation(value => value);
     const data = { message: 'The model connection has been retrying for 120s without making progress. (HTTP 502)',
-      reason: 'codex_reconnect_stalled', errorStatus: 502, isTerminal: true, idleMs: 120000 };
+      reason: 'codex_reconnect_stalled', errorStatus: 502, pendingToolCount: 1, isTerminal: true, idleMs: 120000 };
     try {
       h.emit(event('error', data));
       await microtasks();
       expect(h.deps.agentInputCoordinatorHolder.onTurnEvent).toHaveBeenCalledWith(
-        'task', 'error', data.message, expect.objectContaining({ reason: data.reason, errorStatus: 502 }), expect.any(Object),
+        'task', 'error', data.message, expect.objectContaining({ reason: data.reason, errorStatus: 502, pendingToolCount: 1 }), expect.any(Object),
       );
       expect(h.deps.broadcastToAllWindows).toHaveBeenCalledWith('maker:event', expect.objectContaining({
         event: expect.objectContaining({ type: 'error', data }),
@@ -1856,6 +1856,26 @@ describe('production Session event pipeline', () => {
     await h.dispose();
   });
 
+  // #12814: an idle Codex Worker can compact with no accepted input. Its
+  // running status is visible to the composer, but must not start an Orca task.
+  it('keeps manual compact busy status out of the Worker turn lifecycle', async () => {
+    const h = harness();
+    h.deps.redactEventForRenderer.mockImplementation(value => value);
+    try {
+      const compact = event('status', { isRunning: true, manualCompact: true }, { source: 'codex' });
+      h.emit(compact);
+      await microtasks();
+      expect(h.deps.broadcastToAllWindows).toHaveBeenCalledWith('maker:event', expect.objectContaining({
+        event: expect.objectContaining({ type: 'status', data: expect.objectContaining({ isRunning: true }) }),
+      }));
+      expect(h.activity.isSessionInTurn('task')).toBe(false);
+      expect(h.deps.orcaTeamServiceForEvents.handleWorkerTurnStarted).not.toHaveBeenCalled();
+      h.emit(event('status', { isRunning: true }, { source: 'codex' }));
+      await microtasks();
+      expect(h.deps.orcaTeamServiceForEvents.handleWorkerTurnStarted).toHaveBeenCalledExactlyOnceWith('task');
+    } finally { await h.dispose(); }
+  });
+
   it('waits for accepted persistence and worker start while returning synchronously', async () => {
     const h = harness(),
       writes = deferred(),
@@ -2308,6 +2328,39 @@ describe('provider turn observer on real Session.send', () => {
 });
 
 describe('usage through the production event pipeline', () => {
+  // #12433 (unit): ACP completes without a built-in engine source, but its
+  // report must reach the model ledger once and refresh consumers after the write.
+  // A device-hosted engine has no persisted Session on the execution device.
+  it.each([null, 'device-2'])('settles reported ACP tokens and distinguishes zero from missing usage (device: %s)', async (agentDeviceId) => {
+    const h = harness(undefined, 'acp');
+    Object.defineProperty(h.session, 'agentDeviceId', { value: agentDeviceId });
+    const done = { type: 'done', sessionTurnGeneration: 1, data: {
+      type: 'acp/prompt_end', status: 'completed', usageModel: 'original-model',
+      usage: { inputTokens: 2161, outputTokens: 15, cacheReadTokens: 9459, cacheCreationTokens: 0 },
+    } } satisfies AgentEvent;
+    try {
+      h.emit(done);
+      h.emit({ ...done, data: { ...done.data } });
+      h.emit({ ...done, sessionTurnGeneration: 2, data: { type: 'acp/prompt_end', status: 'completed' } });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(effects.fn('recordModelTurnUsage')).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+        agentKind: 'acp', model: 'original-model', sessionId: 'task',
+        inputTokensDelta: 2161, outputTokensDelta: 15, cacheReadTokensDelta: 9459, cacheCreateTokensDelta: 0,
+      }));
+      expect(effects.fn('rebroadcastTodaySpend').mock.invocationCallOrder[0])
+        .toBeGreaterThan(effects.fn('recordModelTurnUsage').mock.invocationCallOrder[0]);
+      h.emit({ ...done, sessionTurnGeneration: 3, data: { ...done.data, usage: {
+        inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0,
+      } } });
+      expect(effects.fn('recordModelTurnUsage')).toHaveBeenCalledTimes(2);
+      expect(effects.fn('recordModelTurnUsage')).toHaveBeenLastCalledWith(expect.objectContaining({
+        inputTokensDelta: 0, outputTokensDelta: 0, cacheReadTokensDelta: 0, cacheCreateTokensDelta: 0,
+      }));
+    } finally {
+      await h.dispose();
+    }
+  });
+
   const tokens = { inputTokens: 100, outputTokens: 20, cacheReadTokens: 10, cacheCreateTokens: 0 };
   const segment = { ...tokens, model: 'test-model', priceVariant: 'standard' };
   function usage(source: 'codex' | 'pi') {

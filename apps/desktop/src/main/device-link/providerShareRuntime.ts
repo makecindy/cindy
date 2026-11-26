@@ -28,6 +28,7 @@ import {
   MAX_FRAME_BYTES,
   REMOTE_AGENT_CHANNEL,
   isProviderAccessDeniedError,
+  DeviceLinkError,
   parseProviderSharePeer,
   providerShareGuestPeer,
   providerShareFavoriteSource,
@@ -97,6 +98,7 @@ import { captureProviderManagementScope } from '../provider-group/managementScop
 import { readProviderManagementShares } from '../provider-group/managementClient.js';
 import type { ProviderShareManagementCommand } from '../../shared/providerManagement.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
+import type { IpcErrorCode } from '../../shared/ipc-errors.js';
 import {
   abortProviderShareReshareRuns,
   getControllerDisplayName,
@@ -113,12 +115,15 @@ import { configureProviderShareApprovalWindows } from './providerShareApprovalWi
 import {
   findReceivedShare,
   providerShareAccessEpoch,
+  providerShareReceivedChangeSequence,
   getReceivedShares,
   isReceivedSharesReady,
   getReceivedSharesSnapshot,
   leaveProviderShare,
   previewProviderShare,
+  parseProviderShareAgentDeviceId,
   refreshReceivedShares,
+  resolveRemoteAgentTargetWhenReady,
   sendProviderShareRequest,
   getProviderShareRequest,
   startProviderShareGuest,
@@ -188,9 +193,10 @@ function emit(channel: string, payload: unknown): void {
   }
 }
 
-function notifyControlledModelCatalogChanged(): void {
-  emit(CONTROLLED_MODEL_CATALOG_CHANGED, {});
-  tapWindowBroadcast(CONTROLLED_MODEL_CATALOG_CHANGED, {});
+function notifyControlledModelCatalogChanged(receivedChangeSequence?: number): void {
+  const payload = receivedChangeSequence === undefined ? {} : { receivedChangeSequence };
+  emit(CONTROLLED_MODEL_CATALOG_CHANGED, payload);
+  tapWindowBroadcast(CONTROLLED_MODEL_CATALOG_CHANGED, payload);
 }
 
 function appInForeground(): boolean {
@@ -537,7 +543,7 @@ export function startProviderShareRuntime(broadcast: Broadcast, options: { invok
       // Local windows re-check stale subscription catalogs on every poll.
       emit(PROVIDER_SHARE_IPC.RECEIVED_CHANGED, received);
       // Pushed to every controlling computer; they re-read capabilities and rosters.
-      if (changed) notifyControlledModelCatalogChanged();
+      if (changed) notifyControlledModelCatalogChanged(providerShareReceivedChangeSequence());
     },
     settled(state, preview) {
       emit(PROVIDER_SHARE_IPC.SETTLED, { state, preview });
@@ -666,6 +672,11 @@ export function parseProviderShareCommand(raw: unknown): ProviderShareCommand {
       const decision = value.decision;
       if (decision !== 'approve' && decision !== 'reject') throwIpcError('INVALID_PARAMS', 'Invalid decision');
       return { action: 'reshare-decide', id: text(value.id, 'id', 64), decision };
+    }
+    case 'retry-model-catalog': {
+      const agentDeviceId = text(value.agentDeviceId, 'agentDeviceId', 128);
+      if (!parseProviderShareAgentDeviceId(agentDeviceId)) throwIpcError('INVALID_PARAMS', 'Invalid shared provider');
+      return { action: value.action, agentDeviceId };
     }
     case 'received':
       return { action: 'received' };
@@ -1098,6 +1109,19 @@ async function createLink(
   return { link, expiresAt, ...(created.linkId ? { linkId: created.linkId } : {}) };
 }
 
+/** Fixed public categories for both local transport errors and remote refusal envelopes. */
+function insightsFailureCode(error: { code: unknown; message?: string }): IpcErrorCode {
+  const code = typeof error.code === 'string' ? error.code : '';
+  return code === 'CHANNEL_NOT_ALLOWED' ? 'UNSUPPORTED_CAPABILITY'
+    : code === 'BACKPRESSURE' ? 'DEVICE_LINK_BUSY'
+    : code === 'DEVICE_UNRESPONSIVE' ? 'DEVICE_LINK_DEVICE_UNRESPONSIVE'
+    : code === 'DEVICE_OFFLINE' ? 'DEVICE_LINK_DEVICE_OFFLINE'
+    : code === 'INVOKE_TIMEOUT' ? 'DEVICE_LINK_TIMEOUT'
+    : ['NOT_CONNECTED', 'LINK_NOT_OPEN', 'PEER_RESET'].includes(code) ? 'DEVICE_LINK_NOT_CONNECTED'
+    : isProviderAccessDeniedError(error) || code === 'REMOTE_DISABLED' ? 'PERMISSION_DENIED'
+    : 'DEVICE_LINK_UNAVAILABLE';
+}
+
 async function execute(command: ProviderShareCommand, assertCurrent: () => void = () => undefined): Promise<unknown> {
   assertCurrent();
   switch (command.action) {
@@ -1237,14 +1261,20 @@ async function execute(command: ProviderShareCommand, assertCurrent: () => void 
           throwIpcError('PERMISSION_DENIED', 'Provider share changed');
         }
       };
-      const response = await shareInvoke(`share:${command.shareId}`, PROVIDER_SHARE_INSIGHTS_CHANNEL, [{ version: 1, includeUsage: command.includeUsage }], { preSend: assertShare });
+      const response = await shareInvoke(`share:${command.shareId}`, PROVIDER_SHARE_INSIGHTS_CHANNEL, [{ version: 1, includeUsage: command.includeUsage }], { preSend: assertShare })
+        .catch(error => {
+          assertShare();
+          if (error instanceof DeviceLinkError
+            || (error instanceof Error && 'code' in error && error.code === 'DEVICE_UNRESPONSIVE')) {
+            throwIpcError(insightsFailureCode(error), 'Provider share insights are not available');
+          }
+          throw error;
+        });
       assertShare();
       if (!response.ok) {
-        throwIpcError(response.error.code === 'CHANNEL_NOT_ALLOWED' ? 'UNSUPPORTED_CAPABILITY'
-          : response.error.code === 'DEVICE_OFFLINE' ? 'DEVICE_LINK_DEVICE_OFFLINE'
-          : response.error.code === 'INVOKE_TIMEOUT' ? 'DEVICE_LINK_TIMEOUT'
-          : response.error.code === 'NOT_CONNECTED' || response.error.code === 'LINK_NOT_OPEN' ? 'DEVICE_LINK_NOT_CONNECTED'
-          : 'PERMISSION_DENIED', 'Provider share insights are not available');
+        // Congestion and a missing reply are not evidence of revoked permission.
+        // Keep fixed public messages; the upstream diagnostic may contain identity.
+        throwIpcError(insightsFailureCode(response.error), 'Provider share insights are not available');
       }
       const result = parseProviderShareInsights(response.result);
       if (!result || (command.includeUsage && result.status.usage === 'not-requested') || (!command.includeUsage && (result.usage !== null || !['disabled', 'not-requested'].includes(result.status.usage)))) {
@@ -1321,6 +1351,12 @@ async function execute(command: ProviderShareCommand, assertCurrent: () => void 
       emit(PROVIDER_SHARE_IPC.OWNED_CHANGED, null);
       return { ok: true };
     }
+    case 'retry-model-catalog': {
+      const previousSequence = providerShareReceivedChangeSequence();
+      await resolveRemoteAgentTargetWhenReady(command.agentDeviceId, { retryDirectory: true });
+      const receivedChangeSequence = providerShareReceivedChangeSequence();
+      return previousSequence === receivedChangeSequence ? { ok: true } : { ok: true, receivedChangeSequence };
+    }
     case 'received':
       if (running) void refreshReceivedShares('ui');
       return getReceivedShares();
@@ -1356,6 +1392,19 @@ export async function readReceivedProviderShareQuota(shareId: string): Promise<P
   const result = await execute({ action: 'insights', shareId, includeUsage: false }, assertCurrent);
   assertCurrent();
   return result as ProviderShareInsights;
+}
+
+/** Guest actions the owner's cloud instance settings page runs on that instance. */
+export type ProviderShareGuestCommand = Extract<
+  ProviderShareCommand,
+  { action: 'received' | 'get-credential-consent' | 'set-credential-consent' | 'leave' | 'insights' }
+>;
+/**
+ * Only for the instance owner's private cloud settings channel, which checks ownership first;
+ * the general command IPC stays local-only. Joining by link stays an account action elsewhere.
+ */
+export function executeProviderShareGuestCommand(command: ProviderShareGuestCommand): Promise<unknown> {
+  return execute(command);
 }
 
 /**

@@ -18,6 +18,7 @@ export function PluginVersionUpdates({ children, attention, open, onOpenChange }
         if (event.target === event.currentTarget) onOpenChange?.(event.currentTarget.open);
       }}
     >
+      {/* 无框文字按钮：圆角只塑形键盘焦点环（DESIGN.md §5 登记） */}
       <summary className="flex min-h-8 cursor-pointer select-none list-none items-center gap-2 rounded-md text-16 font-medium text-[var(--text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)] [&::-webkit-details-marker]:hidden">
         <span>{t('settings.ghosts.contribution.versionUpdates')}</span>
         {attention}
