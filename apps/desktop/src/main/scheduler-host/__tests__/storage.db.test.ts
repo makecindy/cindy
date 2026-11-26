@@ -104,6 +104,7 @@ const SCHEDULER_DDL = [
       model TEXT,
       provider_id TEXT,
       sdk_session_id TEXT,
+      remote_host_id TEXT,
       agent_device_id TEXT,
       effort TEXT,
       fast_mode INTEGER,
@@ -836,8 +837,9 @@ describe('DrizzleScheduleStorage (in-memory)', () => {
     }
   });
 
-  // #12397, DB tier. A second writer repoints one rule without changing the
-  // count, status, or due time. Both affected picker entries must refresh.
+  // #12397 + #12734, DB tier. A second writer repoints a model-pinned rule or
+  // edits its model choice without changing count, status, or due time. Affected
+  // picker entries must refresh on both changes.
   it('refreshes plugin eligibility when another writer changes a schedule binding', async () => {
     const { db, storage, close } = createStorageHarness();
     const other = new DrizzleScheduleStorage(() => db);
@@ -849,7 +851,9 @@ describe('DrizzleScheduleStorage (in-memory)', () => {
           id, scheduleId: 'run-rule', sessionId: id, firedAt: 1, finishedAt: 2, status: 'success',
         });
       }
-      await other.insert(baseSchedule({ id: 'binding', targetSessionId: 'old-target' }));
+      await other.insert(baseSchedule({
+        id: 'binding', targetSessionId: 'old-target', modelAgentKind: 'claude-code', model: 'claude-sonnet-4-6',
+      }));
       const picker = async (id: string) =>
         (await storage.listSidebarIndexRuns()).findLast(run => run.sessionId === id)?.canSwitchPluginEngine === true;
       await expect(picker('old-target')).resolves.toBe(false);
@@ -860,6 +864,12 @@ describe('DrizzleScheduleStorage (in-memory)', () => {
       await expect(storage.canSwitchCompletedAutomationSession('new-target')).resolves.toBe(false);
       await expect(picker('old-target')).resolves.toBe(true);
       await expect(picker('new-target')).resolves.toBe(false);
+
+      // Clearing the model choice in another writer turns the binding into a task-model
+      // follow-up, which must invalidate the cached revision and re-enable plugin switching.
+      await other.update('binding', { modelAgentKind: undefined, model: undefined });
+      await expect(storage.canSwitchCompletedAutomationSession('new-target')).resolves.toBe(true);
+      await expect(picker('new-target')).resolves.toBe(true);
     } finally {
       close();
     }
@@ -2116,9 +2126,9 @@ describe('DrizzleScheduleStorage (in-memory)', () => {
   });
 });
 
-// #12397, DB tier. The sidebar and switch handler share the completed-run
-// predicate. A run resumed or a different automation bound to the same task
-// must no longer let that task pick a plugin engine.
+// #12397 + #12734, DB tier. The sidebar and switch handler share the completed-run
+// predicate. A task-model follow-up keeps plugin switching available, while a model-pinned
+// binding or an interrupted run must block picking a plugin engine.
 it('offers the same plugin switch eligibility in the sidebar and send guard', async () => {
   const harness = createStorageHarness();
   const { db, storage } = harness;
@@ -2139,7 +2149,14 @@ it('offers the same plugin switch eligibility in the sidebar and send guard', as
     await storage.update('fresh-rule', { persistentSession: true });
     await expect(eligibility()).resolves.toEqual({ switch: true, picker: true });
 
-    await storage.insert(baseSchedule({ id: 'bound-rule', targetSessionId: 'fresh-task', persistentSession: true }));
+    await storage.insert(baseSchedule({ id: 'follow-rule', targetSessionId: 'fresh-task' }));
+    await expect(eligibility()).resolves.toEqual({ switch: true, picker: true });
+    await storage.delete('follow-rule');
+
+    await storage.insert(baseSchedule({
+      id: 'bound-rule', targetSessionId: 'fresh-task', persistentSession: true,
+      modelAgentKind: 'claude-code', model: 'claude-sonnet-4-6',
+    }));
     await expect(eligibility()).resolves.toEqual({ switch: false, picker: false });
     await storage.delete('bound-rule');
 
@@ -2153,9 +2170,9 @@ it('offers the same plugin switch eligibility in the sidebar and send guard', as
   }
 });
 
-// #12397, DB tier. Two SQLite connections pass the initial checks while
-// the task is still on a builtin engine. In either commit order only the
-// first operation may succeed, even without a shared JavaScript lock.
+// #12397 + #12734, DB tier. Two SQLite connections pass the initial checks while
+// the task is still on a builtin engine. For an incompatible (model-pinned) binding,
+// in either commit order only the first operation may succeed, even without a shared JS lock.
 it.each(['create', 'update'])('serializes plugin switching with a binding from another connection (%s)', async operation => {
   const dir = mkdtempSync(join(tmpdir(), 'cindy-schedule-route-'));
   const dbPath = join(dir, 'schedule.sqlite');
@@ -2175,7 +2192,9 @@ it.each(['create', 'update'])('serializes plugin switching with a binding from a
       await storage.insertRun({
         id: sessionId, scheduleId: 'run-rule', sessionId, firedAt: 1, finishedAt: 2, status: 'success',
       });
-      const rule = baseSchedule({ id: `rule-${sessionId}` });
+      const rule = baseSchedule({
+        id: `rule-${sessionId}`, modelAgentKind: 'claude-code', model: 'claude-sonnet-4-6',
+      });
       if (operation === 'update') await storage.insert(rule);
       expect(await storage.canSwitchCompletedAutomationSession(sessionId)).toBe(true);
       expect(second.prepare('SELECT agent_kind FROM sessions WHERE id = ?').pluck().get(sessionId)).toBe('cc');
@@ -2203,6 +2222,101 @@ it.each(['create', 'update'])('serializes plugin switching with a binding from a
     close();
     rmSync(dbPath);
     rmdirSync(dir);
+  }
+});
+
+// Regression for PR #12591 / PR #12734 conflict (DB tier):
+// - Production entry & observable result: DrizzleScheduleStorage.insert / update and
+//   applyAgentSwitchToSessionRowWithPorts; a local automation-spawned plugin-engine task
+//   (source='scheduler', agent_kind='acp', e.g. GitHub PR auto-follow with "follow current task")
+//   must accept a task-model bound automation and still allow plugin-engine switching, while
+//   incompatible bindings (explicit model/provider/effort, source='bot', or remote ACP target)
+//   must be rejected without corrupting non-route updates (e.g. pause).
+// - Rule basis: docs/plans/acp-plugin-bridge.md (bound plugin-engine automations, 2026-11-25)
+//   and scheduler-host/runner.ts boundPluginEngineRefusal.
+// - Coverage gap: #12397 tests blocked every binding on source='scheduler' + agent_kind='acp',
+//   leaving no DB-tier coverage for model-less follow-up bindings on scheduler ACP sessions.
+// - Minimal failing input: sessions(source='scheduler', agent_kind='acp') + storage.insert
+//   with targetSessionId and no model override (reproduces UNSUPPORTED_CAPABILITY before fix).
+it('allows task-model follow-ups on local plugin-engine tasks while rejecting incompatible bindings', async () => {
+  const { db, storage, close } = createStorageHarness();
+  setCurrentDbClient({ drizzle: db } as unknown as DbClient, 'test-user');
+  const owner = {
+    captureOwnerScope: () => true,
+    isOwnerScopeCurrent: () => true,
+    broadcastSessionPatched: () => {},
+  };
+  try {
+    await storage.insert(baseSchedule({ id: 'origin-rule', agentKind: 'acp', modelAgentKind: 'acp', providerId: 'acp-plugin:agy:agy', model: 'gemini-4-neon' }));
+    db.run(sql`INSERT INTO sessions (id, title, source, agent_kind, provider_id, model)
+      VALUES ('sched-acp', 'PR task', 'scheduler', 'acp', 'acp-plugin:agy:agy', 'gemini-4-neon')`);
+    db.run(sql`INSERT INTO sessions (id, title, source, agent_kind, agent_device_id)
+      VALUES ('remote-acp', 'Remote ACP', 'desktop', 'acp', 'other-mac')`);
+    db.run(sql`INSERT INTO sessions (id, title, source, agent_kind, remote_host_id)
+      VALUES ('ssh-acp', 'SSH ACP', 'desktop', 'acp', 'ssh-host')`);
+    await storage.insertRun({
+      id: 'origin-run', scheduleId: 'origin-rule', sessionId: 'sched-acp', firedAt: 1, finishedAt: 2, status: 'success',
+    });
+
+    // Follow-current-task PR auto-follow (no model override) succeeds on insert & update.
+    const follow = await storage.insert(baseSchedule({
+      id: 'pr-follow', agentKind: 'codex', targetSessionId: 'sched-acp',
+    }));
+    expect(follow.targetSessionId).toBe('sched-acp');
+    await expect(storage.canSwitchCompletedAutomationSession('sched-acp')).resolves.toBe(true);
+
+    // Switching the bound scheduler task onto another local plugin engine still succeeds.
+    await expect(applyAgentSwitchToSessionRowWithPorts(
+      'sched-acp', { agentKind: 'acp', model: 'deepseek-v4', providerId: 'acp-plugin:dsh:dsh' }, owner,
+    )).resolves.toBeUndefined();
+
+    // Repointing an unbound model-less schedule to the scheduler ACP task also succeeds.
+    await storage.insert(baseSchedule({ id: 'repoint-ok', agentKind: 'codex' }));
+    await expect(storage.update('repoint-ok', { targetSessionId: 'sched-acp' }))
+      .resolves.toMatchObject({ targetSessionId: 'sched-acp' });
+
+    // Adding an explicit model override on an already-bound ACP schedule is rejected.
+    await expect(storage.update('pr-follow', { modelAgentKind: 'codex', model: 'gpt-5.4' }))
+      .rejects.toThrow('[UNSUPPORTED_CAPABILITY]');
+    expect((await storage.get('pr-follow'))?.model).toBeUndefined();
+
+    // Clearing a model choice in the same update that binds to the ACP task succeeds.
+    await storage.insert(baseSchedule({ id: 'clear-and-bind', modelAgentKind: 'codex', model: 'gpt-5.4' }));
+    await expect(storage.update('clear-and-bind', {
+      targetSessionId: 'sched-acp', modelAgentKind: undefined, model: undefined,
+    })).resolves.toMatchObject({ targetSessionId: 'sched-acp', model: undefined });
+
+    // Incompatible inserts targeting a local or remote ACP task are rejected.
+    const incompatible: Array<{ id: string; overrides: Partial<Schedule> }> = [
+      { id: 'bad-model-kind', overrides: { targetSessionId: 'sched-acp', modelAgentKind: 'codex', model: 'gpt-5.4' } },
+      { id: 'bad-model-only', overrides: { targetSessionId: 'sched-acp', model: 'claude-opus-4-6' } },
+      { id: 'bad-provider', overrides: { targetSessionId: 'sched-acp', providerId: 'anthropic' } },
+      { id: 'bad-effort', overrides: { targetSessionId: 'sched-acp', effort: 'high' } },
+      { id: 'bad-bot', overrides: { targetSessionId: 'sched-acp', source: 'bot' } },
+      { id: 'bad-remote-device', overrides: { targetSessionId: 'remote-acp' } },
+      { id: 'bad-ssh', overrides: { targetSessionId: 'ssh-acp' } },
+    ];
+    for (const { id, overrides } of incompatible) {
+      await expect(storage.insert(baseSchedule({ id, ...overrides }))).rejects.toThrow('[UNSUPPORTED_CAPABILITY]');
+      expect(await storage.get(id)).toBeNull();
+    }
+
+    // Script schedules bind purely for lifecycle ownership, not agent turns.
+    await expect(storage.insert(baseSchedule({
+      id: 'script-on-acp', executionMode: 'script', targetSessionId: 'sched-acp',
+      workingDir: '/repo', scriptConfig: { command: 'echo ok', capabilities: [] },
+    }))).resolves.toMatchObject({ targetSessionId: 'sched-acp', executionMode: 'script' });
+
+    // Non-route updates (e.g. pause) on a pre-existing legacy incompatible schedule must still work.
+    db.run(sql`INSERT INTO schedules (id, name, prompt, kind, cron_expr, timezone, agent_kind, model, target_session_id, status, created_at, updated_at)
+      VALUES ('legacy-bad', 'legacy', 'hi', 'cron', '0 9 * * *', 'UTC', 'codex', 'gpt-5.4', 'sched-acp', 'active', 1, 1)`);
+    await expect(storage.update('legacy-bad', { status: 'paused', nextFireAt: undefined }))
+      .resolves.toMatchObject({ id: 'legacy-bad', status: 'paused' });
+    await expect(storage.update('legacy-bad', { targetSessionId: undefined }))
+      .resolves.toMatchObject({ id: 'legacy-bad', targetSessionId: undefined });
+  } finally {
+    clearCurrentDbClient();
+    close();
   }
 });
 

@@ -17,6 +17,12 @@ import { supplementalConversationEstimates } from '@cindy/maker-shared/usage-cos
 
 import { eq, gte, desc, and, isNull, isNotNull, inArray, notInArray, or, sql, getTableColumns, is, SQL } from 'drizzle-orm';
 import { runAsBackgroundDbRpc } from '../localDb/client/rpcAdmission.js';
+import {
+  boundScheduleBlocksPluginEngineSql,
+  boundScheduleRefusesLocalPluginEngineSql,
+  scheduleRequiresNonPluginBoundTarget,
+  type BoundSchedulePluginRouteSqlColumns,
+} from '../localDb/pluginAutomationBinding.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
 import type { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
 import type { broadcastSessionPatched as BroadcastSessionPatched } from '../localDb/ipc/sessions.js';
@@ -393,23 +399,113 @@ function publicScheduleRunWhere() {
   return sql`${scheduleRuns.scheduleId} NOT IN (SELECT id FROM schedules WHERE source = 'bot')`;
 }
 
-/** A finished run can change its own route only when no automation reuses this task. */
+const BOUND_SCHEDULE_COLUMNS: BoundSchedulePluginRouteSqlColumns = {
+  executionMode: sql.raw('bound.execution_mode'),
+  source: sql.raw('bound.source'),
+  modelAgentKind: sql.raw('bound.model_agent_kind'),
+  model: sql.raw('bound.model'),
+  providerId: sql.raw('bound.provider_id'),
+  effort: sql.raw('bound.effort'),
+};
+
+const PLUGIN_TARGET_COMPAT_PATCH_KEYS = [
+  'targetSessionId',
+  'executionMode',
+  'source',
+  'modelAgentKind',
+  'model',
+  'providerId',
+  'effort',
+] as const;
+
+function hasOwn(obj: object, key: PropertyKey): boolean {
+  return Object.prototype.hasOwnProperty.call(obj, key);
+}
+
+/**
+ * A finished run can switch onto a local plugin engine unless an incompatible
+ * automation (bot routine or explicit model/provider/effort choice) reuses it.
+ * Task-model follow-ups (e.g. GitHub PR auto-follow) run on the task's own plugin engine.
+ */
 function canSwitchRunPluginEngine() {
   return sql<boolean>`(
     ${scheduleRuns.sessionId} IS NOT NULL
     AND ${scheduleRuns.finishedAt} IS NOT NULL
     AND ${scheduleRuns.status} IN ('success', 'failed', 'aborted')
     AND NOT EXISTS (
-      SELECT 1 FROM schedules AS bound WHERE bound.target_session_id = ${scheduleRuns.sessionId}
+      SELECT 1 FROM schedules AS bound
+      WHERE bound.target_session_id = ${scheduleRuns.sessionId}
+        AND ${boundScheduleBlocksPluginEngineSql(BOUND_SCHEDULE_COLUMNS)}
     )
   )`.mapWith(Boolean);
 }
 
 // Check as part of the write so another desktop instance cannot switch the
-// target between validation and persistence.
-function targetAcceptsAutomation(targetSessionId: string) {
+// target between validation and persistence. Mirrors runner.ts boundPluginEngineRefusal:
+// local plugin-engine tasks accept task-model follow-up automations (including tasks
+// created by a scheduler run), while refusing bot routines, explicit model overrides,
+// and remote/other-device plugin-engine targets.
+function targetAcceptsInsertedAutomation(
+  targetSessionId: string,
+  row: Pick<typeof schedules.$inferInsert, 'executionMode' | 'source' | 'modelAgentKind' | 'model' | 'providerId' | 'effort'>,
+): SQL {
+  if (scheduleRequiresNonPluginBoundTarget(row)) {
+    return sql`NOT EXISTS (
+      SELECT 1 FROM sessions WHERE id = ${targetSessionId} AND agent_kind = 'acp'
+    )`;
+  }
   return sql`NOT EXISTS (
-    SELECT 1 FROM sessions WHERE id = ${targetSessionId} AND source = 'scheduler' AND agent_kind = 'acp'
+    SELECT 1 FROM sessions
+    WHERE id = ${targetSessionId}
+      AND agent_kind = 'acp'
+      AND (remote_host_id IS NOT NULL OR agent_device_id IS NOT NULL)
+  )`;
+}
+
+function targetAcceptsUpdatedAutomation(
+  setObj: Partial<Pick<typeof schedules.$inferInsert, (typeof PLUGIN_TARGET_COMPAT_PATCH_KEYS)[number]>>,
+): SQL | undefined {
+  if (!PLUGIN_TARGET_COMPAT_PATCH_KEYS.some((key) => hasOwn(setObj, key))) return undefined;
+  if (hasOwn(setObj, 'targetSessionId') && !setObj.targetSessionId) return undefined;
+  if (hasOwn(setObj, 'executionMode') && setObj.executionMode === 'script') return undefined;
+
+  const effectiveTarget = hasOwn(setObj, 'targetSessionId')
+    ? sql.param(setObj.targetSessionId ?? null, schedules.targetSessionId)
+    : schedules.targetSessionId;
+  const effectiveExecutionMode = hasOwn(setObj, 'executionMode')
+    ? sql.param(setObj.executionMode ?? 'agent', schedules.executionMode)
+    : schedules.executionMode;
+  const effectiveRoute = {
+    source: hasOwn(setObj, 'source')
+      ? sql.param(setObj.source ?? 'user', schedules.source)
+      : schedules.source,
+    modelAgentKind: hasOwn(setObj, 'modelAgentKind')
+      ? sql.param(setObj.modelAgentKind ?? null, schedules.modelAgentKind)
+      : schedules.modelAgentKind,
+    model: hasOwn(setObj, 'model')
+      ? sql.param(setObj.model ?? null, schedules.model)
+      : schedules.model,
+    providerId: hasOwn(setObj, 'providerId')
+      ? sql.param(setObj.providerId ?? null, schedules.providerId)
+      : schedules.providerId,
+    effort: hasOwn(setObj, 'effort')
+      ? sql.param(setObj.effort ?? null, schedules.effort)
+      : schedules.effort,
+  };
+
+  return sql`(
+    ${effectiveTarget} IS NULL
+    OR coalesce(${effectiveExecutionMode}, 'agent') = 'script'
+    OR NOT EXISTS (
+      SELECT 1 FROM sessions
+      WHERE sessions.id = ${effectiveTarget}
+        AND sessions.agent_kind = 'acp'
+        AND (
+          sessions.remote_host_id IS NOT NULL
+          OR sessions.agent_device_id IS NOT NULL
+          OR ${boundScheduleRefusesLocalPluginEngineSql(effectiveRoute)}
+        )
+    )
   )`;
 }
 
@@ -457,10 +553,12 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
         nextFireSum: sql<number>`coalesce(sum(${schedules.nextFireAt}), 0)`.mapWith(Number),
         nextFireN: sql<number>`coalesce(sum(case when ${schedules.nextFireAt} is not null then 1 else 0 end), 0)`.mapWith(Number),
         activeN: sql<number>`coalesce(sum(case when ${schedules.status} = 'active' then 1 else 0 end), 0)`.mapWith(Number),
-        // A different instance can repoint a rule without changing those totals.
+        // A different instance can repoint a rule or edit its model choice without changing those totals.
         boundTasks: sql<string>`(SELECT json_group_array(bound.target_session_id) FROM (
           SELECT DISTINCT target_session_id FROM schedules
-          WHERE target_session_id IS NOT NULL ORDER BY target_session_id
+          WHERE target_session_id IS NOT NULL
+            AND ${boundScheduleBlocksPluginEngineSql(schedules)}
+          ORDER BY target_session_id
         ) AS bound)`,
       })
       .from(schedules);
@@ -505,7 +603,7 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
   async insert(s: Schedule): Promise<Schedule> {
     const db = this.getDb();
     const row = scheduleCreateToRow(s);
-    if (row.targetSessionId) {
+    if (row.targetSessionId && row.executionMode !== 'script') {
       // Drizzle inserts SELECT values in table column order. Reuse its
       // encoders and schema defaults, including columns omitted by the mapper.
       const values = Object.entries(getTableColumns(schedules)).map(([key, column]) => {
@@ -514,7 +612,7 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
         return is(value, SQL) ? value : sql.param(value, column);
       });
       const [inserted] = await db.insert(schedules)
-        .select(sql`SELECT ${sql.join(values, sql`, `)} WHERE ${targetAcceptsAutomation(row.targetSessionId)}`)
+        .select(sql`SELECT ${sql.join(values, sql`, `)} WHERE ${targetAcceptsInsertedAutomation(row.targetSessionId, row)}`)
         .returning({ id: schedules.id });
       if (!inserted) rejectPluginAutomationTarget();
     } else {
@@ -558,7 +656,7 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
       const [current] = await db.select().from(schedules).where(where).limit(1);
       return current ? scheduleToCamel(current) : null;
     }
-    const targetCondition = patch.targetSessionId ? targetAcceptsAutomation(patch.targetSessionId) : undefined;
+    const targetCondition = targetAcceptsUpdatedAutomation(setObj);
     const [updated] = await db.update(schedules).set(setObj).where(and(where, targetCondition)).returning();
     if (!updated) {
       if (targetCondition) {
