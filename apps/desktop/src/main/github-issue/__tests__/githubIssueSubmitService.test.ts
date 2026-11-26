@@ -211,6 +211,22 @@ describe('submitGithubIssueWithConfirm', () => {
     }
   });
 
+  // #13146, unit: ACP and Pi share the same tool context. Only live metadata for
+  // the requested task distinguishes them in the confirmation and public body.
+  it.each([
+    ['sess-1', 'ACP'],
+    ['another-session', 'Pi'],
+  ])('uses live ACP identity only for the feedback task (%s)', async (acpSessionId, harness) => {
+    const modelId = 'fixture-neon';
+    const isAcpSession = vi.fn((sessionId: string) => sessionId === acpSessionId);
+    const { deps, confirm, postIssue } = makeDeps({ isAcpSession, getTurnModelId: async () => modelId });
+
+    await expect(submitGithubIssueWithConfirm(deps, { ...REQ, agentKind: 'pi' })).resolves.toMatchObject({ ok: true });
+    expect(isAcpSession).toHaveBeenCalledExactlyOnceWith(REQ.sessionId);
+    expect(confirm.mock.calls[0]![2]).toMatchObject({ harness, modelId });
+    expect(postIssue.mock.calls[0]![1]().description).toContain(`**Harness**: ${harness}\n**Model ID**: \` ${modelId} \``);
+  });
+
   it('在确认卡出现前锁定本轮模型 ID，之后切换 session 模型不会改写提交值', async () => {
     let selectedModel = 'claude-sonnet-4-5';
     const getTurnModelId = vi.fn(async () => selectedModel);
