@@ -17,12 +17,12 @@ import { randomUUID } from 'node:crypto';
 
 import { and, desc, eq, sql } from 'drizzle-orm';
 import type { IdentityKey } from '@cindy/im';
-import type { AgentKind, Effort, PermissionMode } from '@cindy/maker-core';
+import type { AgentKind, EngineKind, Effort, PermissionMode } from '@cindy/maker-core';
 import type { ProviderView } from '@cindy/model-providers';
 import { permissionModeOrAsk } from '@cindy/maker-shared/permission-mode';
 
 import { getDbClient } from '../../localDb/client/current';
-import { normalizeDbAgentKind } from '../../../shared/agentKindConversion';
+import { makerToDbEngineKind } from '../../../shared/agentKindConversion';
 import { sessions } from '../../localDb/schema';
 import { withSessionRouteLock } from '../../localDb/sessionRouteLock';
 import { retireDeletedPiSubagentState } from '../../localDb/ipc/piSubagentDeletion';
@@ -44,9 +44,18 @@ export function toCoreAgentKind(kind: string): AgentKind {
   return kind === 'codex' || kind === 'pi' ? kind : 'claude-code';
 }
 
-/** core AgentKind → sessions.agentKind 列的 legacy 存储值。 */
-function toDbAgentKind(kind: AgentKind): string {
-  return normalizeDbAgentKind(kind);
+/**
+ * Task row engine → Maker engine kind for every IM read of a task row. Plugin engines
+ * (docs/plans/acp-plugin-bridge.md) stay 'acp': mapping them to a built-in kind would send a
+ * plugin-engine task through built-in auth checks and restart it on Claude Code.
+ */
+export function toCoreEngineKind(kind: string): EngineKind {
+  return kind === 'acp' ? 'acp' : toCoreAgentKind(kind);
+}
+
+/** core engine kind → sessions.agentKind 列的存储值(插件引擎保持 'acp')。 */
+function toDbAgentKind(kind: EngineKind): string {
+  return makerToDbEngineKind(kind);
 }
 
 export interface ImSessionRow {
@@ -54,7 +63,8 @@ export interface ImSessionRow {
   initialTitle?: string;
   agentDeviceId?: string | null;
   id: string;
-  agentKind: AgentKind;
+  /** 'acp' = the task runs on a plugin engine (providerId names it, docs/plans/acp-plugin-bridge.md). */
+  agentKind: EngineKind;
   workingDir: string;
   model: string;
   /** Latest persisted effort (may be changed by user via /model card later). */
@@ -282,7 +292,7 @@ export function createImSessionRepo(
       if (!row) return null;
       return {
         id: row.id,
-        agentKind: toCoreAgentKind(row.agentKind),
+        agentKind: toCoreEngineKind(row.agentKind),
         workingDir: row.workingDir ?? ns.ensureWorkingDir(botContextId, userId),
         model: row.model,
         effort: row.effort,
@@ -361,7 +371,7 @@ export function createImSessionRepo(
       }
       return {
         id: row.id,
-        agentKind: toCoreAgentKind(row.agentKind),
+        agentKind: toCoreEngineKind(row.agentKind),
         workingDir: row.workingDir ?? ns.ensureWorkingDir(botContextId, userId),
         model: row.model,
         effort: row.effort,
@@ -384,7 +394,7 @@ export function createImSessionRepo(
       if (!row?.workingDir) return null;
       return {
         id: row.id,
-        agentKind: toCoreAgentKind(row.agentKind),
+        agentKind: toCoreEngineKind(row.agentKind),
         workingDir: row.workingDir,
         model: row.model,
         effort: row.effort,
@@ -530,7 +540,7 @@ export function createImSessionRepo(
       const result: ImSessionRow = persistedRow
         ? {
             id: persistedRow.id,
-            agentKind: toCoreAgentKind(persistedRow.agentKind),
+            agentKind: toCoreEngineKind(persistedRow.agentKind),
             workingDir: persistedRow.workingDir ?? row.workingDir,
             model: persistedRow.model,
             effort: persistedRow.effort,
@@ -706,7 +716,8 @@ function rowFromDefaults(
 
 /** 按渠道默认建出 / 重置的行对应的跟随记录; 非默认来源的行返回 null。 */
 function defaultRouteRecordFor(row: ImSessionRow): string | null {
-  if (!row.defaultRouteFingerprint) return null;
+  // Channel defaults are built-in routes; a task on a plugin engine never follows them.
+  if (!row.defaultRouteFingerprint || row.agentKind === 'acp') return null;
   return buildImDefaultRouteRecord(row.defaultRouteFingerprint, {
     agentKind: row.agentKind,
     model: row.model,

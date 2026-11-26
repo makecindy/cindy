@@ -56,6 +56,8 @@ export interface SessionPeerOptions {
   onRequest?(request: SessionRequest): void | Promise<void>;
   onPush?(channel: string, payload: unknown): void | Promise<void>;
   onPresence?(payload: unknown): void | Promise<void>;
+  /** Send backlog drained (`SessionWire.onDrain` or worker backlog report). */
+  onDrain?(): void;
   /** The session is unusable (bad frame, backlog, connection gone); pending requests have been failed. */
   onBroken?(code: string): void;
 }
@@ -100,7 +102,7 @@ export type SessionOpenOutcome = { opened: unknown } | { error: Error };
 
 /** What the business side uses of a session, the same whether it runs on this thread or in the Agent-Net worker. */
 export type SessionHandle = Pick<SessionPeer, 'open' | 'accept' | 'reject' | 'close' | 'presence' | 'request' | 'respond' | 'push'
-  | 'dispose' | 'bufferedAmount' | 'closedReason'>;
+  | 'dispose' | 'bufferedAmount' | 'closedReason' | 'cancelRequest'>;
 
 interface Pending {
   resolve(result: SessionResult): void; timer: ReturnType<typeof setTimeout> | null; written: boolean;
@@ -158,6 +160,7 @@ export class SessionPeer {
     });
     options.wire.onData((lane, bytes) => { this.receivedAt = performance.now(); this.lanes.receive(lane, bytes); });
     options.wire.onBody?.((key, bytes) => { this.receivedAt = performance.now(); this.lanes.receiveBody(key, bytes); });
+    options.wire.onDrain?.(() => options.onDrain?.());
   }
 
   get bufferedAmount(): number { return this.options.wire.bufferedAmount; }
@@ -174,7 +177,15 @@ export class SessionPeer {
       const refused = (error: Error) => { onSettled?.({ error }); reject(error); };
       const timer = setTimeout(() => { this.opening.delete(id); refused(new SessionError('LINK_TIMEOUT', 'no answer to session open')); }, timeoutMs);
       this.opening.set(id, { resolve: accepted, reject: refused, timer });
-      this.send('control', 'control', { t: 'open', id, payload });
+      try {
+        this.send('control', 'control', { t: 'open', id, payload });
+      } catch (error) {
+        // The worker forwards onSettled to Main. A rejected promise alone
+        // would leave Main waiting for a handshake that could not be sent.
+        if (!this.opening.delete(id)) return;
+        clearTimeout(timer);
+        refused(error instanceof Error ? error : new Error(String(error)));
+      }
     });
   }
   accept(id: string, payload: unknown): void { this.send('control', 'control', { t: 'accept', id, payload, at: performance.now() }); }
@@ -223,6 +234,11 @@ export class SessionPeer {
     const lane = this.inboundLane.get(id) ?? 'normal';
     this.send(lane, 'result', { t: 'result', id, result }, { id });
     this.inboundLane.delete(id);
+  }
+
+  cancelRequest(id: string): void {
+    const entry = this.pending.get(id);
+    if (entry) this.expire(id, entry, 'request was cancelled');
   }
 
   /** The request timed out (`INVOKE_TIMEOUT`, it may have run): tell the peer, so it does not start it or stops sending its result. */

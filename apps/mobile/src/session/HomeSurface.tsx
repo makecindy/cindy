@@ -4,7 +4,6 @@ import { useOrcaQuestionRows } from './orcaQuestionRows';
 import { sessionTaskProjectIconDirectory } from '@cindy/maker-shared/worktree-paths';
 import { ProjectPickerIcon } from './ProjectPickerIcon';
 import { ProjectSettingsSheet } from './ProjectSettingsSheet';
-import { Settings as ProjectSettingsIcon } from 'lucide-react-native';
 import { useStableHomeSections, type HomeDisplayOrder } from './homeStableOrder';
 import { playHaptic } from '@/platform/haptics';
 import { TaskSnoozeSheet } from './TaskSnoozeSheet';
@@ -198,6 +197,7 @@ import { runIndependentSnapshotReads } from '@/device-link/sessionSnapshotSingle
 import { revokedDevicesStore, useRevokedDevices } from '@/device-link/revokedDevicesStore';
 import { useUnresponsiveDevices } from '@/device-link/unresponsiveDevicesStore';
 import {
+  applyRemoteScheduleTimingsToIndex,
   remoteScheduleEventStore,
   useRemoteScheduleMirrorInvalidations,
 } from '@/scheduler/remoteScheduleEvents';
@@ -1065,10 +1065,13 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
         if (homeAccountGenerationRef.current !== expectedAccountGeneration) return;
         if (!isCurrentHomeSyncTarget(deviceId, expectedHomeSyncGeneration)) return;
         if (getScheduleIndexInvalidationVersion(deviceId) !== invalidationVersion) return;
+        // A patchable skipped event does not invalidate this read. Keep its
+        // newer timing even if the host read the index before the skip.
+        const timings = remoteScheduleEventStore.getSnapshot(deviceId).scheduleTimings;
         setScheduleIndex((current) => replaceSessionScheduleIndexEntries(
           current,
           sessionIds,
-          nextIndex,
+          applyRemoteScheduleTimingsToIndex(nextIndex, timings),
         ));
         if (homeScheduleIndexDirtyRef.current.get(deviceId) === pendingSeq) {
           homeScheduleIndexDirtyRef.current.delete(deviceId);
@@ -1727,17 +1730,28 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
       if (version === (scheduleEventVersionsRef.current.get(deviceId) ?? 0)) continue;
       scheduleEventVersionsRef.current.set(deviceId, version);
       const projection = snapshot.lastProjection;
-      if (projection?.refresh.sessionIndex !== true && projection?.runPatch.status !== 'running') continue;
       const sessionIds = remoteSessionStore.getSessions()
         .filter((session) => session.deviceLinkDeviceId === deviceId)
         .map((session) => session.id);
+      if (snapshot.scheduleTimings.size > 0 && sessionIds.length > 0) {
+        const deviceSessionSet = new Set(sessionIds);
+        setScheduleIndex((current) => applyRemoteScheduleTimingsToIndex(
+          current,
+          snapshot.scheduleTimings,
+          deviceSessionSet,
+        ));
+      }
+      if (projection?.refresh.sessionIndex !== true && projection?.runPatch.status !== 'running') continue;
       // scheduler 触发的新一次运行不会广播 local-db:sessions:created(桌面 runner 只发
       // schedule 事件),新 run 的会话不会自己进列表。事件带的 sessionId 不在本地列表时,
       // 先触发该设备重拉会话列表 —— hydrate 完成后其内部的 defer 会用新列表刷新 schedule
       // 索引(此处用旧列表刷,新会话的 running/未读条目会被 replaceSessionScheduleIndexEntries
       // 按 sessionIds 白名单丢弃,手机将一直看不到"任务正在运行")。
       const boundSessionId = projection.runPatch.sessionId;
-      if (boundSessionId && !sessionIds.includes(boundSessionId)) {
+      // An overflow summary may have dropped bindings for sessions missing
+      // from Home, even when its last retained binding is already known.
+      const scheduleOverflow = projection.event.type === 'unknown' && projection.event.rawType === 'resync';
+      if (scheduleOverflow || (boundSessionId && !sessionIds.includes(boundSessionId))) {
         remoteSessionStore.requestReseed(deviceId);
         continue;
       }
@@ -3550,6 +3564,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
         testID="devices.list"
         renderSectionHeader={({ section }) => {
           if (section.key.startsWith('device:')) {
+            if (!section.title) return null;
             const closed = collapsedProjectKeys.includes(section.key);
             const Chevron = closed ? ChevronRight : ChevronDown;
             return <Pressable accessibilityRole="button" accessibilityState={{ expanded: !closed }}
@@ -4578,10 +4593,6 @@ function ProjectRow({
         <Text style={[styles.projectTitle, styles.projectFolderTitle]} numberOfLines={1}>{project.title}</Text>
         {machineIdentity ? <HomeProjectMachineLabel identity={machineIdentity} /> : null}
       </View>
-      {kind === 'project' && hostKey && project.deviceId && <Pressable accessibilityRole="button" accessibilityLabel={t('settings.projectInfo.title')}
-        hitSlop={8} onPress={event => {event.stopPropagation(); setSettingsOpen(true);}} style={{padding:8}}>
-        <ProjectSettingsIcon size={iconSize.lg} color={colors.textSecondary} strokeWidth={iconStroke.regular} />
-      </Pressable>}
       <Text style={styles.projectCount} numberOfLines={1}>{project.sessionCount}</Text>
       {collapsedStatus?.dot ? (
         // 与任务行右槽同一 18×18 槽、同一右边缘,点色与任务行同表。
@@ -4626,7 +4637,8 @@ function ProjectRow({
       ) : null}
       {actionable && swipe ? (
         <SwipeableProjectHeader projectKey={project.key} registry={swipe.registry}
-          onNewTask={onNewTask} onOpenTasks={onOpenProject} onSearch={onSearchProject}>
+          onNewTask={onNewTask} onOpenTasks={onOpenProject} onSearch={onSearchProject}
+          onSettings={hostKey && project.deviceId ? () => setSettingsOpen(true) : undefined}>
           {dragGesture ? <GestureDetector gesture={dragGesture}>{header}</GestureDetector> : header}
         </SwipeableProjectHeader>
       ) : dragGesture ? <GestureDetector gesture={dragGesture}>{header}</GestureDetector> : header}

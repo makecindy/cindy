@@ -92,14 +92,45 @@ export interface WorkspaceMediaPath {
   revision: number;
 }
 
+function workspaceLookupHref(src: string | undefined, workingDir: string, enabled: boolean): string | null {
+  return enabled && src && workingDir && isRelativeLocalPath(src) && !src.includes('%') ? lookupPath(src) : null;
+}
+
+/** The found absolute path replaces the written one only for a unique match elsewhere. */
+function settledWorkspaceSrc(src: string, href: string, workingDir: string, result: SmartResolveResult): string {
+  if (result.status !== 'unique' || result.kind === 'directory') return src;
+  // 直接拼接本来就能找到、且原写法就是规范写法时保持原写法，避免播放器因地址写法不同而重新加载；
+  // 原写法不规范（如 POSIX 任务目录里的反斜杠）时拼不出能用的地址，换成找到的绝对路径。
+  return src === href && isSamePath(result.absPath, resolveLocalPath(href, workingDir)) ? src : result.absPath;
+}
+
+/** Whether the renderer searches the task folder for this written path. */
+export function usesWorkspaceLookup(src: string | undefined, workingDir: string, enabled: boolean): boolean {
+  return workspaceLookupHref(src, workingDir, enabled) !== null;
+}
+
+/**
+ * Synchronous counterpart for data built outside the rendered row (the task image
+ * gallery): uses an already cached lookup and otherwise keeps the written path.
+ * Never starts a lookup; the viewer resolves the entry it shows (useGalleryImageSrc).
+ */
+export function peekWorkspaceMediaSrc(
+  src: string | undefined,
+  workingDir: string,
+  enabled: boolean,
+): string | undefined {
+  const href = workspaceLookupHref(src, workingDir, enabled);
+  const result = href ? peekResolveLocalPathSmart(href, workingDir) : undefined;
+  return src && href && result ? settledWorkspaceSrc(src, href, workingDir, result) : src;
+}
+
 export function useWorkspaceMediaPath(
   src: string | undefined,
   workingDir: string,
   enabled: boolean,
   streaming = false,
 ): WorkspaceMediaPath {
-  const href =
-    enabled && src && workingDir && isRelativeLocalPath(src) && !src.includes('%') ? lookupPath(src) : null;
+  const href = workspaceLookupHref(src, workingDir, enabled);
   const key = href ? `${workingDir}::${href}` : null;
   const [settled, setSettled] = useState<{ key: string; result: SmartResolveResult } | null>(null);
   // 重查时机：窗口重新聚焦、所在消息流式结束(挂载本身由下面的 effect 覆盖)。记下发生的
@@ -175,16 +206,9 @@ export function useWorkspaceMediaPath(
   }
   const revision = display.revision;
 
-  if (!href) return { src, pending: false, revision };
+  if (!href || !src) return { src, pending: false, revision };
   if (!result) return { src: undefined, pending: true, revision };
-  if (result.status !== 'unique' || result.kind === 'directory') return { src, pending: false, revision };
-  // 直接拼接本来就能找到、且原写法就是规范写法时保持原写法，避免播放器因地址写法不同而重新加载；
-  // 原写法不规范（如 POSIX 任务目录里的反斜杠）时拼不出能用的地址，换成找到的绝对路径。
-  return {
-    src: src === href && isSamePath(result.absPath, resolveLocalPath(href, workingDir)) ? src : result.absPath,
-    pending: false,
-    revision,
-  };
+  return { src: settledWorkspaceSrc(src, href, workingDir, result), pending: false, revision };
 }
 
 /**

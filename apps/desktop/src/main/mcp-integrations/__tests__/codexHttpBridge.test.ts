@@ -1,6 +1,15 @@
 import { registerAppServer, clearAppServerConfigs } from '../../mcp-apps/runtime.js';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
+import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
+import { z } from 'zod';
+import { ANTIGRAVITY_TOTAL_DECLARATION_BYTES } from '../antigravityToolCatalog.js';
+import { COMPANION_CONNECTIONS_MCP_NAME, createCompanionConnectionsProvider } from '../../bot-import/connectionProvider.js';
+// The companion provider's catalog code is real; only its import-setup host and session store are
+// replaced, because loading them costs ~15 s of collection and no case here has a companion session.
+vi.mock('../../bot-import/host.js', () => ({ continueCompanionImport: vi.fn(), getCompanionImportSetupStatus: vi.fn(), useCindyImportSettings: vi.fn() }));
+vi.mock('../../bot-import/runtime.js', () => ({ readCompanionSessionDiscovery: vi.fn(async () => undefined), readCompanionSessionEnvironment: vi.fn(async () => undefined), readCompanionSessionScope: vi.fn(async () => undefined) }));
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { createXdtHelperMcpServer, getLiziMcpSessionContext } from '@cindy/mcps';
 
@@ -232,6 +241,111 @@ describe('codexHttpBridge', () => {
     expect(JSON.stringify(await invoke())).toContain('TASK_ACTION_AUTHORIZATION_EXPIRED');
   });
 
+  // 测试价值
+  // - 生产入口与可观察结果：startCodexHttpBridge 的真实 HTTP/MCP 入口；agy（clientInfo 为
+  //   antigravity-client）看到的 tools/list 总量与直接声明的入口，以及 describe_tool / run_tool 的回包。
+  // - Bug／规则依据：agy 把 ACP 传入的所有 MCP 工具放进约 16 KB 的共享预算，超出时整个删掉最大的工具
+  //   （google-antigravity/antigravity-cli#1530），ghost_call、cindy_scheduler.call_tool 因此不可调用。
+  // - 现有覆盖缺口：其他用例只验证普通客户端的完整目录。
+  // - 最小失败输入：16 个服务、每个都有几 KB 声明的目录；旧实现原样下发，总量远超预算。
+  //   自己安装 tools/list / tools/call 处理器的服务（companion_connections 的生产 provider、
+  //   与 mcp-apps/serverProxy.ts 同样写法的代理）在 agy 下曾因 registerTool 冲突而初始化失败。
+  // - tier：unit（回环端口、内存服务器，无外部进程）。实测约 1 秒。
+  it('keeps every agy catalog within the shared budget while full help and normal calls still work', async () => {
+    const run = vi.fn(async (args: Record<string, unknown>) => ({ content: [{ type: 'text' as const, text: `ran ${String(args.plugin)}` }] }));
+    const long = (topic: string) => `${topic}. ${'Detailed guidance for this tool. '.repeat(40)}`;
+    const serverNames = ['cindy', 'cindy_orca', 'cindy_helper', 'cindy_scheduler', 'app_proxy', COMPANION_CONNECTIONS_MCP_NAME,
+      ...Array.from({ length: 10 }, (_, i) => `extra_${i}`)];
+    const proxied = Array.from({ length: 8 }, (_, i) => ({
+      name: `upstream_${i}`, description: long(`Upstream ${i}`),
+      inputSchema: { type: 'object' as const, properties: { plugin: { type: 'string' } }, required: ['plugin'] },
+    }));
+    const proxyCall = vi.fn(async (request: { params: { name: string; arguments?: Record<string, unknown> } }) => ({
+      content: [{ type: 'text' as const, text: `proxied ${request.params.name} ${String(request.params.arguments?.plugin)}` }],
+    }));
+    const serverFactories = Object.fromEntries(serverNames.map(name => [name, () => {
+      if (name === COMPANION_CONNECTIONS_MCP_NAME) {
+        return (createCompanionConnectionsProvider().toClaudeSdkConfig!({} as never) as { instance: McpServer }).instance;
+      }
+      if (name === 'app_proxy') {
+        // Same construction as the MCP App proxy: its own discovery and execution handlers.
+        const server = new McpServer({ name, version: '1.0.0' }, { capabilities: { tools: {} } });
+        server.server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: proxied }));
+        server.server.setRequestHandler(CallToolRequestSchema, proxyCall);
+        return server;
+      }
+      const server = new McpServer({ name, version: '1.0.0' });
+      const plain = { title: z.string(), note: z.string().optional() };
+      if (name === 'cindy') {
+        server.registerTool('ghost_call', { description: long('Call a plugin tool'), inputSchema: { plugin: z.string().min(1) } }, run);
+        server.registerTool('ghost_info', { description: long('Inspect a plugin'), inputSchema: plain }, run);
+      }
+      if (name === 'cindy_scheduler') {
+        server.registerTool('list_tools', { description: long('List scheduler tools'), inputSchema: plain }, run);
+        server.registerTool('call_tool', { description: long('Call a scheduler tool'), inputSchema: plain }, run);
+        return server;
+      }
+      for (let i = 0; i < 8; i++) {
+        server.registerTool(`${name}_rare_${i}`, { description: long(`Rare ${i}`), inputSchema: { plugin: z.string().min(1) } }, run);
+      }
+      return server;
+    }]));
+    bridge = await startCodexHttpBridge({ serverFactories, logger: noopLogger() });
+    const open = async (clientName: string, serverName: string) => {
+      const client = new Client({ name: clientName, version: '1' });
+      await client.connect(new StreamableHTTPClientTransport(new URL(bridge!.url(serverName)), {
+        requestInit: { headers: { Authorization: 'Bearer ' + bridge!.token } },
+      }));
+      return client;
+    };
+    const bytes = (tools: Array<{ name: string; description?: string; inputSchema: unknown }>) => tools.reduce(
+      (sum, tool) => sum + Buffer.byteLength(JSON.stringify({ name: tool.name, description: tool.description, parameters: tool.inputSchema })), 0);
+    const clients = await Promise.all(serverNames.map(name => open('antigravity-client', name)));
+    const ordinary = await open('other-client', 'cindy');
+    try {
+      const listed = await Promise.all(clients.map(client => client.listTools()));
+      expect(bytes(listed.flatMap(result => result.tools))).toBeLessThanOrEqual(ANTIGRAVITY_TOTAL_DECLARATION_BYTES);
+      const names = (index: number) => listed[index]!.tools.map(tool => tool.name);
+      expect(names(0)).toEqual(expect.arrayContaining(['ghost_call', 'ghost_info', 'describe_tool', 'run_tool']));
+      expect(names(0)).not.toContain('cindy_rare_0');
+      expect(names(3)).toEqual(['list_tools', 'call_tool']);
+      expect(names(4)).toEqual(['describe_tool', 'run_tool']);
+      expect(names(5)).toEqual([]);
+      const proxy = clients[4]!;
+      expect(JSON.parse(((await proxy.callTool({ name: 'describe_tool', arguments: { name: 'upstream_3' } })).content as [{ text: string }])[0].text))
+        .toEqual(proxied[3]);
+      expect((await proxy.callTool({ name: 'run_tool', arguments: { name: 'upstream_3', arguments: { plugin: 'docs' } } })).content)
+        .toEqual([{ type: 'text', text: 'proxied upstream_3 docs' }]);
+      expect(proxyCall).toHaveBeenCalledOnce();
+
+      const full = (await ordinary.listTools()).tools;
+      expect(full.map(tool => tool.name)).not.toContain('describe_tool');
+      const agy = clients[0]!;
+      const help = await agy.callTool({ name: 'describe_tool', arguments: { name: 'cindy_rare_0' } });
+      const definition = full.find(tool => tool.name === 'cindy_rare_0')!;
+      expect(JSON.parse((help.content as [{ text: string }])[0].text))
+        .toEqual({ name: definition.name, description: definition.description, inputSchema: definition.inputSchema });
+      const index = JSON.parse(((await agy.callTool({ name: 'describe_tool', arguments: {} })).content as [{ text: string }])[0].text);
+      expect(index).toEqual(expect.arrayContaining([
+        expect.objectContaining({ name: 'ghost_call', declared: true }),
+        expect.objectContaining({ name: 'cindy_rare_0', declared: false }),
+      ]));
+
+      // run_tool becomes the original tools/call: the real schema still rejects bad input.
+      expect((await agy.callTool({ name: 'run_tool', arguments: { name: 'cindy_rare_0', arguments: { plugin: '' } } })).isError).toBe(true);
+      expect((await agy.callTool({ name: 'run_tool', arguments: { name: 'missing_tool' } })).isError).toBe(true);
+      expect((await agy.callTool({ name: 'ghost_call', arguments: { plugin: '' } })).isError).toBe(true);
+      expect(run).not.toHaveBeenCalled();
+      expect((await agy.callTool({ name: 'run_tool', arguments: { name: 'cindy_rare_0', arguments: { plugin: 'github' } } })).content)
+        .toEqual([{ type: 'text', text: 'ran github' }]);
+      expect((await agy.callTool({ name: 'ghost_call', arguments: { plugin: 'gitlab' } })).content)
+        .toEqual([{ type: 'text', text: 'ran gitlab' }]);
+      expect(run).toHaveBeenCalledTimes(2);
+    } finally {
+      await Promise.all([...clients, ordinary].map(client => client.close()));
+    }
+  });
+
   it('scopes startup tools/list before thread registration without authorizing execution', async () => {
     bridge = await startCodexHttpBridge({
       serverFactories: { cindy_helper: () => {
@@ -416,6 +530,33 @@ describe('codexHttpBridge', () => {
     const stale = await request('tools/list');
     expect(stale.status).toBe(401);
     await stale.text();
+  });
+
+  it('reclaims stale and excess ownerless sessions in the same sweep', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'setInterval', 'clearInterval'] });
+    try {
+      bridge = await startCodexHttpBridge({ serverFactories: { cindy_test: createTestServer }, logger: noopLogger() });
+      const url = bridge.url('cindy_test');
+      const headers = { authorization: 'Bearer ' + bridge.token, accept: 'application/json, text/event-stream', 'content-type': 'application/json' };
+      const body = JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: {
+        protocolVersion: '2024-11-05', capabilities: {}, clientInfo: { name: 'test-client', version: '1' },
+      } });
+      async function open() {
+        const response = await fetch(url, { method: 'POST', headers, body });
+        expect(response.status).toBe(200);
+        await response.text();
+      }
+      await open();
+      vi.setSystemTime(Date.now() + 30 * 60_000);
+      for (let i = 0; i < 257; i++) await open();
+      expect(bridge.mcpSessionCount()).toBe(258);
+      vi.advanceTimersByTime(5 * 60_000);
+      expect(bridge.mcpSessionCount()).toBe(256);
+    } finally {
+      await bridge?.shutdown();
+      bridge = null;
+      vi.useRealTimers();
+    }
   });
 
   it('accepts an additional bearer token (remote daemon) and rejects unknown tokens', async () => {

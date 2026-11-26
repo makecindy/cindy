@@ -99,6 +99,8 @@ export const providersSettings = defineSettings({
     keywordKeys: [
       'settings.providers.models.advanced.displayName',
       'settings.providers.remote.modelsTitle',
+      'settings.providers.menu.appearance', 'settings.providers.menu.icon',
+      'settings.providers.menu.ownImage', 'settings.providers.wizard.nameLabel',
     ],
     sectionKey: 'settings.sections.providers',
   },

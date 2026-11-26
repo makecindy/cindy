@@ -7,6 +7,7 @@
  * - 持有依赖注入的 deps，但具体使用由子类决定
  */
 
+import type { ChildProcess } from 'node:child_process';
 import type { AutoReviewUserIntent, AutoReviewUserReferences } from './shared/auto-review-decision.js';
 import { LIBRARY_READ_ROOT } from './shared/library-native-read.js';
 import { canonicalSkillPath, isSkillDisabled } from './shared/skill-activation.js';
@@ -396,6 +397,21 @@ export interface CodexDownshiftModelRejection {
   transport: 'http' | 'bridge';
 }
 
+/**
+ * Structured capacity/overload signal observed at the local codex-proxy layer
+ * (WebSocket inbound error frames or HTTP /responses errors) before Codex's
+ * native app-server strips the cause down to a generic `Reconnecting... N/M`
+ * or silently sleeps through retry 1/5.
+ *
+ * Intentionally carries no raw upstream body or user text.
+ */
+export interface CodexUpstreamCapacitySignal {
+  code: 'server_is_overloaded' | 'slow_down' | 'at_capacity';
+  status?: number;
+  retryAfterMs?: number;
+  observedAt: number;
+}
+
 export interface CodexExtraSpawnConfig {
   /** Exact root-connection model IDs frozen with the custom context catalog. */
   contextProviderModels?: readonly string[];
@@ -465,6 +481,8 @@ export type CodexAppServerProcessRole = 'task-host' | 'control-plane-service';
 
 export interface CodexAppServerProcessRegistration {
   pid: number;
+  /** The local spawn handle used by the owning runtime at shutdown. */
+  child?: ChildProcess;
   role: CodexAppServerProcessRole;
 }
 
@@ -1446,6 +1464,18 @@ export interface AgentDeps {
   /** Original model of the local root's rejected native pre-turn downshift request, if observed. */
   getRejectedCodexDownshiftModel?: (sessionId: string, threadId: string, turnId: string) => CodexDownshiftModelRejection | undefined;
 
+  /** Latest proxy-observed upstream capacity signal for a local Codex root thread, if any. */
+  getObservedCodexUpstreamCapacity?: (sessionId: string, threadId: string) => CodexUpstreamCapacitySignal | undefined;
+
+  /**
+   * Subscribe to real-time upstream capacity signals observed by local codex-proxy
+   * for `sessionId` (covers retry 1/5 where Codex app-server emits no error event).
+   */
+  subscribeCodexUpstreamCapacity?: (
+    sessionId: string,
+    listener: (event: { threadId: string; signal: CodexUpstreamCapacitySignal }) => void,
+  ) => () => void;
+
   /** Desktop proxy observation of the model actually sent for one Codex child thread. */
   getCodexSubagentIdentity?: (args: { childThreadId: string }) => {
     model: string;
@@ -1908,9 +1938,11 @@ export const PI_REQUEST_BODY_RECOVERY_EXHAUSTED = 'PI_REQUEST_BODY_RECOVERY_EXHA
 /** The provider explicitly rejected the turn before accepting any work. */
 export class TurnDispatchRejectedError extends Error {
   readonly code = 'TURN_DISPATCH_REJECTED';
+  readonly diagnostic?: 'pi-retry-history-frame-too-large';
 
-  constructor(msg: string, options?: ErrorOptions) {
+  constructor(msg: string, options?: ErrorOptions & { diagnostic?: TurnDispatchRejectedError['diagnostic'] }) {
     super(msg, options);
+    this.diagnostic = options?.diagnostic;
     this.name = 'TurnDispatchRejectedError';
   }
 }
@@ -2056,6 +2088,8 @@ export interface StartSessionOptions {
    * 暴露成模型或插件可控的工具参数。
    */
   sessionInstanceId?: string;
+  /** Maker can verify that this start has no existing task metadata. */
+  isNewMakerTask?: () => Promise<boolean>;
   workingDir: string;
   /**
    * Product workspace classification. `dialogue` sessions may still receive an
@@ -2450,7 +2484,8 @@ export class TurnPermissionPolicyUnsupportedError extends Error {
   readonly code = 'TURN_PERMISSION_POLICY_UNSUPPORTED';
 
   constructor(
-    readonly agentKind: AgentKind,
+    /** 'acp' = a plugin engine (enforces per-turn policies only when it advertises permissionGate outside bypassPermissions). */
+    readonly agentKind: EngineKind,
     readonly permissionMode: PermissionMode,
   ) {
     super(
@@ -2570,6 +2605,8 @@ export interface PiModelSwitchPreview {
   targetContextWindow: number | null;
   /** Only true when the live Pi runtime has confirmed this exact target window. */
   windowVerified: boolean;
+  /** The target provider was resolved and its model list excludes this selection. */
+  modelNotOffered?: true;
   /** Non-secret reason suitable for a host error; never include env values. */
   reason?: string;
 }
@@ -2624,6 +2661,8 @@ export interface AgentSessionHandle {
   readonly model: string;
   /** Pi-only, per-session runtime command catalog. Undefined for other agents. */
   getRuntimeCapabilities?(): PiRuntimeCapabilityManifest | undefined;
+  /** ACP-only slash-command names advertised by the current plugin session. */
+  getPluginEngineCommandNames?(): readonly string[];
   /** An explicit Skill send may retry exhausted discovery on the existing process. */
   retryFailedRuntimeCapabilityCapture?(): void;
   /** Subscribe to Pi runtime catalog replacement; returns an idempotent disposer. */
@@ -2737,6 +2776,14 @@ export interface AgentSessionHandle {
    * Agents whose background work is fully covered by listBackgroundTasks omit it.
    */
   hasLiveBackgroundWork?(): Promise<boolean>;
+
+  /**
+   * Whether closing this runtime keeps the conversation: the next send can reopen
+   * the same native session. Idle runtime reclamation releases only runtimes that
+   * can. Built-in engines always resume and omit it; a plugin engine answers from
+   * what its agent advertised.
+   */
+  canResumeAfterClose?(): boolean;
 
   /**
    * Resolve the provider claim attached atomically to a specific `done` event.

@@ -563,7 +563,7 @@ export function PlanChangeStatusDialog({
                           aria-hidden="true"
                           className="pointer-events-none absolute grid size-10 place-items-center rounded-lg bg-white p-1"
                         >
-                          <img src={cindyIconUrl} className="size-8 rounded-md" alt="" />
+                          <img src={cindyIconUrl} className="size-8" alt="" />
                         </span>
                       </>
                     ) : (

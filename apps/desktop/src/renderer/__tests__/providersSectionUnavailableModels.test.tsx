@@ -280,6 +280,10 @@ beforeEach(() => {
   refetchProvidersSpy.mockReset().mockResolvedValue(true);
   vi.mocked(updateCustomProvider).mockResolvedValue({ ok: true });
   (window as unknown as { electronAPI: unknown }).electronAPI = {
+    providerGroup: {
+      command: vi.fn(async ({ action }: { action: string }) => action === 'account-detail' ? { accounts: [] } : {}),
+      onChanged: vi.fn(() => () => undefined),
+    },
     modelAccess: { getByokStatus: vi.fn(async () => ({ providers: [] })) },
     subscriptionAccounts: {
       command: vi.fn(async ({ providerId }: { providerId: string }) => ({
@@ -380,13 +384,9 @@ describe('ProvidersSection — 双栏管理', () => {
         fireEvent.click(screen.getByRole('button', { name: 'settings.providers.button.disconnect' }));
         await waitFor(() => expect(disconnect).toHaveBeenCalledOnce());
       } else if (source !== 'import') {
-        confirmSpy.mockImplementationOnce(async (options) => {
-          const input = render(options.content);
-          fireEvent.change(screen.getByRole('textbox', { name: 'settings.providers.pill.rename' }), { target: { value: 'New provider' } });
-          input.unmount();
-          return true;
-        });
         fireEvent.doubleClick(screen.getByRole('button', { name: /Old provider/ }));
+        fireEvent.change(await screen.findByRole('textbox', { name: 'settings.providers.wizard.nameLabel' }), { target: { value: 'New provider' } });
+        fireEvent.click(screen.getByRole('button', { name: 'settings.providers.custom.save' }));
         await waitFor(() => expect(rename).toHaveBeenCalledOnce());
       } else {
         await screen.findByRole('button', { name: 'settings.providers.import.create' });
@@ -395,7 +395,10 @@ describe('ProvidersSection — 双栏管理', () => {
         fireEvent.click(await screen.findByRole('button', { name: 'settings.providers.import.replaceKey' }));
         await waitFor(() => expect(confirmImport).toHaveBeenCalledOnce());
       }
-      if (source !== 'import') {
+      if (source === 'rename' || source === 'owner-changed') {
+        expect((screen.getByRole('button', { name: 'settings.providers.custom.save' }) as HTMLButtonElement).disabled).toBe(true);
+        expect(persist).not.toHaveBeenCalled();
+      } else if (source !== 'import') {
         fireEvent.click(screen.getByRole('button', { name: 'settings.providers.models.advanced.openAria' }));
         const input = screen.getByRole('textbox', { name: 'settings.providers.models.advanced.displayName' });
         fireEvent.change(input, { target: { value: 'Work alias' } });
@@ -423,7 +426,7 @@ describe('ProvidersSection — 双栏管理', () => {
       }
       expect(committed.name).toBe(source === 'rename' ? 'New provider' : 'Old provider');
       if (source.endsWith('disconnect') || source === 'oauth-login') expect(committed.runtimes.codex!.models[0]).not.toHaveProperty('discoveredSource');
-      if (source === 'import') fireEvent.click(screen.getByRole('button', { name: 'settings.providers.models.advanced.openAria' }));
+      if (source === 'import' || source === 'rename') fireEvent.click(screen.getByRole('button', { name: 'settings.providers.models.advanced.openAria' }));
       const input = screen.getByRole('textbox', { name: 'settings.providers.models.advanced.displayName' }) as HTMLInputElement;
       fireEvent.change(input, { target: { value: 'Work alias' } });
       const save = screen.getByRole('button', { name: 'settings.providers.models.advanced.saveName' }) as HTMLButtonElement;

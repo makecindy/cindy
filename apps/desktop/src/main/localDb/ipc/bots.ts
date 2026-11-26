@@ -116,6 +116,7 @@ import type { BotPackageOpening } from '../../../shared/botMarket.js';
 import { botDmThreadRouteKey, parseBotDmThreadRouteKey, type BotDmThreadSummary } from '../../../shared/botDmThread.js';
 import { botGroupLaneRouteKey, botGroupPlanRouteKey, chatGroupLaneRouteKey, chatGroupTalkRouteKey, chatGroupThreadRouteKey, groupLaneOfRouteKey, groupLaneUsesChatWorkspace, parseBotGroupIdFromRouteKey, type ChatLaneAccess } from '../../../shared/botGroupChat.js';
 import { queueBotInvitation as enqueueBotInvitation } from '../../maker-ipc/botInvitation.js';
+import { getAuthState } from '../../authManager.js';
 import { getMakerIfReady, validateBotCapabilityAdditions } from '../../maker-host/index.js';
 import type { BotCapabilityUpdate } from '../../maker-ipc/botCapabilityService.js';
 import { getResolvedMainLocale } from '../../i18n.desktop.js';
@@ -132,7 +133,8 @@ function queueBotInvitation(botId: string, retry = false): void {
   enqueueBotInvitation(
     botId,
     { createCanonicalSession: createBotCanonicalSession, broadcastProfileChanged: broadcastBotProfileChanged,
-      canStartWelcome: async config => (await readEffectiveBotModelChain(config)).length > 0 },
+      canStartWelcome: async config => (await readEffectiveBotModelChain(config)).length > 0,
+      getUserName: () => getAuthState().user?.name },
     retry,
   );
 }
@@ -301,6 +303,13 @@ type CreateBotCanonicalSessionResult = {
   created: boolean;
   canonicalSessionId: string;
   session: ReturnType<typeof sessionToCamel>;
+  /** True when created via the trusted host-only take-over path without a usable model route yet. */
+  missingModel?: boolean;
+};
+
+type CreateBotCanonicalSessionHostOptions = {
+  /** Host-only flag for explicit cloud take-over; never accepted from renderer IPC payloads. */
+  allowMissingModel?: boolean;
 };
 
 type CanonicalLinkReconciliation = {
@@ -315,7 +324,7 @@ type CanonicalLinkReconciliation = {
 };
 
 let createBotCanonicalSessionImpl:
-  ((input: CreateBotCanonicalSessionInput, beforeCommit?: () => Promise<void>) => Promise<CreateBotCanonicalSessionResult>) | null =
+  ((input: CreateBotCanonicalSessionInput, beforeCommit?: () => Promise<void>, hostOptions?: CreateBotCanonicalSessionHostOptions) => Promise<CreateBotCanonicalSessionResult>) | null =
   null;
 
 /** Main-side canonical creator shared by first creation, restore and missing-task repair. */
@@ -323,13 +332,14 @@ export async function createBotCanonicalSession(
   input: CreateBotCanonicalSessionInput,
   // Host-only guard, never accepted from the IPC payload or serialized to the worker.
   beforeCommit?: () => Promise<void>,
+  hostOptions?: CreateBotCanonicalSessionHostOptions,
 ): Promise<CreateBotCanonicalSessionResult> {
   if (!createBotCanonicalSessionImpl) {
     throwIpcError('PRECONDITION_FAILED', 'Bot 数据服务尚未初始化');
   }
   const owner = captureBotOperationOwner();
   owner.assertCurrent();
-  const result = await createBotCanonicalSessionImpl(input, beforeCommit);
+  const result = await createBotCanonicalSessionImpl(input, beforeCommit, hostOptions);
   owner.assertCurrent();
   return result;
 }
@@ -2701,6 +2711,7 @@ export function registerBotIpc(onCreatedTopic?: (id: string, subject: string, in
   const createBotCanonicalSessionUnlocked = async (
     input: CreateBotCanonicalSessionInput,
     beforeCommit?: () => Promise<void>,
+    hostOptions?: CreateBotCanonicalSessionHostOptions,
   ): Promise<CreateBotCanonicalSessionResult> => {
     const botId = readText(input.botId, 'botId', 128, true);
     const expectedCanonicalSessionId = input.expectedCanonicalSessionId;
@@ -2760,7 +2771,10 @@ export function registerBotIpc(onCreatedTopic?: (id: string, subject: string, in
     if (invitation && invitation.stage !== 'ready' && invitation.stage !== 'welcome')
       throwIpcError('PRECONDITION_FAILED', '伙伴正在准备见面');
     const primaryRoute = await readEffectiveBotPrimaryRoute(config);
-    if (!primaryRoute) throwIpcError('PRECONDITION_FAILED', '请先连接模型供应商或选择伙伴模型');
+    const missingModel = !primaryRoute;
+    if (missingModel && !hostOptions?.allowMissingModel) {
+      throwIpcError('PRECONDITION_FAILED', '请先连接模型供应商或选择伙伴模型');
+    }
     const workspace = await privateBotWorkspace(botId, readBotProjectMode(config), { ownerUserDataPath: () => owner.userDataDir });
     const { value: result } = await openSession({ id: sessionId, now, source: 'bot', assertCurrent: owner.assertCurrent,
       body: { title: profile.displayName, ...workspace, ...botSessionRouteFields(config, primaryRoute) },
@@ -2800,6 +2814,7 @@ export function registerBotIpc(onCreatedTopic?: (id: string, subject: string, in
     return {
       created,
       canonicalSessionId,
+      ...(missingModel ? { missingModel: true } : {}),
       session: sessionToCamel({
         ...canonical,
         messageCount: 0,
@@ -2809,7 +2824,11 @@ export function registerBotIpc(onCreatedTopic?: (id: string, subject: string, in
     };
   };
 
-  const createBotCanonicalSessionPrepared = async (input: CreateBotCanonicalSessionInput, beforeCommit?: () => Promise<void>) => {
+  const createBotCanonicalSessionPrepared = async (
+    input: CreateBotCanonicalSessionInput,
+    beforeCommit?: () => Promise<void>,
+    hostOptions?: CreateBotCanonicalSessionHostOptions,
+  ) => {
     const owner = captureBotOperationOwner();
     // Bring legacy pointer-only profiles into the link registry before any
     // create/replace CAS. Once a canonical link exists, the worker transaction
@@ -2817,13 +2836,13 @@ export function registerBotIpc(onCreatedTopic?: (id: string, subject: string, in
     await reconcileCanonicalLink(input.botId);
     owner.assertCurrent();
     const previousSessionId = input.expectedCanonicalSessionId;
-    if (!previousSessionId) return createBotCanonicalSessionUnlocked(input, beforeCommit);
+    if (!previousSessionId) return createBotCanonicalSessionUnlocked(input, beforeCommit, hostOptions);
     return coordinateBotCanonicalReplacement(previousSessionId, () =>
-      createBotCanonicalSessionUnlocked(input, beforeCommit),
+      createBotCanonicalSessionUnlocked(input, beforeCommit, hostOptions),
     );
   };
 
-  createBotCanonicalSessionImpl = async (input, beforeCommit) => {
+  createBotCanonicalSessionImpl = async (input, beforeCommit, hostOptions) => {
     const owner = captureBotOperationOwner();
     /*
       解析主任务前先把家里的文件收进来。用户拿编辑器改完 SOUL.md、
@@ -2835,14 +2854,14 @@ export function registerBotIpc(onCreatedTopic?: (id: string, subject: string, in
     */
     const derived = await reconcileBotProfileFolder(input.botId);
     owner.assertCurrent();
-    if (!derived) return createBotCanonicalSessionPrepared(input, beforeCommit);
+    if (!derived) return createBotCanonicalSessionPrepared(input, beforeCommit, hostOptions);
     // The host itself just folded the user's file edit into a new version. A caller
     // that saw the version before it is not racing a concurrent change; any other
     // mismatch still loses the create CAS.
     broadcastBotProfileChanged({ botId: input.botId, change: 'updated' });
     return createBotCanonicalSessionPrepared(input.expectedProfileVersion === derived.from
       ? { ...input, expectedProfileVersion: derived.to }
-      : input, beforeCommit);
+      : input, beforeCommit, hostOptions);
   };
 
   ipcMain.handle('local-db:bots:create-canonical-session', async (event, raw: unknown) => {

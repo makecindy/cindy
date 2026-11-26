@@ -396,6 +396,18 @@ describe('settings discoverability regressions', () => {
       .not.toContain('shortcuts.close-tab-or-window');
   });
 
+  // #8494: the English alias returned no shortcut row.
+  it.each([
+    ['zh-CN', '截屏'],
+    ['en', 'screen capture'],
+  ])('finds the region screenshot shortcut by its %s alias', (locale, query) => {
+    const translate = searchI18n.getFixedT(locale);
+    const documents = buildSettingsSearchDocuments(translate, TAB_IDS, { ...searchContext, platform: 'darwin' });
+    const results = searchSettings(documents, query).filter(({ entry }) =>
+      entry.targetId === 'settings-shortcut-region-screenshot');
+    expect(results.map(({ entry }) => entry.id)).toEqual(['shortcuts.region-screenshot']);
+  });
+
   it.each([['win32', 'Ctrl+Enter'], ['darwin', '⌘+Enter']])('keeps the %s shortcut in the search result title', (platform, shortcut) => {
     const documents = buildSettingsSearchDocuments(searchI18n.t, TAB_IDS, { ...searchContext, platform });
     const result = searchSettings(documents, shortcut).find(({ entry }) => entry.id === 'settings.composer.sendShortcut.label');
@@ -581,6 +593,9 @@ describe('settings search catalog', () => {
       );
     expect(ids()).not.toContain('remoteControl.devices');
     expect(ids({ mode: 'cloud' })).toContain('remoteControl.devices');
+    // 云主机入口只给组织成员:个人账号搜不到「云主机」,否则搜到后页面上没有这一行(PR #12823 评审)。
+    expect(ids({ mode: 'cloud', membershipKind: 'personal' })).not.toContain('remoteControl.cloudComputer');
+    expect(ids({ mode: 'cloud', membershipKind: 'org' })).toContain('remoteControl.cloudComputer');
     for (const region of ['cn', 'dev', 'global'] as const) {
       const visible = ids({ region, mode: 'cloud', membershipKind: 'personal' });
       expect(visible).toContain('imBot.cindy');

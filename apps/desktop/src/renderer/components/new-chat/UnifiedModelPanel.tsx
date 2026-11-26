@@ -21,6 +21,8 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import { favoritesSyncFailureI18nKey } from './favoritesSyncFailure';
 import { Check, ChevronRight, Loader2, TriangleAlert } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
+import { useInitialPaint } from '@/hooks/useInitialPaint';
+import { Spinner } from '@/components/ui/spinner';
 
 import {
   unifiedModelEntries,
@@ -414,7 +416,28 @@ export interface UnifiedModelPanelProps {
  * 数据源:M1 的 `unifiedModelEntries`(纯逻辑,已按生效来源解析候选与能力)+ 调用方注入的
  * 可见性 / 排除谓词。本组件**不自己判定候选引擎或能力**,只做合成与呈现。
  */
-export function UnifiedModelPanel({
+export function UnifiedModelPanel(props: UnifiedModelPanelProps) {
+  const { t } = useTranslation();
+  const panelRoot = useRef<HTMLDivElement>(null);
+  // The first provider snapshot can arrive while the opening morph is still
+  // transparent. Track the shell's paint independently of the initial catalog.
+  const painted = useInitialPaint(() => true, panelRoot);
+  if (!painted) {
+    const localRows = props.providers.reduce((count, provider) =>
+      count + Object.values(provider.models).reduce((sum, models) => sum + models.length, 0), 0);
+    const remoteRows = props.remoteSources?.groups.reduce((count, group) => count + group.entries.length, 0) ?? 0;
+    if (localRows + remoteRows >= 80) {
+      return <div ref={panelRoot} role="status" style={{ height: props.listMaxHeight ?? 428 }} className="flex min-h-0 shrink items-center justify-center gap-1.5 px-3 text-13 text-[var(--text-tertiary)]">
+        <Spinner size={14} />
+        {t('newChat.modelSelector.trigger.loading')}
+      </div>;
+    }
+  }
+  return <UnifiedModelPanelContent {...props} panelRoot={panelRoot} />;
+}
+
+function UnifiedModelPanelContent({
+  panelRoot,
   pinnedTop,
   pinnedTopHasRows = false,
   modelGroupsView,
@@ -475,7 +498,7 @@ export function UnifiedModelPanel({
   catalogNotice,
   emptyCatalogNotice,
   remoteSources,
-}: UnifiedModelPanelProps) {
+}: UnifiedModelPanelProps & { panelRoot: React.RefObject<HTMLDivElement | null> }) {
   const { t } = useTranslation();
   const [thinkingMemoryVersion, refreshThinkingMemory] = useState(0);
   const storedFavorites = useModelFavorites();
@@ -1567,6 +1590,7 @@ export function UnifiedModelPanel({
 
   const panelContent = (
     <div
+      ref={panelRoot}
       className="flex min-h-0 min-w-0 shrink"
       style={{ height: `${listMaxHeight ?? 428}px` }}
     >

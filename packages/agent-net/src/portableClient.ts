@@ -22,13 +22,14 @@ function udpCredentialsAllowed(wsUrl: string): boolean {
   return /^wss:\/\//i.test(wsUrl) || /^ws:\/\/(127\.0\.0\.1|localhost|\[::1\])(:\d+)?(\/|$)/i.test(wsUrl);
 }
 /** A malformed credential only disables UDP for this session; it never fails the handshake. */
-function udpCredentials(value: unknown): { session: Uint8Array; key: Uint8Array } | null {
+function udpCredentials(value: unknown): { session: Uint8Array; key: Uint8Array; probe?: boolean } | null {
   if (!value || typeof value !== 'object') return null;
-  const { session, key } = value as { session?: unknown; key?: unknown };
+  const { session, key, probe } = value as { session?: unknown; key?: unknown; probe?: unknown };
   if (typeof session !== 'string' || typeof key !== 'string') return null;
   try {
-    const credentials = { session: fromBase64Url(session), key: fromBase64Url(key) };
-    return credentials.session.length === 8 && credentials.key.length === 32 ? credentials : null;
+    const sessionBytes = fromBase64Url(session), keyBytes = fromBase64Url(key);
+    if (sessionBytes.length !== 8 || keyBytes.length !== 32) return null;
+    return probe === true ? { session: sessionBytes, key: keyBytes, probe: true } : { session: sessionBytes, key: keyBytes };
   } catch { return null; }
 }
 
@@ -374,7 +375,7 @@ class PortableUplink extends SocketEvents implements SocketUplink {
     this.probeTimer = null;
   }
   /** This session's relay UDP credentials when the relay offered them; null keeps every relayed datagram on the WebSocket. */
-  udp: { session: Uint8Array; key: Uint8Array } | null = null;
+  udp: { session: Uint8Array; key: Uint8Array; probe?: boolean } | null = null;
   private receiver: ((deviceId: string, data: Uint8Array) => void) | null = null;
   private pending: [string, Uint8Array][] = [];
   private pendingBytes = 0;
