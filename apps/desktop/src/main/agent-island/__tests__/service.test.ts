@@ -5771,9 +5771,11 @@ describe('AgentIslandService native publishing', () => {
     expect(publish.mock.lastCall?.[1]).toEqual([]);
   });
 
-  // Unit: alert callers must fall back while the selected display is absent.
+  // Unit: alert callers must fall back while the selected display is absent,
+  // regardless of whether 8-bit event sounds are enabled.
   // The previous regression only checked frames and missed notification ownership.
-  it.each([false, true])('releases alert ownership while disconnected (live activity=%s)', async (liveOwnsAlerts) => {
+  it.each([false, true].flatMap(liveOwnsAlerts =>
+    [true, false].map(soundEnabled => ({ liveOwnsAlerts, soundEnabled }))))('releases alert ownership while disconnected (%j)', async ({ liveOwnsAlerts, soundEnabled }) => {
     const { AgentIslandService } = await import('../service.js');
     const publish = vi.fn(() => true);
     const service = new AgentIslandService({
@@ -5783,7 +5785,7 @@ describe('AgentIslandService native publishing', () => {
     });
     service.registerIpc();
     service.setEnabled(true);
-    service.setSoundSettings({ ...DEFAULT_AGENT_ISLAND_SOUND_SETTINGS, enabled: true });
+    service.setSoundSettings({ ...DEFAULT_AGENT_ISLAND_SOUND_SETTINGS, enabled: soundEnabled });
     service.setGroupChat('group', { groupId: 'group', name: 'Product', messageId: 'message',
       mentioned: true, preview: 'hello', lastMessageAt: 1, members: [] });
     const display = { id: 7, label: 'Studio Display', internal: false,

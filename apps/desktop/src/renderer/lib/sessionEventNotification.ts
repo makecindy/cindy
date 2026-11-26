@@ -1,4 +1,3 @@
-import { getAgentIslandEnabled, isAgentIslandSupported } from '@/hooks/useAgentIslandSettings';
 import { getFeishuNotificationsEnabled } from '@/hooks/useFeishuNotificationSettings';
 import { getNotificationsEnabled } from '@/hooks/useNotificationSettings';
 import { isDefaultDraftSessionTitle } from '@cindy/maker-shared/session-title';
@@ -214,7 +213,6 @@ function deliverSessionEventNotification(
   // A handoff can finish after the user has opened Cindy or changed preferences.
   if (typeof document !== 'undefined' && document.hasFocus()) return;
 
-  const islandActive = isAgentIslandSupported() && getAgentIslandEnabled();
   if (!remoteDevice) void window.electronAPI.notificationMarkSessionAttention(sessionId);
   void window.electronAPI.notificationShowSessionEvent({
     sessionId,
@@ -226,7 +224,10 @@ function deliverSessionEventNotification(
     // payload is rejected, so only carry it for the two kinds it describes.
     ...(kind !== 'done' && options.alertEventId ? { alertEventId: options.alertEventId } : {}),
     channels: {
-      desktop: !remoteDevice && getNotificationsEnabled() && !islandActive,
+      // Main arbitrates live Agent Notch display visibility and Live Activity alert
+      // ownership via `isTaskAlertShownElsewhere`; renderer only gates the global
+      // desktop notification preference and remote-device scope.
+      desktop: !remoteDevice && getNotificationsEnabled(),
       feishu: options.feishu !== false && getFeishuNotificationsEnabled(),
       // Mobile owns registration/unregistration of its push token. There is
       // deliberately no second desktop setting for the same channel.

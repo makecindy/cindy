@@ -14,8 +14,6 @@ import { setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 const gates = vi.hoisted(() => ({
   desktop: true,
   feishu: false,
-  islandEnabled: false,
-  islandSupported: false,
 }));
 
 vi.mock('@/hooks/useNotificationSettings', () => ({
@@ -23,10 +21,6 @@ vi.mock('@/hooks/useNotificationSettings', () => ({
 }));
 vi.mock('@/hooks/useFeishuNotificationSettings', () => ({
   getFeishuNotificationsEnabled: () => gates.feishu,
-}));
-vi.mock('@/hooks/useAgentIslandSettings', () => ({
-  getAgentIslandEnabled: () => gates.islandEnabled,
-  isAgentIslandSupported: () => gates.islandSupported,
 }));
 
 const markAttention = vi.fn(() => Promise.resolve());
@@ -68,8 +62,6 @@ describe('shared session event notifications', () => {
     clearRemoteSessionActivity();
     gates.desktop = true;
     gates.feishu = false;
-    gates.islandEnabled = false;
-    gates.islandSupported = false;
     vi.clearAllMocks();
     getSession.mockResolvedValue({ source: 'desktop', feishuOpenId: null });
     resolveBinding.mockResolvedValue({ attached: false });
@@ -199,29 +191,26 @@ describe('shared session event notifications', () => {
     expect(resolveBinding).not.toHaveBeenCalled();
   });
 
-  it('lets Agent Island replace desktop notification without suppressing other channels', () => {
-    gates.islandSupported = true;
-    gates.islandEnabled = true;
+  // #13214 / unit: renderer only enforces the global desktop notification preference;
+  // live Agent Notch display visibility and Live Activity ownership are decided in main
+  // so a disconnected external display can fall back to OS notifications.
+  it.each(['done', 'needs-reply', 'error'] as const)('leaves %s desktop arbitration to main while honoring the global desktop toggle', (kind) => {
     gates.feishu = true;
+    gates.desktop = true;
+    sendSessionEventNotification('session-2', 'Cindy', kind);
+    expect(showSessionEvent).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        channels: { desktop: true, feishu: true, mobile: true },
+      }),
+    );
 
-    sendSessionEventNotification('session-2', 'Cindy', 'done');
-
-    expect(showSessionEvent).toHaveBeenCalledWith(
+    gates.desktop = false;
+    sendSessionEventNotification('session-2', 'Cindy', kind);
+    expect(showSessionEvent).toHaveBeenLastCalledWith(
       expect.objectContaining({
         channels: { desktop: false, feishu: true, mobile: true },
       }),
     );
-  });
-
-  // Unit regression: enabling Agent Island suppresses desktop notifications for all task
-  // event kinds without coupling suppression to 8-bit event sound configuration.
-  it.each(['done', 'needs-reply', 'error'] as const)('keeps desktop notifications suppressed for %s whenever Agent Island is enabled', (kind) => {
-    gates.islandSupported = true;
-    gates.islandEnabled = true;
-    sendSessionEventNotification('island-suppress', 'Task', kind);
-    expect(showSessionEvent).toHaveBeenLastCalledWith(expect.objectContaining({
-      channels: { desktop: false, feishu: false, mobile: true },
-    }));
   });
 
   it('leaves the desktop toast of a remote device task to the main-process scope filter', () => {
