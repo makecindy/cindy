@@ -44,6 +44,9 @@ import {
   type UnifiedRailItem,
 } from './unifiedModelSelection';
 import { QUOTA_FILL_COLOR_CLASSES, QUOTA_TEXT_COLOR_CLASSES, quotaSeverity } from '../status/QuotaBar';
+import { RouteSourceMark } from '@/components/icons/RouteSourceMark';
+import { isSourceRouteProviderId } from '@/features/model-groups/sourceRouteProviders';
+import { OWN_ROUTES_PROVIDER_ID } from '../../../shared/auxiliaryModelSettings';
 
 /**
  * UnifiedModelRail —— 统一面板左侧的视图筛选栏(model-selector-unified §1.2 / §1.6)。
@@ -66,7 +69,10 @@ export function UnifiedModelRail({
   remoteSources,
   pluginEngineTabs,
   modelGroupDeviceTabs,
+  routeUsageMember,
 }: {
+  /** 合并整个供应商的路由那一格显示谁的额度；缺省时那一格不显示额度。 */
+  routeUsageMember?: (providerId: string) => { provider: ProviderView; agentDeviceId: string | null } | null;
   /** 插件引擎格的名字与图标，按 providerId (与所在电脑)对应 `plugin-engine` 格。 */
   pluginEngineTabs?: readonly PluginEngineRailTab[];
   /** 另一台电脑的「模型组」格的名字(悬停与读屏)。 */
@@ -115,9 +121,15 @@ export function UnifiedModelRail({
         const previous = index > 0 ? items[index - 1] : undefined;
         // 另一台电脑上的插件引擎格与那台的供应商格同属一段。
         const itemDeviceId = railItemDeviceId(item);
+        // 路由一组(「智能路由」那一格 + 合并了整个供应商的路由)与后面的普通供应商之间也画一条：
+        // 混在一排品牌图标里分不出哪些是路由(2026-11-25 用户反馈)。
+        const routeItem = (candidate: UnifiedRailItem | undefined) => !!candidate && (
+          (candidate.kind === 'model-groups' && !candidate.deviceId)
+          || (candidate.kind === 'provider' && isSourceRouteProviderId(candidate.providerId)));
         const separatorBefore =
           item.kind === 'all' ||
-          (itemDeviceId !== null && (!previous || railItemDeviceId(previous) !== itemDeviceId));
+          (itemDeviceId !== null && (!previous || railItemDeviceId(previous) !== itemDeviceId)) ||
+          (itemDeviceId === null && routeItem(previous) && !routeItem(item));
         const engineTab = item.kind === 'plugin-engine'
           ? pluginEngineTabs?.find((tab) => tab.providerId === item.providerId && (tab.deviceId ?? null) === (item.deviceId ?? null))
           : undefined;
@@ -164,6 +176,14 @@ export function UnifiedModelRail({
                   device: groupUsage.deviceName,
                 })
           : undefined;
+        // 合并整个供应商的路由：额度按排在最前、没停用的那个成员显示，悬停写明是谁的(它自己没有账号)。
+        const routeMember = item.kind === 'provider' && isSourceRouteProviderId(item.providerId)
+          ? routeUsageMember?.(item.providerId) ?? null : null;
+        const routeMemberShare = routeMember && isProviderShareAgentDeviceId(routeMember.agentDeviceId) ? routeMember.agentDeviceId : null;
+        const routeMemberName = routeMember
+          ? (routeMember.agentDeviceId ? remoteSources?.labelOf(routeMember.agentDeviceId, routeMember.provider.id) : undefined)
+            ?? routeMember.provider.name
+          : null;
         const label =
           item.kind === 'recent'
             ? t('newChat.modelSelector.unified.railRecent')
@@ -205,25 +225,31 @@ export function UnifiedModelRail({
             )}
             <RailButton
               shareDeviceId={
-                (item.kind === 'provider' || item.kind === 'remote-provider') &&
-                isProviderShareAgentDeviceId(usageDeviceId)
-                  ? usageDeviceId
-                  : null
+                routeMember
+                  ? routeMemberShare
+                  : (item.kind === 'provider' || item.kind === 'remote-provider') &&
+                      isProviderShareAgentDeviceId(usageDeviceId)
+                    ? usageDeviceId
+                    : null
               }
               label={label}
-              accountIdentity={accountIdentity}
-              {...(groupNote ? { groupNote } : {})}
+              accountIdentity={routeMember ? undefined : accountIdentity}
+              {...(routeMemberName
+                ? { groupNote: t('modelGroups.picker.quotaOf', { name: routeMemberName }) }
+                : groupNote ? { groupNote } : {})}
               selectedUpload={isActive && !!provider?.customIcon}
               isActive={isActive}
               itemKey={key}
               onClick={() => onSelect(item)}
               disabled={interactionDisabled}
-              provider={providerUsage ? usageProvider : undefined}
+              provider={providerUsage ? (routeMember ? (routeMemberShare ? undefined : routeMember.provider) : usageProvider) : undefined}
               {...(pluginEngineUsage ? { pluginEngineUsage } : {})}
               usageDeviceId={
-                groupUsage?.kind === 'running' && groupUsage.usage
-                  ? groupUsage.usage.scope.deviceId
-                  : usageDeviceId
+                routeMember
+                  ? routeMember.agentDeviceId ?? usageDeviceId
+                  : groupUsage?.kind === 'running' && groupUsage.usage
+                    ? groupUsage.usage.scope.deviceId
+                    : usageDeviceId
               }
             >
               {item.kind === 'recent' ? (
@@ -259,6 +285,14 @@ export function UnifiedModelRail({
                   iconDataUrl={engineTab?.iconDataUrl}
                   className=""
                 />
+              ) : item.kind === 'provider' && item.providerId === OWN_ROUTES_PROVIDER_ID ? (
+                // 自己排的路由合在一格(辅助模型)：与「智能路由」格同一个图形，不叠合并供应商的角标。
+                <Waypoints size={16} />
+              ) : item.kind === 'provider' && isSourceRouteProviderId(item.providerId) ? (
+                // 合并了整个供应商的路由：品牌图形 + 路由角标，不与普通供应商混淆。
+                <RouteSourceMark markSize={16}>
+                  <ProviderRailMark providerId={item.providerId} providers={railProviders} />
+                </RouteSourceMark>
               ) : item.kind === 'provider' ? (
                 <ProviderRailMark providerId={item.providerId} providers={railProviders} />
               ) : item.kind === 'remote-provider' ? (

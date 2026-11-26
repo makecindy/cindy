@@ -7,7 +7,7 @@ import {
   type SubscriptionAccountCommand,
   type SubscriptionSessionAccountQuery,
 } from '../../shared/subscriptionAccounts.js';
-import { PROVIDER_GROUP_STRATEGIES } from '../../shared/providerGroup.js';
+import { knownRouteStrategy } from '../../shared/routeStrategy.js';
 import { accountIdValid } from './store.js';
 import { GHOST_HARNESS_ACCOUNT_SECRET_MAX } from '@cindy/plugin-protocol';
 
@@ -120,7 +120,7 @@ export function parseSubscriptionAccountCommand(raw: unknown): SubscriptionAccou
   if (value.action === 'configure') {
     if (
       value.strategy !== undefined &&
-      !PROVIDER_GROUP_STRATEGIES.includes(value.strategy as never)
+      !knownRouteStrategy(value.strategy)
     )
       throwIpcError('INVALID_PARAMS', 'Invalid strategy');
     if (accountId !== undefined && !accountIdValid(accountId))
@@ -150,7 +150,8 @@ export function parseSubscriptionAccountCommand(raw: unknown): SubscriptionAccou
       action: 'configure',
       providerId,
       accountId,
-      strategy: value.strategy,
+      // Old controllers and scripts still send the four former names.
+      ...(value.strategy !== undefined ? { strategy: knownRouteStrategy(value.strategy)! } : {}),
       paused: value.paused,
       limit: value.limit,
       weight: value.weight,

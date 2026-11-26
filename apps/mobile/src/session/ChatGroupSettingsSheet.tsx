@@ -468,6 +468,11 @@ function ManagePage({ k, group, owner, writable, online, busy, direct, settings,
         { id: 'mentioned', title: t('groupChat.settings.replyModeMentioned') }, { id: 'all', title: t('groupChat.settings.replyModeAll') },
       ], 'replyMode', 'botGroup.settings.replyMode')}
     </SettingsGroup>
+    {!direct && group.supportsGroupAssistant && typeof group.assistantEnabled === 'boolean' ? <SettingsGroup footer={k('assistantHint')}>
+      <SettingsSwitchRow label={k('assistant')} value={group.assistantEnabled}
+        disabled={!writable || busy || !group.supportsAssistantManagement || group.revision === undefined} switchTestID="botGroup.settings.assistant"
+        onValueChange={assistant => { void settings('set-assistant', { assistant }); }} />
+    </SettingsGroup> : null}
     {group.supportsMentionAudiences && owner ? <SettingsGroup footer={t('groupChat.settings.allowMentionAllBotsHint')}>
       <SettingsSwitchRow label={t('groupChat.settings.allowMentionAllBots')} value={group.allowMentionAllBots === true}
         disabled={!writable || busy} switchTestID="botGroup.settings.allowMentionAllBots"

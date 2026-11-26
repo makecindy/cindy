@@ -23,8 +23,7 @@ export function ConnectionTraffic({ traffic }: { traffic?: LinkTrafficSnapshot }
           value={range}
           options={ranges.map(value => ({ value, label: t(`${key}.${value}`) }))}
           onValueChange={setRange}
-          height={28}
-          optionHeight={24}
+          density="sm"
         />
       </div>
       <table aria-label={title} className="w-full text-right text-12 tabular-nums text-[var(--text-secondary)]">

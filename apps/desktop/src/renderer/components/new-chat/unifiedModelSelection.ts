@@ -24,6 +24,7 @@ import type { AgentKind } from '@/hooks/useAgentCapabilities';
 import type { SelectableVendor } from '@/lib/agentVendors';
 import type { Effort } from '@/lib/userPreferences.types';
 import { applyProviderOrderIds } from '../../../shared/providerOrder';
+import { isSourceRouteProviderId } from '@/features/model-groups/sourceRouteProviders';
 import { modelConfigCopyIdentity, type ModelConfigCopy } from '@/state/modelConfigCopy';
 import type { ModelFavoriteItem } from '@/state/modelFavorites';
 import type { RecentModelItem } from '@/state/recentModels';
@@ -494,7 +495,8 @@ export function buildUnifiedRail(
   }
   const ordered =
     providerOrder === undefined ? firstSeen : applyProviderOrderIds(firstSeen, providerOrder);
-  for (const providerId of ordered) {
+  // 合并了整个供应商的路由排在普通供应商前面：它们与「智能路由」那一格是一组(侧栏在这组后面画分隔线)。
+  for (const providerId of [...ordered.filter(isSourceRouteProviderId), ...ordered.filter((id) => !isSourceRouteProviderId(id))]) {
     items.push({ kind: 'provider', providerId });
   }
   return items;
