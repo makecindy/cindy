@@ -6957,11 +6957,11 @@ describe('Chat Server directed sends', () => {
     expect(posts()).toEqual([]);
   });
 
-  it.each(['main', 'thread'])('preserves actor/local-bot/human targets and excludes self in %s wire payloads', async entry => {
+  it.each(['main', 'thread'])('preserves explicitly selected self and other targets in %s wire payloads', async entry => {
     for (const all of [false, true]) {
       for (const targets of [[botId], ['local-bot'], [humanId], [selfId], [selfId, humanId, 'local-bot', botId]]) {
         expect(await send(entry, { all, botIds: targets })).toMatchObject({ ok: true });
-        const ids = [...new Set([...targets.map(target => target === 'local-bot' ? botId : target), ...(all ? [humanId] : [])])].filter(target => target !== selfId);
+        const ids = [...new Set([...targets.map(target => target === 'local-bot' ? botId : target), ...(all ? [humanId] : [])])];
         expect(posts().at(-1)![2]).toMatchObject({ mentions: ids,
           ...(entry === 'thread' ? { threadRootId: rootId } : {}) });
       }

@@ -4050,8 +4050,8 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       if (!member) throw new Error('MENTION_UNAVAILABLE');
       return member.id;
     });
-    const recipients = [...named, ...joined.filter(m => (mentions.all && m.kind === 'human') || (mentions.allBots && m.kind === 'bot')).map(m => m.id)];
-    const resolved = [...new Set(recipients.filter(target => target !== selfId))];
+    const recipients = [...named, ...joined.filter(m => m.id !== selfId && ((mentions.all && m.kind === 'human') || (mentions.allBots && m.kind === 'bot'))).map(m => m.id)];
+    const resolved = [...new Set(recipients)];
     // Old servers have no broadcast marker: keep an empty human broadcast directed.
     return mentions.all && !resolved.length && !supportsMentionAudiences ? [selfId] : resolved;
   }

@@ -139,8 +139,8 @@ export function createChatOutboxDelivery(deps: {
           const [members, self] = await Promise.all([client.members(room), client.me()]); guard();
           const joined = members.filter(member => member.state === 'joined');
           if (input.mentions.botIds.some(id => !joined.some(member => member.id === id))) throw new Error('MENTION_UNAVAILABLE');
-          const recipients = [...input.mentions.botIds, ...joined.filter(member => (input.mentions.all && member.kind === 'human') || (input.mentions.allBots && member.kind === 'bot')).map(member => member.id)];
-          input = { ...input, mentions: { ...input.mentions, botIds: [...new Set(recipients.filter(id => id !== self))] } };
+          const recipients = [...input.mentions.botIds, ...joined.filter(member => member.id !== self && ((input.mentions.all && member.kind === 'human') || (input.mentions.allBots && member.kind === 'bot'))).map(member => member.id)];
+          input = { ...input, mentions: { ...input.mentions, botIds: [...new Set(recipients)] } };
         }
         row = await store.update(row, { state: 'sending', error: undefined,
           ...(row.chat!.body ? { enqueueStarted: true } : {}) }); guard();
