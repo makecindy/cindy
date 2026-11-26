@@ -1,3 +1,4 @@
+import { buildUserMessageAttachmentPayload } from '@/lib/messageAttachmentPayload';
 import { isComposerAttachmentDrag } from '@/lib/composerDrop';
 import { useAlternateDraftModel } from './alternateDraftModel';
 import { useProjectInfo } from './hooks/useProjectInfo';
@@ -118,7 +119,7 @@ import { HomeZeroModelAction } from './HomeZeroModelAction';
 import { resolveDeviceLinkSubmission } from './deviceLinkCreateArgs';
 import { hasAcknowledgedRemoteSessionSubscription } from '@/lib/remoteSessionSubscription';
 import {
-  commitRemoteSessionHandoff, createRemoteSessionForPreview, previewRemoteCreation,
+  buildTaskCreationPreview, commitRemoteSessionHandoff, createRemoteSessionForPreview, previewRemoteCreation,
   rememberRemoteCreationRetry, remoteCreationRetryId, updateRemoteCreationAttachments,
 } from './remoteSessionHandoff';
 import { remoteProjectsStore } from '@/features/device-link/remoteProjectsStore';
@@ -4976,20 +4977,11 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
             }
             return;
           }
-          if (remoteDeviceId) {
-            if (!window.electronAPI?.deviceLink?.invoke) {
+          if (remoteDeviceId || baseRepo) {
+            const previewStore = remoteDeviceId ? remoteProjectsStore : sessionsStore;
+            if (remoteDeviceId && !window.electronAPI?.deviceLink?.invoke) {
               throw new Error('deviceLink bridge unavailable in renderer');
             }
-            const invokeRemote = async (channel: string, args: unknown[]) => {
-              if (!isCurrentDataOwner()) {
-                throw new RemotePrecreatedWorktreeOwnerChangedError();
-              }
-              const result = await window.electronAPI.deviceLink.invoke(remoteDeviceId, channel, args);
-              if (!isCurrentDataOwner()) {
-                throw new RemotePrecreatedWorktreeOwnerChangedError();
-              }
-              return result;
-            };
             const createArgs = resolveDeviceLinkSubmission({
               agentKind: persistedAgentKind,
               workingDir: selectedWorkingDir,
@@ -5011,7 +5003,7 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
               },
             });
             // 两步创建(先建 worktree)不复用失败重试的 id：被控端按 id 绑定预创建的 worktree。
-            const retryId = wantsWorktree
+            const retryId = wantsWorktree || !remoteDeviceId
               ? undefined
               : remoteCreationRetryId(NEW_MAKER_DRAFT_KEY, remoteDeviceId, createArgs);
             const presetSessionId = retryId ?? makeDraftSessionId();
@@ -5028,36 +5020,31 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
               browserComments: sourceDraft?.browserComments ?? [],
             };
             if (!isCurrentDataOwner()) return;
-            previewRemoteCreation(
-              {
-                deviceId: remoteDeviceId,
-                deviceName: remoteDeviceName,
-                remoteSessionId: presetSessionId,
-                createArgs,
-                workDir: selectedWorkingDir,
-                nowIso,
-                logTag: 'draft send plugin engine',
-              },
-              title,
-              {
-                ...firstMessageIdentity,
-                role: 'user',
-                content: message,
-                quotesEncoded: opts?.quotesEncoded,
-                agentReferences: opts?.agentReferences,
-                pastedTextRanges: opts?.pastedTextRanges,
-                slashCommandRanges: opts?.slashCommandRanges,
-              },
-              files,
-            );
-            remoteOptimisticTitleSessionId = presetSessionId;
+            const previewMessage = {
+              ...firstMessageIdentity, role: 'user' as const, content: message,
+              quotesEncoded: opts?.quotesEncoded, agentReferences: opts?.agentReferences,
+              pastedTextRanges: opts?.pastedTextRanges, slashCommandRanges: opts?.slashCommandRanges,
+            };
+            if (remoteDeviceId) {
+              previewRemoteCreation({
+                deviceId: remoteDeviceId, deviceName: remoteDeviceName, remoteSessionId: presetSessionId,
+                createArgs, workDir: selectedWorkingDir, nowIso, logTag: 'draft send plugin engine',
+              }, title, previewMessage, files);
+              remoteOptimisticTitleSessionId = presetSessionId;
+            } else {
+              // No working directory is available for execution until Main confirms the checkout.
+              sessionsStore.setCreationPreview(buildTaskCreationPreview(
+                presetSessionId, undefined, createArgs, nowIso, title, previewMessage, files,
+              ));
+              markSessionStarting(presetSessionId);
+            }
             markedStartingSessionId = presetSessionId;
             let recoveredFiles = files;
             const attachmentCopy = rehomeDraftAttachments(files, presetSessionId, {
               draftKey: NEW_MAKER_DRAFT_KEY,
               onCopied: (copied) => {
                 recoveredFiles = copied;
-                if (isCurrentDataOwner()) updateRemoteCreationAttachments(presetSessionId, copied);
+                if (isCurrentDataOwner()) updateRemoteCreationAttachments(presetSessionId, copied, previewStore);
               },
             }).catch(() => files);
             const recoveryFragment = () => {
@@ -5074,22 +5061,24 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
             };
             failedPreview = () => {
               if (!isCurrentDataOwner()) return;
-              const preview = remoteProjectsStore.getCreationPreview(presetSessionId);
+              const preview = previewStore.getCreationPreview(presetSessionId);
               if (!preview) return;
               clearSessionStarting(presetSessionId);
-              remoteProjectsStore.clearPendingTitlePreview(presetSessionId);
-              remoteProjectsStore.clearPendingFirstSend(presetSessionId);
+              if (remoteDeviceId) {
+                remoteProjectsStore.clearPendingTitlePreview(presetSessionId);
+                remoteProjectsStore.clearPendingFirstSend(presetSessionId);
+              }
               const editAfterFailure = async () => {
                 const editingRoute = getCurrentRoutePath();
                 await attachmentCopy;
                 if (
                   getCurrentRoutePath() !== editingRoute ||
                   !isCurrentDataOwner() ||
-                  !remoteProjectsStore.getCreationPreview(presetSessionId)
+                  !previewStore.getCreationPreview(presetSessionId)
                 ) {
                   return;
                 }
-                if (!wantsWorktree) rememberRemoteCreationRetry(presetSessionId, remoteDeviceId, createArgs);
+                if (remoteDeviceId && !wantsWorktree) rememberRemoteCreationRetry(presetSessionId, remoteDeviceId, createArgs);
                 const recoveredKey = `remote-create-draft-${presetSessionId}`;
                 flushDraft(presetSessionId);
                 const followup = getComposerDraft(presetSessionId);
@@ -5102,26 +5091,24 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
                   deviceLinkDeviceId: targetDraft.deviceLinkDeviceId,
                   deviceLinkDeviceName: targetDraft.deviceLinkDeviceName,
                   remoteHostId: targetDraft.remoteHostId,
-                  agentDeviceId: null,
-                  agentDeviceName: null,
+                  agentDeviceId: targetDraft.agentDeviceId,
+                  agentDeviceName: targetDraft.agentDeviceName,
+                  ...(!remoteDeviceId ? { pluginEngine: engineSelectionAtSend } : {}),
                   extraDirs: targetDraft.extraDirs,
                   writableDirs: targetDraft.writableDirs,
                   vendor: targetDraft.vendor,
                   collab: targetDraft.collab,
                 });
-                remoteProjectsStore.clearCreationPreview(presetSessionId);
+                previewStore.clearCreationPreview(presetSessionId);
                 navigate('/cc-agent/new', {
                   replace: true,
                   state: {
                     remoteCreationRecoveryId: presetSessionId,
-                    remotePluginEngineSelection: {
-                      deviceId: remoteDeviceId,
-                      selection: engineSelectionAtSend,
-                    },
+                    ...(remoteDeviceId ? { remotePluginEngineSelection: { deviceId: remoteDeviceId, selection: engineSelectionAtSend } } : {}),
                   },
                 });
               };
-              remoteProjectsStore.setCreationPreview({ ...preview, editAfterFailure });
+              previewStore.setCreationPreview({ ...preview, editAfterFailure });
             };
             const stillOnSubmittingPage =
               submittingPage !== null && activeDraftPage.current === submittingPage;
@@ -5135,6 +5122,68 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
               resetDraftWorkspaceAfterSend();
               navigate(`/cc-agent/${presetSessionId}`, { replace: true });
             }
+            if (!remoteDeviceId) {
+              let name = selectedWorktree.name.trim();
+              if (!baseRepo) throw new Error('Missing worktree repository');
+              if (!name) {
+                const suggested = await window.electronAPI.worktreeSuggestName({ baseRepo });
+                name = suggested.name?.trim() || `auto-${Date.now().toString(36).slice(-6)}`;
+              }
+              if (!isCurrentDataOwner()) return;
+              name = await resolveTaskWorktreeName(message, name);
+              if (!isCurrentDataOwner()) return;
+              // The user can already be writing another task. Create this reserved id
+              // directly without taking or discarding the current home draft's provisional task.
+              const session = await createSessionRow({
+                id: presetSessionId, ...createFields, permissionMode: enginePermissionMode,
+                fastMode: false, planModeEnabled: false, workingDir: baseRepo, workspaceKind: 'project',
+                localPluginWorktree: { name, sourceBranch }, extraDirs: [], writableDirs: [],
+              }, error => { createSessionErrorRef.current = error; });
+              if (!isCurrentDataOwner()) return;
+              if (!session || session.id !== presetSessionId || !session.worktreePath || session.worktreePath !== session.workingDir) {
+                failedPreview();
+                toastCreateSessionFailed();
+                return;
+              }
+              // The task now exists: an enqueue failure belongs in its own composer.
+              failedPreview = () => {
+                if (!isCurrentDataOwner()) return;
+                flushDraft(session.id);
+                restoreRemoteOptimisticDraft(session.id, recoveryFragment());
+                sessionsStore.clearCreationPreview(session.id);
+                emitAutoTitlePreviewCleared(session.id);
+                clearSessionStarting(session.id);
+              };
+              if (title) emitAutoTitlePreview(session.id, title);
+              sessionsStore.patchLocal(session.id, { userSendAt: nowIso, updatedAt: nowIso });
+              void refreshWorktreeForSession(session.id);
+              makerChatStore.setSessionRuntime(session.id, {
+                fastMode: false, planModeEnabled: false, remoteHostId: null, sessionProviderId: createFields.providerId,
+              });
+              const readyFiles = await attachmentCopy;
+              if (!isCurrentDataOwner()) return;
+              const accepted = await makerChatStore.sendMessage(session.id, message, createFields.model, '',
+                enginePermissionMode, session.workingDir, readyFiles, mentions, {
+                  firstMessageIdentity, quotesEncoded: opts?.quotesEncoded, agentReferences: opts?.agentReferences,
+                  pastedTextRanges: opts?.pastedTextRanges, slashCommandRanges: opts?.slashCommandRanges,
+                });
+              if (!isCurrentDataOwner()) return;
+              if (accepted) {
+                sessionsStore.clearCreationPreview(session.id);
+                opts?.onAccepted?.();
+              } else failedPreview();
+              return;
+            }
+            const invokeRemote = async (channel: string, args: unknown[]) => {
+              if (!isCurrentDataOwner()) {
+                throw new RemotePrecreatedWorktreeOwnerChangedError();
+              }
+              const result = await window.electronAPI.deviceLink.invoke(remoteDeviceId, channel, args);
+              if (!isCurrentDataOwner()) {
+                throw new RemotePrecreatedWorktreeOwnerChangedError();
+              }
+              return result;
+            };
             // worktree 由被控端检出(与内置引擎同一套两步创建)：先建好拿到路径，再以该路径 +
             // 同一个预生成 id 建任务，被控端关闭任务时按绑定回收。
             let precreatedWorktree: { path: string; recoveryKey: string; createdAt: number } | undefined;
@@ -5282,23 +5331,7 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
             if (pendingPreview) remoteProjectsStore.setCreationPreview({ ...pendingPreview, handedOff: true });
             return;
           }
-          let localPluginWorktree: { name: string; sourceBranch: string } | undefined;
-          if (baseRepo) {
-            const startedAt = Date.now();
-            let name = selectedWorktree.name.trim();
-            if (!name) {
-              const suggested = await window.electronAPI.worktreeSuggestName({ baseRepo });
-              if (!isCurrentDataOwner()) return;
-              name = (suggested.name ?? '').trim();
-            }
-            if (!name) name = `auto-${Date.now().toString(36).slice(-6)}`;
-            setWtCreatingInfo({ branch: getWorktreeModelNamingEnabled() ? '' : getBranchName(name), startedAt });
-            name = await resolveTaskWorktreeName(message, name);
-            if (!isCurrentDataOwner()) return;
-            setWtCreatingInfo({ branch: getBranchName(name), startedAt });
-            localPluginWorktree = { name, sourceBranch };
-          }
-          const sessionId = localPluginWorktree ? makeDraftSessionId() : localDraftSessionIdRef.current;
+          const sessionId = localDraftSessionIdRef.current;
           const optimisticTitle = optimisticFirstMessageTitle(message, files, mentions, opts, {
             image: t('ccAgent.autoTitle.image'),
             file: t('ccAgent.autoTitle.file'),
@@ -5313,24 +5346,16 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
             permissionMode: enginePermissionMode,
             fastMode: false,
             planModeEnabled: false,
-            workingDir: baseRepo ?? selectedWorkingDir,
-            ...(localPluginWorktree ? { localPluginWorktree } : {}),
+            workingDir: selectedWorkingDir,
             workspaceKind: selectedWorkingDir ? 'project' : 'dialogue',
             extraDirs: [],
             writableDirs: [],
           });
-          if (localPluginWorktree && !isCurrentDataOwner()) return;
           if (!newSession) {
             if (optimisticTitleSessionId) emitAutoTitlePreviewCleared(optimisticTitleSessionId);
             toastCreateSessionFailed();
             return;
           }
-          if (localPluginWorktree && (!newSession.worktreePath || newSession.worktreePath !== newSession.workingDir)) {
-            if (optimisticTitleSessionId) emitAutoTitlePreviewCleared(optimisticTitleSessionId);
-            toastCreateSessionFailed();
-            return;
-          }
-          if (localPluginWorktree) void refreshWorktreeForSession(newSession.id);
           {
             const iso = new Date().toISOString();
             sessionsStore.patchLocal(newSession.id, { userSendAt: iso, updatedAt: iso });
@@ -5347,18 +5372,14 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
             sessionProviderId: createFields.providerId,
           });
           const rehydratedFiles = await rehomeDraftAttachments(files, newSession.id);
-          if (localPluginWorktree && !isCurrentDataOwner()) return;
-          const sendWorkingDir = localPluginWorktree
-            ? newSession.workingDir
-            : selectedWorkingDir ?? newSession.workingDir;
-          const preNavDraft = localPluginWorktree ? sourceDraft : getComposerDraft(NEW_MAKER_DRAFT_KEY);
+          const sendWorkingDir = selectedWorkingDir ?? newSession.workingDir;
+          const preNavDraft = getComposerDraft(NEW_MAKER_DRAFT_KEY);
           const preNavDraftDoc = opts?.recoveryDraftDoc ?? preNavDraft?.text ?? null;
           const preNavBrowserComments = rewriteBrowserCommentsFromRehomedFiles(
             preNavDraft?.browserComments,
             rehydratedFiles,
           );
           const restoreEngineFirstMessageDraft = () => {
-            if (localPluginWorktree && !isCurrentDataOwner()) return;
             restoreRemoteOptimisticDraft(newSession.id, {
               clientId: `local-first:${newSession.id}`,
               text: preNavDraftDoc ?? plainTextToTiptapDoc(message),
@@ -5369,12 +5390,6 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
             clearSessionStarting(newSession.id);
           };
           const handOffAndNavigate = () => {
-            if (localPluginWorktree && activeDraftPage.current !== submittingPage) {
-              if (getComposerDraft(NEW_MAKER_DRAFT_KEY) === sourceDraft) {
-                clearComposerDraftAndNotify(NEW_MAKER_DRAFT_KEY);
-              }
-              return;
-            }
             clearComposerDraftAndNotify(NEW_MAKER_DRAFT_KEY);
             attachmentState.clearFiles();
             setAlternateModel(null);
@@ -5416,6 +5431,7 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
             },
           );
         } catch (err) {
+          if (!isCurrentDataOwner()) return;
           if (optimisticTitleSessionId) emitAutoTitlePreviewCleared(optimisticTitleSessionId);
           if (remoteOptimisticTitleSessionId) {
             remoteProjectsStore.clearPendingTitlePreview(remoteOptimisticTitleSessionId);
@@ -5456,6 +5472,7 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
       attachmentState,
       markSendInFlight,
       makeRemoteWorktreeProgress,
+      createSessionRow,
       t,
     ],
   );
@@ -6274,9 +6291,17 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
             // With model naming on, the random name is only a fallback: keep it off the
             // "Creating worktree" overlay until the real name is known.
             const namingWithModel = getWorktreeModelNamingEnabled() && message.trim().length > 0;
+            const firstMessageIdentity = { clientId: makeDraftSessionId(), createdAt: sendAt.toISOString() };
+            const firstAttachments = buildUserMessageAttachmentPayload(files);
             worktreeCreationStore.set(newSession.id, {
               status: 'creating',
               name: namingWithModel ? '' : branchName,
+              message: {
+                ...firstMessageIdentity, role: 'user', content: message,
+                images: firstAttachments.imageAttachments, files: firstAttachments.fileAttachments,
+                quotesEncoded: opts?.quotesEncoded, agentReferences: opts?.agentReferences,
+                pastedTextRanges: opts?.pastedTextRanges, slashCommandRanges: opts?.slashCommandRanges,
+              },
             });
 
             // navigate FIRST, 然后再清 draft store —— 避免用户看到 "draft 输入框清空
@@ -6306,7 +6331,10 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
               let rehomedFiles = files;
               let rehomedComments = preNavBrowserComments;
               const restoreFirstMessageDraft = () => {
-                saveComposerDraft(newSession.id, {
+                if (!isCurrentDataOwner()) return;
+                flushDraft(newSession.id);
+                restoreRemoteOptimisticDraft(newSession.id, {
+                  clientId: firstMessageIdentity.clientId,
                   text: preNavDraftDoc ?? plainTextToTiptapDoc(builtInSkillIntent ? builtInSkillDraftMessage : message),
                   ...(builtInSkillIntent ? { builtInSkillIntent } : {}),
                   attachments: excludeCommentScreenshots(rehomedFiles, rehomedComments),
@@ -6321,7 +6349,19 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
                 clearSessionStarting(newSession.id);
               };
               try {
-                rehomedFiles = await rehomeDraftAttachments(files, newSession.id);
+                rehomedFiles = await rehomeDraftAttachments(files, newSession.id, {
+                  draftKey: NEW_MAKER_DRAFT_KEY,
+                  onCopied: (copied) => {
+                    if (!isCurrentDataOwner()) return;
+                    const preview = worktreeCreationStore.get(newSession.id);
+                    if (preview?.status !== 'creating' || !preview.message) return;
+                    const attachments = buildUserMessageAttachmentPayload(copied);
+                    worktreeCreationStore.set(newSession.id, {
+                      ...preview, message: { ...preview.message, images: attachments.imageAttachments, files: attachments.fileAttachments },
+                    });
+                  },
+                });
+                if (!isCurrentDataOwner()) return;
                 rehomedComments = rewriteBrowserCommentsFromRehomedFiles(
                   preNavBrowserComments,
                   rehomedFiles,
@@ -6478,6 +6518,7 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
                   rehomedFiles,
                   mentions,
                   {
+                    firstMessageIdentity,
                     ...(opts?.quotesEncoded ? { quotesEncoded: true } : {}),
                     ...(opts?.agentReferences?.length
                       ? { agentReferences: rebaseRanges(opts.agentReferences) }
@@ -6499,13 +6540,10 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
                       toast.error(t('newChat.collaboration.assignmentFailed'));
                     },
                   );
-                } else if (deferredUiAssignment) {
-                  toast.error(t('newChat.collaboration.assignmentFailed'));
+                } else {
+                  restoreFirstMessageDraft();
+                  if (deferredUiAssignment) toast.error(t('newChat.collaboration.assignmentFailed'));
                 }
-                // sendMessage 会先同步 push user message,再异步返回 enqueue 是否接受。
-                // await 完成时 messages 已经有 user bubble + isStreaming=true,
-                // 此时 clear 让 worktreePreparing 进入 1.6s 平滑期 (overlay 自然
-                // 渐渐让位给已经在串的 chat view)。
                 worktreeCreationStore.clear(newSession.id);
               } catch (err) {
                 log.error('[draft worktree send]', err);

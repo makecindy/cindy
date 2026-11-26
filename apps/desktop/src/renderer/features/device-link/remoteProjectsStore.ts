@@ -64,7 +64,7 @@ interface DeviceShard {
 
 const EMPTY_SCHEDULE_BINDINGS: readonly ScheduleBinding[] = Object.freeze([]);
 /** Display-only until the creating host returns. Never feed these rows to the mirror cache. */
-type CreationPreview = {
+export type CreationPreview = {
   row: Session;
   message: import('@/lib/makerChatStore').ChatMessage;
   handedOff?: boolean;

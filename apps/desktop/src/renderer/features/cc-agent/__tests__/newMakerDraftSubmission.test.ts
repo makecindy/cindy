@@ -32,7 +32,8 @@ import { filterHealthyDraftProviders, resolveDraftProviderForModel } from '../..
 import type { GhostStartTaskRouteResult } from '../../../../shared/ghost';
 import { sshModel, sshNativeCodexProvider } from './sshModelFixtures';
 import type { ModelGroupResolveResult } from '../../../../shared/modelGroups';
-import { createRemoteSessionForPreview, previewRemoteCreation } from '../remoteSessionHandoff';
+import { buildUserMessageAttachmentPayload } from '@/lib/messageAttachmentPayload';
+import { buildTaskCreationPreview, createRemoteSessionForPreview, previewRemoteCreation } from '../remoteSessionHandoff';
 import {
   pluginEnginePermissionMode,
   pluginEngineSessionCreateFields,
@@ -418,7 +419,9 @@ async function submit(options: {
     optimisticFirstMessageTitle: () => options.titlePreview ?? null, autoTitleLabels: {},
     remoteProjectsStore,
     createSession, rememberCreatedWorkspace: vi.fn(), toastCreateSessionFailed: noop, carryDraftFavoriteAnchorToSession: noop,
-    makerChatStore: { setSessionRuntime: noop, sendMessage, autoNameSession: noop }, sessionsStore: { patchLocal: noop },
+    makerChatStore: { setSessionRuntime: noop, sendMessage, autoNameSession: noop },
+    buildTaskCreationPreview, buildUserMessageAttachmentPayload, createSessionRow: createSession,
+    sessionsStore: { patchLocal: noop, setCreationPreview: vi.fn(), getCreationPreview: () => ({}), clearCreationPreview: vi.fn() },
     markSessionStarting: noop, clearSessionStarting: noop,
     rehomeDraftAttachments: options.copyAttachments ?? (async () => []), getComposerDraft: () => options.builtInSkillIntent
       ? { builtInSkillIntent: options.builtInSkillIntent } : null,
@@ -929,7 +932,7 @@ describe('homepage submission to Main admission and first-message handoff', () =
       }));
       expect(result.invokeRemote.mock.calls.every(([target]) => target === deviceId)).toBe(true);
     } else {
-      expect(result.environment.saveComposerDraft).toHaveBeenCalledWith('created', expect.objectContaining({
+      expect(result.environment.restoreRemoteOptimisticDraft).toHaveBeenCalledWith('created', expect.objectContaining({
         text: plainTextToTiptapDoc('/cindy-plugin-creator Make a plugin'),
         builtInSkillIntent: { name: 'cindy-plugin-creator', commandName: 'cindy-plugin-creator' },
       }));
@@ -1334,14 +1337,17 @@ describe('local plugin engine worktree submission', () => {
   it('waits for the selected branch checkout before sending in the returned task directory', async () => {
     const entered = Promise.withResolvers<void>();
     const checkout = Promise.withResolvers<void>();
+    // Slow checkout must leave the new-task form before the engine can read marker.txt (unit).
+    const navigate = vi.fn();
     const onFirstSend = vi.fn();
     const attempt = submit({
-      activePluginEngine: syntheticPluginEngine, message: 'Read marker.txt', onFirstSend,
+      activePluginEngine: syntheticPluginEngine, message: 'Read marker.txt', onFirstSend, navigate,
       worktree: { enabled: true, sourceBranch: 'feature/marker' },
       finishPluginCheckout: () => { entered.resolve(); return checkout.promise; },
     });
     try {
       await Promise.race([entered.promise, attempt]);
+      expect(navigate).toHaveBeenCalledWith('/cc-agent/remote-created', expect.any(Object));
       expect(onFirstSend).not.toHaveBeenCalled();
     } finally {
       checkout.resolve();
@@ -1372,9 +1378,18 @@ describe('local plugin engine worktree submission', () => {
     });
     expect(result.errors).toEqual([expect.objectContaining({ message: 'fixture checkout failed' })]);
     expect(result.sendMessage).not.toHaveBeenCalled();
-    expect(result.clearDraft).not.toHaveBeenCalled();
-    expect(result.environment.attachmentState.clearFiles).not.toHaveBeenCalled();
-    expect(result.environment.navigate).not.toHaveBeenCalled();
+    const [preview] = result.environment.sessionsStore.setCreationPreview.mock.calls[0];
+    expect(preview.message.content).toBe('Read marker.txt');
+    expect(preview.row.workingDir).toBe('');
+    expect(result.environment.navigate).toHaveBeenCalledTimes(1);
+    const [failure] = result.environment.sessionsStore.setCreationPreview.mock.calls.at(-1)!;
+    await failure.editAfterFailure();
+    expect(result.environment.restoreRemoteOptimisticDraft).toHaveBeenCalledWith('remote-create-draft-remote-created',
+      expect.objectContaining({ text: plainTextToTiptapDoc('Read marker.txt'), attachments: [file] }));
+    expect(result.environment.patchDraft).toHaveBeenCalledWith(expect.objectContaining({
+      pluginEngine: expect.objectContaining({ providerId: syntheticPluginEngine.engine.providerId }),
+    }));
+    expect(result.environment.navigate).toHaveBeenLastCalledWith('/cc-agent/new', expect.any(Object));
   });
 
   it('blocks a checked worktree whose source branch is not ready instead of sending in the repo', async () => {
