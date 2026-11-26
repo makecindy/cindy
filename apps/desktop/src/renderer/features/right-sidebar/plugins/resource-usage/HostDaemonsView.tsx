@@ -4,7 +4,8 @@
  *
  * 数据全部来自 main（扫描 + 归属判定 + 台账），这里只负责呈现与二次确认。
  * 列表里不会出现与本机任务无关的常驻项（例如用户自己装的 v2rayN）：main 只返回
- * 有 Cindy 归属证据的条目，其余只回一个数量。
+ * 有 Cindy 归属证据的条目，其余只回一个数量。归属还在核对历史记录的条目同样先不列，
+ * 由界面按 main 给的间隔静默重拉，直到核对完。
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -19,7 +20,7 @@ import type { HostDaemonEntry, HostDaemonsSnapshot } from '../../../../../shared
 
 type PendingAction = { entry: HostDaemonEntry; action: 'stop' | 'delete' };
 
-export function HostDaemonsView() {
+export function HostDaemonsView({ visible }: { visible: boolean }) {
   const { t } = useTranslation();
   const [snapshot, setSnapshot] = useState<HostDaemonsSnapshot | null>(null);
   const [loading, setLoading] = useState(true);
@@ -29,9 +30,10 @@ export function HostDaemonsView() {
   // 请求序号：慢扫描返回时丢弃过期结果，避免旧响应覆盖新状态。
   const loadSeq = useRef(0);
 
-  const load = useCallback(async () => {
+  // quiet：核对历史期间的自动重拉，不进加载态（列表和刷新按钮保持可用）。
+  const load = useCallback(async (quiet = false) => {
     const seq = ++loadSeq.current;
-    setLoading(true);
+    if (!quiet) setLoading(true);
     try {
       const next = await window.electronAPI.hostDaemons.list();
       if (seq !== loadSeq.current) return;
@@ -45,9 +47,24 @@ export function HostDaemonsView() {
     }
   }, []);
 
+  // 只在看得见时工作：收起时停下，重新展开时补拉一次。
   useEffect(() => {
-    void load();
-  }, [load]);
+    if (visible) void load();
+  }, [visible, load]);
+
+  // 归属还在核对历史的条目：按 main 给的间隔静默重拉。pollTick 让失败的一次也会排下一次，
+  // 否则一次瞬时的读取失败会让核对停在那里。
+  const [pollTick, setPollTick] = useState(0);
+  const pendingCount = snapshot?.pendingCount ?? 0;
+  const retryAfterMs = snapshot?.retryAfterMs ?? 0;
+  useEffect(() => {
+    if (!visible || pendingCount === 0) return;
+    const timer = setTimeout(async () => {
+      await load(true);
+      setPollTick((n) => n + 1);
+    }, retryAfterMs);
+    return () => clearTimeout(timer);
+  }, [visible, pendingCount, retryAfterMs, pollTick, load]);
 
   const runAction = async () => {
     if (!pending || busy) return;
@@ -185,9 +202,11 @@ export function HostDaemonsView() {
           {/* 保留旧列表时也要说清楚它可能不是最新的（停止/删除后的状态同理）。 */}
           {failed
             ? t('rightSidebar.hostDaemons.refreshFailed')
-            : entries.length > 0 && (snapshot?.unrelatedCount ?? 0) > 0
-              ? t('rightSidebar.hostDaemons.unrelated', { count: snapshot?.unrelatedCount ?? 0 })
-              : ''}
+            : pendingCount > 0
+              ? t('rightSidebar.hostDaemons.checking', { count: pendingCount })
+              : entries.length > 0 && (snapshot?.unrelatedCount ?? 0) > 0
+                ? t('rightSidebar.hostDaemons.unrelated', { count: snapshot?.unrelatedCount ?? 0 })
+                : ''}
         </div>
         <Button variant="secondary" size="xs" disabled={loading} onClick={() => void load()}>
           <RefreshCw aria-hidden size={12} strokeWidth={1.8} />

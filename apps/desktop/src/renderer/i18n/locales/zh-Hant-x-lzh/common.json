@@ -11292,7 +11292,8 @@
       "stopped": "已停止 {{name}}",
       "deleted": "已刪除 {{name}}",
       "actionFailed": "動作失敗，請再試一次。",
-      "unrelated_other": "已隱藏 {{count}} 個無關的背景項目"
+      "unrelated_other": "已隱藏 {{count}} 個無關的背景項目",
+      "checking_other": "另有 {{count}} 個背景項目還在核對任務歷史，核對後自動更新"
     }
   },
   "update": {

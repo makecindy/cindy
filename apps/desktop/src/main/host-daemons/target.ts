@@ -34,9 +34,10 @@ export interface RawHostDaemon {
    */
   attributionNeedles?: readonly string[];
   /**
-   * 定义写入时刻，是判定「什么时候被创建」的唯一证据。
-   * null = 本平台/来源读不到（crontab 没有文件级定义），此时以「首次扫描到它的
-   * 时刻」为锚点回溯，避免每次扫描都往更晚的方向滑。
+   * 定义写入时刻，是判定「什么时候被创建」的证据：有它就只查那一刻前后的时间窗。
+   * null = 本平台/来源读不到（crontab 没有文件级定义）：只能把工具调用历史从旧到新
+   * 读完再下结论（见 service.ts 的全历史回看）；「首次扫描到它的时刻」只用来定
+   * 「之后才算晚落库」的等待窗口和归属记录的身份。
    */
   definitionMtimeMs: number | null;
   lastRunAtMs: number | null;

@@ -11423,7 +11423,10 @@
       "actionFailed": "A ação falhou. Tente novamente.",
       "unrelated_one": "{{count}} elemento em segundo plano não relacionado está oculto",
       "unrelated_other": "{{count}} elementos em segundo plano não relacionados estão ocultos",
-      "unrelated_many": "{{count}} elemento em segundo plano não relacionado está oculto"
+      "unrelated_many": "{{count}} elemento em segundo plano não relacionado está oculto",
+      "checking_one": "{{count}} elemento em segundo plano ainda está a ser verificado; esta lista é atualizada automaticamente",
+      "checking_other": "{{count}} elementos em segundo plano ainda estão a ser verificados; esta lista é atualizada automaticamente",
+      "checking_many": "{{count}} elemento em segundo plano ainda está a ser verificado; esta lista é atualizada automaticamente"
     }
   },
   "update": {

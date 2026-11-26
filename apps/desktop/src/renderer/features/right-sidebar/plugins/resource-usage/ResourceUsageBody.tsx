@@ -353,7 +353,7 @@ function LocalResourceUsageBody({
         />
       </div>
       {view === 'hostDaemons' ? (
-        <HostDaemonsView />
+        <HostDaemonsView visible={visible} />
       ) : (
         <>
       <div

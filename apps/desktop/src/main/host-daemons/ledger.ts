@@ -106,6 +106,9 @@ export interface HostDaemonLedger {
   /** 无定义文件的来源：首次扫描到的时刻（归属回溯锚点）。 */
   getFirstSeen(id: string): number | null;
   setFirstSeen(id: string, atMs: number): void;
+  firstSeenIds(): string[];
+  /** 结束一代：条目已不在，锚点和「无关」结论一并作废，重新加回来时从头核对。 */
+  retireFirstSeen(id: string): void;
   /**
    * 按当前账号把台账读进内存。读写一律异步：本模块的入口挂在列表 IPC 上，
    * 同步 I/O 会直接卡主线程（工程约定 §8.5）。读内存的 getter 仍是同步的。
@@ -240,6 +243,17 @@ export function createHostDaemonLedger(filePath: string | (() => string)): HostD
     },
     setFirstSeen(id, atMs) {
       ensure().firstSeen[id] = atMs;
+      generation += 1;
+    },
+    firstSeenIds() {
+      return Object.keys(ensure().firstSeen);
+    },
+    retireFirstSeen(id) {
+      const current = ensure();
+      if (current.firstSeen[id] === undefined) return;
+      delete current.firstSeen[id];
+      // 同一代的「无关」结论依附于这个锚点，锚点没了它也不能留。
+      delete current.misses[id];
       generation += 1;
     },
     ready,

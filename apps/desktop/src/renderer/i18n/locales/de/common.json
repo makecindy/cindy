@@ -11337,7 +11337,9 @@
       "deleted": "{{name}} gelöscht",
       "actionFailed": "Aktion fehlgeschlagen. Versuche es erneut.",
       "unrelated_one": "{{count}} nicht zugehöriges Hintergrundelement ist ausgeblendet",
-      "unrelated_other": "{{count}} nicht zugehörige Hintergrundelemente sind ausgeblendet"
+      "unrelated_other": "{{count}} nicht zugehörige Hintergrundelemente sind ausgeblendet",
+      "checking_one": "{{count}} Hintergrundelement wird noch zugeordnet; diese Liste aktualisiert sich automatisch",
+      "checking_other": "{{count}} Hintergrundelemente werden noch zugeordnet; diese Liste aktualisiert sich automatisch"
     }
   },
   "update": {

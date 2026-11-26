@@ -11240,7 +11240,9 @@
       "deleted": "已删除 {{name}}",
       "actionFailed": "操作失败，请重试",
       "unrelated_one": "另有 {{count}} 项与本机任务无关的常驻项没有显示",
-      "unrelated_other": "另有 {{count}} 项与本机任务无关的常驻项没有显示"
+      "unrelated_other": "另有 {{count}} 项与本机任务无关的常驻项没有显示",
+      "checking_one": "另有 {{count}} 项常驻项还在核对本机任务历史，核对后会自动更新",
+      "checking_other": "另有 {{count}} 项常驻项还在核对本机任务历史，核对后会自动更新"
     },
     "resourceUsage": {
       "tabs": {

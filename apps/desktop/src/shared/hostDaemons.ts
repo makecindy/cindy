@@ -6,8 +6,9 @@
  * 的区别：那边是 OS 级进程与 Agent 进程树，这边是「脱离会话生命周期仍然自己跑」
  * 的东西 —— 删掉任务后仍然存在，所以必须能独立查看与清理。
  *
- * 归属口径（见 main/host-daemons/service.ts）：只有台账已登记，或能在任务创建时刻
- * 前后 5 分钟内找到「本机工具调用里出现过该任务名」的来源会话，才算 Cindy 产生的。
+ * 归属口径（见 main/host-daemons/service.ts）：证据只有一种 —— 本机某个任务执行过的命令里
+ * 出现过该条目的名字。有定义文件时刻的条目查那一刻前后 5 分钟；没有定义时刻的条目
+ * （crontab）要把工具调用历史从旧到新翻完才算数，没读完不下结论。
  * 其余一律不返回给 renderer（只回一个数量），避免把 v2rayN 这类无关常驻混进清单。
  *
  * 与现有「路径不出 main」规则的受控例外：本清单的用途就是告诉用户脚本在哪、怎么
@@ -61,6 +62,13 @@ export interface HostDaemonsSnapshot {
    * 「我让 Cindy 做过什么」，不是系统计划任务管理器。
    */
   unrelatedCount: number;
+  /**
+   * 还在核对归属、暂不下结论的条目数：没有定义时刻的条目要把工具调用历史翻完，
+   * 冷盘的大库上一次拉不完，进度留在 main。不算「无关」，也还不进清单。
+   */
+  pendingCount: number;
+  /** 还有条目待核对时，界面隔多少毫秒再拉一次；null = 本次已核对完。 */
+  retryAfterMs: number | null;
 }
 
 export interface HostDaemonActionRequest {

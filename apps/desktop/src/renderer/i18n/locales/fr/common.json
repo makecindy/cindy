@@ -11423,7 +11423,10 @@
       "actionFailed": "Échec de l’action. Réessayez.",
       "unrelated_one": "{{count}} élément en arrière-plan sans rapport est masqué",
       "unrelated_other": "{{count}} éléments en arrière-plan sans rapport sont masqués",
-      "unrelated_many": "{{count}} élément en arrière-plan sans rapport est masqué"
+      "unrelated_many": "{{count}} élément en arrière-plan sans rapport est masqué",
+      "checking_one": "{{count}} élément en arrière-plan est encore en cours de vérification ; cette liste se met à jour automatiquement",
+      "checking_other": "{{count}} éléments en arrière-plan sont encore en cours de vérification ; cette liste se met à jour automatiquement",
+      "checking_many": "{{count}} élément en arrière-plan est encore en cours de vérification ; cette liste se met à jour automatiquement"
     }
   },
   "update": {

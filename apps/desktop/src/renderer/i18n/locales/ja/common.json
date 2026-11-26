@@ -11240,7 +11240,9 @@
       "deleted": "{{name}} を削除しました",
       "actionFailed": "操作に失敗しました。もう一度お試しください",
       "unrelated_one": "無関係な常駐タスク {{count}} 件は表示していません",
-      "unrelated_other": "無関係な常駐タスク {{count}} 件は表示していません"
+      "unrelated_other": "無関係な常駐タスク {{count}} 件は表示していません",
+      "checking_one": "常駐タスク {{count}} 件の作成元を確認しています。確認が終わると自動的に更新されます",
+      "checking_other": "常駐タスク {{count}} 件の作成元を確認しています。確認が終わると自動的に更新されます"
     },
     "resourceUsage": {
       "tabs": {

@@ -11240,7 +11240,9 @@
       "deleted": "已刪除 {{name}}",
       "actionFailed": "操作失敗，請重試",
       "unrelated_one": "另有 {{count}} 項與本機任務無關的常駐項目未顯示",
-      "unrelated_other": "另有 {{count}} 項與本機任務無關的常駐項目未顯示"
+      "unrelated_other": "另有 {{count}} 項與本機任務無關的常駐項目未顯示",
+      "checking_one": "另有 {{count}} 項常駐項目還在核對本機任務歷史，核對後會自動更新",
+      "checking_other": "另有 {{count}} 項常駐項目還在核對本機任務歷史，核對後會自動更新"
     },
     "resourceUsage": {
       "tabs": {

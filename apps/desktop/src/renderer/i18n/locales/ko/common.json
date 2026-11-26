@@ -11240,7 +11240,9 @@
       "deleted": "{{name}}을(를) 삭제했습니다",
       "actionFailed": "작업을 수행하지 못했습니다. 다시 시도하세요",
       "unrelated_one": "관련 없는 상주 작업 {{count}}개는 표시하지 않습니다",
-      "unrelated_other": "관련 없는 상주 작업 {{count}}개는 표시하지 않습니다"
+      "unrelated_other": "관련 없는 상주 작업 {{count}}개는 표시하지 않습니다",
+      "checking_one": "상주 작업 {{count}}개의 생성 기록을 확인하는 중입니다. 확인이 끝나면 자동으로 업데이트됩니다",
+      "checking_other": "상주 작업 {{count}}개의 생성 기록을 확인하는 중입니다. 확인이 끝나면 자동으로 업데이트됩니다"
     },
     "resourceUsage": {
       "tabs": {

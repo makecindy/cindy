@@ -11284,7 +11284,9 @@
       "deleted": "Deleted {{name}}",
       "actionFailed": "Action failed. Try again.",
       "unrelated_one": "{{count}} unrelated background item is hidden",
-      "unrelated_other": "{{count}} unrelated background items are hidden"
+      "unrelated_other": "{{count}} unrelated background items are hidden",
+      "checking_one": "{{count}} background item is still being checked; this list updates automatically",
+      "checking_other": "{{count}} background items are still being checked; this list updates automatically"
     },
     "resourceUsage": {
       "tabs": {

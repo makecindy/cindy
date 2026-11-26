@@ -11292,7 +11292,8 @@
       "stopped": "已停止 {{name}}",
       "deleted": "已删除 {{name}}",
       "actionFailed": "操作失败，请重试。",
-      "unrelated_other": "已隐藏 {{count}} 个无关的后台项目"
+      "unrelated_other": "已隐藏 {{count}} 个无关的后台项目",
+      "checking_other": "另有 {{count}} 个后台项目还在核对任务历史，核对后自动更新"
     }
   },
   "update": {

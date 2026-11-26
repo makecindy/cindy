@@ -3,13 +3,17 @@
  * - 生产入口与可观察结果：`createHostDaemonsService().list()` 决定了「哪些系统常驻项
  *   会出现在本机常驻清单里」——用户看到的是「只有我让 Cindy 装的那些」。
  * - Bug／规则依据：清单的立身之本是不混入 v2rayN 这类与本机任务无关的常驻项；
- *   归属只认「任务定义写入时刻 ±5 分钟内、该会话工具调用里出现任务名」。
+ *   归属只认「任务定义写入时刻 ±5 分钟内、该会话工具调用里出现任务名」。没有定义
+ *   时刻的条目（crontab）没有时间窗可查：要把工具调用历史读完才下结论，读到一半、
+ *   读失败、切号都不能当成「无关」记下来。
  * - 现有覆盖缺口：process-monitor 的测试只覆盖进程与终止授权，没有计划任务扫描、
  *   归属判定与台账命中的任何覆盖。
  * - 最小失败输入：一条任务名只出现在用户聊天、不在工具调用里的计划任务（必须被排除）；
  *   以及 `\Microsoft\` 下的系统任务（必须拒绝操作）；删除必须先结束运行中的实例
- *   （Unregister 只删定义，不带走进程）。
- * - tier：unit。扫描与数据库全部注入，不触碰真实 PowerShell / SQLite。
+ *   （Unregister 只删定义，不带走进程）。全历史回看还依赖证据读取不漏不重：
+ *   同一时刻落库的多行（只按时间翻页会漏行）、读到头之后才落库的行。
+ * - tier：unit。扫描全部注入，不触碰真实 PowerShell；证据读取那组用内存 SQLite，
+ *   走生产查询入口。
  */
 
 import fs from 'node:fs';
@@ -18,6 +22,8 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { describe, expect, it, vi } from 'vitest';
+import Database from 'better-sqlite3';
+import { drizzle } from 'drizzle-orm/better-sqlite3';
 
 // 只为台账那条用例卡住一次 rename；其余用例与模块拿到的仍是真实实现。
 vi.mock('node:fs/promises', async (importOriginal) => {
@@ -26,7 +32,7 @@ vi.mock('node:fs/promises', async (importOriginal) => {
 });
 
 import type { ToolMessageRow } from '../attribution.js';
-import { pickOwnerSession } from '../attribution.js';
+import { ATTRIBUTION_WINDOW_MS, pickOwnerSession } from '../attribution.js';
 import { createHostDaemonLedger, type HostDaemonLedger, type HostDaemonOwnerRecord } from '../ledger.js';
 import {
   buildDeleteScheduledTaskScript,
@@ -40,6 +46,17 @@ import {
   type HostDaemonsService,
   type HostDaemonsServiceDeps,
 } from '../service.js';
+import type { RawHostDaemon } from '../target.js';
+import {
+  TOOL_MESSAGE_PAGE_LIMIT,
+  readToolUses,
+  readToolUsesFrom,
+  type ToolMessagePage,
+  type ToolUseCursor,
+} from '../toolHistory.js';
+import type { DbClient } from '../../localDb/client/DbClient.js';
+import { clearCurrentDbClient, setCurrentDbClient } from '../../localDb/client/current.js';
+import * as schema from '../../localDb/schema.js';
 
 function memoryLedger(): HostDaemonLedger & { owners: Map<string, HostDaemonOwnerRecord> } {
   const owners = new Map<string, HostDaemonOwnerRecord>();
@@ -54,6 +71,8 @@ function memoryLedger(): HostDaemonLedger & { owners: Map<string, HostDaemonOwne
     setMissMtime: (id, mtimeMs) => void misses.set(id, mtimeMs),
     getFirstSeen: (id) => firstSeen.get(id) ?? null,
     setFirstSeen: (id, mtimeMs) => void firstSeen.set(id, mtimeMs),
+    firstSeenIds: () => [...firstSeen.keys()],
+    retireFirstSeen: (id) => void firstSeen.delete(id),
     ready: async () => {},
     save: async () => {},
   };
@@ -65,7 +84,9 @@ function memoryLedger(): HostDaemonLedger & { owners: Map<string, HostDaemonOwne
  */
 function createTestService(init: {
   scanTasks: () => Promise<RawScheduledTask[]> | RawScheduledTask[];
-  readToolMessages: HostDaemonsServiceDeps['readToolMessages'];
+  readToolUses: HostDaemonsServiceDeps['readToolUses'];
+  /** 全历史分页读的替身；默认历史为空。 */
+  readToolUsesFrom?: HostDaemonsServiceDeps['readToolUsesFrom'];
   ledger?: HostDaemonLedger;
   stopTask?: (id: string) => Promise<void> | void;
   runTask?: (id: string) => Promise<void> | void;
@@ -86,7 +107,8 @@ function createTestService(init: {
         };
   return createHostDaemonsService({
     target,
-    readToolMessages: init.readToolMessages,
+    readToolUses: init.readToolUses,
+    readToolUsesFrom: init.readToolUsesFrom ?? (async () => ({ rows: [], next: null, exhausted: true })),
     ledger: init.ledger ?? memoryLedger(),
     now: init.now,
     ownerScopeKey: init.ownerScopeKey,
@@ -97,6 +119,11 @@ function createTestService(init: {
 /** 追溯窗口查询的替身：默认「读全了」。 */
 function windowOf(rows: ToolMessageRow[], truncated = false) {
   return { rows, truncated };
+}
+
+/** 一行工具调用：只有命令文本参与归属，会话标题只是给人看的。 */
+function toolUse(sessionId: string, content: string): ToolMessageRow {
+  return { sessionId, title: `任务 ${sessionId}`, content };
 }
 
 function task(overrides: Partial<RawScheduledTask> = {}): RawScheduledTask {
@@ -267,7 +294,7 @@ describe('attribution window query', () => {
     const truncated = true;
     const service = createTestService({
       scanTasks: async () => [task()],
-      readToolMessages: async () => windowOf([], truncated),
+      readToolUses: async () => windowOf([], truncated),
       ledger,
       stopTask: async () => {},
       runTask: async () => {},
@@ -285,7 +312,7 @@ describe('attribution window query', () => {
     const ledger = memoryLedger();
     const service = createTestService({
       scanTasks: async () => [task()],
-      readToolMessages: async () => windowOf([], false),
+      readToolUses: async () => windowOf([], false),
       ledger,
       stopTask: async () => {},
       runTask: async () => {},
@@ -312,7 +339,7 @@ describe('hostDaemons service', () => {
     let dbRows = traceRows;
     const service = createTestService({
       scanTasks: async () => scanned,
-      readToolMessages: async () => windowOf(dbRows),
+      readToolUses: async () => windowOf(dbRows),
       ledger,
       stopTask: async () => {},
       runTask: async () => {},
@@ -341,7 +368,7 @@ describe('hostDaemons service', () => {
     const ran: string[] = [];
     const runnable = createTestService({
       scanTasks: async () => scanned,
-      readToolMessages: async () => windowOf([]),
+      readToolUses: async () => windowOf([]),
       ledger,
       stopTask: async () => {},
       runTask: async (id) => void ran.push(id),
@@ -356,7 +383,7 @@ describe('hostDaemons service', () => {
   it('refuses to stop or delete a task it did not attribute', async () => {
     const service = createTestService({
       scanTasks: async () => [task({ id: '\\v2rayNAutoRun', name: 'v2rayNAutoRun' })],
-      readToolMessages: async () => windowOf([]),
+      readToolUses: async () => windowOf([]),
       ledger: memoryLedger(),
       stopTask: async () => {},
       runTask: async () => {},
@@ -383,7 +410,7 @@ describe('hostDaemons service', () => {
     let queries = 0;
     const deps = {
       scanTasks: async () => [task({ id: '\fresh', name: 'fresh', definitionMtimeMs: createdMs })],
-      readToolMessages: async () => {
+      readToolUses: async () => {
         queries += 1;
         return windowOf(rows);
       },
@@ -416,7 +443,7 @@ describe('hostDaemons service', () => {
     let queries = 0;
     const service = createTestService({
       scanTasks: async () => [task({ id: '\never', name: 'never', definitionMtimeMs: createdMs })],
-      readToolMessages: async () => {
+      readToolUses: async () => {
         queries += 1;
         return windowOf([]);
       },
@@ -439,7 +466,7 @@ describe('hostDaemons service', () => {
     const replaced = task({ definitionMtimeMs: 1_793_000_000_001, exec: 'C:\\other\\new.exe', args: '' });
     const service = createTestService({
       scanTasks: async () => [replaced],
-      readToolMessages: async () => windowOf([]),
+      readToolUses: async () => windowOf([]),
       ledger,
       stopTask: async () => {},
       runTask: async () => {},
@@ -468,7 +495,7 @@ describe('hostDaemons service', () => {
     let fail = true;
     const service = createTestService({
       scanTasks: async () => [task({ definitionMtimeMs: 1_793_028_922_179 })],
-      readToolMessages: async () => {
+      readToolUses: async () => {
         if (fail) throw new Error('database is locked');
         return {
           rows: [{ sessionId: 's1', title: '空气质量联动', content: 'schtasks /create /tn airlink-autopm' }],
@@ -496,7 +523,7 @@ describe('hostDaemons service', () => {
     const deleted: string[] = [];
     const service = createTestService({
       scanTasks: async () => [task()],
-      readToolMessages: async () =>
+      readToolUses: async () =>
         windowOf([
           { sessionId: 's1', title: '空气质量联动', content: 'schtasks /create /tn airlink-autopm' },
         ]),
@@ -520,7 +547,7 @@ describe('hostDaemons service', () => {
       scanTasks: async () => {
         throw new Error('must not scan off Windows');
       },
-      readToolMessages: async () => windowOf([]),
+      readToolUses: async () => windowOf([]),
       ledger: memoryLedger(),
       stopTask: async () => {},
       runTask: async () => {},
@@ -537,7 +564,7 @@ describe('hostDaemons service', () => {
     const ledger = memoryLedger();
     const service = createTestService({
       scanTasks: async () => [task()],
-      readToolMessages: async () => {
+      readToolUses: async () => {
         scope = 'account-b';
         return windowOf([
           { sessionId: 'session-a', title: '账号A的标题', content: 'schtasks /create /tn airlink-autopm' },
@@ -566,7 +593,7 @@ describe('hostDaemons service', () => {
         scope = 'account-b';
         return [task()];
       },
-      readToolMessages: async () =>
+      readToolUses: async () =>
         windowOf([
           { sessionId: 'session-a', title: '账号A的标题', content: 'schtasks /create /tn airlink-autopm' },
         ]),
@@ -593,7 +620,7 @@ describe('hostDaemons service', () => {
         scope = 'account-b';
         return [task()];
       },
-      readToolMessages: async () =>
+      readToolUses: async () =>
         windowOf([
           { sessionId: 'session-a', title: '账号A的标题', content: 'schtasks /create /tn airlink-autopm' },
         ]),
@@ -625,7 +652,7 @@ describe('hostDaemons service', () => {
         pending = true;
         return [task()];
       },
-      readToolMessages: async () =>
+      readToolUses: async () =>
         windowOf([
           { sessionId: 'session-a', title: '账号A的标题', content: 'schtasks /create /tn airlink-autopm' },
         ]),
@@ -652,7 +679,7 @@ describe('hostDaemons service', () => {
     // 请求一开始就落在边界里，结束时边界仍未结束 —— 只有真实 key 能暴露中间那次提交。
     const pending = true;
     const ledger = memoryLedger();
-    const readToolMessages = vi.fn(async () => {
+    const readToolUses = vi.fn(async () => {
       // 查询期间 owner 被提交，边界仍未结束。
       scope = 'account-b';
       return windowOf([
@@ -661,7 +688,7 @@ describe('hostDaemons service', () => {
     });
     const service = createTestService({
       scanTasks: async () => [task()],
-      readToolMessages,
+      readToolUses,
       ledger,
       stopTask: async () => {},
       runTask: async () => {},
@@ -679,11 +706,11 @@ describe('hostDaemons service', () => {
 
   // 边界进行中连库都不读：那一刻数据库可能正被换掉，读到的行属于哪个账号无法确定。
   it('refuses to read tool history while the account boundary is in progress', async () => {
-    const readToolMessages = vi.fn(async () => windowOf([]));
+    const readToolUses = vi.fn(async () => windowOf([]));
     const ledger = memoryLedger();
     const service = createTestService({
       scanTasks: async () => [task()],
-      readToolMessages,
+      readToolUses,
       ledger,
       stopTask: async () => {},
       runTask: async () => {},
@@ -696,7 +723,7 @@ describe('hostDaemons service', () => {
 
     const snapshot = await service.list();
     expect(snapshot.entries).toEqual([]);
-    expect(readToolMessages).not.toHaveBeenCalled();
+    expect(readToolUses).not.toHaveBeenCalled();
     expect(ledger.owners.size).toBe(0);
     await expect(service.run('\\airlink-autopm')).rejects.toMatchObject({ code: 'NOT_OWNED' });
   });
@@ -713,7 +740,7 @@ describe('hostDaemons service', () => {
         task({ id: '\\first', name: 'first-task' }),
         task({ id: '\\second', name: 'second-task' }),
       ],
-      readToolMessages: async () => {
+      readToolUses: async () => {
         reads += 1;
         // 第一条任务照常归属；第二条任务的查询期间切号。
         if (reads === 2) scope = 'account-b';
@@ -745,7 +772,7 @@ describe('hostDaemons service', () => {
         scope = 'account-b';
         return [task()];
       },
-      readToolMessages: async () => windowOf([]),
+      readToolUses: async () => windowOf([]),
       ledger,
       stopTask,
       runTask: async () => {},
@@ -764,5 +791,519 @@ describe('hostDaemons service', () => {
 
     await expect(service.stop('\\airlink-autopm')).rejects.toBeInstanceOf(HostDaemonActionError);
     expect(stopTask).not.toHaveBeenCalled();
+  });
+});
+
+describe('没有定义时刻的条目：读完工具调用历史才下结论', () => {
+  const T0 = 1_800_000_000_000;
+  const COMMAND = '*/5 * * * * /usr/local/bin/backup.sh';
+  /** 证据只有一种形态：会话执行过的命令里出现这一行。 */
+  const EVIDENCE = toolUse('session-a', `(crontab -l; echo '${COMMAND}') | crontab -`);
+  /** 读满一页的历史行：没有任何证据，只用来把历史撑长。 */
+  const filler = Array.from({ length: TOOL_MESSAGE_PAGE_LIMIT }, () =>
+    toolUse('session-x', 'ls'),
+  );
+
+  function cronEntry(overrides: Partial<RawHostDaemon> = {}): RawHostDaemon {
+    return {
+      id: 'cron-entry:4f2a',
+      name: 'backup.sh',
+      kind: 'cron-entry',
+      state: 'unknown',
+      command: '/usr/local/bin/backup.sh',
+      trigger: 'schedule',
+      attributionNeedles: [COMMAND],
+      definitionMtimeMs: null,
+      lastRunAtMs: null,
+      stoppable: false,
+      ...overrides,
+    };
+  }
+
+  function sweepService(init: {
+    daemons?: () => RawHostDaemon[];
+    readToolUses?: HostDaemonsServiceDeps['readToolUses'];
+    readToolUsesFrom: HostDaemonsServiceDeps['readToolUsesFrom'];
+    now?: () => number;
+    ownerScopeKey?: () => string;
+  }) {
+    const ledger = memoryLedger();
+    const service = createHostDaemonsService({
+      target: {
+        scan: async () => init.daemons?.() ?? [cronEntry()],
+        stop: async () => {},
+        run: async () => {},
+        remove: async () => {},
+      },
+      readToolUses: init.readToolUses ?? (async () => windowOf([])),
+      readToolUsesFrom: init.readToolUsesFrom,
+      ledger,
+      now: init.now,
+      ownerScopeKey: init.ownerScopeKey,
+    });
+    return { service, ledger };
+  }
+
+  /**
+   * 分页历史的替身，页的语义与真实读取层一致：读满一页 = 后面可能还有行；不足一页
+   * = 读到头；空页没有「最后一行」，`next` 为 null。游标是页序号，`calls` 记下每次
+   * 从哪里读起。
+   */
+  function history(pages: ToolMessageRow[][]) {
+    const calls: Array<ToolUseCursor | null> = [];
+    const read = vi.fn(async (after: ToolUseCursor | null): Promise<ToolMessagePage> => {
+      calls.push(after);
+      const index = after ? Number(after.id) + 1 : 0;
+      const rows = pages[index] ?? [];
+      const last = rows.at(-1);
+      return {
+        rows,
+        next: last ? { createdAt: index, id: String(index) } : null,
+        exhausted: rows.length < TOOL_MESSAGE_PAGE_LIMIT,
+      };
+    });
+    return { read, calls };
+  }
+
+  it('attributes a crontab entry whose creating session ran long before the panel opened', async () => {
+    const { service } = sweepService({
+      readToolUsesFrom: async () => ({ rows: [EVIDENCE], next: { createdAt: 0, id: '0' }, exhausted: true }),
+    });
+
+    const list = await service.list();
+
+    expect(list.entries.map((entry) => entry.ownerSessionId)).toEqual(['session-a']);
+    expect(list.unrelatedCount).toBe(0);
+    expect(list.pendingCount).toBe(0);
+  });
+
+  it('keeps an entry without evidence pending until its window closes, then counts it unrelated', async () => {
+    let nowMs = T0;
+    const { read } = history([]);
+    const { service, ledger } = sweepService({ readToolUsesFrom: read, now: () => nowMs });
+
+    const first = await service.list();
+    expect(first).toMatchObject({
+      entries: [],
+      unrelatedCount: 0,
+      pendingCount: 1,
+      retryAfterMs: 30_000,
+    });
+    expect(ledger.getMissMtime('cron-entry:4f2a')).toBeNull();
+
+    nowMs = T0 + ATTRIBUTION_WINDOW_MS;
+    const second = await service.list();
+    expect(second).toMatchObject({
+      entries: [],
+      unrelatedCount: 1,
+      pendingCount: 0,
+      retryAfterMs: null,
+    });
+    expect(ledger.getMissMtime('cron-entry:4f2a')).toBe(T0);
+  });
+
+  it('picks up evidence that lands after the history was read to the end', async () => {
+    // 会话的工具调用行比第一次扫描晚落库：先读到头，证据之后才出现。
+    const pages: ToolMessageRow[][] = [filler];
+    const { read, calls } = history(pages);
+    const { service } = sweepService({ readToolUsesFrom: read, now: () => T0 });
+    expect((await service.list()).pendingCount).toBe(1);
+    const readsBefore = calls.length;
+
+    // 还没有新行时再拉一次：读到的是空页，位置必须留在最后一行上。
+    expect((await service.list()).pendingCount).toBe(1);
+    expect(calls).toHaveLength(readsBefore + 1);
+    expect(calls[readsBefore]).toEqual({ createdAt: 0, id: '0' });
+
+    pages.push([EVIDENCE]);
+    const third = await service.list();
+
+    expect(third.entries.map((entry) => entry.ownerSessionId)).toEqual(['session-a']);
+    // 读到头之后从停下的位置接着读：不把整段历史重读一遍（命中翻倍、冷盘时每次都很慢）。
+    expect(calls).toHaveLength(readsBefore + 2);
+    expect(calls[readsBefore + 1]).toEqual({ createdAt: 0, id: '0' });
+  });
+
+  it('still reads history when the scan itself took longer than the read budget', async () => {
+    // 一次扫描要一秒多、冷盘时更久：预算若从 list 一开始算，轮到回看时早已用完，一页
+    // 都读不了，界面却被告知「有进展、马上再来」，待核对的条目永远挂着。
+    let clock = T0;
+    const { read, calls } = history([[EVIDENCE]]);
+    const { service } = sweepService({
+      daemons: () => {
+        clock += 60_000;
+        return [cronEntry()];
+      },
+      readToolUsesFrom: read,
+      now: () => clock,
+    });
+
+    const list = await service.list();
+
+    expect(calls.length).toBeGreaterThan(0);
+    expect(list.entries.map((entry) => entry.ownerSessionId)).toEqual(['session-a']);
+  });
+
+  it('reads on from where the previous list stopped instead of starting over', async () => {
+    // 一次 list 最多读 300 页，证据在第 301 页。每轮都从头读的话，每轮都停在同一处。
+    const pages = [...Array.from({ length: 300 }, () => filler), [EVIDENCE]];
+    const { read, calls } = history(pages);
+    const { service } = sweepService({ readToolUsesFrom: read, now: () => T0 });
+
+    expect((await service.list()).pendingCount).toBe(1);
+    expect(calls).toHaveLength(300);
+
+    const second = await service.list();
+    expect(second.entries.map((entry) => entry.ownerSessionId)).toEqual(['session-a']);
+    expect(calls[300]).toEqual({ createdAt: 299, id: '299' });
+  });
+
+  it('decides the owner only after the whole history was read, not on the first hit', async () => {
+    // 会话 a 在最早一页命中 1 次，会话 b 在后面的页里命中 2 次。读到一页有命中就下
+    // 结论的话，归属会给 a，而且记了账之后不会再改。
+    const pages: ToolMessageRow[][] = [
+      [EVIDENCE, ...filler.slice(1)],
+      filler,
+      [
+        ...filler.slice(0, -3),
+        toolUse('session-b', `crontab -l | grep -F '${COMMAND}'`),
+        toolUse('session-b', `(crontab -l; echo '${COMMAND}') | crontab -`),
+      ],
+    ];
+    const { read, calls } = history(pages);
+    // 冷盘：每页都读得很慢，一次 list 读完一页预算就没了。
+    let clock = T0;
+    const { service, ledger } = sweepService({
+      readToolUsesFrom: async (after) => {
+        clock += 60_000;
+        return read(after);
+      },
+      now: () => clock,
+    });
+
+    const first = await service.list();
+    expect(calls).toHaveLength(1);
+    expect(first).toMatchObject({ entries: [], pendingCount: 1 });
+    expect(ledger.getOwner('cron-entry:4f2a')).toBeNull();
+
+    const second = await service.list();
+    expect(second).toMatchObject({ entries: [], pendingCount: 1 });
+    expect(ledger.getOwner('cron-entry:4f2a')).toBeNull();
+
+    const third = await service.list();
+    expect(calls).toHaveLength(3);
+    expect(third.entries.map((entry) => entry.ownerSessionId)).toEqual(['session-b']);
+    expect(ledger.getOwner('cron-entry:4f2a')).toMatchObject({ sessionId: 'session-b' });
+  });
+
+  it('keeps an entry pending after its window closed while the history is still unread', async () => {
+    // 冷盘大库：一次 list 读不完（单次有页数上限，现为 300）。时间窗关了也不能就地记
+    // 「无关」——证据可能在还没读到的页里，记了 miss 就是永久停在「无关」。
+    const pages: ToolMessageRow[][] = Array.from({ length: 601 }, () => filler);
+    pages.push([EVIDENCE]);
+    let clock = T0;
+    const { read } = history(pages);
+    const { service, ledger } = sweepService({ readToolUsesFrom: read, now: () => clock });
+
+    expect(await service.list()).toMatchObject({ unrelatedCount: 0, pendingCount: 1 });
+
+    clock = T0 + ATTRIBUTION_WINDOW_MS;
+    expect(await service.list()).toMatchObject({ unrelatedCount: 0, pendingCount: 1 });
+    expect(ledger.getMissMtime('cron-entry:4f2a')).toBeNull();
+
+    const third = await service.list();
+    expect(third.entries.map((entry) => entry.ownerSessionId)).toEqual(['session-a']);
+  });
+
+  it('records nothing when the history cannot be read, and attributes once it can', async () => {
+    const { read } = history([[EVIDENCE]]);
+    read.mockRejectedValueOnce(new Error('database is busy'));
+    // 时间窗已经关上：此刻挡在「无关」结论前面的只有「历史没读成」这一条。
+    const { service, ledger } = sweepService({
+      readToolUsesFrom: read,
+      now: () => T0 + ATTRIBUTION_WINDOW_MS,
+    });
+
+    const first = await service.list();
+    expect(first).toMatchObject({
+      entries: [],
+      unrelatedCount: 0,
+      pendingCount: 1,
+      retryAfterMs: 15_000,
+    });
+    expect(ledger.getMissMtime('cron-entry:4f2a')).toBeNull();
+
+    const second = await service.list();
+    expect(second.entries.map((entry) => entry.ownerSessionId)).toEqual(['session-a']);
+  });
+
+  it('drops the pass when the account changes while the history is being read', async () => {
+    let scope = 'account-a';
+    let reads = 0;
+    const { read } = history([[EVIDENCE]]);
+    const { service, ledger } = sweepService({
+      readToolUsesFrom: async (after) => {
+        reads += 1;
+        // 新账号的历史里没有这一条的证据。
+        if (reads >= 2) return { rows: [], next: null, exhausted: true };
+        const page = await read(after);
+        scope = 'account-b';
+        return page;
+      },
+      now: () => T0,
+      ownerScopeKey: () => scope,
+    });
+
+    const first = await service.list();
+    expect(first).toMatchObject({ supported: true, entries: [], pendingCount: 1 });
+    expect(ledger.owners.size).toBe(0);
+
+    // 旧账号读到的那一页不能变成新账号的归属结论。
+    const second = await service.list();
+    expect(second).toMatchObject({ entries: [], pendingCount: 1 });
+    expect(ledger.owners.size).toBe(0);
+  });
+
+  it('returns no entries when the account changes while the history is being read', async () => {
+    let scope = 'account-a';
+    const TASK = 'Cindy-7671-probe';
+    const { read } = history([filler]);
+    const { service, ledger } = sweepService({
+      daemons: () => [
+        {
+          id: 'scheduled-task:1',
+          name: TASK,
+          kind: 'scheduled-task',
+          state: 'ready',
+          trigger: 'logon',
+          attributionNeedles: [TASK],
+          definitionMtimeMs: T0 - 60_000,
+          lastRunAtMs: null,
+          stoppable: true,
+          command: `schtasks /create /tn ${TASK}`,
+        },
+        cronEntry(),
+      ],
+      readToolUses: async () => windowOf([toolUse('session-a', `schtasks /create /tn ${TASK}`)]),
+      readToolUsesFrom: async (after) => {
+        // 计划任务已在本轮归属；读到回看的第一页时账号切换。
+        scope = 'account-b';
+        return read(after);
+      },
+      now: () => T0,
+      ownerScopeKey: () => scope,
+    });
+
+    const list = await service.list();
+
+    // 旧账号的任务标题不能跟着「已归属」的条目回到界面。
+    expect(list).toMatchObject({ supported: true, entries: [], pendingCount: 1 });
+    expect(ledger.owners.size).toBe(0);
+  });
+
+  it('never feeds the same page of history to two overlapping lists', async () => {
+    const { read, calls } = history([filler, [EVIDENCE]]);
+    let release = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let firstReadStarted = () => {};
+    const started = new Promise<void>((resolve) => {
+      firstReadStarted = resolve;
+    });
+    const { service } = sweepService({
+      readToolUsesFrom: async (after) => {
+        if (calls.length === 0) {
+          firstReadStarted();
+          await gate;
+        }
+        return read(after);
+      },
+      now: () => T0,
+    });
+
+    // 第一次 list 停在读第一页的途中，第二次 list 进来。
+    const first = service.list();
+    await started;
+    const second = service.list();
+    release();
+    const [firstList, secondList] = await Promise.all([first, second]);
+
+    expect(firstList.entries.map((entry) => entry.ownerSessionId)).toEqual(['session-a']);
+    expect(secondList.entries.map((entry) => entry.ownerSessionId)).toEqual(['session-a']);
+    expect(calls.filter((after) => after === null)).toHaveLength(1);
+  });
+
+  it('keeps the progress and anchor of a pass that failed midway', async () => {
+    let nowMs = T0;
+    let reads = 0;
+    const { read, calls } = history([filler, [EVIDENCE]]);
+    const { service, ledger } = sweepService({
+      readToolUsesFrom: async (after) => {
+        reads += 1;
+        if (reads === 2) throw new Error('database is busy');
+        return read(after);
+      },
+      now: () => nowMs,
+    });
+
+    expect((await service.list()).pendingCount).toBe(1);
+    expect(ledger.getFirstSeen('cron-entry:4f2a')).toBe(T0);
+
+    nowMs = T0 + 1;
+    const second = await service.list();
+    expect(second.entries.map((entry) => entry.ownerSessionId)).toEqual(['session-a']);
+    // 第二轮从第一轮停下的位置接着读；锚点换了值才会让进度作废、从头再来。
+    expect(calls).toEqual([null, { createdAt: 0, id: '0' }]);
+  });
+
+  it('starts a newly seen entry from the oldest page without resetting the others', async () => {
+    const pages = [...Array.from({ length: 300 }, () => filler), [EVIDENCE]];
+    const { read, calls } = history(pages);
+    let daemons = [cronEntry()];
+    const { service } = sweepService({
+      daemons: () => daemons,
+      readToolUsesFrom: read,
+      now: () => T0,
+    });
+    expect((await service.list()).pendingCount).toBe(1);
+
+    daemons = [
+      cronEntry(),
+      cronEntry({
+        id: 'cron-entry:9c31',
+        name: 'sync.sh',
+        command: '/usr/local/bin/sync.sh',
+        attributionNeedles: ['0 3 * * * /usr/local/bin/sync.sh'],
+      }),
+    ];
+    const second = await service.list();
+
+    expect(second.entries.map((entry) => entry.ownerSessionId)).toEqual(['session-a']);
+    expect(second.pendingCount).toBe(1);
+    expect(calls.slice(300, 302)).toEqual([{ createdAt: 299, id: '299' }, null]);
+  });
+});
+
+describe('归属证据读取（内存库，走生产查询入口）', () => {
+  // 规则依据：「查无归属」是长期结论，前提是历史确实读完了。分页游标漏一行或重读
+  // 一行、把命令输出或远端会话当证据，都会直接变成错误的归属或错误的「无关」。
+  // 最小失败输入：同一时刻落库的多行（只按时间翻页会漏）；读到头之后才落库的行。
+  function installDb() {
+    const raw = new Database(':memory:');
+    raw.exec(`
+      CREATE TABLE sessions (id TEXT PRIMARY KEY, title TEXT, remote_host_id TEXT);
+      CREATE TABLE messages (
+        id TEXT PRIMARY KEY, session_id TEXT NOT NULL, role TEXT NOT NULL,
+        content TEXT NOT NULL, created_at INTEGER NOT NULL
+      );
+      CREATE TABLE session_imports (session_id TEXT PRIMARY KEY, imported_at INTEGER NOT NULL);
+    `);
+    setCurrentDbClient({ drizzle: drizzle(raw, { schema }) } as unknown as DbClient, 'owner');
+    return {
+      raw,
+      session: (id: string, remoteHostId: string | null = null) =>
+        raw.prepare('INSERT INTO sessions (id, title, remote_host_id) VALUES (?, ?, ?)').run(id, `任务 ${id}`, remoteHostId),
+      message: (row: { id: string; sessionId: string; role: string; content: string; createdAt: number }) =>
+        raw
+          .prepare('INSERT INTO messages (id, session_id, role, content, created_at) VALUES (?, ?, ?, ?, ?)')
+          .run(row.id, row.sessionId, row.role, row.content, row.createdAt),
+      importSession: (sessionId: string, importedAt: number) =>
+        raw.prepare('INSERT INTO session_imports (session_id, imported_at) VALUES (?, ?)').run(sessionId, importedAt),
+    };
+  }
+
+  const contents = (rows: ToolMessageRow[]) => rows.map((row) => row.content);
+
+  it('同一时刻落库的多行按游标逐页读完，不漏不重；读到头后晚落库的行从游标接着读到', async () => {
+    const db = installDb();
+    try {
+      db.session('s1');
+      for (let i = 0; i < 5; i += 1) {
+        db.message({ id: `m${i}`, sessionId: 's1', role: 'tool_use', content: `cmd ${i}`, createdAt: 1000 });
+      }
+
+      const seen: string[] = [];
+      let after: ToolUseCursor | null = null;
+      let lastPage: ToolMessagePage | undefined;
+      for (let page = 0; page < 10 && lastPage?.exhausted !== true; page += 1) {
+        lastPage = await readToolUsesFrom(after, 2);
+        seen.push(...contents(lastPage.rows));
+        after = lastPage.next;
+      }
+      expect(lastPage?.exhausted).toBe(true);
+      expect(seen).toEqual(['cmd 0', 'cmd 1', 'cmd 2', 'cmd 3', 'cmd 4']);
+
+      db.message({ id: 'm5', sessionId: 's1', role: 'tool_use', content: 'cmd 5', createdAt: 1000 });
+      const next = await readToolUsesFrom(after, 2);
+      expect(contents(next.rows)).toEqual(['cmd 5']);
+      expect(next.exhausted).toBe(true);
+    } finally {
+      clearCurrentDbClient();
+      db.raw.close();
+    }
+  });
+
+  it('只把 tool_use 当证据：命令输出与用户消息里出现的同名条目不算', async () => {
+    const db = installDb();
+    try {
+      const NAME = 'Cindy-Backup';
+      db.session('s1');
+      db.message({ id: 'u1', sessionId: 's1', role: 'user', content: `帮我把 ${NAME} 加进 crontab`, createdAt: 1000 });
+      db.message({ id: 't1', sessionId: 's1', role: 'tool_use', content: '{"command":"crontab -l"}', createdAt: 1001 });
+      db.message({ id: 'r1', sessionId: 's1', role: 'tool_result', content: `* * * * * ${NAME} run`, createdAt: 1002 });
+
+      const window = await readToolUses(0, 2000);
+      expect(contents(window.rows)).toEqual(['{"command":"crontab -l"}']);
+      expect(window.truncated).toBe(false);
+      const page = await readToolUsesFrom(null);
+      expect(contents(page.rows)).toEqual(['{"command":"crontab -l"}']);
+      expect(page.exhausted).toBe(true);
+    } finally {
+      clearCurrentDbClient();
+      db.raw.close();
+    }
+  });
+
+  it('不把远端会话的工具调用、以及导入会话在导入时刻之前的消息当本机证据', async () => {
+    const db = installDb();
+    try {
+      db.session('local');
+      db.session('remote', 'host-b');
+      db.session('imported');
+      db.importSession('imported', 2000);
+      db.message({ id: 'm1', sessionId: 'local', role: 'tool_use', content: 'echo local', createdAt: 1000 });
+      db.message({ id: 'm2', sessionId: 'remote', role: 'tool_use', content: 'echo remote', createdAt: 1001 });
+      db.message({ id: 'm3', sessionId: 'imported', role: 'tool_use', content: 'echo imported-old', createdAt: 1002 });
+      db.message({ id: 'm4', sessionId: 'imported', role: 'tool_use', content: 'echo imported-new', createdAt: 3000 });
+
+      const window = await readToolUses(0, 4000);
+      expect(contents(window.rows)).toEqual(['echo local', 'echo imported-new']);
+      const page = await readToolUsesFrom(null);
+      expect(contents(page.rows)).toEqual(['echo local', 'echo imported-new']);
+    } finally {
+      clearCurrentDbClient();
+      db.raw.close();
+    }
+  });
+
+  it('时间窗读取只返回窗内的行，超过上限时如实报截断', async () => {
+    const db = installDb();
+    try {
+      db.session('s1');
+      [1000, 1100, 1200, 1300, 5000].forEach((createdAt, i) =>
+        db.message({ id: `m${i}`, sessionId: 's1', role: 'tool_use', content: `cmd ${createdAt}`, createdAt }),
+      );
+
+      const truncated = await readToolUses(900, 1400, 3);
+      expect(contents(truncated.rows)).toEqual(['cmd 1000', 'cmd 1100', 'cmd 1200']);
+      expect(truncated.truncated).toBe(true);
+      const complete = await readToolUses(900, 1400, 5);
+      expect(contents(complete.rows)).toEqual(['cmd 1000', 'cmd 1100', 'cmd 1200', 'cmd 1300']);
+      expect(complete.truncated).toBe(false);
+    } finally {
+      clearCurrentDbClient();
+      db.raw.close();
+    }
   });
 });
