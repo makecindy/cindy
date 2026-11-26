@@ -25,7 +25,7 @@ import { resolveFeishuNotificationReply } from './notificationOrigin';
 import path from 'node:path';
 import fs from 'node:fs';
 import { app } from 'electron';
-import { decodeFeishuLaneUserId, type FeishuIM, type FeishuLane, type IMAttachment } from '@cindy/im';
+import { FEISHU_MERGE_FORWARD_PLACEHOLDER, decodeFeishuLaneUserId, type FeishuIM, type FeishuLane, type IMAttachment } from '@cindy/im';
 
 import { imChannelNoteDirectSourceFromEvent } from '../shared/channelNote';
 import { receivedHistoryScope } from '../shared/receivedImageHistory';
@@ -412,7 +412,10 @@ export function buildFeishuAdapter(
           if (contextAttachments.length) safeReply.attachmentCount = contextAttachments.length;
           if (unavailable.length) safeReply.unavailableAttachments = unavailable;
         }
-        replyPrefix = buildFeishuReplyContextBlock(safeReply, event.text);
+        // A bare merged forward carries only a channel placeholder as its text: the user
+        // typed nothing, so the forwarded messages are what they are handing over.
+        const requestText = event.text === FEISHU_MERGE_FORWARD_PLACEHOLDER ? '' : event.text;
+        replyPrefix = buildFeishuReplyContextBlock(safeReply, requestText);
       }
       if (!lane) return replyPrefix ? {
         agentText: `${replyPrefix}${event.text}`,
