@@ -352,7 +352,10 @@ const MIN_RECOVERY_KEY_LENGTH = 16;
 const MAX_RECOVERY_KEY_LENGTH = 256;
 const RECOVERY_KEY_PATTERN = /^[A-Za-z0-9_-]+$/;
 
-async function withCreateWorktreeQueue<T>(baseRepo: string, fn: () => Promise<T>): Promise<T> {
+async function withCreateWorktreeQueue<T>(
+  baseRepo: string,
+  fn: (releaseQueue: () => void) => Promise<T>,
+): Promise<T> {
   const key = path.resolve(baseRepo);
   const previous = createWorktreeQueues.get(key) ?? Promise.resolve();
   let releaseCurrent!: () => void;
@@ -365,14 +368,21 @@ async function withCreateWorktreeQueue<T>(baseRepo: string, fn: () => Promise<T>
   );
   createWorktreeQueues.set(key, queued);
 
-  await previous.catch(() => {});
-  try {
-    return await fn();
-  } finally {
+  let released = false;
+  const release = () => {
+    if (released) return;
+    released = true;
     releaseCurrent();
     if (createWorktreeQueues.get(key) === queued) {
       createWorktreeQueues.delete(key);
     }
+  };
+
+  await previous.catch(() => {});
+  try {
+    return await fn(release);
+  } finally {
+    release();
   }
 }
 
@@ -589,7 +599,7 @@ async function stageCheckout(
       await gitExec(
         ['checkout', '--no-recurse-submodules', 'HEAD', '--', ...existingPaths],
         worktreePath,
-        { onSpawn: onCheckoutChildSpawn },
+        { extraEnv: { LC_ALL: 'C', GIT_TERMINAL_PROMPT: '0' }, onSpawn: onCheckoutChildSpawn },
       );
       log.info(
         `[stageCheckout] selective checkout done in ${Date.now() - t0}ms (${existingPaths.length} paths)`,
@@ -604,7 +614,7 @@ async function stageCheckout(
 
   // 3. 后台跑全 checkout: 排除已 checkout 的目录避免重复 / 覆盖
   //    (单文件如 CLAUDE.md 即使重复 checkout 也无害, 不需要 exclude)
-  //    LC_ALL=C 让 git 报错文案一致, 便于解析。
+  //    LC_ALL=C 让 git 报错文案一致, 便于解析; GIT_TERMINAL_PROMPT=0 避免主进程无 TTY 时挂死。
   const bgT0 = Date.now();
   const fullCheckoutPromise = gitExec(
     [
@@ -612,7 +622,7 @@ async function stageCheckout(
       ':(exclude).claude', ':(exclude).sivi',
     ],
     worktreePath,
-    { extraEnv: { LC_ALL: 'C' }, onSpawn: onCheckoutChildSpawn },
+    { extraEnv: { LC_ALL: 'C', GIT_TERMINAL_PROMPT: '0' }, onSpawn: onCheckoutChildSpawn },
   )
     .then(() => {
       log.info(
@@ -855,14 +865,18 @@ export interface CreateWorktreeOptions {
 
 export async function createWorktree(req: CreateWorktreeReq, options?: CreateWorktreeOptions): Promise<CreateWorktreeResp> {
   options?.assertWriteAllowed?.();
-  const create = () => withCreateWorktreeQueue(req.baseRepo, () => {
+  const create = () => withCreateWorktreeQueue(req.baseRepo, (releaseRepoQueue) => {
     worktreeManagerPorts().assertPrecreatedSessionNotCancelled(req.sessionId);
-    return createWorktreeInner(req, options);
+    return createWorktreeInner(req, options, releaseRepoQueue);
   });
   return withPrecreatedWorktreeOperationQueue(req.sessionId, create);
 }
 
-async function createWorktreeInner(req: CreateWorktreeReq, options?: CreateWorktreeOptions): Promise<CreateWorktreeResp> {
+async function createWorktreeInner(
+  req: CreateWorktreeReq,
+  options: CreateWorktreeOptions | undefined,
+  releaseRepoQueue: () => void,
+): Promise<CreateWorktreeResp> {
   const snap: CreatedSnapshot = {};
   const totalStartedAt = Date.now();
   try {
@@ -1025,16 +1039,29 @@ async function createWorktreeInner(req: CreateWorktreeReq, options?: CreateWorkt
       // Built-in task startup still gets the staged fast path. Callers that need
       // the complete tree can check it out once, without the selective pass or
       // its exclusions. Multibox already returns a complete tree.
+      //
+      // Once the branch and worktree directory exist (and the checkout lease is
+      // recorded for non-Multibox), release the repo-level create queue before
+      // running per-worktree checkout / copy / include / metadata work. That way
+      // a slow full checkout (e.g. huge repo or slow Git LFS download) never
+      // head-of-line blocks other worktree creations on the same repository, while
+      // `withWorktreeResourceLock(worktreePath)` keeps this checkout isolated.
       let bgPromise: Promise<void> | undefined;
-      if (!useMultibox) {
+      if (useMultibox) {
+        releaseRepoQueue();
+      } else {
         const checkoutLease = await acquireWorktreeRuntimeLease(`checkout:${req.sessionId}`, worktreePath);
         if (!checkoutLease) throw new Error('managed checkout runtime lease is missing');
+        releaseRepoQueue();
         try {
           if (options?.awaitFullCheckout) {
             await timed('full checkout', () => gitExec(
               ['checkout', '--no-recurse-submodules', 'HEAD', '--', '.'],
               worktreePath,
-              { onSpawn: (pid) => recordWorktreeRuntimeLeaseChild(checkoutLease, pid) },
+              {
+                extraEnv: { LC_ALL: 'C', GIT_TERMINAL_PROMPT: '0' },
+                onSpawn: (pid) => recordWorktreeRuntimeLeaseChild(checkoutLease, pid),
+              },
             ));
           } else {
             const stageRes = await timed('stage checkout', () => stageCheckout(
@@ -1137,6 +1164,8 @@ async function createWorktreeInner(req: CreateWorktreeReq, options?: CreateWorkt
       return { ok: true, meta };
     });
   } catch (err) {
+    // Release the repo-level create queue before waiting on checkout or rollback.
+    releaseRepoQueue();
     // Failed worker creation must also wait when metadata has not been published yet.
     if (options?.trackBackgroundCheckout) await awaitBackgroundCheckout(req.sessionId);
     // 兜底: 任何未捕获的异常走 classifier + rollback

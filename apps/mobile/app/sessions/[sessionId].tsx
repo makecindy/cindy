@@ -498,6 +498,11 @@ import {
   type MobilePendingSendActions,
   type MobilePendingSendWaitingFor,
 } from '@/session/pendingSendItems';
+import { beginBackgroundWork } from '@/notifications/backgroundWork';
+import {
+  beginOutboxBackgroundSend, getOutboxLeftInBackgroundVersion, isPendingDeliveryAfterLeaving, isPendingPlainText,
+  subscribeOutboxLeftInBackground,
+} from '@/session/outboxBackgroundSend';
 import { noteLocalSend } from '@/session/localSendMotion';
 import { isSourceDeviceRemoved } from '@/session/messageSourceLabels';
 import {
@@ -1264,6 +1269,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     getPresenceAvailability,
     getSubscriptionIdentity,
     readDeviceList,
+    holdBackgroundConnection,
     recoverWaitingPeer,
     invoke,
     openLink,
@@ -4879,7 +4885,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     const attempt = typeof pending.attempt === 'number' ? pending.attempt : 0;
     const maxAttempts = typeof pending.maxAttempts === 'number' ? pending.maxAttempts : 0;
     return attempt > 0 && maxAttempts > 0
-      ? { label: t('message.systemCard.autoResume.pendingWithProgress', { attempt, total: maxAttempts }) }
+      ? { label: t(pending.reason === 'codex_reconnect_stalled' ? 'message.systemCard.autoResume.continuingWithProgress' : 'message.systemCard.autoResume.pendingWithProgress', { attempt, total: maxAttempts }) }
       : { label: t('message.systemCard.autoResume.pending') };
   }, [inputProjection.autoResumePending, t]);
   useEffect(() => {
@@ -6360,14 +6366,15 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     deviceId, deviceName, sessionId, router, outboxSessionAliveRef,
     setError, setQueueSelectedClientId, t,
   });
+  const outboxLeftVersion = useSyncExternalStore(subscribeOutboxLeftInBackground, getOutboxLeftInBackgroundVersion);
   const outboxDisplayItems = useMemo(() => outboxItems.map((item) => {
     const record = findDurableOutboxRecord(item.clientId);
     return {
       ...outboxDisplayItem(item),
-      ...(record ? { sentAt: record.createdAt } : {}),
+      ...(record ? { sentAt: record.createdAt, pendingDelivery: isPendingDeliveryAfterLeaving(record) } : {}),
       canCancel: !(record?.creation && !record.prepared && !record.template),
     };
-  }), [outboxItems, deviceId, sessionId]);
+  }), [outboxItems, deviceId, sessionId, outboxLeftVersion]);
 
   // Legacy creation tasks have no app-owned first record. Never downgrade durable follow-ups
   // into the old ephemeral draft recovery; new creation tasks use the branch above.
@@ -6744,6 +6751,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     /** 编辑消息提交流程内部的重发:绕过编辑入口与提交锁。 */
     messageEditResend?: boolean;
   } = {}) {
+    const clickedAt = Date.now();
     const independent = options.independentText !== undefined;
     let messageAccepted = false;
     // 编辑提交进行中(回退 → 重发 → 恢复),拒绝其它发送,避免重复发送。
@@ -7155,7 +7163,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
           });
           const clearedAt = currentSession.clearedAt ? Date.parse(currentSession.clearedAt) : null;
           record = {
-            version: 1, accountId: ownerAtSend.accountKey, deviceId, item, createdAt: Date.now(),
+            version: 1, accountId: ownerAtSend.accountKey, deviceId, item, createdAt: clickedAt,
             ...(readRouteParam(params.resourceKind) === 'bot' && readRouteParam(params.resourceCollectionId) && readRouteParam(params.resourceId)
               ? { resourceRef: { collectionId: readRouteParam(params.resourceCollectionId)!, kind: 'bot', id: readRouteParam(params.resourceId)! } } : {}),
             ...(!independent ? { draftHandoff: { before: documentBeforeSend, after: documentAfterOptimisticClear } } : {}),
@@ -7173,9 +7181,20 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
           }
           if (!sendScopeStillAlive() || !isMobileAuthOwnerCurrent(ownerAtSend)) return;
           noteLocalSend(record.item.clientId);
-          await mobileDurableOutbox.add(record);
+          const finishBackgroundSend = status === 'online' && holdBackgroundConnection
+            && isPendingPlainText(record)
+            ? beginOutboxBackgroundSend(record, holdBackgroundConnection, beginBackgroundWork) : undefined;
+          try {
+            await mobileDurableOutbox.add(record);
+          } catch (error) {
+            finishBackgroundSend?.();
+            throw error;
+          }
           committed = true;
           messageAccepted = true;
+          mobileDebugLog('debug', 'device-link', 'send saved on phone', {
+            client: item.clientId.slice(-8), clickToSavedMs: Date.now() - clickedAt,
+          });
           if (replyQuoteAtSend) clearSentCompanionReplyQuote(sessionId, replyQuoteAtSend);
           handoff?.release(true);
           // Durable ownership precedes clearing the composer or deleting annotation sources.
@@ -11470,6 +11489,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
                             不在这里,它们是消息流里的 pending_send 项。 */}
                         <InlineQueueSection
                           busy={queueBusy || historyRecoveryBusy}
+                          isRunning={remoteSessionRunning || isSessionStreaming}
                           onRecoverHistory={canRecoverHistory ? () => void recoverReadableHistory() : undefined}
                           sessionSource={currentSession?.source}
                           onClearError={clearQueueError}

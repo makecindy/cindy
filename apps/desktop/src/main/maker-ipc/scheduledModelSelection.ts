@@ -1,5 +1,6 @@
-import type { AgentKind, Effort } from '@cindy/maker-core';
+import type { AgentKind, Effort, EngineKind } from '@cindy/maker-core';
 import { actualSourceIdForModel, connectedProvidersForAgent, effectiveSourceIdForModel, findCatalogModel, isModelSelectableForNewRoute, type ProviderView } from '@cindy/model-providers';
+import { isDisallowedPluginEngineDeviceId } from './pluginEngineSessionAdmission';
 import { resolveCompatibleSessionRuntimeEffort } from './sessionRuntimeControl';
 import { parseScheduledModelBaseline, type ScheduledModelBaseline } from '../../shared/scheduledModelBaseline';
 import { throwIpcError } from '../utils/ipcValidate';
@@ -7,14 +8,20 @@ import { isIpcError } from '../../shared/ipc-errors';
 
 /** A saved automation choice, applied only while its target's send lock is held. */
 export interface ScheduledModelSelection {
-  agentKind: AgentKind;
+  agentKind: EngineKind;
   /** Undefined inherits a bound task; null explicitly selects the task host. */
   agentDeviceId?: string | null;
   model: string;
   providerId: string | null;
   effort: Effort | null;
   fastMode: boolean | 'ultrafast';
+  /** Restored when returning from a temporary scheduled switch that narrowed permissionMode. */
+  permissionMode?: ScheduledModelBaseline['permissionMode'];
 }
+
+export type BuiltinScheduledModelSelection = Omit<ScheduledModelSelection, 'agentKind'> & {
+  agentKind: AgentKind;
+};
 
 export interface ScheduledModelSelectionLease {
   release: () => void;
@@ -169,32 +176,55 @@ export async function reconcileScheduledModelRouteBeforeBaseline(deps: {
 }
 
 interface ScheduledModelTarget {
-  agentKind: AgentKind;
+  agentKind: EngineKind;
+  providerId?: string | null;
   agentDeviceId?: string | null;
   status: string;
+  source?: string | null;
   remoteHostId?: string | null;
   orcaRole?: string | null;
+  orcaRemoteLead?: string | null;
 }
 
 /** Enforce the existing runtime boundary at save time as well as dispatch. */
 export function assertScheduledHarnessSupported(
   target: ScheduledModelTarget | null,
-  agentKind: AgentKind | undefined,
+  agentKind: EngineKind | undefined,
   agentDeviceId?: string | null,
+  providerId?: string | null,
 ): void {
   if (target?.status !== 'active') return;
   const changesHarness = agentKind && target.agentKind !== agentKind;
+  const changesPluginEngine = agentKind === 'acp' && target.agentKind === 'acp'
+    && providerId !== undefined && (target.providerId ?? null) !== (providerId ?? null);
   const changesDevice = agentDeviceId !== undefined && agentDeviceId !== (target.agentDeviceId ?? null);
-  if (!changesHarness && !changesDevice) return;
-  // Ordinary Orca Lead/Worker use the existing handoff for both axes, including
+  if (!changesHarness && !changesDevice && !changesPluginEngine) return;
+  // Ordinary Orca Lead/Worker use the existing handoff for both built-in axes, including
   // restoration before the next manual send. SSH still cannot change either.
   if (target.remoteHostId) {
     throwIpcError('SSH_HARNESS_SWITCH_UNSUPPORTED', 'SSH automation targets must keep their current Harness');
   }
+  if (target.agentKind === 'acp' || agentKind === 'acp') {
+    if (target.source === 'bot') {
+      throwIpcError('UNSUPPORTED_CAPABILITY', 'Teammate routines cannot switch to or from a plugin engine');
+    }
+    if (target.orcaRole || target.orcaRemoteLead) {
+      throwIpcError('UNSUPPORTED_CAPABILITY', 'Collaborative tasks cannot switch to or from a plugin engine');
+    }
+    if (target.source && target.source !== 'desktop' && target.source !== 'scheduler') {
+      throwIpcError('UNSUPPORTED_CAPABILITY', 'This task cannot switch to or from a plugin engine');
+    }
+    if (target.agentKind === 'acp' && isDisallowedPluginEngineDeviceId(target.agentDeviceId)) {
+      throwIpcError('UNSUPPORTED_CAPABILITY', 'This plugin engine task location cannot be used for scheduled tasks');
+    }
+    if (agentKind === 'acp' && isDisallowedPluginEngineDeviceId(agentDeviceId)) {
+      throwIpcError('UNSUPPORTED_CAPABILITY', 'This plugin engine location cannot be used for scheduled tasks');
+    }
+  }
 }
 
 function scheduledModelProviderId(
-  selection: ScheduledModelSelection,
+  selection: BuiltinScheduledModelSelection,
   providers: ProviderView[],
 ): string | null {
   return selection.providerId ??
@@ -208,15 +238,19 @@ function scheduledModelProviderId(
 export function resolveScheduledModelSelection(
   selection: ScheduledModelSelection,
   providers: ProviderView[],
-): ScheduledModelSelection {
-  const providerId = scheduledModelProviderId(selection, providers);
-  const connected = connectedProvidersForAgent(providers, selection.agentKind);
+): BuiltinScheduledModelSelection {
+  if (selection.agentKind === 'acp') {
+    throwIpcError('UNSUPPORTED_CAPABILITY', 'Plugin engines are not resolved through the built-in catalog');
+  }
+  const builtinSelection: BuiltinScheduledModelSelection = { ...selection, agentKind: selection.agentKind };
+  const providerId = scheduledModelProviderId(builtinSelection, providers);
+  const connected = connectedProvidersForAgent(providers, builtinSelection.agentKind);
   const provider = connected.find((candidate) => candidate.id === providerId);
-  const model = findCatalogModel(provider, selection.model, selection.agentKind, { exact: true });
+  const model = findCatalogModel(provider, builtinSelection.model, builtinSelection.agentKind, { exact: true });
   // Payment admission is not evidence that a saved model has been removed.
   // Preserve the local guard's error class so restoration cannot replace it.
   if (model?.availability === 'requires_payment') {
-    throwIpcError('INVALID_PARAMS', `Scheduled model "${selection.model}" requires payment from provider "${providerId ?? 'default'}"`);
+    throwIpcError('INVALID_PARAMS', `Scheduled model "${builtinSelection.model}" requires payment from provider "${providerId ?? 'default'}"`);
   }
   // A legacy implicit choice has no source to classify until a catalog contains it.
   // Unknown eligible catalogs cannot prove removal; never guess a replacement source.
@@ -226,13 +260,13 @@ export function resolveScheduledModelSelection(
   }
   if (!provider || !model ||
     !isModelSelectableForNewRoute(model, { userProvider: provider.source === 'user' })) {
-    throwIpcError('MODEL_SELECTION_UNAVAILABLE', `Scheduled model "${selection.model}" is unavailable from provider "${providerId ?? 'default'}"`);
+    throwIpcError('MODEL_SELECTION_UNAVAILABLE', `Scheduled model "${builtinSelection.model}" is unavailable from provider "${providerId ?? 'default'}"`);
   }
   return {
-    ...selection,
+    ...builtinSelection,
     providerId,
-    effort: resolveCompatibleSessionRuntimeEffort(model, selection.effort),
-    fastMode: model.supportsFastMode === true && (selection.fastMode !== 'ultrafast' || (selection.agentKind === 'codex' && model.supportsUltrafastMode === true)) ? selection.fastMode : false,
+    effort: resolveCompatibleSessionRuntimeEffort(model, builtinSelection.effort),
+    fastMode: model.supportsFastMode === true && (builtinSelection.fastMode !== 'ultrafast' || (builtinSelection.agentKind === 'codex' && model.supportsUltrafastMode === true)) ? builtinSelection.fastMode : false,
   };
 }
 
@@ -246,14 +280,18 @@ export async function resolveScheduledModelSelectionWithRefresh(
     refreshProvider: (providerId: string) => Promise<unknown>;
     assertCurrent: () => void;
   },
-): Promise<ScheduledModelSelection> {
+): Promise<BuiltinScheduledModelSelection> {
+  if (selection.agentKind === 'acp') {
+    throwIpcError('UNSUPPORTED_CAPABILITY', 'Plugin engines are not resolved through the built-in catalog');
+  }
+  const builtinSelection: BuiltinScheduledModelSelection = { ...selection, agentKind: selection.agentKind };
   let providers = await deps.readProviders();
   deps.assertCurrent();
-  const providerId = scheduledModelProviderId(selection, providers);
-  const candidates = connectedProvidersForAgent(providers, selection.agentKind).filter(provider =>
+  const providerId = scheduledModelProviderId(builtinSelection, providers);
+  const candidates = connectedProvidersForAgent(providers, builtinSelection.agentKind).filter(provider =>
     (providerId === null || provider.id === providerId) && !provider.removed &&
     provider.subscriptionAccountPool === 'openai' &&
-    !findCatalogModel(provider, selection.model, selection.agentKind, { exact: true }));
+    !findCatalogModel(provider, builtinSelection.model, builtinSelection.agentKind, { exact: true }));
   if (candidates.length) {
     // The native discovery routine retains the last success and marks failed reads.
     // If recovery itself throws, re-read that state rather than treating it as removal.
@@ -264,30 +302,44 @@ export async function resolveScheduledModelSelectionWithRefresh(
     providers = await deps.readProviders();
     deps.assertCurrent();
   }
-  return resolveScheduledModelSelection(selection, providers);
+  return resolveScheduledModelSelection(builtinSelection, providers);
 }
 
 /** Resolve against the bound execution computer; the runner owns inactive-target recovery. */
 export function createScheduledModelSelectionResolver(deps: {
   readRemoteProviders: (deviceId: string, agent: AgentKind, model: string, providerId: string | null) => Promise<ProviderView[]>;
   readSshCodexProviders: (hostId: string) => Promise<ProviderView[]>;
-  resolveLocalSelection: (selection: ScheduledModelSelection) => Promise<ScheduledModelSelection>;
+  resolveLocalSelection: (selection: BuiltinScheduledModelSelection) => Promise<ScheduledModelSelection>;
+  resolvePluginEngineSelection?: (selection: ScheduledModelSelection) => Promise<ScheduledModelSelection>;
 }) {
   return async (selection: ScheduledModelSelection, target?: ScheduledModelTarget | null): Promise<ScheduledModelSelection> => {
+    if (selection.agentKind === 'acp') {
+      const agentDeviceId = selection.agentDeviceId === undefined
+        ? (target?.agentDeviceId ?? null)
+        : (selection.agentDeviceId || null);
+      if (isDisallowedPluginEngineDeviceId(agentDeviceId)) {
+        throwIpcError('UNSUPPORTED_CAPABILITY', 'This plugin engine location cannot be used for scheduled tasks');
+      }
+      if (!deps.resolvePluginEngineSelection) {
+        throwIpcError('UNSUPPORTED_CAPABILITY', 'Plugin engines are not available here');
+      }
+      return deps.resolvePluginEngineSelection({ ...selection, agentDeviceId, fastMode: false });
+    }
+    const builtinSelection: BuiltinScheduledModelSelection = { ...selection, agentKind: selection.agentKind };
     // SSH Codex discovers native models on its host. A controller's catalog
     // cannot establish that a frozen remote choice is obsolete.
-    if (target?.remoteHostId && selection.agentKind === 'codex') {
-      return resolveScheduledModelSelection(selection, await deps.readSshCodexProviders(target.remoteHostId));
+    if (target?.remoteHostId && builtinSelection.agentKind === 'codex') {
+      return resolveScheduledModelSelection(builtinSelection, await deps.readSshCodexProviders(target.remoteHostId));
     }
-    const agentDeviceId = selection.agentDeviceId === undefined
-      ? target?.agentDeviceId : selection.agentDeviceId;
+    const agentDeviceId = builtinSelection.agentDeviceId === undefined
+      ? target?.agentDeviceId : builtinSelection.agentDeviceId;
     if (agentDeviceId && !target?.remoteHostId) {
       const providers = await deps.readRemoteProviders(
-        agentDeviceId, selection.agentKind, selection.model, selection.providerId,
+        agentDeviceId, builtinSelection.agentKind, builtinSelection.model, builtinSelection.providerId,
       );
-      return resolveScheduledModelSelection(selection, providers);
+      return resolveScheduledModelSelection(builtinSelection, providers);
     }
-    return deps.resolveLocalSelection(selection);
+    return deps.resolveLocalSelection(builtinSelection);
   };
 }
 
@@ -311,19 +363,26 @@ export async function applyScheduledModelSelection(
     return selection;
   }
   if (deps.isBusy()) throw new ScheduledModelSelectionBusyError('Scheduled model selection waits for the current turn');
-  assertScheduledHarnessSupported(target, selection.agentKind, selection.agentDeviceId);
+  assertScheduledHarnessSupported(target, selection.agentKind, selection.agentDeviceId, selection.providerId);
   const resolved = await deps.resolveSelection({ ...selection,
+    ...(selection.agentKind === 'acp' ? { fastMode: false } : {}),
     ...(selection.agentDeviceId === undefined && target.agentDeviceId !== undefined
       ? { agentDeviceId: target.agentDeviceId } : {}),
   }, target);
   const changesDevice = (target.agentDeviceId ?? null) !== (resolved.agentDeviceId ?? null);
-  if (target.agentKind !== resolved.agentKind || changesDevice) {
+  const changesPluginEngine = target.agentKind === 'acp' && resolved.agentKind === 'acp'
+    && (target.providerId ?? null) !== (resolved.providerId ?? null);
+  const needsSwitch = target.agentKind !== resolved.agentKind || changesDevice || changesPluginEngine;
+  if (needsSwitch) {
     // The handoff treats an explicit location as a relocation request. Preserve
     // engine-only switching for execution-device Workers without relaxing that boundary.
     const { agentDeviceId: _location, ...harnessSelection } = resolved;
     const result = await deps.switchHarness(changesDevice ? resolved : harnessSelection);
     if (!result.engineReady || result.retryPending) throwIpcError('HARNESS_SWITCH_NOT_READY', 'Scheduled Harness switch did not become ready');
   }
-  await deps.applyModel(resolved);
+  // performSessionAgentSwitch already persisted the new plugin-engine route and starts it lazily on send.
+  if (!needsSwitch || resolved.agentKind !== 'acp') {
+    await deps.applyModel(resolved);
+  }
   return resolved;
 }
