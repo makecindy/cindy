@@ -302,3 +302,31 @@ IM 轮次只有已知的读和搜索操作可以经上述条件直接放行，�
 时 fail-closed，不会无闸运行。不新增 channel、中转帧或 IPC。实现见 maker-core `agents/acp/{protocol,capabilities,session}.ts`
 与 Desktop `im/shared/turnRunner.ts`；回归见 `acp-session.test.ts`「AcpSession per-turn permission gate」与
 `channelToolPolicy.test.ts`。
+
+## 轮次变更集与 `.cshare` 分享／任务迁移（2026-11-27）
+
+1. **轮次变更集（`turn-change-set`）**：`TurnChangeProvider` 扩展加入 `'acp'`（`apps/desktop/src/shared/turnChangeSet.ts`、
+   `turn-change-set/store.ts`、`dispatchBoundary.ts` 及远程 Agent 控制端 `remote-agent/controller/{startRemote,service}.ts`）。
+   派发入口不再用 `hasBuiltinAgentKind` 跳过插件引擎，每轮均建立基准锚点；本机 ACP 会话在审批放行前捕获已知文件路径，在
+   `tool_call` / `tool_call_update` 收到结构化 `diff` 内容块时按既有安全门禁记录精确前像（即使在 `bypassPermissions` 下也能无损回撤），
+   对命令执行或无明确工作区路径的写工具记为 `opaque-tool`；远端执行的插件引擎任务经既有 `RemoteExecutor` 在真实工作区捕获并保留
+   `provider: 'acp'`。不新增 IPC / device-link channel、manifest 字段或中转帧；旧控制端按既有摘要形状读取 `TurnChangeSetSummary`，
+   不识别具体 provider 枚举值，完全兼容。实现见 maker-core `agents/acp/{session,translator,acp-agent}.ts` 与 Desktop
+   `turn-change-set/{store,dispatchBoundary}.ts`、`maker-host/{acp-host,index}.ts`、`remote-agent/controller/{startRemote,service}.ts`。
+2. **`.cshare`（旧 `.xdtshare`）导出导入与跨设备任务迁移**：
+   - `XDTSHARE_FORMAT_VERSION` 与 `XDTSHARE_READER_VERSION` 升至 `3`，新增 `XDTSHARE_ACP_MIN_READER_VERSION = 3`；
+     `manifest.agentKind` 与 `manifest.orca.workers[].agentKind` 新增 `'acp'`，并追加可选 `providerId?: string | null`。
+   - **向后兼容**：普通内置引擎（`cc`/`codex`/`pi`）包继续写 `formatVersion: 1, minReaderVersion: 1`，全内置协同包继续写
+     `formatVersion: 2, minReaderVersion: 2`，旧读端行为零变化；仅当 lead 或任意协同 Worker 为 `'acp'` 时写入 `3`，旧读端以
+     `SHARE_VERSION_UNSUPPORTED` 明确拒读，不会误报损坏或错配成内置引擎。
+   - **DB-only 导出与上下文交接**：插件引擎会话按 DB-only 导出（`sdkSessionIds: []`、`activeSdkSessionId: null`、`transcripts: []`，
+     单会话包保真度为 `'db-only'`，内置 lead 含 `acp` Worker 的协同包在内置转录齐全时保真度为 `'partial'`），保留 `agentKind: 'acp'`、
+     `providerId`、`model`、`effort`。导入端不套用内置引擎草稿、`fastMode` 固定 `false`、`sdkSessionId` 固定 `null`，并在同一事务写入
+     隐藏的 `context_rebuild` 交接行（`rewind_at` 非空、`consumed: false`），使目标机首轮续聊无缝承接完整历史。
+   - **跨设备任务迁移**：`TaskMigrationView.agents`（`packages/device-link/src/taskMigration.ts`）扩展加入 `'acp'`，新版目标机在 `caps`
+     上报 `'acp'`，经 Cindy 消息历史与上述 `context_rebuild` 交接完成迁移；旧版目标机不上报 `'acp'`，源端在启动前即以
+     `MIGRATION_TARGET_MODEL_UNAVAILABLE` 明确拒绝，避免上传不兼容的 v3 包。不新增 device-link channel 或中转帧，自建中转原样转发。
+   - 实现见 `session-share/{xdtshareFormat.pure,sessionShareExport,sessionShareImport}.ts`、`task-migration/service.ts`、
+     `packages/device-link/src/taskMigration.ts` 与 renderer `SessionShareImportWizard.tsx`；回归见
+     `xdtshareFormat.pure.test.ts`、`sessionShareExport.test.ts`、`sessionShareImport.test.ts`、`task-migration/__tests__/service.test.ts`、
+     `store.git-integration.test.ts` 与 maker-core `acp-session.test.ts`。

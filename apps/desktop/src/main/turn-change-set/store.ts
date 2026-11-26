@@ -56,6 +56,8 @@ interface CapturedFile {
   beforeExists: boolean;
   beforeText: string;
   beforeMode: number | null;
+  /** Set only for un-paused notification disk reads; a structured diff from the same tool call may replace it. */
+  provisionalId?: string;
 }
 
 interface PendingTurnChangeSet {
@@ -85,7 +87,7 @@ interface TurnChangeActionStateV1 {
   states: Record<string, { workspaceState: TurnChangeWorkspaceState; updatedAt: number }>;
 }
 
-const PROVIDERS = new Set<TurnChangeProvider>(['codex', 'claude-code', 'pi']);
+const PROVIDERS = new Set<TurnChangeProvider>(['codex', 'claude-code', 'pi', 'acp']);
 const STATES = new Set<TurnChangeSetState>(['complete', 'partial']);
 const WORKSPACE_STATES = new Set<TurnChangeWorkspaceState>(['applied', 'undone']);
 const INCOMPLETE_REASONS = new Set<TurnChangeIncompleteReason>([
@@ -118,6 +120,18 @@ export interface KnownFileWriteCapture {
   cwd: string;
   targetPath: string;
   remote?: boolean;
+  provisionalId?: string;
+}
+
+export interface KnownFilePreimageCapture {
+  sessionId: string;
+  provider: TurnChangeProvider;
+  cwd: string;
+  targetPath: string;
+  beforeExists: boolean;
+  beforeText: string;
+  remote?: boolean;
+  provisionalId?: string;
 }
 
 export interface OpaqueTurnChangeCapture {
@@ -966,9 +980,92 @@ export async function captureKnownFileBefore(input: KnownFileWriteCapture): Prom
       beforeExists: before.exists,
       beforeText: before.text,
       beforeMode: before.mode,
+      ...(input.provisionalId ? { provisionalId: input.provisionalId } : {}),
     });
     pending.capturedBytes += captureBytes;
-  })().finally(() => pending.captureTasks.delete(captureKey));
+  })().finally(() => {
+    if (pending.captureTasks.get(captureKey) === captureTask) {
+      pending.captureTasks.delete(captureKey);
+    }
+  });
+  pending.captureTasks.set(captureKey, captureTask);
+  return captureTask;
+}
+
+/**
+ * Records an exact text preimage supplied by a structured diff (for example ACP
+ * `tool_call_update` content diffs under `bypassPermissions`). Honors all workspace
+ * containment, sensitivity, file-count and byte-budget guards, and never overwrites
+ * an earlier authoritative preimage for the same file within the same turn.
+ */
+export async function recordKnownFilePreimage(input: KnownFilePreimageCapture): Promise<void> {
+  if (input.remote) return;
+  const pending = ensurePending(input.sessionId, input.provider, input.cwd);
+  const target = safeRelativeTarget(input.cwd, input.targetPath);
+  if (!target) {
+    return;
+  }
+  if (detectSensitivePath(target.relativePath, { allowEnvTemplates: true })) {
+    addIncompleteReason(pending, 'sensitive-file');
+    return;
+  }
+  const captureKey = captureFileKey(target.absolutePath);
+  const existing = pending.capturedFiles.get(captureKey);
+  if (
+    existing
+    && (!existing.provisionalId || !input.provisionalId || existing.provisionalId !== input.provisionalId)
+  ) {
+    return;
+  }
+  const inFlight = pending.captureTasks.get(captureKey);
+  if (inFlight && !input.provisionalId) return inFlight;
+  const captureTask = (async () => {
+    if (inFlight) await inFlight.catch(() => undefined);
+    const current = pending.capturedFiles.get(captureKey);
+    const replacingProvisional = Boolean(
+      current?.provisionalId && input.provisionalId && current.provisionalId === input.provisionalId,
+    );
+    if (current && !replacingProvisional) return;
+    if (!await isRealTargetInsideWorkspace(input.cwd, target.absolutePath)) {
+      addIncompleteReason(pending, 'outside-workspace');
+      return;
+    }
+    if (!replacingProvisional && pending.capturedFiles.size >= MAX_CAPTURED_FILES) {
+      addIncompleteReason(pending, 'diff-too-large');
+      return;
+    }
+    const beforeText = input.beforeExists ? input.beforeText : '';
+    const captureBytes = byteLength(beforeText);
+    if (captureBytes > MAX_CAPTURE_FILE_BYTES) {
+      addIncompleteReason(pending, 'file-too-large');
+      return;
+    }
+    const previousBytes = replacingProvisional && current ? byteLength(current.beforeText) : 0;
+    if (pending.capturedBytes - previousBytes + captureBytes > MAX_CAPTURE_TOTAL_BYTES) {
+      addIncompleteReason(pending, 'diff-too-large');
+      return;
+    }
+    let beforeMode: number | null = null;
+    if (input.beforeExists) {
+      if (replacingProvisional && current) {
+        beforeMode = current.beforeMode;
+      } else {
+        const stat = await fs.stat(target.absolutePath).catch(() => null);
+        beforeMode = stat?.isFile() ? stat.mode : null;
+      }
+    }
+    pending.capturedFiles.set(captureKey, {
+      ...target,
+      beforeExists: input.beforeExists,
+      beforeText,
+      beforeMode,
+    });
+    pending.capturedBytes = pending.capturedBytes - previousBytes + captureBytes;
+  })().finally(() => {
+    if (pending.captureTasks.get(captureKey) === captureTask) {
+      pending.captureTasks.delete(captureKey);
+    }
+  });
   pending.captureTasks.set(captureKey, captureTask);
   return captureTask;
 }

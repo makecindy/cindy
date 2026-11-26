@@ -64,6 +64,8 @@ const state = vi.hoisted(() => ({
   },
   /** Target without the `externalTranscripts` capability. */
   oldTarget: false,
+  /** Target without `'acp'` in `caps.agents` (simulating an older target version). */
+  oldTargetNoAcp: false,
   importedTranscripts: [] as Array<{ path: string; content: string }>,
   recentProjects: [] as string[],
   archiveDownloadFails: false,
@@ -148,6 +150,9 @@ vi.mock('../../device-link', () => ({
       requestTaskMigration(args[0]),
     );
     if (state.oldTarget && args[0].action === 'caps') delete result.externalTranscripts;
+    if (state.oldTargetNoAcp && args[0].action === 'caps' && Array.isArray(result.agents)) {
+      result.agents = result.agents.filter((a) => a !== 'acp');
+    }
     if (state.loseReply === args[0].action) {
       state.loseReply = '';
       throw new Error('connection lost after commit');
@@ -235,20 +240,32 @@ vi.mock('../../session-share/sessionShareExport', () => ({
         : [];
     for (const transcript of staged)
       await fs.writeFile(path.join(external!.dir, transcript.file), state.transcript);
+    const sourceRow = state.rows.get('A')?.get('fork');
+    const isAcpLead = sourceRow?.agentKind === 'acp';
+    const fidelity = isAcpLead ? 'db-only' : 'full';
     return {
       status: 'ok',
-      fidelity: 'full',
+      fidelity,
+      missingTranscripts: [],
       ...state.exportMedia,
       ...(external ? { externalTranscripts: staged } : {}),
     };
   },
 }));
 vi.mock('../../session-share/sessionShareImport', () => ({
-  inspectShareFile: async () => ({
-    draftId: 'draft',
-    encrypted: false,
-    preview: { fidelity: 'full', orcaWorkerCount: state.workers.length, agentKind: 'cc' },
-  }),
+  inspectShareFile: async () => {
+    const sourceRow = state.rows.get('A')?.get('fork');
+    const agentKind = (sourceRow?.agentKind as 'cc' | 'codex' | 'pi' | 'acp') ?? 'cc';
+    return {
+      draftId: 'draft',
+      encrypted: false,
+      preview: {
+        fidelity: agentKind === 'acp' ? 'db-only' : 'full',
+        orcaWorkerCount: state.workers.length,
+        agentKind,
+      },
+    };
+  },
   cancelShareDraft() {},
   commitShareImport: async (
     _opts: unknown,
@@ -267,6 +284,8 @@ vi.mock('../../session-share/sessionShareImport', () => ({
         path: transcriptPath,
         content: await fs.readFile(file, 'utf8'),
       });
+    const sourceRow = state.rows.get('A')?.get('fork');
+    const agentKind = (sourceRow?.agentKind as 'cc' | 'codex' | 'pi' | 'acp') ?? 'cc';
     const { sessionId, workingDir } = scope.migration;
     state.rows.get(device())!.set(sessionId, {
       id: sessionId,
@@ -274,7 +293,7 @@ vi.mock('../../session-share/sessionShareImport', () => ({
       remoteHostId: null,
       status: 'active',
       source: 'shared',
-      agentKind: 'cc',
+      agentKind,
       orcaRole: null,
     });
     for (const worker of scope.migration.workers ?? []) {
@@ -292,7 +311,7 @@ vi.mock('../../session-share/sessionShareImport', () => ({
       state.importsFail = false;
       throw new Error('DB committed but acknowledgement lost');
     }
-    return { fidelity: 'full' };
+    return { fidelity: agentKind === 'acp' ? 'db-only' : 'full' };
   },
 }));
 vi.mock('../workspace', async (original) => ({
@@ -369,6 +388,7 @@ describe('resumable cross-computer copy', () => {
     state.sharingLatest = [];
     state.workers = [];
     state.estimateLimits = [];
+    state.oldTargetNoAcp = false;
     state.timeoutAction = '';
     state.offlineError = null;
     state.exclusions = [];
@@ -1355,5 +1375,25 @@ describe('resumable cross-computer copy', () => {
     expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
     expect((await settled()).stage).toBe('complete');
     expect(state.imports).toHaveBeenCalledTimes(1);
+  });
+
+  it('migrates an ACP plugin-engine task via DB-only handoff without coercing to a built-in engine', async () => {
+    state.oldTargetNoAcp = false;
+    state.rows.get('A')!.get('fork')!.agentKind = 'acp';
+    await start();
+    const done = await settled();
+    expect(done.stage).toBe('complete');
+    expect(state.rows.get('B')!.get(done.targetSessionId!)?.agentKind).toBe('acp');
+  });
+
+  it('rejects migrating an ACP task to an older target whose caps omit acp', async () => {
+    state.oldTargetNoAcp = true;
+    state.rows.get('A')!.get('fork')!.agentKind = 'acp';
+    try {
+      await expect(start()).rejects.toThrow('MIGRATION_TARGET_MODEL_UNAVAILABLE');
+      expect(state.imports).not.toHaveBeenCalled();
+    } finally {
+      state.oldTargetNoAcp = false;
+    }
   });
 });

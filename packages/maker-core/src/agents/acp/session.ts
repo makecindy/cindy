@@ -17,6 +17,7 @@ import {
   TurnPermissionPolicyUnsupportedError,
   type AgentSessionHandle,
   type SendOptions,
+  type TurnChangeCaptureHooks,
   type TurnPermissionPolicy,
 } from '../base-agent.js';
 import { NotSupportedError, type Capabilities } from '../../types/capabilities.js';
@@ -155,6 +156,10 @@ export interface OpenAcpSessionOptions {
   expandSlashInvocation?: (text: string) => Promise<string | null>;
   /** Called once when the session's event stream ends (closed, or the endpoint exited). */
   onEnded?: () => void;
+  /** Cindy session id used for host-side turn change capture (defaults to the ACP session id). */
+  captureSessionId?: string;
+  /** Host-side file change capture callbacks for local ACP turns. */
+  turnChangeCapture?: TurnChangeCaptureHooks;
   /** Overrides ACP_OPEN_TOOL_QUIET_CAP_MS (tests). */
   openToolQuietCapMs?: number;
   now?: () => number;
@@ -394,6 +399,82 @@ const ACP_KIND_POLICY_NAMES: Readonly<Record<string, string>> = {
   fetch: 'WebFetch',
 };
 
+const ACP_FILE_MUTATION_KINDS: ReadonlySet<string> = new Set(['edit', 'delete', 'move']);
+const ACP_FILE_PATH_INPUT_KEYS = [
+  'path',
+  'file_path',
+  'filePath',
+  'target_file',
+  'targetFile',
+  'notebook_path',
+  'notebookPath',
+  'old_path',
+  'oldPath',
+  'new_path',
+  'newPath',
+  'source_path',
+  'sourcePath',
+  'destination_path',
+  'destinationPath',
+] as const;
+const ACP_MOVE_PATH_INPUT_KEYS = ['source', 'destination', 'from', 'to'] as const;
+
+interface AcpStructuredDiff {
+  path: string;
+  beforeExists: boolean;
+  beforeText: string;
+}
+
+function extractAcpStructuredDiffs(content: readonly unknown[] | undefined): AcpStructuredDiff[] {
+  if (!Array.isArray(content) || content.length === 0) return [];
+  const diffs: AcpStructuredDiff[] = [];
+  for (const entry of content) {
+    const item = asRecord(entry);
+    if (item.type !== 'diff') continue;
+    const targetPath = asNonEmptyString(item.path)?.trim();
+    if (!targetPath) continue;
+    if (typeof item.oldText === 'string') {
+      diffs.push({ path: targetPath, beforeExists: true, beforeText: item.oldText });
+    } else if (item.oldText === null) {
+      diffs.push({ path: targetPath, beforeExists: false, beforeText: '' });
+    }
+  }
+  return diffs;
+}
+
+function extractAcpToolTargetPaths(toolCall: AcpToolCallFields): string[] {
+  const seen = new Set<string>();
+  const add = (value: unknown): void => {
+    const trimmed = typeof value === 'string' ? value.trim() : '';
+    if (trimmed) seen.add(trimmed);
+  };
+  for (const location of toolCall.locations ?? []) {
+    add(location.path);
+  }
+  const input = asRecord(toolCall.rawInput);
+  for (const key of ACP_FILE_PATH_INPUT_KEYS) {
+    add(input[key]);
+  }
+  if (toolCall.kind === 'move') {
+    for (const key of ACP_MOVE_PATH_INPUT_KEYS) {
+      add(input[key]);
+    }
+  }
+  for (const arrayKey of ['paths', 'files'] as const) {
+    const list = input[arrayKey];
+    if (!Array.isArray(list)) continue;
+    for (const item of list) {
+      if (typeof item === 'string') {
+        add(item);
+      } else {
+        const entry = asRecord(item);
+        add(entry.path ?? entry.file_path ?? entry.filePath ?? entry.target_file);
+      }
+    }
+  }
+  return [...seen];
+}
+
 function mergeGates(running: TurnGate, incoming: TurnGate): TurnGate {
   const prior = running.policy;
   const next = incoming.policy;
@@ -453,6 +534,9 @@ export class AcpSession {
   readonly initializeResult: AcpInitializeResult;
 
   private readonly connection: AcpConnection;
+  private readonly cwd: string;
+  private readonly captureSessionId: string;
+  private readonly turnChangeCapture: TurnChangeCaptureHooks | undefined;
   private readonly logger: Logger | undefined;
   private readonly readImage: (path: string) => Promise<Uint8Array>;
   private readonly expandSlashInvocation: ((text: string) => Promise<string | null>) | undefined;
@@ -461,6 +545,11 @@ export class AcpSession {
   private readonly queue = createAsyncQueue<AgentEvent>();
   private readonly translator: AcpUpdateTranslator;
   private readonly pendingPrompts: QueuedPrompt[] = [];
+  private readonly permissionCapturedTools = new Set<string>();
+  private readonly capturedBeforePaths = new Set<string>();
+  private readonly capturedDiffPaths = new Set<string>();
+  private readonly capturedOpaqueTools = new Set<string>();
+  private readonly pendingOpaqueTools = new Set<string>();
   /** Sent once, ahead of the first prompt of a new session. */
   private pendingBriefing: string | null;
   /** Slash-command names advertised by Skills or `available_commands_update`. */
@@ -498,6 +587,9 @@ export class AcpSession {
 
   constructor(init: AcpSessionInit) {
     this.connection = init.connection;
+    this.cwd = init.options.cwd;
+    this.captureSessionId = init.options.captureSessionId ?? init.sessionId;
+    this.turnChangeCapture = init.options.turnChangeCapture;
     this.initializeResult = init.init;
     this.id = init.sessionId;
     this.resumeOutcome = init.resumeOutcome;
@@ -845,6 +937,15 @@ export class AcpSession {
       default:
         if (STATE_UPDATES.has(update.sessionUpdate)) return;
         this.emit(this.translator.handleUpdate(update));
+        if (
+          this.turn
+          && this.turnChangeCapture
+          && (update.sessionUpdate === 'tool_call' || update.sessionUpdate === 'tool_call_update')
+        ) {
+          const toolCallId = asNonEmptyString(update.toolCallId);
+          const merged = toolCallId ? this.translator.getToolCall(toolCallId) : undefined;
+          if (merged) this.captureFromToolCallUpdate(merged);
+        }
         if (this.turn) return;
         // Progress on a running call may change nothing on screen, yet it proves the agent
         // is still working: it keeps the runtime busy and restarts the open-call quiet bound.
@@ -895,6 +996,7 @@ export class AcpSession {
       gate: next.gate,
     };
     this.turn = turn;
+    this.resetTurnChangeCaptureState();
     this.backgroundPermission = null;
     this.usage = { ...this.usage, tokenUsage: 0 };
     this.emit([{ type: 'status', data: { status: 'running', ...this.usage, isRunning: true } }]);
@@ -922,6 +1024,14 @@ export class AcpSession {
     turn.settled = true;
     if (turn.cancelTimer) clearTimeout(turn.cancelTimer);
     this.cancelPermissions();
+    if (this.pendingOpaqueTools.size > 0 && this.turnChangeCapture) {
+      this.turnChangeCapture.noteOpaqueWrite({
+        sessionId: this.captureSessionId,
+        provider: 'acp',
+        cwd: this.cwd,
+      });
+    }
+    this.resetTurnChangeCaptureState();
     this.turn = null;
     this.backgroundPermission = turn.cancelTimer || 'error' in outcome || outcome.stopReason === 'cancelled'
       ? null
@@ -1025,8 +1135,15 @@ export class AcpSession {
     if (gate?.policy && !fields) return selected(reject);
     const { events, toolCall } = this.translator.noteToolCall(fields ?? { toolCallId: `acp-permission-${this.permissionSeq + 1}` });
     this.emit(events);
-    if (this.permissionMode === 'bypassPermissions') {
+    const allowDecision = async (): Promise<AcpPermissionOutcome> => {
+      if (allowOnce) {
+        await this.captureBeforeAllowedToolCall(toolCall);
+        if (signal.aborted || this.closing || this.turn?.cancelTimer) return { outcome: 'cancelled' };
+      }
       return selected(allowOnce ?? reject);
+    };
+    if (this.permissionMode === 'bypassPermissions') {
+      return allowDecision();
     }
     const input = toolCall.rawInput;
     const hasInputRecord = input !== null && typeof input === 'object' && !Array.isArray(input);
@@ -1049,7 +1166,7 @@ export class AcpSession {
       && !this.policyForcesConfirmation(gate.policy, policyToolName, requestInput)
       && (!toolCall.name || toolCall.name === policyToolName
         || !this.policyForcesConfirmation(gate.policy, toolCall.name, requestInput))) {
-      return selected(allowOnce ?? reject);
+      return allowDecision();
     }
     const resolver = this.resolver;
     if (!resolver) return selected(reject);
@@ -1080,7 +1197,7 @@ export class AcpSession {
       const decision = await untilAborted(resolver(request, controller.signal), controller.signal);
       if (decision === ABORTED || controller.signal.aborted) return { outcome: 'cancelled' };
       if (decision.kind !== 'permission' || decision.behavior !== 'allow') return selected(reject);
-      return selected(allowOnce ?? reject);
+      return await allowDecision();
     } catch (error) {
       if (controller.signal.aborted) return { outcome: 'cancelled' };
       this.logger?.warn('acp: permission resolver failed; rejecting', { error: String(error) });
@@ -1088,6 +1205,170 @@ export class AcpSession {
     } finally {
       signal.removeEventListener('abort', forwardAbort);
       this.permissionControllers.delete(controller);
+    }
+  }
+
+  private resetTurnChangeCaptureState(): void {
+    this.permissionCapturedTools.clear();
+    this.capturedBeforePaths.clear();
+    this.capturedDiffPaths.clear();
+    this.capturedOpaqueTools.clear();
+    this.pendingOpaqueTools.clear();
+  }
+
+  private async captureBeforeAllowedToolCall(toolCall: AcpToolCallFields): Promise<void> {
+    if (!this.turn || !this.turnChangeCapture) return;
+    const capture = this.turnChangeCapture;
+    const kind = toolCall.kind;
+    try {
+      if (kind === 'execute') {
+        this.permissionCapturedTools.add(toolCall.toolCallId);
+        if (!this.capturedOpaqueTools.has(toolCall.toolCallId)) {
+          this.capturedOpaqueTools.add(toolCall.toolCallId);
+          capture.noteOpaqueWrite({ sessionId: this.captureSessionId, provider: 'acp', cwd: this.cwd });
+        }
+        return;
+      }
+      const diffs = extractAcpStructuredDiffs(toolCall.content);
+      const isMutation = kind !== undefined && ACP_FILE_MUTATION_KINDS.has(kind);
+      if (!isMutation && diffs.length === 0) return;
+      this.permissionCapturedTools.add(toolCall.toolCallId);
+      const diffPaths = new Set<string>();
+      for (const diff of diffs) {
+        diffPaths.add(diff.path);
+        const key = `${toolCall.toolCallId}\0${diff.path}`;
+        if (this.capturedDiffPaths.has(key)) continue;
+        this.capturedDiffPaths.add(key);
+        this.pendingOpaqueTools.delete(toolCall.toolCallId);
+        if (capture.recordKnownFilePreimage) {
+          await capture.recordKnownFilePreimage({
+            sessionId: this.captureSessionId,
+            provider: 'acp',
+            cwd: this.cwd,
+            targetPath: diff.path,
+            beforeExists: diff.beforeExists,
+            beforeText: diff.beforeText,
+          });
+        } else if (!this.capturedBeforePaths.has(key)) {
+          this.capturedBeforePaths.add(key);
+          await capture.beforeKnownFileWrite({
+            sessionId: this.captureSessionId,
+            provider: 'acp',
+            cwd: this.cwd,
+            targetPath: diff.path,
+          });
+        }
+      }
+      const paths = isMutation ? extractAcpToolTargetPaths(toolCall) : [];
+      for (const targetPath of paths) {
+        if (diffPaths.has(targetPath)) continue;
+        const key = `${toolCall.toolCallId}\0${targetPath}`;
+        if (this.capturedBeforePaths.has(key)) continue;
+        this.capturedBeforePaths.add(key);
+        this.pendingOpaqueTools.delete(toolCall.toolCallId);
+        await capture.beforeKnownFileWrite({
+          sessionId: this.captureSessionId,
+          provider: 'acp',
+          cwd: this.cwd,
+          targetPath,
+        });
+      }
+      if (isMutation && diffs.length === 0 && paths.length === 0) {
+        this.pendingOpaqueTools.add(toolCall.toolCallId);
+      }
+    } catch (error) {
+      this.logger?.warn('acp: turn change capture before permission failed', {
+        toolCallId: toolCall.toolCallId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  private captureFromToolCallUpdate(toolCall: AcpToolCallFields): void {
+    if (!this.turn || !this.turnChangeCapture) return;
+    const capture = this.turnChangeCapture;
+    const diffs = extractAcpStructuredDiffs(toolCall.content);
+    const diffPaths = new Set<string>();
+    for (const diff of diffs) {
+      diffPaths.add(diff.path);
+      const key = `${toolCall.toolCallId}\0${diff.path}`;
+      if (this.capturedDiffPaths.has(key)) continue;
+      this.capturedDiffPaths.add(key);
+      this.pendingOpaqueTools.delete(toolCall.toolCallId);
+      if (capture.recordKnownFilePreimage) {
+        void capture.recordKnownFilePreimage({
+          sessionId: this.captureSessionId,
+          provider: 'acp',
+          cwd: this.cwd,
+          targetPath: diff.path,
+          beforeExists: diff.beforeExists,
+          beforeText: diff.beforeText,
+          provisionalId: toolCall.toolCallId,
+        }).catch((error: unknown) => {
+          this.logger?.warn('acp: structured diff preimage capture failed', {
+            toolCallId: toolCall.toolCallId,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        });
+      } else if (!this.capturedBeforePaths.has(key)) {
+        this.capturedBeforePaths.add(key);
+        void capture.beforeKnownFileWrite({
+          sessionId: this.captureSessionId,
+          provider: 'acp',
+          cwd: this.cwd,
+          targetPath: diff.path,
+          provisionalId: toolCall.toolCallId,
+        }).catch((error: unknown) => {
+          this.logger?.warn('acp: turn change capture failed', {
+            toolCallId: toolCall.toolCallId,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        });
+      }
+    }
+    const kind = toolCall.kind;
+    if (kind === 'execute') {
+      if (!this.capturedOpaqueTools.has(toolCall.toolCallId)) {
+        this.capturedOpaqueTools.add(toolCall.toolCallId);
+        capture.noteOpaqueWrite({ sessionId: this.captureSessionId, provider: 'acp', cwd: this.cwd });
+      }
+      return;
+    }
+    if (!kind || !ACP_FILE_MUTATION_KINDS.has(kind)) return;
+    const paths = extractAcpToolTargetPaths(toolCall);
+    if (!this.permissionCapturedTools.has(toolCall.toolCallId)) {
+      for (const targetPath of paths) {
+        if (diffPaths.has(targetPath)) continue;
+        const key = `${toolCall.toolCallId}\0${targetPath}`;
+        if (this.capturedBeforePaths.has(key) || this.capturedDiffPaths.has(key)) continue;
+        this.capturedBeforePaths.add(key);
+        this.pendingOpaqueTools.delete(toolCall.toolCallId);
+        void capture.beforeKnownFileWrite({
+          sessionId: this.captureSessionId,
+          provider: 'acp',
+          cwd: this.cwd,
+          targetPath,
+          provisionalId: toolCall.toolCallId,
+        }).catch((error: unknown) => {
+          this.logger?.warn('acp: turn change capture failed', {
+            toolCallId: toolCall.toolCallId,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        });
+      }
+    }
+    if (diffs.length === 0 && paths.length === 0) {
+      if (toolCall.status === 'completed' || toolCall.status === 'failed') {
+        this.pendingOpaqueTools.delete(toolCall.toolCallId);
+        if (!this.capturedOpaqueTools.has(toolCall.toolCallId)) {
+          this.capturedOpaqueTools.add(toolCall.toolCallId);
+          capture.noteOpaqueWrite({ sessionId: this.captureSessionId, provider: 'acp', cwd: this.cwd });
+        }
+      } else {
+        this.pendingOpaqueTools.add(toolCall.toolCallId);
+      }
+    } else {
+      this.pendingOpaqueTools.delete(toolCall.toolCallId);
     }
   }
 

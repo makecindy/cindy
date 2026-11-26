@@ -1810,3 +1810,152 @@ describe('AcpAgent (the acp engine)', () => {
     await handle.close();
   });
 });
+
+describe('AcpSession turnChangeCapture', () => {
+  it('awaits beforeKnownFileWrite before allowing permission-gated edit/move and skips rejected calls', async () => {
+    const order: string[] = [];
+    const beforeKnownFileWrite = vi.fn(async (params: { sessionId: string; provider: string; cwd: string; targetPath: string }) => {
+      order.push(`capture:${params.targetPath}`);
+    });
+    const recordKnownFilePreimage = vi.fn(async () => {});
+    const noteOpaqueWrite = vi.fn();
+
+    const agent = createFakeAgent();
+    const { session, ended } = await open(agent, {
+      captureSessionId: 'biz-session-1',
+      turnChangeCapture: { beforeKnownFileWrite, recordKnownFilePreimage, noteOpaqueWrite },
+    });
+    const decisions: InteractionDecision[] = [
+      { kind: 'permission', behavior: 'allow' },
+      { kind: 'permission', behavior: 'deny' },
+    ];
+    session.setInteractionResolver(async () => decisions.shift()!);
+
+    await session.send({ type: 'user', content: 'edit files' });
+    await vi.waitFor(() => expect(agent.prompts).toHaveLength(1));
+
+    // Allow edit with locations + rawInput old_path/new_path: capture must finish before allow_once reply.
+    const editReply = await agent.requestPermission({
+      toolCall: {
+        toolCallId: 'tc-move',
+        title: 'Move file',
+        kind: 'move',
+        locations: [{ path: 'src/a.ts' }],
+        rawInput: { old_path: 'src/a.ts', new_path: 'src/b.ts' },
+      },
+      options: PERMISSION_OPTIONS,
+    });
+    order.push(`reply:${(editReply.outcome as { optionId?: string }).optionId}`);
+    expect(editReply).toEqual({ outcome: { outcome: 'selected', optionId: 'yes' } });
+    expect(order).toEqual(['capture:src/a.ts', 'capture:src/b.ts', 'reply:yes']);
+    expect(beforeKnownFileWrite).toHaveBeenCalledWith({
+      sessionId: 'biz-session-1',
+      provider: 'acp',
+      cwd: '/work/project',
+      targetPath: 'src/a.ts',
+    });
+
+    // Reject delete: must NOT trigger capture or opaque marking.
+    const deleteReply = await agent.requestPermission({
+      toolCall: {
+        toolCallId: 'tc-del',
+        title: 'Delete file',
+        kind: 'delete',
+        rawInput: { file_path: 'src/secret.ts' },
+      },
+      options: PERMISSION_OPTIONS,
+    });
+    expect(deleteReply).toEqual({ outcome: { outcome: 'selected', optionId: 'no' } });
+    expect(beforeKnownFileWrite).toHaveBeenCalledTimes(2);
+    expect(noteOpaqueWrite).not.toHaveBeenCalled();
+
+    agent.prompts[0]!.settle.resolve({ stopReason: 'end_turn' });
+    await session.close();
+    await ended;
+  });
+
+  it('records structured diff preimages under bypassPermissions and defers opaque marking until tool settles', async () => {
+    const beforeKnownFileWrite = vi.fn(async () => {});
+    const recordKnownFilePreimage = vi.fn(async () => {});
+    const noteOpaqueWrite = vi.fn();
+
+    const agent = createFakeAgent();
+    const { session, ended } = await open(agent, {
+      permissionMode: 'bypassPermissions',
+      captureSessionId: 'biz-session-2',
+      turnChangeCapture: { beforeKnownFileWrite, recordKnownFilePreimage, noteOpaqueWrite },
+    });
+
+    session.send({ type: 'user', content: 'apply edits' });
+    await vi.waitFor(() => expect(agent.prompts).toHaveLength(1));
+
+    // Edit starts without path or diff yet — must NOT prematurely poison turn as opaque.
+    agent.update({
+      sessionUpdate: 'tool_call',
+      toolCallId: 'tc-diff',
+      title: 'Edit',
+      kind: 'edit',
+      status: 'in_progress',
+    });
+    expect(noteOpaqueWrite).not.toHaveBeenCalled();
+
+    // Update delivers structured diffs (modify + create) — must record preimages and stay non-opaque.
+    agent.update({
+      sessionUpdate: 'tool_call_update',
+      toolCallId: 'tc-diff',
+      status: 'completed',
+      content: [
+        { type: 'diff', path: 'src/app.ts', oldText: 'const a = 1;\n', newText: 'const a = 2;\n' },
+        { type: 'diff', path: 'src/new.ts', oldText: null, newText: 'export const x = 1;\n' },
+      ],
+    });
+    expect(recordKnownFilePreimage).toHaveBeenCalledWith({
+      sessionId: 'biz-session-2',
+      provider: 'acp',
+      cwd: '/work/project',
+      targetPath: 'src/app.ts',
+      beforeExists: true,
+      beforeText: 'const a = 1;\n',
+      provisionalId: 'tc-diff',
+    });
+    expect(recordKnownFilePreimage).toHaveBeenCalledWith({
+      sessionId: 'biz-session-2',
+      provider: 'acp',
+      cwd: '/work/project',
+      targetPath: 'src/new.ts',
+      beforeExists: false,
+      beforeText: '',
+      provisionalId: 'tc-diff',
+    });
+    expect(noteOpaqueWrite).not.toHaveBeenCalled();
+
+    // Edit that completes with neither paths nor structured diffs marks opaque.
+    agent.update({
+      sessionUpdate: 'tool_call',
+      toolCallId: 'tc-blind-edit',
+      title: 'Mystery Edit',
+      kind: 'edit',
+      status: 'completed',
+    });
+    expect(noteOpaqueWrite).toHaveBeenCalledTimes(1);
+    expect(noteOpaqueWrite).toHaveBeenLastCalledWith({
+      sessionId: 'biz-session-2',
+      provider: 'acp',
+      cwd: '/work/project',
+    });
+
+    // Shell execute immediately marks opaque.
+    agent.update({
+      sessionUpdate: 'tool_call',
+      toolCallId: 'tc-exec',
+      title: 'Run shell',
+      kind: 'execute',
+      status: 'in_progress',
+    });
+    expect(noteOpaqueWrite).toHaveBeenCalledTimes(2);
+
+    agent.prompts[0]!.settle.resolve({ stopReason: 'end_turn' });
+    await session.close();
+    await ended;
+  });
+});

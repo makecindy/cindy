@@ -103,7 +103,7 @@ export interface TaskMigrationView {
    */
   skipped?: { total: number; entries: Array<{ path: string; code: string }> };
   projects?: string[];
-  agents?: Array<"cc" | "codex" | "pi">;
+  agents?: Array<"cc" | "codex" | "pi" | "acp">;
   /** Entire Orca graph, native contexts and per-member workspaces. Absence means unsupported. */
   teamMigration?: true;
   /** Accepts `files.transcripts` (large native transcripts streamed outside the package). */

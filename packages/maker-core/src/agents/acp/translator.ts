@@ -142,6 +142,11 @@ export class AcpUpdateTranslator {
     return this.plan;
   }
 
+  /** Returns the merged fields of a tracked tool call in the current session, if any. */
+  getToolCall(toolCallId: string): AcpToolCallFields | undefined {
+    return this.tools.get(toolCallId);
+  }
+
   handleUpdate(update: AcpRecord): AgentEvent[] {
     const events: AgentEvent[] = [];
     switch (update.sessionUpdate) {

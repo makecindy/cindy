@@ -40,6 +40,7 @@ import {
   normalizeTurnChangeSetWorkspaceKey,
   noteOpaqueTurnChange,
   noteTurnDiffEvent,
+  recordKnownFilePreimage,
   waitForTurnChangeSetPersistence,
 } from '../store';
 
@@ -1659,5 +1660,171 @@ describe('turn change-set sidecar store', () => {
       'utf8',
     );
     expect(detailRaw).not.toContain('TOKEN=');
+  });
+
+  it('captures ACP beforeKnownFileWrite edits and round-trips undo/reapply', async () => {
+    const target = path.join(workdir, 'acp.ts');
+    await fs.writeFile(target, 'before\n', 'utf8');
+    await beginTurnChangeSet({
+      sessionId: 'session-1',
+      anchorClientId: 'user-1',
+      provider: 'acp',
+      cwd: workdir,
+    });
+    await captureKnownFileBefore({
+      sessionId: 'session-1',
+      provider: 'acp',
+      cwd: workdir,
+      targetPath: 'acp.ts',
+    });
+    await fs.writeFile(target, 'after\n', 'utf8');
+    await finalizeTurnChangeSet('session-1', 'acp-turn-1', 'complete');
+
+    const [summary] = await listTurnChangeSets('session-1');
+    expect(summary).toMatchObject({
+      provider: 'acp',
+      state: 'complete',
+      files: [expect.objectContaining({ path: 'acp.ts', status: 'modified' })],
+    });
+
+    await applyTurnChangeSetAction('session-1', summary!.id, 'undo');
+    expect(await fs.readFile(target, 'utf8')).toBe('before\n');
+
+    await applyTurnChangeSetAction('session-1', summary!.id, 'reapply');
+    expect(await fs.readFile(target, 'utf8')).toBe('after\n');
+  });
+
+  it('upgrades same-tool provisional preimage via recordKnownFilePreimage without overwriting earlier tool calls', async () => {
+    const edited = path.join(workdir, 'raced.ts');
+    const created = path.join(workdir, 'created.ts');
+    // Simulate bypassPermissions race: file is already rewritten on disk before un-paused notification runs.
+    await fs.writeFile(edited, 'v2\n', 'utf8');
+    await fs.writeFile(created, 'brand-new\n', 'utf8');
+
+    await beginTurnChangeSet({
+      sessionId: 'session-1',
+      anchorClientId: 'user-1',
+      provider: 'acp',
+      cwd: workdir,
+    });
+    await captureKnownFileBefore({
+      sessionId: 'session-1',
+      provider: 'acp',
+      cwd: workdir,
+      targetPath: 'raced.ts',
+      provisionalId: 'tc-1',
+    });
+    // Same tool call supplies exact structured diff preimage → replaces raced provisional snapshot.
+    await recordKnownFilePreimage({
+      sessionId: 'session-1',
+      provider: 'acp',
+      cwd: workdir,
+      targetPath: 'raced.ts',
+      beforeExists: true,
+      beforeText: 'v1\n',
+      provisionalId: 'tc-1',
+    });
+    // A second tool call modifying the same file later in the turn must NEVER overwrite the turn's first preimage.
+    await recordKnownFilePreimage({
+      sessionId: 'session-1',
+      provider: 'acp',
+      cwd: workdir,
+      targetPath: 'raced.ts',
+      beforeExists: true,
+      beforeText: 'v2\n',
+      provisionalId: 'tc-2',
+    });
+    // New file preimage (beforeExists: false)
+    await recordKnownFilePreimage({
+      sessionId: 'session-1',
+      provider: 'acp',
+      cwd: workdir,
+      targetPath: 'created.ts',
+      beforeExists: false,
+      beforeText: '',
+      provisionalId: 'tc-3',
+    });
+    await fs.writeFile(edited, 'v3\n', 'utf8');
+    await finalizeTurnChangeSet('session-1', 'acp-turn-2', 'complete');
+
+    const [summary] = await listTurnChangeSets('session-1');
+    expect(summary).toMatchObject({ provider: 'acp', state: 'complete' });
+    expect(summary!.files.map((f) => `${f.path}:${f.status}`).sort()).toEqual([
+      'created.ts:added',
+      'raced.ts:modified',
+    ]);
+
+    await applyTurnChangeSetAction('session-1', summary!.id, 'undo');
+    expect(await fs.readFile(edited, 'utf8')).toBe('v1\n');
+    await expect(fs.stat(created)).rejects.toMatchObject({ code: 'ENOENT' });
+
+    await applyTurnChangeSetAction('session-1', summary!.id, 'reapply');
+    expect(await fs.readFile(edited, 'utf8')).toBe('v3\n');
+    expect(await fs.readFile(created, 'utf8')).toBe('brand-new\n');
+  });
+
+  it('enforces security guards and opaque-tool tracking on ACP recordKnownFilePreimage', async () => {
+    const safeFile = path.join(workdir, 'safe.ts');
+    const envFile = path.join(workdir, '.env');
+    const outsideFile = path.join(root, 'outside.txt');
+    const escapeLink = path.join(workdir, 'escape-link.txt');
+    await fs.writeFile(safeFile, 'new\n', 'utf8');
+    await fs.writeFile(envFile, 'SECRET=new\n', 'utf8');
+    await fs.writeFile(outsideFile, 'outside-new\n', 'utf8');
+    await fs.symlink(outsideFile, escapeLink);
+
+    await beginTurnChangeSet({
+      sessionId: 'session-1',
+      anchorClientId: 'user-1',
+      provider: 'acp',
+      cwd: workdir,
+    });
+    await recordKnownFilePreimage({
+      sessionId: 'session-1',
+      provider: 'acp',
+      cwd: workdir,
+      targetPath: 'safe.ts',
+      beforeExists: true,
+      beforeText: 'old\n',
+    });
+    await recordKnownFilePreimage({
+      sessionId: 'session-1',
+      provider: 'acp',
+      cwd: workdir,
+      targetPath: '.env',
+      beforeExists: true,
+      beforeText: 'SECRET=old\n',
+    });
+    await recordKnownFilePreimage({
+      sessionId: 'session-1',
+      provider: 'acp',
+      cwd: workdir,
+      targetPath: '../outside.txt',
+      beforeExists: true,
+      beforeText: 'literal-outside\n',
+    });
+    await recordKnownFilePreimage({
+      sessionId: 'session-1',
+      provider: 'acp',
+      cwd: workdir,
+      targetPath: 'escape-link.txt',
+      beforeExists: true,
+      beforeText: 'escape\n',
+    });
+    noteOpaqueTurnChange({ sessionId: 'session-1', provider: 'acp', cwd: workdir });
+    await finalizeTurnChangeSet('session-1', 'acp-turn-3', 'complete');
+
+    const [summary] = await listTurnChangeSets('session-1');
+    expect(summary).toMatchObject({ provider: 'acp', state: 'partial' });
+    expect(summary!.incompleteReasons).toEqual(
+      expect.arrayContaining(['sensitive-file', 'outside-workspace', 'opaque-tool']),
+    );
+    expect(summary!.files.map((f) => f.path)).toEqual(['safe.ts']);
+    const detailRaw = await fs.readFile(
+      path.join(mocks.userDataRoot, 'turn-change-sets', 'session-1', `${summary!.id}.json`),
+      'utf8',
+    );
+    expect(detailRaw).not.toContain('SECRET=');
+    expect(detailRaw).not.toContain('outside-new');
   });
 });

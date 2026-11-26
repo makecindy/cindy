@@ -53,6 +53,7 @@ import {
   cancelShareDraft,
   type ShareImportDraftPrefs,
 } from '../session-share/sessionShareImport';
+import type { XdtshareAgentKind, XdtshareFidelity } from '../session-share/xdtshareFormat.pure';
 import type { moveSessionProjectFromHost } from '../mcp-integrations/moveSession';
 import { physicalWorktreeKey, withWorktreeResourceLocks } from '../worktree/resourceLock';
 import { GitExecError } from '../worktree/gitExec';
@@ -247,7 +248,7 @@ interface SourceSession {
   status: string;
   source: string;
   orcaRole: string | null;
-  agentKind: 'cc' | 'codex' | 'pi';
+  agentKind: XdtshareAgentKind;
   updatedAt: number;
 }
 async function assertSource(
@@ -551,7 +552,19 @@ async function prepare(scope: Scope, record: MigrationHandoff) {
           throw new Error('MIGRATION_UNSUPPORTED');
         throw new MigrationSizeError('MIGRATION_NO_MEMORY', result.totalBytes, result.limitBytes);
       }
-      if (result.status !== 'ok' || result.fidelity !== 'full' || result.mediaDropped)
+      const hasAcpMember = members.some((member) => member.agentKind === 'acp');
+      const hasBuiltinMember = members.some((member) => member.agentKind !== 'acp');
+      const expectedFidelity: XdtshareFidelity = !hasAcpMember
+        ? 'full'
+        : hasBuiltinMember
+          ? 'partial'
+          : 'db-only';
+      if (
+        result.status !== 'ok' ||
+        result.fidelity !== expectedFidelity ||
+        (result.missingTranscripts?.length ?? 0) > 0 ||
+        result.mediaDropped
+      )
         throw new Error('MIGRATION_INCOMPLETE_CONTEXT');
       // The target rejects more transcripts than the protocol allows; stop before uploading them.
       if ((result.externalTranscripts?.length ?? 0) > TASK_MIGRATION_MAX_TRANSCRIPTS)
@@ -1214,25 +1227,54 @@ async function receive(
           resourceBudgetBytes: memoryBudget(),
         });
         try {
-          if (
-            inspected.encrypted ||
-            inspected.preview.fidelity !== 'full' ||
-            inspected.preview.orcaWorkerCount !== (record.workers?.length ?? 0)
-          )
+          if (inspected.encrypted) throw new Error('MIGRATION_INCOMPLETE_CONTEXT');
+          const preview = inspected.preview;
+          const leadIsAcp = preview.agentKind === 'acp';
+          const expectedFidelity: XdtshareFidelity = leadIsAcp
+            ? 'db-only'
+            : preview.hasAcpWorker
+              ? 'partial'
+              : 'full';
+          const previewFidelityOk = leadIsAcp
+            ? preview.fidelity === 'db-only' ||
+              (preview.orcaWorkerCount > 0 && preview.fidelity === 'partial')
+            : preview.fidelity === expectedFidelity;
+          if (!previewFidelityOk || preview.orcaWorkerCount !== (record.workers?.length ?? 0))
             throw new Error('MIGRATION_INCOMPLETE_CONTEXT');
-          const agentKind =
-            inspected.preview.agentKind === 'cc' ? 'claude-code' : inspected.preview.agentKind;
           const providers = await getDesktopProviderService().listProviders({
             allowSideEffects: true,
           });
           scope.assertCurrent();
-          const route = pickEnabledFallbackModel(providers, agentKind);
-          if (!route) throw new Error('MIGRATION_TARGET_MODEL_UNAVAILABLE');
-          const effort =
-            getMakerIfReady()
-              ?.getCapabilities(agentKind)
-              .availableModels.find((m) => m.id === route.model)?.defaultEffort ?? 'high';
-          const agentPrefs: Partial<Record<'cc' | 'codex' | 'pi', ShareImportDraftPrefs>> = {};
+          let leadDraftPrefs: ShareImportDraftPrefs;
+          if (preview.agentKind === 'acp') {
+            leadDraftPrefs = {
+              permissionMode: 'ask',
+              planMode: false,
+              fastMode: false,
+            };
+          } else {
+            const agentKind = preview.agentKind === 'cc' ? 'claude-code' : preview.agentKind;
+            const route = pickEnabledFallbackModel(providers, agentKind);
+            if (!route) throw new Error('MIGRATION_TARGET_MODEL_UNAVAILABLE');
+            const effort =
+              getMakerIfReady()
+                ?.getCapabilities(agentKind)
+                .availableModels.find((m) => m.id === route.model)?.defaultEffort ?? 'high';
+            leadDraftPrefs = {
+              ...route,
+              effort,
+              permissionMode: agentKind === 'claude-code' ? 'default' : 'ask',
+              planMode: false,
+              fastMode: false,
+            };
+          }
+          const agentPrefs: Partial<Record<XdtshareAgentKind, ShareImportDraftPrefs>> = {
+            acp: {
+              permissionMode: 'ask',
+              planMode: false,
+              fastMode: false,
+            },
+          };
           for (const agent of ['cc', 'codex', 'pi'] as const) {
             const kind = agent === 'cc' ? 'claude-code' : agent;
             const selected = pickEnabledFallbackModel(providers, kind);
@@ -1252,13 +1294,7 @@ async function receive(
             {
               draftId: inspected.draftId,
               workingDir,
-              draftPrefs: {
-                ...route,
-                effort,
-                permissionMode: agentKind === 'claude-code' ? 'default' : 'ask',
-                planMode: false,
-                fastMode: false,
-              },
+              draftPrefs: leadDraftPrefs,
             },
             {
               dbClient: scope.db,
@@ -1273,7 +1309,11 @@ async function receive(
               },
             },
           );
-          if (result.fidelity !== 'full') throw new Error('MIGRATION_INCOMPLETE_CONTEXT');
+          const resultFidelityOk = leadIsAcp
+            ? result.fidelity === 'db-only' ||
+              (preview.orcaWorkerCount > 0 && result.fidelity === 'partial')
+            : result.fidelity === expectedFidelity;
+          if (!resultFidelityOk) throw new Error('MIGRATION_INCOMPLETE_CONTEXT');
         } finally {
           cancelShareDraft(inspected.draftId);
         }
@@ -1366,9 +1406,12 @@ export async function requestTaskMigration(raw: unknown): Promise<TaskMigrationV
       teamMigration: true,
       externalTranscripts: true,
       copyEstimate: true,
-      agents: (['cc', 'codex', 'pi'] as const).filter(
-        (agent) => !!pickEnabledFallbackModel(providers, agent === 'cc' ? 'claude-code' : agent),
-      ),
+      agents: [
+        ...(['cc', 'codex', 'pi'] as const).filter(
+          (agent) => !!pickEnabledFallbackModel(providers, agent === 'cc' ? 'claude-code' : agent),
+        ),
+        'acp' as const,
+      ],
     };
   }
   if (request.action === 'receive' || request.action === 'receipt') {

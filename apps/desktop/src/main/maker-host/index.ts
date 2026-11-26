@@ -322,7 +322,11 @@ import { getGhostRosterPrompt } from '../mcp-integrations/ghost.desktop.js';
 import { STARTUP_GHOST_TOOLS_OWNER_KEY } from '../cindy-brain/startupGhostTool.js';
 import { readSessionSource } from '../localDb/sessionDispatchSnapshot.js';
 import { getPiExtraSpawnConfig, invalidatePiEnvironment } from '../mcp-integrations/piEnvironment.desktop.js';
-import { captureKnownFileBefore, noteOpaqueTurnChange } from '../turn-change-set/store.js';
+import {
+  captureKnownFileBefore,
+  noteOpaqueTurnChange,
+  recordKnownFilePreimage,
+} from '../turn-change-set/store.js';
 import {
   getBuiltinMcpServerNames,
   registerCustomMcpArrays,
@@ -2919,6 +2923,11 @@ export function getMaker(): Maker {
       appVersion: app.getVersion(),
       mcpProviders: piMcpProviders,
       makerMemory: makerMemoryManager,
+      turnChangeCapture: {
+        beforeKnownFileWrite: captureKnownFileBefore,
+        recordKnownFilePreimage,
+        noteOpaqueWrite: noteOpaqueTurnChange,
+      },
       getGhostRosterPrompt,
       // Same Skill scope as the built-in Pi engine (Cindy-managed and plugin Skills, Pi's discovery
       // directories, the user's enable switches), discovered in the isolated scan process.
