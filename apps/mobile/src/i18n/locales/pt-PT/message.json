@@ -308,6 +308,7 @@
       "neutral": "Restabelecer ligação",
       "usageReset": "Utilização reposta, continuação automática",
       "pending": "A restabelecer a ligação…",
+      "continuingWithProgress": "A continuar automaticamente ({{attempt}}/{{total}})…",
       "pendingWithProgress": "A restabelecer a ligação {{attempt}}/{{total}}…",
       "groupSwitchPending": "A mudar para outro computador…",
       "details": "Tentativa {{attempt}}/{{total}} · {{count}} restabelecimentos de ligação nesta sessão",

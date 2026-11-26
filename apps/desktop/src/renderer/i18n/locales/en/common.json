@@ -16328,6 +16328,7 @@
       },
       "autoResumePending": {
         "label": "Reconnecting",
+        "continuingWithProgress": "Continuing automatically ({{attempt}}/{{total}})…",
         "labelWithProgress": "Reconnecting {{attempt}}/{{total}}",
         "groupSwitch": "Switching to another computer"
       },
@@ -20137,6 +20138,9 @@
       "permissionTightenInterruptFailed": "Failed to stop the running task while tightening permissions; it may keep running without approval prompts until it finishes. Stop it manually if needed.",
       "codexAutoReviewUnavailable": "Auto-review is temporarily unavailable. The current action was blocked and permissions switched to Default. Retry the request; Cindy will ask when needed.",
       "hostShellCommandBlocked": "Cindy blocked this shell command. Check the command and use an available tool or command to continue.",
+      "reconnectAutoResumeExhausted": "Automatic continuation reached its retry limit.",
+      "reconnectAutoResumeDisabled": "Automatic continuation is turned off.",
+      "codexReconnectStalled": "The model connection did not recover within 2 minutes.",
       "upstreamResponseIdleTimeout": "The model stopped responding for a long time, so this turn was interrupted to avoid hanging forever. Completed tool calls are preserved — send the next message to continue.",
       "codexHistoryOversized": "The image history is too large to resume automatically. Send “Continue”, and Cindy will pick up the current task.",
       "codexHistoryOversizedRemote": "This task’s history includes oversized images, so remote compaction cannot finish. Open the task on the machine running Codex and send again; Cindy will omit those images there.",

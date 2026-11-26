@@ -16435,6 +16435,7 @@
       },
       "autoResumePending": {
         "label": "Reconnexion",
+        "continuingWithProgress": "Reprise automatique ({{attempt}}/{{total}})…",
         "labelWithProgress": "Reconnexion {{attempt}}/{{total}}",
         "groupSwitch": "Passage à un autre ordinateur"
       },
@@ -20323,6 +20324,9 @@
       "permissionTightenInterruptFailed": "Impossible d'arrêter la tâche en cours lors du durcissement des autorisations ; elle risque de continuer sans demande d'approbation jusqu'à la fin. Arrêtez-la manuellement si nécessaire.",
       "codexAutoReviewUnavailable": "La revue automatique est temporairement indisponible. L'action en cours a été bloquée et les autorisations sont repassées sur Par défaut. Relancez la requête ; Cindy vous demandera si nécessaire.",
       "hostShellCommandBlocked": "Cindy a bloqué cette commande shell. Vérifiez la commande et utilisez un outil ou une commande disponible pour continuer.",
+      "reconnectAutoResumeExhausted": "Le nombre maximal de tentatives de reprise automatique a été atteint.",
+      "reconnectAutoResumeDisabled": "La reprise automatique est désactivée.",
+      "codexReconnectStalled": "La connexion au modèle n’a pas été rétablie en 2 minutes.",
       "upstreamResponseIdleTimeout": "Le modèle a cessé de répondre pendant longtemps, ce tour a donc été interrompu pour éviter un blocage indéfini. Les appels d'outils terminés sont conservés : envoyez le message suivant pour continuer.",
       "codexHistoryOversized": "L'historique d'images est trop volumineux pour une reprise automatique. Envoyez « Continuer » et Cindy reprendra la tâche en cours.",
       "codexHistoryOversizedRemote": "L'historique de cette tâche contient des images trop volumineuses, la compaction à distance ne peut donc pas aboutir. Ouvrez la tâche sur la machine qui exécute Codex et renvoyez le message ; Cindy y omettra ces images.",

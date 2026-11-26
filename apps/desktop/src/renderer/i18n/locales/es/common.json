@@ -16435,6 +16435,7 @@
       },
       "autoResumePending": {
         "label": "Reconectando",
+        "continuingWithProgress": "Continuando automáticamente ({{attempt}}/{{total}})…",
         "labelWithProgress": "Reconectando {{attempt}}/{{total}}",
         "groupSwitch": "Cambiando a otra computadora"
       },
@@ -20323,6 +20324,9 @@
       "permissionTightenInterruptFailed": "No se pudo detener la tarea en ejecución al restringir los permisos; podría seguir ejecutándose sin solicitar aprobación hasta que termine. Detenla manualmente si es necesario.",
       "codexAutoReviewUnavailable": "La revisión automática no está disponible temporalmente. Se bloqueó la acción actual y los permisos cambiaron a Predeterminado. Reintenta la solicitud; Cindy te preguntará cuando sea necesario.",
       "hostShellCommandBlocked": "Cindy bloqueó este comando de shell. Revisa el comando y usa una herramienta o un comando disponible para continuar.",
+      "reconnectAutoResumeExhausted": "Se alcanzó el límite de reintentos automáticos.",
+      "reconnectAutoResumeDisabled": "La continuación automática está desactivada.",
+      "codexReconnectStalled": "No se pudo restablecer la conexión con el modelo en 2 minutos.",
       "upstreamResponseIdleTimeout": "El modelo dejó de responder durante mucho tiempo, por lo que se interrumpió este turno para evitar un bloqueo indefinido. Las llamadas a herramientas completadas se conservan; envía el siguiente mensaje para continuar.",
       "codexHistoryOversized": "El historial de imágenes es demasiado grande para reanudar automáticamente. Envía “Continuar” y Cindy retomará la tarea actual.",
       "codexHistoryOversizedRemote": "El historial de esta tarea incluye imágenes demasiado grandes, por lo que la compactación remota no puede completarse. Abre la tarea en el equipo que ejecuta Codex y envía el mensaje de nuevo; Cindy omitirá esas imágenes allí.",

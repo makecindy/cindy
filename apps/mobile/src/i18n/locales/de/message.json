@@ -307,6 +307,7 @@
       "neutral": "Erneut verbinden",
       "usageReset": "Nutzung zurückgesetzt, automatisch fortgesetzt",
       "pending": "Verbindung wird wiederhergestellt…",
+      "continuingWithProgress": "Automatische Fortsetzung ({{attempt}}/{{total}})…",
       "pendingWithProgress": "Verbindung wird wiederhergestellt {{attempt}}/{{total}}…",
       "groupSwitchPending": "Wechsel zu einem anderen Computer…",
       "details": "Versuch {{attempt}}/{{total}} · {{count}} erneute Verbindungen in dieser Sitzung",

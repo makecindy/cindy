@@ -16262,6 +16262,7 @@
       },
       "autoResumePending": {
         "label": "再接続中",
+        "continuingWithProgress": "自動で続行中（{{attempt}}/{{total}}）…",
         "labelWithProgress": "再接続中 {{attempt}}/{{total}}",
         "groupSwitch": "別のパソコンに切り替え中"
       },
@@ -20061,6 +20062,9 @@
       "permissionTightenInterruptFailed": "権限を厳格化する際に実行中のタスクを停止できませんでした。タスクは終了まで確認なしで実行され続ける可能性があります。必要に応じて手動で停止してください。",
       "codexAutoReviewUnavailable": "自動レビューは一時的に利用できません。現在の操作をブロックし、デフォルト権限に切り替えました。もう一度実行してください。必要な場合は確認します。",
       "hostShellCommandBlocked": "Cindy がこのシェルコマンドをブロックしました。コマンドを確認し、利用可能なツールまたはコマンドで続行してください。",
+      "reconnectAutoResumeExhausted": "自動続行の試行回数が上限に達しました。",
+      "reconnectAutoResumeDisabled": "自動続行はオフです。",
+      "codexReconnectStalled": "2 分以内にモデルとの接続を復旧できませんでした。",
       "upstreamResponseIdleTimeout": "モデルから長時間応答がなかったため、無限待機を避けるためこのターンを自動中断しました。完了したツール呼び出しは保持されています。次のメッセージを送信して続行できます。",
       "codexHistoryOversized": "画像の履歴が大きすぎて、自動では再開できません。「続けて」と送ると、Cindy が現在のタスクを再開します。",
       "codexHistoryOversizedRemote": "履歴に過大な画像があり、リモート圧縮を完了できません。Codex を実行している端末でこのタスクを開いて再送信してください。Cindy が画像を省略して続けます。",
