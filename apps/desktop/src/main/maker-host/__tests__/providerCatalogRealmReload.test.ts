@@ -59,6 +59,8 @@ const h = vi.hoisted(() => ({
   /** Providers Cindy created for subscription accounts, and the providers whose accounts were read. */
   created: {} as Record<string, { kind: 'openai' | 'anthropic'; name: string; account: string }>,
   refreshed: new Set<string>(),
+  /** Error that subscription pool reads reject with after recording the read. */
+  poolRefreshError: null as Error | null,
   openAiSiblingHealthy: false,
   retainedOpenAiModels: null as import('@cindy/model-providers').CatalogModel[] | null,
   poolModels: null as import('@cindy/model-providers').CatalogModel[] | null,
@@ -120,6 +122,7 @@ vi.mock('../../subscription-accounts/runtime.js', async (importOriginal) => {
     // No real CLI homes here: a read only records which provider was read.
     refreshSubscriptionPool: async (id: string) => {
       h.refreshed.add(id);
+      if (h.poolRefreshError) throw h.poolRefreshError;
       return { providerId: id, configured: true, strategy: 'expiring' as const, accounts: [] };
     },
     refreshSubscriptionPoolCodexModels: async () => undefined,
@@ -2296,6 +2299,34 @@ describe('provider catalog realm reload', () => {
     h.request.mockReturnValueOnce(request);
     await expect(h.catalogIo!.fetchText!('https://catalog.example.test', 100)).rejects.toThrow('HTTP 404');
     expect(request.abort).toHaveBeenCalledTimes(1);
+  });
+
+  // Unit regression (v0.1.147 Windows log, 2026-11-26): splash check-environment awaits
+  // ensureActiveCatalogLoaded. With a Claude subscription pool, its startup warm-up read
+  // ran while the signed-out → cloud owner boundary committed and threw
+  // `Subscription account owner changed`, so splash showed 环境初始化失败 until Retry.
+  // Earlier cases never let the pool read fail during the first load.
+  // Minimal input: pool present + pool read rejects with the owner-boundary error.
+  // Last in this describe because it restarts the process-wide first load.
+  it('finishes the startup catalog load when the Claude pool read hits an owner boundary', async () => {
+    __testing.resetStartupCatalogLoad();
+    h.claudePool = { strategy: 'least', accounts: [{ id: 'second', paused: false, limit: 4, weight: 1 }] };
+    h.poolRefreshError = new Error('Subscription account owner changed');
+    const loadsBefore = h.loads.length;
+    try {
+      const startup = ensureActiveCatalogLoaded();
+      expect(h.loads).toHaveLength(loadsBefore + 1);
+      h.loads.at(-1)!.resolve(BUNDLED_CATALOG);
+      await expect(startup).resolves.toBeDefined();
+      expect(h.refreshed.has('anthropic')).toBe(true);
+      // Startup is complete: no Retry-driven second load is needed.
+      await ensureActiveCatalogLoaded();
+      expect(h.loads).toHaveLength(loadsBefore + 1);
+    } finally {
+      h.claudePool = null;
+      h.poolRefreshError = null;
+      h.refreshed.clear();
+    }
   });
 });
 

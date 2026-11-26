@@ -323,7 +323,7 @@ function handleProviderSecretsCleared(): void {
 
 /**
  * 启动期（splash）await 一次：加载远端目录写入 active-catalog。幂等 + 并发去重。
- * loadCatalog 永不抛（最差回落 bundled），故本函数也不会抛。
+ * loadCatalog 永不抛（最差回落 bundled），加载后的 Claude 账号池预热失败也只记日志，故本函数也不会抛。
  * 调用点：bootstrap-electron 的 registerMakerIpcsAfterSplash，第一次 getMaker() 构造之前。
  */
 export function ensureActiveCatalogLoaded(): Promise<Catalog> {
@@ -412,7 +412,14 @@ export function ensureActiveCatalogLoaded(): Promise<Catalog> {
         // 让首次 maker 构建的 availableModels 派生就包含它。gate 读的是 CLI 登录态:只有
         // 已连接 Claude 订阅的用户才等一次 `claude auth status`(约 0.1–0.3s),其余用户的
         // 启动不等 CLI 进程(未绑定时缓存加载本就早退)。此后由会话 init 的 SDK 捕获刷新。
-        if (readPool('anthropic')) await refreshSubscriptionPool('anthropic');
+        // 账号池读取只是预热:启动时账号边界(未登录 → 已登录)尚未提交完会让它抛
+        // `Subscription account owner changed`。splash 的 check-environment 会 await 本函数,
+        // 抛出就把启动打成「环境初始化失败」;这里只记日志,之后的 provider 读取按新 owner 重读。
+        if (readPool('anthropic')) {
+          await refreshSubscriptionPool('anthropic').catch((err: unknown) => {
+            log.warn('Claude subscription pool warm-up skipped during catalog load', { error: String(err) });
+          });
+        }
         if (isNativeProviderAuthBound('anthropic') || hasConnectedSubscriptionPool('anthropic')) {
           await readClaudeCliLoginStatus();
           await loadAnthropicModelsFromDiskCache();
@@ -1179,4 +1186,9 @@ export const __testing = {
   selectCatalogLkgSnapshot,
   serializeCatalogLkgWrite,
   writeCatalogLkg,
+  /** Return to the state of a fresh app start, so the next ensureActiveCatalogLoaded runs the startup load again. */
+  resetStartupCatalogLoad: (): void => {
+    activeLoaded = false;
+    activeInflight = null;
+  },
 };
