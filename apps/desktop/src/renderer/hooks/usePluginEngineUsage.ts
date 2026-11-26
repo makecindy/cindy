@@ -6,6 +6,7 @@ import { useTranslation } from 'react-i18next';
 import { useOptionalAuthDeviceId } from '@/contexts/AuthContext';
 import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
 import { readPluginEngineUsage } from '@/hooks/pluginEngineUsage';
+import { formatCompactTimeUntilReset } from '@/lib/compactQuotaCountdown';
 import { formatQuotaResetDuration } from '@/components/status/usageCardModel';
 import { isProviderShareAgentDeviceId } from '../../shared/providerShare';
 
@@ -63,8 +64,17 @@ export function usePluginEngineUsage({
       const { usage: currentUsage, now: prevNow, t: translate } = clockSnapshot.current;
       if (!currentUsage) return;
       const nextNow = Date.now();
-      const formatReset = (resetsAtMs: number, currentNow: number) =>
-        formatQuotaResetDuration(resetsAtMs / 1000, currentNow, translate);
+      const formatReset = (
+        resetsAtMs: number,
+        currentNow: number,
+        windowMinutes?: number | null,
+      ) => {
+        const resetsAtSec = resetsAtMs / 1000;
+        return [
+          formatQuotaResetDuration(resetsAtSec, currentNow, translate) ?? '',
+          formatCompactTimeUntilReset(resetsAtSec, currentNow, translate, windowMinutes) ?? '',
+        ].join(',');
+      };
       if (
         pluginEngineUsageClockKey(currentUsage, prevNow, formatReset) !==
         pluginEngineUsageClockKey(currentUsage, nextNow, formatReset)

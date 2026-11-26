@@ -239,42 +239,98 @@ function isCatchAllOtherGroup(group: PluginEngineQuotaGroup): boolean {
   return tokens.includes('other') || tokens.includes('others');
 }
 
+function explicitModelScope(window: PluginEngineUsageWindowInput): string[] | null {
+  if (!window.models || window.models.length === 0) return null;
+  const normalized = window.models
+    .map((candidate) => candidate.trim().toLowerCase())
+    .filter(Boolean);
+  return normalized.length > 0 ? normalized : null;
+}
+
+function groupWithWindows(
+  group: PluginEngineQuotaGroup,
+  windows: PluginEngineUsageWindowInput[],
+): PluginEngineQuotaGroup {
+  if (windows.length === group.windows.length) return group;
+  const primary = pickPrimaryWindow(windows);
+  const clamped = Math.max(0, Math.min(100, primary.remainingPercent));
+  return {
+    ...group,
+    primary,
+    remainingPercent: Math.round(clamped),
+    level: quotaLevelFromRemaining(clamped),
+    windows,
+  };
+}
+
 /**
  * Matches a plugin engine model row to its governing quota group (e.g. `gemini-4-neon` →
  * `Gemini Models`, `claude-sonnet-5-5` / `gpt-oss-120b-medium` → `Claude and GPT models`).
- * Returns null when a multi-group snapshot cannot be matched unambiguously.
+ *
+ * Explicit `window.models` restrictions are always checked first across both single-group
+ * and multi-group snapshots: windows that declare `models` only apply to those models and
+ * never leak to other models through single-group or name-based fallback. Returns null when
+ * no applicable window matches unambiguously.
  */
 export function matchPluginEngineQuotaGroup(
   presentation: PluginEngineUsagePresentation | null | undefined,
   model: { id: string; name?: string | null },
 ): PluginEngineQuotaGroup | null {
   if (!presentation || presentation.groups.length === 0) return null;
-  if (!presentation.isMultiGroup) return presentation.groups[0] ?? null;
 
   const modelIdLower = model.id.trim().toLowerCase();
-  if (modelIdLower) {
-    const explicit = presentation.groups.filter((group) =>
-      group.windows.some((window) =>
-        window.models?.some((candidate) => candidate.trim().toLowerCase() === modelIdLower),
-      ),
-    );
-    if (explicit.length === 1) return explicit[0]!;
-    if (explicit.length > 1) return null;
+  const explicitMatches: PluginEngineQuotaGroup[] = [];
+  const unscopedGroups: PluginEngineQuotaGroup[] = [];
+
+  for (const group of presentation.groups) {
+    const matchedScoped: PluginEngineUsageWindowInput[] = [];
+    const unscoped: PluginEngineUsageWindowInput[] = [];
+    for (const window of group.windows) {
+      const scope = explicitModelScope(window);
+      if (scope === null) {
+        unscoped.push(window);
+      } else if (modelIdLower && scope.includes(modelIdLower)) {
+        matchedScoped.push(window);
+      }
+    }
+    if (matchedScoped.length > 0) {
+      explicitMatches.push(groupWithWindows(group, [...matchedScoped, ...unscoped]));
+    } else if (unscoped.length > 0) {
+      unscopedGroups.push(groupWithWindows(group, unscoped));
+    }
   }
+
+  if (explicitMatches.length === 1) return explicitMatches[0]!;
+  if (explicitMatches.length > 1) {
+    let best = explicitMatches[0]!;
+    for (let index = 1; index < explicitMatches.length; index += 1) {
+      const candidate = explicitMatches[index]!;
+      if (isBetterPrimary(candidate.primary, best.primary)) best = candidate;
+    }
+    return groupWithWindows(
+      best,
+      explicitMatches.flatMap((group) => group.windows),
+    );
+  }
+
+  if (unscopedGroups.length === 0) return null;
+  if (!presentation.isMultiGroup) return unscopedGroups[0] ?? null;
 
   const modelTokens = new Set([
     ...tokenizeLower(model.id),
     ...(model.name ? tokenizeLower(model.name) : []),
   ]);
   if (modelTokens.size > 0) {
-    const familyMatches = presentation.groups.filter((group) =>
+    const familyMatches = unscopedGroups.filter((group) =>
       groupFamilyTokens(group).some((token) => modelTokens.has(token)),
     );
     if (familyMatches.length === 1) return familyMatches[0]!;
     if (familyMatches.length > 1) return null;
   }
 
-  const catchAll = presentation.groups.filter(isCatchAllOtherGroup);
+  const catchAll = unscopedGroups.filter(
+    (group) => group.id === 'default' || isCatchAllOtherGroup(group),
+  );
   return catchAll.length === 1 ? catchAll[0]! : null;
 }
 
@@ -285,7 +341,7 @@ export function matchPluginEngineQuotaGroup(
 export function pluginEngineUsageClockKey(
   usage: PluginEngineUsageInput | null | undefined,
   nowMs: number,
-  formatReset: (resetsAtMs: number, nowMs: number) => string | null,
+  formatReset: (resetsAtMs: number, nowMs: number, windowMinutes?: number | null) => string | null,
 ): string {
   if (!usage?.windows?.length) return '';
   return usage.windows
@@ -293,7 +349,7 @@ export function pluginEngineUsageClockKey(
     .map((row) => [
       row.label,
       Math.round(row.remainingPercent),
-      row.resetsAt ? formatReset(row.resetsAt, nowMs) : null,
+      row.resetsAt ? formatReset(row.resetsAt, nowMs, row.windowMinutes ?? null) : null,
     ].join(':'))
     .join('|');
 }

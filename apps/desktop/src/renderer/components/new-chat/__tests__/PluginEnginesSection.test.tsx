@@ -50,6 +50,10 @@ vi.mock('react-i18next', async (importOriginal) => ({
         'newChat.pluginEngines.defaultModelHint': 'Uses the engine’s own default',
         'newChat.pluginEngines.unavailable': 'Unavailable',
         'newChat.pluginEngines.engineMissing': 'The plugin that provides this engine is turned off or uninstalled.',
+        'todaySpend.unit.day': 'd',
+        'todaySpend.unit.hour': 'h',
+        'todaySpend.unit.minute': 'm',
+        'todaySpend.unit.second': 's',
       };
       return table[key] ?? (o.defaultValue as string | undefined) ?? key;
     },
@@ -1212,6 +1216,49 @@ describe('a task running on a plugin engine', () => {
       });
       expect(screen.queryByLabelText(/Short · 15%/)).toBeNull();
       expect(screen.getByLabelText(/Weekly · 82%/)).toBeTruthy();
+      expect(getPluginEngineUsage).toHaveBeenCalledTimes(1);
+    } finally {
+      window.electronAPI = prevApi;
+      vi.useRealTimers();
+    }
+  });
+
+  // Regression (PR #13257 review): model rows show second-level countdowns via
+  // formatCompactTimeUntilReset in the final minute, so usePluginEngineUsage's clock key
+  // must tick every second while <60s remains without triggering extra usage IPC reads.
+  it('ticks final-minute second-level model row countdowns every second without re-fetching', async () => {
+    vi.useFakeTimers();
+    const baseNow = new Date('2026-11-23T10:00:00.000Z').getTime();
+    vi.setSystemTime(baseNow);
+    const getPluginEngineUsage = vi.fn(async () => ({
+      updatedAt: baseNow,
+      windows: [
+        { label: 'Gemini Models · 5h', remainingPercent: 12, resetsAt: baseNow + 45_000, windowMinutes: 300 },
+        { label: 'Claude and GPT models · weekly', remainingPercent: 80, resetsAt: baseNow + 4 * 86_400_000, windowMinutes: 10080 },
+      ],
+    }));
+    const prevApi = window.electronAPI;
+    window.electronAPI = { ...(prevApi ?? {}), maker: { ...(prevApi?.maker ?? {}), getPluginEngineUsage } } as typeof window.electronAPI;
+    try {
+      const agy = engine('quota-seconds:agy', 'Antigravity', {
+        reportsUsage: true,
+        models: [{ id: 'gemini-4-neon', displayName: 'Gemini 4 Neon' }],
+      });
+      renderDraftPicker({ engines: [agy], active: null, onSelect: vi.fn() });
+      await act(async () => { await Promise.resolve(); });
+
+      const row = screen.getByRole('option', { name: /Gemini 4 Neon/ });
+      expect(row.querySelector('[data-plugin-model-quota="label:gemini models"]')?.textContent).toContain('45s');
+
+      await act(async () => {
+        vi.advanceTimersByTime(1_000);
+      });
+      expect(row.querySelector('[data-plugin-model-quota="label:gemini models"]')?.textContent).toContain('44s');
+
+      await act(async () => {
+        vi.advanceTimersByTime(45_000);
+      });
+      expect(row.querySelector('[data-plugin-model-quota]')).toBeNull();
       expect(getPluginEngineUsage).toHaveBeenCalledTimes(1);
     } finally {
       window.electronAPI = prevApi;

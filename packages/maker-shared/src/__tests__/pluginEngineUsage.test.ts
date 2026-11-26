@@ -158,4 +158,72 @@ describe('pluginEngineUsage', () => {
     expect(matchPluginEngineQuotaGroup(presentation, { id: 'gpt-oss-120b-medium', name: 'GPT-OSS 120B (Medium)' })?.shortLabel).toBe('Claude & GPT');
     expect(matchPluginEngineQuotaGroup(presentation, { id: 'unknown-model', name: 'Custom Model' })).toBeNull();
   });
+
+  // 回归（PR #13257 review）：无论单组还是多组，声明了 `models` 的窗口只能匹配列出的模型，
+  // 不能通过单组回退或名称启发式泄露到其他模型行。
+  it('enforces explicit window.models scope across single-group, multi-group, and mixed-scope pools', () => {
+    const singleScoped = buildPluginEngineUsagePresentation({
+      updatedAt: now,
+      windows: [
+        { label: 'Gemini Pro · 5h', remainingPercent: 32, resetsAt: now + 3_600_000, models: ['gemini-pro'] },
+      ],
+    }, now);
+    expect(matchPluginEngineQuotaGroup(singleScoped, { id: 'gemini-pro', name: 'Gemini Pro' })?.remainingPercent).toBe(32);
+    expect(matchPluginEngineQuotaGroup(singleScoped, { id: 'gemini-flash', name: 'Gemini Flash' })).toBeNull();
+    expect(matchPluginEngineQuotaGroup(singleScoped, { id: 'claude-sonnet-5-5', name: 'Claude Sonnet 5.5' })).toBeNull();
+
+    const multiScoped = buildPluginEngineUsagePresentation({
+      updatedAt: now,
+      windows: [
+        { label: 'Gemini Models · 5h', remainingPercent: 18, resetsAt: now + 3_600_000, models: ['gemini-pro'] },
+        { label: 'Claude and GPT models · weekly', remainingPercent: 80, resetsAt: now + 4 * 86_400_000 },
+      ],
+    }, now);
+    expect(matchPluginEngineQuotaGroup(multiScoped, { id: 'gemini-pro', name: 'Gemini Pro' })?.remainingPercent).toBe(18);
+    expect(matchPluginEngineQuotaGroup(multiScoped, { id: 'gemini-flash', name: 'Gemini Flash' })).toBeNull();
+    expect(matchPluginEngineQuotaGroup(multiScoped, { id: 'claude-sonnet-5-5', name: 'Claude Sonnet 5.5' })?.remainingPercent).toBe(80);
+
+    // Same group mixes a model-specific cap (15%) with a group-wide weekly cap (75%):
+    // gemini-pro sees 15%, gemini-flash sees only the unscoped 75% window.
+    const mixedInGroup = buildPluginEngineUsagePresentation({
+      updatedAt: now,
+      windows: [
+        { label: 'Gemini Models · 5h', remainingPercent: 15, resetsAt: now + 3_600_000, models: ['gemini-pro'] },
+        { label: 'Gemini Models · weekly', remainingPercent: 75, resetsAt: now + 4 * 86_400_000 },
+      ],
+    }, now);
+    const proMatch = matchPluginEngineQuotaGroup(mixedInGroup, { id: 'gemini-pro', name: 'Gemini Pro' });
+    const flashMatch = matchPluginEngineQuotaGroup(mixedInGroup, { id: 'gemini-flash', name: 'Gemini Flash' });
+    expect(proMatch?.remainingPercent).toBe(15);
+    expect(proMatch?.windows).toHaveLength(2);
+    expect(flashMatch?.remainingPercent).toBe(75);
+    expect(flashMatch?.windows).toHaveLength(1);
+
+    // Explicit model-scoped pool alongside an unscoped default pool: other models fall back to default.
+    const scopedPlusDefault = buildPluginEngineUsagePresentation({
+      updatedAt: now,
+      windows: [
+        { label: 'Pro 5h', remainingPercent: 12, resetsAt: now + 3_600_000, models: ['gemini-pro'] },
+        { label: 'Weekly', remainingPercent: 68, resetsAt: now + 4 * 86_400_000 },
+      ],
+    }, now);
+    expect(matchPluginEngineQuotaGroup(scopedPlusDefault, { id: 'gemini-pro' })?.remainingPercent).toBe(12);
+    expect(matchPluginEngineQuotaGroup(scopedPlusDefault, { id: 'claude-sonnet-5-5' })?.remainingPercent).toBe(68);
+
+    // Overlapping explicit model sets: pick the tightest window that includes the model.
+    const overlappingScoped = buildPluginEngineUsagePresentation({
+      updatedAt: now,
+      windows: [
+        { label: 'Pro 5h', remainingPercent: 14, resetsAt: now + 3_600_000, models: ['gemini-pro'] },
+        { label: 'Gemini Weekly', remainingPercent: 72, resetsAt: now + 4 * 86_400_000, models: ['gemini-pro', 'gemini-flash'] },
+      ],
+    }, now);
+    const proOverlap = matchPluginEngineQuotaGroup(overlappingScoped, { id: 'gemini-pro' });
+    const flashOverlap = matchPluginEngineQuotaGroup(overlappingScoped, { id: 'gemini-flash' });
+    expect(proOverlap?.remainingPercent).toBe(14);
+    expect(proOverlap?.windows).toHaveLength(2);
+    expect(flashOverlap?.remainingPercent).toBe(72);
+    expect(flashOverlap?.windows).toHaveLength(1);
+    expect(matchPluginEngineQuotaGroup(overlappingScoped, { id: 'claude-sonnet-5-5' })).toBeNull();
+  });
 });
