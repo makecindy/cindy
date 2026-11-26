@@ -46,7 +46,8 @@ export function useSessionSnooze(session: Session) {
       setSaving(false);
     }
   };
-  return session.pinnedAt == null ? { snooze, saving } : undefined;
+  // Pinned tasks snooze like any other; the patch carries only the snooze, so the pin stays.
+  return { snooze, saving };
 }
 
 export type SnoozeAction = NonNullable<ReturnType<typeof useSessionSnooze>>;

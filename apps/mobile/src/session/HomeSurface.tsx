@@ -335,7 +335,7 @@ import { RenameSessionModal } from '@/session/RenameSessionModal';
 import { SessionOptionsPresenter } from '@/session/SessionOptionsExpoSheet';
 import { SwipeableSessionRow, type SessionSwipeControls } from '@/session/SwipeableSessionRow';
 import { TaskCreatorMark, TaskFollowMark, taskFollowerNames, useTaskFollowers } from '@/session/TaskFollowMark';
-import { createSwipeRowRegistry } from '@/session/swipeRowRegistry';
+import { createSwipeRowRegistry, type SessionOptionsContext } from '@/session/swipeRowRegistry';
 import { useSessionListActions } from '@/session/useSessionListActions';
 import { useModalFadeLifecycle } from '@/session/useModalFadeLifecycle';
 import type { RemoteSession } from '@/session/types';
@@ -778,6 +778,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
   const {
     snoozeSessionTarget, confirmSnooze, closeSnooze, handleSnoozeClosed,
     actionSheetSession,
+    actionSheetInbox,
     archiveSession,
     closeRenameSession,
     confirmRenameSession,
@@ -4003,7 +4004,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
         visible={searchFilterOpen}
       />}</MountOnFirstOpen>
       <MountOnFirstOpen open={actionSheetSession !== null}>{() => <SessionOptionsPresenter
-        inboxMode={taskListMode === 'inbox'}
+        inboxMode={taskListMode === 'inbox' && actionSheetInbox !== false}
         session={actionSheetSession}
         onAction={handleSessionSheetAction}
         onClose={() => setActionSheetSession(null)}
@@ -4786,7 +4787,7 @@ function HomeListRowInner({
   onProjectDragMove?: (absoluteY: number) => void;
   onProjectDragStart?: (input: { absoluteY: number; count: number; key: string; title: string }) => void;
   onShowAllDialogue(): void;
-  onShowOptions(session: RemoteSession): void;
+  onShowOptions(session: RemoteSession, context?: SessionOptionsContext): void;
   onToggleAutomationGroup(key: string): void;
   onToggleProject(key: string): void;
   onTogglePin(session: RemoteSession): void;
@@ -5050,7 +5051,7 @@ function HomeSessionRowInner({
           !selectionMode && !group && swipe && conversationSearchAllowsLocalWrites(item)
             ? () => {
                 swipe.registry.closeOpenRow();
-                swipe.onShowOptions(latestMobileSessionRow(item).session as RemoteSession);
+                swipe.onShowOptions(latestMobileSessionRow(item).session as RemoteSession, { inboxMode });
               }
             : onLongPress}
         onPress={handlePress}

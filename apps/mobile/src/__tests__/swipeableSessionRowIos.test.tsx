@@ -356,5 +356,5 @@ it('uses snooze in the inbox secondary slot, while ordinary rows retain More', (
   expect(controls.onArchive).toHaveBeenCalledWith(session);
   draw(false);
   act(() => (host.querySelector('[data-testid="swipe.optionsAction"]') as HTMLButtonElement).click());
-  expect(controls.onShowOptions).toHaveBeenCalledWith(session);
+  expect(controls.onShowOptions).toHaveBeenCalledWith(session, { inboxMode: false });
 });
