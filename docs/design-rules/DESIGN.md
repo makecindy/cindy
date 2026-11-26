@@ -929,15 +929,13 @@ When the initiating computer itself only accepts encrypted connections, the same
 
 ### Desktop task sidebar identity
 
-Individually pinned tasks stay out of the ordinary list. Automatic task groups use two presentation modes:
-while expanded, history includes the task represented by the group header, whether read or unread;
-while collapsed, omit that task from the visible attention rows so it only appears in the header.
-Deduplicate collapsed rows by task ID, not title. The header keeps its existing click target (latest run,
-or the failing run when a collapsed group reports an error). Expanded preview limits, frozen layouts
-and “Show all” continue to include the header task.
-Non-silent unread runs and pending errors/replies remain visible while collapsed, without a five-row cap;
-a task already represented by the header satisfies this visibility rule. Silent successful runs and
-read history stay hidden unless the group is expanded.
+Individually pinned tasks stay out of the ordinary list. A collapsed automatic task group occupies one
+entry regardless of how many runs are unread. Its header summarizes unread runs and the highest-priority
+state: error, awaiting input, running, completed unread, then time. Clicking opens the run contributing
+that state, falling back to the latest run when none needs attention. Local live state and authoritative
+remote activity remain visible through this summary even after reading a waiting or running task.
+History appears only after explicit expansion. Expanded preview limits, attention exemptions, frozen
+layouts and “Show all” continue to include the header task and preserve access to every run.
 Implementation: `AutomationSessionGroupItem.tsx` and `automationSidebarGrouping.ts`; regression:
 `automationGroupCollapsedAlerts.test.tsx` and the `automation-unread` UI fixture.
 

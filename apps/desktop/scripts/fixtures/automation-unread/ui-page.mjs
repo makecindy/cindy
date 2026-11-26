@@ -15,13 +15,13 @@ export default {
       about: 'Interactive task sidebar preview with reading and reset controls',
       viewport: { width: 960, height: 640 },
     },
-    default: { about: 'Expanded history includes the header task; collapsed unread rows exclude it' },
+    default: { about: 'One collapsed entry aggregates seven unread runs; expansion preserves all history' },
   },
   async check(page, ui) {
-    for (let i = 1; i <= 6; i++)
-      assert.equal(await page.locator(`[data-session-id="run-${i}"]`).count(), 1);
-    assert.equal(await page.locator('[data-session-id="run-0"]').count(), 0);
-    assert.equal(await page.getByText('已读结果', { exact: true }).count(), 0);
+    assert.equal(await page.locator('[data-sidebar-session-row="true"]').count(), 0);
+    const unreadLabel = await ui.t('ccAgent.sidebar.automationGroup.unreadRunCount', { count: 7 });
+    assert.equal(await page.getByLabel(unreadLabel, { exact: true }).count(), 1);
+    await ui.capture('collapsed-single-entry');
     await page
       .getByRole('button', {
         name: await ui.t('ccAgent.sidebar.automationGroup.expand', { title: '每日巡检' }),
@@ -40,7 +40,10 @@ export default {
       .click();
     await page.locator('[data-session-id="run-7"]').waitFor({ state: 'detached' });
     assert.equal(await page.locator('[data-session-id="run-0"]').count(), 0);
-    await page.locator('[data-session-id="run-6"]').click();
-    await page.locator('[data-session-id="run-6"]').waitFor({ state: 'detached' });
+    assert.equal(await page.locator('[data-sidebar-session-row="true"]').count(), 0);
+    await page.getByRole('button', { name: '每日巡检', exact: true }).click();
+    const remainingLabel = await ui.t('ccAgent.sidebar.automationGroup.unreadRunCount', { count: 6 });
+    await page.getByLabel(remainingLabel, { exact: true }).waitFor();
+    assert.equal(await page.locator('[data-sidebar-session-row="true"]').count(), 0);
   },
 };

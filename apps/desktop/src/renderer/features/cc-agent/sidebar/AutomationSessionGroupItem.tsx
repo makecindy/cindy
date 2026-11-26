@@ -41,17 +41,16 @@ import {
   useRemoteSessionActivity,
   useRemoteSessionsPhaseMap,
 } from '@/features/device-link/remoteSessionActivityStore';
-import { useAgentIslandActivity } from '@/state/agentIslandActivity';
+import {
+  useAgentIslandActivity,
+  useAgentIslandSessionsPhaseMap,
+} from '@/state/agentIslandActivity';
 import {
   projectSidebarSessionActivity,
   resolveSidebarRightStatus,
   type SidebarRightStatusKind,
 } from './sidebarRightStatus';
-import {
-  resolveCollapsedAttention,
-  resolveCollapsedGroupHeaderSessionId,
-  resolveCollapsedGroupRightStatus,
-} from './projectCollapsedAttention';
+import { resolveCollapsedAutomationGroupState } from './projectCollapsedAttention';
 import { AutomationTimerIcon } from './AutomationTimerIcon';
 import { SessionCard } from './SessionCard';
 import { sessionRowKey } from './sessionRowKey';
@@ -157,19 +156,10 @@ export const AutomationSessionGroupItem = withSidebarNavigation<AutomationSessio
     const [menuOpen, setMenuOpen] = useState(false);
     const [rowTooltipOpen, setRowTooltipOpen] = useState(false);
     const [countdownNowMs, setCountdownNowMs] = useState(() => Date.now());
-    // 组头 = 组内「最新一条」运行的代理:状态、running/loading、点击打开目标都跟这条一致。
-    // 用 group.sessions 派生(仅活动时间排序,不掺 running/notifications),引用随组内成员
-    // 变化才变,天然稳定,无需再靠 frozen 快照固定"代表会话"。
+    // 最新运行作为展开态的代表；收起态另按整组汇总状态和打开目标。
     const latestSession = useMemo(() => getAutomationGroupLatestSession(group), [group]);
     const latestSessionId = latestSession?.id;
-    // ── 收起态的整组汇总 ────────────────────────────────────────────────────────
-    // 组头收起时代表的是**整组**,不能只反映最新一条:组内任意一条运行留下未处理告警
-    // (典型是被 App 重启打断、turn 从未收尾的运行)时,项目折叠头会按全部子任务汇总出
-    // 红点,而此前组头只看最新一条、收起态子行又整片不渲染 —— 于是「项目行有红点、
-    // 展开后哪一行都没有」。判据复用项目折叠头那一份(resolveCollapsedAttention),
-    // 红点与被提上来的告警行同源,两者不可能再打架。
-    // 三个 hook 都是"一组 id"的 primitive 快照订阅(组外会话变化、组内不改变本组结果的
-    // 变化都不唤醒本组件),不要退回整表 / 整集订阅 —— 每个项目下都有若干组头在挂载。
+    // 收起只显示一个入口；按本组订阅汇总所有运行的状态和点击目标。
     const groupSessionIds = useMemo(
       () => group.sessions.map((session) => session.id),
       [group.sessions],
@@ -177,43 +167,60 @@ export const AutomationSessionGroupItem = withSidebarNavigation<AutomationSessio
     const groupAttentionKinds = useSessionsAttentionKindMap(groupSessionIds);
     const groupUrgentSessionIds = useSessionsAttentionUrgencyIdSet(groupSessionIds);
     const groupRemotePhases = useRemoteSessionsPhaseMap(group.sessions);
-    const collapsedAttention = useMemo(
+    const groupLocalPhases = useAgentIslandSessionsPhaseMap(groupSessionIds);
+    const latestUrgentFromSchedule = useSessionAttentionUrgency(latestSessionId ?? '');
+    const latestChatKind = useSessionAttentionKind(latestSessionId ?? '');
+    const latestLocalActivity = useAgentIslandActivity(latestSessionId ?? '');
+    const latestRemoteActivity = useRemoteSessionActivity(
+      latestSessionId ?? '',
+      latestSession?.deviceLinkDeviceId,
+    );
+    const latestLiveActivity = latestSession?.deviceLinkDeviceId
+      ? latestRemoteActivity
+      : latestLocalActivity;
+    const isRunning =
+      latestSessionId != null && latestSession?.deviceLinkDeviceId
+        ? latestRemoteActivity?.phase === 'running'
+        : latestSessionId != null && runningSessionIds.has(latestSessionId);
+    const latestHasNotification = latestSessionId != null && notifications.has(latestSessionId);
+    const groupActivity = projectSidebarSessionActivity({
+      interruption: latestSession,
+      sessionId: latestSessionId ?? '',
+      title: latestSession?.title,
+      recordStatus: latestSession?.status,
+      liveActivity: latestLiveActivity,
+      attentionKind: latestChatKind,
+      isUrgentFromContext: latestUrgentFromSchedule,
+      isRunning,
+      hasAttentionNotification: latestHasNotification,
+    });
+    const latestKind = resolveSidebarRightStatus(groupActivity);
+    const collapsedState = useMemo(
       () =>
-        resolveCollapsedAttention({
+        resolveCollapsedAutomationGroupState({
+          latestSessionId,
+          latestKind,
           sessions: group.sessions,
           runningSessionIds,
           notifications,
           attentionKinds: groupAttentionKinds,
           urgentSessionIds: groupUrgentSessionIds,
           remotePhaseOf: (sessionId) => groupRemotePhases.get(sessionId),
+          localPhaseOf: (sessionId) => groupLocalPhases.get(sessionId),
         }),
       [
         group.sessions,
+        latestSessionId,
+        latestKind,
         groupAttentionKinds,
         groupRemotePhases,
+        groupLocalPhases,
         groupUrgentSessionIds,
         notifications,
         runningSessionIds,
       ],
     );
-    // 非静默未读、错误和待回复运行在收起时仍可见。静默成功已由上游排除未读。
-    // 远程活动仍是权威来源，不能让本地残留未读盖过远程 running。
-    const collapsedAttentionSessionIds = useMemo(() => {
-      const ids = new Set(collapsedAttention.errorSessionIds);
-      for (const session of group.sessions) {
-        const remotePhase = groupRemotePhases.get(session.id);
-        if (
-          remotePhase === 'needs-interaction' ||
-          remotePhase === 'completed' ||
-          (!remotePhase && notifications.has(session.id))
-        ) {
-          ids.add(session.id);
-        }
-      }
-      return ids;
-    }, [collapsedAttention, group.sessions, groupRemotePhases, notifications]);
-    // 与组头红/绿未读点同源:没有未读就不提供「标为已读」,避免空操作占菜单。
-    const canMarkRead = collapsedAttention.tone != null;
+    const canMarkRead = collapsedState.unreadCount > 0;
     // 远程分组只提供在对方电脑上执行的操作（运行、暂停 / 恢复、标为已读）；编辑页与删除
     // 确认只管本机任务，查看入口也不能拿远程 id 去聚焦本机自动化页。
     const isRemoteGroup = !!group.deviceLinkDeviceId;
@@ -224,12 +231,7 @@ export const AutomationSessionGroupItem = withSidebarNavigation<AutomationSessio
     const hasMoreMenuItems = teammateRoutine
       ? canMarkRead
       : !isRemoteGroup || canMarkRead || group.scheduleStatus !== 'expired';
-    // 点击目标和收起态子行去重共用同一 ID；折叠红点可能代表旧的失败运行而非最新运行。
-    const headerSessionId = resolveCollapsedGroupHeaderSessionId({
-      collapsed,
-      latestSessionId,
-      attention: collapsedAttention,
-    });
+    const headerSessionId = collapsed ? collapsedState.sessionId : latestSessionId;
     // childView 的 24h 豁免依赖实时 now,必须每次渲染直接算,不能进 useMemo —— 否则依赖项
     // 不变时时间窗口会被冻结,跨过 24h 阈值的运行不会及时移出豁免。与普通对话列表
     // SessionEntryList 一致(它也是 render 内直接算 getSessionListCollapseView、不 memo);
@@ -243,35 +245,12 @@ export const AutomationSessionGroupItem = withSidebarNavigation<AutomationSessio
       // 实时 now:启用「最近 24h 内有活动不折叠」豁免,和普通对话列表一致。
       nowMs: Date.now(),
       collapsed,
-      collapsedAttentionSessionIds,
-      headerSessionId,
       foldExemptSessionIds,
     });
-    // 轴 1 收起时只留组头 + 未读及待处理行;展开时交给轴 2 的「前 5 / 显示全部」。
+    // 收起只留组头；展开后保留原有的历史列表和「显示全部」。
     // 两种形态都由 getAutomationGroupChildView 一处决定(见该函数说明)。
     const visibleSessions = childView.visibleSessions;
-    // 组头右侧状态图标的**基线**来源(全端统一 5 档色表:error 红 > awaiting TapTap 蓝 >
-    // running spinner > 完成未读绿 > time),两路信号都只看「最新一条」运行:
-    //   1. SessionAttentionUrgencyContext:该 run 是失败 schedule run(attentionKind 缺失
-    //      但语义等同 error)→ 红
-    //   2. sessionAttentionStore kind:该 run 有 chat 侧 urgent attention
-    //      (错误终止 → 红;pending ask-user / 权限 → 蓝)
-    // 组头是「最新一条运行的代理」:点击打开它,loading / vendor 呼吸与其一致。展开态右侧
-    // 状态就到此为止;**收起态**再叠一层整组汇总(上方 collapsedAttention +
-    // resolveCollapsedGroupRightStatus)—— 此时组头代表整组,组内任何一条的未处理告警都必须
-    // 露出来,否则会重演「项目折叠头有红点、展开却哪一行都没有」。
-    // 这两个 hook 仍按 latestSessionId 精准订阅(boolean / kind primitive 快照),整组那三个
-    // 也都是"一组 id"的 primitive 快照 —— 别退回整组对象 / 整张表订阅(性能不变量)。
-    const latestUrgentFromSchedule = useSessionAttentionUrgency(latestSessionId ?? '');
-    const latestChatKind = useSessionAttentionKind(latestSessionId ?? '');
-    const latestLocalActivity = useAgentIslandActivity(latestSessionId ?? '');
-    const latestRemoteActivity = useRemoteSessionActivity(
-      latestSessionId ?? '',
-      latestSession?.deviceLinkDeviceId,
-    );
-    const latestLiveActivity = latestSession?.deviceLinkDeviceId
-      ? latestRemoteActivity
-      : latestLocalActivity;
+    // 展开时仍显示最新运行的状态；收起时显示整组最需要关注的状态。
     const scheduleId = group.scheduleId;
     // Deleting an automation leaves its past runs grouped under a fallback key, so the group
     // has no scheduleId any more. Those sessions are still real and still archivable: the
@@ -282,7 +261,8 @@ export const AutomationSessionGroupItem = withSidebarNavigation<AutomationSessio
     const hasArchivableSessions =
       canArchiveGroupSessions && group.sessions.some((session) => session.status === 'active');
     // 组头右侧悬停操作槽：schedule 分组恒有（运行 + 更多），例行任务分组仅在有菜单项时有。
-    const hasHoverActions = !!scheduleId || (!!teammateRoutine && hasMoreMenuItems) || hasArchivableSessions;
+    const hasHoverActions =
+      !!scheduleId || (!!teammateRoutine && hasMoreMenuItems) || hasArchivableSessions;
     // 「已停止」= paused(用户主动暂停)+ expired(计划到期不再触发);两者对用户体验
     // 而言都是「不会再自动跑」,视觉上都在 Timer chip 上叠 Pause 徽标,并在 tooltip
     // 里显示「已停止」文案,避免用户误判为普通空闲态。
@@ -291,10 +271,6 @@ export const AutomationSessionGroupItem = withSidebarNavigation<AutomationSessio
     const hasVisibleChildren = visibleSessions.length > 0;
     // running / loading 也只看最新那条:组头 vendor mark 呼吸 + Timer chip 呼吸 + 右侧
     // spinner 都据此,与最新 session 子行一致(需求:「loading 状态和最新的 session 保持一致」)。
-    const isRunning =
-      latestSessionId != null && latestSession?.deviceLinkDeviceId
-        ? latestRemoteActivity?.phase === 'running'
-        : latestSessionId != null && runningSessionIds.has(latestSessionId);
     const primaryActivityIso = latestSession?.updatedAt;
     const hasActiveHidden =
       activeSessionId != null &&
@@ -306,31 +282,10 @@ export const AutomationSessionGroupItem = withSidebarNavigation<AutomationSessio
       Number.isFinite(group.nextFireAt) &&
       group.nextFireAt > countdownNowMs;
     const ToggleIcon = collapsed ? ChevronRight : ChevronDown;
-    // 组头右侧状态槽复用 SessionItem 的 5 档色表(error 红 / awaiting 蓝 / running spinner /
-    // done 绿 / time 文字):四个 input 全部取「最新一条」运行,送进同一 resolveSidebarRightStatus,
-    // 于是组头右侧状态与最新 session 子行像素级一致(色号 / 图标尺寸 / 判定完全同源)。
-    // 收起态在这个基线之上叠整组汇总,见下方 groupRightStatusKind —— 色表与图标不变,
-    // 只是档位改由整组决定。
-    const latestHasNotification = latestSessionId != null && notifications.has(latestSessionId);
-    const groupActivity = projectSidebarSessionActivity({
-      interruption: latestSession,
-      sessionId: latestSessionId ?? '',
-      title: latestSession?.title,
-      recordStatus: latestSession?.status,
-      liveActivity: latestLiveActivity,
-      attentionKind: latestChatKind,
-      isUrgentFromContext: latestUrgentFromSchedule,
-      isRunning,
-      hasAttentionNotification: latestHasNotification,
-    });
-    // 收起态按整组汇总补足组头(展开态仍严格只看最新一条),判据见
-    // resolveCollapsedGroupRightStatus。isRunning 与 vendor / Timer 呼吸不受影响,仍跟
-    // 最新一条 —— 保住「loading 与最新 session 一致」那条既有裁决。
-    const groupRightStatusKind: SidebarRightStatusKind = resolveCollapsedGroupRightStatus({
-      collapsed,
-      latestKind: resolveSidebarRightStatus(groupActivity),
-      tone: collapsedAttention.tone,
-    });
+    // 复用任务行的五档状态和语义色；收起按整组汇总，展开跟随最新运行。
+    const groupRightStatusKind: SidebarRightStatusKind = collapsed
+      ? collapsedState.kind
+      : resolveSidebarRightStatus(groupActivity);
     const showRightStatus = groupRightStatusKind !== 'time';
     const actionButtonToneClassName = hasActiveHidden
       ? 'text-sidebar-item-active-foreground hover:text-sidebar-item-active-foreground hover:bg-[color-mix(in_srgb,var(--sidebar-item-active-foreground)_14%,transparent)]'
@@ -353,8 +308,7 @@ export const AutomationSessionGroupItem = withSidebarNavigation<AutomationSessio
     freezeCurrentLayoutRef.current = freezeCurrentLayout;
     const showAllRef = useRef(showAll);
     showAllRef.current = showAll;
-    // 收起态点告警行不冻结:冻结快照会把"当时可见的行"锁成布局,而收起态可见的只有
-    // 告警行 —— 之后用户展开这个组会看到被锁住的两三条告警行而不是正常的前 5 条运行。
+    // 只有展开后的子行会冻结布局，收起时不显示子行。
     const collapsedRef = useRef(collapsed);
     collapsedRef.current = collapsed;
     const handleChildSessionClick = useCallback<SessionClickHandler>(
@@ -472,12 +426,11 @@ export const AutomationSessionGroupItem = withSidebarNavigation<AutomationSessio
       [countdownText, runCountText, stoppedText],
     );
 
-    // 点击空白行区域 = 点击标题。展开态打开最新一条;收起且整组是红时打开
-    // 贡献红点的那条。行内控件各自 stopPropagation,不会误触发。
+    // 点击入口打开汇总状态对应的运行，展开后仍打开最新一次。
     const openLatestSession = () => {
       const targetId = headerSessionId;
       if (!targetId) return;
-      // 仅在展开 + 前 5 条态下冻结当前布局;收起态未读子行随已读状态收回。
+      // 仅在展开 + 前 5 条态下冻结当前布局。
       if (!collapsed && !showAll) freezeCurrentLayout(targetId);
       onSessionClick(targetId);
     };
@@ -579,35 +532,35 @@ export const AutomationSessionGroupItem = withSidebarNavigation<AutomationSessio
                   />
                 </span>
               ) : (
-              <Tip text={scheduleBindingLabel} side="bottom">
-                <button
-                  type="button"
-                  data-automation-group-inline-action="true"
-                  aria-label={scheduleBindingLabel}
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    navigate(
-                      group.scheduleId && !isRemoteGroup
-                        ? scheduleFocusPath(group.scheduleId)
-                        : '/cc-agent/scheduled',
-                    );
-                  }}
-                  onPointerDown={(event) => event.stopPropagation()}
-                  className={cn(
-                    'relative inline-flex size-3 shrink-0 cursor-pointer items-center justify-center',
-                    'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
-                    sessionVariant === 'list' && 'order-2',
-                  )}
-                >
-                  {/* Timer 始终占同一个 12px 槽；暂停/过期只叠状态角标，不替换主图标。 */}
-                  <AutomationTimerIcon
-                    size={10}
-                    paused={isScheduleStopped}
-                    activeForeground={hasActiveHidden}
-                    running={isRunning}
-                  />
-                </button>
-              </Tip>
+                <Tip text={scheduleBindingLabel} side="bottom">
+                  <button
+                    type="button"
+                    data-automation-group-inline-action="true"
+                    aria-label={scheduleBindingLabel}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      navigate(
+                        group.scheduleId && !isRemoteGroup
+                          ? scheduleFocusPath(group.scheduleId)
+                          : '/cc-agent/scheduled',
+                      );
+                    }}
+                    onPointerDown={(event) => event.stopPropagation()}
+                    className={cn(
+                      'relative inline-flex size-3 shrink-0 cursor-pointer items-center justify-center',
+                      'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
+                      sessionVariant === 'list' && 'order-2',
+                    )}
+                  >
+                    {/* Timer 始终占同一个 12px 槽；暂停/过期只叠状态角标，不替换主图标。 */}
+                    <AutomationTimerIcon
+                      size={10}
+                      paused={isScheduleStopped}
+                      activeForeground={hasActiveHidden}
+                      running={isRunning}
+                    />
+                  </button>
+                </Tip>
               )}
               <button
                 type="button"
@@ -683,6 +636,15 @@ export const AutomationSessionGroupItem = withSidebarNavigation<AutomationSessio
                     menuOpen && 'opacity-0',
                   )}
                 >
+                  {collapsed && collapsedState.unreadCount > 0 && (
+                    <span
+                      aria-label={t('ccAgent.sidebar.automationGroup.unreadRunCount', {
+                        count: collapsedState.unreadCount,
+                      })}
+                    >
+                      {collapsedState.unreadCount}
+                    </span>
+                  )}
                   {showRightStatus ? (
                     groupRightStatusKind === 'error' ? (
                       <span
