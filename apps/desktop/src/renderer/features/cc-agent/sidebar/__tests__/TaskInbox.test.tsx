@@ -240,6 +240,27 @@ it('places teammate conversations with the tasks and removes a read one even whi
 });
 
 
+// 2026-11-25 user decision (task-inbox.md「分区与动作」): rows inside a section follow time alone.
+// Before, the inbox reused the list's priority sort, so week-old unread archives sat above a task
+// archived a minute ago. Unit: real grouping; minimal input is an older unread and a newer read
+// task in both Pending and Done.
+it('orders each section by latest activity, whether or not a task is unread', () => {
+  const at = (daysAgo: number) => new Date(Date.now() - daysAgo * 86_400_000).toISOString();
+  const sessions = [
+    { id: 'old-unread', title: 'old-unread', status: 'active', lastActivityAt: at(7) },
+    { id: 'new-read', title: 'new-read', status: 'active', lastActivityAt: at(0) },
+    { id: 'old-unread-done', title: 'old-unread-done', status: 'archived', lastActivityAt: at(7) },
+    { id: 'new-read-done', title: 'new-read-done', status: 'archived', lastActivityAt: at(0) },
+  ] as Session[];
+  const view = render(<TaskInbox sessions={sessions}
+    priorityContext={{ runningSessionIds: new Set(), attentionSessionIds: new Set(['old-unread', 'old-unread-done']) }}
+    runningSessionIds={new Set()} attachedSessionIds={new Set()} notifications={new Set()}
+    onSessionClick={() => {}} onAction={() => {}} onRename={() => {}} onTogglePin={() => {}} onScheduleAction={() => {}} />);
+  expect(Array.from(view.container.querySelectorAll('section'), section =>
+    Array.from(section.querySelectorAll('[data-testid="row"]'), row => row.textContent)))
+    .toEqual([['new-read', 'old-unread'], [], [], ['new-read-done', 'old-unread-done']]);
+});
+
 // Unit: task-inbox.md. Row placement tests cannot see the closed inbox's indicator.
 // A snoozed remote result wakes on time and clears on read despite the open row's held rank.
 it('lights for a due remote result and clears as soon as the host acknowledges it', () => {

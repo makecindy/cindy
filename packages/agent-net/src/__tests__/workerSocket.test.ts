@@ -97,7 +97,7 @@ it('discards a still-CONNECTING network socket without an uncaught error when cl
   expect(ws.readyState).toBe(WebSocket.CLOSED);
 });
 
-async function openAgainstRelay(options: { autoPong: boolean; keepalive?: { intervalMs: number; timeoutMs: number }; networkChangeProbeMs?: number; workerFile?: URL }) {
+async function openAgainstRelay(options: { autoPong: boolean; keepalive?: { intervalMs: number; timeoutMs: number }; networkChangeProbeMs?: number; relayStuckMs?: number; workerFile?: URL }) {
   const relay = new WebSocketServer({ host: '127.0.0.1', port: 0, autoPong: options.autoPong });
   await once(relay, 'listening');
   const accepted = once(relay, 'connection') as Promise<[WebSocket]>;
@@ -114,16 +114,54 @@ async function openAgainstRelay(options: { autoPong: boolean; keepalive?: { inte
     log: { info: (line: string) => { infos.push(line); }, warn: (line: string) => { warnings.push(line); } },
     uplinkKeepalive: options.keepalive ?? { intervalMs: 10, timeoutMs: 50 },
     ...(options.networkChangeProbeMs ? { networkChangeProbeMs: options.networkChangeProbeMs } : {}),
+    ...(options.relayStuckMs ? { relayStuckMs: options.relayStuckMs } : {}),
   } as Parameters<typeof AgentNetWorkerSocket.open>[0]);
   cleanup.push(() => { socket.terminate(); for (const peer of relay.clients) peer.terminate(); relay.close(); });
   const [server] = await accepted;
-  return { server, warnings, infos, socket };
+  return { server, warnings, infos, socket, relay };
 }
 
 it('drops a relay connection whose pings are never answered, so the worker reconnects it (2026-11-13)', async () => {
   const { server, warnings } = await openAgainstRelay({ autoPong: false });
   await new Promise<void>((resolve) => { server.on('close', () => resolve()); });
   expect(warnings).toEqual([expect.stringMatching(/^agent-net relay connection is not answering \(no pong for \d+ms, \d+ bytes waiting to be sent\); reconnecting$/)]);
+});
+
+/**
+ * 测试价值
+ * - 生产入口与可观察结果：`AgentNetWorkerSocket.open` 之后中转连接断了，worker 却一直不再请求连接（它的重连卡住了）：
+ *   Main 在 `relayStuckMs` 后让 worker 从头重连（`relay-restart`），中转看到新连接，日志记一条警告。
+ * - Bug 依据：2026-11-25 一台 Mac 的中转连接 04:26 断开后 worker 再没请求过连接，只经中转能到的设备离线 4.5 小时，
+ *   重启 App 才恢复。那条原因已在 worker 里修掉（socket.integration.test.ts「reconnects its relay after ending …」），这里是
+ *   Main 侧的兜底：以后再有让 worker 停止重连的原因，也不必重启。
+ * - 现有覆盖缺口：此前 Main 只管已打开的中转连接是否活着（保活、换网探测），连接断开以后完全交给 worker。
+ * - 最小失败输入：中转关掉唯一的连接，worker 不再发 `ws-open`。
+ * - tier：unit，内联最小 worker 与本机回环真实 WebSocket，时限压到 100 毫秒。
+ */
+it('tells a worker whose relay reconnect is stuck to start over (2026-11-25)', async () => {
+  const stuckWorker = new URL('data:text/javascript,' + encodeURIComponent(`
+import { parentPort } from 'node:worker_threads';
+let url, id = 0;
+parentPort.on('message', (m) => {
+  if (m.type === 'init') { url = m.client.base.replace(/^http/, 'ws') + '/ws'; parentPort.postMessage({ type: 'ready' }); }
+  if (m.type === 'init' || m.type === 'relay-restart') parentPort.postMessage({ type: 'ws-open', id: ++id, url, headers: {} });
+});
+`));
+  const { server, socket, warnings, relay } = await openAgainstRelay({ autoPong: true, keepalive: { intervalMs: 60_000, timeoutMs: 120_000 },
+    relayStuckMs: 100, workerFile: stuckWorker });
+  await vi.waitFor(() => expect(socket.relayConnected()).toBe(true));
+  // An open relay connection is never restarted, however long it stays open.
+  // real-wait: only time past relayStuckMs (100 ms) on a real open connection shows the watchdog stays quiet; Main's timers run in real time here.
+  await new Promise(resolve => setTimeout(resolve, 250));
+  expect(warnings).toEqual([]);
+  const reconnected = once(relay, 'connection');
+  const droppedAt = performance.now();
+  server.close();
+  await reconnected;
+  // The worker gets the whole period from the drop, however long ago it last connected (here 250 ms, more than the period).
+  expect(performance.now() - droppedAt).toBeGreaterThanOrEqual(100);
+  await vi.waitFor(() => expect(socket.relayConnected()).toBe(true));
+  expect(warnings).toEqual([expect.stringMatching(/^agent-net relay connection is down and no reconnect was attempted for \d+s; restarting it$/)]);
 });
 
 it('reports whether its relay connection is open, and when that changes', async () => {
@@ -338,4 +376,39 @@ parentPort.on('message', (m) => {
   expect(lines().slice(2)).toEqual(['agent-net peer peer-a moved from direct to relay']);
   await post({ type: 'path', id: 'peer-a', path: null }, status(null));
   expect(lines().slice(3)).toEqual(['agent-net peer peer-a disconnected']);
+});
+
+/**
+ * 测试价值
+ * - 生产入口与可观察结果：`AgentNetWorkerSocket.open` 透传 `bindPort` 给 worker、`setStunServers` 推送动态 STUN 列表，
+ *   并把 worker 发出的 `log` 消息转给宿主 `log.info` / `log.warn`。
+ * - Bug／规则依据：双区 STUN 异步补齐与固定 UDP 端口冲突回退日志均跨 worker 线程边界传递。
+ * - 现有覆盖缺口：已有 workerSocket 测试未覆盖 `bindPort` 初始化透传、`set-stun-servers` 消息与 worker 日志回传。
+ * - 最小失败输入：携带 `bindPort: 41641` 打开 worker，调用 `setStunServers`，并由 worker 上报一条 info 与一条 warn 日志。
+ * - tier：unit（内联最小 worker，不启网络）。
+ */
+it('forwards bindPort, setStunServers, and worker log lines across the worker boundary', async () => {
+  const workerFile = new URL('data:text/javascript,' + encodeURIComponent(`
+import { parentPort } from 'node:worker_threads';
+parentPort.on('message', (m) => {
+  if (m.type === 'init') {
+    parentPort.postMessage({ type: 'log', level: 'info', message: 'init-port:' + m.options.bindPort });
+    parentPort.postMessage({ type: 'ready' });
+  }
+  if (m.type === 'set-stun-servers') {
+    parentPort.postMessage({ type: 'log', level: 'warn', message: 'stuns:' + m.servers.join(',') });
+  }
+});
+`));
+  const infos: string[] = [];
+  const warnings: string[] = [];
+  const client = { identity: { deviceId: 'unit-device' }, transport: {} } as unknown as AgentNetClient;
+  const socket = await AgentNetWorkerSocket.open({
+    workerFile, client, userId: 'unit-user', bindPort: 41641,
+    log: { info: (line) => { infos.push(line); }, warn: (line) => { warnings.push(line); } },
+  });
+  cleanup.push(() => socket.terminate());
+  socket.setStunServers(['agent-net-stun.cindy.com.cn:3479', 'agent-net-stun.cindy.app:3479']);
+  await vi.waitFor(() => expect(warnings).toEqual(['stuns:agent-net-stun.cindy.com.cn:3479,agent-net-stun.cindy.app:3479']));
+  expect(infos).toEqual(['init-port:41641']);
 });

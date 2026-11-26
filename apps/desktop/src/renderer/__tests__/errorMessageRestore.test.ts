@@ -15,7 +15,8 @@ import { describe, it, expect } from 'vitest';
 import { i18n } from '@/i18n';
 import { makerChatStore } from '@/lib/makerChatStore';
 import type { Message } from '@/lib/ccAgent.types';
-import { ERROR_REASON_I18N_KEYS } from '@/components/chat/errorReasonI18n';
+import { ERROR_REASON_I18N_KEYS, errorReasonI18nKey } from '@/components/chat/errorReasonI18n';
+import { PROVIDER_SAFETY_REFUSAL_REASON } from '@cindy/maker-shared/error-redaction';
 import { UPSTREAM_OVERLOAD_REASON } from '@/utils/overloadError';
 
 const SESSION_ID = 's-err';
@@ -200,5 +201,54 @@ describe('mapServerMessages — persisted terminal error rows', () => {
       user,
     ]);
     expect(mapped.map((m) => m.role)).toEqual(['user', 'error']);
+  });
+
+  // 测试价值：依据补充审阅要求，从实时流与历史恢复两条入口用原例 `This request was flagged for possible cybersecurity risk.` 验收，
+  // 同时验证普通聊天消息与插件引用错误不被误归为安全拦截；生产入口 makerChatStore(live + mapServerMessages) / errorReasonI18nKey；
+  // 最小失败输入为无新 reason 的历史 error 行及 turn-failed 实时事件；tier: unit。
+  it('preserves and localizes the cybersecurity refusal across live stream and restored legacy history while leaving ordinary chat and plugin errors intact', () => {
+    const cyberRefusal = 'This request was flagged for possible cybersecurity risk.';
+    try {
+      makerChatStore.__applyStreamEventForTest(SESSION_ID, {
+        sessionId: SESSION_ID,
+        type: 'error',
+        data: { message: cyberRefusal, reason: 'turn-failed', isTerminal: true },
+      });
+      const liveSnap = makerChatStore.getSnapshot(SESSION_ID);
+      expect(liveSnap.error).toBe(cyberRefusal);
+      expect(errorReasonI18nKey(liveSnap.errorReason, liveSnap.error!)).toBe(
+        'chat.errorBanner.providerSafetyRefusal',
+      );
+    } finally {
+      makerChatStore.purgeSession(SESSION_ID);
+    }
+
+    const userQuote = {
+      id: 'row-u-quote',
+      clientId: 'u-quote',
+      sessionId: SESSION_ID,
+      role: 'user',
+      content: cyberRefusal,
+      createdAt: '2026-07-02T23:59:59.000Z',
+    } as unknown as Message;
+    const mapped = makerChatStore.__mapServerMessagesForTest([
+      userQuote,
+      errorRow('e-legacy-cyber', { message: cyberRefusal, reason: 'turn-failed' }),
+      errorRow('e-typed-cyber', { message: cyberRefusal, reason: PROVIDER_SAFETY_REFUSAL_REASON }),
+      errorRow('e-plugin-quote', {
+        message: `Local plugin check failed: "${cyberRefusal}"`,
+        reason: 'turn-failed',
+      }),
+    ]);
+    expect(mapped[0]).toMatchObject({ role: 'user', content: cyberRefusal });
+    expect(errorReasonI18nKey(mapped[1]!.errorReason, mapped[1]!.content)).toBe(
+      'chat.errorBanner.providerSafetyRefusal',
+    );
+    expect(errorReasonI18nKey(mapped[2]!.errorReason, mapped[2]!.content)).toBe(
+      'chat.errorBanner.providerSafetyRefusal',
+    );
+    expect(errorReasonI18nKey(mapped[3]!.errorReason, mapped[3]!.content)).toBe(
+      'logic.errors.turnFailed',
+    );
   });
 });
