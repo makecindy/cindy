@@ -16,7 +16,7 @@ export default {
       'export function DrawioPreview() { throw new Error("draw.io is outside this fixture"); }',
   },
   cases: {
-    default: { about: 'A zip that cannot be previewed opens in a compact centered panel over the dimmed conversation' },
+    default: { about: 'A spreadsheet that cannot be previewed opens in a compact centered panel over the dimmed conversation' },
     markdown: { about: 'A Markdown document in the same floating panel' },
     image: { about: 'An image in the same floating panel' },
   },
@@ -26,7 +26,7 @@ export default {
         document.querySelector('[data-preview-scrim]') &&
         ([...document.querySelectorAll('img')].some((i) => i.complete && i.naturalWidth === 1600) ||
           document.body.innerText.includes('核对步骤') ||
-          document.body.innerText.includes('269.4 KB ·')),
+          document.querySelector('[role=dialog]')?.innerText.includes('59.7 KB')),
     );
     // 入场淡入结束后再截图。
     await page.waitForTimeout(300);
@@ -57,7 +57,12 @@ export default {
       assert.equal(viewport.height - panel.bottom, MARGIN);
     }
     if (ui.case !== 'default') return;
-    await page.getByRole('button', { name: await ui.t('ccAgent.workdirBrowse.unrenderable.revealFolder') }).click();
+    const dialog = page.getByRole('dialog');
+    assert.equal(await dialog.getByText(/cache-473d6dd49fb70e80510e/).count(), 0);
+    assert.equal(await dialog.getByRole('button', { name: await ui.t('ccAgent.workdirBrowse.unrenderable.openInSystem') }).count(), 1);
+    await page.getByRole('button', { name: await ui.t('attachmentPreview.more') }).click();
+    assert.equal(await page.getByRole('menuitem', { name: await ui.t('ccAgent.workdirBrowse.systemPreview') }).count(), 1);
+    await page.getByRole('menuitem', { name: await ui.t('chat.lightbox.openInExplorer') }).click();
     // 点遮罩关闭预览。
     await page.mouse.click(viewport.width / 2, viewport.height - 12);
     await page.waitForFunction(() => !document.querySelector('[data-preview-scrim]'));

@@ -12,12 +12,23 @@ export interface OpenInSystemActionsProps {
   /** Extra classes applied to the outer button row. */
   className?: string;
   systemPreview?: boolean;
+  primaryOnly?: boolean;
+}
+
+export function canOpenSystemPreview() {
+  return typeof window.electronAPI.openSystemPreview === 'function' &&
+    ['darwin', 'win32'].includes(window.electronAPI.platform);
+}
+
+export async function openSystemPreview(absPath: string, errorMessage: string) {
+  if (!(await window.electronAPI.openSystemPreview(absPath).catch(() => false))) toast.error(errorMessage);
 }
 
 export function OpenInSystemActions({
   absPath,
   className,
   systemPreview = true,
+  primaryOnly = false,
 }: OpenInSystemActionsProps) {
   const { t } = useTranslation();
 
@@ -50,11 +61,9 @@ export function OpenInSystemActions({
 
   return (
     <div className={cn('flex flex-wrap items-center justify-center gap-2', className)}>
-      {systemPreview && typeof window.electronAPI.openSystemPreview === 'function' &&
-        ['darwin', 'win32'].includes(window.electronAPI.platform) && (
-        <Button variant="secondary" size="md" compact type="button" onClick={async () => {
-          if (!(await window.electronAPI.openSystemPreview(absPath).catch(() => false))) toast.error(t('ccAgent.common.openFailed'));
-        }}>
+      {!primaryOnly && systemPreview && canOpenSystemPreview() && (
+        <Button variant="secondary" size="md" compact type="button"
+          onClick={() => void openSystemPreview(absPath, t('ccAgent.common.openFailed'))}>
           <Eye size={14} />{t('ccAgent.workdirBrowse.systemPreview')}
         </Button>
       )}
@@ -62,10 +71,12 @@ export function OpenInSystemActions({
         <ExternalLink size={14} />
         {t('ccAgent.workdirBrowse.unrenderable.openInSystem')}
       </Button>
-      <Button variant="secondary" size="md" compact type="button" onClick={onRevealFile}>
-        <FolderOpen size={14} />
-        {t('ccAgent.workdirBrowse.unrenderable.revealFolder')}
-      </Button>
+      {!primaryOnly && (
+        <Button variant="secondary" size="md" compact type="button" onClick={onRevealFile}>
+          <FolderOpen size={14} />
+          {t('ccAgent.workdirBrowse.unrenderable.revealFolder')}
+        </Button>
+      )}
     </div>
   );
 }
