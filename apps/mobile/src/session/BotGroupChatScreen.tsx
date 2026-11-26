@@ -141,7 +141,8 @@ import type { ResolveRemoteMediaFn } from './remoteMedia';
 import { useBotGroupChat } from './useBotGroupChat';
 import { useBotGroupRemoteMedia } from './useBotGroupRemoteMedia';
 import { botGroupRoute } from './botGroupNavigation';
-import { BotGroupThreadEntry, BotGroupThreadFollow, BotGroupThreadShare, BotGroupThreadPosted, BotGroupMessageActions } from './BotGroupThreadViews';
+import { BotGroupThreadEntry, BotGroupThreadFollow, BotGroupThreadShare, BotGroupThreadPosted, BotGroupMessageActions, BotGroupMessageReactions } from './BotGroupThreadViews';
+import { toggleReaction } from '@/chat/optimisticReactions';
 import { compactMessageBubble, messageBubbleBase, userMessageBubble } from './messageBubbleStyles';
 
 type MobilePlanAction = BotGroupPlanAction | 'auto-continue';
@@ -632,6 +633,20 @@ function BotGroupChatContent({ deviceId, deviceName, groupId, messageId, notific
   const shareToMain = useCallback((id: string) => {
     void chat.shareToMain?.(id).catch(error => report(error, 'groupChat.thread.shareFailed'));
   }, [chat.shareToMain, report]);
+  // Reactions show at once and save behind; a failure takes the local change back and says why.
+  const react = useCallback((messageId: string, emoji: string, present: boolean) => {
+    const send = chat.react, groupId = group?.id;
+    if (!send || !groupId) return;
+    let failure: unknown = null;
+    toggleReaction(async input => {
+      try { await send(input.messageId, input.emoji, input.present); return { ok: true }; }
+      catch (error) { failure = error; return { ok: false, errorCode: 'REQUEST_FAILED' }; }
+    }, groupId, messageId, emoji, present, {
+      // A successful save already re-reads the page.
+      onChanged: () => {},
+      onFailed: () => { report(failure, 'groupChat.reaction.failed'); chat.reload(); },
+    });
+  }, [chat.react, chat.reload, group?.id, report]);
   const shareImage = useCallback((id: string) => {
     Keyboard.dismiss(); shareSelectionStore.enter(shareScope, id);
   }, [shareScope]);
@@ -868,6 +883,7 @@ function BotGroupChatContent({ deviceId, deviceName, groupId, messageId, notific
           onShare={chat.shareToMain ? shareToMain : undefined}
           selectedImages={selectedImages} imageShareBusy={imageShareBusy}
           onShareImage={!deviceId && chat.server ? shareImage : undefined}
+          onReact={!deviceId && chat.server && !direct && chat.react ? react : undefined}
           sharedReplies={chat.threadMeta?.shares} readBefore={initialRead.current.sequence} olderError={olderError}
           highlightId={highlightId} onLocateMessage={locateMessage}
           pending={chat.pending} onPendingAction={pendingAction}
@@ -1102,7 +1118,7 @@ function BotGroupVirtualList({ data, renderItem, keyExtractor, header, footer, o
 export const BotGroupTimeline = memo(function BotGroupTimeline({
   group, workRows = [], deviceId, online, identityFor, resolveMedia, resolveServerMedia, loadOlder, loadingOlder, continuing, planPending, onContinue, onPlanAction, onEditStep,
   onMessageLayout, onLocateMessage, highlightId, onReply, onOpenThread, threadRootId, pending = EMPTY_PENDING, onPendingAction, onOpenDiagram, active = true,
-  onOpenTopic, onRevealShare, onShare, sharedReplies, readBefore, olderError, onRetrySource, onShareImage, selectedImages, imageShareBusy,
+  onOpenTopic, onRevealShare, onShare, sharedReplies, readBefore, olderError, onRetrySource, onShareImage, selectedImages, imageShareBusy, onReact,
 }: {
   group: BotGroupRemoteChatData;
   workRows?: BotGroupWorkRow[];
@@ -1134,6 +1150,8 @@ export const BotGroupTimeline = memo(function BotGroupTimeline({
   onShare?: (messageId: string) => void;
   onRetrySource?: () => void;
   selectedImages?: string[]; imageShareBusy?: boolean; onShareImage?: (messageId: string) => void;
+  /** Adds or removes your reaction on a server group message; absent where reactions are not offered. */
+  onReact?: (messageId: string, emoji: string, present: boolean) => void;
   sharedReplies?: Record<string, { messageId: string; bySelf: boolean }>;
   readBefore?: string;
   olderError?: boolean;
@@ -1229,7 +1247,8 @@ export const BotGroupTimeline = memo(function BotGroupTimeline({
             onQuote={onReply && isBotGroupMessageQuotable(message) ? () => onReply(message) : undefined}
             onThread={onOpenThread && !message.threadRootId ? () => onOpenThread(message) : undefined}
             onShare={onShare && !isRoot && message.threadRootId ? () => onShare(message.id) : undefined}
-            shared={shared} onReveal={revealShare} />;
+            shared={shared} onReveal={revealShare} reactionGroupId={onReact ? group.id : undefined} onReact={onReact} />;
+      const readOnly = !!group.archived || !!group.dissolvedAt;
       const key = rowKey(message.id);
       const selectable = selectedImages && !queued && message.kind === 'message' && !message.deleted
         && (!message.threadShare || message.threadShare.status === 'available');
@@ -1248,6 +1267,8 @@ export const BotGroupTimeline = memo(function BotGroupTimeline({
         {shared ?
           <BotGroupThreadPosted messageId={message.id} shared={shared} onPress={revealShare} />
         : null}
+        {onReact ? <BotGroupMessageReactions groupId={group.id} message={message} align={ownMessage ? 'right' : 'left'}
+          disabled={readOnly || !online} onReact={onReact} /> : null}
         {actions}
         </View>} topic={!!threadRootId} isRoot={isRoot} active={active} interactive={!selectedImages && (!longRoot || expandedRoot)} onOpenDiagram={onOpenDiagram ? source => onOpenDiagram(source, message) : undefined} onRetrySource={onRetrySource} message={displayMessage} continued={continued} member={message.authorBotId ? memberById.get(message.authorBotId) : undefined}
           quoteDisplay={message.quote ? resolveBotGroupQuote(message.quote, messages) : undefined}

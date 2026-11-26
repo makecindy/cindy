@@ -647,5 +647,10 @@
     "externalFormatError": "Reopen the complete link from the original message."
   },
   "waitingForOwner": "Waiting for confirmation",
-  "externalBadge": "External"
+  "externalBadge": "External",
+  "reaction": {
+    "add": "Add reaction",
+    "count": "{{emoji}} · {{count}} reactions",
+    "failed": "Could not update the reaction. Try again."
+  }
 }

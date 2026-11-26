@@ -647,5 +647,10 @@
     "externalFormatError": "请自原讯重新打开完整链接。"
   },
   "waitingForOwner": "待主人允",
-  "externalBadge": "外部"
+  "externalBadge": "外部",
+  "reaction": {
+    "add": "增表情回应",
+    "count": "{{emoji}} · {{count}} 人应之",
+    "failed": "表情回应未能更易，请再试。"
+  }
 }

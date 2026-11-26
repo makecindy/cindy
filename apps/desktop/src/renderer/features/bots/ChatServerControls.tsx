@@ -2,6 +2,7 @@ import { chatErrorKey } from './chatError';
 import { useState } from 'react';
 import { ChatReactionButton } from './ChatReactionButton';
 import { toggleReaction, useOptimisticReactions } from './optimisticReactions';
+import { CHAT_REACTION_EMOJIS } from '@cindy/maker-shared/optimistic-reactions';
 import { useTranslation } from 'react-i18next';
 import { BubbleHoverToolbar, MessageActionBar } from '@/components/chat/MessageActionBar';
 import { shareSelectionStore } from '@/components/chat/shareSelectionStore';
@@ -14,14 +15,6 @@ import type { BotGroupDetail, BotGroupMemberView, BotGroupMessageView } from '..
 
 const key = (name: string) => `bots.groupChat.server.${name}`;
 const api = () => window.electronAPI.maker.chatServer;
-const emojiChoices = [
-  '👍', '❤️', '😂', '🎉', '👀', '🙏',
-  '✅', '🤔', '🔥', '👏', '🚀', '💯',
-  '😀', '😄', '😊', '😍', '🥰', '😎',
-  '🤣', '😅', '🥹', '😭', '😮', '😱',
-  '😢', '😡', '🤯', '😴', '🤦', '🤷',
-  '👌', '🤝', '💪', '🙌', '👋', '✨',
-];
 const iconClass = 'flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-[var(--text-tertiary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)] disabled:opacity-50';
 export { chatErrorKey } from './chatError';
 
@@ -98,7 +91,7 @@ function ChatMessageToolbar({ groupId, shareScope, message: serverMessage, align
       replyAction={onReply ? { onClick: onReply, count: replyCountShown ? undefined : message.replyCount,
         label: message.replyCount ? t(key('openTopic'), { count: message.replyCount }) : t(key('startTopic')) } : undefined}
       reactionAction={groupId ? { label: t(key('addReaction')), open: picker, onOpenChange: onPickerChange,
-        content: <div className="grid grid-cols-6 gap-1">{emojiChoices.map(emoji =>
+        content: <div className="grid grid-cols-6 gap-1">{CHAT_REACTION_EMOJIS.map(emoji =>
           <button type="button" key={emoji} className={iconClass} aria-label={emoji}
             onClick={() => { onPickerChange(false); react(emoji, !message.reactions?.some(r => r.emoji === emoji && r.me)); }}>
             {/* Color emoji inherit the text color's alpha; keep their native colors fully opaque. */}

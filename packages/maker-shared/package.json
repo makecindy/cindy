@@ -120,6 +120,7 @@
     "./botDirectMessage": "./src/botDirectMessage.ts",
     "./chatConversationList": "./src/chatConversationList.ts",
     "./botGroupChat": "./src/botGroupChat.ts",
+    "./optimistic-reactions": "./src/optimisticReactions.ts",
     "./botGroupMentions": "./src/botGroupMentions.ts",
     "./botGroupPresentation": "./src/botGroupPresentation.ts",
     "./botDelegation": "./src/botDelegation.ts",
