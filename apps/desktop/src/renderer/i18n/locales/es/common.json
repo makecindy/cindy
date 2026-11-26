@@ -7457,7 +7457,7 @@
             "models": "Modelos activos",
             "tasksCount": "Tareas vinculadas ({{count}})",
             "clickToOpenHint": "Haz clic para abrir",
-            "relayHost": "Host del relay",
+            "relayHost": "Dirección del relay",
             "relayRegion": "Región",
             "relayHop": "Local a relay",
             "relayLoad": "Por este relay",
