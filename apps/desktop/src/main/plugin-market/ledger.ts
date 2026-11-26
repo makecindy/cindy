@@ -80,11 +80,27 @@ export interface PluginMarketInstallationRecord {
    * `management:begin` 安装／更新提交的。`controller` 是发起方设备身份的本机不可逆标识（不存原始设备号），
    * `keyId` 是算它的密钥，`rawManifestSha256` 是当次装入的包。投影时要求包摘要仍等于记录当前的值、keyId 等于
    * 当前密钥、controller 等于请求方，否则缺省。其它路径重装或更新都会整条重写记录，旧值不会残留。
+   * 契约 V2.10：沿用旧记录写回的路径里，凡是卸载、重新接回或重新提交包的（markRemovedRecord、
+   * restoreDisconnectedInstallation、replaceManifestIdentityAfterPackageCommit、migrateSimulatorInstallation）都经
+   * withoutRemoteOperationBinding 丢弃它；只有换装失败时原样恢复整条旧记录（restoreInstallation）会保留，因为包也
+   * 回到了那一份。这样「操作号相等 ⇒ 当前包就是那次操作装的」才成立。
    *
    * 存量兼容同 `sourceIdBinding`：只增可选字段，`validRecord` 不检查它；旧记录缺省；降级时旧版本保留未知字段、
    * 重写记录时丢弃，结果都是缺省（控制端未确认）。
    */
   remoteOperationBinding?: { operationId: string; controller: string; keyId: string; rawManifestSha256: string };
+}
+
+/**
+ * 契约 V2.10：去掉操作证据。用于沿用旧记录、但不再是「那次远程操作提交的那份包」的写回。`sourceIdBinding` 不动：
+ * 它绑定的是来源指纹与 raw manifest 摘要，换包或换来源后投影自然失效，而且这些路径不改记录的来源与包摘要
+ * （或只对从不带它的服务端记录生效）。
+ */
+function withoutRemoteOperationBinding(record: PluginMarketInstallationRecord): PluginMarketInstallationRecord {
+  if (record.remoteOperationBinding === undefined) return record;
+  const copy = { ...record };
+  delete copy.remoteOperationBinding;
+  return copy;
 }
 
 export type PluginMarketAuthorizationTarget = { ghostId: string; namespace?: string | null };
@@ -673,7 +689,7 @@ export class PluginMarketLedger {
         current.scope !== 'public' || next.scope !== 'public' || current.namespace != null || next.namespace !== null ||
         current.pluginId !== next.pluginId || (current.source !== 'market' && current.source !== 'legacy-adopted') ||
         (target && target.installed)) return false;
-    this.replaceRecord(data, current, next);
+    this.replaceRecord(data, current, withoutRemoteOperationBinding(next));
     this.write(data);
     return true;
   }
@@ -784,7 +800,7 @@ export class PluginMarketLedger {
     const current = data.installations[pluginLedgerRecordKey(expected)];
     if (!current || canonicalJson(current) !== canonicalJson(expected)) return false;
     this.replaceRecord(data, current, {
-      ...current,
+      ...withoutRemoteOperationBinding(current),
       manifestDigest,
       rawManifestSha256,
     });
@@ -840,7 +856,7 @@ export class PluginMarketLedger {
       return false;
     }
     this.replaceRecord(data, current, {
-      ...current,
+      ...withoutRemoteOperationBinding(current),
       source:
         current.scope === 'organization' && current.source === 'market'
           ? 'legacy-adopted'
@@ -860,7 +876,7 @@ export class PluginMarketLedger {
     const current = data.installations[pluginLedgerRecordKey(record)];
     if (!current) return;
     this.replaceRecord(data, current, {
-      ...current,
+      ...withoutRemoteOperationBinding(current),
       installed: false,
       updatedAt: new Date().toISOString(),
     });

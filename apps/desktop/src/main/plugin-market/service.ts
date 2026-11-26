@@ -64,6 +64,7 @@ import {
   DEFAULT_PLUGIN_MARKET_SORT,
   isPluginMarketOperationId,
   isPluginMarketSort,
+  projectInstalledOperationAttribution,
   isPluginMarketSourceId,
   marketSourceKey,
   parseCustomMarketPluginId,
@@ -1121,6 +1122,56 @@ const EMPTY_LOCAL_INSTALL_SNAPSHOT: LocalInstallSnapshot = {
   manifestIdentityByStoragePart: new Map(),
 };
 
+/**
+ * 契约 V2.10：条目是由哪份本机安装快照投影出来的。远程归属只按这同一份快照核实，`installState` 与
+ * `installedOperationAttribution`／`installedOperationId` 因此来自同一次账本读取。只在 Main 内存里（WeakMap，
+ * 不上线、不进 IPC，也不改变条目本身）；复制条目的地方必须经 carryInstallSnapshot 带过去，漏带时远程按
+ * `'unattributed'` 处理（保守）。
+ */
+const itemInstallSnapshots = new WeakMap<object, LocalInstallSnapshot>();
+
+function withInstallSnapshot<T extends object>(item: T, local: LocalInstallSnapshot): T {
+  itemInstallSnapshots.set(item, local);
+  return item;
+}
+
+function carryInstallSnapshot<T extends object>(from: object, to: T): T {
+  const local = itemInstallSnapshots.get(from);
+  if (local) itemInstallSnapshots.set(to, local);
+  return to;
+}
+
+/** 完整实例身份（pluginId + ghostId + namespace，缺省 namespace 即根）。 */
+function marketInstanceKey(entry: { pluginId: string; ghostId: string; namespace?: string | null }): string {
+  return JSON.stringify([entry.pluginId, entry.ghostId, entry.namespace ?? null]);
+}
+
+/**
+ * 契约 V2.9／V2.10：这份快照里，哪些实例的当前安装记录带着由当前密钥为 `controllerTag` 算出的操作证据，且绑定的
+ * 包摘要等于记录与磁盘上的包。只读快照里已有的数据，不做磁盘读取或哈希。
+ */
+function operationEvidenceByInstance(
+  local: LocalInstallSnapshot,
+  controllerTag: string,
+  keyId: string,
+): Map<string, string> {
+  const evidence = new Map<string, string>();
+  for (const record of Object.values(local.installations)) {
+    const binding: unknown = record.remoteOperationBinding;
+    if (!record.installed || !binding || typeof binding !== 'object' || Array.isArray(binding)) continue;
+    const value = binding as Record<string, unknown>;
+    if (
+      !isPluginMarketOperationId(value.operationId) || value.controller !== controllerTag || value.keyId !== keyId ||
+      typeof record.rawManifestSha256 !== 'string' || value.rawManifestSha256 !== record.rawManifestSha256
+    ) continue;
+    const ghost = snapshotGhost(local, record);
+    const identity = ghost ? local.manifestIdentityByStoragePart.get(installedGhostStoragePart(ghost)) : null;
+    if (!identity || !verifyInstalledMarketManifest(record, identity)) continue;
+    evidence.set(marketInstanceKey(record), value.operationId);
+  }
+  return evidence;
+}
+
 function indexByGhostId<T>(items: readonly T[], ghostId: (item: T) => string): Map<string, T[]> {
   const indexed = new Map<string, T[]>();
   for (const item of items) {
@@ -1307,7 +1358,7 @@ export class PluginMarketService {
       );
       const held = this.automaticUpgradeConsentHolds.get(retryKey);
       return held?.releaseKey === item.releaseId
-        ? { ...item, updateRequiresConsent: true }
+        ? carryInstallSnapshot(item, { ...item, updateRequiresConsent: true as const })
         : item;
     });
   }
@@ -2144,7 +2195,7 @@ export class PluginMarketService {
     const customRef = parseCustomMarketPluginId(pluginId);
     if (customRef) {
       const detail = await this.customDetail(customRef, includeReadme);
-      return includeUpdates ? { ...detail, updates: [] } : detail;
+      return includeUpdates ? carryInstallSnapshot(detail, { ...detail, updates: [] }) : detail;
     }
     if (!isValidPluginResourceId(pluginId)) {
       throwIpcError('INVALID_PARAMS', 'Invalid Plugin ID');
@@ -2182,12 +2233,13 @@ export class PluginMarketService {
         ? await this.recentUpdatesInstallSnapshot(owner, ledger, plugin)
         : this.localInstallSnapshot(ledger);
       requireSameMarketOwner(owner);
-      return {
-        ...this.toItem(plugin, local),
+      const item = this.toItem(plugin, local);
+      return carryInstallSnapshot(item, {
+        ...item,
         manifest: compatible.manifest,
         ...serverReadmeField(plugin, includeReadme),
         ...(includeUpdates ? { updates: plugin.updates ?? [] } : {}),
-      };
+      });
     });
   }
 
@@ -2633,23 +2685,24 @@ export class PluginMarketService {
         if (!plugin) {
           throwIpcError('NOT_FOUND', 'The Plugin is no longer listed by this marketplace');
         }
-        return {
-          ...this.customToItem(
-            {
-              config: discovered.config,
+        const item = this.customToItem(
+          {
+            config: discovered.config,
+            plugin,
+            sourceIdentity: discovered.sourceIdentity,
+            sourceId: discovered.sourceId,
+            sourceIds: customSourceIdsOf(manager),
+            iconKey: await customMarketIconKey(
+              owner,
+              discovered.config,
               plugin,
-              sourceIdentity: discovered.sourceIdentity,
-              sourceId: discovered.sourceId,
-              sourceIds: customSourceIdsOf(manager),
-              iconKey: await customMarketIconKey(
-                owner,
-                discovered.config,
-                plugin,
-                iconProjectionGeneration,
-              ),
-            },
-            this.localInstallSnapshot(this.ledgerForOwner(owner)),
-          ),
+              iconProjectionGeneration,
+            ),
+          },
+          this.localInstallSnapshot(this.ledgerForOwner(owner)),
+        );
+        return carryInstallSnapshot(item, {
+          ...item,
           manifest: plugin.manifest,
           // 在发现租约内读完：plugin.dir 是 Git 源的缓存版本目录，租约外可能被清理。
           ...(includeReadme
@@ -2659,7 +2712,7 @@ export class PluginMarketService {
                   : null,
               }
             : {}),
-        };
+        });
       });
     });
   }
@@ -3173,7 +3226,7 @@ export class PluginMarketService {
       : null;
     // 同一路由下候选的实际来源与已装的不同（两边都可核实）：不作为可静默套用的更新，标成等待用户确认。
     const sourceSwitch = matchesUpdateRoute && isCustomSourceSwitch(installedSourceId, entry.sourceId);
-    return {
+    return withInstallSnapshot({
       pluginId,
       ghostId: plugin.ghostId,
       namespace: null,
@@ -3204,7 +3257,7 @@ export class PluginMarketService {
       ...(sourceIdentity ? { sourceIdentity } : {}),
       ...(installedSourceId ? { installedSourceId } : {}),
       ...(installState === 'update-available' && sourceSwitch ? { updateRequiresConsent: true as const } : {}),
-    };
+    }, local);
   }
 
   /**
@@ -3683,52 +3736,39 @@ export class PluginMarketService {
   }
 
   /**
-   * 远程管理响应专用（契约 V2.9）：只对发起那次操作的控制端，给条目补上 `installedOperationId`。要求当前已装
-   * 实例的安装记录为已安装、属于该条目，记录里的操作证据由当前密钥为这个控制端算出，且绑定的包摘要等于记录与
-   * 磁盘上的包。传入条目上已有的该字段一律先去掉（只认这里的结论）。本机界面不经过这里，永远看不到。
+   * 远程管理响应专用（契约 V2.9／V2.10）：按请求方给条目定「当前安装归属」。
+   * - 只按条目自己投影时用的那份本机快照核实（见 itemInstallSnapshots），与 `installState` 同出一次账本读取；
+   *   不再另读账本或磁盘。
+   * - 记录里的操作证据由当前密钥为这个控制端算出、绑定的包摘要等于记录与磁盘上的包、且属于同一实例时，
+   *   给 `'self'` + `installedOperationId`；其余已装条目一律 `'unattributed'`（不说明是谁）。
+   * - 出口统一经 projectInstalledOperationAttribution，传入条目上已有的两个字段先去掉。本机界面不经过这里。
    */
   async withInstalledOperationIds<T extends PluginMarketItem>(
     items: readonly T[],
     controller: string,
   ): Promise<T[]> {
-    const stripped = items.map((item) => {
-      if (!('installedOperationId' in item)) return item;
-      const copy = { ...item };
-      delete copy.installedOperationId;
-      return copy;
-    });
-    if (stripped.length === 0 || !controller || !canCaptureMarketOwner()) return stripped;
-    const owner = captureMarketOwner();
-    const sourceIds = await this.preparedSourceIds();
-    requireSameMarketOwner(owner);
-    const tag = sourceIds.controllerTag?.(controller) ?? null;
-    const keyId = sourceIds.keyId();
-    if (!tag || !keyId) return stripped;
-    const local = await this.readLocalInstallSnapshot(owner);
-    requireSameMarketOwner(owner);
-    // 按完整实例身份关联（pluginId + ghostId + namespace，缺省 namespace 即根）：同一 pluginId 可在多个 namespace 各有
-    // 一份安装记录，一份记录的证据不能投影到另一个实例的条目上。
-    const instanceKey = (entry: { pluginId: string; ghostId: string; namespace?: string | null }) =>
-      JSON.stringify([entry.pluginId, entry.ghostId, entry.namespace ?? null]);
-    const evidenceByInstance = new Map<string, string>();
-    for (const record of Object.values(local.installations)) {
-      const binding: unknown = record.remoteOperationBinding;
-      if (!record.installed || !binding || typeof binding !== 'object' || Array.isArray(binding)) continue;
-      const value = binding as Record<string, unknown>;
-      if (
-        !isPluginMarketOperationId(value.operationId) || value.controller !== tag || value.keyId !== keyId ||
-        typeof record.rawManifestSha256 !== 'string' || value.rawManifestSha256 !== record.rawManifestSha256
-      ) continue;
-      const ghost = snapshotGhost(local, record);
-      const identity = ghost ? local.manifestIdentityByStoragePart.get(installedGhostStoragePart(ghost)) : null;
-      if (!identity || !verifyInstalledMarketManifest(record, identity)) continue;
-      evidenceByInstance.set(instanceKey(record), value.operationId);
+    let tag: string | null = null;
+    let keyId: string | null = null;
+    if (items.length > 0 && controller && canCaptureMarketOwner()) {
+      const owner = captureMarketOwner();
+      const sourceIds = await this.preparedSourceIds();
+      requireSameMarketOwner(owner);
+      tag = sourceIds.controllerTag?.(controller) ?? null;
+      keyId = sourceIds.keyId();
     }
-    return stripped.map((item) => {
-      const operationId = item.installState === 'installed' || item.installState === 'update-available'
-        ? evidenceByInstance.get(instanceKey(item))
-        : undefined;
-      return operationId ? { ...item, installedOperationId: operationId } : item;
+    const evidenceBySnapshot = new Map<LocalInstallSnapshot, Map<string, string>>();
+    return items.map((item) => {
+      const local = itemInstallSnapshots.get(item);
+      let operationId: string | undefined;
+      if (local && tag && keyId) {
+        let evidence = evidenceBySnapshot.get(local);
+        if (!evidence) {
+          evidence = operationEvidenceByInstance(local, tag, keyId);
+          evidenceBySnapshot.set(local, evidence);
+        }
+        operationId = evidence.get(marketInstanceKey(item));
+      }
+      return projectInstalledOperationAttribution(item, operationId);
     });
   }
 
@@ -3802,7 +3842,7 @@ export class PluginMarketService {
       ? getGhostManager().approvedInstallEvidence(installedGhostPhysicalRelId(ghost))
       : null;
     const author = plugin.displayAuthor === undefined ? plugin.author : plugin.displayAuthor;
-    return {
+    return withInstallSnapshot({
       ...(plugin.usageStatistics ? { usageStatistics: plugin.usageStatistics } : {}),
       ...(plugin.downloadStatistics ? { downloadStatistics: plugin.downloadStatistics } : {}),
       ...(plugin.sortValue === undefined ? {} : { sortValue: plugin.sortValue }),
@@ -3829,7 +3869,7 @@ export class PluginMarketService {
       enabled: matchesUpdateRoute ? (ghost?.enabled ?? null) : null,
       sourceType: 'server',
       sourceMarketName: null,
-    };
+    }, local);
   }
 
   /**
