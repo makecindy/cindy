@@ -2118,4 +2118,124 @@ describe('codexHttpBridge', () => {
       await clientA.close().catch(() => {});
     }
   });
+
+  // Regression (P0-3.3): transports carrying ownerSessionInstanceId previously bypassed
+  // sweepOrphanTransports completely and post-init readJsonBody had maxBytes = Infinity.
+  // Production entries: HTTP initialize + POST JSON-RPC on startCodexHttpBridge (unit tier).
+  it('caps duplicate transports per (server, ownerSessionInstanceId) and evicts idle superseded ones without dropping the latest active transport', async () => {
+    bridge = await startCodexHttpBridge({
+      serverFactories: { cindy_orca: createTestServer },
+      maxTransportsPerOwner: 3,
+      ownedDuplicateIdleTimeoutMs: 40,
+      sweepIntervalMs: 30,
+      logger: noopLogger(),
+    });
+    const ctx = {
+      agentKind: 'pi' as const,
+      sessionId: 'pi-long-session',
+      sessionInstanceId: 'pi-long-instance',
+      workingDir: '/repo',
+      vendorOptions: {},
+    };
+    bridge.registerSessionCtx('pi-long-session', ctx);
+    bridge.registerSessionToken('pi-long-session', 'pi-long-token');
+    const url = withMcpRouteIdentity(bridge.url('cindy_orca'), {
+      sessionId: 'pi-long-session',
+      sessionInstanceId: 'pi-long-instance',
+    });
+    const headers = {
+      accept: 'application/json, text/event-stream',
+      'content-type': 'application/json',
+      authorization: 'Bearer pi-long-token',
+    };
+    const init = async () => {
+      const resp = await fetch(url, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          id: 1,
+          method: 'initialize',
+          params: {
+            protocolVersion: '2024-11-05',
+            capabilities: {},
+            clientInfo: { name: 'pi', version: '1.0.0' },
+          },
+        }),
+      });
+      expect(resp.status).toBe(200);
+      const sid = resp.headers.get('mcp-session-id') ?? '';
+      await resp.text();
+      return sid;
+    };
+
+    // Open 5 transports under the same (server, ownerSessionInstanceId): immediately capped at 3.
+    const ids: string[] = [];
+    for (let i = 0; i < 5; i += 1) ids.push(await init());
+    expect(bridge.mcpSessionCount()).toBe(3);
+
+    // Wait for periodic sweep to evict idle superseded transports while retaining the single newest one.
+    await vi.waitFor(() => expect(bridge!.mcpSessionCount()).toBe(1), { timeout: 2000 });
+
+    // The newest transport remains fully functional even after the idle timeout elapses (PR #13076).
+    const newestId = ids[ids.length - 1]!;
+    const call = await fetch(url, {
+      method: 'POST',
+      headers: { ...headers, 'mcp-session-id': newestId },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 2,
+        method: 'tools/call',
+        params: { name: 'current_session', arguments: {} },
+      }),
+    });
+    expect(call.status).toBe(200);
+    expect(await readRpcResponse(call)).toMatchObject({
+      result: { content: [{ type: 'text', text: 'pi-long-session' }] },
+    });
+  });
+
+  it('rejects oversized post-init JSON-RPC bodies with HTTP 413', async () => {
+    bridge = await startCodexHttpBridge({
+      serverFactories: { cindy_orca: createTestServer },
+      maxRequestBodyBytes: 1024,
+      logger: noopLogger(),
+    });
+    const url = bridge.url('cindy_orca');
+    const headers = {
+      accept: 'application/json, text/event-stream',
+      'content-type': 'application/json',
+      authorization: `Bearer ${bridge.token}`,
+    };
+    const initResp = await fetch(url, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'initialize',
+        params: {
+          protocolVersion: '2024-11-05',
+          capabilities: {},
+          clientInfo: { name: 'codex', version: '1.0.0' },
+        },
+      }),
+    });
+    const mcpSessionId = initResp.headers.get('mcp-session-id') ?? '';
+    await initResp.text();
+
+    const oversizedBody = JSON.stringify({
+      jsonrpc: '2.0',
+      id: 2,
+      method: 'tools/call',
+      params: { name: 'current_session', arguments: { blob: 'x'.repeat(4096) } },
+    });
+    const resp = await fetch(url, {
+      method: 'POST',
+      headers: { ...headers, 'mcp-session-id': mcpSessionId },
+      body: oversizedBody,
+    });
+    expect(resp.status).toBe(413);
+    await resp.text();
+  });
 });

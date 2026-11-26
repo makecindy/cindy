@@ -120,6 +120,12 @@ export interface StartCodexHttpBridgeOptions {
   additionalBearerTokens?: () => readonly string[];
   /** Explicit configured user MCP facades in this bridge generation; never arbitrary built-ins. */
   appServerNames?: readonly string[];
+  /** Optional overrides for bounded transport cleanup & body limits (primarily for tests). */
+  maxTransportsPerOwner?: number;
+  ownedDuplicateIdleTimeoutMs?: number;
+  orphanTransportIdleTimeoutMs?: number;
+  sweepIntervalMs?: number;
+  maxRequestBodyBytes?: number;
   logger: Logger;
 }
 
@@ -152,6 +158,8 @@ interface DispatchOpts {
   threadInstanceQuery: string | null;
   /** Optional Host MCP `tools/call` output observer for opted-in ACP sessions. */
   onToolCallResult?: (receipt: ObservedMcpToolCallResult) => void;
+  maxRequestBodyBytes: number;
+  onTransportInitialized?: (transports: Map<string, SessionTransport>, ownerKey: string | null) => void;
 }
 
 interface SessionTransport {
@@ -207,8 +215,10 @@ const SERVER_HEADER = 'Lizi_MCPS/1.0';
 const MCP_PATH_PREFIX = '/mcp/';
 const SHUTDOWN_TIMEOUT_MS = 5_000;
 const ORPHAN_TRANSPORT_IDLE_TIMEOUT_MS = 30 * 60 * 1000;
+const OWNED_DUPLICATE_TRANSPORT_IDLE_TIMEOUT_MS = 10 * 60 * 1000;
 const ORPHAN_TRANSPORT_SWEEP_INTERVAL_MS = 5 * 60 * 1000;
 const MAX_ORPHAN_TRANSPORTS = 256;
+const MAX_TRANSPORTS_PER_OWNER = 8;
 
 /**
  * 「gate 集合 → 远端注入名单」的唯一合成规则:协同段 = available ∩ 协同白名单
@@ -280,6 +290,11 @@ function withMcpRouteIdentity(
  * POST request 会先解析 JSON 读取 `_meta.threadId` 后交给 transport。
  */
 const INIT_BODY_MAX_BYTES = 1 * 1024 * 1024;
+/**
+ * Post-init JSON-RPC request body upper bound (64 MiB). Large enough for base64
+ * screenshots and multi-file tool payloads, while preventing unbounded memory growth.
+ */
+const POST_INIT_BODY_MAX_BYTES = 64 * 1024 * 1024;
 
 /**
  * 本进程所有存活 bridge 上的 MCP 会话总数,写进 memory-usage 采样行。每个会话持有一整个
@@ -345,6 +360,49 @@ async function startCodexHttpBridge(
     });
   };
 
+  const orphanIdleTimeoutMs = opts.orphanTransportIdleTimeoutMs ?? ORPHAN_TRANSPORT_IDLE_TIMEOUT_MS;
+  const ownedDuplicateIdleTimeoutMs =
+    opts.ownedDuplicateIdleTimeoutMs ?? OWNED_DUPLICATE_TRANSPORT_IDLE_TIMEOUT_MS;
+  const maxTransportsPerOwner = Math.max(1, opts.maxTransportsPerOwner ?? MAX_TRANSPORTS_PER_OWNER);
+  const sweepIntervalMs = opts.sweepIntervalMs ?? ORPHAN_TRANSPORT_SWEEP_INTERVAL_MS;
+  const maxRequestBodyBytes = opts.maxRequestBodyBytes ?? POST_INIT_BODY_MAX_BYTES;
+
+  const transportOwnerKey = (entry: SessionTransport): string | null =>
+    entry.ownerSessionInstanceId
+      ? `inst:${entry.ownerSessionInstanceId}`
+      : entry.ownerSessionId
+        ? `sess:${entry.ownerSessionId}`
+        : null;
+
+  /**
+   * Enforce per-(server, owner) transport cap immediately on new transport insertion so
+   * repeated rmcp reconnects or subagent bursts cannot accumulate unbounded McpServer instances
+   * between periodic sweeps. Always preserves the newest transport(s).
+   */
+  const pruneOwnedTransportsForOwner = (
+    transports: Map<string, SessionTransport>,
+    ownerKey: string,
+    now: number,
+    evictIdleSuperseded: boolean,
+  ): void => {
+    const owned = [...transports.entries()]
+      .filter(([, entry]) => transportOwnerKey(entry) === ownerKey)
+      .sort(([, a], [, b]) => a.lastActivityAt - b.lastActivityAt);
+    if (owned.length <= 1) return;
+    // Never evict the single most recently active transport for a live owner (PR #13076):
+    // an idle Codex/Pi session must keep its active MCP connection alive until session close.
+    const newestIndex = owned.length - 1;
+    const overflowCount = Math.max(0, owned.length - maxTransportsPerOwner);
+    for (let index = 0; index < newestIndex; index++) {
+      const [sessionId, entry] = owned[index];
+      const exceedsCap = index < overflowCount;
+      const idleSuperseded =
+        evictIdleSuperseded && now - entry.lastActivityAt >= ownedDuplicateIdleTimeoutMs;
+      if (!exceedsCap && !idleSuperseded) continue;
+      closeTransport(transports, sessionId);
+    }
+  };
+
   const sweepOrphanTransports = (): void => {
     const now = Date.now();
     for (const transports of transportsByServer.values()) {
@@ -353,8 +411,20 @@ async function startCodexHttpBridge(
         .sort(([, a], [, b]) => a.lastActivityAt - b.lastActivityAt);
       for (const [index, [sessionId, entry]] of orphaned.entries()) {
         if (index >= orphaned.length - MAX_ORPHAN_TRANSPORTS &&
-            now - entry.lastActivityAt < ORPHAN_TRANSPORT_IDLE_TIMEOUT_MS) break;
+            now - entry.lastActivityAt < orphanIdleTimeoutMs) break;
         closeTransport(transports, sessionId);
+      }
+
+      // Also bound superseded / stale duplicate transports owned by the same
+      // (serverName, ownerSessionInstanceId|ownerSessionId), while leaving the newest
+      // active transport per owner untouched.
+      const ownerKeys = new Set<string>();
+      for (const entry of transports.values()) {
+        const key = transportOwnerKey(entry);
+        if (key) ownerKeys.add(key);
+      }
+      for (const ownerKey of ownerKeys) {
+        pruneOwnedTransportsForOwner(transports, ownerKey, now, true);
       }
     }
   };
@@ -546,6 +616,10 @@ async function startCodexHttpBridge(
           isInstanceGenerationCurrent: handshake ? () => handshake.generation === generation : undefined,
           threadInstanceQuery: sessionQuery === null ? instanceQuery : null,
           remoteBotHelper: isScopedRemoteToken && serverName === REMOTE_BOT_HELPER_SERVER_NAME,
+          maxRequestBodyBytes,
+          onTransportInitialized: (serverTransports, ownerKey) => {
+            if (ownerKey) pruneOwnedTransportsForOwner(serverTransports, ownerKey, Date.now(), false);
+          },
           ...(sessionQuery && findReceiptBucket(sessionQuery, ownerSessionInstanceId)
             ? {
                 onToolCallResult: (receipt: ObservedMcpToolCallResult) => {
@@ -620,7 +694,7 @@ async function startCodexHttpBridge(
 
   const addr = httpServer.address() as AddressInfo;
   const port = addr.port;
-  orphanSweepTimer = setInterval(sweepOrphanTransports, ORPHAN_TRANSPORT_SWEEP_INTERVAL_MS);
+  orphanSweepTimer = setInterval(sweepOrphanTransports, sweepIntervalMs);
   orphanSweepTimer.unref?.();
 
   log.info('http bridge listening', {
@@ -874,15 +948,25 @@ async function dispatchToTransport(opts: DispatchOpts): Promise<void> {
     let activeContext: LiziMcpSessionContext | undefined = sessionTokenCtx;
     if (req.method === 'POST') {
       try {
-        parsedBody = await readJsonBody(req);
+        parsedBody = await readJsonBody(req, opts.maxRequestBodyBytes);
       } catch (e) {
+        const msg = (e as Error).message;
         log.warn('request body read failed', {
           serverName,
           sessionId,
-          message: (e as Error).message,
+          message: msg,
         });
-        res.statusCode = 400;
-        res.end('Invalid request body');
+        if (msg === 'BODY_TOO_LARGE') {
+          res.statusCode = 413;
+          res.setHeader('Connection', 'close');
+          res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+          res.end('Request body too large', () => {
+            req.destroy();
+          });
+        } else {
+          res.statusCode = 400;
+          res.end('Invalid request body');
+        }
         return;
       }
       if (!activeContext) {
@@ -1017,7 +1101,11 @@ async function dispatchToTransport(opts: DispatchOpts): Promise<void> {
     log.warn('init body read failed', { serverName, message: msg });
     if (msg === 'BODY_TOO_LARGE') {
       res.statusCode = 413;
-      res.end('Init body too large');
+      res.setHeader('Connection', 'close');
+      res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+      res.end('Init body too large', () => {
+        req.destroy();
+      });
     } else {
       res.statusCode = 400;
       res.end('Invalid init body');
@@ -1043,6 +1131,12 @@ async function dispatchToTransport(opts: DispatchOpts): Promise<void> {
         ownerSessionInstanceId,
         lastActivityAt: Date.now(),
       });
+      const ownerKey = ownerSessionInstanceId
+        ? `inst:${ownerSessionInstanceId}`
+        : ownerSessionId
+          ? `sess:${ownerSessionId}`
+          : null;
+      opts.onTransportInitialized?.(transports, ownerKey);
       log.debug('mcp session initialized', { serverName, sessionId: newId });
     },
   }, opts.onToolCallResult);
@@ -1233,14 +1327,21 @@ async function readJsonBody(
   req: http.IncomingMessage,
   maxBytes = Number.POSITIVE_INFINITY,
 ): Promise<unknown> {
+  const rawLength = req.headers['content-length'];
+  const declaredLength = typeof rawLength === 'string' ? Number(rawLength) : NaN;
+  if (Number.isFinite(declaredLength) && declaredLength > maxBytes) {
+    // 暂停读取但暂不 destroy socket，让调用方先把 HTTP 413 + Connection: close 写回客户端。
+    req.pause();
+    throw new Error('BODY_TOO_LARGE');
+  }
   const chunks: Buffer[] = [];
   let received = 0;
   for await (const chunk of req) {
     const buf = typeof chunk === 'string' ? Buffer.from(chunk) : (chunk as Buffer);
     received += buf.length;
     if (received > maxBytes) {
-      // 主动 destroy 让客户端立刻知道,不再继续读
-      req.destroy();
+      chunks.length = 0;
+      req.pause();
       throw new Error('BODY_TOO_LARGE');
     }
     chunks.push(buf);
@@ -1248,8 +1349,8 @@ async function readJsonBody(
   if (chunks.length === 0) return undefined;
   const text = Buffer.concat(chunks).toString('utf8');
   if (!text.trim()) return undefined;
-  // init request 传 1MB 上限; 已初始化 request 不设额外上限,避免破坏
-  // Codex/MCP 已允许的大 payload。同步 parse 成本与 SDK 内部解析等价。
+  // init request 传 1MB 上限; 已初始化 request 传 POST_INIT_BODY_MAX_BYTES (64 MiB) 上限,
+  // 兼容附图等大 payload 同时防止无界内存增长。同步 parse 成本与 SDK 内部解析等价。
   return JSON.parse(text);
 }
 
