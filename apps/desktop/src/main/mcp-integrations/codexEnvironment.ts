@@ -253,7 +253,7 @@ function unregisterCodexMcpThreadContext(
   activeBridge?.unregisterThreadContext(threadId, expectedSessionInstanceId);
 }
 
-/** Close the bridge sessions of one ended local Codex session instance (Codex sends no DELETE). */
+/** Thread replacement retains the instance; only its terminal lifecycle releases transports. */
 function closeCodexMcpSessionInstance(sessionInstanceId: string): void {
   activeBridge?.closeSessionInstance(sessionInstanceId);
 }

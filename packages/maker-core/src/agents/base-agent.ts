@@ -1266,11 +1266,7 @@ export interface AgentDeps {
     threadId: string,
     expectedSessionInstanceId?: string,
   ) => void;
-  /**
-   * Close every host bridge MCP session opened by one ended local Codex session instance.
-   * Codex does not DELETE its streamable-http sessions on exit, so without this they stay
-   * in the bridge table for the lifetime of the app. Local, synchronous, idempotent.
-   */
+  /** Release instance-owned MCP transports on handle termination, not on thread replacement. */
   closeCodexMcpSessionInstance?: (sessionInstanceId: string) => void;
 
   /**
@@ -2490,7 +2486,7 @@ export class TurnPermissionPolicyUnsupportedError extends Error {
   readonly code = 'TURN_PERMISSION_POLICY_UNSUPPORTED';
 
   constructor(
-    /** 'acp' = a plugin engine, which cannot enforce a per-turn policy in any mode. */
+    /** 'acp' = a plugin engine (enforces per-turn policies only when it advertises permissionGate outside bypassPermissions). */
     readonly agentKind: EngineKind,
     readonly permissionMode: PermissionMode,
   ) {

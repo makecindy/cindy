@@ -6278,20 +6278,13 @@ assertRouteCurrent();
       }
     };
     let registeredRootCodexThreadId: string | undefined;
-    const closeCodexMcpSessionInstance = this.deps.closeCodexMcpSessionInstance;
-    // Remote, hosted and external-client handles don't own local bridge sessions.
-    let localMcpInstanceId = !opts.remoteHostId && !hosted && !opts[LOCAL_AGENT_CLIENT]
-      ? opts.sessionInstanceId : undefined;
-    const endPublishedSessionEvents = (): void => {
-      // EOF auto-closes Session without calling handle.close(). Release this instance
-      // before publishing EOF, whether shutdown was requested or initiated here.
-      const instanceId = localMcpInstanceId;
-      localMcpInstanceId = undefined;
-      if (instanceId) {
-        try { closeCodexMcpSessionInstance?.(instanceId); }
-        catch (e) { log.warn('closeCodexMcpSessionInstance threw', { error: String(e) }); }
-      }
-      eventQueue.end();
+    let mcpInstanceClosed = false;
+    const closeCodexMcpInstance = (): void => {
+      if (mcpInstanceClosed) return;
+      mcpInstanceClosed = true;
+      if (!opts.sessionInstanceId) return;
+      try { this.deps.closeCodexMcpSessionInstance?.(opts.sessionInstanceId); }
+      catch (error) { log.warn('closeCodexMcpSessionInstance threw', { error: String(error) }); }
     };
     const unregisterCodexMcpContext = (threadId: string): void => {
       if (registeredRootCodexThreadId === threadId) registeredRootCodexThreadId = undefined;
@@ -6677,6 +6670,7 @@ assertRouteCurrent();
       resetUpstreamIdleForTurnEnd();
       unregisterCodexMcpContext(threadId);
       unregisterDescendantCodexMcpContexts();
+      closeCodexMcpInstance();
       activeToolContexts.clear();
       approvalDenials.clear();
       completedActiveToolTurns.clear();
@@ -6697,7 +6691,7 @@ assertRouteCurrent();
       try { stopActiveRolloutPlanFallback(); } catch (e) { log.warn('stop rollout plan fallback threw', { error: String(e) }); }
       try { discardOverloadRetry(reason); } catch (e) { log.warn('cancel overload retry threw', { error: String(e) }); }
       subscription = null;
-      try { endPublishedSessionEvents(); } catch (e) { log.warn('eventQueue.end threw', { error: String(e) }); }
+      try { eventQueue.end(); } catch (e) { log.warn('eventQueue.end threw', { error: String(e) }); }
     };
     const retireCapturedHostAfterThreadCleanupFailure = async (
       reason: string,
@@ -6913,6 +6907,7 @@ assertRouteCurrent();
       } finally {
         if (registeredRootCodexThreadId) unregisterCodexMcpContext(registeredRootCodexThreadId);
         unregisterDescendantCodexMcpContexts();
+        closeCodexMcpInstance();
         releaseHostBindingLeaseIfNeeded();
         eventQueue.end();
       }
@@ -13075,6 +13070,9 @@ assertRouteCurrent();
         sessionHostForceRetired = true;
         subscriptionInvalidatedByTransport = false;
         resetCodexGenerationTiming(translatorRt);
+        // Either branch below ends the stream. Session then auto-closes without
+        // calling handle.close(), so retire the local bridge instance here.
+        if (!opts.remoteHostId && !hosted && !opts[LOCAL_AGENT_CLIENT]) closeCodexMcpInstance();
 
         const hadPendingWork =
           isTurnInFlight
@@ -13091,7 +13089,7 @@ assertRouteCurrent();
         });
         if (!hadPendingWork) {
           log.info('idle Codex session invalidated by forced host retirement', { threadId });
-          endPublishedSessionEvents();
+          eventQueue.end();
           return;
         }
         discardYieldContinuationClaims('app-server force-retired');
@@ -13143,7 +13141,7 @@ assertRouteCurrent();
         // 该 host 已被永久替换，handle 不可能原地恢复。结束内部事件流，让已启动的
         // Session 走既有 auto-close → Maker lazy create；尚未启动 event loop 的
         // Session 会在下一次 send 明确失败后 drain 到这里并重建。
-        endPublishedSessionEvents();
+        eventQueue.end();
       },
       threadStarted: (params) => {
         const sid = params.thread?.id;
@@ -14275,6 +14273,7 @@ assertRouteCurrent();
       resetUpstreamIdleForTurnEnd();
       unregisterCodexMcpContext(threadId);
       unregisterDescendantCodexMcpContexts();
+      closeCodexMcpInstance();
       activeToolContexts.clear();
       approvalDenials.clear();
       completedActiveToolTurns.clear();
@@ -14308,7 +14307,7 @@ assertRouteCurrent();
         retireHostOnFailure: opts.retireHostOnCleanupFailure ?? true,
         closeHandleOnFailure: false,
       });
-      try { endPublishedSessionEvents(); } catch (e) { log.warn('eventQueue.end threw', { error: String(e) }); }
+      try { eventQueue.end(); } catch (e) { log.warn('eventQueue.end threw', { error: String(e) }); }
       if (!released) throw new Error('Codex task cleanup remains unconfirmed');
     }
     // ── AgentSessionHandle ──────────────────────────────────────────────────

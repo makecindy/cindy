@@ -14,8 +14,7 @@ export function createHostMcpRuntime(ports: { appServerIds(): string[]; getRemot
   const logger = createMakerLogger('maker/mcp');
   // Required: every member is set, and the engine bags in runtime.ts count them as written.
   const codexDeps: Required<Pick<AgentDeps, 'prepareCodexExtraSpawnConfig' | 'registerCodexMcpThreadContext' |
-    'unregisterCodexMcpThreadContext' | 'closeCodexMcpSessionInstance' | 'prepareCodexMcpToolCancellation' |
-    'withCodexMcpDiscoveryContext'>> = {
+    'unregisterCodexMcpThreadContext' | 'closeCodexMcpSessionInstance' | 'prepareCodexMcpToolCancellation' | 'withCodexMcpDiscoveryContext'>> = {
     prepareCodexExtraSpawnConfig: providers => codex.getCodexExtraSpawnConfig({ mcpProviders: providers, logger }),
     registerCodexMcpThreadContext: ({ threadId, ...context }) => {
       const disabled = readDisabledBuiltinPluginIds(context.vendorOptions)

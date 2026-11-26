@@ -4645,6 +4645,15 @@
       "menu": {
         "disableProvider": "停用此供應商",
         "enableProvider": "啟用此供應商",
+        "icon": "連線圖示",
+        "appearance": "名稱與圖示",
+        "ownImage": "選擇自己的圖片",
+        "imageError": "請選擇 10 MB 以內的 PNG、JPG 或 WebP 圖片。",
+        "connectionIcon": {
+          "default": "預設",
+          "personal": "個人",
+          "work": "工作"
+        },
         "hideProvider": "在模型選擇器中隱藏",
         "showProvider": "在模型選擇器中顯示"
       },
@@ -5854,7 +5863,7 @@
       "uninstallTitle": "解除安裝 Pi 擴充功能？",
       "uninstallDescription": "將從這台裝置移除 {{name}}。目前已開啟的 Pi 任務仍會保留舊擴充功能，關閉後才會完全移除。",
       "confirmUninstall": "解除安裝",
-      "extensionDialogConfirm": "確認",
+      "extensionDialogConfirm": "繼續",
       "cancel": "取消",
       "relativePathUnsupported": "在設定中安裝本機擴充功能時請使用絕對路徑；./extension 這類相對路徑可在 Pi 任務中安裝。",
       "resources": {
@@ -7236,6 +7245,30 @@
           "disableBlocked": {
             "controller-encryption-required": "這台電腦開啟了「僅使用 Agent-Net」。請先在這台電腦關閉此選項，才能把對方切回 Device Link。",
             "agent-net-only-relay": "此連線使用僅支援 Agent-Net 的網路，無法切回 Device Link。請先改用支援 Device Link 的連線路線。"
+          }
+        },
+        "peerUpdate": {
+          "availableTip": "有新版本 {{version}}，點擊更新",
+          "downloading": "正在下載 {{version}}…",
+          "relaunching": "正在重新啟動並更新至 {{version}}…",
+          "confirm": {
+            "title": "更新「{{name}}」上的 Cindy？",
+            "selfTitle": "更新這台電腦上的 Cindy？",
+            "description": "將把 Cindy 從 {{from}} 更新至 {{to}}。更新完成後該裝置會重新啟動 Cindy，遠端連線會短暫中斷。",
+            "selfDescription": "將把 Cindy 從 {{from}} 更新至 {{to}}。更新完成後這台電腦上的 Cindy 會重新啟動。",
+            "busyWarning": "該裝置目前有執行中的任務或背景工作，重新啟動會將其中斷。",
+            "selfBusyWarning": "這台電腦目前有執行中的任務或背景工作，重新啟動會將其中斷。",
+            "linuxPermissionHint": "Linux 受管安裝可能需要在目標裝置上輸入系統密碼。",
+            "windowsPermissionHint": "若安裝在受保護目錄，可能需要在目標裝置上確認系統權限。",
+            "action": "立即更新"
+          },
+          "toast": {
+            "started": "已開始將「{{name}}」更新至 {{version}}",
+            "relaunching": "「{{name}}」正在重新啟動並更新至 {{version}}",
+            "versionChanged": "「{{name}}」的新版本已變更，請重新開啟卡片確認",
+            "noUpdate": "「{{name}}」目前沒有可安裝的新版本",
+            "busy": "「{{name}}」正在執行另一次更新，請稍後再試",
+            "failed": "未能更新「{{name}}」上的 Cindy"
           }
         }
       }
@@ -9763,7 +9796,7 @@
       "allow": "允許",
       "deny": "拒絕",
       "questionTitle": "需要你回答",
-      "submit": "提交",
+      "submit": "傳送答覆",
       "planTitle": "計劃待審閱",
       "approve": "批准",
       "requestChanges": "要求修改",
@@ -12332,7 +12365,7 @@
           "soleOwnerHint": "群組裡只剩你。可以封存群組，保留歷史記錄，以後再恢復使用。",
           "archive": "封存群組",
           "archiveHint": "封存會對所有成員停用本群組，停止新訊息與夥伴執行。歷史記錄保留，之後可透過搜尋找到本群組、查看歷史並取消封存。",
-          "confirm": "確認",
+          "confirm": "繼續",
           "lastOwner": "請先將群主轉讓給其他成員，再退出或移除目前的群主。",
           "conflict": "群組設定已更新，請重新整理後再試。",
           "unarchive": "取消封存",
@@ -13188,7 +13221,7 @@
       }
     },
     "confirmDialog": {
-      "confirm": "確認",
+      "confirm": "繼續",
       "cancel": "取消",
       "dontShowAgain": "下次不再提示"
     },
@@ -14729,27 +14762,27 @@
         },
         "acp": {
           "ask": {
-            "label": "逐項確認",
+            "label": "預設權限",
             "description": "Agent 請求權限時由你確認。Agent 沒有請求確認的操作，Cindy 無法攔截。"
           },
           "default": {
-            "label": "預設",
+            "label": "預設權限",
             "description": "依 Agent 自己的預設方式工作；它請求權限時由你確認。"
           },
           "acceptEdits": {
-            "label": "自動接受編輯",
+            "label": "允許編輯",
             "description": "Agent 直接修改檔案；其他請求權限的操作由你確認。"
           },
           "auto": {
-            "label": "自動",
+            "label": "自動審核",
             "description": "由 Agent 自行判斷哪些操作需要確認；它請求權限時由你確認。"
           },
           "plan": {
-            "label": "只規劃",
+            "label": "計畫模式",
             "description": "Agent 只分析並制定計畫，不修改檔案。"
           },
           "bypassPermissions": {
-            "label": "全部允許",
+            "label": "完全訪問",
             "description": "Agent 請求的權限一律自動允許。"
           }
         }
@@ -15411,7 +15444,7 @@
       "back": "返回",
       "skip": "跳過",
       "next": "下一題",
-      "submit": "提交",
+      "submit": "傳送答覆",
       "sendAndContinue": "傳送並繼續",
       "close": "關閉",
       "customAnswer": "輸入其他回答…",
@@ -15841,6 +15874,10 @@
       "diffUnchangedLines_one": "{{count}} 行未變",
       "diffUnchangedLines_other": "{{count}} 行未變",
       "diffPreviewLoading": "正在準備差異預覽…"
+    },
+    "filePreview": {
+      "changed": "檔案已變更",
+      "refreshHint": "點擊重新整理"
     },
     "textLightbox": {
       "unreadable": "無法讀取該檔案",

@@ -6679,28 +6679,6 @@ describe('CodexAgent.startSession developerInstructions', () => {
     expect(unregisterCodexMcpThreadContext).toHaveBeenCalledWith('grandchild-thread-id');
   });
 
-  // Host port contract: Codex never DELETEs its bridge MCP sessions, so a closed local
-  // session instance must hand its id to the host, which closes them
-  // (codexHttpBridge.closeSessionInstance has its own transport tests). Before this, the
-  // port did not exist and the production bridge grew ~300 → 712 sessions in a morning
-  // of group replies. Unit tier, fake app-server host.
-  it('releases the closed local session instance from the host MCP bridge', async () => {
-    const closeCodexMcpSessionInstance = vi.fn();
-    const agent = new CodexAgent(createDeps({}, { closeCodexMcpSessionInstance }));
-    installFakeHost(agent);
-    const handle = await agent.startSession({
-      sessionId: 'session-bridge-release',
-      sessionInstanceId: 'instance-bridge-release',
-      model: 'gpt-5.4',
-      workingDir: '/repo',
-    });
-    expect(closeCodexMcpSessionInstance).not.toHaveBeenCalled();
-
-    await handle.close();
-    expect(closeCodexMcpSessionInstance).toHaveBeenCalledTimes(1);
-    expect(closeCodexMcpSessionInstance).toHaveBeenCalledWith('instance-bridge-release');
-  });
-
   it('keeps thread/start developerInstructions on the websocket provider and registers child route context', async () => {
     const registerCodexSystemPromptForThread = vi.fn();
     const agent = new CodexAgent(createDeps(
@@ -7254,7 +7232,8 @@ describe('CodexAgent.startSession developerInstructions', () => {
   });
 
   it.each([false, true])('requires current teammate baseline delivery on native resume (injection rejected: %s)', async (rejectInjection) => {
-    const agent = new CodexAgent(createDeps({}));
+    const closeCodexMcpSessionInstance = vi.fn();
+    const agent = new CodexAgent(createDeps({}, { closeCodexMcpSessionInstance }));
     const host = installFakeHost(agent, method => {
       if (method !== Method.ThreadInjectItems) return undefined;
       if (rejectInjection) throw new Error('instruction injection rejected');
@@ -7262,6 +7241,7 @@ describe('CodexAgent.startSession developerInstructions', () => {
     }, { userAgent: 'mock-codex/0.153.4' });
     const started = agent.startSession({
       sessionId: 'old-teammate', resumeSessionId: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
+      sessionInstanceId: 'failed-startup-mcp-instance',
       codexHistoryHasProductPrompt: true,
       workingDir: '/repo', model: 'gpt-5.6-luna', providerId: 'openai', effort: 'medium',
       botProfilePrompt: 'EXISTING USER PERSONA', botProfileContextPrompt: 'CURRENT TEAMMATE GUIDE',
@@ -7274,10 +7254,13 @@ describe('CodexAgent.startSession developerInstructions', () => {
     });
     if (rejectInjection) {
       await expect(started).rejects.toThrow('instruction injection rejected');
+      // Failed startup can already own MCP transports from tools/list discovery.
+      expect(closeCodexMcpSessionInstance).toHaveBeenCalledExactlyOnceWith('failed-startup-mcp-instance');
       expect(host.request.mock.calls.some(([method]) => method === Method.ThreadStart || method === Method.TurnStart)).toBe(false);
       return;
     }
     const handle = await started;
+    expect(closeCodexMcpSessionInstance).not.toHaveBeenCalled();
     const calls = host.request.mock.calls;
     const resume = calls.findIndex(([method]) => method === Method.ThreadResume);
     const inject = calls.findIndex(([method]) => method === Method.ThreadInjectItems);
@@ -11643,9 +11626,11 @@ describe('CodexAgent MCP thread context hooks', () => {
   it('registers and unregisters Codex MCP thread context for local sessions', async () => {
     const registerCodexMcpThreadContext = vi.fn();
     const unregisterCodexMcpThreadContext = vi.fn();
+    const closeCodexMcpSessionInstance = vi.fn();
     const agent = new CodexAgent(createDeps({}, {
       registerCodexMcpThreadContext,
       unregisterCodexMcpThreadContext,
+      closeCodexMcpSessionInstance,
     }));
     installFakeHost(agent);
 
@@ -11674,6 +11659,11 @@ describe('CodexAgent MCP thread context hooks', () => {
       'start-thread-id',
       'instance-codex-mcp-context',
     );
+    // Regression: unregistering thread identity alone retained each instance's
+    // HTTP McpServer. The unit fake observes the Host cleanup contract on close.
+    expect(closeCodexMcpSessionInstance).toHaveBeenCalledExactlyOnceWith('instance-codex-mcp-context');
+    await handle.close();
+    expect(closeCodexMcpSessionInstance).toHaveBeenCalledTimes(1);
   });
 
   it.each([{ resume: false, remote: false }, { resume: true, remote: false }, { resume: false, remote: true }, { resume: true, remote: true }])('registers discovery identity around native startup ($resume, $remote)', async ({ resume, remote }) => {
