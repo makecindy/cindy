@@ -17044,9 +17044,6 @@
     },
     "sidebar": {
       "machineSwitcher": {
-        "addCloud": "Add cloud computer",
-        "preparingCloud": "Cloud computer · preparing",
-        "manageCloud": "Manage cloud computer",
         "allMachines": "All",
         "localMachine": "Local",
         "connecting": "Connecting…",

@@ -17202,9 +17202,6 @@
     },
     "sidebar": {
       "machineSwitcher": {
-        "addCloud": "Adicionar computador na nuvem",
-        "preparingCloud": "A preparar computador na nuvem",
-        "manageCloud": "Gerir computador na nuvem",
         "allMachines": "Todas",
         "localMachine": "Locais",
         "connecting": "A ligar…",
