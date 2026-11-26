@@ -209,19 +209,28 @@ export function createChatHistory(input: {
             if (query.has('before')) continue;
             if (query.get('all') !== 'true' && (query.get('threadRootId') ?? null) !== (message.threadRootId ?? null)) continue;
             const ids = state.pages[key]!;
-            // Preserve the old window as bounded coverage: new arrivals shift pagination
-            // boundaries, but must not make every older page download again.
-            const first = ids[0] && state.messages[ids[0]];
-            if (first) {
-              query.set('before', String(BigInt(first.seq) + 1n)); state.pages[query.toString()] = ids;
-              if (state.stalePages?.includes(key)) stale(state, query.toString());
-            }
-            if (query.has('after')) { delete state.pages[key]; continue; }
             // The authorized change body is enough to maintain the latest page.
             // Keep the old bounded range for pagination without re-downloading the head.
-            state.pages[key] = [...new Set([message.id, ...ids])]
+            const latest = [...new Set([message.id, ...ids])]
               .sort((a, b) => BigInt(state.messages[a]!.seq) > BigInt(state.messages[b]!.seq) ? -1 : 1)
               .slice(0, Number(query.get('limit') ?? 100));
+            // Preserve the old window as bounded coverage: new arrivals shift pagination
+            // boundaries, but must not make every older page download again. One copy per
+            // arrival would fill the page budget with near-identical windows, so copy only
+            // when no fresh page already bridges the new head down to the departing message.
+            // An existing copy under the same key is still replaced, as before: a late, older
+            // arrival leaves that copy without itself until the next arrival rewrites it.
+            const first = ids[0] && state.messages[ids[0]];
+            if (first) {
+              const copy = new URLSearchParams(query); copy.set('before', String(BigInt(first.seq) + 1n));
+              if (query.has('after') || Object.hasOwn(state.pages, copy.toString()) || BigInt(message.seq) <= BigInt(first.seq)
+                || !bridged(state, query, ids.at(-1)!, latest.at(-1)!)) {
+                state.pages[copy.toString()] = ids;
+                if (state.stalePages?.includes(key)) stale(state, copy.toString());
+              }
+            }
+            if (query.has('after')) { delete state.pages[key]; continue; }
+            state.pages[key] = latest;
           }
         }
       } else if (!['execution.changed', 'plan.changed'].includes(change.type)) state.metadataDirty = true;
@@ -229,6 +238,17 @@ export function createChatHistory(input: {
     state.snapshot.messages = state.snapshot.messages.map(m => state.messages[m.id] ?? m);
     state.cursor = batch.cursor;
     return true;
+  }
+  /** coveredPage() can step from the new head's oldest row to an older page only through a
+   * fresh page that holds the row leaving the head and whose bound reaches that oldest row. */
+  function bridged(state: ChatHistoryState, head: URLSearchParams, leaving: string, oldest: string) {
+    const position = BigInt(state.messages[oldest]!.seq);
+    return Object.entries(state.pages).some(([key, ids]) => {
+      const query = new URLSearchParams(key);
+      const before = query.get('before');
+      return before !== null && BigInt(before) >= position && !state.stalePages?.includes(key) && ids.includes(leaving)
+        && ['threadRootId', 'all', 'after'].every(field => query.get(field) === head.get(field));
+    });
   }
   function stale(state: ChatHistoryState, key: string) {
     state.stalePages ??= [];

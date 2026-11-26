@@ -248,6 +248,54 @@ describe('durable chat history', () => {
     expect((await cache.page('room', new URLSearchParams('limit=3&before=5'))).map(m => m.id)).toEqual(['4', '3', '2']);
     expect(f.api).not.toHaveBeenCalled();
   });
+  // Unit, live-append cost: every new message used to store another copy of the latest page,
+  // so an active room filled the 500-page budget after ~500 messages (rewriting ~2 MB per
+  // message) and evicted pages the user had scrolled to. Room-global seqs leave gaps in a
+  // view, so the kept pages must still stitch without asking the server.
+  it('keeps one older page per window of live messages and still stitches the whole history', async () => {
+    const f = fixture(); const cache = f.open();
+    const seqs = [2, 4, 6, 8, 10];
+    f.api.mockImplementation(async route => {
+      if (route.endsWith('/snapshot')) return { room: { id: 'room' }, messages: [], cursor: '10' };
+      const query = new URL(`https://fixture${route}`).searchParams;
+      const before = Number(query.get('before') ?? Infinity);
+      return seqs.filter(seq => seq < before).reverse().slice(0, 3).map(seq => f.message(String(seq)));
+    });
+    await cache.page('room', new URLSearchParams('limit=3'));
+    await cache.page('room', new URLSearchParams('limit=3&before=6'));
+    for (let seq = 12; seq <= 34; seq += 2) {
+      seqs.push(seq);
+      await cache.receive('room', { cursor: String(seq), changes: [{ type: 'message.created', data: { message: f.message(String(seq)) } }] }, '10');
+    }
+    // Two fetched pages plus one kept window per two arrivals, instead of one per arrival.
+    expect(Object.keys(f.disk.get('room')!.pages)).toHaveLength(8);
+    f.api.mockClear();
+    const shown: string[] = [];
+    let page = await cache.page('room', new URLSearchParams('limit=3'));
+    while (page.length) {
+      shown.push(...page.map(m => m.id));
+      page = page.length < 3 ? [] : await cache.page('room', new URLSearchParams(`limit=3&before=${page.at(-1)!.seq}`));
+    }
+    expect(shown).toEqual([...seqs].reverse().map(String));
+    expect(f.api).not.toHaveBeenCalled();
+  });
+  // Unit, adversarial review of the change above: a late, older arrival leaves the copy of the
+  // previous head without it; only the next arrival's copy under the same key repairs that.
+  it('repairs the older page a late message left behind instead of trusting it as coverage', async () => {
+    const f = fixture(); const cache = f.open();
+    const seqs = [4, 5, 6];
+    f.api.mockImplementation(async route => {
+      if (route.endsWith('/snapshot')) return { room: { id: 'room' }, messages: [], cursor: '10' };
+      const before = Number(new URL(`https://fixture${route}`).searchParams.get('before') ?? Infinity);
+      return seqs.filter(seq => seq < before).sort((a, b) => b - a).slice(0, 3).map(seq => f.message(String(seq)));
+    });
+    await cache.page('room', new URLSearchParams('limit=3'));
+    for (const [n, seq] of [8, 7, 9, 10, 11].entries()) {
+      seqs.push(seq);
+      await cache.receive('room', { cursor: String(11 + n), changes: [{ type: 'message.created', data: { message: f.message(String(seq)) } }] }, '10');
+    }
+    expect((await cache.page('room', new URLSearchParams('limit=3&before=9'))).map(m => m.id)).toEqual(['8', '7', '6']);
+  });
   it('reuses covered pages after restart and applies edits and tombstones outside the latest window', async () => {
     const f = fixture();
     await f.open().page('room', f.page);
