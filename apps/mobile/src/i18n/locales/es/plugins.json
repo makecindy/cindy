@@ -510,6 +510,7 @@
       "confirmation": "Esperando confirmación",
       "checking": "Comprobando el resultado",
       "waiting": "Resultado sin confirmar. Compruébalo otra vez o deja de seguirlo.",
+      "recordMissing": "Este complemento está en el ordenador, pero no se pudo leer su registro de instalación, así que el resultado aún no se puede confirmar. Compruébalo más tarde o deja de seguirlo.",
       "offline": "«{{device}}» no está conectado. Conéctalo para comprobar el resultado.",
       "awaitingYou": "El ordenador espera tu confirmación",
       "unprovable": {

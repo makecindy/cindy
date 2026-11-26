@@ -106,6 +106,8 @@ export function PluginPendingChecksSheet({ visible, lines, conclusions, isOnline
       + (!check.unprovable.present ? "absent" : check.unprovable.pagesApproved === undefined ? "present"
         : check.unprovable.pagesApproved ? "approved" : "notApproved"));
     if (check.state.busy && check.state.outcome === "unknown") return t("plugins.checks.status.checking");
+    // The receipt is gone and the facts cannot settle it yet (the plugin is there, its installed record was not read).
+    if (check.recordMissing) return t("plugins.checks.status.recordMissing");
     if (check.waiting || check.state.outcome === "unknown") return t("plugins.checks.status.waiting");
     return t(check.state.outcome === "confirmation" ? "plugins.checks.status.confirmation" : "plugins.checks.status.running");
   };

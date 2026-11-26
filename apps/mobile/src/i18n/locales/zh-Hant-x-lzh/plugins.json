@@ -508,6 +508,7 @@
       "confirmation": "待確",
       "checking": "方核其果",
       "waiting": "果未確。可復核之，或不復隨之。",
+      "recordMissing": "彼機有此法器，然其裝錄未可讀，果未可確。可稍後復核之，或不復隨之。",
       "offline": "「{{device}}」未連，連之乃可核果。",
       "awaitingYou": "彼機待汝確之",
       "unprovable": {

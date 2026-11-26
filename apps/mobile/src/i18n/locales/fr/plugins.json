@@ -510,6 +510,7 @@
       "confirmation": "En attente de confirmation",
       "checking": "Vérification du résultat",
       "waiting": "Résultat non confirmé. Vérifiez à nouveau ou arrêtez le suivi.",
+      "recordMissing": "Ce plugin est sur l’ordinateur, mais son enregistrement d’installation n’a pas pu être lu : le résultat ne peut pas encore être confirmé. Vérifiez à nouveau plus tard ou arrêtez le suivi.",
       "offline": "« {{device}} » n’est pas connecté. Connectez-le pour vérifier le résultat.",
       "awaitingYou": "L’ordinateur attend votre confirmation",
       "unprovable": {

@@ -16,15 +16,18 @@ export interface FinishedPluginOperation {
  * Why a finished operation offers no "Open" (the success, when there was one, stays a past result): `gone`, no instance
  * of it on the computer now; `unconfirmed`, an instance is there and the computer's record of it is not attributed to
  * this operation (V2.10 ②: another install since, or a conflict); `legacy`, an older computer gives no evidence (③: the
- * person opens it from the installed list).
+ * person opens it from the installed list); `unread`, an instance is there but this response has no installed record of
+ * the plugin at all (the computer could not read its catalog or the plugin's market then, or its market data has not
+ * caught up with an install that just committed): nothing can be concluded from it, it has to be read again.
  */
-export type PluginOperationNotOpened = "gone" | "unconfirmed" | "legacy";
+export type PluginOperationNotOpened = "gone" | "unconfirmed" | "legacy" | "unread";
 export type PluginOperationOpens = { open: true; instanceKey: string } | { open: false; reason: PluginOperationNotOpened };
 /** What the list of checks and the installed detail say for each reason (plugins.json, 12 languages). */
 export const PLUGIN_NOT_OPENED_TEXT: Record<PluginOperationNotOpened, string> = {
   gone: "plugins.checks.result.goneSince",
   unconfirmed: "plugins.checks.result.unconfirmed",
   legacy: "plugins.checks.result.legacyHost",
+  unread: "plugins.checks.result.succeededUnread",
 };
 type MarketRecord = Pick<ManagedMarketItem, "pluginId" | "ghostId" | "namespace" | "installState" | "installedOperationId" | "installedOperationAttribution">;
 
@@ -63,17 +66,15 @@ export function pluginOperationOpens(operation: FinishedPluginOperation, facts: 
   if (evidence === "none") {
     // A conflict: a package of the same id from elsewhere is there (not this attempt's instance, but not "gone" either).
     if (record?.installState === "conflict") return { open: false, reason: "unconfirmed" };
-    // No installed record of it. "Gone" only when no instance of the plugin is there either. One that is there cannot be
-    // attributed to this operation (②), whether its record says "not installed" or the response has no record of it at
-    // all: the Host only names what it can resolve now (a server plugin withdrawn or not visible to this account, one
-    // no longer listed by its custom market, a market removed, a source unreachable or the server catalog unreadable
-    // at that moment, as the Host gives it; dispatcher decision, 2026-11-26, no wire change).
+    // No installed record of it. "Gone" only when no instance of the plugin is there either. One that is there with a
+    // record saying "not installed" cannot be attributed (②); with no record at all the response says nothing about
+    // it (its market part is incomplete or behind): it settles nothing and has to be read again.
     // (An instance of the same id in another known namespace is another plugin. An item read before the install may
     // carry no namespace: that is the root one, as the computer fills it in once installed.)
     const there = (ghost: ManagedPlugin) => ghost.manifest.id === item.ghostId
       && (ghost.namespace === undefined || ghost.namespace === (item.namespace ?? null));
     if (!facts.ghosts.some((ghost) => there(ghost) && started(ghost))) return { open: false, reason: "gone" };
-    return { open: false, reason: "unconfirmed" };
+    return { open: false, reason: record ? "unconfirmed" : "unread" };
   }
   if (evidence !== "confirmed") return { open: false, reason: evidence };
   const identity = record && record.namespace !== undefined ? record : item;

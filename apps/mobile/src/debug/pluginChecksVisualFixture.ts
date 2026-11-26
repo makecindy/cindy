@@ -101,8 +101,7 @@ export async function seedPluginChecksForVisualMock(state: string): Promise<(() 
     case "offline": await one("running", AWAY_DEVICE); return () => {};
     // The waiting one first: it lets go of the computer's slot, so the second operation may begin beside it.
     case "many": await one("waiting"); await seedOne(SIMULATOR, "running"); return () => {};
-    // The receipt is gone; the plugin is there but the computer names no market record of it (it cannot read the
-    // plugin's market now): not attributable to this install, ② ("could not confirm"), as any other record missing.
+    // The receipt is gone and the computer cannot read the plugin's market: the facts settle nothing yet (it says so).
     case "recordMissing": { const c = await one("goneUnread"); return () => { void c?.reconcile(); }; }
     // Two successes proven once looked up: the notice at the top (behind the list) says both have a result.
     case "results": { const a = await one("succeeded"); const b = await seedOne(SIMULATOR, "succeeded"); return () => { void a?.reconcile(); void b?.reconcile(); }; }

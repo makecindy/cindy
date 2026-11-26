@@ -157,8 +157,7 @@ describe("more pending-check states from cindy://plugins?checks=<state>", () => 
     ["catalogAhead", () => expect(ended()).toEqual([["market-install", "succeeded", "verified"]])],
     // Pre-push review 2026-11-26: the receipt is gone and the computer cannot read the plugin's market: nothing is
     // concluded, the check says why and stays; two successes both read; one read beside one still waiting.
-    // The plugin is there and the computer names no market record of it: not attributable (②), settled, no Open.
-    ["recordMissing", () => expect({ ended: ended(), checks: __retainedForTests.checks().length }).toEqual({ ended: [["market-install", "mismatch", "none"]], checks: 0 })],
+    ["recordMissing", () => expect({ ended: ended(), checks: __retainedForTests.checks().map((c) => [c.entry, c.recordMissing]) }).toEqual({ ended: [], checks: [["market-install", true]] })],
   ] as const)("%s, after the list opened", async (state, assert) => {
     const after = await seedPluginChecksForVisualMock(state);
     await flush();

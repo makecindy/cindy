@@ -129,6 +129,12 @@ export interface PluginPendingCheck {
    * this, and offers only "Stop tracking"; nothing looks it up again by itself.
    */
   unprovable?: { present: boolean; pagesApproved?: boolean };
+  /**
+   * A market install or update whose receipt is gone, and the facts read after it cannot settle it yet: the plugin is
+   * there, but that response has no installed record of it (`pluginOperationOpens` "unread"). The panel says so; "Check
+   * result" looks it up and reads the facts again.
+   */
+  recordMissing?: boolean;
   /** Look up the original operation once (never a second begin, answer or cancel). */
   verify(): Promise<void>;
   /**
@@ -158,8 +164,12 @@ function pendingChecksOf(ownerKey: string): PluginPendingCheck[] {
     const controller = entry.controller;
     const gone = AFTER_RECEIPT_GONE[check.entry] === "unprovable" ? controller.currentMissingReceiptFacts() : null;
     const now = gone && check.who.instanceKey ? gone.ghosts.find((ghost) => ghost.instanceKey === check.who.instanceKey) : undefined;
+    const facts = AFTER_RECEIPT_GONE[check.entry] === "facts" ? controller.currentMissingReceiptFacts() : null;
+    const recordMissing = !!facts && (() => { const opens = pluginOperationOpens(check, { ghosts: facts.ghosts, market: facts.market.items });
+      return !opens.open && opens.reason === "unread"; })();
     list.push({ ...check, state: controller.getState(), shown: !!entry.listener, controller,
       ...(gone ? { unprovable: { present: !!now, ...(check.entry === "page-approval" && now ? { pagesApproved: now.uiCapabilityApproved === true } : {}) } } : {}),
+      ...(recordMissing ? { recordMissing } : {}),
       // A consent no sheet of this phone shows now (a view merely attached does not: the installed detail's sheet only
       // shows while that detail is what is open). Read when asked: a sheet marking its consent changes it without a
       // change of the controller's state.
@@ -246,8 +256,8 @@ async function readBack(operationId: string): Promise<boolean> {
     if (!current()) return false;
   }
   if (opens?.open) { conclude(job, { ...latest(), readback: "verified", instanceKey: opens.instanceKey }); return true; }
-  if (opens) { conclude(job, { ...latest(), readback: opens.reason, instanceKey: undefined }); return true; }
-  // Not read (the read failed), and its computer became reachable
+  if (opens && opens.reason !== "unread") { conclude(job, { ...latest(), readback: opens.reason, instanceKey: undefined }); return true; }
+  // Not read (the read failed, or its response had the instance without its record), and its computer became reachable
   // while this read was out (it was not when the read was issued, or it went away and came back since): that
   // comeback's one read is this one, now. A read issued while it was reachable and that simply failed is not read
   // again by itself.
@@ -390,6 +400,10 @@ function settleFromFacts(entry: ManagementEntry, facts: NonNullable<PluginManage
   // instance leave it unconfirmed (without a receipt, ② does not even show the operation succeeded).
   const opens = pluginOperationOpens(check, { ghosts: facts.ghosts, market: facts.market.items });
   if (opens.open) { settle("installed", opens.instanceKey); return; }
+  // An instance is there, but this response has no market record of the plugin (the computer cannot reach its catalog
+  // or a custom market, the market was removed, or the row is simply not in this response): nothing proves or
+  // disproves it. It stays a pending check; "Check result" looks the operation up and reads the facts again.
+  if (opens.reason === "unread") return;
   settle(opens.reason === "legacy" ? "legacy" : opens.reason === "gone" ? "notInstalled" : "mismatch");
 }
 /** After each change of an entry's controller: the list at the top, a market install's facts, a final result. */

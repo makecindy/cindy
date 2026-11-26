@@ -2499,12 +2499,13 @@ describe('whether a finished operation opens an instance', () => {
   it.each([
     ['the same name in another namespace', [{ ...updated, instanceKey: 'team__demo', namespace: 'team' }],
       [{ ...detail, namespace: 'team', installState: 'installed' as const, installedOperationId: 'operation-1', installedOperationAttribution: 'self' as const }], 'unconfirmed'],
-    // An instance is there but the response names no record of it: the Host names only what it can resolve now (a
-    // server plugin withdrawn or not visible, one no longer listed by its custom market, a market removed, a source or
-    // the catalog unreadable then). Not attributable to this operation (②), never "not on the computer now"
-    // (dispatcher decision 2026-11-26; on fe7e1ee78c this was "could not read", kept pending). With no instance of the
-    // plugin there at all it is gone.
-    ['no record of it, an instance there', [updated], [], 'unconfirmed'],
+    // An instance is there but the response names no record of it (the Host sends this shape when it could not read its
+    // catalog, for a plugin whose market was removed, and on the first read after an install): what the computer says
+    // about this install was not read, so nothing is settled ("could not read", read again); never "not on the computer
+    // now", and never "cannot confirm" from a record that was not there to say so. Whether the response calls its market
+    // part complete plays no part (minimal failing input on a337ae955c: a complete-looking response gave 'unconfirmed').
+    // With no instance of the plugin there at all it is gone.
+    ['no record of it, an instance there', [updated], [], 'unread'],
     ['a record saying not installed, an instance there', [updated], [{ ...detail, installState: 'not-installed' as const }], 'unconfirmed'],
     ['no record of it, no instance', [], [], 'gone'],
     // A package of the same id from elsewhere is there: not this attempt's instance, and not "gone" (V2.10: unconfirmed).
@@ -2538,7 +2539,7 @@ describe('whether a finished operation opens an instance', () => {
     const other = { ...detail, pluginId: 'market/other', ghostId: 'other', name: 'Other', installState: 'installed' as const };
     expect(pluginOperationOpens(finished('market-install'), { ghosts: [updated], market: [other, own] })).toEqual({ open: true, instanceKey: updated.instanceKey });
     // Records of other plugins are not a record of this one.
-    expect(pluginOperationOpens(finished('market-install'), { ghosts: [updated], market: [other] })).toEqual({ open: false, reason: 'unconfirmed' });
+    expect(pluginOperationOpens(finished('market-install'), { ghosts: [updated], market: [other] })).toEqual({ open: false, reason: 'unread' });
     expect(pluginOperationOpens(finished('market-install'), { ghosts: [], market: [other] })).toEqual({ open: false, reason: 'gone' });
   });
   // The Host shape asserted by apps/desktop plugin-market service.test.ts ("isolated-root"): a server summary carries no
