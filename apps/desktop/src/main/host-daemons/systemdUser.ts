@@ -11,9 +11,11 @@
  *
  * `foo.timer` 与 `foo.service` 是同一项常驻物的两半：只列 timer（schedule 语义），
  * 跳过被它拉起的 service，避免界面上出现两条几乎一样的条目。执行面按 timer 的
- * `Unit=` 认（没写才同名），删除时只连同能确认属于它的另一半一起删。
+ * `Unit=` 认（没写才同名），删除时只连同能确认属于它、且没有别的单元在用的另一半
+ * 一起删。
  */
 
+import type { Dirent } from 'node:fs';
 import { readdir, readFile, stat, unlink } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
@@ -94,10 +96,14 @@ export function parseSystemdListUnits(stdout: string): Map<string, SystemdUnitRu
  * 按同名猜会把状态、启动、停止、删除都作用到错误对象上（timer 可以指名任意 service，
  * 同名那个可能属于另一项）。
  */
+/** `Unit=` 的值可以不带后缀；执行面一律补成 `.service`。 */
+function serviceOf(name: string): string {
+  return name.endsWith('.service') ? name : `${name}.service`;
+}
+
 export function pairedUnit(unit: string, declaredUnit = ''): string {
   if (!unit.endsWith('.timer')) return unit;
-  if (declaredUnit) return declaredUnit.endsWith('.service') ? declaredUnit : `${declaredUnit}.service`;
-  return `${stem(unit)}.service`;
+  return declaredUnit ? serviceOf(declaredUnit) : `${stem(unit)}.service`;
 }
 
 export function stateOf(
@@ -122,8 +128,26 @@ function isOwnCounterpart(unit: string, declaredUnit: string): boolean {
   return !declaredUnit || stem(declaredUnit) === stem(unit);
 }
 
+/** 不是单元文件的目录项：drop-in、enable 建立的依赖目录、编辑器残留。 */
+const NON_UNIT_SUFFIX = /\.(d|wants|requires|conf)$/;
+
 /** `systemctl stop` 对「单元未加载」的退出码；文件在的单元即使没跑过也返回 0。 */
 const EXIT_NOT_LOADED = 5;
+
+/**
+ * 单元文件是否依赖某个执行面：timer / path / socket 用 `Unit=` 指名它，或把它列进
+ * 依赖（`Requires=` / `Wants=` …，值可以省略 `.service` 后缀）。
+ */
+export function unitTextDependsOn(text: string, target: string): boolean {
+  // 续行先接回同一行，否则 `Wants=a b \` + 下一行的 `backup.service` 会被漏掉。
+  for (const line of text.replace(/\\\r?\n\s*/g, ' ').split(/\r?\n/)) {
+    const match =
+      /^\s*(?:Unit|Wants|Requires|Requisite|BindsTo|Upholds|Also)\s*=\s*(.*)$/.exec(line);
+    if (!match) continue;
+    if (match[1].trim().split(/\s+/).some((value) => serviceOf(value) === target)) return true;
+  }
+  return false;
+}
 
 function triggerOf(file: SystemdUnitFile): HostDaemonTrigger {
   if (!file.schedule) return 'other';
@@ -191,6 +215,37 @@ export function createSystemdUserAdapter(deps: SystemdUserAdapterDeps = {}): Hos
       '--no-legend',
     ]);
     return failed ? null : parseSystemdListUnits(stdout);
+  }
+
+  /**
+   * 执行面是否还有别的单元在用：别的 timer / path / socket 用 `Unit=` 指名它，被列进
+   * 别的单元的依赖，或被 `enable` 挂进了某个 target 的 wants / requires。
+   *
+   * 同名不等于独有。`foo.timer` 的默认执行面 `foo.service` 可以同时是 `bar.timer`
+   * （`Unit=foo.service`）的执行面：删 `foo.timer` 时把它一起删，就删掉了别人还在用的
+   * 文件。目录读不了时按「有人用」处理 —— 判断不了就不删。
+   *
+   * shortcut: 只看这个用户级目录，看不到别处 link 进来的单元和系统级单元，若要支持再改为问 systemd 的反向依赖
+   */
+  async function sharedByOthers(target: string, self: string): Promise<boolean> {
+    let entries: Dirent[];
+    try {
+      entries = await readdir(dir, { recursive: true, withFileTypes: true });
+    } catch {
+      return true;
+    }
+    for (const entry of entries) {
+      const path = join(entry.parentPath, entry.name);
+      if (path === join(dir, self) || path === join(dir, target)) continue;
+      if (/[.](wants|requires)$/.test(entry.parentPath) && entry.name === target) return true;
+      const isUnitFile =
+        entry.parentPath === dir && entry.name.includes('.') && !NON_UNIT_SUFFIX.test(entry.name);
+      const isDropIn = entry.parentPath.endsWith('.d') && entry.name.endsWith('.conf');
+      if (!isUnitFile && !isDropIn) continue;
+      const text = await readFile(path, 'utf8').catch(() => null);
+      if (text !== null && unitTextDependsOn(text, target)) return true;
+    }
+    return false;
   }
 
   return {
@@ -277,9 +332,9 @@ export function createSystemdUserAdapter(deps: SystemdUserAdapterDeps = {}): Hos
       // 执行面先删、条目自己的文件最后删：中途失败时条目还列在清单里、还带着归属，能重试。
       // 反过来先删 timer，就会留下一个没有归属记录、从页面上再也删不掉的 service。
       const pairedPath = join(dir, target);
-      if (unit.endsWith('.timer') && isOwnCounterpart(unit, declaredUnit) && (await exists(pairedPath))) {
-        await removeFile(pairedPath);
-      }
+      const ownExecution =
+        unit.endsWith('.timer') && isOwnCounterpart(unit, declaredUnit) && (await exists(pairedPath));
+      if (ownExecution && !(await sharedByOthers(target, unit))) await removeFile(pairedPath);
       await removeFile(join(dir, unit));
     },
   };

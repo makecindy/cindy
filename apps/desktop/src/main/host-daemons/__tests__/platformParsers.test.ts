@@ -5,9 +5,9 @@
  * 解析；Linux 侧在 WSL2 Ubuntu 上做过真实的 systemd / crontab 建、跑、停、删验证。
  */
 
-import { mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { basename, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
@@ -29,6 +29,7 @@ import {
   parseSystemdListUnits,
   parseSystemdUnitFile,
   stateOf,
+  unitTextDependsOn,
 } from '../systemdUser.js';
 import type { ExecResult } from '../target.js';
 
@@ -125,6 +126,22 @@ describe('systemd 用户单元', () => {
     expect(stateOf('cindy-probe.timer', new Map())).toBe('ready');
     // systemctl 读不到运行时状态时不能说它在跑，也不能说它没跑。
     expect(stateOf('cindy-probe.timer', null)).toBe('unknown');
+  });
+
+  it('单元文本是否依赖某个执行面：认 Unit= 与依赖列表，不认命令正文和描述', () => {
+    const cases: Array<[string, boolean]> = [
+      ['[Timer]\nUnit=backup.service\n', true],
+      ['[Timer]\nUnit=backup\n', true],
+      // 续行先接回同一行；值可以省略 .service 后缀。
+      ['[Unit]\nWants=a.service b.service \\n    backup.service\n', true],
+      ['[Unit]\nRequires=backup.timer\n', false],
+      ['[Unit]\nUpholds=backup2.service\n', false],
+      ['[Service]\nExecStart=/bin/backup.service\n', false],
+      ['[Unit]\nDescription=runs backup.service daily\n', false],
+    ];
+    for (const [text, expected] of cases) {
+      expect(unitTextDependsOn(text, 'backup.service')).toBe(expected);
+    }
   });
 
   it('timer 显式指名别的 service 时，不把那个 service 当成自己的另一半', () => {
@@ -229,7 +246,9 @@ describe('systemd 动作契约（真目录 + 假 systemctl）', () => {
   ) {
     const dir = await mkdtemp(join(tmpdir(), 'host-daemons-'));
     for (const [name, body] of Object.entries(units)) {
-      await writeFile(join(dir, name), body, 'utf8');
+      const path = join(dir, name);
+      await mkdir(dirname(path), { recursive: true });
+      await writeFile(path, body, 'utf8');
     }
     const commands: string[][] = [];
     const adapter = createSystemdUserAdapter({
@@ -268,6 +287,22 @@ describe('systemd 动作契约（真目录 + 假 systemctl）', () => {
     }
   });
 
+  it('timer 指名的 service 与自己不同名：没别的单元在用也不连带删', async () => {
+    // 不同名的 service 是另一份定义，这个 timer 只是借用它；删 timer 不等于替它的主人做主。
+    const { adapter, dir, cleanup } = await withUnits({
+      'cron-a.timer': '[Timer]\nUnit=shared.service\nOnCalendar=hourly\n',
+      'shared.service': '[Service]\nExecStart=/bin/true\n',
+    });
+    try {
+      await adapter.scan();
+      await adapter.remove('systemd-user:cron-a.timer');
+      await expect(stat(join(dir, 'cron-a.timer'))).rejects.toMatchObject({ code: 'ENOENT' });
+      await expect(stat(join(dir, 'shared.service'))).resolves.toBeTruthy();
+    } finally {
+      await cleanup();
+    }
+  });
+
   it('执行面未加载（stop 返回 5）时停与删都不算失败；真停不下来则不删', async () => {
     const units = { 'orphan.timer': '[Timer]\nOnCalendar=hourly\n' };
     const orphan = await withUnits(units, { stopCode: 5 });
@@ -289,6 +324,41 @@ describe('systemd 动作契约（真目录 + 假 systemctl）', () => {
     } finally {
       await orphan.cleanup();
       await stuck.cleanup();
+    }
+  });
+
+  it('默认同名配对的执行面，被别的单元使用时不连带删除；没人用才跟着删', async () => {
+    const own = {
+      'backup.timer': '[Timer]\nOnCalendar=hourly\n',
+      'backup.service': '[Service]\nExecStart=/bin/true\n',
+    };
+    // 「在用」不只有 Unit=：硬依赖、开机启用建的依赖目录，删掉执行面都会让它们启动失败。
+    const users: Record<string, string> = {
+      'daily.timer': '[Timer]\nUnit=backup.service\nOnCalendar=daily\n',
+      'report.service': '[Unit]\nRequires=backup.service\n[Service]\nExecStart=/bin/true\n',
+      'default.target.wants/backup.service': 'symlink\n',
+    };
+    for (const [name, body] of Object.entries(users)) {
+      const { adapter, dir, cleanup } = await withUnits({ ...own, [name]: body });
+      try {
+        await adapter.scan();
+        await adapter.remove('systemd-user:backup.timer');
+        // 删的是这一项自己；执行面留着，下次扫描还能把它列出来、还能删。
+        await expect(stat(join(dir, 'backup.timer'))).rejects.toMatchObject({ code: 'ENOENT' });
+        await expect(stat(join(dir, 'backup.service'))).resolves.toBeTruthy();
+      } finally {
+        await cleanup();
+      }
+    }
+
+    // 对照：执行面确实只属于这一项时，不留下没人认领、页面上再也删不掉的文件。
+    const { adapter, dir, cleanup } = await withUnits(own);
+    try {
+      await adapter.scan();
+      await adapter.remove('systemd-user:backup.timer');
+      await expect(stat(join(dir, 'backup.service'))).rejects.toMatchObject({ code: 'ENOENT' });
+    } finally {
+      await cleanup();
     }
   });
 
