@@ -1,4 +1,5 @@
 import type { Delegation, DeviceCertificate, GrantKind } from '@cindy/agent-net-protocol';
+import { SERVER_RETRY_MAX_WAIT_MS } from '@cindy/device-link';
 import type { AgentNetSigner } from './portableClient.js';
 import { AgentNetSharingError, type AgentNetSharingClient } from './sharingClient.js';
 
@@ -25,7 +26,7 @@ export class AgentNetSharingTransport {
   private closed = false;
   private pending: Promise<Delegation> | null = null;
   private cached: Delegation | null = null;
-  private rateLimit: AgentNetSharingError | null = null;
+  private rateLimit: { error: AgentNetSharingError; wallUntil: number; monotonicUntil: number } | null = null;
   private controller: AbortController | null = null;
   constructor(private readonly options: SharingTransportOptions) {
     if (options.client.options.networkId !== options.scope.networkId || options.client.options.rootPublicKey !== options.scope.rootPublicKey)
@@ -65,8 +66,9 @@ export class AgentNetSharingTransport {
     if (this.pending) return this.pending;
     // Reconnect and renewal share this lease. Honor the server's deadline at
     // the request boundary even when a caller bypasses its own backoff timer.
-    if (this.rateLimit?.retryAt !== undefined && this.rateLimit.retryAt > Date.now()) {
-      return Promise.reject(this.rateLimit);
+    const rateLimit = this.rateLimit;
+    if (rateLimit && Date.now() < rateLimit.wallUntil && performance.now() < rateLimit.monotonicUntil) {
+      return Promise.reject(rateLimit.error);
     }
     this.rateLimit = null;
     const controller = new AbortController(); this.controller = controller;
@@ -74,8 +76,12 @@ export class AgentNetSharingTransport {
     this.pending = this.acquireNow(controller.signal).then(d => { this.current(); this.cached = d; return d; })
       .catch((error: unknown) => {
         if (error instanceof AgentNetSharingError && error.status === 429 && error.retryAt !== undefined
-          && Number.isFinite(error.retryAt) && error.retryAt > Date.now() && !controller.signal.aborted) {
-          this.rateLimit = error;
+          && Number.isFinite(error.retryAt) && !controller.signal.aborted) {
+          const now = Date.now();
+          const waitMs = Math.min(error.retryAt - now, SERVER_RETRY_MAX_WAIT_MS);
+          if (waitMs > 0) {
+            this.rateLimit = { error, wallUntil: now + waitMs, monotonicUntil: performance.now() + waitMs };
+          }
         }
         throw error;
       })

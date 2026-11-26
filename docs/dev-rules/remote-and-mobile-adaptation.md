@@ -18,6 +18,12 @@ stop/start 都在 `connect()` 入口统一推迟，不调用工厂，并同样�
 把连接永久挂起；收到时换算成墙钟与单调钟两个到期时刻，任一到点即解除，系统睡眠不会多等，系统时间回拨也不能把
 等待拉长到收到时的期限之外。没有 `retryAt` 的失败（含现场那次空 `retryAt` 的 429）保持原退避不变。
 
+分享租约的 [`acquire()`](../../packages/agent-net/src/sharingTransport.ts) 也执行同一上限和双时钟规则，
+覆盖直接续租和绕过连接排期的调用。冷却期间同一租约返回原始 429，仍可复用有效的缓存委托。
+任一时钟到点后，下一次调用可发起准入请求。若服务端仍返回带有效新期限的 429，该租约重新等待。
+其它租约照常工作。[`sharingInvitation.test.ts`](../../packages/agent-net/src/__tests__/sharingInvitation.test.ts)
+用本地替身检查上限、回拨、新一轮限流和租约隔离。
+
 故障半径三问：① 证据是这一条连接的工厂被服务端明确限流并给出期限，不涉及其它连接或对端；② 只推迟这一个
 `DeviceLinkClient` 的建连，主连接、其它 scoped 连接、已建立的会话与可靠层状态都不动，不新增重试或重放；期限只在
 没有 socket 时产生，推迟不会丢弃在线连接；③ `client.test.ts`「does not call the socket factory before a server

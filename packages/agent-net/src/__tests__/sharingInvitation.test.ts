@@ -71,13 +71,19 @@ it('waits for a fresh host signature instead of accepting the expiring lease aga
 // Unit, #13041: the existing fresh-lease test never receives a 429. Exercise
 // the production acquire entry shared by reconnect and renewal, using a 429
 // on the initial POST or on the status poll after an existing lease ages out.
+// The cap and clock-rollback cases check that the next admission reaches the
+// HTTP port at the local deadline and that another 429 starts a fresh wait.
 it.each([
-  { limitedStep: 'post', retryAfter: '90', stop: true },
-  { limitedStep: 'status', retryAfter: new Date(90_000).toUTCString(), stop: false },
-  { limitedStep: 'post', retryAfter: 'invalid', stop: false },
-  { limitedStep: 'post', retryAfter: undefined, stop: false },
-])('handles a 429 from $limitedStep with Retry-After $retryAfter', async ({ limitedStep, retryAfter, stop }) => {
-  vi.useFakeTimers();
+  { limitedStep: 'post', retryAfter: '90', stop: true, serverWaitMs: 90_000 },
+  { limitedStep: 'status', retryAfter: new Date(90_000).toUTCString(), serverWaitMs: 90_000 },
+  { limitedStep: 'post', retryAfter: '601', serverWaitMs: 601_000, localWaitMs: 600_000 },
+  { limitedStep: 'post', retryAfter: '90', serverWaitMs: 90_000, localWaitMs: 90_000, rollbackMs: 3_600_000 },
+  { limitedStep: 'post', retryAfter: 'invalid' },
+  { limitedStep: 'post', retryAfter: undefined },
+])('handles a 429 from $limitedStep with Retry-After $retryAfter (rollback: $rollbackMs)', async ({
+  limitedStep, retryAfter, stop, serverWaitMs, localWaitMs, rollbackMs,
+}) => {
+  vi.useFakeTimers({ toFake: ['Date', 'performance', 'setTimeout', 'clearTimeout'] });
   const { identity: host, bootstrap } = createPrivateNetwork('Rate limited lease');
   const guest = generateIdentity('guest');
   const membership = { memberId: 'member', guestSubject: 'guest-account', memberVersion: 1 };
@@ -90,10 +96,9 @@ it.each([
   const reply = { id: delegation.id, networkId: scope.networkId, rootPublicKey: scope.rootPublicKey,
     certificate: bootstrap.ownerCertificate };
   const renew = limitedStep === 'status';
-  const honorsDeadline = retryAfter !== undefined && retryAfter !== 'invalid';
   const now = Date.now();
   const initialPollDelay = renew ? 250 : 0;
-  const deadline = now + (renew ? 1000 : 0) + initialPollDelay + 90_000;
+  const deadline = now + (renew ? 1000 : 0) + initialPollDelay + (serverWaitMs ?? 90_000);
   const headers = new Headers();
   if (retryAfter !== undefined) headers.set('Retry-After', retryAfter);
   if (renew) headers.set('Date', new Date(0).toUTCString());
@@ -126,16 +131,17 @@ it.each([
       await vi.advanceTimersByTimeAsync(1000);
     }
     const first = expect(lease.acquire()).rejects.toMatchObject({
-      status: 429, retryAt: honorsDeadline ? deadline : undefined,
+      status: 429, retryAt: serverWaitMs === undefined ? undefined : deadline,
     });
     await vi.advanceTimersByTimeAsync(initialPollDelay);
     await first;
-    if (!honorsDeadline) {
+    if (serverWaitMs === undefined) {
       await expect(lease.acquire()).rejects.toMatchObject({ status: 429, retryAt: undefined });
       expect(fetch).toHaveBeenCalledTimes(initialCalls + 1);
       return;
     }
-    await vi.advanceTimersByTimeAsync(89_999);
+    if (rollbackMs !== undefined) vi.setSystemTime(Date.now() - rollbackMs);
+    await vi.advanceTimersByTimeAsync((localWaitMs ?? serverWaitMs) - 1);
     const blocked = lease.acquire().catch((error: unknown) => error);
     await vi.advanceTimersByTimeAsync(0);
     expect(fetch).toHaveBeenCalledTimes(initialCalls);
@@ -154,6 +160,14 @@ it.each([
       return;
     }
     await vi.advanceTimersByTimeAsync(1);
+    if (localWaitMs !== undefined) {
+      const retryAt = Date.now() + serverWaitMs;
+      await expect(lease.acquire()).rejects.toMatchObject({ status: 429, retryAt });
+      expect(fetch).toHaveBeenCalledTimes(initialCalls + 2);
+      await expect(lease.acquire()).rejects.toMatchObject({ status: 429, retryAt });
+      expect(fetch).toHaveBeenCalledTimes(initialCalls + 2);
+      return;
+    }
     await expect(lease.acquire()).resolves.toEqual(delegation);
     await expect(lease.acquire()).resolves.toEqual(delegation);
     expect(fetch).toHaveBeenCalledTimes(initialCalls + 2);
