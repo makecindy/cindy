@@ -270,13 +270,13 @@ const REMOTE_PLUGIN_ENGINE_TOTAL_ICON_MAX_CHARS = 512 * 1024;
  * of plugin artwork, and leaves out what only this computer's settings page shows (the declared
  * name behind a display name, the models the user turned off).
  */
-export function remotePluginEngineViews(views: readonly PluginEngineView[]): PluginEngineView[] {
+export function remotePluginEngineViews(views: readonly PluginEngineView[], includeIcons = true): PluginEngineView[] {
   let remainingIconChars = REMOTE_PLUGIN_ENGINE_TOTAL_ICON_MAX_CHARS;
   return views.map((listed) => {
     const view = withoutSettingsDetails(listed);
     if (!view.iconDataUrl) return view;
     const size = view.iconDataUrl.length;
-    if (size <= REMOTE_PLUGIN_ENGINE_ICON_MAX_CHARS && size <= remainingIconChars) {
+    if (includeIcons && size <= REMOTE_PLUGIN_ENGINE_ICON_MAX_CHARS && size <= remainingIconChars) {
       remainingIconChars -= size;
       return view;
     }
@@ -365,8 +365,12 @@ export function registerPluginEnginesIpc(opts: RegisterPluginEnginesIpcOpts): ()
   remoteUseAccess = opts.remoteUse ?? null;
   settingsAccess = opts.settings ?? null;
   accountProvidersAccess = opts.accountProviders ?? null;
-  opts.handle(PLUGIN_ENGINES_INVOKE.LIST, (event) => {
-    if (remote()) return remotePluginEngineViews(listPluginEngineViews());
+  opts.handle(PLUGIN_ENGINES_INVOKE.LIST, (event, input) => {
+    if (remote()) {
+      const omitIcons = input && typeof input === 'object' && !Array.isArray(input)
+        && (input as { includeIcons?: unknown }).includeIcons === false;
+      return remotePluginEngineViews(listPluginEngineViews(), !omitIcons);
+    }
     opts.assertTrusted(event);
     return listPluginEngineViews();
   });

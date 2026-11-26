@@ -116,9 +116,9 @@ function register(harnesses: PluginHarness[] = [dsh()]) {
   return {
     pushes,
     list: () => invoke(PLUGIN_ENGINES_INVOKE.LIST) as PluginEngineView[],
-    listFromAnotherDevice: () => {
+    listFromAnotherDevice: (input?: unknown) => {
       deviceLink = true;
-      try { return invoke(PLUGIN_ENGINES_INVOKE.LIST) as PluginEngineView[]; } finally { deviceLink = false; }
+      try { return invoke(PLUGIN_ENGINES_INVOKE.LIST, input) as PluginEngineView[]; } finally { deviceLink = false; }
     },
     set: (input: unknown) => Promise.resolve().then(() => invoke(PLUGIN_ENGINES_INVOKE.SET_PREFS, input)) as Promise<PluginEngineView | null>,
     setFromAnotherDevice: (input: unknown) => {
@@ -158,6 +158,18 @@ describe('plugin engines with the settings from Settings → Model providers', (
     expect(JSON.stringify(ipc.list())).toBe(JSON.stringify([unchanged]));
     expect(JSON.stringify(ipc.listFromAnotherDevice())).toBe(JSON.stringify([unchanged]));
     expect(fs.existsSync(ipc.prefsFile())).toBe(false);
+  });
+
+  // #13225, unit: build the actual LIST reply for one engine with an in-budget icon.
+  // Unlike the legacy picker reply, a dispatch catalog must serialize no artwork.
+  it('leaves artwork out of remote model-only replies without changing the picker catalog', () => {
+    const iconDataUrl = 'data:image/png;base64,AA==';
+    const ipc = register([dsh({ iconDataUrl })]);
+    const [picker] = ipc.listFromAnotherDevice();
+    expect(picker).toHaveProperty('iconDataUrl', iconDataUrl);
+    const { iconDataUrl: _icon, ...metadata } = picker!;
+    expect(ipc.listFromAnotherDevice({ includeIcons: false })).toStrictEqual([metadata]);
+    expect(ipc.listFromAnotherDevice()).toStrictEqual([picker]);
   });
 
   // Unit: real settings IPC and owner-scoped file, with the plugin publishing two levels.

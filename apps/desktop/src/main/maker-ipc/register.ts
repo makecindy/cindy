@@ -8897,7 +8897,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     if (!deviceId) return listPluginEngineViews();
     if (isProviderShareAgentDeviceId(deviceId) || deviceId.length > 128) throw new Error('Select a same-account computer for the plugin engine');
     const assertCurrent = captureSessionOwner();
-    const reply = await remoteBackgroundInvoke(deviceId, PLUGIN_ENGINES_INVOKE.LIST, []);
+    const reply = await remoteBackgroundInvoke(deviceId, PLUGIN_ENGINES_INVOKE.LIST, [{ includeIcons: false }]);
     assertCurrent();
     if (!reply.ok) throw new Error('Could not read plugin engines on the selected computer');
     return parseOfferedPluginEngines(reply.result);
