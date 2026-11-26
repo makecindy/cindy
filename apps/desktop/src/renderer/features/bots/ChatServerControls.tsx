@@ -4,6 +4,7 @@ import type { useChatReactions } from './useChatReactions';
 import { ChatReactionMotion, ReactionGlyph } from './ChatReactionMotion';
 import { ChatReactionButton, type ReactorReads } from './ChatReactionButton';
 import { useTranslation } from 'react-i18next';
+import { Button } from '@/components/ui/button';
 import { Tip } from '@/components/ui/tooltip';
 import { BubbleHoverToolbar, MessageActionBar } from '@/components/chat/MessageActionBar';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
@@ -42,11 +43,6 @@ function preserveNextReactionFocus(event: Event) {
   if (activeReactionPopover) event.preventDefault();
 }
 
-function ReactionDetailsPopover({ children }: { children: ReactNode }) {
-  const [open, setOpen] = useReactionPopover();
-  return <Popover open={open} onOpenChange={setOpen}>{children}</Popover>;
-}
-
 /** A message's reaction version: the room's reset version plus the message's own realtime changes. */
 export const messageReactionRevision = (group: Pick<BotGroupDetail, 'reactionRevision' | 'reactionRevisions'>, messageId: string) =>
   `${group.reactionRevision ?? 0}:${group.reactionRevisions?.[messageId] ?? 0}`;
@@ -69,30 +65,43 @@ export function ChatMessageReactions({ groupId, message, members, reactionRevisi
   const reactorReads: ReactorReads = useMemo(() => new Map(), [groupId, message.id, owner, reactionRevision]);
   if (!reactions.length) return null;
   const stacked = reactions.length > 1;
-  const badges = reactions.map(reaction => (
+  const renderBadges = (closeDetails?: () => void) => reactions.map(reaction => (
     <ChatReactionButton key={reaction.emoji} groupId={groupId} messageId={message.id} reads={reactorReads} reaction={reaction} revision={reactionRevision} members={members}
       optimistic={!message.reactions?.includes(reaction)} compact={!stacked} disabled={!groupId}
       gesture={!stacked && gesture?.emoji === reaction.emoji ? gesture : undefined}
-      onFinishGesture={controls.finishGesture} onToggle={() => void controls.toggle(reaction.emoji)} />
+      onFinishGesture={controls.finishGesture} onToggle={() => {
+        closeDetails?.();
+        void controls.toggle(reaction.emoji);
+      }} />
   ));
   const total = reactions.reduce((n, r) => n + r.count, 0);
   const label = t(key('reactionTotal'), { emoji: reactions.slice(0, 2).map(r => r.emoji).join(' '), count: total });
   return (
     <div {...{ [SHARE_EXCLUDE_ATTR]: '' }} data-message-reactions=""
       className={cn('absolute -top-2.5 z-[5] w-max', align === 'right' ? '-left-1' : '-right-1')}>
-      {stacked ? <ReactionDetailsPopover>
-        <PopoverTrigger asChild>
-          <button type="button" aria-label={label} className="relative flex h-[22px] items-center gap-0.5 rounded-full border border-[var(--border-default)] bg-popover px-1.5 text-13 focus-visible:ring-2 focus-visible:ring-ring">
-            {reactions.slice(0, 2).map(r => <ReactionGlyph key={r.emoji} emoji={r.emoji} />)}
-            <span className="text-11 tabular-nums text-[var(--text-secondary)]">{total}</span>
-            {gesture && <ChatReactionMotion key={gesture.emoji} gesture={gesture} onFinish={controls.finishGesture} />}
-          </button>
-        </PopoverTrigger>
-        <PopoverContent side="top" align={align === 'right' ? 'start' : 'end'} collisionPadding={12} aria-label={label} onCloseAutoFocus={preserveNextReactionFocus}
-          className="flex max-h-52 w-max max-w-[min(256px,90vw)] flex-wrap gap-1 overflow-y-auto p-2">{badges}</PopoverContent>
-      </ReactionDetailsPopover> : badges}
+      {stacked ? <ReactionDetailsPopover label={label} align={align} renderBadges={renderBadges}>
+        <button type="button" aria-label={label} className="relative flex h-[22px] items-center gap-0.5 rounded-full border border-[var(--border-default)] bg-popover px-1.5 text-13 focus-visible:ring-2 focus-visible:ring-ring">
+          {reactions.slice(0, 2).map(r => <ReactionGlyph key={r.emoji} emoji={r.emoji} />)}
+          <span className="text-11 tabular-nums text-[var(--text-secondary)]">{total}</span>
+          {gesture && <ChatReactionMotion key={gesture.emoji} gesture={gesture} onFinish={controls.finishGesture} />}
+        </button>
+      </ReactionDetailsPopover> : renderBadges()}
     </div>
   );
+}
+
+function ReactionDetailsPopover({ children, align, label, renderBadges }: {
+  children: ReactNode; align: 'left' | 'right'; label: string; renderBadges: (close: () => void) => ReactNode;
+}) {
+  const [open, setOpen] = useReactionPopover();
+  return <Popover open={open} onOpenChange={setOpen}>
+    <PopoverTrigger asChild>{children}</PopoverTrigger>
+    <PopoverContent side="top" align={align === 'right' ? 'start' : 'end'} collisionPadding={12}
+      aria-label={label} onCloseAutoFocus={preserveNextReactionFocus}
+      className="flex max-h-52 w-max max-w-[min(256px,90vw)] flex-wrap gap-1 overflow-y-auto p-2">
+      {renderBadges(() => setOpen(false))}
+    </PopoverContent>
+  </Popover>;
 }
 
 function ReactionPicker({ controls, onChoose }: { controls: ReturnType<typeof useChatReactions>; onChoose: (emoji: string, from?: DOMRect) => void }) {
@@ -111,10 +120,10 @@ function ReactionPicker({ controls, onChoose }: { controls: ReturnType<typeof us
     <div className="flex items-center justify-between gap-0.5">
       {quickReactions.map(choice)}
       <Tip text={t(key('moreReactions'))}>
-        <button type="button" className={iconClass} aria-expanded={expanded} aria-label={t(key('moreReactions'))}
-          onClick={() => setExpanded(!expanded)}>
+        <Button type="button" variant="secondary" tone="quiet" className="w-8 px-0" aria-expanded={expanded}
+          aria-label={t(key('moreReactions'))} onClick={() => setExpanded(!expanded)}>
           {expanded ? <ChevronUp aria-hidden className="size-4" /> : <Plus aria-hidden className="size-4" />}
-        </button>
+        </Button>
       </Tip>
     </div>
     {expanded && <Suspense fallback={<div className="chat-full-reaction-space" aria-busy="true" />}>

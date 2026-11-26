@@ -982,7 +982,7 @@ export function BubbleHoverToolbar({ side, open = false, marker, children }: {
   const left = side === 'left';
   return (
     <div data-chat-copy-exclude {...{ [SHARE_EXCLUDE_ATTR]: '' }} {...(marker ? { [marker]: '' } : {})} data-open={open ? '' : undefined}
-      className={cn('chat-bubble-toolbar pointer-events-none absolute top-0 z-raised w-max rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-0.5 opacity-0 transition-opacity duration-[var(--motion-fast)] ease-[var(--motion-ease-out)] focus-within:pointer-events-auto focus-within:opacity-100 group-hover/message:pointer-events-auto group-hover/message:opacity-100 motion-reduce:transition-none [@media(hover:none)]:pointer-events-auto [@media(hover:none)]:opacity-100',
+      className={cn('chat-bubble-toolbar pointer-events-none absolute top-0 z-raised w-max rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-0.5 opacity-0 transition-opacity duration-[var(--motion-fast)] ease-[var(--motion-ease-out)] has-[:focus-visible]:pointer-events-auto has-[:focus-visible]:opacity-100 group-hover/message:pointer-events-auto group-hover/message:opacity-100 motion-reduce:transition-none [@media(hover:none)]:pointer-events-auto [@media(hover:none)]:opacity-100',
         left ? 'right-full mr-1.5' : 'left-full ml-1.5')}>
       {children}
     </div>
