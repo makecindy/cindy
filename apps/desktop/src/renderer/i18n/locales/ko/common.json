@@ -4645,6 +4645,15 @@
       "menu": {
         "disableProvider": "이 제공자 비활성화",
         "enableProvider": "이 제공자 활성화",
+        "icon": "연결 아이콘",
+        "appearance": "이름 및 아이콘",
+        "ownImage": "이미지 선택",
+        "imageError": "10 MB 이하의 PNG, JPG 또는 WebP 이미지를 선택하세요.",
+        "connectionIcon": {
+          "default": "기본값",
+          "personal": "개인용",
+          "work": "업무용"
+        },
         "hideProvider": "모델 선택기에서 숨기기",
         "showProvider": "모델 선택기에 표시"
       },

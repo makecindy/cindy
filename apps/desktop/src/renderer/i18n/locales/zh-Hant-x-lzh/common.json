@@ -4645,6 +4645,15 @@
       "menu": {
         "disableProvider": "停此供方",
         "enableProvider": "啟此供方",
+        "icon": "連接之徽",
+        "appearance": "名與徽",
+        "ownImage": "自擇圖",
+        "imageError": "請擇 PNG、JPG 或 WebP 圖，不逾 10 MB。",
+        "connectionIcon": {
+          "default": "如常",
+          "personal": "私用",
+          "work": "公用"
+        },
         "hideProvider": "隱於模型之選",
         "showProvider": "顯於模型之選"
       },

@@ -4688,6 +4688,15 @@
       "menu": {
         "disableProvider": "Disable This Provider",
         "enableProvider": "Enable This Provider",
+        "icon": "Connection icon",
+        "appearance": "Name and icon",
+        "ownImage": "Choose image",
+        "imageError": "Choose a PNG, JPG or WebP image under 10 MB.",
+        "connectionIcon": {
+          "default": "Default",
+          "personal": "Personal",
+          "work": "Work"
+        },
         "hideProvider": "Hide from Model Picker",
         "showProvider": "Show in Model Picker"
       },

@@ -4744,6 +4744,15 @@
       "menu": {
         "disableProvider": "Désactiver ce fournisseur",
         "enableProvider": "Activer ce fournisseur",
+        "icon": "Icône de connexion",
+        "appearance": "Nom et icône",
+        "ownImage": "Choisir une image",
+        "imageError": "Choisissez une image PNG, JPG ou WebP de moins de 10 Mo.",
+        "connectionIcon": {
+          "default": "Par défaut",
+          "personal": "Personnel",
+          "work": "Travail"
+        },
         "hideProvider": "Masquer dans le sélecteur de modèles",
         "showProvider": "Afficher dans le sélecteur de modèles"
       },
