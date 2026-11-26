@@ -59,7 +59,9 @@ export function PluginManagementConfirmation(
   const compact = plan.mode === "compact" || reviewed;
   const needsReview = compact && !reviewed && info?.allowBlocked !== true;
   const listRef = useRef<ScrollViewInstance>(null);
-  useEffect(() => { if (reviewed) listRef.current?.scrollTo({ y: 0, animated: false }); }, [reviewed]);
+  // Back to the list's top after "Review", and for each new consent (another requestId), so a second consent does not
+  // open where the previous one was scrolled to (iOS: its new view id does the same).
+  useEffect(() => { listRef.current?.scrollTo({ y: 0, animated: false }); }, [reviewed, consent?.requestId]);
   const list = useScrollOverflow(), summary = useScrollOverflow();
   // Large text on a narrow screen: the buttons stack so each label shows in full (as the plugin notices do). Wide enough
   // (landscape, tablets) they stay side by side, labels wrapping inside them, so the text keeps more room (K-3).

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { PluginNativeNotice, PluginNotice as PluginNoticeHost } from "@/plugins/PluginNotice.ios";
-import { act, createElement } from "react";
+import { act, createElement, useImperativeHandle } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { PluginDirectoryView } from "@/plugins/PluginDirectoryView.ios";
@@ -29,6 +29,8 @@ const bridge = vi.hoisted(() => ({
   fontScale: 1,
   width: 390,
   mode: "light" as "light" | "dark",
+  /** `scrollTo` calls on a ScrollView, by its testID. */
+  scrolledTo: [] as Array<[string | undefined, unknown]>,
 }));
 vi.mock("@/hooks/useReduceMotion", () => ({ useReduceMotionEnabled: () => false }));
 // Metro resolves the iOS market rows inside the iOS directory; vitest needs the platform file named.
@@ -198,7 +200,12 @@ vi.mock("react-native", () => ({
   },
   Text: (p: any) => p.children,
   TextInput: () => null,
-  ScrollView: (p: any) => { if (p.testID) bridge.props.set(p.testID, p); return createElement("div", { "data-testid": p.testID }, p.children); },
+  // React 19 passes `ref` as a prop: the list's scrollTo calls are recorded.
+  ScrollView: (p: any) => {
+    useImperativeHandle(p.ref, () => ({ scrollTo: (to: unknown) => { bridge.scrolledTo.push([p.testID, to]); } }));
+    if (p.testID) bridge.props.set(p.testID, p);
+    return createElement("div", { "data-testid": p.testID }, p.children);
+  },
   Pressable: (p: any) => { if (p.testID) bridge.props.set(p.testID, p); return createElement("div", { "data-testid": p.testID }, p.children); },
   ActivityIndicator: () => null,
   AccessibilityInfo: {
@@ -322,6 +329,7 @@ const roots: ReturnType<typeof createRoot>[] = [];
 afterEach(() => {
   act(() => roots.splice(0).forEach((root) => root.unmount()));
   bridge.props.clear();
+  bridge.scrolledTo = [];
   bridge.mode = "light";
   bridge.ownerCurrent = true;
   bridge.keyboardVisible = false;
@@ -1751,6 +1759,24 @@ describe("pinned high-risk permission", () => {
       act(() => bridge.props.get("plugins.management.allow").onPress());
       expect(sheetProps.controller.answer).toHaveBeenCalledWith(true);
     });
+  /* 测试价值（调度 2026-11-26：两端一致）
+   * - 生产入口与可观察结果：Android 真实确认面板组件；观察列表滚动区收到的 scrollTo。
+   * - 依据：同一项操作里接连出现第二个确认、面板一直开着时，列表要从顶部开始（iOS 由新的视图 id 重置）。
+   * - 最小失败输入：查看并允许第一个确认后，换成 requestId 不同的第二个确认；改前没有第二次回顶部。tier: unit。
+   */
+  it("Android: a second consent in the open sheet starts at the top of the list again", () => {
+    bridge.fontScale = 1;
+    const first = props(allFive);
+    const { rerender } = mount(AndroidManagementConfirmation, first);
+    const toTop = () => bridge.scrolledTo.filter(([id, to]) => id === "plugins.management.list" && (to as any)?.y === 0).length;
+    const before = toTop();
+    const second = props(allFive);
+    second.state.receipt.consent.requestId = "request-2";
+    rerender(second);
+    expect(toTop()).toBe(before + 1);
+    rerender(second);
+    expect(toTop(), "the same consent drawn again does not move the list").toBe(before + 1);
+  });
   it.each([["iOS", PluginManagementConfirmation], ["Android", AndroidManagementConfirmation]] as const)(
     "%s regular layout: Allow at once, no review step (unchanged)", (_platform, Sheet) => {
       bridge.fontScale = 1;
