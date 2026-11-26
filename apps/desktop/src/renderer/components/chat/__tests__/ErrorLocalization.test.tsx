@@ -42,6 +42,26 @@ const raw = JSON.stringify({ error: {
 } });
 afterEach(cleanup);
 
+// #12924, unit: the live and historical notices distinguish the observed
+// empty HTTP 550 from ordinary failures, while preserving the dispatch refusal.
+it.each([
+  ['550 status code (no body)', '模型服务返回 HTTP 550（无响应内容）'],
+  ['ordinary failure mentioning 550 status code (no body)', zhCN.chat.errorBanner.replyFailed],
+  ['provider-rejected-before-dispatch: Provider rejected the Session send before dispatch: SEND/task/send',
+    zhCN.chat.errorBanner.messageNotSent],
+])('localizes the exact empty upstream 550 without changing other errors (%s)', async (message, expected) => {
+  const i18n = createInstance();
+  await i18n.init({ lng: 'zh-CN', resources: { 'zh-CN': { translation: zhCN } } });
+  const { rerender } = render(<I18nextProvider i18n={i18n}>
+    <ErrorBanner error={message} agentKind="pi" onRetry={vi.fn()} />
+  </I18nextProvider>);
+  expect(screen.getByText(expected)).toBeTruthy();
+  rerender(<I18nextProvider i18n={i18n}>
+    <ErrorMessageCard message={message} />
+  </I18nextProvider>);
+  expect(screen.getByText(expected)).toBeTruthy();
+});
+
 // #12240, unit: the live banner must explain both options for a retained
 // queue head. The same network error without that recovery cannot promise
 // that the original input is still waiting to be sent.

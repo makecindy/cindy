@@ -15646,6 +15646,7 @@
       "requestFormatError": "Die App hat eine ungültige Anfrage gesendet. Daher konnte diese Antwort nicht abgeschlossen werden.",
       "piRetryHistoryTooLarge": "Deine Nachricht wurde nicht gesendet. Beim Lesen des Verlaufs für den erneuten Versuch wurde das lokale Limit von 16 MiB für einen Datenrahmen überschritten. Du kannst in einer neuen Aufgabe fortfahren.",
       "messageNotSent": "Deine Nachricht wurde nicht gesendet.",
+      "upstreamEmpty550": "Der Modelldienst hat HTTP 550 ohne Antwortinhalt zurückgegeben",
       "replyFailed": "Antwort konnte nicht abgeschlossen werden",
       "queuedSendRecovery": "Deine Nachricht wurde nicht gesendet. Wähle „Erneut versuchen“, um sie unverändert zu senden. Eine neue Nachricht ersetzt sie.",
       "retryTitle": "Letzte Nachricht erneut senden",
