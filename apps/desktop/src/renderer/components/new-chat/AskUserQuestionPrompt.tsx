@@ -32,7 +32,7 @@ import { ChevronLeft, ChevronRight, Mic, Square } from 'lucide-react';
 
 import { InteractionPromptCardShell } from '@/components/interaction-portal';
 import { ChatSessionFileProvider, useChatSessionFile, useChatSessionFileValue } from '@/components/chat/ChatSessionFileContext';
-import { QuestionReferenceText } from '@/components/chat/MarkdownRenderer';
+import { MarkdownRenderer, QuestionReferenceText } from '@/components/chat/MarkdownRenderer';
 import { getTextPreviewHost } from '@/components/find-in-page/findInPageOwnership';
 import { useOptionalConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { Tip } from '@/components/ui/tooltip';
@@ -213,7 +213,7 @@ export function AskUserQuestionPrompt({
     question.header,
     question.multiSelect,
     question.answerConstraints,
-    (question.options ?? []).map((option) => [option.label, option.description]),
+    (question.options ?? []).map((option) => [option.label, option.description, option.preview]),
   ]);
   const formKey = JSON.stringify([sessionId, props.pending.requestId, questionsIdentity]);
   // Repeated snapshots keep this form mounted. A changed session, request or
@@ -237,10 +237,25 @@ function AskUserQuestionForm({
   hostVisible = true,
 }: AskUserQuestionPromptProps) {
   const { t } = useTranslation();
+  const fileContext = useChatSessionFile();
   const { requestId, questions } = pending;
   const totalQuestions = questions.length;
   const queueIndex = pendingQuestions?.findIndex((q) => q.requestId === requestId) ?? -1;
-  const [referencePreviewOpen, setReferencePreviewOpen] = useState(false);
+  const [openPreviewSources, setOpenPreviewSources] = useState<ReadonlySet<string>>(() => new Set());
+  const referencePreviewOpen = openPreviewSources.size > 0;
+  const setPreviewSourceOpen = useCallback((source: string, open: boolean) => {
+    setOpenPreviewSources((prev) => {
+      if (prev.has(source) === open) return prev;
+      const next = new Set(prev);
+      if (open) next.add(source);
+      else next.delete(source);
+      return next;
+    });
+  }, []);
+  const handleQuestionPreviewOpenChange = useCallback(
+    (open: boolean) => setPreviewSourceOpen('question', open),
+    [setPreviewSourceOpen],
+  );
   const [voiceFeedback, setVoiceFeedback] = useState<'hint' | 'confirm' | 'ambiguous' | 'unknown' | 'cancelled'>('hint');
   const voiceRevision = useRef(0);
 
@@ -299,6 +314,10 @@ function AskUserQuestionForm({
     if (!confirmed) return;
     const result = await requestRendererMicrophonePermission();
     if (result.ok) return;
+    if (result.status === 'device-unavailable') {
+      toast.error(t('settings.voiceInput.microphone.errors.deviceUnavailable'));
+      return;
+    }
     const settingsResult = await window.electronAPI.voiceInput.openMicrophoneSettings();
     if (!settingsResult.ok) toast.error(settingsResult.error);
   }, [confirmDialog, t]);
@@ -442,7 +461,7 @@ function AskUserQuestionForm({
   const snapshotButtons = useCallback(() => {
     // Capture a static copy of the current button bar's DOM via a frozen JSX snapshot.
     // This uses the current values at call time, not reactive state.
-    const btnClass = 'rounded-[9999px] px-[20px] py-[8px] text-13 font-medium pointer-events-none';
+    const btnClass = 'rounded-full px-5 py-2 text-13 font-medium pointer-events-none';
     const skipClass = cn(
       btnClass,
       'border border-[var(--confirm-btn-secondary-border)] bg-transparent text-[var(--confirm-btn-secondary-text)]',
@@ -687,7 +706,7 @@ function AskUserQuestionForm({
     };
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.repeat || event.isComposing) return;
-      if (event.key === 'Escape' && getTextPreviewHost()) return;
+      if (event.key === 'Escape' && (referencePreviewOpen || getTextPreviewHost())) return;
       if (event.key === 'Escape' && dictationRef.current.isBusy && shortcutCard.owns(event.target)) {
         event.preventDefault();
         event.stopPropagation();
@@ -717,7 +736,7 @@ function AskUserQuestionForm({
       window.removeEventListener('keydown', onKeyDown, true);
       unsubscribe?.();
     };
-  }, [beginVoiceInput, hostVisible, viewerState, voiceBridge, voiceShortcutOrder, voiceShortcutPreferred]);
+  }, [beginVoiceInput, hostVisible, referencePreviewOpen, viewerState, voiceBridge, voiceShortcutOrder, voiceShortcutPreferred]);
 
   // ── Custom input submit (single-select mode) ──
   const handleCustomSubmit = useCallback(() => {
@@ -805,7 +824,7 @@ function AskUserQuestionForm({
   ) : null;
   // A companion call's question bridge shows this on the call bar instead.
   const speakerFilteredNotice = !voiceBridge && dictation.speakerFiltered ? (
-    <p role="status" className="px-[4px] text-12 leading-5 text-[var(--text-secondary)]">
+    <p role="status" className="px-1 text-12 leading-5 text-[var(--text-secondary)]">
       {t('voiceInputOverlay.speakerFiltered')}
     </p>
   ) : null;
@@ -813,9 +832,9 @@ function AskUserQuestionForm({
   // ── Keyboard shortcuts ──
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      // File previews can keep focus on their question link. Their keys must
-      // never select or skip an answer, including during the closing fade.
-      if (referencePreviewOpen) return;
+      // File previews can keep focus on their question or option link. Their keys
+      // must never select or skip an answer, including during the closing fade.
+      if (referencePreviewOpen || getTextPreviewHost()) return;
       // F-AUQ-MIN-5: minimized 时数字键 1-N / 回车 / N+1 全部透传，
       // 避免"无视觉反馈地选中选项"。Escape 仍保留——满足 F-AUQ-MIN-5 的取消语义。
       if (viewerState === 'minimized' && e.key !== 'Escape') return;
@@ -989,13 +1008,13 @@ function AskUserQuestionForm({
   // view (DESIGN.md §4: permanent entries pin below the scroll region).
   const customAnswerEntry =
     options.length > 0 && !currentQ?.answerConstraints?.choices ? (
-      <div className="overflow-hidden rounded-[12px] border border-[var(--ask-option-border)] bg-[var(--ask-option-list-bg)]">
+      <div className="overflow-hidden rounded-xl border border-[var(--ask-option-border)] bg-[var(--ask-option-list-bg)]">
         {showCustomInput ? (
           <div
             data-testid="interaction-answer-composer"
             className={cn(
               'flex w-full min-w-0 gap-2',
-              composerExpanded ? 'flex-col p-3' : 'items-end px-[16px] py-[8px]',
+              composerExpanded ? 'flex-col p-3' : 'items-end px-4 py-2',
             )}
           >
             <AutoGrowingAnswerTextarea
@@ -1024,7 +1043,7 @@ function AskUserQuestionForm({
               className={cn(
                 'min-h-[22px] min-w-0 bg-transparent text-14 font-normal leading-[1.571] outline-none',
                 // One line beside the 32px actions; centred on them by the margin.
-                composerExpanded ? 'w-full' : 'my-[5px] flex-1',
+                composerExpanded ? 'w-full' : 'my-1 flex-1',
                 'text-[var(--ask-input-text)] placeholder:text-[var(--ask-input-placeholder)]',
                 'select-text',
               )}
@@ -1073,11 +1092,11 @@ function AskUserQuestionForm({
           // The number badge stays last so it lines up with the option badges
           // above; the microphone sits just before it, the same order as the
           // expanded answer row (mic, then send).
-          <div className="flex items-center gap-2 px-[16px] py-[8px]">
+          <div className="flex items-center gap-2 px-4 py-2">
             <button
               type="button"
               className={cn(
-                'flex min-w-0 flex-1 items-center gap-3 py-[6px] text-left',
+                'flex min-w-0 flex-1 items-center gap-3 py-1.5 text-left',
                 'transition-colors hover:bg-[var(--ask-option-hover)]',
               )}
               disabled={voiceLocked}
@@ -1108,7 +1127,7 @@ function AskUserQuestionForm({
               aria-hidden="true"
               data-testid="ask-user-custom-badge"
               onClick={handleCustomOptionClick}
-              className="flex h-[28px] w-[28px] shrink-0 cursor-pointer items-center justify-center rounded-[8px] bg-[var(--ask-badge-bg)] text-13 font-medium text-[var(--ask-badge-text)]"
+              className="flex h-[28px] w-[28px] shrink-0 cursor-pointer items-center justify-center rounded-lg bg-[var(--ask-badge-bg)] text-13 font-medium text-[var(--ask-badge-text)]"
             >
               {options.length + 1}
             </div>
@@ -1151,7 +1170,7 @@ function AskUserQuestionForm({
           <Tip text={currentQ.header}>
             <span
               tabIndex={0}
-              className="mr-3 inline-block min-w-0 truncate rounded-[6px] bg-[var(--ask-header-chip-bg)] px-[8px] py-[2px] text-12 font-medium text-[var(--ask-badge-text)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
+              className="mr-3 inline-block min-w-0 truncate rounded-full bg-[var(--ask-header-chip-bg)] px-[8px] py-[2px] text-12 font-medium text-[var(--ask-badge-text)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
             >
               {currentQ.header}
             </span>
@@ -1177,7 +1196,7 @@ function AskUserQuestionForm({
         <div className="flex flex-col gap-2">
           <div className="flex items-center justify-between">
             <span className="min-w-0 break-words whitespace-pre-wrap text-15 font-medium text-[var(--ask-header-text)]">
-              <QuestionReferenceText text={currentQ?.question ?? ''} onPreviewOpenChange={setReferencePreviewOpen} />
+              <QuestionReferenceText text={currentQ?.question ?? ''} onPreviewOpenChange={handleQuestionPreviewOpenChange} />
             </span>
             {pageIndicator && (
               <span className="ml-4 shrink-0 text-13 text-[var(--ask-page-text)]">
@@ -1189,10 +1208,10 @@ function AskUserQuestionForm({
 
         {/* Options Container */}
         {options.length > 0 && (
-          <div className="overflow-hidden rounded-[12px] border border-[var(--ask-option-border)] bg-[var(--ask-option-list-bg)]">
+          <div className="overflow-hidden rounded-xl border border-[var(--ask-option-border)] bg-[var(--ask-option-list-bg)]">
             {options.map((opt, idx) => {
               const rowClassName = cn(
-                'flex w-full items-center justify-between px-[16px] py-[14px] text-left',
+                'flex w-full items-center justify-between px-4 py-3.5 text-left',
                 'transition-colors hover:bg-[var(--ask-option-hover)]',
               );
               const optionText = (
@@ -1208,10 +1227,11 @@ function AskUserQuestionForm({
                 </div>
               );
               const numberBadge = (
-                <div className="ml-3 flex h-[28px] w-[28px] shrink-0 items-center justify-center rounded-[8px] bg-[var(--ask-badge-bg)] text-13 font-medium text-[var(--ask-badge-text)]">
+                <div className="ml-3 flex h-[28px] w-[28px] shrink-0 items-center justify-center rounded-lg bg-[var(--ask-badge-bg)] text-13 font-medium text-[var(--ask-badge-text)]">
                   {idx + 1}
                 </div>
               );
+              const preview = opt.preview?.trim() ? opt.preview : undefined;
               return (
                 <div key={opt.label}>
                   {idx > 0 && <div className="h-px bg-[var(--ask-option-divider)]" />}
@@ -1247,6 +1267,26 @@ function AskUserQuestionForm({
                       {numberBadge}
                     </button>
                   )}
+                  {preview && (
+                    // Rendered outside the option button/label so reading, scrolling,
+                    // selecting text or opening links never triggers single-select submit.
+                    <div
+                      data-testid={`ask-user-option-preview-${idx + 1}`}
+                      className={cn(
+                        'mx-4 mb-3.5 max-h-44 overflow-y-auto overscroll-contain rounded-lg',
+                        'border border-[var(--border-default)] bg-[var(--surface)] px-3.5 py-2.5',
+                        'select-text text-13 leading-[1.5] text-[var(--text-primary)]',
+                      )}
+                    >
+                      <OptionPreviewMarkdown
+                        sourceKey={`option-${idx}`}
+                        workingDir={fileContext.workingDir}
+                        sessionId={fileContext.sessionId}
+                        content={preview}
+                        onPreviewSourceOpenChange={setPreviewSourceOpen}
+                      />
+                    </div>
+                  )}
                 </div>
               );
             })}
@@ -1260,7 +1300,7 @@ function AskUserQuestionForm({
           <div
             data-testid="interaction-answer-composer"
             className={cn(
-              'flex w-full min-w-0 gap-2 rounded-[8px] border border-[var(--ask-input-border)] bg-[var(--ask-input-bg)] focus-within:border-[var(--chat-input-border-focus)]',
+              'flex w-full min-w-0 gap-2 rounded-lg border border-[var(--ask-input-border)] bg-[var(--ask-input-bg)] focus-within:border-[var(--chat-input-border-focus)]',
               composerExpanded ? 'flex-col p-3' : 'items-end py-2 pl-3 pr-2',
             )}
           >
@@ -1286,7 +1326,7 @@ function AskUserQuestionForm({
               autoFocus
               className={cn(
                 'min-h-[22px] min-w-0 bg-transparent text-14 leading-[1.571] outline-none',
-                composerExpanded ? 'w-full' : 'my-[5px] flex-1',
+                composerExpanded ? 'w-full' : 'my-1 flex-1',
                 'text-[var(--ask-input-text)]',
                 'placeholder:text-[var(--ask-input-placeholder)]',
               )}
@@ -1331,6 +1371,33 @@ function AskUserQuestionForm({
         {options.length === 0 && speakerFilteredNotice}
       </div>
     </InteractionPromptCardShell>
+  );
+}
+
+function OptionPreviewMarkdown({
+  sourceKey,
+  workingDir,
+  sessionId,
+  content,
+  onPreviewSourceOpenChange,
+}: {
+  sourceKey: string;
+  workingDir: string;
+  sessionId: string | undefined;
+  content: string;
+  onPreviewSourceOpenChange: (source: string, open: boolean) => void;
+}) {
+  const handlePreviewOpenChange = useCallback(
+    (open: boolean) => onPreviewSourceOpenChange(sourceKey, open),
+    [onPreviewSourceOpenChange, sourceKey],
+  );
+  return (
+    <MarkdownRenderer
+      workingDir={workingDir}
+      currentSessionId={sessionId}
+      content={content}
+      onPreviewOpenChange={handlePreviewOpenChange}
+    />
   );
 }
 

@@ -24,6 +24,7 @@ import { renderProviderErrorExplanation } from './ProviderErrorExplanation';
 import { AutoReviewRecoveryActions } from './AutoReviewRecoveryActions';
 import { useTranslation } from 'react-i18next';
 import {
+  isAccountUsageLimitReachedText,
   isCindyGatewayProxyTokenInvalidError,
   isRemoteAgentResumeRejectedError,
   isResponsesLiteParallelToolCallsError,
@@ -32,6 +33,7 @@ import {
   localizeSubscriptionAccountError,
 } from '@cindy/maker-shared/error-redaction';
 import { isStreamInterruptedErrorMessage } from '@/utils/streamInterruptError';
+import { parseUpstreamStatusError } from '@/utils/upstreamStatusError';
 import { chatRemoteErrorGuidanceKey } from '../../lib/autoReviewUnavailableGuidance';
 import { decodeRemoteErrorMessage, remoteErrorI18nKey } from '../../lib/makerChatStore';
 import { errorReasonI18nKey } from './errorReasonI18n';
@@ -91,6 +93,16 @@ export function ErrorMessageCard({
   const subscriptionGuidance = localizeSubscriptionAccountError(message, t, i18n.resolvedLanguage ?? i18n.language);
   const geminiGuidance = parseGeminiInputRateLimit(message) === null ? null :
     t(reason === 'gemini-input-retry-exhausted' ? 'chat.geminiRateLimit.exhausted' : 'chat.geminiRateLimit.title');
+  // 历史错误行与实时横幅同一口径：上游 5xx（无正文）时点名状态，不落到通用兜底。
+  const upstreamStatusError = parseUpstreamStatusError(decoded);
+  // #12970 review: 「未发送」必须压过上游状态码。Pi 历史读取被拒时上游可能返回
+  // 502/529，先命中状态文案会让历史行只说「回复未完成」，丢掉消息根本没发出去这个
+  // 事实。与 ErrorBanner 的 piRetryHistoryKey 分支同一优先级。
+  const piRetryHistoryKey =
+    i18nKey === 'chat.errorBanner.piRetryHistoryUnavailable'
+    || i18nKey === 'chat.errorBanner.piRetryHistoryTooLarge'
+      ? i18nKey
+      : undefined;
   const fallbackText = isResponsesLiteParallelToolCallsError(decoded)
     ? t('chat.errorBanner.requestFormatError')
     : isStreamInterrupted
@@ -98,7 +110,12 @@ export function ErrorMessageCard({
       : isGatewayProxyTokenInvalid
         ? t('chat.errorBanner.gatewayProxyTokenInvalidNoRetry')
         : (parsedRemoteKey?.startsWith('sharedTaskRecovery.') ? remoteGuidance : undefined)
-          ?? localizedReasonError ?? remoteGuidance ?? t('chat.errorBanner.replyFailed');
+          ?? (piRetryHistoryKey ? t(piRetryHistoryKey) : undefined)
+          ?? (upstreamStatusError
+            ? t('chat.errorBanner.upstreamStatusError', { status: upstreamStatusError.status })
+            : undefined)
+          ?? localizedReasonError ?? remoteGuidance
+          ?? t(isAccountUsageLimitReachedText(decoded) ? 'chat.errorBanner.usageLimitReached' : 'chat.errorBanner.replyFailed');
   const text = kind === 'blocked-input'
     ? redactSensitiveText(decoded)
     : geminiGuidance ?? subscriptionGuidance ?? fallbackText;

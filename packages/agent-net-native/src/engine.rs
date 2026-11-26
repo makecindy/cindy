@@ -1,9 +1,11 @@
 use std::{cell::RefCell, collections::{BTreeMap, BTreeSet}, net::{SocketAddr, UdpSocket}, rc::Rc, time::Instant};
 use agent_net_core::{Config, Crypto, Endpoint, Incoming, PathAddress, Priority, RecoveryPolicy, StreamEvent};
 use serde_json::{Value, json};
-use crate::{bytes, crypto::NativeCrypto, encoded, text, udp_paths::{self, Credentials, Intercepted, RelayUdp, Stun}};
+use crate::{bytes, crypto::NativeCrypto, encoded, text, udp_paths::{self, Credentials, Intercepted, RelayUdp, Stun, Udp}};
 
-const MAX_PEERS: usize = 512;
+/// Admitted peers mirrored from JS: every device authorized in the account. 512 closed the transport of a computer in an
+/// account with more (2026-11-23 review of the Desktop's move to this engine; the WASM transport has no such limit).
+const MAX_PEERS: usize = 4096;
 const MAX_CONNECTIONS: usize = 256;
 const IO_SIZE: usize = 65_536;
 const PROLOGUE: &[u8] = b"cindy/agent-net/device-link/2";
@@ -17,11 +19,31 @@ const SEND_PACKET_SIZE: usize = 1350 - udp_paths::UP_OVERHEAD;
 /// bandwidth and round trip. Interop with 128-segment peers is the core's (packages/agent-net-core/sim/results/2026-11-17-window-interop).
 const SEND_WINDOW: u32 = 8192;
 const SEND_BUFFER_BYTES: usize = 24 << 20;
-/// Streams this side opened whose send-buffer size `poll` reports (data, control and the three session lanes).
-const MAX_REPORTED_STREAMS: usize = 16;
+/// Streams this side opened whose send-buffer size `poll` reports: data, control, the three session lanes and the session's
+/// body streams (JS keeps at most 32, nativeTransport.ts `MAX_NATIVE_BODIES`). A stream the core retired is reported once, then
+/// leaves the set.
+const MAX_REPORTED_STREAMS: usize = 40;
 /// What this build adds over the first native release; JS checks it before using any of them (an older
 /// installed binary keeps working with newer JS, without these).
-const FEATURES: [&str; 3] = ["stream-buffered", "stun", "relay-udp-v2"];
+/// `stream-levels`（2026-11-22）：`openStream` 认 `level`（核心的八档，0 最急），`abandon` 放弃一条流，`buffered` 的每一项
+/// 在 `[流, 缓冲字节]` 后面多两项 `[累计确认字节, 停顿毫秒]`（只读前两项的旧 JS 不受影响）。
+/// `stream-retired`（2026-11-22）：`buffered` 里核心已经收回的流报一次就不再报，名额（`MAX_REPORTED_STREAMS`）留给新开的流。
+/// `probe-grants`（2026-11-22）：核心回对端探测的确认带上所有流的额度。没有它的核心只带编号最小的两条，对端开的第 6 条流
+/// 最初的额度没送到时一直停在 128 个分片上；JS 只在有它的引擎上用会话 v2 的正文流（nativeTransport.ts `bodies`）。
+/// `path-routing`（2026-11-23）：`measure` 只验证一条路径、量它的往返，不换数据路径；`preferRelay` 让这条连接优先走中转（中转
+/// 代价降到直连以下）；`poll` 里每条连接带 `probeRtts`（`[地址, 往返微秒]`）。和电脑端 WASM 传输一样供选路用（pathRouter.ts）。
+/// `relay-udp-health`（2026-11-23）：中转 UDP 只通登记、不通数据时退回 WebSocket（数据静默、发出的数据不被确认、`relayStalled`
+/// 报的请求超时；冷却 30 秒、5 分钟、30 分钟），`poll` 报 `relayRoute`（走 UDP 还是 WebSocket、登记往返、停用原因）与套接字的
+/// `udpTraffic`。和电脑端 WASM 传输（relayUdp.ts）一致。
+const FEATURES: [&str; 10] = ["stream-buffered", "stun", "relay-udp-v2", "native-wait", "binary-io", "stream-levels", "stream-retired", "probe-grants",
+    "relay-udp-health", "path-routing"];
+/// Relayed datagrams the application still has to carry over its relay WebSocket; beyond this the oldest go (the
+/// transport resends them). Only fills while the application does not poll.
+const MAX_OUTBOX: usize = 1024;
+/// `pump` asks to be called again at least this often: the relay UDP registration and STUN keep their own timers.
+const MAX_PUMP_WAKE_MS: u64 = 250;
+/// Stream writes in one `io` call; the application sends a turn's worth (at most a megabyte).
+const MAX_IO_WRITES: usize = 1024;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Address { Udp(SocketAddr), Link(u32) }
@@ -61,14 +83,27 @@ pub struct NativeEngine {
     relay_udp: Option<RelayUdp>,
     stun: Option<Stun>,
     local_streams: BTreeMap<u32, BTreeSet<u32>>,
-    udp: Option<UdpSocket>,
+    udp: Option<Udp>,
     clock: Instant,
     now: u64,
     streams: BTreeMap<u32, BTreeSet<u32>>,
     finishing: BTreeMap<u32, BTreeSet<u32>>,
     poisoned: bool,
+    /// Datagrams for relay links that did not go over relay UDP, until the next `collect`.
+    outbox: Vec<(u32, Vec<u8>)>,
+    /// What `pump` collected for the application and `poll` has not handed over yet.
+    stash: Option<Value>,
+    /// The bytes of the datagrams and stream data `collect` put in a result, which names them by index (`blob`) until `poll`
+    /// or `io` hands them over: as base64 in the JSON or raw after the header.
+    blobs: Vec<Vec<u8>>,
+    /// The connection states the application last saw (`signature`), and the same states as `state_hash` reads them.
+    reported: String,
+    reported_hash: u64,
     media: crate::media::MediaCrypto,
     media_http: Option<crate::media_http::MediaHttp>,
+    /// Windows: the UDP socket's arrival event, shared by this engine's waiters (wait.rs).
+    #[cfg(windows)]
+    signal: Option<std::sync::Arc<crate::wait::SocketSignal>>,
 }
 
 impl NativeEngine {
@@ -86,11 +121,14 @@ impl NativeEngine {
         let udp = if udp_enabled {
             let socket = UdpSocket::bind("0.0.0.0:0").map_err(|_| "UDP_BIND_FAILED")?;
             socket.set_nonblocking(true).map_err(|_| "UDP_SETUP_FAILED")?;
-            Some(socket)
+            Some(Udp::new(socket))
         } else { None };
+        #[cfg(windows)]
+        let signal = udp.as_ref().and_then(|udp| crate::wait::SocketSignal::new(udp.socket())).map(std::sync::Arc::new);
         Ok(Self { crypto, device_id, enhanced_transport, endpoint, admitted, relay_tags: BTreeMap::new(), relay_links: BTreeMap::new(), relay_udp: None,
             stun: None, local_streams: BTreeMap::new(), udp, clock: Instant::now(), now: 0,
-            streams: BTreeMap::new(), finishing: BTreeMap::new(), poisoned: false, media: Default::default(), media_http: None })
+            streams: BTreeMap::new(), finishing: BTreeMap::new(), poisoned: false, outbox: Vec::new(), stash: None, blobs: Vec::new(),
+            reported: String::new(), reported_hash: 0, media: Default::default(), media_http: None, #[cfg(windows)] signal })
     }
     fn config(enhanced_transport: bool) -> Config {
         if !enhanced_transport { return Config { max_packet_size: MAX_PACKET_SIZE, ..Config::default() }; }
@@ -115,7 +153,7 @@ impl NativeEngine {
         if text(command, "op")?.starts_with("media") { return self.media.command(&self.crypto, command); }
         match text(command, "op")? {
             "identity" => Ok(json!({"deviceId":self.device_id,"signingKey":encoded(self.crypto.signing_public()),
-                "transportKey":encoded(&self.crypto.static_public()),"udpPort":self.udp.as_ref().and_then(|s| s.local_addr().ok()).map(|a|a.port()),
+                "transportKey":encoded(&self.crypto.static_public()),"udpPort":self.udp.as_ref().and_then(|s| s.socket().local_addr().ok()).map(|a|a.port()),
                 "features":if self.enhanced_transport { FEATURES.as_slice() } else { &[] }})),
             "sign" => {
                 let value = text(command, "text")?;
@@ -140,6 +178,7 @@ impl NativeEngine {
                 drop(admitted);
                 let id = self.endpoint.connect(self.now, self.crypto.clone(), Self::config(self.enhanced_transport), PROLOGUE,
                     &remote, &[], to).map_err(|_| "CONNECT_FAILED")?;
+                self.send_now();
                 Ok(json!(id))
             },
             "datagram" => {
@@ -150,13 +189,18 @@ impl NativeEngine {
                 if !self.admitted.borrow().values().any(|id| *id == link) { return Err("PEER_NOT_ADMITTED"); }
                 let data = bytes(&command["data"])?;
                 if data.len() > IO_SIZE { return Err("DATAGRAM_TOO_LARGE"); }
+                if let Some(relay) = &mut self.relay_udp { relay.note_inbound(false); }
                 self.endpoint.on_datagram(self.now, from, &data);
                 Ok(Value::Null)
             },
             "openStream" => {
-                let priority = match command["priority"].as_str().unwrap_or("normal") {
-                    "interactive" => Priority::Interactive, "normal" => Priority::Normal,
-                    "background" => Priority::Background, _ => return Err("INVALID_PRIORITY"),
+                let priority = if let Some(level) = command.get("level").filter(|level| !level.is_null()) {
+                    level.as_u64().and_then(|level| u8::try_from(level).ok()).and_then(Priority::level).ok_or("INVALID_PRIORITY")?
+                } else {
+                    match command["priority"].as_str().unwrap_or("normal") {
+                        "interactive" => Priority::Interactive, "normal" => Priority::Normal,
+                        "background" => Priority::Background, _ => return Err("INVALID_PRIORITY"),
+                    }
                 };
                 let id = number(command, "id")?;
                 let connection = self.endpoint.connection_mut(id).ok_or("CONNECTION_CLOSED")?;
@@ -171,11 +215,18 @@ impl NativeEngine {
                 let data = bytes(&command["data"])?;
                 if data.len() > IO_SIZE { return Err("WRITE_TOO_LARGE"); }
                 let connection = self.endpoint.connection_mut(number(command, "id")?).ok_or("CONNECTION_CLOSED")?;
-                Ok(json!(connection.send_stream(self.now, number(command, "stream")?, &data)))
+                let written = connection.send_stream(self.now, number(command, "stream")?, &data);
+                self.send_now();
+                Ok(json!(written))
             },
             "finish" => {
                 let connection = self.endpoint.connection_mut(number(command, "id")?).ok_or("CONNECTION_CLOSED")?;
                 Ok(json!(connection.finish_stream(number(command, "stream")?)))
+            },
+            // 没发出的字节不再发，流随即结束；返回丢掉的字节数，流已经结束或不在时是 null（核心的 `abandon_stream`）。
+            "abandon" => {
+                let connection = self.endpoint.connection_mut(number(command, "id")?).ok_or("CONNECTION_CLOSED")?;
+                Ok(json!(connection.abandon_stream(number(command, "stream")?)))
             },
             "close" => {
                 let id = number(command, "id")?;
@@ -185,10 +236,17 @@ impl NativeEngine {
                 Ok(json!(self.endpoint.close(id).is_some()))
             },
             "probe" => Ok(json!(self.endpoint.probe(self.now, number(command, "id")?, address(&command["address"])?))),
+            "measure" => {
+                let started = self.endpoint.measure(self.now, number(command, "id")?, address(&command["address"])?);
+                self.send_now();
+                Ok(json!(started))
+            },
+            "preferRelay" => Ok(json!(self.endpoint.set_prefer_relay(number(command, "id")?, command["prefer"] == true))),
             "migrate" => {
-                // A new network: connections send from the new address at once; ask STUN again for the new outside address.
+                // A new network: connections send from the new address at once; ask STUN again and re-probe relay UDP.
                 self.endpoint.on_local_address_change(self.now);
                 if let Some(stun) = &mut self.stun { stun.restart(); }
+                if let Some(relay) = &mut self.relay_udp && let Some(socket) = &self.udp { relay.network_changed(self.now, socket); }
                 Ok(Value::Null)
             },
             "stun" => {
@@ -200,6 +258,11 @@ impl NativeEngine {
                 Ok(Value::Null)
             },
             "relayUdp" => self.configure_relay_udp(command),
+            // Session requests to a relayed peer timed out (transport.ts `relayStalled`): relay UDP may carry registrations only.
+            "relayStalled" => {
+                if let (Some(relay), Some(udp)) = (&mut self.relay_udp, &self.udp) { relay.note_stall(self.now, udp); }
+                Ok(Value::Null)
+            },
             "poll" => self.poll(),
             _ => Err("UNKNOWN_NATIVE_OPERATION"),
         }
@@ -213,12 +276,20 @@ impl NativeEngine {
             let session = bytes(&command["session"])?.try_into().map_err(|_| "INVALID_RELAY_UDP_CREDENTIALS")?;
             let key = zeroize::Zeroizing::new(bytes(&command["key"])?);
             let key = key.as_slice().try_into().map_err(|_| "INVALID_RELAY_UDP_CREDENTIALS")?;
-            Some(Credentials { session, key })
+            let probe = command["probe"].as_bool().unwrap_or(false);
+            Some(Credentials { session, key, probe })
         };
-        if self.relay_udp.as_ref().is_none_or(|current| current.server_name != server) {
-            self.relay_udp = Some(RelayUdp::new(server).ok_or("INVALID_RELAY_UDP_SERVER")?);
+        match self.relay_udp.as_mut() {
+            Some(current) => {
+                if !current.set_server(server) { return Err("INVALID_RELAY_UDP_SERVER"); }
+                current.set_credentials(credentials);
+            },
+            None => {
+                let mut relay = RelayUdp::new(server).ok_or("INVALID_RELAY_UDP_SERVER")?;
+                relay.set_credentials(credentials);
+                self.relay_udp = Some(relay);
+            },
         }
-        self.relay_udp.as_mut().expect("set above").set_credentials(credentials);
         Ok(Value::Null)
     }
     fn replace_admission(&mut self, command: &Value) -> Result<Value, &'static str> {
@@ -247,8 +318,120 @@ impl NativeEngine {
         for id in removed { self.endpoint.close(id); self.streams.remove(&id); self.finishing.remove(&id); self.local_streams.remove(&id); }
         Ok(Value::Null)
     }
-    pub(crate) fn poison(&mut self) { self.poisoned = true; }
+    /// After a panic inside an engine call: every later call fails (`NATIVE_ENGINE_FAILURE`) instead of using half-updated state.
+    pub fn poison(&mut self) { self.poisoned = true; }
+    /// Everything the application reads: the state now, with what `pump` already collected in front of it.
     fn poll(&mut self) -> Result<Value, &'static str> {
+        let mut result = self.read();
+        take_blobs(&mut result, &mut self.blobs, |item, bytes| { item.insert("data".into(), json!(encoded(&bytes))); });
+        Ok(result)
+    }
+    fn read(&mut self) -> Value {
+        self.network();
+        let mut result = self.collect();
+        if let Some(stash) = self.stash.take() { merge(&mut result, stash); }
+        self.reported = signature(&result);
+        self.reported_hash = self.state_hash();
+        result
+    }
+    /// `binary-io` builds (lib.rs `cindy_agent_net_io`): in one call, relayed datagrams (`datagrams`: `[link, length]`), stream
+    /// writes (`writes`: `[connection, stream, length]`) and, with `poll`, everything `poll` reads. The bytes are not in the
+    /// header: they follow it raw, in the order it lists them, both ways; a datagram or a stream chunk in the poll carries
+    /// `len` where `poll` carries base64 `data`. On the phone, base64 and JSON text of stream data cost the JS thread more
+    /// than the request itself, and a write and the poll after it were two bridge round trips (2026-11-21).
+    ///
+    /// `written` answers each write in order: the bytes the stream took, or -1 when the connection is gone. After a write the
+    /// stream did not take in full, later writes to it in the same call take nothing, so what a stream takes stays in order.
+    pub fn io(&mut self, header: &Value, payload: &[u8]) -> Result<(Value, Vec<u8>), &'static str> {
+        if self.poisoned { return Err("NATIVE_ENGINE_FAILURE"); }
+        self.update_clock();
+        let mut cursor = 0usize;
+        let mut next = |length: &Value| -> Result<&[u8], &'static str> {
+            let length = length.as_u64().and_then(|value| usize::try_from(value).ok()).filter(|value| *value <= IO_SIZE).ok_or("INVALID_NATIVE_IO")?;
+            let end = cursor.checked_add(length).filter(|end| *end <= payload.len()).ok_or("INVALID_NATIVE_IO")?;
+            let bytes = &payload[cursor..end];
+            cursor = end;
+            Ok(bytes)
+        };
+        let list = |key: &str| header[key].as_array().map_or(&[][..], Vec::as_slice);
+        let (datagrams, writes) = (list("datagrams"), list("writes"));
+        if datagrams.len() > MAX_OUTBOX || writes.len() > MAX_IO_WRITES { return Err("INVALID_NATIVE_IO"); }
+        for datagram in datagrams {
+            let link = datagram[0].as_u64().and_then(|link| u32::try_from(link).ok()).ok_or("INVALID_NATIVE_IO")?;
+            let data = next(&datagram[1])?;
+            // As the `datagram` operation: only a relay link admitted right now, never a UDP source address.
+            if link > 0 && self.admitted.borrow().values().any(|id| *id == link) {
+                if let Some(relay) = &mut self.relay_udp { relay.note_inbound(false); }
+                self.endpoint.on_datagram(self.now, Address::Link(link), data);
+            }
+        }
+        let mut written = Vec::with_capacity(writes.len());
+        let mut short = BTreeSet::new();
+        for write in writes {
+            let id = write[0].as_u64().and_then(|id| u32::try_from(id).ok()).ok_or("INVALID_NATIVE_IO")?;
+            let stream = write[1].as_u64().and_then(|stream| u32::try_from(stream).ok()).ok_or("INVALID_NATIVE_IO")?;
+            let data = next(&write[2])?;
+            if short.contains(&(id, stream)) { written.push(json!(0)); continue; }
+            let Some(connection) = self.endpoint.connection_mut(id) else { written.push(json!(-1)); continue; };
+            let accepted = connection.send_stream(self.now, stream, data);
+            if accepted < data.len() { short.insert((id, stream)); }
+            written.push(json!(accepted));
+            if accepted > 0 { self.send_now(); }
+        }
+        if cursor != payload.len() { return Err("INVALID_NATIVE_IO"); }
+        let mut out = Vec::new();
+        let poll = if header["poll"] == true {
+            let mut result = self.read();
+            take_blobs(&mut result, &mut self.blobs, |item, bytes| { item.insert("len".into(), json!(bytes.len())); out.extend_from_slice(&bytes); });
+            result
+        } else { Value::Null };
+        Ok((json!({"written":written,"poll":poll}), out))
+    }
+    /// The engine's own turn, without the application (`native-wait` builds; lib.rs `cindy_agent_net_pump`): read the socket,
+    /// run the timers, send what is due. Acknowledgements, retransmissions and keepalives no longer wait for the JS thread.
+    /// Returns whether the application has something to read with `poll` (stream data or events, a new or changed
+    /// connection, a datagram for its relay WebSocket) and in how many milliseconds to call again when nothing arrives.
+    pub fn pump(&mut self) -> Result<(bool, u64), &'static str> {
+        if self.poisoned { return Err("NATIVE_ENGINE_FAILURE"); }
+        self.update_clock();
+        self.network();
+        // Nothing is taken from the core unless there is something to hand over: an idle `collect` reads no stream. It is not even
+        // built then: the engine takes a turn for every datagram, and building every connection's state as JSON on each one
+        // (acknowledgements included) cost as much CPU as the cryptography (2026-11-23, Desktop on this engine).
+        if self.stash.is_none() && (self.has_unread_work() || self.state_hash() != self.reported_hash) {
+            let result = self.collect();
+            if has_work(&result) || signature(&result) != self.reported { self.stash = Some(result); }
+        }
+        let wake = self.endpoint.next_wake().map_or(MAX_PUMP_WAKE_MS, |at| (at.saturating_sub(self.now) / 1000).min(MAX_PUMP_WAKE_MS));
+        Ok((self.stash.is_some(), wake))
+    }
+    /// What `collect` would hand over as work (`has_work`) can be there: a datagram for the relay WebSocket, an accepted connection,
+    /// stream data or events not read yet.
+    fn has_unread_work(&self) -> bool {
+        !self.outbox.is_empty() || self.endpoint.has_accepted()
+            || self.endpoint.ids().any(|id| self.endpoint.connection(id)
+                .is_some_and(|connection| connection.connection().has_unread() || connection.has_probe_rtt()))
+    }
+    /// The states `signature` reads from a `collect` result, read from the engine itself: whether relay UDP is up, the mapped
+    /// addresses, and which connections exist, established or gone, over which path. Equal hashes, unchanged states.
+    fn state_hash(&self) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        self.relay_udp.as_ref().is_some_and(|relay| relay.up(self.now)).hash(&mut hasher);
+        self.stun.as_ref().map(Stun::mapped).unwrap_or_default().hash(&mut hasher);
+        for id in self.endpoint.ids().take(MAX_CONNECTIONS) {
+            let Some(connection) = self.endpoint.connection(id) else { continue; };
+            (id, connection.is_established(), connection.is_dead(), connection.closed_by_peer()).hash(&mut hasher);
+            self.endpoint.peer_addr(id).map(|address| match address { Address::Udp(address) => (0u32, Some(address)), Address::Link(link) => (link, None) })
+                .hash(&mut hasher);
+        }
+        hasher.finish()
+    }
+    /// A second handle on the UDP socket, to wait for a datagram on another thread while this engine stays usable.
+    pub fn waiter(&self) -> Waiter {
+        Waiter { socket: self.udp.as_ref().and_then(|udp| udp.socket().try_clone().ok()), #[cfg(windows)] signal: self.signal.clone() }
+    }
+    fn network(&mut self) {
         let mut io = [0u8; IO_SIZE];
         let now = self.now;
         if let Some(socket) = &self.udp {
@@ -263,7 +446,10 @@ impl NativeEngine {
                                 Intercepted::Consumed => continue,
                                 Intercepted::Deliver(source, datagram) => {
                                     // Only a peer admitted right now: anyone else's relayed datagram is dropped here.
-                                    if let Some(link) = self.relay_links.get(&source) { self.endpoint.on_datagram(now, Address::Link(*link), datagram); }
+                                    if let Some(link) = self.relay_links.get(&source) {
+                                        relay.note_inbound(true);
+                                        self.endpoint.on_datagram(now, Address::Link(*link), datagram);
+                                    }
                                     continue;
                                 },
                             }
@@ -275,13 +461,29 @@ impl NativeEngine {
                     Err(_) => break,
                 }
             }
-            if let Some(relay) = &mut self.relay_udp { relay.tick(now, socket); }
+            if let Some(relay) = &mut self.relay_udp {
+                relay.tick(now, socket);
+                if relay.sample_due(now) {
+                    let send_stats: Vec<(u32, bool, u64, u64, u64)> = self.endpoint.ids().filter_map(|id| {
+                        let is_relay = matches!(self.endpoint.peer_addr(id), Some(Address::Link(_)));
+                        let stats = self.endpoint.connection(id)?.stats();
+                        Some((id, is_relay, stats.retransmitted_segments, stats.packets_sent, stats.acknowledged_bytes))
+                    }).collect();
+                    relay.observe_relayed_sends(now, socket, &send_stats);
+                } else if !relay.up(now) {
+                    relay.observe_relayed_sends(now, socket, &[]);
+                }
+            }
             if let Some(stun) = &mut self.stun { stun.tick(now, socket, NativeCrypto::random::<12>); }
         }
         self.endpoint.tick(now);
-        let mut packets = Vec::new();
+        self.transmit(&mut io);
+    }
+    /// Sends what the core has due now: directly, over relay UDP, or into the outbox for the application's relay WebSocket.
+    fn transmit(&mut self, io: &mut [u8; IO_SIZE]) {
+        let now = self.now;
         for _ in 0..128 {
-            let Some((len, to)) = self.endpoint.poll_transmit(now, &mut io) else { break; };
+            let Some((len, to)) = self.endpoint.poll_transmit(now, io) else { break; };
             match to {
                 Address::Udp(to) => { if let Some(socket) = &self.udp { let _ = socket.send_to(&io[..len], to); } },
                 Address::Link(link) => {
@@ -289,10 +491,27 @@ impl NativeEngine {
                         (Some(relay), Some(socket), Some(tag)) => relay.send(now, socket, tag, &io[..len]),
                         _ => false,
                     };
-                    if !over_udp { packets.push(json!({"link":link,"data":encoded(&io[..len])})); }
+                    if !over_udp {
+                        if self.outbox.len() >= MAX_OUTBOX { self.outbox.remove(0); }
+                        self.outbox.push((link, io[..len].to_vec()));
+                    }
                 },
             }
         }
+    }
+    /// After the application handed the core something to send: it goes out now, not at the next poll. A request written
+    /// from JS used to wait in the core for one more poll, on a phone a display frame or more (2026-11-21).
+    fn send_now(&mut self) {
+        let mut io = [0u8; IO_SIZE];
+        self.transmit(&mut io);
+    }
+    fn collect(&mut self) -> Value {
+        let mut io = [0u8; IO_SIZE];
+        let now = self.now;
+        let blobs = &mut self.blobs;
+        let mut blob = |bytes: Vec<u8>| { blobs.push(bytes); blobs.len() - 1 };
+        let packets: Vec<Value> = std::mem::take(&mut self.outbox).into_iter()
+            .map(|(link, data)| json!({"link":link,"blob":blob(data)})).collect();
         let mut accepted = Vec::new();
         while accepted.len() < 32 {
             let Some(id) = self.endpoint.accept() else { break; };
@@ -306,6 +525,9 @@ impl NativeEngine {
         let mut overflowed = Vec::new();
         for id in ids {
             let path = self.endpoint.peer_addr(id).map(address_value);
+            // Round trips the core measured on paths it validated (`measure`, `probe`): for choosing between direct and relay.
+            let mut probe_rtts = Vec::new();
+            while let Some((address, rtt_us)) = self.endpoint.poll_probe_rtt(id) { probe_rtts.push(json!([address_value(address), rtt_us])); }
             let Some(connection) = self.endpoint.connection_mut(id) else { continue; };
             let streams = self.streams.entry(id).or_default();
             let finishing = self.finishing.entry(id).or_default();
@@ -329,7 +551,7 @@ impl NativeEngine {
                         if finishing.contains(&stream) { completed.push(stream); }
                         break;
                     }
-                    data.push(json!({"stream":stream,"data":encoded(&io[..len])}));
+                    data.push(json!({"stream":stream,"blob":blob(io[..len].to_vec())}));
                     remaining -= len;
                 }
             }
@@ -341,13 +563,19 @@ impl NativeEngine {
             let security = connection.security_stats();
             // Bytes still in the core's send buffer per stream this side opened (not sent yet, or sent and unacknowledged): the
             // session's backlog reading counts them, as the Desktop's does (transport.ts `coreBufferedBytes`).
+            let mut retired = Vec::new();
             let buffered: Vec<Value> = self.local_streams.get(&id).into_iter().flatten()
-                .map(|stream| json!([stream, connection.stream_buffered(*stream)])).collect();
+                .map(|stream| match connection.stream_progress(now, *stream) {
+                    Some(progress) => json!([stream, progress.buffered, progress.acked_bytes, progress.stalled_us / 1000]),
+                    None => { retired.push(*stream); json!([stream, 0, null, 0]) },
+                }).collect();
+            if let Some(reported) = self.local_streams.get_mut(&id) { for stream in retired { reported.remove(&stream); } }
             connections.push(json!({"id":id,"established":connection.is_established(),"dead":connection.is_dead(),
                 "closedByPeer":connection.closed_by_peer(),"remoteKey":encoded(connection.remote_static()),
                 "unacked":connection.connection().has_unacked_data(),
                 "path":path,"events":events,"data":data,"rttUs":stats.srtt_us,"buffered":buffered,
-                "rotations":security.connection_id_rotations,"received":stats.wire_bytes_received,"sent":stats.wire_bytes_sent}));
+                "rotations":security.connection_id_rotations,"received":stats.wire_bytes_received,"sent":stats.wire_bytes_sent,
+                "probeRtts":probe_rtts}));
         }
         for id in overflowed { self.endpoint.close(id); }
         let live: BTreeSet<u32> = self.endpoint.ids().collect();
@@ -356,7 +584,81 @@ impl NativeEngine {
         self.local_streams.retain(|id,_| live.contains(id));
         let mapped: Vec<Value> = self.stun.as_ref().map(Stun::mapped).unwrap_or_default().into_iter()
             .map(|address| json!({"address":address.ip().to_string(),"port":address.port()})).collect();
-        Ok(json!({"packets":packets,"accepted":accepted,"connections":connections,"mapped":mapped,
-            "relayUdp":self.relay_udp.as_ref().is_some_and(|relay| relay.up(now))}))
+        json!({"packets":packets,"accepted":accepted,"connections":connections,"mapped":mapped,
+            "relayUdp":self.relay_udp.as_ref().is_some_and(|relay| relay.up(now)),
+            "relayRoute":self.relay_udp.as_ref().map(|relay| relay.route(now)),
+            "udpTraffic":self.udp.as_ref().map(Udp::traffic)})
+    }
+}
+
+/// Puts what `pump` collected earlier in front of the state read now: its datagrams, accepted connections, stream data and
+/// events are handed over once, in the order they came. Which connections exist and how each is doing is always the state
+/// now: the application takes a connection missing from the list for gone, and one it dialled after `pump` collected was
+/// missing from the earlier list (PR #11816 review). What was collected for a connection that is gone since is dropped,
+/// as the application drops the data of a connection reported dead.
+fn merge(result: &mut Value, mut stash: Value) {
+    let front = |earlier: &mut Value, now: &mut Value| {
+        if let (Some(before), Some(after)) = (earlier.as_array_mut().map(std::mem::take), now.as_array_mut()) {
+            let later = std::mem::replace(after, before);
+            after.extend(later);
+        }
+    };
+    for key in ["packets", "accepted"] { front(&mut stash[key], &mut result[key]); }
+    let earlier = stash["connections"].as_array_mut().map(std::mem::take).unwrap_or_default();
+    let Some(connections) = result["connections"].as_array_mut() else { return; };
+    for mut old in earlier {
+        let Some(current) = connections.iter_mut().find(|current| current["id"] == old["id"]) else { continue; };
+        for key in ["events", "data", "probeRtts"] { front(&mut old[key], &mut current[key]); }
+    }
+}
+/// Hands over the bytes a result names by `blob` (see `NativeEngine::blobs`), in the order the application reads them: the
+/// datagrams, then each connection's stream data. `finish` puts each in place of its index.
+fn take_blobs(result: &mut Value, blobs: &mut Vec<Vec<u8>>, mut finish: impl FnMut(&mut serde_json::Map<String, Value>, Vec<u8>)) {
+    let mut take = |item: &mut Value| {
+        let Some(item) = item.as_object_mut() else { return; };
+        let Some(index) = item.remove("blob").and_then(|index| index.as_u64()) else { return; };
+        let bytes = usize::try_from(index).ok().and_then(|index| blobs.get_mut(index)).map(std::mem::take).unwrap_or_default();
+        finish(item, bytes);
+    };
+    for packet in result.get_mut("packets").and_then(Value::as_array_mut).into_iter().flatten() { take(packet); }
+    for connection in result.get_mut("connections").and_then(Value::as_array_mut).into_iter().flatten() {
+        for chunk in connection.get_mut("data").and_then(Value::as_array_mut).into_iter().flatten() { take(chunk); }
+    }
+    // What was collected for a connection gone since is not in the result; its bytes go here.
+    blobs.clear();
+}
+/// Something the application must read now: a datagram to relay, a new connection, stream data or events.
+fn has_work(result: &Value) -> bool {
+    let filled = |value: &Value| value.as_array().is_some_and(|items| !items.is_empty());
+    filled(&result["packets"]) || filled(&result["accepted"])
+        || result["connections"].as_array().is_some_and(|all| all.iter().any(|c| filled(&c["events"]) || filled(&c["data"]) || filled(&c["probeRtts"])))
+}
+/// The part of a result the application acts on without any data arriving: which connections exist, whether each is
+/// established or gone and over which path, relay UDP and the mapped addresses. Counters and round trips are left out.
+fn signature(result: &Value) -> String {
+    let mut text = format!("{}|{}", result["relayUdp"], result["mapped"]);
+    for c in result["connections"].as_array().into_iter().flatten() {
+        text.push_str(&format!("|{}:{}:{}:{}:{}", c["id"], c["established"], c["dead"], c["closedByPeer"], c["path"]));
+    }
+    text
+}
+
+/// Waits for a datagram on the engine's UDP socket from any thread; holds no engine state (lib.rs `cindy_agent_net_wait`).
+pub struct Waiter {
+    socket: Option<UdpSocket>,
+    /// Windows: the socket's arrival event, for waits shorter than the system timer's tick (wait.rs).
+    #[cfg(windows)]
+    signal: Option<std::sync::Arc<crate::wait::SocketSignal>>,
+}
+impl Waiter {
+    /// True when a datagram is waiting to be read; false after `timeout_ms` without one (or at once without UDP: the
+    /// caller then only has its timers).
+    pub fn wait(&self, timeout_ms: u32) -> bool {
+        #[cfg(windows)]
+        if let Some(signal) = &self.signal { return signal.wait(timeout_ms); }
+        match &self.socket {
+            Some(socket) => crate::wait::readable(socket, timeout_ms),
+            None => { std::thread::sleep(std::time::Duration::from_millis(timeout_ms as u64)); false },
+        }
     }
 }

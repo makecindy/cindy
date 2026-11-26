@@ -16,14 +16,21 @@
  * Nothing here calls the plugin: the list is the main process's last known state. Opening a picker
  * only asks main to have the engine plugins republish their models (with a per-plugin cooldown).
  */
+import { quotaLevelFromRemaining } from '@cindy/maker-shared/quota-level';
+import type { GhostHarnessUsage } from '@cindy/plugin-protocol';
 import { SlidersHorizontal } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { EffortSlider } from '@/components/ui/effort-slider';
 import { PluginEngineIcon } from '@/components/icons/PluginEngineIcon';
-
+import { Tip } from '@/components/ui/tooltip';
+import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
+import { readPluginEngineUsage } from '@/hooks/pluginEngineUsage';
 import { requestPluginEnginesRefresh } from '@/hooks/usePluginEngines';
+import { QUOTA_TEXT_COLOR_CLASSES } from '../status/QuotaBar';
+import { pluginEngineUsageBalances } from '../status/pluginEngineUsageAccount';
+import { formatQuotaResetDuration } from '../status/usageCardModel';
 
 import {
   COMPOSER_MENU_ROW,
@@ -55,7 +62,10 @@ export interface PluginEnginesPickerProps {
   engines: readonly PluginEngineChoice[];
   /** Current engine choice (already resolved against the list); null = a built-in model is used. */
   active: PluginEngineSelection | null;
-  onSelect(selection: PluginEngineSelection): void;
+  /** The task's current engine and effort, even when the picker highlights a pending switch. */
+  running?: PluginEngineSelection | null;
+  /** Existing tasks wait for the host to accept the choice. False leaves the panel open. */
+  onSelect(selection: PluginEngineSelection): void | boolean | Promise<boolean>;
   /** Device Link picker reloads its own computer's list when opened. */
   readCatalogue?(): void;
 }
@@ -164,6 +174,112 @@ interface EngineBlockProps {
   onChooseEffort(modelId: string, effort: PluginEngineEffort): void;
 }
 
+function pluginGroupQuotaTimeKey(
+  usage: GhostHarnessUsage,
+  now: number,
+  t: ReturnType<typeof useTranslation>['t'],
+): string {
+  return (usage.windows ?? [])
+    .filter((row) => !row.resetsAt || row.resetsAt > now)
+    .map((row) => [
+      row.label,
+      Math.round(row.remainingPercent),
+      row.resetsAt ? formatQuotaResetDuration(row.resetsAt / 1000, now, t) : null,
+    ])
+    .map((parts) => parts.join(':'))
+    .join('|');
+}
+
+/** Compact quota/balance readout on a plugin engine group header; reuses the 1-minute shared reader. */
+function PluginEngineGroupQuota({ engine }: { engine: PluginEngineChoice }) {
+  const { t, i18n } = useTranslation();
+  const targetKey = `${engine.deviceId ?? ''}:${engine.key}`;
+  const [reading, setReading] = useState<{ targetKey: string; usage: GhostHarnessUsage } | null>(null);
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const owner = getDataOwnerGeneration();
+    let active = true;
+    void readPluginEngineUsage(owner, engine.deviceId ?? null, engine.key).result.then((usage) => {
+      if (!active || !isDataOwnerGenerationCurrent(owner)) return;
+      setReading(usage ? { targetKey, usage } : null);
+      setNow(Date.now());
+    });
+    return () => { active = false; };
+  }, [engine.key, engine.deviceId, targetKey]);
+  const activeUsage = reading?.targetKey === targetKey ? reading.usage : null;
+  const hasTimedWindow = !!activeUsage?.windows?.some(
+    (row) => typeof row.resetsAt === 'number' && row.resetsAt > now,
+  );
+  const clockSnapshot = useRef({ usage: activeUsage, now, t });
+  clockSnapshot.current = { usage: activeUsage, now, t };
+  useEffect(() => {
+    if (!hasTimedWindow) return;
+    const syncClock = () => {
+      if (typeof document !== 'undefined' && document.hidden) return;
+      const { usage: currentUsage, now: prevNow, t: translate } = clockSnapshot.current;
+      if (!currentUsage) return;
+      const nextNow = Date.now();
+      if (
+        pluginGroupQuotaTimeKey(currentUsage, prevNow, translate) !==
+        pluginGroupQuotaTimeKey(currentUsage, nextNow, translate)
+      ) {
+        setNow(nextNow);
+      }
+    };
+    const timer = window.setInterval(syncClock, 1000);
+    const onVisibility = () => {
+      if (!document.hidden) syncClock();
+    };
+    if (typeof document !== 'undefined') {
+      document.addEventListener('visibilitychange', onVisibility);
+    }
+    return () => {
+      window.clearInterval(timer);
+      if (typeof document !== 'undefined') {
+        document.removeEventListener('visibilitychange', onVisibility);
+      }
+    };
+  }, [hasTimedWindow]);
+  if (!activeUsage) return null;
+  const usage = activeUsage;
+  const current = (usage.windows ?? []).filter((row) => !row.resetsAt || row.resetsAt > now);
+  const balances = pluginEngineUsageBalances(usage, i18n.language, t);
+  const first = current.reduce<(typeof current)[number] | undefined>((lowest, row) =>
+    !lowest || row.remainingPercent < lowest.remainingPercent ? row : lowest, undefined);
+  if (!first && !balances.length) return null;
+  const reset = first?.resetsAt ? formatQuotaResetDuration(first.resetsAt / 1000, now, t) : null;
+  const value = first ? `${Math.round(first.remainingPercent)}%` : balances[0]!;
+  const firstBalance = (usage.balances ?? []).find((row) => Number.isFinite(Number(row.amount)));
+  const level = first
+    ? quotaLevelFromRemaining(first.remainingPercent)
+    : firstBalance && Number(firstBalance.amount) <= 0 ? 'crit' : 'normal';
+  const details = (
+    <div className="space-y-1">
+      {current.map((row, index) => {
+        const rowReset = row.resetsAt ? formatQuotaResetDuration(row.resetsAt / 1000, now, t) : null;
+        return (
+          <div key={index}>
+            {[row.label, t('quotaCard.remainingPercent', { percent: Math.round(row.remainingPercent) }), rowReset].filter(Boolean).join(' · ')}
+          </div>
+        );
+      })}
+      {balances.map((line, index) => <div key={`b:${index}`}>{line}</div>)}
+    </div>
+  );
+  return (
+    <Tip text={details} side="bottom" contentClassName="max-w-[320px] break-words">
+      <span
+        data-plugin-engine-quota={engine.providerId}
+        aria-label={[first?.label, value, reset].filter(Boolean).join(' · ')}
+        className="ml-auto flex shrink-0 items-center gap-1 text-12 font-normal tabular-nums text-[var(--text-secondary)]"
+      >
+        <span className={QUOTA_TEXT_COLOR_CLASSES[level]}>{value}</span>
+        {reset && <span className="text-[var(--text-tertiary)]">· {reset}</span>}
+      </span>
+    </Tip>
+  );
+}
+
 /**
  * One engine, laid out like a provider in the built-in list: the engine name as the group label
  * (same shared menu group label as 「Anthropic」 etc.), its availability hint when it cannot run,
@@ -195,6 +311,7 @@ function EngineBlock({ engine, rows, activeModelId, onChoose, effortOf, onChoose
       {/* Shared menu group label (DESIGN §4 Menu text): 12px / 500 meta, like the provider headings. */}
       <div className="flex items-center gap-1.5 px-2.5 pb-1 pt-2 text-12 font-medium leading-[1.33] text-[var(--cmd-palette-item-meta,var(--text-tertiary))]">
         <span title={engineLabel} className="truncate">{engineLabel}</span>
+        {selectable && engine.reportsUsage && <PluginEngineGroupQuota engine={engine} />}
       </div>
       {hint && (
         <div
@@ -387,15 +504,35 @@ export function PluginEnginesSection({
   onPicked(): void;
 }) {
   const { t } = useTranslation();
+  const sectionRef = useRef<HTMLDivElement>(null);
+  const selectionInFlight = useRef(false);
+  const choose = async (selection: PluginEngineSelection, dismiss: boolean) => {
+    if (selectionInFlight.current) return;
+    selectionInFlight.current = true;
+    try {
+      const selectionResult = picker.onSelect(selection);
+      const applied = typeof selectionResult === 'object' ? await selectionResult : selectionResult;
+      if (applied !== false && dismiss && sectionRef.current) onPicked();
+    } catch {
+      // Selection failures leave the panel open. The task's selection handler reports the error.
+    } finally {
+      selectionInFlight.current = false;
+    }
+  };
   const needle = query.trim().toLowerCase();
   const defaultLabel = t('newChat.pluginEngines.defaultModel').toLowerCase();
   const blocks = picker.engines
     .map((engine) => {
       const activeModelId = activePluginEngineModelId(picker.active, engine);
+      const running = isSamePluginEngineChoice(picker.running, engine) ? picker.running : null;
+      const effort = running ? running.effort : activeModelId !== null ? picker.active?.effort : undefined;
+      const purpose = running ? 'session' as const : 'new-task' as const;
       return {
         engine,
         activeModelId,
-        rows: engineMatches(engine, pluginEngineModelRows(engine, activeModelId), needle, defaultLabel),
+        purpose,
+        effort,
+        rows: engineMatches(engine, pluginEngineModelRows(engine, activeModelId, purpose), needle, defaultLabel),
       };
     })
     .filter((block) => block.rows.length > 0);
@@ -404,23 +541,22 @@ export function PluginEnginesSection({
   return (
     // Each engine carries its own group label (like a provider), so the section has no visible
     // heading of its own; the 「插件引擎」 name stays for assistive technology and the rail tab.
-    <div role="group" aria-label={label} data-plugin-engines-section>
-      {blocks.map(({ engine, rows, activeModelId }) => (
+    <div ref={sectionRef} role="group" aria-label={label} data-plugin-engines-section>
+      {blocks.map(({ engine, rows, activeModelId, purpose, effort }) => (
         <EngineBlock
           key={pluginEngineChoiceKey(engine)}
           engine={engine}
           rows={rows}
           activeModelId={activeModelId}
-          onChoose={(modelId) => {
-            picker.onSelect({ providerId: engine.providerId, modelId, ...(engine.deviceId ? { deviceId: engine.deviceId } : {}) });
-            onPicked();
-          }}
+          onChoose={(modelId) => { void choose({
+            providerId: engine.providerId, modelId, ...(engine.deviceId ? { deviceId: engine.deviceId } : {}),
+          }, true); }}
           // A row shows the level it would run with: the chosen one where it is offered, else its own.
           effortOf={(row) => resolvePluginEngineEffort(
-            engine, row.id, isSamePluginEngineChoice(picker.active, engine) ? picker.active?.effort : undefined)}
-          onChooseEffort={(modelId, effort) => picker.onSelect({
+            engine, row.id, effort, purpose)}
+          onChooseEffort={(modelId, effort) => { void choose({
             providerId: engine.providerId, modelId, effort, ...(engine.deviceId ? { deviceId: engine.deviceId } : {}),
-          })}
+          }, false); }}
         />
       ))}
     </div>
@@ -477,7 +613,7 @@ export function PluginEngineSessionPanel({
       <MenuHighlightLayer />
       <EngineBlock
         engine={engine}
-        rows={pluginEngineModelRows(engine, pending?.modelId ?? picker.modelId)}
+        rows={pluginEngineModelRows(engine, pending?.modelId ?? picker.modelId, 'session')}
         activeModelId={pending?.modelId ?? picker.modelId}
         onChoose={(modelId) => {
           if (modelId === picker.modelId) {
@@ -485,12 +621,12 @@ export function PluginEngineSessionPanel({
             return;
           }
           // Another model keeps the task's level where it offers it, else runs with its own default.
-          const effort = resolvePluginEngineEffort(engine, modelId, picker.effort) ?? undefined;
+          const effort = resolvePluginEngineEffort(engine, modelId, picker.effort, 'session') ?? undefined;
           void Promise.resolve(effort ? picker.onSelectModel(modelId, effort) : picker.onSelectModel(modelId)).then((applied) => {
             if (applied !== false) onPicked();
           });
         }}
-        effortOf={(row) => resolvePluginEngineEffort(engine, row.id, pending?.effort ?? picker.effort)}
+        effortOf={(row) => resolvePluginEngineEffort(engine, row.id, pending?.effort ?? picker.effort, 'session')}
         onChooseEffort={(modelId, effort) => {
           setPending({ modelId, effort });
           void Promise.resolve(picker.onSelectModel(modelId, effort)).then((applied) => {

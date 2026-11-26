@@ -36,11 +36,15 @@ if (ctx.case === 'sidebar-section') {
   Object.defineProperty(HTMLIFrameElement.prototype, 'src', {
     ...src,
     set(this: HTMLIFrameElement, value: string) {
-      if (value !== 'cindy-mcp-app://sidebar-fixture/sandbox') {
+      if (value.split('?')[0] !== 'cindy-mcp-app://sidebar-fixture/sandbox') {
         src.set!.call(this, value);
         return;
       }
       this.addEventListener('load', () => {
+        // The local stand-in receives the same host theme hint as the Electron wrapper.
+        this.contentWindow!.postMessage = message => {
+          if (message?.type === 'cindy:sandbox-color-scheme') this.contentDocument!.documentElement.style.colorScheme = message.scheme;
+        };
         const body = this.contentDocument!.body;
         body.style.cssText = 'margin:8px;font:14px system-ui;color:CanvasText';
         body.style.colorScheme = document.documentElement.classList.contains('dark') ? 'dark' : 'light';
@@ -49,7 +53,7 @@ if (ctx.case === 'sidebar-section') {
           source: this.contentWindow,
           data: { jsonrpc: '2.0', method: 'ui/notifications/sandbox-handshake-started' },
         }));
-      }, { once: true });
+      }, { capture: true, once: true });
     },
   });
 }

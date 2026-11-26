@@ -29,6 +29,7 @@ export type DbAgentKind = 'cc' | 'codex' | 'pi';
 
 /** 构造交接文本所需的最小消息投影(content 已 JSON.parse,即 camel Message.content)。 */
 export interface HandoffSourceMessage {
+  clientId?: string;
   role: string;
   content: unknown;
   createdAt: number; // unix ms
@@ -133,6 +134,10 @@ const HANDOFF_USER_OVERFLOW_OUTCOME_MAX_CHARS = 5000;
 const HANDOFF_USER_OVERFLOW_OUTCOME_MAX_FRACTION = 0.25;
 const HANDOFF_LEDGER_PATH_CHARS = 240;
 const HANDOFF_LEDGER_MAX_FRACTION = 0.25;
+const HANDOFF_ATTACHMENT_REF_CAP = 4;
+const HANDOFF_ATTACHMENT_NAME_CHARS = 120;
+const HANDOFF_ATTACHMENT_URL_CHARS = 300;
+const HANDOFF_ATTACHMENT_LONG_URL = 'managed address too long; search history for it';
 
 function handoffTokenBudget(opts: BuildHandoffOptions): number | null {
   const window = opts.targetContextWindow;
@@ -237,6 +242,62 @@ export function extractPlainText(content: unknown): string {
     if (isOrcaCommunicationRecord(c)) return c.content;
   }
   return '';
+}
+
+function attachmentRef(value: unknown, kind: 'image' | 'file') {
+  const item = asRecord(value);
+  if (!item) return null;
+  const clean = (value: unknown, limit: number, tooLong?: string): string | undefined => {
+    if (typeof value !== 'string') return undefined;
+    const normalized = value
+      .replace(/[\u0000-\u001f\u007f-\u009f]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .replace(/[\[\]]/g, '')
+      .trim();
+    if (!normalized) return undefined;
+    if (normalized.length > limit) return tooLong ?? `${normalized.slice(0, Math.max(0, limit - '…(truncated)'.length))}…(truncated)`;
+    return normalized;
+  };
+  const name = ['originalName', 'name', 'fileName']
+    .map(key => clean(item[key], HANDOFF_ATTACHMENT_NAME_CHARS))
+    .find((v): v is string => Boolean(v));
+  if (kind === 'image') {
+    const url = ['url', 'mediaId', 'mediaUrl']
+      .map(key => item[key])
+      .filter((value): value is string => typeof value === 'string'
+        && (value.startsWith('cindy-media://') || value.startsWith('xdt-image://')))
+      .map(value => clean(value, HANDOFF_ATTACHMENT_URL_CHARS, HANDOFF_ATTACHMENT_LONG_URL))
+      .find((v): v is string => Boolean(v));
+    return name || url ? { kind, name, url } : null;
+  }
+  return name ? { kind, name } : null;
+}
+
+/** Keep attachment references in replay text without reading their bytes. */
+function userAttachmentMarker(content: unknown): string {
+  const record = asRecord(parseJsonObjectString(content));
+  if (!record) return '';
+  const images = Array.isArray(record.images) ? record.images.map(item => attachmentRef(item, 'image')) : [];
+  const files = Array.isArray(record.files) ? record.files.map(item => attachmentRef(item, 'file')) : [];
+  const all = [...images, ...files].filter(item => item !== null);
+  if (!all.length) return '';
+  const shown = all.slice(0, HANDOFF_ATTACHMENT_REF_CAP).map((item, index) => {
+    const label = item.name || String(index + 1);
+    if (item.kind === 'image') return `image ${label} · ${item.url || '(managed address unavailable)'}`;
+    return `file ${label}`;
+  });
+  const remaining = all.length - shown.length;
+  if (remaining > 0) shown.push(`and ${remaining} more`);
+  if (images.some(item => item !== null)) {
+    shown.push('When you need to view an image, first try the media tool resolve_local_path. If it cannot resolve it, ask the user to send the image again.');
+  }
+  return `[Attachment references: ${shown.join('; ')}]`;
+}
+
+function userReplayText(content: unknown): { text: string; marker?: string } {
+  const text = extractPlainText(content);
+  const marker = userAttachmentMarker(content);
+  return marker ? { text, marker } : { text };
 }
 
 function isOrcaCommunicationRecord(
@@ -532,6 +593,7 @@ function imContextForHandoff(message: HandoffSourceMessage): string[] {
 interface ReplayRecord {
   label: string;
   text: string;
+  marker?: string;
   outcome?: string;
 }
 
@@ -539,15 +601,16 @@ function replayRecord(msg: HandoffSourceMessage, includeToolResults: boolean): R
   switch (msg.role) {
     case 'user': {
       const content = asRecord(parseJsonObjectString(msg.content));
-      const text = typeof msg.content !== 'string' ||
+      const replay = typeof msg.content !== 'string' ||
           (content && (isStringifyUserContentEnvelope(content) || isOrcaCommunicationRecord(content) || content.quotesEncoded === true))
-        ? extractPlainText(content ?? msg.content)
-        : msg.content;
-      if (text.startsWith(SYNTHETIC_TRIGGER_PREFIX)) return;
+          ? userReplayText(content ?? msg.content)
+          : { text: msg.content };
+      if (replay.text.startsWith(SYNTHETIC_TRIGGER_PREFIX)) return;
       const source = describeHandoffUserSource(msg);
       return {
         label: source ? `[User · ${source}]` : '[User]',
-        text: [text, ...imContextForHandoff(msg)].filter(Boolean).join('\n'),
+        text: [replay.text, ...imContextForHandoff(msg)].filter(Boolean).join('\n'),
+        ...(replay.marker ? { marker: replay.marker } : {}),
       };
     }
     case 'assistant': {
@@ -604,15 +667,17 @@ const REPLAY_OMITTED = '(Some records omitted or abbreviated: goals, constraints
 const REPLAY_TECHNICAL_RETRIEVAL = 'For an omitted tool or reasoning record, use the scoped get_chat_history query below with roles ["tool_use","tool_result","thinking"].';
 
 const REPLAY_GAP = '…(records omitted here)…';
+const REPLAY_ATTACHMENT_OMITTED = '\n[Attachment references omitted]';
 
 interface ReplayEntry {
   role: string;
   record?: ReplayRecord;
 }
 
-function replayLine(record: ReplayRecord, text = record.text): string {
+function replayLine(record: ReplayRecord, text = record.text, includeMarker = true): string {
   const separator = record.label.startsWith('[Tool]') ? ' ' : '\n';
-  return text ? `${record.label}${separator}${text}` : record.label;
+  const body = includeMarker && record.marker ? [text, record.marker].filter(Boolean).join('\n') : text;
+  return body ? `${record.label}${separator}${body}` : record.label;
 }
 
 function toolReplayStub(entry: ReplayEntry, record: ReplayRecord): string {
@@ -630,7 +695,36 @@ function toolReplayStub(entry: ReplayEntry, record: ReplayRecord): string {
   }
 }
 
-function condenseReplay(entries: ReplayEntry[], budget: number, handoffBudget: number): string[] {
+function appendReplayMarkers(
+  lines: string[],
+  markers: ReadonlyArray<{ index: number; marker: string }>,
+  room: number,
+  units: number,
+): boolean {
+  const omitted: number[] = [];
+  for (let i = markers.length - 1; i >= 0; i--) {
+    const { index, marker } = markers[i]!;
+    const chars = marker.length + 1;
+    const cost = tokenUnits(marker) + ASCII_TOKEN_UNITS;
+    if (chars > room || cost > units) {
+      omitted.push(index);
+      continue;
+    }
+    lines[index] += '\n' + marker;
+    room -= chars;
+    units -= cost;
+  }
+  const noticeCost = tokenUnits(REPLAY_ATTACHMENT_OMITTED);
+  for (const index of omitted) {
+    if (room < REPLAY_ATTACHMENT_OMITTED.length || units < noticeCost) break;
+    lines[index] += REPLAY_ATTACHMENT_OMITTED;
+    room -= REPLAY_ATTACHMENT_OMITTED.length;
+    units -= noticeCost;
+  }
+  return omitted.length === 0;
+}
+
+function condenseReplay(entries: ReplayEntry[], budget: number, handoffBudget: number, unitBudget: number): string[] {
   const selected: Array<string | undefined> = Array(entries.length).fill(undefined);
   // Initially the entire timeline is one omitted run. Each selection accounts
   // for the gaps it creates, joins or removes, including gaps between users.
@@ -656,7 +750,7 @@ function condenseReplay(entries: ReplayEntry[], budget: number, handoffBudget: n
     const bodyRoom = available - record.label.length - 1;
     const textRoom = Math.min(textLimit, bodyRoom);
     if ((record.text && textRoom < Math.min(record.text.length, 24)) || available < record.label.length) return false;
-    const line = replayLine(record, excerpt(record.text, Math.max(0, textRoom)));
+    const line = replayLine(record, excerpt(record.text, Math.max(0, textRoom)), false);
     if (previous !== undefined && line.length <= previous.length) return false;
     return keep(index, line);
   };
@@ -665,7 +759,10 @@ function condenseReplay(entries: ReplayEntry[], budget: number, handoffBudget: n
   for (const [index, entry] of entries.entries()) {
     if (entry.role === 'user') users.push(index);
   }
-  for (const index of users) keep(index, replayLine(entries[index]!.record!));
+  for (const index of users) {
+    const record = entries[index]!.record!;
+    keep(index, replayLine(record, record.text, false));
+  }
   const userOverflow = users.some(index => selected[index] === undefined);
   let recentToolReserve = 0;
   if (userOverflow) {
@@ -747,11 +844,21 @@ function condenseReplay(entries: ReplayEntry[], budget: number, handoffBudget: n
   }
 
   const lines: string[] = [];
+  const markers: Array<{ index: number; marker: string }> = [];
   let inGap = false;
-  for (const line of selected) {
-    if (line !== undefined) lines.push(line);
-    else if (!inGap) lines.push(REPLAY_GAP);
+  for (const [index, line] of selected.entries()) {
+    if (line !== undefined) {
+      const marker = entries[index]?.record?.marker;
+      if (marker) markers.push({ index: lines.length, marker });
+      lines.push(line);
+    } else if (!inGap) lines.push(REPLAY_GAP);
     inGap = line === undefined;
+  }
+  // Give the remaining space to the most recent attachments. Check tokens
+  // too so adding a marker cannot force a smaller rebuild of the user text.
+  if (markers.length && room > 0) {
+    const units = unitBudget - lines.reduce((sum, line) => sum + tokenUnits(line) + ASCII_TOKEN_UNITS, 0);
+    appendReplayMarkers(lines, markers, room, units);
   }
   return lines;
 }
@@ -775,7 +882,8 @@ export function buildHandoff(
     }
   }
 
-  const build = (budget: number) => buildHandoffWithinChars(entries, opts, framing, heading, budget);
+  const build = (budget: number, completeOnly = false) =>
+    buildHandoffWithinChars(entries, opts, framing, heading, budget, tokens, completeOnly);
   if (tokens === null) return build(HANDOFF_UNKNOWN_WINDOW_CHARS);
   if (opts.reason === 'idle-gap') {
     return buildAtConservativeBudget(build, Math.min(IDLE_GAP_MAX_CHARS, tokens), tokens, opts);
@@ -784,13 +892,26 @@ export function buildHandoff(
   const frame = [...framing.before, heading, REPLAY_CONTEXT, ...framing.after].join('\n');
   let chars = frame.length;
   let units = tokenUnits(frame);
+  let markerChars = 0;
+  let markerUnits = 0;
   for (const { record } of entries) {
     if (!record) continue;
     const separators = record.text ? 2 : 1;
     chars += record.label.length + record.text.length + separators;
-    units += tokenUnits(record.label) + tokenUnits(record.text) + separators * ASCII_TOKEN_UNITS;
+    units += tokenUnits(record.label) + tokenUnits(record.text)
+      + separators * ASCII_TOKEN_UNITS;
+    if (record.marker) {
+      markerChars += record.marker.length + 1;
+      markerUnits += tokenUnits(record.marker) + ASCII_TOKEN_UNITS;
+    }
   }
-  let budget = Math.min(HANDOFF_MAX_CHARS, Math.floor(tokens * TOKEN_UNITS * chars / units));
+  const charBudget = (chars: number, units: number) => Math.min(HANDOFF_MAX_CHARS, Math.floor(tokens * TOKEN_UNITS * chars / units));
+  if (markerChars > 0) {
+    const full = build(charBudget(chars + markerChars, units + markerUnits), true);
+    if (full.handoffCoverage === 'complete') return full;
+  }
+  // Optional markers must not change the budget used to select user text.
+  let budget = charBudget(chars, units);
   // The selected suffix may be denser than the whole history. Validate the
   // exact outgoing text, including ledger and source labels, after every build.
   for (let attempt = 0; attempt <= HANDOFF_BUDGET_RETRIES && budget > tokens; attempt++) {
@@ -800,6 +921,19 @@ export function buildHandoff(
     budget = Math.min(budget - 1, Math.floor(budget * tokens / estimated));
   }
   return buildAtConservativeBudget(build, Math.min(budget, tokens), tokens, opts);
+}
+
+export interface UserReplayHandoff {
+  userClientId: string;
+  text: string;
+}
+
+export function buildUserReplayHandoff(
+  source: HandoffSourceMessage[], options: BuildHandoffOptions, userClientId?: string,
+): UserReplayHandoff | undefined {
+  if (!userClientId || !source.some(entry => entry.role === 'user' && entry.clientId === userClientId)) return;
+  return { userClientId, text: buildHandoff(source.filter(entry =>
+    entry.role !== 'user' || entry.clientId !== userClientId), options).handoff };
 }
 
 function buildAtConservativeBudget(
@@ -822,6 +956,8 @@ function buildHandoffWithinChars(
   framing: ReturnType<typeof assembleHandoffSections>,
   heading: string,
   budget: number,
+  tokens: number | null,
+  completeOnly: boolean,
 ): { handoff: string; handoffCoverage: HandoffCoverage } {
   const before = [...framing.before];
   if (before[1]) {
@@ -838,17 +974,36 @@ function buildHandoffWithinChars(
   if (entries.every(entry => entry.record !== undefined)) {
     const completeSize = entries.length
       ? entries.reduce((size, { record }) => {
-          const { label, text } = record!;
-          return size + label.length + (text ? text.length + 1 : 0) + 1;
+          const { label, text, marker } = record!;
+          const replayTextLength = text.length + (marker ? marker.length + (text ? 1 : 0) : 0);
+          return size + label.length + (replayTextLength ? replayTextLength + 1 : 0) + 1;
         }, render([''], false).length - 1)
       : render([], false).length;
     if (completeSize <= budget) {
-      return { handoff: render(entries.map(({ record }) => replayLine(record!)), false), handoffCoverage: 'complete' };
+      const handoff = render(entries.map(({ record }) => replayLine(record!)), false);
+      if (tokens === null || tokenUnits(handoff) <= tokens * TOKEN_UNITS) {
+        return { handoff, handoffCoverage: 'complete' };
+      }
+    }
+    if (!completeOnly && entries.some(({ record }) => record?.marker)) {
+      const lines = entries.map(({ record }) => replayLine(record!, record!.text, false));
+      const base = render(lines, false);
+      const remainingUnits = tokens === null ? Infinity : tokens * TOKEN_UNITS - tokenUnits(base);
+      // An attachment-only overflow must not make the omission notice
+      // displace otherwise complete history.
+      if (base.length <= budget && remainingUnits >= 0) {
+        const markers = entries.flatMap(({ record }, index) => record?.marker ? [{ index, marker: record.marker }] : []);
+        const complete = appendReplayMarkers(lines, markers, budget - base.length, remainingUnits);
+        return { handoff: render(lines, false), handoffCoverage: complete ? 'complete' : 'condensed' };
+      }
     }
   }
+  if (completeOnly) return { handoff: '', handoffCoverage: 'condensed' };
 
-  const room = budget - render([], true).length;
-  const condensed = room > 0 ? condenseReplay(entries, room, budget) : [];
+  const condensedFrame = render([], true);
+  const room = budget - condensedFrame.length;
+  const unitBudget = tokens === null ? Infinity : tokens * TOKEN_UNITS - tokenUnits(condensedFrame);
+  const condensed = room > 0 ? condenseReplay(entries, room, budget, unitBudget) : [];
   // A very small target window may not fit the long-form framing and scoped
   // retrieval examples. Keep the scope, omission notice and terminator.
   const text = render(condensed, true);
@@ -1248,10 +1403,10 @@ export interface AgentHandoffPendingRegistry {
    * `consume` 都不推进它,所以同一流程内的二次写入、以及与别处 consume 的并发,
    * 都不会被误拒。
    */
-  set(sessionId: string, handoff: string, expectedGeneration?: number): void;
+  set(sessionId: string, handoff: string, expectedGeneration?: number, replay?: UserReplayHandoff): void;
   /** 取当前 clear 纪元(只由 `/clear` 推进),配合 `set` 的 `expectedGeneration` 使用。 */
   readGeneration(sessionId: string): number;
-  peek(sessionId: string): Promise<string | null>;
+  peek(sessionId: string, retryClientId?: string): Promise<string | null>;
   consume(sessionId: string): void;
   /**
    * 丢弃内存里的待注入交接并推进 clear 纪元,**允许后续 peek 回落 DB 重建**。
@@ -1312,11 +1467,14 @@ export function createAgentHandoffPendingRegistry(
    * 只对 `set` 进来的值生效:queryPending 的产出已经组合过,再过一遍会让首发未
    * accepted 的重试拿到两份来源标记(下面的 composedByQuery 就是这道闸)。
    */
-  decorateCached?: (sessionId: string, handoff: string) => Promise<string>,
+  prepareDecoration?: (sessionId: string) => Promise<((handoff: string) => string) | undefined>,
 ): AgentHandoffPendingRegistry {
-  const pending = new Map<string, string | null>();
-  /** 值由 queryPending 产出(已含组合结果)的 session,decorate 必须跳过它们。 */
-  const composedByQuery = new Set<string>();
+  interface Entry {
+    text: string | null;
+    replay?: UserReplayHandoff;
+    decorated?: boolean;
+  }
+  const pending = new Map<string, Entry>();
   /**
    * 每个 session 的 **clear 纪元**:只有 `/clear`(invalidate / clear)递增它。
    *
@@ -1328,7 +1486,7 @@ export function createAgentHandoffPendingRegistry(
    *  - `set` 递增会让同一流程内的第二次写入(resume 回落用全量交接覆盖增量交接)
    *    被自己先前那次挡掉。
    *
-   * peek 写回时除了纪元,还要确认缓存值仍是自己读到的那一份——纪元不变但被别的
+   * peek 写回时除了纪元,还要确认缓存条目仍是自己读到的那一份——纪元不变但被别的
    * `set` 换过内容时,不能拿旧值盖回去。
    */
   const clearEpoch = new Map<string, number>();
@@ -1337,85 +1495,70 @@ export function createAgentHandoffPendingRegistry(
   };
   const genOf = (sessionId: string): number => clearEpoch.get(sessionId) ?? 0;
   return {
-    set(sessionId, handoff, expectedGeneration) {
+    set(sessionId, handoff, expectedGeneration, replay) {
       // 调用方带了 clear 纪元就校验:它是在读历史之前取的,不符说明期间用户 /clear 过,
       // 这份交接算的是已作废的历史,丢弃而不是盖回去。纪元只由 clear 推进,所以同一
       // 流程内的二次写入、以及与别处 consume 的并发,都不会被误拒。
       if (expectedGeneration !== undefined && genOf(sessionId) !== expectedGeneration) return;
-      pending.set(sessionId, handoff);
-      // 外部直接塞进来的交接没经过 queryPending 的组合,重新纳入 decorate 范围。
-      composedByQuery.delete(sessionId);
+      pending.set(sessionId, { text: handoff, replay });
     },
     readGeneration(sessionId) {
       return genOf(sessionId);
     },
-    async peek(sessionId) {
-      if (pending.has(sessionId)) {
-        const cached = pending.get(sessionId) ?? null;
-        if (cached === null || !decorateCached || composedByQuery.has(sessionId)) return cached;
-        const gen = genOf(sessionId);
+    async peek(sessionId, retryClientId) {
+      const forInput = (entry: Entry) =>
+        retryClientId && entry.replay?.userClientId === retryClientId ? entry.replay.text : entry.text;
+      const entry = pending.get(sessionId);
+      const gen = genOf(sessionId);
+      if (entry) {
+        if (entry.text === null || !prepareDecoration || entry.decorated) return forInput(entry);
         try {
-          const decorated = await decorateCached(sessionId, cached);
-          // 期间被 /clear:本次结果基于已作废的状态,既不写回也不返回——返回它等于
-          // 把 clear 掉的交接注入这一次发送。
-          if (genOf(sessionId) !== gen) return null;
-          // 纪元没变但值被别的 set 换过:别拿旧值盖回去,让下一次 peek 处理新值。
-          if (pending.get(sessionId) !== cached) return null;
-          // 组合结果回写并标记为已组合:同一条待注入交接在 consume 之前可能被 peek
-          // 多次(首发被拒后的重试),没有这步每次都要重跑一遍 decorate 的 DB 查询,
-          // 而且要靠 decorate 自身幂等才不会叠加。
-          pending.set(sessionId, decorated);
-          composedByQuery.add(sessionId);
-          return decorated;
+          const decorate = await prepareDecoration(sessionId);
+          if (genOf(sessionId) !== gen || pending.get(sessionId) !== entry) return null;
+          // Compose both variants from their original bodies. A fork may trim
+          // the middle, so its result is not necessarily a prefixed copy.
+          const composed: Entry = {
+            text: decorate ? decorate(entry.text) : entry.text,
+            replay: entry.replay && decorate ? { ...entry.replay, text: decorate(entry.replay.text) } : entry.replay,
+            decorated: true,
+          };
+          pending.set(sessionId, composed);
+          return forInput(composed);
         } catch {
-          // 失败路径与成功路径同一套校验:decorate 抛错期间若发生 /clear,或这份交接
-          // 已被别处 consume / 被新交接替换,退回 cached 都等于把过期内容注入这次发送
-          // ——尤其 consume 之后再注入,accepted 后的无条件 consume 还会抹掉更新的那份。
-          if (genOf(sessionId) !== gen) return null;
-          if (pending.get(sessionId) !== cached) return null;
-          // 组合失败不能吞掉本来就该注入的交接——退回未组合的原值,且不写缓存,
-          // 下次 peek 仍会重试组合。
-          return cached;
+          // Fall back only to the still-current entry. A later peek may retry the read.
+          return genOf(sessionId) === gen && pending.get(sessionId) === entry ? forInput(entry) : null;
         }
       }
-      const gen = genOf(sessionId);
-      let fromDb: string | null = null;
+      let fromDb: string | null;
       try {
         fromDb = await queryPending(sessionId);
       } catch {
-        // 查询失败按无 pending 处理(不阻塞发送);下次 send 重查。
-        return null;
+        return null; // Query failure is not a confirmed miss.
       }
-      // 期间 /clear 或有人写入了新交接:这份 DB 重建结果已过时,不写回也不返回。
       if (genOf(sessionId) !== gen || pending.has(sessionId)) return null;
-      pending.set(sessionId, fromDb);
-      composedByQuery.add(sessionId);
+      pending.set(sessionId, { text: fromDb, decorated: true });
       return fromDb;
     },
     consume(sessionId) {
-      pending.set(sessionId, null);
-      composedByQuery.delete(sessionId);
+      pending.set(sessionId, { text: null });
       // 不推进 clear 纪元:消费的是"这一份"交接,不代表别处正在构造的新交接作废。
       onConsume?.(sessionId);
     },
     clear(sessionId) {
       pending.delete(sessionId);
-      composedByQuery.delete(sessionId);
       // 不要"顺手"改成 clearEpoch.delete():缺省值 0 会让 clear 前取到 0 的在途写入
       // 重新校验通过。理由见接口声明处。
       bumpClearEpoch(sessionId);
     },
     invalidate(sessionId) {
-      pending.set(sessionId, null);
-      composedByQuery.delete(sessionId);
+      pending.set(sessionId, { text: null });
       // 纪元不在这里推进,见接口声明:要等 cleared_at 落库尝试结束。
     },
     sealClearBoundary(sessionId) {
       // 重立墓碑再推进纪元,顺序不能反过来也不能省。落库这段 await 里,一份用
       // clear 前纪元的 set 是能挤进来的(那时纪元还没推进,校验通过),它算的是
       // clear 前的历史;只推进纪元不会把它清掉。
-      pending.set(sessionId, null);
-      composedByQuery.delete(sessionId);
+      pending.set(sessionId, { text: null });
       bumpClearEpoch(sessionId);
     },
   };

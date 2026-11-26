@@ -64,9 +64,19 @@ const codex = (primary: number, secondary: number): SubscriptionAccountUsage => 
   },
 });
 
+/** A plugin engine provider with accounts (plugin engine accounts, 2026-11-23). */
+const PLUGIN_PROVIDER = 'acp-plugin:zcode-plugin:zcode';
+const pluginUsage = (fiveHour: number, weekly: number): SubscriptionAccountUsage => ({
+  plugin: { updatedAt: now, windows: [
+    { label: 'GLM · 5h', remainingPercent: fiveHour, resetsAt: now + 2.4 * 3_600_000, windowMinutes: 300 },
+    { label: 'GLM · Weekly', remainingPercent: weekly, resetsAt: now + 4 * 86_400_000, windowMinutes: 10_080 },
+  ] },
+});
+
 /** Mirrors ProvidersSection: the old provider card is only an unavailable-endpoint fallback. */
-function Section({ codexPool, signedOut }: { codexPool: boolean; signedOut: boolean }) {
+function Section({ codexPool, signedOut, plugin }: { codexPool: boolean; signedOut: boolean; plugin: boolean }) {
   const { t } = useTranslation();
+  if (plugin) return <SubscriptionAccountsSection providerId={PLUGIN_PROVIDER} providerName="ZCode" />;
   if (codexPool) return <SubscriptionAccountsSection providerId="openai" />;
   return (
     <SubscriptionAccountsSection
@@ -143,6 +153,26 @@ void mountPage({
       };
     }
     if (ctx.case.startsWith('codex-no-usage')) view.accounts[1].usage = undefined;
+    if (ctx.case.startsWith('plugin-engine'))
+      view = {
+        providerId: PLUGIN_PROVIDER,
+        configured: true,
+        strategy: 'least',
+        pluginEngine: {
+          engineKey: 'zcode-plugin:zcode',
+          methods: [
+            { id: 'zai-key', label: 'Z.ai API Key', kind: 'secret', secretLabel: 'Z.ai Coding Plan API Key' },
+            { id: 'zai-browser', label: 'Z.ai', kind: 'browser' },
+          ],
+        },
+        accounts: [
+          { id: 'default', identity: 'me@z.ai', plan: 'GLM Coding Plan Pro', directory: '', status: 'ready',
+            running: 1, limit: 4, weight: 1, paused: false, usage: pluginUsage(62, 81) },
+          { id: 'cindy-0123456789ab-00000000-0000-4000-8000-000000000002', identity: 'BigModel API Key ····a1b2',
+            plan: 'GLM Coding Plan Lite', directory: '/Users/alex/Library/Application Support/Cindy/owners/u/plugin-engine-accounts/zcode-plugin/zcode/cindy-…',
+            status: 'limited', running: 0, limit: 2, limitSet: true, weight: 1, paused: false, usage: pluginUsage(0, 44) },
+        ],
+      };
     if (ctx.case === 'expiry-past')
       view.accounts[1].loginExpiresAt = new Date(now - 86_400_000).toISOString();
     // Nothing signed in yet: the host lists only the unbound CLI default slot.
@@ -178,6 +208,8 @@ void mountPage({
       } },
       subscriptionAccounts: {
         onChanged: subscription('subscriptionAccounts'),
+        existingLogins: async () => ({ computer: 'Mac mini', candidates: ctx.case.startsWith('existing-login')
+          ? [{ identity: 'studio@example.com', plan: 'Pro', directory: '~/.claude-person', receipt: 'fixture' }] : [] }),
         command: async (command: SubscriptionAccountCommand) => {
           if (ctx.case === 'error') throw new Error('Fixture read failure');
           // The first read never lands, so the placeholder stays for the capture.
@@ -237,6 +269,7 @@ void mountPage({
         <Section
           codexPool={ctx.case.startsWith('codex') || ctx.case === 'narrow-weight' || ctx.case === 'provider-auth'}
           signedOut={ctx.case === 'empty'}
+          plugin={ctx.case.startsWith('plugin-engine')}
         />
       )}
       <ToastContainer />

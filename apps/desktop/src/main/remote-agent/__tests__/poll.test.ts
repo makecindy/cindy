@@ -1,12 +1,27 @@
 /**
  * 多任务共用一个 poll：被控端按游标返回、控制端去重，链路抖动后不丢不重。
+ *
+ * 测试价值
+ * - 生产入口与可观察结果：RemoteAgentPoller；对端仍在持续回传其它业务帧（大包阻塞回程）时保留在途远程任务游标并自动恢复，
+ *   超过 REMOTE_AGENT_CONGESTED_GIVE_UP_MS 仍无 poll 回包时有界结束。
+ * - Bug／规则依据：docs/dev-rules/remote-and-mobile-adaptation.md「远程 Agent 的拉取与恢复」；2026-11-24 慢中转大包拥塞 121 秒误判 remote_agent_lost。
+ * - 现有覆盖缺口：原测试只覆盖完全失联 2 分钟放弃，未覆盖对端持续送达业务帧期间的延迟窗口与 5 分钟硬上限。
+ * - 最小失败输入：对端持续送达业务帧时 poll 连续超时超过 2 分钟后恢复，以及持续超时超过 5 分钟。
+ * - tier：unit（假时钟驱动，无网络或子进程）。
+ * - 实测耗时：5.50s（pnpm --dir apps/desktop exec vitest run src/main/remote-agent/__tests__/poll.test.ts，其中单测执行 1.71s、模块收集 2.94s）
  */
 import { randomUUID } from 'node:crypto';
 
 import { REMOTE_AGENT_MAX_POLL_RUNS, REMOTE_AGENT_READ_MAX_BYTES, REMOTE_AGENT_READ_WAIT_MS, type RemoteAgentErrorInfo } from '@cindy/device-link';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { isRetryableLinkError, remoteAgentErrorFrom, RemoteAgentPoller, type PolledRun } from '../controller/poller';
+import {
+  REMOTE_AGENT_CONGESTED_GIVE_UP_MS,
+  isRetryableLinkError,
+  remoteAgentErrorFrom,
+  RemoteAgentPoller,
+  type PolledRun,
+} from '../controller/poller';
 import { remoteAgentInvoker } from '../controller/runClient';
 import { createDeviceUnresponsiveError } from '../../device-link/responsivenessTracker';
 import { EventLog } from '../eventLog';
@@ -366,10 +381,10 @@ describe('multiplexed poll', () => {
     expect(attempts).toBeGreaterThan(5);
   });
 
-  // Unit regression: a breaker rejection wrapped by remoteAgentInvoker used to discard
-  // an active run immediately. Cover nonzero-cursor recovery and another controller
-  // polling the same host; existing link-reset tests do not exercise circuit-open errors.
-  it('keeps the cursor through a circuit outage while another controller keeps polling', async () => {
+  // Unit regression: circuit-open and unconfirmed-share failures must preserve an active
+  // run, its cursor and healthy neighbours. Previous share coverage required an earlier
+  // DEVICE_OFFLINE, so it missed a share failure being the first outage signal.
+  it.each(['DEVICE_UNRESPONSIVE', 'REMOTE_AGENT_SHARE_UNAVAILABLE', 'serialized-share-unavailable'])('keeps the cursor through a %s outage while another controller keeps polling', async code => {
     vi.useFakeTimers();
     const host = fakeHost();
     const affected = collector(randomUUID());
@@ -382,7 +397,11 @@ describe('multiplexed poll', () => {
     let circuitOpen = true;
     const poller = new RemoteAgentPoller(remoteAgentInvoker('host', async (_device, _channel, args) => {
       requests.push(args[0] as typeof requests[number]);
-      if (requests.length > 1 && circuitOpen) throw createDeviceUnresponsiveError('host');
+      if (requests.length > 1 && circuitOpen) {
+        if (code === 'DEVICE_UNRESPONSIVE') throw createDeviceUnresponsiveError('host');
+        if (code === 'serialized-share-unavailable') throw new Error('[REMOTE_AGENT_SHARE_UNAVAILABLE] temporarily unavailable');
+        return { ok: false, error: { code: 'IPC_ERROR', message: '[REMOTE_AGENT_SHARE_UNAVAILABLE] temporarily unavailable' } };
+      }
       return { ok: true, result: await host.invoke(args) };
     }));
     const other = new RemoteAgentPoller(args => host.invoke(args));
@@ -419,10 +438,10 @@ describe('multiplexed poll', () => {
     }
   });
 
-  it('cancels circuit-outage retries when the run is unregistered', async () => {
+  it.each(['DEVICE_UNRESPONSIVE', 'REMOTE_AGENT_SHARE_UNAVAILABLE'])('cancels %s retries when the run is unregistered', async code => {
     vi.useFakeTimers();
     const sink = collector(randomUUID());
-    const invoke = vi.fn(async () => { throw createDeviceUnresponsiveError('host'); });
+    const invoke = vi.fn(async () => { throw Object.assign(new Error(code), { code }); });
     const poller = new RemoteAgentPoller(invoke);
     poller.register(sink.run);
     await vi.advanceTimersByTimeAsync(1);
@@ -436,7 +455,7 @@ describe('multiplexed poll', () => {
   });
 
   // Unit regression: a share restart briefly rejects authorization after a link outage.
-  // The old poller ended immediately; only that existing outage may keep its original deadline.
+  // Keep the existing deadline; an ambiguous first failure may start it, a first revocation may not.
   it.each(['ACCESS_REVOKED', 'REMOTE_AGENT_SHARE_UNAVAILABLE'])('bounds temporary %s by the link outage window', async code => {
     vi.useFakeTimers();
     let failure = 'DEVICE_OFFLINE';
@@ -459,12 +478,43 @@ describe('multiplexed poll', () => {
     expect(sink.lost?.reason).toBe('unreachable');
     expect(recoverAuthorization).toHaveBeenCalledOnce();
 
-    const revoked = collector(randomUUID());
-    revoked.run.recoverAuthorization = recoverAuthorization;
-    new RemoteAgentPoller(async () => { throw Object.assign(new Error(code), { code }); }).register(revoked.run);
+    const firstFailure = collector(randomUUID());
+    const firstRecovery = vi.fn(() => new Promise<void>(() => undefined));
+    firstFailure.run.recoverAuthorization = firstRecovery;
+    const firstPoller = new RemoteAgentPoller(async () => { throw Object.assign(new Error(code), { code }); });
+    firstPoller.register(firstFailure.run);
     await vi.advanceTimersByTimeAsync(1);
-    expect(revoked.lost?.error.code).toBe(code);
+    if (code === 'REMOTE_AGENT_SHARE_UNAVAILABLE') {
+      expect(firstFailure.lost).toBeNull();
+      await vi.advanceTimersByTimeAsync(130_000);
+      expect(firstFailure.lost?.reason).toBe('unreachable');
+      expect(firstPoller.size).toBe(0);
+    }
+    expect(firstRecovery).toHaveBeenCalledTimes(code === 'REMOTE_AGENT_SHARE_UNAVAILABLE' ? 1 : 0);
+    expect(firstFailure.lost?.error.code).toBe(code);
     expect(recoverAuthorization).toHaveBeenCalledOnce();
+  });
+
+  // SHARE_UNAVAILABLE alone is ambiguous; an authoritative denial must still stop.
+  // Use the real invoker wrapper, whose display prefix can differ from Error.code.
+  it.each(['ACCESS_REVOKED', 'REMOTE_DISABLED', 'REMOTE_AGENT_SHARE_PAUSED', 'REMOTE_AGENT_SHARE_REMOVED'])('does not recover an initial explicit %s denial', async code => {
+    vi.useFakeTimers();
+    const sink = collector(randomUUID());
+    const recoverAuthorization = vi.fn(async () => undefined);
+    sink.run.recoverAuthorization = recoverAuthorization;
+    const invoke = vi.fn(async () => ({ ok: false, error: {
+      code,
+      message: code === 'ACCESS_REVOKED' || code === 'REMOTE_DISABLED'
+        ? '[REMOTE_AGENT_SHARE_UNAVAILABLE] unavailable'
+        : `[${code}] denied`,
+    } }));
+    const poller = new RemoteAgentPoller(remoteAgentInvoker('host', invoke));
+    poller.register(sink.run);
+    await vi.advanceTimersByTimeAsync(130_000);
+    expect(sink.lost?.reason).toBe('read-failed');
+    expect(poller.size).toBe(0);
+    expect(invoke).toHaveBeenCalledOnce();
+    expect(recoverAuthorization).not.toHaveBeenCalled();
   });
 
   it('resumes polling after temporary share refusal without replaying data', async () => {
@@ -573,6 +623,7 @@ describe('link errors', () => {
     ['INVOKE_TIMEOUT', 'no invoke-result within 30000ms after first socket write', 'REMOTE_AGENT_TIMEOUT', true],
     ['TIMEOUT', 'request timed out', 'REMOTE_AGENT_TIMEOUT', true],
     ['BACKPRESSURE', 'request expired before socket write within 10000ms', 'REMOTE_AGENT_LINK_BUSY', true],
+    ['BACKPRESSURE', '[REMOTE_AGENT_SHARE_UNAVAILABLE] shared request failed before socket write', 'REMOTE_AGENT_LINK_BUSY', true],
     ['DEVICE_UNRESPONSIVE', 'target device host is unresponsive (circuit open)', 'REMOTE_AGENT_UNRESPONSIVE', true],
     ['DEVICE_OFFLINE', 'target device is offline', 'REMOTE_AGENT_OFFLINE', true],
     ['ACCESS_REVOKED', 'access revoked', 'REMOTE_AGENT_ACCESS_DENIED', false],
@@ -626,5 +677,49 @@ describe('link errors', () => {
     const busy = await host([{ op: 'caps' }]).catch((e: unknown) => e);
     expect((busy as Error).message).toBe('[REMOTE_AGENT_BUSY] too many tasks');
     expect(isRetryableLinkError(busy)).toBe(false);
+  });
+
+  it('holds the 2-minute outage cutoff while the peer is actively delivering business frames, up to the 5-minute ceiling', async () => {
+    vi.useFakeTimers();
+    let clock = 0;
+    let congested = true;
+    const sink = collector(randomUUID());
+    const poller = new RemoteAgentPoller(
+      async () => {
+        if (congested) throw Object.assign(new Error('INVOKE_TIMEOUT: head-of-line'), { code: 'INVOKE_TIMEOUT' });
+        return { runs: [{ runId: sink.run.runId, cursor: 4, data: Buffer.from('done').toString('base64'), done: true }] };
+      },
+      undefined,
+      () => clock,
+      () => true,
+    );
+    poller.register(sink.run);
+    for (let step = 0; step < 30; step += 1) {
+      await vi.advanceTimersByTimeAsync(5_000);
+      clock += 5_000;
+    }
+    // 150s (> 120s dead-peer cutoff) while peer actively delivers frames: run stays alive and resumes cleanly.
+    expect(sink.lost).toBeNull();
+    congested = false;
+    await vi.advanceTimersByTimeAsync(5_000);
+    clock += 5_000;
+    expect(sink.done).toBe(true);
+    expect(sink.text()).toBe('done');
+
+    // A permanently wedged poll still terminates at REMOTE_AGENT_CONGESTED_GIVE_UP_MS.
+    const wedged = collector(randomUUID());
+    new RemoteAgentPoller(
+      async () => {
+        throw Object.assign(new Error('INVOKE_TIMEOUT: wedged'), { code: 'INVOKE_TIMEOUT' });
+      },
+      undefined,
+      () => clock,
+      () => true,
+    ).register(wedged.run);
+    for (let elapsed = 0; elapsed <= REMOTE_AGENT_CONGESTED_GIVE_UP_MS + 10_000 && !wedged.lost; elapsed += 5_000) {
+      await vi.advanceTimersByTimeAsync(5_000);
+      clock += 5_000;
+    }
+    expect(wedged.lost?.reason).toBe('unreachable');
   });
 });

@@ -1,3 +1,4 @@
+import { useWallpaper, wallpaperRaisedFill } from '@/theme/wallpaper';
 import { canStopBotGroupSpeaker } from '@cindy/maker-shared/botGroupChat';
 import { interleaveBotGroupWork } from '@cindy/maker-shared/botGroupPresentation';
 import type { BotGroupWorkRow } from './BotGroupWorkArea';
@@ -100,6 +101,7 @@ import {
   BotGroupDuoAvatar,
   useBotGroupIdentities,
 } from './BotGroupAvatars';
+import { BotGroupExternalBadge } from './BotGroupExternalBadge';
 import { CHAT_HEADER_MARK_SIZE, CHAT_HEADER_MIN_HEIGHT, CHAT_HEADER_BLUR_FADE_INSIDE, ChatIdentityHeader } from './ChatIdentityHeader';
 import { SessionHeaderNativeBlur } from './SessionHeaderNativeControls';
 import { CompanionEntering } from './CompanionEntering';
@@ -722,6 +724,10 @@ function BotGroupChatContent({ deviceId, deviceName, groupId, messageId, notific
 
   const title = group?.name ?? (cachedRow ? resolveRemoteText(cachedRow.item.display.title, i18n.language) : '');
   const direct = group?.conversationKind === 'direct';
+  const isExternalGroup = !direct && !threadRootId
+    && (group?.external === true || cachedRow?.item.display.badges?.some(badge => badge.tone === 'external') === true);
+  const externalBadge = isExternalGroup ? <BotGroupExternalBadge /> : undefined;
+  const externalLabel = isExternalGroup ? t('groupChat.externalBadge') : '';
   const peer = direct ? group.members.find(member => !member.isSelf) : undefined;
   // The header reads the group's size, not a roll call (owner request 2026-10-26); the names stay
   // in the accessibility label and in group settings. The list row's member links seed the count.
@@ -745,16 +751,17 @@ function BotGroupChatContent({ deviceId, deviceName, groupId, messageId, notific
       <Stack.Toolbar.Button icon="ellipsis" accessibilityLabel={t('groupChat.settings.open')} disabled={!group} onPress={() => setSettings(true)} />
     </Stack.Toolbar>}
     <ChatIdentityHeader testIDPrefix="botGroup" showBack={false} mark={null}
-      title={threadRootId ? t('groupChat.thread.title') : title} subtitle={threadRootId ? title : memberLine}
-      identityLabel={[title, memberLine].filter(Boolean).join(', ')} onBack={leave}
+      title={threadRootId ? t('groupChat.thread.title') : title} titleBadge={externalBadge} subtitle={threadRootId ? title : memberLine}
+      identityLabel={[title, externalLabel, memberLine].filter(Boolean).join(', ')} onBack={leave}
       controlsReady={!!group} onOpenIdentity={direct || threadRootId ? undefined : () => setSettings(true)} />
   </> : <><ChatIdentityHeader testIDPrefix="botGroup" settingsTestID="botGroup.settingsButton" nativeHeader={nativeHeader}
     mark={threadRootId ? null : peer ? <BotGroupAvatar deviceId={deviceId} identity={identityFor(peer.botId, peer.name)} size={CHAT_HEADER_MARK_SIZE} online={chat.online} /> : <BotGroupDuoAvatar deviceId={deviceId} members={headerMembers} online={chat.online} variant="header"
       working={group?.round.status === 'running'} />}
     title={threadRootId ? t('groupChat.thread.title') : title}
+    titleBadge={externalBadge}
     accessory={nativeHeader ? undefined : threadFollow}
     subtitle={!threadRootId && group?.round.status === 'running' ? t('groupChat.list.running') : threadRootId ? title : memberLine}
-    identityLabel={[title, memberLine, memberNames].filter(Boolean).join(', ')}
+    identityLabel={[title, externalLabel, memberLine, memberNames].filter(Boolean).join(', ')}
     identityHint={t('groupChat.settings.open')}
     controlsReady={!!group}
     onBack={leave}
@@ -923,7 +930,7 @@ function BotGroupChatContent({ deviceId, deviceName, groupId, messageId, notific
       <BotGroupTopicImageShare key={shareScope} selectionScope={shareScope} messages={selectedMessages} allIds={shareableIds}
         resolveMedia={chat.media} onBusyChange={setImageShareBusy} />
       <View style={selectedImages ? styles.hiddenComposer : undefined} testID="botGroup.composerContainer">
-        <BotGroupComposer pullThrough={composerPullThrough} allowMentionAllBots={group.supportsMentionAudiences === true && group.allowMentionAllBots === true} key={`${viewportOwner}:composer`} topic={!!threadRootId} onParticipate={mask.participate} maskIndicator={mask.state?.settings.companionId ? <GroupMaskStatus mask={mask} deviceId={deviceId} onPress={() => setMaskSettings(true)} /> : undefined} members={group.members} identityFor={identityFor} deviceId={deviceId} online={(chat.online || !!chat.canQueue) && !group.archived && !group.dissolvedAt && (!threadRootId || group.messages.some(message => message.id === threadRootId && !message.deleted))}
+        <BotGroupComposer conversationKind={direct ? 'direct' : undefined} pullThrough={composerPullThrough} allowMentionAllBots={group.supportsMentionAudiences === true && group.allowMentionAllBots === true} key={`${viewportOwner}:composer`} topic={!!threadRootId} onParticipate={mask.participate} maskIndicator={mask.state?.settings.companionId ? <GroupMaskStatus mask={mask} deviceId={deviceId} onPress={() => setMaskSettings(true)} /> : undefined} members={group.members} identityFor={identityFor} deviceId={deviceId} online={(chat.online || !!chat.canQueue) && !group.archived && !group.dissolvedAt && (!threadRootId || group.messages.some(message => message.id === threadRootId && !message.deleted))}
         quoteMessageId={replyTo?.messageId} focusRequest={replyFocusRequest}
         placeholder={threadRootId ? t('groupChat.thread.placeholder') : undefined}
         stopPending={stopping || group.round.status === 'running' && group.round.speakers.length > 0 && group.round.speakers.every(speaker => speaker.stopping || speaker.executionStatus === 'stopping')}
@@ -950,7 +957,7 @@ function BotGroupChatContent({ deviceId, deviceName, groupId, messageId, notific
   // in-page content (offline notice or image selection), matching the timeline inset.
   const headerBlurHeight = systemBack ? headerHeight
     : Math.max(headerHeight, nativeHeader ? nativeHeaderHeight : insets.top + navigationChrome.target);
-  return <RichContentContext.Provider value={richContent}><View style={[styles.screen, screenInsets]} testID="botGroup.screen">
+  return <RichContentContext.Provider value={richContent}><View style={[styles.flex, screenInsets]} testID="botGroup.screen">
     {threadRootId ? <Stack.Screen options={{ gestureEnabled: previousIsGroup }} /> : null}
     {nativeHeader || systemBack ? null : <Stack.Screen options={{ headerShown: false }} />}
     {floatingHeader ? <>
@@ -1339,6 +1346,8 @@ function BotGroupTimelineItem({
   const richContentActive = active && (!visibility || visible);
   const styles = useThemedStyles(makeStyles);
   const { colors: userBubbleColors } = useUserBubbleAppearance();
+  const { selected: wallpaper } = useWallpaper();
+  const { colors, mode } = useTheme();
   if (message.kind === 'round-end') {
     return <BotGroupDivider testID="botGroup.roundEnd">
       <Text style={styles.dividerText}>{t('groupChat.timeline.roundEnded')}</Text>
@@ -1386,6 +1395,7 @@ function BotGroupTimelineItem({
           {bubble ? <View style={[
             styles.userBubble,
             compact && styles.userBubbleCompact,
+            wallpaper !== 'none' && { backgroundColor: wallpaperRaisedFill(colors.surfaceElevated, mode) },
             userBubbleColors && { backgroundColor: userBubbleColors.background, borderColor: userBubbleColors.border },
           ]} testID="botGroup.message.userBubble">
             {quoteDisplay ? <View style={styles.userQuote}>
@@ -1412,10 +1422,14 @@ function BotGroupTimelineItem({
   </View>;
   // Server plans retain the human creator as author, but the card belongs to its organizer.
   const isPlanCard = message.kind === 'plan';
+  const isOtherHuman = !isPlanCard && message.authorKind === 'user' && message.isSelf === false;
   const organizer = isPlanCard ? members.find(candidate => candidate.botId === plan?.organizerBotId) : undefined;
+  const authorDisplayName = isPlanCard
+    ? (organizer ? botGroupMentionDisplayName(organizer) : plan?.organizerName || '')
+    : (member && !member.assistant && message.authorKind !== 'system' ? botGroupMentionDisplayName(member) : '') || message.authorName || member?.name || '';
   const author = isPlanCard
-    ? identityFor(plan?.organizerBotId ?? '', organizer?.name || plan?.organizerName || '')
-    : identityFor(message.authorBotId ?? '', message.authorName || member?.name || '');
+    ? identityFor(plan?.organizerBotId ?? '', authorDisplayName)
+    : identityFor(message.authorBotId ?? '', authorDisplayName);
   if (isPlanCard || message.maskAttribution) continued = false;
   return <View style={[styles.botRow, continued && styles.botRowContinued]} testID={isPlanCard ? 'botGroup.message.plan' : 'botGroup.message.bot'}>
     {continued ? <View style={styles.avatarSpacer} /> : <View style={styles.avatarSlot}>
@@ -1423,7 +1437,11 @@ function BotGroupTimelineItem({
     </View>}
     <View style={styles.botColumn}>
       {continued ? null : <View style={[styles.authorRow, topic && styles.topicAuthorRow]}>
-        <Text numberOfLines={1} style={styles.authorName}>{author.name}</Text>
+        <Text numberOfLines={1} style={styles.authorName}>{authorDisplayName || author.name}</Text>
+        {isOtherHuman && member?.external === true ? <BotGroupExternalBadge /> : null}
+        {isOtherHuman && member?.department ? <View style={styles.departmentPill} testID="botGroup.author.department">
+          <Text numberOfLines={1} style={styles.departmentText}>{member.department}</Text>
+        </View> : null}
         {topic ? <Text style={styles.threadCaption}>{new Date(message.createdAt).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}</Text> : null}
         {isRoot ? <Text style={styles.threadCaption}>{t('groupChat.thread.root')}</Text> : null}
         {isPlanCard && plan?.kind !== 'talk' ? <BotGroupOrganizerTag /> : null}
@@ -1518,4 +1536,6 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   topicAuthorRow: { alignItems: 'baseline' },
   authorRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, minHeight: BOT_GROUP_MESSAGE_AVATAR_SIZE },
   authorName: { flexShrink: 1, color: colors.textPrimary, fontSize: typeScale.bodySmall, lineHeight: lineHeight.bodySmall, fontWeight: fontWeight.regular },
+  departmentPill: { flexShrink: 1, maxWidth: 160, borderRadius: radius.pill, paddingHorizontal: spacing.xs + 2, backgroundColor: colors.surfaceChip },
+  departmentText: { color: colors.textSecondary, fontSize: typeScale.micro, lineHeight: lineHeight.micro, fontWeight: fontWeight.medium },
 });

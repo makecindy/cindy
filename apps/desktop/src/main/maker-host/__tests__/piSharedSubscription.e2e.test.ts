@@ -9,8 +9,9 @@ import { expect, it, vi } from 'vitest';
 import { createAnthropicCompatProxy } from '@cindy/anthropic-compat-proxy';
 import { buildUserProvider } from '@cindy/model-providers';
 
-const fixture = vi.hoisted(() => ({ fetch: vi.fn() }));
+const fixture = vi.hoisted(() => ({ fetch: vi.fn(), onReadAuth: undefined as (() => void) | undefined }));
 vi.mock('../../appSessionState.js', () => ({
+  getDataOwnerLifetime: () => 0,
   isAppSessionBoundaryPending: () => false, activeOwnerScopeKey: () => 'cloud:pi-codec-fixture',
 }));
 vi.mock('../../appCapabilities.js', () => ({ getAppCapabilities: () => ({ canUseCindyGateway: true }) }));
@@ -24,13 +25,17 @@ vi.mock('../logger-adapter.js', () => {
 // routing transform, native decoder and live grant checks are production code.
 vi.mock('../anthropic-responses-bridge-host.js', async importOriginal => {
   const actual = await importOriginal<typeof import('../anthropic-responses-bridge-host.js')>();
-  return { ...actual, getPiNativeSubscriptionHandler: (provider: string, session: string) =>
+  return { ...actual, getPiNativeSubscriptionHandler: (...[provider, session, , account, authorizeHostedRequest]:
+    Parameters<typeof actual.getPiNativeSubscriptionHandler>) =>
     actual.getPiNativeSubscriptionHandler(provider, session, {
       fetch: fixture.fetch,
-      getChatgptAuth: async () => ({ accessToken: 'fixture-token', accountId: 'fixture-account' }),
+      getChatgptAuth: async () => {
+        fixture.onReadAuth?.();
+        return { accessToken: 'fixture-token', accountId: 'fixture-account' };
+      },
       getGrokToken: async () => 'fixture-token', peekGrokToken: () => 'fixture-token',
       invalidateChatgpt: async () => false, invalidateXai: async () => 'ignored', recordXaiRateLimit() {},
-    }),
+    }, account, authorizeHostedRequest),
   };
 });
 
@@ -39,6 +44,7 @@ import { setCustomProviders } from '../active-catalog.js';
 import { bindHostedSessionProvider } from '../session-provider-store.js';
 import { registerGuestProviderRoute } from '../guest-provider-route-store.js';
 import { registerPiProxySession } from '../pi-proxy-session-auth.js';
+import { bindPoolExecutionRoute } from '../../subscription-accounts/session.js';
 
 const binary = path.resolve('../../apps/pi-bin', `${process.platform}-${process.arch}`, process.platform === 'win32' ? 'pi.exe' : 'pi');
 const providerId = 'openai-native-codec-fixture';
@@ -64,13 +70,22 @@ function reply(): string {
 // The old host rejected this authorized request as model ''. Unit tests separately
 // covered plaintext routing and compressed forwarding, never their composition.
 // Tier: e2e (real child process + loopback HTTP), no user credentials or cloud calls.
-it.skipIf(!existsSync(binary)).each(['guest', 'owner'])('replies through the real Pi/proxy path for %s and rejects a revoked grant', async trust => {
+it.skipIf(!existsSync(binary)).each(['guest', 'owner', 'owner-child'])('replies through the real Pi/proxy path for %s and rejects a revoked grant', async trust => {
   const directory = await mkdtemp(path.join(tmpdir(), 'cindy-pi-shared-codec-'));
   let allowed = true;
   const binding = trust === 'guest'
     ? registerGuestProviderRoute('codec-runtime', providerId, model => allowed && model === catalogModel)
-    : bindHostedSessionProvider('codec-runtime', providerId, (provider, model) => allowed && provider === providerId && model === catalogModel);
-  const disposeToken = registerPiProxySession('codec-runtime', 'fixture-route-token', () => providerId);
+    : bindHostedSessionProvider('codec-runtime', trust === 'owner-child' ? 'openai' : providerId,
+      (provider, model) => allowed && provider === providerId && model === catalogModel);
+  // A real child uses the business session ID but its provider-specific token.
+  const disposeToken = registerPiProxySession('codec-runtime', 'fixture-route-token', () => providerId,
+    trust === 'owner-child' ? { scope: 'subagent-route' } : undefined);
+  const releasePool = trust === 'owner-child' ? bindPoolExecutionRoute('codec-runtime', {
+    providerId: 'openai', connectionId: 'fixture-parent-key',
+    assertCurrent: (model) => { if (model !== undefined) throw Error('not the parent model'); },
+    logicalModel: () => { throw Error('child must not use the parent model mapping'); },
+    captureTurnRejection: () => undefined,
+  }) : undefined;
   setCustomProviders([buildUserProvider({ id: providerId, name: 'Native codec fixture', auth: { method: 'oauth', native: 'codex' },
     runtimes: { codex: { baseUrl: 'https://chatgpt.example', wireProtocol: 'openai-responses', models: [{ id: wireModel, name: 'Fixture' }] } },
   })]);
@@ -114,8 +129,26 @@ it.skipIf(!existsSync(binary)).each(['guest', 'owner'])('replies through the rea
     expect(denied.code).not.toBe(0);
     expect(denied.stderr).toContain('not available');
     expect(fixture.fetch).toHaveBeenCalledTimes(1);
+    // For a root HTTP request, replace the grant after routing but before the
+    // upstream send. Even a replacement that permits the same model is not
+    // the grant that authenticated this token.
+    if (trust === 'owner') {
+      allowed = true;
+      let replacement: ReturnType<typeof bindHostedSessionProvider> | undefined;
+      fixture.onReadAuth = () => {
+        replacement = bindHostedSessionProvider('codec-runtime', providerId, () => true);
+      };
+      try {
+        const superseded = await run();
+        expect(replacement).toBeDefined();
+        expect(superseded.code).not.toBe(0);
+        expect(superseded.stderr).toContain('not available');
+        expect(fixture.fetch).toHaveBeenCalledTimes(1);
+      } finally { replacement?.release(); }
+    }
   } finally {
-    child?.kill(); await proxy?.dispose(); disposeToken(); binding.release(); setCustomProviders([]);
+    fixture.onReadAuth = undefined;
+    child?.kill(); await proxy?.dispose(); disposeToken(); binding.release(); releasePool?.(); setCustomProviders([]);
     await rm(directory, { recursive: true, force: true });
   }
 }, 30000);

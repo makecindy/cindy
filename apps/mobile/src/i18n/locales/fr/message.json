@@ -133,6 +133,7 @@
     "retryRemoteMediaFetch": "Réessayer de récupérer le média distant",
     "retryFetch": "Réessayer",
     "openMedia": "Ouvrir le média",
+    "playAudio": "Lire l’audio",
     "readCurrentRemoteFile": "Lire le fichier distant actuel",
     "retryFilePreview": "Réessayer l'aperçu",
     "readCurrentFile": "Lire le fichier actuel",
@@ -195,6 +196,9 @@
     "turnTokens": "{{tokens}} jetons"
   },
   "lightbox": {
+    "saveImage": "Enregistrer",
+    "imageSaved": "Image enregistrée",
+    "saveFailed": "Impossible d’enregistrer l’image. Réessayez.",
     "originalUnavailable": "Image originale indisponible",
     "retryOriginal": "Réessayer l'image originale",
     "loadingOriginal": "Chargement de l'image originale…",
@@ -296,7 +300,7 @@
     "goalResumed": "Consommation rétablie, objectif repris",
     "goalCapacityRetry": "Service du modèle saturé : nouvel essai",
     "autoResume": {
-      "separator": "Connexion interrompue : reprise automatique",
+      "separator": "Réponse vide — reprise automatique",
       "succeeded": "Reconnecté",
       "failed": "Échec de la reconnexion",
       "neutral": "Se reconnecter",
@@ -461,6 +465,15 @@
     }
   },
   "attachmentPreview": {
+    "audioBackTen": "Reculer de 10 secondes",
+    "audioForwardTen": "Avancer de 10 secondes",
+    "audioMute": "Couper le son",
+    "audioUnmute": "Rétablir le son",
+    "audioSpeed": "Vitesse de lecture",
+    "audioOutput": "Sortie audio",
+    "fetchAudio": "Récupérer depuis l’ordinateur",
+    "pauseAudio": "Mettre l’audio en pause",
+    "audioProgress": "Position de lecture",
     "more": "Autres actions",
     "retry": "Réessayer",
     "image": "Image",

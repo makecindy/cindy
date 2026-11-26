@@ -85,6 +85,20 @@ describe('previewSlot · 资格审与 URL 守门', () => {
 });
 
 describe('previewSlot · 落点会话与广播', () => {
+  // unit：已有广播测试未覆盖可选复用。最小输入为合法 URL 加 reuseExisting，验证仅透传选项，回执保持原样。
+  it('forwards opt-in reuse through the authorized preview push and keeps the original receipt', () => {
+    const { slot, pushes } = makeSlot();
+    const url = 'https://a.example.dev/build/1';
+    expect(slot.handleRequest('preview-ghost', { url, reuseExisting: true })).toEqual({ ok: true });
+    expect(pushes[0]).toMatchObject({ ghostId: 'preview-ghost', url, reuseExisting: true });
+    expect(slot.handleRequest('preview-ghost', { url, reuseExisting: false })).toEqual({ ok: true });
+    expect(pushes[1]).not.toHaveProperty('reuseExisting');
+    expect(slot.handleRequest('preview-ghost', { url, reuseExisting: 'true' })).toMatchObject({
+      ok: false, errorCode: 'INVALID_REQUEST',
+    });
+    expect(pushes).toHaveLength(2);
+  });
+
   it('显式 sessionId 优先;缺省落台前会话;身份三件套由主机填', () => {
     const { slot, pushes } = makeSlot();
     expect(

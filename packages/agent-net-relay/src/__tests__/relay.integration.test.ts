@@ -19,7 +19,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { generateKeyPairSync, randomBytes, randomUUID } from 'node:crypto';
 import { createSocket } from 'node:dgram';
-import { once } from 'node:events';
+import { on, once } from 'node:events';
 import type { AddressInfo, Socket } from 'node:net';
 import { createServer } from 'node:http';
 import { Readable } from 'node:stream';
@@ -34,7 +34,8 @@ import { generateIdentity, issueCertificate, publicBytes, createJoinRequest, app
 import { AppError } from '@cindy/device-link-sharing/errors';
 import { AgentNetClient, authorization, submitJoin, pollJoin, submitTenantJoin, pollTenantJoin, encryptMedia, decryptMedia, type AgentNetUplink } from '../client.js';
 import { uploadEncryptedMedia, openEncryptedMedia } from '../media.js';
-import { encodeUdpRegister, encodeUdpUp, udpRelayPeerHash, verifyUdpDown, verifyUdpRegisterAck, type UdpRelayCredentials } from '../udpRelay.js';
+import { UDP_RELAY_PROBE_BYTES, UDP_RELAY_PROBE_FEATURE, encodeUdpProbe, encodeUdpRegister, encodeUdpUp, udpRelayPeerHash,
+  verifyUdpDown, verifyUdpProbeAck, verifyUdpRegisterAck, type UdpRelayCredentials } from '../udpRelay.js';
 import { createHash } from 'node:crypto';
 
 // Integration: HTTPS and UDP can sit behind different load balancers. /info must
@@ -560,6 +561,49 @@ describe('independent V2 relay', () => {
     await a.request('DELETE', '/devices/second');
     await expect(a.request('DELETE', '/devices/first')).rejects.toMatchObject({ code: 'OWNER_CANNOT_BE_REMOVED' });
   });
+  // Bug (2026-11-23): a device removed in Cindy could never enroll on the official network again, with no way back.
+  // Now it rejoins when it asks to itself; without asking it stays out, and its certificate from before the removal stays void.
+  // Minimal input: enroll, remove, enroll again without and then with `rejoin`.
+  it('lets a removed device rejoin only when it asks to and keeps its certificate from before the removal void', async () => {
+    const root = generateKeyPairSync('ed25519').privateKey, rootPublicKey = publicBytes(root);
+    const identities: Record<string, Identity> = { first: generateIdentity('first'), phone: generateIdentity('phone') };
+    let signedAt: number | undefined; // a replica whose clock runs behind
+    const f = await fixture({ mode: 'official', bootstrap: undefined, enroll: async (req) => {
+      const identity = identities[String(req.headers['x-test-device'])];
+      const issueWithSerial = (serial?: string) => issueCertificate(root, { networkId: 'account:one', subject: 'account:one', identity, role: 'owner', now: signedAt, serial });
+      const certificate = issueWithSerial();
+      return { certificate, rootPublicKey, networkId: certificate.networkId, name: 'Account network', deviceName: identity.deviceId, issueWithSerial };
+    } });
+    const enroll = async (device: string, body: Record<string, unknown> = {}) => {
+      const response = await fetch(f.relay.url + API + '/enroll', { method: 'POST', headers: { 'x-test-device': device }, body: JSON.stringify(body) });
+      return { status: response.status, body: await response.json() as { certificate: ReturnType<typeof issueCertificate>; error?: { code: string } } };
+    };
+    const first = new AgentNetClient(f.relay.url, identities.first, (await enroll('first')).body.certificate, rootPublicKey);
+    const beforeCertificate = (await enroll('phone')).body.certificate;
+    const before = new AgentNetClient(f.relay.url, identities.phone, beforeCertificate, rootPublicKey);
+    await first.request('PATCH', '/devices/phone', { name: 'My phone' });
+    await first.request('DELETE', '/devices/phone');
+    await expect(before.directory()).rejects.toMatchObject({ code: 'DEVICE_REVOKED' });
+    expect(await enroll('phone')).toMatchObject({ status: 403, body: { error: { code: 'DEVICE_REENROLLMENT_REQUIRES_APPROVAL' } } });
+    expect((await first.directory()).map((d) => d.certificate.deviceId)).toEqual(['first']);
+    // Review (Greptile P1): a rejoin certificate not newer than the one held before the removal is refused, so
+    // notBefore never lets that pre-removal certificate pass again.
+    signedAt = beforeCertificate.issuedAt - 1;
+    expect(await enroll('phone', { rejoin: true })).toMatchObject({ status: 409, body: { error: { code: 'CERTIFICATE_NOT_NEWER' } } });
+    await expect(before.directory()).rejects.toMatchObject({ code: 'DEVICE_REVOKED' });
+    signedAt = undefined;
+
+    await new Promise((resolve) => setTimeout(resolve, 5)); // a strictly newer certificate
+    const rejoined = await enroll('phone', { rejoin: true });
+    expect(rejoined.status).toBe(200);
+    const after = new AgentNetClient(f.relay.url, identities.phone, rejoined.body.certificate, rootPublicKey);
+    expect((await after.directory()).map((d) => d.certificate.deviceId).sort()).toEqual(['first', 'phone']);
+    expect((await first.directory()).find((d) => d.certificate.deviceId === 'phone')?.name).toBe('My phone');
+    await expect(before.directory()).rejects.toMatchObject({ code: 'DEVICE_REVOKED' });
+    // Asking to rejoin does not let new keys take over a device that was never removed.
+    identities.first = generateIdentity('first');
+    expect(await enroll('first', { rejoin: true })).toMatchObject({ status: 403, body: { error: { code: 'DEVICE_REENROLLMENT_REQUIRES_APPROVAL' } } });
+  });
   // §5.5: another account gets its own network on a shared relay. Only the relay owner admits or revokes it,
   // and neither side reaches the other's devices. Minimal input: one invite, one approval, one revocation.
   it('admits another account into an isolated network only after relay-owner approval and revokes it', async () => {
@@ -817,6 +861,85 @@ describe('independent V2 relay', () => {
     await vi.waitFor(() => expect(wsTags).toEqual([1, 2, 3, 4, 10, 11, 13]));
     expect(member.downs().map((down) => down.datagram[0]).sort()).toEqual([5, 6, 7]);
     expect(elsewhere.downs()).toEqual([]);
+  });
+
+  // Integration (2026-11-25): clients verify hop-1 full-size UDP reachability directly with the relay
+  // (0xE5/0xE6) instead of inferring hop-1 health from end-to-end peer retransmits. Smallest failing input:
+  // one unproven probe (must be ignored), one proven 1350B probe (must return non-amplifying 1342B ack),
+  // plus replayed/tampered/wrong-key probes (must be dropped). Tier: integration.
+  it('answers full-size UDP probes only for proven addresses with non-amplifying acks and rejects replays or tampering', async () => {
+    const f = await fixture();
+    const info = await (await fetch(f.relay.url + API + '/info')).json() as { features: string[] };
+    expect(info.features).toContain(UDP_RELAY_PROBE_FEATURE);
+    const a = await f.client.connect(); f.uplinks.push(a);
+    expect(a.udp?.probe).toBe(true);
+
+    const openUdp = async (credentials: UdpRelayCredentials) => {
+      const socket = createSocket('udp4'); cleanups.push(() => { socket.close(); });
+      await new Promise<void>((resolve) => socket.bind(0, '127.0.0.1', resolve));
+      const received: Buffer[] = []; socket.on('message', (packet) => received.push(packet));
+      const send = (packet: Uint8Array) => socket.send(packet, f.relay.udpAddress!.port, '127.0.0.1');
+      const regAcks = () => received.map((p) => verifyUdpRegisterAck(p, credentials)).filter((v) => v !== null);
+      const probeAcks = () => received.map((p) => verifyUdpProbeAck(p, credentials)).filter((v) => v !== null);
+      return { received, send, regAcks, probeAcks };
+    };
+    const owner = await openUdp(a.udp!);
+    const elsewhere = await openUdp(a.udp!);
+
+    // Before the address is proven, full-size probes must be ignored (zero amplification to unproven sources).
+    owner.send(encodeUdpProbe(a.udp!, 1n));
+    owner.send(encodeUdpRegister(a.udp!, 1n, false));
+    await vi.waitFor(() => expect(owner.regAcks()).toHaveLength(1));
+    expect(owner.probeAcks()).toEqual([]);
+
+    // Prove the address via cookie, even with receiving=false (probing during suspension).
+    owner.send(encodeUdpRegister(a.udp!, 2n, false, owner.regAcks()[0].cookie));
+    await vi.waitFor(() => expect(owner.regAcks().at(-1)).toMatchObject({ counter: 2n, proven: true }));
+
+    // A probe from another unproven socket with valid credentials is still ignored.
+    elsewhere.send(encodeUdpProbe(a.udp!, 2n));
+    // Tampered padding and wrong key are ignored; a valid 1350B probe gets a strictly shorter 1342B ack.
+    const tampered = encodeUdpProbe(a.udp!, 3n); tampered[tampered.length - 1] ^= 1;
+    owner.send(tampered);
+    owner.send(encodeUdpProbe({ session: a.udp!.session, key: Buffer.alloc(32, 9) }, 4n));
+    const valid = encodeUdpProbe(a.udp!, 5n, UDP_RELAY_PROBE_BYTES);
+    owner.send(valid);
+    await vi.waitFor(() => expect(owner.probeAcks()).toHaveLength(1));
+    expect(owner.probeAcks()[0]).toEqual({ counter: 5n, size: UDP_RELAY_PROBE_BYTES - 8 });
+    expect(owner.probeAcks()[0].size).toBeLessThan(valid.length);
+
+    // Replayed or older counter is dropped; a newer counter is answered.
+    owner.send(valid);
+    owner.send(encodeUdpProbe(a.udp!, 4n));
+    owner.send(encodeUdpProbe(a.udp!, 6n));
+    await vi.waitFor(() => expect(owner.probeAcks().map((ack) => ack.counter)).toEqual([5n, 6n]));
+    expect(elsewhere.received).toEqual([]);
+  });
+
+  // Integration: a phone must be able to verify the authenticated WebSocket
+  // independently of any peer. Previously any non-presence control closed it.
+  it('answers the mobile relay probe on the authenticated socket', async () => {
+    const f = await fixture();
+    const ws = new WebSocket(f.relay.url.replace(/^http/, 'ws') + API + '/ws', {
+      headers: { authorization: authorization(f.owner, f.certificate, 'GET', API + '/ws') },
+    });
+    cleanups.push(() => { ws.terminate(); });
+    const messages = on(ws, 'message', { signal: AbortSignal.timeout(3_000) });
+    try {
+      const { value: [hello] } = await messages.next();
+      expect(JSON.parse(hello.toString())).toMatchObject({ type: 'hello', relayProbe: true });
+      ws.send('{"type":"relay-probe"}');
+      // The relay can broadcast directory updates on the same socket before replying.
+      for await (const [data] of messages) {
+        const frame = JSON.parse(data.toString());
+        if (frame.type === 'directory') continue;
+        expect(frame).toEqual({ type: 'relay-pong' });
+        return;
+      }
+      throw new Error('Relay message stream ended before relay-pong');
+    } finally {
+      await messages.return?.();
+    }
   });
 
   // 2026-11-17 review: UDP credentials are a reusable secret. On an owner-pinned private relay over plain http (the

@@ -21,6 +21,7 @@ import { sessionsStore } from '@/lib/sessionsStore';
 import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
 import type { PluginBackgroundTask } from '../../../shared/pluginTasks';
+import { PluginLimitedList } from './PluginPermissionList';
 
 const SECTION_CLASS = 'mt-10';
 const HEADING_CLASS = 'text-18 font-medium leading-[1.444] text-[var(--text-primary)]';
@@ -92,7 +93,7 @@ function PluginBackgroundTasksSectionInner({ ghostId, hiddenTasksDeclared }: Plu
           type="button"
           onClick={() => void refresh()}
           aria-label={t('settings.ghosts.backgroundTasks.refresh')}
-          className="shrink-0 rounded-md p-1 text-[var(--text-secondary)] transition-colors duration-150 hover:text-[var(--text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
+          className="shrink-0 rounded-lg p-1 text-[var(--text-secondary)] transition-colors duration-150 hover:text-[var(--text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
         >
           <RefreshCw size={14} aria-hidden="true" />
         </button>
@@ -114,8 +115,8 @@ function PluginBackgroundTasksSectionInner({ ghostId, hiddenTasksDeclared }: Plu
             {t('settings.ghosts.backgroundTasks.empty')}
           </p>
         ) : (
-          <ul className="divide-y divide-[color-mix(in_srgb,var(--border-default)_72%,transparent)]">
-            {items.map((task) => (
+          <PluginLimitedList items={items} choiceKey="backgroundTasks" buttonClassName="mx-5 mb-3"
+            className="divide-y divide-[color-mix(in_srgb,var(--border-default)_72%,transparent)]" renderItem={task => (
               <li
                 key={task.taskId}
                 data-testid="plugin-background-task"
@@ -152,8 +153,7 @@ function PluginBackgroundTasksSectionInner({ ghostId, hiddenTasksDeclared }: Plu
                   {t('settings.ghosts.backgroundTasks.reveal')}
                 </Button>
               </li>
-            ))}
-          </ul>
+            )} />
         )}
       </div>
     </section>

@@ -1,4 +1,4 @@
-import { BUNDLED_CATALOG, type ProviderView } from '@cindy/model-providers';
+import { BUNDLED_CATALOG, buildUserProvider, type ProviderView } from '@cindy/model-providers';
 import { ProvidersSection } from '../../../src/renderer/components/settings/ProvidersSection';
 import { ModelSelector } from '../../../src/renderer/components/new-chat/ModelSelector';
 import { mountPage, subscription, forbid, ctx } from '../../ui-page/harness';
@@ -20,7 +20,43 @@ const catalogs = new Map([
   // A different OpenAI login stays; the same xAI as ROG is listed once.
   ['mini', { providers: [provider('openai', 'account-b'), provider('xai')], loading: false, error: null }],
 ]);
+// Hiding is a picker-only choice: Settings keeps the row, the picker folds it under 已隐藏.
+if (ctx.case.startsWith('hidden-provider')) {
+  local[1] = { ...anthropic(), hidden: true };
+  // A disabled provider too, so Settings shows both folded groups side by side.
+  local.push(provider('anthropic', 'account-d', { id: 'anthropic-work', name: 'Anthropic · Work', models: fable, suspended: true } as Partial<ProviderView>));
+  catalogs.clear();
+  catalogs.set('mini', { providers: [provider('xai')], loading: false, error: null });
+}
+if (ctx.case === 'connection-icons') {
+  local.splice(0, local.length, ...(['personal', 'work'] as const).map(logoKind => ({
+    ...buildUserProvider({
+      id: `glm-${logoKind}`, name: logoKind === 'personal' ? '智谱 · 个人版' : '智谱 · 企业版',
+      runtimes: { codex: { baseUrl: 'https://open.bigmodel.cn/api/paas/v4', models: [{ id: 'glm', name: 'GLM' }] } },
+    }),
+    connected: true, logoKind,
+  })));
+  catalogs.clear();
+}
 if (ctx.case === 'same-account-twice-here') local.push(provider('openai', 'account-a', { id: 'openai-old', name: 'OpenAI · old connection' }));
+// Providers that plugins offer (plugin engines): one still in the picker, one hidden, one turned off.
+const engine = (key: string, name: string, extra: Record<string, unknown> = {}) => ({
+  key, providerId: `acp-plugin:${key}`, ghostId: key.split(':')[0], harnessId: key.split(':')[1], name,
+  availability: { state: 'available' }, permissionModes: [{ id: 'ask', displayName: 'Ask' }], defaultPermissionMode: 'ask',
+  models: [{ id: 'deepseek-v4', displayName: 'DeepSeek-V4-Pro' }, { id: 'deepseek-flash', displayName: 'DeepSeek Flash' }],
+  remoteUse: { supported: true, enabled: true, shareSupported: true }, ...extra,
+});
+// A plugin's own icon (manifest `icon`, read by main into a data URL); without one the generic mark is drawn.
+const PLUGIN_ICON = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='royalblue'/%3E%3Cpath d='M9 16h14M16 9v14' stroke='white' stroke-width='3' stroke-linecap='round'/%3E%3C/svg%3E";
+const pluginEngines = ctx.case === 'plugin-providers' ? [
+  engine('dsh-plugin:dsh', 'Work DeepSeek', {
+    declaredName: 'DeepSeek Harness', reportsUsage: true, iconDataUrl: PLUGIN_ICON,
+    models: [{ id: 'deepseek-v4', displayName: 'DeepSeek-V4-Pro' }],
+    disabledModels: [{ id: 'deepseek-flash', displayName: 'DeepSeek Flash' }],
+  }),
+  engine('agy-plugin:agy', 'Antigravity', { hidden: true, remoteUse: { supported: false, enabled: false } }),
+  engine('zcode-plugin:zcode', 'ZCode', { suspended: true, availability: { state: 'unavailable', reason: 'suspended' } }),
+] : [];
 const devices = [{ deviceId: 'rog', name: 'ROG', platform: 'win32' }, { deviceId: 'mini', name: 'Mac mini', platform: 'darwin' }];
 const snapshot = { providers: local, providerOrder: local.map(item => item.id), ownerGeneration: 1, loading: false, error: null, refetch: async () => {} };
 Object.assign(window, { listingFixture: { snapshot, devices, catalogs },
@@ -43,6 +79,14 @@ mountPage({
       onProviderOAuthProgress: subscription('providerOAuthProgress'),
       onProvidersChanged: subscription('providersChanged'),
       getModelContextLimit: async () => ({ limit: 200000, isCustomized: false }),
+      ...(pluginEngines.length ? {
+        listPluginEngines: async () => pluginEngines,
+        onPluginEnginesChanged: subscription('pluginEnginesChanged'),
+        refreshPluginEngines: async () => {},
+        getPluginEngineUsage: async () => ({ updatedAt: Date.now(), windows: [{ label: 'Weekly requests', remainingPercent: 64 }] }),
+        setPluginEnginePrefs: forbid('setPluginEnginePrefs'),
+        setPluginEngineRemoteUse: forbid('setPluginEngineRemoteUse'),
+      } : {}),
     },
     deviceLink: { getState: async () => ({ remoteControlEnabled: true }), invoke: async () => ({}),
       onRemotePush: subscription('remotePush'), onStatusChanged: subscription('deviceStatus'), onOwnershipChanged: subscription('ownership') },
@@ -52,7 +96,7 @@ mountPage({
   render: () => <div className="flex h-screen gap-4 p-4">
     <div className="min-w-0 flex-1"><ProvidersSection /></div>
     <div data-picker className="flex w-[360px] items-end">
-      <ModelSelector modelId="gpt-6-astra" currentProviderId="openai" agentKind="codex" effort="high"
+      <ModelSelector modelId={ctx.case === 'connection-icons' ? 'glm' : 'gpt-6-astra'} currentProviderId={ctx.case === 'connection-icons' ? 'glm-personal' : 'openai'} agentKind="codex" effort="high"
         onModelChange={() => {}} onEffortChange={() => {}} useMorphPopover
         remoteAgent={{ devices: devices.map(({ deviceId, name }) => ({ deviceId, name })), selectedDeviceId: null }} />
     </div>

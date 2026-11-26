@@ -6,10 +6,9 @@ import { StrictMode } from 'react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render } from '@testing-library/react';
 import { Tooltip } from '@/components/ui/tooltip';
-import { registerMedia, stopAllMedia, __resetMediaBusForTests } from '@/lib/mediaPlaybackBus';
-import { AttachmentCollectionContext } from '../AttachmentCollection';
 import { ChatVideoView } from '../ChatVideoView';
 import { VideoLightbox } from '../VideoLightbox';
+import { registerMedia, __resetMediaBusForTests } from '@/lib/mediaPlaybackBus';
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
 vi.mock('@/hooks/useRemoteMediaUrl', () => ({ useRemoteMediaUrl: (url: string) => url }));
 vi.mock('@/lib/toast', () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
@@ -287,43 +286,76 @@ it('saves the inline media through the host without opening the viewer', async (
 // Regression #10062: a local video's audio kept playing on Windows after its
 // preview closed, so only the system mixer could stop it. Pausing is not
 // releasing — the element kept its source, and the pipeline outlived the DOM
-// node. #11739 also covers duplicate loads when the host unmounts after close.
-// Unit, minimum input: close a video in a two-item collection and finish the fade.
-it('releases the video source once when the collection preview closes', () => {
+// node. Tier 1, minimum input: open one local video preview, click Close.
+it('releases the video source once through close and unmount', () => {
+  // #11715/#11739, unit: the existing close assertions stop before disposal.
+  // Let the close fade finish and unmount the preview to catch a second load
+  // algorithm resetting the same player during bus cleanup.
   vi.useFakeTimers();
   try {
-    const view = render(
-      <AttachmentCollectionContext.Provider value={[
-        { id: 'one', name: 'Clip', source: props.src, kind: 'video', media: true },
-        { id: 'two', name: 'Next', source: 'xdt-video://next.mp4', kind: 'video', media: true },
-      ]}>
-        <VideoLightbox {...props} onClose={() => { view.unmount(); }} />
-      </AttachmentCollectionContext.Provider>,
-      { wrapper: Tooltip.Provider },
-    );
-    expect(view.getByRole('button', { name: 'attachmentPreview.next' })).toBeTruthy();
+    const view = render(<VideoLightbox {...props} onClose={() => view.unmount()} />, {
+      wrapper: Tooltip.Provider,
+    });
     const video = document.querySelector('video')!;
     fireEvent.click(view.getByRole('button', { name: 'chat.lightbox.close' }));
     expect(pause.mock.contexts).toContain(video);
     expect(video.getAttribute('src')).toBeNull();
-    expect(load).toHaveBeenCalledOnce();
+    expect(load.mock.contexts).toEqual([video]);
     act(() => vi.advanceTimersByTime(200));
     expect(video.isConnected).toBe(false);
-    expect(load).toHaveBeenCalledOnce();
+    expect(load.mock.contexts).toEqual([video]);
   } finally {
     vi.useRealTimers();
   }
 });
-// Same defect, second exit path: unmount bypasses the close handler.
-// Unit, minimum input: one mounted preview, then unmount.
-it('releases the video source once on direct unmount', () => {
+
+// #11715, unit: visibility and retry tests leave a player mounted. Removing
+// one playing message must pause its video and release the detached source.
+it('stops and releases an inline video when its message unmounts', () => {
+  const view = render(<ChatVideoView {...props} />);
+  const video = view.container.querySelector('video')!;
+  Object.defineProperty(video, 'paused', { configurable: true, value: false });
+  pause.mockImplementation(function (this: HTMLMediaElement) {
+    Object.defineProperty(this, 'paused', { configurable: true, value: true });
+  });
+  view.unmount();
+  expect(video.paused).toBe(true);
+  expect(video.getAttribute('src')).toBeNull();
+  expect(load.mock.contexts).toEqual([video]);
+});
+
+// Tier 1, #12416: Chromium can autoplay a detached media element as soon as it
+// receives a source. An abandoned React render never runs effects or cleanups.
+// Mount one preview and observe the source assignment at the DOM boundary.
+it.each(['video', 'audio'] as const)('loads preview %s only after the element is mounted', (kind) => {
+  const sourceAssignments: boolean[] = [];
+  const setAttribute = Element.prototype.setAttribute;
+  vi.spyOn(HTMLMediaElement.prototype, 'setAttribute').mockImplementation(function (
+    this: HTMLMediaElement,
+    name: string,
+    value: string,
+  ) {
+    if (name === 'src') sourceAssignments.push(this.isConnected);
+    setAttribute.call(this, name, value);
+  });
+  const view = render(<VideoLightbox {...props} kind={kind} onClose={vi.fn()} />, {
+    wrapper: Tooltip.Provider,
+  });
+
+  expect(sourceAssignments).toEqual([true]);
+  expect(document.querySelector(kind)?.getAttribute('src')).toBe(props.src);
+  view.unmount();
+});
+
+// Same defect, second exit path: a collection preview swaps or closes by
+// unmounting this component, which never runs its own close handler. Tier 1,
+// minimum input: one mounted preview, then unmount.
+it('releases the video source when a collection preview swaps it out', () => {
   const view = render(<VideoLightbox {...props} onClose={vi.fn()} />, {
     wrapper: Tooltip.Provider,
   });
   const video = document.querySelector('video')!;
   view.unmount();
-  expect(video.isConnected).toBe(false);
-  expect(pause.mock.contexts).toContain(video);
   expect(video.getAttribute('src')).toBeNull();
   expect(load).toHaveBeenCalledOnce();
 });
@@ -374,53 +406,4 @@ it('restores the source when React replays the release effect', () => {
   expect(video.getAttribute('src')).toBe(props.src);
   view.unmount();
   expect(video.getAttribute('src')).toBeNull();
-});
-
-function audioWithPlaybackState(src: string, initiallyPaused = false): HTMLAudioElement {
-  const el = document.createElement('audio');
-  el.setAttribute('src', src);
-  let paused = initiallyPaused;
-  Object.defineProperty(el, 'paused', { configurable: true, get: () => paused });
-  vi.spyOn(el, 'pause').mockImplementation(() => { paused = true; });
-  return el;
-}
-
-// #11715, unit: component playback tests exercise registered players. Call
-// registerMedia's cleanup with an active or pending player to verify it stops
-// immediately and only discards the source of a detached player.
-it('pauses a playing element before the bus forgets it', () => {
-  const el = audioWithPlaybackState('/tone.wav');
-  registerMedia(el)();
-  expect(el.paused).toBe(true);
-  // Model playback resuming outside the bus and verify it was unregistered.
-  vi.spyOn(el, 'paused', 'get').mockReturnValue(false);
-  vi.mocked(el.pause).mockClear();
-  stopAllMedia();
-  expect(el.pause).not.toHaveBeenCalled();
-});
-
-it('pauses a pending play even while paused is still true', () => {
-  const el = audioWithPlaybackState('/pending.wav', true);
-  registerMedia(el)();
-  expect(el.pause).toHaveBeenCalledOnce();
-});
-
-it('releases a detached element and keeps a mounted element reusable', () => {
-  const detached = audioWithPlaybackState('/detached.wav');
-  const nested = document.createElement('source');
-  nested.setAttribute('src', '/nested.wav');
-  detached.append(nested);
-  const unregister = registerMedia(detached);
-  unregister();
-  unregister();
-  expect(detached.getAttribute('src')).toBeNull();
-  expect(nested.getAttribute('src')).toBeNull();
-  expect(load.mock.contexts).toEqual([detached]);
-
-  const view = render(<audio src="/mounted.wav" />);
-  const mounted = view.container.querySelector('audio')!;
-  registerMedia(mounted)();
-  expect(pause.mock.contexts).toContain(mounted);
-  expect(mounted.getAttribute('src')).toBe('/mounted.wav');
-  expect(load.mock.contexts).toEqual([detached]);
 });

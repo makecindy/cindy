@@ -18,11 +18,13 @@ import { splitAutoReviewUserReferences } from '@cindy/maker-shared/auto-review-i
 import { redactSensitiveText } from '@cindy/maker-shared/error-redaction';
 
 import { untrustedJsonBlock } from '../../shared/untrustedPrompt.js';
+import type { UtilityTextAttempt } from '../../shared/utilityTextResult.js';
 
 /** Host-owned diagnostics, never parsed from model output or exception text. */
 export type AutoReviewTextFailure = {
-  failure: 'no_available_model' | 'configuration_unavailable' | 'http_error'
+  failure: 'no_available_model' | 'quota_exhausted' | 'configuration_unavailable' | 'http_error'
     | 'request_failed' | 'timeout' | 'empty_response' | 'malformed';
+  reviewCandidates?: UtilityTextAttempt[];
 };
 
 interface AutoPermissionReviewerLogger {
@@ -320,7 +322,7 @@ async function attemptReview(
   request: AutoReviewRequest,
   prompt: string,
   requestTimeoutMs: number,
-): Promise<{ decision: AutoReviewDecision } | { failure: AttemptFailure }> {
+): Promise<{ decision: AutoReviewDecision } | { failure: AttemptFailure; reviewCandidates?: UtilityTextAttempt[] }> {
   let timeout: ReturnType<typeof setTimeout> | undefined;
   const controller = new AbortController();
   try {
@@ -461,8 +463,9 @@ export function createAutoPermissionReviewer(
       lastFailure = result.failure;
       deps.logger.warn('auto permission reviewer attempt failed', {
         agentKind: request.agentKind,
-        providerId: request.providerId ?? null,
-        model: request.model,
+        ...(result.reviewCandidates ? { reviewCandidates: result.reviewCandidates,
+          taskProviderId: request.providerId ?? null, taskModel: request.model }
+          : { providerId: request.providerId ?? null, model: request.model }),
         attempt: attempt + 1,
         maxAttempts: attempts,
         failure: result.failure,
@@ -473,13 +476,13 @@ export function createAutoPermissionReviewer(
 
     deps.logger.warn('auto permission reviewer exhausted attempts', {
       agentKind: request.agentKind,
-      providerId: request.providerId ?? null,
-      model: request.model,
+      taskProviderId: request.providerId ?? null,
+      taskModel: request.model,
       failure: lastFailure,
       durationMs: Date.now() - startedAt,
     });
-    if (lastFailure === 'no_available_model') {
-      return { verdict: 'ask', unavailable: true, unavailableReason: 'no_available_model' };
+    if (lastFailure === 'no_available_model' || lastFailure === 'quota_exhausted') {
+      return { verdict: 'ask', unavailable: true, unavailableReason: lastFailure };
     }
     return null;
   };

@@ -448,7 +448,9 @@ async function syncPushRegistrationInternal(
       && isMobileAuthOwnerCurrent(eventRegistration.owner) && eventRegistration.token === opts.deviceToken.data;
     if (registered) return 'skipped';
   }
-  if (!opts.enabled) eventRegistration = null;
+  // A new registration or opt-out supersedes the previous successful state.
+  // Until it succeeds, recovery must retry even when initiated outside the bridge.
+  eventRegistration = null;
 
   if (!opts.enabled) {
     const registeredRealms = await readPushRealms(
@@ -569,12 +571,22 @@ export function syncPushRegistration(opts: {
   enabled: boolean;
   apiFetch: AuthedApiFetch;
   deviceToken?: Awaited<ReturnType<typeof Notifications.getDevicePushTokenAsync>>;
+  /** Profile/foreground recovery can reuse a confirmed registration for this owner. */
+  skipConfirmed?: boolean;
   /** Android settings opt-in, after system permission and before token acquisition. */
   onPermissionGranted?: () => Promise<void>;
 }): Promise<PushSyncResult> {
   const lifecycleGeneration = pushLifecycleGeneration;
   const owner = getMobileAuthOwner();
   return runPushMutation(async () => {
+    if (opts.enabled && opts.skipConfirmed) {
+      // A Settings opt-out may have run while this recovery was queued.
+      if (!await readPushEnabled()) return 'skipped';
+      if (lifecycleGeneration === pushLifecycleGeneration && isMobileAuthOwnerCurrent(owner)
+        && eventRegistration?.generation === lifecycleGeneration && isMobileAuthOwnerCurrent(eventRegistration.owner)) {
+        return 'registered';
+      }
+    }
     const scope = capturePushStateScope(getActiveMobileSessionRealm());
     const registration: PushRegistrationStatus = { version: 1, at: Date.now(), realm: scope.legacyRealm, stage: 'starting' };
     // A token-listener callback that dedupes or is fenced must not replace the evidence
@@ -671,28 +683,31 @@ export function unregisterPushTokenBestEffort(
  */
 async function retryPendingUnregisterInternal(
   apiFetch: AuthedApiFetch,
-): Promise<void> {
-  if (!isPushSupported()) return;
+): Promise<boolean> {
+  if (!isPushSupported()) return true;
   const realm = getActiveMobileSessionRealm();
   const stateScope = capturePushStateScope(realm);
   const pendingRealms = await readPushRealms(
     PUSH_PENDING_UNREGISTER_KEY,
     stateScope,
   );
-  if (!pendingRealms.has(realm)) return;
+  if (!pendingRealms.has(realm)) return true;
+  eventRegistration = null;
 
   try {
     const token = await getNativeDeviceTokenBestEffort();
     await mutatePushTokens(apiFetch, realm, 'DELETE', pushDeleteBody(token));
     await removePushRealm(PUSH_PENDING_UNREGISTER_KEY, realm, stateScope);
     await removePushRealm(PUSH_REGISTERED_KEY, realm, stateScope);
+    return true;
   } catch {
-    // 仍失败：保留当前区域标记，下次同区登录继续补偿。
+    // 保留标记，通知调用方在同区域恢复连接时补偿。
+    return false;
   }
 }
 
 export function retryPendingUnregister(
   apiFetch: AuthedApiFetch,
-): Promise<void> {
+): Promise<boolean> {
   return runPushMutation(() => retryPendingUnregisterInternal(apiFetch));
 }

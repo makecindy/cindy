@@ -311,6 +311,7 @@ export function BotGroupComposer({
       setText(value);
     },
     members,
+    conversationKind,
     textareaRef,
     allLabels: thread ? threadAllLabels : undefined,
     allowMentionAllBots,
@@ -767,7 +768,7 @@ export function BotGroupComposer({
         {voice.lastError ? <VoiceInputStatusNotice message={voice.lastError} className="mb-2" /> : null}
         {/* Same floating slot above the card as a task's composer: files that did not attach. */}
         {attachmentState.rejections.length > 0 ? (
-          <div className="pointer-events-none absolute bottom-full left-0 right-0 z-20 mb-2 flex flex-col items-center gap-1 px-3">
+          <div className="pointer-events-none absolute bottom-full left-0 right-0 z-page-float mb-2 flex flex-col items-center gap-1 px-3">
             <AttachmentRejectionStrip
               rejections={attachmentState.rejections}
               onDismiss={attachmentState.dismissRejection}
@@ -779,7 +780,7 @@ export function BotGroupComposer({
           {dragOver ? (
             <div
               data-testid="bot-group-drop-hint"
-              className="pointer-events-none absolute inset-0 z-10 rounded-[12px]"
+              className="pointer-events-none absolute inset-0 z-raised rounded-xl"
               style={{
                 backgroundColor: 'var(--drop-overlay-bg)',
                 border: '2px dashed var(--drop-overlay-border)',

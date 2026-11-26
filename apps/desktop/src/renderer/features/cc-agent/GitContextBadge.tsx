@@ -33,44 +33,38 @@ import {
   Clock,
   CircleHelp,
   CircleMinus,
-  Settings,
-  Copy,
-  X,
 } from 'lucide-react';
-import { lazy, Suspense, useEffect, useRef, useState, type Dispatch, type SetStateAction } from 'react';
+import { useEffect, useRef, useState, type Dispatch, type SetStateAction } from 'react';
 import { useTranslation } from 'react-i18next';
 
-import * as Dialog from '@radix-ui/react-dialog';
-
 import { cn } from '@/lib/utils';
-import { toast } from '@/lib/toast';
 import { Tooltip } from '@/components/ui/tooltip';
 import { Popover, PopoverTrigger, PopoverContent } from '@/components/ui/popover';
 import { sessionPrUrl } from '@cindy/maker-shared';
 import { isSharedTaskPeer } from '@cindy/device-link';
 import { SessionPrManager } from './SessionPrManager';
 import { WINDOW_NO_DRAG_STYLE } from '@/components/layout/windowDrag';
-import { ChromeIconButton } from '@/components/title-bar/ChromeIconButton';
 import type { Session } from '@/lib/ccAgent.types';
 import type { PrStatusKind, PrStatusResult, SessionPrRef } from '@/lib/gitContext.types';
 import { useSessionGitContext } from '@/hooks/useSessionGitContext';
-import { GithubSetupDialog } from './GithubSetupDialog';
 import { prStatusKey, MAX_STATUS_QUERIES } from '@/lib/prStatus';
 import {
   prStatusColor,
   PR_STATUS_ICON,
   pickBranchLabel,
-  prFailureCopyKey,
   prGuidanceFor,
+  type PrGuidanceAction,
 } from './gitContextPrVisuals';
 
-import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem } from '@/components/ui/dropdown-menu';
 import { useSessionPrCard } from '@/cindy-brain/useSessionPrCard';
+import {
+  PR_SUMMARY_CLOSE_DELAY_MS,
+  PR_SUMMARY_OPEN_DELAY_MS,
+  PR_SUMMARY_POPOVER_CLASS,
+  PrSummaryDialogs,
+  PrSummaryPopoverContent,
+} from './PrSummaryPopoverContent';
 
-const GhostCardPreview = lazy(() => import('@/components/chat/GhostToolCard').then((m) => ({ default: m.GhostCardPreview })));
-
-const PR_SUMMARY_OPEN_DELAY_MS = 300;
-const PR_SUMMARY_CLOSE_DELAY_MS = 300;
 type PrSummary = string | null;
 
 export function GitContextBadge({ session }: { session: Session }) {
@@ -192,7 +186,7 @@ function PrChip({
   setSummary: Dispatch<SetStateAction<PrSummary>>;
 }) {
   const { t } = useTranslation();
-  const [setupOpen, setSetupOpen] = useState(false);
+  const [setupAction, setSetupAction] = useState<PrGuidanceAction | null>(null);
   const { remoteHostId, deviceLinkDeviceId } = session;
   const readOnly = session.source === 'review';
   // The shared-task host rejects association reads from guests.
@@ -201,14 +195,13 @@ function PrChip({
   const [settingsOpen, setSettingsOpen] = useState(false);
   // A remote task's card is read from its computer by the task page; shared-task guests have none.
   const prCard = useSessionPrCard(session.id, prStatusKey(prRef),
-    (summaryOpen || settingsOpen) && canManage && !readOnly && prRef.provider !== 'gitlab');
+    (summaryOpen || settingsOpen) && canManage && !readOnly);
   useEffect(() => {
     if (!prCard || (status?.ok && (status.status === 'merged' || status.status === 'closed'))) setSettingsOpen(false);
   }, [prCard, status]);
   // 跟进区域的交互保活：指针在区域内、焦点在区域内、设置菜单打开，任一为真都暂停悬停收起。
   const cardHold = useRef({ pointer: false, focus: false, menu: false });
   const panelHovered = useRef(false);
-  const cardSettingsButton = useRef<HTMLButtonElement | null>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   const openTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -267,15 +260,7 @@ function PrChip({
   const Icon = kind ? PR_STATUS_ICON[kind] : GitPullRequest;
   const color = prStatusColor(kind, status?.ok ? status.conflicts : null);
   const guidance = prGuidanceFor(status, { remoteHostId, deviceLinkDeviceId, readOnly });
-  const failureCopyKey = prFailureCopyKey(status, { remoteHostId, deviceLinkDeviceId, readOnly });
 
-  const statusLine = kind
-    ? t(`ccAgent.gitContext.pr.status.${kind}`)
-    : failureCopyKey
-      ? prRef.provider === 'gitlab'
-        ? t(failureCopyKey, { host: prRef.host })
-        : t(failureCopyKey)
-      : t('ccAgent.gitContext.pr.statusNotFetched');
   const ariaLabel = t(
     prRef.provider === 'gitlab'
       ? 'ccAgent.gitContext.pr.gitlab.summaryAria'
@@ -311,23 +296,31 @@ function PrChip({
           ? Check
           : CircleMinus;
   const checkCount = checks ? checks.failed || checks.pending : 0;
-  const checkDetails = checks
-    ? [
-        { icon: CircleX, count: checks.failed, label: 'failed' },
-        { icon: Clock, count: checks.pending, label: 'pending' },
-        { icon: Check, count: checks.passed, label: 'passed' },
-        { icon: CircleMinus, count: checks.skipped, label: 'skippedLabel' },
-      ].filter(({ count }) => count > 0)
-    : [];
+
+  const handleCardHoldChange = (holdKind: 'pointer' | 'focus' | 'menu', active: boolean) => {
+    cardHold.current[holdKind] = active;
+    if (active) cancelClose();
+    else if (holdKind !== 'pointer' && !panelHovered.current && !triggerHovered.current) {
+      scheduleClose();
+    }
+  };
+  const returnFocusToTrigger = () => {
+    pointerFocus.current = true;
+    triggerRef.current?.focus();
+  };
 
   return (
     <div className={cn('inline-flex shrink-0 items-center', className)}>
-      {setupOpen && (
-        <GithubSetupDialog
-          initialAction={guidance ?? 'login'}
-          onClose={() => setSetupOpen(false)}
-        />
-      )}
+      <PrSummaryDialogs
+        prRef={prRef}
+        sessionId={session.id}
+        setupAction={setupAction}
+        onCloseSetup={() => setSetupAction(null)}
+        settingsOpen={settingsOpen}
+        onSettingsOpenChange={setSettingsOpen}
+        prCard={prCard}
+        onReturnFocus={returnFocusToTrigger}
+      />
       <Popover
         open={summaryOpen}
         onOpenChange={(open) => {
@@ -410,7 +403,7 @@ function PrChip({
           >
             <span
               className={cn(
-                'inline-flex min-h-5 items-center justify-center gap-1 rounded-md px-1.5 py-0.5 transition-colors group-hover/pr-action:bg-titlebar-button-hover group-focus-visible/pr-action:ring-2 group-focus-visible/pr-action:ring-[var(--focus-ring)]',
+                'inline-flex min-h-5 items-center justify-center gap-1 rounded-full px-1.5 py-0.5 transition-colors group-hover/pr-action:bg-titlebar-button-hover group-focus-visible/pr-action:ring-2 group-focus-visible/pr-action:ring-[var(--focus-ring)]',
                 summaryOpen && 'bg-titlebar-button-hover',
               )}
             >
@@ -491,7 +484,7 @@ function PrChip({
             side="bottom"
             align="start"
             collisionPadding={8}
-            className={cn('max-w-[calc(100vw-16px)] max-h-[var(--radix-popover-content-available-height)] overflow-y-auto p-4', 'w-[360px]', className)}
+            className={cn(PR_SUMMARY_POPOVER_CLASS, className)}
             aria-label={t(
               prRef.provider === 'gitlab'
                 ? 'ccAgent.gitContext.pr.gitlab.summaryAria'
@@ -499,199 +492,25 @@ function PrChip({
               { number: prRef.prNumber },
             )}
           >
-            <div className="flex items-start gap-2">
-              <a
-                href={sessionPrUrl(prRef)}
-                onClick={(event) => {
-                  event.preventDefault();
-                  void window.electronAPI.openExternal(sessionPrUrl(prRef));
-                }}
-                className="group block min-w-0 flex-1 rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
-              >
-                <span className="flex items-center gap-1 text-12 text-[var(--text-secondary)]">
-                  <Icon size={12} strokeWidth={1.5} className="shrink-0" style={{ color }} />
-                  <span className="min-w-0 break-words group-hover:underline">
-                    {prRef.owner}/{prRef.repo} {prNumberLabel(prRef)}
-                    {status?.ok && <> · {statusLine}</>}
-                  </span>
-                </span>
-                {status?.ok && status.title.trim() && (
-                  <span className="mt-1 block break-words text-14 font-medium leading-snug text-[var(--text-primary)] group-hover:underline">
-                    {status.title}
-                  </span>
-                )}
-              </a>
-              <ChromeIconButton
-                aria-label={t('sharing.copyLink')}
-                className="-mt-1.5 shrink-0"
-                onClick={async () => {
-                  try {
-                    // PR/MR URLs are rendered locally, like the task/link copy actions;
-                    // the native IPC only accepts text previously issued by Main.
-                    await navigator.clipboard.writeText(sessionPrUrl(prRef));
-                    toast.success(t('ccAgent.sidebar.deepLink.copied'));
-                  } catch {
-                    toast.error(t('ccAgent.sidebar.deepLink.copyFailed'));
-                  }
-                }}
-              >
-                <Copy size={14} />
-              </ChromeIconButton>
-              {canManage && (prCard?.settingsLabel && kind !== 'merged' && kind !== 'closed' ? (
-                <DropdownMenu onOpenChange={(open) => {
-                  cardHold.current.menu = open;
-                  if (open) cancelClose();
-                  else if (!panelHovered.current && !triggerHovered.current) scheduleClose();
-                }}>
-                  <DropdownMenuTrigger asChild>
-                    <ChromeIconButton aria-label={t('titleBar.menuItems.settings')} data-pr-manage=""
-                      className="-mr-2 -mt-1.5 shrink-0">
-                      <Settings size={14} />
-                    </ChromeIconButton>
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent align="end" onCloseAutoFocus={(event) => event.preventDefault()}>
-                    <DropdownMenuItem onSelect={() => {
-                      if (!prCard.settingsHtml) cardSettingsButton.current?.click();
-                      setSettingsOpen(true);
-                      closeSummary();
-                    }}>
-                      {prCard.settingsLabel}
-                    </DropdownMenuItem>
-                    <DropdownMenuItem onSelect={() => { closeSummary(); onManage(); }}>
-                      {t('ccAgent.gitContext.pr.manage.title')}
-                    </DropdownMenuItem>
-                  </DropdownMenuContent>
-                </DropdownMenu>
-              ) : (
-                <ChromeIconButton
-                  aria-label={t('ccAgent.gitContext.pr.manage.title')}
-                  data-pr-manage=""
-                  className="-mr-2 -mt-1.5 shrink-0"
-                  onClick={() => { closeSummary(); onManage(); }}
-                >
-                  <Settings size={14} />
-                </ChromeIconButton>
-              ))}
-            </div>
-            {!status?.ok && (
-              <div className="mt-3 space-y-2 text-13 text-[var(--text-secondary)]">
-                <div>{statusLine}</div>
-                {guidance && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      closeSummary();
-                      setSetupOpen(true);
-                    }}
-                    className="block text-left font-medium text-[var(--text-primary)] hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
-                  >
-                    {t(`ccAgent.gitContext.pr.guidance.${guidance}.hint`)}
-                  </button>
-                )}
-              </div>
-            )}
-            {(conflicts || (unresolved !== null && unresolved > 0) || checks !== null) && (
-              <div className="mt-3 space-y-3 border-t border-[var(--border-default)] pt-3 text-13">
-                {conflicts && (
-                  <div className="flex items-center justify-between gap-3 whitespace-nowrap">
-                    <span className="text-[var(--text-primary)]">
-                      {t('ccAgent.gitContext.pr.merge')}
-                    </span>
-                    <span className="shrink-0 font-medium text-[var(--warning-fg)]">
-                      {t('ccAgent.gitContext.pr.conflicts')}
-                    </span>
-                  </div>
-                )}
-                {unresolved !== null && unresolved > 0 && (
-                  <div className="flex items-center justify-between gap-3">
-                    <span className="text-[var(--text-primary)]">
-                      {t('ccAgent.gitContext.pr.unresolvedLabel')}
-                    </span>
-                    <span className="font-medium tabular-nums text-[var(--status-bar-accent)]">
-                      {unresolved}
-                    </span>
-                  </div>
-                )}
-                {checks !== null && (
-                  <div>
-                    <div className="flex items-center justify-between gap-3">
-                      <span className="text-[var(--text-primary)]">
-                        {t('ccAgent.gitContext.pr.checks')}
-                      </span>
-                      <span className="tabular-nums text-[var(--text-secondary)]">
-                        {t('ccAgent.gitContext.pr.checksTotal', { count: checks.total })}
-                      </span>
-                    </div>
-                    {checkDetails.length > 0 && (
-                      <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-2 text-12 text-[var(--text-secondary)]">
-                        {checkDetails.map(({ icon: DetailIcon, count, label }) => (
-                          <span
-                            key={label}
-                            className={cn(
-                              'inline-flex items-center gap-1 whitespace-nowrap',
-                              label === 'failed' && 'text-[var(--error-fg)]',
-                            )}
-                          >
-                            <DetailIcon
-                              size={12}
-                              aria-hidden="true"
-                              className={
-                                label === 'passed' ? 'text-[var(--status-success)]' : undefined
-                              }
-                            />
-                            <span className="font-medium tabular-nums">{count}</span>
-                            <span>{t(`ccAgent.gitContext.pr.${label}`)}</span>
-                          </span>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                )}
-              </div>
-            )}
-            {prCard?.summaryHtml && kind !== 'merged' && kind !== 'closed' && (
-              <div className="mt-3 border-t border-[var(--border-default)] pt-2"
-                onPointerEnter={() => { cardHold.current.pointer = true; cancelClose(); }}
-                onPointerLeave={() => { cardHold.current.pointer = false; }}
-                onFocusCapture={() => { cardHold.current.focus = true; cancelClose(); }}
-                onBlurCapture={(event) => {
-                  if (event.currentTarget.contains(event.relatedTarget as Node | null)) return;
-                  cardHold.current.focus = false;
-                  if (!panelHovered.current && !triggerHovered.current) scheduleClose();
-                }}>
-                <Suspense fallback={null}>
-                  <GhostCardPreview key={prCard.callId} {...prCard} html={prCard.summaryHtml} sessionId={session.id}
-                    onEscape={() => { closeSummary(); pointerFocus.current = true; triggerRef.current?.focus(); }}
-                    settingsButtonRef={canManage ? cardSettingsButton : undefined} />
-                </Suspense>
-              </div>
-            )}
+            <PrSummaryPopoverContent
+              prRef={prRef}
+              status={status}
+              sessionId={session.id}
+              remoteHostId={remoteHostId}
+              deviceLinkDeviceId={deviceLinkDeviceId}
+              readOnly={readOnly}
+              canManage={canManage}
+              prCard={prCard}
+              onManage={onManage}
+              onClose={closeSummary}
+              onReturnFocus={returnFocusToTrigger}
+              onOpenSetup={setSetupAction}
+              onOpenSettings={() => setSettingsOpen(true)}
+              onCardHoldChange={handleCardHoldChange}
+            />
           </PopoverContent>
         )}
       </Popover>
-      {settingsOpen && prCard && (
-        <Dialog.Root open onOpenChange={setSettingsOpen}>
-          <Dialog.Portal>
-            <Dialog.Overlay className="modal-scrim fixed inset-0 z-[10000]" />
-            <Dialog.Content aria-describedby={undefined}
-              onPointerDownOutside={(event) => event.preventDefault()}
-              onCloseAutoFocus={(event) => { event.preventDefault(); pointerFocus.current = true; triggerRef.current?.focus(); }}
-              className="modal-panel fixed left-1/2 top-1/2 z-[10000] w-[min(420px,calc(100vw-32px))] max-h-[85vh] -translate-x-1/2 -translate-y-1/2 overflow-y-auto p-4 outline-none">
-              <div className="mb-3 flex items-center justify-between gap-2">
-                <div>
-                  <Dialog.Title className="text-14 font-medium text-[var(--text-primary)]">{prCard.settingsLabel}</Dialog.Title>
-                  <div className="mt-1 text-12 text-[var(--text-secondary)]">{prRef.owner}/{prRef.repo} {prNumberLabel(prRef)}</div>
-                </div>
-                <Dialog.Close asChild><ChromeIconButton aria-label={t('common.dismiss')}><X size={14} /></ChromeIconButton></Dialog.Close>
-              </div>
-              {prCard.settingsHtml && <Suspense fallback={null}>
-                <GhostCardPreview inDialog {...prCard} html={prCard.settingsHtml} sessionId={session.id}
-                  onEscape={() => setSettingsOpen(false)} />
-              </Suspense>}
-            </Dialog.Content>
-          </Dialog.Portal>
-        </Dialog.Root>
-      )}
     </div>
   );
 }

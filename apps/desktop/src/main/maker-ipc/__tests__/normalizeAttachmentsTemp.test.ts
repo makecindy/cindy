@@ -1,8 +1,14 @@
+import { ACCEPTED_ATTACHMENT_REPLAY } from '../attachmentReplay.js';
+import { buildMakerUserMessage, type AgentInputQueuedMessage } from '../../../shared/agentInputQueue.js';
 import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+const local = { remoteHostId: null, agentDeviceId: null, source: 'desktop', workingDir: '/workspace' };
+const sessionRow = vi.hoisted(() => vi.fn());
+vi.mock('../../localDb/sessionDispatchSnapshot.js', () => ({ getSessionRowSnapshotStrict: sessionRow }));
 
 const tempRoot = vi.hoisted(() => ({ value: '' }));
 
@@ -170,9 +176,87 @@ describe('inline attachment temporary files', () => {
       expect(await fs.readFile(source, 'utf8')).toBe('replaced');
     }
   });
+  // A phone-selected local file can disappear before the desktop accepts its queue item.
+  // Exercise the real deferred entry; plain text and SSH-owned paths must stay untouched. Unit.
+  it('refuses a deleted file from the phone browser before queue acceptance', async () => {
+    sessionRow.mockResolvedValue(local);
+    const localPath = path.join(tempRoot.value, 'selected.pdf');
+    const item = { clientId: 'gone', text: localPath, files: [{ category: 'file', path: localPath }] };
+    await fs.writeFile(localPath, 'fixture');
+    await fs.unlink(localPath);
+    await expect(materializeQueuedOssAttachmentsDeferred('local', item)).rejects.toMatchObject({
+      code: 'DEVICE_LINK_MEDIA_TRANSFER_FAILED', message: '[DEVICE_LINK_MEDIA_TRANSFER_FAILED] Attachment transfer failed',
+    });
+    await expect(materializeQueuedOssAttachmentsDeferred('local', { text: localPath })).resolves.toEqual({ item: { text: localPath } });
+    await fs.writeFile(localPath, 'repaired');
+    await expect(materializeQueuedOssAttachmentsDeferred('local', item)).resolves.toMatchObject({ item });
+  });
+
+  // L337 / unit: the same selected resource must have the same admission on send and enqueue.
+  it('checks confirmed local paths and preserves inline bytes and unknown location', async () => {
+    vi.mocked(cindyMediaBlobStore.mimeForExt).mockReturnValue('image/png');
+    const gone = path.join(tempRoot.value, 'old.png');
+    const file = { type: 'image', path: gone, ext: '.png', category: 'image', mimeType: 'image/png' };
+    const message = (block: typeof file | (typeof file & { base64: string })) => ({ type: 'user' as const, content: [block] });
+    const queue = (block: typeof file) => materializeQueuedOssAttachmentsDeferred('task', { files: [block] });
+    for (const row of [null, { workingDir: '/workspace' }, { ...local, source: 'side-chat' }, { ...local, remoteHostId: 'ssh' }, { ...local, agentDeviceId: 'other' }, { ...local, source: 'review' }]) {
+      sessionRow.mockResolvedValue(row);
+      await expect(normalizeUserMessage('task', message(file))).resolves.toEqual(message(file));
+      await expect(queue(file)).resolves.toMatchObject({ item: { files: [file] } });
+    }
+    const dbError = Object.assign(new Error('snapshot unavailable'), { code: 'DB_INIT_FAILED' });
+    sessionRow.mockRejectedValue(dbError);
+    await expect(normalizeUserMessage('task', message(file))).rejects.toBe(dbError);
+    await expect(queue(file)).rejects.toBe(dbError);
+    sessionRow.mockResolvedValue(local);
+    const inline = { ...file, base64: 'aGk=' };
+    await expect(normalizeUserMessage('task', message(inline))).resolves.toMatchObject({ content: [{ path: expect.not.stringContaining('old.png') }] });
+    const queued = await queue(inline);
+    const wire = buildMakerUserMessage({ ...(queued.item as object), text: 'with image', chatMessage: { content: 'with image' } } as AgentInputQueuedMessage);
+    await expect(normalizeUserMessage('task', wire)).resolves.toMatchObject({
+      content: [{ type: 'text' }, { type: 'image', path: expect.not.stringContaining('old.png') }],
+    });
+    const directory = { type: 'file', path: tempRoot.value, ext: '', category: 'folder', mimeType: 'inode/directory' };
+    await expect(normalizeUserMessage('task', message(directory))).resolves.toEqual(message(directory));
+    await expect(queue(directory)).resolves.toMatchObject({ item: { files: [directory] } });
+  });
+
+  it.each(['EACCES', 'EPERM'])('preserves the source access guidance on send and enqueue for %s', async (code) => {
+    sessionRow.mockResolvedValue(local);
+    const source = path.join(tempRoot.value, 'private.txt');
+    const failure = Object.assign(new Error(code + ' at ' + source), { code, path: source });
+    const disk = (await import('node:fs/promises')).default;
+    const access = vi.spyOn(disk, 'access').mockRejectedValue(failure);
+    const file = { type: 'file', path: source, category: 'file', ext: '.txt' };
+    try {
+      for (const request of [
+        () => normalizeUserMessage('task', { type: 'user', content: [file] }),
+        () => materializeQueuedOssAttachmentsDeferred('task', { files: [file] }),
+      ]) await expect(request()).rejects.toMatchObject({ code: 'DEVICE_LINK_MEDIA_ACCESS_DENIED', message: expect.not.stringContaining(source) });
+    } finally { access.mockRestore(); }
+  });
+
+  it('rejects a missing managed image on external send and enqueue even with replay-shaped fields', async () => {
+    const url = 'xdt-image://cache/cleaned.png';
+    vi.mocked(imageCacheStore.resolveSafe).mockReturnValue({ absPath: path.join(tempRoot.value, 'gone.png'), mimeType: 'image/png' });
+    const block = { type: 'image', path: url, autoResume: true, acceptedHistoryReplay: true };
+    const input = { type: 'user' as const, content: [{ type: 'text', text: 'keep' }, block], autoResume: true };
+    const failure = { code: 'DEVICE_LINK_MEDIA_TRANSFER_FAILED' };
+    for (const path of ['', 'clipboard://missing']) {
+      await expect(materializeQueuedOssAttachmentsDeferred('task', { files: [{ type: 'file', path }] })).rejects.toMatchObject(failure);
+    }
+    await expect(normalizeUserMessage('task', input)).rejects.toMatchObject(failure);
+    // A trusted replay still requires non-images and validates each cache URI.
+    await expect(normalizeUserMessage('task', { ...input, content: [{ ...block, type: 'file' }] }, ACCEPTED_ATTACHMENT_REPLAY)).rejects.toMatchObject(failure);
+    vi.mocked(imageCacheStore.resolveSafe).mockReturnValueOnce({ absPath: path.join(tempRoot.value, 'gone.pdf'), mimeType: 'application/pdf' });
+    await expect(normalizeUserMessage('task', input, ACCEPTED_ATTACHMENT_REPLAY)).rejects.toMatchObject(failure);
+    await expect(materializeQueuedOssAttachmentsDeferred('task', { text: 'keep', files: [block], autoResume: true })).rejects.toMatchObject(failure);
+  });
+
   it('keeps a resolved xdt-image URL as the Host-managed image identity', async () => {
     const imageUrl = 'xdt-image://managed-reference/source.png';
     const absPath = path.join(tempRoot.value, 'source.png');
+    await fs.writeFile(absPath, 'fixture image');
     vi.mocked(imageCacheStore.resolveSafe).mockReturnValue({
       absPath,
       mimeType: 'image/png',
@@ -203,6 +287,7 @@ describe('inline attachment temporary files', () => {
     const hash = '9'.repeat(64);
     const mediaUrl = `cindy-media://blobs/${hash}.png`;
     const absPath = path.join(tempRoot.value, 'blob.png');
+    await fs.writeFile(absPath, 'fixture image');
     vi.mocked(cindyMediaBlobStore.resolveSafe).mockReturnValue({
       absPath,
       mimeType: 'image/png',
@@ -228,6 +313,7 @@ describe('inline attachment temporary files', () => {
 
   it('drops a renderer-supplied managed identity from an ordinary image path', async () => {
     const imagePath = path.join(tempRoot.value, 'ordinary.png');
+    await fs.writeFile(imagePath, 'fixture image');
 
     const normalized = await normalizeUserMessage('untrusted-managed-reference', {
       type: 'user',
@@ -418,6 +504,8 @@ describe('inline attachment temporary files', () => {
     const mediaUrl = `cindy-media://blobs/${'d'.repeat(64)}.png`;
     const originalPath = path.join(tempRoot.value, 'original.png');
     await fs.writeFile(originalPath, Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+    vi.mocked(imageCacheStore.resolveSafe).mockReturnValue({ absPath: originalPath, mimeType: 'image/png' });
+    vi.mocked(cindyMediaBlobStore.resolveSafe).mockReturnValue({ absPath: originalPath, mimeType: 'image/png', hash: 'd'.repeat(64) });
     const item = {
       clientId: 'queued-annotated-image',
       files: [
@@ -676,7 +764,7 @@ describe('inline attachment temporary files', () => {
         await fs.symlink(outside, path.join(sharedRoot, ownerRootName, 'reviewer-session'));
       }
 
-      const normalized = await normalizeUserMessage('reviewer-session', {
+      await expect(normalizeUserMessage('reviewer-session', {
         type: 'user',
         content: [
           { type: 'text', text: 'Review this image' },
@@ -686,12 +774,7 @@ describe('inline attachment temporary files', () => {
             mimeType: 'image/png',
           },
         ],
-      });
-
-      if (typeof normalized === 'string' || typeof normalized.content === 'string') {
-        throw new Error('expected block message');
-      }
-      expect(normalized.content).toEqual([{ type: 'text', text: 'Review this image' }]);
+      })).rejects.toMatchObject({ code: 'DEVICE_LINK_MEDIA_TRANSFER_FAILED' });
       await expect(fs.readdir(outside)).resolves.toEqual([]);
       if (target === 'session directory') {
         await cleanupSessionTempAttachments('seed-session');

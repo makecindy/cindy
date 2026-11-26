@@ -1,5 +1,6 @@
 import type { InputDeliveryProjection } from "@cindy/device-link";
 import { isExplicitRemoteNotFoundError } from "./newSessionWorktree";
+import type { remoteSessionStore } from "./remoteSessionStore";
 import {
   createDurableOutbox,
   isDurableOutboxHandedOff,
@@ -46,10 +47,7 @@ export interface DurableOutboxDeliveryDeps {
   history(record: DurableOutboxRecord): Promise<boolean>;
   /** A remote row alone cannot release the local bubble before offline history owns it. */
   cacheHistory?(record: DurableOutboxRecord): Promise<boolean>;
-  applyProjection(
-    record: DurableOutboxRecord,
-    projection: InputProjection,
-  ): void;
+  bindProjection(record: DurableOutboxRecord): (projection: InputProjection) => void;
   cleanup(record: DurableOutboxRecord, cancelled: boolean): Promise<void>;
   discardUploads(record: DurableOutboxRecord, attachments: RemoteSerializedAttachment[]): void;
   accepted?(record: DurableOutboxRecord): Promise<void>;
@@ -58,6 +56,25 @@ export interface DurableOutboxDeliveryDeps {
   describe(error: unknown): string;
   confirmationMessage: string;
   clearedMessage: string;
+}
+
+type OutboxProjectionStore = Pick<typeof remoteSessionStore,
+  "captureInputProjectionAuthorityEpoch" | "captureInputProjectionRemoteEpoch" | "setInputProjectionIfCurrent"
+>;
+
+/** Return the source connection epoch only when the reply is still authoritative. */
+export function bindOutboxProjection(
+  store: OutboxProjectionStore,
+  sessionId: string,
+  connectionEpoch: () => number,
+) {
+  const epoch = connectionEpoch();
+  const authority = store.captureInputProjectionAuthorityEpoch(sessionId);
+  const remote = store.captureInputProjectionRemoteEpoch(sessionId);
+  return (projection: InputProjection) => {
+    if (connectionEpoch() !== epoch) return undefined;
+    return store.setInputProjectionIfCurrent(sessionId, projection, authority, remote) ? epoch : undefined;
+  };
 }
 
 /** One owner for writes; pages only add records or request retry/cancellation. */
@@ -172,7 +189,13 @@ export function createDurableOutboxDelivery(deps: DurableOutboxDeliveryDeps) {
       // delivery support and the task's clear boundary are already known, the
       // enqueue itself is the only round trip; the host still enforces the
       // boundary and a stale one is retried once through the projection below.
-      const knownProjection = neverSent(record) ? deps.knownProjection?.(record) : undefined;
+      const clearBoundaryAtSend = record.clearBoundaryMs;
+      let knownProjection = neverSent(record) ? deps.knownProjection?.(record) : undefined;
+      // A cached boundary can be behind the session metadata seen at send time.
+      if (clearBoundaryAtSend !== undefined && knownProjection?.clearBoundaryMs !== clearBoundaryAtSend) {
+        knownProjection = undefined;
+      }
+      const applyFetchedProjection = knownProjection ? undefined : deps.bindProjection(record);
       let projection: DeliveryProjection;
       if (knownProjection) projection = knownProjection;
       else try {
@@ -193,7 +216,7 @@ export function createDurableOutboxDelivery(deps: DurableOutboxDeliveryDeps) {
         throw error;
       }
       if (!current(record)) return;
-      if (!knownProjection) deps.applyProjection(record, projection);
+      applyFetchedProjection?.(projection);
       stage('projection');
       const receipt = projection.deliveryReceipts?.find(
         (r) => r.clientId === record.item.clientId,
@@ -354,6 +377,7 @@ export function createDurableOutboxDelivery(deps: DurableOutboxDeliveryDeps) {
       if (!current(record) || !deps.canRun(record)) return;
       // This write precedes every external enqueue. Crash recovery therefore knows it must reconcile.
       await update({ state: "sending", enqueueStarted: true, error: undefined });
+      const applyEnqueueProjection = deps.bindProjection(record);
       let result: InputProjection;
       try {
         result = await deps.enqueue(record);
@@ -367,7 +391,8 @@ export function createDurableOutboxDelivery(deps: DurableOutboxDeliveryDeps) {
             state: "queued",
             prepared: undefined,
             retrySafe: undefined,
-            clearBoundaryMs: undefined,
+            // Keep the original fence; only the cached preparation is stale.
+            clearBoundaryMs: clearBoundaryAtSend,
             enqueueStarted: false,
             error: undefined,
           });
@@ -379,7 +404,7 @@ export function createDurableOutboxDelivery(deps: DurableOutboxDeliveryDeps) {
         throw error;
       }
       if (!current(record)) return;
-      deps.applyProjection(record, result);
+      applyEnqueueProjection(result);
       const durableEnqueue = record.prepared?.durableDelivery === true &&
         projection.inputDeliveryVersion === 1;
       if (durableEnqueue) await deps.accepted?.(record);

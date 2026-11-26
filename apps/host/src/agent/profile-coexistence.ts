@@ -1,3 +1,4 @@
+import { releaseFailure, type ProfileHold } from './profile-hold.js';
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
@@ -319,7 +320,7 @@ export function createCoexistenceMonitor(options: CoexistenceMonitorOptions): Co
 }
 
 interface ProfilePluginRuntime {
-  pauseForDesktop(message: string): void;
+  pauseForDesktop(message: ProfileHold): void;
   pluginPauseFailure(): unknown;
   resumeAfterDesktop(): Promise<boolean>;
 }
@@ -375,9 +376,10 @@ export function createHostProfileCoexistenceMonitor(options: HostProfileCoexiste
         setState({ state: 'clear', desktops: [] });
         resumePlugins();
         options.onInputReleased();
-      }, (error: unknown) => log.warn('releasing the profile hold failed', {
-        error: error instanceof Error ? error.message : String(error),
-      })).finally(() => { releasingInput = false; });
+      }, (error: unknown) => {
+        if (isCurrent() && monitor.state().state === 'clear' && input.isHeldForDesktop()) getPlugins()?.pauseForDesktop(releaseFailure());
+        log.warn('releasing the profile hold failed', { error: error instanceof Error ? error.message : String(error) });
+      }).finally(() => { releasingInput = false; });
     },
   });
   return monitor;

@@ -26,29 +26,6 @@
 
 const registered = new Set<HTMLMediaElement>();
 
-/** 已脱离页面的播放器 pause 后仍可能留着解码管线；只清这类元素的源。 */
-function releaseDetachedPipeline(el: HTMLMediaElement): void {
-  if (el.isConnected) return;
-  const sources = Array.from(el.querySelectorAll('source'));
-  const hasSource = (el.srcObject !== null && el.srcObject !== undefined)
-    || el.hasAttribute('src')
-    || sources.some((source) => source.hasAttribute('src'));
-  // 浮层自己可能已先释放；不要在 effect cleanup 里重复 load、重置同一媒体。
-  if (!hasSource) return;
-  try {
-    el.srcObject = null;
-  } catch {
-    /* 已脱离文档或浏览器不接受清空 */
-  }
-  el.removeAttribute('src');
-  for (const source of sources) source.removeAttribute('src');
-  try {
-    el.load();
-  } catch {
-    /* 销毁中的元素可能没有 load */
-  }
-}
-
 function pauseOthers(active: HTMLMediaElement): void {
   for (const el of registered) {
     if (el === active) continue;
@@ -59,6 +36,30 @@ function pauseOthers(active: HTMLMediaElement): void {
         /* 元素已 detach / 销毁中 — 静默 */
       }
     }
+  }
+}
+
+/**
+ * 释放已经脱离页面的元素的媒体管线。
+ *
+ * cleanup 可能发生在 React 已经把元素移出 DOM 之后。此时元素不在总线上,
+ * stopAllMedia() 找不到它,Chromium 仍可能继续解码音频。清掉源再 load() 能让
+ * 管线释放。仍挂在页面上的元素不处理:React 重放 effect 时会再次注册同一个
+ * 元素,它需要保留源才能重新播放。
+ */
+function releaseDetachedMedia(el: HTMLMediaElement): void {
+  if (el.isConnected) return;
+  const sources = Array.from(el.querySelectorAll('source[src]'));
+  // A preview can release its source before the close animation unmounts it.
+  // Running load() again would reset the already-released player.
+  if (!el.srcObject && !el.hasAttribute('src') && sources.length === 0) return;
+  try {
+    el.srcObject = null;
+    el.removeAttribute('src');
+    for (const source of sources) source.removeAttribute('src');
+    el.load();
+  } catch {
+    /* 元素正在被页面销毁 — 静默 */
   }
 }
 
@@ -74,14 +75,11 @@ export function registerMedia(el: HTMLMediaElement): () => void {
   registered.add(el);
   el.addEventListener('play', onPlay);
   return () => {
-    // 无条件 pause 涵盖 play() pending、paused 仍为 true 的窗口。
-    // 仍挂载的元素保留源供 effect replay；脱离页面的元素释放解码管线。
-    try {
-      el.pause();
-    } catch {
-      /* 元素已 detach / 销毁中 — 静默 */
-    }
-    releaseDetachedPipeline(el);
+    // Stop playback (including a pending play()) while we still own the player.
+    el.pause();
+    // A detached element leaves the bus with this call, so stopAllMedia() can
+    // never reach it again; release its pipeline here instead.
+    releaseDetachedMedia(el);
     el.removeEventListener('play', onPlay);
     registered.delete(el);
   };

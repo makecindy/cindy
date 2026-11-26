@@ -59,12 +59,12 @@ export const CAPABILITIES: readonly CapabilityEntry[] = [
   },
   {
     key: 'computer-use',
-    title: 'Computer Use(操作本机桌面:窗口、点击、输入、截图)',
+    title: '自动操作电脑（Computer automation）',
     oneLiner:
-      '桌面操作只走 cindy_computer;工具列表里没有它就是 Computer Use 没开,引导用户到「设置 → 内置工具」开启并授权,不用 shell 模拟键鼠。',
+      '桌面操作使用 cindy_computer。当前任务缺少桌面工具时，说明可用状态并提供任务电脑「设置 → 自动操作 → 自动操作电脑」的入口。',
     detail: [
-      `【怎么判断没开】cindy_computer 这个 MCP 只在 Computer Use 开启时注册;当前工具列表里找不到 mcp__cindy_computer__* 时,说明用户没开,不是 ${BRAND_NAME} 没有这个能力。不要改用 osascript 按键、cliclick、CGEvent 脚本或 cua-driver CLI 代替,这些会被拒绝。`,
-      '【怎么引导】告诉用户这一步需要操作桌面,请在「设置 → 内置工具 → Computer Use」打开开关;macOS 还会要求授予「辅助功能」和「屏幕录制」权限,设置页里有逐步引导。用 get_settings_link(page="builtin-tools") 生成绑定任务电脑的入口并展示返回的 Markdown；桌面直接打开，手机和另一台电脑走远程画面。开关和权限都要用户本人操作,agent 不能代为开启。',
+      '【状态】用 get_capabilities({scope:"runtime", server:"cindy_computer"}) 查询当前任务的工具状态。按宿主返回的状态和原因说明；仅凭工具缺失无法判断开关、驱动或系统权限。工具可用时，用 cindy_computer 的 status 和 check_permissions 查看驱动及权限。不要用 osascript 按键、cliclick、CGEvent 脚本或 cua-driver CLI 代替。',
+      '【设置】需要用户检查时，调用 get_settings_link(page="computer-use")，展示返回的任务电脑 Markdown 链接。位置是「设置 → 自动操作 → 自动操作电脑」（Settings → Automation → Computer automation）。若宿主无法生成链接，说明原因。由用户本人操作开关，并按 macOS 页面提示授予辅助功能和屏幕录制权限。',
       '【开启之后】Codex 任务的工具桥会自动刷新;Claude Code 任务的 MCP 列表在任务启动时固定,开启后让用户再发一条消息或新建任务,然后用 cindy_computer 的 list_tools 确认它已出现,再继续。',
       '【能做什么】list_windows / get_window_state 读窗口与无障碍树和截图,click / set_value / type_text / press_key / hotkey / scroll 操作目标窗口。Electron 与网页里的文本用 set_value;iOS 模拟器窗口不接受合成输入,用 xcrun simctl 或 AXe;有人正在用电脑时前台输入会被拒(USER_INPUT_ACTIVE),此时先改走后台(后台点击、菜单、set_value、文件或命令行),都不行才等待或询问;锁屏类快捷键被拒(HOTKEY_BLOCKED)。',
     ].join(' '),
@@ -177,9 +177,9 @@ export const CAPABILITIES: readonly CapabilityEntry[] = [
       '【恢复】右键「取消归档」,或项目菜单「全部取消归档」;用户在桌面端打开已归档任务直接发消息,会自动取消归档回到「活跃」。agent 用 send_to_session 发给已归档任务则返回 ARCHIVED,不会自动恢复。',
       '【归档限制】运行中、正被远程接管的任务不能归档;项目 / 对话组「全部归档」与多选归档会跳过已置顶和运行中的任务;worktree 有未提交改动时归档前自动保存 git 快照。',
       'Fork:消息操作栏「开启一个新任务」,用到该点为止的上下文创建独立新任务,原任务不变。Rewind:「回到此处」移除这条消息之后的对话记录,有 Git 保存点 / 文件 checkpoint 时可同时把工作目录文件回退到那一刻;任务运行中会先停止;远端 Claude Code 任务暂不支持。Rewind 会丢弃后续对话,确认前会提示影响范围。',
-      'agent 批量整理:control 类 rename_sessions(批量改名)、move_session(移动)、任务标签工具、archive_sessions / unarchive_sessions(每批 ≤50,把 status 在 active↔archived 间切换;跨电脑传 deviceId::sessionId,单次限定一台电脑;改名 / 移动 / 标签仅本机)。delete_session 删除明确任务；fork_session 从指定消息分叉，rewind_session 恢复指定消息前的检查点，均支持 deviceId::sessionId。删除与回退固定走逐次确认；不能删除当前调用任务。',
+      'agent 批量整理:control 类 rename_sessions(批量改名)、move_session(移动)、任务标签工具、archive_sessions / unarchive_sessions(每批 ≤50,把 status 在 active↔archived 间切换)、snooze_sessions(与收件箱同一「稍后处理 / 取回」:until 传时间、indefinite 或 cancel;不归档);pin_sessions / unpin_sessions（置顶 / 取消置顶，可查回 pinned）、归档与稍后处理跨电脑传 deviceId::sessionId,单次限定一台电脑;改名 / 移动 / 标签仅本机。delete_session 删除明确任务；fork_session 从指定消息分叉，rewind_session 恢复指定消息前的检查点，均支持 deviceId::sessionId。删除与回退固定走逐次确认；不能删除当前调用任务。',
       '归档可逆、不删数据,经统一权威出口写库并广播 sessions:patched,侧栏即时收敛;不能归档调用方自己所在的任务。恢复不启动执行、不发旧消息、不恢复暂停自动化；之后可用 send_to_session 发送新消息。',
-      '本机批次原子写入；远程逐项执行，失败即停并返回已完成、失败与未执行项，不保证跨项事务；回执未知时先查状态再决定重试。',
+      '本机归档与取消归档整批原子写入；稍后处理先确认整批存在且未删除，再逐个写入，中途失败即停并返回已完成项；远程逐项执行，失败即停并返回已完成、失败与未执行项，不保证跨项事务；回执未知时先查状态再决定重试。',
       '更细的界面操作说明可查 get_capabilities({scope:"help", key:"sidebar"})。',
     ].join(' '),
   },
@@ -296,7 +296,7 @@ export const CAPABILITIES: readonly CapabilityEntry[] = [
     title: '自动更新',
     oneLiner: '后台检测并下载新版本,提示重启安装;可开「空闲时自动安装更新」;agent 可在用户确认后代为更新。',
     detail: [
-      '内置更新器在后台检测并下载新版本(断点续传 + SHA256 校验),下载完成后提示用户重启应用来安装,不会意外重启。「设置 → 关于」有「空闲时自动安装更新」开关,开启后在空闲时自动安装并重启(Linux 只在用户选择重启时应用)。',
+      '内置更新器在后台检测并下载新版本(断点续传 + SHA256 校验),下载完成后提示用户重启应用来安装,不会意外重启。「设置 → 关于」有「空闲时自动安装更新」开关,开启后在空闲时自动安装并重启(Linux 支持用户目录安装和已免密授权的系统 .deb;需要系统密码的 .deb 只在用户选择重启时应用,开关不显示)。',
       'agent 工具(cindy_helper app_update 类):check_app_update 只读检查;install_app_update 由宿主弹确认卡(写明目标版本、会重启、会中断哪些任务),用户确认后才经内置更新器下载、安装并重启,重启后结果写回发起任务;set_app_auto_update 同样经确认卡开关上述设置。只有主人本人发起的轮次能触发。',
       '不要用 shell 下载安装包或替换应用;开发版、个人版等不支持应用内更新的构建会明确返回原因。',
     ].join(' '),

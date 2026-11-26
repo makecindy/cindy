@@ -11,7 +11,7 @@ vi.mock('../../scheduler-host/index.desktop.js', () => ({
   getScheduler: () => ({ delete: async (id: string, options: unknown) => { h.remove(id, options); h.schedules.delete(id); } }),
 }));
 
-import { readV1Routines, removeV1Routine, v1RoutinesFile } from '../botV1Routines.js';
+import { readV1NeverDispatchedSessionIds, readV1Routines, removeV1Routine, v1RoutinesFile } from '../botV1Routines.js';
 
 let root = '';
 const routine = (id: string, botId: string) => ({ id, botId, name: id, prompt: 'p', enabled: true, triggers: [], revision: 1, createdAt: 0, updatedAt: 0 });
@@ -45,4 +45,30 @@ it('reads one teammate\'s routines and removes one with its runs, timers and bac
   // A rerun after a partial upgrade finds nothing left to remove.
   await removeV1Routine(root, 'r1');
   expect(await fs.readdir(path.dirname(v1RoutinesFile(root)))).toEqual(['routines.json']);
+});
+
+// Test value: the startup cleanup of empty single-run tasks (botLegacyRoutineHistoryTx.ts) may delete a task
+// only on this proof that it never reached the model. Production entry: the reader over the account's routines
+// file and each teammate's `v1-archive/routine-runs.json` (where the V2 upgrade moved the records). Minimal
+// failure: a task that a `skipped` record points at in one file and a dispatched one in the other, or an
+// unreadable file, still counted as proven. Unit tier, temporary directory.
+it('proves a run task undispatched only when every V1 run record pointing at it says skipped', async () => {
+  const record = (sessionId: string | undefined, status: string) =>
+    ({ ...run('r1'), id: `run-${sessionId}-${status}`, status, ...(sessionId ? { sessionId } : {}) });
+  expect(await readV1NeverDispatchedSessionIds(root)).toEqual(new Set());
+  await fs.mkdir(path.dirname(v1RoutinesFile(root)), { recursive: true });
+  await fs.writeFile(v1RoutinesFile(root), JSON.stringify({ version: 1, routines: [], receipts: {}, next: {},
+    runs: [record('before-upgrade', 'skipped'), record('ran-later', 'skipped'), record(undefined, 'skipped')] }));
+  const archive = path.join(root, 'bots', 'bot-a', 'v1-archive');
+  await fs.mkdir(archive, { recursive: true });
+  await fs.writeFile(path.join(archive, 'routine-runs.json'), JSON.stringify({ next: {},
+    runs: [record('after-upgrade', 'skipped'), record('ran-later', 'success'), record('failed', 'failed')] }));
+  await fs.mkdir(path.join(root, 'bots', 'bot-b'), { recursive: true });
+  expect(await readV1NeverDispatchedSessionIds(root)).toEqual(new Set(['before-upgrade', 'after-upgrade']));
+  // Records that cannot be read decide nothing.
+  await fs.writeFile(path.join(archive, 'routine-runs.json'), '{ not json');
+  expect(await readV1NeverDispatchedSessionIds(root)).toBeNull();
+  await fs.writeFile(path.join(archive, 'routine-runs.json'), JSON.stringify({ runs: [] }));
+  await fs.writeFile(path.join(archive, 'routines-unreadable.json'), 'raw');
+  expect(await readV1NeverDispatchedSessionIds(root)).toBeNull();
 });

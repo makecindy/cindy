@@ -163,10 +163,11 @@ it.each([false, true])('settles an already-read open task without another data u
   expect(rows(0)).toContain('a');
 });
 
-it('keeps a held task Pending when its completion was blocked', async () => {
+it('immediately removes a held task and restores it if the remote completion is blocked', async () => {
   const a = { id: 'a', status: 'active', title: 'A' } as Session;
   following.add(a);
-  const onAction = vi.fn(async () => {});
+  let cancel!: () => void;
+  const onAction = vi.fn(() => new Promise<void>(resolve => { cancel = resolve; }));
   const props: Parameters<typeof TaskInbox>[0] = {
     activeSessionId: 'a', sessions: [a], onAction,
     priorityContext: { runningSessionIds: new Set(), attentionSessionIds: new Set(), heldPriorityRanks: new Map([['a', 1]]) },
@@ -176,7 +177,9 @@ it('keeps a held task Pending when its completion was blocked', async () => {
   const view = render(<TaskInbox {...props} />);
   fireEvent.mouseOver(screen.getByRole('button', { name: 'complete:a' }));
   fireEvent.click(screen.getByRole('button', { name: 'complete:a' }));
-  await waitFor(() => expect(onAction).toHaveBeenCalledOnce());
+  expect(screen.queryByTestId('row')).toBeNull();
+  expect(view.container.querySelector('section > button')?.lastElementChild?.textContent).toBe('0');
+  await act(async () => cancel());
   expect(view.container.querySelector('section')?.querySelector('[data-testid="row"]')?.textContent).toBe('a');
 });
 
@@ -236,6 +239,27 @@ it('places teammate conversations with the tasks and removes a read one even whi
   expect(rows()).toEqual([['running', 'task'], [], [], []]);
 });
 
+
+// 2026-11-25 user decision (task-inbox.md「分区与动作」): rows inside a section follow time alone.
+// Before, the inbox reused the list's priority sort, so week-old unread archives sat above a task
+// archived a minute ago. Unit: real grouping; minimal input is an older unread and a newer read
+// task in both Pending and Done.
+it('orders each section by latest activity, whether or not a task is unread', () => {
+  const at = (daysAgo: number) => new Date(Date.now() - daysAgo * 86_400_000).toISOString();
+  const sessions = [
+    { id: 'old-unread', title: 'old-unread', status: 'active', lastActivityAt: at(7) },
+    { id: 'new-read', title: 'new-read', status: 'active', lastActivityAt: at(0) },
+    { id: 'old-unread-done', title: 'old-unread-done', status: 'archived', lastActivityAt: at(7) },
+    { id: 'new-read-done', title: 'new-read-done', status: 'archived', lastActivityAt: at(0) },
+  ] as Session[];
+  const view = render(<TaskInbox sessions={sessions}
+    priorityContext={{ runningSessionIds: new Set(), attentionSessionIds: new Set(['old-unread', 'old-unread-done']) }}
+    runningSessionIds={new Set()} attachedSessionIds={new Set()} notifications={new Set()}
+    onSessionClick={() => {}} onAction={() => {}} onRename={() => {}} onTogglePin={() => {}} onScheduleAction={() => {}} />);
+  expect(Array.from(view.container.querySelectorAll('section'), section =>
+    Array.from(section.querySelectorAll('[data-testid="row"]'), row => row.textContent)))
+    .toEqual([['new-read', 'old-unread'], [], [], ['new-read-done', 'old-unread-done']]);
+});
 
 // Unit: task-inbox.md. Row placement tests cannot see the closed inbox's indicator.
 // A snoozed remote result wakes on time and clears on read despite the open row's held rank.
