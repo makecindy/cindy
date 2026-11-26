@@ -172,6 +172,7 @@ vi.mock('../../maker-host/nativeProviderAuthBinding.js', () => ({
 }));
 vi.mock('../nativeCli.js', () => ({
   readNativeAccount: h.read,
+  readExistingLogin: async () => ({ login: { identity: (await h.read()).identity } }),
   codexAccountRpc: h.rpc,
   readNativeCodexTokens: h.tokens,
   readNativeAccountUsage: h.usage,
@@ -3060,6 +3061,24 @@ describe('Claude account renewal', () => {
   // Standard, independent PR #10086 review: snapshot guards covered new leases,
   // but an idle live handle could send through a profile being renewed or left
   // on the wrong identity. Exercise the real wrapper, not its guard in isolation.
+  // Unit: an external CLI can switch identities while a live task still has a fresh cache.
+  // The renewal tests change identity through Cindy. A terminal-side change must also stop send.
+  it('rechecks an externally linked subscription before a live task sends again', async () => {
+    h.pools.anthropic!.accounts = [{ ...account('second'), linkedLogin: { directory: '/fixture', identity: 'original' } }];
+    h.read.mockResolvedValue({ authenticated: true, identity: 'original' });
+    const nativeSend = vi.fn(async () => {});
+    const handle = await withSubscriptionAccounts({
+      kind: 'claude-code', startSession: async () => ({
+        id: 'linked', send: nativeSend, close: async () => {},
+        events: async function* () { yield { type: 'done', data: {} }; },
+      }),
+    } as unknown as BaseAgent).startSession({ providerId: 'anthropic', sessionId: 'linked' } as StartSessionOptions);
+    h.read.mockResolvedValue({ authenticated: true, identity: 'replacement' });
+    await expect(handle.send({ type: 'user', content: 'continue' })).rejects.toThrow('SUBSCRIPTION_ACCOUNT_LOGIN_REQUIRED');
+    expect(nativeSend).not.toHaveBeenCalled();
+    await handle.close();
+  });
+
   it.each(['account_mismatch', 'login_cancelled'])('protects an existing handle during renewal and after %s', async reason => {
     h.pools.anthropic!.accounts = [account('second')];
     let identity = 'second@example.test';
@@ -8916,6 +8935,81 @@ describe('shared subscription recovery through controller and account allocation
 describe('unreachable account service', () => {
   const unreachable = () => new AccountServiceUnreachableError('Codex account request failed');
 
+  // #13018, unit. The allocator alone cannot prove a queued input wakes. Two tasks
+  // share a timed-out account read; drive the send transaction through native admission.
+  it('coalesces local Codex account retries and dispatches only the surviving original inputs', async () => {
+    vi.useFakeTimers();
+    const sessions = new Map<string, Session>();
+    const sent: Array<[string, unknown]> = [];
+    const logger: Logger = { trace() {}, debug() {}, info() {}, warn() {}, error() {}, fatal() {}, child: () => logger };
+    const nativeStart: BaseAgent['startSession'] = async opts => {
+      let finish!: () => void;
+      const closed = new Promise<void>(resolve => { finish = resolve; });
+      return { id: opts.sessionId!, agentKind: 'codex', model: opts.model!, steer: vi.fn(), getUsageSnapshot: vi.fn(),
+        send: async message => { sent.push([opts.sessionId!, message]); },
+        close: async () => finish(), abort: async () => {}, events: async function* () { await closed; },
+        setInteractionResolver() {},
+      };
+    };
+    const agent = withSubscriptionAccounts({ kind: 'codex', startSession: nativeStart } as BaseAgent);
+    const persisted = vi.fn(async () => {});
+    const transaction = sharedAccountSendTransaction({
+      getSession: id => sessions.get(id),
+      bootstrapSession: async opts => {
+        const id = opts.id!;
+        const handle = await agent.startSession({ ...opts, sessionId: id, providerId: 'openai',
+          resumeSessionId: 'native-' + id } as StartSessionOptions);
+        const session = new Session({ id, agentKind: 'codex', workDir: opts.workingDir,
+          permissionMode: 'default', capabilities: {} as never, handle, logger });
+        sessions.set(id, session);
+        return { session, didInjectOrcaInstructions: false, didInjectProjectContext: false };
+      },
+      createDbMessage: persisted,
+    });
+    const coordinator = new AgentInputCoordinator({
+      sendToAgent: async (...args) => (await transaction.sendToAgentAccepted(...args)).outcome,
+      steerToAgent: async () => {}, abortSession: async () => {}, touchUserSend: async () => {},
+      createUserMessage: vi.fn(), isTurnRunning: () => false, hasPendingInteraction: () => false,
+      getAgentKind: () => 'codex', getSdkSessionId: async () => undefined,
+      getTurnGeneration: () => null, emitProjection() {},
+    });
+    try {
+      h.pools.openai = { strategy: 'order', accounts: [account('second')] };
+      h.read.mockRejectedValue(unreachable());
+      const enqueue = (id: string) => {
+        h.bindings.set('task:' + id, { providerId: 'openai', accountId: 'second' });
+        coordinator.enqueue(id, { clientId: id, text: id, persistedContent: id, model: 'gpt-6',
+          effort: 'medium', workingDir: '/work', permissionMode: 'default',
+          createOpts: { agentKind: 'codex', providerId: 'openai', model: 'gpt-6', workingDir: '/work' },
+          chatMessage: { role: 'user', clientId: id, content: id, isStreaming: false, createdAt: new Date().toISOString() },
+        });
+      };
+      for (const id of ['first', 'second', 'cancelled']) enqueue(id);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(coordinator.getProjection('first').error).toContain('CODEX_ACCOUNT_READ_RETRY');
+      expect(h.read).toHaveBeenCalledTimes(1);
+      coordinator.remove('cancelled', 'cancelled');
+      await vi.advanceTimersByTimeAsync(3_000);
+      expect(h.read).toHaveBeenCalledTimes(2);
+      h.read.mockResolvedValue({ authenticated: true, identity: 'account' });
+      await vi.advanceTimersByTimeAsync(5_998);
+      expect(sent).toEqual([]);
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(sent.sort()).toEqual(['first', 'second'].map(id => [id, { type: 'user', content: id }]));
+      expect(persisted).toHaveBeenCalledTimes(2);
+      expect(h.read).toHaveBeenCalledTimes(3);
+      h.read.mockResolvedValue({ authenticated: false });
+      enqueue('signed-out');
+      await vi.advanceTimersByTimeAsync(120_000);
+      expect(coordinator.getProjection('signed-out').error).toContain('SUBSCRIPTION_ACCOUNT_LOGIN_REQUIRED');
+      expect(h.read).toHaveBeenCalledTimes(4);
+      expect(sent).toHaveLength(2);
+    } finally {
+      await Promise.all([...sessions.values()].map(session => session.close()));
+      vi.useRealTimers();
+    }
+  });
+
   // The sign-in still has to be confirmed (登录完成须确认, 2026-11-16): an offline confirmation is
   // not a completed login, but it must say the service was unreachable instead of a generic failure.
   it('still opens the browser login for a known account and reports an unconfirmed result as unreachable', async () => {
@@ -8971,7 +9065,7 @@ describe('unreachable account service', () => {
     expect(hasUnavailableSubscriptionPoolAccount('openai')).toBe(true);
     expect(hasConnectedSubscriptionPool('openai', { includeBoundAccounts: true })).toBe(false);
     expect(readSubscriptionPoolCodexModels('openai', { includeBoundAccounts: true })).toEqual([]);
-    await expect(acquireSubscriptionAccount('openai', 'gpt-kept', [])).rejects.toThrow('No subscription account is available');
+    await expect(acquireSubscriptionAccount('openai', 'gpt-kept', [])).rejects.toThrow('CODEX_ACCOUNT_SERVICE_UNREACHABLE');
 
     // Back online: the account reads again and its list is fetched afresh.
     h.read.mockResolvedValue({ authenticated: true, identity: 'account' });
