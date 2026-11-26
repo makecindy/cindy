@@ -229,6 +229,7 @@ import { currentRelayFrameAuth } from './selfHostedRelayFrameAuth.js';
 import { installAgentNetMediaRouting } from './agentNetMedia.js';
 import { bindAgentNetSharing, stopAgentNetSharing, agentNetSharingRoute, agentNetProviderShareRoutes } from './agentNetSharing.js';
 import { installAgentNetSharingPolicy } from './agentNetSharingPolicy.js';
+import { linkedProviderShareAdmission } from './agentNetLinkedShares.js';
 import { isAgentNetActive, agentNetAllowsLegacy, agentNetRequiresEncryption, createAgentNetOrLegacySocket, noteAgentNetIdentityRefused, rejoinOfficialAgentNet, agentNetSelectionKey, agentNetShouldUseLegacyPeer, agentNetShouldProbeLegacyPeer, agentNetPeerSnapshot, agentNetPeerRoutes,
   agentNetTransportAttestation, verifyAgentNetTransportAttestation, agentNetPrefersPrimary, useAgentNetSessions, agentNetSession,
   agentNetPeerRoute, agentNetRelayStalled, agentNetPeerConnectedAt, connectAgentNetSessionPeer, agentNetPeerState, agentNetNotifyCoverage, agentNetListedPhones, agentNetNetworkChanged, agentNetRelayConnected, onAgentNetRelayChange, onAgentNetPathChange, agentNetRelayRoute, setAgentNetDuplicateIdentityCooldown } from './agentNetRuntime.js';
@@ -1754,7 +1755,12 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
       linkTornDown = false;
       stopSharingPolicy?.();
       stopSharingPolicy = installAgentNetSharingPolicy(async request => {
-        if (!arbiter?.isOwner() || linkTornDown || !agentNetSharingRoute(request.kind, request.resourceId)) return false;
+        if (!arbiter?.isOwner() || linkTornDown) return false;
+        // A Device Link share moved to Agent-Net: only the key its guest registered over the share's
+        // authenticated Device Link connection, and only while this computer's V1 member book still admits it.
+        const linked = linkedProviderShareAdmission(request);
+        if (linked === false) return false;
+        if (linked === null && !agentNetSharingRoute(request.kind, request.resourceId)) return false;
         if (request.kind === 'provider-share') {
           await refreshProviderShareHost('agent-net-transport');
           return !!ownedProviderShareGuestAccess(providerShareGuestPeer(request.resourceId, request.scope.memberId, request.guestDeviceId));

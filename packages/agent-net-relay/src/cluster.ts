@@ -22,7 +22,9 @@ import { ID_PATTERN } from '@cindy/agent-net-protocol';
  * replica only when the live members advertise the same value, so a build that changes any of these
  * is rolled out by stopping the old replicas first instead of a rolling update. Bump it in that change.
  */
-export const RELAY_CLUSTER_COMPAT = 1;
+// 2: the sharing document carries `linkedShares` (agent-net-linked-provider-shares.md); a replica without it
+// would neither admit those leases nor keep its own writes from racing the new field's checks.
+export const RELAY_CLUSTER_COMPAT = 2;
 
 /** A replica as the other replicas reach it. `url` is an internal base URL, never the public one. */
 export interface RelayClusterMember { id: string; url: string; }

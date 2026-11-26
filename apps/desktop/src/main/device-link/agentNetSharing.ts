@@ -31,6 +31,7 @@ import { createSharedTaskJournal } from '../localDb/sharedTasks.js';
 import { agentNetMediaBinding, agentNetSharingSubject } from '@cindy/agent-net-protocol';
 import { readDeviceLinkSettings } from './settings-store.desktop.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
+import { bindLinkedProviderShares, ensureLinkedProviderShares, linkedProviderShareSessionSocket, stopLinkedProviderShares } from './agentNetLinkedShares.js';
 
 type Kind = AgentNetSharingInvitation['kind'];
 export interface AgentNetSharingRoute extends Omit<AgentNetSharingInvitation, 'invitation'> {
@@ -90,7 +91,11 @@ function sessionRoute(peer: string): import('@cindy/agent-net').AgentNetAppSocke
   if (!task && !provider) return null;
   const key = task ? keyOf('shared-task', task.sharedTaskId) : keyOf('provider-share', provider!.shareId);
   const via = binding ? binding.via.get(key) : retiredVia?.via.get(key);
-  if (via === undefined) return 'primary';
+  if (via === undefined) {
+    // A Device Link share this guest moved to Agent-Net (agentNetLinkedShares.ts): its own connection, or Device Link until it is up.
+    const linked = provider && binding ? linkedProviderShareSessionSocket(peer) : undefined;
+    return linked === undefined ? 'primary' : linked;
+  }
   if (via === 'blocked') return null;
   return via === 'primary' ? 'primary' : binding!.session.sockets.get(via.connection)?.socket ?? null;
 }
@@ -820,21 +825,28 @@ function installRoute(state: Session, route: AgentNetSharingRoute): void {
 }
 export function bindAgentNetSharing(client: RoutedDeviceLinkClient, options: ScopedConnectionOptions): () => void {
   const selection = agentNetSelectionKey();
-  if (binding?.client === client && binding.session.key === activeOwnerScopeKey() && binding.selection === selection) return binding.stop;
+  if (binding?.client === client && binding.session.key === activeOwnerScopeKey() && binding.selection === selection) {
+    // The primary connection just came up (prepareAgentNetSharingPrimary): moved shares can connect now.
+    ensureLinkedProviderShares();
+    return binding.stop;
+  }
   binding?.stop();
   const state = owner();
   const unprefer = client.preferPrimaryScopedConnection(isAgentNetActive);
   // The routed client keeps a released resource retired until it is registered again; so do its sessions.
   const via = new Map<string, 'primary' | 'blocked' | { connection: string }>(
     retiredVia?.client === client ? [...retiredVia.via.keys()].map(key => [key, 'blocked' as const]) : []);
+  let unbindLinked = () => undefined as void;
   const target: NonNullable<typeof binding> = { client, options, session: state, selection, pins: new Map(), via, stop() {
     if (binding !== target) return;
-    binding = null; unprefer(); for (const off of target.pins.values()) off();
+    binding = null; unprefer(); unbindLinked(); for (const off of target.pins.values()) off();
     retiredVia = { client, via: new Map([...target.via.keys()].map(key => [key, 'blocked' as const])) };
     retire(state); if (session === state) session = null;
   } };
   binding = target;
   for (const route of state.vault.routes) installRoute(state, route);
+  // Device Link shares moved to Agent-Net follow the same switch, account and relay selection (agentNetLinkedShares.ts).
+  unbindLinked = bindLinkedProviderShares(client, options);
   return target.stop;
 }
 function safeRelayHost(server: string): string | null {
@@ -975,6 +987,7 @@ export function agentNetProviderShareRoutes(
 
 export function stopAgentNetSharing(): void {
   binding?.stop();
+  stopLinkedProviderShares();
   if (session) retire(session);
   session = null;
 }

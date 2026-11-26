@@ -507,6 +507,66 @@ describe('independent V2 relay', () => {
     else expect(rows.body.shares[0].status).toBe('paused');
     await expect(f.client.request('POST', '/grants', { delegation })).rejects.toMatchObject({ code: 'GRANT_INVALID' });
   });
+  // 2026-11-26 linked Device Link provider shares (agent-net-linked-provider-shares.md). Real HTTP/store/restart:
+  // the end-to-end lease is covered in packages/agent-net socket.integration; these are the service's own fences.
+  // Minimal failing inputs: linking an ID that is already a native V2 share (would let a link bypass its member book);
+  // a restart dropping the link; the private book exposing it; a 65th waiting guest device flooding one host.
+  it('fences linked Device Link provider shares: native IDs, other accounts, the private book, restarts and waiting guests', async () => {
+    const actor = (token: string) => token === 'Bearer unit-owner' ? { accountId: 'owner-account', deviceId: 'owner' }
+      : token === 'Bearer other-owner' ? { accountId: 'other-account', deviceId: 'owner' }
+      : /^Bearer guest-\d+$/.test(token) ? { accountId: 'guest-account', deviceId: 'guest-device-' + token.slice(13) } : null;
+    const f = await fixture({ sharing: {
+      async authenticate(req) { const found = actor(String(req.headers.authorization));
+        if (!found) throw new AppError('UNAUTHORIZED', 401, 'Unit auth rejected'); return { ...found, networkId: f.certificate.networkId }; },
+      providers: { hostCapability: 'provider-share-v1', identityCards: {
+        async verify() { return { displayName: 'Unit verified person', avatarUrl: null, region: 'global' as const }; },
+        async inspect() { throw new Error('No cross-region fixture'); },
+      } },
+    } });
+    const guests = new Map<string, Identity>();
+    const call = async (target: string, method: string, input: unknown, token = 'Bearer unit-owner', proof = token !== 'Bearer unit-owner' ? false : true, applicant?: Identity) => {
+      const resource = API + target, body = input === undefined ? '' : JSON.stringify(input);
+      const response = await fetch(f.relay.url + resource, { method, headers: { authorization: token, ...(body ? { 'content-type': 'application/json' } : {}),
+        ...(proof ? { 'x-agent-net-authorization': f.client.header(method, resource, body) } : {}),
+        ...(applicant ? { 'x-agent-net-applicant': Buffer.from(JSON.stringify(createRequestProof(applicant, method, resource, body))).toString('base64url') } : {}),
+      }, ...(body ? { body } : {}) });
+      return { status: response.status, body: await response.json() as any };
+    };
+    const ask = (n: number, resourceId = 'v1-share') => {
+      const identity = guests.get(String(n)) ?? generateIdentity('guest-device-' + n); guests.set(String(n), identity);
+      return call('/sharing/transport', 'POST', { kind: 'provider-share', resourceId, memberId: 'v1-member-' + n,
+        signingKey: identity.signingKey, transportKey: identity.transportKey }, 'Bearer guest-' + n, false, identity);
+    };
+    expect((await call('/info', 'GET', undefined)).body.features).toContain('linked-provider-shares-v1');
+    expect((await call('/sharing/provider-shares/linked', 'POST', { shareId: 'v1-share' }, 'Bearer unit-owner', false)).status).toBe(401);
+    expect((await call('/sharing/provider-shares/linked', 'POST', { shareId: 'v1-share' })).body).toEqual({ shareId: 'v1-share', linked: true });
+    // A native V2 share keeps its own member book: it can never be linked.
+    const native = await call('/sharing/provider-shares/links', 'POST', { providerId: 'unit-provider', providerLabel: 'Provider',
+      deviceName: 'Host', identityCard: 'unit-verified-card' });
+    expect(native.status).toBe(200);
+    expect(await call('/sharing/provider-shares/linked', 'POST', { shareId: native.body.shareId }))
+      .toMatchObject({ status: 409, body: { error: { code: 'PROVIDER_SHARE_LINK_CONFLICT' } } });
+    // Another account cannot take over or remove the link, even from a certified device of this network.
+    expect((await call('/sharing/provider-shares/linked', 'POST', { shareId: 'v1-share' }, 'Bearer other-owner', true)).status).toBe(403);
+    expect((await call('/sharing/provider-shares/linked/v1-share/remove', 'POST', {}, 'Bearer other-owner', true)).status).toBe(403);
+    // The private (local key) book never accepts links.
+    const privateTarget = API + '/private-sharing/provider-shares/linked', privateBody = JSON.stringify({ shareId: 'v1-share' });
+    expect((await fetch(f.relay.url + privateTarget, { method: 'POST', headers: { 'content-type': 'application/json',
+      'x-agent-net-authorization': f.client.header('POST', privateTarget, privateBody) }, body: privateBody })).status).toBe(404);
+    await f.restart();
+    const first = await ask(0);
+    expect(first.body).toMatchObject({ status: 'pending' });
+    const directory = await f.client.request<{ delegationRequests: import('@cindy/agent-net-protocol').DelegationRequest[] }>('GET', '/directory');
+    expect(directory.delegationRequests).toEqual([expect.objectContaining({ kind: 'provider-share', resourceId: 'v1-share', hostDeviceId: 'owner',
+      guestDeviceId: 'guest-device-0', scope: { memberId: 'v1-member-0', guestSubject: 'guest-account', memberVersion: 1 } })]);
+    expect((await ask(0)).body.id).toBe(first.body.id);
+    for (let n = 1; n < 64; n++) expect((await ask(n)).status).toBe(200);
+    expect(await ask(64)).toMatchObject({ status: 429, body: { error: { code: 'TOO_MANY_REQUESTS' } } });
+    // A guest already waiting may still renew; removing the link forgets the share at once.
+    expect((await ask(3)).status).toBe(200);
+    expect((await call('/sharing/provider-shares/linked/v1-share/remove', 'POST', {})).body).toEqual({ removed: true });
+    expect((await ask(0)).status).toBe(404);
+  });
   it('drops in-flight datagrams for a removed member without disconnecting healthy peers on the same uplink', async () => {
     const f = await fixture(), removed = await f.join('removed'), healthy = await f.join('healthy');
     const a = await f.client.connect(), c = await healthy.client.connect(); f.uplinks.push(a, c);
