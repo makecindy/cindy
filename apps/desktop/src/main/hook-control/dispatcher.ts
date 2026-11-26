@@ -97,7 +97,7 @@ import { HOOK_CHAT_WORKSPACE_ALIAS } from '../../shared/hookControlIpc.js';
 import { captureImContext, type ImContextSnapshot } from '../../shared/imMessageSource.js';
 import type { GroupHistoryAccessScope } from '../im/shared/groupHistoryAccess.js';
 import { hookReplyTarget } from '../im/shared/autoReviewReferences.js';
-import { quotaFailureNoticePrefix } from '../im/shared/turnRetryNotice.js';
+import { overloadFailureNotice, quotaFailureNoticePrefix } from '../im/shared/turnRetryNotice.js';
 import { imText } from '../im/shared/imText.js';
 import { groupHistoryAccessForExternalKey } from './groupHistoryScope.js';
 import { isPathWithin } from './paths.js';
@@ -140,6 +140,7 @@ export interface HookSessionRunner {
     workingDir: string | null;
     usable: boolean;
     resumableArchive?: boolean;
+    companionOwned?: boolean;
   } | null>;
   /** 跑一个完整 turn, 收口(done / terminal error)后返回。 */
   run(req: HookRunRequest): Promise<HookRunOutcome>;
@@ -329,6 +330,8 @@ export interface HookRunOutcome {
   status: 'ok' | 'error';
   finalText: string;
   errorMessage: string | null;
+  /** Structured maker-core error reason (internal logging/diagnostics only; never sent over wire). */
+  errorReason?: string | null;
   durationMs: number;
   /** 出站附件(agent 产图/产文件, runner 收集编码; 无则省略), 随 turn.end 回传。 */
   attachments?: TaskAttachment[];
@@ -543,10 +546,54 @@ export interface HookDispatcher {
  */
 export const HOOK_ROUTE_UNAVAILABLE_PREFIX = 'hook session route unavailable:';
 
-function hookFailureReasonForLog(errorMessage: string | null | undefined): string {
+/**
+ * 白名单化的结构化失败 reason，允许原样进主日志（不含用户内容、路径或上游原文）。
+ * 少量别名在此归一，避免同一故障拆成多个日志标签。
+ */
+const HOOK_LOGGABLE_ERROR_REASONS: ReadonlyMap<string, string> = new Map([
+  ['upstream-overload', 'upstream-overload'],
+  ['UPSTREAM_OVERLOADED', 'upstream-overload'],
+  ['codex_reconnect_stalled', 'codex_reconnect_stalled'],
+  ['upstream_response_idle_timeout', 'upstream_response_idle_timeout'],
+  ['bridge_upstream_response_idle_timeout', 'upstream_response_idle_timeout'],
+  ['turn_no_event_timeout', 'turn_no_event_timeout'],
+  ['bridge_turn_no_event_timeout', 'turn_no_event_timeout'],
+  ['provider_quota_limit', 'provider-quota-exhausted'],
+  ['output-limit', 'output-limit'],
+  ['context-overflow', 'context-overflow'],
+  ['codex_history_oversized', 'codex_history_oversized'],
+  ['tool_use_loop_detected', 'tool_use_loop_detected'],
+  ['empty-response', 'empty-response'],
+  ['turn-failed', 'turn-failed'],
+  ['silent-stop-exhausted', 'silent-stop-exhausted'],
+  ['user_model_access_denied', 'user_model_access_denied'],
+  ['provider_safety_refusal', 'provider_safety_refusal'],
+  ['remote_agent_lost', 'remote_agent_lost'],
+  ['remote_agent_closed', 'remote_agent_closed'],
+  ['app-server-force-retired', 'app-server-force-retired'],
+]);
+
+const CODEX_RECONNECT_STALLED_MESSAGE_RE =
+  /\bcodex_reconnect_stalled\b|model connection has been retrying for \d+s without making progress/i;
+const UPSTREAM_IDLE_TIMEOUT_MESSAGE_RE =
+  /upstream response has been silent for \d+s/i;
+
+function hookFailureReasonForLog(
+  errorMessage: string | null | undefined,
+  errorReason?: string | null,
+): string {
+  const mappedReason = typeof errorReason === 'string'
+    ? HOOK_LOGGABLE_ERROR_REASONS.get(errorReason)
+    : undefined;
+  if (mappedReason) return mappedReason;
   const message = errorMessage ?? '';
   // 额度说明里带供应商名与上游原文, 日志只记类别。
   if (message.startsWith(quotaFailureNoticePrefix())) return 'provider-quota-exhausted';
+  if (message === imText('imBot.text.shared.retry.overloadFailed') || overloadFailureNotice(message) !== null) {
+    return 'upstream-overload';
+  }
+  if (CODEX_RECONNECT_STALLED_MESSAGE_RE.test(message)) return 'codex_reconnect_stalled';
+  if (UPSTREAM_IDLE_TIMEOUT_MESSAGE_RE.test(message)) return 'upstream_response_idle_timeout';
   if (!message.startsWith(HOOK_ROUTE_UNAVAILABLE_PREFIX)) return 'unclassified';
   return message.replace(/\s+/g, ' ').slice(0, 300);
 }
@@ -2128,7 +2175,7 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
     if (isError) {
       // 失败原因原先只进 request ledger, 主日志里只有 dispatch / delivered 两行(issue #5912)。
       log.warn(
-        `hook task ${task.requestId} failed: im=${task.run.source?.im ?? 'none'} via=${runnerThrew ? 'throw' : 'outcome'} reason=${hookFailureReasonForLog(outcome.errorMessage)}`,
+        `hook task ${task.requestId} failed: im=${task.run.source?.im ?? 'none'} via=${runnerThrew ? 'throw' : 'outcome'} reason=${hookFailureReasonForLog(outcome.errorMessage, outcome.errorReason)}`,
       );
     }
     let turnEnd: TurnEndPayload = {
@@ -2450,7 +2497,7 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
       // Inspect and restore together so a pre-cleanup stat cannot revive a removed worktree.
       return withSessionRouteLock(sessionId, async () => {
         const info = await runner.inspect(sessionId, canRestoreIn);
-        if (!info?.resumableArchive || !canRestoreIn(info.workingDir)) return info;
+        if (info?.companionOwned || !info?.resumableArchive || !canRestoreIn(info.workingDir)) return info;
         await deps.restoreArchivedSession!(sessionId, { routeLockHeld: true });
         return isCurrentGeneration(generation) ? runner.inspect(sessionId) : null;
       });
@@ -2465,6 +2512,7 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
     if (payload.sessionId !== null) {
       const info = await inspectForMessage(payload.sessionId, (dir) => inWhitelistNow(dir) || inDialogueRoot(dir));
       if (!isCurrentGeneration(generation)) return { reject: 'disabled' };
+      if (info?.companionOwned) return { reject: 'workspace_not_allowed' };
       if (info !== null) awaitingPersist.delete(payload.sessionId);
       /**
        * 首次失效接管的 ACK 会把 replacement sessionId 回给 server。若 server 在
@@ -2644,6 +2692,7 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
       const info = await inspectForMessage(bound, inRequestedProject);
       if (!isCurrentGeneration(generation)) return { reject: 'disabled' };
       // 查得到 = 已落库, 此后一律走映射校验
+      if (info?.companionOwned) return { reject: 'workspace_not_allowed' };
       if (info !== null) awaitingPersist.delete(bound);
       /**
        * 免检窗口里那个会话建在哪 —— 必须拿它跟**当前**映射再比一次: 会话还没
@@ -3239,6 +3288,7 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
           }
           return (
             info.usable === true &&
+            (!info.companionOwned || companionTargets.has(sessionId)) &&
             info.workingDir !== null &&
             dirStillAllowed(connectionId, info.workingDir, sessionId)
           );
@@ -3348,6 +3398,7 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
             if (
               isCurrentGeneration(admittedGeneration) &&
               info?.usable === true &&
+              (!info.companionOwned || companionTargets.has(previous)) &&
               info.workingDir !== null &&
               dirStillAllowed(connectionId, info.workingDir, previous)
             ) {

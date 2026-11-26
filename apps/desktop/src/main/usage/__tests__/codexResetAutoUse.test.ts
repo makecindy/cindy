@@ -1,6 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { MobileCodexRateLimitsResult } from '@cindy/maker-shared/device-link-contract';
-import { CodexResetAutoUse, DEFAULT_CODEX_RESET_AUTO_USE, type CodexResetAutoUseDeps } from '../codexResetAutoUse';
+import {
+  CodexResetAutoUse,
+  DEFAULT_CODEX_RESET_AUTO_USE,
+  shouldResetCodexAutoUseBackoffForAccountChange,
+  type CodexResetAutoUseDeps,
+} from '../codexResetAutoUse';
 
 // Tier unit: observable redemption/resume boundaries. Fake time and RPC, never real credits.
 const NOW = 1_800_000_000_000;
@@ -23,7 +28,7 @@ function harness(value = snapshot()) {
     record: vi.fn(async () => {}), refreshWeb: vi.fn(async () => {}), restored: vi.fn(async () => {}), warn: vi.fn(),
   };
   const engine = new CodexResetAutoUse(deps);
-  return { value, deps, engine, advance: () => { now += 60_000; }, switchOwner: () => { scope = 'another'; } };
+  return { value, deps, engine, advance: (ms = 60_000) => { now += ms; }, switchOwner: () => { scope = 'another'; } };
 }
 describe('automatic Codex reset', () => {
   it.each([
@@ -89,5 +94,89 @@ describe('automatic Codex reset', () => {
     const h = harness(); vi.mocked(h.deps.record).mockRejectedValue(new Error('disk full'));
     await h.engine.check('openai');
     expect(h.deps.consume).toHaveBeenCalledOnce(); expect(h.deps.restored).toHaveBeenCalledOnce();
+  });
+  // Regression: failed background probes previously retried every 60s without backoff.
+  it('backs off consecutive failures up to 15 minutes and resets after a successful check', async () => {
+    const h = harness();
+    vi.mocked(h.deps.read).mockRejectedValue(new Error('probe unavailable'));
+    // Expected failure cooldowns: 1m, 2m, 4m, 8m, 15m (cap), 15m (cap).
+    const expectedMinutes = [1, 2, 4, 8, 15, 15];
+    let expectedCalls = 0;
+    for (const minutes of expectedMinutes) {
+      await h.engine.check('openai');
+      expectedCalls += 1;
+      expect(h.deps.read).toHaveBeenCalledTimes(expectedCalls);
+      expect(h.deps.warn).toHaveBeenCalledTimes(expectedCalls);
+      // One millisecond before the backoff deadline is still skipped.
+      h.advance(minutes * 60_000 - 1);
+      await h.engine.check('openai');
+      expect(h.deps.read).toHaveBeenCalledTimes(expectedCalls);
+      h.advance(1);
+    }
+    // Recovery clears consecutive failures back to the normal 30s cooldown.
+    vi.mocked(h.deps.read).mockResolvedValue(h.value);
+    h.value.autoUse!.settings.enabled = false;
+    await h.engine.check('openai');
+    expect(h.deps.read).toHaveBeenCalledTimes(expectedCalls + 1);
+    h.advance(30_000);
+    await h.engine.check('openai');
+    expect(h.deps.read).toHaveBeenCalledTimes(expectedCalls + 2);
+  });
+  it('clears failure backoff immediately on resetFailureBackoff without disturbing healthy cooldowns or other providers', async () => {
+    const h = harness();
+    vi.mocked(h.deps.read).mockRejectedValue(new Error('probe unavailable'));
+    await h.engine.check('openai');
+    h.advance(60_000);
+    await h.engine.check('openai'); // now backed off for 2m
+    await h.engine.check('openai-2');
+    h.advance(60_000);
+    await h.engine.check('openai-2'); // also backed off for 2m
+
+    // Targeted reset only clears the target provider's failure backoff.
+    h.engine.resetFailureBackoff('openai');
+    await h.engine.check('openai');
+    await h.engine.check('openai-2');
+    expect(vi.mocked(h.deps.read).mock.calls.filter(([id]) => id === 'openai')).toHaveLength(3);
+    expect(vi.mocked(h.deps.read).mock.calls.filter(([id]) => id === 'openai-2')).toHaveLength(2);
+
+    // Owner-wide reset clears remaining backed-off providers without dropping a healthy cooldown.
+    vi.mocked(h.deps.read).mockImplementation(async (id) => {
+      if (id === 'healthy') {
+        const clean = snapshot();
+        clean.autoUse!.settings.enabled = false;
+        return clean;
+      }
+      throw new Error('probe unavailable');
+    });
+    await h.engine.check('healthy');
+    h.engine.resetFailureBackoff();
+    await h.engine.check('healthy');
+    await h.engine.check('openai-2');
+    expect(vi.mocked(h.deps.read).mock.calls.filter(([id]) => id === 'healthy')).toHaveLength(1);
+    expect(vi.mocked(h.deps.read).mock.calls.filter(([id]) => id === 'openai-2')).toHaveLength(3);
+  });
+  it('does not let an in-flight failure re-impose backoff after resetFailureBackoff', async () => {
+    const h = harness();
+    let rejectRead!: (err: Error) => void;
+    vi.mocked(h.deps.read).mockImplementationOnce(() => new Promise((_res, rej) => { rejectRead = rej; }));
+    const inflight = h.engine.check('openai');
+    await Promise.resolve();
+    h.engine.resetFailureBackoff('openai');
+    rejectRead(new Error('stale probe failure'));
+    await inflight;
+
+    vi.mocked(h.deps.read).mockResolvedValue(h.value);
+    await h.engine.check('openai');
+    expect(h.deps.read).toHaveBeenCalledTimes(3); // failed read + recovery read + post-reset refresh
+    expect(h.deps.consume).toHaveBeenCalledOnce();
+  });
+  it.each([
+    ['openai account mutation', 'openai', undefined, undefined, true],
+    ['openai reset completion', 'openai', 'acct-1', undefined, true],
+    ['openai routine usage update', 'openai', undefined, 'usage' as const, false],
+    ['openai task load update', 'openai', undefined, 'load' as const, false],
+    ['non-openai account mutation', 'anthropic', undefined, undefined, false],
+  ])('decides whether subscription change clears failure backoff: %s', (_label, provider, resetId, change, expected) => {
+    expect(shouldResetCodexAutoUseBackoffForAccountChange(provider, resetId, change)).toBe(expected);
   });
 });

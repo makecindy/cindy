@@ -1064,6 +1064,18 @@ describe('hook session 精确接管边界', () => {
     expect(info?.resumableArchive === true).toBe(canResume);
   });
 
+  // PR #12405: a shared project can contain a private teammate task. Ordinary hook
+  // routing must distinguish it even when active; archived/remote cases don't cover this (unit).
+  it('identifies teammate-owned tasks during hook target inspection', async () => {
+    const { getSessionRowSnapshotStrict } = await import('../../localDb/ipc/sessions.js');
+    vi.mocked(getSessionRowSnapshotStrict).mockResolvedValueOnce({
+      status: 'active', source: 'bot', workingDir: '/repo', title: null, userSendAt: 1,
+      workspaceKind: 'project', providerId: null,
+    });
+    await expect(createMakerHookSessionRunner({ log }).inspect('companion'))
+      .resolves.toMatchObject({ companionOwned: true });
+  });
+
   it('拒绝接管 SSH 远程会话和内部 worker 会话', async () => {
     const { getSessionRowSnapshot } = await import('../../localDb/ipc/sessions.js');
     vi.mocked(getSessionRowSnapshot)
@@ -3181,6 +3193,7 @@ describe('上游过载自动重试期间的渠道进度(零产出窗口)', () =>
     h.eventCbs.get('sess-new')?.({ type: 'done', data: { result: 'late result' } });
     const outcome = await pending;
     expect(outcome.status).toBe('error');
+    expect(outcome.errorReason).toBe(reason);
     if (text.startsWith('![')) {
       expect(outcome.finalText).toContain('🖼️ _shot_');
       expect(outcome.finalText).not.toContain('shot.png');
@@ -3202,6 +3215,7 @@ describe('上游过载自动重试期间的渠道进度(零产出窗口)', () =>
     } });
     const outcome = await pending;
     expect(outcome.status).toBe('error');
+    expect(outcome.errorReason).toBe('output-limit');
     expect(outcome.errorMessage).toContain('131064');
     expect(outcome.errorMessage).toContain('131072');
     expect(outcome.errorMessage).toContain('降低推理强度');

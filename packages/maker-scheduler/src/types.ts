@@ -407,6 +407,8 @@ export interface ScheduleRunTrigger {
   kind: 'watch';
   source: string;
   detail?: string;
+  /** Distinguishes a speculative overflow/reconnect check from a verified change or explicit doorbell. */
+  reason?: 'reconcile';
 }
 
 /** Safe facts returned to the originating task when its own automation ends. */
@@ -416,7 +418,14 @@ export interface ScheduleClosureFailure {
   laterRunSucceeded: boolean;
 }
 
+/** Verified MR facts at dispatch. Only a successful execution acknowledges them. */
+export interface MrRunObservation {
+  url: string;
+  signature: string;
+}
+
 export interface ScheduleRun {
+  mrObservation?: MrRunObservation;
   id: string;
   scheduleId: string;
   sessionId?: string;
@@ -575,7 +584,16 @@ export type SchedulerEvent =
    * recurring 语义重排下一次触发（不是短延重试）。消费方需像 'deferred' 一样清掉
    * ephemeral running 态；不发通知、不亮红点。sessionId 为跳过留痕会话（可为空串）。
    */
-  | { type: 'skipped'; scheduleId: string; runId: string; sessionId: string }
+  | {
+      type: 'skipped';
+      scheduleId: string;
+      runId: string;
+      sessionId: string;
+      lastFiredAt?: number;
+      lastFinishedAt?: number;
+      nextFireAt?: number;
+      preRunCheckSucceeded?: boolean;
+    }
   /**
    * Runner 在 fire() 内部拿到 sessionId 时主动上报（在 'completed' / 'failed' 之前）。
    * 让 UI 能在 run 还在 running 状态时就拿到 sessionId，"Open session" 按钮即时可用。

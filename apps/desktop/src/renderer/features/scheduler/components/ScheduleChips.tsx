@@ -7,6 +7,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ChevronDown, ExternalLink, Folder, MessageCircle, Timer, SlidersHorizontal } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { Popover, PopoverTrigger, PopoverContent } from '@/components/ui/popover';
+import { SegmentedControl } from '@/components/ui/segmented-control';
 import { Select } from '@/components/ui/select';
 import { Tip } from '@/components/ui/tooltip';
 import {
@@ -247,7 +248,7 @@ export function ScheduleSettingsButton({
         <Tip text={switchDisabled && cantUseReason ? cantUseReason : null} side="top" contentClassName="z-modal-popover-nested">
           <label
             className={cn(
-              'flex h-8 w-full items-center gap-2 rounded-md px-2 text-13 transition-colors',
+              'flex h-8 w-full items-center gap-2 rounded-lg px-2 text-13 transition-colors',
               switchDisabled
                 ? 'cursor-not-allowed opacity-50'
                 : 'cursor-pointer hover:bg-[var(--surface-hover)] dark:hover:bg-[var(--settings-btn-secondary-hover-bg)]',
@@ -407,27 +408,18 @@ export function ScheduleChip({
           }}
         >
           <div className="rounded-xl border border-[var(--cmd-palette-border)] bg-[var(--cmd-palette-bg)] p-2 shadow-[shadow:var(--shadow-menu)] dark:border-[var(--cmd-palette-border)] dark:bg-[var(--cmd-palette-bg)]">
-            <div className="flex h-[34px] items-center gap-1 rounded-lg bg-[var(--chat-input-chip-bg)] p-0.5">
-              {(['cron', 'interval'] as const).map((mode) => {
-                const active = timingMode === mode;
-                return (
-                  <button
-                    key={mode}
-                    type="button"
-                    aria-pressed={active}
-                    onClick={() => setTimingMode(mode)}
-                    className={cn(
-                      'h-full flex-1 rounded-md border px-3 text-12 font-medium transition-colors',
-                      active
-                        ? 'border-[var(--confirm-btn-secondary-border)] bg-[var(--cmd-palette-bg)] text-[var(--msg-assistant-text)]'
-                        : 'border-transparent text-[var(--cmd-palette-item-meta)] hover:text-[var(--msg-assistant-text)]',
-                    )}
-                  >
-                    {t(`scheduler.chips.timingMode.${mode}`)}
-                  </button>
-                );
-              })}
-            </div>
+            <SegmentedControl
+              aria-label={t('scheduler.chips.timingMode.label')}
+              value={timingMode}
+              options={(['cron', 'interval'] as const).map((mode) => ({
+                value: mode,
+                label: t(`scheduler.chips.timingMode.${mode}`),
+              }))}
+              onValueChange={setTimingMode}
+              height={34}
+              optionHeight={30}
+              fullWidth
+            />
             <p className="px-1 pt-1.5 text-11 leading-4 text-[var(--cmd-palette-item-meta)] dark:text-[var(--settings-section-desc)]">
               {t(
                 timingMode === 'interval' && !intervalIsPreset
@@ -646,7 +638,7 @@ function IntervalMinutesInput({
         if (open) onFocus();
       }}
       onValueChange={(next) => onChange(Number(next))}
-      className="w-[88px] px-2 text-center text-13"
+      width="xs"
     />
   );
 }
@@ -889,7 +881,7 @@ function TimeColumn({
               type="button"
               onClick={() => onChange(option)}
               className={cn(
-                'flex h-7 w-full items-center justify-center rounded-md text-13 transition-colors',
+                'flex h-7 w-full items-center justify-center rounded-lg text-13 transition-colors',
                 active
                   ? 'bg-[var(--chat-input-chip-bg)] font-medium text-[var(--msg-assistant-text)] dark:bg-[var(--chat-input-chip-bg)] dark:text-[var(--msg-assistant-text)]'
                   : 'text-[var(--cmd-palette-item-meta)] hover:bg-[var(--surface-hover)] dark:text-[var(--settings-section-desc)] dark:hover:bg-[var(--settings-btn-secondary-hover-bg)]',

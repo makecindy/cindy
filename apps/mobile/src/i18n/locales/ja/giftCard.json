@@ -13,6 +13,7 @@
   "cardLabel": "Cindy ギフトカード、{{amount}}",
   "fields": {
     "validity": "有効期間",
+    "validityValue_one": "受け取りから {{count}} 日間",
     "validityValue_other": "受け取りから {{count}} 日間",
     "claimBy": "受け取り期限",
     "destination": "追加先",

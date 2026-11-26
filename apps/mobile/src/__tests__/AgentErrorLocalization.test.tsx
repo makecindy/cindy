@@ -44,6 +44,16 @@ const clickText = (text: string) => {
   expect(button).toBeTruthy(); button!.click();
 };
 
+// #10161, unit: an older history row with a bare deadline does not establish
+// whether the message was sent. Keep its generic summary on a cold task.
+it('keeps a legacy snapshot deadline in cold history generic', async () => {
+  await i18n.changeLanguage('zh-CN');
+  const message = 'Snapshot operation deadline exceeded';
+  const [historical] = normalizeRemoteMessages([row(message)]);
+  expect(historical.body).toBe(i18n.t('session.tail.replyFailed'));
+  expect(historical.rawError).toBe(message);
+});
+
 // #10854, unit: live and persisted mobile errors share the known-reason copy;
 // the host cause stays available to diagnosis instead of becoming a false claim.
 it.each(['live', 'tail'] as const)('keeps silent-stop %s copy neutral and preserves diagnosis', async surface => {
@@ -300,7 +310,7 @@ describe.each(SUPPORTED_LOCALES)('known mobile remote errors in %s', locale => {
     expect(unclassifiedAgentErrorI18nKey('[CUSTOM_ERROR] private diagnostic')).toBe('session.tail.replyFailed');
   });
 
-  it.each(['REMOTE_AGENT_TIMEOUT', 'REMOTE_AGENT_LINK_BUSY', 'REMOTE_AGENT_UNRESPONSIVE', 'REMOTE_AGENT_OFFLINE', 'REMOTE_AGENT_ACCESS_DENIED', 'REMOTE_LOCAL_ONLY_PROVIDER', 'DEVICE_LINK_MEDIA_TRANSFER_FAILED', 'DEVICE_LINK_MEDIA_ACCESS_DENIED', 'MCP_APPROVAL_CONFIRMATION_TIMEOUT', 'SSH_HARNESS_SWITCH_UNSUPPORTED', 'MODEL_SELECTION_UNAVAILABLE', 'MODEL_CATALOG_UNCONFIRMED', 'HARNESS_SWITCH_NOT_READY'])(
+  it.each(['REMOTE_AGENT_TIMEOUT', 'REMOTE_AGENT_LINK_BUSY', 'REMOTE_AGENT_UNRESPONSIVE', 'REMOTE_AGENT_OFFLINE', 'REMOTE_AGENT_ACCESS_DENIED', 'REMOTE_LOCAL_ONLY_PROVIDER', 'DEVICE_LINK_MEDIA_TRANSFER_FAILED', 'DEVICE_LINK_MEDIA_ACCESS_DENIED', 'MCP_APPROVAL_CONFIRMATION_TIMEOUT', 'SSH_HARNESS_SWITCH_UNSUPPORTED', 'MODEL_SELECTION_UNAVAILABLE', 'MODEL_CATALOG_UNCONFIRMED', 'HARNESS_SWITCH_NOT_READY', 'SNAPSHOT_DISPATCH_INTENT_TIMEOUT'])(
     'preserves %s guidance across history, live and tail, including language changes', async code => {
       await i18n.changeLanguage(locale);
       const message = `Error invoking remote method 'maker:send': Error: [${code}] upstream diagnostic; api_key=private-test-value`;

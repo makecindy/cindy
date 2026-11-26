@@ -21,6 +21,10 @@
 
 import { isDeepStrictEqual } from 'node:util';
 import { createTwoFilesPatch } from 'diff';
+import {
+  isProviderSafetyRefusalError,
+  PROVIDER_SAFETY_REFUSAL_REASON,
+} from '@cindy/maker-shared/error-redaction';
 import { parseMessageToolUse } from '@cindy/maker-shared/message-normalize';
 import type { AgentEvent } from '../../types/events.js';
 import {
@@ -53,7 +57,7 @@ export interface AcpUpdateTranslatorOptions {
 }
 
 export type AcpTurnOutcome =
-  | { stopReason: AcpStopReason; usage?: AcpTurnUsage }
+  | { stopReason: AcpStopReason; usage?: AcpTurnUsage; usageModel?: string }
   /** `signals`: structured failure fields (usage limit, sign-in, overload) the agent classified. */
   | { error: string; reason?: string; signals?: Record<string, unknown> };
 
@@ -229,13 +233,16 @@ export class AcpUpdateTranslator {
     const result = this.lastText;
     this.lastText = '';
     if ('error' in outcome) {
+      const reason =
+        outcome.reason ??
+        (isProviderSafetyRefusalError(outcome.error) ? PROVIDER_SAFETY_REFUSAL_REASON : undefined);
       events.push({
         type: 'error',
         data: {
           ...(outcome.signals ?? {}),
           message: outcome.error,
           isTerminal: true,
-          ...(outcome.reason ? { reason: outcome.reason } : {}),
+          ...(reason ? { reason } : {}),
         },
       });
       return events;
@@ -249,6 +256,7 @@ export class AcpUpdateTranslator {
         stopReason: outcome.stopReason,
         // A cancelled turn still spent the tokens the agent reports for it.
         ...(outcome.usage ? { usage: outcome.usage } : {}),
+        ...(outcome.usageModel ? { usageModel: outcome.usageModel } : {}),
       },
     });
     return events;

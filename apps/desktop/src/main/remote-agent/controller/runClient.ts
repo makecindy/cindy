@@ -13,6 +13,7 @@ import { promisify } from 'node:util';
 import { gzip } from 'node:zlib';
 
 import {
+  DeviceLinkError,
   REMOTE_AGENT_CHANNEL,
   REMOTE_AGENT_MAX_INLINE_PAYLOAD_CHARS,
   REMOTE_AGENT_MAX_PAYLOAD_BYTES,
@@ -324,7 +325,7 @@ export class RemoteAgentRunClient implements PolledRun {
   }
 
   /** 预先分配的 callId(需要先把回调登记到 callId 上时用)。 */
-  async callWithId(callId: string, method: RemoteAgentMethod, args: unknown[], signal?: AbortSignal): Promise<unknown> {
+  async callWithId(callId: string, method: RemoteAgentMethod, args: unknown[], signal?: AbortSignal, onDispatch?: () => void): Promise<unknown> {
     if (this.closed) throw new Error('[REMOTE_AGENT_EXPIRED] The task has ended on the other computer.');
     if (method === 'abort' || method === 'requestGracefulStop') this.sendGeneration += 1;
     const generation = this.sendGeneration;
@@ -345,7 +346,12 @@ export class RemoteAgentRunClient implements PolledRun {
       // Stop can overtake gzip or a chunk acknowledgement, including the final
       // await before dispatch. Never deliver that old send after Stop.
       requireActive();
-      const delivery = this.invoke([{ op: 'call', runId: this.runId, callId, method, payload }], { beforeDispatch: requireActive });
+      const delivery = this.invoke([{ op: 'call', runId: this.runId, callId, method, payload }], {
+        beforeDispatch: () => {
+          requireActive();
+          onDispatch?.();
+        },
+      });
       if (method === 'send') this.handlers.onSend?.();
       await delivery;
     } catch (error) {
@@ -593,12 +599,18 @@ export function remoteAgentLinkError(error: { code?: string; message?: string } 
   const causeCode = typeof code === 'string' && code !== 'IPC_ERROR' ? code : envelopeCode;
   const displayCode = remoteAgentLinkGuidanceCode(causeCode);
   const diagnostic = displayCode && causeCode && envelopeCode !== causeCode ? `[${causeCode}] ${message}` : message;
-  const keepRemoteError = !displayCode && /^\[REMOTE_[A-Z_]+\]/.test(message);
+  const keepRemoteError = ((code === 'ACCESS_REVOKED' || code === 'REMOTE_DISABLED')
+    && envelopeCode?.startsWith('REMOTE_AGENT_SHARE_') === true)
+    || (!displayCode && /^\[REMOTE_[A-Z_]+\]/.test(message));
   // The requested route may be a share/group rather than a resolved computer.
   // Report only this known reference and channel, not a guessed name or status.
   const context = target ? `\nrequestedTarget=${shortDeviceRef(target)}; channel=${REMOTE_AGENT_CHANNEL}` : '';
-  const wrapped = new Error(keepRemoteError
-    ? message : `[${displayCode ?? 'REMOTE_AGENT_UNAVAILABLE'}] ${diagnostic}${context}`);
+  const wrapped = new Error(
+    keepRemoteError ? message : `[${displayCode ?? 'REMOTE_AGENT_UNAVAILABLE'}] ${diagnostic}${context}`,
+    // The local transport can attest that this request never reached a socket.
+    // A remote error envelope cannot supply that evidence.
+    error instanceof DeviceLinkError && error.inFlight === false ? { cause: error } : undefined,
+  );
   return typeof code === 'string' ? Object.assign(wrapped, { code }) : wrapped;
 }
 

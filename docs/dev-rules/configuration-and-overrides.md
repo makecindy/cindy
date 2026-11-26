@@ -258,15 +258,20 @@ Pi 使用逐模型 reserveTokens，Claude Code 同步原生环境与 host 判断
   约定。
 - agent 修改配置时，只有用户明确要求才写入 override，不得把当前默认值固化回用户配置。
 
-### Pi 自定义 Chat 线路的 `store` 能力
+### Pi 自定义 Chat 线路的存储与长缓存能力
 
-当指定连接和型号已确认因 `store` 字段被上游拒绝（#11023），可在执行端当前 owner 的
+当指定连接和型号因 `store`（#11023）或 `prompt_cache_retention`（#12771）被上游拒绝时，
+可在执行端当前 owner 的
 `model-catalog-overrides.json` 中合并以下稀疏覆盖；保留该文件的其它内容，不编辑临时
 `models.json`。键使用活动目录的连接 ID（URL 编码）与原始模型 ID，不使用显示名称。
 
 ```json
-{"version":1,"patches":{"connection-id:gemini-4-hydrogen":{"perAgent":{"pi":{"supportsStore":false}}}}}
+{"version":1,"patches":{"connection-id:gemini-4-hydrogen":{"perAgent":{"pi":{"supportsStore":false,"supportsLongCacheRetention":false}}}}}
 ```
+
+如果上游拒绝 `prompt_cache_retention`，将 `perAgent.pi.supportsLongCacheRetention`
+设为 `false` 即可让 Pi 的 Chat 请求省略该字段。它只接受 `false`；删除后恢复 Pi 原生判断。
+两个覆盖独立，只设置上游需要的字段。
 
 `supportsStore` 只接受布尔值，且只允许写在 `perAgent.pi`；`base`、其它引擎及字符串值
 均会使该条覆盖隔离。只在自定义供应商的 Pi `openai-completions` 启动投影中生效：

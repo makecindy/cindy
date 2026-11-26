@@ -137,7 +137,7 @@ export function onAnalyticsPermissionChange(listener: PermissionListener): () =>
   return () => { permissionListeners.delete(listener); };
 }
 
-function applyPermissionChange(explicitEnabled?: boolean): void {
+export function applyPermissionChange(explicitEnabled?: boolean): void {
   broadcastSettingsChange();
   const allowed = isReportingAllowedNow();
   for (const listener of permissionListeners) {

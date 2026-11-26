@@ -37,6 +37,8 @@ function recoveryHarness() {
     let authStateEpoch = 1;
     const refreshBackoff = new AuthRefreshBackoff(() => 1_000_000, () => 0);
     const getActiveAppSession = () => ({ mode: 'cloud' });
+    // Not a managed instance, so refresh keeps the ordinary path.
+    const getInstanceConfig = () => null;
     const log = { debug() {} };
     ${compiled}
     return { call: refreshUnderTest, backoff: refreshBackoff,
