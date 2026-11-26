@@ -18,7 +18,7 @@ import {
 } from '../bot-model-chain-settings-store';
 
 const modelGroups = vi.hoisted(() => ({ config: { routes: [] as Array<Record<string, unknown>> } }));
-vi.mock('../../model-groups/store.js', () => ({ readModelGroupsConfig: () => modelGroups.config }));
+vi.mock('../../model-groups/store.js', () => ({ readModelGroupsConfig: () => modelGroups.config, readModelGroupsConfigForSelected: () => modelGroups.config }));
 
 const providerService = vi.hoisted(() => ({
   listProviders: vi.fn<() => Promise<ProviderView[]>>(),
@@ -139,7 +139,7 @@ describe('bot model chain settings store', () => {
     expect(await readEffectiveBotModelChain({ modelChainOverride: null }, { rootPath, providers })).toEqual([]);
   });
 
-  it('persists an ordered 1-5 route chain as the Main-owned source of truth', async () => {
+  it('persists a single route as the Main-owned source of truth, cutting older multi-route input to the first', async () => {
     const rootPath = await testRoot();
     const modelChain = [
       {
@@ -158,22 +158,24 @@ describe('bot model chain settings store', () => {
       },
     ];
 
+    // 2026-11-26 单模型决定：旧端可能仍送多条，只保留第一条。
     await writeBotModelChainSettings(modelChain, { rootPath });
+    const stored = modelChain.slice(0, 1);
 
     expect(await readBotModelChainSettingsState({ rootPath, providers: [] })).toMatchObject({
       isCustomized: true,
-      value: { modelChain },
+      value: { modelChain: stored },
     });
 
     expect(await readEffectiveBotModelChain({
       model: 'legacy-cache',
       harness: 'claude',
       modelOverride: null,
-    }, { rootPath })).toEqual(modelChain);
+    }, { rootPath })).toEqual(stored);
     expect(await readEffectiveBotModelChain({
       modelChainOverride: null,
       modelChain: [{ harness: 'claude', model: 'stale-cache' }],
-    }, { rootPath })).toEqual(modelChain);
+    }, { rootPath })).toEqual(stored);
   });
 
   it('keeps an explicit per-Bot chain authoritative even if its cache field drifted', async () => {
@@ -301,10 +303,10 @@ describe('bot model chain settings store', () => {
 
     it('伙伴自己存的路由在使用时改用新来源，不改写资料里的值', async () => {
       const rootPath = await testRoot();
-      const config = { modelChainOverride: [route('org-pool'), route('org-pool', 'pool-model')] };
+      // 2026-11-26 单模型决定：伙伴只有一条路由。
+      const config = { modelChainOverride: [route('org-pool')] };
       expect(await readEffectiveBotModelChain(config, { rootPath, providers })).toEqual([
         route('xd'),
-        route('org-pool', 'pool-model'),
       ]);
       expect(config.modelChainOverride[0].providerId).toBe('org-pool');
     });
@@ -353,10 +355,10 @@ describe('bot model chain settings store', () => {
 
     it('用户自定义的伙伴默认同样跟随；没挪动、预设 auto 与普通模型原样', async () => {
       const rootPath = await testRoot();
-      await writeBotModelChainSettings([route('org-pool'), route('xd', 'auto')], { rootPath });
+      await writeBotModelChainSettings([route('org-pool')], { rootPath });
       expect(
         await readEffectiveBotModelChain({ modelChainOverride: null }, { rootPath, providers }),
-      ).toEqual([route('xd'), route('xd', 'auto')]);
+      ).toEqual([route('xd')]);
       // 保存的设置文件仍是原值。
       expect(
         (await readBotModelChainSettingsState({ rootPath, providers: [] })).value.modelChain[0],
@@ -367,6 +369,12 @@ describe('bot model chain settings store', () => {
           { rootPath, providers },
         ),
       ).toEqual([route('xd')]);
+      expect(
+        await readEffectiveBotModelChain(
+          { modelChainOverride: [route('xd', 'auto')] },
+          { rootPath, providers },
+        ),
+      ).toEqual([route('xd', 'auto')]);
     });
   });
 });

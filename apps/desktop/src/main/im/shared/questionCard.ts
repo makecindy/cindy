@@ -4,7 +4,12 @@ import type { InteractionRequest } from '@cindy/maker-core';
 import type { InteractiveCardSpec } from '@cindy/im';
 import type { QuestionControls } from '../../maker-ipc/interactionRouter';
 import { imText } from './imText';
-import { encodeAskOptionAnswers, formatAskAnswersForDisplay } from './interactionCardModel';
+import {
+  encodeAskOptionAnswers,
+  formatAskAnswersForDisplay,
+  formatAskOptionPreviewLines,
+  IM_ASK_TOTAL_PREVIEW_MAX_BYTES,
+} from './interactionCardModel';
 
 export type QuestionRequest = Extract<InteractionRequest, { kind: 'ask_user_question' }>;
 
@@ -79,27 +84,37 @@ export function createQuestionCard(
     ? text.split('\n').map(line => (line.trim() ? look.muted!(line) : line)).join('\n')
     : text;
   const hintText = (): string => muted(hint ?? imText('imBot.text.questions.cardHint'));
-  const body = () => look.single ? singleBody() : request.questions.map((q, i) => [
-    `${i + 1}. ${withMultiSelectHint(q)}`,
-    ...(q.options ?? []).map((o, j) => `${i + 1}·${j + 1}. ${o.label}${o.description ? ` — ${o.description}` : ''}`),
-    ...resolvedLine(i),
-  ].join('\n')).join('\n\n');
+  const body = () => {
+    if (look.single) return singleBody();
+    const previewBudget = { remainingBytes: IM_ASK_TOTAL_PREVIEW_MAX_BYTES };
+    return request.questions.map((q, i) => [
+      `${i + 1}. ${withMultiSelectHint(q)}`,
+      ...(q.options ?? []).flatMap((o, j) => [
+        `${i + 1}·${j + 1}. ${o.label}${o.description ? ` — ${o.description}` : ''}`,
+        ...formatAskOptionPreviewLines(o.preview, previewBudget),
+      ]),
+      ...resolvedLine(i),
+    ].join('\n')).join('\n\n');
+  };
   /** 按钮总数超过传输上限时不发选项按钮(见 render): 选项必须逐行写在正文里, 靠编号文字作答。 */
   const choiceButtonsOmitted = (): boolean =>
     request.questions.reduce((count, q) => count + (q.options?.length ?? 0), 0) + (requiresSubmit ? 1 : 0)
       > MAX_CARD_BUTTONS;
   // 单题版式：题干单独成段（不以「1.」开头，避免 Markdown 把后面的行并进同一个列表项）；
-  // 选项只有带说明、或按钮放不下时才逐行列出，否则按钮已经写全了选项。带说明时选项名加粗、
-  // 说明弱化，一眼分得清哪段是选项、哪段是解释。
+  // 选项只有带说明、预览、或按钮放不下时才逐行列出，否则按钮已经写全了选项。带说明或预览时
+  // 选项名加粗、说明弱化，一眼分得清哪段是选项、哪段是解释与预览。
   const singleBody = (): string => {
     const q = request.questions[0];
     const options = q.options ?? [];
-    const described = options.some(o => o.description);
+    const detailed = options.some(o => o.description || o.preview?.trim());
+    const previewBudget = { remainingBytes: IM_ASK_TOTAL_PREVIEW_MAX_BYTES };
     return [
       withMultiSelectHint(q),
-      ...(described || choiceButtonsOmitted()
-        ? ['', ...options.map((o, j) =>
-          `${j + 1}. ${described ? `**${o.label}**` : o.label}${o.description ? ` ${muted(o.description)}` : ''}`)]
+      ...(detailed || choiceButtonsOmitted()
+        ? ['', ...options.flatMap((o, j) => [
+          `${j + 1}. ${detailed ? `**${o.label}**` : o.label}${o.description ? ` ${muted(o.description)}` : ''}`,
+          ...formatAskOptionPreviewLines(o.preview, previewBudget),
+        ])]
         : []),
       ...resolvedLine(0).flatMap(line => ['', line]),
     ].join('\n');

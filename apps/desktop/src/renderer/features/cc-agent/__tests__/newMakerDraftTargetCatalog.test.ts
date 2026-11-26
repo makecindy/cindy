@@ -198,7 +198,7 @@ function harness(options: {
     setWtBranchPreferenceSaving: vi.fn(), setWtBranchSync: vi.fn(), setWtBranchPreferenceError: vi.fn(),
     setWtBaseRepo: vi.fn(), setWtSourceBranch: vi.fn(), setWtSupportsRecoveryKeyDiscard: vi.fn(),
     setWtConfirmedIneligible: vi.fn(), setWtPreferenceSaving: vi.fn(),
-    setRemoteDraftPluginEngine: vi.fn(),
+    setRemoteDraftPluginEngine: vi.fn(), forgetRemoteAlternateDraftModel: vi.fn(),
   };
   const applyDraftTarget = callback<(request: unknown) => void>('applyDraftTarget', bindings);
   const add = callback<(target: RemoteProjectTarget) => Promise<void>>('handleRemoteProjectAdded', { ...bindings, applyDraftTarget });
@@ -319,7 +319,7 @@ describe('Agent location chosen on a controlled new-task draft', () => {
       selectableDevices: listed ? [{ deviceId, online: false }] : [],
       selectableDevicesLoaded: loaded,
       controlledModelRoute: { catalogHostDeviceId },
-      isProviderShareAgentDeviceId, patchDraft, setAlternateModel, setDlSel,
+      isProviderShareAgentDeviceId, patchDraft, setAlternateModel, setDlSel, forgetRemoteAlternateDraftModel: vi.fn(),
       log: { warn: vi.fn() },
     })();
     if (clears) {
@@ -339,7 +339,7 @@ describe('Agent location chosen on a controlled new-task draft', () => {
     const select = callback<(selection: unknown) => void>('handleUnifiedDraftSelect', {
       localModelIssue: null, localAlternate: null, setAlternateModel: vi.fn(), usesDeviceCatalog: true,
       setDraftFavoriteAnchor: vi.fn(), getDraft: () => ({}), switchVendor: vi.fn(), setDlSel: vi.fn(),
-      setRemoteDraftPluginEngine: vi.fn(),
+      setRemoteDraftPluginEngine: vi.fn(), forgetRemoteAlternateDraftModel: vi.fn(),
       normalizeDbAgentKind, dbToMakerAgentKind, modelCatalogKey, patchDraft,
       effectiveAgentDeviceId: undefined, isDeviceLinkDraft: true, deviceLinkInitial: null,
       controlledModelRoute: { catalogHostDeviceId: 'task-device' },
@@ -1464,7 +1464,7 @@ describe('the remote draft holder follows the displayed model', () => {
     const select = callback<(selection: unknown) => void>('handleUnifiedDraftSelect', {
       ...bindings, localModelIssue: null, localAlternate: null, setAlternateModel: vi.fn(),
       setDraftFavoriteAnchor: vi.fn(), getDraft: () => ({}), switchVendor: vi.fn(),
-      setRemoteDraftPluginEngine: vi.fn(),
+      setRemoteDraftPluginEngine: vi.fn(), forgetRemoteAlternateDraftModel: vi.fn(),
       normalizeDbAgentKind, dbToMakerAgentKind, setDlSel: vi.fn(), patchDraft: vi.fn(),
       catalogDeviceId: 'target-device', usesDeviceCatalog: true,
       dlRuntimeTouchedRef: { current: false }, dlExplicitChoiceRef: { current: false },
@@ -1507,7 +1507,7 @@ describe('the remote draft holder follows the displayed model', () => {
         resolveDeviceLinkDraftDefaults, setDlSel: vi.fn(), pushActiveDraftPref,
         dlSel: staleHolder, deviceLinkInitial: staleHolder, isCloudDeviceId,
         markDefaultTupleCustomized: vi.fn(), patchActiveTuplePrefs: vi.fn(),
-        setRemoteDraftPluginEngine: vi.fn(), localAlternate: null,
+        setRemoteDraftPluginEngine: vi.fn(), forgetRemoteAlternateDraftModel: vi.fn(), localAlternate: null,
       });
     handleModelDidChange('shared-model');
     expect(pushActiveDraftPref).toHaveBeenCalledTimes(writes);
@@ -1624,7 +1624,7 @@ describe('the seeded source is pinned only by an explicit model or source choice
       pushActiveDraftPref: vi.fn(),
       activePluginEngine: null,
       dlPluginEngine: null,
-      setRemoteDraftPluginEngine: vi.fn(),
+      setRemoteDraftPluginEngine: vi.fn(), forgetRemoteAlternateDraftModel: vi.fn(),
     };
     // 显式来源(用户为这个目标**明确选过**的那家)。没有显式选择时是 null。
     const explicitProviderId = () => callback<() => string | null>('explicitDraftProviderId', {
@@ -1837,7 +1837,7 @@ it('applies a replacement for an unavailable saved model only to the current loc
 });
 
 // Minimal input: a missing local engine and an alternate on another computer.
-it('keeps remote alternates temporary and applies the latest same-device selection to the holder', () => {
+it('keeps remote alternates out of the saved default and applies the latest same-device selection to the holder', () => {
   const setAlternateModel = vi.fn();
   const switchVendor = vi.fn();
   const rememberAgentDeviceSelection = vi.fn();

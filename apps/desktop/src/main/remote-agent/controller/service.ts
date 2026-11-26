@@ -1,3 +1,4 @@
+import { acceptSharedTurnValue } from '../sharedTurnValue.js';
 import { lookupShareAvailability, allocateShareAvailability, reportShareAvailabilityStatus } from '../../device-link/providerShareAvailability.js';
 /**
  * 远程 Agent 的控制端接线：Maker 遇到「Agent 在另一台电脑上运行」的任务时调用这里。
@@ -842,7 +843,16 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
       collectImports: (imports) => collectInstructionImports(imports, collect),
       isGitRepo,
       ...(deps.extractPdfText ? { extractPdfText: deps.extractPdfText } : {}),
-      mapEvent: deps.mapEvent ?? remoteAgentEventMapper,
+      mapEvent: kind => {
+        const map = (deps.mapEvent ?? remoteAgentEventMapper)(kind);
+        if (kind !== 'codex' || !sessionId || !initialShareId || initialAccessEpoch === undefined) return map;
+        return event => {
+          const mapped = map?.(event) ?? event;
+          return mapped.type === 'done' && activeOwnerScopeKey() === ownerScope && !isAppSessionBoundaryPending()
+            && providerShareAccessEpoch(initialShareId) === initialAccessEpoch
+            ? acceptSharedTurnValue(mapped, sessionId, input.deviceId) : mapped;
+        };
+      },
       newId: randomUUID,
       log: {
         debug: (message, fields) => startupLog.debug(message, fields),
