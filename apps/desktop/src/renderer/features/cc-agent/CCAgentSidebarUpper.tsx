@@ -323,6 +323,11 @@ import {
   isRemoteSessionWriteBlocked,
 } from './lib/remoteSessionWriteGuard';
 import {
+  getOfflineInboxIntent,
+  queueOfflineInboxComplete,
+  removeOfflineInboxIntent,
+} from '@/features/device-link/offlineInboxIntentsStore';
+import {
   selectRemoteSessionBootstrapFailures,
   selectRemoteSessionBootstrapLoadingDevices,
   useEffectiveSelectedMachineId,
@@ -3193,8 +3198,50 @@ function ExpandedView({
       sharedTaskId?: string,
     ) => {
       const session = sessionsByIdRef.current.get(sessionId);
-      if (isRemoteSessionWriteBlocked(session)) {
+      const offlineDeviceId = session?.deviceLinkDeviceId;
+      const canHandleOfflineInbox =
+        Boolean(offlineDeviceId) &&
+        !isSharedTaskPeer(offlineDeviceId ?? '') &&
+        isRemoteSessionWriteBlocked(session);
+      if (action === 'unarchive' && canHandleOfflineInbox && offlineDeviceId) {
+        if (getOfflineInboxIntent(offlineDeviceId, sessionId)?.kind === 'complete') {
+          await removeOfflineInboxIntent(offlineDeviceId, sessionId);
+          return;
+        }
+      }
+      if (isRemoteSessionWriteBlocked(session) && !(action === 'complete' && canHandleOfflineInbox)) {
         toast.warning(t('ccAgent.remoteSession.actionsUnavailable'));
+        return;
+      }
+      // Snapshot the displayed queue before the inbox hides the clicked row. At commit,
+      // skip siblings the user has since completed and respect any intervening navigation.
+      const inbox = action === 'complete' && viewedSessionIdRef.current === sessionId
+        ? sidebarScrollRef.current?.querySelector('[data-task-inbox-section="inbox"]')
+        : null;
+      const anchor = `session:${sessionId}`;
+      const order = inbox ? [...getVisibleInboxTargets(inbox).keys()] : [];
+      const advanceInbox = () => {
+        if (!inbox?.isConnected || !isSessionRemovalRouteCurrent(sessionId)) return;
+        const available = getVisibleInboxTargets(inbox);
+        available.delete(anchor);
+        const remaining = [...available.keys()];
+        const removed = new Set(order.filter(id => !available.has(id)));
+        // Removing the last of the first 20 rows can reveal another task below it.
+        const original = new Set(order);
+        const queue = [...order, ...remaining.filter(id => !original.has(id))];
+        const key = pickSessionIdAfterRemoval(queue, removed, anchor) ?? remaining[0];
+        const next = key ? available.get(key) : undefined;
+        if (next && 'route' in next) navigate(next.route);
+        else if (next) void handleSessionClick(next.sessionId);
+        else navigate('/cc-agent/new', { state: { workspacePrompt: 'generic' } });
+      };
+      if (action === 'complete' && canHandleOfflineInbox && offlineDeviceId && session) {
+        const rawHostSession =
+          remoteProjectsStore
+            .getDeviceSessions(offlineDeviceId)
+            .find((row) => row.id === sessionId) ?? session;
+        await queueOfflineInboxComplete(offlineDeviceId, sessionId, rawHostSession);
+        advanceInbox();
         return;
       }
       const isArchiveLike = action === 'archive' || action === 'archive-now' || action === 'complete';
@@ -3223,28 +3270,6 @@ function ExpandedView({
         if (!(await attachedPromise)) return false;
         toast.warning(t('ccAgent.sidebar.archiveBlocked.attached'));
         return true;
-      };
-      // Snapshot the displayed queue before the inbox hides the clicked row. At commit,
-      // skip siblings the user has since completed and respect any intervening navigation.
-      const inbox = action === 'complete' && viewedSessionIdRef.current === sessionId
-        ? sidebarScrollRef.current?.querySelector('[data-task-inbox-section="inbox"]')
-        : null;
-      const anchor = `session:${sessionId}`;
-      const order = inbox ? [...getVisibleInboxTargets(inbox).keys()] : [];
-      const advanceInbox = () => {
-        if (!inbox?.isConnected || !isSessionRemovalRouteCurrent(sessionId)) return;
-        const available = getVisibleInboxTargets(inbox);
-        available.delete(anchor);
-        const remaining = [...available.keys()];
-        const removed = new Set(order.filter(id => !available.has(id)));
-        // Removing the last of the first 20 rows can reveal another task below it.
-        const original = new Set(order);
-        const queue = [...order, ...remaining.filter(id => !original.has(id))];
-        const key = pickSessionIdAfterRemoval(queue, removed, anchor) ?? remaining[0];
-        const next = key ? available.get(key) : undefined;
-        if (next && 'route' in next) navigate(next.route);
-        else if (next) void handleSessionClick(next.sessionId);
-        else navigate('/cc-agent/new', { state: { workspacePrompt: 'generic' } });
       };
       // 收件箱「完成」遇到绑着启用中自动化的任务，只把这轮结果标为已读、任务回到进行中，
       // 不归档：归档会回收 worktree，下一轮又从快照重建，安静的一轮放回已归档再删一次

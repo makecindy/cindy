@@ -17640,7 +17640,14 @@
         "hours": "Daqui a {{count}} horas",
         "hours_one": "Daqui a {{count}} hora",
         "hours_many": "Daqui a {{count}} horas",
-        "hours_other": "Daqui a {{count}} horas"
+        "hours_other": "Daqui a {{count}} horas",
+        "pendingSync": "Sincronização pendente",
+        "pendingArchiveSync": "Será arquivada quando o computador estiver online",
+        "offlineCompleteRejectedDirty": "«{{title}}» voltou para Pendentes: existem alterações por confirmar no Worktree antes de arquivar.",
+        "offlineCompleteRejectedNewActivity": "«{{title}}» voltou para Pendentes: houve nova atividade no computador enquanto esteve offline.",
+        "offlineCompleteRejectedRunning": "«{{title}}» voltou para Pendentes: a tarefa está em execução.",
+        "offlineCompleteRejectedAttached": "«{{title}}» voltou para Pendentes: a tarefa está associada ou partilhada e não foi arquivada automaticamente.",
+        "offlineCompleteRejectedPreflight": "«{{title}}» voltou para Pendentes: não foi possível verificar o Worktree antes de arquivar."
       },
       "taskListMode": {
         "heading": "Modo de tarefas",

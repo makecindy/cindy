@@ -481,7 +481,14 @@
         "nextWeek": "La próxima semana",
         "indefinite": "Indefinidamente",
         "custom": "Personalizar…",
-        "invalidTime": "Elige una fecha y hora futuras dentro de un año."
+        "invalidTime": "Elige una fecha y hora futuras dentro de un año.",
+        "pendingSync": "Pendiente de sincronizar",
+        "pendingArchiveSync": "Se archivará cuando el ordenador vuelva a estar en línea",
+        "offlineCompleteRejectedDirty": "«{{title}}» volvió a Pendientes: hay cambios sin confirmar en el worktree que requieren confirmación antes de archivar.",
+        "offlineCompleteRejectedNewActivity": "«{{title}}» volvió a Pendientes: hubo nueva actividad en su ordenador mientras estaba sin conexión.",
+        "offlineCompleteRejectedRunning": "«{{title}}» volvió a Pendientes: la tarea está en ejecución.",
+        "offlineCompleteRejectedAttached": "«{{title}}» volvió a Pendientes: la tarea está conectada o compartida y no se archivó automáticamente.",
+        "offlineCompleteRejectedPreflight": "«{{title}}» volvió a Pendientes: no se pudo verificar el estado del worktree antes de archivar."
       },
       "taskListMode": {
         "enterInbox": "Bandeja de entrada",

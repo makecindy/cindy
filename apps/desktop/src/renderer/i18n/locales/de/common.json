@@ -17474,7 +17474,14 @@
         "snoozeFailed": "Die Zeit konnte nicht gespeichert werden. Prüfe die Verbindung und aktualisiere den Computer mit dieser Aufgabe.",
         "hours": "In {{count}} Stunden",
         "hours_one": "In {{count}} Stunde",
-        "hours_other": "In {{count}} Stunden"
+        "hours_other": "In {{count}} Stunden",
+        "pendingSync": "Synchronisierung ausstehend",
+        "pendingArchiveSync": "Wird archiviert, sobald der Computer wieder online ist",
+        "offlineCompleteRejectedDirty": "„{{title}}“ wurde nach Ausstehend zurückgestellt: nicht übertragene Änderungen im Worktree erfordern eine Bestätigung vor dem Archivieren.",
+        "offlineCompleteRejectedNewActivity": "„{{title}}“ wurde nach Ausstehend zurückgestellt: Während der Offline-Zeit gab es neue Aktivitäten auf dem Computer.",
+        "offlineCompleteRejectedRunning": "„{{title}}“ wurde nach Ausstehend zurückgestellt: Die Aufgabe wird derzeit ausgeführt.",
+        "offlineCompleteRejectedAttached": "„{{title}}“ wurde nach Ausstehend zurückgestellt: Die Aufgabe ist verbunden oder geteilt und wurde nicht automatisch archiviert.",
+        "offlineCompleteRejectedPreflight": "„{{title}}“ wurde nach Ausstehend zurückgestellt: Der Worktree-Status konnte vor dem Archivieren nicht geprüft werden."
       },
       "taskListMode": {
         "heading": "Aufgabenmodus",

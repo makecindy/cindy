@@ -337,6 +337,18 @@ import { SessionOptionsPresenter } from '@/session/SessionOptionsExpoSheet';
 import { SwipeableSessionRow, type SessionSwipeControls } from '@/session/SwipeableSessionRow';
 import { TaskCreatorMark, TaskFollowMark, taskFollowerNames, useTaskFollowers } from '@/session/TaskFollowMark';
 import { createSwipeRowRegistry } from '@/session/swipeRowRegistry';
+import {
+  clearMobileOfflineInboxIntentsForDevice,
+  getMobileOfflineInboxIntent,
+  getMobileOfflineInboxIntentsForDevice,
+  hydrateMobileOfflineInboxIntents,
+  removeMobileOfflineInboxIntent,
+  replayMobileOfflineInboxIntentsForDevice,
+} from '@/session/offlineInboxIntents';
+import { isWorktreeChannelNotAllowedError } from '@/session/newSessionWorktree';
+import { markSessionScheduleRunsRead } from '@/session/scheduleRunRead';
+import { sessionMayHaveScheduleRuns } from '@/session/scheduleIndex';
+import type { OfflineInboxReplayRejectReason } from '@cindy/maker-shared/offline-inbox-intent';
 import { useSessionListActions } from '@/session/useSessionListActions';
 import { useModalFadeLifecycle } from '@/session/useModalFadeLifecycle';
 import type { RemoteSession } from '@/session/types';
@@ -774,8 +786,10 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
   const runDisclosure = disclosure.run;
   const prepareListDisclosure = disclosure.prepare;
   const animateListChange = useCallback((apply: () => void) => runDisclosure(apply, { nested: true }), [runDisclosure]);
-  // Read by inbox Done, which runs after render; the index is declared further below.
+  // Read by inbox Done, which runs after render; the index and mode are declared further below.
   const scheduleIndexRef = useRef<ReadonlyMap<string, RemoteSessionScheduleInfo>>(new Map());
+  const taskListModeRef = useRef<'tasks' | 'inbox'>('tasks');
+  const unresponsiveDevicesRef = useRef<ReadonlySet<string>>(new Set());
   const {
     snoozeSessionTarget, confirmSnooze, closeSnooze, handleSnoozeClosed,
     actionSheetSession,
@@ -795,6 +809,10 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
   } = useSessionListActions({
     animateListChange,
     hasActiveAutomation: (session) => scheduleIndexRef.current.get(session.id)?.hasActiveFollowUp === true,
+    isInboxMode: () => taskListModeRef.current === 'inbox',
+    userId: homeCacheUserId,
+    isDeviceOffline: (deviceId) =>
+      getPresenceAvailability(deviceId) === false || unresponsiveDevicesRef.current.has(deviceId),
   });
   // 实测 header 高度(onLayout),用于下拉菜单定位;字体放大等导致 header 超过 HOME_HEADER_MIN_HEIGHT 时不再错位。
   const [headerHeight, setHeaderHeight] = useState<number | null>(null);
@@ -812,6 +830,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
   const [projectOrder, setProjectOrder] = useRetainedHomeState<HomeProjectOrder>(viewSession, 'projectOrder', 'activity');
   const [manualProjectOrder, setManualProjectOrder] = useRetainedHomeState<string[]>(viewSession, 'manualProjectOrder', []);
   const [taskListMode, setTaskListMode] = useRetainedHomeState<'tasks' | 'inbox'>(viewSession, 'taskListMode', 'tasks');
+  taskListModeRef.current = taskListMode;
   const [taskFilters, setTaskFilters] = useRetainedHomeState<Partial<HomeModeDisplayPreferences>>(viewSession, 'taskFilters', {});
   const [inboxFilters, setInboxFilters] = useRetainedHomeState<Partial<HomeModeDisplayPreferences>>(viewSession, 'inboxFilters', {});
   const { projectFilter, teammateFilter, vendorFilter, lastActivityFilter, hideAutomations = false,
@@ -866,6 +885,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
   // 熔断 open(电脑端未响应)的设备复用既有 failed 渲染路径(红圈),不新增视觉:
   // 内部态映射覆盖在 hydrate 状态之上,熔断关闭后自动回落到原状态。
   const unresponsiveDevices = useUnresponsiveDevices();
+  unresponsiveDevicesRef.current = unresponsiveDevices;
   const deviceConnectionStates = useMemo<Record<string, HomeDeviceConnectionState>>(() => {
     if (unresponsiveDevices.size === 0) return rawDeviceConnectionStates;
     const merged: Record<string, HomeDeviceConnectionState> = { ...rawDeviceConnectionStates };
@@ -1218,6 +1238,73 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
           : null,
       );
       updateDeviceConnectionState(device.deviceId, 'idle');
+      void replayMobileOfflineInboxIntentsForDevice({
+        userId: homeCacheUserId,
+        deviceId: device.deviceId,
+        getIntents: getMobileOfflineInboxIntentsForDevice,
+        getCurrentIntent: getMobileOfflineInboxIntent,
+        removeIntent: removeMobileOfflineInboxIntent,
+        isStillCurrent: () =>
+          homeAccountGenerationRef.current === expectedAccountGeneration &&
+          isCurrentHomeSyncTarget(device.deviceId, expectedHomeSyncGeneration),
+        getCachedFreshSession: (_deviceId, sessionId) =>
+          nextSessions.find((session) => session.id === sessionId),
+        fetchFreshSession: async (targetDeviceId, sessionId) => {
+          const fetched = await invoke<RemoteSession | null>(
+            targetDeviceId,
+            'local-db:sessions:get',
+            [sessionId],
+          );
+          return fetched && typeof fetched.id === 'string' ? fetched : null;
+        },
+        isRunning: (sessionId) => remoteSessionStore.getSessionRunStatus(sessionId).isRunning,
+        hasActiveAutomation: (session) =>
+          scheduleIndexRef.current.get(session.id)?.hasActiveFollowUp === true,
+        preflightWorktree: async (targetDeviceId, sessionId) => {
+          try {
+            const preview = await invoke<{ hasWorktree?: unknown; dirty?: unknown }>(
+              targetDeviceId,
+              'worktree:removal-preview',
+              [sessionId],
+            );
+            if (!preview?.hasWorktree || !preview?.dirty) return 'clean';
+            return 'dirty';
+          } catch (err) {
+            return isWorktreeChannelNotAllowedError(err) ? 'clean' : 'unknown';
+          }
+        },
+        patchMeta: (targetDeviceId, sessionId, patch) =>
+          invoke<RemoteSession>(targetDeviceId, 'local-db:sessions:patch-meta', [sessionId, patch]),
+        applyPatchedSession: (targetDeviceId, sessionId, patch) => {
+          remoteSessionStore.applySessionPatch(targetDeviceId, sessionId, patch);
+        },
+        markAutomationTaskRead: async (targetDeviceId, session) => {
+          const maker = createMobileMakerTransport({ deviceId: targetDeviceId, invoke });
+          if (sessionMayHaveScheduleRuns(targetDeviceId, session.id, session.source)) {
+            await markSessionScheduleRunsRead(maker, session.id, targetDeviceId, () => true);
+          }
+          await maker.clearSessionAttention(session.id, 'explicit').catch((err: unknown) => {
+            if (!isWorktreeChannelNotAllowedError(err)) throw err;
+          });
+        },
+        notifyRejected: (intent, reason: OfflineInboxReplayRejectReason) => {
+          const title = intent.sessionTitle || t('session.menu.unnamedTitle');
+          const key =
+            reason === 'dirty-worktree'
+              ? 'devices.list.menu.inbox.offlineCompleteRejectedDirty'
+              : reason === 'new-activity'
+                ? 'devices.list.menu.inbox.offlineCompleteRejectedNewActivity'
+                : reason === 'running'
+                  ? 'devices.list.menu.inbox.offlineCompleteRejectedRunning'
+                  : reason === 'attached'
+                    ? 'devices.list.menu.inbox.offlineCompleteRejectedAttached'
+                    : 'devices.list.menu.inbox.offlineCompleteRejectedPreflight';
+          Alert.alert(t('devices.list.alert.actionFailed'), t(key, { title }));
+        },
+        notifySnoozeFailed: () => {
+          Alert.alert(t('devices.list.alert.actionFailed'), t('devices.list.menu.inbox.snoozeFailed'));
+        },
+      });
       // hydrate 成功后去抖回写首页列表缓存(collect 在定时器触发时才读 store,拿届时最新快照;
       // 多设备并发 hydrate 只落盘一次)。不在 store 每次变更时写盘。缓存按账号键控。
       scheduleHomeListSnapshotPersist(homeCacheUserId, () => remoteSessionStore.getSessions());
@@ -1425,6 +1512,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
           remoteScheduleEventStore.clearDevice(item.device.deviceId);
           remoteScheduleEventStore.clearDeviceMirrorInvalidation(item.device.deviceId);
           remoteSessionStore.removeDevice(item.device.deviceId);
+          void clearMobileOfflineInboxIntentsForDevice(homeCacheUserId, item.device.deviceId);
         }
       }
       if (softInvalidateIds.length > 0) softInvalidateDeviceMirrors(softInvalidateIds);
@@ -1443,6 +1531,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
           remoteScheduleEventStore.clearDevice(deviceId);
           remoteScheduleEventStore.clearDeviceMirrorInvalidation(deviceId);
           remoteSessionStore.removeDevice(deviceId);
+          void clearMobileOfflineInboxIntentsForDevice(homeCacheUserId, deviceId);
         }
       }
 
@@ -1551,6 +1640,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
       return;
     }
     let cancelled = false;
+    void hydrateMobileOfflineInboxIntents(homeCacheUserId);
     const read = startBoundedStartupRead(
       getCachedHomeListState(homeCacheUserId),
       { devices: [], displayOrder: null },
