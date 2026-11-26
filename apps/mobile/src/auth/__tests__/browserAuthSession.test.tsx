@@ -11,6 +11,8 @@ const native = vi.hoisted(() => ({
   replaceRoute: vi.fn(),
   closeAccount: undefined as (() => void) | undefined,
   storage: new Map<string, string>(),
+  asyncStorage: new Map<string, string>(),
+  confirmDeletion: vi.fn(),
   chatFiles: new Map<string, string>(),
   removeChatFile: vi.fn(),
   readSecure: vi.fn(),
@@ -36,6 +38,16 @@ const native = vi.hoisted(() => ({
 }));
 
 vi.mock('expo-router', () => ({ useRouter: () => ({ replace: native.replaceRoute }) }));
+vi.mock('@react-native-async-storage/async-storage', () => ({ default: {
+  getItem: async (key: string) => native.asyncStorage.get(key) ?? null,
+  setItem: async (key: string, value: string) => { native.asyncStorage.set(key, value); },
+  removeItem: async (key: string) => { native.asyncStorage.delete(key); },
+  getAllKeys: async () => [...native.asyncStorage.keys()],
+  multiRemove: async (keys: readonly string[]) => { for (const key of keys) native.asyncStorage.delete(key); },
+  multiGet: async (keys: readonly string[]) => keys.map(key => [key, native.asyncStorage.get(key) ?? null]),
+  multiSet: async (pairs: readonly [string, string][]) => { for (const [key, value] of pairs) native.asyncStorage.set(key, value); },
+  clear: async () => { native.asyncStorage.clear(); },
+} }));
 vi.mock('../../../app/(auth)/login', () => ({
   LoginScreen: ({ onClose }: { onClose?: () => void }) => { native.closeAccount = onClose; return null; },
 }));
@@ -90,6 +102,9 @@ vi.mock('@cindy/auth-client', async (importOriginal) => {
       selectAccount = native.selectAccount;
       requestBindingCode = native.requestBinding;
       requestSsoVerificationCode = native.requestVerification;
+      logout = async () => {};
+      logoutAccount = async () => {};
+      confirmAccountDeletion = native.confirmDeletion;
     },
   };
 });
@@ -152,6 +167,8 @@ import { AuthApiError, accountVaultKey } from '@cindy/auth-client';
 import { ApiError } from '@/api/client';
 import { MOBILE_ACCOUNT_VAULT_KEY } from '../mobileAccountVault';
 import { AuthProvider, useAuth } from '../AuthContext';
+import { botGroupComposerDraftId } from '@/session/botGroupComposerDraft';
+import { flushComposerDraftWrites, saveComposerDraft, __testing as composerDraftTesting } from '@/session/composerDraftStore';
 import AddAccountScreen from '../../../app/add-account';
 import { redirectSystemPath } from '../../../app/+native-intent';
 
@@ -225,7 +242,7 @@ describe('browser auth session lifecycle (real AuthProvider, mocked native/netwo
     native.providers.mockReset().mockResolvedValue({ social: ['wechat'], emailCode: true, smsCode: false });
     native.initialUrl.mockReset().mockResolvedValue(null);
     native.requestCode.mockReset().mockResolvedValue(undefined);
-    native.storage.clear(); native.chatFiles.clear();
+    native.storage.clear(); native.chatFiles.clear(); native.asyncStorage.clear();
     native.removeChatFile.mockReset().mockImplementation(async (key: string) => { native.chatFiles.delete(key); });
     native.writeSecure.mockReset().mockImplementation(async (key: string, value: string) => { native.storage.set(key, value); });
     native.logoutCleanup.mockReset();
@@ -274,6 +291,56 @@ describe('browser auth session lifecycle (real AuthProvider, mocked native/netwo
       user: { id: profileId, name: profileId, membershipKind: 'personal' },
     }));
   }
+
+  // Unit regression (review of #13286): ending one account's session cleared every saved account's
+  // group drafts. Two saved accounts, real AuthProvider entries: expiry keeps the other account's draft;
+  // signing out of every account clears both.
+  describe('group composer drafts of two saved accounts', () => {
+    const otherKey = accountVaultKey('cn', 'other');
+    const draftKey = (accountKey: string) => composerDraftTesting.storageKeyForSession(
+      botGroupComposerDraftId({ accountKey, deviceId: 'mac', groupId: 'g1' })!);
+    const siblingKey = accountVaultKey('cn', 'sibling');
+    async function signInWithTwoSavedAccounts(sibling = false) {
+      seedSession(membership.id);
+      const vault = JSON.parse(native.storage.get(MOBILE_ACCOUNT_VAULT_KEY)!);
+      vault.resources[otherKey] = { realm: 'cn', lastUsedAt: 0, refreshToken: 'other-refresh',
+        metadata: { ...membership, id: 'other', membershipId: 'other', passportId: 'other-passport' } };
+      // Another membership under the signed-in passport.
+      if (sibling) vault.resources[siblingKey] = { realm: 'cn', lastUsedAt: 0, refreshToken: 'sibling-refresh',
+        metadata: { ...membership, id: 'sibling', membershipId: 'sibling' } };
+      native.storage.set(MOBILE_ACCOUNT_VAULT_KEY, JSON.stringify(vault));
+      native.refresh.mockResolvedValue({ membership, accessToken: 'fixture-access', refreshToken: 'rotated' });
+      await restartProvider();
+      expect(auth.isAuthenticated && auth.user?.id === membership.id).toBe(true);
+      for (const accountKey of [accountVaultKey('cn', membership.id), otherKey, ...(sibling ? [siblingKey] : [])]) {
+        saveComposerDraft(botGroupComposerDraftId({ accountKey, deviceId: 'mac', groupId: 'g1' })!, `draft of ${accountKey}`);
+      }
+      await flushComposerDraftWrites();
+    }
+
+    it('keeps the other account\'s draft when the current session expires', async () => {
+      await signInWithTwoSavedAccounts();
+      await act(async () => { await auth.terminateSession('SESSION_EXPIRED'); });
+      expect(native.asyncStorage.has(draftKey(accountVaultKey('cn', membership.id)))).toBe(false);
+      expect(native.asyncStorage.get(draftKey(otherKey))).toBe(`draft of ${otherKey}`);
+    });
+
+    it('clears the drafts of every membership of a deleted account and keeps another account\'s', async () => {
+      await signInWithTwoSavedAccounts(true);
+      native.confirmDeletion.mockResolvedValue({ status: 'scheduled' });
+      await act(async () => { await auth.confirmAccountDeletion({ challengeId: 'c', receiptToken: 'r', code: '123456' }); });
+      expect(native.asyncStorage.has(draftKey(accountVaultKey('cn', membership.id)))).toBe(false);
+      expect(native.asyncStorage.has(draftKey(siblingKey))).toBe(false);
+      expect(native.asyncStorage.get(draftKey(otherKey))).toBe(`draft of ${otherKey}`);
+    });
+
+    it('clears every account\'s draft when signing out of all accounts', async () => {
+      await signInWithTwoSavedAccounts();
+      await act(async () => { await auth.logout(); });
+      expect(native.asyncStorage.has(draftKey(accountVaultKey('cn', membership.id)))).toBe(false);
+      expect(native.asyncStorage.has(draftKey(otherKey))).toBe(false);
+    });
+  });
 
   it('restores the cached owner on unlock even while refresh is offline', async () => {
     seedSession(membership.id);

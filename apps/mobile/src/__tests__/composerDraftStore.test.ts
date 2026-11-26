@@ -304,6 +304,46 @@ describe('composerDraftStore', () => {
     expect(readComposerDraftSync('s1')).toBe('task draft');
   });
 
+  // Unit regression (review of #13286): a disk read already waiting when the prefix clear ran used to
+  // put the cleared draft back into memory, so signing in again in the same run showed it.
+  it('does not let a read that started before a prefix clear bring the draft back', async () => {
+    const asyncStorage = (await import('@react-native-async-storage/async-storage')).default;
+    const { __testing, clearComposerDraftsWithPrefix, readComposerDraft, readComposerDraftSync } = await import('@/session/composerDraftStore');
+    const id = 'bot-group:a:mac:g1:';
+    store.set(__testing.storageKeyForSession(id), 'before sign-out');
+    let release!: () => void;
+    vi.mocked(asyncStorage.getItem).mockImplementationOnce((key: string) => new Promise((resolve) => {
+      release = () => resolve(store.get(key) ?? null);
+    }));
+    const reading = readComposerDraft(id);
+    await flushMicrotasks();
+    const value = store.get(__testing.storageKeyForSession(id));
+    await clearComposerDraftsWithPrefix('bot-group:');
+    store.set(__testing.storageKeyForSession(id), value!);
+    release();
+    expect(await reading).toBeNull();
+    expect(readComposerDraftSync(id)).toBeNull();
+  });
+
+  // Unit regression (review of #13286): ending one account's session must keep another saved
+  // account's group draft; the key is realm-qualified, so the same member id in two realms differs.
+  it('clears one account\'s group drafts and keeps the other account\'s, across realms', async () => {
+    const { accountVaultKey } = await import('@cindy/auth-client');
+    const { botGroupComposerDraftId, clearBotGroupComposerDraftsForAccounts } = await import('@/session/botGroupComposerDraft');
+    const { __testing, flushComposerDraftWrites, readComposerDraftSync, saveComposerDraft } = await import('@/session/composerDraftStore');
+    const cn = botGroupComposerDraftId({ accountKey: accountVaultKey('cn', 'same'), deviceId: 'mac', groupId: 'g1' })!;
+    const global = botGroupComposerDraftId({ accountKey: accountVaultKey('global', 'same'), deviceId: 'mac', groupId: 'g1' })!;
+    expect(cn).not.toBe(global);
+    saveComposerDraft(cn, 'cn draft');
+    saveComposerDraft(global, 'global draft');
+    await flushComposerDraftWrites();
+    await clearBotGroupComposerDraftsForAccounts([accountVaultKey('cn', 'same')]);
+    expect(readComposerDraftSync(cn)).toBeNull();
+    expect(store.has(__testing.storageKeyForSession(cn))).toBe(false);
+    expect(readComposerDraftSync(global)).toBe('global draft');
+    expect(store.get(__testing.storageKeyForSession(global))).toBe('global draft');
+  });
+
   it('orders a new persistent write after an in-flight clear', async () => {
     const asyncStorage = (await import('@react-native-async-storage/async-storage')).default;
     const {

@@ -129,7 +129,7 @@ import { clearRemoteResourceCache } from '@/device-link/remoteResourceCache';
 import { isSelfHostedRelayBaseUrl, getSelfHostedRelayRouteGeneration } from '@/device-link/selfHostedRelayRouting';
 import { clearCachedHomeListSnapshot } from '@/session/mobileHomeListCache';
 import { clearHomeSessionPrCache } from '@/session/homeSessionPrStore';
-import { clearBotGroupComposerDrafts } from '@/session/botGroupComposerDraft';
+import { clearBotGroupComposerDrafts, clearBotGroupComposerDraftsForAccounts } from '@/session/botGroupComposerDraft';
 import { getMobileAuthOwner, isMobileAuthOwnerCurrent, invalidateMobileAuthOwnerForSwitch, setMobileAuthOwner } from '@/auth/authOwnerGeneration';
 import { updateCredentialAccessToken } from '@/remote-desktop/credentialIdentity';
 import { clearMobileChatHistoryStore } from '@/chat/chatHistoryStore';
@@ -3041,8 +3041,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     await clearRemoteResourceCache().catch(() => undefined);
     await clearCachedHomeListSnapshot().catch(() => undefined);
     await clearHomeSessionPrCache().catch(() => undefined);
-    // 群聊输入框草稿是这个账号写下的文字，退出时随账号数据一起清。
-    await clearBotGroupComposerDrafts().catch(() => undefined);
+    // 群聊输入框草稿是账号写下的文字。这里只结束当前这个账号（账号不可用、会话过期、注销），
+    // 其他已保存账号的草稿保留；主动退出全部账号由 logout 另行全部清掉。
+    await clearBotGroupComposerDraftsForAccounts([cleanupAccountKey]).catch(() => undefined);
     resetComposerPaletteCache();
     resetAgentCapabilitiesCache();
     await clearCanaryChannel().catch(() => undefined);
@@ -3136,6 +3137,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }),
     );
     await clearLocalSession({ persistedAuthAlreadyCleared: true });
+    await clearBotGroupComposerDrafts().catch(() => undefined);
     setSavedAccounts([]);
     if (!did) return;
     const revocations: Promise<unknown>[] = [];
@@ -3323,6 +3325,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       // 清理，不再调用普通 logout，以免覆盖或依赖已撤销的会话。receipt 已在
       // challenge 返回前持久化，不做可能阻断本地登出的冗余二次写入。
       await serializeRefreshTokenMutation(async () => {
+        // Deleting the passport removes every membership saved under it; their group drafts go with them.
+        const deletedAccountKeys = await readMobileAccountVault()
+          .then((vault) => Object.entries(vault.resources)
+            .filter(([, resource]) => resource.realm === deletedRealm && resource.metadata.passportId === deletedPassportId)
+            .map(([key]) => key))
+          .catch(() => [] as string[]);
         const deletedOwnerIsCurrent =
           activeAuthRealmRef.current === deletedRealm &&
           userRef.current?.passportId === deletedPassportId;
@@ -3335,10 +3343,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           } finally {
             await deleteSecureItem(AUTH_SESSION_KEY).catch(() => undefined);
             await clearLocalSession({ persistedAuthAlreadyCleared: true });
+            await clearBotGroupComposerDraftsForAccounts(deletedAccountKeys).catch(() => undefined);
           }
           return;
         }
         await removeMobilePassport(deletedRealm, deletedPassportId);
+        await clearBotGroupComposerDraftsForAccounts(deletedAccountKeys).catch(() => undefined);
       });
       refreshSavedAccountsSnapshotBestEffort();
       return status;

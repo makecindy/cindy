@@ -59,7 +59,7 @@ import { canBrowsePhotoLibraryDirectly } from './photoLibraryPolicy';
 import type { RemoteSerializedAttachment } from './types';
 import { useBotGroupComposerAttachments } from './useBotGroupComposerAttachments';
 import { flushComposerDraftWrites, readComposerDraft, readComposerDraftSync, saveComposerDraft } from './composerDraftStore';
-import { botGroupComposerDraftGeneration } from './botGroupComposerDraft';
+import { botGroupComposerDraftGeneration, botGroupComposerDraftVersion, markBotGroupComposerDraftChanged } from './botGroupComposerDraft';
 import type { UseMobileLocalAttachmentsOptions } from './useMobileLocalAttachments';
 
 const CONTROL_SIZE = 34;
@@ -135,13 +135,28 @@ export function BotGroupComposer({
     input.focus();
   }, [focusRequest]);
   const textRef = useRef(text); textRef.current = text;
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; };
+  }, []);
   // The draft mirrors the input: sending clears it, a failed send puts it back.
-  const persistDraft = (value: string) => { if (draftId) saveComposerDraft(draftId, value); };
-  // A send that ends after the chat was reopened must not overwrite what was typed there since,
-  // and one that ends after signing out must not bring the cleared text back.
-  const putBackDraft = (value: string, generation: number) => {
-    if (!draftId || generation !== botGroupComposerDraftGeneration() || readComposerDraftSync(draftId)) return;
+  const persistDraft = (value: string) => {
+    if (!draftId) return;
     saveComposerDraft(draftId, value);
+    markBotGroupComposerDraftChanged(draftId);
+  };
+  // A send's text goes back only while that send still owns the draft: not after signing out, and, once its
+  // chat was left, not after anything was typed, cleared or sent there since. While the chat is open the
+  // input and the draft come back together.
+  const draftOwnerOf = () => ({
+    generation: draftId ? botGroupComposerDraftGeneration(draftId) : '',
+    version: draftId ? botGroupComposerDraftVersion(draftId) : 0,
+  });
+  const putBackDraft = (value: string, owner: ReturnType<typeof draftOwnerOf>) => {
+    if (!draftId || owner.generation !== botGroupComposerDraftGeneration(draftId)) return;
+    if (!mountedRef.current && owner.version !== botGroupComposerDraftVersion(draftId)) return;
+    persistDraft(value);
   };
   const draftEditedRef = useRef(false);
   useEffect(() => {
@@ -287,14 +302,18 @@ export function BotGroupComposer({
     // Clear at once like any chat; a failed send puts the draft back if nothing new was typed.
     setText('');
     persistDraft('');
-    const draftGeneration = botGroupComposerDraftGeneration();
+    const draftOwner = draftOwnerOf();
     setCaret(0);
     setTracked([]);
     const restoreDraft = () => {
+      if (!mountedRef.current) {
+        putBackDraft(draft, draftOwner);
+        return;
+      }
       if (textRef.current) return;
       setText(draft);
       setTracked(draftTracked);
-      putBackDraft(draft, draftGeneration);
+      putBackDraft(draft, draftOwner);
       // The tag comes back only with its own draft, never onto newly typed text.
     };
     let release: (() => void) | null = null;
@@ -308,7 +327,7 @@ export function BotGroupComposer({
       setWaitingUploads(false);
       // Nothing is sent once the chat is left; the words wait as this chat's draft.
       if (discarded) {
-        if (!textRef.current) putBackDraft(draft, draftGeneration);
+        if (!mountedRef.current || !textRef.current) putBackDraft(draft, draftOwner);
         return;
       }
       const attachments = attachmentsSupported ? [...tray.attachmentsRef.current] : [];

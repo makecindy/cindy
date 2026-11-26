@@ -8,7 +8,9 @@ import { shareSelectionStore } from '@/session/shareSelectionStore';
 import { i18n, SUPPORTED_LOCALES } from '@/i18n';
 import { resolveBotGroupMentions } from '@cindy/maker-shared/botGroupMentions';
 import { ProcessDisclosureViewport } from '@/session/useProcessDisclosureViewport';
-import { botGroupComposerDraftId, clearBotGroupComposerDrafts } from '@/session/botGroupComposerDraft';
+import { botGroupComposerDraftId, clearBotGroupComposerDrafts, clearBotGroupComposerDraftsForAccounts } from '@/session/botGroupComposerDraft';
+import { setMobileAuthOwner } from '@/auth/authOwnerGeneration';
+import { accountVaultKey, type AuthRegion } from '@cindy/auth-client';
 import { __testing as composerDraftTesting, flushComposerDraftWrites } from '@/session/composerDraftStore';
 
 const testThemeContext = createContext('light');
@@ -66,7 +68,7 @@ const h = vi.hoisted(() => ({
   keyboardAvoidingView: null as any,
   spacer: null as any, platform: { OS: 'ios' }, insets: { top: 59, bottom: 34, left: 0, right: 0 },
   headerBlur: [] as number[], headerFade: [] as (number | undefined)[], screenOptions: [] as any[],
-  userId: 'owner', storage: new Map<string, string>(), storageRead: Promise.resolve(),
+  userId: 'owner', accountGeneration: 1, storage: new Map<string, string>(), storageRead: Promise.resolve(),
 }));
 
 // Keep production message components; adapt native surfaces for jsdom.
@@ -204,7 +206,7 @@ vi.mock('@react-native-async-storage/async-storage', () => ({ default: {
   multiRemove: async (keys: readonly string[]) => { for (const key of keys) h.storage.delete(key); },
 } }));
 vi.mock('@/auth/AuthContext', () => ({ useAuth: () => ({
-  user: { id: h.userId }, accountGeneration: 1, getAccessToken: async () => 'token', apiFetch: async () => ({}),
+  user: { id: h.userId }, accountGeneration: h.accountGeneration, getAccessToken: async () => 'token', apiFetch: async () => ({}),
 }) }));
 vi.mock('@/utils/backGuard', () => ({ goBackGuarded: h.leave }));
 vi.mock('@/utils/useTaskListBack', () => ({ useTaskListBack: () => h.leave }));
@@ -511,7 +513,8 @@ beforeEach(async () => {
     removePendingUpload: vi.fn(), release: vi.fn(), wait: vi.fn(async () => ({ failedCount: 0 })),
   };
   h.confirm.mockResolvedValue(true);
-  h.userId = 'owner'; h.storageRead = Promise.resolve();
+  h.userId = 'owner'; h.accountGeneration = 1; h.storageRead = Promise.resolve();
+  setMobileAuthOwner('owner', 'global');
   await clearBotGroupComposerDrafts();
   h.storage.clear();
   node = document.createElement('div');
@@ -1599,6 +1602,12 @@ describe('group composer', () => {
     });
   }
 
+  async function signIn(id: string, realm: AuthRegion = 'global') {
+    h.userId = id;
+    h.accountGeneration += 1;
+    await act(async () => setMobileAuthOwner(id, realm));
+  }
+
   // Unit regression: the group composer kept its text only in component state, so leaving the group lost
   // it. Drive the real screen: leave and return, another group, a topic, another account, a failed send.
   it('keeps the text draft per account, group and topic until it is sent', async () => {
@@ -1620,10 +1629,14 @@ describe('group composer', () => {
     await act(async () => h.row.onFocus());
     expect(byId('botGroup.thread.alsoSend')).not.toBeNull();
     expect(h.row.value).toBe('');
-    h.userId = 'someone-else';
+    await signIn('someone-else');
     await open();
     expect(h.row.value).toBe('');
-    h.userId = 'owner';
+    // Same member id in another auth realm is another account.
+    await signIn('owner', 'cn');
+    await open();
+    expect(h.row.value).toBe('');
+    await signIn('owner');
     await open();
     expect(h.row.value).toBe('还没写完');
     h.chat.act.mockRejectedValueOnce(new Error('[NOT_CONNECTED] offline'));
@@ -1656,6 +1669,87 @@ describe('group composer', () => {
     expect(h.row.value).toBe('第二句');
   });
 
+  // Unit regression (review of #13286): send A, leave, reopen and send B. A failing late wrote A back over
+  // B, in any order of the two outcomes, so reopening showed A. Only the latest send owns the draft.
+  it.each([
+    ['A fails, then B fails', 'open', '第二次'],
+    ['A fails, then B fails', 'left', '第二次'],
+    ['B fails, then A fails', 'open', '第二次'],
+    ['B fails, then A fails', 'left', '第二次'],
+    ['B is sent, then A fails', 'open', ''],
+    ['B is sent, then A fails', 'left', ''],
+  ] as const)('keeps only the later send\'s text when %s (chat %s)', async (order, state, expected) => {
+    h.chat.server = true;
+    const data = group({ openPlan: null });
+    const outcomes: Array<{ resolve: (value: unknown) => void; reject: (error: Error) => void }> = [];
+    h.chat.act.mockImplementation(() => new Promise((resolve, reject) => { outcomes.push({ resolve, reject }); }));
+    const leaveAndReturn = async () => {
+      await render(data, 'ready', undefined, '', 'g2');
+      await render(data, 'ready', undefined, '');
+    };
+    const offline = () => new Error('[NOT_CONNECTED] offline');
+    await render(data, 'ready', undefined, '');
+    await type('第一次');
+    await click('botGroup.composer.send');
+    await leaveAndReturn();
+    await type('第二次');
+    await click('botGroup.composer.send');
+    if (state === 'left') await render(data, 'ready', undefined, '', 'g2');
+    const [a, b] = outcomes;
+    if (order === 'A fails, then B fails') {
+      await act(async () => a!.reject(offline()));
+      await act(async () => b!.reject(offline()));
+    } else if (order === 'B fails, then A fails') {
+      await act(async () => b!.reject(offline()));
+      await act(async () => a!.reject(offline()));
+    } else {
+      await act(async () => b!.resolve({ effects: [] }));
+      await act(async () => a!.reject(offline()));
+    }
+    if (state === 'open') expect(h.row.value).toBe(expected);
+    await leaveAndReturn();
+    expect(h.row.value).toBe(expected);
+  });
+
+  // Unit regression (self-review of #13286): ending another account's session must not cancel this
+  // account's put-back. A sends, switches to B, B's session ends, A's send fails; back on A the text is there.
+  it('puts a late failed send back after another account\'s session ended', async () => {
+    h.chat.server = true;
+    const data = group({ openPlan: null });
+    let fail!: (error: Error) => void;
+    h.chat.act.mockImplementationOnce(() => new Promise((_resolve, reject) => { fail = reject; }));
+    await render(data, 'ready', undefined, '');
+    await type('发出去的');
+    await click('botGroup.composer.send');
+    await signIn('b');
+    await render(data, 'ready', undefined, '');
+    await act(async () => { await clearBotGroupComposerDraftsForAccounts([accountVaultKey('global', 'b')]); });
+    await act(async () => { fail(new Error('[NOT_CONNECTED] offline')); });
+    await signIn('owner');
+    await render(data, 'ready', undefined, '');
+    expect(h.row.value).toBe('发出去的');
+  });
+
+  // Unit regression (review of #13286): clearing the reopened input on purpose must win over an
+  // earlier send that fails afterwards.
+  it('does not put a late failed send back over an input cleared after reopening', async () => {
+    h.chat.server = true;
+    const data = group({ openPlan: null });
+    let fail!: (error: Error) => void;
+    h.chat.act.mockImplementationOnce(() => new Promise((_resolve, reject) => { fail = reject; }));
+    await render(data, 'ready', undefined, '');
+    await type('发出去的');
+    await click('botGroup.composer.send');
+    await render(data, 'ready', undefined, '', 'g2');
+    await render(data, 'ready', undefined, '');
+    await type('又写了点');
+    await act(async () => h.row.onChangeText(''));
+    await act(async () => { fail(new Error('[NOT_CONNECTED] offline')); });
+    await render(data, 'ready', undefined, '', 'g2');
+    await render(data, 'ready', undefined, '');
+    expect(h.row.value).toBe('');
+  });
+
   // Unit regression: signing out clears group drafts; a send still in flight that fails afterwards
   // must not write the signed-out account's text back to disk.
   it('does not bring a draft back when its send fails after signing out', async () => {
@@ -1679,7 +1773,7 @@ describe('group composer', () => {
   // and typing before the read finishes must win.
   it('restores a stored draft after an app restart unless the user already typed', async () => {
     const stored = (groupId: string) => h.storage.set(composerDraftTesting.storageKeyForSession(
-      botGroupComposerDraftId({ accountId: 'owner', deviceId: 'mac', groupId })!), '重启前的草稿');
+      botGroupComposerDraftId({ accountKey: accountVaultKey('global', 'owner'), deviceId: 'mac', groupId })!), '重启前的草稿');
     stored('g7');
     await render(group({ openPlan: null }), 'ready', undefined, 'mac', 'g7');
     await act(async () => {});

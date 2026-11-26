@@ -11,6 +11,9 @@ const pendingPersistTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const pendingDocumentPersistTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const pendingStorageOperations = new Map<string, Promise<void>>();
 const documentDrafts = new Map<string, ComposerDocument>();
+/** Prefix clears by epoch, so a disk read that started before one cannot bring its id back. */
+const prefixClearEpochs = new Map<string, number>();
+let prefixClearEpoch = 0;
 
 export function saveComposerDraft(sessionId: string, text: string | null | undefined): void {
   const normalizedSessionId = normalizeSessionId(sessionId);
@@ -60,10 +63,11 @@ export async function readComposerDocumentDraft(sessionId: string): Promise<Comp
   const memory = documentDrafts.get(normalizedSessionId);
   if (memory) return memory;
   if (clearedDocumentDrafts.has(normalizedSessionId)) return null;
+  const epoch = prefixClearEpoch;
   const stored = await AsyncStorage.getItem(documentStorageKeyForSession(normalizedSessionId)).catch(() => null);
   const freshMemory = documentDrafts.get(normalizedSessionId);
   if (freshMemory) return freshMemory;
-  if (clearedDocumentDrafts.has(normalizedSessionId)) return null;
+  if (clearedDocumentDrafts.has(normalizedSessionId) || clearedByPrefixSince(normalizedSessionId, epoch)) return null;
   if (!stored) return null;
   try {
     const parsed = parseStoredComposerDocument(JSON.parse(stored));
@@ -90,10 +94,11 @@ export async function readComposerDraft(sessionId: string): Promise<string | nul
   if (memoryDraft !== undefined) return memoryDraft;
   if (clearedDrafts.has(normalizedSessionId)) return null;
 
+  const epoch = prefixClearEpoch;
   const storedDraft = await AsyncStorage.getItem(storageKeyForSession(normalizedSessionId)).catch(() => null);
   const freshMemoryDraft = drafts.get(normalizedSessionId);
   if (freshMemoryDraft !== undefined) return freshMemoryDraft;
-  if (clearedDrafts.has(normalizedSessionId)) return null;
+  if (clearedDrafts.has(normalizedSessionId) || clearedByPrefixSince(normalizedSessionId, epoch)) return null;
   if (!storedDraft) return null;
   drafts.set(normalizedSessionId, storedDraft);
   return storedDraft;
@@ -139,6 +144,8 @@ export async function clearComposerDrafts(): Promise<void> {
 /** Clears every draft whose id starts with `idPrefix`, in memory and on disk; other drafts stay. */
 export async function clearComposerDraftsWithPrefix(idPrefix: string): Promise<void> {
   if (!idPrefix) return;
+  prefixClearEpoch += 1;
+  prefixClearEpochs.set(idPrefix, prefixClearEpoch);
   const ids = new Set([...drafts.keys(), ...documentDrafts.keys(), ...pendingPersistTimers.keys(), ...pendingDocumentPersistTimers.keys()]);
   for (const id of ids) {
     if (!id.startsWith(idPrefix)) continue;
@@ -248,6 +255,14 @@ export async function reconcileCommittedComposerDraft(
       guard();
     }
   }, true);
+}
+
+function clearedByPrefixSince(normalizedSessionId: string, epoch: number): boolean {
+  if (epoch === prefixClearEpoch) return false;
+  for (const [prefix, clearedAt] of prefixClearEpochs) {
+    if (clearedAt > epoch && normalizedSessionId.startsWith(prefix)) return true;
+  }
+  return false;
 }
 
 function normalizeSessionId(sessionId: string): string {
