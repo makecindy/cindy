@@ -435,13 +435,31 @@ export type SessionGracefulStopResult =
 
 const MAX_STALL_DIAGNOSTIC_TOOLS = 5;
 const SAFE_TOOL_LABEL_RE = /^[A-Za-z0-9_.:-]{1,64}$/;
+/** ACP 规范定义的固定 ToolKind 白名单；ACP 的 toolName 来自展示标题，不能当工具标识符放行。 */
+const ACP_TOOL_KIND_ALLOWLIST: ReadonlySet<string> = new Set([
+  'read',
+  'edit',
+  'delete',
+  'move',
+  'search',
+  'execute',
+  'think',
+  'fetch',
+  'switch_mode',
+  'other',
+]);
 
-/** 仅保留短标识符或固定 ACP kind，避免 ACP 命令摘要/路径进入超时日志与错误详情。 */
-function safeActiveToolLabel(data: Record<string, unknown>): string | null {
+/**
+ * 仅保留受控工具标识，供超时告警日志与错误详情使用：
+ * ACP 会话只认固定 ToolKind 白名单，避免标题里的短文件名（如 payroll.csv / .env）或命令进入诊断。
+ */
+function safeActiveToolLabel(agentKind: EngineKind, data: Record<string, unknown>): string | null {
+  if (agentKind === 'acp' || typeof data.acpKind === 'string') {
+    const acpKind = typeof data.acpKind === 'string' ? data.acpKind.trim().toLowerCase() : '';
+    return ACP_TOOL_KIND_ALLOWLIST.has(acpKind) ? acpKind : null;
+  }
   const toolName = typeof data.toolName === 'string' ? data.toolName.trim() : '';
   if (toolName && SAFE_TOOL_LABEL_RE.test(toolName)) return toolName;
-  const acpKind = typeof data.acpKind === 'string' ? data.acpKind.trim() : '';
-  if (acpKind && SAFE_TOOL_LABEL_RE.test(acpKind)) return acpKind;
   return null;
 }
 
@@ -2819,7 +2837,7 @@ export class Session {
       }
       if (toolUseId) {
         control.activeToolIds.add(toolUseId);
-        const label = safeActiveToolLabel(data);
+        const label = safeActiveToolLabel(this.agentKind, data);
         if (label) control.activeToolLabels.set(toolUseId, label);
         else control.activeToolLabels.delete(toolUseId);
       } else {

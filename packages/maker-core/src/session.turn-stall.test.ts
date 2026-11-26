@@ -115,11 +115,16 @@ function createStubHandle(opts?: StubOptions) {
 
 function createSession(
   stub: ReturnType<typeof createStubHandle>,
-  opts?: { turnStallMs?: number; errorSink?: LoggedError[]; diagnostics?: LoggedError[] },
+  opts?: {
+    agentKind?: 'claude-code' | 'codex' | 'pi' | 'acp';
+    turnStallMs?: number;
+    errorSink?: LoggedError[];
+    diagnostics?: LoggedError[];
+  },
 ) {
   return new Session({
     id: 'session-1',
-    agentKind: 'claude-code',
+    agentKind: opts?.agentKind ?? 'claude-code',
     workDir: '/repo',
     handle: stub.handle,
     capabilities: {} as never,
@@ -948,31 +953,33 @@ describe('Session turn stall watchdog', () => {
     }
   });
 
-  it('reports pending unfinished tool calls in stall timeout diagnostics without leaking command text', async () => {
+  it('reports pending unfinished tool calls in stall timeout diagnostics without leaking ACP titles or filenames', async () => {
     vi.useFakeTimers();
     try {
-      const diagnostics: LoggedError[] = [];
-      const stub = createStubHandle();
-      const session = createSession(stub, { diagnostics });
-      const seen: AgentEvent[] = [];
-      session.onEvent((ev) => seen.push(ev));
+      // 1) ACP session: toolName is a human display title (may be a short filename like payroll.csv or .env),
+      // so only allowlisted acpKind values may appear as labels.
+      const acpDiagnostics: LoggedError[] = [];
+      const acpStub = createStubHandle();
+      const acpSession = createSession(acpStub, { agentKind: 'acp', diagnostics: acpDiagnostics });
+      const acpSeen: AgentEvent[] = [];
+      acpSession.onEvent((ev) => acpSeen.push(ev));
 
-      await session.send('diagnose');
+      await acpSession.send('diagnose');
       // Display-only snapshot and settled tools must not be reported as stuck.
-      stub.pushEvent({
+      acpStub.pushEvent({
         type: 'tool_use',
         data: { toolUseId: 'plan:1', toolName: 'update_plan', runtimeActivity: 'snapshot', input: {} },
       } as AgentEvent);
-      stub.pushEvent({
+      acpStub.pushEvent({
         type: 'tool_use',
-        data: { toolUseId: 'call_done', toolName: 'Read', input: {} },
+        data: { toolUseId: 'call_done', toolName: 'Read', acpKind: 'read', input: {} },
       } as AgentEvent);
-      stub.pushEvent({
+      acpStub.pushEvent({
         type: 'tool_result_full',
         data: { toolUseId: 'call_done', fullText: 'ok', isError: false },
       } as AgentEvent);
-      // Unfinished ACP execute call whose toolName holds raw shell command text.
-      stub.pushEvent({
+      // Unfinished ACP calls: raw command, short private filenames, and non-allowlisted acpKind.
+      acpStub.pushEvent({
         type: 'tool_use',
         data: {
           toolUseId: 'call_hung_fifo',
@@ -981,34 +988,78 @@ describe('Session turn stall watchdog', () => {
           input: {},
         },
       } as AgentEvent);
-      // Unfinished standard identifier tool call.
-      stub.pushEvent({
+      acpStub.pushEvent({
         type: 'tool_use',
-        data: { toolUseId: 'call_bash', toolName: 'Bash', input: {} },
+        data: { toolUseId: 'call_read_csv', toolName: 'payroll.csv', acpKind: 'read', input: {} },
+      } as AgentEvent);
+      acpStub.pushEvent({
+        type: 'tool_use',
+        data: { toolUseId: 'call_env_no_kind', toolName: '.env', input: {} },
+      } as AgentEvent);
+      acpStub.pushEvent({
+        type: 'tool_use',
+        data: { toolUseId: 'call_bad_kind', toolName: 'notes.txt', acpKind: 'custom-secret', input: {} },
       } as AgentEvent);
       await vi.advanceTimersByTimeAsync(0);
-
       await vi.advanceTimersByTimeAsync(STALL_MS + 1);
 
-      const terminal = seen.find((ev) => ev.type === 'error');
-      expect(terminal).toBeDefined();
-      const data = terminal!.data as {
+      const acpTerminal = acpSeen.find((ev) => ev.type === 'error');
+      expect(acpTerminal).toBeDefined();
+      const acpData = acpTerminal!.data as {
         reason?: string;
         message?: string;
         activeToolCount?: number;
         activeToolIds?: string[];
       };
-      expect(data.reason).toBe('turn_no_event_timeout');
-      expect(data.activeToolCount).toBe(2);
-      expect(data.activeToolIds).toEqual(['call_hung_fifo', 'call_bash']);
-      expect(data.message).toContain('2 unfinished tool calls still pending: execute/call_hung_fifo, Bash/call_bash');
-      expect(data.message).not.toContain('secret');
-      expect(data.message).not.toContain('/Users/alice');
+      expect(acpData.reason).toBe('turn_no_event_timeout');
+      expect(acpData.activeToolCount).toBe(4);
+      expect(acpData.activeToolIds).toEqual([
+        'call_hung_fifo',
+        'call_read_csv',
+        'call_env_no_kind',
+        'call_bad_kind',
+      ]);
+      expect(acpData.message).toContain(
+        '4 unfinished tool calls still pending: execute/call_hung_fifo, read/call_read_csv, call_env_no_kind, call_bad_kind',
+      );
+      for (const forbidden of ['secret', '/Users/alice', 'payroll.csv', '.env', 'notes.txt', 'custom-secret']) {
+        expect(acpData.message).not.toContain(forbidden);
+      }
 
-      const warn = diagnostics.find((d) => d.msg.includes('turn stall watchdog tripped'));
-      expect(warn?.meta).toMatchObject({
-        activeToolCount: 2,
-        activeTools: ['execute/call_hung_fifo', 'Bash/call_bash'],
+      const acpWarn = acpDiagnostics.find((d) => d.msg.includes('turn stall watchdog tripped'));
+      expect(acpWarn?.meta).toMatchObject({
+        activeToolCount: 4,
+        activeTools: ['execute/call_hung_fifo', 'read/call_read_csv', 'call_env_no_kind', 'call_bad_kind'],
+      });
+
+      // 2) Built-in session: toolName is a real registered tool identifier and is preserved.
+      const builtInDiagnostics: LoggedError[] = [];
+      const builtInStub = createStubHandle();
+      const builtInSession = createSession(builtInStub, { diagnostics: builtInDiagnostics });
+      const builtInSeen: AgentEvent[] = [];
+      builtInSession.onEvent((ev) => builtInSeen.push(ev));
+
+      await builtInSession.send('run command');
+      builtInStub.pushEvent({
+        type: 'tool_use',
+        data: { toolUseId: 'call_bash', toolName: 'Bash', input: {} },
+      } as AgentEvent);
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(STALL_MS + 1);
+
+      const builtInTerminal = builtInSeen.find((ev) => ev.type === 'error');
+      expect(builtInTerminal?.data).toMatchObject({
+        reason: 'turn_no_event_timeout',
+        activeToolCount: 1,
+        activeToolIds: ['call_bash'],
+      });
+      expect((builtInTerminal?.data as { message?: string }).message).toContain(
+        '1 unfinished tool call still pending: Bash/call_bash',
+      );
+      const builtInWarn = builtInDiagnostics.find((d) => d.msg.includes('turn stall watchdog tripped'));
+      expect(builtInWarn?.meta).toMatchObject({
+        activeToolCount: 1,
+        activeTools: ['Bash/call_bash'],
       });
     } finally {
       vi.useRealTimers();
