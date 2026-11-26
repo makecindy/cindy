@@ -1272,6 +1272,8 @@ type RemoteInputProjectionProbeState = {
 };
 
 type RemoteInputProjectionRequest = {
+  restartHost?: string;
+  epoch: number;
   deviceId: string;
   dataOwner: DataOwnerGeneration;
   clearGeneration: number;
@@ -5106,7 +5108,7 @@ function applyInputProjection(
   if (snapshot && previous && previous.host !== snapshot.host && opts.supersedeQueries !== false) {
     // A buffered push can come from either side of a restart. Only a fresh
     // read from the pinned device may install a different coordinator lifetime.
-    void requestInputProjection(projection.sessionId).catch(() => undefined);
+    void requestInputProjection(projection.sessionId, undefined, undefined, snapshot.host).catch(() => undefined);
     return;
   }
   const knownClearBoundary = remoteInputClearBoundaryBySession.get(projection.sessionId);
@@ -5472,6 +5474,7 @@ function requestInputProjection(
   sessionId: string,
   pinnedDeviceId?: string,
   hostRecovery?: { isCurrent: () => boolean },
+  restartHost?: string,
 ): Promise<InputProjectionRequestResult | undefined> {
   if (!sessionId) return Promise.resolve(undefined);
   const origin = pinnedDeviceId ?? getStickySessionDeviceId(sessionId);
@@ -5481,6 +5484,7 @@ function requestInputProjection(
       existing &&
       !existing.settled &&
       existing.deviceId === origin &&
+      (!restartHost || (existing.restartHost === restartHost && existing.epoch === _inputProjectionEpoch.get(sessionId))) &&
       isDataOwnerGenerationCurrent(existing.dataOwner) &&
       (rendererClearGenerationBySession.get(sessionId) ?? 0) === existing.clearGeneration
     ) {
@@ -5545,6 +5549,7 @@ function requestInputProjection(
   } catch (error) {
     const rejected = Promise.reject<InputProjectionRequestResult>(error);
     request = {
+      restartHost, epoch,
       deviceId: origin ?? '',
       dataOwner,
       clearGeneration,
@@ -5558,6 +5563,7 @@ function requestInputProjection(
     return rejected;
   }
   request = {
+    restartHost, epoch,
     deviceId: origin ?? '',
     dataOwner,
     clearGeneration,
@@ -11732,7 +11738,7 @@ function applyInputProjectionOperationResponse(
   const previous = sessions.get(sessionId)?.remoteQueueSnapshot;
   if (operation.origin && previous && projection.queueSnapshot) {
     if (previous.host !== projection.queueSnapshot.host) {
-      void requestInputProjection(sessionId, operation.origin).catch(() => undefined);
+      void requestInputProjection(sessionId, operation.origin, undefined, projection.queueSnapshot.host).catch(() => undefined);
       return false;
     }
     if (previous.sequence >= projection.queueSnapshot.sequence) return false;

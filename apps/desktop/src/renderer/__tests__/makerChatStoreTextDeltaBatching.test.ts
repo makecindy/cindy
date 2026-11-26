@@ -5322,6 +5322,32 @@ describe('makerChatStore text delta batching', () => {
     expect(messages[0]?.isPendingPersist).toBeUndefined();
   });
 
+  // Unit regression: restart notifications can arrive during the initial read.
+  it('refreshes the queue after a restart even with a pre-restart read in flight', async () => {
+    remoteProjectsStore.pinSessionOrigin('device-1', SESSION_ID);
+    const item = activeTurnRecoveryItem('queued', 'q');
+    const old = projection(SESSION_ID, { pendingQueue: [item], queueSnapshot: { host: 'old', sequence: 1 } });
+    const current = projection(SESSION_ID, { queueSnapshot: { host: 'new', sequence: 1 } });
+    const reads: Array<(value: AgentInputProjection) => void> = [];
+    deviceLinkInvoke.mockImplementation(async (_deviceId, channel) => {
+      if (channel === 'maker:input:get-projection') return new Promise<AgentInputProjection>(resolve => reads.push(resolve));
+      return [];
+    });
+    onInputProjection?.(old);
+    makerChatStore.ensureInitialMessages(SESSION_ID);
+    await flushPromises();
+    expect(reads).toHaveLength(1);
+    onInputProjection?.(current);
+    onInputProjection?.(current);
+    await flushPromises();
+    expect(reads).toHaveLength(2);
+    reads[1](current);
+    await flushPromises();
+    reads[0]({ ...old, queueSnapshot: { host: 'old', sequence: 2 } });
+    await flushPromises();
+    expect(makerChatStore.getSnapshot(SESSION_ID).pendingQueue).toEqual([]);
+  });
+
   // Unit regression: remove B captured A before a second device withdrew A.
   it('ignores an older remove response after a newer withdrawal push', async () => {
     remoteProjectsStore.pinSessionOrigin('device-1', SESSION_ID);
