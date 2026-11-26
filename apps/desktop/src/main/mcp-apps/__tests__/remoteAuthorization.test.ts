@@ -276,9 +276,23 @@ describe('MCP Apps over the existing remote bridge', () => {
       params: { protocolVersion: '2024-11-05', capabilities: {}, clientInfo: { name: 'test', version: '1' } },
     };
     const created = createAppServer.mock.calls.length;
-    const unbound = await fetch(f.base, { method: 'POST', headers: localHeaders, body: JSON.stringify(initialize) });
-    expect(unbound.status).toBe(401);
-    await unbound.text();
+    // #13302: distinguish a missing route from one that has no binding yet.
+    const warn = vi.spyOn(log, 'warn');
+    try {
+      for (const target of [f.base, url]) {
+        const unbound = await fetch(target, { method: 'POST', headers: localHeaders, body: JSON.stringify(initialize) });
+        expect(unbound.status).toBe(401);
+        expect(await unbound.text()).toBe('MCP App server requires a bound Session');
+        expect(warn.mock.calls).toEqual([['rejected MCP App request without a bound Session', {
+          reason: 'missing_session',
+          hasSessionQuery: false,
+          hasInstanceQuery: target === url,
+        }]]);
+        warn.mockClear();
+      }
+    } finally {
+      warn.mockRestore();
+    }
     await bridge!.withDiscoveryContext(context, async () => {
       const excluded = await fetch(url, { method: 'POST', headers: localHeaders, body: JSON.stringify(initialize) });
       expect(excluded.status).toBe(403);
