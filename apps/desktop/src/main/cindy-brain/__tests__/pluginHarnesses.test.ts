@@ -120,7 +120,7 @@ describe('plugin harness registry', () => {
   });
 
   // Host-level adaptive usage caching: protects plugin CLI/API workers across all surfaces
-  // (menubar, widget, composer chip, remote device-link) with 45m idle / 10m active / 5m reset
+  // (menubar, widget, composer chip, remote device-link) with 60m idle / 5m active / 5m reset
   // recheck, in-flight dedup, failure backoff, owner isolation, and immediate revocation eviction.
   it('caches and adaptively throttles plugin usage across idle, active, reset, force, and login transitions', async () => {
     let now = 1_000_000;
@@ -149,7 +149,7 @@ describe('plugin harness registry', () => {
     expect(await Promise.all([p1, p2])).toEqual([initial, initial]);
     expect(read).toHaveBeenCalledTimes(1);
 
-    // Idle reads within 45m (before resetAt) reuse cached snapshot.
+    // Idle reads within 60m (before resetAt) reuse cached snapshot.
     now += 10 * 60_000;
     expect(await registry.readUsage(key)).toEqual(initial);
     expect(read).toHaveBeenCalledTimes(1);
@@ -161,20 +161,20 @@ describe('plugin harness registry', () => {
     expect(await registry.readUsage(key)).toEqual(afterReset);
     expect(read).toHaveBeenCalledTimes(2);
 
-    // After crossing reset, idle reads stay cached for 45m.
-    now += 44 * 60_000;
+    // After crossing reset, idle reads stay cached for 60m.
+    now += 59 * 60_000;
     expect(await registry.readUsage(key)).toEqual(afterReset);
     expect(read).toHaveBeenCalledTimes(2);
 
-    // Real task activity switches to the 10m active tier (already >= 10m since last refresh).
+    // Real task activity switches to the 5m active tier (already >= 5m since last refresh).
     registry.recordActivity(key);
     const afterActivity1 = usage(70);
     read.mockResolvedValueOnce(afterActivity1);
     expect(await registry.readUsage(key)).toEqual(afterActivity1);
     expect(read).toHaveBeenCalledTimes(3);
 
-    // Further activity within 10m stays throttled until 10m elapses.
-    now += 9 * 60_000;
+    // Further activity within 5m stays throttled until 5m elapses.
+    now += 4 * 60_000;
     registry.recordActivity(key);
     expect(await registry.readUsage(key)).toEqual(afterActivity1);
     expect(read).toHaveBeenCalledTimes(3);
@@ -237,38 +237,38 @@ describe('plugin harness registry', () => {
     const key = 'dsh-plugin:dsh';
 
     expect(await registry.readUsage(key)).toEqual(good);
-    // Advance past 45m idle TTL -> worker failure keeps last good snapshot locally and backs off 10m.
-    now += 45 * 60_000;
+    // Advance past 60m idle TTL -> worker failure keeps last good snapshot locally and backs off 5m.
+    now += 60 * 60_000;
     expect(await registry.readUsage(key)).toEqual(good);
     expect(read).toHaveBeenCalledTimes(2);
 
-    // Inside 10m backoff: remote caller still learns worker failed without hitting worker again.
-    now += 9 * 60_000;
+    // Inside 5m backoff: remote caller still learns worker failed without hitting worker again.
+    now += 4 * 60_000;
     await expect(registry.readUsage(key, undefined, { reportWorkerFailure: true }))
       .rejects.toThrow('Plugin usage worker unavailable');
     expect(await registry.readUsage(key)).toEqual(good);
     expect(read).toHaveBeenCalledTimes(2);
 
-    // At +10m: retries once, fails -> doubles backoff to 20m.
+    // At +5m: retries once, fails -> doubles backoff to 10m.
     now += 60_000;
     expect(await registry.readUsage(key)).toEqual(good);
     expect(read).toHaveBeenCalledTimes(3);
-    now += 19 * 60_000;
+    now += 9 * 60_000;
     expect(await registry.readUsage(key)).toEqual(good);
     expect(read).toHaveBeenCalledTimes(3);
 
-    // At +20m: succeeds and clears backoff.
+    // At +10m: succeeds and clears backoff.
     now += 60_000;
     expect(await registry.readUsage(key)).toMatchObject({ balances: [{ amount: '11.00' }] });
     expect(read).toHaveBeenCalledTimes(4);
 
-    // Manual force failure 1m after a fresh success still retries as soon as 10m backoff expires
-    // (does not wait out the remaining 45m idle TTL from the earlier success).
+    // Manual force failure 1m after a fresh success still retries as soon as 5m backoff expires
+    // (does not wait out the remaining 60m idle TTL from the earlier success).
     now += 60_000;
     read.mockResolvedValueOnce(PLUGIN_USAGE_WORKER_FAILURE);
     expect(await registry.readUsage(key, undefined, { force: true })).toMatchObject({ balances: [{ amount: '11.00' }] });
     expect(read).toHaveBeenCalledTimes(5);
-    now += 9 * 60_000;
+    now += 4 * 60_000;
     expect(await registry.readUsage(key)).toMatchObject({ balances: [{ amount: '11.00' }] });
     expect(read).toHaveBeenCalledTimes(5);
     now += 60_000;

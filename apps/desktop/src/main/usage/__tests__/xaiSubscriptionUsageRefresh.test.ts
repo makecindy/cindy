@@ -264,7 +264,7 @@ describe('createXaiSubscriptionUsageReader', () => {
     expect(fetchSnapshot).toHaveBeenCalledOnce();
   });
 
-  it('uses 25m idle TTL (below 30m stale threshold), 5m active TTL, and single reset-boundary recheck by default', async () => {
+  it('uses 25m idle TTL (below 30m stale threshold), 3m active TTL, and single reset-boundary recheck by default', async () => {
     let now = 1_000_000;
     const resetSec = Math.floor((now + 10 * 60_000) / 1000);
     let cached: XaiSubscriptionUsageSnapshot | null = null;
@@ -304,8 +304,8 @@ describe('createXaiSubscriptionUsageReader', () => {
     await settle();
     expect(fetchSnapshot).toHaveBeenCalledTimes(3);
 
-    // Turn activity (default activity: true) switches to 5m active cadence.
-    now += 4 * 60_000;
+    // Turn activity (default activity: true) switches to 3m active cadence.
+    now += 2 * 60_000;
     reader.triggerRefresh();
     await settle();
     expect(fetchSnapshot).toHaveBeenCalledTimes(3);

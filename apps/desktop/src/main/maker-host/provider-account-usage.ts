@@ -12,7 +12,7 @@
  *   - **key 读取器注入**：同 provider-diagnostics 的 setDiagnosticsKeyReader 模式，模块
  *     不直接 import safeStorage（maker-host 不触电 Electron），host 注册期接通。
  *   - 查询型结果：失败不 throw，映射为 ProviderAccountUsageError（规则 13 例外条款）。
- *   - 缓存：按活跃度自适应内存缓存（活跃 5 分钟 / 空闲 30 分钟，命中已知重置边界且间隔 ≥15s 提前重查）；
+ *   - 缓存：按活跃度自适应内存缓存（活跃 2 分钟 / 空闲 30 分钟，命中已知重置边界且间隔 ≥15s 提前重查）；
  *     手动刷新受 15s 节流；账号切换（owner / generation 变化）整体失效。缓存键含 providerId + agent，
  *     换 runtime 配置不串数据。
  */

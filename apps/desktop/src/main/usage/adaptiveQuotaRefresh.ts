@@ -37,31 +37,31 @@ export const ADAPTIVE_QUOTA_TIERS = {
    * 空闲档严格小于 `XAI_USAGE_STALE_MS`（30 分钟），避免空闲缓存未到刷新点就被 UI 标成 stale。
    */
   xaiSubscription: {
-    activeThrottleMs: 5 * 60_000,
+    activeThrottleMs: 3 * 60_000,
     idleThrottleMs: 25 * 60_000,
-    resetMinIntervalMs: 5 * 60_000,
+    resetMinIntervalMs: 3 * 60_000,
     failureBackoffInitialMs: 5 * 60_000,
     failureBackoffMaxMs: 30 * 60_000,
   },
   /** 内置 Claude CLI (`get_usage` 子进程)。 */
   claudeCli: {
-    activeThrottleMs: 5 * 60_000,
+    activeThrottleMs: 3 * 60_000,
     idleThrottleMs: 30 * 60_000,
-    resetMinIntervalMs: 5 * 60_000,
+    resetMinIntervalMs: 3 * 60_000,
     failureBackoffInitialMs: 5 * 60_000,
     failureBackoffMaxMs: 30 * 60_000,
   },
   /** 插件提供的 ACP 引擎（如 Antigravity / DSH 等外部 CLI 封装）。 */
   pluginHarness: {
-    activeThrottleMs: 10 * 60_000,
-    idleThrottleMs: 45 * 60_000,
+    activeThrottleMs: 5 * 60_000,
+    idleThrottleMs: 60 * 60_000,
     resetMinIntervalMs: 5 * 60_000,
-    failureBackoffInitialMs: 10 * 60_000,
-    failureBackoffMaxMs: 45 * 60_000,
+    failureBackoffInitialMs: 5 * 60_000,
+    failureBackoffMaxMs: 60 * 60_000,
   },
   /** 官方第一方 API 余额/套餐查询（DeepSeek / Kimi / 智谱 / OpenCode Go）。 */
   officialProviderApi: {
-    activeThrottleMs: 5 * 60_000,
+    activeThrottleMs: 2 * 60_000,
     idleThrottleMs: 30 * 60_000,
     resetMinIntervalMs: 15_000,
     failureBackoffInitialMs: 5 * 60_000,

@@ -657,22 +657,22 @@ describe('readProviderAccountUsage', () => {
     expect(third).toMatchObject({ status: 'ready', stale: true, error: 'rate-limited' });
   });
 
-  it('serves the cached snapshot for 30m while idle and shortens to 5m after turn activity', async () => {
+  it('serves the cached snapshot for 30m while idle and shortens to 2m after turn activity', async () => {
     const fetchMock = vi.fn(async () => jsonRes(DEEPSEEK_BALANCE));
     setAccountUsageFetch(fetchMock as unknown as typeof fetch);
     await readProviderAccountUsage({ providerId: 'deepseek' });
     await readProviderAccountUsage({ providerId: 'deepseek' });
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    // Idle reads stay cached past 5m until 30m.
+    // Idle reads stay cached past 2m until 30m.
     nowMs += 6 * 60_000;
     await readProviderAccountUsage({ providerId: 'deepseek' });
     expect(fetchMock).toHaveBeenCalledTimes(1);
     nowMs += 24 * 60_000;
     await readProviderAccountUsage({ providerId: 'deepseek' });
     expect(fetchMock).toHaveBeenCalledTimes(2);
-    // Real turn activity switches to the 5m active cadence.
+    // Real turn activity switches to the 2m active cadence.
     recordProviderAccountActivity('deepseek');
-    nowMs += 4 * 60_000;
+    nowMs += 60_000;
     await readProviderAccountUsage({ providerId: 'deepseek' });
     expect(fetchMock).toHaveBeenCalledTimes(2);
     nowMs += 60_000;

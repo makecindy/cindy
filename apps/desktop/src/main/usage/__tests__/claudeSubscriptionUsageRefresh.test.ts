@@ -197,7 +197,7 @@ describe('createClaudeSubscriptionUsageReader', () => {
     expect(state.cached).toMatchObject({ accountFingerprint: 'acct-b' });
   });
 
-  it('默认策略:空闲轮询 30m 节流,真实活动/fresh 恢复走 5m,跨 resetsAt 提前重查一次不死循环', async () => {
+  it('默认策略:空闲轮询 30m 节流,真实活动/fresh 恢复走 3m,跨 resetsAt 提前重查一次不死循环', async () => {
     let now = 1_000_000;
     const resetSec = Math.floor((now + 10 * 60_000) / 1000);
     let cached: ClaudeSubscriptionUsageSnapshot | null = null;
@@ -226,7 +226,7 @@ describe('createClaudeSubscriptionUsageReader', () => {
     await flush();
     expect(deps.fetchSnapshot).toHaveBeenCalledTimes(1);
 
-    // 跨过 fiveHour.resetsAt (+10m, 距上次刷新 >= 5m) 触发一次重查。
+    // 跨过 fiveHour.resetsAt (+10m, 距上次刷新 >= 3m) 触发一次重查。
     now += 2 * 60_000;
     await reader.read();
     await flush();
@@ -238,13 +238,13 @@ describe('createClaudeSubscriptionUsageReader', () => {
     await flush();
     expect(deps.fetchSnapshot).toHaveBeenCalledTimes(2);
 
-    // 限额恢复 fresh 读取按活跃档 (5m) 放行,不被 30m 空闲缓存卡住。
+    // 限额恢复 fresh 读取按活跃档 (3m) 放行,不被 30m 空闲缓存卡住。
     await reader.read({ fresh: true });
     expect(deps.fetchSnapshot).toHaveBeenCalledTimes(3);
 
-    // markActivity (如 SDK rate_limit_event) 切回 5m 活跃档。
+    // markActivity (如 SDK rate_limit_event) 切回 3m 活跃档。
     reader.markActivity();
-    now += 4 * 60_000;
+    now += 2 * 60_000;
     await reader.read();
     await flush();
     expect(deps.fetchSnapshot).toHaveBeenCalledTimes(3);
