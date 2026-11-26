@@ -4631,6 +4631,15 @@
       "menu": {
         "disableProvider": "停此供方",
         "enableProvider": "启此供方",
+        "icon": "连接之徽",
+        "appearance": "名与徽",
+        "ownImage": "自择图",
+        "imageError": "请择 PNG、JPG 或 WebP 图，不逾 10 MB。",
+        "connectionIcon": {
+          "default": "如常",
+          "personal": "私用",
+          "work": "公用"
+        },
         "hideProvider": "隐于模型之选",
         "showProvider": "显于模型之选"
       },
@@ -15816,6 +15825,10 @@
       "diffUnchangedLines_one": "{{count}} 行未易",
       "diffUnchangedLines_other": "{{count}} 行未易",
       "diffPreviewLoading": "方备差异先览…"
+    },
+    "filePreview": {
+      "changed": "卷已易",
+      "refreshHint": "点之即重载"
     },
     "textLightbox": {
       "unreadable": "此卷不能读",

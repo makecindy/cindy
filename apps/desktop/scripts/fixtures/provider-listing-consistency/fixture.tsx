@@ -1,4 +1,4 @@
-import { BUNDLED_CATALOG, type ProviderView } from '@cindy/model-providers';
+import { BUNDLED_CATALOG, buildUserProvider, type ProviderView } from '@cindy/model-providers';
 import { ProvidersSection } from '../../../src/renderer/components/settings/ProvidersSection';
 import { ModelSelector } from '../../../src/renderer/components/new-chat/ModelSelector';
 import { mountPage, subscription, forbid, ctx } from '../../ui-page/harness';
@@ -27,6 +27,16 @@ if (ctx.case.startsWith('hidden-provider')) {
   local.push(provider('anthropic', 'account-d', { id: 'anthropic-work', name: 'Anthropic · Work', models: fable, suspended: true } as Partial<ProviderView>));
   catalogs.clear();
   catalogs.set('mini', { providers: [provider('xai')], loading: false, error: null });
+}
+if (ctx.case === 'connection-icons') {
+  local.splice(0, local.length, ...(['personal', 'work'] as const).map(logoKind => ({
+    ...buildUserProvider({
+      id: `glm-${logoKind}`, name: logoKind === 'personal' ? '智谱 · 个人版' : '智谱 · 企业版',
+      runtimes: { codex: { baseUrl: 'https://open.bigmodel.cn/api/paas/v4', models: [{ id: 'glm', name: 'GLM' }] } },
+    }),
+    connected: true, logoKind,
+  })));
+  catalogs.clear();
 }
 if (ctx.case === 'same-account-twice-here') local.push(provider('openai', 'account-a', { id: 'openai-old', name: 'OpenAI · old connection' }));
 // Providers that plugins offer (plugin engines): one still in the picker, one hidden, one turned off.
@@ -86,7 +96,7 @@ mountPage({
   render: () => <div className="flex h-screen gap-4 p-4">
     <div className="min-w-0 flex-1"><ProvidersSection /></div>
     <div data-picker className="flex w-[360px] items-end">
-      <ModelSelector modelId="gpt-6-astra" currentProviderId="openai" agentKind="codex" effort="high"
+      <ModelSelector modelId={ctx.case === 'connection-icons' ? 'glm' : 'gpt-6-astra'} currentProviderId={ctx.case === 'connection-icons' ? 'glm-personal' : 'openai'} agentKind="codex" effort="high"
         onModelChange={() => {}} onEffortChange={() => {}} useMorphPopover
         remoteAgent={{ devices: devices.map(({ deviceId, name }) => ({ deviceId, name })), selectedDeviceId: null }} />
     </div>

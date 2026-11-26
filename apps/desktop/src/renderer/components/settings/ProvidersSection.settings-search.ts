@@ -96,7 +96,8 @@ export const providersSettings = defineSettings({
     targetId: 'settings-panel-providers',
     titleKey: TAB_LABEL_KEY['providers'],
     sectionKey: 'settings.sections.providers',
-    keywordKeys: ['settings.providers.remote.modelsTitle'],
+    keywordKeys: ['settings.providers.remote.modelsTitle', 'settings.providers.menu.appearance',
+      'settings.providers.menu.icon', 'settings.providers.menu.ownImage', 'settings.providers.wizard.nameLabel'],
   },
   pluginProviders: {
     id: 'providers.pluginProviders',

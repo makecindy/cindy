@@ -2,7 +2,7 @@ import type { ProviderErrorCode } from '../../../shared/providerErrors';
 import { useRemoteProviderDisable } from '@/lib/remoteProviderDisable';
 import { Select } from '@/components/ui/select';
 import { duplicateSubscriptionProviders, listedSourceFolds } from '@cindy/model-providers';
-import { isProviderLogoKind } from '@cindy/model-providers/branding';
+import { isProviderConnectionIcon, isProviderLogoKind } from '@cindy/model-providers/branding';
 import { useSettingsSubpageBack } from './useSettingsEscape';
 import { useSettingsSearchNavigation } from './SettingsSearchNavigation';
 import { providersSettings } from './ProvidersSection.settings-search';
@@ -155,6 +155,7 @@ import { ProviderListEntry } from './ProviderListEntry';
 import { ProviderAccountHeader, ConnectedPill } from './ProviderAccountHeader';
 import { OAuthBrowserLink, OAuthDeviceCodeCard } from './OAuthDeviceCodeCard';
 import { ProviderImportDialog, ProviderImportBatchDialog, ProviderImportFileButton } from './ProviderImportDialog';
+import { ProviderAppearanceDialog } from './ProviderAppearanceDialog';
 import { SettingsTextInput } from './SettingsTextInput';
 import { buildUnionRows, UnifiedModelList } from './UnifiedModelList';
 import { AnthropicMark } from '@/components/icons/AnthropicMark';
@@ -538,10 +539,19 @@ function useProviderManagement(provider?: ProviderView) {
   const { t } = useTranslation();
   const { confirm } = useConfirmDialog();
   const confirmProviderChange = useProviderChangeConfirmation();
-  const { refetch } = useProviders();
+  const { refetch, ownerGeneration } = useProviders();
+  const { dataOwnerId } = getDataOwnerGeneration();
   const [busy, setBusy] = useState(false);
+  const [editing, setEditing] = useState<(ProviderOwnerScope & { providerId: string }) | null>(null);
+  const editor = editing && provider && editing.providerId === provider.id && editing.dataOwnerId === dataOwnerId && editing.ownerGeneration === ownerGeneration
+    ? <ProviderAppearanceDialog key={provider.id} provider={provider} scope={editing} onClose={() => setEditing(null)} />
+    : null;
   const rename = async () => {
     if (!provider || busy) return;
+    if (provider.source === 'user') {
+      if (ownerGeneration !== null) setEditing({ dataOwnerId, ownerGeneration, providerId: provider.id });
+      return;
+    }
     try {
       const scope = await window.electronAPI.maker.listProviders();
       let name = provider.name;
@@ -613,7 +623,7 @@ function useProviderManagement(provider?: ProviderView) {
       refetch();
     }
   };
-  return { busy, rename, removeBuiltin };
+  return { busy, rename, removeBuiltin, editor };
 }
 
 function ManagedProviderHeader({
@@ -821,7 +831,7 @@ function DetailHeader({
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <ProviderAccountHeader
-        icon={icon}
+        icon={provider && (isProviderConnectionIcon(provider.logoKind) || provider.customIcon) ? providerIcon(provider, 18) : icon}
         title={provider ? providerDisplayName(provider, t) : title}
         subtitle={provider ? (
           <ProviderRunLocationSubtitle
@@ -895,7 +905,7 @@ function DetailHeader({
                       disabled={management.busy}
                     >
                       <Pencil size={18} className="mr-2.5" />
-                      {t('settings.providers.pill.rename')}
+                      {t(provider.source === 'user' ? 'settings.providers.menu.appearance' : 'settings.providers.pill.rename')}
                     </DropdownMenuItem>
                   )}
                   {editAction && !provider?.auth.native && (
@@ -952,6 +962,7 @@ function DetailHeader({
             )}
         </>}
       />
+      {management.editor}
       <div
         data-testid="provider-detail-scroll"
         ref={detailScrollRef}
@@ -2516,6 +2527,7 @@ function ListRow({
           : 'hover:bg-[var(--settings-menu-bg-hover)]',
       )}
     >
+      {management.editor}
       {sortable && (
         <button data-setting-id={providersSettings.providers.id}
           type="button"

@@ -1115,6 +1115,11 @@ impl<C: Crypto> SecureConnection<C> {
     }
 
     /// 取走一条刚测得的路径往返：（路径号，微秒）。
+    /// 有没取走的路径测速结果（[`poll_probe_rtt`](Self::poll_probe_rtt)）：宿主据此决定要不要叫应用来读。
+    pub fn has_probe_rtt(&self) -> bool {
+        !self.paths.probe_rtts.is_empty()
+    }
+
     pub fn poll_probe_rtt(&mut self) -> Option<(u64, u64)> {
         self.paths.probe_rtts.pop_front()
     }

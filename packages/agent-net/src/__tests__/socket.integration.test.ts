@@ -564,7 +564,8 @@ it('leaves the driver thread mostly idle while it paces a transfer, instead of p
   await vi.waitFor(() => expect(received).toBeGreaterThanOrEqual(total), { timeout: 20_000, interval: 50 });
   const busy = hooks.eventLoopUtilization(before).utilization;
   // 2026-11-22 Linux container, Node 22: 0.47 before the fix, 0.11 after; Windows was already 0.1 (its timer is coarse, the core decided).
-  expect(busy).toBeLessThan(0.3);
+  // The loop also runs this test's line, a timer per datagram: on GitHub's macOS runners the fixed driver measured up to 0.31 (2026-11-23).
+  expect(busy).toBeLessThan(0.4);
 }, 30_000);
 /** 测试价值（Node 驱动收回交完的流）
  * - 生产入口与可观察结果：`@cindy/agent-net-core/node` 的连接（Desktop 的 Agent-Net 线程与 Node Host 的核心驱动）。写完、连结束标记
