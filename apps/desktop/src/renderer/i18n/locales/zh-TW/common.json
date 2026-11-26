@@ -15618,7 +15618,6 @@
       "piRetryHistoryUnavailable": "這則訊息未送出。Pi 讀取傳送所需的歷史記錄時失敗。你可以重試，或在新任務中繼續。",
       "upstreamStatusError": "上游回傳 {{status}}，本次回覆未完成。",
       "messageNotSent": "這則訊息未送出。",
-      "upstreamEmpty550": "模型服務回傳 HTTP 550（無回應內容）",
       "replyFailed": "回覆未完成",
       "queuedSendRecovery": "上一則訊息尚未傳送。點選「重試」可原樣傳送。傳送新訊息會取代這一則。",
       "retryTitle": "重新傳送最後一則訊息",
