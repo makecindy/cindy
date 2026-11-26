@@ -2310,7 +2310,7 @@ describe('provider catalog realm reload', () => {
   // Last in this describe because it restarts the process-wide first load.
   it('finishes the startup catalog load when the Claude pool read hits an owner boundary', async () => {
     __testing.resetStartupCatalogLoad();
-    h.claudePool = { strategy: 'least', accounts: [{ id: 'second', paused: false, limit: 4, weight: 1 }] };
+    h.claudePool = { strategy: 'expiring', accounts: [{ id: 'second', paused: false, limit: 4, weight: 1 }] };
     h.poolRefreshError = new Error('Subscription account owner changed');
     const loadsBefore = h.loads.length;
     try {
