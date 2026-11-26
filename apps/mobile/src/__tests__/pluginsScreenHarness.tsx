@@ -16,6 +16,8 @@ import { createPluginPromptReads } from "@/plugins/pluginPromptReads";
 
 const fixture = vi.hoisted(() => ({
   props: new Map<string, any>(),
+  /** React Native's Keyboard.dismiss (it lets go of the focused text field and hides the keyboard). */
+  keyboardDismiss: vi.fn(),
   originalSettingsMounts: 0,
   appStateListeners: new Set<(state: string) => void>(),
   promptReads: null as ReturnType<typeof createPluginPromptReads> | null,
@@ -164,6 +166,7 @@ vi.mock("react-native", async () => {
         return fixture.platform;
       },
     },
+    Keyboard: { dismiss: () => fixture.keyboardDismiss() },
     StyleSheet: { create: (s: any) => s, hairlineWidth: 1 },
     useWindowDimensions: () => ({ width: fixture.width, height: 800 }),
   };
@@ -408,6 +411,7 @@ beforeEach(() => {
   }));
   fixture.refresh.mockReset().mockResolvedValue(undefined);
   fixture.alert.mockClear();
+  fixture.keyboardDismiss.mockClear();
   element = document.createElement("div");
   root = createRoot(element);
 });

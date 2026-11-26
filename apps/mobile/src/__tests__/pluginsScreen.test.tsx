@@ -2065,6 +2065,46 @@ it("installs from the market through the existing consent sheet; its result is l
 
 // Contract V2.10: once the one read of the computer after the result has landed, the market row ends at once and the
 // result is listed at the top, without a prompt and without waiting on any timer: the proven install says it is done;
+/* 测试价值（Android 复拍 m1、m2：在市场里「搜索 → 安装 → 允许」后，搜索框拿回焦点、键盘弹在结果前面）
+ * - 生产入口与可观察结果：真实 PluginsScreen 与市场 hook；观察从市场发起安装时是否让聚焦的输入框失焦并收起键盘。
+ * - 依据：确认面板是单独的窗口，关闭后 Android 把焦点还给它盖住的搜索框；发起安装时先失焦，面板关闭后就没有输入框可还。
+ *   系统归还焦点这一步组件测试证明不了，靠两端复拍。iOS 的原生搜索条不受影响；从已装详情发起的更新不经过这里。
+ * - 最小失败输入：Android 上从市场行点「安装」；改前不收起。对照：iOS 不调用；安装没开始（被占用）时不调用。tier: unit。
+ */
+it.each([["android", 1], ["ios", 0]] as const)("on %s, starting a market install lets go of the focused search field (%s time)", async (platform, times) => {
+  fixture.platform = platform;
+  const item = marketItem("demo", "Demo");
+  marketWire(async (request) => {
+    switch (request.actionId) {
+      case "management:snapshot":
+        if (request.input?.read === "capabilities") return { catalogPaging: true };
+        if (request.input?.read === "catalog") return marketPage([item]);
+        return managementSnapshot(false);
+      case "management:market-detail": return { ...item, manifest: { schemaVersion: 3, id: "demo", name: "Demo", version: "1" } };
+      case "management:begin": return demoConsent(request);
+      default: throw new Error("unexpected " + request.actionId);
+    }
+  });
+  await act(async () => root.render(createElement(PluginsScreen)));
+  if (platform === "android") await act(async () => fixture.props.get("segment").onChange("market"));
+  else await act(async () => fixture.props.get("directory").onSegmentChange("market"));
+  await settle(14);
+  // The row's own Install: the Android market's real control, the iOS directory's market.
+  const press = async () => {
+    const button = element.querySelector(`[data-testid="plugins.market.install.${item.pluginId}"]`) as HTMLButtonElement | null;
+    // Android: once the install holds the computer the row shows its progress instead of Install.
+    if (platform === "android") { if (button) await act(async () => button.click()); }
+    else await act(async () => shownMarket().install(shownMarket().items[0]));
+  };
+  await press();
+  await settle(14);
+  expect(fixture.keyboardDismiss).toHaveBeenCalledTimes(times);
+  // A second press while that install holds the computer starts nothing, and does not dismiss again.
+  if (platform === "android") expect(element.querySelector(`[data-testid="plugins.market.progress.${item.pluginId}"]`), "the install is under way").not.toBeNull();
+  else expect(shownMarket().installBusy, "the install is under way").toBe(true);
+  await press();
+  expect(fixture.keyboardDismiss).toHaveBeenCalledTimes(times);
+});
 // ② (not attributable) and ③ (an older computer) have their sentence; each offers "Go to Installed".
 // Minimal failing input on 3429eff0eb: an older computer's shape kept the row "installing" for 5 more seconds, then
 // ended without a word; on a337ae955c ② and ③ raised an alert over the page. Tier: unit/jsdom (no timer is advanced).

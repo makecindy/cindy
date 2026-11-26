@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
-import { AppState } from "react-native";
+import { AppState, Keyboard, Platform } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useAuth } from "@/auth/AuthContext";
 import { getMobileAuthOwner, isMobileAuthOwnerCurrent } from "@/auth/authOwnerGeneration";
@@ -494,6 +494,11 @@ export function usePluginMarket(options: UsePluginMarketOptions) {
     const token = slot.tryAcquire("market-install", { name: item.name, deviceId: target.deviceId, deviceName: target.deviceName,
       pluginId: item.pluginId, ghostId: item.ghostId });
     if (!token) return;
+    // Android (reshoots 2026-11-26): the consent sheet is a window of its own, and when it closes the system gives focus
+    // back to the search field under it, so the keyboard came up over the result. The field lets go of focus as the
+    // install starts (the search typed stays; tapping the field focuses it again as before). Installed-detail updates
+    // do not come through here; iOS's native search bar is not affected.
+    if (Platform.OS === "android") Keyboard.dismiss();
     setRowErrors(({ [errorKey(target.deviceId, item.pluginId)]: _removed, ...rest }) => rest);
     const attempt = { id: ++nextAttemptId, token, target, item, detail: known, started: false, confirmed: false };
     installRef.current = attempt;
