@@ -73,6 +73,30 @@ describe('fillGhostCardPrStatus', () => {
     expect(el.style.display).toBe('none');
   });
 
+  it('reveals a dormant merge-ready button when live status becomes CLEAN and hides it otherwise', () => {
+    document.body.innerHTML =
+      '<button id="dormant" data-ghost-action="pr:merge" data-ghost-pr-merge-ready="Octo/Repo#9" style="display:none"></button>' +
+      '<button id="active" data-ghost-action="pr:merge" data-ghost-pr-merge-ready="Octo/Repo#9" style="display:inline-flex"></button>';
+    const dormant = document.querySelector<HTMLElement>('#dormant')!;
+    const active = document.querySelector<HTMLElement>('#active')!;
+    // Live BLOCKED hides both.
+    fillGhostCardPrStatus(document, () => status({ mergeState: 'BLOCKED' }), t);
+    expect(dormant.style.display).toBe('none');
+    expect(active.style.display).toBe('none');
+    // Live CLEAN reveals both.
+    fillGhostCardPrStatus(document, () => status({ mergeState: 'CLEAN' }), t);
+    expect(dormant.style.display).toBe('inline-flex');
+    expect(active.style.display).toBe('inline-flex');
+    // Missing or legacy status restores each button's original plugin snapshot display.
+    fillGhostCardPrStatus(document, () => undefined, t);
+    expect(dormant.style.display).toBe('none');
+    expect(active.style.display).toBe('inline-flex');
+    // Merged PR hides both.
+    fillGhostCardPrStatus(document, () => status({ status: 'merged', mergeState: undefined }), t);
+    expect(dormant.style.display).toBe('none');
+    expect(active.style.display).toBe('none');
+  });
+
   // Regression: one merged card must not offer to archive a task with another unfinished PR.
   // Unit: the second PR need not have a mounted card; missing/failed status is not completion.
   it('requires every task PR to be confirmed merged before revealing archive', () => {
