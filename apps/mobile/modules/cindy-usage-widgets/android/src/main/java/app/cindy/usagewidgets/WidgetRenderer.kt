@@ -214,7 +214,7 @@ object WidgetRenderer {
       val nameStyle = sys(nameSize, pal.ink2)
       if (stacked) {
         val logo = nameSize + 1.5f
-        p.logo(s.logo, s.monogram, x + (width - logo) / 2, y, logo, pal.ink)
+        p.logo(s.displayLogo, s.monogram, x + (width - logo) / 2, y, logo, pal.ink)
         y += logo + 4f
         p.fitText(s.name, x + 2, y, nameStyle, width - 4, Align.Center)
         y += p.lineHeight(nameStyle)
@@ -222,7 +222,7 @@ object WidgetRenderer {
         val textWidth = min(p.textWidth(s.name, nameStyle), width - 13f)
         val left = x + (width - (10f + 3f + textWidth)) / 2
         val rowHeight = max(10f, p.lineHeight(nameStyle))
-        p.logo(s.logo, s.monogram, left, y + (rowHeight - 10f) / 2, 10f, pal.ink)
+        p.logo(s.displayLogo, s.monogram, left, y + (rowHeight - 10f) / 2, 10f, pal.ink)
         p.fitText(s.name, left + 13f, y + (rowHeight - p.lineHeight(nameStyle)) / 2, nameStyle, textWidth)
         y += rowHeight
       }
@@ -387,7 +387,7 @@ object WidgetRenderer {
       val title = sys(size, pal.ink, Weight.Semibold)
       val plan = sys(size - 2.5f, pal.ink3, Weight.Medium)
       val rowHeight = max(size, p.lineHeight(title))
-      p.logo(s.logo, s.monogram, x, y + (rowHeight - size) / 2, size, pal.ink)
+      p.logo(s.displayLogo, s.monogram, x, y + (rowHeight - size) / 2, size, pal.ink)
       var left = x + size + 5
       val titleWidth = min(p.textWidth(d.title, title), width - (left - x))
       p.fitText(d.title, left, y + (rowHeight - p.lineHeight(title)) / 2, title, titleWidth)

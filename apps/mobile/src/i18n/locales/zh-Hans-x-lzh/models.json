@@ -62,6 +62,7 @@
   "unified": {
     "remoteCopyUnavailableOn": "「{{device}}」之 {{provider}} 今不可用。",
     "remoteCopyUnavailableOnTaskComputer": "差事所在之机，{{provider}} 今不可用。",
+    "accountCount_one": "{{count}} 个名籍",
     "accountCount_other": "{{count}} 个名籍",
     "accountFallback": "名籍 {{index}}",
     "favoriteConfiguration": "藏此设置",
@@ -113,6 +114,7 @@
   },
   "modelGroups": {
     "title": "模型组",
+    "sourceCount_one": "{{count}} 源",
     "sourceCount_other": "{{count}} 源",
     "strategy": {
       "expiring": "将废者先用",
@@ -155,7 +157,6 @@
     "genericName": "法器引擎",
     "defaultModel": "预设模型",
     "unavailable": "{{engine}} 暂不可用",
-    "unavailableWithHint": "{{engine}} 暂不可用：{{hint}}",
-    "worktreeUnsupported": "法器引擎尚不能于 worktree 中新建差事，请先取消勾选 worktree 再发"
+    "unavailableWithHint": "{{engine}} 暂不可用：{{hint}}"
   }
 }

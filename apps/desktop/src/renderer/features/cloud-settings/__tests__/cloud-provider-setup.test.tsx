@@ -267,7 +267,7 @@ describe('cloud provider setup with the local wizard', () => {
     fireEvent.change(within(dialog).getByPlaceholderText('sk-…'), { target: { value: KEY } });
     fireEvent.click(within(dialog).getByRole('button', { name: 'settings.providers.wizard.next' }));
     // Step 3 lists the models the instance discovered with the key.
-    fireEvent.click(await within(dialog).findByRole('button', { name: /DeepSeek Reasoner/ }));
+    fireEvent.click(await within(dialog).findByRole('checkbox', { name: /DeepSeek Reasoner/ }));
     fireEvent.click(
       within(dialog).getByRole('button', { name: 'settings.providers.wizard.finish' }),
     );

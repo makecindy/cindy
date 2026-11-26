@@ -122,6 +122,7 @@ import {
   applyAgentIslandUserPrompt,
   buildAgentIslandDisplayState,
   buildAgentIslandTaskOverview,
+  buildLocalAgentIslandTaskOverview,
   buildAllSessionActivitySnapshots,
   buildDeviceSessionActivitySnapshots,
   closeAgentIslandSessionPreservingUnread,
@@ -1796,10 +1797,10 @@ export class AgentIslandService {
 
   /**
    * 按需重放当前会话活动快照。`emit` 由调用方(bootstrap)注入定向 sink 时,
-   * 快照只投给刚完成 sessions 订阅的那一台控制端;不传则沿默认广播通道扇出。
+   * 快照只投给刚完成列表或共享任务订阅的控制端;不传则沿默认广播通道扇出。
    */
-  replaySessionActivity(emit?: (payload: SessionActivityPayload) => void): void {
-    this.sessionActivityRelay.replay(this.notificationActivity(this.buildSessionActivityPayload()), emit);
+  replaySessionActivity(emit?: (payload: SessionActivityPayload) => void, sessionId?: string): void {
+    this.sessionActivityRelay.replay(this.notificationActivity(this.buildSessionActivityPayload()), emit, sessionId);
   }
 
   /**
@@ -2122,7 +2123,7 @@ export class AgentIslandService {
   private foregroundRevision = 0;
 
   getForegroundTaskActivity() {
-    const summary = projectHostTaskActivity(this.getLocalTaskActivitySnapshots());
+    const summary = projectHostTaskActivity(this.getLocalTaskOverview());
     const key = JSON.stringify(summary);
     if (key !== this.foregroundSummaryKey) {
       this.foregroundSummaryKey = key;
@@ -2133,6 +2134,11 @@ export class AgentIslandService {
 
   getLocalTaskActivitySnapshots(): AgentIslandSessionSnapshot[] {
     return buildAllSessionActivitySnapshots(this.state);
+  }
+
+  /** This computer's share of the island counts; the phone island adds these per computer. */
+  getLocalTaskOverview(): AgentIslandSessionSnapshot[] {
+    return buildLocalAgentIslandTaskOverview(this.state, Date.now(), this.companionChatProjections());
   }
 
   /** Read the same canonical snapshot used by sidebar and device-list relays. */

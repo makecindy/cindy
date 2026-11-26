@@ -357,6 +357,7 @@ export async function prepareCodexCustomContextCatalog(params: {
   modelIds?: readonly string[];
   /** Declare Fast for the selected API route without changing the native default tier. */
   declareFastMode?: boolean;
+  declareUltrafastMode?: boolean;
   /** Same-provider budgets for native previous-model compaction after cold resume. */
   resolveContextWindow?: (modelId: string) => number | null;
   resolveCompactionPct?: (modelId: string) => number | null;
@@ -376,10 +377,16 @@ export async function prepareCodexCustomContextCatalog(params: {
   // old > new relationship and compact with the old model before downshifting.
   const models = patched.models.map((entry) => {
     const tiers: unknown[] = Array.isArray(entry.service_tiers) ? entry.service_tiers : [];
-    const model = params.declareFastMode && entry.slug === params.modelId &&
-      !tiers.some(tier => isRecord(tier) && tier.id === 'priority')
-      ? { ...entry, service_tiers: [...tiers, { id: 'priority', name: 'Fast', description: 'Fast mode' }] }
-      : entry;
+    const addedTiers = [];
+    if (entry.slug === params.modelId) {
+      if (params.declareFastMode && !tiers.some(tier => isRecord(tier) && tier.id === 'priority')) {
+        addedTiers.push({ id: 'priority', name: 'Fast', description: 'Fast mode' });
+      }
+      if (params.declareUltrafastMode && !tiers.some(tier => isRecord(tier) && tier.id === 'ultrafast')) {
+        addedTiers.push({ id: 'ultrafast', name: 'Ultrafast', description: 'Ultrafast mode' });
+      }
+    }
+    const model = addedTiers.length > 0 ? { ...entry, service_tiers: [...tiers, ...addedTiers] } : entry;
     const window = model.slug === params.modelId
       ? params.contextWindow : params.resolveContextWindow?.(model.slug);
     if (typeof window !== 'number' || !Number.isSafeInteger(window) || window <= 0) return model;
