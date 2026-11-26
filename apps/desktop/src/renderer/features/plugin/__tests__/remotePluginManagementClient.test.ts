@@ -7,6 +7,8 @@ import {
   readLegacyManagedPlugins,
   hasPluginCatalogPaging,
   parsePluginManagementMarketPage,
+  parsePluginManagementDetail,
+  parsePluginManagementRecommendations,
 } from '../remotePluginManagementClient';
 
 const snapshot = {
@@ -25,6 +27,18 @@ describe('paged Host reads', () => {
     await expect(hasPluginCatalogPaging('target')).rejects.toThrow('offline');
     expect(await hasPluginCatalogPaging('target')).toBe(true);
     expect(invoke.mock.calls.every(call => JSON.stringify(call).includes('capabilities'))).toBe(true);
+  });
+  // Unit: retained optional response metadata must not change any of the desktop peer readers.
+  it.each([{}, { sizeBytes: 1200 }])('accepts market responses with optional package size %o', (metadata) => {
+    const item = { pluginId: 'market/weather', ghostId: 'weather', releaseId: 'release', name: 'Weather',
+      version: '1.0.0', scope: 'public', publisherKind: 'official', ...metadata };
+    const market = { ...snapshot.market, items: [item] };
+    const detail = { ...item, manifest: { schemaVersion: 3, minCindyVersion: '0.1.61',
+      id: 'weather', name: 'Weather', version: '1.0.0', kind: 'chip', entry: 'main.js' } };
+    expect(parsePluginManagementSnapshot({ ...snapshot, market }).market.items).toEqual([item]);
+    expect(parsePluginManagementMarketPage({ ...market, nextCursor: null, counts: null }).items).toEqual([item]);
+    expect(parsePluginManagementRecommendations([item])).toEqual([item]);
+    expect(parsePluginManagementDetail(detail)).toEqual(detail);
   });
   it('rejects invalid source counts while preserving bounded custom grouping metadata', () => {
     const page = { ...snapshot.market, nextCursor: null, counts: { all: 1, public: 0, organization: 0, personal: 0, custom: 1 },

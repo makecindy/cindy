@@ -12846,6 +12846,7 @@ function ensureInitialMessages(sessionId: string): void {
   // Mark in-flight to prevent concurrent callers from double-fetching.
   // historyLoaded stays false until data actually arrives.
   _historyFetchInFlight.add(sessionId);
+  emitStateNotifications(sessionId);
   // 记录本次加载所依据的 origin(可能 undefined)。remote-projects 注入该会话来源后,
   // reconcileOpenSessionOrigins 比对此值发现漂移 → 重载(见上方说明)。
   _historyLoadOrigin.set(sessionId, historyOriginAtStart);
@@ -19269,6 +19270,7 @@ function mirrorSessionFields(
 }
 
 export const makerChatStore = {
+  isInitialHistoryLoading: (sessionId: string) => _historyFetchInFlight.has(sessionId),
   initGlobalListeners,
   subscribe,
   subscribeToMessageRemovals,
