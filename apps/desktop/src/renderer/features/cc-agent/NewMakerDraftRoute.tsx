@@ -5344,7 +5344,9 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
             setWtCreatingInfo({ branch: getBranchName(name), startedAt });
             localPluginWorktree = { name, sourceBranch };
           }
-          const sessionId = localPluginWorktree ? makeDraftSessionId() : localDraftSessionIdRef.current;
+          const sessionId = localPluginWorktree && effectiveWritableDirs.length === 0
+            ? makeDraftSessionId()
+            : localDraftSessionIdRef.current;
           const optimisticTitle = optimisticFirstMessageTitle(message, files, mentions, opts, {
             image: t('ccAgent.autoTitle.image'),
             file: t('ccAgent.autoTitle.file'),
@@ -5362,8 +5364,8 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
             workingDir: baseRepo ?? selectedWorkingDir,
             ...(localPluginWorktree ? { localPluginWorktree } : {}),
             workspaceKind: selectedWorkingDir ? 'project' : 'dialogue',
-            extraDirs: [],
-            writableDirs: [],
+            extraDirs: effectiveExtraDirs,
+            writableDirs: effectiveWritableDirs,
           });
           if (localPluginWorktree && !isCurrentDataOwner()) return;
           if (!newSession) {
@@ -8305,10 +8307,9 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
                     // 不传 onChange 时 ExtraDirsButton 直接不渲染引用目录段(「新建目标」/ 计划模式 /
                     // Plugin 入口不受影响)。进入远程设备时 extraDirs 已被清空,不会留下无法删除的残留。
                     // 恢复这个能力要把 picker 路由到对端(设备域浏览器已有 fs:list-dir),见 follow-up。
-                    // 插件引擎只拿到任务工作目录，附加目录与「新建目标」走的是内置引擎链路：选着引擎时不给入口。
-                    onExtraDirsChange={isDeviceLinkDraft || activePluginEngine ? undefined : handleExtraDirsChange}
+                    onExtraDirsChange={isDeviceLinkDraft ? undefined : handleExtraDirsChange}
                     onWritableDirsChange={
-                      isDeviceLinkDraft || isRemoteProjectDraft || activePluginEngine
+                      isDeviceLinkDraft || isRemoteProjectDraft
                         ? undefined
                         : handleWritableDirsChange
                     }

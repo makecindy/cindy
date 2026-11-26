@@ -173,8 +173,8 @@ export function buildAcpCapabilities(init: AcpInitializeResult, options: readonl
     // `_session/steering` extension take input into the running turn.
     sameTurnSteer: init.steering ? SUPPORTED : SDK_MISSING,
     memory: { supported: SDK_MISSING },
-    extraDirs: NOT_IMPLEMENTED,
-    writableDirs: NOT_IMPLEMENTED,
+    extraDirs: SUPPORTED,
+    writableDirs: SUPPORTED,
     sessionHtmlExport: SDK_MISSING,
     manualCompact: SDK_MISSING,
     // Host turn policies (IM groups, personal WeChat) need an agent that asks before every tool

@@ -50,6 +50,8 @@ export {
   defusePluginEngineHandoffPrefix,
   defusePluginEngineSlashMentions,
   defusePluginEngineWireEnvelope,
+  formatPluginEngineDirectoryGrants,
+  formatPluginEngineDirectoryGrantsUpdate,
   formatPluginEngineSkillList,
   isLeadingSlashCommand,
   renderPluginEngineCapabilityBriefing,

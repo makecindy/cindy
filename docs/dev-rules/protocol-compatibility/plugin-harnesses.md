@@ -302,3 +302,29 @@ IM 轮次只有已知的读和搜索操作可以经上述条件直接放行，�
 时 fail-closed，不会无闸运行。不新增 channel、中转帧或 IPC。实现见 maker-core `agents/acp/{protocol,capabilities,session}.ts`
 与 Desktop `im/shared/turnRunner.ts`；回归见 `acp-session.test.ts`「AcpSession per-turn permission gate」与
 `channelToolPolicy.test.ts`。
+
+## 附加目录、只读 `/review` 与共享任务（2026-11-27）
+
+三项边界能力对齐内置引擎，均复用既有 wire 与本地存储结构，不新增 channel、relay 帧、manifest 字段、批准项或数据库迁移，官方与自建中转无需改动：
+
+- **附加参考目录与可写目录（`extraDirs` / `writableDirs`）**：`buildAcpCapabilities` 对 `extraDirs` 与 `writableDirs` 均声明支持。
+  新会话首轮说明附 `<cindy-extra-reference-directories>` / `<cindy-extra-writable-directories>`（对齐内置 Pi，插件 Library 根不进通用参考清单，
+  由 `<cindy-library-native-read>` 单独下发）；会话中调用 `setExtraDirs` / `setWritableDirs` 立即刷新实时快照并在下一条普通消息附上更新与撤销说明。
+  对启用每轮权限闸（`permissionGate`）或上报路径的 `edit` / `delete` / `move` 权限请求，宿主按 `realpath`（含不存在子路径祖先校验与悬空符号链接拒绝、
+  凭据路径与只读 Library 根拒绝，以及并发撤权复核）校验全部目标路径：落在任务工作目录与当前 `writableDirs` 之外的写操作绝不自动放行（「全部允许」与
+  `routine` 放行均升级到人工确认或无解析器时直接拒绝），撤销目录即时生效。桌面新建页与任务页对本机插件引擎任务开放附加目录入口（远程与 SSH 仍由既有能力门关闭）。
+- **只读 `/review` 沙盒（`reviewMode` + `reviewReadPaths`）**：`maker:review:start` 保留来源任务的 `agentKind = acp`、`providerId`、`model`、`effort`
+  并先做插件引擎准入；`AcpAgent` 启动时剥离全部 MCP 服务、记忆、插件花名册、Skill 清单与展开、伙伴画像、附加目录与宿主说明，并将权限模式固定为 `ask`。
+  握手后强要求对端声明 `initialize._meta.permissionGate.supported === true`：未声明时立即关闭进程并 fail-closed 抛出
+  `AgentStartupStoppedError(NotSupportedError('reviewMode', reason: 'sdk-missing'))`。声明支持时，每轮强制发送 `scope: 'all-tool-calls'`，
+  在 `decidePermission` 强制执行不可绕过的只读审查闸（即使处于 `bypassPermissions` 也不放行）：仅允许 `read` / `search` 且全部路径（含 `locations`、
+  `rawInput` 及搜索通配符选择器）经 `resolveReviewReadPath` 验证落在工作目录或 `reviewReadPaths` 内、非凭据路径且无硬链接逃逸；`edit`、`delete`、
+  `move`、`execute`、`fetch` 或未知/不可验证调用一律拒绝。直接消息附件在发送/插话前经 `assertReviewMessageContentPaths` 校验。
+- **共享任务（Shared Tasks）**：`AgentInputCreateOpts.agentKind` 与主进程 `readSharedTaskTaskCreateOpts` / `requireQueuedMessage` 接受 `acp`，
+  访客消息由宿主盖章保留任务自身的 `agentKind = acp`、`providerId`、`model`、`effort`、`agentDeviceId` 与权限档（剥离访客自报覆盖字段）；
+  访客端不读取或泄漏宿主本地插件目录，沿用通用插件引擎图标与现有共享任务安全边界（访客交互过滤、仅用户可确认项拒绝、撤权隔离）。
+  兼容：旧版宿主仍拒绝共享任务上的 `acp`；旧控制端或手机端查看共享任务按既有通用标识展示、继续发消息由新版宿主按任务记录盖章执行。
+
+实现见 maker-core `agents/acp/{acp-agent,briefing,capabilities,sandbox,session}.ts` 与 Desktop `shared/agentInputQueue.ts`、
+`maker-ipc/{register,reviewStartHandler}.ts`、`renderer/features/cc-agent/{CCAgentSessionView,NewMakerDraftRoute}.tsx`；
+回归见 maker-core `acp-session.test.ts` 与 Desktop `reviewStartHandler.test.ts`、`sharedTaskInput.test.ts`、`newMakerProjectPicker.test.ts`。

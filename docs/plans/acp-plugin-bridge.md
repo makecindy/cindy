@@ -281,8 +281,8 @@ export interface PluginHarnessRegistry {
 
 ## 第一期明确不支持（遇到即明确拒绝，不回落到内置引擎）
 
-（换引擎、定时任务与协同 Worker 已在第二期支持，见下面几节；标题、send_to_session、/learn、目标、IM 渠道
-与分叉、侧聊、上下文溢出续接、每轮权限闸见下文。）回退、移到另一台电脑或 SSH、插件引擎当协同 Lead、共享任务、
+（换引擎、定时任务与协同 Worker 已在第二期支持，见下面几节；标题、send_to_session、/learn、目标、IM 渠道、
+分叉、侧聊、上下文溢出续接、每轮权限闸、附加目录、只读 `/review` 与共享任务见下文。）回退、移到另一台电脑或 SSH、插件引擎当协同 Lead、
 Node Host（`apps/host`）。插件引擎任务的消息按 `agent_kind = 'acp'` 落库，不带供应商元信息。
 
 伙伴的后续支持范围见[模型候选链](../product-rules/cindy-bots-runtime.md#5-模型候选链)。伙伴可以在设置中选择所在电脑的插件模型，主聊天按所选模型运行。
@@ -550,4 +550,15 @@ Cindy 不能复制或截断，所以这三项都只用 Cindy 自己的记录。
   **带本轮权限策略的轮次（群聊要求主人确认）一律拒绝**：插件的 Agent 可以不经 Cindy 询问就执行操作，任何权限档都
   无法兑现「须经主人确认」，所以与内置引擎在绕过审批钩子的档位下同样 fail-closed（`AcpSession.validateSendOptions` 抛
   `TurnPermissionPolicyUnsupportedError`，渠道按「所选 Agent 无法提供逐条确认」提示）。不带策略的私聊与已关闭群强确认的轮次照常运行。
+- **附加参考目录与可写目录（2026-11-27）**：`extraDirs` 与 `writableDirs` 在能力快照中标为支持；新会话首轮与会话中变更通过目录说明
+  （`<cindy-extra-reference-directories>` / `<cindy-extra-writable-directories>`，以及独立下发的 `<cindy-library-native-read>`）
+  同步给引擎，`setExtraDirs` / `setWritableDirs` 立即更新实时边界。启用每轮权限闸或上报路径的写/删/移动请求在 `decidePermission` 按
+  `realpath` 校验目标路径，位于工作目录与当前 `writableDirs` 之外（或命中凭据路径、只读 Library 根、悬空符号链接）的写操作绝不自动放行，
+  撤销目录即时生效。
+- **只读 `/review`（2026-11-27）**：来源任务为插件引擎时，审查任务沿用其引擎、来源、模型与思考深度，启动前剥离全部 MCP 服务、记忆、
+  花名册、Skill、伙伴画像与附加目录，并强制要求对端声明每轮权限闸（`_meta.permissionGate.supported === true`）；未声明时关闭进程并
+  fail-closed 拒绝。声明支持时每轮开启 `scope: 'all-tool-calls'`，仅允许工作目录与 `reviewReadPaths` 内且通过 `resolveReviewReadPath`
+  校验的 `read` / `search`（拒绝写/删/移动/命令执行/联网请求、凭据路径与逃逸通配符），即使处于「全部允许」也不可绕过。
+- **共享任务（2026-11-27）**：插件引擎任务可开放共享并接受访客协作；访客消息由宿主按任务记录盖章保留 `agentKind = acp`、`providerId`、
+  `model`、`effort`、`agentDeviceId` 与权限档，并保持既有访客权限过滤、仅用户确认项拦截、撤权隔离与不泄露宿主插件目录等边界。
 
