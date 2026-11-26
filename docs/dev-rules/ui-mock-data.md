@@ -169,7 +169,7 @@ pnpm mobile:sim:whoami -- --mock --json
   | 已不再跟踪 | `cindy://plugins?checks=untracked` |
   | 多条记录（「2 项插件操作还没结束」） | `cindy://plugins?checks=many` |
   | 成功，正在确认电脑上的插件（「已完成，正在确认电脑上的插件…」） | `cindy://plugins?checks=readingBack`（之后的已装读取一直不回） |
-  | 成功，但插件之后又有变化（未能证实，没有「打开」） | `cindy://plugins?checks=changed`（提交后模拟电脑换成同一插件的旧版本，记录 `unattributed`） |
+  | 成功，但插件之后又有变化（未能证实，没有「打开」） | `cindy://plugins?checks=changed`（提交后模拟电脑换成同一插件的旧版本，记录 `unattributed`；形状不完全贴合真实 Host：真实电脑上从本地文件装旧版本可能落到 `conflict`，结论同样是不打开） |
   | 已卸载 | `cindy://plugins?checks=uninstalled`（Demo Weather Board 的卸载） |
   | 「查看并决定」被占用挡住（说明要等另一项结束） | `cindy://plugins?checks=decideBlocked`，点 Demo Agenda 的「查看并决定」（Demo Device Simulator 正在同一台电脑上安装） |
   | 卸载回执过期，无法确认（显示还装着、只有「不再跟踪」） | `cindy://plugins?checks=unprovableUninstall`（面板打开后自动核实一次即出现） |

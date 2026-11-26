@@ -150,6 +150,8 @@
   不拿记录的 `releaseId` / `version` 与这次比较，也不比已装版本：① 已经钉住已装包（Host 保证那条安装记录就是这次操作提交时写下
   的，此后没有别的包提交过）。`installedSourceId` 不作核实条件。页面批准没有操作证据：开始时的那个实例仍在、页面现在已启用即可打开。
   已装详情在更新之后不满足 ① 时留在原来显示的实例上并提示对应的一句，不跳到别的实例。
+  发起安装的市场行在 controller 自己的结果后读取（`finalReadback`）落地时立即收口：① 打开已装详情，②、③、没有实例都当场
+  提示对应的一句并结束，不再等待；只有这次读取还在途时才等，读取失败时提示「没能读取电脑上的插件」。
 
   Host 在各情形下对这台手机的实际回答（调度要求 R-3；依据契约 V2.10 正文与样例，`apps/desktop/src/main/plugin-market/service.ts`
   的目录投影与归属投影，以及 Host 用例「produces the contract samples byte for byte」等；手机用例的夹具 `hostPluginInstallFacts.ts`

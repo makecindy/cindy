@@ -25,6 +25,12 @@ export interface PluginManagementState {
    */
   missingReceiptFacts?: PluginManagementSnapshot | null;
   /**
+   * After a final receipt, where the controller's own read of the computer stands (the facts "Open" is decided from):
+   * `pending` while it is out, `read` once it landed (the snapshot is then from after the result), `failed` when it did
+   * not come back. Views decide on `read` at once and wait only while `pending` (dispatcher R, point 2).
+   */
+  finalReadback?: 'pending' | 'read' | 'failed';
+  /**
    * The request id of the consent on screen when an answer to it is in flight or was written: Allow and Reject stay
    * unavailable, so one consent request never gets two answers (maintainer review 11:45).
    */
@@ -375,13 +381,17 @@ export function createPluginManagementController(client: PluginManagementClient,
       if (options.readDisplay && state.snapshot) prompt.snapshot = { ...state.snapshot,
         ghosts: state.snapshot.ghosts.map(ghost => matchesReceiver(ghost) ? { ...ghost, uiPromptSuppressed: true } : ghost) };
     }
-    conclude(holder, { ...prompt, receipt, outcome: answered ? 'unknown' : receipt.phase, errorCode: receipt.errorCode ?? null });
+    conclude(holder, { ...prompt, receipt, outcome: answered ? 'unknown' : receipt.phase, errorCode: receipt.errorCode ?? null,
+      ...(terminal(receipt) && !answered ? { finalReadback: 'pending' as const } : {}) });
     if (terminal(receipt)) {
       // A cancel racing commit must still show succeeded. Refresh facts, without changing the receipt on read failure.
       stopPolling();
       const readback = readSnapshot(token), readbackSequence = snapshotSequence;
-      try { await readback; } catch (error) {
-        if (current(token)) publish({ errorCode: pluginManagementErrorCode(error) });
+      try {
+        await readback;
+        if (current(token) && state.finalReadback === 'pending') publish({ finalReadback: 'read' });
+      } catch (error) {
+        if (current(token)) publish({ errorCode: pluginManagementErrorCode(error), ...(state.finalReadback === 'pending' ? { finalReadback: 'failed' as const } : {}) });
         if (displacedDisplay && consumed) {
           try {
             const display = await displacedDisplay;
@@ -444,7 +454,7 @@ export function createPluginManagementController(client: PluginManagementClient,
     const holder = hold();
     answers.clear(); cancelling = null; consentOrder.length = 0; answerSentAt.clear(); shownRank = -1;
     lookupFailures = 0; autoLookupStopped = false; resetPace(); answerWrittenEver = false; cancelAttempted = false; shownConsent = null;
-    publish({ busy: true, errorCode: null, operationId: null, receipt: null, outcome: 'idle',
+    publish({ busy: true, errorCode: null, operationId: null, receipt: null, outcome: 'idle', finalReadback: undefined,
       expectedSource: intent.kind === 'install' && intent.detail.sourceType !== 'server' ? intent.detail.sourceIdentity ?? null : null,
       expectedConsent: expectationOf(intent, slotHold?.who.deviceId ?? client.deviceId) });
     const installed = intent.installed;

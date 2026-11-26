@@ -243,8 +243,11 @@ function PluginDirectory() {
     isOnline: list.isOnline,
     installedDeviceId: deviceId,
     query,
-    onInstalled: (host, instanceKey, item) => {
+    onInstalled: (host, instanceKey, item, notOpened) => {
       void list.refresh();
+      // Succeeded, but nothing proves which instance is this install's (contract V2.10): say why, at once.
+      if (!instanceKey && notOpened)
+        tell("plugins.checks.result.succeeded", notOpened === "unread" ? "plugins.checks.result.succeededUnread" : PLUGIN_NOT_OPENED_TEXT[notOpened]);
       // Same as the computer: a fresh install opens its installed detail.
       if (instanceKey)
         void showDetail({

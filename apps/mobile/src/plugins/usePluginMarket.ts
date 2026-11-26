@@ -1,4 +1,4 @@
-import { pluginOperationOpens } from "./pluginOperationOpens";
+import { pluginOperationOpens, type PluginOperationNotOpened } from "./pluginOperationOpens";
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { AppState } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
@@ -86,7 +86,12 @@ export interface UsePluginMarketOptions {
   installedDeviceId: string;
   query: string;
   /** Called once per successful install; instanceKey is absent only if the Host readback failed. */
-  onInstalled(target: RemoteResourceHostTarget, instanceKey: string | undefined, item: ManagedMarketItem): void;
+  /**
+   * The install succeeded: `instanceKey` when the computer's facts prove this install's instance (it opens), otherwise
+   * why not (`notOpened`: a `pluginOperationOpens` reason, or `unread` when the computer could not be read).
+   */
+  onInstalled(target: RemoteResourceHostTarget, instanceKey: string | undefined, item: ManagedMarketItem,
+    notOpened?: PluginOperationNotOpened | "unread"): void;
 }
 
 function useDebounced(value: string, delay: number) {
@@ -544,7 +549,7 @@ export function usePluginMarket(options: UsePluginMarketOptions) {
     });
     return () => { off(); if (timer) clearTimeout(timer); };
   }, [onRemoteResourceChanged, invalidateComputer]);
-  const complete = useCallback((attempt: InstallAttempt, instanceKey: string | undefined) => {
+  const complete = useCallback((attempt: InstallAttempt, instanceKey: string | undefined, notOpened?: PluginOperationNotOpened | "unread") => {
     if (installRef.current?.id !== attempt.id) return;
     finish(attempt);
     // The page is gone: nothing to open, and no read is sent for it.
@@ -556,7 +561,7 @@ export function usePluginMarket(options: UsePluginMarketOptions) {
       detailRead.current += 1;
       setDetail(null);
     }
-    onInstalled.current(attempt.target, instanceKey, attempt.item);
+    onInstalled.current(attempt.target, instanceKey, attempt.item, instanceKey ? undefined : notOpened);
   }, [finish, invalidateComputer]);
   useEffect(() => {
     const attempt = install, state = management.state, controller = management.controller;
@@ -626,14 +631,15 @@ export function usePluginMarket(options: UsePluginMarketOptions) {
     } else if (state.outcome === "failed") finish(attempt, pluginMarketErrorKey(state.errorCode));
     else if (state.outcome === "cancelled") finish(attempt);
     else if (state.outcome === "succeeded" && !state.busy) {
-      // Wait for the controller's post-commit readback; the one decision (dispatcher O-2) names the instance it opens.
+      // Only while the controller's own post-commit read is out is there nothing to decide on yet. Once it landed, the one
+      // decision (pluginOperationOpens, contract V2.10) settles it at once: open the proven instance, or end with why not
+      // (② not attributable, ③ an older computer, no instance); a failed read ends it as "could not read".
+      if (state.finalReadback === "pending") return;
+      if (state.finalReadback === "failed" || state.errorCode) { complete(attempt, undefined, "unread"); return; }
       const opens = state.operationId && state.snapshot ? pluginOperationOpens(
         { operationId: state.operationId, entry: "market-install", who: {}, detail: attempt.detail ?? attempt.item },
         { ghosts: state.snapshot.ghosts, market: state.snapshot.market.items }) : null;
-      if (opens?.open || state.errorCode) { complete(attempt, opens?.open ? opens.instanceKey : undefined); return; }
-      // The committed install stays successful even if the readback never names it.
-      const timer = setTimeout(() => complete(attempt, undefined), 5_000);
-      return () => clearTimeout(timer);
+      complete(attempt, opens?.open ? opens.instanceKey : undefined, opens && !opens.open ? opens.reason : "unread");
     }
   }, [install, management.state, management.controller, finish, complete]);
   // Pending checks of this market's installs that ended without this view (usePluginManagement): the row's note, and

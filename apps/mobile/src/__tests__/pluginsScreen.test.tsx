@@ -2695,6 +2695,50 @@ it("installs from the market through the existing consent sheet and opens the ne
     .map((request) => request.input?.read)).toEqual(["capabilities", "catalog", "catalog", "installed", "installed", "installed", "installed"]);
 });
 
+// Dispatcher R (point 2), contract V2.10: once the controller's own read after the result has landed, the market row
+// settles at once: the proven instance opens; ② (not attributable) and ③ (an older computer) end with their sentence,
+// without waiting (only while that read is out is there nothing to decide; the controller says so, `finalReadback`).
+// Minimal failing input on 3429eff0eb: an older computer's shape kept the row "installing" for 5 more seconds, then
+// ended without a word (the proven row passes there too: existing behaviour). Tier: unit/jsdom (no timer is advanced).
+it.each([
+  ["this install, proven", { installedOperationId: "screen-operation", installedOperationAttribution: "self" }, null],
+  ["not attributable (②)", { installedOperationAttribution: "unattributed" }, "plugins.checks.result.unconfirmed"],
+  ["an older computer (③)", {}, "plugins.checks.result.legacyHost"],
+] as const)("settles a market install as soon as the computer is read after it: %s", async (_name, evidence, said) => {
+  const item = marketItem("demo", "Demo");
+  const manifest = { schemaVersion: 3, id: "demo", name: "Demo", version: "1" };
+  let installed = false;
+  const requests = marketWire(async (request) => {
+    switch (request.actionId) {
+      case "management:snapshot":
+        if (request.input?.read === "capabilities") return { catalogPaging: true };
+        if (request.input?.read === "catalog") return marketPage([item]);
+        return { version: 1, market: { items: installed ? [{ ...item, installState: "installed", ...evidence }] : [],
+          unavailableReason: null, customSourceNames: [], unavailableCustomSourceNames: [] },
+          ghosts: installed ? [{ instanceKey: "_root__demo", namespace: null, manifest, enabled: true,
+            approval: { state: "approved", revision: "12345678-1234-4123-8123-123456789abc" } }] : [] };
+      case "management:market-detail": return { ...item, manifest };
+      case "management:begin": return demoConsent(request);
+      case "management:answer": installed = true; return { operationId: request.input.operationId, phase: "succeeded" };
+      default: throw new Error("unexpected " + request.actionId);
+    }
+  });
+  await openMarket();
+  await act(async () => shownMarket().install(shownMarket().items[0]));
+  await settle(14);
+  fixture.alert.mockClear();
+  await act(async () => fixture.props.get("confirmation").controller.answer(true));
+  await settle(14);
+  // The read after the result landed: settled at once, without any timer running out (the proven one opened its
+  // installed detail instead of the market).
+  if (said === null) expect(fixture.props.get("header").title).toBe("Demo"); else expect(shownMarket().installBusy).toBe(false);
+  const opened = fixture.read.mock.calls.some((call: any[]) => call[2]?.id === "_root__demo");
+  expect(opened).toBe(said === null);
+  expect(fixture.alert.mock.calls.filter((call) => String(call[1]).startsWith("plugins.checks.result.")).map((call) => call[1]))
+    .toEqual(said ? [said] : []);
+  expect(requests.filter((request) => request.actionId === "management:begin")).toHaveLength(1);
+});
+
 // PR review (2026-11-25): a first install from the user's own Git market, end to end on the phone side.
 it("installs from a custom Git market with the Host's manifest check and opens the new installed detail", async () => {
   const { publisherKind: _server, ...base } = marketItem("repo-tools", "Repo Tools");
