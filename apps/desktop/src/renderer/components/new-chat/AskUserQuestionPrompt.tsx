@@ -32,7 +32,7 @@ import { ChevronLeft, ChevronRight, Mic, Square } from 'lucide-react';
 
 import { InteractionPromptCardShell } from '@/components/interaction-portal';
 import { ChatSessionFileProvider, useChatSessionFile, useChatSessionFileValue } from '@/components/chat/ChatSessionFileContext';
-import { QuestionReferenceText } from '@/components/chat/MarkdownRenderer';
+import { MarkdownRenderer, QuestionReferenceText } from '@/components/chat/MarkdownRenderer';
 import { getTextPreviewHost } from '@/components/find-in-page/findInPageOwnership';
 import { useOptionalConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { Tip } from '@/components/ui/tooltip';
@@ -213,7 +213,7 @@ export function AskUserQuestionPrompt({
     question.header,
     question.multiSelect,
     question.answerConstraints,
-    (question.options ?? []).map((option) => [option.label, option.description]),
+    (question.options ?? []).map((option) => [option.label, option.description, option.preview]),
   ]);
   const formKey = JSON.stringify([sessionId, props.pending.requestId, questionsIdentity]);
   // Repeated snapshots keep this form mounted. A changed session, request or
@@ -237,6 +237,7 @@ function AskUserQuestionForm({
   hostVisible = true,
 }: AskUserQuestionPromptProps) {
   const { t } = useTranslation();
+  const fileContext = useChatSessionFile();
   const { requestId, questions } = pending;
   const totalQuestions = questions.length;
   const queueIndex = pendingQuestions?.findIndex((q) => q.requestId === requestId) ?? -1;
@@ -819,7 +820,7 @@ function AskUserQuestionForm({
     const handler = (e: KeyboardEvent) => {
       // File previews can keep focus on their question link. Their keys must
       // never select or skip an answer, including during the closing fade.
-      if (referencePreviewOpen) return;
+      if (referencePreviewOpen || (e.key === 'Escape' && getTextPreviewHost())) return;
       // F-AUQ-MIN-5: minimized 时数字键 1-N / 回车 / N+1 全部透传，
       // 避免"无视觉反馈地选中选项"。Escape 仍保留——满足 F-AUQ-MIN-5 的取消语义。
       if (viewerState === 'minimized' && e.key !== 'Escape') return;
@@ -1216,6 +1217,7 @@ function AskUserQuestionForm({
                   {idx + 1}
                 </div>
               );
+              const preview = opt.preview?.trim() ? opt.preview : undefined;
               return (
                 <div key={opt.label}>
                   {idx > 0 && <div className="h-px bg-[var(--ask-option-divider)]" />}
@@ -1250,6 +1252,24 @@ function AskUserQuestionForm({
                       <div className="flex items-center gap-3">{optionText}</div>
                       {numberBadge}
                     </button>
+                  )}
+                  {preview && (
+                    // Rendered outside the option button/label so reading, scrolling,
+                    // selecting text or opening links never triggers single-select submit.
+                    <div
+                      data-testid={`ask-user-option-preview-${idx + 1}`}
+                      className={cn(
+                        'mx-4 mb-3.5 max-h-44 overflow-y-auto overscroll-contain rounded-lg',
+                        'border border-[var(--border-default)] bg-[var(--surface)] px-3.5 py-2.5',
+                        'select-text text-13 leading-[1.5] text-[var(--text-primary)]',
+                      )}
+                    >
+                      <MarkdownRenderer
+                        workingDir={fileContext.workingDir}
+                        currentSessionId={fileContext.sessionId}
+                        content={preview}
+                      />
+                    </div>
                   )}
                 </div>
               );

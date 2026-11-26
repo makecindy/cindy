@@ -198,4 +198,40 @@ describe('question card layout', () => {
     await f.card.ready;
     expect(f.frames[0].card.buttonLayout).toBe('list');
   });
+
+  // Options carrying Claude SDK `preview` markdown must surface in both default and single-card IM bodies.
+  it('includes option previews in multi-question and single-question card bodies', async () => {
+    const multi = fixture([{
+      question: 'Send update?',
+      options: [
+        { label: 'Send', preview: 'Line one\nLine two' },
+        { label: 'Skip' },
+      ],
+    }]);
+    await multi.card.ready;
+    expect(multi.frames[0].card.body).toContain('> Line one\n> Line two');
+
+    const frames: InteractiveCardSpec[] = [];
+    const controls = { answer: vi.fn(), settled: new Promise<InteractionDecision>(() => {}) };
+    const single = createQuestionCard(
+      {
+        kind: 'ask_user_question',
+        requestId: 'q-single-preview',
+        questions: [{
+          question: 'Send update?',
+          options: [
+            { label: 'Send', preview: 'Draft line 1\nDraft line 2' },
+            { label: 'Edit first' },
+          ],
+        }],
+      },
+      controls,
+      async (card) => { frames.push(card); },
+      undefined,
+      { single: true },
+    );
+    await single.ready;
+    expect(frames[0].body).toContain('**Send**');
+    expect(frames[0].body).toContain('> Draft line 1\n> Draft line 2');
+  });
 });

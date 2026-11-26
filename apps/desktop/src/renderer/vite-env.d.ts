@@ -923,6 +923,7 @@ interface CCAgentUserMessagePersistedPayload {
 interface CCAgentAskUserQuestionOption {
   label: string;
   description?: string;
+  preview?: string;
 }
 
 interface CCAgentAskUserQuestionItem {

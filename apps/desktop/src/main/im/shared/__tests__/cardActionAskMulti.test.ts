@@ -389,4 +389,36 @@ describe('ask 多题/多选打勾卡', () => {
     expect(last.body).toContain('卡片已过期');
     await expect(decisionPromise).resolves.toEqual({ kind: 'ask_user_question', answers: {} });
   });
+
+  // IM 单问卡与多题卡必须保留选项 preview，否则模型把待发原文放进 preview 时 IM 用户完全看不到。
+  it('buildAskUserCard 与 buildAskMultiCard 渲染选项 preview 引用块', () => {
+    const single = cards.buildAskUserCard({
+      kind: 'ask_user_question',
+      requestId: 'req-single-preview',
+      questions: [{
+        header: '群里同步',
+        question: '要发吗？',
+        options: [
+          { label: '发送', preview: '第一行\n第二行' },
+          { label: '先不发' },
+        ],
+      }],
+    });
+    expect(single?.body).toContain('**发送**\n> 第一行\n> 第二行');
+
+    const multi = cards.buildAskMultiCard({
+      requestId: 'req-multi-preview',
+      questions: [{
+        header: '群里同步',
+        question: '勾选要发的内容',
+        multiSelect: true,
+        options: [
+          { label: '摘要', preview: '进度已完成' },
+          { label: '详情' },
+        ],
+      }],
+      selections: new Map(),
+    });
+    expect(multi.body).toContain('**1·1. 摘要**\n> 进度已完成');
+  });
 });
