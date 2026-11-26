@@ -3080,30 +3080,41 @@ describe('Chat Server result delivery and refresh', () => {
     // - keeps the order: newer requests of B found only by that sweep never go before an older one
     //   still backing off, and that one is asked at most once per pass.
     // - execution.changed: the room stream naming the backed-off execution asks it on the next sweep.
-    it.each(['recovers after one empty claim', 'keeps backing off', 'keeps the order', 'asks again on execution.changed'] as const)('busy in another group, B %s', async variant => {
+    // - stale empty answer: B's claim is on its way when B is moved to this computer and the notice
+    //   (work.available or execution.changed) arrives first; the old empty answer must not put B back
+    //   to sleep. B runs nothing here, so only that notice's wake can reach it, not a sweep.
+    it.each(['recovers after one empty claim', 'keeps backing off', 'keeps the order', 'asks again on execution.changed',
+      'survives a stale empty answer (work.available)', 'survives a stale empty answer (execution.changed)'] as const)('busy in another group, B %s', async variant => {
       await vi.advanceTimersByTimeAsync(2000);
       const socket = fixture.sockets.at(-1)!;
       Object.defineProperty(socket, 'readyState', { value: 1 });
       socket.emit('message', JSON.stringify({ type: 'ready' }));
       const otherRoom = '10000000-0000-4000-8000-000000000002';
       const recovers = variant === 'recovers after one empty claim';
+      const stale = variant.startsWith('survives a stale empty answer');
+      // B's first turn ends while A runs (recovers, stale), or keeps running in B's Thread.
+      const settlesB7 = recovers || stale;
       const rootId = message(1, peerId, '').id;
       const exec = (n: number) => ({ ...request(n), conversation_id: otherRoom, source_message_id: `50000000-0000-4000-8000-00000000077${n}` });
       const [b7, b8, b9] = [exec(7), exec(8), exec(9)];
       const b10 = { ...exec(6), id: '40000000-0000-4000-8000-000000000010' };
       const queuedB = [b7];
       // B's next request: empty once, then claimable (recovers), or empty until `grantedAt`.
-      let empty8 = 0, grantedAt = Infinity;
+      let empty8 = 0, grantedAt = Infinity, suspend = false, release = () => {};
       const base = fixture.handle.getMockImplementation()!;
       fixture.handle.mockImplementation((route, method, body) => {
         if (route === `/conversations/${otherRoom}/executions`) return { body: queuedB.map(e => ({ ...e, status: 'queued' })) };
         if (route === '/executions/claim' && body?.executionId) {
           const e = queuedB.find(row => row.id === body.executionId);
+          if (e === b8 && suspend) {
+            suspend = false;
+            return new Promise(resolve => { release = () => resolve({ body: { execution: null } }); });
+          }
           if (!e || (e === b8 && recovers ? empty8++ === 0 : [b8, b9, b10].includes(e) && Date.now() < grantedAt)) return { body: { execution: null } };
           queuedB.splice(queuedB.indexOf(e), 1); return { body: { execution: e } };
         }
         const m = /\/conversations\/10000000-0000-4000-8000-000000000002\/messages\/(50000000-0000-4000-8000-00000000077(\d))$/.exec(route);
-        if (m) return { body: { ...message(Number(m[2]), selfId, `B request ${m[2]}`, { threadRootId: (m[2] === '7' && !recovers) || (m[2] === '9' && variant === 'keeps backing off') ? rootId : null }), id: m[1] } };
+        if (m) return { body: { ...message(Number(m[2]), selfId, `B request ${m[2]}`, { threadRootId: (m[2] === '7' && !settlesB7) || (m[2] === '9' && variant === 'keeps backing off') ? rootId : null }), id: m[1] } };
         if (route === `/conversations/${otherRoom}/snapshot`) return { body: { room: { ...room(otherRoom), project: null }, members, messages: [], cursor: '1' } };
         return base(route, method, body);
       });
@@ -3113,14 +3124,29 @@ describe('Chat Server result delivery and refresh', () => {
       await vi.advanceTimersByTimeAsync(5_000);
       const firstLines = () => dispatched().map(input => input.message.split('\n')[0]);
       expect(firstLines()).toEqual(['Long work in group A', 'B request 7']);
-      // B's first turn ends while A runs (recovers), or keeps running in B's Thread.
-      if (recovers) await service.settleLaneTurn({ ...terminal, sessionId: dispatched()[1]!.targetSessionId, activeInputClientId: dispatched()[1]!.clientId, resultText: 'B done' });
+      if (settlesB7) await service.settleLaneTurn({ ...terminal, sessionId: dispatched()[1]!.targetSessionId, activeInputClientId: dispatched()[1]!.clientId, resultText: 'B done' });
       queuedB.push(b8);
       const claims8 = () => fixture.handle.mock.calls.filter(([route, , body]) => route === '/executions/claim' && body?.executionId === b8.id).length;
       if (recovers) {
         await vi.advanceTimersByTimeAsync(30_000);
         expect(firstLines().at(-1)).toBe('B request 8');
         expect(claims8()).toBe(2);
+      } else if (stale) {
+        for (let second = 0; second < 60 && claims8() < 4; second++) await vi.advanceTimersByTimeAsync(1000);
+        expect(claims8()).toBe(4);
+        // The fifth claim (16 s after the fourth) is held on its way; the next try after it would be 32 s out.
+        suspend = true;
+        for (let second = 0; second < 60 && claims8() < 5; second++) await vi.advanceTimersByTimeAsync(1000);
+        expect(claims8()).toBe(5);
+        grantedAt = Date.now();
+        socket.emit('message', JSON.stringify(variant.endsWith('(work.available)')
+          ? { type: 'changes', scope: `actor:${selfId}`, cursor: String(Date.now()),
+            changes: [{ type: 'work.available', data: { work: [{ botId: cindyId, conversationId: otherRoom }] } }] }
+          : { type: 'changes', scope: `conversation:${otherRoom}`, cursor: '1000',
+            changes: [{ type: 'execution.changed', entityId: b8.id, data: { status: 'queued', botId: cindyId } }] }));
+        release();
+        await vi.advanceTimersByTimeAsync(4_000);
+        expect(firstLines().slice(2)).toEqual(['B request 8']);
       } else if (variant === 'keeps backing off') {
         queuedB.push(b9);
         await vi.advanceTimersByTimeAsync(300_000);

@@ -733,6 +733,13 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
    * found when it was refused, so the order check below needs no extra reads.
    */
   const emptyAssistantClaims = new Map<string, { failures: number; retryAt: number; roomId: string; lane: string }>();
+  /**
+   * The group's Cindy's claims by execution ID still on their way. A notice for the room, or naming
+   * the execution, that arrives meanwhile is newer than the answer may be (the member may have chosen
+   * this computer since): an empty answer then counts as a refusal but leaves the execution due.
+   * Entries live only while the request does.
+   */
+  const assistantClaimsInFlight = new Map<string, { roomId: string; noticed: boolean }>();
   const metadata = new Map<string, Promise<void>>();
   /**
    * Followed room scopes, each with the newest cursor this process has read or acked. It only
@@ -1513,6 +1520,8 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
                 if (value.data.botId === assistantActorId) {
                   const backoff = emptyAssistantClaims.get(value.entityId);
                   if (backoff) backoff.retryAt = 0;
+                  const flight = assistantClaimsInFlight.get(value.entityId);
+                  if (flight) flight.noticed = true;
                   continue;
                 }
                 // Only companions this installation claims for: other notices would never be read.
@@ -1545,6 +1554,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
                       // A new notice (such as after the member chose this computer) asks again at once,
                       // without restarting the ladder: repeated notices cost one claim each.
                       for (const entry of emptyAssistantClaims.values()) if (entry.roomId === hint.conversationId) entry.retryAt = 0;
+                      for (const flight of assistantClaimsInFlight.values()) if (flight.roomId === hint.conversationId) flight.noticed = true;
                     }
                     targets.push(hint.botId); continue;
                   }
@@ -3912,11 +3922,12 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     for (const [executionId, entry] of emptyAssistantClaims)
       if (entry.roomId === roomId && !keep?.has(executionId)) emptyAssistantClaims.delete(executionId);
   }
-  function noteEmptyAssistantClaim(executionId: string, roomId: string, lane: string) {
+  function noteEmptyAssistantClaim(executionId: string, roomId: string, lane: string, noticed: boolean) {
     const failures = (emptyAssistantClaims.get(executionId)?.failures ?? 0) + 1;
     // Re-inserted, so the first entry is the one longest without a new refusal.
     emptyAssistantClaims.delete(executionId);
-    emptyAssistantClaims.set(executionId, { failures, roomId, lane, retryAt: Date.now() + Math.min(60_000, 2_000 * 2 ** Math.min(failures - 1, 5)) });
+    emptyAssistantClaims.set(executionId, { failures, roomId, lane,
+      retryAt: noticed ? 0 : Date.now() + Math.min(60_000, 2_000 * 2 ** Math.min(failures - 1, 5)) });
     if (emptyAssistantClaims.size <= 1000) return;
     // Over the bound, the evicted execution loses its notice as well. It is asked again only when its
     // room is read for another reason (a notice, a sweep), once, and then starts the ladder anew.
@@ -3984,8 +3995,12 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
           if (candidate !== row) waiting.splice(waiting.indexOf(candidate), 1);
           // A claim failure (such as a rate limit) is reported to the poll, and keeps the notice.
           if (!mayRequest()) return;
-          const execution = await claim(actorId, candidate.id);
-          if (!execution) { if (assistant) noteEmptyAssistantClaim(candidate.id, room, lane); continue; }
+          const flight = { roomId: room, noticed: false };
+          if (assistant) assistantClaimsInFlight.set(candidate.id, flight);
+          let execution: Execution | null;
+          try { execution = await claim(actorId, candidate.id); }
+          finally { if (assistantClaimsInFlight.get(candidate.id) === flight) assistantClaimsInFlight.delete(candidate.id); }
+          if (!execution) { if (assistant) noteEmptyAssistantClaim(candidate.id, room, lane, flight.noticed); continue; }
           emptyAssistantClaims.delete(candidate.id);
           hints.delete(candidate.id);
           lanes.add(lane);
