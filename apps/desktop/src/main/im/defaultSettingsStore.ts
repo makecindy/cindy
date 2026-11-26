@@ -1,3 +1,4 @@
+import fs from 'node:fs';
 /**
  * IM 默认设置的 main 端持久化源。
  *
@@ -28,6 +29,44 @@ import {
   type OverrideSettingsState,
 } from '../maker-host/override-settings-file.js';
 import { claimLegacyImPath, ownerScopedImUserDataPath } from './ownerScopedStorage.js';
+
+import { inspectSettingsJson } from '../maker-host/inspect-settings-json.js';
+import { validateOptionalSettingsFields } from '../maker-host/settings-inspection.js';
+
+function validateInspectionSettings(raw: Record<string, unknown>): void {
+  const nullableText = (value: unknown) => value === null || typeof value === 'string';
+  validateOptionalSettingsFields(raw, { agentKind: isImDefaultAgentKind, permissionMode: isImDefaultPermissionMode,
+    groupPermissionMode: isImDefaultPermissionMode, groupCtrPermissionMode: isImDefaultPermissionMode,
+    providerId: nullableText, model: value => typeof value === 'string', effort: isImDefaultEffort, agents: isRecord });
+  if (isRecord(raw.agents)) for (const agent of ['claude-code', 'codex', 'pi']) {
+    const route = raw.agents[agent];
+    if (route === undefined) continue;
+    if (!isRecord(route)) throw new Error('invalid IM route');
+    validateOptionalSettingsFields(route, { providerId: nullableText, model: value => typeof value === 'string', effort: isImDefaultEffort });
+  }
+}
+function inspectNormalizeDocument(raw: Record<string, unknown>): ImDefaultSettingsDocument {
+  validateOptionalSettingsFields(raw, { schemaVersion: value => value === 1 || value === 2 || value === 3, global: isRecord, channels: isRecord });
+  validateInspectionSettings(raw);
+  if (isRecord(raw.global)) validateInspectionSettings(raw.global);
+  if (isRecord(raw.channels)) for (const channel of IM_DEFAULT_SETTINGS_CHANNELS) {
+    const value = raw.channels[channel];
+    if (value === undefined) continue;
+    if (!isRecord(value)) throw new Error('invalid IM channel');
+    validateInspectionSettings(value);
+  }
+  return normalizeDocument(raw);
+}
+
+/** Bypass settingsFilePath: claiming the legacy path is a mutation, not inspection. */
+export function inspectImDefaultSettings(ownerRoot: string, userDataPath: string) {
+  const result = inspectSettingsJson(path.join(ownerRoot, 'im-default-settings.json'), inspectNormalizeDocument);
+  if (result.status === 'ready' && result.missing && path.resolve(ownerRoot) !== path.resolve(userDataPath)) {
+    try { fs.lstatSync(path.join(userDataPath, 'im-default-settings.json')); return { status: 'migrationPending' as const }; }
+    catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return { status: 'unreadable' as const }; }
+  }
+  return result.status === 'ready' ? { ...result, legacy: usesLegacyRootSettings(result.raw) } : result;
+}
 
 const log = desktopMakerLogger.child('im-default-settings-store');
 const SETTINGS_SCHEMA_VERSION = 3;
@@ -102,9 +141,13 @@ function normalizeChannelSettings(raw: unknown): ImDefaultSettings {
   return normalizeSettings(raw);
 }
 
-function normalizeDocument(raw: unknown): ImDefaultSettingsDocument {
-  const record = isRecord(raw) ? raw : {};
-
+function usesLegacyRootSettings(record: Record<string, unknown>): boolean {
+  // Native v2/v3 channel-only writes omitted the empty global override while
+  // retaining its compatibility mirrors. Those mirrors are not v1 overrides.
+  if ((record.schemaVersion === 2 || record.schemaVersion === 3) && isRecord(record.channels)
+    && !('providerId' in record || 'model' in record || 'effort' in record)
+    && record.global === undefined && record.agentKind === IM_DEFAULT_SETTINGS.agentKind
+    && JSON.stringify(record.agents) === JSON.stringify(IM_DEFAULT_SETTINGS.agents)) return false;
   // Detect legacy v1 overrides even after createOverrideSettingsFile merges
   // them with v2 defaults (which injects schemaVersion/global/channels).
   //
@@ -137,7 +180,13 @@ function normalizeDocument(raw: unknown): ImDefaultSettingsDocument {
   const hasLegacyAgentFields =
     ('agentKind' in record || 'agents' in record) &&
     (globalRecord === null || rootAgentKindDiverges || rootAgentsOnlyWithDefaultGlobal);
-  const hasLegacyRootSettings = hasLegacyScalarOverrides || hasLegacyAgentFields;
+  return hasLegacyScalarOverrides || hasLegacyAgentFields;
+}
+
+function normalizeDocument(raw: unknown): ImDefaultSettingsDocument {
+  const record = isRecord(raw) ? raw : {};
+
+  const hasLegacyRootSettings = usesLegacyRootSettings(record);
 
   // Before schema v2 there was one flat route shared by every IM channel.
   // A legacy file is unambiguous user customization, so seed every channel
@@ -229,6 +278,7 @@ const store = createOverrideSettingsFile<ImDefaultSettingsDocument>({
 });
 
 export function readImDefaultSettings(channel?: ImDefaultSettingsChannel): ImDefaultSettings {
+  store.invalidateIfChanged();
   const document = store.read();
   return cloneSettings(channel ? document.channels[channel] : document.global);
 }
@@ -404,3 +454,15 @@ function cloneSettings(settings: ImDefaultSettings): ImDefaultSettings {
     },
   };
 }
+
+/** Closed Host adapter uses the same file/lock while preserving explicit default choices. */
+export function createHostImDefaultsStore() {
+  return createOverrideSettingsFile<Record<string, unknown>>({
+    filePath: () => ownerScopedImUserDataPath('im-default-settings.json'),
+    defaults: {}, normalize: raw => raw as Record<string, unknown>,
+    validateOverrides: raw => { inspectNormalizeDocument(raw); },
+    maxBytes: 64 * 1024, preserveUnreadableFile: true, logLoadedValue: false,
+    log, label: 'im-default',
+  });
+}
+export function interpretHostImDefaults(raw: Record<string, unknown>) { return normalizeDocument(raw); }

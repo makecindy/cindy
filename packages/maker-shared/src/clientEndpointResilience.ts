@@ -76,6 +76,33 @@ export function parseTrustedEndpointSnapshot(
 
 const bundledManifests = { cn: cnManifest, global: globalManifest };
 
+function trimTrailingSlashes(value: string): string {
+  let end = value.length;
+  while (end > 0 && value.charCodeAt(end - 1) === 0x2f) end -= 1;
+  return value.slice(0, end);
+}
+
+/**
+ * Returns the opposite official region's `agentNetApiBaseUrl` (`cn` ↔ `global`)
+ * from the bundled manifests, or `null` when `apiBase` is self-hosted, local, or
+ * unrecognized. Used for dual-region official STUN discovery without leaking
+ * self-hosted relays to official endpoints.
+ */
+export function getOfficialAgentNetPeerBase(apiBase: string): string | null {
+  const normalized = trimTrailingSlashes(apiBase.trim());
+  if (!normalized) return null;
+  const cnBase = trimTrailingSlashes(
+    (cnManifest.agentNetApiBaseUrl ?? '').trim(),
+  );
+  const globalBase = trimTrailingSlashes(
+    (globalManifest.agentNetApiBaseUrl ?? '').trim(),
+  );
+  if (!cnBase || !globalBase || cnBase === globalBase) return null;
+  if (normalized === cnBase) return globalBase;
+  if (normalized === globalBase) return cnBase;
+  return null;
+}
+
 /** Custom/self-hosted discovery must never fall back to Cindy production. */
 export function getBundledEndpointManifest(
   region: ClientEndpointRegion,

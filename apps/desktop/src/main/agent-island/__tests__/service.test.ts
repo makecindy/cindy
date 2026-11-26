@@ -711,9 +711,12 @@ describe('AgentIslandService native publishing', () => {
     service.setEnabled(false);
     service.handleAgentEvent({ sessionId: 'worker' }, { type: 'status', data: { isRunning: true, status: 'Running' } });
     expect(service.getTaskOverview()).toHaveLength(1);
+    expect(service.getForegroundTaskActivity()).toMatchObject({ runningCount: 1 });
     markKnownOrcaWorkerSession('worker');
     service.handleNotificationMuteChanged();
     expect(service.getTaskOverview()).toEqual([]);
+    // The phone island adds each computer's report; a Worker the desktop island hides must not count there.
+    expect(service.getForegroundTaskActivity()).toMatchObject({ runningCount: 0, selected: null });
     expect(service.getSessionActivitySnapshot('worker')?.phase).toBe('running');
     service.handleSessionStopped('worker');
     service.handleAgentEvent({ sessionId: 'worker' }, doneEvent());
@@ -1665,11 +1668,14 @@ describe('AgentIslandService native publishing', () => {
         service as unknown as { state: { sessions: Map<string, unknown>; remoteUnreadTerminals: Map<string, unknown> } }
       ).state;
       expect(sessions.sessions.has('s1')).toBe(true);
+      expect(service.getForegroundTaskActivity()).toMatchObject({ unreadCount: 1 });
       mocks.tapWindowBroadcast.mockClear();
 
       await vi.advanceTimersByTimeAsync(AGENT_ISLAND_COMPLETED_RETENTION_MS + 50);
       expect(sessions.sessions.has('s1')).toBe(false);
       expect(sessions.remoteUnreadTerminals.has('s1')).toBe(true);
+      // The sidebar dot stays until read, but the phone island drops it with the desktop island.
+      expect(service.getForegroundTaskActivity()).toMatchObject({ unreadCount: 0, selected: null });
       expect(mocks.tapWindowBroadcast).toHaveBeenCalledWith(
         SESSION_ACTIVITY_CHANNEL,
         expect.objectContaining({ sessionId: 's1', phase: 'completed', attention: true }),

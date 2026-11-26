@@ -34,6 +34,7 @@ import {
   isOverloadErrorMessage,
   UPSTREAM_OVERLOAD_REASON,
 } from '@cindy/maker-core';
+import { isProviderSafetyRefusalError } from '@cindy/maker-shared/error-redaction';
 
 /** 判定输入。字段全部可选：不同 agent / 不同失败路径能提供的信号不一样。 */
 export interface InterruptedTurnErrorSignals {
@@ -241,6 +242,14 @@ export function isInterruptedTurnError(signals: InterruptedTurnErrorSignals): bo
   // first so a future stable reason cannot accidentally re-enable auto-resume.
   if (isOAuthAccountPoolUnavailableError(signals)) return false;
   const reason = typeof signals.reason === 'string' ? signals.reason : '';
+  if (
+    signals.codexErrorInfo === 'cyberPolicy' ||
+    signals.codexErrorInfo === 'misalignmentPolicyViolation' ||
+    signals.sdkError === 'content_filter' ||
+    isProviderSafetyRefusalError(typeof signals.message === 'string' ? signals.message : '', reason)
+  ) {
+    return false;
+  }
   // 例外先行：`upstream-overload` 是**已归类为可重试**的 reason，它本身就是比文案更可靠的
   // 权威判据（结构化优先于文案，与 overload-error.ts 的论证同源），直接放行、不再看文案。
   //
@@ -267,7 +276,13 @@ export function isInterruptedTurnError(signals: InterruptedTurnErrorSignals): bo
   // quota or invalid-request rejection must not become retryable just because
   // its explanation mentions temporary unavailability or also carries a 5xx.
   // 账号限额要等周期重置，秒级重连只会再撞一次（由 usageLimitAutoResume 等到重置后续跑）。
-  if (signals.usageLimit === true || signals.codexErrorInfo === 'usageLimitExceeded') return false;
+  if (
+    signals.usageLimit === true ||
+    signals.codexErrorInfo === 'usageLimitExceeded' ||
+    signals.codexErrorInfo === 'rateLimitExceeded'
+  ) {
+    return false;
+  }
   const status = signals.errorStatus;
   if (status !== undefined && status >= 400 && status < 500) return false;
   if ([

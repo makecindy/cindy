@@ -845,6 +845,21 @@ describe('same-engine selection at send', () => {
     expect(h.row().providerId).toBe('xd');
   });
 
+  // #12771 (unit): a confirmed catalog mismatch blocks repeated sends until a fresh pick.
+  it('holds a rejected Pi selection and lets the next pick land', async () => {
+    const h = selectionHarness();
+    const invalid: PendingAgentSwitchIntent = { sameAgentSelection: true, targetAgentKind: 'pi', model: 'a', providerId: 'B' };
+    h.pending.set('s1', invalid);
+    h.apply.mockRejectedValueOnce(Object.assign(new Error('missing model'), { code: 'MODEL_SELECTION_UNAVAILABLE' }));
+    await expect(applyPendingAgentSwitchIfIdle(h.deps, 's1')).rejects.toHaveProperty('code', 'MODEL_SELECTION_UNAVAILABLE');
+    await expect(applyPendingAgentSwitchIfIdle(h.deps, 's1')).rejects.toHaveProperty('code', 'MODEL_SELECTION_UNAVAILABLE');
+    expect(h.apply).toHaveBeenCalledTimes(1);
+    h.pending.set('s1', { sameAgentSelection: true, targetAgentKind: 'pi', model: 'b', providerId: 'B' });
+    await applyPendingAgentSwitchIfIdle(h.deps, 's1');
+    expect(h.row()).toMatchObject({ model: 'b', providerId: 'B' });
+    expect(h.pending.get('s1')).toBeUndefined();
+  });
+
   it('does not apply before a running turn settles, or when send has been canceled', async () => {
     const h = selectionHarness();
     await performSessionAgentSwitch(h.deps, validParams);

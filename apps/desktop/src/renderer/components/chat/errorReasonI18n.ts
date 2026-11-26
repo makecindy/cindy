@@ -1,4 +1,10 @@
-import { GATEWAY_PROXY_TOKEN_INVALID_REASON, isRemoteCompactEncryptedContentError, REMOTE_COMPACT_ENCRYPTED_CONTENT_REASON } from '@cindy/maker-shared/error-redaction';
+import {
+  GATEWAY_PROXY_TOKEN_INVALID_REASON,
+  isProviderSafetyRefusalError,
+  isRemoteCompactEncryptedContentError,
+  PROVIDER_SAFETY_REFUSAL_REASON,
+  REMOTE_COMPACT_ENCRYPTED_CONTENT_REASON,
+} from '@cindy/maker-shared/error-redaction';
 import {
   CLAUDE_GATEWAY_OPUS_PLAN_MISMATCH_REASON,
   CLAUDE_SUBSCRIPTION_OPUS_PLAN_MISMATCH_REASON,
@@ -51,12 +57,22 @@ export const ERROR_REASON_I18N_KEYS: Record<string, string> = {
   [CLAUDE_SUBSCRIPTION_OPUS_PLAN_MISMATCH_REASON]:
     'chat.errorBanner.claudeSubscriptionOpusPlanMismatch',
   [GATEWAY_PROXY_TOKEN_INVALID_REASON]: 'chat.errorBanner.gatewayProxyTokenInvalidNoRetry',
+  [PROVIDER_SAFETY_REFUSAL_REASON]: 'chat.errorBanner.providerSafetyRefusal',
 };
 
-/** Also correct persisted failures from hosts that used the old overflow reason. */
+/** Also correct persisted failures from hosts that used the old overflow reason or lacked the safety reason. */
 export function errorReasonI18nKey(reason: string | null | undefined, message: string): string | undefined {
+  if (message.startsWith('provider-rejected-before-dispatch: [PI_RETRY_HISTORY_FRAME_TOO_LARGE] ')) {
+    return 'chat.errorBanner.piRetryHistoryTooLarge';
+  }
+  if (message.startsWith('provider-rejected-before-dispatch: Provider rejected the Session send before dispatch: ')) {
+    return 'chat.errorBanner.messageNotSent';
+  }
   if ((!reason || reason === 'context-overflow') && isRemoteCompactEncryptedContentError(message, reason)) {
     return 'chat.errorBanner.remoteCompactEncryptedContent';
+  }
+  if (isProviderSafetyRefusalError(message, reason)) {
+    return 'chat.errorBanner.providerSafetyRefusal';
   }
   return reason ? ERROR_REASON_I18N_KEYS[reason] : undefined;
 }

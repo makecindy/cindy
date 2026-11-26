@@ -3193,6 +3193,7 @@ describe('上游过载自动重试期间的渠道进度(零产出窗口)', () =>
     h.eventCbs.get('sess-new')?.({ type: 'done', data: { result: 'late result' } });
     const outcome = await pending;
     expect(outcome.status).toBe('error');
+    expect(outcome.errorReason).toBe(reason);
     if (text.startsWith('![')) {
       expect(outcome.finalText).toContain('🖼️ _shot_');
       expect(outcome.finalText).not.toContain('shot.png');
@@ -3214,6 +3215,7 @@ describe('上游过载自动重试期间的渠道进度(零产出窗口)', () =>
     } });
     const outcome = await pending;
     expect(outcome.status).toBe('error');
+    expect(outcome.errorReason).toBe('output-limit');
     expect(outcome.errorMessage).toContain('131064');
     expect(outcome.errorMessage).toContain('131072');
     expect(outcome.errorMessage).toContain('降低推理强度');

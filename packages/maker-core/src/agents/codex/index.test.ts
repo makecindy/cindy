@@ -1,3 +1,4 @@
+import type { ChildProcessWithoutNullStreams } from 'node:child_process';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import path from 'node:path';
 import os from 'node:os';
@@ -53,7 +54,7 @@ type LooseThreadEventHandlers = {
   [K in keyof ThreadEventHandlers]?: (...args: any[]) => any;
 };
 
-const { MockCodexTransport, createdTransports, createdStdioOptions } = vi.hoisted(() => {
+const { MockCodexTransport, createdTransports, createdStdioOptions, spawnedChildren } = vi.hoisted(() => {
   type LineHandler = (line: string) => void;
   type StderrHandler = (line: string) => void;
   type CloseHandler = (info: { reason: string }) => void;
@@ -277,22 +278,26 @@ const { MockCodexTransport, createdTransports, createdStdioOptions } = vi.hoiste
   }
 
   const createdTransports: MockCodexTransport[] = [];
+  const spawnedChildren: ChildProcessWithoutNullStreams[] = [];
   const createdStdioOptions: Array<{
     extraArgs?: string[];
     env?: Record<string, string>;
-    onProcessSpawned?: (pid: number) => void | (() => void);
+    onProcessSpawned?: (pid: number, child: ChildProcessWithoutNullStreams) => void | (() => void);
   }> = [];
-  return { MockCodexTransport, createdTransports, createdStdioOptions };
+  return { MockCodexTransport, createdTransports, createdStdioOptions, spawnedChildren };
 });
 
 vi.mock('./app-server/stdioTransport.js', () => ({
   createStdioTransport: (opts: {
     extraArgs?: string[];
     env?: Record<string, string>;
-    onProcessSpawned?: (pid: number) => void | (() => void);
+    onProcessSpawned?: (pid: number, child: ChildProcessWithoutNullStreams) => void | (() => void);
   }) => {
     createdStdioOptions.push(opts);
-    opts.onProcessSpawned?.(7_000 + createdStdioOptions.length);
+    const pid = 7_000 + createdStdioOptions.length;
+    const child = { pid } as ChildProcessWithoutNullStreams;
+    spawnedChildren.push(child);
+    opts.onProcessSpawned?.(pid, child);
     const transport = new MockCodexTransport(opts.extraArgs);
     createdTransports.push(transport);
     return transport;
@@ -303,6 +308,7 @@ beforeEach(() => {
   MockCodexTransport.userAgent = 'mock-codex';
   createdTransports.length = 0;
   createdStdioOptions.length = 0;
+  spawnedChildren.length = 0;
   MockCodexTransport.threadSeq = 1;
   MockCodexTransport.failThreadStart = false;
   MockCodexTransport.dropThreadUnsubscribe = false;
@@ -5715,8 +5721,8 @@ describe('CodexAgent.refreshLocalModels', () => {
 
     expect(createdTransports).toHaveLength(2);
     expect(registerLocalCodexAppServerProcess.mock.calls).toEqual([
-      [{ pid: 7_001, role: 'task-host' }],
-      [{ pid: 7_002, role: 'control-plane-service' }],
+      [{ pid: 7_001, child: spawnedChildren[0], role: 'task-host' }],
+      [{ pid: 7_002, child: spawnedChildren[1], role: 'control-plane-service' }],
     ]);
     expect(createdTransports[0].closed).toBe(false);
     expect(prepareCodexLocalCredentialModeSwitch).not.toHaveBeenCalled();
@@ -9131,10 +9137,11 @@ describe('CodexAgent MCP thread context hooks', () => {
     expect(createdTransports).toHaveLength(1);
     expect(registerLocalCodexAppServerProcess).toHaveBeenCalledWith({
       pid: 7_001,
+      child: spawnedChildren[0],
       role: 'control-plane-service',
     });
     // transport 在进程退出时调用该 disposer 注销登记。
-    expect(createdStdioOptions[0]?.onProcessSpawned?.(7_001)).toBe(disposeRegistration);
+    expect(createdStdioOptions[0]?.onProcessSpawned?.(7_001, spawnedChildren[0])).toBe(disposeRegistration);
     expect(prepareCodexExtraSpawnConfig).toHaveBeenCalledWith([], {
       remoteHostId: undefined,
       credentialMode: 'oauth-bearer',
@@ -13338,7 +13345,9 @@ describe('CodexAgent MCP thread context hooks', () => {
       }
     });
 
-    it('retries a zero-output terminal 429 after the daemon exhausts its own retry budget', async () => {
+    // Unit: a native user-message receipt means retrying with the original input
+    // would add another copy to the same thread and the next upstream payload.
+    it.each([false, true])('retries a terminal 429 after native retries (input recorded: %s)', async (inputRecorded) => {
       vi.useFakeTimers();
       try {
         const agent = new CodexAgent(createDeps());
@@ -13357,6 +13366,10 @@ describe('CodexAgent MCP thread context hooks', () => {
           for await (const event of handle.events()) events.push(event);
         })();
 
+        if (inputRecorded) handlers.itemCompleted?.({
+          threadId: 'start-thread-id', turnId: 'turn-1',
+          item: { id: 'user-input', type: 'userMessage', text: 'hello' },
+        });
         handlers.error({
           threadId: 'start-thread-id',
           turnId: 'turn-1',
@@ -13393,6 +13406,8 @@ describe('CodexAgent MCP thread context hooks', () => {
 
         await vi.advanceTimersByTimeAsync(20_000);
         expect(turnStartCount(host)).toBe(2);
+        expect(host.request.mock.calls.filter(([method]) => method === Method.TurnStart).at(-1)?.[1])
+          .toMatchObject({ input: inputRecorded ? [] : [{ type: 'text', text: 'hello' }] });
 
         await handle.close();
       } finally {
@@ -13509,11 +13524,20 @@ describe('CodexAgent MCP thread context hooks', () => {
       },
     );
 
-    it('does not outer-retry a terminal 429 after the turn produced output', async () => {
+    it.each(['reasoning', 'tool'])('does not outer-retry a terminal 429 after %s', async (progress) => {
       vi.useFakeTimers();
       try {
         const agent = new CodexAgent(createDeps());
-        const host = installCapacityHost(agent);
+        let starts = 0;
+        let counter = 0;
+        const runCounterTool = () => { counter += 1; };
+        const host = installFakeHost(agent, (method) => {
+          if (method !== Method.TurnStart) return undefined;
+          starts += 1;
+          // The controlled native engine runs the side effect if input is sent again.
+          if (starts > 1 && progress === 'tool') runCounterTool();
+          return { turn: { id: `turn-${starts}` } };
+        });
         const handle = await agent.startSession({
           sessionId: 'session-terminal-rate-limit-output',
           model: 'gpt-5.4',
@@ -13522,14 +13546,16 @@ describe('CodexAgent MCP thread context hooks', () => {
         await handle.send({ type: 'user', content: 'hello' });
 
         const handlers = host.getThreadHandlers();
-        if (!handlers?.error || !handlers.reasoningTextDelta) {
+        if (!handlers?.error || !handlers.reasoningTextDelta || !handlers.itemCompleted) {
           throw new Error('expected handlers');
         }
-        handlers.reasoningTextDelta({
-          threadId: 'start-thread-id',
-          turnId: 'turn-1',
-          delta: 'already working',
-        } as never);
+        if (progress === 'tool') {
+          runCounterTool();
+          handlers.itemCompleted({ threadId: 'start-thread-id', turnId: 'turn-1',
+            item: { id: 'counter-tool', type: 'commandExecution', command: 'increment fixture counter', status: 'completed' } });
+        } else {
+          handlers.reasoningTextDelta({ threadId: 'start-thread-id', turnId: 'turn-1', delta: 'already working' } as never);
+        }
         handlers.error({
           threadId: 'start-thread-id',
           turnId: 'turn-1',
@@ -13544,6 +13570,7 @@ describe('CodexAgent MCP thread context hooks', () => {
         await vi.advanceTimersByTimeAsync(40_000);
 
         expect(turnStartCount(host)).toBe(1);
+        if (progress === 'tool') expect(counter).toBe(1);
         expect(handle.isTurnRunning?.()).toBe(false);
 
         await handle.close();
@@ -33667,6 +33694,157 @@ describe('CodexAgent reconnect-stall watchdog', () => {
     }
   });
 
+  // Codex 0.166+ moves "Selected model is at capacity" into internal responses_retry
+  // with 300s+ backoff and omits any app-server error event on retry 1/5.
+  // Existing reconnect tests only cover app-server-emitted Reconnecting... notices (unit, fake clock).
+  it('surfaces upstream-overload early on proxy capacity push even when Codex suppresses retry 1/5', async () => {
+    vi.useFakeTimers();
+    try {
+      let pushCapacity: ((event: { threadId: string; signal: { code: 'server_is_overloaded'; status?: number; retryAfterMs?: number; observedAt: number } }) => void) | null = null;
+      const agent = new CodexAgent({
+        ...createDeps(),
+        subscribeCodexUpstreamCapacity: (_sessionId, listener) => {
+          pushCapacity = listener;
+          return () => { pushCapacity = null; };
+        },
+      });
+      const { host, handle, seen } = await startReconnectTurn(
+        agent,
+        'session-capacity-silent-retry-1',
+      );
+      expect(pushCapacity).not.toBeNull();
+      pushCapacity!({
+        threadId: 'start-thread-id',
+        signal: { code: 'server_is_overloaded', status: 503, observedAt: Date.now() },
+      });
+      await vi.advanceTimersByTimeAsync(0);
+
+      // Immediately surfaces non-terminal overload notice instead of waiting 6 minutes silently.
+      expect(seen).toContainEqual(expect.objectContaining({
+        type: 'error',
+        data: expect.objectContaining({
+          reason: 'upstream-overload',
+          codexErrorInfo: 'serverOverloaded',
+          errorStatus: 503,
+          isTerminal: false,
+          willRetry: true,
+        }),
+      }));
+
+      // Interrupts after 30s capacity budget (not 120s generic stall) as upstream-overload.
+      await vi.advanceTimersByTimeAsync(30_001);
+      expect(seen).toContainEqual(expect.objectContaining({
+        type: 'error',
+        data: expect.objectContaining({
+          reason: 'upstream-overload',
+          codexErrorInfo: 'serverOverloaded',
+          errorStatus: 503,
+          isTerminal: true,
+          willRetry: false,
+          message: 'Selected model is at capacity. Please try a different model.',
+        }),
+      }));
+      expect(seen).not.toContainEqual(expect.objectContaining({
+        type: 'error',
+        data: expect.objectContaining({ reason: 'codex_reconnect_stalled' }),
+      }));
+      expect(handle.isTurnRunning?.()).toBe(false);
+      expect(host.request.mock.calls).toContainEqual([
+        Method.TurnInterrupt,
+        expect.objectContaining({ turnId: 'turn-1' }),
+      ]);
+      await handle.close();
+      expect(pushCapacity).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // When upstream explicitly reports retryAfterMs > 120s (e.g. 368s), waiting 30s or 120s
+  // is guaranteed to fail; verify fail-fast grace interruption into upstream-overload (unit, fake clock).
+  it('fails fast into upstream-overload when proxy observes explicit retryAfterMs exceeding 120s', async () => {
+    vi.useFakeTimers();
+    try {
+      let pushCapacity: ((event: { threadId: string; signal: { code: 'server_is_overloaded'; status?: number; retryAfterMs?: number; observedAt: number } }) => void) | null = null;
+      const agent = new CodexAgent({
+        ...createDeps(),
+        subscribeCodexUpstreamCapacity: (_sessionId, listener) => {
+          pushCapacity = listener;
+          return () => { pushCapacity = null; };
+        },
+      });
+      const { handle, seen } = await startReconnectTurn(
+        agent,
+        'session-capacity-long-retry-after',
+      );
+      pushCapacity!({
+        threadId: 'start-thread-id',
+        signal: { code: 'server_is_overloaded', status: 503, retryAfterMs: 368_000, observedAt: Date.now() },
+      });
+
+      await vi.advanceTimersByTimeAsync(1_501);
+      expect(seen).toContainEqual(expect.objectContaining({
+        type: 'error',
+        data: expect.objectContaining({
+          reason: 'upstream-overload',
+          codexErrorInfo: 'serverOverloaded',
+          errorStatus: 503,
+          isTerminal: true,
+        }),
+      }));
+      expect(handle.isTurnRunning?.()).toBe(false);
+      await handle.close();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // Bare "Reconnecting... 2/5" from Codex 0.166 drops the underlying capacity cause;
+  // pull-based proxy observation must classify both the retry notice and watchdog settlement
+  // as upstream-overload and clear on real progress (unit, fake clock).
+  it('maps bare Reconnecting... 2/5 to upstream-overload via proxy pull fallback and clears on recovery', async () => {
+    vi.useFakeTimers();
+    try {
+      let observed: { code: 'server_is_overloaded'; status?: number; observedAt: number } | undefined;
+      const agent = new CodexAgent({
+        ...createDeps(),
+        getObservedCodexUpstreamCapacity: () => observed,
+      });
+      const { handle, handlers, seen } = await startReconnectTurn(
+        agent,
+        'session-capacity-pull-fallback',
+      );
+      observed = { code: 'server_is_overloaded', status: 503, observedAt: Date.now() };
+      emitReconnect(handlers, 2);
+
+      // Visible progress before 30s clears the capacity stall cleanly.
+      await vi.advanceTimersByTimeAsync(10_000);
+      handlers.agentMessageDelta?.({ threadId: 'start-thread-id', turnId: 'turn-1', itemId: 'm1', delta: 'Recovered' });
+      observed = undefined;
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(seen).not.toContainEqual(expect.objectContaining({
+        type: 'error',
+        data: expect.objectContaining({ isTerminal: true }),
+      }));
+
+      // A later capacity episode without recovery settles as upstream-overload within 30s.
+      observed = { code: 'server_is_overloaded', status: 503, observedAt: Date.now() };
+      emitReconnect(handlers, 2);
+      await vi.advanceTimersByTimeAsync(30_001);
+      expect(seen).toContainEqual(expect.objectContaining({
+        type: 'error',
+        data: expect.objectContaining({
+          reason: 'upstream-overload',
+          codexErrorInfo: 'serverOverloaded',
+          isTerminal: true,
+        }),
+      }));
+      await handle.close();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   // #11032: exercise the actual Agent event queue + timed interrupt, not a helper.
   // One started command with no completion must survive interrupt cleanup as an
   // unconfirmed result; a later turn must not inherit it or the gateway status (unit, fake clock).
@@ -37344,11 +37522,22 @@ describe('Codex native manual compaction', () => {
     await waitForExpectation(() => expect(events.some(e => e.type === 'status' && e.data.isRunning === true)).toBe(true));
     // Desktop ignores background running frames. Stop must be available even
     // before the daemon produces its first turn/item notification.
-    expect(events.find(e => e.type === 'status' && e.data.isRunning === true)?.turnScope).not.toBe('background');
+    const startingStatus = events.find(e => e.type === 'status' && e.data.isRunning === true);
+    expect(startingStatus?.turnScope).not.toBe('background');
+    expect(startingStatus?.data).toMatchObject({ manualCompact: true });
     expect(host.request).toHaveBeenCalledWith(Method.ThreadCompactStart, { threadId: handle.id });
     await expect(handle.send({ type: 'user', content: 'do not race' })).rejects.toThrow('compacting');
     await expect(handle.compactSession!()).rejects.toThrow('active');
-    started(); boundary();
+    started();
+    host.getThreadHandlers()!.itemStarted!({
+      threadId: handle.id, turnId: 'manual-turn', item: { id: 'manual-boundary', type: 'contextCompaction' },
+    });
+    boundary();
+    await waitForExpectation(() => {
+      const statuses = events.filter(e => e.type === 'status' && e.data.isRunning === true);
+      expect(statuses.length).toBeGreaterThan(1);
+      expect(statuses.every(e => e.data.manualCompact === true)).toBe(true);
+    });
     expect(resolved).toBe(false);
     completed();
     await expect(result).resolves.toEqual({ tokensBefore: 0, estimatedTokensAfter: undefined });
@@ -37764,17 +37953,21 @@ describe.each(['cindy_helper', 'cindy'])('failed expected %s recovery', serverNa
   async function setup(state: string | null | (() => string | null), background: () => Promise<unknown> = async () => ({ data: [], nextCursor: null }), recover = true) {
     const agent = new CodexAgent(createDeps());
     let resumes = 0;
-    const host = installFakeHost(agent, method => {
+    const host = installFakeHost(agent, (method, params) => {
       if (method === Method.ThreadResume) {
         resumes++;
         return { thread: { id: threadId }, model: 'gpt-5.4' };
       }
       if (method === Method.ThreadBackgroundTerminalsList) return background();
-      if (method === Method.McpServerStatusList) return { data: [
-        ...(serverName === 'cindy' ? [{ name: 'cindy_helper', runtimeStatus: 'connected', tools: { list_tools: {}, call_tool: {} } }] : []),
-        { name: serverName, runtimeStatus: resumes > 1 && recover ? 'connected' : typeof state === 'function' ? state() : state,
-          tools: serverName === 'cindy' ? { ghost_info: {}, ghost_call: {} } : { list_tools: {}, call_tool: {} } },
-      ], nextCursor: null };
+      if (method === Method.McpServerStatusList) {
+        if ((params as { serverName?: string }).serverName === 'cindy_helper' && serverName === 'cindy') {
+          return { data: [{ name: 'cindy_helper', runtimeStatus: 'connected', tools: { list_tools: {}, call_tool: {} } }], nextCursor: null };
+        }
+        return { data: [
+          { name: serverName, runtimeStatus: resumes > 1 && recover ? 'connected' : typeof state === 'function' ? state() : state,
+            tools: serverName === 'cindy' ? { ghost_info: {}, ghost_call: {} } : { list_tools: {}, call_tool: {} } },
+        ], nextCursor: null };
+      }
       if (method === Method.TurnStart) return { turn: { id: 'helper-turn' } };
       return undefined;
     }, { buildSessionMcpConfig: () => ({
@@ -37936,7 +38129,11 @@ describe.each(['cindy_helper', 'cindy'])('failed expected %s recovery', serverNa
     expect(events.filter(event => event.type === 'text' && event.standaloneText
       && (event.data as { code?: string }).code === 'CINDY_EXPECTED_HELPER_UNAVAILABLE')).toHaveLength(serverName === 'cindy_helper' ? 1 : 0);
     expect(host.request.mock.calls.filter(([m]) => m === Method.ThreadResume)).toHaveLength(1);
-    expect(host.request.mock.calls.filter(([m]) => m === Method.McpServerStatusList)).toHaveLength(finalState === 'failed' ? 3 : 2);
+    const expectedProbes = finalState === 'failed' ? 3 : 2;
+    const statusCalls = host.request.mock.calls.filter(([m]) => m === Method.McpServerStatusList);
+    expect(statusCalls).toHaveLength(expectedProbes * (serverName === 'cindy' ? 2 : 1));
+    expect(statusCalls.filter(([, params]) => (params as { serverName?: string }).serverName === serverName))
+      .toHaveLength(expectedProbes);
     await agent.dispose();
   });
   it('backs off repeated failures and stops after two recovery attempts', async () => {

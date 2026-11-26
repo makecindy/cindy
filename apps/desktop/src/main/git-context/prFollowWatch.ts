@@ -18,6 +18,8 @@ import type { PrStatusQuery } from './prStatusService';
 export const PR_WATCH_SOURCE = 'pr-status';
 /** Two host triggers of one schedule at least this far apart; the cron covers the rest. */
 export const MIN_RETRIGGER_MS = 60_000;
+/** Bounded fallback when GitHub metadata lacks updated_at across repeated overflow batches; preserves 30m human-wait backoff. */
+export const RECONCILE_FALLBACK_MS = 30 * 60_000;
 /** How many PR baselines are kept (LRU by insertion). */
 const MAX_TRACKED = 500;
 
@@ -118,6 +120,8 @@ function watchesChange(schedule: Schedule, url: string, changes: readonly WatchC
 
 export class PrFollowWatch {
   private readonly signatures = new Map<string, string>();
+  private readonly reconciledUpdatedAt = new Map<string, string>();
+  private readonly lastReconciledAt = new Map<string, number>();
   private readonly lastTriggered = new Map<string, number>();
   /** Keep one doorbell per schedule, so retrying a busy follower cannot rerun its siblings. */
   private readonly pending = new Map<string, () => Promise<void>>();
@@ -130,6 +134,8 @@ export class PrFollowWatch {
 
   reset(): void {
     this.signatures.clear();
+    this.reconciledUpdatedAt.clear();
+    this.lastReconciledAt.clear();
     this.lastTriggered.clear();
     this.pending.clear();
     if (this.retryTimer) clearTimeout(this.retryTimer);
@@ -163,6 +169,9 @@ export class PrFollowWatch {
       return;
     }
     const url = sessionPrUrl(query);
+    if (this.deps.autoRunAllowed() && result.ok && typeof result.metadata?.updated_at === 'string' && result.metadata.updated_at) {
+      this.markCommentReconciled(query, result.metadata.updated_at);
+    }
     void this.trigger(url, changes).catch((error) => {
       this.deps.log?.warn?.('pr follow watch trigger failed', {
         error: error instanceof Error ? error.message : String(error),
@@ -187,6 +196,35 @@ export class PrFollowWatch {
   /** Snapshot the observer baseline before refreshing an explicit event. */
   observedSignature(query: PrStatusQuery): string | undefined {
     return this.signatures.get(prStatusKey(query));
+  }
+
+  /**
+   * Overflow / reconnect reconciliation wakes the PR check when `updated_at` advanced
+   * (or was never reconciled); if `updated_at` is absent, falls back once per bounded window
+   * rather than looping every minute.
+   */
+  needsCommentReconcile(query: PrStatusQuery, updatedAt: string | undefined): boolean {
+    const key = prStatusKey(query);
+    if (updatedAt) {
+      return this.reconciledUpdatedAt.get(key) !== updatedAt;
+    }
+    const lastAt = this.lastReconciledAt.get(key);
+    return lastAt === undefined || this.now() - lastAt >= RECONCILE_FALLBACK_MS;
+  }
+
+  markCommentReconciled(query: PrStatusQuery, updatedAt: string | undefined): void {
+    const key = prStatusKey(query);
+    this.lastReconciledAt.delete(key);
+    this.lastReconciledAt.set(key, this.now());
+    if (this.lastReconciledAt.size > MAX_TRACKED) {
+      this.lastReconciledAt.delete(this.lastReconciledAt.keys().next().value!);
+    }
+    if (!updatedAt) return;
+    this.reconciledUpdatedAt.delete(key);
+    this.reconciledUpdatedAt.set(key, updatedAt);
+    if (this.reconciledUpdatedAt.size > MAX_TRACKED) {
+      this.reconciledUpdatedAt.delete(this.reconciledUpdatedAt.keys().next().value!);
+    }
   }
 
   /** An authenticated doorbell may represent a new comment without changing status counts. */
@@ -252,13 +290,24 @@ export class PrFollowWatch {
       }
       this.pending.delete(schedule.id);
       this.lastTriggered.set(schedule.id, now);
+      const isReconcileOnly = changes.length === 1 && changes[0] === 'reconcile';
       this.deps.log?.info?.('pr follow watch: status changed, running schedule now', { scheduleId: schedule.id, url });
       // This run belongs to the configured schedule, even if the observing tool call expired.
       void runTaskActionRequest(() =>
-        this.deps.runNow(schedule.id, { kind: 'watch', source: PR_WATCH_SOURCE, detail: url }, schedule, observation))
+        this.deps.runNow(
+          schedule.id,
+          {
+            kind: 'watch',
+            source: PR_WATCH_SOURCE,
+            detail: url,
+            ...(isReconcileOnly ? { reason: 'reconcile' as const } : {}),
+          },
+          schedule,
+          observation,
+        ))
         .then(result => {
           // The next cron tick only checks status. Keep the event after a runner defers its work.
-          if (schedule.prTrigger && result?.deferred && isCurrent() && this.generation === generation && !this.pending.has(schedule.id)) {
+          if (result?.deferred && isCurrent() && this.generation === generation && !this.pending.has(schedule.id)) {
             this.defer(schedule.id, retry);
           }
         })

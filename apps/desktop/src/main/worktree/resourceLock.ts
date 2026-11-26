@@ -50,9 +50,13 @@ export async function withWorktreeResourceLock<T>(value: string, task: () => Pro
 }
 
 /** Stable physical ordering prevents overlapping batch status/move operations from deadlocking. */
-export async function withWorktreeResourceLocks<T>(values: readonly string[], task: () => Promise<T>): Promise<T> {
+export async function withWorktreeResourceLocks<T>(
+  values: readonly string[],
+  task: (isHeld: (physicalKey: string) => boolean) => Promise<T>,
+): Promise<T> {
   const keys = [...new Set(await Promise.all(values.map(physicalWorktreeKey)))].sort();
   const acquire = (index: number): Promise<T> => keys[index]
-    ? withWorktreeResourceLock(keys[index], () => acquire(index + 1)) : task();
+    ? withWorktreeResourceLock(keys[index], () => acquire(index + 1))
+    : task((key) => heldResources.getStore()?.get(key)?.active === true);
   return acquire(0);
 }

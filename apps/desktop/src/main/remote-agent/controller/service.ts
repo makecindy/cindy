@@ -41,7 +41,7 @@ import { createLogger } from '../../logger.js';
 import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../../appSessionState.js';
 import { findReceivedShare, findReceivedShareForExecution, parseProviderShareAgentDeviceId, providerShareAccessEpoch,
   onProviderShareReceivedChanged } from '../../device-link/providerShareGuest.js';
-import { getRemoteLinkCloseEpoch, onRemoteLinkClosed } from '../../device-link/index.js';
+import { getRemoteLinkCloseEpoch, isPeerDeliveringBusinessTraffic, onRemoteLinkClosed } from '../../device-link/index.js';
 import { isTemporaryProviderMetadataFailure } from '../../device-link/providerMetadataContinuity.js';
 import { credentialGrantFor } from '../executor/credentialGrants';
 import type { ExecutorCaptureHooks } from '../executor/executor';
@@ -218,7 +218,12 @@ export function remoteAgentPollerFor(
   }
   let poller = byDevice.get(deviceId);
   if (!poller) {
-    poller = new RemoteAgentPoller(remoteAgentInvoker(deviceId, remoteInvoke), log);
+    poller = new RemoteAgentPoller(
+      remoteAgentInvoker(deviceId, remoteInvoke),
+      log,
+      Date.now,
+      () => isPeerDeliveringBusinessTraffic(deviceId),
+    );
     byDevice.set(deviceId, poller);
   }
   return poller;

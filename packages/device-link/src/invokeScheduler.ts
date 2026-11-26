@@ -1,6 +1,7 @@
 import type { InvokePriority } from "./invokePolicy.js";
 import { DeviceLinkError } from "./protocol.js";
 import { parseSharedTaskPeer } from "./sharedTaskPeer.js";
+import { parseProviderSharePeer } from './providerSharePeer.js';
 import { diagnosticChannel, diagnosticRef } from './stallDiagnostics.js';
 
 export interface InvokeDiagnostic {
@@ -22,6 +23,12 @@ const INTERACTIVE_EXTRA_ACTIVE = 2;
 const MAX_QUEUED = 128;
 // Background refreshes cannot consume the last waiting positions for user actions.
 const MAX_BACKGROUND_QUEUED = 96;
+
+// Capacity belongs to the physical host, while each job keeps its complete
+// authorization scope. This never coalesces results or cancels a sibling share.
+function capacityKey(peerId: string): string {
+  return parseSharedTaskPeer(peerId)?.deviceId ?? parseProviderSharePeer(peerId)?.deviceId ?? peerId;
+}
 
 interface Job {
   peerId: string;
@@ -48,7 +55,7 @@ export class InvokeScheduler {
     private readonly now: () => number = () => performance.now()) {}
 
   snapshot(peerId: string): Record<string, unknown> {
-    const peer = this.peers.get(parseSharedTaskPeer(peerId)?.deviceId ?? peerId);
+    const peer = this.peers.get(capacityKey(peerId));
     const now = this.now();
     const summarize = (jobs: Iterable<Job>) => {
       const groups = new Map<string, { channel: string; priority: InvokePriority; count: number; oldestMs: number; request: string; source: string }>();
@@ -86,9 +93,9 @@ export class InvokeScheduler {
       ? (priority ? "background" : "foreground")
       : priority;
     const background = resolved === "background";
-    // Shared-task handles share the physical host's capacity, but keep their
+    // Shared-task and provider-share handles share physical host capacity, but keep their
     // scoped peer identity for cancellation and all transport bookkeeping.
-    const deviceId = parseSharedTaskPeer(peerId)?.deviceId ?? peerId;
+    const deviceId = capacityKey(peerId);
     let peer = this.peers.get(deviceId);
     if (!peer) {
       peer = { active: 0, background: 0, jobs: [], running: new Set() };
@@ -173,7 +180,7 @@ export class InvokeScheduler {
 
   /** Keep active slots until their promises settle, including across reconnects. */
   cancel(peerId: string, error: DeviceLinkError): void {
-    const deviceId = parseSharedTaskPeer(peerId)?.deviceId ?? peerId;
+    const deviceId = capacityKey(peerId);
     const state = this.peers.get(deviceId);
     if (!state) return;
     const cancelled = state.jobs.filter((job) => job.peerId === peerId);
