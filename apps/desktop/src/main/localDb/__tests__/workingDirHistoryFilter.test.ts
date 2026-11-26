@@ -9,6 +9,7 @@ vi.mock('electron', () => ({
 }));
 
 vi.mock('../../appSessionState.js', () => ({
+  activeOwnerScopeKey: () => 'test-owner',
   ownerScopedUserDataPath: (...parts: string[]) => ['/tmp/xdt-test-user-data', ...parts].join('/'),
 }));
 

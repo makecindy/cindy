@@ -2808,7 +2808,7 @@
         "description": "Ubuntu uses system .deb packages. Arch Linux and Omarchy use the managed user installer with the same verified .deb payload, without a Debian package manager.",
         "item1": "Ubuntu: use sudo apt install ./cindy-<version>-<arch>.deb. Arch/Omarchy: follow the user-install guide in docs/linux.md.",
         "item2": "After choosing Update, system .deb installs request authorization; managed user installs switch versions without a system password. Other package-managed installs use their package manager.",
-        "item3": "Linux x64 and arm64 support the Beta channel. Linux updates are applied only when you choose to restart, never automatically while idle."
+        "item3": "Linux x64 and arm64 support the Beta channel. Managed user installs can install updates automatically while idle; system .deb installs with passwordless authorization can install updates automatically while idle, while other system .deb installs apply updates only when you choose to restart."
       },
       "qnaTitle": "Ask directly",
       "qnaDescription": "Still need help? Ask how to do what you have in mind.",
@@ -2883,7 +2883,7 @@
       "openLogsDirError": "Failed to open logs directory",
       "autoUpdateLabel": "Install updates while idle",
       "autoUpdateDescription": "After an update finishes downloading, restart the app to install it when this computer has been idle for 10 minutes and no tasks are running.",
-      "linuxUpdateDescription": "Updates are applied only when you choose to restart. System .deb installs request your system password; managed user installs do not. Other installations use their package manager.",
+      "linuxUpdateDescription": "System .deb installs request your system password, so updates apply only when you choose to restart. Managed user installs need no password and can install while idle. Other installations use their package manager.",
       "autoUpdateEnabledToast": "Idle update installation enabled",
       "autoUpdateDisabledToast": "Idle update installation disabled",
       "autoUpdateSaveFailed": "Failed to save auto-update settings",
@@ -3473,7 +3473,7 @@
           "passages": {
             "p1": "This morning I will go over the plan for the week, and in the afternoon I will list the questions we need to discuss and send them out so everyone can read them first.",
             "p2": "If the weather is nice tomorrow, we can leave a little earlier, pick up some fruit and snacks on the way, and have lunch in the park.",
-            "p3": "Please make this text more concise, keep the key numbers and conclusions, and then sum up the main points in three to five sentences."
+            "p3": "Make this text more concise, keep the key numbers and conclusions, and then sum up the main points in three to five sentences."
           },
           "errors": {
             "too_short": "Too little speech was detected in passage {{index}}. Record it again.",
@@ -4688,6 +4688,15 @@
       "menu": {
         "disableProvider": "Disable This Provider",
         "enableProvider": "Enable This Provider",
+        "icon": "Connection icon",
+        "appearance": "Name and icon",
+        "ownImage": "Choose image",
+        "imageError": "Choose a PNG, JPG or WebP image under 10 MB.",
+        "connectionIcon": {
+          "default": "Default",
+          "personal": "Personal",
+          "work": "Work"
+        },
         "hideProvider": "Hide from Model Picker",
         "showProvider": "Show in Model Picker"
       },
@@ -4714,7 +4723,7 @@
         "keyPlaceholder": "Paste API key",
         "toast": {
           "saved": "API key for {{name}} saved",
-          "saveFailed": "Failed to save API key for {{name}}. Please try again.",
+          "saveFailed": "Failed to save API key for {{name}}. Try again.",
           "disconnected": "Disconnected {{name}}",
           "disconnectFailed": "Failed to disconnect {{name}}"
         },
@@ -5898,7 +5907,7 @@
       "uninstallTitle": "Uninstall Pi extension?",
       "uninstallDescription": "{{name}} will be removed from this device. Pi tasks that are already open keep the old extension until they are closed.",
       "confirmUninstall": "Uninstall",
-      "extensionDialogConfirm": "Confirm",
+      "extensionDialogConfirm": "Continue",
       "cancel": "Cancel",
       "resources": {
         "extension": "Extension code",
@@ -7280,6 +7289,30 @@
             "controller-encryption-required": "This computer has “Use Only Agent-Net” enabled. Disable it here before switching the other computer back to Device Link.",
             "agent-net-only-relay": "This connection uses a network that only supports Agent-Net. Choose a route that supports Device Link before switching back."
           }
+        },
+        "peerUpdate": {
+          "availableTip": "Version {{version}} available — click to update",
+          "downloading": "Downloading {{version}}…",
+          "relaunching": "Restarting to install {{version}}…",
+          "confirm": {
+            "title": "Update Cindy on “{{name}}”?",
+            "selfTitle": "Update Cindy on this computer?",
+            "description": "Cindy will update from {{from}} to {{to}} and restart on that device. Remote connections will drop briefly.",
+            "selfDescription": "Cindy will update from {{from}} to {{to}} and restart on this computer.",
+            "busyWarning": "Running tasks or background work on that device will be interrupted by the restart.",
+            "selfBusyWarning": "Running tasks or background work on this computer will be interrupted by the restart.",
+            "linuxPermissionHint": "Managed Linux installations may prompt for a system password on the target computer.",
+            "windowsPermissionHint": "Installations in a protected folder may prompt for system permission on the target computer.",
+            "action": "Update now"
+          },
+          "toast": {
+            "started": "Updating “{{name}}” to {{version}}",
+            "relaunching": "“{{name}}” is restarting to install {{version}}",
+            "versionChanged": "The available version on “{{name}}” changed. Reopen the card to review.",
+            "noUpdate": "No installable update is available on “{{name}}”.",
+            "busy": "“{{name}}” is already running an update. Try again shortly.",
+            "failed": "Could not update Cindy on “{{name}}”."
+          }
         }
       }
     },
@@ -7408,7 +7441,8 @@
       "localNetwork": {
         "label": "Local network",
         "deniedHint": "Without this permission, computers and phones on the same network can't connect to this computer directly. They go through the relay, which is slower.",
-        "settingsHint": "Turn on Cindy in System Settings › Privacy & Security › Local Network. It takes effect as soon as you come back."
+        "promptedHint": "Click Allow in the macOS prompt. If no prompt appeared, open System Settings to turn it on manually.",
+        "settingsHint": "In Privacy & Security, open Local Network and turn on Cindy. If it isn't listed, click + to add this app—it takes effect as soon as you come back."
       }
     },
     "imBot": {
@@ -7879,6 +7913,10 @@
         "toggle-sidebar": {
           "label": "Toggle sidebar",
           "description": "Collapse or expand the session list sidebar"
+        },
+        "copy-session-link": {
+          "label": "Copy session link",
+          "description": "Copy the link to the open session"
         },
         "session-history-back": {
           "label": "Previous task",
@@ -9596,6 +9634,7 @@
         "createTitle": "Add MCP server",
         "editTitle": "Edit MCP server",
         "desc": "Remote http / sse MCP only. New sessions can call it after saving; in-flight sessions are unaffected.",
+        "embeddedGuide": "Your assistant opened this form to set up MCP for the current task. Follow the service provider’s instructions to check any prefilled details, fill in what’s missing, and save the configuration.",
         "teammateDesc": "Remote http / sse MCP only. After saving, your buddy adds it to their tools and can use it from the next message in this chat, with no new session needed."
       },
       "fields": {
@@ -9807,7 +9846,7 @@
       "allow": "Allow",
       "deny": "Deny",
       "questionTitle": "Your input needed",
-      "submit": "Submit",
+      "submit": "Send answer",
       "planTitle": "Plan review",
       "approve": "Approve",
       "requestChanges": "Request changes",
@@ -10012,7 +10051,7 @@
       "successBody": "You’re signed in. You can close this page now.",
       "closeCountdown": "Closing in {{count}}s",
       "errorTitle": "Sign-in not completed",
-      "errorBody": "Please return to {{appName}} and sign in again.",
+      "errorBody": "Return to {{appName}} and sign in again.",
       "returnButton": "Return to {{appName}}"
     },
     "regionPill": {
@@ -10059,7 +10098,7 @@
     },
     "rateLimit": {
       "retryAt": "Try again after {{time}} (local time).",
-      "unknownWait": "The server did not provide a waiting time. Please wait before trying again.",
+      "unknownWait": "The server did not provide a waiting time. Wait before trying again.",
       "intro": "The sign-in service is temporarily limiting requests. This is separate from a local credential-storage error.",
       "guidance": "Wait before requesting another code. Restarting, reinstalling, or changing networks does not guarantee that the limit will be lifted.",
       "support": "If this continues after waiting, privately send logs to feedback@cindy.app with your OS, Cindy version, error time, and the code below. Do not post logs publicly."
@@ -10073,9 +10112,9 @@
   },
   "legacyMigration": {
     "title": "Migrate data from the previous version",
-    "description": "Data from a previous version was found on this device. Your chat history and media files will be migrated to the new data location. If the old app is still running, please quit it completely first, and keep {{appName}} open during the migration. Note: authorized third-party keys and credentials cannot be migrated — after the migration you will need to re-authorize or re-enter them in Settings.",
+    "description": "Data from a previous version was found on this device. Your chat history and media files will be migrated to the new data location. If the old app is still running, quit it completely first, and keep {{appName}} open during the migration. Note: authorized third-party keys and credentials cannot be migrated — after the migration you will need to re-authorize or re-enter them in Settings.",
     "confirm": "Continue",
-    "migrating": "Migrating data, please wait…",
+    "migrating": "Migrating data…",
     "failedTitle": "Migration incomplete",
     "failedDescription": "The data migration could not be completed this time. You can keep using {{appName}} — it will retry automatically the next time you sign in."
   },
@@ -10121,17 +10160,17 @@
     },
     "manifestFailed": {
       "title": "Network connection failed",
-      "description": "Could not check for updates. Please check your network and retry.",
+      "description": "Could not check for updates. Check your network and retry.",
       "confirm": "Retry"
     },
     "downloadFailed": {
       "title": "Update download failed",
-      "description": "The app update did not complete. Please check your network and retry.",
+      "description": "The app update did not complete. Check your network and retry.",
       "confirm": "Retry"
     },
     "spawnFailed": {
       "title": "Auto-update failed",
-      "description": "The updater could not be launched, possibly blocked by system security policy. Please download the latest installer manually.",
+      "description": "The updater could not be launched, possibly blocked by system security policy. Download the latest installer manually.",
       "confirm": "Go to download"
     },
     "workspaceMigration": {
@@ -12378,7 +12417,7 @@
           "soleOwnerHint": "You’re the only member left. Archive this group to keep its history and restore it later.",
           "archive": "Archive Group",
           "archiveHint": "Archiving disables this group for all members, stopping new messages and buddy runs. History is kept. Search for the group to view its history or unarchive it.",
-          "confirm": "Confirm",
+          "confirm": "Continue",
           "lastOwner": "Transfer ownership to another member before leaving or removing the current owner.",
           "conflict": "Someone updated this group. Refresh and try again.",
           "unarchive": "Unarchive group",
@@ -13235,7 +13274,7 @@
       }
     },
     "confirmDialog": {
-      "confirm": "Confirm",
+      "confirm": "Continue",
       "cancel": "Cancel",
       "dontShowAgain": "Don’t show again"
     },
@@ -13624,6 +13663,7 @@
           "overloadRetryingNoCount": "The model service is busy. Retrying automatically…",
           "overloadFailed": "⚠️ The model service is busy — the upstream has no capacity right now. Resend this message here to try again, or switch to another model in Cindy. (Clicking “Retry” in the desktop app also continues the task, but the result won’t come back to this message.)"
         },
+        "openAiReconnect": "Reconnect ChatGPT under Settings → Providers → OpenAI in Cindy, then send a message here to continue.",
         "audioInputUnavailable": "This model connection can’t read audio directly. Ask Cindy to transcribe the audio first, then continue.",
         "toolLoop": {
           "generic": "The model called tools repeatedly too many times, so Cindy stopped this turn to avoid an infinite loop. Send a new message to continue.",
@@ -14784,27 +14824,27 @@
         },
         "acp": {
           "ask": {
-            "label": "Ask each time",
+            "label": "Default permissions",
             "description": "You confirm when the Agent asks for permission. Cindy can’t block actions the Agent doesn’t ask about."
           },
           "default": {
-            "label": "Default",
+            "label": "Default permissions",
             "description": "Works the agent’s default way; you confirm its permission requests."
           },
           "acceptEdits": {
-            "label": "Accept edits",
+            "label": "Auto accept edits",
             "description": "The agent edits files directly; you confirm its other permission requests."
           },
           "auto": {
-            "label": "Auto",
+            "label": "Auto-review",
             "description": "The agent decides what needs confirmation; you confirm the requests it makes."
           },
           "plan": {
-            "label": "Plan only",
+            "label": "Plan mode",
             "description": "The agent only analyzes and plans; it does not edit files."
           },
           "bypassPermissions": {
-            "label": "Allow all",
+            "label": "Full access",
             "description": "Every permission the Agent asks for is granted automatically."
           }
         }
@@ -15474,7 +15514,7 @@
       "back": "Back",
       "skip": "Skip",
       "next": "Next",
-      "submit": "Submit",
+      "submit": "Send answer",
       "sendAndContinue": "Send and continue",
       "close": "Close",
       "customAnswer": "Type something else…",
@@ -15649,6 +15689,8 @@
       "codexHelperUnverified": "Could not verify cindy_helper for this task. Task result reporting may be unavailable.",
       "requestFormatError": "The app sent an invalid request, so this reply could not be completed.",
       "piRetryHistoryTooLarge": "Your message was not sent. Pi could not read the history needed to retry after a frame exceeded the local 16 MiB limit. You can continue in a new task.",
+      "piRetryHistoryUnavailable": "Your message was not sent. Pi could not read the history needed to send it. You can retry, or continue in a new task.",
+      "upstreamStatusError": "The upstream returned {{status}}, so this reply is incomplete.",
       "messageNotSent": "Your message was not sent.",
       "replyFailed": "Could not complete the reply",
       "queuedSendRecovery": "Your message wasn’t sent. Select Retry to send it as is. Sending a new message will replace it.",
@@ -15716,8 +15758,8 @@
       "networkHideRaw": "Hide Details",
       "diagnose": "Diagnose",
       "diagnoseTitle": "Diagnose this error in a new session",
-      "diagnosePrompt": "Please diagnose this error: find the cause and tell me how to fix it.\n\nSession: {{sessionUrl}}\nError: {{message}}\nDetails:\n{{details}}\n\nIf you find it's a problem with Cindy itself, let me know so I can choose whether to file an issue with the Cindy team.",
-      "diagnosePromptWithoutSession": "Please diagnose this error: find the cause and tell me how to fix it.\n\nError: {{message}}\nDetails:\n{{details}}\n\nIf you find it's a problem with Cindy itself, let me know so I can choose whether to file an issue with the Cindy team.",
+      "diagnosePrompt": "Diagnose this error: find the cause and tell me how to fix it.\n\nSession: {{sessionUrl}}\nError: {{message}}\nDetails:\n{{details}}\n\nIf you find it's a problem with Cindy itself, let me know so I can choose whether to file an issue with the Cindy team.",
+      "diagnosePromptWithoutSession": "Diagnose this error: find the cause and tell me how to fix it.\n\nError: {{message}}\nDetails:\n{{details}}\n\nIf you find it's a problem with Cindy itself, let me know so I can choose whether to file an issue with the Cindy team.",
       "gatewayProxyTokenInvalid": "Cindy AI credentials are no longer valid. Click Retry. If it happens again, sign out and sign back in.",
       "gatewayProxyTokenInvalidNoRetry": "Cindy AI credentials are no longer valid. If it happens again, sign out and sign back in.",
       "modelAccessDenied": "The upstream account cannot access this model. Select another model or check its access with the provider",
@@ -15909,6 +15951,10 @@
       "diffUnchangedLines_other": "{{count}} unchanged lines",
       "diffPreviewLoading": "Preparing diff preview…"
     },
+    "filePreview": {
+      "changed": "File changed",
+      "refreshHint": "Click to refresh"
+    },
     "textLightbox": {
       "unreadable": "Unable to read this file",
       "openSystemFailed": "Cannot open in system",
@@ -15916,7 +15962,7 @@
       "cannotRead": "Unable to read file",
       "loading": "Loading file…",
       "oversizeTitle": "File too large to preview",
-      "oversizeBody": "This file is {{size}}, exceeding the {{limit}}MB preview limit. Please open it with the system default application.",
+      "oversizeBody": "This file is {{size}}, exceeding the {{limit}}MB preview limit. Open it with the system default application.",
       "openInSystem": "Open in system",
       "closeHint": "or click the backdrop to close"
     },
@@ -16461,7 +16507,7 @@
       "REMOTE_LOCAL_ONLY_PROVIDER": "This model provider is a local-only service (e.g. Ollama) that a remote SSH task cannot reach. Switch to the Cindy AI gateway, or pick a provider reachable from the remote host.",
       "LOCAL_OLLAMA_NOT_READY": "Local Ollama isn't ready. Open Settings → Model Providers → Ollama.",
       "DEVICE_LINK_CONTROL_DISABLED": "Control for this device is off; the message was not sent.",
-      "DEVICE_LINK_MEDIA_TRANSFER_FAILED": "Attachment transfer failed; the message was not sent. Please try again.",
+      "DEVICE_LINK_MEDIA_TRANSFER_FAILED": "Attachment transfer failed; the message was not sent. Try again.",
       "MCP_APPROVAL_AUTO_BLOCKED": "Automatic approval review blocked this tool call. No manual rejection was received.",
       "MCP_APPROVAL_AUTO_BLOCKED_MISSING_EVIDENCE": "Auto approve blocked this tool call because its action details are incomplete.",
       "MCP_APPROVAL_AUTO_BLOCKED_INSTRUCTIONS_CHANGED": "Auto approve blocked this tool call because your instructions changed or are not yet synchronized.",
@@ -16484,7 +16530,7 @@
       "REMOTE_WORKDIR_UNAVAILABLE": "The remote working directory is unavailable. Check that the folder still exists on that computer, then try again.",
       "REMOTE_OPTIMISTIC_SESSION_STATE_UNAVAILABLE": "The computer cannot yet confirm whether this message was sent. Wait a moment and try again. Do not send the same message twice.",
       "REMOTE_AGENT_UNAVAILABLE": "Could not communicate with the computer running the Agent. Check the error details.",
-      "REMOTE_AGENT_TIMEOUT": "Timed out waiting for the computer running the Agent. The result is unknown. Check the task before retrying.",
+      "REMOTE_AGENT_TIMEOUT": "The computer running the Agent hasn’t replied yet. Check the task’s progress. If it’s still running or already finished, there’s no need to retry.",
       "REMOTE_AGENT_LINK_BUSY": "Communication with the computer running the Agent is busy. Wait a moment before retrying.",
       "REMOTE_AGENT_UNRESPONSIVE": "The computer running the Agent repeatedly failed to respond, so calls were temporarily paused. Wait a moment before retrying.",
       "REMOTE_AGENT_OFFLINE": "The computer running the Agent is offline. Retry after it reconnects.",
@@ -16731,6 +16777,8 @@
       "retryIn": "Retrying automatically in {{seconds}} s"
     },
     "subscriptionAccountError": {
+      "unreachable": "The Codex account service is temporarily unreachable.",
+      "rechecking": "The Codex account service is temporarily unreachable. Retrying at {{resetAt}}.",
       "poolModelLimited": "Subscription usage for this model has reached its limit. You can switch models now.",
       "poolRetryUntil": "Retry after {{resetAt}}.",
       "poolOtherSignedOut": "Another subscription account is signed out. You can sign in on the computer running the task and retry.",
@@ -18511,6 +18559,7 @@
         "intervalChip": "After completion · {{schedule}}"
       },
       "scheduleMenu": {
+        "custom": "Custom Cron",
         "intervalMinutes": "Minutes (Every N Minutes)",
         "interval": "Hourly (every N hours)",
         "daily": "Daily (every day)",
@@ -19527,7 +19576,7 @@
     "marketErrors": {
       "forbidden": "No permission to operate on this Skill",
       "notFound": "This Skill no longer exists. Go back to the list and refresh",
-      "managementApiUnavailable": "Hub management API is not ready. Please try again later",
+      "managementApiUnavailable": "Hub management API is not ready. Try again later.",
       "invalidVisibility": "This organization does not support that visibility. Choose Public",
       "default": "The action couldn’t be completed."
     },
@@ -22122,7 +22171,7 @@
   "richAnswer": {
     "invalidImageReference": "This image reference is invalid.",
     "requestImageAgain": "Ask to show image again",
-    "requestImageAgainMessage": "Please show this existing image again ({{name}}, reference: {{source}}). Check the original tool result or file and use its real address. Do not generate a new image; ask me first if you cannot identify the image.",
+    "requestImageAgainMessage": "Show this existing image again ({{name}}, reference: {{source}}). Check the original tool result or file and use its real address. Do not generate a new image; ask me first if you cannot identify the image.",
     "send": "Send Message",
     "sending": "Sending…",
     "sent": "Submitted",
@@ -22698,6 +22747,16 @@
     "refresh": "Refresh quota"
   },
   "subscriptionAccounts": {
+    "existing": {
+      "menu": "More ways to add an account",
+      "connect": "Connect an existing login…",
+      "found": "{{count}} available",
+      "title": "Logins on {{device}}",
+      "note": "Cindy and your CLI will use the same configuration.",
+      "attach": "Connect",
+      "choose": "Choose another folder…",
+      "unverified": "Could not verify this subscription login."
+    },
     "pluginSignIn": {
       "method": "Sign-in method",
       "secretHint": "The key goes only to the plugin, which keeps it in this account's own folder. Cindy doesn't store it or send it to other computers.",

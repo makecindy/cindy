@@ -281,9 +281,9 @@ export interface PluginHarnessRegistry {
 
 ## 第一期明确不支持（遇到即明确拒绝，不回落到内置引擎）
 
-（换引擎、定时任务与协同 Worker 已在第二期支持，见下面几节；标题、send_to_session、/learn、目标与 IM 渠道
-见「与内置引擎一致（2026-11-25）」。）分叉、回退、移到另一台电脑或 SSH、插件引擎当协同 Lead、共享任务、
-上下文溢出后的重放、Node Host（`apps/host`）。插件引擎任务的消息按 `agent_kind = 'acp'` 落库，不带供应商元信息。
+（换引擎、定时任务与协同 Worker 已在第二期支持，见下面几节；标题、send_to_session、/learn、目标、IM 渠道
+与分叉、侧聊、上下文溢出续接、每轮权限闸见下文。）回退、移到另一台电脑或 SSH、插件引擎当协同 Lead、共享任务、
+Node Host（`apps/host`）。插件引擎任务的消息按 `agent_kind = 'acp'` 落库，不带供应商元信息。
 
 伙伴的后续支持范围见[模型候选链](../product-rules/cindy-bots-runtime.md#5-模型候选链)。伙伴可以在设置中选择所在电脑的插件模型，主聊天按所选模型运行。
 
@@ -422,6 +422,27 @@ export interface PluginHarnessRegistry {
   变化的调用不会传到 Desktop：这类调用超过 31 分钟没有可见输出时，任务内「正在后台继续工作」先熄灭，
   结果到达时再亮起（maker-core 不会因此提前收尾该调用）。
 
+## /learn、目标模式与溢出续接（2026-11-25）
+
+用户要求插件引擎与内置引擎在任务里的能力一致（2026-11-25 用户决定）。三项都不借用用户没选的内置引擎。
+
+- **上下文溢出续接**：插件引擎报出能识别为上下文溢出的错误（`isContextOverflowErrorData` 的文本匹配）时，
+  与内置引擎一样关掉溢出的会话、用 Cindy 记录写交接并重放这条消息，任务在同一插件引擎、同一来源的全新会话里继续。
+  `getLiveSession` 看不到插件引擎的运行时，忙碌检查与关闭改用 `getRuntimeSession`；宿主没有这个读取口时什么都不
+  重建（此前会在旧会话仍开着时提交重建、挂上交接，重放又被拒绝）。发送前的换会话（含插件引擎账号切换）同一规则。
+  重建记录写 `sourceAgentKind = acp`。插件引擎不会自己压缩上下文，Cindy 也不能截断它的历史，主动换窗不适用。
+  IM 消息的重试由原渠道负责，以便保留每轮权限和审批入口；Desktop 可以准备交接，但不会通用重放 IM 消息。
+  实现见 `maker-ipc/contextOverflowRollover.ts`、`contextRecoveryAssembly.ts`，回归见 `contextOverflowRollover.test.ts`。
+- **/learn**：蒸馏任务开在同一个插件引擎上，与在它上面新建任务同一准入（停用、卸载、不可用或模型关闭时本次 /learn
+  明确失败），素材与内置引擎相同（含用户画像与其他任务的检索片段，这些内容会交给该插件的服务商），权限收敛到
+  acceptEdits。另一台电脑上的插件引擎仍拒绝。Learn Skill 的调用捕获（按 Skill 文件钉住）没有对应的 ACP 原语，仍只走
+  `/learn` 命令。实现见 `learn-host/pluginEngineLearnSession.ts`。
+- **目标模式**：插件引擎任务可以设目标，休眠后按自己的引擎与来源恢复（`goal-host/sessionRestore.ts`）。插件引擎没有
+  AskUserQuestion，首轮跳过「澄清目标」，按原文执行（`buildFirstTurnDirective` 的 `clarify: false`）。插件引擎不发
+  回合结束的状态事件，每轮用量取自回合结果的 `usage`（含缓存），否则 token 预算永远不触发。插件引擎自己登录，Cindy
+  没有它的账号快照：限额错误自带的重置时刻照常用，账号限额查询对它返回空。`session_goals.agent_kind` 的 `'acp'`
+  只在 TS 枚举里，SQLite 无 CHECK 约束，不需要迁移。权限沿用任务原有档位，插件 Agent 不主动请求确认的操作 Cindy 拦不住。
+
 ## 插件与 Skill 告知（2026-11-24）
 
 用户发现 Antigravity 任务不知道装了哪些插件和 Skill：发 PR 时直接用 `gh`，没走 GitHub 插件的 `pr` Skill，也开不了自动跟进。
@@ -460,6 +481,44 @@ export interface PluginHarnessRegistry {
   不会展开；可重复的说明留给下一条消息，切换引擎的交接同样顺延。
 - **代价**：只有以 `/` 开头的消息才在发送前读一次 Skill 清单（隔离、限时的扫描进程）；其他消息的发送路径不变。
   展开内容在当轮用户消息里，不进 system prompt。手机与自动化发来的 `/名字` 走同一发送路径，同样展开；手机输入框的列表本次未改。
+
+## 分叉、侧聊与起名（2026-11-25）
+
+用户要求插件引擎与内置引擎在任务里的体验一致（2026-11-25 用户决定）。插件引擎的原生历史归插件 Agent 所有，
+Cindy 不能复制或截断，所以这三项都只用 Cindy 自己的记录。
+
+- **分叉与侧聊**：目标消息所在的那一段跑在插件引擎上时（当前就在插件引擎上，或任务之后换走了，按换走时
+  `agent_switch` 边界的 `fromProviderId` / `fromModel` 找回是哪个引擎），子任务留在同一个插件引擎上：复制可见
+  历史，不开原生分叉（`sdk_session_id = null`），写一条待发送的交接（`context_rebuild`，
+  `reason = native-session-recovery`，`sourceAgentKind = acp`），子任务第一条消息启动全新会话并带上它。
+  在第一条消息上分叉时没有可交接的内容，不写空交接。目标在内置引擎的段落里时照旧原生分叉。
+  只限本机插件引擎：那一段跑在另一台电脑或收到的分享上时，分叉会绕过执行端对每个任务的准入，仍明确拒绝
+  （见[插件引擎协议记录](../dev-rules/protocol-compatibility/plugin-harnesses.md)「暂未开放」）。
+  实现见 `maker-orchestration/fork.ts`（`resolveForkNativeSource`），回归见 `__tests__/fork.test.ts`。
+  侧聊走同一条路径。`[Fork·已剥离]`（剥离加密思考块）只针对 Claude，仍拒绝。手机不需改动。
+- **起名**：自动起名、插件建的任务起名与「AI 重命名」都走辅助模型。辅助模型不可用时不借用任何内置引擎
+  兜底（以前普通任务按 Claude Code 读，会回落到 Claude 的一次性请求），标题保留用户原话的截断版；
+  「AI 重命名」此时提示生成失败。实现见 `maker-ipc/title.ts`、`maker-host/auxiliary-title-one-shot.ts`
+  （`agentKind: null` = 没有可兜底的内置引擎）。
+- **仍不支持回退**：回退要裁剪插件 Agent 自己的历史并回滚文件，界面不显示回退。
+
+## IM 渠道（2026-11-25）
+
+用户要求插件引擎在 Cindy 里与内置引擎有同样的体验和全套能力，IM 按「对齐内置引擎」做。
+
+- **接线**：个人 IM（飞书、Slack、Discord、Telegram、钉钉、企业微信、个人微信、iMessage）的接线、换绑、接管（`/ctr`）、
+  通知回复与伙伴专线不再拒绝插件引擎任务。`toCoreAgentKind` 保留 `acp`（此前会把它当 Claude 写回），任务在自己的引擎上启动。
+- **就绪检查**：插件引擎不走供应商密钥检查，改用与桌面换到该引擎相同的准入（引擎由本机提供、未停用、模型未关闭）。
+  不可用时聊天里按「供应商未连接」提示并写引擎名，修复入口同为「设置 → 模型供应商」。另一台电脑上的引擎由那台电脑在启动时判断。
+- **权限**：群聊、访客与个人微信轮次的每轮权限策略由引擎执行，协议见
+  [plugin-harnesses.md 每轮权限闸](../dev-rules/protocol-compatibility/plugin-harnesses.md#每轮权限闸2026-11-25)。
+  引擎没有声明时这些轮次明确失败、提示当前引擎不支持；主人私聊的普通轮次照常运行。「全部允许」与内置引擎一样不接策略轮，
+  私聊修复卡切到引擎的 Auto，没有 Auto 时切到第一个非「全部允许」的模式。`/permission` 卡列出引擎自己的模式。
+- **`/model`**：插件引擎对话只列该引擎的模型，与应用内一样同一引擎内换模型立即生效（准入同上，档位只保留引擎为该模型列出的）；
+  换到别的引擎在 Cindy 里做。
+- **不变**：渠道「新对话配置」仍只能选内置引擎，渠道默认跟随不会改动插件引擎对话；插件引擎不产生回合文件变更记录，与桌面相同。
+- **未覆盖**：渠道新对话默认直接用插件引擎（设置格式同步到手机与远程设置，需单独做协议兼容）；官方机器人渠道（hook-control）；
+  访客轮次临时切 Auto 只对提供 Auto 模式的引擎生效。
 
 ## 已知限制
 

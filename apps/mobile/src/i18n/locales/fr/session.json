@@ -735,7 +735,7 @@
     "REMOTE_WORKDIR_UNAVAILABLE": "Le répertoire de travail distant est indisponible. Vérifiez que le dossier existe toujours sur l'ordinateur distant, puis réessayez.",
     "REMOTE_OPTIMISTIC_SESSION_STATE_UNAVAILABLE": "L'ordinateur ne peut pas encore confirmer si ce message a été envoyé. Patientez un instant et réessayez. N'envoyez pas deux fois le même message.",
     "REMOTE_AGENT_UNAVAILABLE": "Impossible de communiquer avec l'ordinateur qui exécute l'Agent. Consultez les détails de l'erreur.",
-    "REMOTE_AGENT_TIMEOUT": "Le délai d'attente de l'ordinateur qui exécute l'Agent a expiré. Le résultat est inconnu. Vérifiez la tâche avant de réessayer.",
+    "REMOTE_AGENT_TIMEOUT": "L’ordinateur qui exécute l’Agent n’a pas encore répondu. Vérifiez l’avancement de la tâche. Si elle est encore en cours d'exécution ou déjà terminée, inutile de réessayer.",
     "REMOTE_AGENT_LINK_BUSY": "La communication avec l'ordinateur qui exécute l'Agent est saturée. Patientez un instant avant de réessayer.",
     "REMOTE_AGENT_UNRESPONSIVE": "L'ordinateur qui exécute l'Agent n'a pas répondu à plusieurs reprises. Les appels ont donc été temporairement suspendus. Patientez un instant avant de réessayer.",
     "REMOTE_AGENT_OFFLINE": "L'ordinateur qui exécute l'Agent est hors ligne. Réessayez une fois qu'il sera reconnecté.",
