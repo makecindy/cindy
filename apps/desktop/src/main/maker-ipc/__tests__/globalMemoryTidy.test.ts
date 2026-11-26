@@ -186,4 +186,53 @@ describe('globalMemoryTidy', () => {
     const afterError = await readGlobalMemoryTidyState(root);
     expect(afterError.bots['bot-main']!.reviewedAt).toBe(prevReviewedAt);
   });
+
+  it('preserves concurrent setCadence during an in-flight run, guards concurrent file edits, and stabilizes baselineAt', async () => {
+    const bot = await makeBot('bot-race', 'Race', true);
+    let clock = 1_900_000_000_000;
+    const seenSince: number[] = [];
+    let releaseRun!: () => void;
+    let enteredRun!: () => void;
+    const runEntered = new Promise<void>((r) => { enteredRun = r; });
+
+    const coordinator = createGlobalMemoryTidyCoordinator({
+      readOwnerRoot: () => root,
+      assertCurrent: () => {},
+      listLocalTeammates: async () => [bot],
+      countHumanMessages: async (_botId, sinceMs) => {
+        seenSince.push(sinceMs);
+        return seenSince.length === 1 ? 5 : TIDY_MIN_HUMAN_MESSAGES + 1;
+      },
+      executeTidyPrompt: async () => {
+        enteredRun();
+        await new Promise<void>((r) => { releaseRun = r; });
+        clock += 60_000;
+        return { ok: true, output: 'Updated notes.', sessionId: 'tidy-race' };
+      },
+      hasConcurrentActivity: async () => true,
+      globalSkillsDir,
+      now: () => clock,
+    });
+
+    // First skipped run establishes a stable baselineAt that does NOT slide forward 20 days later.
+    expect((await coordinator.run({ manual: false })).outcome).toBe('skipped');
+    const firstSince = seenSince[0]!;
+    clock += 20 * DAY_MS;
+
+    // Start second run and flip cadence to 'off' while LLM execution is in flight.
+    const runStartClock = clock;
+    const inFlight = coordinator.run({ manual: false });
+    await runEntered;
+    expect(seenSince[1]).toBe(firstSince);
+    await coordinator.setCadence('off');
+    releaseRun();
+    const res = await inFlight;
+    expect(res.outcome).toBe('updated');
+
+    const finalState = await readGlobalMemoryTidyState(root);
+    // Cadence change made during run() MUST NOT be overwritten back to 'weekly'.
+    expect(finalState.cadence).toBe('off');
+    // Because hasConcurrentActivity returned true, filesSince stays at runStartClock (not runStartClock + 60_000).
+    expect(finalState.bots['bot-race']!.filesSince).toBe(runStartClock);
+  });
 });

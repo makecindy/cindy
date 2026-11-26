@@ -10,6 +10,7 @@ import path from 'node:path';
 import { BrowserWindow } from 'electron';
 import { and, eq, inArray, or } from 'drizzle-orm';
 import { isTerminalAgentErrorEvent, type AgentEvent, type EngineKind } from '@cindy/maker-core';
+import { UI_ACTION_TRIGGER_PREFIX } from '@cindy/maker-shared/synthetic-trigger';
 
 import { activeOwnerScopeKey, getActiveDataOwnerPushStamp, ownerScopedUserDataPath } from '../appSessionState.js';
 import { companionHomes } from '../companion-cloud/homes.js';
@@ -213,20 +214,85 @@ async function listLocalTeammatesForTidy(ownerRoot: string): Promise<TidyTeammat
   return result;
 }
 
-async function countHumanMessagesSince(botId: string, sinceMs: number): Promise<number> {
-  const row = await getDbClient().queryOne<{ cnt: number }>(
-    `SELECT COUNT(*) AS cnt
-     FROM messages m
-     JOIN bot_session_links l ON l.session_id = m.session_id
+function extractMessageText(content: string): string {
+  try {
+    const parsed = JSON.parse(content) as unknown;
+    if (typeof parsed === 'string') return parsed;
+    if (parsed && typeof parsed === 'object' && typeof (parsed as { text?: unknown }).text === 'string') {
+      return (parsed as { text: string }).text;
+    }
+    return '';
+  } catch {
+    return content;
+  }
+}
+
+function isHumanMessageRow(row: { content: string; agentMeta: string | null }): boolean {
+  let meta: Record<string, unknown> = {};
+  try {
+    meta = row.agentMeta ? (JSON.parse(row.agentMeta) as Record<string, unknown>) : {};
+  } catch {
+    return false;
+  }
+  if (meta.sourcePlugin || meta.autoResume === true) return false;
+  const origin = meta.origin as { kind?: unknown; scheduleId?: unknown; groupThread?: unknown; groupRequest?: unknown } | undefined;
+  // Host-attested owner group messages retain the hidden dispatch prefix; count actual owner text first.
+  if (typeof meta.autoReviewUserText === 'string' && meta.autoReviewUserText.trim()) return true;
+  if (origin?.groupThread || origin?.groupRequest) return true;
+  if (extractMessageText(row.content).startsWith(UI_ACTION_TRIGGER_PREFIX)) return false;
+  return !origin?.kind || (
+    origin.kind === 'scheduler'
+    && typeof origin.scheduleId === 'string'
+    && origin.scheduleId.startsWith('hook:')
+  );
+}
+
+async function countHumanMessagesSince(botId: string, sinceMs: number, untilMs: number): Promise<number> {
+  const rows = await getDbClient().queryAll<{ content: string; agent_meta: string | null }>(
+    `SELECT m.content, m.agent_meta
+     FROM bot_session_links l
+     JOIN messages m ON m.session_id = l.session_id
      WHERE l.bot_id = ?
        AND m.role = 'user'
+       AND m.rewind_at IS NULL
        AND m.created_at > ?
-       AND (m.agent_meta IS NULL
-            OR json_extract(m.agent_meta, '$.origin.kind') IS NULL
-            OR json_extract(m.agent_meta, '$.origin.kind') NOT IN ('scheduler', 'heartbeat', 'delegation', 'agent'))`,
-    [botId, sinceMs],
+       AND m.created_at <= ?
+     ORDER BY m.created_at DESC
+     LIMIT 200`,
+    [botId, sinceMs, untilMs],
   );
-  return Number(row?.cnt ?? 0);
+  let count = 0;
+  for (const row of rows) {
+    if (isHumanMessageRow({ content: row.content, agentMeta: row.agent_meta })) count += 1;
+  }
+  return count;
+}
+
+async function hasConcurrentTeammateActivity(
+  botId: string,
+  workspace: string,
+  startedAt: number,
+  finishedAt: number,
+  tidySessionId?: string | null,
+): Promise<boolean> {
+  const workspacePrefix = workspace + path.sep;
+  const row = await getDbClient().queryOne<{ hit: number }>(
+    `SELECT 1 AS hit
+     FROM messages m
+     WHERE m.created_at > ?
+       AND m.created_at <= ?
+       AND m.session_id IS NOT ?
+       AND (
+         m.session_id IN (SELECT session_id FROM bot_session_links WHERE bot_id = ?)
+         OR m.session_id IN (
+           SELECT id FROM sessions
+           WHERE working_dir = ? OR project_dir = ? OR substr(working_dir, 1, length(?)) = ?
+         )
+       )
+     LIMIT 1`,
+    [startedAt, finishedAt, tidySessionId ?? null, botId, workspace, workspace, workspacePrefix, workspacePrefix],
+  );
+  return Boolean(row);
 }
 
 async function resolveTidyRoute(): Promise<{ agentKind: EngineKind; model: string; providerId?: string } | null> {
@@ -374,6 +440,7 @@ export function getGlobalMemoryTidyCoordinator(): GlobalMemoryTidyCoordinator {
     listLocalTeammates: () => listLocalTeammatesForTidy(ownerScopedUserDataPath()),
     countHumanMessages: countHumanMessagesSince,
     executeTidyPrompt: executeGlobalTidyPrompt,
+    hasConcurrentActivity: hasConcurrentTeammateActivity,
     async snapshotTeammate(botId: string, workspace: string, label: string): Promise<void> {
       if (!await isTeammateProjectIgnoreReady(workspace)) return;
       await createSnapshotDetailed(workspace, {

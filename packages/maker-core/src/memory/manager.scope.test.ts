@@ -769,4 +769,55 @@ describe('MakerMemoryManager · owner scope guard (#2341)', () => {
     await expect(store.getIndex()).rejects.toThrow(/memory:not-ready/);
     manager.dispose();
   });
+
+  // Teammate memory v3 (Greptile P1/P2 fixes, unit): freeform updates preserve unknown YAML fields,
+  // sync H1 title edits on heading-only notes, and runReview truncates even a single >48 KB record.
+  it('preserves custom YAML fields, updates H1 title on heading-only notes, and caps single large review record', async () => {
+    const workdir = path.join(rootA, 'project-greptile');
+    const projectMemoryDir = path.join(workdir, '.cindy', 'memory');
+    await mkdir(projectMemoryDir, { recursive: true });
+    const seenPrompts: string[] = [];
+    const manager = new MakerMemoryManager({
+      basePath: rootA,
+      initialEnabled: true,
+      resolveStorageDir: (scope) => (scope === workdir ? projectMemoryDir : null),
+      sqliteFactory: trackingSqlite().factory,
+      agents: {},
+      logger: noopLogger,
+      reviewOneShot: async (prompt) => {
+        seenPrompts.push(prompt);
+        return 'fine';
+      },
+    });
+    const store = await manager.getStore(workdir);
+    await store.writeRaw('notes.md', '---\ntitle: Old Note\ntags:\n  - release\nsource: slack\n---\nOriginal body\n');
+    const yamlNote = await store.read('notes.md');
+    await store.update('notes.md', yamlNote.frontmatter.updatedAt, {
+      title: 'Updated Note',
+      description: 'Updated body',
+      body: 'Updated body',
+    });
+    const rawAfterYaml = await readFile(path.join(projectMemoryDir, 'notes.md'), 'utf8');
+    expect(rawAfterYaml).toContain('source: slack');
+    expect(rawAfterYaml).toContain('- release');
+    expect(rawAfterYaml).toContain('Updated Note');
+
+    await store.writeRaw('heading-note.md', '# Old Heading\n\nBody text\n');
+    const headingNote = await store.read('heading-note.md');
+    await store.update('heading-note.md', headingNote.frontmatter.updatedAt, {
+      title: 'New Heading',
+      description: 'Body text',
+      body: '# Old Heading\n\nBody text',
+    });
+    const rereadHeading = await store.read('heading-note.md');
+    expect(rereadHeading.frontmatter.title).toBe('New Heading');
+
+    // A single 54 KB note must still be truncated under the 48,000 char review budget.
+    await store.writeRaw('huge-note.md', `# Huge\n\n${'a'.repeat(54_000)}\n`);
+    await manager.runReview(workdir);
+    expect(seenPrompts).toHaveLength(1);
+    expect(seenPrompts[0]!.length).toBeLessThan(49_500);
+    expect(seenPrompts[0]!).toContain('truncated due to review size budget');
+    manager.dispose();
+  });
 });

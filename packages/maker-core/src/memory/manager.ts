@@ -951,16 +951,25 @@ export class MakerMemoryManager {
     // 发送前复核: 边界已切换则丢弃旧 owner 的 records, fail-closed。
     this.assertScopeUnchanged(scopeAtEntry);
 
-    // Cap dump size so large memory stores cannot overflow the auxiliary review model's context.
+    // Cap dump size so large memory stores (including a single 56 KB note) cannot overflow context.
     const REVIEW_DUMP_MAX_CHARS = 48_000;
+    const TRUNCATION_NOTICE = '\n\n_(entry truncated due to review size budget)_';
     const sorted = [...records].sort((a, b) => b.frontmatter.updatedAt.localeCompare(a.frontmatter.updatedAt));
     const chunks: string[] = [];
     let usedChars = 0;
     for (const r of sorted) {
       const entry = `### ${r.filename}\n- title: ${r.frontmatter.title}\n- description: ${r.frontmatter.description}\n- updatedAt: ${r.frontmatter.updatedAt}\n\n${r.body}`;
-      if (chunks.length > 0 && usedChars + entry.length + 7 > REVIEW_DUMP_MAX_CHARS) break;
+      const sepLen = chunks.length > 0 ? 7 : 0;
+      if (usedChars + sepLen + entry.length > REVIEW_DUMP_MAX_CHARS) {
+        if (chunks.length === 0) {
+          const allowed = Math.max(0, REVIEW_DUMP_MAX_CHARS - TRUNCATION_NOTICE.length);
+          chunks.push(entry.slice(0, allowed) + TRUNCATION_NOTICE);
+          usedChars = chunks[0].length;
+        }
+        break;
+      }
       chunks.push(entry);
-      usedChars += entry.length + 7;
+      usedChars += sepLen + entry.length;
     }
     const omitted = sorted.length - chunks.length;
     const summary = chunks.join('\n\n---\n\n')

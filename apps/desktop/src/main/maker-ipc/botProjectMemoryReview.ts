@@ -24,14 +24,7 @@ const HISTORICAL_BUNDLED_CHECK_SHA256 = new Set([
  * (2026-11-22: teammates of owners who chat less were never reviewed). Its record of the last
  * review sits beside it, outside Git. `bundledCheck` is false when the owner edited the check;
  * it is not part of the hook config. */
-export async function ensureMemoryReviewHook(input: {
-  workingDir: string;
-  botId: string;
-  databasePath: string;
-  previousCommand?: string;
-}): Promise<{ command: string; timeoutMs: number; bundledCheck: boolean }> {
-  const filename = '.memory-review-check-v1.cjs';
-  const check = String.raw`
+const CURRENT_MEMORY_REVIEW_CHECK_BODY = String.raw`
 (async () => {
 const { DatabaseSync } = require('node:sqlite');
 let input = '';
@@ -198,6 +191,15 @@ if (run && changed.length > 0) {
 process.stdout.write('', () => process.exit(process.exitCode || 0));
 })().catch(error => { console.error(error); process.stderr.write('', () => process.exit(1)); });
 `;
+
+export async function ensureMemoryReviewHook(input: {
+  workingDir: string;
+  botId: string;
+  databasePath: string;
+  previousCommand?: string;
+}): Promise<{ command: string; timeoutMs: number; bundledCheck: boolean }> {
+  const filename = '.memory-review-check-v1.cjs';
+  const check = CURRENT_MEMORY_REVIEW_CHECK_BODY;
   const source = `const source = ${JSON.stringify({ databasePath: input.databasePath, botId: input.botId, workspace: input.workingDir, syntheticPrefix: UI_ACTION_TRIGGER_PREFIX })};\n` + check;
   // Preserve an owner's edits to the supplied check. A missing database or broken check fails
   // closed through the existing preRunHook protocol; it never silently starts the model.
@@ -235,11 +237,7 @@ export function isBundledMemoryReviewCheckScript(rawScript: string): boolean {
   const newline = rawScript.indexOf('\n');
   if (newline < 0) return false;
   const body = rawScript.slice(newline + 1).replace(/\r\n/g, '\n');
+  if (body === CURRENT_MEMORY_REVIEW_CHECK_BODY) return true;
   const digest = createHash('sha256').update(body).digest('hex');
-  if (HISTORICAL_BUNDLED_CHECK_SHA256.has(digest)) return true;
-  // Also match the current bundled body emitted by ensureMemoryReviewHook.
-  return body.includes("event.event !== 'schedule-pre-run'")
-    && body.includes('.memory-review-state-v1.json')
-    && body.includes('const minimumHumanMessages = 20;')
-    && body.includes('memory and skills review skipped.');
+  return HISTORICAL_BUNDLED_CHECK_SHA256.has(digest);
 }

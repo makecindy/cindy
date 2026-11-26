@@ -150,6 +150,28 @@ export function MemorySection() {
     };
   }, [reloadSlots, settingsRevision]);
 
+  // If a background tidy was already running when Settings opened, poll status until it finishes
+  // (or the component unmounts) so the cadence selector and button re-enable promptly.
+  useEffect(() => {
+    if (!tidyRunning) return;
+    let cancelled = false;
+    const timer = window.setInterval(() => {
+      void window.electronAPI.maker.memoryTidyStatus?.()
+        .then((status) => {
+          if (cancelled) return;
+          setTidyCadence(status.cadence);
+          if (!status.running) setTidyRunning(false);
+        })
+        .catch(() => {
+          if (!cancelled) setTidyRunning(false);
+        });
+    }, 3000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [tidyRunning]);
+
   const handleTidyCadenceChange = useCallback(async (next: MemoryTidyCadence) => {
     setTidyCadencePending(true);
     try {
@@ -519,12 +541,13 @@ export function MemorySectionView({
                 <RefreshCw size={17} className="text-[var(--settings-section-title)]" aria-hidden />
               </span>
             }
-            title={t('settings.memory.tidy.label')}
-            hint={t('settings.memory.tidy.description')}
+            title={t(personalizationDetailsSettings.memoryTidyLabel.titleKey)}
+            hint={t(personalizationDetailsSettings.memoryTidyLabel.descriptionKey)}
             wrap
             trailing={
               <div className="flex items-center gap-2">
                 <Select
+                  data-setting-id={personalizationDetailsSettings.memoryTidyLabel.id}
                   label={t('settings.memory.tidy.cadenceLabel')}
                   value={tidyControl.cadence}
                   options={tidyCadenceOptions}
@@ -533,6 +556,7 @@ export function MemorySectionView({
                   onValueChange={(value) => void tidyControl.onCadenceChange(value as MemoryTidyCadence)}
                 />
                 <Button
+                  data-settings-search-action="Run global memory and skill tidying now"
                   variant="secondary"
                   size="sm"
                   type="button"

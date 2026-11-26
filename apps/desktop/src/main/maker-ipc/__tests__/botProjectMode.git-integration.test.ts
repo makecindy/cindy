@@ -358,4 +358,27 @@ describe('buddy repository initialization (#10216)', () => {
     expect((await prepare('missing_object')).repository).toBe('failed');
     expect(await fs.readFile(refFile, 'utf8')).toBe(badRef);
   });
+
+  // Greptile P1 (git-integration): an existing V2 teammate project with a v1 project-gitignore.json
+  // receipt still has `.cindy/memory/MEMORY.md` ignored; ensureTeammateProjectIgnored upgrades it
+  // once so MEMORY.md enters Git versions while credentials stay ignored.
+  it('upgrades a v1 teammate .gitignore receipt so core MEMORY.md is no longer ignored', async () => {
+    const workspace = teammateWorkspaceDir(root, 'legacy_v1_ignore');
+    await fs.mkdir(workspace, { recursive: true });
+    await gitExec(['init'], workspace);
+    await fs.writeFile(
+      path.join(workspace, '.gitignore'),
+      'token.json\n.cindy/memory/*\n!.cindy/memory/*.md\n.cindy/memory/MEMORY.md\n',
+    );
+    const receiptPath = path.join(path.dirname(workspace), 'project-gitignore.json');
+    await fs.writeFile(receiptPath, JSON.stringify({ version: 1, at: '2026-11-24T00:00:00.000Z', changed: true }));
+
+    const ignored = (file: string) => gitExec(['check-ignore', '-q', file], workspace).then(() => true, () => false);
+    expect(await ignored('.cindy/memory/MEMORY.md')).toBe(true);
+
+    await expect(ensureTeammateProjectIgnored({ workspace })).resolves.toBe('ready');
+    expect(await ignored('.cindy/memory/MEMORY.md')).toBe(false);
+    expect(await ignored('token.json')).toBe(true);
+    expect(JSON.parse(await fs.readFile(receiptPath, 'utf8')).version).toBe(2);
+  });
 });

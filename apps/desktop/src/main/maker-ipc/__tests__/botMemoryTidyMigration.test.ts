@@ -28,6 +28,7 @@ import {
   MEMORY_REVIEW_HOOK_COMMAND,
   MEMORY_REVIEW_STATE_FILENAME,
 } from '../botProjectMemoryReview.js';
+import { botProjectMemoryReview } from '../botProjectMode.js';
 import type { ProjectScheduleConfig } from '../../scheduler-host/project-automation-loader.js';
 
 describe('botMemoryTidyMigration', () => {
@@ -46,29 +47,29 @@ describe('botMemoryTidyMigration', () => {
     await fs.mkdir(workspace, { recursive: true });
     await ensureMemoryReviewHook({ botId: 'bot-a', workingDir: workspace, databasePath: path.join(root, 'db.sqlite') });
     const bundledScript = await fs.readFile(path.join(workspace, '..', MEMORY_REVIEW_CHECK_FILENAME), 'utf8');
+    const bundledConfig = {
+      ...botProjectMemoryReview({ botId: 'bot-a', displayName: 'Mimi', timezone: 'UTC', title: '{{name}} · Review' }),
+      preRunHook: { command: MEMORY_REVIEW_HOOK_COMMAND },
+    };
 
-    expect(isUntouchedBundledMemoryReview(
-      { id: 'teammate-memory-review', prompt: 'Review Mimi...', preRunHook: { command: MEMORY_REVIEW_HOOK_COMMAND } },
-      bundledScript,
-    )).toBe(true);
+    expect(isUntouchedBundledMemoryReview(bundledConfig, bundledScript)).toBe(true);
 
-    // Owner edited the check script => must preserve.
-    expect(isUntouchedBundledMemoryReview(
-      { id: 'teammate-memory-review', prompt: 'Review Mimi...', preRunHook: { command: MEMORY_REVIEW_HOOK_COMMAND } },
-      '/* custom owner check */',
-    )).toBe(false);
+    // Owner edited the check script (even keeping similar strings) => must preserve.
+    expect(isUntouchedBundledMemoryReview(bundledConfig, `${bundledScript}\n// custom`)).toBe(false);
+
+    // Owner edited cronExpr, prompt, or model while keeping the bundled hook => must preserve.
+    expect(isUntouchedBundledMemoryReview({ ...bundledConfig, cronExpr: '0 9 * * *' }, bundledScript)).toBe(false);
+    expect(isUntouchedBundledMemoryReview({ ...bundledConfig, prompt: 'Custom review instructions' }, bundledScript)).toBe(false);
+    expect(isUntouchedBundledMemoryReview({ ...bundledConfig, model: 'claude-opus-4-6' }, bundledScript)).toBe(false);
 
     // Owner replaced the hook command => must preserve.
     expect(isUntouchedBundledMemoryReview(
-      { id: 'teammate-memory-review', prompt: 'Review Mimi...', preRunHook: { command: 'node custom.js' } },
+      { ...bundledConfig, preRunHook: { command: 'node custom.js' } },
       null,
     )).toBe(false);
 
     // Unrelated schedule id => never touched.
-    expect(isUntouchedBundledMemoryReview(
-      { id: 'daily-standup', prompt: 'Review Mimi...', preRunHook: { command: MEMORY_REVIEW_HOOK_COMMAND } },
-      bundledScript,
-    )).toBe(false);
+    expect(isUntouchedBundledMemoryReview({ ...bundledConfig, id: 'daily-standup' }, bundledScript)).toBe(false);
   });
 
   it('retires untouched bundled reviews, archives only safe auto sessions, cleans empty recentWorkdirs, preserves custom reviews, and is idempotent', async () => {
@@ -83,8 +84,12 @@ describe('botMemoryTidyMigration', () => {
     await fs.mkdir(wsB, { recursive: true });
     await fs.writeFile(path.join(wsB, '..', MEMORY_REVIEW_CHECK_FILENAME), '/* custom check kept by owner */');
 
+    const bundledA: ProjectScheduleConfig = {
+      ...botProjectMemoryReview({ botId: 'bot-a', displayName: 'A', timezone: 'UTC', title: '{{name}} · Review' }),
+      preRunHook: { command: MEMORY_REVIEW_HOOK_COMMAND },
+    };
     const projectConfigs = new Map<string, ProjectScheduleConfig[]>([
-      [wsA, [{ id: 'teammate-memory-review', name: 'A · Review', prompt: 'Review A', cronExpr: '30 3 * * *', preRunHook: { command: MEMORY_REVIEW_HOOK_COMMAND } }]],
+      [wsA, [bundledA]],
       [wsB, [{ id: 'teammate-memory-review', name: 'B · Custom', prompt: 'Custom', cronExpr: '0 4 * * *', preRunHook: { command: MEMORY_REVIEW_HOOK_COMMAND } }]],
     ]);
     const dbRows: LegacyReviewScheduleRow[] = [
@@ -142,5 +147,31 @@ describe('botMemoryTidyMigration', () => {
     const second = await retireLegacyTeammateMemoryReviews({ ...deps, listLocalTeammateWorkspaces: listSpy });
     expect(second.skipped).toBe(true);
     expect(listSpy).not.toHaveBeenCalled();
+  });
+
+  it('defers the permanent receipt when a required cleanup step fails so the next startup retries', async () => {
+    const ws = path.join(root, 'bots', 'bot-retry', 'workspace');
+    await fs.mkdir(ws, { recursive: true });
+    const bundled: ProjectScheduleConfig = {
+      ...botProjectMemoryReview({ botId: 'bot-retry', displayName: 'Retry', timezone: 'UTC', title: '{{name}} · Review' }),
+      preRunHook: { command: MEMORY_REVIEW_HOOK_COMMAND },
+    };
+    await retireLegacyTeammateMemoryReviews({
+      ownerRoot: root,
+      assertCurrent: () => {},
+      listLocalTeammateWorkspaces: async () => [ws],
+      loadProjectSchedules: async () => [bundled],
+      removeProjectSchedule: async () => {},
+      listLegacyReviewSchedules: async () => [
+        { id: 'sched-retry', workingDir: ws, targetSessionId: null, projectConfigId: 'teammate-memory-review' },
+      ],
+      listRunSessionIds: async () => [],
+      deleteSchedule: async () => { throw new Error('DB locked'); },
+      isSafeAutoReviewSession: async () => false,
+      archiveSession: async () => false,
+      hasActiveProjectTasks: async () => true,
+      removeRecentWorkdir: async () => false,
+    });
+    await expect(fs.stat(path.join(root, LEGACY_REVIEW_RETIREMENT_RECEIPT))).rejects.toMatchObject({ code: 'ENOENT' });
   });
 });

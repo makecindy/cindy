@@ -59,6 +59,8 @@ export interface GlobalTidyBotWatermark {
 export interface GlobalMemoryTidyState {
   version: 1;
   cadence: MemoryTidyCadence;
+  /** Stable starting timestamp for buddies that have never been tidied yet (never slides forward on skips). */
+  baselineAt: number;
   lastRunAt: number;
   lastOutcome: 'idle' | 'updated' | 'skipped' | 'error' | null;
   lastSummary: string;
@@ -113,6 +115,7 @@ export function defaultTidyState(): GlobalMemoryTidyState {
   return {
     version: 1,
     cadence: DEFAULT_MEMORY_TIDY_CADENCE,
+    baselineAt: 0,
     lastRunAt: 0,
     lastOutcome: null,
     lastSummary: '',
@@ -131,6 +134,7 @@ export async function readGlobalMemoryTidyState(ownerRoot: string): Promise<Glob
     return {
       version: 1,
       cadence: isMemoryTidyCadence(parsed.cadence) ? parsed.cadence : defaults.cadence,
+      baselineAt: typeof parsed.baselineAt === 'number' && Number.isFinite(parsed.baselineAt) ? parsed.baselineAt : 0,
       lastRunAt: typeof parsed.lastRunAt === 'number' && Number.isFinite(parsed.lastRunAt) ? parsed.lastRunAt : 0,
       lastOutcome:
         parsed.lastOutcome === 'idle' || parsed.lastOutcome === 'updated'
@@ -254,12 +258,16 @@ export async function evaluateGlobalMemoryTidyPlan(
   const eligible: TidyTeammateCandidate[] = [];
   const allCoreOutlines: Array<{ botId: string; displayName: string; corePreview: string }> = [];
 
+  const fallbackBaseline = input.state.baselineAt > 0 && input.state.baselineAt < input.now
+    ? input.state.baselineAt
+    : Math.max(0, input.now - 14 * DAY_MS);
+
   for (const bot of input.teammates) {
     const wm = input.state.bots[bot.botId] ?? { reviewedAt: 0, filesSince: 0 };
     const baseline = Math.max(wm.reviewedAt, wm.filesSince);
     const messagesSince = wm.reviewedAt > 0 && wm.reviewedAt < input.now
       ? wm.reviewedAt
-      : Math.max(0, input.now - 14 * DAY_MS);
+      : fallbackBaseline;
 
     const memoryDir = teammateProjectMemoryDir(bot.workspace);
     const coreIndex = bot.memoryEnabled
@@ -442,6 +450,18 @@ export interface GlobalMemoryTidyCoordinatorDeps {
   }): Promise<GlobalMemoryTidyExecutionResult>;
   archiveSession?(sessionId: string): Promise<void>;
   snapshotTeammate?(botId: string, workspace: string, label: string): Promise<void>;
+  /**
+   * Returns true if another task of this teammate had message activity while the tidy ran.
+   * When true (or when this check fails), `filesSince` stays at `startedAt` so concurrent edits
+   * are not swallowed by the tidy's finish timestamp.
+   */
+  hasConcurrentActivity?(
+    botId: string,
+    workspace: string,
+    startedAt: number,
+    finishedAt: number,
+    tidySessionId?: string | null,
+  ): Promise<boolean>;
   globalSkillsDir?: string;
   now?: () => number;
   log?: { info(msg: string, meta?: Record<string, unknown>): void; warn(msg: string, meta?: Record<string, unknown>): void };
@@ -455,6 +475,21 @@ export function createGlobalMemoryTidyCoordinator(deps: GlobalMemoryTidyCoordina
   let running = false;
   let startupTimer: ReturnType<typeof setTimeout> | null = null;
   let periodicTimer: ReturnType<typeof setInterval> | null = null;
+  let stateWriteChain: Promise<unknown> = Promise.resolve();
+
+  /** Serializes all state read-modify-write mutations so setCadence() and run() never clobber each other. */
+  function mutateState<T>(ownerRoot: string, fn: (state: GlobalMemoryTidyState) => Promise<T> | T): Promise<T> {
+    const next = stateWriteChain.catch(() => undefined).then(async () => {
+      deps.assertCurrent(ownerRoot);
+      const latest = await readGlobalMemoryTidyState(ownerRoot);
+      const result = await fn(latest);
+      deps.assertCurrent(ownerRoot);
+      await writeGlobalMemoryTidyState(ownerRoot, latest);
+      return result;
+    });
+    stateWriteChain = next.catch(() => undefined);
+    return next;
+  }
 
   async function getStatus(): Promise<GlobalMemoryTidyStatus> {
     const ownerRoot = deps.readOwnerRoot();
@@ -478,11 +513,9 @@ export function createGlobalMemoryTidyCoordinator(deps: GlobalMemoryTidyCoordina
     if (!isMemoryTidyCadence(cadence)) throw new Error(`Invalid tidy cadence: ${String(cadence)}`);
     const ownerRoot = deps.readOwnerRoot();
     if (!ownerRoot) throw new Error('Account not ready');
-    deps.assertCurrent(ownerRoot);
-    const state = await readGlobalMemoryTidyState(ownerRoot);
-    state.cadence = cadence;
-    deps.assertCurrent(ownerRoot);
-    await writeGlobalMemoryTidyState(ownerRoot, state);
+    await mutateState(ownerRoot, (latest) => {
+      latest.cadence = cadence;
+    });
     return getStatus();
   }
 
@@ -501,8 +534,17 @@ export function createGlobalMemoryTidyCoordinator(deps: GlobalMemoryTidyCoordina
     running = true;
     try {
       deps.assertCurrent(ownerRoot);
-      const state = await readGlobalMemoryTidyState(ownerRoot);
       const startedAt = now();
+      let state = await readGlobalMemoryTidyState(ownerRoot);
+      // Persist a stable first-seen baseline once so low-frequency buddies accumulate messages
+      // across skipped cycles instead of facing a sliding 14-day window forever.
+      if (state.baselineAt <= 0) {
+        const stableBaseline = Math.max(0, startedAt - 14 * DAY_MS);
+        state = await mutateState(ownerRoot, (latest) => {
+          if (latest.baselineAt <= 0) latest.baselineAt = stableBaseline;
+          return { ...latest, bots: { ...latest.bots } };
+        });
+      }
       if (!opts.manual) {
         const interval = cadenceIntervalMs(state.cadence);
         if (!Number.isFinite(interval)) {
@@ -556,11 +598,13 @@ export function createGlobalMemoryTidyCoordinator(deps: GlobalMemoryTidyCoordina
       const finishedAt = now();
 
       if (!result.ok) {
-        state.lastRunAt = finishedAt;
-        state.lastOutcome = 'error';
-        state.lastSummary = result.output.trim().slice(0, 500) || 'Tidy run failed';
-        await writeGlobalMemoryTidyState(ownerRoot, state);
-        return { outcome: 'error', summary: state.lastSummary, touchedBots: [] };
+        const errSummary = result.output.trim().slice(0, 500) || 'Tidy run failed';
+        await mutateState(ownerRoot, (latest) => {
+          latest.lastRunAt = finishedAt;
+          latest.lastOutcome = 'error';
+          latest.lastSummary = errSummary;
+        });
+        return { outcome: 'error', summary: errSummary, touchedBots: [] };
       }
 
       const output = result.output.trim();
@@ -578,21 +622,46 @@ export function createGlobalMemoryTidyCoordinator(deps: GlobalMemoryTidyCoordina
         }
       }
 
+      // Preserve concurrent file edits made by other tasks of a teammate while this tidy ran:
+      // only advance `filesSince` to `finishedAt` when no concurrent activity occurred.
+      const nextBotWatermarks = new Map<string, GlobalTidyBotWatermark>();
       for (const bot of plan.candidates) {
-        state.bots[bot.botId] = { reviewedAt: startedAt, filesSince: finishedAt };
+        let concurrent = true;
+        if (deps.hasConcurrentActivity) {
+          concurrent = await deps
+            .hasConcurrentActivity(bot.botId, bot.workspace, startedAt, finishedAt, result.sessionId)
+            .catch(() => true);
+        } else if (noChanges) {
+          concurrent = false;
+        }
+        nextBotWatermarks.set(bot.botId, {
+          reviewedAt: startedAt,
+          filesSince: concurrent ? startedAt : finishedAt,
+        });
       }
-      if (plan.changedGlobalSkills.length > 0 || opts.manual) {
-        state.globalSkillsReviewedAt = finishedAt;
-      }
-      state.lastRunAt = finishedAt;
-      state.lastOutcome = noChanges ? 'idle' : 'updated';
-      state.lastSummary = noChanges ? '' : output.slice(0, 1000);
-      state.lastTouchedBots = touchedBots;
-      await writeGlobalMemoryTidyState(ownerRoot, state);
+
+      const nextOutcome: 'idle' | 'updated' = noChanges ? 'idle' : 'updated';
+      const nextSummary = noChanges ? '' : output.slice(0, 1000);
+      await mutateState(ownerRoot, (latest) => {
+        for (const [botId, wm] of nextBotWatermarks) {
+          const prev = latest.bots[botId];
+          latest.bots[botId] = {
+            reviewedAt: Math.max(prev?.reviewedAt ?? 0, wm.reviewedAt),
+            filesSince: Math.max(prev?.filesSince ?? 0, wm.filesSince),
+          };
+        }
+        if (plan.changedGlobalSkills.length > 0 || opts.manual) {
+          latest.globalSkillsReviewedAt = Math.max(latest.globalSkillsReviewedAt, finishedAt);
+        }
+        latest.lastRunAt = finishedAt;
+        latest.lastOutcome = nextOutcome;
+        latest.lastSummary = nextSummary;
+        latest.lastTouchedBots = touchedBots;
+      });
 
       return {
-        outcome: state.lastOutcome,
-        summary: state.lastSummary,
+        outcome: nextOutcome,
+        summary: nextSummary,
         touchedBots,
       };
     } catch (error) {

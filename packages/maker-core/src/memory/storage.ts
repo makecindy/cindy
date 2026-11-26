@@ -490,17 +490,31 @@ export class MemoryStorage {
           fileText = `${changes.body.trimEnd()}\n`;
         } else if (!current.hasFrontmatter) {
           const trimmedBody = changes.body.trim();
-          const hasMatchingH1 = /^#\s+/.test(trimmedBody);
-          fileText = hasMatchingH1
-            ? `${trimmedBody}\n`
-            : `# ${changes.title}\n\n${trimmedBody}\n`;
+          const cleanTitle = changes.title.replace(/\r?\n/g, ' ').trim();
+          const hasH1 = /^#\s+[^\r\n]*/.test(trimmedBody);
+          fileText = hasH1
+            ? `${trimmedBody.replace(/^#\s+[^\r\n]*/, `# ${cleanTitle}`)}\n`
+            : `# ${cleanTitle}\n\n${trimmedBody}\n`;
         } else {
-          const nextFrontmatter: MemoryFrontmatter = {
+          // Preserve arbitrary custom YAML fields (e.g. tags, source, date) on freeform notes.
+          let existingData: Record<string, unknown> = {};
+          try {
+            const rawExisting = await fs.readFile(fullPath, 'utf8');
+            const parsedExisting = matter(rawExisting);
+            if (parsedExisting.data && typeof parsedExisting.data === 'object') {
+              existingData = { ...(parsedExisting.data as Record<string, unknown>) };
+            }
+          } catch {
+            // Fall back to parsed frontmatter if raw re-read fails.
+          }
+          const nextUpdatedAt = new Date(Math.max(Date.now(), (Date.parse(current.frontmatter.updatedAt) || 0) + 1)).toISOString();
+          const nextFrontmatter: Record<string, unknown> = {
+            ...existingData,
             title: changes.title,
             description: changes.description,
-            type: current.frontmatter.type,
-            updatedAt: new Date(Math.max(Date.now(), (Date.parse(current.frontmatter.updatedAt) || 0) + 1)).toISOString(),
-            ...(current.frontmatter.bodyLength !== undefined ? { bodyLength: changes.body.length } : {}),
+            ...(existingData.type !== undefined || !current.freeform ? { type: existingData.type ?? current.frontmatter.type } : {}),
+            updatedAt: nextUpdatedAt,
+            ...(existingData.bodyLength !== undefined ? { bodyLength: changes.body.length } : {}),
           };
           fileText = matter.stringify({ content: changes.body }, nextFrontmatter);
         }
@@ -984,9 +998,9 @@ function parseFreeformShard(
   if (/^---\r?\n/.test(raw)) {
     try {
       const parsed = matter(raw);
-      if (parsed.matter && parsed.matter.trim().length > 0) {
+      if (parsed.data && typeof parsed.data === 'object' && Object.keys(parsed.data).length > 0) {
         hasFrontmatter = true;
-        data = (parsed.data ?? {}) as Partial<MemoryFrontmatter>;
+        data = parsed.data as Partial<MemoryFrontmatter>;
         content = parsed.content;
       }
     } catch {
