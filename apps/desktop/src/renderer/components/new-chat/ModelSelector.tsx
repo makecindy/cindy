@@ -4,6 +4,7 @@ import { deviceDisplayName } from '@/lib/deviceName';
 import { ProviderShareQuotaViewingContext, useProviderShareQuotaViewing } from '@/features/provider-share/useProviderShareWeeklyQuota';
 import { SpeedIcon } from './SpeedIcon';
 import { ErrorNotice } from '@/components/ui/error-notice';
+import { SearchInput } from '@/components/ui/search-input';
 import { DisplayPricingDetails } from '@/components/DisplayPricingDetails';
 import { Button } from '@/components/ui/button';
 import { Spinner } from '@/components/ui/spinner';
@@ -3698,42 +3699,18 @@ function ModelSelectorContentView({
   const showRemoteStatusFooter =
     remoteStatusInList !== null && (hasAnyModel || trimmedQuery.length > 0);
 
-  // 搜索框 —— 药丸样式,**只给既有分段面板用**。统一面板的搜索行是设计稿的无框平铺形态
+  // 搜索框 —— 共享 SearchInput(panel 档),**只给既有分段面板用**。统一面板的搜索行是设计稿的无框平铺形态
   // (见下方 unifiedPanel 分支),与这里的胶囊框是两套视觉,刻意不共用;共用的只有
   // placeholder / a11y 名的同一条 i18n key。
   const searchField = (
-    <div
-      className={cn(
-        'flex items-center gap-2 rounded-full border border-[var(--model-dropdown-border)] px-3 py-1.5 transition-colors',
-        interactionDisabled
-          ? 'cursor-not-allowed bg-[var(--surface-elevated-soft)]'
-          : 'bg-[var(--surface)]',
-      )}
-    >
-      <Search
-        size={16}
-        className={cn(
-          'shrink-0',
-          interactionDisabled
-            ? 'text-[var(--text-disabled-tertiary)]'
-            : 'text-[var(--text-tertiary)]',
-        )}
-      />
-      <input
-        type="text"
-        disabled={interactionDisabled}
-        value={query}
-        onChange={(e) => setQuery(e.target.value)}
-        placeholder={t('newChat.modelSelector.search.placeholderAll')}
-        className={cn(
-          'min-w-0 flex-1 bg-transparent text-14 outline-none',
-          interactionDisabled
-            ? 'cursor-not-allowed text-[var(--text-disabled)] placeholder:text-[var(--text-disabled)]'
-            : 'text-[var(--model-item-text)] placeholder:text-[var(--text-placeholder)]',
-        )}
-        aria-label={t('newChat.modelSelector.search.placeholderAll')}
-      />
-    </div>
+    <SearchInput
+      surface="panel"
+      disabled={interactionDisabled}
+      value={query}
+      onChange={setQuery}
+      placeholder={t('newChat.modelSelector.search.placeholderAll')}
+      aria-label={t('newChat.modelSelector.search.placeholderAll')}
+    />
   );
 
   // ── 统一模型选择器面板(opt-in,M3 / M4)────────────────────────────────────

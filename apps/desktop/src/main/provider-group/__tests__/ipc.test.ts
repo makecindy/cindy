@@ -1,7 +1,7 @@
 /**
  * 供应商组设置的 IPC 业务体：入参校验，以及「新加入的电脑必须是这台电脑已经能用的同一个供应商」。
  */
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import { ipcMain, type IpcMainInvokeEvent } from 'electron';
 
 vi.mock('electron', () => ({ ipcMain: { handle: vi.fn() } }));
@@ -37,7 +37,7 @@ vi.mock('../../device-link/providerShareRuntime.js', () => ({
 vi.mock('../../logger.js', () => ({ createLogger: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn() }) }));
 
 import type { ProviderGroupCandidate, ProviderGroupConfig } from '../../../shared/providerGroup';
-import type { ProviderManagementRequest } from '../../../shared/providerManagement';
+import type { ProviderManagementRequest, ProviderShareManagementCommand } from '../../../shared/providerManagement';
 import {
   executeProviderGroupCommand,
   markMembersUnreachableHere,
@@ -57,6 +57,7 @@ import { pruneProviderGroupBindings } from '../bindings.desktop';
 import { readProviderGroup, writeProviderGroup } from '../store';
 import { broadcast } from '../../device-link/index';
 import { createProviderGroupDirectory } from '../directory';
+import { connectTestMaintenanceGate, disconnectTestMaintenanceGate } from '../../instance-runtime/__tests__/maintenanceGateFixture';
 import type { ProviderView } from '@cindy/model-providers';
 
 const LOCAL = { key: 'local', kind: 'local' as const, agentDeviceId: null, providerId: 'anthropic', limit: 4, weight: 1, paused: false };
@@ -808,5 +809,75 @@ describe('provider management receiver account boundary', () => {
     });
     await expect(handleProviderManagementRequest({ action: 'manage-share', command }))
       .rejects.toThrow(/PRECONDITION_FAILED/);
+  });
+});
+
+// Unit/regression, docs/cloud-instances.md「维护」：同账号电脑经 DeviceLink、云服务网页经中转，都由
+// handleProviderManagementRequest 执行供应商组与分享管理。云实例上，改动从接下到落定都计入维护在途，
+// 维护开始后以可重试的 CLOUD_MAINTENANCE_RETRY 拒绝且不执行；读取照常回答、不计入。修复前只有网页
+// 这条入口计入，另一台电脑经 DeviceLink 保存的组可能在封存之后才写完，进不了升级前的备份。
+describe('provider management on a cloud instance under maintenance', () => {
+  const config: ProviderGroupConfig = { strategy: 'expiring', autoSwitch: true, members: [LOCAL] };
+  const save = {
+    action: 'manage-group', command: { action: 'save-if-current', providerId: 'anthropic', config, expectedConfig: config },
+  } satisfies ProviderManagementRequest;
+  const share = (action: ProviderShareManagementCommand['action']) =>
+    ({ action: 'manage-share', command: { action, providerId: 'anthropic' } }) as ProviderManagementRequest;
+  function underMaintenance() {
+    const gate = connectTestMaintenanceGate();
+    onTestFinished(disconnectTestMaintenanceGate);
+    const d = deps([], config);
+    vi.mocked(getProviderGroupDirectory).mockReturnValue(d.directory);
+    vi.mocked(getProviderGroupRouter).mockReturnValue(d.router);
+    vi.mocked(readProviderGroup).mockReturnValue(config);
+    vi.mocked(writeProviderGroup).mockReset().mockResolvedValue(config);
+    vi.mocked(pruneProviderGroupBindings).mockResolvedValue();
+    vi.mocked(executeProviderShareManagementCommand).mockReset().mockResolvedValue({ ok: true });
+    vi.mocked(parseProviderShareCommand).mockImplementation((command) => command as ReturnType<typeof parseProviderShareCommand>);
+    onTestFinished(() => { vi.mocked(parseProviderShareCommand).mockReset(); });
+    return gate;
+  }
+
+  it('holds maintenance until a group save that began first is written', async () => {
+    const gate = underMaintenance();
+    let write!: (value: ProviderGroupConfig) => void;
+    const writing = new Promise<void>((started) => {
+      vi.mocked(writeProviderGroup).mockImplementationOnce(() => {
+        started();
+        return new Promise((resolve) => { write = resolve; });
+      });
+    });
+    const reply = handleProviderManagementRequest(save);
+    await writing;
+    gate.preparing = true;
+    expect(gate.inFlight).toBe(1);
+    write(config);
+    await expect(reply).resolves.toMatchObject({ result: { providerId: 'anthropic', config } });
+    expect(gate.inFlight).toBe(0);
+  });
+
+  it.each([
+    save,
+    { action: 'manage-group', command: { action: 'delete-if-current', providerId: 'anthropic', expectedConfig: config } },
+    ...(['create-link', 'approve', 'reject', 'set-member', 'set-member-note', 'reshare-decide', 'set-run-limits',
+      'reset-run-limits', 'set-visibility', 'set-model-access', 'set-fast-policy'] as const).map(share),
+  ] satisfies ProviderManagementRequest[])('refuses $command.action once maintenance has begun, without running it', async (request) => {
+    const gate = underMaintenance();
+    gate.preparing = true;
+    await expect(handleProviderManagementRequest(request)).rejects.toThrow(/^\[CLOUD_MAINTENANCE_RETRY\]/);
+    expect(writeProviderGroup).not.toHaveBeenCalled();
+    expect(executeProviderShareManagementCommand).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { action: 'manage-group', command: { action: 'get', providerId: 'anthropic' } },
+    { action: 'manage-group', command: { action: 'candidates', providerId: 'anthropic' } },
+    ...(['owned', 'shared-provider-ids', 'own-usage', 'usage-history', 'get-run-limits', 'get-visibility',
+      'quota-account', 'get-model-access', 'get-fast-policy'] as const).map(share),
+  ] satisfies ProviderManagementRequest[])('still answers $command.action during maintenance', async (request) => {
+    const gate = underMaintenance();
+    gate.preparing = true;
+    await expect(handleProviderManagementRequest(request)).resolves.toMatchObject({ result: expect.anything() });
+    expect(gate.inFlight).toBe(0);
   });
 });
