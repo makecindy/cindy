@@ -39,7 +39,7 @@ import { recallAgentDeviceSelection } from '../agentDeviceDraftMemory';
 import { filterHealthyDraftProviders, resolveDraftProviderForModel } from '../../../../shared/draftModelCalibration';
 import type { GhostStartTaskRouteResult } from '../../../../shared/ghost';
 import { sshModel, sshNativeCodexProvider } from './sshModelFixtures';
-import type { ModelGroupResolveResult } from '../../../../shared/modelGroups';
+import type { ModelGroupResolveResult, ModelGroupsConfig } from '../../../../shared/modelGroups';
 import { createRemoteSessionForPreview, previewRemoteCreation } from '../remoteSessionHandoff';
 import {
   pluginEnginePermissionMode,
@@ -48,7 +48,9 @@ import {
   type PluginEngineSelection,
 } from '@/lib/pluginEngineSelection';
 import { checkDraftBranchBeforeStart } from '../newMakerDraftBranchCheck';
+import { applyAlternateDraftModel } from '../alternateDraftModel';
 import { modelGroupOwnerDevice } from '../../model-groups/draftModelGroupRouting';
+import { implicitSourceRouteSelection } from '../../model-groups/sourceRouteProviders';
 
 vi.mock('@/lib/makerTransport', () => ({ makerApiFor: vi.fn() }));
 const remoteProjectsStore = vi.hoisted(() => ({
@@ -81,13 +83,22 @@ function visit(node: ts.Node) {
     routeDeclarations.push(`const ${node.getText(source)};`);
   }
   if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer
-    && ['pluginEnginesAllowed', 'rememberedPluginEngineDeviceId'].includes(node.name.text)) {
+    && ['draft', 'pluginEnginesAllowed', 'rememberedPluginEngineDeviceId'].includes(node.name.text)) {
     pluginEngineDeclarations.push(`const ${node.getText(source)};`);
   }
   if (ts.isVariableDeclaration(node) && node.initializer && ts.isCallExpression(node.initializer)) {
     const name = ts.isIdentifier(node.name) ? node.name.text : '';
     if (['createSession', 'sendWithPluginEngine', 'handleSend', 'handleCreateGoal', 'localDraftEffort', 'draftSeedSelection', 'draftInitialEffort', 'targetSelectableProviders'].includes(name)) {
       callbacks[name] = node.initializer.arguments[0];
+    }
+  }
+  if (ts.isJsxSelfClosingElement(node) && node.tagName.getText(source) === 'CreateWorkerPopover') {
+    for (const prop of node.attributes.properties) {
+      if (!ts.isJsxAttribute(prop) || !prop.initializer || !ts.isJsxExpression(prop.initializer)) continue;
+      const name = prop.name.getText(source);
+      if (prop.initializer.expression && ['onCreate', 'pluginEnginesEnabled'].includes(name)) {
+        callbacks[name] = prop.initializer.expression;
+      }
     }
   }
   ts.forEachChild(node, visit);
@@ -169,9 +180,12 @@ async function submit(options: {
   pluginRoute?: () => Promise<GhostStartTaskRouteResult>;
   /** 选了模型组：发送时解析出的结果。 */
   modelGroupRoute?: ModelGroupResolveResult;
+  /** 这台电脑的路由配置里有供应商路由展开出来的路由；草稿没有记着任何路由。 */
+  sourceRoutes?: ModelGroupsConfig;
   /** 草稿那台电脑的模型目录读到哪一步；默认 ready。 */
   remoteModelListStatus?: 'ready' | 'loading' | 'error';
   rememberedPluginEngineDeviceId?: string;
+  localAlternate?: boolean;
   effort?: Effort;
   submittedEffort?: Effort;
   model?: string;
@@ -357,7 +371,11 @@ async function submit(options: {
     deviceDisplayName, dbToMakerAgentKind, chatEligibleSourcesForModel, askPluginModelRoute, writePluginModelRouteNote, modelCatalogKey,
     controlledModelRoute: { catalogHostDeviceId: options.catalogHostDeviceId },
     // 没选模型组的用例：发送路径不解析、不写说明、不记绑定。
-    activeModelGroup: options.modelGroupRoute ? { type: 'route', id: 'r1' } : null,
+    activeModelGroup: options.modelGroupRoute && !options.sourceRoutes ? { type: 'route', id: 'r1' } : null,
+    // 草稿直接选着供应商路由成员的模型、没记路由：发送时仍按那条路由选成员。
+    sourceRoutesImplicit: !!options.sourceRoutes && !options.deviceId,
+    modelGroupsConfig: options.sourceRoutes ?? { routes: [] },
+    implicitSourceRouteSelection,
     // 远程控制草稿由被控那台选；这里直接给出那台(或本机)的选路结果。
     modelGroupOwnerDevice, resolveDraftModelGroup: vi.fn(async () => options.modelGroupRoute ?? null), writeModelGroupRouteNote: noop,
     bindModelGroupSession: vi.fn(), commitModelGroupDecision: vi.fn(), modelGroupLocationName: () => '', keptModelNameForGroupNote: () => '', i18n: { language: 'en' },
@@ -374,11 +392,27 @@ async function submit(options: {
     setAlternateModel: vi.fn(),
     localModelIssueText: options.localModelIssueText ?? null,
     rememberedPluginEngineDeviceId: runInNewContext(pluginEngineSelectionCode, {
+      applyAlternateDraftModel,
       isDeviceLinkDraft: !!options.deviceId,
       effectiveRemoteHostId: options.remoteHostId,
-      draft: { vendor: agentKind, pluginEngine: options.rememberedPluginEngineDeviceId
-        ? { deviceId: options.rememberedPluginEngineDeviceId }
-        : null },
+      savedDraft: {
+        vendor: agentKind,
+        lastByVendor: { [agentKind]: { model: selectedModel, providerId: selectedProviderId, effort: options.effort ?? 'medium' } },
+        pluginEngine: options.rememberedPluginEngineDeviceId
+          ? { deviceId: options.rememberedPluginEngineDeviceId }
+          : null,
+      },
+      localAlternate: options.localAlternate
+        ? {
+            ownerGeneration: 1,
+            pageKey: 'draft',
+            vendor: agentKind,
+            prefs: { model: selectedModel, providerId: selectedProviderId, effort: options.effort ?? 'medium' },
+            fast: false,
+            favoriteUid: null,
+            agentDevice: options.agentDeviceId ? { deviceId: options.agentDeviceId, name: options.agentDeviceId } : null,
+          }
+        : null,
     }),
     ...draftEffort, getModel, reconcileInvocationEffort, recallAgentDeviceSelection, window,
     localProviders: providers, draftLocalProviders: providers, localProvidersLoading: false, providers,
@@ -569,6 +603,23 @@ describe('homepage submission to Main admission and first-message handoff', () =
   it.each(['send', 'goal'] as const)('allows %s after switching the task computer with a remembered plugin engine', async (entry) => {
     const result = await submit({ entry, deviceId: 'task-computer', rememberedPluginEngineDeviceId: 'engine-computer' });
     expect(result.invokeRemote).toHaveBeenCalledWith('task-computer', 'maker:create-session', [expect.objectContaining({ agentKind: 'pi' })]);
+  });
+  // Choosing a one-task alternate model (for example a built-in model on another
+  // agent computer) must mask any stale remote plugin engine stored on savedDraft,
+  // instead of blocking submission with newChat.pluginEngines.unavailable.
+  it.each(['send', 'goal'] as const)('allows %s when a one-task alternate model overrides a remembered remote plugin engine', async (entry) => {
+    const result = await submit({
+      entry,
+      agentDeviceId: 'agent-computer',
+      providers: [provider(providerId, ['medium'])],
+      rememberedPluginEngineDeviceId: 'engine-computer',
+      localAlternate: true,
+    });
+    expect(result.toastWarning).not.toHaveBeenCalled();
+    expect(result.errors).toEqual([]);
+    expect(result.createSession).toHaveBeenCalledTimes(1);
+    if (entry === 'send') expect(result.sendMessage).toHaveBeenCalledTimes(1);
+    else expect(result.setGoal).toHaveBeenCalledTimes(1);
   });
   // Unit regression: hold both real submission boundaries open. The previous
   // route only opened after both resolved and navigated even after the user left.
@@ -831,6 +882,24 @@ describe('homepage submission to Main admission and first-message handoff', () =
     expect(result.errors).toEqual([]);
     expect(result.invokeRemote).toHaveBeenCalledWith('host-b', 'maker:create-session', [expect.objectContaining({ agentDeviceId: 'source-a' })]);
   });
+  // Unit regression: the draft hid the engine picker and converted its ACP form
+  // to Claude. Exercise the popover bindings and first-send callback up to IPC.
+  it('offers local plugin engines and starts the first Worker with the selected agy model', async () => {
+    const enabled = executable('pluginEnginesEnabled');
+    for (const [device, ssh, expected] of [[null, null, true], ['peer', null, false], [null, 'host', false]] as const) {
+      expect(runInNewContext(enabled, { effectiveDeviceLinkDeviceId: device, effectiveRemoteHostId: ssh })).toBe(expected);
+    }
+    const patchCollab = vi.fn<(draft: CollabDraft) => void>();
+    const { engine, modelId } = syntheticPluginEngine;
+    runInNewContext(executable('onCreate'), { patchCollab, setCreateWorkerOpen: vi.fn() })({
+      role: 'developer', agent: 'acp', providerId: engine.providerId, model: modelId,
+    });
+    const result = await submit({ entry: 'send', collab: patchCollab.mock.calls[0]![0] });
+    expect(result.errors).toEqual([]);
+    expect(result.enableOrca).toHaveBeenCalledExactlyOnceWith('created', expect.objectContaining({
+      workerAgent: 'acp', providerId: engine.providerId, model: modelId,
+    }));
+  });
   // PR #6787, unit: the form stored both computers but the real draft builder
   // dropped the model computer. Existing route tests stubbed that builder. Use
   // the same production callback harness with the actual builder and assert IPC.
@@ -1048,6 +1117,26 @@ describe('homepage submission to Main admission and first-message handoff', () =
     expect(result.ipcCreate.mock.calls[0][0]).toMatchObject({ agentDeviceId: 'dev-2', providerId, model: modelId });
     expect(result.environment.bindModelGroupSession).toHaveBeenCalledWith(expect.any(String), { type: 'route', id: 'r1' }, modelGroupRoute);
   });
+  // 2026-11-24 用户裁决(供应商路由在面板里是一个普通供应商，成员不单列) / unit：草稿直接选着某个成员的模型、没记路由
+  // (升级前的草稿、最近、收藏)时，发送仍按那条路由选成员并记下来。失效后果：面板显示在合并条目下，任务却固定用
+  // 那一个成员，出问题也不会换。
+  it.each(['send', 'goal'] as const)('routes a %s whose draft points straight at a provider-route member', async (entry) => {
+    const modelGroupRoute: ModelGroupResolveResult = {
+      outcome: 'routed', groupName: 'Merged', modelName: modelId, sourceName: 'Other member',
+      route: { agentKind: 'pi', model: modelId, providerId }, why: 'expiring', quota: null, trace: [], decisionId: 'implicit',
+    };
+    const sourceRoutes: ModelGroupsConfig = { routes: [{
+      id: 'src:1', name: modelId, strategy: 'expiring', parent: { id: 'merged', name: 'Merged' },
+      candidates: [{ agentKind: 'pi', providerId, model: modelId }],
+    }] };
+    const result = await submit({ entry, modelGroupRoute, sourceRoutes });
+    expect(result.errors).toEqual([]);
+    expect(result.environment.resolveDraftModelGroup).toHaveBeenCalledWith({ type: 'route', id: 'src:1' }, expect.anything());
+    // 本机发送在派发前就记下选中的来源(派发可能先失败)；目标在建好任务后记下整份选路结果。
+    expect(result.environment.bindModelGroupSession).toHaveBeenCalledWith(expect.any(String), { type: 'route', id: 'src:1' },
+      entry === 'send' ? modelGroupRoute.route : modelGroupRoute);
+  });
+
   it.each(['send', 'goal'] as const)('keeps the model group when opening a collaboration Lead via %s', async (entry) => {
     const modelGroupRoute: ModelGroupResolveResult = {
       outcome: 'routed', groupName: 'Lead', modelName: modelId, sourceName: 'Local',
@@ -1369,6 +1458,7 @@ describe('local plugin engine worktree submission', () => {
       '/fixture/repo/.cindy-worktrees/creator', [], [], expect.any(Object),
     );
     expect(result.clearDraft).toHaveBeenCalledOnce();
+    expect(result.environment.rememberCreatedWorkspace).toHaveBeenCalledOnce();
     expect(result.environment.navigate).toHaveBeenCalledWith(`/cc-agent/${created.id}`, expect.any(Object));
   });
 
@@ -1383,6 +1473,7 @@ describe('local plugin engine worktree submission', () => {
     expect(result.errors).toEqual([expect.objectContaining({ message: 'fixture checkout failed' })]);
     expect(result.sendMessage).not.toHaveBeenCalled();
     expect(result.clearDraft).not.toHaveBeenCalled();
+    expect(result.environment.rememberCreatedWorkspace).not.toHaveBeenCalled();
     expect(result.environment.attachmentState.clearFiles).not.toHaveBeenCalled();
     expect(result.environment.navigate).not.toHaveBeenCalled();
   });
@@ -1396,6 +1487,10 @@ describe('local plugin engine worktree submission', () => {
     expect(result.clearDraft).not.toHaveBeenCalled();
   });
 
+  // 2026-11-26 回归：本机使用插件引擎（acp）新建任务时漏调 rememberCreatedWorkspace()，
+  // 导致曾经在另一台电脑建过任务后，此后本机新建任务默认设备一直回到旧远程设备。
+  // 生产入口：NewMakerDraftRoute 真实 handleSend -> sendWithPluginEngine 本机分支（项目 / 对话 / worktree）。
+  // 最小失败输入：本机草稿选中 activePluginEngine 并成功发送，rememberCreatedWorkspace 未被调用；tier：unit。
   it.each([
     ['/fixture/repo', { enabled: false, sourceBranch: 'remembered' }],
     ['/fixture/linked', { enabled: true, sourceBranch: 'remembered', confirmedIneligible: true }],
@@ -1404,6 +1499,7 @@ describe('local plugin engine worktree submission', () => {
     const [[created]] = result.ipcCreate.mock.calls;
     expect(created).toMatchObject({ workingDir, agentKind: 'acp' });
     expect(created).not.toHaveProperty('localPluginWorktree');
+    expect(result.environment.rememberCreatedWorkspace).toHaveBeenCalledOnce();
     expect(result.sendMessage).toHaveBeenCalledExactlyOnceWith(
       created.id, 'hello', syntheticPluginEngine.modelId, '', 'default',
       workingDir, [], [], expect.any(Object),
@@ -1418,6 +1514,7 @@ describe('local plugin engine worktree submission', () => {
     const [[created]] = result.ipcCreate.mock.calls;
     expect(created).toMatchObject({ workspaceKind: 'dialogue', agentKind: 'acp' });
     expect(created).not.toHaveProperty('localPluginWorktree');
+    expect(result.environment.rememberCreatedWorkspace).toHaveBeenCalledOnce();
     expect(result.sendMessage).toHaveBeenCalledExactlyOnceWith(
       created.id, 'hello', syntheticPluginEngine.modelId, '', 'default',
       '/isolated/dialogue', [], [], expect.any(Object),
@@ -1460,6 +1557,7 @@ describe('local plugin engine worktree submission', () => {
       created.id, 'hello', syntheticPluginEngine.modelId, '', 'default',
       '/fixture/repo/.cindy-worktrees/creator', [], [], expect.any(Object),
     );
+    expect(result.environment.rememberCreatedWorkspace).toHaveBeenCalledOnce();
     expect(result.toastError).not.toHaveBeenCalled();
   });
 });

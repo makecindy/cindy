@@ -162,6 +162,31 @@ describe('createModelGroupResolver', () => {
     expect(third.trace[2]).toMatchObject({ why: 'unavailable' });
   });
 
+  // model-groups.md §3(2026-11-26，dash 建议)：来源背后是电脑组或几个账号时，外层按内层下一个会接任务的那一个判断。
+  // 此前只看额度总览里本机那一份快照，b 读着最急就选 b，即使组里下一台已经用完或 5 小时快满。
+  it('judges a source by the next member its own computer group or account pool would use', async () => {
+    const selection = { type: 'route', id: 'r1' } as const;
+    const base = {
+      config: () => ({ routes: [route('expiring')] }),
+      views: async () => [view('a', 'ChatGPT Pro'), view('b', 'ChatGPT Plus', true)],
+      agents: () => ['codex'] as const,
+      harnessInstalled: async () => true,
+      quotaWindows: async () => new Map([['a', [week(26, 100)]], ['b', [week(39, 20)]]]),
+      scope: () => 'owner',
+      now: () => NOW,
+    };
+    expect(await createModelGroupResolver(base).resolve({ selection })).toMatchObject({ route: { providerId: 'b' } });
+    const asked: string[] = [];
+    const inner = (b: { limited: boolean; fiveHourTight: boolean }) => createModelGroupResolver({ ...base,
+      innerQuota: async ({ providerId }) => {
+        asked.push(providerId);
+        return providerId === 'b' ? { ...b, urgency: 5, headroom: 10 } : null;
+      } });
+    expect(await inner({ limited: true, fiveHourTight: false }).resolve({ selection })).toMatchObject({ route: { providerId: 'a' } });
+    expect(await inner({ limited: false, fiveHourTight: true }).resolve({ selection })).toMatchObject({ route: { providerId: 'a' } });
+    expect(asked).toEqual(expect.arrayContaining(['a', 'b']));
+  });
+
   // #10240: resolve used to record before confirmation. Unit: two resolves without
   // adoption must leave history empty; only one same-account commit may record.
   it('records only committed results and rejects expired or other-account receipts', async () => {
@@ -621,4 +646,25 @@ describe('auto switch setting', () => {
     expect(modelGroupAutoSwitchFor(config, { type: 'route', id: 'r2' })).toBe(false);
     expect(modelGroupAutoSwitchFor(config, { type: 'route', id: 'gone' })).toBe(false);
   });
+});
+
+// 2026-11-25 用户反馈(打开设置页，余量要晚两秒才出现) / unit：界面显示余量时请求带 cachedQuota，读额度那一步要被告知
+// 「用手头的读数，不等新的」；真正给任务选来源(不带)时不能带上它。真实入口：createModelGroupResolver().resolve。
+// 失效后果：显示每次都等满上限，或真选路改按旧读数选。最小输入：一条路由、一个来源。
+it('asks for the quota readings on hand only when the request is for display', async () => {
+  const groups = { routes: [{ id: 'r1', name: 'R', strategy: 'order', candidates: [{ agentKind: 'codex', providerId: 'a', model: 'gpt' }] }] } as ModelGroupsConfig;
+  const view = {
+    id: 'a', name: 'a', source: 'user', connected: true, agents: ['codex'], routing: { codex: { enabled: true } },
+    models: { codex: [{ id: 'gpt', name: 'GPT', mode: 'chat', efforts: [] }] },
+  } as unknown as ProviderView;
+  const quotaWindows = vi.fn(async (_options?: { cached?: boolean }) => new Map<string, ModelGroupTraceQuota[]>());
+  const resolver = createModelGroupResolver({
+    config: () => groups, views: async () => [view], agents: () => ['codex'],
+    harnessInstalled: async () => true, quotaWindows, scope: () => 'owner', now: () => NOW,
+  });
+  const selection = { type: 'route', id: 'r1' } as const;
+  await resolver.resolve({ selection, dryRun: true, cachedQuota: true });
+  await resolver.resolve({ selection, dryRun: true });
+  await resolver.resolve({ selection });
+  expect(quotaWindows.mock.calls.map(([options]) => options?.cached === true)).toEqual([true, false, false]);
 });

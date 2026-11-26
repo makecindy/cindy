@@ -788,4 +788,53 @@ describe('Bot named worker transactions', () => {
       .toBe('New Name');
   });
 
+  // Greptile P1 regression: while a built-in task is temporarily switched to a plugin engine
+  // (which narrowed sessions.permission_mode to 'default'), manual permission changes must update
+  // the owner's saved baseline without forcing an unsupported mode onto the temporary plugin row.
+  it('updates scheduled_model_baseline permissionMode without corrupting a temporary plugin row', () => {
+    const baseline = JSON.stringify({
+      scopeId: 'scope-1',
+      agentKind: 'claude-code',
+      agentDeviceId: null,
+      model: 'claude-sonnet-4-6',
+      providerId: null,
+      effort: 'high',
+      fastMode: false,
+      permissionMode: 'acceptEdits',
+    });
+    db.prepare(`INSERT INTO sessions
+      (id, title, workspace_kind, model, effort, permission_mode, status, scheduled_model_baseline,
+       total_token_usage, total_cost_usd, context_tokens, context_window, fast_mode, plan_mode_enabled,
+       agent_kind, extra_dirs, source, created_at, updated_at)
+      VALUES ('temp-acp', 'Task', 'dialogue', 'gemini-4', '', 'default', 'active', ?,
+       0, 0, 0, 0, 0, 0, 'acp', '[]', 'desktop', 1, 1)`).run(baseline);
+
+    expect(tx(db, { name: 'bots.persistSessionPermission', args: { sessionId: 'temp-acp', mode: 'bypassPermissions' } }))
+      .toEqual({ updated: true });
+    const row = db.prepare('SELECT permission_mode, scheduled_model_baseline FROM sessions WHERE id = ?')
+      .get('temp-acp') as { permission_mode: string; scheduled_model_baseline: string };
+    expect(row.permission_mode).toBe('default');
+    expect(JSON.parse(row.scheduled_model_baseline)).toMatchObject({
+      agentKind: 'claude-code',
+      permissionMode: 'bypassPermissions',
+    });
+
+    // Same-family temporary built-in override updates both the row and the baseline.
+    db.prepare(`INSERT INTO sessions
+      (id, title, workspace_kind, model, effort, permission_mode, status, scheduled_model_baseline,
+       total_token_usage, total_cost_usd, context_tokens, context_window, fast_mode, plan_mode_enabled,
+       agent_kind, extra_dirs, source, created_at, updated_at)
+      VALUES ('temp-codex', 'Task 2', 'dialogue', 'gpt-5.4', 'high', 'acceptEdits', 'active', ?,
+       0, 0, 0, 0, 0, 0, 'codex', '[]', 'desktop', 1, 1)`).run(baseline);
+    expect(tx(db, { name: 'bots.persistSessionPermission', args: { sessionId: 'temp-codex', mode: 'ask' } }))
+      .toEqual({ updated: true });
+    const builtinRow = db.prepare('SELECT permission_mode, scheduled_model_baseline FROM sessions WHERE id = ?')
+      .get('temp-codex') as { permission_mode: string; scheduled_model_baseline: string };
+    expect(builtinRow.permission_mode).toBe('ask');
+    expect(JSON.parse(builtinRow.scheduled_model_baseline)).toMatchObject({
+      agentKind: 'claude-code',
+      permissionMode: 'ask',
+    });
+  });
+
 });

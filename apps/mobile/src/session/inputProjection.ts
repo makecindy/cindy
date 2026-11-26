@@ -106,6 +106,8 @@ export function normalizeInputProjection(value: unknown, fallbackSessionId = '')
     queueAbortPending: record?.queueAbortPending === true,
     error: readString(record?.error),
     errorReason: readString(record?.errorReason),
+    ...(record?.reconnectHandoff === 'disabled' || record?.reconnectHandoff === 'exhausted'
+      ? { reconnectHandoff: record.reconnectHandoff } : {}),
     toolLoop: parseMobileToolLoopErrorDetails(record?.toolLoop),
     outputLimit: parseOutputLimitDetails(record?.outputLimit) ?? null,
     recovery: record?.recovery,

@@ -20,7 +20,7 @@ vi.mock('../worktree/runtimeLeases', () => ({
  *   - dirty → stash 失败保留 / 成功后继续删
  *   - clean 无引用 → git remove + store.del
  */
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import path from 'node:path';
 import fsSync from 'node:fs';
 import os from 'node:os';
@@ -365,6 +365,10 @@ describe('removeWorktreeForSession', () => {
   });
 
   it.each(['discard', 'cancel'])('%s waits for an in-flight create before deciding the record is absent', async (operation) => {
+    // The race starts inside repository discovery, which requires an existing cwd.
+    const fixture = fsSync.mkdtempSync(path.join(os.tmpdir(), 'cindy-create-race-'));
+    onTestFinished(() => fsSync.rmSync(fixture, { recursive: true, force: true }));
+    const baseRepo = fsSync.realpathSync(fixture);
     let releaseGitProbe!: () => void;
     gitExecMock.mockImplementationOnce(
       () =>
@@ -379,7 +383,7 @@ describe('removeWorktreeForSession', () => {
     const recoveryKey = 'recovery-key-123456';
     const create = manager.createWorktree({
       sessionId: 's1',
-      baseRepo: BASE_REPO,
+      baseRepo,
       name: 'recovery-race',
       sourceBranch: 'main',
       recoveryKey,
@@ -387,7 +391,7 @@ describe('removeWorktreeForSession', () => {
     await vi.waitFor(() => {
       expect(gitExecMock).toHaveBeenCalledWith(
         ['rev-parse', '--show-toplevel', '--abbrev-ref', 'HEAD', '--git-dir', '--git-common-dir'],
-        BASE_REPO,
+        baseRepo,
         { timeoutMs: 10_000, deadlineAtMs: 10_000 },
       );
     });
@@ -1022,6 +1026,8 @@ describe('removeWorktreeForSession', () => {
   });
 
   it('discard by recovery key returns preserved(in-progress) when the operation queue stalls past the bounded wait', async () => {
+    const baseRepo = fsSync.mkdtempSync(path.join(os.tmpdir(), 'xdt-wt-stalled-queue-'));
+    onTestFinished(() => fsSync.rmSync(baseRepo, { recursive: true, force: true }));
     const recoveryKey = 'recovery-key-timeout-123456';
     let releaseCreate!: () => void;
     let revParseStarted = false;
@@ -1032,7 +1038,7 @@ describe('removeWorktreeForSession', () => {
       if (args[0] === 'rev-parse' && args[1] === '--show-toplevel') {
         revParseStarted = true;
         return new Promise<{ stdout: string; stderr: string }>((resolve) => {
-          releaseCreate = () => resolve({ stdout: `${BASE_REPO}\nmain\n.git\n.git\n`, stderr: '' });
+          releaseCreate = () => resolve({ stdout: `${baseRepo}\nmain\n.git\n.git\n`, stderr: '' });
         });
       }
       return { stdout: '', stderr: '' };
@@ -1040,7 +1046,7 @@ describe('removeWorktreeForSession', () => {
 
     const createPromise = manager.createWorktree({
       sessionId: 'stalled-queue',
-      baseRepo: BASE_REPO,
+      baseRepo,
       name: 'stalled-branch',
       sourceBranch: 'main',
       recoveryKey,

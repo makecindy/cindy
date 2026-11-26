@@ -11,7 +11,7 @@ import { DEFAULT_REMOTE_AGENT_LIMITS, type RemoteAgentLimitsView } from '../../.
 import type { ProviderGroupConfig, ProviderGroupView } from '../../../src/shared/providerGroup';
 
 const ownerGroupConfig: ProviderGroupConfig = {
-  strategy: 'least', autoSwitch: true, allowFast: true,
+  strategy: 'expiring', autoSwitch: true, allowFast: true,
   members: [
     { key: 'local', kind: 'local', agentDeviceId: null, providerId: 'xd', label: 'Mac mini', limit: 10, weight: 1, paused: false },
     { key: 'device:work-pc:xd', kind: 'device', agentDeviceId: 'work-pc', providerId: 'xd', label: 'Work PC', limit: 10, weight: 1, paused: false },

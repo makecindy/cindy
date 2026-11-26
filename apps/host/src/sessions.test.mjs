@@ -102,7 +102,11 @@ test('Host detail preserves the task-list projection and rejects missing/deleted
   const [listed] = await readHostSessionList(db);
   const detail = await readHostSession(db, 'task');
   assert.deepEqual(detail._count, { messages: 2 });
-  assert.deepEqual(detail, { ...listed, turnElapsedMs: null });
+  assert.deepEqual(detail, { ...listed, turnElapsedMs: null, imAttached: false });
+  sqlite.exec(`CREATE TABLE IF NOT EXISTS im_bindings (target_session_id TEXT);
+    INSERT INTO im_bindings(target_session_id) VALUES ('task');`);
+  assert.equal((await readHostSession(db, 'task')).imAttached, true);
+  sqlite.exec(`DELETE FROM im_bindings WHERE target_session_id = 'task'`);
   const start = Date.now() - 252_000;
   sqlite.prepare('UPDATE sessions SET active_turn_started_at=? WHERE id=?').run(start, 'task');
   const running = await readHostSession(db, 'task');

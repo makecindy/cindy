@@ -3972,6 +3972,7 @@ describe('AgentInputCoordinator send transaction', () => {
     h.coordinator.remove(sid, 'q-2');
     await flush();
     projection = latestProjection(h.projections);
+    expect(projection.withdrawnQueueClientIds).toContain('q-2');
     expect(projection.credentialSwitchWait?.clientId).toBe('q-1');
     expect(projection.pendingQueue.map((q) => q.clientId)).toEqual(['q-1']);
 
@@ -3983,6 +3984,7 @@ describe('AgentInputCoordinator send transaction', () => {
     await flush();
     projection = latestProjection(h.projections);
     expect(projection.pendingQueue.map((q) => q.clientId)).toEqual(['q-2', 'q-1']);
+    expect(projection.withdrawnQueueClientIds ?? []).not.toContain('q-2');
     expect(projection.credentialSwitchWait?.clientId).toBe('q-2');
 
     // 删除等待中的 q-2:该轮等待随消息一起取消;drain 随后为 q-1 重建自己的等待。
@@ -10018,6 +10020,7 @@ describe('AgentInputCoordinator steer transaction', () => {
     await flush();
 
     let projection = latestProjection(h.projections);
+    expect(h.coordinator.getProjection(sid).queueSnapshot?.pendingSteerClientIds).toContain(second.clientId);
     expect(projection.error).toBe('agent failed before persist');
     expect(projection.recovery).toBeNull();
     expect(projection.errorRetryText).toBeNull();
@@ -17418,6 +17421,37 @@ describe('AgentInputCoordinator 中断自动续跑', () => {
     expect(mocks.touchUserSendInDb).toHaveBeenCalledTimes(1);
   });
 
+  // Unit: an accepted Codex turn may already have run tools before its first
+  // persisted output. Manual continuation must not replay that input or exit Plan.
+  it('continues a reconnect-stalled turn manually after automatic recovery is declined', async () => {
+    const h = createHarness();
+    const sid = 'reconnect-manual-continuation';
+    h.onResumableTurnError.mockImplementation((_id, signals) => {
+      signals.recordReconnectHandoff?.('disabled');
+      return null;
+    });
+    h.setHasAssistantProgressAfter(async () => false);
+    const original = makeItem('q-first', 'original long task');
+    original.createOpts.planMode = true;
+    h.coordinator.enqueue(sid, original);
+    await flush();
+    h.setRunning(false);
+    h.coordinator.onTurnEvent(sid, 'error', 'Model reconnect timed out', { reason: 'codex_reconnect_stalled' });
+    expect(h.coordinator.getProjection(sid)).toMatchObject({ reconnectHandoff: 'disabled' });
+    await h.coordinator.retryLastError(sid);
+    await flush();
+    expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+    expect(h.sendToAgent.mock.calls[1]?.[1]).toMatchObject({
+      type: 'user', content: expect.stringContaining(CONTINUE_AFTER_ERROR_PROMPT),
+    });
+    expect(h.sendToAgent.mock.calls[1]?.[1]).toMatchObject({
+      content: expect.stringContaining('model connection stalled'),
+    });
+    expect(JSON.stringify(h.sendToAgent.mock.calls[1]?.[1])).not.toContain('original long task');
+    expect(h.sendToAgent.mock.calls[1]?.[2]).toMatchObject({ planMode: true });
+    expect(h.coordinator.getProjection(sid).reconnectHandoff).toBeUndefined();
+  });
+
   it.each([
     ['turn_no_event_timeout', false, true],
     ['upstream_response_idle_timeout', false, true],
@@ -19622,7 +19656,7 @@ describe('provider group computer switch hold', () => {
       memberLabel: member => member.key, invalidate: vi.fn(),
     };
     const router = createProviderGroupRouter({ directory, readGroup: () => config,
-      listBindings: () => ({ [sid]: binding }), isTurnRunning: () => false, now: () => now, random: () => 0 });
+      listBindings: () => ({ [sid]: binding }), isTurnRunning: () => false, now: () => now});
     const fallback = vi.fn();
     const directGuest = { ownerRoute: 'share:group', requestSwitch: async () => offerToken };
     group = createProviderGroupService({
@@ -19961,7 +19995,7 @@ describe('provider group computer switch hold', () => {
     let group!: ReturnType<typeof createProviderGroupService>;
     const h = createHarness({ providerGroupSwitchCandidate: (id, signals) => group.mayHandleTurnError(id, signals) ? providerGroupSwitchCause(signals, 'run') : null });
     const fallback = vi.fn();
-    const remoteRead = vi.fn(async () => ({ strategy: 'least', autoSwitch: false, members: [] }));
+    const remoteRead = vi.fn(async () => ({ strategy: 'expiring', autoSwitch: false, members: [] }));
     group = createProviderGroupService({
       readBinding: () => ({ providerId: 'codex', memberKey: 'local', groupDeviceId: 'other', at: 1 }),
       remote: { readGroup: remoteRead },
