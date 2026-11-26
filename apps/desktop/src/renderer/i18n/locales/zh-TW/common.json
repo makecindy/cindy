@@ -7246,6 +7246,30 @@
             "controller-encryption-required": "這台電腦開啟了「僅使用 Agent-Net」。請先在這台電腦關閉此選項，才能把對方切回 Device Link。",
             "agent-net-only-relay": "此連線使用僅支援 Agent-Net 的網路，無法切回 Device Link。請先改用支援 Device Link 的連線路線。"
           }
+        },
+        "peerUpdate": {
+          "availableTip": "有新版本 {{version}}，點擊更新",
+          "downloading": "正在下載 {{version}}…",
+          "relaunching": "正在重新啟動並更新至 {{version}}…",
+          "confirm": {
+            "title": "更新「{{name}}」上的 Cindy？",
+            "selfTitle": "更新這台電腦上的 Cindy？",
+            "description": "將把 Cindy 從 {{from}} 更新至 {{to}}。更新完成後該裝置會重新啟動 Cindy，遠端連線會短暫中斷。",
+            "selfDescription": "將把 Cindy 從 {{from}} 更新至 {{to}}。更新完成後這台電腦上的 Cindy 會重新啟動。",
+            "busyWarning": "該裝置目前有執行中的任務或背景工作，重新啟動會將其中斷。",
+            "selfBusyWarning": "這台電腦目前有執行中的任務或背景工作，重新啟動會將其中斷。",
+            "linuxPermissionHint": "Linux 受管安裝可能需要在目標裝置上輸入系統密碼。",
+            "windowsPermissionHint": "若安裝在受保護目錄，可能需要在目標裝置上確認系統權限。",
+            "action": "立即更新"
+          },
+          "toast": {
+            "started": "已開始將「{{name}}」更新至 {{version}}",
+            "relaunching": "「{{name}}」正在重新啟動並更新至 {{version}}",
+            "versionChanged": "「{{name}}」的新版本已變更，請重新開啟卡片確認",
+            "noUpdate": "「{{name}}」目前沒有可安裝的新版本",
+            "busy": "「{{name}}」正在執行另一次更新，請稍後再試",
+            "failed": "未能更新「{{name}}」上的 Cindy"
+          }
         }
       }
     },

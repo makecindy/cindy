@@ -7289,6 +7289,30 @@
             "controller-encryption-required": "This computer has “Use Only Agent-Net” enabled. Disable it here before switching the other computer back to Device Link.",
             "agent-net-only-relay": "This connection uses a network that only supports Agent-Net. Choose a route that supports Device Link before switching back."
           }
+        },
+        "peerUpdate": {
+          "availableTip": "Version {{version}} available — click to update",
+          "downloading": "Downloading {{version}}…",
+          "relaunching": "Restarting to install {{version}}…",
+          "confirm": {
+            "title": "Update Cindy on “{{name}}”?",
+            "selfTitle": "Update Cindy on this computer?",
+            "description": "Cindy will update from {{from}} to {{to}} and restart on that device. Remote connections will drop briefly.",
+            "selfDescription": "Cindy will update from {{from}} to {{to}} and restart on this computer.",
+            "busyWarning": "Running tasks or background work on that device will be interrupted by the restart.",
+            "selfBusyWarning": "Running tasks or background work on this computer will be interrupted by the restart.",
+            "linuxPermissionHint": "Managed Linux installations may prompt for a system password on the target computer.",
+            "windowsPermissionHint": "Installations in a protected folder may prompt for system permission on the target computer.",
+            "action": "Update now"
+          },
+          "toast": {
+            "started": "Updating “{{name}}” to {{version}}",
+            "relaunching": "“{{name}}” is restarting to install {{version}}",
+            "versionChanged": "The available version on “{{name}}” changed. Reopen the card to review.",
+            "noUpdate": "No installable update is available on “{{name}}”.",
+            "busy": "“{{name}}” is already running an update. Try again shortly.",
+            "failed": "Could not update Cindy on “{{name}}”."
+          }
         }
       }
     },
