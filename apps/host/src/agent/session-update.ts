@@ -133,6 +133,7 @@ export function createHostSessionUpdate(deps: {
     // project), with a resume id the Claude transcript move persisted.
     const terminal = patch.status === 'archived' || patch.status === 'deleted';
     const setObj = sessionPatchToRow({
+      projectDir: patch.projectDir,
       workingDir: patch.workingDir,
       workspaceKind: patch.workspaceKind,
       snoozedUntil: patch.status !== undefined ? undefined : patch.snoozedUntil,
