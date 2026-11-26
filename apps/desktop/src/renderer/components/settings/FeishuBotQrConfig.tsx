@@ -52,6 +52,7 @@ export function FeishuBotQrConfig({
           {t('settings.feishuBot.serviceLabel')}
         </legend>
         <SegmentedControl
+          data-settings-search-action="Choose Feishu or Lark for authorization"
           aria-label={t('settings.feishuBot.serviceAria')}
           value={service}
           onValueChange={setService}
@@ -70,6 +71,7 @@ export function FeishuBotQrConfig({
       <p className="text-12 leading-relaxed text-[var(--settings-section-desc)]">
         {t('settings.feishuBot.qr.cardActionHint')}{' '}
         <button
+          data-settings-search-action="Open the Feishu / Lark open platform"
           type="button"
           onClick={() => void window.electronAPI.openExternal(OPEN_PLATFORM_URL[service])}
           className="cursor-pointer bg-transparent p-0 font-medium text-[var(--settings-source-link)] underline underline-offset-2"
@@ -116,6 +118,7 @@ export function FeishuBotQrConfig({
       {isAuthorizing && verificationUrl ? (
         <div className="flex flex-wrap gap-2">
           <Button
+            data-settings-search-action="Open the Feishu / Lark authorization link"
             type="button"
             variant="cta"
             size="lg"
@@ -125,6 +128,7 @@ export function FeishuBotQrConfig({
             {t('settings.feishuBot.qr.openLink')}
           </Button>
           <Button
+            data-settings-search-action="Cancel the Feishu / Lark authorization"
             type="button"
             tone="quiet"
             size="lg"
@@ -135,6 +139,7 @@ export function FeishuBotQrConfig({
         </div>
       ) : !isConnecting ? (
         <Button
+          data-settings-search-action="Start Feishu / Lark QR authorization"
           type="button"
           variant="cta"
           size="lg"
