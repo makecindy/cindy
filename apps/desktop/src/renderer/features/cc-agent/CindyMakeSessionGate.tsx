@@ -20,9 +20,11 @@ export function CindyMakeSessionGate({ sessionId, children, sessionSnapshot }: {
     if (source === undefined && remoteProjectsStore.getCreationPreview(sessionId)) return null;
     return source;
   });
-  const localSource = useSyncExternalStore(sessionsStore.subscribe, () =>
-    sessionId ? sessionsStore.findById(sessionId)?.source : undefined,
-  );
+  const localSource = useSyncExternalStore(sessionsStore.subscribe, () => {
+    if (!sessionId) return undefined;
+    if (sessionsStore.getCreationPreview(sessionId)) return null;
+    return sessionsStore.findById(sessionId)?.source;
+  });
   const snapshotSource = sessionSnapshot && sessionSnapshot.id === sessionId ? sessionSnapshot.source : undefined;
   const listedSource = remoteSource !== undefined ? remoteSource
     : localSource !== undefined ? localSource : snapshotSource;

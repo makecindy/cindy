@@ -13980,6 +13980,9 @@
           "allow": "autoriser",
           "deny": "refuser",
           "approve": "approuver"
+        },
+        "companion": {
+          "retryLater": "veuillez réessayer plus tard"
         }
       },
       "hook": {

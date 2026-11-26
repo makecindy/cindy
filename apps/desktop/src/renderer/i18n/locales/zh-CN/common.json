@@ -13812,6 +13812,9 @@
           "allow": "允许",
           "deny": "拒绝",
           "approve": "批准"
+        },
+        "companion": {
+          "retryLater": "请稍后再试"
         }
       },
       "hook": {
