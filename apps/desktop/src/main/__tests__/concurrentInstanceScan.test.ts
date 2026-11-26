@@ -25,15 +25,23 @@ import {
 // bounded deletion of proven-stale registry records via the real scan entry.
 function makeDeps(opts: {
   raw?: string;
+  /** 按调用序供给 readFile 结果；耗尽后按 ENOENT 处理（模拟「查询期间文件被替换」）。 */
+  readFileByCall?: string[];
   lockTarget?: string;
   lockMtimeMs?: number;
   readProcessIdentity: ConcurrentInstanceScanDeps['readProcessIdentity'];
   unlink?: ConcurrentInstanceScanDeps['unlink'];
 }): ConcurrentInstanceScanDeps {
   const enoent = () => Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+  const readCalls = [...(opts.readFileByCall ?? [])];
   return {
     readdir: async () => (opts.raw !== undefined ? ['4242.json'] : []),
     readFile: async () => {
+      if (opts.readFileByCall !== undefined) {
+        const next = readCalls.shift();
+        if (next === undefined) throw enoent();
+        return next;
+      }
       if (opts.raw === undefined) throw enoent();
       return opts.raw;
     },
@@ -178,5 +186,52 @@ describe('concurrentInstanceScan stale registry record cleanup', () => {
     )).toEqual([4242]);
     expect(unlinked).toEqual([]);
     expect(logged).toHaveLength(0);
+  });
+
+  it('gives up cleanup when the record was rewritten while identity was being queried', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(10_000_000);
+    const unlinked: string[] = [];
+    // 扫描读到旧记录并证死（非 Cindy 身份、启动晚于记录），但删除前同一 PID 已被
+    // 新 Cindy 登记重写。按文件名 unlink 会删掉活实例的注册——Windows 没有
+    // SingletonLock 兜底，后续扫描再也看不到这个实例。删除必须绑定证死时的原文。
+    const replacedRaw = JSON.stringify({
+      pid: 4242,
+      userDataDir,
+      startedAtMs: 9_900_000,
+      rootDir: '/Applications/Cindy.app',
+    });
+    const deps = makeDeps({
+      raw,
+      readFileByCall: [raw, replacedRaw],
+      readProcessIdentity: nonCindy,
+      unlink: async (file) => { unlinked.push(file); },
+    });
+
+    expect(await findConcurrentLiveInstancePids(deps, userDataDir)).toEqual([]);
+    expect(unlinked).toEqual([]);
+    expect(logged).toHaveLength(1);
+  });
+
+  it('deletes only the backup that still holds the stale text when canonical was rewritten', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(10_000_000);
+    const unlinked: string[] = [];
+    const replacedRaw = JSON.stringify({
+      pid: 4242,
+      userDataDir,
+      startedAtMs: 9_900_000,
+      rootDir: '/Applications/Cindy.app',
+    });
+    const deps = makeDeps({
+      raw,
+      readFileByCall: [raw, replacedRaw, raw],
+      readProcessIdentity: nonCindy,
+      unlink: async (file) => { unlinked.push(file); },
+    });
+
+    // 正典已被新实例重写（保留），.bak 仍是证死那份的原文（删）。
+    expect(await findConcurrentLiveInstancePids(deps, userDataDir)).toEqual([]);
+    expect(unlinked).toEqual([path.join(userDataDir, '.dev-instances', '4242.json.bak')]);
   });
 });

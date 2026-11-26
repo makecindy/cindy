@@ -168,12 +168,24 @@ async function cleanupStaleRegistryRecord(
   deps: ConcurrentInstanceScanDeps,
   registryDir: string,
   fileName: string,
+  staleRaw: string,
 ): Promise<void> {
   const unlink = deps.unlink;
   if (!unlink) return;
+  // 证死之后到删除之前隔着身份查询，同一 PID 可能已被新实例登记重写。删除前重读
+  // 并与证死的那份原文比对：内容一致才删，已被替换（或读不了、已不在）就放弃——
+  // 宁可留一份残档，不能误删活实例的注册（Windows 没有 SingletonLock 兜底）。
   for (const name of [fileName, `${fileName}.bak`]) {
+    const filePath = path.join(registryDir, name);
+    let current: string;
     try {
-      await unlink(path.join(registryDir, name));
+      current = await deps.readFile(filePath);
+    } catch {
+      continue;
+    }
+    if (current !== staleRaw) continue;
+    try {
+      await unlink(filePath);
     } catch {
       // ENOENT = 已被清理（属主退出路径或另一台扫描器先删）；其余错误同样吞掉。
     }
@@ -360,7 +372,7 @@ export async function findConcurrentLiveInstancePids(
     if (rememberStaleProcessProof(proofKey)) {
       log.info('ignoring stale instance registry record after PID reuse', { pid: candidate.pid });
     }
-    await cleanupStaleRegistryRecord(deps, registryDir, candidate.fileName);
+    await cleanupStaleRegistryRecord(deps, registryDir, candidate.fileName, candidate.raw);
   }
 
   // 追溯 fallback:本补丁之前的 packaged build 不写注册表,但 Chromium 单例锁是
