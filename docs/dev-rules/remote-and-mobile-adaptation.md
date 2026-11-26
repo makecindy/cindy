@@ -1179,15 +1179,21 @@ mDNS 名，解析要靠双方都能收发组播；跨网段、组播被过滤或
   地址时，ICE 仍能由对端打通：控制通道一直能直连，只公布 mDNS 名的文件通道不能。Info.plist
   缺 `NSLocalNetworkUsageDescription` 时系统不弹授权、直接拒绝；正式包由 `forge.config.ts`
   声明，个人版由 `scripts/personal-build/native-capabilities.mjs` 写入运行时，改动后要用
-  更新过的构建工具重新生成运行时才生效。
-- **应用内检测与提醒（2026-11-22）。** Apple 没有本地网络许可的查询接口，也区分不了「未询问」
+  更新过的构建工具重新生成运行时才生效。此外，同版本 Electron 主二进制原厂共享同一个 Mach-O
+  `LC_UUID`，macOS 27.3 实测（2026-11-26）与开发态 `Electron.app` 或其他 Electron 应用撞
+  `LC_UUID` 时，`nehelper` 会静默继承拒绝、不弹系统授权框也不把 Cindy 列进系统设置；两处
+  构建入口都在签名前通过 [`scripts/macos-macho-uuid.mjs`](../../scripts/macos-macho-uuid.mjs)
+  按 `(bundleId, electronVersion)` 为主二进制写入确定且唯一的 `LC_UUID`。
+- **应用内检测与提醒（2026-11-22，2026-11-26 改进）。** Apple 没有本地网络许可的查询接口，也区分不了「未询问」
   与「已拒绝」。Main 的 [`local-network/access.ts`](../../apps/desktop/src/main/local-network/access.ts)
   向物理网卡的默认网关（默认路由在 VPN 上时取 `route -n get -ifscope <en*> default`）发一次
   TCP/53 连接：立即 `EHOSTUNREACH` 判为 `denied`，连通、拒绝或超时判为 `granted`，没有局域网网关
-  判为 `unknown`，界面在 `unknown` 时什么都不显示。这次探测本身也是未决定的 App 触发系统询问的
-  方式；系统已有决定（含缺 `NSLocalNetworkUsageDescription` 时被静默拒绝的旧安装）就不会再询问，
-  所以「去授权」在约 1.2 秒后仍被拒时打开「系统设置 › 隐私与安全性 › 本地网络」，并在 3 分钟内
-  每 2 秒复查一次。由拒绝变为允许时，Device Link 调用与网卡变化相同的 `notifyNetworkChanged()` /
+  判为 `unknown`，界面在 `unknown` 时什么都不显示。这次探测在 App 处于前台时也是未决定的 App 触发
+  系统询问的方式（后台时 `nehelper` 会跳过弹窗）；为避免把刚弹出的原生授权框顶掉，点击「开启」先将
+  窗口拉回前台触发探测并在 3 分钟内每 2 秒复查，不再在 1.2 秒后强跳系统设置。若系统已有决定（不会再弹
+  原框），界面给出「打开系统设置」（二次点击支持「在新窗口打开」避开卡页）与「在访达中显示当前 App」
+  入口，便于在「隐私与安全性 › 本地网络」打开或通过 `+` 添加。由拒绝变为允许时，Device Link 调用与
+  网卡变化相同的 `notifyNetworkChanged()` /
   `agentNetNetworkChanged()`，立即重试直连，不需要重启。缺许可时 LAN 信标收发都被拦住，「对端是否
   在同一局域网」无从观察，所以侧边栏只在两种可观察的代价出现时提醒
   （[`local-network/reminder.ts`](../../apps/desktop/src/main/local-network/reminder.ts)）：用户刚打开
@@ -1369,6 +1375,10 @@ preparing，本机 Session 可正常关闭，下一条显式消息按原生会�
    打开或连回 Agent 前的只读 `caps` 查询复用共享瞬态重试策略（最多 6 次），等待启动建连或拥堵冷却
    结束；授权拒绝、旧端不支持等非瞬态错误立即结束。只重读这台电脑的能力，不重建 link、不重启 relay，
    不重放 `open`、上传或发送。回归见 `remote-agent/__tests__/connectionPool.test.ts`。其余 op 不自动重放。
+   已发送的 `call` 有两条独立的回传路径：请求回执和现有轮询里的 `result(callId)`。请求回执超时时，
+   控制端采用同一 run、同一 callId 已收到的执行结果；结果尚未到达时再等最多 30 秒。到期仍无结果就保留
+   原超时错误。整个核对过程复用现有轮询，其他任务的游标与重试预算照常。回归见
+   [runClientReply.test.ts](../../apps/desktop/src/main/remote-agent/__tests__/runClientReply.test.ts)。
    设备熔断的 `DEVICE_UNRESPONSIVE` 也属于瞬态错误：`poll` 保留原游标与原两分钟窗口，
    等底层既有单飞探测恢复；注销 run 取消后续重试。共享判据同时让 `reply` / `push` 在原有
    交付次数上限内重试，复用原 requestId／载荷或 seq／帧，不重新执行工具或重放 `open` / `call`。

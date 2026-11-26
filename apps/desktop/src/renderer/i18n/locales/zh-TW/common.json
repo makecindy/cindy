@@ -7398,7 +7398,8 @@
       "localNetwork": {
         "label": "區域網路",
         "deniedHint": "沒有這個權限時，同一網路下的電腦和手機無法直接連線這台電腦，只能經中繼，速度會變慢。",
-        "settingsHint": "請在「系統設定 › 隱私權與安全性 › 區域網路」裡開啟 Cindy，回到這裡會自動生效。"
+        "promptedHint": "請在彈出的系統視窗中點擊「允許」；若沒有彈窗，可前往系統設定手動開啟。",
+        "settingsHint": "在「隱私權與安全性」裡找到「區域網路」並開啟 Cindy；若清單中沒有，點左下角「+」加入目前 App，回到這裡會自動生效。"
       }
     },
     "imBot": {
@@ -7869,6 +7870,10 @@
         "toggle-sidebar": {
           "label": "切換側邊欄",
           "description": "收起或展開左側任務列表"
+        },
+        "copy-session-link": {
+          "label": "複製任務連結",
+          "description": "複製目前開啟的任務連結"
         },
         "session-history-back": {
           "label": "上一個任務",
@@ -9585,6 +9590,7 @@
         "createTitle": "新增 MCP 伺服器",
         "editTitle": "編輯 MCP 伺服器",
         "desc": "僅支援遠端 http / sse 型 MCP。儲存後新建或重啟的 Agent 會話即可呼叫，正在執行的 Agent 會話不受影響。",
+        "embeddedGuide": "助手為目前的任務開啟了 MCP 設定表單。請依照服務供應商的說明核對已填資訊，補齊缺少的欄位，再儲存設定。",
         "teammateDesc": "僅支援遠端 http / sse 型 MCP。儲存後夥伴會把它加入自己的工具，在本對話的下一則訊息起即可使用，無需新建任務。"
       },
       "fields": {
@@ -13605,6 +13611,7 @@
           "overloadRetryingNoCount": "模型服務繁忙，正在自動重試…",
           "overloadFailed": "⚠️ 模型服務繁忙：上游暫時沒有可用容量。請直接在這裡重發這則訊息重試，或在 Cindy 裡換一個模型。（在桌面端點「重試」也能繼續任務，但結果不會回到這則訊息裡。）"
         },
+        "openAiReconnect": "請在 Cindy 設定 → 模型供應商 → OpenAI 中重新連線 ChatGPT，然後在這裡傳送訊息繼續。",
         "audioInputUnavailable": "目前的模型連線無法直接讀取音訊。可以請 Cindy 先將音訊轉成文字，再繼續處理。",
         "toolLoop": {
           "generic": "模型重複呼叫工具次數過多，Cindy 已停止本輪以避免無限迴圈。可以傳送新訊息繼續。",
@@ -15620,7 +15627,6 @@
       "piRetryHistoryUnavailable": "這則訊息未送出。Pi 讀取傳送所需的歷史記錄時失敗。你可以重試，或在新任務中繼續。",
       "upstreamStatusError": "上游回傳 {{status}}，本次回覆未完成。",
       "messageNotSent": "這則訊息未送出。",
-      "upstreamEmpty550": "模型服務回傳 HTTP 550（無回應內容）",
       "replyFailed": "回覆未完成",
       "queuedSendRecovery": "上一則訊息尚未傳送。點選「重試」可原樣傳送。傳送新訊息會取代這一則。",
       "retryTitle": "重新傳送最後一則訊息",
@@ -16459,7 +16465,7 @@
       "REMOTE_WORKDIR_UNAVAILABLE": "遠端工作目錄現在無法使用。請確認那台電腦上的目錄還在，然後重試。",
       "REMOTE_OPTIMISTIC_SESSION_STATE_UNAVAILABLE": "電腦端暫時無法確認這則訊息是否已經送出。請稍後再試，不要重複傳送同一則。",
       "REMOTE_AGENT_UNAVAILABLE": "未能與執行 Agent 的電腦通訊，請查看錯誤詳情。",
-      "REMOTE_AGENT_TIMEOUT": "等待執行 Agent 的電腦回應逾時，結果尚未確認。重試前請先檢查任務進度。",
+      "REMOTE_AGENT_TIMEOUT": "執行 Agent 的電腦還沒回覆。請先查看任務進度。如果任務還在執行或已有結果，就不必重試。",
       "REMOTE_AGENT_LINK_BUSY": "與執行 Agent 的電腦之間的通訊忙碌，請稍後重試。",
       "REMOTE_AGENT_UNRESPONSIVE": "執行 Agent 的電腦多次未回應，呼叫已暫時暫停。請稍後重試。",
       "REMOTE_AGENT_OFFLINE": "執行 Agent 的電腦目前離線，待重新上線後重試。",
@@ -16698,6 +16704,8 @@
       "retryIn": "{{seconds}} 秒後自動重試"
     },
     "subscriptionAccountError": {
+      "unreachable": "暫時無法連上 Codex 帳號服務。",
+      "rechecking": "暫時無法連上 Codex 帳號服務，將於 {{resetAt}} 自動重試。",
       "poolModelLimited": "目前模型的訂閱額度已達上限。可以先切換模型。",
       "poolRetryUntil": "可在 {{resetAt}} 後重試。",
       "poolOtherSignedOut": "另有訂閱帳號已登出，可在執行任務的電腦上重新登入後重試。",
@@ -22652,6 +22660,16 @@
     "refresh": "重新整理配額"
   },
   "subscriptionAccounts": {
+    "existing": {
+      "menu": "更多新增方式",
+      "connect": "連接既有登入…",
+      "found": "發現 {{count}} 個可連接的登入",
+      "title": "{{device}} 上的既有登入",
+      "note": "Cindy 將與終端機共用所選帳號的設定。",
+      "attach": "連接",
+      "choose": "選擇其他目錄…",
+      "unverified": "無法確認此目錄中的訂閱登入。"
+    },
     "pluginSignIn": {
       "method": "登入方式",
       "secretHint": "Key 只交給插件，儲存在這個帳號自己的資料夾裡；Cindy 不會保存，也不會傳到其他電腦。",
