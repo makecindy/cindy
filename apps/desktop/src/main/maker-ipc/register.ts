@@ -7414,6 +7414,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       // 与 Lead 相同的位置，所以缺省 false 时控制端不提供。
       supportsOrcaWorkerAgentDevice: true,
       supportsOrcaWorkerModelGroup: true,
+      supportsSideChatChildId: true,
       // 新控制端只有看到此位，才对本机上的协同 Lead / 本机 Worker 列出其他电脑与分享、允许换 Agent
       // 所在电脑。v0.1.104–v0.1.110 的 host 会以 UNSUPPORTED_CAPABILITY 拒绝这类换位置，缺省 false
       // 时控制端不提供。
