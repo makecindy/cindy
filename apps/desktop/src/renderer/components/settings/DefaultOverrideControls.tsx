@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 
+import { Badge } from '@/components/ui/badge';
 import { RestoreDefaultButton } from '@/components/ui/reset-buttons';
 
 export function DefaultOverrideControls({
@@ -8,6 +9,7 @@ export function DefaultOverrideControls({
   disabled,
   alwaysVisible = false,
   showCustomizedBadge = isCustomized,
+  label,
   onReset,
 }: {
   isCustomized: boolean;
@@ -16,6 +18,8 @@ export function DefaultOverrideControls({
   alwaysVisible?: boolean;
   /** Draft-only settings can keep the reset action without claiming a saved override. */
   showCustomizedBadge?: boolean;
+  /** 同屏有多个还原入口时给出可区分的无障碍名。 */
+  label?: string;
   onReset: () => void;
 }) {
   const { t } = useTranslation();
@@ -26,13 +30,14 @@ export function DefaultOverrideControls({
   return (
     <div className="flex shrink-0 items-center gap-2">
       {isCustomized && showCustomizedBadge ? (
-        <span className="whitespace-nowrap rounded-full bg-[var(--surface-chip)] px-2 py-1 text-11 font-medium leading-none text-[var(--text-secondary)]">
+        <Badge>
           {t('settings.defaults.customizedBadge')}
-        </span>
+        </Badge>
       ) : null}
       {/* Per-setting reset (CONTROLS decision 3): shared 28px quiet icon button. */}
       <RestoreDefaultButton
         data-settings-search-action="Restore this setting to its default value"
+        label={label}
         onClick={onReset}
         disabled={resetDisabled}
       />

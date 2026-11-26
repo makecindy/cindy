@@ -340,7 +340,7 @@
     "tabOwned": "Shared by Me",
     "startIntro": "Invite a collaborator to read everything in this task and work with the same Agent.",
     "runsOnThisDevice": "Runs on this device",
-    "inviteNotice": "Anyone holding the invitation link can join after signing in, with the same Agent access as the host.",
+    "inviteNotice": "Anyone holding the invitation link can join after signing in, with the same Agent access as the host. Guests can review current changes across the entire Git repository, even when sharing a subfolder.",
     "offlineAutoClose": "Sharing ends automatically if the host computer stays offline.",
     "inviteBoxHint": "Send the link to your collaborator. They can open it to join, or paste it into Join Shared Task in Cindy.",
     "invitationMessage": "You’re invited to join “{{title}}”\n{{link}}\nOpen the link to join. If Cindy doesn’t open, choose Join Shared Task in Cindy and paste this link.",
@@ -401,7 +401,7 @@
       "progress": "Current share {{used}}% · limit {{limit}}%",
       "paused": "This model is paused. Choose another available model.",
       "recommendation": "Recommended: {{model}}",
-      "unsupported": "Model share limits are not yet supported for this provider group.",
+      "unsupported": "Model share limits are not yet supported for this computer group.",
       "basis": "Last 7 calendar days · input + output tokens, excluding cache",
       "maxPercent": "Maximum share of personal usage",
       "empty": "No usage recorded",
@@ -498,14 +498,14 @@
         "confirm": "Remove Share"
       },
       "reshare": {
-        "applying": "wants to use it through {{owner}}’s provider group",
+        "applying": "wants to use it through {{owner}}’s computer group",
         "requestedAt": "Requested {{time}}",
         "usageHint": "If you agree, {{name}}’s sessions can run on this computer, and usage counts under {{owner}}",
         "approve": "Agree",
         "reject": "Decline",
         "summaryUsing_one": "{{count}} person uses it through {{owner}}’s provider group",
-        "summaryUsing_other": "{{count}} people use it through {{owner}}’s provider group",
-        "summaryOwner": "Through {{owner}}’s provider group",
+        "summaryUsing_other": "{{count}} people use it through {{owner}}’s computer group",
+        "summaryOwner": "Through {{owner}}’s computer group",
         "summaryDeclined_one": "{{count}} declined",
         "summaryDeclined_other": "{{count}} declined",
         "stateApproved": "Agreed",
@@ -513,10 +513,10 @@
         "revoke": "Withdraw",
         "revokeAria": "Withdraw agreement for {{name}}",
         "approveAria": "Agree to {{name}} using it",
-        "toastApproved": "{{name}} can now use {{provider}} through {{owner}}’s provider group",
+        "toastApproved": "{{name}} can now use {{provider}} through {{owner}}’s computer group",
         "toastRejected": "Declined {{name}}’s request",
         "toastRevoked": "Withdrew agreement for {{name}}. Running sessions were stopped.",
-        "listTitle": "Using it through {{owner}}’s provider group"
+        "listTitle": "Using it through {{owner}}’s computer group"
       },
       "memberNote": {
         "add": "Set Note",
@@ -562,7 +562,7 @@
       "requestedAt": "Requested {{time}} with your share link",
       "pairingHint": "Before approving, you can ask them over the channel you sent the link through: “What pairing code do you see?” Approve if it matches.",
       "callout": "Once approved, {{name}} can use {{provider}} models in their own sessions. The Agent runs on this computer and usage counts toward your {{provider}}. You can pause or remove access anytime in “{{provider}} · Remote & Sharing”.",
-      "calloutGroup": "Once approved, {{name}} can use {{provider}} models in their own sessions. The provider group picks the computer that runs the Agent, and usage counts toward your {{provider}}. You can pause or remove access anytime in “{{provider}} · Remote & Sharing”.",
+      "calloutGroup": "Once approved, {{name}} can use {{provider}} models in their own sessions. The computer group picks the computer that runs the Agent, and usage counts toward your {{provider}}. You can pause or remove access anytime in “{{provider}} · Remote & Sharing”.",
       "calloutRemote": "Once approved, {{name}} can use {{provider}} models in their own sessions. The Agent runs on the computer hosting this provider and usage counts toward your {{provider}}. You can pause or remove access anytime in “{{provider}} · Remote & Sharing”.",
       "calloutClaudeEmail": "While {{name}} uses it, the Agent can see the email address you sign in to Claude with.",
       "calloutUnknown": "If you don’t recognize this person, decline; the link stops working once declined.",
@@ -702,7 +702,7 @@
       "rejectedTitle": "Share Request Declined",
       "rejectedBody": "{{name}} declined to share {{provider}}",
       "reshareTitle": "New Usage Request",
-      "reshareBody": "{{name}} wants to use your shared {{provider}} through {{owner}}’s provider group"
+      "reshareBody": "{{name}} wants to use your shared {{provider}} through {{owner}}’s computer group"
     },
     "runLimits": {
       "title": "Remote session limits",
@@ -758,7 +758,7 @@
   },
   "providerGroup": {
     "management": {
-      "note": "Managing the provider group on {{device}}. Changes are saved on that computer; keep it online.",
+      "note": "Managing the computer group on {{device}}. Changes are saved on that computer; keep it online.",
       "unsupported": "The Cindy version on the computer with this group does not support remote management yet. Update Cindy on that computer first."
     },
     "page": {
@@ -829,27 +829,13 @@
       "emptyRange": "No usage in this period"
     },
     "section": {
-      "title": "Provider Group",
+      "title": "Computer Group",
       "addComputer": "Add Computer",
       "delete": "Delete Group",
       "empty": "Add {{provider}} from your other computers and tasks will pick one automatically",
-      "loading": "Loading provider group…",
-      "loadFailed": "Couldn’t load the provider group",
+      "loading": "Loading computer group…",
+      "loadFailed": "Couldn’t load the computer group",
       "note": "For sessions on this computer and sessions of people you share with, the group picks the computer that runs the Agent"
-    },
-    "strategy": {
-      "label": "Group Strategy",
-      "least": "Least Busy",
-      "round": "Round Robin",
-      "order": "In Order",
-      "weight": "By Weight",
-      "quotaFirst": "When subscription usage is available, computers whose quota resets soon with plenty left go first, so each account is used up evenly over time; similar ones follow the group strategy",
-      "description": {
-        "least": "Goes to the least busy one",
-        "round": "Rotates across computers",
-        "order": "Earlier in the list first",
-        "weight": "Split by weight"
-      }
     },
     "autoSwitch": {
       "label": "Switch Computers Automatically",
@@ -909,9 +895,9 @@
         }
       },
       "removeConfirm": {
-        "title": "Remove {{name}} from the provider group?",
+        "title": "Remove {{name}} from the computer group?",
         "description": "It won’t get new tasks. Tasks already running there stay on that computer.",
-        "lastDescription": "It’s the last computer in the group, so removing it deletes the {{provider}} provider group.",
+        "lastDescription": "It’s the last computer in the group, so removing it deletes the {{provider}} computer group.",
         "confirm": "Remove from Group"
       },
       "sourceGroupOwner": "Hosts the group",
@@ -949,12 +935,12 @@
       "send": "Send message"
     },
     "deleteConfirm": {
-      "title": "Delete the {{provider}} provider group?",
+      "title": "Delete the {{provider}} computer group?",
       "description": "New tasks on this computer will run here. Tasks already on other computers stay where they are.",
       "confirm": "Delete Group"
     },
     "add": {
-      "title": "Add Computers to the {{provider}} Provider Group",
+      "title": "Add Computers to the {{provider}} Computer Group",
       "sourceAria": "Computer source",
       "tabAvailable": "Already Available",
       "tabLink": "Share Link",
@@ -971,11 +957,11 @@
     },
     "toast": {
       "added_one": "Added {{count}} computer to the {{provider}} provider group",
-      "added_other": "Added {{count}} computers to the {{provider}} provider group",
+      "added_other": "Added {{count}} computers to the {{provider}} computer group",
       "addedAccounts_one": "Added {{count}} account to the {{provider}} provider group",
-      "addedAccounts_other": "Added {{count}} accounts to the {{provider}} provider group",
-      "removed": "Removed {{name}} from the provider group",
-      "deleted": "Deleted the {{provider}} provider group"
+      "addedAccounts_other": "Added {{count}} accounts to the {{provider}} account group",
+      "removed": "Removed {{name}} from the computer group",
+      "deleted": "Deleted the {{provider}} computer group"
     }
   },
   "regionScreenshot": {
@@ -1373,7 +1359,7 @@
     "DEVICE_LINK_BUSY": "The remote computer is busy. Try again shortly.",
     "INVALID_PARAMS": "Some input isn’t valid. Check it and try again.",
     "PRECONDITION_FAILED": "This action isn’t available in the current state.",
-    "PROVIDER_GROUP_CHANGED": "The provider group changed elsewhere, so this action was not applied. Review the latest settings and try again.",
+    "PROVIDER_GROUP_CHANGED": "The computer group changed elsewhere, so this action was not applied. Review the latest settings and try again.",
     "MODEL_CONTEXT_USAGE_UNKNOWN": "Model not switched: Cindy can’t verify how much context this task uses. Keep the current model or start a new task.",
     "MODEL_WINDOW_CURRENT_CONTEXT_UNKNOWN": "Model not switched: Cindy can’t verify the current model’s context window. Check the window setting for a custom model. If it can’t be changed, keep the current model or start a new task.",
     "MODEL_WINDOW_TARGET_CONTEXT_UNKNOWN": "Model not switched: Cindy can’t verify the target model’s context window. Check the window setting for a custom model. If it can’t be changed, choose another model or start a new task.",
@@ -1901,7 +1887,7 @@
       "imBot": "IM bots",
       "ghosts": "Plugins",
       "cindyMake": "Cindy Make",
-      "modelGroups": "Model groups"
+      "modelGroups": "Smart routing"
     },
     "sections": {
       "user": "User",
@@ -3778,7 +3764,7 @@
         "formatEndpoint": "Required for each endpoint. protocol accepts \"openai-chat\", \"openai-responses\", \"anthropic-messages\" and \"google-generative-ai\". Set baseUrl to the full HTTP(S) endpoint URL; HTTPS is recommended.",
         "formatTargets": "Optional engine array: \"claude-code\", \"codex\" or \"pi\". Omit it to match engines by protocol, or specify engines explicitly. Claude Code also supports OpenAI and Google protocols. The example enables only Pi.",
         "formatModels": "Optional. Use model ID strings or objects with id (name is optional). Omit the list or leave it empty to fetch models after confirmation. A nonempty list skips automatic fetching.",
-        "formatMetadata": "Optional model fields: group is the model group, contextWindow is the context length, and maxOutputTokens is the output limit (both in tokens). Example numbers are illustrative; use the model’s actual capabilities.",
+        "formatMetadata": "Optional model fields: group is the smart routing, contextWindow is the context length, and maxOutputTokens is the output limit (both in tokens). Example numbers are illustrative; use the model’s actual capabilities.",
         "formatEffort": "Optional model fields: efforts lists supported effort levels; defaultEffort selects one of them as the default. Remove both fields if unsure.",
         "formatLimits": "Up to 8 endpoints per provider and 10,000 models per endpoint, within the 4 MiB file limit.",
         "exampleTitle": "JSON example (same as the download)",
@@ -4326,9 +4312,12 @@
           "compaction": {
             "title": "Automatic Compaction",
             "hint": "Compact context at the selected usage percentage. Lower values compact earlier; engine limits still apply.",
-            "default": "{{pct}}% (Default)",
+            "defaultBadge": "Default",
+            "sliderAria": "Adjust the automatic compaction threshold",
+            "restoreAria": "Restore the default automatic compaction ratio",
             "timing": "Applies to all available engines for this model and source on subsequent runs, without interrupting a response."
           },
+          "antigravityHydrogenDescription": "Designed for everyday coding and fast execution.",
           "contextLimitRoute": "Current {{tokens}} tokens",
           "contextLimitOverWindow": "Above the provider’s declared window; requests may fail.",
           "restoreDefault": "Restore default",
@@ -4416,10 +4405,10 @@
         "detailNote": "The agent runs on {{device}}, using that computer’s sign-in and quota. To use it, choose it in the model list when you start a task. To change this provider, go to Settings → Providers on that computer.",
         "modelsTitle": "Available Models",
         "modelsEmpty": "This provider has no models available on that computer yet.",
-        "rowLabelGroup": "{{provider}} · {{device}} · Provider Group",
+        "rowLabelGroup": "{{provider}} · {{device}} · Computer Group",
         "groupBadge_one": "Provider Group · {{count}} computer",
-        "groupBadge_other": "Provider Group · {{count}} computers",
-        "groupNote": "{{device}} made this provider a provider group. When you start a task with it, {{device}} assigns the task to one of the computers below by its group strategy, and moves it to another one if that computer runs into a problem. While {{device}} is online, use Remote & Sharing here to manage the group and its shares.",
+        "groupBadge_other": "Computer Group · {{count}} computers",
+        "groupNote": "{{device}} made this provider a computer group. When you start a task with it, {{device}} assigns the task to one of the computers below by its group strategy, and moves it to another one if that computer runs into a problem. While {{device}} is online, use Remote & Sharing here to manage the group and its shares.",
         "groupMembersTitle": "Computers in the Group",
         "groupMembersFailed": "Couldn’t get the status of the computers in the group right now.",
         "hiddenBanner": "Hidden from the model picker on this computer. Favorites and sessions that use it are unaffected."
@@ -4471,7 +4460,7 @@
         "remoteAccess": {
           "label": "Allow remote use",
           "description": "When on, your other computers and the people you share with can use this provider’s models. The Agent runs on this computer, using this computer’s sign-in and quota.",
-          "descriptionGroup": "When on, your other computers and the people you share with can use this provider’s models. The provider group picks the computer that runs the Agent.",
+          "descriptionGroup": "When on, your other computers and the people you share with can use this provider’s models. The computer group picks the computer that runs the Agent.",
           "ariaLabel": "Allow your other computers and the people you share with to use this provider",
           "writeFailed": "Couldn’t save the remote access setting. Try again.",
           "followsPool": "This connection was merged into “{{pool}}” and follows its “Allow remote use”. Change it there."
@@ -4776,6 +4765,7 @@
         "discoveryHint": "These models were returned by the provider catalog. Speech execution has not been tested.",
         "saved": "Added",
         "reference": "Reference",
+        "realtimeConfirmed": "Realtime endpoint confirmed",
         "discovered": "Discovered",
         "more": "More speech models ({{count}})",
         "manual": "Enter a speech model ID",
@@ -5674,7 +5664,8 @@
           "runtime": "Recent auxiliary model requests failed. Task naming, summaries and plugin tasks such as subtitle translation may be affected.",
           "open": "Open Settings"
         }
-      }
+      },
+      "missingRoute": "Deleted route"
     },
     "compaction": {
       "codex": {
@@ -6389,7 +6380,7 @@
     "sessionRuntimeFallback": {
       "cell": {
         "label": "Automatic task model fallback",
-        "description": "On failure, a model group tries its other available models. Switching agents uses the normal handoff and updates the task’s saved selection. Other tasks try a different source or recommended model within the same agent after repeated failures. Off by default."
+        "description": "On failure, a smart routing tries its other available models. Switching agents uses the normal handoff and updates the task’s saved selection. Other tasks try a different source or recommended model within the same agent after repeated failures. Off by default."
       },
       "toggleAria": "Toggle automatic task model fallback",
       "toast": {
@@ -7347,8 +7338,7 @@
             "machines": "Remote provider machines"
           },
           "usage": {
-            "remoteModel": "Remote model",
-            "remoteTask": "Remote task"
+            "remoteModel": "Remote model"
           },
           "bundle": {
             "mixed": "{{running}} running · {{ready}} ready",
@@ -8786,8 +8776,8 @@
         "hostTools_controlDetail": "Use Cindy’s task tools to edit, archive, restore and control existing tasks and projects, and import native task files on this computer.",
         "hostTools_handoff": "Task Messaging",
         "hostTools_handoffDetail": "Use Cindy’s task tools to send messages to existing tasks. Operations needing a current task require an explicit task target.",
-        "hostTools_usage": "Read usage and provider group status",
-        "hostTools_usageDetail": "Read IDs, plans, quota windows and update times for local Claude/Codex accounts connected to your Cindy account. Read recorded daily/model usage, cost estimates, provider group configuration and status, and visible member/device IDs, names and avatars on this computer or other authorized computers on the same account. Cannot read subscription login emails, account directories, identity fingerprints, credentials or files, or change accounts or settings. Read quota for a task you can access, including on an authorized computer on your account or through a share that allows quota viewing.",
+        "hostTools_usage": "Read usage and computer group status",
+        "hostTools_usageDetail": "Read IDs, plans, quota windows and update times for local Claude/Codex accounts connected to your Cindy account. Read recorded daily/model usage, cost estimates, computer group configuration and status, and visible member/device IDs, names and avatars on this computer or other authorized computers on the same account. Cannot read subscription login emails, account directories, identity fingerprints, credentials or files, or change accounts or settings. Read quota for a task you can access, including on an authorized computer on your account or through a share that allows quota viewing.",
         "hostTools_settings": "App Settings",
         "hostTools_settingsDetail": "Use Cindy’s settings tools to read and change app configuration. Secrets are not returned, and private input remains yours to provide.",
         "hostTools_scheduler": "Automation Management",
@@ -11753,18 +11743,14 @@
     "model": {
       "description": "Choose the models this buddy uses.",
       "primary": "Primary Model",
-      "restoreDefault": "Restore default model"
+      "restoreDefault": "Restore default model",
+      "followsDefault": "Uses the default model",
+      "ownModel": "Own model",
+      "managedInSettings": "Buddy models are set in Providers → Smart routing.",
+      "openSettings": "Open settings"
     },
     "modelChain": {
-      "primary": "Primary model",
-      "fallback": "Fallback {{index}}",
-      "routeLabel": "Model candidate {{index}}",
-      "add": "Add fallback model",
-      "remove": "Remove this candidate",
-      "moveUp": "Move up",
-      "moveDown": "Move down",
-      "description": "Configure up to 5 models. If one is unavailable, the buddy automatically continues with the next one—no task switching or manual retry.",
-      "options": "Backup models ({{count}})"
+      "routeLabel": "Model candidate {{index}}"
     },
     "actions": {
       "message": "Message",
@@ -12901,7 +12887,7 @@
       "arrivingLater": "{{name}} moved to this computer and is still getting ready. It will appear in your buddies soon",
       "arrivalPermissions": "{{name}} now uses this computer’s default permissions.",
       "arrivalModel": "{{name}}’s saved model isn’t available on this computer, so it follows this computer’s default model.",
-      "arrivalModelSetup": "{{name}} is on this computer, but no model is available yet. Connect a model provider or choose a model in this buddy’s settings under Model.",
+      "arrivalModelSetup": "{{name}} has arrived on this computer but has no usable model yet. Connect a model provider, or set the buddy default model in Providers → Smart routing.",
       "arrivalPartialContent": "{{name}} now runs on this computer, though some synced items couldn’t be restored. Their cloud copies remain intact.",
       "missingProfileTitle": "Start {{name}} with default profile?",
       "missingProfileDescription": "The original main computer hasn’t uploaded {{name}}’s persona or description yet. If that computer was reinstalled or can’t be recovered, you can continue here with a default profile while keeping any synced conversations and content.",
@@ -14860,7 +14846,7 @@
         "providerGroupLabel": "{{provider}} · {{group}}",
         "providerGroupRunningOn": "Running on {{device}}",
         "providerGroupRunningHere": "Running on this computer",
-        "providerGroupUnassigned": "The Provider Group picks a computer when the task starts; usage then shows for that computer"
+        "providerGroupUnassigned": "The Computer Group picks a computer when the task starts; usage then shows for that computer"
       },
       "speed": {
         "label": "Speed",
@@ -16338,10 +16324,11 @@
         "groupSwitch": "Continued on another computer automatically"
       },
       "autoResumeSeparator": {
-        "label": "Connection interrupted — resumed automatically"
+        "label": "Empty response — resumed automatically"
       },
       "autoResumePending": {
         "label": "Reconnecting",
+        "continuingWithProgress": "Continuing automatically ({{attempt}}/{{total}})…",
         "labelWithProgress": "Reconnecting {{attempt}}/{{total}}",
         "groupSwitch": "Switching to another computer"
       },
@@ -16656,7 +16643,7 @@
       "REMOTE_AGENT_SHARE_UNAVAILABLE": "The shared provider is temporarily unavailable. The owner's computer may be offline, or sharing is turned off for now. Try again later, or switch to another model to continue.",
       "REMOTE_AGENT_SHARE_LEGACY_DISABLED": "This is a legacy share, and it can’t be used while “Use Only Agent-Net” is on. Turn that switch off to continue, or switch to another model.",
       "REMOTE_AGENT_GROUP_USAGE_LIMIT": "The available accounts for this model have reached their usage limit. Switch models or continue when the quota resets.",
-      "REMOTE_AGENT_GROUP_UNAVAILABLE": "No computer in the provider group can run this task right now. They may be offline, paused, cooling down, or missing this model. Check the group on this provider’s Remote & Sharing page.",
+      "REMOTE_AGENT_GROUP_UNAVAILABLE": "No computer in the computer group can run this task right now. They may be offline, paused, cooling down, or missing this model. Check the group on this provider’s Remote & Sharing page.",
       "REMOTE_AGENT_GROUP_FULL": "Every account or computer that can run this task has reached its concurrency limit. Wait for a running task to finish, or raise the limit in the provider settings.",
       "SUBSCRIPTION_ACCOUNTS_FULL": "Every account or computer that can run this task has reached its concurrency limit. Wait for a running task to finish, or raise the limit in the provider settings.",
       "REMOTE_AGENT_DEVICE_LIMIT": "This device has reached its remote session limit. Archive unused sessions or ask the provider owner to raise the limit in Remote & sharing.",
@@ -17624,7 +17611,14 @@
         "snoozeFailed": "Could not save the snooze time. Check the connection and update the computer hosting this task.",
         "hours": "In {{count}} hours",
         "hours_one": "In {{count}} hour",
-        "hours_other": "In {{count}} hours"
+        "hours_other": "In {{count}} hours",
+        "pendingSync": "Pending sync",
+        "pendingArchiveSync": "Will archive when computer is online",
+        "offlineCompleteRejectedDirty": "“{{title}}” returned to Pending: uncommitted changes in its worktree need confirmation before archiving.",
+        "offlineCompleteRejectedNewActivity": "“{{title}}” returned to Pending: new activity arrived on its computer while offline.",
+        "offlineCompleteRejectedRunning": "“{{title}}” returned to Pending: the task is currently running.",
+        "offlineCompleteRejectedAttached": "“{{title}}” returned to Pending: the task is currently attached or shared and could not be archived automatically.",
+        "offlineCompleteRejectedPreflight": "“{{title}}” returned to Pending: could not verify its worktree before archiving."
       },
       "taskListMode": {
         "heading": "Task mode",
@@ -18392,7 +18386,7 @@
           "sessions_dispatch": "Dispatch sessions",
           "feishu_read": "Read Feishu messages",
           "settings_read": "Read share members",
-          "usage_read": "Read usage and provider group status"
+          "usage_read": "Read usage and computer group status"
         },
         "project": "Project directory",
         "capabilitiesLabel": "Allowed capabilities",
@@ -18406,7 +18400,7 @@
           "sessions_dispatch": "Create or wake {{appName}} sessions and deliver messages",
           "feishu_read": "List recently-active chats; fetch recent messages from a chat (group or DM)",
           "settings_read": "Read your share members and allowed models on this computer or other authorized computers on the same account; no changes",
-          "usage_read": "Read IDs, plans, quota windows and update times for local Claude/Codex accounts connected to your Cindy account. Read recorded daily/model usage, cost estimates, provider group configuration and status, and visible member/device IDs, names and avatars on this computer or other authorized computers on the same account. Cannot read subscription login emails, account directories, identity fingerprints, credentials or files, or change accounts or settings."
+          "usage_read": "Read IDs, plans, quota windows and update times for local Claude/Codex accounts connected to your Cindy account. Read recorded daily/model usage, cost estimates, computer group configuration and status, and visible member/device IDs, names and avatars on this computer or other authorized computers on the same account. Cannot read subscription login emails, account directories, identity fingerprints, credentials or files, or change accounts or settings."
         },
         "capabilityWarn": {
           "ghostMissing": "Requires the “{{name}}” plugin, which is not installed — this capability will fail at run time",
@@ -18707,7 +18701,7 @@
         "categoryListAria": "{{category}} models",
         "effortListAria": "Reasoning effort",
         "boundLocationLocked": "Bound tasks keep running where they are. Choose a model from that computer.",
-        "modelGroupTitle": "Model group “{{name}}”: picks a source when a run starts a new task"
+        "modelGroupTitle": "Smart routing “{{name}}”: picks a source when a run starts a new task"
       }
     },
     "toast": {
@@ -20151,6 +20145,9 @@
       "permissionTightenInterruptFailed": "Failed to stop the running task while tightening permissions; it may keep running without approval prompts until it finishes. Stop it manually if needed.",
       "codexAutoReviewUnavailable": "Auto-review is temporarily unavailable. The current action was blocked and permissions switched to Default. Retry the request; Cindy will ask when needed.",
       "hostShellCommandBlocked": "Cindy blocked this shell command. Check the command and use an available tool or command to continue.",
+      "reconnectAutoResumeExhausted": "Automatic continuation reached its retry limit.",
+      "reconnectAutoResumeDisabled": "Automatic continuation is turned off.",
+      "codexReconnectStalled": "The model connection did not recover within 2 minutes.",
       "upstreamResponseIdleTimeout": "The model stopped responding for a long time, so this turn was interrupted to avoid hanging forever. Completed tool calls are preserved — send the next message to continue.",
       "codexHistoryOversized": "The image history is too large to resume automatically. Send “Continue”, and Cindy will pick up the current task.",
       "codexHistoryOversizedRemote": "This task’s history includes oversized images, so remote compaction cannot finish. Open the task on the machine running Codex and send again; Cindy will omit those images there.",
@@ -22837,9 +22834,6 @@
     "lineNumbers": "Line numbers"
   },
   "openAiAccountGroup": {
-    "strategy": "Account group strategy",
-    "leastHint": "Prefer the connection running the fewest tasks",
-    "quotaHint": "When subscription usage is available, Cindy uses it to choose eligible connections before applying the group strategy.",
     "removeDescription": "This connection will stop receiving new tasks from the group. Tasks already running will stay on this connection.",
     "mergeDescription": "New tasks started through {{target}} can use both providers. Sign-ins, keys and existing tasks stay where they are. Cindy will test the API key for {{apiKey}} before adding the scheduling connection.",
     "modelUnavailable": "This connection cannot use the model chosen for the test. Test again to try another candidate.",
@@ -22911,7 +22905,6 @@
       "useCodex": "Sign in with Codex"
     },
     "title": "Subscription accounts",
-    "strategy": "Load balancing",
     "add": "Add account",
     "defaultTag": "Default",
     "ready": "Connected",
@@ -22986,15 +22979,15 @@
     "refreshFailed": "Theme installed, but the list could not refresh. Refresh it in Appearance settings."
   },
   "modelGroups": {
-    "title": "Model groups",
-    "description": "Combine sources you already have under Model providers into one choice. Pick it under Model groups in the model picker and Cindy decides which source to use.",
-    "routes": "Modes",
-    "routesDescription": "A mode holds several sources. Each new task picks one by the mode's rule.",
+    "title": "Smart routing",
+    "description": "Combine sources you already have under Model providers into one choice. Pick it under Smart routing in the model picker and Cindy decides which source to use.",
+    "routes": "Routes",
+    "routesDescription": "Combine several sources into one choice. A source can be a whole provider (pick a model as usual and the route decides which one runs it) or one specific model. Providers of the same brand are combined automatically.",
     "sourceCount_one": "{{count}} source",
     "sourceCount_other": "{{count}} sources",
     "strategy": {
       "expiring": {
-        "title": "Expiring first",
+        "title": "Automatic",
         "hint": "Uses subscription quota that is plentiful and about to reset first, so none is wasted. Sources without readable quota come after."
       },
       "order": {
@@ -23023,12 +23016,16 @@
       }
     },
     "picker": {
-      "empty": "No model groups yet. Combine a few sources into a mode in Settings to pick it here.",
-      "manage": "Manage model groups",
-      "deviceTitle": "Model groups · {{device}}",
+      "empty": "No smart routing yet. Combine a few sources into a route in Settings to pick it here.",
+      "manage": "Manage smart routing",
+      "deviceTitle": "Smart routing · {{device}}",
       "switched": "“{{name}}” switched this task to {{model}}",
       "switchUnavailable": "“{{name}}” has no source this task can use right now. The model was not changed.",
-      "chooseUnavailable": "“{{name}}” has no source that can be used right now, so it was not selected."
+      "chooseUnavailable": "“{{name}}” has no source that can be used right now, so it was not selected.",
+      "mergedLabel_one": "{{name}} · route ({{count}} source)",
+      "mergedLabel_other": "{{name}} · route ({{count}} sources)",
+      "routeDecides": "The route “{{name}}” decides which source this task uses",
+      "quotaOf": "Quota: {{name}}"
     },
     "why": {
       "expiringQuota": "{{left}}% of its quota is left and resets {{reset}}, so it goes first",
@@ -23040,7 +23037,7 @@
       "soonestUntil": "Every source is out of quota; this one recovers first ({{reset}})",
       "standby": "Not picked this time",
       "standbyQuota": "{{left}}% of its quota is left and does not reset until {{reset}}, so it is kept for later",
-      "off": "Off in this mode",
+      "off": "Off in this route",
       "unavailable": "Not connected, or this model cannot be selected now",
       "limited": "Out of quota",
       "limitedUntil": "Out of quota until {{reset}}",
@@ -23061,17 +23058,18 @@
     "settings": {
       "autoSwitch": {
         "title": "Switch sources automatically when one fails",
-        "hint": "When the source this mode is using fails, switch to the next usable one and note it under that turn. When off, a switch is only offered on the error."
+        "hint": "When the source this route is using fails, switch to the next usable one and note it under that turn. When off, a switch is only offered on the error."
       },
-      "newRoute": "New mode",
-      "newRouteName": "New mode",
-      "routesEmpty": "No modes yet. Create one and add a few sources.",
-      "scopeNote": "Model groups apply to tasks on this computer. A new task picks a source when it starts. Choosing one in a task already under way switches it once, right away; it does not switch by itself afterwards.",
-      "back": "Back to model groups",
+      "newRoute": "New route",
+      "newRouteName": "New route",
+      "routesEmpty": "No routes yet. Create one and add a few sources.",
+      "scopeNote": "Smart routing applies to tasks on this computer. A new task picks a source when it starts. Choosing one in a task already under way switches it once, right away; it does not switch by itself afterwards.",
+      "back": "Back to smart routing",
       "name": "Name",
       "nameHint": "Shown in the model picker.",
-      "routeShownAs": "Shown under Model groups in the model picker.",
+      "routeShownAs": "Shown under Smart routing in the model picker.",
       "pick": "Which one to use",
+      "moreStrategies": "More options",
       "effort": "Reasoning effort",
       "effortUnset": "Not set",
       "effortHint": "If the chosen model does not support this level, it runs at its own default.",
@@ -23081,14 +23079,15 @@
       "sources": "Sources it can use",
       "sourcesHint": "Different models can sit together. The task shows which one was used.",
       "sourcesEmpty": "No sources yet. Add a connected model below.",
-      "sourcesFull": "A mode can hold up to {{count}} sources.",
+      "sourcesEmptyMerged": "No sources yet. Add a connected provider below.",
+      "sourcesFull": "A route can hold up to {{count}} sources.",
       "addSource": "Add source",
       "chooseModel": "Choose a model",
       "notConnected": "Not connected",
       "moveUp": "Move up",
       "moveDown": "Move down",
-      "remove": "Remove from this mode",
-      "useSource": "Let this mode use {{name}}",
+      "remove": "Remove from this route",
+      "useSource": "Let this route use {{name}}",
       "try": {
         "title": "Try it",
         "hint": "See which source a new task would use right now. Nothing is sent and no quota is used.",
@@ -23096,11 +23095,14 @@
         "picked": "Use this",
         "standby": "Standby",
         "skipped": "Skipped",
-        "unavailable": "No source in this mode can be used right now. A new task will use the model you had selected."
+        "unavailable": "No source in this route can be used right now. A new task will use the model you had selected.",
+        "failed": "Could not run the preview. Try again.",
+        "model": "Model to try"
       },
-      "deleteRoute": "Delete this mode",
+      "deleteRoute": "Delete this route",
       "deleteRouteConfirmTitle": "Delete “{{name}}”?",
-      "deleteRouteConfirmDescription": "Time-of-day exceptions in other modes that switch to it are removed too. Tasks already started are not affected.",
+      "deleteRouteConfirmDescription": "Time-of-day exceptions in other routes that switch to it are removed too. Tasks already started are not affected.",
+      "deleteMergedRouteConfirmDescription": "Tasks already started are not affected.",
       "delete": "Delete",
       "cancel": "Cancel",
       "saveFailed": "Could not save. Try again.",
@@ -23125,23 +23127,72 @@
         "addHours": "Add",
         "sameHour": "Start and end cannot be the same time.",
         "full": "Up to {{count}} exceptions.",
-        "needOtherRoute": "Create another mode to switch to it by time of day."
+        "needOtherRoute": "Create another route to switch to it by time of day."
       }
     },
     "overview": {
       "mapTitle": "How new tasks pick a model",
-      "mapDescription": "Left to right: the mode a new task takes and the source it lands on. Click a mode to change it.",
+      "mapDescription": "Left to right: the route a new task takes and the source it lands on. Click a route to change it.",
       "columnSources": "Sources",
       "columnEmpty": "None yet",
-      "openRoute": "Open mode “{{name}}”",
+      "openRoute": "Open route “{{name}}”",
       "recentTitle": "Recent choices",
-      "recentEmpty": "No task has used a mode yet.",
+      "recentEmpty": "No task has used a route yet.",
       "keptOriginal": "Nothing in it was available, so the task kept the model you had chosen.",
       "keptOriginalShort": "Kept your model",
       "latest": "The path the latest task took"
     },
     "switchOffer": {
       "action": "Continue with {{model}}"
+    },
+    "auto": {
+      "accounts_one": "{{count}} account",
+      "accounts_other": "{{count}} accounts",
+      "computers_one": "{{count}} computer",
+      "computers_other": "{{count}} computers",
+      "pickFor": "Strategy for {{name}}",
+      "hiddenTag": "Hidden",
+      "show": "Show in the model picker",
+      "assignedBy": "New tasks are assigned by “{{strategy}}”",
+      "adjust": "Adjust in Smart routing"
+    },
+    "sources": {
+      "models_one": "{{count}} model",
+      "models_other": "{{count}} models",
+      "autoTag": "Automatic",
+      "chooseProvider": "Choose a provider",
+      "removeAria": "Remove {{name}} from this route",
+      "note": "Automatic routes follow your connected providers. Members cannot be added or removed, but you can reorder them, set weights, turn one off, change the strategy or hide the route.",
+      "providers_one": "{{count}} provider",
+      "providers_other": "{{count}} providers",
+      "addWhole": "Add a whole provider",
+      "addWholeHint": "All of its models join this route. In the model picker the route works like one provider: pick a model as usual and the route decides which member runs it.",
+      "addModelHint": "Add one model from one provider. Choosing this route picks one of these sources by its strategy.",
+      "detailHint": "This route combines whole providers. In the model picker it works like one provider: pick a model and effort as usual and the route decides which member runs it."
+    },
+    "kinds": {
+      "byModel": "By model",
+      "byProvider": "By provider"
+    },
+    "buddies": {
+      "title": "Buddy models",
+      "description": "Buddies share one default model; give a buddy its own only when it needs something different. To have a buddy switch sources when something goes wrong, pick a smart route.",
+      "saveFailed": "The buddy’s model was not saved. Try again.",
+      "defaultLabel": "Default model",
+      "defaultHint": "Every buddy uses it unless set otherwise, including new buddies and buddies taken over from another computer.",
+      "ownTitle": "Buddies with their own model",
+      "ownTitleWithRest_one": "Buddies with their own model · {{count}} other uses the default",
+      "ownTitleWithRest_other": "Buddies with their own model · {{count}} others use the default",
+      "addOwn": "Give a buddy its own model",
+      "allFollow": "All buddies use the default model.",
+      "otherComputers": "Buddies on other computers",
+      "deviceBuddies_one": "{{count}} buddy",
+      "deviceBuddies_other": "{{count}} buddies",
+      "devicePageTitle": "Buddies on {{device}}",
+      "devicePageHint": "Pick from the models and smart routes that computer can use. Saved on that computer.",
+      "deviceDefaultReadOnly": "Update that computer to change its default model here.",
+      "deviceUnavailable": "Can’t read that computer’s buddy settings right now. Make sure it’s online, then open this again.",
+      "deviceLoading": "Reading that computer’s settings…"
     }
   },
   "projectSettings": {

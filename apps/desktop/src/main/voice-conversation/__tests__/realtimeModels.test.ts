@@ -204,3 +204,52 @@ it('keeps realtime and TTS preferences independent across reload and reset', () 
   expect(companionVoicePreference(settings, 'buddy').realtimeSelection).toBeUndefined();
   expect(companionVoicePreference(settings, 'buddy').selection?.modelId).toBe('tts');
 });
+
+it('offers GLM Flash only from ordinary China API discovery and binds the model at handshake', () => {
+  const base = 'https://open.bigmodel.cn/api/paas/v4';
+  const id = 'glm-realtime-flash';
+  const response = { data: [{ id }, { id: 'glm-realtime-air' }, { id: 'glm-5' }] };
+  const discovered = parseModelsListResponse(response, base + '/models')!;
+  const models = mergeDiscoveredRuntimeModels([], discovered);
+  const { deps, config } = fixture(base);
+  const provider = buildUserProvider({ ...config, runtimes: {
+    codex: { ...config.runtimes.codex, models, catalogPresetId: 'zhipu-glm-cn' },
+  } }, { modelRegistry: BUNDLED_CATALOG.modelRegistry });
+  deps.catalog = { ...deps.catalog, providers: [provider] };
+  expect(realtimeModels(deps)).toMatchObject([{ id, protocol: 'glm-realtime', protocolLocked: true }]);
+  expect(resolveRealtimeConnection(deps, { ...selected, modelId: id })).toEqual({
+    protocol: 'glm-realtime', url: 'wss://open.bigmodel.cn/api/paas/v4/realtime',
+    headers: { authorization: 'Bearer test-only-key' },
+  });
+  expect(realtimeModels(fixture(base, { id }).deps)).toEqual([]);
+  for (const wrong of ['https://proxy.example', 'https://open.bigmodel.cn/api/coding/paas/v4']) {
+    expect(parseModelsListResponse(response, wrong + '/models')![0].discoveredMetadata?.mode).toBeUndefined();
+    expect(() => resolveRealtimeConnection(fixture(wrong, models[0]).deps,
+      { ...selected, modelId: id, protocol: 'glm-realtime' })).toThrow();
+  }
+  expect(parseModelsListResponse({ data: [{ id, mode: 'chat' }] }, base + '/models')![0].discoveredMetadata?.mode).toBe('chat');
+  const configured = provider.models.codex!.find(m => m.id === id)!;
+  configured.catalogPresetId = 'zhipu-coding-plan-cn';
+  expect(realtimeModels(deps)).toEqual([]);
+});
+
+it('keeps Flash on a runtime whose own key was confirmed when another chat route lost access', () => {
+  const id = 'glm-realtime-flash';
+  const api = 'https://open.bigmodel.cn/api/paas/v4';
+  const { config, deps } = fixture(api);
+  const models = mergeDiscoveredRuntimeModels([], parseModelsListResponse({ data: [{ id }] }, api + '/models')!);
+  const preset = { catalogPresetId: 'zhipu-glm-cn' };
+  deps.catalog = { ...deps.catalog, providers: [buildUserProvider({ ...config, runtimes: {
+    'claude-code': { ...preset, baseUrl: 'https://open.bigmodel.cn/api/anthropic', models: [{ id, name: id, discoveredMetadata: { mode: 'realtime' } }] },
+    codex: { ...preset, baseUrl: 'https://open.bigmodel.cn/api/coding/paas/v4', models },
+  } })] };
+  expect(realtimeModels(deps)).toMatchObject([{ id, agent: 'codex', protocol: 'glm-realtime' }]);
+  expect(resolveRealtimeConnection(deps, { ...selected, modelId: id }).url).toBe('wss://open.bigmodel.cn/api/paas/v4/realtime');
+  expect(() => resolveRealtimeConnection(deps, { ...selected, agent: 'claude-code', modelId: id })).toThrow('realtime_model_unavailable');
+  // A recovered sibling route must not invalidate the composer's saved runtime key.
+  const provider = deps.catalog.providers[0];
+  provider.models['claude-code']![0].userModelConfig!.discoveredMetadata = models[0].discoveredMetadata;
+  deps.readKey = (_provider, agent) => 'fixture-' + agent;
+  expect(realtimeModels(deps).map(m => m.agent)).toEqual(['claude-code', 'codex']);
+  expect(resolveRealtimeConnection(deps, { ...selected, modelId: id }).headers.authorization).toBe('Bearer fixture-codex');
+});
