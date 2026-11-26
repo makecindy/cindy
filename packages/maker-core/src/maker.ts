@@ -157,7 +157,8 @@ export interface MakerDeps {
    * host 实现(对方运行 Agent、本机执行文件与命令)。缺省时这类会话无法创建。
    */
   startDeviceAgentSession?: (input: {
-    agentKind: AgentKind;
+    /** `acp` = a plugin engine of that computer (`options.providerId` names it). */
+    agentKind: EngineKind;
     deviceId: string;
     options: StartSessionOptions;
   }) => Promise<AgentSessionHandle>;
@@ -788,8 +789,9 @@ export class Maker {
   private async createSessionOnce(opts: CreateSessionOptions, signal?: AbortSignal): Promise<Session> {
     signal?.throwIfAborted();
     // Visible application tasks use the ordinary persistence path, but their
-    // remote engine need not be installed on this controller either.
-    const agent = opts[LOCAL_AGENT_CLIENT] && opts.agentDeviceId
+    // remote engine need not be installed on this controller either. The same
+    // holds for a plugin engine of another computer: the plugin lives there.
+    const agent = (opts[LOCAL_AGENT_CLIENT] || opts.agentKind === 'acp') && opts.agentDeviceId
       ? this.agents[opts.agentKind] : this.requireAgent(opts.agentKind);
     const id = opts.id ?? generateSessionId();
     const localPiPackageGeneration = (
@@ -926,13 +928,6 @@ export class Maker {
         if (startOpts.remoteHostId) {
           throw new Error('A session cannot run its agent on another computer and on an SSH host at the same time');
         }
-        if (opts.agentKind === 'acp') {
-          throw new NotSupportedError('remoteSession', {
-            supported: false,
-            reason: 'not-implemented',
-            message: 'Plugin engines run on this computer only',
-          });
-        }
         if (!this.startDeviceAgentSession) {
           throw new NotSupportedError('remoteSession', {
             supported: false,
@@ -954,6 +949,9 @@ export class Maker {
         ...startOpts,
         sessionId: id,
         sessionInstanceId,
+        isNewMakerTask: opts.agentKind === 'pi'
+          ? async () => !opts.id || (await this.storage.get(id)) === null
+          : undefined,
         // 强制由 Maker 注入持久化 CAS，不能信任外部 CreateSessionOptions 自带回调。
         // Claude adapter 只在精确识别 invalid-resume 时调用；Codex 不消费该字段。
         // 对所有 claude-code 会话装配(不止 resume):全新会话也可能在首个 turn 崩溃前
@@ -1754,7 +1752,7 @@ export class Maker {
    * 设备托管：同账号另一台电脑上的任务让 Agent 在本机运行。直接用本机的 agent 启动会话，
    * 不建本机 Session 与持久化记录(任务、消息与状态都在对方电脑上)；opts.deviceHosted 必填。
    */
-  async startHostedAgentSession(kind: AgentKind, opts: StartSessionOptions): Promise<AgentSessionHandle> {
+  async startHostedAgentSession(kind: EngineKind, opts: StartSessionOptions): Promise<AgentSessionHandle> {
     if (this.shutdownStarted) throw new Error('Maker is shutting down; refusing to start a hosted session');
     if (!opts.deviceHosted) throw new Error('hosted sessions require deviceHosted');
     if (opts.remoteHostId) throw new Error('hosted sessions cannot target an SSH host');
@@ -1815,9 +1813,10 @@ export class Maker {
 
   /**
    * Agent 用户/项目目录扫出的 skill (palette 'agent-skill' 类目) —— 异步, 有 IO。
+   * `acp`：插件引擎任务的 `/` 菜单，与引擎展开 `/<skill>` 同一份清单（AcpAgent.listAgentSkills）。
    */
   async listAgentSkills(
-    agentKind: AgentKind,
+    agentKind: EngineKind,
     opts: ListAgentSkillsOptions & { sessionId?: string },
     /** Host-only request-scoped verification; never part of renderer/remote options. */
     readDisabledSkillPaths?: () => Promise<readonly string[]>,

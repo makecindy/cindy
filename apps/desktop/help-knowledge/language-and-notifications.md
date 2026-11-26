@@ -24,6 +24,7 @@ Settings > General controls the display language, desktop notifications, and a f
 
 **Other settings in General:**
 
+- **When You're Away** — **Try it now** tests whether the privacy screen can cover the displays and lock the Mac on local input. If permission is missing, open System Settings from the notice. On macOS 27.3 and later, look in **System & App Protection Override** for the copy of Cindy shown in the notice. Use its ⓘ button or add that copy with +. If the Mac offers access to selected apps, you can limit the scope. Review the full scope before choosing whole-Mac control. Return to Cindy to check the result.
 - **App Behavior** — **Keep computer awake** (so background agents and scheduled tasks keep running), **Start at Login** (off by default), **Show remaining usage in the menu bar** (macOS), **When closing the main window** (Windows: Minimize to tray / Quit Cindy; Linux: Minimize window / Quit Cindy), and **Prevent Accidental Clicks When Returning** (macOS / Windows).
 - **Message input** — **Use ⌘↵ to send** (Ctrl+Enter on Windows / Linux). When it's off (the default), Enter sends and Shift+Enter inserts a new line.
 - General also holds your account info, Buddies, Collaboration limits, Agent Resource Usage, Git Safety, Pi extensions, Experimental, and Logout.

@@ -46,7 +46,7 @@ export interface ExecServerRelayDeps {
   cwd: string;
   workspace: ExecutorWorkspace;
   authorize(action: ExecutorAction): ExecutorGateDecision;
-  /** 凭证类操作在本机补问(供应商分享的受邀者任务)；允许后再 authorize 一次即放行。 */
+  /** 权限上限拦下的操作在本机补问(含供应商分享的受邀者任务里的凭证类操作)；允许后再 authorize 一次即放行。 */
   confirm?(action: ExecutorAction): Promise<boolean>;
   push(frames: RemoteAgentPushFrame[]): Promise<void>;
   env?: NodeJS.ProcessEnv;
@@ -567,7 +567,7 @@ export class ExecServerRelay {
         this.reject(connId, id, decision);
         return;
       }
-      // 等本机用户确认(凭证类)：这一条与之后的消息都按顺序等它。已放行的操作不再检查(批准只能用一次)。
+      // 等本机用户确认：这一条与之后的消息都按顺序等它。已放行的操作不再检查(批准只能用一次)。
       const rest = actions.slice(index);
       this.enqueue(connection, () => this.deliver(connId, connection, id, line, rest));
       return;

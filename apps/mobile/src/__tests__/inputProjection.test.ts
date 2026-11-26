@@ -48,6 +48,16 @@ function session(patch: Partial<RemoteSession> = {}): RemoteSession {
 }
 
 describe('inputProjection', () => {
+  // #8309 / unit: host diagnostic reason survives the existing projection and
+  // reaches the live/history localization entry without saying it is retrying.
+  it('presents an exhausted nested overload without a retry-in-progress claim', () => {
+    const projection = normalizeInputProjection({ sessionId: 's1',
+      error: 'stream disconnected before completion', errorReason: 'UPSTREAM_OVERLOADED' });
+    expect(localizeAgentError(projection.errorReason, null, projection.error ?? '')).toBe(
+      i18n.t('interaction.contextSheet.goalStatus.capacityLimited'),
+    );
+  });
+
   it('queues the selected Pi package skill with its invocation and marked range', () => {
     const [selected] = filterSlashCommands([{
       kind: 'agent-skill', name: 'poteto-mode', source: 'skill', runtimeCommandName: 'skill:poteto-mode',

@@ -1,13 +1,14 @@
 import { mountPage } from '../../ui-page/harness';
 import { RunningTokenRatePopover } from '../../../src/renderer/features/cc-agent/RunningTokenRatePopover';
-import { emptyRateHistory, type RateHistory } from '../../../src/renderer/features/cc-agent/lib/runningTokenRateHistory';
+import { emptyRateHistory, type RateHistory, type RateSample } from '../../../src/renderer/features/cc-agent/lib/runningTokenRateHistory';
 
 /** A speed history with `requests` finished model requests: mostly quick, a deep think now and then. */
 function fixtureHistory(requests: number, unreported: boolean): RateHistory {
-  const samples = Array.from({ length: 60 }, (_, i) => ({
+  const samples = Array.from({ length: 60 }, (_, i): RateSample => ({
     durationMs: (i + 1) * 2_000,
     outputTokens: (i + 1) * 90,
     rate: Math.round(46 + 22 * Math.sin(i / 3.1) + 12 * Math.sin(i / 1.3)),
+    kind: requests === 60 ? 'request' : 'stream',
   }));
   const thinkingOf = (i: number) => (i % 11 === 1 ? 4_096 : i % 4 === 0 || i === requests - 1 ? 516 : 0);
   const marks = Array.from({ length: requests }, (_, i) => ({

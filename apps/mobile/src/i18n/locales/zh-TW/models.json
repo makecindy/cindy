@@ -53,7 +53,8 @@
   },
   "switchOutcome": {
     "applied": "模型來源切換已生效。",
-    "failed": "模型來源切換失敗，請重新選擇。"
+    "failed": "模型來源切換失敗，請重新選擇。",
+    "previousSettingsRetained": "這次切換未完成，任務會繼續使用原來的設定。"
   },
   "agentSwitch": {
     "browseAccessibility": "瀏覽 {{agent}} 模型"
@@ -61,6 +62,7 @@
   "unified": {
     "remoteCopyUnavailableOn": "「{{device}}」上的 {{provider}} 目前無法使用。",
     "remoteCopyUnavailableOnTaskComputer": "任務所在電腦上的 {{provider}} 目前無法使用。",
+    "accountCount_one": "{{count}} 個帳號",
     "accountCount_other": "{{count}} 個帳號",
     "accountFallback": "帳號 {{index}}",
     "favoriteConfiguration": "收藏此設定",
@@ -110,11 +112,51 @@
     "quotaAverageHint": "每週配額 · 各帳號等權平均",
     "quotaResetHint": "依目前使用速度，重設時可能仍有餘量：24 小時內為黃色，6 小時內為紅色。"
   },
+  "modelGroups": {
+    "title": "模型組",
+    "sourceCount_one": "{{count}} 個來源",
+    "sourceCount_other": "{{count}} 個來源",
+    "strategy": {
+      "expiring": "快作廢的先用",
+      "order": "按順序",
+      "rotate": "輪流",
+      "cheapest": "最省錢",
+      "drain": "用完再換",
+      "headroom": "餘量最多的先用",
+      "weighted": "按權重"
+    },
+    "sourceOnDevice": "{{provider}} · {{device}}",
+    "why": {
+      "expiringQuota": "還剩 {{left}}% 配額，{{reset}} 重設，先用它",
+      "expiring": "按配額排在最前",
+      "order": "排在最前面的可用來源",
+      "rotate": "這次輪到它",
+      "only": "現在只有它能用",
+      "soonest": "所有來源的配額都用完了，它最早恢復",
+      "soonestUntil": "所有來源的配額都用完了，它最早恢復（{{reset}}）",
+      "cheapest": "標價最低",
+      "cheapestFree": "訂閱還有配額，不另外花錢",
+      "drain": "接著用它，直到配額用完",
+      "drainNext": "上一個來源用完或用不了，換到它",
+      "headroom": "剩餘配額最多",
+      "headroomQuota": "還剩 {{left}}% 配額，比其他來源都多",
+      "weighted": "按權重這次分到它",
+      "exceptionImage": "訊息裡有圖片，只在能看圖的來源裡選",
+      "exceptionImageFallback": "訊息裡有圖片，但沒有能看圖的來源，照常選",
+      "exceptionHours": "這個時段改走「{{name}}」",
+      "separator": "；"
+    },
+    "picker": {
+      "switched": "「{{name}}」把這個任務換成了 {{model}}",
+      "switchUnavailable": "「{{name}}」裡現在沒有能給這個任務用的來源，模型沒換。",
+      "chooseUnavailable": "「{{name}}」裡現在沒有能用的來源，沒有選它。"
+    },
+    "anotherDevice": "另一台電腦"
+  },
   "pluginEngines": {
     "genericName": "插件引擎",
     "defaultModel": "預設模型",
     "unavailable": "{{engine}} 暫時無法使用",
-    "unavailableWithHint": "{{engine}} 暫時無法使用：{{hint}}",
-    "worktreeUnsupported": "插件引擎暫不支援在 worktree 中新建任務，請取消勾選 worktree 後再傳送"
+    "unavailableWithHint": "{{engine}} 暫時無法使用：{{hint}}"
   }
 }

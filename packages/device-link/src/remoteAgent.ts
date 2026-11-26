@@ -19,6 +19,16 @@ export const REMOTE_AGENT_VERSION = 1;
 
 export const REMOTE_AGENT_KINDS = ['claude-code', 'codex', 'pi'] as const;
 export type RemoteAgentKind = (typeof REMOTE_AGENT_KINDS)[number];
+/**
+ * A plugin-provided engine of the computer that runs the agent (`open.payload.options.providerId`
+ * names it as `acp-plugin:<plugin>:<engine>`). Only `open` accepts it, and only from a computer
+ * of the same account talking to a host that declared `caps.pluginEngines`: group routing, shared
+ * users, fork and standby stay on the built-in kinds. A host that does not know the kind rejects
+ * the request as invalid; it never falls back to a built-in engine.
+ */
+export const REMOTE_AGENT_PLUGIN_ENGINE_KIND = 'acp';
+export const REMOTE_AGENT_ENGINE_KINDS = [...REMOTE_AGENT_KINDS, REMOTE_AGENT_PLUGIN_ENGINE_KIND] as const;
+export type RemoteAgentEngineKind = (typeof REMOTE_AGENT_ENGINE_KINDS)[number];
 
 /** 每段上传的原始字节(gzip 之后)。base64 后约 683KB，远低于单条逻辑消息 4MB 上限。 */
 export const REMOTE_AGENT_UPLOAD_CHUNK_BYTES = 512 * 1024;
@@ -168,6 +178,8 @@ export const REMOTE_AGENT_MAX_DIRECT_STATUS_BATCH = 64;
 
 export type RemoteAgentRequest =
   | { op: 'caps' }
+  | { op: 'company-reporting-challenge'; runId: string }
+  | { op: 'company-reporting-grant'; runId: string; grant: string }
   /** Same-account native history transfer. The host validates commands before accessing storage. */
   | { op: 'native-history'; sessionId: string; command: unknown }
   /** G→O: durable task location only; every use still needs a fresh allocation. */
@@ -209,7 +221,7 @@ export type RemoteAgentRequest =
   | { op: 'images'; sessionId: string; relay?: string; action: 'read'; imageId: string; offset: number }
   | { op: 'images'; sessionId: string; relay?: string; action: 'release'; imageId: string }
   | { op: 'upload'; uploadId: string; index: number; data: string }
-  | { op: 'open'; runId: string; agentKind: RemoteAgentKind; payload: RemoteAgentPayload }
+  | { op: 'open'; runId: string; agentKind: RemoteAgentEngineKind; payload: RemoteAgentPayload }
   | { op: 'call'; runId: string; callId: string; method: RemoteAgentMethod; payload: RemoteAgentPayload }
   /**
    * waitMs：没有新数据时最多挂起多久(缺省 READ_WAIT_MS)。控制端在已有一个长等待在途时，
@@ -323,6 +335,7 @@ export interface RemoteAgentForkResult {
 }
 
 export interface RemoteAgentCaps {
+  companyTokenReporting?: true;
   /** Preserves external-application tools and runtime storage across every relay. */
   localApplication?: boolean;
   nativeHistoryTransfer?: boolean;
@@ -339,9 +352,18 @@ export interface RemoteAgentCaps {
   imageRecovery?: boolean;
   imageRecoveryRelay?: boolean;
   sharedImageGeneration?: boolean;
+  /** The image executor recognizes the built-in OpenAI subscription identity. */
+  sharedBuiltinOpenAiImage?: true;
+  /**
+   * This computer can run its plugin-provided engines for a task of another computer of the
+   * same account (`open` with the plugin engine kind). Never declared to shared users.
+   */
+  pluginEngines?: true;
   version: number;
   agents: Array<{ kind: RemoteAgentKind; available: boolean }>;
   maxRuns: number;
+  /** Live anonymous admission hint for this authenticated controller, not a reservation. */
+  runCapacityAvailable?: boolean;
   uploadChunkBytes: number;
   maxPayloadBytes: number;
   /** 是否支持 opaque 虚拟工作区；不支持时控制端必须拒绝启动以免泄露真实路径。 */
@@ -602,6 +624,11 @@ export function parseRemoteAgentRequest(value: unknown): RemoteAgentRequest {
         || (v.generation !== undefined && (typeof v.generation !== 'string' || !ID.test(v.generation)))) invalid();
       return { op: 'direct-switch', sessionId: v.sessionId,
         ...(typeof v.generation === 'string' ? { generation: v.generation } : {}) };
+    case 'company-reporting-challenge':
+      return { op: v.op, runId: id(v.runId) };
+    case 'company-reporting-grant':
+      if (typeof v.grant !== 'string' || !v.grant.length || v.grant.length > 8192) invalid();
+      return { op: v.op, runId: id(v.runId), grant: v.grant };
     case 'direct-usage': {
       if (typeof v.sessionId !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(v.sessionId)
         || typeof v.generation !== 'string' || !ID.test(v.generation)
@@ -761,7 +788,7 @@ export function parseRemoteAgentRequest(value: unknown): RemoteAgentRequest {
       return {
         op: 'open',
         runId: id(v.runId),
-        agentKind: oneOf(v.agentKind, REMOTE_AGENT_KINDS),
+        agentKind: oneOf(v.agentKind, REMOTE_AGENT_ENGINE_KINDS),
         payload: payload(v.payload),
       };
     case 'call':
@@ -927,9 +954,11 @@ export function parseRemoteAgentCaps(value: unknown): RemoteAgentCaps {
       })
     : [];
   const caps = {
+    ...(v.companyTokenReporting === true ? { companyTokenReporting: true as const } : {}),
     version: count(v.version, 1_000),
     agents,
     maxRuns: count(v.maxRuns, 1_000),
+    ...(typeof v.runCapacityAvailable === 'boolean' ? { runCapacityAvailable: v.runCapacityAvailable } : {}),
     uploadChunkBytes: count(v.uploadChunkBytes, REMOTE_AGENT_UPLOAD_CHUNK_BYTES),
     maxPayloadBytes: count(v.maxPayloadBytes, Number.MAX_SAFE_INTEGER),
     ...(v.virtualWorkspace === true ? { virtualWorkspace: true } : {}),
@@ -940,6 +969,8 @@ export function parseRemoteAgentCaps(value: unknown): RemoteAgentCaps {
     ...(v.imageRecovery === true ? { imageRecovery: true } : {}),
     ...(v.imageRecoveryRelay === true ? { imageRecoveryRelay: true } : {}),
     ...(v.sharedImageGeneration === true ? { sharedImageGeneration: true } : {}),
+    ...(v.sharedBuiltinOpenAiImage === true ? { sharedBuiltinOpenAiImage: true as const } : {}),
+    ...(v.pluginEngines === true ? { pluginEngines: true as const } : {}),
     ...(v.guestRelay === true ? { guestRelay: true } : {}),
     ...(v.directGuestExecution === true ? { directGuestExecution: true } : {}),
     ...(v.directGuestStandby === true ? { directGuestStandby: true as const } : {}),

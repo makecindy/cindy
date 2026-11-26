@@ -13,6 +13,7 @@ import {
   directoryRetryDeadline,
   recordDirectoryRetryDeadline,
 } from './directoryThrottle.js';
+import { beginDeviceDirectoryMutation, waitForDeviceDirectoryBackfill } from './deviceDirectoryMutationFence.js';
 
 export interface DeviceLinkApiPorts {
   getClientEndpoint(key: 'deviceLinkApiBaseUrl'): string;
@@ -29,9 +30,20 @@ export interface DeviceLinkApiPorts {
   prepareRelayConfig(): Promise<Pick<typeof import('./selfHostedRelayConfig.js'), 'readRelaySecrets'>>;
 }
 
+/** Official account APIs always resolve the account region again before a 401 retry. */
+export function createOfficialDeviceLinkApiFetch({ getClientEndpoint, serverApiFetch }: Pick<DeviceLinkApiPorts, 'getClientEndpoint' | 'serverApiFetch'>) {
+  return function officialDeviceLinkApiFetch<T>(
+    apiPath: string,
+    opts: Omit<ApiFetchOptions, 'baseUrl' | 'token' | 'authorization'> = {},
+  ): Promise<T> {
+    return serverApiFetch<T>(apiPath, { ...opts, baseUrl: () => getClientEndpoint('deviceLinkApiBaseUrl') });
+  };
+}
+
 /** Shared routing and credential contract; each launcher supplies its live scope. */
 export function createDeviceLinkApi(ports: DeviceLinkApiPorts) {
 const { getClientEndpoint, serverApiFetch, activeSelfHostedRelay, readCurrentDeviceDirectory, legacyDeviceView } = ports;
+const officialDeviceLinkApiFetch = createOfficialDeviceLinkApiFetch(ports);
 
 async function agentNetOnlyFetch<T>(relay: ActiveSelfHostedRelay, apiPath: string, method: string, body: unknown, assertRoute: () => void, signal?: AbortSignal): Promise<T> {
   const { agentNetClientForRelay } = await ports.prepareAgentNetRuntime();
@@ -132,18 +144,6 @@ function officialDeviceLinkApiBase(): string {
   return getClientEndpoint('deviceLinkApiBaseUrl');
 }
 
-/** 官方服务的 REST 入口。共享任务附件只存在于官方存储,不随中转选择切换。 */
-function officialDeviceLinkApiFetch<T>(
-  apiPath: string,
-  opts: Omit<ApiFetchOptions, 'baseUrl' | 'token' | 'authorization'> = {},
-): Promise<T> {
-  return serverApiFetch<T>(apiPath, {
-    ...opts,
-    // 401 重试可随账号区域更新官方端点，不能随中转选择跨到自建地址。
-    baseUrl: () => getClientEndpoint('deviceLinkApiBaseUrl'),
-  });
-}
-
 /**
  * The official Device Link device list alone, for Agent-Net's check of removed devices (packages/agent-net/src/membership.ts reads it in
  * the background while Agent-Net is on). Behind the same throttle as every other read of `/devices`: not sent inside a
@@ -172,6 +172,9 @@ async function deviceLinkApiFetch<T>(
     }
     const device = /^\/api\/device-link\/devices\/([^/?#]+)$/.exec(apiPath);
     if (device && (opts.method === 'PATCH' || opts.method === 'DELETE')) {
+      const target = decodeURIComponent(device[1]);
+      const endMutation = beginDeviceDirectoryMutation(target);
+      try {
       const base = officialDeviceLinkApiBase();
       const managementScope = ports.managementScopeKey();
       const { activeOwnerScopeKey, isAppSessionBoundaryPending } = await ports.prepareOwnerScope();
@@ -191,7 +194,6 @@ async function deviceLinkApiFetch<T>(
       };
       const api = runtime.currentAgentNetClient();
       if (!api && runtime.agentNetRequiresEncryption()) throw new Error('AGENT_NET_ENCRYPTED_IDENTITY_REQUIRED');
-      const target = decodeURIComponent(device[1]);
       let deleteEncryptedMember = false;
       if (api) {
         const directory = await api.directory();
@@ -204,6 +206,8 @@ async function deviceLinkApiFetch<T>(
             // that before the legacy service has accepted the deletion.
             deleteEncryptedMember = true;
           } else {
+            await waitForDeviceDirectoryBackfill(target);
+            assertCurrent();
             await api.request('PATCH', '/devices/' + encodeURIComponent(target), opts.body);
             assertCurrent();
           }
@@ -225,6 +229,8 @@ async function deviceLinkApiFetch<T>(
         // and unavailable legacy services must still stop before revocation.
         if (!api || !deleteEncryptedMember || !(error instanceof ServerApiError)
           || error.statusCode !== 404 || error.code !== 'NOT_FOUND') throw error;
+        await waitForDeviceDirectoryBackfill(target);
+        assertCurrent();
         const removed = await api.request('DELETE', '/devices/' + encodeURIComponent(target), undefined);
         assertCurrent();
         return removed as T;
@@ -232,6 +238,8 @@ async function deviceLinkApiFetch<T>(
       assertCurrent();
       const deletion = result as { deviceId?: unknown; deleted?: unknown } | null;
       if (api && deleteEncryptedMember && deletion?.deleted === true && deletion.deviceId === target) {
+        await waitForDeviceDirectoryBackfill(target);
+        assertCurrent();
         await api.request('DELETE', '/devices/' + encodeURIComponent(target), undefined);
         assertCurrent();
       }
@@ -239,6 +247,9 @@ async function deviceLinkApiFetch<T>(
       // (packages/agent-net/src/membership.ts); the account and selection are still the ones that removed it (assertCurrent).
       if (opts.method === 'DELETE' && deletion?.deleted === true && deletion.deviceId === target) runtime.agentNetNoteDeviceRemoved(target);
       return result;
+      } finally {
+        endMutation();
+      }
     }
     return officialDeviceLinkApiFetch<T>(apiPath, opts);
   }
@@ -257,6 +268,10 @@ async function deviceLinkApiFetch<T>(
     ) as Promise<T>;
   }
   const device = /^\/api\/device-link\/devices\/([^/?#]+)$/.exec(apiPath);
+  const endMutation = device && ['DELETE', 'PATCH'].includes(opts.method ?? 'GET')
+    ? beginDeviceDirectoryMutation(decodeURIComponent(device[1]))
+    : null;
+  try {
   if (device && ['DELETE', 'PATCH'].includes(opts.method ?? 'GET')) {
     const { readRelaySecrets } = await ports.prepareRelayConfig();
     assertRoute();
@@ -273,19 +288,24 @@ async function deviceLinkApiFetch<T>(
     const directory = await api.directory();
     assertCurrent();
     if (directory.some((d) => d.certificate.deviceId === target)) {
+      await waitForDeviceDirectoryBackfill(target);
+      assertCurrent();
       await api.request(opts.method!, '/devices/' + encodeURIComponent(target), opts.method === 'PATCH' ? opts.body : undefined);
       assertCurrent();
     }
     }
   }
   assertRoute();
-  return serverApiFetch<T>(apiPath, {
+  return await serverApiFetch<T>(apiPath, {
     ...opts,
     baseUrl: relay.baseUrl,
     authorization: `CindyRelay ${relay.credential}`,
     skipAutoRefresh: true,
     skipSessionInvalidation: true,
   });
+  } finally {
+    endMutation?.();
+  }
 }
 
 return { resolveDeviceLinkApiBase, officialDeviceLinkApiBase, officialDeviceLinkApiFetch, officialDeviceListFetch, deviceLinkApiFetch };

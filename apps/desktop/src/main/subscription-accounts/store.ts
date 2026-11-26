@@ -11,6 +11,7 @@ import { desktopMakerLogger } from '../maker-host/logger-adapter.js';
 import {
   DEFAULT_SUBSCRIPTION_ACCOUNT,
   MAX_SUBSCRIPTION_ACCOUNTS,
+  type LinkedLogin,
   type SubscriptionPoolConfig,
   type SubscriptionProvider,
 } from '../../shared/subscriptionAccounts.js';
@@ -63,12 +64,24 @@ export function normalizePoolFile(raw: unknown): PoolFile {
         ? { legacyCodexDefault: true }
         : {}),
       ...(legacyAccounts ? { legacyCodexAccounts: legacyAccounts } : {}),
+      ...(provider === 'anthropic' && pool.removedClaudeHistoryDirectories ? {
+        removedClaudeHistoryDirectories: Object.fromEntries(Object.entries(pool.removedClaudeHistoryDirectories)
+          .filter(([id, dir]) => accountIdValid(id) && id !== 'default' && typeof dir === 'string' && path.isAbsolute(dir))),
+      } : {}),
+      ...(Array.isArray(pool.dismissedLogins) ? { dismissedLogins: pool.dismissedLogins.filter(
+        key => typeof key === 'string' && /^[a-f0-9]{64}$/.test(key),
+      ) } : {}),
       strategy: PROVIDER_GROUP_STRATEGIES.includes(pool.strategy) ? pool.strategy : 'least',
       accounts: pool.accounts
         .filter((a) => a && accountIdValid(a.id) && !seen.has(a.id) && seen.add(a.id))
         .slice(0, MAX_SUBSCRIPTION_ACCOUNTS)
         .map((a) => ({
           id: a.id,
+          ...(a.id !== 'default' && a.linkedLogin && typeof a.linkedLogin.directory === 'string'
+            && path.isAbsolute(a.linkedLogin.directory) && typeof a.linkedLogin.identity === 'string'
+            && a.linkedLogin.identity.trim() && (provider === 'anthropic' || /^[a-f0-9]{64}$/.test(a.linkedLogin.accountKey ?? ''))
+            ? { linkedLogin: { directory: a.linkedLogin.directory, identity: a.linkedLogin.identity,
+              ...(provider === 'openai' ? { accountKey: a.linkedLogin.accountKey } : {}) } } : {}),
           ...(provider === 'anthropic' && typeof a.lastConfirmedIdentity === 'string' && a.lastConfirmedIdentity.trim()
             && a.lastConfirmedIdentity.length <= 320
             ? { lastConfirmedIdentity: a.lastConfirmedIdentity.trim() } : {}),
@@ -110,9 +123,16 @@ export const accountOwnerPrefix = () => {
   if (!owner) throw new Error('An active owner is required');
   return createHash('sha256').update(owner).digest('hex').slice(0, 12);
 };
-export function accountDirectory(provider: SubscriptionProvider, id: string): string {
+export function accountDirectory(provider: SubscriptionProvider, id: string, purpose: 'execution' | 'history' = 'execution'): string {
   if (!accountIdValid(id) || (id !== 'default' && !id.startsWith(`cindy-${accountOwnerPrefix()}-`)))
     throw new Error('Subscription account is unavailable');
+  const pool = id === 'default' ? undefined : readPool(provider);
+  const linked = pool?.accounts.find(account => account.id === id)?.linkedLogin;
+  if (linked) return linked.directory;
+  if (purpose === 'history' && provider === 'anthropic') {
+    const removedDirectory = pool?.removedClaudeHistoryDirectories?.[id];
+    if (removedDirectory) return removedDirectory;
+  }
   const legacy = provider === 'openai' ? readLegacyCodexProviderId(id) : undefined;
   if (legacy) return legacyCodexAccountHome(getUserDataDir(), getActiveAppSession().dataOwnerId, legacy);
   return path.join(
@@ -120,8 +140,11 @@ export function accountDirectory(provider: SubscriptionProvider, id: string): st
     `.${provider === 'anthropic' ? 'claude' : 'codex'}${id === 'default' ? '' : `-${id}`}`,
   );
 }
+export const loginDirectoryKey = (directory: string) => createHash('sha256').update(directory).digest('hex');
+export const loginIdentityKey = (login: LinkedLogin) =>
+  createHash('sha256').update(JSON.stringify(['identity', login.accountKey ?? login.identity.toLowerCase()])).digest('hex');
 export function readPool(provider: SubscriptionProvider): SubscriptionPoolConfig | null {
-  store.invalidateIfChanged();
+  store.invalidateIfChanged(60_000);
   return store.read().pools[provider] ?? null;
 }
 /** OpenAI 池里从旧 Codex 连接导入的账号(旧连接 ID → 账号)；账号池文件读不了时返回 null，不当成没有。 */
@@ -180,9 +203,21 @@ export async function updatePool(
   provider: SubscriptionProvider,
   edit: (value: SubscriptionPoolConfig) => SubscriptionPoolConfig,
 ): Promise<void> {
-  await store.updateAtomic(({ value }) => ({
-    pools: { ...value.pools, [provider]: edit(value.pools[provider] ?? defaultPool()) },
-  }));
+  await store.updateAtomic(({ value }) => {
+    const previous = value.pools[provider] ?? defaultPool();
+    const next = edit(previous);
+    const retained = new Set(next.accounts.map(account => account.id));
+    const removed = previous.accounts.flatMap(account => account.linkedLogin && !retained.has(account.id)
+      ? [{ id: account.id, login: account.linkedLogin }] : []);
+    if (!removed.length) return { pools: { ...value.pools, [provider]: next } };
+    const dismissed = removed.flatMap(({ login }) => [loginDirectoryKey(login.directory), loginIdentityKey(login)]);
+    const updated = { ...next, dismissedLogins: [...new Set([...(next.dismissedLogins ?? []), ...dismissed])] };
+    if (provider === 'anthropic') {
+      updated.removedClaudeHistoryDirectories = { ...previous.removedClaudeHistoryDirectories };
+      for (const { id, login } of removed) updated.removedClaudeHistoryDirectories[id] = login.directory;
+    }
+    return { pools: { ...value.pools, [provider]: updated } };
+  });
 }
 export function readAccountBinding(key: string, provider: SubscriptionProvider) {
   const bindings = store.read().bindings;
@@ -221,7 +256,7 @@ export function readBoundSubscriptionAccountIds(provider: SubscriptionProvider):
 export function readBoundClaudeConfigDir(sdkSessionId: string): string | undefined {
   const binding = readAccountBinding(`native:${sdkSessionId}`, 'anthropic');
   return binding && binding.accountId !== 'default'
-    ? accountDirectory('anthropic', binding.accountId)
+    ? accountDirectory('anthropic', binding.accountId, 'history')
     : undefined;
 }
 export async function writeAccountBindings(
@@ -230,14 +265,18 @@ export async function writeAccountBindings(
   accountId: string,
   /** The provider the task named (placement.ts); omitted for the built-in provider. */
   via?: string,
+  assertCurrent?: () => void,
 ): Promise<void> {
   const through = via && via !== providerId ? { via } : {};
-  await store.updateAtomic(({ value }) => ({
-    bindings: {
-      ...value.bindings,
-      ...Object.fromEntries(
-        keys.filter(Boolean).map((key) => [`${providerId}:${key}`, { providerId, accountId, ...through }]),
-      ),
-    },
-  }));
+  await store.updateAtomic(({ value }) => {
+    assertCurrent?.();
+    return {
+      bindings: {
+        ...value.bindings,
+        ...Object.fromEntries(
+          keys.filter(Boolean).map((key) => [`${providerId}:${key}`, { providerId, accountId, ...through }]),
+        ),
+      },
+    };
+  });
 }

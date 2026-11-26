@@ -60,6 +60,8 @@ function referencedNames(raw: unknown, ids: string[] | undefined): Record<string
 }
 /** A route that names another computer to run on has no meaning on the new home. */
 const portableRoute = (route: BotModelRoute) => !route.agentDeviceId;
+/** Model groups exist only on the computer that made them; the new home runs the saved model. */
+const withoutModelGroup = ({ modelGroup: _group, ...route }: BotModelRoute): BotModelRoute => route;
 /** The carried task model, read leniently: anything unreadable is simply not carried. */
 function carriedTaskModel(value: unknown): BotModelRoute | undefined {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
@@ -92,7 +94,7 @@ export function portableCompanionCapabilities(config: Record<string, unknown>, e
   }
   if (Array.isArray(config.systemSkillsOff)) value.systemSkillsOff = skillIds(config.systemSkillsOff);
   if (typeof config.gender === 'string' && config.gender.length <= 16) value.gender = config.gender;
-  const chain = (explicitChain ?? []).filter(portableRoute);
+  const chain = (explicitChain ?? []).filter(portableRoute).map(withoutModelGroup);
   if (chain.length) value.modelChain = chain;
   const task = carriedTaskModel(config.taskModelOverride);
   if (task) value.taskModel = task;
@@ -119,7 +121,7 @@ export function parseCompanionCapabilities(raw: unknown): CompanionCapabilitiesV
   }
   if (Array.isArray(input.systemSkillsOff)) value.systemSkillsOff = skillIds(input.systemSkillsOff);
   if (typeof input.gender === 'string' && input.gender.length <= 16) value.gender = input.gender;
-  const chain = normalizeBotModelChain(input.modelChain).filter(portableRoute).slice(0, BOT_MODEL_CHAIN_MAX);
+  const chain = normalizeBotModelChain(input.modelChain).filter(portableRoute).map(withoutModelGroup).slice(0, BOT_MODEL_CHAIN_MAX);
   if (chain.length) value.modelChain = chain;
   const task = carriedTaskModel(input.taskModel);
   if (task) value.taskModel = task;
@@ -127,7 +129,7 @@ export function parseCompanionCapabilities(raw: unknown): CompanionCapabilitiesV
 }
 
 /** What the new home could not keep of the old setup; shown once as a line after the move. */
-export type CompanionArrivalNotice = 'permissions' | 'model';
+export type CompanionArrivalNotice = 'permissions' | 'model' | 'model_setup' | 'partial_content';
 
 /**
  * The settings patch for `updateBotProfile` from a cloud value and the routes usable here. Only called

@@ -25,6 +25,8 @@ import { nativeToolMediaFields, type NativeToolMedia } from '@cindy/maker-shared
 
 import {
   extractNonSecretErrorSignals,
+  isProviderSafetyRefusalError,
+  PROVIDER_SAFETY_REFUSAL_REASON,
   redactSensitiveText,
 } from '@cindy/maker-shared/error-redaction';
 import {
@@ -43,6 +45,7 @@ import {
 import type { AgentEvent, AgentTaskStatus, AgentTaskUpdateEventData, GeneratedImageEventData } from '../../types/events.js';
 import { normalizeAccountRateLimitSnapshot } from '../../types/account-rate-limits.js';
 import type { AsyncQueue } from '../shared/async-queue.js';
+import type { CodexDownshiftModelRejection } from '../base-agent.js';
 import { stripTerminalControlSequences } from '../shared/terminal-output.js';
 import { parseReconnectAttemptMessage } from '../shared/network-error.js';
 import {
@@ -57,6 +60,7 @@ import {
 import { isRemoteCompactEncryptedContentError, REMOTE_COMPACT_ENCRYPTED_CONTENT_REASON } from '../shared/remote-compact-encrypted-error.js';
 import { commandExecutionDisplayInput, type CommandExecutionDisplayInput } from './command-display.js';
 import { annotateSandboxInitFailure } from './sandbox-init-failure.js';
+import { codexResponseSampledTokens } from './app-server/response-timing.js';
 import { codexErrorInfoTag } from './app-server/protocol.js';
 import {
   formatTerminalRateLimitRetryMessage,
@@ -117,6 +121,22 @@ export interface CodexRuntimeState {
   /** Native-turn output for speed, independent of the billing ledger lifecycle. */
   generationOutputTokens: number;
   generationTurnId: string | null;
+  /**
+   * Set once Codex has reported the end of a model response (`turn/moderationMetadata`):
+   * from then on the clock runs from a response's first byte until that end, through
+   * output that arrives whole such as a tool call, instead of stopping when its last
+   * streamed item does. Never reset: it describes the app-server, not a turn.
+   */
+  responseEndSignals: boolean;
+  /**
+   * Provider-reported generation times not yet matched to a finished response, with the
+   * tokens of that one response (the provider reports a running total).
+   */
+  pendingServerTimings: Array<{ turnId: string; tokens: number; samplingMs: number }>;
+  /** The provider's running total last seen in this native turn; it restarts on a new scope. */
+  serverTimingTotal: number;
+  /** The newest finished response, for a generation time that arrives after its usage. */
+  lastSettledResponse: { turnId: string; outputTokens: number; requestIndex: number } | null;
   /** False when a tool boundary is incomplete/out of order; unreliable TPS is omitted. */
   generationTimingReliable: boolean;
   /** Event-loop heartbeat while the model owns the turn; detects suspend/blocking gaps. */
@@ -175,6 +195,10 @@ export function newCodexRuntimeState(): CodexRuntimeState {
     generationOutputDurationMs: 0,
     generationOutputTokens: 0,
     generationTurnId: null,
+    responseEndSignals: false,
+    pendingServerTimings: [],
+    serverTimingTotal: 0,
+    lastSettledResponse: null,
     generationTimingReliable: true,
     generationHeartbeatAt: null,
     generationHeartbeatTimer: null,
@@ -274,7 +298,57 @@ export function settleCodexSpeedUsage(
     return undefined;
   }
   rt.speedOutputTokens += last.outputTokens;
-  return rt.tokenSpeed.settle(rt.speedOutputTokens, now, last.reasoningOutputTokens, responseWallMs);
+  // Timings arrive in response order; one names its response by that response's own tokens.
+  // Earlier unmatched ones belong to responses already settled without them.
+  const turnId = rt.generationTurnId;
+  const index = rt.pendingServerTimings.findIndex((entry) => entry.turnId === turnId && entry.tokens === last.outputTokens);
+  const timing = index >= 0 ? rt.pendingServerTimings[index] : undefined;
+  if (index >= 0) rt.pendingServerTimings.splice(0, index + 1);
+  const report = rt.tokenSpeed.settle(rt.speedOutputTokens, now, last.reasoningOutputTokens, responseWallMs,
+    timing ? { tokens: last.outputTokens, ms: timing.samplingMs } : undefined);
+  rt.lastSettledResponse = turnId && report && !timing
+    ? { turnId, outputTokens: last.outputTokens, requestIndex: rt.tokenSpeed.lastRequestIndex }
+    : null;
+  return report;
+}
+
+/**
+ * A model response ended (Codex sends `turn/moderationMetadata` as the response
+ * completes, before any tool it asked for runs): its generation time ends here,
+ * not when its last streamed item did.
+ */
+export function noteCodexResponseEnded(rt: CodexRuntimeState, turnId: string, endedAt = Date.now()): void {
+  if (rt.generationTurnId !== turnId) return;
+  rt.responseEndSignals = true;
+  rt.generationStreamItemIds.clear();
+  rt.tokenSpeed.pause(endedAt);
+}
+
+const MAX_PENDING_SERVER_TIMINGS = 16;
+
+/**
+ * The provider's own generation time for one response (see app-server/response-timing.ts).
+ * Usually it arrives before the response's usage and waits for it; when it arrives
+ * after, it replaces the client's measurement of that response. Returns whether the
+ * displayed speed changed.
+ */
+export function noteCodexResponseTiming(
+  rt: CodexRuntimeState,
+  timing: { turnId: string; sampledTokensTotal: number; samplingMs: number },
+): boolean {
+  if (!rt.generationTimingReliable || rt.generationTurnId !== timing.turnId) return false;
+  // A total below the last one means the provider started counting again (a new connection or
+  // retried response): this response's tokens are then the whole total.
+  const tokens = codexResponseSampledTokens(timing.sampledTokensTotal, rt.serverTimingTotal);
+  rt.serverTimingTotal = timing.sampledTokensTotal;
+  const settled = rt.lastSettledResponse;
+  if (settled && settled.turnId === timing.turnId && settled.outputTokens === tokens && rt.pendingServerTimings.length === 0) {
+    rt.lastSettledResponse = null;
+    return rt.tokenSpeed.applyServerTiming(settled.requestIndex, timing.samplingMs);
+  }
+  rt.pendingServerTimings.push({ turnId: timing.turnId, tokens, samplingMs: timing.samplingMs });
+  if (rt.pendingServerTimings.length > MAX_PENDING_SERVER_TIMINGS) rt.pendingServerTimings.shift();
+  return false;
 }
 
 /** Reset per-turn model-generation timing; turn wall-clock is tracked separately by the host. */
@@ -292,6 +366,9 @@ export function resetCodexGenerationTiming(rt: CodexRuntimeState, preserveSpeed 
   rt.generationOutputDurationMs = 0;
   rt.generationOutputTokens = 0;
   rt.generationTurnId = null;
+  rt.pendingServerTimings = [];
+  rt.serverTimingTotal = 0;
+  rt.lastSettledResponse = null;
   rt.generationTimingReliable = true;
 }
 
@@ -461,6 +538,7 @@ export interface CodexTranslateContext {
   background?: boolean;
   /** Host denial paired by thread, turn and item; never inferred from empty output. */
   approvalDenialReason?: string;
+  previousCompactionModelRejection?: CodexDownshiftModelRejection;
   /** A failed sample cannot remain the adapter's successful final-text fallback. */
   onSamplingAttemptFailed?: () => void;
   /**
@@ -608,8 +686,10 @@ export function translateItemNotification(
       else handleReasoning(phase, item as ReasoningItem, queue, ctx);
       // A usage report or tool start may arrive well after the last model byte.
       // Count any final text in this item before closing the last open stream.
+      // Once Codex reports where a response ends, output after the last streamed item (a
+      // tool call arrives whole) is still generation: the clock stops at that end instead.
       if (!ctx.background && phase === 'completed' && ctx.rt.generationStreamItemIds.delete(item.id) &&
-          ctx.rt.generationStreamItemIds.size === 0) ctx.rt.tokenSpeed.pause();
+          ctx.rt.generationStreamItemIds.size === 0 && !ctx.rt.responseEndSignals) ctx.rt.tokenSpeed.pause();
       return;
     }
     case 'commandExecution':
@@ -653,6 +733,9 @@ export function translateItemNotification(
     case 'hookPrompt':
     case 'enteredReviewMode':
     case 'exitedReviewMode':
+    //   sleep:        codex 的 clock.sleep 长等待通知（轮询工具自带），无 UI 概念；
+    //                 落 default 会每条约一条 unhandled warning，长任务刷满日志
+    case 'sleep':
       return;
     default:
       ctx.log.warn('unhandled item type', { phase, itemType });
@@ -774,6 +857,7 @@ type CodexErrorInput = {
   codexErrorInfo?: CodexErrorInfo | null;
 };
 
+export const CODEX_COMPACTION_MODEL_UNAVAILABLE_REASON = 'codex_compaction_model_unavailable';
 export const CODEX_MODEL_UNAVAILABLE_REASON = 'model_unavailable';
 export const CODEX_MODEL_UNAVAILABLE_MESSAGE =
   '[MODEL_SELECTION_UNAVAILABLE] The selected model is unavailable for this connection. Choose another available model and retry.';
@@ -821,8 +905,12 @@ function codexAccountAccessDenial(error: CodexErrorInput | null | undefined): { 
 }
 
 /** Both denials reuse the current-turn interrupt and exclude automatic replay. */
-export function isCodexAccessRejectedError(error: CodexErrorInput | null | undefined): boolean {
-  return codexAccountAccessDenial(error) !== null || isCodexModelUnavailableError(error);
+export function isCodexAccessRejectedError(
+  error: CodexErrorInput | null | undefined,
+  previousCompactionModelRejection?: CodexDownshiftModelRejection,
+): boolean {
+  return codexAccountAccessDenial(error) !== null
+    || isCodexModelUnavailableError(error, previousCompactionModelRejection);
 }
 
 function hasModelRejection(text: string, status: number | undefined): boolean {
@@ -846,15 +934,20 @@ function hasModelRejection(text: string, status: number | undefined): boolean {
 }
 
 /** Require an explicit model rejection. A generic reconnect or HTTP 404 is ambiguous. */
-export function isCodexModelUnavailableError(error: CodexErrorInput | null | undefined): boolean {
+export function isCodexModelUnavailableError(
+  error: CodexErrorInput | null | undefined,
+  previousCompactionModelRejection?: CodexDownshiftModelRejection,
+): boolean {
   const message = typeof error?.message === 'string' ? error.message.slice(0, 8192) : '';
   const details = typeof error?.additionalDetails === 'string' ? error.additionalDetails.slice(0, 8192) : '';
 
   const info = error?.codexErrorInfo;
   const tag = codexErrorInfoTag(info);
-  if (tag === 'unauthorized' || tag === 'usageLimitExceeded' || tag === 'sessionBudgetExceeded'
-    || tag === 'serverOverloaded' || tag === 'internalServerError'
-    || tag === 'contextWindowExceeded' || tag === 'cyberPolicy') return false;
+  if (tag === 'unauthorized' || tag === 'usageLimitExceeded' || tag === 'rateLimitExceeded'
+    || tag === 'sessionBudgetExceeded' || tag === 'serverOverloaded' || tag === 'internalServerError'
+    || tag === 'contextWindowExceeded' || tag === 'cyberPolicy'
+    || tag === 'misalignmentPolicyViolation') return false;
+  if (isProviderSafetyRefusalError(message) || isProviderSafetyRefusalError(details)) return false;
   const httpInfo: { httpStatusCode?: number | null } | undefined =
     info && typeof info === 'object' && (tag === 'httpConnectionFailed' ||
       tag === 'responseStreamConnectionFailed' || tag === 'responseStreamDisconnected' ||
@@ -863,6 +956,11 @@ export function isCodexModelUnavailableError(error: CodexErrorInput | null | und
   const match = textStatus.exec(message) ?? textStatus.exec(details);
   const status = httpInfo?.httpStatusCode ?? (match ? Number(match[1]) : undefined);
   if (status !== undefined && status !== 400 && status !== 403 && status !== 404) return false;
+  // Bridges can wrap the body's code or omit it entirely. Only the matching
+  // bridge receipt can refine those generic errors into a model denial.
+  const wrappedBridgeError = /\bupstream_error\b|\bNative provider request failed \[phase=(?:adapter-event|stream-read); HTTP (?:400|403|404);/;
+  if (previousCompactionModelRejection?.transport === 'bridge'
+    && (wrappedBridgeError.test(message) || wrappedBridgeError.test(details))) return true;
   if (isAuthRelatedErrorMessage(message) || isAuthRelatedErrorMessage(details)) return false;
   return hasModelRejection(message, status) || hasModelRejection(details, status);
 }
@@ -872,7 +970,10 @@ export function isCodexModelUnavailableError(error: CodexErrorInput | null | und
  * 默认只消费 Codex wire schema 的 message + codexErrorInfo；stderr 不参与判定。
  * 模型拒绝和远端 compact 密文 400 也识别 additionalDetails 中明确的错误信号。
  */
-export function classifyCodexError(error: CodexErrorInput | null | undefined): ClassifiedCodexError {
+export function classifyCodexError(
+  error: CodexErrorInput | null | undefined,
+  previousCompactionModelRejection?: CodexDownshiftModelRejection,
+): ClassifiedCodexError {
   const errorInfoTag = codexErrorInfoTag(error?.codexErrorInfo);
   const accountDenial = codexAccountAccessDenial(error);
   if (accountDenial) {
@@ -884,16 +985,20 @@ export function classifyCodexError(error: CodexErrorInput | null | undefined): C
       data: { message, reason: CODEX_ACCOUNT_ACCESS_DENIED_REASON, willRetry: false },
     };
   }
-  if (isCodexModelUnavailableError(error)) {
+  if (isCodexModelUnavailableError(error, previousCompactionModelRejection)) {
+    const reason = previousCompactionModelRejection ? CODEX_COMPACTION_MODEL_UNAVAILABLE_REASON : CODEX_MODEL_UNAVAILABLE_REASON;
+    const message = previousCompactionModelRejection
+      ? '[CONTEXT_COMPACTION_MODEL_UNAVAILABLE] Context compaction failed during the switch because this connection cannot use the previous model.'
+      : CODEX_MODEL_UNAVAILABLE_MESSAGE;
     return {
-      message: CODEX_MODEL_UNAVAILABLE_MESSAGE,
+      message,
       ...(errorInfoTag !== undefined ? { errorInfoTag } : {}),
       usageLimit: false,
       isCapacityError: false,
-      reason: CODEX_MODEL_UNAVAILABLE_REASON,
+      reason,
       data: {
-        message: CODEX_MODEL_UNAVAILABLE_MESSAGE,
-        reason: CODEX_MODEL_UNAVAILABLE_REASON,
+        message,
+        reason,
         ...(errorInfoTag !== undefined ? { codexErrorInfo: errorInfoTag } : {}),
       },
     };
@@ -923,22 +1028,45 @@ export function classifyCodexError(error: CodexErrorInput | null | undefined): C
   const signals = extractNonSecretErrorSignals(rawMessage);
   const errorStatus =
     signals.errorStatus ?? upstreamStatus ?? (hasMissingBearer || hasAuthErrorMarker ? 401 : undefined);
-  const overload = parseOverloadError(message, signals.errorStatus, errorInfoTag);
+  const additionalDetails =
+    typeof error?.additionalDetails === 'string' ? error.additionalDetails : '';
+  const compactClassifyText = additionalDetails ? `${message}\n${additionalDetails}` : message;
+  const isSafetyRefusal =
+    errorInfoTag === 'cyberPolicy' ||
+    errorInfoTag === 'misalignmentPolicyViolation' ||
+    isProviderSafetyRefusalError(message) ||
+    isProviderSafetyRefusalError(additionalDetails);
+  const overload = isSafetyRefusal
+    ? null
+    : parseOverloadError(message, signals.errorStatus, errorInfoTag);
   const isCapacityError = overload?.kind === 'capacity';
   // 过载文案常顺带一句 rate limit exceeded（如 Kimi 的 `rate limit exceeded: The
   // engine is currently overloaded`）。那是容量问题，不是账号用量上限：保留
   // usageLimit 会让续跑判定拒掉这一轮，也让限额自动继续误接管。
-  const usageLimit = signals.usageLimit && overload === null;
-  const additionalDetails =
-    typeof error?.additionalDetails === 'string' ? error.additionalDetails : '';
-  const compactClassifyText = additionalDetails ? `${message}\n${additionalDetails}` : message;
-  const reason = isCapacityError
-    ? UPSTREAM_OVERLOAD_REASON
-    : isRemoteCompactEncryptedContentError(compactClassifyText)
-      ? REMOTE_COMPACT_ENCRYPTED_CONTENT_REASON
-      : errorInfoTag === 'contextWindowExceeded' || isContextOverflowErrorMessage(message)
-        ? CONTEXT_OVERFLOW_REASON
-        : undefined;
+  const usageLimit = !isSafetyRefusal && signals.usageLimit && overload === null;
+  const reason = isSafetyRefusal
+    ? PROVIDER_SAFETY_REFUSAL_REASON
+    : isCapacityError
+      ? UPSTREAM_OVERLOAD_REASON
+      : isRemoteCompactEncryptedContentError(compactClassifyText)
+        ? REMOTE_COMPACT_ENCRYPTED_CONTENT_REASON
+        : errorInfoTag === 'contextWindowExceeded' || isContextOverflowErrorMessage(message)
+          ? CONTEXT_OVERFLOW_REASON
+          // Native Responses truncation has no dedicated CodexErrorInfo variant.
+          // Match only its complete diagnostic, not rejected request parameters
+          // or transport errors that happen to mention max_output_tokens.
+          : rawMessage.trim() === 'Incomplete response returned, reason: max_output_tokens'
+            ? 'output-limit'
+          // Preserve a diagnosis that native only provided inside its exhausted
+          // transport wrapper. This reason is presentation-only: upstream-overload
+          // and errorStatus=529 also authorize host/goal retries. Do not promote
+          // nested diagnostics into those control signals or expose the body.
+          // Restrict this to the confirmed opaque stream wrapper; recognized
+          // timeout/network messages retain their existing recovery policy.
+          : rawMessage === 'stream disconnected before completion' && errorInfoTag === 'responseTooManyFailedAttempts' && gatewayStatus === 529
+            && errorStatus === undefined && !usageLimit && !hasMissingBearer && !hasAuthErrorMarker
+            ? 'UPSTREAM_OVERLOADED'
+            : undefined;
   return {
     message,
     ...(errorStatus !== undefined ? { errorStatus } : {}),
@@ -962,7 +1090,7 @@ export function translateErrorNotification(
   queue: AsyncQueue<AgentEvent>,
   ctx: CodexTranslateContext,
 ): void {
-  const classified = classifyCodexError(params.error);
+  const classified = classifyCodexError(params.error, ctx.previousCompactionModelRejection);
   const safeMessage = classified.message;
   const errorStatus = classified.errorStatus;
   const isCapacityError = classified.isCapacityError;

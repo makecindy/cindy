@@ -47,6 +47,7 @@ export interface DesktopTaskDigestHost {
   listDevices?: () => Promise<HistoryDevice[]>;
   getSessionRuntime(sessionId: string): Promise<{ ok: true; runtime: RuntimeLike } | { ok: false }>;
   listSessionQueuedCounts(sessionIds: string[]): Promise<{ ok: true; counts: Record<string, number> } | { ok: false }>;
+  readLocalQueuePaused?(sessionId: string): boolean | undefined;
   /** 本机任务的 PR 状态(git-context 同一服务与缓存)。 */
   readSessionPrStatuses(sessionId: string): Promise<Parameters<typeof formatPrStatuses>[0]>;
   /**
@@ -74,12 +75,14 @@ function routeFromProfile(profile: RuntimeLike['effectiveProfile']): TaskDigestR
   };
 }
 
-const toBotHarness = (harness: TaskDigestRoute['harness']): BotHarness => (harness === 'claude-code' ? 'claude' : harness);
-const toDigestHarness = (harness: BotHarness): TaskDigestRoute['harness'] => (harness === 'claude' ? 'claude-code' : harness);
-const toAgentKind = (harness: BotHarness): AgentKind => (harness === 'claude' ? 'claude-code' : harness);
+type BuiltinBotHarness = Exclude<BotHarness, 'acp'>;
+const toBotHarness = (harness: TaskDigestRoute['harness']): BuiltinBotHarness => (harness === 'claude-code' ? 'claude' : harness);
+const toDigestHarness = (harness: BuiltinBotHarness): TaskDigestRoute['harness'] => (harness === 'claude' ? 'claude-code' : harness);
+const toAgentKind = (harness: BuiltinBotHarness): AgentKind => (harness === 'claude' ? 'claude-code' : harness);
 
 /** 目录里核实过的窗口(与主机切换闸门同一口径);查不到返回 null。 */
 function verifiedRouteWindow(harness: BotHarness, model: string, providerId: string | null): number | null {
+  if (harness === 'acp') return null;
   const catalog = getActiveCatalog();
   return lookupVerifiedContextWindow(
     (agentKind, modelId, pid) => resolveConfiguredContextWindow(catalog, agentKind as AgentKind, pid, modelId),
@@ -165,6 +168,7 @@ export function createDesktopTaskDigestDeps(host: DesktopTaskDigestHost): TaskDi
         const [row] = await getDbClient()
           .drizzle.select({
             title: sessions.title,
+            pinnedAt: sessions.pinnedAt,
             clearedAt: sessions.clearedAt,
             activeTurnStartedAt: sessions.activeTurnStartedAt,
             status: sessions.status,
@@ -217,11 +221,14 @@ export function createDesktopTaskDigestDeps(host: DesktopTaskDigestHost): TaskDi
         const result = await host.listSessionQueuedCounts([sessionId]);
         return result.ok ? (result.counts[sessionId] ?? 0) : null;
       },
+      queuePaused: (sessionId) => host.readLocalQueuePaused?.(sessionId),
       prStatus: async (sessionId) => formatPrStatuses(await host.readSessionPrStatuses(sessionId)),
       suggestRoute: async ({ callerSessionId, targetSessionId, current, failure }) => {
         if (!callerSessionId) return null;
         const chain = await readCallerBotChain(callerSessionId);
         if (!chain?.length) return null;
+        const builtinChain = chain.filter((candidate) => candidate.harness !== 'acp');
+        if (!builtinChain.length) return null;
         const [target] = await getDbClient()
           .drizzle.select({ remoteHostId: sessions.remoteHostId, contextTokens: sessions.contextTokens })
           .from(sessions)
@@ -235,7 +242,7 @@ export function createDesktopTaskDigestDeps(host: DesktopTaskDigestHost): TaskDi
           dbContextTokens: target?.contextTokens,
         });
         const next = suggestFollowUpRoute({
-          chain,
+          chain: builtinChain,
           current: { harness, model: current.model, providerId: current.provider_id },
           failure: { ...failure, ...(failure.phase === 'errored' ? runtime?.terminalError ?? {} : {}) },
           visitedRoutes: getSessionRuntimeControlSnapshot(targetSessionId).visitedRoutes,
@@ -244,7 +251,7 @@ export function createDesktopTaskDigestDeps(host: DesktopTaskDigestHost): TaskDi
           currentContextWindow: usage.contextWindow ?? verifiedRouteWindow(harness, current.model, current.provider_id),
           windowOf: (candidate) => verifiedRouteWindow(candidate.harness, candidate.model, candidate.providerId),
         });
-        return next
+        return next && next.harness !== 'acp'
           ? {
               harness: toDigestHarness(next.harness),
               model: next.model,

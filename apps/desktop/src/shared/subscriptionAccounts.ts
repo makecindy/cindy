@@ -1,5 +1,7 @@
+import type { GhostHarnessAccountMethod, GhostHarnessUsage } from '@cindy/plugin-protocol';
 import type { ProviderGroupStrategy } from './providerGroup.js';
 import type { ClaudeSubscriptionUsageSnapshot } from './claudeSubscriptionUsage.js';
+import type { OpenAiGroupAccount } from './openAiAccountGroup.js';
 
 export const SUBSCRIPTION_ACCOUNTS_CHANNEL = 'maker:subscription-accounts';
 export const SUBSCRIPTION_ACCOUNTS_CHANGED = 'subscription-accounts:changed';
@@ -38,7 +40,28 @@ export const CODEX_POOL_RESET_PREFIX = 'openai-account:';
 export function codexResetScope(accountId: string): string {
   return accountId === 'default' ? 'openai' : `${CODEX_POOL_RESET_PREFIX}${accountId}`;
 }
+export const EXISTING_LOGIN_REVIEW_TTL_MS = 10 * 60_000;
+export interface ExistingLogin {
+  connected?: boolean;
+  identity: string;
+  directory: string;
+  plan?: string;
+  /** Receipt binds the reviewed identity, directory, provider and current Cindy owner. */
+  receipt: string;
+}
+export interface ExistingLoginResult { computer: string; candidates: ExistingLogin[]; canceled?: boolean }
+export type ExistingLoginRequest =
+  | { action: 'discover-logins' | 'pick-login'; providerId: SubscriptionProvider }
+  | { action: 'attach-login'; providerId: SubscriptionProvider; receipt: string };
+
+export interface LinkedLogin {
+  directory: string;
+  identity: string;
+  /** Codex also pins the ChatGPT workspace. */
+  accountKey?: string;
+}
 export interface SubscriptionAccountConfig {
+  linkedLogin?: LinkedLogin;
   id: string;
   /** Last identity confirmed by the official CLI, retained across logout/restart. No credentials. */
   lastConfirmedIdentity?: string;
@@ -52,6 +75,10 @@ export interface SubscriptionAccountConfig {
   weight: number;
 }
 export interface SubscriptionPoolConfig {
+  /** Directory hashes the owner has removed; manual reconnection is still available. */
+  dismissedLogins?: string[];
+  /** Owner-local Claude transcript locations, retained only for native history lookups. */
+  removedClaudeHistoryDirectories?: Record<string, string>;
   disconnected?: boolean;
   /** Upgrade-only: preserve an already authorized private Cindy Codex home. */
   legacyCodexDefault?: boolean;
@@ -78,13 +105,16 @@ export interface SubscriptionCodexUsageBucket {
 /** The account's own quota snapshot, shown with the provider's existing usage card. */
 export interface SubscriptionAccountUsage {
   claude?: ClaudeSubscriptionUsageSnapshot;
+  /** A plugin engine account's own usage, as its plugin reports it (2026-11-23). */
+  plugin?: GhostHarnessUsage;
   codex?: {
     planType?: string;
     buckets: Record<string, SubscriptionCodexUsageBucket>;
     credits: { hasCredits: boolean; unlimited: boolean; balance: string | null } | null;
   };
 }
-export interface SubscriptionAccountView extends Omit<SubscriptionAccountConfig, 'lastConfirmedIdentity' | 'reloginIdentity'> {
+export interface SubscriptionAccountView extends Omit<SubscriptionAccountConfig, 'lastConfirmedIdentity' | 'reloginIdentity' | 'linkedLogin'> {
+  apiKey?: { connectionId: string; checks: NonNullable<OpenAiGroupAccount['checks']> };
   /** Owner-only verified account/workspace digest, for duplicate quota presentation. */
   accountKey?: string;
   legacy?: boolean;
@@ -101,7 +131,7 @@ export interface SubscriptionAccountView extends Omit<SubscriptionAccountConfig,
   directory: string;
   status: 'ready' | 'signed-out' | 'unavailable' | 'limited';
   /** Advisory diagnosis only; absent on older hosts. Never includes CLI output. */
-  authIssue?: 'codex-provider-managed-auth' | 'claude-account-mismatch';
+  authIssue?: 'codex-provider-managed-auth' | 'claude-account-mismatch' | 'account-mismatch';
   running: number;
   usage?: SubscriptionAccountUsage;
 }
@@ -123,12 +153,29 @@ export interface SubscriptionPoolView {
    * offers no shortcut for it. Older hosts omit it; absence keeps the shortcut as before.
    */
   defaultAdded?: boolean;
+  /**
+   * 2026-11-23: the provider is a plugin engine (or a provider taken out of one). Sign-in goes
+   * through the plugin's methods; older hosts never answer for plugin engines.
+   */
+  pluginEngine?: PluginEnginePoolInfo;
+}
+export interface PluginEnginePoolInfo {
+  /** `<plugin instance>:<engine id>`. */
+  engineKey: string;
+  /** Empty: the plugin only reports its original login, accounts cannot be added. */
+  methods: GhostHarnessAccountMethod[];
+  /** A provider the user took an account out into. */
+  separate?: true;
 }
 export type SubscriptionAccountCommand =
   | { action: 'read'; providerId: string; taskId?: string }
   /** Advisory login presentation only; never binds detected system credentials. */
   | { action: 'preview'; providerId: SubscriptionProvider }
-  | { action: 'add'; providerId: string; loginKey: string }
+  /**
+   * `methodId` / `secret` (2026-11-23): a plugin engine's sign-in method and, for a secret method,
+   * the value typed on this computer (never sent between computers, stored or logged).
+   */
+  | { action: 'add'; providerId: string; loginKey: string; methodId?: string; secret?: string }
   /** Explicit wizard intent. Older hosts reject this action instead of reusing a different account. */
   | {
       action: 'connect';
@@ -147,9 +194,10 @@ export type SubscriptionAccountCommand =
   | { action: 'merge'; providerId: string; target: string }
   /** 2026-11-13: delete a provider Cindy created; its accounts stop being used (logins stay). */
   | { action: 'remove-provider'; providerId: string }
-  | { action: 'login'; providerId: string; accountId: string; loginKey: string }
+  | { action: 'login'; providerId: string; accountId: string; loginKey: string; methodId?: string; secret?: string }
   | { action: 'cancel'; providerId: string; loginKey: string }
   | { action: 'remove'; providerId: string; accountId: string }
+  | { action: 'reorder'; providerId: string; accountIds: string[] }
   | {
       action: 'configure';
       providerId: string;
@@ -314,4 +362,16 @@ export function isSubscriptionProvider(value: unknown): value is SubscriptionPro
  */
 export function isSubscriptionPoolProviderIdShape(value: unknown): value is string {
   return typeof value === 'string' && /^[a-z0-9_-]{1,40}$/.test(value);
+}
+/**
+ * A plugin engine provider (2026-11-23): `acp-plugin:<plugin instance>:<engine id>`, or a provider
+ * taken out of it (`…~<8 lowercase letters or digits>`). The executing host resolves it.
+ */
+export function isPluginEngineProviderIdShape(value: unknown): value is string {
+  return typeof value === 'string' && value.length <= 300
+    && /^acp-plugin:[A-Za-z0-9._-]{1,200}:[a-z][a-z0-9-]{0,31}(?:~[a-z0-9]{8})?$/.test(value);
+}
+/** Any provider whose accounts the account channel manages. */
+export function isAccountProviderIdShape(value: unknown): value is string {
+  return isSubscriptionPoolProviderIdShape(value) || isPluginEngineProviderIdShape(value);
 }

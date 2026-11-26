@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 
 import { act, cleanup, fireEvent, render, screen, waitFor, type RenderResult } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 
 const mockUpdate = vi.fn();
 const mockGetModelsForVendor = vi.fn();
@@ -241,6 +242,7 @@ function renderChip(
 }
 
 beforeEach(() => {
+  setDataOwnerGeneration('test-owner');
   mockNavigate.mockReset();
   mockUpdate.mockReset();
   mockUpdate.mockResolvedValue({ id: SESSION_ID });
@@ -262,9 +264,37 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  setDataOwnerGeneration(null);
 });
 
 describe('ContextWindowBudgetChip', () => {
+  // #11716/#4477 unit: same 20K usage must use the execution task's native 100K
+  // window (20%), never the controller's 200K config or an 800K adjustable tier.
+  it.each([false, true])('shows the native task percentage for remote=%s', async remote => {
+    const native = { contextWindow: 100_000, usableContextWindow: 95_000, autoCompactTokenLimit: 90_000 };
+    const getModelContextLimit = vi.fn().mockResolvedValue({ codexContext: remote ? { ...native, contextWindow: 200_000 } : native });
+    Object.assign(window.electronAPI.maker, { getModelContextLimit });
+    const invoke = vi.mocked(window.electronAPI.deviceLink.invoke).mockImplementation(async (_device, channel) =>
+      channel === 'maker:model-context-limit:get' ? { codexContext: native } : boundsView({ modelLimit: 800_000 }));
+    render(<ContextCapacityRing sessionId={SESSION_ID} contextTokens={20_000} model="gpt" providerId="xd"
+      vendorKey="codex" sdkContextWindow={95_000} deviceId={remote ? 'execution-device' : undefined} />);
+    expect(await screen.findByText('20%')).toBeTruthy();
+    if (remote) {
+      expect(getModelContextLimit).not.toHaveBeenCalled();
+      expect(invoke).toHaveBeenCalledWith('execution-device', 'maker:model-context-limit:get', [{
+        agent: 'codex', providerId: 'xd', modelId: 'gpt', sessionId: SESSION_ID,
+      }]);
+    }
+  });
+  it('keeps a remote native window unknown even when adjustable budget tiers are known', async () => {
+    vi.mocked(window.electronAPI.deviceLink.invoke).mockImplementation(async (_device, channel) =>
+      channel === 'maker:model-context-limit:get' ? { codexContext: null } : boundsView({ modelLimit: 800_000 }));
+    render(<ContextCapacityRing sessionId={SESSION_ID} contextTokens={20_000} model="gpt" providerId="xd"
+      vendorKey="codex" sdkContextWindow={95_000} deviceId="execution-device" />);
+    await act(async () => {});
+    expect(screen.getByText('—')).toBeTruthy();
+    expect(screen.queryByText('20%')).toBeNull();
+  });
   it('opens the current model settings from the expanded window controls without changing the task budget', async () => {
     // The settings link must preserve the source/model/engine and must not submit a tier.
     renderChip({ providerId: 'xd', agentKind: 'cc' });

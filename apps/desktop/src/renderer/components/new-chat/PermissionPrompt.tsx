@@ -23,6 +23,7 @@ import type { BotChatIdentity } from '@/features/bots/BotSessionContentHeader';
 import { shouldCardShortcutYield } from '@/lib/editableKeyboardTarget';
 import { cn } from '@/lib/utils';
 import { Tip } from '@/components/ui/tooltip';
+import { Kbd } from '@/components/ui/kbd';
 import { Button } from '@/components/ui/button';
 import type { PendingPermission } from '@/lib/makerChatStore';
 import { describeSessionPermissionScope } from '@/lib/permissionSuggestionScope';
@@ -96,7 +97,8 @@ export function PermissionPrompt({ permission, onRespond, companion }: Permissio
   const [reviewedRequest, setReviewedRequest] = useState<string | null>(null);
   const showInstallSummary = isPluginInstallConsent && reviewedRequest !== permission.requestId;
   const promptDescription = autoReviewUnavailable
-    ? t('newChat.permissionPrompt.autoReviewUnavailable')
+    ? t(permission.autoReviewQuotaExhausted
+      ? 'chat.remoteError.AUTO_REVIEW_UNAVAILABLE_QUOTA' : 'newChat.permissionPrompt.autoReviewUnavailable')
     : isPluginInstallConsent
       ? consentHead
       : description;
@@ -225,7 +227,7 @@ export function PermissionPrompt({ permission, onRespond, companion }: Permissio
       {/* Keep the complete permission list available in place. */}
       {!showInstallSummary && <div
         className={cn(
-          'mt-3 overflow-auto rounded-[8px] border px-3.5 py-2.5',
+          'mt-3 overflow-auto rounded-lg border px-3.5 py-2.5',
           'border-[var(--perm-code-border)] bg-[var(--perm-code-bg)]',
           isPluginInstallConsent
             ? 'max-h-[240px] text-13 leading-relaxed text-[var(--chat-input-text)]'
@@ -273,9 +275,9 @@ export function PermissionPrompt({ permission, onRespond, companion }: Permissio
           className={secondaryActionClass}
         >
           <span>{t(isMcpUrl ? 'newChat.permissionPrompt.mcpCancel' : isMediaDownload ? 'newChat.mediaDownload.defer' : 'agentIsland.native.deny')}</span>
-          <kbd className="rounded-[4px] border border-[var(--chat-input-border)] bg-[var(--perm-code-bg)] px-1.5 py-[1px] text-11 font-normal text-[var(--status-bar-meta)]">
+          <Kbd>
             Esc
-          </kbd>
+          </Kbd>
         </Button>
 
         {canAlwaysAllowForSession && (
@@ -306,12 +308,12 @@ export function PermissionPrompt({ permission, onRespond, companion }: Permissio
                   ? t('newChat.permissionPrompt.alwaysAllowScoped', { scope: allowScope })
                   : t('agentIsland.native.alwaysAllowForSession')}
               </span>
-              <kbd className="shrink-0 rounded-[4px] border border-[var(--chat-input-border)] bg-[var(--perm-code-bg)] px-1.5 py-[1px] text-11 font-normal text-[var(--status-bar-meta)]">
+              <Kbd className="shrink-0">
                 Ctrl
-              </kbd>
-              <kbd className="-ml-1 shrink-0 rounded-[4px] border border-[var(--chat-input-border)] bg-[var(--perm-code-bg)] px-1.5 py-[1px] text-11 font-normal text-[var(--status-bar-meta)]">
+              </Kbd>
+              <Kbd className="-ml-1 shrink-0">
                 Enter
-              </kbd>
+              </Kbd>
             </Button>
           </Tip>
         )}
@@ -327,9 +329,9 @@ export function PermissionPrompt({ permission, onRespond, companion }: Permissio
           className={allowActionClass}
         >
           <span>{t(isFirstInstall ? 'settings.ghosts.installConsent.confirmInstall' : showInstallSummary ? 'settings.ghosts.contribution.viewDetails' : isMcpUrl ? 'newChat.permissionPrompt.mcpComplete' : isMediaDownload ? 'newChat.mediaDownload.allow' : 'agentIsland.native.allowOnce')}</span>
-          <kbd className="rounded-[4px] border border-[var(--perm-allow-kbd-border)] bg-[var(--perm-allow-kbd-bg)] px-1.5 py-[1px] text-11 font-normal text-[var(--perm-allow-btn-text)] opacity-70">
+          <Kbd tone="onSolid">
             Enter
-          </kbd>
+          </Kbd>
         </Button>
       </div>
     </div>

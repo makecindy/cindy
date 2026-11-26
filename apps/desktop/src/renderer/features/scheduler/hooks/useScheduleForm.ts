@@ -38,7 +38,7 @@ export { EFFORT_VALUES, isEffortValue } from '../lib/scheduleFormLogic';
 export type { EffortValue, ScheduleFormState, RunMode } from '../lib/scheduleFormLogic';
 export { deriveRunMode, hasRealBinding, PENDING_SESSION_ID } from '../lib/scheduleFormLogic';
 
-import { normalizePrTrigger, schedulePrTriggers } from '@cindy/maker-scheduler/pr-trigger';
+import { isGitlabMrTriggerUrl, normalizePrTrigger, schedulePrTriggers } from '@cindy/maker-scheduler/pr-trigger';
 
 function prFields(schedule: Schedule): Partial<ScheduleFormState> {
   if (schedule.webhookTrigger && schedule.prTrigger === undefined) return {};
@@ -307,6 +307,7 @@ export function makeFormFromSchedule(s: Schedule | null): ScheduleFormState {
     ...webhookSourceFormFields(s.webhookTrigger?.source),
     ...scheduleEngineFormFields(s),
     modelAgentDeviceId: s.modelAgentDeviceId,
+    modelGroup: s.modelGroup,
     agentDeviceId: s.agentDeviceId ?? '',
     effort: s.effort && isEffortValue(s.effort) ? s.effort : '',
     fastMode: (s.fastMode ?? false),
@@ -320,6 +321,7 @@ export function makeFormFromSchedule(s: Schedule | null): ScheduleFormState {
     // 两者都有时(Agent 设的)界面显示插件;脚本保持原样直到用户改成脚本来源。
     preRunSource: s.preRunPlugin ? 'plugin' : 'script',
     preRunKeepScript: !!s.preRunPlugin && !!s.preRunHook?.command,
+    primaryHostKey: s.primaryHostKey,
     preRunPluginId: s.preRunPlugin?.pluginId ?? '',
     preRunPluginOnFailure: s.preRunPlugin?.onFailure ?? GHOST_CONTROL_POINTS['will-schedule-run'].defaultOnFailure,
     preRunHookCommand: s.preRunHook?.command ?? '',
@@ -342,10 +344,12 @@ export interface UseScheduleFormResult {
     followedAgentKind?: ScheduleFormState['agentKind'],
   ) => void;
   /**
-   * 选中插件引擎(docs/plans/acp-plugin-bridge.md)：每次新建任务、在本机运行，清掉运行位置、worktree
-   * 与 Fast；选内置模型(selectModelConfiguration)时清掉它。
+   * 选中插件引擎(docs/plans/acp-plugin-bridge.md)：每次新建任务、在本机运行，清掉运行位置
+   * 与 Fast(worktree 保留)；选内置模型(selectModelConfiguration)时清掉它。
    */
   selectPluginEngine: (selection: PluginEngineSelection) => void;
+  /** 选一个模型组(模式)。 */
+  selectModelGroup: (modelGroup: string) => void;
   setField: <K extends keyof ScheduleFormState>(k: K, v: ScheduleFormState[K]) => void;
   /** 改 destination 时同步改 useWorktree / targetSessionId 三态互斥。 */
   setDestination: (d: Destination) => void;
@@ -373,8 +377,19 @@ export interface UseScheduleFormResult {
   validate: () => { key: string; values?: Record<string, string> } | null;
 }
 
+function withMrTiming(form: ScheduleFormState): ScheduleFormState {
+  if (!form.prEnabled || !isGitlabMrTriggerUrl(form.prUrl) || (!form.manual && form.recurring)) return form;
+  // A manual schedule has no active cadence. Start with the MR card's five-minute check.
+  return {
+    ...form,
+    manual: false,
+    recurring: true,
+    ...(form.manual ? { cronExpr: '*/5 * * * *', intervalMs: 300_000 } : {}),
+  };
+}
+
 export function useScheduleForm(initial: Schedule | null = null): UseScheduleFormResult {
-  const [form, setForm] = useState<ScheduleFormState>(() => makeFormFromSchedule(initial));
+  const [form, setForm] = useState<ScheduleFormState>(() => withMrTiming(makeFormFromSchedule(initial)));
   // "记住的真实绑定"快照:三态来回切换(bound → fresh/persistent → bound)时
   // 不丢用户已选/任务已有的绑定 —— 表单切换是非破坏性的,只有保存才落库。
   // 快照含 model/effort 等关联字段:切到 fresh 后空 model 会被回填 effect 填成
@@ -386,7 +401,7 @@ export function useScheduleForm(initial: Schedule | null = null): UseScheduleFor
 
   const setField = useCallback(
     <K extends keyof ScheduleFormState>(k: K, v: ScheduleFormState[K]) => {
-      setForm((f) => ({ ...f, [k]: v }));
+      setForm((f) => withMrTiming({ ...f, [k]: v }));
     },
     [],
   );
@@ -397,7 +412,7 @@ export function useScheduleForm(initial: Schedule | null = null): UseScheduleFor
         const boundAgent = form.targetSessionId && form.targetSessionId !== PENDING_SESSION_ID &&
           form.boundAgent?.sessionId !== form.targetSessionId
           ? { sessionId: form.targetSessionId, agentKind: form.agentKind } : form.boundAgent;
-        return { ...form, ...selection, boundAgent, modelAgentKind: selection.agentKind, pluginEngine: null };
+        return { ...form, ...selection, followTeammateModel: false, boundAgent, modelAgentKind: selection.agentKind, pluginEngine: null, modelGroup: undefined };
       }
       const agentKind = followedAgentKind ??
         (form.boundAgent?.sessionId === form.targetSessionId
@@ -405,7 +420,7 @@ export function useScheduleForm(initial: Schedule | null = null): UseScheduleFor
       const boundAgent = followedAgentKind && form.targetSessionId
         ? { sessionId: form.targetSessionId, agentKind } : form.boundAgent;
       return { ...form, agentKind, boundAgent, model: '', providerId: '', agentDeviceId: '', effort: '', fastMode: false,
-        modelAgentKind: undefined, modelAgentDeviceId: undefined, pluginEngine: null };
+        modelAgentKind: undefined, modelAgentDeviceId: undefined, pluginEngine: null, modelGroup: undefined };
     });
   }, []);
 
@@ -416,16 +431,21 @@ export function useScheduleForm(initial: Schedule | null = null): UseScheduleFor
       next.boundAgent = { sessionId: next.targetSessionId, agentKind: s && s.agentKind !== 'acp' ? s.agentKind : next.agentKind };
     }
     lastBindingRef.current = captureBinding(next);
-    setForm(next);
+    setForm(withMrTiming(next));
+  }, []);
+
+  // 选模式：具体模型留作选不出来时沿用的，插件引擎不再生效。
+  const selectModelGroup = useCallback((modelGroup: string) => {
+    setForm((f) => ({ ...f, modelGroup, pluginEngine: null, followTeammateModel: false }));
   }, []);
 
   const selectPluginEngine = useCallback((selection: PluginEngineSelection) => {
     setForm((f) => ({
       ...f,
+      modelGroup: undefined,
       pluginEngine: selection,
       agentDeviceId: '',
       modelAgentDeviceId: undefined,
-      useWorktree: false,
       fastMode: false,
     }));
   }, []);
@@ -440,7 +460,9 @@ export function useScheduleForm(initial: Schedule | null = null): UseScheduleFor
       // A template that supplies a model is an explicit selection, even while following a bound task.
       // 模板的模型与来源属于本机目录;路由变了就回到本机运行。
       const sameRoute = selection.agentKind === f.agentKind && selection.model === f.model && selection.providerId === f.providerId;
+      // 模板换了模型就是选了一个具体模型：去掉模式；没换沿用。
       return { ...f, ...selection, pluginEngine: null, agentDeviceId: sameRoute ? f.agentDeviceId : '',
+        modelGroup: sameRoute ? f.modelGroup : undefined,
         modelAgentKind: template.model?.trim() || (f.targetSessionId.trim() && selection.modelAgentDeviceId === '')
           ? selection.agentKind : sameRoute ? f.modelAgentKind : undefined };
     });
@@ -460,7 +482,7 @@ export function useScheduleForm(initial: Schedule | null = null): UseScheduleFor
         case 'local':
           return { ...f, useWorktree: false, targetSessionId: '' };
         case 'worktree':
-          return { ...f, useWorktree: true, targetSessionId: '', pluginEngine: null };
+          return { ...f, useWorktree: true, targetSessionId: '' };
         case 'thread':
           return {
             ...f,
@@ -568,5 +590,5 @@ export function useScheduleForm(initial: Schedule | null = null): UseScheduleFor
   // heartbeat 分支 model/effort 恒带 key(空值 undefined → update patch 清列 = 跟随会话)。
   const toInput = useCallback((): CreateScheduleInput => buildScheduleInput(form), [form]);
 
-  return { form, setField, selectModelConfiguration, selectPluginEngine, setDestination, setRunMode, selectBoundSession, applyTemplateAgentFields, reset, toInput, validate };
+  return { form, setField, selectModelConfiguration, selectPluginEngine, selectModelGroup, setDestination, setRunMode, selectBoundSession, applyTemplateAgentFields, reset, toInput, validate };
 }

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { INDEFINITE_SNOOZE_UNTIL, taskSnoozeUntil, LIVE_TASK_PRIORITY, liveTaskPriorityRank, taskInboxSection, teammateInboxSection } from '../liveTaskPriority';
+import { INDEFINITE_SNOOZE_UNTIL, isTeammateOwnInboxTask, taskSnoozeUntil, LIVE_TASK_PRIORITY, liveTaskPriorityRank, taskInboxSection, teammateInboxSection } from '../liveTaskPriority';
 
 describe('liveTaskPriorityRank', () => {
   it('puts waiting (including error) ahead of unread, then running, then rest', () => {
@@ -90,4 +90,32 @@ it('lists a teammate conversation by whose turn it is and wakes its snooze on ne
   expect(teammateInboxSection('idle', snooze, now + 1)).toBe('snoozed');
   expect(teammateInboxSection('awaiting', { ...snooze, userSendAt: new Date(now + 1).toISOString() }, now + 2)).toBe('inbox');
   expect(teammateInboxSection('idle', { ...snooze, snoozedUntil: new Date(now + 1000).toISOString() }, now + 1000)).toBeNull();
+});
+
+// 2026-11-22 user decision: a task a teammate opened in the owner's project was left out of the
+// inbox with its result, while the hand-off skill told the teammate not to ask for it back: the
+// result was in neither place and work went unfinished. Only the teammate's own conversations and
+// its own project's tasks stay with the teammate; what it opens elsewhere is the owner's work.
+it('keeps only a teammate\'s own conversations and project tasks with the teammate', () => {
+  const project = '/Users/me/Library/Application Support/Cindy/owners/o1/bots/bot_mia/workspace';
+  expect(isTeammateOwnInboxTask({ source: 'bot', companion: { role: 'channel' } })).toBe(true);
+  expect(isTeammateOwnInboxTask({ source: 'bot', companion: { role: 'group' } })).toBe(true);
+  expect(isTeammateOwnInboxTask({ source: 'scheduler', workingDir: project })).toBe(true);
+  expect(isTeammateOwnInboxTask({ source: 'desktop', projectDir: project, workingDir: '/tmp/elsewhere' })).toBe(true);
+  // Opened by the teammate in the owner's repository (or a worktree of it): ordinary work.
+  expect(isTeammateOwnInboxTask({ source: 'desktop', workingDir: '/Users/me/code/app' })).toBe(false);
+  expect(isTeammateOwnInboxTask({ source: 'desktop', workingDir: '/Users/me/code/app/.cindy-worktrees/calm-ada' })).toBe(false);
+  const now = Date.now();
+  expect(taskInboxSection({}, { running: false, waiting: false, unread: true,
+    teammate: isTeammateOwnInboxTask({ source: 'desktop', workingDir: '/Users/me/code/app' }) }, now)).toBe('inbox');
+});
+
+
+// Unit regression: both inboxes must drop the read, idle pin and surface its next result.
+it('keeps idle read pins out of Pending until they need attention again', () => {
+  const pin = { status: 'active', pinnedAt: '2026-11-25T00:00:00Z' };
+  const idle = { waiting: false, running: false, unread: false };
+  expect(taskInboxSection(pin, idle, 0)).toBeNull();
+  expect(taskInboxSection(pin, { ...idle, unread: true }, 0)).toBe('inbox');
+  expect(taskInboxSection(pin, { ...idle, waiting: true }, 0)).toBe('inbox');
 });

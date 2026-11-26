@@ -483,16 +483,44 @@ describe('projectInvokeResultForTunnel — maker:provider:list 投影', () => {
       routing: { codex: { upstream: 'https://gateway.example.invalid/v1' } },
     };
     const forged = { ...enterprise, id: 'custom-provider', source: 'user' };
+    const work = { ...forged, id: 'zhipu-glm-cn', logoKind: 'work' };
     const projectFor = (supportsFullLogoKinds: boolean, sameAccount: boolean) =>
       (__testing.projectInvokeResultForTunnel(
-        'maker:provider:list', { providers: [enterprise, forged] }, supportsFullLogoKinds, [], sameAccount,
+        'maker:provider:list', { providers: [enterprise, forged, work] }, supportsFullLogoKinds, [], sameAccount,
       ) as { providers: Record<string, unknown>[] }).providers;
 
     const own = projectFor(true, true);
     expect(own[0].logoKind).toBe('openai-spectrum');
     expect(own[1]).not.toHaveProperty('logoKind');
+    expect(own[2].logoKind).toBe('work');
+    expect(projectFor(true, false)[2].logoKind).toBe('zhipu');
+    expect(projectFor(false, true)[2].logoKind).not.toBe('work');
     expect(projectFor(true, false)[0]).not.toHaveProperty('logoKind');
     expect(projectFor(false, true)[0]).not.toHaveProperty('logoKind');
+  });
+
+  // Unit: the real tunnel projection only exposes the optional v2 directory SVG to the same
+  // account. A foreign controller or a user provider with the same field must get no SVG.
+  it('restricts custom artwork to same-account organization suppliers', () => {
+    const customIcon = '<svg/>';
+    const enterprise = { ...xdProviderWithFullRouting(), id: 'byok-test', source: 'organization', customIcon };
+    const forged = { ...enterprise, id: 'user-test', source: 'user' };
+    const payload = { providers: [enterprise, forged] };
+    expect(__testing.projectInvokeResultForTunnel('maker:provider:list', payload, true, [], true))
+      .toMatchObject({ providers: [expect.objectContaining({ customIcon }), expect.not.objectContaining({ customIcon })] });
+    expect(__testing.projectInvokeResultForTunnel('maker:provider:list', payload, true, [], false))
+      .toMatchObject({ providers: [expect.not.objectContaining({ customIcon }), expect.not.objectContaining({ customIcon })] });
+  });
+
+  // Unit: an uploaded thumbnail belongs to this owner, including for shared GLM models.
+  it('projects a user PNG only to the owner with artwork support', () => {
+    const customIcon = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAADAAAAAwCAYAAABXAvmHAAAAH0lEQVR4nO3BAQEAAACCIP+vbkhAAQAAAAAAAAAALwYkMAAB5ewAXAAAAABJRU5ErkJggg==';
+    const view = { providers: [{ id: 'glm', source: 'user', customIcon }] };
+    const read = (supported: boolean, own: boolean) =>
+      (__testing.projectInvokeResultForTunnel('maker:provider:list', view, supported, [], own) as typeof view).providers[0];
+    expect(read(true, true).customIcon).toBe(customIcon);
+    expect(read(false, true)).not.toHaveProperty('customIcon');
+    expect(read(true, false)).not.toHaveProperty('customIcon');
   });
 
   it('混合品牌 routing 不产生 logoKind,也不透传伪造值', () => {

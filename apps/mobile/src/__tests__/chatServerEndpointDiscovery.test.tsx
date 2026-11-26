@@ -115,6 +115,37 @@ it('keeps another topic execution in the real group hook for group-wide settings
   expect(group.state.group.round.speakers).toMatchObject([{ botId, executionId, threadRootId: rootId }]);
 });
 
+// A refreshed list is authoritative for external status even while the snapshot is unavailable.
+it('updates cached external badges in both directions after snapshot failure', async () => {
+  vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, text: async () => texts.global })));
+  await (await import('@/config/clientEndpointStartup')).runStartupEndpointResolve();
+  const original = h.auth.apiFetch.getMockImplementation()!;
+  let external = false;
+  let failSnapshot = false;
+  h.auth.apiFetch.mockImplementation(async (path: string, options: any) => {
+    if (path.startsWith('/v1/conversations?')) return [{ ...room, external }];
+    if (path.endsWith('/snapshot') && failSnapshot) throw new Error('Snapshot timed out');
+    return original(path, options);
+  });
+  hooks = await import('@/chat/useChatServer');
+  await render();
+  const { peekCachedChatRoster, cacheChatRoster } = await import('@/device-link/remoteResourceCache');
+  const row = roster.items[0];
+  await cacheChatRoster(api.userId, api.realm, [{ ...row, item: { ...row.item,
+    display: { ...row.item.display, preview: 'Cached preview' } } }], new Set([roomId]));
+  failSnapshot = true;
+  for (const next of [true, false]) {
+    external = next;
+    await act(async () => { await roster.refresh(); });
+    expect(roster.error).toBe('CHAT_LIST_FAILED');
+    const cached = peekCachedChatRoster(api.userId, api.realm)!.items[0]!;
+    for (const row of [roster.items[0], cached]) {
+      expect(row.item.display.badges?.[0]?.tone).toBe(next ? 'external' : undefined);
+      expect(row.item.display.preview).toBe('Cached preview');
+    }
+  }
+});
+
 it.each(['cn', 'global'] as const)('release %s discovery feeds HTTP, WS and the phone owner identity', async region => {
   vi.stubEnv('EXPO_PUBLIC_CINDY_AUTH_REGION', region);
   vi.stubEnv('EXPO_PUBLIC_ENDPOINT_MANIFEST_BASE_URL', bases[region]);

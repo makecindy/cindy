@@ -53,7 +53,8 @@
   },
   "switchOutcome": {
     "applied": "A troca de provedor de modelo entrou em vigor.",
-    "failed": "Falha ao trocar o provedor de modelo. Escolha o modelo novamente."
+    "failed": "Falha ao trocar o provedor de modelo. Escolha o modelo novamente.",
+    "previousSettingsRetained": "A troca não foi concluída. A tarefa continuará usando as configurações anteriores."
   },
   "agentSwitch": {
     "browseAccessibility": "Explorar modelos de {{agent}}"
@@ -113,11 +114,52 @@
     "quotaAverageHint": "Cota semanal · Peso igual por conta",
     "quotaResetHint": "No ritmo atual, pode restar cota na redefinição: amarelo em até 24 horas, vermelho em até 6 horas."
   },
+  "modelGroups": {
+    "title": "Grupos de modelos",
+    "sourceCount_one": "{{count}} fonte",
+    "sourceCount_many": "{{count}} fontes",
+    "sourceCount_other": "{{count}} fontes",
+    "strategy": {
+      "expiring": "Primeiro o que expira",
+      "order": "Por ordem",
+      "rotate": "Em rodízio",
+      "cheapest": "O mais barato",
+      "drain": "Esgotar e passar",
+      "headroom": "Mais cota restante",
+      "weighted": "Por peso"
+    },
+    "sourceOnDevice": "{{provider}} · {{device}}",
+    "why": {
+      "expiringQuota": "Restam {{left}}% da cota, redefinida a {{reset}}, por isso vai primeiro",
+      "expiring": "Primeira pela cota",
+      "order": "A primeira fonte disponível",
+      "rotate": "Desta vez é a vez dela",
+      "only": "A única disponível agora",
+      "soonest": "Todas as fontes esgotaram a cota; esta recupera primeiro",
+      "soonestUntil": "Todas as fontes esgotaram a cota; esta recupera primeiro ({{reset}})",
+      "cheapest": "Menor preço de tabela",
+      "cheapestFree": "Ainda há cota de assinatura, sem custo adicional",
+      "drain": "Continua em uso até a cota acabar",
+      "drainNext": "A fonte anterior se esgotou ou ficou indisponível, então passou para esta",
+      "headroom": "Tem mais cota restante",
+      "headroomQuota": "Restam {{left}}% da cota, mais do que em qualquer outra fonte",
+      "weighted": "É a vez dela pelo peso",
+      "exceptionImage": "A mensagem tem imagens, então só foram consideradas as fontes que conseguem vê-las",
+      "exceptionImageFallback": "A mensagem tem imagens, mas nenhuma fonte consegue vê-las, então escolheu como de costume",
+      "exceptionHours": "Neste horário usa “{{name}}”",
+      "separator": "; "
+    },
+    "picker": {
+      "switched": "“{{name}}” trocou esta tarefa para {{model}}",
+      "switchUnavailable": "“{{name}}” não tem agora nenhuma fonte que esta tarefa possa usar. O modelo não foi alterado.",
+      "chooseUnavailable": "“{{name}}” não tem agora nenhuma fonte utilizável, então não foi selecionado."
+    },
+    "anotherDevice": "Outro computador"
+  },
   "pluginEngines": {
     "genericName": "Mecanismo de plugin",
     "defaultModel": "Modelo padrão",
     "unavailable": "{{engine}} está indisponível",
-    "unavailableWithHint": "{{engine}} está indisponível: {{hint}}",
-    "worktreeUnsupported": "Os mecanismos de plugins ainda não conseguem iniciar tarefas em uma Worktree. Desative a Worktree para enviar."
+    "unavailableWithHint": "{{engine}} está indisponível: {{hint}}"
   }
 }

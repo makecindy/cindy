@@ -1,4 +1,5 @@
 import { taskSnoozeUntil } from '@cindy/maker-shared/live-task-priority';
+import { patchSessionWithDeleteTarget } from '@cindy/maker-shared/device-link-contract';
 import { useCallback, useMemo, useRef, useState } from 'react';
 import { Alert } from 'react-native';
 import { useTranslation } from 'react-i18next';
@@ -131,15 +132,19 @@ export function useSessionListActions(options?: {
       if (patch.status !== undefined || patch.pinnedAt !== undefined || patch.snoozedUntil !== undefined) await updateList(applyOptimistic);
       else applyOptimistic();
       if (!applied) return;
+      const deleteTarget = patch.status === 'deleted'
+        ? session.sideChatPromoted ? 'task' : session.source === 'side-chat' ? 'side-chat' : undefined
+        : undefined;
       const updated = await withNewSessionCreationRemoval(session.id, rpcDeviceId, patch.status,
         () => sessionMetaWriteQueue.enqueue(session.id, fields, () => retryPatchWhileLatest(
         write.isLatest,
-        (assertStillLatest) => invoke<RemoteSession>(
+        (assertStillLatest) => patchSessionWithDeleteTarget(patch, deleteTarget, body => invoke<RemoteSession>(
           rpcDeviceId,
           'local-db:sessions:patch-meta',
-          [session.id, patch],
+          [session.id, body],
           { preSend: assertStillLatest },
-        ),
+        )),
+        deleteTarget ? 1 : undefined,
       )), write.isLatest);
       if (patch.snoozedUntil !== undefined && write.isLatest() && updated?.snoozedUntil !== patch.snoozedUntil) {
         throw new Error('UNSUPPORTED_CAPABILITY');
@@ -350,11 +355,9 @@ export function useSessionListActions(options?: {
     });
   }, [invoke, preferredRpcDeviceId, t]);
 
-  // Inbox Done. With an active automation bound it only marks the round read and the task
-  // returns to Working: archiving would recycle the worktree that the next round rebuilds
-  // (2026-11-18 user decision). Otherwise it archives in one tap, without the automation reminder.
+  // Done settles this round without archiving a pinned task or recycling an automation's worktree.
   const completeSession = useCallback((session: RemoteSession) => {
-    if (hasActiveAutomationRef.current?.(session)) {
+    if (session.pinnedAt || hasActiveAutomationRef.current?.(session)) {
       swipeRegistry.closeOpenRow();
       markSessionRead(session);
       return;

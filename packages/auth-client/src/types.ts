@@ -20,6 +20,10 @@ export const membershipSchema = z.object({
   email: z.string().nullable(),
   orgId: z.string().nullable(),
   orgName: z.string().nullable(),
+  // 企业实名与部门(auth-server GET /api/me 组织身份新增);personal 或未升级服务端省略。
+  enterpriseName: z.string().nullable().optional(),
+  department: z.string().nullable().optional(),
+  departmentPath: z.array(z.string()).nullable().optional(),
   // 企业 logo(auth console 组织设置上传);personal 或未设置 = null。
   // optional 兼容尚未升级的旧 auth-server 响应(缺字段不整份拒绝)。
   orgLogoUrl: z.string().nullable().optional(),
@@ -241,7 +245,10 @@ export const accountMembershipSchema = membershipSchema.extend({
 export type AccountMembership = z.infer<typeof accountMembershipSchema>;
 
 export const meResponseSchema = z.object({
-  membership: membershipSchema,
+  membership: membershipSchema.extend({
+    // Only a fresh response for the active organization can grant this capability.
+    companyTokenReporting: z.object({ participating: z.boolean(), models: z.array(z.string()), orgRevision: z.number().int().nonnegative(), memberRevision: z.number().int().nonnegative() }).optional().catch(undefined),
+  }),
   passportId: z.string().min(1),
   identities: z.array(membershipSchema),
 });
@@ -283,6 +290,48 @@ export const accountDeletionStatusSchema = z.object({
 export type AccountDeletionStatus = z.infer<
   typeof accountDeletionStatusSchema
 >;
+
+/**
+ * `/api/me/identities` 的已验证联系方式(值已由服务端打码)。
+ * `id` 与 `changeable` 随换绑接口上线新增:旧服务端缺这两个字段时,条目照常解析,
+ * 但不能换绑(客户端据此隐藏入口),避免部署先后顺序让整份列表解析失败。
+ */
+export const accountContactSchema = z.object({
+  id: z.string().min(1).optional(),
+  type: z.enum(["email", "phone"]),
+  value: z.string().min(1),
+  verifiedAt: z.string(),
+  changeable: z.boolean().optional(),
+});
+export type AccountContact = z.infer<typeof accountContactSchema>;
+
+export const accountIdentitiesSchema = z.object({
+  contacts: z.array(accountContactSchema),
+});
+
+export const contactChangeCodeSentSchema = z.object({
+  status: z.literal("sent"),
+  channel: z.enum(["email", "sms"]),
+  maskedTarget: z.string().min(1),
+});
+export type ContactChangeCodeSent = z.infer<typeof contactChangeCodeSentSchema>;
+
+export const contactChangeTicketSchema = z.object({
+  changeTicket: z.string().min(1),
+  type: z.enum(["email", "phone"]),
+  expiresAt: z.string().datetime(),
+});
+export type ContactChangeTicket = z.infer<typeof contactChangeTicketSchema>;
+
+export const contactChangeConfirmedSchema = z.object({
+  status: z.literal("ok"),
+  contact: accountContactSchema,
+});
+
+/** 换绑的新联系方式:类型由 changeTicket 决定,只带对应字段。 */
+export type ContactChangeTarget =
+  | { type: "phone"; phone: string }
+  | { type: "email"; email: string };
 
 /**
  * 托管回调链路(desktop 系统浏览器登录)的授权码取回结果。

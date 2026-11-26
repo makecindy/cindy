@@ -38,6 +38,7 @@ import { createProviderGroupRouter, type ProviderGroupRouter } from './router.js
 import type { ProviderGroupRemoteGroups } from './service.js';
 import { readProviderGroup } from './store.js';
 import { onSubscriptionAccountsChanged, readSubscriptionPoolUsage, readSubscriptionPoolModelAvailability, readSubscriptionPoolScheduling } from '../subscription-accounts/runtime.js';
+import { prepareLegacyOpenAiPool } from '../subscription-accounts/openAiPoolMerge.js';
 import { isSubscriptionProvider, parseSubscriptionPoolScheduling, type SubscriptionProvider } from '../../shared/subscriptionAccounts.js';
 import { providerWeeklyQuotaSource } from '../../shared/providerQuotaSource.js';
 import { DEVICE_LINK_PUSH } from '../../shared/deviceLinkIpc.js';
@@ -264,9 +265,13 @@ function runtimeForActiveOwner(): OwnerRuntime {
     localAppVersion: () => app.getVersion(),
     listDevices: async () => (await handleListDevices(deviceDirectoryDeps())).devices,
     readDeviceProviders: async (agentDeviceId, options) => rememberPools(agentDeviceId,
-      await readDeviceProviderViews(remoteBackgroundInvoke, agentDeviceId, { groupMember: true, live: options?.live })),
+      await readDeviceProviderViews(remoteBackgroundInvoke, agentDeviceId,
+        { groupMember: true, live: options?.live, ownFreshness: true })),
     readDeviceProviderCatalog: async (agentDeviceId, options) => {
-      const catalog = await readDeviceProviderCatalog(remoteBackgroundInvoke, agentDeviceId, { groupMember: true, live: options?.live });
+      // The directory keeps its own 15s cache and its retirement decisions need the host's
+      // current answer, so it opts out of the shared fresh window (still gets continuity fallback).
+      const catalog = await readDeviceProviderCatalog(remoteBackgroundInvoke, agentDeviceId,
+        { groupMember: true, live: options?.live, ownFreshness: true });
       rememberPools(agentDeviceId, catalog.views);
       return catalog;
     },
@@ -322,6 +327,7 @@ function runtimeForActiveOwner(): OwnerRuntime {
   const externalLoad = createProviderGroupExternalLoad({ now: () => Date.now() });
   const applicationLoad = createLocalAgentLoadRegistry();
   const router = createProviderGroupRouter({
+    prepareGroup: prepareLegacyOpenAiPool,
     directory,
     readPoolScheduling: async (member, model, options) => {
       if (!isCurrent() || !hasPool(member.providerId, member.agentDeviceId ?? '') || member.kind === 'share') return null;
@@ -416,6 +422,14 @@ const routerFacade: ProviderGroupRouter = {
     const runtime = runtimeForActiveOwner();
     const view = await runtime.router.view(providerId, options);
     return activeOwnerScopeKey() === runtime.owner ? view : { providerId, config: null, members: [] };
+  },
+  memberViews: (providerId) => {
+    const runtime = runtimeForActiveOwner();
+    return new Map([...runtime.router.memberViews(providerId)].map(([key, read]) => [key, async () => {
+      if (activeOwnerScopeKey() !== runtime.owner) return { providerId, config: null, members: [] };
+      const view = await read();
+      return activeOwnerScopeKey() === runtime.owner ? view : { providerId, config: null, members: [] };
+    }]));
   },
   running: (providerId, memberKey) => runtimeForActiveOwner().router.running(providerId, memberKey),
   markCooling: (providerId, memberKey, until, model) => runtimeForActiveOwner().router.markCooling(providerId, memberKey, until, model),

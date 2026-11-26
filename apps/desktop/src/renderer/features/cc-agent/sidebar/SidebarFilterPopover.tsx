@@ -175,6 +175,9 @@ const PROJECT_ORDER_OPTIONS: ReadonlyArray<Option<FilterProjectOrder>> = [
  * token=Coins、费用=Wallet。
  */
 const TASK_INFO_OPTIONS: ReadonlyArray<Option<TaskInfoField>> = [
+  { value: 'harness', labelKey: 'ccAgent.sidebar.taskInfo.harness', Icon: SquareTerminal },
+  { value: 'project', labelKey: 'ccAgent.sidebar.taskInfo.project', Icon: Folder },
+  { value: 'teammate', labelKey: 'ccAgent.sidebar.taskInfo.teammate', Icon: Bot },
   { value: 'time', labelKey: 'ccAgent.sidebar.taskInfo.time', Icon: Clock },
   { value: 'pr', labelKey: 'ccAgent.sidebar.taskInfo.pr', Icon: GitPullRequest },
   { value: 'worktree', labelKey: 'ccAgent.sidebar.taskInfo.worktree', Icon: Folders },
@@ -550,6 +553,7 @@ export function SidebarFilterPopover({
       : t('ccAgent.sidebar.filterSummaryNone');
 
   // 「任务信息」行摘要：已选项的短标签串;全不选显示「无」。
+  const summaryFields = taskInfoFields.length > 5 ? taskInfoFields.slice(0, 4) : taskInfoFields;
   const taskInfoSummary =
     taskInfoFields.length > 0
       ? taskInfoFields
@@ -610,7 +614,7 @@ export function SidebarFilterPopover({
               aria-pressed={inboxMode ? activeFilterCount > 0 : isFilterActive}
               className={cn(
                 // 配色与段头其余按钮统一(侧栏 token 对),不用通用 text-tertiary。
-                'relative flex h-7 w-7 items-center justify-center rounded-md',
+                'relative flex h-7 w-7 items-center justify-center rounded-lg',
                 'text-[var(--sidebar-list-muted)]',
                 'transition-colors hover:text-[var(--sidebar-nav-text)]',
               )}
@@ -931,6 +935,7 @@ export function SidebarFilterPopover({
               </MenuSubRow>
               <MenuSubRow
                 label={t('ccAgent.sidebar.taskInfoHeading')}
+                contentClassName="w-max min-w-[220px]"
                 value={taskInfoSummary}
                 Icon={Info}
                 valueNode={
@@ -938,7 +943,7 @@ export function SidebarFilterPopover({
                     // 已选项用图标串表示,不再罗列短词。顺序 = 用户勾选顺序(遍历
                     // taskInfoFields 而非选项表),与列表行的渲染顺序一致。
                     <span className="flex items-center justify-end gap-1">
-                      {taskInfoFields.map((field) => {
+                      {summaryFields.map((field) => {
                         const Icon = TASK_INFO_OPTIONS.find(
                           (option) => option.value === field,
                         )?.Icon;
@@ -952,6 +957,9 @@ export function SidebarFilterPopover({
                           />
                         ) : null;
                       })}
+                      {summaryFields.length < taskInfoFields.length && (
+                        <span aria-hidden>+{taskInfoFields.length - summaryFields.length}</span>
+                      )}
                     </span>
                   ) : undefined
                 }

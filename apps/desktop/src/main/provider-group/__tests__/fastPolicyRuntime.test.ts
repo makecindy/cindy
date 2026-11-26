@@ -96,6 +96,8 @@ vi.mock('../../device-link/agentNetSharing.js', () => ({
   agentNetProviderExecutorProof: () => state.agentNetStandby && state.pair ? { ...state.pair, delegation: { id: 'test-signed' } } : null,
 }));
 vi.mock('../../device-link/providerShareHost.js', () => ({
+  // This fixture replaces common guest access; keep the service's synchronous phase callback live.
+  withProviderShareGuestAccessSnapshot: <T>(read: () => T): T => read(),
   getProviderShareHostLoadedSnapshot: ownedShareSnapshot,
   ownedProviderShareGuestAccess: ownedGuestAccess,
   providerShareGuestDenial: () => state.accessDenial ?? (!ownedShareSnapshot() ? 'host-scope-stale' : !state.approved ? 'member-not-active' : null),
@@ -168,6 +170,7 @@ vi.mock('../../usage/providerPartyUsageStore.js', () => ({
 const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-fast-sync-'));
 vi.mock('../../logger.js', () => ({ createLogger: () => ({ info() {}, warn(...args: unknown[]) { state.warnings.push(args); }, error() {} }) }));
 vi.mock('../../appSessionState.js', () => ({
+  getDataOwnerLifetime: () => 0,
   activeOwnerScopeKey: () => state.owner,
   ownerScopedUserDataPath: (file: string) => path.join(temporary, state.owner, file),
   isAppSessionBoundaryPending: () => false,

@@ -125,10 +125,12 @@ vi.mock('../index', () => ({
   getDirectDataDeviceIds: () => [],
   getDeviceLinkConnectionIssue: () => null,
   isDeviceLinkStandby: () => false,
+  getDeviceIdentityConflict: () => null,
   getUnresponsiveDeviceIds: () => [],
   clearDeviceResponsiveness: vi.fn(),
   setRemoteControlEnabled: vi.fn(),
   setKeepAwakeEnabled: vi.fn(),
+  rejoinThisDevice: vi.fn(),
   openRemoteLink: vi.fn(),
   closeRemoteLink: vi.fn(),
   remoteInvoke: vi.fn(),
@@ -191,6 +193,7 @@ import { readWithSourceFileAccessRecovery, sourceFileAccessTransferOptions, onSo
 import { rewriteOutboundMedia } from '../outboundMedia';
 import { DeviceLinkError, REMOTE_INVOKE_ALLOWLIST } from '@cindy/device-link';
 import { DESKTOP_LOCAL } from '../../../shared/remoteDesktop';
+import { LOCAL_NETWORK_LOCAL } from '../../../shared/localNetwork';
 import {
   setRemoteControlEnabled,
   revokeController,
@@ -594,7 +597,7 @@ describe('local control authorization IPC boundary', () => {
   });
 
   it('never exposes local grants, revocation or capture IPC to remote invokes', () => {
-    for (const channel of [...calls.map(([channel]) => channel), ...Object.values(DESKTOP_LOCAL)]) {
+    for (const channel of [...calls.map(([channel]) => channel), ...Object.values(DESKTOP_LOCAL), ...Object.values(LOCAL_NETWORK_LOCAL)]) {
       expect(REMOTE_INVOKE_ALLOWLIST.has(channel), channel).toBe(false);
     }
   });

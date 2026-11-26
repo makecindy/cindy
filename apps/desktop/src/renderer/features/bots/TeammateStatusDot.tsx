@@ -2,7 +2,7 @@ import type { ReactNode } from 'react';
 import { Sparkles } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { cn } from '@/lib/utils';
-import { NavigationCountBadge } from '@/components/sidebar/NavigationCountBadge';
+import { CountBadge } from '@/components/ui/badge';
 import { TEAMMATE_AVATAR, type TeammateStatus } from '@cindy/maker-shared/teammate-status';
 
 const COLOR: Record<Exclude<TeammateStatus, 'idle'>, string> = {
@@ -43,8 +43,8 @@ export function TeammateRowStatus({ status, groupUnread, mentioned = false, inli
   return <span data-teammate-row-status className={cn('pointer-events-none flex h-4 items-center justify-end', !inline && 'absolute right-2.5')}>
     {groupUnread !== undefined && (status === 'running' || status === 'unread' || blueCount) ? (
       <span data-teammate-unread-count data-teammate-mention={blueCount || undefined}>
-        <NavigationCountBadge count={groupUnread} label={[t('sidebar.teammateUnreadCount', { count: groupUnread }), ...(blueCount ? [t('bots.groupChat.server.thread.hintMentioned')] : [])].join(' · ')}
-          className={blueCount ? 'bg-[var(--bot-unread-bg)] text-[var(--bot-unread-fg)]' : undefined} />
+        <CountBadge count={groupUnread} label={[t('sidebar.teammateUnreadCount', { count: groupUnread }), ...(blueCount ? [t('bots.groupChat.server.thread.hintMentioned')] : [])].join(' · ')}
+          tone={blueCount ? 'unread' : 'neutral'} />
       </span>
     ) : <TeammateStatusDot status={status} group={groupUnread !== undefined} mentioned={mentioned} inline />}
   </span>;

@@ -401,11 +401,11 @@ export function AddRemoteProjectDialog({
     <Dialog.Root open={open} onOpenChange={busy ? undefined : onOpenChange}>
       <Dialog.Portal>
         <Dialog.Overlay
-          className="modal-scrim fixed inset-0 z-50"
+          className="modal-scrim fixed inset-0 z-modal"
         />
         <Dialog.Content
           onPointerDownOutside={(event) => event.preventDefault()}
-          className="modal-panel fixed left-1/2 top-1/2 z-50 flex w-[560px] max-w-[92vw] -translate-x-1/2 -translate-y-1/2 flex-col"
+          className="modal-panel fixed left-1/2 top-1/2 z-modal flex w-[560px] max-w-[92vw] -translate-x-1/2 -translate-y-1/2 flex-col"
           style={{
             // Keep the centered shell still across mode changes and async list loading.
             height: noTargets ? undefined : 660,
@@ -439,7 +439,7 @@ export function AddRemoteProjectDialog({
                   type="button"
                   disabled={busy}
                   aria-label={t('newChat.addRemoteProject.cancel')}
-                  className="flex h-6 w-6 items-center justify-center rounded-md transition-colors hover:bg-[var(--surface-chip)] disabled:opacity-40"
+                  className="flex h-6 w-6 items-center justify-center rounded-lg transition-colors hover:bg-[var(--surface-chip)] disabled:opacity-40"
                   style={{ color: 'var(--text-secondary)' }}
                 >
                   <X size={16} />
