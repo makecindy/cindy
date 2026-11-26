@@ -350,6 +350,7 @@ describe('TextLightbox — detectRenderable', () => {
   });
 
   it('routes common code extensions to highlighted code with the right hljs alias', () => {
+    expect(detectRenderable('Contract.SOL')).toEqual({ kind: 'code', lang: 'solidity' });
     expect(detectRenderable('config.json')).toEqual({ kind: 'code', lang: 'json' });
     expect(detectRenderable('app.tsx')).toEqual({ kind: 'code', lang: 'typescript' });
     expect(detectRenderable('script.py')).toEqual({ kind: 'code', lang: 'python' });

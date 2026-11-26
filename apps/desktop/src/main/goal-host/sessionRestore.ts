@@ -5,11 +5,15 @@ import { markOrcaMcpHydratedIfNeeded } from '../maker-ipc/orcaMcpHydrationCache.
 import { preparePersistedOrcaSessionStart } from '../maker-ipc/orcaSessionStartOptions.js';
 import type { MakerSessionCreateOpts } from '../maker-ipc/sessionRequest.js';
 import { wireSessionToIpc } from '../maker-ipc/register.js';
+import { isPluginEngineTask } from '../maker-host/engineKind.js';
 import { hydrateSessionProvider } from '../maker-host/session-provider-store.js';
 import type { SessionLike } from './types.js';
 
+/** A live Maker session of any engine (plugin engines included, 2026-11-25). */
+type GoalRestoreLiveSession = SessionLike;
+
 interface GoalSessionRestoreMaker {
-  getSession(sessionId: string): SessionLike | undefined;
+  getSession(sessionId: string): GoalRestoreLiveSession | undefined;
   getSessionMeta(sessionId: string): Promise<SessionMeta | null>;
   createSession(opts: MakerSessionCreateOpts): Promise<Session>;
 }
@@ -49,6 +53,9 @@ export async function restoreSessionForGoal(
     deps.warn('[goal-host] cannot resume session (no meta)', { sessionId });
     return undefined;
   }
+  // A plugin-engine task (docs/plans/acp-plugin-bridge.md) resumes on its own engine: the row's
+  // providerId names it, and an engine on another computer of the same account stays there.
+  const pluginEngine = isPluginEngineTask(meta);
 
   try {
     const row = await (deps.getSessionRow ?? getSessionRowSnapshot)(sessionId);
@@ -62,6 +69,8 @@ export async function restoreSessionForGoal(
       fastMode: meta.fastMode,
       resumeSessionId: meta.sdkSessionId,
       remoteHostId: meta.remoteHostId,
+      ...(pluginEngine && meta.agentDeviceId ? { agentDeviceId: meta.agentDeviceId } : {}),
+      ...(pluginEngine ? { fastMode: false } : {}),
       // A persisted null explicitly selects the Cindy default route for Pi;
       // only a missing row has no route value to pass through.
       providerId: row?.providerId,

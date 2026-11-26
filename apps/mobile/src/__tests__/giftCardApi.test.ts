@@ -14,7 +14,9 @@ describe('mobile gift card api', () => {
   it('sends the code in the body only and returns the projected card', async () => {
     const post = vi.fn().mockResolvedValue({ card: { ...card, internal: 'x' } });
     const signal = new AbortController().signal;
-    await expect(createGiftCardApi(post).preview(CODE, signal)).resolves.toEqual({ ok: true, card });
+    // 旧服务端不下发 destination：后台发的卡，进赠送余额；也不下发卡面，按 faceCode 用内置卡面。
+    await expect(createGiftCardApi(post).preview(CODE, signal))
+      .resolves.toEqual({ ok: true, card: { ...card, face: null, destination: 'PROMOTIONAL' } });
     expect(post).toHaveBeenCalledWith('/api/gift-cards/preview', { code: CODE }, signal);
     expect(post.mock.calls[0][0]).not.toContain(CODE);
   });

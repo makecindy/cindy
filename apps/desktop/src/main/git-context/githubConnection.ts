@@ -4,14 +4,19 @@ import type { GithubConnectionState } from '../../shared/githubSetup.js';
 export async function githubConnection(deps: {
   readGh(): Promise<string | null>;
   readFallback(): string | null;
+  readApp?(): Promise<string | null>;
   fetch: typeof fetch;
 }): Promise<GithubConnectionState> {
-  let source: 'gh-cli' | 'token' = 'gh-cli';
+  let source: 'gh-cli' | 'token' | 'github-app' = 'gh-cli';
   try {
     let token = await deps.readGh();
     if (!token) {
       source = 'token';
       token = deps.readFallback();
+    }
+    if (!token && deps.readApp) {
+      source = 'github-app';
+      token = await deps.readApp();
     }
     if (!token) return { status: 'missing' };
     const response = await deps.fetch('https://api.github.com/user', {
@@ -23,7 +28,11 @@ export async function githubConnection(deps: {
       await response.body?.cancel();
       return {
         status:
-          response.status === 401 ? 'auth' : response.status === 403 ? 'forbidden' : 'network',
+          response.status === 401
+            ? 'auth'
+            : response.status === 403 || response.status === 429
+              ? 'forbidden'
+              : 'network',
         source,
       };
     }
@@ -46,7 +55,17 @@ export async function connectGithubSignInResult(
   reauthorize: boolean,
   deps: { readConnection(): Promise<GithubConnectionState>; openSignIn(): boolean },
 ): Promise<Record<string, unknown>> {
-  const connection = await deps.readConnection();
+  let connection = await deps.readConnection();
+  if (!reauthorize && connection.status === 'network') connection = await deps.readConnection();
+  if (!reauthorize && (connection.status === 'network' || connection.status === 'forbidden')) {
+    return {
+      ok: false, errorCode: connection.status === 'network' ? 'GITHUB_CONNECTION_UNAVAILABLE' : 'GITHUB_ACCESS_FORBIDDEN',
+      ghostId, connection: connection.status, signInOpened: false,
+      message: connection.status === 'network'
+        ? 'GitHub account verification is temporarily unavailable. Try again later.'
+        : 'GitHub denied this request. Check account permissions or rate limits.',
+    };
+  }
   if (connection.status === 'connected' && !reauthorize) {
     return {
       ok: true, status: 'ready', ghostId, login: connection.login,

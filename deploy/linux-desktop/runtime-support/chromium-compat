@@ -1,0 +1,3 @@
+#!/bin/sh
+# The application looks for Chromium at this path; the image ships only Chrome.
+exec /opt/google/chrome/google-chrome "$@"

@@ -267,7 +267,7 @@ export function BrowserCommentPopover({
   };
 
   const inputCls = cn(
-    'w-full rounded-md border border-[var(--border-default)] bg-transparent',
+    'w-full rounded-full border border-[var(--border-default)] bg-transparent',
     'px-2 py-1 text-12 leading-[1.4] text-[var(--text-primary)]',
     'placeholder:text-[var(--text-placeholder)] outline-none',
     'focus:border-[var(--focus-ring)] focus:ring-1 focus:ring-[var(--focus-ring-soft)]',
@@ -285,7 +285,7 @@ export function BrowserCommentPopover({
       onClick={() => setShowStyles((v) => !v)}
       disabled={submitting}
       className={cn(
-        'flex size-6 items-center justify-center rounded-md transition-colors',
+        'flex size-6 items-center justify-center rounded-lg transition-colors',
         'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
         showStyles || changes.length > 0
           ? 'bg-sidebar-item-active text-sidebar-item-active-foreground'
@@ -300,7 +300,7 @@ export function BrowserCommentPopover({
     <div
       ref={rootRef}
       className={cn(
-        'absolute z-20 flex flex-col gap-2 rounded-lg border border-[var(--border-default)]',
+        'absolute z-page-float flex flex-col gap-2 rounded-lg border border-[var(--border-default)]',
         'bg-[var(--surface-elevated)] p-2.5 shadow-[shadow:var(--shadow-menu)]',
       )}
       style={{ left: pos.left, top: pos.top, width: POPOVER_WIDTH }}
@@ -314,7 +314,7 @@ export function BrowserCommentPopover({
         disabled={submitting}
         placeholder={t('rightSidebar.browser.commentPlaceholder')}
         className={cn(
-          'w-full resize-none rounded-md border border-[var(--border-default)] bg-transparent',
+          'w-full resize-none rounded-lg border border-[var(--border-default)] bg-transparent',
           'px-2 py-1.5 text-12 leading-[1.5] text-[var(--text-primary)]',
           'placeholder:text-[var(--text-placeholder)] outline-none',
           'focus:border-[var(--focus-ring)] focus:ring-1 focus:ring-[var(--focus-ring-soft)]',
@@ -323,7 +323,7 @@ export function BrowserCommentPopover({
 
       {/* 样式编辑区(Codex styling feedback):仅元素点选且基线可用时提供。 */}
       {designBaseline && showStyles && (
-        <div className="flex flex-col gap-1.5 rounded-md border border-[var(--border-default)] p-2">
+        <div className="flex flex-col gap-1.5 rounded-lg border border-[var(--border-default)] p-2">
           {designBaseline.editableText !== null && (
             <label className="flex items-center gap-2 text-11 text-[var(--text-secondary)]">
               <span className="w-[88px] shrink-0 truncate">
@@ -355,7 +355,7 @@ export function BrowserCommentPopover({
                     value={cssColorToHex(value) ?? hexBaseline}
                     onChange={(e) => setStyleEdit(property, e.target.value)}
                     disabled={submitting}
-                    className="h-6 w-10 shrink-0 cursor-pointer rounded border border-[var(--border-default)] bg-transparent p-0.5"
+                    className="h-6 w-10 shrink-0 cursor-pointer rounded-[4px] border border-[var(--border-default)] bg-transparent p-0.5"
                   />
                 ) : (
                   <input
@@ -395,7 +395,7 @@ export function BrowserCommentPopover({
                 aria-disabled="true"
                 aria-label={styleTweaksLabel}
                 tabIndex={0}
-                className="inline-flex rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
+                className="inline-flex rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
               >
                 {styleTweaksButton}
               </span>

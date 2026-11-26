@@ -1,6 +1,6 @@
 {
   "sectionTitle": "기프트 카드",
-  "settingsFooter": "교환 코드를 입력하거나 기프트 카드 링크를 붙여넣어 프로모션 잔액에 추가하세요. 기프트 카드는 개인 계정으로만 받을 수 있습니다.",
+  "settingsFooter": "교환 코드를 입력하거나 기프트 카드 링크를 붙여넣어 잔액에 추가하세요. 기프트 카드는 개인 계정으로만 받을 수 있습니다.",
   "action": "기프트 카드 사용",
   "title": "기프트 카드 사용",
   "inputLabel": "교환 코드",
@@ -13,10 +13,13 @@
   "cardLabel": "Cindy 기프트 카드, {{amount}}",
   "fields": {
     "validity": "유효 기간",
+    "validityValue_one": "받은 후 {{count}}일",
     "validityValue_other": "받은 후 {{count}}일",
     "claimBy": "받기 기한",
     "destination": "추가 위치",
-    "destinationValue": "프로모션 잔액"
+    "destinationValue": "프로모션 잔액",
+    "destinationPurchased": "충전 잔액",
+    "validityPermanent": "기한 없음"
   },
   "doneTitle": "{{amount}} 추가됨",
   "doneDescription": "프로모션 잔액에 추가되었습니다. {{date}}까지 유효합니다.",
@@ -32,8 +35,11 @@
     "alreadyClaimed": "이미 다른 사람이 받은 기프트 카드입니다.",
     "expired": "이 기프트 카드는 받기 기한이 지났습니다.",
     "voided": "이 기프트 카드는 무효화되었습니다.",
+    "voidedPurchased": "이 기프트 카드는 지금 받을 수 없습니다.",
     "rateLimited": "시도 횟수가 너무 많습니다. 잠시 후 다시 시도하세요.",
     "failed": "기프트 카드를 받지 못했습니다. 잠시 후 다시 시도하세요.",
     "personalRequired": "기프트 카드는 개인 계정으로만 받을 수 있습니다."
-  }
+  },
+  "doneDescriptionPurchased": "충전 잔액에 추가했어요. 기한이 없습니다.",
+  "pendingDescriptionPurchased": "{{amount}}을(를) 추가하는 중입니다. 곧 충전 잔액에 표시되며 다시 받을 필요는 없습니다."
 }

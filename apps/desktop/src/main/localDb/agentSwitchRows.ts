@@ -1,15 +1,18 @@
-import { and, desc, eq, gt, isNull } from 'drizzle-orm';
+import { and, desc, eq, gt, isNull, sql } from 'drizzle-orm';
 import { getDbClient } from './client/current.js';
-import { messages, sessions } from './schema.js';
+import { messages, schedules, sessions } from './schema.js';
 import { messageRowid } from './retriedUserTurnSupersede.js';
-import { persistableSessionEffort, projectSessionRuntimeFields } from './mapper.js';
-import { normalizeDbAgentKind } from '../../shared/agentKindConversion.js';
+import { messageToCamel, persistableSessionEffort, projectSessionRuntimeFields } from './mapper.js';
+import { isPluginEngineKind, normalizeDbAgentKind, type DbEngineKind } from '../../shared/agentKindConversion.js';
 import { isProviderShareAgentDeviceId } from '../../shared/providerShare.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
 
+type OwnerBroadcastScope = ReturnType<typeof import('../device-link/broadcast-tap.js').captureDataOwnerBroadcastScope>;
+
 /** The agent-switch row patch (applyAgentSwitchToSessionRow). */
 export type AgentSwitchRowPatch = {
-    agentKind: 'cc' | 'codex' | 'pi';
+    /** 'acp' = 插件引擎(docs/plans/acp-plugin-bridge.md)，providerId 指出是哪一个。 */
+    agentKind: DbEngineKind;
     model: string;
     providerId: string | null | undefined;
     sdkSessionId?: string | null;
@@ -19,6 +22,8 @@ export type AgentSwitchRowPatch = {
     contextWindow?: number | null;
     /** 远程 Agent 换电脑:undefined = 不动,null = 改回任务所在电脑。 */
     agentDeviceId?: string | null;
+    /** 切到插件引擎时收窄到它提供的权限模式；undefined = 不动。 */
+    permissionMode?: string;
   };
 
 /** The owner fence and the session broadcast the caller writes through (the desktop: localDb/ipc/sessions.ts). */
@@ -65,23 +70,40 @@ export async function applyAgentSwitchToSessionRowWithPorts<OwnerScope>(
   if (patch.agentDeviceId !== undefined) setObj.agentDeviceId = patch.agentDeviceId;
   // effort 值域由 renderer 按目标引擎 capabilities 解析(schema 列是字面量联合,
   // 跨层传输后此处以 string 到达;非法值与直改 DB 同级,运行时由引擎侧收敛)。
-  // 固定 effort 模型运行时为 null；sessions.effort NOT NULL，省略该字段。
-  const persistableEffort = persistableSessionEffort(patch.effort);
+  // 固定 effort 的内置模型运行时为 null；sessions.effort NOT NULL，省略该字段保留记忆。
+  // 插件引擎用空串表示「模型不提供思考档位 / 由引擎自己决定」，必须显式写回 '' 清掉旧档位。
+  const persistableEffort = isPluginEngineKind(patch.agentKind) && patch.effort === ''
+    ? ('' as typeof sessions.$inferInsert['effort'])
+    : persistableSessionEffort(patch.effort);
   if (persistableEffort !== undefined) {
     setObj.effort = persistableEffort;
   }
   if (patch.fastMode !== undefined) setObj.fastMode = patch.fastMode;
+  if (patch.permissionMode !== undefined) {
+    // 值域由调用方按目标引擎提供的模式收窄(pluginEngineSessionAdmission)，与列枚举同一组取值。
+    setObj.permissionMode = patch.permissionMode as NonNullable<typeof sessions.$inferInsert['permissionMode']>;
+  }
   if (typeof patch.contextWindow === 'number' && patch.contextWindow > 0) {
     setObj.contextWindow = Math.floor(patch.contextWindow);
   }
   // RETURNING keeps the projection tied to this committed write, including axes
   // omitted by the caller. A later SELECT could observe a newer selection.
-  const [committed] = await db.update(sessions).set(setObj).where(eq(sessions.id, sessionId))
+  const pluginTarget = isPluginEngineKind(patch.agentKind);
+  // Pair with the guarded schedule writes. SQLite arbitrates the two writes
+  // even when different desktop instances share the same profile.
+  const condition = pluginTarget ? sql`NOT EXISTS (
+    SELECT 1 FROM ${schedules} WHERE ${sessions.source} = 'scheduler' AND ${schedules.targetSessionId} = ${sessions.id}
+  )` : undefined;
+  const [committed] = await db.update(sessions).set(setObj).where(and(eq(sessions.id, sessionId), condition))
     .returning({
       id: sessions.id, agentKind: sessions.agentKind, model: sessions.model,
+      agentDeviceId: sessions.agentDeviceId,
       providerId: sessions.providerId, effort: sessions.effort, fastMode: sessions.fastMode,
       scheduledModelBaseline: sessions.scheduledModelBaseline,
     });
+  if (!committed && pluginTarget) {
+    throwIpcError('PRECONDITION_FAILED', 'this task no longer accepts a plugin engine');
+  }
   if (!committed || !isOwnerScopeCurrent(ownerScope)) return;
   broadcastSessionPatched(
     sessionId,
@@ -93,12 +115,17 @@ export async function applyAgentSwitchToSessionRowWithPorts<OwnerScope>(
       ...(patch.agentDeviceId !== undefined ? { agentDeviceId: patch.agentDeviceId } : {}),
       ...(persistableEffort !== undefined ? { effort: persistableEffort } : {}),
       ...(patch.fastMode !== undefined ? { fastMode: patch.fastMode } : {}),
+      ...(patch.permissionMode !== undefined ? { permissionMode: patch.permissionMode } : {}),
       ...(typeof patch.contextWindow === 'number' && patch.contextWindow > 0
         ? { contextWindow: Math.floor(patch.contextWindow) }
         : {}),
       // Publish before the consumed intent is cleared. Otherwise the composer
       // falls back to runtimeEffective from its last full read.
-      ...projectSessionRuntimeFields({ ...committed, agentKind: normalizeDbAgentKind(committed.agentKind) }),
+      // 插件引擎任务原样带 'acp'，投影按它跳过内置模型目录(归一化会把它当成 Claude Code)。
+      ...projectSessionRuntimeFields({
+        ...committed,
+        agentKind: (isPluginEngineKind(committed.agentKind) ? committed.agentKind : normalizeDbAgentKind(committed.agentKind)) as Parameters<typeof projectSessionRuntimeFields>[0]['agentKind'],
+      }),
     },
     ownerScope,
   );
@@ -262,4 +289,26 @@ export async function findParkedEngineSession(
     };
   }
   return null;
+}
+
+/** messages.ts's rebroadcastAgentSwitchBoundary, with its owner check and broadcast passed in. */
+export async function rebroadcastAgentSwitchBoundaryWith(
+  ports: {
+    isOwnerBroadcastScopeCurrent: (scope: OwnerBroadcastScope | null | undefined) => boolean;
+    broadcastMessageRow: (sessionId: string, message: ReturnType<typeof messageToCamel>, ownerScope?: OwnerBroadcastScope | null) => void;
+  },
+  sessionId: string,
+  boundaryClientId: string,
+  ownerScope: OwnerBroadcastScope | null,
+): Promise<void> {
+  const { isOwnerBroadcastScopeCurrent, broadcastMessageRow } = ports;
+  const db = getDbClient().drizzle;
+  const [row] = await db
+    .select()
+    .from(messages)
+    .where(and(eq(messages.sessionId, sessionId), eq(messages.clientId, boundaryClientId)))
+    .limit(1);
+  if (row && isOwnerBroadcastScopeCurrent(ownerScope)) {
+    broadcastMessageRow(sessionId, messageToCamel(row), ownerScope);
+  }
 }

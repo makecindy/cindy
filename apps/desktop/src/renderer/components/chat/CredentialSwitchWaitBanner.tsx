@@ -20,6 +20,7 @@ import { Spinner } from '@/components/ui/spinner';
 import { cn } from '@/lib/utils';
 
 interface CredentialSwitchWaitBannerProps {
+  sessionId: string | null | undefined;
   /** 挡路的本地 Codex 会话 ids(main 透传;可能为空 = 未知)。 */
   blockedBySessionIds: string[];
   /** 取消等待(上层删除队首消息)。无队首时不显示取消按钮。 */
@@ -29,6 +30,7 @@ interface CredentialSwitchWaitBannerProps {
 }
 
 export function CredentialSwitchWaitBanner({
+  sessionId,
   blockedBySessionIds,
   onCancel,
   style,
@@ -38,7 +40,8 @@ export function CredentialSwitchWaitBanner({
   const [blockerTitles, setBlockerTitles] = useState<string[]>([]);
   // projection 每次 emit 都会产出新数组身份(等待期间 2s 重试周期也在 emit),
   // 以内容 key 做依赖,避免标题反复重拉。sessionId 不含逗号,join 无碰撞。
-  const blockersKey = blockedBySessionIds.join(',');
+  const blockersKey = blockedBySessionIds.filter((id) => id !== sessionId).join(',');
+  const waitsOnItself = !blockersKey && blockedBySessionIds.length > 0;
 
   // best-effort 解析挡路会话标题(失败/无标题静默降级为通用文案)。
   useEffect(() => {
@@ -63,6 +66,8 @@ export function CredentialSwitchWaitBanner({
       cancelled = true;
     };
   }, [blockersKey]);
+
+  if (waitsOnItself) return null;
 
   // 未起名会话过投影再拼进文案:横幅里原样会露出内部哨兵 "New Maker"。
   // 刻意在**渲染这一刻**投影、state 里存原始标题:切语言后本次渲染就跟着变,
@@ -90,13 +95,13 @@ export function CredentialSwitchWaitBanner({
   return (
     <div
       className={cn(
-        'mx-auto flex select-none items-start gap-2 rounded-md px-3 py-2',
+        'mx-auto flex select-none items-start gap-2 rounded-xl px-3 py-2',
         'bg-[var(--upgrade-banner-bg)] border border-[var(--upgrade-banner-border)]',
         className,
       )}
       style={style}
     >
-      <Spinner size={14} className="mt-[2px] text-[var(--upgrade-banner-fg)]" />
+      <Spinner size={14} className="mt-0.5 text-[var(--upgrade-banner-fg)]" />
       <span className="flex-1 min-w-0 text-xs text-[var(--upgrade-banner-fg)] break-all">
         {message}
       </span>

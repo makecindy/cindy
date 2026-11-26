@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 
 import {
   collapseWorktreeDirForGrouping,
+  sessionProjectDirectory,
+  sessionTaskProjectIconDirectory,
   groupingWorktreeBaseRepo,
   isManagedWorktreeDirectoryName,
   managedWorktreeBaseRepo,
@@ -39,6 +41,13 @@ describe('worktreePaths', () => {
     expect(managedWorktreeBaseRepo('/repo/.cindy-worktrees/serene-lovelace')).toBe('/repo');
     expect(managedWorktreeBaseRepo('/repo/.cindy-worktrees/serene-lovelace/src/main')).toBe('/repo');
     expect(managedWorktreeBaseRepo('/repo/.xdt-worktrees/pensive-pasteur')).toBe('/repo');
+  });
+
+  it('opens the owning project for legacy managed tasks and honors explicit membership', () => {
+    const workingDir = '/repo/.cindy-worktrees/checkout';
+    expect(sessionProjectDirectory({ workingDir, projectDir: null })).toBe('/repo');
+    expect(sessionProjectDirectory({ workingDir, projectDir: '/selected' })).toBe('/selected');
+    expect(sessionProjectDirectory({ workingDir: '/repo/.worktrees/custom' })).toBe('/repo/.worktrees/custom');
   });
 
   it('collapses conventional worktree layouts only for grouping', () => {
@@ -98,5 +107,21 @@ describe('worktreePaths', () => {
     expect(isManagedWorktreeDirectoryName('.worktrees')).toBe(false);
     expect(isManagedWorktreeDirectoryName('.CINDY-WORKTREES')).toBe(false);
     expect(isManagedWorktreeDirectoryName('.Xdt-Worktrees')).toBe(false);
+  });
+});
+
+// Unit: inbox icons must use the same project across both clients. Existing path
+// tests don't exercise session membership: a sibling worktree, dialogue cwd, or
+// companion lane can otherwise fetch the wrong project's icon.
+describe('inbox project icon identity', () => {
+  it.each([
+    [{ workingDir: '/repo/.cindy-worktrees/topic' }, '/repo'],
+    [{ workingDir: '/sibling-checkout', projectDir: '/repo' }, '/repo'],
+    [{ workingDir: '/dialogue/runtime', workspaceKind: 'dialogue' }, null],
+    [{ workingDir: '/lane', workspaceKind: 'dialogue', companion: { taskProjectDir: '/buddy' } }, '/buddy'],
+    [{ workingDir: 'C:/Repo/.CINDY-WORKTREES/topic' }, 'C:/Repo'],
+    [{ workingDir: null }, null],
+  ])('resolves displayed membership for %j', (session, directory) => {
+    expect(sessionTaskProjectIconDirectory(session)).toBe(directory);
   });
 });

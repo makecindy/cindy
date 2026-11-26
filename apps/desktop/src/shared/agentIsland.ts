@@ -224,7 +224,7 @@ export const DEFAULT_AGENT_ISLAND_SOUND_SETTINGS: AgentIslandSoundSettings = {
   },
 };
 
-export const DEFAULT_AGENT_ISLAND_MASCOT_SKIN: AgentIslandMascotSkin = 'pululu';
+export const DEFAULT_AGENT_ISLAND_MASCOT_SKIN: AgentIslandMascotSkin = 'cindy';
 export const DEFAULT_AGENT_ISLAND_DISPLAY_TARGET: AgentIslandDisplayTarget = { mode: 'all' };
 export const AGENT_ISLAND_MIN_DARWIN_MAJOR = 23; // macOS 14 Sonoma.
 

@@ -205,7 +205,7 @@ export interface PinnedSectionProps {
   notifications: ReadonlySet<string>;
   selectedSessionIds?: ReadonlySet<string>;
   onSessionClick: SessionClickHandler;
-  onAction: (id: string, action: 'delete' | 'archive' | 'archive-now' | 'unarchive') => void;
+  onAction: (id: string, action: 'delete' | 'archive' | 'archive-now' | 'complete' | 'unarchive') => void;
   onRename: (id: string, title: string) => void;
   onTogglePin: (id: string, currentlyPinned: boolean) => void;
   onMoveSession?: (id: string, target: SessionMoveTarget) => void;
@@ -408,7 +408,7 @@ export function PinnedSection({
   if (entries.length === 0) return null;
 
   return (
-    <div className="flex flex-col w-full">
+    <div data-sortable-scope="pinned" className="flex flex-col w-full">
       {/* Section Title — height 24, padding [0,12,0,24]
           颜色规格（2026-04-20 二次确认对标设计稿 ZVIpx/WazkW）：
             Light #262626 / Dark #f5f0e8（深色文本，非 Stone 灰）
@@ -437,7 +437,7 @@ export function PinnedSection({
                 aria-label={toggleLabel}
                 aria-expanded={!collapsed}
                 className={cn(
-                  'flex h-5 w-5 shrink-0 items-center justify-center rounded-md',
+                  'flex h-5 w-5 shrink-0 items-center justify-center rounded-lg',
                   // 无灰底 hover(2026-07 用户定稿):纯色加深反馈,与段标题一致。
                   'text-[var(--sidebar-list-muted)]',
                   'transition-colors hover:text-[var(--sidebar-nav-text)]',
@@ -457,7 +457,7 @@ export function PinnedSection({
                 type="button"
                 aria-label={t('ccAgent.sidebar.viewStyle')}
                 className={cn(
-                  'flex h-5 w-5 shrink-0 items-center justify-center rounded-md',
+                  'flex h-5 w-5 shrink-0 items-center justify-center rounded-lg',
                   'text-[var(--sidebar-list-muted)]',
                   'transition-colors hover:text-[var(--sidebar-nav-text)]',
                 )}
@@ -496,6 +496,7 @@ export function PinnedSection({
           ) : mode === 'card' ? (
             <CardMasonry
               items={slicedEntries}
+              disabled={sortBy !== 'manual'}
               getId={getEntryId}
               onReorder={onReorder}
               reducedMotion={reducedMotion}
@@ -509,6 +510,7 @@ export function PinnedSection({
             // 一条顶线覆盖"列表顶";高亮(active/选中/hover)行及其相邻行的线隐藏。
             <SortableList
               items={slicedEntries}
+              disabled={sortBy !== 'manual'}
               getId={getEntryId}
               onReorder={onReorder}
               reducedMotion={reducedMotion}
@@ -519,6 +521,7 @@ export function PinnedSection({
           ) : (
             <SortableList
               items={slicedEntries}
+              disabled={sortBy !== 'manual'}
               getId={getEntryId}
               onReorder={onReorder}
               reducedMotion={reducedMotion}

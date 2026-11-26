@@ -9,6 +9,8 @@ import { BotPronounProvider, useBotTranslation } from './botPronounContext';
 import { BotSettings } from './BotsHomeView';
 import { useBotProfiles } from './botStore';
 import { useCompanionCloud } from './companionCloudStore';
+import { useDeviceLinkDeviceList } from '@/features/device-link/useDeviceLinkDeviceList';
+import { cloudCompanionAt, homeControlOff, cloudRemoteBots } from './companionCloudPresentation';
 import { standardSessionRoute } from '@/lib/orcaSessionIdentity';
 import { useRemoteBots } from './useRemoteBots';
 import { RemoteTeammateSettings } from './RemoteTeammateSettings';
@@ -20,7 +22,10 @@ export function BotSettingsDrawer() {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const bots = useBotProfiles();
-  const remoteBots = useRemoteBots();
+  const cloud = useCompanionCloud();
+  const devices = useDeviceLinkDeviceList();
+  // Resolve the same rows as the list, including companions whose home was never discovered.
+  const remoteBots = cloudRemoteBots(cloud, useRemoteBots());
   const remoteMatch = matchPath('/bots/remote/:deviceId/:botId', location.pathname);
   const remoteBot = remoteBots.find(
     (item) =>
@@ -34,7 +39,6 @@ export function BotSettingsDrawer() {
       ? null
       : (matchPath('/bots/:botId/*', location.pathname) ??
         matchPath('/bots/:botId', location.pathname));
-  const cloud = useCompanionCloud();
   const settingsBotId = groupMatch ? searchParams.get('settingsBot') : null;
   const localBot = remoteMatch
     ? null
@@ -135,14 +139,14 @@ export function BotSettingsDrawer() {
     <Dialog.Root open={open} onOpenChange={(next) => !next && close()}>
       <Dialog.Portal>
         {/* Keep portaled controls inside the overlay’s React tree so its scroll lock allows them. */}
-        <Dialog.Overlay className="modal-scrim fixed inset-0 z-50">
+        <Dialog.Overlay className="modal-scrim fixed inset-0 z-modal">
           <Dialog.Content
             aria-describedby={undefined}
             // CJK IME: Escape during composition only cancels the candidate.
             onEscapeKeyDown={(event) => {
               if (event.isComposing || event.keyCode === 229) event.preventDefault();
             }}
-            className="fixed inset-y-0 right-0 z-50 flex w-full max-w-md flex-col border-l border-[var(--border-default)] bg-[var(--surface)] outline-none"
+            className="fixed inset-y-0 right-0 z-float flex w-full max-w-md flex-col border-l border-[var(--border-default)] bg-[var(--surface)] outline-none"
             // The header shares the window title strip; without no-drag the page's drag
             // regions underneath swallow the close button's clicks (see windowDrag.tsx).
             style={WINDOW_NO_DRAG_STYLE}
@@ -167,6 +171,7 @@ export function BotSettingsDrawer() {
               <RemoteTeammateSettings
                 key={`${remoteBot.deviceId}:${remoteBot.id}:${open}:${localInitialPage}`}
                 bot={remoteBot}
+                controlOff={homeControlOff(cloudCompanionAt(cloud, remoteBot.deviceId, remoteBot.id) ?? undefined, devices)}
                 initialPage={localInitialPage}
                 beforeCloseRef={beforeCloseRef}
                 onBack={performClose}

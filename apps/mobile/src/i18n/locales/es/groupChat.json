@@ -16,20 +16,20 @@
   "organizer": "Organizador",
   "waitingConfirm": "{{name}} está esperando tu visto bueno",
   "loadFailedTitle": "No se pudo cargar este chat grupal",
-  "loadFailedDescription": "No puedo leer este chat grupal desde tu computadora en este momento. Inténtalo de nuevo o vuelve a Amigos de equipo.",
+  "loadFailedDescription": "No puedo leer este chat grupal desde tu computadora en este momento. Inténtalo de nuevo o vuelve a Amigos.",
   "unavailableTitle": "Este chat grupal ya no está disponible",
-  "unavailableDescription": "Es posible que haya sido eliminado. Vuelve a Amigos de equipo para abrir otro chat grupal o amigo de equipo.",
+  "unavailableDescription": "Es posible que haya sido eliminado. Vuelve a Amigos para abrir otro chat grupal o amigo.",
   "list": {
     "noMessages": "Aún no hay mensajes",
-    "empty": "Aún no hay chats grupales. Toca + para reunir a algunos amigos de equipo.",
-    "running": "Un amigo de equipo está trabajando."
+    "empty": "Aún no hay chats grupales. Toca + para reunir a algunos amigos.",
+    "running": "Un amigo está trabajando."
   },
   "create": {
     "title": "Nuevo chat grupal",
     "nameLabel": "Nombre del grupo",
     "namePlaceholder": "p. ej., Viaje de fin de semana",
     "nameRequired": "Introduce un nombre de grupo",
-    "membersLabel": "Elige amigos de equipo",
+    "membersLabel": "Elige amigos",
     "selectedCount_one": "{{count}} seleccionado, hasta {{max}}",
     "selectedCount_other": "{{count}} seleccionados, hasta {{max}}",
     "close": "Cerrar",
@@ -51,8 +51,8 @@
   },
   "composer": {
     "label": "Mensaje de chat grupal",
-    "placeholder": "Dile algo al grupo. @ un amigo de equipo para que solo él responda…",
-    "noMembers": "Ningún amigo de equipo aquí puede responder en este momento. Agregue uno en la configuración del grupo.",
+    "placeholder": "Dile algo al grupo. @ un amigo para que solo él responda…",
+    "noMembers": "Ningún amigo aquí puede responder en este momento. Agregue uno en la configuración del grupo.",
     "tooLong": "Este mensaje es demasiado largo. El límite es de {{max}} caracteres.",
     "sendFailed": "Mensaje no enviado. Inténtalo de nuevo en un momento.",
     "stopFailed": "No se pudo detener esta ronda. Inténtalo de nuevo.",
@@ -73,8 +73,8 @@
     "newMessages_one": "{{count}} nuevo mensaje",
     "newMessages_other": "{{count}} nuevos mensajes",
     "emptyTitle": "Aún no hay mensajes en este grupo",
-    "emptyDescription": "Di algo para comenzar y tus amigos de equipo se unirán. @ un amigo de equipo para que solo ellos respondan.",
-    "roundEnded": "Los amigos de equipo terminaron",
+    "emptyDescription": "Di algo para comenzar y tus amigos se unirán. @ un amigo para que solo ellos respondan.",
+    "roundEnded": "Los amigos terminaron",
     "continue": "Continuar la discusión",
     "continueFailed": "No se pudo continuar la discusión. Inténtalo de nuevo.",
     "nextStep": "Siguiente:",
@@ -118,9 +118,9 @@
     },
     "runtimeFailure": {
       "REMOTE_DEVICE_LIMIT": {
-        "summary": "{{name}} no puede responder: el dispositivo del amigo de equipo ha alcanzado su límite de sesión remota.",
-        "advice": "Pídale al propietario del amigo de equipo que archive las sesiones no utilizadas.",
-        "details": "Pídale al propietario del amigo de equipo que archive las sesiones no utilizadas o pídale al propietario de la computadora remota que aumente el límite en Remoto y compartido."
+        "summary": "{{name}} no puede responder: el dispositivo del amigo ha alcanzado su límite de sesión remota.",
+        "advice": "Pídale al propietario del amigo que archive las sesiones no utilizadas.",
+        "details": "Pídale al propietario del amigo que archive las sesiones no utilizadas o pídale al propietario de la computadora remota que aumente el límite en Remoto y compartido."
       },
       "REMOTE_TOTAL_LIMIT": {
         "summary": "{{name}} no puede responder: la computadora remota ha alcanzado su límite total de sesiones remotas.",
@@ -130,12 +130,12 @@
       "IMAGE_INPUT_UNSUPPORTED": {
         "summary": "{{name}} no pudo responder: el modelo actual no admite imágenes.",
         "advice": "Elige un modelo compatible con imágenes.",
-        "details": "Elige un modelo compatible con imágenes, o activa y configura Vision Bridge en Configuración → Personalización, y luego vuelve a enviar tu mensaje."
+        "details": "Elige un modelo compatible con imágenes."
       },
       "MODEL_UNAVAILABLE": {
         "summary": "{{name}} no pudo responder: no hay ningún modelo disponible.",
-        "advice": "Elija un modelo disponible en la configuración de amigos de equipo.",
-        "details": "Elija un modelo conectado y disponible en la configuración del amigo de equipo, luego envíe su mensaje nuevamente."
+        "advice": "Elija un modelo disponible en la configuración de amigos.",
+        "details": "Elija un modelo conectado y disponible en la configuración del amigo, luego envíe su mensaje nuevamente."
       },
       "AUTH_REQUIRED": {
         "summary": "{{name}} no pudo responder: la conexión del modelo necesita autenticación.",
@@ -173,7 +173,7 @@
         "details": "Envía tu mensaje nuevamente. Si aún falla, revisa los registros e informa del problema."
       }
     },
-    "runtimeFailureSetupHint": "Para cambiar el modelo o la configuración, use la computadora donde se ejecuta este amigo de equipo.",
+    "runtimeFailureSetupHint": "Para cambiar el modelo o la configuración, use la computadora donde se ejecuta este amigo.",
     "capability": {
       "GROUP_AUTHORIZATION_REQUIRED": "{{name}} no pudo ejecutar la herramienta: la autorización del grupo ha caducado o no permite esta acción. La persona propietaria del amigo puede volver a solicitarla en este grupo.",
       "GROUP_AUTHORIZATION_UNAVAILABLE": "No se pudo verificar la autorización de grupo de {{name}}, por lo que la herramienta no se ejecutó. Vuelve a intentarlo cuando se restablezca la conexión.",
@@ -259,35 +259,35 @@
     "members": "Miembros",
     "remove": "Quitar",
     "removeNamed": "Quitar a {{name}} del grupo",
-    "minMembers": "Un chat grupal necesita al menos amigos de equipo {{min}}",
+    "minMembers": "Un chat grupal necesita al menos amigos {{min}}",
     "maxMembers": "Hasta {{max}}",
-    "noMoreBots": "No hay otros amigos de equipo disponibles para agregar",
+    "noMoreBots": "No hay otros amigos disponibles para agregar",
     "nameSaveFailed": "No se pudo guardar el nombre del grupo. Se conservó lo que escribiste. Vuelve a intentarlo.",
     "membersSaveFailed": "No se pudieron actualizar los miembros. Inténtalo de nuevo.",
     "replyMode": "Cuando no se @menciona a nadie",
     "replyModeAll": "Cualquiera puede responder",
     "replyModeMentioned": "Solo responden los @mencionados",
     "replyModeNote": "Los amigos que no tienen nada que añadir se quedan callados. Cada ronda ejecuta hasta 3 pases y 10 mensajes, luego espera a que hagas clic en \"Continuar discusión\".",
-    "replyModeNoteQueue": "Los amigos de equipo responden uno a la vez; los primeros cinco continúan solos. Citar a un amigo de equipo o responder en su hilo también lo llama.",
+    "replyModeNoteQueue": "Los amigos responden uno a la vez; los primeros cinco continúan solos. Citar a un amigo o responder en su hilo también lo llama.",
     "replyModeSaveFailed": "No se pudo guardar la configuración de respuesta. Inténtalo de nuevo.",
     "delete": "Eliminar chat grupal",
-    "deleteNote": "Sólo se eliminan este chat grupal y sus mensajes. Los amigos de equipo, su memoria y sus chats privados no se ven afectados.",
+    "deleteNote": "Sólo se eliminan este chat grupal y sus mensajes. Los amigos, su memoria y sus chats privados no se ven afectados.",
     "deleteConfirmTitle": "¿Eliminar “{{name}}”?",
     "deleteFailed": "No se pudo eliminar el chat grupal. Inténtalo de nuevo en un momento.",
     "speakingMode": "Orden de intervención",
     "speakingModeAuto": "Automático",
     "speakingModeSequential": "De uno en uno",
     "speakingModeAutoNote": "Sin menciones o con @Todos los amigos: primero piensan a la vez y luego responden uno a uno. Si mencionas amigos, siguen el orden de mención.",
-    "speakingModeSequentialNote": "Un amigo de equipo habla a la vez y cada uno ve las respuestas que tiene delante.",
+    "speakingModeSequentialNote": "Un amigo habla a la vez y cada uno ve las respuestas que tiene delante.",
     "speakingModeSaveFailed": "No se pudo guardar el orden de intervención. Inténtalo de nuevo.",
     "setOrganizer": "Hacer organizador",
     "setOrganizerNamed": "Haz de {{name}} el organizador",
-    "organizerNote": "El organizador decide quién realiza cada paso. Por defecto, es el primer amigo de equipo.",
+    "organizerNote": "El organizador decide quién realiza cada paso. Por defecto, es el primer amigo.",
     "organizerSaveFailed": "No se pudo cambiar el organizador. Inténtalo de nuevo.",
     "projectDir": "Carpeta de proyecto",
     "projectDirNone": "Ninguna seleccionada",
-    "projectDirNote": "Los amigos trabajan aquí cuando se reparten el trabajo. Si lo dejas vacío, usarán la carpeta de esta conversación grupal. Si eliges un proyecto de Git, cada encargo tendrá un worktree y una rama nuevos para no modificar tu código.",
-    "add": "Agregar amigo de equipo",
+    "projectDirNote": "Elige un proyecto existente en este equipo. Si lo dejas vacío, se usará el proyecto del repositorio o el del amigo que ejecute la tarea. La división del trabajo en Git usa un árbol de trabajo independiente.",
+    "add": "Agregar amigo",
     "projectDirOnComputer": "Elígelo o cámbialo en tu computadora",
     "memberActions": "Acciones para {{name}}",
     "retry": "Reintentar",
@@ -321,8 +321,8 @@
     }
   },
   "errors": {
-    "memberLimit": "Un chat grupal necesita de 2 a 6 amigos de equipo",
-    "memberUnavailable": "Uno de estos amigos de equipo no está disponible. Elige otro y vuelve a intentarlo.",
+    "memberLimit": "Un chat grupal necesita de 2 a 6 amigos",
+    "memberUnavailable": "Uno de estos amigos no está disponible. Elige otro y vuelve a intentarlo.",
     "mentionUnavailable": "Un miembro mencionado ya no está disponible. Elige a quién mencionar antes de volver a enviar.",
     "mentionAmbiguous": "Hay más de un miembro llamado «{{name}}». Elige a quién te refieres en la lista de @.",
     "notFound": "Este chat grupal ya no existe",
@@ -377,7 +377,7 @@
     "hide": "Eliminar de mi lista",
     "hideNote": "Elimina este chat de tu lista en todos tus dispositivos. Esto no cambia la membresía, no elimina el historial, no detiene el trabajo en curso ni afecta a otros miembros.",
     "leave": "Dejar grupo",
-    "leaveNote": "Tú y tus compañeros abandonarán este grupo. Ya no recibirás mensajes nuevos ni tendrás acceso a su historial.",
+    "leaveNote": "Tú y tus amigos abandonarán este grupo. Ya no recibirás mensajes nuevos ni tendrás acceso a su historial.",
     "unavailable": "El servidor o computadora actual aún no admite esta acción.",
     "dissolved": "Este grupo ha sido disuelto. Aún puedes leer el historial disponible.",
     "failed": "No se pudo completar esta acción. Inténtalo de nuevo.",
@@ -451,8 +451,8 @@
     },
     "title": "Modo de respuesta IA",
     "settings": "Configuración de respuesta de IA",
-    "companion": "mi amigo de equipo",
-    "choose": "Elige un amigo de equipo",
+    "companion": "mi amigo",
+    "choose": "Elige un amigo",
     "enabled": "Respuestas automáticas",
     "triggerLabel": "Activación",
     "resumeAfter": "Reanudar después de estar ausente",
@@ -481,8 +481,8 @@
       "off": "Las respuestas automáticas están desactivadas",
       "offline": "Respuestas pausadas · Computadora desconectada",
       "waiting": "Esperando a que empieces",
-      "unbound": "Ningún amigo de equipo seleccionado",
-      "enabled": "Tu amigo de equipo está listo para responder por ti."
+      "unbound": "Ningún amigo seleccionado",
+      "enabled": "Tu amigo está listo para responder por ti."
     },
     "trigger": {
       "always": "Siempre habilitado",
@@ -499,7 +499,7 @@
     "attribution": "{{name}} respondió por {{owner}}",
     "digestNow": "Resumir ahora",
     "digestWorking": "Resumiendo…",
-    "digestSent": "Enviado al chat de tu amigo de equipo",
+    "digestSent": "Enviado al chat de tu amigo",
     "digestFailed": "No se pudo resumir. Inténtalo de nuevo.",
     "digestEmpty": "Nada nuevo que resumir.",
     "access": {
@@ -555,7 +555,7 @@
     "replyModeMentionedNote": "Los amigos no responden a menos que alguien los mencione con @.",
     "work": "Repartos de trabajo",
     "organizerHint": "Decide quién realiza cada paso. De forma predeterminada, es el primer amigo.",
-    "ownFolder": "Carpeta propia del grupo",
+    "ownFolder": "Automático",
     "archive": "Archivar grupo",
     "unarchive": "Desarchivar grupo",
     "archiveHint": "Al archivar este grupo, se deshabilita para todos los miembros y se detienen los mensajes nuevos y las ejecuciones de los amigos. El historial se conserva. Busca el grupo para ver su historial o desarchivarlo.",
@@ -592,7 +592,7 @@
     "removeTitle": "¿Quitar a {{name}} de este grupo?",
     "removeHint": "Perderá el acceso a los mensajes. Sus amigos también saldrán del grupo.",
     "removeOwn": "Quitar del grupo",
-    "removeOwnScope": "Esto solo afecta a este grupo. Tu compañero permanece en tu cuenta.",
+    "removeOwnScope": "Esto solo afecta a este grupo. Tu amigo permanece en tu cuenta.",
     "removeOwnHint": "{{name}} dejará de recibir mensajes de «{{group}}». Se conserva el historial; los otros grupos y chats privados no se ven afectados.",
     "removeOwnActiveHint": "Se detendrán sus solicitudes activas en este grupo. Las tareas iniciadas de forma independiente seguirán ejecutándose.",
     "stopAndRemove": "Detener y quitar",
@@ -655,5 +655,6 @@
     "externalFormatError": "Vuelve a abrir el enlace completo del mensaje original."
   },
   "memberCount_many": "Miembros de {{count}}",
-  "waitingForOwner": "Esperando confirmación"
+  "waitingForOwner": "Esperando confirmación",
+  "externalBadge": "Externo"
 }

@@ -17,6 +17,7 @@ import {
   handleGhostList,
   handleGhostManual,
   handleMedia,
+  prepareStartupGhostToolInputSchema,
 } from "../ghost/mcpServer.js";
 import type {
   CindyGhostInfo,
@@ -352,7 +353,7 @@ describe("cindy_ghosts · ghost_info(单插件精准查询)", () => {
     expect(parsePayload(result)).toEqual({ ok: true, ghost });
   });
 
-  it("GHOST_NOT_FOUND 引导回查清单或改道，且不要重复重试同一目标", async () => {
+  it("GHOST_NOT_FOUND 保留宿主恢复指引并过滤内部字段", async () => {
     const result = await handleGhostInfo(
       fakeDeps({
         getAwakeGhost: async () =>
@@ -370,7 +371,7 @@ describe("cindy_ghosts · ghost_info(单插件精准查询)", () => {
       ok: false,
       errorCode: "GHOST_NOT_FOUND",
       message:
-        "目标插件不存在；不要重复重试同一目标；可调用 ghost_list 回查当前可用插件，或改用其它可用方式完成。",
+        "目标插件不存在",
     });
   });
 
@@ -920,14 +921,14 @@ describe("cindy_ghosts · ghost_call(派活透传)", () => {
     expect(String(payload.hint)).toContain("markdown");
   });
 
-  it("xdt_media_descriptions 透传但不被 hoist(视觉桥描述不触发图卡渲染)", async () => {
+  it("附加元数据透传但不提升为媒体卡", async () => {
     const result = await handleGhostCall(
       fakeDeps({
         callGhostTool: async () => ({
           ok: true,
           result: { done: true },
           producedMedia: ["cindy-media://blobs/abc.png"],
-          xdt_media_descriptions: [
+          extra_notes: [
             { url: "cindy-media://blobs/abc.png", description: "一张截图" },
           ],
         }),
@@ -935,12 +936,12 @@ describe("cindy_ghosts · ghost_call(派活透传)", () => {
       { ghost_id: "xd-feishu", tool: "call_tool", args: {} },
     );
     const payload = parsePayload(result);
-    // 描述字段原样透传给模型(纯文本模型靠它看到图)。
-    expect(payload.xdt_media_descriptions).toEqual([
+    // 额外字段原样透传给模型。
+    expect(payload.extra_notes).toEqual([
       { url: "cindy-media://blobs/abc.png", description: "一张截图" },
     ]);
     // 不被提升为图卡字段:渲染层只认 xdt_image_urls / xdt_video_urls 顶层,
-    // xdt_media_descriptions 不是媒体卡,不会触发双份渲染。
+    // 普通额外字段不是媒体卡,不会触发双份渲染。
     expect(payload.xdt_image_urls).toBeUndefined();
   });
 
@@ -2272,6 +2273,39 @@ describe('personal community author MCP transport', () => {
     await client.connect(ct);
     return { client, close: async () => { await client.close(); await server.close(); } };
   }
+
+  // Unit: the real MCP catalog pins the startup definition and sends only the
+  // approved target and validated arguments to the shared ghost_call handler.
+  // The existing ghost_call tests do not cover a startup MCP definition.
+  it('lists a named startup tool with its declared schema and invokes its pinned target', async () => {
+    const name = 'ghost_library_find_23cd';
+    const parameters = {
+      type: 'object', properties: { query: { type: 'string' } },
+      required: ['query'], additionalProperties: false,
+    } as const;
+    const callGhostTool = vi.fn<CindyGhostsMcpDeps['callGhostTool']>(async () => ({ ok: true, result: { found: true } }));
+    const startupTools: NonNullable<CindyGhostsMcpDeps['startupTools']>[number][] = [
+      { name, ghostId: 'library', namespace: 'local', tool: 'find', description: 'Find books',
+        inputSchema: prepareStartupGhostToolInputSchema(parameters)! },
+    ];
+    const { client, close } = await connected(fakeDeps({ callGhostTool, startupTools }));
+    try {
+      startupTools.length = 0;
+      const catalog = await client.listTools();
+      expect(catalog.tools.find(tool => tool.name === name)?.inputSchema.properties?.args)
+        .toMatchObject(parameters);
+      expect(callGhostTool).not.toHaveBeenCalled();
+      expect(await client.callTool({ name, arguments: { args: { query: 2 } } })).toMatchObject({ isError: true });
+      expect(callGhostTool).not.toHaveBeenCalled();
+      const result = await client.callTool({ name, arguments: { args: { query: 'atlas' } } });
+      expect(result.isError).toBeFalsy();
+      expect(callGhostTool).toHaveBeenCalledWith(expect.objectContaining({
+        ghostId: 'library', namespace: 'local', tool: 'find', args: { query: 'atlas' }, startupToolName: name,
+      }));
+    } finally {
+      await close();
+    }
+  });
 
   it('routes preparation, the same operation, and exact personal reads to the independent Host capability', async () => {
     const communityContribution = vi.fn<NonNullable<CindyGhostsMcpDeps['communityContribution']>>(async () => ({ ok: true, result: {} }));

@@ -59,7 +59,9 @@
   // left / right / top / bottom)/ "window"(弹成独立窗口);只是左侧导航入口的默认打开方式,
   // 用户拖过 / 弹过后以用户的放置为准。可选 "multiple": true 允许同一视图同时开在多处。
   "settingsHtml": "settings.html",  // 可选:设置页「自定义设置区」自绘界面(见 §4.8;声明了用户填的凭证时仍必填,用于长期管理/替换/清除;调用前缺失时主机也会在统一 Setup 卡内联收单,见 §4.7)
+  "githubRelease": "example/plugin", // Optional desktop update source for a local install with settingsHtml.
   "showTaskPreferences": true,     // 可选:是否显示宿主「模型与任务」卡,缺省/true 显示,false 隐藏;见 §4.8
+  "imEntrance": true,              // 可选:IM 入口插件(需同时声明 agent.tasks 与 agent.targets)。只影响展示:「设置 → IM 机器人」列出本插件,并在没开官方机器人时也显示「项目与模型」;不新增权限。见 plugin-agent-tasks.md「IM 共用项目与模型」
   "settingsHeight": 360             // 可选:固定高度 px(160–800);缺省 = 随内容自适应(矮内容真收矮,高至 800);内容会动态增减时才声明,避免抖动
 }
 ```
@@ -202,8 +204,11 @@ node secretBindings key、setup kv key——都不能使用 `__proto__`、`const
 
 v3 直接用顶层字段声明插件贡献项与自主 Host 能力，不再有 `slots`。带详单的字段是 `tools`、`cindy`、
 `agent`、`panel`、`mainView`、`taskView`、`card`、`subscribe`、`network`、`node`、`preview`、
-`browserExtension`、`skill`、`systemPrompt`；布尔能力写成字面量 `true`：`notify`、`badge`、`confirm`、`fs`、
+`browserExtension`、`skill`、`systemPrompt`；布尔能力写成字面量 `true`：`notify`、`badge`、`confirm`、`form`、`fs`、
 `library`、`deviceSync`、`sessionContext`、`pick`、`workspace`、`liveScreen`(需同时声明 `node`,见 [§4.22.1](plugin-task-view.md#4221-在手机上查看与操作设备画面livescreen-能力))。不用的字段直接省略。
+`harnesses` 声明插件提供的任务执行引擎(ACP Agent),每项指向 `node.entries` 里的一个入口,见
+[§4.6.4](plugin-harnesses.md)。
+`fileOpener` 声明插件接管打开的文件类型(须同时声明 `node`),见 [§4.25](plugin-file-opener.md)。
 `deviceSync` 的声明与调用约定见 [§4.10.2 资料同步](plugin-files-and-library.md#4102-同账号电脑间的插件资料同步)。
 邮件插件声明 `mail: true`，调用 Cindy 内置 `cindyMail.register(adapter)`
 （version 1），不生成卡片 HTML、不打包公共流程；纯邮件插件不需要 `card`。
@@ -358,6 +363,7 @@ node 详单**不接受** `command` / `args` / `shell` / `env` 或其它自造字
     "oauth": {                                      // source:"oauth" 时必填(其它来源禁写):主机托管 OAuth 授权详单(见 §4.7)
       "authorizeUrl": "https://accounts.example.com/authorize",  // 授权页(https;域名必须命中 hosts 白名单)
       "tokenUrl": "https://accounts.example.com/token",          // code/refresh 交换端点(https;域名必须命中 hosts)。注:个别服务商(如 xAI)的新版 consent 页不再 302 回 loopback,而是页面 JS 跨源投递授权 code——主机允许的投递来源 = authorizeUrl/tokenUrl 的 origin + hosts 白名单命中的 https 域;consent 页与授权端点不同域时,把 consent 域(如 accounts.x.ai)也声明进 hosts 即可
+      "deviceAuthorizationUrl": "https://accounts.example.com/device",  // 可选:设备码登录端点(RFC 8628;https,域名须命中 hosts)。声明后主机改走「申请验证码 → 用户在确认页确认 → 轮询 tokenUrl」,不起 loopback、服务商后台不用登记重定向 URL;与 tokenBroker / brokerBounce 互斥。authorizeUrl 仍必填(旧版 Cindy 忽略本字段、退回授权码流程),详见 §4.7.3
       "clientId": "xxx.apps.example.com",           // 可选:内置 OAuth 客户端 ID(用户零配置开箱即用;用户在设置页自填的覆盖内置,清除自填即回落)
       "clientIdAlternatives": ["xxx-global.apps.example.com"],  // 可选 ≤8 条:仅 tokenBroker 模式;插件按 app-context 选 App 时,connect 只接受默认值或这里声明的公开 ID
       "clientSecret": "xxx",                        // 可选(须与 clientId 成对):内置 client 的 secret;桌面应用的 client 凭证本非机密,纯 PKCE 服务商可省略
@@ -421,13 +427,20 @@ UI 保留。检查、字段绑定、保存状态和恢复都在主机
 
 ### 决策与重排声明
 
-`cindy.models` 是可选的模型能力类目，动作支持 `decisions` 和 `rerank`：
+`cindy.models` 是可选的模型能力类目，支持 `decisions`、`rerank` 和 `media_request`：
 
 ```json
-{ "cindy": { "models": ["decisions", "rerank"] } }
+{ "cindy": { "models": ["media_request"] } }
 ```
 
 只声明实际需要的动作。主机会展示模型额度使用说明，未声明的调用和模型查询会被拒绝。
-调用协议见 `plugin-runtime.md` 的「决策与重排模型」。使用此能力时通过
+调用协议见 `plugin-runtime.md` 的「决策与重排模型」和 [§4.0.4 媒体直调](plugin-media.md)。新增
+`media_request` 要走现有安装或更新审批。使用此能力时通过
 `minCindyVersion` 声明已验证的最低版本；运行时仍须处理旧版不支持响应，不能把权限拒绝
 或账号失效当成不支持而绕过。
+
+### GitHub Release updates for locally installed plugins
+
+With `settingsHtml` present, set `githubRelease` to the GitHub.com repository in owner/repository form. Publish a GitHub Release tagged `v<version>` with an attached `<plugin-id>-<version>.cindy` asset. The package manifest must retain the plugin ID and repository and declare the same version as the tag. A draft does not appear. A published pre-release is labeled in settings.
+
+Users first import a package declaring the source. They then check and install updates from the host section of the plugin settings. Private repositories require GitHub authorization with read access to repository contents. The host checks GitHub?s asset digest and uses the existing plugin update confirmation flow. Existing installed packages without this field continue to work.

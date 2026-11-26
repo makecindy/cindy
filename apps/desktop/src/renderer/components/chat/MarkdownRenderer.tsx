@@ -1,3 +1,4 @@
+import { DownloadImageMenuItem } from '@/components/chat/DownloadImageMenuItem';
 import { parseSettingsNavigationUrl } from '@cindy/maker-shared/settings-navigation';
 import { SettingsLinkChip } from './SettingsLinkChip';
 import '@/styles/chatContentDirection.css';
@@ -41,9 +42,12 @@ import remarkLocalPathLinks, { BARE_PATH_ATTR } from './remarkLocalPathLinks';
 import remarkHtmlImages from './remarkHtmlImages';
 import remarkBareSpaceLocalImages from './remarkBareSpaceLocalImages';
 import remarkPreserveRawLocalDestinations, {
+  RAW_IMAGE_TARGET_PROP,
   RAW_LOCAL_IMAGE_SRC_PROP,
   RAW_LOCAL_LINK_HREF_PROP,
 } from './remarkPreserveRawLocalDestinations';
+import { replySectionId, type GalleryOccurrence } from './ImageGalleryContext';
+import { markdownImageOccurrence } from './markdownImageTargets';
 import remarkSessionLinks from './remarkSessionLinks';
 import { rehypeMathBlockMarker } from './rehypeMathBlockMarker';
 import { FENCED_CODE_PROP, rehypeFencedCodeMarker } from './rehypeFencedCodeMarker';
@@ -69,6 +73,7 @@ import { useTranslation } from 'react-i18next';
 
 import { cn, basename } from '@/lib/utils';
 import {
+  isFileUrlHostHref,
   looksLikeFilePath,
   MODEL_EXT_RE,
   normalizeMarkdownImageSrc,
@@ -99,6 +104,7 @@ import { rewriteToRemoteMediaOrigin, type RemoteMediaOrigin } from '../../../sha
 import { useChatSessionFile } from './ChatSessionFileContext';
 import { toRemoteMediaOrigin } from '@/lib/sessionFileOrigin';
 import { toast } from '@/lib/toast';
+import { mapIpcErrorToI18nKey } from '@/utils/ipcError';
 import { shouldOpenTextLightboxForOrigin } from '@/lib/filePreview';
 import { isRemoteFileOrigin, type SessionFileOrigin } from '@/lib/sessionFileOrigin';
 import {
@@ -142,7 +148,7 @@ import {
   activateMessageUrl,
 } from './messageLinkActions';
 import { useOpenWithMenu } from './useOpenWithMenu';
-import { activateInlineLinkFromKeyboard } from './linkInteraction';
+import { activateInlineLinkFromKeyboard, isSeparateLinkActivation } from './linkInteraction';
 import { useLinkContextMenu } from './useLinkContextMenu';
 
 /**
@@ -313,8 +319,23 @@ const MARKDOWN_LINK_CLASS = 'underline underline-offset-2 cursor-pointer [overfl
  *
  * 移动端**刻意不同形态**(零底色 + 文字压暗):那边聊天流是 RN 嵌套 Text,不认
  * borderRadius,淡底只能是直角方块。这里是 CSS,按 GitHub 原样实现。
+ *
+ * 折行(#11312):行内 code 默认 `white-space: normal`,有空格时本来就会断行;但**无空格
+ * 的超长 token**(长路径、长类名、base64 片段)没有任何断点,会把气泡顶宽、溢出气泡
+ * 边界(见 issue 截图里的 `JudgeAttributeField.tsx` 一行)。折行 class 单独放在
+ * `INLINE_CODE_WRAP_CLASS`,在两条生产 `<code>` 路径上与几何常量一并套用,允许在
+ * 任意字符间断行,与 MARKDOWN_LINK_CLASS 的既有做法一致;`overflow-wrap` 可继承,
+ * 但链接、行内 code 各自声明一份,不依赖外层容器。几何字面量保持原样,避免改动
+ * 既有 `rounded-[6px]` 行被设计门禁当成新增 off-scale radius,也避免拆行破坏
+ * markdownFencedCodeInline 对 `INLINE_CODE_CLASS` 的常量提取。
+ *
+ * 不用 `text-ellipsis`/`truncate` 而是让它折行:行内 code 是路径、标识符这类
+ * **逐字符都有意义**的内容,中段省略会截掉用户真正要看的部分(哪个文件、哪个字段),
+ * 而折行后全文仍在,复制也不受影响。气泡自身的 `max-w` 已经限住上限,无需再写
+ * `max-w-full`——它用在 inline 元素上本就不生效。
  */
 const INLINE_CODE_CLASS = 'font-mono text-14 rounded-[6px] px-[0.4em] py-[0.2em] bg-[var(--msg-md-inline-code-bg)]';
+const INLINE_CODE_WRAP_CLASS = '[overflow-wrap:anywhere]';
 
 const WINDOWS_ABSOLUTE_HREF_RE = /^[A-Za-z]:[\\/]/;
 
@@ -358,6 +379,13 @@ const allowlistedImageUrlTransform: UrlTransform = (url, key) => {
 
 interface MarkdownRendererProps {
   renderRichAnswers?: boolean;
+  /**
+   * The reply's client id. With it, an image shown more than once in the reply
+   * opens the task image gallery at the copy that was clicked (replySectionId).
+   */
+  galleryMessageKey?: string;
+  /** Internal: replySectionId of the part / component node this renderer shows. */
+  gallerySection?: string;
   /** F1: session cwd used to resolve relative paths in markdown links.
    *  Stable per-session — only changes on session switch (parent remount). */
   workingDir: string;
@@ -626,7 +654,7 @@ const baseComponents: Components = {
   table({ children, ...props }) {
     return (
       <CopyAsImageBlock
-        className="my-3"
+        className="my-3 w-[var(--cindy-markdown-table-width,100%)] max-w-full"
         contentClassName="overflow-x-auto"
         extractPlainText={tableToTsv}
       >
@@ -665,6 +693,9 @@ const baseComponents: Components = {
           // overflow-x-auto 横滚 + .is-scrolling 自动隐藏滚动条,
           // 视觉上像被右边截断。anywhere 让浏览器在任意位置可断行。
           'break-words [overflow-wrap:anywhere]',
+          // In narrow task panes, keep column labels readable and let the
+          // existing table scrollport contain columns that no longer fit.
+          '[.chat-rail-compact_&]:whitespace-nowrap',
         )}
         {...props}
       >
@@ -881,6 +912,45 @@ function InlineXdtAudioPlayer({ src }: { src: string }) {
 }
 
 /**
+ * 远程会话里嵌入媒体的取件来源。file://host 指向另一台机器的共享:改写成远程媒体会在渲染时把
+ * 该路径交给被控端取件,因此不改写,留在本机 xdt-file / xdt-audio 协议(不接受这类路径,不触盘)。
+ */
+function markdownMediaOrigin(
+  src: string | undefined,
+  origin: RemoteMediaOrigin | undefined,
+  workingDir: string,
+): RemoteMediaOrigin | undefined {
+  return src && isFileUrlHostHref(src, workingDir) ? undefined : origin;
+}
+
+export interface MarkdownImageAddressOptions {
+  workingDir: string;
+  allowPrivilegedLinks: boolean;
+  remoteMediaOrigin: RemoteMediaOrigin | undefined;
+  /** A task message whose local ownership is not confirmed yet. */
+  ownershipPending: boolean;
+}
+
+/**
+ * Loadable address of an embedded image once its workspace path is settled.
+ * The reply renderer and the task image gallery share this derivation so a
+ * clicked reply image is found among the gallery entries.
+ */
+export function markdownImageAddress(
+  localSrc: string | undefined,
+  options: MarkdownImageAddressOptions,
+): { normalized: string | undefined; mediaOrigin: RemoteMediaOrigin | undefined } {
+  const mediaOrigin = markdownMediaOrigin(localSrc, options.remoteMediaOrigin, options.workingDir);
+  const normalized = normalizeMarkdownImageSrc(
+    localSrc,
+    options.workingDir,
+    options.allowPrivilegedLinks,
+    mediaOrigin ?? (options.ownershipPending ? null : undefined),
+  );
+  return { normalized, mediaOrigin };
+}
+
+/**
  * LightboxImage — module-level component for react-markdown img renderer.
  * Tracks per-image load errors; broken images get no zoom-in cursor or click.
  */
@@ -889,12 +959,14 @@ function LightboxImage({
   alt,
   onZoom,
   streaming = false,
+  allowLocalFileOpen = false,
   ...props
 }: {
   src?: string;
   alt?: string;
   onZoom: (src: string) => void;
   streaming?: boolean;
+  allowLocalFileOpen?: boolean;
   [key: string]: unknown;
 }) {
   const { t } = useTranslation();
@@ -905,6 +977,14 @@ function LightboxImage({
 
   const { canCopy, canReveal: canRevealInFolder, copyImage, revealImage } = useImageClipboard(src ?? '');
   const showMenu = canCopy || canRevealInFolder;
+
+  async function openLocalImage(url: string): Promise<void> {
+    try {
+      await window.electronAPI.openMediaWithDefaultApp({ url });
+    } catch (error) {
+      toast.error(t(mapIpcErrorToI18nKey(error, { fallback: 'chat.media.openWithAppFailed' })));
+    }
+  }
 
   // image-local-cache F4: when the underlying file is missing (cache cleared,
   // xdt-image:// 404, etc.), swap to the friendly placeholder card. The
@@ -917,6 +997,9 @@ function LightboxImage({
         filename={alt || fallbackName}
         status={imageStatus}
         onRetry={canRetry ? retry : undefined}
+        onOpen={allowLocalFileOpen && src?.startsWith('xdt-file://')
+          ? () => void openLocalImage(src)
+          : undefined}
       />
     );
   }
@@ -982,6 +1065,7 @@ function LightboxImage({
             />
           </DropdownMenuTrigger>
           <DropdownMenuContent align="start" sideOffset={2}>
+            {src && <DownloadImageMenuItem src={src} />}
             {canCopy && (
               <DropdownMenuItem onClick={handleCopyImage}>
                 <Copy className="mr-2 h-4 w-4" />
@@ -1337,6 +1421,8 @@ function useResolvedMarkdownTarget(
   // 任何一条边都只有 resolveFromCache 一个地方需要改对(PR #1144 第 10 轮止损重构)。
   const remoteAbsPath = useMemo(() => {
     if (isStreaming || target.kind !== 'local-candidate' || !remoteOrigin) return '';
+    // file://host 指向另一台机器的共享:与本机渲染期解析一样不预检、不点亮,只在点击时 stat。
+    if (isFileUrlHostHref(target.href, workingDir)) return '';
     if (isHomePath(target.href)) return remoteHomePath?.absPath ?? '';
     return resolveLocalPath(target.href, workingDir) || '';
   }, [isStreaming, target, workingDir, remoteOrigin, remoteHomePath]);
@@ -1565,7 +1651,7 @@ function MarkdownTargetLink({
     return allowPrivilegedLinks ? target : stripPrivilegedMarkdownTarget(target);
   }, [href, localFileRefs, allowPrivilegedLinks]);
   const target = useResolvedMarkdownTarget(initialTarget, workingDir, isStreaming);
-  const openInlineTarget = async () => {
+  const openInlineTarget = async (browserTarget?: 'external') => {
     if (target.kind === 'anchor') {
       if (!target.id) return;
       const element = document.getElementById(target.id);
@@ -1617,7 +1703,9 @@ function MarkdownTargetLink({
           return;
         }
         if (resolved.localKind !== 'directory' && isHtmlFilePath(resolved.absPath) && sidebarTargetSessionId) {
-          await openHtmlFileByPreference(sidebarTargetSessionId, resolved.absPath, t, fileCtx);
+          await openHtmlFileByPreference(
+            sidebarTargetSessionId, resolved.absPath, t, fileCtx, browserTarget,
+          );
         } else {
           await activateResolvedLocalTarget(
             resolved, { ...fileCtx, sidebarTargetSessionId },
@@ -1629,6 +1717,14 @@ function MarkdownTargetLink({
       }
     }
   };
+  const activate = (event: React.MouseEvent<HTMLAnchorElement>) => {
+    if (target.kind === 'external') {
+      return activateMessageUrl(event, sidebarTargetSessionId, target.href, t);
+    }
+    event.preventDefault();
+    // Preserve the browser choice while an authored file link retries path resolution.
+    return openInlineTarget(isSeparateLinkActivation(event) ? 'external' : undefined);
+  };
   const inlineMenu = useLinkContextMenu(href ?? '', [{
     label: t('chat.markdownRenderer.openLink'),
     icon: <ArrowUpRight className="mr-2 h-4 w-4" />,
@@ -1636,7 +1732,9 @@ function MarkdownTargetLink({
   }]);
 
   if (target.kind === 'audio') {
-    return <InlineXdtAudioPlayer src={rewriteToRemoteMediaOrigin(target.href, remoteMediaOrigin)} />;
+    const normalized = normalizeMarkdownImageSrc(target.href, workingDir, allowPrivilegedLinks,
+      remoteMediaOrigin ?? (sessionId && fileCtx.localConfirmed !== true ? null : undefined));
+    return normalized ? <InlineXdtAudioPlayer src={rewriteToRemoteMediaOrigin(normalized, remoteMediaOrigin)} /> : null;
   }
 
   if (target.kind === 'plain-text') {
@@ -1705,24 +1803,9 @@ function MarkdownTargetLink({
       href={target.href}
       className={MARKDOWN_LINK_CLASS}
       onKeyDown={activateInlineLinkFromKeyboard}
-      onClick={async (e) => {
-        e.preventDefault();
-
-        if (target.kind === 'external') {
-          // 有会话上下文:左键按用户偏好直开(内置侧边栏 / 系统浏览器,设置 →
-          // 个性化 → 链接打开方式);右键弹"打开方式"菜单临时选另一种。
-          // 修饰键点击(macOS ⌘ / Windows Ctrl)临时强制走系统浏览器,不改偏好。
-          // 无会话上下文(Market 预览等)保持原有直开默认浏览器。
-          await activateMessageUrl(e, sidebarTargetSessionId, target.href, t);
-          return;
-        }
-        openInlineTarget();
-      }}
+      onClick={activate}
       onAuxClick={(event) => {
-        if (event.button !== 1) return;
-        event.preventDefault();
-        if (target.kind === 'external') void activateMessageUrl(event, sidebarTargetSessionId, target.href, t);
-        else openInlineTarget();
+        if (event.button === 1) void activate(event);
       }}
       onContextMenu={(e) => {
         if (target.kind === 'external') openWith.onContextMenu(e, target.href);
@@ -1776,7 +1859,7 @@ function InlineCodeWithTarget({
   // inline <code> — same as before the markdown-target system existed.
   if (target.kind !== 'resolved-local') {
     return (
-      <code className={cn(INLINE_CODE_CLASS)} {...props}>
+      <code className={cn(INLINE_CODE_CLASS, INLINE_CODE_WRAP_CLASS)} {...props}>
         {children}
       </code>
     );
@@ -1817,6 +1900,7 @@ const MarkdownRendererBase = memo(function MarkdownRendererBase({
   allowPrivilegedLinks = true,
   resolveImageSrc,
   emitSourceLines = false,
+  gallerySection,
 }: MarkdownRendererProps) {
   const embeddedMediaStreaming = mediaStreaming ?? isStreaming;
   // Cap markdown re-parse + syntax highlight cost during streaming.
@@ -1862,7 +1946,23 @@ const MarkdownRendererBase = memo(function MarkdownRendererBase({
         : [{ start: 0, content: renderedContent }],
     [emitSourceLines, isStreaming, renderedContent],
   );
-  const [lightboxSrc, setLightboxSrc] = useState<string | null>(null);
+  const [lightbox, setLightbox] = useState<{
+    src: string;
+    galleryTarget?: string;
+    galleryOccurrence?: GalleryOccurrence;
+  } | null>(null);
+  // Links and chips open a single image; only embedded reply images carry a gallery target.
+  const setLightboxSrc = useCallback((src: string | null) => setLightbox(src ? { src } : null), []);
+  // Which repeat of an image was clicked, in the reply section the gallery lists it
+  // under. Read at click time: positions refer to the rendered text.
+  const occurrenceSourceRef = useRef({ section: gallerySection, rendered: repairedContent });
+  occurrenceSourceRef.current = { section: gallerySection, rendered: repairedContent };
+  const clickedOccurrence = useCallback((target: string, offset: number | undefined) => {
+    const { section, rendered } = occurrenceSourceRef.current;
+    if (offset === undefined || section === undefined) return undefined;
+    const index = markdownImageOccurrence(rendered, target, offset);
+    return index === undefined ? undefined : { section, index };
+  }, []);
   // 远程入方向:远程会话里 markdown 的图片/音频 URL 指向远端机器,按来源改写到
   // cindy-remote-media://(device 经 OSS 中转、ssh 经 file-service 落盘缓存)。本地
   // 会话 → undefined,改写为 no-op。origin 从 ChatSessionFileContext 取(provider
@@ -1905,29 +2005,43 @@ const MarkdownRendererBase = memo(function MarkdownRendererBase({
       ...(emitSourceLines ? makeSourceLineWrappers() : {}),
       img: ({ src, alt, node, ...props }) => {
         const rawLocalSrc = node?.properties?.[RAW_LOCAL_IMAGE_SRC_PROP];
+        const rawTarget = node?.properties?.[RAW_IMAGE_TARGET_PROP];
         const imageProps = { ...props };
         delete (imageProps as Record<string, unknown>)[RAW_LOCAL_IMAGE_SRC_PROP];
+        delete (imageProps as Record<string, unknown>)[RAW_IMAGE_TARGET_PROP];
+        // Task reply images browse the task's image gallery, identified by the
+        // destination as written (`src` arrives re-encoded for URLs). File
+        // previews (no task id) keep the single-image viewer.
+        const galleryTarget =
+          currentSessionId && typeof rawTarget === 'string' && rawTarget ? rawTarget : undefined;
+        const sourceOffset = node?.position?.start.offset;
         if (resolveImageSrc) {
           const resolved = typeof src === 'string' && src ? resolveImageSrc(src) : null;
           return resolved ? (
             <LightboxImage streaming={false} src={resolved} alt={alt} onZoom={setLightboxSrc} {...imageProps} />
           ) : null;
         }
+        const writtenSrc = typeof rawLocalSrc === 'string' ? rawLocalSrc : src;
         return (
           <WorkspaceMediaSrc
-            src={typeof rawLocalSrc === 'string' ? rawLocalSrc : src}
+            src={writtenSrc}
             workingDir={workingDir}
             enabled={resolveMediaInWorkspace}
             streaming={embeddedMediaStreaming}
           >
             {(localSrc) => {
-              const normalized = normalizeMarkdownImageSrc(localSrc, workingDir, allowPrivilegedLinks);
+              const { normalized, mediaOrigin } = markdownImageAddress(localSrc, {
+                workingDir,
+                allowPrivilegedLinks,
+                remoteMediaOrigin,
+                ownershipPending: Boolean(currentSessionId) && sessionFileCtx.localConfirmed !== true,
+              });
               if (isManagedMarkdownVideoUrl(normalized)) {
                 // 远程会话里视频 URL 同样指向远端机器，先按来源改写到 cindy-remote-media://
                 // 再交给 ChatVideoView(与下面的图片分支同一条改写路径)。
                 return (
                   <ChatVideoView
-                    src={rewriteToRemoteMediaOrigin(normalized, remoteMediaOrigin)}
+                    src={rewriteToRemoteMediaOrigin(normalized, mediaOrigin)}
                     filename={markdownMediaFilename(normalized, alt)}
                     variant="tool-output"
                     sessionId={currentSessionId}
@@ -1937,10 +2051,16 @@ const MarkdownRendererBase = memo(function MarkdownRendererBase({
               return (
                 <LightboxImage
                   streaming={isStreaming}
-                  src={normalized ? rewriteToRemoteMediaOrigin(normalized, remoteMediaOrigin) : normalized}
+                  src={normalized ? rewriteToRemoteMediaOrigin(normalized, mediaOrigin) : normalized}
                   alt={alt}
-                  onZoom={setLightboxSrc}
+                  onZoom={(clicked) =>
+                    setLightbox({
+                      src: clicked,
+                      galleryTarget,
+                      galleryOccurrence: galleryTarget ? clickedOccurrence(galleryTarget, sourceOffset) : undefined,
+                    })}
                   {...imageProps}
+                  allowLocalFileOpen={resolveMediaInWorkspace && !mediaOrigin}
                 />
               );
             }}
@@ -1972,7 +2092,7 @@ const MarkdownRendererBase = memo(function MarkdownRendererBase({
         const safeProps = omitMarkdownInternalProps(props as Record<string, unknown>);
         if (!allowPrivilegedLinks) {
           return (
-            <code className={cn(INLINE_CODE_CLASS)} {...safeProps}>
+            <code className={cn(INLINE_CODE_CLASS, INLINE_CODE_WRAP_CLASS)} {...safeProps}>
               {children}
             </code>
           );
@@ -2120,8 +2240,14 @@ const MarkdownRendererBase = memo(function MarkdownRendererBase({
           {renderedContent}
         </ReactMarkdown>
       )}
-      {lightboxSrc && (
-        <ImageLightbox src={lightboxSrc} onClose={() => setLightboxSrc(null)} />
+      {lightbox && (
+        <ImageLightbox
+          src={lightbox.src}
+          galleryTarget={lightbox.galleryTarget}
+          galleryOccurrence={lightbox.galleryOccurrence}
+          enableGallery={lightbox.galleryTarget !== undefined}
+          onClose={() => setLightbox(null)}
+        />
       )}
       {/* ADR-4: triggerRef intentionally omitted — markdown links rendered by
           react-markdown have no stable button ref; TextLightbox falls back
@@ -2150,8 +2276,10 @@ export const MarkdownRenderer = memo(function MarkdownRenderer(props: MarkdownRe
   const instanceKey = useId();
   const sessionFileCtx = useChatSessionFile();
   const source = useStreamingThrottle(props.content, props.isStreaming ?? false);
-  const renderMedia = (node: RichNode) => {
-    if (node.kind === 'image') return <MarkdownRendererBase {...props} content={richMarkdown(node) ?? ''} isStreaming={false} mediaStreaming={props.isStreaming ?? false} />;
+  const section = (partKey: number, nodeId?: string) =>
+    props.galleryMessageKey === undefined ? undefined : replySectionId(props.galleryMessageKey, partKey, nodeId);
+  const renderMediaFor = (partKey: number) => (node: RichNode) => {
+    if (node.kind === 'image') return <MarkdownRendererBase {...props} content={richMarkdown(node) ?? ''} isStreaming={false} mediaStreaming={props.isStreaming ?? false} gallerySection={section(partKey, node.id)} />;
     const raw = richMediaSource(node);
     if (!raw) return null;
     if (node.kind === 'video' && youtubeVideo(raw)) return <VideoSitePreview src={raw} title={richString(node, 'alt', 'YouTube')} />;
@@ -2161,23 +2289,27 @@ export const MarkdownRenderer = memo(function MarkdownRenderer(props: MarkdownRe
     return (
       <WorkspaceMediaSrc src={raw} workingDir={props.workingDir} enabled={resolveInWorkspace} streaming={props.isStreaming ?? false}>
         {(localSrc = raw) => {
-          const normalized = localSrc.startsWith('xdt-audio://') && allowPrivilegedLinks ? localSrc : normalizeMarkdownImageSrc(localSrc, props.workingDir, allowPrivilegedLinks);
+          const mediaOrigin = markdownMediaOrigin(localSrc, props.currentSessionId ? toRemoteMediaOrigin(sessionFileCtx.origin, sessionFileCtx.workingDir) : undefined, props.workingDir);
+          const normalized = normalizeMarkdownImageSrc(localSrc, props.workingDir, allowPrivilegedLinks,
+            mediaOrigin ?? (props.currentSessionId && sessionFileCtx.localConfirmed !== true ? null : undefined));
           if (!normalized) return null;
           // Local audio has its own extension-checked protocol; xdt-file serves
           // images/documents/video and rejects MP3. Preserve the encoded path and
           // select the handler before wrapping the URL for a remote source device.
           const playable = node.kind === 'audio' ? normalized.replace(/^xdt-file:/, 'xdt-audio:') : normalized;
-          const src = rewriteToRemoteMediaOrigin(playable, props.currentSessionId ? toRemoteMediaOrigin(sessionFileCtx.origin, sessionFileCtx.workingDir) : undefined);
-          return node.kind === 'audio' ? <InlineXdtAudioPlayer src={src} /> : <ChatVideoView src={src} filename={richString(node, 'alt', 'video')} variant="tool-output" sessionId={props.currentSessionId} />;
+          const src = rewriteToRemoteMediaOrigin(playable, mediaOrigin);
+          // ChatVideoView 会按 sessionId 再改写一次;不改写的来源(file://host)不能让它补上。
+          return node.kind === 'audio' ? <InlineXdtAudioPlayer src={src} /> : <ChatVideoView src={src} filename={richString(node, 'alt', 'video')} variant="tool-output" sessionId={mediaOrigin ? props.currentSessionId : undefined} />;
         }}
       </WorkspaceMediaSrc>
     );
   };
   const parts = useMemo(() => props.renderRichAnswers ? splitRichAnswer(source) : [], [source, props.renderRichAnswers]);
-  if (!parts.some(part => part.kind === 'rich')) return <MarkdownRendererBase {...props} />;
+  // A reply without component blocks is one plain part starting at offset 0.
+  if (!parts.some(part => part.kind === 'rich')) return <MarkdownRendererBase {...props} gallerySection={section(0)} />;
   return <div className="rich-answer-body">{parts.map(part => part.kind === 'rich'
-    ? <RichAnswer renderMedia={renderMedia} key={part.key} source={part.source} complete={part.complete || !props.isStreaming}
+    ? <RichAnswer renderMedia={renderMediaFor(part.key)} key={part.key} source={part.source} complete={part.complete || !props.isStreaming}
         stateKey={`${props.streamFadeKey ?? instanceKey}:${part.key}`}
-        renderMarkdown={(content, id) => <MarkdownRendererBase {...props} content={content} streamFadeKey={`${props.streamFadeKey}:${part.key}:${id}`} />} />
-    : <MarkdownRendererBase {...props} key={part.key} content={part.source} isStreaming={!part.complete && props.isStreaming} mediaStreaming={props.isStreaming ?? false} streamFadeKey={`${props.streamFadeKey}:${part.key}`} />)}</div>;
+        renderMarkdown={(content, id) => <MarkdownRendererBase {...props} content={content} streamFadeKey={`${props.streamFadeKey}:${part.key}:${id}`} gallerySection={section(part.key, id)} />} />
+    : <MarkdownRendererBase {...props} key={part.key} content={part.source} isStreaming={!part.complete && props.isStreaming} mediaStreaming={props.isStreaming ?? false} streamFadeKey={`${props.streamFadeKey}:${part.key}`} gallerySection={section(part.key)} />)}</div>;
 });

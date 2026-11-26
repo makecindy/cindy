@@ -50,7 +50,7 @@ import {
 import { useTranslation } from 'react-i18next';
 
 import { cn } from '@/lib/utils';
-import { Tip } from '@/components/ui/tooltip';
+import { SidebarIconButton } from '@/components/sidebar/SidebarIconButton';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -71,6 +71,7 @@ import {
 } from '../../hooks/useRemoteHostProjectOrders';
 import { SortableList } from '@/components/sidebar/SortableList';
 import { useReducedMotion } from '@/hooks/useReducedMotion';
+import { useTaskListMode } from '@/hooks/useTaskListMode';
 import { useSidebarMainViewMode } from '@/hooks/useSidebarCardMode';
 import { ProjectNode } from './ProjectNode';
 import { UnclassifiedSection } from './UnclassifiedSection';
@@ -83,6 +84,7 @@ import {
   normalizeManualProjectOrder,
   mergeVisibleReorder,
   snapshotManualProjectOrder,
+  sidebarContentFilterCount,
   loadDeviceGroupCollapsedKeys,
   persistDeviceGroupCollapsedKeys,
   loadDialogueGroupCollapsedKeys,
@@ -108,7 +110,6 @@ import { useViewedPriorityHold } from '../../hooks/useViewedPriorityHold';
 import { projectKeyComparisonKey } from '../../lib/projectGrouping';
 import { buildSessionSourceLabelMap } from '../../lib/sessionSourceLabel';
 import { aggregateSessionLamps, type SessionLampAggregate } from '../../lib/sessionLampAggregation';
-import { AttentionDot } from '@/components/sidebar/AttentionDot';
 import { SidebarRightStatusIndicator } from '../SidebarRightStatusIndicator';
 import { useSessionAttentionKindsWithOrcaLeads } from '../../lib/orcaLeadWorkerAttention';
 import { useSessionAttentionUrgencySet } from '../../contexts/SessionAttentionUrgencyContext';
@@ -117,12 +118,13 @@ import {
   isRemoteSessionActivityActive,
   useRemoteSessionActivityRevision,
 } from '@/features/device-link/remoteSessionActivityStore';
-import { absorbSessionStarting } from '@/lib/sessionStartingStore';
+import { absorbSessionStarting, useStartingSessionIds } from '@/lib/sessionStartingStore';
 import type { DialogueDeviceTarget } from '../../lib/dialogueCreateTarget';
 import { MainListScopeHeader } from '../MainListScopeHeader';
 import { DeviceSectionHeader } from '../DeviceSectionHeader';
 import { SectionCollapse } from '../SectionCollapse';
 import { SessionEntryList, SessionEntryRows } from '../SessionEntryList';
+import { TaskInbox, type TaskInboxProps } from '../TaskInbox';
 import { sessionRowKey } from '../sessionRowKey';
 import { useCollapsibleShowAll } from '../hooks/useCollapsibleShowAll';
 import { useAutomationGroupsCollapsed } from '../../hooks/useAutomationGroupCollapsed';
@@ -191,6 +193,12 @@ function ShowAllEntriesButton({ count, onClick }: { count: number; onClick: () =
 
 export interface ProjectsSectionProps {
   unclassified: Session[];
+  /** Same device/content scope, including archived tasks, for the standalone inbox mode. */
+  inboxSessions?: readonly Session[];
+  inboxNow?: number;
+  inboxTeammates?: TaskInboxProps['teammates'];
+  /** Inbox: whether a task belongs to a teammate (the task list's teammate-filter test). */
+  isInboxTeammateTask?: (session: Session) => boolean;
   /** 已经按 filter.projects 过滤后、仅会被渲染的 Project 子集。 */
   projects: ProjectNodeData[];
   /**
@@ -236,23 +244,19 @@ export interface ProjectsSectionProps {
   scheduleSessionIndex: ReadonlyMap<string, AutomationScheduleSessionInfo>;
   selectedSessionIds?: ReadonlySet<string>;
   onSessionClick: SessionClickHandler;
-  onAction: (id: string, action: 'delete' | 'archive' | 'archive-now' | 'unarchive') => void;
+  onAction: (id: string, action: 'delete' | 'archive' | 'archive-now' | 'complete' | 'unarchive') => void;
   onRename: (id: string, title: string) => void;
   onTogglePin: (id: string, currentlyPinned: boolean) => void;
   onMoveSession?: (id: string, target: SessionMoveTarget) => void;
   projectOptions?: readonly FolderPickerOption[];
   onScheduleAction: (group: AutomationSessionGroup, action: AutomationScheduleAction) => void;
   onToggleProject: (projectKey: string) => void;
-  onToggleProjectPin: (project: ProjectNodeData, currentlyPinned: boolean) => void;
+  onSettings: (project: ProjectNodeData) => void;
   onRenameProject: (project: ProjectNodeData, alias: string) => Promise<void>;
-  onRemoveFromSidebar: (project: ProjectNodeData) => void;
   onCollapseAll: () => void;
   onExpandAll: () => void;
-  /**
-   * 段头新建项目：选择一个新项目目录后进入 transient draft route。
-   * 2026-08-12 起段头按钮暂时隐藏(见下方段头注释),prop 保留以便恢复入口。
-   */
-  onCreateProject?: () => void;
+  /** 在设备行指定的电脑上打开新建项目表单；null 表示本机。 */
+  onCreateProject?: (deviceTarget: DialogueDeviceTarget | null) => void;
   /** delayed-create:在该 project 的 workingDir 下进 transient draft route。
    *  父层 wrapper 会处理"预填 workingDir 到 newMakerDraft store + navigate('/cc-agent/new')"。
    *  vendor 由用户在 NewMakerDraftRoute 内的 VendorSegmentedSwitcher 决定(读 draft.vendor)。 */
@@ -261,8 +265,6 @@ export interface ProjectsSectionProps {
   onOpenConversationSearch: (project: ProjectNodeData) => void;
   /** 在系统文件管理器中打开 project 的 workingDir。 */
   onOpenInExplorer: (workingDir: string) => void;
-  /** 打开设置 → 任务导入，只看这个项目。 */
-  onImportFromTools: (project: ProjectNodeData) => void;
   /** 进入 workdir 文件浏览模式 (vscode-style file tree + body viewer)。 */
   onBrowseFiles: (project: ProjectNodeData) => void;
   /** 右键菜单 → 归档该 project 下所有非执行中的 session（带二次确认）。 */
@@ -288,6 +290,10 @@ export interface ProjectsSectionProps {
 
 export function ProjectsSection({
   unclassified,
+  inboxSessions,
+  inboxNow,
+  inboxTeammates,
+  isInboxTeammateTask,
   projects,
   dialogues,
   dialogueActionSessions = dialogues,
@@ -313,15 +319,14 @@ export function ProjectsSection({
   projectOptions,
   onScheduleAction,
   onToggleProject,
-  onToggleProjectPin,
+  onSettings,
   onRenameProject,
-  onRemoveFromSidebar,
   onCollapseAll,
   onExpandAll,
+  onCreateProject,
   onCreateInProject,
   onOpenConversationSearch,
   onOpenInExplorer,
-  onImportFromTools,
   onBrowseFiles,
   onArchiveAll,
   onSearchDialogues,
@@ -347,6 +352,7 @@ export function ProjectsSection({
   const localHostProjectOrder = useLocalHostProjectOrder();
   const remoteHostProjectOrders = useRemoteHostProjectOrders(selectedMachineForOrder);
   // 主列表显示形态(B 期):text 紧凑行 / list 满宽两行卡。独立于置顶段的三态设置。
+  const { mode: taskListMode } = useTaskListMode();
   const { mode: mainViewMode } = useSidebarMainViewMode();
   const mainSessionVariant: 'text' | 'list' = mainViewMode === 'list' ? 'list' : 'text';
   // SortableList 只在自定义项目顺序且按项目分组时挂载。
@@ -579,27 +585,45 @@ export function ProjectsSection({
   const sortingPriorityContext = filter.sortBy === 'priority' ? priorityContext : undefined;
   // starting 只让位给真实 in-flight:本地 isRunning(见 useStartingSessionIds),
   // 远程 running / needs-interaction。终态 attention 不再吸收 —— 旧终态会误伤
-  // 新发送,新终态又要代次才能和旧的区分,两边补丁会来回打。没经过 running
-  // 的快完成靠 TTL。
+  // 新发送,新终态又要代次才能和旧的区分,两边补丁会来回打。
+  // 远程任务没经过 running 推送就结束时(快完成、或完成即已读),以被控端推来的
+  // lastTurnEndedAt 为代次:发送后首次看到时记基线,之后它前进即本轮已结束,
+  // 不再等 TTL(否则收件箱里已完成的远程任务会在「进行中」挂最多 2 分钟)。
+  // 同一台电脑的时钟前后比较,不受两端时钟差影响。
+  const startingSessionIds = useStartingSessionIds();
+  const startingTurnBaselines = useRef(new Map<string, number>());
   useEffect(() => {
     const settled = new Set<string>();
+    const baselines = startingTurnBaselines.current;
     const considerRemote = (session: Session) => {
+      if (!session.deviceLinkDeviceId) return;
       if (
         isRemoteSessionActivityActive(
           getRemoteSessionActivity(session.id, session.deviceLinkDeviceId),
         )
       ) {
         settled.add(session.id);
+        return;
       }
+      if (!startingSessionIds.has(session.id)) return;
+      const endedAt = session.lastTurnEndedAt ?? 0;
+      const baseline = baselines.get(session.id);
+      if (baseline === undefined) baselines.set(session.id, endedAt);
+      else if (endedAt > baseline) settled.add(session.id);
     };
+    for (const id of baselines.keys()) {
+      if (!startingSessionIds.has(id)) baselines.delete(id);
+    }
     for (const project of projects) {
       for (const session of project.sessions) considerRemote(session);
     }
     for (const session of dialogues) considerRemote(session);
     for (const session of unclassified) considerRemote(session);
+    // The inbox spans tasks outside the regular list's scope.
+    for (const session of inboxSessions ?? []) considerRemote(session);
     absorbSessionStarting(settled);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- remoteActivityRevision 代表 getRemoteSessionActivity 读到的整表内容
-  }, [projects, dialogues, unclassified, remoteActivityRevision]);
+  }, [projects, dialogues, unclassified, inboxSessions, startingSessionIds, remoteActivityRevision]);
 
   // E 期「按设备分组」:有可选远程设备（含断线缓存）+ 开关开 → 按设备切段(本机在前,
   // 远程按设备切换栏顺序);其余情况单段直渲。切段后按当前排序重排本段。
@@ -890,9 +914,9 @@ export function ProjectsSection({
   const FoldIcon = foldState === 'expand-all' ? ChevronsUpDown : ChevronsDownUp;
   // 散排行的来源标签:平铺时项目会话也要标项目名,不能只喂 dialogues。
   const flattenedSessionsForSourceLabels = useMemo(() => {
-    if (filter.groupBy === 'project') return dialogues;
-    return [...projects.flatMap((project) => project.sessions), ...dialogues];
-  }, [filter.groupBy, projects, dialogues]);
+    if (taskListMode === 'inbox' && inboxSessions) return inboxSessions;
+    return [...projects.flatMap((project) => project.sessions), ...dialogues, ...unclassified];
+  }, [taskListMode, inboxSessions, projects, dialogues, unclassified]);
   const dialogueSourceLabelMap = useMemo(
     () =>
       buildSessionSourceLabelMap(
@@ -944,10 +968,8 @@ export function ProjectsSection({
       // 按设备分段时段头已写明设备,行内不再重复标注归属(2026-08-12 用户裁决)。
       hideRemoteMachineLabel={deviceGroupingActive}
       onToggle={onToggleProject}
-      isProjectPinned={false}
-      onToggleProjectPin={onToggleProjectPin}
+      onSettings={onSettings}
       onRenameProject={onRenameProject}
-      onRemoveFromSidebar={onRemoveFromSidebar}
       onSessionClick={onSessionClick}
       onAction={onAction}
       onRename={onRename}
@@ -959,7 +981,6 @@ export function ProjectsSection({
       onCreateInProject={onCreateInProject}
       onOpenConversationSearch={onOpenConversationSearch}
       onOpenInExplorer={onOpenInExplorer}
-      onImportFromTools={onImportFromTools}
       onBrowseFiles={onBrowseFiles}
       onArchiveAll={onArchiveAll}
     />
@@ -1135,7 +1156,7 @@ export function ProjectsSection({
         dialogueCount={dialogueCount}
         hasRemoteDevices={deviceGroupingAvailable}
         fold={
-          hasMainListContent && foldState !== null
+          taskListMode === 'tasks' && hasMainListContent && foldState !== null
             ? {
                 label: foldLabel,
                 Icon: FoldIcon,
@@ -1145,7 +1166,7 @@ export function ProjectsSection({
             : null
         }
       />
-      {hasMainListContent ? (
+      {taskListMode === 'tasks' && hasMainListContent ? (
         <div className="relative flex flex-col gap-1 pt-1 pr-0 pl-3">
           {!deviceGroupingActive &&
             visibleMixedEntries
@@ -1209,10 +1230,25 @@ export function ProjectsSection({
                 // 设备层聚合灯:聚合本段全部条目的会话(与段内渲染一致)。
                 // 仅收起时显示运行态与未读点,展开后由下层内容提示。
                 const sectionLamp = lampAgg(section.entries.flatMap(entrySessions));
+                const hasDeviceActions = Boolean(onCreateProject || section.deviceId);
+                const showDeviceTrailingStatus =
+                  !online || Boolean(sectionCollapsed && sectionLamp.dotTone);
                 return (
                   <div key={key} className="flex flex-col">
                     {/* 设备分组头:可折叠。在线设备不画状态点;离线设备保留灰点与文字提示。 */}
-                    <DeviceSectionHeader deviceId={section.deviceId} name={name}>
+                    <DeviceSectionHeader
+                      deviceId={section.deviceId}
+                      name={name}
+                      createProjectDisabled={!online}
+                      sessionVariant={mainSessionVariant}
+                      onCreateProject={
+                        onCreateProject
+                          ? () => onCreateProject(
+                              section.deviceId ? { deviceId: section.deviceId, deviceName: name } : null,
+                            )
+                          : undefined
+                      }
+                    >
                       <button
                         type="button"
                         onClick={() => toggleDeviceSection(key)}
@@ -1223,7 +1259,8 @@ export function ProjectsSection({
                             : t('ccAgent.sidebar.deviceGroup.collapse')
                         }
                         className={cn(
-                          'flex h-6 min-w-0 flex-1 items-center gap-1.5 rounded-full px-2',
+                          'flex h-6 min-w-0 flex-1 items-center gap-1.5 rounded-full pl-2',
+                          mainSessionVariant === 'list' ? 'pr-2.5' : 'pr-2',
                           'text-[var(--sidebar-list-muted)] transition-colors hover:text-[var(--sidebar-nav-text)]',
                         )}
                       >
@@ -1255,26 +1292,38 @@ export function ProjectsSection({
                             className="size-1.5 shrink-0 rounded-full bg-[var(--text-tertiary)]"
                           />
                         )}
-                        {/* 条数已去掉(2026-08-12 用户裁决):它数的是顶层条目
-                            (项目行 + 散排对话 + 对话组),不是任务数,读起来只会误导;
-                            段展开后内容本身就是答案。右侧改为灯组:仅收起时显示聚合未读点
-                            (段级 size 6,rail 段钮同款);离线标注始终保留。 */}
-                        <span className="ml-auto flex shrink-0 items-center gap-1.5">
-                          {sectionCollapsed && sectionLamp.dotTone && (
-                            <AttentionDot size={6} tone={sectionLamp.dotTone} />
-                          )}
-                          {!online && (
-                            <span className="shrink-0 text-xs text-[var(--cmd-palette-item-meta)]">
-                              {t('ccAgent.sidebar.deviceGroup.offline')}
-                            </span>
-                          )}
-                        </span>
+                        {/* 右侧状态槽与项目/分组/任务行对齐同一垂直列：悬停或键盘聚焦操作按钮时
+                            由 DeviceSectionHeader 原地替换，不再预先为隐藏按钮留白。 */}
+                        {showDeviceTrailingStatus && (
+                          <span
+                            className={cn(
+                              'ml-auto flex shrink-0 items-center gap-1.5',
+                              hasDeviceActions && [
+                                'transition-opacity duration-[var(--motion-fast)] motion-reduce:transition-none',
+                                'group-hover/device-header:w-0 group-hover/device-header:overflow-hidden group-hover/device-header:opacity-0',
+                                'group-has-[[data-device-header-action]:focus-visible]/device-header:w-0 group-has-[[data-device-header-action]:focus-visible]/device-header:overflow-hidden group-has-[[data-device-header-action]:focus-visible]/device-header:opacity-0',
+                              ],
+                            )}
+                          >
+                            {!online && (
+                              <span className="shrink-0 text-xs text-[var(--cmd-palette-item-meta)]">
+                                {t('ccAgent.sidebar.deviceGroup.offline')}
+                              </span>
+                            )}
+                            {sectionCollapsed && sectionLamp.dotTone && (
+                              <SidebarRightStatusIndicator
+                                kind={sectionLamp.dotTone}
+                                isActive={false}
+                              />
+                            )}
+                          </span>
+                        )}
                       </button>
                     </DeviceSectionHeader>
                     <SectionCollapse collapsed={sectionCollapsed}>
                       <div
                         className={cn(
-                          'flex flex-col gap-1 pl-2',
+                          'flex flex-col gap-1',
                           section.entries.length > 0 && 'pt-1',
                         )}
                       >
@@ -1369,6 +1418,30 @@ export function ProjectsSection({
           )}
         </div>
       ) : null}
+      {taskListMode === 'inbox' && inboxSessions && (
+        <TaskInbox
+          now={inboxNow}
+          teammates={inboxTeammates}
+          sessions={inboxSessions}
+          contentFiltered={sidebarContentFilterCount(filter) > 0}
+          isTeammateTask={isInboxTeammateTask}
+          priorityContext={priorityContext}
+          activeSessionId={activeSessionId}
+          runningSessionIds={runningSessionIds}
+          attachedSessionIds={attachedSessionIds}
+          notifications={notifications}
+          selectedSessionIds={selectedSessionIds}
+          onSessionClick={onSessionClick}
+          onAction={onAction}
+          onRename={onRename}
+          onTogglePin={onTogglePin}
+          onMoveSession={onMoveSession}
+          projectOptions={projectOptions}
+          onScheduleAction={onScheduleAction}
+          sourceLabelMap={dialogueSourceLabelMap}
+          sessionVariant={mainSessionVariant}
+        />
+      )}
     </div>
   );
 }
@@ -1451,7 +1524,7 @@ export function SessionGroupNode({
   scheduleSessionIndex: ReadonlyMap<string, AutomationScheduleSessionInfo>;
   selectedSessionIds?: ReadonlySet<string>;
   onSessionClick: SessionClickHandler;
-  onAction: (id: string, action: 'delete' | 'archive' | 'archive-now' | 'unarchive') => void;
+  onAction: (id: string, action: 'delete' | 'archive' | 'archive-now' | 'complete' | 'unarchive') => void;
   onRename: (id: string, title: string) => void;
   onTogglePin: (id: string, currentlyPinned: boolean) => void;
   onMoveSession?: (id: string, target: SessionMoveTarget) => void;
@@ -1496,7 +1569,8 @@ export function SessionGroupNode({
           }
         }}
         className={cn(
-          'group flex h-8 w-full cursor-pointer items-center gap-2.5 rounded-full pl-3 pr-2',
+          'group flex h-8 w-full cursor-pointer items-center gap-2.5 rounded-full pl-3',
+          sessionVariant === 'list' ? 'pr-2.5' : 'pr-2',
           'text-sm font-normal text-[var(--sidebar-list-muted)]',
           'transition-colors hover:bg-sidebar-item-hover',
         )}
@@ -1524,54 +1598,68 @@ export function SessionGroupNode({
             className="shrink-0 text-[var(--cmd-palette-item-meta)] opacity-0 transition-opacity duration-[120ms] group-hover:opacity-100"
           />
         </div>
-        {/* 聚合状态与普通任务行保持同一右侧槽位；展开后由子任务行分别显示。 */}
-        {collapsed && lamp?.dotTone && (
-          <div className="ml-auto flex h-6 shrink-0 items-center justify-end">
-            <SidebarRightStatusIndicator kind={lamp.dotTone} isActive={false} />
-          </div>
-        )}
-        {/* 悬浮工具组:与 ProjectNode Header 同款——常态隐藏,hover 整行淡入。
-            新建(SquarePen)与项目行等位，右键菜单独立于新建与折叠操作。 */}
-        {onCreateDialogue && (
-          <div
-            className={cn(
-              'flex shrink-0 items-center gap-0.5',
-              'opacity-0 transition-opacity focus-within:opacity-100 group-hover:opacity-100',
-            )}
-          >
-            <Tip text={createDisabledReason ?? createLabel ?? t('ccAgent.sidebar.newDialogue')}>
-              <button
-                type="button"
-                aria-label={createDisabledReason ?? createLabel ?? t('ccAgent.sidebar.newDialogue')}
-                disabled={isCreateDisabled}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  if (!isCreateDisabled) onCreateDialogue();
-                }}
+        {/* 右侧状态槽与 ProjectNode / SessionItem 共用同一覆盖模式：静态下不给
+            新建按钮预先留白，保证绿/蓝/红点贴齐同一垂直列；悬停或聚焦新建按钮时
+            状态点淡出，由新建按钮原地替换。无新建按钮的分组（如自动化）只保留状态点。 */}
+        {onCreateDialogue ? (
+          <div className="group/slot relative ml-auto flex h-6 shrink-0 items-center justify-end">
+            <div className="grid h-6 grid-cols-[max-content] items-center justify-items-end">
+              {collapsed && lamp?.dotTone ? (
+                <div
+                  className={cn(
+                    'col-start-1 row-start-1 flex items-center gap-1',
+                    'transition-opacity duration-[var(--motion-fast)]',
+                    'group-hover:w-0 group-hover:overflow-hidden group-hover:opacity-0',
+                    'group-focus-within/slot:w-0 group-focus-within/slot:overflow-hidden group-focus-within/slot:opacity-0',
+                  )}
+                >
+                  <SidebarRightStatusIndicator kind={lamp.dotTone} isActive={false} />
+                </div>
+              ) : null}
+              <div
+                aria-hidden
+                className="invisible col-start-1 row-start-1 hidden h-6 items-center gap-0.5 group-hover:flex group-focus-within/slot:flex"
+              >
+                <span className="size-5 shrink-0" />
+              </div>
+              <div
                 onPointerDown={(e) => e.stopPropagation()}
                 onKeyDown={(e) => e.stopPropagation()}
+                onClick={(e) => e.stopPropagation()}
                 className={cn(
-                  'flex size-6 shrink-0 items-center justify-center rounded-full',
-                  'text-sidebar-action-icon hover:text-foreground',
-                  'hover:bg-sidebar-item-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
-                  'disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent',
+                  'absolute right-0 top-0 flex h-6 items-center gap-0.5',
+                  'pointer-events-none opacity-0 transition-opacity duration-[var(--motion-fast)]',
+                  'group-hover:pointer-events-auto group-hover:opacity-100',
+                  'focus-within:pointer-events-auto focus-within:opacity-100',
                 )}
               >
-                <SquarePen size={14} strokeWidth={2} />
-              </button>
-            </Tip>
+                <SidebarIconButton
+                  icon={SquarePen}
+                  label={createDisabledReason ?? createLabel ?? t('ccAgent.sidebar.newDialogue')}
+                  disabled={isCreateDisabled}
+                  onClick={onCreateDialogue}
+                  className={cn(
+                    'size-5 text-sidebar-action-icon hover:text-foreground [&>svg]:size-3.5',
+                    'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
+                    'disabled:cursor-not-allowed disabled:opacity-50',
+                  )}
+                />
+              </div>
+            </div>
           </div>
+        ) : (
+          collapsed &&
+          lamp?.dotTone && (
+            <div className="ml-auto flex h-6 shrink-0 items-center justify-end">
+              <SidebarRightStatusIndicator kind={lamp.dotTone} isActive={false} />
+            </div>
+          )
         )}
       </div>
-      {/* 组内会话:与 ProjectNode 的会话区同款容器(gap / pt、list 缩进)
+      {/* 组内会话:与 ProjectNode 的会话区同款容器(gap / pt)
           与同一份折叠上限(getProjectSessionCollapseLimit)。 */}
       <SectionCollapse collapsed={collapsed} data-no-drag>
-        <div
-          className={cn(
-            'flex flex-col gap-0.5 pt-0.5 pr-0',
-            sessionVariant === 'list' ? 'pl-2' : 'pl-0',
-          )}
-        >
+        <div className="flex flex-col gap-0.5 pt-0.5">
           <SessionEntryList
             sessions={sessions}
             activeSessionId={activeSessionId}
@@ -1587,7 +1675,6 @@ export function SessionGroupNode({
             onMoveSession={onMoveSession}
             projectOptions={projectOptions}
             onScheduleAction={onScheduleAction}
-            indented
             collapsible
             collapseLimit={getProjectSessionCollapseLimit()}
             disableCollapse={disableSessionCollapse}

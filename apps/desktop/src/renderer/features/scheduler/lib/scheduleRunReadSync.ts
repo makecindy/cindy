@@ -37,6 +37,7 @@ function emit(): void {
 export interface MarkScheduleRunsReadResult {
   processed: string[];
   failed: string[];
+  /** First write or mirror-refresh error; failed only counts failed run writes. */
   firstError?: string;
 }
 
@@ -72,8 +73,16 @@ export async function markScheduleRunsReadAndSync(
       }
     });
   }
-  if (deviceId) await refreshRemoteDeviceSessions(deviceId, undefined, { scope: 'schedule' });
-  else emit();
+  if (deviceId) {
+    // A successful write (including no-op) is not enough: Done needs a current mirror.
+    // Keep the write counts truthful and report refresh failure through the same error result.
+    try {
+      const refresh = await refreshRemoteDeviceSessions(deviceId, undefined, { scope: 'schedule' });
+      if (refresh !== 'ok') firstError ??= `Remote schedule refresh: ${refresh}`;
+    } catch (error) {
+      firstError ??= error instanceof Error ? error.message : String(error);
+    }
+  } else emit();
   return firstError === undefined ? { processed, failed } : { processed, failed, firstError };
 }
 

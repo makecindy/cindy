@@ -7,7 +7,7 @@
 
 import type {
   AgentEvent,
-  AgentKind,
+  EngineKind,
   SendOrigin,
   SessionSendResult,
   SessionStatus,
@@ -75,7 +75,8 @@ export interface GoalState {
   usageResetAt: number | null;
   /** 最近一次裁决 / 守卫给出的理由(UI 展示 + resume 续轮提示)。 */
   lastReason: string | null;
-  agentKind: AgentKind;
+  /** 'acp' = 插件引擎任务(docs/plans/acp-plugin-bridge.md)。 */
+  agentKind: EngineKind;
   startedAt: number;
   updatedAt: number;
 }
@@ -85,7 +86,7 @@ export interface SetGoalInput {
   sessionId: string;
   objective: string;
   /** 留空则由 controller 从活动会话(SessionLike.agentKind)解析。 */
-  agentKind?: AgentKind;
+  agentKind?: EngineKind;
   /** 新建时的上限(GUI 新建弹窗的高级设置)。留空 → 走系统默认(getDefaults)。仅新建路径用;编辑改 objective 不动上限。 */
   limits?: GoalLimits;
 }
@@ -139,7 +140,7 @@ export interface GoalCompletionSummary {
 /** Session 的结构子集 —— 真 Session 满足之,fake 实现供单测。 */
 export interface SessionLike {
   readonly id: string;
-  readonly agentKind: AgentKind;
+  readonly agentKind: EngineKind;
   send(
     message: UserMessage | string,
     opts?: {
@@ -246,12 +247,13 @@ export interface GoalControllerDeps {
    * 处理(ChatGPT / Claude / SuperGrok,见 usage/accountUsageLimit.ts)。ChatGPT 成功轮次
    * 不做缓存配额的主动检测,下一轮由上游判断准入;其它订阅仍主动读快照,非订阅的
    * Claude Code 会话退回 Cindy 网关预算快照。
-   * 被拒路径必须传本轮限额报错 `turnError`,否则 ChatGPT 会跳过重置时刻查询;
+   * 本机 OpenCode Go 只在本轮被拒后读取官方受限窗口。被拒路径必须传本轮限额报错
+   * `turnError`,否则 ChatGPT 与 OpenCode Go 都会跳过重置时刻查询;
    * 订阅账号优先用报错原文里写明的重置时刻,再回落到实际账号窗口。
    * 返回 null = 未提供账号限额信息(主动检测不阻止续轮;被动路径仍按限额错误停止)。
    */
   getAccountLimit?: (
-    agentKind: AgentKind,
+    agentKind: EngineKind,
     sessionId: string,
     turnError?: unknown,
   ) => Promise<AccountLimitInfo | null>;

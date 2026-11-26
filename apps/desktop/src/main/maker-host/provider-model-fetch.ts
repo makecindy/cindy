@@ -1,6 +1,6 @@
 import { issueModelSourceSnapshot, modelSourceRequestSignature } from './model-source-snapshots.js';
 import { copilotModelsRequest, resolveCopilotAccountUrl } from './copilot-account-url.js';
-import { collectModelDiscoveryPages } from './model-discovery-pages.js';
+import { collectModelDiscoveryPagesWithStatus } from './model-discovery-pages.js';
 import type { DiscoveredModel } from '@cindy/model-providers';
 /**
  * provider-model-fetch —— 供应商「获取模型列表」（自定义供应商表单消费）。
@@ -23,12 +23,13 @@ import {
   type Provider,
 } from '@cindy/model-providers';
 
-import { classifyProviderError, type ProviderErrorCode } from '../../shared/providerErrors.js';
+import { classifyProviderError, providerNetworkErrorCode, type ProviderErrorCode } from '../../shared/providerErrors.js';
 import {
   deriveModelsDiscoveryUrl,
   readGenericOAuthAccessToken,
 } from './generic-oauth.desktop.js';
 import { outboundFetch } from './outbound-fetch.desktop.js';
+import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../appSessionState.js';
 
 /** 拉取超时（与 test-connection 探测同量级）。 */
 const FETCH_TIMEOUT_MS = 10_000;
@@ -36,18 +37,55 @@ const FETCH_TIMEOUT_MS = 10_000;
 const MAX_ERROR_BODY_BYTES = 16 * 1024;
 const INVALID_DISCOVERY_URL = 'model discovery requires HTTP(S) URLs without embedded credentials';
 const CODEX_MODELS_CLIENT_VERSION = '0.147.0';
+const OPENAI_MODELS_URL = 'https://api.openai.com/v1/models';
+const OPENAI_MODEL_LIST_TTL_MS = 5 * 60_000;
+const openAiModelLists = new WeakMap<typeof fetch, Map<string, {
+  ids: ReadonlySet<string>; complete: boolean; expires: number;
+}>>();
 
-// Share only an in-flight Hinoki HTTP read, not parsed models or agent-bound
+function officialOpenAiModelsKey(url: string, init: RequestInit): string | undefined {
+  if (url !== OPENAI_MODELS_URL && url !== `${OPENAI_MODELS_URL}?client_version=${CODEX_MODELS_CLIENT_VERSION}`) return;
+  if (!/^Bearer \S+$/i.test(new Headers(init.headers).get('authorization') ?? '')
+    || isAppSessionBoundaryPending()) return;
+  // The official generic and Codex catalog URLs are equivalent. All effective
+  // headers, including project and organization, still bind the memory entry.
+  return `${activeOwnerScopeKey()}:${modelSourceRequestSignature(OPENAI_MODELS_URL, init)}`;
+}
+
+export function openAiModelsRequestKey(spec: ProviderModelsFetchSpec): string | undefined {
+  const { url, init } = buildModelsFetchRequest(spec);
+  return officialOpenAiModelsKey(url, init);
+}
+
+export function recentOpenAiModelList(key: string, fetchImpl: typeof fetch = outboundFetch) {
+  const cache = openAiModelLists.get(fetchImpl);
+  const listing = cache?.get(key);
+  if (listing && listing.expires > Date.now()) return listing;
+  cache?.delete(key);
+}
+
+export function invalidateOpenAiModelList(key: string, fetchImpl: typeof fetch = outboundFetch): void {
+  openAiModelLists.get(fetchImpl)?.delete(key);
+}
+
+function isOfficialOpenAiModelList(value: unknown): boolean {
+  const list = value as { object?: unknown; data?: unknown; error?: unknown } | null;
+  return list?.object === 'list' && list.error == null && Array.isArray(list.data)
+    && list.data.every(entry => entry && typeof entry.id === 'string' && entry.id.trim() === entry.id && entry.id !== '');
+}
+
+// Share only an in-flight Hinoki/Token Rhythm HTTP read, not parsed models or agent-bound
 // provenance receipts. Every caller keeps its own parsing/error policy below.
-const hinokiReads = new WeakMap<typeof fetch, Map<string, {
+const sharedModelReads = new WeakMap<typeof fetch, Map<string, {
   response: Promise<Response>;
   consumers: number;
 }>>();
 
 async function fetchModelsResponse(url: string, init: RequestInit, fetchImpl: typeof fetch): Promise<Response> {
-  if (url !== 'https://inference.hinoki.security/v1/models') return fetchImpl(url, init);
-  let reads = hinokiReads.get(fetchImpl);
-  if (!reads) { reads = new Map(); hinokiReads.set(fetchImpl, reads); }
+  if (url !== 'https://inference.hinoki.security/v1/models'
+    && url !== 'https://tokenrhythm.studio/v1/models') return fetchImpl(url, init);
+  let reads = sharedModelReads.get(fetchImpl);
+  if (!reads) { reads = new Map(); sharedModelReads.set(fetchImpl, reads); }
   // The existing process-local HMAC includes all effective headers (including
   // credentials) without retaining plaintext keys in the map key. Never share
   // across redirect policies or injected transport/credential-owner closures.
@@ -95,6 +133,8 @@ export interface ProviderModelsFetchSpec {
   /** Main-only import constraints; ordinary settings discovery keeps its existing policy. */
   redirect?: 'error';
   responseByteLimit?: number;
+  /** Main-only guard for reads that outlive a saved credential or owner. */
+  isCurrent?: () => boolean;
 }
 
 /** 结构化结果（查询型返回：renderer 需要 code 渲染分类文案，不走 throwIpcError）。 */
@@ -102,6 +142,13 @@ export interface ProviderModelsFetchResult {
   ok: boolean;
   /** 拉到的模型清单（ok=true 时给出；已按 id 去重;contextWindow 为端点声明的上下文长度,尽力提取）。 */
   models?: DiscoveredModel[];
+  /**
+   * true only when every advertised page was read (no failed, refused or capped page).
+   * Absent means unknown: callers must not infer that a missing model was withdrawn.
+   */
+  complete?: boolean;
+  /** Saved-provider fetches only: opaque receipt binding this listing to the credential generation. */
+  listingReceipt?: string;
   /** 失败分类码（ok=false 时给出）。 */
   code?: ProviderErrorCode;
   /** HTTP 状态码（网络层失败时缺省）。 */
@@ -272,16 +319,6 @@ export function buildModelsFetchRequest(spec: ProviderModelsFetchSpec): {
   };
 }
 
-/** 从 Error（fetch 抛出）提取网络层错误码（同 provider-diagnostics）。 */
-function networkErrorCode(err: unknown): string {
-  if (err instanceof Error) {
-    if (err.name === 'TimeoutError' || err.name === 'AbortError') return err.name;
-    const cause = (err as { cause?: { code?: unknown } }).cause;
-    if (cause && typeof cause.code === 'string') return cause.code;
-    return err.name || 'UNKNOWN_NETWORK_ERROR';
-  }
-  return 'UNKNOWN_NETWORK_ERROR';
-}
 
 /** Count decoded stream bytes before buffering/parsing, including missing or false length headers. */
 async function readLimitedBody(res: Response, limit: number): Promise<string> {
@@ -331,11 +368,13 @@ export async function fetchProviderModels(
     return { ok: false, code: 'UNKNOWN', detail: INVALID_DISCOVERY_URL };
   }
   const { url, init } = request;
+  const openAiKey = officialOpenAiModelsKey(url, init);
+  if (spec.isCurrent?.() === false) return { ok: false, code: 'UNKNOWN' };
   let res: Response;
   try {
     res = await fetchModelsResponse(url, { ...init, signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) }, fetchImpl);
   } catch (err) {
-    const cls = classifyProviderError({ networkErrorCode: networkErrorCode(err) });
+    const cls = classifyProviderError({ networkErrorCode: providerNetworkErrorCode(err) });
     return { ok: false, code: cls.code, detail: cls.detail };
   }
   if (!res.ok) {
@@ -372,8 +411,8 @@ export async function fetchProviderModels(
     };
   }
   const pageDeadline = Date.now() + 30_000;
-  const models = await collectModelDiscoveryPages(json, url, async nextUrl => {
-    if (Date.now() >= pageDeadline) throw new Error('catalog deadline exceeded');
+  const { models, complete } = await collectModelDiscoveryPagesWithStatus(json, url, async nextUrl => {
+    if (spec.isCurrent?.() === false || Date.now() >= pageDeadline) throw new Error('catalog read no longer current');
     const page = await fetchImpl(nextUrl, { ...init, redirect: 'error', signal: AbortSignal.timeout(Math.max(1, Math.min(FETCH_TIMEOUT_MS, pageDeadline - Date.now()))) });
     if (!page.ok) { await page.body?.cancel(); throw new Error('catalog page failed'); }
     return JSON.parse(await readLimitedBody(page, spec.responseByteLimit ?? 8 * 1024 * 1024));
@@ -417,5 +456,17 @@ export async function fetchProviderModels(
       detail: 'no models found in response',
     };
   }
-  return { ok: true, models: issueModelSourceSnapshot(models, spec.agent, modelSourceRequestSignature(url, init)) };
+  if (openAiKey && !res.redirected && isOfficialOpenAiModelList(json) && spec.isCurrent?.() !== false
+    && openAiKey === officialOpenAiModelsKey(url, init)) {
+    let cache = openAiModelLists.get(fetchImpl);
+    if (!cache) { cache = new Map(); openAiModelLists.set(fetchImpl, cache); }
+    cache.delete(openAiKey);
+    cache.set(openAiKey, { ids: new Set(models.map(model => model.id)), complete, expires: Date.now() + OPENAI_MODEL_LIST_TTL_MS });
+    if (cache.size > 32) cache.delete(cache.keys().next().value!);
+  }
+  return {
+    ok: true,
+    models: issueModelSourceSnapshot(models, spec.agent, modelSourceRequestSignature(url, init)),
+    complete,
+  };
 }

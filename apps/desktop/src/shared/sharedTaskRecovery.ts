@@ -1,4 +1,5 @@
-import { parseAgentErrorCode } from '@cindy/maker-shared/error-redaction';
+import { isProviderSafetyRefusalError, parseAgentErrorCode } from '@cindy/maker-shared/error-redaction';
+import { BREAKER_PROBE_BACKOFF_MAX_MS } from '@cindy/maker-shared/device-responsiveness';
 import { isQuotaExhaustedErrorMessage } from './providerErrors';
 
 /** Public, bounded diagnostics: never forward upstream messages, URLs or identities to a guest. */
@@ -16,6 +17,7 @@ export function sharedTaskRecoveryReason(message: string): SharedTaskRecoveryRea
 }
 
 export function sharedTaskRecoveryFor(message: string, agentDeviceId?: string | null): SharedTaskRecoveryReason | undefined {
+  if (isProviderSafetyRefusalError(message)) return undefined;
   const detailed = sharedTaskRecoveryReason(message);
   if (detailed) return detailed;
   if (!agentDeviceId?.startsWith('share:')) return undefined;
@@ -110,19 +112,66 @@ export function canRecoverUndeliveredOrcaReport(error: unknown): boolean {
 }
 
 /** Retry only the same idempotent probe, keeping its grant and cancellation fence.
- * The immediate retry preserves the fast path; later retries allow a brief reconnect. */
-export async function probeSharedTask<T>(stage: SharedTaskRecoveryStage, probe: () => Promise<T>, assertCurrent: () => void): Promise<T> {
-  const delays = [0, 1_000, 3_000];
+ * A restarted executor can outlive the old four-second window. Keep one immediate
+ * retry, then bounded exponential jitter; never restart allocation/open/send. */
+export async function probeSharedTask<T>(
+  stage: SharedTaskRecoveryStage,
+  probe: () => Promise<T>,
+  assertCurrent: () => void,
+  signal?: AbortSignal,
+): Promise<T> {
+  // Desktop's breaker probe serially restores the link, then invokes caps.
+  // Default link budget: 1.5s ready + 30s first write + 30s response;
+  // caps: 30s admission + 10s first write + 30s response (DeviceLinkClient).
+  // An availability horizon is not a request deadline: a peer can recover while
+  // the breaker still holds a stale probe or cooldown. Reserve one final cycle
+  // to observe recovery at that horizon, without renewing either fixed bound.
+  const compositeProbeMs = 1_500 + 30_000 + 30_000 + 30_000 + 10_000 + 30_000;
+  const observationGraceMs = 2 * compositeProbeMs + BREAKER_PROBE_BACKOFF_MAX_MS + 5_000 + 25_000;
+  const outageToleranceMs = observationGraceMs;
+  const windowMs = outageToleranceMs + observationGraceMs;
+  const deadline = performance.now() + windowMs;
+  const maxDelayMs = 20_000;
+  const minJitter = 0.75;
+  // One immediate and five ramp retries, then the shortest capped delay.
+  // Derive the count from the window so it cannot cut the window short.
+  const retryLimit = 6 + Math.ceil(windowMs / (maxDelayMs * minJitter));
   for (let attempt = 0; ; attempt++) {
+    signal?.throwIfAborted();
     assertCurrent();
     try {
       const value = await probe();
+      signal?.throwIfAborted();
       assertCurrent();
       return value;
     } catch (error) {
+      signal?.throwIfAborted();
       assertCurrent();
-      if (attempt < delays.length && canRetrySharedTaskRecovery(error)) {
-        if (delays[attempt]) await new Promise<void>(resolve => setTimeout(resolve, delays[attempt]));
+      const remaining = deadline - performance.now();
+      if (attempt < retryLimit && remaining > 0 && canRetrySharedTaskRecovery(error)) {
+        const base = attempt === 0 ? 0 : Math.min(1_000 * 2 ** (attempt - 1), maxDelayMs);
+        // Keep a final probe at the deadline instead of abandoning the last
+        // partial delay. Never bypass the shared breaker's single-flight slot.
+        const delay = Math.min(Math.round(base * (minJitter + Math.random() * 0.5)), maxDelayMs, remaining);
+        if (delay) await new Promise<void>((resolve, reject) => {
+          const finish = () => {
+            signal?.removeEventListener('abort', abort);
+            resolve();
+          };
+          const timer = setTimeout(finish, delay);
+          const abort = () => {
+            clearTimeout(timer);
+            signal?.removeEventListener('abort', abort);
+            reject(signal?.reason);
+          };
+          signal?.addEventListener('abort', abort, { once: true });
+          if (signal?.aborted) abort();
+        });
+        signal?.throwIfAborted();
+        assertCurrent();
+        // A delayed timer must not start a stale request. An RPC started within
+        // the budget keeps its own timeout and real outcome, including at its end.
+        if (performance.now() > deadline) throw sharedTaskRecoveryError(stage, sharedTaskFailureReason(error), error);
         continue;
       }
       throw sharedTaskRecoveryError(stage, sharedTaskFailureReason(error), error);

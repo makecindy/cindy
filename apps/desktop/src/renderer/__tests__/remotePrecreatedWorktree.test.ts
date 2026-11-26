@@ -10,6 +10,7 @@ import {
   listPendingRemotePrecreatedWorktrees,
   parseRemoteDiscardPrecreatedAck,
   parseRemoteWorktreeCreateResult,
+  precreateRemoteDraftWorktree,
   recoverPendingRemotePrecreatedWorktrees,
   registerPendingRemotePrecreatedWorktree,
 } from '../features/cc-agent/remotePrecreatedWorktree';
@@ -150,6 +151,7 @@ describe('createRemoteSessionWithPrecreatedWorktree', () => {
     ledgerRecords = [];
     ledgerReadable = true;
     ledgerWritable = true;
+    __testing.resetAbandonedSessionCreates();
     __testing.setLedgerApi({
       list: async () => ({
         records: ledgerRecords,
@@ -171,6 +173,38 @@ describe('createRemoteSessionWithPrecreatedWorktree', () => {
         ledgerRecords = ledgerRecords.filter((item) => !targetMatches(item, target));
         return { persisted: true };
       },
+    });
+  });
+
+  // Shared by the built-in and plugin-engine remote new-task flows (2026-11-25). Unit, in-memory ledger.
+  // Minimal failing inputs: an empty source branch sent as '' (or a guessed 'main') instead of the current
+  // checkout; a reservation written after worktree:create; an explicit refusal leaving a stale obligation.
+  describe('precreateRemoteDraftWorktree', () => {
+    const precreate = (invoke: ReturnType<typeof vi.fn>, sourceBranch = '') => precreateRemoteDraftWorktree({
+      deviceId: DEVICE_ID, sessionId: SESSION_ID, dataOwnerId: 'owner-1', baseRepo: '/repo', name: '',
+      sourceBranch, resolveName: async () => 'quiet-otter', makeRecoveryKey: () => RECOVERY_KEY,
+      invoke, isCurrent: () => true, progress: { start: vi.fn(), named: vi.fn(), end: vi.fn() },
+    });
+
+    it('records the obligation first and checks out the current checkout when no source was chosen', async () => {
+      const invoke = vi.fn(async (_channel: string, [request]: unknown[]) => {
+        expect(ledgerRecords).toEqual([expect.objectContaining({ sessionId: SESSION_ID, phase: 'reserved' })]);
+        return { ok: true, meta: { ...(request as object), path: WORKTREE_PATH, branch: 'cindy/quiet-otter',
+          createdAt: '2026-11-25T00:00:00.000Z' } };
+      });
+      await expect(precreate(invoke)).resolves.toMatchObject({ ok: true, path: WORKTREE_PATH, recoveryKey: RECOVERY_KEY });
+      expect(invoke).toHaveBeenCalledExactlyOnceWith('worktree:create', [{
+        sessionId: SESSION_ID, baseRepo: '/repo', name: 'quiet-otter', sourceBranch: 'HEAD', recoveryKey: RECOVERY_KEY,
+      }]);
+      expect(ledgerRecords).toEqual([expect.objectContaining({ path: WORKTREE_PATH, phase: 'precreated' })]);
+    });
+
+    it('drops the obligation and reports the error when the computer refuses the checkout', async () => {
+      const invoke = vi.fn(async () => ({ ok: false, error: { kind: 'not-a-git-repo', message: 'not a repo' } }));
+      await expect(precreate(invoke, 'feature/x')).resolves.toEqual({
+        ok: false, error: { kind: 'not-a-git-repo', message: 'not a repo' },
+      });
+      expect(ledgerRecords).toEqual([]);
     });
   });
 
@@ -318,6 +352,56 @@ describe('createRemoteSessionWithPrecreatedWorktree', () => {
         path: WORKTREE_PATH,
       }),
     ]);
+  });
+
+  // 2026-11-18 实测:被控端 Codex 冷启动 42s,控制端 30s 先超时放弃;被控端随后建完任务,
+  // 下次新建前的恢复看到任务存在就销账,空的「未命名任务」永久滞留。晚到且原样未动的
+  // 任务要删掉;一旦有人用过(有消息)就只销账,绝不删除。
+  it.each([
+    { label: 'deletes an untouched late session', messages: 0, deleted: true, missing: '', unsupported: false },
+    ...['userSendAt', 'activeTurnStartedAt', 'pinnedAt'].map(missing => ({ label: `keeps a session missing ${missing}`, messages: 0, deleted: false, missing, unsupported: false })),
+    { label: 'keeps a session on an old host', messages: 0, deleted: true, missing: '', unsupported: true },
+    { label: 'keeps a late session that already has messages', messages: 1, deleted: false, missing: '', unsupported: false },
+  ])('$label when a timed-out create arrives later', async ({ messages, deleted, missing, unsupported }) => {
+    let created = false;
+    const invoke = vi.fn(async (channel: string) => {
+      if (channel === 'maker:create-session') {
+        created = true;
+        throw new Error('[DEVICE_LINK_TIMEOUT] timed out');
+      }
+      if (channel === 'local-db:sessions:get') {
+        // 第一次 probe 时被控端还在建;到下一次恢复时已经建完。
+        if (invoke.mock.calls.filter(([c]) => c === channel).length === 1) {
+          throw new Error('[NOT_FOUND] Session 不存在');
+        }
+        return {
+          id: SESSION_ID,
+          status: 'active',
+          ...(missing === 'userSendAt' ? {} : { userSendAt: null }),
+          ...(missing === 'activeTurnStartedAt' ? {} : { activeTurnStartedAt: null }),
+          ...(missing === 'pinnedAt' ? {} : { pinnedAt: null }),
+          _count: { messages },
+        };
+      }
+      if (channel === 'local-db:sessions:discard-unused') {
+        if (unsupported) throw new Error('[NOT_FOUND] Unknown channel');
+        return { id: SESSION_ID, status: 'deleted' };
+      }
+      throw new Error(`unexpected ${channel}`);
+    });
+
+    const failure = await callWith(invoke).catch((error: unknown) => error);
+    expect(created).toBe(true);
+    expect(isRemotePrecreatedWorktreeCleanupPendingError(failure)).toBe(true);
+
+    await expect(
+      recoverPendingRemotePrecreatedWorktrees({ deviceId: DEVICE_ID, invoke }),
+    ).resolves.toEqual({ attempted: 1, recovered: 1, retained: 0, storageReadable: true });
+    const deleteCalls = invoke.mock.calls.filter(([c]) => c === 'local-db:sessions:discard-unused');
+    expect(deleteCalls).toEqual(
+      deleted ? [['local-db:sessions:discard-unused', [SESSION_ID]]] : [],
+    );
+    await expect(listPendingRemotePrecreatedWorktrees()).resolves.toEqual([]);
   });
 
   it('recovers a retained obligation before another worktree is created', async () => {

@@ -4,6 +4,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testi
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { BotCapabilities, BotModelRoute, BotProfile } from '../botStore';
 import { MainViewHistoryContext, type MainViewHistory } from '@/contexts/MainViewHistoryContext';
+import { getDataOwnerGeneration, setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 import type { CustomMcpListContext, CustomMcpListResult } from '../../../../shared/customMcp';
 import { beginProvidersRefresh, commitProvidersSnapshot } from '@/lib/providersSnapshotStore';
 
@@ -16,6 +17,9 @@ vi.mock('@/components/settings/avatarCropImage', () => ({
 
 vi.mock('@/state/modelVisibilityPrefs', () => ({ migrateModelVisibilityDefaults: vi.fn() }));
 
+vi.mock('@/hooks/useControllableDevices', () => ({
+  useSelectableDevices: () => ({ devices: mocks.selectableDevices }),
+}));
 vi.mock('@/hooks/useProviderOnboarding', () => ({
   useProviderOnboarding: () => ({ visible: mocks.onboarding }),
 }));
@@ -25,7 +29,7 @@ vi.mock('@/components/onboarding/ConnectProviderCard', () => ({
 
 const translate = (key: string, opts?: Record<string, unknown>) =>
   key.startsWith('settings.builtinTools.plugins.') ? String(opts?.defaultValue ?? key) : opts ? `${key}:${JSON.stringify(opts)}` : key;
-vi.mock('@/contexts/AuthContext', () => ({ useAuth: () => ({ dataOwnerId: 'fixture-owner' }) }));
+vi.mock('@/contexts/AuthContext', () => ({ useAuth: () => ({ dataOwnerId: 'fixture-owner' }), useOptionalAuthDeviceId: () => null }));
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: translate, i18n: { language: 'en' } }) }));
 
 const mocks = vi.hoisted(() => {
@@ -34,6 +38,7 @@ const mocks = vi.hoisted(() => {
   navigate: vi.fn(),
   retryBotInvitation: vi.fn(async (_id: string) => {}),
   onboarding: false,
+  selectableDevices: [] as Array<{ deviceId: string; name: string; platform: string; online: boolean }>,
   readSession: sessionGet,
   initialSearch: '' as string,
   listCustomMcpServers: vi.fn<(context?: CustomMcpListContext) => Promise<CustomMcpListResult>>(),
@@ -44,6 +49,8 @@ const mocks = vi.hoisted(() => {
   listToolsets: vi.fn(),
   profiles: [] as BotProfile[],
   profilesLoaded: true,
+  profileLoadError: false,
+  refreshBotProfiles: vi.fn(),
   params: {} as { botId?: string },
   availableVendors: new Set(['cc', 'codex', 'pi']),
   defaultModelChain: [] as BotModelRoute[],
@@ -94,6 +101,8 @@ vi.mock('../botStore', () => ({
   setCanonicalBotSession: vi.fn(),
   useBotProfiles: () => mocks.profiles,
   hasLoadedBotProfiles: () => mocks.profilesLoaded,
+  useBotProfilesLoadState: () => mocks.profileLoadError ? 'error' : mocks.profilesLoaded ? 'ready' : 'pending',
+  refreshBotProfiles: mocks.refreshBotProfiles,
   canonicalBotSessionId: (bot: BotProfile) => bot.canonicalSessionId,
   getEffectiveBotModelChain: () => mocks.defaultModelChain,
   subscribeBotGlobalModel: (listener: () => void) => {
@@ -231,6 +240,7 @@ beforeEach(() => {
   mocks.navigate.mockReset();
   mocks.retryBotInvitation.mockClear();
   mocks.onboarding = false;
+  mocks.selectableDevices = [];
   mocks.readSession.mockReset();
   mocks.updateBotProfile.mockReset();
   mocks.updateBotProfile.mockImplementation(async (_id, patch) => ({
@@ -244,6 +254,8 @@ beforeEach(() => {
   mocks.initialSearch = '';
   mocks.profiles = [];
   mocks.profilesLoaded = true;
+  mocks.profileLoadError = false;
+  mocks.refreshBotProfiles.mockClear();
   mocks.params = {};
   mocks.projectRepository.mockReset().mockResolvedValue('ready');
   mocks.availableVendors = new Set(['cc', 'codex', 'pi']);
@@ -380,6 +392,53 @@ describe('Bot entry after deletion', () => {
     expect(mocks.readSession).not.toHaveBeenCalled();
   });
 
+  // #9978: a failed first read is neither an empty roster nor endless opening.
+  it('offers read recovery without navigating or creating after a failed first roster read', () => {
+    mocks.profilesLoaded = false;
+    mocks.profileLoadError = true;
+    const view = render(<BotsHomeView />);
+    expect(screen.getByRole('alert').textContent).toContain('bots.rosterLoadFailed');
+    expect(screen.queryByRole('textbox')).toBeNull();
+    expect(mocks.navigate).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'bots.rosterReload' }));
+    expect(mocks.refreshBotProfiles).toHaveBeenCalledOnce();
+    mocks.profileLoadError = false;
+    mocks.profilesLoaded = true;
+    mocks.profiles = [bot()];
+    view.rerender(<BotsHomeView />);
+    expect(mocks.navigate).toHaveBeenCalledWith('/bots/bot-1', { replace: true });
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('retains the creation draft after a loaded empty roster refresh fails', () => {
+    const view = render(<BotsHomeView />);
+    const name = screen.getByRole('textbox');
+    fireEvent.change(name, { target: { value: 'My draft buddy' } });
+    mocks.profileLoadError = true;
+    view.rerender(<BotsHomeView />);
+    expect(screen.getByRole('textbox')).toBe(name);
+    expect(screen.getByRole('textbox')).toHaveProperty('value', 'My draft buddy');
+    mocks.profileLoadError = false;
+    view.rerender(<BotsHomeView />);
+    expect(screen.getByRole('textbox')).toBe(name);
+    expect(screen.getByRole('textbox')).toHaveProperty('value', 'My draft buddy');
+  });
+
+  it('prioritizes initial roster recovery before provider onboarding', () => {
+    mocks.onboarding = true;
+    mocks.profilesLoaded = false;
+    mocks.profileLoadError = true;
+    const view = render(<BotsHomeView />);
+    expect(screen.getByRole('alert').textContent).toContain('bots.rosterLoadFailed');
+    expect(screen.queryByTestId('connect-provider-card')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'bots.rosterReload' }));
+    expect(mocks.refreshBotProfiles).toHaveBeenCalledOnce();
+    mocks.profileLoadError = false;
+    mocks.profilesLoaded = true;
+    view.rerender(<BotsHomeView />);
+    expect(screen.getByTestId('connect-provider-card')).toBeTruthy();
+  });
+
   it('only shows creation once the loaded roster is empty', () => {
     mocks.params = { botId: 'deleted' };
     render(<BotsHomeView />);
@@ -389,8 +448,158 @@ describe('Bot entry after deletion', () => {
 });
 
 describe('Bot settings profile consolidation', () => {
-  it.each(['failed', 'welcome'] as const)('keeps model settings accessible while invitation is %s', async (stage) => {
+  // PR #11347 review regression (unit/jsdom): the real settings header must
+  // describe the completed commit, not the page entered during its 1.8s hold.
+  // Existing model receipt cases only saved a model on the model page.
+  // Minimal input: save a name, then immediately open the model page.
+  it('does not turn a profile save into a model receipt when switching pages', async () => {
+    vi.useFakeTimers();
+    renderSettings();
+    const name = screen.getByLabelText('bots.nameLabel');
+    fireEvent.change(name, { target: { value: 'Updated name' } });
+    await act(async () => { fireEvent.blur(name); });
+    expect(screen.getByRole('status').textContent).toContain('bots.autosave.saved');
+    await act(async () => { fireEvent.click(screen.getByText('bots.settingsTabs.model')); });
+    expect(screen.getByRole('status').textContent).toContain('bots.autosave.saved');
+    expect(screen.getByRole('status').textContent).not.toContain('bots.autosave.savedModel');
+    expect(mocks.updateBotProfile).toHaveBeenCalledTimes(1);
+  });
+
+  // PR #11347 unit regression: exercise real canLeave, autosave and patch
+  // generation. Existing picker tests used explicit model revisions, so never
+  // covered an ordinary field reverted to baseline while its old write hung.
+  it('keeps a reverted profile on screen after timeout and persists it after forced unmount', async () => {
+    vi.useFakeTimers();
+    let savedName = bot().name;
+    let finish!: () => void;
+    mocks.updateBotProfile.mockImplementation(async (_id, patch) => {
+      if (mocks.updateBotProfile.mock.calls.length === 1) {
+        await new Promise<void>(resolve => { finish = resolve; });
+      }
+      if (typeof patch.name === 'string') savedName = patch.name;
+      return { ...bot({ name: savedName }), currentVersion: 2 };
+    });
+    const beforeCloseRef = { current: null as (() => Promise<boolean>) | null };
+    const view = render(<BotSettings bot={bot()} onBack={vi.fn()} onOpenSession={vi.fn()} beforeCloseRef={beforeCloseRef} />,
+      { wrapper: ConfirmDialogProvider });
+    const name = screen.getByLabelText('bots.nameLabel');
+    fireEvent.change(name, { target: { value: 'Temporary edit' } });
+    fireEvent.blur(name);
+    await act(async () => {});
+    fireEvent.change(name, { target: { value: bot().name } });
+    let allowed: boolean | undefined;
+    await act(async () => { void beforeCloseRef.current!().then(value => { allowed = value; }); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
+    expect(allowed).toBe(false);
+    expect(screen.getByRole('alert').textContent).toContain('bots.autosave.unconfirmed');
+    expect(name).toHaveProperty('value', bot().name);
+    view.unmount();
+    await act(async () => { finish(); });
+    expect(mocks.updateBotProfile.mock.calls.map(([, patch]) => patch.name)).toEqual(['Temporary edit', bot().name]);
+    expect(savedName).toBe(bot().name);
+    renderSettings({ name: savedName });
+    expect(screen.getByLabelText('bots.nameLabel')).toHaveProperty('value', bot().name);
+    expect(mocks.updateBotProfile).toHaveBeenCalledTimes(2);
+  });
+
+  // Unit regression: the real picker + autosave hook previously waited forever
+  // on an unanswered host. Rejection-only tests missed unknown write outcomes,
+  // later selections, navigation, and reopening the confirmed persisted route.
+  it('keeps the latest model after a timed-out save and confirms only the persisted selection', async () => {
+    vi.useFakeTimers();
+    let saved = capabilities({ modelChainOverride: capabilities().modelChain });
+    const receipts: Array<() => void> = [];
+    mocks.updateBotProfile.mockImplementation(async (_id, input) => {
+      await new Promise<void>(resolve => { receipts.push(resolve); });
+      saved = normalizeBotProfileModelChain({ ...saved, ...input.capabilities as object }) as unknown as BotCapabilities;
+      return { ...bot({ capabilities: saved }), currentVersion: 2 };
+    });
+    const view = renderSettings({ capabilities: saved });
+    fireEvent.click(screen.getByText('bots.settingsTabs.model'));
+    fireEvent.click(within(screen.getByTestId('bot-primary-model-controls')).getByTestId('remote-model-selector'));
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    expect(screen.getByRole('status').textContent).toContain('bots.autosave.saving');
+    await act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
+    expect(screen.getByRole('alert').textContent).toContain('bots.autosave.unconfirmed');
+    expect(saved.agentDeviceId).not.toBe('share:one');
+    // A newer local route remains editable; retry joins the unknown write.
+    fireEvent.click(within(screen.getByTestId('bot-primary-model-controls')).getByTestId('codex-model-selector'));
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    await act(async () => { fireEvent.click(screen.getByText('bots.autosave.retry')); });
+    // Returning must finish its wait and stay on the dirty page, rather than
+    // navigating while the host may still be writing the previous choice.
+    await act(async () => { fireEvent.click(screen.getByLabelText('bots.settingsBack')); });
+    expect(screen.getByTestId('bot-primary-model-controls')).toBeTruthy();
+    expect(mocks.updateBotProfile).toHaveBeenCalledTimes(1);
+    await act(async () => { receipts[0]!(); });
+    expect(screen.queryByText('bots.autosave.savedModel')).toBeNull();
+    expect(mocks.updateBotProfile).toHaveBeenCalledTimes(2);
+    expect(saved.agentDeviceId).toBe('share:one');
+    expect(mocks.updateBotProfile.mock.lastCall![1].capabilities).toMatchObject({ agentDeviceId: null });
+    await act(async () => { receipts[1]!(); });
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(screen.getByRole('status').textContent).toContain('bots.autosave.savedModel');
+    expect(saved.agentDeviceId ?? null).toBeNull();
+    view.unmount();
+    renderSettings({ capabilities: saved });
+    fireEvent.click(screen.getByText('bots.settingsTabs.model'));
+    expect(within(screen.getByTestId('bot-primary-model-controls')).getByTestId('current-model').textContent).toBe('custom-model');
+    expect(mocks.updateBotProfile).toHaveBeenCalledTimes(2);
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it.each(['buddy', 'account', 'same-owner refresh'] as const)('fences a detached trailing model choice across a %s switch', async scope => {
+    vi.useFakeTimers();
+    const owner = getDataOwnerGeneration();
+    let finish!: () => void;
+    mocks.updateBotProfile.mockImplementationOnce(async (_id, patch) => {
+      await new Promise<void>(resolve => { finish = resolve; });
+      return { id: 'bot-1', currentVersion: 2, ...patch };
+    });
+    const view = renderSettings();
+    fireEvent.click(screen.getByText('bots.settingsTabs.model'));
+    fireEvent.click(within(screen.getByTestId('bot-primary-model-controls')).getByTestId('remote-model-selector'));
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    fireEvent.click(within(screen.getByTestId('bot-primary-model-controls')).getByTestId('codex-model-selector'));
+    view.unmount();
+    if (scope === 'account') setDataOwnerGeneration('different-owner');
+    if (scope === 'same-owner refresh') setDataOwnerGeneration(owner.dataOwnerId);
+    try {
+      renderSettings({ id: 'other-bot' });
+      await act(async () => { finish(); await vi.advanceTimersByTimeAsync(30_000); });
+      expect(mocks.updateBotProfile).toHaveBeenCalledTimes(scope === 'buddy' ? 2 : 1);
+      expect(mocks.updateBotProfile.mock.calls.every(([id]) => id === 'bot-1')).toBe(true);
+      expect(screen.queryByRole('alert')).toBeNull();
+      expect(screen.queryByText('bots.autosave.savedModel')).toBeNull();
+    } finally {
+      setDataOwnerGeneration(owner.dataOwnerId, owner.generation);
+    }
+  });
+
+  it('accepts a fresh edit after a same-owner runtime refresh', async () => {
+    vi.useFakeTimers();
+    const owner = getDataOwnerGeneration();
+    renderSettings();
+    try {
+      setDataOwnerGeneration(owner.dataOwnerId);
+      fireEvent.click(screen.getByText('bots.settingsTabs.model'));
+      fireEvent.click(within(screen.getByTestId('bot-primary-model-controls')).getByTestId('codex-model-selector'));
+      await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+      expect(mocks.updateBotProfile).toHaveBeenCalledTimes(1);
+      expect(screen.queryByRole('alert')).toBeNull();
+      expect(screen.getByRole('status').textContent).toContain('bots.autosave.savedModel');
+    } finally {
+      setDataOwnerGeneration(owner.dataOwnerId, owner.generation);
+    }
+  });
+
+  // The settings drawer previously showed its editable identity under the invitation card.
+  it.each(['failed', 'welcome'] as const)('shows only the invitation header and keeps model settings accessible while invitation is %s', async (stage) => {
     renderSettings({ invitation: { stage }, canonicalSessionId: undefined });
+    expect(screen.getByText(/^bots\.invitation\.waiting:/)).toBeTruthy();
+    expect(screen.queryByRole('heading', { level: 1, name: 'PR steward' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'bots.profile.changeAvatar' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'bots.homeFolder.title' })).toBeTruthy();
     expect(screen.getByLabelText('bots.nameLabel')).toHaveProperty('readOnly', true);
     expect(screen.getByLabelText('bots.profile.summary')).toHaveProperty('readOnly', true);
     expect(screen.getByLabelText('bots.profile.personality')).toHaveProperty('readOnly', true);
@@ -470,6 +679,21 @@ describe('Bot settings profile consolidation', () => {
     await waitFor(() => expect(mocks.updateBotProfile).toHaveBeenCalledWith(emptyBot.id, expect.objectContaining({
       capabilities: expect.objectContaining({ modelChainOverride: [expect.objectContaining({ model: 'custom-model', providerId: 'custom' })] }),
     })));
+  });
+
+  // Unit, BotsHomeView recovery: an online same-account computer may offer the only model.
+  // With onboarding active and an empty chain, the old gate hid the model picker before the directory could load.
+  it('lets an empty-chain companion browse models when another computer is online', () => {
+    const emptyBot = bot({ capabilities: capabilities({ modelChain: [], model: '' }), sessions: [], canonicalSessionId: undefined });
+    mocks.profiles = [emptyBot];
+    mocks.params = { botId: emptyBot.id };
+    mocks.onboarding = true;
+    mocks.selectableDevices = [{ deviceId: 'other-computer', name: 'Other computer', platform: 'win32', online: true }];
+
+    render(<BotsHomeView />);
+
+    expect(screen.getByTestId('model-selector')).toBeTruthy();
+    expect(screen.queryByTestId('connect-provider-card')).toBeNull();
   });
 
   it('can connect a source from existing empty-chain recovery when onboarding is hidden', () => {
@@ -729,7 +953,10 @@ describe('Bot settings profile consolidation', () => {
   });
 
   it('starts at grouped settings and opens real inner pages without exposing hidden inputs', async () => {
-    renderSettings({}, 'settings=1&tab=growth');
+    renderSettings({ invitation: { stage: 'ready' } }, 'settings=1&tab=growth');
+    expect(screen.getByRole('heading', { level: 1, name: 'PR steward' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'bots.profile.changeAvatar' })).toBeTruthy();
+    expect(screen.queryByText(/^bots\.invitation\.waiting:/)).toBeNull();
     expect(screen.queryByRole('textbox')).toBeNull();
     expect(screen.getByRole('button', { name: 'bots.historySearch.title' })).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'bots.profile.title' }));

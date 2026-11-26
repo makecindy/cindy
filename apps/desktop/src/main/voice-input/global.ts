@@ -198,6 +198,8 @@ type VoiceInputGlobalErrorCode =
   | 'unavailable'
   | 'unconfirmed'
   | 'permission'
+  /** macOS 27.3+: Cindy may control only chosen apps, and the target is not one of them. */
+  | 'appNotAllowed'
   | 'failed'
   /**
    * 这次调用在启动 listener 期间被更晚的一轮顶掉了。既不是故障也不该清理状态，
@@ -2986,6 +2988,15 @@ async function pasteTextToMacTarget(text: string, pasteTarget: MacPasteTarget | 
       'permission',
     );
   }
+  // macOS 27.3+: Cindy may control only the apps the person chose, and this
+  // target is not one of them. The helper refuses before touching the clipboard.
+  if (isMacAppControlNotAllowedError(result.reason) || isMacAppControlNotAllowedError(result.error)) {
+    throw new PasteCommandError(
+      'This app is not one of the apps Cindy may control.',
+      result.reason || result.error || 'App control is limited to chosen apps.',
+      'appNotAllowed',
+    );
+  }
 
   // Accept-unconfirmed has two channels:
   //
@@ -4263,6 +4274,11 @@ function getPasteErrorPresentation(error: unknown): {
 function isMacAccessibilityPermissionError(value: string | null | undefined): boolean {
   if (!value) return false;
   return value.toLowerCase().includes('accessibility permission is not granted');
+}
+
+/** Exact phrase of HelperError.appControlNotAllowed in macos-text-insertion-helper.swift. */
+function isMacAppControlNotAllowedError(value: string | null | undefined): boolean {
+  return value?.includes('App control is limited to chosen apps') === true;
 }
 
 function getPasteErrorDetail(error: unknown): string {

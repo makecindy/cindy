@@ -17,6 +17,7 @@ import {
 } from '../../../../shared/downloadProgress';
 import {
   DownloadMeter,
+  DownloadRing,
   downloadPercentLabel,
   formatDownloadBytes,
   formatDownloadEta,
@@ -96,4 +97,52 @@ describe('download formatters', () => {
       '1h 5m',
     ]);
   });
+});
+
+/**
+ * 测试价值（DownloadRing）
+ * - 生产入口与可观察结果：标准进度的圆环形态；用户只看到圆环和一句步骤，读屏仍能读到
+ *   百分比、字节与速度。
+ * - Bug／规则依据：DESIGN.md §4「Download progress」圆环形态——不画数字，但进度停住时必须有
+ *   文字说明；verified-downloads.md 要求读屏文本取自同一份 DownloadProgress。
+ * - 现有覆盖缺口：上面的用例只覆盖三行长条。
+ * - 最小失败输入：带字节与速度的 downloading；retrying；调用方自带文字的 completed / failed。
+ * - tier：unit（jsdom，沿用本文件的翻译 mock）。
+ */
+describe('DownloadRing', () => {
+  function ring(progress: Partial<DownloadProgress>, props: { status?: string; explainRetry?: boolean } = {}) {
+    render(
+      <DownloadRing
+        label="Update Helper"
+        progress={{ ...initialDownloadProgress('downloading', 20 * MB), ...progress }}
+        {...props}
+      />,
+    );
+    return screen.getByRole('progressbar', { name: 'Update Helper' });
+  }
+
+  it('draws the step without figures and keeps the figures for screen readers', () => {
+    const el = ring({ loaded: 13 * MB, percent: 65, speedBps: MB, etaSeconds: 7 });
+    expect(el.textContent).toBe('downloadProgress.phase.downloading');
+    expect(el.getAttribute('aria-valuenow')).toBe('65');
+    expect(el.getAttribute('aria-valuetext')).toBe(
+      'downloadProgress.phase.downloading · downloadProgress.bytes(13 MB|20 MB) · 1.0 MB/s · downloadProgress.eta(7s)',
+    );
+  });
+
+  it.each([
+    [{ phase: 'retrying', retryReason: 'slow', attempt: 2, percent: 40 }, {}, 'downloadProgress.phase.retrying', '40'],
+    [{ phase: 'retrying', retryReason: 'slow', attempt: 2, percent: 40 }, { explainRetry: true }, 'downloadProgress.retry.slow', '40'],
+    // Every byte has arrived: the ring is full while the words name what is still running.
+    [{ phase: 'installing', percent: 99.9 }, {}, 'downloadProgress.phase.installing', '100'],
+    [{ phase: 'completed', percent: 100 }, { status: 'Updated' }, 'Updated', '100'],
+    [{ phase: 'failed', percent: 61 }, { status: 'Update failed' }, 'Update failed', '61'],
+  ] as Array<[Partial<DownloadProgress>, { status?: string; explainRetry?: boolean }, string, string]>)(
+    'explains %j',
+    (progress, props, words, percent) => {
+      const el = ring(progress, props);
+      expect(el.textContent).toBe(words);
+      expect(el.getAttribute('aria-valuenow')).toBe(percent);
+    },
+  );
 });

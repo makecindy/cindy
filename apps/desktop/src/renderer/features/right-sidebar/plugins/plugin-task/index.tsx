@@ -35,6 +35,7 @@ import type { TabKindBodyProps, TabKindPlugin } from '../../types';
 export interface PluginTaskTabState {
   instanceId: string;
   resourceViewId?: string;
+  resourceWorkingDir?: string;
   resourceInput?: Record<string, unknown>;
 }
 
@@ -56,6 +57,7 @@ function PluginTaskTabPillTitle({ state, t }: { state: PluginTaskTabState; t: TF
 function PluginTaskTabPillIcon({ state }: { state: PluginTaskTabState }) {
   const ghost = useInstalledGhostByInstance(state.instanceId);
   if (ghost?.iconDataUrl) {
+    // design: intrinsic-geometry — 13px 插件品牌图的内容裁剪（图标自身的圆角，不是控件边框），与 plugin-view 页签一致
     return <img src={ghost.iconDataUrl} alt="" width={13} height={13} className="rounded-[3px]" />;
   }
   return <Puzzle size={13} />;
@@ -98,7 +100,8 @@ function PluginTaskBody({ state, ctx }: TabKindBodyProps<PluginTaskTabState>) {
   if (!ghost || ghost.enabled === false) return null;
   const remoteDevice = ctx.deviceLinkDeviceId;
   if (state.resourceViewId) return remoteDevice === null
-    ? <PluginUiView chrome="panel" sizing="fill" ghost={ghost} viewId={state.resourceViewId} sessionId={ctx.sessionId} input={state.resourceInput} />
+    ? <PluginUiView chrome="panel" sizing="fill" ghost={ghost} viewId={state.resourceViewId} sessionId={ctx.sessionId} composerPlacement={ctx.tabId} input={state.resourceInput}
+        context={state.resourceWorkingDir ? { workingDir: state.resourceWorkingDir } : undefined} />
     : null;
   if (!ghost.manifest.taskView) return null;
   if (remoteDevice !== null && ghost.manifest.taskView.remote !== true) return null;
@@ -140,6 +143,7 @@ const plugin: TabKindPlugin<PluginTaskTabState> = {
   TabBody: PluginTaskBody,
   defaultState: () => ({ instanceId: '' }),
   hydrateState: (raw) => ({
+    ...(typeof (raw as PluginTaskTabState | null)?.resourceWorkingDir === 'string' ? { resourceWorkingDir: (raw as PluginTaskTabState).resourceWorkingDir } : {}),
     ...((raw as PluginTaskTabState | null)?.resourceInput && typeof (raw as PluginTaskTabState).resourceInput === 'object' && !Array.isArray((raw as PluginTaskTabState).resourceInput) ? { resourceInput: (raw as PluginTaskTabState).resourceInput } : {}),
     ...(typeof (raw as PluginTaskTabState | null)?.resourceViewId === 'string' ? { resourceViewId: (raw as PluginTaskTabState).resourceViewId } : {}),
     instanceId:

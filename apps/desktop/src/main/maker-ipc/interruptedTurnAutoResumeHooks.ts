@@ -1,14 +1,19 @@
 import type { AgentInputCoordinatorDeps } from './agent-input-coordinator.js';
 import type { AgentInputQueuedMessage } from '../../shared/agentInputQueue.js';
+import { MODEL_GROUP_LIMITS } from '../../shared/modelGroups.js';
 import { canRecoverUndeliveredOrcaReport } from '../../shared/sharedTaskRecovery.js';
 import type { AutoResumeBookkeeping, SuppressedTurnErrorOwner } from './autoResumeBookkeeping.js';
 import {
   isContinuationOnlyAutoResumeReason,
   isInterruptedTurnError,
+  isUnexpectedWorkerStreamEnd,
   type InterruptedTurnAutoResumeGuard,
   type InterruptedTurnErrorSignals,
 } from './interruptedTurnAutoResume.js';
-import { BOT_SUBSCRIPTION_STARTUP_ADMISSION_REASON, isBotCandidateUnavailable, canResumeAfterRuntimeFallback, type RuntimeFallbackResult } from './botCandidateRecovery.js';
+import {
+  BOT_SUBSCRIPTION_STARTUP_ADMISSION_REASON, MODEL_GROUP_SAME_SOURCE_RETRIES, canResumeAfterRuntimeFallback, isBotCandidateUnavailable,
+  modelGroupFailureScope, modelGroupSwitchCause, type ModelGroupRecovery, type ModelGroupSwitchCause, type RuntimeFallbackResult,
+} from './botCandidateRecovery.js';
 import { isAccountUsageLimitError } from './usageLimitAutoResume.js';
 
 type Hook<K extends keyof AgentInputCoordinatorDeps> = NonNullable<AgentInputCoordinatorDeps[K]>;
@@ -21,18 +26,26 @@ export interface InterruptedTurnAutoResumeHookPorts<RuntimeSession extends objec
   inputCoordinator: {
     isExecutionPaused(sessionId: string): boolean;
     isAutoResumeAttemptCurrent(sessionId: string, attemptToken: number): boolean;
-    autoRetryLastError(sessionId: string, attemptToken: number): Promise<'resumed' | 'superseded' | 'no-progress'>;
+    autoRetryLastError(sessionId: string, attemptToken: number, resumeExtra?: { agentSwitch?: { from: string; to: string; cause: ModelGroupSwitchCause } }): Promise<'resumed' | 'superseded' | 'no-progress'>;
   };
-  interruptedTurnAutoResumeGuard: Pick<InterruptedTurnAutoResumeGuard, 'onInterruptedTurn' | 'noteResumeSendFailed'>;
+  interruptedTurnAutoResumeGuard: Pick<InterruptedTurnAutoResumeGuard, 'onInterruptedTurn' | 'noteResumeSendFailed' | 'noteSourceSwitched'>;
+  /** Settle a still-current paused retry into history without a banner. Opted into by the Node Host. */
+  settlePausedResumeIntoHistory?: boolean;
   autoResumeBookkeeping: Pick<
     AutoResumeBookkeeping,
     | 'takeDeferredError' | 'surfaceSuppressedError' | 'flushSuppressedError' | 'beginAttempt' | 'schedule'
     | 'finalizeSuppressedError' | 'abandonUnconfirmedPersistedResume' | 'surfaceSuppressedErrorForRetry'
   >;
+  resumeQuotaWait?(sessionId: string, item: AgentInputQueuedMessage, signals: InterruptedTurnErrorSignals): void;
   botFallbackInputs: { has(createOpts: object): boolean };
+  modelGroupInputs?: {
+    get(createOpts: object): 'enabled' | 'disabled' | undefined;
+    isInterruptedTurnAutoResumeEnabled(): boolean;
+  };
+  workerInputs?: { has(createOpts: object): boolean };
   scheduledQuotaInputs?: { has(createOpts: object): boolean };
   saveTurnStartedAtForDeferred(sessionId: string): void;
-  beginSchedulerAutoResume(sessionId: string, runId: string, attemptToken: number): void;
+  beginSchedulerAutoResume(sessionId: string, runId: string, attemptToken: number, error?: string): void;
   getStableSessionForTurnBoundary(sessionId: string): RuntimeSession | null | undefined;
   pendingContinuationOnlyAutoResumeRebuilds: { set(session: RuntimeSession, attemptToken: number): unknown };
   maybeApplySessionRuntimeFallback(
@@ -41,6 +54,7 @@ export interface InterruptedTurnAutoResumeHookPorts<RuntimeSession extends objec
     attemptToken: number,
     requireRouteChange: boolean,
     isCurrent: () => boolean,
+    groupRecovery?: ModelGroupRecovery,
   ): Promise<RuntimeFallbackResult<RuntimeSession>>;
   pendingSessionRuntimeFallbackRebuilds: { delete(session: RuntimeSession): unknown };
   providerGroupHeldErrors: { stash(sessionId: string, holdId: number, detail: unknown): void };
@@ -63,7 +77,8 @@ export interface InterruptedTurnAutoResumeHookPorts<RuntimeSession extends objec
  * surface or flush the held error when no attempt runs. Shared by the desktop and the Node Host.
  */
 export function createInterruptedTurnAutoResumeHooks<RuntimeSession extends object>({
-  inputCoordinator, interruptedTurnAutoResumeGuard, autoResumeBookkeeping, botFallbackInputs, scheduledQuotaInputs,
+  inputCoordinator, interruptedTurnAutoResumeGuard, autoResumeBookkeeping, resumeQuotaWait, botFallbackInputs, modelGroupInputs, scheduledQuotaInputs, workerInputs,
+  settlePausedResumeIntoHistory,
   saveTurnStartedAtForDeferred, beginSchedulerAutoResume, getStableSessionForTurnBoundary,
   pendingContinuationOnlyAutoResumeRebuilds, maybeApplySessionRuntimeFallback, pendingSessionRuntimeFallbackRebuilds,
   providerGroupHeldErrors, providerGroupHeldTerminals, pendingSchedulerAutoResumeRunBySession,
@@ -76,8 +91,15 @@ export function createInterruptedTurnAutoResumeHooks<RuntimeSession extends obje
       ? item?.origin?.kind === 'scheduler' && !!item.origin.runId
       : signals.reason === 'orca-report-preparation'
       ? !!item?.orcaReportDelivery && item.origin?.kind === 'orca' && canRecoverUndeliveredOrcaReport(signals.message)
+      : signals.reason === 'session_event_loop_crashed'
+      ? !!item && workerInputs?.has(item.createOpts) === true && isUnexpectedWorkerStreamEnd(signals)
+      : item && modelGroupInputs?.get(item.createOpts) === 'enabled'
+      ? modelGroupFailureScope(signals) !== null
       : isInterruptedTurnError(signals) ||
         (!!item && botFallbackInputs.has(item.createOpts) && isBotCandidateUnavailable(signals));
+  // Every candidate can get two retries plus one attempt to move to the next candidate or surface exhaustion.
+  // Keep a hard cap even if an upstream that keeps interrupting also produces output between failures.
+  const modelGroupEpisodeLimit = MODEL_GROUP_LIMITS.candidates * (MODEL_GROUP_SAME_SOURCE_RETRIES + 1);
   const hooks: {
     onResumableTurnErrorDiscarded: Hook<'onResumableTurnErrorDiscarded'>;
     onResumableTurnError: Hook<'onResumableTurnError'>;
@@ -109,14 +131,19 @@ export function createInterruptedTurnAutoResumeHooks<RuntimeSession extends obje
       item: AgentInputQueuedMessage,
     ) => {
       if (!canRecoverTurn(signals, item) || inputCoordinator.isExecutionPaused(sessionId)) return null;
-      const botInput = botFallbackInputs.has(item.createOpts);
-      const requireRouteChange = botInput && isBotCandidateUnavailable(signals);
+      const modelGroupPolicy = modelGroupInputs?.get(item.createOpts);
+      // model-groups.md §4.1: a source problem switches now; a transient one retries the same source first.
+      const groupScope = modelGroupPolicy === 'enabled' ? modelGroupFailureScope(signals) : null;
+      const groupSwitchesNow = groupScope === 'model' || groupScope === 'connection';
       const reportPreparation = signals.reason === 'orca-report-preparation';
       const localPreparation = signals.reason === 'scheduler-snapshot-preparation';
       const startupAdmission = signals.reason === BOT_SUBSCRIPTION_STARTUP_ADMISSION_REASON;
-      const sameRouteRetryable = reportPreparation || localPreparation || isInterruptedTurnError(signals);
+      const sameRouteRetryable = reportPreparation || localPreparation || isInterruptedTurnError(signals) || groupScope === 'transient';
       const erroredAt = Date.now();
-      const decision = interruptedTurnAutoResumeGuard.onInterruptedTurn(sessionId, erroredAt);
+      const decision = interruptedTurnAutoResumeGuard.onInterruptedTurn(sessionId, erroredAt,
+        groupScope !== null ? { enabled: true, maxEpisodeAttempts: modelGroupEpisodeLimit }
+          : modelGroupPolicy !== undefined ? { enabled: modelGroupInputs?.isInterruptedTurnAutoResumeEnabled() } : undefined,
+      );
       if (decision.action !== 'resume') {
         // 不接管 → coordinator 走常规错误呈现(落 error 行 + 红横幅 + 「继续任务」)。
         // 额度耗尽 / 熔断 / 开关关闭都走这里:自愈救不动了就把方向盘交回用户。
@@ -137,6 +164,10 @@ export function createInterruptedTurnAutoResumeHooks<RuntimeSession extends obje
       // saveTurnStartedAtForDeferred 与 isRemoteAuthRetry 同款 —— 补落时 turn 开始时刻
       // 已被 resetTurnPersistState 清掉,不先存一份会让 /clear 竞态 cap 判错。
       saveTurnStartedAtForDeferred(sessionId);
+      const groupSwitch = groupSwitchesNow || (groupScope === 'transient' && decision.attempt > MODEL_GROUP_SAME_SOURCE_RETRIES);
+      const requireRouteChange = modelGroupPolicy !== undefined
+        ? groupSwitch
+        : botFallbackInputs.has(item.createOpts) && isBotCandidateUnavailable(signals);
       log.info('interrupted-turn auto-resume scheduled', {
         sessionId,
         attempt: decision.attempt,
@@ -153,7 +184,7 @@ export function createInterruptedTurnAutoResumeHooks<RuntimeSession extends obje
           ? item.origin.runId
           : null;
       if (schedulerRunId) {
-        beginSchedulerAutoResume(sessionId, schedulerRunId, decision.attemptToken);
+        beginSchedulerAutoResume(sessionId, schedulerRunId, decision.attemptToken, signals.message);
       }
       if (isContinuationOnlyAutoResumeReason(signals.reason)) {
         const runtimeSession = getStableSessionForTurnBoundary(sessionId);
@@ -166,16 +197,26 @@ export function createInterruptedTurnAutoResumeHooks<RuntimeSession extends obje
       autoResumeBookkeeping.schedule(
         sessionId,
         decision.attemptToken,
-        decision.delayMs,
+        // A source problem is not waited out: the next source takes the turn at once.
+        groupSwitch ? 0 : decision.delayMs,
         (attempt) => {
           return (async () => {
             let fallbackRebuildSession: RuntimeSession | null = null;
             const isCurrent = () => attempt.isCurrent() && !inputCoordinator.isExecutionPaused(sessionId)
               && (!startupAdmission || inputCoordinator.isAutoResumeAttemptCurrent(sessionId, decision.attemptToken) === true);
+            const ownsAttempt = () => attempt.isCurrent()
+              && (!startupAdmission || inputCoordinator.isAutoResumeAttemptCurrent(sessionId, decision.attemptToken) === true);
+            const mayContinue = settlePausedResumeIntoHistory ? () => {
+              if (!ownsAttempt()) return false;
+              if (!inputCoordinator.isExecutionPaused(sessionId)) return true;
+              interruptedTurnAutoResumeGuard.noteResumeSendFailed(sessionId, decision.attemptToken);
+              autoResumeBookkeeping.finalizeSuppressedError(sessionId, decision.attemptToken, { surfaceBanner: false });
+              return false;
+            } : isCurrent;
             try {
               // Report retries must enter the original queue checkpoint before any
               // allocation. Runtime fallback can eagerly bootstrap a different route.
-              if (!isCurrent()) return;
+              if (!mayContinue()) return;
               const fallback: RuntimeFallbackResult<RuntimeSession> = reportPreparation || localPreparation
                 ? { session: null, outcome: 'unchanged' }
                 : await maybeApplySessionRuntimeFallback(
@@ -183,16 +224,29 @@ export function createInterruptedTurnAutoResumeHooks<RuntimeSession extends obje
                   decision.episodeAttempt,
                   decision.attemptToken,
                   requireRouteChange,
-                  isCurrent,
+                  settlePausedResumeIntoHistory
+                    ? () => ownsAttempt() && !inputCoordinator.isExecutionPaused(sessionId)
+                    : isCurrent,
+                  ...(modelGroupPolicy !== undefined ? [{
+                    retrySameSource: !groupSwitch,
+                    accountUnavailable: groupScope === 'connection',
+                    hasImages: item.files?.some(file => file.category === 'image') === true,
+                  }] as const : []),
                 );
               fallbackRebuildSession = fallback.session;
-              if (!isCurrent()) return;
-              if (!canResumeAfterRuntimeFallback(requireRouteChange, fallback, sameRouteRetryable)) {
+              if (!mayContinue()) return;
+              if (!canResumeAfterRuntimeFallback(requireRouteChange, fallback, sameRouteRetryable && !groupSwitch)) {
                 interruptedTurnAutoResumeGuard.noteResumeSendFailed(sessionId, decision.attemptToken);
-                autoResumeBookkeeping.finalizeSuppressedError(sessionId, decision.attemptToken, {
+                const released = autoResumeBookkeeping.finalizeSuppressedError(sessionId, decision.attemptToken, {
                   surfaceBanner: true,
                 });
+                if (released && groupSwitch && fallback.outcome === 'exhausted' && isAccountUsageLimitError(signals)) {
+                  resumeQuotaWait?.(sessionId, item, signals);
+                }
                 return;
+              }
+              if (groupSwitch && fallback.outcome === 'switched') {
+                interruptedTurnAutoResumeGuard.noteSourceSwitched(sessionId, decision.attemptToken);
               }
               // 退避窗口内用户可能已经自己发了消息 / 清了会话。判据是 coordinator 的 recovery
               // 与**接管态**(enqueue / clearError / teardown 会清掉接管态,recovery 未必),
@@ -201,9 +255,12 @@ export function createInterruptedTurnAutoResumeHooks<RuntimeSession extends obje
               // A queue-head retry keeps its original input ID and has no
               // replacement turn to release the guard. Retain the attempt budget.
               if (reportPreparation || startupAdmission) interruptedTurnAutoResumeGuard.noteResumeSendFailed(sessionId, decision.attemptToken);
+              // model-groups.md §4.6: say which source the group moved to and why, on the continuation's activity line.
+              const sourceSwitch = groupSwitch && fallback.outcome === 'switched' ? fallback.sourceSwitch : undefined;
               const outcome = await inputCoordinator.autoRetryLastError(
                 sessionId,
                 decision.attemptToken,
+                ...(sourceSwitch ? [{ agentSwitch: { ...sourceSwitch, cause: modelGroupSwitchCause(signals, groupScope) } }] as const : []),
               );
               if (!attempt.isCurrent()) {
                 log.debug('interrupted-turn auto-resume completion superseded', {

@@ -2,6 +2,7 @@ import { useTranslation } from 'react-i18next';
 import { Popover, PopoverAnchor, PopoverContent } from '@/components/ui/popover';
 import type { BotGroupMemberView, BotGroupMention } from '../../../shared/botGroupChat';
 import { BotAvatar } from './BotAvatar';
+import { BotGroupExternalBadge } from './BotGroupExternalBadge';
 import { botGroupMemberDisplayName } from './BotGroupTimelineModel';
 
 // Keep sent broadcasts intact across reader locales and the Buddy rename.
@@ -56,6 +57,9 @@ export function BotGroupMentionCard({ member, anchor, onPointerEnter, onPointerL
   const status = !member || member.status === 'active' ? ''
     : member.status === 'paused' ? t('bots.groupChat.memberStatus.paused') : t('bots.groupChat.memberStatus.unavailable');
   const fullName = member?.nickname && member.displayName && member.nickname !== member.displayName ? member.displayName : null;
+  const orgDetail = member && member.actorKind === 'human'
+    ? (member.departmentPath || member.department || (member.nickname && member.orgName ? member.orgName : null))
+    : null;
   return (
     <Popover open={open}>
       <PopoverAnchor asChild>
@@ -70,8 +74,12 @@ export function BotGroupMentionCard({ member, anchor, onPointerEnter, onPointerL
           onPointerEnter={onPointerEnter} onPointerLeave={onPointerLeave}>
           <BotAvatar bot={member} size="md" />
           <span className="flex min-w-0 flex-1 flex-col">
-            <span className="truncate text-14 font-medium leading-5 text-[var(--text-primary)]">{botGroupMemberDisplayName(member)}</span>
+            <span className="flex min-w-0 items-center gap-1.5">
+              <span className="truncate text-14 font-medium leading-5 text-[var(--text-primary)]">{botGroupMemberDisplayName(member)}</span>
+              {member.external ? <BotGroupExternalBadge /> : null}
+            </span>
             {fullName ? <span className="truncate text-12 leading-4 text-[var(--text-secondary)]">{fullName}</span> : null}
+            {orgDetail ? <span className="truncate text-12 leading-[1.333] text-[var(--text-secondary)]" title={orgDetail}>{orgDetail}</span> : null}
             {role || status ? (
               <span className="truncate text-12 leading-4 text-[var(--text-tertiary)]">{[role, status].filter(Boolean).join(' · ')}</span>
             ) : null}

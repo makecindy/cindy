@@ -24,7 +24,8 @@ export function CindyDevicePicker({
       label={t('bots.devicePicker.switchDevice', { device: current.label })}
       value={current.key}
       truncateOptions
-      className={cn('h-6 w-fit max-w-full px-2 text-11', className)}
+      size="inline"
+      className={cn('text-11', className)}
       contentClassName="w-64 max-w-[var(--radix-select-content-available-width)]"
       triggerAdornment={
         otherUnread ? (

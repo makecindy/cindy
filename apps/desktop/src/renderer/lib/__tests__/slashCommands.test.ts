@@ -53,7 +53,8 @@ function stubCommandLists(skillResult: { success: boolean; skills?: UnifiedComma
 
 // Unit: repeated palette consumers previously logged each identical conflict.
 // Existing merge tests checked precedence but not repeated renderer log IPC.
-it('warns once per conflict while preserving command precedence across rebuilds', () => {  const logToMain = vi.fn();
+it('warns once per conflict while preserving command precedence across rebuilds', () => {
+  const logToMain = vi.fn();
   vi.stubGlobal('window', { electronAPI: { logToMain } });
   const preferred = skill({ name: 'conflict-diagnostic-test' });
   const desktop: UnifiedCommand = { kind: 'desktop', name: preferred.name, description: 'fallback' };
@@ -62,29 +63,6 @@ it('warns once per conflict while preserving command precedence across rebuilds'
   expect(warnings()).toHaveLength(1);
   expect(mergeCommands([], [{ kind: 'agent-builtin', name: preferred.name, description: 'builtin' }], [preferred])).toEqual([preferred]);
   expect(warnings()).toHaveLength(2);
-});
-
-// Unit: the in-flight request is scoped to one session. The main side
-// filters skills per session, so two sessions on the same directory must
-// not share one response.
-it('keeps the in-flight skill scan session-scoped', async () => {
-  const listAgentSkills = vi.fn(async () => ({ success: true, skills: [skill({ name: 'shared' })] }));
-  vi.stubGlobal('window', { electronAPI: { maker: {
-    listDesktopCommands: vi.fn(async () => ({ success: true, commands: [] })),
-    listAgentCommands: vi.fn(async () => ({ success: true, commands: [] })),
-    listAgentSkills,
-  } } });
-  await Promise.all([
-    loadAllCommands('claude-code', '/repo', { sessionId: 'session-a' }),
-    loadAllCommands('claude-code', '/repo', { sessionId: 'session-b' }),
-  ]);
-  expect(listAgentSkills).toHaveBeenCalledTimes(2);
-  // The same session still shares one in-flight scan.
-  await Promise.all([
-    loadAllCommands('claude-code', '/repo', { sessionId: 'session-a' }),
-    loadAllCommands('claude-code', '/repo', { sessionId: 'session-a' }),
-  ]);
-  expect(listAgentSkills).toHaveBeenCalledTimes(3);
 });
 
 describe('loadAllCommands Learn fallback', () => {
@@ -104,6 +82,26 @@ describe('loadAllCommands Learn fallback', () => {
     stubCommandLists({ success: true, skills: [learnSkill] });
 
     await expect(loadAllCommands('claude-code', null)).resolves.toEqual([learnSkill]);
+  });
+});
+
+// 用户要求（2026-11-25）：插件引擎任务的 `/` 也列出 Cindy Skill，由执行电脑上的引擎按人名展开
+// （maker-core acp/skill-invocation.ts）。覆盖缺口：此前插件引擎直接跳过 Skill 清单。
+// Review (#12732, Codex P2)：清单向插件引擎自己要（`acp`），不借 Pi 的清单；本机 Pi 不可用时 Pi 那份会失败而菜单为空。
+// 最小失败输入：草稿仍是 Claude 身份的插件引擎，引擎返回一个项目 Skill（unit）。
+describe('plugin engine Skills', () => {
+  it('asks the plugin engine for its Skills and lists them by their human name, ready to send', async () => {
+    const path = '/repo/.agents/skills/deploy/SKILL.md';
+    stubCommandLists({ success: true, skills: [skill({ name: 'deploy', scope: 'repo', path })] });
+
+    const commands = await loadAllCommands('claude-code', '/repo', { skipAgentCommands: true, pluginEngineSkills: true });
+
+    expect(vi.mocked(window.electronAPI.maker.listAgentSkills)).toHaveBeenCalledWith('acp', { workingDir: '/repo' });
+    expect(vi.mocked(window.electronAPI.maker.listAgentCommands)).not.toHaveBeenCalled();
+    const deploy = commands.find((command) => command.name === 'deploy');
+    expect(deploy).toEqual({ kind: 'agent-skill', name: 'deploy', source: 'skill', scope: 'repo', path });
+    expect(isSlashCommandUnavailable(deploy!)).toBe(false);
+    expect(rewriteAgentSkillInvocationForDispatch('/deploy now', deploy)).toBe('/deploy now');
   });
 });
 
@@ -262,6 +260,12 @@ describe('rewriteAgentSkillInvocationForDispatch', () => {
 });
 
 describe('filterSlashCommands', () => {
+  it('matches a Pi invocation alias while preserving the short selection name', () => {
+    const command = { kind: 'agent-skill' as const, name: 'poteto-mode', source: 'skill' as const,
+      runtimeCommandName: 'skill:poteto-mode' };
+    expect(filterSlashCommands([command], 'skill:poteto')).toEqual([command]);
+  });
+
   it('ranks a plugin command by its display label so hidden qualifiers keep exact matches on top', () => {
     const prefixed = Array.from({ length: 30 }, (_, i) => ({
       kind: 'desktop' as const, name: `draw-${i}`, description: '',

@@ -6,7 +6,7 @@ import { MAX_MEDIA_OBJECT_BYTES } from '@cindy/agent-net-protocol';
 import { emptySharingState, type SharingState, type SharingStorage } from '@cindy/device-link-sharing/repositories';
 import type { TenantJoinRequest } from './identity.js';
 
-export interface DeviceRecord { certificate: DeviceCertificate; name: string; revokedAt: number | null; notBefore?: number;
+export interface DeviceRecord { certificate: DeviceCertificate; name: string; revokedAt: number | null; notBefore?: number; membershipGeneration?: string;
   metadata?: DeviceMetadata; lastSeenAt?: number; reportedName?: string; customName?: string | null; }
 export interface PendingJoin { request: JoinRequest; pollHash: string; expiresAt: number; status: 'pending' | 'approved' | 'rejected'; certificate?: DeviceCertificate; }
 export interface MediaRecord { owner: string; recipient: string; size: number; received: number; expiresAt: number; }
@@ -23,7 +23,7 @@ export interface NetworkRecord {
   tenant?: { accountName: string; createdAt: number };
 }
 export interface TenantRequestRecord { request: TenantJoinRequest; pollHash: string; createdAt: number; expiresAt: number; status: 'pending' | 'approved' | 'rejected'; }
-export interface State { schema: 1; networks: Record<string, NetworkRecord>; sharing?: SharingState; delegationRequests?: DelegationRequest[];
+export interface State { schema: 1; networks: Record<string, NetworkRecord>; sharing?: SharingState; privateSharing?: SharingState; delegationRequests?: DelegationRequest[];
   /** The self-hosted relay owner's network; only its owner devices administer tenants. */
   primaryNetworkId?: string;
   /** Keyed by sha256(invite code); the code itself is never stored. */
@@ -67,8 +67,8 @@ export class Store implements RelayStore {
         }
       }
       state = parsed;
-      if (state.sharing && (state.sharing.version !== 1 || ['tasks', 'invitations', 'shares', 'links', 'requests', 'credentials', 'bindings']
-        .some(key => !Array.isArray((state.sharing as unknown as Record<string, unknown>)[key])))) throw new Error('INVALID_AGENT_NET_SHARING_STATE');
+      for (const saved of [state.sharing, state.privateSharing]) if (saved && (saved.version !== 1 || ['tasks', 'invitations', 'shares', 'links', 'requests', 'credentials', 'bindings']
+        .some(key => !Array.isArray((saved as unknown as Record<string, unknown>)[key])))) throw new Error('INVALID_AGENT_NET_SHARING_STATE');
       if (state.delegationRequests && !Array.isArray(state.delegationRequests)) throw new Error('INVALID_AGENT_NET_DELEGATION_REQUESTS');
       const map = (value: unknown) => value === undefined || (!!value && typeof value === 'object' && !Array.isArray(value));
       if ((state.primaryNetworkId !== undefined && typeof state.primaryNetworkId !== 'string')
@@ -89,10 +89,10 @@ export class Store implements RelayStore {
   delegationRequests(): DelegationRequest[] { return structuredClone(this.state.delegationRequests ?? []); }
   primaryNetworkId(): string | undefined { return this.state.primaryNetworkId; }
   tenantRequests(): TenantRequestRecord[] { return Object.values(structuredClone(this.state.tenantRequests ?? {})); }
-  sharingStorage(): SharingStorage {
-    return { read: () => structuredClone(this.state.sharing ?? emptySharingState()), revision: () => this.revision,
+  sharingStorage(field: 'sharing' | 'privateSharing' = 'sharing'): SharingStorage {
+    return { read: () => structuredClone(this.state[field] ?? emptySharingState()), revision: () => this.revision,
       transaction: work => this.transaction(async state => {
-        const sharing = state.sharing ??= emptySharingState();
+        const sharing = state[field] ??= emptySharingState();
         return work(sharing);
       }) };
   }

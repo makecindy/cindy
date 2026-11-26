@@ -75,12 +75,21 @@ mountPage({
       for (const id of ['mbp', 'mini']) fixture.catalogs.set(id, { providers: remote, loading: false, error: null });
     }
     if (ctx.case.startsWith('local-management')) snapshot.providers[0] = { ...snapshot.providers[0], connected: false, subscriptionAccountPool: 'openai', runLocation: 'mbp' } as typeof snapshot.providers[0];
+    if (ctx.case === 'empty-pool') Object.assign(snapshot.providers[0], { connected: false, removed: false, subscriptionAccountPool: 'openai' });
     if (ctx.case === 'borrowing') snapshot.providers[0] = { ...snapshot.providers[0], connected: false };
     // Anthropic was never signed in here (no removed flag): it must still be listed, borrowed from another computer.
     if (ctx.case === 'never-signed-in') snapshot.providers[1] = { ...snapshot.providers[1], connected: false };
-    // provider-own-computers 页：OpenAI 只有 own-provider 场景单独打开了「允许被远程调用」。
+    // provider-own-computers 页：OpenAI 在 own-provider / own-remote-off 场景打开了「允许被远程调用」。
     if (ctx.page === 'provider-own-computers') {
-      snapshot.providers[0] = { ...snapshot.providers[0], remoteInvocationEnabled: ctx.case === 'own-provider' };
+      snapshot.providers[0] = { ...snapshot.providers[0], remoteInvocationEnabled: ctx.case === 'own-provider' || ctx.case === 'own-remote-off' };
+    }
+    // provider-own-computers 页：并进 OpenAI 账号池、仍有分享的旧连接，开关跟随账号池且不可在这里改。
+    if (ctx.case === 'merged-shared') {
+      snapshot.providers.push({
+        ...provider('openai', 'OpenAI · old connection'), id: 'openai-old', remoteInvocationEnabled: true,
+        subscriptionPoolAlias: true, subscriptionPoolTarget: 'openai',
+      } as typeof snapshot.providers[0]);
+      snapshot.providerOrder.push('openai-old');
     }
     if (ctx.case === 'pinned' || ctx.case === 'recovery-pinned') snapshot.providers[0] = { ...snapshot.providers[0], runLocation: 'mbp' } as typeof snapshot.providers[0];
     refreshControl.defer = ctx.case === 'wizard-reopen';
@@ -113,9 +122,16 @@ mountPage({
             subscriptionControl.connected = true;
           }
           const configured = ctx.case !== 'borrowing' && !(ctx.case === 'never-signed-in' && command.providerId === 'anthropic');
+          if (ctx.case === 'empty-pool' && command.providerId === 'openai') {
+            if (!subscriptionControl.connected) {
+              if (command.action === 'login') throw new Error('[SUBSCRIPTION_ACCOUNT_FAILED] Could not update the subscription account');
+              return { providerId: 'openai', configured, strategy: 'least', accounts: [] };
+            }
+            if (command.action === 'add') (window as any).__uiPage.emit('subscriptionAccountsChanged', { providerId: 'openai' });
+          }
           const directory = command.providerId === 'anthropic' ? '/Users/alex/.claude' : '/Users/alex/.codex';
           const defaultAccount = { id: 'default', identity: 'alex@example.com',
-            plan: command.providerId === 'anthropic' ? 'Max' : 'Plus', status: ctx.case.startsWith('recovery-') && !(window as any).providerSourcesFixture.snapshot.providers[0].connected ? 'unavailable' : 'ready', directory,
+            plan: command.providerId === 'anthropic' ? 'Max' : 'Plus', status: ctx.case.startsWith('recovery-') && !(window as any).providerSourcesFixture.snapshot.providers[0].connected ? 'signed-out' : 'ready', directory,
             running: 0, paused: false, limit: 4, weight: 1 };
           if (ctx.case.startsWith('local-management') && command.providerId === 'openai') {
             return { providerId: 'openai', configured: true, strategy: 'least', accounts: Array.from({ length: 5 }, (_, index) => ({
@@ -140,8 +156,6 @@ mountPage({
         requestProviderModelsAutoRefresh: async () => ({ ok: true }),
         setProviderOrder: forbid('setProviderOrder'),
         setProviderRunLocation: async () => ({ ok: true }),
-        // provider-own-computers 页：「远程连接」里的「让我的其他电脑用本机模型」开没开。
-        getOwnComputerModelUse: async () => ({ enabled: ctx.case === 'own-on' || ctx.case === 'own-remote-off' }),
         listProviderPresets: async () => ({ presets: BUNDLED_CATALOG.presets ?? [] }),
         localModelList: async () => ({ status: { kind: 'ready' }, models: [], memoryGb: 0 }),
         localModelStatus: async () => ({ kind: 'ready' }),
@@ -151,7 +165,7 @@ mountPage({
       },
       deviceLink: { getState: async () => ({ remoteControlEnabled: ctx.case !== 'own-remote-off' }) },
       providerShare: {
-        command: async () => ({ ready: true, providerIds: [] }),
+        command: async () => ({ ready: true, providerIds: ctx.case === 'merged-shared' ? ['openai-old'] : [] }),
         onOwnedChanged: subscription('ownedChanged'),
       },
       providerGroup: {

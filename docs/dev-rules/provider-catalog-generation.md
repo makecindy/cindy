@@ -87,6 +87,12 @@ Server Registry 与运行时二进制未修改；原生订阅的账号准入仍�
 `supplementalSources`。其它供应商、订阅端点和 GPT-6.2 Astra 未补记录（Astra 的 API 记录本就是
 1,050,000，行为不变）；Pi 上游发布后以上游资料为准。该记录未用 API Key 实测推理。
 
+同日：官方 `https://api.openai.com/v1` 端点的 `gpt-6.1-sol`、`gpt-6.1-terra`、`gpt-6-sol`、`gpt-6-luna`
+四条既有记录同样只有 272,000 工作窗口，用 API Key 直连时更大的任务预算被夹紧到 272,000。为它们补
+`contextWindowMax: 1050000`（Registry 登记的官方容量），工作默认不变。从 Pi 上游重新生成这些记录时
+须保留该字段，`modelGeneration.test.ts` 的对应用例会拦住丢失。其它渠道的同名记录不改：渠道自己的
+窗口可能就是它的真实上限。
+
 Copilot 发现使用官方账号主机的 `/models`，不依赖推理使用 Messages、Responses 还是 Chat。
 登录后的地址推导、手动获取和旧连接 `/v1/models` 读取共用
 `maker-host/copilot-account-url.ts`，客户端标识取已有渠道目录；不写回用户连接，不重置登录。

@@ -1,3 +1,4 @@
+import { supplementalConversationEstimates } from '@cindy/maker-shared/usage-cost-details';
 /**
  * Phase 2: DrizzleScheduleStorage —— `ScheduleStorage` 接口的 SQLite 实现。
  *
@@ -14,8 +15,9 @@
  *   - snake↔camel 全部走 `localDb/mapper.ts`，本文件不写字段转换代码。
  */
 
-import { eq, desc, and, isNull, isNotNull, inArray, notInArray, or, sql } from 'drizzle-orm';
+import { eq, gte, desc, and, isNull, isNotNull, inArray, notInArray, or, sql, getTableColumns, is, SQL } from 'drizzle-orm';
 import { runAsBackgroundDbRpc } from '../localDb/client/rpcAdmission.js';
+import { throwIpcError } from '../utils/ipcValidate.js';
 import type { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
 import type { broadcastSessionPatched as BroadcastSessionPatched } from '../localDb/ipc/sessions.js';
 
@@ -29,7 +31,7 @@ import {
   scheduleSessionLatestRuns,
   sessions,
 } from '../localDb/schema';
-import { scheduleRunMissingPlugin, type ScheduleMissingPlugin } from '@cindy/maker-shared/schedule-model';
+import { readPrCheckDiagnosis, scheduleRunMissingPlugin, type PrCheckDiagnosis, type ScheduleMissingPlugin } from '@cindy/maker-shared/schedule-model';
 import {
   scheduleToCamel,
   scheduleCreateToRow,
@@ -43,6 +45,8 @@ import {
   asValueEstimateMoney,
   DEFAULT_USAGE_CURRENCY,
   legacyUsdMoney,
+  mixedEstimateAmounts,
+  sumMoneyByCurrency,
   normalizeRegionalMoney,
   type RegionalMoney,
   zeroUsageMoney,
@@ -105,16 +109,21 @@ export interface ScheduleSidebarIndexRun {
   status: ScheduleRun['status'];
   readAt?: number;
   firedAt?: number;
+  finishedAt?: number;
+  canSwitchPluginEngine?: true;
   failureKind?: 'precheck' | 'rate-limit' | 'execution';
+  preRunBlocked?: true;
   errorMsg?: string;
   failureRecovered?: boolean;
   missingPlugin?: ScheduleMissingPlugin;
+  prCheckDiagnosis?: PrCheckDiagnosis;
 }
 
 export interface ScheduleCostSummary {
   scheduleId: string;
   totalMoney: RegionalMoney;
   totalEstimatedValueMoney: RegionalMoney;
+  totalEstimatedValueAmounts?: RegionalMoney[];
   totalCostUsd?: number;
   totalEstimatedValueUsd?: number;
   /** 至少一轮 agent run 无法得到可靠费用。 */
@@ -127,6 +136,7 @@ export interface ScheduleSessionCostSummary {
   sessionId: string;
   totalMoney: RegionalMoney;
   totalEstimatedValueMoney: RegionalMoney;
+  totalEstimatedValueAmounts?: RegionalMoney[];
   totalCostUsd?: number;
   totalEstimatedValueUsd?: number;
 }
@@ -285,14 +295,14 @@ function scheduleOriginFromAgentMeta(agentMeta: string | null): PersistedSchedul
 
 function turnCostFromAgentMeta(agentMeta: string | null): {
   costMoney: RegionalMoney | null;
-  estimatedValueMoney: RegionalMoney | null;
+  estimates: RegionalMoney[];
   legacyProjectedActualAmount: number;
   totalTokens: number;
 } {
   if (!agentMeta) {
     return {
       costMoney: null,
-      estimatedValueMoney: null,
+      estimates: [],
       legacyProjectedActualAmount: 0,
       totalTokens: 0,
     };
@@ -322,14 +332,17 @@ function turnCostFromAgentMeta(agentMeta: string | null): {
       costMoney: addCompatibleRegionalMoney([
         ...mediaCosts, ...(money && money.amount > 0 && !isEstimate ? [money] : []),
       ]),
-      estimatedValueMoney: money && money.amount > 0 && isEstimate ? asValueEstimateMoney(money) : null,
+      estimates: [
+        ...(money && money.amount > 0 && isEstimate ? [asValueEstimateMoney(money)] : []),
+        ...supplementalConversationEstimates(parsed).map(value => asValueEstimateMoney(value)),
+      ],
       legacyProjectedActualAmount: !structured && !isEstimate ? (money?.amount ?? 0) : 0,
       totalTokens,
     };
   } catch {
     return {
       costMoney: null,
-      estimatedValueMoney: null,
+      estimates: [],
       legacyProjectedActualAmount: 0,
       totalTokens: 0,
     };
@@ -380,6 +393,30 @@ function publicScheduleRunWhere() {
   return sql`${scheduleRuns.scheduleId} NOT IN (SELECT id FROM schedules WHERE source = 'bot')`;
 }
 
+/** A finished run can change its own route only when no automation reuses this task. */
+function canSwitchRunPluginEngine() {
+  return sql<boolean>`(
+    ${scheduleRuns.sessionId} IS NOT NULL
+    AND ${scheduleRuns.finishedAt} IS NOT NULL
+    AND ${scheduleRuns.status} IN ('success', 'failed', 'aborted')
+    AND NOT EXISTS (
+      SELECT 1 FROM schedules AS bound WHERE bound.target_session_id = ${scheduleRuns.sessionId}
+    )
+  )`.mapWith(Boolean);
+}
+
+// Check as part of the write so another desktop instance cannot switch the
+// target between validation and persistence.
+function targetAcceptsAutomation(targetSessionId: string) {
+  return sql`NOT EXISTS (
+    SELECT 1 FROM sessions WHERE id = ${targetSessionId} AND source = 'scheduler' AND agent_kind = 'acp'
+  )`;
+}
+
+function rejectPluginAutomationTarget(): never {
+  throwIpcError('UNSUPPORTED_CAPABILITY', 'this plugin engine task cannot be bound to an automation');
+}
+
 export class DrizzleScheduleStorage implements ScheduleStorage {
   constructor(
     private readonly getDb: () => SchedulerDrizzleDb,
@@ -420,6 +457,11 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
         nextFireSum: sql<number>`coalesce(sum(${schedules.nextFireAt}), 0)`.mapWith(Number),
         nextFireN: sql<number>`coalesce(sum(case when ${schedules.nextFireAt} is not null then 1 else 0 end), 0)`.mapWith(Number),
         activeN: sql<number>`coalesce(sum(case when ${schedules.status} = 'active' then 1 else 0 end), 0)`.mapWith(Number),
+        // A different instance can repoint a rule without changing those totals.
+        boundTasks: sql<string>`(SELECT json_group_array(bound.target_session_id) FROM (
+          SELECT DISTINCT target_session_id FROM schedules
+          WHERE target_session_id IS NOT NULL ORDER BY target_session_id
+        ) AS bound)`,
       })
       .from(schedules);
     return [
@@ -433,6 +475,7 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
       scheduleStats?.nextFireSum ?? 0,
       scheduleStats?.nextFireN ?? 0,
       scheduleStats?.activeN ?? 0,
+      scheduleStats?.boundTasks ?? '[]',
     ].join(':');
   }
 
@@ -461,7 +504,22 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
 
   async insert(s: Schedule): Promise<Schedule> {
     const db = this.getDb();
-    await db.insert(schedules).values(scheduleCreateToRow(s));
+    const row = scheduleCreateToRow(s);
+    if (row.targetSessionId) {
+      // Drizzle inserts SELECT values in table column order. Reuse its
+      // encoders and schema defaults, including columns omitted by the mapper.
+      const values = Object.entries(getTableColumns(schedules)).map(([key, column]) => {
+        const mapped = row[key as keyof typeof row];
+        const value = mapped === undefined ? column.default ?? null : mapped;
+        return is(value, SQL) ? value : sql.param(value, column);
+      });
+      const [inserted] = await db.insert(schedules)
+        .select(sql`SELECT ${sql.join(values, sql`, `)} WHERE ${targetAcceptsAutomation(row.targetSessionId)}`)
+        .returning({ id: schedules.id });
+      if (!inserted) rejectPluginAutomationTarget();
+    } else {
+      await db.insert(schedules).values(row);
+    }
     // 返回 round-tripped 版本（确保 timezone/booleans/默认值都按 DB 实际形态回流）
     const inserted = await this.get(s.id);
     if (!inserted) {
@@ -500,10 +558,31 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
       const [current] = await db.select().from(schedules).where(where).limit(1);
       return current ? scheduleToCamel(current) : null;
     }
-    const [updated] = await db.update(schedules).set(setObj).where(where).returning();
-    if (!updated) return null;
+    const targetCondition = patch.targetSessionId ? targetAcceptsAutomation(patch.targetSessionId) : undefined;
+    const [updated] = await db.update(schedules).set(setObj).where(and(where, targetCondition)).returning();
+    if (!updated) {
+      if (targetCondition) {
+        const [rejected] = await db.select({ id: schedules.id }).from(schedules)
+          .where(and(where, sql`NOT (${targetCondition})`)).limit(1);
+        if (rejected) rejectPluginAutomationTarget();
+      }
+      return null;
+    }
     this.bumpSidebarIndexCache();
     return scheduleToCamel(updated);
+  }
+
+  async latestClosureFailure(scheduleId: string, sessionId: string) {
+    const [row] = await this.getDb().select({
+      firedAt: scheduleRuns.firedAt, recovered: failureRecoveredSql('schedule_runs'),
+    }).from(scheduleRuns).where(and(
+      eq(scheduleRuns.scheduleId, scheduleId), eq(scheduleRuns.sessionId, sessionId),
+      eq(scheduleRuns.status, 'failed'),
+      inArray(scheduleRuns.errorMsg, ['TASK_ACTION_AUTHORIZATION_EXPIRED', 'scheduled task auto-resume failed: TASK_ACTION_AUTHORIZATION_EXPIRED']),
+      sql`${failureKindSql('schedule_runs')} = 'execution'`,
+    )).orderBy(desc(scheduleRuns.firedAt), desc(scheduleRuns.id)).limit(1);
+    return row && { firedAt: row.firedAt, errorCode: 'TASK_ACTION_AUTHORIZATION_EXPIRED' as const,
+      laterRunSucceeded: Boolean(row.recovered) };
   }
 
   async delete(id: string): Promise<void> {
@@ -658,6 +737,23 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
     return rows.length > 0;
   }
 
+  async lastSuccessfulMrObservation(scheduleId: string) {
+    const [row] = await this.getDb().select({ observation: scheduleRuns.mrObservation })
+      .from(scheduleRuns).where(and(
+        eq(scheduleRuns.scheduleId, scheduleId), eq(scheduleRuns.status, 'success'),
+        eq(scheduleRuns.triggerSource, 'pr-status'), isNotNull(scheduleRuns.mrObservation),
+      )).orderBy(desc(scheduleRuns.firedAt), desc(scheduleRuns.id)).limit(1);
+    return row?.observation ?? null;
+  }
+
+  async hasSuccessfulPrRunSince(scheduleId: string, since: number): Promise<boolean> {
+    const rows = await this.getDb().select({ id: scheduleRuns.id }).from(scheduleRuns).where(and(
+      eq(scheduleRuns.scheduleId, scheduleId), gte(scheduleRuns.firedAt, since),
+      eq(scheduleRuns.triggerSource, 'pr-status'), eq(scheduleRuns.status, 'success'),
+    )).limit(1);
+    return rows.length > 0;
+  }
+
   async listRuns(scheduleId: string, limit?: number): Promise<ScheduleRun[]> {
     const db = this.getDb();
     const cap = typeof limit === 'number' && limit > 0 ? Math.floor(limit) : 50;
@@ -667,13 +763,15 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
       .where(eq(schedules.id, scheduleId))
       .limit(1);
     const rows = await db
-      .select()
+      .select({ run: scheduleRuns, recovered: failureRecoveredSql('schedule_runs') })
       .from(scheduleRuns)
       .where(eq(scheduleRuns.scheduleId, scheduleId))
       // 最近的一次在前，便于 UI 抽屉直接展示
       .orderBy(desc(scheduleRuns.firedAt))
       .limit(cap);
-    const runs = await this.hydrateRunCostsFromMessages(db, rows.map(scheduleRunToCamel));
+    const runs = await this.hydrateRunCostsFromMessages(db, rows.map(({ run, recovered }) => ({
+      ...scheduleRunToCamel(run), ...(recovered ? { failureRecovered: true } : {}),
+    })));
     if (!scheduleRow) return runs;
 
     const linkedSessionIds = new Set(
@@ -731,9 +829,7 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
         totalTokens: 0,
       };
       if (cost.costMoney) current.costValues.push(cost.costMoney);
-      if (cost.estimatedValueMoney) {
-        current.estimatedValues.push(cost.estimatedValueMoney);
-      }
+      current.estimatedValues.push(...cost.estimates);
       current.totalTokens += cost.totalTokens;
       ledger.set(origin.runId, current);
     }
@@ -747,9 +843,7 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
           ...persisted.costValues,
         ];
         const estimatedValues = [
-          ...(run.estimatedValueMoney && run.estimatedValueMoney.amount > 0
-            ? [run.estimatedValueMoney]
-            : []),
+          ...(run.estimatedValueAmounts ?? (run.estimatedValueMoney ? [run.estimatedValueMoney] : [])),
           ...persisted.estimatedValues,
         ];
         return {
@@ -757,6 +851,7 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
           ...(persisted.totalTokens > 0 ? { totalTokens: persisted.totalTokens } : {}),
           costMoney:
             addCompatibleRegionalMoney(costValues, run.costMoney?.currency) ?? zeroUsageMoney(),
+          ...mixedEstimateAmounts(estimatedValues),
           estimatedValueMoney:
             addCompatibleRegionalMoney(estimatedValues, run.estimatedValueMoney?.currency) ??
             zeroUsageMoney('value-estimate'),
@@ -774,6 +869,7 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
         ...run,
         ...(persisted.totalTokens > 0 ? { totalTokens: persisted.totalTokens } : {}),
         costMoney: addCompatibleRegionalMoney(persisted.costValues) ?? zeroUsageMoney(),
+        ...mixedEstimateAmounts(persisted.estimatedValues),
         estimatedValueMoney:
           addCompatibleRegionalMoney(persisted.estimatedValues) ?? zeroUsageMoney('value-estimate'),
         costAttribution: 'exact',
@@ -810,9 +906,17 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
       status: scheduleRuns.status,
       readAt: scheduleRuns.readAt,
       firedAt: scheduleRuns.firedAt,
+      finishedAt: scheduleRuns.finishedAt,
+      canSwitchPluginEngine: canSwitchRunPluginEngine(),
       failureRecovered: failureRecoveredSql('schedule_runs'),
       failureKind: failureKindSql('schedule_runs'),
       errorMsg: scheduleRuns.errorMsg,
+      preRunBlocked: sql<number | null>`CASE WHEN json_valid(schedule_runs.pre_run_hook_result)
+        THEN json_extract(schedule_runs.pre_run_hook_result, '$.decision') = 'block'
+          AND json_extract(schedule_runs.pre_run_hook_result, '$.status') IN ('failed', 'timed_out') END`,
+      prCheckDiagnosis: sql<string | null>`CASE WHEN json_valid(schedule_runs.pre_run_hook_result)
+        THEN CASE WHEN json_type(schedule_runs.pre_run_hook_result, '$.prCheckDiagnosis') = 'object'
+        THEN json_extract(schedule_runs.pre_run_hook_result, '$.prCheckDiagnosis') END END`,
       missingPlugin: sql<string | null>`CASE WHEN json_valid(schedule_runs.pre_run_hook_result)
         THEN json_extract(schedule_runs.pre_run_hook_result, '$.missingPlugin') END`,
     };
@@ -890,10 +994,14 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
       status: row.status,
       readAt: row.readAt ?? undefined,
       firedAt: row.firedAt ?? undefined,
+      ...(row.canSwitchPluginEngine && row.sessionId ? { canSwitchPluginEngine: true as const } : {}),
       ...(row.status === 'failed' || row.status === 'interrupted' ? {
+        finishedAt: row.finishedAt ?? undefined,
         failureRecovered: Boolean(row.failureRecovered),
         failureKind: row.failureKind,
+        ...(row.status === 'failed' && row.preRunBlocked === 1 ? { preRunBlocked: true as const } : {}),
         errorMsg: row.errorMsg ?? undefined,
+        prCheckDiagnosis: row.prCheckDiagnosis ? readPrCheckDiagnosis(JSON.parse(row.prCheckDiagnosis)) : undefined,
         ...missingPluginField(row.missingPlugin),
       } : {}),
     }));
@@ -953,6 +1061,17 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
     }
     return runs;
     });
+  }
+
+  async canSwitchCompletedAutomationSession(sessionId: string): Promise<boolean> {
+    const [run] = await this.getDb()
+      .select({ eligible: canSwitchRunPluginEngine() })
+      .from(scheduleSessionLatestRuns)
+      .innerJoin(scheduleRuns, eq(scheduleSessionLatestRuns.runId, scheduleRuns.id))
+      .innerJoin(schedules, eq(scheduleRuns.scheduleId, schedules.id))
+      .where(and(eq(scheduleSessionLatestRuns.sessionId, sessionId), publicScheduleRunWhere()))
+      .limit(1);
+    return run?.eligible === true;
   }
 
   /**
@@ -1039,8 +1158,7 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
       if (row.role !== 'assistant' && row.role !== 'user') continue;
       const turnCost = turnCostFromAgentMeta(row.agentMeta);
       const cost = turnCost.costMoney?.amount ?? 0;
-      const estimatedValue = turnCost.estimatedValueMoney?.amount ?? 0;
-      if (cost <= 0 && estimatedValue <= 0) continue;
+      if (cost <= 0 && !turnCost.estimates.length) continue;
       if (turnCost.legacyProjectedActualAmount > 0) {
         legacyMessageCostBySessionId.set(
           row.sessionId,
@@ -1059,9 +1177,7 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
         messageCostRunIds.add(assistantRunId);
         const runCost = messageCostByRunId.get(assistantRunId) ?? emptyScheduleMoneyValues();
         if (turnCost.costMoney) runCost.costValues.push(turnCost.costMoney);
-        if (turnCost.estimatedValueMoney) {
-          runCost.estimatedValueValues.push(turnCost.estimatedValueMoney);
-        }
+        runCost.estimatedValueValues.push(...turnCost.estimates);
         messageCostByRunId.set(assistantRunId, runCost);
       }
       const entry = bySchedule.get(attributedScheduleId) ?? emptyScheduleTurnCostState();
@@ -1069,20 +1185,16 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
       if (turnCost.costMoney) {
         entry.costValues.push(turnCost.costMoney);
       }
-      if (turnCost.estimatedValueMoney) {
-        entry.estimatedValueValues.push(turnCost.estimatedValueMoney);
-      }
+      entry.estimatedValueValues.push(...turnCost.estimates);
       noteLatestCurrency(entry, turnCost.costMoney, row.createdAt);
-      noteLatestCurrency(entry, turnCost.estimatedValueMoney, row.createdAt);
+      noteLatestCurrency(entry, turnCost.estimates[0] ?? null, row.createdAt);
       const sessionCost = entry.sessionCosts.get(row.sessionId) ?? emptyScheduleMoneyValues();
       if (turnCost.costMoney) {
         sessionCost.costValues.push(turnCost.costMoney);
       }
-      if (turnCost.estimatedValueMoney) {
-        sessionCost.estimatedValueValues.push(turnCost.estimatedValueMoney);
-      }
+      sessionCost.estimatedValueValues.push(...turnCost.estimates);
       noteLatestCurrency(sessionCost, turnCost.costMoney, row.createdAt);
-      noteLatestCurrency(sessionCost, turnCost.estimatedValueMoney, row.createdAt);
+      noteLatestCurrency(sessionCost, turnCost.estimates[0] ?? null, row.createdAt);
       entry.sessionCosts.set(row.sessionId, sessionCost);
       bySchedule.set(attributedScheduleId, entry);
     }
@@ -1155,12 +1267,13 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
           run.costAttribution === 'direct'
             ? (run.costMoney ?? null)
             : remainingMoney(run.costMoney, messageCost?.costValues ?? []);
-        const estimatedValueMoney =
-          run.costAttribution === 'direct'
-            ? (run.estimatedValueMoney ?? null)
-            : remainingMoney(run.estimatedValueMoney, messageCost?.estimatedValueValues ?? []);
+        const estimates = run.estimatedValueAmounts ?? (run.estimatedValueMoney ? [run.estimatedValueMoney] : []);
         const entry = bySchedule.get(run.scheduleId) ?? emptyScheduleTurnCostState();
-        appendRunMoney(entry, run.sessionId, costMoney, estimatedValueMoney, run.firedAt);
+        appendRunMoney(entry, run.sessionId, costMoney, null, run.firedAt);
+        for (const value of estimates) {
+          const remainder = run.costAttribution === 'direct' ? value : remainingMoney(value, messageCost?.estimatedValueValues ?? []);
+          if (remainder) appendRunMoney(entry, run.sessionId, null, remainder, run.firedAt);
+        }
         bySchedule.set(run.scheduleId, entry);
         continue;
       }
@@ -1172,9 +1285,12 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
         entry,
         run.sessionId,
         run.costMoney ?? null,
-        run.estimatedValueMoney ?? null,
+        null,
         run.firedAt,
       );
+      for (const value of run.estimatedValueAmounts ?? (run.estimatedValueMoney ? [run.estimatedValueMoney] : [])) {
+        appendRunMoney(entry, run.sessionId, null, value, run.firedAt);
+      }
       bySchedule.set(run.scheduleId, entry);
     }
 
@@ -1213,16 +1329,14 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
       const totalEstimatedValueMoney =
         addCompatibleRegionalMoney(summary.estimatedValueValues, summary.latestCurrency) ??
         zeroUsageMoney('value-estimate');
+      const estimateAmounts = sumMoneyByCurrency(summary.estimatedValueValues);
       return {
         scheduleId,
         totalMoney,
         totalEstimatedValueMoney,
-        ...(totalMoney.currency === 'USD'
-          ? {
-              totalCostUsd: totalMoney.amount,
-              totalEstimatedValueUsd: totalEstimatedValueMoney.amount,
-            }
-          : {}),
+        ...(estimateAmounts.length > 1 && { totalEstimatedValueAmounts: estimateAmounts }),
+        ...(totalMoney.currency === 'USD' && { totalCostUsd: totalMoney.amount }),
+        ...(totalEstimatedValueMoney.currency === 'USD' && { totalEstimatedValueUsd: totalEstimatedValueMoney.amount }),
         ...(summary.hasUnavailableCost ? { hasUnavailableCost: true } : {}),
         sessionCount: summary.sessionIds.size,
         sessions: [...summary.sessionCosts.entries()].map(([sessionId, costs]) => {
@@ -1231,16 +1345,14 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
           const estimatedMoney =
             addCompatibleRegionalMoney(costs.estimatedValueValues, costs.latestCurrency) ??
             zeroUsageMoney('value-estimate');
+          const sessionEstimates = sumMoneyByCurrency(costs.estimatedValueValues);
           return {
             sessionId,
             totalMoney: money,
             totalEstimatedValueMoney: estimatedMoney,
-            ...(money.currency === 'USD'
-              ? {
-                  totalCostUsd: money.amount,
-                  totalEstimatedValueUsd: estimatedMoney.amount,
-                }
-              : {}),
+            ...(sessionEstimates.length > 1 && { totalEstimatedValueAmounts: sessionEstimates }),
+            ...(money.currency === 'USD' && { totalCostUsd: money.amount }),
+            ...(estimatedMoney.currency === 'USD' && { totalEstimatedValueUsd: estimatedMoney.amount }),
           };
         }),
       };

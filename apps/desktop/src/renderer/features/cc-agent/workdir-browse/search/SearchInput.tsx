@@ -40,7 +40,7 @@ export function SearchInput({
     <div
       className={cn(
         'flex h-[30px] w-full items-center gap-1',
-        'rounded-md border border-sidebar-border bg-background',
+        'rounded-full border border-sidebar-border bg-background',
         'pl-2.5 pr-1',
         'focus-within:border-foreground/40',
       )}
@@ -75,7 +75,7 @@ export function SearchInput({
           aria-label={t('ccAgent.workdirBrowse.searchPanel.matchCaseAria')}
           aria-pressed={caseSensitive}
           className={cn(
-            'flex h-[22px] min-w-[22px] shrink-0 items-center justify-center rounded-[4px] px-1',
+            'flex h-[22px] min-w-[22px] shrink-0 items-center justify-center rounded-lg px-1',
             'text-11 font-semibold leading-none transition-colors',
             caseSensitive
               ? 'bg-sidebar-item-active text-sidebar-item-active-foreground'

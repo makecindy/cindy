@@ -47,7 +47,7 @@
   结果 `result {id, result: {ok, result} | {ok:false, error:{code, message}}}` 走请求来的那条流；`push {channel, payload}` 在 v1 里一律走普通流
   （同一方向的推送共用一个顺序，保住「任务列表补丁是任务事件的分界」这类跨主题先后）；`presence {payload}`；
   `cancel {id}`（2026-11-16）：走控制流，调用方超时了，这条请求还没交给业务的话就不再交。
-- **Desktop 的控制链路**（`apps/desktop/src/main/device-link/agentNetSessionLinks.ts`）：`open`/`accept` 的载荷就是 Device Link 的
+- **Desktop 的控制链路**（`packages/agent-net/src/session/sessionLinks.ts`）：`open`/`accept` 的载荷就是 Device Link 的
   `LinkOpenPayload`/`LinkAcceptPayload`，控制端只加推送压缩的字典能力；结果一律包一层 `{ok: true, result: InvokeResultPayload}`，
   外层只表示送达，业务的成功与失败原样在里面，不和会话层自己的失败码混；推送的 `payload` 是整个 `PushPayload`
   （含 `ownerStamp`，可能按建链时声明的字典压缩过）。结果压缩与增量、正文复用、历史页增量、标签目录、模型速度编码和 Device Link
@@ -94,7 +94,16 @@
   2026-11-17 Node Host 接入（Windows 上的 Host ↔ macOS 上打开 Agent-Net 的 Desktop，同一个个人账号，官方 Agent-Net）：Host 加入后
   0.1 秒会话就绪，Desktop 经会话调用 Host 每次 13–15 毫秒（直连）；Host 关掉 Agent-Net 后经 Device Link 中转每次约 300 毫秒，
   再打开不用重启就回到 Agent-Net（已开着的链路按「中途不换路」用到关链）。真机里发现 Host 关着时不签传输方式声明、开着 Agent-Net
-  的 Desktop 拒收（`Untrusted transport mode`），已改成和 Desktop 一样关着也签。手机不宣告会话能力，和它之间照旧走 Device Link。
+  的 Desktop 拒收（`Untrusted transport mode`），已改成和 Desktop 一样关着也签。
+  2026-11-18 手机接入：会话对接（`AgentNetSessionLinks`、选路 `routeSessionPeers`、`PeerLinks`）从 Desktop 移到
+  `packages/agent-net/src/session/`，Desktop、Node Host 与手机共用一份；手机在 `apps/mobile/src/device-link/DeviceLinkContext.tsx`
+  与 `agentNetRuntime.ts` 装配，只在手机能用 Agent-Net 时挂上（没开时客户端和原来完全一样，不经会话层）。手机的原生连接（`packages/agent-net/src/nativeTransport.ts`）有了同样的三条会话通道、宣告与积压读数
+  （核心缓冲按流读回，原生库的 `stream-buffered`）；同账号走会话（含 `presence-v1`），共享任务的受邀者在它的分享连接上走单向会话。
+  手机只控制：不接受链路，`invokeEpoch` 不提供。会话断了又回来时按 Device Link 传输重置的同一流程恢复这个对端（只这一个）。
+  旧安装包的原生库也能走会话（只需要流）；它的 `identity()` 没有 `features` 时不用中转 UDP、STUN 与按流积压，也不调用新操作。
+  回归：`packages/agent-net/src/__tests__/native.integration.test.ts`「carries sessions on the real native engine, relays them over UDP,
+  and keeps working on an older native build」（真实原生库的 C 接口、真实 V2 中转与 Node 节点；去掉原生的会话宣告时会话一直不出现）。
+  真机还没测。
   同日真机里还发现 Host 的 `link-accept` 一直不带 `background-link-v1`（和 Agent-Net 无关，主干上也一样）：电脑的后台读取每次新开链路、
   发现不支持就关（`backgroundLink.ts`），调用方再读又开，一秒几次。Host 的入站处理和 Desktop 是同一套，本来就按后台链路处理，
   现在 Host 开着 Agent-Net 时 `sameAccountCapabilities` 带上这一项（会话上每次后台读都重建一条会话链路）。按用户定的原则「改动只影响
@@ -114,3 +123,70 @@
 （跨账号：会话键、单向、`delegatedOnly`、撤销后两端会话作废）；`packages/agent-net/src/__tests__/portableSocket.test.ts`
 「keeps presence on the session with a new peer and still sends the frame to an older one」（在线状态只在会话上、连接上没有 Device Link 帧，
 老版本对端等过以后收到帧，自报的设备号不算数）。端到端对比用 `packages/agent-net/bench/session-latency.ts --modes v1,session`。
+
+## 会话 v2（2026-11-22，`agent-net-session-v2`）
+
+方案见 [`agent-net-session-plan.md`](../../agent-net-session-plan.md) 第 7 节、第 10.2 节的 v2-2。v2 只换大消息的走法，业务拿到消息的先后与 v1 完全一样。
+
+- **开启方式（两端都宣告）**：通道能读独立消息流的节点（Desktop 与 Node Host 的核心通道，打开 Agent-Net 的手机的原生通道）在宣告那一行里
+  多带一项 `agent-net-session-v2`（`{"session":["agent-net-session-v1","presence-v1","agent-net-session-v2"]}`）。两端都带了才用
+  （`portableSocket.ts` 的 `bodies`）；对端只有 v1、或本端这条通道不能读，就和 v1 一样，通道上的帧逐字节相同。
+  旧节点遇到不认识的流类型会关掉整条连接，所以只有收到对端的这一项以后才开正文流；反过来，本端没宣告 v2 时对端开正文流，本端也和旧节点一样关连接。
+- **正文流**：编码后 64 KiB 及以上的消息（`lanes.ts` 的 `BODY_STREAM_BYTES`）走一条自己的核心流：首字节 `0x33`，随后 4 字节大端的键，
+  再是消息的 UTF-8 JSON，写完流就结束；核心优先级同它本该走的那条通道。通道上原来放这条消息的位置换成占位
+  `{c, p?, r?, b?, o?, z: [键, 正文字节数], i?}`：计数（`p`、`r`、`b`、`o`）与 v1 相同，`i` 只在结果上，是请求号。键由发送方从随机起点递增，
+  一个会话里不重复。正文流开不出来（流数到了上限）时这条消息照 v1 整条写在通道上。
+- **正文里的字节**（`session/binarySegments.ts`）：正文 JSON 里 16 KiB 及以上、恰好是规范 base64（标准字母表、带填充、末尾多余位为 0）的字符串
+  （文件块、远程任务上传块）按它编码的字节写在 JSON 后面，少约四分之一；占位多一项 `y: [JSON 字节数, 各段字节数…]`，各项之和等于 `z` 里的长度。
+  JSON 里原处换成 `"\u0000\u0001b#序号"`；消息里本来就以 `"\u0000\u0001b"` 开头的字符串写成 `"\u0000\u0001b="` 加原文，所以每个字符串都原样
+  还原。接收方把字节重新编成同一个 base64 字符串交给业务，业务看不出差别。不规范的 base64、URL 字母表、短字符串和对象的键都照原样留在 JSON 里。
+- **先后**：占位停在它的通道头，直到正文收齐才交出，所以先后与 v1 相同（列表结果与它之后的补丁推送照旧不乱）。变化只在传输：
+  正文不占着通道，接收方从正文的第一个字节就知道这条结果在来。
+- **按进展判超时**：结果的正文开始到达后（占位里的 `i` 对上调用方在等的请求），请求自己的时限不再算，改成 15 秒没有新字节才报
+  `INVOKE_TIMEOUT`（`peer.ts` 的 `RESULT_STALL_MS`，核心判连接已死的 30 秒的一半）。慢线上大结果不再因为传不完就超时、再按同样大小重要。
+  正文收齐、还在通道上等前面的消息（例如前面一个更大的结果还在传）时，只有整个会话 15 秒什么都没收到才算超时（2026-11-22 审查）。
+  请求一侧不按进展：大请求仍按总时限，与 v1 相同（被调方按请求的 `at`、`ms` 丢掉晚到的请求，上传期间不计时的话，断网恢复后请求可能在调用方
+  报超时之后才执行）。
+- **放弃**：调用方超时发 `cancel` 时，结果的正文还在发的话，发送方放弃这条流（核心的 `abandon_stream`：没发出的不再发，已发出的照常重传），
+  并在控制通道发一条 `{c:"control", x: 键}`：流的头几个字节可能也没发出，接收方只能靠它认出是哪个占位。接收方跳过这个占位（仍算交出，
+  同一通道后面的照常交），这条流之后到的字节丢掉；正文提前结束（比 `z` 里的短）时同样跳过。记下的放弃最多 1024 个，最早的先忘，不当错误。
+  请求还在业务里时收到 `cancel`，结果不再发回（v1 照发，调用方忽略）。
+- **上限**：接收方同时最多 1024 条还没交出的正文，正文字节算在 64 MiB 的积压里；本端会话还没准备好时先到的正文与会话流共用 16 MiB，
+  每个正文事件（连只有结束的）另计 64 字节（2026-11-22 审查：结束事件原来不计，不挂会话的对端可以一直开空流）。
+  手机一条连接同时最多 32 条正文流（核心每条连接 64 条流，通道自己用 5 条），超过时照 v1 走通道。
+- **积压读数**：控制、普通通道的正文流和它们的通道一样，算 JS 这边与核心里还没发出、还没确认的字节；后台的只算 JS 这边。
+- **Node 驱动**：`agent-net-core/wasm/node.mts` 里写完（连结束标记都交给核心）或放弃了的流不再留在连接的表里：一条大消息一条流，
+  长连着的连接上这张表原来只增不减，驱动每一轮都要遍历它。进度、缓冲与放弃照样按流号问核心。
+- **手机原生库**：只有报告 `probe-grants` 的原生库才读、开正文流（`nativeTransport.ts` 的 `bodies`），否则这部手机不宣告 v2，照 v1 走。
+  原因在核心：更早的核心回对端探测的确认只带编号最小的两条流的额度，正文流是一条连接的第 6 条流，它最初那几份额度没送到时，对端一直停在
+  128 个分片（约 160 KB）上，15 秒后报停住（2026-11-22 CI，手机轮询慢时必现；核心已改，见 `packages/agent-net-core/README.md`「额度跟着确认出去」）。
+  手机 JS 热更新、原生库随安装包，旧安装包配新 JS 因此仍是 v1。报告 `probe-grants` 的原生库也都有 `stream-levels`（放弃用 `abandon`）
+  和 `stream-retired`（核心收回了的流报一次就不再报，`MAX_REPORTED_STREAMS` 为 40）。Desktop、Node Host 的核心随 JS 一起发布，不需要判断。
+- **中转**：不变，只转发密文数据报。
+- **兼容组合**：v2 对 v2 走正文流；v2 对 v1、v1 对 v1、任一端通道不能读时都是 v1。v1 的会话端不认 `z`、`x`、`y`，但收不到它们：
+  只有对端宣告了 v2 才发。
+
+回归：`packages/agent-net/src/__tests__/sessionLanes.test.ts` 的「v2:」几条（先后与进展、放弃通知先到、后到、流头都没发出、正文提前结束、
+上千次放弃以后会话照常、对 v1 和小消息逐字节相同、按进展判超时与停住、业务里的请求被取消后不发结果、正文里的字节与各种字符串原样还原、
+`Buffer`／`atob`／查表三种编解码一致）；`portableSocket.test.ts`「opens body streams
+only to a peer that declared session v2, on a channel that reads them」；`nativeTransport.test.ts`「opens, ends and gives up session v2 body streams
+on the native engine」（结束、写之前放弃、结束后放弃、开流暂时失败、对端流的键分片到达）；`socket.integration.test.ts`「carries an independent
+session between two new nodes alongside Device Link frames」（真实核心上 300 KB 结果走正文流，夹在两条推送之间，积压读数算上它；
+240 KB 文件块的 base64 按字节过线）、
+「lets go of streams the Node driver has handed over…」（300 条写完的流和一条放弃的流都不留在驱动的表里）；
+`native.integration.test.ts`「carries sessions on the real native engine…」（真实原生库上大结果两个方向都走正文流，其中一种构建每次调用晚 5 毫秒
+回来，像 JS 线程忙的手机；不报能力的旧构建照 v1）；核心 `sim/tests/streams.rs`「a_later_stream_gets_its_lost_credit_back」。
+
+### 自建中继上的新分享
+
+自建中继在 `/info` 广告 `private-sharing-v1` 后，新版桌面端创建的分享使用版本 3 的邀请。新邀请需要支持该版本的客户端。版本 2 的邀请继续使用原身份服务；官方网络及历史成员记录沿用原有权限。
+
+`/private-sharing/` 使用独立的资源和权限记录。创建者提交本网络签发的成员证书和请求签名；访客用设备保存的密钥签名，请求绑定中继根公钥、网络、路径、正文、时间和一次性随机数。供应商分享仍需主人批准；获得业务成员身份后，连接还需要对应资源的委托签名。附件继续经原有端到端加密传输。旧附件按原引用读取，只存于官方服务器的历史附件需要该服务器可达。
+
+桌面和手机分别保存版本 2 与版本 3 的分享路由，回退客户端后版本 2 的路由仍可读取。同一私有网络的已配对设备以主人身份读取自有任务，远程取消共享仍由原房主设备执行。自建中继移除租户时，随网络撤销该租户的分享与邀请。
+
+### 手机按需验证中继上行
+
+V2 成员连接的中继可在已鉴权的 WebSocket hello 中声明 `relayProbe: true`。支持方才会在拨号或经中继的业务请求失败后发送文本帧 `{"type":"relay-probe"}`，中继在同一连接回复 `{"type":"relay-pong"}`。探测只验证本机与中继的往返；目标设备的业务可用性仍需业务回包确认。探测不携带设备号、任务数据或账号凭据。新客户端遇到未声明能力的中继不发送该帧，旧客户端忽略新增字段；访客连接继续拒绝成员控制帧。中继和手机可以分批上线，两边更新后手机探测才生效。桌面继续使用标准 WebSocket 控制帧。自建与官方中继的实现和套接字验收见 `packages/agent-net-relay/src/server.ts` 和 `relay.integration.test.ts`。
+
+自建服务器的 V1 和 V2 程序共用的部署版本升至 `0.5.6`。带新版中转包的桌面客户端可为旧部署显示升级入口。升级自建服务器后，由中继 hello 的能力声明启用已更新手机的探测。

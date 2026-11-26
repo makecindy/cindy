@@ -1,6 +1,7 @@
 /** Compatibility implementation is owned by the shared package; preserve this import contract. */
 export {
   createToolReferenceRecoveryRule,
+  createNativeMcpHistoryRecoveryRule,
   lowerToolReferencesFromBody,
   createVllmResponsesCompatibilityRule,
   stripToolUseProviderSpecificFieldsFromBody,
@@ -27,6 +28,8 @@ export {
   createActiveStripTransform,
   createEncryptedContentRecoveryRule,
   createResponsesReasoningContentRecoveryRule,
+  createResponsesToolAudioRecoveryRule,
+  stripResponsesToolAudioFromBody,
   createImageGenerationIdRecoveryRule,
   createToolUseProviderSpecificFieldsRecoveryRule,
   createEmptyThinkingRecoveryRule,

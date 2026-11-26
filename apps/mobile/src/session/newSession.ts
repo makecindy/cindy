@@ -1,3 +1,5 @@
+import { composerSlashInvocationName, leadingSlashInvocation } from '@cindy/maker-shared/composer-palette';
+import { buildComposerPaletteCacheKey } from './composerPaletteCache';
 import { deviceDisplayName } from '@/device-link/deviceName';
 import { getSessionListActivityAt } from '@cindy/maker-shared/session-activity';
 import { modelNeedsReselection } from './modelReselection';
@@ -13,6 +15,7 @@ import {
 import { i18n } from '@/i18n';
 import type {
   CreateSessionOptions,
+  MobileMakerTransport,
   RemoteDirectoryDrive,
   RemoteDirectoryEntry,
 } from '@/device-link/mobileMakerTransport';
@@ -61,6 +64,7 @@ export interface NewSessionDraft {
   permissionMode: string;
   fastMode: boolean | 'ultrafast';
   firstMessage: string;
+  selectedSkill?: { name: string; invocation: string; context: string } | null;
   extraDirs?: string[];
   /**
    * 远程 Agent:Agent 在哪台电脑运行——同账号另一台电脑的 deviceId,或别人分享给被控电脑的
@@ -68,6 +72,70 @@ export interface NewSessionDraft {
    * (见 applyRemoteAgentPick),模型与来源随之属于那台电脑的目录。
    */
   agentDeviceId?: string | null;
+  /**
+   * 插件提供的执行引擎(Desktop docs/plans/acp-plugin-bridge.md)：只在提交时由选中的引擎写入
+   * (applyPluginEnginePick)，不进持久草稿。存在时任务按 agent_kind = 'acp' 创建，内置的
+   * agentKind / model / providerId / Fast 不发；engine 只来自被控电脑的 listPluginEngines。
+   */
+  pluginEngine?: NewSessionPluginEngine | null;
+}
+
+/** 新任务选中的插件引擎(已按引擎规则校准：模型、思考深度、权限模式)。 */
+export interface NewSessionPluginEngine {
+  providerId: string;
+  model: string;
+  /** '' = 引擎自己决定。 */
+  effort: string;
+  permissionMode: string;
+}
+
+/** 提交时把选中的插件引擎写进要创建的草稿；没有选插件引擎时原样返回。 */
+export function applyPluginEnginePick(
+  draft: NewSessionDraft,
+  pick: NewSessionPluginEngine | null,
+): NewSessionDraft {
+  if (!pick) return draft;
+  // 插件引擎只在被控电脑本机运行：不带另一台电脑的 Agent 位置。
+  return { ...draft, pluginEngine: pick, agentDeviceId: null };
+}
+
+export async function lookupMobileSkillInvocation(
+  maker: Pick<MobileMakerTransport, 'listAgentSkills'>,
+  agentKind: NewSessionAgentKind,
+  workingDir: string,
+  name: string,
+): Promise<string> {
+  const result = await maker.listAgentSkills(agentKind, { ...(workingDir ? { workingDir } : {}) });
+  if (!result.success) throw new Error(result.error || 'Skill list unavailable');
+  const match = result.skills?.find(item => item.kind === 'agent-skill' && item.name === name && item.enabled !== false);
+  return match ? composerSlashInvocationName(match) : name;
+}
+
+/** Resolve a menu choice against the final engine when preparing delivery. */
+export async function resolveNewSessionSkillDraft(
+  draft: NewSessionDraft,
+  deviceId: string,
+  maker: Pick<MobileMakerTransport, 'listAgentSkills'>,
+): Promise<NewSessionDraft> {
+  const skill = draft.selectedSkill;
+  if (!skill) return draft;
+  const token = leadingSlashInvocation(draft.firstMessage);
+  if (!token || (token.name !== skill.name && token.name !== skill.invocation)) return draft;
+  const workingDir = draft.workspaceKind === 'project' ? draft.workingDir.trim() : '';
+  const context = buildComposerPaletteCacheKey(draft.agentDeviceId || deviceId, draft.agentKind, workingDir);
+  let invocation = skill.invocation;
+  if (context !== skill.context) {
+    // The controlled computer's catalog describes only its own engine.
+    invocation = skill.name;
+    if (!draft.agentDeviceId) {
+      invocation = await lookupMobileSkillInvocation(maker, draft.agentKind, workingDir, skill.name);
+    }
+  }
+  return {
+    ...draft,
+    firstMessage: draft.firstMessage.slice(0, token.start) + '/' + invocation + draft.firstMessage.slice(token.end),
+    selectedSkill: { ...skill, context, invocation },
+  };
 }
 
 /**
@@ -241,7 +309,7 @@ export function validateNewSessionDraft(
   if (draft.workspaceKind === 'project' && !draft.workingDir.trim()) {
     return i18n.t('session.new.enterProjectPath');
   }
-  if (!draft.model.trim()) return i18n.t('session.new.enterModel');
+  if (!(draft.pluginEngine?.model ?? draft.model).trim()) return i18n.t('session.new.enterModel');
   if (!hasFirstMessagePayload(draft, content)) return i18n.t('session.new.enterFirstMessageOrAttachment');
   return null;
 }
@@ -258,7 +326,7 @@ export function isNewSessionDraftMissingPayloadOnly(
   content: NewSessionDraftContentState = {},
 ): boolean {
   if (draft.workspaceKind === 'project' && !draft.workingDir.trim()) return false;
-  if (!draft.model.trim()) return false;
+  if (!(draft.pluginEngine?.model ?? draft.model).trim()) return false;
   return !hasFirstMessagePayload(draft, content);
 }
 
@@ -1091,11 +1159,21 @@ export function pickInitialNewSessionWorkspace(
   return recentWorkspaces[0]?.workingDir ?? null;
 }
 
-export function buildRemoteCreateSessionOptions(draft: NewSessionDraft): CreateSessionOptions {
+export function buildRemoteCreateSessionOptions(draft: NewSessionDraft, projectDir?: string): CreateSessionOptions {
   const extraDirs = normalizeExtraDirs(draft.extraDirs);
   const effort = draft.effort.trim();
   const providerId = draft.providerId?.trim();
-  const base = {
+  const engine = draft.pluginEngine;
+  // 插件引擎任务：Desktop 只接受带 acp-plugin: 标识、不带远程字段的 'acp'；没有 Fast。
+  const base = engine ? {
+    agentKind: 'acp' as const,
+    workspaceKind: draft.workspaceKind,
+    model: engine.model || 'default',
+    permissionMode: engine.permissionMode,
+    fastMode: false,
+    effort: engine.effort,
+    providerId: engine.providerId,
+  } : {
     agentKind: draft.agentKind,
     workspaceKind: draft.workspaceKind,
     model: draft.model.trim(),
@@ -1111,7 +1189,9 @@ export function buildRemoteCreateSessionOptions(draft: NewSessionDraft): CreateS
   return {
     ...base,
     workingDir: draft.workingDir.trim(),
-    ...(extraDirs.length > 0 ? { extraDirs } : {}),
+    ...(projectDir ? { projectDir } : {}),
+    // 插件引擎不接受额外目录(与桌面一致，桌面对插件引擎隐藏这一项)。
+    ...(extraDirs.length > 0 && !engine ? { extraDirs } : {}),
   };
 }
 

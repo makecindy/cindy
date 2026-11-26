@@ -11,6 +11,7 @@ import {
   parseSubscriptionAccountCommand,
   parseSubscriptionSessionAccountQuery,
 } from './commands.js';
+import { onPluginEngineAccountsChanged } from '../plugin-engine-accounts/runtime.js';
 export { parseSubscriptionAccountCommand } from './commands.js';
 import { executeSubscriptionAccountCommand } from './service.js';
 import {
@@ -52,18 +53,25 @@ export function registerSubscriptionAccountsIpc(): void {
     broadcast('subscription-accounts:changed', { providerId, ...(resetAccountId ? { resetAccountId } : {}),
       ...(change ? { change } : {}) }),
   );
+  // Plugin engine accounts use the same push (older views ignore provider ids they do not show).
+  onPluginEngineAccountsChanged((providerId, change) =>
+    broadcast('subscription-accounts:changed', { providerId, ...(change ? { change } : {}) }),
+  );
   ipcMain.handle('maker:subscription-pool:quota', async (event, providerId: unknown, model?: unknown, scope?: unknown) => {
     const context = getDeviceLinkInvokeContext();
     if (context?.sharedTask) throwIpcError('PERMISSION_DENIED', 'Account quota requires the owner');
     if (!context) assertTrustedAppRendererEvent(event);
     const scheduling = scope && typeof scope === 'object' && !Array.isArray(scope)
-      ? scope as { scheduling?: unknown; ownComputer?: unknown } : null;
+      ? scope as { scheduling?: unknown; ownComputer?: unknown; capability?: unknown } : null;
     if (scheduling?.scheduling === 1) {
       if (context && !isOwnComputerContext(context)) throwIpcError('PERMISSION_DENIED', 'Account scheduling requires the owner');
       if (!isSubscriptionPoolProviderIdShape(providerId) || typeof model !== 'string' || !model.trim() || model.length > 512
-        || typeof scheduling.ownComputer !== 'boolean') throwIpcError('INVALID_PARAMS', 'Invalid subscription scheduling query');
+        || typeof scheduling.ownComputer !== 'boolean'
+        || (scheduling.capability !== undefined && scheduling.capability !== 'image.generate'))
+        throwIpcError('INVALID_PARAMS', 'Invalid subscription scheduling query');
       return { providerId, model, scheduling: await readSubscriptionPoolScheduling(providerId, model, {
         remote: !!context, ownComputer: isOwnComputerContext(context) && scheduling.ownComputer === true,
+        ...(scheduling.capability === 'image.generate' ? { capability: scheduling.capability } : {}),
       }) };
     }
     if (!isSubscriptionPoolProviderIdShape(providerId))
@@ -86,7 +94,6 @@ export function registerSubscriptionAccountsIpc(): void {
     if (context?.sharedTask)
       throwIpcError('PERMISSION_DENIED', 'Account management requires the owner');
     if (!context) assertTrustedAppRendererEvent(event);
-    // Read-only task account for its usage display; same owner gate as `read`.
     const session = parseSubscriptionSessionAccountQuery(raw);
     if (session) {
       try {
@@ -98,6 +105,10 @@ export function registerSubscriptionAccountsIpc(): void {
       }
     }
     const command = parseSubscriptionAccountCommand(raw);
+    // A secret (a plugin engine's API key) is typed into this computer's own window only: it never
+    // travels between computers (plugin-security-and-authoring.md 内联凭证只走本机).
+    if (context && 'secret' in command && command.secret !== undefined)
+      throwIpcError('PERMISSION_DENIED', 'Enter the key on the computer that has the plugin');
     try {
       return await executeSubscriptionAccountCommand(command);
     } catch (error) {
@@ -112,6 +123,7 @@ export function registerSubscriptionAccountsIpc(): void {
             : KNOWN_FAILURE_REASONS.has(reason) ? reason
               : error instanceof Error ? error.name : typeof error,
         });
+      if (reason === 'Account not found') throwIpcError('NOT_FOUND', 'Subscription account not found');
       if (unreachable)
         throwIpcError(
           'SUBSCRIPTION_ACCOUNT_UNREACHABLE',

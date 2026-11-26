@@ -10,6 +10,7 @@ import { MemoryRouter } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { TAB_IDS } from '@/lib/tabLabels';
+import { Checkbox } from '@/components/ui/checkbox';
 import { PluginDetailTopBar } from '@/features/plugin/PluginDetailTopBar';
 import { PluginManagementLayout } from '@/features/plugin/PluginManagementLayout';
 import { SettingsSidebarNav } from '../SettingsSidebarNav';
@@ -86,6 +87,23 @@ describe('useSettingsEscape', () => {
     expect(onEscape).not.toHaveBeenCalled();
 
     pressEscape();
+    expect(onEscape).toHaveBeenCalledTimes(1);
+  });
+
+  // #12342 review PRRT_kwDOTgdRUs67KjKu: StorageManagementCard / PluginSettingsSection moved
+  // from Switch (a button) to the shared native Checkbox. A checkbox takes no text, so Escape
+  // must leave settings on the first press exactly as it did on the Switch, not just blur it.
+  it('exits settings on the first Escape while a settings checkbox has focus', () => {
+    const onEscape = vi.fn();
+    render(
+      <Harness onEscape={onEscape}>
+        <Checkbox aria-label="Back up first" defaultChecked />
+      </Harness>,
+    );
+    const checkbox = screen.getByRole('checkbox', { name: 'Back up first' });
+    checkbox.focus();
+
+    expect(pressEscape(checkbox).defaultPrevented).toBe(true);
     expect(onEscape).toHaveBeenCalledTimes(1);
   });
 

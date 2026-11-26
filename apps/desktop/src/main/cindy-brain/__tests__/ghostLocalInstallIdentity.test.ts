@@ -1,5 +1,6 @@
 import { pluginHasToolUi, pluginToolVisible } from '@cindy/plugin-protocol';
-import { ghostPermissionItems, hasGhostUiPermission, ghostCindyModelActionApproved } from '../../../shared/ghost.js';
+import { approvedGhostHarnesses, ghostPermissionItems, hasGhostUiPermission, ghostCindyModelActionApproved } from '../../../shared/ghost.js';
+import { createPluginHarnessRegistry } from '../pluginHarnesses.js';
 import { describe, expect, it, vi } from 'vitest';
 import fs from 'node:fs/promises';
 import os from 'node:os';
@@ -26,6 +27,7 @@ const createCallbacks = createGhostProductionCallbacks<{
   install: (event: unknown, file: string, options: unknown) => Promise<{ ghost: InstalledGhost }>;
 }>({
   functions: ['installAndDock', 'installAndDockLocked'],
+  variables: ['installLocalFile'],
   callbacks: { install: ['ipcMain.handle', 'ghosts:install'] },
 });
 
@@ -457,6 +459,56 @@ it.each([{}, ['rerank']])('reloads historical model declarations without revokin
       approvedCindyModelActions: ['rerank'] });
     if ('rejection' in updated) throw new Error(updated.rejection.reason);
     expect(ghostCindyModelActionApproved(new GhostManager(options).list()[0], 'rerank')).toBe(true);
+  } finally { await fs.rm(directory, { recursive: true, force: true }); }
+});
+
+/*
+ * 测试价值
+ * - 生产入口与可观察结果：GhostManager.list() 重启后读回旧 receipt 的插件状态、approvedGhostHarnesses 与
+ *   执行引擎注册表 list；确认过的更新后同一入口读回批准事实。
+ * - Bug／规则依据：plugin-security-and-authoring.md §5 红线（升级后已装已启用插件照旧可用、不得静默扩权；
+ *   测试门槛要求「从旧状态升级」fixture）；docs/plans/acp-plugin-bridge.md「存量兼容」。
+ * - 现有覆盖缺口：harnesses 是新字段，旧 Host 把它当未知 v3 字段写进 receipt，且可能不合新规则。
+ * - 最小失败输入：旧 receipt 的 manifest 含 harnesses（合规或 entry 指向主入口），没有 approvedHarnesses。
+ * - tier：unit（tmpdir 真实 receipt）。实测耗时：随本文件整体约数秒。
+ */
+it.each(['valid', 'invalid'] as const)('keeps a plugin with %s pre-declared task engines enabled and their engines off after upgrade', async declaration => {
+  const directory = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-old-engine-')));
+  try {
+    const node = { entry: 'worker.js', protocol: 'json-rpc-stdio', entries: ['engine.js'] };
+    const raw = { schemaVersion: 3, minCindyVersion: '0.1.0', id: 'old-engine', name: 'Old', version: '1.0.0', entry: 'main.js', node };
+    const files = { 'main.js': '// ok\n', 'worker.js': '// worker\n', 'engine.js': '// engine\n' };
+    const file = await writeTestCindyPackage(path.join(directory, 'old.cindy'), raw, files);
+    const options: GhostManagerOptions = { getRootDir: () => path.join(directory, 'plugins'),
+      mutateSnapshot: async ({ parentDir, ...request }) => runGhostSnapshotWorkerRequest(request, parentDir) };
+    const manager = new GhostManager(options);
+    const installed = await manager.install(file);
+    if ('rejection' in installed) throw new Error(installed.rejection.reason);
+    // An older Host kept `harnesses` as an unknown v3 field in the receipt and recorded no engine approval.
+    const harness = { id: 'dsh', name: 'DeepSeek Harness', protocol: 'acp', entry: declaration === 'valid' ? 'engine.js' : 'worker.js' };
+    const receiptFile = (await fs.readdir(manager.approvalStateRoot(), { recursive: true }))
+      .map(entry => path.join(manager.approvalStateRoot(), String(entry))).find(entry => path.basename(entry) === 'old-engine.json');
+    if (!receiptFile) throw new Error('receipt not found');
+    const receipt = JSON.parse(await fs.readFile(receiptFile, 'utf8'));
+    receipt.manifest.harnesses = [harness];
+    await fs.writeFile(receiptFile, JSON.stringify(receipt));
+
+    const restarted = new GhostManager(options);
+    const old = restarted.list()[0]!;
+    expect(old).toMatchObject({ enabled: true, approval: installed.ghost.approval, manifest: { node: { entry: 'worker.js' } } });
+    expect(old.approvedHarnesses).toBeUndefined();
+    expect(approvedGhostHarnesses(old)).toEqual([]);
+    expect(old.manifest.harnesses).toEqual(declaration === 'valid' ? [harness] : undefined);
+    const registry = createPluginHarnessRegistry({ listGhosts: () => restarted.list(), isAvailable: () => true,
+      readAvailability: () => ({}), uiLocale: () => 'en', spawn: async () => { throw new Error('not used'); } });
+    expect(registry.list()).toEqual([]);
+    if (declaration === 'invalid') return;
+    // The next confirmed update records the engine; a restart reads it back.
+    const next = await writeTestCindyPackage(path.join(directory, 'next.cindy'), { ...raw, version: '2.0.0', harnesses: [harness] }, files);
+    const updated = await restarted.update(next, { expectedInstalledApproval: ghostInstallApprovalToken(old.approval), approvedHarnesses: ['dsh'] });
+    if ('rejection' in updated) throw new Error(updated.rejection.reason);
+    const after = new GhostManager(options).list()[0]!;
+    expect(approvedGhostHarnesses(after).map(item => item.id)).toEqual(['dsh']);
   } finally { await fs.rm(directory, { recursive: true, force: true }); }
 });
 

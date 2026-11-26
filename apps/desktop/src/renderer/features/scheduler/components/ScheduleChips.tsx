@@ -7,6 +7,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ChevronDown, ExternalLink, Folder, MessageCircle, Timer, SlidersHorizontal } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { Popover, PopoverTrigger, PopoverContent } from '@/components/ui/popover';
+import { SegmentedControl } from '@/components/ui/segmented-control';
 import { Select } from '@/components/ui/select';
 import { Tip } from '@/components/ui/tooltip';
 import {
@@ -22,6 +23,10 @@ import { useModelRouteDevices } from '@/hooks/useModelRouteDevices';
 import { RemoteSourceMark } from '@/components/icons/RemoteSourceMark';
 import { VendorIcon, agentKindToVendor } from '@/components/sidebar/VendorIcon';
 import { ModelRouteSelectorContent } from '@/components/new-chat/ModelRouteSelector';
+import { PluginEngineIcon } from '@/components/icons/PluginEngineIcon';
+import type { PluginEnginesPickerProps } from '@/components/new-chat/PluginEnginesSection';
+import { ModelGroupIcon, type ModelGroupsPickerProps } from '@/components/new-chat/ModelGroupsPickerSection';
+import { pluginEngineModelName, resolvePluginEngineEffort, PLUGIN_ENGINE_DEFAULT_MODEL } from '@/lib/pluginEngineSelection';
 import { useModelDiscoveryPending } from '@/components/new-chat/useModelDiscoveryPending';
 import {
   effectiveSourceIdForModel,
@@ -42,6 +47,7 @@ import {
   DEFAULT_SCHEDULE_INTERVAL_MS,
   resolveScheduleTimingPresentation,
   summarizeConfig,
+  formatIntervalDuration,
   switchScheduleTimingMode,
   WEEKDAY_LABELS,
   DEFAULT_CONFIG,
@@ -110,7 +116,7 @@ export const ChipButton = React.forwardRef<HTMLButtonElement, ChipButtonProps>(f
 });
 
 const POPOVER_BASE = cn(
-  'z-[10010] rounded-xl border p-2 shadow-[shadow:var(--shadow-menu)]',
+  'rounded-xl border p-2 shadow-[shadow:var(--shadow-menu)]',
   'border-[var(--cmd-palette-border)] bg-[var(--cmd-palette-bg)] dark:border-[var(--cmd-palette-border)] dark:bg-[var(--cmd-palette-bg)]',
 );
 
@@ -171,7 +177,7 @@ export function ProjectChip({
         active={open}
         disabled={disabled}
         variant="pill"
-        className="[&>span:nth-child(2)]:min-w-[94px] max-w-[220px] gap-[7px]"
+        className="[&>span:nth-child(2)]:min-w-[94px] max-w-[220px] gap-1.5"
       />
     </FolderPickerPopover>
   );
@@ -239,10 +245,10 @@ export function ScheduleSettingsButton({
         )}
 
         {!lockEnabled && (
-        <Tip text={switchDisabled && cantUseReason ? cantUseReason : null} side="top" contentClassName="z-[10020]">
+        <Tip text={switchDisabled && cantUseReason ? cantUseReason : null} side="top" contentClassName="z-modal-popover-nested">
           <label
             className={cn(
-              'flex h-8 w-full items-center gap-2 rounded-md px-2 text-13 transition-colors',
+              'flex h-8 w-full items-center gap-2 rounded-lg px-2 text-13 transition-colors',
               switchDisabled
                 ? 'cursor-not-allowed opacity-50'
                 : 'cursor-pointer hover:bg-[var(--surface-hover)] dark:hover:bg-[var(--settings-btn-secondary-hover-bg)]',
@@ -290,22 +296,6 @@ const INTERVAL_MENU_MODES: ReadonlyArray<EditableScheduleMenuMode> = [
   'intervalMinutes',
   'interval',
 ];
-
-function formatIntervalDuration(intervalMs: number, locale: string): string {
-  const units: ReadonlyArray<{ factor: number; unit: string }> = [
-    { factor: 24 * 60 * 60_000, unit: 'day' },
-    { factor: 60 * 60_000, unit: 'hour' },
-    { factor: 60_000, unit: 'minute' },
-    { factor: 1_000, unit: 'second' },
-    { factor: 1, unit: 'millisecond' },
-  ];
-  const selected = units.find(({ factor }) => intervalMs % factor === 0) ?? units[units.length - 1];
-  return new Intl.NumberFormat(locale, {
-    style: 'unit',
-    unit: selected.unit,
-    unitDisplay: 'long',
-  }).format(intervalMs / selected.factor);
-}
 
 const WEEKDAY_SHORT: Record<number, string> = {
   1: 'Mo',
@@ -408,7 +398,7 @@ export function ScheduleChip({
         align="start"
         sideOffset={8}
         collisionPadding={16}
-        className="z-[10010] w-[600px] rounded-xl bg-transparent p-0 shadow-none border-0"
+        className="w-[600px] rounded-xl bg-transparent p-0 shadow-none border-0"
         onWheel={stopWheel}
       >
         <div
@@ -418,27 +408,18 @@ export function ScheduleChip({
           }}
         >
           <div className="rounded-xl border border-[var(--cmd-palette-border)] bg-[var(--cmd-palette-bg)] p-2 shadow-[shadow:var(--shadow-menu)] dark:border-[var(--cmd-palette-border)] dark:bg-[var(--cmd-palette-bg)]">
-            <div className="flex h-[34px] items-center gap-1 rounded-lg bg-[var(--chat-input-chip-bg)] p-[3px]">
-              {(['cron', 'interval'] as const).map((mode) => {
-                const active = timingMode === mode;
-                return (
-                  <button
-                    key={mode}
-                    type="button"
-                    aria-pressed={active}
-                    onClick={() => setTimingMode(mode)}
-                    className={cn(
-                      'h-full flex-1 rounded-md border px-3 text-12 font-medium transition-colors',
-                      active
-                        ? 'border-[var(--confirm-btn-secondary-border)] bg-[var(--cmd-palette-bg)] text-[var(--msg-assistant-text)]'
-                        : 'border-transparent text-[var(--cmd-palette-item-meta)] hover:text-[var(--msg-assistant-text)]',
-                    )}
-                  >
-                    {t(`scheduler.chips.timingMode.${mode}`)}
-                  </button>
-                );
-              })}
-            </div>
+            <SegmentedControl
+              aria-label={t('scheduler.chips.timingMode.label')}
+              value={timingMode}
+              options={(['cron', 'interval'] as const).map((mode) => ({
+                value: mode,
+                label: t(`scheduler.chips.timingMode.${mode}`),
+              }))}
+              onValueChange={setTimingMode}
+              height={34}
+              optionHeight={30}
+              fullWidth
+            />
             <p className="px-1 pt-1.5 text-11 leading-4 text-[var(--cmd-palette-item-meta)] dark:text-[var(--settings-section-desc)]">
               {t(
                 timingMode === 'interval' && !intervalIsPreset
@@ -449,7 +430,7 @@ export function ScheduleChip({
           </div>
           <div className="flex items-start gap-2">
             <div className="w-[260px] shrink-0 rounded-xl border border-[var(--cmd-palette-border)] bg-[var(--cmd-palette-bg)] p-2 shadow-[shadow:var(--shadow-menu)] dark:border-[var(--cmd-palette-border)] dark:bg-[var(--cmd-palette-bg)]">
-              <div className="flex flex-col gap-[2px]">
+              <div className="flex flex-col gap-0.5">
                 {availableModes.map((mode) => {
                 const active = activeMode === mode;
                 return (
@@ -657,7 +638,7 @@ function IntervalMinutesInput({
         if (open) onFocus();
       }}
       onValueChange={(next) => onChange(Number(next))}
-      className="w-[88px] px-2 text-center text-13"
+      width="xs"
     />
   );
 }
@@ -855,7 +836,7 @@ function TimePicker({
         align="end"
         sideOffset={6}
         collisionPadding={16}
-        className={cn(POPOVER_BASE, 'z-[10020] w-[168px]')}
+        className={cn(POPOVER_BASE, 'z-modal-popover-nested w-[168px]')}
         onWheel={stopWheel}
       >
         <div className="grid grid-cols-2 gap-1.5">
@@ -900,7 +881,7 @@ function TimeColumn({
               type="button"
               onClick={() => onChange(option)}
               className={cn(
-                'flex h-7 w-full items-center justify-center rounded-md text-13 transition-colors',
+                'flex h-7 w-full items-center justify-center rounded-lg text-13 transition-colors',
                 active
                   ? 'bg-[var(--chat-input-chip-bg)] font-medium text-[var(--msg-assistant-text)] dark:bg-[var(--chat-input-chip-bg)] dark:text-[var(--msg-assistant-text)]'
                   : 'text-[var(--cmd-palette-item-meta)] hover:bg-[var(--surface-hover)] dark:text-[var(--settings-section-desc)] dark:hover:bg-[var(--settings-btn-secondary-hover-bg)]',
@@ -1044,6 +1025,7 @@ function previewConfigFor(mode: EditableScheduleMenuMode, current: CodexSchedule
 export function ModelEffortChip({
   onSelect,
   onFollowSession,
+  hostOnly,
   agentKind,
   agentDeviceId,
   modelValue,
@@ -1052,14 +1034,18 @@ export function ModelEffortChip({
   onChangeEffort,
   disabled,
   followSession,
+  followModel,
   providerId,
   onChangeProviderId,
   onNavigateToProviders,
   fastMode,
   onChangeFast,
+  pluginEngines,
+  modelGroups,
 }: {
   onSelect: NonNullable<React.ComponentProps<typeof ModelRouteSelectorContent>['onUnifiedSelect']>;
   onFollowSession: () => void;
+  hostOnly?: boolean;
   agentKind: AgentKind;
   agentDeviceId?: string;
   modelValue: string;
@@ -1069,6 +1055,7 @@ export function ModelEffortChip({
   disabled?: boolean;
   /** Bound automations may explicitly inherit the session model when modelValue is empty. */
   followSession?: boolean;
+  followModel?: { active: boolean; label: string; onFollow: () => void };
   /** 显式选定来源(供应商)id;'' = 跟随该 agent 原生默认来源(no-break)。 */
   providerId: string;
   /** 用户在来源轨选了某供应商时回调(等于原生默认时归一化为 '')。 */
@@ -1078,6 +1065,13 @@ export function ModelEffortChip({
   /** Fast 模式状态 + 回调(与聊天一致,收进模型选择器 Edit 配置列)。绑定任务同样保存，下一次触发时应用。 */
   fastMode?: boolean | 'ultrafast';
   onChangeFast?: (v: boolean | 'ultrafast') => void;
+  /**
+   * 本机的插件引擎(docs/plans/acp-plugin-bridge.md)，只给每次新建任务、在本机运行的自动任务传。
+   * active 有值时触发器显示「引擎 · 模型 · 思考深度」。
+   */
+  pluginEngines?: PluginEnginesPickerProps;
+  /** 模型组(model-groups.md §6.3)：选着模式时触发器写模式名，来源在新建任务时按模式选。 */
+  modelGroups?: ModelGroupsPickerProps;
 }) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
@@ -1136,7 +1130,7 @@ export function ModelEffortChip({
     providerId,
     effort: effortValue,
   });
-  const followsSessionModel = usesBoundSessionModel({ followSession, model: modelValue });
+  const followsSessionModel = followModel?.active || usesBoundSessionModel({ followSession, model: modelValue });
   // The form owns default resolution. Empty means no selected model, not permission
   // to resolve another default from this chip's independent catalog snapshot.
   const effectiveId = followsSessionModel ? '' : modelValue;
@@ -1149,7 +1143,7 @@ export function ModelEffortChip({
   const modelLabel = catalogModel?.name || current?.displayName || effectiveId || t('scheduler.chips.model.default');
   const agentLabel = t(`newChat.modelSelector.trigger.agent.${agentKind === 'claude-code' ? 'claudeCode' : agentKind}`);
   const effortLabel = (e: EffortValue) => t(`effortLevels.${e}`);
-  const display = followsSessionModel
+  const display = followModel?.active ? followModel.label : followsSessionModel
     ? [
       t('scheduler.chips.model.followSession'),
       providerId.trim()
@@ -1170,38 +1164,77 @@ export function ModelEffortChip({
   const agentDeviceTitle = agentDeviceName
     ? t('newChat.modelSelector.trigger.agentDevice', { device: agentDeviceName })
     : null;
+  // 选中插件引擎时触发器写引擎自己的名字、模型与档位(插件停用后用通用名称)，不画内置 Harness 的标志。
+  const activeEngineSelection = pluginEngines?.active ?? null;
+  const activeEngine = activeEngineSelection
+    ? pluginEngines?.engines.find((engine) => engine.providerId === activeEngineSelection.providerId) ?? null
+    : null;
+  const engineDisplay = activeEngineSelection
+    ? [
+        activeEngine?.name ?? t('newChat.pluginEngines.genericName'),
+        pluginEngineModelName(activeEngine, activeEngineSelection.modelId)
+          ?? (activeEngineSelection.modelId === PLUGIN_ENGINE_DEFAULT_MODEL
+            ? t('newChat.pluginEngines.defaultModel')
+            : t('newChat.modelSelector.trigger.unresolved')),
+        (() => {
+          const level = resolvePluginEngineEffort(activeEngine, activeEngineSelection.modelId, activeEngineSelection.effort);
+          return level ? effortLabel(level as EffortValue) : null;
+        })(),
+      ].filter(Boolean).join(' · ')
+    : null;
+
+  const activeModelGroupName = modelGroups?.active
+    ? modelGroups.config.routes.find((route) => route.id === modelGroups.active?.id)?.name ?? null
+    : null;
 
   return (
     <Popover open={open} onOpenChange={handleOpenChange}>
       <PopoverTrigger asChild>
+        {activeModelGroupName ? (
+          <ChipButton
+            icon={<ModelGroupIcon size={14} />}
+            label={activeModelGroupName}
+            title={t('scheduler.chips.model.modelGroupTitle', { name: activeModelGroupName })}
+            active={open}
+            disabled={disabled}
+            className="max-w-[240px] px-2"
+          />
+        ) : (
         <ChipButton
-          icon={agentDeviceId && agentIcon ? <RemoteSourceMark markSize={14}>{agentIcon}</RemoteSourceMark> : agentIcon}
-          label={display}
-          title={agentDeviceTitle ? `${display} · ${agentDeviceTitle}` : undefined}
+          icon={engineDisplay
+            ? <PluginEngineIcon size={14} iconDataUrl={activeEngine?.iconDataUrl} className='text-current' />
+            : agentDeviceId && agentIcon ? <RemoteSourceMark markSize={14}>{agentIcon}</RemoteSourceMark> : agentIcon}
+          label={engineDisplay ?? display}
+          title={engineDisplay ? engineDisplay : agentDeviceTitle ? `${display} · ${agentDeviceTitle}` : undefined}
           active={open}
           disabled={disabled}
           className="[&>span:last-of-type]:min-w-[106px] max-w-[240px] px-2"
         />
+        )}
       </PopoverTrigger>
       <PopoverContent
         align="end"
         sideOffset={8}
         collisionPadding={16}
         className={cn(
-          // z-[10010]:本 chip 在 ScheduleFormDialog 内,弹层必须盖过对话框(沿用原
-          // POPOVER_BASE 的层级——丢了它会渲染在对话框下层、点了"没反应")。
-          'z-[10010] overflow-hidden rounded-[12px] p-0 shadow-[shadow:var(--shadow-menu)]',
+          // 本 chip 在 ScheduleFormDialog 内:共享 PopoverContent 默认在 dropdown 层
+          // (10010),已盖过对话框;不要再局部降层,否则会渲染在对话框下层、点了"没反应"。
+          'overflow-hidden rounded-xl p-0 shadow-[shadow:var(--shadow-menu)]',
+          // 高度不超过窗口可用高度(与聊天选择器同口径)：矮窗口里弹层顶到窗口外，最上面的模型组点不到。
+          'flex min-h-0 max-h-[var(--radix-popover-content-available-height)] flex-col',
           'bg-[var(--model-dropdown-bg)] border border-[var(--model-dropdown-border)]',
           // 宽度由内容自适应(单栏 320;Edit 展开 ~517 向左加宽),与聊天选择器同口径。
-          'w-auto',
+          'w-auto flex max-h-[var(--radix-popover-content-available-height)] flex-col',
         )}
         onWheel={stopWheel}
       >
         {/* 直接复用聊天的下拉内容本体(唯一真源:聊天选择器改了这里跟着变)。
             来源轨 / 模型分组 / 搜索 / effort / 空态全套自带;followSession 行为 opt-in。 */}
         <ModelRouteSelectorContent
+          hostOnly={hostOnly}
           agentDeviceId={agentDeviceId || null}
           fastModeConfigurable={['codex', 'pi']}
+          {...(modelGroups ? { modelGroups } : {})}
           unifiedAgents={pickerAgents}
           onUnifiedSelect={onSelect}
           vendorKey={vendorKey}
@@ -1225,10 +1258,11 @@ export function ModelEffortChip({
           // An explicit selection always pins the connection, including the native default.
           reselectEmitsChange
           selectedRowClickOpensConfiguration
-          overlayContentClassName="z-[10020]"
+          overlayContentClassName="z-modal-popover-nested"
           discoveringModels={discovery.pending}
+          {...(pluginEngines ? { pluginEngines } : {})}
           followSession={
-            followSession
+            followModel ?? (followSession
               ? {
                   active: isFollowingSession,
                   label: t('scheduler.chips.model.followSession'),
@@ -1236,7 +1270,7 @@ export function ModelEffortChip({
                     onFollowSession();
                   },
                 }
-              : undefined
+              : undefined)
           }
         />
       </PopoverContent>

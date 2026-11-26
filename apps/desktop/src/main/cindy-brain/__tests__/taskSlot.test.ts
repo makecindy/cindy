@@ -36,10 +36,16 @@ describe('plugin task pipe', () => {
     let current = ghost;
     const page = createGhostPageBridge({ ping: async () => ({ ok: true, id: 'p' }),
       send: payload => handlePluginTaskRequest('p', payload, { getGhost: () => current, handler, isCurrent: () => true }) });
+    // 2026-11-18: per-conversation settings and the loosening dialog sit behind the same consent.
     const requests = [
       { type: 'tasks-request', kind: 'imProjects' },
       { type: 'tasks-request', kind: 'create', requestKey: 'project', title: 'Group', imProject: 'chat' },
       { type: 'tasks-request', kind: 'followImProject', taskId: 'owned', expectedRevision: 1, imProject: '/project' },
+      { type: 'tasks-request', kind: 'imProjectConfig', imProject: 'chat' },
+      { type: 'tasks-request', kind: 'confirmImPermission', imProject: 'chat', permissionMode: 'bypassPermissions',
+        conversation: { label: 'Group', kind: 'group' } },
+      { type: 'tasks-request', kind: 'followImProject', taskId: 'owned', expectedRevision: 1, imProject: 'chat',
+        imOverride: { permissionMode: 'ask', permissionGrant: 'grant-1' } },
     ];
     for (const request of requests) {
       const { type: _type, kind, ...args } = request;
@@ -48,7 +54,14 @@ describe('plugin task pipe', () => {
       current = approved;
       await expect(page.api.tasks[kind]!(args)).resolves.toEqual({ accepted: true });
     }
-    expect(handler).toHaveBeenCalledTimes(3);
+    expect(handler).toHaveBeenCalledTimes(6);
+    // A conversation override is only meaningful inside a shared project and carries no other authority.
+    for (const imOverride of [{ permissionMode: 'plan' }, { workingDir: '/elsewhere' }, { permissionGrant: '../grant' },
+      { route: { ...requests[0], model: 'x' } }])
+      expect(validPluginTaskRequest({ ...requests[5], imOverride })).toBe(false);
+    expect(validPluginTaskRequest({ ...requests[1], imProject: undefined, imOverride: { permissionMode: 'ask' } })).toBe(false);
+    for (const conversation of [{ label: 'Group', kind: 'channel' }, { label: 'Gro\nup', kind: 'group' }, { label: 'Group' }])
+      expect(validPluginTaskRequest({ ...requests[4], conversation })).toBe(false);
     for (const field of [{ permissionMode: 'bypassPermissions' }, { isolatedWorkspace: true }, { callId: 'call' }])
       expect(validPluginTaskRequest({ ...requests[1], ...field })).toBe(false);
   });
@@ -128,6 +141,14 @@ describe('plugin task pipe', () => {
     expect(handler).toHaveBeenCalledOnce();
     // Only tasks.send accepts relay.
     expect(validPluginTaskRequest({ type: 'tasks-request', kind: 'create', requestKey: 'new', title: 'T', relay })).toBe(false);
+    // plugin-agent-tasks.md「后续轮次」(2026-11-25): the follow-up opt-in is advertised and only `true`
+    // passes the pipe (an old Host rejects the key, so plugins must check the capability first).
+    expect(await handlePluginTaskRequest('p', { type: 'tasks-request', kind: 'capabilities' }, deps))
+      .toMatchObject({ ok: true, data: { followUps: true } });
+    expect(validPluginTaskRequest({ ...send, relay, followUps: true })).toBe(true);
+    for (const followUps of [false, 'true', 1, {}])
+      expect(validPluginTaskRequest({ ...send, followUps })).toBe(false);
+    expect(validPluginTaskRequest({ type: 'tasks-request', kind: 'create', requestKey: 'new', title: 'T', followUps: true })).toBe(false);
   });
   it('bounds the complete JSON plan without truncating scope or breaking representative 200-item batches', () => {
     const item = {label:'sample',workingDir:'/answer',route:{agentKind:'pi',providerId:'p',model:'m',effort:'high',fastMode:false},task:'测'.repeat(2600)};

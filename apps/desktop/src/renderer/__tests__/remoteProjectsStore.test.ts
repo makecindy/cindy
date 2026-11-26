@@ -116,6 +116,38 @@ describe('remoteProjectsStore', () => {
     expect(freshRead.mergeActivity(mk('same')).lastActivityAt).toBe('2026-01-02T00:00:00.000Z');
   });
 
+  // Unit, #10710: replace one row to separate the visible and authoritative
+  // references of an unchanged row. A subsequent patch can reuse that projection
+  // without serializing it again, including when a hidden row shifts its index.
+  it('reuses a previously compared visible row without encoding it on the next patch', () => {
+    const hidden = mk('hidden', { source: 'cindy-make' });
+    remoteProjectsStore.setDeviceSessions('host', 'Host', [hidden, mk('stable'), mk('changing')]);
+    const stableVisible = remoteProjectsStore.getVisibleMergedRemoteSessions().find(row => row.id === 'stable');
+    remoteProjectsStore.setDeviceSessions('host', 'Host', [
+      hidden, mk('stable'), mk('changing', { title: 'From snapshot' }),
+    ]);
+    const stableMirror = remoteProjectsStore.getDeviceSessions('host').find(row => row.id === 'stable');
+    expect(stableVisible).toBeDefined();
+    expect(stableMirror).toBeDefined();
+    expect(stableMirror).not.toBe(stableVisible);
+
+    const stringify = vi.spyOn(JSON, 'stringify');
+    let encodedStableRow: boolean;
+    try {
+      remoteProjectsStore.applyPatch('host', 'changing', { extraDirs: ['/from-patch'] });
+      encodedStableRow = stringify.mock.calls.some(([value]) => value === stableVisible || value === stableMirror);
+    } finally {
+      stringify.mockRestore();
+    }
+
+    const visible = remoteProjectsStore.getVisibleMergedRemoteSessions();
+    expect(visible.find(row => row.id === 'stable')).toBe(stableVisible);
+    expect(visible.find(row => row.id === 'changing')).toMatchObject({
+      title: 'From snapshot', extraDirs: ['/from-patch'],
+    });
+    expect(encodedStableRow).toBe(false);
+  });
+
   // Unit, #7469: structural sharing must compare nested payloads too, and must
   // not resurrect removed rows or hide connection changes behind a UI cache.
   it('updates nested visible data and retires rows on disconnect, deletion and clear', () => {
@@ -219,6 +251,22 @@ describe('remoteProjectsStore', () => {
     remoteProjectsStore.applyTagCatalog('dev-A', []);
     expect(remoteProjectsStore.isLatestSnapshotEpoch('dev-A', epoch, 'archived')).toBe(false);
     expect(reseed.mock.calls).toEqual([['dev-A', 'active'], ['dev-A', 'archived']]);
+  });
+
+  // Unit: the controller may never have opened the hidden follow-up. Its
+  // first-worker patch must make the existing task visible on the right device.
+  it('loads a newly linked side chat missing from the controller task list', () => {
+    remoteProjectsStore.setDeviceSessions('dev-A', 'A', [mk('parent')]);
+    remoteProjectsStore.setDeviceSessions('dev-B', 'B', [mk('unrelated')]);
+    const reseed = vi.fn((deviceId: string) => {
+      remoteProjectsStore.setDeviceSessions(deviceId, 'A', [mk('parent'), mk('child', { source: 'desktop', parentSessionId: 'parent' })]);
+    });
+    setRemoteReseedImpl(reseed);
+    remoteProjectsStore.applyPatch('dev-A', 'child', { source: 'desktop', sideChatPromoted: true });
+    expect(reseed).toHaveBeenCalledExactlyOnceWith('dev-A', 'active');
+    expect(remoteProjectsStore.getVisibleMergedRemoteSessions()).toContainEqual(expect.objectContaining({
+      id: 'child', parentSessionId: 'parent', deviceLinkDeviceId: 'dev-A',
+    }));
   });
 
   it('requeues both loaded buckets after invalidating a refresh that may contain new tasks', () => {

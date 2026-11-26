@@ -6,6 +6,16 @@ const schema = { properties: { prompt: {}, image: {}, aspect_ratio: {} }, requir
 const prepared = { ok: true, invocation_id: 'existing-core-id', input_schema: schema };
 
 describe('旧接口适配 Core media', () => {
+  // #11243 / unit: the existing normalized two-image input must reach the
+  // Guide-declared frame fields instead of failing the old single-image branch.
+  it('maps existing two-frame and reference modes to the 1.5 Guide fields', () => {
+    const schema = { properties: { prompt: {}, image: { type: 'object' }, last_frame: { type: 'object' }, reference_images: { type: 'array' } } };
+    const request = { kind: 'edit_video' as const, model: 'xai/grok-imagine-video-1.5', prompt: 'move', images: ['first', 'last'] };
+    expect(legacyMediaBody(request, schema)).toEqual({ prompt: 'move', image: { url: 'first' }, last_frame: { url: 'last' } });
+    expect(legacyMediaBody({ ...request, refMode: 'reference_image' }, schema))
+      .toEqual({ prompt: 'move', reference_images: [{ url: 'first' }, { url: 'last' }] });
+    expect(() => legacyMediaBody(request, { properties: { prompt: {}, image: { type: 'object' } } })).toThrow('一张参考图');
+  });
   it('保留完整模型来源，使用 Server 输入说明，只提交一次并返回 Core 已入仓结果', async () => {
     const callCore = vi.fn()
       .mockResolvedValueOnce(prepared)

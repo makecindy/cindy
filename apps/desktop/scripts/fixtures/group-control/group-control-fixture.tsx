@@ -3,7 +3,7 @@ import answerVideo from '../../../src/renderer/assets/wallpapers/cindy-window.mp
 import answerAudio from '../../../native/agent-island/sounds/startup-chime.mp3?url';
 import { makerChatStore } from '../../../src/renderer/lib/makerChatStore';
 import { useEffect, useRef } from 'react';
-import { Route, Routes, useSearchParams } from 'react-router-dom';
+import { Route, Routes, useNavigate, useSearchParams } from 'react-router-dom';
 import { AppFrame, ctx, forbid, mountPage, subscription } from '../../ui-page/harness';
 import type { BotGroupSummary } from '../../../src/shared/botGroupChat';
 import { BotGroupSidebarRow } from '../../../src/renderer/features/bots/BotGroupSidebarRow';
@@ -24,6 +24,7 @@ if (!crypto.randomUUID) {
 }
 
 interface GroupData {
+  topicPreview?: boolean;
   /** #9398: message-only push, then an explicitly released full plan read. */
   planRead?: 'talk' | 'work' | 'missing';
   processRecord?: boolean;
@@ -340,7 +341,9 @@ function groupFrom(data: GroupData) {
     ...(data.settings ? { revision: 1 } : {}),
     organizerBotId: data.members[0]?.botId ?? null,
     projectDir: null,
-    lastMessage: null,
+    lastMessage: data.topicPreview ? { messageId: '40000000-0000-4000-8000-000000000002',
+      threadRootId: '40000000-0000-4000-8000-000000000001', authorKind: 'bot', authorName: 'Cindy',
+      preview: '已经补充了测试结果，详细说明放在这个话题里。', createdAt: Date.now() } : null,
     speakingBotIds: data.workState ? data.workParallel ? ['a', 'b'] : ['a'] : [],
     planningBotId: data.planningForeign ? 'a' : null,
     openPlan: data.workQueuedStep ? { id: 'queued-plan', kind: 'work', status: 'running', currentStep: 0, stepCount: 2, currentBotName: 'Aster', currentStepStatus: 'running' } : null,
@@ -434,6 +437,8 @@ void mountPage({
       return { ok: true, following };
     };
     const thread = async (input: { rootId: string }) => {
+      if (data.topicPreview) return { ok: true, root: message({ id: input.rootId, content: '请核对这次问题的描述。' }),
+        replies: [message({ id: group.lastMessage!.messageId, threadRootId: input.rootId, authorName: 'Cindy', content: group.lastMessage!.preview })], hasMore: false, following: false };
       const root = group.messages.find(m => m.id === input.rootId);
       const replies = ((root?.threadPreview as { replies?: Array<Record<string, unknown>> } | undefined)?.replies ?? []).map((reply, index) => message({
         id: reply.id, sequence: 100 + index, threadRootId: input.rootId, authorKind: reply.authorKind, authorBotId: reply.authorBotId,
@@ -507,7 +512,7 @@ void mountPage({
           react: forbid('maker.chatServer.react'),
           ownedBots: async () => ({ ok: true, bots: [] }),
           manage: forbid('maker.chatServer.manage'),
-          ...(data.threadPanel || data.readReceipts ? { thread, followThread } : {}),
+          ...(data.threadPanel || data.readReceipts || data.topicPreview ? { thread, followThread } : {}),
           ...(data.sharePending ? { shareToMain: () => new Promise(() => {}) } : {}),
         },
         updateBotGroup: forbid('maker.updateBotGroup'),
@@ -543,7 +548,7 @@ void mountPage({
   },
   render: (ctx) => {
     const data = ctx.data as unknown as GroupData;
-    const sidebar = data.sidebar ? <div className="p-5">{data.workState ? <BotGroupSidebarRow
+    const sidebar = data.topicPreview ? <TopicPreviewSidebar data={data} /> : data.sidebar ? <div className="p-5">{data.workState ? <BotGroupSidebarRow
       group={groupFrom(data) as BotGroupSummary} bots={[]} islandActivity={new Map()}
       now={Date.now()} selected={true} onOpenGroup={() => undefined}
     /> : null}</div> : undefined;
@@ -595,4 +600,12 @@ function SeedProcessNotes() {
     return () => makerChatStore.purgeSession('fixture-work');
   }, []);
   return null;
+}
+
+
+function TopicPreviewSidebar({ data }: { data: GroupData }) {
+  const navigate = useNavigate();
+  return <div className="p-2"><BotGroupSidebarRow group={groupFrom(data) as BotGroupSummary}
+    bots={[]} islandActivity={new Map()} now={Date.now()} selected={true}
+    onOpenGroup={(id, reply) => navigate(`/bots/groups/${id}${reply ? '?' + new URLSearchParams(reply).toString() : ''}`)} /></div>;
 }

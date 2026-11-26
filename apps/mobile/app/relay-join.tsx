@@ -395,6 +395,19 @@ export default function RelayJoinScreen() {
         </View>
       </>
     );
+  } else if (phase.kind === 'failed') {
+    content = (
+      <>
+        {phase.info && link ? <RelayIdentity info={phase.info} baseUrl={link.baseUrl} /> : account ? <AccountRelayIdentity offer={account} /> : null}
+        <Notice
+          icon={phase.info || account ? null : <CircleAlert size={iconSize.xl} color={colors.textSecondary} />}
+          message={t(errorMessageKey(phase.code, link), { device })}
+          action={phase.retry
+            ? { label: t('relay.join.retry'), onPress: retry, testID: 'relayJoin.retry', primary: true }
+            : { label: t('relay.join.done'), onPress: leave, testID: 'relayJoin.done' }}
+        />
+      </>
+    );
   } else if (!link) {
     content = null;
   } else if (phase.kind === 'idle' || phase.kind === 'probing' || phase.kind === 'requesting') {
@@ -450,7 +463,7 @@ export default function RelayJoinScreen() {
         </View>
       </>
     );
-  } else if (phase.kind === 'joined') {
+  } else {
     content = (
       <Notice
         icon={<CircleCheck size={iconSize.xl} color={colors.textSecondary} />}
@@ -458,19 +471,6 @@ export default function RelayJoinScreen() {
         message={t('relay.join.joinedBody', { name: phase.info.name })}
         action={{ label: t('relay.join.done'), onPress: () => router.replace('/'), testID: 'relayJoin.done', primary: true }}
       />
-    );
-  } else {
-    content = (
-      <>
-        {phase.info && link ? <RelayIdentity info={phase.info} baseUrl={link.baseUrl} /> : account ? <AccountRelayIdentity offer={account} /> : null}
-        <Notice
-          icon={phase.info || account ? null : <CircleAlert size={iconSize.xl} color={colors.textSecondary} />}
-          message={t(errorMessageKey(phase.code, link), { device })}
-          action={phase.retry
-            ? { label: t('relay.join.retry'), onPress: retry, testID: 'relayJoin.retry', primary: true }
-            : { label: t('relay.join.done'), onPress: leave, testID: 'relayJoin.done' }}
-        />
-      </>
     );
   }
 

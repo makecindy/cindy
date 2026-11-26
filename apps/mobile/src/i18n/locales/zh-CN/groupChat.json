@@ -127,7 +127,7 @@
       "IMAGE_INPUT_UNSUPPORTED": {
         "summary": "{{name}}无法回复：当前模型不支持图片。",
         "advice": "请切换到支持图片的模型。",
-        "details": "请切换到支持图片的模型，或在「设置 → 个性化 → 视觉桥」开启并配置视觉模型后重新发送。"
+        "details": "请切换到支持图片的模型。"
       },
       "MODEL_UNAVAILABLE": {
         "summary": "{{name}}无法回复：当前没有可用模型。",
@@ -291,7 +291,7 @@
     "organizerSaveFailed": "负责人没能更换，请再试一次",
     "projectDir": "项目文件夹",
     "projectDirNone": "没选",
-    "projectDirNote": "分工做事时，伙伴们在这里干活。不选也行，会用这个群自己的文件夹；选了 git 项目，每次分工会新开一个 worktree 和分支，不动你手上的代码。",
+    "projectDirNote": "可以选择这台电脑上的已有项目。留空时，优先使用仓库对应的项目，其次使用执行伙伴自己的项目。Git 项目分工使用独立 worktree。",
     "add": "添加伙伴",
     "projectDirOnComputer": "在电脑上选择或更换",
     "memberActions": "{{name}} 的操作",
@@ -547,7 +547,7 @@
     "replyModeMentionedNote": "不 @ 人时，伙伴不会接话。",
     "work": "分工",
     "organizerHint": "安排谁做哪一步；默认是第一位伙伴。",
-    "ownFolder": "群自己的文件夹",
+    "ownFolder": "自动选择",
     "archive": "归档群",
     "unarchive": "取消归档",
     "archiveHint": "归档会对所有成员停用本群，停止新消息和伙伴执行。历史记录保留，之后可通过搜索找到本群、查看历史并取消归档。",
@@ -646,5 +646,6 @@
     },
     "externalFormatError": "请从原消息重新打开完整链接。"
   },
-  "waitingForOwner": "等待主人确认"
+  "waitingForOwner": "等待主人确认",
+  "externalBadge": "外部"
 }

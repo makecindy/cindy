@@ -5,16 +5,12 @@ import { describe, expect, it } from 'vitest';
 
 import {
   buildDocModeSwitchProjects,
+  projectFilesRoute,
   hasSwitchableDocModeProject,
   resolveDocModeFilesSession,
   shouldIgnoreDocModeProjectSwitch,
 } from '@/features/cc-agent/workdir-browse/lib/docModeSwitchProjects';
 import type { Session } from '@/lib/ccAgent.types';
-
-const sidebarSource = readFileSync(
-  resolve(__dirname, '..', 'features', 'cc-agent', 'CCAgentSidebarUpper.tsx'),
-  'utf8',
-);
 
 const routeSource = readFileSync(
   resolve(__dirname, '..', 'features', 'cc-agent', 'workdir-browse', 'WorkdirBrowseRoute.tsx'),
@@ -77,10 +73,18 @@ function session(partial: Partial<Session>): Session {
 }
 
 describe('workdir browse remote safety', () => {
-  it('sends remote project Browse Files to the normal session view', () => {
-    expect(sidebarSource).toContain("if (project.scope === 'remote')");
-    expect(sidebarSource).toContain('navigate(`/cc-agent/${id}`)');
-    expect(sidebarSource).toContain('navigate(`/cc-agent/files/${id}`)');
+  it('opens the file tree on the selected project host even with identical task IDs and paths', () => {
+    const local = session({ id: 'same' });
+    const ssh = { ...local, id: 'ssh', remoteHostId: 'builder' };
+    const studio = { ...local, deviceLinkDeviceId: 'studio' };
+    const other = { ...local, deviceLinkDeviceId: 'laptop' };
+    const rows = [local, other, ssh, studio];
+    const project = { projectKey: 'device:studio:/repo/app', sessions: [studio] };
+    expect(projectFilesRoute(project, 'same', rows)).toBe('/cc-agent/files/same?device=studio');
+    expect(projectFilesRoute({ projectKey: 'remote:builder:/repo/app', sessions: [ssh] }, 'same', rows))
+      .toBe('/cc-agent/files/ssh');
+    expect(resolveDocModeFilesSession([local], 'same', [other, studio], 'studio')).toBe(studio);
+    expect(resolveDocModeFilesSession([local], 'same', [other], 'studio')).toBeNull();
   });
 
   it('routes remote sessions through the remote file-service instead of local fs', () => {

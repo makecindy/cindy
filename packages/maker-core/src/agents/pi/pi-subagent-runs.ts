@@ -870,14 +870,14 @@ export const PI_SUBAGENT_IDLE_POLL_MS = 2_000;
 /** Background polling consumes one bounded status at a time, not Promise.all(history). */
 export async function* scanPiSubagentRuns(
   root: string,
-  options: { latestPerTask?: boolean } = {},
+  options: { latestPerTask?: boolean; onRead?: (status: PiSubagentRunStatus) => void | Promise<void> } = {},
 ): AsyncGenerator<PiSubagentRunStatus> {
   if (options.latestPerTask) {
     // Directory order is not generation order. Select using small identities
     // first so an old run cannot publish a result/approval before its successor.
     // Re-read only the selected payloads instead of retaining every output.
     const newest = new Map<string, { runId: string; startedAt: number }>();
-    for await (const status of scanPiSubagentRuns(root)) {
+    for await (const status of scanPiSubagentRuns(root, { onRead: options.onRead })) {
       const previous = newest.get(status.taskId);
       if (!previous || status.startedAt > previous.startedAt
         || (status.startedAt === previous.startedAt && status.runId.localeCompare(previous.runId) > 0)) {
@@ -905,7 +905,11 @@ export async function* scanPiSubagentRuns(
     try {
       status = parseStatus(await readSmallJson(path.join(root, entry.name, 'status.json')), entry.name);
     } catch { continue; }
-    if (status && !await isPiSubagentRunStaleAsync(status, Date.now())) yield status;
+    if (status && !await isPiSubagentRunStaleAsync(status, Date.now())) {
+      // Accounting can observe all generations without exposing old results or approvals.
+      await options.onRead?.(status);
+      yield status;
+    }
   }
 }
 
@@ -1426,12 +1430,19 @@ function readProcessStartTimeSecAsync(pid: number): Promise<number | null> {
   return probe;
 }
 
-async function isOwnerInstanceAliveAsync(identity: PiSubagentOwnerIdentity): Promise<boolean> {
+async function isOwnerInstanceAliveAsync(
+  identity: PiSubagentOwnerIdentity,
+  startTimes?: ProcessStartTimeMemo,
+): Promise<boolean> {
   if (isProcessAlive(identity.pid) === false) return false;
   if (identity.startTimeSec === undefined) return true;
-  const startTimeSec = identity.pid === process.pid
-    ? ownProcessStartTimeSec()
-    : await readProcessStartTimeSecAsync(identity.pid);
+  let startTimeSec = startTimes?.get(identity.pid);
+  if (startTimeSec === undefined) {
+    startTimeSec = identity.pid === process.pid
+      ? ownProcessStartTimeSec()
+      : await readProcessStartTimeSecAsync(identity.pid);
+    startTimes?.set(identity.pid, startTimeSec);
+  }
   if (isProcessAlive(identity.pid) === false) return false;
   return startTimeSec === null
     || Math.abs(startTimeSec - identity.startTimeSec) <= OWNER_START_TIME_TOLERANCE_SEC;
@@ -2386,6 +2397,7 @@ interface PiSubagentResumeLaunch {
     bridgeSource: Buffer;
     runnerSource: Buffer;
     cacheRulesJson?: Buffer;
+    settingsJson?: Buffer;
   };
 }
 
@@ -2838,6 +2850,30 @@ async function resumeClaimedPiSubagentRun(
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
     }
   }
+  // Older snapshots may lack settings; new launches freeze only native shell keys.
+  let settingsJson = launch.runtimeSnapshot?.settingsJson;
+  if (settingsJson === undefined) {
+    const sourceSettingsFile = path.join(sourceConfigHome, 'settings.json');
+    try {
+      const [info, canonical] = await Promise.all([fs.lstat(sourceSettingsFile), fs.realpath(sourceSettingsFile)]);
+      if (info.isSymbolicLink() || !info.isFile() || info.size > MAX_STATUS_BYTES
+        || path.dirname(canonical) !== canonicalConfigHome) {
+        throw new Error('PI Subagent resume settings escaped their source run');
+      }
+      settingsJson = await fs.readFile(sourceSettingsFile);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    }
+  }
+  if (settingsJson && settingsJson.byteLength > MAX_STATUS_BYTES) {
+    throw new Error('PI Subagent resume settings escaped their source run');
+  }
+  const settings = settingsJson ? JSON.parse(settingsJson.toString('utf8')) : {};
+  const shellSettings: Record<string, string> = {};
+  for (const key of ['shellPath', 'shellCommandPrefix']) {
+    const value = settings && settings[key];
+    if (typeof value === 'string' && value.trim()) shellSettings[key] = value;
+  }
   const runId = randomUUID();
   const runDir = path.join(root, runId);
   const childConfigHome = path.join(runDir, 'pi-home');
@@ -2907,6 +2943,7 @@ async function resumeClaimedPiSubagentRun(
     }
     await fs.mkdir(childConfigHome, { recursive: true, mode: 0o700 });
     await fs.writeFile(path.join(childConfigHome, 'models.json'), modelsJson, { mode: 0o600, flag: 'wx' });
+    await fs.writeFile(path.join(childConfigHome, 'settings.json'), JSON.stringify(shellSettings) + '\n', { mode: 0o600, flag: 'wx' });
     if (cacheRules) await fs.writeFile(path.join(childConfigHome, 'pi-cache-compatibility.json'), cacheRules, { mode: 0o600, flag: 'wx' });
     await copyStagedRipgrep(
       sourceConfigHome,
@@ -2985,8 +3022,44 @@ export async function resumePiSubagentRun(
   ));
 }
 
+/** Periodic update checks must yield while reading history and querying foreign processes. */
+export async function hasActivePiSubagentRuns(
+  agentHome: string,
+  scope: Pick<PiSubagentSweepScope, 'hostPid'> = {},
+): Promise<boolean> {
+  let sessions: Awaited<ReturnType<typeof fs.opendir>>;
+  try {
+    sessions = await fs.opendir(piSubagentRunsRoot(agentHome));
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code !== 'ENOENT';
+  }
+
+  const startTimes: ProcessStartTimeMemo = new Map();
+  try {
+    for await (const session of sessions) {
+      if (!session.isDirectory()) continue;
+      const root = path.join(sessions.path, session.name);
+      for await (const run of await fs.opendir(root)) {
+        if (!run.isDirectory() || !RUN_DIR_RE.test(run.name)) continue;
+        const status = parseStatus(await readSmallJson(path.join(root, run.name, 'status.json')), run.name);
+        if (!status) return true;
+        if (isPiSubagentTerminal(status.state)) continue;
+        if (scope.hostPid !== undefined) {
+          const owner = piSubagentOwnerIdentity(status.runtimeOwnerId);
+          if (owner && owner.pid !== scope.hostPid && await isOwnerInstanceAliveAsync(owner, startTimes)) continue;
+        }
+        if (!await isPiSubagentRunStaleAsync(status, Date.now())) return true;
+      }
+    }
+  } catch {
+    // An unreadable or partly published run cannot be declared idle.
+    return true;
+  }
+  return false;
+}
+
 /**
- * Is anything still running that *this* host would have to stop on exit?
+ * Immediate activity check for restart decisions, including the fenced exit boundary.
  *
  * `hostPid` scopes the answer to this process (plus unattributable and orphaned
  * runs). Without it a concurrent instance sharing `pi-agent-home` would make
@@ -3007,6 +3080,7 @@ export function hasActivePiSubagentRunsSync(
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
     return true;
   }
+  const startTimes: ProcessStartTimeMemo = new Map();
   for (const sessionEntry of sessionEntries) {
     if (!sessionEntry.isDirectory()) continue;
     let runEntries: import('node:fs').Dirent[];
@@ -3019,10 +3093,12 @@ export function hasActivePiSubagentRunsSync(
           JSON.parse(readFileSync(path.join(root, runEntry.name, 'status.json'), 'utf8')),
           runEntry.name,
         );
-        if (status && scope.hostPid !== undefined && !isSweepableByHost(status, scope.hostPid)) {
+        if (!status) return true;
+        if (isPiSubagentTerminal(status.state)) continue;
+        if (scope.hostPid !== undefined && !isSweepableByHost(status, scope.hostPid, startTimes)) {
           continue;
         }
-        if (!status || (!isPiSubagentTerminal(status.state) && !isPiSubagentRunStale(status))) return true;
+        if (!isPiSubagentRunStale(status)) return true;
       } catch {
         return true;
       }

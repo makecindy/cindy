@@ -4,7 +4,7 @@ import { isGhostHostUiSettingValue, type GhostHostUiSetting } from '@cindy/plugi
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Select } from '@/components/ui/select';
-import { Switch } from '@/components/ui/switch';
+import { Checkbox } from '@/components/ui/checkbox';
 import { SettingsCard, SettingsPageHeader, SettingsRow } from '@/components/ui/settings-rows';
 import { useAppSettingsRevision } from '@/hooks/useAppSettingsRevision';
 import { toast } from '@/lib/toast';
@@ -76,8 +76,9 @@ export function PluginSettingsFields({ instanceId, title, fields }: {
             options={field.options.map((option, index) => ({ label: option.label, value: String(index) }))}
             disabled={busy} onValueChange={index => setDraft(value => ({ ...value, [field.id]: field.options![Number(index)].value }))} />
           : field.type === 'boolean'
-            ? <Switch data-settings-search-action="Edit a plugin switch indexed from the approved manifest" data-setting-id={`${root}-${field.id}`} checked={draft[field.id] === true} disabled={busy} aria-label={field.title}
-              onCheckedChange={checked => setDraft(value => ({ ...value, [field.id]: checked }))} />
+            // Draft field applied by Save: Checkbox, not Switch (DESIGN.md §4 Desktop settings controls).
+            ? <Checkbox data-settings-search-action="Edit a plugin switch indexed from the approved manifest" data-setting-id={`${root}-${field.id}`} checked={draft[field.id] === true} disabled={busy} aria-label={field.title}
+              onChange={event => { const checked = event.currentTarget.checked; setDraft(value => ({ ...value, [field.id]: checked })); }} />
             : <Input data-settings-search-action="Edit a plugin value indexed from the approved manifest" data-setting-id={`${root}-${field.id}`} ariaLabel={field.title} type={field.type === 'number' ? 'number' : 'text'}
               min={field.min} max={field.max} maxLength={field.maxLength} step="any" disabled={busy}
               value={String(draft[field.id] ?? '')} error={!isGhostHostUiSettingValue(field, values[field.id])}

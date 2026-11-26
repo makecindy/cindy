@@ -66,7 +66,7 @@ import { RUNTIME_PLUGIN_RESULT_CURRENT, type RuntimePluginControlResult } from '
 /** block 理由展示上限(超长截断,防意识用理由塞小作文)。 */
 const BLOCK_REASON_MAX_CHARS = 200;
 
-/** 单意识裁决(askOne 归一化产物;null = 本轮失败已计熔断)。 */
+/** 单意识裁决(askOne 归一化产物;null = 未得到裁决)。 */
 type HookVerdict = {
   action: 'allow' | 'block' | 'rewrite' | 'render' | 'skip' | 'route' | 'transform' | 'context' | 'memories' | 'tool';
   tool?: ToolLifecycleVerdict;
@@ -152,10 +152,13 @@ export interface GhostSubscriptionGatewayDeps {
   findGhostForDelivery?(id: string): InstalledGhost | null;
   /** 意识电子脑是否在跑。 */
   isRunning(ghostId: string): boolean;
+  isRunningInstall?(ghost: InstalledGhost): boolean;
   /** 按需拉起电子脑(幂等;失败 reject)。 */
   wake(ghost: InstalledGhost): Promise<void>;
   /** 管子下行投递(失败抛/返 false)。Optional install is checked in this synchronous stage; never retain it. */
   sendToGhost(ghostId: string, payload: GhostPipeEventPush, synchronousInstall?: InstalledGhost): void;
+  /** Host-only signal for intentional hook delivery suspension. */
+  hookDeliveryPauseSignal?(): AbortSignal;
   now(): number;
   /** 钩子熔断回调(通知 renderer + 日志;每意识只触发一次)。 */
   onHookFused?(ghost: InstalledGhost, ownerStamp?: unknown): void;
@@ -211,7 +214,7 @@ interface PendingHook {
 export class GhostSubscriptionGateway {
   private readonly entries = new Map<string, SubEntry>();
   private readonly pendingHooks = new Map<string, PendingHook>();
-  private discovery: { owner: unknown; promise: Promise<InstalledGhost[]> } | null = null;
+  private discovery: { owner: unknown; promise: Promise<InstalledGhost[]>; pause?: AbortSignal } | null = null;
   private readonly contentRecipients = new WeakMap<GhostPipeEventPush, InstalledGhost>();
 
   constructor(private readonly deps: GhostSubscriptionGatewayDeps) {}
@@ -220,15 +223,17 @@ export class GhostSubscriptionGateway {
   async preparePublish(topic: GhostSubscribeTopic): Promise<
     ((name: GhostDidEventName, data: GhostDidEventData) => void) | null
   > {
+    const pause = this.deps.hookDeliveryPauseSignal?.();
+    if (pause?.aborted) return null;
     const owner = this.captureOwnerScope();
     if (!this.ownerScopeUsable(owner)) return null;
     const ghosts = this.deps.listGhostsAsync
       ? await this.deps.listGhostsAsync()
       : this.deps.listGhosts();
     if (!this.ownerScopeUsable(owner) || !ghosts.some(ghost =>
-      ghost.enabled && ghost.manifest.subscribe?.topics?.includes(topic))) return null;
+      ghost.enabled && ghost.manifest.subscribe?.topics?.includes(topic)) || pause?.aborted) return null;
     return (name, data) => {
-      if (!this.ownerScopeUsable(owner)) return;
+      if (!this.ownerScopeUsable(owner) || pause?.aborted) return;
       this.publishTo(ghosts, topic, name, data);
     };
   }
@@ -241,14 +246,16 @@ export class GhostSubscriptionGateway {
     name: GhostDidEventName,
     data: GhostDidEventData,
   ): void {
+    const pause = this.deps.hookDeliveryPauseSignal?.();
+    if (pause?.aborted) return;
     if (this.deps.listGhostsAsync) {
       const owner = this.captureOwnerScope();
       if (!this.ownerScopeUsable(owner)) return;
       // Share concurrent discovery; exact live approvals are checked in publishTo.
-      if (this.discovery && !this.ownerScopeUsable(this.discovery.owner)) this.discovery = null;
-      const discovery = this.discovery ??= { owner, promise: this.deps.listGhostsAsync() };
+      if (this.discovery && (!this.ownerScopeUsable(this.discovery.owner) || this.discovery.pause?.aborted)) this.discovery = null;
+      const discovery = this.discovery ??= { owner, promise: this.deps.listGhostsAsync(), pause };
       void discovery.promise.then((ghosts) => {
-        if (!this.ownerScopeUsable(owner)) return;
+        if (!this.ownerScopeUsable(owner) || pause?.aborted) return;
         this.publishTo(ghosts, topic, name, data);
       }).catch(() => {
         this.deps.log?.warn('ghost notification discovery failed');
@@ -262,6 +269,15 @@ export class GhostSubscriptionGateway {
 
   /** Indexed content/state subscribers; avoids discovery on every message or state event. */
   publishIndexed(ghosts: InstalledGhost[], topic: GhostSubscribeTopic, name: GhostDidEventName, data: GhostDidEventData): void {
+    if (this.deps.hookDeliveryPauseSignal?.().aborted) return;
+    if (topic === 'native-recovery') {
+      for (const ghost of ghosts) {
+        if (ghostTaskEventApproved(ghost, topic) && this.deps.isRunningInstall?.(ghost)) {
+          this.dispatchTo(ghost, topic, name, data);
+        }
+      }
+      return;
+    }
     this.publishTo(ghosts, topic, name, data);
   }
 
@@ -327,11 +343,11 @@ export class GhostSubscriptionGateway {
       ts: this.deps.now(),
       data,
     };
-    if (topic === 'message' || topic === 'task-state' || topic === 'tool-execution') this.contentRecipients.set(evt, ghost);
+    if (topic === 'message' || topic === 'task-state' || topic === 'tool-execution' || topic === 'native-recovery') this.contentRecipients.set(evt, ghost);
 
     // 直投条件:在跑 + 缓冲已清 + 无唤醒在途——三者缺一都排队,否则新事件
     // 会插到缓冲里旧事件前面(seq 乱序)。投递失败(刚崩窗口期)同样回落缓冲。
-    if (topic !== 'tool-execution' && this.deps.isRunning(ghostId) && e.buffer.length === 0 && !e.waking) {
+    if (topic !== 'tool-execution' && topic !== 'native-recovery' && this.deps.isRunning(ghostId) && e.buffer.length === 0 && !e.waking) {
       if (this.sendOne(ghostId, e, evt, ownerScope, ghost)) return;
     }
     this.buffer(ghost, e, evt, ownerScope);
@@ -353,9 +369,13 @@ export class GhostSubscriptionGateway {
     const recipient = this.contentRecipients.get(evt);
     // Immediate sends reuse publishTo's check. flush never supplies that fact:
     // after any asynchronous boundary the queued recipient must be checked again.
-    const live = synchronousInstall ?? (recipient
-      ? this.deps.findGhostForDelivery ? this.deps.findGhostForDelivery(ghostId) : recipient
-      : undefined);
+    const nativeRecovery = 'topic' in evt && evt.topic === 'native-recovery';
+    const live = nativeRecovery
+      ? recipient && this.deps.isRunningInstall?.(recipient) ? recipient : undefined
+      : synchronousInstall ?? (recipient
+        ? this.deps.findGhostForDelivery ? this.deps.findGhostForDelivery(ghostId) : recipient
+        : undefined);
+    if (nativeRecovery && !live) return true;
     if (recipient && 'topic' in evt) {
       // A queue belongs to the exact approved install. Drop stale events instead of retrying into an update.
       if (!live?.enabled || ghostInstallApprovalToken(live.approval) !== ghostInstallApprovalToken(recipient.approval)
@@ -383,7 +403,7 @@ export class GhostSubscriptionGateway {
       e.pendingDropped += 1;
     }
     e.buffer.push(evt);
-    this.kickWake(ghost, e, ownerScope, 'topic' in evt && evt.topic === 'tool-execution');
+    this.kickWake(ghost, e, ownerScope, 'topic' in evt && (evt.topic === 'tool-execution' || evt.topic === 'native-recovery'));
   }
 
   /** 事件到达即按需拉起(去重:唤醒在途不重复 spawn),醒后顺序补投。 */
@@ -452,6 +472,7 @@ export class GhostSubscriptionGateway {
       this.invalidateOwner(ghostId, e);
       return;
     }
+    if (this.deps.hookDeliveryPauseSignal?.().aborted) return;
     e.ownerScope = ownerScope;
     while (e.buffer.length > 0 && this.deps.isRunning(ghostId)) {
       if (!this.sendOne(ghostId, e, e.buffer[0])) break; // 又熄灯了:留在缓冲等下次
@@ -481,6 +502,8 @@ export class GhostSubscriptionGateway {
     for (const ghost of this.deps.listGhosts()) {
       if (!ghost.enabled) continue;
       if (!ghost.manifest.subscribe?.hooks?.includes('will-user-message')) continue;
+      const pause = this.deps.hookDeliveryPauseSignal?.();
+      if (pause?.aborted) continue;
       const ghostId = installedGhostStoragePart(ghost);
       const e = this.entry(ghostId);
       if (e.hookFused) continue;
@@ -489,7 +512,7 @@ export class GhostSubscriptionGateway {
       const verdict = await this.askOne(ghost, e, 'will-user-message', {
         sessionId: input.sessionId,
         text: currentText,
-      }, context, ownerStamp, ownerScope);
+      }, context, ownerStamp, ownerScope, pause);
       if (!this.ownerScopeUsable(ownerScope)) return { action: 'allow' };
       if (verdict?.action === 'block') {
         const reason = (verdict.reason ?? '').slice(0, BLOCK_REASON_MAX_CHARS);
@@ -545,6 +568,8 @@ export class GhostSubscriptionGateway {
     for (const ghost of this.deps.listGhosts()) {
       if (!ghost.enabled) continue;
       if (!ghost.manifest.subscribe?.hooks?.includes('will-assistant-message')) continue;
+      const pause = this.deps.hookDeliveryPauseSignal?.();
+      if (pause?.aborted) continue;
       const ghostId = installedGhostStoragePart(ghost);
       const e = this.entry(ghostId);
       if (e.hookFused) continue;
@@ -556,7 +581,7 @@ export class GhostSubscriptionGateway {
       const verdict = await this.askOne(ghost, e, 'will-assistant-message', {
         sessionId: input.sessionId,
         text: currentText,
-      }, context, ownerStamp, ownerScope);
+      }, context, ownerStamp, ownerScope, pause);
       if (!this.ownerScopeUsable(ownerScope)) return { action: 'allow' };
       if (verdict?.action === 'rewrite' && typeof verdict.text === 'string') {
         const next = verdict.text.slice(0, GHOST_HOOK_REWRITE_MAX_CHARS).trim();
@@ -614,6 +639,7 @@ export class GhostSubscriptionGateway {
     if (!this.ownerScopeUsable(ownerScope)) return { action: 'allow' };
     const spec = GHOST_CONTROL_POINTS[point];
     const runtimePoint = isRuntimePluginPoint(point);
+    const toolPoint = point === 'will-tool-call' || point === 'did-tool-result';
     // Reuse the fresh exact-instance authorization lookup; per-request runtime
     // control must not rescan unrelated installs. Legacy points keep their path.
     const findTarget = () => runtimePoint && this.deps.findGhostForDelivery
@@ -626,9 +652,12 @@ export class GhostSubscriptionGateway {
       return { action: target.onFailure, ghostId, ghostName, reason: '', failure: true };
     };
     if (!ghost || !ghostControlPointActive(ghost, point)) {
+      if (toolPoint) return { action: 'allow' };
       return failed(target.pluginId, ghost?.manifest.name ?? target.pluginId, ghost ? 'inactive' : 'missing');
     }
     const ghostId = installedGhostStoragePart(ghost);
+    const pause = this.deps.hookDeliveryPauseSignal?.();
+    if (pause?.aborted) return failed(ghostId, ghost.manifest.name, 'profile-held');
     const e = this.entry(ghostId);
     if (e.pointFused && (point === 'will-tool-call' || point === 'did-tool-result')) return { action: 'allow' };
     const controlApproval = ghostInstallApprovalToken(ghost.approval);
@@ -644,10 +673,14 @@ export class GhostSubscriptionGateway {
       return result;
     };
     const verdict = e.pointFused ? null : await this.askControlPoint(ghost, e, point, data,
-      Math.min(spec.timeoutMs, timeoutMs ?? spec.timeoutMs), ownerScope);
+      Math.min(spec.timeoutMs, timeoutMs ?? spec.timeoutMs), ownerScope, pause);
     if (!this.ownerScopeUsable(ownerScope)) return { action: 'allow' };
-    if (verdict === null) return failed(ghostId, ghost.manifest.name, e.pointFused ? 'fused' : 'unanswered');
-    if (runtimePoint && !currentTarget()) return failed(ghostId, ghost.manifest.name, 'changed');
+    if (toolPoint && !currentTarget()) return { action: 'allow' };
+    if (verdict === null) {
+      const why = pause?.aborted ? 'profile-held' : e.pointFused ? 'fused' : 'unanswered';
+      return failed(ghostId, ghost.manifest.name, why);
+    }
+    if (runtimePoint && !toolPoint && !currentTarget()) return failed(ghostId, ghost.manifest.name, 'changed');
     if (verdict.action === 'route' && verdict.route && (spec.actions as readonly string[]).includes('route')) {
       if (point === 'will-model-request' && 'phase' in data && data.phase !== 'select') {
         return failed(ghostId, ghost.manifest.name, 'route-after-selection');
@@ -692,6 +725,19 @@ export class GhostSubscriptionGateway {
     return checked({ action: 'allow' });
   }
 
+  private watchHookDeliveryPause(
+    signal: AbortSignal,
+    hookId: string,
+    resolve: (verdict: HookVerdict | null) => void,
+  ): () => void {
+    const onPause = () => {
+      if (this.pendingHooks.delete(hookId)) resolve(null);
+    };
+    signal.addEventListener('abort', onPause, { once: true });
+    if (signal.aborted) onPause();
+    return () => signal.removeEventListener('abort', onPause);
+  }
+
   private async askControlPoint(
     ghost: InstalledGhost,
     e: SubEntry,
@@ -699,7 +745,9 @@ export class GhostSubscriptionGateway {
     data: GhostControlPointData,
     timeoutMs: number,
     ownerScope: unknown,
+    pause?: AbortSignal,
   ): Promise<HookVerdict | null> {
+    if (pause?.aborted) return null;
     const ghostId = installedGhostStoragePart(ghost);
     const hookId = this.deps.newHookId?.() ?? randomUUID();
     const deadline = this.deps.now() + timeoutMs;
@@ -708,12 +756,14 @@ export class GhostSubscriptionGateway {
       resolveVerdict = resolve;
     });
     this.pendingHooks.set(hookId, { ghostId, resolve: resolveVerdict });
+    const stopWatchingPause = pause && this.watchHookDeliveryPause(pause, hookId, resolveVerdict);
     const timer = setTimeout(() => {
       if (this.pendingHooks.delete(hookId)) resolveVerdict(null);
     }, timeoutMs);
     timer.unref?.();
     let deliverFailure: string | null = null;
     void (async () => {
+      if (pause?.aborted) return;
       // 自动化节点不要求常驻：不在跑就按需拉起，唤醒耗时计入同一时限。
       if (!this.deps.isRunning(ghostId)) {
         const wokeBeforeDeadline = await Promise.race([
@@ -736,8 +786,9 @@ export class GhostSubscriptionGateway {
     });
     const verdict = await verdictPromise;
     clearTimeout(timer);
+    stopWatchingPause?.();
     if (verdict === null) {
-      if (!this.ownerScopeUsable(ownerScope)) return null;
+      if (!this.ownerScopeUsable(ownerScope) || pause?.aborted) return null;
       e.pointFails += 1;
       this.deps.log?.warn('ghost control point failed', { ghostId, point, why: deliverFailure ?? 'timeout', fails: e.pointFails });
       if (e.pointFails >= GHOST_HOOK_FUSE_THRESHOLD && !e.pointFused) {
@@ -754,7 +805,7 @@ export class GhostSubscriptionGateway {
   }
 
   /** 问一个意识:唤醒(如需)+ 投递 + 等裁决,整体套一只超时闸。
-   *  返回 null = 本轮失败(已计入熔断),外层按放行继续。 */
+   *  返回 null 时按放行继续。 */
   private async askOne(
     ghost: InstalledGhost,
     e: SubEntry,
@@ -763,7 +814,9 @@ export class GhostSubscriptionGateway {
     context: MessageHookContext | Promise<MessageHookContext>,
     ownerStamp?: unknown,
     ownerScope?: unknown,
+    pause?: AbortSignal,
   ): Promise<HookVerdict | null> {
+    if (pause?.aborted) return null;
     const ghostId = installedGhostStoragePart(ghost);
     const hookId = this.deps.newHookId?.() ?? randomUUID();
     // 超时按钩子分:入口(user-message)必须快(挡发送);出口(assistant-message)
@@ -776,6 +829,7 @@ export class GhostSubscriptionGateway {
       resolveVerdict = resolve;
     });
     this.pendingHooks.set(hookId, { ghostId, resolve: resolveVerdict });
+    const stopWatchingPause = pause && this.watchHookDeliveryPause(pause, hookId, resolveVerdict);
     let timer: ReturnType<typeof setTimeout> | undefined;
     const armTimeout = () => {
       if (timer) clearTimeout(timer);
@@ -787,6 +841,7 @@ export class GhostSubscriptionGateway {
 
     let deliverFailure: string | null = null;
     void (async () => {
+      if (pause?.aborted) return;
       const capturedOwner = ownerScope ?? this.captureOwnerScope();
       if (!this.ownerScopeUsable(capturedOwner)) {
         this.invalidateOwner(ghostId, e);
@@ -833,8 +888,9 @@ export class GhostSubscriptionGateway {
 
     const verdict = await verdictPromise;
     clearTimeout(timer);
+    stopWatchingPause?.();
     if (verdict === null) {
-      if (!this.ownerScopeUsable(ownerScope)) return null;
+      if (!this.ownerScopeUsable(ownerScope) || pause?.aborted) return null;
       this.noteHookFailure(ghost, e, deliverFailure ?? 'timeout', ownerStamp);
       return null;
     }

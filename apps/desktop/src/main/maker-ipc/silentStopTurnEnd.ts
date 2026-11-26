@@ -55,6 +55,8 @@ export async function handleSilentStopTurnEndWithPorts(
     productTurnWallClockTracker, advanceRuntimeRecoveryNotice, createDbMessage, settleSilentStopDone,
     surfaceSilentStopExhaustedBanner, log,
   }: SilentStopTurnEndPorts,
+  /** Best-effort Desktop recovery evidence, after the hidden input is saved. */
+  startContinuationMarker?: (generation: number, signal?: AbortSignal) => Promise<(() => void) | undefined>,
 ): Promise<void> {
   const generation = session.getTurnGeneration();
   if (!silentStopTurnLeaseGate.claim(session.id, turnLeaseId)) {
@@ -87,6 +89,8 @@ export async function handleSilentStopTurnEndWithPorts(
           adoptedGeneration,
         ),
     });
+    let undoMarker: (() => void) | undefined;
+    let reservedGeneration: number | undefined;
     try {
       // The next Claude running boundary belongs to the same user-visible turn.
       // Mark it before send(), which may synchronously emit status events.
@@ -100,7 +104,13 @@ export async function handleSilentStopTurnEndWithPorts(
           // 预约(onTurnReserved)在 binding.sendOpts；语义与不变量见
           // silentStopContinuationBinding.ts 文件头。
           ...binding.sendOpts,
-          onAccepted: async () => {
+          ...(startContinuationMarker && {
+            onTurnReserved: (reserved: number) => {
+              binding.sendOpts.onTurnReserved(reserved);
+              reservedGeneration = reserved;
+            },
+          }),
+          onAccepted: async (signal) => {
             await createDbMessage(session.id, {
               clientId,
               role: 'user',
@@ -124,6 +134,9 @@ export async function handleSilentStopTurnEndWithPorts(
                   : {}),
               },
             });
+            if (reservedGeneration !== undefined && !signal?.aborted) {
+              undoMarker = await startContinuationMarker?.(reservedGeneration, signal);
+            }
           },
         },
       );
@@ -139,6 +152,7 @@ export async function handleSilentStopTurnEndWithPorts(
         // 否则失败收口合成的 done 会因 generation 不匹配被 ownership 守卫丢弃,
         // 形成与本次修复对称的反向僵尸(输入边界永久忙)。
         binding.rollbackBinding();
+        undoMarker?.();
         log.warn('silent-stop auto-resume send not accepted', {
           sessionId: session.id,
           reason: outcome.reason,
@@ -153,6 +167,7 @@ export async function handleSilentStopTurnEndWithPorts(
     } catch (err) {
       silentStopAutoResumeGuard.noteResumeSendFailed(session.id);
       binding.rollbackBinding();
+      undoMarker?.();
       log.warn('silent-stop auto-resume send failed', {
         sessionId: session.id,
         error: err instanceof Error ? err.message : String(err),

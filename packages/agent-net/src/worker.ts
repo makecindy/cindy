@@ -36,7 +36,17 @@ class NetworkSocket extends EventEmitter {
   bufferedAmount = 0;
   constructor(url: string, headers: unknown) { super(); network.set(this.id, this); send({ type: 'ws-open', id: this.id, url, headers }); }
   send(data: unknown) { if (this.readyState === WebSocket.OPEN) send({ type: 'ws-send', id: this.id, data }); }
-  terminate() { this.readyState = WebSocket.CLOSED; network.delete(this.id); send({ type: 'ws-close', id: this.id }); }
+  /**
+   * Like `ws`, ends in 'close' (1006) on the next turn. This socket is forgotten here right away, so the close Main reports for
+   * it afterwards is dropped: without this event the uplink that ended its own relay connection (a frame it refused) never
+   * heard that it was gone, and the socket kept it as its relay connection and never reconnected (2026-11-25: 4.5 hours
+   * until the app was restarted).
+   */
+  terminate() {
+    if (this.readyState === WebSocket.CLOSED) return;
+    this.readyState = WebSocket.CLOSED; network.delete(this.id); send({ type: 'ws-close', id: this.id });
+    setImmediate(() => this.emit('close', 1006));
+  }
 }
 function client(value: any): AgentNetClient {
   return new AgentNetClient(value.base, value.identity, value.certificate, value.rootPublicKey, value.delegation, {
@@ -56,10 +66,26 @@ function reportBuffered() {
   setImmediate(() => { bufferedScheduled = false; if (socket) send({ type: 'buffered', queued: socket.bufferedAmount }); });
 }
 function snapshot() {
-  if (!socket) return;
-  send({ type: 'status', queued: socket.bufferedAmount, known: [...ids], peers: [...ids].map((id) => [id, {
-    available: socket!.supports(id), path: socket!.pathTo(id), rttMs: socket!.peerSnapshot(id)?.rttMs ?? null,
-  }]) });
+  const current = socket;
+  if (!current) return;
+  // The socket leaves a device out of the directory it reports when a later certificate has its transport key; it still
+  // counts as a device seen on Agent-Net, and this is the only way its id gets here.
+  for (const id of current.knownPeers()) ids.add(id);
+  const known = [...ids];
+  const peers = known.map((id) => {
+    const route = current.peerSnapshot(id);
+    return [id, {
+      available: current.supports(id),
+      path: route?.path ?? null,
+      rttMs: route?.rttMs ?? null,
+      directRttMs: route?.directRttMs ?? null,
+      relayRttMs: route?.relayRttMs ?? null,
+      pathPreference: route?.pathPreference ?? 'auto',
+      dialing: current.isDialing(id),
+    }];
+  });
+  // 经中转的数据报现在走中转的 UDP 还是 WebSocket（快照每秒一次，远程连接页最多晚一秒看到切换）。
+  send({ type: 'status', queued: current.bufferedAmount, known, peers, relayRoute: current.relayRoute() });
 }
 port.on('message', (message) => {
   if (message.type === 'http-result') {
@@ -82,10 +108,13 @@ port.on('message', (message) => {
     const options = message.options as AgentNetSocketOptions;
     for (const view of options.cachedDirectory ?? []) ids.add(view.certificate.deviceId);
     void AgentNetSocket.open({ ...options, client: client(message.client),
+      onLog(level, text) { send({ type: 'log', level, message: text }); },
       onDirectory(directory) { receivedDirectory = true; for (const view of directory) ids.add(view.certificate.deviceId); send({ type: 'directory', directory }); snapshot(); },
       onDelegationRequests(requests) { send({ type: 'delegation-requests', requests }); },
       onDelegations(delegations) { send({ type: 'delegations', delegations }); },
       onPathChanged(id, path) { ids.add(id); send({ type: 'path', id, path }); snapshot(); },
+      onRelayReplaced() { if (message.reportRelayReplacements) send({ type: 'relay-replaced' }); },
+      onRelayClosed(closeCode, reason) { send({ type: 'relay-closed', code: closeCode, reason }); },
       ...(message.tap ? { tap: (data, via) => send({ type: 'tap', data, via }) } : {}),
     }).then((value) => {
       socket = value;
@@ -108,6 +137,17 @@ port.on('message', (message) => {
   if (message.type === 'renew') void socket.replaceClient(client(message.client)).then(() => send({ type: 'renewed', id: message.id }),
     (error) => send({ type: 'renewed', id: message.id, code: code(error) }));
   if (message.type === 'restrict' && message.rule && typeof message.rule === 'object') { socket.restrictPeers(message.rule); snapshot(); }
+  if (message.type === 'set-peer-path-preference' && typeof message.deviceId === 'string'
+    && (message.preference === 'auto' || message.preference === 'direct' || message.preference === 'relay')) {
+    socket.setPeerPathPreference(message.deviceId, message.preference);
+    snapshot();
+  }
   if (message.type === 'network-changed') socket.networkChanged();
+  if (message.type === 'set-stun-servers' && Array.isArray(message.servers)) {
+    socket.setStunServers(message.servers.filter((value: unknown): value is string => typeof value === 'string'));
+  }
+  if (message.type === 'duplicate-identity-cooldown') socket.setDuplicateIdentityCooldown(message.active === true);
+  if (message.type === 'relay-stalled') socket.relayStalled();
+  if (message.type === 'relay-restart') socket.restartRelay();
   if (message.type === 'close') socket.close(message.code);
 });

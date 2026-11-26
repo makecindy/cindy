@@ -35,7 +35,10 @@ import { evictTaskTagCatalog } from '../task-tags/taskTagEvents';
 
 import { useEffect, useRef } from 'react';
 import { isSharedTaskPeer, readProviderMetadataContinuity } from '@cindy/device-link';
-import { projectScheduleEvent } from '@cindy/maker-shared/schedule-events';
+import {
+  isPatchableSkippedScheduleEvent,
+  projectScheduleEvent,
+} from '@cindy/maker-shared/schedule-events';
 import { isCindyApp } from '@cindy/maker-shared/device-list';
 import { historyTurnEnded } from '@cindy/maker-shared/message-window';
 import { PROJECT_ALIASES_CHANGED_CHANNEL } from '@cindy/maker-shared/project-alias-sync';
@@ -80,6 +83,13 @@ import {
   evictDeviceGitSafetySettings,
   prefetchDeviceGitSafetySettings,
 } from '@/hooks/useGitSafetySettings';
+import {
+  evictRemotePluginEngines,
+  hasRemotePluginEngineSubscribers,
+  markRemotePluginEnginesStale,
+  prefetchRemotePluginEngines,
+} from '@/hooks/usePluginEngines';
+import { isPluginEngineKind } from '../../../shared/pluginEngines';
 import { extractIpcError } from '@/utils/ipcError';
 import { remoteProjectAliases } from './remoteProjectAliases';
 
@@ -461,7 +471,11 @@ export function useDeviceLinkRemoteProjects(
     }
 
     let disposed = false;
-    const scheduleEventRefreshes = new Map<string, { timer: ReturnType<typeof setTimeout>; firstAt: number }>();
+    const scheduleEventRefreshes = new Map<
+      string,
+      { timer: ReturnType<typeof setTimeout>; firstAt: number; onlyFiredRuns: Set<string> | null }
+    >();
+    const patchedSkippedRuns = new Map<string, Map<string, string>>();
     /** Count of schedule events skipped while the window was hidden or idle. */
     const scheduleEventsMissed = new Map<string, number>();
     const markScheduleEventMissed = (deviceId: string) =>
@@ -654,6 +668,7 @@ export function useDeviceLinkRemoteProjects(
       evictDeviceCapabilities(deviceId);
       evictDeviceProviders(deviceId);
       evictDeviceGitSafetySettings(deviceId);
+      evictRemotePluginEngines(deviceId);
     };
 
     /**
@@ -746,6 +761,13 @@ export function useDeviceLinkRemoteProjects(
         if (!canBootstrap(deviceId, lifecycleEpoch)) return;
         await prefetchDeviceGitSafetySettings(deviceId);
         if (!canBootstrap(deviceId, lifecycleEpoch)) return;
+        const hasPluginEngineTasks = remoteProjectsStore
+          .getDeviceSessions(deviceId)
+          .some((session) => isPluginEngineKind(session.agentKind));
+        if (hasPluginEngineTasks || hasRemotePluginEngineSubscribers(deviceId)) {
+          await prefetchRemotePluginEngines(deviceId);
+          if (!canBootstrap(deviceId, lifecycleEpoch)) return;
+        }
         // Bootstrap follows a gap in live pushes (start, reconnect). Read changed tasks ahead
         // so opening them shows what the list already shows; one window does it for all.
         if (windowRole === 'main') void makerChatStore.prefetchRemoteHistories(deviceId);
@@ -852,6 +874,8 @@ export function useDeviceLinkRemoteProjects(
         if (action === 'disconnect') {
           remoteProjectsStore.markDeviceDisconnected(d.deviceId);
           remoteProjectAliases.suspend(d.deviceId);
+          // 离线期间保留已读到的插件引擎图标，重连后再刷新一次。
+          markRemotePluginEnginesStale(d.deviceId);
         } else {
           remoteProjectsStore.removeDevice(d.deviceId);
           remoteProjectAliases.remove(d.deviceId);
@@ -860,6 +884,7 @@ export function useDeviceLinkRemoteProjects(
           // 否则下次冷启动会把一台已经不该出现的设备画回侧边栏。
           cacheHydrationBlocked.add(d.deviceId);
           clearCachedDevice(d.deviceId);
+          evictRemotePluginEngines(d.deviceId);
         }
         evictDeviceCapabilities(d.deviceId);
         evictDeviceProviders(d.deviceId);
@@ -1332,14 +1357,59 @@ export function useDeviceLinkRemoteProjects(
           markScheduleEventMissed(push.deviceId);
           return;
         }
+        const deviceId = push.deviceId;
         // 与手机同一份事件投影：运行诊断、静默提醒这类不改索引的事件不重拉，
         // 否则 run 进行期间高频推送会反复取消在途的列表 / 索引读取。
-        const { refresh } = projectScheduleEvent(push.payload);
-        if (!refresh.sessionIndex && !refresh.scheduleList && !refresh.unreadSummary) return;
-        const deviceId = push.deviceId;
+        const { event, refresh } = projectScheduleEvent(push.payload);
+        if (
+          event.type === 'changed' &&
+          event.skippedRunId &&
+          patchedSkippedRuns.get(deviceId)?.get(event.scheduleId) === event.skippedRunId
+        ) {
+          return;
+        }
+        if (isPatchableSkippedScheduleEvent(event)) {
+          if (remoteProjectsStore.patchDeviceScheduleTiming(deviceId, event)) {
+            let perSchedule = patchedSkippedRuns.get(deviceId);
+            if (!perSchedule) {
+              perSchedule = new Map();
+              patchedSkippedRuns.set(deviceId, perSchedule);
+            }
+            perSchedule.set(event.scheduleId, event.runId);
+            const pending = scheduleEventRefreshes.get(deviceId);
+            const runKey = `${event.scheduleId}:${event.runId}`;
+            if (pending?.onlyFiredRuns?.delete(runKey) && pending.onlyFiredRuns.size === 0) {
+              clearTimeout(pending.timer);
+              scheduleEventRefreshes.delete(deviceId);
+            }
+            return;
+          }
+          patchedSkippedRuns.get(deviceId)?.delete(event.scheduleId);
+          remoteProjectsStore.clearPendingDeviceScheduleTiming(deviceId, event.scheduleId);
+        } else if (event.type === 'ready' || event.type === 'unknown') {
+          patchedSkippedRuns.delete(deviceId);
+          remoteProjectsStore.clearPendingDeviceScheduleTiming(deviceId);
+        } else if ('scheduleId' in event) {
+          patchedSkippedRuns.get(deviceId)?.delete(event.scheduleId);
+          if (
+            event.type === 'changed' || event.type === 'fired' || event.type === 'completed'
+            || event.type === 'failed' || event.type === 'deferred' || event.type === 'skipped'
+          ) {
+            remoteProjectsStore.clearPendingDeviceScheduleTiming(deviceId, event.scheduleId);
+          }
+        }
+        const forceUnseededOrFailureSkipRefresh = isPatchableSkippedScheduleEvent(event);
+        if (!forceUnseededOrFailureSkipRefresh && !refresh.sessionIndex && !refresh.scheduleList && !refresh.unreadSummary) {
+          return;
+        }
         const pending = scheduleEventRefreshes.get(deviceId);
         if (pending) clearTimeout(pending.timer);
         const firstAt = pending?.firstAt ?? Date.now();
+        let onlyFiredRuns: Set<string> | null = null;
+        if (event.type === 'fired' && (pending === undefined || pending.onlyFiredRuns !== null)) {
+          onlyFiredRuns = pending?.onlyFiredRuns ? new Set(pending.onlyFiredRuns) : new Set();
+          onlyFiredRuns.add(`${event.scheduleId}:${event.runId}`);
+        }
         const delay = Math.min(SCHEDULE_EVENT_QUIET_MS, Math.max(0, firstAt + SCHEDULE_EVENT_MAX_WAIT_MS - Date.now()));
         const timer = setTimeout(() => {
           scheduleEventRefreshes.delete(deviceId);
@@ -1353,7 +1423,7 @@ export function useDeviceLinkRemoteProjects(
             if (result === 'revoked' && !disposed) handleRevoked(deviceId);
           });
         }, delay);
-        scheduleEventRefreshes.set(deviceId, { timer, firstAt });
+        scheduleEventRefreshes.set(deviceId, { timer, firstAt, onlyFiredRuns });
         return;
       }
       // Main fences in-flight catalog reads for each of these source changes.
@@ -1500,6 +1570,7 @@ export function useDeviceLinkRemoteProjects(
           evictDeviceCapabilities(p.deviceId);
           evictDeviceProviders(p.deviceId);
           evictDeviceGitSafetySettings(p.deviceId);
+          evictRemotePluginEngines(p.deviceId);
         }
         // 本机关掉「控制这台设备」→ 盘上那份镜像缓存也要清。只清内存分片的话,下次冷启动
         // hydrateFromCache 会把这台已经明确禁用控制的设备连着它的会话画回侧边栏
@@ -1518,6 +1589,7 @@ export function useDeviceLinkRemoteProjects(
     });
 
     const offRemoval = subscribeDeviceLinkDeviceRemoval((deviceId) => {
+      revokedDevicesStore.clearRevoked(deviceId);
       // Deletion is authoritative even if the directory is unavailable or a cold read is in flight.
       directoryGeneration += 1;
       cacheHydrationBlocked.add(deviceId);
@@ -1534,6 +1606,7 @@ export function useDeviceLinkRemoteProjects(
       evictDeviceCapabilities(deviceId);
       evictDeviceProviders(deviceId);
       evictDeviceGitSafetySettings(deviceId);
+      evictRemotePluginEngines(deviceId);
     });
 
     // 冷缓存回写由「分片变更」驱动,而不是只在一次成功 refresh 之后:
@@ -1552,6 +1625,7 @@ export function useDeviceLinkRemoteProjects(
       stopDirectoryRetry();
       for (const { timer } of scheduleEventRefreshes.values()) clearTimeout(timer);
       scheduleEventRefreshes.clear();
+      patchedSkippedRuns.clear();
       clearConnectingGrace();
       stopRecoveryTimer();
       recoveryInFlight.clear();
@@ -1582,6 +1656,7 @@ export function useDeviceLinkRemoteProjects(
         evictDeviceCapabilities(deviceId);
         evictDeviceProviders(deviceId);
         evictDeviceGitSafetySettings(deviceId);
+        evictRemotePluginEngines(deviceId);
       }
       // 卸载可能只是关了个窗口(镜像是每渲染进程一份),盘上缓存**不动** ——
       // 只作废尚未落盘的回写,免得它把正在清空的分片写回去。

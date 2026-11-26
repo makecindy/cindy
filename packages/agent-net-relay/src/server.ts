@@ -14,19 +14,21 @@ import {
   guestRequestPath, delegationPrincipalMatches, delegationEndpointCertificate, isAgentNetStunHost,
 } from '@cindy/agent-net-protocol';
 import { sha256, verifySignature, verifyCertificate, verifyDelegation, verifyJoinRequest, verifyRequestProof, verifyRequestDigestProof, verifyTenantJoinRequest } from './identity.js';
-import { Store, type NetworkRecord, type RelayStore } from './store.js';
+import { Store, type DeviceRecord, type NetworkRecord, type RelayStore } from './store.js';
 import { ClusterStore, RelayStateUnavailableError, type RelayStoreChange } from './clusterStore.js';
 import { CLUSTER_PATH, checkClusterOptions, clusterOwner, createClusterRouter, routingNetwork, type RelayClusterMember, type RelayClusterOptions } from './cluster.js';
 import type { SharingState } from '@cindy/device-link-sharing/repositories';
 import type { DelegationRequest } from '@cindy/agent-net-protocol';
 import { AppError as SharingError } from '@cindy/device-link-sharing/errors';
-import { createAgentNetSharing, type AgentNetSharingOptions } from './sharing.js';
+import { createPrivateSharing } from './privateSharing.js';
+import { createAgentNetSharing, type AgentNetSharingOptions, type SharingHost } from './sharing.js';
 import { DatagramSendQueue } from './datagramQueue.js';
 import { MEDIA_TRANSFER_DIRECT, MEDIA_TRANSFER_HEADER, type DirectMediaRequest } from '@cindy/agent-net-protocol';
 import { createLocalMediaStorage, DIRECT_GRANT_MAX_MS, guardMediaStorage, RelayMediaStorageError, RelayMediaStorageUnavailableError, type RelayMediaStorage } from './mediaStorage.js';
-import { UDP_RELAY_FEATURE, UDP_RELAY_HEADER, UDP_RELAY_KEY_BYTES, UDP_RELAY_MAX_FORWARD_BYTES, UDP_RELAY_MIN_FORWARD_BYTES, UDP_RELAY_REGISTER,
-  UDP_RELAY_SESSION_BYTES, UDP_RELAY_VERSION, UdpReplayWindow, encodeUdpDown, encodeUdpRegisterAck, isUdpRelayPacket, readUdpRelaySession,
-  sameUdpRelayCookie, udpRelayAddressCookie, udpRelayPeerHash, verifyUdpRegister, verifyUdpUp } from './udpRelay.js';
+import { UDP_RELAY_FEATURE, UDP_RELAY_HEADER, UDP_RELAY_KEY_BYTES, UDP_RELAY_MAX_FORWARD_BYTES, UDP_RELAY_MIN_FORWARD_BYTES, UDP_RELAY_PROBE,
+  UDP_RELAY_PROBE_FEATURE, UDP_RELAY_REGISTER, UDP_RELAY_SESSION_BYTES, UDP_RELAY_VERSION, UdpReplayWindow, encodeUdpDown, encodeUdpProbeAck,
+  encodeUdpRegisterAck, isUdpRelayPacket, readUdpRelaySession, sameUdpRelayCookie, udpRelayAddressCookie, udpRelayPeerHash, verifyUdpProbe,
+  verifyUdpRegister, verifyUdpUp } from './udpRelay.js';
 import type { TLSSocket } from 'node:tls';
 import { agentNetInvitationAsset } from '@cindy/device-link-sharing/pages';
 
@@ -45,7 +47,7 @@ const identifier = (value: unknown): string => { const result = string(value); r
 const name = (value: unknown): string => string(value, 64).trim() || fail(400, 'BAD_REQUEST');
 
 export interface Bootstrap { networkId: string; name: string; rootPublicKey: string; ownerCertificate: DeviceCertificate; }
-export interface Enrollment { networkId: string; name: string; rootPublicKey: string; certificate: DeviceCertificate; deviceName: string; }
+export interface Enrollment { networkId: string; name: string; rootPublicKey: string; certificate: DeviceCertificate; deviceName: string; issueWithSerial?: (serial: string) => DeviceCertificate; }
 export interface RelayLogger {
   info(fields: Record<string, unknown>, message: string): void;
   warn(fields: Record<string, unknown>, message: string): void;
@@ -91,7 +93,7 @@ interface Session { principal: Principal; ws: WebSocket; lastPong: number; remot
    * registration that proved its source address (echoed the address cookie); `receiving` is what that registration said
    * about the device getting our UDP packets. `uplinks` drops replayed uplink packets.
    */
-  udp?: { session: Buffer; key: Buffer; counter: bigint; registeredAt: number; receiving: boolean; address?: { address: string; port: number };
+  udp?: { session: Buffer; key: Buffer; counter: bigint; probeCounter: bigint; registeredAt: number; receiving: boolean; address?: { address: string; port: number };
     uplinks: UdpReplayWindow }; }
 /**
  * An idle device re-registers every 15s (every few seconds while sending); after this without one, deliveries to it
@@ -358,26 +360,34 @@ export async function startAgentNetRelay(options: RelayOptions): Promise<RelayHa
     if (!verifyCertificate(n.rootPublicKey, c, now()) || c.subject !== n.subject) return fail(401, 'CERTIFICATE_INVALID');
     const existing = memberRecord(n, c.deviceId);
     if (existing.revokedAt !== null || c.issuedAt < (existing.notBefore ?? 0) || existing.certificate.signingKey !== c.signingKey
-      || existing.certificate.transportKey !== c.transportKey || existing.certificate.role !== c.role) return fail(401, 'DEVICE_REVOKED');
+      || existing.certificate.transportKey !== c.transportKey || existing.certificate.role !== c.role || !sameMembership(existing, c)) return fail(401, 'DEVICE_REVOKED');
     if (!validProof(c.signingKey, envelope.proof)) return fail(401, 'PROOF_INVALID');
     await remember(n.id, c.deviceId, envelope.proof.nonce);
     if (c.issuedAt > existing.certificate.issuedAt) await store.transaction((state) => {
       const currentNetwork = own(state.networks, n.id);
       const current = currentNetwork && own(currentNetwork.devices, c.deviceId);
-      if (!current || current.revokedAt !== null || current.certificate.signingKey !== c.signingKey) return fail(401, 'DEVICE_REVOKED');
-      current.certificate = c;
+      if (!current || current.revokedAt !== null || current.certificate.signingKey !== c.signingKey
+        || !sameMembership(current, c)) return fail(401, 'DEVICE_REVOKED');
+      if (c.issuedAt > current.certificate.issuedAt) current.certificate = c;
     });
     return { networkId: n.id, deviceId: c.deviceId, certificate: c };
   }
+  // Existing serials are UUIDs. After rejoin, the signed serial carries a new membership generation.
+  const certificateGeneration = (certificate: DeviceCertificate): string | undefined =>
+    /^rejoin-([a-f0-9]{32})\./.exec(certificate.serial)?.[1];
+  const sameMembership = (current: DeviceRecord, incoming: DeviceCertificate): boolean =>
+    current.membershipGeneration === certificateGeneration(incoming);
+
   function usableDelegation(n: NetworkRecord, d: Delegation): boolean {
     const issuer = own(n.devices, d.hostDeviceId);
     return d.expiresAt > now() && !!issuer && issuer.revokedAt === null && d.issuerCertificate.issuedAt >= (issuer.notBefore ?? 0)
-      && issuer.certificate.signingKey === d.issuerCertificate.signingKey && (!sharing || sharing.authorized(d));
+      && issuer.certificate.signingKey === d.issuerCertificate.signingKey && sameMembership(issuer, d.issuerCertificate) && (!sharing || sharing.authorized(d));
   }
   function endpointUsable(n: NetworkRecord, d: Delegation, deviceId: string): boolean {
     const c = delegationEndpointCertificate(d, deviceId, now()), member = own(n.devices, deviceId);
     return !!c && !!member && member.revokedAt === null && c.issuedAt >= (member.notBefore ?? 0)
-      && c.signingKey === member.certificate.signingKey && c.transportKey === member.certificate.transportKey;
+      && c.signingKey === member.certificate.signingKey && c.transportKey === member.certificate.transportKey
+      && sameMembership(member, c);
   }
   function active(principal: Principal): boolean {
     try {
@@ -392,7 +402,7 @@ export async function startAgentNetRelay(options: RelayOptions): Promise<RelayHa
       }
       const c = principal.certificate!;
       const current = memberRecord(n, principal.deviceId);
-      return c.expiresAt > now() && c.issuedAt >= (current.notBefore ?? 0) && current.revokedAt === null && current.certificate.signingKey === c.signingKey && current.certificate.transportKey === c.transportKey;
+      return c.expiresAt > now() && c.issuedAt >= (current.notBefore ?? 0) && current.revokedAt === null && current.certificate.signingKey === c.signingKey && current.certificate.transportKey === c.transportKey && sameMembership(current, c);
     } catch { return false; }
   }
   const requireOwner = (p: Principal) => p.certificate?.role === 'owner' ? undefined : fail(403, 'OWNER_REQUIRED');
@@ -533,6 +543,18 @@ export async function startAgentNetRelay(options: RelayOptions): Promise<RelayHa
         remote.port, remote.address);
       return;
     }
+    if (packet[0] === UDP_RELAY_PROBE) {
+      const probe = verifyUdpProbe(packet, session.udp.key);
+      // Increasing counters only, and only to an already-proven address with a fresh registration; ack is strictly shorter than probe.
+      if (probe === null || probe.counter <= session.udp.probeCounter) return;
+      if (!session.udp.address || session.udp.address.address !== remote.address || session.udp.address.port !== remote.port
+        || now() - session.udp.registeredAt >= UDP_REGISTRATION_TTL_MS) return;
+      session.udp.probeCounter = probe.counter;
+      if (udpSocket && udpSocket.getSendQueueSize() < UDP_SEND_QUEUE_LIMIT_BYTES) {
+        udpSocket.send(encodeUdpProbeAck(session.udp, probe.counter, probe.size), remote.port, remote.address);
+      }
+      return;
+    }
     const up = verifyUdpUp(packet, session.udp.key);
     // Each uplink counter is taken once: a captured packet replayed later is not forwarded again.
     if (!up || !session.udp.uplinks.accept(up.counter)) return;
@@ -555,17 +577,18 @@ export async function startAgentNetRelay(options: RelayOptions): Promise<RelayHa
     return Object.values(n.grants).filter(g => g.revokedAt === null && usableDelegation(n, g.delegation)
       && endpointUsable(n, g.delegation, p.deviceId)).map(g => g.delegation);
   }
-  const sharing = options.sharing ? createAgentNetSharing(options.sharing, {
+  const sharingHost: SharingHost = {
     storage: store.sharingStorage(), now,
     requests: () => store.delegationRequests(),
     async saveRequest(request) {
       await store.transaction(state => {
+        const current = own(state.networks, request.networkId) ?? fail(401, 'NETWORK_UNKNOWN');
         const requests = (state.delegationRequests ?? []).filter(r => r.expiresAt > now()
           && !(r.networkId === request.networkId && r.kind === request.kind && r.resourceId === request.resourceId && r.guestDeviceId === request.guestDeviceId));
         if (requests.filter(r => r.networkId === request.networkId).length >= 4096) return fail(429, 'DELEGATION_REQUEST_LIMIT');
         if (requests.some(r => r.networkId === request.networkId && r.hostDeviceId === request.hostDeviceId
           && r.guestTransportKey === request.guestTransportKey)) return fail(409, 'RESOURCE_TRANSPORT_KEY_REUSED');
-        if (Object.values(state.networks[request.networkId].devices).some(d => d.revokedAt === null
+        if (Object.values(current.devices).some(d => d.revokedAt === null
           && d.certificate.transportKey === request.guestTransportKey)) return fail(409, 'MEMBER_TRANSPORT_KEY_REUSED');
         requests.push(request); state.delegationRequests = requests;
       });
@@ -609,7 +632,13 @@ export async function startAgentNetRelay(options: RelayOptions): Promise<RelayHa
       }
       for (const networkId of networkIds) announce(networkId);
     },
-  }) : undefined;
+  };
+  const accountSharing = options.sharing && createAgentNetSharing(options.sharing, sharingHost);
+  const privateSharing = mode === 'self-hosted' && store instanceof Store ? createPrivateSharing(sharingHost, store.sharingStorage('privateSharing')) : undefined;
+  const sharing = !privateSharing ? accountSharing : {
+    authorized: (d: Delegation) => privateSharing.ownsResource(d.kind, d.resourceId) ? !!d.scope && privateSharing.authorized(d) : accountSharing?.authorized(d) ?? true,
+    requestsFor: (network: string, device: string) => [...privateSharing.requestsFor(network, device), ...(accountSharing?.requestsFor(network, device) ?? [])],
+  };
   async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const url = new URL(req.url ?? '/', 'http://localhost');
     const method = req.method ?? 'GET';
@@ -636,32 +665,51 @@ export async function startAgentNetRelay(options: RelayOptions): Promise<RelayHa
     }
     if (url.pathname === API + '/info' && method === 'GET') return writeJson(res, 200, {
       protocolVersion: AGENT_NET_VERSION, mode, udpPort: advertisedUdpPort,
-      ...(options.stunHost !== undefined && advertisedUdpPort !== null ? { stunHost: options.stunHost } : {}), features: ['encrypted-datagrams-v2', 'owner-pairing-v2', 'directory-v2', 'delegation-v2', 'scoped-device-link-v2', 'media-v2', ...(storage.direct ? ['media-direct-v1'] : []), 'notification-keys-v2', ...(options.sharing ? ['sharing-authority-v2'] : []), ...(options.notify ? ['notify-v2'] : []),
+      ...(options.stunHost !== undefined && advertisedUdpPort !== null ? { stunHost: options.stunHost } : {}), features: ['encrypted-datagrams-v2', 'owner-pairing-v2', 'directory-v2', 'delegation-v2', 'scoped-device-link-v2', 'media-v2', ...(storage.direct ? ['media-direct-v1'] : []), 'notification-keys-v2', ...(privateSharing ? ['private-sharing-v1'] : []), ...(options.sharing ? ['sharing-authority-v2'] : []), ...(options.notify ? ['notify-v2'] : []),
         ...(mode === 'self-hosted' && store.primaryNetworkId() !== undefined ? ['tenants-v1'] : []),
-        ...(advertisedUdpPort !== null ? [UDP_RELAY_FEATURE] : [])],
+        ...(advertisedUdpPort !== null ? [UDP_RELAY_FEATURE, UDP_RELAY_PROBE_FEATURE] : [])],
     });
-    if (url.pathname.startsWith(API + '/sharing/')) {
-      if (!sharing) return fail(404, 'SHARING_UNAVAILABLE');
+    if (url.pathname.startsWith(API + '/sharing/') || url.pathname.startsWith(API + '/private-sharing/')) {
+      const authority = url.pathname.startsWith(API + '/private-sharing/') ? privateSharing : accountSharing;
+      if (!authority) return fail(404, 'SHARING_UNAVAILABLE');
       if (!allow('sharing:' + clientAddress(req), 180)) return fail(429, 'TOO_MANY_REQUESTS');
       await synchronize(req, [routingNetwork(req), routingNetwork(req, req.headers['x-agent-net-authorization'])]
         .filter((id): id is string => id !== undefined));
-      return writeJson(res, 200, await sharing.handle(req, await readBody(req, 16_384)));
+      return writeJson(res, 200, await authority.handle(req, await readBody(req, 16_384)));
     }
     if (url.pathname === API + '/enroll' && method === 'POST') {
       if (!options.enroll || mode !== 'official') return fail(404, 'NOT_FOUND');
       const bytes = await readBody(req, 16_384);
-      const enrollment = await options.enroll(req, jsonBody(bytes));
-      const c = enrollment.certificate;
+      const body = jsonBody(bytes);
+      const enrollment = await options.enroll(req, body);
+      let c = enrollment.certificate;
       if (!verifyCertificate(enrollment.rootPublicKey, c, now()) || c.networkId !== enrollment.networkId) return fail(500, 'ENROLLMENT_INVALID');
       await synchronize(req, [c.networkId]);
       await store.transaction((state) => {
         const n = own(state.networks, c.networkId) ?? blankNetwork(c.networkId, enrollment.name, enrollment.rootPublicKey, c.subject);
         if (n.rootPublicKey !== enrollment.rootPublicKey || n.subject !== c.subject) return fail(403, 'NETWORK_MISMATCH');
         const existing = own(n.devices, c.deviceId);
-        if (existing && (existing.revokedAt !== null || existing.certificate.signingKey !== c.signingKey || existing.certificate.transportKey !== c.transportKey)) return fail(403, 'DEVICE_REENROLLMENT_REQUIRES_APPROVAL');
+        const rejoining = body.rejoin === true && !!existing && existing.revokedAt !== null;
+        if (!rejoining && existing && existing.revokedAt !== null && body.reportRevocation === true) return fail(403, 'DEVICE_REVOKED');
+        if (existing && !rejoining && (existing.revokedAt !== null || existing.certificate.signingKey !== c.signingKey || existing.certificate.transportKey !== c.transportKey)) return fail(403, 'DEVICE_REENROLLMENT_REQUIRES_APPROVAL');
+        const generation = rejoining ? randomBytes(16).toString('hex') : existing?.membershipGeneration;
+        if (generation) {
+          const serial = 'rejoin-' + generation + '.' + randomUUID();
+          const issued = enrollment.issueWithSerial?.(serial);
+          if (!issued || issued.serial !== serial || !verifyCertificate(enrollment.rootPublicKey, issued, now())
+            || issued.networkId !== c.networkId || issued.subject !== c.subject || issued.deviceId !== c.deviceId
+            || issued.signingKey !== c.signingKey || issued.transportKey !== c.transportKey || issued.role !== c.role) return fail(500, 'ENROLLMENT_INVALID');
+          c = issued;
+        }
+        if (existing && c.issuedAt < (existing.notBefore ?? 0)) return fail(409, 'CERTIFICATE_NOT_NEWER');
+        if (rejoining && existing && c.issuedAt <= existing.certificate.issuedAt) return fail(409, 'CERTIFICATE_NOT_NEWER');
         if (!existing && Object.keys(n.devices).length >= 256) return fail(409, 'DEVICE_LIMIT');
-        n.devices[c.deviceId] = { ...existing, certificate: c, name: existing?.name ?? name(enrollment.deviceName),
-          reportedName: name(enrollment.deviceName), ...(!existing ? { customName: null } : {}), revokedAt: null };
+        const certificate = !rejoining && existing && sameMembership(existing, existing.certificate) && c.issuedAt < existing.certificate.issuedAt
+          ? existing.certificate : c;
+        n.devices[c.deviceId] = { ...existing, certificate, name: existing?.name ?? name(enrollment.deviceName),
+          reportedName: name(enrollment.deviceName), ...(!existing ? { customName: null } : {}), revokedAt: null,
+          ...(rejoining ? { notBefore: c.issuedAt, membershipGeneration: generation } : {}) };
+        if (rejoining && n.sharingOrigins) delete n.sharingOrigins[c.deviceId];
         state.networks[n.id] = n;
       });
       announce(c.networkId);
@@ -748,9 +796,11 @@ export async function startAgentNetRelay(options: RelayOptions): Promise<RelayHa
     const n = network(principal.networkId);
     if (url.pathname === API + '/sharing-origins') {
       if (principal.delegation || principal.certificate?.subject !== n.subject) return fail(403, 'FORBIDDEN');
-      if (method === 'GET') return writeJson(res, 200, { origins: Object.values(n.sharingOrigins ?? {}).filter(doc =>
-        sharingOriginsPolicyValid(doc, now()) && own(n.devices, doc.certificate.deviceId)?.revokedAt === null
-        && own(n.devices, doc.certificate.deviceId)?.certificate.signingKey === doc.certificate.signingKey) });
+      if (method === 'GET') return writeJson(res, 200, { origins: Object.values(n.sharingOrigins ?? {}).filter(doc => {
+        const publishedBy = own(n.devices, doc.certificate.deviceId);
+        return publishedBy && publishedBy.revokedAt === null && sameMembership(publishedBy, doc.certificate)
+          && publishedBy.certificate.signingKey === doc.certificate.signingKey && sharingOriginsPolicyValid(doc, now());
+      }) });
       if (method !== 'POST') return fail(405, 'METHOD_NOT_ALLOWED');
       const doc = body as unknown as SharingOrigins;
       if (!sharingOriginsPolicyValid(doc, now()) || doc.networkId !== n.id || doc.certificate.deviceId !== principal.deviceId
@@ -760,6 +810,9 @@ export async function startAgentNetRelay(options: RelayOptions): Promise<RelayHa
         || !verifySignature(doc.certificate.signingKey, sharingOriginsPayload(doc), doc.signature)) return fail(400, 'INVALID_SHARING_ORIGINS');
       await store.transaction(state => {
         const current = state.networks[n.id], old = current.sharingOrigins?.[principal.deviceId];
+        const publishedBy = own(current.devices, principal.deviceId);
+        if (!publishedBy || publishedBy.revokedAt !== null || !sameMembership(publishedBy, doc.certificate)
+          || publishedBy.certificate.signingKey !== doc.certificate.signingKey) return fail(403, 'FORBIDDEN');
         if (old && old.issuedAt > doc.issuedAt) return fail(409, 'STALE_SHARING_ORIGINS');
         current.sharingOrigins ??= {}; current.sharingOrigins[principal.deviceId] = doc;
       });
@@ -853,6 +906,27 @@ export async function startAgentNetRelay(options: RelayOptions): Promise<RelayHa
       const media = await store.transaction((state) => {
         const removed = own(state.networks, target);
         if (!removed?.tenant) return fail(404, 'NOT_FOUND');
+        // Re-admitting a tenant must not restore its old shares or invitations.
+        for (const book of [state.sharing, state.privateSharing]) {
+          if (!book) continue;
+          const bindings = book.bindings.filter(binding => binding.networkId === target);
+          if (!bindings.length) continue;
+          const tasks = new Set(bindings.filter(binding => binding.kind === 'shared-task').map(binding => binding.resourceId));
+          const shares = new Set(bindings.filter(binding => binding.kind === 'provider-share').map(binding => binding.resourceId));
+          const removedGuests = new Set([
+            ...book.shares.filter(share => shares.has(share.shareId)).flatMap(share => share.members.map(member => member.guestKey)),
+            ...book.requests.filter(request => shares.has(request.shareId)).map(request => request.guestKey),
+          ]);
+          book.tasks = book.tasks.filter(task => !tasks.has(task.sharedTaskId));
+          book.invitations = book.invitations.filter(invitation => !tasks.has(invitation.sharedTaskId));
+          book.shares = book.shares.filter(share => !shares.has(share.shareId));
+          book.links = book.links.filter(link => !shares.has(link.shareId));
+          book.requests = book.requests.filter(request => !shares.has(request.shareId));
+          book.bindings = book.bindings.filter(binding => binding.networkId !== target);
+          const retainedGuests = new Set([...book.shares.flatMap(share => share.members.map(member => member.guestKey)),
+            ...book.requests.map(request => request.guestKey)]);
+          book.credentials = book.credentials.filter(credential => !removedGuests.has(credential.guestKey) || retainedGuests.has(credential.guestKey));
+        }
         delete state.networks[target];
         if (state.delegationRequests) state.delegationRequests = state.delegationRequests.filter(r => r.networkId !== target);
         for (const [id, r] of Object.entries(state.tenantRequests ?? {})) if (r.request.bootstrap.networkId === target) delete state.tenantRequests![id];
@@ -1171,7 +1245,7 @@ export async function startAgentNetRelay(options: RelayOptions): Promise<RelayHa
               'agent-net session send queue moving again'),
           }, options.datagramQueueDelayMs),
           hash: udpRelayPeerHash(principal.deviceId), udpBudget: { tokens: UDP_BUDGET_BURST, at: performance.now() },
-          ...(wantsUdp ? { udp: { session: randomBytes(UDP_RELAY_SESSION_BYTES), key: randomBytes(UDP_RELAY_KEY_BYTES), counter: 0n, registeredAt: 0,
+          ...(wantsUdp ? { udp: { session: randomBytes(UDP_RELAY_SESSION_BYTES), key: randomBytes(UDP_RELAY_KEY_BYTES), counter: 0n, probeCounter: 0n, registeredAt: 0,
             receiving: false, uplinks: new UdpReplayWindow() } } : {}) };
         sessions.set(id, session);
         if (session.udp) udpSessions.set(session.udp.session.toString('hex'), session);
@@ -1180,9 +1254,11 @@ export async function startAgentNetRelay(options: RelayOptions): Promise<RelayHa
         hashes.set(session.hash.toString('hex'), principal.deviceId);
         ws.on('error', () => undefined);
         ws.on('pong', () => { session.lastPong = now(); });
-        ws.send(JSON.stringify({ type: 'hello', protocolVersion: 2, notifications: !!options.notify, networkId: principal.networkId, deviceId: principal.deviceId, devices: roster(principal), delegations: delegatedPeers(principal),
+        let lastProbeReply = -Infinity;
+        let probeReplyPending = false;
+        ws.send(JSON.stringify({ type: 'hello', protocolVersion: 2, relayProbe: !principal.delegation, notifications: !!options.notify, networkId: principal.networkId, deviceId: principal.deviceId, devices: roster(principal), delegations: delegatedPeers(principal),
           delegationRequests: principal.delegation ? [] : sharing?.requestsFor(principal.networkId, principal.deviceId) ?? [],
-          ...(session.udp ? { udp: { session: session.udp.session.toString('base64url'), key: session.udp.key.toString('base64url') } } : {}) }));
+          ...(session.udp ? { udp: { session: session.udp.session.toString('base64url'), key: session.udp.key.toString('base64url'), probe: true } } : {}) }));
         ws.on('message', (raw: RawData, binary: boolean) => {
           if (sessions.get(id) !== session || !active(principal)) { ws.close(expiredCredential(principal) ? 4408 : 4410, 'access unavailable'); return; }
           const bytes = Buffer.isBuffer(raw) ? raw : Array.isArray(raw) ? Buffer.concat(raw) : Buffer.from(raw);
@@ -1190,6 +1266,15 @@ export async function startAgentNetRelay(options: RelayOptions): Promise<RelayHa
             if (principal.delegation || bytes.length > 4_096) { ws.close(1008, 'invalid control'); return; }
             try {
               const control = record(JSON.parse(bytes.toString('utf8')));
+              if (control.type === 'relay-probe') {
+                const at = performance.now();
+                if (!probeReplyPending && at - lastProbeReply >= 1_000) {
+                  lastProbeReply = at;
+                  probeReplyPending = true;
+                  ws.send('{"type":"relay-pong"}', () => { probeReplyPending = false; });
+                }
+                return;
+              }
               if (control.type !== 'presence' || typeof control.remoteControlEnabled !== 'boolean' || !Array.isArray(control.capabilities)
                 || control.capabilities.length > 64 || !control.capabilities.every((v) => typeof v === 'string' && ID_PATTERN.test(v))) throw new Error('invalid');
               session.remoteControlEnabled = control.remoteControlEnabled;

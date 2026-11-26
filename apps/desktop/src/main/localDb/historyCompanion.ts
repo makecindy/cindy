@@ -5,7 +5,7 @@ import type { HistoryCompanion } from '@cindy/mcps';
 export function historyCompanionJson(sessionId: SQL): SQL<string | null> {
   return sql<string | null>`(SELECT json_object('id', hcl.bot_id, 'role', hcl.role, 'routeKey', hcl.route_key,
       'taskProjectDir', CASE WHEN hcl.role = 'group'
-        THEN (SELECT COALESCE(lane.project_dir, lane.working_dir) FROM sessions lane WHERE lane.id = hcl.session_id) ELSE NULL END)
+        THEN (SELECT COALESCE(lane.project_dir, CASE WHEN lane.workspace_kind = 'project' THEN lane.working_dir END) FROM sessions lane WHERE lane.id = hcl.session_id) ELSE NULL END)
     FROM bot_session_links hcl WHERE hcl.session_id = ${sessionId} LIMIT 1)`;
 }
 

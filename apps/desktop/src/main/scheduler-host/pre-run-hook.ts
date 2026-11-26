@@ -22,6 +22,8 @@
 import { execFile, spawn } from 'node:child_process';
 import type { PreRunHookRunResult, ScheduleWebhookEvent } from '@cindy/maker-scheduler';
 import { capAppend as capAppendBase, killProcessTree } from './proc-util';
+import { readPrCheckDiagnosis } from '@cindy/maker-shared/schedule-model';
+import { deviceName } from '../device-link/deviceName.js';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -59,7 +61,7 @@ export interface PreRunHookStdinPayload {
    * Present when host code started this run early instead of the cron or a user, for example
    * `{ kind: 'watch', source: 'pr-status', detail: <PR URL> }` when a watched PR's status changed.
    */
-  trigger?: { kind: 'watch'; source: string; detail?: string };
+  trigger?: { kind: 'watch'; source: string; detail?: string; reason?: 'reconcile' };
 }
 
 export interface PreRunHookInput {
@@ -110,9 +112,36 @@ export function buildSkipResultText(hook: PreRunHookResult): string {
   return out ? `${head} — ${firstLine(out)}` : head;
 }
 
+function parsePrCheckOutput(stdout: string) {
+  const prefix = 'CINDY_PR_CHECK_DIAGNOSIS ';
+  const marker = stdout.split(/\r?\n/).find(line => line.startsWith(prefix));
+  if (!marker) return;
+  try {
+    const device = process.versions.electron ? deviceName() : process.env.CINDY_HOST_DEVICE_NAME?.trim() || deviceName();
+    return readPrCheckDiagnosis({ ...JSON.parse(marker.slice(prefix.length)), device });
+  } catch {
+    return undefined;
+  }
+}
+
 function firstLine(text: string): string {
   const line = text.split(/\r?\n/, 1)[0] ?? '';
   return line.length > 200 ? `${line.slice(0, 200)}…` : line;
+}
+
+// Node prints an uncaught exception as "<file>:<line>", the source line and a caret
+// before the error itself, so the first line of a crashed check (for example a
+// deleted script: "node:internal/modules/cjs/loader:1520") names Node internals.
+const NODE_CRASH_LOCATION = /^(?:node:|file:|\/|[A-Za-z]:[\\/]).*:\d+$/;
+const NODE_ERROR_LINE = /^(?:Uncaught )?(?:[A-Z][\w$]*)?(?:Error|Exception)(?: \[[\w-]+\])?: \S/;
+
+/** 前置检查失败时 stderr 里最能说明原因的一行。 */
+function stderrFailureReason(stderr: string): string {
+  const text = stderr.trim();
+  const rawHead = text.split(/\r?\n/, 1)[0] ?? '';
+  if (!NODE_CRASH_LOCATION.test(rawHead)) return firstLine(text);
+  const errorLine = text.split(/\r?\n/).find(line => NODE_ERROR_LINE.test(line));
+  return firstLine(errorLine ?? rawHead);
 }
 
 /** POSIX 下 spawn(shell:true) 实际使用的解释器;语法预检必须用同一个。 */
@@ -266,8 +295,10 @@ export async function executePreRunHook(input: PreRunHookInput): Promise<PreRunH
               : exitCode === 2
                 ? 'skipped'
                 : 'failed';
+      const diagnosis = status === 'failed' && !stdoutTruncated ? parsePrCheckOutput(stdout) : undefined;
       resolve({
         status,
+        ...(diagnosis && { prCheckDiagnosis: diagnosis }),
         ...((status === 'passed' || status === 'skipped') && !stdoutTruncated
           && stdout.split(/\r?\n/).includes('CINDY_PRECHECK_OK') ? { checkSucceeded: true as const } : {}),
         decision: status === 'passed' ? 'run' : status === 'skipped' ? 'skip' : 'block',
@@ -375,6 +406,6 @@ export function formatPreRunHookFailure(result: PreRunHookResult): string {
   // The script's own first stderr line is usually the actual cause ("gh not found",
   // "not authenticated"); a bare exit code leaves the user nothing to act on.
   // Bounded like script-mode failures, which already carry their stderr tail.
-  const reason = firstLine(result.stderr.trim());
+  const reason = stderrFailureReason(result.stderr);
   return `pre-run hook failed with exit code ${result.exitCode ?? 'unknown'}${reason ? `: ${reason}` : ''}`;
 }

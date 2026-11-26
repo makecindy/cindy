@@ -9,10 +9,10 @@
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-vi.mock('../../store', () => ({
-  addTab: vi.fn(async () => ({ id: 't_1', kind: 'web-browser', state: null })),
-  ensureHydrated: vi.fn(async () => undefined),
-}));
+vi.mock('../../store', async (importOriginal) => {
+  const store = await importOriginal<typeof import('../../store')>();
+  return { ...store, addTab: vi.fn(store.addTab), ensureHydrated: vi.fn(store.ensureHydrated) };
+});
 vi.mock('../sidebarCommands', () => ({
   requestRightSidebarVisibility: vi.fn(),
 }));
@@ -20,7 +20,8 @@ vi.mock('../detachedSidebarRouting', () => ({
   routeSidebarCommand: vi.fn(async () => 'attached'),
 }));
 
-import { addTab, ensureHydrated } from '../../store';
+import { _resetStore, addTab, ensureHydrated, getBucket, patchTabState } from '../../store';
+import { setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 import { requestRightSidebarVisibility } from '../sidebarCommands';
 import { routeSidebarCommand } from '../detachedSidebarRouting';
 import {
@@ -79,6 +80,8 @@ describe('fileUrlToAbsPath / isLocalHtmlFileUrl', () => {
 
 describe('openUrlInSidebarBrowser', () => {
   beforeEach(() => {
+    _resetStore();
+    setDataOwnerGeneration('owner-a', 1);
     vi.clearAllMocks();
     vi.mocked(routeSidebarCommand).mockResolvedValue('attached');
   });
@@ -114,6 +117,50 @@ describe('openUrlInSidebarBrowser', () => {
       sessionId: 's1',
       userInitiated: false,
     });
+  });
+
+  // unit：原测试只记录开页调用。同任务同实例同 URL 并发打开是最小失败输入，真实任务桶应只新增一页。
+  const previewOptions = (instanceId = 'preview-ghost', reuseExisting = true) => ({
+    userInitiated: false,
+    pluginPreview: {
+      instanceId,
+      ...(reuseExisting ? { reuseExisting: true as const } : {}),
+      ownerStamp: { dataOwnerId: 'owner-a', ownerGeneration: 1 },
+    },
+  });
+
+  it('adds one preview for concurrent requests that resolve to the same complete URL', async () => {
+    await Promise.all([
+      openUrlInSidebarBrowser('s1', 'https://EXAMPLE.com:443/path?q=1#one', previewOptions()),
+      openUrlInSidebarBrowser('s1', 'https://example.com/path?q=1#one', previewOptions()),
+    ]);
+    expect(getBucket('s1').tabs).toHaveLength(1);
+  });
+
+  it('focuses a matching plugin tab and opens another after navigation', async () => {
+    const url = 'https://example.com/path?q=1#one';
+    await openUrlInSidebarBrowser('s1', url, previewOptions('preview-ghost', false));
+    const [first] = getBucket('s1').tabs;
+    await openUrlInSidebarBrowser('s1', url);
+    await openUrlInSidebarBrowser('s1', url, previewOptions());
+    expect(getBucket('s1').tabs).toHaveLength(2);
+    expect(getBucket('s1').activeTabId).toBe(first.id);
+
+    await patchTabState('s1', first.id, (current) => ({ ...current as object, url: 'https://example.com/path?q=1#two' }));
+    await openUrlInSidebarBrowser('s1', url, previewOptions());
+    expect(getBucket('s1').tabs).toHaveLength(3);
+    expect(getBucket('s1').activeTabId).not.toBe(first.id);
+  });
+
+  it('keeps instance, task and account boundaries', async () => {
+    const url = 'https://example.com/';
+    await openUrlInSidebarBrowser('s1', url, previewOptions());
+    await openUrlInSidebarBrowser('s1', url, previewOptions('other-ghost'));
+    await openUrlInSidebarBrowser('s2', url, previewOptions());
+    setDataOwnerGeneration('owner-b', 2);
+    await openUrlInSidebarBrowser('s1', url, previewOptions());
+    expect(getBucket('s1').tabs).toHaveLength(2);
+    expect(getBucket('s2').tabs).toHaveLength(1);
   });
 
   it('does not request visibility when addTab rejects (caller surfaces the error)', async () => {
