@@ -55,9 +55,16 @@ const MAX_LEASE_FAILURES = 3;
 
 type ScopedConnectionOptions = Omit<DeviceLinkClientOptions, 'getWsUrl' | 'getToken'>;
 type ShareInvoke = (agentDeviceId: string, channel: string, args: unknown[]) => Promise<InvokeResultPayload>;
+/**
+ * 这台电脑和这个分享对端的控制链路此刻是不是走在 Agent-Net 会话上（index.ts 按会话层装上）。附件跟着它走：会话层规定
+ * 链路中途不换路，已经开在 Device Link 上的链路要等它结束、下一次建链才到会话上，在那之前附件也留在 Device Link。
+ */
+let controlOnSession: (peer: string) => boolean = () => false;
+export function setLinkedShareControlTransport(check: ((peer: string) => boolean) | null): void { controlOnSession = check ?? (() => false); }
 type LinkRoute = ProviderShareAgentNetLinkRoute;
 interface HostedGuest { memberId: string; deviceId: string; signingKey: string; transportKey: string; at: number }
-interface HostedLink { shareId: string; route: LinkRoute; guests: HostedGuest[] }
+/** `pendingUnlink`: the share is gone here, its service registration not yet confirmed removed (retried, never admits). */
+interface HostedLink { shareId: string; route: LinkRoute; guests: HostedGuest[]; pendingUnlink?: true }
 interface JoinedLink { shareId: string; memberId: string; seed: string; route: LinkRoute }
 interface VaultFile { version: 1; seed: string; hosted: HostedLink[]; joined: JoinedLink[] }
 interface Live {
@@ -105,6 +112,7 @@ function vaultValid(value: unknown): value is VaultFile {
   return !!v && v.version === 1 && seedValid(v.seed) && Array.isArray(v.hosted) && Array.isArray(v.joined)
     && v.hosted.length <= MAX_LINKS && v.joined.length <= MAX_LINKS
     && v.hosted.every(h => !!h && ID.test(h.shareId) && routeValid(h.route) && Array.isArray(h.guests) && h.guests.length <= MAX_GUESTS_PER_SHARE
+      && (h.pendingUnlink === undefined || h.pendingUnlink === true)
       && h.guests.every(g => !!g && ID.test(g.memberId) && ID.test(g.deviceId) && KEY.test(g.signingKey) && KEY.test(g.transportKey) && Number.isSafeInteger(g.at)))
     && v.joined.every(j => !!j && ID.test(j.shareId) && ID.test(j.memberId) && seedValid(j.seed) && routeValid(j.route))
     && new Set(v.hosted.map(h => h.shareId)).size === v.hosted.length && new Set(v.joined.map(j => j.shareId)).size === v.joined.length;
@@ -246,6 +254,7 @@ export function linkedProviderShareAdmission(request: DelegationRequest): boolea
   try { s = owner(); } catch { return null; }
   const hosted = s.vault.hosted.find(h => h.shareId === request.resourceId);
   if (!hosted) return null;
+  if (hosted.pendingUnlink) return false;
   const api = hostAgentNetClient();
   return !!api && hosted.route.networkId === request.networkId && hosted.route.rootPublicKey === api.rootPublicKey
     && hosted.route.hostDeviceId === request.hostDeviceId && api.identity.deviceId === request.hostDeviceId
@@ -278,20 +287,37 @@ async function withdrawGrants(s: State, targets: Array<{ shareId: string; member
   }
 }
 
-/** 拿到完整的本机分享快照后：已不在快照里的分享不再登记在 Agent-Net 上。 */
+/** 取消登记失败（本机不在 Agent-Net 上、断网、服务出错）后，同一条记录多久再试一次。 */
+const UNLINK_RETRY_MS = 10 * 60_000;
+const unlinkRetryAt = new Map<string, number>();
+/**
+ * 拿到完整的本机分享快照后：已不在快照里的分享不再登记在 Agent-Net 上。本机记录先标为待取消（不再放行任何人），
+ * 服务端确认删除后才去掉；没确认的随下一次快照重试（每条最多 10 分钟一次），名额不会被遗留登记占满。
+ */
 export function reconcileLinkedProviderShares(owned: ReadonlyMap<string, ReadonlySet<string>>): void {
   let s: State;
   try { s = owner(); } catch { return; }
-  const gone = s.vault.hosted.filter(h => !owned.has(h.shareId));
-  if (!gone.length) return;
-  try { save(s, { ...s.vault, hosted: s.vault.hosted.filter(h => owned.has(h.shareId)) }); }
-  catch (error) { log.warn(`could not save linked share cleanup: ${String(error)}`); return; }
-  const api = hostAgentNetClient(); if (!api) return;
-  for (const h of gone) {
-    if (h.route.server !== api.base || h.route.networkId !== api.certificate.networkId) continue;
-    void businessClient(s, h.route, api).request(`/api/device-link/provider-shares/linked/${encodeURIComponent(h.shareId)}/remove`,
-      { method: 'POST', body: {} }).catch(() => undefined);
+  if (s.vault.hosted.some(h => !owned.has(h.shareId) && !h.pendingUnlink)) {
+    try { save(s, { ...s.vault, hosted: s.vault.hosted.map(h => owned.has(h.shareId) || h.pendingUnlink ? h : { ...h, guests: [], pendingUnlink: true as const }) }); }
+    catch (error) { log.warn(`could not save linked share cleanup: ${String(error)}`); return; }
   }
+  const api = hostAgentNetClient(); if (!api) return;
+  const now = Date.now();
+  for (const h of s.vault.hosted) {
+    if (!h.pendingUnlink || (unlinkRetryAt.get(h.shareId) ?? 0) > now) continue;
+    // Another network or service cannot be asked from here; nothing there can admit anyone for this computer either.
+    if (h.route.server !== api.base || h.route.networkId !== api.certificate.networkId) { dropHosted(s, h.shareId); continue; }
+    unlinkRetryAt.set(h.shareId, now + UNLINK_RETRY_MS);
+    void businessClient(s, h.route, api).request(`/api/device-link/provider-shares/linked/${encodeURIComponent(h.shareId)}/remove`,
+      { method: 'POST', body: {} }).then(() => { if (state === s) { unlinkRetryAt.delete(h.shareId); dropHosted(s, h.shareId); } })
+      .catch(() => undefined);
+  }
+}
+function dropHosted(s: State, shareId: string): void {
+  const current = s.vault.hosted.find(h => h.shareId === shareId);
+  if (!current?.pendingUnlink) return;
+  try { save(s, { ...s.vault, hosted: s.vault.hosted.filter(h => h !== current) }); }
+  catch (error) { log.warn(`could not save linked share cleanup: ${String(error)}`); }
 }
 
 // ─── 受邀者电脑 ────────────────────────────────────────────────────────────────
@@ -488,7 +514,7 @@ function mediaTargetFor(peer: string) {
   if (!p || !s) return null;
   if (p.role === 'host') {
     const link = s.vault.joined.find(j => j.shareId === p.shareId), live = s.live.get(p.shareId);
-    if (!link || link.route.hostDeviceId !== p.deviceId || !live?.socket || !live.api) return null;
+    if (!link || link.route.hostDeviceId !== p.deviceId || !live?.socket || !live.api || !controlOnSession(peer)) return null;
     const target = live.socket.scopedPeerTarget(peer);
     if (!target || target.delegation.resourceId !== p.shareId || target.delegation.networkId !== link.route.networkId
       || target.delegation.scope?.memberId !== link.memberId || !verifyDelegation(link.route.rootPublicKey, target.delegation)) return null;
@@ -497,7 +523,8 @@ function mediaTargetFor(peer: string) {
   }
   const hosted = s.vault.hosted.find(h => h.shareId === p.shareId);
   const api = hosted ? hostAgentNetClient() : null;
-  if (!hosted || !api || api.rootPublicKey !== hosted.route.rootPublicKey || api.certificate.networkId !== hosted.route.networkId) return null;
+  if (!hosted || hosted.pendingUnlink || !api || api.rootPublicKey !== hosted.route.rootPublicKey || api.certificate.networkId !== hosted.route.networkId
+    || !controlOnSession(peer)) return null;
   const target = currentAgentNetScopedTarget(peer);
   if (!target || target.delegation.resourceId !== p.shareId || target.delegation.networkId !== hosted.route.networkId
     || target.delegation.scope?.memberId !== p.memberId || !verifyDelegation(hosted.route.rootPublicKey, target.delegation)) return null;
@@ -515,7 +542,7 @@ function mediaClientFor(slot: string, networkId: string, caller?: string): Agent
   if (!p || !s) return null;
   if (p.role === 'guest') {
     const hosted = s.vault.hosted.find(h => h.shareId === p.shareId);
-    if (!hosted || hosted.route.networkId !== networkId || mediaSlot(hosted.route, p.shareId, p.memberId) !== slot) return null;
+    if (!hosted || hosted.pendingUnlink || hosted.route.networkId !== networkId || mediaSlot(hosted.route, p.shareId, p.memberId) !== slot) return null;
     const api = hostAgentNetClient();
     return api && api.rootPublicKey === hosted.route.rootPublicKey && api.certificate.networkId === networkId ? api : null;
   }
@@ -553,7 +580,7 @@ export function stopLinkedProviderShares(): void {
 }
 
 export const __testing = {
-  reset(): void { if (state) retire(state); state = null; bound = null; },
+  reset(): void { if (state) retire(state); state = null; bound = null; unlinkRetryAt.clear(); controlOnSession = () => false; },
   mediaSlot,
   transportIdentity,
 };

@@ -8,7 +8,8 @@
  * - 现有覆盖缺口：packages/agent-net 的 socket.integration 用真实服务验证了放行证与会话，但分享者电脑「只认登记过的
  *   钥匙」、受邀者「什么时候问、问谁、拿到什么线路才接受、断开后退回哪条线」都在 Desktop 主进程里，没有用例。
  * - 最小失败输入：同一成员换一把没登记的钥匙申请放行证；分享者给出别的服务器地址；连接断开后会话仍指向主连接
- *   （白等 Agent-Net）；旧版分享者回 CHANNEL_NOT_ALLOWED 后每分钟再问一次。
+ *   （白等 Agent-Net）；旧版分享者回 CHANNEL_NOT_ALLOWED 后每分钟再问一次；控制链路还在 Device Link 上时附件
+ *   却改走 Agent-Net；取消登记失败后本机记录已删、服务端登记永远留下。
  * - tier：unit；内存文件系统、系统钥匙串、账号与网络边界替换为桩，无真实网络、无用户数据。
  * - 实测耗时：2026-11-26 本机单独运行约 2.4 秒（测试体 0.2 秒，其余为模块加载）；冷却用例只伪造 Date，没有真实等待。
  */
@@ -59,7 +60,7 @@ vi.mock('../agentNetRuntime.js', () => ({ currentAgentNetClient: () => state.act
 import { bindAgentNetSharing, stopAgentNetSharing } from '../agentNetSharing.js';
 import { __testing, handleProviderShareAgentNetLink, linkReceivedProviderShares, linkedProviderShareAdmission,
   linkedProviderShareMediaClient, linkedProviderShareMediaTarget, reconcileLinkedProviderShares,
-  revokeLinkedProviderShareGuests } from '../agentNetLinkedShares.js';
+  revokeLinkedProviderShareGuests, setLinkedShareControlTransport } from '../agentNetLinkedShares.js';
 import { PROVIDER_SHARE_AGENT_NET_LINK_CHANNEL } from '../../../shared/providerShareAgentNetLink.js';
 
 /** Account-service identity card shape: a JWT whose iat/exp the sharing client reads for its lifetime. */
@@ -123,6 +124,13 @@ it('registers a guest key only on a capable official service and admits exactly 
   // The registration is durable: a restart keeps admitting the same key without asking the guest again.
   __testing.reset();
   expect(linkedProviderShareAdmission(request(guest))).toBe(true);
+  // Attachments to this guest use Agent-Net only while its control link to this computer came over the session.
+  const signed = createDelegation(state.api.identity, state.api.certificate, { kind: 'provider-share', resourceId: 'share-1',
+    scope: { memberId: 'member-1', guestSubject: 'guest-account', memberVersion: 1 }, guest });
+  state.scopedTarget.mockReturnValue({ relayId: 'guest:' + signed.id, transportKey: guest.transportKey, delegation: signed });
+  expect(linkedProviderShareMediaTarget(peer)).toBeNull();
+  setLinkedShareControlTransport(controller => controller === peer);
+  expect(linkedProviderShareMediaTarget(peer)).toMatchObject({ recipient: 'guest:' + signed.id, grantId: signed.id });
 
   // Pausing or removing the member forgets its key and withdraws only its signed leases.
   const grant = (id: string, resourceId: string) => ({ id, kind: 'provider-share', resourceId, guestDeviceId: guest.deviceId, scope: { memberId: 'member-1' } });
@@ -138,8 +146,43 @@ it('registers a guest key only on a capable official service and admits exactly 
   reconcileLinkedProviderShares(new Map([['share-1', new Set(['member-1'])]]));
   expect(calls('POST', '/provider-shares/linked/share-1/remove')).toHaveLength(0);
   reconcileLinkedProviderShares(new Map());
+  // Until the service confirms the removal the record stays, admitting nobody and serving no attachments.
+  expect(linkedProviderShareAdmission(request(guest))).toBe(false);
+  expect(linkedProviderShareMediaTarget(peer)).toBeNull();
   await vi.waitFor(() => expect(calls('POST', '/api/agent-net/sharing/provider-shares/linked/share-1/remove')).toHaveLength(1));
-  expect(linkedProviderShareAdmission(request(guest))).toBeNull();
+  await vi.waitFor(() => expect(linkedProviderShareAdmission(request(guest))).toBeNull());
+});
+
+// Review #13268: the local record used to be deleted before the service removal, so an offline host or a failed request
+// left the registration behind for good (each network holds at most 256). Unit; only Date is faked.
+it('keeps a deleted share queued for removal until the service confirms, retrying at most every 10 minutes', async () => {
+  vi.useFakeTimers({ toFake: ['Date'] });
+  const guest = generateIdentity('guest-laptop'), peer = providerShareGuestPeer('share-1', 'member-1', guest.deviceId);
+  let removal: 'fail' | 'ok' = 'fail';
+  state.http.mockImplementation(async (url: string) => String(url).endsWith('/provider-shares/linked') ? Response.json({ shareId: 'share-1', linked: true })
+    : String(url).endsWith('/linked/share-1/remove') ? removal === 'ok' ? Response.json({ removed: true })
+      : Response.json({ error: { code: 'SERVICE_UNAVAILABLE' } }, { status: 503 }) : Response.json({ error: { code: 'NOT_FOUND' } }, { status: 404 }));
+  await handleProviderShareAgentNetLink(peer, { version: 1, signingKey: guest.signingKey, transportKey: guest.transportKey });
+  const removals = () => calls('POST', '/api/agent-net/sharing/provider-shares/linked/share-1/remove').length;
+  const settle = async () => { for (let i = 0; i < 5; i++) await new Promise(resolve => setImmediate(resolve)); };
+  // Not on Agent-Net at the moment: queued, nothing sent.
+  state.active = false;
+  reconcileLinkedProviderShares(new Map());
+  expect(removals()).toBe(0);
+  state.active = true;
+  reconcileLinkedProviderShares(new Map());
+  await vi.waitFor(() => expect(removals()).toBe(1));
+  await settle();
+  // The service failed: still queued (and admitting nobody); the next snapshot inside the window does not ask again.
+  expect(linkedProviderShareAdmission(request(guest))).toBe(false);
+  reconcileLinkedProviderShares(new Map());
+  expect(removals()).toBe(1);
+  removal = 'ok'; vi.setSystemTime(Date.now() + 10 * 60_000 + 1);
+  reconcileLinkedProviderShares(new Map());
+  await vi.waitFor(() => expect(removals()).toBe(2));
+  await vi.waitFor(() => expect(linkedProviderShareAdmission(request(guest))).toBeNull());
+  reconcileLinkedProviderShares(new Map());
+  expect(removals()).toBe(2);
 });
 
 it('reports an old service when linking returns 404 instead of failing the guest', async () => {
@@ -201,6 +244,9 @@ it('moves an active Device Link share onto Agent-Net once, and routes its sessio
 
   // Attachments follow the same connection, bound to this share and member.
   sockets[0].target = { relayId: 'remote-host', transportKey: host.identity.transportKey, delegation: delegation! };
+  // While this computer's control link to the sharer is still on Device Link, attachments stay there with it (review #13268).
+  expect(linkedProviderShareMediaTarget(hostPeer)).toBeNull();
+  setLinkedShareControlTransport(peer => peer === hostPeer);
   const media = linkedProviderShareMediaTarget(hostPeer);
   expect(media).toMatchObject({ recipient: 'remote-host', grantId: delegation!.id, slot: __testing.mediaSlot(route as never, 'share-1', 'member-1') });
   expect(linkedProviderShareMediaClient(media!.slot, route.networkId, hostPeer)?.delegation?.id).toBe(delegation!.id);
