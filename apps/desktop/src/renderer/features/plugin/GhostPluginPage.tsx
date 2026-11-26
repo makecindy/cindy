@@ -6,7 +6,7 @@ import { LocalPluginShareView } from './LocalPluginShareView';
 import { useSignInToCindy } from '@/hooks/useSignInToCindy';
 import { rememberContributionIntent, consumeContributionIntent, matchesContributionIntent } from './lib/contributionIntent';
 import { MyPluginsPage, contributionErrorKey, type MyPluginsPageCache, type PluginSubmitOptions } from './MyPluginsPage';
-import { localPublishingUnavailableKey } from './lib/ghostPluginDetailModel';
+import { localPublishingUnavailableKey, teamPublishingUnavailableKey } from './lib/ghostPluginDetailModel';
 import { PluginPublishDialog, type PluginPublishDialogRequest } from './PluginPublishDialog';
 import { featureRetirementById, type FeatureRetirement } from '../../../shared/featureRetirements';
 import { RetiredFeatureDetail } from './RetiredFeatureDetail';
@@ -56,6 +56,7 @@ import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { toast } from '@/lib/toast';
 import { extractIpcError } from '@/utils/ipcError';
 import { useAuth } from '@/contexts/AuthContext';
+import { useTeamPublishProgress } from '@/contexts/TeamPublishProgressContext';
 import { isDataOwnerPushCurrent } from '@/contexts/dataOwnerGeneration';
 import { usePluginReviewUpdates } from '@/contexts/PluginReviewUpdatesContext';
 import { readInstalledGhostsSnapshot, useInstalledGhosts } from '@/cindy-brain/useInstalledGhosts';
@@ -122,7 +123,6 @@ import {
   sortInstalledForDisplay,
   type GhostPluginListItem,
 } from './lib/ghostPluginViewModel';
-import { MyPublishesSection } from './MyPublishesSection';
 import {
   githubUpdateKey,
   ignoredRoundStorageKey,
@@ -252,94 +252,6 @@ const RECOMMENDED_FILTERS: readonly PluginPresentationFilter[] = [
 const MAX_VISIBLE_INSTALLED_PLUGINS = PLUGIN_PAGE_SIZE;
 /** 折叠入口只预览前三个隐藏插件，避免头像堆叠反过来抢占操作文案。 */
 const MAX_COLLAPSED_INSTALLED_PLUGIN_PREVIEWS = 3;
-
-/**
- * 本期隐藏「我的发布」二级 tab，避免与「已安装」争抢顶层布局。
- * 重新开放前必须先定首个 tab 的标签；当前「概览」仅为已被用户否掉的占位词，并非定案。
- */
-export const SHOW_MY_PUBLISHES_SECTION = false;
-
-/**
- * Product gate for the whole secondary tab experience. The overview stays mounted while tabs
- * switch, and a disabled gate returns it without an extra wrapper or hidden publishing effects.
- */
-export function MyPublishesSectionVisibilityGate({
-  visible,
-  overviewLabel,
-  publishesLabel,
-  tabsAriaLabel,
-  publishes,
-  children,
-}: {
-  visible: boolean;
-  overviewLabel: string;
-  publishesLabel: string;
-  tabsAriaLabel: string;
-  publishes: ReactNode;
-  children: ReactNode;
-}) {
-  const [activeTab, setActiveTab] = useState<'overview' | 'publishes'>('overview');
-  const id = useId();
-  const overviewTabId = `${id}-overview-tab`;
-  const overviewPanelId = `${id}-overview-panel`;
-  const publishesTabId = `${id}-publishes-tab`;
-  const publishesPanelId = `${id}-publishes-panel`;
-
-  if (!visible) return <>{children}</>;
-
-  return (
-    <>
-      <div
-        role="tablist"
-        aria-label={tabsAriaLabel}
-        className="mt-5 flex items-end gap-6 border-b border-[var(--border-default)]"
-      >
-        {([
-          ['overview', overviewLabel, overviewTabId, overviewPanelId],
-          ['publishes', publishesLabel, publishesTabId, publishesPanelId],
-        ] as const).map(([tab, label, tabId, panelId]) => {
-          const active = activeTab === tab;
-          return (
-            <button
-              key={tab}
-              id={tabId}
-              type="button"
-              role="tab"
-              aria-selected={active}
-              aria-controls={panelId}
-              onClick={() => setActiveTab(tab)}
-              className={cn(
-                '-mb-px select-none border-b-2 px-0.5 pb-2.5 pt-1 text-13 font-medium transition-colors',
-                'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
-                active
-                  ? 'border-[var(--text-primary)] text-[var(--text-primary)]'
-                  : 'border-transparent text-[var(--text-secondary)] hover:text-[var(--text-primary)]',
-              )}
-            >
-              {label}
-            </button>
-          );
-        })}
-      </div>
-      <div
-        id={overviewPanelId}
-        role="tabpanel"
-        aria-labelledby={overviewTabId}
-        hidden={activeTab !== 'overview'}
-      >
-        {children}
-      </div>
-      <div
-        id={publishesPanelId}
-        role="tabpanel"
-        aria-labelledby={publishesTabId}
-        hidden={activeTab !== 'publishes'}
-      >
-        {publishes}
-      </div>
-    </>
-  );
-}
 
 /** Keeps the installed-section disclosure rule deterministic and directly testable. */
 function visibleInstalledPluginItems<T>(items: readonly T[]): T[] {
@@ -1013,6 +925,28 @@ function LocalPluginCatalogSource({
     ).map(installedGhostStoragePart));
     return allInstalledItems.filter((item) => eligible.has(item.id));
   }, [ghosts, marketItems, allInstalledItems]);
+  const teamPublishableInstalledItems = useMemo(() => {
+    if (!showEnterprise) return [];
+    const eligible = new Set(ghosts.filter((ghost) => teamPublishingUnavailableKey(ghost) === null)
+      .map(installedGhostStoragePart));
+    return allInstalledItems.filter((item) => eligible.has(item.id));
+  }, [ghosts, allInstalledItems, showEnterprise]);
+  const { track: trackTeamPublish } = useTeamPublishProgress();
+  const startTeamPublish = useCallback(async (instanceId: string) => {
+    try {
+      const started = await window.electronAPI.pluginPublisher.startInstalled(instanceId);
+      const name = teamPublishableInstalledItems.find((item) => item.id === instanceId)?.name ?? instanceId;
+      trackTeamPublish(started.transferId, name);
+      return true;
+    } catch {
+      return false;
+    }
+  }, [teamPublishableInstalledItems, trackTeamPublish]);
+  const teamPublishing = useMemo(() => showEnterprise ? {
+    orgName: user?.orgName ?? user?.orgSlug ?? '',
+    plugins: teamPublishableInstalledItems,
+    onStart: startTeamPublish,
+  } : undefined, [showEnterprise, user?.orgName, user?.orgSlug, teamPublishableInstalledItems, startTeamPublish]);
   const searchedInstalledItems = useMemo(
     () => filterGhostPluginItems(installedItems, query),
     [installedItems, query],
@@ -1427,21 +1361,6 @@ function LocalPluginCatalogSource({
     },
     [acquireMarketBusy, ghosts, isMarketBusyLeaseActive, releaseMarketBusy, t],
   );
-
-  const handlePublish = useCallback(async () => {
-    const picked = await window.electronAPI.ghosts.pickFile().catch(() => null);
-    if (!picked || 'canceled' in picked) return;
-    try {
-      await window.electronAPI.pluginPublisher.start(picked.filePath);
-    } catch (error) {
-      const decoded = extractIpcError(error);
-      toast.error(
-        decoded?.code === 'PERMISSION_DENIED'
-          ? t('settings.ghosts.publish.disabled')
-          : t('settings.ghosts.publish.startFailed'),
-      );
-    }
-  }, [t]);
 
   const handleInstall = useCallback(async () => {
     const picked = await window.electronAPI.ghosts.pickFile().catch(() => null);
@@ -2185,6 +2104,7 @@ function LocalPluginCatalogSource({
     cache={contributionCache.current}
     reader={window.electronAPI.pluginContributions}
     localPlugins={publishableInstalledItems}
+    teamPublishing={teamPublishing}
     installedPluginCount={allInstalledItems.length}
     onPrepare={preparePublication}
     installedRevision={publishingInstalledRevision}
@@ -2358,17 +2278,6 @@ function LocalPluginCatalogSource({
           onCreateWithCindy={handleCreateWithCindy}
           onAddMarketplace={() => setAddMarketplaceOpen(true)}
         />,
-        wrapSections: sections => (
-          <MyPublishesSectionVisibilityGate
-            visible={SHOW_MY_PUBLISHES_SECTION && showEnterprise}
-            overviewLabel={t('settings.ghosts.page.overviewTab')}
-            publishesLabel={t('settings.ghosts.publish.section')}
-            tabsAriaLabel={t('settings.ghosts.page.secondaryTabsAria')}
-            publishes={<MyPublishesSection enabled={showEnterprise} onPublish={() => void handlePublish()} />}
-          >
-            {sections}
-          </MyPublishesSectionVisibilityGate>
-        ),
         recommendations: !todayLoaded || todayItems.length === 3 ? {
           loading: !todayLoaded,
           items: todayItems,

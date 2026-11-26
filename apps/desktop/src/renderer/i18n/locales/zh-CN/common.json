@@ -8212,7 +8212,6 @@
         "search": "搜索插件",
         "clearSearch": "清除插件搜索",
         "secondaryTabsAria": "插件页内容",
-        "overviewTab": "概览",
         "addPlugin": "添加插件",
         "addPluginAria": "插件添加选项",
         "githubInstall": {
@@ -9209,8 +9208,6 @@
         "skip": "跳过"
       },
       "publish": {
-        "section": "我的发布",
-        "action": "发布插件…",
         "confirmTitle": "发布 {{name}}",
         "confirmDescription": "确认后开始上传到当前组织。",
         "org": "组织",
@@ -9219,33 +9216,25 @@
         "size": "大小",
         "confirm": "发布",
         "cancel": "取消",
-        "disabled": "本组织未开启成员发布，请联系管理员",
-        "loadFailed": "发布列表暂时不可用",
-        "startFailed": "无法开始发布",
-        "empty": "还没有发布记录",
-        "unknownPlugin": "插件",
-        "uploading": "正在发布",
-        "badge": {
-          "validating": "校验中",
-          "processing": "处理中",
-          "pending": "待审核",
-          "approved": "已上架",
-          "rejected": "已驳回",
-          "failed": "失败",
-          "expired": "已过期"
+        "denied": {
+          "title": "无法发布这个插件",
+          "forbidden": "本企业未开启成员发布，或你没有发布权限。可以联系管理员。",
+          "archived": "这个插件已归档，不能再发布新版本。",
+          "commonManaged": "这个插件由平台通用插件生成，企业不能为它发布版本。",
+          "repositoryManaged": "这个插件由代码仓库发布管理，请通过仓库发布新版本。"
         },
-        "stage": {
-          "confirming": "等待确认",
-          "hashing": "正在校验文件",
-          "preparing": "正在创建上传",
-          "uploading": "正在上传",
-          "committing": "正在提交",
-          "processing": "正在处理",
-          "succeeded": "已完成",
-          "failed": "失败",
-          "expired": "已过期",
-          "cancelled": "已取消",
-          "cancelledTracking": "已停止跟踪，服务端仍在处理"
+        "progress": {
+          "title": "团队共享发布进度",
+          "dismiss": "移除这条结果",
+          "publishing": "正在发布 {{name}}…",
+          "uploading": "正在上传 {{name}} · {{percent}}%",
+          "submitted": "{{name}} {{version}} 已提交审核",
+          "published": "{{name}} {{version}} 已发布",
+          "failed": "{{name}} 发布失败，请稍后重试",
+          "networkUnreachable": "{{name}} 发布失败：网络无法连接，可以重试",
+          "versionExists": "{{name}} {{version}} 这个版本号已用过，请修改版本号后重新发布",
+          "notAllowed": "{{name}} 未发布：这个插件当前不能发布",
+          "expired": "{{name}} 上传已过期，请重新发布"
         }
       },
       "retirement": {
@@ -9478,7 +9467,15 @@
           "RELEASE_NOTES_REQUIRED": "尚未提审：请在插件源码的 ghost.json.releaseNotes 中补全更新说明，安装更新后重新提交审核。",
           "VERSION_ALREADY_SUBMITTED": "该版本已经提审，请更改版本号并安装更新后重新提交审核。",
           "PLUGIN_PENDING_RELEASE_EXISTS": "此插件已有版本正在审核，请先查看或取消该次提审。",
-          "CONTRIBUTION_PACKAGE_CHANGED": "本地插件在摘要显示后发生变化，请刷新摘要后重新核对。"
+          "CONTRIBUTION_PACKAGE_CHANGED": "本地插件在摘要显示后发生变化，请刷新摘要后重新核对。",
+          "PLUGIN_DISABLED_BY_ADMIN": "管理员已下架，需由管理员重新上架",
+          "PLUGIN_REVIEW_REQUIRED": "还没有审核通过的版本，暂时不能上架。",
+          "PLUGIN_REVIEW_FINAL": "这个版本已经审核完成，不能取消提审。",
+          "PLUGIN_REVIEW_STATE_CHANGED": "审核状态已变化，请刷新后重试。",
+          "PLUGIN_AUDIENCE_VALIDATION_UNAVAILABLE": "暂时无法核对可见范围，请稍后重试。",
+          "PLUGIN_MEMBER_LOOKUP_UNAVAILABLE": "暂时无法核对成员身份，请稍后重试。",
+          "PLUGIN_MAINTAINER_EXISTS": "此成员已经是维护者。",
+          "COMMON_PLUGIN_MANAGED": "这个插件由管理员统一管理，不能在这里修改。"
         },
         "installForAccount": "无法找到原来选择的插件安装。请在当前账号下重新选择插件，核对后再提交审核。",
         "releaseSha": "实际版本包 SHA-256",
@@ -9495,7 +9492,9 @@
           "approvalRequired": "此插件尚未完成权限批准，请先在此详情中完成权限确认。",
           "installationUnavailable": "当前插件安装不可用，请重新打开原插件详情。",
           "sourceUnverified": "无法确认此插件的安装来源。请打开自己开发的本地插件。",
-          "publishingPermissionRequired": "当前账号没有此插件的提交权限。"
+          "publishingPermissionRequired": "当前账号没有此插件的提交权限。",
+          "teamReviewing": "这个版本正在审核",
+          "teamOtherReviewing": "{{version}} 正在审核"
         },
         "intro": "管理公开市场插件的发布、更新与审核状态",
         "pluginColumn": "插件",
@@ -9526,7 +9525,45 @@
         "cancelReviewCompleted": "已取消本次提审。当前上架版本不受影响。",
         "cancelReviewAlreadyFinal": "审核已经完成，本次未取消。下方显示实际审核结果。",
         "submitFailed": "提交失败",
-        "viewDetails": "查看详情"
+        "viewDetails": "查看详情",
+        "publishTo": "发布到",
+        "pluginList": "插件",
+        "target": {
+          "team": "团队共享",
+          "teamHint": "{{org}}成员可安装",
+          "publicHint": "所有 Cindy 用户可安装",
+          "public": "公开市场"
+        },
+        "next": "下一步",
+        "teamStartFailed": "无法开始发布，请稍后重试",
+        "team": {
+          "delist": "下架",
+          "list": "上架",
+          "delistTitle": "下架「{{name}}」？",
+          "delistDescription": "成员看不到这个插件，也不能新安装；已安装的可以继续使用，但不再收到更新。之后可以重新上架。",
+          "delistedVersion": "已下架 · {{version}}",
+          "delistedByAdminVersion": "已下架 · {{version}}。管理员已下架，需由管理员重新上架。",
+          "listTitle": "上架插件",
+          "listDescription": "上架这个插件？上架后，符合使用策略的成员可以使用。",
+          "edit": "修改",
+          "localDevelopment": "{{version}} · 本地开发",
+          "save": "保存",
+          "editAudienceTitle": "修改可见范围",
+          "saveImpact": "保存后，{{audience}}可以安装。不在范围内的成员，已安装的插件会保留，但不再获得更新。",
+          "audienceChangedElsewhere": "可见范围已在别处被修改，已更新为最新范围，请重新核对。",
+          "maintainers": "维护者",
+          "self": "（你）",
+          "addMaintainer": "添加维护者",
+          "add": "添加",
+          "searchMaintainer": "搜索成员或部门",
+          "removeMaintainer": "移除",
+          "removeMaintainerTitle": "移除维护者 {{name}}？",
+          "removeMaintainerDescription": "之后可以重新添加。",
+          "role": {
+            "creator": "创建者",
+            "maintainer": "维护者"
+          }
+        }
       },
       "fileTransfer": {
         "reading": "正在读取文件",
@@ -9535,6 +9572,61 @@
         "importing": "正在导入文件",
         "finished": "文件处理结束",
         "importFinished": "文件导入结束"
+      },
+      "audience": {
+        "title": "可见范围",
+        "all": "全部成员",
+        "allMembersOf": "{{org}}全部成员",
+        "specified": "指定部门和成员",
+        "choose": "选择部门或成员",
+        "add": "添加",
+        "keepCurrent": "沿用当前范围",
+        "requireOne": "请至少选择一个部门或成员",
+        "tooMany": "{{kind}}最多 {{max}} 项，当前 {{count}} 项，请先删减。",
+        "notFound": "没找到",
+        "ambiguous": "有多个同名，请在选择器里选",
+        "unresolvedLabel": "没对上的名字",
+        "selectedLabel": "已选范围",
+        "roleLabels": {
+          "owner": "超管",
+          "admin": "管理员",
+          "finance": "财务",
+          "department_manager": "部门管理员",
+          "member": "普通成员"
+        },
+        "picker": {
+          "title": "选择可见范围",
+          "search": "搜索部门、成员姓名或邮箱",
+          "departments": "部门",
+          "members": "成员",
+          "emails": "邮箱",
+          "roles": "角色",
+          "included": "已包含",
+          "loadMore": "加载更多",
+          "retry": "重试",
+          "loading": "正在加载…",
+          "loadFailed": "加载失败",
+          "noMembers": "没有匹配的成员",
+          "addEmail": "按邮箱添加 {{email}}",
+          "selected": "已选 {{count}} 项",
+          "clear": "清空",
+          "noneSelected": "还没有选择",
+          "remove": "移除 {{name}}",
+          "unknownDepartment": "已失效的部门",
+          "memberId": "成员 {{id}}",
+          "searchMembersOnly": "输入姓名或邮箱搜索成员",
+          "expand": "展开 {{name}}",
+          "collapse": "收起 {{name}}",
+          "cancel": "取消",
+          "done": "完成",
+          "confirm": "确定"
+        },
+        "namesMore": "{{names}} 等 {{count}} 项",
+        "separator": "、",
+        "blocked": "无法按你指定的范围发布",
+        "blockedLocked": "你不能修改这个插件的可见范围，或暂时读不到它。可以取消后不指定范围发布，或请插件作者修改。",
+        "blockedLegacyRoles": "这个插件当前的范围含旧的角色条件，发布时不能修改。可以取消后不指定范围发布，发布后到插件详情修改范围。",
+        "legacyRolesNote": "当前范围含旧的角色条件，请在发布后到插件详情修改范围。"
       }
     },
     "mcp": {

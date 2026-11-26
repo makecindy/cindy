@@ -8,13 +8,12 @@
 import {
   CINDY_CLIENT_VERSION_HEADER,
   parseCommitPluginMemberUploadResponse,
-  parseListMyPluginMemberReleasesResponse,
   parsePluginMemberUploadStatusResponse,
   parsePreparePluginMemberUploadRequest,
   parsePreparePluginMemberUploadResponse,
   type CommitPluginMemberUploadResponse,
-  type ListMyPluginMemberReleasesResponse,
   type PluginMemberUploadStatusResponse,
+  type PreparePluginMemberUploadRequest,
   type PreparePluginMemberUploadResponse,
 } from '@cindy/plugin-protocol';
 
@@ -161,7 +160,8 @@ export class PluginPublisherApi {
     }
   }
 
-  async prepare(input: { sizeBytes: number; sha256: string }): Promise<PreparePluginMemberUploadResponse> {
+  /** visibilityAudience is only sent when it changes the plugin's audience. */
+  async prepare(input: PreparePluginMemberUploadRequest): Promise<PreparePluginMemberUploadResponse> {
     const body = parsePreparePluginMemberUploadRequest(input);
     const raw = await this.authorizedFetch<unknown>('/api/publisher/uploads', {
       method: 'POST',
@@ -186,18 +186,6 @@ export class PluginPublisherApi {
     );
     const response = parsePluginMemberUploadStatusResponse(raw);
     this.inspectFailures([response]);
-    return response;
-  }
-
-  async listMine(cursor?: string): Promise<ListMyPluginMemberReleasesResponse> {
-    const search = new URLSearchParams();
-    if (cursor) search.set('cursor', cursor);
-    const suffix = search.toString() ? `?${search.toString()}` : '';
-    const raw = await this.authorizedFetch<unknown>(`/api/publisher/releases/mine${suffix}`, {
-      method: 'GET',
-    });
-    const response = parseListMyPluginMemberReleasesResponse(raw);
-    this.inspectFailures(response.releases);
     return response;
   }
 }

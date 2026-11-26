@@ -46,24 +46,53 @@ export function PluginSharedUsage({
   onClick?: () => void;
   leadingSeparator?: boolean;
 }) {
-  const { t, i18n } = useTranslation();
   if (detail.sourceType !== 'server' || detail.scope === 'personal') return null;
+  return (
+    <PluginUsageCounters
+      downloadCount={detail.downloadStatistics?.requestCount}
+      usageCount={detail.usageStatistics?.usageCount}
+      variant={variant}
+      onClick={onClick}
+      leadingSeparator={leadingSeparator}
+    />
+  );
+}
+
+/**
+ * Download / use counters with their shared explanations. Counts are decimal strings from the
+ * server; a missing count is unavailable and is not shown as zero.
+ */
+export function PluginUsageCounters({
+  downloadCount,
+  usageCount,
+  variant = 'detail',
+  onClick,
+  leadingSeparator = true,
+}: {
+  downloadCount?: string;
+  usageCount?: string;
+  variant?: 'detail' | 'list';
+  onClick?: () => void;
+  /** False when the counters start a line: no dot before the first one. */
+  leadingSeparator?: boolean;
+}) {
+  const { t, i18n } = useTranslation();
   const metrics = [
-    ...(detail.downloadStatistics
+    ...(downloadCount !== undefined
       ? [
           {
             key: 'downloadsValue',
-            count: detail.downloadStatistics.requestCount,
+            count: downloadCount,
             explanation: 'downloadExplanation',
             Icon: ArrowDownToLine,
           },
         ]
       : []),
-    ...(variant === 'detail' && detail.usageStatistics?.usageCount !== undefined
+    ...(variant === 'detail' && usageCount !== undefined
       ? [
           {
             key: 'usesValue',
-            count: detail.usageStatistics.usageCount,
+            count: usageCount,
             explanation: 'usesExplanation',
             Icon: Activity,
           },

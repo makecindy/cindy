@@ -27,6 +27,21 @@ export function localPublishingUnavailableKey(
   return null;
 }
 
+/**
+ * Local development copies an organization member may publish to team sharing. Unlike the public
+ * market, a team plugin of the same id is expected (it is how maintainers ship new versions);
+ * Main and the server still verify the actual installation and publishing permission.
+ */
+export function teamPublishingUnavailableKey(ghost: InstalledGhost | null | undefined) {
+  if (!ghost) return 'installationUnavailable';
+  if (ghost.builtin) return 'reservedId';
+  if (ghost.namespaceState !== 'confirmed') return 'identityPending';
+  if (ghost.namespace !== null && ghost.namespace !== LOCAL_PLUGIN_NAMESPACE) return 'privatePlugin';
+  if (ghost.approval.state !== 'approved') return 'approvalRequired';
+  if (ghost.publishingSource?.kind !== 'local') return 'sourceUnverified';
+  return null;
+}
+
 /** Returns the complete normalized description without model-generated copy. */
 export function ghostPluginSummary(description: string, fallback: string): string {
   const normalized = description.replace(/\s+/g, ' ').trim();

@@ -7,14 +7,19 @@ import type { PluginReviewUpdate } from '../../shared/pluginContributions.js';
 import { ownerScopedUserDataPath } from '../appSessionState.js';
 import { isPassiveSharedUserDataInstance } from '../authManager.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
+import { ORGANIZATION_REVIEW_ID_PREFIX, type OrganizationReviewSnapshot } from '../../shared/pluginAuthor.js';
+import { createPluginAuthorApi, pluginAuthorOwnerKey } from '../plugin-author/host.js';
+import { createOrganizationReviewUpdates } from '../plugin-author/reviewUpdates.js';
 import { ContributionApi } from './api.js';
-import { assertContributionOwner, contributionAccountKey } from './prepared.js';
+import { assertContributionOwner, contributionAccountKey, contributionOwnerKey } from './prepared.js';
 
 type Decision = Omit<PluginReviewUpdate, 'unread'>;
 type ReviewCache = { owner: string; token: Pick<ContributionChanges, 'changedAt' | 'eventCount'>; entries: Map<string, Decision | null> };
 let cache: ReviewCache | null = null;
 let inFlight: { owner: string; task: Promise<PluginReviewUpdate[]> } | null = null;
 const readSchema = z.object({ version: z.literal(1), read: z.record(z.string(), z.string()) });
+// Organization plugins (#1541) join the same list and read markers under the `org:` prefix.
+const organization = createOrganizationReviewUpdates({ api: createPluginAuthorApi, ownerKey: pluginAuthorOwnerKey });
 
 function readFile(): string {
   const account = crypto.createHash('sha256').update(contributionAccountKey()).digest('hex');
@@ -60,13 +65,15 @@ async function latestDecision(api: ContributionApi, plugin: MyPluginSummary): Pr
     history = await api.history(plugin.pluginId, history.nextCursor);
   }
 }
-async function refresh(api: ContributionApi): Promise<PluginReviewUpdate[]> {
+/** Public-market results; rereads only when the public change token moves. */
+async function refreshPublic(api: ContributionApi): Promise<ReviewCache> {
   const owner = api.owner;
   const token = await api.changes();
   assertContributionOwner(owner);
   const previous = cache?.owner === owner ? cache : null;
-  if (previous && previous.token.changedAt === token.changedAt && previous.token.eventCount === token.eventCount)
-    return updatesFromCache(previous);
+  if (previous && previous.token.changedAt === token.changedAt && previous.token.eventCount === token.eventCount) {
+    return previous;
+  }
   const held: ReviewCache = { owner, token: { changedAt: token.changedAt, eventCount: token.eventCount }, entries: new Map() };
   const cursors = new Set<string>();
   let cursor: string | undefined;
@@ -86,29 +93,45 @@ async function refresh(api: ContributionApi): Promise<PluginReviewUpdate[]> {
   } while (cursor);
   assertContributionOwner(owner);
   cache = held;
-  return updatesFromCache(held);
-}
-function updatesFromCache(held: ReviewCache): PluginReviewUpdate[] {
-  const markers = readMarkers(readFile());
-  assertContributionOwner(held.owner);
-  return [...held.entries.values()].flatMap(value => value
-    ? [{ ...value, unread: markers[value.pluginId] !== value.key }] : []);
+  return held;
 }
 
+function toUpdates(owner: string, decisions: Decision[]): PluginReviewUpdate[] {
+  const markers = readMarkers(readFile());
+  assertContributionOwner(owner);
+  return decisions.map(value => ({ ...value, unread: markers[value.pluginId] !== value.key }));
+}
+
+/** Public-market review results. Organization results are a separate call (see below). */
 export async function reviewUpdates(): Promise<PluginReviewUpdate[]> {
   const api = new ContributionApi();
   if (inFlight?.owner === api.owner) return inFlight.task;
-  const task = refresh(api);
-  inFlight = { owner: api.owner, task };
+  const owner = api.owner;
+  const task = refreshPublic(api).then(held =>
+    toUpdates(owner, [...held.entries.values()].flatMap(value => value ? [value] : [])));
+  inFlight = { owner, task };
   try { return await task; }
   finally { if (inFlight?.task === task) inFlight = null; }
 }
+
+/**
+ * Organization ("团队共享") review results, read independently of the public ones so a slow or
+ * failing side never holds back or drops the other (#1541). Shares the public read markers.
+ */
+export async function organizationReviewUpdates(): Promise<OrganizationReviewSnapshot> {
+  const owner = contributionOwnerKey();
+  const decisions = await organization.read();
+  return { updates: toUpdates(owner, decisions), changeToken: organization.changeToken() };
+}
+
 export function markReviewRead(pluginId: string, key: string): void {
   const api = new ContributionApi();
   assertContributionOwner(api.owner);
   if (isPassiveSharedUserDataInstance()) throwIpcError('PRECONDITION_FAILED', 'Use the active Cindy instance');
-  if (cache?.owner !== api.owner || cache.entries.get(pluginId)?.key !== key)
-    throwIpcError('PRECONDITION_FAILED', 'Refresh the review result before marking it read');
+  const current = pluginId.startsWith(ORGANIZATION_REVIEW_ID_PREFIX)
+    ? organization.isCurrent(pluginId, key)
+    : cache?.owner === api.owner && cache.entries.get(pluginId)?.key === key;
+  if (!current) throwIpcError('PRECONDITION_FAILED', 'Refresh the review result before marking it read');
   const file = readFile();
   const read = readMarkers(file);
   read[pluginId] = key;

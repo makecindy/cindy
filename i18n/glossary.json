@@ -2675,6 +2675,18 @@
       "note": "插件安装来源的展示文案，独立于签名与运行权限；由宿主安装事实生成。"
     },
     {
+      "id": "plugin-visibility-audience",
+      "status": "proposed",
+      "en": "Visibility",
+      "translations": {
+        "zh-CN": "可见范围",
+        "zh-TW": "可見範圍",
+        "ja": "公開範囲",
+        "ko": "공개 범위"
+      },
+      "note": "企业插件对哪些成员可见：全部成员，或指定部门、成员、邮箱；发布确认屏和企业插件详情使用。与壁纸可见度（wallpaper-visibility）无关。"
+    },
+    {
       "id": "pricing-component-audio",
       "status": "proposed",
       "en": "Audio",

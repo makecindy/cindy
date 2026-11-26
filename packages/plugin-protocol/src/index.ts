@@ -9,6 +9,8 @@ export * from './recommendations.js';
 export * from './delivery.js';
 export * from './catalog.js';
 export * from './memberUpload.js';
+export * from './visibilityAudience.js';
+export * from './managedRelease.js';
 export * from './usage.js';
 export * from './secretCheck.js';
 export * from './publicPresentation.js';

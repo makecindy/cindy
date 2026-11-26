@@ -8324,7 +8324,6 @@
         "search": "Buscar complementos",
         "clearSearch": "Borrar búsqueda de complementos",
         "secondaryTabsAria": "Secciones de la página del complemento",
-        "overviewTab": "Descripción general",
         "addPlugin": "Agregar complemento",
         "addPluginAria": "Opciones para agregar complementos",
         "githubInstall": {
@@ -9328,8 +9327,6 @@
         "skip": "Omitir"
       },
       "publish": {
-        "section": "Mis publicaciones",
-        "action": "Publicar complemento…",
         "confirmTitle": "Publicar {{name}}",
         "confirmDescription": "Después de que confirmes, el paquete se subirá a la organización actual.",
         "org": "Organización",
@@ -9338,33 +9335,25 @@
         "size": "Tamaño",
         "confirm": "Publicar",
         "cancel": "Cancelar",
-        "disabled": "Esta organización no ha habilitado la publicación para miembros. Contacta a un administrador.",
-        "loadFailed": "No se pudieron cargar tus publicaciones",
-        "startFailed": "No se pudo iniciar la publicación",
-        "empty": "Aún no hay publicaciones",
-        "unknownPlugin": "Complemento",
-        "uploading": "Publicando",
-        "badge": {
-          "validating": "Comprobando",
-          "processing": "Procesando",
-          "pending": "Pendiente de revisión",
-          "approved": "Publicado",
-          "rejected": "Rechazado",
-          "failed": "Fallido",
-          "expired": "Caducado"
+        "denied": {
+          "title": "No se puede publicar este complemento",
+          "forbidden": "La publicación por miembros está desactivada en tu organización o no tienes permiso para publicar. Contacta con un administrador.",
+          "archived": "Este complemento está archivado y no admite versiones nuevas.",
+          "commonManaged": "Este complemento procede de un complemento común de la plataforma; tu organización no puede publicar versiones de él.",
+          "repositoryManaged": "Este complemento se publica desde su repositorio de código. Publica las nuevas versiones allí."
         },
-        "stage": {
-          "confirming": "Esperando confirmación",
-          "hashing": "Verificando el archivo",
-          "preparing": "Preparando la carga",
-          "uploading": "Subiendo",
-          "committing": "Enviando",
-          "processing": "Procesando",
-          "succeeded": "Terminado",
-          "failed": "Fallido",
-          "expired": "Caducado",
-          "cancelled": "Cancelado",
-          "cancelledTracking": "Se dejó de supervisar. El servidor sigue procesando."
+        "progress": {
+          "title": "Publicaciones para el equipo",
+          "dismiss": "Descartar este resultado",
+          "publishing": "Publicando {{name}}…",
+          "uploading": "Subiendo {{name}} · {{percent}} %",
+          "submitted": "{{name}} {{version}} se envió a revisión",
+          "published": "{{name}} {{version}} se publicó",
+          "failed": "No se pudo publicar {{name}}. Inténtalo más tarde.",
+          "networkUnreachable": "No se pudo publicar {{name}}: sin conexión de red. Puedes intentarlo de nuevo.",
+          "versionExists": "La versión {{version}} de {{name}} ya se usó. Cambia la versión y vuelve a publicar.",
+          "notAllowed": "{{name}} no se publicó: este complemento no se puede publicar ahora",
+          "expired": "La subida de {{name}} caducó. Vuelve a publicarlo."
         }
       },
       "retirement": {
@@ -9597,7 +9586,15 @@
           "RELEASE_NOTES_REQUIRED": "No se envió a revisión: completa ghost.json.releaseNotes en el código fuente del complemento, instala el complemento actualizado y luego envíalo a revisión.",
           "VERSION_ALREADY_SUBMITTED": "Esta versión ya se envió. Cambia el número de versión e instala el complemento actualizado antes de volver a enviarlo a revisión.",
           "PLUGIN_PENDING_RELEASE_EXISTS": "Hay otra versión en revisión. Consulta o cancela esa revisión primero.",
-          "CONTRIBUTION_PACKAGE_CHANGED": "El complemento instalado cambió después de mostrar el resumen. Actualiza y revísalo de nuevo."
+          "CONTRIBUTION_PACKAGE_CHANGED": "El complemento instalado cambió después de mostrar el resumen. Actualiza y revísalo de nuevo.",
+          "PLUGIN_DISABLED_BY_ADMIN": "Retirado por un administrador. Solo un administrador puede volver a publicarlo.",
+          "PLUGIN_REVIEW_REQUIRED": "Aún no hay ninguna versión aprobada, así que no se puede publicar.",
+          "PLUGIN_REVIEW_FINAL": "Esta versión ya se revisó, así que no se puede cancelar su revisión.",
+          "PLUGIN_REVIEW_STATE_CHANGED": "El estado de la revisión cambió. Actualiza e inténtalo de nuevo.",
+          "PLUGIN_AUDIENCE_VALIDATION_UNAVAILABLE": "No se puede comprobar la visibilidad ahora. Inténtalo más tarde.",
+          "PLUGIN_MEMBER_LOOKUP_UNAVAILABLE": "No se puede confirmar el miembro ahora. Inténtalo más tarde.",
+          "PLUGIN_MAINTAINER_EXISTS": "Este miembro ya es mantenedor.",
+          "COMMON_PLUGIN_MANAGED": "Tus administradores gestionan este complemento y no se puede cambiar aquí."
         },
         "installForAccount": "No se encontró la instalación del complemento seleccionada originalmente. Vuelve a seleccionar el complemento en la cuenta actual y revísalo antes de enviarlo a revisión.",
         "releaseSha": "SHA-256 del paquete de lanzamiento",
@@ -9614,7 +9611,9 @@
           "approvalRequired": "Los permisos del complemento no se han aprobado. Primero completa la revisión de permisos en estos detalles.",
           "installationUnavailable": "Esta instalación del complemento no está disponible. Vuelve a abrir los detalles del complemento original.",
           "sourceUnverified": "No se pudo verificar el origen de instalación de este complemento. Abre un complemento local que hayas desarrollado.",
-          "publishingPermissionRequired": "Esta cuenta no tiene permiso para enviar este complemento."
+          "publishingPermissionRequired": "Esta cuenta no tiene permiso para enviar este complemento.",
+          "teamReviewing": "Esta versión está en revisión",
+          "teamOtherReviewing": "{{version}} está en revisión"
         },
         "intro": "Administra lanzamientos, actualizaciones y revisiones de complementos del mercado público",
         "pluginColumn": "Complemento",
@@ -9645,7 +9644,45 @@
         "cancelReviewCompleted": "Revisión cancelada. La versión publicada actualmente no cambia.",
         "cancelReviewAlreadyFinal": "La revisión ya terminó, por lo que no se canceló. El resultado real se muestra a continuación.",
         "submitFailed": "Error al enviar",
-        "viewDetails": "Ver detalles"
+        "viewDetails": "Ver detalles",
+        "publishTo": "Publicar en",
+        "pluginList": "Complementos",
+        "target": {
+          "team": "Compartido con el equipo",
+          "teamHint": "Los miembros de {{org}} pueden instalarlo",
+          "publicHint": "Cualquier usuario de Cindy puede instalarlo",
+          "public": "Mercado público"
+        },
+        "next": "Siguiente",
+        "teamStartFailed": "No se pudo iniciar la publicación. Inténtalo más tarde.",
+        "team": {
+          "delist": "Retirar",
+          "list": "Publicar",
+          "delistTitle": "¿Retirar «{{name}}» del catálogo?",
+          "delistDescription": "Los miembros no verán este complemento ni podrán instalarlo. Las instalaciones existentes siguen funcionando, pero sin actualizaciones. Puedes volver a publicarlo más tarde.",
+          "delistedVersion": "Retirado del catálogo · {{version}}",
+          "delistedByAdminVersion": "Retirado del catálogo · {{version}}. Lo retiró un administrador; solo un administrador puede volver a publicarlo.",
+          "listTitle": "Publicar complemento",
+          "listDescription": "¿Publicar este complemento? Una vez publicado, los miembros que permita la política de uso podrán usarlo.",
+          "edit": "Editar",
+          "localDevelopment": "{{version}} · Desarrollo local",
+          "save": "Guardar",
+          "editAudienceTitle": "Editar la visibilidad",
+          "saveImpact": "Al guardar, {{audience}} podrá instalarlo. Los miembros fuera de la visibilidad conservan el complemento instalado, pero ya no reciben actualizaciones.",
+          "audienceChangedElsewhere": "La visibilidad se cambió en otro lugar y ahora muestra la configuración más reciente. Revísala de nuevo.",
+          "maintainers": "Mantenedores",
+          "self": " (tú)",
+          "addMaintainer": "Añadir mantenedor",
+          "add": "Añadir",
+          "searchMaintainer": "Busca miembros o departamentos",
+          "removeMaintainer": "Quitar",
+          "removeMaintainerTitle": "¿Quitar al mantenedor {{name}}?",
+          "removeMaintainerDescription": "Podrás volver a añadirlo más adelante.",
+          "role": {
+            "creator": "Creador",
+            "maintainer": "Mantenedor"
+          }
+        }
       },
       "fileTransfer": {
         "reading": "Leyendo archivos",
@@ -9654,6 +9691,61 @@
         "importing": "Importando archivos",
         "finished": "Operación de archivos finalizada",
         "importFinished": "Importación de archivos finalizada"
+      },
+      "audience": {
+        "title": "Visibilidad",
+        "all": "Todos los miembros",
+        "allMembersOf": "Todos los miembros de {{org}}",
+        "specified": "Departamentos y miembros concretos",
+        "choose": "Elegir departamentos o miembros",
+        "add": "Añadir",
+        "keepCurrent": "Mantener la visibilidad actual",
+        "requireOne": "Elige al menos un departamento o miembro",
+        "tooMany": "{{kind}}: máximo {{max}}, {{count}} seleccionados. Quita algunos primero.",
+        "notFound": "No encontrado",
+        "ambiguous": "Varias personas tienen este nombre. Elige en el selector.",
+        "unresolvedLabel": "Nombres sin coincidencia",
+        "selectedLabel": "Alcance seleccionado",
+        "roleLabels": {
+          "owner": "Propietario",
+          "admin": "Administrador",
+          "finance": "Finanzas",
+          "department_manager": "Administrador de departamento",
+          "member": "Miembro"
+        },
+        "picker": {
+          "title": "Elegir la visibilidad",
+          "search": "Busca departamentos, nombres de miembros o correos",
+          "departments": "Departamentos",
+          "members": "Miembros",
+          "emails": "Correos",
+          "roles": "Roles",
+          "included": "Incluido",
+          "loadMore": "Cargar más",
+          "retry": "Reintentar",
+          "loading": "Cargando…",
+          "loadFailed": "No se pudo cargar",
+          "noMembers": "No hay miembros que coincidan",
+          "addEmail": "Añadir por correo {{email}}",
+          "selected": "{{count}} seleccionados",
+          "clear": "Borrar",
+          "noneSelected": "Aún no hay nada seleccionado",
+          "remove": "Quitar {{name}}",
+          "unknownDepartment": "Departamento eliminado",
+          "memberId": "Miembro {{id}}",
+          "searchMembersOnly": "Busca miembros por nombre o correo",
+          "expand": "Expandir {{name}}",
+          "collapse": "Contraer {{name}}",
+          "cancel": "Cancelar",
+          "done": "Listo",
+          "confirm": "Usar selección"
+        },
+        "namesMore": "{{names}} y {{count}} en total",
+        "separator": ", ",
+        "blocked": "No se puede publicar con la visibilidad que pediste",
+        "blockedLocked": "No puedes cambiar la visibilidad de este complemento, o no se pudo leer ahora. Cancela y publica sin indicarla, o pide al autor del complemento que la cambie.",
+        "blockedLegacyRoles": "La visibilidad actual de este complemento incluye condiciones de rol antiguas y no se puede cambiar al publicar. Cancela y publica sin indicarla, y luego cámbiala en los detalles del complemento.",
+        "legacyRolesNote": "La visibilidad actual incluye condiciones de rol antiguas. Cámbiala en los detalles del complemento después de publicar."
       }
     },
     "mcp": {

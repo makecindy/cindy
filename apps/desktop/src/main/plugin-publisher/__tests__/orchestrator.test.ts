@@ -326,6 +326,119 @@ describe('PluginPublisherOrchestrator', () => {
     expect(statusCalls).toBeGreaterThanOrEqual(3);
   });
 
+  // #1541: the field is sent only when it changes the plugin, and a rejection never falls back to
+  // publishing without it (that would publish a different audience than the user chose).
+  it('sends the chosen audience only when it changes and never retries a rejected one without it', async () => {
+    const editable = {
+      kind: 'editable' as const, isNew: false,
+      current: { type: 'matchAny' as const, departmentIds: ['d1'] },
+      initial: { type: 'matchAny' as const, departmentIds: ['d1'] },
+      members: [], unresolved: [],
+    };
+    const narrowed = { type: 'matchAny' as const, departmentIds: ['d1'], emails: ['a@example.com'] };
+    const cases = [
+      { decision: { confirmed: true, visibilityAudience: { type: 'matchAny' as const, departmentIds: ['d1'] } }, sent: undefined },
+      { decision: { confirmed: true, visibilityAudience: narrowed }, sent: narrowed },
+      { decision: { confirmed: true }, sent: undefined },
+    ];
+    for (const { decision, sent } of cases) {
+      const filePath = await packagePath();
+      const snapshots: PluginPublisherProgress[] = [];
+      const prepare = vi.fn(async (_input: unknown) => prepared);
+      const orch = createPluginPublisherOrchestrator({
+        api: {
+          prepare,
+          commit: async () => ({ uploadId: 'upload-1', status: 'expired' }),
+          status: vi.fn(),
+        } as unknown as PluginPublisherApi,
+        inspectPackage: async () => ({ ghostId: 'demo', name: 'Demo', version: '1.0.0' }),
+        audienceContext: async () => editable,
+        confirm: async (_facts, _signal, audience) => {
+          expect(audience).toEqual(editable);
+          return decision;
+        },
+        identity: () => ({ membershipId: 'm1', orgSlug: 'acme', orgName: 'Acme' }),
+        putFile: async () => ({ bytesSent: 24 }),
+        onProgress: (progress) => snapshots.push({ ...progress }),
+      });
+      orch.start(filePath);
+      await waitFor(snapshots, (progress) => progress.stage === 'expired');
+      expect(prepare).toHaveBeenCalledOnce();
+      expect(prepare.mock.calls[0]?.[0]).toEqual({
+        sizeBytes: 24, sha256: expect.any(String), ...(sent ? { visibilityAudience: sent } : {}),
+      });
+    }
+
+    // An explicit audience that cannot be applied stops the publish whether the window confirms or
+    // the user dismisses the alert; the Agent must see the reason, not a plain cancellation (#1541 review).
+    for (const [confirmed, reason, text] of [[true, 'legacyRoles', '旧的角色'], [false, 'locked', '不能修改']] as const) {
+      const blockedPath = await packagePath();
+      const blockedSnapshots: PluginPublisherProgress[] = [];
+      const blockedPrepare = vi.fn(async () => prepared);
+      const blocked = createPluginPublisherOrchestrator({
+        api: { prepare: blockedPrepare, commit: vi.fn(), status: vi.fn() } as unknown as PluginPublisherApi,
+        inspectPackage: async () => ({ ghostId: 'demo', name: 'Demo', version: '1.0.0' }),
+        audienceContext: async () => ({ kind: 'blocked', reason }),
+        confirm: async () => ({ confirmed }),
+        identity: () => ({ membershipId: 'm1', orgSlug: 'acme', orgName: 'Acme' }),
+        putFile: async () => ({ bytesSent: 24 }),
+        onProgress: (progress) => blockedSnapshots.push({ ...progress }),
+      });
+      blocked.start(blockedPath);
+      const stopped = await waitFor(blockedSnapshots, (progress) => progress.stage === 'failed');
+      expect(stopped.errorCode).toBe('AUDIENCE_INTENT_UNAVAILABLE');
+      expect(stopped.message).toContain(text);
+      expect(blockedPrepare).not.toHaveBeenCalled();
+    }
+
+    // #1593: an upload the server rejects for anyone ends with the server's code and reason,
+    // whatever the window answered, and never reaches prepare.
+    for (const [confirmed, reason, code] of [
+      [true, 'forbidden', 'FORBIDDEN'], [false, 'archived', 'PLUGIN_ARCHIVED'],
+      [false, 'commonManaged', 'COMMON_PLUGIN_MANAGED'], [false, 'repositoryManaged', 'PLUGIN_REPOSITORY_MANAGED'],
+    ] as const) {
+      const deniedSnapshots: PluginPublisherProgress[] = [];
+      const deniedPrepare = vi.fn(async () => prepared);
+      const denied = createPluginPublisherOrchestrator({
+        api: { prepare: deniedPrepare, commit: vi.fn(), status: vi.fn() } as unknown as PluginPublisherApi,
+        inspectPackage: async () => ({ ghostId: 'demo', name: 'Demo', version: '1.0.0' }),
+        audienceContext: async () => ({ kind: 'denied', reason }),
+        confirm: async () => ({ confirmed }),
+        identity: () => ({ membershipId: 'm1', orgSlug: 'acme', orgName: 'Acme' }),
+        putFile: async () => ({ bytesSent: 24 }),
+        onProgress: (progress) => deniedSnapshots.push({ ...progress }),
+      });
+      denied.start(await packagePath());
+      const stopped = await waitFor(deniedSnapshots, (progress) => progress.stage === 'failed');
+      expect(stopped.errorCode).toBe(code);
+      expect(stopped.message).toContain('无法发布');
+      expect(deniedPrepare).not.toHaveBeenCalled();
+    }
+
+    const filePath = await packagePath();
+    const snapshots: PluginPublisherProgress[] = [];
+    const prepare = vi.fn(async () => {
+      throw new PluginPublisherApiError('INVALID_PARAMS', 400, '请求失败 (400)');
+    });
+    const putFile = vi.fn(async () => ({ bytesSent: 24 }));
+    const orch = createPluginPublisherOrchestrator({
+      api: { prepare, commit: vi.fn(), status: vi.fn() } as unknown as PluginPublisherApi,
+      inspectPackage: async () => ({ ghostId: 'demo', name: 'Demo', version: '1.0.0' }),
+      audienceContext: async () => editable,
+      confirm: async () => ({ confirmed: true, visibilityAudience: narrowed }),
+      identity: () => ({ membershipId: 'm1', orgSlug: 'acme', orgName: 'Acme' }),
+      putFile,
+      onProgress: (progress) => snapshots.push({ ...progress }),
+    });
+    orch.start(filePath);
+    // A rejected audience is never retried without the field (that would publish a different
+    // audience than the user chose).
+    const failed = await waitFor(snapshots, (progress) => progress.stage === 'failed');
+    expect(failed.errorCode).not.toBe('AUDIENCE_UNSUPPORTED');
+    expect(prepare).toHaveBeenCalledOnce();
+    expect(putFile).not.toHaveBeenCalled();
+  });
+
   it('reads commit body.status expired instead of treating HTTP 202 as success', async () => {
     const filePath = await packagePath();
     const snapshots: PluginPublisherProgress[] = [];
