@@ -3167,20 +3167,23 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
         validate: () => validateExecutionAuthority(run),
         onTaskCreated: created => void postTaskCard(run, s, threadRootId, created),
       });
+      const words = bodyText(source).trim();
+      const visibleRequest = formatGroupRequest({ words, heading, background });
+      let message = visibleRequest;
       run.mentionable = mentionableTeammates(s, execution.bot_id);
       if (run.mentionable?.length) {
         const peers = run.mentionable.filter(member => member.botId !== execution.bot_id);
-        background.push(GROUP_TEAMMATE_HANDOFF_GUIDANCE, untrustedJsonBlock({ replyToMention: replyMention(source, run), teammates: peers.map(member => ({ name: member.name, description: localBot(member.botId)?.description?.slice(0, 300) })) }));
+        const roster = untrustedJsonBlock({ replyToMention: replyMention(source, run),
+          teammates: peers.map(member => ({ name: member.name, description: localBot(member.botId)?.description?.slice(0, 300) })) });
+        message = formatGroupRequest({ words, heading, background: [...background, GROUP_TEAMMATE_HANDOFF_GUIDANCE, roster] });
       }
-      const words = bodyText(source).trim();
-      const message = formatGroupRequest({ words, heading, background });
       // Only the owner's own message speaks for the owner; a teammate that named Cindy in its reply is labeled as itself.
       const ownWords = source.origin === 'user' && source.author?.kind === 'human' && source.authorId === selfId && !source.maskAttribution;
       const speaker = s.members.find(m => m.id === source.authorId);
-      const dispatched = await deps.dispatch({ groupAssistantTask: true, targetSessionId: sessionId, clientId: run.clientId, message, persistedContent: message,
+      const dispatched = await deps.dispatch({ groupAssistantTask: true, targetSessionId: sessionId, clientId: run.clientId, message, persistedContent: visibleRequest,
         // The requester's own words are the request this turn speaks for; the group's messages are background.
         ...(ownWords ? { autoReviewUserText: { kind: 'agent-request' as const, request: { sessionId, clientId: run.clientId, plainBody: true, delegatedText: words } } } : {}),
-        origin: { kind: 'session', senderSessionId: '', displayText: message,
+        origin: { kind: 'session', senderSessionId: '', displayText: visibleRequest,
           groupRequest: { groupId: s.room.id, groupName: s.room.name, speakerId: source.authorId,
             speakerName: speaker ? memberName(speaker, s.members) : source.author.name } },
         ...(attachments.length ? { attachments } : {}),
