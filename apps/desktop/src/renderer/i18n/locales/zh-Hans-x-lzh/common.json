@@ -2778,7 +2778,7 @@
         "description": "Ubuntu 用系统 .deb 安装套件。Arch Linux 与 Omarchy 用受管之用户目录安装程序，采同一份已验之 .deb 内容，无须 Debian 套件管理器。",
         "item1": "Ubuntu：用 sudo apt install ./cindy-<version>-<arch>.deb。Arch/Omarchy：请依 docs/linux.md 中之用户目录安装指南行之。",
         "item2": "点击更新后，系统 .deb 安装须授权；用户目录安装无须系统密码即可易版。他套件管理器所装之版，请经对应之套件管理器更新。",
-        "item3": "Linux x64 与 arm64 支持 Beta 渠道。Linux 唯于君择重新启动时施更新，闲置时不自动安装。"
+        "item3": "Linux x64 与 arm64 支持 Beta 渠道。用户目录所装者，闲时可自行安装更新；已设免密授权的系统 .deb 所装者，闲时亦可自行安装更新，其余系统 .deb 所装者，唯于君择重新启动时施更新。"
       },
       "qnaTitle": "径问",
       "qnaDescription": "未得其解？径问君所欲为",
@@ -2853,7 +2853,7 @@
       "openLogsDirError": "日志目录未能启",
       "autoUpdateLabel": "闲时自装更新",
       "autoUpdateDescription": "更新取下既毕，若此机 10 分钟无操作且无差事方行，则自重启应用以成安装。",
-      "linuxUpdateDescription": "更新于君择重启时生效。系统 .deb 安装须系统密码，用户目录安装则否。他法所装者，请以相应套件管理器更新。",
+      "linuxUpdateDescription": "系统 .deb 安装须系统密码，更新于君择重启时生效；用户目录安装则无须密码，可于闲时自行安装。他法所装者，请以相应套件管理器更新。",
       "autoUpdateEnabledToast": "已启闲时自装更新",
       "autoUpdateDisabledToast": "已阖闲时自装更新",
       "autoUpdateSaveFailed": "自更新之设未能存",
@@ -15609,6 +15609,8 @@
       "companionModelMissing": "此同伴无可用之模型。请先择模型，再试。",
       "companionModelSettings": "模型设定",
       "piRetryHistoryTooLarge": "此信未发。Pi 读取旧录以重试时，一帧逾本机 16 MiB 之限。可另启任务。",
+      "piRetryHistoryUnavailable": "此信未发。Pi 读旧录以发信时失误。可再试，或另启任务。",
+      "upstreamStatusError": "上游返 {{status}}，此答未竟。",
       "messageNotSent": "此信未发。",
       "upstreamEmpty550": "模型之服返 HTTP 550，答文空",
       "replyFailed": "答未竟",
