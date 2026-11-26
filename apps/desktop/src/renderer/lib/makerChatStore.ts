@@ -487,7 +487,7 @@ export interface AskUserQuestionItem {
   id?: string;
   question: string;
   header?: string;
-  options?: Array<{ label: string; description?: string }>;
+  options?: Array<{ label: string; description?: string; preview?: string }>;
   multiSelect?: boolean;
   answerConstraints?: import('@cindy/maker-shared').AskAnswerConstraints;
 }
@@ -7281,7 +7281,8 @@ export function handleStreamEvent(
             (question.options?.length ?? 0) === (next.options?.length ?? 0) &&
             (question.options ?? []).every((option, optionIndex) =>
               option.label === next.options?.[optionIndex]?.label &&
-              option.description === next.options?.[optionIndex]?.description,
+              option.description === next.options?.[optionIndex]?.description &&
+              option.preview === next.options?.[optionIndex]?.preview,
             );
         });
       // F1-a: ask_user 消息的落库(+ 在飞 assistant flush)已收口 main

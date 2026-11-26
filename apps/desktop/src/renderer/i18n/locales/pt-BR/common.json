@@ -7510,7 +7510,8 @@
       "localNetwork": {
         "label": "Rede local",
         "deniedHint": "Sem esta permissão, computadores e celulares na mesma rede não conseguem se conectar diretamente a este computador. Eles passam pelo relay, que é mais lento.",
-        "settingsHint": "Ative o Cindy em Ajustes do Sistema › Privacidade e Segurança › Rede Local. A mudança vale assim que você voltar."
+        "promptedHint": "Clique em Permitir no aviso do macOS. Se nenhum aviso aparecer, abra os Ajustes do Sistema para ativar manualmente.",
+        "settingsHint": "Em Privacidade e Segurança, abra Rede Local e ative o Cindy. Se ele não aparecer na lista, clique em + para adicionar este app — vale assim que você voltar."
       }
     },
     "imBot": {
@@ -7981,6 +7982,10 @@
         "toggle-sidebar": {
           "label": "Alternar barra lateral",
           "description": "Recolher ou expandir a barra lateral de sessões"
+        },
+        "copy-session-link": {
+          "label": "Copiar link da sessão",
+          "description": "Copiar o link da sessão aberta"
         },
         "session-history-back": {
           "label": "Tarefa anterior",
@@ -13768,6 +13773,7 @@
           "overloadRetryingNoCount": "O serviço do modelo está ocupado. Tentando novamente de forma automática…",
           "overloadFailed": "⚠️ O serviço do modelo está ocupado — o serviço de origem está sem capacidade no momento. Reenvie esta mensagem aqui para tentar novamente ou mude para outro modelo no Cindy. (Clicar em “Tentar novamente” no app para desktop também continua a tarefa, mas o resultado não volta para esta mensagem.)"
         },
+        "openAiReconnect": "Reconecte o ChatGPT no Cindy em Configurações → Provedores → OpenAI e envie uma mensagem aqui.",
         "audioInputUnavailable": "Esta conexão com o modelo não permite processar áudio diretamente. Peça à Cindy que transcreva o áudio antes de continuar.",
         "toolLoop": {
           "generic": "O modelo chamou ferramentas repetidamente vezes demais, então o Cindy interrompeu este turno para evitar um loop infinito. Envie uma nova mensagem para continuar.",
@@ -15785,7 +15791,6 @@
       "piRetryHistoryUnavailable": "A mensagem não foi enviada. O Pi não conseguiu ler o histórico necessário para enviá-la. Você pode tentar novamente ou continuar em uma nova tarefa.",
       "upstreamStatusError": "O serviço de origem retornou {{status}}, então a resposta não pôde ser concluída.",
       "messageNotSent": "A mensagem não foi enviada.",
-      "upstreamEmpty550": "O serviço do modelo retornou HTTP 550 com uma resposta vazia",
       "replyFailed": "Não foi possível concluir a resposta",
       "queuedSendRecovery": "Sua mensagem não foi enviada. Selecione “Tentar novamente” para enviá-la sem alterações. Uma nova mensagem substituirá a anterior.",
       "retryTitle": "Reenviar a última mensagem",
@@ -16926,6 +16931,8 @@
       "retryIn": "Nova tentativa automática em {{seconds}} s"
     },
     "subscriptionAccountError": {
+      "unreachable": "O serviço de contas do Codex está temporariamente inacessível.",
+      "rechecking": "O serviço de contas do Codex está temporariamente inacessível. Nova tentativa às {{resetAt}}.",
       "poolModelLimited": "O uso da assinatura para este modelo atingiu o limite. Você pode trocar de modelo.",
       "poolRetryUntil": "Tente novamente após {{resetAt}}.",
       "poolOtherSignedOut": "Outra conta de assinatura está desconectada. Entre nessa conta no computador que executa a tarefa e tente novamente.",
@@ -22958,6 +22965,16 @@
     "refresh": "Atualizar cota"
   },
   "subscriptionAccounts": {
+    "existing": {
+      "menu": "Outras formas de adicionar contas",
+      "connect": "Conectar um login existente…",
+      "found": "{{count}} disponíveis",
+      "title": "Logins em {{device}}",
+      "note": "O Cindy e a CLI usarão a mesma configuração de conta.",
+      "attach": "Conectar",
+      "choose": "Escolher outra pasta…",
+      "unverified": "Não foi possível verificar esta assinatura."
+    },
     "pluginSignIn": {
       "method": "Método de login",
       "secretHint": "A chave vai apenas para o plugin, que a guarda na pasta própria desta conta. O Cindy não a armazena nem a envia para outros computadores.",
