@@ -128,7 +128,7 @@ import { registerSubscriptionAccountsIpc } from '../ipc.js';
 import { onSubscriptionAccountsChanged } from '../runtime.js';
 import { broadcast } from '../../device-link/index.js';
 import { accountDirectory, accountOwnerPrefix, migrateLegacyCodexAccounts, readBoundClaudeConfigDir, readLegacyCodexAccountId, normalizePoolFile,
-  readProviderBoundAccountIds, writeAccountBindings } from '../store.js';
+  readProviderBoundAccountIds, updatePool, writeAccountBindings } from '../store.js';
 import { SUBSCRIPTION_ACCOUNTS_CHANNEL } from '../../../shared/subscriptionAccounts.js';
 import { mapIpcErrorToI18nKey } from '../../../shared/ipcError.js';
 import { AccountServiceUnreachableError } from '../accountServiceError.js';
@@ -678,6 +678,26 @@ describe('subscription management boundary', () => {
       }
     },
   );
+  // #12999, unit: transfer/export must still find native history after removal and reload,
+  // without making the external login usable or exposing discovery to a provider-sharing guest.
+  it('keeps linked native history in its chosen directory and hides discovery from guests', async () => {
+    const id = `cindy-${accountOwnerPrefix()}-12345678-1234-4123-8123-123456789abc`;
+    const directory = path.join(homedir(), '.claude-person');
+    h.pools = normalizePoolFile({ pools: { anthropic: { accounts: [
+      { id, linkedLogin: { directory, identity: 'personal@example.test' } },
+    ] } } }).pools;
+    h.bindings = { 'anthropic:native:linked': { providerId: 'anthropic', accountId: id } };
+    expect(readBoundClaudeConfigDir('linked')).toBe(directory);
+    await updatePool('anthropic', pool => ({ ...pool, accounts: [] }));
+    h.pools = normalizePoolFile({ pools: h.pools }).pools;
+    expect(h.pools.anthropic?.accounts).toEqual([]);
+    expect(accountDirectory('anthropic', id)).not.toBe(directory);
+    expect(readBoundClaudeConfigDir('linked')).toBe(directory);
+    h.owner = 'owner-b';
+    expect(() => readBoundClaudeConfigDir('linked')).toThrow('unavailable');
+    h.context = { controllerDeviceId: providerShareGuestPeer('share', 'member', 'device') };
+    await expect(invoke({ action: 'discover-logins', providerId: 'anthropic' })).rejects.toThrow('PERMISSION_DENIED');
+  });
   it('derives stable directories from the owner, refusing another owner’s account id', () => {
     const id = `cindy-${accountOwnerPrefix()}-12345678-1234-4123-8123-123456789abc`;
     const directory = accountDirectory('anthropic', id);

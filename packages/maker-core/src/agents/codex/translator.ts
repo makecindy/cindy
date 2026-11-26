@@ -733,6 +733,9 @@ export function translateItemNotification(
     case 'hookPrompt':
     case 'enteredReviewMode':
     case 'exitedReviewMode':
+    //   sleep:        codex 的 clock.sleep 长等待通知（轮询工具自带），无 UI 概念；
+    //                 落 default 会每条约一条 unhandled warning，长任务刷满日志
+    case 'sleep':
       return;
     default:
       ctx.log.warn('unhandled item type', { phase, itemType });
