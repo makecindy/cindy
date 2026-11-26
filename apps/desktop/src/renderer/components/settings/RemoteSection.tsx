@@ -172,12 +172,13 @@ function HostRow({
             'text-13 leading-tight',
             // Failed state usually carries an actionable hint (e.g. the
             // `ssh-copy-id` instructions on auth failure) — let it wrap up
-            // to 3 lines so the command is readable. Other states fit in
-            // one line (`user@host:port`).
+            // to 3 lines so the command is readable. Other states keep one
+            // line (`user@host:port`), cut off in a narrow column, so the
+            // title always carries the whole text.
             snap.status === 'failed' ? 'whitespace-pre-wrap break-words' : 'truncate',
           )}
           style={{ color: 'var(--settings-integration-subtitle)' }}
-          title={snap.status === 'failed' ? subtitle : undefined}
+          title={subtitle}
         >
           {subtitle}
         </span>
