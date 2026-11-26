@@ -2152,8 +2152,9 @@ describe('Chat Server result delivery and refresh', () => {
     expect(prompt.includes('Do not call another participant just to reply.')).toBe(!supported);
     expect(prompt.includes('An @name in your final reply wakes that teammate')).toBe(supported);
     const data = [...prompt.matchAll(/<untrusted-data>\n(.*?)\n<\/untrusted-data>/g)].map(match => JSON.parse(match[1])).find(block => block.participants);
-    expect(data.participants).toContainEqual({ name: 'Bot (Owner)', kind: 'bot', you: true, owner: 'Owner', description: 'Writes the code' });
-    expect(data.participants).toContainEqual({ name: 'Luna (Owner)', kind: 'bot', owner: 'Owner' });
+    expect(data.participants.columns).toEqual(['name', 'kind', 'owner', 'description', 'you']);
+    expect(data.participants.rows).toContainEqual(['Bot (Owner)', 'bot', 'Owner', 'Writes the code', true]);
+    expect(data.participants.rows).toContainEqual(['Luna (Owner)', 'bot', 'Owner']);
     expect(data.currentRequest.replyToMention).toBe(supported ? `@${requesterName} (Owner)` : undefined);
     await service.settleLaneTurn({ ...terminal, resultText: `${data.currentRequest.replyToMention ?? ''} review done. @Bot is done. @Cindy, anything to add?` });
     if (supported) expect(deliveries()[0][2].mentions).toEqual([requesterId, groupCindy]);
