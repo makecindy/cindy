@@ -420,6 +420,7 @@
       "description": "Hanya membatasi pemakaian jarak jauh; pemakaian lokal tidak terpengaruh. Setelah disimpan, berlaku saat membuat tugas, mengganti model, dan mengirim pesan berikutnya.",
       "all": "Semua model",
       "selected": "{{count}} model diizinkan",
+      "selectionExcludesModels": "Ada model di luar rentang yang dipilih. Untuk mengizinkan model mendatang, pilih secara manual.",
       "choose": "Pilih model",
       "memberTitle": "Model yang diizinkan",
       "memberDescription": "Atur model yang bisa dipakai {{name}}, hanya dari model yang sudah dibuka untuk jarak jauh. Batasan ini juga berlaku untuk pemakaian yang dibagikan ulang lewat orang ini.",
@@ -1349,6 +1350,7 @@
     "openPermissionInNewWindow": "Buka di jendela baru"
   },
   "ipcError": {
+    "DEVICE_LINK_STANDBY": "Instans Cindy lain di komputer ini sedang memakai koneksi jarak jauh. Tutup instans itu, lalu instans ini mengambil alih otomatis.",
     "SUBSCRIPTION_CLAUDE_IDENTITY_UNKNOWN": "$t(subscriptionAccounts.loginIdentityUnknown)",
     "SUBSCRIPTION_CLAUDE_ACCOUNT_MISMATCH": "$t(subscriptionAccounts.loginIdentityMismatch)",
     "SSH_HARNESS_SWITCH_UNSUPPORTED": "Tugas SSH ini belum bisa mengganti Harness. Pilih model di Harness-nya saat ini, atau buat tugas SSH baru dengan Harness yang dibutuhkan.",
@@ -1370,6 +1372,10 @@
     "PI_IMAGE_INPUT_UNSUPPORTED": "Input gambar tidak aktif untuk model Pi saat ini. Beralih ke model yang mendukung gambar. Untuk model kustom, aktifkan “Mendukung input gambar” di pengaturan penyedia, lalu mulai sesi Pi baru.",
     "CREDENTIAL_SWITCH_BUSY": "Sesi Codex lain masih berjalan, jadi pergantian penyedia ini tidak berlaku (sesi tetap memakai penyedia sebelumnya). Coba lagi setelah sesi itu selesai.",
     "PI_CATALOG_RELOAD_UNCONFIRMED": "Muat ulang katalog model tidak terkonfirmasi, jadi sesi ini dihentikan. Buka lagi sesinya lalu ganti model.",
+    "REMOTE_WORKDIR_INVALID": "Path proyek jarak jauh tidak valid. Pilih direktori proyek lagi.",
+    "REMOTE_WORKDIR_NOT_FOUND": "Direktori proyek jarak jauh sudah tidak ada. Pilih direktori proyeknya lagi.",
+    "REMOTE_WORKDIR_NOT_DIRECTORY": "Path proyek jarak jauh bukan folder. Pilih direktori proyek.",
+    "REMOTE_WORKDIR_UNAVAILABLE": "Direktori proyek jarak jauh tidak bisa diakses. Sambungkan lagi drive jaringannya lalu coba lagi.",
     "REMOTE_MODEL_SWITCH_ROUTE_CHANGE": "Model atau sumber tujuan memerlukan rute jarak jauh yang berbeda — tutup dan buat ulang sesi jarak jauh agar berlaku.",
     "REMOTE_PROVIDER_UPDATING": "Kredensial penyedia sedang diperbarui, coba lagi sebentar lagi",
     "REMOTE_PROVIDER_UNSUPPORTED": "Penyedia ini tidak mendukung tugas jarak jauh SSH; pilih sumber lain",
@@ -1382,10 +1388,6 @@
     "SSH_CONFIG_AUTH_UNSUPPORTED": "Cindy tidak bisa mereproduksi sebagian aturan konfigurasi SSH untuk host ini dengan aman. SSH lewat terminal mungkin masih bisa; periksa Match, Include bersyarat, IdentityAgent, IdentitiesOnly, dan pengaturan kunci publik.",
     "SSH_AGENT_UNAVAILABLE": "Agen kunci SSH lokal (ssh-Agent) tidak tersedia. Pastikan agen sudah berjalan dan periksa dengan ssh-add -l apakah kunci yang diperlukan sudah dimuat; panduan penanganan ada di “Kelola kunci”.",
     "SSH_HOST_PREFS_WRITE_FAILED": "Host tetap tersimpan, tetapi nama tampilan atau pengaturan Agent Proxy gagal disimpan. Periksa izin penyimpanan lokal lalu coba lagi.",
-    "REMOTE_WORKDIR_INVALID": "Path proyek jarak jauh tidak valid. Pilih direktori proyek lagi.",
-    "REMOTE_WORKDIR_NOT_FOUND": "Direktori proyek jarak jauh sudah tidak ada. Pilih direktori proyeknya lagi.",
-    "REMOTE_WORKDIR_NOT_DIRECTORY": "Path proyek jarak jauh bukan folder. Pilih direktori proyek.",
-    "REMOTE_WORKDIR_UNAVAILABLE": "Direktori proyek jarak jauh tidak bisa diakses. Sambungkan lagi drive jaringannya lalu coba lagi.",
     "RIGHT_SIDEBAR_TOO_MANY_TABS": "Tugas ini sudah mencapai batas jumlah tab. Tutup beberapa tab dulu",
     "RIGHT_SIDEBAR_STATE_TOO_LARGE": "Isi tab terlalu besar untuk ditambahkan",
     "RIGHT_SIDEBAR_UNKNOWN_KIND": "Jenis tab ini belum tersedia",
@@ -1414,6 +1416,9 @@
     "ENDPOINT_NOT_FOUND": "Endpoint tidak ditemukan (404). Periksa base URL.",
     "CONTEXT_TOO_LONG": "Konteks melebihi batas panjang model",
     "WIRE_INCOMPATIBLE": "Endpoint tidak sepenuhnya kompatibel dengan protokol ini (ada field permintaan yang tidak dikenali)",
+    "INVALID_PROBE_RESPONSE": "Layanan model mengembalikan respons kosong atau tidak valid",
+    "PROBE_NO_OUTPUT": "Uji koneksi tidak dapat memastikan model menghasilkan keluaran",
+    "PROBE_REFUSED": "Layanan model menolak atau memblokir prompt uji",
     "UPSTREAM_ERROR": "Kesalahan server hulu (5xx). Coba lagi nanti.",
     "UPSTREAM_UNREACHABLE": "Tidak bisa menjangkau endpoint. Periksa jaringan dan base URL.",
     "TIMEOUT": "Koneksi timeout. Periksa jaringan dan base URL.",
@@ -1921,6 +1926,7 @@
       },
       "footnote": "Versi pertama hanya mendukung pengelolaan koneksi SSH. Kemampuan menjalankan Agent di komputer jarak jauh akan ditambahkan di versi berikutnya.",
       "viaAuth": "Diautentikasi lewat {{label}}",
+      "managedAliasConflict": "Alias ini dideklarasikan di konfigurasi SSH milik Cindy dan di konfigurasi eksternal. Detail koneksi hanya-baca, dan host ini tidak bisa dihapus di sini.",
       "readOnlyFromSshConfig": "Detail koneksi berasal dari konfigurasi SSH",
       "importedAgentHint": "Melakukan autentikasi lewat agen kunci SSH lokal (ssh-Agent). Koneksi ssh di terminal yang berhasil bukan berarti agen sudah siap.",
       "agentError": {
@@ -2186,6 +2192,13 @@
       }
     },
     "appearance": {
+      "chatLayout": {
+        "label": "Tata letak obrolan",
+        "standard": "Standar",
+        "wide": "Lebar",
+        "width": "Lebar konten",
+        "hint": "Bagian dari ruang di antara margin obrolan. Panel sempit menyesuaikan otomatis."
+      },
       "title": "Tampilan",
       "modeLabel": "Mode tampilan",
       "appIcon": {
@@ -2431,6 +2444,10 @@
       }
     },
     "windowBehavior": {
+      "trayCard": {
+        "label": "Kartu saat kursor di ikon tray",
+        "hint": "Arahkan kursor ke ikon tray Cindy untuk melihat sisa kuota dan tugas yang belum dibaca."
+      },
       "menubar": {
         "label": "Tampilkan sisa penggunaan di menu bar",
         "hint": "Menambahkan ikon Cindy ke menu bar macOS. Klik untuk melihat sisa langganan, saldo Cindy, dan penggunaan hari ini."
@@ -2680,6 +2697,60 @@
         }
       }
     },
+    "contactChange": {
+      "phone": {
+        "rowTitle": "Nomor telepon untuk masuk",
+        "rowHint": "Dipakai untuk masuk dan menerima kode verifikasi",
+        "change": "Ubah nomor telepon",
+        "verifyTitle": "Verifikasi nomor telepon saat ini",
+        "introDescription": "Demi keamanan akunmu, verifikasi nomor telepon saat ini sebelum mengubahnya.",
+        "newTitle": "Masukkan nomor telepon baru",
+        "newDescription": "Setelah diubah, masuk dengan nomor baru. Nomor lama tidak bisa lagi dipakai masuk ke akun ini.",
+        "inputLabel": "Nomor telepon baru",
+        "placeholder": "Masukkan nomor teleponmu",
+        "success": "Nomor telepon diubah menjadi {{target}}"
+      },
+      "email": {
+        "rowTitle": "Email untuk masuk",
+        "rowHint": "Dipakai untuk masuk dan menerima kode verifikasi",
+        "change": "Ubah email",
+        "verifyTitle": "Verifikasi email saat ini",
+        "introDescription": "Demi keamanan akunmu, verifikasi email saat ini sebelum mengubahnya.",
+        "newTitle": "Masukkan email baru",
+        "newDescription": "Setelah diubah, masuk dengan email baru. Email lama tidak bisa lagi dipakai masuk ke akun ini.",
+        "inputLabel": "Alamat email baru",
+        "placeholder": "Masukkan alamat emailmu",
+        "success": "Email diubah menjadi {{target}}"
+      },
+      "codeSent": "Kode verifikasi dikirim ke {{target}}",
+      "codeLabel": "Kode verifikasi",
+      "codePlaceholder": "Kode 6 digit",
+      "sendCode": "Kirim kode",
+      "next": "Lanjut",
+      "confirm": "Konfirmasi perubahan",
+      "cancel": "Batal",
+      "resend": "Kirim ulang kode",
+      "resendIn": "Kirim ulang dalam {{seconds}} dtk",
+      "errors": {
+        "INVALID_CODE": "Kode verifikasi salah atau sudah kedaluwarsa.",
+        "CODE_ATTEMPTS_EXCEEDED": "Terlalu banyak percobaan salah. Minta kode baru.",
+        "CONTACT_TAKEN": "Nomor telepon atau email ini sudah tertaut ke akun lain.",
+        "CONTACT_UNCHANGED": "Ini sama dengan nomor telepon atau emailmu saat ini.",
+        "CONTACT_CHANGE_TICKET_INVALID": "Verifikasi kedaluwarsa. Verifikasi lagi nomor telepon atau emailmu.",
+        "AUTH_FLOW_SUPERSEDED": "Status masukmu berubah. Mulai lagi.",
+        "CONTACT_CHANGE_UNAVAILABLE": "Akun ini tidak bisa mengubah cara masuknya di sini.",
+        "CONTACT_CHANGE_BUSY": "Langkah sebelumnya masih berjalan.",
+        "RATE_LIMITED": "Terlalu banyak percobaan. Tunggu sebentar lalu coba lagi.",
+        "RATE_LIMITED_UNTIL": "Terlalu banyak percobaan. Coba lagi setelah {{time}} (waktu setempat).",
+        "INVALID_PARAMS": "Formatnya tidak valid. Periksa lalu coba lagi.",
+        "EMAIL_DOMAIN_BLOCKED": "Email ini tidak bisa dipakai. Coba email lain.",
+        "EMAIL_PATTERN_BLOCKED": "Email ini tidak bisa dipakai. Coba email lain.",
+        "ACCOUNT_DELETION_PENDING": "Akun ini dijadwalkan dihapus dan tidak bisa diubah.",
+        "NETWORK_ERROR": "Koneksi jaringan gagal. Periksa jaringanmu lalu coba lagi.",
+        "REQUEST_TIMEOUT": "Permintaan habis waktu. Coba lagi.",
+        "fallback": "Terjadi masalah. Coba lagi nanti."
+      }
+    },
     "help": {
       "title": "Bantuan",
       "description": "Pelajari cara menyelesaikan pekerjaan dengan {{appName}}.",
@@ -2777,7 +2848,8 @@
         "errorBusy": "Sudah ada proses unggah yang berjalan. Tunggu sampai selesai.",
         "errorFailed": "Unggah log gagal. Periksa jaringan lalu coba lagi",
         "unavailableNotConfigured": "Unggah log belum dikonfigurasi di versi ini.",
-        "unavailableNoConsent": "Kamu harus menyetujui Kebijakan Privasi dulu."
+        "unavailableNoConsent": "Kamu harus menyetujui Kebijakan Privasi dulu.",
+        "consentPrompt": "Sebelum mengunggah, baca <policy>Kebijakan Privasi</policy> dan pilih <accept>Setuju</accept>."
       },
       "openLogsDirError": "Gagal membuka direktori log",
       "autoUpdateLabel": "Instal pembaruan otomatis ketika idle",
@@ -2824,6 +2896,14 @@
         "projectsRootReset": "Pulihkan lokasi yang disarankan",
         "projectsRootDescription": "Tempat folder proyek disimpan ketika kamu membuat proyek di dalam sesi. Bila belum diatur, lokasi disarankan dari folder proyek yang sudah ada.",
         "projectsRootFailed": "Tidak dapat memperbarui lokasi penyimpanan proyek baru",
+        "taskExportDirectoryTitle": "Lokasi ekspor sesi",
+        "taskExportDirectoryUnset": "Tanya setiap kali",
+        "taskExportDirectoryMissing": "Folder tidak ditemukan",
+        "taskExportDirectoryUnreadable": "Pengaturan tidak dapat dibaca",
+        "taskExportDirectoryChoose": "Pilih direktori",
+        "taskExportDirectoryReset": "Tanya setiap kali",
+        "taskExportDirectoryDescription": "Jika diatur, sesi yang diekspor Agent disimpan di sini tanpa menanyakan lokasi, dan berkas yang sudah ada tidak pernah ditimpa. Jika tidak diatur, kamu memilih lokasi untuk setiap ekspor.",
+        "taskExportDirectoryFailed": "Lokasi ekspor sesi tidak dapat diperbarui",
         "dialogueDirectoryOpen": "Buka direktori",
         "dialogueDirectoryChoose": "Ubah direktori",
         "dialogueDirectoryReset": "Pulihkan lokasi default",
@@ -2954,7 +3034,12 @@
         "reconcileButton": "Periksa",
         "reconcileFailed": "Pemeriksaan gagal",
         "reconcileHealthy": "Catatan dan disk sesuai, tidak ditemukan masalah.",
-        "reconcileIssues": "Ditemukan masalah: {{orphans}} berkas tanpa catatan ({{orphanSize}}), {{missing}} berkas hilang, {{stray}} entri tidak dikenali. Daftar lengkap ada di log aplikasi."
+        "reconcileIssues": "Ditemukan masalah: {{orphans}} berkas tanpa catatan ({{orphanSize}}), {{missing}} berkas hilang, {{stray}} entri tidak dikenali. Daftar lengkap ada di log aplikasi.",
+        "buddyWorkspaceDirectoryTitle": "Ruang kerja Buddy",
+        "buddyWorkspaceDirectoryDescription": "Tempat buddy baru membuat ruang kerjanya. Buddy yang sudah ada tetap di lokasinya dan bisa dipindahkan satu per satu di pengaturan Lanjutan.",
+        "buddyWorkspaceDirectoryDetails": "Cindy membuat subfolder khusus akun di sini untuk ruang kerja buddy baru sambil menjaga tautan jalur aslinya.",
+        "buddyWorkspaceDirectoryChoose": "Ubah direktori",
+        "buddyWorkspaceDirectoryFailed": "Folder ruang kerja buddy tidak dapat diperbarui."
       },
       "piKernel": {
         "manage": "Kelola versi Pi",
@@ -3379,6 +3464,7 @@
       "description": "Bawa sesi dari alat coding AI lain ke Cindy dan lanjutkan di sini. Cindy hanya membaca catatan aslinya dan tidak mengubahnya.",
       "rescan": "Pindai lagi",
       "allSources": "Semua sumber",
+      "sourceFilterAria": "Sumber",
       "search": "Cari sesi atau folder",
       "projectFilter": "Hanya {{name}}",
       "clearProjectFilter": "Tampilkan semua proyek",
@@ -4097,6 +4183,7 @@
         "refreshReconnect": "Gagal memuat daftar model. Sambungkan ulang penyedia ini lalu coba lagi.",
         "refreshFetchDisabled": "Pengambilan katalog model jarak jauh tidak aktif, penyegaran dilewati",
         "withdrawn": {
+          "rowStatus": "Tidak terdaftar saat penyegaran terakhir",
           "refreshFound": "Tidak lagi ditawarkan di upstream: {{count}}",
           "refreshAdded": "Model baru: {{added}}. Tidak lagi ditawarkan di upstream: {{count}}",
           "refreshSuspicious": "Tidak dikembalikan kali ini: {{count}}. Daftar upstream mungkin tidak lengkap",
@@ -4441,6 +4528,16 @@
         "groupLocal": "Model lokal",
         "metaLocalRecommended": "Direkomendasikan · unduh di Cindy",
         "metaLocalConnect": "Hubungkan server lokal yang sudah berjalan",
+        "configurePlugin": "Atur",
+        "installAndConfigure": "Pasang dan atur",
+        "pluginLoading": "Memuat plugin…",
+        "engineState": {
+          "available": "Siap",
+          "unavailable": "Tidak tersedia",
+          "unknown": "Menunggu status mesin"
+        },
+        "retryPlugin": "Coba lagi",
+        "officialModelPlugins": "Plugin model resmi",
         "moreLocal": "Server lokal lainnya"
       },
       "local": {
@@ -4764,7 +4861,66 @@
         "hint": "Mengirim pesan pribadi lewat bot Feishu atau Lark yang tertaut; hanya ketika jendela tidak fokus.",
         "disabledHint": "Konfigurasikan bot dulu dan kirim satu pesan ke bot untuk menyelesaikan pengikatan."
       },
-      "bind": "Ikat"
+      "bind": "Ikat",
+      "groups": {
+        "title": "Obrolan grup",
+        "description": "Beri grup tempat bot berada proyek, model, dan izinnya sendiri.",
+        "rules": "Yang tidak kamu atur: grup dengan proyek mengikuti proyek itu di Proyek dan model; grup tanpa proyek mengikuti Konfigurasi Percakapan Baru dan Mode izin untuk tugas grup baru di atas. Obrolan utama grup dan topiknya memakai satu pengaturan.",
+        "expand": "Bentangkan",
+        "collapse": "Ciutkan",
+        "groupCount_other": "{{count}} grup",
+        "customCount_other": "{{count}} disesuaikan",
+        "refresh": "Segarkan",
+        "loading": "Memuat grup…",
+        "loadFailed": "Grup tidak dapat dimuat. Coba Segarkan sebentar lagi.",
+        "saveFailed": "Pengaturan grup tidak dapat disimpan",
+        "notConnected": "Grup akan muncul setelah bot terhubung. Hanya grup yang punya pengaturan sendiri yang ditampilkan di bawah.",
+        "empty": "Bot belum ada di grup mana pun. Tambahkan ke grup, lalu kembali ke sini.",
+        "listPermission": "Grup bot tidak dapat dibaca. Di Feishu Open Platform, beri aplikasi ini izin membaca informasi grup. Grup yang sudah pernah dipakai bot ditampilkan di bawah.",
+        "listUnavailable": "Grup bot tidak dapat dibaca saat ini. Grup yang sudah pernah dipakai bot ditampilkan di bawah.",
+        "unnamed": "Grup tanpa nama ({{id}})",
+        "summaryModel": "Model sendiri",
+        "summaryPermission": "Izin sendiri",
+        "expandAria": "Pengaturan untuk {{name}}",
+        "searchLabel": "Cari grup",
+        "searchPlaceholder": "Cari berdasarkan nama grup",
+        "customHeading": "Pengaturan sendiri",
+        "followHeading": "Mengikuti pengaturan kanal",
+        "showMore": "Tampilkan {{count}} lagi",
+        "showLess": "Tampilkan lebih sedikit",
+        "noMatch": "Tidak ada grup yang cocok dengan “{{query}}”",
+        "project": {
+          "label": "Proyek",
+          "follow": "Obrolan",
+          "missing": "{{name}} (tidak lagi ada di bilah samping)",
+          "hint": "Berlaku saat bot pertama kali @disebut di grup, topik dimulai, atau seseorang mengirim /new. Tugas yang sedang berjalan tidak dipindahkan. Dengan proyek, model dan izin mengikuti proyek itu di Proyek dan model; dengan Obrolan, tugas tetap di folder percakapan bot dan mengikuti Konfigurasi Percakapan Baru di atas. Hanya proyek di bilah samping komputer ini yang bisa dipilih."
+        },
+        "model": {
+          "label": "Model dan tingkat penalaran",
+          "hintFollow": "Mengikuti Konfigurasi Percakapan Baru. Mengubah model atau tingkat penalaran di sini hanya berlaku untuk grup ini.",
+          "hintFollowProject": "Mengikuti proyek “{{project}}” di Proyek dan model. Mengubah model atau tingkat penalaran di sini hanya berlaku untuk grup ini.",
+          "hintProjectUnavailable": "Model yang diatur untuk “{{project}}” di Proyek dan model tidak tersedia saat ini. Pilih model lain di sana, atau pilih satu untuk grup ini di sini.",
+          "hintFixed": "Grup ini punya model sendiri. Tugas di grup ini yang modelnya belum diubah akan berganti pada pesan berikutnya; tugas baru memakai model ini."
+        },
+        "permission": {
+          "label": "Izin",
+          "hintFollow": "Mengikuti Mode izin untuk tugas grup baru. Hanya memengaruhi tugas yang dibuat di grup ini mulai sekarang; ganti tugas yang sudah ada dengan /permission di grup.",
+          "hintFollowProject": "Mengikuti izin “{{project}}” di Proyek dan model. Hanya memengaruhi tugas yang dibuat di grup ini mulai sekarang; ganti tugas yang sudah ada dengan /permission di grup.",
+          "hintFixed": "Grup ini punya mode izin sendiri. Hanya memengaruhi tugas yang dibuat di grup ini mulai sekarang; ganti tugas yang sudah ada dengan /permission di grup."
+        },
+        "fullAccessConfirm": {
+          "title": "Pakai Akses penuh di {{name}}?",
+          "description": "Tugas baru di grup ini berjalan tanpa konfirmasi tiap langkah, siapa pun yang @menyebut bot. Pesan grup dikendalikan anggotanya, jadi lakukan ini hanya jika kamu memercayai semua anggota grup.",
+          "confirm": "Pakai Akses penuh",
+          "cancel": "Batal"
+        },
+        "widerConfirm": {
+          "title": "Longgarkan izin di {{name}}?",
+          "description": "Tugas baru di grup ini akan berubah dari {{current}} menjadi {{next}}, siapa pun yang @menyebut bot. Pesan grup dikendalikan anggotanya, jadi lakukan ini hanya jika kamu memercayai semua anggota grup.",
+          "confirm": "Tetap ubah",
+          "cancel": "Batal"
+        }
+      }
     },
     "wechatBot": {
       "title": "WeChat Pribadi",
@@ -5065,6 +5221,7 @@
       "formHint": "ID pengguna berupa angka; kirim DM ke @userinfobot untuk melihat ID sendiri.",
       "connect": "Sambungkan",
       "connectingAction": "Menyambungkan…",
+      "connectTimedOut": "Koneksi habis waktu. Coba lagi.",
       "errorCode": {
         "invalid-token": "Bot Token tidak valid atau sudah direset, isi ulang",
         "provider-api": "Layanan Telegram mengembalikan error, coba lagi nanti",
@@ -5373,6 +5530,69 @@
       "budget": "Diskon",
       "subscription": "Langganan",
       "saveFailed": "Gagal menyimpan pengaturan model pendukung",
+      "testFailed": "Uji koneksi gagal untuk {{model}}",
+      "save": "Simpan model bantu",
+      "saving": "Menyimpan dan menguji…",
+      "saveSuccess": "Uji koneksi lulus, model bantu diaktifkan",
+      "retrySave": "Uji koneksi gagal. Perbaiki koneksi lalu coba simpan lagi.",
+      "notice": {
+        "auto-title": "Judul obrolan ini tidak dapat dibuat otomatis",
+        "title": "Judul obrolan tidak dapat dibuat",
+        "task-summary": "Tugas tidak dapat diringkas",
+        "prompt-prediction": "Saran ketikan berikutnya tidak dapat dibuat",
+        "working-status": "Pembaruan progres tidak dapat dibuat",
+        "tool-loop-review": "Pemeriksaan tindakan alat berulang tidak dapat dijalankan",
+        "unavailable": "Fitur bantu tidak dapat diselesaikan",
+        "dismiss": "Tutup pemberitahuan",
+        "unavailableBody": "Model bantu sedang tidak tersedia.",
+        "recovered": "Model bantu pulih",
+        "recoveredBody": "Permintaan bantu terakhir berhasil.",
+        "details": "Detail",
+        "settings": "Pengaturan model bantu"
+      },
+      "viewSettings": "Lihat pengaturan",
+      "healthRecent": "Tingkat keberhasilan terakhir {{model}} {{rate}}% · {{status}}.",
+      "lastError": "Galat terakhir",
+      "healthPaused": "dijeda",
+      "healthMonitoring": "dipantau",
+      "healthWarning": "{{model}} gagal {{count}} kali belakangan ini ({{reason}}).",
+      "healthIsolated": "{{model}} dijeda sementara ({{reason}}). {{switched}}",
+      "healthSwitched": "Model cadangan sedang dipakai.",
+      "healthNoSwitch": "Tidak ada model cadangan yang menyelesaikan permintaan ini.",
+      "healthRecovered": "Model bantu {{model}} sudah pulih.",
+      "cannotEnable": "Model ini tidak dapat diaktifkan",
+      "failedKeep": "Penyimpanan gagal. Pengaturan sebelumnya masih aktif.",
+      "failedAuto": "Gagal menyimpan. Pemilihan otomatis masih aktif.",
+      "failedSlot": "{{slot}} · {{model}} gagal dalam ujinya",
+      "testingHint": "Model yang dipilih diuji satu per satu. Perubahan berlaku setelah semua model lulus.",
+      "draft": "Perubahan belum disimpan",
+      "restored": "Pemilihan otomatis dipulihkan",
+      "restoring": "Memulihkan pemilihan otomatis…",
+      "retryAction": "Coba simpan lagi",
+      "attempts": "{{failed}} dari {{total}} percobaan terakhir gagal.",
+      "http": {
+        "401": "Autentikasi gagal",
+        "403": "Akses ditolak",
+        "404": "Sumber daya yang diminta tidak ditemukan",
+        "429": "Permintaan dibatasi",
+        "server": "Galat layanan penyedia",
+        "other": "Permintaan gagal"
+      },
+      "healthReasons": {
+        "http_error": "galat permintaan hulu",
+        "timeout": "Permintaan habis waktu",
+        "request_failed": "permintaan gagal",
+        "empty_response": "respons kosong",
+        "model_unavailable": "Model tidak tersedia",
+        "not_authenticated": "Belum terautentikasi",
+        "auth_probe_failed": "pemeriksaan autentikasi gagal",
+        "api_key_missing": "Kunci API tidak ada",
+        "endpoint_missing": "endpoint tidak ada",
+        "unsupported_transport": "protokol tidak didukung",
+        "agent_unavailable": "Agent tidak tersedia",
+        "permission_denied": "Penyedia menolak akses (403). Periksa apakah akunmu bisa memakai model ini.",
+        "quota": "Periksa saldo atau kuotamu di penyedia."
+      },
       "chain": {
         "cindyHy3": "Hy3",
         "cindyDeepseekV4Flash": "DeepSeek v4 Flash",
@@ -5426,6 +5646,41 @@
         "hint": "Nilai lebih rendah membuat kompresi lebih awal dan menyisakan lebih banyak ruang untuk balasan; nilai lebih tinggi membuat kompresi lebih lambat. Perubahan berlaku ketika tugas Pi berikutnya dijalankan.",
         "sliderAria": "Sesuaikan ambang pemicu kompresi otomatis Pi"
       }
+    },
+    "personalization": {
+      "title": "Personalisasi",
+      "subtitle": "Prompt kustom",
+      "description": "Beri asistenmu instruksi dan konteks tambahan.",
+      "placeholder": "Masukkan instruksi kustom di sini; isinya ditambahkan ke akhir system prompt Claude / Codex.\n\n· Hanya berlaku untuk sesi Agent bawaan {{appName}}; sesi yang sudah ada mempertahankan snapshot ketika dimulai, dan perubahan baru berlaku pada sesi baru berikutnya.\n· Agar berlaku wajib untuk semua sesi Claude Code (termasuk yang dijalankan langsung dari terminal dan IDE lain): konfigurasikan hook SessionStart di ~/.claude/settings.json (penegakan tingkat harness).\n· Codex CLI dapat memakai hook SessionStart di ~/.codex/hooks.json untuk injeksi wajib (tingkat harness, sama seperti CC); atau dimuat otomatis lewat ~/.codex/AGENTS.md (panduan lunak, model bisa mengabaikannya).",
+      "ariaLabel": "Instruksi kustom",
+      "save": "Simpan",
+      "overLimit": " — melebihi batas panjang",
+      "toast": {
+        "saved": "Instruksi kustom tersimpan"
+      }
+    },
+    "chipMetrics": {
+      "title": "Indikator penggunaan",
+      "description": "Pilih metrik yang tampil langsung di chip kanan bawah. Metrik yang tidak dipilih tetap tampil di tooltip ketika kursor diarahkan.",
+      "toggleAria": "Alihkan {{metric}} di chip",
+      "metrics": {
+        "daily": {
+          "label": "Harian — akumulasi hari ini lintas klien / batas lunak",
+          "hint": "Akumulasi hari ini di semua klien vs anggaran bulanan ÷ 30 × 4,5 batas lunak (rumus sama dengan dasbor web)"
+        },
+        "monthly": {
+          "label": "Bulanan — akumulasi siklus ini / anggaran bulanan",
+          "hint": "Akumulasi bulanan lintas klien sisi server LiteLLM vs max_budget"
+        },
+        "session": {
+          "label": "Sesi — total sesi ini",
+          "hint": "Total biaya (USD) sesi ini, tetap terakumulasi sesudah sesi dilanjutkan"
+        }
+      }
+    },
+    "compatMode": {
+      "title": "Tips",
+      "description": "Beberapa sakelar fitur; sebagian baru berlaku sesudah sesi baru dibuat (lihat penjelasan tiap item)."
     },
     "terminalShell": {
       "title": "Shell terminal bawaan",
@@ -5490,41 +5745,6 @@
       "label": "Teks muncul bertahap",
       "hint": "Teks balasan baru muncul bertahap ketika aktif dan langsung tampil ketika nonaktif. Efek ini tidak dipakai jika sistem mengurangi animasi.",
       "toggleAria": "Alihkan efek teks balasan muncul bertahap"
-    },
-    "personalization": {
-      "title": "Personalisasi",
-      "subtitle": "Prompt kustom",
-      "description": "Beri asistenmu instruksi dan konteks tambahan.",
-      "placeholder": "Masukkan instruksi kustom di sini; isinya ditambahkan ke akhir system prompt Claude / Codex.\n\n· Hanya berlaku untuk sesi Agent bawaan {{appName}}; sesi yang sudah ada mempertahankan snapshot ketika dimulai, dan perubahan baru berlaku pada sesi baru berikutnya.\n· Agar berlaku wajib untuk semua sesi Claude Code (termasuk yang dijalankan langsung dari terminal dan IDE lain): konfigurasikan hook SessionStart di ~/.claude/settings.json (penegakan tingkat harness).\n· Codex CLI dapat memakai hook SessionStart di ~/.codex/hooks.json untuk injeksi wajib (tingkat harness, sama seperti CC); atau dimuat otomatis lewat ~/.codex/AGENTS.md (panduan lunak, model bisa mengabaikannya).",
-      "ariaLabel": "Instruksi kustom",
-      "save": "Simpan",
-      "overLimit": " — melebihi batas panjang",
-      "toast": {
-        "saved": "Instruksi kustom tersimpan"
-      }
-    },
-    "chipMetrics": {
-      "title": "Indikator penggunaan",
-      "description": "Pilih metrik yang tampil langsung di chip kanan bawah. Metrik yang tidak dipilih tetap tampil di tooltip ketika kursor diarahkan.",
-      "toggleAria": "Alihkan {{metric}} di chip",
-      "metrics": {
-        "daily": {
-          "label": "Harian — akumulasi hari ini lintas klien / batas lunak",
-          "hint": "Akumulasi hari ini di semua klien vs anggaran bulanan ÷ 30 × 4,5 batas lunak (rumus sama dengan dasbor web)"
-        },
-        "monthly": {
-          "label": "Bulanan — akumulasi siklus ini / anggaran bulanan",
-          "hint": "Akumulasi bulanan lintas klien sisi server LiteLLM vs max_budget"
-        },
-        "session": {
-          "label": "Sesi — total sesi ini",
-          "hint": "Total biaya (USD) sesi ini, tetap terakumulasi sesudah sesi dilanjutkan"
-        }
-      }
-    },
-    "compatMode": {
-      "title": "Tips",
-      "description": "Beberapa sakelar fitur; sebagian baru berlaku sesudah sesi baru dibuat (lihat penjelasan tiap item)."
     },
     "chatEmbedding": {
       "cell": {
@@ -5732,6 +5952,7 @@
         "description": "Browser khusus untuk Agent, terpisah dari Chrome yang kamu pakai sehari-hari",
         "toggleAria": "Alihkan otomasi browser",
         "toggleHint": "Hanya berlaku untuk sesi Agent baru",
+        "userDefaultToggleHint": "Mengubah default Browser akan menyegarkan Codex lokal secara otomatis saat sedang menganggur. Tugas dan riwayat obrolanmu tetap. Codex memuat ulang semua pengaturan alat bawaan, dengan penggantian tingkat proyek sebagai prioritas. Pi dan Agent lain memakai default Browser saat mulai atau dimulai ulang berikutnya.",
         "noProjectHint": "Buka Pengaturan dari sesi proyek untuk mengaktifkan atau menonaktifkan otomasi browser bagi proyek itu.",
         "detected": "Terdeteksi {{browser}}",
         "notDetected": "Browser lokal tidak terdeteksi. Pasang Chrome untuk memakai otomasi browser.",
@@ -6480,6 +6701,20 @@
         "ssh": "Host jarak jauh SSH",
         "hook": "Bot Cindy IM"
       },
+      "cloudComputer": {
+        "title": "Komputer cloud",
+        "hint": {
+          "addCloud": "Siapkan komputer cloud dengan Cindy terpasang. Setelah siap, komputer muncul di daftar perangkatmu.",
+          "preparingCloud": "Komputer cloud-mu sedang disiapkan. Akan muncul di daftar perangkat setelah siap.",
+          "manageCloud": "Mulai, hentikan, perpanjang, pasang ulang, dan hapus di web."
+        },
+        "actions": {
+          "addCloud": "Tambah komputer cloud",
+          "preparingCloud": "Lihat progres",
+          "manageCloud": "Kelola komputer cloud"
+        },
+        "openFailed": "Halaman komputer cloud tidak dapat dibuka. Periksa pengaturan browser default-mu."
+      },
       "hook": {
         "description": "Hubungkan Slack, Telegram, Feishu / Lark, dan kanal lain ke Cindy yang sama: semua pesan dikirim ke perangkat ini dan memakai daftar proyek serta penjalan tugas di sini; model dan izin tiap proyek dipakai bersama semua kanal, sedangkan tautan akun disimpan terpisah per kanal.",
         "slackDescription": "Hubungkan Slack workspace dan kirim tugas ke Cindy dari Slack.",
@@ -6662,6 +6897,7 @@
           "guide": {
             "usageLabel": "Cara pakai",
             "usageBody": "Kirim postingan di X yang menyebut @askmycindy, lalu tugas dikirim ke perangkat ini dan dijalankan di sini; hasilnya kembali sebagai balasan.",
+            "usageBodyOnDevice": "Kirim pos di X dengan menyebut @askmycindy, lalu tugas dikirim ke {{device}} untuk dijalankan di sana; hasilnya kembali sebagai balasan.",
             "riskLabel": "Balasan bersifat publik",
             "riskPublicBody": "Balasan adalah postingan publik yang bisa dilihat siapa saja. Cocok untuk pertanyaan dan masalah publik; tidak cocok untuk urusan pribadi agar privasi tidak terbuka.",
             "riskWorkdirBody": "Semua tugas X berjalan di proyek default pada pengaturan koneksi X. Agent bisa membaca dan menulis berkas di sana, dan kesimpulannya diposting publik — jika proyek default menunjuk repo privat, isi berkas bisa ikut terbuka.",
@@ -6750,6 +6986,40 @@
           "workingDeviceThisComputer": "Komputer ini",
           "workingDeviceUnknown": "Komputer kerja belum disinkronkan",
           "workingDeviceUnnamed": "Komputer tanpa nama"
+        },
+        "discord": {
+          "description": "Tautkan akun Discord-mu dan kirim tugas ke Cindy lewat bot resmi, di pesan langsung atau server.",
+          "disabledHint": "Aktifkan sakelar untuk mendapat kode tautan, lalu kirim ke bot Cindy di Discord.",
+          "toggleAria": "Aktifkan atau matikan koneksi Discord",
+          "connect": "Tautkan Discord",
+          "openApp": "Tambahkan Cindy ke Discord",
+          "cancel": "Batalkan Penautan",
+          "retry": "Coba Tautkan Lagi",
+          "openBot": "Buka Bot",
+          "addToGroup": "Tambahkan ke Server",
+          "unlink": "Putuskan Discord",
+          "unlinkConfirmTitle": "Putuskan Discord?",
+          "unlinkConfirmDescription": "Discord tidak lagi mengirim pesan ke perangkat ini. Proyek lokal dan kanal lainmu tidak terpengaruh.",
+          "status": {
+            "checking": "Memeriksa dukungan server…",
+            "unavailable": "Tidak tersedia di server ini",
+            "disabled": "Nonaktif",
+            "none": "Belum tertaut",
+            "pending": "Kirim kode tautan ke bot Cindy",
+            "awaiting_confirmation": "Konfirmasi tautan di Discord",
+            "confirmed": "Tertaut sebagai {{user}}",
+            "denied": "Penautan ditolak",
+            "expired": "Kode tautan kedaluwarsa",
+            "failed": "Penautan gagal",
+            "revoked": "Tautan dihapus",
+            "superseded": "Tertaut ke perangkat lain"
+          },
+          "bindCode": {
+            "label": "Kode tautan",
+            "copy": "Salin kode",
+            "copied": "Kode tautan disalin",
+            "hint": "Kirim kode ini ke bot Cindy lewat pesan langsung Discord, atau jalankan /bind dengannya di Discord. Belum menambahkan Cindy? Tambahkan dulu ke Discord."
+          }
         }
       },
       "summary": {
@@ -6982,6 +7252,7 @@
         "providerTelegram": "Telegram",
         "providerX": "X",
         "providerFeishu": "Feishu / Lark",
+        "providerDiscord": "Discord",
         "requireConnected": "Bisa diubah setelah {{provider}} terhubung (aktifkan dulu sakelarnya di atas dan tunggu koneksi berhasil).",
         "offlineLocal": "{{provider}} sementara tidak bisa dihubungi; perubahan disimpan di komputer ini dan disinkronkan ke kartu model di obrolan setelah tersambung.",
         "requireBinding": "Selesaikan dulu penautan akun {{provider}} agar bisa diedit.",
@@ -7068,6 +7339,22 @@
       },
       "control": "Kontrol",
       "standbyHint": "Instans Cindy lain di komputer ini sedang memakai koneksi jarak jauh. Tutup instans itu, dan instans ini akan mengambil alih otomatis.",
+      "identityConflict": {
+        "notice": "Komputer ini dan “{{name}}” dikenali sebagai komputer yang sama, jadi keduanya saling mendorong keluar dari koneksi jarak jauh dan bisa keluar dari sesi. Memberi salah satunya identitas baru akan memperbaikinya.",
+        "replace": "Beri komputer ini identitas baru",
+        "blockedSelfHostedRelay": "Komputer ini memakai relay-mu sendiri, jadi belum bisa mendapat identitas baru sekarang. Kembali ke relay Cindy, lalu ubah di sini.",
+        "confirmTitle": "Beri komputer ini identitas baru?",
+        "confirmRestart": "Cindy langsung dimulai ulang, dan tugas yang sedang berjalan terputus.",
+        "confirmNewDevice": "Setelah mulai ulang, masuk sekali lagi. Komputer ini lalu muncul sebagai komputer baru di daftar perangkat.",
+        "confirmKeptByOther": "Pengaturan yang tersimpan di identitas lama, seperti nama perangkat, komputer utama buddy-mu, dan penyedia bersama, tetap di “{{name}}”. Atur ulang di komputer ini.",
+        "confirmOtherUnaffected": "“{{name}}” tetap seperti sekarang. Tidak ada yang perlu dilakukan di komputer itu.",
+        "confirmAction": "Ubah identitas dan mulai ulang Cindy",
+        "failed": "Komputer ini tidak dapat diberi identitas baru",
+        "toastTitle": "Komputer ini dan “{{name}}” dikenali sebagai komputer yang sama",
+        "toastBody": "Keduanya saling mendorong keluar dari koneksi jarak jauh dan bisa keluar dari sesi. Memberi salah satunya identitas baru akan memperbaikinya.",
+        "toastAction": "Buka Tautan Perangkat",
+        "toastDismiss": "Nanti saja"
+      },
       "apps": {
         "cindy": "Cindy",
         "cindyFriend": "Cindy Friend"
@@ -7942,6 +8229,11 @@
         "installedExpand": "Tampilkan semua {{count}} Plugin terpasang",
         "installedCollapse": "Sembunyikan Plugin terpasang lainnya",
         "recommendedSection": "Disarankan",
+        "allPlugins": "Semua plugin",
+        "searchResults": "Hasil pencarian",
+        "marketSort": {
+          "label": "Urutkan"
+        },
         "todayRecommendations": "Pilihan hari ini",
         "marketSection": "Marketplace Plugin",
         "browseMarket": "Jelajahi marketplace Plugin",
@@ -7979,6 +8271,7 @@
           "official": "Resmi",
           "community": "Komunitas"
         },
+        "communityDisclaimer": "Pengembang komunitas membuat dan merawat plugin ini. Cindy sudah meninjau versi ini, tetapi tidak bisa menjamin keamanannya di semua situasi.",
         "publisherDescription": {
           "official": "Diterbitkan dan dikelola oleh Cindy",
           "community": "Diterbitkan dan dikelola oleh pengembang komunitas",
@@ -8206,6 +8499,8 @@
         "installMeta": "Versi {{version}} · {{source}}",
         "updateMeta": "Versi {{from}} → {{to}} · {{source}}",
         "installDescription": "Pemasangan baru dilakukan setelah kamu konfirmasi, dan setelah terpasang langsung aktif; bisa dinonaktifkan atau dicopot kapan saja di halaman Plugin.",
+        "customMarketSourceNotice": "Pastikan kamu memercayai marketplace ini dan tinjau izin yang diminta plugin.",
+        "localFileSourceNotice": "Pastikan berkas ini berasal dari sumber yang kamu percayai sebelum memasang.",
         "updateDescription": "Pembaruan baru dimulai setelah kamu konfirmasi; sampai saat itu versi lama tetap bisa dipakai.",
         "grantsTitle": "Setelah dipasang, Plugin akan punya:",
         "noPermissions": "Plugin ini tidak mendeklarasikan izin tambahan.",
@@ -8410,6 +8705,8 @@
         "badgeDetail": "Bila ada konten baru, ia bisa menyalakan titik hijau di entri Plugin pada navigasi kiri dan di kartunya sendiri, disertai ringkasan satu baris; membuka panelnya menghapus titik itu. Titik hijau tidak berbunyi, tidak bergetar, tidak masuk pusat notifikasi sistem, dan merupakan izin terpisah dari tips sistem di atas.",
         "confirm": "Bisa memunculkan dialog konfirmasi untuk meminta persetujuanmu",
         "confirmDetail": "Sebelum bertindak, ia bisa memunculkan dialog seperti milik Cindy untuk bertanya; pertanyaannya disediakan Plugin dan dialognya diberi label namanya; setuju atau batal hanya bisa kamu klik sendiri, Plugin tidak bisa. Paling banyak satu dialog pada satu waktu, dan pertanyaan yang terlalu sering akan diblokir.",
+        "form": "Dapat meminta kamu mengisi formulir",
+        "formDetail": "Dapat membuka formulir yang tampak seperti milik Cindy dan meminta kamu mengisinya. Formulir diberi label nama plugin; isianmu baru sampai ke plugin setelah kamu menekan Simpan, dan tidak ada yang dikirim jika kamu membatalkan. Formulir hanya terbuka saat kamu sedang melihat Cindy, paling banyak satu sekaligus, dan permintaan yang terlalu sering diblokir.",
         "fsWrite": "Bisa mengelola berkas privatnya sendiri",
         "fsWriteDetail": "Bisa membaca, menulis, menampilkan, dan menghapus data privatnya sendiri. Selama panggilan Agent, Plugin juga bisa membaca, menampilkan, dan memantau direktori kerja tugas. Penulisan dan penghapusan mengikuti izin tugas; izin menulis bukan berarti izin menghapus. Pemantauan berhenti saat panggilan selesai. Semua operasi berkas dijalankan oleh host.",
         "deviceSync": "Menyinkronkan data Plugin antar komputermu",
@@ -8417,6 +8714,7 @@
         "libraryPersist": "Bisa memakai pustaka karya permanen (banyak berkas dan basis data)",
         "libraryPersistDetail": "Ia mendapat area penyimpanan terpisah yang dikelola Cindy untuk menyimpan data karyamu (misalnya kanvas, gambar, basis data), tanpa batas kuota data Plugin biasa. Semua operasi berkas dan basis data dijalankan host; Plugin hanya memakai path relatif di dalam pustakanya dan tidak bisa menyentuh berkas lain milikmu. Ia juga bisa meminta Cindy menampilkan berkas pustaka di folder sistem, atau memunculkan dialog Simpan sebagai milik sistem agar kamu memilih lokasi salinannya; bila dibatalkan, tidak ada berkas yang disalin keluar. Ia juga bisa menulis bitmap PNG ke clipboard sistem; tanpa dialog konfirmasi, dan ini menimpa isi clipboard saat ini. Mencopot Plugin tidak menghapus data ini; penghapusan harus dikonfirmasi terpisah di pengaturan Cindy.",
         "networkHost": "Mengakses alamat jaringan {{host}}",
+        "networkHosts": "Target jaringan",
         "networkSecret": "Butuh kredensial darimu: “{{name}}”",
         "networkSecretGhostInputDetail": "Kredensial dikumpulkan lewat antarmuka pengaturan Plugin ini sendiri, dan halaman Plugin melihat nilainya saat diisi; setelah itu nilainya diserahkan sekali ke host untuk disimpan dalam bentuk terenkripsi, dan setelah tersimpan Plugin tidak bisa membacanya kembali—host hanya menyuntikkannya saat domain yang dideklarasikannya diminta.",
         "networkSecretIdentity": "Akan memakai email login kamu sebagai kredensial “{{name}}”",
@@ -8446,6 +8744,8 @@
         "liveScreenDetail": "Lewat desktop jarak jauh, ponsel atau komputer lainmu dapat menampilkan layar perangkat yang disediakan Plugin ini (misalnya emulator) dan langsung mengirim sentuhan, tombol, dan teks. Koneksi hanya dibuka saat kamu membukanya dari perangkat tersebut, dan tidak menampilkan hal lain di komputer ini.",
         "preview": "Dapat membuka halaman pratinjau dari situs berikut di browser sidebar",
         "previewDetail": "Hanya situs yang tercantum di bawah yang dapat dibuka; setiap halaman yang dibuka mencantumkan Plugin mana yang membukanya.",
+        "fileOpener": "Dapat membuka jenis berkas di bawah saat kamu membukanya dari Cindy",
+        "fileOpenerDetail": "Plugin menerima jalur lengkap berkas dan membukanya menggantikan aplikasi default-mu; jika gagal, aplikasi default yang membuka. Kamu bisa mematikannya di detail plugin.",
         "browserExtension": "Memungkinkan ekstensi browser bawaannya terhubung ke Cindy",
         "browserNativeHost": "Dapat mendaftarkan koneksi browser “{{name}}”",
         "browserNativeHostDetail": "Program yang didaftarkan berjalan di luar sandbox. Akses lokalnya mengikuti akun pengguna dan izin sistemmu.",
@@ -8521,6 +8821,7 @@
             "message_body": "isi pesan",
             "tool_body": "hasil tool",
             "sidebar_navigation": "navigasi sidebar",
+            "workdir_menu": "menu direktori kerja",
             "session_menu": "menu tugas",
             "settings_section": "halaman pengaturan",
             "composer_completion": "pelengkapan input",
@@ -8620,6 +8921,8 @@
         "dangerTitle": "Copot Plugin",
         "infoContents": "Berisi",
         "infoVersion": "Versi",
+        "infoPackageSize": "Ukuran paket",
+        "infoPackageSizeWithVersion": "{{size}} ({{version}})",
         "updateTitle": "Perbarui versi",
         "updateDesc": "Pilih berkas .cindy baru untuk menggantikan versi terpasang di tempat; status aktif dan posisi panel tetap sama.",
         "errandPrefs": {
@@ -8642,11 +8945,25 @@
           "restoreModel": "Kembalikan model bawaan"
         },
         "toolsTitle": "Alat",
+        "toolCount_other": "{{count}} alat",
         "permissionsTitle": "Izin",
         "infoDescription": "Deskripsi",
         "customSlotAsleep": "Plugin ini dinonaktifkan. Aktifkan untuk melihat antarmuka pengaturannya di sini.",
         "descriptionExpand": "Bentangkan",
         "descriptionCollapse": "Ciutkan",
+        "recentUpdates": "Pembaruan terbaru",
+        "olderUpdates": "Pembaruan sebelumnya",
+        "collapseOlderUpdates": "Sembunyikan pembaruan sebelumnya",
+        "includesHighRisk": "Risiko tinggi",
+        "heroDownloads": "Total unduhan",
+        "heroUsage": "Total pemakaian",
+        "heroWeeklyUsage": "Pemakaian 7 hari terakhir",
+        "heroWeeklyUsageExplanation": "Panggilan alat dalam 7 hari terakhir di semua rilis pada audiens yang diizinkan.",
+        "heroInstalledVersion": "Versi terpasang",
+        "heroListedVersion": "Versi terbit",
+        "heroLatestUpdate": "Terakhir diperbarui",
+        "morePlugins": "Plugin lainnya",
+        "morePluginsHint": "Dipilih secara acak. Ini tidak mencerminkan preferensi Cindy.",
         "readmeTitle": "Tentang",
         "useAction": "Pakai",
         "chatAction": "Obrolan",
@@ -8685,14 +9002,18 @@
         "portReclaimMessage": "“{{name}}” memerlukan port {{port}}. Akhiri program berikut?",
         "portReclaimDetail": "Mengakhirinya dapat mengganggu pekerjaannya atau menghilangkan data yang belum disimpan. Batalkan dan tutup sendiri programnya jika tidak ingin melanjutkan.",
         "configurationTitle": "Konfigurasi",
+        "recordTitle": "Informasi plugin",
         "sidebarEntryTitle": "Entri navigasi",
         "showInSidebar": "Tampilkan di navigasi kiri",
+        "fileOpenerTitle": "Buka Berkas dengan Plugin Ini",
+        "fileOpenerDescription": "Saat kamu membuka berkas {{extensions}} dari Cindy, {{name}} yang membukanya, bukan aplikasi default-mu. Berkas dari komputer lain tetap dibuka dengan aplikasi default.",
         "sidebarEntryDescription": "Setelah diaktifkan, “{{title}}” muncul di navigasi kiri bersama “Otomasi” dan “Plugin”, di lapisan teratas atau di dalam “Lainnya” — atur tempatnya di “Lainnya → Disesuaikan”. Menyembunyikan entri tidak menonaktifkan Plugin.",
         "openTool": "Lihat detail Tool {{name}}",
         "noToolDescription": "Belum ada deskripsi untuk Tool ini.",
         "viewAllTools": "Lihat semua",
         "collapseTools": "Ciutkan tool",
         "viewAllPermissions": "Lihat semua",
+        "remainingPermissions": "Tampilkan {{count}} lagi",
         "permissionsDialogDescription": "Semua {{count}} izin yang diminta Plugin ini",
         "closeDialog": "Tutup dialog",
         "resetPlacement": "Pulihkan posisi bawaan"
@@ -8712,6 +9033,8 @@
         "slotNetwork": "Akses jaringan",
         "slotNotify": "Tips sistem",
         "slotBadge": "Lencana belum dibaca",
+        "slotConfirm": "Dialog konfirmasi",
+        "slotForm": "Dialog formulir",
         "slotFs": "Penulisan berkas",
         "slotLibrary": "Pustaka karya persisten",
         "slotSkill": "Skill Agent",
@@ -8832,6 +9155,17 @@
         "dialogTitle": "Plugin “{{name}}” — Simpan sebagai",
         "dialogMessage": "Plugin “{{name}}” meminta kamu menyimpan salinan"
       },
+      "form": {
+        "save": "Simpan",
+        "cancel": "Batal",
+        "addItem": "Tambah",
+        "removeItem": "Hapus",
+        "removeNamed": "Hapus {{name}}",
+        "required": "Kolom ini wajib diisi",
+        "incomplete": "Beberapa kolom wajib masih kosong",
+        "itemTitle": "{{label}} {{index}}",
+        "srDescription": "Plugin “{{name}}” meminta kamu mengisi formulir ini"
+      },
       "confirm": {
         "dialogTitle": "Plugin “{{name}}” meminta konfirmasimu"
       },
@@ -8947,10 +9281,12 @@
         "taskWorkdirBoundary": "Direktori kerja mengikuti pengaturan komputer tujuan; ubah di komputer tujuan.",
         "configurationLoading": "Memuat pengaturan…",
         "configurationReadFailed": "Tidak dapat memuat pengaturan.",
+        "settingsWriteUnconfirmed": "Hasil penyimpanan tidak dapat dipastikan. Segarkan pengaturan untuk memeriksa sebelum mencoba lagi.",
         "refreshConfiguration": "Muat ulang pengaturan",
         "enableBeforeConfigure": "Plugin ini nonaktif. Aktifkan lewat sakelar di atas sebelum mengonfigurasi.",
         "settingsPageUnavailable": "Buka Cindy di {{device}} untuk memakai halaman pengaturan Plugin ini. Versi di komputer tujuan saat ini belum bisa menampilkannya dari jarak jauh.",
         "offlineNotice": "“{{device}}” sedang offline. Pengelolaan tidak tersedia sampai koneksi pulih.",
+        "publishOnTarget": "Terbitkan plugin di Cindy pada {{device}}, atau perbarui Cindy di komputer itu untuk menerbitkan dari jarak jauh.",
         "managingTarget": "Mengelola “{{device}}”",
         "managingDescription": "Perubahan disimpan di komputer ini.",
         "viewingTarget": "Plugin terpasang di “{{device}}”",
@@ -8996,6 +9332,7 @@
         "anonymousUnavailable": "Pengaturan penulis sementara tidak tersedia",
         "anonymousUpdateFailed": "Tidak dapat memastikan pengaturan anonim sudah tersimpan. Muat ulang lalu coba lagi.",
         "myPlugins": "Publikasikan Plugin",
+        "backToPublish": "Kembali ke Terbitkan Plugin",
         "publish": "Kirim untuk ditinjau",
         "submitUpdate": "Kirim Versi Baru untuk Ditinjau",
         "publishHint": "Hanya untuk Plugin yang berhak kamu publikasikan; setelah lolos tinjauan, Plugin tayang di komunitas.",
@@ -9035,6 +9372,7 @@
         "publishedContentUnavailable": "Deskripsi dan catatan rilis versi yang tayang saat ini sementara tidak tersedia.",
         "currentSubmission": "Pengajuan saat ini",
         "localState": {
+          "installed": "Lokal {{version}}",
           "missing": "Belum terpasang di komputer ini",
           "unavailable": "Versi lokal sementara tidak tersedia"
         },
@@ -9065,9 +9403,12 @@
           "cancelled": "Dibatalkan"
         },
         "reason": "Alasan",
+        "rejectionReason": "Alasan penolakan",
+        "rejectionReasonLine": "<reasonLabel>Alasan penolakan:</reasonLabel> <reasonText />",
         "submittedContent": "Konten yang dikirim",
         "snapshotUnavailable": "Konten asli tidak tersimpan atau sudah tidak dapat diverifikasi.",
         "history": "Riwayat publikasi",
+        "marketChanges": "Perubahan daftar",
         "loadMore": "Muat lebih banyak",
         "loadMoreHistory": "Muat lebih banyak riwayat",
         "releaseId": "Release ID",
@@ -9164,6 +9505,8 @@
         "notApproved": "Belum disetujui",
         "timeUnavailable": "Tidak tercatat",
         "releaseNotes": "Catatan rilis",
+        "expandReleaseNotes": "Tampilkan semua",
+        "noReleaseNotes": "Tidak ada catatan rilis.",
         "versionUpdates": "Versi dan pembaruan",
         "versionManagement": "Kelola versi",
         "versionContent": "Konten versi",
@@ -9180,7 +9523,6 @@
         "cancelled": "Dibatalkan",
         "cancelReviewCompleted": "Tinjauan ini dibatalkan. Versi yang sedang tayang tidak terpengaruh.",
         "cancelReviewAlreadyFinal": "Tinjauan sudah selesai, jadi tidak dibatalkan. Hasil sebenarnya ditampilkan di bawah.",
-        "viewPendingVersion": "Lihat versi yang sedang ditinjau",
         "submitFailed": "Pengajuan gagal",
         "viewDetails": "Lihat detail"
       },
@@ -9745,6 +10087,18 @@
       "title": "Pembaruan otomatis gagal",
       "description": "Program pembaruan tidak dapat dijalankan, mungkin diblokir kebijakan keamanan sistem. Unduh paket instalasi terbaru secara manual untuk menyelesaikan pembaruan.",
       "confirm": "Buka unduhan"
+    },
+    "workspaceMigration": {
+      "title": "Memindahkan ruang kerja buddy",
+      "progressLabel": "Progres migrasi ruang kerja buddy",
+      "safetyHint": "Menyalin dan memverifikasi berkas sebelum beralih. Biarkan Cindy terbuka sampai selesai.",
+      "phase": {
+        "preparing": "Menyiapkan ruang kerja",
+        "copying": "Menyalin berkas",
+        "verifying": "Memverifikasi berkas",
+        "switching": "Beralih lokasi",
+        "cleaning": "Membersihkan cadangan"
+      }
     }
   },
   "welcome": {
@@ -11076,6 +11430,69 @@
           "routines": "Rutinitas yang perlu diperiksa",
           "upgrade": "Tidak terbawa otomatis saat upgrade"
         }
+      },
+      "workspaceLocation": {
+        "title": "Lokasi ruang kerja",
+        "description": "Pindahkan ruang kerja buddy ini ke disk lokal lain untuk mengosongkan ruang disk sistem. Cindy tetap menautkan jalur asli agar tugas, otomasi, dan skrip yang ada terus berjalan.",
+        "movedDescription": "Tugas dan skrip yang ada tetap memakai jalur asli.",
+        "chooseDialogTitle": "Pilih folder tujuan untuk ruang kerja buddy",
+        "fullPath": "Jalur lengkap",
+        "targetPathLabel": "Folder tujuan",
+        "currentPathLabel": "Folder saat ini",
+        "defaultPathLabel": "Folder tujuan (default)",
+        "logicalPathLabel": "Jalur tertaut asli",
+        "copyPath": "Salin jalur",
+        "pathCopied": "Jalur disalin",
+        "pathCopyFailed": "Jalur tidak dapat disalin",
+        "openTarget": "Buka folder",
+        "moveAction": "Pindahkan ruang kerja",
+        "moveBackAction": "Kembali ke default",
+        "chooseAnother": "Pilih folder lain",
+        "restartNow": "Mulai ulang sekarang",
+        "restartAndMove": "Mulai ulang dan pindahkan",
+        "scheduleNextRestart": "Pindahkan saat mulai ulang berikutnya",
+        "cancel": "Batal",
+        "dismissFailed": "Tutup",
+        "scheduledToast": "Pemindahan ruang kerja dijadwalkan saat mulai ulang berikutnya",
+        "cancelledToast": "Pemindahan ruang kerja dibatalkan",
+        "previewTitle": "Siap memindahkan ruang kerja",
+        "previewSummary": "Ukuran berkas: {{size}}",
+        "previewNotice": "Tutup aplikasi atau skrip yang memakai ruang kerja ini sebelum memulai ulang.",
+        "previewClaudeSkillsNotice": "Jika ruang kerja tidak punya repositori Git sendiri, Claude Code mungkin menemukan Skill di folder induk pada lokasi baru. Untuk menghindarinya, pilih lokasi yang folder induknya tidak berisi Skill Claude Code.",
+        "pendingHint": "Tutup program eksternal yang memakai ruang kerja ini, lalu mulai ulang Cindy untuk memulai pemindahan.",
+        "unavailableTitle": "Ruang kerja yang dipindahkan tidak tersedia",
+        "unavailableDescription": "Cindy tidak dapat menjangkau {{target}}. Sambungkan lagi drive-nya atau pulihkan foldernya; Cindy tidak akan membuat folder kosong menimpanya.",
+        "errorTitle": "Ruang kerja tidak dapat dipindahkan",
+        "failedTitle": "Pemindahan ruang kerja sebelumnya gagal",
+        "interruptedTitle": "Pemindahan ruang kerja perlu dipulihkan",
+        "backupRemainingHint": "Cadangan asli disimpan untuk ditinjau di: {{backup}}",
+        "personalPreviewHint": "Tutup instans pratinjau pribadi dan jalankan build Cindy utama untuk menjadwalkan atau menjalankan pemindahan ruang kerja.",
+        "status": {
+          "default": "Default",
+          "pending": "Menunggu mulai ulang",
+          "moved": "Dipindahkan",
+          "failed": "Gagal",
+          "interrupted": "Perlu dipulihkan",
+          "unavailable": "Tidak tersedia"
+        },
+        "warnings": {
+          "waitingExclusive": "Menunggu proses mulai eksklusif. Tutup instans Cindy lain yang memakai profil ini, lalu mulai ulang Cindy untuk menjalankan pemindahan.",
+          "receiptUpdateFailed": "Ruang kerja bisa dipakai, tetapi pembaruan catatan migrasi gagal dan akan dicoba lagi saat mulai ulang berikutnya."
+        },
+        "errors": {
+          "insufficientSpace": "Disk tujuan tidak punya cukup ruang kosong untuk ruang kerja ini.",
+          "overlapsCindyData": "Pilih folder di luar direktori data Cindy sendiri dan di luar ruang kerja saat ini.",
+          "localDiskRequired": "Pilih folder di disk lokal, bukan berbagi jaringan.",
+          "unsupportedFileOrHardLink": "Ruang kerja ini berisi hard link atau berkas khusus yang belum bisa dipindahkan dengan aman sekarang.",
+          "alreadyRedirected": "Cindy tidak mengenali tautan di lokasi ruang kerja ini. Biarkan tautan dan berkasnya apa adanya.",
+          "botHomeRedirected": "Folder home buddy ini dialihkan secara manual, jadi Cindy tidak bisa memindahkan ruang kerjanya otomatis.",
+          "targetExists": "Folder tujuan sudah ada. Pilih lokasi lain.",
+          "workspaceChanged": "Berkas di ruang kerja berubah selama verifikasi. Tutup program eksternal yang memakainya lalu coba lagi.",
+          "backupRetained": "Pemindahan berhasil, tetapi cadangan berbeda dan disimpan agar tidak ada yang hilang.",
+          "backupCleanupIncomplete": "Pemindahan berhasil, tetapi pembersihan cadangan sementara belum selesai; Cindy akan mencoba lagi saat mulai ulang berikutnya.",
+          "cutoverInterrupted": "Peralihan sebelumnya terputus dan Cindy memulihkan ruang kerja asli. Pilih folder kosong baru untuk mencoba lagi.",
+          "generic": "Permintaan pemindahan ruang kerja tidak dapat diselesaikan. Coba lagi."
+        }
       }
     },
     "profile": {
@@ -12020,7 +12437,8 @@
         "dissolved": "Grup ini sudah dibubarkan. Riwayat yang boleh kamu akses masih bisa dibaca.",
         "failed": "Tindakan belum selesai. Coba lagi.",
         "lastOwner": "Alihkan kepemilikan atau bubarkan grup ini sebelum keluar."
-      }
+      },
+      "externalBadge": "Eksternal"
     },
     "joined": {
       "today": "Bergabung hari ini",
@@ -12039,7 +12457,7 @@
     },
     "welcome": {
       "generic": "Hai, ini {{name}}. Ke depannya sampaikan saja langsung apa yang kamu butuhkan; tempat ini akan dijelajahi dulu.",
-      "withRole": "Hai, ini {{name}} — {{description}}. Kalau ada yang perlu, bilang langsung saja."
+      "withUser": "Hai {{userName}}, aku {{name}}. Tinggal bilang apa yang kamu butuhkan."
     },
     "invitation": {
       "title": "Bersiap untuk bertemu",
@@ -12270,6 +12688,8 @@
       "transferBusy": "{{name}} masih membalas. Pindahkan setelah giliran ini selesai",
       "targetUnavailable": "“{{device}}” sedang tidak tersedia; perangkat itu harus online dan menyalakan kontrol jarak jauh",
       "targetOutdated": "Cindy di “{{device}}” versinya lebih lama dan belum bisa menjalankan {{name}}. Perbarui Cindy di komputer itu dulu",
+      "skillTargetOutdated": "Skill di {{name}} punya isi lebih dari 64 KB, yang tidak bisa diterima Cindy versi lama di “{{device}}”. Perbarui Cindy di komputer itu sebelum memindahkan buddy-mu. Buddy-mu tetap di komputer asal",
+      "skillTargetOutdated_skill": "Cindy versi lama di “{{device}}” tidak bisa menerima Skill “{{slug}}”. Isinya {{bodyBytes, number}} byte, melewati batas 64 KB. {{name}} masih berjalan di komputer asal. Perbarui Cindy di komputer tujuan lalu coba lagi.",
       "targetOutdatedItem": "Pindah ke “{{device}}” · Cindy versi lama",
       "targetOutdatedMeta": "Cindy versi lama",
       "olderTargetNote": "Di “{{device}}” ada Cindy versi lama, jadi {{name}} berjalan dengan cara lama di sana: riwayat obrolan tetap tersinkron, tetapi aturan proyek dan otomasi tidak berlaku di sana.",
@@ -12292,6 +12712,12 @@
       "arrivingLater": "{{name}} sudah dipindahkan ke komputer ini dan masih disiapkan; nanti akan muncul di daftar Rekan",
       "arrivalPermissions": "{{name}} sekarang berjalan dengan izin bawaan komputer ini.",
       "arrivalModel": "Model pilihan {{name}} sebelumnya tidak tersedia di komputer ini, jadi diganti dengan model bawaan komputer ini.",
+      "arrivalModelSetup": "{{name}} ada di komputer ini, tetapi belum ada model yang tersedia. Hubungkan penyedia model atau pilih model di pengaturan buddy ini pada Model.",
+      "arrivalPartialContent": "{{name}} sekarang berjalan di komputer ini, meski beberapa item tersinkron tidak dapat dipulihkan. Salinan cloud-nya tetap utuh.",
+      "missingProfileTitle": "Mulai {{name}} dengan profil default?",
+      "missingProfileDescription": "Komputer utama asal belum mengunggah persona atau deskripsi {{name}}. Jika komputer itu dipasang ulang atau tidak bisa dipulihkan, kamu bisa melanjutkan di sini dengan profil default sambil mempertahankan percakapan dan konten yang tersinkron.",
+      "missingProfileConfirm": "Lanjutkan dengan profil default",
+      "missingProfileFailed": "{{name}} belum mengunggah profilnya ke cloud",
       "busyTitle": "{{name}} masih membalas",
       "busyDescription": "Bisa menunggu giliran ini selesai lalu pindah ke “{{device}}”, atau hentikan giliran ini dan pindah sekarang.",
       "busyWait": "Pindah Setelah Selesai",
@@ -12502,6 +12928,7 @@
           "conflict": "Bot ini sudah dipakai di komputer ini: di Pengaturan → Bot IM, atau di Rekan lain.",
           "botUnavailable": "{{name}} sedang tidak tersedia. Coba lagi setelah pulih.",
           "connectFailed": "Gagal terhubung: {{reason}}",
+          "connectTimedOut": "Koneksi habis waktu. Coba lagi.",
           "failed": "Tidak dapat diselesaikan. Coba lagi nanti.",
           "personalBotGone": "Bot ini sudah tidak ada di Pengaturan → Bot IM. Isi kredensialnya sebagai gantinya."
         },
@@ -12561,6 +12988,20 @@
       }
     },
     "voiceMode": {
+      "realtime": {
+        "systemVoices": "Suara sistem",
+        "myVoices": "Suaraku",
+        "refreshMyVoices": "Segarkan suaraku",
+        "callMode": "Mode panggilan suara",
+        "messageReadAloud": "Bacakan pesan",
+        "callVoice": "Suara panggilan real-time",
+        "readAloudVoice": "Suara pembacaan",
+        "readAloudHint": "Klik ikon pengeras suara di bawah balasan teks buddy-mu untuk mendengarnya dengan suara ini.",
+        "resetReadAloud": "Atur ulang pengaturan pembacaan",
+        "title": "Audio Real-time",
+        "add": "Tambah model audio real-time",
+        "off": "Pakai sintesis suara"
+      },
       "openConversation": "Buka obrolan",
       "inCallWith": "Dalam panggilan dengan {{name}}",
       "showDetails": "Bentangkan transkrip panggilan",
@@ -12736,6 +13177,12 @@
         "description": "Menulis konfigurasi ruang kerja untuk {{targetAgent}}. Jangan tutup jendelanya.",
         "primary": "Konversi",
         "cancel": "Jangan sekarang"
+      },
+      "items": {
+        "agents-md": "Instruksi dan panduan proyek",
+        "agents": "Peran asisten khusus",
+        "hooks": "Tindakan otomatis, seperti menjalankan skrip proyek",
+        "mcp": "Koneksi ke alat eksternal"
       }
     },
     "confirmDialog": {
@@ -13191,6 +13638,7 @@
         },
         "slash": {
           "detachFailed": "❌ Gagal mengakhiri pengambilalihan: {{error}}",
+          "pluginEngineModelsUnavailable": "Mesin plugin tugas ini tidak tersedia saat ini, jadi modelnya tidak bisa didaftar.",
           "companionManaged": "🧭 Koneksi ini sudah diserahkan ke Rekan, jadi model, izin, dan direktori kerja mengikuti pengaturan Rekan. Ubah di pengaturan Rekan di Cindy."
         },
         "turn": {
@@ -13727,6 +14175,7 @@
       }
     }
   },
+  "markdown": {},
   "diffPanel": {
     "shell": {
       "resizeHandleAria": "Ubah lebar panel",
@@ -14357,6 +14806,7 @@
       "missingDir": "Folder tidak ditemukan"
     },
     "pendingQueue": {
+      "waitingForDevice": "Belum terkirim · Akan dikirim saat komputer lain tersambung lagi",
       "stopping": "Menghentikan…",
       "queued": "Dalam antrean",
       "editingInComposer": "Sedang diubah di kotak input di bawah…",
@@ -14831,6 +15281,7 @@
       "unavailable": "Input otomatis tidak tersedia di aplikasi ini. Salin teksnya lalu masukkan secara manual.",
       "unconfirmed": "Tidak bisa dipastikan apakah input otomatis berhasil. Salin teksnya lalu masukkan secara manual.",
       "permission": "Izin Aksesibilitas diperlukan agar input suara bisa masuk ke aplikasi ini. Setelah diizinkan, coba lagi.",
+      "appNotAllowed": "{{app}} tidak diizinkan mengendalikan aplikasi ini, jadi teksnya tidak dimasukkan. Tambahkan aplikasi ini untuk {{app}} di Penggantian Perlindungan Sistem & Aplikasi, atau salin teksnya dan tempel sendiri.",
       "failed": "Input otomatis gagal. Salin teksnya lalu masukkan secara manual."
     },
     "permissionPrompts": {
@@ -15052,6 +15503,7 @@
       "label_other": "{{count}} pesan baru"
     },
     "messageNavRail": {
+      "you": "Kamu",
       "aria": "Navigasi pertanyaan",
       "jumpAria": "Lompat ke pertanyaan {{index}}: {{preview}}",
       "attachmentOnly_one": "{{count}} lampiran",
@@ -15128,7 +15580,10 @@
       "codexHelperUnavailable": "cindy_helper diaktifkan untuk tugas ini tetapi tidak tersedia; hasil tugas mungkin tidak dapat dikirim balik.",
       "codexHelperUnverified": "Tidak dapat memverifikasi ketersediaan cindy_helper untuk tugas ini; hasil tugas mungkin tidak dapat dikirim balik.",
       "requestFormatError": "Aplikasi mengirim format permintaan yang salah, sehingga balasan ini tidak bisa diselesaikan.",
+      "piRetryHistoryTooLarge": "Pesanmu tidak terkirim. Pi tidak dapat membaca riwayat yang diperlukan untuk mencoba lagi setelah satu frame melewati batas lokal 16 MiB. Kamu bisa melanjutkan di tugas baru.",
+      "messageNotSent": "Pesanmu tidak terkirim.",
       "replyFailed": "Balasan belum selesai",
+      "queuedSendRecovery": "Pesanmu tidak terkirim. Pilih Coba lagi untuk mengirim apa adanya. Mengirim pesan baru akan menggantikannya.",
       "retryTitle": "Kirim ulang pesan terakhir",
       "cancelTitle": "Tutup pesan error",
       "retry": "Coba lagi",
@@ -15198,6 +15653,7 @@
       "gatewayProxyTokenInvalid": "Kredensial Cindy AI sudah tidak berlaku. Klik “Coba lagi”. Jika masih gagal, keluar lalu masuk lagi",
       "gatewayProxyTokenInvalidNoRetry": "Kredensial Cindy AI sudah tidak berlaku. Jika nanti masih gagal, keluar lalu masuk lagi",
       "modelAccessDenied": "Akun upstream saat ini tidak punya akses ke model ini. Ganti model, atau konfirmasi akses model ke penyedia",
+      "providerSafetyRefusal": "Kebijakan keamanan penyedia model memblokir respons ini. Sesuaikan permintaanmu sebelum mengirim lagi.",
       "silentStopContinue": "Lanjutkan",
       "silentStopContinueTitle": "Lanjutkan tugas saat ini",
       "piTransportClosed": "Koneksi Pi jarak jauh terputus (kanal SSH ditutup). Tugas jarak jauh masih berjalan; sambungkan ulang untuk melanjutkan.",
@@ -15248,6 +15704,7 @@
       "modelCatalogUnconfirmed": "Daftar model tidak dapat dikonfirmasi. Model pilihan kamu tetap disimpan. Muat ulang daftar model lalu coba lagi.",
       "actionScheduled": "Otorisasi tugas untuk operasi ini telah kedaluwarsa. Putaran berikutnya tetap berjalan sesuai jadwal.",
       "actionExpired": "Otorisasi tugas untuk operasi ini telah kedaluwarsa. Lihat hasil eksekusi terakhir otomatisasi.",
+      "modelRebuildRetry": "Instruksi tidak terkirim. Buka otomasi di komputermu dan pilih “Jalankan sekarang” untuk mencoba lagi.",
       "actionRecovered": "Otorisasi untuk operasi ini telah kedaluwarsa. Otomatisasi yang sama kemudian berhasil dijalankan.",
       "text": "Sebelumnya ada eksekusi otomatis yang gagal.",
       "prCheck_dns": "{{device}} tidak dapat menyelesaikan {{host}}. Periksa jaringan atau DNS di perangkat itu jika ini berlanjut. Kegagalan berturut-turut: {{failures}}. Pemeriksaan otomatis berikutnya: {{retry}}.",
@@ -15256,6 +15713,7 @@
       "prCheck_rate-limit": "GitHub membatasi permintaan dari {{device}}. Kegagalan berturut-turut: {{failures}}. Pemeriksaan otomatis berikutnya: {{retry}}.",
       "prCheck_unknown": "Pemeriksaan PR gagal di {{device}}. Lihat detail jalannya. Kegagalan berturut-turut: {{failures}}. Pemeriksaan otomatis berikutnya: {{retry}}.",
       "precheck": "Pemeriksaan otomatis sementara terhalang.",
+      "preRunBlocked": "Pemeriksaan sebelum jalan gagal. Jalan ini tidak dimulai.",
       "rateLimited": "Pemeriksaan otomatis sementara terhalang: permintaan dibatasi.",
       "pluginMissing": "Pemeriksaan otomatis sementara terhalang: Plugin “{{name}}” belum terpasang. Akan pulih otomatis setelah dipasang.",
       "pluginMissingUnnamed": "Pemeriksaan otomatis sementara terhalang: Plugin yang dibutuhkan belum terpasang. Akan pulih otomatis setelah dipasang.",
@@ -15920,6 +16378,7 @@
       "CONTEXT_COMPACTION_MODEL_UNAVAILABLE": "Pemadatan konteks gagal saat pengalihan karena koneksi ini tidak dapat memakai model sebelumnya.",
       "MODEL_SELECTION_UNAVAILABLE": "Model yang dipilih tidak lagi tersedia dari penyedianya. Periksa koneksi di Pengaturan atau pilih model lain yang tersedia.",
       "MODEL_CATALOG_UNCONFIRMED": "Daftar model tidak dapat dikonfirmasi. Model pilihan kamu tetap disimpan. Muat ulang daftar model lalu coba lagi.",
+      "SNAPSHOT_DISPATCH_INTENT_TIMEOUT": "Pesan tidak terkirim. Cindy tidak dapat memastikan catatan keamanan tepat waktu.",
       "HARNESS_SWITCH_NOT_READY": "Pergantian Harness belum selesai. Lihat detail kesalahan dan coba lagi setelah Harness siap.",
       "DEVICE_LINK_BUSY": "Komputer jarak jauh sedang sibuk. Coba lagi sebentar lagi.",
       "REMOTE_DAEMON_CLOSED": "Koneksi jarak jauh terputus, mungkin sedang diperbarui. Giliran ini sudah berakhir. Kirim ulang pesannya.",
@@ -16175,7 +16634,13 @@
       "open": "Buka tugas “{{title}}”",
       "untitled": "Tugas tanpa judul",
       "startedOne": "Dimulai",
-      "handedToOne": "Diserahkan ke"
+      "handedToOne": "Diserahkan ke",
+      "status": {
+        "running": "Berjalan",
+        "needsAction": "Menunggu kamu",
+        "error": "Galat",
+        "idle": "Menganggur"
+      }
     },
     "botTaskLetter": {
       "replied": "membalas",
@@ -17607,6 +18072,7 @@
       "openWorkdirFailed": "Gagal membuka folder"
     },
     "runs": {
+      "boundPluginEngineRecovery": "Otomasi ini tidak berjalan. Otomasi yang tertaut ke tugas mesin plugin memakai model tugas itu sendiri dan berjalan di komputer ini. Jika otomasi memilih model, hapus pilihannya lalu jalankan lagi.",
       "queueWaitTimeoutRecovery": "Waktu tunggu dalam antrean habis dan prompt tidak terkirim. Setelah tugas tujuan menganggur, klik “{{action}}” untuk menjalankannya lagi.",
       "status": {
         "running": "Berjalan",
@@ -17958,6 +18424,7 @@
       "timingMode": {
         "cron": "Cron",
         "interval": "Interval relatif",
+        "label": "Mode waktu",
         "cronHint": "Berjalan pada slot waktu tetap jam kalender.",
         "intervalHint": "Menunggu durasi ini setelah proses sebelumnya selesai.",
         "intervalUnsupportedHint": "Interval persis saat ini dipertahankan; memilih preset menit atau jam baru akan menggantinya.",
@@ -21245,6 +21712,7 @@
         "emailRequired": "Isi email yang valid",
         "authorHint": "Akan tampil publik di GitHub sebagai penulis dan tanda tangan perubahan ini.",
         "files": "Berisi {{count}} berkas",
+        "files_other": "Berisi {{count}} berkas",
         "onlyThis": "Hanya berisi perubahan ini; perubahan lain di versi pribadimu tidak ikut.",
         "public": "Diajukan dari repositori GitHub-mu {{repository}} dan terlihat oleh semua orang.",
         "uiNote": "Perubahan ini menyentuh antarmuka. Setelah dikirim, tambahkan tangkapan layar di GitHub dan sebutkan pedoman desain yang jadi acuannya.",
@@ -21252,8 +21720,7 @@
         "submit": "Kirim",
         "update": "Perbarui kiriman",
         "cancel": "Batal",
-        "close": "Tutup",
-        "files_other": "Berisi {{count}} berkas"
+        "close": "Tutup"
       },
       "errors": {
         "notBound": "Untuk mengirim ke Cindy, simpan dulu versi pribadi ke GitHub-mu lewat “Disimpan di” di atas halaman ini.",
@@ -21276,6 +21743,7 @@
       "officialUnknown": "Versi resmi",
       "development": "Versi resmi dalam pengembangan",
       "withChanges": "{{version}} + {{count}} perubahanmu",
+      "withChanges_other": "{{version}} + {{count}} perubahanmu",
       "withOwnChanges": "{{version}} + perubahanmu",
       "noChanges": "{{version}}, belum ada perubahanmu",
       "latest": {
@@ -21290,8 +21758,7 @@
         "updateAvailable": "Belum termasuk di versi pribadi",
         "unverified": "Belum bisa dipastikan apakah versi pribadi sudah memuatnya"
       },
-      "technical": "Detail teknis (untuk pengembang)",
-      "withChanges_other": "{{version}} + {{count}} perubahanmu"
+      "technical": "Detail teknis (untuk pengembang)"
     },
     "sync": {
       "action": "Sinkronkan",
@@ -22126,6 +22593,19 @@
     "wrap": "Bungkus baris otomatis",
     "lineNumbers": "Nomor baris"
   },
+  "openAiAccountGroup": {
+    "strategy": "Strategi grup akun",
+    "leastHint": "Utamakan koneksi dengan tugas paling sedikit",
+    "quotaHint": "Jika pemakaian langganan tersedia, Cindy memakainya untuk memilih koneksi yang memenuhi syarat sebelum menerapkan strategi grup.",
+    "removeDescription": "Koneksi ini akan berhenti menerima tugas baru dari grup. Tugas yang sedang berjalan tetap di koneksi ini.",
+    "mergeDescription": "Tugas baru lewat {{target}} bisa memakai kedua penyedia. Sesi masuk, kunci, dan tugas yang ada tetap di tempatnya. Cindy akan menguji kunci API untuk {{apiKey}} sebelum menambahkan koneksi penjadwalan.",
+    "modelUnavailable": "Koneksi ini tidak bisa memakai model yang dipilih untuk uji. Uji lagi untuk mencoba kandidat lain.",
+    "noTestModel": "Tidak ada model terkonfigurasi yang tersedia untuk diuji. Periksa model mana yang bisa dipakai proyek OpenAI-mu, lalu segarkan atau perbarui daftar model koneksi ini.",
+    "billingPaused": "Penetapan grup dijeda karena saldo kurang atau batas penagihan.",
+    "title": "Grup akun",
+    "testPassed": "Uji lulus",
+    "refresh": "Segarkan kuota"
+  },
   "subscriptionAccounts": {
     "pluginSignIn": {
       "method": "Cara masuk",
@@ -22274,6 +22754,18 @@
       "cheapest": {
         "title": "Paling hemat",
         "hint": "Langganan yang masih punya kuota dipakai lebih dulu tanpa biaya tambahan; sisanya dari harga terdaftar terendah ke tertinggi, dan yang tanpa harga di urutan terakhir."
+      },
+      "drain": {
+        "title": "Pakai sampai habis",
+        "hint": "Terus memakai sumber terakhir sampai kuotanya habis atau tidak tersedia, lalu pindah ke berikutnya; tidak kembali saat sumber sebelumnya pulih."
+      },
+      "headroom": {
+        "title": "Sisa kuota terbanyak",
+        "hint": "Memakai sumber dengan porsi kuota tersisa terbesar (kuota mingguan jika ada); sumber tanpa kuota terbaca ditaruh paling akhir."
+      },
+      "weighted": {
+        "title": "Berdasarkan bobot",
+        "hint": "Menyebar tugas baru ke sumber sesuai bobotnya, berselang-seling; sumber yang tidak tersedia tidak ikut kali ini."
       }
     },
     "picker": {
@@ -22301,6 +22793,11 @@
       "tight": "Kuota 5 jam hampir penuh, jadi dilewati dulu",
       "cheapest": "Harga terdaftar terendah",
       "cheapestFree": "Langganan masih punya kuota, tanpa biaya tambahan",
+      "drain": "Masih memakainya sampai kuotanya habis",
+      "drainNext": "Sumber sebelumnya habis atau tidak tersedia, jadi pindah ke yang ini",
+      "headroom": "Sisa kuota terbanyak",
+      "headroomQuota": "{{left}}% kuotanya tersisa, lebih banyak dari sumber lain",
+      "weighted": "Gilirannya berdasarkan bobot",
       "noVision": "Pesan berisi gambar, dan ini tidak bisa melihat gambar",
       "exceptionImage": "Pesan berisi gambar, jadi hanya sumber yang bisa melihat gambar yang dipertimbangkan",
       "exceptionImageFallback": "Pesan berisi gambar, tetapi tidak ada sumber yang bisa melihat gambar, jadi dipilih seperti biasa",
@@ -22308,6 +22805,10 @@
       "separator": "; "
     },
     "settings": {
+      "autoSwitch": {
+        "title": "Ganti sumber otomatis saat salah satu gagal",
+        "hint": "Saat sumber yang sedang dipakai mode ini gagal, beralih ke sumber berikutnya yang bisa dipakai dan mencatatnya di giliran itu. Jika mati, peralihan hanya ditawarkan saat galat."
+      },
       "newRoute": "Buat mode baru",
       "newRouteName": "Mode baru",
       "routesEmpty": "Belum ada mode. Buat satu dan masukkan beberapa sumber.",
@@ -22320,6 +22821,9 @@
       "effort": "Tingkat penalaran",
       "effortUnset": "Tidak ditentukan",
       "effortHint": "Jika model terpilih tidak mendukung tingkat ini, model berjalan pada default-nya sendiri.",
+      "weight": "Bobot",
+      "weightAria": "Bobot untuk “{{name}}”",
+      "weightHint": "Dengan “Berdasarkan bobot”, bobot lebih tinggi mendapat lebih banyak tugas baru. 1–1000.",
       "sources": "Sumber yang bisa dipakai",
       "sourcesHint": "Model berbeda bisa berada bersama. Tugas mencatat mana yang dipakai.",
       "sourcesEmpty": "Belum ada sumber. Tambahkan model yang sudah tersambung di bawah.",
@@ -22352,6 +22856,7 @@
         "empty": "Belum ada pengecualian. Setiap tugas baru mengikuti aturan pemilihan di atas.",
         "imageRule": "Jika pesan berisi gambar, pakai hanya sumber yang bisa melihat gambar",
         "hoursRule": "{{from}}–{{to}}: pakai “{{name}}”",
+        "hoursRuleDays": "{{days}} {{from}}–{{to}}: pakai “{{name}}” sebagai gantinya",
         "remove": "Hapus pengecualian ini",
         "add": "Tambah pengecualian",
         "choose": "Pilih situasi",
@@ -22360,6 +22865,9 @@
         "from": "Dari",
         "to": "Sampai",
         "useRoute": "Ganti ke",
+        "days": "Hari",
+        "daysHint": "Tanpa hari terpilih berarti setiap hari. Rentang waktu melewati tengah malam dihitung pada hari saat dimulai.",
+        "dayRange": "{{from}}–{{to}}",
         "addHours": "Tambah",
         "sameHour": "Waktu mulai dan selesai tidak boleh sama.",
         "full": "Maksimal {{count}} pengecualian.",
@@ -22533,6 +23041,8 @@
   "macControlPermission": {
     "pane": "System & App Protection Override",
     "selectApp": "Temukan {{app}} di “System & App Protection Override”, lalu klik ⓘ di sebelah kanannya. Jika tidak ada, klik “+” dan tambahkan lewat jalur file.",
-    "review": "$t(macControlPermission.selectApp)\nJika sistem menyediakan “Pilih App”, kamu bisa membatasi cakupan kendali. Kendali seluruh mesin memberi akses ke semua aplikasi dan data. Jika setuju, baca setiap butir dan klik “OK” untuk mengonfirmasi, lalu klik tombol izinkan di bagian bawah jendela."
+    "review": "$t(macControlPermission.selectApp)\nJika sistem menyediakan “Pilih App”, kamu bisa membatasi cakupan kendali. Kendali seluruh mesin memberi akses ke semua aplikasi dan data. Jika setuju, baca setiap butir dan klik “OK” untuk mengonfirmasi, lalu klik tombol izinkan di bagian bawah jendela.",
+    "reviewWholeMac": "$t(macControlPermission.selectApp) Papan tombol dan mouse jarak jauh berlaku di seluruh Mac ini, jadi perlu kendali atas seluruh Mac: saat menambahkan dengan +, pilih Ganti Perlindungan Sistem; untuk aplikasi yang sudah terdaftar, aktifkan Kendalikan Seluruh Mac dan Semua Aplikasi di bawah ⓘ. Dengan hanya aplikasi terpilih, macOS memblokir semua masukan papan tombol dan mouse jarak jauh. Tinjau akses yang didaftar macOS sebelum mengizinkannya.",
+    "chosenAppsOnly": "{{app}} hanya bisa mengendalikan aplikasi yang kamu pilih, jadi macOS memblokir semua masukan papan tombol dan mouse jarak jauh. Untuk mengendalikan Mac ini dari jarak jauh, klik ⓘ di samping {{app}} di Penggantian Perlindungan Sistem & Aplikasi lalu aktifkan Kendalikan Seluruh Mac dan Semua Aplikasi."
   }
 }
