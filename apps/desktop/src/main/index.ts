@@ -1,5 +1,6 @@
 import './personalBuildMonitor.js';
 import { configureWindowsAtomicRename } from './windowsAtomicRename.js';
+import { configureWindowsMcpJob } from './windowsMcpJob.js';
 import './personalLaunchCwd.js';
 // Entry: Electron startup → bootstrap-electron.ts (dynamic import).
 import fixPath from 'fix-path';
@@ -343,6 +344,11 @@ configureWindowsAtomicRename({
   packagedBinary: app.isPackaged ? path.join(process.resourcesPath, 'tools', 'windows-atomic-rename', 'cindy-windows-atomic-rename.exe') : undefined,
   sourceFile: app.isPackaged ? undefined : path.join(app.getAppPath(), 'native', 'windows-atomic-rename', 'main.rs'),
   cacheDir: path.join(app.getPath('userData'), 'windows-atomic-rename'),
+});
+configureWindowsMcpJob({
+  packagedBinary: app.isPackaged ? path.join(process.resourcesPath, 'tools', 'windows-mcp-stdio-job', 'cindy-mcp-stdio-job.exe') : undefined,
+  sourceFile: app.isPackaged ? undefined : path.join(app.getAppPath(), 'native', 'windows-mcp-stdio-job', 'main.rs'),
+  cacheDir: path.join(app.getPath('userData'), 'windows-mcp-stdio-job'),
 });
 
 // Pin after the last userData setPath. Vite's main bundle require()s

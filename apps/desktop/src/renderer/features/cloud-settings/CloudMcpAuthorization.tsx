@@ -13,7 +13,7 @@ import { McpTokenField } from '@/components/settings/McpTokenField';
 import { McpAddRow, McpRow } from '@/components/settings/McpServersSection';
 import { McpServerDialog, type McpServerPersistence } from '@/components/settings/McpServerDialog';
 import { toast } from '@/lib/toast';
-import type { CustomMcpConfig } from '../../../shared/customMcp';
+import type { CustomMcpRemoteConfig } from '../../../shared/customMcp';
 import type { ManagementItem, ManagementResult } from '../../../shared/settingsManagement';
 import type { CloudAuthorizationProps } from './useCloudAuthorization';
 
@@ -39,7 +39,7 @@ export function CloudMcpAuthorization({
   const [items, setItems] = useState<ManagementItem[]>([]);
   // The instance's "Add MCP" entry; absent on runtimes that cannot create servers here.
   const [createItem, setCreateItem] = useState<ManagementItem>();
-  const [dialog, setDialog] = useState<{ item?: ManagementItem; config?: CustomMcpConfig }>();
+  const [dialog, setDialog] = useState<{ item?: ManagementItem; config?: CustomMcpRemoteConfig }>();
   const [selected, setSelected] = useState<string>();
   const [failure, setFailure] = useState<string>();
   const [loading, setLoading] = useState(false);
@@ -218,7 +218,7 @@ export function CloudMcpAuthorization({
       }
     }
   };
-  const fieldsOf = (config: CustomMcpConfig) => ({
+  const fieldsOf = (config: CustomMcpRemoteConfig) => ({
     name: config.name,
     url: config.url,
     transport: config.transport,

@@ -1,10 +1,10 @@
 /**
- * McpServersSection —— 设置 → 工具 页里的「外部」分组(用户自定义的远程 MCP)。
+ * McpServersSection —— 设置 → 工具 页里的「外部」分组(用户自定义 MCP)。
  *
  * 与「内置」分组(BuiltinToolsSection)同页:内置在上、外部在下,组成「工具」页。
- * 一张卡片,每行一个用户自定义的远程 MCP(name + transport + url),行尾编辑/删除;
+ * 一张卡片,每行一个用户自定义 MCP(name + transport + url/command),行尾编辑/删除;
  * 底部「添加」入口打开 McpServerDialog。配置全局跟随账号存 localDb,「配了就生效」——
- * 存在即注入两个 agent(Claude / Codex),删除即停用(下次新建会话生效)。
+ * 由共享 Host facade 提供给各引擎,删除即停用(下次新建会话生效)。
  *
  * 数据经 maker.listCustomMcpServers() 拉取;CRUD 后 main 广播 MCP_CHANGED → 本页 refetch。
  * 颜色全走主题 token。
@@ -14,17 +14,18 @@ import { Fragment, useCallback, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ChevronRight, Pencil, Plus, Trash2 } from 'lucide-react';
 
-import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
+import { Button } from '@/components/ui/button';
+import { ErrorNotice } from '@/components/ui/error-notice';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { deleteCustomMcpServer, listCustomMcpServers } from '@/lib/customMcpServers';
 import { SettingsCard, SettingsSection } from '@/components/ui/settings-rows';
 import { McpServerDialog } from './McpServerDialog';
 import { McpDuplicateNotice } from './McpDuplicateNotice';
 
-import type { CustomMcpConfig } from '@/../shared/customMcp';
+import type { CustomMcpListEntry, CustomMcpUnreadableEntry } from '@/../shared/customMcp';
 
-type DialogState = { mode: 'create' } | { mode: 'edit'; config: CustomMcpConfig } | null;
+type DialogState = { mode: 'create' } | { mode: 'edit'; config: CustomMcpListEntry } | null;
 
 function RowIconButton({
   icon,
@@ -57,14 +58,14 @@ export function McpRow({
   onDelete,
   actions,
 }: {
-  config: CustomMcpConfig;
+  config: CustomMcpListEntry | CustomMcpUnreadableEntry;
   onEdit?: () => void;
   onDelete?: () => void;
   actions?: React.ReactNode;
 }) {
   const { t } = useTranslation();
   return (
-    <div className="flex items-center gap-3 px-5 py-4">
+    <div role="group" aria-label={config.name} className="flex items-center gap-3 px-5 py-4">
       <div
         className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-11 font-semibold uppercase"
         style={{
@@ -83,10 +84,10 @@ export function McpRow({
           {config.name}
         </span>
         <span
-          className="truncate text-13 leading-tight"
+          className={'reason' in config ? 'break-words text-13 leading-snug' : 'truncate text-13 leading-tight'}
           style={{ color: 'var(--settings-integration-subtitle)' }}
         >
-          {config.url}
+          {'reason' in config ? t('settings.mcp.unreadable') : config.transport === 'stdio' ? config.command : config.url}
         </span>
       </div>
       <div className="flex shrink-0 items-center gap-1">
@@ -139,16 +140,18 @@ export function McpAddRow({ onClick }: { onClick: () => void }) {
 export function McpServersSection() {
   const { t } = useTranslation();
   const { confirm } = useConfirmDialog();
-  const [servers, setServers] = useState<CustomMcpConfig[]>([]);
+  const [servers, setServers] = useState<Array<CustomMcpListEntry | CustomMcpUnreadableEntry>>([]);
+  const [loadFailed, setLoadFailed] = useState(false);
   const [loading, setLoading] = useState(true);
   const [dialog, setDialog] = useState<DialogState>(null);
 
   const refetch = useCallback(async () => {
     try {
       const list = await listCustomMcpServers();
-      setServers(list);
+      setServers([...list.servers, ...(list.unreadableServers ?? [])]);
+      setLoadFailed(false);
     } catch {
-      setServers([]);
+      setLoadFailed(true);
     } finally {
       setLoading(false);
     }
@@ -162,7 +165,7 @@ export function McpServersSection() {
   }, [refetch]);
 
   const handleDelete = useCallback(
-    async (config: CustomMcpConfig) => {
+    async (config: CustomMcpListEntry | CustomMcpUnreadableEntry) => {
       const ok = await confirm({
         title: t('settings.mcp.deleteConfirm.title', { name: config.name }),
         description: t('settings.mcp.deleteConfirm.message'),
@@ -182,8 +185,10 @@ export function McpServersSection() {
   );
 
   return (
-    <SettingsSection title={t('settings.mcp.title')} description={t('settings.mcp.subtitle')}>
+    <SettingsSection id="settings-custom-mcp" title={t('settings.mcp.title')} description={t('settings.mcp.subtitle')}>
       <McpDuplicateNotice />
+      {loadFailed && <ErrorNotice role="alert" message={t('settings.mcp.loadFailed')}
+        actions={<Button size="sm" variant="secondary" data-settings-search-action="Retry loading custom MCP servers" onClick={() => void refetch()}>{t('commonUi.retry')}</Button>} />}
       {/* MCP 列表自带传输类型图标与行尾操作，行样式保留 */}
       {!loading && (
         <SettingsCard className="flex flex-col">
@@ -192,7 +197,7 @@ export function McpServersSection() {
               {i > 0 && <Divider />}
               <McpRow
                 config={s}
-                onEdit={() => setDialog({ mode: 'edit', config: s })}
+                onEdit={'reason' in s ? undefined : () => setDialog({ mode: 'edit', config: s })}
                 onDelete={() => void handleDelete(s)}
               />
             </Fragment>

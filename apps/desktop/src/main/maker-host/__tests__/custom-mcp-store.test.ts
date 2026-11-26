@@ -42,14 +42,16 @@ import {
   deleteCustomMcpServer,
   getCustomMcpServer,
   listCustomMcpServers,
+  readCustomMcpServers,
   listCustomMcpNamesForSetup,
   updateCustomMcpServer,
   validateCustomMcpConfig,
+  validateCustomMcpInput,
 } from '../custom-mcp-store.desktop.js';
 import { confirmSetupTransfer } from '../../setup-migration/transferPrompt.js';
 import { createSetupTransferSource, SetupTransferBox } from '../../setup-migration/transfer.js';
 import { parseSetupSecretBundle, type SetupSecretBundle } from '@cindy/device-link';
-import type { CustomMcpConfig } from '../../../shared/customMcp.js';
+import type { CustomMcpRemoteConfig, CustomMcpStdioConfig } from '../../../shared/customMcp.js';
 
 const CREATE_SQL = `
   CREATE TABLE custom_mcp_servers (
@@ -58,6 +60,7 @@ const CREATE_SQL = `
     transport TEXT NOT NULL,
     url TEXT NOT NULL,
     headers TEXT NOT NULL DEFAULT '{}',
+    command TEXT, args TEXT NOT NULL DEFAULT '[]', cwd TEXT, env TEXT NOT NULL DEFAULT '{}',
     sort_order INTEGER NOT NULL DEFAULT 0,
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL
@@ -65,7 +68,7 @@ const CREATE_SQL = `
   CREATE INDEX idx_custom_mcp_servers_sort_order ON custom_mcp_servers (sort_order);
 `;
 
-const valid: CustomMcpConfig = {
+const valid: CustomMcpRemoteConfig = {
   id: 'mytools',
   name: 'My Tools',
   transport: 'http',
@@ -103,6 +106,48 @@ afterEach(() => {
   raw = null;
 });
 
+// DB regression: one damaged credential used to hide every settings row and retain stale runtime providers.
+// Both transports must be isolated without rewriting their rows, while deletion stays available.
+it('keeps healthy configurations readable and preserves deletable identities for damaged credentials', async () => {
+  mountDb();
+  await createCustomMcpServer(valid);
+  await createCustomMcpServer({ ...valid, id: 'broken-http', name: 'Broken HTTP' });
+  await createCustomMcpServer({ id: 'broken-stdio', name: 'Broken local', transport: 'stdio', command: 'uvx', args: [], env: {} });
+  raw!.prepare('UPDATE custom_mcp_servers SET headers = ? WHERE id = ?').run('safe-storage:v1:broken-http-secret', 'broken-http');
+  raw!.prepare('UPDATE custom_mcp_servers SET env = ? WHERE id = ?').run('safe-storage:v1:broken-env-secret', 'broken-stdio');
+  const before = raw!.prepare('SELECT * FROM custom_mcp_servers ORDER BY id').all();
+  vi.mocked(safeStorage.decryptString).mockClear();
+  expect(await readCustomMcpServers([valid.id])).toEqual({ servers: [valid], unreadableServers: [] });
+  expect(await readCustomMcpServers([])).toEqual({ servers: [], unreadableServers: [] });
+  expect(safeStorage.decryptString).not.toHaveBeenCalled();
+  const result = await readCustomMcpServers();
+  expect(result).toEqual({ servers: [valid], unreadableServers: [
+    { id: 'broken-http', name: 'Broken HTTP', transport: 'http', reason: 'unreadable' },
+    { id: 'broken-stdio', name: 'Broken local', transport: 'stdio', reason: 'unreadable' },
+  ] });
+  expect(raw!.prepare('SELECT * FROM custom_mcp_servers ORDER BY id').all()).toEqual(before);
+  await expect(getCustomMcpServer('broken-http')).rejects.toThrow('MCP header credentials are unreadable');
+  await expect(getCustomMcpServer('broken-stdio')).rejects.toThrow('MCP environment credentials are unreadable');
+  expect(await listCustomMcpServers()).toEqual([valid]);
+  await deleteCustomMcpServer('broken-http');
+  await deleteCustomMcpServer('broken-stdio');
+  expect(await readCustomMcpServers()).toEqual({ servers: [valid], unreadableServers: [] });
+});
+
+// DB tier: storage availability is distinct from a single unreadable credential.
+it.each(['select', 'legacy-upgrade'])('propagates a database %s failure instead of declaring records unreadable', async (stage) => {
+  mountDb();
+  await createCustomMcpServer(valid);
+  if (stage === 'select') raw!.exec('DROP TABLE custom_mcp_servers');
+  else {
+    raw!.prepare('UPDATE custom_mcp_servers SET headers = ?').run('{"Authorization":"test-legacy-credential"}');
+    raw!.exec("CREATE TRIGGER reject_upgrade BEFORE UPDATE ON custom_mcp_servers BEGIN SELECT RAISE(ABORT, 'test write failure'); END");
+  }
+  await expect(readCustomMcpServers()).rejects.toThrow();
+  if (stage === 'legacy-upgrade') expect(raw!.prepare('SELECT headers FROM custom_mcp_servers').get())
+    .toEqual({ headers: '{"Authorization":"test-legacy-credential"}' });
+});
+
 describe('validateCustomMcpConfig', () => {
   it('accepts a valid http config', () => {
     expect(validateCustomMcpConfig(valid)).toEqual({ ok: true });
@@ -123,7 +168,7 @@ describe('validateCustomMcpConfig', () => {
   });
 
   it('rejects invalid transport', () => {
-    expect(validateCustomMcpConfig({ ...valid, transport: 'stdio' }).ok).toBe(false);
+    expect(validateCustomMcpConfig({ ...valid, transport: 'unknown' }).ok).toBe(false);
   });
 
   it('rejects non-http(s) / malformed url', () => {
@@ -214,7 +259,7 @@ describe('custom-mcp-store CRUD', () => {
     await createCustomMcpServer(valid);
     const list = await listCustomMcpServers();
     expect(list).toHaveLength(1);
-    expect(list[0].url).toBe('https://example.com/mcp');
+    expect(list[0]).toMatchObject({ url: 'https://example.com/mcp' });
 
     const got = await getCustomMcpServer('mytools');
     expect(got?.name).toBe('My Tools');
@@ -229,7 +274,7 @@ describe('custom-mcp-store CRUD', () => {
     expect(updated?.name).toBe('My Tools v2');
     const after = await getCustomMcpServer('mytools');
     expect(after?.transport).toBe('sse');
-    expect(after?.headers).toEqual({ 'X-Org': 'acme' });
+    expect(after).toMatchObject({ headers: { 'X-Org': 'acme' } });
 
     await deleteCustomMcpServer('mytools');
     expect(await listCustomMcpServers()).toEqual([]);
@@ -263,17 +308,17 @@ describe('encrypted MCP headers', () => {
     mountDb();
     await createCustomMcpServer({ ...valid, headers });
     expect(stored()).not.toContain(headers.Authorization);
-    expect((await getCustomMcpServer(valid.id))?.headers).toEqual(headers);
+    expect(await getCustomMcpServer(valid.id)).toMatchObject({ headers });
     await updateCustomMcpServer(valid.id, { ...valid, headers: { 'X-Key': 'invalid-replacement' } });
     expect(stored()).not.toContain('invalid-replacement');
-    expect((await listCustomMcpServers())[0].headers).toEqual({ 'X-Key': 'invalid-replacement' });
+    expect((await listCustomMcpServers())[0]).toMatchObject({ headers: { 'X-Key': 'invalid-replacement' } });
   });
 
   it('upgrades legacy headers before returning them without changing the runtime generation', async () => {
     mountDb();
     await createCustomMcpServer(valid, 100);
     raw!.prepare('UPDATE custom_mcp_servers SET headers = ?').run(JSON.stringify(headers));
-    expect((await listCustomMcpServers())[0].headers).toEqual(headers);
+    expect((await listCustomMcpServers())[0]).toMatchObject({ headers });
     expect(stored()).not.toContain(headers.Authorization);
     expect(raw!.prepare('SELECT updated_at FROM custom_mcp_servers').get()).toEqual({ updated_at: 100 });
   });
@@ -295,7 +340,7 @@ describe('encrypted MCP headers', () => {
     raw!.exec("CREATE TRIGGER reject_update BEFORE UPDATE ON custom_mcp_servers BEGIN SELECT RAISE(ABORT, 'test write failure'); END");
     await expect(updateCustomMcpServer(valid.id, { ...valid, headers: { Authorization: 'invalid-new' } })).rejects.toThrow('test write failure');
     expect(stored()).toBe(before);
-    expect((await getCustomMcpServer(valid.id))?.headers).toEqual(headers);
+    expect(await getCustomMcpServer(valid.id)).toMatchObject({ headers });
   });
 
   it('keeps legacy data on failed conversion and does not return it as a successful read', async () => {
@@ -303,7 +348,9 @@ describe('encrypted MCP headers', () => {
     await createCustomMcpServer(valid);
     raw!.prepare('UPDATE custom_mcp_servers SET headers = ?').run(JSON.stringify(headers));
     vi.mocked(safeStorage.isEncryptionAvailable).mockReturnValue(false);
-    await expect(listCustomMcpServers()).rejects.toThrow();
+    expect(await readCustomMcpServers()).toEqual({ servers: [], unreadableServers: [
+      { id: valid.id, name: valid.name, transport: valid.transport, reason: 'unreadable' },
+    ] });
     expect(stored()).toBe(JSON.stringify(headers));
   });
 
@@ -443,9 +490,88 @@ describe('stored MCP credentials versus transfer bounds', () => {
     expect(validateCustomMcpConfig(config)).toEqual({ ok: true });
     await createCustomMcpServer(config);
     const saved = (await listCustomMcpServers())[0];
+    if (saved.transport === 'stdio') throw new Error('Expected remote configuration');
     expect(saved.headers).toEqual(headers);
     const parsed = parseSetupSecretBundle({ mcpServers: [{ id: saved.id, url: saved.url, headers: saved.headers, token: null }], builtinKeys: [{ id: 'brave', value: 'fake-brave' }] });
     expect(parsed.mcpServers).toEqual([]);
     expect(parsed.builtinKeys).toEqual([{ id: 'brave', value: 'fake-brave' }]);
+  });
+});
+
+// Stdio configuration contract: the production store must preserve argv and encrypted env.
+// Existing coverage only exercised HTTP headers. Minimal input: one stdio server with one
+// fake credential and one argument containing whitespace. Tier: db, isolated in-memory SQLite.
+describe('stdio configuration and environment storage', () => {
+  const local: CustomMcpStdioConfig = {
+    id: 'grafana', name: 'Grafana', transport: 'stdio', command: 'uvx',
+    args: ['mcp-grafana', 'a b', '$HOME', ''], cwd: '/fixture/folder with spaces',
+    env: { GRAFANA_URL: 'https://grafana.example.test', GRAFANA_SERVICE_ACCOUNT_TOKEN: 'invalid-test-only-token' },
+  };
+  const publicConfig: Omit<CustomMcpStdioConfig, 'env'> = { id: local.id, name: local.name, transport: local.transport, command: local.command,
+    args: local.args, cwd: local.cwd };
+
+  it('validates stdio separately and rejects unspawnable values without disclosing them', () => {
+    expect(validateCustomMcpConfig(local)).toEqual({ ok: true });
+    for (const patch of [{ command: '' }, { args: ['a\0b'] }, { cwd: '' }, { env: { 'BAD=KEY': 'x' } }, { env: { X: 3 } }]) {
+      expect(validateCustomMcpConfig({ ...local, ...patch }).ok).toBe(false);
+    }
+    expect(validateCustomMcpInput({ ...publicConfig, envChanges: { set: local.env, remove: [] } })).toEqual({ ok: true });
+    expect(validateCustomMcpInput({ ...local, envChanges: { set: {}, remove: [] } }).ok).toBe(false);
+    expect(validateCustomMcpInput({ ...publicConfig, envChanges: { set: { X: 'x' }, remove: ['X'] } }).ok).toBe(false);
+  });
+
+  it('roundtrips literal arguments and encrypts env in the same configuration write', async () => {
+    mountDb();
+    await createCustomMcpServer(local);
+    expect(await getCustomMcpServer(local.id)).toEqual(local);
+    const row = raw!.prepare('SELECT * FROM custom_mcp_servers WHERE id = ?').get(local.id);
+    expect(JSON.stringify(row)).not.toContain(local.env.GRAFANA_SERVICE_ACCOUNT_TOKEN);
+    expect(row).toMatchObject({ url: '', headers: '{}', command: 'uvx' });
+    await updateCustomMcpServer(local.id, { ...publicConfig, envChanges: { set: { NEW: '', GRAFANA_URL: 'new-url' }, remove: [] } });
+    expect(await getCustomMcpServer(local.id)).toMatchObject({ env: { ...local.env, GRAFANA_URL: 'new-url', NEW: '' } });
+    await updateCustomMcpServer(local.id, { ...publicConfig, envChanges: { set: {}, remove: ['GRAFANA_SERVICE_ACCOUNT_TOKEN'] } });
+    const saved = await getCustomMcpServer(local.id);
+    expect(saved).toMatchObject({ env: { GRAFANA_URL: 'new-url', NEW: '' } });
+    expect(saved).not.toHaveProperty('env.GRAFANA_SERVICE_ACCOUNT_TOKEN');
+  });
+
+  it('preserves saved data on encryption failure and never echoes a decrypt error', async () => {
+    mountDb();
+    await createCustomMcpServer(local);
+    const before = raw!.prepare('SELECT * FROM custom_mcp_servers').get();
+    vi.mocked(safeStorage.encryptString).mockImplementation(() => { throw new Error(local.env.GRAFANA_SERVICE_ACCOUNT_TOKEN); });
+    await expect(updateCustomMcpServer(local.id, { ...local, name: 'Changed' })).rejects.toThrow('MCP environment encryption failed');
+    expect(raw!.prepare('SELECT * FROM custom_mcp_servers').get()).toEqual(before);
+    vi.mocked(safeStorage.decryptString).mockImplementation(() => { throw new Error(local.env.GRAFANA_SERVICE_ACCOUNT_TOKEN); });
+    await expect(getCustomMcpServer(local.id)).rejects.toThrow('MCP environment credentials are unreadable');
+    expect(raw!.prepare('SELECT * FROM custom_mcp_servers').get()).toEqual(before);
+  });
+
+  it('does not overwrite an environment changed while the native edit was being saved', async () => {
+    mountDb();
+    await createCustomMcpServer(local, 100);
+    const newer = `safe-storage:v1:${safeStorage.encryptString(JSON.stringify({ TOKEN: 'invalid-newer-secret' })).toString('base64')}`;
+    const encrypt = safeStorage.encryptString;
+    vi.mocked(safeStorage.encryptString).mockImplementationOnce(value => {
+      raw!.prepare('UPDATE custom_mcp_servers SET env = ?, updated_at = 101 WHERE id = ?').run(newer, local.id);
+      return encrypt(value);
+    });
+    await expect(updateCustomMcpServer(local.id, { ...publicConfig, name: 'Stale edit', envChanges: { set: {}, remove: [] } }, 102))
+      .rejects.toThrow('MCP configuration changed');
+    expect(await getCustomMcpServer(local.id)).toMatchObject({ name: 'Grafana', env: { TOKEN: 'invalid-newer-secret' } });
+  });
+
+  it('clears inactive fields on transport changes and isolates unreadable local rows for runtime', async () => {
+    mountDb();
+    await createCustomMcpServer(local);
+    await createCustomMcpServer(valid);
+    raw!.prepare('UPDATE custom_mcp_servers SET env = ? WHERE id = ?').run('broken-env', local.id);
+    expect(await listCustomMcpServers()).toEqual([valid]);
+    expect(await readCustomMcpServers()).toEqual({ servers: [valid], unreadableServers: [
+      { id: local.id, name: local.name, transport: local.transport, reason: 'unreadable' },
+    ] });
+    await updateCustomMcpServer(local.id, { ...valid, id: local.id });
+    expect(raw!.prepare('SELECT command, args, cwd, env FROM custom_mcp_servers WHERE id = ?').get(local.id))
+      .toEqual({ command: null, args: '[]', cwd: null, env: '{}' });
   });
 });

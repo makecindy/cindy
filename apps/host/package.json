@@ -34,6 +34,7 @@
     "@cindy/plugin-protocol": "workspace:*",
     "better-sqlite3": "^12.9.0",
     "cindy-tools": "workspace:*",
+    "cross-spawn": "^7.0.6",
     "node-machine-id": "^1.1.12",
     "playwright-core": "1.63.0",
     "ws": "^8.18.0"

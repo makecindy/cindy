@@ -4,7 +4,7 @@ import path from 'node:path';
 import { ScriptTarget, transpileModule } from 'typescript';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { companionEnvironmentKey } from '../bot-import/environment.js';
-import * as mcp from '../../renderer/lib/customMcpServers.js';
+import { readCustomMcpToken } from '../../renderer/lib/customMcpServers.js';
 import { readCustomProviderKey } from '../../renderer/lib/customProviders.js';
 import { isRendererSafeStorageOperationAllowed, isCustomProviderRuntimeKeyStorageKey,
   customProviderHeaderStorageKey, customProviderSecretStorageKey, customMcpSecretStorageKey,
@@ -92,7 +92,7 @@ describe('generic safeStorage companion boundary', () => {
   //   读、写、删各一条用例，断言 Renderer 拿到的返回值，以及磁盘上的 .enc 文件是否被写入或删除。
   // - 规则依据：electron-security-and-process-boundaries §1（preload 是最小权限桥）。Renderer 只用
   //   三类键：网关 api_key（useApiKey、makerChatStore 读，useApiKey 删）、mcp_token_（customMcpServers
-  //   读写删）、自定义供应商 runtime key（customProviders 只读）。
+  //   读取已存 token）、自定义供应商 runtime key（customProviders 只读）。
   // - 现有覆盖缺口：没有用例逐个键族、逐个操作钉住通用 IPC 的访问范围。
   // - 最小失败输入：表外的某个键或操作被放行；或者表内登记的操作被误拒。
   // - tier：unit，进程内 fake + 临时目录。
@@ -181,27 +181,15 @@ describe('generic safeStorage companion boundary', () => {
 // 测试价值
 // - 生产入口与可观察结果：Renderer 的真实调用函数（customMcpServers、customProviders.readCustomProviderKey）
 //   经 window.electronAPI 进入 bootstrap-electron 注册块原文，断言函数返回值与磁盘 .enc 内容。
-// - 规则依据：白名单收紧后普通桌面现有功能不得受影响（编辑自定义供应商时回显 key、MCP 令牌增删改）。
+// - 规则依据：白名单收紧后普通桌面现有功能不得受影响（编辑自定义供应商时回显 key、回显已存 MCP 令牌）。
 // - 现有覆盖缺口：上面的表驱动用例只证明键名被放行，不证明 Renderer 实际拼出的键名落在放行范围内。
 // - 最小失败输入：Renderer 拼出的键名与白名单匹配不一致（如供应商 id 经 storedCustomProviderId 改写）。
 // - tier：unit，进程内 fake + 临时目录。
 describe('ordinary Renderer credential flows through the real safeStorage handlers', () => {
-  const stored = (key: string) => {
-    const file = path.join(root, 'safe-storage', `owner_fixture_${key}.enc`);
-    return fs.existsSync(file) ? Buffer.from(fs.readFileSync(file, 'utf8'), 'base64').toString().slice('fixture:'.length) : null;
-  };
-  let bridgeApi: ReturnType<typeof bridge>;
   function wireRenderer() {
-    bridgeApi = bridge();
-    const maker = {
-      createCustomMcpServer: vi.fn(async () => undefined), updateCustomMcpServer: vi.fn(async () => undefined),
-      deleteCustomMcpServer: vi.fn(async () => undefined), refreshCustomMcpCodex: vi.fn(async () => undefined),
-    };
+    const api = bridge();
     vi.stubGlobal('window', { electronAPI: {
-      safeStorageRead: (key: string) => bridgeApi.invoke('read', key),
-      safeStorageStore: (key: string, value: string) => bridgeApi.invoke('store', key, value),
-      safeStorageRemove: (key: string) => bridgeApi.invoke('remove', key),
-      maker,
+      safeStorageRead: (key: string) => api.invoke('read', key),
     } });
   }
   afterEach(() => { vi.unstubAllGlobals(); });
@@ -215,28 +203,14 @@ describe('ordinary Renderer credential flows through the real safeStorage handle
     expect(await readCustomProviderKey('fixture-provider', 'claude-code')).toBeNull();
   });
 
-  it('adds, edits, reads back, clears and deletes a custom MCP token', async () => {
+  it('reads the stored MCP token for the server being edited', async () => {
     wireRenderer();
-    const config = { id: 'fixture-mcp' } as Parameters<typeof mcp.createCustomMcpServer>[0];
     const key = customMcpSecretStorageKey('fixture-mcp');
-
-    await mcp.createCustomMcpServer(config, ' fixture-token-1 ');
-    expect(stored(key)).toBe('fixture-token-1');
-    expect(await mcp.readCustomMcpToken('fixture-mcp')).toBe('fixture-token-1');
-
-    await mcp.updateCustomMcpServer(config, 'fixture-token-2', false);
-    expect(stored(key)).toBe('fixture-token-2');
-    await mcp.updateCustomMcpServer(config, '', false);
-    expect(stored(key)).toBe('fixture-token-2');
-    await mcp.updateCustomMcpServer(config, '', true);
-    expect(stored(key)).toBeNull();
-
-    await mcp.updateCustomMcpServer(config, 'fixture-token-3', false);
-    await mcp.deleteCustomMcpServer('fixture-mcp');
-    expect(stored(key)).toBeNull();
-    expect(await mcp.readCustomMcpToken('fixture-mcp')).toBeNull();
+    fs.mkdirSync(path.join(root, 'safe-storage'));
+    fs.writeFileSync(path.join(root, 'safe-storage', `owner_fixture_${key}.enc`), Buffer.from('fixture:fixture-token').toString('base64'));
+    expect(await readCustomMcpToken('fixture-mcp')).toBe('fixture-token');
+    expect(await readCustomMcpToken('other-mcp')).toBeNull();
   });
-
 });
 
 describe('cloud providers page removal', () => {

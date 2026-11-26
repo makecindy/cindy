@@ -1467,6 +1467,7 @@ import {
   removeCustomProviderHeaders,
   removeCustomProviderKey,
   storeCustomMcpToken,
+  removeCustomMcpToken,
   storeCustomProviderHeaders,
   storeCustomProviderKey,
 } from '../secrets/providerSecretStore.js';
@@ -8136,25 +8137,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     },
   }));
 
-  // 自定义 MCP 服务器 CRUD —— CRUD 成功后刷新三个 agent 的 mcpProviders 数组
-  // （下次新建会话生效）并广播 MCP_CHANGED 让设置页列表 live 刷新。
-  const refreshMcpHarnesses = async () => {
-      const ownerScopeKey = activeOwnerScopeKey();
-      await refreshCodexMcpEnvironment({
-        restartCodex: restartCodexAfterAuthModeChange,
-        shutdownCodexEnvironment,
-        onDeferred: () => {
-          if (!isAppSessionBoundaryPending() && activeOwnerScopeKey() === ownerScopeKey) {
-            scheduleDeferredCodexRestart('Custom MCP configuration changed');
-          }
-        },
-        logger: log,
-      });
-      // Pi 的 MCP bridge 同样按首个会话冻结 server 集合:自定义 MCP 增删改后必须 invalidate,
-      // 否则新 Pi 会话仍暴露已删/已禁用的工具、拿不到新启用的工具(codex review P1)。
-      // 与 codex 分支独立(不依赖 codexRestarted),下一次 startSession lazy 重建。
-      invalidatePiEnvironment();
-    };
+  // 本机 Codex 在启动新任务时从 provider 数组组装工具，无需重启共享运行环境。
   registerMcpHandlers(cloudManagementProviderRegistry(createElectronIpcHandlerRegistry()), {
     listDuplicates: () => listMcpDuplicates(),
     chooseDuplicate: saveMcpDuplicateChoice,
@@ -8165,15 +8148,17 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       const meta = await maker.getSessionMeta(sessionId);
       return meta ? { agentKind: route.agentKind === 'acp' ? 'pi' : route.agentKind, remoteHostId: meta.remoteHostId } : null;
     },
-    refreshProviders: () => refreshCustomMcpProviders(),
+    refreshProviders: async () => {
+      await refreshCustomMcpProviders();
+      // Pi 已有代次租约：只让新会话取新配置，旧会话持有的 bridge 不关闭。
+      invalidatePiEnvironment();
+    },
     broadcastChanged: () => broadcastToAllWindows(MAKER_PUSH.MCP_CHANGED, {}),
     // 内置 server 名对自定义 MCP 是保留名：撞名会在装配层顶替内置 server 并继承
     // 它在 MCP 审批策略里的信任，所以 CRUD 阶段就拒收。
     getReservedMcpIds: () => getBuiltinMcpServerNames(),
-    // Persisted MCP changes must eventually replace the frozen spawn config;
-    // busy hosts keep their bridge until the existing idle retry can refresh it.
-    invalidateCodex: refreshMcpHarnesses,
     storeMcpToken: storeCustomMcpToken,
+    removeMcpToken: removeCustomMcpToken,
   });
   // Claude 原生 Auto 分类器不可用 → 会话仍保持 Auto，只把后续审批切到 Cindy reviewer。
   // coordinator 内部复核 DB 仍为 auto 并按 session 去重；不改偏好、不弹提示。

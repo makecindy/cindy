@@ -6205,15 +6205,17 @@ interface ElectronAPI {
     onMcpAppComposerAttachment: (cb: (input: import('../shared/mcpApps').McpAppComposerAttachment) => void) => () => void;
     onPluginUiAction: (callback: (input: unknown) => void) => () => void;
     onPluginUiState: (callback: (input: { epoch: string; updates: import('../shared/pluginUi').PluginUiStateChange[] }) => void) => () => void;
-    // 自定义 MCP 服务器配置 CRUD（可选 bearer token 另走通用 safeStorage IPC，不经这里）。
+    // 自定义 MCP 配置与可选 bearer token 保存意图（Main 统一保存后发布）。
     listCustomMcpServers: (
       context?: import('../shared/customMcp').CustomMcpListContext,
     ) => Promise<import('../shared/customMcp').CustomMcpListResult>;
     createCustomMcpServer: (
-      config: import('../shared/customMcp').CustomMcpConfig,
+      config: import('../shared/customMcp').CustomMcpInput,
+      tokenChange?: import('../shared/customMcp').CustomMcpTokenChange,
     ) => Promise<{ ok: true }>;
     updateCustomMcpServer: (
-      config: import('../shared/customMcp').CustomMcpConfig,
+      config: import('../shared/customMcp').CustomMcpInput,
+      tokenChange?: import('../shared/customMcp').CustomMcpTokenChange,
     ) => Promise<{ ok: true }>;
     deleteCustomMcpServer: (mcpId: string) => Promise<{ ok: true }>;
     /** token-only 后置刷新：safeStorage write/remove 完成后调用，消除竞态窗口。 */

@@ -905,7 +905,8 @@ describe('official MCP Apps interoperability', () => {
     await expect(f.host.open('renderer:1', 'task', 'card', {}))
       .rejects.toThrow('MCP_APP_REVISION_KEY_UNAVAILABLE');
     f.config.url += '/changed';
-    await expect(client.listTools()).rejects.toThrow('MCP_APP_SERVER_CHANGED');
+    // Existing tasks retain their endpoint snapshot when settings change.
+    expect((await client.listTools()).tools.map((tool) => tool.name)).toEqual(['draft_form', 'model_only']);
   });
   it.each(['http', 'sse'] as const)(
     'preserves upstream instructions in the %s model initialize response',

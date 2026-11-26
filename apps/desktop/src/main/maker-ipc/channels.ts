@@ -574,9 +574,11 @@ export const MAKER_INVOKE = {
   PROVIDER_IMPORT_CONFIRM: 'maker:provider:import:confirm',
   PROVIDER_IMPORT_CANCEL: 'maker:provider:import:cancel',
   /**
-   * 自定义 MCP 服务器 CRUD（配置入 localDb，可选 bearer token 另走通用 safe-storage IPC）。
-   * list 无入参；create/update 入参 = CustomMcpConfig；delete 入参 = mcpId。
-   * 成功后 main 刷新两个 agent 的 mcpProviders 数组并广播 MCP_CHANGED（见 MAKER_PUSH）。
+   * 自定义 MCP 服务器 CRUD（配置入 localDb，可选 bearer token 仍入安全存储）。
+   * list 可带运行期目录上下文，stdio 只回传 envKeys；create/update 入参 = CustomMcpInput，
+   * stdio 环境值只接受 envChanges；可选第二参数为 CustomMcpTokenChange；delete 入参 = mcpId。
+   * Main 串行完成配置和凭证写入后发布，stdio → 远程切换先清除旧 Bearer。
+   * 成功后 main 刷新各 agent 的 mcpProviders 数组并广播 MCP_CHANGED（见 MAKER_PUSH）。
    */
   MCP_CUSTOM_LIST: 'maker:mcp:custom:list',
   MCP_DUPLICATES_LIST: 'maker:mcp:duplicates:list',
@@ -585,9 +587,9 @@ export const MAKER_INVOKE = {
   MCP_CUSTOM_UPDATE: 'maker:mcp:custom:update',
   MCP_CUSTOM_DELETE: 'maker:mcp:custom:delete',
   /**
-   * token-only 后置刷新：renderer 在 safeStorage write/remove 完成后调用，触发第二次
-   * refreshProviders + invalidateCodex，消除「配置 IPC 完成→token 落盘」之间的竞态窗口。
-   * 无入参，无实质 DB 改动。
+   * 兼容已有调用方的 token-only 后置刷新；原生设置已将凭证写入合并到保存 IPC。重新
+   * refreshProviders + broadcastChanged，供后续运行环境装配读取最新凭证。
+   * 无入参，无实质 DB 改动，不关闭已有任务或重建共享运行环境。
    */
   MCP_CUSTOM_REFRESH: 'maker:mcp:custom:refresh',
   /**

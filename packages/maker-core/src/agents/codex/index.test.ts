@@ -11779,13 +11779,18 @@ describe('CodexAgent MCP thread context hooks', () => {
     await resumeHandle.close();
   });
 
-  it('cold-resumes the same Codex thread when its configured scheduler MCP is missing', async () => {
+  // Unit regression: a local session must retain its launch MCP configuration
+  // during cold recovery after Settings changes; the next session reads the edit.
+  // The existing recovery test had only a constant endpoint and missed this drift.
+  it('cold-resumes with its original MCP snapshot while a new session uses edited settings', async () => {
     const threadId = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
     const agent = new CodexAgent(createDeps({ systemPrompt: 'HOST PRODUCT PROMPT' }));
     let resumeCount = 0;
+    let schedulerUrl = 'http://127.0.0.1:47100/mcp/cindy_scheduler';
     const host = installFakeHost(agent, (method, params) => {
       if (method === Method.ThreadResume) {
         resumeCount++;
+        schedulerUrl = 'http://127.0.0.1:47101/mcp/cindy_scheduler';
         return { thread: { id: threadId }, model: 'gpt-5.4', modelProvider: 'openai' };
       }
       if (method === Method.McpServerStatusList) {
@@ -11798,7 +11803,7 @@ describe('CodexAgent MCP thread context hooks', () => {
       if (method === Method.TurnStart) return { turn: { id: 'scheduler-turn' } };
       return undefined;
     }, {
-      buildSessionMcpConfig: () => ({ 'mcp_servers.cindy_scheduler.url': 'http://127.0.0.1:47100/mcp/cindy_scheduler' }),
+      buildSessionMcpConfig: () => ({ 'mcp_servers.cindy_scheduler.url': schedulerUrl }),
     });
     const handle = await agent.startSession({
       sessionId: 'session-scheduler-recovery', resumeSessionId: threadId,
@@ -11819,6 +11824,15 @@ describe('CodexAgent MCP thread context hooks', () => {
     expect(host.request.mock.calls.filter(([method]) => method === Method.McpServerStatusList)).toHaveLength(checksBeforeSend);
     expect(host.request.mock.calls.map(([method]) => method).lastIndexOf(Method.McpServerStatusList))
       .toBeLessThan(host.request.mock.calls.findIndex(([method]) => method === Method.TurnStart));
+    const next = await agent.startSession({ sessionId: 'session-scheduler-next',
+      model: 'gpt-5.4', workingDir: '/repo' });
+    const nextStart = host.request.mock.calls.find(([method]) => method === Method.ThreadStart)?.[1] as {
+      config: Record<string, unknown>;
+    };
+    expect(nextStart.config['mcp_servers.cindy_scheduler.url']).toBe(schedulerUrl);
+    expect(host.retire).not.toHaveBeenCalled();
+    expect(host.request.mock.calls.some(([method]) => method === Method.TurnInterrupt)).toBe(false);
+    await next.close();
     await handle.close();
   });
 

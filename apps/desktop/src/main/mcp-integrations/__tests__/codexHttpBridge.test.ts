@@ -168,6 +168,90 @@ describe('codexHttpBridge', () => {
   afterEach(async () => {
     await bridge?.shutdown();
     bridge = null;
+    clearAppServerConfigs();
+  });
+
+  // Regression: a cached bridge omitted custom servers saved after its startup.
+  // Real HTTP initialize/call verifies new factories without retiring an active
+  // transport or widening the existing bound-session and frozen-mount gates.
+  it('updates custom factories for new sessions while an existing call and transport keep their snapshot', async () => {
+    const addConfig = (id: string) => registerAppServer(id, () => ({ id, transport: 'http', url: 'https://fixture.invalid' }));
+    addConfig('custom_old');
+    let started!: () => void;
+    const entered = new Promise<void>(resolve => { started = resolve; });
+    let finish!: () => void;
+    const hold = new Promise<void>(resolve => { finish = resolve; });
+    let first = true;
+    const factory = (version: string) => () => {
+      const server = new McpServer({ name: 'fixture', version: '1' });
+      server.tool('version', {}, async () => {
+        if (version === 'old' && first) { first = false; started(); await hold; }
+        return { content: [{ type: 'text', text: version }] };
+      });
+      return server;
+    };
+    bridge = await startCodexHttpBridge({ serverFactories: { cindy_test: createTestServer },
+      additionalBearerTokens: () => ['invalid-test-only-persistent-token'], logger: noopLogger() });
+    const current = bridge;
+    const identity = { port: current.port, token: current.token, instanceId: current.instanceId };
+    current.registerThreadContext('thread', { agentKind: 'codex', sessionId: 'task', sessionInstanceId: 'instance', workingDir: '/fixture' });
+    current.replaceAppServerFactories({ custom_old: factory('old') });
+    const baseHeaders = { authorization: `Bearer ${current.token}`, accept: 'application/json, text/event-stream', 'content-type': 'application/json' };
+    let id = 0;
+    const init = async (name: string, instance: string | undefined = 'instance') => {
+      const url = instance ? withMcpRouteIdentity(current.url(name), { sessionInstanceId: instance }) : current.url(name);
+      return fetch(url, { method: 'POST', headers: baseHeaders, body: JSON.stringify({ jsonrpc: '2.0', id: ++id, method: 'initialize', params: {
+        protocolVersion: '2024-11-05', capabilities: {}, clientInfo: { name: 'factory-test', version: '1' },
+      } }) });
+    };
+    const connect = async (name: string) => {
+      const initialized = await init(name);
+      expect(initialized.status).toBe(200);
+      const session = initialized.headers.get('mcp-session-id')!;
+      await initialized.text();
+      return async () => readRpcResponse(await fetch(withMcpRouteIdentity(current.url(name), { sessionInstanceId: 'instance' }), {
+        method: 'POST', headers: { ...baseHeaders, 'mcp-session-id': session },
+        body: JSON.stringify({ jsonrpc: '2.0', id: ++id, method: 'tools/call', params: { name: 'version', arguments: {}, _meta: { threadId: 'thread' } } }),
+      }));
+    };
+    const oldCall = await connect('custom_old');
+    const pending = oldCall();
+    await entered;
+    addConfig('custom_added');
+    current.replaceAppServerFactories({ custom_old: factory('updated'), custom_added: factory('added') });
+    expect({ port: current.port, token: current.token, instanceId: current.instanceId }).toEqual(identity);
+    finish();
+    expect(await pending).toMatchObject({ result: { content: [{ text: 'old' }] } });
+    expect(await oldCall()).toMatchObject({ result: { content: [{ text: 'old' }] } });
+    expect(await (await connect('custom_old'))()).toMatchObject({ result: { content: [{ text: 'updated' }] } });
+    expect(await (await connect('custom_added'))()).toMatchObject({ result: { content: [{ text: 'added' }] } });
+    const denied = await init('custom_added', '');
+    expect(denied.status).toBe(401);
+    await denied.text();
+    current.registerThreadContext('frozen', { agentKind: 'codex', sessionId: 'frozen-task', sessionInstanceId: 'frozen-instance', workingDir: '/fixture',
+      vendorOptions: { [CODEX_ALLOWED_BUILTIN_PLUGIN_IDS_KEY]: [], cindyRuntimeMcpServerNames: ['custom_old'] } });
+    const excluded = await init('custom_added', 'frozen-instance');
+    expect(excluded.status).toBe(403);
+    await excluded.text();
+    current.registerSessionCtx('remote-task', { agentKind: 'claude-code', sessionId: 'remote-task',
+      sessionInstanceId: 'remote-instance', workingDir: '/fixture', remoteHostId: 'remote-host' });
+    const remote = await fetch(withMcpRouteIdentity(current.url('custom_added'), { sessionId: 'remote-task', sessionInstanceId: 'remote-instance' }), {
+      method: 'POST', headers: { ...baseHeaders, authorization: 'Bearer invalid-test-only-persistent-token' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: ++id, method: 'initialize', params: {
+        protocolVersion: '2024-11-05', capabilities: {}, clientInfo: { name: 'remote-fixture', version: '1' },
+      } }),
+    });
+    expect(remote.status).toBe(403);
+    await remote.text();
+    addConfig('cindy_test');
+    expect(() => current.replaceAppServerFactories({ custom_old: factory('wrong'), cindy_test: factory('wrong') })).toThrow('MCP_APP_SERVER_FACTORY_NOT_ALLOWED');
+    expect(() => current.replaceAppServerFactories({ unregistered: factory('wrong') })).toThrow('MCP_APP_SERVER_FACTORY_NOT_ALLOWED');
+    expect(await (await connect('custom_old'))()).toMatchObject({ result: { content: [{ text: 'updated' }] } });
+    current.replaceAppServerFactories({ custom_old: factory('updated') });
+    const removed = await init('custom_added');
+    expect(removed.status).toBe(404);
+    await removed.text();
+    expect(await oldCall()).toMatchObject({ result: { content: [{ text: 'old' }] } });
   });
 
   // Regression: lazy bridge startup inside an admitted action must not attach that

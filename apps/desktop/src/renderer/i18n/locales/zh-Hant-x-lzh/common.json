@@ -9538,21 +9538,23 @@
       }
     },
     "mcp": {
+      "unreadable": "配置不可讀，暫不可用。可刪而重添。",
+      "loadFailed": "MCP 配置未能讀取，請重試。",
       "title": "外器",
-      "subtitle": "接君自有之遠端 MCP 伺服器。HTTP / Streamable HTTP 伺服器，Claude 與 Codex 皆可呼叫；SSE 僅支援 Claude。",
+      "subtitle": "連接遠端 HTTP/SSE 服務或本機 stdio 程式。",
       "cancel": "罷",
       "save": "存之",
       "editAria": "修",
       "deleteAria": "刪",
       "addCustom": {
         "title": "增 MCP 伺服器",
-        "subtitle": "填遠端 MCP 端點(http/sse)"
+        "subtitle": "設定 HTTP/SSE 位址或 stdio 命令"
       },
       "dialog": {
         "createTitle": "增 MCP 伺服器",
         "editTitle": "修 MCP 伺服器",
-        "desc": "僅支援遠端 http / sse 型 MCP。存後新開或重啟之 Agent 會話即可呼叫，方行之 Agent 會話不受影響。",
-        "teammateDesc": "僅支援遠端 http / sse 型 MCP。存後同伴自納為己用，於此言談下一則訊息起即可用之，毋須新開差事。"
+        "desc": "設遠端服務或本機程式。儲存後，現有差事仍循舊設；本機新啟差事載入新設。",
+        "teammateDesc": "設遠端服務或本機程式。儲存後，現有差事仍循舊設；本機新啟差事載入新設。"
       },
       "fields": {
         "name": "顯名",
@@ -9564,16 +9566,35 @@
         "tokenPlaceholder": "填鑑權 token",
         "tokenEditPlaceholder": "留空則刪已存 token",
         "tokenSaved": "已存",
-        "tokenHelp": "用於鑑權：Claude 以 Authorization: Bearer 頭遣之；Codex 僅支援 Bearer 型鑑權。",
+        "tokenHelp": "由 Cindy 作為 Authorization: Bearer 請求標頭傳送。",
         "headers": "請求頭(可略)",
         "headerNamePlaceholder": "Header 名",
         "headerValuePlaceholder": "值",
         "addHeader": "增請求頭",
-        "removeRow": "刪此行"
+        "removeRow": "刪此行",
+        "command": "命令",
+        "commandHelp": "填已裝程式之名或絕對路徑，需連線時由 Cindy 啟之。",
+        "args": "參數",
+        "argsHelp": "一行一參。空格與空參皆留，不用 shell 語法。",
+        "cwd": "工作目錄（可略）",
+        "cwdHelp": "填執行電腦之絕對路徑；留空則用使用者主目錄。",
+        "env": "環境變數（可略）",
+        "envHelp": "值加密存之，不返助手；刪列即刪所存變數。",
+        "envName": "變數名",
+        "envValue": "值",
+        "envSaved": "已存；不改則留",
+        "addArg": "添參數",
+        "removeArg": "刪參數",
+        "addEnv": "添變數",
+        "removeEnv": "刪變數"
       },
       "errors": {
         "nameRequired": "請填顯名",
-        "urlInvalid": "請填合法之 http(s) URL"
+        "urlInvalid": "請填合法之 http(s) URL",
+        "commandRequired": "請填寫程式名稱或絕對路徑",
+        "argsInvalid": "參數不能包含 NUL 字元",
+        "cwdInvalid": "工作目錄不能包含 NUL 字元",
+        "envInvalid": "變數名稱不可重複，僅限字母、數字和底線，且不可由數字開頭。值不可包含 NUL。"
       },
       "toast": {
         "created": "MCP 伺服器已增",

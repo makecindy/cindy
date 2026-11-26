@@ -312,6 +312,7 @@ rc9 在发布提交 `ce58e49a47` 上的 27 项 CI 全部通过。Windows 的独�
 | codex-home、codex-accounts | 写 | Codex 登录、作废标记、账号目录 | 24b、m1-cp9、m1-cp13 | Codex 自己的格式；账号服务同一 core；作废双向对照（`hostCodexInvalidationParity.test.ts`） |
 | pi-agent-home、工作树租约、回合改动记录 | 写 | Pi 运行目录与会话；租约；改动记录 | 各行 | 同一份代码 |
 | browser-runtime、windows-atomic-rename | 写 | 托管浏览器运行目录；Windows 原子改名辅助程序缓存 | M1 前 | 与桌面同名，同一份代码、同一布局 |
+| windows-mcp-stdio-job | 写（仅 Windows 开发版） | 首次使用 stdio MCP 时编译的辅助程序缓存 | 自定义 stdio MCP | 桌面与 Host 复用同一布局；旧版本会忽略，可从源码重建 |
 | profile 根目录的 `ghost-skill-projection-boundary.json`、`.quarantine.json`（Skill 投影的 owner 边界） | serve 不写状态，只在修改时持同一把锁（`.json.lock`）；独立 Host 的 `cindy-host login` 命令行进程照桌面协议写（隔离标记、pending、stable） | 方案 A：窗口提交 owner；独立 profile 上由 login 提交，serve 注入拒绝（第 25 行 25b） | 25a、25b | 同一份桌面代码写、同一份读 |
 | profile 根目录的 `claude-idle-release.json`（Claude 空闲释放的分钟数覆盖） | 不写，只读 | 空闲释放每次扫描时读（第一批检查点 1，第 35 行） | 第一批检查点 1 | Host 不写 |
 | profile 根目录的 `worktrees.json`（桌面的 worktree 登记表，electron-store） | 不写、不建，只读 | 移动任务时判断 worktree 归属（甲 5）：每次读，文件不存在等于没有绑定，读不懂（不是 JSON、结构不对、条目没有路径）就拒绝移动，与桌面的 store 抛错一致 | 甲 5 | Host 不写 |

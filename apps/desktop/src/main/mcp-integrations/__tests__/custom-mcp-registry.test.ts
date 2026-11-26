@@ -10,12 +10,16 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { McpProvider } from '@cindy/maker-core';
-import type { CustomMcpConfig } from '../../../shared/customMcp.js';
+import type { CustomMcpConfig, CustomMcpUnreadableEntry } from '../../../shared/customMcp.js';
 import { detectMcpDuplicates, resolveMcpDuplicateChoices } from '../../maker-host/mcp-duplicate-detection.js';
 import type { McpDuplicateChoice } from '../../../shared/customMcp.js';
 
-const storeMock = vi.hoisted(() => ({ listCustomMcpServers: vi.fn(), owner: {} as object | null }));
+const storeMock = vi.hoisted(() => ({ listCustomMcpServers: vi.fn(), readToken: vi.fn(), warn: vi.fn(), unreadableServers: [] as CustomMcpUnreadableEntry[], owner: {} as object | null }));
 vi.mock('../../localDb/client/current.js', () => ({ getCurrentDbClientSnapshot: () => storeMock.owner }));
+vi.mock('../../logger.js', async importOriginal => ({
+  ...await importOriginal<typeof import('../../logger.js')>(),
+  createLogger: () => ({ trace() {}, debug() {}, info() {}, warn: storeMock.warn, error() {}, fatal() {} }),
+}));
 
 // This suite uses isolated SQLite fixtures; OS encryption is covered by the store suite.
 vi.mock('electron', async (importOriginal) => {
@@ -37,12 +41,14 @@ vi.mock('../../maker-host/custom-mcp-store.desktop.js', async () => {
     ...actual,
     // 只把读库这一步换成 mock；校验 / 判定逻辑用真实实现，避免名单在测试里漂移。
     listCustomMcpServers: storeMock.listCustomMcpServers,
+    readCustomMcpServers: async () => ({ servers: await storeMock.listCustomMcpServers(), unreadableServers: storeMock.unreadableServers }),
   };
 });
 
 vi.mock('../../secrets/providerSecretStore.js', () => ({
-  readCustomMcpToken: () => null,
+  readCustomMcpToken: storeMock.readToken,
 }));
+import { readAppServer } from '../../mcp-apps/runtime.js';
 
 import {
   getBuiltinMcpServerNames,
@@ -52,7 +58,7 @@ import {
   resetCustomMcpRegistry,
 } from '../custom-mcp-registry.desktop.js';
 
-function config(id: string): CustomMcpConfig {
+function config(id: string): Extract<CustomMcpConfig, { transport: 'http' | 'sse' }> {
   return {
     id,
     name: `custom ${id}`,
@@ -66,13 +72,69 @@ function builtin(name: string): McpProvider {
   return { name, toClaudeSdkConfig: () => ({ type: 'sdk' }) };
 }
 
-beforeEach(() => {
-  resetCustomMcpRegistry();
+beforeEach(async () => {
+  await resetCustomMcpRegistry();
   storeMock.owner = {};
+  storeMock.unreadableServers = [];
   storeMock.listCustomMcpServers.mockReset();
+  storeMock.readToken.mockReset().mockReturnValue(null);
+  storeMock.warn.mockClear();
 });
 
 describe('refreshCustomMcpProviders', () => {
+  // Unit regression: Node Host can throw while reading one damaged bearer file.
+  // A normal refresh must remove deleted/broken servers and publish healthy edits, without logging the exception.
+  it('isolates a broken bearer without retaining deleted services or publishing it unauthenticated', async () => {
+    const arr: McpProvider[] = [];
+    registerCustomMcpArrays(arr);
+    storeMock.listCustomMcpServers.mockResolvedValue([config('deleted'), config('broken'), config('healthy')]);
+    await refreshCustomMcpProviders();
+    expect(arr.map(provider => provider.name)).toEqual(['deleted', 'broken', 'healthy']);
+    const changed = { ...config('healthy'), url: 'https://updated.example/mcp' };
+    storeMock.listCustomMcpServers.mockResolvedValue([config('broken'), changed]);
+    storeMock.readToken.mockImplementation((id: string) => {
+      if (id === 'broken') throw new Error('fake-private-token-decryption-detail');
+      return 'fake-healthy-token';
+    });
+    await refreshCustomMcpProviders();
+    expect(arr.map(provider => provider.name)).toEqual(['healthy']);
+    expect(readAppServer('deleted')).toBeUndefined();
+    expect(readAppServer('broken')).toBeUndefined();
+    expect(readAppServer('healthy')).toMatchObject({ url: changed.url, headers: { Authorization: 'Bearer fake-healthy-token' } });
+    expect(JSON.stringify(storeMock.warn.mock.calls)).not.toContain('fake-private-token-decryption-detail');
+  });
+
+  // Unit: owner-scoped runtime publication must quarantine an unreadable stdio
+  // credential without retaining that process configuration or hiding peers.
+  it.each(['stdio', 'http'] as const)('removes unreadable %s credentials while retaining the usable remote provider', async (transport) => {
+    const arr: McpProvider[] = [];
+    registerCustomMcpArrays(arr);
+    const stdio: CustomMcpConfig = transport === 'stdio'
+      ? { id: 'local', name: 'Local', transport, command: 'node', args: [], env: {} } : config('local');
+    storeMock.listCustomMcpServers.mockResolvedValue([stdio, config('remote')]);
+    await refreshCustomMcpProviders();
+    expect(arr.map(provider => provider.name)).toEqual(['local', 'remote']);
+    storeMock.listCustomMcpServers.mockResolvedValue([config('remote')]);
+    storeMock.unreadableServers = [{ id: stdio.id, name: stdio.name, transport: stdio.transport, reason: 'unreadable' }];
+    await refreshCustomMcpProviders();
+    expect(arr.map(provider => provider.name)).toEqual(['remote']);
+    expect(readAppServer('local')).toBeUndefined();
+    expect(await listRegistrableCustomMcpServers()).toEqual([config('remote')]);
+  });
+
+  it('does not republish a delayed snapshot after a newer refresh has completed', async () => {
+    const arr: McpProvider[] = [];
+    registerCustomMcpArrays(arr);
+    let finish!: (rows: CustomMcpConfig[]) => void;
+    storeMock.listCustomMcpServers.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    const old = refreshCustomMcpProviders();
+    storeMock.listCustomMcpServers.mockResolvedValue([config('new')]);
+    await refreshCustomMcpProviders();
+    finish([config('old')]);
+    await old;
+    expect(arr.map(provider => provider.name)).toEqual(['new']);
+  });
+
   // 2026-11-10, unit: Maker's initial refresh ran before DB takeover. A missing
   // DB must defer, then the existing onReady refresh must publish saved MCPs.
   it('defers before DB readiness and publishes saved providers when onReady refreshes', async () => {

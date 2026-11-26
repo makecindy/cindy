@@ -5,9 +5,7 @@
  * （`<userData>/xdt-maker-<userId>.db`，换账号 closeDb 重开），故本表天然账号隔离、无 owner 列
  * （与 `custom_providers` / `sessions` 一致）。bearer token 不在此——单独走 safeStorage
  * （`mcp_token_<id>`，见 shared/providerSecrets 的 customMcpSecretStorageKey）。
- * headers 整组经系统 safeStorage 加密后与配置原子写入；旧明文行在读取时转换。
- *
- * 仅支持远程 transport（http/sse），一条记录 = 一个可被 Claude / Codex 共同调用的远程 MCP。
+ * headers 和 stdio env 分别经系统凭证存储加密后与配置原子写入；旧明文 headers 行在读取时转换。
  *
  * 验证（`validateCustomMcpConfig`）是纯函数，便于单测；CRUD 经 `getDbClient().drizzle`
  * （测试用 `setCurrentDbClient` 注入内存 db，见 __tests__）。
@@ -20,11 +18,13 @@ import { customMcpServers } from '../localDb/schema.js';
 import {
   MCP_TRANSPORTS,
   type CustomMcpConfig,
+  type CustomMcpInput,
+  type CustomMcpReadResult,
   type McpTransport,
 } from '../../shared/customMcp.js';
 
 export { MCP_TRANSPORTS };
-export type { CustomMcpConfig, McpTransport };
+export type { CustomMcpConfig, CustomMcpInput, McpTransport };
 
 /** MCP id slug 规则（与 safeStorage key 名 `mcp_token_<id>` 合法字符对齐）。 */
 export const CUSTOM_MCP_ID_RE = /^[a-z0-9_-]+$/;
@@ -71,6 +71,36 @@ function invalid(message: string): ValidationResult {
   return { ok: false, code: 'INVALID_PARAMS', message };
 }
 
+function validEnvironmentKey(key: string): boolean {
+  return key.length > 0 && !/[=\0]/.test(key) && !UNSAFE_OBJECT_KEYS.has(key);
+}
+
+function validateEnvironment(env: unknown): ValidationResult {
+  if (!env || typeof env !== 'object' || Array.isArray(env)) return invalid('env must be an object');
+  for (const [key, value] of Object.entries(env)) {
+    if (!validEnvironmentKey(key)) return invalid('env names must be nonempty and contain no equals sign or NUL');
+    if (typeof value !== 'string' || value.includes('\0')) return invalid('env values must be strings without NUL');
+  }
+  return { ok: true };
+}
+
+/** Public native-form boundary: saved environment values can only be retained, replaced or removed. */
+export function validateCustomMcpInput(input: unknown, reservedIds: readonly string[] = []): ValidationResult {
+  if (!input || typeof input !== 'object') return invalid('config must be an object');
+  const c = input as Record<string, unknown>;
+  if (c.transport !== 'stdio') return validateCustomMcpConfig(input, reservedIds);
+  if ('env' in c) return invalid('use envChanges to update environment values');
+  const changes = c.envChanges as Record<string, unknown> | undefined;
+  if (!changes || typeof changes !== 'object' || Array.isArray(changes)) return invalid('envChanges required');
+  const result = validateEnvironment(changes.set);
+  if (!result.ok) return result;
+  if (!Array.isArray(changes.remove) || changes.remove.some(key => typeof key !== 'string' || !validEnvironmentKey(key))) {
+    return invalid('envChanges.remove must contain valid environment names');
+  }
+  if (changes.remove.some(key => Object.hasOwn(changes.set as object, key))) return invalid('environment changes cannot both set and remove a key');
+  return validateCustomMcpConfig({ ...c, env: changes.set }, reservedIds);
+}
+
 /**
  * 纯函数：校验一份自定义 MCP 配置的结构合法性。
  *
@@ -101,6 +131,13 @@ export function validateCustomMcpConfig(
 
   if (typeof c.transport !== 'string' || !MCP_TRANSPORTS.includes(c.transport as McpTransport)) {
     return invalid(`transport must be one of ${MCP_TRANSPORTS.join('|')}`);
+  }
+
+  if (c.transport === 'stdio') {
+    if (typeof c.command !== 'string' || !c.command.trim() || c.command.includes('\0')) return invalid('command must be nonempty and contain no NUL');
+    if (!Array.isArray(c.args) || c.args.some(arg => typeof arg !== 'string' || arg.includes('\0'))) return invalid('args must be strings without NUL');
+    if (c.cwd !== undefined && (typeof c.cwd !== 'string' || !c.cwd.trim() || c.cwd.includes('\0'))) return invalid('cwd must be nonempty and contain no NUL');
+    return validateEnvironment(c.env);
   }
 
   if (typeof c.url !== 'string' || c.url.trim().length === 0) return invalid('url required');
@@ -135,6 +172,11 @@ export function validateCustomMcpConfig(
 
 /** 规整配置（trim、裁剪 headers）。 */
 function normalizeConfig(config: CustomMcpConfig): CustomMcpConfig {
+  if (config.transport === 'stdio') return {
+    id: config.id, name: config.name.trim(), transport: 'stdio',
+    command: config.command, args: [...config.args],
+    ...(config.cwd !== undefined ? { cwd: config.cwd } : {}), env: { ...config.env },
+  };
   const headers: Record<string, string> = {};
   for (const [k, v] of Object.entries(config.headers ?? {})) {
     const key = k.trim();
@@ -149,20 +191,27 @@ function normalizeConfig(config: CustomMcpConfig): CustomMcpConfig {
   };
 }
 
-/** 安全解析 headers JSON（坏数据兜底 {}）。 */
+function resolveInput(config: CustomMcpConfig | CustomMcpInput, existing?: CustomMcpConfig): CustomMcpConfig {
+  if (config.transport !== 'stdio' || 'env' in config) return normalizeConfig(config);
+  const env = { ...(existing?.transport === 'stdio' ? existing.env : {}) };
+  for (const key of config.envChanges.remove) delete env[key];
+  Object.assign(env, config.envChanges.set);
+  return normalizeConfig({ ...config, env });
+}
+
+/** Distinguish per-record decode failures from database failures that must abort publication. */
+class UnreadableCustomMcpError extends Error {}
+
+/** Legacy plaintext headers follow the same strict shape as decrypted headers. */
 function parseHeaders(raw: string): Record<string, string> {
-  let v: unknown;
   try {
-    v = JSON.parse(raw);
+    const value: unknown = JSON.parse(raw);
+    if (!value || typeof value !== 'object' || Array.isArray(value) ||
+        Object.values(value).some(v => typeof v !== 'string')) throw new Error();
+    return value as Record<string, string>;
   } catch {
-    return {};
+    throw new UnreadableCustomMcpError('MCP header credentials are unreadable');
   }
-  if (!v || typeof v !== 'object' || Array.isArray(v)) return {};
-  const out: Record<string, string> = {};
-  for (const [k, val] of Object.entries(v as Record<string, unknown>)) {
-    if (typeof val === 'string') out[k] = val;
-  }
-  return out;
 }
 
 /** One encrypted configuration store for every launcher; codecs keep the original format. */
@@ -188,33 +237,63 @@ function encodeHeaders(headers: Record<string, string>): string {
   }
 }
 
+function encodeEnvironment(env: Record<string, string>): string {
+  if (Object.keys(env).length === 0) return '{}';
+  credentials.assertAvailable();
+  try { return ENCRYPTED_HEADERS_PREFIX + credentials.encrypt(JSON.stringify(env)); }
+  catch { throw new Error('MCP environment encryption failed'); }
+}
+
+function decodeEnvironment(raw: string): Record<string, string> {
+  if (raw === '{}') return {};
+  try {
+    credentials.assertAvailable();
+    if (!raw.startsWith(ENCRYPTED_HEADERS_PREFIX)) throw new Error();
+    const value: unknown = JSON.parse(credentials.decrypt(raw.slice(ENCRYPTED_HEADERS_PREFIX.length)));
+    if (!validateEnvironment(value).ok) throw new Error();
+    return value as Record<string, string>;
+  } catch { throw new UnreadableCustomMcpError('MCP environment credentials are unreadable'); }
+}
+
 async function rowToConfig(
   row: typeof customMcpServers.$inferSelect,
   db: ReturnType<typeof getDbClient>['drizzle'],
 ): Promise<CustomMcpConfig> {
+  if (row.transport === 'stdio') {
+    let args: unknown;
+    try { args = JSON.parse(row.args); } catch { throw new UnreadableCustomMcpError('MCP arguments are unreadable'); }
+    if (!Array.isArray(args) || args.some(arg => typeof arg !== 'string')) throw new UnreadableCustomMcpError('MCP arguments are unreadable');
+    return { id: row.id, name: row.name, transport: 'stdio', command: row.command ?? '', args,
+      ...(row.cwd !== null ? { cwd: row.cwd } : {}), env: decodeEnvironment(row.env) };
+  }
   let headers: Record<string, string>;
   if (row.headers.startsWith(ENCRYPTED_HEADERS_PREFIX)) {
-    requireHeaderEncryption();
     // A corrupt/unreadable blob must not masquerade as an empty credential map.
     try {
-      const value: unknown = JSON.parse(credentials.decrypt(row.headers.slice(ENCRYPTED_HEADERS_PREFIX.length)));
-      if (!value || typeof value !== 'object' || Array.isArray(value) ||
-          Object.values(value).some((v) => typeof v !== 'string')) throw new Error();
-      headers = value as Record<string, string>;
+      requireHeaderEncryption();
+      headers = parseHeaders(credentials.decrypt(row.headers.slice(ENCRYPTED_HEADERS_PREFIX.length)));
     } catch {
       // JSON/decrypt error text can contain plaintext. Report only a fixed error.
-      throw new Error('MCP header credentials are unreadable');
+      throw new UnreadableCustomMcpError('MCP header credentials are unreadable');
     }
   } else {
     headers = parseHeaders(row.headers);
     if (Object.keys(headers).length > 0) {
-      const encrypted = encodeHeaders(headers);
+      let encrypted: string;
+      try { encrypted = encodeHeaders(headers); }
+      catch { throw new UnreadableCustomMcpError('MCP header credentials are unreadable'); }
       // Captured DB belongs to the read's owner. CAS preserves concurrent edits/deletes;
       // encryption-only conversion does not change the runtime generation.
-      await db.update(customMcpServers).set({ headers: encrypted }).where(and(
-        eq(customMcpServers.id, row.id), eq(customMcpServers.headers, row.headers),
-        eq(customMcpServers.updatedAt, row.updatedAt),
-      ));
+      try {
+        await db.update(customMcpServers).set({ headers: encrypted }).where(and(
+          eq(customMcpServers.id, row.id), eq(customMcpServers.headers, row.headers),
+          eq(customMcpServers.updatedAt, row.updatedAt),
+        ));
+      } catch {
+        // Query errors can include the old plaintext header in CAS parameters.
+        // This remains a batch-level storage failure, not an unreadable record.
+        throw new Error('MCP credential storage update failed');
+      }
     }
   }
   return {
@@ -222,20 +301,36 @@ async function rowToConfig(
     name: row.name,
     transport: (MCP_TRANSPORTS.includes(row.transport as McpTransport)
       ? row.transport
-      : 'http') as McpTransport,
+      : 'http') as 'http' | 'sse',
     url: row.url,
     headers,
   };
 }
 
-/** 列出当前账号的全部自定义 MCP（按 sortOrder 升序，再按 createdAt）。 */
+/** Healthy configurations in display order. Use readCustomMcpServers when omissions must be reported. */
 async function listCustomMcpServers(): Promise<CustomMcpConfig[]> {
+  return (await readCustomMcpServers()).servers;
+}
+
+/** Isolate unreadable rows without exposing credentials or treating a failed DB read as an empty catalog. */
+async function readCustomMcpServers(ids?: readonly string[]): Promise<CustomMcpReadResult> {
+  if (ids?.length === 0) return { servers: [], unreadableServers: [] };
   const db = getDbClient().drizzle;
-  const rows = await db
-    .select()
-    .from(customMcpServers)
+  const rows = await db.select().from(customMcpServers)
+    .where(ids ? inArray(customMcpServers.id, [...new Set(ids)]) : undefined)
     .orderBy(asc(customMcpServers.sortOrder), asc(customMcpServers.createdAt));
-  return Promise.all(rows.map((row) => rowToConfig(row, db)));
+  const servers: CustomMcpConfig[] = [];
+  const unreadableServers: CustomMcpReadResult['unreadableServers'] = [];
+  for (const row of rows) {
+    try { servers.push(await rowToConfig(row, db)); }
+    catch (error) {
+      if (!(error instanceof UnreadableCustomMcpError)) throw error;
+      unreadableServers.push({ id: row.id, name: row.name,
+        transport: row.transport === 'stdio' || row.transport === 'sse' ? row.transport : 'http',
+        reason: 'unreadable' });
+    }
+  }
+  return { servers, unreadableServers };
 }
 
 /** Names for the source consent prompt: never load headers or upgrade legacy rows. */
@@ -288,10 +383,10 @@ async function customMcpServerExists(id: string): Promise<boolean> {
  * 返回入库后的规整配置。
  */
 async function createCustomMcpServer(
-  config: CustomMcpConfig,
+  config: CustomMcpConfig | CustomMcpInput,
   now: number = Date.now(),
 ): Promise<CustomMcpConfig> {
-  const c = normalizeConfig(config);
+  const c = resolveInput(config);
   const db = getDbClient().drizzle;
   const agg = await db
     .select({ maxOrder: sql<number | null>`MAX(${customMcpServers.sortOrder})` })
@@ -302,8 +397,7 @@ async function createCustomMcpServer(
     id: c.id,
     name: c.name,
     transport: c.transport,
-    url: c.url,
-    headers: encodeHeaders(c.headers),
+    ...encodeConfiguration(c),
     sortOrder: nextOrder,
     createdAt: now,
     updatedAt: now,
@@ -317,10 +411,9 @@ async function createCustomMcpServer(
  */
 async function updateCustomMcpServer(
   id: string,
-  config: CustomMcpConfig,
+  config: CustomMcpConfig | CustomMcpInput,
   now: number = Date.now(),
 ): Promise<CustomMcpConfig | null> {
-  const c = normalizeConfig({ ...config, id });
   const db = getDbClient().drizzle;
   const existing = await db
     .select()
@@ -328,17 +421,29 @@ async function updateCustomMcpServer(
     .where(eq(customMcpServers.id, id))
     .get();
   if (!existing) return null;
-  await db
+  const retainingEnvironment = config.transport === 'stdio' && 'envChanges' in config;
+  const c = resolveInput({ ...config, id },
+    retainingEnvironment && existing.transport === 'stdio' ? await rowToConfig(existing, db) : undefined);
+  const updated = await db
     .update(customMcpServers)
     .set({
       name: c.name,
       transport: c.transport,
-      url: c.url,
-      headers: encodeHeaders(c.headers),
+      ...encodeConfiguration(c),
       updatedAt: now,
     })
-    .where(eq(customMcpServers.id, id));
+    .where(retainingEnvironment
+      ? and(eq(customMcpServers.id, id), eq(customMcpServers.updatedAt, existing.updatedAt), eq(customMcpServers.env, existing.env))
+      : eq(customMcpServers.id, id))
+    .returning({ id: customMcpServers.id });
+  if (retainingEnvironment && updated.length === 0) throw new Error('MCP configuration changed; reopen the form and try again');
   return c;
+}
+
+function encodeConfiguration(c: CustomMcpConfig) {
+  return c.transport === 'stdio'
+    ? { url: '', headers: '{}', command: c.command, args: JSON.stringify(c.args), cwd: c.cwd ?? null, env: encodeEnvironment(c.env) }
+    : { url: c.url, headers: encodeHeaders(c.headers), command: null, args: '[]', cwd: null, env: '{}' };
 }
 
 /** 删除（幂等：不存在也不报错）。 */
@@ -347,5 +452,5 @@ async function deleteCustomMcpServer(id: string): Promise<void> {
   await db.delete(customMcpServers).where(eq(customMcpServers.id, id));
 }
 
-return { listCustomMcpServers, listCustomMcpNamesForSetup, listCustomMcpRuntimeGenerations, getCustomMcpServer, customMcpServerExists, createCustomMcpServer, updateCustomMcpServer, deleteCustomMcpServer };
+return { listCustomMcpServers, readCustomMcpServers, listCustomMcpNamesForSetup, listCustomMcpRuntimeGenerations, getCustomMcpServer, customMcpServerExists, createCustomMcpServer, updateCustomMcpServer, deleteCustomMcpServer };
 }

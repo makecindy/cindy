@@ -64,6 +64,9 @@ export function createHostPluginGateway(options: GatewayOptions) {
     listCustomMcpServers: async () => {
       const configs = await customStore.listCustomMcpServers(); runtime.assertCurrent(); return configs;
     },
+    readCustomMcpServers: async () => {
+      const configs = await customStore.readCustomMcpServers(); runtime.assertCurrent(); return configs;
+    },
     readCustomMcpToken,
     createAppServerProxy: createAppServerProxyFactory(apps),
   });
@@ -177,6 +180,6 @@ export function createHostPluginGateway(options: GatewayOptions) {
       runtime.assertCurrent(); return result;
     },
     releaseCaller: (caller: string) => host.releaseCaller(caller),
-    async close() { await host.reset(); custom.resetCustomMcpRegistry(); revisionKey.clear(); },
+    async close() { await custom.resetCustomMcpRegistry(); revisionKey.clear(); },
   };
 }

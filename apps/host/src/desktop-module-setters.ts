@@ -160,6 +160,7 @@ export const DESKTOP_MODULE_SETTERS: Readonly<Record<string, DesktopModuleSetter
   'apps/desktop/src/main/userDataPath.ts#configureAppDataDir': { status: 'bound', where: 'apps/host/src/main.ts' },
   'apps/desktop/src/main/userDataPath.ts#configureUserDataDir': { status: 'bound', where: 'apps/host/src/agent/claude-auth.mjs' },
   'apps/desktop/src/main/windowsAtomicRename.ts#configureWindowsAtomicRename': { status: 'bound', where: 'apps/host/src/main.ts' },
+  'apps/desktop/src/main/windowsMcpJob.ts#configureWindowsMcpJob': { status: 'bound', where: 'apps/host/src/main.ts' },
   'apps/desktop/src/main/worktree/WorktreeManagerPorts.ts#configureWorktreeManagerPorts': { status: 'bound', where: 'apps/host/src/agent/worktree-lifecycle.ts#createHostWorktreeLifecycle' },
   'apps/desktop/src/main/worktree/worktreeStoreCore.ts#configureWorktreeStoreDbSync': { status: 'bound', where: 'apps/host/src/agent/worktree-lifecycle.ts#createHostWorktreeLifecycle' },
   'apps/desktop/src/main/worktree/worktreeStoreCore.ts#configureWorktreeStorePorts': { status: 'internal', reason: 'worktreeStore.ts binds its Node-safe profile JSON backends when it loads, in the Host as on the desktop' },

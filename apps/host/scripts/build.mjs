@@ -7,8 +7,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createRequire, isBuiltin } from 'node:module';
 import { createHash } from 'node:crypto';
-import os from 'node:os';
 import { execFileSync } from 'node:child_process';
+import { stageWindowsRustHelpers } from '../../desktop/scripts/stage-windows-rust-helpers.cjs';
 import { parseArgs } from 'node:util';
 import { build } from 'esbuild';
 import { WEB_SHIM_DEFINE } from '../src/web-client-build.mjs';
@@ -215,18 +215,7 @@ try {
       recursive: true, dereference: true,
     });
   }
-  if (process.platform === 'win32') {
-    const target = process.arch === 'arm64' ? 'aarch64-pc-windows-msvc' : process.arch === 'x64' ? 'x86_64-pc-windows-msvc' : null;
-    if (!target) throw new Error(`Unsupported Windows atomic rename architecture: ${process.arch}`);
-    const rustc = path.join(os.homedir(), '.cargo', 'bin', 'rustc.exe');
-    const helperRoot = path.join(resources, 'tools', 'windows-atomic-rename');
-    await fs.mkdir(helperRoot, { recursive: true });
-    execFileSync(syncFs.existsSync(rustc) ? rustc : 'rustc', [
-      path.join(desktop, 'native', 'windows-atomic-rename', 'main.rs'), '--edition=2021',
-      '-C', 'opt-level=s', '-C', 'panic=abort', '--target', target,
-      '-o', path.join(helperRoot, 'cindy-windows-atomic-rename.exe'),
-    ], { timeout: 180_000, windowsHide: true, stdio: 'inherit' });
-  }
+  if (process.platform === 'win32') stageWindowsRustHelpers(resources, process.arch);
   const browserExecutable = chromium.executablePath();
   const browserRoot = process.platform === 'darwin'
     ? path.resolve(browserExecutable, '../../../..') : path.dirname(browserExecutable);
