@@ -23,7 +23,7 @@ export interface AutoResumeRuntimePorts {
   /** silent-stop kill switch, read on every decision (a settings change applies at once). */
   isSilentStopAutoResumeEnabled: () => boolean;
   /** interrupted-turn kill switch, read on every decision. */
-  isInterruptedTurnAutoResumeEnabled: () => boolean;
+  isInterruptedTurnAutoResumeEnabled: (sessionId: string) => boolean;
   guardLog: SilentStopAutoResumeGuardDeps['log'] & InterruptedTurnAutoResumeGuardDeps['log'];
   /** The bookkeeping's side effects; rolling back the guard's pending resume is the runtime's own. */
   bookkeeping: Omit<AutoResumeBookkeepingDeps, 'rollbackGuardPendingResume'>;

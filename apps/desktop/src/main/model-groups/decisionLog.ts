@@ -23,10 +23,13 @@ const log = createLogger('model-group-decisions');
 
 const FILE_NAME = 'model-group-decisions.json';
 const FIELD_MAX = 256;
-const WHY: readonly ModelGroupTraceWhy[] = [
-  'expiring', 'order', 'rotate', 'cheapest', 'cheapestFree', 'only', 'soonest', 'standby',
-  'off', 'unavailable', 'limited', 'tight', 'noVision',
-];
+/** 认识的原因；按类型列全，新增一种原因时这里漏写会编译失败，不会读盘时被悄悄丢掉。 */
+const WHY_KNOWN: Record<ModelGroupTraceWhy, true> = {
+  expiring: true, order: true, rotate: true, cheapest: true, cheapestFree: true, only: true, soonest: true,
+  drain: true, drainNext: true, headroom: true, weighted: true,
+  standby: true, off: true, unavailable: true, limited: true, tight: true, noVision: true,
+};
+const WHY = Object.keys(WHY_KNOWN) as ModelGroupTraceWhy[];
 
 function filePath(): string | null {
   return activeDataOwnerId() ? ownerScopedPath(FILE_NAME) : null;

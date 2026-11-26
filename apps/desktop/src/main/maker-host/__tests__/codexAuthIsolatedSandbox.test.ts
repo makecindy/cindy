@@ -22,6 +22,31 @@ import {
 } from '../codex-auth-invalidation.js';
 import { getPreferredSharedCodexAuthPath } from '../codex-shared-auth.js';
 
+// CI #12846: ownership checks must not depend on cold native process startup.
+// Fail fast if this unit fixture escapes its process boundary.
+vi.mock('node:child_process', async (importOriginal) => ({
+  ...await importOriginal<typeof import('node:child_process')>(),
+  execFile: vi.fn(() => { throw new Error('Unexpected native process in auth ownership unit test'); }),
+}));
+
+// Keep real snapshot copies, inode checks and authorization guards. Only the
+// native no-overwrite move is a synchronous fixture operation (no competing OS
+// writer here). codexAuthFileMove.test.ts covers interrupted publication; the
+// Windows CI check-windows-codex-auth-move.mjs runs the real File.Move, including
+// a concurrent destination and symlinks. Do not replace the adapter/reconcile.
+vi.mock('../codex-auth-file-move', () => ({
+  moveCodexAuthFile: async (from: string, to: string) => {
+    try {
+      fs.lstatSync(to);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      fs.renameSync(from, to);
+      return;
+    }
+    throw Object.assign(new Error('exists'), { code: 'EEXIST' });
+  },
+}));
+
 const dirs: string[] = [];
 const h = vi.hoisted(() => ({
   userDataDir: '',

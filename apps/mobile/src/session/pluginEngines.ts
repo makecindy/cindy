@@ -13,8 +13,11 @@
  *
  * 列表按电脑缓存在内存里：打开模型选择器时读一次并请那台的插件重新上报模型，不轮询。
  */
+import { ANTIGRAVITY_MARK_DATA_URL, isAntigravityEngine } from '@cindy/maker-shared/branding';
 import { useCallback, useEffect, useSyncExternalStore } from 'react';
-import { createPluginHarnessUsageReader } from '@cindy/plugin-protocol';
+import { quotaLevelFromRemaining, type QuotaLevel } from '@cindy/maker-shared/quota-level';
+import { resolvePermissionModeForOptions } from '@cindy/maker-shared/permission-mode';
+import { createPluginHarnessUsageReader, type GhostHarnessUsage } from '@cindy/plugin-protocol';
 
 import type { MobileAgentCapabilities, MobileChoiceOption, MobileModelOption } from '@cindy/maker-shared/agent-capabilities';
 
@@ -151,10 +154,13 @@ export function normalizePluginEngines(raw: unknown): MobilePluginEngine[] {
           return [{ id, displayName: text((mode as Record<string, unknown>).displayName, 64) ?? id }];
         })
       : [];
-    const fallbackModes = [{ id: 'ask', displayName: 'Ask' }, { id: 'bypassPermissions', displayName: 'Allow all' }];
+    const fallbackModes = [{ id: 'ask', displayName: 'Default permissions' }, { id: 'bypassPermissions', displayName: 'Full access' }];
     const modes = permissionModes.length ? permissionModes : fallbackModes;
     const requestedDefault = text(item.defaultPermissionMode, 64);
-    const iconDataUrl = typeof item.iconDataUrl === 'string' && item.iconDataUrl.startsWith('data:image/')
+    const ghostId = typeof item.ghostId === 'string' ? item.ghostId : undefined;
+    const iconDataUrl = isAntigravityEngine({ ghostId, providerId, name })
+      ? ANTIGRAVITY_MARK_DATA_URL
+      : typeof item.iconDataUrl === 'string' && item.iconDataUrl.startsWith('data:image/')
       ? item.iconDataUrl
       : undefined;
     const description = text(item.description, 200);
@@ -214,13 +220,17 @@ export function resolvePluginEngineEffort(
   return model?.defaultEffort && offered.includes(model.defaultEffort) ? model.defaultEffort : null;
 }
 
-/** 插件引擎任务的权限模式：引擎提供的那一档，否则用引擎的默认档；引擎已不在时只保留「全部允许」。 */
+/** 插件引擎任务的权限模式：按跨引擎等价规则（ask <-> default）匹配引擎提供的档位，否则安全回落到引擎默认档；引擎已不在时只保留「完全访问」。 */
 export function pluginEnginePermissionMode(
   mode: string | null | undefined,
   engine: Pick<MobilePluginEngine, 'permissionModes' | 'defaultPermissionMode'> | null | undefined,
 ): string {
   if (engine) {
-    return engine.permissionModes.some((option) => option.id === mode) ? mode! : engine.defaultPermissionMode;
+    return resolvePermissionModeForOptions(
+      mode,
+      engine.permissionModes.map((option) => option.id),
+      engine.defaultPermissionMode,
+    );
   }
   return mode === 'bypassPermissions' ? 'bypassPermissions' : 'ask';
 }
@@ -278,8 +288,8 @@ export function pluginEngineSessionCapabilities(
     .filter((effort) => rows.some((row) => row.efforts.includes(effort)))
     .map((effort) => ({ id: effort, label: labels.effort(effort) }));
   const permissionModes: MobileChoiceOption[] = (engine?.permissionModes ?? [
-    { id: 'ask', displayName: 'Ask' },
-    { id: 'bypassPermissions', displayName: 'Allow all' },
+    { id: 'ask', displayName: 'Default permissions' },
+    { id: 'bypassPermissions', displayName: 'Full access' },
   ]).map((mode) => ({ id: mode.id, label: mode.displayName }));
   return {
     ...(host ?? {}),
@@ -335,10 +345,61 @@ export interface UnifiedMobilePluginEngineRow {
   disabled: boolean;
 }
 
+export interface UnifiedMobilePluginEngineQuota {
+  summary: string;
+  level: QuotaLevel;
+  accessibilityLabel: string;
+}
+
 export interface UnifiedMobilePluginEngineGroup {
   key: string;
+  providerId: string;
   title: string;
+  quota?: UnifiedMobilePluginEngineQuota;
   rows: UnifiedMobilePluginEngineRow[];
+}
+
+/** Formats a plugin engine's usage snapshot into a single-line picker header readout. */
+export function formatPluginEnginePickerQuota(
+  usage: GhostHarnessUsage | null | undefined,
+  now: number,
+  language: string,
+  countdown: (resetsAtSeconds: number, now: number) => string | null,
+): UnifiedMobilePluginEngineQuota | undefined {
+  if (!usage) return undefined;
+  const current = (usage.windows ?? []).filter((row) => !row.resetsAt || row.resetsAt > now);
+  const first = current.reduce<(typeof current)[number] | undefined>(
+    (lowest, row) => (!lowest || row.remainingPercent < lowest.remainingPercent ? row : lowest),
+    undefined,
+  );
+  if (first) {
+    const percent = `${Math.round(first.remainingPercent)}%`;
+    const reset = first.resetsAt ? countdown(first.resetsAt / 1000, now) : null;
+    const summary = reset ? `${percent} · ${reset}` : percent;
+    return {
+      summary,
+      level: quotaLevelFromRemaining(first.remainingPercent),
+      accessibilityLabel: [first.label, summary].filter(Boolean).join(' · '),
+    };
+  }
+  const balance = (usage.balances ?? []).find((row) => Number.isFinite(Number(row.amount)));
+  if (!balance) return undefined;
+  const amount = Number(balance.amount);
+  let formatted: string;
+  try {
+    formatted = new Intl.NumberFormat(language, {
+      style: 'currency',
+      currency: balance.currency,
+      currencyDisplay: 'code',
+    }).format(amount);
+  } catch {
+    formatted = `${balance.currency} ${balance.amount}`;
+  }
+  return {
+    summary: formatted,
+    level: amount <= 0 ? 'crit' : 'normal',
+    accessibilityLabel: formatted,
+  };
 }
 
 /** 插件引擎分组：引擎名命中搜索时整组列出，否则只列命中的模型；不可用的引擎可见但不能选。 */
@@ -382,7 +443,7 @@ export function buildPluginEngineGroups(
           disabled: !selectable,
         };
       });
-    if (rows.length) groups.push({ key: `plugin-engine:${engine.providerId}`, title: engine.name, rows });
+    if (rows.length) groups.push({ key: `plugin-engine:${engine.providerId}`, providerId: engine.providerId, title: engine.name, rows });
   }
   return groups;
 }

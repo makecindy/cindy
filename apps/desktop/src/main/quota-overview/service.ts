@@ -17,6 +17,7 @@
  */
 
 import { isSessionActivityRunning } from '@cindy/maker-shared/session-activity';
+import { PLUGIN_USAGE_READ_INTERVAL_MS, type GhostHarnessUsage } from '@cindy/plugin-protocol';
 import type {
   MobileCodexRateLimitsResult,
   MobileUsageWidgetSnapshotResult,
@@ -48,7 +49,9 @@ import { getResolvedMainLocale, mainStringKeysUnder, rawMainString } from '../i1
 import { getSessionRowSnapshot } from '../localDb/ipc/sessions.js';
 import { createLogger } from '../logger.js';
 import { getDesktopProviderService } from '../maker-host/createDesktopProviderService.js';
-import { readKimiCodingAccountUsage, readOpenCodeGoAccountUsage } from '../maker-host/provider-account-usage.js';
+import { readPluginHarnessUsage } from '../cindy-brain/pluginHarnesses.js';
+import { listPluginEngineViews, onPluginEnginesChanged } from '../maker-ipc/pluginEnginesIpc.js';
+import { readKimiCodingAccountUsage, readOpenCodeGoAccountUsage, readZhipuCodingPlanAccountUsage } from '../maker-host/provider-account-usage.js';
 import { getSessionProvider, hasSessionProvider } from '../maker-host/session-provider-store.js';
 import {
   readClaudeSubscriptionUsageSnapshotForDeviceLink,
@@ -59,6 +62,7 @@ import {
   triggerXaiSubscriptionUsageRefresh,
 } from '../maker-ipc/usage.js';
 import { serverApiFetch } from '../serverApiClient.desktop.js';
+import { isCreditUsageRateLimited } from '../model-access/creditUsageRateLimit.js';
 import { observeClaudeAccountUsage, readClaudeAccountUsageRevision, readClaudeAccountUsageSnapshot, triggerClaudeAccountUsageRefresh } from '../usage/claudeAccountUsage.js';
 import { currentLedgerCurrency } from '../usage/ledgerCurrency.js';
 import { readUsageHistory, type UsageHistoryPayload } from '../usage/usageHistory.js';
@@ -180,6 +184,8 @@ export class QuotaOverviewService {
   private remoteSeen: TimedCache<Map<string, RemoteSeen>> | null = null;
   private readonly remoteInFlight = new OwnedInFlight<MenubarSubscriptionInput[]>();
   private readonly resets = new Map<string, TimedCache<MenubarResetCredits | null>>();
+  private readonly pluginUsage = new Map<string, TimedCache<GhostHarnessUsage | null>>();
+  private readonly pluginUsageInFlight = new Map<string, OwnedInFlight<GhostHarnessUsage | null>>();
   /** Received shares' quotas, read only through each share's own authorization. */
   private sharedReader: SharedQuotaReader | null = null;
   /** The reader's latest result and the owner generation it was read for. */
@@ -350,6 +356,10 @@ export class QuotaOverviewService {
         this.accountsRevision += 1;
         this.scheduleRebuild();
       }),
+      onPluginEnginesChanged(() => {
+        this.pluginUsage.clear();
+        this.scheduleRebuild();
+      }),
       observeClaudeAccountUsage(() => {
         if (!this.balanceAccountKey()?.startsWith('quota:')) return;
         this.balance = null;
@@ -365,6 +375,7 @@ export class QuotaOverviewService {
           this.remote = null;
           this.remoteSeen = null;
           this.resets.clear();
+          this.pluginUsage.clear();
         }
         this.scheduleRebuild();
       }),
@@ -422,6 +433,8 @@ export class QuotaOverviewService {
     this.usageCache.clear();
     this.remote = null;
     this.resets.clear();
+    this.pluginUsage.clear();
+    this.pluginUsageInFlight.clear();
   }
 
   /**
@@ -523,10 +536,14 @@ export class QuotaOverviewService {
     let stale = false;
     const collected = await collectMenubarInputs({
       nowMs,
+      now: Date.now,
       listProviders: () => getDesktopProviderService().listProviders({ allowSideEffects: false }),
+      listPluginEngines: () => listPluginEngineViews(),
+      readPluginEngineUsage: (key) => this.readPluginUsage(key, force, nowMs),
       readSubscriptionPool: (providerId) => force ? refreshSubscriptionPool(providerId, true) : readSubscriptionPool(providerId),
       readKimi: (providerId) => readKimiCodingAccountUsage({ providerId, forceRefresh: force }),
       readOpenCodeGo: (providerId) => readOpenCodeGoAccountUsage({ providerId, forceRefresh: force }),
+      readZhipu: (providerId) => readZhipuCodingPlanAccountUsage({ providerId, forceRefresh: force }),
       readCodex: (providerId) => readCodexAccountUsageSnapshot(providerId),
       readClaude: (providerId) => readClaudeSubscriptionUsageSnapshotForDeviceLink(providerId),
       readXai: (providerId) => readXaiSubscriptionUsageSnapshotForDeviceLink(providerId),
@@ -685,6 +702,32 @@ export class QuotaOverviewService {
     }
   }
 
+  /** One plugin engine's account usage, cached per owner and bypassed on explicit refresh. */
+  private async readPluginUsage(key: string, force: boolean, nowMs: number): Promise<GhostHarnessUsage | null> {
+    const ownerId = getActiveAppSession().dataOwnerId;
+    const entry = this.pluginUsage.get(key);
+    const cached = entry?.ownerId === ownerId ? entry : null;
+    const maxAge = this.interactive ? PLUGIN_USAGE_READ_INTERVAL_MS : BALANCE_FRESH_WHILE_CLOSED_MS;
+    if (cached && !force && nowMs - cached.readAtMs < maxAge) return cached.value;
+    let inFlight = this.pluginUsageInFlight.get(key);
+    if (!inFlight) {
+      inFlight = new OwnedInFlight<GhostHarnessUsage | null>();
+      this.pluginUsageInFlight.set(key, inFlight);
+    }
+    const readOwner = `${ownerId ?? ''}:${force ? 'force' : 'cached'}`;
+    try {
+      const value = await inFlight.run(readOwner, () => readPluginHarnessUsage(key));
+      if (getActiveAppSession().dataOwnerId !== ownerId) return null;
+      this.pluginUsage.set(key, { ownerId, value, readAtMs: Date.now() });
+      return value;
+    } catch (error) {
+      log.info('quota plugin usage unavailable', { key, error: errorMessage(error) });
+      if (getActiveAppSession().dataOwnerId !== ownerId) return null;
+      this.pluginUsage.set(key, { ownerId, value: cached?.value ?? null, readAtMs: Date.now() });
+      return cached?.value ?? null;
+    }
+  }
+
   // ── Cindy balance ──────────────────────────────────────────────────────────
 
   /**
@@ -699,7 +742,8 @@ export class QuotaOverviewService {
     if (!user) return null;
     if (user.membershipKind === 'org') return auth.dataOwnerId ? `quota:cloud:${auth.dataOwnerId}:${auth.ownerGeneration}:${readClaudeAccountUsageRevision()}` : null;
     if (user.membershipKind !== 'personal') return null;
-    return `${user.id}:${CURRENT_CINDY_REGION}`;
+    return JSON.stringify([auth.dataOwnerId, auth.ownerGeneration, user.id, authManager.getActiveAuthRealm(), CURRENT_CINDY_REGION,
+      getClientEndpoint('modelAccessApiBaseUrl')]);
   }
 
   private async readBalance(force: boolean, nowMs: number): Promise<MenubarBalanceReading | null> {
@@ -771,6 +815,8 @@ export class QuotaOverviewService {
         pools = totals.reduce((sum, total) => sum + Number(total), 0);
       }
     } catch (error) {
+      if (this.balanceAccountKey() !== accountKey) return null;
+      if (isCreditUsageRateLimited(error)) throw error;
       log.info('credit usage unavailable, falling back to balance', { error: errorMessage(error) });
       const balance = projectModelAccessBalance(await serverApiFetch<unknown>('/api/model-access/balance', options));
       available = Number(balance.available);

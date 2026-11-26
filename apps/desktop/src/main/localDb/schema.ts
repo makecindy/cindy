@@ -20,6 +20,7 @@ import {
   customType,
 } from 'drizzle-orm/sqlite-core';
 
+import type { MrRunObservation } from '@cindy/maker-scheduler';
 import type { SessionSource } from '../../shared/sessionSource.js';
 
 /** Rebuildable Chat Server projection inside the owner's database; namespace includes server and reader. */
@@ -106,6 +107,7 @@ const SESSION_SOURCES = [
   'telegram',
   'x',
   'discord',
+  'discord-hook',
   'wechat',
   'dingtalk',
   'wecom',
@@ -1544,6 +1546,11 @@ export const schedules = sqliteTable(
       enum: ['minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
     }),
     /**
+     * 模型组(模式)id：设了时新建任务按模式选来源(发到已有任务按那个任务自己的模式)，上面的具体模型是选不出来时沿用的
+     * (model-groups.md §6.3)。NULL = 没选模式，与原来一致。
+     */
+    modelGroup: text('model_group'),
+    /**
      * 速度档位沿用整数列：0 标准、1 快速、2 超快。超快仅用于获授权的 Codex 模型。
      */
     fastMode: speedSetting('fast_mode').notNull().default(false),
@@ -1659,7 +1666,8 @@ export const sessionGoals = sqliteTable(
     /** usageLimited 时记录的限额重置时刻(unix ms);到点自动续跑。其它状态为 null。 */
     usageResetAt: integer('usage_reset_at'),
     lastReason: text('last_reason'),
-    agentKind: text('agent_kind', { enum: ['claude-code', 'codex', 'pi'] }).notNull(),
+    /** 'acp' = 插件引擎任务的目标(2026-11-25；列无 CHECK 约束，只放宽 TS 枚举，无需迁移)。 */
+    agentKind: text('agent_kind', { enum: ['claude-code', 'codex', 'pi', 'acp'] }).notNull(),
     startedAt: integer('started_at').notNull(),
     updatedAt: integer('updated_at').notNull(),
   },
@@ -1763,6 +1771,7 @@ export const scheduleRuns = sqliteTable(
     preRunHookResult: text('pre_run_hook_result'),
     /** 本轮触发来源；NULL = 定时或手动。 */
     triggerSource: text('trigger_source'),
+    mrObservation: text('mr_observation', { mode: 'json' }).$type<MrRunObservation>(),
     readAt: integer('read_at'),
     /**
      * In-flight 心跳时间戳（毫秒）——跨实例的"仍有活实例在跑"租约信号。
@@ -1773,6 +1782,9 @@ export const scheduleRuns = sqliteTable(
   },
   (t) => ({
     idxBySchedule: index('idx_schedule_runs_schedule').on(t.scheduleId, t.firedAt),
+    idxMrObservation: index('idx_schedule_runs_mr_observation')
+      .on(t.scheduleId, t.status, t.firedAt, t.id)
+      .where(sql`${t.mrObservation} IS NOT NULL`),
     idxRunningSchedule: index('idx_schedule_runs_running_schedule')
       .on(t.scheduleId)
       .where(sql`${t.status} = 'running'`),
@@ -2572,7 +2584,8 @@ export const pluginTaskRequests = sqliteTable('plugin_task_requests', {
   id: text('id').primaryKey(),
   pluginId: text('plugin_id').notNull(),
   // imPermission: a looser IM-project permission the user allowed in Cindy (TypeScript-only enum).
-  operation: text('operation', { enum: ['create', 'send', 'target', 'imPermission'] }).notNull(),
+  // followUp: a task a plugin run's turn opened, whose word back becomes a follow-up run (targetId = that task).
+  operation: text('operation', { enum: ['create', 'send', 'target', 'imPermission', 'followUp'] }).notNull(),
   targetId: text('target_id').notNull(),
   requestKey: text('request_key').notNull(),
   fingerprint: text('fingerprint').notNull(),

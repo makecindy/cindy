@@ -23,6 +23,7 @@ import { ServerApiError } from '../serverApiClient.desktop.js';
 import { getCurrentDbClientUserId, getDbClient } from '../localDb/client/current.js';
 import type { DbClient } from '../localDb/client/DbClient.js';
 import { outboundFetch } from '../maker-host/outbound-fetch.desktop.js';
+import { getActiveCatalog } from '../maker-host/active-catalog.js';
 import {
   fetchMediaInvocationGuide,
   getMediaGuide,
@@ -1270,6 +1271,15 @@ async function prepareInvocation(
     });
   }
   if (!model) {
+    if (capability === 'image.generate' && providerId &&
+        getActiveCatalog().providers.some(provider => provider.id === providerId && provider.source === 'user')) {
+      return failure('MODEL_NOT_AVAILABLE', '指定供应商的可用生图型号中没有找到目标型号', false, {
+        outcomeKnown: true,
+        target: { providerId, modelId, ...(sourceAgent && { agent: sourceAgent }) },
+        allowedActions: ['inspect_model_connection_and_media_declaration', 'use_another_tool'],
+        guidance: '先用 cindy_helper.list_model_providers 核对供应商和型号是否启用，以及型号是否属于所选 runtime 的连接。确认目标连接支持文生图且声明缺失时，用 configure_model_connection 为该型号补齐 mode=image_generation、modalities.input 包含 text、modalities.output 包含 image，再查模型和 Guide。',
+      });
+    }
     return failure('MODEL_NOT_AVAILABLE', '该模型或指定 Provider 当前不可见，或不是请求的媒体类型');
   }
   const resolvedModelId = model.id;

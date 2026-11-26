@@ -13,11 +13,13 @@ import { pluginEngineUsageAccount, pluginEngineUsageBalances } from './pluginEng
 import { formatQuotaResetDuration } from './usageCardModel';
 
 /** Mounted only for the visible task. Its React key includes the account device and engine. */
-export function PluginEngineUsageChip({ engineKey, name, deviceId, running }: {
+export function PluginEngineUsageChip({ engineKey, name, deviceId, running, sessionId }: {
   engineKey: string;
   name?: string;
   deviceId: string | null;
   running: boolean;
+  /** A local task: an engine with several accounts shows this task's account. */
+  sessionId?: string;
 }) {
   const { t, i18n } = useTranslation();
   const [usage, setUsage] = useState<GhostHarnessUsage | null>(null);
@@ -38,7 +40,7 @@ export function PluginEngineUsageChip({ engineKey, name, deviceId, running }: {
         return;
       }
       pending = true;
-      const read = readPluginEngineUsage(owner, deviceId, engineKey);
+      const read = readPluginEngineUsage(owner, deviceId, engineKey, sessionId);
       const snapshot = await read.result;
       nextRead = read.freshUntil;
       pending = false;
@@ -60,7 +62,7 @@ export function PluginEngineUsageChip({ engineKey, name, deviceId, running }: {
       window.removeEventListener('focus', check);
       document.removeEventListener('visibilitychange', check);
     };
-  }, [engineKey, deviceId]);
+  }, [engineKey, deviceId, sessionId]);
   const wasRunning = useRef(running);
   useEffect(() => {
     if (wasRunning.current && !running) refresh.current();
@@ -91,6 +93,7 @@ export function PluginEngineUsageChip({ engineKey, name, deviceId, running }: {
     <Popover open={menu.open} onOpenChange={menu.onOpenChange} modal={false}>
       <PopoverTrigger asChild>
         <button type="button" {...menu.triggerProps} onClick={event => { if (menu.open) event.preventDefault(); }} aria-label={[title, first?.label, reset, value].filter(Boolean).join(' · ')}
+          // 无框文字按钮：圆角只塑形键盘焦点环（DESIGN.md §5 登记）
           className="flex min-w-0 items-center gap-1 rounded-sm text-12 font-medium tabular-nums text-[var(--text-secondary)] hover:text-[var(--text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]">
           {first && <span title={first.label} className="max-w-28 truncate">{first.label}</span>}
           {reset && <span className="whitespace-nowrap">{reset}</span>}

@@ -507,7 +507,7 @@
       "tools": "Ferramentas e informações autorizadas pelo proprietário",
       "authorizeTitle": "Permitir que este grupo utilize as ferramentas e informações de {{name}}?",
       "toolsHint": "Os membros podem utilizar as ferramentas existentes e as informações privadas deste amigo. Os resultados são visíveis para todos. As regras de aprovação existentes continuam a aplicar-se. A revogação interrompe os pedidos ativos, mas não pode anular ações concluídas.",
-      "confirm": "Confirmar"
+      "confirm": "Permitir ferramentas"
     }
   },
   "groupSettings": {
@@ -552,6 +552,8 @@
     "accessChat": "Apenas a conversa de grupo",
     "accessTools": "Pode usar ferramentas e informações",
     "replies": "Como respondem os amigos",
+    "assistant": "Cindy do grupo",
+    "assistantHint": "Trabalha no computador de quem a @menciona.",
     "replyModeMentionedNote": "Os amigos ficam em silêncio, a menos que alguém os @mencione.",
     "work": "Divisão do trabalho",
     "organizerHint": "Decide quem executa cada passo. Por predefinição, esta função cabe ao primeiro amigo.",
@@ -596,7 +598,7 @@
     "removeOwnHint": "{{name}} deixará de receber mensagens de «{{group}}». O histórico é mantido; os outros grupos e conversas privadas não são afetados.",
     "removeOwnActiveHint": "Os pedidos ativos neste grupo serão interrompidos. As tarefas iniciadas de forma independente continuarão em execução.",
     "stopAndRemove": "Parar e remover",
-    "confirm": "Confirmar",
+    "confirm": "Permitir ferramentas",
     "inviteTitle": "Convidar para o grupo",
     "reusableLink": "Sem expiração · Reutilizável por várias pessoas",
     "singleUseUntil": "Utilização única · Expira em {{date}}",
@@ -655,5 +657,6 @@
     "externalFormatError": "Volte a abrir a ligação completa a partir da mensagem original."
   },
   "memberCount_many": "{{count}} membros",
-  "waitingForOwner": "A aguardar confirmação"
+  "waitingForOwner": "A aguardar confirmação",
+  "externalBadge": "Externo"
 }

@@ -2,8 +2,8 @@ import { describe, expect, it, vi } from 'vitest';
 import type { ChatMessage } from '@/lib/makerChatStore';
 import { groupWorkRuns, type MessageRenderItem, type ToolSegmentRenderItem, type RenderItem } from '@/components/chat/messageWorkGroups';
 import { readBotGroupProcessMessages, projectBotGroupProcess, type BotGroupProcessMessage } from '@cindy/maker-shared/botGroupChat';
-import { botProcessItems, botTurnContinuations, botUnreadBoundaryItemKey, latestSettledAssistantMs, simplifyBotRenderItems, tailReplyClientIds } from '../botConversationPresentation';
-import { findFirstUnreadBotReplyClientId } from '../botConversationTimeline';
+import { botProcessItems, botTimeGroupRows, botTurnContinuations, botUnreadBoundaryItemKey, latestSettledAssistantMs, simplifyBotRenderItems, tailReplyClientIds } from '../botConversationPresentation';
+import { collectBotMessageTimeGroups, findFirstUnreadBotReplyClientId } from '../botConversationTimeline';
 
 const message = (id: string, role: ChatMessage['role'], content = id,
   extra: Partial<ChatMessage> = {}): MessageRenderItem => ({
@@ -63,6 +63,27 @@ describe('teammate final-result presentation', () => {
       item.type === 'message' ? [item.message] : []), boundary);
     return { items, key: botUnreadBoundaryItemKey(items, unread, botTurnContinuations(items)) };
   };
+
+  it.each([true, false])('places the reply clock above its visible process (streaming=%s)', streaming => {
+    const start = Date.parse('2026-11-24T18:09:00Z');
+    const end = start + 5 * 60_000;
+    const rows = [
+      message('ask', 'user', 'Ready?', { createdAt: new Date(start).toISOString() }),
+      tool('read'),
+      message('answer', 'assistant', 'Done', {
+        createdAt: new Date(end).toISOString(), assistantPhase: 'final_answer',
+        isStreaming: streaming, turnCompleted: !streaming,
+      }),
+    ];
+    const items = botProcessItems(groupWorkRuns(rows, streaming), streaming);
+    const groups = collectBotMessageTimeGroups(items.flatMap(item => item.type === 'message' ? [item.message] : []));
+    const continuations = botTurnContinuations(items);
+    expect(items[1]?.type).toBe('work_group');
+    expect([...botTimeGroupRows(items, groups, continuations)]).toEqual([
+      ['msg-ask', start], [items[1]!.key, end],
+    ]);
+    expect([...botTimeGroupRows(items.slice(2), groups, continuations)]).toEqual([['msg-answer', end]]);
+  });
 
   it('puts NEW before the same-turn process, including intervening media', () => {
     const rows: RenderItem[] = [message('u', 'user'), tool('one'),

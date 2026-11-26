@@ -133,6 +133,7 @@
     "retryRemoteMediaFetch": "再取远程媒体",
     "retryFetch": "再取",
     "openMedia": "启媒体",
+    "playAudio": "播音",
     "readCurrentRemoteFile": "读今之远程卷",
     "retryFilePreview": "再览其卷",
     "readCurrentFile": "读今之卷",
@@ -195,6 +196,9 @@
     "turnTokens": "{{tokens}} tokens"
   },
   "lightbox": {
+    "saveImage": "存原图",
+    "imageSaved": "图已存",
+    "saveFailed": "图未存，请再试。",
     "originalUnavailable": "原图暂不可载",
     "retryOriginal": "再载原图",
     "loadingOriginal": "方载原图…",
@@ -263,6 +267,8 @@
     "imagesNotUploaded_other": "{{count}} 图未能上呈",
     "waitingForNamedComputer": "俟{{name}}连通即发",
     "reconnectComputer": "重连",
+    "pendingDelivery": "待达",
+    "pendingDeliveryHint": "此讯已存于机，正候电脑确认。",
     "waitingForComputer": "候机归来，即遣之",
     "waitingForNetwork": "待网络重通，即遣之",
     "queued": "方候",
@@ -287,7 +293,7 @@
     "goalResumed": "耗用已复，续逐其鹄",
     "goalCapacityRetry": "模型繁忙，方再逐其鹄",
     "autoResume": {
-      "separator": "连接中断，已自续",
+      "separator": "未得答，已自续",
       "succeeded": "已复连",
       "failed": "复连未成",
       "neutral": "复连",
@@ -460,6 +466,15 @@
     }
   },
   "attachmentPreview": {
+    "audioBackTen": "退十秒",
+    "audioForwardTen": "进十秒",
+    "audioMute": "静音",
+    "audioUnmute": "复声",
+    "audioSpeed": "奏速",
+    "audioOutput": "音出何处",
+    "fetchAudio": "取自电脑",
+    "pauseAudio": "暂止音声",
+    "audioProgress": "奏至何处",
     "more": "更多操作",
     "retry": "再试",
     "image": "图",

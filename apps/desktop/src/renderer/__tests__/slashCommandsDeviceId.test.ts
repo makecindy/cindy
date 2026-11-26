@@ -6,6 +6,7 @@
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { loadAllCommands } from '@/lib/slashCommands';
+import { setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 
 beforeEach(() => {
   vi.unstubAllGlobals();
@@ -82,28 +83,29 @@ describe('loadAllCommands deviceId', () => {
   // Unit: task view and composer can ask for the same roster before either
   // request finishes. Existing routing tests only make sequential calls.
   // A refresh must still return a fresh roster, and a later read must see edits.
-  it('shares in-flight skill reads while a forced refresh supersedes the older flight', async () => {
+  it.each([undefined, 'shared-read'])('shares a trailing refresh during a slow scan (session %s)', async (sessionId) => {
     const s = stubElectron();
     let finishOld!: (value: Awaited<ReturnType<typeof s.listAgentSkills>>) => void;
     let finishFresh!: typeof finishOld;
     s.listAgentSkills.mockImplementationOnce(() => new Promise((resolve) => { finishOld = resolve; }))
       .mockImplementationOnce(() => new Promise((resolve) => { finishFresh = resolve; }));
-    const first = loadAllCommands('claude-code', '/w', { sessionId: 'shared-read' });
-    const second = loadAllCommands('claude-code', '/w', { sessionId: 'shared-read' });
+    const first = loadAllCommands('claude-code', '/w', { sessionId });
+    const second = loadAllCommands('claude-code', '/w', { sessionId });
     expect(s.listAgentSkills).toHaveBeenCalledTimes(1);
-    const refresh = loadAllCommands('claude-code', '/w', { sessionId: 'shared-read', forceReload: true });
-    expect(s.listAgentSkills).toHaveBeenCalledTimes(2);
+    const refresh = loadAllCommands('claude-code', '/w', { sessionId, forceReload: true });
+    const repeated = loadAllCommands('claude-code', '/w', { sessionId, forceReload: true });
+    expect(s.listAgentSkills).toHaveBeenCalledTimes(1);
     finishOld({ success: true, skills: [c('old', 'agent-skill')] });
     expect((await first).some((x) => x.name === 'old')).toBe(true);
     expect((await second).some((x) => x.name === 'old')).toBe(true);
-    const duringRefresh = loadAllCommands('claude-code', '/w', { sessionId: 'shared-read' });
+    const duringRefresh = loadAllCommands('claude-code', '/w', { sessionId });
     expect(s.listAgentSkills).toHaveBeenCalledTimes(2);
     finishFresh({ success: true, skills: [c('fresh', 'agent-skill')] });
-    for (const result of await Promise.all([refresh, duringRefresh])) {
+    for (const result of await Promise.all([refresh, repeated, duringRefresh])) {
       expect(result.some((x) => x.name === 'fresh')).toBe(true);
       expect(result.some((x) => x.name === 'old')).toBe(false);
     }
-    expect((await loadAllCommands('claude-code', '/w', { sessionId: 'shared-read' }))
+    expect((await loadAllCommands('claude-code', '/w', { sessionId }))
       .some((x) => x.name === 'localskill')).toBe(true);
     expect(s.listAgentSkills).toHaveBeenCalledTimes(3);
   });
@@ -122,6 +124,26 @@ describe('loadAllCommands deviceId', () => {
     expect(s.invoke.mock.calls.filter((call) => call[1] === 'maker:list-agent-skills')).toHaveLength(2);
     expect(results.slice(0, 4).every((commands) => commands.some((x) => x.name === 'localskill'))).toBe(true);
     expect(results.slice(4).every((commands) => commands.some((x) => x.name === 'host-skill'))).toBe(true);
+  });
+
+  // Unit: changing accounts before a queued draft refresh must not scan under the new owner.
+  it('drops a queued refresh when the data owner changes', async () => {
+    const s = stubElectron();
+    let finish!: (value: Awaited<ReturnType<typeof s.listAgentSkills>>) => void;
+    s.listAgentSkills.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    const first = loadAllCommands('codex', '/w');
+    const queued = loadAllCommands('codex', '/w', { forceReload: true });
+    setDataOwnerGeneration('next-owner');
+    try {
+      const next = await loadAllCommands('codex', '/w');
+      expect(next.some(command => command.name === 'localskill')).toBe(true);
+      finish({ success: true, skills: [] });
+      await first;
+      expect((await queued).some(command => command.kind === 'agent-skill')).toBe(false);
+      expect(s.listAgentSkills).toHaveBeenCalledTimes(2);
+    } finally {
+      setDataOwnerGeneration(null);
+    }
   });
 
   // Unit: a rejected shared IPC must not poison subsequent reads after recovery.

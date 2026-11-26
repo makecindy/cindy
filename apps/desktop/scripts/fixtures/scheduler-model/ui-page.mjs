@@ -36,11 +36,28 @@ export default {
     'src/renderer/features/scheduler/components/TemplateGallery': 'export const TemplateGallery = () => null;',
   },
   cases: {
+    buddy: { about: 'Switch a Bot project task with a new default ID to follow its primary model, save and reopen', viewport: { width: 1100, height: 900 } },
     default: { about: 'Pick the shared source, then return to the local source' },
     speed: { about: 'Edit, save and reopen automation speed through the real modal', viewport: { width: 1100, height: 900 } },
     'shared-speed': { about: 'Edit and restore speed for a shared model source', viewport: { width: 1100, height: 900 } },
   },
   async check(page, ui) {
+    if (ui.case === 'buddy') {
+      const label = await ui.t('scheduler.chips.model.followTeammate');
+      await page.getByRole('button', { name: /Codex · GPT-6.1-Sol/ }).click();
+      await ui.capture('buddy-model-menu');
+      const follow = page.getByText(label, { exact: true });
+      const bounds = await follow.boundingBox();
+      assert.ok(bounds && bounds.y >= 0 && bounds.y + bounds.height <= page.viewportSize().height, 'Buddy inheritance label is clipped by the viewport');
+      await follow.click();
+      await page.keyboard.press('Escape');
+      await ui.capture('buddy-follow-selected');
+      await page.getByRole('button', { name: await ui.t('scheduler.editor.promptDialog.saveAria'), exact: true }).click();
+      await page.getByTestId('reopen-editor').click();
+      await page.getByRole('button', { name: label, exact: true }).waitFor();
+      await ui.capture('buddy-follow-saved');
+      return;
+    }
     if (ui.case.endsWith('speed')) {
       // Regression #6559: the portaled speed menu painted behind the editor.
       // Existing speed tests lacked the modal; jsdom cannot check hit testing.

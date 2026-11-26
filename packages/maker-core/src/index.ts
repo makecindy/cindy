@@ -25,6 +25,7 @@ export {
 } from './agents/claude-code/cli-login-status.js';
 export { workspaceSettingsFiles, parseClaudeSettingsJson } from './agents/claude-code/workspace-settings-guard.js';
 export * from './agents/pi/managed-command.js';
+export { verifyPiResponsesCompletion } from './agents/pi/responses-completion.js';
 export { evaluatePiProjectTrust, piProjectKey } from './agents/pi/project-trust.js';
 export {
   assertReviewMessageContentPaths,
@@ -113,7 +114,7 @@ export {
 } from './memory/manager.js';
 export { isBotMcpServerAllowed } from './agents/shared/bot-runtime-policy.js';
 export { resolveAllowedManagedSkills, snapshotManagedSkillGrants } from './agents/shared/managed-skill-policy.js';
-export { isSkillDisabled } from './agents/shared/skill-activation.js';
+export { canonicalSkillPath, isSkillDisabled, snapshotDisabledSkillPaths } from './agents/shared/skill-activation.js';
 export {
   MemoryFlushController,
   DEFAULT_FLUSH_THRESHOLDS,
@@ -123,6 +124,6 @@ export { MAKER_MEMORY_RULES } from './memory/system-prompt.js';
 export { loadMemoryContext } from './memory/context.js';
 
 export { LIBRARY_READ_ROOT, parseLibraryAssetRef, resolveLibraryAssetPath } from './agents/shared/library-native-read.js';
-export { VoiceCallContext, type VoiceCallRecord, type VoiceCallTurn, type VoiceCallHandoff } from './voice-call.js';
+export { VoiceCallContext, nativeVoiceCallInstructions, type VoiceCallRecord, type VoiceCallTurn, type VoiceCallHandoff } from './voice-call.js';
 
 export { ASYNC_QUESTION_ANSWER, SUPERSEDE_ASYNC_QUESTIONS, isolatedBotProfile } from './agents/base-agent.js';
