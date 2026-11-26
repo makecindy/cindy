@@ -32,7 +32,7 @@ import { ChevronLeft, ChevronRight, Mic, Square } from 'lucide-react';
 
 import { InteractionPromptCardShell } from '@/components/interaction-portal';
 import { ChatSessionFileProvider, useChatSessionFile, useChatSessionFileValue } from '@/components/chat/ChatSessionFileContext';
-import { QuestionReferenceText } from '@/components/chat/MarkdownRenderer';
+import { MarkdownRenderer, QuestionReferenceText } from '@/components/chat/MarkdownRenderer';
 import { getTextPreviewHost } from '@/components/find-in-page/findInPageOwnership';
 import { useOptionalConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { Tip } from '@/components/ui/tooltip';
@@ -213,7 +213,7 @@ export function AskUserQuestionPrompt({
     question.header,
     question.multiSelect,
     question.answerConstraints,
-    (question.options ?? []).map((option) => [option.label, option.description]),
+    (question.options ?? []).map((option) => [option.label, option.description, option.preview]),
   ]);
   const formKey = JSON.stringify([sessionId, props.pending.requestId, questionsIdentity]);
   // Repeated snapshots keep this form mounted. A changed session, request or
@@ -237,10 +237,25 @@ function AskUserQuestionForm({
   hostVisible = true,
 }: AskUserQuestionPromptProps) {
   const { t } = useTranslation();
+  const fileContext = useChatSessionFile();
   const { requestId, questions } = pending;
   const totalQuestions = questions.length;
   const queueIndex = pendingQuestions?.findIndex((q) => q.requestId === requestId) ?? -1;
-  const [referencePreviewOpen, setReferencePreviewOpen] = useState(false);
+  const [openPreviewSources, setOpenPreviewSources] = useState<ReadonlySet<string>>(() => new Set());
+  const referencePreviewOpen = openPreviewSources.size > 0;
+  const setPreviewSourceOpen = useCallback((source: string, open: boolean) => {
+    setOpenPreviewSources((prev) => {
+      if (prev.has(source) === open) return prev;
+      const next = new Set(prev);
+      if (open) next.add(source);
+      else next.delete(source);
+      return next;
+    });
+  }, []);
+  const handleQuestionPreviewOpenChange = useCallback(
+    (open: boolean) => setPreviewSourceOpen('question', open),
+    [setPreviewSourceOpen],
+  );
   const [voiceFeedback, setVoiceFeedback] = useState<'hint' | 'confirm' | 'ambiguous' | 'unknown' | 'cancelled'>('hint');
   const voiceRevision = useRef(0);
 
@@ -691,7 +706,7 @@ function AskUserQuestionForm({
     };
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.repeat || event.isComposing) return;
-      if (event.key === 'Escape' && getTextPreviewHost()) return;
+      if (event.key === 'Escape' && (referencePreviewOpen || getTextPreviewHost())) return;
       if (event.key === 'Escape' && dictationRef.current.isBusy && shortcutCard.owns(event.target)) {
         event.preventDefault();
         event.stopPropagation();
@@ -721,7 +736,7 @@ function AskUserQuestionForm({
       window.removeEventListener('keydown', onKeyDown, true);
       unsubscribe?.();
     };
-  }, [beginVoiceInput, hostVisible, viewerState, voiceBridge, voiceShortcutOrder, voiceShortcutPreferred]);
+  }, [beginVoiceInput, hostVisible, referencePreviewOpen, viewerState, voiceBridge, voiceShortcutOrder, voiceShortcutPreferred]);
 
   // ── Custom input submit (single-select mode) ──
   const handleCustomSubmit = useCallback(() => {
@@ -817,9 +832,9 @@ function AskUserQuestionForm({
   // ── Keyboard shortcuts ──
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      // File previews can keep focus on their question link. Their keys must
-      // never select or skip an answer, including during the closing fade.
-      if (referencePreviewOpen) return;
+      // File previews can keep focus on their question or option link. Their keys
+      // must never select or skip an answer, including during the closing fade.
+      if (referencePreviewOpen || getTextPreviewHost()) return;
       // F-AUQ-MIN-5: minimized 时数字键 1-N / 回车 / N+1 全部透传，
       // 避免"无视觉反馈地选中选项"。Escape 仍保留——满足 F-AUQ-MIN-5 的取消语义。
       if (viewerState === 'minimized' && e.key !== 'Escape') return;
@@ -1181,7 +1196,7 @@ function AskUserQuestionForm({
         <div className="flex flex-col gap-2">
           <div className="flex items-center justify-between">
             <span className="min-w-0 break-words whitespace-pre-wrap text-15 font-medium text-[var(--ask-header-text)]">
-              <QuestionReferenceText text={currentQ?.question ?? ''} onPreviewOpenChange={setReferencePreviewOpen} />
+              <QuestionReferenceText text={currentQ?.question ?? ''} onPreviewOpenChange={handleQuestionPreviewOpenChange} />
             </span>
             {pageIndicator && (
               <span className="ml-4 shrink-0 text-13 text-[var(--ask-page-text)]">
@@ -1216,6 +1231,7 @@ function AskUserQuestionForm({
                   {idx + 1}
                 </div>
               );
+              const preview = opt.preview?.trim() ? opt.preview : undefined;
               return (
                 <div key={opt.label}>
                   {idx > 0 && <div className="h-px bg-[var(--ask-option-divider)]" />}
@@ -1250,6 +1266,26 @@ function AskUserQuestionForm({
                       <div className="flex items-center gap-3">{optionText}</div>
                       {numberBadge}
                     </button>
+                  )}
+                  {preview && (
+                    // Rendered outside the option button/label so reading, scrolling,
+                    // selecting text or opening links never triggers single-select submit.
+                    <div
+                      data-testid={`ask-user-option-preview-${idx + 1}`}
+                      className={cn(
+                        'mx-4 mb-3.5 max-h-44 overflow-y-auto overscroll-contain rounded-lg',
+                        'border border-[var(--border-default)] bg-[var(--surface)] px-3.5 py-2.5',
+                        'select-text text-13 leading-[1.5] text-[var(--text-primary)]',
+                      )}
+                    >
+                      <OptionPreviewMarkdown
+                        sourceKey={`option-${idx}`}
+                        workingDir={fileContext.workingDir}
+                        sessionId={fileContext.sessionId}
+                        content={preview}
+                        onPreviewSourceOpenChange={setPreviewSourceOpen}
+                      />
+                    </div>
                   )}
                 </div>
               );
@@ -1335,6 +1371,33 @@ function AskUserQuestionForm({
         {options.length === 0 && speakerFilteredNotice}
       </div>
     </InteractionPromptCardShell>
+  );
+}
+
+function OptionPreviewMarkdown({
+  sourceKey,
+  workingDir,
+  sessionId,
+  content,
+  onPreviewSourceOpenChange,
+}: {
+  sourceKey: string;
+  workingDir: string;
+  sessionId: string | undefined;
+  content: string;
+  onPreviewSourceOpenChange: (source: string, open: boolean) => void;
+}) {
+  const handlePreviewOpenChange = useCallback(
+    (open: boolean) => onPreviewSourceOpenChange(sourceKey, open),
+    [onPreviewSourceOpenChange, sourceKey],
+  );
+  return (
+    <MarkdownRenderer
+      workingDir={workingDir}
+      currentSessionId={sessionId}
+      content={content}
+      onPreviewOpenChange={handlePreviewOpenChange}
+    />
   );
 }
 

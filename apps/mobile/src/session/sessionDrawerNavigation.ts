@@ -75,7 +75,7 @@ export function taskListSessionTarget(
  * List selection uses replaceParams instead, clearing this entry mode. */
 export function pushSessionDrillDown(
   router: Pick<ReturnType<typeof useRouter>, 'push'>,
-  params: SessionDrawerRouteTarget & { focusRequestKey?: string },
+  params: SessionDrawerRouteTarget & { focusRequestKey?: string; focusComposerRequestKey?: string },
 ): void {
   router.push({
     pathname: '/sessions/[sessionId]',

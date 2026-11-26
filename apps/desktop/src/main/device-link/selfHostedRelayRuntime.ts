@@ -79,6 +79,8 @@ import {
   type RelayDeployProgressMessage,
   type PeerAgentNetReply,
   type PeerAgentNetRequest,
+  type PeerAppUpdateReply,
+  type PeerAppUpdateRequest,
   type RelayDeployStep,
 } from '../../shared/selfHostedRelay.js';
 import { deviceName } from './deviceName.js';
@@ -91,7 +93,7 @@ import {
   restartDeviceLinkForRelayChange,
   setKeepAwakeEnabled,
 } from './index.js';
-import { AGENT_NET_SWITCH_CHANNEL } from '@cindy/device-link';
+import { AGENT_NET_SWITCH_CHANNEL, PEER_APP_UPDATE_CHANNEL } from '@cindy/device-link';
 import { createAgentNetRemoteSwitch, type AgentNetRemoteSwitch } from './agentNetRemoteSwitch.js';
 import { isAgentNetOnlyRelay } from './selfHostedRelayRouting.js';
 import type { AgentNetSwitchDisableBlock } from '@cindy/device-link';
@@ -813,6 +815,7 @@ type CommandResult = {
   state: SelfHostedRelayState;
   error?: SelfHostedRelayErrorCode;
   peer?: PeerAgentNetReply;
+  peerUpdate?: PeerAppUpdateReply;
   check?: SelfHostedRelayServerCheck;
   deploymentStatus?: SelfHostedRelayDeploymentStatus;
 };
@@ -1914,6 +1917,40 @@ export function agentNetSwitchRemoteHandler(): { handle(raw: unknown, controller
   return service ? { handle: (raw, controllerDeviceId, controllerName) => service.handle(raw, controllerDeviceId, controllerName) } : null;
 }
 
+let localPeerAppUpdateHandler: { handle(raw: unknown, controllerDeviceId: string, controllerName: string): Promise<unknown> } | null = null;
+
+/** 注入本机应用更新处理器(由 bootstrap 装配 updateService 后注册，避免本模块静态耦合更新服务)。 */
+export function setLocalPeerAppUpdateHandler(
+  handler: { handle(raw: unknown, controllerDeviceId: string, controllerName: string): Promise<unknown> } | null,
+): void {
+  localPeerAppUpdateHandler = handler;
+}
+
+async function askPeerAppUpdate(deviceId: string, request: PeerAppUpdateRequest): Promise<PeerAppUpdateReply> {
+  try {
+    const reply = await remoteBackgroundInvoke(deviceId, PEER_APP_UPDATE_CHANNEL, [request]);
+    return reply.ok
+      ? { ok: true, result: reply.result }
+      : { ok: false, code: reply.error.code, message: reply.error.message };
+  } catch (error) {
+    const code = typeof (error as { code?: unknown }).code === 'string' ? (error as { code: string }).code : 'NOT_CONNECTED';
+    return { ok: false, code, message: error instanceof Error ? error.message : 'unavailable' };
+  }
+}
+
+async function askSelfAppUpdate(request: PeerAppUpdateRequest): Promise<PeerAppUpdateReply> {
+  const handler = localPeerAppUpdateHandler;
+  if (!handler) return { ok: false, code: 'IPC_ERROR', message: '[PEER_APP_UPDATE_UNAVAILABLE] not ready yet' };
+  try {
+    const result = await handler.handle(request, 'self', 'self');
+    return { ok: true, result };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : '';
+    const code = /\bPEER_APP_UPDATE_[A-Z_]+\b/.exec(message)?.[0] ?? 'PEER_APP_UPDATE_UNAVAILABLE';
+    return { ok: false, code: 'IPC_ERROR', message: `[${code}] self app update failed` };
+  }
+}
+
 async function askPeerAgentNet(deviceId: string, request: PeerAgentNetRequest): Promise<PeerAgentNetReply> {
   const controllerBlock = agentNetSwitchDisableBlock();
   if (request.action === 'set' && !request.enabled && controllerBlock) {
@@ -1962,6 +1999,10 @@ async function execute(command: SelfHostedRelayCommand): Promise<CommandResult> 
     }
     case 'peer-agent-net':
       return { state: getState(), peer: await askPeerAgentNet(command.deviceId, command.request) };
+    case 'peer-app-update':
+      return { state: getState(), peerUpdate: await askPeerAppUpdate(command.deviceId, command.request) };
+    case 'self-app-update':
+      return { state: getState(), peerUpdate: await askSelfAppUpdate(command.request) };
     case 'state':
       return { state: getState() };
     case 'enable-host':
@@ -2034,7 +2075,8 @@ export function registerSelfHostedRelayIpc(): void {
     }
     // 只读查询不改状态,不向所有窗口广播(重读同账号中转有变化时由它自己推送)。
     if (command.type !== 'state' && command.type !== 'check-server' && command.type !== 'deployment-status'
-      && command.type !== 'refresh-account-relays' && command.type !== 'peer-agent-net') emitChanged();
+      && command.type !== 'refresh-account-relays' && command.type !== 'peer-agent-net'
+      && command.type !== 'peer-app-update' && command.type !== 'self-app-update') emitChanged();
     return result;
   });
 

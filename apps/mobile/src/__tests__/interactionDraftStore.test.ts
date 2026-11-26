@@ -1,9 +1,11 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import {
+  askQuestionsIdentity,
   clearAllInteractionDrafts,
   clearAskUserDraft,
   clearPlanReviewDraft,
   readAskUserDraft,
+  readAskUserDraftFor,
   readPlanReviewDraft,
   saveAskUserDraft,
   savePlanReviewDraft,
@@ -104,5 +106,28 @@ describe('interactionDraftStore', () => {
 
     clearPlanReviewDraft('plan-1');
     expect(readPlanReviewDraft('plan-1')).toBeNull();
+  });
+
+  // Changing an option's preview within the same requestId must invalidate stale drafts.
+  it('changes askQuestionsIdentity when option preview changes', () => {
+    const before = askQuestionsIdentity([{
+      question: 'Send update?',
+      options: [{ label: 'Send', preview: 'Draft v1' }, { label: 'Cancel' }],
+    }]);
+    const after = askQuestionsIdentity([{
+      question: 'Send update?',
+      options: [{ label: 'Send', preview: 'Draft v2' }, { label: 'Cancel' }],
+    }]);
+    expect(before).not.toBe(after);
+    saveAskUserDraft('req-preview', {
+      answers: { 'Send update?': 'Send' },
+      currentIndex: 0,
+      customInput: '',
+      questionsIdentity: before,
+      selectedLabels: ['Send'],
+      showCustomInput: false,
+    });
+    expect(readAskUserDraftFor('req-preview', before)).not.toBeNull();
+    expect(readAskUserDraftFor('req-preview', after)).toBeNull();
   });
 });
