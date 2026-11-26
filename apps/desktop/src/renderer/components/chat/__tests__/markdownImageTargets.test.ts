@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   extractCachedRenderedMarkdownImageTargets,
+  extractMarkdownGalleryImages,
   extractRenderedMarkdownImageTargets,
   type MarkdownImageTargetCache,
 } from '../markdownImageTargets';
@@ -107,5 +108,38 @@ describe('extractRenderedMarkdownImageTargets', () => {
         '![video](cindy-media://blobs/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.mp4)',
       ),
     ).toEqual([]);
+  });
+
+  // Value: carousel slides render real images in MarkdownRenderer and must
+  // participate in document gallery order and image target extraction.
+  it('extracts images inside carousel fences in document order while skipping nested carousels', () => {
+    const md = [
+      '![Cover](./cover.png)',
+      '',
+      '````carousel',
+      '![Dark](/tmp/01-dark.png)',
+      '<!-- slide -->',
+      '![Light](/tmp/01-light.png)',
+      '````',
+      '',
+      '![Footer](./footer.png)',
+    ].join('\n');
+
+    expect(extractRenderedMarkdownImageTargets(md)).toEqual([
+      './cover.png',
+      '/tmp/01-dark.png',
+      '/tmp/01-light.png',
+      './footer.png',
+    ]);
+    const gallery = extractMarkdownGalleryImages(md);
+    expect(gallery.map((g) => g.target)).toEqual([
+      './cover.png',
+      '/tmp/01-dark.png',
+      '/tmp/01-light.png',
+      './footer.png',
+    ]);
+    expect(gallery[1].sectionSuffix).toContain('carousel:');
+    expect(gallery[2].sectionSuffix).toContain('carousel:');
+    expect(gallery[1].sectionSuffix).not.toBe(gallery[2].sectionSuffix);
   });
 });
