@@ -9,6 +9,7 @@ import type { ProviderView, UnifiedModelEntry } from '@cindy/model-providers';
 
 import type { AgentKind } from '@/hooks/useAgentCapabilities';
 import { cn } from '@/lib/utils';
+import { Badge } from '@/components/ui/badge';
 import { COMPOSER_MENU_ROW, menuRowAttrs } from '@/components/ui/menu-row';
 import { providerDisplayName } from '@/lib/providerDisplayName';
 import { isCustomRoutedProvider, modelSupplierLabel } from '@cindy/model-providers';
@@ -255,13 +256,9 @@ export function UnifiedModelRow({
   );
   const paymentRequiredBadge =
     paymentRequired && paymentRequiredLabel ? (
-      <span
-        data-payment-required-badge
-        className="inline-flex shrink-0 items-center gap-1 rounded-full bg-[var(--surface-chip)] px-2 py-px text-10 font-normal leading-[1.45] text-[var(--text-secondary)]"
-      >
-        <Lock size={10} />
+      <Badge size="xs" data-payment-required-badge icon={<Lock size={10} />}>
         {paymentRequiredLabel}
-      </span>
+      </Badge>
     ) : null;
   const paymentRequiredUnlock =
     paymentRequired && paymentRequiredUnlockLabel ? (

@@ -53,6 +53,7 @@ export function useBotGroupMentionPicker({
   text,
   onTextChange,
   members,
+  conversationKind,
   textareaRef,
   allLabels,
   disabled = false,
@@ -63,7 +64,7 @@ export function useBotGroupMentionPicker({
   disabled?: boolean;
   /** Every text change from typing or picking goes through here. */
   onTextChange: (value: string) => void;
-  /** Full roster: active members other than you are offered; everyone but you still resolves. */
+  conversationKind?: 'direct';
   members: readonly BotGroupMemberView[];
   textareaRef: RefObject<BotGroupTextInput | null>;
   /** Labels that mean 「所有人」 when resolving; the first is the one offered. Defaults to the UI label. */
@@ -97,8 +98,7 @@ export function useBotGroupMentionPicker({
   const allBotsLabel = t('bots.groupChat.mention.allBots');
   const allBotLabels = useMemo(() => [allBotsLabel, 'bots'], [allBotsLabel]);
   const resolveLabels = useMemo(() => allLabels ?? [allLabel], [allLabels, allLabel]);
-  // You never name yourself: the host drops you from the targets (as on mobile).
-  const mentionMembers = useMemo(() => chatGroupMentionRoster(members), [members]);
+  const mentionMembers = useMemo(() => chatGroupMentionRoster(members, conversationKind), [members, conversationKind]);
   const activeMembers = useMemo(() => mentionMembers.filter(isActiveBotGroupMember), [mentionMembers]);
   const query = focused && !disabled ? findBotGroupMentionQuery(text, caret, activeMembers) : null;
   const options = useMemo<MentionOption[]>(() => {
@@ -299,9 +299,9 @@ export function useBotGroupMentionPicker({
     reset,
     /** Resolve who the text addresses, using the picks; `roster` defaults to the current members. */
     resolve: (value: string, roster: readonly BotGroupMemberView[] = members) =>
-      resolveBotGroupMentions(value, { members: chatGroupMentionRoster(roster), allLabels: resolveLabels, allBotLabels, tracked }),
+      resolveBotGroupMentions(value, { members: chatGroupMentionRoster(roster, conversationKind), allLabels: resolveLabels, allBotLabels, tracked }),
     /** Typed names several members share: they name nobody, so sending asks to pick from the list. */
     ambiguous: (value: string, roster: readonly BotGroupMemberView[] = members) =>
-      ambiguousBotGroupMentionLabels(value, { members: chatGroupMentionRoster(roster), allLabels: resolveLabels, allBotLabels, tracked }),
+      ambiguousBotGroupMentionLabels(value, { members: chatGroupMentionRoster(roster, conversationKind), allLabels: resolveLabels, allBotLabels, tracked }),
   };
 }

@@ -1,3 +1,4 @@
+import type { ReconnectHandoff } from '../../../shared/agentInputQueue';
 import { localizeOutputLimit } from './outputLimitI18n';
 import { type OutputLimitDetails } from '@cindy/maker-shared';
 import { isMemberBudgetPaused } from '../../../shared/providerShareBudget';
@@ -71,7 +72,7 @@ import { isQuotaExhaustedErrorMessage } from '@/utils/quotaError';
 import { parseUpstreamStatusError } from '@/utils/upstreamStatusError';
 import { parseTerminalRateLimitRetryProgress } from '@/utils/rateLimitRetry';
 import type { UsageLimitRecoveryHint } from '@/lib/usageLimitRecovery';
-import { errorReasonI18nKey as resolveErrorReasonI18nKey } from './errorReasonI18n';
+import { errorReasonI18nKey as resolveErrorReasonI18nKey, localizeReconnectStall } from './errorReasonI18n';
 import { isCodexSharedAuthLinkUnavailableError } from '../../../shared/codexAuthReason';
 import { getToolLoopI18nKey } from './toolLoopI18n';
 import {
@@ -88,6 +89,7 @@ interface ErrorBannerProps {
   /** terminal error 的稳定 reason key。'silent-stop-exhausted'(silent-stop 自动
    *  续跑额度耗尽)时隐藏 Retry、改显「继续」按钮(onSilentStopContinue)。 */
   errorReason?: string | null;
+  reconnectHandoff?: ReconnectHandoff;
   /** Structured details for a tool-loop terminal error (optional for legacy rows). */
   toolLoop?: ToolLoopErrorDetails | null;
   outputLimit?: OutputLimitDetails | null;
@@ -174,6 +176,7 @@ export function ErrorBanner({
   onChooseComputer,
   error,
   errorReason,
+  reconnectHandoff,
   toolLoop,
   outputLimit,
   retryText,
@@ -498,6 +501,7 @@ export function ErrorBanner({
   const isAccountUsageLimitText =
     !isProviderSafetyRefusal && isAccountUsageLimitReachedText(error);
   // 原始恢复记录优先；自动任务收口后可手动续跑。按钮与指引共用同一判定。
+  const isReconnectStalled = errorReason === 'codex_reconnect_stalled';
   const isSilentStopExhausted = errorReason === 'silent-stop-exhausted';
   const isClaudeGatewayOpusPlanMismatch = errorReason === CLAUDE_GATEWAY_OPUS_PLAN_MISMATCH_REASON;
   const isClaudeSubscriptionOpusPlanMismatch =
@@ -701,6 +705,8 @@ export function ErrorBanner({
   } else if (agentKind === 'pi' && /bundled node not installed/.test(error)) {
     // 引导:需先装 claude-code 或 codex 连带 node。
     displayError = t('chat.errorBanner.piBundledNodeMissing');
+  } else if (isReconnectStalled) {
+    displayError = localizeReconnectStall(t, reconnectHandoff);
   } else if (isOverloadError) {
     // 服务过载:上游模型没有可用容量。原始英文("Selected model is at capacity")
     // 对用户没有行动价值,换成友好文案 + 明确的下一步;原始错误折叠可查。
@@ -766,6 +772,7 @@ export function ErrorBanner({
     displayError = t(`sharedTaskRecovery.reason.${sharedRecoveryReason}`);
   }
   const canShowErrorDetails =
+    isReconnectStalled ||
     piCloudContextRecovery ||
     isNetworkishError ||
     isOverloadError ||
@@ -1111,10 +1118,10 @@ export function ErrorBanner({
               disabled={forkStripEncryptedRunning}
               loading={retrying}
               onClick={() => void handleRetry()}
-              title={t('chat.errorBanner.retryTitle')}
+              title={t(isReconnectStalled ? 'chat.errorBanner.silentStopContinueTitle' : 'chat.errorBanner.retryTitle')}
             >
-              <RotateCcw size={12} />
-              {t('chat.errorBanner.retry')}
+              {isReconnectStalled ? <Play size={12} /> : <RotateCcw size={12} />}
+              {t(isReconnectStalled ? 'chat.errorBanner.silentStopContinueTitle' : 'chat.errorBanner.retry')}
             </Button>
           )}
           {(showHistoryRecovery || showInvalidEncryptedContentRecovery) && onForkStripEncrypted && (
