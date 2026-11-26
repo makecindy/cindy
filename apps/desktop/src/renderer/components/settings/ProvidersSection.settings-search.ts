@@ -30,12 +30,18 @@ export const providersSettings = defineSettings({
     sectionKey: 'settings.tabs.providers',
     keywordKeys: [
       'subscriptionAccounts.add',
-      'subscriptionAccounts.strategy',
+      'subscriptionAccounts.existing.connect',
+      'subscriptionAccounts.existing.choose',
+      'modelGroups.auto.adjust',
       'settings.providers.detail.sameAccountConnections',
       'settings.providers.detail.sameAccountConnectionsHint',
     ],
     aliases: [
       '多账号',
+      'Claude 路径',
+      '配置目录',
+      'CLAUDE_CONFIG_DIR',
+      'CODEX_HOME',
       '订阅账号',
       '并发上限',
       '权重',
@@ -80,7 +86,7 @@ export const providersSettings = defineSettings({
       'providerGroup.section.title',
       'settings.providers.detail.runLocation.label',
     ],
-    aliases: ['供应商分享', '供应商组', 'provider group', 'provider sharing', '运行于', '借用', 'run on', 'borrow'],
+    aliases: ['供应商分享', '电脑组', '供应商组', 'computer group', 'provider group', 'provider sharing', '运行于', '借用', 'run on', 'borrow'],
   },
   modelCompaction: {
     id: 'model-compaction',

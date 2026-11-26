@@ -89,7 +89,7 @@ import { TeammatesSection } from '@/features/bots/TeammatesSection';
 import { TeammateSearchResults, useTeammateSearchMatches } from '@/features/bots/TeammateSearchResults';
 import { useNavigationAttention } from '@/lib/navigationAttentionStore';
 import { useActiveMainView } from '@/hooks/useActiveMainView';
-import { NavigationCountBadge } from '@/components/sidebar/NavigationCountBadge';
+import { CountBadge } from '@/components/ui/badge';
 import { useViewedBotSessionId } from '@/features/bots/useViewedBotSessionId';
 import { useCompanionCloud } from '@/features/bots/companionCloudStore';
 import { sharedTaskErrorKey } from '@/features/device-link/sharedTaskCompatibility';
@@ -3241,14 +3241,12 @@ function ExpandedView({
         else if (next) void handleSessionClick(next.sessionId);
         else navigate('/cc-agent/new', { state: { workspacePrompt: 'generic' } });
       };
-      // 收件箱「完成」遇到绑着启用中自动化的任务，只把这轮结果标为已读、任务回到进行中，
-      // 不归档：归档会回收 worktree，下一轮又从快照重建，安静的一轮放回已归档再删一次
-      // （2026-11-18 用户决定，task-inbox.md）。读不到绑定时按无绑定处理，照常归档。
+      // For a pinned task or an active automation, Done settles this round without archiving.
       if (action === 'complete') {
-        const boundNames = await loadActiveBoundScheduleNames([
+        const keepActive = session?.pinnedAt || await loadActiveBoundScheduleNames([
           { id: sessionId, deviceLinkDeviceId: session?.deviceLinkDeviceId },
-        ]).then((names) => names.get(sessionId) ?? [], () => []);
-        if (boundNames.length > 0) {
+        ]).then(names => !!names.get(sessionId)?.length, () => false);
+        if (keepActive) {
           if (await blockedByAttachment()) return;
           const read = await markSessionsRead([sessionId], session?.deviceLinkDeviceId ?? undefined, { announce: false });
           if (!read) return;
@@ -4186,7 +4184,7 @@ function CollapsedView({
         active={onBotsRoute}
         aria-description={teammateUnread > 0 ? t('sidebar.teammateUnreadCount', { count: teammateUnread }) : undefined}
         badge={teammateUnread > 0 ? (
-          <NavigationCountBadge count={teammateUnread} label={t('sidebar.teammateUnreadCount', { count: teammateUnread })} />
+          <CountBadge count={teammateUnread} label={t('sidebar.teammateUnreadCount', { count: teammateUnread })} />
         ) : undefined}
         onClick={() => navigateToView('bots')}
       />

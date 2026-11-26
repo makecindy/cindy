@@ -10,6 +10,7 @@ import { AGENT_ISLAND_SOUND_EVENTS, AGENT_ISLAND_SOUND_OPTIONS } from '../../../
 import {
   buildSettingsSearchDocuments,
   isLegacyAppearanceDeepLink,
+  isLegacyModelSettingsDeepLink,
   normalizeSettingsSearchText,
   resolveSettingsSearchTarget,
   searchSettings,
@@ -447,6 +448,20 @@ describe('settings search catalog', () => {
     const matches = searchSettings(documents, 'appearance');
 
     expect(matches[0]?.entry.id).toBe('appearance');
+  });
+
+  // 2026-11-25 用户反馈(Subagent 模型与辅助模型从「个性化」搬到「模型供应商 → 智能路由」页) / unit：旧版本、
+  // 帮助文档和别处存下的深链仍指着个性化。失效后果：点「去设置」落在个性化页，要找的那一项不在那里。
+  // 最小输入：旧的 tab 与这两项各自的 section id。
+  it('routes legacy Subagent and auxiliary model deep links to the smart routing page', () => {
+    expect(isLegacyModelSettingsDeepLink('personalization', 'personalization.auxiliaryModels')).toBe(true);
+    expect(isLegacyModelSettingsDeepLink('personalization', 'personalization.subagents')).toBe(true);
+    expect(isLegacyModelSettingsDeepLink('personalization', 'settings.subagentModels.smartRouting.label')).toBe(true);
+    // 仍在个性化里的设置不受影响。
+    expect(isLegacyModelSettingsDeepLink('personalization', 'personalization.userPrompt')).toBe(false);
+    expect(resolveSettingsSearchTarget('model-groups', 'personalization.auxiliaryModels')).toBe(
+      'settings-search-target-personalization-auxiliary-models',
+    );
   });
 
   it('routes legacy appearance deep links to the Appearance tab', () => {

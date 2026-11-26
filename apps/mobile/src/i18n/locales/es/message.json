@@ -133,6 +133,7 @@
     "retryRemoteMediaFetch": "Reintentar la recuperación remota de medios",
     "retryFetch": "Reintentar recuperación",
     "openMedia": "Abrir medio",
+    "playAudio": "Reproducir audio",
     "readCurrentRemoteFile": "Leer el archivo remoto actual",
     "retryFilePreview": "Reintentar vista previa del archivo",
     "readCurrentFile": "Leer archivo actual",
@@ -299,7 +300,7 @@
     "goalResumed": "Uso restablecido, continuando con el objetivo.",
     "goalCapacityRetry": "El servicio de modelo estaba ocupado: reintentando el objetivo",
     "autoResume": {
-      "separator": "Conexión interrumpida: se reanudó automáticamente",
+      "separator": "Respuesta vacía. Se ha continuado automáticamente",
       "succeeded": "Reconectado",
       "failed": "Error al volver a conectar",
       "neutral": "Reconectar",
@@ -464,6 +465,15 @@
     }
   },
   "attachmentPreview": {
+    "audioBackTen": "Retroceder 10 segundos",
+    "audioForwardTen": "Avanzar 10 segundos",
+    "audioMute": "Silenciar",
+    "audioUnmute": "Activar sonido",
+    "audioSpeed": "Velocidad de reproducción",
+    "audioOutput": "Salida de audio",
+    "fetchAudio": "Obtener del ordenador",
+    "pauseAudio": "Pausar audio",
+    "audioProgress": "Posición de reproducción",
     "more": "Más acciones",
     "retry": "Reintentar",
     "image": "Imagen",
