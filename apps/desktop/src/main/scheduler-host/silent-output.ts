@@ -13,7 +13,9 @@ export function setSilencedRunProbe(probe: ((runId: string) => boolean) | null):
  * terminal event: the run is still in flight then, and the agent's notify/silence call is final.
  * Unknown runs (restart, hook origins without runId) are not silenced, matching completion alerts.
  */
-export function isSilencedSchedulerTurn(origin: SendOrigin | undefined): boolean {
+export function isSilencedSchedulerTurn(
+  origin: { kind?: string; runId?: unknown } | undefined,
+): boolean {
   return (
     origin?.kind === 'scheduler' &&
     typeof origin.runId === 'string' &&

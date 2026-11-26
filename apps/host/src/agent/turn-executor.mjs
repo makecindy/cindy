@@ -43,7 +43,7 @@ import { setSessionEffort } from '../../../desktop/src/main/maker-host/session-e
 import { applyQueuedSessionSettings, rememberLiveSessionSettings } from './session-settings.mjs';
 import { MCP_APP_MESSAGE_GUARD } from '../../../desktop/src/main/mcp-apps/message.ts';
 import { redactEventForRenderer } from '../../../desktop/src/main/maker-ipc/rendererEventRedaction.ts';
-import { isQuietScheduledOutput } from '../../../desktop/src/main/scheduler-host/silent-output.ts';
+import { isQuietScheduledOutput, isSilencedSchedulerTurn } from '../../../desktop/src/main/scheduler-host/silent-output.ts';
 import { claudeOpusPlanTerminalErrorData, defaultDecisionForPending, handleInteractionDismissedEvent, localizeRuntimeRecoveryEvent, routeStandaloneTextEvent } from '../../../desktop/src/main/maker-ipc/sessionEventPreparationSteps.ts';
 import { uiText } from '../../../desktop/src/main/uiText.ts';
 import { MAKER_PUSH } from '../../../desktop/src/main/maker-ipc/channels.ts';
@@ -496,10 +496,14 @@ export function createTurnExecutor(deps) {
     listActivityInTurn.delete(sessionId);
     const resumeHeld = deps.isAutoResumeHeld?.(sessionId) === true;
     if (event.turnOrigin?.kind !== 'goal') {
-      // The desktop also holds a silent-stop done's end (sessionEventTerminal.ts): the continuation drops
-      // it, a settle without one commits it (silent-stop.ts).
-      productTurn.listActivity.end(sessionId, { identity: activityIdentity(session, event),
-        hold: suppressed || recoveryOwns || resumeHeld || silentStop?.isScheduled(event) === true });
+      if (event.type === 'done' && !isTerminalTurnErrorEvent(event) && isSilencedSchedulerTurn(event.turnOrigin)) {
+        productTurn.listActivity.deleteSession(sessionId);
+      } else {
+        // The desktop also holds a silent-stop done's end (sessionEventTerminal.ts): the continuation drops
+        // it, a settle without one commits it (silent-stop.ts).
+        productTurn.listActivity.end(sessionId, { identity: activityIdentity(session, event),
+          hold: suppressed || recoveryOwns || resumeHeld || silentStop?.isScheduled(event) === true });
+      }
     }
     const successfulReply = event.type === 'done' && isSuccessfulAssistantReplyDoneData(event.data);
     if (successfulReply && !recoveryOwns && !resumeHeld
@@ -678,7 +682,8 @@ export function createTurnExecutor(deps) {
       if (claim === 'idle') publishAgentEvent(deps.hub, sessionId, event, fields);
       recordContextSnapshot();
       if (deps.productTurn && event.type === 'status' && event.data?.isRunning === false && event.turnScope !== 'background'
-        && !isTurnContinuationBoundaryEvent(event) && listActivityInTurn.delete(sessionId) && event.turnOrigin?.kind !== 'goal') {
+        && !isTurnContinuationBoundaryEvent(event) && listActivityInTurn.delete(sessionId)
+        && event.turnOrigin?.kind !== 'goal' && !isSilencedSchedulerTurn(event.turnOrigin)) {
         deps.productTurn.listActivity.end(sessionId, { identity: activityIdentity(session, event), statusOnly: true,
           hold: deps.isAutoResumeHeld?.(sessionId) === true });
       }

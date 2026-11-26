@@ -2758,16 +2758,18 @@ export class MakerScheduleRunner implements ScheduleRunner {
             // to cancel this one pre-dispatch send.
             throw new RoutineDispatchDeferredError('Routine revision changed before dispatch');
           }
-          // 保留 scheduler 的既有 userSendAt 写入；该入口同时推进列表 lastActivityAt。
-          // userSendAt 的历史口径清理另行处理，不改变活跃礼让判据。
-          // 用 ctx.firedAt 对齐本轮 run.firedAt,顺延重试时也稳定。
-          void this.runtime.touchUserSendInDb(session.id, ctx.firedAt).catch((err) => {
-            this.deps.logger.warn?.('[runner] touchUserSend failed', {
-              scheduleId: schedule.id,
-              sessionId: session.id,
-              error: err instanceof Error ? err.message : String(err),
+          // 保留非静默 scheduler 的既有 userSendAt 写入；该入口同时推进列表 lastActivityAt。
+          // silentWhenIdle 轮次默认不打扰用户：派发时不提前 bump userSendAt / lastActivityAt
+          //（避免把任务顶到收件箱/列表最前，或误解除「稍后处理」），仅在 finalizeRun 确认提醒或失败时补记。
+          if (!schedule.silentWhenIdle) {
+            void this.runtime.touchUserSendInDb(session.id, ctx.firedAt).catch((err) => {
+              this.deps.logger.warn?.('[runner] touchUserSend failed', {
+                scheduleId: schedule.id,
+                sessionId: session.id,
+                error: err instanceof Error ? err.message : String(err),
+              });
             });
-          });
+          }
         },
       });
       if (pendingHandoff && sendResult.accepted) {
@@ -3460,13 +3462,15 @@ export class MakerScheduleRunner implements ScheduleRunner {
         ctx.onTurnActive?.(sessionId);
         this.runtime.noteSilentStopUserSend(sessionId);
         options?.onAccepted?.();
-        void this.runtime.touchUserSendInDb(sessionId, ctx.firedAt).catch((err) => {
-          this.deps.logger.warn?.('[runner] touchUserSend failed', {
-            scheduleId: schedule.id,
-            sessionId,
-            error: err instanceof Error ? err.message : String(err),
+        if (!schedule.silentWhenIdle) {
+          void this.runtime.touchUserSendInDb(sessionId, ctx.firedAt).catch((err) => {
+            this.deps.logger.warn?.('[runner] touchUserSend failed', {
+              scheduleId: schedule.id,
+              sessionId,
+              error: err instanceof Error ? err.message : String(err),
+            });
           });
-        });
+        }
         settleDispatch();
       },
       onAcceptedRollback: async (reason) => {
@@ -4332,6 +4336,15 @@ export class MakerScheduleRunner implements ScheduleRunner {
           isDataOwnerBroadcastScopeCurrent(ownerScope) &&
           !(finalRun.status === 'success' && ctx.signal.aborted)
         ) {
+          if (schedule.silentWhenIdle) {
+            void this.runtime.touchUserSendInDb(sessionId, finalRun.finishedAt ?? Date.now()).catch((err) => {
+              this.deps.logger.warn?.('[runner] touchUserSend on silent run alert failed', {
+                scheduleId: schedule.id,
+                sessionId,
+                error: err instanceof Error ? err.message : String(err),
+              });
+            });
+          }
           await this.deps.notifier.notify(schedule, finalRun);
         }
       } catch (err) {

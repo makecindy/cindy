@@ -10,6 +10,7 @@ const mocks = vi.hoisted(() => ({
   createMessage: vi.fn(),
   rewind: vi.fn(),
   getSessionRowSnapshot: vi.fn(),
+  touchUserSendInDb: vi.fn(),
   ensureDialogueWorkspaceDir: vi.fn(),
   wireSessionToIpc: vi.fn(),
   resolveWorkingDir: vi.fn(),
@@ -31,7 +32,7 @@ vi.mock('../../localDb/ipc/messages.js', () => ({
 vi.mock('../../localDb/ipc/sessions.js', () => ({
   getSessionRowSnapshot: mocks.getSessionRowSnapshot,
   getSessionFsSnapshot: vi.fn(async () => ({ permissionMode: 'default', planModeEnabled: false })),
-  touchUserSendInDb: vi.fn().mockResolvedValue(undefined),
+  touchUserSendInDb: mocks.touchUserSendInDb,
 }));
 
 vi.mock('../../localDb/dialogueWorkspace', () => ({
@@ -195,6 +196,7 @@ describe('MakerScheduleRunner silent-run notification skip', () => {
     mocks.backfillSessionMeta.mockResolvedValue(undefined);
     mocks.resolveWorkingDir.mockResolvedValue({ ok: true, path: '/repo/project' });
     mocks.getSessionRowSnapshot.mockResolvedValue({ status: 'active' });
+    mocks.touchUserSendInDb.mockResolvedValue(undefined);
   });
 
   it.each([true, false])('adds the checkpoint guidance only to recurring teammate work (%s)', async (recurring) => {
@@ -1038,5 +1040,36 @@ describe('MakerScheduleRunner silent-run notification skip', () => {
     await fireToCompletion(runner, h);
 
     expect(notifier.notify).toHaveBeenCalledTimes(1);
+  });
+
+  // 回归: silentWhenIdle 调度在静默完成时曾于派发阶段无条件 touchUserSendInDb,
+  // 导致任务在收件箱/侧栏被刷成「刚刚」顶到最前并误解除「稍后处理」;
+  // 仅当本轮主动提醒(schedule_notify_current_run)或失败时才应推进活动时间。
+  it.each([
+    { name: 'silenced success skips touchUserSendInDb', silenced: true, outcome: 'done' as const, expectTouch: false },
+    { name: 'notified success touches userSendAt on finalize', silenced: false, outcome: 'done' as const, expectTouch: true },
+    { name: 'failed silentWhenIdle run touches userSendAt on finalize', silenced: true, outcome: 'error' as const, expectTouch: true },
+  ])('silentWhenIdle activity timestamp: $name', async ({ silenced, outcome, expectTouch }) => {
+    const h = createSessionHarness(acceptingSend());
+    const { runner } = createRunnerHarness(h.session, { silenced });
+    const firePromise = runner.fire(baseSchedule({ silentWhenIdle: true }), createFireContext());
+    await vi.waitFor(() => expect(mocks.createMessage).toHaveBeenCalled());
+    // Dispatch must never bump userSendAt / lastActivityAt for a silentWhenIdle run.
+    expect(mocks.touchUserSendInDb).not.toHaveBeenCalled();
+
+    if (outcome === 'done') {
+      h.emit({ type: 'done', data: {} });
+      await firePromise;
+    } else {
+      h.emit({ type: 'error', data: { message: 'boom', isTerminal: true } });
+      await expect(firePromise).rejects.toThrow('boom');
+    }
+
+    if (expectTouch) {
+      expect(mocks.touchUserSendInDb).toHaveBeenCalledTimes(1);
+      expect(mocks.touchUserSendInDb).toHaveBeenCalledWith('scheduler-session', expect.any(Number));
+    } else {
+      expect(mocks.touchUserSendInDb).not.toHaveBeenCalled();
+    }
   });
 });
