@@ -31,11 +31,13 @@ import { autoReviewUnavailablePromptLine, permissionPromptDescription } from './
 import type { ImUiTextPack } from './types';
 import {
   composeInteractionModel,
+  formatAskOptionPreviewLines,
   isOneTimePermission,
   needsAskMultiCard,
   truncateBlock,
   truncateInline,
   BTN_LABEL_MAX,
+  IM_ASK_TOTAL_PREVIEW_MAX_BYTES,
   IM_PERMISSION_INPUT_PREVIEW_MAX,
   MAX_OPTIONS,
   MAX_PLAN_LEN,
@@ -55,18 +57,17 @@ function previewInput(input: Record<string, unknown>): string {
   }
 }
 
-/** 选项预览拼成 Markdown 引用块，保留缩进并用单块预算兜底，不撑爆 IM 卡片上限。 */
+/** 选项预览拼成 Markdown 引用块，保留首行缩进并共用整卡字节预算，不撑爆 IM 卡片上限。 */
 function formatAskOptionPreviews(
   options: ReadonlyArray<{ label: string; preview?: string }>,
+  budget: { remainingBytes: number },
   prefixFor?: (optionIndex: number) => string,
 ): string[] {
   return options.flatMap((opt, oi) => {
-    const trimmed = opt.preview?.trim();
-    if (!trimmed) return [];
-    const clipped = truncate(trimmed, IM_PERMISSION_INPUT_PREVIEW_MAX);
-    const quoted = clipped.split('\n').map((line) => (line ? `> ${line}` : '>')).join('\n');
+    const lines = formatAskOptionPreviewLines(opt.preview, budget);
+    if (lines.length === 0) return [];
     const heading = prefixFor ? `**${prefixFor(oi)}${opt.label}**` : `**${opt.label}**`;
-    return [`${heading}\n${quoted}`];
+    return [`${heading}\n${lines.join('\n')}`];
   });
 }
 
@@ -169,6 +170,7 @@ export function createCardBuilders(
     const m = ui.cards.ask.multi!;
     const bodyLines: string[] = [];
     const buttons: InteractiveCardSpec['buttons'] = [];
+    const previewBudget = { remainingBytes: IM_ASK_TOTAL_PREVIEW_MAX_BYTES };
     // 单独一道多选题沿用单问卡标题观感; 多道题才用「确认几件事」总标题。
     const title =
       args.questions.length === 1
@@ -189,7 +191,7 @@ export function createCardBuilders(
         return;
       }
       const selected = args.selections.get(qi);
-      bodyLines.push(...formatAskOptionPreviews(options, (oi) => `${qi + 1}·${oi + 1}. `));
+      bodyLines.push(...formatAskOptionPreviews(options, previewBudget, (oi) => `${qi + 1}·${oi + 1}. `));
       options.forEach((opt, oi) => {
         // 勾选前缀也占按钮文案预算; 按钮是单行, 用单行省略号截断
         // (块级截断的换行后缀会掉进按钮文案)。
@@ -299,6 +301,7 @@ export function createCardBuilders(
 
       const optionPreviews = formatAskOptionPreviews(
         (question.options ?? []).slice(0, MAX_OPTIONS),
+        { remainingBytes: IM_ASK_TOTAL_PREVIEW_MAX_BYTES },
       );
       const bodyParts = [
         ...(model.questionBody ? [model.questionBody] : []),

@@ -199,17 +199,18 @@ describe('question card layout', () => {
     expect(f.frames[0].card.buttonLayout).toBe('list');
   });
 
-  // Options carrying Claude SDK `preview` markdown must surface in both default and single-card IM bodies.
-  it('includes option previews in multi-question and single-question card bodies', async () => {
+  // Options carrying Claude SDK `preview` markdown must surface in both default and single-card IM bodies,
+  // preserving leading indentation and capping total byte size below Feishu's 30 KB interactive card limit.
+  it('includes option previews with indentation preserved and caps total card bytes', async () => {
     const multi = fixture([{
       question: 'Send update?',
       options: [
-        { label: 'Send', preview: 'Line one\nLine two' },
+        { label: 'Send', preview: '    const ok = true;\nLine two' },
         { label: 'Skip' },
       ],
     }]);
     await multi.card.ready;
-    expect(multi.frames[0].card.body).toContain('> Line one\n> Line two');
+    expect(multi.frames[0].card.body).toContain('>     const ok = true;\n> Line two');
 
     const frames: InteractiveCardSpec[] = [];
     const controls = { answer: vi.fn(), settled: new Promise<InteractionDecision>(() => {}) };
@@ -220,7 +221,7 @@ describe('question card layout', () => {
         questions: [{
           question: 'Send update?',
           options: [
-            { label: 'Send', preview: 'Draft line 1\nDraft line 2' },
+            { label: 'Send', preview: '    indented line\nDraft line 2' },
             { label: 'Edit first' },
           ],
         }],
@@ -232,6 +233,22 @@ describe('question card layout', () => {
     );
     await single.ready;
     expect(frames[0].body).toContain('**Send**');
-    expect(frames[0].body).toContain('> Draft line 1\n> Draft line 2');
+    expect(frames[0].body).toContain('>     indented line\n> Draft line 2');
+
+    // Oversized CJK previews across multiple options must stay far below Feishu's 30 KB limit.
+    const huge = '汉'.repeat(15_000);
+    const oversized = fixture([{
+      question: 'Pick one?',
+      options: [
+        { label: 'Option A', preview: huge },
+        { label: 'Option B', preview: huge },
+        { label: 'Option C', preview: huge },
+        { label: 'Option D', preview: huge },
+      ],
+    }]);
+    await oversized.card.ready;
+    const body = oversized.frames[0].card.body;
+    expect(Buffer.byteLength(body, 'utf8')).toBeLessThan(10_000);
+    expect(body).toContain('truncated');
   });
 });

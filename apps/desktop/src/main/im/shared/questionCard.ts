@@ -4,7 +4,12 @@ import type { InteractionRequest } from '@cindy/maker-core';
 import type { InteractiveCardSpec } from '@cindy/im';
 import type { QuestionControls } from '../../maker-ipc/interactionRouter';
 import { imText } from './imText';
-import { encodeAskOptionAnswers, formatAskAnswersForDisplay } from './interactionCardModel';
+import {
+  encodeAskOptionAnswers,
+  formatAskAnswersForDisplay,
+  formatAskOptionPreviewLines,
+  IM_ASK_TOTAL_PREVIEW_MAX_BYTES,
+} from './interactionCardModel';
 
 export type QuestionRequest = Extract<InteractionRequest, { kind: 'ask_user_question' }>;
 
@@ -79,19 +84,18 @@ export function createQuestionCard(
     ? text.split('\n').map(line => (line.trim() ? look.muted!(line) : line)).join('\n')
     : text;
   const hintText = (): string => muted(hint ?? imText('imBot.text.questions.cardHint'));
-  const formatPreview = (preview: string | undefined): string[] => {
-    const trimmed = preview?.trim();
-    if (!trimmed) return [];
-    return trimmed.split('\n').map(line => (line ? `> ${line}` : '>'));
+  const body = () => {
+    if (look.single) return singleBody();
+    const previewBudget = { remainingBytes: IM_ASK_TOTAL_PREVIEW_MAX_BYTES };
+    return request.questions.map((q, i) => [
+      `${i + 1}. ${withMultiSelectHint(q)}`,
+      ...(q.options ?? []).flatMap((o, j) => [
+        `${i + 1}·${j + 1}. ${o.label}${o.description ? ` — ${o.description}` : ''}`,
+        ...formatAskOptionPreviewLines(o.preview, previewBudget),
+      ]),
+      ...resolvedLine(i),
+    ].join('\n')).join('\n\n');
   };
-  const body = () => look.single ? singleBody() : request.questions.map((q, i) => [
-    `${i + 1}. ${withMultiSelectHint(q)}`,
-    ...(q.options ?? []).flatMap((o, j) => [
-      `${i + 1}·${j + 1}. ${o.label}${o.description ? ` — ${o.description}` : ''}`,
-      ...formatPreview(o.preview),
-    ]),
-    ...resolvedLine(i),
-  ].join('\n')).join('\n\n');
   /** 按钮总数超过传输上限时不发选项按钮(见 render): 选项必须逐行写在正文里, 靠编号文字作答。 */
   const choiceButtonsOmitted = (): boolean =>
     request.questions.reduce((count, q) => count + (q.options?.length ?? 0), 0) + (requiresSubmit ? 1 : 0)
@@ -103,12 +107,13 @@ export function createQuestionCard(
     const q = request.questions[0];
     const options = q.options ?? [];
     const detailed = options.some(o => o.description || o.preview?.trim());
+    const previewBudget = { remainingBytes: IM_ASK_TOTAL_PREVIEW_MAX_BYTES };
     return [
       withMultiSelectHint(q),
       ...(detailed || choiceButtonsOmitted()
         ? ['', ...options.flatMap((o, j) => [
           `${j + 1}. ${detailed ? `**${o.label}**` : o.label}${o.description ? ` ${muted(o.description)}` : ''}`,
-          ...formatPreview(o.preview),
+          ...formatAskOptionPreviewLines(o.preview, previewBudget),
         ])]
         : []),
       ...resolvedLine(0).flatMap(line => ['', line]),

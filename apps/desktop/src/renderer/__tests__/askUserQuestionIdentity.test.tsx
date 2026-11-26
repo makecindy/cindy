@@ -98,6 +98,18 @@ describe('AskUserQuestionPrompt identity', () => {
     // Clicking the preview must not trigger single-select submission.
     fireEvent.click(previewBox);
     expect(props.onAnswer).not.toHaveBeenCalled();
+    // While a file preview lightbox is open (even if focus stayed on a link inside the card),
+    // number keys and Escape must not submit or skip the underlying question.
+    const lightboxCard = document.createElement('div');
+    lightboxCard.setAttribute('data-text-lightbox-card', 'true');
+    document.body.appendChild(lightboxCard);
+    try {
+      fireEvent.keyDown(window, { key: '1' });
+      fireEvent.keyDown(window, { key: 'Escape' });
+      expect(props.onAnswer).not.toHaveBeenCalled();
+    } finally {
+      lightboxCard.remove();
+    }
     // Clicking the option button still submits the choice label.
     fireEvent.click(view.getByRole('button', { name: /Send \(Recommended\)/ }));
     expect(props.onAnswer).toHaveBeenCalledExactlyOnceWith('req-preview', {

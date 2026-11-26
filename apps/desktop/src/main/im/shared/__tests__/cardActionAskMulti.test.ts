@@ -390,8 +390,8 @@ describe('ask 多题/多选打勾卡', () => {
     await expect(decisionPromise).resolves.toEqual({ kind: 'ask_user_question', answers: {} });
   });
 
-  // IM 单问卡与多题卡必须保留选项 preview，否则模型把待发原文放进 preview 时 IM 用户完全看不到。
-  it('buildAskUserCard 与 buildAskMultiCard 渲染选项 preview 引用块', () => {
+  // IM 单问卡与多题卡必须保留选项 preview 与首行缩进，并受整卡字节预算约束。
+  it('buildAskUserCard 与 buildAskMultiCard 渲染选项 preview（保留缩进并限制总字节）', () => {
     const single = cards.buildAskUserCard({
       kind: 'ask_user_question',
       requestId: 'req-single-preview',
@@ -399,13 +399,14 @@ describe('ask 多题/多选打勾卡', () => {
         header: '群里同步',
         question: '要发吗？',
         options: [
-          { label: '发送', preview: '第一行\n第二行' },
+          { label: '发送', preview: '    code()\n第二行' },
           { label: '先不发' },
         ],
       }],
     });
-    expect(single?.body).toContain('**发送**\n> 第一行\n> 第二行');
+    expect(single?.body).toContain('**发送**\n>     code()\n> 第二行');
 
+    const huge = '中'.repeat(12_000);
     const multi = cards.buildAskMultiCard({
       requestId: 'req-multi-preview',
       questions: [{
@@ -413,12 +414,15 @@ describe('ask 多题/多选打勾卡', () => {
         question: '勾选要发的内容',
         multiSelect: true,
         options: [
-          { label: '摘要', preview: '进度已完成' },
-          { label: '详情' },
+          { label: '摘要', preview: '  进度已完成' },
+          { label: '长文 1', preview: huge },
+          { label: '长文 2', preview: huge },
+          { label: '长文 3', preview: huge },
         ],
       }],
       selections: new Map(),
     });
-    expect(multi.body).toContain('**1·1. 摘要**\n> 进度已完成');
+    expect(multi.body).toContain('**1·1. 摘要**\n>   进度已完成');
+    expect(Buffer.byteLength(multi.body, 'utf8')).toBeLessThan(10_000);
   });
 });
