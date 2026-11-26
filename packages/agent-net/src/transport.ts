@@ -47,7 +47,20 @@ const DRAIN_TIMEOUT_MS = 2_000;
 const REFUSAL_MEMORY_MS = 30_000;
 const DEFAULT_REPROBE_MS = 10_000;
 // 选路的门槛与判断在 pathRouter.ts（原生引擎的传输共用），这里照旧导出给已有的调用方。
-export { AUTO_DIRECT_RECOVER_DELTA_MS, AUTO_DIRECT_RECOVER_RATIO, AUTO_RELAY_DELTA_MS, AUTO_RELAY_RATIO, AUTO_SWITCH_COOLDOWN_MS, decideAutoPreferRelay } from './pathRouter.js';
+export {
+  AUTO_DIRECT_RECOVER_DELTA_MS,
+  AUTO_DIRECT_RECOVER_RATIO,
+  AUTO_EMERGENCY_DELTA_MS,
+  AUTO_EMERGENCY_RATIO,
+  AUTO_RELAY_DELTA_MS,
+  AUTO_RELAY_MAX_DELTA_MS,
+  AUTO_RELAY_MIN_DELTA_MS,
+  AUTO_RELAY_RATIO,
+  AUTO_RELAY_RATIO_MARGIN,
+  AUTO_SWITCH_COOLDOWN_MS,
+  autoRelaySwitchMarginMs,
+  decideAutoPreferRelay,
+} from './pathRouter.js';
 /** 显式换网触发重建 UDP 套接字的最短间隔：合并短时间内连续到达的网卡/代理/中转重连事件，避免高频抖动。 */
 const DEFAULT_NETWORK_REBIND_COOLDOWN_MS = 3_000;
 /** 连续 UDP 发送报错达到该次数，或出现套接字 fd 已失效错误时，触发重建 UDP 套接字。 */

@@ -1,5 +1,5 @@
 import { isComposerAttachmentDrag } from '@/lib/composerDrop';
-import { useAlternateDraftModel } from './alternateDraftModel';
+import { applyAlternateDraftModel, useAlternateDraftModel } from './alternateDraftModel';
 import { useProjectInfo } from './hooks/useProjectInfo';
 import { ProjectSettingsDialog } from './sidebar/ProjectSettingsDialog';
 import { ResolvedProjectIcon } from './sidebar/ResolvedProjectIcon';
@@ -823,20 +823,13 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
   const { t, i18n } = useTranslation();
   const { dataOwnerId, dataOwnerGeneration } = useAuth();
   const savedDraft = useNewMakerDraft();
-  const [alternateModel, setAlternateModel] = useAlternateDraftModel(NEW_MAKER_DRAFT_KEY, dataOwnerGeneration);
+  const [alternateModel, setAlternateModel, forgetRemoteAlternateDraftModel] = useAlternateDraftModel(
+    NEW_MAKER_DRAFT_KEY, dataOwnerGeneration, !savedDraft.deviceLinkDeviceId && !savedDraft.remoteHostId,
+  );
   const localAlternate = alternateModel?.ownerGeneration === dataOwnerGeneration &&
     !savedDraft.deviceLinkDeviceId && !savedDraft.remoteHostId && !savedDraft.agentDeviceId
     ? alternateModel : null;
-  const draft = localAlternate ? {
-    ...savedDraft,
-    vendor: localAlternate.vendor,
-    agentDeviceId: localAlternate.agentDevice?.deviceId ?? null,
-    agentDeviceName: localAlternate.agentDevice?.name ?? null,
-    lastByVendor: {
-      ...savedDraft.lastByVendor,
-      [localAlternate.vendor]: { ...savedDraft.lastByVendor[localAlternate.vendor], ...localAlternate.prefs },
-    },
-  } : savedDraft;
+  const draft = applyAlternateDraftModel(savedDraft, localAlternate);
   useEffect(() => {
     if (alternateModel && !localAlternate) setAlternateModel(null);
   }, [alternateModel, localAlternate]);
@@ -1288,13 +1281,14 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
           active: activePluginModel,
           onSelect: (model: GhostPickerModel) => {
             setAlternateModel(null);
+            forgetRemoteAlternateDraftModel();
             patchDraft({
               pluginModel: { pluginId: model.pluginId, modelId: model.id }, modelGroup: null, pluginEngine: null,
             });
           },
         }
       : undefined,
-    [pluginModelsAllowed, pluginModels, activePluginModel],
+    [pluginModelsAllowed, pluginModels, activePluginModel, setAlternateModel, forgetRemoteAlternateDraftModel],
   );
   // 插件引擎(docs/plans/acp-plugin-bridge.md)：
   //   · 本机新任务(`pluginEnginesAllowed`)：列出本机引擎，以及本机已装对应插件时其他电脑开放的远程引擎；
@@ -1492,6 +1486,7 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
               return;
             }
             setAlternateModel(null);
+            forgetRemoteAlternateDraftModel();
             const currentDraft = getDraft();
             const leavesAgentDevice = !!currentDraft.agentDeviceId;
             if (leavesAgentDevice) {
@@ -1531,6 +1526,8 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
       activePluginEngine,
       readPluginEngineCatalogues,
       remoteDraftPermissionForDevice,
+      setAlternateModel,
+      forgetRemoteAlternateDraftModel,
     ],
   );
   // 模型组：本机开的新任务列本机的模式；远程控制另一台电脑时列那台的模式，由那台按自己的规则选(model-groups.md §6.3)，
@@ -1587,6 +1584,7 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
           active: activeModelGroup,
           onSelect: (selection: ModelGroupSelection) => {
             setAlternateModel(null);
+            forgetRemoteAlternateDraftModel();
             setRemoteDraftPluginEngine(null);
             patchDraft({ modelGroup: selection, pluginModel: null, pluginEngine: null });
           },
@@ -1596,7 +1594,7 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
           ...(modelGroupDeviceIds.length > 0 ? { readDevices: readDevicesModelGroups } : {}),
         }
       : undefined,
-    [modelGroupsAllowed, modelGroupsConfig, activeModelGroup, navigate, isDeviceLinkDraft, modelGroupDevices, modelGroupDeviceIds, readDevicesModelGroups],
+    [modelGroupsAllowed, modelGroupsConfig, activeModelGroup, navigate, isDeviceLinkDraft, modelGroupDevices, modelGroupDeviceIds, readDevicesModelGroups, setAlternateModel, forgetRemoteAlternateDraftModel],
   );
   /** 组里没有能用的模型时，说明里写用户原来选的那个模型的显示名。 */
   const localProvidersForGroupNoteRef = useRef<ReturnType<typeof useProviders>['providers']>([]);
@@ -3546,7 +3544,8 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
       return;
     }
     handledDialogueTargetRequestRef.current = dialogueTargetRequest.requestId;
-    setAlternateModel(null);
+    // 另起新建时只丢本机替代模型；远程替代与正常选的远程模型一样沿用(见 alternateDraftModel)。
+    if (!alternateModel?.agentDevice) setAlternateModel(null);
     // 同路由的对话目标是比在途目录恢复更新的用户选择。先推进同一 sequence owner，
     // 让旧 restore completion 只能释放锁，不能把目录重新写回草稿。
     modePickerSelectionSeqRef.current += 1;
@@ -3586,7 +3585,11 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
     const token = `${dataOwnerId}:${location.key}`;
     if (handledGenericDefaultLocationRef.current === token) return;
     handledGenericDefaultLocationRef.current = token;
-    if (location.state?.workspacePrompt === 'generic' && alternateModel?.pageKey !== location.key) setAlternateModel(null);
+    if (
+      location.state?.workspacePrompt === 'generic' &&
+      alternateModel?.pageKey !== location.key &&
+      !alternateModel?.agentDevice
+    ) setAlternateModel(null);
     if (location.state?.restoreLastCreatedWorkspace === true) {
       const workspace = getLastCreatedTaskWorkspace(dataOwnerId);
       if (workspace) {
@@ -4138,6 +4141,7 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
         return;
       }
       setAlternateModel(null);
+      forgetRemoteAlternateDraftModel();
       setRemoteDraftPluginEngine(null);
       // 收藏锚点写进**目标引擎的槽**(Chris 2026-08-19 起持久化,见 draftFavoriteAnchor 的
       // 说明):记的是 uid + **本次写进草稿的 wire id**,失效判定才有可比的同类值。
@@ -4327,6 +4331,8 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
       localAlternate,
       localModelIssue,
       dataOwnerGeneration,
+      setAlternateModel,
+      forgetRemoteAlternateDraftModel,
       savedDraft.lastByVendor,
       location.key,
       usesDeviceCatalog,
@@ -4501,11 +4507,12 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
     log.warn('[new-maker] selected agent computer is no longer selectable, running the agent here');
     if (localAlternate) {
       setAlternateModel(null);
+      forgetRemoteAlternateDraftModel();
       setDlSel(null);
       return;
     }
     patchDraft({ agentDeviceId: null, agentDeviceName: null });
-  }, [effectiveAgentDeviceId, controlledModelRoute.catalogHostDeviceId, selectableDevices, selectableDevicesLoaded, localAlternate, setAlternateModel, setDlSel]);
+  }, [effectiveAgentDeviceId, controlledModelRoute.catalogHostDeviceId, selectableDevices, selectableDevicesLoaded, localAlternate, setAlternateModel, forgetRemoteAlternateDraftModel, setDlSel]);
 
   // 创建目标正在异步提交时，发送、建目标以及设备／工作区切换必须共用同一把锁。
   // ref 负责同步 guard，state 只负责驱动 UI 禁用；所有写入都经 markSendInFlight，
@@ -8316,7 +8323,8 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
                       usesDeviceCatalog ? undefined : handleRememberedEffortChange
                     }
                   />
-                  {!newGoalOpen && (localModelIssueText || localAlternate) && (
+                  {/* 远程替代会沿用到之后的新建任务，不再是「仅用于本次任务」。 */}
+                  {!newGoalOpen && (localModelIssueText || (localAlternate && !localAlternate.agentDevice)) && (
                     <p role="status" className="mt-2 px-3 text-12 text-[var(--text-secondary)]">
                       {localModelIssueText ?? t('ccAgent.draft.savedModel.thisTaskOnly')}
                     </p>

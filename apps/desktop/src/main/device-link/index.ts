@@ -227,7 +227,7 @@ import { rejoinRemovedDevice, type AgentNetRejoinOutcome } from './deviceRejoin.
 import { activeSelfHostedRelay } from './selfHostedRelayRouting.js';
 import { currentRelayFrameAuth } from './selfHostedRelayFrameAuth.js';
 import { installAgentNetMediaRouting } from './agentNetMedia.js';
-import { bindAgentNetSharing, stopAgentNetSharing, agentNetSharingRoute } from './agentNetSharing.js';
+import { bindAgentNetSharing, stopAgentNetSharing, agentNetSharingRoute, agentNetProviderShareRoutes } from './agentNetSharing.js';
 import { installAgentNetSharingPolicy } from './agentNetSharingPolicy.js';
 import { isAgentNetActive, agentNetAllowsLegacy, agentNetRequiresEncryption, createAgentNetOrLegacySocket, noteAgentNetIdentityRefused, rejoinOfficialAgentNet, agentNetSelectionKey, agentNetShouldUseLegacyPeer, agentNetShouldProbeLegacyPeer, agentNetPeerSnapshot, agentNetPeerRoutes,
   agentNetTransportAttestation, verifyAgentNetTransportAttestation, agentNetPrefersPrimary, useAgentNetSessions, agentNetSession,
@@ -2091,15 +2091,18 @@ export function getDeviceLinkPeerLinks(includeTraffic = false): DeviceLinkPeerLi
   // Device Link 的中转只有 WebSocket。Agent-Net 主连接还没报上来时不写，不猜。
   const agentNetRoute = primaryUsesEncryptedTransport ? agentNetRelayRoute() : null;
   const relayTransport = !relayProtocol ? undefined : primaryUsesEncryptedTransport ? agentNetRoute?.via : 'websocket';
+  const allPeerLinks = client.getPeerLinkSnapshots();
+  const providerShareRoutes = primaryUsesEncryptedTransport ? agentNetProviderShareRoutes(allPeerLinks) : [];
   return {
     ...traffic,
     // 拓扑只画同账号设备;跨账号 peer(共享任务 / 供应商分享)不在这页。
-    links: client.getPeerLinkSnapshots().filter((link) => !isScopedPeer(link.deviceId)).map((link) => {
+    links: allPeerLinks.filter((link) => !isScopedPeer(link.deviceId)).map((link) => {
       const core = client!.connectionFor(link.deviceId) === client ? agentNetPeerSnapshot(link.deviceId) : null;
       const encrypted = primaryUsesEncryptedTransport && client!.connectionFor(link.deviceId) === client;
       return core ? { ...link, ...core, encrypted } : { ...link, encrypted };
     }),
     ...(primaryUsesEncryptedTransport ? { agentNetRoutes: agentNetPeerRoutes() } : {}),
+    ...(providerShareRoutes.length > 0 ? { providerShareRoutes } : {}),
     relayProtocol,
     ...(relayTransport ? { relayTransport } : {}),
     relayRttMs: primaryUsesEncryptedTransport ? agentNetRoute?.rttMs ?? null : client.getRelayRttMs(),
