@@ -96,6 +96,7 @@ import {
 } from './mcp-tool-approval-policy.js';
 import { getRipgrepBinaryPath, claudeUpstreamEndpoint } from './runtime-configs.js';
 import { buildPiRuntimeConfig } from './runtimeConfigsCore.js';
+import { withCloudPluginOauthPrompt } from '../plugin-oauth/prompt.js';
 import {
   getActiveCatalog,
 } from './active-catalog.js';
@@ -203,12 +204,12 @@ export const desktopPiAuthAdapter: AuthAdapter = createPiAuthAdapter({ subscript
 export { composePiSystemPrompt } from './runtimeConfigsCore.js';
 
 function buildDesktopPiRuntimeConfig(): AgentRuntimeConfig {
-  return buildPiRuntimeConfig({
+  return withCloudPluginOauthPrompt(buildPiRuntimeConfig({
     ripgrepPath: getRipgrepBinaryPath(),
     userDataPath: app.getPath('userData'),
     endpoint: () => isAnthropicCompatProxyHandleReady() ? getClaudeEndpoint() : undefined,
     remoteEndpoint: () => claudeUpstreamEndpoint(),
-  });
+  }));
 }
 
 // ── 构造入口 ─────────────────────────────────────────────────────────────────

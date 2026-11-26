@@ -29,6 +29,7 @@ export type DbAgentKind = 'cc' | 'codex' | 'pi';
 
 /** 构造交接文本所需的最小消息投影(content 已 JSON.parse,即 camel Message.content)。 */
 export interface HandoffSourceMessage {
+  clientId?: string;
   role: string;
   content: unknown;
   createdAt: number; // unix ms
@@ -922,6 +923,19 @@ export function buildHandoff(
   return buildAtConservativeBudget(build, Math.min(budget, tokens), tokens, opts);
 }
 
+export interface UserReplayHandoff {
+  userClientId: string;
+  text: string;
+}
+
+export function buildUserReplayHandoff(
+  source: HandoffSourceMessage[], options: BuildHandoffOptions, userClientId?: string,
+): UserReplayHandoff | undefined {
+  if (!userClientId || !source.some(entry => entry.role === 'user' && entry.clientId === userClientId)) return;
+  return { userClientId, text: buildHandoff(source.filter(entry =>
+    entry.role !== 'user' || entry.clientId !== userClientId), options).handoff };
+}
+
 function buildAtConservativeBudget(
   build: (budget: number) => { handoff: string; handoffCoverage: HandoffCoverage },
   chars: number,
@@ -1389,10 +1403,10 @@ export interface AgentHandoffPendingRegistry {
    * `consume` 都不推进它,所以同一流程内的二次写入、以及与别处 consume 的并发,
    * 都不会被误拒。
    */
-  set(sessionId: string, handoff: string, expectedGeneration?: number): void;
+  set(sessionId: string, handoff: string, expectedGeneration?: number, replay?: UserReplayHandoff): void;
   /** 取当前 clear 纪元(只由 `/clear` 推进),配合 `set` 的 `expectedGeneration` 使用。 */
   readGeneration(sessionId: string): number;
-  peek(sessionId: string): Promise<string | null>;
+  peek(sessionId: string, retryClientId?: string): Promise<string | null>;
   consume(sessionId: string): void;
   /**
    * 丢弃内存里的待注入交接并推进 clear 纪元,**允许后续 peek 回落 DB 重建**。
@@ -1453,11 +1467,14 @@ export function createAgentHandoffPendingRegistry(
    * 只对 `set` 进来的值生效:queryPending 的产出已经组合过,再过一遍会让首发未
    * accepted 的重试拿到两份来源标记(下面的 composedByQuery 就是这道闸)。
    */
-  decorateCached?: (sessionId: string, handoff: string) => Promise<string>,
+  prepareDecoration?: (sessionId: string) => Promise<((handoff: string) => string) | undefined>,
 ): AgentHandoffPendingRegistry {
-  const pending = new Map<string, string | null>();
-  /** 值由 queryPending 产出(已含组合结果)的 session,decorate 必须跳过它们。 */
-  const composedByQuery = new Set<string>();
+  interface Entry {
+    text: string | null;
+    replay?: UserReplayHandoff;
+    decorated?: boolean;
+  }
+  const pending = new Map<string, Entry>();
   /**
    * 每个 session 的 **clear 纪元**:只有 `/clear`(invalidate / clear)递增它。
    *
@@ -1469,7 +1486,7 @@ export function createAgentHandoffPendingRegistry(
    *  - `set` 递增会让同一流程内的第二次写入(resume 回落用全量交接覆盖增量交接)
    *    被自己先前那次挡掉。
    *
-   * peek 写回时除了纪元,还要确认缓存值仍是自己读到的那一份——纪元不变但被别的
+   * peek 写回时除了纪元,还要确认缓存条目仍是自己读到的那一份——纪元不变但被别的
    * `set` 换过内容时,不能拿旧值盖回去。
    */
   const clearEpoch = new Map<string, number>();
@@ -1478,85 +1495,70 @@ export function createAgentHandoffPendingRegistry(
   };
   const genOf = (sessionId: string): number => clearEpoch.get(sessionId) ?? 0;
   return {
-    set(sessionId, handoff, expectedGeneration) {
+    set(sessionId, handoff, expectedGeneration, replay) {
       // 调用方带了 clear 纪元就校验:它是在读历史之前取的,不符说明期间用户 /clear 过,
       // 这份交接算的是已作废的历史,丢弃而不是盖回去。纪元只由 clear 推进,所以同一
       // 流程内的二次写入、以及与别处 consume 的并发,都不会被误拒。
       if (expectedGeneration !== undefined && genOf(sessionId) !== expectedGeneration) return;
-      pending.set(sessionId, handoff);
-      // 外部直接塞进来的交接没经过 queryPending 的组合,重新纳入 decorate 范围。
-      composedByQuery.delete(sessionId);
+      pending.set(sessionId, { text: handoff, replay });
     },
     readGeneration(sessionId) {
       return genOf(sessionId);
     },
-    async peek(sessionId) {
-      if (pending.has(sessionId)) {
-        const cached = pending.get(sessionId) ?? null;
-        if (cached === null || !decorateCached || composedByQuery.has(sessionId)) return cached;
-        const gen = genOf(sessionId);
+    async peek(sessionId, retryClientId) {
+      const forInput = (entry: Entry) =>
+        retryClientId && entry.replay?.userClientId === retryClientId ? entry.replay.text : entry.text;
+      const entry = pending.get(sessionId);
+      const gen = genOf(sessionId);
+      if (entry) {
+        if (entry.text === null || !prepareDecoration || entry.decorated) return forInput(entry);
         try {
-          const decorated = await decorateCached(sessionId, cached);
-          // 期间被 /clear:本次结果基于已作废的状态,既不写回也不返回——返回它等于
-          // 把 clear 掉的交接注入这一次发送。
-          if (genOf(sessionId) !== gen) return null;
-          // 纪元没变但值被别的 set 换过:别拿旧值盖回去,让下一次 peek 处理新值。
-          if (pending.get(sessionId) !== cached) return null;
-          // 组合结果回写并标记为已组合:同一条待注入交接在 consume 之前可能被 peek
-          // 多次(首发被拒后的重试),没有这步每次都要重跑一遍 decorate 的 DB 查询,
-          // 而且要靠 decorate 自身幂等才不会叠加。
-          pending.set(sessionId, decorated);
-          composedByQuery.add(sessionId);
-          return decorated;
+          const decorate = await prepareDecoration(sessionId);
+          if (genOf(sessionId) !== gen || pending.get(sessionId) !== entry) return null;
+          // Compose both variants from their original bodies. A fork may trim
+          // the middle, so its result is not necessarily a prefixed copy.
+          const composed: Entry = {
+            text: decorate ? decorate(entry.text) : entry.text,
+            replay: entry.replay && decorate ? { ...entry.replay, text: decorate(entry.replay.text) } : entry.replay,
+            decorated: true,
+          };
+          pending.set(sessionId, composed);
+          return forInput(composed);
         } catch {
-          // 失败路径与成功路径同一套校验:decorate 抛错期间若发生 /clear,或这份交接
-          // 已被别处 consume / 被新交接替换,退回 cached 都等于把过期内容注入这次发送
-          // ——尤其 consume 之后再注入,accepted 后的无条件 consume 还会抹掉更新的那份。
-          if (genOf(sessionId) !== gen) return null;
-          if (pending.get(sessionId) !== cached) return null;
-          // 组合失败不能吞掉本来就该注入的交接——退回未组合的原值,且不写缓存,
-          // 下次 peek 仍会重试组合。
-          return cached;
+          // Fall back only to the still-current entry. A later peek may retry the read.
+          return genOf(sessionId) === gen && pending.get(sessionId) === entry ? forInput(entry) : null;
         }
       }
-      const gen = genOf(sessionId);
-      let fromDb: string | null = null;
+      let fromDb: string | null;
       try {
         fromDb = await queryPending(sessionId);
       } catch {
-        // 查询失败按无 pending 处理(不阻塞发送);下次 send 重查。
-        return null;
+        return null; // Query failure is not a confirmed miss.
       }
-      // 期间 /clear 或有人写入了新交接:这份 DB 重建结果已过时,不写回也不返回。
       if (genOf(sessionId) !== gen || pending.has(sessionId)) return null;
-      pending.set(sessionId, fromDb);
-      composedByQuery.add(sessionId);
+      pending.set(sessionId, { text: fromDb, decorated: true });
       return fromDb;
     },
     consume(sessionId) {
-      pending.set(sessionId, null);
-      composedByQuery.delete(sessionId);
+      pending.set(sessionId, { text: null });
       // 不推进 clear 纪元:消费的是"这一份"交接,不代表别处正在构造的新交接作废。
       onConsume?.(sessionId);
     },
     clear(sessionId) {
       pending.delete(sessionId);
-      composedByQuery.delete(sessionId);
       // 不要"顺手"改成 clearEpoch.delete():缺省值 0 会让 clear 前取到 0 的在途写入
       // 重新校验通过。理由见接口声明处。
       bumpClearEpoch(sessionId);
     },
     invalidate(sessionId) {
-      pending.set(sessionId, null);
-      composedByQuery.delete(sessionId);
+      pending.set(sessionId, { text: null });
       // 纪元不在这里推进,见接口声明:要等 cleared_at 落库尝试结束。
     },
     sealClearBoundary(sessionId) {
       // 重立墓碑再推进纪元,顺序不能反过来也不能省。落库这段 await 里,一份用
       // clear 前纪元的 set 是能挤进来的(那时纪元还没推进,校验通过),它算的是
       // clear 前的历史;只推进纪元不会把它清掉。
-      pending.set(sessionId, null);
-      composedByQuery.delete(sessionId);
+      pending.set(sessionId, { text: null });
       bumpClearEpoch(sessionId);
     },
   };

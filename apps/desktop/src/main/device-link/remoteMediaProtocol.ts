@@ -341,29 +341,49 @@ async function serveStream(
   // 删掉,打断正在开流的这一路(开成功也会 seek 404)。开流失败成对 release,
   // 自愈路径(本请求自己失败后 evict)不受影响。
   cache.retainStream(entry);
-  let upstream: Awaited<ReturnType<typeof openMediaStream>>;
-  try {
-    upstream = await openMediaStream(entry.ossKey, rangeHeader ?? undefined, signal);
-  } catch (err) {
+  const upstreamController = new AbortController();
+  let ended = false;
+  const finish = (reason?: unknown): void => {
+    if (ended) return;
+    ended = true;
+    signal?.removeEventListener('abort', abort);
+    // Electron net.fetch may retain its native connection after reader.cancel().
+    // Own the request signal so every terminal path tears down the HTTP request,
+    // including protocol cancellation that never aborts request.signal.
+    upstreamController.abort(reason);
     cache.releaseStream(entry);
+  };
+  const abort = (): void => finish(signal?.reason);
+  if (signal?.aborted) abort();
+  else signal?.addEventListener('abort', abort, { once: true });
+  try {
+    upstreamController.signal.throwIfAborted();
+    const upstream = await openMediaStream(entry.ossKey, rangeHeader ?? undefined, upstreamController.signal);
+    if (upstreamController.signal.aborted) {
+      // A transport can finish opening after cancellation. Do not publish that
+      // late body, and release it even if the transport ignored the signal.
+      void upstream.body?.cancel().catch(() => {});
+      upstreamController.signal.throwIfAborted();
+    }
+    const headers: Record<string, string> = {
+      'Content-Type': entry.mimeType,
+      'Accept-Ranges': 'bytes',
+      'Cache-Control': 'no-cache',
+    };
+    const cr = upstream.headers.get('content-range');
+    if (cr) headers['Content-Range'] = cr;
+    const cl = upstream.headers.get('content-length');
+    if (cl) headers['Content-Length'] = cl;
+    // Hold the cache lease until this response ends; each range request owns
+    // its own controller, so cancelling it leaves other consumers untouched.
+    const body = upstream.body
+      ? trackStreamEnd(upstream.body, () => finish())
+      : (finish(), null);
+    return new Response(body, { status: upstream.status, headers });
+  } catch (err) {
+    finish();
     throw err;
   }
-  const headers: Record<string, string> = {
-    'Content-Type': entry.mimeType,
-    'Accept-Ranges': 'bytes',
-    'Cache-Control': 'no-cache',
-  };
-  const cr = upstream.headers.get('content-range');
-  if (cr) headers['Content-Range'] = cr;
-  const cl = upstream.headers.get('content-length');
-  if (cl) headers['Content-Length'] = cl;
-  // 服务期间保持 in-flight,sweep/逐出不得删它;流结束/出错/取消后 release + 刷新
-  // lastAccess(空闲 TTL 从「最后一次服务结束」起算),避免长视频播放超 30min TTL
-  // 被删掉正在播放的 OSS 对象。
-  const body = upstream.body
-    ? trackStreamEnd(upstream.body, () => cache.releaseStream(entry))
-    : (cache.releaseStream(entry), null);
-  return new Response(body, { status: upstream.status, headers });
 }
 
 /**

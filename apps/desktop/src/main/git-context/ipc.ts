@@ -1,5 +1,6 @@
 import { readGithubTokenDetailed } from './githubToken.desktop.js';
-import { glabCliTokenSource, readGitlabStatusToken } from './glabCliTokenSource';
+import { glabCliTokenSource } from './glabCliTokenSource';
+import { createGitlabTokenChain, gitlabPluginToken } from './gitlabTokenChain';
 import { getGhostSetupChangeBus } from '../cindy-brain/ghostSetupChangeBus.js';
 import { createPluginLogicalIdentity, pluginInstallStoragePart, pluginNewInstallRelId } from '../../shared/pluginIdentity.js';
 import { activeOwnerScopeKey } from '../appSessionState.js';
@@ -30,7 +31,7 @@ import { manageSessionPrs } from './manageSessionPrs';
 import { app, BrowserWindow, ipcMain } from 'electron';
 import type { Schedule } from '@cindy/maker-scheduler';
 import { GithubClient } from '@cindy/github-client';
-import { prStatusKey, isPrHost, sessionPrUrl, parseSessionPrUrl } from '@cindy/maker-shared';
+import { prStatusKey, isPrHost, parseSessionPrUrl, sessionPrUrl } from '@cindy/maker-shared';
 import { getScheduleWebhookHost } from '../scheduler-host/webhook/runtime';
 import { GITHUB_EVENT_CACHE_TTL_MS, type GithubPrRefresh } from '../scheduler-host/webhook/github';
 import { cachedGithubPrHeads, refreshGithubPrEvents } from './githubPrEvents';
@@ -44,6 +45,7 @@ import {
   githubReadScope,
   githubStatusFetch,
   githubTransport,
+  resolveGithubItem,
 } from './githubReadHost';
 import type { GithubReadService } from './githubReadService';
 import type { GithubReadMethod } from '@cindy/maker-shared';
@@ -190,19 +192,33 @@ const prFollowWatch = new PrFollowWatch({
   runNow: async (id, trigger, expectedSchedule, mrObservation) => {
     const scheduler = getSchedulerIfInitialized();
     if (!scheduler) return null;
-    return scheduler.runNow(id, { trigger, mrObservation, expectedSchedule, deferToCaller: Boolean(expectedSchedule.prTrigger) });
+    // PrFollowWatch owns the single pending doorbell for every watched schedule (both
+    // explicit prTrigger and legacy hook URLs), so busy deferrals must not clobber nextFireAt.
+    return scheduler.runNow(id, { trigger, mrObservation, expectedSchedule, deferToCaller: true });
   },
   log,
 });
 /** Re-read current facts before running the existing follow-up gate. No new agent task. */
 export async function refreshSchedulePr(url: string, schedule?: Schedule): Promise<void> {
   if (!prStatusService) throw new Error('HOST_NOT_READY');
+  // GitHub PR or GitLab MR: the same host-qualified identity the status reader and follow watcher use.
   const ref = parseSessionPrUrl(url);
   if (!ref) throw new Error('INVALID_PR_URL');
   const before = prFollowWatch.observedSignature(ref);
-  const [result] = await prStatusService.getStatuses([ref],
-    { waitForFresh: true, refresh: true });
-  if (!result?.ok) throw new Error('PR_VERIFICATION_FAILED');
+  const { url: link, ...query } = ref;
+  void link;
+  const [result] = await prStatusService.getStatuses([query], { waitForFresh: true, refresh: true });
+  if (!result?.ok) {
+    // The run history shows this message: say what the user can fix, keep the stable code first.
+    const reason = (result as { reason?: unknown } | undefined)?.reason;
+    const host = query.host ?? 'this GitLab instance';
+    const hint = reason === 'glab-missing'
+      ? `no GitLab account for ${host}: glab is not installed and the GitLab plugin has no connection for it`
+      : reason === 'glab-not-logged-in'
+        ? `no GitLab account for ${host}: glab is not signed in and the GitLab plugin has no connection for it`
+        : typeof reason === 'string' ? reason : undefined;
+    throw new Error(hint ? `PR_VERIFICATION_FAILED: ${hint}` : 'PR_VERIFICATION_FAILED');
+  }
   if (schedule && ref.provider === 'gitlab' && !changesBetween(before, prFollowWatch.observedSignature(ref), ref.provider).length) {
     await prFollowWatch.reconcileInitialMrWork(schedule, result);
   }
@@ -244,16 +260,22 @@ export async function readGithub(
 }
 
 /** main 启动期注册(bootstrap-electron 调一次)。 */
-export function registerGitContextIpc(deps: { readGitlabPluginToken: (host: string) => string | null }): void {
+export function registerGitContextIpc(deps?: { readGitlabPluginToken?: (host: string) => string | null }): void {
+  const gitlabTokens = createGitlabTokenChain({
+    glab: glabCliTokenSource,
+    pluginToken: deps?.readGitlabPluginToken ?? gitlabPluginToken,
+    ownerScope: activeOwnerScopeKey,
+  });
   gitContextService = new GitContextService({
     onChanged: (snapshot) => broadcastToAllWindows(GIT_CONTEXT_PUSH.CHANGED, snapshot),
   });
   prStatusService = new PrStatusService({
     readToken: readGithubToken,
-    readGitlabToken: host => readGitlabStatusToken(host, glabCliTokenSource, activeOwnerScopeKey, deps.readGitlabPluginToken),
+    // Account configured for the instance in the GitLab plugin first, then local glab sign-in.
+    readGitlabToken: (host) => gitlabTokens.readTokenDetailed(host),
     fetchGitlab: (token, query) => fetchGitlabMrStatus(token, query, outboundFetch),
-    rejectGitlabToken: (host) => glabCliTokenSource.rejectToken(host),
-    invalidateGitlabTokenFailures: () => glabCliTokenSource.invalidateNegativeCache(),
+    rejectGitlabToken: (host) => gitlabTokens.rejectToken(host),
+    invalidateGitlabTokenFailures: () => gitlabTokens.invalidateNegativeCache(),
     scope: githubReadScope,
     fetchPr: fetchPrRemote,
     // The renderer keeps its last value while awaiting fresh counts; no delayed second tick.
@@ -268,7 +290,7 @@ export function registerGitContextIpc(deps: { readGitlabPluginToken: (host: stri
   for (const id of new Set([gitlabId, namespacedId])) {
     gitlabSetupSubscriptions.push(getGhostSetupChangeBus().subscribe(id, event => {
       if (event.source !== 'connection' && event.source !== 'manifest') return;
-      glabCliTokenSource.invalidateNegativeCache();
+      gitlabTokens.invalidateNegativeCache();
       prStatusService?.invalidate();
     }));
   }
@@ -280,6 +302,12 @@ export function registerGitContextIpc(deps: { readGitlabPluginToken: (host: stri
   registerGithubSetupIpc(() => {
     prStatusService?.invalidate();
     githubTransport.invalidate();
+  });
+  // 自动化「指定 PR 或 Issue」：识别编号是 PR 还是 Issue（仅本机窗口）。
+  ipcMain.handle('git-context:github-item:resolve', async (event, repository: unknown, number: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    if (typeof repository !== 'string' || typeof number !== 'number') throwIpcError('INVALID_PARAMS', 'repository and number are required');
+    return resolveGithubItem(repository, number);
   });
   ipcMain.handle('git-context:github-read', async (event, payload: unknown) => {
     if (!isDeviceLinkInvoke()) assertTrustedAppRendererEvent(event);

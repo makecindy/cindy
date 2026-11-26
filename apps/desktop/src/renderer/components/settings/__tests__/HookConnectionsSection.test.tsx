@@ -2049,7 +2049,7 @@ describe('HookConnectionsSection binding actions (Telegram / X / Feishu)', () =>
     expect(ipc.providerBindRevoke).not.toHaveBeenCalled();
   });
 
-  it('官方 Telegram 卡不再有「新对话配置」, 行为与群设置在绑定后出现', async () => {
+  it('官方 Telegram 卡不再有「新对话配置」, 绑定后显示回应与引用设置，隐藏群参与模式', async () => {
     ipc.get.mockResolvedValue({
       hook: {
         ...BASE_HOOK,
@@ -2084,9 +2084,7 @@ describe('HookConnectionsSection binding actions (Telegram / X / Feishu)', () =>
     // 它与目录行的 agent/model/effort 是同一份配置的两个入口, 画成平级两套只会
     // 让人以为可以分别设 —— global scope 仍是目录行的兜底, 只是不再有 UI 入口。
     expect(screen.queryByTestId('im-defaults-global')).toBeNull();
-    expect(screen.getByTestId('telegram-groups').getAttribute('data-binding-id')).toBe(
-      'binding-settings',
-    );
+    expect(screen.queryByTestId('telegram-groups')).toBeNull();
   });
 
   it('老服务端(无 behavior 能力)时不渲染行为/群设置, 也不回退出「新对话配置」', async () => {

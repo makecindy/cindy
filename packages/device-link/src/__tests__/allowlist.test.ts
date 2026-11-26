@@ -4,6 +4,7 @@
  */
 import { describe, it, expect } from 'vitest';
 import { TASK_MIGRATION_CHANNEL } from '../taskMigration.js';
+import { PEER_APP_UPDATE_CHANNEL } from '../peerAppUpdate.js';
 import {
   REMOTE_INVOKE_ALLOWLIST,
   REMOTE_REVIEW_EXTERNAL_INPUT_CHANNELS,
@@ -27,6 +28,13 @@ import {
 } from '../remoteResources.js';
 
 describe('REMOTE_INVOKE_ALLOWLIST', () => {
+  it('allows the scoped same-account peer app update channel while keeping raw update IPCs forbidden', () => {
+    expect(REMOTE_INVOKE_ALLOWLIST.has(PEER_APP_UPDATE_CHANNEL)).toBe(true);
+    for (const raw of ['update-check-now', 'update-get-status', 'update-auto-settings-set', 'relaunch-to-update']) {
+      expect(REMOTE_INVOKE_ALLOWLIST.has(raw)).toBe(false);
+    }
+  });
+
   it('allows the public composer projection without exposing the full installed plugin records', () => {
     expect(REMOTE_INVOKE_ALLOWLIST.has('ghosts:composer-list')).toBe(true);
     expect(REMOTE_INVOKE_ALLOWLIST.has('ghosts:list')).toBe(false);
@@ -328,6 +336,8 @@ describe('REMOTE_INVOKE_ALLOWLIST', () => {
       'worktree:discard-precreated',
       'worktree:cancel-precreated',
       'worktree:removal-preview',
+      'worktree:restore-status',
+      'worktree:restore-for-session',
     ]) {
       expect(REMOTE_INVOKE_ALLOWLIST.has(ch)).toBe(true);
     }

@@ -645,7 +645,8 @@ export function ChatThreadPanel({ group, rootId, speakers = [], onStop, stopping
   const renderRow = (message: BotGroupTimelineMessage, continued: boolean) => {
     const member = message.authorBotId ? memberById.get(message.authorBotId) : undefined;
     const authorName = (member && !member.assistant && message.authorKind !== 'system' ? botGroupMemberDisplayName(member) : '') || message.authorName || member?.name || '';
-    const owned = message.authorKind === 'user' && message.isSelf === false ? botGroupOwnedBotNames(member, members).join(separator) : '';
+    const isOtherHuman = message.authorKind === 'user' && message.isSelf === false;
+    const owned = isOtherHuman ? botGroupOwnedBotNames(member, members).join(separator) : '';
     const shared = message.id !== root?.id && !message.pending ? sharedState(message.id) : null;
     const onReveal = shared?.shareId ? () => revealShare(shared.shareId!) : undefined;
     const postAction = readOnly || message.pending || message.id === root?.id || message.deleted || message.kind !== 'message' ? undefined
@@ -653,12 +654,16 @@ export function ChatThreadPanel({ group, rootId, speakers = [], onStop, stopping
       : { key: 'post-to-main', label: t(key('thread.postToMain')), disabled: posting.has(message.id), icon: <MessageSquareShare size={14} strokeWidth={2} className="shrink-0" />, onSelect: () => void postToMain(message.id, false) };
     return (
       <BotGroupTimelineItem
+        showDeviceChoice={!!group.assistantComputers && !group.assistantDeviceId}
         pluginUi={pluginUi}
         message={message}
         continued={continued}
         authorName={authorName}
         avatar={{ name: authorName, avatar: member?.avatar ?? null, avatarUrl: member?.avatarUrl, avatarColor: member?.avatarColor ?? null }}
         ownerOf={owned || undefined}
+        department={isOtherHuman ? member?.department ?? undefined : undefined}
+        departmentPath={isOtherHuman ? member?.departmentPath ?? undefined : undefined}
+        external={isOtherHuman && member?.external === true ? true : undefined}
         members={members}
         mentionLabels={mentionLabels}
         locale={locale}
