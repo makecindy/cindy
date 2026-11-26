@@ -91,6 +91,12 @@ export function resolveComposerAtActivation({
  *  render in full like the legacy `+` menu did; the panel scrolls). */
 export const EMPTY_QUERY_CONTEXT_SECTION_LIMIT = 3;
 
+/** Leave IME confirmation and editor newlines to the normal keymap before panel navigation. */
+export function resolveComposerSuggestionKey(event: KeyboardEvent): string | null {
+  if (event.isComposing || (event.key === 'Enter' && event.shiftKey)) return null;
+  return event.key;
+}
+
 export function composerSuggestionEntryKey(entry: ComposerSuggestionEntry): string {
   return entry.kind === 'action'
     ? `action:${entry.action.id}`

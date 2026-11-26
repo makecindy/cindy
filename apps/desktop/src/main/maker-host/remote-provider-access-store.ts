@@ -86,7 +86,7 @@ const store = createOverrideSettingsFile<RemoteProviderAccessPrefs>({
 /** 「允许被远程调用」：自己的其他电脑、分享出去的人与供应商组共用这一个开关。 */
 export function isRemoteProviderInvocationAllowed(providerId: string): boolean {
   if (!providerId) return false;
-  store.invalidateIfChanged();
+  store.invalidateIfChanged(60_000);
   return store.read().allowedProviders[remoteAccessProviderId(providerId)] === true;
 }
 

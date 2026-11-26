@@ -99,7 +99,7 @@ describe('buildTopology:状态五档', () => {
       ],
       unresponsive: ['f'],
     });
-    expect(model.self).toEqual({ name: '我的 Mac', platform: 'darwin' });
+    expect(model.self).toEqual({ name: '我的 Mac', platform: 'darwin', appVersion: '1.0.0' });
     expect(model.nodes.map((n) => [n.id, n.status, n.path, n.rttMs])).toEqual([
       ['a', 'direct', 'direct', 3],
       ['b', 'relay', 'relay', 40],

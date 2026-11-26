@@ -12,7 +12,14 @@ const mocks = vi.hoisted(() => ({
   getSessionProvider: vi.fn(),
   getMaker: vi.fn(),
   executeDetach: vi.fn(),
+  readRemotePluginEngines: vi.fn(),
+  listPluginEngineViews: vi.fn((): unknown[] => []),
 }));
+vi.mock('../../../remote-agent/controller/deviceCatalog', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../../remote-agent/controller/deviceCatalog')>()),
+  readRemotePluginEngines: mocks.readRemotePluginEngines,
+}));
+vi.mock('../../../maker-ipc/pluginEnginesIpc', () => ({ listPluginEngineViews: mocks.listPluginEngineViews }));
 
 vi.mock('../../../logger', () => ({ createLogger: () => mocks.logger }));
 vi.mock('../../../maker-host', () => ({ getMaker: mocks.getMaker }));
@@ -98,7 +105,7 @@ function makeTurnRunner(overrides: Partial<ImTurnRunner> = {}): ImTurnRunner {
     disposeAllSessions: vi.fn(),
     disposeOneSession: vi.fn(),
     getMakerSessionById: vi.fn(() => null),
-    getPermissionModes: vi.fn(() => [
+    getPermissionModes: vi.fn(async () => [
       { id: 'auto', displayName: 'Auto', description: 'Safe default' },
     ]),
     changePermissionMode: vi.fn(),
@@ -437,6 +444,25 @@ describe('IM slash commands', () => {
     expect(mocks.sendMarkdownText).toHaveBeenCalledWith('ou_user', ui.agent.apiKeyMissing);
   });
 
+  // Review on #12820: a plugin-engine task whose engine runs on another computer of the same account
+  // lists that computer's offered models, never this computer's (which may not have the plugin, or have
+  // a namesake with other settings). Minimal input: row agentKind 'acp' with agentDeviceId.
+  it('lists a remote plugin engine’s models from the computer it runs on', async () => {
+    const engine = { providerId: 'acp-plugin:agy:agy', name: 'Antigravity', models: [{ id: 'gemini-3-pro', displayName: 'Gemini 3 Pro' }] };
+    mocks.readRemotePluginEngines.mockResolvedValueOnce([engine]);
+    mocks.listPluginEngineViews.mockReturnValue([{ ...engine, models: [{ id: 'local-only', displayName: 'Local' }] }]);
+    const row = { ...defaultRow, agentKind: 'acp', providerId: 'acp-plugin:agy:agy', model: 'gemini-3-pro', agentDeviceId: 'studio' };
+    const turnRunner = makeTurnRunner({ resolveRouteTarget: vi.fn(async () => ({ row, attached: false })) as never });
+    const { handlers, cards } = makeHarness({ turnRunner });
+    await handlers.handleSlashCommand('/model', { botContextId: 'bot', userId: 'ou_user' });
+    expect(mocks.readRemotePluginEngines).toHaveBeenCalledWith('studio');
+    expect(mocks.listPluginEngineViews).not.toHaveBeenCalled();
+    expect(cards.buildModelPickerCard).toHaveBeenCalledWith(expect.objectContaining({
+      currentProviderId: 'acp-plugin:agy:agy',
+      sections: [expect.objectContaining({ models: [expect.objectContaining({ id: 'gemini-3-pro' })] })],
+    }));
+  });
+
   it('waits for model preferences before constructing the IM picker', async () => {
     let release!: () => void;
     mocks.waitForModelVisibilityMirror.mockImplementationOnce(() => new Promise<void>((resolve) => { release = resolve; }));
@@ -641,7 +667,7 @@ describe('IM slash commands', () => {
       label: 'Full Access',
     }));
     const turnRunner = makeTurnRunner({
-      getPermissionModes: vi.fn(() => [
+      getPermissionModes: vi.fn(async () => [
         { id: 'auto' as const, displayName: 'Auto' },
         { id: 'bypassPermissions' as const, displayName: 'Full Access' },
       ]),

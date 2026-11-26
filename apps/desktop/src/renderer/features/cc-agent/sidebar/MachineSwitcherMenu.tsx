@@ -46,7 +46,7 @@
  * 颜色全走主题 token(规则 16),文案全走 i18n(规则 18)。
  */
 
-import { useEffect, useState, useRef, type ReactNode } from 'react';
+import { useRef, type ReactNode } from 'react';
 import {
   Ban,
   Check,
@@ -65,6 +65,7 @@ import { toast } from '@/lib/toast';
 import { useActiveMainView } from '@/hooks/useActiveMainView';
 import {
   DropdownMenu,
+  DropdownMenuCheckboxItem,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuSeparator,
@@ -72,9 +73,8 @@ import {
   DropdownMenuSub, DropdownMenuSubTrigger, DropdownMenuSubContent,
 } from '@/components/ui/dropdown-menu';
 import { useDeviceLinkDeviceList } from '@/features/device-link/useDeviceLinkDeviceList';
-import { useOptionalAuthUser, useOptionalDataOwnerGeneration } from '@/contexts/AuthContext';
-import { BRAND_IDENTITY } from '@cindy/maker-shared/brand-identity';
-import { cloudComputerEntry, isMobilePlatform } from '@cindy/maker-shared/device-list';
+import { isMobilePlatform } from '@cindy/maker-shared/device-list';
+import { cloudComputerActions, openCloudComputerPage, useCloudComputerEntry } from '@/features/device-link/cloudComputerEntry';
 import {
   isMachineSelected,
   MACHINE_ALL,
@@ -87,31 +87,12 @@ import {
 import { MENU_ITEM_CLASS, MENU_ROW_CLASS } from './menuStyles';
 
 function CloudComputerMenuEntry() {
-  const user = useOptionalAuthUser();
-  const generation = useOptionalDataOwnerGeneration();
   const { t } = useTranslation();
-  const member = user?.membershipKind === 'org' ? user.id : undefined;
-  const org = user?.orgId;
-  const owner = JSON.stringify([member,org,generation]);
-  const [result,setResult] = useState<{owner:string; entry:ReturnType<typeof cloudComputerEntry>} | null>(null);
-  useEffect(() => {
-    if (!member || !org) return;
-    let current = true;
-    // Radix mounts the content only while the menu is open.
-    const read = window.electronAPI?.deviceLink?.cloudComputerEntry;
-    if (read) void read().then(value => {
-      if (current) setResult({owner,entry:cloudComputerEntry(value,member,org)});
-    }).catch(() => { if (current) setResult(null); });
-    return () => { current = false; };
-  },[member,org,owner]);
-  const entry = result?.owner === owner ? result.entry : null;
+  // Radix mounts the content only while the menu is open, so this reads once per opening.
+  const entry = useCloudComputerEntry();
   if (!entry) return null;
-  const actions = 'canAdd' in entry && entry.canAdd ? [entry.action,'addCloud' as const] : [entry.action];
-  return <>{actions.map(action=><DropdownMenuItem key={action} className={MENU_ITEM_CLASS} onSelect={() => {
-    const url = new URL(entry.url);
-    url.searchParams.set('app', BRAND_IDENTITY.primaryScheme);
-    if (action==='addCloud') url.searchParams.set('add','1');
-    void window.electronAPI.openExternal(url.href).catch(() => toast.error(t('remoteDesktop.connectionError')));
+  return <>{cloudComputerActions(entry).map(action=><DropdownMenuItem key={action} className={MENU_ITEM_CLASS} onSelect={() => {
+    void openCloudComputerPage(entry, action).catch(() => toast.error(t('remoteDesktop.connectionError')));
   }}><Monitor size={14}/><span>{t('ccAgent.sidebar.machineSwitcher.' + action)}</span></DropdownMenuItem>)}</>;
 }
 
@@ -333,10 +314,14 @@ function MachineMenuItem({
   // 因 isTrusted=false 不会覆盖。onSelect 消费后立即复位。
   const modifierHeldRef = useRef(false);
   return (
-    <DropdownMenuItem
+    // Checkbox semantics (menuitemcheckbox + aria-checked) from the shared item; the
+    // approved trailing slot below still draws the mark, so the leading column is off.
+    <DropdownMenuCheckboxItem
+      indicator="none"
+      checked={selected}
       className={cn(
         MENU_ITEM_CLASS,
-        'group/machine-item',
+        'group/machine-item cursor-pointer',
         rejected && 'text-[var(--text-tertiary)]',
       )}
       onClick={(event) => {
@@ -447,6 +432,6 @@ function MachineMenuItem({
           </span>
         )}
       </span>
-    </DropdownMenuItem>
+    </DropdownMenuCheckboxItem>
   );
 }

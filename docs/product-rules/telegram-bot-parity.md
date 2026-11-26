@@ -104,6 +104,9 @@ ID 分开保存。官方在入队前组装引用，沿用既有任务持久化�
 机器人」重新选择模型的指引，失败原因写入主日志。服务端快照（主动推送与重连镜像）改动某目录
 的 Agent 或模型时，同键的配对来源一并清除；多个 Slack team 共用的 null-team 兜底来源不因
 单个 team 改路由被清，以免其它 team 静默改走默认来源。
+云实例授权窗口：官方 Telegram、Slack、X、飞书在云实例中使用专用 Chromium 授权窗口，绑定完成、取消或过期
+（最长 15 分钟）后回收；回收不撤销绑定，也不关闭用户另外打开的页面。普通 Desktop 仍用系统浏览器
+（`main/instance-runtime/hook-authorization-windows.ts`）。
 
 > 这张表存在的理由与 `botCommands.ts` 注册表一样：把「散落两个仓、谁也不知道差在哪」
 > 变成「表里显式登记」。**新增或修改任一 bot 的用户可见行为时，必须同步更新本表对应
@@ -572,6 +575,11 @@ bot 身份按入站使用的稳定 ID 校验；Discord 取 gateway application i
 - 呈现大脑：`apps/desktop/src/main/im/shared/turnPresenter.ts`
 - 呈现能力契约：`packages/lizi-im/src/telegram/presentationCapabilities.ts`
 - 任务 / 对话 / 消息的用词：`docs/product-rules/task-and-conversation-naming.md`
+
+### 云实例设置入口
+
+云实例设置页复用本地个人 Telegram 的表单与人设 / 行为 / 群激活组件，读写目标实例；官方 Telegram 走独立作用域，
+不能经个人行为域修改。见 [云实例](../cloud-instances.md)。
 
 ## 按消息号读取群历史图片（2026-10-29）
 

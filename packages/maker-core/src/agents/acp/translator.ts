@@ -21,6 +21,10 @@
 
 import { isDeepStrictEqual } from 'node:util';
 import { createTwoFilesPatch } from 'diff';
+import {
+  isProviderSafetyRefusalError,
+  PROVIDER_SAFETY_REFUSAL_REASON,
+} from '@cindy/maker-shared/error-redaction';
 import { parseMessageToolUse } from '@cindy/maker-shared/message-normalize';
 import type { AgentEvent } from '../../types/events.js';
 import {
@@ -53,7 +57,7 @@ export interface AcpUpdateTranslatorOptions {
 }
 
 export type AcpTurnOutcome =
-  | { stopReason: AcpStopReason; usage?: AcpTurnUsage }
+  | { stopReason: AcpStopReason; usage?: AcpTurnUsage; usageModel?: string }
   /** `signals`: structured failure fields (usage limit, sign-in, overload) the agent classified. */
   | { error: string; reason?: string; signals?: Record<string, unknown> };
 
@@ -192,10 +196,10 @@ export class AcpUpdateTranslator {
    * Registers a tool call seen outside `session/update` (the permission request
    * carries one) so its card exists before the user is asked about it.
    */
-  noteToolCall(fields: AcpToolCallFields): AgentEvent[] {
+  noteToolCall(fields: AcpToolCallFields): { events: AgentEvent[]; toolCall: AcpToolCallFields } {
     const events: AgentEvent[] = [];
-    this.upsertTool(fields, events);
-    return events;
+    const tool = this.upsertTool(fields, events);
+    return { events, toolCall: { ...tool, ...fields } };
   }
 
   /** Closes open text / thinking segments without ending the turn (used before a new turn starts). */
@@ -229,13 +233,16 @@ export class AcpUpdateTranslator {
     const result = this.lastText;
     this.lastText = '';
     if ('error' in outcome) {
+      const reason =
+        outcome.reason ??
+        (isProviderSafetyRefusalError(outcome.error) ? PROVIDER_SAFETY_REFUSAL_REASON : undefined);
       events.push({
         type: 'error',
         data: {
           ...(outcome.signals ?? {}),
           message: outcome.error,
           isTerminal: true,
-          ...(outcome.reason ? { reason: outcome.reason } : {}),
+          ...(reason ? { reason } : {}),
         },
       });
       return events;
@@ -249,6 +256,7 @@ export class AcpUpdateTranslator {
         stopReason: outcome.stopReason,
         // A cancelled turn still spent the tokens the agent reports for it.
         ...(outcome.usage ? { usage: outcome.usage } : {}),
+        ...(outcome.usageModel ? { usageModel: outcome.usageModel } : {}),
       },
     });
     return events;
@@ -271,7 +279,7 @@ export class AcpUpdateTranslator {
     return events;
   }
 
-  private upsertTool(fields: AcpToolCallFields, events: AgentEvent[]): void {
+  private upsertTool(fields: AcpToolCallFields, events: AgentEvent[]): ToolState {
     this.flushText(events);
     this.closeThinking(events);
     let tool = this.tools.get(fields.toolCallId);
@@ -296,6 +304,7 @@ export class AcpUpdateTranslator {
     if (!tool.settled && (tool.status === 'completed' || tool.status === 'failed')) {
       this.settleTool(tool, events, tool.status === 'failed' ? 'failed' : 'done');
     }
+    return tool;
   }
 
   private emitToolUse(tool: ToolState, events: AgentEvent[], inputPatch = false): void {

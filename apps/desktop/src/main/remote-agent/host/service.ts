@@ -32,7 +32,7 @@ import {
 } from '../../device-link/broadcast-tap.js';
 import { setRemoteAgentHandler } from '../../device-link/dispatch.desktop.js';
 import { getSelfDeviceId, remoteBackgroundInvoke } from '../../device-link/index.js';
-import { getProviderShareHostLoadedSnapshot, onProviderShareHostChanged, ownedProviderShareGuestAccess, providerShareGuestAccess, providerShareGuestDenial, verifyProviderShareMemberGeneration } from '../../device-link/providerShareHost.js';
+import { withProviderShareGuestAccessSnapshot, getProviderShareHostLoadedSnapshot, onProviderShareHostChanged, ownedProviderShareGuestAccess, providerShareGuestAccess, providerShareGuestDenial, verifyProviderShareMemberGeneration } from '../../device-link/providerShareHost.js';
 import { admitAgentNetProviderStandby, applyProviderShareDelegation, beginAgentNetStandbyTurn, clearProviderShareDelegations, delegatedProviderShareGuestAccess, delegatedProviderShareLeases, delegatedProviderShareModelAllowed, delegatedProviderShareReceiptAuthority, delegatedProviderShareSessionAllowed, delegatedProviderShareTaskAccess, invalidateProviderShareDelegation, releaseUnusedAgentNetStandby, revokeDelegatedProviderShareGuest } from '../../device-link/providerShareDelegatedAccess.js';
 import { agentNetSharingRoute } from '../../device-link/agentNetSharing.js';
 import { isTemporaryProviderMetadataFailure } from '../../device-link/providerMetadataContinuity.js';
@@ -1050,6 +1050,7 @@ export function installRemoteAgentHost(options: {
     ownerModelAllowed: (hostSessionId, providerId, kind, model) => hasHostedSessionModelAccess(hostSessionId)
       && hostedProviderOffersModel(hostSessionId, providerId, kind, model),
     isControllerAuthorized,
+    withPollAuthorizationSnapshot: withProviderShareGuestAccessSnapshot,
     controllerTrust: (controller) => (isProviderSharePeer(controller) ? 'guest' : 'owner'),
     providerAccess: {
       models: async (kind, providerId, controller, sessionId) => {
@@ -1283,6 +1284,7 @@ export function installRemoteAgentHost(options: {
           : retained ? { agentDeviceId: old.executorDeviceId, providerId: old.providerId,
           memberKey: old.memberKey, sameAccount: true }
           : await groupRelay.plan({ kind: request.agentKind, model: request.model,
+            direct: true,
             providerId: access.providerId,
             exclude: request.op === 'standby-prepare' ? new Set(group!.members.filter(member =>
               member.kind !== 'device' || member.agentDeviceId === request.excludeExecutorDeviceId).map(member => member.key))
@@ -1796,7 +1798,7 @@ export function disposeRemoteAgentHost(): void {
   if (host) hostDisposal = Promise.all([hostDisposal, host.dispose()]).then(() => undefined);
   host = null;
   clearProviderShareDelegations();
-  void flushProviderShareUsage();
+  void flushProviderShareUsage().catch(() => log.warn('Provider share usage checkpoint failed during teardown'));
 }
 
 function flushProviderShareUsage(): Promise<void> {
