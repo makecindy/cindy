@@ -79,6 +79,11 @@ import { useTranslation } from 'react-i18next';
 
 import { useAuth } from '@/contexts/AuthContext';
 import { getLastCreatedTaskWorkspace, rememberCreatedTaskWorkspace } from '@/state/lastCreatedTaskWorkspace';
+import {
+  getRecentDeviceUsage,
+  mergeDeviceRecencyMaps,
+  recordRecentDeviceUsage,
+} from '@/state/recentDeviceUsage';
 import { getDefaultNewTaskWorkingDir } from '@/state/defaultNewTaskWorkingDir';
 import { themeService } from '@/themes/theme-service';
 import type { Theme as ColorTheme } from '@/themes/types';
@@ -1013,6 +1018,9 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
   const [folderPickerOpen, setFolderPickerOpen] = useState(false);
   // 设备切换器(#807)。与项目 picker 互斥打开 —— 两个 popover 同时浮着会互相遮挡。
   const [devicePickerOpen, setDevicePickerOpen] = useState(false);
+  // 每次打开设备切换器时取一次「本地选择记录 ∪ 远端任务活跃时间」快照,
+  // 既避免关闭状态下为无关远端会话变更重渲染新建页,又避免下拉展开时列表在鼠标下抖动。
+  const [deviceLastUsedAt, setDeviceLastUsedAt] = useState<Readonly<Record<string, number>>>({});
   // 整页拖入的视觉反馈(与 CCAgentSessionView 聊天区同款):enter/leave 计数
   // 配对驱动 isDragOver,亮全区虚线遮罩 + 透传 ChatInput 卡内提示文案。
   const pageDragCounterRef = useRef(0);
@@ -1152,6 +1160,9 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
   );
   const effectiveDeviceLinkDeviceName = draft.deviceLinkDeviceName;
   const rememberCreatedWorkspace = useCallback(() => {
+    if (effectiveDeviceLinkDeviceId) {
+      recordRecentDeviceUsage(dataOwnerId, effectiveDeviceLinkDeviceId);
+    }
     rememberCreatedTaskWorkspace(dataOwnerId, {
       deviceId: effectiveDeviceLinkDeviceId ?? null,
       deviceName: effectiveDeviceLinkDeviceName,
@@ -3612,6 +3623,7 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
             providers: freshProviders,
           },
         });
+        recordRecentDeviceUsage(dataOwnerId, target.deviceId);
         // prefetch 补回 hook 缓存:选的是**同一** deviceId 时 hook 的 effect 不会因 deps 变化重跑,
         // 只有 subscriber 通知路径能送达新数据。即使 prefetch 内部 swallow error,send / goal 的
         // capabilitiesLoading / deviceProvidersLoading gate 也会阻止在 hook 尚未就绪时发送。
@@ -3748,6 +3760,7 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
     },
     [
       draft.vendor,
+      dataOwnerId,
       chatPrefs,
       chatInitialPermissionMode,
       chatInitialProviderId,
@@ -4411,10 +4424,21 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
       state: consumeNewMakerFolderPickerRequest(location.state),
     });
   }, [folderPickerRequest, location, navigate]);
-  const handleDevicePickerOpenChange = useCallback((open: boolean) => {
-    setDevicePickerOpen(open);
-    if (open) setFolderPickerOpen(false);
-  }, []);
+  const handleDevicePickerOpenChange = useCallback(
+    (open: boolean) => {
+      if (open) {
+        setDeviceLastUsedAt(
+          mergeDeviceRecencyMaps(
+            getRecentDeviceUsage(dataOwnerId),
+            remoteProjectsStore.getDeviceLatestActivityAt(),
+          ),
+        );
+        setFolderPickerOpen(false);
+      }
+      setDevicePickerOpen(open);
+    },
+    [dataOwnerId],
+  );
   useEffect(
     () => () => {
       modePickerSelectionSeqRef.current += 1;
@@ -4541,9 +4565,10 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
       // 快照未就绪期间由 send / goal 的 capabilitiesLoading / deviceProvidersLoading /
       // remoteDraftState.status 三重 gate 兜住。也因此不必 prefetch:上面已把「重选同一设备」
       // 早返回掉,deviceId 必然变化 → hook effect 必然重跑 → evict 后必然 cache miss 并自行 fetch。
+      if (deviceId) recordRecentDeviceUsage(dataOwnerId, deviceId);
       applyDraftTarget({ deviceId, deviceName, workingDir: null, explicitNoProject: true });
     },
-    [effectiveDeviceLinkDeviceId, applyDraftTarget],
+    [dataOwnerId, effectiveDeviceLinkDeviceId, applyDraftTarget],
   );
   const handleOpenRemoteProject = useCallback((deviceId?: string) => {
     setAddRemoteProjectDeviceId(deviceId ?? null);
@@ -7989,6 +8014,7 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
                     组件自己返回 null —— 只有本机的用户看不到任何新增控件。 */}
                 <DeviceSwitcherPill
                   devices={selectableDevices}
+                  lastUsedAtByDeviceId={deviceLastUsedAt}
                   value={effectiveDeviceLinkDeviceId ?? null}
                   onChange={handleDeviceChange}
                   open={devicePickerOpen}

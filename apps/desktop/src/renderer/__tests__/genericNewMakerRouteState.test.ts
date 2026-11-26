@@ -31,6 +31,11 @@ vi.mock('@/features/device-link/remoteProjectsStore', () => ({
 
 import { setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 import { getLastCreatedTaskWorkspace, rememberCreatedTaskWorkspace } from '@/state/lastCreatedTaskWorkspace';
+import {
+  getRecentDeviceUsage,
+  mergeDeviceRecencyMaps,
+  recordRecentDeviceUsage,
+} from '@/state/recentDeviceUsage';
 import { applyPluginEngineDraftRoute } from '@/state/newMakerDraft';
 import { __resetStickySessionOriginForTest } from '@/features/device-link/stickySessionOrigin';
 import { makeGenericNewMakerRouteState } from '@/features/cc-agent/lib/genericNewMakerRouteState';
@@ -77,6 +82,54 @@ describe('last successful new task takes precedence over the viewed task', () =>
     rememberCreatedTaskWorkspace('owner-a', remote);
     localStorage.setItem(localStorage.key(0)!, JSON.stringify({ workingDir: '/wrong-computer' }));
     expect(getLastCreatedTaskWorkspace('owner-a')).toBeNull();
+  });
+});
+
+describe('recentDeviceUsage', () => {
+  it('isolates recorded timestamps per owner, stays monotonic, and ignores invalid inputs', () => {
+    recordRecentDeviceUsage('owner-a', 'mac-mini', 1000);
+    recordRecentDeviceUsage('owner-a', 'mac-mini', 500);
+    recordRecentDeviceUsage('owner-a', 'studio', 2000);
+    recordRecentDeviceUsage('owner-b', 'other-pc', 3000);
+    recordRecentDeviceUsage(null, 'ignored', 4000);
+    recordRecentDeviceUsage('owner-a', '   ', 4000);
+    recordRecentDeviceUsage('owner-a', 'bad-ts', 0);
+
+    expect(getRecentDeviceUsage('owner-a')).toEqual({
+      'mac-mini': 1000,
+      studio: 2000,
+    });
+    expect(getRecentDeviceUsage('owner-b')).toEqual({ 'other-pc': 3000 });
+    expect(getRecentDeviceUsage(null)).toEqual({});
+  });
+
+  it('caps stored devices to the 64 most recent entries and falls back on malformed JSON', () => {
+    for (let i = 1; i <= 70; i += 1) {
+      recordRecentDeviceUsage('owner-a', `dev-${i}`, i * 100);
+    }
+    const stored = getRecentDeviceUsage('owner-a');
+    expect(Object.keys(stored)).toHaveLength(64);
+    expect(stored['dev-1']).toBeUndefined();
+    expect(stored['dev-6']).toBeUndefined();
+    expect(stored['dev-7']).toBe(700);
+    expect(stored['dev-70']).toBe(7000);
+
+    localStorage.setItem('cindy:recentDeviceUsage:v1:owner-a', '{broken');
+    expect(getRecentDeviceUsage('owner-a')).toEqual({});
+  });
+
+  it('merges explicit usage and remote session activity by taking the latest timestamp per device', () => {
+    expect(
+      mergeDeviceRecencyMaps(
+        { 'mac-mini': 1000, studio: 5000 },
+        { 'mac-mini': 4000, 'cloud-box': 2000, invalid: -1 },
+        null,
+      ),
+    ).toEqual({
+      'mac-mini': 4000,
+      studio: 5000,
+      'cloud-box': 2000,
+    });
   });
 });
 
