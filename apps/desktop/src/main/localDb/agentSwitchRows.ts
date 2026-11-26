@@ -90,9 +90,17 @@ export async function applyAgentSwitchToSessionRowWithPorts<OwnerScope>(
   // omitted by the caller. A later SELECT could observe a newer selection.
   const pluginTarget = isPluginEngineKind(patch.agentKind);
   // Pair with the guarded schedule writes. SQLite arbitrates the two writes
-  // even when different desktop instances share the same profile.
+  // even when different desktop instances share the same profile. Ordinary
+  // non-persistent bound automations (e.g. PR auto-follow) support plugin
+  // engines and temporary switches; only persistent sessions and teammate
+  // routines on scheduler-created tasks remain mutually exclusive with ACP.
   const condition = pluginTarget ? sql`NOT EXISTS (
-    SELECT 1 FROM ${schedules} WHERE ${sessions.source} = 'scheduler' AND ${schedules.targetSessionId} = ${sessions.id}
+    SELECT 1 FROM ${schedules}
+    WHERE ${schedules.targetSessionId} = ${sessions.id}
+      AND (
+        ${schedules.persistentSession} = 1
+        OR (${sessions.source} = 'scheduler' AND COALESCE(${schedules.source}, 'user') = 'bot')
+      )
   )` : undefined;
   const [committed] = await db.update(sessions).set(setObj).where(and(eq(sessions.id, sessionId), condition))
     .returning({

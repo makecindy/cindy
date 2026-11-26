@@ -82,7 +82,7 @@ function mount(deviceId = 'desktop', agentKind: NewSessionAgentKind = 'codex', f
     draft: { ...DEFAULT_NEW_SESSION_DRAFT, agentKind, model: 'chosen', providerId: 'provider', effort: 'high', fastMode: false },
     maker: { getNewMakerDefaults: vi.fn((agent?: string) => agent === failedAgent ? Promise.reject(new Error('read failed')) : pendingReads.get(agent as NewSessionAgentKind)?.promise ?? read.promise), applyNewMakerDraftPref: vi.fn(async () => {}) },
     openLink: vi.fn(async () => {}),
-    preferences: storedAgent ? { agentKind: storedAgent, permissionModeByAgent: {}, device: null, workspaceKind: null, workingDirByDevice: {}, remoteAgentByDevice: {} } : null,
+    preferences: storedAgent ? { agentKind: storedAgent, permissionModeByAgent: {}, device: null, workspaceKind: null, workingDirByDevice: {}, workspaceKindByDevice: {}, remoteAgentByDevice: {} } : null,
   };
   let state!: State;
   function Harness() { state = usePageDefaults(bindings); return null; }

@@ -2,6 +2,12 @@ import { useTranslation } from 'react-i18next';
 import { usageCostTotals, type UsageCostRow } from '@cindy/maker-shared/usage-cost-details';
 import { formatTurnCostMoney } from '@/lib/usageFormat';
 
+const subtotalKinds = ['actual-cost', 'value-estimate'] as const;
+
+function usageCostKindLabel(kind: UsageCostRow['money']['kind']) {
+  return kind === 'value-estimate' ? 'usageCost.estimate' : 'usageCost.charged';
+}
+
 export function UsageCostDetails({ rows }: { rows: UsageCostRow[] | null | undefined }) {
   const { t } = useTranslation();
   return (
@@ -19,9 +25,15 @@ export function UsageCostDetails({ rows }: { rows: UsageCostRow[] | null | undef
             <section key={category} className="space-y-2">
               <div className="flex flex-wrap justify-between gap-x-4 gap-y-1 font-medium">
                 <span>{t(`usageCost.${category}`)}</span>
-                <span className="tabular-nums">
-                  {usageCostTotals(group).map(formatTurnCostMoney).join(' · ')}
-                </span>
+                <div className="flex flex-wrap gap-x-3 gap-y-1 tabular-nums">
+                  {subtotalKinds.flatMap((kind) =>
+                    usageCostTotals(group.filter((row) => row.money.kind === kind)).map((money) => (
+                      <span key={`${kind}-${money.currency}`}>
+                        {t(usageCostKindLabel(kind))} {formatTurnCostMoney(money)}
+                      </span>
+                    )),
+                  )}
+                </div>
               </div>
               {group.map((row, index) => (
                 <div key={index} className="space-y-0.5">
@@ -38,11 +50,7 @@ export function UsageCostDetails({ rows }: { rows: UsageCostRow[] | null | undef
                       : ''}
                     {t(`usageCost.source.${row.billingSource ?? 'unknown'}`)}
                     {' · '}
-                    {t(
-                      row.money.kind === 'value-estimate'
-                        ? 'usageCost.estimate'
-                        : 'usageCost.charged',
-                    )}
+                    {t(usageCostKindLabel(row.money.kind))}
                   </div>
                 </div>
               ))}

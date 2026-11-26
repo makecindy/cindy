@@ -27,9 +27,10 @@ import { isTerminalAgentErrorEvent } from '@cindy/maker-core';
 import {
   createTurnPresenter,
   type ProgressBodyMode,
+  type TurnPresenter,
 } from '../im/shared/turnPresenter.js';
 import { buildActivityRecord, type TurnActivityRecord } from '../im/shared/turnActivity.js';
-import { terminalErrorText } from '../im/shared/turnRetryNotice.js';
+import { overloadRetryNotice, terminalErrorText } from '../im/shared/turnRetryNotice.js';
 import { isImSubagentEvent } from '../im/shared/agentEventScope.js';
 
 /*
@@ -86,6 +87,8 @@ export interface ObservableSession {
 }
 
 export interface HookTurnObserverDeps {
+  /** 复用外部 presenter（过载重试跨 attempt 连续累积正文与过程区时由调用方统一 stopProgress）。 */
+  presenter?: TurnPresenter;
   /** 渲染快照出口(turn.progress); 省略 = 不发进度, 零开销路径。 */
   onProgress?: (text: string) => void;
   /** 运行中正文范围；官方 Telegram 用 whole 对齐个人 bot，其它车道保留 latest。 */
@@ -96,6 +99,8 @@ export interface HookTurnObserverDeps {
   onToolResult?: (fullText: string) => void;
   /** 完整 turn（含后台续跑）收口时同步通知，早于 finished settle；附这一轮最后见到的来源。 */
   onTurnTerminal?: (origin: SendOrigin | undefined) => void;
+  /** 可重试终态错误由外层决定是否续跑时延迟触发 onTurnTerminal，避免中途释放观察归属。 */
+  shouldDeferErrorTerminalNotify?: (errorData: unknown, errorReason: string | null) => boolean;
   /** silent-stop 自动续跑守卫的 settle 订阅(生产为 maker-ipc 的同名函数)。 */
   onSilentStopSettled: (
     sessionId: string,
@@ -111,6 +116,12 @@ export interface HookTurnObserver {
   readonly errorReason: string | null;
   /** 终态错误事件的原始 data(未映射); 调用方按需补上下文重新组织失败说明。 */
   readonly errorData: unknown;
+  /** 本次观察是否见到过可见输出（文本 / 工具 / 思考），用于决定过载重试走续跑还是重发。 */
+  readonly hasOutput: boolean;
+  /** 本次观察是否见到过底层引擎发出的非终止过载重试进度事件。 */
+  readonly hadOverloadRetryNotice: boolean;
+  /** 当前观察器使用的呈现器（可供跨重试共享过程区与正文）。 */
+  readonly presenter: TurnPresenter;
   /** 摘监听 + 停止发射。幂等; 收口后自动调用过。 */
   stop(): void;
   /** 真正的新交互请求边界；等待提示的后续文案更新不得重复调用。 */
@@ -140,11 +151,13 @@ export function observeHookTurn(
   deps: HookTurnObserverDeps,
 ): HookTurnObserver {
   const {
+    presenter: sharedPresenter,
     onProgress,
     progressBodyMode,
     flushProgressOnDone,
     onToolResult,
     onTurnTerminal,
+    shouldDeferErrorTerminalNotify,
     onSilentStopSettled,
     log,
   } = deps;
@@ -154,7 +167,8 @@ export function observeHookTurn(
   // 退 requestId、完成态经 buildMessageRenderItems 折叠 —— #1272/#1636/#1703 的实踩
   // 教训随代码留在该模块。收口(何时结束)刻意**不在** presenter: 见下面 done /
   // silentStop / onStatusChange 三条出口, 只有它们能让本观察器 settle。
-  const presenter = createTurnPresenter({
+  const ownsPresenter = sharedPresenter === undefined;
+  const presenter = sharedPresenter ?? createTurnPresenter({
     mode: 'finalized-segments',
     onProgress,
     progressBodyMode,
@@ -162,6 +176,8 @@ export function observeHookTurn(
 
   let errorReason: string | null = null;
   let errorData: unknown = null;
+  let hasOutput = false;
+  let hadOverloadRetryNotice = false;
   let turnOrigin: SendOrigin | undefined;
   let stopListening: (() => void) | undefined;
   const finished = new Promise<void>((resolve, reject) => {
@@ -187,7 +203,7 @@ export function observeHookTurn(
       pendingSettleUnsub = undefined;
       pendingContinuationUnsub?.();
       pendingContinuationUnsub = undefined;
-      presenter.stopProgress();
+      if (ownsPresenter) presenter.stopProgress();
       off();
       offStatus();
       stopListening = undefined;
@@ -197,8 +213,8 @@ export function observeHookTurn(
       teardown();
       resolve();
     };
-    const failTurn = (err: Error): void => {
-      notifyTurnTerminal();
+    const failTurn = (err: Error, deferTerminalNotify = false): void => {
+      if (!deferTerminalNotify) notifyTurnTerminal();
       teardown();
       reject(err);
     };
@@ -214,7 +230,11 @@ export function observeHookTurn(
       if (ev.type === 'text') {
         // 正文累积(isFinal 逐条契约 / 定稿段按消息切开 / fallbackTail 自成段 /
         // uuid 缺失退 requestId)都在 presenter 的 finalized-segments 策略里。
-        if (presenter.applyText(ev)) presenter.scheduleProgress();
+        if (presenter.applyText(ev)) {
+          const textData = ev.data as { text?: unknown } | null;
+          if (typeof textData?.text === 'string' && textData.text.trim().length > 0) hasOutput = true;
+          presenter.scheduleProgress();
+        }
         return;
       }
       if (ev.type === 'status') {
@@ -225,7 +245,16 @@ export function observeHookTurn(
       if (ev.type === 'thinking') {
         // Desktop 不把 thinking 当 assistant block 边界: presenter 只投影思考活动
         // 本身、不 flush 正文; pushThinkingStep 变化时才刷帧。
+        const thinkingData = ev.data as { text?: unknown; stage?: unknown } | null;
+        if (
+          thinkingData &&
+          (thinkingData.stage === 'redacted' ||
+            (typeof thinkingData.text === 'string' && thinkingData.text.trim().length > 0))
+        ) {
+          hasOutput = true;
+        }
         if (presenter.applyThinking(ev)) {
+          hasOutput = true;
           presenter.ensureProgressTicker();
           presenter.scheduleProgress();
         }
@@ -236,6 +265,7 @@ export function observeHookTurn(
         // 在长 agentic turn 里看到"正在干什么", 而不是盯着 👀 表情干等。
         // tool_use 是明确的 assistant 消息边界(presenter 封存尾段并投影 tool 消息)。
         if (presenter.applyToolUse(ev)) {
+          hasOutput = true;
           presenter.ensureProgressTicker();
           presenter.scheduleProgress();
         }
@@ -246,6 +276,7 @@ export function observeHookTurn(
         // 结束, 不收口; 但必须在过程区留一行, 否则零产出的退避窗口里渠道那
         // 条消息整段静止(见 turnRetryNotice.ts 的模块注释)。ticker 让
         // "第 N 步 · 42s"与这行状态一起走时间, 重试期间没有任何新事件也能看出还在动。
+        if (overloadRetryNotice(ev.data) !== null) hadOverloadRetryNotice = true;
         if (presenter.applyRetryNotice(ev)) {
           presenter.ensureProgressTicker();
           presenter.scheduleProgress();
@@ -253,6 +284,7 @@ export function observeHookTurn(
         return;
       }
       if (ev.type === 'tool_result_full') {
+        hasOutput = true;
         const data = ev.data as { fullText?: unknown } | null;
         if (data && typeof data.fullText === 'string') onToolResult?.(data.fullText);
         return;
@@ -328,7 +360,10 @@ export function observeHookTurn(
         if (friendly !== raw) {
           log.warn(`hook turn failed (mapped channel error): ${raw}`);
         }
-        failTurn(new Error(friendly));
+        failTurn(
+          new Error(friendly),
+          shouldDeferErrorTerminalNotify?.(errorData, errorReason) === true,
+        );
       }
     });
     stopListening = teardown;
@@ -340,6 +375,9 @@ export function observeHookTurn(
     finished,
     get errorReason() { return errorReason; },
     get errorData() { return errorData; },
+    get hasOutput() { return hasOutput; },
+    get hadOverloadRetryNotice() { return hadOverloadRetryNotice; },
+    presenter,
     stop(): void {
       stopListening?.();
       stopListening = undefined;

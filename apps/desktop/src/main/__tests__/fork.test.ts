@@ -405,10 +405,16 @@ describe('forkSessionAtMessage', () => {
           await gate;
           return { ok: true, result: { newSdkSessionId: 'child-sdk', uuidMap: [['native-anchor', 'child-anchor']] } };
         });
-        const opening = createSideChat('src-session');
+        // A phone retry with the same ID must reuse the committed snapshot, even after losing the first reply.
+        const childId = change === 'unchanged' || transport === 'inline' ? '1262e2db-f2b9-408d-9523-ee4e4d781409' : undefined;
+        const opening = createSideChat('src-session', childId);
         // Attach rejection handling before changing the source.
         const outcome = opening.then(value => ({ value, error: null }), error => ({ value: null, error }));
         await Promise.race([waiting, opening]);
+        if (childId) {
+          await expect(createSideChat('src-session', childId)).rejects.toThrow('in progress');
+          await expect(createSideChat('src-session', 'src-session')).rejects.toThrow('ID is unavailable');
+        }
         if (change === 'pi-next-turn' || isCodex) {
           db.insert(messages).values({ id: 'next', clientId: 'next', sessionId: 'src-session',
             role: 'user', content: '"next turn"', createdAt: 1200 }).run();
@@ -426,6 +432,11 @@ describe('forkSessionAtMessage', () => {
         if (change === 'append' || change === 'remote-append' || change === 'unchanged'
           || change === 'pi-unchanged' || change === 'codex-anchored-next-turn') {
           expect(result.error).toBeNull();
+          if (childId) {
+            expect(result.value?.id).toBe(childId);
+            await expect(createSideChat('src-session', childId)).resolves.toMatchObject({ id: childId, source: 'side-chat' });
+            expect(forkSdkSessionMock).toHaveBeenCalledTimes(1);
+          }
           expect(sqlite.prepare('SELECT role, content FROM messages WHERE session_id = ? ORDER BY created_at, rowid')
             .all(result.value!.id)).toEqual([{ role: 'user', content: '"question"' }, { role: 'assistant', content: '"answer"' }]);
           if (change === 'remote-append') {
