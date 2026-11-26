@@ -8310,7 +8310,10 @@ assertRouteCurrent();
           assertRecoveryCurrent();
           await reportExpectedRuntimeMcpAvailability(reports, recoverySignal);
           assertRecoveryCurrent();
-          if (![...reports.values()].some(report => report?.state === 'failed')) return;
+          if (![...reports.values()].some(report => report?.state === 'failed')) {
+            if (reports.has('cindy_orca') && !reports.get('cindy_orca')) mcpRecoveryNotBefore = Date.now() + 30_000;
+            return;
+          }
           // Unloading a thread also stops native children/terminals. Leave those
           // intact, and unknown background state is busy, just as idle cleanup.
           if (await awaitCodexRouteSelection(handle.hasLiveBackgroundWork!().catch(() => true), recoverySignal)) return;
@@ -15805,6 +15808,7 @@ assertRouteCurrent();
       async setVendorOptions(patch: Record<string, unknown>) {
         // Keep the same vendorOptions object so active MCP handlers and the
         // host bridge see runtime Orca role/workflow updates by reference.
+        if (patch.orcaRole === 'lead' && vo.orcaRole !== 'lead') expectedMcpNeedsRecheck = true;
         Object.assign(vo, patch);
         registerRootCodexMcpContext();
         for (const descendantThreadId of descendantMcpThreadIds) {

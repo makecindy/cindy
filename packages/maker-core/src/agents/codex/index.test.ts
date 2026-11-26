@@ -38175,7 +38175,7 @@ describe.each(['cindy_helper', 'cindy'])('failed expected %s recovery', serverNa
 // #11335, unit: resume a Lead whose helper is healthy but whose thread lacks
 // Orca. Exercise the send boundary and retry budget without real timers or I/O.
 describe('resumed Orca Lead readiness', () => {
-  it.each(['ready', 'failed', 'persistent', 'absent', 'disabled', 'ordinary', 'orca-probe-error'] as const)(
+  it.each(['ready', 'failed', 'persistent', 'absent', 'disabled', 'ordinary', 'orca-probe-error', 'promoted', 'timeout'] as const)(
     'scopes recovery and dispatch to the original thread (%s)', async mode => {
       const threadId = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
       const agent = new CodexAgent(createDeps());
@@ -38193,11 +38193,12 @@ describe('resumed Orca Lead readiness', () => {
           const { serverName } = params as { serverName: string };
           expect(params).toMatchObject({ threadId });
           probes.push(serverName);
+          if (mode === 'timeout' && serverName === 'cindy_orca') throw new Error('Orca status unavailable');
           if (mode === 'orca-probe-error') {
             if (serverName === 'cindy_orca') throw new Error('Orca status unavailable');
             if (resumes === 1) return { data: [{ name: serverName, runtimeStatus: 'failed', tools: {} }], nextCursor: null };
           }
-          if (serverName === 'cindy_orca' && (mode === 'persistent' || (mode === 'failed' && resumes === 1))) {
+          if (serverName === 'cindy_orca' && (mode === 'persistent' || (['failed', 'promoted'].includes(mode) && resumes === 1))) {
             return { data: [{ name: serverName, runtimeStatus: 'failed', tools: {} }], nextCursor: null };
           }
           if (serverName === 'cindy_orca' && mode === 'absent') return { data: [], nextCursor: null };
@@ -38214,7 +38215,8 @@ describe('resumed Orca Lead readiness', () => {
       }) });
       try {
         const handle = await agent.startSession({ sessionId: 'orca-readiness', resumeSessionId: threadId,
-          vendorOptions: mode === 'ordinary' ? {} : { orcaRole: 'lead' }, model: 'gpt-5.4', workingDir: '/repo' });
+          vendorOptions: ['ordinary', 'promoted'].includes(mode) ? {} : { orcaRole: 'lead' }, model: 'gpt-5.4', workingDir: '/repo' });
+        if (mode === 'promoted') await handle.setVendorOptions?.({ orcaRole: 'lead' });
         const inputs = ['first', 'second', 'third', 'fourth'];
         const resumeCounts = [];
         for (const content of inputs) {
@@ -38223,9 +38225,9 @@ describe('resumed Orca Lead readiness', () => {
           host.getThreadHandlers()?.turnCompleted?.({ threadId, turn: { id: 'lead-turn', status: 'completed' } });
           if (content !== 'first') now += 60_000;
         }
-        expect(resumeCounts).toEqual(mode === 'persistent' ? [2, 2, 3, 3] : Array(4).fill(['failed', 'orca-probe-error'].includes(mode) ? 2 : 1));
+        expect(resumeCounts).toEqual(mode === 'persistent' ? [2, 2, 3, 3] : Array(4).fill(['failed', 'orca-probe-error', 'promoted'].includes(mode) ? 2 : 1));
         expect(probes.filter(name => name === 'cindy_orca')).toHaveLength(
-          { ready: 1, failed: 3, absent: 1, persistent: 5, disabled: 0, ordinary: 0, 'orca-probe-error': 5 }[mode]);
+          { ready: 1, failed: 3, absent: 1, persistent: 5, disabled: 0, ordinary: 0, 'orca-probe-error': 5, promoted: 2, timeout: 4 }[mode]);
         expect(host.request.mock.calls.filter(([method]) => method === Method.TurnStart).map(([, params]) => params))
           .toMatchObject(inputs.map(text => ({ threadId, input: [{ type: 'text', text }] })));
         await handle.close();
