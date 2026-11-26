@@ -6,9 +6,11 @@ export * from './botGroupProcess.js';
  */
 import type { BotGroupQuoteInput, BotGroupQuoteView } from './botGroupQuote';
 import type { BotGroupLiveTaskView, BotGroupTaskCardView } from './botGroupTask';
+import { isOwnBotGroupSpeaker, isOwnBotGroupWork } from './teammateStatus.js';
 
 export * from './botGroupQuote';
 export * from './botGroupTask';
+export { isOwnBotGroupSpeaker };
 
 export const BOT_GROUP_MIN_MEMBERS = 2;
 export const BOT_GROUP_MAX_MEMBERS = 6;
@@ -228,7 +230,7 @@ export function botGroupStopRunEpoch(execution: { epoch?: number; status: string
 
 /** Group roles never confer control of another account's execution. */
 export function canStopBotGroupWork(member: Pick<BotGroupMemberView, 'assistant' | 'isOwned'> | undefined, isSelfRequested: boolean): boolean {
-  return !!member && (member.assistant === true ? isSelfRequested : member.isOwned === true);
+  return isOwnBotGroupWork(member, isSelfRequested);
 }
 
 /** Also used with older remote hosts: do not trust their legacy canStopAll flag. */

@@ -529,3 +529,116 @@ it('reuses refreshed observation first pages and refreshes only their continuati
   expect(direct.items).toMatchObject([{ body: 'three' }, { body: 'three' }]);
   expect(host.fetch).toHaveBeenCalledTimes(6);
 });
+
+// 测试价值：
+// - 防退化点：当并发追踪超过 50 个 PR（100+ REST+GraphQL 请求）时，ttl:0 的 POST /graphql
+//   响应曾挤占 100 条 FIFO 缓存并逐出 REST ETag，导致后续轮询失去 304 Not Modified。
+// - 触发条件：120 个 PR 交替发起 GET /repos/o/r/pulls/:n (ttl:0, 带 ETag) 与 POST /graphql (ttl:0, 无 ETag)。
+// - 生产入口与可观察结果：直接调用 GithubReadTransport.read，断言第二轮 120 个 GET 全部携带
+//   If-None-Match 命中 304 复用原数据，而 ttl:0 的 GraphQL 每次都重新请求不返回旧缓存。
+// - 依赖策略：仅注入内存 fake fetch，不触发真实网络或时钟等待。
+// - 对应规则或根因：docs/dev-rules/server-channel-review.md（条件请求 304 与受控重试）。
+it('keeps REST ETags across >100 interleaved GraphQL ttl:0 status reads and revalidates with 304', async () => {
+  const etags = new Map<string, string>();
+  const seenIfNoneMatch = new Map<string, string | null>();
+  let graphqlCalls = 0;
+  const fetcher = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    const method = init?.method ?? 'GET';
+    if (method === 'POST') {
+      graphqlCalls += 1;
+      return Response.json({ data: { call: graphqlCalls } });
+    }
+    const headers = init?.headers as Record<string, string> | undefined;
+    const inm = headers?.['If-None-Match'] ?? null;
+    seenIfNoneMatch.set(url, inm);
+    const expected = etags.get(url);
+    if (expected && inm === expected) {
+      return new Response(null, { status: 304 });
+    }
+    const tag = `W/"etag-${url.split('/').pop()}"`;
+    etags.set(url, tag);
+    return new Response(JSON.stringify({ url, seq: 1 }), {
+      status: 200,
+      headers: { 'content-type': 'application/json', etag: tag },
+    });
+  });
+
+  const transport = new GithubReadTransport(fetcher as typeof fetch, () => 10_000, 12);
+  const count = 120;
+  for (let i = 1; i <= count; i += 1) {
+    await transport.read('acct', 'tok', `/repos/o/r/pulls/${i}`, { ttl: 0 });
+    await transport.read('acct', 'tok', '/graphql', {
+      body: { query: 'query Summary($n:Int!){}', variables: { n: i } },
+      ttl: 0,
+    });
+  }
+  expect(graphqlCalls).toBe(count);
+
+  for (let i = 1; i <= count; i += 1) {
+    const path = `/repos/o/r/pulls/${i}`;
+    const res = await transport.read('acct', 'tok', path, { ttl: 0 });
+    expect(res).toEqual({ url: `https://api.github.com${path}`, seq: 1 });
+    expect(seenIfNoneMatch.get(`https://api.github.com${path}`)).toBe(`W/"etag-${i}"`);
+  }
+
+  // ttl:0 GraphQL must not serve stale cached data on a subsequent read.
+  const freshGql = await transport.read('acct', 'tok', '/graphql', {
+    body: { query: 'query Summary($n:Int!){}', variables: { n: 1 } },
+    ttl: 0,
+  });
+  expect(freshGql).toEqual({ data: { call: count + 1 } });
+});
+
+// 测试价值：
+// - 防退化点：304 回填未走容量上限检查时，请求在途期间被淘汰的条目回写会让缓存超出 MAX_CACHE_ENTRIES 且持续膨胀。
+// - 触发条件：maxCacheEntries=2，缓存满 /a、/b 后发起 /a 条件刷新，在途期间写入 /c、/d 挤出 /a，再返回 304。
+// - 生产入口与可观察结果：GithubReadTransport.read，通过后续请求实际携带的 If-None-Match 头部断言
+//   304 回写后缓存严格保持 2 条（/c 被逐出、/d 与 /a 保留）。
+// - 依赖策略：仅内存 fake fetch 与可控 Promise，无网络与真实时钟等待。
+// - 对应规则或根因：PR #13282 Greptile P2（缓存容量不变量）。
+it('enforces maxCacheEntries when a 304 revalidation reinserts an entry evicted while in flight', async () => {
+  let release304!: (response: Response) => void;
+  let holdNextA = false;
+  const seenIfNoneMatch: Array<{ path: string; inm: string | null }> = [];
+  const fetcher = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const path = new URL(String(input)).pathname;
+    const headers = init?.headers as Record<string, string> | undefined;
+    seenIfNoneMatch.push({ path, inm: headers?.['If-None-Match'] ?? null });
+    if (path === '/repos/o/r/pulls/1' && holdNextA) {
+      holdNextA = false;
+      return new Promise<Response>((resolve) => {
+        release304 = resolve;
+      });
+    }
+    return new Response(JSON.stringify({ path }), {
+      status: 200,
+      headers: { 'content-type': 'application/json', etag: `W/"${path}"` },
+    });
+  });
+
+  const transport = new GithubReadTransport(fetcher as typeof fetch, () => 10_000, 6, 2);
+  await transport.read('acct', 'tok', '/repos/o/r/pulls/1', { ttl: 0 });
+  await transport.read('acct', 'tok', '/repos/o/r/pulls/2', { ttl: 0 });
+
+  // Start conditional revalidation for /1; while it is in flight, /3 and /4 evict /1 and /2.
+  holdNextA = true;
+  const revalidating = transport.read('acct', 'tok', '/repos/o/r/pulls/1', { ttl: 0 });
+  await Promise.resolve();
+  await transport.read('acct', 'tok', '/repos/o/r/pulls/3', { ttl: 0 });
+  await transport.read('acct', 'tok', '/repos/o/r/pulls/4', { ttl: 0 });
+  // Cache currently holds {/3, /4} (size 2). Resolving /1 with 304 must evict /3 so size stays 2.
+  release304(new Response(null, { status: 304 }));
+  await expect(revalidating).resolves.toEqual({ path: '/repos/o/r/pulls/1' });
+
+  seenIfNoneMatch.length = 0;
+  // /4 and /1 must still be cached (carry If-None-Match); /3 must have been evicted (no If-None-Match).
+  await transport.read('acct', 'tok', '/repos/o/r/pulls/4', { ttl: 0 });
+  await transport.read('acct', 'tok', '/repos/o/r/pulls/1', { ttl: 0 });
+  await transport.read('acct', 'tok', '/repos/o/r/pulls/3', { ttl: 0 });
+  expect(seenIfNoneMatch).toEqual([
+    { path: '/repos/o/r/pulls/4', inm: 'W/"/repos/o/r/pulls/4"' },
+    { path: '/repos/o/r/pulls/1', inm: 'W/"/repos/o/r/pulls/1"' },
+    { path: '/repos/o/r/pulls/3', inm: null },
+  ]);
+});

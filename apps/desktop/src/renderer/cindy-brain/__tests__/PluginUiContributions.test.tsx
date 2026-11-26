@@ -54,10 +54,13 @@ it.each(['composer.toolbar', 'composer.header'] as const)('opens a %s page only 
   expect(page.mounted).not.toHaveBeenCalled();
   fireEvent.click(screen.getByRole('button', { name: 'Open here' }));
   expect(await screen.findByText('Local page')).toBeTruthy();
-  expect(page.mounted).toHaveBeenCalledTimes(1);
+  // Suspense can commit the page before its passive mount effect runs.
+  await waitFor(() => expect(page.mounted).toHaveBeenCalledTimes(1));
   fireEvent.click(screen.getByRole('button', { name: 'Open here' }));
-  await waitFor(() => expect(screen.queryByText('Local page')).toBeNull());
-  expect(page.released).toHaveBeenCalledTimes(1);
+  await waitFor(() => {
+    expect(screen.queryByText('Local page')).toBeNull();
+    expect(page.released).toHaveBeenCalledTimes(1);
+  });
 });
 
 // Unit: the workdir chip is a native folder shortcut until a plugin contributes.
@@ -83,7 +86,7 @@ it('keeps the native folder action and opens a workdir plugin only after selecti
   expect(page.mounted).not.toHaveBeenCalled();
   fireEvent.click(screen.getByRole('menuitem', { name: 'Open in · Editor' }));
   expect(await screen.findByText('Local page')).toBeTruthy();
-  expect(page.mounted).toHaveBeenCalledWith({ workingDir: '/project' });
+  await waitFor(() => expect(page.mounted).toHaveBeenCalledWith({ workingDir: '/project' }));
   installed.ghosts = [];
   view.rerender(scene());
   expect(screen.queryByText('Local page')).toBeNull();
@@ -152,7 +155,7 @@ it('keeps the sidebar view through collapse and releases it immediately on revoc
   expect(screen.getByText('Local page')).toBeTruthy();
   expect(page.released).not.toHaveBeenCalled();
   fireEvent.click(toggle);
-  expect(page.mounted).toHaveBeenCalledTimes(1);
+  await waitFor(() => expect(page.mounted).toHaveBeenCalledTimes(1));
   fireEvent.click(toggle);
   await waitFor(() => expect(page.released).toHaveBeenCalledTimes(1));
   expect(screen.queryByText('Local page')).toBeNull();

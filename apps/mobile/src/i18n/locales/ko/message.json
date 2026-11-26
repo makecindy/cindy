@@ -250,6 +250,7 @@
     "edit": "편집",
     "steer": "끼어들기",
     "steerQueued": "아직 전달되지 않았습니다. 메시지는 대기열에 남아 있습니다.",
+    "steerUnsupportedNotice": "이 엔진은 끼어들기를 지원하지 않습니다. 대기 중인 메시지는 현재 턴이 끝난 후 전송됩니다.",
     "moveUp": "한 칸 앞으로",
     "moveDown": "한 칸 뒤로",
     "cancelSend": "전송 취소",

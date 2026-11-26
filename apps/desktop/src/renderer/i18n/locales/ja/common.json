@@ -2521,7 +2521,7 @@
       "skinLabel": "キャラクター",
       "skinHint": "Agent Notch と Dynamic Island に表示するキャラクター。",
       "soundLabel": "イベントサウンド",
-      "soundHint": "イベント音を設定すると、その音のみ再生します。未設定またはオフの場合は、システムの通知設定に従います。",
+      "soundHint": "アラートごとに 8-bit サウンドを選べます。Agent Notch と Dynamic Island で共通です。タップ音は Agent Notch をタップしたときだけ鳴ります。",
       "soundAria": "Agent Notch サウンドを切り替え",
       "soundSelectAria": "{{event}} のサウンド",
       "soundPreviewAria": "{{event}} のサウンドをプレビュー",
@@ -2576,7 +2576,7 @@
         "select": "クリック操作"
       },
       "soundOptions": {
-        "none": "システムに従う",
+        "none": "なし",
         "startup-chime": "起動チャイム",
         "ring-chime": "リングチャイム",
         "item-found": "アイテム発見",
@@ -8857,6 +8857,8 @@
         "networkSecretOauthDetail": "ログインとトークンは Cindy が管理します。新たに認可するか、互換性のある接続済みアカウントを選択できます。以下のスコープを確認してください。接続済みアカウントでは既存の権限が適用されます。",
         "networkConnections": "あなたが追加した{{label}}に接続可能",
         "networkConnectionsDetail": "アドレスはこのプラグインの設定画面で追加します。新しいアドレスの追加には毎回あなたの確認が必要で、入力した認証情報は対応するアドレスにのみ注入されます。",
+        "networkConnectionsGlabCli": "追加した {{label}} に接続でき、ローカル glab でログイン済みのインスタンスも利用します",
+        "networkConnectionsGlabCliDetail": "プラグイン設定で追加した認証情報が優先されます。未追加のインスタンスについては、ホストがローカルの glab ログイントークンを必要に応じて読み取り、そのインスタンスへの HTTPS リクエストにのみ注入します。プラグインコードはトークンを読み取ったり保存したりできません。",
         "codeDetailNetwork": "独立したサンドボックスで実行され、ファイルにはアクセスできません。ネットワークは上記のドメインに限られ、ホストが代理送信します。",
         "codeDetailWithNode": "パネル UI は独立したサンドボックスで実行されます。ローカル処理は上記で宣言された Node ランタイムが提供します。",
         "added": "追加",
@@ -8885,7 +8887,7 @@
         "nodeChildSpawnDetail": "起動できるのは自身のパッケージ内で申告済みの JS ファイルだけです(メインプログラムと同じローカル権限)。任意のコマンドは実行できません。プラグインの無効化や終了時にはサブプロセスも一緒に閉じられます。",
         "skill": "AI アシスタントにスキル「{{name}}」を追加します",
         "skillDetail": "スキルは AI が自分の指示として読み込んで実行する指示ファイルです。あなたの全権限で、Claude Code と Codex のすべてのプロジェクトに適用され、このプラグインのサンドボックスには制限されません。プラグインが有効な間は利用可能で、無効化またはアンインストールすると削除されます。特定のフォルダーだけでプラグインをオフにしても非表示にはなりません。ここではスキルの全文をプレビューできません——信頼できるプラグインのみをインストールしてください。",
-        "routineEvents": "ルーティンイベント",
+        "routineEvents": "自動化イベント",
         "mcpUi": "会話にインタラクティブなページを表示",
         "mcpUiDomains": "ページが接続できるドメイン：{{domains}}",
         "mcpAppOnly": "ページ専用",
@@ -17780,8 +17782,8 @@
           }
         },
         "gitlab": {
-          "missing": "GitLab CLI（glab）が見つかりません。glab をインストールしてログインすると MR の状態を表示できます。",
-          "notLoggedIn": "このコンピューターの glab は {{host}} に未ログインです。ターミナルで glab auth login を実行してログインすると MR の状態を表示できます。",
+          "missing": "GitLab CLI（glab）が見つからず、GitLab プラグインにもこのインスタンスの接続がありません。glab をインストールしてログインするか、GitLab プラグインにインスタンスを追加すると MR の状態を表示できます。",
+          "notLoggedIn": "このコンピューターの glab は {{host}} に未ログインで、GitLab プラグインにもこのインスタンスの接続がありません。ターミナルで glab auth login を実行するか、GitLab プラグインにインスタンスを追加すると MR の状態を表示できます。",
           "unsupported": "このコンピューターは GitLab MR の状態表示に未対応です",
           "openAria": "MR !{{number}} をブラウザで開く",
           "summaryAria": "MR !{{number}} の概要",
@@ -18007,6 +18009,13 @@
         "active": "フィルター {{count}} 件",
         "reset": "リセット",
         "allProjects": "すべてのプロジェクト"
+      },
+      "match": {
+        "label": "キーワード一致",
+        "any": "いずれかのキーワード",
+        "all": "すべてのキーワード",
+        "help": "「すべてのキーワード」を選び、空白で区切ると、同じメッセージにすべて含まれるものを検索します。“完全一致フレーズ” は連続する文字列に一致します。タイトルは個別に照合します。",
+        "partial": "結果が一部のみの可能性があります。キーワードを具体的にするか、プロジェクトを絞ってください。"
       }
     }
   },
@@ -18207,7 +18216,8 @@
         "pause": "一時停止",
         "deleteAutomation": "自動化を削除"
       },
-      "tagWebhook": "Webhook"
+      "tagWebhook": "Webhook",
+      "tagPluginEvent": "プラグインイベント"
     },
     "detail": {
       "manualTrigger": "手動トリガー",
@@ -18548,11 +18558,123 @@
         "cindyConnectionTitle": "GitHub · Cindy 経由の接続",
         "manualConnectionTitle": "GitHub · 手動 Webhook",
         "githubAppHint": "このタスクを実行するコンピュータで GitHub App に接続し、これらのリポジトリを許可してください。個別の Webhook URL やシークレットは不要です。",
-        "githubAppPaused": "このタスクは一時停止中です。イベントでは開始されません。"
+        "githubAppPaused": "このタスクは一時停止中です。イベントでは開始されません。",
+        "plugin": {
+          "source": "プラグインのイベント",
+          "label": "プラグインとイベント",
+          "empty": "このコンピュータにはイベントを提供するプラグインがまだありません。イベントを宣言したプラグインをインストールして有効にすると、ここで選べます。",
+          "unavailable": "プラグインを利用できません",
+          "remove": "削除",
+          "hint": "プラグインはイベントを代わりに絞り込みません。この自動化が自分で送ったメッセージも届きます。処理するかどうかはプロンプトか事前チェックで指定してください。コンピュータのスリープ中や電源オフ中、プラグインの停止中のイベントは受け取れません。",
+          "offlineHint": "コンピュータのスリープ中や電源オフ中、プラグインの停止中のイベントは受け取れません。取りこぼせない場合は、定期チェックも追加してください。",
+          "required": "プラグインのイベントを 1 つ以上選んでください",
+          "state": {
+            "listening": "待ち受け中",
+            "disconnected": "切断",
+            "error": "接続エラー",
+            "stopped": "停止中",
+            "unknown": "プラグインの状態報告を待っています"
+          },
+          "filterOnly": "限定",
+          "filterField": "フィールド",
+          "filterOperator": "条件",
+          "filterValue": "値",
+          "filterRemove": "条件を削除",
+          "filterAdd": "「限定」条件を追加",
+          "operators": {
+            "equals": "等しい",
+            "contains": "含む",
+            "not-equals": "等しくない"
+          }
+        },
+        "scopeLabel": "範囲",
+        "scope": {
+          "repository": "リポジトリ全体",
+          "repositoryHint": "新しい PR、コメント、CI 完了など、リポジトリの新しいイベントで実行します。",
+          "repositoryNeedsAccount": "リポジトリのイベントを受け取るには Cindy アカウントへのログインが必要です。",
+          "item": "特定の PR または Issue",
+          "itemHint": "1 つの PR または Issue を見ます。PR は状態が実際に変わったとき、Issue は新しい動きがあったときに実行します。",
+          "project": "プロジェクト全体",
+          "projectHint": "新しい MR、Issue、パイプライン完了など、プロジェクトの新しいイベントで実行します。",
+          "gitlabItem": "特定の MR または Issue",
+          "gitlabItemHint": "1 つの MR または Issue を見ます。MR は状態が実際に変わったとき、Issue は変化があったときに実行します。"
+        },
+        "item": {
+          "label": "PR または Issue",
+          "placeholder": "42、#42、owner/repo#42 またはリンク",
+          "hint": "番号、owner/repo#番号を入力するか、リンクを貼り付けてください。どちらかは Cindy が判別します。",
+          "resolving": "判別中…",
+          "pr": "PR #{{number}}",
+          "issue": "Issue #{{number}}",
+          "closed": "クローズ済み",
+          "required": "監視する PR または Issue を入力し、判別が終わるまでお待ちください。",
+          "issueHint": "特定の Issue は Cindy 経由で接続した GitHub App でイベントを受け取るため、Cindy アカウントが必要です。",
+          "errors": {
+            "invalid": "番号、#番号、owner/repo#番号、または GitHub の PR / Issue のリンクを入力してください。",
+            "no-repository": "番号だけの場合はリポジトリが必要です。owner/repo#42 と書くか、リンクを貼り付けてください。",
+            "not-connected": "PR か Issue かを判別するには GitHub を接続してください。",
+            "not-found": "このリポジトリにその番号が見つからないか、アクセス権がありません。",
+            "unavailable": "現在 GitHub に接続できません。しばらくしてから再試行してください。",
+            "needs-account": "これは Issue です。特定の Issue には Cindy アカウントと Cindy 経由の GitHub 接続が必要です。"
+          },
+          "issueChange": {
+            "any": "Issue の新しい動き",
+            "comment": "新しいコメント",
+            "closed": "Issue がクローズ",
+            "reopened": "Issue が再オープン"
+          },
+          "mr": "MR !{{number}}"
+        },
+        "gitlabSignedConnection": "署名トークン（GitLab 19 以降）",
+        "gitlabSignedConnectionHint": "GitLab プロジェクトの Webhook 設定で署名トークンを使うと、より安全です。",
+        "gitlabTokenConnection": "Secret token",
+        "gitlabTokenConnectionHint": "古い GitLab 向け：Webhook 設定で Secret token を入力します。",
+        "gitlabPluginConnection": "GitLab プラグイン経由",
+        "gitlabPluginConnectionHint": "GitLab プラグインで接続したアカウントで 1 分ごとに確認します。GitLab の Webhook 設定や Cindy アカウントは不要です。このコンピュータがスリープ中や電源オフの間の変化は後から届きません。",
+        "gitlabMrPollConnection": "定期的に状態を読み取る",
+        "gitlabMrPollConnectionHint": "「定期チェックも併用」の間隔で MR の状態を読み取ります（タスクは実行しません）。GitLab プラグインのアカウントを優先し、なければローカルの glab ログインを使います。",
+        "gitlabSetupHint": "保存後、タスク詳細の受信アドレスと秘密鍵を GitLab プロジェクトの「設定 › Webhooks」に入力してください。",
+        "gitlabItem": {
+          "label": "MR または Issue",
+          "placeholder": "!12、#12、group/project!12 またはリンク",
+          "hint": "MR は !番号、Issue は #番号で入力するか、リンクを貼り付けてください。",
+          "required": "監視する MR または Issue を入力してください。",
+          "mrHint": "GitLab にはプッシュ通知がないため、Cindy は「定期チェックも行う」の間隔で MR の状態を読み取ります（タスクは実行しません）。このコンピュータの glab のログイン、または GitLab プラグインで接続したアカウントを使います。",
+          "mrPluginHint": "GitLab プラグインがこの MR を毎分チェックします（新しいコミット、コメント、承認、パイプライン結果を含む）。",
+          "issueHint": "この Issue の変化は GitLab Webhook で受け取ります。コメントイベントは MR と Issue を区別できないため、Issue 自体の作成・編集・クローズ・再オープンだけに反応します。",
+          "issuePluginHint": "GitLab プラグインがこの Issue を 1 分ごとに確認します（新しいコメントを含む）。",
+          "errors": {
+            "invalid": "!番号、#番号、group/project!番号、または GitLab のリンクを入力してください。",
+            "ambiguous": "GitLab の MR と Issue は番号が別です。!12（MR）か #12（Issue）と書くか、リンクを貼り付けてください。",
+            "needs-link": "特定の MR には GitLab のインスタンスが必要です。MR のリンクを貼り付けてください。",
+            "needs-account": "これは Issue です。特定の GitLab Issue には GitLab プラグイン、または GitLab Webhook を受け取るための Cindy アカウントが必要です。"
+          },
+          "mrChange": {
+            "any": "MR の新しい動き",
+            "merged": "マージ済み",
+            "review": "レビューの新しい動き",
+            "ci": "パイプラインの状態変化"
+          },
+          "issueChange": {
+            "any": "Issue の変化",
+            "comment": "Issue に新しいコメント",
+            "closed": "Issue がクローズ",
+            "reopened": "Issue が再オープン"
+          }
+        },
+        "gitlabPlugin": {
+          "projectLabel": "プロジェクト",
+          "projectHint": "group/project またはプロジェクトのリンクを入力します。GitLab プラグインが複数のインスタンスに接続している場合はリンクを貼り付けてください。",
+          "projectInvalid": "group/project または https で始まるプロジェクトのリンクを入力してください。",
+          "eventsLabel": "イベント",
+          "eventsHint": "何も選ばない場合、このプロジェクトのすべてのイベントに反応します。",
+          "unavailable": "GitLab プラグインがインストールされていないか、オフになっています。「プラグイン」でオンにしてから保存してください。"
+        }
       },
       "trigger": {
         "label": "トリガー方式",
-        "timed": "定期実行"
+        "timed": "定期実行",
+        "event": "イベント"
       },
       "runSettings": "実行設定"
     },
@@ -18843,7 +18965,8 @@
         "reconnectConfirm": "Webhook に再接続しますか？",
         "reconnectConfirmHint": "枠を1つ使用して新しい受信アドレスを作成します。新しいアドレスとシークレットを送信元に設定してください。",
         "reconnectFailed": "再接続できません。空き枠を確認して再試行してください。"
-      }
+      },
+      "pluginTitle": "プラグインイベントで実行"
     }
   },
   "issueTracker": {
@@ -21123,7 +21246,7 @@
   "routines": {
     "hourly": "毎時",
     "everyMinutes": "{{count}} 分ごと",
-    "pluginCapability": "宣言されたイベントを発行し、設定済みのルーティンのみを実行します。",
+    "pluginCapability": "宣言されたイベントを自動化に送ります。このプラグインを選んだ自動化だけが実行されます。",
     "advancedSettings": "詳細設定"
   },
   "cindyMakeDoctor": {
