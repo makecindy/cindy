@@ -994,6 +994,10 @@ it.each([false, true])('withdraws a rejected plugin input across an interrupted 
   expect(pending()).toEqual([]);
   expect(JSON.parse(snapshot!)).toEqual([]);
   expect(await f.service.cancel('p', run.runId)).toEqual(receipt);
+  // A newer steering input can own the reply while the original remains in the active turn.
+  vi.spyOn(coordinator, 'getActiveInputClientId').mockReturnValue('later-steer');
+  vi.spyOn(coordinator, 'getActiveInputClientIds').mockReturnValue([run.inputMessageId, 'later-steer']);
+  await expect(f.service.cancel('p', run.runId)).rejects.toMatchObject({ code: 'TASK_BUSY' });
 });
 
 it.each(['restore','restart'] as const)('the production cancel adapter rechecks revoked ownership after %s waits', async point => {

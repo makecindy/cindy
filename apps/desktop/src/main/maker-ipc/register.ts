@@ -15069,7 +15069,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           assertPlugin(pluginId);
           const queue = inputCoordinator.getQueueInspection(taskId);
           if (queue.some(item => inputClientIds.includes(item.queuedMessageId))
-            || inputClientIds.includes(inputCoordinator.getActiveInputClientId(taskId) ?? '')) {
+            || inputCoordinator.getActiveInputClientIds(taskId).some(id => inputClientIds.includes(id))) {
             throw new PluginTaskError('TASK_BUSY', 'The task is consuming this input', true);
           }
         }
