@@ -355,6 +355,8 @@ function mount(component: any, props: any) {
  * Reports one layout for every measured view of the consent sheet on screen, as a device does once it drew it (both
  * sheets): the identity block, the list's visible and content heights as given, every other measured view `other` high.
  */
+/** The layout key a sheet's measured views carry (`consentLayoutKey`) for this consent at the mocked window and text size. */
+const layoutKeyOf = (requestId: string) => `${requestId}|${bridge.width}x844@${bridge.fontScale}`;
 function layOutSheet(heights: { identity: number; visible: number; content: number; other?: number }) {
   const sheet = bridge.props.get("plugins.managementConfirmation");
   const other = heights.other ?? 20;
@@ -1766,7 +1768,7 @@ describe("pinned high-risk permission", () => {
       const lead = container.querySelector('[data-testid="plugins.management.reviewLead"]')!.textContent!;
       expect(lead).toContain(build === customProps ? "plugins.notice.consentSource.repository" : "plugins.notice.consentSource.market");
       // The reviewed list is a new view, so it opens at its top.
-      expect(bridge.props.get("plugins.managementConfirmation").nativeContentModifiers).toContainEqual({ id: "plugins.management.reviewed:request" });
+      expect(bridge.props.get("plugins.managementConfirmation").nativeContentModifiers).toContainEqual({ id: `plugins.management.reviewed:${layoutKeyOf("request")}` });
       act(() => bridge.props.get("plugins.management.allow").onPress());
       expect(sheetProps.controller.answer).toHaveBeenCalledWith(true);
     });
@@ -1936,20 +1938,31 @@ describe("pinned high-risk permission", () => {
       expect(p.controller.answer).toHaveBeenCalledWith(true);
     });
   it.each([["iOS", PluginManagementConfirmation], ["Android", AndroidManagementConfirmation]] as const)(
-    "%s: the next consent does not reuse the previous one's sizes: Allow waits for its own", (_platform, Sheet) => {
+    "%s: the next consent does not reuse the previous one's sizes (they fit, its own do not): Allow writes nothing before or after its sizes arrive", (_platform, Sheet) => {
       bridge.fontScale = 1;
       const first = props(allFive);
-      const { rerender } = mount(Sheet, first);
+      const { container, rerender } = mount(Sheet, first);
       layOutSheet({ identity: 100, visible: 2000, content: 400 });
       const second = props(allFive);
       second.state.receipt.consent.requestId = "request-2";
       rerender(second);
-      expect(pressAllow(second), "the first consent's sizes do not count").toBe(false);
+      const shown = (id: string) => container.querySelector(`[data-testid="${id}"]`) !== null;
+      expect(shown("plugins.management.allow"), "drawn as regular from the estimate").toBe(true);
+      expect(pressAllow(second), "before its own sizes arrive: the first consent's do not count").toBe(false);
+      // Its own sizes: an identity block taller than the list shows.
       const third = props(allFive);
       third.state.receipt.consent.requestId = "request-3";
       rerender(third);
+      layOutSheet({ identity: 1990, visible: 2000, content: 2400 });
+      expect({ review: shown("plugins.management.review"), allow: shown("plugins.management.allow") }).toEqual({ review: true, allow: false });
+      act(() => bridge.props.get("plugins.management.review").onPress());
+      expect(third.controller.answer, "review first, not an answer").not.toHaveBeenCalled();
+      // A consent whose own sizes fit answers.
+      const fourth = props(allFive);
+      fourth.state.receipt.consent.requestId = "request-4";
+      rerender(fourth);
       layOutSheet({ identity: 100, visible: 2000, content: 400 });
-      expect(pressAllow(third), "its own sizes, once they arrive").toBe(true);
+      expect(pressAllow(fourth)).toBe(true);
     });
   /* 测试价值（维护者 18:20：切到下一次确认时，固定高风险摘要仍停在上一条的滚动位置）
    * - 生产入口与可观察结果：两端真实确认面板组件；Android 观察主列表与固定摘要的滚动区是否重建（新建的滚动区从顶部开始），
@@ -1980,14 +1993,15 @@ describe("pinned high-risk permission", () => {
     layOutSheet({ identity: 100, visible: 2000, content: 400 });
     const ids = () => [bridge.props.get("plugins.managementConfirmation").nativeContentModifiers,
       bridge.props.get("plugins.management.highRiskScroll").modifiers].map((modifiers: any[]) => modifiers.find((m: any) => "id" in m)?.id);
-    expect(ids()).toEqual(["plugins.management.list:request", "plugins.management.highRiskScroll:request"]);
+    const idsOf = (requestId: string) => [`plugins.management.list:${layoutKeyOf(requestId)}`, `plugins.management.highRiskScroll:${layoutKeyOf(requestId)}`];
+    expect(ids()).toEqual(idsOf("request"));
     rerender({ ...first });
-    expect(ids()).toEqual(["plugins.management.list:request", "plugins.management.highRiskScroll:request"]);
+    expect(ids()).toEqual(idsOf("request"));
     const second = props(allFive);
     second.state.receipt.consent.requestId = "request-2";
     rerender(second);
     layOutSheet({ identity: 100, visible: 2000, content: 400 });
-    expect(ids()).toEqual(["plugins.management.list:request-2", "plugins.management.highRiskScroll:request-2"]);
+    expect(ids()).toEqual(idsOf("request-2"));
   });
   it("Android puts everything in one scroll area above fixed buttons when they do not fit (maintainer's numbers)", () => {
     bridge.fontScale = 2;

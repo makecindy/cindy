@@ -19,7 +19,7 @@ import {
 import { useEffect, useRef, useState } from "react";
 import { ScrollFade, ScrollThumb, useScrollOverflow } from "@/components/ScrollOverflow";
 import { useConsentSheetSizes } from "./useConsentSheetSizes";
-import { CONSENT_FADE_HEIGHT, CONSENT_SIDE_BY_SIDE_MIN_WIDTH, consentIdentityShown, consentRegularConfirmed, consentSheetMeasured,
+import { CONSENT_FADE_HEIGHT, CONSENT_SIDE_BY_SIDE_MIN_WIDTH, consentIdentityShown, consentLayoutKey, consentRegularConfirmed, consentSheetMeasured,
   consentSummaryFadeAllowed, planConsentSheet,
   pluginConsentPresentation } from "./pluginConsentPresentation";
 export function PluginManagementConfirmation(
@@ -35,10 +35,11 @@ export function PluginManagementConfirmation(
   // the summary's heading with two items fit; compact otherwise, with everything in one scroll area above fixed buttons.
   // A scroll area with more below shows a text-free fade over its lower edge, with the scrollbar always visible
   // (dispatcher J-1, K-2): neither takes room, so neither can change the plan.
-  // Every size comes from this consent's own sheet (maintainer review 18:13): another consent starts from nothing (its
-  // sheet is drawn anew, see `key` below), and a late report of the previous one is dropped.
-  const requestId = consent?.requestId ?? null;
-  const layout = useConsentSheetSizes(requestId);
+  // Every size comes from this consent's own sheet at this window size and text size (maintainer review 18:13): another
+  // consent, a rotation or another text size starts from nothing (the sheet is drawn anew, see `key` below, so every size
+  // is reported again), and a late report made before is dropped.
+  const layoutKey = consentLayoutKey(consent?.requestId, { width: windowWidth, height: windowHeight, fontScale });
+  const layout = useConsentSheetSizes(layoutKey);
   const sizes = layout.sizes;
   const measure = (key: "identity" | "heading" | "actions") => (event: { nativeEvent: { layout: { height: number } } }) =>
     layout.report(key, event.nativeEvent.layout.height);
@@ -62,7 +63,7 @@ export function PluginManagementConfirmation(
   // that, so the list got far less than planned): when the regular list shows less than the whole identity block (where
   // it installs, where it comes from) without scrolling, this consent goes compact. Kept for this consent at this window
   // and text size, so the compact layout cannot flip it back.
-  const fitKey = consent ? JSON.stringify([consent.requestId, windowWidth, windowHeight, fontScale]) : null;
+  const fitKey = layoutKey;
   const [crampedFor, setCrampedFor] = useState<string | null>(null);
   const cramped = fitKey !== null && crampedFor === fitKey;
   const compact = plan.mode === "compact" || reviewed || cramped;
@@ -102,9 +103,10 @@ export function PluginManagementConfirmation(
       onRequestClose={() => answer(false)}
       onBackdropPress={() => answer(false)}
     >
-      {/* Drawn anew for each consent (maintainer review 18:20): both scroll areas start at their top and every size is
-          reported again; redrawing the same consent keeps where the person was reading. */}
-      <View key={requestId ?? "none"} style={styles.sheet} testID="plugins.managementConfirmation">
+      {/* Drawn anew for each consent, window size and text size (maintainer reviews 18:13, 18:20): both scroll areas
+          start at their top and every size is reported again; redrawing the same consent keeps where the person was
+          reading. */}
+      <View key={layoutKey ?? "none"} style={styles.sheet} testID="plugins.managementConfirmation">
         <View style={styles.listArea}>
           <ScrollView ref={listRef} contentContainerStyle={[styles.content, list.thumbGutter]} testID="plugins.management.list" showsVerticalScrollIndicator={false}
             accessibilityHint={t("plugins.management.scrollHint")}

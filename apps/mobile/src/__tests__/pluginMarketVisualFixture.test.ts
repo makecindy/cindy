@@ -54,19 +54,21 @@ describe("mock market pending-check scenarios", () => {
     const operationId = "op-second";
     pluginMarketVisualManagement("management:begin", { operationId, kind: "install",
       pluginId: "demo-market/demo-vault-bridge", expectedReleaseId: "demo-vault-bridge@1.4.2" });
-    const consentId = () => {
+    const consent = () => {
       for (let i = 0; i < 4; i++) {
         const receipt = (pluginMarketVisualManagement("management:operation", { operationId }) as { result: any }).result;
-        if (receipt.phase === "confirmation") return receipt.consent.requestId;
+        if (receipt.phase === "confirmation") return receipt.consent;
       }
       return undefined;
     };
     const answer = (requestId: string) => pluginMarketVisualManagement("management:answer", { operationId, requestId, confirmed: true });
-    const first = consentId()!;
-    answer(first);
-    const second = consentId();
-    expect(second).toBe(`${first}-2`);
-    answer(second!);
+    const first = consent()!;
+    answer(first.requestId);
+    const second = consent()!;
+    // Another request of the same operation, said to come from an Agent (a longer source line than the first).
+    expect({ requestId: second.requestId, first: first.initiator, second: second.initiator })
+      .toEqual({ requestId: `${first.requestId}-2`, first: "user", second: "agent" });
+    answer(second.requestId);
     let phase = "";
     for (let i = 0; i < 6 && phase !== "succeeded"; i++) phase = lookup(operationId).result.phase;
     expect(phase).toBe("succeeded");

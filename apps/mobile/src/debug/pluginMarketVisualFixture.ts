@@ -396,7 +396,9 @@ function receipt(operationId: string) {
   if (demo.outcome === "downloadFailed") { op.done = "failed"; return receipt(operationId); }
   const entry = installed.get(instanceKey(demo.ghostId));
   if (!op.answered) return { operationId, phase: "confirmation", consent: {
-    requestId: `demo-consent-${operationId}${op.second ? "-2" : ""}`, initiator: "user", origin: demo.publisher === "custom" ? "custom-market" : "market",
+    // The second consent of `secondConsent` says an Agent asked for it: its source line is longer ("Initiated by Agent · …"),
+    // so the next consent's identity block is taller than the one before (initiator is not part of what may be allowed).
+    requestId: `demo-consent-${operationId}${op.second ? "-2" : ""}`, initiator: op.second ? "agent" : "user", origin: demo.publisher === "custom" ? "custom-market" : "market",
     ...(demo.publisher === "custom" ? { originLabel: marketName(demo), ...(demo.legacySource ? {} : { originSource: marketSource(demo) }) } : {}),
     // Host: an update from another (verifiable) source than the installed instance's carries originSourceChanged and is
     // confirmed like a first install (full permissions of the new source).

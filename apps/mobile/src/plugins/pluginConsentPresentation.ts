@@ -79,7 +79,8 @@ export function consentIdentityShown(list: { identity: number; visible: number; 
 }
 /**
  * One consent's sheet as laid out (maintainer review 18:13): every size the decision reads, all reported by that
- * consent's own sheet (`for`: its requestId); 0 = not reported yet. Another consent starts from nothing.
+ * consent's own sheet at this window size and text size (`for`: `consentLayoutKey`); 0 = not reported yet. Another
+ * consent, a rotation or another text size starts from nothing.
  */
 export interface ConsentSheetSizes {
   for: string | null;
@@ -89,8 +90,12 @@ export interface ConsentSheetSizes {
   /** The list's visible height and its content height. */
   visible: number; content: number;
 }
-export const emptyConsentSheetSizes = (requestId: string | null): ConsentSheetSizes =>
-  ({ for: requestId, identity: 0, heading: 0, actions: 0, lines: [], visible: 0, content: 0 });
+/** The key a consent sheet's sizes and measured views belong to: this consent, at this window size and text size. */
+export function consentLayoutKey(requestId: string | undefined, window: { width: number; height: number; fontScale: number }): string | null {
+  return requestId ? `${requestId}|${window.width}x${window.height}@${window.fontScale}` : null;
+}
+export const emptyConsentSheetSizes = (layoutKey: string | null): ConsentSheetSizes =>
+  ({ for: layoutKey, identity: 0, heading: 0, actions: 0, lines: [], visible: 0, content: 0 });
 /** Every size the regular layout's decision needs has been reported for this consent. */
 export function consentSheetMeasured(sizes: ConsentSheetSizes, lineCount: number): boolean {
   if (sizes.identity <= 0 || sizes.actions <= 0 || sizes.visible <= 0) return false;

@@ -27,7 +27,7 @@ import { useEffect, useState } from "react";
 import { useConsentSheetSizes } from "./useConsentSheetSizes";
 import { useWindowDimensions } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { CONSENT_FADE_HEIGHT, CONSENT_SIDE_BY_SIDE_MIN_WIDTH, consentIdentityShown, consentRegularConfirmed, consentSheetMeasured,
+import { CONSENT_FADE_HEIGHT, CONSENT_SIDE_BY_SIDE_MIN_WIDTH, consentIdentityShown, consentLayoutKey, consentRegularConfirmed, consentSheetMeasured,
   consentSummaryFadeAllowed, planConsentSheet,
   pluginConsentPresentation } from "./pluginConsentPresentation";
 export function PluginManagementConfirmation(
@@ -48,10 +48,11 @@ export function PluginManagementConfirmation(
   // it takes no room. SwiftUI shows scroll indicators only while scrolling, so the fade is what says there is more.
   // A SwiftUI ScrollView takes all the height it is offered, so the pinned summary gets an explicit height: its
   // measured content height, capped by the plan.
-  // Every size comes from this consent's own sheet (maintainer review 18:13): another consent starts from nothing (its
-  // views get new identities, see `viewId` below, and report again), and a late report of the previous one is dropped.
-  const requestId = consent?.requestId ?? null;
-  const layout = useConsentSheetSizes(requestId);
+  // Every size comes from this consent's own sheet at this window size and text size (maintainer review 18:13): another
+  // consent, a rotation or another text size starts from nothing (the measured views get new identities, see
+  // `forRequest`, so every size is reported again), and a late report made before is dropped.
+  const layoutKey = consentLayoutKey(consent?.requestId, { width: windowWidth, height: windowHeight, fontScale });
+  const layout = useConsentSheetSizes(layoutKey);
   const sizes = layout.sizes;
   const measure = (key: "identity" | "heading" | "actions" | "visible" | "content") => (size: { height: number }) => {
     if (size.height > 0) layout.report(key, size.height);
@@ -59,8 +60,8 @@ export function PluginManagementConfirmation(
   const measureLine = (index: number) => (size: { height: number }) => {
     if (size.height > 0) layout.reportLine(index, size.height);
   };
-  /** A view identity for this consent: another consent's views are new views (scrolled to their top, measured again). */
-  const forRequest = (name: string) => viewId(name + ":" + (requestId ?? ""));
+  /** A view identity for this layout key: another key's views are new views (scrolled to their top, measured again). */
+  const forRequest = (name: string) => viewId(name + ":" + (layoutKey ?? ""));
   const sheetHeader = Math.ceil(64 * Math.min(Math.max(fontScale, 1), 2)) + 10;
   // Which scroll area has more below what it shows (from its own scroll geometry; display only).
   const [more, setMore] = useState({ list: false, summary: false });
@@ -92,7 +93,7 @@ export function PluginManagementConfirmation(
   // footer constants). When the regular list shows less than the whole identity block (where it installs, where it
   // comes from) without scrolling, this consent goes compact; kept for this consent at this window and text size, so
   // the compact layout cannot flip it back.
-  const fitKey = consent ? JSON.stringify([consent.requestId, windowWidth, windowHeight, fontScale]) : null;
+  const fitKey = layoutKey;
   const [crampedFor, setCrampedFor] = useState<string | null>(null);
   const cramped = fitKey !== null && crampedFor === fitKey;
   const compact = plan.mode === "compact" || reviewed || cramped;
@@ -107,9 +108,9 @@ export function PluginManagementConfirmation(
   // pressed. Not marked unavailable: SwiftUI's disabled state would dim the button for that frame.
   const confirmedNow = () => consentRegularConfirmed(layout.latest(), { lineCount, available, gap: spacing.xs, top: spacing.sm });
   const needsReview = compact && !reviewed && info?.allowBlocked !== true;
-  // The pinned summary's content height, for this consent only.
+  // The pinned summary's content height, for this layout key only.
   const [summaryContent, setSummaryContent] = useState<{ for: string | null; height: number }>({ for: null, height: 0 });
-  const summaryHeight = summaryContent.for === requestId ? summaryContent.height : 0;
+  const summaryHeight = summaryContent.for === layoutKey ? summaryContent.height : 0;
   // Large text on a narrow screen: the buttons stack so each label shows in full; wide enough (landscape, iPad) they stay
   // side by side, labels wrapping inside them (K-3).
   const stacked = fontScale > 1.2 && windowWidth < CONSENT_SIDE_BY_SIDE_MIN_WIDTH;
@@ -222,7 +223,7 @@ export function PluginManagementConfirmation(
                     ...(summaryGeometry ? [summaryGeometry] : [])]}>
                   <VStack alignment="leading" spacing={spacing.xs}
                     modifiers={[frame({ maxWidth: Infinity, alignment: "leading" }),
-                      onGeometryChange((size) => { if (size.height > 0) setSummaryContent({ for: requestId, height: size.height }); })]}>
+                      onGeometryChange((size) => { if (size.height > 0) setSummaryContent({ for: layoutKey, height: size.height }); })]}>
                     {summaryItems}
                   </VStack>
                 </ScrollView>
