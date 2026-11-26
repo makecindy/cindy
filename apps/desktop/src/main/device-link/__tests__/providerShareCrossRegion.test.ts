@@ -1491,7 +1491,7 @@ describe('cross-region identity request owner boundary', () => {
     expect(__testing.readMarkers()).toEqual({});
     expect(state.clients).toHaveLength(0);
   });
-  it('keeps a loaded cross-region budget from the request start without advancing cached reads', async () => {
+  it('renews a cross-region directory before its original display deadline, not on cached reads', async () => {
     vi.useFakeTimers({ toFake: ['Date', 'performance', 'setTimeout', 'clearTimeout'] });
     try {
       const gate = deferred();
@@ -1510,6 +1510,14 @@ describe('cross-region identity request owner boundary', () => {
       const repeated = getConfirmedCrossRegionRegionBudgets().global;
       expect(repeated?.id).toBe(first?.id);
       expect(getReceivedSharesSnapshot().regionBudget?.global?.id).toBe(first?.id);
+      await vi.advanceTimersByTimeAsync(PROVIDER_METADATA_TRUST_MS - 10 * 60_000);
+      await vi.waitFor(() => {
+        const snapshot = getReceivedSharesSnapshot();
+        const renewed = snapshot.regionBudget?.global;
+        expect(snapshot.received.map(item => item.shareId)).toContain(share.shareId);
+        expect(renewed?.order).toBeGreaterThan(first?.order ?? 0);
+        expect(renewed?.remainingMs).toBeGreaterThan(0);
+      });
     } finally {
       vi.useRealTimers();
     }

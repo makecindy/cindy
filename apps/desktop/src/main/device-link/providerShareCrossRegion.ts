@@ -54,7 +54,7 @@ const API_PREFIX = '/api/device-link/provider-shares/x';
 const WS_PATH = '/api/device-link/ws';
 /** 凭证 24 小时过期；提前一小时轮换。 */
 const CREDENTIAL_REFRESH_MARGIN_MS = 60 * 60_000;
-const SESSION_REFRESH_MS = 12 * 60 * 60_000;
+const DIRECTORY_REFRESH_MARGIN_MS = 5 * 60_000;
 /** 尚无分享时也定期发现账号在其它电脑新接受的分享，不建立空 relay。 */
 const EMPTY_DISCOVERY_MS = 5 * 60_000;
 const ONLINE_WAIT_MS = 8_000;
@@ -457,8 +457,10 @@ function scheduleRefresh(rt: Runtime, state: RegionState): void {
   if (state.timer) clearTimeout(state.timer);
   state.timer = null;
   if (!current(rt)) return;
-  state.timer = setTimeout(() => { void refreshRegion(rt, state.region); },
-    state.shares.length > 0 ? SESSION_REFRESH_MS : EMPTY_DISCOVERY_MS);
+  const delay = state.shares.length > 0 && state.viewAnchor
+    ? Math.max(60_000, viewAnchorBudget(state.viewAnchor).remainingMs - DIRECTORY_REFRESH_MARGIN_MS)
+    : EMPTY_DISCOVERY_MS;
+  state.timer = setTimeout(() => { void refreshRegion(rt, state.region); }, delay);
   (state.timer as { unref?: () => void }).unref?.();
 }
 
