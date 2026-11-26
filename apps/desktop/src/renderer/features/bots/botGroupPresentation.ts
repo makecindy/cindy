@@ -22,6 +22,7 @@ export {
   botGroupPlanFollowUp,
   botGroupPreviewLine,
   botGroupSidebarPlanPreview,
+  canMentionAllInBotGroup,
   continuableRoundEndId,
   currentBotGroupPlanStep,
   isActiveBotGroupMember,

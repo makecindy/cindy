@@ -89,6 +89,16 @@ export function chatGroupMembership(group: Pick<BotGroupSummary, 'serverBacked' 
   return { self, owner, manager, canLeave };
 }
 
+/** Whether the signed-in human may broadcast @所有人 in this group (default managers only; all members when enabled). */
+export function canMentionAllInBotGroup(
+  group: Pick<BotGroupSummary, 'serverBacked' | 'supportsMemberMentionAll' | 'allowMemberMentionAll' | 'members'>,
+): boolean {
+  if (group.serverBacked !== true || group.supportsMemberMentionAll !== true) return true;
+  if (group.allowMemberMentionAll === true) return true;
+  const self = group.members.find(member => member.isSelf === true);
+  return self?.role === 'owner' || self?.role === 'admin';
+}
+
 /** Group activity includes topic replies and system notices, but never deleted messages. */
 export function latestBotGroupMessage<T extends { seq: string; deleted?: boolean }>(messages: readonly T[]): T | undefined {
   let latest: T | undefined;
@@ -244,6 +254,7 @@ export type BotGroupErrorVariant =
   | 'memberUnavailable'
   | 'mentionUnavailable'
   | 'allBotsMentionDisabled'
+  | 'allHumansMentionForbidden'
   | 'notFound'
   | 'hostNotReady'
   | 'planOpen'
@@ -269,6 +280,7 @@ const ERROR_VARIANTS: ReadonlyMap<string, BotGroupErrorVariant> = new Map<BotGro
   ['MEMBER_UNAVAILABLE', 'memberUnavailable'],
   ['MENTION_UNAVAILABLE', 'mentionUnavailable'],
   ['ALL_BOTS_MENTION_DISABLED', 'allBotsMentionDisabled'],
+  ['ALL_HUMANS_MENTION_FORBIDDEN', 'allHumansMentionForbidden'],
   ['NOT_FOUND', 'notFound'],
   ['HOST_NOT_READY', 'hostNotReady'],
   ['PLAN_OPEN', 'planOpen'],

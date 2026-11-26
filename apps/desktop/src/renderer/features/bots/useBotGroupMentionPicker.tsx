@@ -56,6 +56,7 @@ export function useBotGroupMentionPicker({
   textareaRef,
   allLabels,
   disabled = false,
+  allowMentionAll = true,
   allowMentionAllBots = false,
 }: {
   text: string;
@@ -68,6 +69,7 @@ export function useBotGroupMentionPicker({
   textareaRef: RefObject<BotGroupTextInput | null>;
   /** Labels that mean 「所有人」 when resolving; the first is the one offered. Defaults to the UI label. */
   allLabels?: readonly string[];
+  allowMentionAll?: boolean;
   allowMentionAllBots?: boolean;
 }) {
   const { t } = useTranslation();
@@ -104,7 +106,7 @@ export function useBotGroupMentionPicker({
   const options = useMemo<MentionOption[]>(() => {
     if (!query || activeMembers.length === 0) return [];
     const everyone: MentionOption[] =
-      filterBotGroupMentionCandidates(query.query, [{ name: allLabel }]).length > 0
+      allowMentionAll && filterBotGroupMentionCandidates(query.query, [{ name: allLabel }]).length > 0
         ? [{ kind: 'all', label: allLabel }]
         : [];
     const people = filterBotGroupMentionCandidates(query.query, activeMembers).map(
@@ -113,7 +115,7 @@ export function useBotGroupMentionPicker({
     const allBots: MentionOption[] = allowMentionAllBots && filterBotGroupMentionCandidates(query.query, [{ name: allBotsLabel }]).length
       ? [{ kind: 'allBots', label: allBotsLabel }] : [];
     return [...everyone, ...allBots, ...people];
-  }, [activeMembers, allLabel, allBotsLabel, allowMentionAllBots, query]);
+  }, [activeMembers, allLabel, allBotsLabel, allowMentionAll, allowMentionAllBots, query]);
   const open = query !== null && options.length > 0 && dismissedStart !== query.start;
   const activeIndex = Math.min(highlight, Math.max(0, options.length - 1));
 

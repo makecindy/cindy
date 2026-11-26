@@ -622,7 +622,7 @@ export function registerBotGroupRemoteResourceProvider(service: () => BotGroupCh
         case 'update': {
           // A phone cannot point the group at a folder on this computer.
           const patch: Record<string, unknown> = { groupId };
-          for (const key of ['name', 'replyMode', 'speakingMode', 'organizerBotId', 'allowMentionAllBots', 'allowMemberInvites'] as const) {
+          for (const key of ['name', 'replyMode', 'speakingMode', 'organizerBotId', 'allowMentionAllBots', 'allowMemberMentionAll', 'allowMemberInvites'] as const) {
             if (input[key] !== undefined) patch[key] = input[key];
           }
           if (input.expectedRevision !== undefined) patch.expectedRevision = input.expectedRevision;

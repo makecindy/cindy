@@ -622,6 +622,9 @@ export interface BotGroupSummary {
   /** Manager-controlled friend invitations; absent on old servers/hosts. */
   supportsMemberInvites?: boolean;
   allowMemberInvites?: boolean;
+  /** Manager-controlled @everyone permission (default false); absent on old servers/hosts. */
+  supportsMemberMentionAll?: boolean;
+  allowMemberMentionAll?: boolean;
   /** Owner-controlled companion broadcast; absent on old servers/hosts. */
   supportsMentionAudiences?: boolean;
   allowMentionAllBots?: boolean;
@@ -773,6 +776,7 @@ export type BotGroupErrorCode =
   | 'MEMBER_UNAVAILABLE'
   | 'MENTION_UNAVAILABLE'
   | 'ALL_BOTS_MENTION_DISABLED'
+  | 'ALL_HUMANS_MENTION_FORBIDDEN'
   | 'HOST_NOT_READY'
   /** An explicit 安排分工 while a plan is running or waiting. */
   | 'PLAN_OPEN'
@@ -809,6 +813,7 @@ export interface BotGroupCreateInput {
 
 export interface BotGroupUpdateInput {
   allowMemberInvites?: boolean;
+  allowMemberMentionAll?: boolean;
   allowMentionAllBots?: boolean;
   groupId: string;
   /** Optional optimistic precondition for server-backed settings. */
@@ -1119,7 +1124,7 @@ export interface ChatInvitePreview {
 export type ChatGroupAction =
   | { type: 'read'; messageId: string; conversationKind?: 'direct' }
   | { type: 'notifications'; mode: ChatGroupNotificationMode }
-  | { type: 'update'; name: string; topic: string; description: string; expectedRevision: number; responseMode?: BotGroupReplyMode; speakingMode?: BotGroupSpeakingMode; allowMentionAllBots?: boolean; allowMemberInvites?: boolean; assistant?: boolean }
+  | { type: 'update'; name: string; topic: string; description: string; expectedRevision: number; responseMode?: BotGroupReplyMode; speakingMode?: BotGroupSpeakingMode; allowMentionAllBots?: boolean; allowMemberMentionAll?: boolean; allowMemberInvites?: boolean; assistant?: boolean }
   | { type: 'nickname'; actorId: string; nickname: string | null }
   | { type: 'avatar'; actorId: string; avatar: { type: 'keep' | 'reset' } | { type: 'set'; data: Uint8Array; mimeType: string } }
   | { type: 'member'; actorId: string; action: 'invite' | 'leave' | 'remove' | 'ban' | 'unban' | 'role'; role?: 'admin' | 'member' }

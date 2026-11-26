@@ -29,7 +29,7 @@ import type { BotGroupDetail, BotGroupExecutionFailureView, BotGroupMessageView,
 import { resolveBotGroupQuote } from '../../../shared/botGroupChat';
 import { botGroupAttachmentPreview, botGroupThreadDraftKey, refreshPendingBotGroupAttachments } from './botGroupAttachments';
 import { refreshBotGroups } from './botGroupStore';
-import { mergeBotGroupMessages, projectBotGroupExecutionFailures } from './botGroupPresentation';
+import { canMentionAllInBotGroup, mergeBotGroupMessages, projectBotGroupExecutionFailures } from './botGroupPresentation';
 import { BotGroupComposer, type BotGroupOutgoingMessage, type BotGroupSendOutcome } from './BotGroupComposer';
 import { focusBotGroupComposer } from './botGroupTextInput';
 import { BotGroupTimelineItem } from './BotGroupTimelineItem';
@@ -772,7 +772,7 @@ export function ChatThreadPanel({ group, rootId, speakers = [], onStop, stopping
             <Button variant="secondary" size="sm" compact disabled={readOnly} loading={[...unposted].some(id => posting.has(id))} onClick={() => void retryUnposted()}>
               {t(key('thread.retryPost'))}</Button>
           </div>}
-            <BotGroupComposer allowMentionAllBots={group.supportsMentionAudiences === true && group.allowMentionAllBots === true}
+            <BotGroupComposer allowMentionAll={canMentionAllInBotGroup(group)} allowMentionAllBots={group.supportsMentionAudiences === true && group.allowMentionAllBots === true}
               mode="thread"
               groupId={group.id}
               draftKey={attachmentScope}

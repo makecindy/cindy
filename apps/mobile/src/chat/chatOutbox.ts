@@ -159,7 +159,7 @@ export function createChatOutboxDelivery(deps: {
           ? chatAccessLost(error) ? 'CONVERSATION_NOT_FOUND' : 'THREAD_SHARE_FAILED'
           : error instanceof Error ? error.message : 'CHAT_SEND_FAILED';
         const refused = (status !== undefined && status >= 400 && status < 500 && ![401, 408, 429].includes(status))
-          || ['MENTION_UNAVAILABLE', 'QUOTE_UNAVAILABLE', 'ALL_BOTS_MENTION_DISABLED'].includes(message);
+          || ['MENTION_UNAVAILABLE', 'QUOTE_UNAVAILABLE', 'ALL_BOTS_MENTION_DISABLED', 'ALL_HUMANS_MENTION_FORBIDDEN'].includes(message);
         blocked.add(room);
         try {
           await store.update(row, { state: refused ? 'failed' : 'queued', error: message,
