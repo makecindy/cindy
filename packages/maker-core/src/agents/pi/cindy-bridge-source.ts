@@ -5112,11 +5112,14 @@ export default async function cindyBridge(piApi: any) {
   if (process.platform === 'win32' && typeof createPowerShellTool === 'function' && !guestToolGate) {
     const powershellTool = createPowerShellTool(process.cwd(), {
       exposeSessionEnvironment: false,
-      spawnHook: ({ command, cwd, env }) => ({
-        command,
-        cwd,
-        env: isolatedBashEnvironment(env, bashPackageHome),
-      }),
+      spawnHook: ({ command, cwd, env }) => {
+        const childEnv = isolatedBashEnvironment(env, bashPackageHome);
+        // Windows env names are case-insensitive even after copying into a plain object.
+        const names = new Set(Object.keys(childEnv).filter(key => childEnv[key] !== undefined).map(key => key.toUpperCase()));
+        if (!names.has('PYTHONUTF8')) childEnv.PYTHONUTF8 = '1';
+        if (!names.has('PYTHONIOENCODING')) childEnv.PYTHONIOENCODING = 'utf-8';
+        return { command, cwd, env: childEnv };
+      },
     });
     var powershellParameters = powershellTool.parameters;
     if (
