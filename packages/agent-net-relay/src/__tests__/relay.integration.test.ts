@@ -563,7 +563,9 @@ describe('independent V2 relay', () => {
       : token === 'Bearer other-owner' ? { accountId: 'other-account', deviceId: 'owner' }
       : token === 'Bearer second-host' ? { accountId: 'owner-account', deviceId: 'second' }
       : /^Bearer guest-\d+$/.test(token) ? { accountId: 'guest-account', deviceId: 'guest-device-' + token.slice(13) } : null;
-    const f = await fixture({ sharing: {
+    // A clock the case holds still: removing and linking again within one millisecond must not reuse a generation.
+    const clock = Date.now();
+    const f = await fixture({ now: () => clock, sharing: {
       async authenticate(req) { const found = actor(String(req.headers.authorization));
         if (!found) throw new AppError('UNAUTHORIZED', 401, 'Unit auth rejected'); return { ...found, networkId: f.certificate.networkId }; },
       providers: { hostCapability: 'provider-share-v1', identityCards: {

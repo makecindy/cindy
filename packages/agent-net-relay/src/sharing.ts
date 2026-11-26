@@ -1,6 +1,6 @@
 import type { IncomingMessage } from 'node:http';
 import { AppError, invalidParams, notFound, permissionDenied } from '@cindy/device-link-sharing/errors';
-import { createSharingRepositories, type SharingStorage } from '@cindy/device-link-sharing/repositories';
+import { createSharingRepositories, type LinkedProviderShare, type SharingStorage } from '@cindy/device-link-sharing/repositories';
 import { createSharedTaskService } from '@cindy/device-link-sharing/shared-tasks';
 import { createProviderShareService, type ProviderShareServiceOptions } from '@cindy/device-link-sharing/provider-shares';
 import { createHash, randomUUID } from 'node:crypto';
@@ -24,6 +24,8 @@ export interface AgentNetSharingOptions {
 /** Per network: the host's linked V1 shares, and the distinct guest devices waiting on one of them. */
 export const MAX_LINKED_SHARES_PER_NETWORK = 256;
 export const MAX_LINKED_SHARE_PENDING_GUESTS = 64;
+/** How long an unlinked share keeps its generation: past every lease and request it could have signed. */
+const LINKED_SHARE_TOMBSTONE_MS = 2 * MAX_GRANT_LIFETIME_MS;
 /**
  * A network another account owns on this relay (self-hosted-relay-plan.md §5.5) may belong to the peer region:
  * its certificate carries the account's own ID, the relay names that account `x:<region>:<ID>`.
@@ -96,7 +98,7 @@ export function createAgentNetSharing(options: AgentNetSharingOptions, host: Sha
   /** Only on a service that advertises linked shares; a native V2 resource with that ID always wins. */
   function linkedShare(state: ReturnType<SharingStorage['read']>, kind: string, id: string) {
     if (!options.linkedProviderShares || kind !== 'provider-share') return undefined;
-    const row = state.linkedShares?.find(l => l.shareId === id);
+    const row = state.linkedShares?.find(l => l.shareId === id && l.removedAt === undefined);
     return row && !state.shares.some(s => s.shareId === id) && !state.bindings.some(b => b.kind === 'provider-share' && b.resourceId === id) ? row : undefined;
   }
   async function linkShare(actor: SharingActor, shareId: string): Promise<{ shareId: string; linked: true }> {
@@ -105,8 +107,16 @@ export function createAgentNetSharing(options: AgentNetSharingOptions, host: Sha
       if (host.rootPublicKey(actor.networkId) !== expectedRoot) throw permissionDenied('Network identity changed');
       if (s.shares.some(p => p.shareId === shareId) || s.bindings.some(b => b.kind === 'provider-share' && b.resourceId === shareId))
         throw new AppError('PROVIDER_SHARE_LINK_CONFLICT', 409, 'The share already belongs to this service');
-      const rows = s.linkedShares ??= [];
+      const rows = s.linkedShares = pruneTombstones(s.linkedShares ?? []);
       const existing = rows.find(l => l.shareId === shareId);
+      if (existing?.removedAt !== undefined) {
+        // Linked again after a removal: continue from its generation, never reuse one an old lease still carries.
+        if (rows.filter(l => l.networkId === actor.networkId && l.removedAt === undefined).length >= MAX_LINKED_SHARES_PER_NETWORK)
+          throw new AppError('LINKED_SHARE_LIMIT', 429, 'Too many linked shares');
+        Object.assign(existing, { networkId: actor.networkId, hostDeviceId: actor.deviceId, ownerAccountId: actor.accountId,
+          linkedAt: host.now(), generation: nextGeneration(existing.generation) });
+        delete existing.removedAt; return;
+      }
       if (existing && (existing.networkId !== actor.networkId || existing.ownerAccountId !== actor.accountId))
         throw new AppError('PROVIDER_SHARE_LINK_CONFLICT', 409, 'The share is linked by another network');
       // Another computer of the account now hosts it: a new generation, so the previous host's leases stay withdrawn.
@@ -114,7 +124,7 @@ export function createAgentNetSharing(options: AgentNetSharingOptions, host: Sha
         if (existing.hostDeviceId !== actor.deviceId) { existing.hostDeviceId = actor.deviceId; existing.generation = nextGeneration(existing.generation); }
         existing.linkedAt = host.now(); return;
       }
-      if (rows.filter(l => l.networkId === actor.networkId).length >= MAX_LINKED_SHARES_PER_NETWORK)
+      if (rows.filter(l => l.networkId === actor.networkId && l.removedAt === undefined).length >= MAX_LINKED_SHARES_PER_NETWORK)
         throw new AppError('LINKED_SHARE_LIMIT', 429, 'Too many linked shares');
       // A removed registration leaves its signed leases behind until they expire; a fresh generation keeps them dead.
       rows.push({ shareId, networkId: actor.networkId, hostDeviceId: actor.deviceId, ownerAccountId: actor.accountId, linkedAt: host.now(),
@@ -124,13 +134,14 @@ export function createAgentNetSharing(options: AgentNetSharingOptions, host: Sha
   }
   /** Time-based so that it also exceeds any generation of a registration that was removed (and forgotten) earlier. */
   const nextGeneration = (previous: number) => Math.max(previous + 1, Math.floor(host.now()));
+  const pruneTombstones = (rows: LinkedProviderShare[]) => rows.filter(l => l.removedAt === undefined || host.now() - l.removedAt < LINKED_SHARE_TOMBSTONE_MS);
   async function unlinkShare(actor: SharingActor, shareId: string): Promise<{ removed: boolean }> {
     let removed = false;
     await host.storage.transaction(async s => {
-      const rows = s.linkedShares ?? [];
-      const next = rows.filter(l => !(l.shareId === shareId && l.networkId === actor.networkId && l.ownerAccountId === actor.accountId));
-      removed = next.length !== rows.length;
-      if (removed) s.linkedShares = next;
+      const rows = pruneTombstones(s.linkedShares ?? []);
+      const row = rows.find(l => l.shareId === shareId && l.networkId === actor.networkId && l.ownerAccountId === actor.accountId && l.removedAt === undefined);
+      if (row) { row.removedAt = host.now(); removed = true; }
+      if (removed || rows.length !== (s.linkedShares ?? []).length) s.linkedShares = rows;
     });
     return { removed };
   }
