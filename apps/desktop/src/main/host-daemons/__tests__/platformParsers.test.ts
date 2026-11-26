@@ -7,7 +7,7 @@
 
 import { mkdir, mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { basename, dirname, join } from 'node:path';
+import { basename, dirname, join, sep } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
@@ -28,11 +28,14 @@ import {
   createSystemdUserAdapter,
   parseSystemdListUnits,
   parseSystemdUnitFile,
+  parseUnitFragmentPaths,
   stateOf,
   unitTextDependsOn,
+  userUnitDirs,
 } from '../systemdUser.js';
 import { combineHostDaemonAdapters } from '../target.js';
 import type { ExecResult, RawHostDaemon } from '../target.js';
+import type { RunCommand } from '../exec.js';
 
 describe('launchd', () => {
   it('按 plutil 真实输出取 Label、命令与触发', () => {
@@ -150,6 +153,200 @@ describe('systemd 用户单元', () => {
     const runtime = new Map([['other.service', { active: 'active', sub: 'running' }]]);
     expect(stateOf('cron-a.timer', runtime, 'other.service')).toBe('running');
   });
+
+  it('userUnitDirs 按真实优先序给出三个持久用户目录', () => {
+    const dirs = userUnitDirs();
+    expect(dirs).toHaveLength(3);
+    expect(dirs[0]).toMatch(/systemd[/\\]user$/);
+    expect(dirs[1]).toBe(join(sep, 'etc', 'systemd', 'user'));
+    expect(dirs[2]).toMatch(/systemd[/\\]user$/);
+    expect(dirs[0]).not.toBe(dirs[2]);
+  });
+
+  it('show 的键值输出只收非空 FragmentPath，跳过 mount/device 与 transient', () => {
+    // 摘自真实 Ubuntu 桌面（systemd 259）`systemctl --user show '*' -p Id -p FragmentPath`：
+    // mount/device 单元的名字里带 \x2d 转义（那是名字本身，不是输出转义），
+    // transient/not-found 单元 FragmentPath 为空。
+    const paths = parseUnitFragmentPaths(
+      [
+        'Id=snap-core18-3267.mount',
+        'FragmentPath=',
+        '',
+        'Id=sys-devices-pci0000:00-0000:00:14.0-usb3-3\\x2d3-3\\x2d3:1.0-bluetooth-hci0.device',
+        'FragmentPath=',
+        '',
+        'Id=agent-quota-guard.service',
+        'FragmentPath=/home/u/.config/systemd/user/agent-quota-guard.service',
+        '',
+        'Id=evolution-alarm-notify.service',
+        'FragmentPath=',
+        '',
+        'Id=obex.service',
+        'FragmentPath=/usr/lib/systemd/user/obex.service',
+      ].join('\n'),
+    );
+    expect(paths.get('agent-quota-guard.service')).toBe('/home/u/.config/systemd/user/agent-quota-guard.service');
+    expect(paths.get('obex.service')).toBe('/usr/lib/systemd/user/obex.service');
+    expect(paths.size).toBe(2);
+  });
+});
+
+describe('systemd 用户单元来自多个目录', () => {
+  // 归属与布局取自真实 Ubuntu 桌面实测（systemd 259，98 个用户单元）：
+  // 只有 8 个单元的 FragmentPath 在 ~/.config/systemd/user，4 个在 /etc/systemd/user
+  // （snap 装的），77 个在发行版 /usr/lib，8 个 FragmentPath 为空（transient/not-found），
+  // 另有模板实例（单元名 ≠ 文件名）。这里按同一分布搭 fixture。
+  async function makeUnitDirs() {
+    const root = await mkdtemp(join(tmpdir(), 'host-daemons-systemd-'));
+    const cfg = join(root, 'config', 'systemd', 'user');
+    const etc = join(root, 'etc', 'systemd', 'user');
+    const data = join(root, 'data', 'systemd', 'user');
+    const distro = join(root, 'usr', 'lib', 'systemd', 'user');
+    const generator = join(root, 'run', 'user', '1000', 'systemd', 'generator.late');
+    for (const dir of [cfg, etc, data, distro, generator]) {
+      await mkdir(dir, { recursive: true });
+    }
+    const unit = async (dir: string, name: string, lines: string[]) => {
+      await writeFile(join(dir, name), ['[Unit]', 'Description=x', '[Service]', ...lines].join('\n'));
+    };
+    await unit(cfg, 'herdr-server.service', ['ExecStart=/usr/bin/node /home/u/herdr/server.mjs']);
+    // 模板实例：show 报的 Id 是实例名，FragmentPath 指向模板文件。
+    await unit(cfg, 'gnome-session-manager@.service', ['ExecStart=/usr/libexec/gnome-session-manager %i']);
+    await unit(cfg, 'magpie-3-issues-watch.timer', ['[Timer]', 'OnCalendar=*-*-* 04:00:00']);
+    // timer 在配置目录、service 在数据目录：同一常驻物的两半跨目录。
+    await unit(data, 'magpie-3-issues-watch.service', ['ExecStart=/usr/bin/node /home/u/magpie/watch.mjs']);
+    // /etc 下 snap 装的一对。
+    await unit(etc, 'snap.firmware-updater.firmware-notifier.service', ['ExecStart=/usr/lib/snapd/snapd-notifier']);
+    await unit(etc, 'snap.firmware-updater.firmware-notifier.timer', ['[Timer]', 'OnCalendar=*:0/15']);
+    await unit(distro, 'dbus.service', ['ExecStart=/usr/bin/dbus-daemon --session']);
+    // \x2d 转义是 systemd 单元名正文；Windows 文件名不允许 \，那里换无转义名搭 fixture——
+    // 转义名本身的解析由上面 parseUnitFragmentPaths 的纯字符串用例覆盖，这里只验证
+    // 「generator 目录里的单元不进清单」。
+    const generatorUnitName = process.platform === 'win32'
+      ? 'app-geoclue-agent@autostart.service'
+      : 'app-geoclue\\x2ddemo\\x2dagent@autostart.service';
+    await unit(generator, generatorUnitName, ['ExecStart=/usr/libexec/geoclue']);
+    return { root, cfg, etc, data, distro, generator, generatorUnitName };
+  }
+
+  /** 假 systemctl：list-units 与 show 给真实形状的输出，其余动作只记账。 */
+  function systemdExec(opts: { show: string | null; listUnits?: string }) {
+    const calls: string[][] = [];
+    const exec: RunCommand = async (_file, args) => {
+      calls.push(args);
+      if (args[1] === 'show') {
+        return opts.show === null ? { stdout: '', failed: true } : { stdout: opts.show, failed: false };
+      }
+      if (args[1] === 'list-units') {
+        return { stdout: opts.listUnits ?? '', failed: false };
+      }
+      return { stdout: '', failed: false };
+    };
+    return Object.assign(exec, { calls });
+  }
+
+  function showOutput(dirs: {
+    cfg: string; etc: string; data: string; distro: string; generator: string; generatorUnitName: string;
+  }): string {
+    // FragmentPath 为空的单元（transient/not-found）与 mount/device 照真实输出保留。
+    return [
+      `Id=herdr-server.service`,
+      `FragmentPath=${join(dirs.cfg, 'herdr-server.service')}`,
+      '',
+      `Id=gnome-session-manager@ubuntu.service`,
+      `FragmentPath=${join(dirs.cfg, 'gnome-session-manager@.service')}`,
+      '',
+      `Id=magpie-3-issues-watch.timer`,
+      `FragmentPath=${join(dirs.cfg, 'magpie-3-issues-watch.timer')}`,
+      '',
+      `Id=magpie-3-issues-watch.service`,
+      `FragmentPath=${join(dirs.data, 'magpie-3-issues-watch.service')}`,
+      '',
+      `Id=snap.firmware-updater.firmware-notifier.timer`,
+      `FragmentPath=${join(dirs.etc, 'snap.firmware-updater.firmware-notifier.timer')}`,
+      '',
+      `Id=snap.firmware-updater.firmware-notifier.service`,
+      `FragmentPath=${join(dirs.etc, 'snap.firmware-updater.firmware-notifier.service')}`,
+      '',
+      `Id=dbus.service`,
+      `FragmentPath=${join(dirs.distro, 'dbus.service')}`,
+      '',
+      `Id=${dirs.generatorUnitName}`,
+      `FragmentPath=${join(dirs.generator, dirs.generatorUnitName)}`,
+      '',
+      `Id=evolution-alarm-notify.service`,
+      `FragmentPath=`,
+      '',
+      'Id=snap-core18-3267.mount',
+      'FragmentPath=',
+    ].join('\n');
+  }
+
+  it('scan 列出配置/数据//etc 三个目录的单元，排除发行版、generator 与空 FragmentPath', async () => {
+    const dirs = await makeUnitDirs();
+    try {
+      const exec = systemdExec({ show: showOutput(dirs) });
+      const adapter = createSystemdUserAdapter({ dirs: [dirs.cfg, dirs.etc, dirs.data], exec });
+      const items = await adapter.scan();
+      expect(items.map((item) => item.name)).toEqual([
+        'herdr-server.service',
+        'gnome-session-manager@ubuntu.service',
+        'magpie-3-issues-watch.timer',
+        'snap.firmware-updater.firmware-notifier.timer',
+      ]);
+      // timer 与它的 service 是同一常驻物：service 在另一个目录也一样只列 timer。
+      const timer = items.find((item) => item.name === 'magpie-3-issues-watch.timer');
+      expect(timer?.command).toBe('/usr/bin/node /home/u/magpie/watch.mjs');
+      expect(timer?.trigger).toBe('schedule');
+    } finally {
+      await rm(dirs.root, { recursive: true, force: true });
+    }
+  });
+
+  it('remove 删除 systemd 回答的真实路径（含 /etc 下），timer 与 service 成对删', async () => {
+    const dirs = await makeUnitDirs();
+    try {
+      const removed: string[] = [];
+      const exec = systemdExec({ show: showOutput(dirs) });
+      const adapter = createSystemdUserAdapter({
+        dirs: [dirs.cfg, dirs.etc, dirs.data],
+        exec,
+        removeFile: async (file) => void removed.push(file),
+      });
+      await adapter.scan();
+      await adapter.remove('systemd-user:snap.firmware-updater.firmware-notifier.timer');
+      expect(exec.calls.some((args) => args[1] === 'disable' && args[2] === '--now'
+        && args[3] === 'snap.firmware-updater.firmware-notifier.timer')).toBe(true);
+      expect(exec.calls.some((args) => args[1] === 'daemon-reload')).toBe(true);
+      // 执行面先删、条目自己的文件最后删：中途失败时 timer 还在清单里、还带着归属，能重试。
+      expect(removed).toEqual([
+        join(dirs.etc, 'snap.firmware-updater.firmware-notifier.service'),
+        join(dirs.etc, 'snap.firmware-updater.firmware-notifier.timer'),
+      ]);
+    } finally {
+      await rm(dirs.root, { recursive: true, force: true });
+    }
+  });
+
+  it('show 回答不了时退回扫同样的目录，按文件名列表（模板实例以模板名出现）', async () => {
+    const dirs = await makeUnitDirs();
+    try {
+      const exec = systemdExec({ show: null });
+      const adapter = createSystemdUserAdapter({ dirs: [dirs.cfg, dirs.etc, dirs.data], exec });
+      const items = await adapter.scan();
+      // 退回路径拿不到 systemd 的单元名，只能按文件名：模板实例以模板名出现，
+      // /etc 下的 snap 对与跨目录的 timer/service 配对仍照常工作。
+      // （readdir 顺序由文件系统决定，断言排序后的名单。）
+      expect(items.map((item) => item.name).sort()).toEqual([
+        'gnome-session-manager@.service',
+        'herdr-server.service',
+        'magpie-3-issues-watch.timer',
+        'snap.firmware-updater.firmware-notifier.timer',
+      ]);
+    } finally {
+      await rm(dirs.root, { recursive: true, force: true });
+    }
+  });
 });
 
 describe('crontab', () => {
@@ -253,9 +450,11 @@ describe('systemd 动作契约（真目录 + 假 systemctl）', () => {
     }
     const commands: string[][] = [];
     const adapter = createSystemdUserAdapter({
-      dir,
+      dirs: [dir],
       exec: async (command, args) => {
         commands.push([command, ...args]);
+        // show 回答不了（模拟老 systemd）：契约测试走按目录列表的回退路径。
+        if (args[1] === 'show') return { stdout: '', failed: true };
         return args.includes('stop') && overrides.stopCode !== undefined
           ? { stdout: '', failed: true, code: overrides.stopCode }
           : { stdout: '', failed: false };
@@ -513,7 +712,7 @@ describe('来源适配器：读失败和空表分开报', () => {
   it('systemd：目录不存在才是没有单元，读不了如实抛出', async () => {
     await expectDirHonesty(
       (dir) =>
-        createSystemdUserAdapter({ dir, exec: async () => ({ stdout: '', failed: false }) }),
+        createSystemdUserAdapter({ dirs: [dir], exec: async () => ({ stdout: '', failed: false }) }),
     );
   });
 

@@ -1,9 +1,17 @@
 /**
  * host-daemons/systemdUser —— Linux 用户级 systemd 单元的读取与操作。
  *
- * 只看用户级单元目录（`$XDG_CONFIG_HOME/systemd/user`，默认
- * `~/.config/systemd/user`）：系统单元是发行版装的东西，与「我让 Cindy 做过什么」
- * 无关，用户级才可能由会话创建。
+ * 单元文件的位置以 systemd 自己的回答为准：`systemctl --user show '*' -p Id
+ * -p FragmentPath` 一次拿全部单元的真实路径，只保留落在「非发行版的持久用户目录」
+ * （`$XDG_CONFIG_HOME/systemd/user`、`$XDG_DATA_HOME/systemd/user`、`/etc/systemd/user`）
+ * 里的单元。真实 Ubuntu 桌面（systemd 259 实测 98 个用户单元）里这三处的分布是
+ * 8 / 0 / 4：只扫配置目录会漏掉 /etc 下 snap 装的常驻项与 link 进来的单元；
+ * 而发行版目录（/usr/lib、/lib）仍按既有口径排除——那是发行版装的东西，与
+ * 「我让 Cindy 做过什么」无关。`show` 回答不了（老 systemd / 无会话总线）时
+ * 退回按同样的目录清单列表。
+ *
+ * FragmentPath 为空的单元（transient / not-found）没有文件可删，与「读不到的
+ * 单元文件不进清单」同一口径跳过；generator 产物（/run 下）注销即消失，也不列。
  *
  * 状态从 `systemctl --user list-units --all --plain --no-legend` 一次读全；定义
  * （ExecStart / 时间表达式）从单元文件本身读 —— 前者回答「现在在跑吗」，后者回答
@@ -18,15 +26,27 @@
 import type { Dirent } from 'node:fs';
 import { readdir, readFile, stat, unlink } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve, sep } from 'node:path';
 
 import type { HostDaemonState, HostDaemonTrigger } from '../../shared/hostDaemons.js';
 import { runCommand, type RunCommand } from './exec.js';
 import type { HostDaemonAdapter, RawHostDaemon } from './target.js';
 
-export function userUnitDir(): string {
-  const xdg = process.env.XDG_CONFIG_HOME;
-  return join(xdg && xdg.trim() ? xdg : join(homedir(), '.config'), 'systemd', 'user');
+/** systemd 用户单元的持久目录，按真实优先序排列（config > /etc > 数据目录）。 */
+export function userUnitDirs(): string[] {
+  const config = process.env.XDG_CONFIG_HOME?.trim();
+  const data = process.env.XDG_DATA_HOME?.trim();
+  return [
+    join(config || join(homedir(), '.config'), 'systemd', 'user'),
+    join(sep, 'etc', 'systemd', 'user'),
+    join(data || join(homedir(), '.local', 'share'), 'systemd', 'user'),
+  ];
+}
+
+/** 只有落在持久用户目录里的单元文件才是「我让 Cindy 做过什么」的那一类。 */
+function isUserUnitFile(file: string, dirs: string[]): boolean {
+  const resolved = resolve(file);
+  return dirs.some((dir) => resolved.startsWith(resolve(dir) + sep));
 }
 
 export interface SystemdUnitFile {
@@ -88,6 +108,31 @@ export function parseSystemdListUnits(stdout: string): Map<string, SystemdUnitRu
     units.set(name, { active, sub });
   }
   return units;
+}
+
+/**
+ * `systemctl --user show '*' -p Id -p FragmentPath` 输出 → 单元名 → 单元文件路径。
+ *
+ * show 的键值输出按空行分段；FragmentPath 为空（transient / not-found）的单元
+ * 没有文件可删，不进表。名字里 `\x2d` 这类转义是 systemd 单元名的正文（list-units
+ * 与 show 打的是同一个字符串），不解码——解码反而会把名字改错。
+ */
+export function parseUnitFragmentPaths(stdout: string): Map<string, string> {
+  const paths = new Map<string, string>();
+  let id: string | null = null;
+  for (const line of stdout.split(/\r?\n/)) {
+    const eq = line.indexOf('=');
+    if (eq <= 0) continue;
+    const key = line.slice(0, eq);
+    const value = line.slice(eq + 1);
+    if (key === 'Id') {
+      id = value;
+    } else if (key === 'FragmentPath' && id !== null) {
+      if (value) paths.set(id, value);
+      id = null;
+    }
+  }
+  return paths;
 }
 
 /**
@@ -162,7 +207,8 @@ function stem(unit: string): string {
 }
 
 export interface SystemdUserAdapterDeps {
-  dir?: string;
+  /** 单元目录候选，按真实优先序；默认 `userUnitDirs()`。测试注入临时目录。 */
+  dirs?: string[];
   exec?: RunCommand;
   removeFile?: (path: string) => Promise<void>;
   reload?: () => Promise<void>;
@@ -170,7 +216,7 @@ export interface SystemdUserAdapterDeps {
 
 export function createSystemdUserAdapter(deps: SystemdUserAdapterDeps = {}): HostDaemonAdapter {
   const exec = deps.exec ?? runCommand;
-  const dir = deps.dir ?? userUnitDir();
+  const dirs = deps.dirs ?? userUnitDirs();
   const removeFile = deps.removeFile ?? ((path: string) => unlink(path));
   const reload = deps.reload ?? (async () => {
     const { failed } = await exec('systemctl', ['--user', 'daemon-reload']);
@@ -178,12 +224,23 @@ export function createSystemdUserAdapter(deps: SystemdUserAdapterDeps = {}): Hos
     if (failed) throw new Error('systemd could not reload units');
   });
   /**
-   * 动作时刻重新读单元文件：`Unit=`、文件还在不在，都以当下为准。
+   * 动作时刻重新读单元文件：`Unit=`、文件还在不在、在哪个目录，都以当下为准。
    * 用上次扫描留下的快照，扫描到动作之间被改过的条目就会照旧关系去停 / 删别的单元。
    */
+  async function unitFilePath(unit: string): Promise<string | null> {
+    // 目录互不重叠，同名先到先得就是 systemd 自己的加载结果（优先序见 userUnitDirs）。
+    for (const dir of dirs) {
+      const candidate = join(dir, unit);
+      if (await exists(candidate)) return candidate;
+    }
+    return null;
+  }
+
   async function readUnit(unit: string): Promise<SystemdUnitFile | null> {
+    const file = await unitFilePath(unit);
+    if (!file) return null;
     try {
-      return parseSystemdUnitFile(await readFile(join(dir, unit), 'utf8'));
+      return parseSystemdUnitFile(await readFile(file, 'utf8'));
     } catch {
       return null;
     }
@@ -225,27 +282,38 @@ export function createSystemdUserAdapter(deps: SystemdUserAdapterDeps = {}): Hos
    * （`Unit=foo.service`）的执行面：删 `foo.timer` 时把它一起删，就删掉了别人还在用的
    * 文件。目录读不了时按「有人用」处理 —— 判断不了就不删。
    *
-   * shortcut: 只看这个用户级目录，看不到别处 link 进来的单元和系统级单元，若要支持再改为问 systemd 的反向依赖
+   * shortcut: 只看这几个持久用户目录，看不到别处 link 进来的单元和系统级单元，若要支持再改为问 systemd 的反向依赖
    */
   async function sharedByOthers(target: string, self: string): Promise<boolean> {
-    let entries: Dirent[];
-    try {
-      entries = await readdir(dir, { recursive: true, withFileTypes: true });
-    } catch {
-      return true;
-    }
-    for (const entry of entries) {
-      const path = join(entry.parentPath, entry.name);
-      if (path === join(dir, self) || path === join(dir, target)) continue;
-      if (/[.](wants|requires)$/.test(entry.parentPath) && entry.name === target) return true;
-      const isUnitFile =
-        entry.parentPath === dir && entry.name.includes('.') && !NON_UNIT_SUFFIX.test(entry.name);
-      const isDropIn = entry.parentPath.endsWith('.d') && entry.name.endsWith('.conf');
-      if (!isUnitFile && !isDropIn) continue;
-      const text = await readFile(path, 'utf8').catch(() => null);
-      if (text !== null && unitTextDependsOn(text, target)) return true;
+    for (const dir of dirs) {
+      let entries: Dirent[];
+      try {
+        entries = await readdir(dir, { recursive: true, withFileTypes: true });
+      } catch (error) {
+        // 目录不存在只是「这里没有单元」；读不了才是判断不了，按有人用处理。
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return true;
+        continue;
+      }
+      for (const entry of entries) {
+        const path = join(entry.parentPath, entry.name);
+        if (path === join(dir, self) || path === join(dir, target)) continue;
+        if (/[.](wants|requires)$/.test(entry.parentPath) && entry.name === target) return true;
+        const isUnitFile =
+          entry.parentPath === dir && entry.name.includes('.') && !NON_UNIT_SUFFIX.test(entry.name);
+        const isDropIn = entry.parentPath.endsWith('.d') && entry.name.endsWith('.conf');
+        if (!isUnitFile && !isDropIn) continue;
+        const text = await readFile(path, 'utf8').catch(() => null);
+        if (text !== null && unitTextDependsOn(text, target)) return true;
+      }
     }
     return false;
+  }
+
+  /** 一次子进程拿全部单元的真实定义路径；show 回答不了就返回 null（目录列表兜底）。 */
+  async function unitFragmentPaths(): Promise<Map<string, string> | null> {
+    const { stdout, failed } = await exec('systemctl', ['--user', 'show', '*', '-p', 'Id', '-p', 'FragmentPath']);
+    if (failed) return null;
+    return parseUnitFragmentPaths(stdout);
   }
 
   return {
@@ -253,22 +321,48 @@ export function createSystemdUserAdapter(deps: SystemdUserAdapterDeps = {}): Hos
 
     async scan() {
       const runtime = await listUnits();
-      let names: string[];
-      try {
-        names = await readdir(dir);
-      } catch (error) {
-        // 目录不存在 = 没有任何用户单元，不是错误；其余读失败不能当成空目录。
-        if ((error as NodeJS.ErrnoException | undefined)?.code !== 'ENOENT') throw error;
-        return [];
-      }
       const parsed = new Map<string, SystemdUnitFile>();
-      for (const name of names) {
-        if (!name.endsWith('.service') && !name.endsWith('.timer')) continue;
-        const path = join(dir, name);
+      // 本次扫描读到的单元名 → 文件路径，只用于这一次扫描内的 mtime 锚点。
+      const paths = new Map<string, string>();
+      // 已被 show 条目占用的定义文件：模板实例（Id=实例名）与模板文件指向同一份
+      // 定义，目录再扫到它时不重复列。
+      const usedPaths = new Set<string>();
+      // show 与目录并读：show 只看得到 systemd 已加载的单元，刚写入还没 reload 的
+      // 文件只有目录里才有；show 回答不了时目录就是唯一来源（模板实例以模板名出现）。
+      const fragments = await unitFragmentPaths();
+      if (fragments !== null) {
+        for (const [unit, path] of fragments) {
+          if (!unit.endsWith('.service') && !unit.endsWith('.timer')) continue;
+          if (!isUserUnitFile(path, dirs)) continue;
+          try {
+            parsed.set(unit, parseSystemdUnitFile(await readFile(path, 'utf8')));
+            paths.set(unit, path);
+            usedPaths.add(path);
+          } catch {
+            // 读不到的单元文件不进清单：连「删了以后怎么恢复」都答不上来。
+          }
+        }
+      }
+      for (const dir of dirs) {
+        let names: string[];
         try {
-          parsed.set(name, parseSystemdUnitFile(await readFile(path, 'utf8')));
-        } catch {
-          // 读不到的单元文件不进清单：连「删了以后怎么恢复」都答不上来。
+          names = await readdir(dir);
+        } catch (error) {
+          // 目录不存在 = 这里没有单元，不是错误；其余读失败不能当成空目录。
+          if ((error as NodeJS.ErrnoException | undefined)?.code !== 'ENOENT') throw error;
+          continue;
+        }
+        for (const name of names) {
+          if (parsed.has(name)) continue;
+          if (!name.endsWith('.service') && !name.endsWith('.timer')) continue;
+          const path = join(dir, name);
+          if (usedPaths.has(path)) continue;
+          try {
+            parsed.set(name, parseSystemdUnitFile(await readFile(path, 'utf8')));
+            paths.set(name, path);
+          } catch {
+            // 读不到的单元文件不进清单：连「删了以后怎么恢复」都答不上来。
+          }
         }
       }
 
@@ -283,7 +377,7 @@ export function createSystemdUserAdapter(deps: SystemdUserAdapterDeps = {}): Hos
         if (!unit.endsWith('.timer') && timerTargets.has(unit)) continue;
         let definitionMtimeMs: number | null = null;
         try {
-          definitionMtimeMs = (await stat(join(dir, unit))).mtimeMs;
+          definitionMtimeMs = (await stat(paths.get(unit)!)).mtimeMs;
         } catch {
           // 读不到 mtime 时退化成「首次扫描到它的时刻」锚点，仍可归属。
         }
@@ -333,11 +427,13 @@ export function createSystemdUserAdapter(deps: SystemdUserAdapterDeps = {}): Hos
       await reload();
       // 执行面先删、条目自己的文件最后删：中途失败时条目还列在清单里、还带着归属，能重试。
       // 反过来先删 timer，就会留下一个没有归属记录、从页面上再也删不掉的 service。
-      const pairedPath = join(dir, target);
+      const pairedPath = await unitFilePath(target);
       const ownExecution =
-        unit.endsWith('.timer') && isOwnCounterpart(unit, declaredUnit) && (await exists(pairedPath));
+        unit.endsWith('.timer') && isOwnCounterpart(unit, declaredUnit) && pairedPath !== null;
       if (ownExecution && !(await sharedByOthers(target, unit))) await removeFile(pairedPath);
-      await removeFile(join(dir, unit));
+      // 文件已经不在了（扫描后被别的东西删掉）时目标状态已达成，不需要再报一次错。
+      const ownPath = await unitFilePath(unit);
+      if (ownPath) await removeFile(ownPath);
     },
   };
 }
