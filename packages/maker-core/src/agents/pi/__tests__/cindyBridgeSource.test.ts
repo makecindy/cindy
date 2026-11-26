@@ -482,6 +482,23 @@ function loadReviewSearchHelpers(
   return context as ReviewSearchHelpers;
 }
 
+function loadRejectedToolCallFilter(): (
+  payload: any,
+  rejectedIds: Set<string>,
+) => any {
+  const source = CINDY_BRIDGE_EXTENSION_SOURCE;
+  const start = source.indexOf('function dropRejectedToolCalls(');
+  const end = source.indexOf("pi.on('before_provider_request'", start);
+  if (start < 0 || end <= start) {
+    throw new Error('rejected tool call filter was not found in the generated bridge');
+  }
+  return new Function(
+    `${ts.transpileModule(source.slice(start, end), {
+      compilerOptions: { module: ts.ModuleKind.None, target: ts.ScriptTarget.ES2022 },
+    }).outputText}; return dropRejectedToolCalls;`,
+  )() as (payload: any, rejectedIds: Set<string>) => any;
+}
+
 function loadBashTimeoutHelpers(): {
   resolveCindyBashTimeout: (params: unknown) => number;
   applyCindyBashTimeoutParams: (params: unknown) => Record<string, unknown>;
@@ -1560,6 +1577,48 @@ describe('cindy-bridge extension source', () => {
       command: 'ls',
       timeout: 12,
     });
+  });
+
+  it('drops only the tool calls Pi rejected locally from the outgoing payload (pi#12150)', () => {
+    const filter = loadRejectedToolCallFilter();
+    const rejected = new Set(['call_bad']);
+    const anthropic = {
+      model: 'x',
+      messages: [
+        { role: 'user', content: [{ type: 'text', text: 'go' }] },
+        { role: 'assistant', content: [
+          { type: 'text', text: 'trying' },
+          { type: 'tool_use', id: 'call_bad', name: 'codemode', input: { '': '' } },
+        ] },
+        { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'call_bad', content: 'invalid' }] },
+        { role: 'assistant', content: [{ type: 'tool_use', id: 'call_ok', name: 'bash', input: { command: 'ls' } }] },
+        { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'call_ok', content: 'a.txt' }] },
+      ],
+    };
+    const out = filter(anthropic, rejected);
+    expect(out.messages.map((message: any) => message.role)).toEqual([
+      'user', 'assistant', 'assistant', 'user',
+    ]);
+    // rejected 调用及其配对结果都被剪掉；另一对原样保留。
+    expect(JSON.stringify(out)).not.toContain('call_bad');
+    expect(JSON.stringify(out)).toContain('call_ok');
+    // 不改写输入。
+    expect(JSON.stringify(anthropic)).toContain('call_bad');
+
+    // OpenAI chat：assistant.tool_calls 与 role=tool 结果同时清理。
+    const chat = {
+      messages: [
+        { role: 'assistant', content: null, tool_calls: [{ id: 'call_bad', type: 'function' }] },
+        { role: 'tool', tool_call_id: 'call_bad', content: 'invalid' },
+        { role: 'assistant', content: null, tool_calls: [{ id: 'call_ok', type: 'function' }] },
+      ],
+    };
+    expect(filter(chat, rejected).messages).toEqual([
+      { role: 'assistant', content: null, tool_calls: [{ id: 'call_ok', type: 'function' }] },
+    ]);
+
+    // 未拒绝过任何调用时不触碰 payload（同一对象返回）。
+    expect(filter(anthropic, new Set())).toBe(anthropic);
   });
 
   it('registers the native PowerShell overlay on Windows when Pi exports its factory', () => {

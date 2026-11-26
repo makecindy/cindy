@@ -4799,6 +4799,75 @@ export default async function cindyBridge(piApi: any) {
     },
   });
   if (!currentPermissionState().reviewOnly) registerCindyQuestionTool(pi);
+
+  // pi#12150：Pi 本地校验失败后仍把畸形调用留在历史里，下一次请求按原生 tool-use
+  // 块重放，provider 回 400 且之后每次请求都失败（会话被锁死）。只丢弃 Pi 亲口
+  // 拒绝过的那几个 id，正常历史不动；不重写会话文件，改的是出站 payload。
+  const REJECTED_TOOL_CALL_LIMIT = 64;
+  const REJECTED_TOOL_CALL_TEXT = 'Validation failed for tool "';
+  const rejectedToolCallIds = new Set<string>();
+  pi.on('tool_result', async (evt: any) => {
+    if (!evt || evt.isError !== true || typeof evt.toolCallId !== 'string') return;
+    if (rejectedToolCallIds.size >= REJECTED_TOOL_CALL_LIMIT) return;
+    const blocks = Array.isArray(evt.content) ? evt.content : [];
+    const text = blocks
+      .filter((block: any) => block && block.type === 'text' && typeof block.text === 'string')
+      .map((block: any) => block.text)
+      .join('\n')
+      .trim();
+    if (text.startsWith(REJECTED_TOOL_CALL_TEXT)) rejectedToolCallIds.add(evt.toolCallId);
+  });
+
+  function dropRejectedToolCalls(payload: any, rejectedIds: Set<string>): any {
+    if (!rejectedIds || !rejectedIds.size || !payload || typeof payload !== 'object') return payload;
+    const key = Array.isArray(payload.messages) ? 'messages'
+      : Array.isArray(payload.input) ? 'input' : null;
+    if (!key) return payload;
+    let changed = false;
+    const messages: any[] = [];
+    for (const message of payload[key]) {
+      if (!message || typeof message !== 'object') { messages.push(message); continue; }
+      // 配对的调用被删后，孤立的工具结果同样会让 provider 拒绝。
+      if (typeof message.tool_call_id === 'string' && rejectedIds.has(message.tool_call_id)) {
+        changed = true;
+        continue;
+      }
+      if (message.type === 'function_call_output' && typeof message.call_id === 'string'
+        && rejectedIds.has(message.call_id)) {
+        changed = true;
+        continue;
+      }
+      let next = message;
+      if (Array.isArray(message.content)) {
+        const kept = message.content.filter((block: any) => {
+          const id = block && typeof block === 'object'
+            ? (block.type === 'tool_use' || block.type === 'function_call'
+              ? block.id ?? block.call_id
+              : block.type === 'tool_result' ? block.tool_use_id : undefined)
+            : undefined;
+          const drop = typeof id === 'string' && rejectedIds.has(id);
+          if (drop) changed = true;
+          return !drop;
+        });
+        if (kept.length !== message.content.length) {
+          if (!kept.length) continue;
+          next = { ...message, content: kept };
+        }
+      }
+      if (Array.isArray(message.tool_calls)) {
+        const keptCalls = message.tool_calls.filter((call: any) =>
+          !(call && typeof call === 'object' && typeof call.id === 'string' && rejectedIds.has(call.id)));
+        if (keptCalls.length !== message.tool_calls.length) {
+          changed = true;
+          if (!keptCalls.length && !(Array.isArray(next.content) && next.content.length)) continue;
+          next = { ...next, tool_calls: keptCalls };
+        }
+      }
+      messages.push(next);
+    }
+    return changed ? { ...payload, [key]: messages } : payload;
+  }
+
   pi.on('before_provider_request', async (event, ctx) => {
     const preparationStarted = performance.now();
     const runtimeRequest = runtimeRequestModel();
@@ -4826,7 +4895,7 @@ export default async function cindyBridge(piApi: any) {
         ), 'info');
       } catch { /* Diagnostics must never block a model request. */ }
     }
-    return next;
+    return dropRejectedToolCalls(next, rejectedToolCallIds);
   });
   const mcpGateway = new CindyMcpGateway();
   // bash 隔离 home 经 resolveBashPackageHome 解析(首次加载读删 + 防篡改 stash,
